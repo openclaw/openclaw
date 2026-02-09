@@ -1,15 +1,8 @@
 ---
-summary: „Benutzerprofil des Dev-Agenten (C-3PO)“
+summary: "„Benutzerprofil des Dev-Agenten (C-3PO)“"
 read_when:
-  - Bei Verwendung der Dev-Gateway-Vorlagen
+  - Verwendung der Dev-Gateway-Vorlagen
   - Beim Aktualisieren der Standardidentität des Dev-Agenten
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:17Z
 ---
 
 # USER.md – Benutzerprofil

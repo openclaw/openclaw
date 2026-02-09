@@ -4,13 +4,6 @@ read_when:
   - Вам нужно установить или управлять внутрипроцессными плагинами Gateway (шлюз)
   - Вам нужно отладить ошибки загрузки плагинов
 title: "плагины"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:21Z
 ---
 
 # `openclaw plugins`

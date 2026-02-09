@@ -4,13 +4,6 @@ read_when:
   - Sie möchten In-Process-Gateway-Plugins installieren oder verwalten
   - Sie möchten Fehler beim Laden von Plugins debuggen
 title: "Plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:40Z
 ---
 
 # `openclaw plugins`

@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:35Z
 ---
 
 # Triển khai Fly.io
@@ -42,13 +35,13 @@ fly apps create my-openclaw
 fly volumes create openclaw_data --size 1 --region iad
 ```
 
-**Mẹo:** Chọn khu vực gần bạn. Các tùy chọn phổ biến: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
+**Tip:** Choose a region close to you. Common options: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) Cấu hình fly.toml
+## 2. Cấu hình fly.toml
 
 Chỉnh sửa `fly.toml` để khớp với tên app và yêu cầu của bạn.
 
-**Lưu ý bảo mật:** Cấu hình mặc định mở một URL công khai. Để triển khai được gia cố không có IP công khai, xem [Triển khai riêng tư](#private-deployment-hardened) hoặc dùng `fly.private.toml`.
+**Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Thiết lập chính:**
 
-| Thiết lập                      | Lý do                                                                               |
-| ------------------------------ | ----------------------------------------------------------------------------------- |
-| `--bind lan`                   | Gắn vào `0.0.0.0` để proxy của Fly có thể truy cập gateway                          |
+| Thiết lập                      | Lý do                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `--bind lan`                   | Gắn vào `0.0.0.0` để proxy của Fly có thể truy cập gateway                                             |
 | `--allow-unconfigured`         | Khởi động không cần file cấu hình (bạn sẽ tạo sau)                                  |
 | `internal_port = 3000`         | Phải khớp với `--port 3000` (hoặc `OPENCLAW_GATEWAY_PORT`) cho health check của Fly |
-| `memory = "2048mb"`            | 512MB là quá ít; khuyến nghị 2GB                                                    |
-| `OPENCLAW_STATE_DIR = "/data"` | Lưu trạng thái trên volume                                                          |
+| `memory = "2048mb"`            | 512MB là quá ít; khuyến nghị 2GB                                                                       |
+| `OPENCLAW_STATE_DIR = "/data"` | Lưu trạng thái trên volume                                                                             |
 
-## 3) Đặt secrets
+## 3. Đặt secrets
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,15 +107,15 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - Bind không phải loopback (`--bind lan`) yêu cầu `OPENCLAW_GATEWAY_TOKEN` để bảo mật.
 - Hãy coi các token này như mật khẩu.
-- **Ưu tiên biến môi trường thay vì file cấu hình** cho tất cả khóa API và token. Điều này giúp giữ bí mật không nằm trong `openclaw.json` nơi có thể vô tình bị lộ hoặc ghi log.
+- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
 
-## 4) Triển khai
+## 4. Triển khai
 
 ```bash
 fly deploy
 ```
 
-Lần triển khai đầu sẽ build Docker image (~2–3 phút). Các lần sau sẽ nhanh hơn.
+Lần triển khai đầu tiên sẽ build Docker image (~2–3 phút). Subsequent deploys are faster.
 
 Sau khi triển khai, xác minh:
 
@@ -138,7 +131,7 @@ Bạn sẽ thấy:
 [discord] logged in to discord as xxx
 ```
 
-## 5) Tạo file cấu hình
+## 5. Tạo file cấu hình
 
 SSH vào máy để tạo cấu hình phù hợp:
 
@@ -209,7 +202,7 @@ EOF
 - Biến môi trường: `DISCORD_BOT_TOKEN` (khuyến nghị cho bí mật)
 - File cấu hình: `channels.discord.token`
 
-Nếu dùng biến môi trường, không cần thêm token vào cấu hình. Gateway tự động đọc `DISCORD_BOT_TOKEN`.
+If using env var, no need to add token to config. Gateway tự động đọc `DISCORD_BOT_TOKEN`.
 
 Khởi động lại để áp dụng:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Truy cập Gateway
+## 6. Truy cập Gateway
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Fly không thể truy cập gateway trên cổng đã cấu hình.
 
 ### OOM / Vấn đề bộ nhớ
 
-Container liên tục khởi động lại hoặc bị kill. Dấu hiệu: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, hoặc khởi động lại im lặng.
+Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, or silent restarts.
 
 **Cách khắc phục:** Tăng bộ nhớ trong `fly.toml`:
 
@@ -276,7 +269,7 @@ Hoặc cập nhật một máy hiện có:
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**Lưu ý:** 512MB là quá ít. 1GB có thể chạy nhưng dễ OOM khi tải cao hoặc log chi tiết. **Khuyến nghị 2GB.**
+**Note:** 512MB is too small. 1GB may work but can OOM under load or with verbose logging. **Khuyến nghị 2GB.**
 
 ### Sự cố khóa Gateway
 
@@ -295,7 +288,7 @@ File khóa nằm tại `/data/gateway.*.lock` (không nằm trong thư mục con
 
 ### Cấu hình không được đọc
 
-Nếu dùng `--allow-unconfigured`, gateway tạo một cấu hình tối thiểu. Cấu hình tùy chỉnh của bạn tại `/data/openclaw.json` sẽ được đọc khi khởi động lại.
+Nếu dùng `--allow-unconfigured`, gateway sẽ tạo một cấu hình tối thiểu. Your custom config at `/data/openclaw.json` should be read on restart.
 
 Xác minh cấu hình tồn tại:
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### Ghi cấu hình qua SSH
 
-Lệnh `fly ssh console -C` không hỗ trợ chuyển hướng shell. Để ghi file cấu hình:
+The `fly ssh console -C` command doesn't support shell redirection. Để ghi một file cấu hình:
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -316,7 +309,7 @@ fly sftp shell
 > put /local/path/config.json /data/openclaw.json
 ```
 
-**Lưu ý:** `fly sftp` có thể thất bại nếu file đã tồn tại. Hãy xóa trước:
+**Lưu ý:** `fly sftp` có thể thất bại nếu file đã tồn tại. Delete first:
 
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
@@ -357,11 +350,11 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**Lưu ý:** Sau `fly deploy`, lệnh máy có thể reset về giá trị trong `fly.toml`. Nếu bạn đã chỉnh sửa thủ công, hãy áp dụng lại sau khi deploy.
+**Lưu ý:** Sau `fly deploy`, lệnh máy có thể reset về giá trị trong `fly.toml`. If you made manual changes, re-apply them after deploy.
 
 ## Triển khai riêng tư (Gia cố)
 
-Theo mặc định, Fly cấp IP công khai, khiến gateway của bạn truy cập được tại `https://your-app.fly.dev`. Điều này tiện lợi nhưng đồng nghĩa triển khai của bạn có thể bị các công cụ quét internet (Shodan, Censys, v.v.) phát hiện.
+By default, Fly allocates public IPs, making your gateway accessible at `https://your-app.fly.dev`. This is convenient but means your deployment is discoverable by internet scanners (Shodan, Censys, etc.).
 
 Để triển khai được gia cố với **không phơi bày công khai**, hãy dùng mẫu riêng tư.
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### Webhook với triển khai riêng tư
 
-Nếu bạn cần callback webhook (Twilio, Telnyx, v.v.) mà không phơi bày công khai:
+If you need webhook callbacks (Twilio, Telnyx, etc.) without public exposure:
 
 1. **Đường hầm ngrok** – Chạy ngrok bên trong container hoặc như một sidecar
 2. **Tailscale Funnel** – Mở các đường dẫn cụ thể qua Tailscale
@@ -464,7 +457,7 @@ Ví dụ cấu hình gọi thoại với ngrok:
 }
 ```
 
-Đường hầm ngrok chạy bên trong container và cung cấp URL webhook công khai mà không phơi bày app Fly. Đặt `webhookSecurity.allowedHosts` thành hostname công khai của đường hầm để chấp nhận header host được chuyển tiếp.
+The ngrok tunnel runs inside the container and provides a public webhook URL without exposing the Fly app itself. Set `webhookSecurity.allowedHosts` to the public tunnel hostname so forwarded host headers are accepted.
 
 ### Lợi ích bảo mật
 

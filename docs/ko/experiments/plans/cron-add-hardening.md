@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Cron Add 하드닝"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:58Z
 ---
 
 # Cron Add 하드닝 & 스키마 정렬

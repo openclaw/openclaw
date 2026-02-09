@@ -5,33 +5,26 @@ read_when:
   - Opsætning af baggrundsovervågning eller notifikationer
   - Optimering af tokenforbrug ved periodiske tjek
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:06Z
 ---
 
 # Cron vs Heartbeat: Hvornår skal du bruge hvad
 
-Både heartbeats og cron-jobs lader dig køre opgaver efter en tidsplan. Denne guide hjælper dig med at vælge den rette mekanisme til dit use case.
+Både hjerteslag og cron job lader dig køre opgaver på en tidsplan. Denne guide hjælper dig med at vælge den rigtige mekanisme til din brug kasse.
 
 ## Hurtig beslutningsguide
 
-| Use case                                   | Anbefalet           | Hvorfor                                   |
-| ------------------------------------------ | ------------------- | ----------------------------------------- |
-| Tjek indbakke hver 30. min                 | Heartbeat           | Batch’er med andre tjek, kontekstbevidst  |
-| Send daglig rapport kl. 9 præcis           | Cron (isoleret)     | Kræver præcis timing                      |
-| Overvåg kalender for kommende begivenheder | Heartbeat           | Naturligt match til periodisk overblik    |
-| Kør ugentlig dybdegående analyse           | Cron (isoleret)     | Selvstændig opgave, kan bruge anden model |
-| Mind mig om 20 minutter                    | Cron (main, `--at`) | Éngangsopgave med præcis timing           |
-| Baggrundstjek af projektsundhed            | Heartbeat           | Kører oven på eksisterende cyklus         |
+| Use case                                         | Anbefalet                              | Hvorfor                                   |
+| ------------------------------------------------ | -------------------------------------- | ----------------------------------------- |
+| Afkryds indbakke hver 30 min.    | Heartbeat                              | Batch’er med andre tjek, kontekstbevidst  |
+| Send daglig rapport kl. 9 præcis | Cron (isoleret)     | Kræver præcis timing                      |
+| Overvåg kalender for kommende begivenheder       | Heartbeat                              | Naturligt match til periodisk overblik    |
+| Kør ugentlig dybdegående analyse                 | Cron (isoleret)     | Selvstændig opgave, kan bruge anden model |
+| Mind mig om 20 minutter                          | Cron (main, `--at`) | Éngangsopgave med præcis timing           |
+| Baggrundstjek af projektsundhed                  | Heartbeat                              | Kører oven på eksisterende cyklus         |
 
 ## Heartbeat: Periodisk overblik
 
-Heartbeats kører i **hovedsessionen** med et fast interval (standard: 30 min). De er designet til, at agenten kan holde øje med ting og fremhæve det vigtige.
+Hjertebanken kører i **hovedsessionen** med et regelmæssigt interval (standard: 30 min). De er designet til agenten til at kontrollere ting og overflade noget vigtigt.
 
 ### Hvornår skal du bruge heartbeat
 
@@ -161,12 +154,12 @@ Does it need a different model or thinking level?
 
 Den mest effektive opsætning bruger **begge**:
 
-1. **Heartbeat** håndterer rutinemæssig overvågning (indbakke, kalender, notifikationer) i ét batch’et turn hver 30. minut.
+1. **Hjertebeat** håndterer rutinemæssig overvågning (indbakke, kalender, meddelelser) i én drejning hvert 30. minut.
 2. **Cron** håndterer præcise tidsplaner (daglige rapporter, ugentlige reviews) og éngangspåmindelser.
 
 ### Eksempel: Effektiv automatiseringsopsætning
 
-**HEARTBEAT.md** (tjekkes hver 30. min):
+**HEARTBEAT.md** (kontrolleres hver 30 min):
 
 ```md
 # Heartbeat checklist
@@ -192,8 +185,8 @@ openclaw cron add --name "Call back" --at "2h" --session main --system-event "Ca
 
 ## Lobster: Deterministiske workflows med godkendelser
 
-Lobster er workflow-runtime’en til **flertrins værktøjspipelines**, der kræver deterministisk eksekvering og eksplicitte godkendelser.
-Brug den, når opgaven er mere end ét agent-turn, og du vil have et genoptageligt workflow med menneskelige checkpoints.
+Hummer er arbejdsgangstiden for **flertrinsværktøjsrørledninger**, der har brug for deterministisk udførelse og udtrykkelige godkendelser.
+Brug den, når opgaven er mere end en enkelt agent tur, og du ønsker en genoptagelig arbejdsgang med menneskelige checkpoints.
 
 ### Hvornår Lobster passer
 
@@ -206,8 +199,8 @@ Brug den, når opgaven er mere end ét agent-turn, og du vil have et genoptageli
 - **Heartbeat/cron** beslutter _hvornår_ en kørsel sker.
 - **Lobster** definerer _hvilke trin_ der sker, når kørslen starter.
 
-Til planlagte workflows: brug cron eller heartbeat til at trigge et agent-turn, der kalder Lobster.
-Til ad-hoc workflows: kald Lobster direkte.
+For planlagte arbejdsgange, bruge cron eller hjerteslag til at udløse en agent drej der kalder Lobster.
+For ad hoc-arbejdsgange, kald Hummer direkte.
 
 ### Driftsnoter (fra koden)
 
@@ -222,13 +215,13 @@ Se [Lobster](/tools/lobster) for fuld brug og eksempler.
 
 Både heartbeat og cron kan interagere med hovedsessionen, men på forskellige måder:
 
-|          | Heartbeat                        | Cron (main)                 | Cron (isoleret)            |
-| -------- | -------------------------------- | --------------------------- | -------------------------- |
-| Session  | Main                             | Main (via systemhændelse)   | `cron:<jobId>`             |
-| Historik | Delt                             | Delt                        | Ny ved hver kørsel         |
-| Kontekst | Fuld                             | Fuld                        | Ingen (starter rent)       |
-| Model    | Hovedsessionens model            | Hovedsessionens model       | Kan overrides              |
-| Output   | Leveres hvis ikke `HEARTBEAT_OK` | Heartbeat-prompt + hændelse | Annoncer resume (standard) |
+|          | Heartbeat                        | Cron (main)               | Cron (isoleret)            |
+| -------- | -------------------------------- | -------------------------------------------- | --------------------------------------------- |
+| Session  | Main                             | Main (via systemhændelse) | `cron:<jobId>`                                |
+| Historik | Delt                             | Delt                                         | Ny ved hver kørsel                            |
+| Kontekst | Fuld                             | Fuld                                         | Ingen (starter rent)       |
+| Model    | Hovedsessionens model            | Hovedsessionens model                        | Kan overrides                                 |
+| Output   | Leveres hvis ikke `HEARTBEAT_OK` | Heartbeat-prompt + hændelse                  | Annoncer resume (standard) |
 
 ### Hvornår skal du bruge main session cron
 
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Omkostningsovervejelser
 
-| Mekanisme       | Omkostningsprofil                                             |
-| --------------- | ------------------------------------------------------------- |
-| Heartbeat       | Ét turn hver N minutter; skalerer med HEARTBEAT.md-størrelse  |
+| Mekanisme                          | Omkostningsprofil                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------- |
+| Heartbeat                          | Ét turn hver N minutter; skalerer med HEARTBEAT.md-størrelse     |
 | Cron (main)     | Tilføjer hændelse til næste heartbeat (ingen isoleret kørsel) |
-| Cron (isoleret) | Fuldt agent-turn pr. job; kan bruge billigere model           |
+| Cron (isoleret) | Fuldt agent-turn pr. job; kan bruge billigere model              |
 
 **Tips**:
 

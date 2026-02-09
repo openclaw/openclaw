@@ -3,13 +3,6 @@ summary: "Katayuan ng suporta ng Google Chat app, mga kakayahan, at konpigurasyo
 read_when:
   - Gumagawa sa mga feature ng Google Chat channel
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Google Chat (Chat API)
@@ -54,7 +47,7 @@ Status: handa para sa mga DM + spaces sa pamamagitan ng Google Chat API webhooks
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - O config: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`.
 8. Itakda ang uri at value ng webhook audience (tugma sa config ng iyong Chat app).
-9. Simulan ang Gateway. Mag-POST ang Google Chat sa iyong webhook path.
+9. Simulan ang Gateway. Magpo-POST ang Google Chat sa iyong webhook path.
 
 ## Idagdag sa Google Chat
 
@@ -63,18 +56,18 @@ Kapag tumatakbo na ang Gateway at naidagdag ang iyong email sa visibility list:
 1. Pumunta sa [Google Chat](https://chat.google.com/).
 2. I-click ang **+** (plus) icon sa tabi ng **Direct Messages**.
 3. Sa search bar (kung saan ka karaniwang nagdadagdag ng mga tao), i-type ang **App name** na kinonpigura mo sa Google Cloud Console.
-   - **Tala**: _hindi_ lalabas ang bot sa "Marketplace" browse list dahil ito ay isang private app. Kailangan mo itong hanapin ayon sa pangalan.
+   - **Tandaan**: Ang bot ay _hindi_ lilitaw sa listahan ng "Marketplace" browse dahil ito ay isang private app. Kailangan mo itong hanapin ayon sa pangalan.
 4. Piliin ang iyong bot mula sa mga resulta.
 5. I-click ang **Add** o **Chat** para magsimula ng 1:1 na usapan.
 6. Magpadala ng "Hello" para ma-trigger ang assistant!
 
 ## Pampublikong URL (Webhook-only)
 
-Nangangailangan ang Google Chat webhooks ng pampublikong HTTPS endpoint. Para sa seguridad, **ilantad lamang ang path na `/googlechat`** sa internet. Panatilihin ang OpenClaw dashboard at iba pang sensitibong endpoint sa iyong pribadong network.
+Ang mga webhook ng Google Chat ay nangangailangan ng isang pampublikong HTTPS endpoint. Para sa seguridad, **ilantad lamang ang `/googlechat` path** sa internet. Panatilihin ang OpenClaw dashboard at iba pang sensitibong endpoint sa iyong pribadong network.
 
 ### Opsyon A: Tailscale Funnel (Inirerekomenda)
 
-Gamitin ang Tailscale Serve para sa pribadong dashboard at Funnel para sa pampublikong webhook path. Pinapanatiling pribado ang `/` habang inilalantad lamang ang `/googlechat`.
+Gamitin ang Tailscale Serve para sa pribadong dashboard at ang Funnel para sa pampublikong webhook path. Pinananatiling pribado nito ang `/` habang inilalantad lamang ang `/googlechat`.
 
 1. **Suriin kung saang address naka-bind ang iyong Gateway:**
 
@@ -114,15 +107,13 @@ Gamitin ang Tailscale Serve para sa pribadong dashboard at Funnel para sa pampub
    tailscale funnel status
    ```
 
-Ang iyong pampublikong webhook URL ay:
-`https://<node-name>.<tailnet>.ts.net/googlechat`
+Ang iyong pampublikong webhook URL ay magiging:`https://<node-name>.<tailnet>`
 
-Ang iyong pribadong dashboard ay mananatiling tailnet-only:
-`https://<node-name>.<tailnet>.ts.net:8443/`
+`.ts.net/googlechat`Mananatiling tailnet-only ang iyong pribadong dashboard:
 
 Gamitin ang pampublikong URL (walang `:8443`) sa config ng Google Chat app.
 
-> Tala: Ang konpigurasyong ito ay nananatili kahit mag-reboot. Para alisin ito sa hinaharap, patakbuhin ang `tailscale funnel reset` at `tailscale serve reset`.
+> `https://<node-name>.<tailnet>` `.ts.net:8443/`
 
 ### Opsyon B: Reverse Proxy (Caddy)
 
@@ -145,16 +136,16 @@ I-configure ang ingress rules ng iyong tunnel upang iruta lamang ang webhook pat
 
 ## Paano ito gumagana
 
-1. Nagpapadala ang Google Chat ng webhook POSTs sa Gateway. Kasama sa bawat request ang header na `Authorization: Bearer <token>`.
+1. Tandaan: Ang konfigurasyong ito ay nananatili kahit mag-reboot. Upang alisin ito sa ibang pagkakataon, patakbuhin ang `tailscale funnel reset` at `tailscale serve reset`.
 2. Vine-verify ng OpenClaw ang token laban sa naka-configure na `audienceType` + `audience`:
    - `audienceType: "app-url"` → ang audience ay ang iyong HTTPS webhook URL.
    - `audienceType: "project-number"` → ang audience ay ang Cloud project number.
 3. Niruruta ang mga mensahe ayon sa space:
    - Gumagamit ang mga DM ng session key na `agent:<agentId>:googlechat:dm:<spaceId>`.
    - Gumagamit ang mga space ng session key na `agent:<agentId>:googlechat:group:<spaceId>`.
-4. Ang DM access ay pairing bilang default. Ang mga hindi kilalang sender ay makakatanggap ng pairing code; i-approve gamit ang:
+4. Nagpapadala ang Google Chat ng mga webhook POST sa gateway. Ang bawat request ay may kasamang header na `Authorization: Bearer <token>`.
    - `openclaw pairing approve googlechat <code>`
-5. Ang mga group space ay nangangailangan ng @-mention bilang default. Gamitin ang `botUser` kung kailangan ng mention detection ang user name ng app.
+5. Ang DM access ay pairing bilang default. Use `botUser` if mention detection needs the app’s user name.
 
 ## Mga target
 
@@ -214,9 +205,9 @@ Kung ang Google Cloud Logs Explorer ay nagpapakita ng mga error tulad ng:
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-Ibig sabihin nito ay hindi naka-register ang webhook handler. Mga karaniwang sanhi:
+This means the webhook handler isn't registered. Common causes:
 
-1. **Hindi naka-configure ang channel**: Nawawala ang seksyong `channels.googlechat` sa iyong config. I-verify gamit ang:
+1. **Channel not configured**: The `channels.googlechat` section is missing from your config. I-verify gamit ang:
 
    ```bash
    openclaw config get channels.googlechat

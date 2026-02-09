@@ -4,13 +4,6 @@ read_when:
   - Konfiguracja Mattermost
   - Debugowanie routingu Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:54Z
 ---
 
 # Mattermost (wtyczka)
@@ -40,7 +33,7 @@ OpenClaw automatycznie zaproponuje lokalną ścieżkę instalacji.
 
 Szczegóły: [Plugins](/tools/plugin)
 
-## Szybki start
+## Szybka konfiguracja
 
 1. Zainstaluj wtyczkę Mattermost.
 2. Utwórz konto bota Mattermost i skopiuj **token bota**.

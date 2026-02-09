@@ -5,24 +5,17 @@ read_when:
   - 你想要部署到雲端平台
   - 你需要更新、遷移或解除安裝
 title: "安裝"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:30Z
 ---
 
 # 安裝
 
-已經完成 [入門指南](/start/getting-started) 了嗎？那就準備好了 — 本頁提供替代的安裝方式、各平台專屬指引，以及維護相關內容。
+34. 已經完成 [Getting Started](/start/getting-started)？ 一切就緒 — 本頁面提供替代安裝方式、平台特定指引與維護資訊。
 
 ## 系統需求
 
 - **[Node 22+](/install/node)**（若未安裝，[安裝程式腳本](#install-methods) 會自動安裝）
 - macOS、Linux 或 Windows
-- 僅在從原始碼建置時需要 `pnpm`
+- 36. 僅在從原始碼建置時才需要 `pnpm`
 
 <Note>
 在 Windows 上，我們強烈建議於 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) 下執行 OpenClaw。
@@ -31,13 +24,14 @@ x-i18n:
 ## 安裝方式
 
 <Tip>
-**安裝程式腳本** 是安裝 OpenClaw 的建議方式。它可在一步內完成 Node 偵測、安裝與入門引導。
+**安裝程式腳本** 是安裝 OpenClaw 的建議方式。 38. 它可在單一步驟中處理 Node 偵測、安裝與導覽設定。
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="安裝程式腳本" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     下載 CLI、透過 npm 全域安裝，並啟動入門引導精靈。
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ x-i18n:
         ```
       </Tab>
     </Tabs>
-
+    
     就這樣 — 腳本會處理 Node 偵測、安裝與入門引導。
-
+    
     若要略過入門引導、僅安裝二進位檔：
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ x-i18n:
         ```
       </Tab>
     </Tabs>
-
+    
     所有旗標、環境變數與 CI／自動化選項，請參閱 [Installer internals](/install/installer)。
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     若你已具備 Node 22+，並偏好自行管理安裝：
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp 建置錯誤？">
           若你已全域安裝 libvips（在 macOS 上常見於 Homebrew），且 `sharp` 失敗，請強制使用預先建置的二進位檔：
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           若看到 `sharp: Please add node-gyp to your dependencies`，請安裝建置工具（macOS：Xcode CLT + `npm install -g node-gyp`），或使用上述環境變數。
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ x-i18n:
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm 需要對含有建置腳本的套件給予明確核准。首次安裝出現「Ignored build scripts」警告後，請執行 `pnpm approve-builds -g`，並選取列出的套件。
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="從原始碼" icon="github">
-    適合貢獻者或希望從本機檢出執行的使用者。
+  <Accordion title="From source" icon="github">39. 
+        適用於貢獻者或任何想要從本機檢出執行的人。
 
+    ```
     <Steps>
       <Step title="複製並建置">
         複製 [OpenClaw repo](https://github.com/openclaw/openclaw) 並建置：
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ x-i18n:
       </Step>
       <Step title="連結 CLI">
         讓 `openclaw` 指令可全域使用：
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         或者略過連結，直接在 repo 內透過 `pnpm openclaw ...` 執行指令。
       </Step>
       <Step title="執行入門引導">
@@ -137,8 +135,9 @@ x-i18n:
         ```
       </Step>
     </Steps>
-
+    
     更深入的開發流程，請參閱 [Setup](/start/setup)。
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## 疑難排解：找不到 `openclaw`
 
-<Accordion title="PATH 診斷與修正">
+<Accordion title="PATH diagnosis and fix">
   快速診斷：
 
 ```bash
@@ -192,19 +191,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 在 Windows 上，請將 `npm prefix -g` 的輸出加入 PATH。
 
-接著開啟新的終端機（或在 zsh 中執行 `rehash`／在 bash 中執行 `hash -r`）。
-</Accordion>
+接著開啟新的終端機（或在 zsh 中執行 `rehash`／在 bash 中執行 `hash -r`）。 </Accordion> </Accordion>
 
 ## 更新／解除安裝
 
 <CardGroup cols={3}>
-  <Card title="更新" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     讓 OpenClaw 保持最新。
   </Card>
-  <Card title="遷移" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     移轉到新機器。
   </Card>
-  <Card title="解除安裝" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     完整移除 OpenClaw。
   </Card>
 </CardGroup>

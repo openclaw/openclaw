@@ -3,17 +3,10 @@ summary: "Günlükleme yüzeyleri, dosya günlükleri, WS günlük stilleri ve k
 read_when:
   - Günlükleme çıktısını veya biçimlerini değiştirirken
   - CLI veya gateway çıktısını hata ayıklarken
-title: "Günlükleme"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:22Z
+title: "Logging"
 ---
 
-# Günlükleme
+# Logging
 
 Kullanıcıya dönük bir genel bakış için (CLI + Control UI + yapılandırma), bkz. [/logging](/logging).
 
@@ -55,7 +48,7 @@ Konsol ayrıntı düzeyini bağımsız olarak ayarlayabilirsiniz:
 - `logging.consoleLevel` (varsayılan `info`)
 - `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
-## Araç özetinde maskeleme
+## Tool summary redaction
 
 Ayrıntılı araç özetleri (örn. `🛠️ Exec: ...`), konsol akışına ulaşmadan önce hassas belirteçleri maskeleyebilir. Bu **yalnızca araçlar** içindir ve dosya günlüklerini değiştirmez.
 

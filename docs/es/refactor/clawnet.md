@@ -4,13 +4,6 @@ read_when:
   - Planificar un protocolo de red unificado para nodos + clientes de operador
   - Replantear aprobaciones, emparejamiento, TLS y presencia entre dispositivos
 title: "Refactorización de Clawnet"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:51Z
 ---
 
 # Refactorización de Clawnet (unificación de protocolo + autenticación)
@@ -51,7 +44,7 @@ Documento único y riguroso para:
 
 ## Dos protocolos
 
-### 1) Gateway WebSocket (plano de control)
+### 1. Gateway WebSocket (plano de control)
 
 - Superficie completa de API: configuración, canales, modelos, sesiones, ejecuciones de agentes, logs, nodos, etc.
 - Enlace predeterminado: loopback. Acceso remoto vía SSH/Tailscale.
@@ -62,7 +55,7 @@ Documento único y riguroso para:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (transporte de nodos)
+### 2. Bridge (transporte de nodos)
 
 - Superficie reducida con lista de permitidos, identidad del nodo + emparejamiento.
 - JSONL sobre TCP; TLS opcional + pinning de huella de certificado.
@@ -374,7 +367,7 @@ Elija uno antes de implementar para evitar deriva.
 
 # Política de capacidades + comandos
 
-- Las capacidades/comandos reportados por el nodo se tratan como **afirmaciones**.
+- Los mayúsculas/comandos reportados por nodos son tratados como **reclamos**.
 - El Gateway aplica listas de permitidos por plataforma.
 - Cualquier comando nuevo requiere aprobación del operador o un cambio explícito en la lista de permitidos.
 - Auditar cambios con marcas de tiempo.

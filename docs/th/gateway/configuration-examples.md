@@ -5,18 +5,11 @@ read_when:
   - มองหาตัวอย่างการกำหนดค่า
   - ตั้งค่า OpenClaw เป็นครั้งแรก
 title: "ตัวอย่างการกำหนดค่า"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:12Z
 ---
 
 # ตัวอย่างการกำหนดค่า
 
-ตัวอย่างด้านล่างสอดคล้องกับสคีมาคอนฟิกปัจจุบัน สำหรับเอกสารอ้างอิงแบบครบถ้วนและหมายเหตุรายฟิลด์ โปรดดูที่ [Configuration](/gateway/configuration)
+Examples below are aligned with the current config schema. ตัวอย่างด้านล่างสอดคล้องกับสคีมาคอนฟิกปัจจุบัน สำหรับเอกสารอ้างอิงแบบครบถ้วนและหมายเหตุรายฟิลด์ โปรดดูที่ [Configuration](/gateway/configuration)
 
 ## เริ่มต้นอย่างรวดเร็ว
 
@@ -55,7 +48,7 @@ x-i18n:
 
 ## ตัวอย่างแบบขยาย (ตัวเลือกหลัก)
 
-> JSON5 ช่วยให้ใช้คอมเมนต์และเครื่องหมายจุลภาคต่อท้ายได้ JSON ปกติก็ใช้งานได้เช่นกัน
+> JSON5 ช่วยให้ใช้คอมเมนต์และเครื่องหมายจุลภาคต่อท้ายได้ JSON ปกติก็ใช้งานได้เช่นกัน Regular JSON works too.
 
 ```json5
 {
@@ -608,6 +601,6 @@ x-i18n:
 ## เคล็ดลับ
 
 - หากคุณตั้งค่า `dmPolicy: "open"` รายการ `allowFrom` ที่ตรงกันต้องมี `"*"` รวมอยู่ด้วย
-- รหัสผู้ให้บริการแตกต่างกัน (หมายเลขโทรศัพท์, รหัสผู้ใช้, รหัสช่องทาง) โปรดใช้เอกสารของผู้ให้บริการเพื่อยืนยันรูปแบบ
+- รหัสผู้ให้บริการแตกต่างกัน (หมายเลขโทรศัพท์, รหัสผู้ใช้, รหัสช่องทาง) โปรดใช้เอกสารของผู้ให้บริการเพื่อยืนยันรูปแบบ Use the provider docs to confirm the format.
 - ส่วนที่เป็นตัวเลือกซึ่งสามารถเพิ่มภายหลังได้: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`
 - ดู [Providers](/channels/whatsapp) และ [Troubleshooting](/gateway/troubleshooting) สำหรับหมายเหตุการตั้งค่าเชิงลึกเพิ่มเติม

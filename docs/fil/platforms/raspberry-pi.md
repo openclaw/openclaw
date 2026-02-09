@@ -5,13 +5,6 @@ read_when:
   - Pagpapatakbo ng OpenClaw sa mga ARM device
   - Pagbuo ng murang, laging-on na personal AI
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:51Z
 ---
 
 # OpenClaw sa Raspberry Pi
@@ -28,13 +21,13 @@ Perpekto para sa:
 
 ## Mga Kinakailangan sa Hardware
 
-| Pi Model        | RAM     | Gumagana?        | Mga Tala                            |
-| --------------- | ------- | ---------------- | ----------------------------------- |
+| Pi Model        | RAM     | Gumagana?       | Mga Tala                            |
+| --------------- | ------- | --------------- | ----------------------------------- |
 | **Pi 5**        | 4GB/8GB | ✅ Pinakamahusay | Pinakamabilis, inirerekomenda       |
 | **Pi 4**        | 4GB     | ✅ Maganda       | Sweet spot para sa karamihan        |
 | **Pi 4**        | 2GB     | ✅ OK            | Gumagana, magdagdag ng swap         |
-| **Pi 4**        | 1GB     | ⚠️ Sikip         | Posible may swap, minimal na config |
-| **Pi 3B+**      | 1GB     | ⚠️ Mabagal       | Gumagana pero mabagal               |
+| **Pi 4**        | 1GB     | ⚠️ Sikip        | Posible may swap, minimal na config |
+| **Pi 3B+**      | 1GB     | ⚠️ Mabagal      | Gumagana pero mabagal               |
 | **Pi Zero 2 W** | 512MB   | ❌               | Hindi inirerekomenda                |
 
 **Minimum na specs:** 1GB RAM, 1 core, 500MB disk  
@@ -48,7 +41,7 @@ Perpekto para sa:
 - Network connection (Ethernet o WiFi)
 - ~30 minuto
 
-## 1) I-flash ang OS
+## 1. I-flash ang OS
 
 Gamitin ang **Raspberry Pi OS Lite (64-bit)** — walang desktop na kailangan para sa headless server.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) System Setup
+## 3. System Setup
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) I-install ang Node.js 22 (ARM64)
+## 4. I-install ang Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Magdagdag ng Swap (Mahalaga para sa 2GB o mas mababa)
+## 5. Magdagdag ng Swap (Mahalaga para sa 2GB o mas mababa)
 
 Pinipigilan ng swap ang out-of-memory crashes:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) I-install ang OpenClaw
+## 6. I-install ang OpenClaw
 
 ### Option A: Standard Install (Inirerekomenda)
 
@@ -134,7 +127,7 @@ npm link
 
 Ang hackable install ay nagbibigay ng direktang access sa mga log at code — kapaki-pakinabang para sa pag-debug ng mga ARM-specific na isyu.
 
-## 7) Patakbuhin ang Onboarding
+## 7. Patakbuhin ang Onboarding
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) I-access ang Dashboard
+## 9. I-access ang Dashboard
 
 Dahil headless ang Pi, gumamit ng SSH tunnel:
 
@@ -190,7 +183,7 @@ sudo systemctl restart openclaw
 
 ### Gumamit ng USB SSD (Malaking Pagbuti)
 
-Mabagal ang SD cards at madaling mapudpod. Ang USB SSD ay lubos na nagpapabuti ng performance:
+Mabagal ang mga SD card at madaling masira. Malaki ang ipinapahusay ng isang USB SSD ang performance:
 
 ```bash
 # Check if booting from USB
@@ -230,19 +223,19 @@ htop
 
 Karamihan sa mga tampok ng OpenClaw ay gumagana sa ARM64, pero maaaring kailanganin ng ARM builds ang ilang external binaries:
 
-| Tool               | Status sa ARM64 | Mga Tala                            |
-| ------------------ | --------------- | ----------------------------------- |
-| Node.js            | ✅              | Mahusay na gumagana                 |
-| WhatsApp (Baileys) | ✅              | Pure JS, walang isyu                |
-| Telegram           | ✅              | Pure JS, walang isyu                |
+| Tool                                  | Status sa ARM64 | Mga Tala                            |
+| ------------------------------------- | --------------- | ----------------------------------- |
+| Node.js               | ✅               | Mahusay na gumagana                 |
+| WhatsApp (Baileys) | ✅               | Pure JS, walang isyu                |
+| Telegram                              | ✅               | Pure JS, walang isyu                |
 | gog (Gmail CLI)    | ⚠️              | Tingnan kung may ARM release        |
-| Chromium (browser) | ✅              | `sudo apt install chromium-browser` |
+| Chromium (browser) | ✅               | `sudo apt install chromium-browser` |
 
-Kung pumalya ang isang skill, tingnan kung ang binary nito ay may ARM build. Maraming Go/Rust tools ang meron; ang iba ay wala.
+Kung pumalya ang isang skill, tingnan kung may ARM build ang binary nito. Many Go/Rust tools do; some don't.
 
 ### 32-bit vs 64-bit
 
-**Laging gumamit ng 64-bit OS.** Kinakailangan ito ng Node.js at maraming modernong tool. Suriin gamit ang:
+**Palaging gumamit ng 64-bit OS.** Kinakailangan ito ng Node.js at ng maraming modernong tool. Suriin gamit ang:
 
 ```bash
 uname -m
@@ -268,7 +261,7 @@ Dahil ang Pi ay Gateway lamang (ang mga model ay tumatakbo sa cloud), gumamit ng
 }
 ```
 
-**Huwag subukang magpatakbo ng local LLMs sa Pi** — kahit maliliit na model ay masyadong mabagal. Hayaan ang Claude/GPT ang gumawa ng mabibigat na gawain.
+**Don't try to run local LLMs on a Pi** — even small models are too slow. Let Claude/GPT do the heavy lifting.
 
 ---
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Paghahambing ng Gastos
 
-| Setup          | One-Time Cost | Buwanang Gastos | Mga Tala                      |
-| -------------- | ------------- | --------------- | ----------------------------- |
-| **Pi 4 (2GB)** | ~$45          | $0              | + kuryente (~$5/taon)         |
-| **Pi 4 (4GB)** | ~$55          | $0              | Inirerekomenda                |
-| **Pi 5 (4GB)** | ~$60          | $0              | Pinakamahusay na performance  |
-| **Pi 5 (8GB)** | ~$80          | $0              | Sobra pero handa sa hinaharap |
-| DigitalOcean   | $0            | $6/buwan        | $72/taon                      |
-| Hetzner        | $0            | €3.79/buwan     | ~$50/taon                     |
+| Setup                             | One-Time Cost        | Buwanang Gastos             | Mga Tala                                                 |
+| --------------------------------- | -------------------- | --------------------------- | -------------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                          | + kuryente (~$5/taon) |
+| **Pi 4 (4GB)** | ~$55 | $0                          | Inirerekomenda                                           |
+| **Pi 5 (4GB)** | ~$60 | $0                          | Pinakamahusay na performance                             |
+| **Pi 5 (8GB)** | ~$80 | $0                          | Sobra pero handa sa hinaharap                            |
+| DigitalOcean                      | $0                   | $6/buwan                    | $72/taon                                                 |
+| Hetzner                           | $0                   | €3.79/buwan | ~$50/taon                                |
 
 **Break-even:** Nababayaran ng Pi ang sarili nito sa loob ng ~6-12 buwan kumpara sa cloud VPS.
 

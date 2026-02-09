@@ -4,13 +4,6 @@ read_when:
   - iOS düğümlerinde veya macOS’te kamera yakalamayı eklerken ya da değiştirirken
   - Ajanın erişebildiği MEDIA geçici dosya iş akışlarını genişletirken
 title: "Kamera Yakalama"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Kamera yakalama (ajan)
@@ -94,7 +87,7 @@ Notlar:
   - Varsayılan: **açık** (anahtar yoksa etkin kabul edilir).
   - Kapalıyken: `camera.*` komutları `CAMERA_DISABLED` döndürür.
 
-### İzinler
+### Permissions
 
 - Android çalışma zamanı izinleri gerektirir:
   - Hem `camera.snap` hem de `camera.clip` için `CAMERA`.

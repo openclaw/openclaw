@@ -2,13 +2,6 @@
 summary: "Werkruimtesjabloon voor AGENTS.md"
 read_when:
   - Handmatig een werkruimte opstarten
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:59Z
 ---
 
 # AGENTS.md - Jouw werkruimte
@@ -79,7 +72,7 @@ Leg vast wat ertoe doet. Beslissingen, context, dingen om te onthouden. Sla gehe
 - Alles wat de machine verlaat
 - Alles waar je onzeker over bent
 
-## Groepschats
+## Groep Chats
 
 Je hebt toegang tot de spullen van je mens. Dat betekent niet dat je hun spullen _deelt_. In groepen ben je een deelnemer — niet hun stem, niet hun proxy. Denk na voordat je spreekt.
 
@@ -91,7 +84,7 @@ In groepschats waar je elk bericht ontvangt, wees **slim over wanneer je bijdraa
 
 - Je direct wordt genoemd of een vraag krijgt
 - Je echte waarde kunt toevoegen (info, inzicht, hulp)
-- Iets gevat/funnies natuurlijk past
+- Iets leuks/grappigs past natuurlijk
 - Je belangrijke desinformatie corrigeert
 - Er om een samenvatting wordt gevraagd
 
@@ -185,7 +178,7 @@ Je kunt `HEARTBEAT.md` vrij bewerken met een korte checklist of herinneringen. H
 }
 ```
 
-**Wanneer contact opnemen:**
+**Wanneer om uit te komen:**
 
 - Er is een belangrijke e-mail binnengekomen
 - Een agenda-afspraak komt eraan (&lt;2 uur)

@@ -4,13 +4,6 @@ read_when:
   - Ina-update ang mga mapping ng device model identifier o mga NOTICE/license file
   - Binabago kung paano ipinapakita ng Instances UI ang mga pangalan ng device
 title: "Database ng Device Model"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:47Z
 ---
 
 # Database ng device model (mga friendly name)

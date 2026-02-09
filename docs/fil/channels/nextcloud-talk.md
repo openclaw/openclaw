@@ -3,18 +3,11 @@ summary: "Katayuan ng suporta, mga kakayahan, at konpigurasyon ng Nextcloud Talk
 read_when:
   - Nagtatrabaho sa mga feature ng channel ng Nextcloud Talk
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:22Z
 ---
 
 # Nextcloud Talk (plugin)
 
-Katayuan: suportado sa pamamagitan ng plugin (webhook bot). Sinusuportahan ang direct messages, rooms, reactions, at mga markdown message.
+10. Status: sinusuportahan sa pamamagitan ng plugin (webhook bot). 11. Sinusuportahan ang direct messages, rooms, reactions, at markdown messages.
 
 ## Kailangan ang plugin
 
@@ -40,6 +33,7 @@ Mga detalye: [Plugins](/tools/plugin)
 ## Mabilis na setup (baguhan)
 
 1. I-install ang Nextcloud Talk plugin.
+
 2. Sa iyong Nextcloud server, gumawa ng bot:
 
    ```bash
@@ -47,9 +41,11 @@ Mga detalye: [Plugins](/tools/plugin)
    ```
 
 3. I-enable ang bot sa mga setting ng target room.
+
 4. I-configure ang OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - O env: `NEXTCLOUD_TALK_BOT_SECRET` (default account lamang)
+
 5. I-restart ang Gateway (o tapusin ang onboarding).
 
 Minimal na config:
@@ -69,14 +65,14 @@ Minimal na config:
 
 ## Mga tala
 
-- Hindi maaaring magsimula ng DMs ang mga bot. Kailangang ang user ang unang mag-message sa bot.
+- 12. Hindi maaaring magpasimula ng DM ang mga bot. 13. Kailangang ang user ang unang mag-message sa bot.
 - Dapat maabot ng Gateway ang webhook URL; itakda ang `webhookPublicUrl` kung nasa likod ng proxy.
 - Hindi suportado ng bot API ang media uploads; ipinapadala ang media bilang mga URL.
 - Hindi tinutukoy ng webhook payload kung DM o room; itakda ang `apiUser` + `apiPassword` para paganahin ang mga lookup ng uri ng room (kung hindi, ituturing ang DMs bilang rooms).
 
 ## Kontrol sa access (DMs)
 
-- Default: `channels.nextcloud-talk.dmPolicy = "pairing"`. Ang mga hindi kilalang sender ay makakakuha ng pairing code.
+- Default: `channels.nextcloud-talk.dmPolicy = "pairing"`. 14. Ang mga hindi kilalang sender ay nakakakuha ng pairing code.
 - I-apruba sa pamamagitan ng:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ Mga opsyon ng provider:
 - `channels.nextcloud-talk.webhookPath`: webhook path (default: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: externally reachable na webhook URL.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`.
-- `channels.nextcloud-talk.allowFrom`: DM allowlist (mga user ID). Ang `open` ay nangangailangan ng `"*"`.
+- 15. `channels.nextcloud-talk.allowFrom`: DM allowlist (mga user ID). 16. Ang `open` ay nangangailangan ng `"*"`.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
 - `channels.nextcloud-talk.groupAllowFrom`: group allowlist (mga user ID).
 - `channels.nextcloud-talk.rooms`: mga per-room setting at allowlist.

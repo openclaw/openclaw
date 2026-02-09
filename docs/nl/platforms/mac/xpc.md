@@ -3,13 +3,6 @@ summary: "macOS IPC-architectuur voor de OpenClaw-app, Gateway-node-transport en
 read_when:
   - Bewerken van IPC-contracten of IPC van de menubalk-app
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # OpenClaw macOS IPC-architectuur
@@ -54,7 +47,7 @@ Agent -> Gateway -> Node Service (WS)
 ## Operationele stromen
 
 - Herstarten/herbouwen: `SIGN_IDENTITY="Apple Development: <Developer Name> (<TEAMID>)" scripts/restart-mac.sh`
-  - Beëindigt bestaande instanties
+  - Doodt bestaande instanties
   - Swift-build + packaging
   - Schrijft/bootstrappt/kickstart de LaunchAgent
 - Enkele instantie: de app sluit vroegtijdig af als er al een andere instantie met dezelfde bundle-ID draait.

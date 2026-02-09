@@ -5,19 +5,12 @@ read_when:
   - بصری ورک اسپیس کے لیے ایجنٹ کنٹرولز شامل کرتے وقت
   - WKWebView میں Canvas لوڈز کی ڈیبگنگ کرتے وقت
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:28Z
 ---
 
 # Canvas (macOS ایپ)
 
-macOS ایپ ایجنٹ کے زیرِ کنٹرول **Canvas پینل** کو `WKWebView` کے ذریعے ایمبیڈ کرتی ہے۔ یہ
-HTML/CSS/JS، A2UI، اور چھوٹی انٹرایکٹو UI سطحوں کے لیے ایک ہلکا پھلکا بصری ورک اسپیس ہے۔
+macOS ایپ `WKWebView` کا استعمال کرتے ہوئے ایک ایجنٹ کے زیرِ کنٹرول **Canvas panel** ایمبیڈ کرتی ہے۔ یہ
+HTML/CSS/JS، A2UI، اور چھوٹے انٹرایکٹو UI سرفیسز کے لیے ایک ہلکا پھلکا بصری ورک اسپیس ہے۔
 
 ## Canvas کہاں رہتا ہے
 
@@ -44,7 +37,7 @@ Canvas پینل ان فائلوں کو **کسٹم URL اسکیم** کے ذریع
 - مقامی canvas فائلوں میں تبدیلی پر خودکار طور پر دوبارہ لوڈ ہوتا ہے۔
 - ایک وقت میں صرف ایک Canvas پینل نظر آتا ہے (ضرورت کے مطابق سیشن بدلا جاتا ہے)۔
 
-Settings → **Allow Canvas** سے Canvas کو غیرفعال کیا جا سکتا ہے۔ غیرفعال ہونے پر، canvas
+Canvas کو Settings → **Allow Canvas** سے غیر فعال کیا جا سکتا ہے۔ غیر فعال ہونے پر، canvas
 نوڈ کمانڈز `CANVAS_DISABLED` واپس کرتی ہیں۔
 
 ## ایجنٹ API سطح
@@ -72,9 +65,9 @@ openclaw nodes canvas snapshot --node <id>
 
 ## Canvas میں A2UI
 
-A2UI کو Gateway canvas host کے ذریعے ہوسٹ کیا جاتا ہے اور Canvas پینل کے اندر رینڈر کیا جاتا ہے۔
-جب Gateway ایک Canvas host کا اعلان کرتا ہے، تو macOS ایپ پہلی بار کھلنے پر خودکار طور پر
-A2UI ہوسٹ صفحے پر نیویگیٹ کرتی ہے۔
+A2UI کو Gateway canvas host کے ذریعے ہوسٹ کیا جاتا ہے اور Canvas panel کے اندر رینڈر کیا جاتا ہے۔
+جب Gateway ایک Canvas host کا اعلان کرتا ہے تو macOS ایپ
+پہلی بار کھلنے پر خود بخود A2UI host صفحے پر نیویگیٹ کرتی ہے۔
 
 ڈیفالٹ A2UI ہوسٹ URL:
 

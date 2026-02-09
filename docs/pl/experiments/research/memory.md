@@ -1,17 +1,10 @@
 ---
-summary: „Notatki badawcze: system pamięci offline dla obszarów roboczych Clawd (Markdown jako źródło prawdy + indeks pochodny)”
+summary: "„Notatki badawcze: system pamięci offline dla obszarów roboczych Clawd (Markdown jako źródło prawdy + indeks pochodny)”"
 read_when:
   - Projektowanie pamięci obszaru roboczego (~/.openclaw/workspace) poza dziennymi logami Markdown
-  - Decyzja: samodzielne CLI vs głęboka integracja z OpenClaw
+  - Deciding: "Decyzja: samodzielne CLI vs głęboka integracja z OpenClaw"
   - Dodawanie przywoływania offline + refleksji (retain/recall/reflect)
-title: „Badania nad pamięcią obszaru roboczego”
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:33Z
+title: "„Badania nad pamięcią obszaru roboczego”"
 ---
 
 # Workspace Memory v2 (offline): notatki badawcze
@@ -26,7 +19,7 @@ Obecna konfiguracja (jeden plik na dzień) świetnie sprawdza się w:
 
 - dziennikowaniu „append-only”
 - edycji przez człowieka
-- trwałości i audytowalności opartej na git
+- trwałość zabezpieczona gitem + możliwość kontroli
 - niskim progu zapisu („po prostu to zapisz”)
 
 Jest słaba w:

@@ -2,14 +2,7 @@
 summary: "Шаги проверки работоспособности для связности каналов"
 read_when:
   - Диагностика работоспособности канала WhatsApp
-title: "Проверки работоспособности"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:32Z
+title: "Проверки здоровья"
 ---
 
 # Проверки работоспособности (CLI)

@@ -1,18 +1,11 @@
 ---
 summary: "उच्च‑संकेत वाले इश्यू और बग रिपोर्ट दर्ज करना"
 title: "इश्यू सबमिट करना"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:22Z
 ---
 
 ## इश्यू सबमिट करना
 
-स्पष्ट और संक्षिप्त इश्यू निदान और सुधार को तेज़ करते हैं। बग, रिग्रेशन, या फीचर गैप के लिए निम्नलिखित शामिल करें:
+Clear, concise issues speed up diagnosis and fixes. Include the following for bugs, regressions, or feature gaps:
 
 ### क्या शामिल करें
 
@@ -28,7 +21,7 @@ x-i18n:
 - [ ] हाल ही में ठीक/सुलझाया नहीं गया है, इसकी पुष्टि (विशेषकर सुरक्षा)
 - [ ] दावे प्रमाण या पुनरुत्पादन द्वारा समर्थित
 
-संक्षिप्त रहें। पूर्ण व्याकरण से अधिक संक्षेप महत्वपूर्ण है।
+Be brief. Terseness > perfect grammar.
 
 मान्यकरण (PR से पहले चलाएँ/ठीक करें):
 
@@ -84,7 +77,7 @@ x-i18n:
 ### Evidence (redacted)
 ```
 
-_सार्वजनिक रूप से सीक्रेट/एक्सप्लॉइट विवरण से बचें। संवेदनशील इश्यू के लिए विवरण न्यूनतम रखें और निजी प्रकटीकरण का अनुरोध करें।_
+_Avoid secrets/exploit details in public. For sensitive issues, minimize detail and request private disclosure._
 
 #### रिग्रेशन रिपोर्ट
 
@@ -156,4 +149,4 @@ _सार्वजनिक रूप से सीक्रेट/एक्स
 
 ### फिक्स PR सबमिट करना
 
-PR से पहले इश्यू वैकल्पिक है। यदि छोड़ रहे हैं तो PR में विवरण शामिल करें। PR को केंद्रित रखें, इश्यू नंबर नोट करें, परीक्षण जोड़ें या उनकी अनुपस्थिति का कारण बताएं, व्यवहार परिवर्तन/जोखिम दस्तावेज़ करें, प्रमाण के रूप में संपादित लॉग/स्क्रीनशॉट शामिल करें, और सबमिट करने से पहले उचित मान्यकरण चलाएँ।
+Issue before PR is optional. Include details in PR if skipping. Keep the PR focused, note issue number, add tests or explain absence, document behavior changes/risks, include redacted logs/screenshots as proof, and run proper validation before submitting.

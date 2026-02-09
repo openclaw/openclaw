@@ -4,20 +4,13 @@ read_when:
   - Gusto mo ang OpenCode Zen para sa access sa mga model
   - Gusto mo ng isang piniling listahan ng mga model na angkop sa coding
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:45Z
 ---
 
 # OpenCode Zen
 
-Ang OpenCode Zen ay isang **piniling listahan ng mga model** na inirerekomenda ng OpenCode team para sa mga coding agent.
-Isa itong opsyonal, hosted na paraan ng access sa mga model na gumagamit ng API key at ng `opencode` provider.
-Kasalukuyang nasa beta ang Zen.
+OpenCode Zen is a **curated list of models** recommended by the OpenCode team for coding agents.
+It is an optional, hosted model access path that uses an API key and the `opencode` provider.
+Zen is currently in beta.
 
 ## Setup ng CLI
 

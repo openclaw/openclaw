@@ -2,13 +2,6 @@
 summary: "Rytuał pierwszego uruchomienia dla nowych agentów"
 read_when:
   - Ręczne bootstrapowanie obszaru roboczego
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:37Z
 ---
 
 # BOOTSTRAP.md – Witaj, świecie
@@ -57,7 +50,7 @@ Zapytaj, jak chcą się z Tobą kontaktować:
 - **WhatsApp** — połącz ich konto osobiste (pokażesz kod QR)
 - **Telegram** — skonfiguruj bota przez BotFather
 
-Poprowadź ich przez wybraną opcję.
+Prowadź je niezależnie od tego, co wybierają.
 
 ## Gdy skończysz
 

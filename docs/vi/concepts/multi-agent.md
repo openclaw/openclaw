@@ -3,18 +3,11 @@ summary: "Định tuyến đa tác tử: tác tử cô lập, tài khoản kênh
 title: Định tuyến đa tác tử
 read_when: "Bạn muốn nhiều tác tử cô lập (workspace + xác thực) trong một tiến trình gateway."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:48Z
 ---
 
 # Định tuyến đa tác tử
 
-Mục tiêu: nhiều tác tử _cô lập_ (workspace + `agentDir` + phiên riêng biệt), cùng với nhiều tài khoản kênh (ví dụ hai WhatsApp) trong một Gateway đang chạy. Lưu lượng vào được định tuyến tới một tác tử thông qua các ràng buộc.
+Mục tiêu: nhiều agent _cô lập_ (workspace + `agentDir` + phiên riêng), cùng với nhiều tài khoản kênh (ví dụ: hai WhatsApp) trong một Gateway đang chạy. Lưu lượng vào được định tuyến đến một agent thông qua các binding.
 
 ## “Một tác tử” là gì?
 
@@ -24,25 +17,21 @@ Một **tác tử** là một bộ não được phạm vi hóa đầy đủ v�
 - **Thư mục trạng thái** (`agentDir`) cho hồ sơ xác thực, registry mô hình và cấu hình theo từng tác tử.
 - **Kho phiên** (lịch sử chat + trạng thái định tuyến) nằm dưới `~/.openclaw/agents/<agentId>/sessions`.
 
-Hồ sơ xác thực là **theo từng tác tử**. Mỗi tác tử đọc từ:
+Hồ sơ xác thực là **theo từng agent**. Mỗi agent đọc từ phần riêng của nó:
 
 ```
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Thông tin xác thực của tác tử chính **không** được chia sẻ tự động. Không bao giờ tái sử dụng `agentDir`
-giữa các tác tử (sẽ gây xung đột xác thực/phiên). Nếu bạn muốn chia sẻ thông tin xác thực,
-hãy sao chép `auth-profiles.json` vào `agentDir` của tác tử kia.
+Thông tin xác thực của agent chính **không** được chia sẻ tự động. Never reuse `agentDir`
+across agents (it causes auth/session collisions). Nếu bạn muốn chia sẻ thông tin xác thực, hãy sao chép `auth-profiles.json` vào `agentDir` của agent kia.
 
-Skills là theo từng tác tử thông qua thư mục `skills/` của mỗi workspace, với các skill dùng chung
-có sẵn từ `~/.openclaw/skills`. Xem [Skills: theo tác tử vs dùng chung](/tools/skills#per-agent-vs-shared-skills).
+Skills là theo từng agent thông qua thư mục `skills/` của mỗi workspace, với các skill dùng chung có sẵn tại `~/.openclaw/skills`. Xem [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 Gateway có thể lưu trữ **một tác tử** (mặc định) hoặc **nhiều tác tử** song song.
 
-**Lưu ý về workspace:** workspace của mỗi tác tử là **cwd mặc định**, không phải
-sandbox cứng. Đường dẫn tương đối được resolve trong workspace, nhưng đường dẫn tuyệt đối có thể
-truy cập các vị trí khác trên host trừ khi bật sandboxing. Xem
-[Sandboxing](/gateway/sandboxing).
+**Ghi chú workspace:** workspace của mỗi agent là **cwd mặc định**, không phải một sandbox cứng. Relative paths resolve inside the workspace, but absolute paths can
+reach other host locations unless sandboxing is enabled. Xem [Sandboxing](/gateway/sandboxing).
 
 ## Đường dẫn (bản đồ nhanh)
 
@@ -89,7 +78,7 @@ Với **nhiều tác tử**, mỗi `agentId` trở thành một **persona cô l�
 
 ## Một số WhatsApp, nhiều người (tách DM)
 
-Bạn có thể định tuyến **các DM WhatsApp khác nhau** tới các tác tử khác nhau trong khi vẫn dùng **một tài khoản WhatsApp**. So khớp theo E.164 của người gửi (như `+15551234567`) với `peer.kind: "dm"`. Phản hồi vẫn đến từ cùng một số WhatsApp (không có danh tính người gửi theo từng tác tử).
+Bạn có thể định tuyến **các DM WhatsApp khác nhau** đến các agent khác nhau trong khi vẫn dùng **một tài khoản WhatsApp**. Khớp theo E.164 của người gửi (như `+15551234567`) với `peer.kind: "dm"`. Phản hồi vẫn đến từ cùng một số WhatsApp (không có danh tính người gửi theo từng agent).
 
 Chi tiết quan trọng: chat trực tiếp được gộp về **khóa phiên chính** của tác tử, vì vậy để cô lập thực sự cần **mỗi người một tác tử**.
 
@@ -134,9 +123,7 @@ Các ràng buộc là **xác định** và **cụ thể nhất sẽ thắng**:
 
 ## Nhiều tài khoản / số điện thoại
 
-Các kênh hỗ trợ **nhiều tài khoản** (ví dụ WhatsApp) dùng `accountId` để nhận diện
-mỗi lần đăng nhập. Mỗi `accountId` có thể được định tuyến tới một tác tử khác nhau, vì vậy một máy chủ
-có thể lưu trữ nhiều số điện thoại mà không trộn lẫn phiên.
+Các kênh hỗ trợ **nhiều tài khoản** (ví dụ: WhatsApp) sử dụng `accountId` để định danh từng lần đăng nhập. Mỗi `accountId` có thể được định tuyến đến một agent khác nhau, vì vậy một máy chủ có thể lưu trữ nhiều số điện thoại mà không trộn lẫn phiên.
 
 ## Khái niệm
 
@@ -325,8 +312,8 @@ và chính sách công cụ chặt chẽ hơn:
 
 Ghi chú:
 
-- Danh sách cho phép/từ chối công cụ là **công cụ**, không phải skills. Nếu một skill cần chạy
-  binary, hãy đảm bảo `exec` được cho phép và binary tồn tại trong sandbox.
+- Danh sách cho phép/từ chối công cụ là **tools**, không phải skills. 1. Nếu một kỹ năng cần chạy một
+  tệp nhị phân, hãy đảm bảo `exec` được cho phép và tệp nhị phân tồn tại trong sandbox.
 - Để kiểm soát chặt hơn, đặt `agents.list[].groupChat.mentionPatterns` và giữ
   danh sách cho phép nhóm được bật cho kênh.
 
@@ -367,8 +354,8 @@ Bắt đầu từ v2026.1.6, mỗi tác tử có thể có sandbox và hạn ch�
 }
 ```
 
-Lưu ý: `setupCommand` nằm dưới `sandbox.docker` và chạy một lần khi tạo container.
-Các ghi đè `sandbox.docker.*` theo tác tử sẽ bị bỏ qua khi phạm vi được resolve là `"shared"`.
+2. Lưu ý: `setupCommand` nằm dưới `sandbox.docker` và chỉ chạy một lần khi tạo container.
+3. Các ghi đè `sandbox.docker.*` theo từng agent sẽ bị bỏ qua khi phạm vi đã được phân giải là `"shared"`.
 
 **Lợi ích:**
 
@@ -376,8 +363,8 @@ Các ghi đè `sandbox.docker.*` theo tác tử sẽ bị bỏ qua khi phạm vi
 - **Kiểm soát tài nguyên**: Sandbox các tác tử cụ thể trong khi giữ các tác tử khác trên host
 - **Chính sách linh hoạt**: Quyền khác nhau cho từng tác tử
 
-Lưu ý: `tools.elevated` là **toàn cục** và dựa trên người gửi; không thể cấu hình theo tác tử.
-Nếu bạn cần ranh giới theo tác tử, hãy dùng `agents.list[].tools` để từ chối `exec`.
-Để nhắm mục tiêu theo nhóm, dùng `agents.list[].groupChat.mentionPatterns` để các @mention ánh xạ rõ ràng tới tác tử dự định.
+Lưu ý: `tools.elevated` là **toàn cục** và dựa trên người gửi; không thể cấu hình theo từng agent.
+5. Nếu bạn cần ranh giới theo từng agent, hãy dùng `agents.list[].tools` để từ chối `exec`.
+Đối với nhắm mục tiêu theo nhóm, hãy dùng `agents.list[].groupChat.mentionPatterns` để các @mention ánh xạ chính xác tới agent mong muốn.
 
 Xem [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) để có ví dụ chi tiết.

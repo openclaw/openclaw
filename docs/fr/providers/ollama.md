@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez exécuter OpenClaw avec des modèles locaux via Ollama
   - Vous avez besoin d’aide pour la configuration et la mise en place d’Ollama
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 2992dd0a456d19c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:35Z
 ---
 
 # Ollama
@@ -225,7 +218,7 @@ Vous pouvez également désactiver le streaming pour n’importe quel fournisseu
 
 Pour les modèles découverts automatiquement, OpenClaw utilise la fenêtre de contexte signalée par Ollama lorsqu’elle est disponible, sinon la valeur par défaut est `8192`. Vous pouvez remplacer `contextWindow` et `maxTokens` dans la configuration explicite du fournisseur.
 
-## Depannage
+## Problemes courants
 
 ### Ollama non détecté
 

@@ -5,13 +5,6 @@ read_when:
   - Swift Package Manager 를 통해 Peekaboo 통합
   - PeekabooBridge 프로토콜/경로 변경
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:45Z
 ---
 
 # Peekaboo Bridge (macOS UI 자동화)

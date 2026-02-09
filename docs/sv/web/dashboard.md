@@ -3,13 +3,6 @@ summary: "Åtkomst och autentisering för Gateway-dashboarden (Control UI)"
 read_when:
   - Ändrar autentisering eller exponeringslägen för dashboarden
 title: "Dashboard"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:52Z
 ---
 
 # Dashboard (Control UI)
@@ -27,12 +20,12 @@ Viktiga referenser:
 - [Tailscale](/gateway/tailscale) för Serve/Funnel-automation.
 - [Web surfaces](/web) för bindningslägen och säkerhetsnoteringar.
 
-Autentisering tillämpas vid WebSocket-handshaken via `connect.params.auth`
-(token eller lösenord). Se `gateway.auth` i [Gateway-konfiguration](/gateway/configuration).
+Autentisering är påtvingad på WebSocket handskakning via `connect.params.auth`
+(token eller lösenord). Se `gateway.auth` i [Gateway configuration](/gateway/configuration).
 
-Säkerhetsnotering: Control UI är en **adminyta** (chatt, konfig, exec-godkännanden).
-Exponera den inte offentligt. UI:t lagrar token i `localStorage` efter första inläsningen.
-Föredra localhost, Tailscale Serve eller en SSH-tunnel.
+Säkerhetsanteckning: Control UI är en **administratörsyta** (chatt, konfigurera, exec godkännanden).
+Utsätt den inte offentligt. UI lagrar token i `localStorage` efter första laddningen.
+Föredrar localhost, Tailscale Serve, eller en SSH-tunnel.
 
 ## Snabbaste vägen (rekommenderas)
 
@@ -44,7 +37,7 @@ Föredra localhost, Tailscale Serve eller en SSH-tunnel.
 
 - **Localhost**: öppna `http://127.0.0.1:18789/`.
 - **Tokenkälla**: `gateway.auth.token` (eller `OPENCLAW_GATEWAY_TOKEN`); UI:t lagrar en kopia i localStorage efter att du anslutit.
-- **Inte localhost**: använd Tailscale Serve (tokenlöst om `gateway.auth.allowTailscale: true`), tailnet-bindning med token eller en SSH-tunnel. Se [Web surfaces](/web).
+- **Inte localhost**: använd Tailscale Serve (tokenless if `gateway.auth.allowTailscale: true`), tailnet binda med en token, eller en SSH-tunnel. Se [Webbytor](/web).
 
 ## Om du ser ”unauthorized” / 1008
 

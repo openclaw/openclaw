@@ -3,20 +3,13 @@ summary: "Reference CLI pour `openclaw agents` (lister/ajouter/supprimer/definir
 read_when:
   - Vous souhaitez plusieurs agents isoles (espaces de travail + routage + authentification)
 title: "agents"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:50Z
 ---
 
 # `openclaw agents`
 
 Gerez des agents isoles (espaces de travail + authentification + routage).
 
-Voir aussi :
+Liens connexes :
 
 - Routage multi-agents : [Multi-Agent Routing](/concepts/multi-agent)
 - Espace de travail d'agent : [Agent workspace](/concepts/agent-workspace)

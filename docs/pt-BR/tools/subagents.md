@@ -4,13 +4,6 @@ read_when:
   - Você quer trabalho em segundo plano/paralelo via o agente
   - Você está alterando sessions_spawn ou a política de ferramentas de subagentes
 title: "Subagentes"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:20Z
 ---
 
 # Subagentes
@@ -36,7 +29,8 @@ Objetivos principais:
 - Manter a superfície de ferramentas difícil de usar incorretamente: subagentes **não** recebem ferramentas de sessão por padrão.
 - Evitar expansão aninhada: subagentes não podem criar subagentes.
 
-Nota de custo: cada subagente tem seu **próprio** contexto e uso de tokens. Para tarefas pesadas ou repetitivas, defina um modelo mais barato para subagentes e mantenha seu agente principal em um modelo de maior qualidade. Você pode configurar isso via `agents.defaults.subagents.model` ou substituições por agente.
+Nota de custo: cada subagente tem seu **próprio** contexto e uso de tokens. Para tarefas pesadas ou repetitivas, defina um modelo mais barato para subagentes e mantenha seu agente principal em um modelo de maior qualidade.
+Você pode configurar isso via `agents.defaults.subagents.model` ou substituições por agente.
 
 ## Ferramenta
 

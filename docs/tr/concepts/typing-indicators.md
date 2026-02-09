@@ -3,13 +3,6 @@ summary: "OpenClaw'ın yazma göstergelerini ne zaman gösterdiği ve bunların 
 read_when:
   - Yazma göstergesi davranışını veya varsayılanlarını değiştirirken
 title: "Yazma Göstergeleri"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:12Z
 ---
 
 # Yazma göstergeleri
@@ -36,8 +29,8 @@ Yazma göstergeleri, bir çalıştırma aktifken sohbet kanalına gönderilir. Y
   **model döngüsü başlar başlamaz** yazmayı başlatır.
 - `thinking` — **ilk akıl yürütme deltası**nda yazmayı başlatır (çalıştırma için
   `reasoningLevel: "stream"` gerektirir).
-- `message` — **ilk sessiz olmayan metin deltası**nda yazmayı başlatır (**
-  OC_I18N_0011** sessiz belirtecini yok sayar).
+- `message` — **ilk sessiz olmayan metin deltası**nda yazmayı başlatır (\*\*
+  OC_I18N_0011\*\* sessiz belirtecini yok sayar).
 
 “Ne kadar erken tetiklendiği” sırası:
 `never` → `message` → `thinking` → `instant`

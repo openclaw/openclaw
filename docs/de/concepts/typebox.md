@@ -3,13 +3,6 @@ summary: "TypeBox-Schemas als einzige Quelle der Wahrheit für das Gateway-Proto
 read_when:
   - Aktualisieren von Protokoll-Schemas oder Codegenerierung
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:09Z
 ---
 
 # TypeBox als Quelle der Wahrheit für das Protokoll
@@ -30,8 +23,7 @@ Jede Gateway‑WS‑Nachricht ist eines von drei Frames:
 - **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
 
 Der erste Frame **muss** eine `connect`‑Anfrage sein. Danach können Clients
-Methoden aufrufen (z. B. `health`, `send`, `chat.send`) und Events abonnieren (z. B.
-`presence`, `tick`, `agent`).
+Methoden aufrufen (z. B. `health`, `send`, `chat.send`) und Events abonnieren (z. B. `presence`, `tick`, `agent`).
 
 Verbindungsablauf (minimal):
 

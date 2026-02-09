@@ -3,13 +3,6 @@ summary: "OpenClaw 가 타이핑 표시기를 표시하는 경우와 이를 조�
 read_when:
   - 타이핑 표시기 동작 또는 기본값을 변경할 때
 title: "타이핑 표시기"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:52Z
 ---
 
 # 타이핑 표시기

@@ -3,13 +3,6 @@ summary: "Paano nag-uulat ang macOS app ng mga estado ng kalusugan ng gateway/Ba
 read_when:
   - Pag-debug ng mga indicator ng kalusugan ng mac app
 title: "Mga Health Check"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Mga Health Check sa macOS
@@ -33,7 +26,7 @@ Paano makita kung malusog ang naka-link na channel mula sa menu bar app.
 
 ## Paano gumagana ang probe
 
-- Pinapatakbo ng app ang `openclaw health --json` sa pamamagitan ng `ShellExecutor` tuwing ~60s at on demand. Ini-load ng probe ang creds at nag-uulat ng status nang hindi nagpapadala ng mga mensahe.
+- Pinapatakbo ng app ang `openclaw health --json` sa pamamagitan ng `ShellExecutor` tuwing ~60s at kapag hinihingi. Ikinakarga ng probe ang mga kredensyal at nag-uulat ng status nang hindi nagpapadala ng mga mensahe.
 - I-cache nang hiwalay ang huling magandang snapshot at ang huling error upang maiwasan ang flicker; ipakita ang timestamp ng bawat isa.
 
 ## Kapag may alinlangan

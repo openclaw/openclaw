@@ -4,13 +4,6 @@ summary: "Einrichtung des Vercel AI Gateway (Authentifizierung + Modellauswahl)"
 read_when:
   - Sie möchten Vercel AI Gateway mit OpenClaw verwenden
   - Sie benötigen die API-Schlüssel-Umgebungsvariable oder die CLI-Authentifizierungsoption
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:07Z
 ---
 
 # Vercel AI Gateway
@@ -50,7 +43,7 @@ openclaw onboard --non-interactive \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY"
 ```
 
-## Umgebungs-Hinweis
+## Umgebungshinweis
 
 Wenn das Gateway als Daemon (launchd/systemd) ausgeführt wird, stellen Sie sicher, dass `AI_GATEWAY_API_KEY`
 diesem Prozess zur Verfügung steht (zum Beispiel in `~/.openclaw/.env` oder über

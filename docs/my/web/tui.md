@@ -4,13 +4,6 @@ read_when:
   - TUI ကို စတင်အသုံးပြုရန် လမ်းညွှန်ကို လိုအပ်သောအခါ
   - TUI ၏ အင်္ဂါရပ်များ၊ အမိန့်များနှင့် အတိုကောက်ခလုတ်များကို အပြည့်အစုံ သိလိုသောအခါ
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:18Z
 ---
 
 # TUI (Terminal UI)
@@ -49,7 +42,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 ## Mental model: agents + sessions
 
-- Agents များသည် ထူးခြားသော slug များဖြစ်သည် (ဥပမာ `main`, `research`)။ Gateway မှ စာရင်းကို ထုတ်ပေးထားသည်။
+- 33. Agents များသည် unique slug များဖြစ်ပါသည် (ဥပမာ `main`, `research`)။ 34. Gateway သည် စာရင်းကို ဖော်ပြပေးပါသည်။
 - Sessions များသည် လက်ရှိ agent နှင့် ဆိုင်သည်။
 - Session keys များကို `agent:<agentId>:<sessionKey>` အဖြစ် သိမ်းဆည်းထားသည်။
   - သင် `/session main` ကို ရိုက်ထည့်ပါက TUI သည် `agent:<currentAgent>:main` သို့ ချဲ့ထွင်ပြသသည်။
@@ -113,7 +106,7 @@ Session lifecycle:
 - `/settings`
 - `/exit`
 
-အခြား Gateway slash commands များ (ဥပမာ `/context`) ကို Gateway သို့ ဆက်လက်ပို့ပြီး system output အဖြစ် ပြသသည်။ [Slash commands](/tools/slash-commands) ကို ကြည့်ပါ။
+35. အခြား Gateway slash commands များ (ဥပမာ `/context`) ကို Gateway သို့ forward လုပ်ပြီး system output အဖြစ် ပြသပါသည်။ 36. [Slash commands](/tools/slash-commands) ကို ကြည့်ပါ။
 
 ## Local shell commands
 
@@ -149,8 +142,8 @@ Session lifecycle:
 - `--thinking <level>`: ပို့ဆောင်မှုများအတွက် thinking level ကို override လုပ်ရန်
 - `--timeout-ms <ms>`: Agent timeout (ms ဖြင့်) (မူလ `agents.defaults.timeoutSeconds`)
 
-မှတ်ချက်: `--url` ကို သတ်မှတ်ထားသောအခါ TUI သည် config သို့မဟုတ် environment credentials များသို့ ပြန်လည်မလှည့်ပါ။
-`--token` သို့မဟုတ် `--password` ကို တိတိကျကျ ပေးပို့ရပါမည်။ Explicit credentials မရှိပါက အမှားဖြစ်သည်။
+37. မှတ်ချက်: `--url` ကို set လုပ်ပါက TUI သည် config သို့မဟုတ် environment credentials သို့ ပြန်မလှည့်ပါ။
+38. `--token` သို့မဟုတ် `--password` ကို ထင်ရှားစွာ ပေးပါ။ 39. ထင်ရှားသော credentials မပါရှိပါက error ဖြစ်ပါသည်။
 
 ## Troubleshooting
 

@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Distribuera OpenClaw på Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:48Z
 ---
 
 # Fly.io-distribution
@@ -44,11 +37,11 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **Tips:** Välj en region nära dig. Vanliga alternativ: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) Konfigurera fly.toml
+## 2. Konfigurera fly.toml
 
 Redigera `fly.toml` så att den matchar ditt appnamn och dina krav.
 
-**Säkerhetsnotering:** Standardkonfigen exponerar en offentlig URL. För en härdad distribution utan offentlig IP, se [Privat distribution](#private-deployment-hardened) eller använd `fly.private.toml`.
+**Säkerhetsanteckning:** Standardkonfigurationen exponerar en publik URL. För en härdad distribution utan offentlig IP-adress, se [Privat distribution](#private-deployment-hardened) eller använd `fly.private.toml`.
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Viktiga inställningar:**
 
-| Inställning                    | Varför                                                                              |
-| ------------------------------ | ----------------------------------------------------------------------------------- |
-| `--bind lan`                   | Binder till `0.0.0.0` så att Flys proxy kan nå gatewayen                            |
+| Inställning                    | Varför                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `--bind lan`                   | Binder till `0.0.0.0` så att Flys proxy kan nå gatewayen                                               |
 | `--allow-unconfigured`         | Startar utan en konfigfil (du skapar en senare)                                     |
 | `internal_port = 3000`         | Måste matcha `--port 3000` (eller `OPENCLAW_GATEWAY_PORT`) för Flys hälsokontroller |
-| `memory = "2048mb"`            | 512MB är för lite; 2GB rekommenderas                                                |
-| `OPENCLAW_STATE_DIR = "/data"` | Beständig lagring av tillstånd på volymen                                           |
+| `memory = "2048mb"`            | 512MB är för lite; 2GB rekommenderas                                                                   |
+| `OPENCLAW_STATE_DIR = "/data"` | Beständig lagring av tillstånd på volymen                                                              |
 
-## 3) Sätt hemligheter
+## 3. Sätt hemligheter
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,15 +107,15 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - Icke-loopback-bindningar (`--bind lan`) kräver `OPENCLAW_GATEWAY_TOKEN` av säkerhetsskäl.
 - Behandla dessa token som lösenord.
-- **Föredra miljövariabler framför konfigfil** för alla API-nycklar och token. Detta håller hemligheter borta från `openclaw.json` där de kan exponeras eller loggas av misstag.
+- **Föredrar env vars över konfigurationsfil** för alla API-nycklar och tokens. Detta håller hemligheter från `openclaw.json` där de kan av misstag exponeras eller loggas.
 
-## 4) Distribuera
+## 4. Distribuera
 
 ```bash
 fly deploy
 ```
 
-Första distributionen bygger Docker-imagen (~2–3 minuter). Efterföljande distributioner går snabbare.
+Först distribuera bygger Docker-bilden (~2-3 minuter). Efterföljande distributioner är snabbare.
 
 Efter distribution, verifiera:
 
@@ -138,7 +131,7 @@ Du bör se:
 [discord] logged in to discord as xxx
 ```
 
-## 5) Skapa konfigfil
+## 5. Skapa konfigfil
 
 SSH:a in i maskinen för att skapa en korrekt konfig:
 
@@ -209,7 +202,7 @@ EOF
 - Miljövariabel: `DISCORD_BOT_TOKEN` (rekommenderas för hemligheter)
 - Konfigfil: `channels.discord.token`
 
-Om du använder miljövariabel behövs ingen token i konfigen. Gatewayen läser `DISCORD_BOT_TOKEN` automatiskt.
+Om du använder env var, behöver du inte lägga till token för att konfigurera. Gateway läser `DISCORD_BOT_TOKEN` automatiskt.
 
 Starta om för att tillämpa:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Åtkomst till Gateway
+## 6. Åtkomst till Gateway
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Fly kan inte nå gatewayen på den konfigurerade porten.
 
 ### OOM / Minnesproblem
 
-Containern startar om eller dödas. Tecken: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration` eller tysta omstarter.
+Behållare fortsätter att starta om eller bli dödad. Skyltar: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, eller tyst omstart.
 
 **Åtgärd:** Öka minnet i `fly.toml`:
 
@@ -276,7 +269,7 @@ Eller uppdatera en befintlig maskin:
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**Obs:** 512MB är för lite. 1GB kan fungera men kan få OOM under belastning eller med utförlig loggning. **2GB rekommenderas.**
+**Obs:** 512MB är för litet. 1GB kan fungera men kan OOM under belastning eller med verbose loggning. **2GB rekommenderas.**
 
 ### Gateway-låsproblem
 
@@ -295,7 +288,7 @@ Låsfilen finns på `/data/gateway.*.lock` (inte i en underkatalog).
 
 ### Konfig läses inte
 
-Om du använder `--allow-unconfigured` skapar gatewayen en minimal konfig. Din anpassade konfig på `/data/openclaw.json` ska läsas vid omstart.
+Om du använder `--allow-unconfigured`, skapar gateway en minimal konfiguration. Din anpassade konfiguration på `/data/openclaw.json` ska läsas vid omstart.
 
 Verifiera att konfigen finns:
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### Skriva konfig via SSH
 
-Kommandot `fly ssh console -C` stöder inte shell-omdirigering. För att skriva en konfigfil:
+Kommandot `fly ssh console -C` stöder inte skalomdirigering. För att skriva en konfigurationsfil:
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -316,7 +309,7 @@ fly sftp shell
 > put /local/path/config.json /data/openclaw.json
 ```
 
-**Obs:** `fly sftp` kan misslyckas om filen redan finns. Ta bort den först:
+**Obs:** 'fly sftp' kan misslyckas om filen redan finns. Ta bort först:
 
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
@@ -357,11 +350,11 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**Obs:** Efter `fly deploy` kan maskinkommandot återställas till det som finns i `fly.toml`. Om du gjort manuella ändringar, tillämpa dem igen efter distribution.
+**Obs:** Efter `fly deploy`, kan maskinkommandot återställas till vad som finns i `fly.toml`. Om du gjort manuella ändringar, åter tillämpa dem efter distribution.
 
 ## Privat distribution (Härdad)
 
-Som standard tilldelar Fly offentliga IP-adresser, vilket gör din gateway åtkomlig på `https://your-app.fly.dev`. Detta är bekvämt men innebär att din distribution kan upptäckas av internetscanners (Shodan, Censys, m.fl.).
+Som standard, Fly allokerar offentliga IP-adresser, vilket gör din gateway tillgänglig på `https://your-app.fly.dev`. Detta är bekvämt men innebär att din distribution är upptäckbar av internet-skannrar (Shodan, Censys, etc.).
 
 För en härdad distribution med **ingen offentlig exponering**, använd den privata mallen.
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### Webhooks med privat distribution
 
-Om du behöver webhook-callbacks (Twilio, Telnyx, m.fl.) utan offentlig exponering:
+Om du behöver webhook callbacks (Twilio, Telnyx, etc.) utan offentlig exponering:
 
 1. **ngrok-tunnel** – Kör ngrok i containern eller som sidecar
 2. **Tailscale Funnel** – Exponera specifika sökvägar via Tailscale
@@ -464,7 +457,7 @@ Exempel på röstkonfig med ngrok:
 }
 ```
 
-ngrok-tunneln körs i containern och tillhandahåller en offentlig webhook-URL utan att exponera Fly-appen i sig. Sätt `webhookSecurity.allowedHosts` till det offentliga tunnelvärdnamnet så att vidarebefordrade host-headers accepteras.
+Den ngrok tunneln körs inne i behållaren och ger en publik webhook URL utan att exponera Fly appen själv. Ange `webhookSecurity.allowedHosts` till det publika tunnelns värdnamn så vidarekopplade värdhuvuden accepteras.
 
 ### Säkerhetsfördelar
 

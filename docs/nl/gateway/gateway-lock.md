@@ -4,13 +4,6 @@ read_when:
   - Het gatewayproces uitvoeren of debuggen
   - Onderzoeken van handhaving van één instantie
 title: "Gateway-vergrendeling"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:18Z
 ---
 
 # Gateway-vergrendeling

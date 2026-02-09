@@ -3,13 +3,6 @@ summary: "Hoe inkomende audio/spraaknotities worden gedownload, getranscribeerd 
 read_when:
   - Bij het wijzigen van audiotranscriptie of media-afhandeling
 title: "Audio en spraaknotities"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:32Z
 ---
 
 # Audio / Spraaknotities — 2026-01-17
@@ -114,7 +107,7 @@ Let op: Detectie van binaries is best-effort op macOS/Linux/Windows; zorg dat de
 - Het transcript is beschikbaar voor templates als `{{Transcript}}`.
 - CLI-stdout is begrensd (5MB); houd CLI-uitvoer beknopt.
 
-## Valkuilen
+## Gotcha's
 
 - Scoperegels gebruiken first-match-wins. `chatType` wordt genormaliseerd naar `direct`, `group` of `room`.
 - Zorg dat je CLI met exitcode 0 afsluit en platte tekst print; JSON moet worden aangepast via `jq -r .text`.

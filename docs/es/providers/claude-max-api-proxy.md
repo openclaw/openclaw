@@ -5,13 +5,6 @@ read_when:
   - Quiere un servidor de API local que envuelva la CLI de Claude Code
   - Quiere ahorrar dinero usando una suscripción en lugar de claves de API
 title: "Proxy de API de Claude Max"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:16Z
 ---
 
 # Proxy de API de Claude Max
@@ -20,10 +13,10 @@ x-i18n:
 
 ## ¿Por qué usar esto?
 
-| Enfoque                | Costo                                                         | Ideal para                              |
-| ---------------------- | ------------------------------------------------------------- | --------------------------------------- |
+| Enfoque                | Costo                                                                                            | Ideal para                              |
+| ---------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------- |
 | API de Anthropic       | Pago por token (~$15/M de entrada, $75/M de salida para Opus) | Apps de producción, alto volumen        |
-| Suscripción Claude Max | $200/mes fijo                                                 | Uso personal, desarrollo, uso ilimitado |
+| Suscripción Claude Max | $200/mes fijo                                                                                    | Uso personal, desarrollo, uso ilimitado |
 
 Si tiene una suscripción Claude Max y quiere usarla con herramientas compatibles con OpenAI, este proxy puede ahorrarle una cantidad significativa de dinero.
 
@@ -97,7 +90,7 @@ Puede apuntar OpenClaw al proxy como un endpoint personalizado compatible con Op
 
 ## Modelos disponibles
 
-| ID del modelo     | Se asigna a     |
+| ID del modelo     | Mapas a         |
 | ----------------- | --------------- |
 | `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |

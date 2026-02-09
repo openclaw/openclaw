@@ -1,15 +1,8 @@
 ---
-title: Sandbox vs polityka narzędzi vs Elevated
-summary: „Dlaczego narzędzie jest zablokowane: środowisko wykonawcze sandbox, polityka dozwalania/blokowania narzędzi oraz bramki elevated exec”
-read_when: „Gdy trafisz do „sandbox jail” lub zobaczysz odmowę narzędzia/elevated i chcesz znać dokładny klucz konfiguracji do zmiany.”
+title: Sandbox vs Tool Policy vs Elevated
+summary: "„Dlaczego narzędzie jest zablokowane: środowisko wykonawcze sandbox, polityka dozwalania/blokowania narzędzi oraz bramki elevated exec”"
+read_when: "„Gdy trafisz do „sandbox jail” lub zobaczysz odmowę narzędzia/elevated i chcesz znać dokładny klucz konfiguracji do zmiany.”"
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:22Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -31,7 +24,7 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Wyświetla:
+Wypisz:
 
 - efektywny tryb/zakres sandboxa/dostęp do obszaru roboczego
 - czy sesja jest obecnie sandboxowana (main vs non-main)

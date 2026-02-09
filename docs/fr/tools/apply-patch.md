@@ -1,16 +1,9 @@
 ---
-summary: « Appliquer des correctifs multi-fichiers avec l’outil apply_patch »
+summary: "Appliquer des correctifs multi-fichiers avec l’outil apply_patch"
 read_when:
   - Vous avez besoin d’editions de fichiers structurees sur plusieurs fichiers
   - Vous souhaitez documenter ou depanner des modifications basees sur des correctifs
-title: « Outil apply_patch »
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:53Z
+title: "Outil apply_patch"
 ---
 
 # outil apply_patch

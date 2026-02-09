@@ -4,18 +4,11 @@ read_when:
   - آپ OpenClaw میں Xiaomi MiMo ماڈلز چاہتے ہیں
   - آپ کو XIAOMI_API_KEY سیٹ اپ درکار ہے
 title: "Xiaomi MiMo"
-x-i18n:
-  source_path: providers/xiaomi.md
-  source_hash: 366fd2297b2caf8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # Xiaomi MiMo
 
-Xiaomi MiMo **MiMo** ماڈلز کے لیے API پلیٹ فارم ہے۔ یہ OpenAI اور Anthropic فارمیٹس کے ساتھ ہم آہنگ REST APIs فراہم کرتا ہے اور تصدیق کے لیے API کلیدیں استعمال کرتا ہے۔ اپنی API کلید [Xiaomi MiMo کنسول](https://platform.xiaomimimo.com/#/console/api-keys) میں بنائیں۔ OpenClaw Xiaomi MiMo API کلید کے ساتھ `xiaomi` فراہم کنندہ استعمال کرتا ہے۔
+Xiaomi MiMo **MiMo** ماڈلز کے لیے API پلیٹ فارم ہے۔ یہ OpenAI اور Anthropic فارمیٹس کے مطابق REST APIs فراہم کرتا ہے اور authentication کے لیے API keys استعمال کرتا ہے۔ [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys) میں اپنی API key بنائیں۔ OpenClaw Xiaomi MiMo API key کے ساتھ `xiaomi` provider استعمال کرتا ہے۔
 
 ## ماڈل کا جائزہ
 

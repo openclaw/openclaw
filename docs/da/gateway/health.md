@@ -3,13 +3,6 @@ summary: "Sundhedstjektrin for kanalforbindelse"
 read_when:
   - Diagnosticering af WhatsApp-kanalens sundhed
 title: "Sundhedstjek"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Sundhedstjek (CLI)
@@ -28,8 +21,8 @@ Kort guide til at verificere kanalforbindelse uden at gætte.
 ## Dybdegående diagnosticering
 
 - Legitimationsoplysninger på disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime bør være nylig).
-- Sessionslager: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (stien kan tilsidesættes i konfigurationen). Antal og seneste modtagere vises via `status`.
-- Genforbindelsesflow: `openclaw channels logout && openclaw channels login --verbose` når statuskoder 409–515 eller `loggedOut` vises i logs. (Bemærk: QR-loginflowet genstarter automatisk én gang for status 515 efter parring.)
+- Session butik: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Tæller og seneste modtagere er dukket op via `status`.
+- Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Bemærk: QR login flow auto-genstarter en gang for status 515 efter parring.)
 
 ## Når noget fejler
 
@@ -39,4 +32,4 @@ Kort guide til at verificere kanalforbindelse uden at gætte.
 
 ## Dedikeret "health"-kommando
 
-`openclaw health --json` beder den kørende Gateway om dens sundhedsbillede (ingen direkte kanalsockets fra CLI’en). Den rapporterer tilknyttede legitimationsoplysninger/autentalder, per-kanal-sondeoversigter, sessionslager-oversigt og en sonderingsvarighed. Den afslutter med ikke-nul, hvis Gateway er utilgængelig, eller hvis sonden fejler/timeout’er. Brug `--timeout <ms>` til at tilsidesætte standarden på 10 s.
+`openclaw sundhed --json` spørger den løbende Gateway for sin sundhed snapshot (ingen direkte kanal stikkontakter fra CLI). Det rapporterer linket creds/auth alder når tilgængelig, per-kanal probe resuméer, session-store resumé, og en sonde varighed. Den afslutter ikke nul, hvis porten ikke kan nås eller sonden svigter/timeouts. Brug `--timeout <ms>` for at tilsidesætte 10s standard.

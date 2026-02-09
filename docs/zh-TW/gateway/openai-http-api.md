@@ -1,31 +1,24 @@
 ---
-summary: 「從 Gateway 公開一個與 OpenAI 相容的 /v1/chat/completions HTTP 端點」
+summary: "從 Gateway 公開一個與 OpenAI 相容的 /v1/chat/completions HTTP 端點"
 read_when:
-  - 「整合需要 OpenAI Chat Completions 的工具」
-title: 「OpenAI Chat Completions」
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:04Z
+  - 整合需要 OpenAI Chat Completions 的工具
+title: "OpenAI Chat Completions"
 ---
 
 # OpenAI Chat Completions（HTTP）
 
 OpenClaw 的 Gateway 可以提供一個小型、與 OpenAI 相容的 Chat Completions 端點。
 
-此端點**預設為停用**。請先在設定中啟用。
+此端點**預設為停用**。請先在設定中啟用。 請先在設定中啟用。
 
 - `POST /v1/chat/completions`
 - 與 Gateway 使用相同的連接埠（WS + HTTP 多工）：`http://<gateway-host>:<port>/v1/chat/completions`
 
 在內部實作上，請求會以一般的 Gateway 代理程式執行流程來處理（與 `openclaw agent` 相同的程式碼路徑），因此路由、權限與設定都會符合你的 Gateway。
 
-## 身分驗證
+## Authentication
 
-使用 Gateway 的身分驗證設定。請傳送 Bearer 權杖：
+Uses the Gateway auth configuration. 傳送 Bearer 權杖：
 
 - `Authorization: Bearer <token>`
 
@@ -49,7 +42,7 @@ OpenClaw 的 Gateway 可以提供一個小型、與 OpenAI 相容的 Chat Comple
 
 - `x-openclaw-session-key: <sessionKey>` 以完整控制工作階段路由。
 
-## 啟用端點
+## Enabling the endpoint
 
 將 `gateway.http.endpoints.chatCompletions.enabled` 設為 `true`：
 
@@ -81,11 +74,11 @@ OpenClaw 的 Gateway 可以提供一個小型、與 OpenAI 相容的 Chat Comple
 }
 ```
 
-## 工作階段行為
+## Session behavior
 
-預設情況下，該端點**每個請求皆為無狀態**（每次呼叫都會產生新的工作階段金鑰）。
+By default the endpoint is **stateless per request** (a new session key is generated each call).
 
-如果請求包含 OpenAI 的 `user` 字串，Gateway 會從中衍生出穩定的工作階段金鑰，讓重複呼叫能夠共用同一個代理程式工作階段。
+If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
 
 ## 串流（SSE）
 

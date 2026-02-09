@@ -3,13 +3,6 @@ summary: "Integración de WhatsApp (canal web): inicio de sesión, bandeja de en
 read_when:
   - Al trabajar en el comportamiento del canal WhatsApp/web o el enrutamiento de la bandeja de entrada
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:22Z
 ---
 
 # WhatsApp (canal web)
@@ -211,6 +204,7 @@ El asistente lo usa para establecer su **lista de permitidos/propietario** y per
 ## Normalización de mensajes (lo que ve el modelo)
 
 - `Body` es el cuerpo del mensaje actual con envolvente.
+
 - El contexto de respuesta citada **siempre se agrega**:
 
   ```
@@ -223,6 +217,7 @@ El asistente lo usa para establecer su **lista de permitidos/propietario** y per
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = cuerpo citado o marcador de posición de medios
   - `ReplyToSender` = E.164 cuando se conoce
+
 - Los mensajes entrantes solo de medios usan marcadores de posición:
   - `<media:image|video|audio|document|sticker>`
 

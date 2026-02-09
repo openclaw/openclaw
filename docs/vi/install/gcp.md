@@ -5,13 +5,6 @@ read_when:
   - Bạn muốn một Gateway luôn bật, đạt chuẩn production trên VM riêng
   - Bạn muốn toàn quyền kiểm soát lưu trữ, nhị phân và hành vi khởi động lại
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:30Z
 ---
 
 # OpenClaw trên GCP Compute Engine (Docker, Hướng dẫn VPS production)
@@ -20,8 +13,8 @@ x-i18n:
 
 Chạy một OpenClaw Gateway bền vững trên VM GCP Compute Engine bằng Docker, với trạng thái lưu trữ lâu dài, nhị phân được bake sẵn và hành vi khởi động lại an toàn.
 
-Nếu bạn muốn “OpenClaw 24/7 với ~$5-12/tháng”, đây là một thiết lập đáng tin cậy trên Google Cloud.  
-Chi phí thay đổi theo loại máy và khu vực; hãy chọn VM nhỏ nhất phù hợp với khối lượng công việc và nâng cấp nếu gặp OOM.
+If you want "OpenClaw 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
+Pricing varies by machine type and region; pick the smallest VM that fits your workload and scale up if you hit OOMs.
 
 ## Chúng ta đang làm gì (giải thích đơn giản)?
 
@@ -37,9 +30,9 @@ Gateway có thể được truy cập qua:
 - Chuyển tiếp cổng SSH từ laptop
 - Mở cổng trực tiếp nếu bạn tự quản lý firewall và token
 
-Hướng dẫn này dùng Debian trên GCP Compute Engine.  
-Ubuntu cũng hoạt động; chỉ cần ánh xạ gói tương ứng.  
-Với luồng Docker chung, xem [Docker](/install/docker).
+This guide uses Debian on GCP Compute Engine.
+Ubuntu cũng hoạt động; hãy ánh xạ các gói cho phù hợp.
+Đối với luồng Docker chung, xem [Docker](/install/docker).
 
 ---
 
@@ -72,7 +65,7 @@ Với luồng Docker chung, xem [Docker](/install/docker).
 
 ---
 
-## 1) Cài gcloud CLI (hoặc dùng Console)
+## 1. Cài gcloud CLI (hoặc dùng Console)
 
 **Tùy chọn A: gcloud CLI** (khuyến nghị cho tự động hóa)
 
@@ -91,7 +84,7 @@ Tất cả các bước có thể thực hiện qua web UI tại [https://consol
 
 ---
 
-## 2) Tạo dự án GCP
+## 2. Tạo dự án GCP
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) Tạo VM
+## 3. Tạo VM
 
 **Các loại máy:**
 
-| Type     | Specs                     | Cost                   | Notes                  |
-| -------- | ------------------------- | ---------------------- | ---------------------- |
-| e2-small | 2 vCPU, 2GB RAM           | ~$12/tháng             | Khuyến nghị            |
-| e2-micro | 2 vCPU (chia sẻ), 1GB RAM | Đủ điều kiện free tier | Có thể OOM khi tải cao |
+| Type     | Specs                                        | Cost                       | Notes                  |
+| -------- | -------------------------------------------- | -------------------------- | ---------------------- |
+| e2-small | 2 vCPU, 2GB RAM                              | ~$12/tháng | Khuyến nghị            |
+| e2-micro | 2 vCPU (chia sẻ), 1GB RAM | Đủ điều kiện free tier     | Có thể OOM khi tải cao |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) SSH vào VM
+## 4. SSH vào VM
 
 **CLI:**
 
@@ -160,11 +153,11 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a
 
 Nhấn nút “SSH” bên cạnh VM trong bảng điều khiển Compute Engine.
 
-Lưu ý: Việc đồng bộ SSH key có thể mất 1–2 phút sau khi tạo VM. Nếu bị từ chối kết nối, hãy đợi và thử lại.
+Lưu ý: Việc lan truyền khóa SSH có thể mất 1–2 phút sau khi tạo VM. If connection is refused, wait and retry.
 
 ---
 
-## 5) Cài Docker (trên VM)
+## 5. Cài Docker (trên VM)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) Clone repository OpenClaw
+## 6. Clone repository OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,10 +198,10 @@ Hướng dẫn này giả định bạn sẽ build image tùy chỉnh để đ�
 
 ---
 
-## 7) Tạo các thư mục host bền vững
+## 7. Tạo các thư mục host bền vững
 
-Container Docker là tạm thời.  
-Mọi trạng thái dài hạn phải nằm trên host.
+Docker containers are ephemeral.
+All long-lived state must live on the host.
 
 ```bash
 mkdir -p ~/.openclaw
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) Cấu hình biến môi trường
+## 8. Cấu hình biến môi trường
 
 Tạo `.env` ở thư mục gốc của repository.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Cấu hình Docker Compose
+## 9. Cấu hình Docker Compose
 
 Tạo hoặc cập nhật `docker-compose.yml`.
 
@@ -291,10 +284,10 @@ services:
 
 ---
 
-## 10) Bake nhị phân cần thiết vào image (quan trọng)
+## 10. Bake nhị phân cần thiết vào image (quan trọng)
 
-Cài nhị phân bên trong container đang chạy là một cái bẫy.  
-Mọi thứ cài ở runtime sẽ bị mất khi restart.
+Installing binaries inside a running container is a trap.
+Bất kỳ thứ gì được cài đặt lúc runtime sẽ bị mất khi khởi động lại.
 
 Tất cả nhị phân bên ngoài mà Skills cần phải được cài ở thời điểm build image.
 
@@ -304,8 +297,8 @@ Các ví dụ dưới đây chỉ minh họa ba nhị phân phổ biến:
 - `goplaces` cho Google Places
 - `wacli` cho WhatsApp
 
-Đây chỉ là ví dụ, không phải danh sách đầy đủ.  
-Bạn có thể cài bao nhiêu nhị phân tùy ý theo cùng một mẫu.
+Hỗ trợ macOS và Linux (bao gồm WSL).
+You may install as many binaries as needed using the same pattern.
 
 Nếu sau này bạn thêm Skills mới phụ thuộc vào nhị phân khác, bạn phải:
 
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Build và khởi chạy
+## 11. Build và khởi chạy
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 12) Xác minh Gateway
+## 12. Xác minh Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Thành công:
 
 ---
 
-## 13) Truy cập từ laptop của bạn
+## 13. Truy cập từ laptop của bạn
 
 Tạo đường hầm SSH để chuyển tiếp cổng Gateway:
 
@@ -411,10 +404,10 @@ Dán gateway token của bạn.
 
 ## Dữ liệu nào được lưu ở đâu (nguồn chân lý)
 
-OpenClaw chạy trong Docker, nhưng Docker không phải là nguồn chân lý.  
-Mọi trạng thái dài hạn phải tồn tại qua restart, rebuild và reboot.
+OpenClaw runs in Docker, but Docker is not the source of truth.
+All long-lived state must survive restarts, rebuilds, and reboots.
 
-| Thành phần             | Vị trí                            | Cơ chế lưu bền vững    | Ghi chú                        |
+| Thành phần             | Vị trí                            | Cơ chế lưu bền vững    | Notes                          |
 | ---------------------- | --------------------------------- | ---------------------- | ------------------------------ |
 | Cấu hình Gateway       | `/home/node/.openclaw/`           | Gắn volume host        | Bao gồm `openclaw.json`, token |
 | Hồ sơ xác thực mô hình | `/home/node/.openclaw/`           | Gắn volume host        | Token OAuth, khóa API          |
@@ -446,7 +439,7 @@ docker compose up -d
 
 **SSH connection refused**
 
-Việc đồng bộ SSH key có thể mất 1–2 phút sau khi tạo VM. Hãy đợi và thử lại.
+Việc lan truyền khóa SSH có thể mất 1–2 phút sau khi tạo VM. Hãy đợi và thử lại.
 
 **Vấn đề OS Login**
 
@@ -498,7 +491,7 @@ Với tự động hóa hoặc pipeline CI/CD, hãy tạo một service account 
      --role="roles/compute.instanceAdmin.v1"
    ```
 
-Tránh dùng vai trò Owner cho tự động hóa. Áp dụng nguyên tắc đặc quyền tối thiểu.
+Avoid using the Owner role for automation. Use the principle of least privilege.
 
 Xem [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google.com/iam/docs/understanding-roles) để biết chi tiết về vai trò IAM.
 

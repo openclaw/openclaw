@@ -4,28 +4,21 @@ read_when:
   - När du förklarar tokenanvändning, kostnader eller kontextfönster
   - Vid felsökning av kontexttillväxt eller kompakteringsbeteende
 title: "Tokenanvändning och kostnader"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:33Z
 ---
 
 # Tokenanvändning och kostnader
 
-OpenClaw spårar **tokens**, inte tecken. Tokens är modellspecifika, men de flesta
-OpenAI-liknande modeller ligger i genomsnitt på ~4 tecken per token för engelsk text.
+OpenClaw spår **tokens**, inte tecken. Tokens är modellspecifika, men de flesta
+OpenAI-stil modeller genomsnitt ~4 tecken per token för engelsk text.
 
 ## Hur systemprompten byggs
 
-OpenClaw sammanställer sin egen systemprompt vid varje körning. Den innehåller:
+OpenClaw sammanställer sin egen systemprompt på varje körning. Den inkluderar:
 
 - Verktygslista + korta beskrivningar
 - Skills-lista (endast metadata; instruktioner laddas vid behov med `read`)
 - Självuppdateringsinstruktioner
-- Arbetsyta + bootstrap-filer (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` när nya). Stora filer trunkeras av `agents.defaults.bootstrapMaxChars` (standard: 20000).
+- Arbetsyta + bootstrap filer (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` när ny). Stora filer trunkeras av `agents.defaults.bootstrapMaxChars` (standard: 20000).
 - Tid (UTC + användarens tidszon)
 - Svarstaggar + heartbeat-beteende
 - Körtidsmetadata (värd/OS/modell/tänkande)
@@ -43,7 +36,7 @@ Allt som modellen tar emot räknas mot kontextgränsen:
 - Sammanfattningar från kompaktering och artefakter från rensning
 - Leverantörsomslag eller säkerhetsrubriker (inte synliga, men räknas ändå)
 
-För en praktisk uppdelning (per injicerad fil, verktyg, skills och systempromptens storlek), använd `/context list` eller `/context detail`. Se [Context](/concepts/context).
+För en praktisk uppdelning (per injicerad fil, verktyg, färdigheter och systempromptstorlek), använd `/context list` eller `/context detail`. Se [Context](/concepts/context).
 
 ## Hur du ser aktuell tokenanvändning
 
@@ -71,27 +64,27 @@ models.providers.<provider>.models[].cost
 ```
 
 Dessa är **USD per 1M tokens** för `input`, `output`, `cacheRead` och
-`cacheWrite`. Om prissättning saknas visar OpenClaw endast tokens. OAuth‑tokens
-visar aldrig dollarkostnad.
+`cacheWrite`. Om prissättningen saknas, visar OpenClaw endast tokens OAuth tokens
+visar aldrig dollarkostnaden.
 
 ## Cache-TTL och påverkan av rensning
 
-Leverantörens promptcache gäller endast inom cache-TTL‑fönstret. OpenClaw kan
-valfritt köra **cache-ttl-rensning**: den rensar sessionen när cache-TTL har löpt ut,
-och återställer sedan cachefönstret så att efterföljande förfrågningar kan återanvända
-den nyligen cachade kontexten i stället för att cacha om hela historiken. Detta håller
-cache-skrivkostnaderna lägre när en session blir inaktiv efter TTL.
+Leverantörsprompten om cachelagring gäller endast i cachens TTL-fönster. OpenClaw kan
+valfritt köra **cache-ttl beskärning**: det beskär sessionen när cachen TTL
+har löpt ut, återställer sedan cachefönstret så att efterföljande förfrågningar kan återanvända
+nyligen cachade sammanhang istället för att åter cacha hela historiken. Detta håller cache
+skriva kostnader lägre när en session går vilande förbi TTL.
 
 Konfigurera detta i [Gateway-konfiguration](/gateway/configuration) och se
 beteendedetaljerna i [Session pruning](/concepts/session-pruning).
 
-Heartbeat kan hålla cachen **varm** över inaktiva pauser. Om din modells cache-TTL
-är `1h`, kan ett heartbeat‑intervall strax under detta (t.ex. `55m`) undvika
-att hela prompten cachas om, vilket minskar cache-skrivkostnader.
+Heartbeat kan hålla cachen **varm** över tomgångar. Om din modellcache TTL
+är `1h`, sätt hjärtslagsintervallet precis under det (e. ., '55m') kan undvika att
+cachelagrar om den fulla snabbheten, vilket minskar kostnaderna för cachelagring.
 
-För Anthropic API-prissättning är cache-läsningar betydligt billigare än inmatningstokens,
-medan cache-skrivningar debiteras med en högre multiplikator. Se Anthropics
-prissättning för promptcache för aktuella nivåer och TTL‑multiplikatorer:
+För antropisk API-prissättning är cache-läsningar betydligt billigare än inmatning
+-tokens, medan cacheskrivningar faktureras med en högre multiplikator. Se Anthropic’s
+prompt caching prissättning för de senaste priserna och TTL-multiplikatorer:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 
 ### Exempel: håll 1 h cache varm med heartbeat

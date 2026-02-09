@@ -4,19 +4,12 @@ read_when:
   - När du kör skript från repot
   - När du lägger till eller ändrar skript under ./scripts
 title: "Skript"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:27Z
 ---
 
 # Skript
 
-Katalogen `scripts/` innehåller hjälpskript för lokala arbetsflöden och driftuppgifter.
-Använd dessa när en uppgift tydligt är kopplad till ett skript; annars bör du föredra CLI.
+Katalogen `scripts/` innehåller hjälpskript för lokala arbetsflöden och ops-uppgifter.
+Använd dessa när en uppgift är tydligt knuten till ett skript; annars föredrar CLI.
 
 ## Konventioner
 

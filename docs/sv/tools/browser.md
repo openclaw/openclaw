@@ -5,20 +5,13 @@ read_when:
   - Felsöka varför openclaw stör din egen Chrome
   - Implementera webbläsarinställningar + livscykel i macOS-appen
 title: "Webbläsare (OpenClaw-hanterad)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:19:26Z
 ---
 
 # Webbläsare (openclaw-hanterad)
 
-OpenClaw kan köra en **dedikerad Chrome/Brave/Edge/Chromium-profil** som agenten styr.
-Den är isolerad från din personliga webbläsare och hanteras via en liten lokal
-kontrolltjänst inuti Gateway (endast loopback).
+OpenClaw kan köra en **dedikerad Chrome/Brave/Edge/Chromium-profil** som agenten kontrollerar.
+Den är isolerad från din personliga webbläsare och hanteras genom en liten lokal
+kontrolltjänst inne i Gateway (loopback endast).
 
 Nybörjarvy:
 
@@ -35,8 +28,8 @@ Nybörjarvy:
 - Agentåtgärder (klicka/skriva/dra/välja), ögonblicksbilder, skärmdumpar, PDF:er.
 - Valfritt stöd för flera profiler (`openclaw`, `work`, `remote`, ...).
 
-Den här webbläsaren är **inte** din dagliga webbläsare. Den är en säker, isolerad yta för
-agentautomation och verifiering.
+Denna webbläsare är **inte** din dagliga förare. Det är en säker, isolerad yta för
+agentautomatisering och verifiering.
 
 ## Snabbstart
 
@@ -86,8 +79,8 @@ Webbläsarinställningar finns i `~/.openclaw/openclaw.json`.
 
 Noteringar:
 
-- Webbläsarkontrolltjänsten binder till loopback på en port som härleds från `gateway.port`
-  (standard: `18791`, vilket är gateway + 2). Reläet använder nästa port (`18792`).
+- Webbläsarens kontrolltjänst binder till loopback på en port som härrör från `gateway.port`
+  (standard: `18791`, som är gateway + 2). Reläet använder nästa port (`18792`).
 - Om du åsidosätter Gateway‑porten (`gateway.port` eller `OPENCLAW_GATEWAY_PORT`),
   flyttas de härledda webbläsarportarna för att stanna i samma ”familj”.
 - `cdpUrl` använder som standard reläporten när den inte är satt.
@@ -95,15 +88,15 @@ Noteringar:
 - `remoteCdpHandshakeTimeoutMs` gäller kontroller av fjärr‑CDP WebSocket‑åtkomlighet.
 - `attachOnly: true` betyder ”starta aldrig en lokal webbläsare; anslut endast om den redan körs”.
 - `color` + per‑profil `color` färgar webbläsar‑UI:t så att du ser vilken profil som är aktiv.
-- Standardprofilen är `chrome` (tilläggsrelä). Använd `defaultProfile: "openclaw"` för den hanterade webbläsaren.
+- Standardprofilen är `chrome` (förlängningsrelä). Använd `defaultProfil: "openclaw"` för den hanterade webbläsaren.
 - Automatisk detekteringsordning: systemets standardwebbläsare om Chromium‑baserad; annars Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Lokala `openclaw`‑profiler tilldelar automatiskt `cdpPort`/`cdpUrl` — sätt dem endast för fjärr‑CDP.
 
 ## Använd Brave (eller annan Chromium‑baserad webbläsare)
 
-Om din **systemstandard**‑webbläsare är Chromium‑baserad (Chrome/Brave/Edge/etc)
-använder OpenClaw den automatiskt. Sätt `browser.executablePath` för att åsidosätta
-autodetektering:
+Om din **systemstandard** webbläsare är Chromium-baserad (Chrome/Brave/Edge/etc), använder
+OpenClaw den automatiskt. Set `browser.executablePath` to override
+auto-detection:
 
 CLI‑exempel:
 
@@ -138,23 +131,23 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 - **Lokal kontroll (standard):** Gateway startar loopback‑kontrolltjänsten och kan starta en lokal webbläsare.
 - **Fjärrkontroll (node‑värd):** kör en node‑värd på maskinen som har webbläsaren; Gateway proxyar webbläsaråtgärder till den.
-- **Fjärr‑CDP:** sätt `browser.profiles.<name>.cdpUrl` (eller `browser.cdpUrl`) för att
-  ansluta till en fjärr‑Chromium‑baserad webbläsare. I detta fall startar OpenClaw ingen lokal webbläsare.
+- **Fjärr-CDP:** sätt `browser.profiles.<name>.cdpUrl` (eller `browser.cdpUrl`) till
+  bifoga till en fjärrbaserad Chromium-baserad webbläsare. I detta fall kommer OpenClaw inte att starta en lokal webbläsare.
 
 Fjärr‑CDP‑URL:er kan inkludera autentisering:
 
-- Frågetokens (t.ex. `https://provider.example?token=<token>`)
-- HTTP Basic‑auth (t.ex. `https://user:pass@provider.example`)
+- Frågepolletter (t.ex., `https://provider.exempel?token=<token>`)
+- HTTP Basic auth (t.ex., `https://user:pass@provider.exempel`)
 
-OpenClaw bevarar autentiseringen när `/json/*`‑endpoints anropas och vid anslutning
-till CDP‑WebSocket. Föredra miljövariabler eller hemlighetshanterare för
-tokens i stället för att committa dem i konfigfiler.
+OpenClaw bevarar auth när du ringer `/json/*` slutpunkter och när du ansluter
+till CDP WebSocket. Föredrar miljövariabler eller hemligheter chefer för
+tokens istället för att överlåta dem till konfigurationsfiler.
 
 ## Node‑webbläsarproxy (nollkonfig‑standard)
 
-Om du kör en **node‑värd** på maskinen som har din webbläsare kan OpenClaw
-autorouta webbläsarverktygsanrop till den noden utan extra webbläsarkonfig.
-Detta är standardvägen för fjärr‑gateways.
+Om du kör en **nod värd** på maskinen som har din webbläsare, OpenClaw kan
+automatiskt dirigera webbläsarverktygets samtal till den noden utan någon extra webbläsarkonfiguration.
+Detta är standardsökvägen för fjärr-gateways.
 
 Noteringar:
 
@@ -166,9 +159,9 @@ Noteringar:
 
 ## Browserless (hostad fjärr‑CDP)
 
-[Browserless](https://browserless.io) är en hostad Chromium‑tjänst som exponerar
-CDP‑endpoints över HTTPS. Du kan peka en OpenClaw‑webbläsarprofil mot en
-Browserless‑regionsendpoint och autentisera med din API‑nyckel.
+[Browserless](https://browserless.io) är en hostad krom tjänst som exponerar
+CDP-slutpunkter över HTTPS. Du kan peka en OpenClaw webbläsarprofil på en
+Webbläsarlös regionslutpunkt och autentisera med din API-nyckel.
 
 Exempel:
 
@@ -209,7 +202,7 @@ Tips för fjärr‑CDP:
 
 ## Profiler (flera webbläsare)
 
-OpenClaw stöder flera namngivna profiler (routingkonfiger). Profiler kan vara:
+OpenClaw stöder flera namngivna profiler (routingkonfigurationer). Profiler kan vara:
 
 - **openclaw‑managed**: en dedikerad Chromium‑baserad webbläsarinstans med egen användardatakatalog + CDP‑port
 - **remote**: en explicit CDP‑URL (Chromium‑baserad webbläsare som körs någon annanstans)
@@ -241,8 +234,8 @@ Om Gateway kör någon annanstans, kör en node‑värd på webbläsarmaskinen s
 
 ### Sandboxade sessioner
 
-Om agentsessionen är sandboxad kan verktyget `browser` som standard använda `target="sandbox"` (sandbox‑webbläsare).
-Övertagande via Chrome‑tilläggsrelä kräver värdwebbläsarkontroll, så antingen:
+Om agenten sessionen är sandlåda, "webbläsare" verktyget kan standard till "target="sandbox"\` (sandlåda webbläsare).
+Chrome extension relay takeover kräver värd webbläsarkontroll, så antingen:
 
 - kör sessionen utan sandbox, eller
 - sätt `agents.defaults.sandbox.browser.allowHostControl: true` och använd `target="host"` när du anropar verktyget.
@@ -324,10 +317,10 @@ Alla endpoints accepterar `?profile=<name>`.
 
 ### Playwright‑krav
 
-Vissa funktioner (navigera/agera/AI‑ögonblicksbild/roll‑ögonblicksbild, elementskärmdumpar, PDF) kräver
-Playwright. Om Playwright inte är installerat returnerar dessa endpoints ett tydligt
-501‑fel. ARIA‑ögonblicksbilder och grundläggande skärmdumpar fungerar fortfarande för openclaw‑hanterad Chrome.
-För drivrutinen för Chrome‑tilläggsrelä kräver ARIA‑ögonblicksbilder och skärmdumpar Playwright.
+Vissa funktioner (navigera/agera/AI-ögonblicksbilder/rollbilder, elementskärmdumpar, PDF) kräver
+Playwright. Om Playwright inte är installerat, dessa slutpunkter returnerar en tydlig 501
+fel. ARIA ögonblicksbilder och grundläggande skärmbilder fungerar fortfarande för openclaw-managed Chrome.
+För Chrome-tilläggsrelä drivrutinen kräver ARIA-ögonblicksbilder och skärmbilder Playwright.
 
 Om du ser `Playwright is not available in this gateway build`, installera hela
 Playwright‑paketet (inte `playwright-core`) och starta om gatewayen, eller installera om
@@ -335,17 +328,17 @@ OpenClaw med webbläsarstöd.
 
 #### Docker‑installation av Playwright
 
-Om din Gateway kör i Docker, undvik `npx playwright` (npm‑överskrivningskonflikter).
-Använd den medföljande CLI:n i stället:
+Om din Gateway körs i Docker, undvik `npx playwright` (npm åsidosätta konflikter).
+Använd den medföljande CLI istället:
 
 ```bash
 docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-För att bevara webbläsarnedladdningar, sätt `PLAYWRIGHT_BROWSERS_PATH` (till exempel
-`/home/node/.cache/ms-playwright`) och se till att `/home/node` bevaras via
-`OPENCLAW_HOME_VOLUME` eller en bind‑mount. Se [Docker](/install/docker).
+För att hålla fast vid webbläsarhämtningar, sätt `PLAYWRIGHT_BROWSERS_PATH` (till exempel,
+`/home/node/.cache/ms-playwright`) och se till att `/home/node` är ihållande via
+`OPENCLAW_HOME_VOLUME` eller ett bindfäste. Se [Docker](/install/docker).
 
 ## Hur det fungerar (internt)
 
@@ -362,8 +355,8 @@ du kan byta lokala/fjärrwebbläsare och profiler.
 
 ## CLI‑snabbreferens
 
-Alla kommandon accepterar `--browser-profile <name>` för att rikta mot en specifik profil.
-Alla kommandon accepterar också `--json` för maskinläsbar utdata (stabila payloads).
+Alla kommandon accepterar `--browser-profile <name>` för att rikta en specifik profil.
+Alla kommandon accepterar också `--json` för maskinläsbar utdata (stabila nyttolaster).
 
 Grunder:
 
@@ -456,7 +449,7 @@ Noteringar:
   - `--interactive` ger en platt, lättplockad lista över interaktiva element (bäst för att driva åtgärder).
   - `--labels` lägger till en skärmdump av endast viewporten med överlagrade refetiketter (skriver ut `MEDIA:<path>`).
 - `click`/`type`/etc kräver en `ref` från `snapshot` (antingen numerisk `12` eller rollref `e12`).
-  CSS‑selektorer stöds avsiktligt inte för åtgärder.
+  CSS-selektorer stöds avsiktligt inte för åtgärder.
 
 ## Ögonblicksbilder och refar
 
@@ -503,7 +496,7 @@ openclaw browser wait "#main" \
 
 ## Felsökningsarbetsflöden
 
-När en åtgärd misslyckas (t.ex. ”not visible”, ”strict mode violation”, ”covered”):
+När en åtgärd misslyckas (t.ex. “inte synligt”, “strikt läge kränkning”, “täckt”):
 
 1. `openclaw browser snapshot --interactive`
 2. Använd `click <ref>` / `type <ref>` (föredra rollrefar i interaktivt läge)
@@ -551,8 +544,8 @@ Dessa är användbara för arbetsflöden av typen ”få webbplatsen att bete si
 
 - Webbläsarprofilen openclaw kan innehålla inloggade sessioner; behandla den som känslig.
 - `browser act kind=evaluate` / `openclaw browser evaluate` och `wait --fn`
-  kör godtycklig JavaScript i sidans kontext. Prompt‑injektion kan styra
-  detta. Inaktivera med `browser.evaluateEnabled=false` om du inte behöver det.
+  kör godtyckligt JavaScript i sidsammanhanget. Snabb injektion kan styra
+  detta. Inaktivera det med `browser.evaluateEnabled=false` om du inte behöver det.
 - För inloggningar och anti‑bot‑noteringar (X/Twitter, etc.), se [Webbläsarinloggning + X/Twitter‑postning](/tools/browser-login).
 - Håll Gateway/node‑värd privat (loopback eller endast tailnet).
 - Fjärr‑CDP‑endpoints är kraftfulla; tunnla och skydda dem.

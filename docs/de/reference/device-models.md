@@ -4,13 +4,6 @@ read_when:
   - Aktualisieren der Zuordnungen von Gerätemodellkennungen oder der NOTICE-/Lizenzdateien
   - Ändern der Darstellung von Gerätenamen in der Instances-UI
 title: "Gerätemodell-Datenbank"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:12Z
 ---
 
 # Gerätemodell-Datenbank (benutzerfreundliche Namen)

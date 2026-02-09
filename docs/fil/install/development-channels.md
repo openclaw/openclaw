@@ -4,13 +4,6 @@ read_when:
   - Gusto mong lumipat sa pagitan ng stable/beta/dev
   - Nagta-tag o nagpa-publish ka ng mga prerelease
 title: "Mga Development Channel"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:34Z
 ---
 
 # Mga development channel
@@ -21,7 +14,7 @@ Nagpapadala ang OpenClaw ng tatlong update channel:
 
 - **stable**: npm dist-tag `latest`.
 - **beta**: npm dist-tag `beta` (mga build na sinusubok).
-- **dev**: gumagalaw na head ng `main` (git). npm dist-tag: `dev` (kapag nai-publish).
+- Maaaring **hindi** kasama sa beta at dev builds ang isang macOS app release. 10. npm dist-tag: `dev` (kapag na-publish).
 
 Nagpapadala kami ng mga build sa **beta**, sinusubok ang mga ito, at pagkatapos ay **pino-promote ang isang na-validate na build sa `latest`**
 nang hindi binabago ang version number — ang mga dist-tag ang pinagmumulan ng katotohanan para sa mga npm install.
@@ -76,7 +69,7 @@ Kapag lumipat ka ng channel gamit ang `openclaw update`, sini-sync din ng OpenCl
 
 ## Availability ng macOS app
 
-Maaaring **hindi** magsama ng macOS app release ang mga beta at dev build. Ayos lang iyon:
+Tingnan ang [Sandboxing](/gateway/sandboxing). 12. OK lang iyon:
 
 - Maaari pa ring i-publish ang git tag at npm dist-tag.
 - Banggitin ang “walang macOS build para sa beta na ito” sa mga release note o changelog.

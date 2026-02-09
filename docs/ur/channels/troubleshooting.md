@@ -4,13 +4,6 @@ read_when:
   - چینل ٹرانسپورٹ منسلک دکھاتا ہے لیکن جوابات ناکام ہو جاتے ہیں
   - گہرے فراہم کنندہ کی دستاویزات سے پہلے چینل مخصوص جانچ درکار ہو
 title: "چینل کی خرابیوں کا ازالہ"
-x-i18n:
-  source_path: channels/troubleshooting.md
-  source_hash: 30443f9aa52c4e0c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:03Z
 ---
 
 # چینل کی خرابیوں کا ازالہ

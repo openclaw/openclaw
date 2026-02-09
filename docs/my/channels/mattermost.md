@@ -4,20 +4,13 @@ read_when:
   - Mattermost ကို တပ်ဆင်ပြင်ဆင်နေစဉ်
   - Mattermost routing ကို ပြဿနာရှာဖွေခြင်း
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:00Z
 ---
 
 # Mattermost (plugin)
 
-အခြေအနေ: plugin ဖြင့် ပံ့ပိုးထားသည် (bot token + WebSocket ဖြစ်ရပ်များ)။ ချန်နယ်များ၊ အုပ်စုများနှင့် DM မက်ဆေ့ချ်များကို ပံ့ပိုးထားသည်။
-Mattermost သည် ကိုယ်တိုင် ဟို့စ်တင်နိုင်သော အဖွဲ့လိုက် စာတိုပေးပို့ရေး ပလက်ဖောင်းတစ်ခုဖြစ်သည်။ ထုတ်ကုန်အသေးစိတ်နှင့် ဒေါင်းလုဒ်များအတွက် တရားဝင်ဝဘ်ဆိုဒ်
-[mattermost.com](https://mattermost.com) ကို ကြည့်ရှုပါ။
+Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
+Mattermost is a self-hostable team messaging platform; see the official site at
+[mattermost.com](https://mattermost.com) for product details and downloads.
 
 ## Plugin လိုအပ်သည်
 
@@ -69,11 +62,11 @@ env vars ကို အသုံးပြုလိုပါက Gateway ဟို�
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-Env vars များသည် **default** အကောင့် (`default`) အတွက်သာ သက်ရောက်ပါသည်။ အခြား အကောင့်များအတွက် config တန်ဖိုးများကို အသုံးပြုရပါမည်။
+Env vars apply only to the **default** account (`default`). Other accounts must use config values.
 
 ## Chat modes
 
-Mattermost သည် DM မက်ဆေ့ချ်များကို အလိုအလျောက် တုံ့ပြန်ပါသည်။ ချန်နယ် အပြုအမူကို `chatmode` ဖြင့် ထိန်းချုပ်ပါသည်-
+Mattermost responds to DMs automatically. Channel behavior is controlled by `chatmode`:
 
 - `oncall` (default): ချန်နယ်များတွင် @mention လုပ်ထားသောအခါသာ တုံ့ပြန်ပါသည်။
 - `onmessage`: ချန်နယ်မက်ဆေ့ချ် အားလုံးကို တုံ့ပြန်ပါသည်။

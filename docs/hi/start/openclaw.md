@@ -4,18 +4,11 @@ read_when:
   - एक नए सहायक इंस्टेंस का ऑनबोर्डिंग
   - सुरक्षा/अनुमति प्रभावों की समीक्षा
 title: "पर्सनल असिस्टेंट सेटअप"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:54Z
 ---
 
 # OpenClaw के साथ एक व्यक्तिगत सहायक बनाना
 
-OpenClaw **Pi** एजेंट्स के लिए WhatsApp + Telegram + Discord + iMessage Gateway है। Plugins से Mattermost जोड़ा जाता है। यह मार्गदर्शिका “पर्सनल असिस्टेंट” सेटअप के लिए है: एक समर्पित WhatsApp नंबर जो आपके हमेशा-ऑन एजेंट की तरह व्यवहार करता है।
+OpenClaw is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents. Plugins add Mattermost. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
 
 ## ⚠️ सुरक्षा पहले
 
@@ -29,7 +22,7 @@ OpenClaw **Pi** एजेंट्स के लिए WhatsApp + Telegram + Dis
 
 - हमेशा `channels.whatsapp.allowFrom` सेट करें (अपने व्यक्तिगत Mac पर कभी भी ओपन-टू-द-वर्ल्ड न चलाएँ)।
 - सहायक के लिए एक समर्पित WhatsApp नंबर उपयोग करें।
-- हार्टबीट्स अब डिफ़ॉल्ट रूप से हर 30 मिनट पर होते हैं। सेटअप पर भरोसा होने तक `agents.defaults.heartbeat.every: "0m"` सेट करके इन्हें अक्षम करें।
+- Heartbeats now default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
 
 ## पूर्वापेक्षाएँ
 
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-यदि आप अपने व्यक्तिगत WhatsApp को OpenClaw से लिंक करते हैं, तो आपके पास आने वाला हर संदेश “एजेंट इनपुट” बन जाता है। यह शायद ही कभी वांछित होता है।
+If you link your personal WhatsApp to OpenClaw, every message to you becomes “agent input”. That’s rarely what you want.
 
 ## 5-मिनट त्वरित प्रारंभ
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 अब allowlist किए गए फ़ोन से सहायक नंबर पर संदेश भेजें।
 
-ऑनबोर्डिंग पूरी होने पर, हम अपने आप डैशबोर्ड खोलते हैं और एक साफ़ (नॉन-टोकनाइज़्ड) लिंक प्रिंट करते हैं। यदि यह auth के लिए पूछे, तो `gateway.auth.token` से टोकन को Control UI सेटिंग्स में पेस्ट करें। बाद में फिर से खोलने के लिए: `openclaw dashboard`।
+जब ऑनबोर्डिंग समाप्त होती है, हम डैशबोर्ड अपने आप खोलते हैं और एक साफ़ (नॉन-टोकनाइज़्ड) लिंक प्रिंट करते हैं। If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `openclaw dashboard`.
 
 ## एजेंट को एक वर्कस्पेस दें (AGENTS)
 
 OpenClaw अपने वर्कस्पेस डायरेक्टरी से ऑपरेटिंग निर्देश और “मेमोरी” पढ़ता है।
 
-डिफ़ॉल्ट रूप से, OpenClaw एजेंट वर्कस्पेस के रूप में `~/.openclaw/workspace` का उपयोग करता है, और सेटअप/पहली एजेंट रन पर इसे (साथ ही शुरुआती `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) अपने आप बना देता है। `BOOTSTRAP.md` केवल तब बनता है जब वर्कस्पेस बिल्कुल नया हो (इसे हटाने के बाद वापस नहीं आना चाहिए)। `MEMORY.md` वैकल्पिक है (अपने आप नहीं बनता); मौजूद होने पर, इसे सामान्य सत्रों के लिए लोड किया जाता है। सबएजेंट सत्र केवल `AGENTS.md` और `TOOLS.md` इंजेक्ट करते हैं।
+By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
 
-सुझाव: इस फ़ोल्डर को OpenClaw की “मेमोरी” की तरह मानें और इसे एक git repo (आदर्श रूप से निजी) बनाएं ताकि आपकी `AGENTS.md` + मेमोरी फ़ाइलें बैकअप हों। यदि git इंस्टॉल है, तो बिल्कुल नए वर्कस्पेस अपने आप इनिशियलाइज़ हो जाते हैं।
+टिप: इस फ़ोल्डर को OpenClaw की “memory” की तरह मानें और इसे एक git repo बनाएं (आदर्श रूप से निजी), ताकि आपकी `AGENTS.md` + मेमोरी फ़ाइलें बैकअप हो सकें। If git is installed, brand-new workspaces are auto-initialized.
 
 ```bash
 openclaw setup
@@ -168,13 +161,13 @@ OpenClaw डिफ़ॉल्ट रूप से एक अच्छा अस
 
 - सत्र फ़ाइलें: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - सत्र मेटाडेटा (टोकन उपयोग, अंतिम रूट, आदि): `~/.openclaw/agents/<agentId>/sessions/sessions.json` (legacy: `~/.openclaw/sessions/sessions.json`)
-- `/new` या `/reset` उस चैट के लिए एक नया सत्र शुरू करता है ( `resetTriggers` के माध्यम से कॉन्फ़िगर योग्य)। यदि अकेले भेजा जाए, तो एजेंट रीसेट की पुष्टि के लिए एक छोटा अभिवादन भेजता है।
+- `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). यदि इसे अकेले भेजा जाए, तो एजेंट रीसेट की पुष्टि करने के लिए एक छोटा सा hello जवाब देता है।
 - `/compact [instructions]` सत्र संदर्भ को संक्षिप्त करता है और शेष संदर्भ बजट की रिपोर्ट करता है।
 
 ## हार्टबीट्स (प्रोएक्टिव मोड)
 
-डिफ़ॉल्ट रूप से, OpenClaw हर 30 मिनट पर इस प्रॉम्प्ट के साथ एक हार्टबीट चलाता है:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`  
+By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
+`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. यदि किसी चीज़ पर ध्यान देने की आवश्यकता नहीं है, तो HEARTBEAT_OK का जवाब दें।`
 अक्षम करने के लिए `agents.defaults.heartbeat.every: "0m"` सेट करें।
 
 - यदि `HEARTBEAT.md` मौजूद है लेकिन प्रभावी रूप से खाली है (केवल खाली पंक्तियाँ और markdown हेडर्स जैसे `# Heading`), तो API कॉल बचाने के लिए OpenClaw हार्टबीट रन छोड़ देता है।
@@ -198,7 +191,7 @@ OpenClaw डिफ़ॉल्ट रूप से एक अच्छा अस
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (यदि ऑडियो ट्रांसक्रिप्शन सक्षम है)
 
-एजेंट से आउटबाउंड अटैचमेंट्स: अपनी अलग पंक्ति में (बिना स्पेस) `MEDIA:<path-or-url>` शामिल करें। उदाहरण:
+Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). उदाहरण:
 
 ```
 Here’s the screenshot.

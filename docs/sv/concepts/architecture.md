@@ -3,13 +3,6 @@ summary: "WebSocket-gatewayarkitektur, komponenter och klientflöden"
 read_when:
   - Arbetar med gateway-protokoll, klienter eller transporter
 title: "Gateway-arkitektur"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:57Z
 ---
 
 # Gateway-arkitektur
@@ -116,6 +109,7 @@ Detaljer: [Gateway-protokoll](/gateway/protocol), [Parning](/channels/pairing),
 ## Fjärråtkomst
 
 - Föredragen: Tailscale eller VPN.
+
 - Alternativ: SSH-tunnel
 
   ```bash
@@ -123,6 +117,7 @@ Detaljer: [Gateway-protokoll](/gateway/protocol), [Parning](/channels/pairing),
   ```
 
 - Samma handskakning + autentiseringstoken gäller över tunneln.
+
 - TLS + valfri pinning kan aktiveras för WS i fjärrinstallationer.
 
 ## Driftöversikt

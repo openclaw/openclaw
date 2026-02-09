@@ -5,25 +5,18 @@ read_when:
   - Undersøgelse af parring eller fejl i bridge-godkendelse
   - Revision af node-overfladen, der eksponeres af gatewayen
 title: "Bridge-protokol"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:16Z
 ---
 
 # Bridge-protokol (legacy node-transport)
 
-Bridge-protokollen er en **legacy** node-transport (TCP JSONL). Nye nodeklienter
-bør i stedet bruge den samlede Gateway WebSocket-protokol.
+Broprotokollen er en **legacy** node transport (TCP JSONL). Nye node klienter
+bør i stedet bruge den samlede Gateway WebSocket protokol.
 
 Hvis du bygger en operatør- eller nodeklient, skal du bruge
 [Gateway-protokollen](/gateway/protocol).
 
-**Bemærk:** Aktuelle OpenClaw-builds leveres ikke længere med TCP bridge-listeneren; dette dokument bevares af historiske årsager.
-Legacy `bridge.*` konfigurationsnøgler er ikke længere en del af konfigurationsskemaet.
+**Bemærk:** Nuværende OpenClaw bygger sender ikke længere TCP-broens lytter; dette dokument opbevares til historisk reference.
+Legacy `bridge.*` config nøgler er ikke længere en del af config skema.
 
 ## Hvorfor vi har begge dele
 
@@ -71,8 +64,8 @@ Legacy håndhævelse af tilladelsesliste lå i `src/gateway/server-bridge.ts` (f
 
 ## Exec-livscyklusbegivenheder
 
-Noder kan udsende `exec.finished` eller `exec.denied`-begivenheder for at eksponere system.run-aktivitet.
-Disse mappes til systembegivenheder i gatewayen. (Legacy-noder kan stadig udsende `exec.started`.)
+Knuder kan udsende `exec.finished` eller `exec.denied` begivenheder til overflade system.run aktivitet.
+Disse er knyttet til systembegivenheder i gatewayen. (Ældre knuder kan stadig udsende `exec.started`.)
 
 Payload-felter (alle valgfri, medmindre andet er angivet):
 
@@ -92,5 +85,5 @@ Payload-felter (alle valgfri, medmindre andet er angivet):
 
 ## Versionering
 
-Bridge er i øjeblikket **implicit v1** (ingen min/maks-forhandling). Bagudkompatibilitet
-forventes; tilføj et bridge-protokolversionsfelt før eventuelle breaking changes.
+Broen er i øjeblikket **implicit v1** (ingen min/max forhandling). Bagud-compat
+forventes; tilføj en bro protokol versionsfelt før eventuelle brydende ændringer.

@@ -5,13 +5,6 @@ read_when:
   - Pagpapatakbo ng iOS app mula sa source
   - Pag-debug ng discovery ng gateway o mga command ng canvas
 title: "iOS App"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:40Z
 ---
 
 # iOS App (Node)
@@ -73,7 +66,7 @@ Sa Settings, i-enable ang **Manual Host** at ilagay ang host + port ng gateway (
 
 ## Canvas + A2UI
 
-Nagre-render ang iOS node ng WKWebView canvas. Gamitin ang `node.invoke` para kontrolin ito:
+Ang iOS node ay nagre-render ng WKWebView canvas. Gamitin ang `node.invoke` para kontrolin ito:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

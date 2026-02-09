@@ -1,15 +1,8 @@
 ---
-summary: „Kiedy OpenClaw pokazuje wskaźniki pisania i jak je dostroić”
+summary: "„Kiedy OpenClaw pokazuje wskaźniki pisania i jak je dostroić”"
 read_when:
   - Zmiana zachowania lub ustawień domyślnych wskaźników pisania
-title: „Wskaźniki pisania”
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:06Z
+title: "„Wskaźniki pisania”"
 ---
 
 # Wskaźniki pisania
@@ -27,7 +20,7 @@ Gdy `agents.defaults.typingMode` jest **nieustawione**, OpenClaw zachowuje dotyc
 - **Czaty grupowe bez wzmianki**: pisanie zaczyna się dopiero, gdy rozpocznie się strumieniowanie treści wiadomości.
 - **Przebiegi heartbeat**: pisanie jest wyłączone.
 
-## Tryby
+## Mody
 
 Ustaw `agents.defaults.typingMode` na jedną z opcji:
 

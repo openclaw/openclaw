@@ -6,21 +6,14 @@ read_when:
   - Gusto mo ng resettable na macOS environment na puwede mong i-clone
   - Gusto mong ikumpara ang lokal vs hosted na mga opsyon ng macOS VM
 title: "mga macOS VM"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:41Z
 ---
 
 # OpenClaw sa macOS VMs (Sandboxing)
 
 ## Inirerekomendang default (para sa karamihan ng user)
 
-- **Maliit na Linux VPS** para sa isang laging-on na Gateway at mababang gastos. Tingnan ang [VPS hosting](/vps).
-- **Dedicated hardware** (Mac mini o Linux box) kung gusto mo ng ganap na kontrol at isang **residential IP** para sa browser automation. Maraming site ang nagba-block ng data center IPs, kaya mas gumagana ang lokal na pagba-browse.
+- **Maliit na Linux VPS** para sa laging-on na Gateway at mababang gastos. Tingnan ang [VPS hosting](/vps).
+- **Dedicated hardware** (Mac mini o Linux box) kung gusto mo ng ganap na kontrol at isang **residential IP** para sa browser automation. Maraming site ang nagba-block ng mga data center IP, kaya madalas mas gumagana ang lokal na pagba-browse.
 - **Hybrid:** panatilihin ang Gateway sa murang VPS, at ikonekta ang iyong Mac bilang isang **node** kapag kailangan mo ng browser/UI automation. Tingnan ang [Nodes](/nodes) at [Gateway remote](/gateway/remote).
 
 Gumamit ng macOS VM kapag partikular mong kailangan ang macOS-only na kakayahan (iMessage/BlueBubbles) o gusto mo ng mahigpit na isolation mula sa iyong pang-araw-araw na Mac.
@@ -69,7 +62,7 @@ Kapag may SSH access ka na sa isang macOS VM, magpatuloy sa hakbang 6 sa ibaba.
 
 ---
 
-## 1) I-install ang Lume
+## 1. I-install ang Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ Docs: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/install
 
 ---
 
-## 2) Lumikha ng macOS VM
+## 2. Lumikha ng macOS VM
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-Ita-download nito ang macOS at lilikhain ang VM. Awtomatikong magbubukas ang isang VNC window.
+I-da-download nito ang macOS at lilikha ng VM. Awtomatikong magbubukas ang isang VNC window.
 
 Tandaan: Maaaring magtagal ang pag-download depende sa iyong koneksyon.
 
 ---
 
-## 3) Kumpletuhin ang Setup Assistant
+## 3. Kumpletuhin ang Setup Assistant
 
 Sa VNC window:
 
@@ -119,7 +112,7 @@ Pagkatapos makumpleto ang setup, i-enable ang SSH:
 
 ---
 
-## 4) Kunin ang IP address ng VM
+## 4. Kunin ang IP address ng VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Hanapin ang IP address (karaniwan ay `192.168.64.x`).
 
 ---
 
-## 5) Mag-SSH papunta sa VM
+## 5. Mag-SSH papunta sa VM
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Palitan ang `youruser` ng account na ginawa mo, at ang IP ng IP ng iyong VM.
 
 ---
 
-## 6) I-install ang OpenClaw
+## 6. I-install ang OpenClaw
 
 Sa loob ng VM:
 
@@ -152,7 +145,7 @@ Sundin ang mga onboarding prompt para i-set up ang iyong model provider (Anthrop
 
 ---
 
-## 7) I-configure ang mga channel
+## 7. I-configure ang mga channel
 
 I-edit ang config file:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Patakbuhin ang VM nang headless
+## 8. Patakbuhin ang VM nang headless
 
 Itigil ang VM at i-restart nang walang display:
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-Tatagalbo ang VM sa background. Pinananatiling tumatakbo ng daemon ng OpenClaw ang gateway.
+Tumatakbo ang VM sa background. Pinananatiling tumatakbo ng daemon ng OpenClaw ang gateway.
 
 Para tingnan ang status:
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## Bonus: iMessage integration
 
-Ito ang killer feature ng pagpapatakbo sa macOS. Gamitin ang [BlueBubbles](https://bluebubbles.app) para idagdag ang iMessage sa OpenClaw.
+Ito ang killer feature ng pagtakbo sa macOS. Gamitin ang [BlueBubbles](https://bluebubbles.app) upang idagdag ang iMessage sa OpenClaw.
 
 Sa loob ng VM:
 
@@ -228,7 +221,7 @@ Idagdag sa iyong OpenClaw config:
 }
 ```
 
-I-restart ang gateway. Ngayon ay makakapagpadala at makakatanggap ng mga iMessage ang iyong agent.
+I-restart ang Gateway. Ngayon ay makakapagpadala at makakatanggap na ng iMessages ang iyong agent.
 
 Buong detalye ng setup: [BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,17 +254,17 @@ Panatilihing tumatakbo ang VM sa pamamagitan ng:
 - Pag-disable ng sleep sa System Settings → Energy Saver
 - Paggamit ng `caffeinate` kung kinakailangan
 
-Para sa tunay na always-on, isaalang-alang ang isang dedicated Mac mini o isang maliit na VPS. Tingnan ang [VPS hosting](/vps).
+Para sa tunay na laging-on, isaalang-alang ang isang dedicated Mac mini o isang maliit na VPS. Tingnan ang [VPS hosting](/vps).
 
 ---
 
 ## Pag-troubleshoot
 
-| Problema                      | Solusyon                                                                                     |
-| ----------------------------- | -------------------------------------------------------------------------------------------- |
-| Hindi makapag-SSH sa VM       | Tiyaking naka-enable ang "Remote Login" sa System Settings ng VM                             |
-| Hindi lumalabas ang VM IP     | Hintaying ganap na mag-boot ang VM, patakbuhin muli ang `lume get openclaw`                  |
-| Hindi makita ang Lume command | Idagdag ang `~/.local/bin` sa iyong PATH                                                     |
+| Problema                      | Solusyon                                                                                                        |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Hindi makapag-SSH sa VM       | Tiyaking naka-enable ang "Remote Login" sa System Settings ng VM                                                |
+| Hindi lumalabas ang VM IP     | Hintaying ganap na mag-boot ang VM, patakbuhin muli ang `lume get openclaw`                                     |
+| Hindi makita ang Lume command | Idagdag ang `~/.local/bin` sa iyong PATH                                                                        |
 | Hindi ma-scan ang WhatsApp QR | Tiyaking naka-login ka sa VM (hindi sa host) kapag pinapatakbo ang `openclaw channels login` |
 
 ---

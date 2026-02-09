@@ -2,15 +2,8 @@
 summary: "従来の `openclaw-*` skills を置き換える、OpenClaw 向けエージェントツールのサーフェス（browser、canvas、nodes、message、cron）"
 read_when:
   - エージェントツールを追加または変更する場合
-  - `openclaw-*` skills を廃止または変更する場合
+  - "`openclaw-*` skills を廃止または変更する場合"
 title: "ツール"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:16Z
 ---
 
 # ツール（OpenClaw）
@@ -18,11 +11,13 @@ x-i18n:
 OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラスのエージェントツール** を公開しています。
 これらは旧来の `openclaw-*` skills を置き換えるものです。ツールは型付きで、シェル実行は行わず、
 エージェントはこれらに直接依存することが想定されています。
+21. これらは古い `openclaw-*` スキルを置き換えるものです。ツールは型付きで、シェル実行は行わず、
+エージェントはそれらに直接依存する必要があります。
 
 ## ツールの無効化
 
 `openclaw.json` において、`tools.allow` / `tools.deny` を使ってツールをグローバルに許可／拒否できます
-（拒否が優先されます）。これにより、許可されていないツールがモデルプロバイダーに送信されるのを防ぎます。
+（拒否が優先されます）。これにより、許可されていないツールがモデルプロバイダーに送信されるのを防ぎます。 これにより、許可されていないツールがモデルプロバイダに送信されるのを防ぎます。
 
 ```json5
 {
@@ -40,6 +35,7 @@ OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラ
 
 `tools.profile` は、`tools.allow`/`tools.deny` の前に **ベースツール許可リスト** を設定します。
 エージェント単位の上書き: `agents.list[].tools.profile`。
+エージェント毎のオーバーライド: `agents.list[].tools.profile` 。
 
 プロファイル:
 
@@ -91,11 +87,12 @@ OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラ
 `tools.byProvider` を使用して、グローバル既定を変更せずに、特定のプロバイダー
 （または単一の `provider/model`）向けにツールを **さらに制限** できます。
 エージェント単位の上書き: `agents.list[].tools.byProvider`。
+エージェント毎のオーバーライド: `agents.list[].tools.byProvider`
 
-これは、ベースツールプロファイルの **後**、許可／拒否リストの **前** に適用されるため、
-ツールセットを絞り込むことしかできません。
-プロバイダーキーは `provider`（例: `google-antigravity`）または
-`provider/model`（例: `openai/gpt-5.2`）のいずれかを受け付けます。
+これはベースツールプロファイルの**after**と、許可/拒否リスト
+の前に適用されるため、ツールセットのみを絞り込むことができます。
+プロバイダのキーは `provider` (例: `google-antigubity`) または
+`provider/model` (例: `openai/gpt-5.2`) のいずれかを受け付けます。
 
 例（グローバルはコーディングプロファイルを維持しつつ、Google Antigravity では最小限のツール）:
 
@@ -146,6 +143,7 @@ OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラ
 
 ツールポリシー（グローバル、エージェント、サンドボックス）は、複数ツールに展開される `group:*` エントリをサポートします。
 `tools.allow` / `tools.deny` で使用してください。
+`tools.allow` / `tools.deny` でこれを使用します。
 
 利用可能なグループ:
 
@@ -172,9 +170,11 @@ OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラ
 
 ## プラグイン + ツール
 
+プラグインはコアセットを超えて**追加ツール** (とCLIコマンド) を登録できます。
 プラグインは、コアセットを超える **追加ツール**（および CLI コマンド）を登録できます。
 インストールと設定は [Plugins](/tools/plugin)、ツール使用ガイダンスがプロンプトにどのように注入されるかは [Skills](/tools/skills) を参照してください。
-一部のプラグインは、ツールと並行して独自の skills を同梱しています（例: 音声通話プラグイン）。
+一部のプラグインは、ツールと並行して独自の skills を同梱しています（例: 音声通話プラグイン）。 いくつかのプラグインは、ツールと一緒に独自のスキル
+を搭載しています(例えば、ボイスコールプラグイン)。
 
 任意のプラグインツール:
 
@@ -185,6 +185,7 @@ OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラ
 
 ### `apply_patch`
 
+1つまたは複数のファイルに構造化パッチを適用します。 複数のハンクの編集に使用します。
 1 つ以上のファイルに構造化パッチを適用します。複数ハンクの編集に使用します。
 実験的: `tools.exec.applyPatch.enabled` で有効化（OpenAI モデルのみ）。
 
@@ -203,7 +204,7 @@ OpenClaw は、browser、canvas、nodes、cron 向けの **ファーストクラ
 - `security`（`deny | allowlist | full`）
 - `ask`（`off | on-miss | always`）
 - `node`（`host=node` 用のノード id/名前）
-- 実 TTY が必要な場合は `pty: true` を設定します。
+- 実際の TTY が必要ですか？ `pty: true` を設定してください。 実 TTY が必要な場合は `pty: true` を設定します。
 
 注記:
 
@@ -471,8 +472,8 @@ Gateway（ゲートウェイ）バックエンドのツール（`canvas`, `nodes
 - `gatewayToken`（認証が有効な場合）
 - `timeoutMs`
 
-注記: `gatewayUrl` が設定されている場合、`gatewayToken` を明示的に含めてください。ツールは
-上書きのための設定や環境認証情報を継承しません。明示的な認証情報が欠落している場合はエラーになります。
+注意: `gatewayUrl` が設定されている場合、明示的に `gatewayToken` を含めます。 ツールは config
+またはオーバーライドの環境資格情報を継承しません。明示的な資格情報が不足していることはエラーです。
 
 browser ツール:
 
@@ -514,5 +515,5 @@ Canvas レンダリング:
 1. **システムプロンプトテキスト**: 人が読める一覧とガイダンス。
 2. **ツールスキーマ**: モデル API に送信される構造化された関数定義。
 
-つまり、エージェントは「どのツールが存在するか」と「どのように呼び出すか」の両方を把握します。ツールが
+つまり、エージェントは「ツールが存在するもの」と「呼び方」の両方を見ることができます。 つまり、エージェントは「どのツールが存在するか」と「どのように呼び出すか」の両方を把握します。ツールが
 システムプロンプトまたはスキーマに表示されない場合、モデルはそれを呼び出すことができません。

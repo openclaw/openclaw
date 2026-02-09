@@ -1,16 +1,9 @@
 ---
 summary: "web_search के लिए Brave Search API सेटअप"
 read_when:
-  - "आप web_search के लिए Brave Search का उपयोग करना चाहते हैं"
-  - "आपको BRAVE_API_KEY या प्लान विवरण की आवश्यकता है"
+  - आप web_search के लिए Brave Search का उपयोग करना चाहते हैं
+  - आपको BRAVE_API_KEY या प्लान विवरण की आवश्यकता है
 title: "Brave Search"
-x-i18n:
-  source_path: brave-search.md
-  source_hash: 81cd0a13239c13f4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:49Z
 ---
 
 # Brave Search API

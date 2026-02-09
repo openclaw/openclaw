@@ -4,18 +4,11 @@ read_when:
   - ပြင်ပ CLI ပေါင်းစည်းမှုများကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြောင်းလဲခြင်း အချိန်
   - RPC အဒက်တာများ (signal-cli၊ imsg) ကို ပြဿနာရှာဖွေပြုပြင်နေစဉ်
 title: "RPC အဒက်တာများ"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:51Z
 ---
 
 # RPC အဒက်တာများ
 
-OpenClaw သည် JSON-RPC မှတစ်ဆင့် ပြင်ပ CLI များကို ပေါင်းစည်းအသုံးပြုသည်။ ယနေ့တွင် ပုံစံနှစ်မျိုးကို အသုံးပြုထားသည်။
+OpenClaw သည် JSON-RPC မှတဆင့် external CLIs များကို ပေါင်းစည်းပါသည်။ ယနေ့ အသုံးပြုနေသော pattern နှစ်ခု ရှိပါသည်။
 
 ## ပုံစံ A: HTTP daemon (signal-cli)
 

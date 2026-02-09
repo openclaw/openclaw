@@ -1,16 +1,9 @@
 ---
-summary: „Diagnose-Flags für gezielte Debug-Logs“
+summary: "„Diagnose-Flags für gezielte Debug-Logs“"
 read_when:
   - Sie benötigen gezielte Debug-Logs, ohne globale Logging-Level zu erhöhen
   - Sie müssen subsystem-spezifische Logs für den Support erfassen
-title: „Diagnose-Flags“
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:04Z
+title: "„Diagnose-Flags“"
 ---
 
 # Diagnose-Flags
@@ -47,7 +40,7 @@ Mehrere Flags:
 
 Starten Sie das Gateway nach dem Ändern der Flags neu.
 
-## Umgebungsvariablen-Override (einmalig)
+## Env-Override (einmalig)
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

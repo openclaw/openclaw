@@ -6,25 +6,17 @@ read_when:
   - setup-token သို့မဟုတ် OAuth auth လမ်းကြောင်းများကို လိုအပ်သောအခါ
   - အကောင့်အများအပြား သို့မဟုတ် ပရိုဖိုင် လမ်းကြောင်းပြုလုပ်ခြင်းကို လိုအပ်သောအခါ
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:26Z
 ---
 
 # OAuth
 
-OpenClaw သည် OAuth ကို ပံ့ပိုးပေးသော provider များအတွက် “subscription auth” ကို ပံ့ပိုးပါသည် (အထူးသဖြင့် **OpenAI Codex (ChatGPT OAuth)**)။ Anthropic subscription များအတွက်တော့ **setup-token** လမ်းကြောင်းကို အသုံးပြုပါ။ ဤစာမျက်နှာတွင် အောက်ပါအကြောင်းအရာများကို ရှင်းပြထားပါသည်—
+၁၅။ OpenClaw သည် OAuth ကို ပံ့ပိုးပေးသော providers များအတွက် “subscription auth” ကို support လုပ်ပါသည် (အထူးသဖြင့် **OpenAI Codex (ChatGPT OAuth)**)။ ၁၆။ Anthropic subscriptions များအတွက် **setup-token** flow ကို အသုံးပြုပါ။ ၁၇။ ဤစာမျက်နှာတွင် ရှင်းပြထားသည်မှာ:
 
 - OAuth **token exchange** အလုပ်လုပ်ပုံ (PKCE)
 - တိုကင်များကို **ဘယ်နေရာမှာ သိမ်းဆည်းထားသည်** (နှင့် အကြောင်းရင်း)
 - **အကောင့်အများအပြား** ကို ကိုင်တွယ်နည်း (profiles + per-session overrides)
 
-OpenClaw သည် မိမိတို့ကိုယ်ပိုင် OAuth သို့မဟုတ် API‑key
-လမ်းကြောင်းများပါဝင်သည့် **provider plugins** များကိုလည်း ပံ့ပိုးပါသည်။ အောက်ပါအတိုင်း လုပ်ဆောင်နိုင်ပါသည်—
+၁၈။ OpenClaw သည် ကိုယ်ပိုင် OAuth သို့မဟုတ် API-key flows များပါဝင်သော **provider plugins** များကိုလည်း support လုပ်ပါသည်။ ၁၉။ အောက်ပါအတိုင်း run လုပ်ပါ:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -32,7 +24,7 @@ openclaw models auth login --provider <id>
 
 ## Token sink (ဘာကြောင့် လိုအပ်သလဲ)
 
-OAuth provider များသည် login/refresh လမ်းကြောင်းများအတွင်း **refresh token အသစ်** ကို မကြာခဏ ထုတ်ပေးလေ့ရှိပါသည်။ Provider အချို့ (သို့မဟုတ် OAuth client အချို့) တွင် အသုံးပြုသူ/အက်ပ် တူညီနေစဉ် refresh token အသစ် ထုတ်ပေးလိုက်ပါက ယခင် refresh token များကို မမှန်ကန်တော့အောင် ပြုလုပ်နိုင်ပါသည်။
+၂၀။ OAuth providers များသည် login/refresh flows အတွင်း **refresh token အသစ်တစ်ခု** ကို မကြာခဏ ထုတ်ပေးလေ့ရှိပါသည်။ ၂၁။ Provider အချို့ (သို့မဟုတ် OAuth clients အချို့) သည် user/app တစ်ခုတည်းအတွက် အသစ်သော refresh token ထုတ်ပေးသည့်အခါ အဟောင်း refresh tokens များကို invalidate လုပ်နိုင်ပါသည်။
 
 လက်တွေ့ တွေ့ရတတ်သော လက္ခဏာ—
 
@@ -54,7 +46,7 @@ Legacy import-only ဖိုင် (ထောက်ပံ့ဆဲ ဖြစ်�
 
 - `~/.openclaw/credentials/oauth.json` (ပထမဆုံး အသုံးပြုချိန်တွင် `auth-profiles.json` သို့ import လုပ်ပါသည်)
 
-အထက်ပါ အားလုံးသည် `$OPENCLAW_STATE_DIR` (state dir override) ကိုလည်း လိုက်နာပါသည်။ အပြည့်အစုံ ကိုးကားချက်— [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+၂၂။ အထက်ပါအရာအားလုံးသည် `$OPENCLAW_STATE_DIR` (state dir override) ကိုလည်း လေးစားလိုက်နာပါသည်။ ၂၃။ အပြည့်အစုံ reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token (subscription auth)
 
@@ -118,7 +110,7 @@ Refresh လမ်းကြောင်းသည် အလိုအလျော�
 
 ပုံစံ နှစ်မျိုး—
 
-### 1) ဦးစားပေး: အေးဂျင့် ခွဲခြားအသုံးပြုခြင်း
+### 1. ဦးစားပေး: အေးဂျင့် ခွဲခြားအသုံးပြုခြင်း
 
 “ကိုယ်ရေးကိုယ်တာ” နှင့် “အလုပ်” ကို မည်သည့်အခါမှ မပေါင်းစပ်စေချင်ပါက အေးဂျင့်များကို သီးခြားခွဲအသုံးပြုပါ (sessions + credentials + workspace သီးခြား)—
 
@@ -129,7 +121,7 @@ openclaw agents add personal
 
 ထို့နောက် အေးဂျင့်တစ်ခုချင်းစီအလိုက် auth ကို (wizard ဖြင့်) ဖွဲ့စည်းပြီး ချတ်များကို မှန်ကန်သော အေးဂျင့်သို့ လမ်းကြောင်းပြုလုပ်ပါ။
 
-### 2) အဆင့်မြင့်: အေးဂျင့်တစ်ခုအတွင်း ပရိုဖိုင် အများအပြား
+### 2. အဆင့်မြင့်: အေးဂျင့်တစ်ခုအတွင်း ပရိုဖိုင် အများအပြား
 
 `auth-profiles.json` သည် provider တစ်ခုတည်းအတွက် profile ID အများအပြားကို ပံ့ပိုးပါသည်။
 

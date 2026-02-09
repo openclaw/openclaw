@@ -5,18 +5,11 @@ read_when:
   - Köra iOS-appen från källkod
   - Felsökning av gateway-upptäckt eller canvas-kommandon
 title: "iOS-app"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:54Z
 ---
 
 # iOS-app (Node)
 
-Tillgänglighet: intern förhandsversion. iOS-appen är ännu inte publikt distribuerad.
+Tillgänglighet: intern förhandsgranskning. iOS-appen distribueras inte offentligt ännu.
 
 ## Vad den gör
 
@@ -60,11 +53,11 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-Gateway annonserar `_openclaw-gw._tcp` på `local.`. iOS-appen listar dessa automatiskt.
+Gateway annonserar `_openclaw-gw._tcp` på `local.`. iOS app listar dessa automatiskt.
 
 ### Tailnet (över nätverk)
 
-Om mDNS blockeras, använd en unicast DNS-SD-zon (välj en domän; exempel: `openclaw.internal.`) och Tailscale split DNS.
+Om mDNS är blockerad, använd en unicast DNS-SD-zon (välj en domän; exempel: `openclaw.internal.`) och Tailscale split DNS.
 Se [Bonjour](/gateway/bonjour) för CoreDNS-exemplet.
 
 ### Manuell värd/port
@@ -73,7 +66,7 @@ I Inställningar aktiverar du **Manuell värd** och anger gateway-värd + port (
 
 ## Canvas + A2UI
 
-iOS-noden renderar en WKWebView-canvas. Använd `node.invoke` för att styra den:
+iOS nod renderar en WKWebView canvas. Använd `node.invoke` för att köra den:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

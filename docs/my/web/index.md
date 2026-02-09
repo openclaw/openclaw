@@ -4,13 +4,6 @@ read_when:
   - သင် Tailscale မှတဆင့် Gateway ကို ဝင်ရောက်လိုပါက
   - ဘရောက်ဇာ Control UI နှင့် config တည်းဖြတ်ခြင်းကို လိုအပ်ပါက
 title: "ဝဘ်"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:06Z
 ---
 
 # ဝဘ် (Gateway)
@@ -20,18 +13,18 @@ Gateway သည် Gateway WebSocket နှင့် တူညီသော ပိ
 - မူလတန်ဖိုး: `http://<host>:18789/`
 - ရွေးချယ်နိုင်သော prefix: `gateway.controlUi.basePath` ကို သတ်မှတ်ပါ (ဥပမာ `/openclaw`)
 
-စွမ်းရည်များကို [Control UI](/web/control-ui) တွင် တွေ့နိုင်ပါသည်။
-ဤစာမျက်နှာသည် bind modes၊ လုံခြုံရေးနှင့် ဝဘ်ဘက်သို့ ထိတွေ့နေသော မျက်နှာပြင်များကို အဓိကထား ရှင်းပြပါသည်။
+22. Capabilities များကို [Control UI](/web/control-ui) တွင် ရှိပါသည်။
+23. ဤစာမျက်နှာသည် bind modes၊ လုံခြုံရေး နှင့် web-facing surfaces များကို အဓိကထား ဖော်ပြပါသည်။
 
 ## Webhooks
 
-`hooks.enabled=true` ဖြစ်ပါက Gateway သည် တူညီသော HTTP ဆာဗာပေါ်တွင် webhook endpoint အသေးစားတစ်ခုကိုလည်း ဖော်ပြပေးပါသည်။
-auth နှင့် payloads အတွက် [Gateway configuration](/gateway/configuration) → `hooks` ကို ကြည့်ပါ။
+24. `hooks.enabled=true` ဖြစ်ပါက Gateway သည် တူညီသော HTTP server ပေါ်တွင် webhook endpoint အသေးတစ်ခုကိုပါ ဖော်ပြပါသည်။
+25. auth + payloads အတွက် [Gateway configuration](/gateway/configuration) → `hooks` ကို ကြည့်ပါ။
 
 ## Config (မူလအားဖြင့် ဖွင့်ထားသည်)
 
-assets များ ရှိနေပါက Control UI ကို **မူလအားဖြင့် ဖွင့်ထားပါသည်** (`dist/control-ui`)။
-config ဖြင့် ထိန်းချုပ်နိုင်ပါသည်—
+26. assets (`dist/control-ui`) ရှိပါက Control UI ကို **default အနေဖြင့် enable လုပ်ထားပါသည်**။
+27. config ဖြင့် ထိန်းချုပ်နိုင်ပါသည်:
 
 ```json5
 {
@@ -107,15 +100,12 @@ openclaw gateway
 - wizard သည် loopback ပေါ်တွင်တောင် မူလအားဖြင့် gateway token တစ်ခုကို ဖန်တီးပေးပါသည်။
 - UI သည် `connect.params.auth.token` သို့မဟုတ် `connect.params.auth.password` ကို ပို့ပေးပါသည်။
 - Control UI သည် anti-clickjacking headers များကို ပို့ပြီး `gateway.controlUi.allowedOrigins` ကို မသတ်မှတ်ထားပါက same-origin ဘရောက်ဇာ websocket ချိတ်ဆက်မှုများကိုသာ လက်ခံပါသည်။
-- Serve ကို အသုံးပြုပါက Tailscale identity headers များသည်
-  `gateway.auth.allowTailscale` ကို `true` ဖြစ်စေထားသောအခါ auth ကို ဖြည့်ဆည်းပေးနိုင်ပါသည် (token/password မလိုအပ်ပါ)။ သတ်မှတ်ရန်
-  `gateway.auth.allowTailscale: false` ကို သုံးပြီး အတိအကျ အထောက်အထားများကို လိုအပ်စေပါ။ ကြည့်ရန်
-  [Tailscale](/gateway/tailscale) နှင့် [Security](/gateway/security)။
+- 28. Serve အသုံးပြုသောအခါ `gateway.auth.allowTailscale` သည် `true` ဖြစ်ပါက Tailscale identity headers များဖြင့် auth ကို ဖြည့်ဆည်းနိုင်ပါသည် (token/password မလိုအပ်ပါ)။ 29. ထင်ရှားသော credentials လိုအပ်စေရန် `gateway.auth.allowTailscale: false` ကို set လုပ်ပါ။ 30. [Tailscale](/gateway/tailscale) နှင့် [Security](/gateway/security) ကို ကြည့်ပါ။
 - `gateway.tailscale.mode: "funnel"` သည် `gateway.auth.mode: "password"` (မျှဝေထားသော password) ကို လိုအပ်ပါသည်။
 
 ## UI ကို တည်ဆောက်ခြင်း
 
-Gateway သည် `dist/control-ui` မှ static ဖိုင်များကို ဆောင်ရွက်ပေးပါသည်။ အောက်ပါအတိုင်း တည်ဆောက်ပါ—
+31. Gateway သည် static files များကို `dist/control-ui` မှ serve လုပ်ပါသည်။ 32. အောက်ပါအတိုင်း build လုပ်ပါ:
 
 ```bash
 pnpm ui:build # auto-installs UI deps on first run

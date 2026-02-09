@@ -1,17 +1,10 @@
 ---
 summary: "OpenClaw 가 환경 변수를 로드하는 위치와 우선순위 순서"
 read_when:
-  - 어떤 환경 변수가 로드되는지와 그 순서를 알아야 할 때
+  - You need to know which env vars are loaded, and in what order
   - Gateway(게이트웨이) 에서 API 키 누락을 디버깅할 때
   - 프로바이더 인증 또는 배포 환경을 문서화할 때
 title: "환경 변수"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:10Z
 ---
 
 # 환경 변수
@@ -43,7 +36,7 @@ OpenClaw 는 여러 소스에서 환경 변수를 가져옵니다. 규칙은 **�
 }
 ```
 
-## 셸 환경 변수 가져오기
+## Shell env import
 
 `env.shellEnv` 는 로그인 셸을 실행하고 **누락된** 예상 키만 가져옵니다:
 
@@ -58,12 +51,12 @@ OpenClaw 는 여러 소스에서 환경 변수를 가져옵니다. 규칙은 **�
 }
 ```
 
-환경 변수 동등 항목:
+Env var equivalents:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
-## 구성에서의 환경 변수 치환
+## Env var substitution in config
 
 구성 문자열 값에서 `${VAR_NAME}` 구문을 사용하여 환경 변수를 직접 참조할 수 있습니다:
 

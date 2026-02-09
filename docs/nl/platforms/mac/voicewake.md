@@ -2,14 +2,7 @@
 summary: "Spraakactivering en push-to-talk-modi plus routeringsdetails in de mac-app"
 read_when:
   - Werken aan spraakactivering- of PTT-paden
-title: "Spraakactivering"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:40Z
+title: "Voice Wake"
 ---
 
 # Spraakactivering & Push-to-Talk

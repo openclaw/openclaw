@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "تعزيز إضافة Cron"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:13Z
 ---
 
 # تعزيز إضافة Cron ومحاذاة المخططات
@@ -27,7 +20,7 @@ x-i18n:
 - إصلاح عرض عدد مهام حالة cron في واجهة التحكم.
 - إضافة اختبارات لتغطية التوحيد وسلوك الأداة.
 
-## خارج النطاق
+## غير الأهداف
 
 - تغيير دلالات جدولة cron أو سلوك تنفيذ المهام.
 - إضافة أنواع جداول جديدة أو تحليل تعابير cron.

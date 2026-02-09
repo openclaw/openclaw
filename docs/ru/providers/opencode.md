@@ -4,13 +4,6 @@ read_when:
   - Вам нужен OpenCode Zen для доступа к моделям
   - Вам нужен курируемый список моделей, удобных для программирования
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:51Z
 ---
 
 # OpenCode Zen

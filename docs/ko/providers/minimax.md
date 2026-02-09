@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 에서 MiniMax 모델을 사용하려는 경우
   - MiniMax 설정 가이드가 필요한 경우
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:04Z
 ---
 
 # MiniMax
@@ -38,8 +31,7 @@ MiniMax 는 M2.1 에서 다음과 같은 개선 사항을 강조합니다:
 
 - **속도:** Lightning 은 MiniMax 가격 문서에서 '빠른' 변형으로 표시됩니다.
 - **비용:** 가격은 동일한 입력 비용을 보여주지만, Lightning 은 출력 비용이 더 높습니다.
-- **코딩 플랜 라우팅:** Lightning 백엔드는 MiniMax 코딩 플랜에서 직접 사용할 수 없습니다.
-  MiniMax 는 대부분의 요청을 Lightning 으로 자동 라우팅하지만,
+- **코딩 플랜 라우팅:** Lightning 백엔드는 MiniMax 코딩 플랜에서 직접 사용할 수 없습니다. MiniMax 는 대부분의 요청을 Lightning 으로 자동 라우팅하지만,
   트래픽 급증 시에는 일반 M2.1 백엔드로 폴백합니다.
 
 ## 설정 선택
@@ -199,8 +191,7 @@ JSON 을 직접 편집하지 않고 대화형 설정 마법사를 사용하여 M
 ### “Unknown model: minimax/MiniMax-M2.1”
 
 이는 일반적으로 **MiniMax 프로바이더가 구성되지 않았음**을 의미합니다
-(프로바이더 항목이 없고 MiniMax 인증 프로필/환경 변수 키도 발견되지 않음).
-이 감지를 수정하는 패치는 **2026.1.12** 에 포함되어 있습니다
+(프로바이더 항목이 없고 MiniMax 인증 프로필/환경 변수 키도 발견되지 않음). 이 감지를 수정하는 패치는 **2026.1.12** 에 포함되어 있습니다
 (작성 시점 기준 미릴리스). 다음 방법으로 해결할 수 있습니다:
 
 - **2026.1.12** 로 업그레이드 (또는 소스에서 `main` 실행)한 후

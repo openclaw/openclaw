@@ -3,18 +3,11 @@ summary: "Cấu hình và thiết lập bot chat Twitch"
 read_when:
   - Thiết lập tích hợp chat Twitch cho OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:18Z
 ---
 
 # Twitch (plugin)
 
-Hỗ trợ chat Twitch thông qua kết nối IRC. OpenClaw kết nối với tư cách là một người dùng Twitch (tài khoản bot) để nhận và gửi tin nhắn trong các kênh.
+Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
 
 ## Plugin bắt buộc
 
@@ -48,7 +41,7 @@ Chi tiết: [Plugins](/tools/plugin)
    - Nếu cả hai đều được thiết lập, cấu hình sẽ được ưu tiên (biến môi trường chỉ là phương án dự phòng cho tài khoản mặc định).
 5. Khởi động gateway.
 
-**⚠️ Quan trọng:** Thêm kiểm soát truy cập (`allowFrom` hoặc `allowedRoles`) để ngăn người dùng không được ủy quyền kích hoạt bot. `requireMention` mặc định là `true`.
+**⚠️ Important:** Add access control (`allowFrom` or `allowedRoles`) to prevent unauthorized users from triggering the bot. `requireMention` defaults to `true`.
 
 Cấu hình tối thiểu:
 
@@ -84,7 +77,7 @@ Sử dụng [Twitch Token Generator](https://twitchtokengenerator.com/):
 - Xác minh các scope `chat:read` và `chat:write` đã được chọn
 - Sao chép **Client ID** và **Access Token**
 
-Không cần đăng ký ứng dụng thủ công. Token sẽ hết hạn sau vài giờ.
+No manual app registration needed. Tokens expire after several hours.
 
 ### Cấu hình bot
 
@@ -124,11 +117,11 @@ Nếu cả biến môi trường và cấu hình đều được thiết lập, 
 }
 ```
 
-Ưu tiên `allowFrom` cho danh sách cho phép cứng. Dùng `allowedRoles` nếu bạn muốn kiểm soát theo vai trò.
+Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
 
 **Các vai trò khả dụng:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
-**Vì sao dùng user ID?** Tên người dùng có thể thay đổi, cho phép giả mạo. User ID là vĩnh viễn.
+**Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
 Tìm Twitch user ID của bạn: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Chuyển đổi tên người dùng Twitch sang ID)
 
@@ -153,7 +146,7 @@ Bot sẽ tự động làm mới token trước khi hết hạn và ghi log các
 
 ## Hỗ trợ nhiều tài khoản
 
-Sử dụng `channels.twitch.accounts` với token theo từng tài khoản. Xem [`gateway/configuration`](/gateway/configuration) để biết mẫu dùng chung.
+Use `channels.twitch.accounts` with per-account tokens. See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
 Ví dụ (một tài khoản bot trong hai kênh):
 
@@ -218,8 +211,8 @@ Ví dụ (một tài khoản bot trong hai kênh):
 
 ### Truy cập theo vai trò (phương án thay thế)
 
-`allowFrom` là danh sách cho phép cứng. Khi được thiết lập, chỉ các user ID đó mới được phép.
-Nếu bạn muốn truy cập theo vai trò, hãy để `allowFrom` chưa thiết lập và cấu hình `allowedRoles` thay vào đó:
+`allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+If you want role-based access, leave `allowFrom` unset and configure `allowedRoles` instead:
 
 ```json5
 {
@@ -237,7 +230,7 @@ Nếu bạn muốn truy cập theo vai trò, hãy để `allowFrom` chưa thiế
 
 ### Tắt yêu cầu @mention
 
-Theo mặc định, `requireMention` là `true`. Để tắt và phản hồi tất cả tin nhắn:
+By default, `requireMention` is `true`. To disable and respond to all messages:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Nếu bạn thấy “token refresh disabled (no refresh token)”:
 - `channels.twitch.accessToken` - Access token OAuth (cấu hình đơn tài khoản rút gọn)
 - `channels.twitch.clientId` - Twitch Client ID (cấu hình đơn tài khoản rút gọn)
 - `channels.twitch.channel` - Kênh cần tham gia (cấu hình đơn tài khoản rút gọn)
-- `channels.twitch.accounts.<accountName>` - Cấu hình nhiều tài khoản (tất cả các trường tài khoản ở trên)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
 
 Ví dụ đầy đủ:
 

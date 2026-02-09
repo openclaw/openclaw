@@ -4,18 +4,11 @@ read_when:
   - စက်တစ်လုံးတည်းပေါ်တွင် Gateway တစ်ခုထက်ပို၍ လည်ပတ်ရန်လိုအပ်သောအခါ
   - Gateway တစ်ခုချင်းစီအတွက် သီးခြား config/state/ports များလိုအပ်သောအခါ
 title: "Gateways အများအပြား"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:23Z
 ---
 
 # Gateways အများအပြား (ဟို့စ်တစ်ခုတည်း)
 
-အများစုသော တပ်ဆင်မှုများတွင် Gateway တစ်ခုတည်းကို အသုံးပြုသင့်ပါသည်၊ Gateway တစ်ခုတည်းက မက်ဆေ့ချ်ဆက်သွယ်မှုများနှင့် အေးဂျင့်များကို အများအပြား ကိုင်တွယ်နိုင်သောကြောင့်ဖြစ်သည်။ ပိုမိုပြင်းထန်သော ခွဲခြားမှု သို့မဟုတ် ထပ်တလဲလဲအသုံးချနိုင်မှု (ဥပမာ — rescue bot) လိုအပ်ပါက ပရိုဖိုင်/ပေါက်များကို သီးခြားထားသော Gateway များကို ခွဲ၍ လည်ပတ်စေပါ။
+Setup အများစုအတွက် Gateway တစ်ခုတည်းကို အသုံးပြုသင့်သည်၊ Gateway တစ်ခုက messaging connection များနှင့် agent များ အများအပြားကို ကိုင်တွယ်နိုင်သောကြောင့်ဖြစ်သည်။ ပိုမိုကောင်းမွန်သော isolation သို့မဟုတ် redundancy (ဥပမာ rescue bot) လိုအပ်ပါက profile/port များကို ခွဲထားသော Gateway များကို သီးခြားစီ chạy ပါ။
 
 ## Isolation စစ်ဆေးရန်စာရင်း (မဖြစ်မနေလိုအပ်)
 
@@ -87,7 +80,7 @@ Base port = `gateway.port` (သို့မဟုတ် `OPENCLAW_GATEWAY_PORT` 
 
 - browser control service port = base + 2 (local loopback သာ)
 - `canvasHost.port = base + 4`
-- Browser profile CDP ports များကို `browser.controlPort + 9 .. + 108` မှ အလိုအလျောက် ခွဲဝေပေးပါသည်
+- Browser profile CDP port များကို `browser.controlPort + 9 .. + 108` မှ အလိုအလျောက် ခွဲဝေသတ်မှတ်သည်။
 
 Config သို့မဟုတ် env တွင် ဤအရာများထဲမှ မည်သည့်အရာကိုမဆို override လုပ်ပါက instance တစ်ခုချင်းစီအတွက် မတူညီအောင် ထားရှိရပါမည်။
 
@@ -95,8 +88,8 @@ Config သို့မဟုတ် env တွင် ဤအရာများထ�
 
 - `browser.cdpUrl` ကို instance အများအပြားတွင် တန်ဖိုးတူညီအောင် မချိန်ထားပါနှင့်။
 - Instance တစ်ခုချင်းစီအတွက် ကိုယ်ပိုင် browser control port နှင့် CDP range (gateway port မှ ဆင်းသက်လာသော) လိုအပ်ပါသည်။
-- CDP ports များကို တိတိကျကျ သတ်မှတ်ရန်လိုအပ်ပါက `browser.profiles.<name>.cdpPort` ကို instance တစ်ခုချင်းစီအတွက် သတ်မှတ်ပါ။
-- Remote Chrome: `browser.profiles.<name>.cdpUrl` ကို အသုံးပြုပါ (profile အလိုက်၊ instance အလိုက်)။
+- သတ်မှတ်ထားသော CDP port များ လိုအပ်ပါက `browser.profiles.<name>.cdpPort` ကို instance တစ်ခုချင်းစီအတွက် သတ်မှတ်ပါ။
+- Remote Chrome: `browser.profiles.<name>.cdpUrl` ကို အသုံးပြုပါ (profile တစ်ခုချင်း၊ instance တစ်ခုချင်း)။
 
 ## Manual env ဥပမာ
 

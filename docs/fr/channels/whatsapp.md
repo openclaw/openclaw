@@ -1,15 +1,8 @@
 ---
-summary: « Intégration WhatsApp (canal web) : connexion, boîte de réception, réponses, médias et opérations »
+summary: "Intégration WhatsApp (canal web) : connexion, boîte de réception, réponses, médias et opérations"
 read_when:
   - Travail sur le comportement du canal WhatsApp/web ou le routage de la boîte de réception
-title: « WhatsApp »
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 44fd88f8e2692849
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:20Z
+title: "WhatsApp"
 ---
 
 # WhatsApp (canal web)
@@ -158,7 +151,7 @@ Comportement :
 - Les messages privés sortants ne déclenchent jamais de réponses d’appairage (évite de spammer les contacts).
 - Les expéditeurs inconnus entrants suivent toujours `channels.whatsapp.dmPolicy`.
 - Le mode auto‑discussion (allowFrom inclut votre numéro) évite les accusés de lecture automatiques et ignore les JID de mention.
-- Des accusés de lecture sont envoyés pour les messages privés hors auto‑discussion.
+- Reçus de lecture envoyés pour les MP non auto-chat.
 
 ## Accusés de lecture
 
@@ -211,16 +204,20 @@ L’assistant l’utilise pour définir votre **liste d’autorisation/propriét
 ## Normalisation des messages (ce que voit le modèle)
 
 - `Body` est le corps du message courant avec enveloppe.
+
 - Le contexte de réponse citée est **toujours ajouté** :
+
   ```
   [Replying to +1555 id:ABC123]
   <quoted text or <media:...>>
   [/Replying]
   ```
+
 - Les métadonnées de réponse sont également définies :
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = corps cité ou espace réservé de média
   - `ReplyToSender` = E.164 lorsque connu
+
 - Les messages entrants contenant uniquement des médias utilisent des espaces réservés :
   - `<media:image|video|audio|document|sticker>`
 

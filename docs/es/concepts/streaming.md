@@ -5,13 +5,6 @@ read_when:
   - Cambiar el streaming por bloques o el comportamiento de fragmentación por canal
   - Depurar respuestas por bloques duplicadas/anticipadas o streaming de borradores
 title: "Streaming y fragmentación"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:26Z
 ---
 
 # Streaming + fragmentación

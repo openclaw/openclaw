@@ -2,22 +2,15 @@
 summary: "TOOLS.md 를 위한 워크스페이스 템플릿"
 read_when:
   - 워크스페이스를 수동으로 부트스트래핑할 때
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:07Z
 ---
 
 # TOOLS.md - 로컬 노트
 
 Skills 는 도구가 _어떻게_ 동작하는지를 정의합니다. 이 파일은 _당신_ 의 구체적인 사항 — 즉, 당신의 설정에만 고유한 것들을 위한 공간입니다.
 
-## 여기에 포함되는 내용
+## 23. 여기에 들어갈 것
 
-예를 들면 다음과 같습니다:
+24. 다음과 같은 것들:
 
 - 카메라 이름과 위치
 - SSH 호스트와 별칭
@@ -26,7 +19,7 @@ Skills 는 도구가 _어떻게_ 동작하는지를 정의합니다. 이 파일�
 - 디바이스 별명
 - 환경에 특화된 모든 것
 
-## 예시
+## 예제
 
 ```markdown
 ### Cameras

@@ -1,18 +1,11 @@
 ---
 summary: "تشغيل OpenClaw داخل VM macOS معزول (محلي أو مُستضاف) عندما تحتاج إلى العزل أو iMessage"
 read_when:
-  - "تريد عزل OpenClaw عن بيئة macOS الأساسية لديك"
-  - "تريد تكامل iMessage ‏(BlueBubbles) داخل sandbox"
-  - "تريد بيئة macOS قابلة لإعادة الضبط ويمكن استنساخها"
-  - "تريد مقارنة خيارات VM macOS المحلية مقابل المُستضافة"
+  - تريد عزل OpenClaw عن بيئة macOS الأساسية لديك
+  - تريد تكامل iMessage ‏(BlueBubbles) داخل sandbox
+  - تريد بيئة macOS قابلة لإعادة الضبط ويمكن استنساخها
+  - تريد مقارنة خيارات VM macOS المحلية مقابل المُستضافة
 title: "VMs macOS"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:33Z
 ---
 
 # OpenClaw على VMs macOS (Sandboxing)
@@ -69,7 +62,7 @@ x-i18n:
 
 ---
 
-## 1) تثبيت Lume
+## 1. تثبيت Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ lume --version
 
 ---
 
-## 2) إنشاء VM macOS
+## 2. إنشاء VM macOS
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 3) إكمال Setup Assistant
+## 3. إكمال Setup Assistant
 
 في نافذة VNC:
 
@@ -119,7 +112,7 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 4) الحصول على عنوان IP للـ VM
+## 4. الحصول على عنوان IP للـ VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ lume get openclaw
 
 ---
 
-## 5) الدخول إلى الـ VM عبر SSH
+## 5. الدخول إلى الـ VM عبر SSH
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) تثبيت OpenClaw
+## 6. تثبيت OpenClaw
 
 داخل الـ VM:
 
@@ -152,7 +145,7 @@ openclaw onboard --install-daemon
 
 ---
 
-## 7) تهيئة القنوات
+## 7. تهيئة القنوات
 
 حرّر ملف التهيئة:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) تشغيل الـ VM دون واجهة
+## 8. تشغيل الـ VM دون واجهة
 
 أوقف الـ VM وأعد تشغيله دون عرض:
 
@@ -267,11 +260,11 @@ lume run openclaw --no-display
 
 ## استكشاف الأخطاء وإصلاحها
 
-| المشكلة                   | الحل                                                                                      |
-| ------------------------- | ----------------------------------------------------------------------------------------- |
-| لا يمكن الدخول عبر SSH    | تأكّد من تمكين "Remote Login" في System Settings داخل الـ VM                              |
-| لا يظهر IP للـ VM         | انتظر حتى يكتمل إقلاع الـ VM، ثم شغّل `lume get openclaw` مرة أخرى                        |
-| أمر Lume غير موجود        | أضِف `~/.local/bin` إلى PATH لديك                                                         |
+| المشكلة                   | الحل                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| لا يمكن الدخول عبر SSH    | تأكّد من تمكين "Remote Login" في System Settings داخل الـ VM                                                 |
+| لا يظهر IP للـ VM         | انتظر حتى يكتمل إقلاع الـ VM، ثم شغّل `lume get openclaw` مرة أخرى                                           |
+| أمر Lume غير موجود        | أضِف `~/.local/bin` إلى PATH لديك                                                                            |
 | لا يتم مسح QR لـ WhatsApp | تأكّد من تسجيل دخولك داخل الـ VM (وليس النظام المضيف) عند تشغيل `openclaw channels login` |
 
 ---

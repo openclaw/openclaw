@@ -4,13 +4,6 @@ read_when:
   - تريد استخدام Synthetic كمزوّد نماذج
   - تحتاج إلى إعداد مفتاح واجهة برمجة التطبيقات لـ Synthetic أو عنوان URL الأساسي
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:36Z
 ---
 
 # Synthetic
@@ -21,7 +14,7 @@ x-i18n:
 ## الإعداد السريع
 
 1. عيّن `SYNTHETIC_API_KEY` (أو شغّل معالج الإعداد أدناه).
-2. نفّذ التهيئة الأولية:
+2. تشغيل الرحلة:
 
 ```bash
 openclaw onboard --auth-choice synthetic-api-key
@@ -76,7 +69,7 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 
 تستخدم جميع النماذج أدناه التكلفة `0` (إدخال/إخراج/ذاكرة مؤقتة).
 
-| معرّف النموذج                                          | نافذة السياق | الحد الأقصى للرموز | الاستدلال | الإدخال   |
+| معرف النموذج                                           | نافذة السياق | الحد الأقصى للرموز | الاستدلال | الإدخال   |
 | ------------------------------------------------------ | ------------ | ------------------ | --------- | --------- |
 | `hf:MiniMaxAI/MiniMax-M2.1`                            | 192000       | 65536              | false     | نص        |
 | `hf:moonshotai/Kimi-K2-Thinking`                       | 256000       | 8192               | true      | نص        |

@@ -4,13 +4,6 @@ read_when:
   - iMessage desteğini kurma
   - iMessage gönderme/alma hata ayıklama
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:18Z
 ---
 
 # iMessage (eski: imsg)
@@ -54,7 +47,7 @@ Asgari yapılandırma:
 
 Varsayılan olarak iMessage, `/config set|unset` tarafından tetiklenen yapılandırma güncellemelerini yazmaya izinlidir ( `commands.config: true` gerektirir).
 
-Devre dışı bırakmak için:
+Şununla devre dışı bırakın:
 
 ```json5
 {

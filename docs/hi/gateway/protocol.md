@@ -5,21 +5,12 @@ read_when:
   - प्रोटोकॉल असंगतियों या कनेक्ट विफलताओं का डिबग करते समय
   - प्रोटोकॉल स्कीमा/मॉडल्स को पुनः जनरेट करते समय
 title: "Gateway प्रोटोकॉल"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:20Z
 ---
 
 # Gateway प्रोटोकॉल (WebSocket)
 
-Gateway WS प्रोटोकॉल OpenClaw के लिए **एकल कंट्रोल प्लेन + नोड ट्रांसपोर्ट** है।
-सभी क्लाइंट्स (CLI, वेब UI, macOS ऐप, iOS/Android नोड्स, हेडलेस नोड्स)
-WebSocket के माध्यम से कनेक्ट होते हैं और हैंडशेक के समय अपनी **role** + **scope**
-घोषित करते हैं।
+Gateway WS प्रोटोकॉल OpenClaw के लिए **एकमात्र control plane + node transport** है। सभी क्लाइंट (CLI, web UI, macOS ऐप, iOS/Android nodes, headless
+nodes) WebSocket के माध्यम से कनेक्ट होते हैं और handshake समय पर अपना **role** + **scope** घोषित करते हैं।
 
 ## Transport
 
@@ -162,7 +153,7 @@ Gateway → Client:
 
 - `caps`: उच्च-स्तरीय क्षमता श्रेणियाँ।
 - `commands`: invoke के लिए कमांड allowlist।
-- `permissions`: सूक्ष्म टॉगल्स (उदा. `screen.record`, `camera.capture`)।
+- `permissions`: सूक्ष्म टॉगल्स (जैसे `screen.record`, `camera.capture`)।
 
 Gateway इन्हें **claims** के रूप में मानता है और सर्वर-साइड allowlists लागू करता है।
 
@@ -195,9 +186,8 @@ Gateway इन्हें **claims** के रूप में मानता
 
 - यदि `OPENCLAW_GATEWAY_TOKEN` (या `--token`) सेट है, तो `connect.params.auth.token`
   मेल खाना चाहिए; अन्यथा सॉकेट बंद कर दिया जाता है।
-- पेयरिंग के बाद, Gateway कनेक्शन की role + scopes तक सीमित एक **device token** जारी करता है।
-  यह `hello-ok.auth.deviceToken` में लौटाया जाता है और भविष्य के कनेक्शनों के लिए
-  क्लाइंट द्वारा स्थायी रूप से सहेजा जाना चाहिए।
+- pairing के बाद, Gateway कनेक्शन के role + scopes तक सीमित एक **device token** जारी करता है। यह `hello-ok.auth.deviceToken` में लौटाया जाता है और भविष्य के कनेक्शनों के लिए
+  क्लाइंट द्वारा सहेजा जाना चाहिए।
 - डिवाइस टोकन `device.token.rotate` और `device.token.revoke` के माध्यम से रोटेट/रिवोक किए जा सकते हैं
   (इसके लिए `operator.pairing` स्कोप आवश्यक है)।
 
@@ -210,7 +200,7 @@ Gateway इन्हें **claims** के रूप में मानता
 - **Local** कनेक्शनों में loopback और Gateway होस्ट का अपना tailnet पता शामिल होता है
   (ताकि same‑host tailnet binds भी auto‑approve हो सकें)।
 - सभी WS क्लाइंट्स को `connect` के दौरान `device` पहचान शामिल करनी चाहिए (operator + node)।
-  कंट्रोल UI इसे **केवल** तब छोड़ सकता है जब `gateway.controlUi.allowInsecureAuth` सक्षम हो
+  Control UI इसे **केवल** तब छोड़ सकता है जब `gateway.controlUi.allowInsecureAuth` सक्षम हो
   (या ब्रेक-ग्लास उपयोग के लिए `gateway.controlUi.dangerouslyDisableDeviceAuth`)।
 - गैर-स्थानीय कनेक्शनों को सर्वर द्वारा प्रदान किए गए `connect.challenge` nonce पर हस्ताक्षर करना होगा।
 
@@ -222,6 +212,5 @@ Gateway इन्हें **claims** के रूप में मानता
 
 ## Scope
 
-यह प्रोटोकॉल **पूर्ण Gateway API** (स्थिति, चैनल्स, मॉडल्स, चैट,
-agent, sessions, nodes, approvals, आदि) को एक्सपोज़ करता है। सटीक सतह
-`src/gateway/protocol/schema.ts` में TypeBox स्कीमाओं द्वारा परिभाषित है।
+यह प्रोटोकॉल **पूरा गेटवे API** (status, channels, models, chat,
+agent, sessions, nodes, approvals, आदि) को एक्सपोज़ करता है। सटीक सतह `src/gateway/protocol/schema.ts` में TypeBox schemas द्वारा परिभाषित है।

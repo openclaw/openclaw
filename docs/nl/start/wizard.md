@@ -5,13 +5,6 @@ read_when:
   - Het instellen van een nieuwe machine
 title: "Onboardingwizard (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:50Z
 ---
 
 # Onboardingwizard (CLI)

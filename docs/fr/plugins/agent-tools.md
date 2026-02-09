@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez ajouter un nouvel outil d’agent dans un plugin
   - Vous devez rendre un outil optionnel via des listes d’autorisation
 title: "Outils d’agent de plugin"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:24Z
 ---
 
 # Outils d’agent de plugin

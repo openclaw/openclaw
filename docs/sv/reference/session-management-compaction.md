@@ -5,13 +5,6 @@ read_when:
   - Du ändrar beteendet för automatisk kompaktering eller lägger till ”pre-kompaktering”-städning
   - Du vill implementera minnesflushar eller tysta systemvändor
 title: "Fördjupning i sessionshantering"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:42Z
 ---
 
 # Sessionshantering och kompaktering (fördjupning)
@@ -96,7 +89,7 @@ Tumregler:
 
 - **Återställning** (`/new`, `/reset`) skapar ett nytt `sessionId` för den `sessionKey`.
 - **Daglig återställning** (standard 04:00 lokal tid på Gateway-värden) skapar ett nytt `sessionId` vid nästa meddelande efter återställningsgränsen.
-- **Inaktivitetsutgång** (`session.reset.idleMinutes` eller äldre `session.idleMinutes`) skapar ett nytt `sessionId` när ett meddelande anländer efter inaktivitetsfönstret. När både daglig och inaktivitet är konfigurerade vinner den som löper ut först.
+- **Idle utgång** (`session.reset.idleMinutes` eller äldre `session.idleMinutes`) skapar en ny `sessionId` när ett meddelande kommer efter tomgångsfönstret. När dagligen + inaktiv är båda konfigurerade, vilket som löper ut första vinner.
 
 Implementationsdetalj: beslutet sker i `initSessionState()` i `src/auto-reply/reply/session.ts`.
 
@@ -174,7 +167,7 @@ Efter kompaktering ser framtida vändor:
 - Kompakteringssammanfattningen
 - Meddelanden efter `firstKeptEntryId`
 
-Kompaktering är **persistent** (till skillnad från session pruning). Se [/concepts/session-pruning](/concepts/session-pruning).
+Komprimering är **persistent** (till skillnad från sessionsbeskärning). Se [/concepts/session-pruning](/concepts/session-pruning).
 
 ---
 
@@ -250,9 +243,9 @@ Från och med `2026.1.10` undertrycker OpenClaw även **utkast-/skrivstreaming**
 
 ## ”Minnesflush” före kompaktering (implementerad)
 
-Mål: innan automatisk kompaktering sker, köra en tyst agentisk vända som skriver beständigt
-tillstånd till disk (t.ex. `memory/YYYY-MM-DD.md` i agentens arbetsyta) så att kompaktering inte kan
-radera kritisk kontext.
+Mål: innan automatisk komprimering händer, kör en tyst agentic tur som skriver hållbar
+tillstånd till disk (e. . `minne/YYY-MM-DD.md` i agentens arbetsyta) så komprimering kan inte
+radera kritiska sammanhang.
 
 OpenClaw använder metoden **pre-tröskel-flush**:
 
@@ -283,10 +276,10 @@ flushlogik ligger i dag på Gateway-sidan.
 
 ## Felsökningschecklista
 
-- Fel sessionsnyckel? Börja med [/concepts/session](/concepts/session) och bekräfta `sessionKey` i `/status`.
-- Avvikelse mellan lagring och transkript? Bekräfta Gateway-värden och lagringsökvägen från `openclaw status`.
-- Kompakteringsspam? Kontrollera:
+- Sessionsnyckel fel? Börja med [/concepts/session](/concepts/session) och bekräfta `sessionKey` i `/status`.
+- Lagra vs utskrift felaktigt? Bekräfta Gateway-värden och butikssökvägen från `openclaw status`.
+- Komprimering skräppost? Kontroll:
   - modellens kontextfönster (för litet)
   - kompakteringsinställningar (`reserveTokens` för högt i förhållande till modellfönstret kan orsaka tidigare kompaktering)
   - uppblåst tool-result: aktivera/justera session pruning
-- Läckande tysta vändor? Bekräfta att svaret börjar med `NO_REPLY` (exakt token) och att du kör en version som inkluderar fixen för undertryckning av streaming.
+- Tysta svängar läckande? Bekräfta svaret börjar med `NO_REPLY` (exakt token) och du är på en byggnad som inkluderar strömmande dämpning fix.

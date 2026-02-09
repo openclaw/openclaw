@@ -4,13 +4,6 @@ read_when:
   - อัปเดตการแม็ปตัวระบุรุ่นอุปกรณ์หรือไฟล์ NOTICE/ไลเซนส์
   - เปลี่ยนวิธีที่ UI ของ Instances แสดงชื่ออุปกรณ์
 title: "ฐานข้อมูลรุ่นอุปกรณ์"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:34Z
 ---
 
 # ฐานข้อมูลรุ่นอุปกรณ์(ชื่อที่เป็นมิตร)
@@ -23,7 +16,7 @@ x-i18n:
 
 ## แหล่งข้อมูล
 
-ปัจจุบันเราใช้การแม็ปจากรีโพซิทอรีที่อยู่ภายใต้ไลเซนส์ MIT:
+ปัจจุบันมีการใช้สองแพตเทิร์น
 
 - `kyle-seongwoo-jun/apple-device-identifiers`
 

@@ -5,13 +5,6 @@ read_when:
   - လော့ဂ်အဆင့်များ သို့မဟုတ် ဖော်မတ်များကို ဖွဲ့စည်းပြင်ဆင်လိုသည့်အခါ
   - ပြဿနာဖြေရှင်းနေစဉ် လော့ဂ်များကို လျင်မြန်စွာ ရှာဖွေရန် လိုအပ်သောအခါ
 title: "Logging"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:00Z
 ---
 
 # Logging
@@ -74,8 +67,8 @@ openclaw doctor
 
 ### Control UI (web)
 
-Control UI ၏ **Logs** 탭သည် `logs.tail` ကို အသုံးပြုပြီး တူညီသော ဖိုင်ကို tail လုပ်သည်။
-ဖွင့်နည်းကို [/web/control-ui](/web/control-ui) တွင် ကြည့်ပါ။
+Control UI ၏ **Logs** tab သည် `logs.tail` ကို အသုံးပြု၍ တူညီသော ဖိုင်ကို tail လုပ်ပါသည်။
+ဖွင့်ရန် နည်းလမ်းအတွက် [/web/control-ui](/web/control-ui) ကို ကြည့်ပါ။
 
 ### Channel သီးသန့် လော့ဂ်များ
 
@@ -89,7 +82,7 @@ openclaw channels logs --channel whatsapp
 
 ### ဖိုင်လော့ဂ်များ (JSONL)
 
-လော့ဂ်ဖိုင်အတွင်း လိုင်းတိုင်းသည် JSON object တစ်ခုဖြစ်သည်။ CLI နှင့် Control UI သည် ဤ entry များကို ခွဲခြမ်းစိတ်ဖြာပြီး ဖွဲ့စည်းထားသော output (အချိန်၊ အဆင့်၊ subsystem၊ မက်ဆေ့ချ်) ကို ပြသသည်။
+log ဖိုင်အတွင်းရှိ line တစ်ကြောင်းစီသည် JSON object တစ်ခုဖြစ်ပါသည်။ CLI နှင့် Control UI သည် ဤ entries များကို parse လုပ်၍ structured output (အချိန်၊ level၊ subsystem၊ message) အဖြစ် ပြသပါသည်။
 
 ### ကွန်ဆိုလ်ထုတ်လွှင့်မှု
 
@@ -144,7 +137,7 @@ Redaction သည် **ကွန်ဆိုလ်ထုတ်လွှင့်�
 
 ## Diagnostics + OpenTelemetry
 
-Diagnostics သည် မော်ဒယ် run များ **နှင့်** မက်ဆေ့ချ်စီးဆင်းမှု telemetry (webhooks, queueing, session state) အတွက် ဖွဲ့စည်းထားသော၊ စက်ဖတ်နိုင်သော ဖြစ်ရပ်များဖြစ်သည်။ ၎င်းတို့သည် လော့ဂ်များကို အစားမထိုးပါဘဲ metrics၊ traces နှင့် အခြား exporter များကို ထောက်ပံ့ရန် ရည်ရွယ်ထားသည်။
+Diagnostics များသည် model run များအတွက် **နှင့်** message-flow telemetry (webhooks၊ queueing၊ session state) အတွက် စနစ်တကျ ဖွဲ့စည်းထားသော၊ စက်ဖြင့်ဖတ်နိုင်သော event များဖြစ်ပါသည်။ ၎င်းတို့သည် logs ကို အစားထိုးခြင်း မဟုတ်ပါ၊ metrics၊ traces နှင့် အခြား exporter များကို ပံ့ပိုးရန် ရည်ရွယ်ပါသည်။
 
 Diagnostics ဖြစ်ရပ်များကို process အတွင်း ထုတ်ပေးသော်လည်း diagnostics နှင့် exporter plugin ကို ဖွင့်ထားမှသာ exporter များက ချိတ်ဆက်မည်ဖြစ်သည်။
 
@@ -158,7 +151,7 @@ Diagnostics ဖြစ်ရပ်များကို process အတွင်�
 
 - **Metrics**: counters + histograms (token အသုံးပြုမှု၊ message flow၊ queueing)။
 - **Traces**: မော်ဒယ်အသုံးပြုမှု နှင့် webhook/message processing အတွက် spans။
-- **Logs**: `diagnostics.otel.logs` ကို ဖွင့်ထားပါက OTLP ဖြင့် export လုပ်သည်။ Log အရေအတွက် များနိုင်သောကြောင့် `logging.level` နှင့် exporter filter များကို သတိထားပါ။
+- **Logs**: `diagnostics.otel.logs` ကို ဖွင့်ထားပါက OTLP မှတစ်ဆင့် export လုပ်ပါသည်။ log အရေအတွက်သည် များနိုင်ပါသည်; `logging.level` နှင့် exporter filter များကို ထည့်သွင်းစဉ်းစားပါ။
 
 ### Diagnostic event catalog
 
@@ -197,8 +190,8 @@ Plugin များ သို့မဟုတ် custom sink များအတ�
 
 ### Diagnostics flags (ရည်ရွယ်ချက်ရှိသော လော့ဂ်များ)
 
-`logging.level` ကို မမြှင့်ဘဲ အပို debug လော့ဂ်များကို ဖွင့်ရန် flag များကို အသုံးပြုပါ။
-Flag များသည် case-insensitive ဖြစ်ပြီး wildcard များကို ထောက်ပံ့သည် (ဥပမာ– `telegram.*` သို့မဟုတ် `*`)။
+`logging.level` ကို မမြှင့်ဘဲ အထူးသီးသန့် debug logs များကို ဖွင့်ရန် flags များကို အသုံးပြုပါ။
+Flags များသည် case-insensitive ဖြစ်ပြီး wildcard များကို ထောက်ပံ့ပါသည် (ဥပမာ `telegram.*` သို့မဟုတ် `*`)။
 
 ```json
 {
@@ -222,8 +215,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 ### OpenTelemetry သို့ export လုပ်ခြင်း
 
-Diagnostics များကို `diagnostics-otel` plugin (OTLP/HTTP) ဖြင့် export လုပ်နိုင်သည်။
-OTLP/HTTP ကို လက်ခံသော OpenTelemetry collector/backend မည်သည့်အမျိုးအစားမဆို အသုံးပြုနိုင်သည်။
+Diagnostics များကို `diagnostics-otel` plugin (OTLP/HTTP) ဖြင့် export လုပ်နိုင်ပါသည်။ ဤသည်သည် OTLP/HTTP ကို လက်ခံသော OpenTelemetry collector/backend မည်သည့်အမျိုးအစားမဆို အသုံးပြုနိုင်ပါသည်။
 
 ```json
 {
@@ -255,9 +247,10 @@ OTLP/HTTP ကို လက်ခံသော OpenTelemetry collector/backend မ
 မှတ်ချက်များ–
 
 - `openclaw plugins enable diagnostics-otel` ဖြင့်လည်း plugin ကို ဖွင့်နိုင်သည်။
-- `protocol` သည် လက်ရှိတွင် `http/protobuf` ကိုသာ ထောက်ပံ့သည်။ `grpc` ကို လျစ်လျူရှုထားသည်။
+- `protocol` သည် လက်ရှိအချိန်တွင် `http/protobuf` ကိုသာ ထောက်ပံ့ပါသည်။ `grpc` ကို လျစ်လျူရှုပါသည်။
 - Metrics တွင် token အသုံးပြုမှု၊ cost၊ context အရွယ်အစား၊ run ကြာချိန်၊ နှင့် message-flow counter/histogram များ (webhooks, queueing, session state, queue depth/wait) ပါဝင်သည်။
-- Traces/metrics ကို `traces` / `metrics` ဖြင့် ဖွင့်/ပိတ်နိုင်သည် (ပုံမှန်– ဖွင့်ထားသည်)။ Traces တွင် မော်ဒယ်အသုံးပြုမှု spans နှင့် webhook/message processing spans များ ပါဝင်သည်။
+- Traces/metrics များကို `traces` / `metrics` ဖြင့် toggle လုပ်နိုင်ပါသည် (default: on)။ Traces
+  မှာ enable လုပ်ထားရင် model usage spans နဲ့ webhook/message processing spans တွေ ပါဝင်ပါတယ်။
 - Collector တွင် auth လိုအပ်ပါက `headers` ကို သတ်မှတ်ပါ။
 - ထောက်ပံ့သော environment variables– `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`။
@@ -337,7 +330,7 @@ Queues + sessions–
 ### Log export အပြုအမူ
 
 - OTLP လော့ဂ်များသည် `logging.file` သို့ ရေးသားသော ဖွဲ့စည်းထားသည့် record များနှင့် တူညီသည်။
-- `logging.level` (ဖိုင်လော့ဂ်အဆင့်) ကို လိုက်နာသည်။ ကွန်ဆိုလ် redaction သည် OTLP လော့ဂ်များတွင် **မသက်ရောက်ပါ**။
+- `logging.level` (file log level) ကို လိုက်နာပါ။ Console redaction သည် OTLP logs များတွင် **မသက်ရောက်ပါ**။
 - လော့ဂ်အရေအတွက်များသော install များတွင် OTLP collector sampling/filtering ကို ဦးစားပေးသင့်သည်။
 
 ## ပြဿနာဖြေရှင်းရန် အကြံပြုချက်များ

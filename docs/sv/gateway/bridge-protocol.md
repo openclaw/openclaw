@@ -5,25 +5,18 @@ read_when:
   - Utreder parkopplings- eller bridge‑autentiseringsfel
   - Granskar nodytan som exponeras av gatewayn
 title: "Bridge-protokoll"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:15Z
 ---
 
 # Bridge-protokoll (äldre nodtransport)
 
-Bridge-protokollet är en **äldre** nodtransport (TCP JSONL). Nya nodklienter
-bör i stället använda det enhetliga Gateway WebSocket-protokollet.
+Bro protokollet är en **legacy** nod transport (TCP JSONL). Nya nodklienter
+bör använda det enhetliga Gateway WebSocket-protokollet istället.
 
 Om du bygger en operatör eller nodklient, använd
 [Gateway-protokollet](/gateway/protocol).
 
-**Obs:** Aktuella OpenClaw‑byggen levereras inte längre med TCP‑bridge‑lyssnaren; detta dokument bevaras av historiska skäl.
-Äldre `bridge.*`‑konfignycklar ingår inte längre i konfigschemat.
+**Observera:** Nuvarande OpenClaw bygger skickar inte längre TCP-brygglyssnaren, detta dokument hålls för historisk referens.
+Legacy `bridge.*` config nycklar är inte längre en del av konfigurationsschemat.
 
 ## Varför vi har båda
 
@@ -71,8 +64,8 @@ Gateway → Klient:
 
 ## Exec‑livscykelhändelser
 
-Noder kan emitera `exec.finished`‑ eller `exec.denied`‑händelser för att exponera system.run‑aktivitet.
-Dessa mappas till systemhändelser i gatewayn. (Äldre noder kan fortfarande emitera `exec.started`.)
+Noder kan sända ut `exec.finished` eller `exec.denied` händelser till ytans system.run aktivitet.
+Dessa kartläggs till systemhändelser i porten. (Legacy noder kan fortfarande avge `exec.started`.)
 
 Payload‑fält (alla valfria om inget annat anges):
 
@@ -92,5 +85,5 @@ Payload‑fält (alla valfria om inget annat anges):
 
 ## Versionering
 
-Bridge är för närvarande **implicit v1** (ingen min/max‑förhandling). Bakåtkompatibilitet
-förväntas; lägg till ett versionsfält för bridge‑protokollet före eventuella brytande ändringar.
+Bridge är för närvarande **implicit v1** (ingen min/max förhandling). Bakåt-compat
+förväntas; lägg till en bro protokoll versionsfält innan några brytningsändringar.

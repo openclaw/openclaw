@@ -3,13 +3,6 @@ title: Sandbox مقابل سياسة الأدوات مقابل Elevated
 summary: "لماذا يتم حظر أداة ما: وقت تشغيل sandbox، وسياسة السماح/المنع للأدوات، وبوابات تنفيذ Elevated"
 read_when: "عندما تصطدم بـ «سجن sandbox» أو ترى رفضًا لأداة/‏Elevated وتريد مفتاح التهيئة الدقيق الذي يجب تغييره."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:29Z
 ---
 
 # Sandbox مقابل سياسة الأدوات مقابل Elevated

@@ -3,18 +3,11 @@ summary: "Regler för hantering av bilder och media för sändning, gateway och 
 read_when:
   - Ändring av mediepipeline eller bilagor
 title: "Stöd för bilder och media"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:49Z
 ---
 
 # Stöd för bilder och media — 2025-12-05
 
-WhatsApp-kanalen körs via **Baileys Web**. Det här dokumentet beskriver de aktuella reglerna för mediehantering vid sändning, gateway och agentsvar.
+WhatsApp-kanalen körs via **Baileys Web**. Detta dokument fångar aktuella regler för hantering av media för att skicka, gateway, och agent svarar.
 
 ## Mål
 
@@ -55,7 +48,7 @@ WhatsApp-kanalen körs via **Baileys Web**. Det här dokumentet beskriver de akt
 - Medieförståelse (om konfigurerad via `tools.media.*` eller delad `tools.media.models`) körs före mallning och kan infoga blocken `[Image]`, `[Audio]` och `[Video]` i `Body`.
   - Ljud sätter `{{Transcript}}` och använder transkriptionen för kommandotolkning så att snedstreckskommandon fortfarande fungerar.
   - Video- och bildbeskrivningar bevarar eventuell bildtext för kommandotolkning.
-- Som standard bearbetas endast den första matchande bilagan för bild/ljud/video; sätt `tools.media.<cap>.attachments` för att bearbeta flera bilagor.
+- Som standard behandlas endast den första matchande bilden/audio/videobilagan; sätt `tools.media.<cap>.attachments` för att bearbeta flera bilagor.
 
 ## Gränser och fel
 

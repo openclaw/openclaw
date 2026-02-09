@@ -5,13 +5,6 @@ read_when:
   - Firecrawl API 키가 필요할 때
   - web_fetch 를 위한 안티 봇 추출이 필요할 때
 title: "Firecrawl"
-x-i18n:
-  source_path: tools/firecrawl.md
-  source_hash: 08a7ad45b41af412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:27Z
 ---
 
 # Firecrawl

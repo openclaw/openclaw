@@ -4,13 +4,6 @@ summary: "Konfiguracja Cloudflare AI Gateway (uwierzytelnianie + wybór modelu)"
 read_when:
   - Chcesz używać Cloudflare AI Gateway z OpenClaw
   - Potrzebujesz identyfikatora konta, identyfikatora gateway lub zmiennej środowiskowej klucza API
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
 ---
 
 # Cloudflare AI Gateway

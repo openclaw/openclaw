@@ -4,13 +4,6 @@ read_when:
   - Добавление или изменение конфига Skills
   - Корректировка встроенного allowlist или поведения установки
 title: "Конфиг Skills"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:02Z
 ---
 
 # Конфиг Skills
@@ -58,7 +51,7 @@ x-i18n:
   (Bun не рекомендуется для WhatsApp/Telegram).
 - `entries.<skillKey>`: переопределения для каждого Skill.
 
-Поля для каждого Skill:
+Поля навыков:
 
 - `enabled`: установите `false`, чтобы отключить Skill, даже если он встроенный/установлен.
 - `env`: переменные окружения, внедряемые для запуска агента (только если ещё не заданы).

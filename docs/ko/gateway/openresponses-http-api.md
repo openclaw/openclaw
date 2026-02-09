@@ -4,13 +4,6 @@ read_when:
   - OpenResponses API를 사용하는 클라이언트를 통합할 때
   - 아이템 기반 입력, 클라이언트 도구 호출 또는 SSE 이벤트가 필요할 때
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:13Z
 ---
 
 # OpenResponses API (HTTP)

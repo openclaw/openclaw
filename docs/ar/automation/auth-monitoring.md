@@ -4,13 +4,6 @@ read_when:
   - إعداد مراقبة أو تنبيهات لانتهاء صلاحية المصادقة
   - أتمتة فحوصات تحديث OAuth لـ Claude Code / Codex
 title: "مراقبة المصادقة"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:47Z
 ---
 
 # مراقبة المصادقة

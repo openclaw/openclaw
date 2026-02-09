@@ -2,15 +2,8 @@
 summary: "`openclaw dns`에 대한 CLI 레퍼런스 (광역 디스커버리 도우미)"
 read_when:
   - Tailscale + CoreDNS를 통한 광역 디스커버리 (DNS-SD)가 필요할 때
-  - 사용자 지정 디스커버리 도메인 (예: openclaw.internal)에 대한 분할 DNS를 설정할 때
+  - You’re setting up split DNS for a custom discovery domain (example: openclaw.internal)
 title: "dns"
-x-i18n:
-  source_path: cli/dns.md
-  source_hash: d2011e41982ffb4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:16Z
 ---
 
 # `openclaw dns`

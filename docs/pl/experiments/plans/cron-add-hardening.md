@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Utwierdzenie dodawania cron"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:13Z
 ---
 
 # Utwardzanie dodawania Crona i wyrównanie schematów
@@ -27,7 +20,7 @@ Najnowsze logi Gateway pokazują powtarzające się awarie `cron.add` z nieprawi
 - Naprawić wyświetlanie liczby zadań statusu cron w Control UI.
 - Dodać testy obejmujące normalizację i zachowanie narzędzia.
 
-## Poza zakresem
+## Inne cele
 
 - Zmiana semantyki harmonogramu cron lub zachowania wykonywania zadań.
 - Dodanie nowych rodzajów harmonogramów lub parsowania wyrażeń cron.

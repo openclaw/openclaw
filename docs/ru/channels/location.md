@@ -4,13 +4,6 @@ read_when:
   - Добавление или изменение разбора локаций каналов
   - Использование полей контекста локации в подсказках или инструментах агента
 title: "Разбор локаций каналов"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:06Z
 ---
 
 # Разбор локаций каналов

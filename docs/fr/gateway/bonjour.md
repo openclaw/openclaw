@@ -4,13 +4,6 @@ read_when:
   - Débogage des problèmes de découverte Bonjour sur macOS/iOS
   - Modification des types de services mDNS, des enregistrements TXT ou de l’UX de découverte
 title: "Découverte Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 47569da55f0c0523
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:40Z
 ---
 
 # Découverte Bonjour / mDNS
@@ -111,10 +104,13 @@ La Gateway (passerelle) annonce de petits indices non secrets pour faciliter les
 Outils intégrés utiles :
 
 - Parcourir les instances :
+
   ```bash
   dns-sd -B _openclaw-gw._tcp local.
   ```
+
 - Résoudre une instance (remplacez `<instance>`) :
+
   ```bash
   dns-sd -L "<instance>" _openclaw-gw._tcp local.
   ```

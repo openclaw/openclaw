@@ -4,13 +4,6 @@ read_when:
   - Cortar um novo lançamento npm
   - Cortar um novo lançamento do app macOS
   - Verificar metadados antes de publicar
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:59Z
 ---
 
 # Checklist de Lançamento (npm + macOS)

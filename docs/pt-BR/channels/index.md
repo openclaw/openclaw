@@ -4,13 +4,6 @@ read_when:
   - Você quer escolher um canal de chat para o OpenClaw
   - Você precisa de uma visão geral rápida das plataformas de mensagens compatíveis
 title: "Canais de Chat"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:55Z
 ---
 
 # Canais de Chat
@@ -18,7 +11,7 @@ x-i18n:
 O OpenClaw pode falar com você em qualquer aplicativo de chat que você já usa. Cada canal se conecta via o Gateway.
 Texto é suportado em todos; mídia e reações variam conforme o canal.
 
-## Canais compatíveis
+## Canais suportados
 
 - [WhatsApp](/channels/whatsapp) — Mais popular; usa Baileys e requer pareamento por QR.
 - [Telegram](/channels/telegram) — Bot API via grammY; suporta grupos.

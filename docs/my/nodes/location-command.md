@@ -4,13 +4,6 @@ read_when:
   - Location နိုဒ် အထောက်အပံ့ သို့မဟုတ် ခွင့်ပြုချက် UI ကို ထည့်သွင်းရာတွင်
   - နောက်ခံ Location + push လုပ်ငန်းစဉ်များကို ဒီဇိုင်းရေးဆွဲရာတွင်
 title: "Location အမိန့်"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:42Z
 ---
 
 # Location အမိန့် (နိုဒ်များ)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## Selector ကို အသုံးပြုရသည့် အကြောင်းရင်း (switch တစ်ခုတည်း မဟုတ်ခြင်း)
 
-OS ခွင့်ပြုချက်များမှာ အဆင့်အတန်းများ ပါဝင်သည်။ အက်ပ်အတွင်း Selector ကို ဖော်ပြနိုင်သော်လည်း အမှန်တကယ် ခွင့်ပြုချက် ပေးခြင်းကို OS က ဆုံးဖြတ်သည်။
+23. in-app အတွင်း selector တစ်ခုကို expose လုပ်နိုင်သော်လည်း အမှန်တကယ် grant ကို OS က ဆုံးဖြတ်သည်။ We can expose a selector in-app, but the OS still decides the actual grant.
 
-- iOS/macOS: စနစ် prompt များ/Settings တွင် **While Using** သို့မဟုတ် **Always** ကို အသုံးပြုသူက ရွေးချယ်နိုင်သည်။ အက်ပ်မှ အဆင့်မြှင့်တင်ရန် တောင်းဆိုနိုင်သော်လည်း OS က Settings သို့ သွားရန် လိုအပ်စေတတ်သည်။
+- iOS/macOS: user can choose **While Using** or **Always** in system prompts/Settings. 26. Optional ဖြစ်သည်။
 - Android: နောက်ခံ Location သည် သီးခြား ခွင့်ပြုချက်တစ်ခု ဖြစ်သည်; Android 10+ တွင် Settings လုပ်ငန်းစဉ် လိုအပ်တတ်သည်။
 - Precise location သည် သီးခြား ခွင့်ပြုချက်တစ်ခု ဖြစ်သည် (iOS 14+ “Precise”, Android “fine” နှင့် “coarse” ခြားနားမှု)။
 
@@ -47,7 +40,7 @@ UI အပြုအမူ:
 
 ## Permissions mapping (node.permissions)
 
-မဖြစ်မနေ မလိုအပ်ပါ။ macOS နိုဒ်သည် permissions map မှတစ်ဆင့် `location` ကို အစီရင်ခံပါသည်; iOS/Android တွင် မပါဝင်နိုင်ပါ။
+27. macOS node သည် permissions map မှတဆင့် `location` ကို report လုပ်ပြီး iOS/Android တွင် မပါဝင်နိုင်ပါ။ 28. iOS: Always permission နှင့် background location mode လိုအပ်သည်။
 
 ## Command: `location.get`
 
@@ -103,7 +96,7 @@ Push ဖြင့် အစပြုသော လုပ်ငန်းစဉ် 
 
 မှတ်ချက်များ:
 
-- iOS: Always ခွင့်ပြုချက် + နောက်ခံ Location mode လိုအပ်သည်။ Silent push ကို ကန့်သတ်နိုင်ပြီး မကြာခဏ မအောင်မြင်မှုများ ဖြစ်နိုင်သည်။
+- 29. Silent push ကို throttled လုပ်နိုင်သဖြင့် intermittent failures များကို မျှော်လင့်ပါ။ Silent push may be throttled; expect intermittent failures.
 - Android: နောက်ခံ Location အတွက် foreground service လိုအပ်နိုင်သည်; မဟုတ်ပါက ငြင်းပယ်ခံရနိုင်သည်။
 
 ## မော်ဒယ်/ကိရိယာ ပေါင်းစည်းမှု
@@ -116,5 +109,5 @@ Push ဖြင့် အစပြုသော လုပ်ငန်းစဉ် 
 
 - Off: “Location မျှဝေမှုကို ပိတ်ထားသည်။”
 - While Using: “OpenClaw ဖွင့်ထားချိန်တွင်သာ။”
-- Always: “နောက်ခံ Location ကို ခွင့်ပြုပါ။ စနစ် ခွင့်ပြုချက် လိုအပ်သည်။”
-- Precise: “တိကျသော GPS Location ကို အသုံးပြုပါ။ ပိတ်ထားပါက ခန့်မှန်း Location ကို မျှဝေပါမည်။”
+- 31. Requires system permission.” 32. Precise: “Use precise GPS location.
+- 33. Toggle off to share approximate location.” 34. OpenClaw သည် reply pipeline မစတင်မီ **inbound media** (image/audio/video) ကို **summarize** လုပ်နိုင်သည်။

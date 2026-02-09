@@ -1,15 +1,8 @@
 ---
-summary: „macOS-App-Ablauf zur Steuerung eines entfernten OpenClaw Gateway über SSH“
+summary: "„macOS-App-Ablauf zur Steuerung eines entfernten OpenClaw Gateway über SSH“"
 read_when:
   - Beim Einrichten oder Debuggen der entfernten macOS-Steuerung
-title: „Fernsteuerung“
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:59Z
+title: "Fernbedienung"
 ---
 
 # Remote OpenClaw (macOS ⇄ entfernter Host)
@@ -81,7 +74,7 @@ Der Remote-Modus unterstützt zwei Transporte:
 
 ## Benachrichtigungstöne
 
-Wählen Sie Töne pro Benachrichtigung aus Skripten mit `openclaw` und `node.invoke`, z. B.:
+Wählen Sie Töne pro Benachrichtigung aus Skripten mit `openclaw` und `node.invoke`, z. B.:
 
 ```bash
 openclaw nodes notify --node <id> --title "Ping" --body "Remote gateway ready" --sound Glass

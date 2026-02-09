@@ -1,16 +1,9 @@
 ---
-summary: „OpenClaw macOS‑Release‑Checkliste (Sparkle‑Feed, Packaging, Signierung)“
+summary: "„OpenClaw macOS‑Release‑Checkliste (Sparkle‑Feed, Packaging, Signierung)“"
 read_when:
   - Beim Erstellen oder Validieren eines OpenClaw macOS‑Releases
   - Beim Aktualisieren des Sparkle‑Appcasts oder der Feed‑Assets
-title: „macOS‑Release“
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:56Z
+title: "„macOS‑Release“"
 ---
 
 # OpenClaw macOS‑Release (Sparkle)

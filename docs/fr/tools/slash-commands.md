@@ -4,13 +4,6 @@ read_when:
   - Utilisation ou configuration des commandes de chat
   - Debogage du routage des commandes ou des autorisations
 title: "Commandes slash"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:27Z
 ---
 
 # Commandes slash
@@ -156,7 +149,7 @@ Remarques :
 - `/model <#>` selectionne depuis ce selecteur (et privilegie le fournisseur courant lorsque possible).
 - `/model status` affiche la vue detaillee, y compris l’endpoint du fournisseur configure (`baseUrl`) et le mode API (`api`) lorsque disponible.
 
-## Surcharges de debogage
+## Debug overrides
 
 `/debug` vous permet de definir des surcharges de configuration **uniquement a l’execution** (memoire, pas disque). Reserve au proprietaire. Desactive par defaut ; activez avec `commands.debug: true`.
 

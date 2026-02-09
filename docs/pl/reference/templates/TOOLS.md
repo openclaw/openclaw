@@ -1,14 +1,7 @@
 ---
-summary: „Szablon obszaru roboczego dla TOOLS.md”
+summary: "„Szablon obszaru roboczego dla TOOLS.md”"
 read_when:
   - Ręczne bootstrapowanie obszaru roboczego
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:34Z
 ---
 
 # TOOLS.md – Notatki lokalne
@@ -17,13 +10,13 @@ Skills definiują, _jak_ działają narzędzia. Ten plik jest dla _Twoich_ szcze
 
 ## Co tu umieścić
 
-Na przykład:
+Rzeczy takie jak:
 
 - Nazwy i lokalizacje kamer
 - Hosty SSH i aliasy
 - Preferowane głosy dla TTS
 - Nazwy głośników/pomieszczeń
-- Przydomki urządzeń
+- Nick urządzenia
 - Wszystko, co jest specyficzne dla środowiska
 
 ## Przykłady

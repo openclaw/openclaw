@@ -4,13 +4,6 @@ read_when:
   - Gebruik of configuratie van chatcommando’s
   - Debuggen van commandorouting of rechten
 title: "Slash-commando’s"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:13Z
 ---
 
 # Slash-commando’s

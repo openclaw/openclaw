@@ -4,13 +4,6 @@ read_when:
   - Einrichten von Zalo Personal für OpenClaw
   - Debugging von Zalo-Personal-Login oder Nachrichtenfluss
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:26Z
 ---
 
 # Zalo Personal (inoffiziell)

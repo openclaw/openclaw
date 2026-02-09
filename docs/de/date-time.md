@@ -4,13 +4,6 @@ read_when:
   - Sie ändern, wie Zeitstempel dem Modell oder den Benutzern angezeigt werden
   - Sie debuggen die Zeitformatierung in Nachrichten oder der Ausgabe des System-Prompts
 title: "Datum und Uhrzeit"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:05Z
 ---
 
 # Datum & Uhrzeit

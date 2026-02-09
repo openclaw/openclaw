@@ -4,19 +4,13 @@ read_when:
   - リポジトリからスクリプトを実行する場合
   - ./scripts 配下のスクリプトを追加または変更する場合
 title: "スクリプト"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:59Z
 ---
 
 # スクリプト
 
 `scripts/` ディレクトリには、ローカル ワークフローおよび運用タスク向けのヘルパー スクリプトが含まれています。
 タスクが明確にスクリプトに紐づく場合に使用してください。それ以外の場合は CLI を優先してください。
+タスクが明確にスクリプトに関連付けられている場合、これらを使用します。そうでなければCLIを好みます。
 
 ## 規約
 

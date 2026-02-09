@@ -2,13 +2,6 @@
 summary: "Configuration Slack pour le mode socket ou webhook HTTP"
 read_when: "Configurer Slack ou depanner le mode socket/HTTP de Slack"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 703b4b4333bebfef
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:14Z
 ---
 
 # Slack
@@ -137,7 +130,7 @@ Exemple avec userTokenReadOnly defini explicitement (autoriser les ecritures via
 Utilisez le mode webhook HTTP lorsque votre Gateway (passerelle) est accessible par Slack via HTTPS (typique pour des deploiements serveur).
 Le mode HTTP utilise l’API Events + Interactivity + Slash Commands avec une URL de requete partagee.
 
-### Configuration
+### Configuration (mode HTTP)
 
 1. Creez une application Slack et **desactivez le Mode socket** (optionnel si vous n’utilisez que HTTP).
 2. **Basic Information** → copiez le **Signing Secret**.
@@ -365,7 +358,7 @@ Slack utilise uniquement le Mode socket (pas de serveur webhook HTTP). Fournisse
 }
 ```
 
-Les tokens peuvent egalement etre fournis via des variables d'environnement :
+Les jetons peuvent également être fournis via des variables env :
 
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
@@ -384,11 +377,11 @@ reaction d’accuse de reception apres la reponse du bot.
 
 Par defaut, OpenClaw repond dans le canal principal. Utilisez `channels.slack.replyToMode` pour controler le fil automatique :
 
-| Mode    | Comportement                                                                                                                                                                     |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Par defaut.** Repondre dans le canal principal. Ne creer un fil que si le message declencheur etait deja dans un fil.                                                          |
+| Mode    | Comportement                                                                                                                                                                                                                        |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **Par defaut.** Repondre dans le canal principal. Ne creer un fil que si le message declencheur etait deja dans un fil.                                                             |
 | `first` | La premiere reponse va dans le fil (sous le message declencheur), les reponses suivantes vont dans le canal principal. Utile pour conserver le contexte sans encombrer les fils. |
-| `all`   | Toutes les reponses vont dans le fil. Garde les conversations contenues mais peut reduire la visibilite.                                                                         |
+| `all`   | Toutes les reponses vont dans le fil. Garde les conversations contenues mais peut reduire la visibilite.                                                                                            |
 
 Le mode s’applique aux reponses automatiques et aux appels d’outils de l’agent (`slack sendMessage`).
 
@@ -420,13 +413,13 @@ Priorite :
 
 1. `replyToModeByChatType.<chatType>`
 2. `replyToMode`
-3. Valeur par defaut du fournisseur (`off`)
+3. Fournisseur par défaut (`off`)
 
 Le parametre historique `channels.slack.dm.replyToMode` est toujours accepte comme repli pour `direct` lorsqu’aucune surcharge par type de discussion n’est definie.
 
 Exemples :
 
-Fil uniquement pour les Messages prives :
+Sujet de discussion uniquement :
 
 ```json5
 {
@@ -452,7 +445,7 @@ Fil pour les Messages prives de groupe mais canaux a la racine :
 }
 ```
 
-Canaux en fil, Messages prives a la racine :
+Faire des fils de discussion, garder les MP à la racine :
 
 ```json5
 {
@@ -481,7 +474,7 @@ Pour un controle fin, utilisez ces balises dans les reponses de l’agent :
 - L’enregistrement des commandes natives utilise `commands.native` (valeur globale par defaut `"auto"` → Slack desactive) et peut etre surcharge par espace de travail avec `channels.slack.commands.native`. Les commandes texte necessitent des messages `/...` autonomes et peuvent etre desactivees avec `commands.text: false`. Les commandes slash Slack sont gerees dans l’application Slack et ne sont pas supprimees automatiquement. Utilisez `commands.useAccessGroups: false` pour contourner les verifications de groupes d’acces pour les commandes.
 - Liste complete des commandes + configuration : [Slash commands](/tools/slash-commands)
 
-## Securite des Messages prives (appairage)
+## Sécurité DM (jumelage)
 
 - Par defaut : `channels.slack.dm.policy="pairing"` — les expediteurs de Messages prives inconnus recoivent un code d’appairage (expire apres 1 heure).
 - Approbation via : `openclaw pairing approve slack <code>`.
@@ -524,7 +517,7 @@ Utilisez-les avec des envois cron/CLI :
 
 Les actions d’outils Slack peuvent etre controlees via `channels.slack.actions.*` :
 
-| Groupe d’actions | Par defaut | Notes                         |
+| Groupe d’actions | Par défaut | Notes                         |
 | ---------------- | ---------- | ----------------------------- |
 | reactions        | active     | React + lister les reactions  |
 | messages         | active     | Lire/envoyer/editer/supprimer |
@@ -540,6 +533,29 @@ Les actions d’outils Slack peuvent etre controlees via `channels.slack.actions
   operations d’ecriture lorsqu’aucun token de bot n’est disponible, ce qui signifie que les actions s’executent avec l’acces de l’utilisateur installateur. Traitez le token utilisateur comme hautement privilegie et maintenez des controles d’actions et des listes d’autorisation stricts.
 - Si vous activez les ecritures via token utilisateur, assurez-vous que le token utilisateur inclut les scopes d’ecriture attendus (`chat:write`, `reactions:write`, `pins:write`,
   `files:write`) sinon ces operations echoueront.
+
+## Problemes courants
+
+Exécutez d'abord cette échelle :
+
+```bash
+openclaw models auth paste-token --provider anthropic
+openclaw models status
+```
+
+Ensuite, confirmez l'état d'appairage du DM si nécessaire:
+
+```bash
+openclaw pairing list slack
+```
+
+Échecs communs :
+
+- Réponses connectées mais pas de canal : canal bloqué par `groupPolicy` ou non dans la liste de diffusion `channels.slack.channels`.
+- DMs ignorés: l'expéditeur n'est pas approuvé lorsque `channels.slack.dm.policy="appairage"`.
+- Erreurs d'API (`missing_scope`, `not_in_channel`, échecs d'authentification): les tokens bot/app ou Slack sont incomplets.
+
+channels/signal.md
 
 ## Notes
 

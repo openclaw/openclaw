@@ -1,18 +1,11 @@
 ---
 summary: "내구성 있는 상태와 이미지에 포함된 바이너리를 사용하여 저렴한 Hetzner VPS (Docker)에서 OpenClaw Gateway 를 24/7 실행합니다"
 read_when:
-  - "노트북이 아닌 클라우드 VPS 에서 OpenClaw 를 24/7 실행하고 싶을 때"
-  - "자신의 VPS 에서 프로덕션급, 항상 켜져 있는 Gateway(게이트웨이) 를 원할 때"
-  - "영속성, 바이너리, 재시작 동작을 완전히 제어하고 싶을 때"
-  - "Hetzner 또는 유사한 프로바이더에서 Docker 로 OpenClaw 를 실행 중일 때"
+  - 노트북이 아닌 클라우드 VPS 에서 OpenClaw 를 24/7 실행하고 싶을 때
+  - 자신의 VPS 에서 프로덕션급, 항상 켜져 있는 Gateway(게이트웨이) 를 원할 때
+  - 영속성, 바이너리, 재시작 동작을 완전히 제어하고 싶을 때
+  - Hetzner 또는 유사한 프로바이더에서 Docker 로 OpenClaw 를 실행 중일 때
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:32Z
 ---
 
 # Hetzner 에서 OpenClaw 실행 (Docker, 프로덕션 VPS 가이드)
@@ -21,10 +14,10 @@ x-i18n:
 
 Docker 를 사용하여 Hetzner VPS 에서 영속적인 OpenClaw Gateway(게이트웨이) 를 실행하고, 내구성 있는 상태, 이미지에 포함된 바이너리, 안전한 재시작 동작을 보장합니다.
 
-“약 $5 로 OpenClaw 24/7”을 원한다면, 이것이 가장 단순하고 신뢰할 수 있는 설정입니다.  
+“약 $5 로 OpenClaw 24/7”을 원한다면, 이것이 가장 단순하고 신뢰할 수 있는 설정입니다.
 Hetzner 가격은 변경될 수 있으므로, 가장 작은 Debian/Ubuntu VPS 를 선택하고 OOM 이 발생하면 확장하십시오.
 
-## 무엇을 하나요 (간단히)?
+## What are we doing (simple terms)?
 
 - 소형 Linux 서버 (Hetzner VPS) 임대
 - Docker 설치 (격리된 앱 런타임)
@@ -38,7 +31,7 @@ Gateway(게이트웨이) 접근 방법:
 - 방화벽과 토큰을 직접 관리하는 경우 포트를 직접 노출
 
 이 가이드는 Hetzner 의 Ubuntu 또는 Debian 을 가정합니다.  
-다른 Linux VPS 를 사용하는 경우 패키지를 적절히 매핑하십시오.  
+다른 Linux VPS 를 사용하는 경우 패키지를 적절히 매핑하십시오.
 일반적인 Docker 흐름은 [Docker](/install/docker)를 참고하십시오.
 
 ---
@@ -56,7 +49,7 @@ Gateway(게이트웨이) 접근 방법:
 
 ---
 
-## 준비물
+## 필요한 사항
 
 - root 접근이 가능한 Hetzner VPS
 - 노트북에서의 SSH 접근
@@ -71,7 +64,7 @@ Gateway(게이트웨이) 접근 방법:
 
 ---
 
-## 1) VPS 프로비저닝
+## 1. VPS 프로비저닝
 
 Hetzner 에서 Ubuntu 또는 Debian VPS 를 생성합니다.
 
@@ -81,12 +74,12 @@ root 로 접속합니다:
 ssh root@YOUR_VPS_IP
 ```
 
-이 가이드는 VPS 가 상태를 유지한다고 가정합니다.  
+이 가이드는 VPS 가 상태를 유지한다고 가정합니다.
 이를 일회성 인프라로 취급하지 마십시오.
 
 ---
 
-## 2) Docker 설치 (VPS 에서)
+## 2. Docker 설치 (VPS 에서)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) OpenClaw 리포지토리 클론
+## 3. OpenClaw 리포지토리 클론
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,9 +107,9 @@ cd openclaw
 
 ---
 
-## 4) 영속적인 호스트 디렉토리 생성
+## 4. 영속적인 호스트 디렉토리 생성
 
-Docker 컨테이너는 일시적입니다.  
+Docker 컨테이너는 일시적입니다.
 모든 장기 상태는 호스트에 존재해야 합니다.
 
 ```bash
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) 환경 변수 구성
+## 5. 환경 변수 구성
 
 리포지토리 루트에 `.env` 을 생성합니다.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose 구성
+## 6. Docker Compose 구성
 
 `docker-compose.yml` 을 생성하거나 업데이트합니다.
 
@@ -204,9 +197,9 @@ services:
 
 ---
 
-## 7) 필요한 바이너리를 이미지에 포함 (중요)
+## 7. 필요한 바이너리를 이미지에 포함 (중요)
 
-실행 중인 컨테이너 안에 바이너리를 설치하는 것은 함정입니다.  
+실행 중인 컨테이너 안에 바이너리를 설치하는 것은 함정입니다.
 런타임에 설치된 모든 것은 재시작 시 사라집니다.
 
 Skills 에 필요한 모든 외부 바이너리는 이미지 빌드 시점에 설치되어야 합니다.
@@ -217,7 +210,7 @@ Skills 에 필요한 모든 외부 바이너리는 이미지 빌드 시점에 �
 - Google Places 를 위한 `goplaces`
 - WhatsApp 을 위한 `wacli`
 
-이는 예시이며 완전한 목록이 아닙니다.  
+이는 예시이며 완전한 목록이 아닙니다.
 동일한 패턴을 사용하여 필요한 만큼 바이너리를 설치할 수 있습니다.
 
 나중에 추가 바이너리에 의존하는 새로운 Skills 를 추가하는 경우 다음을 수행해야 합니다:
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) 빌드 및 실행
+## 8. 빌드 및 실행
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) Gateway(게이트웨이) 확인
+## 9. Gateway(게이트웨이) 확인
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,18 +313,18 @@ Gateway 토큰을 붙여넣습니다.
 
 ## 무엇이 어디에 영속화되는가 (단일 기준점)
 
-OpenClaw 는 Docker 에서 실행되지만, Docker 가 단일 기준점은 아닙니다.  
+OpenClaw 는 Docker 에서 실행되지만, Docker 가 단일 기준점은 아닙니다.
 모든 장기 상태는 재시작, 재빌드, 재부팅 이후에도 유지되어야 합니다.
 
-| 구성 요소          | 위치                              | 영속성 메커니즘        | 비고                        |
-| ------------------ | --------------------------------- | ---------------------- | --------------------------- |
-| Gateway 설정       | `/home/node/.openclaw/`           | 호스트 볼륨 마운트     | `openclaw.json`, 토큰 포함  |
-| 모델 인증 프로필   | `/home/node/.openclaw/`           | 호스트 볼륨 마운트     | OAuth 토큰, API 키          |
-| Skill 설정         | `/home/node/.openclaw/skills/`    | 호스트 볼륨 마운트     | Skill 수준 상태             |
-| 에이전트 작업 공간 | `/home/node/.openclaw/workspace/` | 호스트 볼륨 마운트     | 코드 및 에이전트 아티팩트   |
-| WhatsApp 세션      | `/home/node/.openclaw/`           | 호스트 볼륨 마운트     | QR 로그인 유지              |
-| Gmail 키링         | `/home/node/.openclaw/`           | 호스트 볼륨 + 비밀번호 | `GOG_KEYRING_PASSWORD` 필요 |
-| 외부 바이너리      | `/usr/local/bin/`                 | Docker 이미지          | 빌드 시점에 포함되어야 함   |
-| Node 런타임        | 컨테이너 파일 시스템              | Docker 이미지          | 매 이미지 빌드마다 재생성   |
-| OS 패키지          | 컨테이너 파일 시스템              | Docker 이미지          | 런타임에 설치하지 말 것     |
-| Docker 컨테이너    | 일시적                            | 재시작 가능            | 삭제해도 안전함             |
+| 구성 요소       | 위치                                | 영속성 메커니즘      | 참고 자료                       |
+| ----------- | --------------------------------- | ------------- | --------------------------- |
+| Gateway 설정  | `/home/node/.openclaw/`           | 호스트 볼륨 마운트    | `openclaw.json`, 토큰 포함      |
+| 모델 인증 프로필   | `/home/node/.openclaw/`           | 호스트 볼륨 마운트    | OAuth 토큰, API 키             |
+| Skill 설정    | `/home/node/.openclaw/skills/`    | 호스트 볼륨 마운트    | Skill 수준 상태                 |
+| 에이전트 작업 공간  | `/home/node/.openclaw/workspace/` | 호스트 볼륨 마운트    | 코드 및 에이전트 아티팩트              |
+| WhatsApp 세션 | `/home/node/.openclaw/`           | 호스트 볼륨 마운트    | QR 로그인 유지                   |
+| Gmail 키링    | `/home/node/.openclaw/`           | 호스트 볼륨 + 비밀번호 | `GOG_KEYRING_PASSWORD` 필요   |
+| 외부 바이너리     | `/usr/local/bin/`                 | Docker 이미지    | Must be baked at build time |
+| Node 런타임    | 컨테이너 파일 시스템                       | Docker 이미지    | 매 이미지 빌드마다 재생성              |
+| OS 패키지      | 컨테이너 파일 시스템                       | Docker 이미지    | 런타임에 설치하지 말 것               |
+| Docker 컨테이너 | 일회성입니다                            | 재시작 가능        | 삭제해도 안전함                    |

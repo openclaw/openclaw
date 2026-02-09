@@ -4,19 +4,12 @@ read_when:
   - CLI မှ exec approvals ကို ပြင်ဆင်လိုသည့်အခါ
   - Gateway သို့မဟုတ် နိုဒ် ဟို့စ်များပေါ်ရှိ allowlist များကို စီမံခန့်ခွဲရန် လိုအပ်သည့်အခါ
 title: "approvals"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:53Z
 ---
 
 # `openclaw approvals`
 
-**local host**, **gateway host**, သို့မဟုတ် **node host** အတွက် exec approvals ကို စီမံခန့်ခွဲပါ။
-မူလအားဖြင့် အမိန့်များသည် ဒစ်စ်ပေါ်ရှိ local approvals ဖိုင်ကို ဦးတည်သည်။ Gateway ကို ဦးတည်ရန် `--gateway` ကို အသုံးပြုပါ၊ သို့မဟုတ် သတ်မှတ်ထားသော နိုဒ်ကို ဦးတည်ရန် `--node` ကို အသုံးပြုပါ။
+Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
+default အနေဖြင့် commands များသည် disk ပေါ်ရှိ local approvals file ကို target လုပ်သည်။ gateway ကို target လုပ်ရန် `--gateway` ကို၊ node တစ်ခုကို target လုပ်ရန် `--node` ကို အသုံးပြုပါ။
 
 ဆက်စပ်အကြောင်းအရာများ:
 

@@ -4,13 +4,6 @@ read_when:
   - Você quer escolher um provedor de modelo
   - Você precisa de uma visão geral rápida dos backends de LLM compatíveis
 title: "Provedores de modelo"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:39Z
 ---
 
 # Provedores de modelo

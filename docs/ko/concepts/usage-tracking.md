@@ -4,18 +4,11 @@ read_when:
   - 프로바이더 사용량/쿼터 표면을 연결하고 있을 때
   - 사용량 추적 동작 또는 인증 요구 사항을 설명해야 할 때
 title: "사용량 추적"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:49Z
 ---
 
 # 사용량 추적
 
-## 개요
+## 무엇인가요
 
 - 프로바이더의 사용량 엔드포인트에서 사용량/쿼터를 직접 가져옵니다.
 - 비용을 추정하지 않으며, 프로바이더가 보고한 기간만 사용합니다.

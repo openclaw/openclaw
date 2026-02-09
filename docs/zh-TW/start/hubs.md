@@ -2,17 +2,10 @@
 summary: "連結至所有 OpenClaw 文件的中樞頁面"
 read_when:
   - 你想要完整掌握整份文件的地圖
-title: "文件中樞"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:22Z
+title: "Docs Hubs"
 ---
 
-# 文件中樞
+# Docs hubs
 
 <Note>
 如果你是 OpenClaw 新手，請從 [Getting Started](/start/getting-started) 開始。
@@ -130,7 +123,7 @@ x-i18n:
 - [Browser（Linux 疑難排解）](/tools/browser-linux-troubleshooting)
 - [Polls](/automation/poll)
 
-## 節點、媒體、語音
+## Nodes, media, voice
 
 - [Nodes overview](/nodes)
 - [Camera](/nodes/camera)
@@ -171,7 +164,7 @@ x-i18n:
 - [macOS skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
-## 工作區 + 範本
+## Workspace + templates
 
 - [Skills](/tools/skills)
 - [ClawHub](/tools/clawhub)
@@ -193,11 +186,11 @@ x-i18n:
 - [Research: memory](/experiments/research/memory)
 - [Model config exploration](/experiments/proposals/model-config)
 
-## 專案
+## 23. 專案
 
 - [Credits](/reference/credits)
 
-## 測試 + 發佈
+## 24. 測試 + 發佈
 
 - [Testing](/reference/test)
 - [Release checklist](/reference/RELEASING)

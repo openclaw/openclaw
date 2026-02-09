@@ -3,18 +3,11 @@ summary: "macOS IPC-arkitektur for OpenClaw-appen, gateway-node-transport og Pee
 read_when:
   - Redigering af IPC-kontrakter eller menulinje-appens IPC
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:28Z
 ---
 
 # OpenClaw macOS IPC-arkitektur
 
-**Nuværende model:** en lokal Unix-socket forbinder **node-værtstjenesten** med **macOS-appen** til exec-godkendelser + `system.run`. En `openclaw-mac` debug-CLI findes til discovery/connect-tjek; agenthandlinger går stadig gennem Gateway WebSocket og `node.invoke`. UI-automatisering bruger PeekabooBridge.
+**Aktuelt** en lokal Unix socket forbinder **node host service** til **macOS appen** for exec godkendelser + `system.run`. En `openclaw-mac` debug CLI findes til opdagelse/forbindelseskontrol; agent handlinger stadig flyder gennem Gateway WebSocket og `node.invoke`. UI automation bruger PeekabooBridge.
 
 ## Mål
 
@@ -27,7 +20,7 @@ x-i18n:
 ### Gateway + node-transport
 
 - Appen kører Gateway (lokal tilstand) og forbinder til den som en node.
-- Agenthandlinger udføres via `node.invoke` (f.eks. `system.run`, `system.notify`, `canvas.*`).
+- Agent handlinger udføres via `node.invoke` (f.eks. `system.run`, `system.notify`, `canvas.*`).
 
 ### Node-tjeneste + app IPC
 

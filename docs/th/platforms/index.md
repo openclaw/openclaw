@@ -4,23 +4,16 @@ read_when:
   - กำลังมองหาการรองรับระบบปฏิบัติการหรือเส้นทางการติดตั้ง
   - กำลังตัดสินใจว่าจะรันGatewayที่ใด
 title: "แพลตฟอร์ม"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:22Z
 ---
 
 # แพลตฟอร์ม
 
-แกนหลักของOpenClawเขียนด้วยTypeScript **แนะนำให้ใช้Nodeเป็นรันไทม์**  
-ไม่แนะนำให้ใช้BunสำหรับGateway(มีบั๊กกับWhatsApp/Telegram)
+แกนหลักของ OpenClaw เขียนด้วย TypeScript **Node เป็นรันไทม์ที่แนะนำ**
+ไม่แนะนำให้ใช้ Bun สำหรับ Gateway (มีบั๊กกับ WhatsApp/Telegram)
 
-มีแอปคู่หูสำหรับmacOS(แอปแถบเมนู)และโหนดบนมือถือ(iOS/Android) แอปคู่หูสำหรับWindowsและ
-Linuxอยู่ในแผนพัฒนา แต่Gatewayรองรับอย่างเต็มรูปแบบแล้วในปัจจุบัน
-แอปคู่หูแบบเนทีฟสำหรับWindowsก็อยู่ในแผนเช่นกัน โดยแนะนำให้ใช้Gatewayผ่านWSL2
+มีแอปคู่หูสำหรับ macOS (แอปบนแถบเมนู) และโหนดมือถือ (iOS/Android) แอปคู่หูสำหรับ Windows และ
+Linux อยู่ในแผนพัฒนา แต่ Gateway รองรับเต็มรูปแบบแล้วในปัจจุบัน
+แอปคู่หูแบบเนทีฟสำหรับ Windows ก็อยู่ในแผนเช่นกัน; แนะนำให้ใช้ Gateway ผ่าน WSL2
 
 ## เลือกระบบปฏิบัติการของคุณ
 

@@ -4,13 +4,6 @@ read_when:
   - 워크플로 내에서 JSON 전용 LLM 단계를 원할 때
   - 자동화를 위해 스키마 검증된 LLM 출력이 필요할 때
 title: "LLM 작업"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:32Z
 ---
 
 # LLM 작업

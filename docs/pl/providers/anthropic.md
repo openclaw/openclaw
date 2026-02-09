@@ -1,16 +1,9 @@
 ---
-summary: „Użyj Anthropic Claude przez klucze API lub setup-token w OpenClaw”
+summary: "„Użyj Anthropic Claude przez klucze API lub setup-token w OpenClaw”"
 read_when:
   - Chcesz używać modeli Anthropic w OpenClaw
   - Chcesz używać setup-token zamiast kluczy API
-title: „Anthropic”
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:31Z
+title: "„Anthropic”"
 ---
 
 # Anthropic (Claude)
@@ -50,11 +43,11 @@ OpenClaw obsługuje funkcję buforowania promptów Anthropic. Jest to **wyłącz
 
 Użyj parametru `cacheRetention` w konfiguracji modelu:
 
-| Wartość | Czas cache | Opis                                      |
-| ------- | ---------- | ----------------------------------------- |
-| `none`  | Brak cache | Wyłącza buforowanie promptów              |
-| `short` | 5 minut    | Domyślne dla uwierzytelniania kluczem API |
-| `long`  | 1 godzina  | Rozszerzony cache (wymaga flagi beta)     |
+| Wartość | Czas cache | Opis                                                     |
+| ------- | ---------- | -------------------------------------------------------- |
+| `none`  | Brak cache | Wyłącza buforowanie promptów                             |
+| `short` | 5 minut    | Domyślne dla uwierzytelniania kluczem API                |
+| `long`  | 1 godzina  | Rozszerzony cache (wymaga flagi beta) |
 
 ```json5
 {
@@ -74,7 +67,7 @@ Użyj parametru `cacheRetention` w konfiguracji modelu:
 
 Podczas używania uwierzytelniania kluczem API Anthropic, OpenClaw automatycznie stosuje `cacheRetention: "short"` (cache 5‑minutowy) dla wszystkich modeli Anthropic. Możesz to nadpisać, jawnie ustawiając `cacheRetention` w konfiguracji.
 
-### Parametr starszy (legacy)
+### Parametr starszy
 
 Starszy parametr `cacheControlTtl` jest nadal obsługiwany w celu zachowania zgodności wstecznej:
 

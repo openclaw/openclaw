@@ -3,13 +3,6 @@ summary: "OpenClaw — это многоканальный шлюз для ИИ-
 read_when:
   - Представление OpenClaw новичкам
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:46Z
 ---
 
 # OpenClaw 🦞
@@ -31,19 +24,18 @@ x-i18n:
 
 > _«EXFOLIATE! EXFOLIATE!»_ — космический лобстер, вероятно
 
-<p align="center">
-  <strong>Шлюз для ИИ-агентов под любую ОС в WhatsApp, Telegram, Discord, iMessage и не только.</strong><br />
+<p align="center"><strong>Шлюз для ИИ-агентов под любую ОС в WhatsApp, Telegram, Discord, iMessage и не только.</strong><br />
   Отправьте сообщение — получите ответ агента прямо из кармана. Плагины добавляют Mattermost и многое другое.
 </p>
 
 <Columns>
-  <Card title="Начало работы" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Установите OpenClaw и поднимите Gateway (шлюз) за считанные минуты.
   </Card>
-  <Card title="Запустить мастер" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     Пошаговая настройка с `openclaw onboard` и процессами сопряжения.
   </Card>
-  <Card title="Открыть панель управления" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Запустите браузерную панель для чатов, конфига и сеансов.
   </Card>
 </Columns>
@@ -80,22 +72,22 @@ Gateway (шлюз) — это единый источник истины для 
 ## Ключевые возможности
 
 <Columns>
-  <Card title="Многоканальный шлюз" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     WhatsApp, Telegram, Discord и iMessage в одном процессе Gateway (шлюза).
   </Card>
-  <Card title="Каналы через плагины" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     Добавляйте Mattermost и другое с помощью пакетов расширений.
   </Card>
-  <Card title="Маршрутизация между агентами" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     Изолированные сеансы для каждого агента, рабочего пространства или отправителя.
   </Card>
-  <Card title="Поддержка медиа" icon="image">
+  <Card title="Media support" icon="image">
     Отправка и получение изображений, аудио и документов.
   </Card>
-  <Card title="Веб‑панель управления" icon="monitor">
+  <Card title="Web Control UI" icon="monitor">
     Браузерная панель для чатов, конфига, сеансов и узлов.
   </Card>
-  <Card title="Мобильные узлы" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Сопряжение узлов iOS и Android с поддержкой Canvas.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ Gateway (шлюз) — это единый источник истины для 
 ## Быстрый старт
 
 <Steps>
-  <Step title="Установите OpenClaw">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Онбординг и установка сервиса">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Сопрягите WhatsApp и запустите Gateway (шлюз)">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -158,22 +150,22 @@ Gateway (шлюз) — это единый источник истины для 
 ## Начните отсюда
 
 <Columns>
-  <Card title="Хабы документации" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     Вся документация и руководства, сгруппированные по сценариям.
   </Card>
-  <Card title="Конфигурация" href="/gateway/configuration" icon="settings">
+  <Card title="Configuration" href="/gateway/configuration" icon="settings">
     Основные настройки Gateway (шлюза), токены и конфигурация провайдеров.
   </Card>
-  <Card title="Удалённый доступ" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     Паттерны доступа по SSH и через tailnet.
   </Card>
-  <Card title="Каналы" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     Настройка каналов для WhatsApp, Telegram, Discord и других.
   </Card>
-  <Card title="Узлы" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     Узлы iOS и Android с сопряжением и Canvas.
   </Card>
-  <Card title="Помощь" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     Типовые решения и точка входа для устранения неполадок.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Gateway (шлюз) — это единый источник истины для 
 ## Узнать больше
 
 <Columns>
-  <Card title="Полный список возможностей" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     Полный набор возможностей каналов, маршрутизации и медиа.
   </Card>
-  <Card title="Маршрутизация между агентами" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     Изоляция рабочих пространств и сеансы для каждого агента.
   </Card>
-  <Card title="Безопасность" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     Токены, списки разрешённых и средства безопасной работы.
   </Card>
-  <Card title="Устранение неполадок" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Диагностика Gateway (шлюза) и распространённые ошибки.
   </Card>
-  <Card title="О проекте и благодарности" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     Происхождение проекта, участники и лицензия.
   </Card>
 </Columns>

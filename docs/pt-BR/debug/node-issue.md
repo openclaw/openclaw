@@ -4,13 +4,6 @@ read_when:
   - Depuração de scripts de desenvolvimento apenas com Node ou falhas no modo watch
   - Investigação de falhas do loader tsx/esbuild no OpenClaw
 title: "Falha do Node + tsx"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:47Z
 ---
 
 # Falha do Node + tsx "\_\_name is not a function"
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Soluções alternativas
 
 - Usar Bun para scripts de desenvolvimento (reversão temporária atual).
+
 - Usar Node + tsc em watch e, em seguida, executar a saída compilada:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Confirmado localmente: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` funciona no Node 25.
+
 - Desabilitar keepNames do esbuild no loader TS, se possível (evita a inserção do helper `__name`); o tsx atualmente não expõe isso.
+
 - Testar o Node LTS (22/24) com `tsx` para ver se o problema é específico do Node 25.
 
 ## Referências

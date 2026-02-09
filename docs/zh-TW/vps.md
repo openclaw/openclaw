@@ -4,13 +4,6 @@ read_when:
   - 您想在雲端執行 Gateway 閘道器
   - 您需要一份 VPS／託管指南的快速地圖
 title: "VPS 託管"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:35Z
 ---
 
 # VPS 託管
@@ -27,6 +20,7 @@ x-i18n:
 - **GCP（Compute Engine）**：[GCP](/install/gcp)
 - **exe.dev**（VM＋HTTPS 代理）：[exe.dev](/install/exe-dev)
 - **AWS（EC2／Lightsail／free tier）**：同樣運作良好。影片指南：
+  [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547) 5. 影片指南：
   [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
 ## 雲端設定如何運作
@@ -36,6 +30,7 @@ x-i18n:
 - 將 VPS 視為單一事實來源，並**備份**狀態與工作區。
 - 安全預設：將 Gateway 閘道器維持在 loopback，並透過 SSH 通道或 Tailscale Serve 存取。
   若您綁定至 `lan`/`tailnet`，請要求 `gateway.auth.token` 或 `gateway.auth.password`。
+  6. 若綁定至 `lan`/`tailnet`，需要設定 `gateway.auth.token` 或 `gateway.auth.password`。
 
 遠端存取：[Gateway remote](/gateway/remote)  
 平台中樞：[Platforms](/platforms)
@@ -44,6 +39,7 @@ x-i18n:
 
 您可以將 Gateway 閘道器保留在雲端，並在本機裝置
 （Mac／iOS／Android／headless）配對 **nodes**。Nodes 提供本機的螢幕／相機／畫布，以及 `system.run`
-能力，而 Gateway 閘道器則留在雲端。
+能力，而 Gateway 閘道器則留在雲端。 Nodes provide local screen/camera/canvas and `system.run`
+capabilities while the Gateway stays in the cloud.
 
 文件：[Nodes](/nodes)，[Nodes CLI](/cli/nodes)

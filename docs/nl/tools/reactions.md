@@ -3,13 +3,6 @@ summary: "Reactiesemantiek gedeeld over kanalen"
 read_when:
   - Werken aan reacties in elk kanaal
 title: "Reacties"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # Reactie-tooling

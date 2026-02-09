@@ -5,13 +5,6 @@ read_when:
   - 모델/프로바이더 버그에 대한 회귀 테스트를 추가할 때
   - Gateway(게이트웨이) + 에이전트 동작을 디버깅할 때
 title: "테스트"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:59Z
 ---
 
 # 테스트
@@ -20,7 +13,7 @@ OpenClaw 에는 세 가지 Vitest 스위트(unit/integration, e2e, live)와 소�
 
 이 문서는 “어떻게 테스트하는가”에 대한 가이드입니다:
 
-- 각 스위트가 무엇을 다루는지(그리고 의도적으로 다루지 않는 것은 무엇인지)
+- What each suite covers (and what it deliberately does _not_ cover)
 - 일반적인 워크플로(로컬, 푸시 전, 디버깅)에 실행할 명령
 - live 테스트가 자격 증명을 발견하고 모델/프로바이더를 선택하는 방식
 - 실제 모델/프로바이더 이슈에 대한 회귀 테스트를 추가하는 방법
@@ -89,7 +82,7 @@ OpenClaw 에는 세 가지 Vitest 스위트(unit/integration, e2e, live)와 소�
   - Live 실행은 누락된 API 키를 수집하기 위해 `~/.profile` 를 소스함
   - Anthropic 키 로테이션: `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."`(또는 `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) 또는 여러 `ANTHROPIC_API_KEY*` 변수를 설정; 테스트는 레이트 리밋 시 재시도함
 
-## 어떤 스위트를 실행해야 하나요?
+## Which suite should I run?
 
 다음 결정 표를 사용하십시오:
 
@@ -277,13 +270,13 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 선택적 추가 커버리지(있으면 좋음):
 
 - xAI: `xai/grok-4`(또는 최신 사용 가능 모델)
-- Mistral: `mistral/`…(도구 지원 모델 하나 선택)
-- Cerebras: `cerebras/`…(접근 권한이 있는 경우)
-- LM Studio: `lmstudio/`…(로컬; 도구 호출은 API 모드에 따라 다름)
+- Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
+- Cerebras: `cerebras/`…(접근 권한이 있는 경우) (if you have access)
+- LM Studio: `lmstudio/`… LM Studio: `lmstudio/`…(로컬; 도구 호출은 API 모드에 따라 다름)
 
 ### 비전: 이미지 전송(첨부 → 멀티모달 메시지)
 
-이미지 프로브를 실행하기 위해 `OPENCLAW_LIVE_GATEWAY_MODELS` 에 이미지 가능 모델을 최소 하나 포함하십시오(Claude/Gemini/OpenAI 비전 가능 변형 등).
+이미지 프로브를 실행하기 위해 `OPENCLAW_LIVE_GATEWAY_MODELS` 에 이미지 가능 모델을 최소 하나 포함하십시오(Claude/Gemini/OpenAI 비전 가능 변형 등). to exercise the image probe.
 
 ### 집계기 / 대체 게이트웨이
 
@@ -304,9 +297,11 @@ Live 매트릭스에 포함할 수 있는 추가 프로바이더(자격 증명/�
 Live 테스트는 CLI 와 동일한 방식으로 자격 증명을 발견합니다. 실무적 의미:
 
 - CLI 가 동작하면 live 테스트도 동일한 키를 찾아야 합니다.
+
 - live 테스트가 “자격 증명 없음”이라고 하면 `openclaw models list` / 모델 선택을 디버깅하는 것과 같은 방식으로 디버깅하십시오.
 
 - 프로파일 스토어: `~/.openclaw/credentials/`(권장; 테스트에서 말하는 “프로파일 키”의 의미)
+
 - 구성: `~/.openclaw/openclaw.json`(또는 `OPENCLAW_CONFIG_PATH`)
 
 환경 키에 의존하려면(예: `~/.profile` 에서 export), `source ~/.profile` 이후 로컬 테스트를 실행하거나 아래 Docker 러너를 사용하십시오(컨테이너에 `~/.profile` 를 마운트 가능).
@@ -326,7 +321,7 @@ Live 테스트는 CLI 와 동일한 방식으로 자격 증명을 발견합니�
 - Gateway(게이트웨이) 네트워킹(두 컨테이너, WS 인증 + 헬스): `pnpm test:docker:gateway-network`(스크립트: `scripts/e2e/gateway-network-docker.sh`)
 - 플러그인(커스텀 확장 로드 + 레지스트리 스모크): `pnpm test:docker:plugins`(스크립트: `scripts/e2e/plugins-docker.sh`)
 
-유용한 환경 변수:
+Useful env vars:
 
 - `OPENCLAW_CONFIG_DIR=...`(기본값: `~/.openclaw`) → `/home/node/.openclaw` 에 마운트
 - `OPENCLAW_WORKSPACE_DIR=...`(기본값: `~/.openclaw/workspace`) → `/home/node/.openclaw/workspace` 에 마운트
@@ -334,7 +329,7 @@ Live 테스트는 CLI 와 동일한 방식으로 자격 증명을 발견합니�
 - 실행을 좁히려면 `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...`
 - 자격 증명이 환경 변수가 아닌 프로파일 스토어에서 오도록 보장하려면 `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1`
 
-## 문서 점검
+## Docs sanity
 
 문서 편집 후 문서 체크 실행: `pnpm docs:list`.
 

@@ -3,13 +3,6 @@ summary: "WebSocket گیٹ وے کی معماری، اجزاء، اور کلائ
 read_when:
   - گیٹ وے پروٹوکول، کلائنٹس، یا ٹرانسپورٹس پر کام کرتے وقت
 title: "Gateway معماری"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:14Z
 ---
 
 # Gateway معماری
@@ -114,6 +107,7 @@ Client                    Gateway
 ## ریموٹ رسائی
 
 - ترجیحی: Tailscale یا VPN۔
+
 - متبادل: SSH سرنگ
 
   ```bash
@@ -121,6 +115,7 @@ Client                    Gateway
   ```
 
 - سرنگ کے ذریعے بھی وہی ہینڈ شیک + auth ٹوکن لاگو ہوتا ہے۔
+
 - ریموٹ سیٹ اپس میں WS کے لیے TLS + اختیاری pinning فعال کی جا سکتی ہے۔
 
 ## آپریشنز اسنیپ شاٹ

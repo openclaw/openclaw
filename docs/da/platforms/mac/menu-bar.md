@@ -3,13 +3,6 @@ summary: "Statuslogik for menulinjen og hvad der vises for brugere"
 read_when:
   - Justering af mac-menulinjens UI eller statuslogik
 title: "Menulinje"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:31Z
 ---
 
 # Statuslogik for menulinjen
@@ -23,8 +16,8 @@ x-i18n:
 
 ## Tilstandsmodel
 
-- Sessioner: hændelser ankommer med `runId` (pr. kørsel) samt `sessionKey` i payloaden. Den “primære” session er nøglen `main`; hvis den mangler, falder vi tilbage til den senest opdaterede session.
-- Prioritet: primær vinder altid. Hvis primær er aktiv, vises dens tilstand straks. Hvis primær er inaktiv, vises den senest aktive ikke‑primære session. Vi skifter ikke frem og tilbage midt i aktivitet; vi skifter kun, når den aktuelle session bliver inaktiv, eller når primær bliver aktiv.
+- Sessioner: begivenheder ankommer med `runId` (per run) plus `sessionKey` i nyttelasten. Den “main” session er nøglen `main`; hvis ikke, vi falder tilbage til den seneste opdaterede session.
+- Prioritet: vigtigste altid vinder. Hvis hovedparten er aktiv, vises dets tilstand straks. Hvis hovedparten er inaktiv, vises den senest aktive ikke-hovedfase. Vi skifter ikke mellem flip-flop midt-aktivitet; vi skifter kun, når den aktuelle session kører i tomgang, eller når den bliver aktiv.
 - Aktivitetstyper:
   - `job`: udførelse af kommandoer på højt niveau (`state: started|streaming|done|error`).
   - `tool`: `phase: start|result` med `toolName` og `meta/args`.

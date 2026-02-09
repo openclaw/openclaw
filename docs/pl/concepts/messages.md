@@ -1,17 +1,10 @@
 ---
-summary: „Przepływ wiadomości, sesje, kolejkowanie i widoczność rozumowania”
+summary: "„Przepływ wiadomości, sesje, kolejkowanie i widoczność rozumowania”"
 read_when:
   - Wyjaśnianie, jak wiadomości przychodzące stają się odpowiedziami
   - Doprecyzowanie sesji, trybów kolejkowania lub zachowania strumieniowania
   - Dokumentowanie widoczności rozumowania i implikacji użytkowych
-title: „Wiadomości”
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
+title: "Wiadomości"
 ---
 
 # Wiadomości
@@ -146,7 +139,7 @@ OpenClaw może ujawniać lub ukrywać rozumowanie modelu:
 
 - `/reasoning on|off|stream` kontroluje widoczność.
 - Treści rozumowania nadal wliczają się do użycia tokenów, gdy są generowane przez model.
-- Telegram obsługuje strumień rozumowania do dymka roboczego.
+- Telegram obsługuje strumień rozumowania do bańki szkicowej.
 
 Szczegóły: [Dyrektywy myślenia + rozumowania](/tools/thinking) oraz [Użycie tokenów](/reference/token-use).
 

@@ -4,18 +4,12 @@ read_when:
   - モデル認証や OAuth の有効期限切れをデバッグする場合
   - 認証や資格情報の保存を文書化する場合
 title: "認証"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:49Z
 ---
 
 # 認証
 
-OpenClaw は、モデルプロバイダー向けに OAuth と API キーをサポートします。Anthropic のアカウントでは、**API キー**の使用を推奨します。Claude のサブスクリプションアクセスには、`claude setup-token` によって作成される長期有効トークンを使用してください。
+OpenClaw は、モデルプロバイダー向けに OAuth と API キーをサポートします。Anthropic のアカウントでは、**API キー**の使用を推奨します。Claude のサブスクリプションアクセスには、`claude setup-token` によって作成される長期有効トークンを使用してください。 Anthropic
+アカウントでは、**API キー**を使用することをお勧めします。 22. Claude のサブスクリプションアクセスには、`claude setup-token` で作成した長期間有効なトークンを使用してください。
 
 OAuth の完全なフローと保存レイアウトについては、[/concepts/oauth](/concepts/oauth) を参照してください。
 
@@ -52,7 +46,8 @@ openclaw doctor
 
 ## Anthropic：setup-token（サブスクリプション認証）
 
-Anthropic では、推奨される方法は **API キー**です。Claude のサブスクリプションを使用している場合は、setup-token フローもサポートされています。**ゲートウェイ ホスト**で実行してください。
+Anthropicでは、推奨されるパスは**APIキー**です。 Claude
+サブスクリプションを使用している場合は、setup-token フローもサポートされます。 **ゲートウェイホスト**で実行します。
 
 ```bash
 claude setup-token
@@ -135,7 +130,8 @@ openclaw models status
 
 ### トークンの期限切れ／期限接近
 
-`openclaw models status` を実行して、どのプロファイルが期限切れになっているかを確認します。プロファイルが見つからない場合は、`claude setup-token` を再実行し、トークンを再度貼り付けてください。
+`openclaw models status` を実行して、どのプロファイルが期限切れになっているかを確認します。プロファイルが見つからない場合は、`claude setup-token` を再実行し、トークンを再度貼り付けてください。 プロファイル
+がない場合は、`claude setup-token`を再度実行し、トークンを再度貼り付けます。
 
 ## 要件
 

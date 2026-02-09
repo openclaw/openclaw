@@ -3,30 +3,23 @@ summary: "WhatsApp समूह संदेश हैंडलिंग के 
 read_when:
   - समूह संदेश नियमों या मेंशनों में परिवर्तन करते समय
 title: "समूह संदेश"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:02Z
 ---
 
 # समूह संदेश (WhatsApp वेब चैनल)
 
 लक्ष्य: Clawd को WhatsApp समूहों में बैठने देना, केवल पिंग होने पर ही सक्रिय करना, और उस थ्रेड को व्यक्तिगत DM सत्र से अलग रखना।
 
-टिप्पणी: `agents.list[].groupChat.mentionPatterns` अब Telegram/Discord/Slack/iMessage के लिए भी उपयोग किया जाता है; यह दस्तावेज़ WhatsApp-विशिष्ट व्यवहार पर केंद्रित है। मल्टी-एजेंट सेटअप के लिए, प्रति एजेंट `agents.list[].groupChat.mentionPatterns` सेट करें (या वैश्विक फ़ॉलबैक के रूप में `messages.groupChat.mentionPatterns` का उपयोग करें)।
+नोट: `agents.list[].groupChat.mentionPatterns` अब Telegram/Discord/Slack/iMessage द्वारा भी उपयोग किया जाता है; यह दस्तावेज़ WhatsApp-विशिष्ट व्यवहार पर केंद्रित है। मल्टी-एजेंट सेटअप के लिए, प्रति एजेंट `agents.list[].groupChat.mentionPatterns` सेट करें (या ग्लोबल फ़ॉलबैक के रूप में `messages.groupChat.mentionPatterns` का उपयोग करें)।
 
 ## क्या लागू किया गया है (2025-12-03)
 
-- सक्रियण मोड: `mention` (डिफ़ॉल्ट) या `always`। `mention` के लिए पिंग आवश्यक है (वास्तविक WhatsApp @-मेंशन `mentionedJids` के माध्यम से, regex पैटर्न, या टेक्स्ट में कहीं भी बॉट का E.164)। `always` हर संदेश पर एजेंट को जगाता है, लेकिन उसे केवल तभी उत्तर देना चाहिए जब वह सार्थक मूल्य जोड़ सके; अन्यथा यह मौन टोकन `NO_REPLY` लौटाता है। डिफ़ॉल्ट्स को विन्यास (`channels.whatsapp.groups`) में सेट किया जा सकता है और प्रति समूह `/activation` के माध्यम से ओवरराइड किया जा सकता है। जब `channels.whatsapp.groups` सेट होता है, तो यह समूह allowlist के रूप में भी कार्य करता है (सभी को अनुमति देने के लिए `"*"` शामिल करें)।
-- समूह नीति: `channels.whatsapp.groupPolicy` नियंत्रित करता है कि समूह संदेश स्वीकार किए जाएँ या नहीं (`open|disabled|allowlist`)। `allowlist` `channels.whatsapp.groupAllowFrom` का उपयोग करता है (फ़ॉलबैक: स्पष्ट `channels.whatsapp.allowFrom`)। डिफ़ॉल्ट `allowlist` है (जब तक आप प्रेषकों को नहीं जोड़ते, तब तक अवरुद्ध)।
-- प्रति-समूह सत्र: सत्र कुंजियाँ `agent:<agentId>:whatsapp:group:<jid>` जैसी दिखती हैं, इसलिए `/verbose on` या `/think high` जैसे कमांड (स्टैंडअलोन संदेशों के रूप में भेजे गए) उसी समूह तक सीमित रहते हैं; व्यक्तिगत DM स्थिति अप्रभावित रहती है। समूह थ्रेड्स के लिए हार्टबीट्स छोड़े जाते हैं।
-- संदर्भ इंजेक्शन: **केवल-लंबित** समूह संदेश (डिफ़ॉल्ट 50) जो रन को ट्रिगर _नहीं_ करते, उन्हें `[Chat messages since your last reply - for context]` के अंतर्गत प्रीफ़िक्स किया जाता है, और ट्रिगर करने वाली पंक्ति `[Current message - respond to this]` के अंतर्गत होती है। जो संदेश पहले से सत्र में हैं, उन्हें दोबारा इंजेक्ट नहीं किया जाता।
+- एक्टिवेशन मोड: `mention` (डिफ़ॉल्ट) या `always`। `mention` के लिए एक पिंग आवश्यक है (वास्तविक WhatsApp @-mentions `mentionedJids` के माध्यम से, regex पैटर्न, या टेक्स्ट में कहीं भी बॉट का E.164)। `always` हर संदेश पर एजेंट को जगाता है, लेकिन उसे केवल तब ही उत्तर देना चाहिए जब वह सार्थक मूल्य जोड़ सके; अन्यथा यह साइलेंट टोकन `NO_REPLY` लौटाता है। डिफ़ॉल्ट्स को config (`channels.whatsapp.groups`) में सेट किया जा सकता है और `/activation` के माध्यम से प्रति समूह ओवरराइड किया जा सकता है। जब `channels.whatsapp.groups` सेट होता है, तो यह एक समूह allowlist के रूप में भी कार्य करता है (सभी को अनुमति देने के लिए `"*"` शामिल करें)।
+- Group policy: `channels.whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` में `channels.whatsapp.groupAllowFrom` का उपयोग होता है (फ़ॉलबैक: स्पष्ट `channels.whatsapp.allowFrom`)। डिफ़ॉल्ट `allowlist` है (जब तक आप प्रेषकों को न जोड़ें, तब तक ब्लॉक रहता है)।
+- प्रति-समूह सेशंस: सेशन कीज़ इस तरह दिखती हैं `agent:<agentId>:whatsapp:group:<jid>` इसलिए `/verbose on` या `/think high` जैसे कमांड (स्टैंडअलोन संदेश के रूप में भेजे गए) उसी समूह तक सीमित रहते हैं; व्यक्तिगत DM स्टेट अप्रभावित रहता है। समूह थ्रेड्स के लिए हार्टबीट्स छोड़े जाते हैं।
+- कॉन्टेक्स्ट इंजेक्शन: **pending-only** समूह संदेश (डिफ़ॉल्ट 50) जिन्होंने रन ट्रिगर नहीं किया, उन्हें `[Chat messages since your last reply - for context]` के अंतर्गत प्रीफ़िक्स किया जाता है, और ट्रिगर करने वाली पंक्ति `[Current message - respond to this]` के अंतर्गत होती है। जो संदेश पहले से सेशन में हैं, उन्हें दोबारा इंजेक्ट नहीं किया जाता।
 - प्रेषक सरफेसिंग: हर समूह बैच अब `[from: Sender Name (+E164)]` के साथ समाप्त होता है ताकि Pi जान सके कि कौन बोल रहा है।
 - अस्थायी/व्यू-वनस: टेक्स्ट/मेंशन्स निकालने से पहले हम इन्हें अनरैप करते हैं, ताकि इनके अंदर के पिंग्स भी ट्रिगर करें।
-- समूह सिस्टम प्रॉम्प्ट: समूह सत्र के पहले टर्न पर (और जब भी `/activation` मोड बदलता है) हम सिस्टम प्रॉम्प्ट में `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.` जैसा एक छोटा ब्लर्ब इंजेक्ट करते हैं। यदि मेटाडेटा उपलब्ध नहीं है, तब भी हम एजेंट को बताते हैं कि यह एक समूह चैट है।
+- समूह सिस्टम प्रॉम्प्ट: समूह सेशन के पहले टर्न पर (और जब भी `/activation` मोड बदलता है) हम सिस्टम प्रॉम्प्ट में एक छोटा ब्लर्ब इंजेक्ट करते हैं जैसे `You are replying inside the WhatsApp group "<subject>".` समूह सदस्य: Alice (+44...), Bob (+43...), … एक्टिवेशन: केवल-ट्रिगर … Address the specific sender noted in the message context.\` If metadata isn’t available we still tell the agent it’s a group chat.
 
 ## विन्यास उदाहरण (WhatsApp)
 
@@ -67,14 +60,14 @@ x-i18n:
 - `/activation mention`
 - `/activation always`
 
-केवल ओनर नंबर (`channels.whatsapp.allowFrom` से, या जब अनसेट हो तो बॉट का अपना E.164) ही इसे बदल सकता है। वर्तमान सक्रियण मोड देखने के लिए समूह में स्टैंडअलोन संदेश के रूप में `/status` भेजें।
+केवल ओनर नंबर (`channels.whatsapp.allowFrom` से, या अनसेट होने पर बॉट का अपना E.164) ही इसे बदल सकता है। Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## उपयोग कैसे करें
 
 1. अपने WhatsApp खाते (जो OpenClaw चला रहा है) को समूह में जोड़ें।
 2. `@openclaw …` कहें (या नंबर शामिल करें)। जब तक आप `groupPolicy: "open"` सेट नहीं करते, केवल allowlist किए गए प्रेषक ही इसे ट्रिगर कर सकते हैं।
 3. एजेंट प्रॉम्प्ट में हालिया समूह संदर्भ के साथ ट्रेलिंग `[from: …]` मार्कर शामिल होगा ताकि वह सही व्यक्ति को संबोधित कर सके।
-4. सत्र-स्तरीय निर्देश (`/verbose on`, `/think high`, `/new` या `/reset`, `/compact`) केवल उस समूह के सत्र पर लागू होते हैं; उन्हें स्टैंडअलोन संदेशों के रूप में भेजें ताकि वे दर्ज हों। आपका व्यक्तिगत DM सत्र स्वतंत्र रहता है।
+4. सेशन-स्तरीय निर्देश (`/verbose on`, `/think high`, `/new` या `/reset`, `/compact`) केवल उसी समूह के सेशन पर लागू होते हैं; उन्हें स्टैंडअलोन संदेशों के रूप में भेजें ताकि वे रजिस्टर हों। आपका व्यक्तिगत DM सेशन स्वतंत्र रहता है।
 
 ## परीक्षण / सत्यापन
 

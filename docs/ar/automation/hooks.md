@@ -1,16 +1,9 @@
 ---
 summary: "Hooks: أتمتة قائمة على الأحداث للأوامر وأحداث دورة الحياة"
 read_when:
-  - "تريد أتمتة قائمة على الأحداث لأوامر /new و/reset و/stop وأحداث دورة حياة الوكيل"
-  - "تريد بناء أو تثبيت أو تصحيح Hooks"
+  - تريد أتمتة قائمة على الأحداث لأوامر /new و/reset و/stop وأحداث دورة حياة الوكيل
+  - تريد بناء أو تثبيت أو تصحيح Hooks
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:15Z
 ---
 
 # Hooks
@@ -676,7 +669,7 @@ openclaw hooks list --verbose
 
 ### Check Registration
 
-في المعالِج، سجّل عند استدعائه:
+في المعالج الخاص بك، سجل عند استدعائه:
 
 ```typescript
 const handler: HookHandler = async (event) => {
@@ -885,7 +878,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
    Does something useful.
    ```
 
-3. حدّث التهيئة:
+3. تحديث الإعداد:
 
    ```json
    {

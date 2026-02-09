@@ -4,18 +4,11 @@ read_when:
   - CLI کمانڈز یا اختیارات شامل یا تبدیل کرتے وقت
   - نئی کمانڈ سرفیسز کی دستاویز بندی کرتے وقت
 title: "CLI حوالہ"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:09Z
 ---
 
 # CLI حوالہ
 
-یہ صفحہ موجودہ CLI رویّے کی وضاحت کرتا ہے۔ اگر کمانڈز تبدیل ہوں تو اس دستاویز کو اپ ڈیٹ کریں۔
+This page describes the current CLI behavior. If commands change, update this doc.
 
 ## کمانڈ صفحات
 
@@ -259,10 +252,10 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw plugins list` — پلگ اِنز دریافت کریں (مشینی آؤٹ پٹ کے لیے `--json` استعمال کریں)۔
 - `openclaw plugins info <id>` — کسی پلگ اِن کی تفصیلات دکھائیں۔
 - `openclaw plugins install <path|.tgz|npm-spec>` — پلگ اِن انسٹال کریں (یا پلگ اِن پاتھ کو `plugins.load.paths` میں شامل کریں)۔
-- `openclaw plugins enable <id>` / `disable <id>` — `plugins.entries.<id>.enabled` کو ٹوگل کریں۔
+- `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — پلگ اِن لوڈ کی غلطیوں کی رپورٹ۔
 
-زیادہ تر پلگ اِن تبدیلیوں کے لیے gateway ری اسٹارٹ درکار ہوتا ہے۔ دیکھیں [/plugin](/tools/plugin)۔
+Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 ## میموری
 
@@ -274,7 +267,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ## چیٹ سلیش کمانڈز
 
-چیٹ پیغامات `/...` کمانڈز (متن اور نیٹو) کی حمایت کرتے ہیں۔ دیکھیں [/tools/slash-commands](/tools/slash-commands)۔
+Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
 
 نمایاں نکات:
 
@@ -350,8 +343,8 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `config`
 
-نان-انٹرایکٹو کنفیگ مددگار (get/set/unset)۔ بغیر
-ذیلی کمانڈ کے `openclaw config` چلانے سے وزارڈ شروع ہوتا ہے۔
+Non-interactive config helpers (get/set/unset). Running `openclaw config` with no
+subcommand launches the wizard.
 
 ذیلی کمانڈز:
 
@@ -456,7 +449,7 @@ openclaw status --deep
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub ہُک سیٹ اپ + رَنر۔ دیکھیں [/automation/gmail-pubsub](/automation/gmail-pubsub)۔
+Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 ذیلی کمانڈز:
 
@@ -465,7 +458,7 @@ Gmail Pub/Sub ہُک سیٹ اپ + رَنر۔ دیکھیں [/automation/gmail-pu
 
 ### `dns setup`
 
-وسیع علاقے کی دریافت DNS مددگار (CoreDNS + Tailscale)۔ دیکھیں [/gateway/discovery](/gateway/discovery)۔
+Wide-area discovery DNS helper (CoreDNS + Tailscale). See [/gateway/discovery](/gateway/discovery).
 
 اختیارات:
 
@@ -531,7 +524,7 @@ Gateway کے ذریعے ایک ایجنٹ ٹرن چلائیں (یا `--local` ا
 
 #### `agents add [name]`
 
-نیا الگ تھلگ ایجنٹ شامل کریں۔ جب تک فلیگز (یا `--non-interactive`) پاس نہ کیے جائیں، رہنمائی وزارڈ چلتا ہے؛ نان-انٹرایکٹو موڈ میں `--workspace` درکار ہے۔
+ایک نیا الگ تھلگ ایجنٹ شامل کریں۔ جب تک فلیگز (یا `--non-interactive`) فراہم نہ کیے جائیں، رہنمائی والا وزرڈ چلتا ہے؛ نان اِنٹریکٹو موڈ میں `--workspace` درکار ہے۔
 
 اختیارات:
 
@@ -542,7 +535,7 @@ Gateway کے ذریعے ایک ایجنٹ ٹرن چلائیں (یا `--local` ا
 - `--non-interactive`
 - `--json`
 
-بائنڈنگ اسپیگز `channel[:accountId]` استعمال کرتے ہیں۔ جب WhatsApp کے لیے `accountId` چھوڑ دیا جائے تو طے شدہ اکاؤنٹ آئی ڈی استعمال ہوتی ہے۔
+بائنڈنگ اسپیسیفکیشنز `channel[:accountId]` استعمال کرتی ہیں۔ جب WhatsApp کے لیے `accountId` چھوڑ دیا جائے تو ڈیفالٹ اکاؤنٹ آئی ڈی استعمال ہوتی ہے۔
 
 #### `agents delete <id>`
 
@@ -694,7 +687,7 @@ Gateway سروس کا انتظام کریں (launchd/systemd/schtasks)۔
 
 - `gateway status` بطورِ طے شدہ سروس کے حل شدہ پورٹ/کنفیگ کا استعمال کرتے ہوئے Gateway RPC پروب کرتا ہے (`--url/--token/--password` سے اوور رائیڈ کریں)۔
 - `gateway status` اسکرپٹنگ کے لیے `--no-probe`, `--deep`, اور `--json` کی حمایت کرتا ہے۔
-- `gateway status` لیگیسی یا اضافی gateway سروسز کو بھی ظاہر کرتا ہے جب ان کا پتا لگایا جا سکے (`--deep` سسٹم سطح کے اسکین شامل کرتا ہے)۔ پروفائل نامی OpenClaw سروسز کو فرسٹ کلاس سمجھا جاتا ہے اور انہیں "اضافی" کے طور پر نشان زد نہیں کیا جاتا۔
+- `gateway status` جب ممکن ہو تو لیگیسی یا اضافی گیٹ وے سروسز بھی ظاہر کرتا ہے (`--deep` سسٹم لیول اسکینز شامل کرتا ہے)۔ Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
 - `gateway status` دکھاتا ہے کہ CLI کون سا کنفیگ پاتھ استعمال کرتا ہے بمقابلہ سروس غالباً کون سا کنفیگ استعمال کرتی ہے (سروس env)، نیز حل شدہ پروب ٹارگٹ URL۔
 - `gateway install|uninstall|start|stop|restart` اسکرپٹنگ کے لیے `--json` کی حمایت کرتا ہے (طے شدہ آؤٹ پٹ انسان دوست رہتا ہے)۔
 - `gateway install` بطورِ طے شدہ Node رن ٹائم استعمال کرتا ہے؛ bun **سفارش نہیں** (WhatsApp/Telegram بگز)۔
@@ -721,9 +714,9 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Gateway CLI مددگار (RPC ذیلی کمانڈز کے لیے `--url`, `--token`, `--password`, `--timeout`, `--expect-final` استعمال کریں)۔
-جب آپ `--url` پاس کرتے ہیں تو CLI کنفیگ یا ماحولیاتی اسناد خود بخود لاگو نہیں کرتا۔
-`--token` یا `--password` واضح طور پر شامل کریں۔ واضح اسناد کی کمی ایک غلطی ہے۔
+گیٹ وے CLI ہیلپرز (RPC سب کمانڈز کے لیے `--url`, `--token`, `--password`, `--timeout`, `--expect-final` استعمال کریں)۔
+When you pass `--url`, the CLI does not auto-apply config or environment credentials.
+Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ذیلی کمانڈز:
 
@@ -789,7 +782,7 @@ openclaw models status
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-ہمیشہ auth اوورویو اور auth اسٹور میں پروفائلز کے لیے OAuth میعاد ختم ہونے کی حالت شامل ہوتی ہے۔
+Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 `--probe` لائیو درخواستیں چلاتا ہے (ٹوکن خرچ ہو سکتے ہیں اور ریٹ لمٹس ٹرگر ہو سکتی ہیں)۔
 
 ### `models set <model>`
@@ -895,7 +888,7 @@ openclaw models status
 
 ## کرون
 
-شیڈیول شدہ جابز کا انتظام کریں (Gateway RPC)۔ دیکھیں [/automation/cron-jobs](/automation/cron-jobs)۔
+شیڈول شدہ جابز کا انتظام کریں (Gateway RPC)۔ 1. دیکھیں [/automation/cron-jobs](/automation/cron-jobs).
 
 ذیلی کمانڈز:
 
@@ -913,7 +906,7 @@ openclaw models status
 
 ## نوڈ ہوسٹ
 
-`node` ایک **ہیڈ لیس نوڈ ہوسٹ** چلاتا ہے یا اسے پسِ منظر سروس کے طور پر منظم کرتا ہے۔ دیکھیں
+`node` ایک **ہیڈلیس نوڈ ہوسٹ** چلاتا ہے یا اسے بیک گراؤنڈ سروس کے طور پر منظم کرتا ہے۔ دیکھیں
 [`openclaw node`](/cli/node)۔
 
 ذیلی کمانڈز:
@@ -927,7 +920,7 @@ openclaw models status
 
 ## نوڈز
 
-`nodes` Gateway سے بات کرتا ہے اور جوڑے گئے نوڈز کو ہدف بناتا ہے۔ دیکھیں [/nodes](/nodes)۔
+`nodes` گیٹ وے سے بات کرتا ہے اور جوڑے گئے نوڈز کو ہدف بناتا ہے۔ دیکھیں [/nodes](/nodes)۔
 
 عام اختیارات:
 

@@ -3,13 +3,6 @@ summary: "Regras de gerenciamento de sessão, chaves e persistência para chats"
 read_when:
   - Modificando o tratamento ou armazenamento de sessões
 title: "Gerenciamento de Sessões"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:55Z
 ---
 
 # Gerenciamento de Sessões
@@ -80,6 +73,7 @@ Todo o estado da sessão é **de propriedade do gateway** (o OpenClaw “mestre�
 ## Poda de sessões
 
 O OpenClaw remove **resultados antigos de ferramentas** do contexto em memória imediatamente antes das chamadas ao LLM por padrão.
+Isso **não** reescreve o histórico JSONL.
 Isso **não** reescreve o histórico JSONL. Veja [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Liberação de memória antes da compactação

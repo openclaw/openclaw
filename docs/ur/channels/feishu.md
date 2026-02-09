@@ -4,18 +4,11 @@ read_when:
   - آپ Feishu/Lark بوٹ کو منسلک کرنا چاہتے ہیں
   - آپ Feishu چینل کو کنفیگر کر رہے ہیں
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:14Z
 ---
 
 # Feishu بوٹ
 
-Feishu (Lark) ایک ٹیم چیٹ پلیٹ فارم ہے جسے کمپنیاں پیغام رسانی اور تعاون کے لیے استعمال کرتی ہیں۔ یہ پلگ اِن OpenClaw کو Feishu/Lark بوٹ سے پلیٹ فارم کی WebSocket ایونٹ سبسکرپشن کے ذریعے جوڑتا ہے تاکہ عوامی webhook URL کو ظاہر کیے بغیر پیغامات موصول کیے جا سکیں۔
+Feishu (Lark) is a team chat platform used by companies for messaging and collaboration. This plugin connects OpenClaw to a Feishu/Lark bot using the platform’s WebSocket event subscription so messages can be received without exposing a public webhook URL.
 
 ---
 
@@ -78,13 +71,13 @@ openclaw channels add
 
 ## مرحلہ 1: Feishu ایپ بنائیں
 
-### 1. Feishu Open Platform کھولیں
+### 1. Open Feishu Open Platform
 
 [Feishu Open Platform](https://open.feishu.cn/app) پر جائیں اور سائن اِن کریں۔
 
 Lark (عالمی) ٹیننٹس کے لیے [https://open.larksuite.com/app](https://open.larksuite.com/app) استعمال کریں اور Feishu کنفیگ میں `domain: "lark"` سیٹ کریں۔
 
-### 2. ایپ بنائیں
+### 2. Create an app
 
 1. **Create enterprise app** پر کلک کریں
 2. ایپ کا نام اور وضاحت درج کریں
@@ -92,7 +85,7 @@ Lark (عالمی) ٹیننٹس کے لیے [https://open.larksuite.com/app](http
 
 ![Create enterprise app](../images/feishu-step2-create-app.png)
 
-### 3. اسناد کاپی کریں
+### 3. Copy credentials
 
 **Credentials & Basic Info** سے یہ کاپی کریں:
 
@@ -103,7 +96,7 @@ Lark (عالمی) ٹیننٹس کے لیے [https://open.larksuite.com/app](http
 
 ![Get credentials](../images/feishu-step3-credentials.png)
 
-### 4. اجازتیں کنفیگر کریں
+### 4. Configure permissions
 
 **Permissions** میں، **Batch import** پر کلک کریں اور یہ پیسٹ کریں:
 
@@ -144,7 +137,7 @@ Lark (عالمی) ٹیننٹس کے لیے [https://open.larksuite.com/app](http
 
 ![Enable bot capability](../images/feishu-step5-bot-capability.png)
 
-### 6. ایونٹ سبسکرپشن کنفیگر کریں
+### 6. Configure event subscription
 
 ⚠️ **اہم:** ایونٹ سبسکرپشن سیٹ کرنے سے پہلے، یقینی بنائیں:
 
@@ -160,7 +153,7 @@ Lark (عالمی) ٹیننٹس کے لیے [https://open.larksuite.com/app](http
 
 ![Configure event subscription](../images/feishu-step6-event-subscription.png)
 
-### 7. ایپ شائع کریں
+### 7. Publish the app
 
 1. **Version Management & Release** میں ایک ورژن بنائیں
 2. ریویو کے لیے جمع کروائیں اور شائع کریں
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark (عالمی) ڈومین
 
-اگر آپ کا ٹیننٹ Lark (بین الاقوامی) پر ہے، تو ڈومین کو `lark` (یا مکمل ڈومین اسٹرنگ) پر سیٹ کریں۔ آپ اسے `channels.feishu.domain` پر یا فی اکاؤنٹ (`channels.feishu.accounts.<id>.domain`) سیٹ کر سکتے ہیں۔
+If your tenant is on Lark (international), set the domain to `lark` (or a full domain string). You can set it at `channels.feishu.domain` or per account (`channels.feishu.accounts.<id>.domain`).
 
 ```json5
 {
@@ -231,19 +224,19 @@ export FEISHU_APP_SECRET="xxx"
 
 ## مرحلہ 3: شروع کریں اور جانچ کریں
 
-### 1. گیٹ وے شروع کریں
+### 1. Start the gateway
 
 ```bash
 openclaw gateway
 ```
 
-### 2. ٹیسٹ پیغام بھیجیں
+### 2. Send a test message
 
 Feishu میں، اپنے بوٹ کو تلاش کریں اور پیغام بھیجیں۔
 
-### 3. جوڑی بنانے کی منظوری دیں
+### 3. Approve pairing
 
-بطورِ طے شدہ، بوٹ جوڑی بنانے کا کوڈ جواب میں بھیجتا ہے۔ اسے منظور کریں:
+By default, the bot replies with a pairing code. Approve it:
 
 ```bash
 openclaw pairing approve feishu <CODE>
@@ -267,6 +260,7 @@ openclaw pairing approve feishu <CODE>
 ### براہِ راست پیغامات
 
 - **بطورِ طے شدہ**: `dmPolicy: "pairing"` (نامعلوم صارفین کو جوڑی بنانے کا کوڈ ملتا ہے)
+
 - **جوڑی بنانے کی منظوری دیں**:
 
   ```bash
@@ -278,13 +272,13 @@ openclaw pairing approve feishu <CODE>
 
 ### گروپ چیٹس
 
-**1. گروپ پالیسی** (`channels.feishu.groupPolicy`):
+**1. Group policy** (`channels.feishu.groupPolicy`):
 
 - `"open"` = گروپس میں سب کو اجازت دیں (بطورِ طے شدہ)
 - `"allowlist"` = صرف `groupAllowFrom` کو اجازت دیں
 - `"disabled"` = گروپ پیغامات غیر فعال کریں
 
-**2. ذکر کی شرط** (`channels.feishu.groups.<chat_id>.requireMention`):
+**2. Mention requirement** (`channels.feishu.groups.<chat_id>.requireMention`):
 
 - `true` = @mention لازمی (بطورِ طے شدہ)
 - `false` = بغیر ذکر کے جواب دیں
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### اسٹریمنگ
 
-Feishu انٹرایکٹو کارڈز کے ذریعے اسٹریمنگ جوابات کی حمایت کرتا ہے۔ فعال ہونے پر، بوٹ متن تیار کرتے ہوئے کارڈ کو اپ ڈیٹ کرتا ہے۔
+Feishu supports streaming replies via interactive cards. When enabled, the bot updates a card as it generates text.
 
 ```json5
 {
@@ -534,23 +528,23 @@ Feishu DMs یا گروپس کو مختلف ایجنٹس کی طرف روٹ کر�
 
 اہم اختیارات:
 
-| سیٹنگ                                             | وضاحت                          | بطورِ طے شدہ |
-| ------------------------------------------------- | ------------------------------ | ------------ |
-| `channels.feishu.enabled`                         | چینل فعال/غیرفعال              | `true`       |
-| `channels.feishu.domain`                          | API ڈومین (`feishu` یا `lark`) | `feishu`     |
-| `channels.feishu.accounts.<id>.appId`             | App ID                         | -            |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                     | -            |
-| `channels.feishu.accounts.<id>.domain`            | فی اکاؤنٹ API ڈومین اووررائیڈ  | `feishu`     |
-| `channels.feishu.dmPolicy`                        | DM پالیسی                      | `pairing`    |
+| سیٹنگ                                             | وضاحت                                                                  | بطورِ طے شدہ |
+| ------------------------------------------------- | ---------------------------------------------------------------------- | ------------ |
+| `channels.feishu.enabled`                         | چینل فعال/غیرفعال                                                      | `true`       |
+| `channels.feishu.domain`                          | API ڈومین (`feishu` یا `lark`)                      | `feishu`     |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                 | -            |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                             | -            |
+| `channels.feishu.accounts.<id>.domain`            | فی اکاؤنٹ API ڈومین اووررائیڈ                                          | `feishu`     |
+| `channels.feishu.dmPolicy`                        | DM پالیسی                                                              | `pairing`    |
 | `channels.feishu.allowFrom`                       | DM اجازت فہرست (open_id فہرست) | -            |
-| `channels.feishu.groupPolicy`                     | گروپ پالیسی                    | `open`       |
-| `channels.feishu.groupAllowFrom`                  | گروپ اجازت فہرست               | -            |
-| `channels.feishu.groups.<chat_id>.requireMention` | @mention لازمی                 | `true`       |
-| `channels.feishu.groups.<chat_id>.enabled`        | گروپ فعال کریں                 | `true`       |
-| `channels.feishu.textChunkLimit`                  | پیغام کے حصے کا سائز           | `2000`       |
-| `channels.feishu.mediaMaxMb`                      | میڈیا سائز کی حد               | `30`         |
-| `channels.feishu.streaming`                       | اسٹریمنگ کارڈ آؤٹ پٹ فعال کریں | `true`       |
-| `channels.feishu.blockStreaming`                  | بلاک اسٹریمنگ فعال کریں        | `true`       |
+| `channels.feishu.groupPolicy`                     | گروپ پالیسی                                                            | `open`       |
+| `channels.feishu.groupAllowFrom`                  | گروپ اجازت فہرست                                                       | -            |
+| `channels.feishu.groups.<chat_id>.requireMention` | @mention لازمی                                            | `true`       |
+| `channels.feishu.groups.<chat_id>.enabled`        | گروپ فعال کریں                                                         | `true`       |
+| `channels.feishu.textChunkLimit`                  | پیغام کے حصے کا سائز                                                   | `2000`       |
+| `channels.feishu.mediaMaxMb`                      | میڈیا سائز کی حد                                                       | `30`         |
+| `channels.feishu.streaming`                       | اسٹریمنگ کارڈ آؤٹ پٹ فعال کریں                                         | `true`       |
+| `channels.feishu.blockStreaming`                  | بلاک اسٹریمنگ فعال کریں                                                | `true`       |
 
 ---
 
@@ -560,7 +554,7 @@ Feishu DMs یا گروپس کو مختلف ایجنٹس کی طرف روٹ کر�
 | ------------- | -------------------------------------------------------------------------- |
 | `"pairing"`   | **بطورِ طے شدہ۔** نامعلوم صارفین کو جوڑی بنانے کا کوڈ ملتا ہے؛ منظوری لازم |
 | `"allowlist"` | صرف `allowFrom` میں موجود صارفین چیٹ کر سکتے ہیں                           |
-| `"open"`      | تمام صارفین کو اجازت دیں (requires `"*"` in allowFrom)                     |
+| `"open"`      | تمام صارفین کو اجازت دیں (requires `"*"` in allowFrom)  |
 | `"disabled"`  | DMs غیر فعال کریں                                                          |
 
 ---

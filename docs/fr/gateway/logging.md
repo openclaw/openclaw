@@ -4,13 +4,6 @@ read_when:
   - Modification de la sortie ou des formats de journalisation
   - Depannage de la sortie du CLI ou de la passerelle
 title: "Journalisation"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:45Z
 ---
 
 # Journalisation

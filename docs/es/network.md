@@ -4,14 +4,7 @@ read_when:
   - Necesita la arquitectura de red y la visión general de seguridad
   - Está depurando el acceso local vs. tailnet o el emparejamiento
   - Quiere la lista canónica de documentos de red
-title: "Red"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:49Z
+title: "network.md"
 ---
 
 # Centro de red

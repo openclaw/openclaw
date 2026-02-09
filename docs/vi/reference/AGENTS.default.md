@@ -3,20 +3,13 @@ summary: "Hướng dẫn mặc định cho tác tử OpenClaw và danh sách Ski
 read_when:
   - Bắt đầu một phiên tác tử OpenClaw mới
   - Bật hoặc kiểm tra các Skills mặc định
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:09Z
 ---
 
 # AGENTS.md — Trợ lý cá nhân OpenClaw (mặc định)
 
 ## Lần chạy đầu tiên (khuyến nghị)
 
-OpenClaw sử dụng một thư mục workspace riêng cho tác tử. Mặc định: `~/.openclaw/workspace` (có thể cấu hình qua `agents.defaults.workspace`).
+**discord** — Các hành động Discord: react, stickers, polls. 4. Mặc định: `~/.openclaw/workspace` (có thể cấu hình qua `agents.defaults.workspace`).
 
 1. Tạo workspace (nếu chưa tồn tại):
 
@@ -59,7 +52,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Linh hồn (bắt buộc)
 
-- `SOUL.md` xác định danh tính, giọng điệu và ranh giới. Giữ cho nó luôn cập nhật.
+- `SOUL.md` định nghĩa danh tính, giọng điệu và ranh giới. Keep it current.
 - Nếu bạn thay đổi `SOUL.md`, hãy cho người dùng biết.
 - Mỗi phiên bạn là một thực thể mới; tính liên tục nằm trong các tệp này.
 
@@ -108,7 +101,7 @@ git commit -m "Add Clawd workspace"
 - **eightctl** — Điều khiển giấc ngủ của bạn từ terminal.
 - **imsg** — Gửi, đọc, stream iMessage & SMS.
 - **wacli** — WhatsApp CLI: đồng bộ, tìm kiếm, gửi.
-- **discord** — Hành động Discord: react, sticker, poll. Dùng mục tiêu `user:<id>` hoặc `channel:<id>` (ID số trần có thể gây mơ hồ).
+- **discord** — Discord actions: react, stickers, polls. Sử dụng mục tiêu `user:<id>` hoặc `channel:<id>` (id số thuần là mơ hồ).
 - **gog** — Google Suite CLI: Gmail, Calendar, Drive, Contacts.
 - **spotify-player** — Trình phát Spotify trong terminal để tìm kiếm/xếp hàng/điều khiển phát.
 - **sag** — Giọng nói ElevenLabs với UX kiểu macOS say; mặc định phát ra loa.
@@ -124,7 +117,7 @@ git commit -m "Add Clawd workspace"
 - Ưu tiên CLI `openclaw` cho scripting; ứng dụng macOS xử lý quyền.
 - Chạy cài đặt từ tab Skills; nút sẽ được ẩn nếu binary đã tồn tại.
 - Giữ heartbeat bật để trợ lý có thể lên lịch nhắc nhở, theo dõi hộp thư đến và kích hoạt chụp camera.
-- Giao diện Canvas chạy toàn màn hình với overlay gốc. Tránh đặt các điều khiển quan trọng ở mép trên-trái/trên-phải/dưới; hãy thêm lề (gutter) rõ ràng trong bố cục và không phụ thuộc vào safe-area insets.
+- 2. Giao diện Canvas chạy toàn màn hình với các lớp phủ gốc. Tránh đặt các điều khiển quan trọng ở các cạnh trên-trái/trên-phải/dưới; thêm các lề (gutters) rõ ràng trong bố cục và đừng dựa vào safe-area insets.
 - Với xác minh dựa trên trình duyệt, dùng `openclaw browser` (tab/trạng thái/ảnh chụp màn hình) với profile Chrome do OpenClaw quản lý.
 - Để kiểm tra DOM, dùng `openclaw browser eval|query|dom|snapshot` (và `--json`/`--out` khi cần đầu ra cho máy).
 - Đối với tương tác, dùng `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (click/type yêu cầu tham chiếu snapshot; dùng `evaluate` cho CSS selector).

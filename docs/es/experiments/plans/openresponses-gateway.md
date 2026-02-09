@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "Plan del Gateway OpenResponses"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:31Z
 ---
 
 # Plan de Integración del Gateway OpenResponses

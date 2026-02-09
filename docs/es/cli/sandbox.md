@@ -3,13 +3,6 @@ title: CLI de Sandbox
 summary: "Administre contenedores sandbox y examine la política efectiva del sandbox"
 read_when: "Usted está administrando contenedores sandbox o depurando el comportamiento de sandbox/política de herramientas."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:01Z
 ---
 
 # CLI de Sandbox

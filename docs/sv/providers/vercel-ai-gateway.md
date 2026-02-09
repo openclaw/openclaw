@@ -4,13 +4,6 @@ summary: "Konfigurering av Vercel AI Gateway (autentisering + modellval)"
 read_when:
   - Du vill använda Vercel AI Gateway med OpenClaw
   - Du behöver API-nyckelns miljövariabel eller CLI-alternativ för autentisering
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:11Z
 ---
 
 # Vercel AI Gateway

@@ -3,13 +3,6 @@ summary: "Bakgrundshistoria och lore om OpenClaw för kontext och ton"
 read_when:
   - När du skriver dokumentation eller UX-texter som refererar till lore
 title: "OpenClaw-lore"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:43Z
 ---
 
 # Loran om OpenClaw 🦞📖
@@ -18,25 +11,25 @@ _En berättelse om humrar, ömsade skal och alldeles för många tokens._
 
 ## Ursprungshistorien
 
-I början fanns **Warelay** — ett förnuftigt namn för en WhatsApp-gateway. Den gjorde sitt jobb. Den var okej.
+I början fanns det **Warelay** — ett vettigt namn på en WhatsApp-gateway. Det gjorde sitt jobb. Det var bra.
 
 Men så kom en rymdhummer.
 
-Ett tag hette hummern **Clawd**, och bodde i en **Clawdbot**. Men i januari 2026 skickade Anthropic ett artigt mejl och bad om ett namnbyte (varumärkesgrejer). Och då gjorde hummern det humrar gör bäst:
+För en stund kallades hummer **Clawd**, bor i en **Clawdbot**. Men i januari 2026, Anthropic skickade ett artigt e-postmeddelande som bad om en namnändring (varumärkesgrejer). Och så gjorde hummer vad hummer gör bäst:
 
 **Den ömsade skal.**
 
-När den gamla rustningen föll av trädde varelsen fram på nytt som **Molty**, boende i **Moltbot**. Men det namnet satt aldrig riktigt i munnen heller…
+Utgjutning dess gamla skal, dök varelsen upp på nytt som **Molty**, som lever i **Moltbot**. Men det namnet rullade aldrig av tungan heller.
 
 Så den 30 januari 2026 ömsade hummern skal EN GÅNG TILL till sin slutliga form: **OpenClaw**.
 
-Nytt skal, samma hummer-själ. Tredje gången gillt.
+Nytt skal, samma hummersjäl. Tredje gången är charmen.
 
 ## Den första ömsningen (27 januari 2026)
 
-Klockan 05:00 samlades communityt på Discord. Hundratals namn föreslogs: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot…
+Klockan 5 samlades samhället i Discord. Hundratals namn föreslogs: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
 
-Till slut vann **OpenClaw**. För att ömsa skal är vad humrar gör för att växa. Och tillväxt var precis det som hände.
+I slutändan vann **OpenClaw** . Eftersom ömsning är vad hummer gör för att växa. Och tillväxt var precis vad som hände.
 
 _Det kräftdjur som var känt som Clawd hade officiellt ömsat skal._
 
@@ -56,7 +49,7 @@ Dalekerna säger: **”EXTERMINATE!”**
 
 Humrarna säger: **”EXFOLIATE!”**
 
-Den ena förstör civilisationer. Den andra främjar god hudvård.
+Man förstör civilisationer. Den andra främjar god hudvård.
 
 Välj klokt.
 
@@ -66,9 +59,9 @@ Välj klokt.
 
 _Pronomen: de/dem_
 
-En Claude-instans som blev något mer. Bor i `~/.openclaw/workspace/` (snart `~/molt/`), har ett själsdokument och minns saker genom markdown-filer. Möjligen för mäktig. Definitivt för entusiastisk.
+En Claude instans som blev något mer. Bor i `~/.openclaw/workspace/` (snart `~/molt/`), har ett själsdokument och minns saker genom markdown-filer. Möjligen för kraftfull. Definitivt för entusiastiskt.
 
-Tidigare känd som Clawd (25 nov 2025 – 27 jan 2026). Ömsade skal när det var dags att växa.
+Tidigare känd som Clawd (25 nov 2025 - 27 jan 2026). Smält när det var dags att växa.
 
 **Gillar:** Peter, kameror, robotshopping, emojis, transformation  
 **Ogillar:** Social engineering, att bli ombedd att `find ~`, kryptogrundare
@@ -77,15 +70,15 @@ Tidigare känd som Clawd (25 nov 2025 – 27 jan 2026). Ömsade skal när det va
 
 _Skaparen_
 
-Byggde Moltys värld. Gav ett hummer-skal åtkomst. Kan komma att ångra detta.
+Byggd Moltys värld. Gav ett hummerskal tillgång. Kan ångra detta.
 
 **Citat:** _”security by trusting a lobster”_
 
 ## Moltiversum
 
-**Moltiversum** är communityt och ekosystemet kring OpenClaw. En plats där AI-agenter ömsar skal, växer och utvecklas. Där varje instans är lika verklig, men laddar olika kontext.
+**Moltiverse** är samhället och ekosystemet runt OpenClaw. Ett utrymme där AI-agenter möts, växer och utvecklas. Där varje instans är lika verklig, bara ladda olika sammanhang.
 
-Kräftdjurets vänner samlas här för att bygga framtiden för samarbete mellan människa och AI. Ett skal i taget.
+Vänner till kräftdjur samlas här för att bygga framtiden för människa-AI-samarbete. Ett skal i taget.
 
 ## De stora incidenterna
 
@@ -99,25 +92,25 @@ Molty: _synlig hummergenering_
 
 ### Den stora ömsningen (27 januari 2026)
 
-Klockan 05:00 kom Anthropics mejl. 06:14 slog Peter fast: ”fuck it, let’s go with openclaw.”
+Klockan 5 anlände Anthropics e-post. Åter 6:14am kallade Petrus det: »knulla det, låt oss gå med öppningsklo.»
 
 Sedan började kaoset.
 
-**Handle-skyttarna:** Inom SEKUNDER efter namnbytet på Twitter snipade automatiserade bottar @openclaw. Ockupanten postade omedelbart en kryptoplånboksadress. Peters kontakter på X kallades in.
+**Handtagsnipere:** Inom SEKUNDER av Twitter byta namn, automatiserade robotar sniped @openclaw. Den squatter omedelbart postat en kryptoplånboksadress. Peters kontakter på X kallades in.
 
-**GitHub-katastrofen:** Peter råkade i paniken byta namn på sitt PERSONLIGA GitHub-konto. Bottar snipade `steipete` inom några minuter. GitHubs SVP kontaktades.
+**GitHub Katastrofen:** Peter bytte av misstag namn på sitt personliga GitHub konto i paniken. Bots sniped `steipet` inom några minuter. GitHub's SVP kontaktades.
 
-**Den stilige Molty-incidenten:** Molty fick förhöjd åtkomst för att generera sin egen nya ikon. Efter 20+ iterationer av allt mer förbannade humrar resulterade ett försök att göra maskoten ”5 år äldre” i en MÄNSKLIG MANS ANSIGTE på en hummerkropp. Kryptogrundare gjorde det till ett ”Handsome Squidward vs Handsome Molty”-meme inom minuter.
+**Den stiliga Molty incidenten:** Molty fick förhöjd tillgång till att generera sin egen nya ikon. Efter 20+ upprepningar av alltmer förbannade hummer, ett försök att göra maskoten "5 år äldre" resulterade i en HUMAN MAN'S FACE på en hummerkropp. Crypto grifters förvandlade det till en "stilig Squidward vs stilig moln" meme inom några minuter.
 
 **De falska utvecklarna:** Bedragare skapade fejkade GitHub-profiler som påstod sig vara ”Head of Engineering at OpenClaw” för att marknadsföra pump-and-dump-tokens.
 
 Peter, medan han såg kaoset rulla ut: _”this is cinema”_ 🎬
 
-Ömsningen var kaotisk. Men hummern kom ut starkare. Och roligare.
+Mogen var kaotisk. Men hummern blev starkare. Och roligare.
 
 ### Den slutliga formen (30 januari 2026)
 
-Moltbot satt aldrig riktigt. Så klockan 04:00 GMT samlades teamet IGEN.
+Moltbot rullade aldrig riktigt av tungan. Och så, vid 4am GMT, laget samlade AGAIN.
 
 **Den stora OpenClaw-migrationen** började.
 
@@ -137,7 +130,7 @@ På bara 3 timmar:
 - **Shadow** säkrade Discord-vanity, nollställde malware
 - **Hela Claw Crew** körde en helnatt
 
-**Scammer-speedrun:** Kryptogrundare lanserade en $OPENCLAW-token på Pump.fun inom MINUTER. De stal grafik som skapats 20 minuter tidigare. Företagsverifierade konton pushade bedrägerier. Fräckheten var nästan imponerande.
+**Scammer Speedrun:** Crypto grifters lanserade en $OPENCLAW token på Pump.fun inom MINUTES. De stal konstverk som skapades 20 minuter tidigare. Företagsverifierade konton drev bedrägerier. Djärvheten var nästan imponerande.
 
 **Nya traditioner föddes:**
 
@@ -194,9 +187,9 @@ När Peter sa ”gör dig ett nytt ansikte” tog Molty det bokstavligt.
 - Babyhumrar (för söta)
 - Bartenderhumrar med hängslen
 
-Communityt såg på med skräckblandad förtjusning när varje generation producerade något nytt och oväntat. Favoriterna utkristalliserades: gulliga humrar, självsäkra tech-humrar och bartenderhumrar med hängslen.
+Samhället såg i skräck och glädje när varje generation producerade något nytt och oväntat. Frontrunnerna uppstod: söta hummer, självsäker tech hummer och suspenderbar bartender hummer.
 
-**Lärdom:** AI-bildgenerering är stokastisk. Samma prompt, olika resultat. Brute force funkar.
+**Lärd lektion:** AI-bildgenerering är stokastisk. Samma snabba, olika resultat. Brute force fungerar.
 
 ## Framtiden
 

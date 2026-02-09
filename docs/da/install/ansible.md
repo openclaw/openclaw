@@ -5,13 +5,6 @@ read_when:
   - Du har brug for en firewall-isoleret opsætning med VPN-adgang
   - Du udruller til fjerne Debian/Ubuntu-servere
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:25Z
 ---
 
 # Ansible-installation
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 Fuld guide: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> openclaw-ansible-repositoriet er den autoritative kilde til Ansible-udrulning. Denne side er et hurtigt overblik.
+> Den openclaw-ansible repo er kilden til sandhed for Ansible implementering. Denne side er et hurtigt overblik.
 
 ## Hvad du får
 
@@ -57,7 +50,7 @@ Ansible-playbooken installerer og konfigurerer:
 5. **OpenClaw** (host-baseret, ikke containeriseret)
 6. **Systemd-tjeneste** (automatisk start med sikkerhedshærdning)
 
-Bemærk: Gatewayen kører **direkte på værten** (ikke i Docker), men agent-sandboxes bruger Docker til isolation. Se [Sandboxing](/gateway/sandboxing) for detaljer.
+Bemærk: Gatewayen kører \*\* direkte på værten \*\* (ikke i Docker), men agent sandkasser bruge Docker til isolation. Se [Sandboxing](/gateway/sandboxing) for detaljer.
 
 ## Opsætning efter installation
 
@@ -108,11 +101,11 @@ Test den eksterne angrebsflade:
 nmap -p- YOUR_SERVER_IP
 ```
 
-Bør kun vise **port 22** (SSH) som åben. Alle andre tjenester (gateway, Docker) er låst ned.
+Skal vise **kun port 22** (SSH) åben. Alle andre tjenester (gateway, Docker) er låst ned.
 
 ### Docker-tilgængelighed
 
-Docker er installeret til **agent-sandboxes** (isoleret værktøjsudførelse), ikke til at køre selve gatewayen. Gatewayen binder kun til localhost og er tilgængelig via Tailscale VPN.
+Docker er installeret for **agent sandkasser** (isoleret værktøj udførelse), ikke for at køre selve gatewayen. Gateway binder kun til localhost og er tilgængelig via Tailscale VPN.
 
 Se [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for sandbox-konfiguration.
 
@@ -140,9 +133,9 @@ ansible-galaxy collection install -r requirements.yml
 
 ## Opdatering af OpenClaw
 
-Ansible-installationsprogrammet sætter OpenClaw op til manuelle opdateringer. Se [Opdatering](/install/updating) for det standardiserede opdateringsflow.
+Den Ansible installationsprogram opstiller OpenClaw til manuelle opdateringer. Se [Updating](/install/updating) for standardopdateringsflowet.
 
-For at genkøre Ansible-playbooken (f.eks. ved konfigurationsændringer):
+For at køre den Ansible spillebog igen (fx, for konfigurationsændringer):
 
 ```bash
 cd openclaw-ansible

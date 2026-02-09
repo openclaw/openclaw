@@ -4,13 +4,6 @@ read_when:
   - Einrichten der iMessage-Unterstützung
   - Debugging von iMessage-Senden/Empfangen
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:34Z
 ---
 
 # iMessage (Legacy: imsg)
@@ -224,11 +217,11 @@ Multi-Account-Unterstützung: Verwenden Sie `channels.imessage.accounts` mit ein
 
 ## Zugriffskontrolle (Direktnachrichten + Gruppen)
 
-Direktnachrichten:
+DMs:
 
 - Standard: `channels.imessage.dmPolicy = "pairing"`.
 - Unbekannte Absender erhalten einen Kopplungscode; Nachrichten werden ignoriert, bis sie genehmigt sind (Codes laufen nach 1 Stunde ab).
-- Genehmigen über:
+- Genehmigung über:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
 - Kopplung ist der Standard-Token-Austausch für iMessage-Direktnachrichten. Details: [Kopplung](/channels/pairing)

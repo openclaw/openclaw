@@ -3,13 +3,6 @@ summary: "Regels voor beeld- en mediaverwerking voor verzenden, Gateway en agent
 read_when:
   - Wijzigen van mediapipeline of bijlagen
 title: "Ondersteuning voor Afbeeldingen en Media"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # Afbeeldingen & Media-ondersteuning — 2025-12-05

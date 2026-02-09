@@ -4,13 +4,6 @@ read_when:
   - 플러그인에 새로운 에이전트 도구를 추가하려는 경우
   - 허용 목록을 통해 도구를 옵트인으로 설정해야 하는 경우
 title: "플러그인 에이전트 도구"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:52Z
 ---
 
 # 플러그인 에이전트 도구

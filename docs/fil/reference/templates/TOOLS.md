@@ -2,18 +2,11 @@
 summary: "Template ng workspace para sa TOOLS.md"
 read_when:
   - Manu-manong pag-bootstrap ng isang workspace
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:53Z
 ---
 
 # TOOLS.md - Mga Lokal na Tala
 
-Ang Skills ang nagtatakda kung _paano_ gumagana ang mga tool. Ang file na ito ay para sa _iyong_ mga detalye — ang mga bagay na natatangi sa iyong setup.
+Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
 ## Ano ang Nilalaman Dito
 
@@ -46,8 +39,8 @@ Mga bagay tulad ng:
 
 ## Bakit Hiwalay?
 
-Ibinabahagi ang Skills. Sa iyo ang iyong setup. Ang paghihiwalay ng mga ito ay nangangahulugang maaari mong i-update ang skills nang hindi nawawala ang iyong mga tala, at maibahagi ang skills nang hindi nailalantad ang iyong infrastructure.
+Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
 
 ---
 
-Magdagdag ng anumang makakatulong sa iyo sa trabaho. Ito ang iyong cheat sheet.
+Add whatever helps you do your job. This is your cheat sheet.

@@ -4,13 +4,6 @@ read_when:
   - စက်ပစ္စည်း တွဲချိတ်ရန် တောင်းဆိုမှုများကို သင် အတည်ပြုနေသောအခါ
   - စက်ပစ္စည်း တိုကင်များကို လှည့်ပြောင်းခြင်း သို့မဟုတ် ပြန်လည်ရုပ်သိမ်းရန် လိုအပ်သောအခါ
 title: "devices"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:59Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC အချိန်ကန့်သတ်။
 - `--json`: JSON အထွက် (script အသုံးပြုရန် အကြံပြုသည်)။
 
-မှတ်ချက်: `--url` ကို သတ်မှတ်လိုက်ပါက CLI သည် config သို့မဟုတ် ပတ်ဝန်းကျင် အထောက်အထားများကို ပြန်လည်အသုံးမပြုတော့ပါ။
-`--token` သို့မဟုတ် `--password` ကို တိတိကျကျ ပေးပို့ရပါမည်။ အထောက်အထားများကို တိတိကျကျ မပေးပါက အမှားအယွင်းဖြစ်ပါသည်။
+မှတ်ချက်: `--url` ကို သတ်မှတ်သောအခါ CLI သည် config သို့မဟုတ် environment credentials များကို fallback မလုပ်ပါ။
+`--token` သို့မဟုတ် `--password` ကို တိတိကျကျ ပေးရပါမည်။ credentials ကို အထူးတလည် မပေးထားခြင်းသည် error ဖြစ်သည်။
 
 ## Notes
 
-- တိုကင် လှည့်ပြောင်းခြင်းသည် တိုကင်အသစ် (အရေးကြီးသော အချက်အလက်) ကို ပြန်လည်ပေးအပ်ပါသည်။ လျှို့ဝှက်ချက်တစ်ခုအဖြစ် ကိုင်တွယ်ပါ။
+- Token rotation သည် token အသစ် (sensitive) ကို ပြန်ပေးသည်။ ၎င်းကို secret အဖြစ် ဆက်ဆံပါ။
 - ဤအမိန့်များကို အသုံးပြုရန် `operator.pairing` (သို့မဟုတ် `operator.admin`) scope လိုအပ်ပါသည်။

@@ -4,21 +4,13 @@ read_when:
   - Gumagawa ka ng OpenClaw plugin
   - Kailangan mong mag-ship ng plugin config schema o mag-debug ng mga error sa pag-validate ng plugin
 title: "Manifest ng Plugin"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:45Z
 ---
 
 # Plugin manifest (openclaw.plugin.json)
 
-Bawat plugin **dapat** mag-ship ng isang `openclaw.plugin.json` file sa **plugin root**.
-Ginagamit ng OpenClaw ang manifest na ito para i-validate ang konpigurasyon **nang hindi ine-execute ang plugin
-code**. Ang mga nawawala o invalid na manifest ay tinatrato bilang mga error ng plugin at hinaharangan ang
-pag-validate ng config.
+Bawat plugin **ay dapat** maglaman ng isang `openclaw.plugin.json` file sa **plugin root**.
+OpenClaw uses this manifest to validate configuration **without executing plugin
+code**. Ang nawawala o hindi valid na mga manifest ay itinuturing na mga error ng plugin at hinaharangan ang config validation.
 
 Tingnan ang kumpletong gabay sa plugin system: [Plugins](/tools/plugin).
 
@@ -61,8 +53,7 @@ Mga opsyonal na key:
 
 - Ang mga hindi kilalang `channels.*` key ay **mga error**, maliban kung ang channel id ay idineklara ng
   isang plugin manifest.
-- Ang `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, at `plugins.slots.*`
-  ay dapat tumukoy sa **nadidiskubreng** mga plugin id. Ang mga hindi kilalang id ay **mga error**.
+- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, at `plugins.slots.*` ay dapat tumukoy sa **nadidiskubreng** mga plugin id. Ang mga hindi kilalang id ay **mga error**.
 - Kung naka-install ang isang plugin ngunit may sira o nawawalang manifest o schema,
   babagsak ang validation at ire-report ng Doctor ang error ng plugin.
 - Kung may umiiral na plugin config ngunit ang plugin ay **disabled**, pananatilihin ang config at

@@ -3,13 +3,6 @@ summary: "Logic trạng thái menu bar và những gì hiển thị cho người
 read_when:
   - Điều chỉnh UI menu mac hoặc logic trạng thái
 title: "Menu Bar"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:45Z
 ---
 
 # Logic Trạng Thái Menu Bar
@@ -23,8 +16,8 @@ x-i18n:
 
 ## Mô hình trạng thái
 
-- Phiên: các sự kiện đến với `runId` (theo từng lần chạy) kèm `sessionKey` trong payload. Phiên “chính” là khóa `main`; nếu không có, chúng tôi dùng phiên được cập nhật gần nhất.
-- Ưu tiên: phiên chính luôn thắng. Nếu phiên chính đang hoạt động, trạng thái của nó được hiển thị ngay. Nếu phiên chính nhàn rỗi, phiên không‑chính hoạt động gần nhất sẽ được hiển thị. Chúng tôi không đổi qua lại giữa chừng khi đang hoạt động; chỉ chuyển khi phiên hiện tại chuyển sang nhàn rỗi hoặc phiên chính bắt đầu hoạt động.
+- Phiên: các sự kiện đến với `runId` (theo từng lần chạy) cùng với `sessionKey` trong payload. Session “main” có khóa là `main`; nếu không có, chúng tôi fallback sang session được cập nhật gần nhất.
+- Ưu tiên: main luôn thắng. Nếu main đang hoạt động, trạng thái của nó được hiển thị ngay lập tức. Nếu main đang nhàn rỗi, phiên không‑main hoạt động gần đây nhất sẽ được hiển thị. Chúng tôi không chuyển qua lại giữa chừng khi đang hoạt động; chỉ chuyển khi session hiện tại idle hoặc main trở nên hoạt động.
 - Loại hoạt động:
   - `job`: thực thi lệnh mức cao (`state: started|streaming|done|error`).
   - `tool`: `phase: start|result` với `toolName` và `meta/args`.

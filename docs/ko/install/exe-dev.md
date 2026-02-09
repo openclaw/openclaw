@@ -1,16 +1,9 @@
 ---
 summary: "원격 액세스를 위해 exe.dev (VM + HTTPS 프록시)에서 OpenClaw Gateway 실행"
 read_when:
-  - "Gateway(게이트웨이)를 위한 저렴한 상시 실행 Linux 호스트가 필요할 때"
-  - "자체 VPS 를 운영하지 않고 원격 Control UI 액세스를 원할 때"
+  - Gateway(게이트웨이)를 위한 저렴한 상시 실행 Linux 호스트가 필요할 때
+  - 자체 VPS 를 운영하지 않고 원격 Control UI 액세스를 원할 때
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:20Z
 ---
 
 # exe.dev
@@ -34,8 +27,7 @@ x-i18n:
 
 ## Shelley 를 사용한 자동 설치
 
-exe.dev 의 에이전트인 Shelley 는 제공되는 프롬프트를 사용하여 OpenClaw 를 즉시 설치할 수 있습니다.
-사용되는 프롬프트는 다음과 같습니다:
+exe.dev 의 에이전트인 Shelley 는 제공되는 프롬프트를 사용하여 OpenClaw 를 즉시 설치할 수 있습니다. 사용되는 프롬프트는 다음과 같습니다:
 
 ```
 Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw device approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
@@ -43,7 +35,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## 수동 설치
 
-## 1) VM 생성
+## 1. VM 생성
 
 사용 중인 장치에서:
 
@@ -59,14 +51,14 @@ ssh <vm-name>.exe.xyz
 
 팁: 이 VM 은 **stateful** 로 유지하십시오. OpenClaw 는 상태를 `~/.openclaw/` 및 `~/.openclaw/workspace/` 아래에 저장합니다.
 
-## 2) 사전 요구 사항 설치 (VM 에서)
+## 2. 사전 요구 사항 설치 (VM 에서)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) OpenClaw 설치
+## 3. OpenClaw 설치
 
 OpenClaw 설치 스크립트를 실행합니다:
 
@@ -74,7 +66,7 @@ OpenClaw 설치 스크립트를 실행합니다:
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) nginx 를 설정하여 OpenClaw 를 포트 8000 으로 프록시
+## 4. nginx 를 설정하여 OpenClaw 를 포트 8000 으로 프록시
 
 `/etc/nginx/sites-enabled/default` 을 다음 내용으로 편집합니다:
 
@@ -108,7 +100,7 @@ server {
 }
 ```
 
-## 5) OpenClaw 에 접근하고 권한 부여
+## 5. OpenClaw 에 접근하고 권한 부여
 
 `https://<vm-name>.exe.xyz/` 에 접근합니다 (온보딩에서 출력된 Control UI 를 참고하십시오). 인증을 요청하는 경우,
 VM 의 `gateway.auth.token` 에서 토큰을 붙여넣으십시오 (`openclaw config get gateway.auth.token` 로 조회하거나,

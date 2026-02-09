@@ -5,25 +5,18 @@ read_when:
   - Gusto mo ng lokal na API server na bumabalot sa Claude Code CLI
   - Gusto mong makatipid sa pamamagitan ng paggamit ng subscription sa halip na mga API key
 title: "Claude Max API Proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:49Z
 ---
 
 # Claude Max API Proxy
 
-Ang **claude-max-api-proxy** ay isang community tool na naglalantad ng iyong Claude Max/Pro subscription bilang isang OpenAI-compatible na API endpoint. Pinapahintulutan ka nitong gamitin ang iyong subscription sa anumang tool na sumusuporta sa OpenAI API format.
+**claude-max-api-proxy** is a community tool that exposes your Claude Max/Pro subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
 
 ## Bakit Ito Gagamitin?
 
-| Paraan                  | Gastos                                                     | Pinakamainam Para Sa                                     |
-| ----------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
+| Paraan                  | Gastos                                                                                        | Pinakamainam Para Sa                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
 | Anthropic API           | Bayad kada token (~$15/M input, $75/M output para sa Opus) | Production apps, mataas na volume                        |
-| Claude Max subscription | $200/buwan na flat                                         | Personal na gamit, development, walang limit na paggamit |
+| Claude Max subscription | $200/buwan na flat                                                                            | Personal na gamit, development, walang limit na paggamit |
 
 Kung mayroon kang Claude Max subscription at gusto mo itong gamitin sa mga OpenAI-compatible na tool, makakatipid ka ng malaking halaga gamit ang proxy na ito.
 

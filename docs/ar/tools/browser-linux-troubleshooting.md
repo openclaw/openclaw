@@ -2,13 +2,6 @@
 summary: "إصلاح مشكلات بدء تشغيل CDP في Chrome/Brave/Edge/Chromium للتحكم بالمتصفح في OpenClaw على Linux"
 read_when: "يفشل التحكم بالمتصفح على Linux، خصوصًا مع Chromium بنظام snap"
 title: "استكشاف أخطاء المتصفح وإصلاحها"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:45Z
 ---
 
 # استكشاف أخطاء المتصفح وإصلاحها (Linux)
@@ -61,7 +54,7 @@ sudo apt --fix-broken install -y  # if there are dependency errors
 
 إذا كان لا بد من استخدام Chromium بنظام snap، فقم بتهيئة OpenClaw ليرتبط بمتصفح تم تشغيله يدويًا:
 
-1. حدّث التهيئة:
+1. تحديث الإعداد:
 
 ```json
 {
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### مرجع التهيئة
 
-| الخيار                   | الوصف                                                         | الافتراضي                                                                    |
-| ------------------------ | ------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `browser.enabled`        | تمكين التحكم بالمتصفح                                         | `true`                                                                       |
+| الخيار                   | الوصف                                                                            | الافتراضي                                                                                       |
+| ------------------------ | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | تمكين التحكم بالمتصفح                                                            | `true`                                                                                          |
 | `browser.executablePath` | مسار ملف متصفح قائم على Chromium (Chrome/Brave/Edge/Chromium) | يتم الاكتشاف تلقائيًا (يُفضِّل المتصفح الافتراضي إن كان قائمًا على Chromium) |
-| `browser.headless`       | التشغيل دون واجهة رسومية                                      | `false`                                                                      |
-| `browser.noSandbox`      | إضافة علامة `--no-sandbox` (مطلوبة لبعض إعدادات Linux)        | `false`                                                                      |
-| `browser.attachOnly`     | عدم تشغيل المتصفح، والاكتفاء بالارتباط بمتصفح موجود           | `false`                                                                      |
-| `browser.cdpPort`        | منفذ بروتوكول أدوات المطوّر في Chrome                         | `18800`                                                                      |
+| `browser.headless`       | التشغيل دون واجهة رسومية                                                         | `false`                                                                                         |
+| `browser.noSandbox`      | إضافة علامة `--no-sandbox` (مطلوبة لبعض إعدادات Linux)        | `false`                                                                                         |
+| `browser.attachOnly`     | عدم تشغيل المتصفح، والاكتفاء بالارتباط بمتصفح موجود                              | `false`                                                                                         |
+| `browser.cdpPort`        | منفذ بروتوكول أدوات المطوّر في Chrome                                            | `18800`                                                                                         |
 
 ### المشكلة: "Chrome extension relay is running, but no tab is connected"
 

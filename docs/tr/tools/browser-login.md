@@ -4,13 +4,6 @@ read_when:
   - Tarayıcı otomasyonu için sitelere giriş yapmanız gerektiğinde
   - X/Twitter’a güncelleme göndermek istediğinizde
 title: "Tarayıcı Girişi"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:44Z
 ---
 
 # Tarayıcı girişi + X/Twitter gönderimi

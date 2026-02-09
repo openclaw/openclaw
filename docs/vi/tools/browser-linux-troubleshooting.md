@@ -2,13 +2,6 @@
 summary: "Khắc phục sự cố khởi động CDP của Chrome/Brave/Edge/Chromium cho điều khiển trình duyệt OpenClaw trên Linux"
 read_when: "Điều khiển trình duyệt không hoạt động trên Linux, đặc biệt với Chromium dạng snap"
 title: "Xử lý sự cố trình duyệt"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:20Z
 ---
 
 # Xử lý sự cố trình duyệt (Linux)
@@ -23,7 +16,7 @@ Máy chủ điều khiển trình duyệt của OpenClaw không thể khởi ch�
 
 ### Nguyên nhân gốc rễ
 
-Trên Ubuntu (và nhiều bản phân phối Linux), bản cài đặt Chromium mặc định là một **gói snap**. Cơ chế cô lập AppArmor của snap can thiệp vào cách OpenClaw khởi tạo và giám sát tiến trình trình duyệt.
+34. Trên Ubuntu (và nhiều distro Linux), cài đặt Chromium mặc định là **gói snap**. Snap's AppArmor confinement interferes with how OpenClaw spawns and monitors the browser process.
 
 Lệnh `apt install chromium` cài đặt một gói stub chuyển hướng sang snap:
 
@@ -119,18 +112,19 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Tham chiếu cấu hình
 
-| Tùy chọn                 | Mô tả                                                                           | Mặc định                                                           |
-| ------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `browser.enabled`        | Bật điều khiển trình duyệt                                                      | `true`                                                             |
+| Tùy chọn                 | Mô tả                                                                                              | Mặc định                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Bật điều khiển trình duyệt                                                                         | `true`                                                                                |
 | `browser.executablePath` | Đường dẫn tới binary trình duyệt dựa trên Chromium (Chrome/Brave/Edge/Chromium) | auto-detected (ưu tiên trình duyệt mặc định nếu dựa trên Chromium) |
-| `browser.headless`       | Chạy không có GUI                                                               | `false`                                                            |
-| `browser.noSandbox`      | Thêm cờ `--no-sandbox` (cần cho một số thiết lập Linux)                         | `false`                                                            |
-| `browser.attachOnly`     | Không khởi chạy trình duyệt, chỉ gắn vào phiên hiện có                          | `false`                                                            |
-| `browser.cdpPort`        | Cổng Chrome DevTools Protocol                                                   | `18800`                                                            |
+| `browser.headless`       | Chạy không có GUI                                                                                  | `false`                                                                               |
+| `browser.noSandbox`      | Thêm cờ `--no-sandbox` (cần cho một số thiết lập Linux)                         | `false`                                                                               |
+| `browser.attachOnly`     | Không khởi chạy trình duyệt, chỉ gắn vào phiên hiện có                                             | `false`                                                                               |
+| `browser.cdpPort`        | Cổng Chrome DevTools Protocol                                                                      | `18800`                                                                               |
 
 ### Vấn đề: "Chrome extension relay is running, but no tab is connected"
 
-Bạn đang dùng profile `chrome` (extension relay). Profile này yêu cầu tiện ích mở rộng trình duyệt OpenClaw phải được gắn vào một tab đang hoạt động.
+You’re using the `chrome` profile (extension relay). It expects the OpenClaw
+browser extension to be attached to a live tab.
 
 Các cách khắc phục:
 

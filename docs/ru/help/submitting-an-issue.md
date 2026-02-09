@@ -1,13 +1,6 @@
 ---
 summary: "Подача информативных обращений и отчётов об ошибках"
 title: "Подача обращения"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:37Z
 ---
 
 ## Подача обращения

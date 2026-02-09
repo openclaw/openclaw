@@ -4,13 +4,6 @@ read_when:
   - Je wilt dat OpenClaw DM's ontvangt via Nostr
   - Je bent bezig met het opzetten van gedecentraliseerde berichtgeving
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:10Z
 ---
 
 # Nostr
@@ -76,17 +69,17 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 4. Herstart de Gateway.
 
-## Configuratiereferentie
+## Configuratie referentie
 
-| Sleutel      | Type     | Standaard                                   | Beschrijving                            |
-| ------------ | -------- | ------------------------------------------- | --------------------------------------- |
-| `privateKey` | string   | vereist                                     | Privésleutel in `nsec`- of hex-indeling |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay-URL's (WebSocket)                 |
-| `dmPolicy`   | string   | `pairing`                                   | DM-toegangsbeleid                       |
-| `allowFrom`  | string[] | `[]`                                        | Toegestane afzender-pubkeys             |
-| `enabled`    | boolean  | `true`                                      | Kanaal in-/uitschakelen                 |
-| `name`       | string   | -                                           | Weergavenaam                            |
-| `profile`    | object   | -                                           | NIP-01-profielmetadata                  |
+| Sleutel      | Type                                                         | Standaard                                   | Beschrijving                               |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------ |
+| `privateKey` | string                                                       | vereist                                     | Privésleutel in `nsec`- of hex-indeling    |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay-URL's (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM-toegangsbeleid                          |
+| `allowFrom`  | string[] | `[]`                                        | Toegestane afzender-pubkeys                |
+| `enabled`    | boolean                                                      | `true`                                      | Kanaal in-/uitschakelen                    |
+| `name`       | string                                                       | -                                           | Weergavenaam                               |
+| `profile`    | object                                                       | -                                           | NIP-01-profielmetadata                     |
 
 ## Profielmetadata
 
@@ -119,7 +112,7 @@ Notities:
 - Profiel-URL's moeten `https://` gebruiken.
 - Importeren vanaf relays voegt velden samen en behoudt lokale overschrijvingen.
 
-## Toegangsbeheer
+## Toegangs beheer
 
 ### DM-beleid
 
@@ -142,7 +135,7 @@ Notities:
 }
 ```
 
-## Sleutelindelingen
+## Sleutel formaten
 
 Geaccepteerde indelingen:
 
@@ -173,12 +166,12 @@ Tips:
 
 ## Protocolondersteuning
 
-| NIP    | Status      | Beschrijving                           |
-| ------ | ----------- | -------------------------------------- |
-| NIP-01 | Ondersteund | Basis event-indeling + profielmetadata |
-| NIP-04 | Ondersteund | Versleutelde DM's (`kind:4`)           |
-| NIP-17 | Gepland     | Gift-wrapped DM's                      |
-| NIP-44 | Gepland     | Versiegebonden encryptie               |
+| NIP    | Status      | Beschrijving                                    |
+| ------ | ----------- | ----------------------------------------------- |
+| NIP-01 | Ondersteund | Basis event-indeling + profielmetadata          |
+| NIP-04 | Ondersteund | Versleutelde DM's (`kind:4`) |
+| NIP-17 | Gepland     | Gift-wrapped DM's                               |
+| NIP-44 | Gepland     | Versiegebonden encryptie                        |
 
 ## Testen
 

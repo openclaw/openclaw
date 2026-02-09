@@ -3,13 +3,6 @@ summary: "خطوات التوقيع لبُنى تصحيح الأخطاء على 
 read_when:
   - بناء أو توقيع بُنى تصحيح الأخطاء على mac
 title: "توقيع macOS"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:34Z
 ---
 
 # توقيع mac (بُنى تصحيح الأخطاء)
@@ -40,7 +33,7 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # dev-only Sparkle Tea
 
 عند التوقيع باستخدام `SIGN_IDENTITY="-"` (ad‑hoc)، يقوم السكربت تلقائيًا بتعطيل **Hardened Runtime** (`--options runtime`). هذا ضروري لمنع الأعطال عندما يحاول التطبيق تحميل أطر مضمّنة (مثل Sparkle) لا تشترك في نفس Team ID. كما أن التواقيع المخصّصة تكسر استمرارية أذونات TCC؛ راجع [أذونات macOS](/platforms/mac/permissions) لخطوات الاستعادة.
 
-## بيانات البناء الوصفية لقسم «حول»
+## إنشاء بيانات التعريف لـ حول
 
 يقوم `package-mac-app.sh` بختم الحزمة بما يلي:
 

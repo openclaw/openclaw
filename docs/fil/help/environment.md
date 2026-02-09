@@ -5,18 +5,11 @@ read_when:
   - Nagde-debug ka ng mga nawawalang API key sa Gateway
   - Dinodokumento mo ang provider auth o mga deployment environment
 title: "Mga Environment Variable"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:30Z
 ---
 
 # Mga environment variable
 
-Kinukuha ng OpenClaw ang mga environment variable mula sa maraming source. Ang patakaran ay **huwag kailanman i-override ang mga umiiral na value**.
+Kinukuha ng OpenClaw ang mga environment variable mula sa maraming pinagmulan. Ang patakaran ay **huwag kailanman i-override ang umiiral na mga value**.
 
 ## Precedence (pinakamataas → pinakamababa)
 

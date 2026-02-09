@@ -4,13 +4,6 @@ read_when:
   - 인프로세스 Gateway(게이트웨이) 플러그인을 설치하거나 관리하려는 경우
   - 플러그인 로드 실패를 디버그하려는 경우
 title: "plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:22Z
 ---
 
 # `openclaw plugins`

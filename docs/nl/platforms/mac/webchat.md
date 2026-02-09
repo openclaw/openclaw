@@ -3,13 +3,6 @@ summary: "Hoe de mac-app de Gateway WebChat insluit en hoe je deze kunt debuggen
 read_when:
   - Debuggen van de mac WebChat-weergave of local loopback-poort
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:34Z
 ---
 
 # WebChat (macOS-app)
@@ -25,6 +18,7 @@ geselecteerde agent (met een sessiewisselaar voor andere sessies).
 ## Starten & debuggen
 
 - Handmatig: Lobster‑menu → “Open Chat”.
+
 - Automatisch openen voor testen:
 
   ```bash

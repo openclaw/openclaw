@@ -5,13 +5,6 @@ read_when:
   - Potrzebujesz konfiguracji klucza API Brave Search
   - Chcesz używać Perplexity Sonar do wyszukiwania w sieci
 title: "Narzędzia webowe"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:54Z
 ---
 
 # Narzędzia webowe
@@ -36,10 +29,10 @@ To **nie** jest automatyzacja przeglądarki. Dla stron intensywnie wykorzystują
 
 ## Wybór dostawcy wyszukiwania
 
-| Dostawca             | Zalety                                                         | Wady                                        | Klucz API                                     |
-| -------------------- | -------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------- |
+| Dostawca                                | Zalety                                                         | Koty                                        | Klucz API                                     |
+| --------------------------------------- | -------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------- |
 | **Brave** (domyślny) | Szybkie, ustrukturyzowane wyniki, darmowy tier                 | Tradycyjne wyniki wyszukiwania              | `BRAVE_API_KEY`                               |
-| **Perplexity**       | Odpowiedzi syntetyzowane przez AI, cytowania, czas rzeczywisty | Wymaga dostępu do Perplexity lub OpenRouter | `OPENROUTER_API_KEY` lub `PERPLEXITY_API_KEY` |
+| **Perplexity**                          | Odpowiedzi syntetyzowane przez AI, cytowania, czas rzeczywisty | Wymaga dostępu do Perplexity lub OpenRouter | `OPENROUTER_API_KEY` lub `PERPLEXITY_API_KEY` |
 
 Zobacz [konfigurację Brave Search](/brave-search) oraz [Perplexity Sonar](/perplexity) po szczegóły specyficzne dla dostawców.
 
@@ -90,9 +83,7 @@ aktualne limity i ceny.
 **Zalecane:** uruchom `openclaw configure --section web`. Zapisuje on klucz w
 `~/.openclaw/openclaw.json` pod `tools.web.search.apiKey`.
 
-**Alternatywa środowiskowa:** ustaw `BRAVE_API_KEY` w środowisku procesu Gateway.
-Dla instalacji gateway umieść go w `~/.openclaw/.env` (lub w środowisku usługi).
-Zobacz [zmienne środowiskowe](/help/faq#how-does-openclaw-load-environment-variables).
+**Alternatywa środowiskowa:** ustaw `BRAVE_API_KEY` w środowisku procesu Gateway. Dla instalacji gateway umieść go w `~/.openclaw/.env` (lub w środowisku usługi). Zobacz [zmienne środowiskowe](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Używanie Perplexity (bezpośrednio lub przez OpenRouter)
 
@@ -129,8 +120,7 @@ odpowiedzi syntetyzowane przez AI z cytowaniami. Możesz używać ich przez Open
 }
 ```
 
-**Alternatywa środowiskowa:** ustaw `OPENROUTER_API_KEY` lub `PERPLEXITY_API_KEY` w środowisku Gateway.
-Dla instalacji gateway umieść go w `~/.openclaw/.env`.
+**Alternatywa środowiskowa:** ustaw `OPENROUTER_API_KEY` lub `PERPLEXITY_API_KEY` w środowisku Gateway. Dla instalacji gateway umieść go w `~/.openclaw/.env`.
 
 Jeśli nie ustawiono bazowego URL, OpenClaw wybiera domyślny na podstawie źródła klucza API:
 
@@ -140,11 +130,11 @@ Jeśli nie ustawiono bazowego URL, OpenClaw wybiera domyślny na podstawie źró
 
 ### Dostępne modele Perplexity
 
-| Model                             | Opis                                             | Najlepsze do       |
-| --------------------------------- | ------------------------------------------------ | ------------------ |
-| `perplexity/sonar`                | Szybkie Q&A z wyszukiwaniem w sieci              | Szybkich sprawdzeń |
-| `perplexity/sonar-pro` (domyślny) | Wieloetapowe rozumowanie z wyszukiwaniem w sieci | Złożonych pytań    |
-| `perplexity/sonar-reasoning-pro`  | Analiza typu chain-of-thought                    | Dogłębnych badań   |
+| Model                                                | Opis                                                    | Najlepsze do       |
+| ---------------------------------------------------- | ------------------------------------------------------- | ------------------ |
+| `perplexity/sonar`                                   | Szybkie Q&A z wyszukiwaniem w sieci | Szybkich sprawdzeń |
+| `perplexity/sonar-pro` (domyślny) | Wieloetapowe rozumowanie z wyszukiwaniem w sieci        | Złożonych pytań    |
+| `perplexity/sonar-reasoning-pro`                     | Analiza typu chain-of-thought                           | Dogłębnych badań   |
 
 ## web_search
 

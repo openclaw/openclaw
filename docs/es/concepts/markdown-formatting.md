@@ -5,20 +5,12 @@ read_when:
   - Está agregando un nuevo formateador de canal o mapeo de estilos
   - Está depurando regresiones de formato entre canales
 title: "Formato Markdown"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:11Z
 ---
 
 # Formato Markdown
 
 OpenClaw formatea el Markdown saliente convirtiéndolo en una representación
-intermedia (IR) compartida antes de renderizar la salida específica del canal.
-La IR mantiene intacto el texto de origen mientras transporta tramos de estilo/enlaces,
+intermedia (IR) compartida antes de renderizar la salida específica del canal. La IR mantiene intacto el texto de origen mientras transporta tramos de estilo/enlaces,
 de modo que el troceado y el renderizado se mantengan consistentes entre canales.
 
 ## Objetivos
@@ -90,7 +82,7 @@ channels:
           tables: off
 ```
 
-## Reglas de troceado
+## Reglas de Chunking
 
 - Los límites de fragmentos provienen de los adaptadores/configuración del canal y se aplican al texto de la IR.
 - Los cercos de código se preservan como un solo bloque con una nueva línea final para que los canales

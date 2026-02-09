@@ -4,13 +4,6 @@ read_when:
   - Ondersteuning voor locatienodes of permissie-UI toevoegen
   - Achtergrondlocatie- en pushstromen ontwerpen
 title: "Locatie-opdracht"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:34Z
 ---
 
 # Locatie-opdracht (nodes)

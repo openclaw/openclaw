@@ -4,20 +4,12 @@ read_when:
   - Bạn muốn sử dụng các mô hình Amazon Bedrock với OpenClaw
   - Bạn cần thiết lập thông tin xác thực/khu vực AWS cho các lệnh gọi mô hình
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:52Z
 ---
 
 # Amazon Bedrock
 
-OpenClaw có thể sử dụng các mô hình **Amazon Bedrock** thông qua nhà cung cấp
-streaming **Bedrock Converse** của pi‑ai. Xác thực Bedrock sử dụng **chuỗi thông
-tin xác thực mặc định của AWS SDK**, không dùng khóa API.
+OpenClaw có thể sử dụng các mô hình **Amazon Bedrock** thông qua nhà cung cấp streaming **Bedrock Converse** của pi‑ai. Xác thực Bedrock sử dụng **chuỗi thông tin xác thực mặc định của AWS SDK**,
+không phải khóa API.
 
 ## Những gì pi‑ai hỗ trợ
 
@@ -28,9 +20,8 @@ tin xác thực mặc định của AWS SDK**, không dùng khóa API.
 
 ## Tự động khám phá mô hình
 
-Nếu phát hiện thông tin xác thực AWS, OpenClaw có thể tự động khám phá các mô hình
-Bedrock hỗ trợ **streaming** và **đầu ra văn bản**. Việc khám phá sử dụng
-`bedrock:ListFoundationModels` và được lưu vào bộ nhớ đệm (mặc định: 1 giờ).
+Nếu phát hiện thông tin xác thực AWS, OpenClaw có thể tự động khám phá các mô hình Bedrock hỗ trợ **streaming** và **xuất văn bản**. Việc khám phá sử dụng
+`bedrock:ListFoundationModels` và được lưu bộ đệm (mặc định: 1 giờ).
 
 Các tùy chọn cấu hình nằm dưới `models.bedrockDiscovery`:
 
@@ -107,13 +98,12 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## Vai trò EC2 Instance
 
-Khi chạy OpenClaw trên một EC2 instance có gắn vai trò IAM, AWS SDK sẽ tự động sử
-dụng dịch vụ metadata của instance (IMDS) để xác thực. Tuy nhiên, việc phát hiện
-thông tin xác thực của OpenClaw hiện chỉ kiểm tra biến môi trường, không kiểm tra
-thông tin xác thực từ IMDS.
+When running OpenClaw on an EC2 instance with an IAM role attached, the AWS SDK
+will automatically use the instance metadata service (IMDS) for authentication.
+Tuy nhiên, việc phát hiện thông tin xác thực của OpenClaw hiện chỉ kiểm tra các biến môi trường,
+không kiểm tra thông tin xác thực IMDS.
 
-**Cách khắc phục:** Đặt `AWS_PROFILE=default` để báo hiệu rằng thông tin xác thực AWS có
-sẵn. Việc xác thực thực tế vẫn sử dụng vai trò instance thông qua IMDS.
+**Cách khắc phục:** Đặt `AWS_PROFILE=default` để báo hiệu rằng thông tin xác thực AWS khả dụng. Xác thực thực tế vẫn sử dụng vai trò instance thông qua IMDS.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

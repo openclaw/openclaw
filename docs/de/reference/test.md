@@ -1,15 +1,8 @@
 ---
-summary: „Wie Sie Tests lokal ausführen (Vitest) und wann Sie die Modi force/coverage verwenden“
+summary: "„Wie Sie Tests lokal ausführen (Vitest) und wann Sie die Modi force/coverage verwenden“"
 read_when:
   - Beim Ausführen oder Beheben von Tests
-title: „Tests“
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:21Z
+title: "Tests"
 ---
 
 # Tests
@@ -17,8 +10,11 @@ x-i18n:
 - Vollständiges Test-Kit (Suites, Live, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: Beendet alle verbliebenen Gateway-Prozesse, die den Standard-Steuerport belegen, und führt anschließend die vollständige Vitest-Suite mit einem isolierten Gateway-Port aus, sodass Servertests nicht mit einer laufenden Instanz kollidieren. Verwenden Sie dies, wenn ein vorheriger Gateway-Lauf den Port 18789 belegt hat.
+
 - `pnpm test:coverage`: Führt Vitest mit V8-Coverage aus. Globale Schwellenwerte sind 70 % für Zeilen/Branches/Funktionen/Statements. Die Coverage schließt integrationslastige Entry-Points (CLI-Verdrahtung, Gateway/Telegram-Bridges, Webchat-Static-Server) aus, um den Fokus auf unit-testbare Logik zu legen.
+
 - `pnpm test:e2e`: Führt Gateway-End-to-End-Smoke-Tests aus (Multi-Instance WS/HTTP/Node-Pairing).
+
 - `pnpm test:live`: Führt Provider-Live-Tests (minimax/zai) aus. Erfordert API-Schlüssel und `LIVE=1` (oder anbieter­spezifisch `*_LIVE_TEST=1`), um das Überspringen aufzuheben.
 
 ## Modell-Latenz-Benchmark (lokale Schlüssel)

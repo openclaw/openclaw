@@ -4,20 +4,13 @@ read_when:
   - Vous gerez des nœuds appaires (cameras, ecran, canevas)
   - Vous devez approuver des requetes ou invoquer des commandes de nœud
 title: "nœuds"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:59Z
 ---
 
 # `openclaw nodes`
 
-Gerez les nœuds appaires (appareils) et invoquez les capacites des nœuds.
+Gérer les nœuds appariés (périphériques) et appeler les capacités des nœuds.
 
-Connexe :
+Liens connexes :
 
 - Vue d’ensemble des nœuds : [Nodes](/nodes)
 - Camera : [Camera nodes](/nodes/camera)
@@ -53,13 +46,13 @@ openclaw nodes run --raw "git status"
 openclaw nodes run --agent main --node <id|name|ip> --raw "git status"
 ```
 
-Options d’invocation :
+Invoquer les drapeaux :
 
 - `--params <json>` : chaine d’objet JSON (par defaut `{}`).
 - `--invoke-timeout <ms>` : delai d’expiration d’invocation du nœud (par defaut `15000`).
 - `--idempotency-key <key>` : cle d’idempotence optionnelle.
 
-### Valeurs par defaut de type exec
+### Par défaut de style Exécutif
 
 `nodes run` reflète le comportement exec du modele (valeurs par defaut + approbations) :
 
@@ -68,7 +61,7 @@ Options d’invocation :
 - `--node` peut etre omis lorsque `tools.exec.node` est defini.
 - Necessite un nœud qui annonce `system.run` (application compagnon macOS ou hote de nœud headless).
 
-Options :
+Drapeaux :
 
 - `--cwd <path>` : repertoire de travail.
 - `--env <key=val>` : remplacement d’env (repetable).

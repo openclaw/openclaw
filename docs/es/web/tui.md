@@ -4,13 +4,6 @@ read_when:
   - Quiere una guía paso a paso para principiantes del TUI
   - Necesita la lista completa de funciones, comandos y atajos del TUI
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:06Z
 ---
 
 # TUI (Interfaz de Usuario de Terminal)

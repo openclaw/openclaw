@@ -1,20 +1,13 @@
 ---
-title: Refaktorierung der ausgehenden Sitzungs-Spiegelung (Issue #1520)
+title: refactor/outbound-session-mirroring.md #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:17Z
 ---
 
 # Refaktorierung der ausgehenden Sitzungs-Spiegelung (Issue #1520)
 
 ## Status
 
-- In Arbeit.
+- In Bearbeitung.
 - Core- und Plugin-Kanal-Routing für ausgehende Spiegelung aktualisiert.
 - Gateway-Senden leitet nun die Ziel-Sitzung ab, wenn `sessionKey` ausgelassen wird.
 
@@ -50,7 +43,7 @@ Ausgehende Sendungen wurden in die _aktuelle_ Agenten-Sitzung (Werkzeug-Sitzungs
 
 - Matrix, MS Teams, Mattermost, BlueBubbles, Nextcloud Talk, Zalo, Zalo Personal, Nostr, Tlon.
 - Hinweise:
-  - Mattermost-Ziele entfernen nun `@` für DM-Sitzungsschlüssel-Routing.
+  - Mattermost Targets entfernen nun `@` für DM Session-Schlüsselrouting.
   - Zalo Personal verwendet den DM-Peer-Typ für 1:1-Ziele (Gruppe nur, wenn `group:` vorhanden ist).
   - BlueBubbles-Gruppenziele entfernen `chat_*`-Präfixe, um eingehenden Sitzungsschlüsseln zu entsprechen.
   - Slack Auto-Thread-Spiegelung gleicht Kanal-IDs ohne Beachtung der Groß-/Kleinschreibung ab.

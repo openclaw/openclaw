@@ -3,30 +3,23 @@ summary: "Regler, nycklar och persistens för sessionshantering i chattar"
 read_when:
   - Modifierar sessionshantering eller lagring
 title: "Sessionshantering"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:17Z
 ---
 
 # Sessionshantering
 
-OpenClaw behandlar **en direktchatt-session per agent** som primär. Direktchattar kollapsar till `agent:<agentId>:<mainKey>` (standard `main`), medan grupp-/kanalchattar får egna nycklar. `session.mainKey` respekteras.
+OpenClaw behandlar **en direktchatt per agent** som primär. Direktchattar kollapsar till `agent:<agentId>:<mainKey>` (standard `main`), medan grupp/kanalchattar får sina egna nycklar. `session.mainKey` är hedrad.
 
 Använd `session.dmScope` för att styra hur **direktmeddelanden** grupperas:
 
 - `main` (standard): alla DM delar huvudsessionskontinuitet.
 - `per-peer`: isolera per avsändar-id över kanaler.
 - `per-channel-peer`: isolera per kanal + avsändare (rekommenderas för inkorgar med flera användare).
-- `per-account-channel-peer`: isolera per konto + kanal + avsändare (rekommenderas för inkorgar med flera konton).
-  Använd `session.identityLinks` för att mappa leverantörsprefixade peer-id:n till en kanonisk identitet så att samma person delar en DM-session över kanaler när `per-peer`, `per-channel-peer` eller `per-account-channel-peer` används.
+- `per-account-channel-peer`: isolera från konto + kanal + avsändare (rekommenderas för multi-account inkorgar).
+  Använd `session. dentityLinks` för att kartlägga leverantörs-prefixed kamrat-ids till en kanonisk identitet så att samma person delar en DM-session över kanaler när man använder `per-peer`, `per-channel-peer`, eller `per-account-channel-peer`.
 
 ## Säker DM-läge (rekommenderas för uppsättningar med flera användare)
 
-> **Säkerhetsvarning:** Om din agent kan ta emot DM från **flera personer** bör du starkt överväga att aktivera säkert DM-läge. Utan detta delar alla användare samma konversationskontext, vilket kan läcka privat information mellan användare.
+> **Säkerhetsvarning:** Om din agent kan ta emot DMs från **flera personer**, bör du starkt överväga att aktivera säkert DM-läge. Utan det delar alla användare samma kontext som kan läcka privat information mellan användare.
 
 **Exempel på problemet med standardinställningar:**
 
@@ -55,37 +48,37 @@ Använd `session.dmScope` för att styra hur **direktmeddelanden** grupperas:
 
 Noteringar:
 
-- Standard är `dmScope: "main"` för kontinuitet (alla DM delar huvudsessionsnyckeln). Detta är bra för uppsättningar med en användare.
+- Standard är `dmScope: "main"` för kontinuitet (alla DMs delar huvudsessionen). Detta är bra för enanvändares inställningar.
 - För inkorgar med flera konton på samma kanal, föredra `per-account-channel-peer`.
 - Om samma person kontaktar dig via flera kanaler, använd `session.identityLinks` för att slå samman deras DM-sessioner till en kanonisk identitet.
 - Du kan verifiera dina DM-inställningar med `openclaw security audit` (se [security](/cli/security)).
 
 ## Gateway är sanningskällan
 
-All sessionsstatus **ägs av gatewayn** (den ”master”-OpenClaw). UI-klienter (macOS-app, WebChat, etc.) måste fråga gatewayn efter sessionslistor och tokenantal i stället för att läsa lokala filer.
+Alla sessionsstater är **ägda av gateway** (“master” OpenClaw). UI-klienter (macOS app, WebChat, etc.) måste fråga gateway för sessionslistor och token räknas istället för att läsa lokala filer.
 
 - I **fjärrläge** finns den sessionslagring du bryr dig om på den fjärranslutna gateway-värden, inte på din Mac.
-- Tokenantal som visas i UI:n kommer från gatewayns lagringsfält (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Klienter tolkar inte JSONL-transkript för att ”justera” totaler.
+- Tokenantal som visas i UIs kommer från gatewayens butiksfält (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Klienter tolkar inte JSONL avskrifter för att “fixa upp” summor.
 
 ## Var tillstånd lagras
 
 - På **gateway-värden**:
   - Lagringsfil: `~/.openclaw/agents/<agentId>/sessions/sessions.json` (per agent).
 - Transkript: `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl` (Telegram-ämnessessioner använder `.../<SessionId>-topic-<threadId>.jsonl`).
-- Lagringen är en mappning `sessionKey -> { sessionId, updatedAt, ... }`. Att ta bort poster är säkert; de återskapas vid behov.
+- Butiken är en karta `sessionKey -> { sessionId, updatedAt, ... }`. Att ta bort poster är säkert; de återskapas på begäran.
 - Grupposter kan innehålla `displayName`, `channel`, `subject`, `room` och `space` för att märka sessioner i UI:n.
 - Sessionsposter innehåller `origin`-metadata (etikett + routningstips) så att UI:n kan förklara var en session kommer ifrån.
 - OpenClaw läser **inte** äldre Pi/Tau-sessionsmappar.
 
 ## Sessionsrensning
 
-OpenClaw trimmar som standard **gamla verktygsresultat** från kontexten i minnet precis före LLM-anrop.
+OpenClaw trims **gamla verktygsresultat** från kontexten i minnet precis innan LLM-samtal som standard.
 Detta skriver **inte** om JSONL-historik. Se [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Förkompaktering: minnesrensning
 
-När en session närmar sig automatisk kompaktering kan OpenClaw köra en **tyst minnesrensning**
-som påminner modellen att skriva beständiga anteckningar till disk. Detta körs endast när
+När en session närmar sig automatisk komprimering kan OpenClaw köra en **tyst minnesfärg**
+sväng som påminner modellen om att skriva hållbara anteckningar till disken. Detta körs bara när
 arbetsytan är skrivbar. Se [Memory](/concepts/memory) och
 [Compaction](/concepts/compaction).
 
@@ -110,12 +103,12 @@ arbetsytan är skrivbar. Se [Memory](/concepts/memory) och
 ## Livscykel
 
 - Återställningspolicy: sessioner återanvänds tills de löper ut, och utgång utvärderas vid nästa inkommande meddelande.
-- Daglig återställning: standard är **04:00 lokal tid på gateway-värden**. En session är inaktuell när dess senaste uppdatering är tidigare än den senaste dagliga återställningstiden.
-- Inaktivitetsåterställning (valfritt): `idleMinutes` lägger till ett glidande inaktivitetsfönster. När både daglig och inaktivitetsåterställning är konfigurerade tvingar **den som löper ut först** fram en ny session.
+- Daglig återställning: Standard är **4:00 AM lokal tid på gateway-värden**. En session är föråldrad när dess senaste uppdatering är tidigare än den senaste dagliga återställningstiden.
+- Idle reset (valfritt): `idleMinutes` lägger till ett glidande inaktiv fönster. När både dagliga och inaktiva återställningar är konfigurerade, tvingar **oavsett vilken som går ut först** en ny session.
 - Äldre endast-inaktivitet: om du sätter `session.idleMinutes` utan någon `session.reset`/`resetByType`-konfiguration förblir OpenClaw i endast-inaktivitetsläge för bakåtkompatibilitet.
 - Överstyrning per typ (valfritt): `resetByType` låter dig åsidosätta policyn för `dm`, `group` och `thread`-sessioner (tråd = Slack/Discord-trådar, Telegram-ämnen, Matrix-trådar när de tillhandahålls av kontakten).
 - Överstyrning per kanal (valfritt): `resetByChannel` åsidosätter återställningspolicyn för en kanal (gäller alla sessionstyper för den kanalen och har företräde framför `reset`/`resetByType`).
-- Återställningstriggers: exakt `/new` eller `/reset` (plus eventuella extra i `resetTriggers`) startar ett nytt sessions-id och skickar resten av meddelandet vidare. `/new <model>` accepterar ett modellalias, `provider/model` eller leverantörsnamn (fuzzy match) för att sätta den nya sessionsmodellen. Om `/new` eller `/reset` skickas ensamt kör OpenClaw en kort ”hej”-hälsning för att bekräfta återställningen.
+- Återställ utlösare: exakt `/new` eller `/reset` (plus eventuella extramaterial i `resetTriggers`) starta ett nytt sessions-id och skicka resten av meddelandet genom. `/new <model>` accepterar ett modellalias, `provider/model`, eller leverantörsnamn (luddig match) för att ställa in den nya sessionsmodellen. Om `/new` eller `/reset` skickas ensam, kör OpenClaw en kort “hej” hälsning sväng för att bekräfta återställningen.
 - Manuell återställning: ta bort specifika nycklar från lagringen eller ta bort JSONL-transkriptet; nästa meddelande återskapar dem.
 - Isolerade cron-jobb skapar alltid en ny `sessionId` per körning (ingen inaktivitetsåteranvändning).
 
@@ -185,7 +178,7 @@ Körtidsöverstyrning (endast ägare):
 - Skicka `/status` som ett fristående meddelande i chatten för att se om agenten är nåbar, hur mycket av sessionskontexten som används, aktuella thinking/verbose-växlar och när dina WhatsApp-webbuppgifter senast uppdaterades (hjälper att upptäcka behov av omkoppling).
 - Skicka `/context list` eller `/context detail` för att se vad som finns i systemprompten och injicerade arbetsytefiler (och de största kontextbidragen).
 - Skicka `/stop` som ett fristående meddelande för att avbryta den pågående körningen, rensa köade uppföljningar för den sessionen och stoppa eventuella subagent-körningar som startats från den (svaret inkluderar antalet stoppade).
-- Skicka `/compact` (valfria instruktioner) som ett fristående meddelande för att sammanfatta äldre kontext och frigöra fönsterutrymme. Se [/concepts/compaction](/concepts/compaction).
+- Skicka `/compact` (valfria instruktioner) som ett fristående meddelande för att sammanfatta äldre sammanhang och frigöra fönsterutrymme. Se [/concepts/compaction](/concepts/compaction).
 - JSONL-transkript kan öppnas direkt för att granska fullständiga turer.
 
 ## Tips
@@ -201,11 +194,11 @@ Varje sessionspost registrerar var den kom ifrån (bästa möjliga) i `origin`:
 - `provider`: normaliserat kanal-id (inklusive tillägg)
 - `from`/`to`: råa routnings-id:n från det inkommande kuvertet
 - `accountId`: leverantörskonto-id (vid flera konton)
-- `threadId`: tråd-/ämnes-id när kanalen stöder det
-  Ursprungsfälten fylls i för direktmeddelanden, kanaler och grupper. Om en
-  kontakt endast uppdaterar leveransroutning (till exempel för att hålla en DM-huvudsession
-  färsk) bör den ändå tillhandahålla inkommande kontext så att sessionen behåller
-  sin förklarande metadata. Tillägg kan göra detta genom att skicka `ConversationLabel`,
-  `GroupSubject`, `GroupChannel`, `GroupSpace` och `SenderName` i den inkommande
-  kontexten och anropa `recordSessionMetaFromInbound` (eller skicka samma kontext
+- `threadId`: tråd/tråd-id när kanalen stöder den
+  Ursprungsfälten är befolkade för direkta meddelanden, kanaler och grupper. Om en
+  connector endast uppdaterar leveransvägen (till exempel för att hålla en DM huvudsession
+  färsk), det bör fortfarande ge inkommande sammanhang så sessionen håller sin
+  förklarare metadata. Tillägg kan göra detta genom att skicka `ConversationLabel`,
+  `GroupSubject`, `GroupChannel`, `GroupSpace`, och `SenderName` i det inkommande
+  sammanhanget och ringer `recordSessionMetaFromInbound` (eller skickar samma kontext
   till `updateLastRoute`).

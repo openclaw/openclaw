@@ -4,18 +4,11 @@ read_when:
   - Pagse-setup ng Mattermost
   - Pag-debug ng Mattermost routing
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:17Z
 ---
 
 # Mattermost (plugin)
 
-Status: suportado sa pamamagitan ng plugin (bot token + WebSocket events). Sinusuportahan ang mga channel, grupo, at DM.
+Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
 Ang Mattermost ay isang self-hostable na team messaging platform; tingnan ang opisyal na site sa
 [mattermost.com](https://mattermost.com) para sa mga detalye ng produkto at mga download.
 
@@ -69,11 +62,11 @@ Itakda ang mga ito sa host ng Gateway kung mas gusto mong gumamit ng env vars:
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-Nalalapat lamang ang env vars sa **default** na account (`default`). Ang ibang account ay dapat gumamit ng mga value sa config.
+Env vars apply only to the **default** account (`default`). Ang ibang account ay dapat gumamit ng mga config value.
 
 ## Mga chat mode
 
-Awtomatikong tumutugon ang Mattermost sa mga DM. Ang asal sa channel ay kinokontrol ng `chatmode`:
+Awtomatikong tumutugon ang Mattermost sa mga DM. Ang asal ng channel ay kinokontrol ng `chatmode`:
 
 - `oncall` (default): tumugon lamang kapag may @mention sa mga channel.
 - `onmessage`: tumugon sa bawat mensahe sa channel.

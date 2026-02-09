@@ -5,21 +5,12 @@ read_when:
   - Gỡ lỗi dịch vụ launchd Gateway trên macOS
   - Cài đặt CLI gateway cho macOS
 title: "Gateway trên macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:38Z
 ---
 
 # Gateway trên macOS (launchd bên ngoài)
 
-OpenClaw.app không còn đóng gói Node/Bun hoặc runtime Gateway. Ứng dụng macOS
-mong đợi một cài đặt CLI `openclaw` **bên ngoài**, không khởi chạy Gateway như
-một tiến trình con, và quản lý một dịch vụ launchd theo từng người dùng để giữ
-Gateway chạy (hoặc gắn vào một Gateway cục bộ hiện có nếu đã chạy sẵn).
+OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. Ứng dụng macOS
+mong đợi một bản cài đặt CLI `openclaw` **bên ngoài**, không khởi chạy Gateway như một tiến trình con, và quản lý một dịch vụ launchd theo từng người dùng để giữ Gateway chạy (hoặc gắn vào một Gateway cục bộ hiện có nếu đã có một Gateway đang chạy).
 
 ## Cài đặt CLI (bắt buộc cho chế độ local)
 
@@ -35,12 +26,12 @@ Nút **Install CLI** của ứng dụng macOS chạy cùng quy trình qua npm/pn
 
 Nhãn (Label):
 
-- `bot.molt.gateway` (hoặc `bot.molt.<profile>`; `com.openclaw.*` cũ có thể vẫn còn)
+- `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.openclaw.*` may remain)
 
 Vị trí plist (theo người dùng):
 
 - `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (hoặc `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
+  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
 
 Trình quản lý:
 
@@ -60,8 +51,9 @@ Ghi log:
 
 ## Tương thích phiên bản
 
-Ứng dụng macOS kiểm tra phiên bản gateway so với phiên bản của chính nó. Nếu
-không tương thích, hãy cập nhật CLI toàn cục để khớp với phiên bản ứng dụng.
+Qianfan là nền tảng MaaS của Baidu, cung cấp một **API thống nhất** định tuyến yêu cầu tới nhiều mô hình phía sau một
+endpoint và API key duy nhất. If they’re
+incompatible, update the global CLI to match the app version.
 
 ## Kiểm tra nhanh
 

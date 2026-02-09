@@ -1,16 +1,9 @@
 ---
-summary: 「用於工作流程的僅 JSON LLM 任務（可選外掛工具）」
+summary: "用於工作流程的僅 JSON LLM 任務（可選外掛工具）"
 read_when:
   - 你想在工作流程中加入僅 JSON 的 LLM 步驟
   - 你需要可進行結構描述驗證的 LLM 輸出以利自動化
-title: 「LLM 任務」
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:29Z
+title: "LLM 任務"
 ---
 
 # LLM 任務
@@ -19,9 +12,9 @@ x-i18n:
 
 這非常適合像 Lobster 這類的工作流程引擎：你可以加入單一的 LLM 步驟，而不必為每個工作流程撰寫自訂的 OpenClaw 程式碼。
 
-## 啟用外掛
+## Enable the plugin
 
-1. 啟用外掛：
+1. Enable the plugin:
 
 ```json
 {
@@ -70,7 +63,8 @@ x-i18n:
 }
 ```
 
-`allowedModels` 是一個 `provider/model` 字串的允許清單。若有設定，任何不在清單內的請求都會被拒絕。
+`allowedModels` is an allowlist of `provider/model` strings. If set, any request
+outside the list is rejected.
 
 ## 工具參數
 
@@ -84,7 +78,7 @@ x-i18n:
 - `maxTokens`（number，選填）
 - `timeoutMs`（number，選填）
 
-## 輸出
+## Output
 
 回傳 `details.json`，其中包含已解析的 JSON（若提供 `schema`，則會進行驗證）。
 
@@ -114,4 +108,4 @@ openclaw.invoke --tool llm-task --action json --args-json '{
 - 此工具為 **僅 JSON**，並指示模型只輸出 JSON（不含程式碼圍欄、不含說明文字）。
 - 本次執行不會向模型暴露任何工具。
 - 除非你使用 `schema` 進行驗證，否則請將輸出視為不可信。
-- 在任何具有副作用的步驟（傳送、張貼、執行）之前加入核准流程。
+- Put approvals before any side-effecting step (send, post, exec).

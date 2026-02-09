@@ -5,13 +5,6 @@ read_when:
   - آپ لاگ لیولز یا فارمیٹس کنفیگر کرنا چاہتے ہوں
   - آپ خرابیوں کا ازالہ کر رہے ہوں اور لاگز تیزی سے تلاش کرنا چاہتے ہوں
 title: "لاگنگ"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:48Z
 ---
 
 # لاگنگ
@@ -75,8 +68,8 @@ openclaw doctor
 
 ### کنٹرول UI (ویب)
 
-کنٹرول UI کا **Logs** ٹیب `logs.tail` استعمال کرتے ہوئے اسی فائل کو ٹیل کرتا ہے۔
-اسے کھولنے کے طریقے کے لیے [/web/control-ui](/web/control-ui) دیکھیں۔
+Control UI کا **Logs** ٹیب `logs.tail` استعمال کرتے ہوئے اسی فائل کو ٹیل کرتا ہے۔
+اسے کھولنے کا طریقہ دیکھنے کے لیے [/web/control-ui](/web/control-ui) دیکھیں۔
 
 ### چینل-صرف لاگز
 
@@ -90,8 +83,8 @@ openclaw channels logs --channel whatsapp
 
 ### فائل لاگز (JSONL)
 
-لاگ فائل کی ہر لائن ایک JSON آبجیکٹ ہوتی ہے۔ CLI اور کنٹرول UI ان
-اندراجات کو پارس کر کے ساختہ آؤٹ پٹ (وقت، لیول، سب سسٹم، پیغام) دکھاتے ہیں۔
+لاگ فائل کی ہر لائن ایک JSON آبجیکٹ ہوتی ہے۔ The CLI and Control UI parse these
+entries to render structured output (time, level, subsystem, message).
 
 ### کنسول آؤٹ پٹ
 
@@ -146,9 +139,9 @@ openclaw channels logs --channel whatsapp
 
 ## تشخیصی معلومات + OpenTelemetry
 
-تشخیصی معلومات ساختہ، مشین-قابلِ مطالعہ ایونٹس ہیں جو ماڈل رنز **اور**
-پیغام-فلو ٹیلیمیٹری (ویب ہُکس، کیوئنگ، سیشن اسٹیٹ) کے لیے ہوتے ہیں۔ یہ لاگز
-کی جگہ نہیں لیتے؛ یہ میٹرکس، ٹریسز، اور دیگر ایکسپورٹرز کو فیڈ کرنے کے لیے ہوتے ہیں۔
+Diagnostics are structured, machine-readable events for model runs **and**
+message-flow telemetry (webhooks, queueing, session state). They do **not**
+replace logs; they exist to feed metrics, traces, and other exporters.
 
 تشخیصی ایونٹس اِن-پروسیس خارج ہوتے ہیں، لیکن ایکسپورٹرز صرف تب منسلک ہوتے ہیں
 جب diagnostics اور ایکسپورٹر پلگ اِن فعال ہوں۔
@@ -163,8 +156,8 @@ openclaw channels logs --channel whatsapp
 
 - **میٹرکس**: کاؤنٹرز + ہسٹوگرامز (ٹوکن استعمال، پیغام فلو، کیوئنگ)۔
 - **ٹریسز**: ماڈل استعمال + ویب ہُک/پیغام پروسیسنگ کے لیے اسپینز۔
-- **لاگز**: OTLP کے ذریعے برآمد ہوتے ہیں جب `diagnostics.otel.logs` فعال ہو۔ لاگ
-  والیوم زیادہ ہو سکتا ہے؛ `logging.level` اور ایکسپورٹر فلٹرز کو مدِنظر رکھیں۔
+- **Logs**: exported over OTLP when `diagnostics.otel.logs` is enabled. Log
+  volume can be high; keep `logging.level` and exporter filters in mind.
 
 ### تشخیصی ایونٹ کیٹلاگ
 
@@ -203,8 +196,8 @@ openclaw channels logs --channel whatsapp
 
 ### تشخیصی فلیگز (ہدفی لاگز)
 
-`logging.level` بڑھائے بغیر اضافی، ہدفی ڈیبگ لاگز آن کرنے کے لیے فلیگز استعمال کریں۔
-فلیگز کیس اِن سینسِٹو ہوتے ہیں اور وائلڈ کارڈز کی حمایت کرتے ہیں (مثلاً `telegram.*` یا `*`)۔
+Use flags to turn on extra, targeted debug logs without raising `logging.level`.
+Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
 
 ```json
 {
@@ -228,8 +221,8 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 ### OpenTelemetry میں ایکسپورٹ کریں
 
-تشخیصی معلومات `diagnostics-otel` پلگ اِن (OTLP/HTTP) کے ذریعے برآمد کی جا سکتی ہیں۔ یہ
-کسی بھی OpenTelemetry کلیکٹر/بیک اینڈ کے ساتھ کام کرتا ہے جو OTLP/HTTP قبول کرتا ہو۔
+Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This
+works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 
 ```json
 {
@@ -261,11 +254,11 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 نوٹس:
 
 - آپ پلگ اِن کو `openclaw plugins enable diagnostics-otel` کے ساتھ بھی فعال کر سکتے ہیں۔
-- `protocol` فی الحال صرف `http/protobuf` کی حمایت کرتا ہے۔ `grpc` نظر انداز کر دیا جاتا ہے۔
+- `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
 - میٹرکس میں ٹوکن استعمال، لاگت، سیاق سائز، رن دورانیہ، اور پیغام-فلو
   کاؤنٹرز/ہسٹوگرامز (ویب ہُکس، کیوئنگ، سیشن اسٹیٹ، کیو کی گہرائی/انتظار) شامل ہیں۔
-- ٹریسز/میٹرکس کو `traces` / `metrics` کے ذریعے ٹوگل کیا جا سکتا ہے (بطورِ طے شدہ: آن)۔ ٹریسز
-  میں ماڈل استعمال اسپینز کے ساتھ ویب ہُک/پیغام پروسیسنگ اسپینز شامل ہوتے ہیں جب فعال ہوں۔
+- Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
+  include model usage spans plus webhook/message processing spans when enabled.
 - جب آپ کے کلیکٹر کو تصدیق درکار ہو تو `headers` سیٹ کریں۔
 - معاون ماحولیاتی متغیرات: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`۔
@@ -345,8 +338,8 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 ### لاگ ایکسپورٹ رویہ
 
 - OTLP لاگز وہی ساختہ ریکارڈز استعمال کرتے ہیں جو `logging.file` میں لکھے جاتے ہیں۔
-- `logging.level` (فائل لاگ لیول) کی پابندی کریں۔ کنسول ریڈیکشن
-  OTLP لاگز پر **لاگو نہیں** ہوتی۔
+- Respect `logging.level` (file log level). Console redaction does **not** apply
+  to OTLP logs.
 - زیادہ والیوم والی انسٹالیشنز کو OTLP کلیکٹر سیمپلنگ/فلٹرنگ کو ترجیح دینی چاہیے۔
 
 ## خرابیوں کے ازالے کے مشورے

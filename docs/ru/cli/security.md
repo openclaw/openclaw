@@ -4,13 +4,6 @@ read_when:
   - Вы хотите выполнить быстрый аудит безопасности конфигурации/состояния
   - Вы хотите применить безопасные рекомендации «fix» (chmod, ужесточение значений по умолчанию)
 title: "security"
-x-i18n:
-  source_path: cli/security.md
-  source_hash: 96542b4784e53933
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:17Z
 ---
 
 # `openclaw security`

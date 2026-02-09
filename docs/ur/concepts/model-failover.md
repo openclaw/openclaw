@@ -4,13 +4,6 @@ read_when:
   - auth پروفائل روٹیشن، کول ڈاؤنز، یا ماڈل فال بیک رویّے کی تشخیص کرتے وقت
   - auth پروفائلز یا ماڈلز کے لیے فال بیک قواعد کو اپ ڈیٹ کرتے وقت
 title: "ماڈل فال بیک"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:19Z
 ---
 
 # ماڈل فال بیک
@@ -35,7 +28,7 @@ OpenClaw **auth پروفائلز** استعمال کرتا ہے، جو API کل�
 اسناد کی اقسام:
 
 - `type: "api_key"` → `{ provider, key }`
-- `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ کچھ فراہم کنندگان کے لیے `projectId`/`enterpriseUrl`)
+- `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` for some providers)
 
 ## پروفائل IDs
 
@@ -62,8 +55,8 @@ OAuth لاگ اِن الگ الگ پروفائلز بناتا ہے تاکہ مت
 
 ### سیشن اسٹکنس (کیچ-فرینڈلی)
 
-OpenClaw **ہر سیشن کے لیے منتخب شدہ auth پروفائل کو پن** کرتا ہے تاکہ فراہم کنندہ کی کیچز گرم رہیں۔
-یہ **ہر درخواست پر روٹیٹ نہیں کرتا**۔ پن کیا گیا پروفائل دوبارہ استعمال ہوتا ہے جب تک کہ:
+OpenClaw **pins the chosen auth profile per session** to keep provider caches warm.
+22. یہ **ہر درخواست پر** روٹیٹ نہیں کرتا۔ The pinned profile is reused until:
 
 - سیشن ری سیٹ نہ ہو (`/new` / `/reset`)
 - کوئی کمپیکشن مکمل نہ ہو (کمپیکشن کاؤنٹ میں اضافہ)
@@ -72,24 +65,24 @@ OpenClaw **ہر سیشن کے لیے منتخب شدہ auth پروفائل کو 
 `/model …@<profileId>` کے ذریعے دستی انتخاب اس سیشن کے لیے **یوزر اووررائیڈ** سیٹ کرتا ہے
 اور نیا سیشن شروع ہونے تک خودکار روٹیشن نہیں ہوتی۔
 
-خودکار طور پر پن کیے گئے پروفائلز (جو سیشن روٹر منتخب کرتا ہے) **ترجیح** کے طور پر برتے جاتے ہیں:
-انہیں پہلے آزمایا جاتا ہے، لیکن ریٹ لمٹس/ٹائم آؤٹس پر OpenClaw کسی دوسرے پروفائل پر جا سکتا ہے۔
-یوزر-پن کیے گئے پروفائلز اسی پروفائل پر لاک رہتے ہیں؛ اگر وہ ناکام ہو جائے اور ماڈل فال بیکس
-کنفیگر ہوں، تو OpenClaw پروفائل بدلنے کے بجائے اگلے ماڈل پر منتقل ہو جاتا ہے۔
+Auto‑pinned profiles (selected by the session router) are treated as a **preference**:
+they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts.
+User‑pinned profiles stay locked to that profile; if it fails and model fallbacks
+are configured, OpenClaw moves to the next model instead of switching profiles.
 
 ### OAuth کیوں “گم شدہ” محسوس ہو سکتا ہے
 
-اگر ایک ہی فراہم کنندہ کے لیے آپ کے پاس OAuth پروفائل اور API کلید پروفائل دونوں ہوں، تو راؤنڈ-روبن پیغامات کے درمیان ان کے بیچ سوئچ کر سکتا ہے جب تک پن نہ کیا جائے۔ ایک ہی پروفائل پر مجبور کرنے کے لیے:
+If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
 
 - `auth.order[provider] = ["provider:profileId"]` کے ساتھ پن کریں، یا
 - `/model …` کے ذریعے فی-سیشن اووررائیڈ استعمال کریں جس میں پروفائل اووررائیڈ ہو (جب آپ کی UI/چیٹ سطح اس کی حمایت کرے)۔
 
 ## کول ڈاؤنز
 
-جب کوئی پروفائل auth/ریٹ-لمٹ غلطیوں کی وجہ سے ناکام ہو (یا ایسا ٹائم آؤٹ جو
-ریٹ لمٹنگ جیسا لگے)، OpenClaw اسے کول ڈاؤن میں نشان زد کرتا ہے اور اگلے پروفائل پر جاتا ہے۔
-فارمیٹ/غلط-درخواست کی غلطیاں (مثال کے طور پر Cloud Code Assist ٹول کال ID
-ویلیڈیشن کی ناکامیاں) بھی فال اوور کے قابل سمجھی جاتی ہیں اور وہی کول ڈاؤنز استعمال کرتی ہیں۔
+When a profile fails due to auth/rate‑limit errors (or a timeout that looks
+like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
+Format/invalid‑request errors (for example Cloud Code Assist tool call ID
+validation failures) are treated as failover‑worthy and use the same cooldowns.
 
 کول ڈاؤنز ایکسپونینشل بیک آف استعمال کرتے ہیں:
 
@@ -114,7 +107,7 @@ OpenClaw **ہر سیشن کے لیے منتخب شدہ auth پروفائل کو 
 
 ## بلنگ کی وجہ سے غیرفعالی
 
-بلنگ/کریڈٹ کی ناکامیاں (مثال کے طور پر “ناکافی کریڈٹس” / “کریڈٹ بیلنس بہت کم”) فال اوور کے قابل سمجھی جاتی ہیں، مگر عموماً عارضی نہیں ہوتیں۔ مختصر کول ڈاؤن کے بجائے، OpenClaw پروفائل کو **غیرفعال** نشان زد کرتا ہے (زیادہ طویل بیک آف کے ساتھ) اور اگلے پروفائل/فراہم کنندہ پر روٹیٹ کرتا ہے۔
+Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
 
 حالت `auth-profiles.json` میں محفوظ ہوتی ہے:
 
@@ -136,9 +129,9 @@ OpenClaw **ہر سیشن کے لیے منتخب شدہ auth پروفائل کو 
 
 ## ماڈل فال بیک
 
-اگر کسی فراہم کنندہ کے تمام پروفائلز ناکام ہو جائیں، OpenClaw
-`agents.defaults.model.fallbacks` میں اگلے ماڈل پر منتقل ہو جاتا ہے۔ یہ auth ناکامیوں، ریٹ لمٹس، اور
-ایسے ٹائم آؤٹس پر لاگو ہوتا ہے جنہوں نے پروفائل روٹیشن ختم کر دی ہو (دیگر غلطیاں فال بیک کو آگے نہیں بڑھاتیں)۔
+23. اگر کسی فراہم کنندہ کے تمام پروفائلز ناکام ہو جائیں، تو OpenClaw اگلے ماڈل پر منتقل ہو جاتا ہے جو
+    `agents.defaults.model.fallbacks` میں ہے۔ This applies to auth failures, rate limits, and
+    timeouts that exhausted profile rotation (other errors do not advance fallback).
 
 جب کوئی رَن ماڈل اووررائیڈ (ہُکس یا CLI) کے ساتھ شروع ہو، تو فال بیکس پھر بھی
 کسی بھی کنفیگر شدہ فال بیکس آزمانے کے بعد `agents.defaults.model.primary` پر ختم ہوتے ہیں۔

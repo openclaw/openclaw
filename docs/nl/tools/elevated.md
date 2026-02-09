@@ -3,13 +3,6 @@ summary: "Verhoogde exec-modus en /elevated-directieven"
 read_when:
   - Aanpassen van standaardinstellingen voor verhoogde modus, toegestane lijsten of gedrag van slash-opdrachten
 title: "Verhoogde modus"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:53Z
 ---
 
 # Verhoogde modus (/elevated-directieven)

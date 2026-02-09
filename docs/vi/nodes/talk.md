@@ -4,13 +4,6 @@ read_when:
   - Triển khai chế độ Talk trên macOS/iOS/Android
   - Thay đổi hành vi giọng nói/TTS/ngắt lời
 title: "Chế độ Talk"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:33Z
 ---
 
 # Chế độ Talk

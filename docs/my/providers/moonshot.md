@@ -5,19 +5,11 @@ read_when:
   - ခွဲခြားထားသော endpoint များ၊ ကီးများနှင့် မော်ဒယ် ရည်ညွှန်းချက်များကို နားလည်လိုသောအခါ
   - ပံ့ပိုးသူ တစ်ခုချင်းစီအတွက် ကော်ပီ/ပိတ်စ် ချိန်ညှိဖိုင်ကို လိုအပ်သောအခါ
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:46Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot သည် OpenAI နှင့် ကိုက်ညီသော endpoint များဖြင့် Kimi API ကို ပံ့ပိုးပေးသည်။ ပံ့ပိုးသူကို ချိန်ညှိပြီး မူလ မော်ဒယ်ကို `moonshot/kimi-k2.5` အဖြစ် သတ်မှတ်ပါ၊ သို့မဟုတ်
-Kimi Coding ကို `kimi-coding/k2p5` ဖြင့် အသုံးပြုနိုင်သည်။
+Moonshot သည် OpenAI-compatible endpoints များဖြင့် Kimi API ကို ပေးပါသည်။ Provider ကို configure လုပ်ပြီး default model ကို `moonshot/kimi-k2.5` အဖြစ် သတ်မှတ်ပါ၊ သို့မဟုတ် `kimi-coding/k2p5` ဖြင့် Kimi Coding ကို အသုံးပြုပါ။
 
 လက်ရှိ Kimi K2 မော်ဒယ် ID များ:
 
@@ -40,7 +32,7 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-မှတ်ချက်: Moonshot နှင့် Kimi Coding သည် သီးခြား ပံ့ပိုးသူများ ဖြစ်သည်။ ကီးများကို အပြန်အလှန် မသုံးနိုင်ပါ၊ endpoint များကွဲပြားပြီး မော်ဒယ် ရည်ညွှန်းချက်များလည်း ကွဲပြားသည် (Moonshot သည် `moonshot/...` ကို အသုံးပြုပြီး၊ Kimi Coding သည် `kimi-coding/...` ကို အသုံးပြုသည်)။
+မှတ်ချက်: Moonshot နှင့် Kimi Coding သည် သီးခြား provider များဖြစ်ပါသည်။ Keys are not interchangeable, endpoints differ, and model refs differ (Moonshot uses `moonshot/...`, Kimi Coding uses `kimi-coding/...`).
 
 ## Config snippet (Moonshot API)
 
@@ -141,7 +133,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## Notes
 
-- Moonshot မော်ဒယ် ရည်ညွှန်းချက်များသည် `moonshot/<modelId>` ကို အသုံးပြုသည်။ Kimi Coding မော်ဒယ် ရည်ညွှန်းချက်များသည် `kimi-coding/<modelId>` ကို အသုံးပြုသည်။
+- Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi-coding/<modelId>`.
 - လိုအပ်ပါက စျေးနှုန်းနှင့် context မီတာဒေတာကို `models.providers` တွင် အစားထိုး သတ်မှတ်နိုင်သည်။
 - မော်ဒယ်တစ်ခုအတွက် Moonshot က context ကန့်သတ်ချက် မတူညီစွာ ထုတ်ပြန်ပါက
   `contextWindow` ကို လိုက်လျောညီထွေ ချိန်ညှိပါ။

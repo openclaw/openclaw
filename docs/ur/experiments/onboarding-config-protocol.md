@@ -2,13 +2,6 @@
 summary: "آن بورڈنگ وزرڈ اور کنفیگ اسکیما کے لیے RPC پروٹوکول نوٹس"
 read_when: "آن بورڈنگ وزرڈ کے مراحل یا کنفیگ اسکیما اینڈپوائنٹس میں تبدیلی کرتے وقت"
 title: "آن بورڈنگ اور کنفیگ پروٹوکول"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:08Z
 ---
 
 # آن بورڈنگ + کنفیگ پروٹوکول
@@ -26,14 +19,14 @@ x-i18n:
 ## Gateway RPC
 
 - `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`
-- `wizard.next` params: `{ sessionId, answer?: { stepId, value? } }`
+- `wizard.next` params: `{ sessionId, answer?: { stepId, value?` } }\`
 - `wizard.cancel` params: `{ sessionId }`
 - `wizard.status` params: `{ sessionId }`
 - `config.schema` params: `{}`
 
 Responses (شکل)
 
-- Wizard: `{ sessionId, done, step?, status?, error? }`
+- Wizard: `{ sessionId, done, step?, status?, error?` } }\`
 - Config schema: `{ schema, uiHints, version, generatedAt }`
 
 ## UI ہنٹس

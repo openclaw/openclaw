@@ -4,13 +4,6 @@ read_when:
   - การเพิ่มหรือเปลี่ยนแปลงเอ็นด์พอยต์ webhook
   - การเชื่อมต่อระบบภายนอกเข้ากับ OpenClaw
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:55Z
 ---
 
 # Webhooks
@@ -36,7 +29,7 @@ Notes:
 
 ## Auth
 
-ทุกคำขอต้องมี hook token แนะนำให้ส่งผ่านเฮดเดอร์:
+ทุกคำขอต้องมี hook token แนะนำให้ส่งผ่านเฮดเดอร์: 4. ให้ความสำคัญกับเฮดเดอร์:
 
 - `Authorization: Bearer <token>` (แนะนำ)
 - `x-openclaw-token: <token>`
@@ -81,12 +74,12 @@ Payload:
 
 - `message` **จำเป็น** (string): พรอมป์ต์หรือข้อความที่ให้เอเจนต์ประมวลผล
 - `name` ไม่บังคับ (string): ชื่อที่อ่านเข้าใจง่ายสำหรับ hook (เช่น "GitHub") ใช้เป็นคำนำหน้าในสรุปเซสชัน
-- `sessionKey` ไม่บังคับ (string): คีย์ที่ใช้ระบุเซสชันของเอเจนต์ ค่าเริ่มต้นเป็น `hook:<uuid>` แบบสุ่ม การใช้คีย์ที่สม่ำเสมอช่วยให้สนทนาได้หลายเทิร์นภายในบริบทของ hook
+- `sessionKey` ไม่บังคับ (string): คีย์ที่ใช้ระบุเซสชันของเอเจนต์ ค่าเริ่มต้นเป็น `hook:<uuid>` แบบสุ่ม การใช้คีย์ที่สม่ำเสมอช่วยให้สนทนาได้หลายเทิร์นภายในบริบทของ hook 5. ค่าเริ่มต้นเป็น `hook:<uuid>` แบบสุ่ม 6. การใช้คีย์ที่สอดคล้องกันช่วยให้สามารถสนทนาแบบหลายรอบภายในบริบทของ hook เดียวกันได้
 - `wakeMode` ไม่บังคับ (`now` | `next-heartbeat`): ระบุว่าจะทริกเกอร์ heartbeat ทันทีหรือรอการตรวจสอบตามรอบถัดไป (ค่าเริ่มต้น `now`)
-- `deliver` ไม่บังคับ (boolean): หาก `true` การตอบกลับของเอเจนต์จะถูกส่งไปยังช่องทางข้อความ ค่าเริ่มต้นเป็น `true` การตอบกลับที่เป็นเพียงการยืนยัน heartbeat จะถูกข้ามโดยอัตโนมัติ
-- `channel` ไม่บังคับ (string): ช่องทางข้อความสำหรับการส่ง หนึ่งใน: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams` ค่าเริ่มต้นเป็น `last`
-- `to` ไม่บังคับ (string): ตัวระบุผู้รับสำหรับช่องทาง (เช่น หมายเลขโทรศัพท์สำหรับ WhatsApp/Signal, chat ID สำหรับ Telegram, channel ID สำหรับ Discord/Slack/Mattermost (plugin), conversation ID สำหรับ Microsoft Teams) ค่าเริ่มต้นเป็นผู้รับล่าสุดในเซสชันหลัก
-- `model` ไม่บังคับ (string): การแทนที่โมเดล (เช่น `anthropic/claude-3-5-sonnet` หรือชื่อแฝง) ต้องอยู่ในรายการโมเดลที่อนุญาตหากมีการจำกัด
+- `deliver` ไม่บังคับ (boolean): หาก `true` การตอบกลับของเอเจนต์จะถูกส่งไปยังช่องทางข้อความ ค่าเริ่มต้นเป็น `true` การตอบกลับที่เป็นเพียงการยืนยัน heartbeat จะถูกข้ามโดยอัตโนมัติ 7. ค่าเริ่มต้นเป็น `true` 8. การตอบกลับที่เป็นเพียงการยืนยัน heartbeat เท่านั้นจะถูกข้ามโดยอัตโนมัติ
+- `channel` optional (string): The messaging channel for delivery. `channel` ไม่บังคับ (string): ช่องทางข้อความสำหรับการส่ง หนึ่งใน: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams` ค่าเริ่มต้นเป็น `last` 10. ค่าเริ่มต้นเป็น `last`
+- `to` ไม่บังคับ (string): ตัวระบุผู้รับสำหรับช่องทาง (เช่น หมายเลขโทรศัพท์สำหรับ WhatsApp/Signal, chat ID สำหรับ Telegram, channel ID สำหรับ Discord/Slack/Mattermost (plugin), conversation ID สำหรับ Microsoft Teams) ค่าเริ่มต้นเป็นผู้รับล่าสุดในเซสชันหลัก 11. ค่าเริ่มต้นเป็นผู้รับรายล่าสุดในเซสชันหลัก
+- `model` ไม่บังคับ (string): การแทนที่โมเดล (เช่น `anthropic/claude-3-5-sonnet` หรือชื่อแฝง) ต้องอยู่ในรายการโมเดลที่อนุญาตหากมีการจำกัด Must be in the allowed model list if restricted.
 - `thinking` ไม่บังคับ (string): การแทนที่ระดับการคิด (เช่น `low`, `medium`, `high`)
 - `timeoutSeconds` ไม่บังคับ (number): ระยะเวลาสูงสุดสำหรับการรันเอเจนต์เป็นวินาที
 
@@ -98,7 +91,7 @@ Effect:
 
 ### `POST /hooks/<name>` (mapped)
 
-ชื่อ hook แบบกำหนดเองจะถูกแก้ไขผ่าน `hooks.mappings` (ดูการกำหนดค่า) การแมปสามารถ
+Custom hook names are resolved via `hooks.mappings` (see configuration). ชื่อ hook แบบกำหนดเองจะถูกแก้ไขผ่าน `hooks.mappings` (ดูการกำหนดค่า) การแมปสามารถ
 แปลง payload ใดๆ ให้เป็นการกระทำ `wake` หรือ `agent` พร้อมเทมเพลตหรือ
 การแปลงโค้ดตามต้องการ
 
@@ -115,6 +108,7 @@ Effect:
   (อันตราย; ใช้เฉพาะแหล่งภายในที่เชื่อถือได้)
 - `openclaw webhooks gmail setup` เขียนคอนฟิก `hooks.gmail` สำหรับ `openclaw webhooks gmail run`
   ดู [Gmail Pub/Sub](/automation/gmail-pubsub) สำหรับโฟลว์การเฝ้าดู Gmail แบบครบถ้วน
+  14. ดู [Gmail Pub/Sub](/automation/gmail-pubsub) สำหรับขั้นตอนการ watch ของ Gmail แบบครบถ้วน
 
 ## Responses
 
@@ -165,6 +159,7 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - เก็บเอ็นด์พอยต์ hook ไว้หลัง loopback, tailnet หรือรีเวิร์สพร็อกซีที่เชื่อถือได้
 - ใช้ hook token เฉพาะ ห้ามนำโทเคนยืนยันตัวตนของ Gateway มาใช้ซ้ำ
 - หลีกเลี่ยงการใส่ payload ดิบที่มีข้อมูลอ่อนไหวในล็อกของ webhook
-- payload ของ hook จะถูกมองว่าไม่น่าเชื่อถือและถูกห่อด้วยขอบเขตความปลอดภัยตามค่าเริ่มต้น
-  หากจำเป็นต้องปิดสำหรับ hook เฉพาะ ให้ตั้งค่า `allowUnsafeExternalContent: true`
-  ในการแมปของ hook นั้น (อันตราย)
+- 15. payload ของ hook จะถูกมองว่าไม่น่าเชื่อถือ และถูกห่อด้วยขอบเขตความปลอดภัยตามค่าเริ่มต้น
+      payload ของ hook จะถูกมองว่าไม่น่าเชื่อถือและถูกห่อด้วยขอบเขตความปลอดภัยตามค่าเริ่มต้น
+      หากจำเป็นต้องปิดสำหรับ hook เฉพาะ ให้ตั้งค่า `allowUnsafeExternalContent: true`
+      ในการแมปของ hook นั้น (อันตราย)

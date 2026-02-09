@@ -4,17 +4,11 @@ read_when:
   - セマンティックメモリをインデックス化または検索したい場合
   - メモリの可用性やインデックス作成のデバッグを行っている場合
 title: "メモリ"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:09Z
 ---
 
 # `openclaw memory`
 
+セマンティックメモリのインデックスと検索を管理します。
 セマンティックメモリのインデックス作成と検索を管理します。  
 アクティブなメモリプラグインによって提供されます（デフォルト：`memory-core`。無効化するには `plugins.slots.memory = "none"` を設定してください）。
 

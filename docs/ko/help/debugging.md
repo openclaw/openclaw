@@ -5,13 +5,6 @@ read_when:
   - 반복 작업 중 Gateway(게이트웨이)를 감시 모드로 실행하고 싶을 때
   - 반복 가능한 디버깅 워크플로가 필요할 때
 title: "디버깅"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:18Z
 ---
 
 # 디버깅
@@ -43,7 +36,7 @@ x-i18n:
 pnpm gateway:watch --force
 ```
 
-이는 다음과 매핑됩니다:
+이는 다음에 매핑됩니다:
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -129,7 +122,7 @@ pnpm gateway:watch --force --raw-stream
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-동등한 환경 변수:
+Equivalent env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

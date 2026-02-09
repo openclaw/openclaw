@@ -5,25 +5,18 @@ read_when:
   - Du vil have en lokal API-server, der wrapper Claude Code CLI
   - Du vil spare penge ved at bruge abonnement i stedet for API-nøgler
 title: "Claude Max API-proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:29Z
 ---
 
 # Claude Max API-proxy
 
-**claude-max-api-proxy** er et community-værktøj, der eksponerer dit Claude Max/Pro-abonnement som et OpenAI-kompatibelt API-endpoint. Det gør det muligt at bruge dit abonnement med ethvert værktøj, der understøtter OpenAI API-formatet.
+**claude-max-api-proxy** er et fællesskabsværktøj, der udsætter dit Claude Max/Pro-abonnement som et OpenAI-kompatibelt API-endepunkt. Dette giver dig mulighed for at bruge dit abonnement med ethvert værktøj, der understøtter OpenAI API-format.
 
 ## Hvorfor bruge dette?
 
-| Tilgang               | Omkostning                                            | Bedst til                                  |
-| --------------------- | ----------------------------------------------------- | ------------------------------------------ |
+| Tilgang               | Omkostning                                                                                               | Bedst til                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
 | Anthropic API         | Betal pr. token (~$15/M input, $75/M output for Opus) | Produktionsapps, høj volumen               |
-| Claude Max-abonnement | $200/måned fast                                       | Personlig brug, udvikling, ubegrænset brug |
+| Claude Max-abonnement | $200/måned fast                                                                                          | Personlig brug, udvikling, ubegrænset brug |
 
 Hvis du har et Claude Max-abonnement og vil bruge det med OpenAI-kompatible værktøjer, kan denne proxy spare dig for betydelige beløb.
 

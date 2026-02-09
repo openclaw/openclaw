@@ -4,13 +4,6 @@ read_when:
   - Achtergrond-exec-gedrag toevoegen of wijzigen
   - Debuggen van langlopende exec-taken
 title: "Achtergrond Exec en Proces-tool"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:24Z
 ---
 
 # Achtergrond Exec + Proces-tool

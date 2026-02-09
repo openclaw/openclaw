@@ -3,19 +3,12 @@ summary: "မော်ဒယ် အထောက်အထားစိစစ်ခ
 read_when:
   - မော်ဒယ် အထောက်အထားစိစစ်ခြင်း သို့မဟုတ် OAuth သက်တမ်းကုန်ဆုံးမှုကို ပြဿနာရှာဖွေနေစဉ်
   - အထောက်အထားစိစစ်ခြင်း သို့မဟုတ် အထောက်အထားသိမ်းဆည်းမှုကို စာတမ်းရေးသားနေစဉ်
-title: "အထောက်အထားစိစစ်ခြင်း"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:23Z
+title: "Authentication"
 ---
 
 # Authentication
 
-OpenClaw သည် မော်ဒယ် ပံ့ပိုးသူများအတွက် OAuth နှင့် API ကီးများကို ပံ့ပိုးပါသည်။ Anthropic အကောင့်များအတွက် **API ကီး** ကို အသုံးပြုရန် အကြံပြုပါသည်။ Claude စာရင်းသွင်းအသုံးပြုခွင့်အတွက် `claude setup-token` မှ ဖန်တီးထားသော သက်တမ်းရှည် token ကို အသုံးပြုပါ။
+OpenClaw သည် model providers များအတွက် OAuth နှင့် API keys ကို ထောက်ပံ့ပါသည်။ Claude subscription access အတွက် `claude setup-token` ဖြင့် ဖန်တီးထားသော long‑lived token ကို အသုံးပြုပါ။ Anthropic အတွက် အကြံပြုထားသော လမ်းကြောင်းမှာ **API key** ဖြစ်ပါသည်။
 
 OAuth လုပ်ငန်းစဉ်အပြည့်အစုံနှင့် သိမ်းဆည်းမှု အပြင်အဆင်အတွက် [/concepts/oauth](/concepts/oauth) ကို ကြည့်ပါ။
 
@@ -52,7 +45,7 @@ env inheritance ဆိုင်ရာ အသေးစိတ်အတွက် [H
 
 ## Anthropic: setup-token (subscription auth)
 
-Anthropic အတွက် အကြံပြုထားသော လမ်းကြောင်းမှာ **API ကီး** ဖြစ်ပါသည်။ Claude subscription ကို အသုံးပြုနေပါက setup-token လုပ်ငန်းစဉ်ကိုလည်း ပံ့ပိုးထားပါသည်။ **Gateway ဟို့စ်** ပေါ်တွင် အောက်ပါအတိုင်း လည်ပတ်ပါ။
+Claude subscription ကို အသုံးပြုနေပါက setup-token flow ကိုလည်း ထောက်ပံ့ထားပါသည်။ **gateway host** ပေါ်တွင် အလုပ်လုပ်စေပါ: မည်သည့် profile သည် သက်တမ်းကုန်ဆုံးနေသည်ကို အတည်ပြုရန် `openclaw models status` ကို chạy ပါ။
 
 ```bash
 claude setup-token
@@ -135,7 +128,7 @@ openclaw models status
 
 ### Token သက်တမ်းကုန်ဆုံးနေ/ကုန်ဆုံးပြီး
 
-ဘယ် profile သက်တမ်းကုန်ဆုံးနေသည်ကို အတည်ပြုရန် `openclaw models status` ကို လည်ပတ်ပါ။ profile မရှိပါက `claude setup-token` ကို ပြန်လည် လည်ပတ်ပြီး token ကို ထပ်မံ ကူးထည့်ပါ။
+Profile မတွေ့ပါက `claude setup-token` ကို ပြန်လည် chạy ပြီး token ကို ထပ်မံ paste လုပ်ပါ။ OpenClaw သည် `exec` tool ကို အသုံးပြု၍ shell commands များကို chạy လုပ်ပြီး ကြာရှည်အလုပ်လုပ်သော tasks များကို memory ထဲတွင် ထိန်းသိမ်းထားပါသည်။
 
 ## လိုအပ်ချက်များ
 

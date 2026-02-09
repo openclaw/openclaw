@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:00Z
 ---
 
 # Fly.io တွင် တပ်ဆင်အသုံးပြုခြင်း
@@ -42,13 +35,13 @@ fly apps create my-openclaw
 fly volumes create openclaw_data --size 1 --region iad
 ```
 
-**အကြံပြုချက်:** ကိုယ်တိုင်နီးစပ်သော ဒေသကို ရွေးချယ်ပါ။ ပုံမှန်ရွေးချယ်စရာများမှာ `lhr` (London), `iad` (Virginia), `sjc` (San Jose) ဖြစ်သည်။
+**အကြံပြုချက်:** သင့်နီးစပ်ရာ region ကို ရွေးပါ။ အသုံးများတဲ့ option များ: `lhr` (London), `iad` (Virginia), `sjc` (San Jose)။
 
-## 2) fly.toml ကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
+## 2. fly.toml ကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
 
 `fly.toml` ကို သင့် app အမည်နှင့် လိုအပ်ချက်များနှင့် ကိုက်ညီအောင် ပြင်ဆင်ပါ။
 
-**လုံခြုံရေးမှတ်ချက်:** မူလ config သည် အများပြည်သူ ဝင်ရောက်နိုင်သော URL ကို ဖွင့်ပေးထားသည်။ အများပြည်သူ IP မရှိသည့် အားကောင်းစေသော တပ်ဆင်မှုအတွက် [Private Deployment](#private-deployment-hardened) ကို ကြည့်ပါ သို့မဟုတ် `fly.private.toml` ကို အသုံးပြုပါ။
+**လုံခြုံရေး သတိပေးချက်:** မူလ config က public URL တစ်ခုကို ဖွင့်ထားပါတယ်။ Public IP မပါဘဲ ပိုမိုခိုင်မာတဲ့ deployment အတွက် [Private Deployment](#private-deployment-hardened) ကို ကြည့်ပါ သို့မဟုတ် `fly.private.toml` ကို အသုံးပြုပါ။
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **အဓိက သတ်မှတ်ချက်များ:**
 
-| Setting                        | အကြောင်းရင်း                                                                                |
-| ------------------------------ | ------------------------------------------------------------------------------------------- |
-| `--bind lan`                   | Fly ၏ proxy က gateway ကို ရောက်ရှိနိုင်ရန် `0.0.0.0` သို့ bind လုပ်ပေးသည်                   |
+| Setting                        | အကြောင်းရင်း                                                                                                   |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Fly ၏ proxy က gateway ကို ရောက်ရှိနိုင်ရန် `0.0.0.0` သို့ bind လုပ်ပေးသည်                                      |
 | `--allow-unconfigured`         | Config ဖိုင်မပါဘဲ စတင်သည် (နောက်မှ ဖန်တီးမည်)                                               |
 | `internal_port = 3000`         | Fly health checks အတွက် `--port 3000` (သို့မဟုတ် `OPENCLAW_GATEWAY_PORT`) နှင့် ကိုက်ညီရမည် |
-| `memory = "2048mb"`            | 512MB သည် မလုံလောက်ပါ; 2GB ကို အကြံပြုသည်                                                   |
-| `OPENCLAW_STATE_DIR = "/data"` | Volume ပေါ်တွင် အခြေအနေကို အမြဲတမ်းသိုလှောင်ထားသည်                                          |
+| `memory = "2048mb"`            | 512MB သည် မလုံလောက်ပါ; 2GB ကို အကြံပြုသည်                                                                      |
+| `OPENCLAW_STATE_DIR = "/data"` | Volume ပေါ်တွင် အခြေအနေကို အမြဲတမ်းသိုလှောင်ထားသည်                                                             |
 
-## 3) Secrets များ သတ်မှတ်ခြင်း
+## 3. Secrets များ သတ်မှတ်ခြင်း
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,15 +107,15 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - Non-loopback bind (`--bind lan`) များအတွက် လုံခြုံရေးအတွက် `OPENCLAW_GATEWAY_TOKEN` လိုအပ်သည်။
 - ဤတိုကင်များကို စကားဝှက်များကဲ့သို့ ထိန်းသိမ်းပါ။
-- **API ကီးများနှင့် တိုကင်များအားလုံးအတွက် config ဖိုင်ထက် env vars ကို ဦးစားပေးအသုံးပြုပါ။** ဤနည်းလမ်းဖြင့် `openclaw.json` ထဲတွင် မတော်တဆ ထုတ်ဖော်ခြင်း သို့မဟုတ် log ထဲပါဝင်သွားခြင်းကို ရှောင်ရှားနိုင်သည်။
+- API key နဲ့ token အားလုံးအတွက် **config file ထက် env vars ကို ဦးစားပေးပါ**။ ဒါကြောင့် `openclaw.json` ထဲမှာ secret များ မသိမ်းရဘဲ မတော်တဆ ဖော်ထုတ်ခြင်း သို့မဟုတ် log ထဲ ပါသွားခြင်းကို ရှောင်ရှားနိုင်ပါတယ်။
 
-## 4) Deploy လုပ်ခြင်း
+## 4. Deploy လုပ်ခြင်း
 
 ```bash
 fly deploy
 ```
 
-ပထမဆုံး deploy တွင် Docker image ကို တည်ဆောက်ရပြီး (~၂–၃ မိနစ်) လိုအပ်သည်။ နောက်တစ်ကြိမ်များတွင် ပိုမြန်သည်။
+ပထမဆုံး deploy မှာ Docker image ကို build လုပ်ရပြီး (~၂–၃ မိနစ်) ကြာပါတယ်။ နောက်တစ်ခါ deploy များက ပိုမိုမြန်ဆန်ပါလိမ့်မယ်။
 
 Deploy ပြီးနောက် အတည်ပြုရန်:
 
@@ -138,7 +131,7 @@ fly logs
 [discord] logged in to discord as xxx
 ```
 
-## 5) Config ဖိုင် ဖန်တီးခြင်း
+## 5. Config ဖိုင် ဖန်တီးခြင်း
 
 စနစ်ထဲသို့ SSH ဝင်၍ သင့်တော်သော config ကို ဖန်တီးပါ—
 
@@ -209,7 +202,7 @@ EOF
 - Environment variable: `DISCORD_BOT_TOKEN` (လျှို့ဝှက်ချက်များအတွက် အကြံပြု)
 - Config ဖိုင်: `channels.discord.token`
 
-Env var ကို အသုံးပြုပါက config ထဲသို့ တိုကင် မထည့်ရန် မလိုပါ။ Gateway သည် `DISCORD_BOT_TOKEN` ကို အလိုအလျောက် ဖတ်ယူသည်။
+env var ကို သုံးရင် token ကို config ထဲ ထည့်စရာ မလိုပါ။ Gateway က `DISCORD_BOT_TOKEN` ကို အလိုအလျောက် ဖတ်ယူပါတယ်။
 
 အပြောင်းအလဲများ အသက်သွင်းရန် ပြန်စတင်ပါ—
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Gateway သို့ ဝင်ရောက်ခြင်း
+## 6. Gateway သို့ ဝင်ရောက်ခြင်း
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Fly သည် သတ်မှတ်ထားသော port ပေါ်ရှိ
 
 ### OOM / Memory ပြဿနာများ
 
-Container သည် မကြာခဏ ပြန်စတင်ခြင်း သို့မဟုတ် kill ခံနေရသည်။ လက္ခဏာများမှာ `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration` သို့မဟုတ် မျက်နှာပြင်မရှိဘဲ ပြန်စတင်ခြင်းများ ဖြစ်သည်။
+Container က အမြဲ restart ဖြစ်နေတယ် သို့မဟုတ် kill ခံနေရပါတယ်။ လက္ခဏာများ: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, သို့မဟုတ် အသံမရှိဘဲ restart ဖြစ်ခြင်း။
 
 **ဖြေရှင်းနည်း:** `fly.toml` ထဲတွင် memory ကို တိုးမြှင့်ပါ—
 
@@ -276,7 +269,7 @@ Container သည် မကြာခဏ ပြန်စတင်ခြင်း �
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**မှတ်ချက်:** 512MB သည် မလုံလောက်ပါ။ 1GB သည် အလုပ်လုပ်နိုင်သော်လည်း load မြင့်မားသည့်အချိန် သို့မဟုတ် verbose logging ဖြင့် OOM ဖြစ်နိုင်သည်။ **2GB ကို အကြံပြုသည်။**
+**မှတ်ချက်:** 512MB က အရမ်းသေးလွန်းပါတယ်။ 1GB နဲ့ အလုပ်လုပ်နိုင်ပေမယ့် load များတဲ့အခါ သို့မဟုတ် verbose logging နဲ့ဆို OOM ဖြစ်နိုင်ပါတယ်။ **2GB ကို အကြံပြုပါတယ်။**
 
 ### Gateway Lock ပြဿနာများ
 
@@ -295,7 +288,7 @@ Lock ဖိုင်သည် `/data/gateway.*.lock` တွင် ရှိသ�
 
 ### Config ကို မဖတ်ရခြင်း
 
-`--allow-unconfigured` ကို အသုံးပြုပါက gateway သည် အနည်းဆုံး config တစ်ခုကို ဖန်တီးပါသည်။ သင့်စိတ်ကြိုက် config (`/data/openclaw.json`) ကို ပြန်စတင်ချိန်တွင် ဖတ်ရမည်ဖြစ်သည်။
+`--allow-unconfigured` ကို သုံးရင် gateway က minimal config တစ်ခုကို ဖန်တီးပေးပါတယ်။ `/data/openclaw.json` မှာရှိတဲ့ သင့် custom config ကို restart ပြုလုပ်တဲ့အခါ ဖတ်သင့်ပါတယ်။
 
 Config ရှိကြောင်း အတည်ပြုပါ—
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### SSH ဖြင့် Config ရေးသားခြင်း
 
-`fly ssh console -C` အမိန့်သည် shell redirection ကို မထောက်ပံ့ပါ။ Config ဖိုင်ရေးရန်—
+`fly ssh console -C` command က shell redirection ကို မထောက်ပံ့ပါ။ config ဖိုင် ရေးဖို့:
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -316,7 +309,7 @@ fly sftp shell
 > put /local/path/config.json /data/openclaw.json
 ```
 
-**မှတ်ချက်:** ဖိုင်ရှိပြီးသားဖြစ်ပါက `fly sftp` မအောင်မြင်နိုင်ပါ။ အရင် ဖျက်ပါ—
+**မှတ်ချက်:** ဖိုင်ရှိပြီးသား ဖြစ်ရင် `fly sftp` မအောင်မြင်နိုင်ပါ။ အရင် ဖျက်ပါ:
 
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
@@ -357,11 +350,11 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**မှတ်ချက်:** `fly deploy` ပြီးနောက် machine command သည် `fly.toml` ထဲရှိအတိုင်း ပြန်လည်သတ်မှတ်နိုင်သည်။ လက်ဖြင့် ပြင်ဆင်ထားပါက deploy ပြီးနောက် ပြန်လည် အသုံးချပါ။
+**မှတ်ချက်:** `fly deploy` ပြီးတဲ့နောက် machine command က `fly.toml` ထဲမှာ ရှိတဲ့အတိုင်း ပြန် reset ဖြစ်နိုင်ပါတယ်။ Manual ပြောင်းလဲမှုတွေ လုပ်ထားရင် deploy ပြီးတဲ့နောက် ပြန်လည် 적용 လုပ်ပါ။
 
 ## Private Deployment (Hardened)
 
-မူလအနေဖြင့် Fly သည် အများပြည်သူ IP များကို ခွဲဝေပေးသဖြင့် သင့် gateway ကို `https://your-app.fly.dev` တွင် ဝင်ရောက်နိုင်သည်။ ၎င်းသည် အဆင်ပြေသော်လည်း အင်တာနက် စကင်နာများ (Shodan, Censys စသည်) မှ ရှာဖွေတွေ့ရှိနိုင်ပါသည်။
+မူလအတိုင်း Fly က public IP များ allocate လုပ်ပေးပြီး သင့် gateway ကို `https://your-app.fly.dev` မှာ ဝင်ရောက်နိုင်စေပါတယ်။ ဒါက အဆင်ပြေသော်လည်း သင့် deployment ကို internet scanner များ (Shodan, Censys စသည်) က ရှာတွေ့နိုင်တယ်ဆိုတဲ့ အဓိပ္ပါယ်ပါ။
 
 **အများပြည်သူသို့ မထုတ်ဖော်သည့်** အားကောင်းစေသော တပ်ဆင်မှုအတွက် private template ကို အသုံးပြုပါ။
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### Private deployment နှင့် Webhooks
 
-အများပြည်သူသို့ မထုတ်ဖော်ဘဲ webhook callbacks (Twilio, Telnyx စသည်) လိုအပ်ပါက—
+webhook callbacks (Twilio, Telnyx စသည်) လိုအပ်ရင် Public exposure မရှိဘဲ:
 
 1. **ngrok tunnel** — container အတွင်း သို့မဟုတ် sidecar အဖြစ် ngrok ကို ပြေးပါ
 2. **Tailscale Funnel** — Tailscale ဖြင့် လမ်းကြောင်းအချို့ကိုသာ ထုတ်ဖော်ပါ
@@ -464,7 +457,7 @@ ngrok ဖြင့် အသံခေါ်ဆိုမှု config ဥပမ�
 }
 ```
 
-ngrok တန်နယ်သည် container အတွင်းတွင် ပြေးပြီး Fly app ကို မထုတ်ဖော်ဘဲ အများပြည်သူ webhook URL ကို ပံ့ပိုးပေးသည်။ Forwarded host headers ကို လက်ခံရန် `webhookSecurity.allowedHosts` ကို public tunnel hostname သို့ သတ်မှတ်ပါ။
+ngrok tunnel ကို container အတွင်းမှာ run လုပ်ပြီး Fly app ကို မဖော်ထုတ်ဘဲ public webhook URL တစ်ခု ပေးပါတယ်။ Forward လုပ်တဲ့ host header များကို လက်ခံနိုင်ဖို့ `webhookSecurity.allowedHosts` ကို public tunnel hostname အဖြစ် သတ်မှတ်ပါ။
 
 ### လုံခြုံရေး အကျိုးကျေးဇူးများ
 

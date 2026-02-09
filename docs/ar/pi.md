@@ -1,12 +1,5 @@
 ---
 title: "بنية تكامل Pi"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:59Z
 ---
 
 # بنية تكامل Pi
@@ -22,9 +15,9 @@ x-i18n:
 - تخصيص مطالبة النظام لكل قناة/سياق
 - استمرارية الجلسات مع دعم التفرّع/الدمج
 - تدوير ملفات مصادقة متعددة للحسابات مع التحويل التلقائي عند الفشل
-- تبديل النماذج بشكل مستقل عن الموفّر
+- تبديل نموذج المزود
 
-## تبعيات الحِزَم
+## تبعيات الحزمة
 
 ```json
 {
@@ -35,12 +28,12 @@ x-i18n:
 }
 ```
 
-| الحزمة            | الغرض                                                                                                 |
-| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| الحزمة            | الغرض                                                                                                                 |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | تجريدات LLM الأساسية: `Model`، `streamSimple`، أنواع الرسائل، واجهات برمجة تطبيقات الموفّرين          |
-| `pi-agent-core`   | حلقة الوكيل، تنفيذ الأدوات، أنواع `AgentMessage`                                                      |
+| `pi-agent-core`   | حلقة الوكيل، تنفيذ الأدوات، أنواع `AgentMessage`                                                                      |
 | `pi-coding-agent` | SDK عالي المستوى: `createAgentSession`، `SessionManager`، `AuthStorage`، `ModelRegistry`، أدوات مدمجة |
-| `pi-tui`          | مكوّنات واجهة المستخدم الطرفية (تُستخدم في وضع TUI المحلي لـ OpenClaw)                                |
+| `pi-tui`          | مكوّنات واجهة المستخدم الطرفية (تُستخدم في وضع TUI المحلي لـ OpenClaw)                             |
 
 ## بنية الملفات
 
@@ -314,7 +307,7 @@ sessionManager = SessionManager.open(params.sessionFile);
 trackSessionManagerAccess(params.sessionFile);
 ```
 
-### تحديد السجلّ
+### الحد من السجل
 
 يقوم `limitHistoryTurns()` بتقليم سجل المحادثة بناءً على نوع القناة (محادثة خاصة مقابل مجموعة).
 
@@ -339,7 +332,7 @@ const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false 
 const profileOrder = resolveAuthProfileOrder({ cfg, store: authStore, provider, preferredProfile });
 ```
 
-تتدوّر الملفات عند الفشل مع تتبّع فترات التهدئة:
+تدوير الملفات الشخصية عند الفشل مع تتبع التبريد:
 
 ```typescript
 await markAuthProfileFailure({ store, profileId, reason, cfg, agentDir });
@@ -362,7 +355,7 @@ const { model, error, authStorage, modelRegistry } = resolveModel(
 authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
 ```
 
-### التحويل عند الفشل
+### فشل
 
 يُفعِّل `FailoverError` الرجوع إلى نموذج بديل عند تهيئته:
 
@@ -419,7 +412,7 @@ if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
 const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
 ```
 
-### إزالة وسوم التفكير/النهائي
+### تفكير/وضع علامة نهائية
 
 تُعالج مخرجات البث لإزالة كتل `<think>`/`<thinking>` واستخراج محتوى `<final>`:
 
@@ -486,7 +479,7 @@ if (sandboxRoot) {
 }
 ```
 
-## المعالجة الخاصة بكل موفّر
+## التعامل مع المزود الخاص
 
 ### Anthropic
 
@@ -518,15 +511,15 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## الفروقات الرئيسية عن Pi CLI
 
-| الجانب         | Pi CLI                   | OpenClaw المُضمَّن                                                                             |
-| -------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| الاستدعاء      | أمر `pi` / RPC           | SDK عبر `createAgentSession()`                                                                 |
-| الأدوات        | أدوات الترميز الافتراضية | مجموعة أدوات OpenClaw المخصّصة                                                                 |
-| مطالبة النظام  | AGENTS.md + مطالبات      | ديناميكية حسب القناة/السياق                                                                    |
-| تخزين الجلسة   | `~/.pi/agent/sessions/`  | `~/.openclaw/agents/<agentId>/sessions/` (أو `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| المصادقة       | اعتماد واحد              | ملفات متعددة مع تدوير                                                                          |
-| الامتدادات     | محمّلة من القرص          | برمجية + مسارات قرص                                                                            |
-| معالجة الأحداث | عرض TUI                  | قائم على الاستدعاءات الراجعة (onBlockReply، إلخ)                                               |
+| الجانب         | Pi CLI                              | OpenClaw المُضمَّن                                                                                                |
+| -------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| الاستدعاء      | أمر `pi` / RPC                      | SDK عبر `createAgentSession()`                                                                                    |
+| الأدوات        | أدوات الترميز الافتراضية            | مجموعة أدوات OpenClaw المخصّصة                                                                                    |
+| مطالبة النظام  | AGENTS.md + مطالبات | ديناميكية حسب القناة/السياق                                                                                       |
+| تخزين الجلسة   | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (أو `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| المصادقة       | اعتماد واحد                         | ملفات متعددة مع تدوير                                                                                             |
+| الامتدادات     | محمّلة من القرص                     | برمجية + مسارات قرص                                                                                               |
+| معالجة الأحداث | عرض TUI                             | قائم على الاستدعاءات الراجعة (onBlockReply، إلخ)                                               |
 
 ## اعتبارات مستقبلية
 

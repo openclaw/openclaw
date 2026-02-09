@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de la capture de caméra sur des nœuds iOS ou macOS
   - Extension des workflows MEDIA en fichiers temporaires accessibles aux agents
 title: "Capture de caméra"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: b4d5f5ecbab6f705
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:12Z
 ---
 
 # Capture de caméra (agent)
@@ -38,7 +31,7 @@ Tout accès à la caméra est contrôlé par des **paramètres définis par l’
     - `devices` : tableau de `{ id, name, position, deviceType }`
 
 - `camera.snap`
-  - Paramètres :
+  - Parametres :
     - `facing` : `front|back` (par défaut : `front`)
     - `maxWidth` : nombre (optionnel ; par défaut `1600` sur le nœud iOS)
     - `quality` : `0..1` (optionnel ; par défaut `0.9`)
@@ -52,7 +45,7 @@ Tout accès à la caméra est contrôlé par des **paramètres définis par l’
   - Garde de payload : les photos sont recompressées afin de maintenir le payload base64 en dessous de 5 Mo.
 
 - `camera.clip`
-  - Paramètres :
+  - Parametres :
     - `facing` : `front|back` (par défaut : `front`)
     - `durationMs` : nombre (par défaut `3000`, limité à un maximum de `60000`)
     - `includeAudio` : booléen (par défaut `true`)
@@ -64,7 +57,7 @@ Tout accès à la caméra est contrôlé par des **paramètres définis par l’
     - `durationMs`
     - `hasAudio`
 
-### Exigence de premier plan
+### Pré-requis de premier plan
 
 Comme `canvas.*`, le nœud iOS n’autorise les commandes `camera.*` qu’en **premier plan**. Les invocations en arrière-plan renvoient `NODE_BACKGROUND_UNAVAILABLE`.
 
@@ -102,7 +95,7 @@ Remarques :
 
 Si des autorisations manquent, l’app demandera l’autorisation lorsque cela est possible ; si elle est refusée, les requêtes `camera.*` échouent avec une erreur `*_PERMISSION_REQUIRED`.
 
-### Exigence de premier plan
+### Exigence d'avant-plan d'Android
 
 Comme `canvas.*`, le nœud Android n’autorise les commandes `camera.*` qu’en **premier plan**. Les invocations en arrière-plan renvoient `NODE_BACKGROUND_UNAVAILABLE`.
 

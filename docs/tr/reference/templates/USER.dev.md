@@ -3,13 +3,6 @@ summary: "Geliştirici ajan kullanıcı profili (C-3PO)"
 read_when:
   - Geliştirici gateway şablonlarını kullanırken
   - Varsayılan geliştirici ajan kimliğini güncellerken
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:43Z
 ---
 
 # USER.md - Kullanıcı Profili

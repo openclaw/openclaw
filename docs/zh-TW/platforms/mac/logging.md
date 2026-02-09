@@ -4,13 +4,6 @@ read_when:
   - 擷取 macOS 記錄或調查私密資料記錄
   - 偵錯語音喚醒／工作階段生命週期問題
 title: "macOS 記錄"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:45Z
 ---
 
 # 記錄（macOS）
@@ -26,12 +19,12 @@ OpenClaw 會透過 swift-log 將 macOS 應用程式記錄導向（預設為統�
 
 注意事項：
 
-- 這項功能**預設為關閉**。僅在積極偵錯期間啟用。
-- 將該檔案視為敏感資料；未經審查請勿分享。
+- 此功能**預設為關閉**。 僅在主動除錯時啟用。
+- 將此檔案視為敏感資料；未經審查請勿分享。
 
 ## macOS 上統一記錄的私密資料
 
-除非某個子系統選擇加入 `privacy -off`，否則統一記錄會遮蔽大多數負載。依 Peter 在 macOS 的〈[logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans)〉（2025）一文所述，這由位於 `/Library/Preferences/Logging/Subsystems/` 的 plist 控制，並以子系統名稱作為索引鍵。只有新的記錄項目會套用該旗標，因此請在重現問題之前先啟用。
+Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. 除非某個子系統選擇加入 `privacy -off`，否則統一記錄會遮蔽大多數負載。依 Peter 在 macOS 的〈[logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans)〉（2025）一文所述，這由位於 `/Library/Preferences/Logging/Subsystems/` 的 plist 控制，並以子系統名稱作為索引鍵。只有新的記錄項目會套用該旗標，因此請在重現問題之前先啟用。 只有新的日誌項目會套用此旗標，因此請在重現問題前啟用。
 
 ## 為 OpenClaw 啟用（`bot.molt`）
 
@@ -61,4 +54,4 @@ sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Lo
 
 - 移除覆寫設定：`sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`。
 - 視需要執行 `sudo log config --reload`，以強制 logd 立即移除覆寫。
-- 請記得此介面可能包含電話號碼與訊息內容；僅在確實需要額外細節時才保留該 plist。
+- 請記住此介面可能包含電話號碼與訊息內容；僅在你實際需要額外細節時才保留 plist。

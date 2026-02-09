@@ -1,13 +1,6 @@
 ---
 summary: "Aussagekräftige Issues und Bug-Reports einreichen"
 title: "Ein Issue einreichen"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:24Z
 ---
 
 ## Ein Issue einreichen

@@ -4,13 +4,6 @@ read_when:
   - Connexion des déclencheurs de la boîte de réception Gmail à OpenClaw
   - Configuration du push Pub/Sub pour le réveil de l’agent
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:31Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -248,7 +241,7 @@ gog gmail watch status --account openclaw@gmail.com
 gog gmail history --account openclaw@gmail.com --since <historyId>
 ```
 
-## Dépannage
+## Problemes courants
 
 - `Invalid topicName` : incohérence de projet (le topic n’est pas dans le projet du client OAuth).
 - `User not authorized` : `roles/pubsub.publisher` manquant sur le topic.

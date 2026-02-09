@@ -5,13 +5,6 @@ read_when:
   - Je moet sleutels, kosten en zichtbaarheid van gebruik auditen
   - Je legt /status- of /usage-kostenrapportage uit
 title: "API-gebruik en kosten"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 908bfc17811b8f4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:46Z
 ---
 
 # API-gebruik & kosten
@@ -50,14 +43,14 @@ OpenClaw kan inloggegevens ophalen uit:
 
 ## Functies die sleutels kunnen verbruiken
 
-### 1) Kernmodelreacties (chat + tools)
+### 1. Kernmodelreacties (chat + tools)
 
 Elke reactie of tool-aanroep gebruikt de **huidige modelprovider** (OpenAI, Anthropic, enz.). Dit is de
 primaire bron van gebruik en kosten.
 
 Zie [Models](/providers/models) voor prijsconfiguratie en [Tokengebruik & kosten](/reference/token-use) voor weergave.
 
-### 2) Media-understanding (audio/beeld/video)
+### 2. Media-understanding (audio/beeld/video)
 
 Inkomende media kunnen worden samengevat/getranscribeerd voordat het antwoord wordt uitgevoerd. Dit gebruikt model-/provider-API’s.
 
@@ -67,7 +60,7 @@ Inkomende media kunnen worden samengevat/getranscribeerd voordat het antwoord wo
 
 Zie [Media understanding](/nodes/media-understanding).
 
-### 3) Geheugen-embeddings + semantische zoekopdracht
+### 3. Geheugen-embeddings + semantische zoekopdracht
 
 Semantische geheugenzorg gebruikt **embedding-API’s** wanneer geconfigureerd voor externe providers:
 
@@ -80,7 +73,7 @@ Je kunt het lokaal houden met `memorySearch.provider = "local"` (geen API-gebrui
 
 Zie [Memory](/concepts/memory).
 
-### 4) Webzoektool (Brave / Perplexity via OpenRouter)
+### 4. Webzoektool (Brave / Perplexity via OpenRouter)
 
 `web_search` gebruikt API-sleutels en kan gebruikskosten veroorzaken:
 
@@ -95,7 +88,7 @@ Zie [Memory](/concepts/memory).
 
 Zie [Web tools](/tools/web).
 
-### 5) Web-fetchtool (Firecrawl)
+### 5. Web-fetchtool (Firecrawl)
 
 `web_fetch` kan **Firecrawl** aanroepen wanneer een API-sleutel aanwezig is:
 
@@ -105,7 +98,7 @@ Als Firecrawl niet is geconfigureerd, valt de tool terug op direct fetch + reada
 
 Zie [Web tools](/tools/web).
 
-### 6) Provider-gebruikssnapshots (status/health)
+### 6. Provider-gebruikssnapshots (status/health)
 
 Sommige statusopdrachten roepen **provider-gebruikseindpunten** aan om quotavensters of auth-status weer te geven.
 Dit zijn doorgaans low-volume aanroepen, maar raken wel provider-API’s:
@@ -115,21 +108,21 @@ Dit zijn doorgaans low-volume aanroepen, maar raken wel provider-API’s:
 
 Zie [Models CLI](/cli/models).
 
-### 7) Samenvatten door compactiebeveiliging
+### 7. Samenvatten door compactiebeveiliging
 
 De compactiebeveiliging kan sessiegeschiedenis samenvatten met het **huidige model**, wat
 provider-API’s aanroept wanneer het wordt uitgevoerd.
 
 Zie [Sessiebeheer + compactie](/reference/session-management-compaction).
 
-### 8) Modelscan / probe
+### 8. Modelscan / probe
 
 `openclaw models scan` kan OpenRouter-modellen sonderen en gebruikt `OPENROUTER_API_KEY` wanneer
 sonderen is ingeschakeld.
 
 Zie [Models CLI](/cli/models).
 
-### 9) Talk (spraak)
+### 9. Talk (spraak)
 
 Talk-modus kan **ElevenLabs** aanroepen wanneer geconfigureerd:
 
@@ -137,7 +130,7 @@ Talk-modus kan **ElevenLabs** aanroepen wanneer geconfigureerd:
 
 Zie [Talk mode](/nodes/talk).
 
-### 10) Skills (API’s van derden)
+### 10. Skills (API’s van derden)
 
 Skills kunnen `apiKey` opslaan in `skills.entries.<name>.apiKey`. Als een skill die sleutel gebruikt voor externe
 API’s, kan dit kosten veroorzaken volgens de provider van de skill.

@@ -4,41 +4,34 @@ read_when:
   - Du vil bruge GitHub Copilot som modeludbyder
   - Du har brug for flowet `openclaw models auth login-github-copilot`
 title: "GitHub Copilot"
-x-i18n:
-  source_path: providers/github-copilot.md
-  source_hash: 503e0496d92c921e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:30Z
 ---
 
 # GitHub Copilot
 
 ## Hvad er GitHub Copilot?
 
-GitHub Copilot er GitHubs AI-kodeassistent. Den giver adgang til Copilot-modeller
-for din GitHub-konto og dit abonnement. OpenClaw kan bruge Copilot som
-modeludbyder på to forskellige måder.
+GitHub Copilot is GitHub's AI coding assistant. Det giver adgang til Copilot
+modeller for din GitHub konto og plan. OpenClaw kan bruge Copilot som model
+udbyder på to forskellige måder.
 
 ## To måder at bruge Copilot i OpenClaw
 
-### 1) Indbygget GitHub Copilot-udbyder (`github-copilot`)
+### 1. Indbygget GitHub Copilot-udbyder (`github-copilot`)
 
-Brug det indbyggede device-login-flow til at hente et GitHub-token, og udskift
-det derefter med Copilot API-tokens, når OpenClaw kører. Dette er **standard**
-og den enkleste løsning, fordi den ikke kræver VS Code.
+Brug det native enheds-login-flow for at få et GitHub-token, og byt det derefter for
+Copilot API-tokens når OpenClaw kører. Dette er den **standard** og den enkleste sti
+, fordi den ikke kræver VS-kode.
 
-### 2) Copilot Proxy-plugin (`copilot-proxy`)
+### 2. Copilot Proxy-plugin (`copilot-proxy`)
 
-Brug **Copilot Proxy** VS Code-udvidelsen som en lokal bro. OpenClaw taler med
-proxyens `/v1`-endpoint og bruger den modelliste, du konfigurerer der.
-Vælg dette, hvis du allerede kører Copilot Proxy i VS Code eller har brug for at
-route gennem den. Du skal aktivere pluginet og holde VS Code-udvidelsen kørende.
+Brug **Copilot Proxy** VS Code udvidelsen som en lokal bro. OpenClaw taler til
+proxyens `/v1` endpoint og bruger den model liste, du konfigurerer der. Vælg
+dette når du allerede kører Copilot Proxy i VS-kode eller har brug for at køre gennem det.
+Du skal aktivere plugin og holde VS Code udvidelse kørende.
 
 Brug GitHub Copilot som modeludbyder (`github-copilot`). Login-kommandoen kører
-GitHubs device flow, gemmer en auth-profil og opdaterer din konfiguration til at
-bruge den profil.
+GitHub enhedsflowet, gemmer en auth profil og opdaterer din config for at bruge den
+-profil.
 
 ## CLI-opsætning
 
@@ -47,7 +40,7 @@ openclaw models auth login-github-copilot
 ```
 
 Du bliver bedt om at besøge en URL og indtaste en engangskode. Hold terminalen
-åben, indtil det er fuldført.
+åben, indtil den er færdig.
 
 ### Valgfrie flag
 

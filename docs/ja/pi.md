@@ -1,12 +1,5 @@
 ---
 title: "Pi 統合アーキテクチャ"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:46Z
 ---
 
 # Pi 統合アーキテクチャ
@@ -15,7 +8,7 @@ x-i18n:
 
 ## Overview
 
-OpenClaw は pi SDK を使用して、AI コーディングエージェントをメッセージングゲートウェイアーキテクチャに組み込みます。pi をサブプロセスとして起動したり RPC モードを使用したりするのではなく、OpenClaw は `createAgentSession()` を介して pi の `AgentSession` を直接インポートおよびインスタンス化します。この組み込み型アプローチにより、次の利点が得られます。
+OpenClaw は pi SDK を使用して、AI コーディングエージェントをメッセージングゲートウェイアーキテクチャに組み込みます。pi をサブプロセスとして起動したり RPC モードを使用したりするのではなく、OpenClaw は `createAgentSession()` を介して pi の `AgentSession` を直接インポートおよびインスタンス化します。この組み込み型アプローチにより、次の利点が得られます。 パイをサブプロセスとしてスポーンさせる代わりに、またはRPCモードを使用する代わりに、OpenClawは`createAgentSession()`を介してpiの`AgentSession`を直接インポートしてインスタンス化します。 この組み込みアプローチは以下のとおりです。
 
 - セッションライフサイクルおよびイベント処理を完全に制御
 - カスタムツールの注入（メッセージング、サンドボックス、チャンネル固有アクション）
@@ -35,12 +28,12 @@ OpenClaw は pi SDK を使用して、AI コーディングエージェントを
 }
 ```
 
-| Package           | Purpose                                                                                              |
-| ----------------- | ---------------------------------------------------------------------------------------------------- |
-| `pi-ai`           | コア LLM 抽象化：`Model`、`streamSimple`、メッセージ型、プロバイダー API                             |
-| `pi-agent-core`   | エージェントループ、ツール実行、`AgentMessage` 型                                                    |
+| Package           | Purpose                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `pi-ai`           | コア LLM 抽象化：`Model`、`streamSimple`、メッセージ型、プロバイダー API                                  |
+| `pi-agent-core`   | エージェントループ、ツール実行、`AgentMessage` 型                                                     |
 | `pi-coding-agent` | 高レベル SDK：`createAgentSession`、`SessionManager`、`AuthStorage`、`ModelRegistry`、組み込みツール |
-| `pi-tui`          | ターミナル UI コンポーネント（OpenClaw のローカル TUI モードで使用）                                 |
+| `pi-tui`          | ターミナル UI コンポーネント（OpenClaw のローカル TUI モードで使用）                                          |
 
 ## File Structure
 
@@ -249,7 +242,7 @@ SDK は、LLM への送信、ツール呼び出しの実行、レスポンスの
 
 ### Tool Definition Adapter
 
-pi-agent-core の `AgentTool` は、pi-coding-agent の `ToolDefinition` とは異なる `execute` シグネチャを持ちます。`pi-tool-definition-adapter.ts` 内のアダプターがこれを橋渡しします。
+pi-agent-core の `AgentTool` は、pi-coding-agent の `ToolDefinition` とは異なる `execute` シグネチャを持ちます。`pi-tool-definition-adapter.ts` 内のアダプターがこれを橋渡しします。 `pi-tool-definition-adapter.ts`のアダプターは、以下のようにブリッジします。
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -283,7 +276,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 ## System Prompt Construction
 
-システムプロンプトは `buildAgentSystemPrompt()`（`system-prompt.ts`）で構築されます。Tooling、Tool Call Style、安全性ガードレール、OpenClaw CLI リファレンス、Skills、Docs、Workspace、Sandbox、Messaging、Reply Tags、Voice、Silent Replies、Heartbeats、Runtime メタデータに加え、有効時には Memory と Reactions、さらにオプションのコンテキストファイルおよび追加のシステムプロンプト内容を含む完全なプロンプトを組み立てます。サブエージェントで使用される最小プロンプトモードでは、各セクションがトリミングされます。
+システムプロンプトは `buildAgentSystemPrompt()`（`system-prompt.ts`）で構築されます。Tooling、Tool Call Style、安全性ガードレール、OpenClaw CLI リファレンス、Skills、Docs、Workspace、Sandbox、Messaging、Reply Tags、Voice、Silent Replies、Heartbeats、Runtime メタデータに加え、有効時には Memory と Reactions、さらにオプションのコンテキストファイルおよび追加のシステムプロンプト内容を含む完全なプロンプトを組み立てます。サブエージェントで使用される最小プロンプトモードでは、各セクションがトリミングされます。 ツール、ツールコールスタイル、安全ガードレール、OpenClawのCLI参照、スキル、ドキュメント、ワークスペース、サンドボックス、メッセージングなどのセクションで完全なプロンプトを組み立てます。 返信タグ、音声、サイレント返信、ハートビート、ランタイムメタデータ、プラスメモリとリアクション、オプションのコンテキストファイルと追加のシステムプロンプトコンテンツ。 サブエージェントで使用される最小限のプロンプトモードでは、セクションがトリミングされます。
 
 このプロンプトは、セッション作成後に `applySystemPromptOverrideToSession()` を介して適用されます。
 
@@ -296,7 +289,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### Session Files
 
-セッションはツリー構造（id / parentId によるリンク）を持つ JSONL ファイルです。pi の `SessionManager` が永続化を処理します。
+セッションはツリー構造（id / parentId によるリンク）を持つ JSONL ファイルです。pi の `SessionManager` が永続化を処理します。 Pi の `SessionManager` ハンドル:
 
 ```typescript
 const sessionManager = SessionManager.open(params.sessionFile);
@@ -320,7 +313,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### Compaction
 
-コンテキストオーバーフロー時に自動圧縮がトリガーされます。`compactEmbeddedPiSessionDirect()` は手動圧縮を処理します。
+コンテキストオーバーフロー時に自動圧縮をトリガーします。 `compactEmbeddedPiSessionDirect()`は手動コンパクトを処理します。
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -518,19 +511,19 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## Key Differences from Pi CLI
 
-| Aspect          | Pi CLI                   | OpenClaw Embedded                                                                                   |
-| --------------- | ------------------------ | --------------------------------------------------------------------------------------------------- |
-| Invocation      | `pi` コマンド / RPC      | `createAgentSession()` 経由の SDK                                                                   |
-| Tools           | 既定のコーディングツール | カスタム OpenClaw ツールスイート                                                                    |
-| System prompt   | AGENTS.md + プロンプト   | チャンネル／コンテキストごとに動的                                                                  |
-| Session storage | `~/.pi/agent/sessions/`  | `~/.openclaw/agents/<agentId>/sessions/`（または `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`） |
-| Auth            | 単一クレデンシャル       | ローテーション付きマルチプロファイル                                                                |
-| Extensions      | ディスクからロード       | プログラム的 + ディスクパス                                                                         |
-| Event handling  | TUI レンダリング         | コールバックベース（onBlockReply など）                                                             |
+| Aspect          | Pi CLI                            | OpenClaw Embedded                                                                              |
+| --------------- | --------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Invocation      | `pi` コマンド / RPC                   | `createAgentSession()` 経由の SDK                                                                 |
+| Tools           | 既定のコーディングツール                      | カスタム OpenClaw ツールスイート                                                                          |
+| System prompt   | AGENTS.md + プロンプト | チャンネル／コンテキストごとに動的                                                                              |
+| Session storage | `~/.pi/agent/sessions/`           | `~/.openclaw/agents/<agentId>/sessions/`（または `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`） |
+| Auth            | 単一クレデンシャル                         | ローテーション付きマルチプロファイル                                                                             |
+| Extensions      | ディスクからロード                         | プログラム的 + ディスクパス                                                                                |
+| Event handling  | TUI レンダリング                        | コールバックベース（onBlockReply など）                                                                     |
 
 ## Future Considerations
 
-将来的な見直し候補の領域は次のとおりです。
+潜在的な再作業のための領域:
 
 1. **Tool signature alignment**：現在、pi-agent-core と pi-coding-agent のシグネチャ間でアダプトを実施
 2. **Session manager wrapping**：`guardSessionManager` は安全性を追加するが、複雑性が増加

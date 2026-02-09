@@ -3,13 +3,6 @@ summary: "Hvordan macOS-appen rapporterer gateway/Baileys-sundhedstilstande"
 read_when:
   - Fejlfinding af mac-appens sundhedsindikatorer
 title: "Sundhedstjek"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:26Z
 ---
 
 # Sundhedstjek på macOS
@@ -33,7 +26,7 @@ Sådan kan du se, om den tilknyttede kanal er sund fra menulinje-appen.
 
 ## Sådan virker proben
 
-- Appen kører `openclaw health --json` via `ShellExecutor` cirka hver ~60. sekund og efter behov. Proben indlæser legitimationsoplysninger og rapporterer status uden at sende beskeder.
+- App kører `openclaw sundhed --json` via `ShellExecutor` hver ~ 60s og efter behov. Sonden indlæser creds og rapporter status uden at sende beskeder.
 - Cache det seneste gode snapshot og den seneste fejl separat for at undgå flimmer; vis tidsstemplet for hver.
 
 ## Når du er i tvivl

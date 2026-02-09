@@ -3,13 +3,6 @@ summary: "États et animations de l’icône de la barre de menus pour OpenClaw 
 read_when:
   - Modification du comportement de l’icône de la barre de menus
 title: "Icône de la barre de menus"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:17Z
 ---
 
 # États de l’icône de la barre de menus
@@ -30,7 +23,7 @@ Formes et tailles
 
 - Icône de base dessinée dans `CritterIconRenderer.makeIcon(blink:legWiggle:earWiggle:earScale:earHoles:)`.
 - L’échelle des oreilles par défaut est `1.0` ; l’amplification vocale définit `earScale=1.9` et bascule `earHoles=true` sans modifier le cadre global (image modèle 18×18 pt rendue dans un support Retina 36×36 px).
-- La course utilise un dandinement des pattes jusqu’à ~1,0 avec un léger tremblement horizontal ; elle s’additionne à tout dandinement inactif existant.
+- Scurry utilise des wiggle de jambe jusqu'à ~1.0 avec un petit jiggle horizontal ; il est additif à n'importe quelle wiggle inactive existante.
 
 Notes comportementales
 

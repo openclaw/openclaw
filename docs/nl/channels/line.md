@@ -5,13 +5,6 @@ read_when:
   - Je hebt webhook- en inloggegevens voor LINE nodig
   - Je wilt LINE-specifieke berichtopties gebruiken
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:04Z
 ---
 
 # LINE (plugin)
@@ -109,7 +102,7 @@ Meerdere accounts:
 }
 ```
 
-## Toegangsbeheer
+## Toegangs beheer
 
 Directe berichten staan standaard op koppelen. Onbekende afzenders krijgen een
 koppelcode en hun berichten worden genegeerd totdat ze zijn goedgekeurd.

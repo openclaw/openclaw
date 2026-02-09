@@ -3,13 +3,6 @@ summary: "चैनल कनेक्टिविटी के लिए स्
 read_when:
   - WhatsApp चैनल स्वास्थ्य का निदान करते समय
 title: "स्वास्थ्य जाँच"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:21Z
 ---
 
 # स्वास्थ्य जाँच (CLI)
@@ -28,8 +21,8 @@ x-i18n:
 ## गहन निदान
 
 - डिस्क पर क्रेडेंशियल्स: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime हालिया होना चाहिए)।
-- सत्र स्टोर: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (पथ को विन्यास में ओवरराइड किया जा सकता है)। गणना और हालिया प्राप्तकर्ता `status` के माध्यम से प्रदर्शित होते हैं।
-- रिलिंक प्रवाह: `openclaw channels logout && openclaw channels login --verbose` जब स्थिति कोड 409–515 हों या लॉग्स में `loggedOut` दिखाई दे। (टिप्पणी: पेयरिंग के बाद स्थिति 515 के लिए QR लॉगिन प्रवाह एक बार स्वतः पुनः आरंभ होता है।)
+- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`.
+- Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Note: the QR login flow auto-restarts once for status 515 after pairing.)
 
 ## जब कुछ विफल हो जाए
 
@@ -39,4 +32,4 @@ x-i18n:
 
 ## समर्पित "health" कमांड
 
-`openclaw health --json` चल रहे Gateway (गेटवे) से उसका स्वास्थ्य स्नैपशॉट माँगता है (CLI से कोई प्रत्यक्ष चैनल सॉकेट नहीं)। यह उपलब्ध होने पर लिंक किए गए क्रेडेंशियल्स/प्रमाणीकरण आयु, प्रति-चैनल प्रोब सारांश, सत्र-स्टोर सारांश, और प्रोब अवधि रिपोर्ट करता है। यदि Gateway (गेटवे) अनुपलब्ध हो या प्रोब विफल/टाइमआउट हो जाए, तो यह नॉन-ज़ीरो के साथ समाप्त होता है। 10s डिफ़ॉल्ट को ओवरराइड करने के लिए `--timeout <ms>` का उपयोग करें।
+`openclaw health --json` asks the running Gateway for its health snapshot (no direct channel sockets from the CLI). It reports linked creds/auth age when available, per-channel probe summaries, session-store summary, and a probe duration. It exits non-zero if the Gateway is unreachable or the probe fails/timeouts. Use `--timeout <ms>` to override the 10s default.

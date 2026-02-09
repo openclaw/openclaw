@@ -5,13 +5,6 @@ description: Typed workflow runtime for OpenClaw — composable pipelines with a
 read_when:
   - Açık onaylarla deterministik çok adımlı iş akışları istiyorsunuz
   - Önceki adımları yeniden çalıştırmadan bir iş akışını sürdürmeniz gerekiyor
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:06Z
 ---
 
 # Lobster
@@ -63,7 +56,7 @@ inbox apply --json
 }
 ```
 
-Boru hattı onay isterse, belirteçle devam edin:
+31. Ardışık düzen onay isterse, belirteçle devam edin:
 
 ```json
 {
@@ -176,7 +169,7 @@ Lobster **isteğe bağlı** bir eklenti aracıdır (varsayılan olarak etkin de�
 }
 ```
 
-Veya ajan bazında:
+32. Veya ajan başına:
 
 ```json
 {

@@ -1,17 +1,10 @@
 ---
 summary: "Où OpenClaw charge les variables d'environnement et l'ordre de priorité"
 read_when:
-  - Vous devez savoir quelles variables d'environnement sont chargées, et dans quel ordre
+  - Vous devez savoir quelles sont les variables d'env qui sont chargées, et dans quel ordre
   - Vous dépannez des clés API manquantes dans la Gateway (passerelle)
   - Vous documentez l'authentification des fournisseurs ou les environnements de déploiement
 title: "Variables d'environnement"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:37Z
 ---
 
 # Variables d'environnement
@@ -58,7 +51,7 @@ Deux façons équivalentes de définir des variables d'environnement inline (les
 }
 ```
 
-Équivalents en variables d'environnement :
+Env var équivalents:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`

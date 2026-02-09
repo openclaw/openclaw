@@ -3,13 +3,6 @@ summary: "macOS アプリが Gateway（ゲートウェイ）/Baileys のヘル�
 read_when:
   - mac アプリのヘルスインジケーターをデバッグする場合
 title: "ヘルスチェック"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:33Z
 ---
 
 # macOS におけるヘルスチェック
@@ -33,7 +26,7 @@ x-i18n:
 
 ## プローブの仕組み
 
-- アプリは約 60 秒ごと、およびオンデマンドで、`openclaw health --json` を `ShellExecutor` 経由で実行します。プローブは認証情報を読み込み、メッセージを送信せずにステータスを報告します。
+- アプリは約 60 秒ごと、およびオンデマンドで、`openclaw health --json` を `ShellExecutor` 経由で実行します。プローブは認証情報を読み込み、メッセージを送信せずにステータスを報告します。 プローブは、メッセージを送信せずにクリードを読み込み、ステータスを報告します。
 - ちらつきを防ぐため、直近の正常なスナップショットと直近のエラーを個別にキャッシュし、それぞれのタイムスタンプを表示します。
 
 ## 判断に迷った場合

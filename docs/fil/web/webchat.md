@@ -3,13 +3,6 @@ summary: "Static host ng Loopback WebChat at paggamit ng Gateway WS para sa chat
 read_when:
   - Pag-debug o pag-configure ng access sa WebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:58Z
 ---
 
 # WebChat (Gateway WebSocket UI)
@@ -46,7 +39,7 @@ Buong konpigurasyon: [Configuration](/gateway/configuration)
 
 Mga opsyon ng channel:
 
-- Walang dedicated na `webchat.*` block. Ginagamit ng WebChat ang Gateway endpoint + mga auth setting sa ibaba.
+- No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.
 
 Kaugnay na mga global na opsyon:
 

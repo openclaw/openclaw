@@ -4,13 +4,6 @@ read_when:
   - संदेश CLI क्रियाएँ जोड़ते या संशोधित करते समय
   - आउटबाउंड चैनल व्यवहार बदलते समय
 title: "संदेश"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:17Z
 ---
 
 # `openclaw message`

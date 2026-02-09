@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:38Z
 ---
 
 # Fly.io-udrulning
@@ -42,13 +35,13 @@ fly apps create my-openclaw
 fly volumes create openclaw_data --size 1 --region iad
 ```
 
-**Tip:** Vælg en region tæt på dig. Almindelige muligheder: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
+**Tip:** Vælg et område tæt på dig. Fælles muligheder: »lhr« (London), »iad« (Virginia), »sjc« (San Jose).
 
-## 2) Konfigurer fly.toml
+## 2. Konfigurer fly.toml
 
 Redigér `fly.toml` så den matcher dit appnavn og dine krav.
 
-**Sikkerhedsbemærkning:** Standardkonfigurationen eksponerer en offentlig URL. For en hærdet udrulning uden offentlig IP, se [Private Deployment](#private-deployment-hardened) eller brug `fly.private.toml`.
+**Sikkerhed note:** Standard config udsætter en offentlig URL. For en hærdet deployering uden offentlig IP, se [Privat Deployment](#private-deployment-hardened) eller brug `fly.private.toml`.
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Nøgleindstillinger:**
 
-| Indstilling                    | Hvorfor                                                                        |
-| ------------------------------ | ------------------------------------------------------------------------------ |
-| `--bind lan`                   | Binder til `0.0.0.0` så Flys proxy kan nå gatewayen                            |
+| Indstilling                    | Hvorfor                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Binder til `0.0.0.0` så Flys proxy kan nå gatewayen                                               |
 | `--allow-unconfigured`         | Starter uden en konfigurationsfil (du opretter en senere)                      |
 | `internal_port = 3000`         | Skal matche `--port 3000` (eller `OPENCLAW_GATEWAY_PORT`) for Fly-sundhedstjek |
-| `memory = "2048mb"`            | 512MB er for lidt; 2GB anbefales                                               |
-| `OPENCLAW_STATE_DIR = "/data"` | Gør tilstand vedvarende på volumen                                             |
+| `memory = "2048mb"`            | 512MB er for lidt; 2GB anbefales                                                                  |
+| `OPENCLAW_STATE_DIR = "/data"` | Gør tilstand vedvarende på volumen                                                                |
 
-## 3) Sæt secrets
+## 3. Sæt secrets
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,15 +107,15 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - Ikke-loopback-bindinger (`--bind lan`) kræver `OPENCLAW_GATEWAY_TOKEN` af sikkerhedshensyn.
 - Behandl disse tokens som adgangskoder.
-- **Foretræk miljøvariabler frem for konfigurationsfil** for alle API-nøgler og tokens. Det holder secrets ude af `openclaw.json`, hvor de utilsigtet kan blive eksponeret eller logget.
+- **Foretræk env vars over config fil** for alle API-nøgler og tokens. Dette holder hemmeligheder ud af `openclaw.json` hvor de ved et uheld kunne blive afsløret eller logget.
 
-## 4) Udrul
+## 4. Udrul
 
 ```bash
 fly deploy
 ```
 
-Første udrulning bygger Docker-imaget (~2–3 minutter). Efterfølgende udrulninger er hurtigere.
+Installér først Docker-billedet (~2-3 minutter). Efterfølgende implementeringer er hurtigere.
 
 Efter udrulning, verificér:
 
@@ -138,7 +131,7 @@ Du bør se:
 [discord] logged in to discord as xxx
 ```
 
-## 5) Opret konfigurationsfil
+## 5. Opret konfigurationsfil
 
 SSH ind på maskinen for at oprette en korrekt konfiguration:
 
@@ -209,7 +202,7 @@ EOF
 - Miljøvariabel: `DISCORD_BOT_TOKEN` (anbefalet til secrets)
 - Konfigurationsfil: `channels.discord.token`
 
-Hvis du bruger env var, behøver du ikke at tilføje token til konfigurationen. Gatewayen læser `DISCORD_BOT_TOKEN` automatisk.
+Hvis du bruger env var, ingen grund til at tilføje token til config. Gatewayen læser automatisk `DISCORD_BOT_TOKEN`
 
 Genstart for at anvende:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Få adgang til Gateway
+## 6. Få adgang til Gateway
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Fly kan ikke nå gatewayen på den konfigurerede port.
 
 ### OOM / hukommelsesproblemer
 
-Containeren genstarter konstant eller bliver dræbt. Tegn: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration` eller tavse genstarter.
+Container fortsætter med at genstarte eller blive dræbt. Tegninger: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, eller tavse genstarter.
 
 **Løsning:** Øg hukommelsen i `fly.toml`:
 
@@ -276,7 +269,7 @@ Eller opdatér en eksisterende maskine:
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**Bemærk:** 512MB er for lidt. 1GB kan fungere, men kan få OOM under belastning eller med detaljeret logging. **2GB anbefales.**
+**Bemærk:** 512MB er for lille. 1 GB kan fungere, men kan OOM under belastning eller med verbose logning. **2GB anbefales.**
 
 ### Gateway-låsproblemer
 
@@ -295,7 +288,7 @@ Låsfilen ligger i `/data/gateway.*.lock` (ikke i en undermappe).
 
 ### Konfigurationen bliver ikke læst
 
-Hvis du bruger `--allow-unconfigured`, opretter gatewayen en minimal konfiguration. Din brugerdefinerede konfiguration i `/data/openclaw.json` bør blive læst ved genstart.
+Hvis du bruger `-- allow-unconfigured`, opretter gatewayen en minimal konfiguration. Din brugerdefinerede config på `/data / openclaw.json` skal læses ved genstart.
 
 Verificér at konfigurationen findes:
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### Skrivning af konfiguration via SSH
 
-Kommandoen `fly ssh console -C` understøtter ikke shell-omdirigering. For at skrive en konfigurationsfil:
+Kommandoen `fly ssh konsol -C` understøtter ikke skalomdirigering. Sådan skriver du en konfigurationsfil:
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -316,7 +309,7 @@ fly sftp shell
 > put /local/path/config.json /data/openclaw.json
 ```
 
-**Bemærk:** `fly sftp` kan fejle, hvis filen allerede findes. Slet den først:
+**Bemærk:** 'flyve sftp' kan mislykkes, hvis filen allerede eksisterer. Slet først:
 
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
@@ -357,11 +350,11 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**Bemærk:** Efter `fly deploy` kan maskinkommandoen blive nulstillet til det, der står i `fly.toml`. Hvis du har lavet manuelle ændringer, skal du genanvende dem efter udrulning.
+**Bemærk:** Efter `flyve deploy`, maskinens kommando kan nulstille til hvad der er i `fly.toml`. Hvis du har foretaget manuelle ændringer, genanvende dem efter implementering.
 
 ## Privat udrulning (hærdet)
 
-Som standard tildeler Fly offentlige IP’er, hvilket gør din gateway tilgængelig på `https://your-app.fly.dev`. Det er praktisk, men betyder, at din udrulning kan opdages af internet-scannere (Shodan, Censys m.fl.).
+Som standard, Fly allokerer offentlige IP'er, hvilket gør din gateway tilgængelig på `https://your-app.fly.dev`. Dette er praktisk, men betyder din implementering er opdaget af internet scannere (Shodan, Censys, etc.).
 
 For en hærdet udrulning **uden offentlig eksponering**, brug den private skabelon.
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### Webhooks med privat udrulning
 
-Hvis du har brug for webhook-callbacks (Twilio, Telnyx m.fl.) uden offentlig eksponering:
+Hvis du har brug for webhook tilbagekald (Twilio, Telnyx, etc.) uden offentlig eksponering:
 
 1. **ngrok-tunnel** – Kør ngrok inde i containeren eller som sidecar
 2. **Tailscale Funnel** – Eksponér specifikke stier via Tailscale
@@ -464,7 +457,7 @@ Eksempel på voice-call-konfiguration med ngrok:
 }
 ```
 
-ngrok-tunnellen kører inde i containeren og leverer en offentlig webhook-URL uden at eksponere selve Fly-appen. Sæt `webhookSecurity.allowedHosts` til det offentlige tunnel-værtsnavn, så videresendte host-headers accepteres.
+Ngrok tunnelen kører inde i beholderen og giver en offentlig webhook URL uden at udsætte flyve app selv. Sæt `webhookSecurity.allowedHosts` til den offentlige tunnel værtsnavn så videresendte vært overskrifter accepteres.
 
 ### Sikkerhedsfordele
 

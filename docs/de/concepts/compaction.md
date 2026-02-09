@@ -1,16 +1,9 @@
 ---
-summary: „Kontextfenster + Kompaktierung: wie OpenClaw Sitzungen innerhalb der Modellgrenzen hält“
+summary: "„Kontextfenster + Kompaktierung: wie OpenClaw Sitzungen innerhalb der Modellgrenzen hält“"
 read_when:
   - Sie möchten Auto-Kompaktierung und /compact verstehen
   - Sie debuggen lange Sitzungen, die an Kontextgrenzen stoßen
-title: „Kompaktierung“
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:49Z
+title: "Verdichtung"
 ---
 
 # Kontextfenster & Kompaktierung

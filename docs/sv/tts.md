@@ -5,19 +5,12 @@ read_when:
   - Konfigurera TTS-leverantörer eller gränser
   - Använda /tts-kommandon
 title: "Text-till-tal"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:19:05Z
 ---
 
 # Text-till-tal (TTS)
 
-OpenClaw kan konvertera utgående svar till ljud med ElevenLabs, OpenAI eller Edge TTS.
-Det fungerar överallt där OpenClaw kan skicka ljud; Telegram får en rund röstmeddelandebubbla.
+OpenClaw kan konvertera utgående svar till ljud med hjälp av ElevenLabs, OpenAI, eller Edge TTS.
+Det fungerar var som helst OpenClaw kan skicka ljud, Telegram får en rund röst-anteckningsbubbla.
 
 ## Stödda tjänster
 
@@ -27,15 +20,15 @@ Det fungerar överallt där OpenClaw kan skicka ljud; Telegram får en rund rös
 
 ### Anteckningar om Edge TTS
 
-Edge TTS använder Microsoft Edges onlinebaserade neurala TTS-tjänst via biblioteket
-`node-edge-tts`. Det är en hostad tjänst (inte lokal), använder Microsofts endpoints och
-kräver ingen API-nyckel. `node-edge-tts` exponerar talinställningar och
-utdataformat, men alla alternativ stöds inte av Edge-tjänsten. citeturn2search0
+Kanten TTS använder Microsoft Edges online-neurala TTS-tjänst via `node-edge-tts`
+biblioteket. Det är en värd tjänst (inte lokal), använder Microsofts slutpunkter, och gör
+inte kräver en API-nyckel. `node-edge-tts` exponerar talkonfigurationsalternativ och
+utdataformat, men inte alla alternativ stöds av Edge tjänsten. <unk> cite<unk> turn2search0<unk>
 
-Eftersom Edge TTS är en offentlig webbtjänst utan publicerad SLA eller kvot bör den
-betraktas som best-effort. Om du behöver garanterade gränser och support, använd OpenAI
-eller ElevenLabs. Microsofts Speech REST API dokumenterar en ljudgräns på 10 minuter per
-begäran; Edge TTS publicerar inga gränser, så anta liknande eller lägre gränser. citeturn0search3
+Eftersom Edge TTS är en offentlig webbtjänst utan en publicerad SLA eller kvot, behandla det
+som bäst-ansträngning. Om du behöver garanterade gränser och stöd, använd OpenAI eller ElevenLabs.
+Microsofts Speech REST API dokumenterar en 10 minuters ljudgräns per begäran; Edge TTS
+inte publicera gränser, så anta liknande eller lägre gränser. <unk> cite<unk> turn0search3<unk>
 
 ## Valfria nycklar
 
@@ -44,13 +37,12 @@ Om du vill använda OpenAI eller ElevenLabs:
 - `ELEVENLABS_API_KEY` (eller `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS kräver **ingen** API-nyckel. Om inga API-nycklar hittas använder OpenClaw som
-standard Edge TTS (om det inte är inaktiverat via `messages.tts.edge.enabled=false`).
+Edge TTS kräver **inte** en API-nyckel. Om inga API-nycklar hittas, är OpenClaw standard
+to Edge TTS (om inte inaktiverat via `messages.tts.edge.enabled=false`).
 
-Om flera leverantörer är konfigurerade används den valda leverantören först och de andra
-är reservalternativ. Auto-sammanfattning använder den konfigurerade `summaryModel`
-(eller `agents.defaults.model.primary`), så den leverantören måste också vara autentiserad om du
-aktiverar sammanfattningar.
+Om flera leverantörer är konfigurerade, används den valda leverantören först och de andra är reservalternativ.
+Automatisk sammanfattning använder den konfigurerade `summaryModel` (eller `agents.defaults.model.primary`),
+så att leverantören måste autentiseras om du aktiverar sammanfattningar.
 
 ## Tjänstelänkar
 
@@ -63,7 +55,7 @@ aktiverar sammanfattningar.
 
 ## Är det aktiverat som standard?
 
-Nej. Auto‑TTS är **av** som standard. Aktivera det i konfig med
+Nej. AutoTTS är **av** som standard. Aktivera det i konfigurationen med
 `messages.tts.auto` eller per session med `/tts always` (alias: `/tts on`).
 
 Edge TTS **är** aktiverat som standard när TTS är på, och används automatiskt
@@ -71,8 +63,8 @@ när inga OpenAI- eller ElevenLabs-API-nycklar finns tillgängliga.
 
 ## Konfig
 
-TTS-konfig ligger under `messages.tts` i `openclaw.json`.
-Fullständigt schema finns i [Gateway configuration](/gateway/configuration).
+TTS-konfigurationen lever under `messages.tts` i `openclaw.json`.
+Fullt schema finns i [Gateway konfiguration](/gateway/configuration).
 
 ### Minimal konfig (aktivera + leverantör)
 
@@ -218,7 +210,7 @@ Kör sedan:
 - `summaryModel`: valfri billig modell för auto-sammanfattning; standard är `agents.defaults.model.primary`.
   - Accepterar `provider/model` eller ett konfigurerat modellalias.
 - `modelOverrides`: tillåt modellen att emittera TTS-direktiv (på som standard).
-- `maxTextLength`: hård gräns för TTS-indata (tecken). `/tts audio` misslyckas om den överskrids.
+- `maxTextLength`: hård mössa för TTS-inmatning (tecken). `/tts audio` misslyckas om det överskrids.
 - `timeoutMs`: timeout för begäran (ms).
 - `prefsPath`: åsidosätt lokal prefs-JSON-sökväg (leverantör/gräns/sammanfattning).
 - `apiKey`-värden faller tillbaka till miljövariabler (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
@@ -228,12 +220,12 @@ Kör sedan:
   - `useSpeakerBoost`: `true|false`
   - `speed`: `0.5..2.0` (1.0 = normalt)
 - `elevenlabs.applyTextNormalization`: `auto|on|off`
-- `elevenlabs.languageCode`: 2-bokstävers ISO 639-1 (t.ex. `en`, `de`)
+- `11labs.languageCode`: 2-bokstavlig ISO 639-1 (t.ex. `en`, `de`)
 - `elevenlabs.seed`: heltal `0..4294967295` (best-effort-determinism)
 - `edge.enabled`: tillåt användning av Edge TTS (standard `true`; ingen API-nyckel).
-- `edge.voice`: Edge neural röstnamn (t.ex. `en-US-MichelleNeural`).
+- `edge.voice`: Edge neuralt röstnamn (t.ex. `en-US-MichelleNeural`).
 - `edge.lang`: språkkod (t.ex. `en-US`).
-- `edge.outputFormat`: Edge-utdataformat (t.ex. `audio-24khz-48kbitrate-mono-mp3`).
+- `edge.outputFormat`: Edge utdataformat (t.ex. `audio-24khz-48kbitrate-mono-mp3`).
   - Se Microsoft Speech output formats för giltiga värden; alla format stöds inte av Edge.
 - `edge.rate` / `edge.pitch` / `edge.volume`: procentsträngar (t.ex. `+10%`, `-5%`).
 - `edge.saveSubtitles`: skriv JSON-undertexter bredvid ljudfilen.
@@ -242,13 +234,13 @@ Kör sedan:
 
 ## Modellstyrda åsidosättningar (på som standard)
 
-Som standard **kan** modellen emittera TTS-direktiv för ett enskilt svar.
-När `messages.tts.auto` är `tagged` krävs dessa direktiv för att trigga ljud.
+Som standard kan modellen \*\*sända ut TTS-direktiv för ett enda svar.
+När `messages.tts.auto` är `tagged`, krävs dessa direktiv för att utlösa ljud.
 
-När detta är aktiverat kan modellen emittera `[[tts:...]]`-direktiv för att
-åsidosätta rösten för ett enskilt svar, samt ett valfritt `[[tts:text]]...[[/tts:text]]`-block
-för att tillhandahålla uttrycksfulla taggar (skratt, sångmarkörer m.m.) som endast
-ska förekomma i ljudet.
+När den är aktiverad kan modellen sända ut direktiven `[[tts:...]]` för att åsidosätta rösten
+för ett enda svar, plus en valfri `[[tts:text]]. .[[/tts:text]]` block till
+ger uttrycksfulla taggar (skratt, sjungande ledtrådar, etc) som endast ska synas i
+ljudet.
 
 Exempel på svarspayload:
 
@@ -321,11 +313,11 @@ Dessa åsidosätter `messages.tts.*` för den värden.
 - **Andra kanaler**: MP3 (`mp3_44100_128` från ElevenLabs, `mp3` från OpenAI).
   - 44,1 kHz / 128 kbps är standardbalansen för taltydlighet.
 - **Edge TTS**: använder `edge.outputFormat` (standard `audio-24khz-48kbitrate-mono-mp3`).
-  - `node-edge-tts` accepterar ett `outputFormat`, men alla format är inte tillgängliga
-    från Edge-tjänsten. citeturn2search0
-  - Utdataformatvärden följer Microsoft Speech output formats (inklusive Ogg/WebM Opus). citeturn1search0
+  - `node-edge-tts` accepterar en `outputFormat`, men inte alla format är tillgängliga
+    från Edge tjänsten. <unk> cite<unk> turn2search0<unk>
+  - Utdataformatvärden följer Microsoft Utdataformat (inklusive Ogg/WebM Opus). <unk> cite<unk> turn1search0<unk>
   - Telegram `sendVoice` accepterar OGG/MP3/M4A; använd OpenAI/ElevenLabs om du behöver
-    garanterade Opus-röstmeddelanden. citeturn1search1
+    garanterade röstanteckningar från Opus. <unk> cite<unk> turn1search1<unk>
   - Om det konfigurerade Edge-utdataformatet misslyckas försöker OpenClaw igen med MP3.
 
 OpenAI/ElevenLabs-format är fasta; Telegram förväntar sig Opus för röstmeddelande-UX.
@@ -360,10 +352,10 @@ Reply -> TTS enabled?
 ## Användning av snedstreckskommandon
 
 Det finns ett enda kommando: `/tts`.
-Se [Slash commands](/tools/slash-commands) för detaljer om aktivering.
+Se [Slash-kommandon](/tools/slash-commands) för information om aktivering.
 
 Discord-anteckning: `/tts` är ett inbyggt Discord-kommando, så OpenClaw registrerar
-`/voice` som det inbyggda kommandot där. Text `/tts ...` fungerar fortfarande.
+`/voice` som det infödda kommandot där. Text `/tts ...` fungerar fortfarande.
 
 ```
 /tts off
@@ -387,8 +379,8 @@ Anteckningar:
 
 ## Agentverktyg
 
-Verktyget `tts` konverterar text till tal och returnerar en `MEDIA:`-sökväg.
-När resultatet är Telegram-kompatibelt inkluderar verktyget `[[audio_as_voice]]` så att
+Verktyget `tts` omvandlar text till tal och returnerar en `MEDIA:` väg. När resultatet
+är Telegram-kompatibelt innehåller verktyget `[[audio_as_voice]]` så
 Telegram skickar en röstbubbla.
 
 ## Gateway RPC

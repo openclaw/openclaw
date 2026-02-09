@@ -1,19 +1,12 @@
 ---
 title: "Pi Geliştirme İş Akışı"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:28Z
 ---
 
 # Pi Geliştirme İş Akışı
 
 Bu kılavuz, OpenClaw’daki pi entegrasyonu üzerinde çalışmak için makul bir iş akışını özetler.
 
-## Tür Denetimi ve Linting
+## Type Checking and Linting
 
 - Tür denetimi ve derleme: `pnpm build`
 - Lint: `pnpm lint`
@@ -49,14 +42,14 @@ Betik, aşağıdaki glob’lar üzerinden tüm pi ile ilgili birim testlerini ç
 
 - Gateway’i geliştirme modunda çalıştırın:
   - `pnpm gateway:dev`
-- Ajanı doğrudan tetikleyin:
+- Trigger the agent directly:
   - `pnpm openclaw agent --message "Hello" --thinking low`
 - Etkileşimli hata ayıklama için TUI’yi kullanın:
   - `pnpm tui`
 
 Araç çağrısı davranışı için, araç akışını ve yük (payload) işlemesini görebilmek amacıyla bir `read` veya `exec` eylemi istemi verin.
 
-## Temiz Başlangıç Sıfırlaması
+## Clean Slate Reset
 
 Durum, OpenClaw durum dizini altında tutulur. Varsayılan değer `~/.openclaw`’dir. `OPENCLAW_STATE_DIR` ayarlanmışsa, bunun yerine o dizini kullanın.
 

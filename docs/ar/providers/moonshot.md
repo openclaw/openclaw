@@ -1,17 +1,10 @@
 ---
 summary: "تهيئة Moonshot K2 مقابل Kimi Coding (موفّران ومفاتيح منفصلة)"
 read_when:
-  - "تريد إعداد Moonshot K2 (منصة Moonshot المفتوحة) مقابل Kimi Coding"
-  - "تحتاج إلى فهم نقاط النهاية والمفاتيح ومراجع النماذج المنفصلة"
-  - "تريد تهيئة جاهزة للنسخ/اللصق لأيٍّ من الموفّرَين"
+  - تريد إعداد Moonshot K2 (منصة Moonshot المفتوحة) مقابل Kimi Coding
+  - تحتاج إلى فهم نقاط النهاية والمفاتيح ومراجع النماذج المنفصلة
+  - تريد تهيئة جاهزة للنسخ/اللصق لأيٍّ من الموفّرَين
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:31Z
 ---
 
 # Moonshot AI (Kimi)

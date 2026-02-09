@@ -3,28 +3,21 @@ summary: "Lifecycle ng voice overlay kapag nagsasapawan ang wake-word at push-to
 read_when:
   - Inaayos ang gawi ng voice overlay
 title: "Voice Overlay"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:48Z
 ---
 
 # Lifecycle ng Voice Overlay (macOS)
 
-Audience: mga contributor ng macOS app. Layunin: panatilihing predictable ang voice overlay kapag nagsasapawan ang wake-word at push-to-talk.
+23. Audience: mga contributor ng macOS app. 24. Layunin: panatilihing predictable ang voice overlay kapag nagsasabay ang wake-word at push-to-talk.
 
 ## Kasalukuyang layunin
 
-- Kung nakikita na ang overlay mula sa wake-word at pinindot ng user ang hotkey, _ina-adopt_ ng hotkey session ang umiiral na text sa halip na i-reset ito. Nananatiling nakabukas ang overlay habang hawak ang hotkey. Kapag binitawan ng user: mag-send kung may trimmed text, kung hindi ay i-dismiss.
+- If the overlay is already visible from wake-word and the user presses the hotkey, the hotkey session _adopts_ the existing text instead of resetting it. Nanatiling nakikita ang overlay habang pinipindot ang hotkey. When the user releases: send if there is trimmed text, otherwise dismiss.
 - Ang wake-word lang ay nag-a-auto-send pa rin kapag may katahimikan; ang push-to-talk ay nagse-send agad sa pag-release.
 
 ## Naipatupad (Dis 9, 2025)
 
-- Ang mga overlay session ay may dala na ngayong token kada capture (wake-word o push-to-talk). Ang mga update na partial/final/send/dismiss/level ay dini-drop kapag hindi tugma ang token, para maiwasan ang mga stale callback.
-- Ina-adopt ng push-to-talk ang anumang nakikitang overlay text bilang prefix (kaya kapag pinindot ang hotkey habang bukas ang wake overlay, nananatili ang text at dinadagdagan ng bagong speech). Naghihintay ito ng hanggang 1.5s para sa final transcript bago mag-fallback sa kasalukuyang text.
+- 27. Ang mga overlay session ay may dalang token bawat capture (wake-word o push-to-talk). 28. Ang mga partial/final/send/dismiss/level update ay dini-drop kapag hindi tumutugma ang token, upang maiwasan ang mga stale callback.
+- Push-to-talk adopts any visible overlay text as a prefix (so pressing the hotkey while the wake overlay is up keeps the text and appends new speech). It waits up to 1.5s for a final transcript before falling back to the current text.
 - Ang chime/overlay logging ay ine-emit sa `info` sa mga category na `voicewake.overlay`, `voicewake.ptt`, at `voicewake.chime` (session start, partial, final, send, dismiss, chime reason).
 
 ## Mga susunod na hakbang
@@ -56,6 +49,7 @@ Audience: mga contributor ng macOS app. Layunin: panatilihing predictable ang vo
   ```
 
 - I-verify na iisa lang ang active session token; ang mga stale callback ay dapat dini-drop ng coordinator.
+
 - Tiyaking ang pag-release ng push-to-talk ay laging tumatawag ng `endCapture` gamit ang active token; kung walang laman ang text, asahan ang `dismiss` na walang chime o send.
 
 ## Mga hakbang sa migration (iminumungkahi)

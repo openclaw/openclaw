@@ -4,24 +4,16 @@ read_when:
   - 實作 macOS 應用程式功能時
   - 在 macOS 上變更 Gateway 生命週期或節點橋接時
 title: "macOS 應用程式"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:01Z
 ---
 
 # OpenClaw macOS 配套應用程式（選單列 + gateway broker）
 
-macOS 應用程式是 OpenClaw 的**選單列配套應用程式**。它負責權限管理，
-在本機管理／附加 Gateway（launchd 或手動），並將 macOS 能力以節點的形式
-提供給代理程式。
+The macOS app is the **menu‑bar companion** for OpenClaw. 它擁有權限，
+在本地管理／附加 Gateway（launchd 或手動），並將 macOS 能力以節點形式暴露給代理。
 
-## 功能說明
+## What it does
 
-- 在選單列中顯示原生通知與狀態。
+- Shows native notifications and status in the menu bar.
 - 管理 TCC 提示（通知、輔助使用、螢幕錄製、麥克風、
   語音辨識、自動化／AppleScript）。
 - 執行或連線至 Gateway（本機或遠端）。
@@ -38,6 +30,8 @@ macOS 應用程式是 OpenClaw 的**選單列配套應用程式**。它負責權
   本機處理程序。
   應用程式會啟動本機**節點主機服務**，讓遠端 Gateway 能夠連線到此 Mac。
   應用程式不會以子處理程序的方式啟動 Gateway。
+  The app starts the local **node host service** so the remote Gateway can reach this Mac.
+  應用程式不會以子行程方式啟動 Gateway。
 
 ## Launchd 控制
 
@@ -49,21 +43,21 @@ launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-在執行具名設定檔時，請將標籤替換為 `bot.molt.<profile>`。
+在執行具名設定檔時，請將標籤替換為 `bot.molt.<profile> `。\` when running a named profile.
 
 如果尚未安裝 LaunchAgent，可從應用程式中啟用，或執行
 `openclaw gateway install`。
 
 ## 節點能力（mac）
 
-macOS 應用程式會將自己呈現為一個節點。常見指令包括：
+macOS 應用程式以節點的形式呈現自己。 常用指令：
 
 - Canvas：`canvas.present`、`canvas.navigate`、`canvas.eval`、`canvas.snapshot`、`canvas.a2ui.*`
 - Camera：`camera.snap`、`camera.clip`
 - Screen：`screen.record`
 - System：`system.run`、`system.notify`
 
-節點會回報一個 `permissions` 對映，讓代理程式判斷允許的操作。
+該節點回報一個 `permissions` 對應表，讓代理決定允許的項目。
 
 節點服務 + 應用程式 IPC：
 
@@ -81,8 +75,8 @@ Gateway -> Node Service (WS)
 
 ## Exec 核准（system.run）
 
-`system.run` 由 macOS 應用程式中的**Exec 核准**（設定 → Exec 核准）所控制。
-安全性、詢問與允許清單會儲存在此 Mac 的本機位置：
+`system.run` 由 macOS 應用程式中的 **Exec 核准** 控制（設定 → Exec 核准）。
+安全性 + 詢問 + 允許清單會本地儲存在 Mac 上：
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -115,7 +109,7 @@ Gateway -> Node Service (WS)
 
 ## 深層連結
 
-應用程式會註冊 `openclaw://` URL 配置，用於本機動作。
+應用程式註冊 `openclaw://` URL 配置，用於本地動作。
 
 ### `openclaw://agent`
 
@@ -144,7 +138,7 @@ open 'openclaw://agent?message=Hello%20from%20deep%20link'
 1. 安裝並啟動 **OpenClaw.app**。
 2. 完成權限檢查清單（TCC 提示）。
 3. 確認 **Local** 模式已啟用且 Gateway 正在執行。
-4. 若需要終端機存取，請安裝 CLI。
+4. Install the CLI if you want terminal access.
 
 ## 建置與開發流程（原生）
 
@@ -191,18 +185,19 @@ macOS 應用程式的探索管線（NWBrowser + tailnet DNS‑SD 後備）
 - **用途：** 健康檢查、狀態、Web Chat、設定，以及其他控制平面呼叫。
 - **本機連接埠：** Gateway 連接埠（預設 `18789`），始終固定。
 - **遠端連接埠：** 遠端主機上的相同 Gateway 連接埠。
-- **行為：** 不使用隨機本機連接埠；應用程式會重用現有的健康通道，
-  或在需要時重新啟動。
+- **Behavior:** no random local port; the app reuses an existing healthy tunnel
+  or restarts it if needed.
 - **SSH 形式：** `ssh -N -L <local>:127.0.0.1:<remote>`，搭配 BatchMode +
   ExitOnForwardFailure + keepalive 選項。
 - **IP 回報：** SSH 通道使用 loopback，因此 gateway 看到的節點 IP
   會是 `127.0.0.1`。若希望顯示真實的用戶端 IP，
-  請使用 **Direct（ws/wss）** 傳輸（請參閱 [macOS remote access](/platforms/mac/remote)）。
+  請使用 **Direct（ws/wss）** 傳輸（請參閱 [macOS remote access](/platforms/mac/remote)）。 Use **Direct (ws/wss)** transport if you want the real client
+  IP to appear (see [macOS remote access](/platforms/mac/remote)).
 
-設定步驟請參閱 [macOS remote access](/platforms/mac/remote)。
-通訊協定細節請參閱 [Gateway protocol](/gateway/protocol)。
+For setup steps, see [macOS remote access](/platforms/mac/remote). For protocol
+details, see [Gateway protocol](/gateway/protocol).
 
-## 相關文件
+## Related docs
 
 - [Gateway runbook](/gateway)
 - [Gateway（macOS）](/platforms/mac/bundled-gateway)

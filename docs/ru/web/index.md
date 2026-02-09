@@ -4,13 +4,6 @@ read_when:
   - Вам нужен доступ к Gateway через Tailscale
   - Вам нужен браузерный UI управления и редактирование конфига
 title: "Web"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:03Z
 ---
 
 # Web (Gateway)
@@ -25,8 +18,8 @@ Gateway обслуживает небольшой **браузерный UI уп
 
 ## Webhooks
 
-Когда `hooks.enabled=true`, Gateway также публикует небольшой endpoint для вебхуков на том же HTTP‑сервере.
-См. [Конфигурация Gateway](/gateway/configuration) → `hooks` для аутентификации и полезных нагрузок.
+Когда `hooks.enabled=true`, Gateway также публикует небольшой endpoint для вебхуков на том же HTTP‑сервере. См.
+См. [Конфигурация шлюза] (/gateway/configuration) → `hooks` для аутентификации + payloads.
 
 ## Config (включено по умолчанию)
 
@@ -110,8 +103,7 @@ openclaw gateway
   WebSocket‑подключения браузера, если не задано `gateway.controlUi.allowedOrigins`.
 - При использовании Serve заголовки идентификации Tailscale могут удовлетворять требованиям аутентификации, когда
   `gateway.auth.allowTailscale` — `true` (токен/пароль не требуются). Установите
-  `gateway.auth.allowTailscale: false`, чтобы требовать явные учётные данные. См.
-  [Tailscale](/gateway/tailscale) и [Безопасность](/gateway/security).
+  `gateway.auth.allowTailscale: false`, чтобы требовать явные учётные данные. См. [Tailscale](/gateway/tailscale) и [Безопасность](/gateway/security).
 - `gateway.tailscale.mode: "funnel"` требует `gateway.auth.mode: "password"` (общий пароль).
 
 ## Сборка UI

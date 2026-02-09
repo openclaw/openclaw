@@ -2,16 +2,9 @@
 summary: "Ghi chú nghiên cứu: hệ thống bộ nhớ offline cho workspace Clawd (Markdown làm nguồn sự thật + chỉ mục dẫn xuất)"
 read_when:
   - Thiết kế bộ nhớ workspace (~/.openclaw/workspace) vượt ra ngoài các nhật ký Markdown hằng ngày
-  - Quyết định: CLI độc lập hay tích hợp sâu vào OpenClaw
+  - Deciding: các ràng buộc về thời gian (“điều gì là đúng trong tháng 11 năm 2025?”)
   - Thêm khả năng hồi tưởng + phản tư offline (retain/recall/reflect)
 title: "Nghiên cứu bộ nhớ Workspace"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:11Z
 ---
 
 # Workspace Memory v2 (offline): ghi chú nghiên cứu
@@ -34,7 +27,7 @@ Nhưng nó yếu ở:
 - truy xuất cần độ nhớ cao (“chúng ta đã quyết định gì về X?”, “lần trước thử Y khi nào?”)
 - trả lời theo thực thể (“kể tôi nghe về Alice / The Castle / warelay”) mà không phải đọc lại nhiều tệp
 - sự ổn định của ý kiến/sở thích (và bằng chứng khi thay đổi)
-- ràng buộc thời gian (“điều gì là đúng trong tháng 11/2025?”) và xử lý xung đột
+- các ràng buộc thời gian (“điều gì đúng vào tháng 11 năm 2025?”) và giải quyết xung đột
 
 ## Mục tiêu thiết kế
 
@@ -87,7 +80,7 @@ Bố cục workspace gợi ý:
 
 Ghi chú:
 
-- **Nhật ký ngày vẫn là nhật ký ngày**. Không cần biến nó thành JSON.
+- Không cần biến nó thành JSON. Không cần chuyển nó thành JSON.
 - Các tệp `bank/` là **được tuyển chọn**, do các job phản tư tạo ra, và vẫn có thể chỉnh sửa thủ công.
 - `memory.md` giữ ở mức “nhỏ + mang tính lõi”: những thứ bạn muốn Clawd thấy trong mỗi phiên.
 
@@ -144,7 +137,7 @@ Recall nên hỗ trợ:
 - **từ vựng**: “tìm thuật ngữ / tên / lệnh chính xác” (FTS5)
 - **theo thực thể**: “kể tôi nghe về X” (trang thực thể + các fact liên kết thực thể)
 - **theo thời gian**: “điều gì xảy ra quanh 27/11” / “kể từ tuần trước”
-- **theo ý kiến**: “Peter thích gì?” (kèm độ tin cậy + bằng chứng)
+- (kèm theo sự tự tin + bằng chứng) OpenClaw hỗ trợ OAuth và API key cho các nhà cung cấp model.
 
 Định dạng trả về nên thân thiện với tác tử và có trích dẫn nguồn:
 

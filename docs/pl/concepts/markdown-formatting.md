@@ -5,13 +5,6 @@ read_when:
   - Dodajesz nowy formatter kanału lub mapowanie stylów
   - Debugujesz regresje formatowania między kanałami
 title: "Formatowanie Markdown"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:11Z
 ---
 
 # Formatowanie Markdown
@@ -30,7 +23,7 @@ kanałami.
 - **Dopasowanie do kanału:** mapowanie tego samego IR do mrkdwn Slacka, HTML
   Telegrama i zakresów stylów Signal bez ponownego parsowania Markdown.
 
-## Potok
+## Rurociąg
 
 1. **Parsowanie Markdown -> IR**
    - IR to zwykły tekst plus zakresy stylów (bold/italic/strike/code/spoiler) oraz zakresy linków.
@@ -128,7 +121,7 @@ na zakresy stylu SPOILER. Inne kanały traktują je jako zwykły tekst.
 5. **Testuj:** dodaj lub zaktualizuj testy formatowania oraz test dostarczania
    wyjściowego, jeśli kanał używa chunkingu.
 
-## Typowe pułapki
+## Czubacz zwyczajny
 
 - Tokeny Slacka w nawiasach ostrych (`<@U123>`, `<#C123>`, `<https://...>`) muszą być
   zachowane; bezpiecznie escapuj surowy HTML.

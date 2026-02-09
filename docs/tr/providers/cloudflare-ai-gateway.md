@@ -4,13 +4,6 @@ summary: "Cloudflare AI Gateway kurulumu (kimlik doğrulama + model seçimi)"
 read_when:
   - OpenClaw ile Cloudflare AI Gateway kullanmak istiyorsunuz
   - Hesap kimliği, gateway kimliği veya API anahtarı ortam değişkenine ihtiyacınız var
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:31Z
 ---
 
 # Cloudflare AI Gateway

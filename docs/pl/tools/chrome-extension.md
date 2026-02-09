@@ -5,13 +5,6 @@ read_when:
   - Potrzebujesz zdalnego Gateway + lokalnej automatyzacji przeglądarki przez Tailscale
   - Chcesz zrozumieć implikacje bezpieczeństwa przejęcia przeglądarki
 title: "Rozszerzenie Chrome"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:55Z
 ---
 
 # Rozszerzenie Chrome (przekaźnik przeglądarki)
@@ -86,7 +79,7 @@ openclaw browser create-profile \
   - Odznaka pokazuje `ON` po dołączeniu.
 - Kliknij ponownie, aby odłączyć.
 
-## Którą kartę kontroluje?
+## Która karta kontrolu?
 
 - **Nie** kontroluje automatycznie „dowolnej karty, na którą patrzysz”.
 - Kontroluje **tylko kartę (karty), które jawnie dołączysz**, klikając przycisk na pasku narzędzi.

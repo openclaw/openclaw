@@ -3,13 +3,6 @@ summary: "Esquemas TypeBox como a única fonte de verdade para o protocolo do ga
 read_when:
   - Atualizar esquemas de protocolo ou codegen
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:47Z
 ---
 
 # TypeBox como fonte de verdade do protocolo

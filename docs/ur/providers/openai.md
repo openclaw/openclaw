@@ -4,23 +4,16 @@ read_when:
   - آپ OpenClaw میں OpenAI ماڈلز استعمال کرنا چاہتے ہیں
   - آپ API کلیدوں کے بجائے Codex سبسکرپشن کی تصدیق چاہتے ہیں
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:30Z
 ---
 
 # OpenAI
 
-OpenAI GPT ماڈلز کے لیے ڈویلپر APIs فراہم کرتا ہے۔ Codex **ChatGPT سائن اِن** کے ذریعے سبسکرپشن رسائی یا **API کلید** سائن اِن کے ذریعے استعمال پر مبنی رسائی کی حمایت کرتا ہے۔ Codex کلاؤڈ کے لیے ChatGPT سائن اِن درکار ہے۔
+OpenAI provides developer APIs for GPT models. Codex سبسکرپشن رسائی کے لیے **ChatGPT sign-in** یا استعمال کی بنیاد پر رسائی کے لیے **API key** sign-in کو سپورٹ کرتا ہے۔ Codex cloud کے لیے ChatGPT sign-in درکار ہے۔
 
 ## آپشن A: OpenAI API کلید (OpenAI Platform)
 
-**بہترین برائے:** براہِ راست API رسائی اور استعمال پر مبنی بلنگ۔
-اپنی API کلید OpenAI ڈیش بورڈ سے حاصل کریں۔
+**Best for:** براہِ راست API رسائی اور استعمال کی بنیاد پر بلنگ۔
+اپنی API key OpenAI ڈیش بورڈ سے حاصل کریں۔
 
 ### CLI سیٹ اپ
 
@@ -41,8 +34,8 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 ## آپشن B: OpenAI Code (Codex) سبسکرپشن
 
-**بہترین برائے:** API کلید کے بجائے ChatGPT/Codex سبسکرپشن رسائی کا استعمال۔
-Codex کلاؤڈ کے لیے ChatGPT سائن اِن درکار ہے، جبکہ Codex CLI ChatGPT یا API کلید سائن اِن کی حمایت کرتا ہے۔
+**Best for:** API key کے بجائے ChatGPT/Codex سبسکرپشن رسائی استعمال کرنا۔
+Codex cloud کو ChatGPT sign-in درکار ہے، جبکہ Codex CLI ChatGPT یا API key sign-in کو سپورٹ کرتا ہے۔
 
 ### CLI سیٹ اپ (Codex OAuth)
 

@@ -4,32 +4,34 @@ read_when:
   - Gusto mong gamitin ang GitHub Copilot bilang model provider
   - Kailangan mo ang `openclaw models auth login-github-copilot` flow
 title: "GitHub Copilot"
-x-i18n:
-  source_path: providers/github-copilot.md
-  source_hash: 503e0496d92c921e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # GitHub Copilot
 
 ## Ano ang GitHub Copilot?
 
-Ang GitHub Copilot ay AI coding assistant ng GitHub. Nagbibigay ito ng access sa mga model ng Copilot para sa iyong GitHub account at plano. Maaaring gamitin ng OpenClaw ang Copilot bilang model provider sa dalawang magkaibang paraan.
+GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
+models for your GitHub account and plan. OpenClaw can use Copilot as a model
+provider in two different ways.
 
 ## Dalawang paraan para gamitin ang Copilot sa OpenClaw
 
-### 1) Built-in na GitHub Copilot provider (`github-copilot`)
+### 1. Built-in na GitHub Copilot provider (`github-copilot`)
 
-Gamitin ang native device-login flow para kumuha ng GitHub token, pagkatapos ay i-exchange ito para sa mga Copilot API token kapag tumatakbo ang OpenClaw. Ito ang **default** at pinakasimpleng ruta dahil hindi nito kailangan ang VS Code.
+Use the native device-login flow to obtain a GitHub token, then exchange it for
+Copilot API tokens when OpenClaw runs. This is the **default** and simplest path
+because it does not require VS Code.
 
-### 2) Copilot Proxy plugin (`copilot-proxy`)
+### 2. Copilot Proxy plugin (`copilot-proxy`)
 
-Gamitin ang **Copilot Proxy** VS Code extension bilang lokal na bridge. Nakikipag-usap ang OpenClaw sa `/v1` endpoint ng proxy at ginagamit ang listahan ng model na kino-configure mo roon. Piliin ito kapag nagpapatakbo ka na ng Copilot Proxy sa VS Code o kailangan mong mag-route dito. Kailangan mong i-enable ang plugin at panatilihing tumatakbo ang VS Code extension.
+Use the **Copilot Proxy** VS Code extension as a local bridge. OpenClaw talks to
+the proxy’s `/v1` endpoint and uses the model list you configure there. Choose
+this when you already run Copilot Proxy in VS Code or need to route through it.
+You must enable the plugin and keep the VS Code extension running.
 
-Gamitin ang GitHub Copilot bilang model provider (`github-copilot`). Pinapatakbo ng login command ang GitHub device flow, sine-save ang isang auth profile, at ina-update ang iyong config para gamitin ang profile na iyon.
+Use GitHub Copilot as a model provider (`github-copilot`). The login command runs
+the GitHub device flow, saves an auth profile, and updates your config to use that
+profile.
 
 ## CLI setup
 
@@ -37,7 +39,8 @@ Gamitin ang GitHub Copilot bilang model provider (`github-copilot`). Pinapatakbo
 openclaw models auth login-github-copilot
 ```
 
-Ipo-prompt kang bumisita sa isang URL at maglagay ng one-time code. Panatilihing bukas ang terminal hanggang sa makumpleto ito.
+You'll be prompted to visit a URL and enter a one-time code. Keep the terminal
+open until it completes.
 
 ### Mga opsyonal na flag
 

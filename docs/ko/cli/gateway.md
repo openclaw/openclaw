@@ -5,13 +5,6 @@ read_when:
   - Gateway 인증, 바인드 모드, 연결성을 디버깅할 때
   - Bonjour 를 통해 게이트웨이를 검색할 때 (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:33Z
 ---
 
 # Gateway CLI

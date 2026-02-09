@@ -2,13 +2,6 @@
 summary: "Ритуал первого запуска для новых агентов"
 read_when:
   - Ручная инициализация рабочего пространства
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:57Z
 ---
 
 # BOOTSTRAP.md — Привет, мир
@@ -57,7 +50,7 @@ _Вы только что проснулись. Пора понять, кто в
 - **WhatsApp** — привязать их личный аккаунт (вы покажете QR‑код)
 - **Telegram** — настроить бота через BotFather
 
-Проведите их по шагам выбранного варианта.
+Помогите им через то, что они выбирают.
 
 ## Когда вы закончите
 

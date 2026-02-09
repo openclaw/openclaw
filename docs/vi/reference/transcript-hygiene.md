@@ -5,23 +5,12 @@ read_when:
   - Bạn đang thay đổi logic làm sạch bản ghi hoặc sửa chữa tool-call
   - Bạn đang điều tra sự không khớp id tool-call giữa các nhà cung cấp
 title: "Vệ sinh bản ghi"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:16Z
 ---
 
 # Vệ sinh bản ghi (Sửa lỗi theo nhà cung cấp)
 
-Tài liệu này mô tả các **bản sửa lỗi theo từng nhà cung cấp** được áp dụng cho bản ghi trước khi chạy
-(xây dựng ngữ cảnh cho mô hình). Đây là các điều chỉnh **trong bộ nhớ** nhằm đáp ứng những yêu cầu nghiêm ngặt
-của nhà cung cấp. Các bước vệ sinh này **không** ghi đè bản ghi JSONL đã lưu trên đĩa; tuy nhiên,
-một bước sửa chữa tệp phiên riêng biệt có thể ghi lại các tệp JSONL bị lỗi bằng cách loại bỏ
-những dòng không hợp lệ trước khi phiên được tải. Khi có sửa chữa, tệp gốc sẽ được sao lưu
-cùng với tệp phiên.
+Tài liệu này mô tả các **bản sửa lỗi theo từng nhà cung cấp** được áp dụng cho transcript trước khi chạy (xây dựng ngữ cảnh mô hình). 13. Đây là các điều chỉnh **trong bộ nhớ** được dùng để đáp ứng các yêu cầu nghiêm ngặt của provider. Các bước vệ sinh này **không** ghi đè transcript JSONL đã lưu trên đĩa; tuy nhiên, một bước sửa chữa tệp phiên riêng biệt có thể ghi lại các tệp JSONL bị lỗi bằng cách loại bỏ các dòng không hợp lệ trước khi phiên được tải. When a repair occurs, the original
+file is backed up alongside the session file.
 
 Phạm vi bao gồm:
 
@@ -68,9 +57,7 @@ Triển khai:
 
 ## Quy tắc toàn cục: tool call bị lỗi
 
-Các khối tool-call của assistant bị thiếu cả `input` và `arguments` sẽ bị loại bỏ
-trước khi xây dựng ngữ cảnh cho mô hình. Điều này ngăn việc nhà cung cấp từ chối do các tool call
-được lưu dở dang (ví dụ, sau một lỗi giới hạn tốc độ).
+Các khối tool-call của trợ lý bị thiếu cả `input` và `arguments` sẽ bị loại bỏ trước khi ngữ cảnh mô hình được xây dựng. Điều này ngăn việc nhà cung cấp từ chối do các tool call được lưu một phần (ví dụ sau khi gặp lỗi giới hạn tốc độ).
 
 Triển khai:
 
@@ -131,6 +118,5 @@ Trước bản phát hành 2026.1.22, OpenClaw áp dụng nhiều lớp vệ sin
   - Loại bỏ các lượt lỗi trống của assistant.
   - Cắt bớt nội dung assistant sau các tool call.
 
-Sự phức tạp này gây ra hồi quy giữa các nhà cung cấp (đáng chú ý là việc ghép cặp `openai-responses`
-`call_id|fc_id`). Việc dọn dẹp vào 2026.1.22 đã loại bỏ extension, tập trung logic vào runner,
-và biến OpenAI thành **không can thiệp** ngoài việc làm sạch hình ảnh.
+This complexity caused cross-provider regressions (notably `openai-responses`
+`call_id|fc_id` pairing). Đợt dọn dẹp ngày 2026.1.22 đã loại bỏ extension, tập trung logic vào runner và khiến OpenAI **không cần can thiệp** ngoài việc làm sạch hình ảnh.

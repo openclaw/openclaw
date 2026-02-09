@@ -5,18 +5,11 @@ read_when:
   - کنفیگریشن مثالیں تلاش کرتے وقت
   - پہلی بار OpenClaw سیٹ اپ کرتے وقت
 title: "کنفیگریشن مثالیں"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:11Z
 ---
 
 # کنفیگریشن مثالیں
 
-ذیل میں دی گئی مثالیں موجودہ کنفیگ اسکیمہ کے مطابق ہیں۔ مکمل حوالہ اور ہر فیلڈ کے نوٹس کے لیے [Configuration](/gateway/configuration) دیکھیں۔
+Examples below are aligned with the current config schema. مکمل حوالہ اور ہر فیلڈ کی نوٹس کے لیے [Configuration](/gateway/configuration) دیکھیں۔
 
 ## فوری آغاز
 
@@ -55,7 +48,7 @@ x-i18n:
 
 ## توسیع شدہ مثال (اہم اختیارات)
 
-> JSON5 آپ کو تبصرے اور آخری کاماز استعمال کرنے دیتا ہے۔ عام JSON بھی کام کرتا ہے۔
+> JSON5 lets you use comments and trailing commas. عام JSON بھی کام کرتا ہے۔
 
 ```json5
 {
@@ -608,6 +601,6 @@ x-i18n:
 ## مشورے
 
 - اگر آپ `dmPolicy: "open"` سیٹ کرتے ہیں، تو متعلقہ `allowFrom` فہرست میں `"*"` شامل ہونا لازم ہے۔
-- فراہم کنندہ IDs مختلف ہوتے ہیں (فون نمبرز، یوزر IDs، چینل IDs)۔ فارمیٹ کی تصدیق کے لیے فراہم کنندہ کی دستاویزات استعمال کریں۔
+- Provider IDs differ (phone numbers, user IDs, channel IDs). فارمیٹ کی تصدیق کے لیے provider کی دستاویزات استعمال کریں۔
 - بعد میں شامل کرنے کے لیے اختیاری حصے: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`۔
 - مزید سیٹ اپ نوٹس کے لیے [Providers](/channels/whatsapp) اور [Troubleshooting](/gateway/troubleshooting) دیکھیں۔

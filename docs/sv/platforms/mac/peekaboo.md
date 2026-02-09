@@ -1,24 +1,17 @@
 ---
-summary: ”PeekabooBridge‑integration för macOS‑UI‑automatisering”
+summary: "”PeekabooBridge‑integration för macOS‑UI‑automatisering”"
 read_when:
   - ”Värd för PeekabooBridge i OpenClaw.app”
   - ”Integrera Peekaboo via Swift Package Manager”
   - ”Ändra PeekabooBridge‑protokoll/sökvägar”
-title: ”Peekaboo Bridge”
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:58Z
+title: "”Peekaboo Bridge”"
 ---
 
 # Peekaboo Bridge (macOS‑UI‑automatisering)
 
-OpenClaw kan vara värd för **PeekabooBridge** som en lokal, behörighetsmedveten
-mäklare för UI‑automatisering. Detta gör att `peekaboo`‑CLI:t kan driva
-UI‑automatisering samtidigt som macOS‑appens TCC‑behörigheter återanvänds.
+OpenClaw kan vara värd för **PeekabooBridge** som en lokal, behörighetsmedveten UI-automatisering
+mäklare. Detta låter `peekaboo` CLI-enhet UI automation när du återanvänder
+macOS appens TCC behörigheter.
 
 ## Vad detta är (och inte är)
 
@@ -33,9 +26,8 @@ I macOS‑appen:
 
 - Inställningar → **Aktivera Peekaboo Bridge**
 
-När den är aktiverad startar OpenClaw en lokal UNIX‑socketserver. Om den
-inaktiveras stoppas värden och `peekaboo` faller tillbaka till andra
-tillgängliga värdar.
+När den är aktiverad startar OpenClaw en lokal UNIX-uttagsserver. Om inaktiverad stoppas värden
+och `peekaboo` kommer att falla tillbaka till andra tillgängliga värdar.
 
 ## Klienternas upptäcktsordning
 
@@ -46,7 +38,7 @@ Peekaboo‑klienter provar vanligtvis värdar i denna ordning:
 3. OpenClaw.app (tunn mäklare)
 
 Använd `peekaboo bridge status --verbose` för att se vilken värd som är aktiv och vilken
-socket‑sökväg som används. Du kan åsidosätta med:
+socket-sökväg som används. Du kan åsidosätta med:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -62,8 +54,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Snapshot‑beteende (automatisering)
 
-Snapshots lagras i minnet och upphör automatiskt efter ett kort tidsfönster.
-Om du behöver längre kvarhållning, fånga igen från klienten.
+Ögonblicksbilder lagras i minnet och upphör automatiskt efter ett kort fönster.
+Om du behöver längre retention, återfånga från klienten.
 
 ## Felsökning
 

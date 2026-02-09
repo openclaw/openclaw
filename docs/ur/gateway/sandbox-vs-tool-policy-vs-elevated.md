@@ -1,15 +1,8 @@
 ---
-title: سینڈباکس بمقابلہ ٹول پالیسی بمقابلہ ایلیویٹڈ
+title: Sandbox vs Tool Policy vs Elevated
 summary: "یہ کیوں کوئی ٹول بلاک ہوا: سینڈباکس رَن ٹائم، ٹول اجازت/ممانعت پالیسی، اور ایلیویٹڈ exec گیٹس"
 read_when: "جب آپ کو 'sandbox jail' کا سامنا ہو یا کسی ٹول/ایلیویٹڈ انکار کو دیکھیں اور یہ جاننا چاہیں کہ کون سی درست کنفیگ کلید تبدیل کرنی ہے۔"
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:26Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -71,8 +64,8 @@ Sandboxing کو `agents.defaults.sandbox.mode` کے ذریعے کنٹرول کی
 - `deny` ہمیشہ غالب رہتا ہے۔
 - اگر `allow` خالی نہ ہو تو باقی سب کو بلاک سمجھا جاتا ہے۔
 - ٹول پالیسی حتمی رکاوٹ ہے: `/exec` کسی ممنوعہ `exec` ٹول کو اووررائیڈ نہیں کر سکتا۔
-- `/exec` صرف مجاز ارسال کنندگان کے لیے سیشن ڈیفالٹس تبدیل کرتا ہے؛ یہ ٹول رسائی نہیں دیتا۔
-  Provider ٹول کیز `provider` (مثلاً `google-antigravity`) یا `provider/model` (مثلاً `openai/gpt-5.2`) میں سے کسی کو بھی قبول کرتی ہیں۔
+- 41. `/exec` صرف مجاز بھیجنے والوں کے لیے سیشن ڈیفالٹس تبدیل کرتا ہے؛ یہ ٹول تک رسائی فراہم نہیں کرتا۔
+  42. Provider ٹول کیز یا تو `provider` (مثلاً `google-antigravity`) یا `provider/model` (مثلاً `openai/gpt-5.2`) قبول کرتی ہیں۔
 
 ### Tool groups (مختصر نام)
 
@@ -110,12 +103,12 @@ Elevated **اضافی ٹولز فراہم نہیں کرتا**؛ یہ صرف `exe
 - سیشن کے لیے exec منظوریوں کو چھوڑنے کے لیے `/elevated full` استعمال کریں۔
 - اگر آپ پہلے ہی براہِ راست چل رہے ہیں تو Elevated عملی طور پر no-op ہے (پھر بھی گیٹڈ)۔
 - Elevated **Skill-اسکوپڈ نہیں** ہے اور **ٹول اجازت/ممانعت کو اووررائیڈ نہیں** کرتا۔
-- `/exec` ایلیویٹڈ سے الگ ہے۔ یہ صرف مجاز ارسال کنندگان کے لیے فی-سیشن exec ڈیفالٹس کو ایڈجسٹ کرتا ہے۔
+- 43. `/exec` elevated سے الگ ہے۔ 44. یہ صرف مجاز بھیجنے والوں کے لیے فی-سیشن exec ڈیفالٹس ایڈجسٹ کرتا ہے۔
 
 گیٹس:
 
 - فعال کرنا: `tools.elevated.enabled` (اور اختیاری طور پر `agents.list[].tools.elevated.enabled`)
-- ارسال کنندہ اجازت فہرستیں: `tools.elevated.allowFrom.<provider>` (اور اختیاری طور پر `agents.list[].tools.elevated.allowFrom.<provider>`)
+- 45. Sender allowlists: `tools.elevated.allowFrom.<provider>46. ` (اور اختیاری طور پر `agents.list[].tools.elevated.allowFrom.<provider>47. `)
 
 دیکھیں [Elevated Mode](/tools/elevated)۔
 
@@ -132,4 +125,4 @@ Elevated **اضافی ٹولز فراہم نہیں کرتا**؛ یہ صرف `exe
 
 ### “مجھے لگا یہ مین ہے، یہ سینڈباکس کیوں ہے؟”
 
-`"non-main"` موڈ میں، گروپ/چینل کیز _مین_ نہیں ہوتیں۔ مین سیشن کی کلید استعمال کریں (جو `sandbox explain` دکھاتا ہے) یا موڈ کو `"off"` پر سوئچ کریں۔
+48. `"non-main"` موڈ میں، group/channel کیز _main_ نہیں ہوتیں۔ 49. مین سیشن کی استعمال کریں (جو `sandbox explain` کے ذریعے دکھائی جاتی ہے) یا موڈ کو `"off"` پر سوئچ کریں۔

@@ -3,20 +3,13 @@ summary: "Exponera en OpenAI-kompatibel /v1/chat/completions HTTP-ändpunkt frå
 read_when:
   - Integrerar verktyg som förväntar sig OpenAI Chat Completions
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:18Z
 ---
 
 # OpenAI Chat Completions (HTTP)
 
 OpenClaws Gateway kan tillhandahålla en liten OpenAI-kompatibel Chat Completions-ändpunkt.
 
-Den här ändpunkten är **inaktiverad som standard**. Aktivera den först i konfigurationen.
+Denna slutpunkt är **inaktiverad som standard**. Aktivera det i konfigurationen först.
 
 - `POST /v1/chat/completions`
 - Samma port som Gateway (WS + HTTP-multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
@@ -25,7 +18,7 @@ Under huven körs förfrågningar som en vanlig Gateway-agentkörning (samma kod
 
 ## Autentisering
 
-Använder Gateways autentiseringskonfiguration. Skicka en bearer-token:
+Använder Gateway auth konfiguration. Skicka en bärare token:
 
 - `Authorization: Bearer <token>`
 

@@ -1,17 +1,10 @@
 ---
 title: Lobster
-summary: ”Typad arbetsflödeskörning för OpenClaw med återupptagbara godkännandespärrar.”
+summary: "”Typad arbetsflödeskörning för OpenClaw med återupptagbara godkännandespärrar.”"
 description: Typed workflow runtime for OpenClaw — composable pipelines with approval gates.
 read_when:
   - Du vill ha deterministiska flerstegsarbetsflöden med explicita godkännanden
   - Du behöver återuppta ett arbetsflöde utan att köra om tidigare steg
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:19:00Z
 ---
 
 # Lobster
@@ -20,11 +13,11 @@ Lobster är ett arbetsflödesskal som låter OpenClaw köra flerstegssekvenser a
 
 ## Hook
 
-Din assistent kan bygga verktygen som hanterar sig själv. Be om ett arbetsflöde, och 30 minuter senare har du ett CLI plus pipelines som körs som ett enda anrop. Lobster är den saknade pusselbiten: deterministiska pipelines, explicita godkännanden och återupptagbart tillstånd.
+Din assistent kan bygga de verktyg som klarar sig själv. Be om ett arbetsflöde och 30 minuter senare har du en CLI plus pipelines som löper som ett samtal. Hummer är den saknade biten: deterministiska rörledningar, uttryckliga godkännanden, och återupptagningsbara tillstånd.
 
 ## Why
 
-I dag kräver komplexa arbetsflöden många fram-och-tillbaka-anrop till verktyg. Varje anrop kostar tokens, och LLM:en måste orkestrera varje steg. Lobster flyttar den orkestreringen till en typad körmiljö:
+Idag kräver komplexa arbetsflöden många bak-och-tillbaka verktygssamtal. Varje samtal kostar tokens, och LLM måste orkestrera varje steg. Hummer flyttar den orkestreringen till en nedskriven körtid:
 
 - **Ett anrop i stället för många**: OpenClaw kör ett Lobster-verktygsanrop och får ett strukturerat resultat.
 - **Inbyggda godkännanden**: Biverkningar (skicka e-post, posta kommentar) stoppar arbetsflödet tills de uttryckligen godkänns.
@@ -32,22 +25,22 @@ I dag kräver komplexa arbetsflöden många fram-och-tillbaka-anrop till verktyg
 
 ## Why a DSL instead of plain programs?
 
-Lobster är avsiktligt litet. Målet är inte ”ett nytt språk”, utan en förutsägbar, AI-vänlig pipelinespecifikation med förstklassiga godkännanden och återupptagningstokens.
+Hummer är avsiktligt liten. Målet är inte "ett nytt språk", det är en förutsägbar, AI-vänlig pipeline spec med förstklassiga godkännanden och återuppta tokens.
 
 - **Godkänn/återuppta är inbyggt**: Ett vanligt program kan fråga en människa, men kan inte _pausa och återuppta_ med en varaktig token utan att du själv uppfinner den körmiljön.
 - **Determinism + granskningsbarhet**: Pipelines är data, så de är enkla att logga, diffa, spela upp igen och granska.
 - **Begränsad yta för AI**: En liten grammatik + JSON-piping minskar ”kreativa” kodvägar och gör validering realistisk.
 - **Säkerhetspolicy inbakad**: Tidsgränser, utdata-tak, sandbox-kontroller och tillåtelselistor verkställs av körmiljön, inte av varje skript.
-- **Fortfarande programmerbart**: Varje steg kan anropa valfritt CLI eller skript. Vill du ha JS/TS, generera `.lobster`-filer från kod.
+- **Fortfarande programmerbar**: Varje steg kan ringa någon CLI eller skript. Om du vill ha JS/TS, generera `.lobster`-filer från kod.
 
 ## How it works
 
-OpenClaw startar det lokala `lobster` CLI i **tool mode** och tolkar ett JSON-kuvert från stdout.
-Om pipelinen pausar för godkännande returnerar verktyget en `resumeToken` så att du kan fortsätta senare.
+OpenClaw lanserar den lokala `lobster` CLI i **verktygsläge** och tolkar ett JSON-kuvert från stdout.
+Om rörledningen pausar för godkännande, returnerar verktyget en `resumeToken` så att du kan fortsätta senare.
 
 ## Pattern: small CLI + JSON pipes + approvals
 
-Bygg små kommandon som talar JSON och kedja dem sedan till ett enda Lobster-anrop. (Exempel på kommandonamn nedan — byt mot dina egna.)
+Bygg små kommandon som talar JSON, sedan kedja dem till ett enda hummersamtal. (Exempelkommandonamn nedan — byt på egen hand.)
 
 ```bash
 inbox list --json
@@ -73,7 +66,7 @@ Om pipelinen begär godkännande, återuppta med token:
 }
 ```
 
-AI triggar arbetsflödet; Lobster exekverar stegen. Godkännandespärrar håller biverkningar explicita och granskningsbara.
+AI utlöser arbetsflödet; Hummer utför stegen. Godkännande grindar hålla biverkningar explicita och granskningsbara.
 
 Exempel: mappa indatobjekt till verktygsanrop:
 
@@ -84,9 +77,9 @@ gog.gmail.search --query 'newer_than:1d' \
 
 ## JSON-only LLM steps (llm-task)
 
-För arbetsflöden som behöver ett **strukturerat LLM-steg**, aktivera det valfria
-`llm-task` plugin-verktyget och anropa det från Lobster. Detta håller arbetsflödet
-deterministiskt samtidigt som du kan klassificera/sammanfatta/utkasta med en modell.
+För arbetsflöden som behöver ett **strukturerat LLM-steg**, aktivera tilläggsverktyget
+`llm-task` och anropa det från Hummer. Detta håller arbetsflödet
+deterministiskt medan du fortfarande låter dig klassificera/sammanfatta/utkast med en modell.
 
 Aktivera verktyget:
 
@@ -130,7 +123,7 @@ Se [LLM Task](/tools/llm-task) för detaljer och konfigurationsalternativ.
 
 ## Workflow files (.lobster)
 
-Lobster kan köra YAML/JSON-arbetsflödesfiler med fälten `name`, `args`, `steps`, `env`, `condition` och `approval`. I OpenClaw-verktygsanrop sätter du `pipeline` till filsökvägen.
+Hummer kan köra YAML/JSON arbetsflödesfiler med `name`, `args`, `steps`, `env`, `condition` och `approval`-fält. I OpenClaw verktygssamtal, ange `pipeline` till filsökvägen.
 
 ```yaml
 name: inbox-triage
@@ -160,8 +153,8 @@ Noteringar:
 
 ## Install Lobster
 
-Installera Lobster-CLI:t på **samma värd** som kör OpenClaw Gateway (se [Lobster-repot](https://github.com/openclaw/lobster)) och säkerställ att `lobster` finns på `PATH`.
-Om du vill använda en anpassad binär plats, skicka en **absolut** `lobsterPath` i verktygsanropet.
+Installera hummern CLI på **samma värd** som kör OpenClaw Gateway (se [Hummerrepo](https://github.com/openclaw/lobster)), och se till att `hummer` är på `PATH`.
+Om du vill använda en anpassad binär plats, skicka en **absolut** `lobsterPath` i verktygssamtalet.
 
 ## Enable the tool
 
@@ -196,9 +189,9 @@ Eller per agent:
 
 Undvik att använda `tools.allow: ["lobster"]` om du inte avser att köra i restriktivt tillåtelseläge.
 
-Obs: tillåtelselistor är opt-in för valfria plugins. Om din tillåtelselista endast namnger
-plugin-verktyg (som `lobster`), behåller OpenClaw kärnverktygen aktiverade. För att begränsa kärnverktyg,
-inkludera även de kärnverktyg eller grupper du vill ha i tillåtelselistan.
+Notera: allowlists are opt-in for optional plugins. Om din tillåtna lista bara namnger
+plugin verktyg (som `lobster`), håller OpenClaw grundläggande verktyg aktiverade. För att begränsa kärnan
+verktyg, inkludera de grundläggande verktyg eller grupper du vill ha i listan också.
 
 ## Example: Email triage
 
@@ -251,7 +244,7 @@ Användaren godkänner → återuppta:
 }
 ```
 
-Ett arbetsflöde. Deterministiskt. Säkert.
+Ett arbetsflöde. Bestämmelse. Säkert.
 
 ## Tool parameters
 
@@ -316,11 +309,11 @@ Om `requiresApproval` finns, granska prompten och besluta:
 - `approve: true` → återuppta och fortsätt biverkningar
 - `approve: false` → avbryt och finalisera arbetsflödet
 
-Använd `approve --preview-from-stdin --limit N` för att bifoga en JSON-förhandsvisning till godkännandeförfrågningar utan anpassad jq/heredoc-limning. Återupptagningstokens är nu kompakta: Lobster lagrar arbetsflödets återupptagningstillstånd under sin tillståndskatalog och returnerar en liten tokennyckel.
+Använd `approve --preview-from-stdin --limit N` för att bifoga en JSON-förhandsgranskning till godkännandeförfrågningar utan anpassat jq/heredoc-lim. Återuppta tokens är nu kompakt: Hummer lagrar arbetsflöde återuppta tillstånd under dess tillstånd dir och händer tillbaka en liten token nyckel.
 
 ## OpenProse
 
-OpenProse passar bra ihop med Lobster: använd `/prose` för att orkestrera förarbete med flera agenter och kör sedan en Lobster-pipeline för deterministiska godkännanden. Om ett Prose-program behöver Lobster, tillåt `lobster`-verktyget för underagenter via `tools.subagents.tools`. Se [OpenProse](/prose).
+OpenProse par bra med Hummer: använd `/prose` för att orkestrera multi-agent prep, och kör sedan en hummerpipeline för deterministiska godkännanden. Om ett Prosprogram behöver Hummer, tillåt `hummer`-verktyget för underagenter via `tools.subagents.tools`. Se [OpenProse](/prose).
 
 ## Safety
 
@@ -343,7 +336,7 @@ OpenProse passar bra ihop med Lobster: använd `/prose` för att orkestrera för
 
 ## Case study: community workflows
 
-Ett offentligt exempel: ett ”second brain”-CLI + Lobster-pipelines som hanterar tre Markdown-valv (personligt, partner, delat). CLI:t emitterar JSON för statistik, inkorgslistor och inaktuella skanningar; Lobster kedjar dessa kommandon till arbetsflöden som `weekly-review`, `inbox-triage`, `memory-consolidation` och `shared-task-sync`, vart och ett med godkännandespärrar. AI hanterar omdömen (kategorisering) när den finns tillgänglig och faller tillbaka till deterministiska regler när den inte gör det.
+Ett offentligt exempel: en ”second brain” CLI + Hummerledningar som hanterar tre Markdown-valv (personlig, partner, delad). CLI avger JSON för statistik, inkorgslistor och gamla skanningar; Hummerkedjor dessa kommandon i arbetsflöden som `weekly-review`, `inbox-triage`, `memory-consolidation`, och `shared-task-sync`, var och en med godkännandeportar. AI hanterar dom (kategorisering) när den är tillgänglig och faller tillbaka till deterministiska regler när den inte är det.
 
 - Tråd: [https://x.com/plattenschieber/status/2014508656335770033](https://x.com/plattenschieber/status/2014508656335770033)
 - Repo: [https://github.com/bloomedai/brain-cli](https://github.com/bloomedai/brain-cli)

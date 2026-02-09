@@ -5,18 +5,11 @@ read_when:
   - آپ Gateway میں گمشدہ API کلیدوں کی خرابی تلاش کر رہے ہوں
   - آپ فراہم کنندہ کی تصدیق یا ڈپلائمنٹ ماحول کی دستاویز بنا رہے ہوں
 title: "ماحولاتی متغیرات"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:16Z
 ---
 
 # ماحولاتی متغیرات
 
-OpenClaw ماحولاتی متغیرات کو متعدد ذرائع سے حاصل کرتا ہے۔ اصول یہ ہے کہ **موجودہ قدروں کو کبھی اووررائیڈ نہ کیا جائے**۔
+OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
 
 ## ترجیحی ترتیب (اعلیٰ → ادنیٰ)
 

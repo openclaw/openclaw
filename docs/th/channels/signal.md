@@ -4,18 +4,11 @@ read_when:
   - การตั้งค่าการรองรับ Signal
   - การดีบักการส่ง/รับของ Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:03Z
 ---
 
 # Signal (signal-cli)
 
-สถานะ: การผสานรวม CLI ภายนอก Gateway สื่อสารกับ `signal-cli` ผ่าน HTTP JSON-RPC + SSE
+สถานะ: การผสานรวม CLI ภายนอก สถานะ: การผสานรวม CLI ภายนอก Gateway สื่อสารกับ `signal-cli` ผ่าน HTTP JSON-RPC + SSE
 
 ## Quick setup (beginner)
 
@@ -88,7 +81,7 @@ x-i18n:
 }
 ```
 
-รองรับหลายบัญชี: ใช้ `channels.signal.accounts` พร้อมคอนฟิกต่อบัญชีและ `name` แบบไม่บังคับ ดู [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) สำหรับรูปแบบที่ใช้ร่วมกัน
+การรองรับหลายบัญชี: ใช้ `channels.signal.accounts` พร้อมคอนฟิกต่อบัญชีและ `name` แบบไม่บังคับ ดู [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) สำหรับรูปแบบร่วมกัน อย่าคอมมิต `~/.openclaw/openclaw.json` (มักมีโทเคน) รองรับหลายบัญชี: ใช้ `channels.signal.accounts` พร้อมคอนฟิกต่อบัญชีและ `name` แบบไม่บังคับ ดู [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) สำหรับรูปแบบที่ใช้ร่วมกัน
 
 ## External daemon mode (httpUrl)
 
@@ -105,7 +98,7 @@ x-i18n:
 }
 ```
 
-วิธีนี้จะข้ามการสปอว์นอัตโนมัติและการรอเริ่มต้นภายใน OpenClaw สำหรับการเริ่มช้าเมื่อสปอว์นอัตโนมัติ ให้ตั้งค่า `channels.signal.startupTimeoutMs`
+การตั้งค่านี้จะข้ามการสร้างอัตโนมัติและการรอเริ่มต้นภายใน OpenClaw วิธีนี้จะข้ามการสปอว์นอัตโนมัติและการรอเริ่มต้นภายใน OpenClaw สำหรับการเริ่มช้าเมื่อสปอว์นอัตโนมัติ ให้ตั้งค่า `channels.signal.startupTimeoutMs`
 
 ## Access control (DMs + groups)
 
@@ -116,7 +109,7 @@ DMs:
 - อนุมัติผ่าน:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- การจับคู่เป็นการแลกเปลี่ยนโทเคนเริ่มต้นสำหรับ Signal DMs รายละเอียด: [Pairing](/channels/pairing)
+- การจับคู่เป็นการแลกเปลี่ยนโทเคนเริ่มต้นสำหรับ Signal DMs รายละเอียด: [Pairing](/channels/pairing) การจับคู่เป็นการแลกเปลี่ยนโทเคนเริ่มต้น รายละเอียด: [Pairing](/channels/pairing)
 - ผู้ส่งแบบ UUID เท่านั้น (จาก `sourceUuid`) จะถูกจัดเก็บเป็น `uuid:<id>` ใน `channels.signal.allowFrom`
 
 Groups:
@@ -137,7 +130,7 @@ Groups:
 - รองรับไฟล์แนบ (base64 ดึงจาก `signal-cli`)
 - ขีดจำกัดสื่อเริ่มต้น: `channels.signal.mediaMaxMb` (ค่าเริ่มต้น 8)
 - ใช้ `channels.signal.ignoreAttachments` เพื่อข้ามการดาวน์โหลดสื่อ
-- บริบทประวัติกลุ่มใช้ `channels.signal.historyLimit` (หรือ `channels.signal.accounts.*.historyLimit`) และจะถอยกลับไปใช้ `messages.groupChat.historyLimit` ตั้งค่า `0` เพื่อปิด (ค่าเริ่มต้น 50)
+- บริบทประวัติกลุ่มใช้ `channels.signal.historyLimit` (หรือ `channels.signal.accounts.*.historyLimit`) และจะถอยกลับไปใช้ `messages.groupChat.historyLimit` ตั้งค่า `0` เพื่อปิด (ค่าเริ่มต้น 50) ตั้งค่า `0` เพื่อปิด (ค่าเริ่มต้น 50)
 
 ## Typing + read receipts
 
@@ -219,11 +212,11 @@ openclaw pairing list signal
 - `channels.signal.ignoreStories`: เพิกเฉยสตอรี่จากเดมอน
 - `channels.signal.sendReadReceipts`: ส่งต่อใบรับการอ่าน
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (ค่าเริ่มต้น: pairing)
-- `channels.signal.allowFrom`: DM allowlist (E.164 หรือ `uuid:<id>`) `open` ต้องใช้ `"*"` Signal ไม่มีชื่อผู้ใช้; ใช้รหัสโทรศัพท์/UUID
+- `channels.signal.allowFrom`: DM allowlist (E.164 หรือ `uuid:<id>`) `open` ต้องใช้ `"*"` Signal ไม่มีชื่อผู้ใช้; ใช้รหัสโทรศัพท์/UUID `open` ต้องใช้ `"*"`. Signal ไม่มีชื่อผู้ใช้; ใช้รหัสโทรศัพท์/UUID
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (ค่าเริ่มต้น: allowlist)
 - `channels.signal.groupAllowFrom`: allowlist ผู้ส่งในกลุ่ม
 - `channels.signal.historyLimit`: จำนวนข้อความกลุ่มสูงสุดที่จะรวมเป็นบริบท (ตั้ง 0 เพื่อปิด)
-- `channels.signal.dmHistoryLimit`: ขีดจำกัดประวัติ DM ในรอบผู้ใช้ การเขียนทับต่อผู้ใช้: `channels.signal.dms["<phone_or_uuid>"].historyLimit`
+- `channels.signal.dmHistoryLimit`: ขีดจำกัดประวัติ DM เป็นจำนวนเทิร์นของผู้ใช้ การแทนที่ต่อผู้ใช้: `channels.imessage.dms["<handle>"].historyLimit` `channels.signal.dmHistoryLimit`: ขีดจำกัดประวัติ DM ในรอบผู้ใช้ การเขียนทับต่อผู้ใช้: `channels.signal.dms["<phone_or_uuid>"].historyLimit`
 - `channels.signal.textChunkLimit`: ขนาดการแบ่งชิ้นขาออก (อักขระ)
 - `channels.signal.chunkMode`: `length` (ค่าเริ่มต้น) หรือ `newline` เพื่อแบ่งตามบรรทัดว่าง (ขอบเขตย่อหน้า) ก่อนการแบ่งตามความยาว
 - `channels.signal.mediaMaxMb`: ขีดจำกัดสื่อขาเข้า/ขาออก (MB)

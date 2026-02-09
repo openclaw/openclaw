@@ -3,13 +3,6 @@ summary: "Huby prowadzące do każdej dokumentacji OpenClaw"
 read_when:
   - Chcesz uzyskać kompletną mapę dokumentacji
 title: "Huby dokumentacji"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:51Z
 ---
 
 # Huby dokumentacji

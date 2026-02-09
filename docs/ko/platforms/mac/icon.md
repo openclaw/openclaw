@@ -3,13 +3,6 @@ summary: "macOS 에서 OpenClaw 의 메뉴 막대 아이콘 상태와 애니메�
 read_when:
   - 메뉴 막대 아이콘 동작 변경 시
 title: "메뉴 막대 아이콘"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:46Z
 ---
 
 # 메뉴 막대 아이콘 상태

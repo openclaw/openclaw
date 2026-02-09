@@ -1,17 +1,10 @@
 ---
-summary: „iMessage przez serwer BlueBubbles na macOS (REST wysyłanie/odbieranie, pisanie, reakcje, parowanie, akcje zaawansowane).”
+summary: "„iMessage przez serwer BlueBubbles na macOS (REST wysyłanie/odbieranie, pisanie, reakcje, parowanie, akcje zaawansowane).”"
 read_when:
   - Konfigurowanie kanału BlueBubbles
   - Rozwiązywanie problemów z parowaniem webhooków
   - Konfigurowanie iMessage na macOS
-title: „BlueBubbles”
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
+title: "„BlueBubbles”"
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ Status: dołączona wtyczka komunikująca się z serwerem BlueBubbles na macOS p
 ## Szybki start
 
 1. Zainstaluj serwer BlueBubbles na Macu (postępuj zgodnie z instrukcjami na [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. W konfiguracji BlueBubbles włącz web API i ustaw hasło.
+
 3. Uruchom `openclaw onboard` i wybierz BlueBubbles albo skonfiguruj ręcznie:
 
    ```json5
@@ -49,13 +44,14 @@ Status: dołączona wtyczka komunikująca się z serwerem BlueBubbles na macOS p
    ```
 
 4. Skieruj webhooki BlueBubbles do swojej bramy (przykład: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Uruchom bramę; zarejestruje ona obsługę webhooków i rozpocznie parowanie.
 
 ## Utrzymywanie Messages.app przy życiu (VM / konfiguracje bez ekranu)
 
 Niektóre konfiguracje VM macOS / always‑on mogą powodować, że Messages.app przechodzi w stan „idle” (zdarzenia przychodzące przestają napływać, dopóki aplikacja nie zostanie otwarta/przeniesiona na pierwszy plan). Prostym obejściem jest **„szturchanie” Messages co 5 minut** przy użyciu AppleScript + LaunchAgent.
 
-### 1) Zapisz AppleScript
+### 1. Zapisz AppleScript
 
 Zapisz jako:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Zainstaluj LaunchAgent
+### 2. Zainstaluj LaunchAgent
 
 Zapisz jako:
 
@@ -133,7 +129,7 @@ BlueBubbles jest dostępny w interaktywnym kreatorze konfiguracji:
 openclaw onboard
 ```
 
-Kreator prosi o:
+Kreator prosi dla:
 
 - **Server URL** (wymagane): adres serwera BlueBubbles (np. `http://192.168.1.100:1234`)
 - **Password** (wymagane): hasło API z ustawień serwera BlueBubbles
@@ -188,7 +184,7 @@ Konfiguracja per‑grupa:
 }
 ```
 
-### Bramka poleceń
+### Brama poleceń
 
 - Polecenia kontrolne (np. `/config`, `/model`) wymagają autoryzacji.
 - Wykorzystuje `allowFrom` oraz `groupAllowFrom` do określenia autoryzacji poleceń.

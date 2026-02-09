@@ -3,13 +3,6 @@ summary: "Sintaxis de directivas para /think + /verbose y cómo afectan el razon
 read_when:
   - Ajustar el análisis de directivas de thinking o verbose o sus valores predeterminados
 title: "Niveles de Thinking"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:58Z
 ---
 
 # Niveles de Thinking (directivas /think)

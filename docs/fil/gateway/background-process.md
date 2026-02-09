@@ -4,18 +4,11 @@ read_when:
   - Pagdaragdag o pagbabago ng behavior ng background exec
   - Pag-debug ng mga long-running na exec task
 title: "Background Exec at Process Tool"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:35Z
 ---
 
 # Background Exec + Process Tool
 
-Pinapatakbo ng OpenClaw ang mga shell command gamit ang `exec` tool at pinananatili sa memory ang mga long‑running na gawain. Pinamamahalaan ng `process` tool ang mga background session na iyon.
+Pinamamahalaan ng `process` tool ang mga background session na iyon. Kailangan ng totoong TTY?
 
 ## exec tool
 
@@ -26,7 +19,7 @@ Mga pangunahing parameter:
 - `background` (bool): i-background kaagad
 - `timeout` (segundo, default 1800): patayin ang proseso pagkatapos ng timeout na ito
 - `elevated` (bool): patakbuhin sa host kung naka-enable/allowed ang elevated mode
-- Kailangan ng tunay na TTY? Itakda ang `pty: true`.
+- Itakda ang `pty: true`. Set `pty: true`.
 - `workdir`, `env`
 
 Behavior:
@@ -38,7 +31,7 @@ Behavior:
 
 ## Child process bridging
 
-Kapag nag-spawn ng mga long-running na child process sa labas ng exec/process tools (halimbawa, CLI respawns o gateway helpers), ikabit ang child-process bridge helper para ma-forward ang mga termination signal at ma-detach ang mga listener sa exit/error. Iniiwasan nito ang mga orphaned process sa systemd at pinananatiling consistent ang shutdown behavior sa iba’t ibang platform.
+Kapag naglulunsad ng mga pangmatagalang child process sa labas ng exec/process tools (hal., mga CLI respawn o gateway helper), ikabit ang child‑process bridge helper upang maipasa ang mga termination signal at matanggal ang mga listener sa exit/error. Iniiwasan nito ang mga orphaned process sa systemd at pinananatiling pare‑pareho ang shutdown behavior sa iba’t ibang platform.
 
 Environment overrides:
 

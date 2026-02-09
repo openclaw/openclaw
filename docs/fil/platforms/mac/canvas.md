@@ -5,18 +5,11 @@ read_when:
   - Pagdaragdag ng mga kontrol ng agent para sa visual workspace
   - Pag-debug ng mga load ng WKWebView canvas
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:42Z
 ---
 
 # Canvas (macOS app)
 
-Ang macOS app ay nag-e-embed ng **Canvas panel** na kontrolado ng agent gamit ang `WKWebView`. Isa itong magaan na visual workspace para sa HTML/CSS/JS, A2UI, at maliliit na interactive UI surface.
+Nag-e-embed ang macOS app ng agent‑controlled **Canvas panel** gamit ang `WKWebView`. Ito ay isang magaan na visual workspace para sa HTML/CSS/JS, A2UI, at maliliit na interactive na UI surface.
 
 ## Saan matatagpuan ang Canvas
 
@@ -70,7 +63,8 @@ Mga tala:
 
 ## A2UI sa Canvas
 
-Ang A2UI ay hina-host ng Gateway canvas host at nirender sa loob ng Canvas panel. Kapag inanunsyo ng Gateway ang isang Canvas host, awtomatikong nagna-navigate ang macOS app sa A2UI host page sa unang pagbukas.
+Ang A2UI ay hina-host ng Gateway canvas host at nirere-render sa loob ng Canvas panel.
+Kapag nag-advertise ang Gateway ng Canvas host, awtomatikong nagna-navigate ang macOS app sa A2UI host page sa unang pagbukas.
 
 Default na A2UI host URL:
 

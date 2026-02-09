@@ -5,13 +5,6 @@ read_when:
   - تصحيح أخطاء خدمة launchd الخاصة بـ Gateway على macOS
   - تثبيت CLI الخاص بـ Gateway لنظام macOS
 title: "Gateway على macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:27Z
 ---
 
 # Gateway على macOS (launchd خارجي)
@@ -58,7 +51,7 @@ npm install -g openclaw@<version>
 
 يتحقق تطبيق macOS من إصدار Gateway مقارنةً بإصداره. إذا كانا غير متوافقين، حدّث CLI العالمي ليتطابق مع إصدار التطبيق.
 
-## فحص سريع
+## التحقق من الدخان
 
 ```bash
 openclaw --version

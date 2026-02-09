@@ -4,13 +4,6 @@ read_when:
   - Du skal logge ind på websites til browserautomatisering
   - Du vil poste opdateringer på X/Twitter
 title: "Browser-login"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:39Z
 ---
 
 # Browser-login + opslag på X/Twitter
@@ -19,13 +12,13 @@ x-i18n:
 
 Når et website kræver login, skal du **logge ind manuelt** i **host**-browserprofilen (openclaw-browseren).
 
-Giv **ikke** modellen dine loginoplysninger. Automatiserede logins udløser ofte anti‑bot‑forsvar og kan låse kontoen.
+Giv **ikke** modellen dine legitimationsoplysninger. Automatiserede logins udløser ofte anti-bot forsvar og kan låse kontoen.
 
 Tilbage til hoveddokumentationen for browseren: [Browser](/tools/browser).
 
 ## Hvilken Chrome-profil bruges?
 
-OpenClaw styrer en **dedikeret Chrome-profil** (navngivet `openclaw`, orangefarvet UI). Den er adskilt fra din daglige browserprofil.
+OpenClaw styrer en **dedikeret Chrome-profil** (navngivet `openclaw`, orange-tonet UI). Dette er adskilt fra din daglige browserprofil.
 
 To nemme måder at få adgang til den på:
 
@@ -46,9 +39,9 @@ Hvis du har flere profiler, kan du angive `--browser-profile <name>` (standard e
 
 ## Sandboxing + adgang til host-browser
 
-Sandboxede browsersessioner er **mere tilbøjelige** til at udløse bot-detektion. For X/Twitter (og andre strikse websites) bør du foretrække **host**-browseren.
+Sandboxed browser sessioner er \*\* mere sandsynlig\*\* at udløse bot detektion. For X/Twitter (og andre strenge websteder), foretrækker **vært**-browseren.
 
-Hvis agenten er sandboxet, bruger browser-værktøjet som standard sandboxen. For at tillade host-kontrol:
+Hvis agenten er sandboxed, er browserværktøjet standard sandboks. For at tillade værtskontrol:
 
 ```json5
 {

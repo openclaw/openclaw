@@ -5,13 +5,6 @@ read_when:
   - Bạn đang gỡ lỗi truy cập local so với tailnet hoặc ghép cặp
   - Bạn muốn danh sách tài liệu mạng chuẩn
 title: "Mạng"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:23Z
 ---
 
 # Trung tâm mạng

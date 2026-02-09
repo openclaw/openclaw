@@ -4,13 +4,6 @@ read_when:
   - Cập nhật hành vi hoặc mặc định retry của nhà cung cấp
   - Gỡ lỗi lỗi gửi hoặc giới hạn tốc độ của nhà cung cấp
 title: "Chính sách Retry"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:33Z
 ---
 
 # Chính sách retry

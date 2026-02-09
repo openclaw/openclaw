@@ -1,16 +1,9 @@
 ---
-summary: 「Talk 模式：使用 ElevenLabs TTS 的連續語音對話」
+summary: "Talk 模式：使用 ElevenLabs TTS 的連續語音對話"
 read_when:
   - 在 macOS／iOS／Android 上實作 Talk 模式
   - 變更語音／TTS／中斷行為
-title: 「Talk 模式」
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:41Z
+title: "Talk 模式"
 ---
 
 # Talk 模式
@@ -26,7 +19,7 @@ Talk 模式是一個連續的語音對話循環：
 
 - 在啟用 Talk 模式時，**常駐顯示的覆蓋層**。
 - **聆聽 → 思考 → 說話** 的階段轉換。
-- 在**短暫停頓**（靜音視窗）時，會送出目前的逐字稿。
+- 在**短暫暫停**（靜默視窗）時，會送出目前的逐字稿。
 - 回覆會**寫入 WebChat**（與鍵入相同）。
 - **語音中斷**（預設開啟）：若使用者在助理說話時開始發言，將停止播放，並為下一個提示記錄中斷時間戳。
 
@@ -80,7 +73,7 @@ Talk 模式是一個連續的語音對話循環：
 
 - 選單列切換：**Talk**
 - 設定分頁：**Talk 模式** 群組（語音 ID ＋ 中斷切換）
-- 覆蓋層：
+- Overlay:
   - **聆聽**：雲朵隨麥克風音量脈動
   - **思考**：下沉動畫
   - **說話**：放射狀圓環

@@ -1,16 +1,9 @@
 ---
-summary: „OpenClaw sicher aktualisieren (globale Installation oder aus dem Quellcode) sowie Rollback-Strategie“
+summary: "„OpenClaw sicher aktualisieren (globale Installation oder aus dem Quellcode) sowie Rollback-Strategie“"
 read_when:
   - OpenClaw aktualisieren
   - Nach einem Update funktioniert etwas nicht mehr
-title: „Aktualisieren“
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:46Z
+title: "Aktualisieren"
 ---
 
 # Aktualisieren
@@ -29,6 +22,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Hinweise:
 
 - Fügen Sie `--no-onboard` hinzu, wenn der Onboarding‑Assistent nicht erneut ausgeführt werden soll.
+
 - Für **Source‑Installationen** verwenden Sie:
 
   ```bash
@@ -38,6 +32,7 @@ Hinweise:
   Der Installer wird `git pull --rebase` **nur**, wenn das Repository sauber ist.
 
 - Für **globale Installationen** verwendet das Skript unter der Haube `npm install -g openclaw@latest`.
+
 - Legacy‑Hinweis: `clawdbot` bleibt als Kompatibilitäts‑Shim verfügbar.
 
 ## Vor dem Update

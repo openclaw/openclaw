@@ -4,20 +4,13 @@ read_when:
   - Konfigurera en ny maskin
   - Du vill ha ”senaste + bästa” utan att bryta din personliga setup
 title: "Konfigurering"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:37Z
 ---
 
 # Konfigurering
 
 <Note>
-Om du konfigurerar för första gången, börja med [Kom igång](/start/getting-started).
-För detaljer om guiden, se [Onboarding Wizard](/start/wizard).
+Om du ställer in för första gången, börja med [Komma igång](/start/getting-started).
+För information om guiden, se [Onboarding Wizard](/start/wizard).
 </Note>
 
 Senast uppdaterad: 2026-01-01
@@ -88,7 +81,7 @@ Om introduktionen inte är tillgänglig i din build:
 
 Mål: arbeta på TypeScript‑Gateway, få hot reload, behåll macOS‑appens UI anslutet.
 
-### 0) (Valfritt) Kör macOS‑appen från källkod också
+### 0. (Valfritt) Kör macOS‑appen från källkod också
 
 Om du även vill ha macOS‑appen på bleeding edge:
 
@@ -96,7 +89,7 @@ Om du även vill ha macOS‑appen på bleeding edge:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Starta dev‑Gateway
+### 1. Starta dev‑Gateway
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` kör gateway i watch‑läge och laddar om vid TypeScript‑ändringar.
 
-### 2) Peka macOS‑appen mot din körande Gateway
+### 2. Peka macOS‑appen mot din körande Gateway
 
 I **OpenClaw.app**:
 
 - Anslutningsläge: **Local**
   Appen ansluter till den körande gatewayn på den konfigurerade porten.
 
-### 3) Verifiera
+### 3. Verifiera
 
 - Gateway‑status i appen ska visa **”Using existing gateway …”**
 - Eller via CLI:
@@ -149,13 +142,16 @@ Använd detta vid felsökning av autentisering eller när du bestämmer vad som 
 
 ## Linux (systemd användartjänst)
 
-Linux‑installationer använder en systemd **user**‑tjänst. Som standard stoppar systemd användartjänster vid utloggning/idle, vilket dödar Gateway. Introduktionen försöker aktivera lingering åt dig (kan be om sudo). Om det fortfarande är av, kör:
+Linux installerar använder en systemd **användare** tjänst. Som standard stoppar systemd användare
+tjänster på utloggning/inaktiv, vilket dödar Gateway. Onboarding försök att aktivera
+kvardröjande för dig (kan fråga om sudo). Om det fortfarande är borta, köra:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-För alltid‑på eller fleranvändarservrar, överväg en **system**‑tjänst i stället för en användartjänst (ingen lingering behövs). Se [Gateway runbook](/gateway) för systemd‑anteckningarna.
+För alltid på eller multi-user servrar, överväga ett **system** tjänst istället för en
+användartjänst (ingen kvardröjande behövs). Se [Gateway runbook](/gateway) för systemd-anteckningarna.
 
 ## Relaterad dokumentation
 

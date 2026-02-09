@@ -4,13 +4,6 @@ read_when:
   - macOS/iOS üzerinde Bonjour keşif sorunlarını giderirken
   - mDNS hizmet türlerini, TXT kayıtlarını veya keşif UX’ini değiştirirken
 title: "Bonjour Keşfi"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:25Z
 ---
 
 # Bonjour / mDNS keşfi
@@ -20,8 +13,7 @@ Tailnet tabanlı bağlantının **yerini almaz**.
 
 ## Tailscale üzerinden geniş alan Bonjour (Unicast DNS‑SD)
 
-Düğüm ve gateway farklı ağlardaysa, çok noktaya yayın mDNS sınırı aşmaz.
-**unicast DNS‑SD** (“Wide‑Area Bonjour”) kullanarak Tailscale üzerinden
+Düğüm ve gateway farklı ağlardaysa, çok noktaya yayın mDNS sınırı aşmaz. **unicast DNS‑SD** (“Wide‑Area Bonjour”) kullanarak Tailscale üzerinden
 aynı keşif UX’ini koruyabilirsiniz.
 
 Üst düzey adımlar:
@@ -106,11 +98,11 @@ Gateway, UI akışlarını kolaylaştırmak için küçük ve gizli olmayan ipu�
 - `cliPath=<path>` (isteğe bağlı; çalıştırılabilir bir `openclaw` giriş noktasına mutlak yol)
 - `tailnetDns=<magicdns>` (Tailnet mevcut olduğunda isteğe bağlı ipucu)
 
-## macOS’ta hata ayıklama
+## Debugging on macOS
 
 Kullanışlı yerleşik araçlar:
 
-- Örnekleri tarayın:
+- Browse instances:
 
   ```bash
   dns-sd -B _openclaw-gw._tcp local.
@@ -138,7 +130,7 @@ Gateway, dönen bir günlük dosyası yazar (başlangıçta
 
 iOS düğümü, `_openclaw-gw._tcp`’i keşfetmek için `NWBrowser` kullanır.
 
-Günlükleri yakalamak için:
+To capture logs:
 
 - Ayarlar → Gateway → Gelişmiş → **Keşif Hata Ayıklama Günlükleri**
 - Ayarlar → Gateway → Gelişmiş → **Keşif Günlükleri** → yeniden üret → **Kopyala**
@@ -154,7 +146,7 @@ Günlük, tarayıcı durum geçişlerini ve sonuç kümesi değişikliklerini i�
   noktalama işaretlerinden kaçının), ardından Gateway’i yeniden başlatın. Hizmet örneği adı
   ana makine adından türetilir; aşırı karmaşık adlar bazı çözücüleri şaşırtabilir.
 
-## Kaçışlı örnek adları (`\032`)
+## Escaped instance names (`\032`)
 
 Bonjour/DNS‑SD, hizmet örneği adlarındaki baytları sıklıkla ondalık `\DDD`
 dizileri olarak kaçışlar (ör. boşluklar `\032` olur).

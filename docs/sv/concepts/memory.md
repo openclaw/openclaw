@@ -3,22 +3,15 @@ summary: "Hur OpenClaw-minne fungerar (arbetsytans filer + automatisk minnesspol
 read_when:
   - Du vill ha filstrukturen och arbetsflödet för minne
   - Du vill finjustera den automatiska förkompakterings-spolningen av minne
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:39Z
 ---
 
 # Minne
 
-OpenClaw-minne är **vanlig Markdown i agentens arbetsyta**. Filerna är
-sanningskällan; modellen ”minns” bara det som skrivs till disk.
+OpenClaw minne är **vanligt markdown i agentutrymmet**. Filerna är
+sanningskällan; modellen bara "minnas" vad som skrivs till disken.
 
-Verktyg för minnessökning tillhandahålls av det aktiva minnespluginet (standard:
-`memory-core`). Inaktivera minnespluginer med `plugins.slots.memory = "none"`.
+Minnessökverktyg tillhandahålls av det aktiva minnestillägget (standard:
+`memory-core`). Inaktivera minnesplugins med `plugins.slots.memory = "none"`.
 
 ## Minnesfiler (Markdown)
 
@@ -31,23 +24,23 @@ Standardlayouten för arbetsytan använder två minneslager:
   - Kurerat långtidsminne.
   - **Läs endast i den huvudsakliga, privata sessionen** (aldrig i gruppsammanhang).
 
-Dessa filer ligger under arbetsytan (`agents.defaults.workspace`, standard
-`~/.openclaw/workspace`). Se [Agent workspace](/concepts/agent-workspace) för fullständig layout.
+Dessa filer lever under arbetsytan (`agents.defaults.workspace`, standard
+`~/.openclaw/workspace`). Se [Agentens arbetsyta](/concepts/agent-workspace) för den fullständiga layouten.
 
 ## När ska minne skrivas
 
 - Beslut, preferenser och varaktiga fakta hör hemma i `MEMORY.md`.
 - Dagliga anteckningar och löpande kontext hör hemma i `memory/YYYY-MM-DD.md`.
 - Om någon säger ”kom ihåg detta”, skriv ner det (behåll det inte i RAM).
-- Detta område utvecklas fortfarande. Det hjälper att påminna modellen att lagra minnen; den vet vad den ska göra.
+- Detta område utvecklas fortfarande. Det hjälper till att påminna modellen för att lagra minnen; det kommer att veta vad man ska göra.
 - Om du vill att något ska bestå, **be boten att skriva det** till minnet.
 
 ## Automatisk minnesspolning (förkompakterings-ping)
 
-När en session är **nära automatisk kompaktering** triggar OpenClaw en **tyst,
-agentisk tur** som påminner modellen att skriva varaktigt minne **innan**
-kontexten kompakteras. Standardprompterna säger uttryckligen att modellen _får svara_,
-men oftast är `NO_REPLY` det korrekta svaret så att användaren aldrig ser denna tur.
+När en session är **nära automatisk komprimering**, utlöser OpenClaw en **tyst,
+agentic turn** som påminner modellen att skriva hållbart minne **innan** sammanhanget
+är kompakt. Standardprompten säger explicit att modellen _may reply_,
+men brukar `NO_REPLY` är det rätta svaret så att användaren aldrig ser denna tur.
 
 Detta styrs av `agents.defaults.compaction.memoryFlush`:
 
@@ -91,7 +84,7 @@ Standardvärden:
 
 - Aktiverad som standard.
 - Bevakar minnesfiler efter ändringar (debounce).
-- Använder fjärr-embeddings som standard. Om `memorySearch.provider` inte är satt väljer OpenClaw automatiskt:
+- Använder fjärrinbäddning som standard. Om `memorySearch.provider` inte är satt, är OpenClaw auto-selects:
   1. `local` om en `memorySearch.local.modelPath` är konfigurerad och filen finns.
   2. `openai` om en OpenAI-nyckel kan lösas.
   3. `gemini` om en Gemini-nyckel kan lösas.
@@ -100,24 +93,24 @@ Standardvärden:
 - Lokalt läge använder node-llama-cpp och kan kräva `pnpm approve-builds`.
 - Använder sqlite-vec (när tillgängligt) för att accelerera vektorsökning i SQLite.
 
-Fjärr-embeddings **kräver** en API-nyckel för embeddingsleverantören. OpenClaw
-löser nycklar från auth-profiler, `models.providers.*.apiKey` eller
-miljövariabler. Codex OAuth täcker endast chatt/kompletteringar och uppfyller **inte**
-embeddings för minnessökning. För Gemini, använd `GEMINI_API_KEY` eller
-`models.providers.google.apiKey`. För Voyage, använd `VOYAGE_API_KEY` eller
-`models.providers.voyage.apiKey`. När du använder en anpassad OpenAI-kompatibel endpoint,
-ställ in `memorySearch.remote.apiKey` (och valfri `memorySearch.remote.headers`).
+Fjärrbäddningar **kräver** en API-nyckel för inbäddningsleverantören. OpenClaw
+löser nycklar från auth profiler, `models.providers.*.apiKey`, eller miljö
+variabler. Codex OAuth täcker endast chatt/kompletteringar och uppfyller **inte**
+inbäddning för minnessökning. För Gemini, använd `GEMINI_API_KEY` eller
+`models.providers.google.apiKey`. För resor använder du `VOYAGE_API_KEY` eller
+`models.providers.voyage.apiKey`. När du använder en egen OpenAI-kompatibel slutpunkt, sätt
+`memorySearch.remote.apiKey` (och valfritt `memorySearch.remote.headers`).
 
 ### QMD-backend (experimentell)
 
-Sätt `memory.backend = "qmd"` för att byta den inbyggda SQLite-indexeraren mot
-[QMD](https://github.com/tobi/qmd): en lokal-först-sök-sidecar som kombinerar
-BM25 + vektorer + rerankning. Markdown förblir sanningskällan; OpenClaw anropar
-QMD för hämtning. Viktiga punkter:
+Ange `minne. ackend = "qmd"` för att byta den inbyggda SQLite-indexeraren mot
+[QMD](https://github.com/tobi/qmd): en lokal första söksida som kombinerar
+BM25 + vektorer + reranking. Markdown förblir källan till sanning; OpenClaw skal
+ut till QMD för hämtning. Viktiga punkter:
 
 **Förutsättningar**
 
-- Inaktiverad som standard. Aktivera per konfig (`memory.backend = "qmd"`).
+- Inaktiverad som standard. Opt in per-config (`memory.backend = "qmd"`).
 - Installera QMD CLI separat (`bun install -g https://github.com/tobi/qmd` eller hämta
   en release) och säkerställ att `qmd`-binären finns på gatewayens `PATH`.
 - QMD behöver en SQLite-byggnad som tillåter tillägg (`brew install sqlite` på
@@ -127,7 +120,8 @@ QMD för hämtning. Viktiga punkter:
 - Gatewayen kör QMD i ett självbärande XDG-hem under
   `~/.openclaw/agents/<agentId>/qmd/` genom att sätta `XDG_CONFIG_HOME` och
   `XDG_CACHE_HOME`.
-- OS-stöd: macOS och Linux fungerar direkt när Bun + SQLite är installerade. Windows stöds bäst via WSL2.
+- OS-stöd: macOS och Linux fungerar ur lådan när Bun + SQLite är
+  installerade. Windows stöds bäst via WSL2.
 
 **Hur sidecaren körs**
 
@@ -138,15 +132,17 @@ QMD för hämtning. Viktiga punkter:
   vid uppstart och på ett konfigurerbart intervall (`memory.qmd.update.interval`,
   standard 5 m).
 - Uppstartsuppdatering kör nu i bakgrunden som standard så att chattstart inte blockeras; sätt `memory.qmd.update.waitForBootSync = true` för att behålla tidigare blockerande beteende.
-- Sökningar körs via `qmd query --json`. Om QMD misslyckas eller binären saknas
-  faller OpenClaw automatiskt tillbaka till den inbyggda SQLite-hanteraren så att minnesverktyg fortsätter fungera.
+- Sökningar som körs via `qmd fråga --json`. Om QMD misslyckas eller binären saknas, faller
+  OpenClaw automatiskt tillbaka till den inbyggda SQLite-hanteraren så minnesverktygen
+  fungerar.
 - OpenClaw exponerar inte justering av QMD:s inbäddningsbatchstorlek i nuläget; batchbeteende styrs av QMD självt.
 - **Första sökningen kan vara långsam**: QMD kan ladda ner lokala GGUF-modeller (reranker/frågeexpansion) vid första `qmd query`-körningen.
   - OpenClaw sätter `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` automatiskt när QMD körs.
   - Om du vill förladda modeller manuellt (och värma samma index som OpenClaw använder), kör en engångsfråga med agentens XDG-kataloger.
 
-    OpenClaws QMD-tillstånd ligger under din **state-katalog** (standard `~/.openclaw`).
-    Du kan peka `qmd` till exakt samma index genom att exportera samma XDG-variabler som OpenClaw använder:
+    OpenClaws QMD-tillstånd lever under din **state dir** (standard är `~/.openclaw`).
+    Du kan peka `qmd` på exakt samma index genom att exportera samma XDG vars
+    OpenClaw använder:
 
     ```bash
     # Pick the same state dir OpenClaw uses
@@ -181,7 +177,8 @@ QMD för hämtning. Viktiga punkter:
 - `limits`: begränsa återkallningspayload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
 - `scope`: samma schema som [`session.sendPolicy`](/gateway/configuration#session).
-  Standard är endast DM (`deny` alla, `allow` direktchattar); lätta upp det för att visa QMD-träffar i grupper/kanaler.
+  Standard är endast DM-(`deny` all, `allow` direktchattar); lossa den till ytan QMD
+  träffar i grupper/kanaler.
 - Utdrag hämtade utanför arbetsytan visas som
   `qmd/<collection>/<relative-path>` i `memory_search`-resultat; `memory_get`
   förstår prefixet och läser från den konfigurerade QMD-samlingens rot.
@@ -217,7 +214,10 @@ memory: {
 **Citat & fallback**
 
 - `memory.citations` gäller oavsett backend (`auto`/`on`/`off`).
-- När `qmd` körs taggar vi `status().backend = "qmd"` så att diagnostik visar vilken motor som levererade resultaten. Om QMD-underprocessen avslutas eller JSON-utdata inte kan tolkas loggar sökhanteraren en varning och returnerar den inbyggda leverantören (befintliga Markdown-embeddings) tills QMD återhämtar sig.
+- När `qmd` körs taggar vi `status().backend = "qmd"` så diagnostik visar vilken
+  motor som tjänade resultatet. Om QMD delprocessen avslutas eller JSON utdata inte kan
+  tolkas, sökhanteraren loggar en varning och returnerar den inbyggda leverantören
+  (befintliga Markdown inbäddar) tills QMD återställs.
 
 ### Ytterligare minnesvägar
 
@@ -293,7 +293,7 @@ Fallbacks:
 
 Batchindexering (OpenAI + Gemini):
 
-- Aktiverad som standard för OpenAI- och Gemini-embeddings. Sätt `agents.defaults.memorySearch.remote.batch.enabled = false` för att inaktivera.
+- Aktiverad som standard för inbäddning av OpenAI och Gemini. Ange `agents.defaults.memorySearch.remote.batch.enabled = false` för att inaktivera.
 - Standardbeteendet väntar på batchslutförande; justera `remote.batch.wait`, `remote.batch.pollIntervalMs` och `remote.batch.timeoutMinutes` vid behov.
 - Sätt `remote.batch.concurrency` för att styra hur många batchjobb som skickas parallellt (standard: 2).
 - Batchläge gäller när `memorySearch.provider = "openai"` eller `"gemini"` och använder motsvarande API-nyckel.
@@ -338,16 +338,16 @@ Lokalt läge:
 
 ### Hur minnesverktygen fungerar
 
-- `memory_search` söker semantiskt i Markdown-chunkar (~400 tokens mål, 80 tokens överlapp) från `MEMORY.md` + `memory/**/*.md`. Det returnerar utdragstext (begränsad till ~700 tecken), filsökväg, radintervall, poäng, leverantör/modell samt om vi föll tillbaka från lokala → fjärr-embeddings. Ingen fullständig filpayload returneras.
-- `memory_get` läser en specifik minnes-Markdownfil (arbetsyterelativ), valfritt från en startlinje och för N rader. Sökvägar utanför `MEMORY.md` / `memory/` avvisas.
+- `memory_search` semantiskt söker Markdown chunks (~400 token target, 80-token overlap) från `MEMORY.md` + `memory/**/*.md`. Den returnerar textutdrag (capped ~700 tecken), filsökväg, linjesortiment, poäng, leverantör / modell, och om vi föll tillbaka från lokala → fjärranslutningar. Ingen full nyttolast för filen returneras.
+- `memory_get` läser en specifik minnesmarkdown-fil (arbetsyta-relativ), alternativt från en startlinje och för N-linjer. Sökvägar utanför `MEMORY.md` / `minne/` avvisas.
 - Båda verktygen är aktiverade endast när `memorySearch.enabled` löses till true för agenten.
 
 ### Vad som indexeras (och när)
 
 - Filtyp: endast Markdown (`MEMORY.md`, `memory/**/*.md`).
 - Indexlagring: per-agent SQLite på `~/.openclaw/memory/<agentId>.sqlite` (konfigurerbar via `agents.defaults.memorySearch.store.path`, stöder `{agentId}`-token).
-- Aktualitet: bevakare på `MEMORY.md` + `memory/` markerar indexet smutsigt (debounce 1,5 s). Synk schemaläggs vid sessionsstart, vid sökning eller på intervall och kör asynkront. Sessionsutskrifter använder deltatrösklar för att trigga bakgrundssynk.
-- Omindexeringstriggers: indexet lagrar embeddings **leverantör/modell + endpoint-fingeravtryck + chunkningsparametrar**. Om något av dessa ändras återställer och omindexerar OpenClaw automatiskt hela lagret.
+- Freshness: betraktare på `MEMORY.md` + `minne/` markerar indexet smutsigt (debounce 1.5s). Synkronisering är schemalagd vid start av sessionen, vid sökning eller på ett intervall och körs asynkront. Sessionsutskrifter använder deltatrösklar för att utlösa bakgrundssynkronisering.
+- Reindex triggers: index lagrar inbäddning **leverantör/modell + endpoint fingeravtryck + chunking params**. Om någon av dessa ändringar, återställer och indexerar OpenClaw automatiskt hela butiken.
 
 ### Hybridsökning (BM25 + vektor)
 
@@ -371,9 +371,9 @@ Men den kan vara svag på exakta, högsignalstokens:
 - kodsymboler (`memorySearch.query.hybrid`)
 - felsträngar (“sqlite-vec unavailable”)
 
-BM25 (fulltext) är motsatsen: stark på exakta tokens, svagare på parafraser.
-Hybridsökning är den pragmatiska medelvägen: **använd båda återhämtningssignalerna** så att du får
-bra resultat både för ”naturligt språk”-frågor och ”nål i en höstack”-frågor.
+BM25 (fulltext) är motsatsen: stark vid exakta tokens, svagare vid parafraser.
+Hybrid search är den pragmatiska mittfältet: **använd båda hämtningssignaler** så att du får
+bra resultat för både “naturspråk” frågor och “nål i en haystack” frågor.
 
 #### Hur vi slår ihop resultat (nuvarande design)
 
@@ -398,9 +398,9 @@ Noteringar:
 - Om embeddings inte är tillgängliga (eller om leverantören returnerar en nollvektor) kör vi ändå BM25 och returnerar nyckelordsträffar.
 - Om FTS5 inte kan skapas behåller vi endast vektorsökning (inget hårt fel).
 
-Detta är inte ”IR-teori-perfekt”, men det är enkelt, snabbt och tenderar att förbättra recall/precision på verkliga anteckningar.
-Om vi vill bli mer sofistikerade senare är vanliga nästa steg Reciprocal Rank Fusion (RRF) eller poängnormalisering
-(min/max eller z-score) innan mixning.
+Detta är inte “IR-teori perfekt”, men det är enkelt, snabbt och tenderar att förbättra återkallande/precision på verkliga anteckningar.
+Om vi vill få finare senare, vanliga nästa steg är Reciprocal Rank Fusion (RRF) eller poäng normalisering
+(min/max eller z-poäng) innan blandning.
 
 Konfig:
 
@@ -442,8 +442,8 @@ agents: {
 
 ### Sessionsminnessökning (experimentell)
 
-Du kan valfritt indexera **sessionsutskrifter** och visa dem via `memory_search`.
-Detta är skyddat bakom en experimentflagga.
+Du kan eventuellt indexera **sessionsutskrifter** och ytbehandla dem via `memory_search`.
+Detta är gated bakom en experimentell flagga.
 
 ```json5
 agents: {
@@ -463,7 +463,7 @@ Noteringar:
 - `memory_search` blockerar aldrig på indexering; resultat kan vara något inaktuella tills bakgrundssynk är klar.
 - Resultat innehåller fortfarande endast utdrag; `memory_get` förblir begränsad till minnesfiler.
 - Sessionsindexering är isolerad per agent (endast den agentens sessionsloggar indexeras).
-- Sessionsloggar ligger på disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Alla processer/användare med filsystemåtkomst kan läsa dem, så betrakta diskåtkomst som förtroendegränsen. För striktare isolering, kör agenter under separata OS-användare eller värdar.
+- Sessionsloggar live på disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Alla process/användare med filsystemsåtkomst kan läsa dem, så behandla diskåtkomst som förtroendegränsen. För strängare isolering, kör agenter under separata OS-användare eller värdar.
 
 Deltatrösklar (standardvärden visas):
 
@@ -484,9 +484,9 @@ agents: {
 
 ### SQLite-vektoracceleration (sqlite-vec)
 
-När sqlite-vec-tillägget är tillgängligt lagrar OpenClaw embeddings i en
-SQLite-virtuell tabell (`vec0`) och utför vektordistansfrågor i
-databasen. Detta håller sökningen snabb utan att ladda varje embedding till JS.
+När sqlite-vec tillägget är tillgängligt, lagrar OpenClaw inbäddning i en
+SQLite virtuell tabell (`vec0`) och utför vektordistansfrågor i databasen
+. Detta håller sökandet snabbt utan att ladda varje inbäddning i JS.
 
 Konfiguration (valfri):
 
@@ -516,7 +516,7 @@ Noteringar:
 ### Lokal inbäddnings-autonedladdning
 
 - Standardmodell för lokala embeddings: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0,6 GB).
-- När `memorySearch.provider = "local"`, löser `node-llama-cpp` `modelPath`; om GGUF saknas **laddas den automatiskt ner** till cachen (eller `local.modelCacheDir` om satt), och laddas sedan. Nedladdningar återupptas vid omförsök.
+- När `memorySearch.provider = "local"`, `node-llama-cpp` löser `modelPath`; om GGUF saknar det **auto-downloads** till cachen (eller `local.modelCacheDir` om set), laddar sedan den. Nedladdningar återupptas vid återförsök.
 - Krav för native-build: kör `pnpm approve-builds`, välj `node-llama-cpp`, därefter `pnpm rebuild node-llama-cpp`.
 - Fallback: om lokal konfiguration misslyckas och `memorySearch.fallback = "openai"`, byter vi automatiskt till fjärr-embeddings (`openai/text-embedding-3-small` om inte åsidosatt) och registrerar orsaken.
 
@@ -544,4 +544,4 @@ agents: {
 Noteringar:
 
 - `remote.*` har företräde framför `models.providers.openai.*`.
-- `remote.headers` slås samman med OpenAI-headers; fjärr vinner vid nyckelkonflikter. Utelämna `remote.headers` för att använda OpenAI-standardvärdena.
+- `remote.headers` sammanfoga med OpenAI-huvuden; fjärråtkomst på nyckelkonflikter. Utelämna `remote.headers` för att använda OpenAI-standarderna.

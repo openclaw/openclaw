@@ -3,13 +3,6 @@ summary: "Udostępnij zgodny z OpenAI punkt końcowy HTTP /v1/chat/completions z
 read_when:
   - Integracja narzędzi oczekujących OpenAI Chat Completions
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:10Z
 ---
 
 # OpenAI Chat Completions (HTTP)

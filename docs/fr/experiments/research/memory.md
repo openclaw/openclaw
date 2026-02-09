@@ -2,16 +2,9 @@
 summary: "Notes de recherche : systeme de memoire hors ligne pour les espaces de travail Clawd (source de verite Markdown + index derive)"
 read_when:
   - Conception de la memoire d’espace de travail (~/.openclaw/workspace) au-dela des journaux Markdown quotidiens
-  - Choix: CLI autonome vs integration profonde a OpenClaw
+  - Deciding: "Choix: CLI autonome vs integration profonde a OpenClaw"
   - Ajout du rappel hors ligne + reflexion (retain/recall/reflect)
 title: "Recherche sur la memoire d’espace de travail"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:54Z
 ---
 
 # Memoire d’espace de travail v2 (hors ligne) : notes de recherche
@@ -31,10 +24,10 @@ La configuration actuelle (un fichier par jour) est excellente pour :
 
 Elle est faible pour :
 
-- la recuperation a fort rappel (« qu’avons-nous decide a propos de X ? », « la derniere fois que nous avons essaye Y ? »)
+- la recuperation a fort rappel (« qu’avons-nous decide a propos de X ? », « la derniere fois que nous avons essaye Y ? »)
 - les reponses centrees sur les entites (« parle-moi d’Alice / The Castle / warelay ») sans relire de nombreux fichiers
 - la stabilite des opinions/preferences (et les preuves lors des changements)
-- les contraintes temporelles (« qu’est-ce qui etait vrai en nov. 2025 ? ») et la resolution des conflits
+- les contraintes temporelles (« qu’est-ce qui etait vrai en nov. 2025 ? ») et la resolution des conflits
 
 ## Objectifs de conception
 
@@ -63,7 +56,7 @@ Deux pieces a combiner :
 
 ## Architecture proposee (source de verite Markdown + index derive)
 
-### Stockage canonique (compatible git)
+### Magasin canonique (convivial)
 
 Conserver `~/.openclaw/workspace` comme memoire canonique lisible par l’humain.
 
@@ -99,7 +92,7 @@ Ajouter un index derive sous l’espace de travail (pas necessairement suivi par
 ~/.openclaw/workspace/.memory/index.sqlite
 ```
 
-S’appuyer sur :
+Revenir avec :
 
 - un schema SQLite pour les faits + liens d’entites + metadonnees d’opinions
 - SQLite **FTS5** pour le rappel lexical (rapide, leger, hors ligne)
@@ -143,8 +136,8 @@ Le rappel doit prendre en charge :
 
 - **lexical** : « trouver des termes/noms/commandes exacts » (FTS5)
 - **entite** : « parle-moi de X » (pages d’entites + faits lies aux entites)
-- **temporel** : « que s’est-il passe autour du 27 nov. » / « depuis la semaine derniere »
-- **opinion** : « que prefere Peter ? » (avec confiance + preuves)
+- **temporel** : « que s’est-il passe autour du 27 nov. » / « depuis la semaine derniere »
+- **opinion** : « que prefere Peter ? » (avec confiance + preuves)
 
 Le format de retour doit etre compatible agent et citer les sources :
 
@@ -165,7 +158,7 @@ La reflexion est une tache planifiee (quotidienne ou heartbeat `ultrathink`) qui
 Evolution des opinions (simple, explicable) :
 
 - chaque opinion a :
-  - un enonce
+  - instruction
   - une confiance `c ∈ [0,1]`
   - un last_updated
   - des liens de preuves (IDs de faits a l’appui + contradictoires)

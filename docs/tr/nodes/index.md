@@ -4,17 +4,10 @@ read_when:
   - iOS/Android düğümlerini bir gateway ile eşleştirme
   - Ajan bağlamı için düğüm canvas/kamerasını kullanma
   - Yeni düğüm komutları veya CLI yardımcıları ekleme
-title: "Düğümler"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:47Z
+title: "Nodes"
 ---
 
-# Düğümler
+# Nodes
 
 Bir **düğüm**, Gateway **WebSocket**’ine (operatörlerle aynı port) `role: "node"` ile bağlanan ve `node.invoke` aracılığıyla bir komut yüzeyi (örn. `canvas.*`, `camera.*`, `system.*`) sunan bir yardımcı cihazdır (macOS/iOS/Android/headless). Protokol ayrıntıları: [Gateway protocol](/gateway/protocol).
 
@@ -121,7 +114,7 @@ openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 
 Onaylar node host üzerinde `~/.openclaw/exec-approvals.json` konumunda bulunur.
 
-### Exec’i düğüme yönlendirme
+### Point exec at the node
 
 Varsayılanları yapılandırın (gateway yapılandırması):
 
@@ -146,7 +139,7 @@ node host üzerinde çalışır.
 - [Exec tool](/tools/exec)
 - [Exec approvals](/tools/exec-approvals)
 
-## Komutları çağırma
+## Invoking commands
 
 Düşük seviye (ham RPC):
 
@@ -299,7 +292,7 @@ Genel varsayılan:
 openclaw config set tools.exec.node "node-id-or-name"
 ```
 
-Ajan başına geçersiz kılma:
+Per-agent override:
 
 ```bash
 openclaw config get agents.list

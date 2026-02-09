@@ -1,15 +1,8 @@
 ---
-summary: „Cykl życia Gateway na macOS (launchd)”
+summary: "„Cykl życia Gateway na macOS (launchd)”"
 read_when:
   - Integracja aplikacji macOS z cyklem życia Gateway
-title: „Cykl życia Gateway”
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:24Z
+title: "„Cykl życia Gateway”"
 ---
 
 # Cykl życia Gateway na macOS
@@ -17,11 +10,11 @@ x-i18n:
 Aplikacja macOS **domyślnie zarządza Gateway za pomocą launchd** i nie uruchamia
 Gateway jako procesu potomnego. Najpierw próbuje podłączyć się do już działającego
 Gateway na skonfigurowanym porcie; jeśli żaden nie jest osiągalny, włącza usługę
-launchd za pomocą zewnętrznego CLI `openclaw` (bez wbudowanego runtime).
-Zapewnia to niezawodny automatyczny start przy logowaniu oraz restart po awariach.
+launchd za pomocą zewnętrznego CLI `openclaw` (bez wbudowanego runtime). Zapewnia to niezawodny automatyczny start przy logowaniu oraz restart po awariach.
 
 Tryb procesu potomnego (Gateway uruchamiany bezpośrednio przez aplikację)
-**nie jest obecnie używany**. Jeśli potrzebujesz ściślejszego powiązania z UI,
+**nie jest obecnie używany**.
+Jeśli potrzebujesz ściślejszego powiązania z UI,
 uruchom Gateway ręcznie w terminalu.
 
 ## Domyślne zachowanie (launchd)
@@ -41,7 +34,7 @@ launchctl bootout gui/$UID/bot.molt.gateway
 
 Zastąp etykietę wartością `bot.molt.<profile>` podczas uruchamiania nazwanego profilu.
 
-## Niepodpisane kompilacje deweloperskie
+## Nieoznaczone deweloperskie kompilacje
 
 `scripts/restart-mac.sh --no-sign` jest przeznaczony do szybkich lokalnych kompilacji, gdy nie masz
 kluczy podpisu. Aby zapobiec temu, by launchd wskazywał na niepodpisany binarny relay, wykonuje on:
@@ -71,7 +64,7 @@ zdalnego hosta i łączy się przez ten tunel.
 
 - Automatyczny start przy logowaniu.
 - Wbudowane mechanizmy restartu/KeepAlive.
-- Przewidywalne logi i nadzór.
+- Przewidywalne wpisy i nadzór.
 
 Jeśli kiedykolwiek ponownie potrzebny będzie prawdziwy tryb procesu potomnego,
 powinien on zostać udokumentowany jako osobny, wyraźny tryb tylko dla deweloperów.

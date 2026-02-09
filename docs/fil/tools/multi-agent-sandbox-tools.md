@@ -3,13 +3,6 @@ summary: "Per-agent na sandbox + mga restriksyon sa tool, precedence, at mga hal
 title: Multi-Agent Sandbox at Mga Tool
 read_when: "Gusto mo ng per-agent sandboxing o per-agent na mga patakaran sa pagpayag/pagtanggi ng tool sa isang multi-agent gateway."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:07Z
 ---
 
 # Konpigurasyon ng Multi-Agent Sandbox at Mga Tool
@@ -35,11 +28,11 @@ Per-agent ang auth: bawat agent ay nagbabasa mula sa sarili nitong `agentDir` au
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Hindi **pinagbabahaginan** ang mga credential sa pagitan ng mga agent. Huwag kailanman i-reuse ang `agentDir` sa iba’t ibang agent.
-Kung gusto mong magbahagi ng creds, kopyahin ang `auth-profiles.json` papunta sa `agentDir` ng ibang agent.
+Credentials are **not** shared between agents. 12. Huwag kailanman muling gamitin ang `agentDir` sa iba't ibang agent.
+13. Kung gusto mong magbahagi ng creds, kopyahin ang `auth-profiles.json` papunta sa `agentDir` ng ibang agent.
 
-Para sa kung paano kumikilos ang sandboxing sa runtime, tingnan ang [Sandboxing](/gateway/sandboxing).
-Para sa pag-debug ng “bakit ito naka-block?”, tingnan ang [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) at `openclaw sandbox explain`.
+14. Para sa kung paano kumikilos ang sandboxing sa runtime, tingnan ang [Sandboxing](/gateway/sandboxing).
+15. Para sa pag-debug ng “bakit ito naka-block?”, tingnan ang [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) at `openclaw sandbox explain`.
 
 ---
 
@@ -223,10 +216,10 @@ Ang pagkakasunud-sunod ng pag-filter ay:
 7. **Sandbox tool policy** (`tools.sandbox.tools` o `agents.list[].tools.sandbox.tools`)
 8. **Subagent tool policy** (`tools.subagents.tools`, kung naaangkop)
 
-Ang bawat antas ay maaaring magdagdag pa ng restriksyon sa mga tool, ngunit hindi maaaring ibalik ang mga tool na tinanggihan sa mas naunang mga antas.
-Kung naka-set ang `agents.list[].tools.sandbox.tools`, pinapalitan nito ang `tools.sandbox.tools` para sa agent na iyon.
-Kung naka-set ang `agents.list[].tools.profile`, ino-override nito ang `tools.profile` para sa agent na iyon.
-Tumatanggap ang mga provider tool key ng alinman sa `provider` (hal. `google-antigravity`) o `provider/model` (hal. `openai/gpt-5.2`).
+16) Ang bawat antas ay maaaring higit pang maghigpit ng mga tool, ngunit hindi maaaring ibalik ang mga tool na tinanggihan na sa mga naunang antas.
+    If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
+17) Kung nakatakda ang `agents.list[].tools.profile`, ino-override nito ang `tools.profile` para sa agent na iyon.
+18) Tumatanggap ang mga provider tool key ng alinman sa `provider` (hal. `google-antigravity`) o `provider/model` (hal. `openai/gpt-5.2`).
 
 ### Mga tool group (shorthands)
 
@@ -244,7 +237,7 @@ Sinusuportahan ng mga tool policy (global, agent, sandbox) ang mga entry na `gro
 
 ### Elevated Mode
 
-Ang `tools.elevated` ang global baseline (sender-based allowlist). Ang `agents.list[].tools.elevated` ay maaaring magdagdag pa ng restriksyon sa elevated para sa mga partikular na agent (kapwa dapat payagan).
+`tools.elevated` is the global baseline (sender-based allowlist). 19. Ang `agents.list[].tools.elevated` ay maaaring higit pang maghigpit ng elevated para sa mga partikular na agent (parehong dapat payagan).
 
 Mga pattern sa mitigasyon:
 
@@ -340,10 +333,7 @@ Ang mga legacy na `agent.*` config ay mina-migrate ng `openclaw doctor`; mas mai
 
 ## Karaniwang Pitfall: "non-main"
 
-Ang `agents.defaults.sandbox.mode: "non-main"` ay nakabatay sa `session.mainKey` (default `"main"`),
-hindi sa agent id. Ang mga session ng group/channel ay palaging nakakakuha ng sarili nilang mga key, kaya
-itinuturing silang non-main at isinasailalim sa sandbox. Kung gusto mong ang isang agent ay hindi kailanman
-ma-sandbox, i-set ang `agents.list[].sandbox.mode: "off"`.
+20. Ang `agents.defaults.sandbox.mode: "non-main"` ay nakabatay sa `session.mainKey` (default na `"main"`), hindi sa agent id. 21. Ang mga session ng group/channel ay palaging nakakakuha ng sarili nilang mga key, kaya itinuturing silang non-main at isasailalim sa sandbox. 22. Kung gusto mong ang isang agent ay hindi kailanman ma-sandbox, itakda ang `agents.list[].sandbox.mode: "off"`.
 
 ---
 

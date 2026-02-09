@@ -1,17 +1,10 @@
 ---
-summary: „Agentengesteuertes Canvas-Panel, eingebettet über WKWebView + benutzerdefiniertes URL-Schema“
+summary: "„Agentengesteuertes Canvas-Panel, eingebettet über WKWebView + benutzerdefiniertes URL-Schema“"
 read_when:
   - Implementierung des macOS-Canvas-Panels
   - Hinzufügen von Agentensteuerungen für visuelle Arbeitsbereiche
   - Debugging von WKWebView-Canvas-Ladevorgängen
-title: „Canvas“
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:52Z
+title: "„Canvas“"
 ---
 
 # Canvas (macOS-App)

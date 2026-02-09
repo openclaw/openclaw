@@ -3,13 +3,6 @@ summary: "Microsoft Teams بوٹ سپورٹ کی حیثیت، صلاحیتیں،
 read_when:
   - MS Teams چینل کی خصوصیات پر کام کرتے وقت
 title: "Microsoft Teams"
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:08Z
 ---
 
 # Microsoft Teams (پلگ اِن)
@@ -18,13 +11,13 @@ x-i18n:
 
 اپ ڈیٹ: 2026-01-21
 
-حیثیت: متن + DMs اٹیچمنٹس سپورٹڈ ہیں؛ چینل/گروپ فائل بھیجنے کے لیے `sharePointSiteId` + Graph اجازتیں درکار ہیں (دیکھیں [گروپ چیٹس میں فائلیں بھیجنا](#sending-files-in-group-chats))۔ پولز Adaptive Cards کے ذریعے بھیجے جاتے ہیں۔
+اسٹیٹس: متن + DM اٹیچمنٹس سپورٹڈ ہیں؛ چینل/گروپ فائل بھیجنے کے لیے `sharePointSiteId` + Graph اجازتیں درکار ہیں (دیکھیں [Sending files in group chats](#sending-files-in-group-chats))۔ پولز Adaptive Cards کے ذریعے بھیجے جاتے ہیں۔
 
 ## پلگ اِن درکار ہے
 
 Microsoft Teams ایک پلگ اِن کے طور پر فراہم کیا جاتا ہے اور کور انسٹال میں شامل نہیں۔
 
-**اہم تبدیلی (2026.1.15):** MS Teams کو کور سے نکال دیا گیا ہے۔ اگر آپ اسے استعمال کرتے ہیں تو پلگ اِن انسٹال کرنا لازم ہے۔
+**Breaking change (2026.1.15):** MS Teams moved out of core. اگر آپ اسے استعمال کرتے ہیں تو آپ کو پلگ اِن انسٹال کرنا ہوگا۔
 
 وجہ: اس سے کور انسٹال ہلکا رہتا ہے اور MS Teams کی dependencies آزادانہ طور پر اپ ڈیٹ ہو سکتی ہیں۔
 
@@ -69,7 +62,7 @@ openclaw plugins install ./extensions/msteams
 }
 ```
 
-نوٹ: گروپ چیٹس بطورِ طے شدہ بلاک ہیں (`channels.msteams.groupPolicy: "allowlist"`)۔ گروپ جوابات کی اجازت دینے کے لیے `channels.msteams.groupAllowFrom` سیٹ کریں (یا `groupPolicy: "open"` استعمال کریں تاکہ کسی بھی رکن کو اجازت ملے، mention-gated)۔
+نوٹ: گروپ چیٹس بطورِ ڈیفالٹ بلاک ہوتی ہیں (`channels.msteams.groupPolicy: "allowlist"`)۔ گروپ جوابات کی اجازت دینے کے لیے `channels.msteams.groupAllowFrom` سیٹ کریں (یا `groupPolicy: "open"` استعمال کریں تاکہ کسی بھی ممبر کو اجازت ہو، مینشَن کی شرط کے ساتھ)۔
 
 ## اہداف
 
@@ -93,12 +86,12 @@ openclaw plugins install ./extensions/msteams
 
 **DM رسائی**
 
-- بطورِ طے شدہ: `channels.msteams.dmPolicy = "pairing"`۔ نامعلوم ارسال کنندگان منظوری تک نظر انداز کیے جاتے ہیں۔
-- `channels.msteams.allowFrom` AAD object IDs، UPNs، یا ڈسپلے نام قبول کرتا ہے۔ وزارڈ ناموں کو Microsoft Graph کے ذریعے IDs میں حل کرتا ہے جب اسناد اجازت دیں۔
+- ڈیفالٹ: `channels.msteams.dmPolicy = "pairing"`۔ نامعلوم بھیجنے والوں کو منظوری تک نظرانداز کیا جاتا ہے۔
+- `channels.msteams.allowFrom` AAD آبجیکٹ IDs، UPNs، یا ڈسپلے نام قبول کرتا ہے۔ جب کریڈینشلز اجازت دیں تو وزرڈ Microsoft Graph کے ذریعے ناموں کو IDs میں تبدیل کرتا ہے۔
 
 **گروپ رسائی**
 
-- بطورِ طے شدہ: `channels.msteams.groupPolicy = "allowlist"` (جب تک `groupAllowFrom` شامل نہ کریں، بلاک)۔ اگر غیر سیٹ ہو تو ڈیفالٹ کو اووررائیڈ کرنے کے لیے `channels.defaults.groupPolicy` استعمال کریں۔
+- ڈیفالٹ: `channels.msteams.groupPolicy = "allowlist"` (جب تک آپ `groupAllowFrom` شامل نہ کریں، بلاکڈ)۔ جب ڈیفالٹ سیٹ نہ ہو تو اسے اووررائیڈ کرنے کے لیے `channels.defaults.groupPolicy` استعمال کریں۔
 - `channels.msteams.groupAllowFrom` کنٹرول کرتا ہے کہ گروپ چیٹس/چینلز میں کون ٹرگر کر سکتا ہے (بیک اپ `channels.msteams.allowFrom`)۔
 - کسی بھی رکن کو اجازت دینے کے لیے `groupPolicy: "open"` سیٹ کریں (ابھی بھی بطورِ طے شدہ mention‑gated)۔
 - **کوئی چینل اجازت نہ دینے** کے لیے `channels.msteams.groupPolicy: "disabled"` سیٹ کریں۔
@@ -162,16 +155,16 @@ OpenClaw کنفیگر کرنے سے پہلے، آپ کو Azure Bot ریسورس 
 1. جائیں: [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot)
 2. **Basics** ٹیب بھریں:
 
-   | فیلڈ               | قدر                                                           |
-   | ------------------ | ------------------------------------------------------------- |
+   | فیلڈ               | قدر                                                                              |
+   | ------------------ | -------------------------------------------------------------------------------- |
    | **Bot handle**     | آپ کے بوٹ کا نام، مثلاً `openclaw-msteams` (منفرد ہونا چاہیے) |
-   | **Subscription**   | اپنی Azure سبسکرپشن منتخب کریں                                |
-   | **Resource group** | نیا بنائیں یا موجودہ استعمال کریں                             |
+   | **Subscription**   | اپنی Azure سبسکرپشن منتخب کریں                                                   |
+   | **Resource group** | نیا بنائیں یا موجودہ استعمال کریں                                                |
    | **Pricing tier**   | **Free** (ڈیولپمنٹ/ٹیسٹنگ کے لیے)                             |
    | **Type of App**    | **Single Tenant** (سفارش کردہ — نیچے نوٹ دیکھیں)              |
-   | **Creation type**  | **Create new Microsoft App ID**                               |
+   | **Creation type**  | **Create new Microsoft App ID**                                                  |
 
-> **Deprecation نوٹس:** نئے multi-tenant بوٹس کی تخلیق 2025-07-31 کے بعد deprecated ہے۔ نئے بوٹس کے لیے **Single Tenant** استعمال کریں۔
+> **ڈیپریکیشن نوٹس:** نئے ملٹی ٹیننٹ بوٹس کی تخلیق 2025-07-31 کے بعد ڈیپریکیٹ کر دی گئی ہے۔ نئے بوٹس کے لیے **سنگل ٹیننٹ** استعمال کریں۔
 
 3. **Review + create** → **Create** پر کلک کریں (تقریباً 1–2 منٹ انتظار کریں)
 
@@ -198,7 +191,7 @@ OpenClaw کنفیگر کرنے سے پہلے، آپ کو Azure Bot ریسورس 
 
 ## لوکل ڈیولپمنٹ (ٹنلنگ)
 
-Teams `localhost` تک نہیں پہنچ سکتا۔ لوکل ڈیولپمنٹ کے لیے ٹنل استعمال کریں:
+Teams `localhost` تک رسائی حاصل نہیں کر سکتا۔ لوکل ڈیولپمنٹ کے لیے ٹنل استعمال کریں:
 
 **آپشن A: ngrok**
 
@@ -278,6 +271,7 @@ tailscale funnel 3978
    ```
 
    آپ کنفیگ کیز کے بجائے ماحولیاتی متغیرات بھی استعمال کر سکتے ہیں:
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -292,12 +286,12 @@ tailscale funnel 3978
 ## ہسٹری سیاق
 
 - `channels.msteams.historyLimit` کنٹرول کرتا ہے کہ حالیہ چینل/گروپ پیغامات میں سے کتنے پرامپٹ میں شامل ہوں۔
-- بیک اپ `messages.groupChat.historyLimit` ہے۔ غیر فعال کرنے کے لیے `0` سیٹ کریں (ڈیفالٹ 50)۔
-- DM ہسٹری کو `channels.msteams.dmHistoryLimit` (یوزر ٹرنز) کے ذریعے محدود کیا جا سکتا ہے۔ فی صارف اووررائیڈز: `channels.msteams.dms["<user_id>"].historyLimit`۔
+- Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+- DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## موجودہ Teams RSC اجازتیں (منیفیسٹ)
 
-یہ ہمارے Teams ایپ منیفیسٹ میں موجود **resourceSpecific** اجازتیں ہیں۔ یہ صرف اسی ٹیم/چیٹ میں لاگو ہوتی ہیں جہاں ایپ انسٹال ہو۔
+These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team/chat where the app is installed.
 
 **چینلز کے لیے (ٹیم اسکوپ):**
 
@@ -315,7 +309,7 @@ tailscale funnel 3978
 
 ## مثال Teams منیفیسٹ (redacted)
 
-درکار فیلڈز کے ساتھ کم از کم درست مثال۔ IDs اور URLs تبدیل کریں۔
+Minimal, valid example with the required fields. Replace IDs and URLs.
 
 ```json
 {
@@ -410,14 +404,14 @@ tailscale funnel 3978
 
 ### RSC بمقابلہ Graph API
 
-| صلاحیت                | RSC اجازتیں            | Graph API                       |
-| --------------------- | ---------------------- | ------------------------------- |
+| صلاحیت                | RSC اجازتیں                               | Graph API                                          |
+| --------------------- | ----------------------------------------- | -------------------------------------------------- |
 | **ریئل ٹائم پیغامات** | ہاں (webhook کے ذریعے) | نہیں (صرف polling)              |
-| **تاریخی پیغامات**    | نہیں                   | ہاں (ہسٹری کوئری کی جا سکتی ہے) |
-| **سیٹ اپ پیچیدگی**    | صرف ایپ منیفیسٹ        | ایڈمن رضامندی + ٹوکن فلو درکار  |
+| **تاریخی پیغامات**    | نہیں                                      | ہاں (ہسٹری کوئری کی جا سکتی ہے) |
+| **سیٹ اپ پیچیدگی**    | صرف ایپ منیفیسٹ                           | ایڈمن رضامندی + ٹوکن فلو درکار                     |
 | **آف لائن کام**       | نہیں (چلنا ضروری)      | ہاں (کسی بھی وقت کوئری)         |
 
-**خلاصہ:** RSC ریئل ٹائم سننے کے لیے ہے؛ Graph API تاریخی رسائی کے لیے۔ آف لائن رہتے ہوئے چھوٹے ہوئے پیغامات حاصل کرنے کے لیے Graph API کے ساتھ `ChannelMessage.Read.All` درکار ہے (ایڈمن رضامندی لازمی)۔
+**Bottom line:** RSC is for real-time listening; Graph API is for historical access. For catching up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
 
 ## Graph فعال میڈیا + ہسٹری (چینلز کے لیے درکار)
 
@@ -434,7 +428,7 @@ tailscale funnel 3978
 
 ### Webhook ٹائم آؤٹس
 
-Teams پیغامات HTTP webhook کے ذریعے بھیجتا ہے۔ اگر پروسیسنگ میں زیادہ وقت لگے (مثلاً سست LLM جوابات)، تو یہ ہو سکتا ہے:
+Teams delivers messages via HTTP webhook. If processing takes too long (e.g., slow LLM responses), you may see:
 
 - گیٹ وے ٹائم آؤٹس
 - Teams کی طرف سے پیغام دوبارہ بھیجنا (ڈپلیکیٹس)
@@ -459,21 +453,21 @@ Teams کا markdown Slack یا Discord سے زیادہ محدود ہے:
 - `channels.msteams.webhook.port` (ڈیفالٹ `3978`)
 - `channels.msteams.webhook.path` (ڈیفالٹ `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (ڈیفالٹ: pairing)
-- `channels.msteams.allowFrom`: DMs کے لیے اجازت فہرست (AAD object IDs، UPNs، یا ڈسپلے نام)۔ وزارڈ Graph رسائی کی موجودگی میں سیٹ اپ کے دوران ناموں کو IDs میں حل کرتا ہے۔
+- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.textChunkLimit`: آؤٹ باؤنڈ متن چنک سائز۔
 - `channels.msteams.chunkMode`: `length` (ڈیفالٹ) یا `newline` تاکہ لمبائی کے حساب سے چنک کرنے سے پہلے خالی لائنوں (پیراگراف حدود) پر تقسیم کیا جائے۔
 - `channels.msteams.mediaAllowHosts`: اِن باؤنڈ اٹیچمنٹ ہوسٹس کے لیے اجازت فہرست (ڈیفالٹ Microsoft/Teams ڈومینز)۔
 - `channels.msteams.mediaAuthAllowHosts`: میڈیا ریٹرائز پر Authorization ہیڈرز لگانے کے لیے اجازت فہرست (ڈیفالٹ Graph + Bot Framework ہوسٹس)۔
 - `channels.msteams.requireMention`: چینلز/گروپس میں @mention درکار (ڈیفالٹ true)۔
 - `channels.msteams.replyStyle`: `thread | top-level` (دیکھیں [Reply Style](#reply-style-threads-vs-posts))۔
-- `channels.msteams.teams.<teamId>.replyStyle`: فی ٹیم اووررائیڈ۔
-- `channels.msteams.teams.<teamId>.requireMention`: فی ٹیم اووررائیڈ۔
-- `channels.msteams.teams.<teamId>.tools`: فی ٹیم ڈیفالٹ ٹول پالیسی اووررائیڈز (`allow`/`deny`/`alsoAllow`) جو چینل اووررائیڈ نہ ہونے پر استعمال ہوتے ہیں۔
-- `channels.msteams.teams.<teamId>.toolsBySender`: فی ٹیم فی ارسال کنندہ ٹول پالیسی اووررائیڈز (`"*"` وائلڈکارڈ سپورٹڈ)۔
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: فی چینل اووررائیڈ۔
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: فی چینل اووررائیڈ۔
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: فی چینل ٹول پالیسی اووررائیڈز (`allow`/`deny`/`alsoAllow`)۔
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: فی چینل فی ارسال کنندہ ٹول پالیسی اووررائیڈز (`"*"` وائلڈکارڈ سپورٹڈ)۔
+- `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
+- `channels.msteams.teams.<teamId>.requireMention`: per-team override.
+- `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
+- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.sharePointSiteId`: گروپ چیٹس/چینلز میں فائل اپ لوڈز کے لیے SharePoint سائٹ ID (دیکھیں [گروپ چیٹس میں فائلیں بھیجنا](#sending-files-in-group-chats))۔
 
 ## روٹنگ اور سیشنز
@@ -488,12 +482,12 @@ Teams کا markdown Slack یا Discord سے زیادہ محدود ہے:
 
 Teams نے حال ہی میں ایک ہی بنیادی ڈیٹا ماڈل پر دو چینل UI اسٹائل متعارف کرائے ہیں:
 
-| انداز                    | وضاحت                                         | سفارش کردہ `replyStyle` |
-| ------------------------ | --------------------------------------------- | ----------------------- |
-| **Posts** (کلاسک)        | پیغامات کارڈز کی صورت میں، نیچے تھریڈڈ جوابات | `thread` (ڈیفالٹ)       |
-| **Threads** (Slack جیسے) | پیغامات سیدھی لائن میں، Slack کی طرح          | `top-level`             |
+| انداز                                       | وضاحت                                         | سفارش کردہ `replyStyle`              |
+| ------------------------------------------- | --------------------------------------------- | ------------------------------------ |
+| **Posts** (کلاسک)        | پیغامات کارڈز کی صورت میں، نیچے تھریڈڈ جوابات | `thread` (ڈیفالٹ) |
+| **Threads** (Slack جیسے) | پیغامات سیدھی لائن میں، Slack کی طرح          | `top-level`                          |
 
-**مسئلہ:** Teams API یہ ظاہر نہیں کرتا کہ چینل کون سا UI اسٹائل استعمال کر رہا ہے۔ اگر غلط `replyStyle` استعمال کریں تو:
+**The problem:** The Teams API does not expose which UI style a channel uses. If you use the wrong `replyStyle`:
 
 - Threads اسٹائل چینل میں `thread` → جوابات عجیب طرح نیسٹ ہو جاتے ہیں
 - Posts اسٹائل چینل میں `top-level` → جوابات الگ ٹاپ‑لیول پوسٹس کے طور پر نظر آتے ہیں
@@ -522,25 +516,25 @@ Teams نے حال ہی میں ایک ہی بنیادی ڈیٹا ماڈل پر د
 **موجودہ حدود:**
 
 - **DMs:** تصاویر اور فائل اٹیچمنٹس Teams بوٹ فائل APIs کے ذریعے کام کرتے ہیں۔
-- **چینلز/گروپس:** اٹیچمنٹس M365 اسٹوریج (SharePoint/OneDrive) میں ہوتی ہیں۔ webhook payload میں اصل فائل بائٹس نہیں بلکہ HTML stub شامل ہوتا ہے۔ **Graph API اجازتیں درکار ہیں** تاکہ چینل اٹیچمنٹس ڈاؤن لوڈ ہوں۔
+- **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
 
-Graph اجازتوں کے بغیر، تصاویر والے چینل پیغامات متن‑صرف موصول ہوں گے (تصویر کا مواد بوٹ کے لیے دستیاب نہیں)۔
-بطورِ طے شدہ، OpenClaw صرف Microsoft/Teams ہوسٹ نیمز سے میڈیا ڈاؤن لوڈ کرتا ہے۔ `channels.msteams.mediaAllowHosts` سے اووررائیڈ کریں (کسی بھی ہوسٹ کی اجازت کے لیے `["*"]` استعمال کریں)۔
-Authorization ہیڈرز صرف `channels.msteams.mediaAuthAllowHosts` میں موجود ہوسٹس کے لیے منسلک کیے جاتے ہیں (ڈیفالٹ Graph + Bot Framework ہوسٹس)۔ اس فہرست کو سخت رکھیں (ملٹی‑ٹیننٹ سفکسز سے گریز کریں)۔
+Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
+By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
+Authorization headers are only attached for hosts in `channels.msteams.mediaAuthAllowHosts` (defaults to Graph + Bot Framework hosts). Keep this list strict (avoid multi-tenant suffixes).
 
 ## گروپ چیٹس میں فائلیں بھیجنا
 
-بوٹس DMs میں FileConsentCard فلو کے ذریعے فائلیں بھیج سکتے ہیں (بلٹ‑اِن)۔ تاہم، **گروپ چیٹس/چینلز میں فائلیں بھیجنے** کے لیے اضافی سیٹ اپ درکار ہے:
+Bots can send files in DMs using the FileConsentCard flow (built-in). However, **sending files in group chats/channels** requires additional setup:
 
-| سیاق                      | فائل کیسے بھیجی جاتی ہے                  | درکار سیٹ اپ                             |
-| ------------------------- | ---------------------------------------- | ---------------------------------------- |
-| **DMs**                   | FileConsentCard → صارف قبول → بوٹ اپ لوڈ | بغیر کسی اضافے کے کام کرتا ہے            |
-| **گروپ چیٹس/چینلز**       | SharePoint پر اپ لوڈ → شیئر لنک          | `sharePointSiteId` + Graph اجازتیں درکار |
+| سیاق                                         | فائل کیسے بھیجی جاتی ہے                  | درکار سیٹ اپ                             |
+| -------------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| **DMs**                                      | FileConsentCard → صارف قبول → بوٹ اپ لوڈ | بغیر کسی اضافے کے کام کرتا ہے            |
+| **گروپ چیٹس/چینلز**                          | SharePoint پر اپ لوڈ → شیئر لنک          | `sharePointSiteId` + Graph اجازتیں درکار |
 | **تصاویر (کسی بھی سیاق)** | Base64-encoded inline                    | بغیر کسی اضافے کے کام کرتا ہے            |
 
 ### گروپ چیٹس کو SharePoint کیوں درکار ہے
 
-بوٹس کے پاس ذاتی OneDrive ڈرائیو نہیں ہوتی ( `/me/drive` Graph API اینڈ پوائنٹ ایپلیکیشن شناختوں کے لیے کام نہیں کرتا)۔ گروپ چیٹس/چینلز میں فائلیں بھیجنے کے لیے، بوٹ **SharePoint سائٹ** پر اپ لوڈ کر کے شیئرنگ لنک بناتا ہے۔
+Bots don't have a personal OneDrive drive (the `/me/drive` Graph API endpoint doesn't work for application identities). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
 
 ### سیٹ اپ
 
@@ -579,18 +573,18 @@ Authorization ہیڈرز صرف `channels.msteams.mediaAuthAllowHosts` میں م
 
 ### شیئرنگ رویہ
 
-| اجازت                                   | شیئرنگ رویہ                                                        |
-| --------------------------------------- | ------------------------------------------------------------------ |
+| اجازت                                   | شیئرنگ رویہ                                                                           |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
 | صرف `Sites.ReadWrite.All`               | تنظیم بھر میں شیئرنگ لنک (تنظیم کے کسی بھی فرد کے لیے قابلِ رسائی) |
 | `Sites.ReadWrite.All` + `Chat.Read.All` | فی صارف شیئرنگ لنک (صرف چیٹ ممبرز کے لیے)                          |
 
-فی صارف شیئرنگ زیادہ محفوظ ہے کیونکہ صرف چیٹ کے شرکاء فائل تک رسائی حاصل کر سکتے ہیں۔ اگر `Chat.Read.All` اجازت غائب ہو تو بوٹ تنظیم بھر کی شیئرنگ پر واپس چلا جاتا ہے۔
+Per-user sharing is more secure as only the chat participants can access the file. If `Chat.Read.All` permission is missing, the bot falls back to organization-wide sharing.
 
 ### فال بیک رویہ
 
-| منظرنامہ                                     | نتیجہ                                                  |
-| -------------------------------------------- | ------------------------------------------------------ |
-| گروپ چیٹ + فائل + `sharePointSiteId` کنفیگرڈ | SharePoint پر اپ لوڈ، شیئرنگ لنک بھیجا جاتا ہے         |
+| منظرنامہ                                     | نتیجہ                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------- |
+| گروپ چیٹ + فائل + `sharePointSiteId` کنفیگرڈ | SharePoint پر اپ لوڈ، شیئرنگ لنک بھیجا جاتا ہے                            |
 | گروپ چیٹ + فائل + `sharePointSiteId` نہیں    | OneDrive اپ لوڈ کی کوشش (ناکام ہو سکتی ہے)، صرف متن    |
 | ذاتی چیٹ + فائل                              | FileConsentCard فلو (SharePoint کے بغیر کام کرتا ہے)   |
 | کوئی بھی سیاق + تصویر                        | Base64-encoded inline (SharePoint کے بغیر کام کرتا ہے) |
@@ -612,7 +606,7 @@ OpenClaw Teams پولز کو Adaptive Cards کے طور پر بھیجتا ہے (
 
 `message` ٹول یا CLI استعمال کرتے ہوئے کسی بھی Adaptive Card JSON کو Teams صارفین یا گفتگوؤں کو بھیجیں۔
 
-`card` پیرامیٹر ایک Adaptive Card JSON آبجیکٹ قبول کرتا ہے۔ جب `card` فراہم ہو تو پیغام متن اختیاری ہوتا ہے۔
+The `card` parameter accepts an Adaptive Card JSON object. When `card` is provided, the message text is optional.
 
 **ایجنٹ ٹول:**
 
@@ -637,17 +631,17 @@ openclaw message send --channel msteams \
   --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Hello!"}]}'
 ```
 
-کارڈ اسکیما اور مثالوں کے لیے [Adaptive Cards documentation](https://adaptivecards.io/) دیکھیں۔ ہدف فارمیٹ کی تفصیلات کے لیے نیچے [Target formats](#target-formats) دیکھیں۔
+See [Adaptive Cards documentation](https://adaptivecards.io/) for card schema and examples. For target format details, see [Target formats](#target-formats) below.
 
 ## Target formats
 
 MSTeams اہداف صارفین اور گفتگوؤں میں فرق کرنے کے لیے prefixes استعمال کرتے ہیں:
 
-| ہدف کی قسم          | فارمیٹ                           | مثال                                                |
-| ------------------- | -------------------------------- | --------------------------------------------------- |
-| صارف (ID کے ذریعے)  | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`         |
+| ہدف کی قسم                             | فارمیٹ                           | مثال                                                                   |
+| -------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
+| صارف (ID کے ذریعے)  | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                            |
 | صارف (نام کے ذریعے) | `user:<display-name>`            | `user:John Smith` (Graph API درکار)                 |
-| گروپ/چینل           | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`            |
+| گروپ/چینل                              | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                               |
 | گروپ/چینل (raw)     | `<conversation-id>`              | `19:abc123...@thread.tacv2` (اگر `@thread` شامل ہو) |
 
 **CLI مثالیں:**
@@ -691,7 +685,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-نوٹ: `user:` prefix کے بغیر، نام بطورِ طے شدہ گروپ/ٹیم ریزولوشن پر جاتے ہیں۔ افراد کو ڈسپلے نام سے ہدف بنانے کے لیے ہمیشہ `user:` استعمال کریں۔
+Note: Without the `user:` prefix, names default to group/team resolution. Always use `user:` when targeting people by display name.
 
 ## Proactive میسجنگ
 
@@ -700,7 +694,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 
 ## ٹیم اور چینل IDs (عام غلطی)
 
-Teams URLs میں `groupId` کوئری پیرامیٹر وہ ٹیم ID **نہیں** ہے جو کنفیگریشن میں استعمال ہوتی ہے۔ IDs کو URL پاتھ سے نکالیں:
+The `groupId` query parameter in Teams URLs is **NOT** the team ID used for configuration. Extract IDs from the URL path instead:
 
 **ٹیم URL:**
 
@@ -728,13 +722,13 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 پرائیویٹ چینلز میں بوٹس کی سپورٹ محدود ہے:
 
-| خصوصیت                      | معیاری چینلز | پرائیویٹ چینلز         |
-| --------------------------- | ------------ | ---------------------- |
-| بوٹ انسٹالیشن               | ہاں          | محدود                  |
-| ریئل ٹائم پیغامات (webhook) | ہاں          | ممکن ہے کام نہ کرے     |
-| RSC اجازتیں                 | ہاں          | مختلف رویہ ہو سکتا ہے  |
-| @mentions                   | ہاں          | اگر بوٹ قابلِ رسائی ہو |
-| Graph API ہسٹری             | ہاں          | ہاں (اجازتوں کے ساتھ)  |
+| خصوصیت                                         | معیاری چینلز | پرائیویٹ چینلز                           |
+| ---------------------------------------------- | ------------ | ---------------------------------------- |
+| بوٹ انسٹالیشن                                  | ہاں          | محدود                                    |
+| ریئل ٹائم پیغامات (webhook) | ہاں          | ممکن ہے کام نہ کرے                       |
+| RSC اجازتیں                                    | ہاں          | مختلف رویہ ہو سکتا ہے                    |
+| @mentions                         | ہاں          | اگر بوٹ قابلِ رسائی ہو                   |
+| Graph API ہسٹری                                | ہاں          | ہاں (اجازتوں کے ساتھ) |
 
 **اگر پرائیویٹ چینلز کام نہ کریں تو حل:**
 
@@ -746,15 +740,15 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 ### عام مسائل
 
-- **چینلز میں تصاویر نظر نہیں آ رہیں:** Graph اجازتیں یا ایڈمن رضامندی غائب ہے۔ Teams ایپ دوبارہ انسٹال کریں اور Teams کو مکمل طور پر بند/کھولیں۔
+- **Images not showing in channels:** Graph permissions or admin consent missing. Reinstall the Teams app and fully quit/reopen Teams.
 - **چینل میں کوئی جواب نہیں:** بطورِ طے شدہ mentions درکار ہیں؛ `channels.msteams.requireMention=false` سیٹ کریں یا فی ٹیم/چینل کنفیگر کریں۔
 - **ورژن عدم مطابقت (Teams پرانا منیفیسٹ دکھا رہا ہے):** ایپ ہٹائیں اور دوبارہ شامل کریں، پھر Teams کو مکمل طور پر بند کریں۔
-- **Webhook سے 401 Unauthorized:** Azure JWT کے بغیر دستی ٹیسٹنگ میں متوقع ہے — اس کا مطلب ہے اینڈ پوائنٹ قابلِ رسائی ہے مگر تصدیق ناکام ہوئی۔ درست جانچ کے لیے Azure Web Chat استعمال کریں۔
+- **401 Unauthorized from webhook:** Expected when testing manually without Azure JWT - means endpoint is reachable but auth failed. Use Azure Web Chat to test properly.
 
 ### منیفیسٹ اپ لوڈ کی غلطیاں
 
-- **"Icon file cannot be empty":** منیفیسٹ ایسے آئیکنز کا حوالہ دیتا ہے جن کا سائز 0 بائٹس ہے۔ درست PNG آئیکنز بنائیں (32x32 برائے `outline.png`, 192x192 برائے `color.png`)۔
-- **"webApplicationInfo.Id already in use":** ایپ کسی اور ٹیم/چیٹ میں ابھی انسٹال ہے۔ پہلے ان انسٹال کریں یا 5–10 منٹ انتظار کریں۔
+- **"Icon file cannot be empty":** The manifest references icon files that are 0 bytes. Create valid PNG icons (32x32 for `outline.png`, 192x192 for `color.png`).
+- **"webApplicationInfo.Id already in use":** The app is still installed in another team/chat. Find and uninstall it first, or wait 5-10 minutes for propagation.
 - **"Something went wrong" اپ لوڈ پر:** اس کے بجائے [https://admin.teams.microsoft.com](https://admin.teams.microsoft.com) کے ذریعے اپ لوڈ کریں، براؤزر DevTools (F12) → Network ٹیب کھولیں، اور اصل ایرر کے لیے response body دیکھیں۔
 - **Sideload ناکام:** "Upload a custom app" کے بجائے "Upload an app to your org's app catalog" آزمائیں — یہ اکثر پابندیاں بائی پاس کر دیتا ہے۔
 

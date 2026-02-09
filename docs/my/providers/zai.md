@@ -4,19 +4,13 @@ read_when:
   - OpenClaw တွင် Z.AI / GLM မော်ဒယ်များကို အသုံးပြုလိုပါက
   - ရိုးရှင်းသော ZAI_API_KEY တပ်ဆင်မှု လိုအပ်ပါက
 title: "Z.AI"
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # Z.AI
 
-Z.AI သည် **GLM** မော်ဒယ်များအတွက် API ပလက်ဖောင်း ဖြစ်သည်။ GLM အတွက် REST API များကို ပံ့ပိုးပေးပြီး အတည်ပြုရန်အတွက် API key များကို အသုံးပြုသည်။
-Z.AI console တွင် သင့် API key ကို ဖန်တီးပါ။ OpenClaw သည် Z.AI API key ဖြင့် `zai` provider ကို အသုံးပြုသည်။
+Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and uses API keys
+for authentication. Create your API key in the Z.AI console. OpenClaw uses the `zai` provider
+with a Z.AI API key.
 
 ## CLI setup
 

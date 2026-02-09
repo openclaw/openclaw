@@ -4,13 +4,6 @@ read_when:
   - 디바이스 모델 식별자 매핑 또는 NOTICE/라이선스 파일을 업데이트할 때
   - Instances UI 가 디바이스 이름을 표시하는 방식을 변경할 때
 title: "디바이스 모델 데이터베이스"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:02Z
 ---
 
 # 디바이스 모델 데이터베이스 (친숙한 이름)

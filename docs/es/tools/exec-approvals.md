@@ -5,13 +5,6 @@ read_when:
   - Implementar UX de aprobación de exec en la app de macOS
   - Revisar avisos de escape del sandbox y sus implicaciones
 title: "Aprobaciones de Exec"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:59Z
 ---
 
 # Aprobaciones de exec
@@ -243,7 +236,8 @@ Los execs con aprobación reutilizan el id de aprobación como el `runId` en est
 - **ask** lo mantiene informado y aun así permite aprobaciones rápidas.
 - Las listas de permitidos por agente evitan que las aprobaciones de un agente se filtren a otros.
 - Las aprobaciones solo se aplican a solicitudes de exec en el host de **remitentes autorizados**. Los remitentes no autorizados no pueden emitir `/exec`.
-- `/exec security=full` es una conveniencia a nivel de sesión para operadores autorizados y omite las aprobaciones por diseño.
+- `/exec security=full` es una comodidad a nivel de sesión para operadores autorizados y salta las aprobaciones por diseño.
+  `/exec security=full` es una conveniencia a nivel de sesión para operadores autorizados y omite las aprobaciones por diseño.
   Para bloquear de forma estricta el exec en el host, configure la seguridad de aprobaciones en `deny` o deniegue la herramienta `exec` mediante la política de herramientas.
 
 Relacionado:

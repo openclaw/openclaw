@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez indexer ou rechercher la memoire semantique
   - Vous depannez la disponibilite de la memoire ou l’indexation
 title: "memoire"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: 95a9e94306f95be2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:56Z
 ---
 
 # `openclaw memory`

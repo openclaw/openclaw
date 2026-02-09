@@ -3,13 +3,6 @@ summary: "Укрепление allowlist Telegram: префикс + нормал
 read_when:
   - При анализе исторических изменений allowlist Telegram
 title: "Укрепление allowlist Telegram"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:25Z
 ---
 
 # Укрепление allowlist Telegram

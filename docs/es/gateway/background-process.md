@@ -4,13 +4,6 @@ read_when:
   - Al agregar o modificar el comportamiento de exec en segundo plano
   - Al depurar tareas exec de larga duración
 title: "Exec en Segundo Plano y Herramienta de Procesos"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:28Z
 ---
 
 # Exec en Segundo Plano + Herramienta de Procesos
@@ -36,7 +29,7 @@ Comportamiento:
 - La salida se mantiene en memoria hasta que la sesión se consulte o se borre.
 - Si la herramienta `process` no está permitida, `exec` se ejecuta de forma sincrónica e ignora `yieldMs`/`background`.
 
-## Puente de procesos secundarios
+## Paréntesis de proceso hijo
 
 Al generar procesos secundarios de larga duración fuera de las herramientas exec/proceso (por ejemplo, reinicios de la CLI o ayudantes del Gateway), adjunte el helper de puente de procesos secundarios para que las señales de terminación se reenvíen y los listeners se desacoplen al salir/error. Esto evita procesos huérfanos en systemd y mantiene un comportamiento de apagado consistente entre plataformas.
 

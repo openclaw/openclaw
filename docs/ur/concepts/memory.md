@@ -3,22 +3,15 @@ summary: "OpenClaw میموری کیسے کام کرتی ہے (ورک اسپیس
 read_when:
   - آپ کو میموری فائل لےآؤٹ اور ورک فلو درکار ہو
   - آپ خودکار پری-کمپیکشن میموری فلش کو ٹیون کرنا چاہتے ہوں
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:09Z
 ---
 
 # میموری
 
-OpenClaw میموری **ایجنٹ ورک اسپیس میں سادہ Markdown** ہے۔ فائلیں
-حقیقی ماخذ ہیں؛ ماڈل صرف وہی “یاد” رکھتا ہے جو ڈسک پر لکھا جاتا ہے۔
+OpenClaw memory is **plain Markdown in the agent workspace**. The files are the
+source of truth; the model only "remembers" what gets written to disk.
 
-میموری سرچ کے اوزار فعال میموری پلگ اِن فراہم کرتا ہے (ڈیفالٹ:
-`memory-core`)۔ میموری پلگ اِنز کو `plugins.slots.memory = "none"` کے ساتھ غیر فعال کریں۔
+19. میموری سرچ ٹولز فعال میموری پلگ ان کے ذریعے فراہم کیے جاتے ہیں (ڈیفالٹ:
+    `memory-core`)۔ Disable memory plugins with `plugins.slots.memory = "none"`.
 
 ## میموری فائلیں (Markdown)
 
@@ -31,21 +24,23 @@ OpenClaw میموری **ایجنٹ ورک اسپیس میں سادہ Markdown** 
   - ترتیب دی گئی طویل مدتی میموری۔
   - **صرف مرکزی، نجی سیشن میں لوڈ کریں** (گروپ سیاق میں کبھی نہیں)۔
 
-یہ فائلیں ورک اسپیس کے تحت ہوتی ہیں (`agents.defaults.workspace`, ڈیفالٹ
-`~/.openclaw/workspace`)۔ مکمل لےآؤٹ کے لیے [Agent workspace](/concepts/agent-workspace) دیکھیں۔
+These files live under the workspace (`agents.defaults.workspace`, default
+`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
 ## میموری کب لکھیں
 
 - فیصلے، ترجیحات، اور پائیدار حقائق `MEMORY.md` میں جائیں۔
 - روزمرہ نوٹس اور جاری سیاق `memory/YYYY-MM-DD.md` میں جائیں۔
 - اگر کوئی کہے “اسے یاد رکھو”، تو لکھ دیں (RAM میں نہ رکھیں)۔
-- یہ حصہ اب بھی ارتقا پذیر ہے۔ ماڈل کو میموری محفوظ کرنے کی یاد دہانی مددگار ہوتی ہے؛ وہ جان لے گا کیا کرنا ہے۔
+- This area is still evolving. It helps to remind the model to store memories; it will know what to do.
 - اگر آپ چاہتے ہیں کہ کوئی چیز قائم رہے، **بوٹ سے کہیں کہ اسے میموری میں لکھ دے**۔
 
 ## خودکار میموری فلش (پری-کمپیکشن پِنگ)
 
-جب کوئی سیشن **آٹو-کمپیکشن کے قریب** ہوتا ہے، OpenClaw ایک **خاموش،
-ایجنٹک ٹرن** چلاتا ہے جو ماڈل کو سیاق کے کمپیکٹ ہونے **سے پہلے** پائیدار میموری لکھنے کی یاد دہانی کراتا ہے۔ ڈیفالٹ پرامپٹس واضح طور پر کہتے ہیں کہ ماڈل _جواب دے سکتا ہے_، مگر عموماً `NO_REPLY` درست ردِعمل ہوتا ہے تاکہ صارف کو یہ ٹرن نظر نہ آئے۔
+When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
+agentic turn** that reminds the model to write durable memory **before** the
+context is compacted. The default prompts explicitly say the model _may reply_,
+but usually `NO_REPLY` is the correct response so the user never sees this turn.
 
 یہ `agents.defaults.compaction.memoryFlush` کے ذریعے کنٹرول ہوتا ہے:
 
@@ -89,7 +84,7 @@ OpenClaw `MEMORY.md` اور `memory/*.md` پر ایک چھوٹا ویکٹر ان
 
 - بطورِ طے شدہ فعال۔
 - میموری فائلوں میں تبدیلیوں کو دیکھتا ہے (ڈی باؤنسڈ)۔
-- بطورِ طے شدہ ریموٹ ایمبیڈنگز استعمال کرتا ہے۔ اگر `memorySearch.provider` سیٹ نہ ہو تو OpenClaw خودکار طور پر منتخب کرتا ہے:
+- Uses remote embeddings by default. If `memorySearch.provider` is not set, OpenClaw auto-selects:
   1. `local` اگر `memorySearch.local.modelPath` کنفیگر ہو اور فائل موجود ہو۔
   2. `openai` اگر OpenAI کلید حل ہو سکے۔
   3. `gemini` اگر Gemini کلید حل ہو سکے۔
@@ -98,23 +93,24 @@ OpenClaw `MEMORY.md` اور `memory/*.md` پر ایک چھوٹا ویکٹر ان
 - لوکل موڈ node-llama-cpp استعمال کرتا ہے اور `pnpm approve-builds` درکار ہو سکتا ہے۔
 - SQLite کے اندر ویکٹر سرچ تیز کرنے کے لیے sqlite-vec (جب دستیاب ہو) استعمال کرتا ہے۔
 
-ریموٹ ایمبیڈنگز کے لیے ایمبیڈنگ فراہم کنندہ کی API کلید **لازم** ہے۔ OpenClaw
-کلیدیں auth پروفائلز، `models.providers.*.apiKey`، یا ماحولیاتی
-متغیرات سے حل کرتا ہے۔ Codex OAuth صرف چیٹ/کمپلیشنز کو کور کرتا ہے اور میموری سرچ کے لیے ایمبیڈنگز **پورا نہیں کرتا**۔ Gemini کے لیے `GEMINI_API_KEY` یا
-`models.providers.google.apiKey` استعمال کریں۔ Voyage کے لیے `VOYAGE_API_KEY` یا
-`models.providers.voyage.apiKey` استعمال کریں۔ کسٹم OpenAI-مطابقتی اینڈپوائنٹ استعمال کرتے وقت،
-`memorySearch.remote.apiKey` سیٹ کریں (اور اختیاری `memorySearch.remote.headers`)۔
+Remote embeddings **require** an API key for the embedding provider. OpenClaw
+resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
+variables. Codex OAuth only covers chat/completions and does **not** satisfy
+embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
+`models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
+`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD بیک اینڈ (تجرباتی)
 
-بلٹ اِن SQLite انڈیکسر کی جگہ
-[QMD](https://github.com/tobi/qmd) استعمال کرنے کے لیے `memory.backend = "qmd"` سیٹ کریں: ایک لوکل-فرسٹ سرچ سائیڈکار جو
-BM25 + ویکٹرز + ری رینکنگ کو یکجا کرتا ہے۔ Markdown حقیقی ماخذ رہتا ہے؛ OpenClaw
-ریٹریول کے لیے QMD کو شیل آؤٹ کرتا ہے۔ اہم نکات:
+Set `memory.backend = "qmd"` to swap the built-in SQLite indexer for
+[QMD](https://github.com/tobi/qmd): a local-first search sidecar that combines
+BM25 + vectors + reranking. Markdown stays the source of truth; OpenClaw shells
+out to QMD for retrieval. Key points:
 
 **پیشگی تقاضے**
 
-- بطورِ طے شدہ غیر فعال۔ فی کنفیگ آپٹ اِن کریں (`memory.backend = "qmd"`)۔
+- Disabled by default. 20. فی کنفیگ آپٹ اِن کریں (`memory.backend = "qmd"`)۔
 - QMD CLI الگ سے انسٹال کریں (`bun install -g https://github.com/tobi/qmd` یا
   ریلیز حاصل کریں) اور یقینی بنائیں کہ `qmd` بائنری گیٹ وے کے `PATH` پر موجود ہو۔
 - QMD کو ایسی SQLite بلڈ درکار ہے جو ایکسٹینشنز کی اجازت دے (`brew install sqlite` برائے
@@ -124,7 +120,8 @@ BM25 + ویکٹرز + ری رینکنگ کو یکجا کرتا ہے۔ Markdown �
 - گیٹ وے QMD کو خودمختار XDG ہوم میں
   `~/.openclaw/agents/<agentId>/qmd/` کے تحت چلاتا ہے، `XDG_CONFIG_HOME` اور
   `XDG_CACHE_HOME` سیٹ کر کے۔
-- OS سپورٹ: macOS اور Linux Bun + SQLite انسٹال ہونے کے بعد فوراً کام کرتے ہیں۔ Windows کے لیے WSL2 بہترین ہے۔
+- OS support: macOS and Linux work out of the box once Bun + SQLite are
+  installed. Windows is best supported via WSL2.
 
 **سائیڈکار کیسے چلتا ہے**
 
@@ -135,9 +132,9 @@ BM25 + ویکٹرز + ری رینکنگ کو یکجا کرتا ہے۔ Markdown �
   ڈیفالٹ 5 m)۔
 - بوٹ ریفریش اب بطورِ طے شدہ بیک گراؤنڈ میں چلتا ہے تاکہ چیٹ اسٹارٹ اپ بلاک نہ ہو؛
   پچھلا بلاکنگ رویہ رکھنے کے لیے `memory.qmd.update.waitForBootSync = true` سیٹ کریں۔
-- سرچز `qmd query --json` کے ذریعے چلتی ہیں۔ اگر QMD ناکام ہو یا بائنری غائب ہو،
-  OpenClaw خودکار طور پر بلٹ اِن SQLite مینیجر پر واپس آ جاتا ہے تاکہ میموری ٹولز
-  کام کرتے رہیں۔
+- Searches run via `qmd query --json`. If QMD fails or the binary is missing,
+  OpenClaw automatically falls back to the builtin SQLite manager so memory tools
+  keep working.
 - OpenClaw فی الحال QMD ایمبیڈ بیچ-سائز ٹیوننگ ایکسپوز نہیں کرتا؛ بیچ رویہ
   QMD خود کنٹرول کرتا ہے۔
 - **پہلی سرچ سست ہو سکتی ہے**: QMD پہلی `qmd query` رن پر لوکل GGUF ماڈلز (ری رینکر/کوئری ایکسپینشن) ڈاؤن لوڈ کر سکتا ہے۔
@@ -145,8 +142,9 @@ BM25 + ویکٹرز + ری رینکنگ کو یکجا کرتا ہے۔ Markdown �
   - اگر آپ ماڈلز دستی طور پر پری-ڈاؤن لوڈ کرنا چاہتے ہیں (اور وہی انڈیکس وارم کریں جو OpenClaw استعمال کرتا ہے)،
     ایجنٹ کے XDG ڈائریکٹریز کے ساتھ ایک وقتی کوئری چلائیں۔
 
-    OpenClaw کی QMD اسٹیٹ آپ کی **اسٹیٹ ڈائریکٹری** کے تحت ہوتی ہے (ڈیفالٹ `~/.openclaw`)۔
-    وہی XDG متغیرات ایکسپورٹ کر کے `qmd` کو بالکل اسی انڈیکس کی طرف پوائنٹ کیا جا سکتا ہے جو OpenClaw استعمال کرتا ہے:
+    OpenClaw’s QMD state lives under your **state dir** (defaults to `~/.openclaw`).
+    You can point `qmd` at the exact same index by exporting the same XDG vars
+    OpenClaw uses:
 
     ```bash
     # Pick the same state dir OpenClaw uses
@@ -180,9 +178,9 @@ BM25 + ویکٹرز + ری رینکنگ کو یکجا کرتا ہے۔ Markdown �
   `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`)۔
 - `limits`: ریکال پے لوڈ محدود کریں (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`)۔
-- `scope`: [`session.sendPolicy`](/gateway/configuration#session) جیسا ہی اسکیما۔
-  ڈیفالٹ DM-only ہے (`deny` سب، `allow` براہِ راست چیٹس)؛
-  گروپس/چینلز میں QMD ہِٹس دکھانے کے لیے اسے نرم کریں۔
+- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
+  Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
+  hits in groups/channels.
 - ورک اسپیس کے باہر سے آنے والے اسنیپٹس
   `qmd/<collection>/<relative-path>` کے طور پر `memory_search` نتائج میں دکھائی دیتے ہیں؛
   `memory_get` اس پریفکس کو سمجھتا ہے اور کنفیگرڈ QMD کلیکشن روٹ سے پڑھتا ہے۔
@@ -219,10 +217,10 @@ memory: {
 **حوالہ جات اور فال بیک**
 
 - `memory.citations` بیک اینڈ سے قطع نظر لاگو ہوتا ہے (`auto`/`on`/`off`)۔
-- جب `qmd` چلتا ہے، ہم `status().backend = "qmd"` ٹیگ کرتے ہیں تاکہ تشخیصی معلومات دکھائیں کہ
-  کون سا انجن نتائج فراہم کر رہا تھا۔ اگر QMD سب پروسیس بند ہو جائے یا JSON آؤٹ پٹ پارس نہ ہو سکے،
-  سرچ مینیجر وارننگ لاگ کرتا ہے اور QMD کے بحال ہونے تک بلٹ اِن فراہم کنندہ
-  (موجودہ Markdown ایمبیڈنگز) واپس کر دیتا ہے۔
+- When `qmd` runs, we tag `status().backend = "qmd"` so diagnostics show which
+  engine served the results. If the QMD subprocess exits or JSON output can’t be
+  parsed, the search manager logs a warning and returns the builtin provider
+  (existing Markdown embeddings) until QMD recovers.
 
 ### اضافی میموری راستے
 
@@ -299,7 +297,7 @@ agents: {
 
 بیچ انڈیکسنگ (OpenAI + Gemini):
 
-- OpenAI اور Gemini ایمبیڈنگز کے لیے بطورِ طے شدہ فعال۔ غیر فعال کرنے کے لیے `agents.defaults.memorySearch.remote.batch.enabled = false` سیٹ کریں۔
+- Enabled by default for OpenAI and Gemini embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
 - ڈیفالٹ رویہ بیچ مکمل ہونے کا انتظار کرتا ہے؛ ضرورت ہو تو `remote.batch.wait`, `remote.batch.pollIntervalMs`, اور `remote.batch.timeoutMinutes` ٹیون کریں۔
 - متوازی طور پر جمع کرائے جانے والے بیچ جابز کی تعداد کنٹرول کرنے کے لیے `remote.batch.concurrency` سیٹ کریں (ڈیفالٹ: 2)۔
 - بیچ موڈ اس وقت لاگو ہوتا ہے جب `memorySearch.provider = "openai"` یا `"gemini"` ہو اور متعلقہ API کلید استعمال کرتا ہے۔
@@ -344,16 +342,16 @@ agents: {
 
 ### میموری ٹولز کیسے کام کرتے ہیں
 
-- `memory_search` `MEMORY.md` + `memory/**/*.md` سے Markdown حصّوں (~400 ٹوکن ہدف، 80-ٹوکن اوورلیپ) کی سیمنٹک سرچ کرتا ہے۔ یہ اسنیپٹ متن (تقریباً 700 حروف کی حد)، فائل پاتھ، لائن رینج، اسکور، فراہم کنندہ/ماڈل، اور یہ کہ ہم لوکل → ریموٹ ایمبیڈنگز پر فال بیک ہوئے یا نہیں، واپس کرتا ہے۔ مکمل فائل پے لوڈ واپس نہیں کیا جاتا۔
-- `memory_get` کسی مخصوص میموری Markdown فائل (ورک اسپیس-نسبتی) کو پڑھتا ہے، اختیاری طور پر کسی ابتدائی لائن سے اور N لائنوں کے لیے۔ `MEMORY.md` / `memory/` سے باہر کے راستے مسترد کر دیے جاتے ہیں۔
+- `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
+- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
 - دونوں ٹولز صرف اس وقت فعال ہوتے ہیں جب ایجنٹ کے لیے `memorySearch.enabled` درست ثابت ہو۔
 
 ### کیا چیز انڈیکس ہوتی ہے (اور کب)
 
 - فائل قسم: صرف Markdown (`MEMORY.md`, `memory/**/*.md`)۔
 - انڈیکس اسٹوریج: فی ایجنٹ SQLite، مقام `~/.openclaw/memory/<agentId>.sqlite` (کنفیگ کے ذریعے `agents.defaults.memorySearch.store.path`؛ `{agentId}` ٹوکن سپورٹ)۔
-- تازگی: `MEMORY.md` + `memory/` پر واچر انڈیکس کو ڈرٹی مارک کرتا ہے (ڈی باؤنس 1.5s)۔ سنک سیشن اسٹارٹ، سرچ، یا وقفے پر شیڈول ہوتی ہے اور غیر ہم زمانی چلتی ہے۔ سیشن ٹرانسکرپٹس بیک گراؤنڈ سنک ٹرگر کرنے کے لیے ڈیلٹا تھریش ہولڈز استعمال کرتے ہیں۔
-- ری انڈیکس ٹرگرز: انڈیکس ایمبیڈنگ **فراہم کنندہ/ماڈل + اینڈپوائنٹ فنگرپرنٹ + چنکنگ پیرامیٹرز** محفوظ کرتا ہے۔ ان میں سے کوئی بدلے تو OpenClaw خودکار طور پر پورا اسٹور ری سیٹ کر کے ری انڈیکس کرتا ہے۔
+- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
+- Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, OpenClaw automatically resets and reindexes the entire store.
 
 ### ہائبرڈ سرچ (BM25 + ویکٹر)
 
@@ -377,9 +375,9 @@ agents: {
 - کوڈ سمبلز (`memorySearch.query.hybrid`)
 - ایرر اسٹرنگز (“sqlite-vec unavailable”)
 
-BM25 (فل ٹیکسٹ) اس کے برعکس ہے: عین ٹوکنز میں مضبوط، پیرا فریزز میں کمزور۔
-ہائبرڈ سرچ عملی درمیانی راستہ ہے: **دونوں ریٹریول سگنلز استعمال کریں** تاکہ
-“قدرتی زبان” اور “سوئی تنکے میں” دونوں قسم کی کوئریز کے لیے اچھے نتائج ملیں۔
+BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
+Hybrid search is the pragmatic middle ground: **use both retrieval signals** so you get
+good results for both “natural language” queries and “needle in a haystack” queries.
 
 #### نتائج کیسے ملاتے ہیں (موجودہ ڈیزائن)
 
@@ -404,9 +402,9 @@ BM25 (فل ٹیکسٹ) اس کے برعکس ہے: عین ٹوکنز میں مض�
 - اگر ایمبیڈنگز دستیاب نہ ہوں (یا فراہم کنندہ زیرو-ویکٹر لوٹائے)، ہم پھر بھی BM25 چلاتے ہیں اور کی ورڈ میچز واپس کرتے ہیں۔
 - اگر FTS5 نہ بن سکے تو ہم ویکٹر-اونلی سرچ رکھتے ہیں (کوئی ہارڈ فیل نہیں)۔
 
-یہ “IR تھیوری کے لحاظ سے کامل” نہیں، مگر سادہ، تیز، اور حقیقی نوٹس پر یادداشت/درستگی بہتر کرتا ہے۔
-آگے چل کر عام اگلے قدم Reciprocal Rank Fusion (RRF) یا اسکور نارملائزیشن
-(min/max یا z-score) ہو سکتے ہیں۔
+This isn’t “IR-theory perfect”, but it’s simple, fast, and tends to improve recall/precision on real notes.
+If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
+(min/max or z-score) before mixing.
 
 کنفیگ:
 
@@ -449,8 +447,8 @@ agents: {
 
 ### سیشن میموری سرچ (تجرباتی)
 
-آپ اختیاری طور پر **سیشن ٹرانسکرپٹس** انڈیکس کر کے انہیں `memory_search` کے ذریعے سامنے لا سکتے ہیں۔
-یہ ایک تجرباتی فلیگ کے پیچھے ہے۔
+You can optionally index **session transcripts** and surface them via `memory_search`.
+This is gated behind an experimental flag.
 
 ```json5
 agents: {
@@ -470,7 +468,7 @@ agents: {
 - `memory_search` کبھی انڈیکسنگ پر بلاک نہیں کرتا؛ بیک گراؤنڈ سنک مکمل ہونے تک نتائج قدرے پرانے ہو سکتے ہیں۔
 - نتائج میں اب بھی صرف اسنیپٹس شامل ہوتے ہیں؛ `memory_get` میموری فائلوں تک محدود رہتا ہے۔
 - سیشن انڈیکسنگ فی ایجنٹ علیحدہ ہے (صرف اسی ایجنٹ کے سیشن لاگز انڈیکس ہوتے ہیں)۔
-- سیشن لاگز ڈسک پر رہتے ہیں (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`)۔ فائل سسٹم رسائی والا کوئی بھی عمل/صارف انہیں پڑھ سکتا ہے، اس لیے ڈسک رسائی کو اعتماد کی حد سمجھیں۔ زیادہ سخت علیحدگی کے لیے ایجنٹس کو الگ OS صارفین یا ہوسٹس کے تحت چلائیں۔
+- Session logs live on disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
 
 ڈیلٹا تھریش ہولڈز (ڈیفالٹس دکھائے گئے):
 
@@ -491,9 +489,9 @@ agents: {
 
 ### SQLite ویکٹر ایکسیلیریشن (sqlite-vec)
 
-جب sqlite-vec ایکسٹینشن دستیاب ہو، OpenClaw ایمبیڈنگز کو
-SQLite ورچوئل ٹیبل (`vec0`) میں محفوظ کرتا ہے اور ویکٹر فاصلے کی کوئریز
-ڈیٹا بیس میں انجام دیتا ہے۔ اس سے ہر ایمبیڈنگ کو JS میں لوڈ کیے بغیر سرچ تیز رہتی ہے۔
+When the sqlite-vec extension is available, OpenClaw stores embeddings in a
+SQLite virtual table (`vec0`) and performs vector distance queries in the
+database. This keeps search fast without loading every embedding into JS.
 
 کنفیگریشن (اختیاری):
 
@@ -524,7 +522,7 @@ agents: {
 ### لوکل ایمبیڈنگ خودکار ڈاؤن لوڈ
 
 - ڈیفالٹ لوکل ایمبیڈنگ ماڈل: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB)۔
-- جب `memorySearch.provider = "local"` ہو، `node-llama-cpp` `modelPath` حل کرتا ہے؛ اگر GGUF غائب ہو تو اسے **خودکار ڈاؤن لوڈ** کر کے کیش میں رکھتا ہے (یا `local.modelCacheDir` اگر سیٹ ہو)، پھر لوڈ کرتا ہے۔ ڈاؤن لوڈز ری ٹرائی پر دوبارہ شروع ہو جاتے ہیں۔
+- When `memorySearch.provider = "local"`, `node-llama-cpp` resolves `modelPath`; if the GGUF is missing it **auto-downloads** to the cache (or `local.modelCacheDir` if set), then loads it. Downloads resume on retry.
 - نیٹو بلڈ تقاضا: `pnpm approve-builds` چلائیں، `node-llama-cpp` منتخب کریں، پھر `pnpm rebuild node-llama-cpp`۔
 - فال بیک: اگر لوکل سیٹ اپ ناکام ہو اور `memorySearch.fallback = "openai"` ہو تو ہم خودکار طور پر ریموٹ ایمبیڈنگز پر سوئچ کرتے ہیں (`openai/text-embedding-3-small` جب تک اووررائیڈ نہ ہو) اور وجہ ریکارڈ کرتے ہیں۔
 
@@ -552,4 +550,4 @@ agents: {
 نوٹس:
 
 - `remote.*`، `models.providers.openai.*` پر فوقیت رکھتا ہے۔
-- `remote.headers` OpenAI ہیڈرز کے ساتھ مرج ہوتا ہے؛ کلیدی تنازعات میں ریموٹ غالب رہتا ہے۔ OpenAI ڈیفالٹس استعمال کرنے کے لیے `remote.headers` چھوڑ دیں۔
+- `remote.headers` merge with OpenAI headers; remote wins on key conflicts. Omit `remote.headers` to use the OpenAI defaults.

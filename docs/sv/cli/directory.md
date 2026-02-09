@@ -4,13 +4,6 @@ read_when:
   - Du vill slå upp kontakt-/grupp-/själv-ID:n för en kanal
   - Du utvecklar en kanaladapter för katalog
 title: "directory"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:37Z
 ---
 
 # `openclaw directory`

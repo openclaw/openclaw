@@ -3,13 +3,6 @@ summary: "CLI کے لیے حوالہ: `openclaw configure` (انٹرایکٹو �
 read_when:
   - آپ اس وقت جب اسناد، ڈیوائسز، یا ایجنٹ کی ڈیفالٹس کو انٹرایکٹو طور پر ایڈجسٹ کرنا چاہتے ہوں
 title: "کنفیگر"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
 ---
 
 # `openclaw configure`
@@ -18,7 +11,8 @@ x-i18n:
 
 نوٹ: **Model** سیکشن میں اب `agents.defaults.models` اجازت فہرست کے لیے ملٹی-سلیکٹ شامل ہے (جو `/model` اور ماڈل پکر میں ظاہر ہوتا ہے)۔
 
-مشورہ: بغیر ذیلی کمانڈ کے `openclaw config` چلانے سے یہی وزرڈ کھلتا ہے۔ نان-انٹرایکٹو ترامیم کے لیے `openclaw config get|set|unset` استعمال کریں۔
+Tip: `openclaw config` without a subcommand opens the same wizard. Use
+`openclaw config get|set|unset` for non-interactive edits.
 
 متعلقہ:
 
@@ -27,8 +21,8 @@ x-i18n:
 
 نوٹس:
 
-- Gateway کہاں چلتا ہے اس کا انتخاب ہمیشہ `gateway.mode` کو اپڈیٹ کرتا ہے۔ اگر بس یہی درکار ہو تو آپ دیگر سیکشنز کے بغیر "Continue" منتخب کر سکتے ہیں۔
-- چینل پر مبنی سروسز (Slack/Discord/Matrix/Microsoft Teams) سیٹ اپ کے دوران چینل/روم اجازت فہرستوں کے لیے پرامپٹ کرتی ہیں۔ آپ نام یا IDs درج کر سکتے ہیں؛ جہاں ممکن ہو وزرڈ ناموں کو IDs میں ریزولو کرتا ہے۔
+- Choosing where the Gateway runs always updates `gateway.mode`. You can select "Continue" without other sections if that is all you need.
+- Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) prompt for channel/room allowlists during setup. You can enter names or IDs; the wizard resolves names to IDs when possible.
 
 ## مثالیں
 

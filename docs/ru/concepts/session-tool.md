@@ -3,13 +3,6 @@ summary: "Инструменты сессий агента для перечис
 read_when:
   - Добавление или изменение инструментов сессий
 title: "Инструменты сессий"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:41Z
 ---
 
 # Инструменты сессий

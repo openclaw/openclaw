@@ -4,13 +4,6 @@ read_when:
   - Você precisa fazer login em sites para automação de navegador
   - Você quer publicar atualizações no X/Twitter
 title: "Login no navegador"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:02Z
 ---
 
 # Login no navegador + postagem no X/Twitter

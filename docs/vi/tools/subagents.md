@@ -4,18 +4,11 @@ read_when:
   - Bạn muốn thực hiện công việc nền/song song thông qua tác tử
   - Bạn đang thay đổi sessions_spawn hoặc chính sách công cụ sub-agent
 title: "Sub-Agents"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:40Z
 ---
 
 # Sub-agents
 
-Sub-agent là các lần chạy tác tử nền được tạo ra từ một lần chạy tác tử hiện có. Chúng chạy trong phiên riêng (`agent:<agentId>:subagent:<uuid>`) và khi hoàn tất sẽ **thông báo** kết quả về kênh chat của bên yêu cầu.
+Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel.
 
 ## Lệnh slash
 
@@ -36,9 +29,9 @@ Mục tiêu chính:
 - Giữ bề mặt công cụ khó bị dùng sai: sub-agent **không** có công cụ của phiên theo mặc định.
 - Tránh fan-out lồng nhau: sub-agent không thể tạo sub-agent khác.
 
-Lưu ý về chi phí: mỗi sub-agent có **ngữ cảnh** và mức sử dụng token **riêng**. Với tác vụ nặng hoặc lặp lại,
-hãy đặt mô hình rẻ hơn cho sub-agent và giữ tác tử chính dùng mô hình chất lượng cao hơn.
-Bạn có thể cấu hình qua `agents.defaults.subagents.model` hoặc ghi đè theo từng tác tử.
+Cost note: each sub-agent has its **own** context and token usage. For heavy or repetitive
+tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
+You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
 
 ## Công cụ
 
@@ -61,7 +54,7 @@ Tham số công cụ:
 
 Danh sách cho phép:
 
-- `agents.list[].subagents.allowAgents`: danh sách agent id có thể nhắm tới qua `agentId` (`["*"]` để cho phép bất kỳ). Mặc định: chỉ tác tử yêu cầu.
+- `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
 Khám phá:
 
@@ -70,10 +63,10 @@ Khám phá:
 Tự động lưu trữ:
 
 - Phiên sub-agent được tự động lưu trữ sau `agents.defaults.subagents.archiveAfterMinutes` (mặc định: 60).
-- Lưu trữ dùng `sessions.delete` và đổi tên transcript thành `*.deleted.<timestamp>` (cùng thư mục).
+- Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
 - `cleanup: "delete"` lưu trữ ngay sau announce (vẫn giữ transcript thông qua đổi tên).
 - Tự động lưu trữ là best-effort; các bộ hẹn giờ đang chờ sẽ bị mất nếu gateway khởi động lại.
-- `runTimeoutSeconds` **không** tự động lưu trữ; nó chỉ dừng lần chạy. Phiên vẫn tồn tại cho đến khi tự động lưu trữ.
+- `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
 
 ## Xác thực
 
@@ -83,7 +76,7 @@ Xác thực sub-agent được phân giải theo **agent id**, không theo loạ
 - Kho xác thực được tải từ `agentDir` của tác tử đó.
 - Hồ sơ xác thực của tác tử chính được gộp vào như một **dự phòng**; hồ sơ của tác tử ghi đè hồ sơ chính khi xung đột.
 
-Lưu ý: việc gộp là cộng dồn, nên hồ sơ của tác tử chính luôn sẵn có như dự phòng. Chưa hỗ trợ xác thực cô lập hoàn toàn theo từng tác tử.
+Note: the merge is additive, so main profiles are always available as fallbacks. Fully isolated auth per agent is not supported yet.
 
 ## Announce
 
@@ -152,7 +145,7 @@ Sub-agent sử dụng một làn hàng đợi riêng trong tiến trình:
 
 ## Hạn chế
 
-- Announce của sub-agent là **best-effort**. Nếu gateway khởi động lại, công việc “announce back” đang chờ sẽ bị mất.
+- Sub-agent announce is **best-effort**. If the gateway restarts, pending “announce back” work is lost.
 - Sub-agent vẫn chia sẻ tài nguyên tiến trình gateway; hãy xem `maxConcurrent` như một van an toàn.
 - `sessions_spawn` luôn không chặn: nó trả về `{ status: "accepted", runId, childSessionKey }` ngay lập tức.
 - Ngữ cảnh sub-agent chỉ tiêm `AGENTS.md` + `TOOLS.md` (không có `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md` hoặc `BOOTSTRAP.md`).

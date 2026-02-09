@@ -3,13 +3,6 @@ summary: "Comment fonctionne la mémoire d’OpenClaw (fichiers d’espace de tr
 read_when:
   - Vous voulez la disposition des fichiers de mémoire et le flux de travail
   - Vous voulez ajuster la purge automatique de la mémoire avant la compaction
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: 5fe705d89fb30998
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:58Z
 ---
 
 # Mémoire
@@ -95,7 +88,8 @@ Valeurs par défaut :
   1. `local` si un `memorySearch.local.modelPath` est configuré et que le fichier existe.
   2. `openai` si une clé OpenAI peut être résolue.
   3. `gemini` si une clé Gemini peut être résolue.
-  4. Sinon, la recherche mémoire reste désactivée jusqu’à configuration.
+  4. `voyage` si une clé Voyage peut être résolue.
+  5. Sinon, la recherche mémoire reste désactivée jusqu’à configuration.
 - Le mode local utilise node-llama-cpp et peut nécessiter `pnpm approve-builds`.
 - Utilise sqlite-vec (lorsqu’il est disponible) pour accélérer la recherche vectorielle dans SQLite.
 
@@ -103,7 +97,8 @@ Les embeddings distants **nécessitent** une clé API pour le fournisseur d’em
 résout les clés depuis les profils d’authentification, `models.providers.*.apiKey`, ou les variables
 d’environnement. L’OAuth Codex couvre uniquement le chat/les complétions et **ne** satisfait **pas**
 les embeddings pour la recherche mémoire. Pour Gemini, utilisez `GEMINI_API_KEY` ou
-`models.providers.google.apiKey`. Lors de l’utilisation d’un endpoint compatible OpenAI personnalisé,
+`models.providers.google.apiKey`. Pour Voyage, utilisez `VOYAGE_API_KEY` ou
+`models.providers.voyage.apiKey`. Lors de l’utilisation d’un endpoint compatible OpenAI personnalisé,
 définissez `memorySearch.remote.apiKey` (et éventuellement `memorySearch.remote.headers`).
 
 ### Backend QMD (expérimental)
@@ -135,9 +130,14 @@ récupération à QMD. Points clés :
 - Les collections sont réécrites depuis `memory.qmd.paths` (plus les fichiers de mémoire
   par défaut de l’espace de travail) vers `index.yml`, puis `qmd update` + `qmd embed` s’exécutent au démarrage et
   à un intervalle configurable (`memory.qmd.update.interval`, par défaut 5 min).
+- L'actualisation du démarrage s'exécute maintenant en arrière-plan par défaut, de sorte que le démarrage du chat n'est pas
+  bloqué; définissez `mémoire. md.update.waitForBootSync = true` pour garder le comportement de blocage
+  précédent.
 - Les recherches s’exécutent via `qmd query --json`. Si QMD échoue ou si le binaire est absent,
   OpenClaw bascule automatiquement vers le gestionnaire SQLite intégré afin que les outils
   de mémoire continuent de fonctionner.
+- OpenClaw n'expose pas le réglage de la taille des lots QMD aujourd'hui ; le comportement des lots est
+  contrôlé par QMD lui-même.
 - **La première recherche peut être lente** : QMD peut télécharger des modèles GGUF locaux
   (reranker/extension de requête) lors de la première exécution de `qmd query`.
   - OpenClaw définit automatiquement `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` lorsqu’il exécute QMD.

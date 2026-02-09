@@ -1,16 +1,9 @@
 ---
-summary: 「透過 imsg 的舊版 iMessage 支援（以 stdio 進行 JSON-RPC）。新的設定應使用 BlueBubbles。」
+summary: "透過 imsg 的舊版 iMessage 支援（以 stdio 進行 JSON-RPC）。新的設定應使用 BlueBubbles。 New setups should use BlueBubbles."
 read_when:
-  - 「設定 iMessage 支援」
-  - 「除錯 iMessage 傳送／接收」
+  - 設定 iMessage 支援
+  - 除錯 iMessage 傳送／接收
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:15Z
 ---
 
 # iMessage（舊版：imsg）
@@ -19,7 +12,7 @@ x-i18n:
 >
 > `imsg` 頻道是舊版的外部 CLI 整合，未來版本可能會移除。
 
-狀態：舊版外部 CLI 整合。Gateway 會啟動 `imsg rpc`（以 stdio 進行 JSON-RPC）。
+Status: legacy external CLI integration. 狀態：舊版外部 CLI 整合。Gateway 會啟動 `imsg rpc`（以 stdio 進行 JSON-RPC）。
 
 ## 快速設定（初學者）
 
@@ -73,15 +66,15 @@ x-i18n:
 
 若傳送／接收失敗（例如 `imsg rpc` 非零結束、逾時，或 Gateway 看似卡住），常見原因是未核准的 macOS 權限提示。
 
-macOS 會依應用程式／行程情境授予 TCC 權限。請在執行 `imsg` 的相同情境中核准提示（例如 Terminal/iTerm、LaunchAgent 工作階段，或由 SSH 啟動的行程）。
+macOS 會依應用程式／行程情境授予 TCC 權限。請在執行 `imsg` 的相同情境中核准提示（例如 Terminal/iTerm、LaunchAgent 工作階段，或由 SSH 啟動的行程）。 Approve prompts in the same context that runs `imsg` (for example, Terminal/iTerm, a LaunchAgent session, or an SSH-launched process).
 
 檢查清單：
 
-- **完整磁碟存取**：允許執行 OpenClaw 的行程（以及任何執行 `imsg` 的 shell／SSH 包裝器）存取。這是讀取「訊息」資料庫（`chat.db`）所必需。
+- **完整磁碟存取**：允許執行 OpenClaw 的行程（以及任何執行 `imsg` 的 shell／SSH 包裝器）存取。這是讀取「訊息」資料庫（`chat.db`）所必需。 This is required to read the Messages database (`chat.db`).
 - **自動化 → 訊息**：允許執行 OpenClaw 的行程（及／或你的終端機）控制 **Messages.app** 以進行外送。
 - **`imsg` CLI 健康狀態**：確認已安裝 `imsg` 並支援 RPC（`imsg rpc --help`）。
 
-提示：若 OpenClaw 以無頭模式執行（LaunchAgent/systemd/SSH），macOS 的提示很容易錯過。請在 GUI 終端機中執行一次互動式指令以強制顯示提示，然後重試：
+提示：若 OpenClaw 以無頭模式執行（LaunchAgent/systemd/SSH），macOS 的提示很容易錯過。請在 GUI 終端機中執行一次互動式指令以強制顯示提示，然後重試： Run a one-time interactive command in a GUI terminal to force the prompt, then retry:
 
 ```bash
 imsg chats --limit 1
@@ -110,9 +103,9 @@ imsg send <handle> "test"
 6. 設定 SSH，讓 `ssh <bot-macos-user>@localhost true` 無需密碼即可運作。
 7. 將 `channels.imessage.accounts.bot.cliPath` 指向一個 SSH 包裝器，以機器人使用者身分執行 `imsg`。
 
-首次執行注意事項：傳送／接收可能需要在 _機器人 macOS 使用者_ 中核准 GUI 權限（自動化 + 完整磁碟存取）。若 `imsg rpc` 看起來卡住或結束，請登入該使用者（可使用螢幕共享），執行一次 `imsg chats --limit 1`／`imsg send ...`，核准提示後再重試。請參考［疑難排解 macOS 隱私權與安全性 TCC］(#troubleshooting-macos-privacy-and-security-tcc)。
+First-run note: sending/receiving may require GUI approvals (Automation + Full Disk Access) in the _bot macOS user_. If `imsg rpc` looks stuck or exits, log into that user (Screen Sharing helps), run a one-time `imsg chats --limit 1` / `imsg send ...`, approve prompts, then retry. See [Troubleshooting macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
 
-範例包裝器（`chmod +x`）。請將 `<bot-macos-user>` 替換為你實際的 macOS 使用者名稱：
+Example wrapper (`chmod +x`). 範例包裝器（`chmod +x`）。請將 `<bot-macos-user>` 替換為你實際的 macOS 使用者名稱：
 
 ```bash
 #!/usr/bin/env bash
@@ -148,7 +141,7 @@ exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@local
 
 ### 遠端／SSH 變體（選用）
 
-若你希望在另一台 Mac 上使用 iMessage，請將 `channels.imessage.cliPath` 設為一個包裝器，透過 SSH 在遠端 macOS 主機上執行 `imsg`。OpenClaw 只需要 stdio。
+若你希望在另一台 Mac 上使用 iMessage，請將 `channels.imessage.cliPath` 設為一個包裝器，透過 SSH 在遠端 macOS 主機上執行 `imsg`。OpenClaw 只需要 stdio。 OpenClaw only needs stdio.
 
 範例包裝器：
 
@@ -157,7 +150,7 @@ exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@local
 exec ssh -T gateway-host imsg "$@"
 ```
 
-**遠端附件：** 當 `cliPath` 透過 SSH 指向遠端主機時，「訊息」資料庫中的附件路徑會參考遠端機器上的檔案。可設定 `channels.imessage.remoteHost`，讓 OpenClaw 透過 SCP 自動擷取這些檔案：
+**Remote attachments:** When `cliPath` points to a remote host via SSH, attachment paths in the Messages database reference files on the remote machine. OpenClaw can automatically fetch these over SCP by setting `channels.imessage.remoteHost`:
 
 ```json5
 {
@@ -171,7 +164,7 @@ exec ssh -T gateway-host imsg "$@"
 }
 ```
 
-若未設定 `remoteHost`，OpenClaw 會嘗試解析你的包裝腳本中的 SSH 指令來自動偵測。為了可靠性，建議明確設定。
+若未設定 `remoteHost`，OpenClaw 會嘗試解析你的包裝腳本中的 SSH 指令來自動偵測。為了可靠性，建議明確設定。 Explicit configuration is recommended for reliability.
 
 #### 透過 Tailscale 的遠端 Mac（範例）
 
@@ -220,18 +213,18 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 - 使用 SSH 金鑰，讓 `ssh bot@mac-mini.tailnet-1234.ts.net` 無需提示即可運作。
 - `remoteHost` 應與 SSH 目標相符，以便 SCP 擷取附件。
 
-多帳號支援：使用 `channels.imessage.accounts` 搭配每個帳號的設定，以及選用的 `name`。共享模式請見［`gateway/configuration`］(/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。請勿提交 `~/.openclaw/openclaw.json`（通常包含權杖）。
+多帳號支援：使用 `channels.imessage.accounts` 搭配每個帳號的設定，以及選用的 `name`。共享模式請見［`gateway/configuration`］(/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。請勿提交 `~/.openclaw/openclaw.json`（通常包含權杖）。 See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don't commit `~/.openclaw/openclaw.json` (it often contains tokens).
 
 ## 存取控制（私訊 + 群組）
 
-私訊：
+私訊（DMs）：
 
 - 預設：`channels.imessage.dmPolicy = "pairing"`。
 - 未知寄件者會收到配對碼；在核准前會忽略訊息（配對碼 1 小時後過期）。
-- 核准方式：
+- Approve via:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- 配對是 iMessage 私訊的預設權杖交換機制。詳情請見：[Pairing](/channels/pairing)
+- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/channels/pairing)
 
 群組：
 
@@ -270,7 +263,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 }
 ```
 
-當你希望為特定執行緒使用隔離的人格／模型時，這非常實用（請見［多代理程式路由］(/concepts/multi-agent)）。檔案系統隔離請見［沙箱隔離］(/gateway/sandboxing)。
+當你希望為特定執行緒使用隔離的人格／模型時，這非常實用（請見［多代理程式路由］(/concepts/multi-agent)）。檔案系統隔離請見［沙箱隔離］(/gateway/sandboxing)。 For filesystem isolation, see [Sandboxing](/gateway/sandboxing).
 
 ## 媒體 + 限制
 
@@ -307,22 +300,22 @@ imsg chats --limit 20
 - `channels.imessage.enabled`：啟用／停用頻道啟動。
 - `channels.imessage.cliPath`：`imsg` 的路徑。
 - `channels.imessage.dbPath`：「訊息」資料庫路徑。
-- `channels.imessage.remoteHost`：當 `cliPath` 指向遠端 Mac（例如 `user@gateway-host`）時，用於 SCP 附件傳輸的 SSH 主機。若未設定，將從 SSH 包裝器自動偵測。
+- `channels.imessage.remoteHost`：當 `cliPath` 指向遠端 Mac（例如 `user@gateway-host`）時，用於 SCP 附件傳輸的 SSH 主機。若未設定，將從 SSH 包裝器自動偵測。 Auto-detected from SSH wrapper if not set.
 - `channels.imessage.service`：`imessage | sms | auto`。
 - `channels.imessage.region`：SMS 區域。
 - `channels.imessage.dmPolicy`：`pairing | allowlist | open | disabled`（預設：配對）。
-- `channels.imessage.allowFrom`：私訊允許清單（handle、電子郵件、E.164 號碼，或 `chat_id:*`）。`open` 需要 `"*"`。iMessage 沒有使用者名稱；請使用 handle 或聊天目標。
+- `channels.imessage.allowFrom`：私訊允許清單（handle、電子郵件、E.164 號碼，或 `chat_id:*`）。`open` 需要 `"*"`。iMessage 沒有使用者名稱；請使用 handle 或聊天目標。 `open` requires `"*"`. iMessage has no usernames; use handles or chat targets.
 - `channels.imessage.groupPolicy`：`open | allowlist | disabled`（預設：允許清單）。
 - `channels.imessage.groupAllowFrom`：群組寄件者允許清單。
 - `channels.imessage.historyLimit`／`channels.imessage.accounts.*.historyLimit`：納入為上下文的群組訊息最大數量（0 代表停用）。
-- `channels.imessage.dmHistoryLimit`：以使用者回合計的私訊歷史上限。每位使用者的覆寫：`channels.imessage.dms["<handle>"].historyLimit`。
+- `channels.imessage.dmHistoryLimit`: DM history limit in user turns. `channels.imessage.dmHistoryLimit`：以使用者回合計的私訊歷史上限。每位使用者的覆寫：`channels.imessage.dms["<handle>"].historyLimit`。
 - `channels.imessage.groups`：每個群組的預設值 + 允許清單（全域預設請使用 `"*"`）。
 - `channels.imessage.includeAttachments`：將附件匯入至上下文。
 - `channels.imessage.mediaMaxMb`：入站／出站媒體上限（MB）。
 - `channels.imessage.textChunkLimit`：外送分段大小（字元）。
 - `channels.imessage.chunkMode`：`length`（預設）或 `newline`，在依長度分段前先依空白行（段落邊界）分割。
 
-相關的全域選項：
+Related global options:
 
 - `agents.list[].groupChat.mentionPatterns`（或 `messages.groupChat.mentionPatterns`）。
 - `messages.responsePrefix`。

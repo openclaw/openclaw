@@ -1,13 +1,6 @@
 ---
-title: Tái cấu trúc Mirroring Phiên Gửi Đi (Issue #1520)
+title: "Tái cấu trúc Mirroring Phiên Gửi Đi (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:06Z
 ---
 
 # Tái cấu trúc Mirroring Phiên Gửi Đi (Issue #1520)
@@ -20,7 +13,7 @@ x-i18n:
 
 ## Bối cảnh
 
-Các lần gửi đi trước đây được mirror vào phiên tác tử _hiện tại_ (khóa phiên của công cụ) thay vì phiên của kênh đích. Định tuyến inbound sử dụng khóa phiên theo kênh/peer, nên các phản hồi outbound rơi vào sai phiên và các mục tiêu liên hệ lần đầu thường thiếu mục phiên.
+Outbound sends were mirrored into the _current_ agent session (tool session key) rather than the target channel session. Định tuyến inbound sử dụng session key của kênh/peer, vì vậy các phản hồi outbound đã rơi vào sai phiên và các mục tiêu liên hệ lần đầu thường thiếu mục nhập phiên.
 
 ## Mục tiêu
 
@@ -58,7 +51,7 @@ Các lần gửi đi trước đây được mirror vào phiên tác tử _hiệ
 
 ## Quyết định
 
-- **Suy ra phiên cho Gateway send**: nếu cung cấp `sessionKey` thì dùng nó. Nếu bỏ qua, suy ra sessionKey từ mục tiêu + tác tử mặc định và mirror tại đó.
+- **Suy diễn phiên gửi Gateway**: nếu `sessionKey` được cung cấp, hãy sử dụng nó. If omitted, derive a sessionKey from target + default agent and mirror there.
 - **Tạo mục phiên**: luôn dùng `recordSessionMetaFromInbound` với `Provider/From/To/ChatType/AccountId/Originating*` căn chỉnh theo định dạng inbound.
 - **Chuẩn hóa mục tiêu**: định tuyến outbound dùng các mục tiêu đã được phân giải (sau `resolveChannelTarget`) khi có.
 - **Chữ hoa/thường của khóa phiên**: chuẩn hóa khóa phiên về chữ thường khi ghi và trong quá trình migration.
@@ -76,7 +69,7 @@ Các lần gửi đi trước đây được mirror vào phiên tác tử _hiệ
 
 ## Mục mở / Theo dõi tiếp
 
-- Plugin gọi thoại dùng các khóa phiên `voice:<phone>` tùy chỉnh. Việc ánh xạ outbound chưa được chuẩn hóa ở đây; nếu message-tool cần hỗ trợ gửi cho gọi thoại, hãy thêm ánh xạ rõ ràng.
+- Voice-call plugin uses custom `voice:<phone>` session keys. Outbound mapping is not standardized here; if message-tool should support voice-call sends, add explicit mapping.
 - Xác nhận xem có plugin bên ngoài nào dùng các định dạng `From/To` không chuẩn ngoài bộ đi kèm hay không.
 
 ## Các tệp đã chạm

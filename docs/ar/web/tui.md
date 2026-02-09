@@ -1,16 +1,9 @@
 ---
 summary: "واجهة طرفية (TUI): الاتصال بـ Gateway من أي جهاز"
 read_when:
-  - "تريد دليلًا مبسّطًا للمبتدئين لاستخدام TUI"
-  - "تحتاج إلى القائمة الكاملة لميزات TUI والأوامر والاختصارات"
+  - تريد دليلًا مبسّطًا للمبتدئين لاستخدام TUI
+  - تحتاج إلى القائمة الكاملة لميزات TUI والأوامر والاختصارات
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:06Z
 ---
 
 # TUI (واجهة المستخدم الطرفية)
@@ -86,7 +79,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 - Ctrl+O: تبديل توسيع مخرجات الأدوات
 - Ctrl+T: تبديل إظهار التفكير (يعيد تحميل السجل)
 
-## أوامر الشرطة المائلة
+## tools/slash-commands.md
 
 الأساسية:
 

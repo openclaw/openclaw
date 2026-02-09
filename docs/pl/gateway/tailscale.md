@@ -4,13 +4,6 @@ read_when:
   - Udostępnianie interfejsu sterowania Gateway poza localhost
   - Automatyzacja dostępu do panelu w tailnecie lub publicznie
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:20Z
 ---
 
 # Tailscale (panel Gateway)
@@ -19,7 +12,7 @@ OpenClaw może automatycznie konfigurować Tailscale **Serve** (tailnet) lub **F
 panelu Gateway oraz portu WebSocket. Dzięki temu Gateway pozostaje powiązany z loopback, a
 Tailscale zapewnia HTTPS, routing oraz (dla Serve) nagłówki tożsamości.
 
-## Tryby
+## Mody
 
 - `serve`: Serve tylko w tailnecie przez `tailscale serve`. Gateway pozostaje na `127.0.0.1`.
 - `funnel`: Publiczny HTTPS przez `tailscale funnel`. OpenClaw wymaga wspólnego hasła.

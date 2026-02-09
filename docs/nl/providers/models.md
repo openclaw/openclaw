@@ -4,13 +4,6 @@ read_when:
   - Je wilt een modelprovider kiezen
   - Je wilt snelle installatievoorbeelden voor LLM-authenticatie + modelselectie
 title: "Snelle start voor modelproviders"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # Modelproviders

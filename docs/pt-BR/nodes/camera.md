@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou modificar captura de câmera em nós iOS ou macOS
   - Ao estender fluxos de trabalho de arquivos temporários MEDIA acessíveis ao agente
 title: "Captura de câmera"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:22Z
 ---
 
 # Captura de câmera (agente)
@@ -94,7 +87,7 @@ Notas:
   - Padrão: **ativado** (chave ausente é tratada como habilitada).
   - Quando desativado: comandos `camera.*` retornam `CAMERA_DISABLED`.
 
-### Permissões
+### Permissions
 
 - O Android exige permissões em tempo de execução:
   - `CAMERA` para `camera.snap` e `camera.clip`.

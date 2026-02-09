@@ -4,13 +4,6 @@ read_when:
   - Uppdatering av leverantörers återförsöksbeteende eller standardvärden
   - Felsökning av leverantörers sändningsfel eller hastighetsbegränsningar
 title: "Återförsökspolicy"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:58Z
 ---
 
 # Återförsökspolicy

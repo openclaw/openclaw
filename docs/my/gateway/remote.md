@@ -3,13 +3,6 @@ summary: "SSH တန်နယ်များ (Gateway WS) နှင့် tailne
 read_when:
   - အဝေးမှ Gateway တပ်ဆင်မှုများကို လည်ပတ်စဉ် သို့မဟုတ် ပြဿနာရှာဖွေစစ်ဆေးစဉ်
 title: "အဝေးမှ ဝင်ရောက်အသုံးပြုခြင်း"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # အဝေးမှ ဝင်ရောက်အသုံးပြုခြင်း (SSH၊ တန်နယ်များ၊ နှင့် tailnet များ)
@@ -26,10 +19,10 @@ x-i18n:
 
 ## ပုံမှန် VPN/tailnet တပ်ဆင်မှုများ (agent တည်ရှိရာ)
 
-**Gateway ဟို့စ်** ကို “agent တည်ရှိရာနေရာ” ဟု တွေးပါ။ ၎င်းသည် ဆက်ရှင်များ၊ auth ပရိုဖိုင်များ၊ ချန်နယ်များနှင့် အခြေအနေများကို ပိုင်ဆိုင်သည်။
-သင့် လပ်တော့/ဒက်စတော့ (နှင့် နိုဒ်များ) သည် ထို ဟို့စ် သို့ ချိတ်ဆက်ပါသည်။
+SSH tunnel က အဲဒီ connection ကို Gateway chạy နေတဲ့ remote machine ရဲ့ port 18789 ဆီကို forward လုပ်ပေးပါတယ်။ **Gateway host** ကို “agent နေတဲ့နေရာ” လို့ စဉ်းစားနိုင်ပါတယ်။
+sessions, auth profiles, channels နဲ့ state တွေကို အဲဒီ host က ပိုင်ဆိုင်ပါတယ်။
 
-### 1) tailnet အတွင်း အမြဲလည်ပတ်နေသော Gateway (VPS သို့မဟုတ် အိမ်ဆာဗာ)
+### 1. tailnet အတွင်း အမြဲလည်ပတ်နေသော Gateway (VPS သို့မဟုတ် အိမ်ဆာဗာ)
 
 Gateway ကို အမြဲတမ်းရှိနေသော ဟို့စ် ပေါ်တွင် လည်ပတ်စေပြီး **Tailscale** သို့မဟုတ် SSH ဖြင့် ဝင်ရောက်ပါ။
 
@@ -39,16 +32,16 @@ Gateway ကို အမြဲတမ်းရှိနေသော ဟို့�
 
 သင့် လပ်တော့ အမြဲ အိပ်နေတတ်သော်လည်း agent ကို အမြဲလည်ပတ်စေလိုသည့်အခါ အကောင်းဆုံး ဖြစ်သည်။
 
-### 2) အိမ်ရှိ desktop သည် Gateway ကို လည်ပတ်ပြီး လပ်တော့သည် အဝေးမှ ထိန်းချုပ်ခြင်း
+### 2. အိမ်ရှိ desktop သည် Gateway ကို လည်ပတ်ပြီး လပ်တော့သည် အဝေးမှ ထိန်းချုပ်ခြင်း
 
-လပ်တော့ သည် agent ကို မလည်ပတ်ပါ။ ၎င်းသည် အဝေးမှ ချိတ်ဆက်ပါသည်။
+သင့် laptop/desktop (နဲ့ nodes) တွေက အဲဒီ host ကို ချိတ်ဆက်ပါတယ်။ laptop က agent ကို **မ chạy ပါဘူး**။
 
 - macOS အက်ပ်၏ **Remote over SSH** မုဒ် (Settings → General → “OpenClaw runs”) ကို အသုံးပြုပါ။
 - အက်ပ်က တန်နယ်ကို ဖွင့်လှစ်ပြီး စီမံခန့်ခွဲပေးသဖြင့် WebChat + ကျန်းမာရေး စစ်ဆေးမှုများကို “အလိုအလျောက် အလုပ်လုပ်” စေပါသည်။
 
 လုပ်ဆောင်ချက်လမ်းညွှန်: [macOS remote access](/platforms/mac/remote)။
 
-### 3) လပ်တော့သည် Gateway ကို လည်ပတ်ပြီး အခြား စက်များမှ အဝေးမှ ဝင်ရောက်ခြင်း
+### 3. လပ်တော့သည် Gateway ကို လည်ပတ်ပြီး အခြား စက်များမှ အဝေးမှ ဝင်ရောက်ခြင်း
 
 Gateway ကို ဒေသတွင်း ထားရှိထားပြီး လုံခြုံစွာ ထုတ်ဖော်ပါ။
 
@@ -59,7 +52,7 @@ Gateway ကို ဒေသတွင်း ထားရှိထားပြီ�
 
 ## အမိန့် စီးဆင်းပုံ (ဘယ်မှာ ဘာလည်ပတ်သလဲ)
 
-Gateway ဝန်ဆောင်မှု တစ်ခုတည်းက အခြေအနေ + ချန်နယ်များကို ပိုင်ဆိုင်သည်။ နိုဒ်များသည် ပတ်ဝန်းကျင်ပစ္စည်းများ ဖြစ်သည်။
+remote အနေနဲ့ ချိတ်ဆက်တာပါ။ gateway service တစ်ခုက state + channels ကို ပိုင်ဆိုင်ပါတယ်။
 
 စီးဆင်းပုံ ဥပမာ (Telegram → node):
 
@@ -86,9 +79,9 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 - `openclaw health` နှင့် `openclaw status --deep` သည် `ws://127.0.0.1:18789` မှတဆင့် အဝေးမှ gateway ကို ရောက်ရှိနိုင်ပါသည်။
 - လိုအပ်ပါက `openclaw gateway {status,health,send,agent,call}` သည် `--url` ဖြင့် forward လုပ်ထားသော URL ကိုလည်း ဦးတည်နိုင်ပါသည်။
 
-မှတ်ချက်: သင် သတ်မှတ်ထားသော `gateway.port` (သို့မဟုတ် `--port`/`OPENCLAW_GATEWAY_PORT`) ဖြင့် `18789` ကို အစားထိုးပါ။
-မှတ်ချက်: `--url` ကို ပေးလိုက်ပါက CLI သည် config သို့မဟုတ် environment အထောက်အထားများသို့ ပြန်မလှည့်ပါ။
-`--token` သို့မဟုတ် `--password` ကို သီးသန့် ပေးပါ။ သီးသန့် အထောက်အထား မပါရှိပါက အမှားဖြစ်ပါသည်။
+nodes တွေက peripherals ဖြစ်ပါတယ်။
+မှတ်ချက်: `18789` ကို သင့် config ထဲက `gateway.port` (သို့မဟုတ် `--port`/`OPENCLAW_GATEWAY_PORT`) နဲ့ အစားထိုးပါ။
+မှတ်ချက်: `--url` ကို ပေးလိုက်တဲ့အခါ CLI က config သို့မဟုတ် environment credentials ကို fallback မလုပ်ပါဘူး။ `--token` သို့မဟုတ် `--password` ကို အတိအကျ ထည့်ပါ။
 
 ## CLI အဝေးမှ မူလတန်ဖိုးများ
 
@@ -110,7 +103,7 @@ gateway သည် loopback-only ဖြစ်ပါက URL ကို `ws://127.0.
 
 ## SSH ဖြင့် Chat UI
 
-WebChat သည် သီးခြား HTTP ပို့တ်ကို မသုံးတော့ပါ။ SwiftUI chat UI သည် Gateway WebSocket သို့ တိုက်ရိုက် ချိတ်ဆက်ပါသည်။
+credentials ကို အတိအကျ မပေးထားရင် error ဖြစ်ပါတယ်။ The SwiftUI chat UI connects directly to the Gateway WebSocket.
 
 - `18789` ကို SSH ဖြင့် forward လုပ်ပြီး (အထက်ပါအတိုင်း) client များကို `ws://127.0.0.1:18789` သို့ ချိတ်ဆက်ပါ။
 - macOS တွင် တန်နယ်ကို အလိုအလျောက် စီမံပေးသော အက်ပ်၏ “Remote over SSH” မုဒ်ကို ဦးစားပေးပါ။
@@ -129,8 +122,8 @@ macOS မီနူးဘား အက်ပ်သည် အဆုံးမှ �
 - **Loopback မဟုတ်သော bind များ** (`lan`/`tailnet`/`custom`၊ သို့မဟုတ် loopback မရနိုင်သည့်အခါ `auto`) တွင် auth token/စကားဝှက်များကို မဖြစ်မနေ အသုံးပြုရပါမည်။
 - `gateway.remote.token` သည် အဝေးမှ CLI ခေါ်ဆိုမှုများအတွက် **သာလျှင်** ဖြစ်ပြီး ဒေသတွင်း auth ကို **မဖွင့်ပေးပါ**။
 - `gateway.remote.tlsFingerprint` သည် `wss://` ကို အသုံးပြုသည့်အခါ အဝေးမှ TLS လက်မှတ်ကို pin လုပ်ပေးပါသည်။
-- **Tailscale Serve** သည် `gateway.auth.allowTailscale: true` ဖြစ်ပါက identity header များဖြင့် authenticate လုပ်နိုင်ပါသည်။
-  token/စကားဝှက်များကို အသုံးပြုလိုပါက `false` သို့ သတ်မှတ်ပါ။
+- **Tailscale Serve** can authenticate via identity headers when `gateway.auth.allowTailscale: true`.
+  Set it to `false` if you want tokens/passwords instead.
 - ဘရောက်ဇာ ထိန်းချုပ်မှုကို အော်ပရေးတာ ဝင်ရောက်မှုကဲ့သို့ ကိုင်တွယ်ပါ — tailnet-only + ရည်ရွယ်ချက်ရှိသော node pairing။
 
 အသေးစိတ်: [Security](/gateway/security)။

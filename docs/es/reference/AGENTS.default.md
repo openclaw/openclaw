@@ -3,13 +3,6 @@ summary: "Instrucciones predeterminadas del agente OpenClaw y lista de Skills pa
 read_when:
   - Al iniciar una nueva sesión de agente de OpenClaw
   - Al habilitar o auditar Skills predeterminadas
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:33Z
 ---
 
 # AGENTS.md — Asistente Personal de OpenClaw (predeterminado)

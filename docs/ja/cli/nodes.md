@@ -4,20 +4,13 @@ read_when:
   - ペアリングされたノード（カメラ、スクリーン、キャンバス）を管理している場合
   - リクエストを承認する、またはノードコマンドを呼び出す必要がある場合
 title: "ノード"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:14Z
 ---
 
 # `openclaw nodes`
 
 ペアリングされたノード（デバイス）を管理し、ノードの機能を呼び出します。
 
-関連情報：
+関連項目:
 
 - ノード概要： [Nodes](/nodes)
 - カメラ： [Camera nodes](/nodes/camera)
@@ -40,9 +33,9 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` は、保留中／ペアリング済みのテーブルを表示します。ペアリング済みの行には、直近の接続経過時間（Last Connect）が含まれます。
-現在接続中のノードのみを表示するには `--connected` を使用します。`--last-connected <duration>` を使用すると、
-指定した期間内に接続したノードに絞り込めます（例： `24h`, `7d`）。
+`nodes list` は保留/ペアテーブルを表示します。 ペアリングされた行には、最新の接続年齢 (Last Connect) が含まれます。
+現在接続されているノードのみを表示するには、 `--connected` を使用します。 <duration>には、 `--last-connected
+`を使用して、持続時間内に接続されたノード(例えば `24h`, `7d`)にフィルターをかけます。
 
 ## Invoke / 実行
 

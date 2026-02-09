@@ -1,15 +1,8 @@
 ---
 summary: "Telegram allowlist ကို ခိုင်မာစေခြင်း: prefix + whitespace ကို စံညွှန်းတကျ ပြုပြင်ခြင်း"
 read_when:
-  - "Telegram allowlist ပြောင်းလဲမှုများ၏ သမိုင်းကို ပြန်လည်သုံးသပ်နေစဉ်"
+  - Telegram allowlist ပြောင်းလဲမှုများ၏ သမိုင်းကို ပြန်လည်သုံးသပ်နေစဉ်
 title: "Telegram Allowlist ကို ခိုင်မာစေခြင်း"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:13Z
 ---
 
 # Telegram Allowlist ကို ခိုင်မာစေခြင်း
@@ -20,9 +13,7 @@ x-i18n:
 
 ## Summary
 
-Telegram allowlists များသည် ယခုအခါ `telegram:` နှင့် `tg:` prefix များကို အကြီးအသေးမခွဲဘဲ လက်ခံနိုင်ပြီး၊
-မတော်တဆ ပါဝင်လာသည့် whitespace များကိုလည်း သက်သာစွာ လက်ခံနိုင်သည်။ ၎င်းသည် အပြင်သို့ ပို့ရာတွင် ပြုလုပ်သော
-send normalization နှင့် အဝင် allowlist စစ်ဆေးမှုများကို ကိုက်ညီစေသည်။
+ဤအရာသည် outbound send normalization နှင့် inbound allowlist checks များကို ကိုက်ညီစေပါသည်။ Logs သို့မဟုတ် chat IDs များမှ copy/paste လုပ်ရာတွင် prefixes နှင့် whitespace များ ပါဝင်လာတတ်ပါသည်။
 
 ## What changed
 
@@ -39,9 +30,7 @@ send normalization နှင့် အဝင် allowlist စစ်ဆေးမ�
 
 ## Why it matters
 
-Logs သို့မဟုတ် chat ID များမှ copy/paste လုပ်ရာတွင် prefix များနှင့် whitespace များ ပါဝင်လာတတ်သည်။
-Normalization ပြုလုပ်ခြင်းဖြင့် DM မက်ဆေ့ချ်များ သို့မဟုတ် အုပ်စုများတွင် တုံ့ပြန်မလား ဆုံးဖြတ်ရာတွင်
-မှားယွင်းသော negative များ ဖြစ်ပေါ်ခြင်းကို ရှောင်ရှားနိုင်သည်။
+Normalization ပြုလုပ်ခြင်းသည် DMs သို့မဟုတ် groups များတွင် ပြန်ကြားရမလား ဆုံးဖြတ်ရာတွင် false negatives များကို ရှောင်ရှားပေးပါသည်။ Open Responses သည် OpenAI Responses API အပေါ် အခြေခံထားသော open inference standard တစ်ခု ဖြစ်ပါသည်။
 
 ## Related docs
 

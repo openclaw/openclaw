@@ -5,18 +5,11 @@ read_when:
   - Installation, søgning eller publicering af Skills
   - Forklaring af ClawHub CLI-flag og synkroniseringsadfærd
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:59Z
 ---
 
 # ClawHub
 
-ClawHub er **den offentlige Skills-registrering for OpenClaw**. Det er en gratis tjeneste: alle Skills er offentlige, åbne og synlige for alle til deling og genbrug. En Skill er blot en mappe med en `SKILL.md`-fil (plus understøttende tekstfiler). Du kan gennemse Skills i webappen eller bruge CLI’en til at søge, installere, opdatere og publicere Skills.
+ClawHub er den **offentlige færdighed registreringsdatabasen for OpenClaw**. Det er en gratis tjeneste: Alle færdigheder er offentlige, åbne og synlige for alle til deling og genbrug. En færdighed er blot en mappe med en `SKILL.md` fil (plus understøttende tekstfiler). Du kan gennemse færdigheder i web-app eller bruge CLI til at søge, installere, opdatere og udgive færdigheder.
 
 Site: [clawhub.ai](https://clawhub.ai)
 
@@ -43,7 +36,7 @@ Site: [clawhub.ai](https://clawhub.ai)
 
 ## Hvem det er til (begyndervenligt)
 
-Hvis du vil tilføje nye funktioner til din OpenClaw-agent, er ClawHub den nemmeste måde at finde og installere Skills på. Du behøver ikke at vide, hvordan backend’en fungerer. Du kan:
+Hvis du ønsker at tilføje nye funktioner til din OpenClaw agent, er ClawHub den nemmeste måde at finde og installere færdigheder. Du behøver ikke at vide, hvordan backend virker. Du kan:
 
 - Søge efter Skills med almindeligt sprog.
 - Installere en Skill i dit workspace.
@@ -73,16 +66,16 @@ pnpm add -g clawhub
 
 ## Sådan passer det ind i OpenClaw
 
-Som standard installerer CLI’en Skills i `./skills` under din nuværende arbejdsmappe. Hvis et OpenClaw-workspace er konfigureret, falder `clawhub` tilbage til dette workspace, medmindre du tilsidesætter `--workdir` (eller `CLAWHUB_WORKDIR`). OpenClaw indlæser workspace-Skills fra `<workspace>/skills` og samler dem op i **næste** session. Hvis du allerede bruger `~/.openclaw/skills` eller bundtede Skills, har workspace-Skills forrang.
+Som standard installerer CLI færdigheder i `./skills` under din nuværende arbejdsmappe. Hvis et OpenClaw arbejdsområde er konfigureret, falder `clawhub` tilbage til det arbejdsområde, medmindre du tilsidesætter `--workdir` (eller `CLAWHUB_WORKDIR`). OpenClaw indlæser arbejdsområde færdigheder fra `<workspace>/skills` og vil samle dem op i \*\* næste\*\* session. Hvis du allerede bruger `~/.openclaw/skills` eller bundtet færdigheder, arbejdsområde færdigheder har forrang.
 
 For flere detaljer om, hvordan Skills indlæses, deles og gates, se
 [Skills](/tools/skills).
 
 ## Overblik over Skill-systemet
 
-En Skill er en versionsstyret bundle af filer, der lærer OpenClaw at udføre en
-specifik opgave. Hver publicering opretter en ny version, og registreringen
-bevarer en historik over versioner, så brugere kan revidere ændringer.
+En færdighed er en versioneret pakke af filer, der lærer OpenClaw hvordan man udfører en
+specifik opgave. Hver udgivelse skaber en ny version, og registret opbevarer en
+historie af versioner, så brugerne kan revidere ændringer.
 
 En typisk Skill indeholder:
 
@@ -90,9 +83,9 @@ En typisk Skill indeholder:
 - Valgfrie konfigurationer, scripts eller understøttende filer, som Skill’en bruger.
 - Metadata såsom tags, resumé og installationskrav.
 
-ClawHub bruger metadata til at drive Discovery og sikkert eksponere Skill-funktioner.
-Registreringen sporer også brugssignaler (såsom stjerner og downloads) for at forbedre
-rangering og synlighed.
+ClawHub bruger metadata til at aktivere opdagelsen og sikkert afsløre færdigheder.
+Registret sporer også brugssignaler (såsom stjerner og downloads) for at forbedre
+ranking og synlighed.
 
 ## Hvad tjenesten tilbyder (funktioner)
 
@@ -106,9 +99,9 @@ rangering og synlighed.
 
 ## Sikkerhed og moderation
 
-ClawHub er åbent som standard. Alle kan uploade Skills, men en GitHub-konto skal
-være mindst én uge gammel for at kunne publicere. Det hjælper med at bremse misbrug
-uden at blokere legitime bidragydere.
+ClawHub er som standard åbent. Alle kan uploade færdigheder, men en GitHub konto skal
+være mindst en uge gammel for at offentliggøre. Dette hjælper med at bremse misbrug uden at blokere
+legitime bidragsydere.
 
 Rapportering og moderation:
 
@@ -119,7 +112,7 @@ Rapportering og moderation:
 - Moderatorer kan se skjulte Skills, vise dem igen, slette dem eller bandlyse brugere.
 - Misbrug af rapportfunktionen kan resultere i kontobandlysning.
 
-Interesseret i at blive moderator? Spørg i OpenClaw Discord og kontakt en
+Er du interesseret i at blive moderator? Spørg i OpenClaw Discord og kontakt en
 moderator eller vedligeholder.
 
 ## CLI-kommandoer og parametre
@@ -148,7 +141,7 @@ Indstillinger:
 Søgning:
 
 - `clawhub search "query"`
-- `--limit <n>`: Maks. resultater.
+- `--limit <n>`: Max resultater.
 
 Installér:
 
@@ -236,11 +229,11 @@ clawhub sync --all
 
 ### Lokale ændringer vs. registreringsversioner
 
-Opdateringer sammenligner det lokale Skill-indhold med registreringsversioner ved hjælp af en indholdshash. Hvis lokale filer ikke matcher nogen publiceret version, spørger CLI’en før overskrivning (eller kræver `--force` i ikke-interaktive kørsler).
+Opdateringer sammenligner de lokale færdigheders indhold til registreringsversioner ved hjælp af en indhold hash. Hvis lokale filer ikke matcher nogen publiceret version, spørger CLI før overskrive (eller kræver `--force` i ikke-interaktive kørsler).
 
 ### Sync-scanning og fallback-roots
 
-`clawhub sync` scanner først din nuværende workdir. Hvis der ikke findes nogen Skills, falder den tilbage til kendte legacy-placeringer (for eksempel `~/openclaw/skills` og `~/.openclaw/skills`). Dette er designet til at finde ældre Skill-installationer uden ekstra flags.
+`clawhub synkronisering` scanner din aktuelle arbejdsmappe først. Hvis der ikke findes nogen færdigheder, falder det tilbage til kendte ældre steder (for eksempel `~/openclaw/skills` og `~/.openclaw/skills`). Dette er designet til at finde ældre færdigheder installeres uden ekstra flag.
 
 ### Lagring og lockfile
 
@@ -249,7 +242,7 @@ Opdateringer sammenligner det lokale Skill-indhold med registreringsversioner ve
 
 ### Telemetri (installationsantal)
 
-Når du kører `clawhub sync` mens du er logget ind, sender CLI’en et minimalt snapshot for at beregne installationsantal. Du kan deaktivere dette helt:
+Når du kører 'clawhub synkronisering', mens du er logget ind, sender CLI et minimalt øjebliksbillede til beregning af installationstal. Du kan deaktivere dette hele:
 
 ```bash
 export CLAWHUB_DISABLE_TELEMETRY=1

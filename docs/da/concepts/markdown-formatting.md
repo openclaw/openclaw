@@ -5,21 +5,14 @@ read_when:
   - Du tilføjer en ny kanalformatter eller style-mapping
   - Du fejlsøger formateringsregressioner på tværs af kanaler
 title: "Markdown-formatering"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:13Z
 ---
 
 # Markdown-formatering
 
-OpenClaw formaterer udgående Markdown ved at konvertere det til en fælles mellemliggende
-repræsentation (IR), før der renderes kanalspecifikt output. IR’en bevarer
-kildeteksten intakt, samtidig med at den bærer style-/link-spans, så chunking og rendering
-kan forblive konsistent på tværs af kanaler.
+OpenClaw formater udgående Markdown ved at konvertere det til en delt mellemliggende
+repræsentation (IR) før rendering kanal-specifik output. IR holder
+kildeteksten intakt, mens du bærer stil/link spænder så chunking og rendering kan
+forblive konsekvent på tværs af kanaler.
 
 ## Mål
 
@@ -70,7 +63,7 @@ IR (skematisk):
 
 ## Tabelhåndtering
 
-Markdown-tabeller understøttes ikke konsistent på tværs af chatklienter. Brug
+Markdown tabeller understøttes ikke konsekvent på tværs af chat-klienter. Brug
 `markdown.tables` til at styre konvertering pr. kanal (og pr. konto).
 
 - `code`: render tabeller som kodeblokke (standard for de fleste kanaler).
@@ -105,15 +98,15 @@ Hvis du har brug for mere om chunking-adfærd på tværs af kanaler, se
 
 ## Linkpolitik
 
-- **Slack:** `[label](url)` -> `<url|label>`; bare URL’er forbliver bare. Autolink
-  er deaktiveret under parsing for at undgå dobbelt-linking.
+- **Slack:** `[label](url)` -> `<url|label>`; nøgne URLer forbliver bare. Autolink
+  er deaktiveret under parse for at undgå dobbelt-forbindelse.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML-parse-tilstand).
 - **Signal:** `[label](url)` -> `label (url)`, medmindre label matcher URL’en.
 
 ## Spoilers
 
-Spoiler-markører (`||spoiler||`) parses kun for Signal, hvor de mappes til
-SPOILER style ranges. Andre kanaler behandler dem som almindelig tekst.
+Spoilermarkører (`° = spøgelsesskrævende `) er kun fortolket til Signal, hvor de kortlægger til
+SPOILER-stilområder. Andre kanaler behandler dem som almindelig tekst.
 
 ## Sådan tilføjer eller opdaterer du en kanalformatter
 

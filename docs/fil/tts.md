@@ -5,19 +5,12 @@ read_when:
   - Pag-configure ng mga TTS provider o limitasyon
   - Paggamit ng mga /tts command
 title: "Text-to-Speech"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:21Z
 ---
 
 # Text-to-speech (TTS)
 
-Kayang i-convert ng OpenClaw ang mga outbound na sagot tungo sa audio gamit ang ElevenLabs, OpenAI, o Edge TTS.
-Gumagana ito saanman kayang magpadala ng audio ang OpenClaw; sa Telegram, nagiging bilog na voice-note bubble ito.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Mga sinusuportahang serbisyo
 
@@ -27,15 +20,15 @@ Gumagana ito saanman kayang magpadala ng audio ang OpenClaw; sa Telegram, nagigi
 
 ### Mga tala sa Edge TTS
 
-Ginagamit ng Edge TTS ang online neural TTS service ng Microsoft Edge sa pamamagitan ng
-library na `node-edge-tts`. Isa itong hosted service (hindi local), gumagamit ng mga endpoint ng Microsoft, at
-hindi nangangailangan ng API key. Inilalantad ng `node-edge-tts` ang mga opsyon sa speech configuration at
-mga output format, ngunit hindi lahat ng opsyon ay sinusuportahan ng Edge service. citeturn2search0
+Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
+library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
+not require an API key. `node-edge-tts` exposes speech configuration options and
+output formats, but not all options are supported by the Edge service. citeturn2search0
 
-Dahil ang Edge TTS ay isang pampublikong web service na walang inilathalang SLA o quota, ituring ito bilang
-best-effort. Kung kailangan mo ng garantisadong mga limitasyon at suporta, gumamit ng OpenAI o ElevenLabs.
-Idinodokumento ng Speech REST API ng Microsoft ang 10‑minutong limitasyon ng audio bawat request; hindi
-naglilimbag ng mga limitasyon ang Edge TTS, kaya ipagpalagay ang kapareho o mas mababang mga limitasyon. citeturn0search3
+Because Edge TTS is a public web service without a published SLA or quota, treat it
+as best-effort. If you need guaranteed limits and support, use OpenAI or ElevenLabs.
+Microsoft's Speech REST API documents a 10‑minute audio limit per request; Edge TTS
+does not publish limits, so assume similar or lower limits. citeturn0search3
 
 ## Mga opsyonal na key
 
@@ -44,13 +37,12 @@ Kung gusto mo ng OpenAI o ElevenLabs:
 - `ELEVENLABS_API_KEY` (o `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-**Hindi** nangangailangan ng API key ang Edge TTS. Kapag walang natagpuang API keys, awtomatikong
-naka-default ang OpenClaw sa Edge TTS (maliban kung naka-disable sa pamamagitan ng `messages.tts.edge.enabled=false`).
+Edge TTS does **not** require an API key. If no API keys are found, OpenClaw defaults
+to Edge TTS (unless disabled via `messages.tts.edge.enabled=false`).
 
-Kung maraming provider ang naka-configure, ang napiling provider ang unang gagamitin at ang iba ay
-magsisilbing mga fallback.
-Gumagamit ang auto-summary ng naka-configure na `summaryModel` (o `agents.defaults.model.primary`),
-kaya kailangang authenticated din ang provider na iyon kung ie-enable mo ang mga buod.
+If multiple providers are configured, the selected provider is used first and the others are fallback options.
+Auto-summary uses the configured `summaryModel` (or `agents.defaults.model.primary`),
+so that provider must also be authenticated if you enable summaries.
 
 ## Mga link ng serbisyo
 
@@ -63,16 +55,16 @@ kaya kailangang authenticated din ang provider na iyon kung ie-enable mo ang mga
 
 ## Naka-enable ba ito bilang default?
 
-Hindi. **Naka-off** ang Auto‑TTS bilang default. I-enable ito sa config gamit ang
-`messages.tts.auto` o per session gamit ang `/tts always` (alias: `/tts on`).
+Hindi. Auto‑TTS is **off** by default. Enable it in config with
+`messages.tts.auto` or per session with `/tts always` (alias: `/tts on`).
 
 **Naka-enable** ang Edge TTS bilang default kapag naka-on na ang TTS, at awtomatikong ginagamit
 kapag walang available na OpenAI o ElevenLabs API keys.
 
 ## Config
 
-Ang TTS config ay nasa ilalim ng `messages.tts` sa `openclaw.json`.
-Ang buong schema ay nasa [Gateway configuration](/gateway/configuration).
+TTS config lives under `messages.tts` in `openclaw.json`.
+Full schema is in [Gateway configuration](/gateway/configuration).
 
 ### Minimal na config (enable + provider)
 
@@ -218,7 +210,7 @@ Pagkatapos ay patakbuhin:
 - `summaryModel`: opsyonal na murang model para sa auto-summary; default sa `agents.defaults.model.primary`.
   - Tumatanggap ng `provider/model` o isang naka-configure na model alias.
 - `modelOverrides`: payagan ang model na maglabas ng mga TTS directive (naka-on bilang default).
-- `maxTextLength`: hard cap para sa TTS input (chars). `/tts audio` ang magfa-fail kapag lumampas.
+- `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: i-override ang local prefs JSON path (provider/limit/summary).
 - `apiKey` na mga value ay magfa-fallback sa env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
@@ -242,12 +234,13 @@ Pagkatapos ay patakbuhin:
 
 ## Mga override na pinapagana ng model (default naka-on)
 
-Bilang default, **puwedeng** maglabas ang model ng mga TTS directive para sa iisang sagot.
-Kapag ang `messages.tts.auto` ay `tagged`, kinakailangan ang mga directive na ito upang mag-trigger ng audio.
+By default, the model **can** emit TTS directives for a single reply.
+When `messages.tts.auto` is `tagged`, these directives are required to trigger audio.
 
-Kapag naka-enable, puwedeng maglabas ang model ng mga `[[tts:...]]` directive upang i-override ang boses
-para sa iisang sagot, kasama ang opsyonal na `[[tts:text]]...[[/tts:text]]` block upang
-magbigay ng mga expressive tag (tawa, mga cue sa pagkanta, atbp.) na dapat lumabas lamang sa audio.
+When enabled, the model can emit `[[tts:...]]` directives to override the voice
+for a single reply, plus an optional `[[tts:text]]...[[/tts:text]]` block to
+provide expressive tags (laughter, singing cues, etc) that should only appear in
+the audio.
 
 Halimbawang reply payload:
 
@@ -320,11 +313,11 @@ Ina-override nito ang `messages.tts.*` para sa host na iyon.
 - **Iba pang channel**: MP3 (`mp3_44100_128` mula sa ElevenLabs, `mp3` mula sa OpenAI).
   - 44.1kHz / 128kbps ang default na balanse para sa linaw ng pananalita.
 - **Edge TTS**: gumagamit ng `edge.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
-  - Tumatanggap ang `node-edge-tts` ng `outputFormat`, ngunit hindi lahat ng format ay available
-    mula sa Edge service. citeturn2search0
+  - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
+    from the Edge service. citeturn2search0
   - Ang mga value ng output format ay sumusunod sa Microsoft Speech output formats (kasama ang Ogg/WebM Opus). citeturn1search0
-  - Tumatanggap ang Telegram `sendVoice` ng OGG/MP3/M4A; gumamit ng OpenAI/ElevenLabs kung kailangan mo ng
-    garantisadong Opus voice notes. citeturn1search1
+  - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
+    guaranteed Opus voice notes. citeturn1search1
   - Kapag pumalya ang naka-configure na Edge output format, magre-retry ang OpenClaw gamit ang MP3.
 
 Fixed ang mga format ng OpenAI/ElevenLabs; inaasahan ng Telegram ang Opus para sa voice-note UX.
@@ -358,11 +351,11 @@ Reply -> TTS enabled?
 
 ## Paggamit ng slash command
 
-May iisang command: `/tts`.
-Tingnan ang [Slash commands](/tools/slash-commands) para sa mga detalye ng pag-enable.
+There is a single command: `/tts`.
+See [Slash commands](/tools/slash-commands) for enablement details.
 
-Tala sa Discord: Ang `/tts` ay built-in na Discord command, kaya nirerehistro ng OpenClaw ang
-`/voice` bilang native na command doon. Gumagana pa rin ang text na `/tts ...`.
+Discord note: `/tts` is a built-in Discord command, so OpenClaw registers
+`/voice` as the native command there. Gumagana pa rin ang tekstong `/tts ...`.
 
 ```
 /tts off
@@ -386,9 +379,9 @@ Mga tala:
 
 ## Agent tool
 
-Ang `tts` tool ay kino-convert ang text tungo sa speech at nagbabalik ng path na `MEDIA:`. Kapag
-Telegram-compatible ang resulta, isinasama ng tool ang `[[audio_as_voice]]` upang
-magpadala ang Telegram ng voice bubble.
+The `tts` tool converts text to speech and returns a `MEDIA:` path. When the
+result is Telegram-compatible, the tool includes `[[audio_as_voice]]` so
+Telegram sends a voice bubble.
 
 ## Gateway RPC
 

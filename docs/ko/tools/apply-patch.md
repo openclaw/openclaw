@@ -4,13 +4,6 @@ read_when:
   - 여러 파일에 걸친 구조화된 파일 편집이 필요할 때
   - 패치 기반 편집을 문서화하거나 디버그하려는 경우
 title: "apply_patch 도구"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:20Z
 ---
 
 # apply_patch 도구

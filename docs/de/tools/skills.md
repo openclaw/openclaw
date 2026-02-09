@@ -4,20 +4,13 @@ read_when:
   - Hinzufügen oder Ändern von Skills
   - Ändern von Skill-Gating oder Ladevorschriften
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:58Z
 ---
 
 # Skills (OpenClaw)
 
 OpenClaw verwendet **[AgentSkills](https://agentskills.io)-kompatible** Skill-Ordner, um dem Agenten den Umgang mit Werkzeugen beizubringen. Jeder Skill ist ein Verzeichnis mit einer `SKILL.md` mit YAML-Frontmatter und Anweisungen. OpenClaw lädt **gebündelte Skills** sowie optionale lokale Overrides und filtert sie zur Ladezeit basierend auf Umgebung, Konfiguration und Vorhandensein von Binärdateien.
 
-## Speicherorte und Priorität
+## Orte und Vorrangstellung
 
 Skills werden aus **drei** Orten geladen:
 
@@ -50,8 +43,7 @@ Workspace gewinnt, dann verwaltet/lokal, dann gebündelt.
 Plugins können eigene Skills mitliefern, indem sie `skills`-Verzeichnisse in
 `openclaw.plugin.json` auflisten (Pfade relativ zum Plugin-Root). Plugin-Skills werden geladen,
 wenn das Plugin aktiviert ist, und nehmen an den normalen Skill-Prioritätsregeln teil.
-Sie können sie über `metadata.openclaw.requires.config` im Konfigurationseintrag des Plugins gate’n.
-Siehe [Plugins](/tools/plugin) für Discovery/Konfiguration und [Tools](/tools) für die
+Sie können sie über `metadata.openclaw.requires.config` im Konfigurationseintrag des Plugins gate’n. Siehe [Plugins](/tools/plugin) für Discovery/Konfiguration und [Tools](/tools) für die
 Werkzeugoberfläche, die diese Skills vermitteln.
 
 ## ClawHub (Installation + Sync)

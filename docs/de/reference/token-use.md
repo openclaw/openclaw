@@ -1,16 +1,9 @@
 ---
-summary: „Wie OpenClaw Prompt-Kontext aufbaut und Token-Nutzung sowie Kosten meldet“
+summary: "„Wie OpenClaw Prompt-Kontext aufbaut und Token-Nutzung sowie Kosten meldet“"
 read_when:
   - Erläuterung von Token-Nutzung, Kosten oder Kontextfenstern
   - Debugging von Kontextwachstum oder Kompaktierungsverhalten
-title: „Token-Nutzung und Kosten“
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:25Z
+title: "„Token-Nutzung und Kosten“"
 ---
 
 # Token-Nutzung & Kosten
@@ -54,6 +47,7 @@ Verwenden Sie dies im Chat:
 - `/usage off|tokens|full` → fügt jeder Antwort eine **pro-Antwort-Nutzungsfußzeile** hinzu.
   - Bleibt pro Sitzung bestehen (gespeichert als `responseUsage`).
   - OAuth‑Authentifizierung **blendet Kosten aus** (nur Tokens).
+- `/usage cost` → zeigt eine lokale Kostenübersicht aus OpenClaw Session-Logs.
 
 Weitere Oberflächen:
 
@@ -91,8 +85,7 @@ Modell‑Cache‑TTL `1h` beträgt, kann das Setzen des Heartbeat‑Intervalls k
 Cache‑Schreibkosten reduzieren.
 
 Für Anthropic‑API‑Preise sind Cache‑Lesevorgänge deutlich günstiger als Input‑Tokens,
-während Cache‑Schreibvorgänge mit einem höheren Multiplikator berechnet werden.
-Die aktuellen Sätze und TTL‑Multiplikatoren finden Sie in Anthropics
+während Cache‑Schreibvorgänge mit einem höheren Multiplikator berechnet werden. Die aktuellen Sätze und TTL‑Multiplikatoren finden Sie in Anthropics
 Prompt‑Caching‑Preisen:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 

@@ -3,23 +3,19 @@ summary: "စမ်းသပ်မှုများကို ဒေသတွင
 read_when:
   - စမ်းသပ်မှုများကို လုပ်ဆောင်နေစဉ် သို့မဟုတ် ပြင်ဆင်နေစဉ်
 title: "စမ်းသပ်မှုများ"
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:56Z
 ---
 
 # စမ်းသပ်မှုများ
 
 - စမ်းသပ်ရေးကိရိယာအစုံအလင် (suites, live, Docker): [Testing](/help/testing)
 
-- `pnpm test:force`: ပုံမှန်ထိန်းချုပ်ရေး ပေါက် (control port) ကို ကိုင်ထားနေသည့် Gateway လုပ်ငန်းစဉ်များကို ပိတ်သိမ်းပြီး၊ Gateway ပေါက်ကို သီးခြားသတ်မှတ်ထားသော Vitest စမ်းသပ်မှု အစုံအလင်ကို လုပ်ဆောင်သည်။ ယခင် Gateway လည်ပတ်မှုတစ်ခုကြောင့် ပေါက် 18789 ကို အသုံးပြုနေဆဲဖြစ်ပါက ယင်းကို အသုံးပြုပါ။
-- `pnpm test:coverage`: V8 coverage ဖြင့် Vitest ကို လုပ်ဆောင်သည်။ Global threshold များမှာ lines/branches/functions/statements အားလုံးအတွက် 70% ဖြစ်သည်။ Coverage တွင် integration အလေးပေးသော entrypoints များ (CLI ချိတ်ဆက်မှု၊ gateway/telegram bridges၊ webchat static server) ကို ဖယ်ရှားထားပြီး unit-test လုပ်နိုင်သော logic များအပေါ် အာရုံစိုက်စေရန် ရည်ရွယ်ထားသည်။
+- 30. `pnpm test:force`: ပုံမှန် control port ကို ကိုင်ထားတဲ့ gateway process များကို အဆုံးသတ်ပြီး၊ သီးသန့် gateway port နဲ့ Vitest suite အပြည့်အစုံကို chạy လုပ်ပါတယ်၊ ဒါကြောင့် server tests တွေက လက်ရှိ chạy နေတဲ့ instance နဲ့ မထိခိုက်ပါဘူး။ 31. ယခင် gateway run တစ်ခုက port 18789 ကို သိမ်းထားခဲ့တဲ့အခါ ဒီဟာကို သုံးပါ။
+
+- 32. `pnpm test:coverage`: V8 coverage နဲ့ Vitest ကို chạy လုပ်ပါတယ်။ 33. Global thresholds တွေက lines/branches/functions/statements အတွက် 70% ပါ။ Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
+
 - `pnpm test:e2e`: Gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing) ကို လုပ်ဆောင်သည်။
-- `pnpm test:live`: provider live tests (minimax/zai) ကို လုပ်ဆောင်သည်။ API keys များနှင့် `LIVE=1` (သို့မဟုတ် provider-specific `*_LIVE_TEST=1`) ရှိရန်လိုအပ်ပြီး unskip လုပ်နိုင်ရန် လိုအပ်သည်။
+
+- 35. `pnpm test:live`: provider live tests (minimax/zai) ကို chạy လုပ်ပါတယ်။ 36. API keys နဲ့ `LIVE=1` (သို့မဟုတ် provider-specific `*_LIVE_TEST=1`) လိုအပ်ပြီး unskip လုပ်ရန် အသုံးပြုရပါတယ်။
 
 ## Model latency bench (local keys)
 
@@ -29,7 +25,7 @@ Usage:
 
 - `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
 - Optional env: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
-- မူလ prompt: “စကားလုံးတစ်လုံးတည်းဖြင့် ပြန်ကြားပါ: ok. သင်္ကေတ သို့မဟုတ် အပိုစာသား မပါဝင်ရပါ။”
+- 37. Default prompt: “စကားလုံး တစ်လုံးတည်းနဲ့ ပြန်ကြားပါ: ok။ 38. အမှတ်အသား punctuation မထည့်ပါနဲ့၊ ထပ်ဆောင်း စာသား မပါစေနဲ့။”
 
 နောက်ဆုံး လုပ်ဆောင်မှု (2025-12-31, 20 runs):
 

@@ -3,23 +3,16 @@ summary: "Tlon/Urbit အထောက်အပံ့ အခြေအနေ၊ လ
 read_when:
   - Tlon/Urbit ချန်နယ် အင်္ဂါရပ်များကို လုပ်ဆောင်နေချိန်
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:59Z
 ---
 
 # Tlon (plugin)
 
-Tlon သည် Urbit ပေါ်တွင် တည်ဆောက်ထားသော အလယ်ဗဟိုမဲ့ မက်ဆင်ဂျာတစ်ခုဖြစ်သည်။ OpenClaw သည် သင့် Urbit ship နှင့် ချိတ်ဆက်ကာ
-DM မက်ဆေ့ချ်များနှင့် အုပ်စု ချတ်မက်ဆေ့ချ်များကို တုံ့ပြန်နိုင်သည်။ အုပ်စုတွင် တုံ့ပြန်ရန် ပုံမှန်အားဖြင့် @ mention လိုအပ်ပြီး
-allowlist များဖြင့် ထပ်မံ ကန့်သတ်နိုင်သည်။
+Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
+respond to DMs and group chat messages. Group replies require an @ mention by default and can
+be further restricted via allowlists.
 
-အခြေအနေ: plugin ဖြင့် အထောက်အပံ့ပေးထားသည်။ DM မက်ဆေ့ချ်များ၊ အုပ်စု mention များ၊ thread တုံ့ပြန်ချက်များနှင့် စာသားသာ မီဒီယာ fallback
-(URL ကို caption တွင် ထည့်ပေါင်း) ကို ပံ့ပိုးသည်။ Reactions၊ polls နှင့် native media uploads များကို မပံ့ပိုးပါ။
+Status: supported via plugin. DMs, group mentions, thread replies, and text-only media fallback
+(URL appended to caption). Reactions, polls, and native media uploads are not supported.
 
 ## Plugin required
 
@@ -64,7 +57,7 @@ openclaw plugins install ./extensions/tlon
 
 ## Group channels
 
-Auto-discovery ကို ပုံမှန်အားဖြင့် ဖွင့်ထားသည်။ ချန်နယ်များကို လက်ဖြင့် pin လုပ်နိုင်သည်။
+Auto-discovery is enabled by default. You can also pin channels manually:
 
 ```json5
 {

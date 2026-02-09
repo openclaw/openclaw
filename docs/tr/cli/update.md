@@ -2,15 +2,8 @@
 summary: "`openclaw update` için CLI referansı (güvenli sayılır kaynak güncellemesi + Gateway otomatik yeniden başlatma)"
 read_when:
   - Bir kaynak çalışma kopyasını güvenle güncellemek istiyorsunuz
-  - `--update` kısaltma davranışını anlamanız gerekiyor
+  - "`--update` kısaltma davranışını anlamanız gerekiyor"
 title: "güncelle"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:13Z
 ---
 
 # `openclaw update`

@@ -3,21 +3,13 @@ summary: "Agent loop ၏ အသက်တာကာလ၊ စီးကြောင
 read_when:
   - Agent loop သို့မဟုတ် lifecycle ဖြစ်ရပ်များကို တိတိကျကျ လမ်းညွှန်ချက်အဖြစ် ကြည့်ရှုရန် လိုအပ်သောအခါ
 title: "Agent Loop"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:30Z
 ---
 
 # Agent Loop (OpenClaw)
 
-Agentic loop သည် agent တစ်ခု၏ “အမှန်တကယ်” အပြည့်အစုံ လည်ပတ်မှုဖြစ်ပြီး intake → context စုစည်းခြင်း → model inference →
-tool အကောင်အထည်ဖော်ခြင်း → ပြန်ကြားချက်များကို စီးကြောင်းဖြင့် ပို့ခြင်း → သိမ်းဆည်းမှု တို့ကို ဖုံးလွှမ်းထားသည်။ ၎င်းသည် မက်ဆေ့ချ်တစ်ခုကို လုပ်ဆောင်ချက်များနှင့် နောက်ဆုံးပြန်ကြားချက်အဖြစ် ပြောင်းလဲပေးသော အာဏာရှိသည့် လမ်းကြောင်းဖြစ်ပြီး session အခြေအနေကို တည်ငြိမ်စွာ ထိန်းသိမ်းထားသည်။
+Agentic loop ဆိုသည်မှာ agent ၏ “အမှန်တကယ်” run အပြည့်အစုံဖြစ်ပြီး: intake → context assembly → model inference → tool execution → streaming replies → persistence ဖြစ်ပါသည်။ ၎င်းသည် message တစ်ခုကို action များနှင့် final reply အဖြစ် ပြောင်းလဲပေးသည့် အာဏာပိုင် လမ်းကြောင်းဖြစ်ပြီး session state ကို တိကျစွာ ထိန်းသိမ်းထားပါသည်။
 
-OpenClaw တွင် loop တစ်ခုသည် session တစ်ခုစီအတွက် serialized ဖြစ်သော run တစ်ကြိမ်သာ ဖြစ်ပြီး model စဉ်းစားနေစဉ်၊ tool များကို ခေါ်ယူစဉ်၊ output ကို စီးကြောင်းဖြင့် ပို့စဉ် lifecycle နှင့် stream ဖြစ်ရပ်များကို ထုတ်လွှင့်သည်။ ဤစာတမ်းသည် ထိုအမှန်တကယ် loop ကို အဆုံးမှအစ အလုပ်လုပ်ပုံကို ရှင်းလင်းဖော်ပြထားသည်။
+OpenClaw တွင် loop တစ်ခုသည် session တစ်ခုလျှင် serialized run တစ်ခုသာဖြစ်ပြီး model စဉ်းစားနေစဉ်၊ tool များကို ခေါ်ယူစဉ်၊ output ကို stream လုပ်စဉ် lifecycle နှင့် stream event များကို ထုတ်လွှတ်ပါသည်။ ဤစာတမ်းသည် ထို authentic loop ကို end-to-end အဖြစ် မည်သို့ ချိတ်ဆက်ထားသည်ကို ရှင်းပြပါသည်။
 
 ## Entry points
 
@@ -44,14 +36,14 @@ OpenClaw တွင် loop တစ်ခုသည် session တစ်ခုစ�
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
 5. `agent.wait` သည် `waitForAgentJob` ကို အသုံးပြုသည်။
    - `runId` အတွက် **lifecycle end/error** ကို စောင့်ဆိုင်းသည်
-   - `{ status: ok|error|timeout, startedAt, endedAt, error? }` ကို ပြန်ပေးသည်
+   - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
 ## Queueing + concurrency
 
 - Runs များကို session key (session lane) အလိုက် serialized လုပ်ပြီး လိုအပ်ပါက global lane မှတစ်ဆင့် ဖြတ်သန်းစေသည်။
 - ၎င်းသည် tool/session race များကို ကာကွယ်ပြီး session history ကို တည်ငြိမ်စေသည်။
-- Messaging ချန်နယ်များသည် lane စနစ်သို့ ထည့်သွင်းပေးသည့် queue modes (collect/steer/followup) ကို ရွေးချယ်နိုင်သည်။
-  အသေးစိတ်အတွက် [Command Queue](/concepts/queue) ကို ကြည့်ပါ။
+- Messaging channel များသည် lane system ကို feed လုပ်ပေးသော queue mode များ (collect/steer/followup) ကို ရွေးချယ်နိုင်ပါသည်။
+  [Command Queue](/concepts/queue) ကို ကြည့်ပါ။
 
 ## Session + workspace ပြင်ဆင်မှု
 
@@ -75,8 +67,8 @@ OpenClaw တွင် hook စနစ် နှစ်မျိုး ရှိသ
 
 ### Internal hooks (Gateway hooks)
 
-- **`agent:bootstrap`**: system prompt ကို အပြီးသတ်မလုပ်မီ bootstrap ဖိုင်များကို တည်ဆောက်နေစဉ် လည်ပတ်သည်။
-  Bootstrap context ဖိုင်များကို ထည့်/ဖယ်ရန် အသုံးပြုနိုင်သည်။
+- **`agent:bootstrap`**: system prompt ကို အပြီးသတ် မချမှတ်မီ bootstrap ဖိုင်များကို တည်ဆောက်နေစဉ် run လုပ်ပါသည်။
+  Bootstrap context ဖိုင်များကို ထည့်ရန်/ဖယ်ရှားရန် ဒီကို အသုံးပြုပါ။
 - **Command hooks**: `/new`, `/reset`, `/stop`, နှင့် အခြား command ဖြစ်ရပ်များ (Hooks doc ကို ကြည့်ပါ)။
 
 တပ်ဆင်နည်းနှင့် ဥပမာများအတွက် [Hooks](/automation/hooks) ကို ကြည့်ပါ။
@@ -139,7 +131,7 @@ Hook API နှင့် မှတ်ပုံတင်အသေးစိတ်�
 
 ## Timeouts
 
-- `agent.wait` default: 30s (စောင့်ဆိုင်းမှုသာ)။ `timeoutMs` param ဖြင့် override လုပ်နိုင်သည်။
+- `agent.wait` default: 30s (စောင့်ဆိုင်းချိန်သာ)။ `timeoutMs` parameter သည် override လုပ်ပေးပါသည်။
 - Agent runtime: `agents.defaults.timeoutSeconds` default 600s; `runEmbeddedPiAgent` abort timer တွင် အကောင်အထည်ဖော်ထားသည်။
 
 ## စောစီးစွာ အဆုံးသတ်နိုင်သော နေရာများ

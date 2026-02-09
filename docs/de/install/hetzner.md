@@ -1,18 +1,11 @@
 ---
-summary: „Betreiben Sie OpenClaw Gateway rund um die Uhr auf einem günstigen Hetzner‑VPS (Docker) mit dauerhaftem Zustand und fest integrierten Binaries“
+summary: "„Betreiben Sie OpenClaw Gateway rund um die Uhr auf einem günstigen Hetzner‑VPS (Docker) mit dauerhaftem Zustand und fest integrierten Binaries“"
 read_when:
   - Sie möchten OpenClaw rund um die Uhr auf einem Cloud‑VPS (nicht auf Ihrem Laptop) betreiben
   - Sie möchten ein produktionsreifes, dauerhaft aktives Gateway auf Ihrem eigenen VPS
   - Sie möchten volle Kontrolle über Persistenz, Binaries und Neustartverhalten
   - Sie betreiben OpenClaw in Docker auf Hetzner oder einem ähnlichen Anbieter
-title: „Hetzner“
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:43Z
+title: "„Hetzner“"
 ---
 
 # OpenClaw auf Hetzner (Docker, Produktions‑VPS‑Leitfaden)
@@ -71,7 +64,7 @@ Für den generischen Docker‑Ablauf siehe [Docker](/install/docker).
 
 ---
 
-## 1) VPS bereitstellen
+## 1. VPS bereitstellen
 
 Erstellen Sie einen Ubuntu‑ oder Debian‑VPS bei Hetzner.
 
@@ -86,7 +79,7 @@ Behandeln Sie ihn nicht als wegwerfbare Infrastruktur.
 
 ---
 
-## 2) Docker installieren (auf dem VPS)
+## 2. Docker installieren (auf dem VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) OpenClaw‑Repository klonen
+## 3. OpenClaw‑Repository klonen
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,7 +107,7 @@ Dieser Leitfaden geht davon aus, dass Sie ein benutzerdefiniertes Image bauen, u
 
 ---
 
-## 4) Persistente Host‑Verzeichnisse erstellen
+## 4. Persistente Host‑Verzeichnisse erstellen
 
 Docker‑Container sind ephemer.
 Jeglicher langlebige Zustand muss auf dem Host liegen.
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Umgebungsvariablen konfigurieren
+## 5. Umgebungsvariablen konfigurieren
 
 Erstellen Sie `.env` im Repository‑Root.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker‑Compose‑Konfiguration
+## 6. Docker‑Compose‑Konfiguration
 
 Erstellen oder aktualisieren Sie `docker-compose.yml`.
 
@@ -204,7 +197,7 @@ services:
 
 ---
 
-## 7) Erforderliche Binaries in das Image einbacken (kritisch)
+## 7. Erforderliche Binaries in das Image einbacken (kritisch)
 
 Binaries in einem laufenden Container zu installieren, ist eine Falle.
 Alles, was zur Laufzeit installiert wird, geht beim Neustart verloren.
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Build und Start
+## 8. Build und Start
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Erwartete Ausgabe:
 
 ---
 
-## 9) Gateway verifizieren
+## 9. Gateway verifizieren
 
 ```bash
 docker compose logs -f openclaw-gateway

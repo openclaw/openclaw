@@ -5,13 +5,6 @@ read_when:
   - Pag-debug ng auth, bind modes, at connectivity ng Gateway
   - Pag-discover ng mga gateway sa pamamagitan ng Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:28Z
 ---
 
 # Gateway CLI
@@ -42,10 +35,10 @@ openclaw gateway run
 
 Mga tala:
 
-- Bilang default, tumatanggi ang Gateway na magsimula maliban kung naka-set ang `gateway.mode=local` sa `~/.openclaw/openclaw.json`. Gamitin ang `--allow-unconfigured` para sa ad-hoc/dev na mga run.
+- 14. Bilang default, tatanggi ang Gateway na magsimula maliban kung ang `gateway.mode=local` ay nakatakda sa `~/.openclaw/openclaw.json`. 15. Gamitin ang `--allow-unconfigured` para sa mga ad-hoc/dev na run.
 - Ang pag-bind lampas sa loopback nang walang auth ay naka-block (safety guardrail).
 - Ang `SIGUSR1` ay nagti-trigger ng in-process restart kapag authorized (i-enable ang `commands.restart` o gamitin ang gateway tool/config apply/update).
-- Ang mga handler na `SIGINT`/`SIGTERM` ay humihinto sa gateway process, pero hindi nila ibinabalik ang anumang custom terminal state. Kung binalot mo ang CLI gamit ang TUI o raw-mode input, ibalik ang terminal bago lumabas.
+- 16. Ang mga `SIGINT`/`SIGTERM` handler ay humihinto sa proseso ng gateway, ngunit hindi nila ibinabalik ang anumang custom na estado ng terminal. 17. Kung binabalot mo ang CLI gamit ang isang TUI o raw-mode input, ibalik ang terminal bago lumabas.
 
 ### Mga opsyon
 
@@ -85,8 +78,8 @@ Mga shared na opsyon (kung supported):
 - `--timeout <ms>`: timeout/budget (nag-iiba-iba kada command).
 - `--expect-final`: maghintay ng “final” na response (agent calls).
 
-Tandaan: kapag itinakda mo ang `--url`, hindi bumabalik ang CLI sa config o environment credentials.
-Ipasa ang `--token` o `--password` nang tahasan. Error ang kulang na tahasang credentials.
+18. Paalala: kapag itinakda mo ang `--url`, hindi na babalik ang CLI sa config o mga credential mula sa environment.
+19. Ipasa nang tahasan ang `--token` o `--password`. 20. Ang kakulangan ng tahasang credential ay isang error.
 
 ### `gateway health`
 
@@ -114,12 +107,12 @@ Mga opsyon:
 
 ### `gateway probe`
 
-Ang `gateway probe` ang “debug everything” na command. Palagi nitong pino-probe:
+21. Ang `gateway probe` ang utos na “i-debug ang lahat”. 22. Palagi nitong sinusuri:
 
 - ang naka-configure mong remote gateway (kung naka-set), at
 - ang localhost (loopback) **kahit naka-configure ang remote**.
 
-Kung maraming gateway ang naaabot, ipiniprint nito ang lahat. Sinusuportahan ang maraming gateway kapag gumagamit ka ng isolated profiles/ports (hal., rescue bot), pero karamihan ng install ay nagpapatakbo pa rin ng iisang gateway.
+23. Kung maraming gateway ang maaabot, ipi-print nito ang lahat ng mga iyon. 24. Sinusuportahan ang maraming gateway kapag gumagamit ka ng mga isolated na profile/port (hal., isang rescue bot), ngunit karamihan sa mga install ay nagpapatakbo pa rin ng iisang gateway.
 
 ```bash
 openclaw gateway probe
@@ -183,7 +176,7 @@ Tanging mga gateway na may naka-enable na Bonjour discovery (default) ang nag-a-
 Kasama sa Wide-Area discovery records ang (TXT):
 
 - `role` (hint ng role ng gateway)
-- `transport` (hint ng transport, hal. `gateway`)
+- 25. `transport` (transport hint, hal. `gateway`)
 - `gatewayPort` (WebSocket port, karaniwang `18789`)
 - `sshPort` (SSH port; default sa `22` kung wala)
 - `tailnetDns` (MagicDNS hostname, kapag available)

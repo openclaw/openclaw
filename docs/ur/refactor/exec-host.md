@@ -5,13 +5,6 @@ read_when:
   - نوڈ رنر + UI IPC نافذ کرتے وقت
   - exec ہوسٹ سکیورٹی موڈز اور سلیش کمانڈز شامل کرتے وقت
 title: "Exec Host ریفیکٹر"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:01Z
 ---
 
 # Exec host ریفیکٹر منصوبہ
@@ -258,7 +251,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ## آؤٹ پٹ حدود
 
 - مشترکہ stdout+stderr کو **200k** پر محدود کریں؛ ایونٹس کے لیے **ٹیل 20k** رکھیں۔
-- واضح لاحقے کے ساتھ تراشیں (مثلاً `"… (truncated)"`)۔
+- واضح لاحقے کے ساتھ مختصر کریں (مثلاً، "… (truncated)" )۔
 
 ## سلیش کمانڈز
 

@@ -4,13 +4,6 @@ read_when:
   - Web araması için Perplexity Sonar kullanmak istiyorsunuz
   - PERPLEXITY_API_KEY veya OpenRouter kurulumu yapmanız gerekiyor
 title: "Perplexity Sonar"
-x-i18n:
-  source_path: perplexity.md
-  source_hash: f6c9824ad9bebe38
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:24Z
 ---
 
 # Perplexity Sonar

@@ -4,13 +4,6 @@ read_when:
   - Ändring av beteende eller standardvärden för röstväckningsord
   - Tillägg av nya nodplattformar som behöver synk av väckningsord
 title: "Röstväckning"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:47Z
 ---
 
 # Röstväckning (Globala väckningsord)
@@ -42,7 +35,7 @@ Struktur:
 
 Noteringar:
 
-- Triggers normaliseras (trimmas, tomma tas bort). Tomma listor faller tillbaka till standardvärden.
+- Utlösare är normaliserade (trimmade tommar tappade). Tomma listor faller tillbaka till standardinställningar.
 - Gränser tillämpas av säkerhetsskäl (tak för antal/längd).
 
 ### Händelser

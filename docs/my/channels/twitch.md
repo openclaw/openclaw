@@ -3,18 +3,11 @@ summary: "Twitch ချတ် ဘော့၏ ဖွဲ့စည်းပြင�
 read_when:
   - OpenClaw အတွက် Twitch ချတ် ပေါင်းစည်းမှုကို တပ်ဆင်သည့်အခါ
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:18Z
 ---
 
 # Twitch (plugin)
 
-IRC ချိတ်ဆက်မှုမှတစ်ဆင့် Twitch ချတ်ကို ပံ့ပိုးပေးသည်။ OpenClaw သည် Twitch အသုံးပြုသူ (bot အကောင့်) အဖြစ် ချန်နယ်များတွင် မက်ဆေ့ချ်များကို လက်ခံခြင်းနှင့် ပို့ခြင်းအတွက် ချိတ်ဆက်သည်။
+Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
 
 ## Plugin လိုအပ်ချက်
 
@@ -48,7 +41,7 @@ openclaw plugins install ./extensions/twitch
    - နှစ်ခုလုံး သတ်မှတ်ထားပါက config သည် ဦးစားပေးအဖြစ် အသုံးပြုမည် (env fallback သည် default-account အတွက်သာ)။
 5. Gateway ကို စတင်ပါ။
 
-**⚠️ အရေးကြီး:** မခွင့်ပြုထားသော အသုံးပြုသူများက ဘော့ကို လှုံ့ဆော်မိခြင်းမှ ကာကွယ်ရန် access control (`allowFrom` သို့မဟုတ် `allowedRoles`) ကို ထည့်သွင်းပါ။ `requireMention` ၏ မူလတန်ဖိုးမှာ `true` ဖြစ်သည်။
+**⚠️ Important:** Add access control (`allowFrom` or `allowedRoles`) to prevent unauthorized users from triggering the bot. `requireMention` defaults to `true`.
 
 အနည်းဆုံး config:
 
@@ -84,7 +77,7 @@ openclaw plugins install ./extensions/twitch
 - `chat:read` နှင့် `chat:write` scope များကို ရွေးထားကြောင်း အတည်ပြုပါ
 - **Client ID** နှင့် **Access Token** ကို ကူးယူပါ
 
-App ကို လက်ဖြင့် မှတ်ပုံတင်ရန် မလိုအပ်ပါ။ Token များသည် နာရီအနည်းငယ်အကြာတွင် သက်တမ်းကုန်ပါသည်။
+No manual app registration needed. Tokens expire after several hours.
 
 ### Configure the bot
 
@@ -124,11 +117,11 @@ Env နှင့် config နှစ်ခုလုံး သတ်မှတ်�
 }
 ```
 
-ခိုင်မာသော allowlist အတွက် `allowFrom` ကို ဦးစားပေးအသုံးပြုပါ။ Role အခြေပြု ဝင်ရောက်ခွင့် လိုအပ်ပါက `allowedRoles` ကို အသုံးပြုနိုင်သည်။
+Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
 
 **ရရှိနိုင်သော roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`။
 
-**User ID ကို ဘာကြောင့် အသုံးပြုသလဲ?** Username များသည် ပြောင်းလဲနိုင်သောကြောင့် အတုလုပ်နိုင်ပါသည်။ User ID များသည် အမြဲတမ်းတည်ငြိမ်ပါသည်။
+**Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
 သင့် Twitch user ID ကို ရှာဖွေရန်: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (သင့် Twitch username ကို ID သို့ ပြောင်းရန်)
 
@@ -153,7 +146,7 @@ Env နှင့် config နှစ်ခုလုံး သတ်မှတ်�
 
 ## Multi-account support
 
-အကောင့်တစ်ခုချင်းစီအလိုက် token များဖြင့် `channels.twitch.accounts` ကို အသုံးပြုပါ။ ပုံမှန်ပုံစံအတွက် [`gateway/configuration`](/gateway/configuration) ကို ကြည့်ပါ။
+Use `channels.twitch.accounts` with per-account tokens. See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
 ဥပမာ (ဘော့အကောင့်တစ်ခုကို ချန်နယ်နှစ်ခုတွင် အသုံးပြုခြင်း)—
 
@@ -218,8 +211,8 @@ Env နှင့် config နှစ်ခုလုံး သတ်မှတ်�
 
 ### Role-based ဝင်ရောက်ခွင့် (အစားထိုး)
 
-`allowFrom` သည် ခိုင်မာသော allowlist ဖြစ်သည်။ သတ်မှတ်ထားပါက ထို user ID များသာ ခွင့်ပြုမည်။
-Role အခြေပြု ဝင်ရောက်ခွင့်ကို လိုအပ်ပါက `allowFrom` ကို မသတ်မှတ်ဘဲ `allowedRoles` ကို ဖွဲ့စည်းပြင်ဆင်ပါ—
+`allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+If you want role-based access, leave `allowFrom` unset and configure `allowedRoles` instead:
 
 ```json5
 {
@@ -237,7 +230,7 @@ Role အခြေပြု ဝင်ရောက်ခွင့်ကို လ�
 
 ### @mention လိုအပ်ချက်ကို ပိတ်ရန်
 
-မူလအားဖြင့် `requireMention` သည် `true` ဖြစ်သည်။ ပိတ်ပြီး မက်ဆေ့ချ်အားလုံးကို တုံ့ပြန်စေရန်—
+By default, `requireMention` is `true`. To disable and respond to all messages:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Access token refreshed for user 123456 (expires in 14400s)
 - `channels.twitch.accessToken` - OAuth access token (လွယ်ကူသော single-account config)
 - `channels.twitch.clientId` - Twitch Client ID (လွယ်ကူသော single-account config)
 - `channels.twitch.channel` - Join လုပ်မည့် ချန်နယ် (လွယ်ကူသော single-account config)
-- `channels.twitch.accounts.<accountName>` - Multi-account config (အထက်ပါ account field များအားလုံး)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
 
 အပြည့်အစုံ ဥပမာ—
 

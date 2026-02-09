@@ -5,13 +5,6 @@ read_when:
   - Vous devez activer ou desactiver les heartbeats
   - Vous souhaitez inspecter les entrees de presence systeme
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:07Z
 ---
 
 # `openclaw system`
@@ -34,7 +27,7 @@ Met en file d'attente un evenement systeme sur la session **main**. Le prochain 
 comme une ligne `System:` dans le prompt. Utilisez `--mode now` pour declencher le heartbeat
 immediatement ; `next-heartbeat` attend le prochain tick planifie.
 
-Options :
+Drapeaux :
 
 - `--text <text>` : texte d'evenement systeme requis.
 - `--mode <mode>` : `now` ou `next-heartbeat` (par defaut).
@@ -48,7 +41,7 @@ Controles des heartbeats :
 - `enable` : reactiver les heartbeats (utilisez ceci s'ils etaient desactives).
 - `disable` : mettre en pause les heartbeats.
 
-Options :
+Drapeaux :
 
 - `--json` : sortie lisible par machine.
 
@@ -57,7 +50,7 @@ Options :
 Liste les entrees de presence systeme actuelles connues par la Gateway (passerelle) (noeuds,
 instances et lignes de statut similaires).
 
-Options :
+Drapeaux :
 
 - `--json` : sortie lisible par machine.
 

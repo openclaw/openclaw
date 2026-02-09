@@ -4,13 +4,6 @@ read_when:
   - التقاط سجلات macOS أو التحقيق في تسجيل البيانات الخاصة
   - تصحيح أخطاء تنشيط الصوت ودورة حياة الجلسة
 title: "تسجيل macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:31Z
 ---
 
 # التسجيل (macOS)

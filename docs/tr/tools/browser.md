@@ -1,17 +1,10 @@
 ---
 summary: "Entegre tarayıcı kontrol hizmeti + eylem komutları"
 read_when:
-  - Ajan kontrollü tarayıcı otomasyonu eklerken
+  - 13. Ajan kontrollü tarayıcı otomasyonu ekleme
   - OpenClaw’ın kendi Chrome’unuzla neden etkileşime girdiğini hata ayıklarken
   - macOS uygulamasında tarayıcı ayarları ve yaşam döngüsünü uygularken
 title: "Tarayıcı (OpenClaw tarafından yönetilen)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:40Z
 ---
 
 # Tarayıcı (openclaw-managed)
@@ -153,7 +146,8 @@ ortam değişkenlerini veya gizli anahtar yöneticilerini tercih edin.
 
 Tarayıcınızın bulunduğu makinede bir **node host** çalıştırırsanız, OpenClaw
 herhangi ek tarayıcı yapılandırması olmadan tarayıcı araç çağrılarını otomatik olarak
-o node’a yönlendirebilir. Bu, uzak Gateway’ler için varsayılan yoldur.
+o node’a yönlendirebilir.
+Bu, uzak Gateway’ler için varsayılan yoldur.
 
 Notlar:
 
@@ -328,7 +322,8 @@ Tüm uç noktalar `?profile=<name>` kabul eder.
 Bazı özellikler (gezinti/eylem/AI anlık görüntü/rol anlık görüntüsü, öğe ekran görüntüleri, PDF)
 Playwright gerektirir. Playwright yüklü değilse bu uç noktalar net bir 501
 hatası döndürür. ARIA anlık görüntüleri ve temel ekran görüntüleri openclaw-managed Chrome için
-çalışmaya devam eder. Chrome uzantı rölesi sürücüsü için ARIA anlık görüntüleri ve ekran görüntüleri Playwright gerektirir.
+çalışmaya devam eder.
+Chrome uzantı rölesi sürücüsü için ARIA anlık görüntüleri ve ekran görüntüleri Playwright gerektirir.
 
 `Playwright is not available in this gateway build` görürseniz, tam
 Playwright paketini (`playwright-core` değil) yükleyin ve gateway’i yeniden başlatın
@@ -422,7 +417,7 @@ Eylemler:
 - `openclaw browser trace start`
 - `openclaw browser trace stop`
 
-Durum:
+14. Durum:
 
 - `openclaw browser cookies`
 - `openclaw browser cookies set session abc123 --url "https://example.com"`
@@ -457,7 +452,7 @@ Notlar:
 - `click`/`type`/vb., `snapshot`’den bir `ref` gerektirir (sayısal `12` veya rol referansı `e12`).
   CSS seçicileri eylemler için bilinçli olarak desteklenmez.
 
-## Anlık görüntüler ve referanslar
+## 15. Anlık görüntüler ve referanslar
 
 OpenClaw iki “anlık görüntü” stilini destekler:
 
@@ -477,7 +472,7 @@ Referans davranışı:
 - Referanslar **gezintiler arasında kararlı değildir**; bir şey başarısız olursa `snapshot`’ü yeniden çalıştırın ve yeni bir referans kullanın.
 - Rol anlık görüntüsü `--frame` ile alındıysa, rol referansları bir sonraki rol anlık görüntüsüne kadar o iframe’e kapsamlıdır.
 
-## Bekleme güçlendirmeleri
+## 16. Bekleme güçlendirmeleri
 
 Yalnızca zaman/metin değil, daha fazlasını bekleyebilirsiniz:
 
@@ -531,7 +526,7 @@ openclaw browser cookies --json
 JSON’daki rol anlık görüntüleri, araçların yük boyutu ve yoğunluğu hakkında akıl yürütebilmesi için
 `refs`’a ek olarak küçük bir `stats` bloğu (satırlar/karakterler/referanslar/etkileşimli) içerir.
 
-## Durum ve ortam ayarları
+## 17. Durum ve ortam ayar düğmeleri
 
 Bunlar “siteyi X gibi davranmaya zorla” iş akışları için kullanışlıdır:
 
@@ -551,8 +546,7 @@ Bunlar “siteyi X gibi davranmaya zorla” iş akışları için kullanışlıd
 
 - openclaw tarayıcı profili oturum açılmış oturumlar içerebilir; hassas olarak değerlendirin.
 - `browser act kind=evaluate` / `openclaw browser evaluate` ve `wait --fn`,
-  sayfa bağlamında rastgele JavaScript çalıştırır. Prompt injection bunu yönlendirebilir.
-  İhtiyacınız yoksa `browser.evaluateEnabled=false` ile devre dışı bırakın.
+  sayfa bağlamında rastgele JavaScript çalıştırır. Prompt injection bunu yönlendirebilir. İhtiyacınız yoksa `browser.evaluateEnabled=false` ile devre dışı bırakın.
 - Girişler ve anti-bot notları (X/Twitter vb.) için [Tarayıcı girişi + X/Twitter gönderimi](/tools/browser-login) bölümüne bakın.
 - Gateway/node host’u özel tutun (loopback veya tailnet-only).
 - Uzak CDP uç noktaları güçlüdür; tünelleyin ve koruyun.
@@ -568,7 +562,7 @@ Ajan, tarayıcı otomasyonu için **tek bir araç** alır:
 
 - `browser` — durum/başlat/durdur/sekme/aç/odakla/kapat/anlık görüntü/ekran görüntüsü/gezinti/eylem
 
-Eşlemesi:
+18. Nasıl eşlendiği:
 
 - `browser snapshot`, kararlı bir UI ağacı (AI veya ARIA) döndürür.
 - `browser act`, tıklama/yazma/sürükleme/seçme için anlık görüntü `ref` kimliklerini kullanır.

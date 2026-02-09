@@ -4,18 +4,11 @@ read_when:
   - Eklenti/uzantı eklerken veya değiştirirken
   - Eklenti kurulum veya yükleme kurallarını belgelendirirken
 title: "Eklentiler"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:26Z
 ---
 
 # Eklentiler (Uzantılar)
 
-## Hızlı başlangıç (eklentilere yeni misiniz?)
+## 38. Hızlı başlangıç (eklentilere yeni misiniz?)
 
 Bir eklenti, OpenClaw’u ek
 özelliklerle (komutlar, araçlar ve Gateway RPC) genişleten **küçük bir kod modülüdür**.
@@ -26,7 +19,7 @@ tutmak istediğinizde) eklentileri kullanırsınız.
 
 Hızlı yol:
 
-1. Hâlihazırda yüklü olanları görün:
+1. 39. Zaten yüklü olanları görün:
 
 ```bash
 openclaw plugins list
@@ -42,7 +35,7 @@ openclaw plugins install @openclaw/voice-call
 
 Somut bir örnek eklenti için [Voice Call](/plugins/voice-call) sayfasına bakın.
 
-## Mevcut eklentiler (resmî)
+## 40. Mevcut eklentiler (resmi)
 
 - Microsoft Teams, 2026.1.15 itibarıyla yalnızca eklenti olarak sunulmaktadır; Teams kullanıyorsanız `@openclaw/msteams`’yi kurun.
 - Memory (Core) — paketli bellek arama eklentisi (`plugins.slots.memory` ile varsayılan olarak etkindir)
@@ -58,7 +51,9 @@ Somut bir örnek eklenti için [Voice Call](/plugins/voice-call) sayfasına bak�
 - Qwen OAuth (sağlayıcı kimlik doğrulaması) — `qwen-portal-auth` olarak paketlidir (varsayılan olarak devre dışı)
 - Copilot Proxy (sağlayıcı kimlik doğrulaması) — yerel VS Code Copilot Proxy köprüsü; yerleşik `github-copilot` cihaz oturum açmadan ayrıdır (paketli, varsayılan olarak devre dışı)
 
-OpenClaw eklentileri, jiti aracılığıyla çalışma zamanında yüklenen **TypeScript modülleridir**. **Yapılandırma doğrulaması eklenti kodunu çalıştırmaz**; bunun yerine eklenti bildirimi (manifest) ve JSON Schema kullanır. Bkz. [Eklenti bildirimi](/plugins/manifest).
+OpenClaw eklentileri, jiti aracılığıyla çalışma zamanında yüklenen **TypeScript modülleridir**. 41. **Yapılandırma
+doğrulaması eklenti kodunu çalıştırmaz**; bunun yerine eklenti bildirimi ve JSON
+Şemasını kullanır. [Eklenti bildirimi](/plugins/manifest).
 
 Eklentiler şunları kaydedebilir:
 
@@ -113,8 +108,7 @@ OpenClaw, şu sırayla tarar:
 
 - `<openclaw>/extensions/*`
 
-Paketli eklentiler, `plugins.entries.<id>.enabled` veya `openclaw plugins enable <id>` ile açıkça etkinleştirilmelidir.
-Kurulu eklentiler varsayılan olarak etkindir, ancak aynı şekilde devre dışı bırakılabilir.
+Paketli eklentiler, `plugins.entries.<id>.enabled` veya `openclaw plugins enable <id>` ile açıkça etkinleştirilmelidir. Kurulu eklentiler varsayılan olarak etkindir, ancak aynı şekilde devre dışı bırakılabilir.
 
 Her eklenti kök dizininde bir `openclaw.plugin.json` dosyası bulunmalıdır. Bir yol bir dosyayı işaret ediyorsa, eklenti kökü dosyanın dizinidir ve bildirimi içermelidir.
 
@@ -289,12 +283,12 @@ Eklentiler ayrıca kendi üst düzey komutlarını da kaydedebilir (örnek: `ope
 
 ## Eklenti API’si (genel bakış)
 
-Eklentiler aşağıdakilerden birini dışa aktarır:
+42. Eklentiler şunlardan birini dışa aktarır:
 
 - Bir fonksiyon: `(api) => { ... }`
 - Bir nesne: `{ id, name, configSchema, register(api) { ... } }`
 
-## Eklenti kancaları
+## 43. Eklenti kancaları
 
 Eklentiler kancalarla birlikte gönderilebilir ve bunları çalışma zamanında kaydedebilir. Bu, ayrı bir kanca paketi kurulumuna gerek kalmadan olay güdümlü otomasyon sağlar.
 
@@ -435,7 +429,7 @@ Model sağlayıcı belgeleri `/providers/*` altında yer alır.
 - `gateway` (başlat/durdur/giriş), `mentions`, `threading`, `streaming`
 - `actions` (mesaj eylemleri), `commands` (yerel komut davranışı)
 
-5. Kanalı eklentinizde kaydedin
+5. 44. Eklentinizde kanalı kaydedin
 
 - `api.registerChannel({ plugin })`
 
@@ -453,7 +447,7 @@ Asgari yapılandırma örneği:
 }
 ```
 
-Asgari kanal eklentisi (yalnızca giden):
+45. Minimal kanal eklentisi (yalnızca giden):
 
 ```ts
 const plugin = {
@@ -536,7 +530,7 @@ export default function (api) {
 }
 ```
 
-Komut işleyici bağlamı:
+46. Komut işleyici bağlamı:
 
 - `senderId`: Gönderenin kimliği (varsa)
 - `channel`: Komutun gönderildiği kanal
@@ -590,7 +584,7 @@ export default function (api) {
 }
 ```
 
-## Adlandırma kuralları
+## 47. Adlandırma kuralları
 
 - Gateway yöntemleri: `pluginId.action` (örnek: `voicecall.status`)
 - Araçlar: `snake_case` (örnek: `voice_call`)

@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification d’outils d’agent
   - Retrait ou modification des Skills `openclaw-*`
 title: "Outils"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 332c319afb6e65ad
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:42Z
 ---
 
 # Tools (OpenClaw)
@@ -363,7 +356,7 @@ Analyser une image avec le modèle d’image configuré.
 Paramètres principaux :
 
 - `image` (chemin ou URL requis)
-- `prompt` (optionnel ; par défaut « Describe the image. »)
+- `prompt` (optionnel ; par défaut « Describe the image. »)
 - `model` (surcharge optionnelle)
 - `maxBytesMb` (plafond de taille optionnel)
 
@@ -496,7 +489,7 @@ Rendu Canvas :
 2. `a2ui_push` (optionnel)
 3. `snapshot`
 
-Ciblage de nœud :
+Ciblage des nœuds:
 
 1. `nodes` → `status`
 2. `describe` sur le nœud choisi

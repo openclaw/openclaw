@@ -5,19 +5,12 @@ read_when:
   - Du behöver granska nycklar, kostnader och synlighet för användning
   - Du förklarar rapportering för /status eller /usage
 title: "API-användning och kostnader"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 908bfc17811b8f4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:24Z
 ---
 
 # API-användning och kostnader
 
-Detta dokument listar **funktioner som kan anropa API-nycklar** och var deras kostnader visas. Det fokuserar på
-OpenClaw-funktioner som kan generera leverantörsanvändning eller betalda API-anrop.
+Den här doc listar **funktioner som kan åberopa API-nycklar** och var deras kostnader dyker upp. Den fokuserar på
+OpenClaw funktioner som kan generera leverantörsanvändning eller betalda API-samtal.
 
 ## Var kostnader visas (chatt + CLI)
 
@@ -46,20 +39,20 @@ OpenClaw kan hämta autentiseringsuppgifter från:
 - **Miljövariabler** (t.ex. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
 - **Konfig** (`models.providers.*.apiKey`, `tools.web.search.*`, `tools.web.fetch.firecrawl.*`,
   `memorySearch.*`, `talk.apiKey`).
-- **Skills** (`skills.entries.<name>.apiKey`) som kan exportera nycklar till skill-processens miljö.
+- **Skickligheter** (`skills.entries.<name>.apiKey`) som kan exportera nycklar till färdighetsprocessen env.
 
 ## Funktioner som kan använda nycklar
 
-### 1) Kärnmodellens svar (chatt + verktyg)
+### 1. Kärnmodellens svar (chatt + verktyg)
 
-Varje svar eller verktygsanrop använder den **aktuella modellleverantören** (OpenAI, Anthropic m.fl.). Detta är den
-primära källan till användning och kostnad.
+Varje svars- eller verktygssamtal använder **nuvarande modellleverantör** (OpenAI, Anthropic, etc). Detta är
+primära källa till användning och kostnad.
 
 Se [Modeller](/providers/models) för prisinställningar och [Tokenanvändning och kostnader](/reference/token-use) för visning.
 
-### 2) Medieförståelse (ljud/bild/video)
+### 2. Medieförståelse (ljud/bild/video)
 
-Inkommande media kan sammanfattas/transkriberas innan svaret körs. Detta använder modell-/leverantörs-API:er.
+Inkommande media kan sammanfattas/transkriberas innan svaret körs. Detta använder modell/leverantör API:er.
 
 - Ljud: OpenAI / Groq / Deepgram (nu **autoaktiverat** när nycklar finns).
 - Bild: OpenAI / Anthropic / Google.
@@ -67,7 +60,7 @@ Inkommande media kan sammanfattas/transkriberas innan svaret körs. Detta använ
 
 Se [Medieförståelse](/nodes/media-understanding).
 
-### 3) Minnesinbäddningar + semantisk sökning
+### 3. Minnesinbäddningar + semantisk sökning
 
 Semantisk minnessökning använder **inbäddnings-API:er** när den är konfigurerad för fjärrleverantörer:
 
@@ -80,7 +73,7 @@ Du kan hålla det lokalt med `memorySearch.provider = "local"` (ingen API-använ
 
 Se [Minne](/concepts/memory).
 
-### 4) Verktyg för webbsökning (Brave / Perplexity via OpenRouter)
+### 4. Verktyg för webbsökning (Brave / Perplexity via OpenRouter)
 
 `web_search` använder API-nycklar och kan medföra användningsavgifter:
 
@@ -95,7 +88,7 @@ Se [Minne](/concepts/memory).
 
 Se [Webbverktyg](/tools/web).
 
-### 5) Verktyg för webbhämtning (Firecrawl)
+### 5. Verktyg för webbhämtning (Firecrawl)
 
 `web_fetch` kan anropa **Firecrawl** när en API-nyckel finns:
 
@@ -105,31 +98,31 @@ Om Firecrawl inte är konfigurerat faller verktyget tillbaka till direkt hämtni
 
 Se [Webbverktyg](/tools/web).
 
-### 6) Ögonblicksbilder av leverantörsanvändning (status/hälsa)
+### 6. Ögonblicksbilder av leverantörsanvändning (status/hälsa)
 
-Vissa statuskommandon anropar **leverantörers användningsendpoints** för att visa kvotfönster eller autentiseringshälsa.
-Dessa är vanligtvis lågvolymanrop men träffar ändå leverantörs-API:er:
+Vissa statuskommandon anropa **leverantörs användnings slutpunkter** för att visa kvotfönster eller auth hälsa.
+Dessa är typiskt låga volymer samtal men ändå slå leverantör API:
 
 - `openclaw status --usage`
 - `openclaw models status --json`
 
 Se [Models CLI](/cli/models).
 
-### 7) Sammanfattning för kompakteringsskydd
+### 7. Sammanfattning för kompakteringsskydd
 
 Kompakteringsskyddet kan sammanfatta sessionshistorik med **den aktuella modellen**, vilket
 anropar leverantörs-API:er när det körs.
 
 Se [Sessionshantering + kompaktering](/reference/session-management-compaction).
 
-### 8) Modellskanning/probing
+### 8. Modellskanning/probing
 
 `openclaw models scan` kan sondera OpenRouter-modeller och använder `OPENROUTER_API_KEY` när
 sondering är aktiverad.
 
 Se [Models CLI](/cli/models).
 
-### 9) Talk (tal)
+### 9. Talk (tal)
 
 Talk-läge kan anropa **ElevenLabs** när det är konfigurerat:
 
@@ -137,9 +130,9 @@ Talk-läge kan anropa **ElevenLabs** när det är konfigurerat:
 
 Se [Talk-läge](/nodes/talk).
 
-### 10) Skills (tredjeparts-API:er)
+### 10. Skills (tredjeparts-API:er)
 
-Skills kan lagra `apiKey` i `skills.entries.<name>.apiKey`. Om en skill använder den nyckeln för externa
-API:er kan det medföra kostnader enligt skillens leverantör.
+Färdigheter kan lagra `apiKey` i `skills.entries.<name>.apiKey`. Om en färdighet använder den nyckeln för externa
+API:er, kan det medföra kostnader enligt kompetensleverantören.
 
 Se [Skills](/tools/skills).

@@ -2,13 +2,6 @@
 summary: "Rituel de premier lancement pour les nouveaux agents"
 read_when:
   - Démarrage manuel d’un espace de travail
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:38Z
 ---
 
 # BOOTSTRAP.md - Bonjour, le monde

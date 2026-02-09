@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: OpenClaw’ı Fly.io üzerinde dağıtın
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 # Fly.io Dağıtımı
@@ -44,7 +37,7 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **İpucu:** Size yakın bir bölge seçin. Yaygın seçenekler: `lhr` (Londra), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) fly.toml yapılandırması
+## 2. fly.toml yapılandırması
 
 Uygulama adınız ve gereksinimlerinizle eşleşecek şekilde `fly.toml` dosyasını düzenleyin.
 
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Ana ayarlar:**
 
-| Ayar                           | Neden                                                                                     |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `--bind lan`                   | Fly proxy’sinin gateway’e erişebilmesi için `0.0.0.0`’e bağlanır                          |
-| `--allow-unconfigured`         | Bir yapılandırma dosyası olmadan başlar (sonrasında oluşturacaksınız)                     |
-| `internal_port = 3000`         | Fly sağlık kontrolleri için `--port 3000` (veya `OPENCLAW_GATEWAY_PORT`) ile eşleşmelidir |
-| `memory = "2048mb"`            | 512MB çok küçüktür; 2GB önerilir                                                          |
-| `OPENCLAW_STATE_DIR = "/data"` | Durumu birimde kalıcı kılar                                                               |
+| Ayar                           | Neden                                                                                                                   |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Fly proxy’sinin gateway’e erişebilmesi için `0.0.0.0`’e bağlanır                                                        |
+| `--allow-unconfigured`         | Bir yapılandırma dosyası olmadan başlar (sonrasında oluşturacaksınız)                                |
+| `internal_port = 3000`         | Fly sağlık kontrolleri için `--port 3000` (veya `OPENCLAW_GATEWAY_PORT`) ile eşleşmelidir            |
+| `memory = "2048mb"`            | 512MB çok küçüktür; 2GB önerilir                                                                                        |
+| `OPENCLAW_STATE_DIR = "/data"` | **Tüm API anahtarları ve token’lar için yapılandırma dosyası yerine ortam değişkenlerini tercih edin.** |
 
-## 3) Gizli anahtarları ayarlayın
+## 3. Gizli anahtarları ayarlayın
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,9 +107,9 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - Loopback olmayan bağlamalar (`--bind lan`) güvenlik için `OPENCLAW_GATEWAY_TOKEN` gerektirir.
 - Bu belirteçleri parola gibi ele alın.
-- **Tüm API anahtarları ve belirteçler için yapılandırma dosyası yerine ortam değişkenlerini tercih edin.** Bu, sırların yanlışlıkla açığa çıkabileceği veya günlüğe alınabileceği `openclaw.json` dışında kalmasını sağlar.
+- Bu, sırların kazara açığa çıkabileceği veya günlüklere yazılabileceği `openclaw.json` dosyasından uzak tutulmasını sağlar. Günlükler
 
-## 4) Dağıtım
+## 4. Dağıtım
 
 ```bash
 fly deploy
@@ -138,7 +131,7 @@ fly logs
 [discord] logged in to discord as xxx
 ```
 
-## 5) Yapılandırma dosyasını oluşturun
+## 5. Yapılandırma dosyasını oluşturun
 
 Uygun bir yapılandırma oluşturmak için makineye SSH ile bağlanın:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Gateway’e erişim
+## 6. Gateway’e erişim
 
 ### Control UI
 
@@ -232,7 +225,7 @@ Veya `https://my-openclaw.fly.dev/` adresini ziyaret edin.
 
 Kimlik doğrulamak için gateway belirtecinizi (`OPENCLAW_GATEWAY_TOKEN`’ten alınan) yapıştırın.
 
-### Günlükler
+### Durum Kalıcı Değil
 
 ```bash
 fly logs              # Live logs
@@ -322,7 +315,7 @@ fly sftp shell
 fly ssh console --command "rm /data/openclaw.json"
 ```
 
-### Durum Kalıcı Değil
+### herkese açık maruz kalma olmadan:
 
 Yeniden başlatmadan sonra kimlik bilgilerini veya oturumları kaybediyorsanız, durum dizini konteyner dosya sistemine yazıyordur.
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### Özel dağıtımda webhooks
 
-Genel erişim olmadan webhook geri çağrıları (Twilio, Telnyx vb.) gerekiyorsa:
+Genel erişim olmadan webhook geri çağrıları (Twilio, Telnyx vb.) gerekiyorsa: Kalıcı veriler `/data` konumundaki hacimde bulunur
 
 1. **ngrok tüneli** – ngrok’u konteyner içinde veya yan bileşen olarak çalıştırın
 2. **Tailscale Funnel** – Belirli yolları Tailscale üzerinden açığa çıkarın
@@ -480,7 +473,7 @@ ngrok tüneli konteyner içinde çalışır ve Fly uygulamasını açığa çık
 - Fly.io **x86 mimarisi** kullanır (ARM değil)
 - Dockerfile her iki mimariyle de uyumludur
 - WhatsApp/Telegram başlangıcı için `fly ssh console` kullanın
-- Kalıcı veriler birimde `/data` konumunda bulunur
+- Tür
 - Signal, Java + signal-cli gerektirir; özel bir imaj kullanın ve belleği 2GB+ tutun.
 
 ## Maliyet

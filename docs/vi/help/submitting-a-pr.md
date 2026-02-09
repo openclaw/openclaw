@@ -1,21 +1,14 @@
 ---
 summary: "Cách gửi một PR có tín hiệu cao"
 title: "Gửi PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:11Z
 ---
 
-PR tốt thì dễ review: người review có thể nhanh chóng hiểu mục đích, xác minh hành vi và triển khai thay đổi một cách an toàn. Hướng dẫn này tập trung vào cách gửi PR ngắn gọn, giàu tín hiệu cho cả con người và LLM review.
+PR tốt thì dễ review: reviewer nên nhanh chóng hiểu được mục đích, xác minh hành vi, và merge thay đổi một cách an toàn. Hướng dẫn này bao gồm các submission ngắn gọn, nhiều tín hiệu cho cả người và LLM review.
 
 ## Điều gì tạo nên một PR tốt
 
 - [ ] Giải thích vấn đề, vì sao nó quan trọng và thay đổi được đề xuất.
-- [ ] Giữ phạm vi thay đổi tập trung. Tránh refactor diện rộng.
+- [ ] Các vấn đề rõ ràng, súc tích giúp tăng tốc việc chẩn đoán và sửa lỗi. Tránh các refactor quá rộng.
 - [ ] Tóm tắt các thay đổi có thể thấy với người dùng/cấu hình/giá trị mặc định.
 - [ ] Liệt kê phạm vi test, các test bị bỏ qua và lý do.
 - [ ] Thêm bằng chứng: log, ảnh chụp màn hình hoặc bản ghi (UI/UX).
@@ -25,7 +18,7 @@ PR tốt thì dễ review: người review có thể nhanh chóng hiểu mục �
 - [ ] Dựa trên bằng chứng hoặc quan sát để đưa ra nhận định.
 - [ ] Tiêu đề tốt: động từ + phạm vi + kết quả (ví dụ: `Docs: add PR and issue templates`).
 
-Hãy ngắn gọn; review súc tích > ngữ pháp. Bỏ qua mọi mục không áp dụng.
+Hãy ngắn gọn; review súc tích > ngữ pháp. Bỏ qua bất kỳ phần nào không áp dụng.
 
 ### Lệnh xác thực cơ bản (chạy/sửa lỗi cho thay đổi của bạn)
 
@@ -53,7 +46,7 @@ Hãy ngắn gọn; review súc tích > ngữ pháp. Bỏ qua mọi mục không 
 - [ ] Perf: Thêm số liệu trước/sau và cách đo.
 - [ ] UX/UI: Ảnh chụp màn hình/video, ghi chú tác động tới khả năng tiếp cận.
 - [ ] Infra/Build: Môi trường/xác thực.
-- [ ] Security: Tóm tắt rủi ro, cách tái hiện, xác minh, không dữ liệu nhạy cảm. Chỉ nêu nhận định có căn cứ.
+- [ ] Bảo mật: Tóm tắt rủi ro, cách tái hiện, xác minh, không có dữ liệu nhạy cảm. Chỉ đưa ra các khẳng định có cơ sở.
 
 ## Checklist
 

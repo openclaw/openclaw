@@ -4,13 +4,6 @@ read_when:
   - إعداد جهاز جديد
   - تريد «الأحدث والأفضل» دون كسر إعدادك الشخصي
 title: "الإعداد"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:53Z
 ---
 
 # الإعداد
@@ -22,7 +15,7 @@ x-i18n:
 
 آخر تحديث: 2026-01-01
 
-## ملخص سريع
+## TL;DR
 
 - **التخصيص خارج المستودع:** `~/.openclaw/workspace` (مساحة العمل) + `~/.openclaw/openclaw.json` (التهيئة).
 - **سير عمل مستقر:** ثبّت تطبيق macOS؛ ودعه يشغّل Gateway (البوابة) المضمّن.
@@ -41,7 +34,7 @@ x-i18n:
 - **التهيئة:** `~/.openclaw/openclaw.json` (JSON/JSON5-ish)
 - **مساحة العمل:** `~/.openclaw/workspace` (Skills، مطالبات، ذكريات؛ اجعلها مستودع git خاصًا)
 
-التهيئة الأولية مرة واحدة:
+Bootstrap مرة:
 
 ```bash
 openclaw setup
@@ -55,7 +48,7 @@ openclaw setup
 
 إذا لم يكن لديك تثبيت عام بعد، فشغّله عبر `pnpm openclaw setup`.
 
-## تشغيل Gateway (البوابة) من هذا المستودع
+## تشغيل البوابة من هذا المستودع
 
 بعد `pnpm build`، يمكنك تشغيل CLI المُعبّأ مباشرةً:
 
@@ -74,7 +67,7 @@ node openclaw.mjs gateway --port 18789 --verbose
 openclaw channels login
 ```
 
-5. تحقّق سريع:
+5. التحقق من المتعة:
 
 ```bash
 openclaw health
@@ -88,7 +81,7 @@ openclaw health
 
 الهدف: العمل على Gateway المكتوب بـ TypeScript، الحصول على إعادة تحميل فورية، والإبقاء على واجهة تطبيق macOS متصلة.
 
-### 0) (اختياري) تشغيل تطبيق macOS من المصدر أيضًا
+### 0. (اختياري) تشغيل تطبيق macOS من المصدر أيضًا
 
 إذا أردت أيضًا تشغيل تطبيق macOS على أحدث نسخة:
 
@@ -96,7 +89,7 @@ openclaw health
 ./scripts/restart-mac.sh
 ```
 
-### 1) بدء Gateway التطويري
+### 1. بدء Gateway التطويري
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 يشغّل `gateway:watch` البوابة في وضع المراقبة ويعيد التحميل عند تغييرات TypeScript.
 
-### 2) توجيه تطبيق macOS إلى Gateway (البوابة) التي تعمل لديك
+### 2. توجيه تطبيق macOS إلى Gateway (البوابة) التي تعمل لديك
 
 في **OpenClaw.app**:
 
 - وضع الاتصال: **Local**
   سيتصل التطبيق بالبوابة العاملة على المنفذ المُهيّأ.
 
-### 3) التحقق
+### 3. التحقق
 
 - يجب أن تعرض حالة Gateway داخل التطبيق **«Using existing gateway …»**
 - أو عبر CLI:
@@ -121,7 +114,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### أخطاء شائعة
+### المسدسات الشائعة
 
 - **منفذ خاطئ:** افتراضي WS لـ Gateway هو `ws://127.0.0.1:18789`؛ احرص على أن يكون التطبيق وCLI على المنفذ نفسه.
 - **أين تُحفظ الحالة:**
@@ -135,7 +128,7 @@ openclaw health
 
 - **WhatsApp**: `~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
 - **رمز بوت Telegram**: التهيئة/متغيرات البيئة أو `channels.telegram.tokenFile`
-- **رمز بوت Discord**: التهيئة/متغيرات البيئة (ملف الرمز غير مدعوم بعد)
+- **رمز Discord bot**: تهيئة/متغيرات البيئة (ملف الرمز غير مدعوم بعد)
 - **رموز Slack**: التهيئة/متغيرات البيئة (`channels.slack.*`)
 - **قوائم السماح بالاقتران**: `~/.openclaw/credentials/<channel>-allowFrom.json`
 - **ملفات تعريف مصادقة النماذج**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`

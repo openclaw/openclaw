@@ -4,13 +4,6 @@ read_when:
   - Diagnose der Rotation von Auth‑Profilen, Cooldowns oder des Modell‑Fallback‑Verhaltens
   - Aktualisierung von Failover‑Regeln für Auth‑Profile oder Modelle
 title: "Modell‑Failover"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:58Z
 ---
 
 # Modell‑Failover
@@ -32,7 +25,7 @@ OpenClaw verwendet **Auth‑Profile** sowohl für API‑Schlüssel als auch für
 
 Mehr Details: [/concepts/oauth](/concepts/oauth)
 
-Typen von Zugangsdaten:
+Anmeldedatentypen:
 
 - `type: "api_key"` → `{ provider, key }`
 - `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` für einige Anbieter)

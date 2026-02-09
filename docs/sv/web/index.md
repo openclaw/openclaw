@@ -4,13 +4,6 @@ read_when:
   - Du vill komma åt Gateway via Tailscale
   - Du vill använda webbläsarens kontroll-UI och redigera konfiguration
 title: "Webb"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:51Z
 ---
 
 # Webb (Gateway)
@@ -18,20 +11,20 @@ x-i18n:
 Gatewayn tillhandahåller ett litet **kontroll-UI i webbläsaren** (Vite + Lit) från samma port som Gateway WebSocket:
 
 - standard: `http://<host>:18789/`
-- valfri prefix: ställ in `gateway.controlUi.basePath` (t.ex. `/openclaw`)
+- valfritt prefix: sätt `gateway.controlUi.basePath` (t.ex. `/openclaw`)
 
-Funktioner finns i [Control UI](/web/control-ui).
-Den här sidan fokuserar på bindningslägen, säkerhet och webbriktade ytor.
+Egenskaper lever i [Control UI](/web/control-ui).
+Denna sida fokuserar på binda lägen, säkerhet och webb-vända ytor.
 
 ## Webhooks
 
-När `hooks.enabled=true`, exponerar Gatewayn även en liten webhook-endpoint på samma HTTP-server.
-Se [Gateway-konfiguration](/gateway/configuration) → `hooks` för autentisering + payloads.
+När `hooks.enabled=true`, exponerar Gateway också en liten webhook slutpunkt på samma HTTP-server.
+Se [Gateway konfiguration](/gateway/configuration) → `hooks` för auth + nyttolaster.
 
 ## Konfig (på som standard)
 
-Kontroll-UI:t är **aktiverat som standard** när tillgångar finns (`dist/control-ui`).
-Du kan styra det via konfiguration:
+Kontrollgränssnittet är **aktiverat som standard** när tillgångar finns (`dist/control-ui`).
+Du kan styra den via config:
 
 ```json5
 {
@@ -108,15 +101,15 @@ openclaw gateway
 - UI:t skickar `connect.params.auth.token` eller `connect.params.auth.password`.
 - Kontroll-UI:t skickar anti-clickjacking-huvuden och accepterar endast webbläsarens
   websocket-anslutningar från samma ursprung om inte `gateway.controlUi.allowedOrigins` är satt.
-- Med Serve kan Tailscale-identitetshuvuden uppfylla autentisering när
-  `gateway.auth.allowTailscale` är `true` (ingen token/lösenord krävs). Sätt
-  `gateway.auth.allowTailscale: false` för att kräva explicita autentiseringsuppgifter. Se
-  [Tailscale](/gateway/tailscale) och [Säkerhet](/gateway/security).
+- Med Serve kan Tailscale identitetshuvuden tillfredsställa auth när
+  `gateway.auth.allowTailscale` är `true` (ingen token/lösenord krävs). Ange
+  `gateway.auth.allowTailscale: false` för att kräva explicita referenser. Se
+  [Tailscale](/gateway/tailscale) och [Security](/gateway/security).
 - `gateway.tailscale.mode: "funnel"` kräver `gateway.auth.mode: "password"` (delat lösenord).
 
 ## Bygga UI:t
 
-Gatewayn serverar statiska filer från `dist/control-ui`. Bygg dem med:
+Gateway serverar statiska filer från `dist/control-ui`. Bygg dem med:
 
 ```bash
 pnpm ui:build # auto-installs UI deps on first run

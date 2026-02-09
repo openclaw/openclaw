@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการใช้ OpenCode Zen เพื่อเข้าถึงโมเดล
   - คุณต้องการรายการโมเดลที่คัดสรรซึ่งเหมาะกับงานเขียนโค้ด
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:34Z
 ---
 
 # OpenCode Zen
@@ -18,6 +11,8 @@ x-i18n:
 OpenCode Zen คือ**รายการโมเดลที่คัดสรร**ซึ่งทีม OpenCode แนะนำสำหรับเอเจนต์เขียนโค้ด
 เป็นเส้นทางการเข้าถึงโมเดลแบบโฮสต์เสริมที่ใช้คีย์APIและผู้ให้บริการ `opencode`
 ขณะนี้ Zen อยู่ในสถานะเบต้า
+เป็นเส้นทางการเข้าถึงโมเดลแบบโฮสต์เสริม ที่ใช้คีย์ API และผู้ให้บริการ `opencode`
+Zen อยู่ในสถานะเบต้าในขณะนี้
 
 ## CLI setup
 

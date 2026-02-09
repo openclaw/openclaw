@@ -3,13 +3,6 @@ summary: "Cómo se descargan, transcriben y se inyectan en las respuestas los au
 read_when:
   - Cambio de la transcripción de audio o del manejo de medios
 title: "Audio y notas de voz"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:56Z
 ---
 
 # Audio / Notas de voz — 2026-01-17
@@ -114,7 +107,7 @@ Nota: La detección de binarios es de mejor esfuerzo en macOS/Linux/Windows; ase
 - La transcripción está disponible para las plantillas como `{{Transcript}}`.
 - La salida stdout de la CLI está limitada (5MB); mantenga la salida de la CLI concisa.
 
-## Aspectos a tener en cuenta
+## Gotchas
 
 - Las reglas de alcance usan “primera coincidencia gana”. `chatType` se normaliza a `direct`, `group` o `room`.
 - Asegúrese de que su CLI termine con código 0 e imprima texto plano; el JSON debe ajustarse mediante `jq -r .text`.

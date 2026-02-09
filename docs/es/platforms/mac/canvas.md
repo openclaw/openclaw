@@ -5,13 +5,6 @@ read_when:
   - Adición de controles del agente para el espacio de trabajo visual
   - Depuración de cargas de Canvas en WKWebView
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:06Z
 ---
 
 # Canvas (app macOS)

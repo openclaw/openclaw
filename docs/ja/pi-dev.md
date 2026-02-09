@@ -1,12 +1,5 @@
 ---
 title: "Pi 開発ワークフロー"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:28Z
 ---
 
 # Pi 開発ワークフロー
@@ -56,9 +49,9 @@ scripts/pi/run-tests.sh --live
 
 ツール呼び出しの挙動を確認するには、`read` または `exec` のアクションをプロンプトしてください。これにより、ツールのストリーミングやペイロードの処理を確認できます。
 
-## クリーンスレートのリセット
+## スレートをリセットする
 
-状態は OpenClaw の状態ディレクトリ配下に保存されます。デフォルトは `~/.openclaw` です。`OPENCLAW_STATE_DIR` が設定されている場合は、代わりにそのディレクトリが使用されます。
+状態はOpenClawの状態ディレクトリの下にあります。 デフォルトは `~/.openclaw` です。 `OPENCLAW_STATE_DIR` が設定されている場合は、代わりにそのディレクトリを使用してください。
 
 すべてをリセットするには、次を実行します。
 
@@ -69,7 +62,7 @@ scripts/pi/run-tests.sh --live
 - レガシーパスが存在する場合: `sessions/`
 - 空のワークスペースにしたい場合: `workspace/`
 
-セッションのみをリセットしたい場合は、そのエージェントに対して `agents/<agentId>/sessions/` と `agents/<agentId>/sessions.json` を削除します。再認証を行いたくない場合は、`credentials/` を保持してください。
+セッションのみをリセットしたい場合は、そのエージェントに対して `agents/<agentId>/sessions/` と `agents/<agentId>/sessions.json` を削除します。再認証を行いたくない場合は、`credentials/` を保持してください。 再認証したくない場合は、`credentials/` を保持してください。
 
 ## 参照
 

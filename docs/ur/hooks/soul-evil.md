@@ -4,22 +4,18 @@ read_when:
   - آپ SOUL Evil ہُک کو فعال یا اس کی ٹیوننگ کرنا چاہتے ہیں
   - آپ purge ونڈو یا رینڈم-چانس persona سوئچ چاہتے ہیں
 title: "SOUL Evil ہُک"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:17Z
 ---
 
 # SOUL Evil ہُک
 
-SOUL Evil ہُک purge ونڈو کے دوران یا رینڈم امکان کے ذریعے **انجیکٹ کیے گئے** `SOUL.md` مواد کو `SOUL_EVIL.md` کے ساتھ تبدیل کر دیتا ہے۔ یہ ڈسک پر موجود فائلوں میں **کوئی** تبدیلی نہیں کرتا۔
+The SOUL Evil hook swaps the **injected** `SOUL.md` content with `SOUL_EVIL.md` during
+a purge window or by random chance. It does **not** modify files on disk.
 
 ## یہ کیسے کام کرتا ہے
 
-جب `agent:bootstrap` چلتا ہے، تو یہ ہُک سسٹم پرامپٹ تیار ہونے سے پہلے میموری میں موجود `SOUL.md` مواد کو بدل سکتا ہے۔ اگر `SOUL_EVIL.md` موجود نہ ہو یا خالی ہو، تو OpenClaw ایک وارننگ لاگ کرتا ہے اور معمول کا `SOUL.md` برقرار رکھتا ہے۔
+When `agent:bootstrap` runs, the hook can replace the `SOUL.md` content in memory
+before the system prompt is assembled. If `SOUL_EVIL.md` is missing or empty,
+OpenClaw logs a warning and keeps the normal `SOUL.md`.
 
 سب-ایجنٹ رنز میں اپنے بوٹسٹریپ فائلز میں `SOUL.md` شامل نہیں ہوتا، اس لیے اس ہُک کا سب-ایجنٹس پر کوئی اثر نہیں پڑتا۔
 

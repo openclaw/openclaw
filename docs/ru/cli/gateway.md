@@ -5,13 +5,6 @@ read_when:
   - Отладка аутентификации Gateway, режимов привязки и подключения
   - Обнаружение шлюзов через Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:32Z
 ---
 
 # Gateway CLI
@@ -34,7 +27,7 @@ Gateway — это WebSocket‑сервер OpenClaw (каналы, узлы, с
 openclaw gateway
 ```
 
-Алиас для запуска в переднем плане:
+Псевдоним переднего плана:
 
 ```bash
 openclaw gateway run

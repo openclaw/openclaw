@@ -4,13 +4,6 @@ read_when:
   - Thêm hoặc chỉnh sửa chụp camera trên node iOS hoặc macOS
   - Mở rộng các quy trình MEDIA tệp tạm cho tác tử truy cập
 title: "Chụp Camera"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:33Z
 ---
 
 # Chụp camera (tác tử)
@@ -66,7 +59,7 @@ Mọi quyền truy cập camera đều được kiểm soát bởi **các cài �
 
 ### Yêu cầu chạy tiền cảnh
 
-Giống như `canvas.*`, node iOS chỉ cho phép các lệnh `camera.*` khi ở **tiền cảnh**. Gọi ở nền sẽ trả về `NODE_BACKGROUND_UNAVAILABLE`.
+Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### Trợ giúp CLI (tệp tạm + MEDIA)
 
@@ -105,7 +98,7 @@ Nếu thiếu quyền, ứng dụng sẽ nhắc khi có thể; nếu bị từ c
 
 ### Yêu cầu chạy tiền cảnh trên Android
 
-Giống như `canvas.*`, node Android chỉ cho phép các lệnh `camera.*` khi ở **tiền cảnh**. Gọi ở nền sẽ trả về `NODE_BACKGROUND_UNAVAILABLE`.
+Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### Bảo vệ payload
 

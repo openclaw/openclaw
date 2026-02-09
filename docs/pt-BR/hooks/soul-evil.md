@@ -4,13 +4,6 @@ read_when:
   - Você quer habilitar ou ajustar o hook SOUL Evil
   - Você quer uma janela de purge ou troca de persona por chance aleatória
 title: "Hook SOUL Evil"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:03Z
 ---
 
 # Hook SOUL Evil

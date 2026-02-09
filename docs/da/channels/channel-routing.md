@@ -3,18 +3,13 @@ summary: "Ruteringsregler pr. kanal (WhatsApp, Telegram, Discord, Slack) og delt
 read_when:
   - Ændring af kanalrouting eller indbakkens adfærd
 title: "Kanalrouting"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:51Z
 ---
 
 # Kanaler & routing
 
-OpenClaw ruter svar **tilbage til den kanal, som en besked kom fra**. Modellen vælger ikke en kanal; routingen er deterministisk og styres af værtskonfigurationen.
+OpenClaw ruter besvarer **tilbage til kanalen, hvor en meddelelse kom fra**.
+-modellen vælger ikke en kanal; routing er deterministisk og styres af
+-værtens konfiguration.
 
 ## Nøglebegreber
 
@@ -105,7 +100,9 @@ Du kan tilsidesætte lagerstien via `session.store` og `{agentId}` templating.
 
 ## WebChat-adfærd
 
-WebChat knytter sig til den **valgte agent** og bruger som standard agentens hovedsession. Derfor lader WebChat dig se tværkanal‑kontekst for den agent ét sted.
+WebChat knytter sig til den \*\* valgte agent \*\* og standard til agentens vigtigste
+session. På grund af dette, WebChat giver dig mulighed for at se cross-channel sammenhæng for at
+agent på ét sted.
 
 ## Svarkontekst
 

@@ -4,20 +4,12 @@ read_when:
   - Você está criando um plugin do OpenClaw
   - Você precisa distribuir um esquema de configuração de plugin ou depurar erros de validação de plugin
 title: "Manifesto de Plugin"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:38Z
 ---
 
 # Manifesto de plugin (openclaw.plugin.json)
 
 Todo plugin **deve** incluir um arquivo `openclaw.plugin.json` na **raiz do plugin**.
-O OpenClaw usa esse manifesto para validar a configuração **sem executar código do plugin**.
-Manifestos ausentes ou inválidos são tratados como erros de plugin e bloqueiam a
+O OpenClaw usa esse manifesto para validar a configuração **sem executar código do plugin**. Manifestos ausentes ou inválidos são tratados como erros de plugin e bloqueiam a
 validação de configuração.
 
 Veja o guia completo do sistema de plugins: [Plugins](/tools/plugin).

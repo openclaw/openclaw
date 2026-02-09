@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’dan giden bir sesli arama yapmak istiyorsunuz
   - voice-call eklentisini yapılandırıyor veya geliştiriyorsunuz
 title: "Voice Call Eklentisi"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 # Voice Call (eklenti)
@@ -135,7 +128,7 @@ güvenildiğini denetler.
 
 `webhookSecurity.trustedProxyIPs` yalnızca istek uzak IP’si listeyle eşleştiğinde iletilen başlıklara güvenir.
 
-Kararlı bir genel ana makine ile örnek:
+Kararlı bir genel ana bilgisayar ile örnek:
 
 ```json5
 {

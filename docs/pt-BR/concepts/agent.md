@@ -3,13 +3,6 @@ summary: "Runtime do agente (pi-mono incorporado), contrato do workspace e boots
 read_when:
   - Ao alterar o runtime do agente, o bootstrap do workspace ou o comportamento da sessão
 title: "Runtime do Agente"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:38Z
 ---
 
 # Runtime do Agente 🤖

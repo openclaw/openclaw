@@ -4,13 +4,6 @@ read_when:
   - आप डिफ़ॉल्ट मॉडल बदलना चाहते हैं या प्रदाता प्रमाणीकरण स्थिति देखना चाहते हैं
   - आप उपलब्ध मॉडल/प्रदाताओं को स्कैन करना और प्रमाणीकरण प्रोफ़ाइलों का डिबग करना चाहते हैं
 title: "मॉडल्स"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:06Z
 ---
 
 # `openclaw models`
@@ -31,19 +24,19 @@ openclaw models set <model-or-alias>
 openclaw models scan
 ```
 
-`openclaw models status` समाधान किए गए डिफ़ॉल्ट/फॉलबैक के साथ प्रमाणीकरण का अवलोकन दिखाता है।
-जब प्रदाता उपयोग स्नैपशॉट उपलब्ध होते हैं, तो OAuth/टोकन स्थिति अनुभाग में
-प्रदाता उपयोग हेडर शामिल होते हैं।
-प्रत्येक विन्यस्त प्रदाता प्रोफ़ाइल के विरुद्ध लाइव प्रमाणीकरण प्रोब चलाने के लिए `--probe` जोड़ें।
-प्रोब वास्तविक अनुरोध होते हैं (टोकन खर्च कर सकते हैं और दर-सीमाएँ ट्रिगर कर सकते हैं)।
-विन्यस्त एजेंट के मॉडल/प्रमाणीकरण स्थिति का निरीक्षण करने के लिए `--agent <id>` का उपयोग करें। यदि छोड़ा गया,
-तो कमांड `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` का उपयोग करता है यदि सेट हों, अन्यथा
-विन्यस्त डिफ़ॉल्ट एजेंट का उपयोग करता है।
+`openclaw models status` shows the resolved default/fallbacks plus an auth overview.
+When provider usage snapshots are available, the OAuth/token status section includes
+provider usage headers.
+Add `--probe` to run live auth probes against each configured provider profile.
+Probes are real requests (may consume tokens and trigger rate limits).
+Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
+the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
+configured default agent.
 
 नोट्स:
 
 - `models set <model-or-alias>` `provider/model` या किसी उपनाम को स्वीकार करता है।
-- मॉडल संदर्भ **पहले** `/` पर विभाजित करके पार्स किए जाते हैं। यदि मॉडल ID में `/` (OpenRouter-शैली) शामिल है, तो प्रदाता उपसर्ग शामिल करें (उदाहरण: `openrouter/moonshotai/kimi-k2`)।
+- Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - यदि आप प्रदाता छोड़ देते हैं, तो OpenClaw इनपुट को डिफ़ॉल्ट प्रदाता के लिए एक उपनाम या मॉडल के रूप में मानता है (यह केवल तब काम करता है जब मॉडल ID में `/` न हो)।
 
 ### `models status`
@@ -77,8 +70,8 @@ openclaw models auth setup-token
 openclaw models auth paste-token
 ```
 
-`models auth login` किसी प्रदाता प्लगइन का प्रमाणीकरण प्रवाह (OAuth/एपीआई कुंजी) चलाता है। कौन-से प्रदाता इंस्टॉल हैं यह देखने के लिए
-`openclaw plugins list` का उपयोग करें।
+`models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
+`openclaw plugins list` to see which providers are installed.
 
 नोट्स:
 

@@ -2,23 +2,16 @@
 summary: "OpenClaw 何時顯示輸入中指示，以及如何調整"
 read_when:
   - 變更輸入中指示的行為或預設值
-title: "輸入中指示"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:50Z
+title: "Typing Indicators"
 ---
 
-# 輸入中指示
+# Typing indicators
 
-在執行期間，輸入中指示會傳送到聊天頻道。使用
+Typing indicators are sent to the chat channel while a run is active. 在執行期間，輸入中指示會傳送到聊天頻道。使用
 `agents.defaults.typingMode` 來控制**何時**開始輸入，並使用 `typingIntervalSeconds`
 來控制**更新頻率**。
 
-## 預設值
+## Defaults
 
 當 `agents.defaults.typingMode` **未設定**時，OpenClaw 會維持舊有行為：
 
@@ -53,7 +46,7 @@ x-i18n:
 }
 ```
 
-你可以針對每個工作階段覆寫模式或更新頻率：
+You can override mode or cadence per session:
 
 ```json5
 {
@@ -68,8 +61,9 @@ x-i18n:
 
 - `message` 模式不會為僅有靜默的回覆顯示輸入中（例如用於抑制輸出的 `NO_REPLY`
   權杖）。
-- `thinking` 僅在執行會串流推理（`reasoningLevel: "stream"`）時才會觸發。
-  若模型未輸出推理增量，則不會開始顯示輸入中。
+- `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
+  If the model doesn’t emit reasoning deltas, typing won’t start.
 - 心跳執行無論模式為何，都不會顯示輸入中。
 - `typingIntervalSeconds` 只控制**更新頻率**，而非開始時間。
   預設為 6 秒。
+  The default is 6 seconds.

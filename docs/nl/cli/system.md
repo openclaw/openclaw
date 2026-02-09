@@ -5,13 +5,6 @@ read_when:
   - Je moet heartbeat-signalen in- of uitschakelen
   - Je wilt systeemaanwezigheidsvermeldingen inspecteren
 title: "systeem"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:12Z
 ---
 
 # `openclaw system`

@@ -4,13 +4,6 @@ read_when:
   - آپ TUI کی مبتدی دوست رہنمائی چاہتے ہیں
   - آپ TUI کی خصوصیات، کمانڈز، اور شارٹ کٹس کی مکمل فہرست چاہتے ہیں
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # TUI (Terminal UI)
@@ -49,7 +42,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 ## ذہنی ماڈل: ایجنٹس + سیشنز
 
-- ایجنٹس منفرد سلاگز ہوتے ہیں (مثلاً `main`، `research`)۔ Gateway فہرست فراہم کرتا ہے۔
+- Agents منفرد slugs ہوتے ہیں (مثلاً `main`, `research`)۔ Gateway فہرست فراہم کرتا ہے۔
 - سیشنز موجودہ ایجنٹ سے وابستہ ہوتے ہیں۔
 - سیشن کیز `agent:<agentId>:<sessionKey>` کے طور پر محفوظ ہوتی ہیں۔
   - اگر آپ `/session main` ٹائپ کریں تو TUI اسے `agent:<currentAgent>:main` میں توسیع کر دیتا ہے۔
@@ -113,7 +106,7 @@ Session lifecycle:
 - `/settings`
 - `/exit`
 
-دیگر Gateway slash کمانڈز (مثال کے طور پر، `/context`) Gateway کو فارورڈ کی جاتی ہیں اور سسٹم آؤٹ پٹ کے طور پر دکھائی جاتی ہیں۔ دیکھیں [Slash commands](/tools/slash-commands)۔
+دیگر Gateway slash کمانڈز (مثال کے طور پر، `/context`) Gateway کو فارورڈ کی جاتی ہیں اور سسٹم آؤٹ پٹ کے طور پر دکھائی جاتی ہیں۔ [Slash commands](/tools/slash-commands) دیکھیں۔
 
 ## لوکل شیل کمانڈز
 
@@ -149,8 +142,8 @@ Session lifecycle:
 - `--thinking <level>`: بھیجنے کے لیے سوچ کی سطح اووررائیڈ کریں
 - `--timeout-ms <ms>`: ایجنٹ ٹائم آؤٹ (ملی سیکنڈ میں) (بطورِ طے شدہ `agents.defaults.timeoutSeconds`)
 
-نوٹ: جب آپ `--url` سیٹ کرتے ہیں، تو TUI کنفیگ یا ماحول کی اسناد پر واپس نہیں جاتا۔
-`--token` یا `--password` واضح طور پر فراہم کریں۔ واضح اسناد کی عدم موجودگی ایک غلطی ہے۔
+نوٹ: جب آپ `--url` سیٹ کرتے ہیں تو TUI کنفیگ یا ماحول کی اسناد پر واپس نہیں جاتا۔
+`--token` یا `--password` کو واضح طور پر فراہم کریں۔ واضح اسناد کا نہ ہونا ایک خرابی ہے۔
 
 ## خرابیوں کا ازالہ
 

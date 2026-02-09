@@ -4,13 +4,6 @@ read_when:
   - Tools aanroepen zonder een volledige agentbeurt te draaien
   - Automatiseringen bouwen die toolbeleidshandhaving vereisen
 title: "Tools Invoke API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:25Z
 ---
 
 # Tools Invoke (HTTP)
@@ -45,7 +38,7 @@ Notities:
 }
 ```
 
-Velden:
+Velden
 
 - `tool` (string, vereist): naam van de tool die moet worden aangeroepen.
 - `action` (string, optioneel): wordt gemapt naar args als het toolschema `action` ondersteunt en de args-payload dit heeft weggelaten.

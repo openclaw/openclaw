@@ -4,13 +4,6 @@ read_when:
   - Quiere modelos GLM en OpenClaw
   - Necesita la convención de nombres de modelos y la configuración
 title: "Modelos GLM"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:14Z
 ---
 
 # Modelos GLM

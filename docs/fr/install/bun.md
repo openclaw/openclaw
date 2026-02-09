@@ -4,13 +4,6 @@ read_when:
   - Vous voulez la boucle de développement locale la plus rapide (bun + watch)
   - Vous rencontrez des problèmes d’installation/de patch/de scripts de cycle de vie avec Bun
 title: "Bun (Expérimental)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:52Z
 ---
 
 # Bun (expérimental)
@@ -61,6 +54,6 @@ Si vous rencontrez un véritable problème d’exécution nécessitant ces scrip
 bun pm trust @whiskeysockets/baileys protobufjs
 ```
 
-## Limitations
+## Avertissements
 
 - Certains scripts codent toujours pnpm en dur (p. ex. `docs:build`, `ui:*`, `protocol:check`). Exécutez-les via pnpm pour le moment.

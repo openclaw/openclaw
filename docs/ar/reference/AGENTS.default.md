@@ -3,13 +3,6 @@ summary: "تعليمات وكيل OpenClaw الافتراضية وقائمة Ski
 read_when:
   - بدء جلسة وكيل OpenClaw جديدة
   - تمكين Skills الافتراضية أو تدقيقها
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:50Z
 ---
 
 # AGENTS.md — المساعد الشخصي OpenClaw (افتراضي)
@@ -49,7 +42,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 ## إعدادات السلامة الافتراضية
 
 - لا تُفرغ الأدلة أو الأسرار في الدردشة.
-- لا تُشغّل أوامر مدمّرة إلا إذا طُلب ذلك صراحةً.
+- لا تقم بتشغيل الأوامر الهدامة إلا إذا سألت صراحة.
 - لا تُرسل ردودًا جزئية/متدفقة إلى أسطح المراسلة الخارجية (الردود النهائية فقط).
 
 ## بدء الجلسة (مطلوب)

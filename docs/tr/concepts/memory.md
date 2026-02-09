@@ -3,13 +3,6 @@ summary: "OpenClaw belleğinin nasıl çalıştığı (çalışma alanı dosyala
 read_when:
   - Bellek dosyası düzenini ve iş akışını istiyorsanız
   - Otomatik ön-sıkıştırma bellek boşaltmasını ayarlamak istiyorsanız
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:05Z
 ---
 
 # Bellek
@@ -34,7 +27,7 @@ Varsayılan çalışma alanı düzeni iki bellek katmanı kullanır:
 Bu dosyalar çalışma alanı altında bulunur (`agents.defaults.workspace`, varsayılan
 `~/.openclaw/workspace`). Tam düzen için [Agent workspace](/concepts/agent-workspace) bölümüne bakın.
 
-## Belleğe ne zaman yazılır
+## When to write memory
 
 - Kararlar, tercihler ve kalıcı gerçekler `MEMORY.md` dosyasına gider.
 - Günlük notlar ve akan bağlam `memory/YYYY-MM-DD.md` dosyasına gider.
@@ -79,8 +72,7 @@ Ayrıntılar:
 - **Çalışma alanı yazılabilir olmalıdır**: oturum `workspaceAccess: "ro"` veya
   `"none"` ile sandbox içinde çalışıyorsa boşaltma atlanır.
 
-Tam sıkıştırma yaşam döngüsü için bkz.
-[Session management + compaction](/reference/session-management-compaction).
+Tam sıkıştırma yaşam döngüsü için bkz. [Session management + compaction](/reference/session-management-compaction).
 
 ## Vektör bellek araması
 
@@ -101,8 +93,7 @@ Varsayılanlar:
 - Yerel mod node-llama-cpp kullanır ve `pnpm approve-builds` gerektirebilir.
 - SQLite içinde vektör aramasını hızlandırmak için (mevcutsa) sqlite-vec kullanır.
 
-Uzak embedding’ler, embedding sağlayıcısı için bir API anahtarı **gerektirir**.
-OpenClaw anahtarları kimlik doğrulama profillerinden, `models.providers.*.apiKey`’den veya
+Uzak embedding’ler, embedding sağlayıcısı için bir API anahtarı **gerektirir**. OpenClaw anahtarları kimlik doğrulama profillerinden, `models.providers.*.apiKey`’den veya
 ortam değişkenlerinden çözümler. Codex OAuth yalnızca sohbet/completion’ları
 kapsar ve bellek araması için embedding’leri **karşılamaz**. Gemini için
 `GEMINI_API_KEY` veya `models.providers.google.apiKey` kullanın. Voyage için `VOYAGE_API_KEY` veya
@@ -127,10 +118,9 @@ eder; OpenClaw getirim için QMD’yi çağırır. Öne çıkan noktalar:
   HuggingFace’ten GGUF modellerini otomatik indirir (ayrı bir Ollama daemon’u gerekmez).
 - Gateway, `XDG_CONFIG_HOME` ve `XDG_CACHE_HOME` ayarlayarak QMD’yi
   `~/.openclaw/agents/<agentId>/qmd/` altında kendi kendine yeten bir XDG evinde çalıştırır.
-- OS desteği: macOS ve Linux, Bun + SQLite kurulduktan sonra kutudan çıktığı gibi çalışır.
-  Windows için WSL2 önerilir.
+- OS desteği: macOS ve Linux, Bun + SQLite kurulduktan sonra kutudan çıktığı gibi çalışır. Windows için WSL2 önerilir.
 
-**Yan hizmetin çalışması**
+**How the sidecar runs**
 
 - Gateway, `~/.openclaw/agents/<agentId>/qmd/` altında kendi kendine yeten bir QMD evi yazar
   (yapılandırma + önbellek + sqlite DB).
@@ -152,7 +142,8 @@ eder; OpenClaw getirim için QMD’yi çağırır. Öne çıkan noktalar:
     ısıtmak) isterseniz, ajan XDG dizinleriyle tek seferlik bir sorgu çalıştırın.
 
     OpenClaw’ın QMD durumu **durum dizininiz** altında bulunur (varsayılan
-    `~/.openclaw`). OpenClaw’ın kullandığı XDG değişkenlerinin aynısını
+    `~/.openclaw`).
+    OpenClaw’ın kullandığı XDG değişkenlerinin aynısını
     dışa aktararak `qmd`’yı tam olarak aynı dizine yönlendirebilirsiniz:
 
     ```bash
@@ -371,8 +362,7 @@ Yerel mod:
   ve yerel → uzak embedding’lere geri düşülüp düşülmediğini döndürür. Tam dosya
   içeriği döndürülmez.
 - `memory_get`, belirli bir bellek Markdown dosyasını (çalışma alanına göreli),
-  isteğe bağlı olarak bir başlangıç satırından ve N satır boyunca okur.
-  `MEMORY.md` / `memory/` dışındaki yollar reddedilir.
+  isteğe bağlı olarak bir başlangıç satırından ve N satır boyunca okur. `MEMORY.md` / `memory/` dışındaki yollar reddedilir.
 - Her iki araç da yalnızca ajan için `memorySearch.enabled` true çözümlendiğinde etkindir.
 
 ### Neler indekslenir (ve ne zaman)
@@ -411,7 +401,8 @@ Ancak tam ve yüksek sinyalli belirteçlerde zayıf olabilir:
 - hata dizeleri (“sqlite-vec unavailable”)
 
 BM25 (tam metin) bunun tersidir: tam belirteçlerde güçlü, yeniden ifade etmelerde
-zayıf. Hibrit arama, pragmatik orta yoldur: **her iki getirim sinyalini de
+zayıf.
+Hibrit arama, pragmatik orta yoldur: **her iki getirim sinyalini de
 kullanın**, böylece hem “doğal dil” hem de “samanlıkta iğne” sorgularında iyi
 sonuçlar elde edersiniz.
 
@@ -428,7 +419,7 @@ Uygulama taslağı:
 
 - `textScore = 1 / (1 + max(0, bm25Rank))`
 
-3. Adayları parça kimliğine göre birleştirin ve ağırlıklı bir skor hesaplayın:
+3. Union candidates by chunk id and compute a weighted score:
 
 - `finalScore = vectorWeight * vectorScore + textWeight * textScore`
 
@@ -441,7 +432,8 @@ Notlar:
 - FTS5 oluşturulamıyorsa, yalnızca vektör aramayı koruruz (sert hata yok).
 
 Bu “IR-teorisi açısından kusursuz” değil; ancak basit, hızlıdır ve gerçek
-notlarda geri çağırma/duyarlılığı artırma eğilimindedir. Daha sonra daha
+notlarda geri çağırma/duyarlılığı artırma eğilimindedir.
+Daha sonra daha
 gelişmiş olmak istersek, yaygın sonraki adımlar Reciprocal Rank Fusion (RRF)
 veya karıştırmadan önce skor normalizasyonudur (min/max veya z-skoru).
 
@@ -464,7 +456,7 @@ agents: {
 }
 ```
 
-### Embedding önbelleği
+### Embedding cache
 
 OpenClaw, **parça embedding’lerini** SQLite’ta önbelleğe alabilir; böylece yeniden
 indeksleme ve sık güncellemeler (özellikle oturum dökümleri) değişmeyen metni
@@ -488,7 +480,8 @@ agents: {
 ### Oturum belleği araması (deneysel)
 
 İsteğe bağlı olarak **oturum dökümlerini** indeksleyebilir ve bunları
-`memory_search` üzerinden sunabilirsiniz. Bu özellik deneysel bir bayrakla
+`memory_search` üzerinden sunabilirsiniz.
+Bu özellik deneysel bir bayrakla
 korunur.
 
 ```json5

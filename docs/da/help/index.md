@@ -4,13 +4,6 @@ read_when:
   - Du er ny og vil have guiden til “hvad klikker/kører jeg”
   - Noget gik i stykker, og du vil have den hurtigste vej til en løsning
 title: "Hjælp"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:14Z
 ---
 
 # Hjælp

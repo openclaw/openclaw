@@ -4,13 +4,6 @@ read_when:
   - नोड्स + ऑपरेटर क्लाइंट्स के लिए एकीकृत नेटवर्क प्रोटोकॉल की योजना बनाते समय
   - उपकरणों के बीच अनुमोदन, पेयरिंग, TLS और उपस्थिति को पुनः डिज़ाइन करते समय
 title: "Clawnet रिफैक्टर"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:06Z
 ---
 
 # Clawnet रिफैक्टर (प्रोटोकॉल + प्रमाणीकरण का एकीकरण)
@@ -51,10 +44,10 @@ x-i18n:
 
 ## दो प्रोटोकॉल
 
-### 1) Gateway WebSocket (कंट्रोल प्लेन)
+### 1. Gateway WebSocket (कंट्रोल प्लेन)
 
 - पूर्ण API सतह: config, channels, models, sessions, agent runs, logs, nodes, आदि।
-- डिफ़ॉल्ट बाइंड: loopback। रिमोट एक्सेस SSH/Tailscale के माध्यम से।
+- Default bind: loopback. Remote access via SSH/Tailscale.
 - प्रमाणीकरण: `connect` के माध्यम से टोकन/पासवर्ड।
 - TLS पिनिंग नहीं (loopback/टनल पर निर्भर)।
 - कोड:
@@ -62,7 +55,7 @@ x-i18n:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (नोड ट्रांसपोर्ट)
+### 2. Bridge (नोड ट्रांसपोर्ट)
 
 - सीमित allowlist सतह, नोड पहचान + पेयरिंग।
 - TCP पर JSONL; वैकल्पिक TLS + प्रमाणपत्र फ़िंगरप्रिंट पिनिंग।
@@ -145,7 +138,7 @@ x-i18n:
 
 ### प्रमुख नियम
 
-भूमिका प्रति‑कनेक्शन होती है, प्रति‑डिवाइस नहीं। एक डिवाइस अलग‑अलग कनेक्शनों में दोनों भूमिकाएँ खोल सकता है।
+Role is per‑connection, not per device. A device may open both roles, separately.
 
 ---
 
@@ -187,7 +180,7 @@ x-i18n:
 
 ## साइलेंट अनुमोदन (SSH heuristic)
 
-कमज़ोर कड़ी से बचने के लिए इसे सटीक परिभाषित करें। इनमें से एक चुनें:
+Define it precisely to avoid a weak link. Prefer one:
 
 - **Local‑only**: जब क्लाइंट loopback/Unix socket से कनेक्ट करे तो auto‑pair।
 - **SSH के माध्यम से चुनौती**: Gateway nonce जारी करे; क्लाइंट SSH द्वारा उसे प्राप्त कर प्रमाण दे।
@@ -224,7 +217,7 @@ x-i18n:
 
 ## वर्तमान
 
-अनुमोदन नोड होस्ट पर होता है (mac ऐप नोड रनटाइम)। प्रॉम्प्ट वहीं दिखता है जहाँ नोड चलता है।
+Approval happens on node host (mac app node runtime). Prompt appears where node runs.
 
 ## प्रस्तावित
 
@@ -283,8 +276,8 @@ x-i18n:
 
 ## स्थिर ID
 
-प्रमाणीकरण के लिए आवश्यक; कभी नहीं बदलती।
-प्राथमिकता:
+Required for auth; never changes.
+प्राथमिक:
 
 - keypair फ़िंगरप्रिंट (पब्लिक की हैश)।
 

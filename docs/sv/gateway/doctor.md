@@ -4,19 +4,12 @@ read_when:
   - Lägger till eller ändrar doctor-migreringar
   - Introducerar brytande konfigändringar
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:38Z
 ---
 
 # Doctor
 
-`openclaw doctor` är reparations- och migreringsverktyget för OpenClaw. Det åtgärdar inaktuell
-konfig/tillstånd, kontrollerar hälsa och ger handlingsbara reparationssteg.
+`openclaw doctor` är reparationen + migreringsverktyget för OpenClaw. Det fixar inaktuella
+config/state, kontrollerar hälsa och ger åtgärdbara reparationssteg.
 
 ## Snabbstart
 
@@ -48,7 +41,7 @@ Tillämpa även aggressiva reparationer (skriver över anpassade supervisor-konf
 openclaw doctor --non-interactive
 ```
 
-Kör utan frågor och tillämpa endast säkra migreringar (konfig-normalisering + flytt av tillstånd på disk). Hoppar över omstart-/tjänst-/sandbox-åtgärder som kräver mänsklig bekräftelse.
+Kör utan uppmaningar och tillämpa endast säkra migreringar (konfigurationsnormalisering + rörelser på diskstatus). Hoppa över omstart/service/sandlåda åtgärder som kräver mänsklig bekräftelse.
 Äldre tillståndsmigreringar körs automatiskt när de upptäcks.
 
 ```bash
@@ -91,18 +84,18 @@ cat ~/.openclaw/openclaw.json
 
 ## Detaljerat beteende och motiv
 
-### 0) Valfri uppdatering (git-installationer)
+### 0. Valfri uppdatering (git-installationer)
 
 Om detta är en git-utcheckning och doctor körs interaktivt, erbjuder den att
 uppdatera (fetch/rebase/build) innan doctor körs.
 
-### 1) Konfig-normalisering
+### 1. Konfig-normalisering
 
 Om konfigen innehåller äldre värdeformer (till exempel `messages.ackReaction`
 utan en kanalspecifik överskrivning) normaliserar doctor dem till det aktuella
 schemat.
 
-### 2) Migreringar av äldre konfig-nycklar
+### 2. Migreringar av äldre konfig-nycklar
 
 När konfigen innehåller utfasade nycklar vägrar andra kommandon att köras och ber
 dig köra `openclaw doctor`.
@@ -135,12 +128,12 @@ Aktuella migreringar:
 
 ### 2b) OpenCode Zen-leverantörsöverskrivningar
 
-Om du manuellt har lagt till `models.providers.opencode` (eller `opencode-zen`) åsidosätter det
+Om du har lagt till `models.providers.opencode` (eller `opencode-zen`) manuellt, åsidosätter det
 den inbyggda OpenCode Zen-katalogen från `@mariozechner/pi-ai`. Det kan
-tvinga alla modeller till ett enda API eller nollställa kostnader. Doctor varnar
-så att du kan ta bort överskrivningen och återställa per-modell-API-routning + kostnader.
+tvinga varje modell på ett enda API eller noll ut kostnader. Läkare varnar så att du kan
+ta bort åsidosättning och återställa per modell API-routing + kostnader.
 
-### 3) Migreringar av äldre tillstånd (disklayout)
+### 3. Migreringar av äldre tillstånd (disklayout)
 
 Doctor kan migrera äldre layouter på disk till den aktuella strukturen:
 
@@ -152,14 +145,16 @@ Doctor kan migrera äldre layouter på disk till den aktuella strukturen:
   - från äldre `~/.openclaw/credentials/*.json` (utom `oauth.json`)
   - till `~/.openclaw/credentials/whatsapp/<accountId>/...` (standardkonto-id: `default`)
 
-Dessa migreringar är best-effort och idempotenta; doctor utfärdar varningar när
-den lämnar kvar äldre mappar som säkerhetskopior. Gateway/CLI migrerar också
-automatiskt de äldre sessionerna + agentkatalogen vid uppstart så att historik/autentisering/modeller hamnar i per-agent-sökvägen utan manuell doctor-körning. WhatsApp-autentisering migreras avsiktligt endast via `openclaw doctor`.
+Dessa migrationer är bäst-ansträngning och idempotent; läkare kommer att sända ut varningar när
+det lämnar några äldre mappar bakom sig som säkerhetskopior. Den Gateway/CLI också auto-migrerar
+äldre sessioner + agent dir vid start så historia/auth/modeller landa i
+per-agent väg utan en manuell läkare kör. WhatsApp auth är avsiktligt endast
+migrerat via `openclaw doctor`.
 
-### 4) Kontroller av tillståndsintegritet (sessionspersistens, routning och säkerhet)
+### 4. Kontroller av tillståndsintegritet (sessionspersistens, routning och säkerhet)
 
-Tillståndskatalogen är den operativa hjärnstammen. Om den försvinner förlorar du
-sessioner, autentiseringsuppgifter, loggar och konfig (om du inte har säkerhetskopior någon annanstans).
+Statskatalogen är det operativa brainstemet. Om det försvinner, förlorar du
+sessioner, autentiseringsuppgifter, loggar och konfiguration (om du inte har säkerhetskopior någon annanstans).
 
 Doctor kontrollerar:
 
@@ -181,12 +176,12 @@ Doctor kontrollerar:
 - **Konfigfilens behörigheter**: varnar om `~/.openclaw/openclaw.json` är
   läsbar för grupp/värld och erbjuder att strama åt till `600`.
 
-### 5) Modellautentiseringshälsa (OAuth-utgång)
+### 5. Modellautentiseringshälsa (OAuth-utgång)
 
-Doctor inspekterar OAuth-profiler i autentiseringslagret, varnar när tokens
-håller på att gå ut/har gått ut och kan uppdatera dem när det är säkert. Om Anthropic Claude Code-profilen
-är inaktuell föreslår den att köra `claude setup-token` (eller klistra in en setup-token).
-Uppdateringsuppmaningar visas endast vid interaktiv körning (TTY); `--non-interactive`
+Läkaren inspekterar OAuth profiler i auth butiken, varnar när polletter
+upphör att gälla, och kan uppdatera dem när det är säkert. Om Anthropic Claude Code
+-profilen är inaktuell föreslår det att du kör `claude setup-token` (eller klistrar in en setup-token).
+Uppdateringsuppmaningar visas endast när du kör interaktivt (TTY); `--non-interactive`
 hoppar över uppdateringsförsök.
 
 Doctor rapporterar också autentiseringsprofiler som tillfälligt är obrukbara på grund av:
@@ -194,58 +189,60 @@ Doctor rapporterar också autentiseringsprofiler som tillfälligt är obrukbara 
 - korta cooldowns (hastighetsbegränsningar/timeouts/autentiseringsfel)
 - längre inaktiveringar (fakturering/kreditfel)
 
-### 6) Validering av Hooks-modell
+### 6. Validering av Hooks-modell
 
 Om `hooks.gmail.model` är satt validerar doctor modellreferensen mot
 katalogen och tillåtelselistan och varnar när den inte kan lösas eller är otillåten.
 
-### 7) Reparation av sandbox-avbildning
+### 7. Reparation av sandbox-avbildning
 
 När sandboxing är aktiverat kontrollerar doctor Docker-avbildningar och erbjuder att bygga eller
 byta till äldre namn om den aktuella avbildningen saknas.
 
-### 8) Migreringar av Gateway-tjänster och städhints
+### 8. Migreringar av Gateway-tjänster och städhints
 
-Doctor upptäcker äldre gateway-tjänster (launchd/systemd/schtasks) och
-erbjuder att ta bort dem och installera OpenClaw-tjänsten med den aktuella gateway-porten. Den kan också skanna efter extra gateway-liknande tjänster och skriva ut städhints.
-Profilnamngivna OpenClaw gateway-tjänster betraktas som förstklassiga och flaggas inte som ”extra”.
+Doctor detects legacy gateway services (launchd/systemd/schtasks) and
+offers to remove them and install the OpenClaw service using the current gateway
+port. Det kan också söka efter extra gateway-liknande tjänster och skriva ut saneringsanvisningar.
+Profilnamn OpenClaw gateway-tjänster anses vara förstklassiga och är inte
+flaggade som "extra".
 
-### 9) Säkerhetsvarningar
+### 9. Säkerhetsvarningar
 
 Doctor utfärdar varningar när en leverantör är öppen för DM utan en tillåtelselista, eller
 när en policy är konfigurerad på ett farligt sätt.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 Om den körs som en systemd-användartjänst säkerställer doctor att lingering är aktiverat så att
 gatewayen fortsätter att vara igång efter utloggning.
 
-### 11) Skills-status
+### 11. Skills-status
 
 Doctor skriver ut en snabb sammanfattning av berättigade/saknade/blockerade Skills för den aktuella arbetsytan.
 
-### 12) Gateway-autentiseringskontroller (lokal token)
+### 12. Gateway-autentiseringskontroller (lokal token)
 
-Doctor varnar när `gateway.auth` saknas på en lokal gateway och erbjuder att
-generera en token. Använd `openclaw doctor --generate-gateway-token` för att tvinga token-
-skapande i automation.
+Doktorn varnar när `gateway.auth` saknas på en lokal gateway och erbjuder
+att generera en token. Använd `openclaw doctor --generate-gateway-token` för att tvinga token
+att skapa i automation.
 
-### 13) Gateway-hälsokontroll + omstart
+### 13. Gateway-hälsokontroll + omstart
 
 Doctor kör en hälsokontroll och erbjuder att starta om gatewayen när den verkar
 ohälsosam.
 
-### 14) Kanalstatusvarningar
+### 14. Kanalstatusvarningar
 
 Om gatewayen är frisk kör doctor en kanalstatussond och rapporterar
 varningar med föreslagna åtgärder.
 
-### 15) Granskning + reparation av supervisor-konfig
+### 15. Granskning + reparation av supervisor-konfig
 
-Doctor kontrollerar den installerade supervisor-konfigen (launchd/systemd/schtasks) för
-saknade eller inaktuella standarder (t.ex. systemd-beroenden för network-online och
-omstartsfördröjning). När den hittar en avvikelse rekommenderar den en uppdatering och kan
-skriva om servicefilen/uppgiften till de aktuella standarderna.
+Läkare kontrollerar den installerade övervakarkonfigurationen (launchd/systemd/schtasks) för
+saknade eller föråldrade standardinställningar (t.ex. systemd-nätberoenden och
+omstart fördröjning). När den hittar en felmatchning, rekommenderar den en uppdatering och kan
+skriva om tjänstfilen/uppgiften till de aktuella standardvärdena.
 
 Noteringar:
 
@@ -255,26 +252,26 @@ Noteringar:
 - `openclaw doctor --repair --force` skriver över anpassade supervisor-konfigar.
 - Du kan alltid tvinga en fullständig omskrivning via `openclaw gateway install --force`.
 
-### 16) Diagnostik för Gateway-körtid + port
+### 16. Diagnostik för Gateway-körtid + port
 
-Doctor inspekterar tjänstens körtid (PID, senaste avslutsstatus) och varnar när
-tjänsten är installerad men faktiskt inte körs. Den kontrollerar också portkollisioner
+Läkare inspekterar tjänsten körtid (PID, sista utgångsstatus) och varnar när tjänsten
+är installerad men inte körs. Den söker också efter portkollisioner
 på gateway-porten (standard `18789`) och rapporterar troliga orsaker (gateway redan
-körs, SSH-tunnel).
+körs, SSH-tunneln).
 
-### 17) Bästa praxis för Gateway-körtid
+### 17. Bästa praxis för Gateway-körtid
 
-Doctor varnar när gateway-tjänsten körs på Bun eller en Node-sökväg som hanteras av en versionshanterare
-(`nvm`, `fnm`, `volta`, `asdf`, osv.). WhatsApp- och Telegram-kanaler kräver Node,
-och sökvägar för versionshanterare kan gå sönder efter uppgraderingar eftersom tjänsten inte
-läser in din shell-init. Doctor erbjuder att migrera till en systeminstallerad Node när
-tillgänglig (Homebrew/apt/choco).
+Läkare varnar när gateway-tjänsten körs på Bun eller en versionshanterad nodsökväg
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram kanaler kräver Node,
+och version-manager sökvägar kan bryta efter uppgraderingar eftersom tjänsten inte
+ladda ditt skal init. Läkare erbjuder sig att migrera till en systemnodinstallation när
+är tillgänglig (Homebrew/apt/choco).
 
-### 18) Skrivning av konfig + guide-metadata
+### 18. Skrivning av konfig + guide-metadata
 
 Doctor sparar alla konfigändringar och stämplar guide-metadata för att registrera doctor-körningen.
 
-### 19) Arbetsyte-tips (backup + minnessystem)
+### 19. Arbetsyte-tips (backup + minnessystem)
 
 Doctor föreslår ett minnessystem för arbetsytan när det saknas och skriver ut ett backup-tips
 om arbetsytan inte redan ligger under git.

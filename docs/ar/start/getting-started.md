@@ -4,13 +4,6 @@ read_when:
   - الإعداد لأول مرة من الصفر
   - تريد أسرع مسار للوصول إلى دردشة تعمل
 title: "بدء الاستخدام"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:43Z
 ---
 
 # بدء الاستخدام
@@ -24,7 +17,7 @@ x-i18n:
 الوثائق: [Dashboard](/web/dashboard) و[Control UI](/web/control-ui).
 </Info>
 
-## المتطلبات المسبقة
+## المسبق
 
 - Node 22 أو أحدث
 
@@ -35,7 +28,7 @@ x-i18n:
 ## إعداد سريع (CLI)
 
 <Steps>
-  <Step title="تثبيت OpenClaw (موصى به)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ x-i18n:
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     طرق التثبيت الأخرى والمتطلبات: [Install](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="تشغيل معالج الإعداد الأولي">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     يقوم المعالج بتهيئة المصادقة، وإعدادات Gateway، والقنوات الاختيارية.
     راجع [Onboarding Wizard](/start/wizard) للتفاصيل.
-
-  </Step>
-  <Step title="التحقق من Gateway">
-    إذا قمت بتثبيت الخدمة، فيجب أن تكون قيد التشغيل بالفعل:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="فتح واجهة التحكم">
+  <Step title="Check the Gateway">
+    إذا قمت بتثبيت الخدمة، فيجب أن تكون قيد التشغيل بالفعل:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,31 +84,35 @@ x-i18n:
 ## فحوصات إضافية وخيارات اختيارية
 
 <AccordionGroup>
-  <Accordion title="تشغيل Gateway في الواجهة الأمامية">
+  <Accordion title="Run the Gateway in the foreground">
     مفيد للاختبارات السريعة أو استكشاف الأخطاء وإصلاحها.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="إرسال رسالة اختبار">
+  <Accordion title="Send a test message">
     يتطلب قناة مُهيّأة.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
 
-## تعمّق أكثر
+## اذهب أعمق
 
 <Columns>
-  <Card title="معالج الإعداد الأولي (تفاصيل)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     مرجع كامل لمعالج CLI وخيارات متقدمة.
   </Card>
-  <Card title="تهيئة تطبيق macOS عند التشغيل الأول" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     مسار التشغيل الأول لتطبيق macOS.
   </Card>
 </Columns>

@@ -3,24 +3,16 @@ summary: "ایجنٹ لوپ کی لائف سائیکل، اسٹریمز، اور
 read_when:
   - آپ کو ایجنٹ لوپ یا لائف سائیکل ایونٹس کی عین مطابق مرحلہ وار وضاحت درکار ہو
 title: "Agent Loop"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # Agent Loop (OpenClaw)
 
-ایجنٹک لوپ ایجنٹ کی مکمل “حقیقی” رَن ہوتی ہے: انٹیک → سیاق کی تیاری → ماڈل انفرنس →
-اوزاروں کا اجرا → جوابات کی اسٹریمنگ → مستقل ذخیرہ۔ یہ وہ مستند راستہ ہے جو ایک پیغام کو
-اعمال اور حتمی جواب میں تبدیل کرتا ہے، جبکہ سیشن کی حالت کو ہم آہنگ رکھتا ہے۔
+13. ایک ایجنٹک لوپ ایجنٹ کا مکمل "حقیقی" رن ہوتا ہے: انٹیک → کانٹیکسٹ کی تیاری → ماڈل انفیرنس → ٹول ایکزیکیوشن → اسٹریمنگ جوابات → پرسسٹنس۔ It’s the authoritative path that turns a message
+    into actions and a final reply, while keeping session state consistent.
 
-OpenClaw میں، لوپ فی سیشن ایک واحد، سلسلہ وار رَن ہوتی ہے جو لائف سائیکل اور اسٹریم ایونٹس خارج کرتی ہے
-جب ماڈل سوچتا ہے، اوزار کال کرتا ہے، اور آؤٹ پٹ اسٹریم کرتا ہے۔ یہ دستاویز وضاحت کرتی ہے کہ یہ مستند لوپ
-شروع سے آخر تک کیسے جڑی ہوتی ہے۔
+In OpenClaw, a loop is a single, serialized run per session that emits lifecycle and stream events
+as the model thinks, calls tools, and streams output. This doc explains how that authentic loop is
+wired end-to-end.
 
 ## Entry points
 
@@ -47,14 +39,14 @@ OpenClaw میں، لوپ فی سیشن ایک واحد، سلسلہ وار رَ�
    - lifecycle ایونٹس => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
 5. `agent.wait`، `waitForAgentJob` استعمال کرتا ہے:
    - `runId` کے لیے **lifecycle end/error** کا انتظار کرتا ہے
-   - `{ status: ok|error|timeout, startedAt, endedAt, error? }` واپس کرتا ہے
+   - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
 ## Queueing + concurrency
 
 - رنز فی سیشن کلید (session lane) کے لحاظ سے اور اختیاری طور پر ایک عالمی لین کے ذریعے سلسلہ وار کی جاتی ہیں۔
 - یہ اوزار/سیشن ریسز کو روکتا ہے اور سیشن ہسٹری کو ہم آہنگ رکھتا ہے۔
-- میسجنگ چینلز قطار موڈز (collect/steer/followup) منتخب کر سکتے ہیں جو اس لین سسٹم میں شامل ہوتے ہیں۔
-  دیکھیں [Command Queue](/concepts/queue)۔
+- 14. میسجنگ چینلز کیو موڈز (collect/steer/followup) منتخب کر سکتے ہیں جو اس لین سسٹم کو فیڈ کرتے ہیں۔
+  15. دیکھیں [Command Queue](/concepts/queue).
 
 ## Session + workspace preparation
 
@@ -78,8 +70,8 @@ OpenClaw میں دو hook سسٹمز ہیں:
 
 ### Internal hooks (Gateway hooks)
 
-- **`agent:bootstrap`**: سسٹم پرامپٹ کو حتمی شکل دینے سے پہلے بوٹ اسٹرپ فائلیں بناتے وقت چلتا ہے۔
-  اسے بوٹ اسٹرپ سیاق فائلیں شامل/حذف کرنے کے لیے استعمال کریں۔
+- **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized.
+  Use this to add/remove bootstrap context files.
 - **Command hooks**: `/new`, `/reset`, `/stop`, اور دیگر کمانڈ ایونٹس (Hooks دستاویز دیکھیں)۔
 
 سیٹ اپ اور مثالوں کے لیے [Hooks](/automation/hooks) دیکھیں۔
@@ -142,7 +134,7 @@ hook API اور رجسٹریشن کی تفصیلات کے لیے [Plugins](/tool
 
 ## Timeouts
 
-- `agent.wait` ڈیفالٹ: 30s (صرف انتظار)۔ `timeoutMs` پیرامیٹر اوور رائیڈ کرتا ہے۔
+- `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - ایجنٹ رَن ٹائم: `agents.defaults.timeoutSeconds` ڈیفالٹ 600s؛ `runEmbeddedPiAgent` ابورٹ ٹائمر میں نافذ۔
 
 ## Where things can end early

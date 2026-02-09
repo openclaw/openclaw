@@ -1,16 +1,9 @@
 ---
 summary: "Gateway HTTP uç noktası üzerinden tek bir aracı doğrudan çağırma"
 read_when:
-  - Tam bir ajan turu çalıştırmadan araç çağırma
+  - Tam bir ajan turu çalıştırmadan araçları çağırma
   - Araç politika zorunluluğu gerektiren otomasyonlar oluşturma
 title: "Araçları Çağırma API'si"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Araçları Çağırma (HTTP)
@@ -61,7 +54,7 @@ Araç kullanılabilirliği, Gateway ajanları tarafından kullanılan aynı poli
 - `tools.allow` / `tools.byProvider.allow`
 - `agents.<id>.tools.allow` / `agents.<id>.tools.byProvider.allow`
 - grup politikaları (oturum anahtarı bir gruba veya kanala eşleniyorsa)
-- alt ajan politikası (bir alt ajan oturum anahtarıyla çağırırken)
+- Alt ajan politikası (bir alt ajan oturum anahtarıyla çağırırken)
 
 Bir araç politika tarafından izinli değilse, uç nokta **404** döndürür.
 

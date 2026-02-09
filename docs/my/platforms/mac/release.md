@@ -4,23 +4,16 @@ read_when:
   - OpenClaw macOS ထုတ်ဝေမှုကို ဖြတ်တောက်ခြင်း သို့မဟုတ် အတည်ပြုခြင်း ပြုလုပ်နေစဉ်
   - Sparkle appcast သို့မဟုတ် feed အရင်းအမြစ်များကို အပ်ဒိတ်လုပ်နေစဉ်
 title: "macOS ထုတ်ဝေမှု"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:47Z
 ---
 
 # OpenClaw macOS ထုတ်ဝေမှု (Sparkle)
 
-ဤအက်ပ်တွင် ယခု Sparkle အလိုအလျောက် အပ်ဒိတ်များ ပါဝင်လာပါပြီ။ ထုတ်ဝေမှု build များကို Developer ID ဖြင့် လက်မှတ်ရေးထိုးရမည်၊ zip ပြုလုပ်ရမည်၊ လက်မှတ်ရေးထိုးထားသော appcast entry ဖြင့် ထုတ်ဝေရမည် ဖြစ်သည်။
+47. ယခု အက်ပ်တွင် Sparkle auto-updates ပါဝင်လာပါသည်။ 48. Release builds များကို Developer ID ဖြင့် sign လုပ်ပြီး zip လုပ်ကာ signed appcast entry ဖြင့် publish လုပ်ရပါမည်။
 
 ## ကြိုတင်လိုအပ်ချက်များ
 
 - Developer ID Application cert ကို ထည့်သွင်းထားရမည် (ဥပမာ: `Developer ID Application: <Developer Name> (<TEAMID>)`)။
-- Sparkle private key လမ်းကြောင်းကို environment အဖြစ် `SPARKLE_PRIVATE_KEY_FILE` တွင် သတ်မှတ်ထားရမည် (သင်၏ Sparkle ed25519 private key လမ်းကြောင်း; public key ကို Info.plist အတွင်း ထည့်သွင်းထားသည်)။ မရှိပါက `~/.profile` ကို စစ်ဆေးပါ။
+- 49. Sparkle private key path ကို environment ထဲတွင် `SPARKLE_PRIVATE_KEY_FILE` အဖြစ် သတ်မှတ်ထားရပါမည် (သင်၏ Sparkle ed25519 private key သို့ path; public key ကို Info.plist ထဲတွင် ထည့်သွင်းထားပြီးသား)။ 50. မရှိပါက `~/.profile` ကို စစ်ဆေးပါ။
 - Gatekeeper-လုံခြုံသော DMG/zip ဖြန့်ချိမှု ပြုလုပ်လိုပါက `xcrun notarytool` အတွက် Notary အထောက်အထားများ (keychain profile သို့မဟုတ် API key)။
   - ကျွန်ုပ်တို့သည် shell profile ထဲရှိ App Store Connect API key env vars များမှ ဖန်တီးထားသော `openclaw-notary` ဟု အမည်ပေးထားသည့် Keychain profile ကို အသုံးပြုပါသည်။
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
@@ -34,8 +27,8 @@ x-i18n:
 မှတ်ချက်များ—
 
 - `APP_BUILD` သည် `CFBundleVersion`/`sparkle:version` သို့ မပ်ဖြစ်သည်; ကိန်းဂဏန်းသာ ဖြစ်ပြီး တဖြည်းဖြည်း တိုးတက်သည့် အစီအစဉ်ဖြစ်အောင် ထိန်းထားပါ (`-beta` မပါစေနှင့်)၊ မဟုတ်ပါက Sparkle က တူညီသည်ဟု နှိုင်းယှဉ်ပါလိမ့်မည်။
-- ပုံမှန်အားဖြင့် လက်ရှိ architecture (`$(uname -m)`) ကို အသုံးပြုပါသည်။ ထုတ်ဝေမှု/Universal build များအတွက် `BUILD_ARCHS="arm64 x86_64"` (သို့မဟုတ် `BUILD_ARCHS=all`) ကို သတ်မှတ်ပါ။
-- ထုတ်ဝေမှု အရာဝတ္ထုများ (zip + DMG + notarization) အတွက် `scripts/package-mac-dist.sh` ကို အသုံးပြုပါ။ ဒေသခံ/dev ပက်ကေ့ဂျ်လုပ်ရန် `scripts/package-mac-app.sh` ကို အသုံးပြုပါ။
+- လက်ရှိ architecture (`$(uname -m)`) ကို မူလသတ်မှတ်ထားသည်။ Release / universal build များအတွက် `BUILD_ARCHS="arm64 x86_64"` (သို့မဟုတ် `BUILD_ARCHS=all`) ကို သတ်မှတ်ပါ။
+- Release artifact များ (zip + DMG + notarization) အတွက် `scripts/package-mac-dist.sh` ကို အသုံးပြုပါ။ Local / dev packaging အတွက် `scripts/package-mac-app.sh` ကို အသုံးပြုပါ။
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -77,8 +70,8 @@ Sparkle မှ ဖော်မတ်ထားသော HTML မှတ်စု�
 SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.2.6.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 ```
 
-[`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh) မှတဆင့် `CHANGELOG.md` မှ HTML release notes များကို ဖန်တီးပြီး appcast entry အတွင်း ထည့်သွင်းပါသည်။
-ထုတ်ဝေရာတွင် အပ်ဒိတ်လုပ်ထားသော `appcast.xml` ကို release assets (zip + dSYM) များနှင့်အတူ commit လုပ်ပါ။
+`CHANGELOG.md` မှ HTML release notes များကို (`scripts/changelog-to-html.sh` မှတစ်ဆင့်) ဖန်တီးပြီး appcast entry ထဲတွင် ထည့်သွင်းပါသည်။
+Publish လုပ်ရာတွင် update လုပ်ထားသော `appcast.xml` ကို release asset များ (zip + dSYM) နှင့်အတူ commit လုပ်ပါ။
 
 ## ထုတ်ဝေခြင်း & အတည်ပြုခြင်း
 
@@ -87,6 +80,6 @@ SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh di
 - Sanity checks—
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` သည် 200 ပြန်ရပါသည်။
   - asset များ တင်ပြီးနောက် `curl -I <enclosure url>` သည် 200 ပြန်ရပါသည်။
-  - ယခင် public build တစ်ခုတွင် About tab မှ “Check for Updates…” ကို လုပ်ဆောင်ပြီး Sparkle က build အသစ်ကို ပြီးပြည့်စုံစွာ ထည့်သွင်းနိုင်ကြောင်း အတည်ပြုပါ။
+  - အရင် public build တစ်ခုတွင် About tab မှ “Check for Updates…” ကို chạyပြီး Sparkle က build အသစ်ကို သန့်ရှင်းစွာ install လုပ်နိုင်ကြောင်း စစ်ဆေးပါ။
 
 ပြီးစီးသတ်မှတ်ချက် (Definition of done): လက်မှတ်ရေးထိုးထားသော app နှင့် appcast ကို ထုတ်ဝေပြီးဖြစ်သည်၊ ယခင် ထည့်သွင်းထားသော ဗားရှင်းမှ အပ်ဒိတ် လုပ်ငန်းစဉ် အလုပ်လုပ်ပါသည်၊ ထုတ်ဝေမှု အရင်းအမြစ်များကို GitHub release တွင် ချိတ်ဆက်ထားပြီးဖြစ်သည်။

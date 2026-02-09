@@ -3,13 +3,6 @@ summary: "Adgang og autentificering til Gateway-dashboardet (Control UI)"
 read_when:
   - Ændring af autentificering eller eksponeringsmetoder for dashboardet
 title: "Dashboard"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:44Z
 ---
 
 # Dashboard (Control UI)
@@ -27,12 +20,12 @@ Vigtige referencer:
 - [Tailscale](/gateway/tailscale) for Serve/Funnel-automatisering.
 - [Web surfaces](/web) for bind-modes og sikkerhedsnoter.
 
-Autentificering håndhæves ved WebSocket-handshaket via `connect.params.auth`
-(token eller adgangskode). Se `gateway.auth` i [Gateway-konfiguration](/gateway/configuration).
+Godkendelse håndhæves på WebSocket handshake via `connect.params.auth`
+(token eller adgangskode). Se `gateway.auth` i [Gateway konfiguration](/gateway/configuration).
 
-Sikkerhedsnote: Control UI er en **admin-overflade** (chat, konfiguration, exec-godkendelser).
-Udsæt den ikke offentligt. UI’et gemmer tokenet i `localStorage` efter første indlæsning.
-Foretræk localhost, Tailscale Serve eller en SSH-tunnel.
+Sikkerheds note: Control UI er en **admin overflade** (chat, config, exec godkendelser).
+Må ikke udsætte det offentligt. Brugerfladen gemmer token i `localStorage` efter første indlæsning.
+Foretrækker localhost, Tailscale Serve, eller en SSH-tunnel.
 
 ## Hurtig vej (anbefalet)
 
@@ -44,7 +37,7 @@ Foretræk localhost, Tailscale Serve eller en SSH-tunnel.
 
 - **Localhost**: åbn `http://127.0.0.1:18789/`.
 - **Token-kilde**: `gateway.auth.token` (eller `OPENCLAW_GATEWAY_TOKEN`); UI’et gemmer en kopi i localStorage, efter du forbinder.
-- **Ikke localhost**: brug Tailscale Serve (uden token hvis `gateway.auth.allowTailscale: true`), tailnet-bind med et token eller en SSH-tunnel. Se [Web surfaces](/web).
+- **Ikke localhost**: brug Tailscale Serve (tokenless if `gateway.auth.allowTailscale: true`), tailnet bind med en token, eller en SSH tunnel. Se [Weboverflader](/web).
 
 ## Hvis du ser “unauthorized” / 1008
 

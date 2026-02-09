@@ -4,13 +4,6 @@ read_when:
   - Insamling av macOS-loggar eller undersökning av loggning av privata data
   - Felsökning av problem med röstväckning/sessionens livscykel
 title: "macOS-loggning"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:56Z
 ---
 
 # Loggning (macOS)
@@ -26,12 +19,12 @@ OpenClaw dirigerar macOS-apploggar via swift-log (unified logging som standard) 
 
 Noteringar:
 
-- Detta är **avstängt som standard**. Aktivera endast under aktiv felsökning.
+- Detta är **av som standard**. Aktivera endast vid aktiv felsökning.
 - Behandla filen som känslig; dela den inte utan granskning.
 
 ## Unified logging: privata data på macOS
 
-Unified logging maskerar de flesta nyttolaster om inte ett subsystem väljer `privacy -off`. Enligt Peters genomgång av macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) styrs detta av en plist i `/Library/Preferences/Logging/Subsystems/` som är nycklad efter subsystemets namn. Endast nya loggposter tar upp flaggan, så aktivera den innan du reproducerar ett problem.
+Enhetlig loggning ändrar de flesta payloads såvida inte ett delsystem väljer i `privacy -off`. Per Peter's write-up on macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) this is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Endast nya loggposter plocka upp flaggan, så aktivera det innan du reproducerar ett problem.
 
 ## Aktivera för OpenClaw (`bot.molt`)
 
@@ -55,7 +48,7 @@ sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Lo
 ```
 
 - Ingen omstart krävs; logd upptäcker filen snabbt, men endast nya loggrader kommer att inkludera privata nyttolaster.
-- Visa den mer detaljerade utdata med den befintliga hjälparen, t.ex. `./scripts/clawlog.sh --category WebChat --last 5m`.
+- Visa den rikare utmatningen med den befintliga hjälparen, t.ex. `./scripts/clawlog.sh --category WebChat --last 5m`.
 
 ## Inaktivera efter felsökning
 

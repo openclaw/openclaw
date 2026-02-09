@@ -5,13 +5,6 @@ read_when:
   - Depurar desajustes de protocolo o fallas de conexión
   - Regenerar esquemas/modelos del protocolo
 title: "Protocolo del Gateway"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:39Z
 ---
 
 # Protocolo del Gateway (WebSocket)
@@ -131,7 +124,7 @@ Cuando se emite un token de dispositivo, `hello-ok` también incluye:
 }
 ```
 
-## Tramas
+## Enmarcando
 
 - **Solicitud**: `{type:"req", id, method, params}`
 - **Respuesta**: `{type:"res", id, ok, payload|error}`
@@ -156,7 +149,7 @@ Alcances comunes:
 - `operator.approvals`
 - `operator.pairing`
 
-### Capacidades/comandos/permisos (nodo)
+### Caps/comandos/permisos (node)
 
 Los nodos declaran reclamaciones de capacidades al momento de conectarse:
 

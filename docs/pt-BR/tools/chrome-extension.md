@@ -5,13 +5,6 @@ read_when:
   - Você precisa de Gateway remoto + automação de navegador local via Tailscale
   - Você quer entender as implicações de segurança da tomada de controle do navegador
 title: "Extensão do Chrome"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:11Z
 ---
 
 # Extensão do Chrome (relay do navegador)
@@ -165,7 +158,7 @@ Se você mover ou excluir esse diretório de instalação, o Chrome marcará a e
 Isso é poderoso e arriscado. Trate como se estivesse dando ao modelo “mãos no seu navegador”.
 
 - A extensão usa a API de depuração do Chrome (`chrome.debugger`). Quando anexada, o modelo pode:
-  - clicar/digitar/navegar nessa aba
+  - click/type/navegue nessa aba
   - ler o conteúdo da página
   - acessar tudo o que a sessão logada da aba puder acessar
 - **Isso não é isolado** como o perfil dedicado gerenciado pelo OpenClaw.

@@ -5,13 +5,6 @@ read_when:
   - Eşleştirme veya köprü kimlik doğrulama hatalarını incelerken
   - Gateway tarafından açığa çıkarılan düğüm yüzeyini denetlerken
 title: "Köprü Protokolü"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Köprü protokolü (eski düğüm taşıması)
@@ -66,7 +59,7 @@ Gateway → İstemci:
 
 Eski izin listesi zorlaması `src/gateway/server-bridge.ts` içinde yer alıyordu (kaldırıldı).
 
-## Çalıştırma yaşam döngüsü olayları
+## Exec lifecycle events
 
 Düğümler, system.run etkinliğini yüzeye çıkarmak için `exec.finished` veya `exec.denied` olayları yayımlayabilir.
 Bunlar gateway'de sistem olaylarına eşlenir. (Eski düğümler hâlâ `exec.started` yayımlayabilir.)
@@ -86,6 +79,6 @@ Yük alanı alanları (belirtilmedikçe tümü isteğe bağlıdır):
 - İstemciler MagicDNS adı veya tailnet IP'si üzerinden bağlanır.
 - Bonjour ağlar arası **geçmez**; gerektiğinde manuel ana makine/port veya geniş alan DNS‑SD kullanın.
 
-## Sürümleme
+## Versioning
 
 Köprü şu anda **örtük v1**'dir (min/maks müzakere yok). Geriye dönük uyumluluk beklenir; herhangi bir kırıcı değişiklikten önce bir köprü protokolü sürüm alanı ekleyin.

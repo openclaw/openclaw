@@ -4,18 +4,11 @@ read_when:
   - Bạn muốn chạy OpenClaw với các mô hình cục bộ thông qua Ollama
   - Bạn cần hướng dẫn thiết lập và cấu hình Ollama
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:01Z
 ---
 
 # Ollama
 
-Ollama là một runtime LLM cục bộ giúp bạn dễ dàng chạy các mô hình mã nguồn mở trên máy của mình. OpenClaw tích hợp với API tương thích OpenAI của Ollama và có thể **tự động khám phá các mô hình có khả năng dùng tool** khi bạn bật `OLLAMA_API_KEY` (hoặc một auth profile) và không định nghĩa mục `models.providers.ollama` một cách tường minh.
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Khởi động nhanh
 
@@ -181,7 +174,7 @@ Ollama miễn phí và chạy cục bộ, vì vậy mọi chi phí mô hình đ�
 
 ### Cấu hình streaming
 
-Do một [vấn đề đã biết](https://github.com/badlogic/pi-mono/issues/1205) trong SDK nền tảng với định dạng phản hồi của Ollama, **streaming bị tắt theo mặc định** đối với các mô hình Ollama. Điều này ngăn chặn các phản hồi bị hỏng khi sử dụng các mô hình có khả năng dùng tool.
+Due to a [known issue](https://github.com/badlogic/pi-mono/issues/1205) in the underlying SDK with Ollama's response format, **streaming is disabled by default** for Ollama models. 15. Điều này ngăn chặn các phản hồi bị hỏng khi sử dụng các mô hình có khả năng dùng công cụ.
 
 Khi streaming bị tắt, phản hồi được trả về một lần (chế độ không streaming), tránh được vấn đề nội dung/suy luận đan xen gây ra đầu ra bị lỗi.
 
@@ -223,7 +216,7 @@ Bạn cũng có thể tắt streaming cho bất kỳ nhà cung cấp nào nếu 
 
 ### Cửa sổ ngữ cảnh
 
-Đối với các mô hình được tự động khám phá, OpenClaw sử dụng cửa sổ ngữ cảnh do Ollama báo cáo khi có, nếu không sẽ mặc định là `8192`. Bạn có thể ghi đè `contextWindow` và `maxTokens` trong cấu hình provider tường minh.
+For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it defaults to `8192`. You can override `contextWindow` and `maxTokens` in explicit provider config.
 
 ## Xử lý sự cố
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### Không có mô hình khả dụng
 
-OpenClaw chỉ tự động khám phá các mô hình báo cáo hỗ trợ tool. Nếu mô hình của bạn không xuất hiện, hãy:
+OpenClaw only auto-discovers models that report tool support. If your model isn't listed, either:
 
 - Tải một mô hình có khả năng dùng tool, hoặc
 - Định nghĩa mô hình một cách tường minh trong `models.providers.ollama`.
@@ -270,7 +263,7 @@ ollama serve
 
 ### Phản hồi bị hỏng hoặc xuất hiện tên tool trong đầu ra
 
-Nếu bạn thấy các phản hồi bị lỗi chứa tên tool (như `sessions_send`, `memory_get`) hoặc văn bản bị phân mảnh khi sử dụng mô hình Ollama, điều này là do một vấn đề từ SDK thượng nguồn với phản hồi streaming. **Vấn đề này đã được khắc phục theo mặc định** trong phiên bản OpenClaw mới nhất bằng cách tắt streaming cho các mô hình Ollama.
+If you see garbled responses containing tool names (like `sessions_send`, `memory_get`) or fragmented text when using Ollama models, this is due to an upstream SDK issue with streaming responses. 17. **Điều này đã được khắc phục theo mặc định** trong phiên bản OpenClaw mới nhất bằng cách tắt streaming cho các mô hình Ollama.
 
 Nếu bạn đã bật streaming thủ công và gặp vấn đề này:
 

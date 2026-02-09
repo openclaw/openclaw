@@ -4,13 +4,6 @@ read_when:
   - Pagkuha ng macOS logs o pag-imbestiga ng pagla-log ng pribadong data
   - Pag-debug ng mga isyu sa voice wake/session lifecycle
 title: "Pagla-log sa macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Logging (macOS)
@@ -26,12 +19,12 @@ Ipinapadaan ng OpenClaw ang mga macOS app log sa swift-log (unified logging bila
 
 Mga tala:
 
-- **Naka-off ito bilang default**. Paganahin lamang habang aktibong nagde-debug.
+- Ito ay **naka-off bilang default**. I-enable lamang habang aktibong nagde-debug.
 - Ituring ang file bilang sensitibo; huwag itong ibahagi nang walang pagsusuri.
 
 ## Unified logging private data sa macOS
 
-Ang unified logging ay nagre-redact ng karamihan ng mga payload maliban kung ang isang subsystem ay nag-opt in sa `privacy -off`. Ayon sa write-up ni Peter tungkol sa macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025), ito ay kinokontrol ng isang plist sa `/Library/Preferences/Logging/Subsystems/` na naka-key ayon sa pangalan ng subsystem. Tanging mga bagong log entry lang ang kukuha ng flag, kaya paganahin ito bago muling likhain ang isyu.
+Ang unified logging ay nagre-redact ng karamihan sa mga payload maliban kung ang isang subsystem ay nag-opt in sa `privacy -off`. Ayon sa write-up ni Peter tungkol sa macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025), ito ay kinokontrol ng isang plist sa `/Library/Preferences/Logging/Subsystems/` na naka-key sa pangalan ng subsystem. Tanging mga bagong log entry lamang ang kumukuha ng flag, kaya i-enable ito bago mag-reproduce ng isyu.
 
 ## Paganahin para sa OpenClaw (`bot.molt`)
 

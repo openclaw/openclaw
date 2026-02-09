@@ -3,13 +3,6 @@ summary: "Guía de configuración para desarrolladores que trabajan en la aplica
 read_when:
   - Configuración del entorno de desarrollo de macOS
 title: "Configuración de desarrollo en macOS"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:07Z
 ---
 
 # Configuración para desarrolladores de macOS
@@ -23,7 +16,7 @@ Antes de compilar la aplicación, asegúrese de tener instalado lo siguiente:
 1. **Xcode 26.2+**: Requerido para el desarrollo en Swift.
 2. **Node.js 22+ y pnpm**: Requeridos para el Gateway, la CLI y los scripts de empaquetado.
 
-## 1. Instalar dependencias
+## 1) Instalar dependencias
 
 Instale las dependencias de todo el proyecto:
 

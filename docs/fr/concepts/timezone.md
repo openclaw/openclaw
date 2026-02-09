@@ -1,16 +1,9 @@
 ---
 summary: "Gestion des fuseaux horaires pour les agents, les enveloppes et les invites"
 read_when:
-  - Vous devez comprendre comment les horodatages sont normalisés pour le modele
+  - Vous devez comprendre comment les horodatages sont normalisés pour le modèle
   - Configuration du fuseau horaire de l'utilisateur pour les invites systeme
 title: "Fuseaux horaires"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:22Z
 ---
 
 # Fuseaux horaires

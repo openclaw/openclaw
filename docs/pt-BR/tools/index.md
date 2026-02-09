@@ -4,13 +4,6 @@ read_when:
   - Adicionar ou modificar ferramentas do agente
   - Aposentar ou alterar Skills `openclaw-*`
 title: "Tools"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:47Z
 ---
 
 # Tools (OpenClaw)
@@ -32,7 +25,7 @@ Você pode permitir/negar ferramentas globalmente via `tools.allow` / `tools.den
 
 Notas:
 
-- A correspondência não diferencia maiúsculas de minúsculas.
+- Correspondência é insensível a maiúsculas e minúsculas.
 - Curingas `*` são suportados (`"*"` significa todas as ferramentas).
 - Se `tools.allow` referenciar apenas nomes de ferramentas de plugin desconhecidos ou não carregados, o OpenClaw registra um aviso e ignora a allowlist para que as ferramentas principais continuem disponíveis.
 
@@ -464,7 +457,7 @@ Notas:
 - O resultado é restrito às allowlists por agente (`agents.list[].subagents.allowAgents`).
 - Quando `["*"]` está configurado, a ferramenta inclui todos os agentes configurados e marca `allowAny: true`.
 
-## Parâmetros (comuns)
+## Parâmetros (comum)
 
 Ferramentas apoiadas pelo Gateway (`canvas`, `nodes`, `cron`):
 

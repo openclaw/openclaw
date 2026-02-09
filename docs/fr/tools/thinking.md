@@ -3,13 +3,6 @@ summary: "Syntaxe des directives pour /think + /verbose et leur impact sur le ra
 read_when:
   - Ajuster l’analyse des directives de thinking ou verbose, ou leurs valeurs par defaut
 title: "Niveaux de thinking"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:14Z
 ---
 
 # Niveaux de thinking (directives /think)
@@ -65,7 +58,7 @@ x-i18n:
 - Alias : `/reason`.
 - Envoyez `/reasoning` (ou `/reasoning:`) sans argument pour voir le niveau de raisonnement actuel.
 
-## Lien connexe
+## Associe
 
 - La documentation du mode eleve se trouve dans [Elevated mode](/tools/elevated).
 

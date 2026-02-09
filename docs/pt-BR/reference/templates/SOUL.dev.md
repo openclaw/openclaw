@@ -3,13 +3,6 @@ summary: "Alma do agente de desenvolvimento (C-3PO)"
 read_when:
   - Ao usar os templates do gateway de desenvolvimento
   - Ao atualizar a identidade padrão do agente de desenvolvimento
-x-i18n:
-  source_path: reference/templates/SOUL.dev.md
-  source_hash: 8ba3131f4396c4f3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:55Z
 ---
 
 # SOUL.md - A Alma de C-3PO

@@ -3,20 +3,13 @@ summary: "Gateway سے OpenAI-مطابقت رکھنے والا /v1/chat/completi
 read_when:
   - ایسے ٹولز کے انضمام کے وقت جو OpenAI Chat Completions کی توقع رکھتے ہوں
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:14Z
 ---
 
 # OpenAI Chat Completions (HTTP)
 
 OpenClaw کا Gateway ایک چھوٹا OpenAI-مطابقت رکھنے والا Chat Completions اینڈپوائنٹ فراہم کر سکتا ہے۔
 
-یہ اینڈپوائنٹ **بطورِ طے شدہ غیرفعال** ہوتا ہے۔ پہلے کنفیگ میں اسے فعال کریں۔
+This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/chat/completions`
 - Gateway ہی کا پورٹ (WS + HTTP ملٹی پلیکس): `http://<gateway-host>:<port>/v1/chat/completions`
@@ -25,7 +18,7 @@ OpenClaw کا Gateway ایک چھوٹا OpenAI-مطابقت رکھنے والا 
 
 ## تصدیق
 
-Gateway کی auth کنفیگریشن استعمال ہوتی ہے۔ ایک bearer ٹوکن بھیجیں:
+Uses the Gateway auth configuration. Send a bearer token:
 
 - `Authorization: Bearer <token>`
 

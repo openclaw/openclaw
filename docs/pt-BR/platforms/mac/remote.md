@@ -3,13 +3,6 @@ summary: "fluxo do app macOS para controlar um Gateway OpenClaw remoto via SSH"
 read_when:
   - Ao configurar ou depurar o controle remoto do mac
 title: "Controle Remoto"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:35Z
 ---
 
 # OpenClaw remoto (macOS ⇄ host remoto)
@@ -55,7 +48,7 @@ O modo remoto oferece suporte a dois transportes:
 - **Direto (ws/wss)**: o Web Chat se conecta diretamente à URL do gateway configurada.
 - Não existe mais um servidor HTTP separado para WebChat.
 
-## Permissões
+## Permissions
 
 - O host remoto precisa das mesmas aprovações de TCC que o local (Automação, Acessibilidade, Gravação de Tela, Microfone, Reconhecimento de Fala, Notificações). Execute a integração inicial nessa máquina para concedê-las uma vez.
 - Os nós anunciam seu estado de permissões via `node.list` / `node.describe` para que os agentes saibam o que está disponível.

@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de l’analyse des emplacements de canal
   - Utilisation des champs de contexte d’emplacement dans les invites ou outils d’agent
 title: "Analyse des emplacements de canal"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:29Z
 ---
 
 # Analyse des emplacements de canal

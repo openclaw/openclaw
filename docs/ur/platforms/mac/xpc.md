@@ -3,18 +3,11 @@ summary: "OpenClaw ایپ، گیٹ وے نوڈ ٹرانسپورٹ، اور Peeka
 read_when:
   - IPC کنٹریکٹس یا مینو بار ایپ IPC میں ترمیم کرتے وقت
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # OpenClaw macOS IPC آرکیٹیکچر
 
-**موجودہ ماڈل:** ایک لوکل Unix ساکٹ **نوڈ ہوسٹ سروس** کو **macOS ایپ** سے exec منظوریوں + `system.run` کے لیے جوڑتا ہے۔ ڈسکوری/کنیکٹ چیکس کے لیے ایک `openclaw-mac` ڈیبگ CLI موجود ہے؛ ایجنٹ ایکشنز اب بھی Gateway WebSocket اور `node.invoke` کے ذریعے بہتے ہیں۔ UI آٹومیشن PeekabooBridge استعمال کرتی ہے۔
+**Current model:** a local Unix socket connects the **node host service** to the **macOS app** for exec approvals + `system.run`. 21. دریافت/کنیکٹ چیکس کے لیے ایک `openclaw-mac` ڈیبگ CLI موجود ہے؛ ایجنٹ ایکشنز اب بھی Gateway WebSocket اور `node.invoke` کے ذریعے گزرتے ہیں۔ 22. UI آٹومیشن PeekabooBridge استعمال کرتی ہے۔
 
 ## اہداف
 

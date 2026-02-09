@@ -4,13 +4,6 @@ read_when:
   - हेडलैस नोड होस्ट चलाते समय
   - system.run के लिए गैर‑macOS नोड को पेयर करते समय
 title: "नोड"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:05Z
 ---
 
 # `openclaw node`
@@ -34,9 +27,9 @@ x-i18n:
 
 ## ब्राउज़र प्रॉक्सी (शून्य‑विन्यास)
 
-यदि नोड पर `browser.enabled` अक्षम नहीं है, तो नोड होस्ट स्वतः एक ब्राउज़र प्रॉक्सी
-विज्ञापित करते हैं। इससे एजेंट अतिरिक्त विन्यास के बिना उस नोड पर ब्राउज़र
-ऑटोमेशन का उपयोग कर सकता है।
+Node hosts automatically advertise a browser proxy if `browser.enabled` is not
+disabled on the node. This lets the agent use browser automation on that node
+without extra configuration.
 
 आवश्यक होने पर नोड पर इसे अक्षम करें:
 
@@ -99,8 +92,8 @@ openclaw node uninstall
 
 ## पेयरिंग
 
-पहला कनेक्शन Gateway पर एक लंबित नोड पेयर अनुरोध बनाता है।
-इसे निम्न के माध्यम से अनुमोदित करें:
+The first connection creates a pending node pair request on the Gateway.
+Approve it via:
 
 ```bash
 openclaw nodes pending

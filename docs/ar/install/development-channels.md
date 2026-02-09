@@ -1,16 +1,9 @@
 ---
-summary: «القنوات المستقرة وبيتا والتطويرية: الدلالات، والتبديل، ووضع الوسوم»
+summary: "القنوات المستقرة وبيتا والتطويرية: الدلالات، والتبديل، ووضع الوسوم"
 read_when:
-  - «تريد التبديل بين stable/beta/dev»
-  - «تقوم بوسم الإصدارات أو نشر الإصدارات التمهيدية»
-title: «قنوات التطوير»
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:21Z
+  - تريد التبديل بين stable/beta/dev
+  - تقوم بوسم الإصدارات أو نشر الإصدارات التمهيدية
+title: "قنوات التطوير"
 ---
 
 # قنوات التطوير

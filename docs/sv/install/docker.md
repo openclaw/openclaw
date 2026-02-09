@@ -4,24 +4,17 @@ read_when:
   - Du vill ha en containeriserad gateway i stället för lokala installationer
   - Du validerar Docker-flödet
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:08Z
 ---
 
 # Docker (valfritt)
 
-Docker är **valfritt**. Använd det bara om du vill ha en containeriserad gateway eller validera Docker-flödet.
+Docker är **valfritt**. Använd den endast om du vill ha en behållaranpassad inkörsport eller för att validera Docker-flödet.
 
 ## Är Docker rätt för mig?
 
 - **Ja**: du vill ha en isolerad, tillfällig gateway-miljö eller köra OpenClaw på en värd utan lokala installationer.
-- **Nej**: du kör på din egen maskin och vill bara ha det snabbaste utvecklingsflödet. Använd det vanliga installationsflödet i stället.
-- **Notering om sandboxing**: agent-sandboxing använder också Docker, men det kräver **inte** att hela gatewayen körs i Docker. Se [Sandboxing](/gateway/sandboxing).
+- **Nej**: du kör på din egen maskin och vill bara ha den snabbaste dev-loopen. Använd det normala installationsflödet istället.
+- **Sandboxningsanteckning**: agentsandboxning använder också Docker, men det behöver **inte** hela porten för att köras i Docker. Se [Sandboxing](/gateway/sandboxing).
 
 Den här guiden täcker:
 
@@ -63,14 +56,14 @@ Efter att det är klart:
 
 - Öppna `http://127.0.0.1:18789/` i din webbläsare.
 - Klistra in token i Control UI (Inställningar → token).
-- Behöver du URL:en igen? Kör `docker compose run --rm openclaw-cli dashboard --no-open`.
+- Behöver du webbadressen igen? Kör `docker komponera kör --rm openclaw-cli instrumentbräda --no-open`.
 
 Det skriver konfig/arbetsyta på värden:
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-Kör du på en VPS? Se [Hetzner (Docker VPS)](/install/hetzner).
+Kör på en VPS? See [Hetzner (Docker VPS)](/install/hetzner).
 
 ### Manuell väg (compose)
 
@@ -80,9 +73,9 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
-Obs: kör `docker compose ...` från repo-roten. Om du aktiverade
+Obs: kör `docker komponera ...` från repo roten. Om du aktiverade
 `OPENCLAW_EXTRA_MOUNTS` eller `OPENCLAW_HOME_VOLUME`, skriver installationsskriptet
-`docker-compose.extra.yml`; inkludera den när du kör Compose någon annanstans:
+`docker-compose.extra.yml`; inkludera det när du kör Compose någon annanstans:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
@@ -103,9 +96,9 @@ Mer detaljer: [Dashboard](/web/dashboard), [Devices](/cli/devices).
 
 ### Extra mounts (valfritt)
 
-Om du vill montera ytterligare kataloger från värden i containrarna, sätt
+Om du vill montera ytterligare värdkataloger i behållarna, sätt
 `OPENCLAW_EXTRA_MOUNTS` innan du kör `docker-setup.sh`. Detta accepterar en
-kommaseparerad lista med Docker bind mounts och tillämpar dem på både
+kommaseparerad lista med Docker bind fästen och tillämpar dem på både
 `openclaw-gateway` och `openclaw-cli` genom att generera `docker-compose.extra.yml`.
 
 Exempel:
@@ -120,15 +113,15 @@ Noteringar:
 - Sökvägar måste delas med Docker Desktop på macOS/Windows.
 - Om du redigerar `OPENCLAW_EXTRA_MOUNTS`, kör `docker-setup.sh` igen för att regenerera
   den extra compose-filen.
-- `docker-compose.extra.yml` genereras. Redigera den inte manuellt.
+- `docker-compose.extra.yml` genereras. Redigera den inte.
 
 ### Persist hela container-hemmet (valfritt)
 
-Om du vill att `/home/node` ska bestå över återskapande av containrar, sätt en
-namngiven volym via `OPENCLAW_HOME_VOLUME`. Detta skapar en Docker-volym och monterar
-den på `/home/node`, samtidigt som standard bind-mounts för konfig/arbetsyta
-behålls. Använd en namngiven volym här (inte en bind-sökväg); för bind-mounts,
-använd `OPENCLAW_EXTRA_MOUNTS`.
+Om du vill att `/home/node` ska bestå över behållaren rekreation, ange en namngiven
+volym via `OPENCLAW_HOME_VOLUME`. Detta skapar en Docker-volym och monterar den på
+`/home/node`, samtidigt som standard config/workspace binder fästen. Använd en
+namngiven volym här (inte en bind sökväg); för bind fästen, använd
+`OPENCLAW_EXTRA_MOUNTS`.
 
 Exempel:
 
@@ -153,10 +146,10 @@ Noteringar:
 
 ### Installera extra apt-paket (valfritt)
 
-Om du behöver systempaket i imagen (till exempel byggverktyg eller
-mediebibliotek), sätt `OPENCLAW_DOCKER_APT_PACKAGES` innan du kör `docker-setup.sh`.
-Detta installerar paketen under image-bygget, så de består även om containern
-tas bort.
+Om du behöver systempaket inuti bilden (till exempel bygga verktyg eller media
+bibliotek), sätt `OPENCLAW_DOCKER_APT_PACKAGES` innan du kör `docker-setup.sh`.
+Detta installerar paketen under avbildningsbygget, så de kvarstår även om
+behållaren tas bort.
 
 Exempel:
 
@@ -173,8 +166,8 @@ Noteringar:
 
 ### Avancerat läge / fullfjädrad container (opt-in)
 
-Standard Docker-image är **säkerhetsfokuserad** och körs som den icke-root
-`node`-användaren. Detta håller attackytan liten, men innebär:
+Standardbilden för Docker är **security-first** och körs som icke-root `node`
+användare. Detta håller attackytan liten, men det betyder:
 
 - inga systempaketinstallationer vid körning
 - ingen Homebrew som standard
@@ -215,8 +208,8 @@ Om du behöver att Playwright installerar systemberoenden, bygg om imagen med
 
 ### Behörigheter + EACCES
 
-Imagen körs som `node` (uid 1000). Om du ser behörighetsfel på
-`/home/node/.openclaw`, se till att dina bind-mounts på värden ägs av uid 1000.
+Bilden körs som `node` (uid 1000). Om du ser behörighetsfel på
+`/home/node/.openclaw`, se till att din värd bind fästen ägs av uid 1000.
 
 Exempel (Linux-värd):
 
@@ -228,8 +221,8 @@ Om du väljer att köra som root av bekvämlighetsskäl accepterar du säkerhets
 
 ### Snabbare ombyggnader (rekommenderas)
 
-För att snabba upp ombyggnader, ordna din Dockerfile så att beroendelager cacheas.
-Detta undviker att köra `pnpm install` igen om inte låsfiler ändras:
+För att snabba på återuppbyggnaden, beställ din Dockerfile så att beroendelager cachelagras.
+Detta undviker att köra om `pnpm install` om inte låsfiler ändras:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -285,10 +278,10 @@ Dokumentation: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [
 
 ### OpenAI Codex OAuth (headless Docker)
 
-Om du väljer OpenAI Codex OAuth i guiden öppnas en webbläsar-URL och försöker
-fånga en callback på `http://127.0.0.1:1455/auth/callback`. I Docker eller
-headless-upplägg kan den callbacken visa ett webbläsarfel. Kopiera hela
-redirect-URL:en du landar på och klistra in den tillbaka i guiden för att slutföra autentiseringen.
+Om du väljer OpenAI Codex OAuth i guiden öppnar den en webbläsarURL och försöker
+att fånga en callback på `http://127.0.0.1:1455/auth/callback`. I Docker eller
+headless setups som callback kan visa ett webbläsarfel. Kopiera hela omdirigera
+URL som du landar på och klistra in den i guiden för att avsluta författaren.
 
 ### Hälsokontroll
 
@@ -311,7 +304,7 @@ pnpm test:docker:qr
 ### Noteringar
 
 - Gateway-bindning är som standard `lan` för containeranvändning.
-- Dockerfile CMD använder `--allow-unconfigured`; monterad konfig med `gateway.mode` och inte `local` startar ändå. Åsidosätt CMD för att tvinga skyddet.
+- Dockerfile CMD använder `--allow-unconfigured`; monterad konfiguration med `gateway.mode` inte `local` kommer fortfarande att starta. Åsidosätt CMD för att genomdriva vakten.
 - Gateway-containern är sanningskällan för sessioner (`~/.openclaw/agents/<agentId>/sessions/`).
 
 ## Agent Sandbox (gateway på värden + Docker-verktyg)
@@ -320,8 +313,8 @@ Fördjupning: [Sandboxing](/gateway/sandboxing)
 
 ### Vad den gör
 
-När `agents.defaults.sandbox` är aktiverat körs **icke-huvudsessioner** verktyg i en Docker-
-container. Gatewayen stannar på din värd, men verktygskörningen är isolerad:
+När `agents.defaults.sandbox` är aktiverat, **icke-huvudsakliga sessioner** kör verktyg inuti en Docker
+behållare. Gateway stannar på din värd, men verktyget utförande är isolerat:
 
 - omfattning: `"agent"` som standard (en container + arbetsyta per agent)
 - omfattning: `"session"` för per-session-isolering
@@ -330,14 +323,14 @@ container. Gatewayen stannar på din värd, men verktygskörningen är isolerad:
 - policy för tillåt/nekade verktyg (nekad vinner)
 - inkommande media kopieras till den aktiva sandbox-arbetsytan (`media/inbound/*`) så att verktyg kan läsa den (med `workspaceAccess: "rw"` hamnar detta i agentens arbetsyta)
 
-Varning: `scope: "shared"` inaktiverar isolering mellan sessioner. Alla sessioner delar
+Varning: `scope: "shared"` inaktiverar cross-sessions-isolering. Alla sessioner delar
 en container och en arbetsyta.
 
 ### Sandbox-profiler per agent (multi-agent)
 
-Om du använder multi-agent-routing kan varje agent åsidosätta sandbox- och
-verktygsinställningar: `agents.list[].sandbox` och `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools`).
-Detta låter dig köra blandade åtkomstnivåer i en gateway:
+Om du använder multi-agent routing, kan varje agent åsidosätta sandlåda + verktygsinställningar:
+`agents.list[].sandbox` och `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools`). Detta låter dig köra
+blandade accessnivåer i en gateway:
 
 - Full åtkomst (personlig agent)
 - Läsbara verktyg + skrivskyddad arbetsyta (familj-/arbetsagent)
@@ -364,10 +357,10 @@ Om du planerar att installera paket i `setupCommand`, notera:
 
 - Standard `docker.network` är `"none"` (ingen utgående trafik).
 - `readOnlyRoot: true` blockerar paketinstallationer.
-- `user` måste vara root för `apt-get` (utelämna `user` eller sätt `user: "0:0"`).
-  OpenClaw återskapar automatiskt containrar när `setupCommand` (eller Docker-konfig) ändras
-  om inte containern **nyligen användes** (inom ~5 minuter). Aktiva containrar
-  loggar en varning med exakt `openclaw sandbox recreate ...`-kommando.
+- `user` måste vara root för `apt-get` (utelämna `user` eller set `user: "0:0"`).
+  OpenClaw återskapar automatiskt behållare när `setupCommand` (eller docker config) ändras
+  om inte behållaren **nyligen använts** (inom ~5 minuter). Heta behållare
+  logga en varning med det exakta `openclaw sandlådan återskapa ...` kommandot.
 
 ```json5
 {
@@ -475,8 +468,8 @@ scripts/sandbox-browser-setup.sh
 ```
 
 Detta bygger `openclaw-sandbox-browser:bookworm-slim` med
-`Dockerfile.sandbox-browser`. Containern kör Chromium med CDP aktiverat och
-en valfri noVNC-observatör (headful via Xvfb).
+`Dockerfile.sandbox-browser`. Behållaren kör Krom med CDP aktiverat och
+en valfri noVNC-observatör (huvudvärdigt via Xvfb).
 
 Noteringar:
 
@@ -515,9 +508,9 @@ När den är aktiverad får agenten:
 - en kontroll-URL för sandbox-webbläsaren (för verktyget `browser`)
 - en noVNC-URL (om aktiverad och headless=false)
 
-Kom ihåg: om du använder en tillåtelselista för verktyg, lägg till `browser`
-(och ta bort den från neka) annars förblir verktyget blockerat.
-Rensningsregler (`agents.defaults.sandbox.prune`) gäller även webbläsarcontainrar.
+Kom ihåg: Om du använder en tillåten lista för verktyg, lägg till `browser` (och ta bort den från
+deny) eller verktyget förblir blockerat.
+Rensa regler (`agents.defaults.sandbox.prune`) gäller även för webbläsarbehållare.
 
 ### Anpassad sandbox-image
 
@@ -569,8 +562,7 @@ Exempel:
 - Container körs inte: den skapas automatiskt per session vid behov.
 - Behörighetsfel i sandbox: sätt `docker.user` till ett UID:GID som matchar
   ägarskapet för din monterade arbetsyta (eller chown arbetsytemappen).
-- Anpassade verktyg hittas inte: OpenClaw kör kommandon med `sh -lc`
-  (inloggningsshell), som sourcar `/etc/profile` och kan återställa PATH. Sätt
-  `docker.env.PATH` för att lägga till dina anpassade verktygssökvägar (t.ex.
-  `/custom/bin:/usr/local/share/npm-global/bin`), eller lägg till
+- Anpassade verktyg hittades inte: OpenClaw kör kommandon med `sh -lc` (login shell), som
+  källor `/etc/profile` och kan återställa PATH. Sätt `docker.env.PATH` till att förkoda dina
+  anpassade verktygssökvägar (t.ex. `/custom/bin:/usr/local/share/npm-global/bin`), eller lägg till
   ett skript under `/etc/profile.d/` i din Dockerfile.

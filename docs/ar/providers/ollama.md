@@ -1,16 +1,9 @@
 ---
 summary: "تشغيل OpenClaw باستخدام Ollama (بيئة تشغيل LLM محلية)"
 read_when:
-  - "تريد تشغيل OpenClaw مع نماذج محلية عبر Ollama"
-  - "تحتاج إلى إرشادات إعداد وتهيئة Ollama"
+  - تريد تشغيل OpenClaw مع نماذج محلية عبر Ollama
+  - تحتاج إلى إرشادات إعداد وتهيئة Ollama
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:42Z
 ---
 
 # Ollama
@@ -235,7 +228,7 @@ Ollama مجاني ويعمل محليًا، لذلك يتم تعيين جميع 
 ollama serve
 ```
 
-وتأكد من أن واجهة البرمجة متاحة:
+و أن API يمكن الوصول إليه:
 
 ```bash
 curl http://localhost:11434/api/tags

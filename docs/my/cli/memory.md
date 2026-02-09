@@ -4,19 +4,12 @@ read_when:
   - သင်သည် semantic memory ကို အညွှန်းသတ်မှတ်ခြင်း သို့မဟုတ် ရှာဖွေလိုသောအခါ
   - memory ရရှိနိုင်မှု သို့မဟုတ် အညွှန်းသတ်မှတ်ခြင်းကို ဒီဘဂ်လုပ်နေစဉ်
 title: "မှတ်ဉာဏ်"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:03Z
 ---
 
 # `openclaw memory`
 
-semantic memory အညွှန်းသတ်မှတ်ခြင်းနှင့် ရှာဖွေမှုကို စီမံခန့်ခွဲရန်။
-လက်ရှိအသုံးပြုနေသော memory plugin မှ ပံ့ပိုးထားသည် (မူလအဖြစ်: `memory-core`; ပိတ်ရန် `plugins.slots.memory = "none"` ကို သတ်မှတ်ပါ)။
+semantic memory indexing နှင့် search ကို စီမံခန့်ခွဲပါ။
+လုပ်ဆောင်နေသော memory plugin မှ ပံ့ပိုးပေးထားသည် (default: `memory-core`; ပိတ်ရန် `plugins.slots.memory = "none"` ကို သတ်မှတ်ပါ)။
 
 ဆက်စပ်အကြောင်းအရာများ—
 

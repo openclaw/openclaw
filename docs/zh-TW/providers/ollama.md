@@ -1,21 +1,14 @@
 ---
-summary: 「使用 Ollama（本機 LLM 執行環境）執行 OpenClaw」
+summary: "使用 Ollama（本機 LLM 執行環境）執行 OpenClaw"
 read_when:
-  - 「你想透過 Ollama 使用本機模型來執行 OpenClaw」
-  - 「你需要 Ollama 的安裝與設定指引」
-title: 「Ollama」
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:07Z
+  - 你想透過 Ollama 使用本機模型來執行 OpenClaw
+  - 你需要 Ollama 的安裝與設定指引
+title: "Ollama"
 ---
 
 # Ollama
 
-Ollama 是一個本機 LLM 執行環境，可讓你輕鬆在自己的機器上執行開源模型。OpenClaw 可整合 Ollama 相容 OpenAI 的 API，並在你選擇啟用 `OLLAMA_API_KEY`（或身分驗證設定檔）且未定義明確的 `models.providers.ollama` 項目時，**自動探索具備工具能力的模型**。
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. Ollama 是一個本機 LLM 執行環境，可讓你輕鬆在自己的機器上執行開源模型。OpenClaw 可整合 Ollama 相容 OpenAI 的 API，並在你選擇啟用 `OLLAMA_API_KEY`（或身分驗證設定檔）且未定義明確的 `models.providers.ollama` 項目時，**自動探索具備工具能力的模型**。
 
 ## 快速開始
 
@@ -99,7 +92,7 @@ export OLLAMA_API_KEY="ollama-local"
 
 在以下情況下使用明確設定：
 
-- Ollama 執行於另一個主機或連接埠。
+- 38. Ollama 會在另一個主機／連接埠上執行。
 - 你想強制指定特定的內容視窗大小或模型清單。
 - 你想納入未回報工具支援的模型。
 
@@ -181,7 +174,7 @@ Ollama 為免費且於本機執行，因此所有模型成本皆設為 $0。
 
 ### 串流設定
 
-由於底層 SDK 在處理 Ollama 回應格式時存在一個[已知問題](https://github.com/badlogic/pi-mono/issues/1205)，**預設會停用 Ollama 模型的串流**。這可避免在使用具備工具能力的模型時產生損毀的回應。
+由於底層 SDK 在處理 Ollama 回應格式時存在一個[已知問題](https://github.com/badlogic/pi-mono/issues/1205)，**預設會停用 Ollama 模型的串流**。這可避免在使用具備工具能力的模型時產生損毀的回應。 39. 這可防止在使用具備工具能力的模型時出現回應損毀。
 
 當串流停用時，回應會一次性傳送（非串流模式），可避免內容／推理增量交錯而造成輸出混亂的問題。
 
@@ -223,9 +216,9 @@ Ollama 為免費且於本機執行，因此所有模型成本皆設為 $0。
 
 ### 內容視窗
 
-對於自動探索的模型，OpenClaw 會在可用時使用 Ollama 回報的內容視窗大小，否則預設為 `8192`。你可以在明確的提供者設定中覆寫 `contextWindow` 與 `maxTokens`。
+對於自動探索的模型，OpenClaw 會在可用時使用 Ollama 回報的內容視窗大小，否則預設為 `8192`。你可以在明確的提供者設定中覆寫 `contextWindow` 與 `maxTokens`。 40. 你可以在明確的提供者設定中覆寫 `contextWindow` 與 `maxTokens`。
 
-## 疑難排解
+## 41. 疑難排解
 
 ### 未偵測到 Ollama
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### 沒有可用模型
 
-OpenClaw 僅會自動探索回報具備工具支援的模型。若你的模型未列出，請擇一：
+OpenClaw 僅會自動探索回報具備工具支援的模型。若你的模型未列出，請擇一： 42. 如果你的模型未列出，請擇一：
 
 - 下載具備工具能力的模型，或
 - 在 `models.providers.ollama` 中明確定義該模型。
@@ -270,14 +263,14 @@ ollama serve
 
 ### 回應損毀或輸出中出現工具名稱
 
-若你在使用 Ollama 模型時，看到包含工具名稱（例如 `sessions_send`、`memory_get`）或文字片段化的混亂回應，這是由於上游 SDK 在串流回應上的問題所致。最新版本的 OpenClaw 已**預設修正此問題**，方式是停用 Ollama 模型的串流。
+若你在使用 Ollama 模型時，看到包含工具名稱（例如 `sessions_send`、`memory_get`）或文字片段化的混亂回應，這是由於上游 SDK 在串流回應上的問題所致。最新版本的 OpenClaw 已**預設修正此問題**，方式是停用 Ollama 模型的串流。 **This is fixed by default** in the latest OpenClaw version by disabling streaming for Ollama models.
 
 若你手動啟用了串流並遇到此問題：
 
 1. 從你的 Ollama 模型項目中移除 `streaming: true` 設定，或
 2. 為 Ollama 模型明確設定 `streaming: false`（請參閱[串流設定](#streaming-configuration)）
 
-## 另請參閱
+## See Also
 
 - [Model Providers](/concepts/model-providers) - 所有提供者的概覽
 - [Model Selection](/concepts/models) - 如何選擇模型

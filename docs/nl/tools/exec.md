@@ -4,13 +4,6 @@ read_when:
   - Bij het gebruiken of aanpassen van de exec-tool
   - Bij het debuggen van stdin- of TTY-gedrag
 title: "Exec-tool"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # Exec-tool
@@ -158,7 +151,7 @@ Verzenden (alleen CR verzenden):
 { "tool": "process", "action": "submit", "sessionId": "<id>" }
 ```
 
-Plakken (standaard tussen haakjes):
+Plakken (standaard bracketed):
 
 ```json
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }

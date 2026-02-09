@@ -4,13 +4,6 @@ read_when:
   - Node 전용 개발 스크립트 또는 watch 모드 실패를 디버깅할 때
   - OpenClaw 에서 tsx/esbuild 로더 충돌을 조사할 때
 title: "Node + tsx 충돌"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:57Z
 ---
 
 # Node + tsx "\_\_name is not a function" 충돌
@@ -42,7 +35,7 @@ pnpm install
 node --import tsx src/entry.ts status
 ```
 
-## 저장소 내 최소 재현
+## 리포지토리의 최소 재현 예제
 
 ```bash
 node --import tsx scripts/repro/tsx-name-repro.ts
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## 해결 방법
 
 - 개발 스크립트에 Bun 사용(현재의 임시 되돌림).
+
 - Node + tsc watch 를 사용한 다음, 컴파일된 출력을 실행:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - 로컬에서 확인됨: Node 25 에서 `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` 조합이 동작합니다.
+
 - 가능하다면 TS 로더에서 esbuild keepNames 를 비활성화( `__name` 헬퍼 삽입을 방지); tsx 는 현재 이를 노출하지 않습니다.
+
 - Node LTS (22/24) 를 `tsx` 와 함께 테스트하여 Node 25 전용 문제인지 확인합니다.
 
 ## 참고 자료

@@ -3,13 +3,6 @@ summary: "grammY üzerinden Telegram Bot API entegrasyonu ve kurulum notları"
 read_when:
   - Telegram veya grammY yolları üzerinde çalışırken
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:50Z
 ---
 
 # grammY Entegrasyonu (Telegram Bot API)
@@ -20,7 +13,7 @@ x-i18n:
 - fetch + FormData’yı elle yazmaya kıyasla daha temiz medya yardımcıları; tüm Bot API yöntemlerini destekler.
 - Genişletilebilir: özel fetch ile proxy desteği, oturum middleware’i (isteğe bağlı), tür güvenli bağlam.
 
-# Teslim ettiklerimiz
+# What we shipped
 
 - **Tek istemci yolu:** fetch tabanlı uygulama kaldırıldı; grammY artık varsayılan olarak etkin olan grammY throttler ile tek Telegram istemcisidir (gönderme + gateway).
 - **Gateway:** `monitorTelegramProvider` bir grammY `Bot` oluşturur; mention/allowlist kapılamasını bağlar, `getFile`/`download` üzerinden medya indirmeyi yapar ve yanıtları `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument` ile iletir. `webhookCallback` üzerinden long-poll veya webhook’u destekler.

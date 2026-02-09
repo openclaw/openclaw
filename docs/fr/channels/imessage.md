@@ -4,13 +4,6 @@ read_when:
   - Mise en place de la prise en charge iMessage
   - Débogage de l’envoi/la réception iMessage
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: 7c8c276701528b8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:53Z
 ---
 
 # iMessage (legacy : imsg)
@@ -43,7 +36,7 @@ Configuration minimale :
 }
 ```
 
-## Description
+## Qu’est-ce que c’est
 
 - Canal iMessage adossé à `imsg` sur macOS.
 - Routage déterministe : les réponses reviennent toujours vers iMessage.
@@ -69,6 +62,28 @@ Désactiver avec :
 - Autorisation d’automatisation lors de l’envoi.
 - `channels.imessage.cliPath` peut pointer vers toute commande qui proxifie stdin/stdout (par exemple, un script wrapper qui se connecte en SSH à un autre Mac et exécute `imsg rpc`).
 
+## Dépannage de la confidentialité et de la sécurité macOS TCC
+
+Si l'envoi/la réception échoue (par exemple, `imsg rpc` quitte non-zéro, les temps écoulés, ou la passerelle semble se suspendre), une cause courante est une invite de permission macOS qui n'a jamais été approuvée.
+
+macOS accorde les permissions TCC par contexte application/processus. Approuver les invites dans le même contexte que `imsg` (par exemple, Terminal/iTerm, une session LaunchAgent ou un processus lancé par SSH).
+
+Checklist:
+
+- **Full Disk Access** : autorise l'accès pour le processus qui exécute OpenClaw (et n'importe quel wrapper shell/SSH qui exécute `imsg`). Ceci est nécessaire pour lire la base de données des messages (`chat.db`).
+- **Automatisation → Messages** : permet au processus utilisant OpenClaw (et/ou votre terminal) de contrôler **Messages.app** pour les envois sortants.
+- **`imsg` CLI health**: vérifiez que `imsg` est installé et prend en charge RPC (`imsg rpc --help`).
+
+Astuce : si OpenClaw fonctionne sans tête (LaunchAgent/systemd/SSH), l'invite macOS peut être facile à manquer. Exécutez une commande interactive à usage unique dans un terminal GUI pour forcer l'invite de commande, puis recommencez :
+
+```bash
+imsg chats --limit 1
+# ou
+imsg envoyer <handle> "test"
+```
+
+Permissions de dossier macOS connexes (Desktop/Documents/Downloads): [/platforms/mac/permissions](/platforms/mac/permissions).
+
 ## Configuration (chemin rapide)
 
 1. Assurez-vous que Messages est connecté sur ce Mac.
@@ -88,7 +103,7 @@ Si vous voulez que le bot envoie depuis une **identité iMessage distincte** (et
 6. Configurez SSH pour que `ssh <bot-macos-user>@localhost true` fonctionne sans mot de passe.
 7. Faites pointer `channels.imessage.accounts.bot.cliPath` vers un wrapper SSH qui exécute `imsg` en tant qu’utilisateur bot.
 
-Note au premier lancement : l’envoi/la réception peuvent nécessiter des autorisations GUI (Automatisation + Accès complet au disque) dans l’_utilisateur macOS du bot_. Si `imsg rpc` semble bloqué ou s’arrête, connectez-vous à cet utilisateur (le partage d’écran aide), lancez une fois `imsg chats --limit 1` / `imsg send ...`, approuvez les invites, puis réessayez.
+Note au premier lancement : l’envoi/la réception peuvent nécessiter des autorisations GUI (Automatisation + Accès complet au disque) dans l’_utilisateur macOS du bot_. Si `imsg rpc` semble bloqué ou s’arrête, connectez-vous à cet utilisateur (le partage d’écran aide), lancez une fois `imsg chats --limit 1` / `imsg send ...`, approuvez les invites, puis réessayez. Voir [Dépannage macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
 
 Exemple de wrapper (`chmod +x`). Remplacez `<bot-macos-user>` par votre nom d’utilisateur macOS réel :
 
@@ -202,7 +217,7 @@ Prise en charge multi-comptes : utilisez `channels.imessage.accounts` avec une c
 
 ## Contrôle d’accès (Messages prives + groupes)
 
-Messages prives :
+DMs:
 
 - Par défaut : `channels.imessage.dmPolicy = "pairing"`.
 - Les expéditeurs inconnus reçoivent un code d’appairage ; les messages sont ignorés jusqu’à approbation (les codes expirent après 1 heure).
@@ -218,7 +233,7 @@ Groupes :
 - Le filtrage par mention utilise `agents.list[].groupChat.mentionPatterns` (ou `messages.groupChat.mentionPatterns`) car iMessage n’a pas de métadonnées de mention natives.
 - Surcharge multi-agents : définissez des motifs par agent sur `agents.list[].groupChat.mentionPatterns`.
 
-## Fonctionnement (comportement)
+## Comment ça marche (comportement)
 
 - `imsg` diffuse les événements de messages ; la passerelle les normalise dans l’enveloppe de canal partagée.
 - Les réponses reviennent toujours vers le même identifiant de discussion ou handle.

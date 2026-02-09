@@ -5,13 +5,6 @@ read_when:
   - تصحيح سبب تداخل openclaw مع Chrome الخاص بك
   - تنفيذ إعدادات المتصفح ودورة حياته في تطبيق macOS
 title: "المتصفح (مُدار بواسطة OpenClaw)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:40Z
 ---
 
 # المتصفح (مُدار بواسطة openclaw)
@@ -134,7 +127,7 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 }
 ```
 
-## التحكّم المحلي مقابل البعيد
+## وحدة التحكم المحلية مقابل عن بعد
 
 - **التحكّم المحلي (الافتراضي):** يقوم Gateway ببدء خدمة التحكّم بالحَلْقة المحلية ويمكنه إطلاق متصفح محلي.
 - **التحكّم البعيد (مضيف عُقدة):** شغّل مضيف عُقدة على الجهاز الذي يحتوي المتصفح؛ يقوم Gateway بتمرير إجراءات المتصفح إليه.
@@ -303,7 +296,7 @@ openclaw browser create-profile \
 - Linux: يبحث عن `google-chrome`، `brave`، `microsoft-edge`، `chromium`، إلخ.
 - Windows: يتحقق من مواقع التثبيت الشائعة.
 
-## واجهة برمجة التحكّم (اختياري)
+## تحكم API (اختياري)
 
 للتكاملات المحلية فقط، يوفّر Gateway واجهة HTTP صغيرة على الحلقة المحلية:
 
@@ -478,7 +471,7 @@ docker compose run --rm openclaw-cli \
 - المراجع **غير مستقرة عبر عمليات التنقّل**؛ إذا فشل شيء، أعد تشغيل `snapshot` واستخدم مرجعًا جديدًا.
 - إذا أُخذت لقطة الدور مع `--frame`، فستكون مراجع الدور ضمن نطاق ذلك iframe حتى لقطة الدور التالية.
 
-## تحسينات الانتظار
+## انتظر الطاقة
 
 يمكنك الانتظار لأكثر من الوقت/النص:
 
@@ -501,7 +494,7 @@ openclaw browser wait "#main" \
   --timeout-ms 15000
 ```
 
-## سير عمل التصحيح
+## تصحيح مسار العمل
 
 عندما يفشل إجراء (مثل «غير مرئي»، «انتهاك الوضع الصارم»، «مغطّى»):
 
@@ -511,7 +504,7 @@ openclaw browser wait "#main" \
 4. إذا تصرفت الصفحة بغرابة:
    - `openclaw browser errors --clear`
    - `openclaw browser requests --filter api --clear`
-5. للتصحيح العميق: سجّل تتبّعًا:
+5. لتصحيح الأخطاء العميقة: تسجيل التتبع:
    - `openclaw browser trace start`
    - أعد إنتاج المشكلة
    - `openclaw browser trace stop` (يطبع `TRACE:<path>`)

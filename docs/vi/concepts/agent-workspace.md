@@ -4,29 +4,21 @@ read_when:
   - Bạn cần giải thích workspace của tác tử hoặc bố cục tệp của nó
   - Bạn muốn sao lưu hoặc di chuyển workspace của tác tử
 title: "Workspace của tác tử"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:43Z
 ---
 
 # Workspace của tác tử
 
-Workspace là “ngôi nhà” của tác tử. Đây là thư mục làm việc duy nhất được dùng cho
-các công cụ tệp và cho ngữ cảnh workspace. Hãy giữ nó riêng tư và coi nó như bộ nhớ.
+**Quan trọng:** workspace là **cwd mặc định**, không phải sandbox cứng. It is the only working directory used for
+file tools and for workspace context. Keep it private and treat it as memory.
 
 Nó tách biệt với `~/.openclaw/`, nơi lưu cấu hình, thông tin xác thực và các phiên.
 
-**Quan trọng:** workspace là **cwd mặc định**, không phải là sandbox cứng. Các công cụ
-giải quyết đường dẫn tương đối dựa trên workspace, nhưng đường dẫn tuyệt đối vẫn có
-thể truy cập nơi khác trên máy chủ trừ khi bật sandboxing. Nếu bạn cần cô lập, hãy
-dùng [`agents.defaults.sandbox`](/gateway/sandboxing) (và/hoặc cấu hình sandbox theo từng tác tử).
-Khi sandboxing được bật và `workspaceAccess` không phải `"rw"`, các công cụ sẽ
-hoạt động bên trong một workspace sandbox dưới `~/.openclaw/sandboxes`, không phải workspace
-trên máy chủ của bạn.
+Nếu cần cách ly, hãy dùng
+[`agents.defaults.sandbox`](/gateway/sandboxing) (và/hoặc cấu hình sandbox theo từng agent). Tools
+resolve relative paths against the workspace, but absolute paths can still reach
+elsewhere on the host unless sandboxing is enabled. Các bản cài đặt cũ có thể đã tạo `~/openclaw`.
+When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate
+inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
 
 ## Vị trí mặc định
 
@@ -54,14 +46,14 @@ Nếu bạn đã tự quản lý các tệp workspace, bạn có thể tắt vi�
 
 ## Thư mục workspace bổ sung
 
-Các bản cài đặt cũ có thể đã tạo `~/openclaw`. Việc giữ nhiều thư mục workspace
-cùng lúc có thể gây nhầm lẫn về xác thực hoặc trạng thái, vì chỉ có một workspace
-được kích hoạt tại một thời điểm.
+**Khuyến nghị:** chỉ giữ một workspace đang hoạt động. Keeping multiple workspace
+directories around can cause confusing auth or state drift, because only one
+workspace is active at a time.
 
-**Khuyến nghị:** chỉ giữ một workspace đang hoạt động. Nếu bạn không còn dùng các
-thư mục bổ sung, hãy lưu trữ hoặc chuyển chúng vào Thùng rác (ví dụ `trash ~/openclaw`).
-Nếu bạn cố ý giữ nhiều workspace, hãy đảm bảo
-`agents.defaults.workspace` trỏ tới workspace đang hoạt động.
+**Recommendation:** keep a single active workspace. If you no longer use the
+extra folders, archive or move them to Trash (for example `trash ~/openclaw`).
+If you intentionally keep multiple workspaces, make sure
+`agents.defaults.workspace` points to the active one.
 
 `openclaw doctor` sẽ cảnh báo khi phát hiện có thêm thư mục workspace.
 
@@ -120,10 +112,11 @@ Xem [Memory](/concepts/memory) để biết quy trình làm việc và cơ chế
 - `canvas/` (tùy chọn)
   - Các tệp Canvas UI cho hiển thị node (ví dụ `canvas/index.html`).
 
-Nếu bất kỳ tệp bootstrap nào bị thiếu, OpenClaw sẽ chèn một dấu hiệu “thiếu tệp”
-vào phiên và tiếp tục. Các tệp bootstrap lớn sẽ bị cắt ngắn khi chèn;
-điều chỉnh giới hạn bằng `agents.defaults.bootstrapMaxChars` (mặc định: 20000).
-`openclaw setup` có thể tạo lại các mặc định bị thiếu mà không ghi đè các tệp hiện có.
+If any bootstrap file is missing, OpenClaw injects a "missing file" marker into
+the session and continues. Large bootstrap files are truncated when injected;
+adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
+`openclaw setup` can recreate missing defaults without overwriting existing
+files.
 
 ## Những gì KHÔNG nằm trong workspace
 
@@ -139,15 +132,15 @@ chúng ngoài hệ thống kiểm soát phiên bản.
 
 ## Sao lưu Git (khuyến nghị, riêng tư)
 
-Hãy coi workspace là bộ nhớ riêng tư. Đặt nó trong một repo git **riêng tư** để
-được sao lưu và có thể khôi phục.
+Treat the workspace as private memory. Put it in a **private** git repo so it is
+backed up and recoverable.
 
 Chạy các bước này trên máy nơi Gateway chạy (đó là nơi workspace tồn tại).
 
-### 1) Khởi tạo repo
+### 1. Khởi tạo repo
 
-Nếu git đã được cài đặt, các workspace hoàn toàn mới sẽ được khởi tạo tự động.
-Nếu workspace này chưa là một repo, hãy chạy:
+If git is installed, brand-new workspaces are initialized automatically. If this
+workspace is not already a repo, run:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -156,7 +149,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Thêm remote riêng tư (tùy chọn thân thiện cho người mới)
+### 2. Thêm remote riêng tư (tùy chọn thân thiện cho người mới)
 
 Tùy chọn A: GitHub web UI
 
@@ -191,7 +184,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Cập nhật định kỳ
+### 3. Cập nhật định kỳ
 
 ```bash
 git status
@@ -231,7 +224,7 @@ Gợi ý starter cho `.gitignore`:
 
 ## Ghi chú nâng cao
 
-- Định tuyến đa tác tử có thể dùng các workspace khác nhau cho từng tác tử. Xem
-  [Channel routing](/channels/channel-routing) để biết cấu hình định tuyến.
+- Các tệp trống sẽ bị bỏ qua. See
+  [Channel routing](/channels/channel-routing) for routing configuration.
 - Nếu `agents.defaults.sandbox` được bật, các phiên không phải chính có thể dùng workspace
   sandbox theo từng phiên dưới `agents.defaults.sandbox.workspaceRoot`.

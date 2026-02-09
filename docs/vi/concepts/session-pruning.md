@@ -3,18 +3,11 @@ summary: "Cắt tỉa phiên: rút gọn kết quả công cụ để giảm ph�
 read_when:
   - Bạn muốn giảm tăng trưởng ngữ cảnh LLM do đầu ra công cụ
   - Bạn đang tinh chỉnh agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:44Z
 ---
 
 # Cắt tỉa phiên
 
-Cắt tỉa phiên rút gọn **các kết quả công cụ cũ** khỏi ngữ cảnh trong bộ nhớ ngay trước mỗi lần gọi LLM. Nó **không** ghi lại lịch sử phiên trên đĩa (`*.jsonl`).
+33. Cắt tỉa phiên (session pruning) loại bỏ **kết quả công cụ cũ** khỏi ngữ cảnh trong bộ nhớ ngay trước mỗi lần gọi LLM. 34. Nó **không** ghi lại lịch sử phiên trên đĩa (`*.jsonl`).
 
 ## Khi nào chạy
 
@@ -32,7 +25,7 @@ Cắt tỉa phiên rút gọn **các kết quả công cụ cũ** khỏi ngữ c
 
 ## Điều này cải thiện gì (chi phí + hành vi cache)
 
-- **Vì sao cần cắt tỉa:** cache prompt của Anthropic chỉ áp dụng trong TTL. Nếu một phiên bị nhàn rỗi vượt TTL, yêu cầu tiếp theo sẽ cache lại toàn bộ prompt trừ khi bạn rút gọn trước.
+- 35. **Vì sao cần cắt tỉa:** bộ nhớ đệm prompt của Anthropic chỉ áp dụng trong TTL. 36. Nếu một phiên bị nhàn rỗi vượt quá TTL, yêu cầu tiếp theo sẽ cache lại toàn bộ prompt trừ khi bạn cắt tỉa trước.
 - **Cái gì rẻ hơn:** cắt tỉa làm giảm kích thước **cacheWrite** cho yêu cầu đầu tiên sau khi TTL hết hạn.
 - **Vì sao việc đặt lại TTL quan trọng:** khi cắt tỉa chạy, cửa sổ cache được đặt lại, nên các yêu cầu theo sau có thể tái sử dụng prompt vừa được cache thay vì cache lại toàn bộ lịch sử.
 - **Những gì nó không làm:** cắt tỉa không thêm token hay “nhân đôi” chi phí; nó chỉ thay đổi những gì được cache ở yêu cầu đầu tiên sau TTL.
@@ -47,7 +40,7 @@ Cắt tỉa phiên rút gọn **các kết quả công cụ cũ** khỏi ngữ c
 
 ## Ước tính cửa sổ ngữ cảnh
 
-Cắt tỉa sử dụng ước tính cửa sổ ngữ cảnh (ký tự ≈ token × 4). Cửa sổ cơ sở được xác định theo thứ tự sau:
+37. Việc cắt tỉa dùng ước lượng cửa sổ ngữ cảnh (ký tự ≈ token × 4). 38. Cửa sổ cơ sở được phân giải theo thứ tự này:
 
 1. Ghi đè `models.providers.*.models[].contextWindow`.
 2. Định nghĩa mô hình `contextWindow` (từ sổ đăng ký mô hình).
@@ -79,7 +72,7 @@ Nếu đặt `agents.defaults.contextTokens`, giá trị này được coi là m
 ## Tương tác với các giới hạn khác
 
 - Các công cụ tích hợp sẵn đã tự cắt ngắn đầu ra của chúng; cắt tỉa phiên là một lớp bổ sung để ngăn các cuộc trò chuyện kéo dài tích lũy quá nhiều đầu ra công cụ trong ngữ cảnh mô hình.
-- Nén (compaction) là riêng biệt: nén tóm tắt và lưu bền, còn cắt tỉa là tạm thời theo từng yêu cầu. Xem [/concepts/compaction](/concepts/compaction).
+- 39. Nén (compaction) là tách biệt: nén sẽ tóm tắt và lưu trữ, còn cắt tỉa là tạm thời theo từng yêu cầu. 40. Xem [/concepts/compaction](/concepts/compaction).
 
 ## Mặc định (khi được bật)
 

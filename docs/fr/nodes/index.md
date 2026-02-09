@@ -5,13 +5,6 @@ read_when:
   - Utilisation du canvas/de la caméra d’un nœud pour le contexte de l’agent
   - Ajout de nouvelles commandes de nœud ou d’assistants CLI
 title: "Nœuds"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: 74e9420f61c653e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:23Z
 ---
 
 # Nœuds
@@ -26,6 +19,7 @@ Notes :
 
 - Les nœuds sont des **périphériques**, pas des passerelles. Ils n’exécutent pas le service de passerelle.
 - Les messages Telegram/WhatsApp/etc. arrivent sur la **gateway**, pas sur les nœuds.
+- Dépannage du runbook : [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Appairage + statut
 
@@ -53,7 +47,7 @@ Utilisez un **hôte de nœud** lorsque votre Gateway s’exécute sur une machin
 s’exécutent sur une autre. Le modèle parle toujours à la **gateway** ; la gateway
 transmet les appels `exec` à l’**hôte de nœud** lorsque `host=node` est sélectionné.
 
-### Qui exécute quoi
+### Qu'est-ce qui fonctionne où
 
 - **Hôte de la gateway** : reçoit les messages, exécute le modèle, route les appels d’outils.
 - **Hôte de nœud** : exécute `system.run`/`system.which` sur la machine du nœud.
@@ -317,7 +311,7 @@ openclaw config unset agents.list[0].tools.exec.node
 
 Les nœuds peuvent inclure une carte `permissions` dans `node.list` / `node.describe`, indexée par nom d’autorisation (p. ex. `screenRecording`, `accessibility`) avec des valeurs booléennes (`true` = accordé).
 
-## Hôte de nœud sans interface (multiplateforme)
+## Hôte de noeud Headless (cross-platform)
 
 OpenClaw peut exécuter un **hôte de nœud sans interface** (sans UI) qui se connecte au WebSocket de la Gateway
 et expose `system.run` / `system.which`. C’est utile sous Linux/Windows

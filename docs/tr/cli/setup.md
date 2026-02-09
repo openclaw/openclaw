@@ -4,13 +4,6 @@ read_when:
   - Tam onboarding sihirbazını kullanmadan ilk kurulum yapıyorsanız
   - Varsayılan çalışma alanı yolunu ayarlamak istiyorsanız
 title: "kurulum"
-x-i18n:
-  source_path: cli/setup.md
-  source_hash: 7f3fc8b246924edf
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:05Z
 ---
 
 # `openclaw setup`

@@ -2,16 +2,9 @@
 summary: "Notas de investigación: sistema de memoria offline para espacios de trabajo de Clawd (Markdown como fuente de verdad + índice derivado)"
 read_when:
   - Diseñar la memoria del espacio de trabajo (~/.openclaw/workspace) más allá de los registros diarios en Markdown
-  - Decidir: CLI independiente vs integración profunda con OpenClaw
+  - Deciding: "Decidir: CLI independiente vs integración profunda con OpenClaw"
   - Agregar recuerdo offline + reflexión (retener/recordar/reflexionar)
 title: "Investigación sobre la memoria del espacio de trabajo"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:38Z
 ---
 
 # Memoria del espacio de trabajo v2 (offline): notas de investigación
@@ -111,7 +104,7 @@ El índice es siempre **reconstruible desde Markdown**.
 
 ### Retener: normalizar registros diarios en “hechos”
 
-La idea clave de Hindsight que importa aquí: almacenar **hechos narrativos y autocontenidos**, no fragmentos diminutos.
+La visión clave de Hindsight que importa aquí: almacene **hechos narrativos y autosuficientes**, no pequeños fragmentos.
 
 Regla práctica para `memory/YYYY-MM-DD.md`:
 

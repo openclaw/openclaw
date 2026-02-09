@@ -5,13 +5,6 @@ read_when:
   - Naghahanap ng murang VPS hosting para sa OpenClaw
   - Gusto ng 24/7 OpenClaw sa isang maliit na server
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:55Z
 ---
 
 # OpenClaw sa Oracle Cloud (OCI)
@@ -27,13 +20,13 @@ Maaaring maging magandang opsyon ang free tier ng Oracle para sa OpenClaw (lalo 
 
 ## Paghahambing ng Gastos (2026)
 
-| Provider     | Plan            | Specs                     | Presyo/buwan | Mga tala                      |
-| ------------ | --------------- | ------------------------- | ------------ | ----------------------------- |
-| Oracle Cloud | Always Free ARM | hanggang 4 OCPU, 24GB RAM | $0           | ARM, limitadong capacity      |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM           | ~ $4         | Pinakamurang paid option      |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6           | Madaling UI, magagandang docs |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6           | Maraming lokasyon             |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5           | Bahagi na ng Akamai           |
+| Provider     | Plan            | Specs                     | Presyo/buwan         | Mga tala                      |
+| ------------ | --------------- | ------------------------- | -------------------- | ----------------------------- |
+| Oracle Cloud | Always Free ARM | hanggang 4 OCPU, 24GB RAM | $0                   | ARM, limitadong capacity      |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM           | ~ $4 | Pinakamurang paid option      |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6                   | Madaling UI, magagandang docs |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6                   | Maraming lokasyon             |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5                   | Bahagi na ng Akamai           |
 
 ---
 
@@ -43,7 +36,7 @@ Maaaring maging magandang opsyon ang free tier ng Oracle para sa OpenClaw (lalo 
 - Tailscale account (libre sa [tailscale.com](https://tailscale.com))
 - ~30 minuto
 
-## 1) Gumawa ng OCI Instance
+## 1. Gumawa ng OCI Instance
 
 1. Mag-log in sa [Oracle Cloud Console](https://cloud.oracle.com/)
 2. Pumunta sa **Compute → Instances → Create Instance**
@@ -58,9 +51,9 @@ Maaaring maging magandang opsyon ang free tier ng Oracle para sa OpenClaw (lalo 
 4. I-click ang **Create**
 5. Tandaan ang public IP address
 
-**Tip:** Kung pumalya ang paggawa ng instance na may error na "Out of capacity", subukang gumamit ng ibang availability domain o mag-retry mamaya. Limitado ang capacity ng free tier.
+**Tip:** Kung pumalya ang paggawa ng instance na may "Out of capacity", subukan ang ibang availability domain o mag-retry sa ibang oras. Limitado ang kapasidad ng free tier.
 
-## 2) Kumonekta at Mag-update
+## 2. Kumonekta at Mag-update
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Tala:** Kailangan ang `build-essential` para sa ARM compilation ng ilang dependency.
 
-## 3) I-configure ang User at Hostname
+## 3. I-configure ang User at Hostname
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) I-install ang Tailscale
+## 4. I-install ang Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **Mula ngayon, kumonekta sa pamamagitan ng Tailscale:** `ssh ubuntu@openclaw` (o gamitin ang Tailscale IP).
 
-## 5) I-install ang OpenClaw
+## 5. I-install ang OpenClaw
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,9 +107,9 @@ Kapag tinanong na "How do you want to hatch your bot?", piliin ang **"Do this la
 
 > Tala: Kung makaranas ka ng ARM-native build issues, magsimula muna sa system packages (hal. `sudo apt install -y build-essential`) bago gumamit ng Homebrew.
 
-## 6) I-configure ang Gateway (loopback + token auth) at i-enable ang Tailscale Serve
+## 6. I-configure ang Gateway (loopback + token auth) at i-enable ang Tailscale Serve
 
-Gamitin ang token auth bilang default. Predictable ito at iniiwasan ang pangangailangan ng anumang “insecure auth” Control UI flags.
+Gamitin ang token auth bilang default. Ito ay predictable at iniiwasan ang pangangailangan ng anumang “insecure auth” Control UI flags.
 
 ```bash
 # Keep the Gateway private on the VM
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) I-verify
+## 7. I-verify
 
 ```bash
 # Check version
@@ -149,9 +142,9 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) Higpitan ang VCN Security
+## 8. Higpitan ang VCN Security
 
-Ngayong gumagana na ang lahat, higpitan ang VCN para i-block ang lahat ng traffic maliban sa Tailscale. Ang Virtual Cloud Network ng OCI ay nagsisilbing firewall sa network edge — bina-block ang traffic bago pa man umabot sa iyong instance.
+Ngayong gumagana na ang lahat, i-lock down ang VCN upang harangan ang lahat ng trapiko maliban sa Tailscale. Ang Virtual Cloud Network ng OCI ay kumikilos bilang firewall sa gilid ng network — nahaharangan ang trapiko bago pa ito makarating sa iyong instance.
 
 1. Pumunta sa **Networking → Virtual Cloud Networks** sa OCI Console
 2. I-click ang iyong VCN → **Security Lists** → Default Security List
@@ -159,7 +152,7 @@ Ngayong gumagana na ang lahat, higpitan ang VCN para i-block ang lahat ng traffi
    - `0.0.0.0/0 UDP 41641` (Tailscale)
 4. Panatilihin ang default egress rules (payagan ang lahat ng outbound)
 
-Bina-block nito ang SSH sa port 22, HTTP, HTTPS, at lahat ng iba pa sa network edge. Mula ngayon, sa Tailscale ka na lang makakakonekta.
+Hinaharangan nito ang SSH sa port 22, HTTP, HTTPS, at lahat ng iba pa sa gilid ng network. Mula ngayon, maaari ka na lamang kumonekta sa pamamagitan ng Tailscale.
 
 ---
 
@@ -173,7 +166,7 @@ https://openclaw.<tailnet-name>.ts.net/
 
 Palitan ang `<tailnet-name>` ng pangalan ng iyong tailnet (makikita sa `tailscale status`).
 
-Hindi kailangan ng SSH tunnel. Nagbibigay ang Tailscale ng:
+Hindi na kailangan ng SSH tunnel. Nagbibigay ang Tailscale ng:
 
 - HTTPS encryption (automatic certs)
 - Authentication gamit ang Tailscale identity
@@ -237,7 +230,7 @@ Pagkatapos ay buksan ang `http://localhost:18789`.
 
 ### Pumapalya ang paggawa ng instance ("Out of capacity")
 
-Sikat ang free tier ARM instances. Subukan ang:
+Sikat ang free tier ARM instances. Subukan:
 
 - Ibang availability domain
 - Mag-retry sa off-peak hours (maagang umaga)
@@ -276,13 +269,13 @@ systemctl --user restart openclaw-gateway
 
 ### Mga isyu sa ARM binary
 
-May ilang tool na walang ARM builds. Suriin ang:
+Maaaring walang ARM builds ang ilang tool. Suriin:
 
 ```bash
 uname -m  # Should show aarch64
 ```
 
-Karamihan sa npm packages ay maayos. Para sa mga binary, hanapin ang `linux-arm64` o `aarch64` releases.
+Karamihan sa mga npm package ay gumagana nang maayos. Para sa mga binary, hanapin ang `linux-arm64` o `aarch64` na mga release.
 
 ---
 

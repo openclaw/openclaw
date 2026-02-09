@@ -6,13 +6,6 @@ read_when:
   - Wizardgedrag debuggen
 title: "Referentie onboardingwizard"
 sidebarTitle: "Wizard Reference"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # Referentie onboardingwizard
@@ -23,7 +16,7 @@ Voor een overzicht op hoog niveau, zie [Onboarding Wizard](/start/wizard).
 ## Stroomdetails (lokale modus)
 
 <Steps>
-  <Step title="Detectie van bestaande config">
+  <Step title="Existing config detection">
     - Als `~/.openclaw/openclaw.json` bestaat, kies **Behouden / Wijzigen / Resetten**.
     - Het opnieuw uitvoeren van de wizard wist **niets**, tenzij je expliciet **Resetten** kiest
       (of `--reset` doorgeeft).
@@ -32,8 +25,8 @@ Voor een overzicht op hoog niveau, zie [Onboarding Wizard](/start/wizard).
     - Resetten gebruikt `trash` (nooit `rm`) en biedt scopes:
       - Alleen config
       - Config + inloggegevens + sessies
-      - Volledige reset (verwijdert ook de werkruimte)
-  </Step>
+      - Volledige reset (verwijdert ook de werkruimte)  
+</Step>
   <Step title="Model/Auth">
     - **Anthropic API-sleutel (aanbevolen)**: gebruikt `ANTHROPIC_API_KEY` indien aanwezig of vraagt om een sleutel en slaat deze vervolgens op voor daemon-gebruik.
     - **Anthropic OAuth (Claude Code CLI)**: op macOS controleert de wizard het Sleutelhangerelement "Claude Code-credentials" (kies "Altijd toestaan" zodat launchd-starts niet blokkeren); op Linux/Windows hergebruikt hij `~/.claude/.credentials.json` indien aanwezig.
@@ -60,25 +53,25 @@ Voor een overzicht op hoog niveau, zie [Onboarding Wizard](/start/wizard).
     - Kies een standaardmodel uit de gedetecteerde opties (of voer provider/model handmatig in).
     - De wizard voert een modelcheck uit en waarschuwt als het geconfigureerde model onbekend is of auth ontbreekt.
     - OAuth-inloggegevens staan in `~/.openclaw/credentials/oauth.json`; auth-profielen staan in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API-sleutels + OAuth).
-    - Meer details: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - Meer details: [/concepts/oauth](/concepts/oauth)    
+<Note>
     Tip voor headless/server: voltooi OAuth op een machine met een browser en kopieer vervolgens
     `~/.openclaw/credentials/oauth.json` (of `$OPENCLAW_STATE_DIR/credentials/oauth.json`) naar de
     Gateway-host.
     </Note>
   </Step>
-  <Step title="Werkruimte">
+  <Step title="Workspace">
     - Standaard `~/.openclaw/workspace` (configureerbaar).
     - Initialiseert de werkruimtebestanden die nodig zijn voor het bootstrap-ritueel van de agent.
-    - Volledige werkruimte-indeling + back-upgids: [Agent workspace](/concepts/agent-workspace)
-  </Step>
+    - Volledige werkruimte-indeling + back-upgids: [Agent workspace](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - Poort, bind, auth-modus, Tailscale-blootstelling.
     - Auth-aanbeveling: houd **Token** aan, zelfs voor loopback, zodat lokale WS-clients zich moeten authenticeren.
     - Schakel auth alleen uit als je elke lokale proces volledig vertrouwt.
     - Niet-loopback binds vereisen nog steeds auth.
   </Step>
-  <Step title="Kanalen">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optionele QR-login.
     - [Telegram](/channels/telegram): bot-token.
     - [Discord](/channels/discord): bot-token.
@@ -87,7 +80,8 @@ Voor een overzicht op hoog niveau, zie [Onboarding Wizard](/start/wizard).
     - [Signal](/channels/signal): optionele `signal-cli`-installatie + accountconfiguratie.
     - [BlueBubbles](/channels/bluebubbles): **aanbevolen voor iMessage**; server-URL + wachtwoord + webhook.
     - [iMessage](/channels/imessage): legacy `imsg` CLI-pad + DB-toegang.
-    - DM-beveiliging: standaard is koppelen. De eerste DM stuurt een code; keur goed via `openclaw pairing approve <channel> <code>` of gebruik toegestane lijsten.
+    - DM-beveiliging: standaard is koppelen. De eerste DM stuurt een code; keur goed via `openclaw pairing approve <channel><code>` of gebruik toegestane lijsten.
+  </Step><code>` of gebruik toegestane lijsten.
   </Step>
   <Step title="Daemon-installatie">
     - macOS: LaunchAgent
@@ -139,7 +133,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Gemini-voorbeeld">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +143,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI-voorbeeld">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +153,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway-voorbeeld">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +163,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway-voorbeeld">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +175,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot-voorbeeld">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +185,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic-voorbeeld">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +195,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen-voorbeeld">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

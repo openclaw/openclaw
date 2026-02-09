@@ -3,13 +3,6 @@ summary: "توجيه متعدد الوكلاء: وكلاء معزولون، حس
 title: التوجيه متعدد الوكلاء
 read_when: "عندما تريد عدة وكلاء معزولين (مساحات عمل + مصادقة) ضمن عملية Gateway واحدة."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:24Z
 ---
 
 # التوجيه متعدد الوكلاء

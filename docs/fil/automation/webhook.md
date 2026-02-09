@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag o pagbabago ng mga webhook endpoint
   - Pagkonekta ng mga panlabas na system sa OpenClaw
 title: "Mga Webhook"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:28Z
 ---
 
 # Mga Webhook
@@ -36,7 +29,7 @@ Mga tala:
 
 ## Auth
 
-Kailangang may hook token ang bawat request. Mas mainam gamitin ang headers:
+Every request must include the hook token. Prefer headers:
 
 - `Authorization: Bearer <token>` (inirerekomenda)
 - `x-openclaw-token: <token>`
@@ -81,12 +74,12 @@ Payload:
 
 - `message` **kinakailangan** (string): Ang prompt o mensahe na ipo-process ng agent.
 - `name` opsyonal (string): Human-readable na pangalan para sa hook (hal., "GitHub"), ginagamit bilang prefix sa mga session summary.
-- `sessionKey` opsyonal (string): Ang key na ginagamit para tukuyin ang session ng agent. Default sa isang random na `hook:<uuid>`. Ang paggamit ng pare-parehong key ay nagbibigay-daan sa multi-turn na pag-uusap sa loob ng hook context.
+- `sessionKey` optional (string): The key used to identify the agent's session. Defaults to a random `hook:<uuid>`. Ang paggamit ng pare-parehong key ay nagbibigay-daan sa isang multi-turn na pag-uusap sa loob ng hook context.
 - `wakeMode` opsyonal (`now` | `next-heartbeat`): Kung magti-trigger ng agarang heartbeat (default `now`) o maghihintay sa susunod na periodic check.
-- `deliver` opsyonal (boolean): Kapag `true`, ipapadala ang tugon ng agent sa messaging channel. Default sa `true`. Ang mga tugon na heartbeat acknowledgment lang ay awtomatikong nilalaktawan.
-- `channel` opsyonal (string): Ang messaging channel para sa delivery. Isa sa: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Default sa `last`.
-- `to` opsyonal (string): Ang recipient identifier para sa channel (hal., phone number para sa WhatsApp/Signal, chat ID para sa Telegram, channel ID para sa Discord/Slack/Mattermost (plugin), conversation ID para sa MS Teams). Default sa huling recipient sa main session.
-- `model` opsyonal (string): Model override (hal., `anthropic/claude-3-5-sonnet` o isang alias). Dapat ay nasa allowed model list kung may restriction.
+- `deliver` optional (boolean): If `true`, the agent's response will be sent to the messaging channel. Defaults to `true`. Responses that are only heartbeat acknowledgments are automatically skipped.
+- `channel` optional (string): The messaging channel for delivery. One of: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Defaults to `last`.
+- `to` optional (string): The recipient identifier for the channel (e.g., phone number for WhatsApp/Signal, chat ID for Telegram, channel ID for Discord/Slack/Mattermost (plugin), conversation ID for MS Teams). Defaults to the last recipient in the main session.
+- `model` optional (string): Model override (e.g., `anthropic/claude-3-5-sonnet` or an alias). Must be in the allowed model list if restricted.
 - `thinking` opsyonal (string): Thinking level override (hal., `low`, `medium`, `high`).
 - `timeoutSeconds` opsyonal (number): Maximum na tagal para sa agent run sa segundo.
 
@@ -98,9 +91,9 @@ Epekto:
 
 ### `POST /hooks/<name>` (mapped)
 
-Nireresolba ang mga custom hook name sa pamamagitan ng `hooks.mappings` (tingnan ang configuration). Ang isang mapping ay maaaring
-mag-convert ng arbitrary payloads papunta sa mga aksyong `wake` o `agent`, na may opsyonal na mga template o
-code transform.
+Custom hook names are resolved via `hooks.mappings` (see configuration). A mapping can
+turn arbitrary payloads into `wake` or `agent` actions, with optional templates or
+code transforms.
 
 Mga opsyon sa mapping (buod):
 
@@ -113,8 +106,8 @@ Mga opsyon sa mapping (buod):
   (`channel` ay default sa `last` at nagfa-fallback sa WhatsApp).
 - Dinidi-disable ng `allowUnsafeExternalContent: true` ang external content safety wrapper para sa hook na iyon
   (mapanganib; para lang sa mga pinagkakatiwalaang internal source).
-- Isinusulat ng `openclaw webhooks gmail setup` ang `hooks.gmail` config para sa `openclaw webhooks gmail run`.
-  Tingnan ang [Gmail Pub/Sub](/automation/gmail-pubsub) para sa buong Gmail watch flow.
+- `openclaw webhooks gmail setup` writes `hooks.gmail` config for `openclaw webhooks gmail run`.
+  See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
 ## Mga Tugon
 
@@ -165,6 +158,6 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Panatilihin ang mga hook endpoint sa likod ng loopback, tailnet, o pinagkakatiwalaang reverse proxy.
 - Gumamit ng dedikadong hook token; huwag i-reuse ang mga gateway auth token.
 - Iwasang magsama ng sensitibong raw payload sa mga webhook log.
-- Ang mga hook payload ay itinuturing na hindi pinagkakatiwalaan at binalot ng mga safety boundary bilang default.
-  Kung kailangan mong i-disable ito para sa isang partikular na hook, itakda ang `allowUnsafeExternalContent: true`
-  sa mapping ng hook na iyon (mapanganib).
+- Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
+  If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`
+  in that hook's mapping (dangerous).

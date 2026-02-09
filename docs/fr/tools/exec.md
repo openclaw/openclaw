@@ -4,13 +4,6 @@ read_when:
   - Utilisation ou modification de l’outil exec
   - Debogage du comportement stdin ou TTY
 title: "Outil Exec"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:14Z
 ---
 
 # Outil Exec
@@ -137,7 +130,7 @@ Premier plan :
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Arriere-plan + interrogation :
+Arrière-plan + sondage :
 
 ```json
 {"tool":"exec","command":"npm run build","yieldMs":1000}

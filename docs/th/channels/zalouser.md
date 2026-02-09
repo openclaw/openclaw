@@ -4,20 +4,13 @@ read_when:
   - การตั้งค่า Zalo ส่วนบุคคลสำหรับ OpenClaw
   - การดีบักการล็อกอินหรือโฟลว์ข้อความของ Zalo ส่วนบุคคล
 title: "Zalo ส่วนบุคคล"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:57Z
 ---
 
 # Zalo ส่วนบุคคล (ไม่เป็นทางการ)
 
-สถานะ: ทดลองใช้งาน การผสานรวมนี้ทำงานอัตโนมัติกับ **บัญชี Zalo ส่วนบุคคล** ผ่าน `zca-cli`.
+สถานะ: ทดลอง สถานะ: ทดลองใช้งาน การผสานรวมนี้ทำงานอัตโนมัติกับ **บัญชี Zalo ส่วนบุคคล** ผ่าน `zca-cli`.
 
-> **คำเตือน:** นี่เป็นการผสานรวมที่ไม่เป็นทางการและอาจทำให้บัญชีถูกระงับ/แบนได้ ใช้ด้วยความเสี่ยงของคุณเอง
+> **คำเตือน:** นี่เป็นการผสานรวมที่ไม่เป็นทางการและอาจทำให้บัญชีถูกระงับ/แบนได้ ใช้ด้วยความเสี่ยงของคุณเอง ใช้ด้วยความเสี่ยงของคุณเอง
 
 ## ต้องใช้ปลั๊กอิน
 
@@ -64,7 +57,7 @@ Zalo ส่วนบุคคลมาในรูปแบบปลั๊กอ
 
 ## การตั้งชื่อ
 
-Channel id คือ `zalouser` เพื่อระบุอย่างชัดเจนว่านี่คือการทำงานอัตโนมัติกับ **บัญชีผู้ใช้ Zalo ส่วนบุคคล** (ไม่เป็นทางการ) เราเก็บ `zalo` ไว้สำหรับการผสานรวม Zalo API อย่างเป็นทางการในอนาคตที่อาจเกิดขึ้น
+Channel id คือ `zalouser` เพื่อระบุอย่างชัดเจนว่านี่คือการทำงานอัตโนมัติกับ **บัญชีผู้ใช้ Zalo ส่วนบุคคล** (ไม่เป็นทางการ) เราเก็บ `zalo` ไว้สำหรับการผสานรวม Zalo API อย่างเป็นทางการในอนาคตที่อาจเกิดขึ้น เราเก็บ `zalo` ไว้สำหรับการผสานรวม Zalo API อย่างเป็นทางการที่อาจเกิดขึ้นในอนาคต
 
 ## การค้นหา ID (ไดเรกทอรี)
 
@@ -84,7 +77,7 @@ openclaw directory groups list --channel zalouser --query "work"
 ## การควบคุมการเข้าถึง(DMs)
 
 `channels.zalouser.dmPolicy` รองรับ: `pairing | allowlist | open | disabled` (ค่าเริ่มต้น: `pairing`).
-`channels.zalouser.allowFrom` รับ user ID หรือชื่อ วิซาร์ดจะแปลงชื่อเป็น ID ผ่าน `zca friend find` เมื่อมีให้ใช้งาน
+`channels.zalouser.allowFrom` รับ user ID หรือชื่อ วิซาร์ดจะแปลงชื่อเป็น ID ผ่าน `zca friend find` เมื่อมีให้ใช้งาน วิซาร์ดจะแปลงชื่อเป็น ID ผ่าน `zca friend find` เมื่อมีให้ใช้งาน
 
 อนุมัติผ่าน:
 
@@ -93,7 +86,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## การเข้าถึงกลุ่ม(ไม่บังคับ)
 
-- ค่าเริ่มต้น: `channels.zalouser.groupPolicy = "open"` (อนุญาตกลุ่ม) ใช้ `channels.defaults.groupPolicy` เพื่อแทนที่ค่าเริ่มต้นเมื่อยังไม่ถูกตั้งค่า
+- ค่าเริ่มต้น: `channels.zalouser.groupPolicy = "open"` (อนุญาตกลุ่ม) ใช้ `channels.defaults.groupPolicy` เพื่อแทนที่ค่าเริ่มต้นเมื่อยังไม่ถูกตั้งค่า ใช้ `channels.defaults.groupPolicy` เพื่อแทนที่ค่าเริ่มต้นเมื่อยังไม่ตั้งค่า
 - จำกัดด้วย allowlist:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups` (คีย์คือ group ID หรือชื่อ)
@@ -119,7 +112,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## หลายบัญชี
 
-บัญชีจะเชื่อมกับโปรไฟล์ zca ตัวอย่าง:
+บัญชีจะถูกแมปกับโปรไฟล์ zca ตัวอย่าง:
 
 ```json5
 {

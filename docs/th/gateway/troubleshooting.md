@@ -4,17 +4,11 @@ read_when:
   - ศูนย์การแก้ไขปัญหาแนะนำให้มาที่นี่เพื่อการวินิจฉัยเชิงลึก
   - คุณต้องการส่วนคู่มือแบบอิงอาการที่เสถียรพร้อมคำสั่งที่ชัดเจน
 title: "การแก้ไขปัญหา"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:31Z
 ---
 
 # การแก้ไขปัญหา Gateway
 
+หน้านี้คือคู่มือเชิงลึก
 หน้านี้เป็นคู่มือเชิงลึก
 เริ่มที่ [/help/troubleshooting](/help/troubleshooting) หากต้องการโฟลว์คัดกรองอย่างรวดเร็วก่อน
 
@@ -48,7 +42,7 @@ openclaw config get channels
 openclaw logs --follow
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - การจับคู่ค้างอยู่สำหรับผู้ส่ง DM
 - การจำกัดการกล่าวถึงในกลุ่ม (`requireMention`, `mentionPatterns`)
@@ -78,7 +72,7 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - URL สำหรับตรวจสอบและ URL แดชบอร์ดถูกต้อง
 - โหมด/โทเคนการยืนยันตัวตนไม่ตรงกันระหว่างไคลเอนต์และเกตเวย์
@@ -108,7 +102,7 @@ openclaw doctor
 openclaw gateway status --deep
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - `Runtime: stopped` พร้อมคำใบ้การออกจากโปรเซส
 - คอนฟิกบริการไม่ตรงกัน (`Config (cli)` เทียบกับ `Config (service)`)
@@ -138,7 +132,7 @@ openclaw logs --follow
 openclaw config get channels
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - นโยบาย DM (`pairing`, `allowlist`, `open`, `disabled`)
 - allowlist กลุ่มและข้อกำหนดการกล่าวถึง
@@ -169,7 +163,7 @@ openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - เปิดใช้งาน cron และมีเวลาปลุกถัดไป
 - สถานะประวัติการรันงาน (`ok`, `skipped`, `error`)
@@ -200,7 +194,7 @@ openclaw logs --follow
 openclaw status
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - โหนดออนไลน์พร้อมความสามารถที่คาดหวัง
 - การอนุญาตระดับ OS สำหรับกล้อง/ไมค์/ตำแหน่ง/หน้าจอ
@@ -231,7 +225,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-ตรวจสอบสิ่งต่อไปนี้:
+มองหา:
 
 - พาธไฟล์ปฏิบัติการของเบราว์เซอร์ถูกต้อง
 - การเข้าถึงโปรไฟล์ CDP
@@ -254,7 +248,7 @@ openclaw doctor
 
 ปัญหาหลังอัปเกรดส่วนใหญ่เกิดจากคอนฟิกเปลี่ยนหรือค่าเริ่มต้นที่เข้มงวดขึ้นถูกบังคับใช้
 
-### 1) พฤติกรรมการยืนยันตัวตนและการ override URL เปลี่ยนไป
+### 1. พฤติกรรมการยืนยันตัวตนและการ override URL เปลี่ยนไป
 
 ```bash
 openclaw gateway status
@@ -273,7 +267,7 @@ openclaw config get gateway.auth.mode
 - `gateway connect failed:` → เป้าหมาย URL ไม่ถูกต้อง
 - `unauthorized` → ปลายทางเข้าถึงได้แต่การยืนยันตัวตนไม่ถูกต้อง
 
-### 2) ข้อกำหนดการ bind และ guardrail การยืนยันตัวตนเข้มงวดขึ้น
+### 2. ข้อกำหนดการ bind และ guardrail การยืนยันตัวตนเข้มงวดขึ้น
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +286,7 @@ openclaw logs --follow
 - `refusing to bind gateway ... without auth` → bind+auth ไม่ตรงกัน
 - `RPC probe: failed` ขณะรันไทม์ทำงานอยู่ → เกตเวย์ยังทำงานแต่ไม่สามารถเข้าถึงด้วย auth/URL ปัจจุบัน
 
-### 3) สถานะการจับคู่และตัวตนอุปกรณ์เปลี่ยนไป
+### 3. สถานะการจับคู่และตัวตนอุปกรณ์เปลี่ยนไป
 
 ```bash
 openclaw devices list

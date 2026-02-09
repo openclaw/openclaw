@@ -4,13 +4,6 @@ read_when:
   - تحتاج إلى تعديلات ملفات منظَّمة عبر عدة ملفات
   - تريد توثيق أو تصحيح أخطاء تعديلات قائمة على التصحيحات
 title: "أداة apply_patch"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:44Z
 ---
 
 # أداة apply_patch
@@ -33,7 +26,7 @@ x-i18n:
 *** End Patch
 ```
 
-## المعاملات
+## المعلمات
 
 - `input` (مطلوب): محتويات التصحيح كاملة بما في ذلك `*** Begin Patch` و `*** End Patch`.
 

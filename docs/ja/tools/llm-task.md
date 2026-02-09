@@ -4,13 +4,6 @@ read_when:
   - ワークフロー内に JSON のみの LLM ステップが必要な場合
   - 自動化のためにスキーマ検証された LLM 出力が必要な場合
 title: "LLM タスク"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:25Z
 ---
 
 # LLM タスク
@@ -71,7 +64,8 @@ Lobster のようなワークフローエンジンに最適で、各ワークフ
 }
 ```
 
-`allowedModels` は、`provider/model` 文字列の許可リストです。設定されている場合、リスト外のリクエストは拒否されます。
+`allowedModels` は、`provider/model` 文字列の許可リストです。設定されている場合、リスト外のリクエストは拒否されます。 設定されている場合、リスト外のリクエスト
+は拒否されます。
 
 ## ツールのパラメータ
 

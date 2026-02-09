@@ -4,20 +4,13 @@ read_when:
   - Vous souhaitez executer un audit de securite rapide sur la configuration/l'etat
   - Vous souhaitez appliquer des suggestions de « correctifs » surs (chmod, durcissement des valeurs par defaut)
 title: "securite"
-x-i18n:
-  source_path: cli/security.md
-  source_hash: 96542b4784e53933
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:03Z
 ---
 
 # `openclaw security`
 
 Outils de securite (audit + correctifs optionnels).
 
-Connexe :
+Liens connexes :
 
 - Guide de securite : [Security](/gateway/security)
 

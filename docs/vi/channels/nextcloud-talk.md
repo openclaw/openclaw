@@ -3,18 +3,11 @@ summary: "Trạng thái hỗ trợ, khả năng và cấu hình của Nextcloud 
 read_when:
   - Làm việc trên các tính năng kênh Nextcloud Talk
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:05Z
 ---
 
 # Nextcloud Talk (plugin)
 
-Trạng thái: được hỗ trợ thông qua plugin (bot webhook). Tin nhắn trực tiếp, phòng, phản ứng và tin nhắn markdown đều được hỗ trợ.
+Status: supported via plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
 ## Yêu cầu plugin
 
@@ -40,6 +33,7 @@ Chi tiết: [Plugins](/tools/plugin)
 ## Thiết lập nhanh (cho người mới)
 
 1. Cài đặt plugin Nextcloud Talk.
+
 2. Trên máy chủ Nextcloud của bạn, tạo một bot:
 
    ```bash
@@ -47,9 +41,11 @@ Chi tiết: [Plugins](/tools/plugin)
    ```
 
 3. Bật bot trong cài đặt phòng mục tiêu.
+
 4. Cấu hình OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Hoặc env: `NEXTCLOUD_TALK_BOT_SECRET` (chỉ cho tài khoản mặc định)
+
 5. Khởi động lại gateway (hoặc hoàn tất hướng dẫn ban đầu).
 
 Cấu hình tối thiểu:
@@ -69,14 +65,14 @@ Cấu hình tối thiểu:
 
 ## Ghi chú
 
-- Bot không thể khởi tạo DM. Người dùng phải nhắn tin cho bot trước.
+- Bots cannot initiate DMs. The user must message the bot first.
 - URL webhook phải truy cập được bởi Gateway; đặt `webhookPublicUrl` nếu ở sau proxy.
 - Tải lên media không được hỗ trợ bởi API bot; media được gửi dưới dạng URL.
 - Payload webhook không phân biệt DM và phòng; đặt `apiUser` + `apiPassword` để bật tra cứu loại phòng (nếu không, DM sẽ được xử lý như phòng).
 
 ## Kiểm soát truy cập (DM)
 
-- Mặc định: `channels.nextcloud-talk.dmPolicy = "pairing"`. Người gửi không xác định sẽ nhận mã ghép cặp.
+- Mặc định: `channels.nextcloud-talk.dmPolicy = "pairing"`. Unknown senders get a pairing code.
 - Phê duyệt thông qua:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ Tùy chọn nhà cung cấp:
 - `channels.nextcloud-talk.webhookPath`: đường dẫn webhook (mặc định: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: URL webhook có thể truy cập từ bên ngoài.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`.
-- `channels.nextcloud-talk.allowFrom`: danh sách cho phép DM (ID người dùng). `open` yêu cầu `"*"`.
+- `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
 - `channels.nextcloud-talk.groupAllowFrom`: danh sách cho phép nhóm (ID người dùng).
 - `channels.nextcloud-talk.rooms`: cài đặt theo phòng và danh sách cho phép.

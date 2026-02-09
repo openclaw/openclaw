@@ -5,18 +5,11 @@ read_when:
   - आप किसी क्लाउड प्लेटफ़ॉर्म पर डिप्लॉय करना चाहते हैं
   - आपको अपडेट, माइग्रेट, या अनइंस्टॉल करना है
 title: "स्थापना"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:26Z
 ---
 
 # स्थापना
 
-क्या आपने पहले ही [Getting Started](/start/getting-started) का पालन कर लिया है? तब आप पूरी तरह तैयार हैं — यह पृष्ठ वैकल्पिक इंस्टॉल विधियों, प्लेटफ़ॉर्म-विशिष्ट निर्देशों, और रखरखाव के लिए है।
+क्या आपने पहले ही [Getting Started](/start/getting-started) फॉलो कर लिया है? आप पूरी तरह तैयार हैं — यह पेज वैकल्पिक इंस्टॉल तरीकों, प्लेटफ़ॉर्म-विशिष्ट निर्देशों और मेंटेनेंस के लिए है।
 
 ## सिस्टम आवश्यकताएँ
 
@@ -31,13 +24,14 @@ Windows पर, हम दृढ़ता से अनुशंसा करत
 ## इंस्टॉल विधियाँ
 
 <Tip>
-**इंस्टॉलर स्क्रिप्ट** OpenClaw स्थापित करने का अनुशंसित तरीका है। यह Node की पहचान, स्थापना, और ऑनबोर्डिंग को एक ही चरण में संभालती है।
+**installer script** OpenClaw इंस्टॉल करने का अनुशंसित तरीका है। यह एक ही स्टेप में Node detection, इंस्टॉलेशन और onboarding संभालता है।
 </Tip>
 
 <AccordionGroup>
   <Accordion title="Installer script" icon="rocket" defaultOpen>
     CLI डाउनलोड करता है, npm के माध्यम से इसे वैश्विक रूप से स्थापित करता है, और ऑनबोर्डिंग विज़ार्ड प्रारंभ करता है।
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ Windows पर, हम दृढ़ता से अनुशंसा करत
         ```
       </Tab>
     </Tabs>
-
+    
     बस इतना ही — यह स्क्रिप्ट Node की पहचान, स्थापना, और ऑनबोर्डिंग संभालती है।
-
+    
     ऑनबोर्डिंग छोड़कर केवल बाइनरी स्थापित करने के लिए:
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ Windows पर, हम दृढ़ता से अनुशंसा करत
         ```
       </Tab>
     </Tabs>
-
+    
     सभी फ़्लैग, env vars, और CI/ऑटोमेशन विकल्पों के लिए, [Installer internals](/install/installer) देखें।
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     यदि आपके पास पहले से Node 22+ है और आप इंस्टॉल को स्वयं प्रबंधित करना चाहते हैं:
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp बिल्ड त्रुटियाँ?">
           यदि आपके पास libvips वैश्विक रूप से स्थापित है (macOS पर Homebrew के माध्यम से सामान्य) और `sharp` विफल हो जाता है, तो प्रीबिल्ट बाइनरी को बाध्य करें:
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           यदि आपको `sharp: Please add node-gyp to your dependencies` दिखाई देता है, तो या तो बिल्ड टूलिंग स्थापित करें (macOS: Xcode CLT + `npm install -g node-gyp`) या ऊपर दिए गए env var का उपयोग करें।
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ Windows पर, हम दृढ़ता से अनुशंसा करत
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm को बिल्ड स्क्रिप्ट वाले पैकेजों के लिए स्पष्ट अनुमोदन की आवश्यकता होती है। पहली इंस्टॉल के बाद यदि "Ignored build scripts" चेतावनी दिखाई दे, तो `pnpm approve-builds -g` चलाएँ और सूचीबद्ध पैकेजों का चयन करें।
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
   <Accordion title="From source" icon="github">
     योगदानकर्ताओं या उन सभी के लिए जो स्थानीय चेकआउट से चलाना चाहते हैं।
 
+    ```
     <Steps>
       <Step title="Clone और build करें">
         [OpenClaw repo](https://github.com/openclaw/openclaw) को clone करें और build करें:
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ Windows पर, हम दृढ़ता से अनुशंसा करत
       </Step>
       <Step title="CLI को link करें">
         `openclaw` कमांड को वैश्विक रूप से उपलब्ध करें:
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         वैकल्पिक रूप से, link को छोड़ दें और repo के अंदर से `pnpm openclaw ...` के माध्यम से कमांड चलाएँ।
       </Step>
       <Step title="ऑनबोर्डिंग चलाएँ">
@@ -137,8 +135,9 @@ Windows पर, हम दृढ़ता से अनुशंसा करत
         ```
       </Step>
     </Steps>
-
+    
     गहन विकास वर्कफ़्लो के लिए, [Setup](/start/setup) देखें।
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## समस्या-निवारण: `openclaw` नहीं मिला
 
-<Accordion title="PATH निदान और समाधान">
+<Accordion title="PATH diagnosis and fix">
   त्वरित निदान:
 
 ```bash
@@ -192,8 +191,7 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Windows पर, `npm prefix -g` के आउटपुट को अपने PATH में जोड़ें।
 
-फिर एक नया टर्मिनल खोलें (या zsh में `rehash` / bash में `hash -r`)।
-</Accordion>
+फिर एक नया टर्मिनल खोलें (या zsh में `rehash` / bash में `hash -r`)। </Accordion>
 
 ## अपडेट / अनइंस्टॉल
 

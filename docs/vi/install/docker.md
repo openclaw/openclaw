@@ -4,24 +4,17 @@ read_when:
   - Bạn muốn một gateway chạy trong container thay vì cài đặt cục bộ
   - Bạn đang kiểm tra luồng Docker
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:44Z
 ---
 
 # Docker (tùy chọn)
 
-Docker là **tùy chọn**. Chỉ dùng khi bạn muốn một gateway chạy trong container hoặc để kiểm tra luồng Docker.
+Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 ## Docker có phù hợp với tôi không?
 
 - **Có**: bạn muốn một môi trường gateway tách biệt, dùng xong bỏ, hoặc chạy OpenClaw trên máy chủ không có cài đặt cục bộ.
-- **Không**: bạn chạy trên máy của mình và chỉ muốn vòng lặp phát triển nhanh nhất. Hãy dùng luồng cài đặt thông thường.
-- **Lưu ý sandboxing**: sandboxing cho tác tử cũng dùng Docker, nhưng **không** yêu cầu toàn bộ gateway phải chạy trong Docker. Xem [Sandboxing](/gateway/sandboxing).
+- **No**: you’re running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
+- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
 
 Hướng dẫn này bao gồm:
 
@@ -63,14 +56,14 @@ Sau khi hoàn tất:
 
 - Mở `http://127.0.0.1:18789/` trong trình duyệt.
 - Dán token vào Control UI (Settings → token).
-- Cần lại URL? Chạy `docker compose run --rm openclaw-cli dashboard --no-open`.
+- Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 Nó ghi cấu hình/workspace trên host:
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-Chạy trên VPS? Xem [Hetzner (Docker VPS)](/install/hetzner).
+Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
 
 ### Luồng thủ công (compose)
 
@@ -80,9 +73,9 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
-Lưu ý: chạy `docker compose ...` từ thư mục gốc của repo. Nếu bạn bật
+Note: run `docker compose ...` from the repo root. Nếu bạn đã bật
 `OPENCLAW_EXTRA_MOUNTS` hoặc `OPENCLAW_HOME_VOLUME`, script thiết lập sẽ ghi
-`docker-compose.extra.yml`; hãy đưa nó vào khi chạy Compose ở nơi khác:
+`docker-compose.extra.yml`; hãy include nó khi chạy Compose ở nơi khác:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
@@ -103,10 +96,8 @@ Chi tiết thêm: [Dashboard](/web/dashboard), [Devices](/cli/devices).
 
 ### Mount bổ sung (tùy chọn)
 
-Nếu bạn muốn mount thêm các thư mục từ host vào container, hãy đặt
-`OPENCLAW_EXTRA_MOUNTS` trước khi chạy `docker-setup.sh`. Biến này nhận danh sách
-bind mount Docker, phân tách bằng dấu phẩy, và áp dụng cho cả
-`openclaw-gateway` và `openclaw-cli` bằng cách tạo `docker-compose.extra.yml`.
+If you want to mount additional host directories into the containers, set
+`OPENCLAW_EXTRA_MOUNTS` before running `docker-setup.sh`. Đây là các ví dụ, không phải danh sách đầy đủ.
 
 Ví dụ:
 
@@ -120,14 +111,14 @@ Ghi chú:
 - Đường dẫn phải được chia sẻ với Docker Desktop trên macOS/Windows.
 - Nếu bạn chỉnh sửa `OPENCLAW_EXTRA_MOUNTS`, hãy chạy lại `docker-setup.sh` để tạo lại
   file compose bổ sung.
-- `docker-compose.extra.yml` được tạo tự động. Đừng chỉnh sửa thủ công.
+- `docker-compose.extra.yml` được tạo. Don’t hand-edit it.
 
 ### Lưu toàn bộ home của container (tùy chọn)
 
-Nếu bạn muốn `/home/node` được giữ lại qua các lần tạo lại container, hãy đặt
-một volume có tên qua `OPENCLAW_HOME_VOLUME`. Việc này tạo một Docker volume và mount tại
-`/home/node`, đồng thời vẫn giữ các bind mount cấu hình/workspace tiêu chuẩn.
-Hãy dùng volume có tên ở đây (không dùng bind path); với bind mount, dùng
+If you want `/home/node` to persist across container recreation, set a named
+volume via `OPENCLAW_HOME_VOLUME`. This creates a Docker volume and mounts it at
+`/home/node`, while keeping the standard config/workspace bind mounts. Use a
+named volume here (not a bind path); for bind mounts, use
 `OPENCLAW_EXTRA_MOUNTS`.
 
 Ví dụ:
@@ -153,10 +144,10 @@ Ghi chú:
 
 ### Cài thêm gói apt (tùy chọn)
 
-Nếu bạn cần các gói hệ thống bên trong image (ví dụ: công cụ build hoặc thư viện
-media), hãy đặt `OPENCLAW_DOCKER_APT_PACKAGES` trước khi chạy `docker-setup.sh`.
-Các gói này được cài trong quá trình build image, nên vẫn tồn tại ngay cả khi
-container bị xóa.
+If you need system packages inside the image (for example, build tools or media
+libraries), set `OPENCLAW_DOCKER_APT_PACKAGES` before running `docker-setup.sh`.
+This installs the packages during the image build, so they persist even if the
+container is deleted.
 
 Ví dụ:
 
@@ -173,8 +164,8 @@ Ghi chú:
 
 ### Container đầy đủ tính năng cho người dùng nâng cao (tùy chọn)
 
-Image Docker mặc định ưu tiên **bảo mật** và chạy dưới người dùng không phải root
-`node`. Điều này giúp giảm bề mặt tấn công, nhưng đồng nghĩa:
+The default Docker image is **security-first** and runs as the non-root `node`
+user. This keeps the attack surface small, but it means:
 
 - không cài gói hệ thống lúc runtime
 - không có Homebrew mặc định
@@ -215,8 +206,8 @@ Nếu bạn cần Playwright cài phụ thuộc hệ thống, hãy build lại i
 
 ### Quyền + EACCES
 
-Image chạy dưới `node` (uid 1000). Nếu bạn gặp lỗi quyền truy cập trên
-`/home/node/.openclaw`, hãy đảm bảo các bind mount trên host thuộc sở hữu uid 1000.
+The image runs as `node` (uid 1000). If you see permission errors on
+`/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000.
 
 Ví dụ (host Linux):
 
@@ -228,8 +219,8 @@ Nếu bạn chọn chạy dưới root cho tiện lợi, bạn chấp nhận đ�
 
 ### Build lại nhanh hơn (khuyến nghị)
 
-Để tăng tốc build lại, hãy sắp xếp Dockerfile sao cho các layer phụ thuộc được cache.
-Điều này tránh việc chạy lại `pnpm install` trừ khi lockfile thay đổi:
+To speed up rebuilds, order your Dockerfile so dependency layers are cached.
+This avoids re-running `pnpm install` unless lockfiles change:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -285,10 +276,10 @@ Tài liệu: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Di
 
 ### OpenAI Codex OAuth (Docker không giao diện)
 
-Nếu bạn chọn OpenAI Codex OAuth trong trình hướng dẫn, nó sẽ mở một URL trình duyệt
-và cố gắng nhận callback tại `http://127.0.0.1:1455/auth/callback`. Trong Docker hoặc các thiết lập
-không giao diện, callback này có thể hiện lỗi trình duyệt. Hãy sao chép toàn bộ URL
-redirect mà bạn truy cập được và dán lại vào trình hướng dẫn để hoàn tất xác thực.
+If you pick OpenAI Codex OAuth in the wizard, it opens a browser URL and tries
+to capture a callback on `http://127.0.0.1:1455/auth/callback`. In Docker or
+headless setups that callback can show a browser error. Copy the full redirect
+URL you land on and paste it back into the wizard to finish auth.
 
 ### Kiểm tra sức khỏe
 
@@ -311,7 +302,7 @@ pnpm test:docker:qr
 ### Ghi chú
 
 - Gateway bind mặc định là `lan` cho việc dùng trong container.
-- CMD của Dockerfile dùng `--allow-unconfigured`; cấu hình được mount với `gateway.mode` chứ không phải `local` vẫn sẽ khởi động. Ghi đè CMD để bắt buộc kiểm tra.
+- Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - Container gateway là nguồn chân lý cho các phiên (`~/.openclaw/agents/<agentId>/sessions/`).
 
 ## Sandbox Tác tử (gateway trên host + công cụ Docker)
@@ -320,8 +311,8 @@ pnpm test:docker:qr
 
 ### Nó làm gì
 
-Khi bật `agents.defaults.sandbox`, **các phiên không phải chính** sẽ chạy công cụ bên trong
-container Docker. Gateway vẫn chạy trên host, nhưng việc thực thi công cụ được cô lập:
+When `agents.defaults.sandbox` is enabled, **non-main sessions** run tools inside a Docker
+container. The gateway stays on your host, but the tool execution is isolated:
 
 - phạm vi: `"agent"` theo mặc định (một container + workspace cho mỗi tác tử)
 - phạm vi: `"session"` để cô lập theo từng phiên
@@ -330,14 +321,14 @@ container Docker. Gateway vẫn chạy trên host, nhưng việc thực thi côn
 - chính sách cho phép/từ chối công cụ (từ chối được ưu tiên)
 - media đầu vào được sao chép vào workspace sandbox đang hoạt động (`media/inbound/*`) để công cụ có thể đọc (với `workspaceAccess: "rw"`, nội dung này nằm trong workspace tác tử)
 
-Cảnh báo: `scope: "shared"` vô hiệu hóa cô lập giữa các phiên. Tất cả phiên dùng chung
-một container và một workspace.
+Warning: `scope: "shared"` disables cross-session isolation. All sessions share
+one container and one workspace.
 
 ### Hồ sơ sandbox theo từng tác tử (đa tác tử)
 
-Nếu bạn dùng định tuyến đa tác tử, mỗi tác tử có thể ghi đè cài đặt sandbox + công cụ:
-`agents.list[].sandbox` và `agents.list[].tools` (cộng thêm `agents.list[].tools.sandbox.tools`). Điều này cho phép
-chạy các mức truy cập khác nhau trong cùng một gateway:
+If you use multi-agent routing, each agent can override sandbox + tool settings:
+`agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools`). This lets you run
+mixed access levels in one gateway:
 
 - Toàn quyền (tác tử cá nhân)
 - Công cụ chỉ đọc + workspace chỉ đọc (tác tử gia đình/công việc)
@@ -364,10 +355,10 @@ Nếu bạn dự định cài gói trong `setupCommand`, lưu ý:
 
 - `docker.network` mặc định là `"none"` (không egress).
 - `readOnlyRoot: true` chặn việc cài gói.
-- `user` phải là root cho `apt-get` (bỏ `user` hoặc đặt `user: "0:0"`).
-  OpenClaw tự động tạo lại container khi `setupCommand` (hoặc cấu hình docker) thay đổi
-  trừ khi container **vừa được dùng** (trong ~5 phút). Các container đang nóng
-  sẽ ghi cảnh báo kèm lệnh `openclaw sandbox recreate ...` chính xác.
+- `user` must be root for `apt-get` (omit `user` or set `user: "0:0"`).
+  OpenClaw auto-recreates containers when `setupCommand` (or docker config) changes
+  unless the container was **recently used** (within ~5 minutes). Hot containers
+  log a warning with the exact `openclaw sandbox recreate ...` command.
 
 ```json5
 {
@@ -453,7 +444,7 @@ Nếu bạn muốn một image sandbox có sẵn công cụ build phổ biến (
 scripts/sandbox-common-setup.sh
 ```
 
-Lệnh này build `openclaw-sandbox-common:bookworm-slim`. Để sử dụng:
+This builds `openclaw-sandbox-common:bookworm-slim`. To use it:
 
 ```json5
 {
@@ -473,9 +464,9 @@ Lệnh này build `openclaw-sandbox-common:bookworm-slim`. Để sử dụng:
 scripts/sandbox-browser-setup.sh
 ```
 
-Lệnh này build `openclaw-sandbox-browser:bookworm-slim` dùng
-`Dockerfile.sandbox-browser`. Container chạy Chromium với CDP được bật và
-một trình quan sát noVNC tùy chọn (có giao diện qua Xvfb).
+This builds `openclaw-sandbox-browser:bookworm-slim` using
+`Dockerfile.sandbox-browser`. The container runs Chromium with CDP enabled and
+an optional noVNC observer (headful via Xvfb).
 
 Ghi chú:
 
@@ -514,9 +505,9 @@ Khi bật, tác tử nhận được:
 - URL điều khiển trình duyệt sandbox (cho công cụ `browser`)
 - URL noVNC (nếu bật và headless=false)
 
-Lưu ý: nếu bạn dùng allowlist cho công cụ, hãy thêm `browser` (và xóa khỏi
-deny) nếu không công cụ vẫn bị chặn.
-Quy tắc dọn dẹp (`agents.defaults.sandbox.prune`) cũng áp dụng cho container trình duyệt.
+Remember: if you use an allowlist for tools, add `browser` (and remove it from
+deny) or the tool remains blocked.
+Prune rules (`agents.defaults.sandbox.prune`) apply to browser containers too.
 
 ### Image sandbox tùy chỉnh
 
@@ -568,7 +559,7 @@ Ví dụ:
 - Container không chạy: nó sẽ tự tạo theo phiên khi cần.
 - Lỗi quyền trong sandbox: đặt `docker.user` thành UID:GID khớp với quyền sở hữu
   workspace được mount (hoặc chown thư mục workspace).
-- Không tìm thấy công cụ tùy chỉnh: OpenClaw chạy lệnh với `sh -lc` (login shell),
-  shell này sẽ source `/etc/profile` và có thể đặt lại PATH. Hãy đặt `docker.env.PATH` để
-  thêm trước các đường dẫn công cụ tùy chỉnh (ví dụ: `/custom/bin:/usr/local/share/npm-global/bin`), hoặc thêm
-  một script dưới `/etc/profile.d/` trong Dockerfile của bạn.
+- Custom tools not found: OpenClaw runs commands with `sh -lc` (login shell), which
+  sources `/etc/profile` and may reset PATH. Set `docker.env.PATH` to prepend your
+  custom tool paths (e.g., `/custom/bin:/usr/local/share/npm-global/bin`), or add
+  a script under `/etc/profile.d/` in your Dockerfile.

@@ -3,13 +3,6 @@ summary: "Perfil de usuário do agente dev (C-3PO)"
 read_when:
   - Usando os templates do gateway de dev
   - Atualizando a identidade padrão do agente dev
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:51Z
 ---
 
 # USER.md - Perfil do Usuário

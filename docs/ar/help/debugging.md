@@ -4,21 +4,14 @@ read_when:
   - تحتاج إلى فحص مخرجات النموذج الخام لرصد تسرّب الاستدلال
   - تريد تشغيل Gateway في وضع المراقبة أثناء التكرار
   - تحتاج إلى سير عمل قابل للتكرار لتصحيح الأخطاء
-title: "تصحيح الأخطاء"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:26Z
+title: "Debugging"
 ---
 
-# تصحيح الأخطاء
+# Debugging
 
 تغطي هذه الصفحة أدوات مساعدة لتصحيح الأخطاء الخاصة بالمخرجات المتدفقة، خصوصًا عندما يمزج موفّر ما الاستدلال مع النص العادي.
 
-## تجاوزات تصحيح الأخطاء أثناء التشغيل
+## تجاوز تصحيح أخطاء وقت التشغيل
 
 استخدم `/debug` في الدردشة لتعيين تجاوزات تهيئة **وقت التشغيل فقط** (في الذاكرة، وليس على القرص).
 يكون `/debug` معطّلًا افتراضيًا؛ فعِّله باستخدام `commands.debug: true`.
@@ -43,7 +36,7 @@ x-i18n:
 pnpm gateway:watch --force
 ```
 
-يقابل ذلك:
+هذه الخرائط إلى:
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -127,7 +120,7 @@ pnpm gateway:watch --force --raw-stream
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-متغيرات البيئة المكافئة:
+معادل إنف فار:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

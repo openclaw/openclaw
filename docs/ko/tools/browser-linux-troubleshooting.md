@@ -2,13 +2,6 @@
 summary: "Linux 에서 OpenClaw 브라우저 제어를 위한 Chrome/Brave/Edge/Chromium CDP 시작 문제 해결"
 read_when: "Linux 에서 브라우저 제어가 실패할 때, 특히 snap Chromium 사용 시"
 title: "브라우저 문제 해결"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:23Z
 ---
 
 # 브라우저 문제 해결 (Linux)
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### 설정 참조
 
-| 옵션                     | 설명                                                              | 기본값                                              |
-| ------------------------ | ----------------------------------------------------------------- | --------------------------------------------------- |
-| `browser.enabled`        | 브라우저 제어 활성화                                              | `true`                                              |
+| 옵션                       | 설명                                                                       | 기본값                                                   |
+| ------------------------ | ------------------------------------------------------------------------ | ----------------------------------------------------- |
+| `browser.enabled`        | 브라우저 제어 활성화                                                              | `true`                                                |
 | `browser.executablePath` | Chromium 기반 브라우저 바이너리 경로 (Chrome/Brave/Edge/Chromium) | 자동 감지 (Chromium 기반일 경우 기본 브라우저 우선) |
-| `browser.headless`       | GUI 없이 실행                                                     | `false`                                             |
-| `browser.noSandbox`      | `--no-sandbox` 플래그 추가 (일부 Linux 설정에 필요)               | `false`                                             |
-| `browser.attachOnly`     | 브라우저를 실행하지 않고 기존 인스턴스에만 연결                   | `false`                                             |
-| `browser.cdpPort`        | Chrome DevTools Protocol 포트                                     | `18800`                                             |
+| `browser.headless`       | GUI 없이 실행                                                                | `false`                                               |
+| `browser.noSandbox`      | `--no-sandbox` 플래그 추가 (일부 Linux 설정에 필요)               | `false`                                               |
+| `browser.attachOnly`     | 브라우저를 실행하지 않고 기존 인스턴스에만 연결                                               | `false`                                               |
+| `browser.cdpPort`        | Chrome DevTools Protocol 포트                                              | `18800`                                               |
 
 ### 문제: "Chrome extension relay is running, but no tab is connected"
 

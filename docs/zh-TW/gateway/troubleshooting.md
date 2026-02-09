@@ -3,20 +3,13 @@ summary: "針對 Gateway 閘道器、頻道、自動化、節點與瀏覽器的�
 read_when:
   - 疑難排解中樞將你指向此處以進行更深入的診斷
   - 你需要依症狀分類、且包含精確指令的穩定操作手冊章節
-title: "疑難排解"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:22Z
+title: "Troubleshooting"
 ---
 
 # Gateway 閘道器 疑難排解
 
-本頁是深入的操作手冊。
-若你想先進行快速分流，請從 [/help/troubleshooting](/help/troubleshooting) 開始。
+This page is the deep runbook.
+Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
 
 ## 指令階梯
 
@@ -48,13 +41,13 @@ openclaw config get channels
 openclaw logs --follow
 ```
 
-檢查項目：
+Look for:
 
-- 私訊寄件者的配對仍在等待中。
+- Pairing pending for DM senders.
 - 群組提及限制（`requireMention`、`mentionPatterns`）。
 - 頻道／群組允許清單不相符。
 
-常見特徵：
+Common signatures:
 
 - `drop guild message (mention required` → 群組訊息在被提及之前會被忽略。
 - `pairing request` → 寄件者需要核准。
@@ -78,10 +71,10 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-檢查項目：
+尋找：
 
 - 正確的探測 URL 與 dashboard URL。
-- 用戶端與 Gateway 閘道器 之間的驗證模式／權杖不一致。
+- Auth mode/token mismatch between client and gateway.
 - 在需要裝置身分識別時使用了 HTTP。
 
 常見特徵：
@@ -98,7 +91,7 @@ openclaw gateway status --json
 
 ## Gateway 服務未執行
 
-當服務已安裝但程序無法持續執行時使用。
+Use this when service is installed but process does not stay up.
 
 ```bash
 openclaw gateway status
@@ -108,19 +101,19 @@ openclaw doctor
 openclaw gateway status --deep
 ```
 
-檢查項目：
+Look for:
 
 - `Runtime: stopped` 及其結束提示。
 - 服務設定不一致（`Config (cli)` 與 `Config (service)`）。
-- 連接埠／監聽衝突。
+- Port/listener conflicts.
 
-常見特徵：
+Common signatures:
 
 - `Gateway start blocked: set gateway.mode=local` → 未啟用本機 Gateway 模式。
 - `refusing to bind gateway ... without auth` → 非 local loopback 綁定且未設定權杖／密碼。
 - `another gateway instance is already listening` ／ `EADDRINUSE` → 連接埠衝突。
 
-相關：
+Related:
 
 - [/gateway/background-process](/gateway/background-process)
 - [/gateway/configuration](/gateway/configuration)
@@ -128,7 +121,7 @@ openclaw gateway status --deep
 
 ## 頻道已連線但訊息未流動
 
-如果頻道狀態為已連線但訊息流中斷，請聚焦於政策、權限，以及頻道特定的投遞規則。
+如果通道狀態為已連線但訊息流量停滯，請專注於政策、權限，以及通道特定的投遞規則。
 
 ```bash
 openclaw channels status --probe
@@ -138,19 +131,19 @@ openclaw logs --follow
 openclaw config get channels
 ```
 
-檢查項目：
+Look for:
 
 - 私訊政策（`pairing`、`allowlist`、`open`、`disabled`）。
 - 群組允許清單與提及需求。
 - 缺少頻道 API 權限／範圍。
 
-常見特徵：
+Common signatures:
 
 - `mention required` → 訊息被群組提及政策忽略。
 - `pairing` ／ 等待核准的痕跡 → 寄件者尚未核准。
 - `missing_scope`、`not_in_channel`、`Forbidden`、`401/403` → 頻道驗證／權限問題。
 
-相關：
+Related:
 
 - [/channels/troubleshooting](/channels/troubleshooting)
 - [/channels/whatsapp](/channels/whatsapp)
@@ -169,7 +162,7 @@ openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-檢查項目：
+Look for:
 
 - 已啟用 cron 且存在下一次喚醒時間。
 - 工作執行歷史狀態（`ok`、`skipped`、`error`）。
@@ -182,7 +175,7 @@ openclaw logs --follow
 - `heartbeat skipped` 搭配 `reason=quiet-hours` → 位於啟用時段視窗之外。
 - `heartbeat: unknown accountId` → 心跳投遞目標的帳戶 ID 無效。
 
-相關：
+Related:
 
 - [/automation/troubleshooting](/automation/troubleshooting)
 - [/automation/cron-jobs](/automation/cron-jobs)
@@ -190,7 +183,7 @@ openclaw logs --follow
 
 ## 已配對的節點工具失敗
 
-如果節點已配對但工具失敗，請隔離前景狀態、權限與核准狀態。
+If a node is paired but tools fail, isolate foreground, permission, and approval state.
 
 ```bash
 openclaw nodes status
@@ -200,20 +193,20 @@ openclaw logs --follow
 openclaw status
 ```
 
-檢查項目：
+尋找：
 
-- 節點在線且具備預期能力。
+- Node online with expected capabilities.
 - 作業系統對相機／麥克風／位置／螢幕的權限授與。
-- Exec 核准與允許清單狀態。
+- Exec approvals and allowlist state.
 
-常見特徵：
+Common signatures:
 
 - `NODE_BACKGROUND_UNAVAILABLE` → 節點應用程式必須在前景。
 - `*_PERMISSION_REQUIRED` ／ `LOCATION_PERMISSION_REQUIRED` → 缺少作業系統權限。
 - `SYSTEM_RUN_DENIED: approval required` → Exec 核准仍在等待中。
 - `SYSTEM_RUN_DENIED: allowlist miss` → 指令被允許清單阻擋。
 
-相關：
+Related:
 
 - [/nodes/troubleshooting](/nodes/troubleshooting)
 - [/nodes/index](/nodes/index)
@@ -231,9 +224,9 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-檢查項目：
+Look for:
 
-- 有效的瀏覽器可執行檔路徑。
+- Valid browser executable path.
 - CDP 設定檔可達性。
 - 針對 `profile="chrome"` 的擴充功能轉接分頁附掛。
 
@@ -244,7 +237,7 @@ openclaw doctor
 - `Chrome extension relay is running, but no tab is connected` → 擴充功能轉接未附掛。
 - `Browser attachOnly is enabled ... not reachable` → 僅附掛的設定檔沒有可達的目標。
 
-相關：
+Related:
 
 - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
 - [/tools/chrome-extension](/tools/chrome-extension)
@@ -252,9 +245,9 @@ openclaw doctor
 
 ## 若你升級後突然出現問題
 
-多數升級後的問題源於設定漂移，或是更嚴格的預設值開始被強制套用。
+Most post-upgrade breakage is config drift or stricter defaults now being enforced.
 
-### 1) 驗證與 URL 覆寫行為已變更
+### 1. 驗證與 URL 覆寫行為已變更
 
 ```bash
 openclaw gateway status
@@ -268,12 +261,12 @@ openclaw config get gateway.auth.mode
 - 若 `gateway.mode=remote`，CLI 呼叫可能指向遠端，而你的本機服務其實正常。
 - 明確的 `--url` 呼叫不會回退到已儲存的認證。
 
-常見特徵：
+Common signatures:
 
 - `gateway connect failed:` → URL 目標錯誤。
 - `unauthorized` → 端點可達但驗證錯誤。
 
-### 2) 綁定與驗證防護更為嚴格
+### 2. 綁定與驗證防護更為嚴格
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ openclaw logs --follow
 - `refusing to bind gateway ... without auth` → 綁定與驗證不相符。
 - 在執行階段仍在運作時出現 `RPC probe: failed` → Gateway 存活，但以目前的驗證／URL 無法存取。
 
-### 3) 配對與裝置身分識別狀態已變更
+### 3. 配對與裝置身分識別狀態已變更
 
 ```bash
 openclaw devices list
@@ -303,8 +296,8 @@ openclaw doctor
 
 檢查項目：
 
-- Dashboard／節點的裝置核准仍在等待中。
-- 在政策或身分識別變更後，私訊配對核准仍在等待中。
+- Pending device approvals for dashboard/nodes.
+- 在政策或身分變更後，DM 配對核准待處理。
 
 常見特徵：
 
@@ -318,7 +311,7 @@ openclaw gateway install --force
 openclaw gateway restart
 ```
 
-相關：
+Related:
 
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)

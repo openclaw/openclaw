@@ -4,13 +4,6 @@ read_when:
   - Je moet inloggen op sites voor browserautomatisering
   - Je wilt updates plaatsen op X/Twitter
 title: "Browserlogin"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:43Z
 ---
 
 # Browserlogin + X/Twitter-posts

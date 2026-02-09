@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "Quản lý các container sandbox và kiểm tra chính sách sandbox hiệu lực"
 read_when: "Khi bạn đang quản lý các container sandbox hoặc gỡ lỗi hành vi sandbox/chính sách công cụ."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:26Z
 ---
 
 # Sandbox CLI
@@ -18,7 +11,8 @@ Quản lý các container sandbox dựa trên Docker để thực thi tác tử 
 
 ## Tổng quan
 
-OpenClaw có thể chạy các tác tử trong các container Docker cô lập để tăng cường bảo mật. Các lệnh `sandbox` giúp bạn quản lý các container này, đặc biệt sau khi cập nhật hoặc thay đổi cấu hình.
+Nó sử dụng
+cách đặt tên container của Gateway và tránh sai lệch khi các khóa phạm vi/phiên thay đổi. Các lệnh `sandbox` giúp bạn quản lý các container này, đặc biệt sau khi cập nhật hoặc thay đổi cấu hình.
 
 ## Lệnh
 
@@ -121,9 +115,9 @@ openclaw sandbox recreate --agent alfred
 - Container chỉ được dọn dẹp sau 24 giờ không hoạt động
 - Các tác tử được sử dụng thường xuyên giữ các container cũ chạy vô thời hạn
 
-**Giải pháp:** Sử dụng `openclaw sandbox recreate` để buộc xóa các container cũ. Chúng sẽ được tự động tạo lại với thiết lập hiện tại khi cần dùng lần tiếp theo.
+**Giải pháp:** Dùng `openclaw sandbox recreate` để buộc xóa các container cũ. Chúng sẽ được tạo lại tự động với các thiết lập hiện tại khi cần lần tiếp theo.
 
-Mẹo: ưu tiên `openclaw sandbox recreate` hơn `docker rm` thủ công. Lệnh này sử dụng cách đặt tên container của Gateway và tránh sai lệch khi khóa phạm vi/phiên thay đổi.
+Mẹo: ưu tiên `openclaw sandbox recreate` hơn là `docker rm` thủ công. Nó cũng cảnh báo khi các mô hình nhỏ (`<=300B`) được dùng mà không có sandbox và có bật công cụ web/trình duyệt.
 
 ## Cấu hình
 

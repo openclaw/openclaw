@@ -1,15 +1,8 @@
 ---
-summary: „Kwestie bezpieczeństwa i model zagrożeń dla uruchamiania bramy AI z dostępem do powłoki”
+summary: "„Kwestie bezpieczeństwa i model zagrożeń dla uruchamiania bramy AI z dostępem do powłoki”"
 read_when:
   - „Dodawanie funkcji, które poszerzają dostęp lub automatyzację”
-title: „Bezpieczeństwo”
-x-i18n:
-  source_path: gateway/security/index.md
-  source_hash: 5566bbbbbf7364ec
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:50Z
+title: "„Bezpieczeństwo”"
 ---
 
 # Bezpieczeństwo 🔒
@@ -106,7 +99,8 @@ Gdy skonfigurowane jest `trustedProxies`, Gateway użyje nagłówków `X-Forward
 
 ## Lokalne dzienniki sesji na dysku
 
-OpenClaw zapisuje transkrypty sesji na dysku pod `~/.openclaw/agents/<agentId>/sessions/*.jsonl`. Jest to wymagane dla ciągłości sesji i (opcjonalnie) indeksowania pamięci sesji, ale oznacza również, że **każdy proces/użytkownik z dostępem do systemu plików może odczytać te logi**. Traktuj dostęp do dysku jako granicę zaufania i zaostrz uprawnienia do `~/.openclaw` (zob. sekcję audytu poniżej). Jeśli potrzebujesz silniejszej izolacji między agentami, uruchamiaj je pod oddzielnymi użytkownikami systemu operacyjnego lub na oddzielnych hostach.
+OpenClaw zapisuje transkrypty sesji na dysku pod `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
+Jest to wymagane dla ciągłości sesji i (opcjonalnie) indeksowania pamięci sesji, ale oznacza również, że **każdy proces/użytkownik z dostępem do systemu plików może odczytać te logi**. Traktuj dostęp do dysku jako granicę zaufania i zaostrz uprawnienia do `~/.openclaw` (zob. sekcję audytu poniżej). Jeśli potrzebujesz silniejszej izolacji między agentami, uruchamiaj je pod oddzielnymi użytkownikami systemu operacyjnego lub na oddzielnych hostach.
 
 ## Wykonywanie węzła (system.run)
 
@@ -314,7 +308,7 @@ To podstawy socjotechniki. Zasiać nieufność, zachęcić do grzebania.
 
 ## Utwardzanie konfiguracji (przykłady)
 
-### 0) Uprawnienia plików
+### 0. Uprawnienia plików
 
 Trzymaj konfigurację + stan prywatnie na hoście gateway:
 
@@ -405,7 +399,8 @@ Ustaw token, aby **wszyscy** klienci WS musieli się uwierzytelniać:
 
 Doctor może wygenerować go za Ciebie: `openclaw doctor --generate-gateway-token`.
 
-Uwaga: `gateway.remote.token` służy **wyłącznie** do zdalnych wywołań CLI; nie chroni lokalnego dostępu WS. Opcjonalnie: przypnij zdalne TLS za pomocą `gateway.remote.tlsFingerprint` podczas używania `wss://`.
+Uwaga: `gateway.remote.token` służy **wyłącznie** do zdalnych wywołań CLI; nie chroni lokalnego dostępu WS.
+Opcjonalnie: przypnij zdalne TLS za pomocą `gateway.remote.tlsFingerprint` podczas używania `wss://`.
 
 Parowanie urządzeń lokalnych:
 
@@ -440,7 +435,8 @@ Zobacz [Tailscale](/gateway/tailscale) i [Web overview](/web).
 
 ### 0.6.1) Sterowanie przeglądarką przez host węzła (zalecane)
 
-Jeśli Gateway jest zdalny, a przeglądarka działa na innej maszynie, uruchom **host węzła** na maszynie z przeglądarką i pozwól Gateway pośredniczyć w akcjach przeglądarki (zob. [Browser tool](/tools/browser)). Traktuj parowanie węzłów jak dostęp administratora.
+Jeśli Gateway jest zdalny, a przeglądarka działa na innej maszynie, uruchom **host węzła** na maszynie z przeglądarką i pozwól Gateway pośredniczyć w akcjach przeglądarki (zob. [Browser tool](/tools/browser)).
+Traktuj parowanie węzłów jak dostęp administratora.
 
 Zalecany wzorzec:
 
@@ -485,7 +481,7 @@ Rekomendacje:
 
 Szczegóły: [Logging](/gateway/logging)
 
-### 1) DM‑y: parowanie domyślnie
+### 1. DM‑y: parowanie domyślnie
 
 ```json5
 {
@@ -493,7 +489,7 @@ Szczegóły: [Logging](/gateway/logging)
 }
 ```
 
-### 2) Grupy: wymagaj wzmianek wszędzie
+### 2. Grupy: wymagaj wzmianek wszędzie
 
 ```json
 {
@@ -533,7 +529,7 @@ Możesz już zbudować profil tylko do odczytu, łącząc:
 
 Być może dodamy później pojedynczą flagę `readOnlyMode`, aby uprościć tę konfigurację.
 
-### 5) Bezpieczna baza (kopiuj/wklej)
+### 5. Bezpieczna baza (kopiuj/wklej)
 
 Jedna „bezpieczna domyślna” konfiguracja, która trzyma Gateway prywatnie, wymaga parowania DM‑ów i unika botów grupowych „zawsze włączonych”:
 
@@ -577,7 +573,8 @@ Ważne: `tools.elevated` to globalna furtka awaryjna, która uruchamia exec na h
 
 ## Ryzyka sterowania przeglądarką
 
-Włączenie sterowania przeglądarką daje modelowi możliwość kierowania prawdziwą przeglądarką. Jeśli profil przeglądarki zawiera już zalogowane sesje, model może uzyskać dostęp do tych kont i danych. Traktuj profile przeglądarki jako **wrażliwy stan**:
+Włączenie sterowania przeglądarką daje modelowi możliwość kierowania prawdziwą przeglądarką.
+Jeśli profil przeglądarki zawiera już zalogowane sesje, model może uzyskać dostęp do tych kont i danych. Traktuj profile przeglądarki jako **wrażliwy stan**:
 
 - Preferuj dedykowany profil dla agenta (domyślny profil `openclaw`).
 - Unikaj wskazywania profilu osobistego „daily‑driver”.
@@ -592,7 +589,8 @@ Włączenie sterowania przeglądarką daje modelowi możliwość kierowania praw
 
 ## Profile dostępu per agent (multi‑agent)
 
-Przy routingu wieloagentowym każdy agent może mieć własny sandbox + politykę narzędzi: użyj tego, aby nadać **pełny dostęp**, **tylko do odczytu** lub **brak dostępu** per agent. Zobacz [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools), aby poznać pełne szczegóły i reguły pierwszeństwa.
+Przy routingu wieloagentowym każdy agent może mieć własny sandbox + politykę narzędzi: użyj tego, aby nadać **pełny dostęp**, **tylko do odczytu** lub **brak dostępu** per agent.
+Zobacz [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools), aby poznać pełne szczegóły i reguły pierwszeństwa.
 
 Typowe przypadki użycia:
 
@@ -704,7 +702,7 @@ Uwzględnij wytyczne bezpieczeństwa w promptcie systemowym agenta:
 
 Jeśli Twoja AI zrobi coś złego:
 
-### Ogranicz
+### Zawiera
 
 1. **Zatrzymaj:** zatrzymaj aplikację macOS (jeśli nadzoruje Gateway) lub zakończ proces `openclaw gateway`.
 2. **Zamknij ekspozycję:** ustaw `gateway.bind: "loopback"` (lub wyłącz Tailscale Funnel/Serve), aż zrozumiesz, co się stało.
@@ -731,7 +729,8 @@ Jeśli Twoja AI zrobi coś złego:
 
 ## Skanowanie sekretów (detect-secrets)
 
-CI uruchamia `detect-secrets scan --baseline .secrets.baseline` w zadaniu `secrets`. Jeśli zakończy się niepowodzeniem, są nowe kandydaty nieujęte jeszcze w bazie.
+CI uruchamia `detect-secrets scan --baseline .secrets.baseline` w zadaniu `secrets`.
+Jeśli zakończy się niepowodzeniem, są nowe kandydaty nieujęte jeszcze w bazie.
 
 ### Jeśli CI się nie powiedzie
 
@@ -744,8 +743,10 @@ CI uruchamia `detect-secrets scan --baseline .secrets.baseline` w zadaniu `secre
 2. Zrozum narzędzia:
    - `detect-secrets scan` znajduje kandydaty i porównuje je z bazą.
    - `detect-secrets audit` otwiera interaktywny przegląd, aby oznaczyć każdy element bazy jako prawdziwy sekret lub fałszywy alarm.
+
 3. Dla prawdziwych sekretów: zrotuj/usuń je, a następnie ponownie uruchom skan, aby zaktualizować bazę.
-4. Dla fałszywych alarmów: uruchom interaktywny audyt i oznacz je jako fałszywe:
+
+4. W przypadku fałszywych dodatków: uruchom interaktywny audyt i oznacz je jako fałszywe:
 
    ```bash
    detect-secrets audit .secrets.baseline

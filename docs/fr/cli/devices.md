@@ -4,13 +4,6 @@ read_when:
   - Vous approuvez des demandes d’appairage d’appareils
   - Vous devez faire tourner ou révoquer des jetons d’appareil
 title: "appareils"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:54Z
 ---
 
 # `openclaw devices`

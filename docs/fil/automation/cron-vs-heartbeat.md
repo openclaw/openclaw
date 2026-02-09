@@ -5,33 +5,26 @@ read_when:
   - Nagse-setup ng background monitoring o mga notification
   - Pag-o-optimize ng paggamit ng token para sa mga pana-panahong check
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:36Z
 ---
 
 # Cron vs Heartbeat: Kailan Gagamitin ang Bawat Isa
 
-Parehong nagbibigay-daan ang heartbeats at cron jobs na magpatakbo ng mga gawain ayon sa iskedyul. Tinutulungan ka ng gabay na ito na pumili ng tamang mekanismo para sa iyong use case.
+Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps you choose the right mechanism for your use case.
 
 ## Mabilis na Gabay sa Pagpapasya
 
-| Use Case                                           | Inirerekomenda      | Bakit                                                 |
-| -------------------------------------------------- | ------------------- | ----------------------------------------------------- |
-| I-check ang inbox bawat 30 min                     | Heartbeat           | Na-ba-batch kasama ng ibang check, context-aware      |
+| Use Case                                           | Inirerekomenda                         | Bakit                                                 |
+| -------------------------------------------------- | -------------------------------------- | ----------------------------------------------------- |
+| I-check ang inbox bawat 30 min                     | Heartbeat                              | Na-ba-batch kasama ng ibang check, context-aware      |
 | Magpadala ng arawang ulat eksaktong 9am            | Cron (isolated)     | Kailangan ng eksaktong oras                           |
-| I-monitor ang calendar para sa paparating na event | Heartbeat           | Natural na akma para sa pana-panahong awareness       |
+| I-monitor ang calendar para sa paparating na event | Heartbeat                              | Natural na akma para sa pana-panahong awareness       |
 | Magpatakbo ng lingguhang malalim na analysis       | Cron (isolated)     | Standalone na gawain, puwedeng gumamit ng ibang model |
 | Paalalahanan ako sa loob ng 20 minuto              | Cron (main, `--at`) | One-shot na may eksaktong timing                      |
-| Background na health check ng proyekto             | Heartbeat           | Sumasabay sa umiiral na cycle                         |
+| Background na health check ng proyekto             | Heartbeat                              | Sumasabay sa umiiral na cycle                         |
 
 ## Heartbeat: Pana-panahong Awareness
 
-Tumatakbo ang heartbeats sa **main session** sa regular na pagitan (default: 30 min). Dinisenyo ang mga ito para i-check ng agent ang mga bagay-bagay at ilabas kung may mahalaga.
+Heartbeats run in the **main session** at a regular interval (default: 30 min). They're designed for the agent to check on things and surface anything important.
 
 ### Kailan gagamit ng heartbeat
 
@@ -192,8 +185,8 @@ openclaw cron add --name "Call back" --at "2h" --session main --system-event "Ca
 
 ## Lobster: Deterministic na mga workflow na may approvals
 
-Ang Lobster ay ang workflow runtime para sa **multi-step tool pipelines** na nangangailangan ng deterministic execution at malinaw na approvals.
-Gamitin ito kapag ang gawain ay higit pa sa isang agent turn, at gusto mo ng resumable workflow na may human checkpoints.
+Lobster is the workflow runtime for **multi-step tool pipelines** that need deterministic execution and explicit approvals.
+Use it when the task is more than a single agent turn, and you want a resumable workflow with human checkpoints.
 
 ### Kailan akma ang Lobster
 
@@ -206,8 +199,8 @@ Gamitin ito kapag ang gawain ay higit pa sa isang agent turn, at gusto mo ng res
 - **Heartbeat/cron** ang nagdedesisyon kung _kailan_ tatakbo ang isang run.
 - **Lobster** ang nagde-define kung _anong mga hakbang_ ang mangyayari kapag nagsimula na ang run.
 
-Para sa mga scheduled workflow, gumamit ng cron o heartbeat para mag-trigger ng agent turn na tatawag sa Lobster.
-Para sa ad-hoc na mga workflow, direktang tawagin ang Lobster.
+For scheduled workflows, use cron or heartbeat to trigger an agent turn that calls Lobster.
+For ad-hoc workflows, call Lobster directly.
 
 ### Mga tala sa operasyon (mula sa code)
 
@@ -223,12 +216,12 @@ Tingnan ang [Lobster](/tools/lobster) para sa kumpletong paggamit at mga halimba
 Parehong puwedeng makipag-interact ang heartbeat at cron sa main session, pero magkaiba ang paraan:
 
 |         | Heartbeat                             | Cron (main)                           | Cron (isolated)                 |
-| ------- | ------------------------------------- | ------------------------------------- | ------------------------------- |
-| Session | Main                                  | Main (sa pamamagitan ng system event) | `cron:<jobId>`                  |
-| History | Shared                                | Shared                                | Bago sa bawat run               |
-| Context | Buo                                   | Buo                                   | Wala (nagsisimula nang malinis) |
-| Model   | Model ng main session                 | Model ng main session                 | Puwedeng i-override             |
-| Output  | Ipinapadala kung hindi `HEARTBEAT_OK` | Heartbeat prompt + event              | Announce summary (default)      |
+| ------- | ------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
+| Session | Main                                  | Main (sa pamamagitan ng system event) | `cron:<jobId>`                                     |
+| History | Shared                                | Shared                                                   | Bago sa bawat run                                  |
+| Context | Buo                                   | Buo                                                      | Wala (nagsisimula nang malinis) |
+| Model   | Model ng main session                 | Model ng main session                                    | Puwedeng i-override                                |
+| Output  | Ipinapadala kung hindi `HEARTBEAT_OK` | Heartbeat prompt + event                                 | Announce summary (default)      |
 
 ### Kailan gagamit ng main session cron
 
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Mga Pagsasaalang-alang sa Gastos
 
-| Mekanismo       | Profile ng Gastos                                                   |
-| --------------- | ------------------------------------------------------------------- |
-| Heartbeat       | Isang turn bawat N minuto; nag-i-scale ayon sa laki ng HEARTBEAT.md |
+| Mekanismo                          | Profile ng Gastos                                                                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------- |
+| Heartbeat                          | Isang turn bawat N minuto; nag-i-scale ayon sa laki ng HEARTBEAT.md    |
 | Cron (main)     | Nagdaragdag ng event sa susunod na heartbeat (walang isolated turn) |
-| Cron (isolated) | Buong agent turn bawat job; puwedeng gumamit ng mas murang model    |
+| Cron (isolated) | Buong agent turn bawat job; puwedeng gumamit ng mas murang model                       |
 
 **Mga Tip**:
 

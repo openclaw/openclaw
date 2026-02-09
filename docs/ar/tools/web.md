@@ -5,13 +5,6 @@ read_when:
   - تحتاج إلى إعداد مفتاح واجهة برمجة تطبيقات Brave Search
   - تريد استخدام Perplexity Sonar للبحث على الويب
 title: "أدوات الويب"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:08Z
 ---
 
 # أدوات الويب
@@ -36,10 +29,10 @@ x-i18n:
 
 ## اختيار موفّر البحث
 
-| الموفّر             | الإيجابيات                                      | السلبيات                            | مفتاح واجهة برمجة التطبيقات                  |
-| ------------------- | ----------------------------------------------- | ----------------------------------- | -------------------------------------------- |
+| Provider                               | Pros                                            | السياقات                            | مفتاح API                                    |
+| -------------------------------------- | ----------------------------------------------- | ----------------------------------- | -------------------------------------------- |
 | **Brave** (افتراضي) | سريع، نتائج مُهيكلة، شريحة مجانية               | نتائج بحث تقليدية                   | `BRAVE_API_KEY`                              |
-| **Perplexity**      | إجابات مُولّدة بالذكاء الاصطناعي، اقتباسات، آني | يتطلب وصول Perplexity أو OpenRouter | `OPENROUTER_API_KEY` أو `PERPLEXITY_API_KEY` |
+| **Perplexity**                         | إجابات مُولّدة بالذكاء الاصطناعي، اقتباسات، آني | يتطلب وصول Perplexity أو OpenRouter | `OPENROUTER_API_KEY` أو `PERPLEXITY_API_KEY` |
 
 انظر [إعداد Brave Search](/brave-search) و[Perplexity Sonar](/perplexity) لتفاصيل خاصة بكل موفّر.
 
@@ -90,9 +83,7 @@ x-i18n:
 **موصى به:** شغّل `openclaw configure --section web`. سيخزّن المفتاح في
 `~/.openclaw/openclaw.json` تحت `tools.web.search.apiKey`.
 
-**بديل عبر البيئة:** اضبط `BRAVE_API_KEY` في بيئة عملية Gateway.
-لتثبيت gateway، ضعه في `~/.openclaw/.env` (أو بيئة خدمتك).
-انظر [متغيرات البيئة](/help/faq#how-does-openclaw-load-environment-variables).
+**بديل عبر البيئة:** اضبط `BRAVE_API_KEY` في بيئة عملية Gateway. لتثبيت gateway، ضعه في `~/.openclaw/.env` (أو بيئة خدمتك). انظر [متغيرات البيئة](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## استخدام Perplexity (مباشر أو عبر OpenRouter)
 
@@ -129,8 +120,7 @@ x-i18n:
 }
 ```
 
-**بديل عبر البيئة:** اضبط `OPENROUTER_API_KEY` أو `PERPLEXITY_API_KEY` في بيئة Gateway.
-لتثبيت gateway، ضعه في `~/.openclaw/.env`.
+**بديل عبر البيئة:** اضبط `OPENROUTER_API_KEY` أو `PERPLEXITY_API_KEY` في بيئة Gateway. لتثبيت gateway، ضعه في `~/.openclaw/.env`.
 
 إذا لم يتم تعيين عنوان أساسي، يختار OpenClaw قيمة افتراضية بناءً على مصدر مفتاح API:
 
@@ -140,11 +130,11 @@ x-i18n:
 
 ### نماذج Perplexity المتاحة
 
-| النموذج                          | الوصف                            | الأنسب لـ       |
-| -------------------------------- | -------------------------------- | --------------- |
-| `perplexity/sonar`               | أسئلة وأجوبة سريعة مع بحث ويب    | استعلامات سريعة |
+| النموذج                                             | الوصف                            | الأنسب لـ       |
+| --------------------------------------------------- | -------------------------------- | --------------- |
+| `perplexity/sonar`                                  | أسئلة وأجوبة سريعة مع بحث ويب    | استعلامات سريعة |
 | `perplexity/sonar-pro` (افتراضي) | استدلال متعدد الخطوات مع بحث ويب | أسئلة معقّدة    |
-| `perplexity/sonar-reasoning-pro` | تحليل سلسلة الأفكار              | بحث معمّق       |
+| `perplexity/sonar-reasoning-pro`                    | تحليل سلسلة الأفكار              | بحث معمّق       |
 
 ## web_search
 
@@ -175,7 +165,7 @@ x-i18n:
 }
 ```
 
-### معاملات الأداة
+### Tool parameters
 
 - `query` (مطلوب)
 - `count` (من 1 إلى 10؛ الافتراضي من التهيئة)

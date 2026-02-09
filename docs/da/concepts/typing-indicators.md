@@ -3,20 +3,13 @@ summary: "Hvornår OpenClaw viser skriveindikatorer, og hvordan du justerer dem"
 read_when:
   - Ændring af adfærd eller standarder for skriveindikatorer
 title: "Skriveindikatorer"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:20Z
 ---
 
 # Skriveindikatorer
 
-Skriveindikatorer sendes til chatkanalen, mens et run er aktivt. Brug
-`agents.defaults.typingMode` til at styre **hvornår** skrivning starter og `typingIntervalSeconds`
-til at styre **hvor ofte** den opdateres.
+Skrive indikatorer sendes til chatkanalen, mens et løb er aktivt. Brug
+`agents.defaults.typingMode` til at styre **når** typning starter og `typingIntervalSeconds`
+til at styre **hvor ofte** det opdateres.
 
 ## Standarder
 
@@ -66,10 +59,10 @@ Du kan tilsidesætte tilstand eller kadence pr. session:
 
 ## Noter
 
-- `message`-tilstand viser ikke skriveindikator for svar, der kun er silent (f.eks. `NO_REPLY`-
-  tokenet, der bruges til at undertrykke output).
-- `thinking` udløses kun, hvis run’et streamer reasoning (`reasoningLevel: "stream"`).
-  Hvis modellen ikke udsender reasoning-deltaer, starter skrivning ikke.
+- `message` tilstand vil ikke vise indtastning for lydløse svar (fx `NO_REPLY`
+  token bruges til at undertrykke output).
+- `tænkende` kun brande, hvis løbestrømmene ræsonnement (`ræsonnementLevel: "stream"`).
+  Hvis modellen ikke udleder ræsonnement deltas, vil skrive ikke starte.
 - Heartbeats viser aldrig skriveindikator, uanset tilstand.
-- `typingIntervalSeconds` styrer **opdateringskadencen**, ikke starttidspunktet.
-  Standardværdien er 6 sekunder.
+- `typingIntervalSeconds` styrer **refresh cadence**, ikke starttidspunktet.
+  Standard er 6 sekunder.

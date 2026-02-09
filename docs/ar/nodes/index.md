@@ -4,17 +4,10 @@ read_when:
   - اقتران عُقد iOS/Android مع Gateway
   - استخدام لوحة/كاميرا العُقد لسياق الوكيل
   - إضافة أوامر عُقد جديدة أو مساعدات CLI
-title: "العُقد"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:52Z
+title: "Nodes"
 ---
 
-# العُقد
+# Nodes
 
 **العُقدة** هي جهاز مُرافِق (macOS/iOS/Android/بدون واجهة) يتصل بـ **WebSocket** الخاص بـ Gateway (نفس المنفذ الخاص بالمشغّلين) مع `role: "node"` ويكشف سطح أوامر (مثل `canvas.*`، `camera.*`، `system.*`) عبر `node.invoke`. تفاصيل البروتوكول: [بروتوكول Gateway](/gateway/protocol).
 
@@ -118,7 +111,7 @@ openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 
 توجد الموافقات على مضيف العُقدة في `~/.openclaw/exec-approvals.json`.
 
-### توجيه التنفيذ إلى العُقدة
+### نقطة خارجية في العقدة
 
 اضبط القيم الافتراضية (تهيئة البوابة):
 

@@ -3,13 +3,6 @@ summary: "Hoe OpenClaw-sandboxing werkt: modi, scopes, werkruimte-toegang en ima
 title: Sandboxing
 read_when: "Je wilt een toegewijde uitleg van sandboxing of moet agents.defaults.sandbox afstemmen."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # Sandboxing
@@ -143,7 +136,7 @@ Docker-installaties en de gecontaineriseerde Gateway vind je hier:
 `setupCommand` draait **één keer** nadat de sandbox-container is aangemaakt (niet bij elke run).
 Het wordt in de container uitgevoerd via `sh -lc`.
 
-Paden:
+Paths:
 
 - Globaal: `agents.defaults.sandbox.docker.setupCommand`
 - Per agent: `agents.list[].sandbox.docker.setupCommand`

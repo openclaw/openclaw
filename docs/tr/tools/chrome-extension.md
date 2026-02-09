@@ -5,13 +5,6 @@ read_when:
   - Tailscale üzerinden uzak Gateway + yerel tarayıcı otomasyonuna ihtiyacınız var
   - Tarayıcı devralmanın güvenlik etkilerini anlamak istiyorsunuz
 title: "Chrome Uzantısı"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:58Z
 ---
 
 # Chrome uzantısı (tarayıcı rölesi)
@@ -20,7 +13,7 @@ OpenClaw Chrome uzantısı, ayrı bir openclaw tarafından yönetilen Chrome pro
 
 Bağlama/ayırma işlemi **tek bir Chrome araç çubuğu düğmesi** üzerinden yapılır.
 
-## Nedir (kavram)
+## 19. Nedir (kavram)
 
 Üç parça vardır:
 
@@ -49,7 +42,7 @@ openclaw browser extension path
 - “Geliştirici modu”nu etkinleştirin
 - “Paketlenmemiş yükle” → yukarıda yazdırılan dizini seçin
 
-4. Uzantıyı sabitleyin.
+4. 20. Uzantıyı sabitleyin.
 
 ## Güncellemeler (derleme adımı yok)
 
@@ -165,7 +158,7 @@ Bu kurulum dizinini taşırsanız veya silerseniz, Chrome geçerli bir yoldan ye
 Bu güçlü ve risklidir. Model’e “tarayıcınız üzerinde eller” vermek gibi düşünün.
 
 - Uzantı, Chrome’un debugger API’sini (`chrome.debugger`) kullanır. Bağlıyken model:
-  - tıklayabilir/yazabilir/gezinme yapabilir
+  - 21. o sekmede tıkla/yaz/navigasyon yap
   - sayfa içeriğini okuyabilir
   - sekmenin oturum açmış olduğu her şeye erişebilir
 - **Bu, özel openclaw tarafından yönetilen profil gibi yalıtılmış değildir.**

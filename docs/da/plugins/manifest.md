@@ -4,21 +4,14 @@ read_when:
   - Du bygger et OpenClaw-plugin
   - Du skal levere et plugin-konfigurationsskema eller fejlfinde plugin-valideringsfejl
 title: "Plugin-manifest"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:29Z
 ---
 
 # Plugin-manifest (openclaw.plugin.json)
 
-Hvert plugin **skal** levere en `openclaw.plugin.json`-fil i **plugin-roden**.
-OpenClaw bruger dette manifest til at validere konfiguration **uden at køre plugin-kode**.
-Manglende eller ugyldige manifester behandles som plugin-fejl og blokerer
-konfigurationsvalidering.
+Hvert plugin **must** sender en `openclaw.plugin.json` fil i **pluginroden**.
+OpenClaw bruger dette manifest til at validere konfiguration \*\* uden at udføre plugin
+kode \*\*. Manglende eller ugyldige manifester behandles som plugin fejl og blokere
+config validering.
 
 Se den fulde guide til pluginsystemet: [Plugins](/tools/plugin).
 
@@ -61,8 +54,8 @@ Valgfrie nøgler:
 
 - Ukendte `channels.*`-nøgler er **fejl**, medmindre kanal-id’et er deklareret af
   et plugin-manifest.
-- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny` og `plugins.slots.*`
-  skal referere til **opdagelige** plugin-id’er. Ukendte id’er er **fejl**.
+- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, og `plugins.slots.*`
+  skal henvise til **opdagelig** plugin-id'er. Ukendt id er **fejl**.
 - Hvis et plugin er installeret, men har et defekt eller manglende manifest eller skema,
   fejler valideringen, og Doctor rapporterer plugin-fejlen.
 - Hvis plugin-konfiguration findes, men plugin’et er **deaktiveret**, bevares konfigurationen,

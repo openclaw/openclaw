@@ -3,13 +3,6 @@ summary: "Exploración: configuración de modelos, perfiles de autenticación y 
 read_when:
   - Explorando ideas futuras de selección de modelos + perfiles de autenticación
 title: "Exploración de configuración de modelos"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:22Z
 ---
 
 # Configuración de modelos (Exploración)

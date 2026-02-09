@@ -3,13 +3,6 @@ summary: "ချန်နယ် ချိတ်ဆက်နိုင်မှု
 read_when:
   - WhatsApp ချန်နယ် Health ကို ချို့ယွင်းချက်ရှာဖွေနေစဉ်
 title: "Health Checks"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:21Z
 ---
 
 # Health Checks (CLI)
@@ -28,8 +21,8 @@ x-i18n:
 ## Deep diagnostics
 
 - Disk ပေါ်ရှိ Creds: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime သည် လတ်တလော ဖြစ်သင့်သည်)။
-- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path ကို config တွင် override လုပ်နိုင်သည်)။ အရေအတွက်နှင့် လတ်တလော လက်ခံသူများကို `status` မှတစ်ဆင့် ပြသထားသည်။
-- Relink flow: logs တွင် status codes 409–515 သို့မဟုတ် `loggedOut` ပေါ်လာပါက `openclaw channels logout && openclaw channels login --verbose` ကို အသုံးပြုပါ။ (မှတ်ချက်: pairing ပြီးနောက် status 515 ဖြစ်ပါက QR login flow သည် အလိုအလျောက် တစ်ကြိမ် ပြန်လည်စတင်ပါသည်)။
+- 9. Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path ကို config တွင် override ပြုလုပ်နိုင်သည်)။ 10. Count နှင့် မကြာသေးမီ recipient များကို `status` မှတဆင့် ပြသပါသည်။
+- 11. Relink flow: log တွင် status code 409–515 သို့မဟုတ် `loggedOut` ပေါ်လာပါက `openclaw channels logout && openclaw channels login --verbose` ကို အသုံးပြုပါ။ (မှတ်ချက် - pairing ပြီးနောက် status 515 ဖြစ်လာပါက QR login flow သည် အလိုအလျောက် တစ်ကြိမ် ပြန်လည်စတင်ပါသည်။)
 
 ## When something fails
 
@@ -39,4 +32,4 @@ x-i18n:
 
 ## Dedicated "health" command
 
-`openclaw health --json` သည် လည်ပတ်နေသော Gateway（ဂိတ်ဝေး）ထံမှ ၎င်း၏ Health snapshot ကို တောင်းခံသည် (CLI မှ ချန်နယ် socket များကို တိုက်ရိုက် မချိတ်ဆက်ပါ)။ ရရှိနိုင်ပါက ချိတ်ဆက်ထားသော creds/အတည်ပြုချက် အသက်ကာလ၊ ချန်နယ်တစ်ခုချင်းစီအလိုက် probe အကျဉ်းချုပ်များ၊ session-store အကျဉ်းချုပ်နှင့် probe ကြာချိန်ကို တင်ပြပါသည်။ Gateway မရောက်နိုင်ပါက သို့မဟုတ် probe မအောင်မြင်/timeout ဖြစ်ပါက non-zero ဖြင့် exit လုပ်ပါသည်။ 10s default ကို override လုပ်ရန် `--timeout <ms>` ကို အသုံးပြုပါ။
+13. `openclaw health --json` သည် လည်ပတ်နေသော Gateway ထံမှ health snapshot ကို တောင်းခံပါသည် (CLI မှ channel socket ကို တိုက်ရိုက် မချိတ်ဆက်ပါ)။ 14. ရနိုင်ပါက linked creds/auth age၊ channel တစ်ခုချင်းစီ၏ probe summary၊ session-store summary နှင့် probe duration ကို အစီရင်ခံပါသည်။ 15. Gateway ကို မရောက်ရှိနိုင်ပါက သို့မဟုတ် probe မအောင်မြင်/timeout ဖြစ်ပါက non-zero ဖြင့် exit ပြုလုပ်ပါသည်။ 16. 10s default ကို override ပြုလုပ်ရန် `--timeout <ms>` ကို အသုံးပြုပါ။

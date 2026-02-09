@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez utiliser des modèles OpenAI dans OpenClaw
   - Vous souhaitez une authentification par abonnement Codex plutôt que par clés API
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 13d8fd7f1f935b0a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:27Z
 ---
 
 # OpenAI
@@ -44,7 +37,7 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 **Idéal pour :** utiliser l’accès par abonnement ChatGPT/Codex au lieu d’une clé API.
 Le cloud Codex nécessite une connexion ChatGPT, tandis que le CLI Codex prend en charge une connexion ChatGPT ou par clé API.
 
-### Configuration CLI
+### Configuration CLI (Codex OAuth)
 
 ```bash
 # Run Codex OAuth in the wizard
@@ -54,7 +47,7 @@ openclaw onboard --auth-choice openai-codex
 openclaw models auth login --provider openai-codex
 ```
 
-### Extrait de configuration
+### Configuration du snippet (abonnement Codex)
 
 ```json5
 {

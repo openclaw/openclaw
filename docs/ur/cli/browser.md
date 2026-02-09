@@ -5,13 +5,6 @@ read_when:
   - آپ کسی دوسرے مشین پر چلنے والے براؤزر کو node host کے ذریعے کنٹرول کرنا چاہتے ہیں
   - آپ Chrome ایکسٹینشن ریلے استعمال کرنا چاہتے ہیں (ٹول بار بٹن کے ذریعے attach/detach)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## Profiles
 
-پروفائلز نامزد براؤزر روٹنگ کنفیگز ہیں۔ عملی طور پر:
+پروفائلز براؤزر روٹنگ کنفیگز کے نام ہوتے ہیں۔ عملی طور پر:
 
 - `openclaw`: ایک مخصوص OpenClaw کے زیرِ انتظام Chrome انسٹینس لانچ/اٹیچ کرتا ہے (الگ تھلگ user data dir)۔
 - `chrome`: Chrome ایکسٹینشن ریلے کے ذریعے آپ کے موجودہ Chrome ٹیب(ز) کو کنٹرول کرتا ہے۔
@@ -107,7 +100,7 @@ openclaw browser extension path
 
 ## Remote browser control (node host proxy)
 
-اگر Gateway براؤزر سے مختلف مشین پر چل رہا ہو، تو اس مشین پر **node host** چلائیں جہاں Chrome/Brave/Edge/Chromium موجود ہو۔ Gateway براؤزر ایکشنز کو اس node تک پروکسی کرے گا (علیحدہ براؤزر کنٹرول سرور درکار نہیں)۔
+اگر گیٹ وے براؤزر سے مختلف مشین پر چل رہا ہو تو اس مشین پر **نوڈ ہوسٹ** چلائیں جس پر Chrome/Brave/Edge/Chromium موجود ہو۔ گیٹ وے براؤزر ایکشنز کو اس نوڈ کی طرف پراکسی کرے گا (الگ براؤزر کنٹرول سرور کی ضرورت نہیں)۔
 
 آٹو روٹنگ کو کنٹرول کرنے کے لیے `gateway.nodes.browser.mode` استعمال کریں اور اگر متعدد nodes منسلک ہوں تو کسی مخصوص node کو پن کرنے کے لیے `gateway.nodes.browser.node` استعمال کریں۔
 

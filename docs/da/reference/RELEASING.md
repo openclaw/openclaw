@@ -4,18 +4,11 @@ read_when:
   - Udgivelse af en ny npm-version
   - Udgivelse af en ny macOS-app-version
   - Verifikation af metadata før publicering
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:45Z
 ---
 
 # Release-tjekliste (npm + macOS)
 
-Brug `pnpm` (Node 22+) fra repo-roden. Hold working tree rent før tagging/publicering.
+Brug `pnpm` (Node 22+) fra repo roden. Hold arbejdstræet rent før tagging/publicering.
 
 ## Operator-trigger
 
@@ -65,7 +58,7 @@ Når operatøren siger “release”, skal du straks lave denne preflight (ingen
 
 - [ ] Build og signér macOS-appen, og zip den derefter til distribution.
 - [ ] Generér Sparkle-appcast (HTML-noter via [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)) og opdatér `appcast.xml`.
-- [ ] Hav app-zippen (og evt. dSYM-zip) klar til at vedhæfte GitHub-releasen.
+- [ ] Hold app zip (og valgfri dSYM zip) klar til at vedhæfte til GitHub udgivelse.
 - [ ] Følg [macOS release](/platforms/mac/release) for de præcise kommandoer og påkrævede env-vars.
   - `APP_BUILD` skal være numerisk og monoton (ingen `-beta`), så Sparkle sammenligner versioner korrekt.
   - Hvis der notariseres, brug `openclaw-notary`-keychain-profilen oprettet fra App Store Connect API env-vars (se [macOS release](/platforms/mac/release)).
@@ -79,7 +72,7 @@ Når operatøren siger “release”, skal du straks lave denne preflight (ingen
 
 ### Fejlfinding (noter fra 2.0.0-beta2-release)
 
-- **npm pack/publish hænger eller producerer enorm tarball**: macOS-app-bundlet i `dist/OpenClaw.app` (og release-zips) bliver samlet med i pakken. Løs ved at whiteliste publish-indhold via `package.json` `files` (inkludér dist-undermapper, docs, skills; ekskludér app-bundles). Bekræft med `npm pack --dry-run`, at `dist/OpenClaw.app` ikke er listet.
+- **npm pack/publish hangs or produces huge tarball**: macOS app bundle in `dist/OpenClaw.app` (og release zips) bliver fejet ind i pakken. Fix ved whitelisting publicere indhold via `package.json` `files` (omfatter dist subdirs, docs, færdigheder; udelukke app bundter). Bekræft med `npm pack --dry-run` at `dist/OpenClaw.app` ikke er angivet.
 - **npm auth web-loop for dist-tags**: brug legacy-auth for at få en OTP-prompt:
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **`npx`-verifikation fejler med `ECOMPROMISED: Lock compromised`**: prøv igen med en frisk cache:
@@ -98,8 +91,8 @@ Når operatøren siger “release”, skal du straks lave denne preflight (ingen
 
 ## Plugin-publiceringsscope (npm)
 
-Vi publicerer kun **eksisterende npm-plugins** under `@openclaw/*`-scopet. Bundtede
-plugins, der ikke er på npm, forbliver **kun disk-tree** (stadig leveret i
+Vi offentliggør kun **eksisterende npm plugins** under `@openclaw/*` anvendelsesområdet. Medfølgende
+plugins, der ikke er på npm ophold **disk-tree kun** (stadig afsendt i
 `extensions/**`).
 
 Proces for at aflede listen:

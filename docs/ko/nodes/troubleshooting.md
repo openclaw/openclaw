@@ -4,13 +4,6 @@ read_when:
   - 노드는 연결되어 있지만 camera/canvas/screen/exec 도구가 실패하는 경우
   - 노드 페어링과 승인에 대한 정신 모델이 필요한 경우
 title: "노드 문제 해결"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:38Z
 ---
 
 # 노드 문제 해결
@@ -57,12 +50,12 @@ openclaw logs --follow
 
 ## 권한 매트릭스
 
-| 기능                         | iOS                                  | Android                                 | macOS 노드 앱                   | 일반적인 실패 코드             |
-| ---------------------------- | ------------------------------------ | --------------------------------------- | ------------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | 카메라 (+ 클립 오디오용 마이크)      | 카메라 (+ 클립 오디오용 마이크)         | 카메라 (+ 클립 오디오용 마이크) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | 화면 녹화 (+ 마이크 선택 사항)       | 화면 캡처 프롬프트 (+ 마이크 선택 사항) | 화면 녹화                       | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | 사용 중 또는 항상 (모드에 따라 다름) | 모드에 따른 전경/백그라운드 위치        | 위치 권한                       | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | 해당 없음 (노드 호스트 경로)         | 해당 없음 (노드 호스트 경로)            | Exec 승인 필요                  | `SYSTEM_RUN_DENIED`            |
+| 기능                           | iOS                                       | Android                                     | macOS 노드 앱                             | 일반적인 실패 코드                     |
+| ---------------------------- | ----------------------------------------- | ------------------------------------------- | -------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | 카메라 (+ 클립 오디오용 마이크)    | 카메라 (+ 클립 오디오용 마이크)      | 카메라 (+ 클립 오디오용 마이크) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | 화면 녹화 (+ 마이크 선택 사항)    | 화면 캡처 프롬프트 (+ 마이크 선택 사항) | 화면 녹화                                  | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | 사용 중 또는 항상 (모드에 따라 다름) | 모드에 따른 전경/백그라운드 위치                          | 위치 권한                                  | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | 해당 없음 (노드 호스트 경로)      | 해당 없음 (노드 호스트 경로)        | Exec 승인 필요                             | `SYSTEM_RUN_DENIED`            |
 
 ## 페어링 대 승인
 

@@ -3,21 +3,17 @@ summary: "Matrix ပံ့ပိုးမှု အခြေအနေ၊ လု�
 read_when:
   - Matrix ချန်နယ် အင်္ဂါရပ်များကို လုပ်ဆောင်နေစဉ်
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:23Z
 ---
 
 # Matrix (plugin)
 
-Matrix သည် ဖွင့်လှစ်ထားသော၊ ဗဟိုမထားသော မက်ဆေ့ချ်ပို့ဆောင်ရေး ပရိုတိုကောတစ်ခု ဖြစ်သည်။ OpenClaw သည် မည်သည့် homeserver မဆို Matrix **အသုံးပြုသူ** အဖြစ် ချိတ်ဆက်လုပ်ဆောင်သောကြောင့် bot အတွက် Matrix အကောင့်တစ်ခု လိုအပ်ပါသည်။ လော့ဂ်အင် ဝင်ပြီးနောက် bot ကို တိုက်ရိုက် DM ပို့နိုင်သလို အခန်းများ (Matrix “groups”) သို့ ဖိတ်ခေါ်နိုင်ပါသည်။ Beeper ကိုလည်း အသုံးပြုနိုင်သော်လည်း E2EE ကို ဖွင့်ထားရန် လိုအပ်ပါသည်။
+Matrix is an open, decentralized messaging protocol. OpenClaw connects as a Matrix **user**
+on any homeserver, so you need a Matrix account for the bot. Once it is logged in, you can DM
+the bot directly or invite it to rooms (Matrix "groups"). Beeper is a valid client option too,
+but it requires E2EE to be enabled.
 
-အခြေအနေ: plugin (@vector-im/matrix-bot-sdk) ဖြင့် ပံ့ပိုးထားသည်။ Direct messages, rooms, threads, media, reactions,
-polls (ပို့ခြင်း + poll-start ကို စာသားအဖြစ်), location နှင့် E2EE (crypto ပံ့ပိုးမှုပါ) ကို ပံ့ပိုးထားသည်။
+Status: supported via plugin (@vector-im/matrix-bot-sdk). Direct messages, rooms, threads, media, reactions,
+polls (send + poll-start as text), location, and E2EE (with crypto support).
 
 ## Plugin လိုအပ်ချက်
 
@@ -45,10 +41,13 @@ OpenClaw သည် local install လမ်းကြောင်းကို အ�
 1. Matrix plugin ကို ထည့်သွင်းပါ:
    - npm မှ: `openclaw plugins install @openclaw/matrix`
    - local checkout မှ: `openclaw plugins install ./extensions/matrix`
+
 2. homeserver တစ်ခုတွင် Matrix အကောင့် ဖန်တီးပါ:
    - hosting ရွေးချယ်စရာများကို [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/) တွင် ကြည့်ရှုပါ
    - သို့မဟုတ် ကိုယ်တိုင် host ပြုလုပ်ပါ။
+
 3. bot အကောင့်အတွက် access token ရယူပါ:
+
    - သင့် homeserver တွင် `curl` ကို အသုံးပြုပြီး Matrix login API ကို သုံးပါ:
 
    ```bash
@@ -76,10 +75,12 @@ OpenClaw သည် local install လမ်းကြောင်းကို အ�
    - နှစ်ခုလုံး သတ်မှတ်ထားပါက config ကို ဦးစားပေးပါသည်။
    - access token ဖြင့် အသုံးပြုသောအခါ user ID ကို `/whoami` မှတစ်ဆင့် အလိုအလျောက် ရယူပါသည်။
    - `channels.matrix.userId` ကို သတ်မှတ်ပါက Matrix ID အပြည့်အစုံ ဖြစ်ရပါမည် (ဥပမာ: `@bot:example.org`)။
+
 5. Gateway ကို ပြန်လည်စတင်ပါ (သို့မဟုတ် onboarding ကို ပြီးဆုံးစေပါ)။
-6. မည်သည့် Matrix client မဆိုမှ bot နှင့် DM စတင်ပါ သို့မဟုတ် အခန်းသို့ ဖိတ်ခေါ်ပါ
-   (Element, Beeper စသည်; [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/) ကို ကြည့်ပါ)။ Beeper သည် E2EE လိုအပ်သဖြင့်
-   `channels.matrix.encryption: true` ကို သတ်မှတ်ပြီး device ကို အတည်ပြုပါ။
+
+6. Start a DM with the bot or invite it to a room from any Matrix client
+   (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requires E2EE,
+   so set `channels.matrix.encryption: true` and verify the device.
 
 အနည်းဆုံး config (access token, user ID ကို အလိုအလျောက် ရယူ):
 
@@ -121,7 +122,7 @@ End-to-end encryption ကို Rust crypto SDK ဖြင့် **ပံ့ပ�
 - crypto module ကို load လုပ်နိုင်ပါက encrypted rooms များကို အလိုအလျောက် decrypt လုပ်ပါသည်။
 - encrypted rooms သို့ ပို့သော outbound media ကို encryption လုပ်ပါသည်။
 - ပထမဆုံး ချိတ်ဆက်ချိန်တွင် OpenClaw သည် သင့်အခြား session များမှ device verification ကို တောင်းခံပါသည်။
-- key sharing ကို ဖွင့်နိုင်ရန် အခြား Matrix client (Element စသည်) တွင် device ကို အတည်ပြုပါ။
+- Verify the device in another Matrix client (Element, etc.) to enable key sharing.
 - crypto module ကို load မလုပ်နိုင်ပါက E2EE ကို ပိတ်ထားပြီး encrypted rooms များကို decrypt မလုပ်နိုင်ပါ;
   OpenClaw သည် သတိပေးချက်ကို log ထဲတွင် ရေးသားပါသည်။
 - crypto module မရှိကြောင်း error များကို တွေ့ရပါက (ဥပမာ `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -129,16 +130,16 @@ End-to-end encryption ကို Rust crypto SDK ဖြင့် **ပံ့ပ�
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` ကို chạy ပါ သို့မဟုတ်
   `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js` ဖြင့် binary ကို ရယူပါ။
 
-Crypto အခြေအနေကို account + access token တစ်ခုချင်းစီအလိုက်
+Crypto state is stored per account + access token in
 `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
-(SQLite database) တွင် သိမ်းဆည်းထားပါသည်။ Sync state ကို `bot-storage.json` တွင် အတူတကွ သိမ်းဆည်းထားပါသည်။
-access token (device) ပြောင်းလဲသွားပါက store အသစ်တစ်ခု ဖန်တီးပြီး
-encrypted rooms များအတွက် bot ကို ပြန်လည် အတည်ပြုရပါမည်။
+(SQLite database). Sync state lives alongside it in `bot-storage.json`.
+If the access token (device) changes, a new store is created and the bot must be
+re-verified for encrypted rooms.
 
-**Device အတည်ပြုခြင်း:**
-E2EE ကို ဖွင့်ထားသောအခါ bot သည် စတင်ချိန်တွင် သင့်အခြား session များထံ အတည်ပြုရန် တောင်းဆိုပါသည်။
-Element (သို့မဟုတ် အခြား client) ကို ဖွင့်ပြီး verification တောင်းဆိုချက်ကို ခွင့်ပြုပါ။
-အတည်ပြုပြီးပါက bot သည် encrypted rooms များတွင် မက်ဆေ့ချ်များကို decrypt လုပ်နိုင်ပါသည်။
+**Device verification:**
+When E2EE is enabled, the bot will request verification from your other sessions on startup.
+Open Element (or another client) and approve the verification request to establish trust.
+Once verified, the bot can decrypt messages in encrypted rooms.
 
 ## Routing model
 
@@ -147,16 +148,16 @@ Element (သို့မဟုတ် အခြား client) ကို ဖွင
 
 ## Access control (DMs)
 
-- မူလအခြေအနေ: `channels.matrix.dm.policy = "pairing"`။ မသိရှိသော ပို့သူများသည် pairing code ရရှိပါသည်။
+- မူလ: `channels.matrix.dm.policy = "pairing"`။ Unknown senders get a pairing code.
 - အတည်ပြုရန်:
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - အများပြည်သူ DMs: `channels.matrix.dm.policy="open"` နှင့် `channels.matrix.dm.allowFrom=["*"]`။
-- `channels.matrix.dm.allowFrom` သည် Matrix user ID အပြည့်အစုံကို လက်ခံပါသည် (ဥပမာ: `@user:server`)။ directory search တွင် တစ်ခုတည်းသော တိကျကိုက်ညီမှုကို တွေ့ရှိပါက wizard သည် display name များကို user ID များအဖြစ် ဖြေရှင်းပေးပါသည်။
+- `channels.matrix.dm.allowFrom` accepts full Matrix user IDs (example: `@user:server`). The wizard resolves display names to user IDs when directory search finds a single exact match.
 
 ## Rooms (groups)
 
-- မူလအခြေအနေ: `channels.matrix.groupPolicy = "allowlist"` (mention-gated)။ မသတ်မှတ်ထားပါက `channels.defaults.groupPolicy` ဖြင့် မူလတန်ဖိုးကို အစားထိုးနိုင်ပါသည်။
+- Default: `channels.matrix.groupPolicy = "allowlist"` (mention ဖြင့်သာ ဝင်ရောက်နိုင်ခြင်း)။ Use `channels.defaults.groupPolicy` to override the default when unset.
 - `channels.matrix.groups` ဖြင့် rooms များကို allowlist ပြုလုပ်ပါ (room IDs သို့မဟုတ် aliases; directory search တွင် တစ်ခုတည်းသော တိကျကိုက်ညီမှုကို တွေ့ရှိပါက name များကို ID များအဖြစ် ဖြေရှင်းပါသည်):
 
 ```json5
@@ -194,17 +195,17 @@ Element (သို့မဟုတ် အခြား client) ကို ဖွင
 
 ## Capabilities
 
-| Feature         | Status                                                                                                          |
-| --------------- | --------------------------------------------------------------------------------------------------------------- |
-| Direct messages | ✅ ပံ့ပိုးထားသည်                                                                                                |
-| Rooms           | ✅ ပံ့ပိုးထားသည်                                                                                                |
-| Threads         | ✅ ပံ့ပိုးထားသည်                                                                                                |
-| Media           | ✅ ပံ့ပိုးထားသည်                                                                                                |
+| Feature         | Status                                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Direct messages | ✅ ပံ့ပိုးထားသည်                                                                                                                   |
+| Rooms           | ✅ ပံ့ပိုးထားသည်                                                                                                                   |
+| Threads         | ✅ ပံ့ပိုးထားသည်                                                                                                                   |
+| Media           | ✅ ပံ့ပိုးထားသည်                                                                                                                   |
 | E2EE            | ✅ ပံ့ပိုးထားသည် (crypto module လိုအပ်)                                                                         |
 | Reactions       | ✅ ပံ့ပိုးထားသည် (tools မှတစ်ဆင့် ပို့/ဖတ်)                                                                     |
 | Polls           | ✅ ပို့ခြင်း ပံ့ပိုးထားသည်; ဝင်လာသော poll start များကို စာသားအဖြစ် ပြောင်းလဲသည် (responses/ends ကို လျစ်လျူရှု) |
 | Location        | ✅ ပံ့ပိုးထားသည် (geo URI; altitude ကို လျစ်လျူရှု)                                                             |
-| Native commands | ✅ ပံ့ပိုးထားသည်                                                                                                |
+| Native commands | ✅ ပံ့ပိုးထားသည်                                                                                                                   |
 
 ## Troubleshooting
 
@@ -250,7 +251,7 @@ Provider ရွေးချယ်စရာများ:
 - `channels.matrix.textChunkLimit`: outbound စာသား chunk အရွယ်အစား (chars)။
 - `channels.matrix.chunkMode`: `length` (မူလ) သို့မဟုတ် `newline` ကို အသုံးပြုပြီး အလွတ်လိုင်းများ (paragraph boundaries) အပေါ် မူတည်၍ ခွဲထုတ်ပြီးနောက် အရှည်အလိုက် chunk ပြုလုပ်ခြင်း။
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (မူလ: pairing)။
-- `channels.matrix.dm.allowFrom`: DM allowlist (Matrix user ID အပြည့်အစုံ)။ `open` သည် `"*"` ကို လိုအပ်ပါသည်။ wizard သည် ဖြစ်နိုင်ပါက names များကို IDs များအဖြစ် ဖြေရှင်းပါသည်။
+- `channels.matrix.dm.allowFrom`: DM allowlist (full Matrix user IDs). `open` requires `"*"`. The wizard resolves names to IDs when possible.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (မူလ: allowlist)။
 - `channels.matrix.groupAllowFrom`: group မက်ဆေ့ချ်များအတွက် allowlisted ပို့သူများ (Matrix user ID အပြည့်အစုံ)။
 - `channels.matrix.allowlistOnly`: DMs + rooms အတွက် allowlist စည်းမျဉ်းများကို အတင်းအကျပ် အသုံးပြုစေခြင်း။

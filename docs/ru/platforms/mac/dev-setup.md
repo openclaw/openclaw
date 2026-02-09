@@ -3,13 +3,6 @@ summary: "Руководство по настройке для разработ
 read_when:
   - Настройка среды разработки macOS
 title: "Настройка разработки для macOS"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:47Z
 ---
 
 # Настройка разработки для macOS
@@ -23,7 +16,7 @@ x-i18n:
 1. **Xcode 26.2+**: требуется для разработки на Swift.
 2. **Node.js 22+ и pnpm**: требуются для Gateway (шлюза), CLI и скриптов упаковки.
 
-## 1. Установка зависимостей
+## 1) Установка зависимостей
 
 Установите зависимости, общие для всего проекта:
 

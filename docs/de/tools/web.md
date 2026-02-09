@@ -1,17 +1,10 @@
 ---
-summary: „Websuche- und Fetch-Werkzeuge (Brave Search API, Perplexity direkt/OpenRouter)“
+summary: "„Websuche- und Fetch-Werkzeuge (Brave Search API, Perplexity direkt/OpenRouter)“"
 read_when:
   - Sie möchten web_search oder web_fetch aktivieren
   - Sie benötigen die Einrichtung eines Brave Search API-Schlüssels
   - Sie möchten Perplexity Sonar für die Websuche verwenden
-title: „Web-Werkzeuge“
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:48Z
+title: "„Web-Werkzeuge“"
 ---
 
 # Web-Werkzeuge
@@ -24,7 +17,7 @@ OpenClaw liefert zwei leichtgewichtige Web-Werkzeuge aus:
 Dies ist **keine** Browser-Automatisierung. Für JS-lastige Seiten oder Logins verwenden Sie das
 [Browser-Werkzeug](/tools/browser).
 
-## Funktionsweise
+## Wie es funktioniert
 
 - `web_search` ruft Ihren konfigurierten Anbieter auf und gibt Ergebnisse zurück.
   - **Brave** (Standard): liefert strukturierte Ergebnisse (Titel, URL, Snippet).
@@ -36,10 +29,10 @@ Dies ist **keine** Browser-Automatisierung. Für JS-lastige Seiten oder Logins v
 
 ## Auswahl eines Suchanbieters
 
-| Anbieter             | Vorteile                                      | Nachteile                                    | API-Schlüssel                                  |
-| -------------------- | --------------------------------------------- | -------------------------------------------- | ---------------------------------------------- |
+| Anbieter                                | Vorteile                                      | Nachteile                                    | API-Schlüssel                                  |
+| --------------------------------------- | --------------------------------------------- | -------------------------------------------- | ---------------------------------------------- |
 | **Brave** (Standard) | Schnell, strukturierte Ergebnisse, Free-Tier  | Klassische Suchergebnisse                    | `BRAVE_API_KEY`                                |
-| **Perplexity**       | KI-synthetisierte Antworten, Zitate, Echtzeit | Erfordert Perplexity- oder OpenRouter-Zugang | `OPENROUTER_API_KEY` oder `PERPLEXITY_API_KEY` |
+| **Perplexity**                          | KI-synthetisierte Antworten, Zitate, Echtzeit | Erfordert Perplexity- oder OpenRouter-Zugang | `OPENROUTER_API_KEY` oder `PERPLEXITY_API_KEY` |
 
 Siehe [Brave Search Einrichtung](/brave-search) und [Perplexity Sonar](/perplexity) für anbieterspezifische Details.
 
@@ -140,11 +133,11 @@ Wenn keine Base-URL gesetzt ist, wählt OpenClaw einen Standard basierend auf de
 
 ### Verfügbare Perplexity-Modelle
 
-| Modell                            | Beschreibung                             | Am besten für         |
-| --------------------------------- | ---------------------------------------- | --------------------- |
-| `perplexity/sonar`                | Schnelles Q&A mit Websuche               | Schnelle Nachschläge  |
-| `perplexity/sonar-pro` (Standard) | Mehrstufiges Schlussfolgern mit Websuche | Komplexe Fragen       |
-| `perplexity/sonar-reasoning-pro`  | Chain-of-Thought-Analyse                 | Tiefgehende Recherche |
+| Modell                                               | Beschreibung                                   | Am besten für         |
+| ---------------------------------------------------- | ---------------------------------------------- | --------------------- |
+| `perplexity/sonar`                                   | Schnelles Q&A mit Websuche | Schnelle Nachschläge  |
+| `perplexity/sonar-pro` (Standard) | Mehrstufiges Schlussfolgern mit Websuche       | Komplexe Fragen       |
+| `perplexity/sonar-reasoning-pro`                     | Chain-of-Thought-Analyse                       | Tiefgehende Recherche |
 
 ## web_search
 

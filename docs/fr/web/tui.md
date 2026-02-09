@@ -4,13 +4,6 @@ read_when:
   - Vous voulez un guide pas à pas pour débutants sur la TUI
   - Vous avez besoin de la liste complète des fonctionnalités, commandes et raccourcis de la TUI
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:51Z
 ---
 
 # TUI (Terminal UI)
@@ -152,7 +145,7 @@ Les autres commandes slash de la Gateway (passerelle) (par exemple, `/context`) 
 Remarque : lorsque vous définissez `--url`, la TUI ne revient pas aux identifiants de configuration ou d’environnement.
 Passez explicitement `--token` ou `--password`. L’absence d’identifiants explicites est une erreur.
 
-## Dépannage
+## Problemes courants
 
 Aucune sortie après l’envoi d’un message :
 

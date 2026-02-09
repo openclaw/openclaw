@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "Beheer sandboxcontainers en inspecteer het effectieve sandboxbeleid"
 read_when: "Je beheert sandboxcontainers of debugt sandbox-/toolbeleidsgedrag."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:12Z
 ---
 
 # Sandbox CLI
@@ -20,7 +13,7 @@ Beheer op Docker gebaseerde sandboxcontainers voor geïsoleerde agentuitvoering.
 
 OpenClaw kan agents uitvoeren in geïsoleerde Dockercontainers voor beveiliging. De `sandbox`-opdrachten helpen je deze containers te beheren, vooral na updates of configuratiewijzigingen.
 
-## Opdrachten
+## Commands
 
 ### `openclaw sandbox explain`
 

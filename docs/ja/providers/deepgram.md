@@ -4,20 +4,15 @@ read_when:
   - 音声添付に Deepgram の音声認識を使いたい場合
   - Deepgram の簡単な設定例が必要な場合
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:47Z
 ---
 
 # Deepgram（音声文字起こし）
 
-Deepgram は音声認識（speech-to-text）API です。OpenClaw では、**インバウンドの音声／ボイスノートの文字起こし** に `tools.media.audio` を介して使用されます。
+Deepgram は音声認識（speech-to-text）API です。OpenClaw では、**インバウンドの音声／ボイスノートの文字起こし** に `tools.media.audio` を介して使用されます。 OpenClawでは、`tools.media.audio`を介して**音声/音声音符
+トランスクリプト**に使用されます。
 
-有効化すると、OpenClaw は音声ファイルを Deepgram にアップロードし、文字起こし結果を返信パイプライン（`{{Transcript}}` + `[Audio]` ブロック）に注入します。これは**ストリーミングではありません**。事前録音向けの文字起こしエンドポイントを使用します。
+有効化すると、OpenClaw は音声ファイルを Deepgram にアップロードし、文字起こし結果を返信パイプライン（`{{Transcript}}` + `[Audio]` ブロック）に注入します。これは**ストリーミングではありません**。事前録音向けの文字起こしエンドポイントを使用します。 これは**ストリーミングしません**;
+は事前に記録された転写エンドポイントを使用します。
 
 Web サイト: [https://deepgram.com](https://deepgram.com)  
 ドキュメント: [https://developers.deepgram.com](https://developers.deepgram.com)
@@ -30,7 +25,7 @@ Web サイト: [https://deepgram.com](https://deepgram.com)
 DEEPGRAM_API_KEY=dg_...
 ```
 
-2. プロバイダーを有効化します。
+2. プロバイダを有効化:
 
 ```json5
 {

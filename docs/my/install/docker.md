@@ -4,24 +4,17 @@ read_when:
   - ဒေသတွင်း ထည့်သွင်းမှုများအစား containerized Gateway ကို လိုအပ်ပါက
   - Docker flow ကို စစ်ဆေးအတည်ပြုလိုပါက
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:18Z
 ---
 
 # Docker (ရွေးချယ်နိုင်)
 
-Docker သည် **မဖြစ်မနေလိုအပ်ခြင်း မရှိပါ**။ Containerized Gateway ကို လိုအပ်ပါက သို့မဟုတ် Docker flow ကို စစ်ဆေးအတည်ပြုလိုပါကသာ အသုံးပြုပါ။
+Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 ## Docker က ကိုယ့်အတွက် သင့်တော်ပါသလား?
 
 - **ဟုတ်ကဲ့**: သီးခြားခွဲထားပြီး လွယ်ကူစွာ ဖျက်သိမ်းနိုင်သော Gateway ပတ်ဝန်းကျင်တစ်ခု လိုအပ်ပါက၊ သို့မဟုတ် ဒေသတွင်း ထည့်သွင်းမှုမရှိသော ဟို့စ်ပေါ်တွင် OpenClaw ကို chạy လိုပါက။
-- **မဟုတ်ပါ**: ကိုယ့်စက်ပေါ်တွင် chạy နေပြီး ဖွံ့ဖြိုးရေး လှုပ်ရှားမှုကို အမြန်ဆုံး လုပ်ချင်ပါက။ ပုံမှန် install flow ကို အသုံးပြုပါ။
-- **Sandboxing မှတ်ချက်**: agent sandboxing သည် Docker ကိုလည်း အသုံးပြုပါသည်၊ သို့သော် Gateway အပြည့်အစုံကို Docker ထဲတွင် chạy ရန် **မလိုအပ်ပါ**။ [Sandboxing](/gateway/sandboxing) ကို ကြည့်ပါ။
+- **No**: you’re running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
+- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
 
 ဤလမ်းညွှန်တွင် အောက်ပါအရာများကို ဖော်ပြထားပါသည်—
 
@@ -63,14 +56,14 @@ repo root မှ—
 
 - browser တွင် `http://127.0.0.1:18789/` ကို ဖွင့်ပါ။
 - Control UI (Settings → token) ထဲသို့ token ကို ကူးထည့်ပါ။
-- URL ကို ပြန်လိုပါသလား? `docker compose run --rm openclaw-cli dashboard --no-open` ကို chạy ပါ။
+- Need the URL again? Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 ဟို့စ်ပေါ်တွင် config/workspace ကို ရေးသားပါသည်—
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-VPS ပေါ်တွင် chạy နေပါသလား? [Hetzner (Docker VPS)](/install/hetzner) ကို ကြည့်ပါ။
+Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
 
 ### Manual flow (compose)
 
@@ -80,9 +73,9 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
-မှတ်ချက်: repo root မှ `docker compose ...` ကို chạy ပါ။ အကယ်၍
-`OPENCLAW_EXTRA_MOUNTS` သို့မဟုတ် `OPENCLAW_HOME_VOLUME` ကို ဖွင့်ထားပါက setup script သည်
-`docker-compose.extra.yml` ကို ရေးသားပါသည်; Compose ကို အခြားနေရာတွင် chạy မည်ဆိုပါက ထည့်သွင်းအသုံးပြုပါ—
+Note: run `docker compose ...` from the repo root. If you enabled
+`OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, the setup script writes
+`docker-compose.extra.yml`; include it when running Compose elsewhere:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
@@ -103,10 +96,10 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 
 ### Extra mounts (ရွေးချယ်နိုင်)
 
-containers ထဲသို့ host directory များကို ထပ်မံ mount လုပ်လိုပါက
-`OPENCLAW_EXTRA_MOUNTS` ကို `docker-setup.sh` မ chạy မီ သတ်မှတ်ပါ။ ၎င်းသည် Docker bind mounts များကို comma ဖြင့် ခွဲထားသော စာရင်းအဖြစ် လက်ခံပြီး
-`openclaw-gateway` နှင့် `openclaw-cli` နှစ်ခုစလုံးအတွက်
-`docker-compose.extra.yml` ကို ဖန်တီးခြင်းဖြင့် အသုံးချပါသည်။
+If you want to mount additional host directories into the containers, set
+`OPENCLAW_EXTRA_MOUNTS` before running `docker-setup.sh`. This accepts a
+comma-separated list of Docker bind mounts and applies them to both
+`openclaw-gateway` and `openclaw-cli` by generating `docker-compose.extra.yml`.
 
 ဥပမာ—
 
@@ -120,14 +113,14 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 - macOS/Windows တွင် Docker Desktop နှင့် shared ဖြစ်ရပါမည်။
 - `OPENCLAW_EXTRA_MOUNTS` ကို ပြင်ဆင်ပါက `docker-setup.sh` ကို ပြန် chạy လုပ်၍
   extra compose file ကို ပြန်လည် ဖန်တီးပါ။
-- `docker-compose.extra.yml` သည် အလိုအလျောက် ဖန်တီးထားသည်။ ကိုယ်တိုင် မပြင်ပါနှင့်။
+- `docker-compose.extra.yml` is generated. Don’t hand-edit it.
 
 ### Container home အပြည့်အစုံကို သိမ်းဆည်းထားရန် (ရွေးချယ်နိုင်)
 
-container ကို ပြန်ဖန်တီးသည့်အခါ `/home/node` ကို ဆက်လက် ထိန်းသိမ်းလိုပါက
-`OPENCLAW_HOME_VOLUME` ဖြင့် named volume တစ်ခု သတ်မှတ်ပါ။ ၎င်းသည် Docker volume ကို ဖန်တီးပြီး
-`/home/node` တွင် mount လုပ်ကာ standard config/workspace bind mounts များကို ထိန်းထားပါသည်။ ဒီနေရာတွင် named volume ကို အသုံးပြုပါ (bind path မဟုတ်ပါ); bind mounts အတွက်
-`OPENCLAW_EXTRA_MOUNTS` ကို အသုံးပြုပါ။
+If you want `/home/node` to persist across container recreation, set a named
+volume via `OPENCLAW_HOME_VOLUME`. ဒါက Docker volume တစ်ခု ဖန်တီးပြီး `/home/node` မှာ mount လုပ်ပေးသလို၊ ပုံမှန် config/workspace bind mounts တွေကိုလည်း ဆက်လက် ထိန်းသိမ်းထားပါတယ်။ Use a
+named volume here (not a bind path); for bind mounts, use
+`OPENCLAW_EXTRA_MOUNTS`.
 
 ဥပမာ—
 
@@ -152,9 +145,10 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 ### Extra apt packages များ ထည့်သွင်းရန် (ရွေးချယ်နိုင်)
 
-image အတွင်းတွင် system packages များ (ဥပမာ build tools သို့မဟုတ် media libraries) လိုအပ်ပါက
-`OPENCLAW_DOCKER_APT_PACKAGES` ကို `docker-setup.sh` မ chạy မီ သတ်မှတ်ပါ။
-၎င်းသည် image build အချိန်တွင် packages များကို ထည့်သွင်းပေးပြီး container ကို ဖျက်လိုက်သော်လည်း ဆက်လက် ရှိနေပါမည်။
+If you need system packages inside the image (for example, build tools or media
+libraries), set `OPENCLAW_DOCKER_APT_PACKAGES` before running `docker-setup.sh`.
+This installs the packages during the image build, so they persist even if the
+container is deleted.
 
 ဥပမာ—
 
@@ -171,8 +165,8 @@ export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg build-essential"
 
 ### Power-user / feature အပြည့်အစုံပါသော container (opt-in)
 
-မူလ Docker image သည် **လုံခြုံရေးကို ဦးစားပေး** ထားပြီး non-root `node`
-user အဖြစ် chạy ပါသည်။ ၎င်းကြောင့် attack surface သေးငယ်သော်လည်း—
+The default Docker image is **security-first** and runs as the non-root `node`
+user. This keeps the attack surface small, but it means:
 
 - runtime တွင် system package များ ထည့်သွင်း၍ မရပါ
 - မူလအနေဖြင့် Homebrew မပါဝင်ပါ
@@ -213,9 +207,8 @@ Playwright ကို system deps များ ထည့်သွင်းစေ�
 
 ### Permissions + EACCES
 
-image သည် `node` (uid 1000) အဖြစ် chạy ပါသည်။
-`/home/node/.openclaw` တွင် permission error များ တွေ့ပါက
-host bind mounts များကို uid 1000 ပိုင်ဆိုင်ထားကြောင်း သေချာပါစေ။
+The image runs as `node` (uid 1000). If you see permission errors on
+`/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000.
 
 ဥပမာ (Linux host)—
 
@@ -227,8 +220,8 @@ sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 
 ### Rebuild ကို ပိုမြန်စေရန် (အကြံပြု)
 
-rebuild များကို မြန်ဆန်စေရန် Dockerfile ကို dependency layers များ cache ဖြစ်အောင် အစီအစဉ်ချထားပါ။
-၎င်းဖြင့် lockfiles မပြောင်းလဲမချင်း `pnpm install` ကို ပြန် chạy မလုပ်ရပါ—
+To speed up rebuilds, order your Dockerfile so dependency layers are cached.
+This avoids re-running `pnpm install` unless lockfiles change:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -284,10 +277,10 @@ Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](
 
 ### OpenAI Codex OAuth (headless Docker)
 
-wizard တွင် OpenAI Codex OAuth ကို ရွေးချယ်ပါက browser URL တစ်ခုကို ဖွင့်ပြီး
-`http://127.0.0.1:1455/auth/callback` တွင် callback ကို ဖမ်းယူရန် ကြိုးပမ်းပါသည်။
-Docker သို့မဟုတ် headless setup များတွင် ထို callback သည် browser error ပြနိုင်ပါသည်။
-ရောက်ရှိသွားသော redirect URL အပြည့်အစုံကို ကူးယူပြီး wizard ထဲသို့ ပြန်ကူးထည့်၍ auth ကို အပြီးသတ်ပါ။
+If you pick OpenAI Codex OAuth in the wizard, it opens a browser URL and tries
+to capture a callback on `http://127.0.0.1:1455/auth/callback`. In Docker or
+headless setups that callback can show a browser error. Copy the full redirect
+URL you land on and paste it back into the wizard to finish auth.
 
 ### Health check
 
@@ -310,7 +303,7 @@ pnpm test:docker:qr
 ### မှတ်ချက်များ
 
 - container အသုံးပြုရန် Gateway bind သည် မူလအားဖြင့် `lan` ဖြစ်သည်။
-- Dockerfile CMD သည် `--allow-unconfigured` ကို အသုံးပြုသည်; `gateway.mode` ဖြင့် mount လုပ်ထားသော config သည် `local` မရှိသော်လည်း စတင် chạy ပါမည်။ guard ကို အတင်းအကျပ် ချမှတ်လိုပါက CMD ကို override လုပ်ပါ။
+- Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - gateway container သည် sessions များအတွက် source of truth ဖြစ်သည် (`~/.openclaw/agents/<agentId>/sessions/`)။
 
 ## Agent Sandbox (ဟို့စ် Gateway + Docker tools)
@@ -319,8 +312,8 @@ pnpm test:docker:qr
 
 ### ဘာလုပ်ပေးသလဲ
 
-`agents.defaults.sandbox` ကို ဖွင့်ထားပါက **main မဟုတ်သော sessions** များသည် Docker
-container အတွင်းတွင် tools များကို chạy ပါသည်။ Gateway သည် ဟို့စ်ပေါ်တွင် ဆက်လက် chạy နေပြီး tool execution ကို သီးခြားခွဲထားပါသည်—
+When `agents.defaults.sandbox` is enabled, **non-main sessions** run tools inside a Docker
+container. The gateway stays on your host, but the tool execution is isolated:
 
 - scope: မူလအားဖြင့် `"agent"` (agent တစ်ခုလျှင် container + workspace တစ်ခု)
 - scope: per-session သီးခြားခွဲထားရန် `"session"`
@@ -329,14 +322,14 @@ container အတွင်းတွင် tools များကို chạy ပ�
 - allow/deny tool policy (deny က အနိုင်ရ)
 - inbound media များကို active sandbox workspace (`media/inbound/*`) သို့ ကူးယူထားပြီး tools များ ဖတ်နိုင်စေရန် ( `workspaceAccess: "rw"` ဖြင့် agent workspace ထဲသို့ ရောက်ပါသည်)
 
-သတိပေးချက်: `scope: "shared"` သည် cross-session isolation ကို ပိတ်ပင်ပါသည်။
-sessions အားလုံးသည် container တစ်ခုနှင့် workspace တစ်ခုကို မျှဝေပါသည်။
+Warning: `scope: "shared"` disables cross-session isolation. All sessions share
+one container and one workspace.
 
 ### Per-agent sandbox profiles (multi-agent)
 
-multi-agent routing ကို အသုံးပြုပါက agent တစ်ခုချင်းစီသည် sandbox + tool settings များကို
-`agents.list[].sandbox` နှင့် `agents.list[].tools` (အပြင် `agents.list[].tools.sandbox.tools`) ဖြင့် override လုပ်နိုင်ပါသည်။
-Gateway တစ်ခုအတွင်း access level မတူညီသော အခြေအနေများကို chạy လုပ်နိုင်ပါသည်—
+If you use multi-agent routing, each agent can override sandbox + tool settings:
+`agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools`). This lets you run
+mixed access levels in one gateway:
 
 - Full access (ပုဂ္ဂိုလ်ရေး agent)
 - Read-only tools + read-only workspace (မိသားစု/အလုပ် agent)
@@ -363,9 +356,10 @@ Gateway တစ်ခုအတွင်း access level မတူညီသော 
 
 - မူလ `docker.network` သည် `"none"` ဖြစ်သည် (egress မရှိ)။
 - `readOnlyRoot: true` သည် package ထည့်သွင်းမှုကို ပိတ်ဆို့ပါသည်။
-- `user` သည် `apt-get` အတွက် root ဖြစ်ရပါမည် (`user` ကို ချန်ထားပါ သို့မဟုတ် `user: "0:0"` ကို သတ်မှတ်ပါ)။
-  OpenClaw သည် `setupCommand` (သို့မဟုတ် docker config) ပြောင်းလဲသည့်အခါ container များကို အလိုအလျောက် ပြန်ဖန်တီးပါသည်၊ သို့သော် container ကို **မကြာသေးမီက အသုံးပြုထားပါက** (~၅ မိနစ်အတွင်း) မပြန်ဖန်တီးပါ။
-  Hot containers များသည် တိကျသော `openclaw sandbox recreate ...` command ဖြင့် warning ကို log ထုတ်ပါသည်။
+- `user` must be root for `apt-get` (omit `user` or set `user: "0:0"`).
+  OpenClaw auto-recreates containers when `setupCommand` (or docker config) changes
+  unless the container was **recently used** (within ~5 minutes). Hot containers
+  log a warning with the exact `openclaw sandbox recreate ...` command.
 
 ```json5
 {
@@ -451,7 +445,7 @@ Node, Go, Rust စသည့် common build tooling ပါသော sandbox imag
 scripts/sandbox-common-setup.sh
 ```
 
-၎င်းသည် `openclaw-sandbox-common:bookworm-slim` ကို build လုပ်ပါသည်။ အသုံးပြုရန်—
+This builds `openclaw-sandbox-common:bookworm-slim`. To use it:
 
 ```json5
 {
@@ -471,9 +465,9 @@ sandbox အတွင်း browser tool ကို chạy လုပ်ရန် b
 scripts/sandbox-browser-setup.sh
 ```
 
-၎င်းသည် `Dockerfile.sandbox-browser` ကို အသုံးပြု၍ `openclaw-sandbox-browser:bookworm-slim` ကို build လုပ်ပါသည်။
-container သည် CDP ဖွင့်ထားသော Chromium ကို chạy လုပ်ပြီး
-ရွေးချယ်နိုင်သော noVNC observer (Xvfb ဖြင့် headful) ပါဝင်ပါသည်။
+This builds `openclaw-sandbox-browser:bookworm-slim` using
+`Dockerfile.sandbox-browser`. The container runs Chromium with CDP enabled and
+an optional noVNC observer (headful via Xvfb).
 
 မှတ်ချက်များ—
 
@@ -512,9 +506,9 @@ Custom browser image—
 - sandbox browser control URL ( `browser` tool အတွက်)
 - noVNC URL (ဖွင့်ထားပြီး headless=false ဖြစ်ပါက)
 
-သတိပြုရန်: tools အတွက် allowlist ကို အသုံးပြုပါက `browser` ကို ထည့်သွင်းပြီး
-deny မှ ဖယ်ရှားပါ၊ မဟုတ်ပါက tool သည် ဆက်လက် ပိတ်ထားပါမည်။
-Prune rules (`agents.defaults.sandbox.prune`) သည် browser containers များအတွက်လည်း သက်ရောက်ပါသည်။
+Remember: if you use an allowlist for tools, add `browser` (and remove it from
+deny) or the tool remains blocked.
+Prune rules (`agents.defaults.sandbox.prune`) apply to browser containers too.
 
 ### Custom sandbox image
 
@@ -565,4 +559,5 @@ knobs နှစ်ခု—
 - Image မရှိပါက: [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh) ဖြင့် build လုပ်ပါ သို့မဟုတ် `agents.defaults.sandbox.docker.image` ကို သတ်မှတ်ပါ။
 - Container မ chạy ပါက: session လိုအပ်သည့်အခါ အလိုအလျောက် ဖန်တီးပါမည်။
 - Sandbox အတွင်း permission error များ: mount လုပ်ထားသော workspace ပိုင်ဆိုင်မှုနှင့် ကိုက်ညီသော UID:GID သို့ `docker.user` ကို သတ်မှတ်ပါ (သို့မဟုတ် workspace folder ကို chown လုပ်ပါ)။
-- Custom tools မတွေ့ပါက: OpenClaw သည် commands များကို `sh -lc` (login shell) ဖြင့် chạy ပါသည်၊ ၎င်းသည် `/etc/profile` ကို source လုပ်ပြီး PATH ကို ပြန်သတ်မှတ်နိုင်ပါသည်။ ကိုယ်ပိုင် tool paths များကို ရှေ့တွင် ထည့်ရန် `docker.env.PATH` ကို သတ်မှတ်ပါ (ဥပမာ `/custom/bin:/usr/local/share/npm-global/bin`)၊ သို့မဟုတ် Dockerfile ထဲတွင် `/etc/profile.d/` အောက်၌ script တစ်ခု ထည့်ပါ။
+- Custom tools not found: OpenClaw runs commands with `sh -lc` (login shell), which
+  sources `/etc/profile` and may reset PATH. `docker.env.PATH` ကို သင့်စိတ်ကြိုက် tool path များ (ဥပမာ `/custom/bin:/usr/local/share/npm-global/bin`) ကို အရှေ့မှာထည့်ပေးအောင် သတ်မှတ်ပါ၊ သို့မဟုတ် သင့် Dockerfile ထဲတွင် `/etc/profile.d/` အောက်မှာ script တစ်ခု ထည့်ပါ။

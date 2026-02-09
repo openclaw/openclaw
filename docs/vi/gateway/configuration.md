@@ -3,20 +3,13 @@ summary: "All configuration options for ~/.openclaw/openclaw.json with examples"
 read_when:
   - Adding or modifying config fields
 title: "Configuration"
-x-i18n:
-  source_path: gateway/configuration.md
-  source_hash: e226e24422c05e7e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:45:36Z
 ---
 
 # Configuration 🔧
 
 OpenClaw reads an optional **JSON5** config from `~/.openclaw/openclaw.json` (comments + trailing commas allowed).
 
-If the file is missing, OpenClaw uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/.openclaw/workspace`). You usually only need a config to:
+Nếu tệp bị thiếu, OpenClaw dùng các mặc định tương đối an toàn (agent Pi nhúng + phiên theo từng người gửi + workspace `~/.openclaw/workspace`). You usually only need a config to:
 
 - restrict who can trigger the bot (`channels.whatsapp.allowFrom`, `channels.telegram.allowFrom`, etc.)
 - control group allowlists + mention behavior (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.discord.guilds`, `agents.list[].groupChat`)
@@ -55,10 +48,10 @@ better forms without hard-coding config knowledge.
 ## Apply + restart (RPC)
 
 Use `config.apply` to validate + write the full config and restart the Gateway in one step.
-It writes a restart sentinel and pings the last active session after the Gateway comes back.
+Nó ghi một sentinel khởi động lại và ping phiên hoạt động gần nhất sau khi Gateway quay lại.
 
-Warning: `config.apply` replaces the **entire config**. If you want to change only a few keys,
-use `config.patch` or `openclaw config set`. Keep a backup of `~/.openclaw/openclaw.json`.
+Cảnh báo: `config.apply` thay thế **toàn bộ cấu hình**. If you want to change only a few keys,
+use `config.patch` or `openclaw config set`. Hãy giữ một bản sao lưu của `~/.openclaw/openclaw.json`.
 
 Params:
 
@@ -83,7 +76,7 @@ openclaw gateway call config.apply --params '{
 ## Partial updates (RPC)
 
 Use `config.patch` to merge a partial update into the existing config without clobbering
-unrelated keys. It applies JSON merge patch semantics:
+unrelated keys. Nó áp dụng ngữ nghĩa JSON merge patch:
 
 - objects merge recursively
 - `null` deletes a key
@@ -153,7 +146,7 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
 
 ## Config Includes (`$include`)
 
-Split your config into multiple files using the `$include` directive. This is useful for:
+Chia cấu hình của bạn thành nhiều tệp bằng directive `$include`. Các yêu cầu ghép cặp DM đang chờ được giới hạn **3 mỗi kênh** theo mặc định.
 
 - Organizing large configs (e.g., per-client agent definitions)
 - Sharing common settings across environments
@@ -282,8 +275,8 @@ Additionally, it loads:
 
 Neither `.env` file overrides existing env vars.
 
-You can also provide inline env vars in config. These are only applied if the
-process env is missing the key (same non-overriding rule):
+Bạn cũng có thể cung cấp biến môi trường inline trong cấu hình. Những biến này chỉ được áp dụng nếu
+môi trường tiến trình thiếu khóa đó (cùng quy tắc không ghi đè):
 
 ```json5
 {
@@ -300,8 +293,8 @@ See [/environment](/help/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
-Opt-in convenience: if enabled and none of the expected keys are set yet, OpenClaw runs your login shell and imports only the missing expected keys (never overrides).
-This effectively sources your shell profile.
+Tiện ích opt‑in: nếu được bật và chưa có khóa mong đợi nào được đặt, OpenClaw sẽ chạy login shell của bạn và chỉ nhập các khóa mong đợi còn thiếu (không bao giờ ghi đè).
+Điều này về cơ bản là source hồ sơ shell của bạn.
 
 ```json5
 {
@@ -321,8 +314,8 @@ Env var equivalent:
 
 ### Env var substitution in config
 
-You can reference environment variables directly in any config string value using
-`${VAR_NAME}` syntax. Variables are substituted at config load time, before validation.
+Bạn có thể tham chiếu trực tiếp các biến môi trường trong bất kỳ giá trị chuỗi cấu hình nào bằng cú pháp
+`${VAR_NAME}`. Các biến được thay thế tại thời điểm tải cấu hình, trước khi xác thực.
 
 ```json5
 {
@@ -391,9 +384,9 @@ On first use, OpenClaw imports `oauth.json` entries into `auth-profiles.json`.
 
 ### `auth`
 
-Optional metadata for auth profiles. This does **not** store secrets; it maps
-profile IDs to a provider + mode (and optional email) and defines the provider
-rotation order used for failover.
+Metadata tùy chọn cho các hồ sơ xác thực. Điều này **không** lưu trữ bí mật; nó ánh xạ
+ID hồ sơ tới một nhà cung cấp + chế độ (và email tùy chọn) và xác định thứ tự
+xoay vòng nhà cung cấp dùng cho failover.
 
 ```json5
 {
@@ -411,13 +404,13 @@ rotation order used for failover.
 
 ### `agents.list[].identity`
 
-Optional per-agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
+Danh tính theo từng agent (tùy chọn) dùng cho mặc định và UX. Được ghi bởi trợ lý onboarding trên macOS.
 
 If set, OpenClaw derives defaults (only when you haven’t set them explicitly):
 
 - `messages.ackReaction` from the **active agent**’s `identity.emoji` (falls back to 👀)
 - `agents.list[].groupChat.mentionPatterns` from the agent’s `identity.name`/`identity.emoji` (so “@Samantha” works in groups across Telegram/Slack/Discord/Google Chat/iMessage/WhatsApp)
-- `identity.avatar` accepts a workspace-relative image path or a remote URL/data URL. Local files must live inside the agent workspace.
+- `identity.avatar` chấp nhận đường dẫn ảnh tương đối với workspace hoặc URL từ xa/data URL. Các tệp cục bộ phải nằm trong workspace của agent.
 
 `identity.avatar` accepts:
 
@@ -496,7 +489,7 @@ Controls how WhatsApp direct chats (DMs) are handled:
 - `"open"`: allow all inbound DMs (**requires** `channels.whatsapp.allowFrom` to include `"*"`)
 - `"disabled"`: ignore all inbound DMs
 
-Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per channel** by default.
+Mã ghép cặp hết hạn sau 1 giờ; bot chỉ gửi mã ghép cặp khi có yêu cầu mới được tạo. Allowlist các số điện thoại E.164 có thể kích hoạt trả lời tự động WhatsApp (**chỉ DM**).
 
 Pairing approvals:
 
@@ -505,9 +498,9 @@ Pairing approvals:
 
 ### `channels.whatsapp.allowFrom`
 
-Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (**DMs only**).
+Xem [Messages](/concepts/messages) để biết về xếp hàng, phiên và ngữ cảnh streaming.
 If empty and `channels.whatsapp.dmPolicy="pairing"`, unknown senders will receive a pairing code.
-For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowFrom`.
+Đối với nhóm, dùng `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowFrom`.
 
 ```json5
 {
@@ -525,11 +518,11 @@ For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowF
 
 ### `channels.whatsapp.sendReadReceipts`
 
-Controls whether inbound WhatsApp messages are marked as read (blue ticks). Default: `true`.
+Kiểm soát việc các tin nhắn WhatsApp đến có được đánh dấu đã đọc hay không (dấu tick xanh). Mặc định: `true`.
 
 Self-chat mode always skips read receipts, even when enabled.
 
-Per-account override: `channels.whatsapp.accounts.<id>.sendReadReceipts`.
+Ghi đè theo từng tài khoản: `channels.whatsapp.accounts.<id>`.sendReadReceipts\`.
 
 ```json5
 {
@@ -592,7 +585,7 @@ Notes:
 
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
-- Base channel settings (group policy, mention gating, etc.) apply to all accounts unless overridden per account.
+- Cài đặt kênh cơ sở (chính sách nhóm, kiểm soát đề cập, v.v.) apply to all accounts unless overridden per account.
 - Use `bindings[].match.accountId` to route each account to a different agents.defaults.
 
 ### Group chat mention gating (`agents.list[].groupChat` + `messages.groupChat`)
@@ -601,8 +594,8 @@ Group messages default to **require mention** (either metadata mention or regex 
 
 **Mention types:**
 
-- **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `channels.whatsapp.allowFrom`).
-- **Text patterns**: Regex patterns defined in `agents.list[].groupChat.mentionPatterns`. Always checked regardless of self-chat mode.
+- **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Bị bỏ qua trong chế độ tự chat WhatsApp (xem `channels.whatsapp.allowFrom`).
+- **Text patterns**: Regex patterns defined in `agents.list[].groupChat.mentionPatterns`. Luôn được kiểm tra bất kể chế độ self-chat.
 - Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
 
 ```json5
@@ -616,7 +609,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-`messages.groupChat.historyLimit` sets the global default for group history context. Channels can override with `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit` for multi-account). Set `0` to disable history wrapping.
+`messages.groupChat.historyLimit` sets the global default for group history context. Channels can override with `channels.<channel>.historyLimit` (hoặc `channels.<channel>.accounts.*.historyLimit` for multi-account). Đặt `0` để tắt việc gói lịch sử.
 
 #### DM history limits
 
@@ -656,7 +649,7 @@ Per-agent override (takes precedence when set, even `[]`):
 }
 ```
 
-Mention gating defaults live per channel (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`, `channels.discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
+Mention gating defaults live per channel (`channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`, `channels.discord.guilds`). Khi `*.groups` được đặt, nó cũng hoạt động như một allowlist nhóm; bao gồm `"*"` để cho phép tất cả các nhóm.
 
 To respond **only** to specific text triggers (ignoring native @-mentions):
 
@@ -740,7 +733,7 @@ Notes:
 ### Multi-agent routing (`agents.list` + `bindings`)
 
 Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside one Gateway.
-Inbound messages are routed to an agent via bindings.
+Thông điệp đến được định tuyến tới một agent thông qua bindings.
 
 - `agents.list[]`: per-agent overrides.
   - `id`: stable agent id (required).
@@ -1007,12 +1000,12 @@ Notes:
 - Text commands must be sent as a **standalone** message and use the leading `/` (no plain-text aliases).
 - `commands.text: false` disables parsing chat messages for commands.
 - `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off; unsupported channels stay text-only.
-- Set `commands.native: true|false` to force all, or override per channel with `channels.discord.commands.native`, `channels.telegram.commands.native`, `channels.slack.commands.native` (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup; Slack commands are managed in the Slack app.
+- Đặt `commands.native: true|false` để ép cho tất cả, hoặc ghi đè theo kênh với `channels.discord.commands.native`, `channels.telegram.commands.native`, `channels.slack.commands.native` (bool hoặc `"auto"`). `false` sẽ xóa các lệnh đã đăng ký trước đó trên Discord/Telegram khi khởi động; lệnh Slack được quản lý trong ứng dụng Slack.
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries. Names are normalized; conflicts with native commands are ignored.
 - `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<channel>`.
 - `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
 - `commands.config: true` enables `/config` (reads/writes `openclaw.json`).
-- `channels.<provider>.configWrites` gates config mutations initiated by that channel (default: true). This applies to `/config set|unset` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
+- `channels.<provider>WhatsApp chạy thông qua kênh web của gateway (Baileys Web). This applies to `/config set|unset\` plus provider-specific auto-migrations (Telegram supergroup ID changes, Slack channel ID changes).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
@@ -1021,7 +1014,7 @@ Notes:
 
 ### `web` (WhatsApp web channel runtime)
 
-WhatsApp runs through the gateway’s web channel (Baileys Web). It starts automatically when a linked session exists.
+Bot token được lấy từ `channels.telegram.botToken` (hoặc `channels.telegram.tokenFile`), với `TELEGRAM_BOT_TOKEN` làm phương án dự phòng cho tài khoản mặc định. It starts automatically when a linked session exists.
 Set `web.enabled: false` to keep it off by default.
 
 ```json5
@@ -1042,10 +1035,10 @@ Set `web.enabled: false` to keep it off by default.
 
 ### `channels.telegram` (bot transport)
 
-OpenClaw starts Telegram only when a `channels.telegram` config section exists. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
-Set `channels.telegram.enabled: false` to disable automatic startup.
+OpenClaw chỉ khởi động Telegram khi tồn tại một mục cấu hình `channels.telegram`. The bot token is resolved from `channels.telegram.botToken` (or `channels.telegram.tokenFile`), with `TELEGRAM_BOT_TOKEN` as a fallback for the default account.
+`/reasoning stream` stream phần lập luận vào bản nháp, sau đó gửi câu trả lời cuối cùng.
 Multi-account support lives under `channels.telegram.accounts` (see the multi-account section above). Env tokens only apply to the default account.
-Set `channels.telegram.configWrites: false` to block Telegram-initiated config writes (including supergroup ID migrations and `/config set|unset`).
+Token môi trường chỉ áp dụng cho tài khoản mặc định.
 
 ```json5
 {
@@ -1116,7 +1109,7 @@ Draft streaming notes:
 ### `channels.discord` (bot transport)
 
 Configure the Discord bot by setting the bot token and optional gating:
-Multi-account support lives under `channels.discord.accounts` (see the multi-account section above). Env tokens only apply to the default account.
+Multi-account support lives under `channels.discord.accounts` (see the multi-account section above). Slug guild là chữ thường với khoảng trắng được thay bằng `-`; khóa kênh dùng tên kênh đã slug hóa (không có `#` ở đầu).
 
 ```json5
 {
@@ -1187,8 +1180,8 @@ Multi-account support lives under `channels.discord.accounts` (see the multi-acc
 }
 ```
 
-OpenClaw starts Discord only when a `channels.discord` config section exists. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
-Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
+OpenClaw chỉ khởi động Discord khi tồn tại một mục cấu hình `channels.discord`. The token is resolved from `channels.discord.token`, with `DISCORD_BOT_TOKEN` as a fallback for the default account (unless `channels.discord.enabled` is `false`). Bật bằng `channels.discord.allowBots` (tin nhắn của chính bot vẫn bị lọc để ngăn vòng lặp tự trả lời).
+Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Văn bản gửi đi được chia khúc theo `channels.discord.textChunkLimit` (mặc định 2000).
 Bot-authored messages are ignored by default. Enable with `channels.discord.allowBots` (own messages are still filtered to prevent self-reply loops).
 Reaction notification modes:
 
@@ -1328,7 +1321,7 @@ Slack action groups (gate `slack` tool actions):
 
 ### `channels.mattermost` (bot token)
 
-Mattermost ships as a plugin and is not bundled with the core install.
+Mattermost được phân phối dưới dạng plugin và không được gộp sẵn trong bản cài đặt lõi.
 Install it first: `openclaw plugins install @openclaw/mattermost` (or `./extensions/mattermost` from a git checkout).
 
 Mattermost requires a bot token plus the base URL for your server:
@@ -1364,7 +1357,7 @@ Access control:
 - Public DMs: `channels.mattermost.dmPolicy="open"` plus `channels.mattermost.allowFrom=["*"]`.
 - Groups: `channels.mattermost.groupPolicy="allowlist"` by default (mention-gated). Use `channels.mattermost.groupAllowFrom` to restrict senders.
 
-Multi-account support lives under `channels.mattermost.accounts` (see the multi-account section above). Env vars only apply to the default account.
+Multi-account support lives under `channels.mattermost.accounts` (see the multi-account section above). Biến môi trường chỉ áp dụng cho tài khoản mặc định.
 Use `channel:<id>` or `user:<id>` (or `@username`) when specifying delivery targets; bare ids are treated as channel ids.
 
 ### `channels.signal` (signal-cli)
@@ -1392,7 +1385,7 @@ Reaction notification modes:
 
 ### `channels.imessage` (imsg CLI)
 
-OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). Không cần daemon hay cổng (port).
 
 ```json5
 {
@@ -1420,7 +1413,7 @@ Notes:
 
 - Requires Full Disk Access to the Messages DB.
 - The first send will prompt for Messages automation permission.
-- Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
+- Ưu tiên các mục tiêu `chat_id:<id>`. Use `imsg chats --limit 20` to list chats.
 - `channels.imessage.cliPath` can point to a wrapper script (e.g. `ssh` to another Mac that runs `imsg rpc`); use SSH keys to avoid password prompts.
 - For remote SSH wrappers, set `channels.imessage.remoteHost` to fetch attachments via SCP when `includeAttachments` is enabled.
 
@@ -1448,9 +1441,7 @@ own per-scope workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
 ### `agents.defaults.repoRoot`
 
-Optional repository root to show in the system prompt’s Runtime line. If unset, OpenClaw
-tries to detect a `.git` directory by walking upward from the workspace (and current
-working directory). The path must exist to be used.
+Optional repository root to show in the system prompt’s Runtime line. Nếu không được đặt, OpenClaw sẽ cố gắng phát hiện thư mục `.git` bằng cách đi ngược lên từ workspace (và thư mục làm việc hiện tại). The path must exist to be used.
 
 ```json5
 {
@@ -1472,8 +1463,7 @@ Use this for pre-seeded deployments where your workspace files come from a repo.
 
 ### `agents.defaults.bootstrapMaxChars`
 
-Max characters of each workspace bootstrap file injected into the system prompt
-before truncation. Default: `20000`.
+Số ký tự tối đa của mỗi tệp bootstrap trong workspace được chèn vào system prompt trước khi bị cắt ngắn. Mặc định: `20000`.
 
 When a file exceeds this limit, OpenClaw logs a warning and injects a truncated
 head/tail with a marker.
@@ -1486,8 +1476,7 @@ head/tail with a marker.
 
 ### `agents.defaults.userTimezone`
 
-Sets the user’s timezone for **system prompt context** (not for timestamps in
-message envelopes). If unset, OpenClaw uses the host timezone at runtime.
+Đặt múi giờ của người dùng cho **ngữ cảnh system prompt** (không áp dụng cho dấu thời gian trong phong bì thông điệp). If unset, OpenClaw uses the host timezone at runtime.
 
 ```json5
 {
@@ -1498,7 +1487,7 @@ message envelopes). If unset, OpenClaw uses the host timezone at runtime.
 ### `agents.defaults.timeFormat`
 
 Controls the **time format** shown in the system prompt’s Current Date & Time section.
-Default: `auto` (OS preference).
+Mặc định: `auto` (ưu tiên của hệ điều hành).
 
 ```json5
 {
@@ -1508,8 +1497,8 @@ Default: `auto` (OS preference).
 
 ### `messages`
 
-Controls inbound/outbound prefixes and optional ack reactions.
-See [Messages](/concepts/messages) for queueing, sessions, and streaming context.
+Điều khiển các tiền tố inbound/outbound và phản ứng ack tùy chọn.
+`params` cũng được áp dụng cho các lần chạy streaming (agent nhúng + nén).
 
 ```json5
 {
@@ -1527,12 +1516,12 @@ streaming, final replies) across channels unless already present.
 
 Overrides can be configured per channel and per account:
 
-- `channels.<channel>.responsePrefix`
+- `channels.<channel>`.responsePrefix\`
 - `channels.<channel>.accounts.<id>.responsePrefix`
 
 Resolution order (most specific wins):
 
-1. `channels.<channel>.accounts.<id>.responsePrefix`
+1. `channels.<channel>`.accounts.<id>.responsePrefix\`
 2. `channels.<channel>.responsePrefix`
 3. `messages.responsePrefix`
 
@@ -1544,24 +1533,22 @@ Semantics:
 
 Overrides apply to all channels, including extensions, and to every outbound reply kind.
 
-If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
-replies are the exception: they default to `[{identity.name}]` when set, otherwise
-`[openclaw]`, so same-phone conversations stay legible.
-Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
+Nếu `messages.responsePrefix` không được đặt, sẽ không áp dụng tiền tố nào theo mặc định. Các trả lời self-chat của WhatsApp là ngoại lệ: mặc định là `[{identity.name}]` khi được đặt, nếu không thì `[openclaw]`, để các cuộc trò chuyện cùng số điện thoại dễ đọc.
+Đặt thành `"auto"` để suy ra `[{identity.name}]` cho agent được định tuyến (khi được đặt).
 
 #### Template variables
 
 The `responsePrefix` string can include template variables that resolve dynamically:
 
-| Variable          | Description            | Example                     |
-| ----------------- | ---------------------- | --------------------------- |
-| `{model}`         | Short model name       | `claude-opus-4-6`, `gpt-4o` |
-| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6` |
-| `{provider}`      | Provider name          | `anthropic`, `openai`       |
-| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`        |
-| `{identity.name}` | Agent identity name    | (same as `"auto"` mode)     |
+| Variable          | Description            | Example                                    |
+| ----------------- | ---------------------- | ------------------------------------------ |
+| `{model}`         | Short model name       | `claude-opus-4-6`, `gpt-4o`                |
+| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6`                |
+| `{provider}`      | Provider name          | `anthropic`, `openai`                      |
+| `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`                       |
+| `{identity.name}` | Agent identity name    | (same as `"auto"` mode) |
 
-Variables are case-insensitive (`{MODEL}` = `{model}`). `{think}` is an alias for `{thinkingLevel}`.
+Các biến không phân biệt chữ hoa/thường (`{MODEL}` = `{model}`). `{think}` is an alias for `{thinkingLevel}`.
 Unresolved variables remain as literal text.
 
 ```json5
@@ -1576,13 +1563,12 @@ Example output: `[claude-opus-4-6 | think:high] Here's my response...`
 
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
 `messages.messagePrefix`). Default stays **unchanged**: `"[openclaw]"` when
-`channels.whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using
-`"[openclaw]"`, OpenClaw will instead use `[{identity.name}]` when the routed
-agent has `identity.name` set.
+`channels.whatsapp.allowFrom` is empty, otherwise `""` (no prefix). Khi sử dụng
+`"[openclaw]"`, OpenClaw sẽ thay vào đó dùng `[{identity.name}]` khi agent được định tuyến có thiết lập `identity.name`.
 
-`ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
-on channels that support reactions (Slack/Discord/Telegram/Google Chat). Defaults to the
-active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
+`ackReaction` gửi một phản ứng emoji theo cơ chế best-effort để xác nhận các tin nhắn đến
+trên những kênh hỗ trợ phản ứng (Slack/Discord/Telegram/Google Chat). Defaults to the
+active agent’s `identity.emoji` when set, otherwise `"👀"`. 1. Đặt thành `""` để vô hiệu hóa.
 
 `ackReactionScope` controls when reactions fire:
 
@@ -1591,8 +1577,8 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 - `direct`: direct messages only
 - `all`: all messages
 
-`removeAckAfterReply` removes the bot’s ack reaction after a reply is sent
-(Slack/Discord/Telegram/Google Chat only). Default: `false`.
+2. `removeAckAfterReply` sẽ xóa phản ứng xác nhận (ack) của bot sau khi gửi xong phản hồi
+   (Slack/Discord/Telegram/Google Chat בלבד). 3. Mặc định: `false`.
 
 #### `messages.tts`
 
@@ -1658,9 +1644,9 @@ Notes:
 
 ### `talk`
 
-Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID` when unset.
+Defaults for Talk mode (macOS/iOS/Android). ID giọng nói sẽ fallback về `ELEVENLABS_VOICE_ID` hoặc `SAG_VOICE_ID` khi không được thiết lập.
 `apiKey` falls back to `ELEVENLABS_API_KEY` (or the gateway’s shell profile) when unset.
-`voiceAliases` lets Talk directives use friendly names (e.g. `"voice":"Clawd"`).
+4. `voiceAliases` cho phép các chỉ thị Talk dùng tên thân thiện (ví dụ: `"voice":"Clawd"`).
 
 ```json5
 {
@@ -1683,13 +1669,13 @@ Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_V
 Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `agents.defaults.models` defines the configured model catalog (and acts as the allowlist for `/model`).
 `agents.defaults.model.primary` sets the default model; `agents.defaults.model.fallbacks` are global failovers.
-`agents.defaults.imageModel` is optional and is **only used if the primary model lacks image input**.
-Each `agents.defaults.models` entry can include:
+5. `agents.defaults.imageModel` là tùy chọn và **chỉ được dùng nếu mô hình chính không hỗ trợ đầu vào hình ảnh**.
+6. Mỗi mục trong `agents.defaults.models` có thể bao gồm:
 
 - `alias` (optional model shortcut, e.g. `/opus`).
 - `params` (optional provider-specific API params passed through to the model request).
 
-`params` is also applied to streaming runs (embedded agent + compaction). Supported keys today: `temperature`, `maxTokens`. These merge with call-time options; caller-supplied values win. `temperature` is an advanced knob—leave unset unless you know the model’s defaults and need a change.
+Nếu xác thực gateway bị vô hiệu hóa, các kết nối đó sẽ bị từ chối. Supported keys today: `temperature`, `maxTokens`. These merge with call-time options; caller-supplied values win. `temperature` là một nút điều chỉnh nâng cao—hãy để trống trừ khi bạn hiểu rõ mặc định của model và cần thay đổi.
 
 Example:
 
@@ -1715,8 +1701,8 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you:
 - set `--thinking off`, or
 - define `agents.defaults.models["zai/<model>"].params.thinking` yourself.
 
-OpenClaw also ships a few built-in alias shorthands. Defaults only apply when the model
-is already present in `agents.defaults.models`:
+OpenClaw also ships a few built-in alias shorthands. Giá trị mặc định chỉ áp dụng khi model
+đã có sẵn trong `agents.defaults.models`:
 
 - `opus` -> `anthropic/claude-opus-4-6`
 - `sonnet` -> `anthropic/claude-sonnet-4-5`
@@ -1750,8 +1736,8 @@ MiniMax auth: set `MINIMAX_API_KEY` (env) or configure `models.providers.minimax
 
 #### `agents.defaults.cliBackends` (CLI fallback)
 
-Optional CLI backends for text-only fallback runs (no tool calls). These are useful as a
-backup path when API providers fail. Image pass-through is supported when you configure
+Optional CLI backends for text-only fallback runs (no tool calls). Chúng hữu ích như một
+đường dự phòng khi các nhà cung cấp API gặp sự cố. Image pass-through is supported when you configure
 an `imageArg` that accepts file paths.
 
 Notes:
@@ -1846,7 +1832,7 @@ Example:
 
 #### `agents.defaults.contextPruning` (tool-result pruning)
 
-`agents.defaults.contextPruning` prunes **old tool results** from the in-memory context right before a request is sent to the LLM.
+`agents.defaults.contextPruning` cắt tỉa **các kết quả công cụ cũ** khỏi ngữ cảnh trong bộ nhớ ngay trước khi một yêu cầu được gửi tới LLM.
 It does **not** modify the session history on disk (`*.jsonl` remains complete).
 
 This is intended to reduce token usage for chatty agents that accumulate large tool outputs over time.
@@ -1937,10 +1923,10 @@ See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 
 #### `agents.defaults.compaction` (reserve headroom + memory flush)
 
-`agents.defaults.compaction.mode` selects the compaction summarization strategy. Defaults to `default`; set `safeguard` to enable chunked summarization for very long histories. See [/concepts/compaction](/concepts/compaction).
+`agents.defaults.compaction.mode` chọn chiến lược tóm tắt compaction. Defaults to `default`; set `safeguard` to enable chunked summarization for very long histories. See [/concepts/compaction](/concepts/compaction).
 
 `agents.defaults.compaction.reserveTokensFloor` enforces a minimum `reserveTokens`
-value for Pi compaction (default: `20000`). Set it to `0` to disable the floor.
+value for Pi compaction (default: `20000`). Đặt thành `0` để tắt ngưỡng sàn.
 
 `agents.defaults.compaction.memoryFlush` runs a **silent** agentic turn before
 auto-compaction, instructing the model to store durable memories on disk (e.g.
@@ -1979,9 +1965,12 @@ Example (tuned):
 Block streaming:
 
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default off).
-- Channel overrides: `*.blockStreaming` (and per-account variants) to force block streaming on/off.
-  Non-Telegram channels require an explicit `*.blockStreaming: true` to enable block replies.
+
+- Ghi đè theo kênh: `*.blockStreaming` (và các biến thể theo tài khoản) để buộc bật/tắt block streaming.
+  Các kênh không phải Telegram yêu cầu thiết lập rõ ràng `*.blockStreaming: true` để bật trả lời theo khối.
+
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"` (default: text_end).
+
 - `agents.defaults.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
   800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
   Example:
@@ -1992,15 +1981,16 @@ Block streaming:
   }
   ```
 
-- `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
+- `agents.defaults.blockStreamingCoalesce`: gộp các block được stream trước khi gửi.
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
-  with `maxChars` capped to the channel text limit. Signal/Slack/Discord/Google Chat default
-  to `minChars: 1500` unless overridden.
+  with `maxChars` capped to the channel text limit. Signal/Slack/Discord/Google Chat mặc định
+  là `minChars: 1500` trừ khi được ghi đè.
   Channel overrides: `channels.whatsapp.blockStreamingCoalesce`, `channels.telegram.blockStreamingCoalesce`,
   `channels.discord.blockStreamingCoalesce`, `channels.slack.blockStreamingCoalesce`, `channels.mattermost.blockStreamingCoalesce`,
   `channels.signal.blockStreamingCoalesce`, `channels.imessage.blockStreamingCoalesce`, `channels.msteams.blockStreamingCoalesce`,
   `channels.googlechat.blockStreamingCoalesce`
   (and per-account variants).
+
 - `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
   Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
   Per-agent override: `agents.list[].humanDelay`.
@@ -2318,8 +2308,7 @@ cross-session isolation. Use `scope: "session"` for per-session isolation.
 Legacy: `perSession` is still supported (`true` → `scope: "session"`,
 `false` → `scope: "shared"`).
 
-`setupCommand` runs **once** after the container is created (inside the container via `sh -lc`).
-For package installs, ensure network egress, a writable root FS, and a root user.
+`setupCommand` runs **once** after the container is created (inside the container via `sh -lc`).1) Đối với việc cài đặt gói, hãy đảm bảo có quyền egress mạng, hệ thống tệp gốc (root FS) có thể ghi, và người dùng root.
 
 ```json5
 {
@@ -2411,7 +2400,7 @@ scripts/sandbox-setup.sh
 Note: sandbox containers default to `network: "none"`; set `agents.defaults.sandbox.docker.network`
 to `"bridge"` (or your custom network) if the agent needs outbound access.
 
-Note: inbound attachments are staged into the active workspace at `media/inbound/*`. With `workspaceAccess: "rw"`, that means files are written into the agent workspace.
+2. Lưu ý: các tệp đính kèm đến được dàn dựng vào workspace đang hoạt động tại `media/inbound/*`. 3. Với `workspaceAccess: "rw"`, điều đó có nghĩa là các tệp được ghi vào workspace của agent.
 
 Note: `docker.binds` mounts additional host directories; global and per-agent binds are merged.
 
@@ -2421,31 +2410,25 @@ Build the optional browser image with:
 scripts/sandbox-browser-setup.sh
 ```
 
-When `agents.defaults.sandbox.browser.enabled=true`, the browser tool uses a sandboxed
-Chromium instance (CDP). If noVNC is enabled (default when headless=false),
-the noVNC URL is injected into the system prompt so the agent can reference it.
-This does not require `browser.enabled` in the main config; the sandbox control
-URL is injected per session.
+4. Khi `agents.defaults.sandbox.browser.enabled=true`, công cụ trình duyệt sử dụng một phiên bản Chromium được sandbox (CDP). 5. Nếu noVNC được bật (mặc định khi headless=false),
+   URL noVNC sẽ được chèn vào system prompt để agent có thể tham chiếu đến nó.
+5. Điều này không yêu cầu `browser.enabled` trong cấu hình chính; URL điều khiển sandbox được chèn theo từng phiên.
 
-`agents.defaults.sandbox.browser.allowHostControl` (default: false) allows
-sandboxed sessions to explicitly target the **host** browser control server
-via the browser tool (`target: "host"`). Leave this off if you want strict
-sandbox isolation.
+7. `agents.defaults.sandbox.browser.allowHostControl` (mặc định: false) cho phép các phiên được sandbox nhắm mục tiêu rõ ràng tới máy chủ điều khiển trình duyệt **host** thông qua công cụ trình duyệt (`target: "host"`). 8. Hãy tắt tùy chọn này nếu bạn muốn cách ly sandbox nghiêm ngặt.
 
 Allowlists for remote control:
 
 - `allowedControlUrls`: exact control URLs permitted for `target: "custom"`.
 - `allowedControlHosts`: hostnames permitted (hostname only, no port).
-- `allowedControlPorts`: ports permitted (defaults: http=80, https=443).
-  Defaults: all allowlists are unset (no restriction). `allowHostControl` defaults to false.
+- 9. `allowedControlPorts`: các cổng được phép (mặc định: http=80, https=443).
+  10. Mặc định: tất cả các allowlist đều chưa được đặt (không hạn chế). 11. `allowHostControl` mặc định là false.
 
 ### `models` (custom providers + base URLs)
 
-OpenClaw uses the **pi-coding-agent** model catalog. You can add custom providers
-(LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
-`~/.openclaw/agents/<agentId>/agent/models.json` or by defining the same schema inside your
-OpenClaw config under `models.providers`.
-Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
+12. OpenClaw sử dụng danh mục mô hình **pi-coding-agent**. 13. Bạn có thể thêm các nhà cung cấp tùy chỉnh
+    (LiteLLM, máy chủ tương thích OpenAI cục bộ, proxy Anthropic, v.v.) 14. bằng cách ghi
+    `~/.openclaw/agents/<agentId>/agent/models.json` hoặc bằng cách định nghĩa cùng schema trong cấu hình OpenClaw của bạn dưới `models.providers`.
+13. Tổng quan theo từng nhà cung cấp + ví dụ: [/concepts/model-providers](/concepts/model-providers).
 
 When `models.providers` is present, OpenClaw writes/merges a `models.json` into
 `~/.openclaw/agents/<agentId>/agent/` on startup:
@@ -2491,9 +2474,8 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 
 ### OpenCode Zen (multi-model proxy)
 
-OpenCode Zen is a multi-model gateway with per-model endpoints. OpenClaw uses
-the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
-`OPENCODE_ZEN_API_KEY`) from [https://opencode.ai/auth](https://opencode.ai/auth).
+16. OpenCode Zen là một cổng đa mô hình với các endpoint riêng cho từng mô hình. 17. OpenClaw sử dụng nhà cung cấp tích hợp sẵn `opencode` từ pi-ai; hãy đặt `OPENCODE_API_KEY` (hoặc
+    `OPENCODE_ZEN_API_KEY`) từ [https://opencode.ai/auth](https://opencode.ai/auth).
 
 Notes:
 
@@ -2514,8 +2496,8 @@ Notes:
 
 ### Z.AI (GLM-4.7) — provider alias support
 
-Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
-in your environment and reference the model by provider/model.
+18. Các mô hình Z.AI khả dụng thông qua nhà cung cấp tích hợp sẵn `zai`. 19. Hãy đặt `ZAI_API_KEY`
+    trong môi trường của bạn và tham chiếu mô hình theo provider/model.
 
 Shortcut: `openclaw onboard --auth-choice zai-api-key`.
 
@@ -2535,11 +2517,11 @@ Notes:
 - `z.ai/*` and `z-ai/*` are accepted aliases and normalize to `zai/*`.
 - If `ZAI_API_KEY` is missing, requests to `zai/*` will fail with an auth error at runtime.
 - Example error: `No API key found for provider "zai".`
-- Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. GLM coding
-  requests use the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
-  The built-in `zai` provider uses the Coding endpoint. If you need the general
-  endpoint, define a custom provider in `models.providers` with the base URL
-  override (see the custom providers section above).
+- 20. Endpoint API chung của Z.AI là `https://api.z.ai/api/paas/v4`. 21. Các yêu cầu
+      lập trình GLM sử dụng endpoint Coding chuyên dụng `https://api.z.ai/api/coding/paas/v4`.
+  21. Nhà cung cấp tích hợp sẵn `zai` sử dụng endpoint Coding. 23. Nếu bạn cần endpoint
+      chung, hãy định nghĩa một nhà cung cấp tùy chỉnh trong `models.providers` với ghi đè base URL
+      (xem phần nhà cung cấp tùy chỉnh ở trên).
 - Use a fake placeholder in docs/configs; never commit real API keys.
 
 ### Moonshot AI (Kimi)
@@ -2653,7 +2635,7 @@ Notes:
 
 ### Local models (LM Studio) — recommended setup
 
-See [/gateway/local-models](/gateway/local-models) for the current local guidance. TL;DR: run MiniMax M2.1 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
+24. Xem [/gateway/local-models](/gateway/local-models) để biết hướng dẫn cục bộ hiện tại. 25. TL;DR: chạy MiniMax M2.1 thông qua LM Studio Responses API trên phần cứng mạnh; giữ các mô hình hosted được gộp để dự phòng.
 
 ### MiniMax M2.1
 
@@ -2790,8 +2772,8 @@ Controls session scoping, reset policy, reset triggers, and where the session st
 
 Fields:
 
-- `mainKey`: direct-chat bucket key (default: `"main"`). Useful when you want to “rename” the primary DM thread without changing `agentId`.
-  - Sandbox note: `agents.defaults.sandbox.mode: "non-main"` uses this key to detect the main session. Any session key that does not match `mainKey` (groups/channels) is sandboxed.
+- 26. `mainKey`: khóa bucket direct-chat (mặc định: `"main"`). 27. Hữu ích khi bạn muốn “đổi tên” luồng DM chính mà không thay đổi `agentId`.
+  - 28. Ghi chú sandbox: `agents.defaults.sandbox.mode: "non-main"` sử dụng khóa này để phát hiện phiên chính. 29. Bất kỳ khóa phiên nào không khớp với `mainKey` (group/channel) đều bị sandbox.
 - `dmScope`: how DM sessions are grouped (default: `"main"`).
   - `main`: all DMs share the main session for continuity.
   - `per-peer`: isolate DMs by sender id across channels.
@@ -2800,7 +2782,7 @@ Fields:
   - Secure DM mode (recommended): set `session.dmScope: "per-channel-peer"` when multiple people can DM the bot (shared inboxes, multi-person allowlists, or `dmPolicy: "open"`).
 - `identityLinks`: map canonical ids to provider-prefixed peers so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
   - Example: `alice: ["telegram:123456789", "discord:987654321012345678"]`.
-- `reset`: primary reset policy. Defaults to daily resets at 4:00 AM local time on the gateway host.
+- 30. `reset`: chính sách reset chính. 31. Mặc định là reset hằng ngày lúc 4:00 sáng theo giờ địa phương trên máy chủ gateway.
   - `mode`: `daily` or `idle` (default: `daily` when `reset` is present).
   - `atHour`: local hour (0-23) for the daily reset boundary.
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
@@ -2809,7 +2791,7 @@ Fields:
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
-- `sendPolicy.rules[]`: match by `channel`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
+- 34. `sendPolicy.rules[]`: khớp theo `channel`, `chatType` (`direct|group|room`), hoặc `keyPrefix` (ví dụ: `cron:`). 35. Từ chối đầu tiên sẽ thắng; nếu không thì cho phép.
 
 ### `skills` (skills config)
 
@@ -2824,7 +2806,7 @@ Fields:
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `install.preferBrew`: prefer brew installers when available (default: true).
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn`, default: npm).
-- `entries.<skillKey>`: per-skill config overrides.
+- 40. `entries.<skillKey>`: per-skill config overrides.
 
 Per-skill fields:
 
@@ -2861,10 +2843,10 @@ Example:
 
 ### `plugins` (extensions)
 
-Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
-from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
-`plugins.load.paths` entries. **Config changes require a gateway restart.**
-See [/plugin](/tools/plugin) for full usage.
+42. Điều khiển việc phát hiện plugin, cho phép/từ chối, và cấu hình theo từng plugin. Plugins are loaded
+    from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
+    `plugins.load.paths` entries. 44. **Thay đổi cấu hình yêu cầu khởi động lại gateway.**
+    Xem [/plugin](/tools/plugin) để biết cách sử dụng đầy đủ.
 
 Fields:
 
@@ -2989,10 +2971,10 @@ Control UI base path:
 - Default: root (`/`) (unchanged).
 - `gateway.controlUi.root` sets the filesystem root for Control UI assets (default: `dist/control-ui`).
 - `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
-  device identity is omitted (typically over HTTP). Default: `false`. Prefer HTTPS
-  (Tailscale Serve) or `127.0.0.1`.
+  device identity is omitted (typically over HTTP). Mặc định: `false`. Ưu tiên HTTPS
+  (Tailscale Serve) hoặc `127.0.0.1`.
 - `gateway.controlUi.dangerouslyDisableDeviceAuth` disables device identity checks for the
-  Control UI (token/password only). Default: `false`. Break-glass only.
+  Control UI (token/password only). Mặc định: `false`. Break-glass only.
 
 Related docs:
 
@@ -3013,9 +2995,9 @@ Notes:
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > default `18789`.
-- Gateway auth is required by default (token/password or Tailscale Serve identity). Non-loopback binds require a shared token/password.
+- Gateway auth is required by default (token/password or Tailscale Serve identity). Các bind không phải loopback yêu cầu token/mật khẩu dùng chung.
 - The onboarding wizard generates a gateway token by default (even on loopback).
-- `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
+- `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` bị bỏ qua.
 
 Auth and Tailscale:
 
@@ -3027,9 +3009,9 @@ Auth and Tailscale:
   (`tailscale-user-login`) to satisfy auth when the request arrives on loopback
   with `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`. OpenClaw
   verifies the identity by resolving the `x-forwarded-for` address via
-  `tailscale whois` before accepting it. When `true`, Serve requests do not need
-  a token/password; set `false` to require explicit credentials. Defaults to
-  `true` when `tailscale.mode = "serve"` and auth mode is not `password`.
+  `tailscale whois` before accepting it. Khi `true`, các yêu cầu Serve không cần
+  token/mật khẩu; đặt `false` để yêu cầu thông tin xác thực rõ ràng. Mặc định là
+  `true` khi `tailscale.mode = "serve"` và chế độ xác thực không phải `password`.
 - `gateway.tailscale.mode: "serve"` uses Tailscale Serve (tailnet only, loopback bind).
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
 - `gateway.tailscale.resetOnExit` resets Serve/Funnel config on shutdown.
@@ -3037,7 +3019,7 @@ Auth and Tailscale:
 Remote client defaults (CLI):
 
 - `gateway.remote.url` sets the default Gateway WebSocket URL for CLI calls when `gateway.mode = "remote"`.
-- `gateway.remote.transport` selects the macOS remote transport (`ssh` default, `direct` for ws/wss). When `direct`, `gateway.remote.url` must be `ws://` or `wss://`. `ws://host` defaults to port `18789`.
+- `gateway.remote.transport` selects the macOS remote transport (`ssh` default, `direct` for ws/wss). Khi `direct`, `gateway.remote.url` phải là `ws://` hoặc `wss://`. `ws://host` defaults to port `18789`.
 - `gateway.remote.token` supplies the token for remote calls (leave unset for no auth).
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
 
@@ -3190,7 +3172,7 @@ Requests must include the hook token:
 Endpoints:
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? 23. }` }\`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -3251,8 +3233,7 @@ Gateway auto-start:
 
 Note: when `tailscale.mode` is on, OpenClaw defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).
-If you need the backend to receive the prefixed path, set
-`hooks.gmail.tailscale.target` to a full URL (and align `serve.path`).
+Các bản build hiện tại không còn bao gồm listener TCP bridge; các khóa cấu hình `bridge.*` bị bỏ qua.
 
 ### `canvasHost` (LAN/tailnet Canvas file server + live reload)
 
@@ -3295,7 +3276,8 @@ Disable with:
 ### `bridge` (legacy TCP bridge, removed)
 
 Current builds no longer include the TCP bridge listener; `bridge.*` config keys are ignored.
-Nodes connect over the Gateway WebSocket. This section is kept for historical reference.
+Nodes connect over the Gateway WebSocket. Khi TLS được bật, Gateway quảng bá `bridgeTls=1` và `bridgeTlsSha256` trong các bản ghi TXT discovery
+để các node có thể ghim (pin) chứng chỉ.
 
 Legacy behavior:
 
@@ -3321,10 +3303,8 @@ TLS:
 - `bridge.tls.certPath` / `bridge.tls.keyPath`: PEM paths for the bridge certificate + private key.
 - `bridge.tls.caPath`: optional PEM CA bundle (custom roots or future mTLS).
 
-When TLS is enabled, the Gateway advertises `bridgeTls=1` and `bridgeTlsSha256` in discovery TXT
-records so nodes can pin the certificate. Manual connections use trust-on-first-use if no
-fingerprint is stored yet.
-Auto-generated certs require `openssl` on PATH; if generation fails, the bridge will not start.
+Khi TLS được bật, Gateway quảng bá `bridgeTls=1` và `bridgeTlsSha256` trong các bản ghi TXT khám phá để các node có thể ghim (pin) chứng chỉ. Chứng chỉ được tạo tự động yêu cầu `openssl` có trong PATH; nếu tạo thất bại, bridge sẽ không khởi động.
+Hostname: mặc định là `openclaw` (quảng bá `openclaw.local`).
 
 ```json5
 {
@@ -3349,7 +3329,19 @@ Controls LAN mDNS discovery broadcasts (`_openclaw-gw._tcp`).
 - `minimal` (default): omit `cliPath` + `sshPort` from TXT records
 - `full`: include `cliPath` + `sshPort` in TXT records
 - `off`: disable mDNS broadcasts entirely
-- Hostname: defaults to `openclaw` (advertises `openclaw.local`). Override with `OPENCLAW_MDNS_HOSTNAME`.
+- Tên máy chủ: mặc định là `openclaw` (quảng bá `openclaw.local`). | Variable           | Description                                                                     |
+  \| ------------------ | ------------------------------------------------------------------------------- | -------- | ------- | ---------- | ----- | ------ | -------- | ------- | ------- | --- |
+  \| `{{Body}}`         | Toàn bộ nội dung thông điệp đến                                                  |
+  \| `{{RawBody}}`      | Nội dung thô của thông điệp đến (không có wrapper lịch sử/người gửi; tốt nhất cho phân tích lệnh) |
+  \| `{{BodyStripped}}` | Nội dung đã loại bỏ mention nhóm (mặc định tốt nhất cho agent)                  |
+  \| `{{From}}`         | Định danh người gửi (E.164 cho WhatsApp; có thể khác theo kênh)                 |
+  \| `{{To}}`           | Định danh đích                                                                  |
+  \| `{{MessageSid}}`   | ID thông điệp của kênh (khi có)                                                 |
+  \| `{{SessionId}}`    | UUID của phiên hiện tại                                                         |
+  \| `{{IsNewSession}}` | `"true"` khi một phiên mới được tạo                                            |
+  \| `{{MediaUrl}}`     | Pseudo-URL media đến (nếu có)                                                   |
+  \| `{{MediaPath}}`    | Đường dẫn media cục bộ (nếu đã tải xuống)                                      |
+  \| `{{MediaType}}`    | Loại media (image/audio/document/…)
 
 ```json5
 {
@@ -3382,32 +3374,29 @@ openclaw dns setup --apply
 
 Template placeholders are expanded in `tools.media.*.models[].args` and `tools.media.models[].args` (and any future templated argument fields).
 
-| Variable           | Description                                                                     |
-| ------------------ | ------------------------------------------------------------------------------- | -------- | ------- | ---------- | ----- | ------ | -------- | ------- | ------- | --- |
-| `{{Body}}`         | Full inbound message body                                                       |
-| `{{RawBody}}`      | Raw inbound message body (no history/sender wrappers; best for command parsing) |
-| `{{BodyStripped}}` | Body with group mentions stripped (best default for agents)                     |
-| `{{From}}`         | Sender identifier (E.164 for WhatsApp; may differ per channel)                  |
-| `{{To}}`           | Destination identifier                                                          |
-| `{{MessageSid}}`   | Channel message id (when available)                                             |
-| `{{SessionId}}`    | Current session UUID                                                            |
-| `{{IsNewSession}}` | `"true"` when a new session was created                                         |
-| `{{MediaUrl}}`     | Inbound media pseudo-URL (if present)                                           |
-| `{{MediaPath}}`    | Local media path (if downloaded)                                                |
-| `{{MediaType}}`    | Media type (image/audio/document/…)                                             |
-| `{{Transcript}}`   | Audio transcript (when enabled)                                                 |
-| `{{Prompt}}`       | Resolved media prompt for CLI entries                                           |
-| `{{MaxChars}}`     | Resolved max output chars for CLI entries                                       |
-| `{{ChatType}}`     | `"direct"` or `"group"`                                                         |
-| `{{GroupSubject}}` | Group subject (best effort)                                                     |
-| `{{GroupMembers}}` | Group members preview (best effort)                                             |
-| `{{SenderName}}`   | Sender display name (best effort)                                               |
-| `{{SenderE164}}`   | Sender phone number (best effort)                                               |
-| `{{Provider}}`     | Provider hint (whatsapp                                                         | telegram | discord | googlechat | slack | signal | imessage | msteams | webchat | …)  |
+|
+\| `{{Transcript}}`   | Bản chép lời âm thanh (khi được bật)                                            |
+\| `{{Prompt}}`       | Prompt media đã được phân giải cho các mục CLI                                 |
+\| `{{MaxChars}}`     | Số ký tự đầu ra tối đa đã được phân giải cho các mục CLI                        |
+\| `{{ChatType}}`     | `"direct"` hoặc `"group"`                                                    |
+\| `{{GroupSubject}}` | Chủ đề nhóm (cố gắng hết mức)                                                   |
+\| `{{GroupMembers}}` | Xem trước thành viên nhóm (cố gắng hết mức)                                    |
+\| `{{SenderName}}`   | Tên hiển thị của người gửi (cố gắng hết mức)                                   |
+\| `{{SenderE164}}`   | Số điện thoại người gửi (cố gắng hết mức)                                      |
+\| `{{Provider}}`     | Gợi ý nhà cung cấp (whatsapp                                                         | telegram | discord | googlechat | slack | signal | imessage | msteams | webchat | …)                                             |
+\| `{{Transcript}}`   | Bản ghi âm thanh (khi được bật)                                                 |
+\| `{{Prompt}}`       | Prompt media đã được phân giải cho các mục CLI                                  |
+\| `{{MaxChars}}`     | Số ký tự đầu ra tối đa đã được phân giải cho các mục CLI                        |
+\| `{{ChatType}}`     | `"direct"` hoặc `"group"`                                                   |
+\| `{{GroupSubject}}` | Chủ đề nhóm (nỗ lực tốt nhất)                                                   |
+\| `{{GroupMembers}}` | Xem trước thành viên nhóm (nỗ lực tốt nhất)                                    |
+\| `{{SenderName}}`   | Tên hiển thị người gửi (nỗ lực tốt nhất)                                       |
+\| `{{SenderE164}}`   | Số điện thoại người gửi (nỗ lực tốt nhất)                                      |
+\| `{{Provider}}`     | Gợi ý nhà cung cấp (whatsapp                                                         | telegram | discord | googlechat | slack | signal | imessage | msteams | webchat | …)  Cron là bộ lập lịch do Gateway sở hữu cho các tác vụ đánh thức và công việc theo lịch.
 
 ## Cron (Gateway scheduler)
 
-Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs](/automation/cron-jobs) for the feature overview and CLI examples.
+Cron là bộ lập lịch do Gateway sở hữu cho các lần đánh thức và các tác vụ theo lịch. **Gateway**: một tiến trình gateway chạy dài hạn duy nhất, sở hữu trạng thái (phiên, ghép cặp, sổ đăng ký node) và chạy các kênh.
 
 ```json5
 {

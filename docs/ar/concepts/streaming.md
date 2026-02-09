@@ -4,14 +4,7 @@ read_when:
   - شرح كيفية عمل البثّ أو التجزئة على القنوات
   - تغيير سلوك بثّ الكتل أو تجزئة القنوات
   - تصحيح أخطاء تكرار ردود الكتل أو إرسالها مبكرًا أو بثّ المسودات
-title: "البثّ والتجزئة"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:24Z
+title: "البث و القطع"
 ---
 
 # البثّ + التجزئة
@@ -37,7 +30,7 @@ Model output
                    └─ channel send (block replies)
 ```
 
-الشرح:
+اسطوري:
 
 - `text_delta/events`: أحداث بثّ النموذج (قد تكون متباعدة في النماذج غير الداعمة للبثّ).
 - `chunker`: `EmbeddedBlockChunker` مع تطبيق الحدود الدنيا/العليا + تفضيل موضع الفصل.
@@ -61,7 +54,7 @@ Model output
 
 لا يزال `message_end` يستخدم المُجزِّئ إذا تجاوز النص المخزّن `maxChars`، لذا قد يُصدر عدة مقاطع في النهاية.
 
-## خوارزمية التجزئة (الحدود الدنيا/العليا)
+## خوارزمية القطع (حدود منخفضة/مرتفعة)
 
 تُنفَّذ تجزئة الكتل بواسطة `EmbeddedBlockChunker`:
 
@@ -98,7 +91,7 @@ Model output
 
 ## «بثّ المقاطع أم كل شيء»
 
-يتطابق ذلك مع:
+هذه الخرائط إلى:
 
 - **بثّ المقاطع:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (الإصدار أثناء التوليد). تحتاج القنوات غير Telegram أيضًا إلى `*.blockStreaming: true`.
 - **بثّ كل شيء في النهاية:** `blockStreamingBreak: "message_end"` (تفريغ واحد، وربما عدة مقاطع إذا كان الطول كبيرًا جدًا).
@@ -135,7 +128,7 @@ Telegram (private + topics)
   └─ final reply → normal message
 ```
 
-الشرح:
+اسطوري:
 
 - `sendMessageDraft`: فقاعة مسودة Telegram (ليست رسالة حقيقية).
 - `final reply`: إرسال رسالة Telegram عادية.

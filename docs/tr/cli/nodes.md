@@ -4,13 +4,6 @@ read_when:
   - Eşleştirilmiş düğümleri (kameralar, ekran, tuval) yönetiyorsunuz
   - İstekleri onaylamanız veya düğüm komutlarını çağırmanız gerekiyor
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:01Z
 ---
 
 # `openclaw nodes`

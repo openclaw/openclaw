@@ -1,15 +1,8 @@
 ---
 summary: "Логика состояния строки меню и то, что отображается пользователям"
 read_when:
-  - "Настройка UI macOS или логики состояния"
+  - Настройка UI macOS или логики состояния
 title: "Строка меню"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:48Z
 ---
 
 # Логика состояния строки меню
@@ -70,7 +63,7 @@ x-i18n:
   - `edit`: путь плюс предполагаемый тип изменения из `meta`/счётчиков diff.
   - fallback: имя инструмента.
 
-## Переопределение для отладки
+## Debug override
 
 - Настройки ▸ Debug ▸ селектор «Icon override»:
   - `System (auto)` (по умолчанию)

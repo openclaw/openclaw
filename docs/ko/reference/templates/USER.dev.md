@@ -3,13 +3,6 @@ summary: "Dev 에이전트 사용자 프로필 (C-3PO)"
 read_when:
   - dev 게이트웨이 템플릿을 사용할 때
   - 기본 dev 에이전트 아이덴티티를 업데이트할 때
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:07Z
 ---
 
 # USER.md - 사용자 프로필

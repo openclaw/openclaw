@@ -5,13 +5,6 @@ read_when:
   - Vous depannez pourquoi le modele « sait » quelque chose (ou l’a oublie)
   - Vous voulez reduire la surcharge de contexte (/context, /status, /compact)
 title: "Contexte"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: b32867b9b93254fd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:18Z
 ---
 
 # Contexte
@@ -28,7 +21,7 @@ Le contexte _n’est pas la meme chose_ que la « memoire » : la memoire 
 
 ## Demarrage rapide (inspecter le contexte)
 
-- `/status` → vue rapide « a quel point ma fenetre est-elle remplie ? » + parametres de session.
+- `/status` → vue rapide « a quel point ma fenetre est-elle remplie ? » + parametres de session.
 - `/context list` → ce qui est injecte + tailles approximatives (par fichier + totaux).
 - `/context detail` → detail approfondi : tailles par fichier, par schema d’outil, par entree de Skill, et taille de l’invite systeme.
 - `/usage tokens` → ajouter un pied de page d’utilisation par reponse aux reponses normales.

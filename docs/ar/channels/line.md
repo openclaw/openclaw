@@ -1,17 +1,10 @@
 ---
 summary: "إعداد وتهيئة واستخدام إضافة LINE Messaging API"
 read_when:
-  - "تريد ربط OpenClaw بـ LINE"
-  - "تحتاج إلى إعداد webhook وبيانات الاعتماد الخاصة بـ LINE"
-  - "تريد خيارات رسائل خاصة بـ LINE"
+  - تريد ربط OpenClaw بـ LINE
+  - تحتاج إلى إعداد webhook وبيانات الاعتماد الخاصة بـ LINE
+  - تريد خيارات رسائل خاصة بـ LINE
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:54Z
 ---
 
 # LINE (إضافة)

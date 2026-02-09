@@ -4,20 +4,13 @@ read_when:
   - OpenClaw macOS 릴리스를 컷팅하거나 검증할 때
   - Sparkle 앱캐스트 또는 피드 자산을 업데이트할 때
 title: "macOS 릴리스"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:48Z
 ---
 
 # OpenClaw macOS 릴리스 (Sparkle)
 
 이 앱은 이제 Sparkle 자동 업데이트를 제공합니다. 릴리스 빌드는 Developer ID 로 서명되고, zip 으로 압축되며, 서명된 앱캐스트 항목과 함께 게시되어야 합니다.
 
-## 사전 요구 사항
+## 34. 사전 요구 사항
 
 - Developer ID Application 인증서가 설치되어 있어야 합니다 (예: `Developer ID Application: <Developer Name> (<TEAMID>)`).
 - Sparkle 개인 키 경로가 환경 변수 `SPARKLE_PRIVATE_KEY_FILE` 로 설정되어 있어야 합니다 (Sparkle ed25519 개인 키의 경로; 공개 키는 Info.plist 에 포함됨). 누락된 경우 `~/.profile` 를 확인하십시오.
@@ -69,7 +62,7 @@ scripts/package-mac-dist.sh
 ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenClaw-2026.2.6.dSYM.zip
 ```
 
-## 앱캐스트 항목
+## 35. Appcast 항목
 
 Sparkle 이 서식이 지정된 HTML 릴리스 노트를 렌더링하도록 릴리스 노트 생성기를 사용하십시오:
 

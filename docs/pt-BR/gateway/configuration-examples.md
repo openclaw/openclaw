@@ -5,13 +5,6 @@ read_when:
   - Procurando exemplos de configuração
   - Configurando o OpenClaw pela primeira vez
 title: "Exemplos de Configuração"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:50Z
 ---
 
 # Exemplos de Configuração

@@ -5,13 +5,6 @@ read_when:
   - 로컬과 tailnet 접근 또는 페어링 문제를 디버깅할 때
   - 네트워킹 문서의 표준 목록을 확인하고자 할 때
 title: "네트워크"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:26Z
 ---
 
 # 네트워크 허브

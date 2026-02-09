@@ -3,20 +3,13 @@ summary: "mac ایپ کس طرح Gateway WebChat کو ایمبیڈ کرتی ہے
 read_when:
   - mac WebChat ویو یا loopback پورٹ کی ڈیبگنگ
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:27Z
 ---
 
 # WebChat (macOS ایپ)
 
-macOS مینو بار ایپ WebChat UI کو ایک مقامی SwiftUI ویو کے طور پر ایمبیڈ کرتی ہے۔ یہ
-Gateway سے کنیکٹ ہوتی ہے اور منتخب ایجنٹ کے لیے بطورِ طے شدہ **مین سیشن** استعمال کرتی ہے
-(دیگر سیشنز کے لیے سیشن سوئچر کے ساتھ)۔
+16. macOS مینو بار ایپ WebChat UI کو ایک نیٹو SwiftUI ویو کے طور پر ایمبیڈ کرتی ہے۔ 17. یہ
+    Gateway سے کنیکٹ کرتی ہے اور منتخب ایجنٹ کے لیے **مین سیشن** کو ڈیفالٹ بناتی ہے
+    (دیگر سیشنز کے لیے سیشن سوئچر کے ساتھ)۔
 
 - **Local mode**: مقامی Gateway WebSocket سے براہِ راست کنیکٹ ہوتا ہے۔
 - **Remote mode**: Gateway کنٹرول پورٹ کو SSH کے ذریعے فارورڈ کرتا ہے اور اسی
@@ -25,6 +18,7 @@ Gateway سے کنیکٹ ہوتی ہے اور منتخب ایجنٹ کے لیے �
 ## Launch & debugging
 
 - Manual: Lobster مینو → “Open Chat”۔
+
 - Auto‑open برائے ٹیسٹنگ:
 
   ```bash
@@ -37,8 +31,7 @@ Gateway سے کنیکٹ ہوتی ہے اور منتخب ایجنٹ کے لیے �
 
 - Data plane: Gateway WS میتھڈز `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` اور واقعات `chat`, `agent`, `presence`, `tick`, `health`۔
-- Session: بطورِ طے شدہ پرائمری سیشن (`main`، یا جب اسکوپ
-  گلوبل ہو تو `global`)۔ UI سیشنز کے درمیان سوئچ کر سکتی ہے۔
+- 18. سیشن: ڈیفالٹ طور پر پرائمری سیشن (`main`، یا جب اسکوپ گلوبل ہو تو `global`)۔ 19. UI سیشنز کے درمیان سوئچ کر سکتی ہے۔
 - Onboarding پہلے رن کے سیٹ اپ کو الگ رکھنے کے لیے ایک مخصوص سیشن استعمال کرتا ہے۔
 
 ## Security surface

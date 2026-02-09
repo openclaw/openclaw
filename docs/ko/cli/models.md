@@ -4,13 +4,6 @@ read_when:
   - 기본 모델을 변경하거나 프로바이더 인증 상태를 확인하려는 경우
   - 사용 가능한 모델/프로바이더를 스캔하고 인증 프로필을 디버그하려는 경우
 title: "models"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:24Z
 ---
 
 # `openclaw models`

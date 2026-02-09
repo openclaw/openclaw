@@ -4,20 +4,13 @@ read_when:
   - Opsætning af Mattermost
   - Fejlfinding af Mattermost-routing
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:53Z
 ---
 
 # Mattermost (plugin)
 
-Status: understøttet via plugin (bot-token + WebSocket-hændelser). Kanaler, grupper og DMs er understøttet.
-Mattermost er en selvhostbar team-messagingplatform; se det officielle site på
-[mattermost.com](https://mattermost.com) for produktdetaljer og downloads.
+Status: understøttet via plugin (bot token + WebSocket events). Kabelkanaler, grupper og DM'er understøttes.
+Mattermost er en selv-hostable team messaging platform; se den officielle hjemmeside på
+[mattermost.com](https://mattermost.com) for produktoplysninger og downloads.
 
 ## Plugin påkrævet
 
@@ -44,7 +37,7 @@ Detaljer: [Plugins](/tools/plugin)
 
 1. Installér Mattermost-pluginet.
 2. Opret en Mattermost-botkonto og kopiér **bot-token**.
-3. Kopiér Mattermost **base-URL** (f.eks. `https://chat.example.com`).
+3. Kopier den mest betydningsfulde **base-URL** (f.eks. `https://chat.example.com`).
 4. Konfigurér OpenClaw og start gateway.
 
 Minimal konfiguration:
@@ -69,11 +62,11 @@ Sæt disse på gateway-værten, hvis du foretrækker miljøvariabler:
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-Miljøvariabler gælder kun for **standard**kontoen (`default`). Andre konti skal bruge konfigurationsværdier.
+Env vars gælder kun for **default** kontoen (`default`). Andre konti skal bruge konfigurationsværdier.
 
 ## Chattilstande
 
-Mattermost svarer automatisk på DMs. Kanaladfærd styres af `chatmode`:
+Mattermost reagerer automatisk på DM'er. Kanal adfærd styres af `chatmode`:
 
 - `oncall` (standard): svar kun ved @omtale i kanaler.
 - `onmessage`: svar på hver kanalbesked.

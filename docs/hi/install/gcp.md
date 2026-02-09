@@ -5,13 +5,6 @@ read_when:
   - आप अपनी स्वयं की VM पर प्रोडक्शन-ग्रेड, हमेशा-चालू Gateway चाहते हैं
   - आप persistence, binaries और restart व्यवहार पर पूर्ण नियंत्रण चाहते हैं
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:35Z
 ---
 
 # GCP Compute Engine पर OpenClaw (Docker, प्रोडक्शन VPS गाइड)
@@ -20,8 +13,8 @@ x-i18n:
 
 Docker का उपयोग करके GCP Compute Engine VM पर एक स्थायी OpenClaw Gateway चलाना, जिसमें टिकाऊ स्टेट, इमेज में बेक किए गए binaries, और सुरक्षित restart व्यवहार हो।
 
-यदि आप “~$5-12/माह में OpenClaw 24/7” चाहते हैं, तो यह Google Cloud पर एक विश्वसनीय सेटअप है।  
-मूल्य मशीन टाइप और क्षेत्र के अनुसार बदलता है; अपने वर्कलोड के अनुसार सबसे छोटी VM चुनें और यदि OOM आए तो स्केल अप करें।
+34. यदि आप "OpenClaw 24/7 लगभग ~$5-12/महीना" चाहते हैं, तो यह Google Cloud पर एक भरोसेमंद सेटअप है।
+35. कीमत मशीन प्रकार और क्षेत्र के अनुसार बदलती है; अपने वर्कलोड के लिए सबसे छोटा VM चुनें और यदि OOM आए तो स्केल अप करें।
 
 ## हम क्या कर रहे हैं (सरल शब्दों में)?
 
@@ -37,9 +30,9 @@ Gateway तक पहुँचा जा सकता है:
 - आपके लैपटॉप से SSH पोर्ट फ़ॉरवर्डिंग के माध्यम से
 - यदि आप फ़ायरवॉलिंग और टोकन स्वयं प्रबंधित करते हैं तो सीधे पोर्ट एक्सपोज़र द्वारा
 
-यह गाइड GCP Compute Engine पर Debian का उपयोग करती है।  
-Ubuntu भी काम करता है; पैकेजों को उसी अनुसार मैप करें।  
-सामान्य Docker फ़्लो के लिए देखें: [Docker](/install/docker)।
+36. यह गाइड GCP Compute Engine पर Debian का उपयोग करती है।
+37. Ubuntu भी काम करता है; पैकेजों को उसी अनुसार मैप करें।
+38. सामान्य Docker फ़्लो के लिए, [Docker](/install/docker) देखें।
 
 ---
 
@@ -72,7 +65,7 @@ Ubuntu भी काम करता है; पैकेजों को उस
 
 ---
 
-## 1) gcloud CLI इंस्टॉल करें (या Console का उपयोग करें)
+## 1. gcloud CLI इंस्टॉल करें (या Console का उपयोग करें)
 
 **विकल्प A: gcloud CLI** (ऑटोमेशन के लिए अनुशंसित)
 
@@ -91,7 +84,7 @@ gcloud auth login
 
 ---
 
-## 2) GCP प्रोजेक्ट बनाएँ
+## 2. GCP प्रोजेक्ट बनाएँ
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) VM बनाएँ
+## 3. VM बनाएँ
 
 **Machine types:**
 
-| Type     | Specs                    | Cost            | Notes                 |
-| -------- | ------------------------ | --------------- | --------------------- |
-| e2-small | 2 vCPU, 2GB RAM          | ~$12/माह        | अनुशंसित              |
-| e2-micro | 2 vCPU (shared), 1GB RAM | फ्री टियर योग्य | लोड पर OOM हो सकता है |
+| Type     | Specs                                       | Cost                     | Notes                 |
+| -------- | ------------------------------------------- | ------------------------ | --------------------- |
+| e2-small | 2 vCPU, 2GB RAM                             | ~$12/माह | अनुशंसित              |
+| e2-micro | 2 vCPU (shared), 1GB RAM | फ्री टियर योग्य          | लोड पर OOM हो सकता है |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) VM में SSH करें
+## 4. VM में SSH करें
 
 **CLI:**
 
@@ -160,11 +153,11 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a
 
 Compute Engine डैशबोर्ड में अपनी VM के बगल में “SSH” बटन पर क्लिक करें।
 
-टिप्पणी: VM बनने के बाद SSH key propagation में 1–2 मिनट लग सकते हैं। यदि कनेक्शन अस्वीकृत हो, तो प्रतीक्षा करें और पुनः प्रयास करें।
+39. नोट: VM बनाने के बाद SSH कुंजी प्रसार में 1-2 मिनट लग सकते हैं। 40. यदि कनेक्शन अस्वीकृत हो, तो प्रतीक्षा करें और फिर से प्रयास करें।
 
 ---
 
-## 5) Docker इंस्टॉल करें (VM पर)
+## 5. Docker इंस्टॉल करें (VM पर)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) OpenClaw रिपॉज़िटरी क्लोन करें
+## 6. OpenClaw रिपॉज़िटरी क्लोन करें
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,10 +198,10 @@ cd openclaw
 
 ---
 
-## 7) स्थायी होस्ट डायरेक्टरी बनाएँ
+## 7. स्थायी होस्ट डायरेक्टरी बनाएँ
 
-Docker कंटेनर अस्थायी होते हैं।  
-सभी दीर्घकालिक स्टेट होस्ट पर रहना चाहिए।
+41. Docker कंटेनर ephemeral होते हैं।
+42. सभी दीर्घकालिक स्टेट होस्ट पर रहनी चाहिए।
 
 ```bash
 mkdir -p ~/.openclaw
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) पर्यावरण चर कॉन्फ़िगर करें
+## 8. पर्यावरण चर कॉन्फ़िगर करें
 
 रिपॉज़िटरी रूट में `.env` बनाएँ।
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose कॉन्फ़िगरेशन
+## 9. Docker Compose कॉन्फ़िगरेशन
 
 `docker-compose.yml` बनाएँ या अपडेट करें।
 
@@ -291,10 +284,10 @@ services:
 
 ---
 
-## 10) आवश्यक binaries को इमेज में बेक करें (महत्वपूर्ण)
+## 10. आवश्यक binaries को इमेज में बेक करें (महत्वपूर्ण)
 
-चलते हुए कंटेनर के भीतर binaries इंस्टॉल करना एक जाल है।  
-रनटाइम पर इंस्टॉल की गई कोई भी चीज़ restart पर खो जाएगी।
+43. चल रहे कंटेनर के अंदर बाइनरीज़ इंस्टॉल करना एक जाल है।
+44. रनटाइम पर इंस्टॉल की गई कोई भी चीज़ रीस्टार्ट पर खो जाएगी।
 
 Skills द्वारा आवश्यक सभी बाहरी binaries को इमेज बिल्ड समय पर इंस्टॉल करना चाहिए।
 
@@ -304,8 +297,8 @@ Skills द्वारा आवश्यक सभी बाहरी binaries 
 - Google Places के लिए `goplaces`
 - WhatsApp के लिए `wacli`
 
-ये उदाहरण हैं, पूर्ण सूची नहीं।  
-आप इसी पैटर्न का उपयोग करके जितने चाहें binaries इंस्टॉल कर सकते हैं।
+45. ये उदाहरण हैं, पूरी सूची नहीं।
+46. आप उसी पैटर्न का उपयोग करके जितनी चाहें उतनी बाइनरीज़ इंस्टॉल कर सकते हैं।
 
 यदि आप बाद में नए Skills जोड़ते हैं जिनके लिए अतिरिक्त binaries चाहिए, तो आपको:
 
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) बिल्ड और लॉन्च
+## 11. बिल्ड और लॉन्च
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 12) Gateway सत्यापित करें
+## 12. Gateway सत्यापित करें
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ docker compose logs -f openclaw-gateway
 
 ---
 
-## 13) अपने लैपटॉप से एक्सेस करें
+## 13. अपने लैपटॉप से एक्सेस करें
 
 Gateway पोर्ट फ़ॉरवर्ड करने के लिए SSH टनल बनाएँ:
 
@@ -411,8 +404,8 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:1
 
 ## क्या कहाँ persist होता है (source of truth)
 
-OpenClaw Docker में चलता है, लेकिन Docker source of truth नहीं है।  
-सभी दीर्घकालिक स्टेट को restarts, rebuilds और reboots के बाद भी सुरक्षित रहना चाहिए।
+47. OpenClaw Docker में चलता है, लेकिन Docker स्रोत-of-truth नहीं है।
+48. सभी दीर्घकालिक स्टेट को रीस्टार्ट, रीबिल्ड और रीबूट के बाद भी सुरक्षित रहना चाहिए।
 
 | Component           | Location                          | Persistence mechanism | Notes                         |
 | ------------------- | --------------------------------- | --------------------- | ----------------------------- |
@@ -446,7 +439,7 @@ docker compose up -d
 
 **SSH कनेक्शन अस्वीकृत**
 
-VM बनने के बाद SSH key propagation में 1–2 मिनट लग सकते हैं। प्रतीक्षा करें और पुनः प्रयास करें।
+49. VM बनाने के बाद SSH कुंजी प्रसार में 1-2 मिनट लग सकते हैं। 50. प्रतीक्षा करें और फिर से प्रयास करें।
 
 **OS Login समस्याएँ**
 
@@ -498,7 +491,7 @@ gcloud compute instances start openclaw-gateway --zone=us-central1-a
      --role="roles/compute.instanceAdmin.v1"
    ```
 
-ऑटोमेशन के लिए Owner भूमिका से बचें। न्यूनतम विशेषाधिकार के सिद्धांत का पालन करें।
+ऑटोमेशन के लिए Owner भूमिका का उपयोग करने से बचें। न्यूनतम विशेषाधिकार के सिद्धांत का उपयोग करें।
 
 IAM भूमिकाओं के विवरण के लिए देखें: [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google.com/iam/docs/understanding-roles)
 

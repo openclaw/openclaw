@@ -4,13 +4,6 @@ read_when:
   - Вызов инструментов без запуска полного хода агента
   - Построение автоматизаций, которым требуется применение политик инструментов
 title: "API вызова инструментов"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:35Z
 ---
 
 # Вызов инструментов (HTTP)

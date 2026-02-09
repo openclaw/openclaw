@@ -3,13 +3,6 @@ summary: "macOS-appstroom voor het bedienen van een externe OpenClaw-gateway via
 read_when:
   - Het instellen of debuggen van externe Mac-bediening
 title: "Externe bediening"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:38Z
 ---
 
 # Externe OpenClaw (macOS ⇄ externe host)
@@ -55,7 +48,7 @@ De externe modus ondersteunt twee transports:
 - **Direct (ws/wss)**: Web Chat verbindt rechtstreeks met de geconfigureerde gateway-URL.
 - Er is geen aparte WebChat HTTP-server meer.
 
-## Rechten
+## Permissions
 
 - De externe host heeft dezelfde TCC-goedkeuringen nodig als lokaal (Automatisering, Toegankelijkheid, Schermopname, Microfoon, Spraakherkenning, Meldingen). Voer onboarding op die machine uit om ze eenmalig te verlenen.
 - Nodes adverteren hun rechtenstatus via `node.list` / `node.describe` zodat agents weten wat beschikbaar is.
@@ -79,7 +72,7 @@ De externe modus ondersteunt twee transports:
 - **Node-IP toont 127.0.0.1**: verwacht bij de SSH-tunnel. Zet **Transport** op **Direct (ws/wss)** als je wilt dat de gateway het echte client-IP ziet.
 - **Voice Wake**: triggerzinnen worden in de externe modus automatisch doorgestuurd; er is geen aparte forwarder nodig.
 
-## Meldingsgeluiden
+## Notificatie geluiden
 
 Kies per melding geluiden vanuit scripts met `openclaw` en `node.invoke`, bijvoorbeeld:
 

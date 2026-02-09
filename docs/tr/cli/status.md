@@ -4,13 +4,6 @@ read_when:
   - Kanal sağlığının ve son oturum alıcılarının hızlı bir teşhisini istediğinizde
   - Hata ayıklama için yapıştırılabilir “tümü” durum çıktısı istediğinizde
 title: "durum"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:04Z
 ---
 
 # `openclaw status`

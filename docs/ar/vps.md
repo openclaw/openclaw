@@ -1,16 +1,9 @@
 ---
 summary: "مركز استضافة VPS لـ OpenClaw (Oracle/Fly/Hetzner/GCP/exe.dev)"
 read_when:
-  - "تريد تشغيل Gateway في السحابة"
-  - "تحتاج إلى خريطة سريعة لأدلة VPS/الاستضافة"
+  - تريد تشغيل Gateway في السحابة
+  - تحتاج إلى خريطة سريعة لأدلة VPS/الاستضافة
 title: "استضافة VPS"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:49Z
 ---
 
 # استضافة VPS

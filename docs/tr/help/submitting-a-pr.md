@@ -1,13 +1,6 @@
 ---
 summary: "Yüksek sinyalli bir PR nasıl gönderilir"
 title: "PR Gönderme"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:21Z
 ---
 
 İyi PR’lar incelenmesi kolaydır: inceleyenler amacı hızlıca anlamalı, davranışı doğrulamalı ve değişiklikleri güvenle birleştirebilmelidir. Bu kılavuz, insan ve LLM incelemesi için özlü, yüksek sinyalli gönderimleri kapsar.
@@ -35,7 +28,7 @@ x-i18n:
 - `pnpm test`
 - Protokol değişiklikleri: `pnpm protocol:check`
 
-## Kademeli açıklama
+## 46. Aşamalı açıklama
 
 - Üst: özet/amaç
 - Sonraki: değişiklikler/riskler

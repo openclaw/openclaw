@@ -5,13 +5,6 @@ read_when:
   - Usted está cambiando el saneamiento de transcripciones o la lógica de reparación de llamadas a herramientas
   - Usted está investigando desajustes de id de llamadas a herramientas entre proveedores
 title: "Higiene de transcripciones"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:41Z
 ---
 
 # Higiene de transcripciones (Correcciones por proveedor)

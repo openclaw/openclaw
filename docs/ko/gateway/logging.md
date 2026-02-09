@@ -4,13 +4,6 @@ read_when:
   - 로깅 출력 또는 형식을 변경할 때
   - CLI 또는 게이트웨이 출력을 디버깅할 때
 title: "로깅"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:10Z
 ---
 
 # 로깅
@@ -60,8 +53,7 @@ stdout/stderr 로의 출력은 그대로 유지합니다.
 ## 도구 요약 마스킹
 
 상세한 도구 요약 (예: `🛠️ Exec: ...`)은
-콘솔 스트림에 도달하기 전에 민감한 토큰을 마스킹할 수 있습니다.
-이는 **도구 전용**이며 파일 로그는 변경하지 않습니다.
+콘솔 스트림에 도달하기 전에 민감한 토큰을 마스킹할 수 있습니다. 이는 **도구 전용**이며 파일 로그는 변경하지 않습니다.
 
 - `logging.redactSensitive`: `off` | `tools` (기본값: `tools`)
 - `logging.redactPatterns`: 정규식 문자열 배열 (기본값을 재정의)

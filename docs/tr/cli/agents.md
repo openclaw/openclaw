@@ -2,14 +2,7 @@
 summary: "`openclaw agents` için CLI referansı (listeleme/ekleme/silme/kimlik ayarlama)"
 read_when:
   - Birden fazla yalıtılmış ajan (çalışma alanları + yönlendirme + kimlik doğrulama) istediğinizde
-title: "ajanlar"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
+title: "cli/agents.md"
 ---
 
 # `openclaw agents`

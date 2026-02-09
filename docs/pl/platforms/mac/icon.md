@@ -3,13 +3,6 @@ summary: "Stany i animacje ikony paska menu dla OpenClaw na macOS"
 read_when:
   - Zmienianie zachowania ikony paska menu
 title: "Ikona paska menu"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:27Z
 ---
 
 # Stany ikony paska menu
@@ -30,7 +23,7 @@ Kształty i rozmiary
 
 - Ikona bazowa rysowana w `CritterIconRenderer.makeIcon(blink:legWiggle:earWiggle:earScale:earHoles:)`.
 - Skala uszu domyślnie wynosi `1.0`; wzmocnienie głosowe ustawia `earScale=1.9` i przełącza `earHoles=true` bez zmiany całkowitej ramki (szablon obrazu 18×18 pt renderowany do magazynu Retina 36×36 px).
-- „Scurry” wykorzystuje poruszanie nóg do ~1,0 z niewielkim poziomym drganiem; jest addytywne względem istniejącego poruszenia bezczynnego.
+- Scurry używa przełącznika nogi do ~1.0 z niewielkim gwiazdką poziomą; jest to dodatek do dowolnego istniejącego przełącznika bezczynności.
 
 Uwagi dotyczące zachowania
 

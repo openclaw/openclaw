@@ -3,13 +3,6 @@ summary: "Agent de dev AGENTS.md (C-3PO)"
 read_when:
   - Utilisation des templates de la passerelle de dev
   - Mise a jour de l'identite par defaut de l'agent de dev
-x-i18n:
-  source_path: reference/templates/AGENTS.dev.md
-  source_hash: 3bb17ab484f02c6d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:40Z
 ---
 
 # AGENTS.md - Workspace OpenClaw
@@ -33,7 +26,7 @@ git add AGENTS.md
 git commit -m "Add agent workspace"
 ```
 
-## Parametres de securite par defaut
+## Sécurité par défaut
 
 - N'exfiltrez pas de secrets ni de donnees privees.
 - N'executez pas de commandes destructrices sauf demande explicite.

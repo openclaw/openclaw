@@ -4,13 +4,6 @@ read_when:
   - Plugins/extensies toevoegen of wijzigen
   - Plugin-installatie- of laadregels documenteren
 title: "Plugins"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:20Z
 ---
 
 # Plugins (Extensies)
@@ -211,7 +204,7 @@ wanneer deze niet overeenkomt met de geconfigureerde id.
 }
 ```
 
-Velden:
+Velden
 
 - `enabled`: hoofdswitch (standaard: true)
 - `allow`: toegestane lijst (optioneel)
@@ -245,8 +238,7 @@ Sommige plugincategorieën zijn **exclusief** (slechts één tegelijk actief). G
 }
 ```
 
-Als meerdere plugins `kind: "memory"` declareren, wordt alleen de geselecteerde geladen.
-De andere worden uitgeschakeld met diagnostische meldingen.
+Als meerdere plugins `kind: "memory"` declareren, wordt alleen de geselecteerde geladen. De andere worden uitgeschakeld met diagnostische meldingen.
 
 ## Control UI (schema + labels)
 

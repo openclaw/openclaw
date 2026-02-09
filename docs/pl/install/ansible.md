@@ -5,13 +5,6 @@ read_when:
   - Potrzebujesz konfiguracji izolowanej zaporą z dostępem przez VPN
   - Wdrażasz na zdalnych serwerach Debian/Ubuntu
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:24Z
 ---
 
 # Instalacja Ansible
@@ -93,7 +86,7 @@ openclaw channels login
 
 ## Architektura bezpieczeństwa
 
-### Obrona 4‑warstwowa
+### 4-Warstwowa Obrona
 
 1. **Zapora (UFW)**: Publicznie wystawione tylko SSH (22) + Tailscale (41641/udp)
 2. **VPN (Tailscale)**: Gateway dostępny wyłącznie przez siatkę VPN

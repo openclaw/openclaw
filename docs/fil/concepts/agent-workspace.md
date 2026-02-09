@@ -4,28 +4,20 @@ read_when:
   - Kailangan mong ipaliwanag ang agent workspace o ang layout ng mga file nito
   - Gusto mong mag-back up o mag-migrate ng agent workspace
 title: "Agent Workspace"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Agent workspace
 
 Ang workspace ang tahanan ng agent. Ito ang nag-iisang working directory na ginagamit para sa
-mga file tool at para sa workspace context. Panatilihin itong pribado at ituring bilang memorya.
+file tools at para sa workspace context. Panatilihin itong pribado at ituring ito bilang memorya.
 
 Hiwalay ito sa `~/.openclaw/`, na naglalaman ng config, mga credential, at mga session.
 
-**Mahalaga:** ang workspace ang **default cwd**, hindi isang hard sandbox. Nireresolba ng mga tool
-ang mga relative path laban sa workspace, ngunit ang mga absolute path ay maaari pa ring
-umabot sa ibang bahagi ng host maliban kung naka-enable ang sandboxing. Kung kailangan mo ng
-isolation, gamitin ang [`agents.defaults.sandbox`](/gateway/sandboxing) (at/o per‑agent sandbox config).
-Kapag naka-enable ang sandboxing at ang `workspaceAccess` ay hindi `"rw"`, ang mga tool ay
-nag-ooperate sa loob ng sandbox workspace sa ilalim ng `~/.openclaw/sandboxes`, hindi sa iyong host workspace.
+**Mahalaga:** ang workspace ang **default cwd**, hindi isang mahigpit na sandbox. Nire-resolve ng mga tool
+ang mga relative path laban sa workspace, ngunit ang mga absolute path ay maaari pa ring umabot
+sa ibang bahagi ng host maliban kung naka-enable ang sandboxing. Kung kailangan mo ng isolation, gamitin ang
+[`agents.defaults.sandbox`](/gateway/sandboxing) (at/o per‑agent sandbox config).
+Kapag naka-enable ang sandboxing at ang `workspaceAccess` ay hindi \`
 
 ## Default na lokasyon
 
@@ -53,14 +45,14 @@ Kung ikaw na mismo ang namamahala sa mga file ng workspace, maaari mong i-disabl
 
 ## Mga dagdag na folder ng workspace
 
-Maaaring nakalikha ang mga mas lumang install ng `~/openclaw`. Ang pagpapanatili ng maraming
-workspace directory ay maaaring magdulot ng nakalilitong auth o state drift, dahil iisa lang
-ang aktibong workspace sa anumang oras.
+rw", ang mga tool ay gumagana
+sa loob ng isang sandbox workspace sa ilalim ng `~/.openclaw/sandboxes`, hindi sa iyong host workspace. Maaaring nakalikha ang mga mas lumang install ng `~/openclaw`.
 
-**Rekomendasyon:** panatilihin ang iisang aktibong workspace. Kung hindi mo na ginagamit ang
+Ang pagpapanatili ng maraming workspace
+directory ay maaaring magdulot ng nakalilitong auth o state drift, dahil iisa lamang
+ang aktibong workspace sa isang pagkakataon. **Rekomendasyon:** panatilihin ang iisang aktibong workspace.
+Kung hindi mo na ginagamit ang
 mga dagdag na folder, i-archive o ilipat ang mga ito sa Trash (halimbawa `trash ~/openclaw`).
-Kung sadyang pinananatili mo ang maraming workspace, tiyaking ang
-`agents.defaults.workspace` ay tumuturo sa aktibo.
 
 Nagbibigay ng babala ang `openclaw doctor` kapag may nadetektang dagdag na mga workspace directory.
 
@@ -119,11 +111,11 @@ Tingnan ang [Memory](/concepts/memory) para sa workflow at awtomatikong memory f
 - `canvas/` (opsyonal)
   - Mga Canvas UI file para sa mga node display (halimbawa `canvas/index.html`).
 
-Kung may nawawalang bootstrap file, nag-i-inject ang OpenClaw ng marker na “missing file” sa
-session at nagpapatuloy. Ang malalaking bootstrap file ay tina-truncate kapag ini-inject;
-i-adjust ang limit gamit ang `agents.defaults.bootstrapMaxChars` (default: 20000).
-Maaaring muling likhain ng `openclaw setup` ang mga nawawalang default nang hindi
-nino-overwrite ang mga umiiral na file.
+Kung sinasadya mong panatilihin ang maraming workspace, tiyaking
+ang `agents.defaults.workspace` ay tumuturo sa aktibo. Kung may nawawalang anumang bootstrap file, nag-iinject ang OpenClaw ng isang marker na "missing file" sa
+session at nagpapatuloy.
+Ang malalaking bootstrap file ay pinuputol kapag ini-inject;
+i-adjust ang limitasyon gamit ang `agents.defaults.bootstrapMaxChars` (default: 20000).
 
 ## Ano ang HINDI kasama sa workspace
 
@@ -139,16 +131,16 @@ panatilihing wala sa version control.
 
 ## Git backup (inirerekomenda, pribado)
 
-Ituring ang workspace bilang pribadong memorya. Ilagay ito sa isang **pribadong** git repo upang
-may backup at madaling ma-recover.
+Maaaring muling likhain ng `openclaw setup` ang mga nawawalang default nang hindi pinapatungan ang mga umiiral na
+file. Ituring ang workspace bilang pribadong memorya.
 
 Patakbuhin ang mga hakbang na ito sa machine kung saan tumatakbo ang Gateway (doon nakatira ang
 workspace).
 
-### 1) I-initialize ang repo
+### 1. I-initialize ang repo
 
-Kung naka-install ang git, ang mga brand-new na workspace ay awtomatikong ini-initialize. Kung
-hindi pa repo ang workspace na ito, patakbuhin:
+Ilagay ito sa isang **pribadong** git repo upang ito ay
+ma-back up at marekober. Kung naka-install ang git, ang mga bagong-bagong workspace ay awtomatikong ini-initialize.
 
 ```bash
 cd ~/.openclaw/workspace
@@ -157,7 +149,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Magdagdag ng pribadong remote (beginner-friendly na mga opsyon)
+### 2. Magdagdag ng pribadong remote (beginner-friendly na mga opsyon)
 
 Opsyon A: GitHub web UI
 
@@ -192,7 +184,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Mga tuloy-tuloy na update
+### 3. Mga tuloy-tuloy na update
 
 ```bash
 git status
@@ -233,7 +225,7 @@ Iminungkahing `.gitignore` starter:
 
 ## Mga advanced na tala
 
-- Maaaring gumamit ang multi-agent routing ng magkakaibang workspace bawat agent. Tingnan ang
-  [Channel routing](/channels/channel-routing) para sa routing configuration.
+- Kung ang
+  workspace na ito ay hindi pa isang repo, patakbuhin: Maaaring gumamit ang multi-agent routing ng magkakaibang workspace kada agent.
 - Kung naka-enable ang `agents.defaults.sandbox`, ang mga non-main na session ay maaaring gumamit ng per-session sandbox
   workspace sa ilalim ng `agents.defaults.sandbox.workspaceRoot`.

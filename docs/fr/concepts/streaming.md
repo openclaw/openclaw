@@ -5,13 +5,6 @@ read_when:
   - Modifier le streaming par blocs ou le comportement de découpage par canal
   - Déboguer les réponses par blocs dupliquées/prématurées ou le streaming de brouillon
 title: "Streaming et découpage"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:34Z
 ---
 
 # Streaming + découpage
@@ -99,7 +92,7 @@ plus naturelles.
 
 ## « Streamer les morceaux ou tout à la fin »
 
-Correspond à :
+Ceci correspond à :
 
 - **Streamer les morceaux :** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (émettre au fil de l’eau). Les canaux non Telegram nécessitent aussi `*.blockStreaming: true`.
 - **Tout streamer à la fin :** `blockStreamingBreak: "message_end"` (vidange unique, éventuellement en plusieurs morceaux si très long).

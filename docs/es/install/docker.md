@@ -4,13 +4,6 @@ read_when:
   - Quiere un Gateway en contenedores en lugar de instalaciones locales
   - Está validando el flujo con Docker
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:10Z
 ---
 
 # Docker (opcional)
@@ -53,7 +46,7 @@ Este script:
 - inicia el Gateway mediante Docker Compose
 - genera un token del Gateway y lo escribe en `.env`
 
-Variables de entorno opcionales:
+Variables de env opcionales:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — instala paquetes apt adicionales durante la construcción
 - `OPENCLAW_EXTRA_MOUNTS` — agrega montajes bind adicionales del host
@@ -173,8 +166,7 @@ Notas:
 
 ### Contenedor avanzado / con todas las funciones (opcional)
 
-La imagen Docker predeterminada prioriza la **seguridad** y se ejecuta como el usuario no root `node`.
-Esto mantiene pequeña la superficie de ataque, pero significa:
+La imagen Docker predeterminada prioriza la **seguridad** y se ejecuta como el usuario no root `node`. Esto mantiene pequeña la superficie de ataque, pero significa:
 
 - sin instalaciones de paquetes del sistema en tiempo de ejecución
 - sin Homebrew por defecto
@@ -290,7 +282,7 @@ capturar una devolución de llamada en `http://127.0.0.1:1455/auth/callback`. En
 configuraciones sin interfaz, esa devolución de llamada puede mostrar un error del navegador. Copie la URL completa de redirección
 a la que llega y péguela de nuevo en el asistente para finalizar la autenticación.
 
-### Verificación de estado
+### Revisión de salud
 
 ```bash
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"

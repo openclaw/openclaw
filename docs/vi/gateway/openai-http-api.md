@@ -3,20 +3,13 @@ summary: "Mở một endpoint HTTP /v1/chat/completions tương thích OpenAI t�
 read_when:
   - Tích hợp các công cụ mong đợi OpenAI Chat Completions
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:59Z
 ---
 
 # OpenAI Chat Completions (HTTP)
 
 Gateway của OpenClaw có thể phục vụ một endpoint Chat Completions nhỏ, tương thích OpenAI.
 
-Endpoint này **bị tắt theo mặc định**. Trước tiên hãy bật nó trong cấu hình.
+Endpoint này **bị tắt theo mặc định**. Hãy bật nó trong cấu hình trước.
 
 - `POST /v1/chat/completions`
 - Cùng cổng với Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`

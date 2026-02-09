@@ -4,13 +4,6 @@ read_when:
   - Pag-wire ng Gmail inbox triggers sa OpenClaw
   - Pag-setup ng Pub/Sub push para sa agent wake
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -22,9 +15,9 @@ Layunin: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webh
 - `gcloud` naka-install at naka-log in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) naka-install at may awtorisasyon para sa Gmail account ([gogcli.sh](https://gogcli.sh/)).
 - Naka-enable ang OpenClaw hooks (tingnan ang [Webhooks](/automation/webhook)).
-- `tailscale` naka-log in ([tailscale.com](https://tailscale.com/)). Ang suportadong setup ay gumagamit ng Tailscale Funnel para sa public HTTPS endpoint.
-  Maaari ring gumana ang ibang tunnel services, pero DIY/unsupported ang mga ito at nangangailangan ng manual na wiring.
-  Sa ngayon, Tailscale ang sinusuportahan namin.
+- `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
+  Other tunnel services can work, but are DIY/unsupported and require manual wiring.
+  Right now, Tailscale is what we support.
 
 Halimbawang hook config (i-enable ang Gmail preset mapping):
 
@@ -66,11 +59,11 @@ na nagse-set ng `deliver` + opsyonal na `channel`/`to`:
 }
 ```
 
-Kung gusto mo ng fixed na channel, i-set ang `channel` + `to`. Kung hindi, ginagamit ng `channel: "last"`
-ang huling delivery route (nagfa-fallback sa WhatsApp).
+If you want a fixed channel, set `channel` + `to`. Otherwise `channel: "last"`
+uses the last delivery route (falls back to WhatsApp).
 
-Para pilitin ang mas murang model para sa Gmail runs, i-set ang `model` sa mapping
-(`provider/model` o alias). Kung ipinatutupad mo ang `agents.defaults.models`, isama ito roon.
+To force a cheaper model for Gmail runs, set `model` in the mapping
+(`provider/model` or alias). If you enforce `agents.defaults.models`, include it there.
 
 Para magtakda ng default na model at thinking level na partikular para sa Gmail hooks, idagdag
 ang `hooks.gmail.model` / `hooks.gmail.thinking` sa iyong config:
@@ -91,8 +84,8 @@ Mga tala:
 - Ang per-hook `model`/`thinking` sa mapping ay nag-o-override pa rin sa mga default na ito.
 - Fallback order: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primary (auth/rate-limit/timeouts).
 - Kung naka-set ang `agents.defaults.models`, dapat nasa allowlist ang Gmail model.
-- Ang content ng Gmail hook ay naka-wrap sa external-content safety boundaries bilang default.
-  Para i-disable (delikado), i-set ang `hooks.gmail.allowUnsafeExternalContent: true`.
+- Gmail hook content is wrapped with external-content safety boundaries by default.
+  To disable (dangerous), set `hooks.gmail.allowUnsafeExternalContent: true`.
 
 Para mas i-customize pa ang payload handling, idagdag ang `hooks.mappings` o isang JS/TS transform module
 sa ilalim ng `hooks.transformsDir` (tingnan ang [Webhooks](/automation/webhook)).
@@ -112,15 +105,15 @@ Mga default:
 - Nagsusulat ng `hooks.gmail` config para sa `openclaw webhooks gmail run`.
 - Ina-enable ang Gmail hook preset (`hooks.presets: ["gmail"]`).
 
-Path note: kapag naka-enable ang `tailscale.mode`, awtomatikong sine-set ng OpenClaw ang
-`hooks.gmail.serve.path` sa `/` at pinananatili ang public path sa
-`hooks.gmail.tailscale.path` (default `/gmail-pubsub`) dahil ang Tailscale
-ay nagtatanggal ng set-path prefix bago mag-proxy.
-Kung kailangan mong matanggap ng backend ang prefixed path, i-set ang
-`hooks.gmail.tailscale.target` (o `--tailscale-target`) sa isang buong URL gaya ng
-`http://127.0.0.1:8788/gmail-pubsub` at itugma ang `hooks.gmail.serve.path`.
+Path note: when `tailscale.mode` is enabled, OpenClaw automatically sets
+`hooks.gmail.serve.path` to `/` and keeps the public path at
+`hooks.gmail.tailscale.path` (default `/gmail-pubsub`) because Tailscale
+strips the set-path prefix before proxying.
+If you need the backend to receive the prefixed path, set
+`hooks.gmail.tailscale.target` (or `--tailscale-target`) to a full URL like
+`http://127.0.0.1:8788/gmail-pubsub` and match `hooks.gmail.serve.path`.
 
-Gusto mo ng custom endpoint? Gamitin ang `--push-endpoint <url>` o `--tailscale off`.
+Want a custom endpoint? Use `--push-endpoint <url>` or `--tailscale off`.
 
 Platform note: sa macOS ini-install ng wizard ang `gcloud`, `gogcli`, at `tailscale`
 sa pamamagitan ng Homebrew; sa Linux, i-install muna ang mga ito nang mano-mano.

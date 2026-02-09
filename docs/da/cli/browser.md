@@ -5,13 +5,6 @@ read_when:
   - Du vil styre en browser, der kører på en anden maskine via en node-vært
   - Du vil bruge Chrome-udvidelses-relayet (tilknyt/frakobl via værktøjslinjeknap)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:59Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## Profiler
 
-Profiler er navngivne browser-routingkonfigurationer. I praksis:
+Profiler hedder browser routing configs. I praksis:
 
 - `openclaw`: starter/tilknytter til en dedikeret OpenClaw-administreret Chrome-instans (isoleret brugerdatamappe).
 - `chrome`: styrer dine eksisterende Chrome-faner via Chrome-udvidelses-relayet.
@@ -107,7 +100,7 @@ Fuld guide: [Chrome extension](/tools/chrome-extension)
 
 ## Fjernbrowserkontrol (node-vært-proxy)
 
-Hvis Gateway kører på en anden maskine end browseren, skal du køre en **node-vært** på maskinen, der har Chrome/Brave/Edge/Chromium. Gateway vil proxy browserhandlinger til den node (ingen separat browser-kontrolserver kræves).
+Hvis Gateway kører på en anden maskine end browseren, skal du køre en **nodevært** på den maskine, der har Chrome/Brave/Edge/Chromium. Gateway vil proxy browser handlinger til denne node (ingen separat browser kontrol server påkrævet).
 
 Brug `gateway.nodes.browser.mode` til at styre automatisk routing og `gateway.nodes.browser.node` til at fastgøre en specifik node, hvis flere er tilsluttet.
 

@@ -4,13 +4,6 @@ read_when:
   - Al agregar o modificar la captura de cámara en nodos iOS o macOS
   - Al ampliar flujos de trabajo de archivos temporales MEDIA accesibles por el agente
 title: "Captura de cámara"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:01Z
 ---
 
 # Captura de cámara (agente)
@@ -84,7 +77,7 @@ openclaw nodes camera clip --node <id> --no-audio
 Notas:
 
 - `nodes camera snap` se establece de forma predeterminada en **ambas** orientaciones para dar al agente ambas vistas.
-- Los archivos de salida son temporales (en el directorio temporal del SO) a menos que usted cree su propio contenedor.
+- Los archivos de salida son temporales (en el directorio temporal del sistema operativo) a menos que construya su propio envoltorio.
 
 ## Nodo Android
 

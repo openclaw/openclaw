@@ -5,13 +5,6 @@ read_when:
   - استكشاف أخطاء اقتران webhook وإصلاحها
   - تهيئة iMessage على macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:22Z
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ x-i18n:
 ## البدء السريع
 
 1. ثبّت خادم BlueBubbles على جهاز Mac الخاص بك (اتبع التعليمات على [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. في تهيئة BlueBubbles، فعّل واجهة برمجة التطبيقات على الويب وحدّد كلمة مرور.
+
 3. شغّل `openclaw onboard` واختر BlueBubbles، أو هيّئه يدويًا:
 
    ```json5
@@ -49,13 +44,14 @@ x-i18n:
    ```
 
 4. وجّه webhooks الخاصة بـ BlueBubbles إلى Gateway الخاص بك (مثال: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. ابدأ تشغيل Gateway؛ سيُسجِّل معالج webhook ويبدأ الاقتران.
 
 ## إبقاء Messages.app نشطًا (بيئات VM / دون واجهة)
 
 قد تنتهي بعض إعدادات macOS داخل آلات افتراضية أو إعدادات دائمة التشغيل إلى دخول Messages.app في حالة «خمول» (تتوقف الأحداث الواردة حتى فتح التطبيق/إحضاره للمقدمة). حل بسيط هو **تنبيه Messages كل 5 دقائق** باستخدام AppleScript + LaunchAgent.
 
-### 1) حفظ AppleScript
+### 1. حفظ AppleScript
 
 احفظ هذا باسم:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) تثبيت LaunchAgent
+### 2. تثبيت LaunchAgent
 
 احفظ هذا باسم:
 
@@ -125,7 +121,7 @@ launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null
 launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 ```
 
-## التهيئة الأولية
+## Onboarding
 
 يتوفر BlueBubbles في معالج الإعداد التفاعلي:
 
@@ -149,7 +145,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 
 ## التحكم بالوصول (الرسائل الخاصة + المجموعات)
 
-الرسائل الخاصة (DMs):
+DMs:
 
 - الافتراضي: `channels.bluebubbles.dmPolicy = "pairing"`.
 - يتلقى المرسلون غير المعروفين رمز اقتران؛ وتُتجاهل الرسائل حتى الموافقة (تنتهي صلاحية الرموز بعد ساعة واحدة).
@@ -163,7 +159,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 - `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (الافتراضي: `allowlist`).
 - يتحكم `channels.bluebubbles.groupAllowFrom` بمن يمكنه التحفيز داخل المجموعات عندما يكون `allowlist` مُعيّنًا.
 
-### تقييد الذِكر (المجموعات)
+### ذكر بوابة (مجموعات)
 
 يدعم BlueBubbles تقييد الذِكر لدردشات المجموعات، بما يطابق سلوك iMessage/WhatsApp:
 
@@ -251,7 +247,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 - **sendAttachment**: إرسال وسائط/ملفات (`to`، `buffer`، `filename`، `asVoice`)
   - المذكرات الصوتية: عيّن `asVoice: true` مع صوت **MP3** أو **CAF** للإرسال كرسالة صوتية في iMessage. يقوم BlueBubbles بتحويل MP3 → CAF عند إرسال المذكرات الصوتية.
 
-### معرّفات الرسائل (قصير مقابل كامل)
+### معرفات الرسالة (قصيرة مقابل كاملة)
 
 قد يعرض OpenClaw معرّفات رسائل _قصيرة_ (مثل `1`، `2`) لتقليل استهلاك الرموز.
 

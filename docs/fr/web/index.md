@@ -4,13 +4,6 @@ read_when:
   - Vous voulez acceder a la Gateway via Tailscale
   - Vous voulez l’interface de controle dans le navigateur et l’edition de la configuration
 title: "Web"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:08Z
 ---
 
 # Web (Gateway)
@@ -104,7 +97,7 @@ Ouvrez :
 
 - L’authentification de la Gateway est requise par defaut (jeton/mot de passe ou en-tetes d’identite Tailscale).
 - Les liaisons non-loopback **necessitent** toujours un jeton/mot de passe partage (`gateway.auth` ou variable d’environnement).
-- L’assistant genere un jeton de gateway par defaut (meme sur loopback).
+- L'assistant génère un jeton de passerelle par défaut (même sur le rebouclage).
 - L’interface envoie `connect.params.auth.token` ou `connect.params.auth.password`.
 - L’interface de controle envoie des en-tetes anti-clickjacking et n’accepte que des connexions WebSocket
   navigateur de meme origine, sauf si `gateway.controlUi.allowedOrigins` est defini.

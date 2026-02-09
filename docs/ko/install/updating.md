@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 업데이트
   - 업데이트 후 문제가 발생했을 때
 title: "업데이트"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:40Z
 ---
 
 # 업데이트
@@ -28,6 +21,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 참고 사항:
 
 - 온보딩 마법사가 다시 실행되지 않게 하려면 `--no-onboard` 을 추가하십시오.
+
 - **소스 설치**의 경우 다음을 사용하십시오:
 
   ```bash
@@ -37,13 +31,14 @@ curl -fsSL https://openclaw.ai/install.sh | bash
   설치 프로그램은 리포지토리가 깨끗한 경우에 **한해서만** `git pull --rebase` 을 수행합니다.
 
 - **글로벌 설치**의 경우, 스크립트는 내부적으로 `npm install -g openclaw@latest` 을 사용합니다.
+
 - 레거시 참고: `clawdbot` 은 호환성 시밍으로 계속 제공됩니다.
 
 ## 업데이트 전에
 
 - 설치 방법을 파악하십시오: **글로벌** (npm/pnpm) vs **소스에서 설치** (git clone).
 - Gateway(게이트웨이) 실행 방식을 파악하십시오: **포그라운드 터미널** vs **감독 서비스** (launchd/systemd).
-- 커스터마이징 스냅샷을 남기십시오:
+- 2. 맞춤 설정 스냅샷:
   - 구성: `~/.openclaw/openclaw.json`
   - 자격 증명: `~/.openclaw/credentials/`
   - 워크스페이스: `~/.openclaw/workspace`
@@ -229,7 +224,7 @@ git checkout main
 git pull
 ```
 
-## 문제가 해결되지 않는 경우
+## 3. 막혔을 때
 
 - `openclaw doctor` 을 다시 실행하고 출력 내용을 주의 깊게 읽으십시오 (대개 해결 방법이 포함되어 있습니다).
 - 확인: [문제 해결](/gateway/troubleshooting)

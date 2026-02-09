@@ -5,22 +5,14 @@ read_when:
   - Fejlfinding af macOS gateway launchd-tjenesten
   - Installation af gateway CLI til macOS
 title: "Gateway på macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:25Z
 ---
 
 # Gateway på macOS (ekstern launchd)
 
-OpenClaw.app bundler ikke længere Node/Bun eller Gateway-runtime. macOS-appen
-forventer en **ekstern** `openclaw` CLI-installation, starter ikke Gateway som en
-underproces og administrerer en pr. bruger launchd-tjeneste for at holde Gateway
-kørende (eller kobler sig til en eksisterende lokal Gateway, hvis en allerede
-kører).
+OpenClaw.app har ikke længere bundles Node/Bun eller Gateway runtime. MacOS app
+forventer en **eksternt** 'openclaw' CLI installation, spawner ikke Gateway som en
+-børneproces, og administrerer en per-user launchd service til at holde Gateway
+kører (eller tillægger en eksisterende lokal Gateway hvis en allerede kører).
 
 ## Installér CLI (påkrævet for lokal tilstand)
 
@@ -36,7 +28,7 @@ macOS-appens **Install CLI**-knap kører samme flow via npm/pnpm (bun anbefales 
 
 Etiket:
 
-- `bot.molt.gateway` (eller `bot.molt.<profile>`; legacy `com.openclaw.*` kan forblive)
+- `bot.molt.gateway` (or `bot.molt.<profile>`; arv `com.openclaw.*` kan være tilbage)
 
 Plist-placering (pr. bruger):
 
@@ -61,8 +53,8 @@ Logning:
 
 ## Versionskompatibilitet
 
-macOS-appen tjekker gateway-versionen mod sin egen version. Hvis de er
-inkompatible, skal du opdatere den globale CLI, så den matcher app-versionen.
+MacOS app kontrollerer gatewayversionen mod sin egen version. Hvis de er
+uforenelige, skal du opdatere den globale CLI til at matche app-versionen.
 
 ## Smoke check
 

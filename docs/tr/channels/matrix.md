@@ -3,13 +3,6 @@ summary: "Matrix destek durumu, yetenekler ve yapılandırma"
 read_when:
   - Matrix kanal özellikleri üzerinde çalışırken
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:15Z
 ---
 
 # Matrix (eklenti)
@@ -48,10 +41,13 @@ Ayrıntılar: [Eklentiler](/tools/plugin)
 1. Matrix eklentisini yükleyin:
    - npm’den: `openclaw plugins install @openclaw/matrix`
    - Yerel checkout’tan: `openclaw plugins install ./extensions/matrix`
+
 2. Bir homeserver üzerinde bir Matrix hesabı oluşturun:
    - Barındırma seçeneklerine göz atın: [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Ya da kendiniz barındırın.
+
 3. Bot hesabı için bir erişim belirteci alın:
+
    - Homeserver’ınızda `curl` ile Matrix giriş API’sini kullanın:
 
    ```bash
@@ -79,7 +75,9 @@ Ayrıntılar: [Eklentiler](/tools/plugin)
    - Her ikisi de ayarlıysa yapılandırma önceliklidir.
    - Erişim belirteciyle: kullanıcı kimliği `/whoami` üzerinden otomatik olarak alınır.
    - Ayarlandığında `channels.matrix.userId` tam Matrix kimliği olmalıdır (örnek: `@bot:example.org`).
+
 5. Gateway’i yeniden başlatın (ya da ilk kurulumu tamamlayın).
+
 6. Herhangi bir Matrix istemcisinden botla DM başlatın veya onu bir odaya davet edin
    (Element, Beeper vb.; bkz. [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper E2EE gerektirir,
    bu nedenle `channels.matrix.encryption: true` ayarlayın ve cihazı doğrulayın.
@@ -124,7 +122,7 @@ Uçtan uca şifreleme, Rust kripto SDK’sı üzerinden **desteklenir**.
 - Kripto modülü yüklenirse, şifreli odalar otomatik olarak çözümlenir.
 - Şifreli odalara gönderimde giden medya şifrelenir.
 - İlk bağlantıda OpenClaw, diğer oturumlarınızdan cihaz doğrulaması ister.
-- Anahtar paylaşımını etkinleştirmek için başka bir Matrix istemcisinde (Element vb.) cihazı doğrulayın.
+- Anahtar paylaşımını etkinleştirmek için başka bir Matrix istemcisinde (Element vb.) cihazı doğrulayın. to enable key sharing.
 - Kripto modülü yüklenemezse E2EE devre dışı bırakılır ve şifreli odalar çözümlenmez;
   OpenClaw bir uyarı günlüğe yazar.
 - Eksik kripto modülü hataları görürseniz (örneğin `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -195,19 +193,19 @@ Doğrulandıktan sonra bot, şifreli odalardaki mesajları çözebilir.
 - `channels.matrix.replyToMode`, thread içinde yanıtlanmadığında reply-to meta verisini kontrol eder:
   - `off` (varsayılan), `first`, `all`
 
-## Yetenekler
+## Capabilities
 
-| Özellik           | Durum                                                                                                |
-| ----------------- | ---------------------------------------------------------------------------------------------------- |
-| Doğrudan mesajlar | ✅ Desteklenir                                                                                       |
-| Odalar            | ✅ Desteklenir                                                                                       |
-| Thread’ler        | ✅ Desteklenir                                                                                       |
-| Medya             | ✅ Desteklenir                                                                                       |
-| E2EE              | ✅ Desteklenir (kripto modülü gerekir)                                                               |
+| Özellik           | Status                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Doğrudan mesajlar | ✅ Desteklenir                                                                                                          |
+| Odalar            | ✅ Desteklenir                                                                                                          |
+| Thread’ler        | ✅ Desteklenir                                                                                                          |
+| Medya             | ✅ Desteklenir                                                                                                          |
+| E2EE              | ✅ Supported (crypto module required)                                                                |
 | Tepkiler          | ✅ Desteklenir (araçlar üzerinden gönderme/okuma)                                                    |
-| Anketler          | ✅ Gönderme desteklenir; gelen anket başlatmaları metne dönüştürülür (yanıtlar/bitişler yok sayılır) |
+| Polls             | ✅ Gönderme desteklenir; gelen anket başlatmaları metne dönüştürülür (yanıtlar/bitişler yok sayılır) |
 | Konum             | ✅ Desteklenir (geo URI; irtifa yok sayılır)                                                         |
-| Yerel komutlar    | ✅ Desteklenir                                                                                       |
+| Native commands   | ✅ Desteklenir                                                                                                          |
 
 ## Sorun Giderme
 
@@ -263,4 +261,4 @@ Sağlayıcı seçenekleri:
 - `channels.matrix.mediaMaxMb`: gelen/giden medya sınırı (MB).
 - `channels.matrix.autoJoin`: davet işleme (`always | allowlist | off`, varsayılan: her zaman).
 - `channels.matrix.autoJoinAllowlist`: otomatik katılım için izin verilen oda kimlikleri/takma adları.
-- `channels.matrix.actions`: eylem bazlı araç kapılama (tepkiler/mesajlar/sabitler/üyeBilgisi/kanalBilgisi).
+- `channels.matrix.actions`: per-action tool gating (reactions/messages/pins/memberInfo/channelInfo).

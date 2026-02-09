@@ -3,18 +3,11 @@ summary: "OpenClaw アプリ、ゲートウェイ ノードのトランスポー
 read_when:
   - IPC コントラクトまたはメニューバー アプリの IPC を編集する場合
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:44Z
 ---
 
 # OpenClaw macOS IPC アーキテクチャ
 
-**現在のモデル:** ローカル Unix ソケットが **ノード ホスト サービス** を **macOS アプリ** に接続し、実行承認 + `system.run` を提供します。検出／接続チェック用に `openclaw-mac` デバッグ CLI が存在します。エージェントのアクションは引き続き Gateway WebSocket と `node.invoke` を経由します。UI 自動化には PeekabooBridge を使用します。
+**現在のモデル:** ローカル Unix ソケットが **ノード ホスト サービス** を **macOS アプリ** に接続し、実行承認 + `system.run` を提供します。検出／接続チェック用に `openclaw-mac` デバッグ CLI が存在します。エージェントのアクションは引き続き Gateway WebSocket と `node.invoke` を経由します。UI 自動化には PeekabooBridge を使用します。 チェックを発見/接続するための `openclaw-mac` デバッグCLI が存在します。エージェントアクションはゲートウェイの WebSocket と `node.invoke` を流れます。 UIオートメーションはPeekabooBridgeを使用しています。
 
 ## 目標
 
@@ -22,7 +15,7 @@ x-i18n:
 - 自動化のための小さな表面積: Gateway + ノード コマンドに加え、UI 自動化用の PeekabooBridge。
 - 予測可能な権限: 常に同一の署名済みバンドル ID を使用し、launchd により起動されるため、TCC の付与が維持されます。
 
-## 仕組み
+## How it works
 
 ### Gateway + ノード トランスポート
 

@@ -1,12 +1,5 @@
 ---
 title: "Architektura integracji Pi"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:47Z
 ---
 
 # Architektura integracji Pi
@@ -35,12 +28,12 @@ OpenClaw używa SDK pi do osadzenia agenta kodującego AI w swojej architekturze
 }
 ```
 
-| Pakiet            | Przeznaczenie                                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Pakiet            | Przeznaczenie                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Podstawowe abstrakcje LLM: `Model`, `streamSimple`, typy wiadomości, API dostawców                                 |
-| `pi-agent-core`   | Pętla agenta, wykonywanie narzędzi, typy `AgentMessage`                                                            |
+| `pi-agent-core`   | Pętla agenta, wykonywanie narzędzi, typy `AgentMessage`                                                                            |
 | `pi-coding-agent` | SDK wysokiego poziomu: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, narzędzia wbudowane |
-| `pi-tui`          | Komponenty UI terminala (używane w lokalnym trybie TUI OpenClaw)                                                   |
+| `pi-tui`          | Komponenty UI terminala (używane w lokalnym trybie TUI OpenClaw)                                                |
 
 ## Struktura plików
 
@@ -318,7 +311,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 `limitHistoryTurns()` przycina historię rozmów w zależności od typu kanału (DM vs grupa).
 
-### Kompaktowanie
+### Kompakcja a przycinanie
 
 Automatyczne kompaktowanie uruchamia się przy przepełnieniu kontekstu. Ręczne kompaktowanie obsługuje `compactEmbeddedPiSessionDirect()`:
 
@@ -362,7 +355,7 @@ const { model, error, authStorage, modelRegistry } = resolveModel(
 authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
 ```
 
-### Przełączanie awaryjne
+### Nieudane
 
 `FailoverError` uruchamia fallback modelu, gdy jest skonfigurowany:
 
@@ -490,8 +483,8 @@ if (sandboxRoot) {
 
 ### Anthropic
 
-- Czyszczenie „magicznego” ciągu odmowy
-- Walidacja tur dla kolejnych ról
+- Skanowanie magicznego ciągu znaków odmowa
+- Włącz weryfikację kolejnych ról
 - Zgodność parametrów Claude Code
 
 ### Google/Gemini
@@ -518,15 +511,15 @@ Zapewnia to interaktywne doświadczenie terminalowe podobne do natywnego trybu p
 
 ## Kluczowe różnice względem Pi CLI
 
-| Aspekt               | Pi CLI                      | OpenClaw osadzony                                                                               |
-| -------------------- | --------------------------- | ----------------------------------------------------------------------------------------------- |
-| Wywołanie            | polecenie `pi` / RPC        | SDK przez `createAgentSession()`                                                                |
-| Narzędzia            | Domyślne narzędzia kodujące | Niestandardowy zestaw narzędzi OpenClaw                                                         |
-| Prompt systemowy     | AGENTS.md + prompty         | Dynamiczny per kanał/kontekst                                                                   |
-| Przechowywanie sesji | `~/.pi/agent/sessions/`     | `~/.openclaw/agents/<agentId>/sessions/` (lub `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Uwierzytelnianie     | Pojedyncze poświadczenie    | Wiele profili z rotacją                                                                         |
-| Rozszerzenia         | Ładowane z dysku            | Programowe + ścieżki dyskowe                                                                    |
-| Obsługa zdarzeń      | Renderowanie TUI            | Oparte na callbackach (onBlockReply itd.)                                                       |
+| Aspekt               | Pi CLI                              | OpenClaw osadzony                                                                                                  |
+| -------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Wywołanie            | polecenie `pi` / RPC                | SDK przez `createAgentSession()`                                                                                   |
+| Narzędzia            | Domyślne narzędzia kodujące         | Niestandardowy zestaw narzędzi OpenClaw                                                                            |
+| Prompt systemowy     | AGENTS.md + prompty | Dynamiczny per kanał/kontekst                                                                                      |
+| Przechowywanie sesji | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (lub `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Uwierzytelnianie     | Pojedyncze poświadczenie            | Wiele profili z rotacją                                                                                            |
+| Rozszerzenia         | Ładowane z dysku                    | Programowe + ścieżki dyskowe                                                                                       |
+| Obsługa zdarzeń      | Renderowanie TUI                    | Oparte na callbackach (onBlockReply itd.)                                       |
 
 ## Przyszłe rozważania
 

@@ -4,13 +4,6 @@ read_when:
   - Você quer um gateway em contêiner em vez de instalações locais
   - Você está validando o fluxo do Docker
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:36Z
 ---
 
 # Docker (opcional)
@@ -48,12 +41,12 @@ A partir da raiz do repositório:
 Este script:
 
 - constrói a imagem do gateway
-- executa o assistente de integração inicial
+- executa o assistente de integração
 - imprime dicas opcionais de configuração de provedores
 - inicia o gateway via Docker Compose
 - gera um token do gateway e o grava em `.env`
 
-Variáveis de ambiente opcionais:
+Variáveis env opcionais:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — instala pacotes apt extras durante o build
 - `OPENCLAW_EXTRA_MOUNTS` — adiciona bind mounts extras do host
@@ -155,7 +148,8 @@ Notas:
 
 Se você precisar de pacotes de sistema dentro da imagem (por exemplo, ferramentas
 de build ou bibliotecas de mídia), defina `OPENCLAW_DOCKER_APT_PACKAGES` antes de executar
-`docker-setup.sh`. Isso instala os pacotes durante o build da imagem, então eles
+`docker-setup.sh`.
+Isso instala os pacotes durante o build da imagem, então eles
 persistem mesmo que o contêiner seja excluído.
 
 Exemplo:
@@ -229,7 +223,8 @@ Se você optar por rodar como root por conveniência, você aceita a troca de se
 ### Rebuilds mais rápidos (recomendado)
 
 Para acelerar rebuilds, organize seu Dockerfile para que as camadas de dependências
-sejam cacheadas. Isso evita reexecutar `pnpm install` a menos que os lockfiles mudem:
+sejam cacheadas.
+Isso evita reexecutar `pnpm install` a menos que os lockfiles mudem:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -584,7 +579,6 @@ Exemplo:
 - Erros de permissão no sandbox: defina `docker.user` para um UID:GID que corresponda à
   propriedade do seu workspace montado (ou faça chown da pasta do workspace).
 - Ferramentas personalizadas não encontradas: o OpenClaw executa comandos com
-  `sh -lc` (login shell), que carrega `/etc/profile` e pode redefinir o PATH.
-  Defina `docker.env.PATH` para prefixar os caminhos das suas ferramentas personalizadas
+  `sh -lc` (login shell), que carrega `/etc/profile` e pode redefinir o PATH. Defina `docker.env.PATH` para prefixar os caminhos das suas ferramentas personalizadas
   (por exemplo, `/custom/bin:/usr/local/share/npm-global/bin`), ou adicione
   um script em `/etc/profile.d/` no seu Dockerfile.

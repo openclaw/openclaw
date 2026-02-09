@@ -5,18 +5,11 @@ read_when:
   - ผสานรวม Peekaboo ผ่าน Swift Package Manager
   - เปลี่ยนโปรโตคอล/พาธของ PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:26Z
 ---
 
 # Peekaboo Bridge (การทำอัตโนมัติ UI บน macOS)
 
-OpenClaw สามารถโฮสต์ **PeekabooBridge** เป็นโบรกเกอร์การทำอัตโนมัติ UI แบบโลคัลที่คำนึงถึงสิทธิ์การอนุญาตได้ ซึ่งช่วยให้ `peekaboo` CLI ควบคุมการทำอัตโนมัติ UI ได้ โดยยังคงใช้สิทธิ์ TCC ของแอป macOS ร่วมกัน
+OpenClaw สามารถโฮสต์ **PeekabooBridge** เป็นโบรกเกอร์การทำอัตโนมัติ UI แบบโลคัลที่คำนึงถึงสิทธิ์การอนุญาตได้ ซึ่งช่วยให้ `peekaboo` CLI ควบคุมการทำอัตโนมัติ UI ได้ โดยยังคงใช้สิทธิ์ TCC ของแอป macOS ร่วมกัน 24. สิ่งนี้ทำให้ CLI `peekaboo` ควบคุม UI automation ได้ ขณะเดียวกันก็ใช้สิทธิ์ TCC ของแอป macOS ซ้ำ
 
 ## สิ่งนี้คืออะไร (และไม่ใช่อะไร)
 
@@ -30,7 +23,7 @@ OpenClaw สามารถโฮสต์ **PeekabooBridge** เป็นโบ
 
 - การตั้งค่า → **Enable Peekaboo Bridge**
 
-เมื่อเปิดใช้งาน OpenClaw จะเริ่มเซิร์ฟเวอร์ซ็อกเก็ต UNIX แบบโลคัล หากปิดใช้งาน โฮสต์จะถูกหยุดและ `peekaboo` จะถอยกลับไปใช้โฮสต์อื่นที่มีอยู่
+25. เมื่อเปิดใช้งาน OpenClaw จะเริ่มเซิร์ฟเวอร์ UNIX socket ภายในเครื่อง เมื่อเปิดใช้งาน OpenClaw จะเริ่มเซิร์ฟเวอร์ซ็อกเก็ต UNIX แบบโลคัล หากปิดใช้งาน โฮสต์จะถูกหยุดและ `peekaboo` จะถอยกลับไปใช้โฮสต์อื่นที่มีอยู่
 
 ## ลำดับการค้นหาไคลเอนต์
 
@@ -40,7 +33,7 @@ OpenClaw สามารถโฮสต์ **PeekabooBridge** เป็นโบ
 2. Claude.app (หากติดตั้ง)
 3. OpenClaw.app (โบรกเกอร์แบบบาง)
 
-ใช้ `peekaboo bridge status --verbose` เพื่อดูว่าโฮสต์ใดกำลังทำงานอยู่และใช้พาธซ็อกเก็ตใด คุณสามารถบังคับแทนที่ได้ด้วย:
+ใช้ `peekaboo bridge status --verbose` เพื่อดูว่าโฮสต์ใดกำลังทำงานอยู่และใช้พาธซ็อกเก็ตใด คุณสามารถบังคับแทนที่ได้ด้วย: 26. คุณสามารถโอเวอร์ไรด์ได้ด้วย:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -55,6 +48,7 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 ## พฤติกรรมสแนปช็อต (การทำอัตโนมัติ)
 
 สแนปช็อตจะถูกเก็บไว้ในหน่วยความจำและหมดอายุอัตโนมัติหลังจากช่วงเวลาสั้นๆ หากต้องการเก็บไว้นานขึ้น ให้จับภาพใหม่จากฝั่งไคลเอนต์
+27. หากต้องการเก็บข้อมูลนานขึ้น ให้จับใหม่จากฝั่งไคลเอนต์
 
 ## การแก้ไขปัญหา
 

@@ -1,17 +1,10 @@
 ---
 summary: "Dónde OpenClaw carga las variables de entorno y el orden de precedencia"
 read_when:
-  - Necesita saber qué variables de entorno se cargan y en qué orden
+  - Necesitas saber qué vars env están cargados, y en qué orden
   - Está depurando claves de API faltantes en el Gateway
   - Está documentando la autenticación de proveedores o los entornos de despliegue
 title: "Variables de entorno"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:38Z
 ---
 
 # Variables de entorno
@@ -30,7 +23,7 @@ Si el archivo de configuración falta por completo, el paso 4 se omite; la impor
 
 ## Bloque de configuración `env`
 
-Dos formas equivalentes de establecer variables de entorno en línea (ambas no sobrescriben):
+Dos formas equivalentes de establecer variables env en línea (ambas no son anuladas):
 
 ```json5
 {
@@ -58,12 +51,12 @@ Dos formas equivalentes de establecer variables de entorno en línea (ambas no s
 }
 ```
 
-Equivalentes como variables de entorno:
+Equivalentes de var Env:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
-## Sustitución de variables de entorno en la configuración
+## Sustitución de var Env en configuración
 
 Puede referenciar variables de entorno directamente en valores de cadena de la configuración usando la sintaxis `${VAR_NAME}`:
 

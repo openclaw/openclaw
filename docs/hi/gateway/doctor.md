@@ -4,20 +4,11 @@ read_when:
   - Doctor माइग्रेशन जोड़ते या संशोधित करते समय
   - ब्रेकिंग विन्यास परिवर्तनों को प्रस्तुत करते समय
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:37Z
 ---
 
 # Doctor
 
-`openclaw doctor` OpenClaw के लिए मरम्मत + माइग्रेशन टूल है। यह पुराने
-config/state को ठीक करता है, स्वास्थ्य की जाँच करता है, और कार्रवाई योग्य
-मरम्मत चरण प्रदान करता है।
+`openclaw doctor` OpenClaw के लिए रिपेयर + माइग्रेशन टूल है। यह पुराने config/state को ठीक करता है, हेल्थ चेक करता है, और उपयोगी रिपेयर स्टेप्स प्रदान करता है।
 
 ## त्वरित प्रारंभ
 
@@ -49,8 +40,8 @@ openclaw doctor --repair --force
 openclaw doctor --non-interactive
 ```
 
-बिना प्रॉम्प्ट चलाएँ और केवल सुरक्षित माइग्रेशन लागू करें (config normalization + डिस्क पर state मूव्स)। restart/service/sandbox क्रियाएँ, जिनके लिए मानव पुष्टि आवश्यक है, छोड़ दी जाती हैं।
-Legacy state माइग्रेशन पहचान होने पर स्वचालित रूप से चलते हैं।
+बिना प्रॉम्प्ट्स के चलाएँ और केवल सुरक्षित माइग्रेशन्स लागू करें (config normalization + on-disk state moves)। रीस्टार्ट/सर्विस/सैंडबॉक्स एक्शन्स को स्किप करता है जिनके लिए मानव पुष्टि आवश्यक होती है।
+लीगेसी स्टेट माइग्रेशन्स डिटेक्ट होने पर अपने-आप चलती हैं।
 
 ```bash
 openclaw doctor --deep
@@ -92,17 +83,17 @@ cat ~/.openclaw/openclaw.json
 
 ## विस्तृत व्यवहार और तर्क
 
-### 0) वैकल्पिक अपडेट (git इंस्टॉल)
+### 0. वैकल्पिक अपडेट (git इंस्टॉल)
 
 यदि यह git checkout है और doctor interactive रूप से चल रहा है, तो doctor चलाने से पहले
 अपडेट (fetch/rebase/build) का प्रस्ताव देता है।
 
-### 1) Config normalization
+### 1. Config normalization
 
 यदि config में legacy मान संरचनाएँ हैं (उदाहरण के लिए channel-specific override के बिना `messages.ackReaction`),
 तो doctor उन्हें वर्तमान स्कीमा में normalize करता है।
 
-### 2) Legacy config key माइग्रेशन
+### 2. Legacy config key माइग्रेशन
 
 जब config में deprecated keys होती हैं, अन्य कमांड चलने से मना कर देती हैं और
 आपसे `openclaw doctor` चलाने को कहती हैं।
@@ -135,12 +126,10 @@ Gateway भी startup पर legacy config फ़ॉर्मेट पहच�
 
 ### 2b) OpenCode Zen provider overrides
 
-यदि आपने मैन्युअल रूप से `models.providers.opencode` (या `opencode-zen`) जोड़ा है, तो यह
-`@mariozechner/pi-ai` से built-in OpenCode Zen catalog को override करता है। इससे
-हर मॉडल को एक ही API पर मजबूर किया जा सकता है या लागत शून्य हो सकती है। Doctor चेतावनी देता है
-ताकि आप override हटाकर per-model API routing + लागत पुनर्स्थापित कर सकें।
+यदि आपने `models.providers.opencode` (या `opencode-zen`) को मैन्युअली जोड़ा है, तो यह `@mariozechner/pi-ai` से बिल्ट-इन OpenCode Zen कैटलॉग को ओवरराइड करता है। यह हर मॉडल को एक ही API पर फ़ोर्स कर सकता है या कॉस्ट्स को शून्य कर सकता है। Doctor warns so you can
+remove the override and restore per-model API routing + costs.
 
-### 3) Legacy state माइग्रेशन (डिस्क लेआउट)
+### 3. Legacy state माइग्रेशन (डिस्क लेआउट)
 
 Doctor पुराने on-disk लेआउट को वर्तमान संरचना में माइग्रेट कर सकता है:
 
@@ -152,15 +141,16 @@ Doctor पुराने on-disk लेआउट को वर्तमान �
   - legacy `~/.openclaw/credentials/*.json` से ( `oauth.json` को छोड़कर)
   - `~/.openclaw/credentials/whatsapp/<accountId>/...` तक (डिफ़ॉल्ट account id: `default`)
 
-ये माइग्रेशन best-effort और idempotent हैं; यदि legacy फ़ोल्डर बैकअप के रूप में पीछे रह जाते हैं,
-तो doctor चेतावनियाँ देगा। Gateway/CLI भी startup पर legacy sessions + agent dir को
-auto-migrate करता है ताकि history/auth/models बिना मैनुअल doctor रन के
-per-agent path में आ जाएँ। WhatsApp auth को जानबूझकर केवल `openclaw doctor` के माध्यम से माइग्रेट किया जाता है।
+These migrations are best-effort and idempotent; doctor will emit warnings when
+it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates
+the legacy sessions + agent dir on startup so history/auth/models land in the
+per-agent path without a manual doctor run. WhatsApp auth is intentionally only
+migrated via `openclaw doctor`.
 
-### 4) State integrity जाँच (session persistence, routing, और safety)
+### 4. State integrity जाँच (session persistence, routing, और safety)
 
-State directory ऑपरेशनल brainstem है। यदि यह गायब हो जाए, तो आप
-sessions, credentials, logs, और config खो देते हैं (जब तक कहीं और बैकअप न हो)।
+The state directory is the operational brainstem. If it vanishes, you lose
+sessions, credentials, logs, and config (unless you have backups elsewhere).
 
 Doctor जाँचता है:
 
@@ -179,71 +169,72 @@ Doctor जाँचता है:
 - **Config file permissions**: यदि `~/.openclaw/openclaw.json`
   group/world readable है तो चेतावनी देता है और `600` तक कड़ा करने का प्रस्ताव देता है।
 
-### 5) Model auth स्वास्थ्य (OAuth expiry)
+### 5. Model auth स्वास्थ्य (OAuth expiry)
 
-Doctor auth store में OAuth profiles का निरीक्षण करता है, समाप्त/समाप्त होने वाले टोकन पर चेतावनी देता है,
-और जहाँ सुरक्षित हो वहाँ उन्हें रीफ़्रेश कर सकता है। यदि Anthropic Claude Code
-profile पुराना है, तो यह `claude setup-token` चलाने (या setup-token पेस्ट करने) का सुझाव देता है।
-Refresh प्रॉम्प्ट केवल interactive (TTY) में दिखाई देते हैं; `--non-interactive`
-refresh प्रयासों को छोड़ देता है।
+Doctor inspects OAuth profiles in the auth store, warns when tokens are
+expiring/expired, and can refresh them when safe. If the Anthropic Claude Code
+profile is stale, it suggests running `claude setup-token` (or pasting a setup-token).
+Refresh prompts only appear when running interactively (TTY); `--non-interactive`
+skips refresh attempts.
 
 Doctor उन auth profiles की भी रिपोर्ट करता है जो अस्थायी रूप से अनुपयोगी हैं, कारण:
 
 - छोटे cooldowns (rate limits/timeouts/auth failures)
 - लंबे disable (billing/credit failures)
 
-### 6) Hooks model validation
+### 6. Hooks model validation
 
 यदि `hooks.gmail.model` सेट है, तो doctor catalog और allowlist के विरुद्ध model reference को validate करता है
 और जब वह resolve नहीं होगा या disallowed है तो चेतावनी देता है।
 
-### 7) Sandbox image मरम्मत
+### 7. Sandbox image मरम्मत
 
 जब sandboxing सक्षम हो, doctor Docker images की जाँच करता है और यदि वर्तमान image गायब हो तो
 build करने या legacy नामों पर स्विच करने का प्रस्ताव देता है।
 
-### 8) Gateway service माइग्रेशन और cleanup संकेत
+### 8. Gateway service माइग्रेशन और cleanup संकेत
 
-Doctor legacy gateway services (launchd/systemd/schtasks) पहचानता है और
-उन्हें हटाने तथा वर्तमान gateway port का उपयोग करते हुए OpenClaw service इंस्टॉल करने का प्रस्ताव देता है।
-यह अतिरिक्त gateway-जैसी services के लिए स्कैन भी कर सकता है और cleanup संकेत प्रिंट करता है।
-Profile-नामित OpenClaw gateway services को first-class माना जाता है और उन्हें "extra" के रूप में फ़्लैग नहीं किया जाता।
+Doctor detects legacy gateway services (launchd/systemd/schtasks) and
+offers to remove them and install the OpenClaw service using the current gateway
+port. It can also scan for extra gateway-like services and print cleanup hints.
+Profile-named OpenClaw gateway services are considered first-class and are not
+flagged as "extra."
 
-### 9) सुरक्षा चेतावनियाँ
+### 9. सुरक्षा चेतावनियाँ
 
 Doctor चेतावनियाँ देता है जब कोई provider बिना allowlist के DMs के लिए खुला हो,
 या जब कोई policy खतरनाक तरीके से कॉन्फ़िगर की गई हो।
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 यदि systemd user service के रूप में चल रहा हो, तो doctor सुनिश्चित करता है कि lingering सक्षम हो
 ताकि logout के बाद भी gateway जीवित रहे।
 
-### 11) Skills स्थिति
+### 11. Skills स्थिति
 
 Doctor वर्तमान workspace के लिए eligible/missing/blocked skills का एक त्वरित सारांश प्रिंट करता है।
 
-### 12) Gateway auth जाँच (local token)
+### 12. Gateway auth जाँच (local token)
 
-Doctor local gateway पर `gateway.auth` के गायब होने पर चेतावनी देता है और
-token generate करने का प्रस्ताव देता है। स्वचालन में token
-creation को मजबूर करने के लिए `openclaw doctor --generate-gateway-token` का उपयोग करें।
+Doctor warns when `gateway.auth` is missing on a local gateway and offers to
+generate a token. Use `openclaw doctor --generate-gateway-token` to force token
+creation in automation.
 
-### 13) Gateway स्वास्थ्य जाँच + restart
+### 13. Gateway स्वास्थ्य जाँच + restart
 
 Doctor स्वास्थ्य जाँच चलाता है और gateway अस्वस्थ दिखने पर restart का प्रस्ताव देता है।
 
-### 14) Channel स्थिति चेतावनियाँ
+### 14. Channel स्थिति चेतावनियाँ
 
 यदि gateway स्वस्थ है, तो doctor channel status probe चलाता है और
 सुझाए गए fixes के साथ चेतावनियाँ रिपोर्ट करता है।
 
-### 15) Supervisor config ऑडिट + मरम्मत
+### 15. Supervisor config ऑडिट + मरम्मत
 
-Doctor इंस्टॉल किए गए supervisor config (launchd/systemd/schtasks) में
-missing या outdated defaults (जैसे systemd network-online dependencies और
-restart delay) की जाँच करता है। mismatch मिलने पर यह अपडेट की सिफ़ारिश करता है और
-service file/task को वर्तमान defaults में फिर से लिख सकता है।
+Doctor checks the installed supervisor config (launchd/systemd/schtasks) for
+missing or outdated defaults (e.g., systemd network-online dependencies and
+restart delay). When it finds a mismatch, it recommends an update and can
+rewrite the service file/task to the current defaults.
 
 Notes:
 
@@ -253,25 +244,26 @@ Notes:
 - `openclaw doctor --repair --force` कस्टम supervisor configs को ओवरराइट करता है।
 - आप `openclaw gateway install --force` के माध्यम से हमेशा full rewrite को मजबूर कर सकते हैं।
 
-### 16) Gateway runtime + port diagnostics
+### 16. Gateway runtime + port diagnostics
 
-Doctor service runtime (PID, last exit status) का निरीक्षण करता है और
-service इंस्टॉल होने के बावजूद वास्तव में न चलने पर चेतावनी देता है। यह gateway port
-(डिफ़ॉल्ट `18789`) पर port collisions की भी जाँच करता है और संभावित कारण
-(पहले से चल रहा gateway, SSH टनल) रिपोर्ट करता है।
+Doctor inspects the service runtime (PID, last exit status) and warns when the
+service is installed but not actually running. It also checks for port collisions
+on the gateway port (default `18789`) and reports likely causes (gateway already
+running, SSH tunnel).
 
-### 17) Gateway runtime best practices
+### 17. Gateway runtime best practices
 
-Doctor चेतावनी देता है जब gateway service Bun पर या version-managed Node path पर चलती है
-(`nvm`, `fnm`, `volta`, `asdf`, आदि)। WhatsApp + Telegram चैनलों को Node की आवश्यकता होती है,
-और version-manager paths upgrades के बाद टूट सकते हैं क्योंकि service आपकी shell init लोड नहीं करती।
-Doctor उपलब्ध होने पर system Node install (Homebrew/apt/choco) में माइग्रेट करने का प्रस्ताव देता है।
+Doctor warns when the gateway service runs on Bun or a version-managed Node path
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node,
+and version-manager paths can break after upgrades because the service does not
+load your shell init. Doctor offers to migrate to a system Node install when
+available (Homebrew/apt/choco).
 
-### 18) Config लिखना + wizard metadata
+### 18. Config लिखना + wizard metadata
 
 Doctor किसी भी config बदलाव को स्थायी करता है और doctor रन को रिकॉर्ड करने के लिए wizard metadata स्टैम्प करता है।
 
-### 19) Workspace सुझाव (backup + memory system)
+### 19. Workspace सुझाव (backup + memory system)
 
 Doctor यदि workspace memory system गायब हो तो उसका सुझाव देता है और
 यदि workspace पहले से git के अंतर्गत न हो तो backup टिप प्रिंट करता है।

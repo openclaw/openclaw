@@ -4,13 +4,6 @@ read_when:
   - iMessage 지원 설정
   - iMessage 송수신 디버깅
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:16Z
 ---
 
 # iMessage (레거시: imsg)
@@ -43,7 +36,7 @@ x-i18n:
 }
 ```
 
-## 개요
+## 무엇인가요
 
 - macOS 에서 `imsg` 로 구동되는 iMessage 채널입니다.
 - 결정적 라우팅: 답장은 항상 iMessage 로 돌아갑니다.
@@ -110,7 +103,7 @@ imsg send <handle> "test"
 6. `ssh <bot-macos-user>@localhost true` 가 비밀번호 없이 동작하도록 SSH 를 설정합니다.
 7. `channels.imessage.accounts.bot.cliPath` 을 봇 사용자로 `imsg` 를 실행하는 SSH 래퍼로 지정합니다.
 
-첫 실행 참고: 송수신에는 *봇 macOS 사용자*에서 GUI 승인(자동화 + 전체 디스크 접근)이 필요할 수 있습니다. `imsg rpc` 가 멈춘 것처럼 보이거나 종료되면, 해당 사용자로 로그인(화면 공유가 도움됨)하여 한 번 `imsg chats --limit 1` / `imsg send ...` 를 실행하고 프롬프트를 승인한 뒤 다시 시도하십시오. [macOS 개인정보 보호 및 보안 TCC 문제 해결](#troubleshooting-macos-privacy-and-security-tcc)을 참고하십시오.
+첫 실행 참고: 송수신에는 _봇 macOS 사용자_에서 GUI 승인(자동화 + 전체 디스크 접근)이 필요할 수 있습니다. `imsg rpc` 가 멈춘 것처럼 보이거나 종료되면, 해당 사용자로 로그인(화면 공유가 도움됨)하여 한 번 `imsg chats --limit 1` / `imsg send ...` 를 실행하고 프롬프트를 승인한 뒤 다시 시도하십시오. [macOS 개인정보 보호 및 보안 TCC 문제 해결](#troubleshooting-macos-privacy-and-security-tcc)을 참고하십시오.
 
 래퍼 예제(`chmod +x`). `<bot-macos-user>` 을 실제 macOS 사용자 이름으로 교체하십시오:
 
@@ -224,7 +217,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 
 ## 접근 제어 (다이렉트 메시지 + 그룹)
 
-다이렉트 메시지:
+DM:
 
 - 기본값: `channels.imessage.dmPolicy = "pairing"`.
 - 알 수 없는 발신자는 페어링 코드를 받으며, 승인될 때까지 메시지는 무시됩니다(코드는 1시간 후 만료).

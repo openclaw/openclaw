@@ -3,13 +3,6 @@ title: Sandbox बनाम Tool Policy बनाम Elevated
 summary: "किस कारण कोई टूल ब्लॉक होता है: sandbox runtime, टूल allow/deny नीति, और elevated exec गेट्स"
 read_when: "जब आप 'sandbox jail' में फँसें या किसी tool/elevated अस्वीकृति को देखें और बदलने के लिए सटीक config key जानना चाहें।"
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:26Z
 ---
 
 # Sandbox बनाम Tool Policy बनाम Elevated
@@ -71,8 +64,8 @@ Sandboxing को `agents.defaults.sandbox.mode` द्वारा नियं
 - `deny` हमेशा जीतता है।
 - यदि `allow` खाली नहीं है, तो बाकी सब कुछ ब्लॉक माना जाता है।
 - Tool policy अंतिम रोक है: `/exec` किसी अस्वीकृत `exec` टूल को ओवरराइड नहीं कर सकता।
-- `/exec` केवल अधिकृत प्रेषकों के लिए सत्र डिफ़ॉल्ट बदलता है; यह टूल एक्सेस प्रदान नहीं करता।
-  Provider टूल कुंजियाँ `provider` (जैसे `google-antigravity`) या `provider/model` (जैसे `openai/gpt-5.2`) स्वीकार करती हैं।
+- `/exec` केवल अधिकृत senders के लिए session defaults बदलता है; यह tool access प्रदान नहीं करता।
+  Provider tool keys `provider` (जैसे `google-antigravity`) या `provider/model` (जैसे `openai/gpt-5.2`) दोनों स्वीकार करते हैं।
 
 ### Tool groups (शॉर्टहैंड)
 
@@ -110,12 +103,12 @@ Elevated अतिरिक्त टूल्स प्रदान **नही
 - सत्र के लिए exec अनुमोदन छोड़ने हेतु `/elevated full` का उपयोग करें।
 - यदि आप पहले से direct चल रहे हैं, तो elevated प्रभावी रूप से no-op है (फिर भी gated)।
 - Elevated **skill-scoped नहीं** है और टूल allow/deny को **ओवरराइड नहीं** करता।
-- `/exec` elevated से अलग है। यह केवल अधिकृत प्रेषकों के लिए प्रति-सत्र exec डिफ़ॉल्ट्स समायोजित करता है।
+- `/exec` elevated से अलग है। यह केवल अधिकृत senders के लिए प्रति-session exec defaults समायोजित करता है।
 
 गेट्स:
 
 - Enablement: `tools.elevated.enabled` (और वैकल्पिक रूप से `agents.list[].tools.elevated.enabled`)
-- Sender allowlists: `tools.elevated.allowFrom.<provider>` (और वैकल्पिक रूप से `agents.list[].tools.elevated.allowFrom.<provider>`)
+- Sender allowlists: `tools.elevated.allowFrom.<provider>`` (और वैकल्पिक रूप से `agents.list[].tools.elevated.allowFrom.<provider>\`\`)\`
 
 देखें [Elevated Mode](/tools/elevated)।
 
@@ -132,4 +125,4 @@ Fix-it कुंजियाँ (एक चुनें):
 
 ### “मुझे लगा यह main है, फिर यह sandboxed क्यों है?”
 
-`"non-main"` मोड में, group/channel कुंजियाँ _main_ नहीं होतीं। main session key का उपयोग करें (जैसा कि `sandbox explain` दिखाता है) या मोड को `"off"` पर स्विच करें।
+`"non-main"` मोड में, group/channel keys _main_ नहीं होते। मुख्य session key का उपयोग करें (`sandbox explain` द्वारा दिखाया गया) या मोड को `"off"` पर स्विच करें।

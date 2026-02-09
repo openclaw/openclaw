@@ -4,13 +4,6 @@ read_when:
   - आपको कनेक्टिविटी/प्रमाणीकरण संबंधी समस्याएँ हैं और आप मार्गदर्शित समाधान चाहते हैं
   - आपने अपडेट किया है और एक त्वरित सत्यापन चाहते हैं
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:00Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 नोट्स:
 
-- इंटरैक्टिव प्रॉम्प्ट (जैसे कीचेन/OAuth सुधार) केवल तब चलते हैं जब stdin एक TTY हो और `--non-interactive` सेट **न** हो। हेडलेस रन (cron, Telegram, टर्मिनल नहीं) प्रॉम्प्ट को छोड़ देंगे।
+- Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
 - `--fix` (`--repair` का उपनाम) `~/.openclaw/openclaw.json.bak` में एक बैकअप लिखता है और अज्ञात विन्यास कुंजियों को हटा देता है, प्रत्येक हटाने को सूचीबद्ध करते हुए।
 
 ## macOS: `launchctl` env overrides

@@ -4,13 +4,6 @@ read_when:
   - Je bouwt een OpenClaw-plugin
   - Je moet een plugin-configschema leveren of pluginvalidatiefouten debuggen
 title: "Pluginmanifest"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:39Z
 ---
 
 # Pluginmanifest (openclaw.plugin.json)

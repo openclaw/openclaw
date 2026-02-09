@@ -1,13 +1,6 @@
 ---
-title: Outbound ဆက်ရှင် မီရရင် ပြန်လည်ဖွဲ့စည်းခြင်း (Issue #1520)
+title: "Outbound ဆက်ရှင် မီရရင် ပြန်လည်ဖွဲ့စည်းခြင်း (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:05Z
 ---
 
 # Outbound ဆက်ရှင် မီရရင် ပြန်လည်ဖွဲ့စည်းခြင်း (Issue #1520)
@@ -20,7 +13,7 @@ x-i18n:
 
 ## နောက်ခံအကြောင်းအရာ
 
-Outbound ပို့ဆောင်မှုများကို ပစ်မှတ် ချန်နယ် ဆက်ရှင်အစား လက်ရှိ အေးဂျင့် ဆက်ရှင် (tool session key) ထဲသို့ မီရရင်လုပ်နေခဲ့သည်။ Inbound လမ်းကြောင်းသတ်မှတ်မှုတွင် channel/peer session keys ကို အသုံးပြုသောကြောင့် outbound အဖြေများသည် မှားယွင်းသော ဆက်ရှင်ထဲသို့ ရောက်ရှိခဲ့ပြီး ပထမဆုံး ဆက်သွယ်မှုရှိသည့် ပစ်မှတ်များတွင် ဆက်ရှင် အချက်အလက်များ မရှိသေးသော အခြေအနေများ ဖြစ်ပေါ်ခဲ့သည်။
+37. Outbound sends များကို target channel session မဟုတ်ဘဲ _current_ agent session (tool session key) ထဲသို့ mirror လုပ်ခဲ့သည်။ 38. Inbound routing သည် channel/peer session keys များကို အသုံးပြုသဖြင့် outbound responses များသည် မှားယွင်းသော session ထဲသို့ ရောက်ခဲ့ပြီး ပထမဆုံး ဆက်သွယ်သည့် targets များတွင် session entries မကြာခဏ မရှိခဲ့ပါ။
 
 ## ရည်မှန်းချက်များ
 
@@ -58,7 +51,7 @@ Outbound ပို့ဆောင်မှုများကို ပစ်မ�
 
 ## ဆုံးဖြတ်ချက်များ
 
-- **Gateway send ဆက်ရှင် ဆင်းသက်သတ်မှတ်မှု**: `sessionKey` ကို ပေးထားပါက ထိုကီးကို အသုံးပြုသည်။ မပေးထားပါက ပစ်မှတ် + default agent မှ sessionKey ကို ဆင်းသက်သတ်မှတ်ပြီး ထိုနေရာတွင် မီရရင်လုပ်သည်။
+- 39. **Gateway send session derivation**: `sessionKey` ပေးထားပါက ၎င်းကို အသုံးပြုပါ။ 40. မပေးထားပါက target + default agent မှ sessionKey ကို derive လုပ်ပြီး ထိုနေရာသို့ mirror လုပ်ပါ။
 - **ဆက်ရှင် အချက်အလက် ဖန်တီးမှု**: inbound ပုံစံများနှင့် ကိုက်ညီစေရန် `Provider/From/To/ChatType/AccountId/Originating*` ပါဝင်သော `recordSessionMetaFromInbound` ကို အမြဲ အသုံးပြုသည်။
 - **ပစ်မှတ် ပုံမှန်化**: outbound လမ်းကြောင်းသတ်မှတ်မှုသည် ရရှိနိုင်ပါက ဖြေရှင်းပြီးသား ပစ်မှတ်များ ( `resolveChannelTarget` ပြီးနောက် ) ကို အသုံးပြုသည်။
 - **ဆက်ရှင် key စာလုံးအကြီးအသေး**: ရေးသားချိန်နှင့် migration အတွင်း session keys များကို lowercase အဖြစ် canonicalize လုပ်သည်။
@@ -76,7 +69,7 @@ Outbound ပို့ဆောင်မှုများကို ပစ်မ�
 
 ## ဖွင့်လှစ်ထားသော အချက်များ / နောက်ဆက်တွဲ လုပ်ဆောင်ရန်များ
 
-- Voice-call plugin သည် စိတ်ကြိုက် `voice:<phone>` ဆက်ရှင် keys ကို အသုံးပြုနေသည်။ Outbound မပ်ပြောင်းမှုကို ဤနေရာတွင် စံမထားရသေးပါ။ message-tool မှ voice-call ပို့ဆောင်မှုများကို ထောက်ပံ့ရမည်ဆိုပါက ထူးခြားသည့် mapping ကို ထည့်သွင်းရန်လိုအပ်သည်။
+- 41. Voice‑call plugin သည် custom `voice:<phone>` session keys များကို အသုံးပြုသည်။ 42. Outbound mapping ကို ဒီနေရာတွင် standardize မလုပ်ထားပါ; message‑tool က voice‑call sends ကို ထောက်ပံ့ရမည်ဆိုပါက explicit mapping ကို ထည့်ပါ။
 - Bundled set ထက် ကျော်လွန်ပြီး မည်သည့် external plugin မဆို non-standard `From/To` ပုံစံများကို အသုံးပြုနေသလားကို အတည်ပြုရန်။
 
 ## ထိတွေ့ပြင်ဆင်ခဲ့သော ဖိုင်များ

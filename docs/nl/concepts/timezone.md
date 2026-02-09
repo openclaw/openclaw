@@ -4,13 +4,6 @@ read_when:
   - Je moet begrijpen hoe tijdstempels voor het model worden genormaliseerd
   - Het configureren van de gebruikers­tijdzone voor systeemprompts
 title: "Tijdzones"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:17Z
 ---
 
 # Tijdzones

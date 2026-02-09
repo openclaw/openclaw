@@ -4,13 +4,6 @@ read_when:
   - Добавление или изменение поддержки опросов
   - Отладка отправки опросов из CLI или через Gateway (шлюз)
 title: "Опросы"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:02Z
 ---
 
 # Опросы
@@ -51,7 +44,7 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 
 Метод: `poll`
 
-Параметры:
+Params:
 
 - `to` (string, обязательно)
 - `question` (string, обязательно)

@@ -4,23 +4,16 @@ read_when:
   - OpenClaw macOS リリースをカットまたは検証する際
   - Sparkle の appcast またはフィードアセットを更新する際
 title: "macOS リリース"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:40Z
 ---
 
 # OpenClaw macOS リリース（Sparkle）
 
-このアプリは現在 Sparkle による自動アップデートを提供しています。リリースビルドは Developer ID で署名し、zip 化し、署名済みの appcast エントリーとともに公開する必要があります。
+このアプリは現在 Sparkle による自動アップデートを提供しています。リリースビルドは Developer ID で署名し、zip 化し、署名済みの appcast エントリーとともに公開する必要があります。 リリース ビルドは、開発者ID、署名された appcast エントリを含む、zipped およびパブリッシュされる必要があります。
 
-## 前提条件
+## Prereq
 
 - Developer ID Application 証明書がインストールされていること（例: `Developer ID Application: <Developer Name> (<TEAMID>)`）。
-- Sparkle の秘密鍵パスが環境変数として `SPARKLE_PRIVATE_KEY_FILE` に設定されていること（Sparkle ed25519 秘密鍵へのパス。公開鍵は Info.plist に埋め込まれています）。見つからない場合は `~/.profile` を確認してください。
+- Sparkle の秘密鍵パスが環境変数として `SPARKLE_PRIVATE_KEY_FILE` に設定されていること（Sparkle ed25519 秘密鍵へのパス。公開鍵は Info.plist に埋め込まれています）。見つからない場合は `~/.profile` を確認してください。 見つからない場合は、`~/.profile` を確認してください。
 - Gatekeeper 対応の DMG / zip 配布を行う場合は、`xcrun notarytool` 用の Notary 資格情報（キーチェーンプロファイルまたは API キー）があること。
   - App Store Connect API キーの環境変数をシェルプロファイルに設定して作成した、`openclaw-notary` という名前のキーチェーンプロファイルを使用しています:
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
@@ -34,8 +27,8 @@ x-i18n:
 注記:
 
 - `APP_BUILD` は `CFBundleVersion`/`sparkle:version` にマッピングされます。数値かつ単調増加（`-beta` なし）にしてください。そうしないと Sparkle が同一と比較します。
-- デフォルトでは現在のアーキテクチャ（`$(uname -m)`）を使用します。リリース / ユニバーサルビルドの場合は `BUILD_ARCHS="arm64 x86_64"`（または `BUILD_ARCHS=all`）を設定してください。
-- リリースアーティファクト（zip + DMG + 公証）には `scripts/package-mac-dist.sh` を使用してください。ローカル / 開発用のパッケージングには `scripts/package-mac-app.sh` を使用します。
+- デフォルトは現在のアーキテクチャ (`$(uame -m)`) です。 デフォルトでは現在のアーキテクチャ（`$(uname -m)`）を使用します。リリース / ユニバーサルビルドの場合は `BUILD_ARCHS="arm64 x86_64"`（または `BUILD_ARCHS=all`）を設定してください。
+- リリースアーティファクト（zip + DMG + 公証）には `scripts/package-mac-dist.sh` を使用してください。ローカル / 開発用のパッケージングには `scripts/package-mac-app.sh` を使用します。 local/devパッケージには`scripts/package-mac-app.sh`を使用します。
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -79,6 +72,7 @@ SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh di
 
 これは [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh) を介して `CHANGELOG.md` から HTML リリースノートを生成し、appcast エントリーに埋め込みます。
 公開時には、更新された `appcast.xml` をリリースアセット（zip + dSYM）とともにコミットしてください。
+公開時に、更新された `appcast.xml` をリリースアセット (zip + dSYM) と一緒にコミットします。
 
 ## 公開と検証
 

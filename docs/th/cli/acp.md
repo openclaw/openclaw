@@ -4,13 +4,6 @@ read_when:
   - การตั้งค่าการผสานรวมIDEที่ใช้ACP
   - การดีบักการกำหนดเส้นทางเซสชันACPไปยังGateway
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:56Z
 ---
 
 # acp
@@ -18,7 +11,7 @@ x-i18n:
 รันบริดจ์ACP (Agent Client Protocol) ที่สื่อสารกับ OpenClaw Gateway
 
 คำสั่งนี้ใช้ACPผ่าน stdio สำหรับIDE และส่งต่อพรอมป์ไปยังGateway
-ผ่าน WebSocket โดยจะคงการแมปเซสชันACPกับคีย์เซสชันของGateway
+ผ่าน WebSocket โดยจะคงการแมปเซสชันACPกับคีย์เซสชันของGateway It keeps ACP sessions mapped to Gateway session keys.
 
 ## Usage
 
@@ -42,6 +35,7 @@ openclaw acp --session agent:main:main --reset-session
 
 ใช้ACP client ที่มีมาในตัวเพื่อตรวจสอบความถูกต้องของบริดจ์โดยไม่ต้องใช้IDE
 มันจะสปอว์นบริดจ์ACPและให้คุณพิมพ์พรอมป์แบบโต้ตอบได้
+ระบบจะสร้าง ACP bridge และให้คุณพิมพ์พรอมป์แบบโต้ตอบ
 
 ```bash
 openclaw acp client
@@ -76,7 +70,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Selecting agents
 
-ACPไม่เลือกเอเจนต์โดยตรง แต่จะกำหนดเส้นทางตามคีย์เซสชันของGateway
+ACPไม่เลือกเอเจนต์โดยตรง แต่จะกำหนดเส้นทางตามคีย์เซสชันของGateway ระบบกำหนดเส้นทางตามคีย์เซสชันของ Gateway
 
 ใช้คีย์เซสชันที่ผูกกับเอเจนต์เพื่อกำหนดเป้าหมายเอเจนต์เฉพาะ:
 
@@ -86,7 +80,7 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-แต่ละเซสชันACPจะถูกแมปกับคีย์เซสชันของGatewayเพียงหนึ่งค่า เอเจนต์หนึ่งตัวสามารถมีหลายเซสชันได้; ACPจะใช้ค่าเริ่มต้นเป็นเซสชัน `acp:<uuid>` แบบแยกอิสระ เว้นแต่คุณจะโอเวอร์ไรด์คีย์หรือเลเบล
+แต่ละเซสชัน ACP จะถูกแมปกับคีย์เซสชันของ Gateway เพียงหนึ่งเดียว แต่ละเซสชันACPจะถูกแมปกับคีย์เซสชันของGatewayเพียงหนึ่งค่า เอเจนต์หนึ่งตัวสามารถมีหลายเซสชันได้; ACPจะใช้ค่าเริ่มต้นเป็นเซสชัน `acp:<uuid>` แบบแยกอิสระ เว้นแต่คุณจะโอเวอร์ไรด์คีย์หรือเลเบล
 
 ## Zed editor setup
 
@@ -134,6 +128,7 @@ openclaw acp --session agent:qa:bug-123
 
 โดยค่าเริ่มต้น เซสชันACPจะได้รับคีย์เซสชันของGatewayแบบแยกอิสระพร้อมคำนำหน้า `acp:`
 หากต้องการใช้เซสชันที่ทราบอยู่แล้ว ให้ส่งคีย์เซสชันหรือเลเบล:
+หากต้องการใช้เซสชันที่ทราบอยู่แล้ว ให้ส่งคีย์เซสชันหรือป้ายกำกับ:
 
 - `--session <key>`: ใช้คีย์เซสชันของGatewayที่ระบุ
 - `--session-label <label>`: แก้ไขเซสชันที่มีอยู่ตามเลเบล

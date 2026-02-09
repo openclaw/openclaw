@@ -3,18 +3,11 @@ summary: "Kiến trúc IPC trên macOS cho ứng dụng OpenClaw, truyền tải
 read_when:
   - Chỉnh sửa các hợp đồng IPC hoặc IPC của ứng dụng menu bar
 title: "IPC trên macOS"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:48Z
 ---
 
 # Kiến trúc IPC OpenClaw trên macOS
 
-**Mô hình hiện tại:** một Unix socket cục bộ kết nối **dịch vụ node host** với **ứng dụng macOS** để phê duyệt exec + `system.run`. Có một CLI debug `openclaw-mac` để khám phá/kiểm tra kết nối; các hành động của agent vẫn đi qua WebSocket của Gateway và `node.invoke`. Tự động hóa UI sử dụng PeekabooBridge.
+**Current model:** a local Unix socket connects the **node host service** to the **macOS app** for exec approvals + `system.run`. A `openclaw-mac` debug CLI exists for discovery/connect checks; agent actions still flow through the Gateway WebSocket and `node.invoke`. UI automation uses PeekabooBridge.
 
 ## Mục tiêu
 

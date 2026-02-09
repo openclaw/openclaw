@@ -4,20 +4,13 @@ read_when:
   - Vous souhaitez changer les modèles par défaut ou consulter l’état d’authentification des fournisseurs
   - Vous souhaitez analyser les modèles/fournisseurs disponibles et déboguer les profils d’authentification
 title: "modèles"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:58Z
 ---
 
 # `openclaw models`
 
 Découverte, analyse et configuration des modèles (modèle par défaut, solutions de repli, profils d’authentification).
 
-Connexe :
+Liens connexes :
 
 - Fournisseurs + modèles : [Models](/providers/models)
 - Configuration de l’authentification des fournisseurs : [Getting started](/start/getting-started)
@@ -61,7 +54,7 @@ Options :
 - `--probe-max-tokens <n>`
 - `--agent <id>` (identifiant d’agent configuré ; remplace `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
 
-## Alias + solutions de repli
+## Alias + replis
 
 ```bash
 openclaw models aliases list

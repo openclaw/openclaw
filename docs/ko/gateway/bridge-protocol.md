@@ -5,13 +5,6 @@ read_when:
   - 페어링 또는 브리지 인증 실패를 조사할 때
   - 게이트웨이가 노출하는 노드 표면을 감사할 때
 title: "브리지 프로토콜"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:02Z
 ---
 
 # 브리지 프로토콜 (레거시 노드 전송)

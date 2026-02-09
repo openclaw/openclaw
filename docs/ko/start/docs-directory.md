@@ -3,13 +3,6 @@ summary: "가장 많이 사용되는 OpenClaw 문서로 연결되는 엄선된 �
 read_when:
   - 핵심 문서 페이지에 빠르게 접근하고 싶을 때
 title: "문서 디렉토리"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:14Z
 ---
 
 <Note>
@@ -53,7 +46,7 @@ x-i18n:
 - [미디어 이미지](/nodes/images)
 - [미디어 오디오](/nodes/audio)
 
-## 컴패니언 앱
+## 28. 컴패니언 앱들
 
 - [macOS 앱](/platforms/macos)
 - [iOS 앱](/platforms/ios)

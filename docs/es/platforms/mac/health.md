@@ -3,13 +3,6 @@ summary: "Cómo la app de macOS informa los estados de salud del Gateway/Baileys
 read_when:
   - Depuración de los indicadores de salud de la app de macOS
 title: "Comprobaciones de salud"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:05Z
 ---
 
 # Comprobaciones de salud en macOS

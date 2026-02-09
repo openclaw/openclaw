@@ -3,20 +3,13 @@ summary: "ပုဂ္ဂိုလ်ရေး အကူအညီပေး အ�
 read_when:
   - OpenClaw အေးဂျင့် ဆက်ရှင်အသစ်တစ်ခု စတင်ချိန်
   - ပုံမှန် Skills များကို ဖွင့်ခြင်း သို့မဟုတ် စစ်ဆေးအကဲဖြတ်ခြင်း ပြုလုပ်ချိန်
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:13Z
 ---
 
 # AGENTS.md — OpenClaw ပုဂ္ဂိုလ်ရေး အကူအညီပေး (ပုံမှန်)
 
 ## ပထမဆုံး လည်ပတ်မှု (အကြံပြု)
 
-OpenClaw သည် အေးဂျင့်အတွက် သီးသန့် workspace directory တစ်ခုကို အသုံးပြုသည်။ ပုံမှန်တန်ဖိုး — `~/.openclaw/workspace` (`agents.defaults.workspace` ဖြင့် ပြင်ဆင်နိုင်သည်)။
+OpenClaw သည် agent အတွက် သီးသန့် workspace directory ကို အသုံးပြုပါသည်။ Default: `~/.openclaw/workspace` (`agents.defaults.workspace` ဖြင့် ပြင်ဆင်နိုင်သည်)။
 
 1. Workspace ကို ဖန်တီးပါ (မရှိသေးပါက) —
 
@@ -59,7 +52,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Soul (လိုအပ်)
 
-- `SOUL.md` သည် အထောက်အထား၊ အသံသွင်ပြင် (tone) နှင့် ကန့်သတ်ချက်များကို သတ်မှတ်သည်။ အမြဲတမ်း နောက်ဆုံးအခြေအနေဖြစ်အောင် ထိန်းသိမ်းပါ။
+- `SOUL.md` သည် identity၊ tone နှင့် boundaries ကို သတ်မှတ်ပါသည်။ အမြဲ လက်ရှိအခြေအနေအတိုင်း ထိန်းသိမ်းထားပါ။
 - `SOUL.md` ကို ပြောင်းလဲပါက အသုံးပြုသူကို အသိပေးပါ။
 - ဆက်ရှင်တိုင်းတွင် အသစ်တစ်ခုဖြစ်ပြီး ဆက်လက်တည်တံ့မှုမှာ ဤဖိုင်များထဲတွင် ရှိသည်။
 
@@ -108,7 +101,7 @@ git commit -m "Add Clawd workspace"
 - **eightctl** — တာမီနယ်မှတစ်ဆင့် အိပ်စက်မှုကို ထိန်းချုပ်ရန်။
 - **imsg** — iMessage & SMS ကို ပို့၊ ဖတ်၊ stream ပြုလုပ်ရန်။
 - **wacli** — WhatsApp CLI: sync, search, send။
-- **discord** — Discord လုပ်ဆောင်ချက်များ: react, stickers, polls။ `user:<id>` သို့မဟုတ် `channel:<id>` targets ကို အသုံးပြုပါ (ကိန်းဂဏန်း id များကိုသာ အသုံးပြုပါက မရှင်းလင်းနိုင်ပါ)။
+- **discord** — Discord လုပ်ဆောင်ချက်များ: react, stickers, polls။ `user:<id>` သို့မဟုတ် `channel:<id>` target များကို အသုံးပြုပါ (numeric id များကို တစ်ခုတည်းသာ အသုံးပြုပါက အဓိပ္ပါယ်မရှင်းလင်းနိုင်ပါ)။
 - **gog** — Google Suite CLI: Gmail, Calendar, Drive, Contacts။
 - **spotify-player** — ရှာဖွေရန်/queue ထားရန်/ပြန်ဖွင့်ခြင်းကို ထိန်းချုပ်ရန် Terminal Spotify client။
 - **sag** — mac-style say UX ဖြင့် ElevenLabs အသံထွက်; ပုံမှန်အားဖြင့် စပီကာများသို့ stream လုပ်သည်။
@@ -124,7 +117,7 @@ git commit -m "Add Clawd workspace"
 - scripting အတွက် `openclaw` CLI ကို ဦးစားပေးအသုံးပြုပါ; mac အက်ပ်က ခွင့်ပြုချက်များကို စီမံခန့်ခွဲသည်။
 - Skills tab မှ installs များကို လုပ်ဆောင်ပါ; binary ရှိပြီးသားဖြစ်ပါက ခလုတ်ကို ဖျက်ထားမည်။
 - heartbeats များကို ဖွင့်ထားပါ — ထိုသို့လုပ်ခြင်းဖြင့် အကူအညီပေးသည် သတိပေးချက်များ စီစဉ်နိုင်ခြင်း၊ inbox များကို စောင့်ကြည့်နိုင်ခြင်း၊ ကင်မရာ ဖမ်းယူမှုများကို လှုံ့ဆော်နိုင်ခြင်းတို့ ဖြစ်စေသည်။
-- Canvas UI သည် native overlays ဖြင့် full-screen လည်ပတ်သည်။ အရေးကြီးသော ထိန်းချုပ်မှုများကို အပေါ်ဘယ်/အပေါ်ညာ/အောက်အစွန်းများတွင် မထားပါနှင့်; layout တွင် explicit gutters များ ထည့်သွင်းပြီး safe-area insets ကို မမှီခိုပါနှင့်။
+- Canvas UI သည် native overlays များနှင့်အတူ full-screen အဖြစ် လည်ပတ်ပါသည်။ အရေးကြီးသော controls များကို top-left/top-right/bottom အနားသတ်များတွင် မထားပါနှင့်; layout တွင် explicit gutters များ ထည့်ပါ၊ safe-area insets ကို မမှီခိုပါနှင့်။
 - ဘရောက်ဇာအခြေပြု စစ်ဆေးအတည်ပြုမှုအတွက် OpenClaw စီမံခန့်ခွဲထားသော Chrome profile နှင့်အတူ `openclaw browser` (tabs/status/screenshot) ကို အသုံးပြုပါ။
 - DOM စစ်ဆေးရန် `openclaw browser eval|query|dom|snapshot` ကို အသုံးပြုပါ (machine output လိုအပ်ပါက `--json`/`--out` ကိုပါ အသုံးပြုပါ)။
 - အပြန်အလှန်လုပ်ဆောင်မှုများအတွက် `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` ကို အသုံးပြုပါ (click/type များသည် snapshot refs လိုအပ်သည်; CSS selectors အတွက် `evaluate` ကို အသုံးပြုပါ)။

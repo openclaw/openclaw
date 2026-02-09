@@ -4,18 +4,11 @@ read_when:
   - OpenClaw မှ အထွက် Voice Call တစ်ခုပြုလုပ်လိုသောအခါ
   - Voice Call ပလပ်ဂင်ကို ဖွဲ့စည်းပြင်ဆင်ခြင်း သို့မဟုတ် ဖွံ့ဖြိုးတိုးတက်ရေးလုပ်ဆောင်နေသောအခါ
 title: "Voice Call ပလပ်ဂင်"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:54Z
 ---
 
 # Voice Call (plugin)
 
-OpenClaw အတွက် Voice Call များကို ပလပ်ဂင်ဖြင့် အသုံးပြုနိုင်သည်။ အထွက် အသိပေးချက်များနှင့် အဝင် မူဝါဒများပါဝင်သော multi-turn ဆက်သွယ်ပြောဆိုမှုများကို ပံ့ပိုးသည်။
+Plugin တစ်ခုမှတစ်ဆင့် OpenClaw အတွက် voice calls များ။ Outbound notifications နှင့် inbound policies ပါဝင်သော multi-turn conversations များကို ပံ့ပိုးပေးပါသည်။
 
 လက်ရှိ ပံ့ပိုးသူများ:
 
@@ -120,12 +113,12 @@ cd ./extensions/voice-call && pnpm install
 - `mock` သည် local dev အတွက် ပံ့ပိုးသူ (network ခေါ်ဆိုမှု မရှိ) ဖြစ်သည်။
 - `skipSignatureVerification` သည် local စမ်းသပ်မှုအတွက်သာ ဖြစ်သည်။
 - ngrok free tier ကို အသုံးပြုပါက `publicUrl` ကို ngrok URL အတိအကျ သတ်မှတ်ရပါမည်; လက်မှတ်စစ်ဆေးခြင်းကို အမြဲတမ်း အကောင်အထည်ဖော်ထားသည်။
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` သည် `tunnel.provider="ngrok"` နှင့် `serve.bind` သည် loopback (ngrok local agent) ဖြစ်သည့်အချိန်တွင်သာ Twilio webhook များ၏ မမှန်ကန်သော လက်မှတ်များကို ခွင့်ပြုပါသည်။ local dev အတွက်သာ အသုံးပြုပါ။
-- Ngrok free tier URL များသည် ပြောင်းလဲနိုင်ခြင်း သို့မဟုတ် interstitial အပြုအမူများ ထည့်နိုင်ပါသည်; `publicUrl` ပြောင်းလဲသွားပါက Twilio လက်မှတ်များ မအောင်မြင်ပါမည်။ ထုတ်လုပ်ရေးအတွက် တည်ငြိမ်သော domain သို့မဟုတ် Tailscale funnel ကို ဦးစားပေးအသုံးပြုပါ။
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` သည် `tunnel.provider="ngrok"` ဖြစ်ပြီး `serve.bind` သည် loopback (ngrok local agent) ဖြစ်သည့်အခါတွင်သာ **signature မမှန်သော** Twilio webhooks များကို ခွင့်ပြုပါသည်။ Local dev အတွက်သာ အသုံးပြုပါ။
+- Ngrok free tier URL များသည် ပြောင်းလဲနိုင်သလို interstitial behavior ကိုလည်း ထည့်နိုင်ပါသည်။ `publicUrl` ပြောင်းလဲသွားပါက Twilio signature များ ပျက်ကွက်ပါလိမ့်မည်။ Production အတွက် stable domain သို့မဟုတ် Tailscale funnel ကို အသုံးပြုရန် အကြံပြုပါသည်။
 
 ## Webhook လုံခြုံရေး
 
-Gateway အရှေ့တွင် proxy သို့မဟုတ် tunnel တစ်ခု ရှိနေပါက၊ ပလပ်ဂင်သည် လက်မှတ်စစ်ဆေးရန် အများပြည်သူ URL ကို ပြန်လည်တည်ဆောက်ပါသည်။ အောက်ပါ ရွေးချယ်မှုများသည် မည်သည့် forwarded header များကို ယုံကြည်မည်ကို ထိန်းချုပ်ပါသည်။
+Gateway ရှေ့တွင် proxy သို့မဟုတ် tunnel တစ်ခုရှိပါက plugin သည် signature စစ်ဆေးရန်အတွက် public URL ကို ပြန်လည်တည်ဆောက်ပါသည်။ ဤရွေးချယ်မှုများသည် မည်သည့် forwarded headers များကို ယုံကြည်မည်ကို ထိန်းချုပ်ပါသည်။
 
 `webhookSecurity.allowedHosts` သည် forwarding header များမှ ဟို့စ်များကို ခွင့်ပြုစာရင်းဖြင့် သတ်မှတ်ပါသည်။
 
@@ -154,7 +147,7 @@ Gateway အရှေ့တွင် proxy သို့မဟုတ် tunnel တ
 
 ## ခေါ်ဆိုမှုများအတွက် TTS
 
-Voice Call သည် ခေါ်ဆိုမှုများအတွက် streaming speech ကို core `messages.tts` ဖွဲ့စည်းပြင်ဆင်မှု (OpenAI သို့မဟုတ် ElevenLabs) ကို အသုံးပြုပါသည်။ ပလပ်ဂင် ဖွဲ့စည်းပြင်ဆင်မှုအောက်တွင် **တူညီသော ပုံသဏ္ဌာန်** ဖြင့် override လုပ်နိုင်ပြီး `messages.tts` နှင့် deep‑merge လုပ်ပါသည်။
+Voice Call သည် call များအတွင်း streaming speech အတွက် core `messages.tts` configuration (OpenAI သို့မဟုတ် ElevenLabs) ကို အသုံးပြုပါသည်။ Plugin config အောက်တွင် **same shape** ဖြင့် override လုပ်နိုင်ပြီး `messages.tts` နှင့် deep‑merge ဖြစ်ပါသည်။
 
 ```json5
 {
@@ -234,7 +227,7 @@ Core TTS ကိုသာ အသုံးပြုခြင်း (override မ�
 
 ## အဝင် ခေါ်ဆိုမှုများ
 
-Inbound မူဝါဒ၏ default သည် `disabled` ဖြစ်သည်။ အဝင် ခေါ်ဆိုမှုများကို ဖွင့်ရန် အောက်ပါအတိုင်း သတ်မှတ်ပါ:
+Inbound policy ၏ default သည် `disabled` ဖြစ်ပါသည်။ Inbound calls ကို ဖွင့်ရန် သတ်မှတ်ပါ:
 
 ```json5
 {
@@ -244,7 +237,7 @@ Inbound မူဝါဒ၏ default သည် `disabled` ဖြစ်သည်။
 }
 ```
 
-Auto-response များသည် agent စနစ်ကို အသုံးပြုပါသည်။ အောက်ပါအရာများဖြင့် ချိန်ညှိနိုင်ပါသည်:
+Auto-responses များသည် agent system ကို အသုံးပြုပါသည်။ Tune လုပ်ရန်:
 
 - `responseModel`
 - `responseSystemPrompt`

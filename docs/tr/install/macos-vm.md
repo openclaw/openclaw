@@ -6,13 +6,6 @@ read_when:
   - Klonlayabileceğiniz, sıfırlanabilir bir macOS ortamı istiyorsanız
   - Yerel ve barındırılan macOS VM seçeneklerini karşılaştırmak istiyorsanız
 title: "macOS VM’leri"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:35Z
 ---
 
 # macOS VM’lerinde OpenClaw (Sandboxing)
@@ -21,7 +14,7 @@ x-i18n:
 
 - **Küçük bir Linux VPS**, her zaman açık bir Gateway ve düşük maliyet için. Bkz. [VPS hosting](/vps).
 - **Özel donanım** (Mac mini veya Linux makine), tam denetim ve tarayıcı otomasyonu için **konut IP’si** istiyorsanız. Birçok site veri merkezi IP’lerini engeller; bu nedenle yerel tarama çoğu zaman daha iyi çalışır.
-- **Hibrit:** Gateway’i ucuz bir VPS’te tutun ve tarayıcı/UI otomasyonuna ihtiyaç duyduğunuzda Mac’inizi **node** olarak bağlayın. Bkz. [Nodes](/nodes) ve [Gateway remote](/gateway/remote).
+- **Hibrit:** Gateway’i ucuz bir VPS’te tutun ve tarayıcı/UI otomasyonuna ihtiyaç duyduğunuzda Mac’inizi **node** olarak bağlayın. [Nodes](/nodes) ve [Gateway remote](/gateway/remote).
 
 macOS’a özgü yeteneklere (iMessage/BlueBubbles) özellikle ihtiyaç duyduğunuzda veya günlük Mac’inizden sıkı yalıtım istediğinizde macOS VM kullanın.
 
@@ -56,7 +49,7 @@ Bir macOS VM’ye SSH erişiminiz olduğunda, aşağıdaki 6. adımdan devam edi
 3. Kurulum Asistanını tamamlayın, Remote Login’i (SSH) etkinleştirin
 4. `lume run openclaw --no-display`
 5. SSH ile bağlanın, OpenClaw’ı kurun, kanalları yapılandırın
-6. Bitti
+6. Done
 
 ---
 
@@ -69,7 +62,7 @@ Bir macOS VM’ye SSH erişiminiz olduğunda, aşağıdaki 6. adımdan devam edi
 
 ---
 
-## 1) Lume’u yükleyin
+## 1. Lume’u yükleyin
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ Belgeler: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/ins
 
 ---
 
-## 2) macOS VM’yi oluşturun
+## 2. macOS VM’yi oluşturun
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ Not: İndirme, bağlantınıza bağlı olarak biraz zaman alabilir.
 
 ---
 
-## 3) Kurulum Asistanını tamamlayın
+## 3. Kurulum Asistanını tamamlayın
 
 VNC penceresinde:
 
@@ -119,7 +112,7 @@ Kurulum tamamlandıktan sonra SSH’yi etkinleştirin:
 
 ---
 
-## 4) VM’nin IP adresini alın
+## 4. VM’nin IP adresini alın
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ IP adresini bulun (genellikle `192.168.64.x`).
 
 ---
 
-## 5) VM’ye SSH ile bağlanın
+## 5. VM’ye SSH ile bağlanın
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) OpenClaw’ı yükleyin
+## 6. OpenClaw’ı yükleyin
 
 VM’nin içinde:
 
@@ -152,7 +145,7 @@ Model sağlayıcınızı (Anthropic, OpenAI, vb.) ayarlamak için yönlendirmele
 
 ---
 
-## 7) Kanalları yapılandırın
+## 7. Kanalları yapılandırın
 
 Yapılandırma dosyasını düzenleyin:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) VM’yi başlıksız çalıştırın
+## 8. VM’yi başlıksız çalıştırın
 
 VM’yi durdurun ve ekransız olarak yeniden başlatın:
 
@@ -267,11 +260,11 @@ Gerçek anlamda her zaman açık kullanım için özel bir Mac mini veya küçü
 
 ## Sorun Giderme
 
-| Problem                      | Çözüm                                                                                              |
-| ---------------------------- | -------------------------------------------------------------------------------------------------- |
-| VM’ye SSH ile bağlanılamıyor | VM’nin Sistem Ayarları’nda “Remote Login”in etkin olduğundan emin olun                             |
-| VM IP görünmüyor             | VM’nin tamamen açılmasını bekleyin, `lume get openclaw` komutunu tekrar çalıştırın                 |
-| Lume komutu bulunamadı       | `~/.local/bin` öğesini PATH’inize ekleyin                                                          |
+| Problem                      | Çözüm                                                                                                                 |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| VM’ye SSH ile bağlanılamıyor | VM’nin Sistem Ayarları’nda “Remote Login”in etkin olduğundan emin olun                                                |
+| VM IP görünmüyor             | VM’nin tamamen açılmasını bekleyin, `lume get openclaw` komutunu tekrar çalıştırın                                    |
+| Lume komutu bulunamadı       | `~/.local/bin` öğesini PATH’inize ekleyin                                                                             |
 | WhatsApp QR taranmıyor       | `openclaw channels login` çalıştırılırken VM’ye (ana makineye değil) giriş yaptığınızdan emin olun |
 
 ---

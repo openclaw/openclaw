@@ -1,17 +1,10 @@
 ---
 summary: "OpenClaw presence kayıtlarının nasıl üretildiği, birleştirildiği ve görüntülendiği"
 read_when:
-  - Instances sekmesinde hata ayıklama
+  - Debugging the Instances tab
   - Yinelenen veya bayat instance satırlarını araştırma
   - Gateway WS bağlantısını veya sistem-olayı beacon'larını değiştirme
 title: "Presence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:17Z
 ---
 
 # Presence
@@ -42,12 +35,12 @@ Presence girdileri, aşağıdaki gibi alanlara sahip yapılandırılmış nesnel
 
 Presence girdileri birden fazla kaynak tarafından üretilir ve **birleştirilir**.
 
-### 1) Gateway öz girdisi
+### 1. Gateway öz girdisi
 
 Gateway, başlatma sırasında her zaman bir “öz” girdisi ekler; böylece herhangi bir
 istemci bağlanmadan önce bile arayüzlerde gateway ana makinesi görünür.
 
-### 2) WebSocket bağlantısı
+### 2. WebSocket bağlantısı
 
 Her WS istemcisi bir `connect` isteğiyle başlar. Başarılı el sıkışma sonrasında
 Gateway, bu bağlantı için bir presence girdisini ekler veya günceller.
@@ -57,12 +50,12 @@ Gateway, bu bağlantı için bir presence girdisini ekler veya günceller.
 CLI, kısa süreli tek seferlik komutlar için sıkça bağlanır. Instances listesini
 spam’lememek için `client.mode === "cli"` bir presence girdisine **dönüştürülmez**.
 
-### 3) `system-event` beacon’ları
+### 3. `system-event` beacon’ları
 
 İstemciler, `system-event` yöntemi aracılığıyla daha zengin periyodik beacon’lar
 gönderebilir. mac uygulaması, ana makine adı, IP ve `lastInputSeconds` bildirmek için bunu kullanır.
 
-### 4) Node bağlantıları (rol: node)
+### 4. Node bağlantıları (rol: node)
 
 Bir node, Gateway WebSocket’i üzerinden `role: node` ile bağlandığında Gateway,
 o node için bir presence girdisini ekler veya günceller (diğer WS istemcileriyle aynı akış).

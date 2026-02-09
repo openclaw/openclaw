@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou modificar plugins/extensões
   - Ao documentar regras de instalação ou carregamento de plugins
 title: "Plugins"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:44Z
 ---
 
 # Plugins (Extensões)
@@ -312,7 +305,7 @@ Os plugins exportam um de:
 
 ## Hooks de plugin
 
-Os plugins podem incluir hooks e registrá-los em tempo de execução. Isso permite que um plugin
+Os plugins podem enviar hooks e registrá-los em tempo de execução. Os plugins podem incluir hooks e registrá-los em tempo de execução. Isso permite que um plugin
 empacote automação orientada a eventos sem uma instalação separada de pacote de hooks.
 
 ### Exemplo

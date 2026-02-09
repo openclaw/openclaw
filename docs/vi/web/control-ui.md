@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn vận hành Gateway từ trình duyệt
   - Bạn muốn truy cập Tailnet mà không cần đường hầm SSH
 title: "Control UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:52Z
 ---
 
 # Control UI (trình duyệt)
@@ -33,15 +26,13 @@ Nếu trang không tải được, hãy khởi động Gateway trước: `opencl
 Xác thực được cung cấp trong quá trình bắt tay WebSocket thông qua:
 
 - `connect.params.auth.token`
-- `connect.params.auth.password`
-  Bảng cài đặt dashboard cho phép bạn lưu token; mật khẩu không được lưu lại.
-  Trình hướng dẫn onboarding tạo token gateway theo mặc định, vì vậy hãy dán token này khi kết nối lần đầu.
+- 48. `connect.params.auth.password`
+      Bảng cài đặt dashboard cho phép bạn lưu một token; mật khẩu không được lưu trữ.
+      Trình hướng dẫn onboarding tạo token gateway theo mặc định, vì vậy hãy dán nó vào đây khi kết nối lần đầu.
 
 ## Ghép cặp thiết bị (kết nối lần đầu)
 
-Khi bạn kết nối Control UI từ một trình duyệt hoặc thiết bị mới, Gateway
-yêu cầu **phê duyệt ghép cặp một lần** — ngay cả khi bạn ở cùng Tailnet
-với `gateway.auth.allowTailscale: true`. Đây là biện pháp bảo mật để ngăn
+Khi bạn kết nối tới Control UI từ một trình duyệt hoặc thiết bị mới, Gateway yêu cầu **phê duyệt ghép cặp một lần** — ngay cả khi bạn đang ở cùng Tailnet với `gateway.auth.allowTailscale: true`. 49. Đây là một biện pháp bảo mật để ngăn chặn
 truy cập trái phép.
 
 **Những gì bạn sẽ thấy:** "disconnected (1008): pairing required"
@@ -56,14 +47,13 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-Sau khi được phê duyệt, thiết bị sẽ được ghi nhớ và không cần phê duyệt lại trừ khi
-bạn thu hồi nó bằng `openclaw devices revoke --device <id> --role <role>`. Xem
-[Devices CLI](/cli/devices) để biết cách xoay vòng và thu hồi token.
+Sau khi được phê duyệt, thiết bị sẽ được ghi nhớ và sẽ không cần phê duyệt lại trừ khi bạn thu hồi bằng `openclaw devices revoke --device <id> --role <role>`. Xem
+[Devices CLI](/cli/devices) để xoay vòng và thu hồi token.
 
 **Ghi chú:**
 
 - Kết nối local (`127.0.0.1`) được tự động phê duyệt.
-- Kết nối từ xa (LAN, Tailnet, v.v.) cần phê duyệt rõ ràng.
+- Kết nối từ xa (LAN, Tailnet, v.v.) 50. yêu cầu phê duyệt rõ ràng.
 - Mỗi hồ sơ trình duyệt tạo một ID thiết bị duy nhất, vì vậy việc đổi trình duyệt hoặc
   xóa dữ liệu trình duyệt sẽ yêu cầu ghép cặp lại.
 
@@ -71,7 +61,7 @@ bạn thu hồi nó bằng `openclaw devices revoke --device <id> --role <role>`
 
 - Chat với mô hình qua Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream các lời gọi công cụ + thẻ đầu ra công cụ trực tiếp trong Chat (sự kiện tác tử)
-- Kênh: trạng thái WhatsApp/Telegram/Discord/Slack + kênh plugin (Mattermost, v.v.) + đăng nhập QR + cấu hình theo từng kênh (`channels.status`, `web.login.*`, `config.patch`)
+- Kênh: WhatsApp/Telegram/Discord/Slack + các kênh plugin (Mattermost, v.v.) trạng thái + đăng nhập QR + cấu hình theo kênh (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: danh sách hiện diện + làm mới (`system-presence`)
 - Sessions: danh sách + ghi đè thinking/verbose theo từng phiên (`sessions.list`, `sessions.patch`)
 - Cron jobs: liệt kê/thêm/chạy/bật/tắt + lịch sử chạy (`cron.*`)
@@ -88,7 +78,7 @@ bạn thu hồi nó bằng `openclaw devices revoke --device <id> --role <role>`
 
 Ghi chú về bảng Cron jobs:
 
-- Với các job cô lập, cách gửi mặc định là thông báo tóm tắt. Bạn có thể chuyển sang none nếu muốn chỉ chạy nội bộ.
+- Đối với các tác vụ cô lập, phương thức gửi mặc định là thông báo tóm tắt. Bạn có thể chuyển sang none nếu muốn chạy chỉ nội bộ.
 - Trường kênh/đích sẽ xuất hiện khi chọn announce.
 
 ## Hành vi chat
@@ -115,13 +105,12 @@ Mở:
 
 - `https://<magicdns>/` (hoặc `gateway.controlUi.basePath` đã cấu hình của bạn)
 
-Theo mặc định, các yêu cầu Serve có thể xác thực qua header danh tính Tailscale
-(`tailscale-user-login`) khi `gateway.auth.allowTailscale` là `true`. OpenClaw
-xác minh danh tính bằng cách phân giải địa chỉ `x-forwarded-for` với
-`tailscale whois` và đối chiếu với header, và chỉ chấp nhận khi yêu cầu
-đi vào loopback với các header `x-forwarded-*` của Tailscale. Đặt
+Theo mặc định, các yêu cầu Serve có thể xác thực qua các header danh tính Tailscale (`tailscale-user-login`) khi `gateway.auth.allowTailscale` là `true`. OpenClaw
+xác minh danh tính bằng cách phân giải địa chỉ `x-forwarded-for` bằng
+`tailscale whois` và đối chiếu nó với header, và chỉ chấp nhận các yêu cầu này khi
+request đi vào loopback với các header `x-forwarded-*` của Tailscale. Đặt
 `gateway.auth.allowTailscale: false` (hoặc ép `gateway.auth.mode: "password"`)
-nếu bạn muốn yêu cầu token/mật khẩu ngay cả với lưu lượng Serve.
+nếu bạn muốn yêu cầu token/mật khẩu ngay cả đối với lưu lượng Serve.
 
 ### Bind vào tailnet + token
 
@@ -137,9 +126,9 @@ Dán token vào cài đặt UI (được gửi dưới dạng `connect.params.au
 
 ## HTTP không an toàn
 
-Nếu bạn mở dashboard qua HTTP thuần (`http://<lan-ip>` hoặc `http://<tailscale-ip>`),
-trình duyệt sẽ chạy trong **ngữ cảnh không an toàn** và chặn WebCrypto. Theo mặc định,
-OpenClaw **chặn** kết nối Control UI không có danh tính thiết bị.
+If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`),
+the browser runs in a **non-secure context** and blocks WebCrypto. By default,
+OpenClaw **blocks** Control UI connections without device identity.
 
 **Cách khắc phục khuyến nghị:** dùng HTTPS (Tailscale Serve) hoặc mở UI cục bộ:
 
@@ -158,14 +147,14 @@ OpenClaw **chặn** kết nối Control UI không có danh tính thiết bị.
 }
 ```
 
-Điều này vô hiệu hóa danh tính thiết bị + ghép cặp cho Control UI (kể cả trên HTTPS).
-Chỉ sử dụng nếu bạn tin tưởng mạng.
+26. Điều này vô hiệu hóa định danh thiết bị + ghép cặp cho Control UI (kể cả trên HTTPS). Use
+    only if you trust the network.
 
 Xem [Tailscale](/gateway/tailscale) để được hướng dẫn thiết lập HTTPS.
 
 ## Build UI
 
-Gateway phục vụ các file tĩnh từ `dist/control-ui`. Build chúng bằng:
+The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
 pnpm ui:build # auto-installs UI deps on first run
@@ -187,9 +176,9 @@ Sau đó trỏ UI tới URL Gateway WS của bạn (ví dụ: `ws://127.0.0.1:18
 
 ## Gỡ lỗi/kiểm thử: dev server + Gateway từ xa
 
-Control UI là các file tĩnh; đích WebSocket có thể cấu hình và có thể
-khác với origin HTTP. Điều này hữu ích khi bạn muốn chạy Vite dev server
-cục bộ nhưng Gateway chạy ở nơi khác.
+27. Control UI là các tệp tĩnh; đích WebSocket có thể cấu hình và có thể
+    khác với nguồn gốc HTTP. Điều này hữu ích khi bạn muốn chạy máy chủ dev Vite
+    cục bộ nhưng Gateway chạy ở nơi khác.
 
 1. Khởi động UI dev server: `pnpm ui:dev`
 2. Mở một URL như:
@@ -208,8 +197,8 @@ Ghi chú:
 
 - `gatewayUrl` được lưu trong localStorage sau khi tải và bị xóa khỏi URL.
 - `token` được lưu trong localStorage; `password` chỉ được giữ trong bộ nhớ.
-- Khi `gatewayUrl` được đặt, UI sẽ không fallback sang cấu hình hoặc thông tin xác thực từ môi trường.
-  Hãy cung cấp `token` (hoặc `password`) một cách rõ ràng. Thiếu thông tin xác thực rõ ràng là lỗi.
+- 28. Khi `gatewayUrl` được đặt, UI sẽ không quay về sử dụng thông tin xác thực từ cấu hình hoặc môi trường.
+      Provide `token` (or `password`) explicitly. 29. Thiếu thông tin xác thực rõ ràng là một lỗi.
 - Dùng `wss://` khi Gateway nằm sau TLS (Tailscale Serve, proxy HTTPS, v.v.).
 - `gatewayUrl` chỉ được chấp nhận trong cửa sổ cấp cao nhất (không nhúng) để ngăn clickjacking.
 - Với các thiết lập dev khác origin (ví dụ: `pnpm ui:dev` tới một Gateway từ xa), hãy thêm origin của UI

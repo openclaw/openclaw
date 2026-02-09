@@ -3,13 +3,6 @@ summary: "Sandbox na agenta + ograniczenia narzędzi, priorytety i przykłady"
 title: Sandbox i narzędzia dla wielu agentów
 read_when: "Chcesz sandboxing per agent lub zasady zezwalania/odmowy narzędzi per agent w bramie wieloagentowej."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:54Z
 ---
 
 # Konfiguracja sandboxa i narzędzi dla wielu agentów
@@ -247,7 +240,7 @@ Polityki narzędzi (globalne, agenta, sandboxa) obsługują wpisy `group:*`, kt�
 
 `tools.elevated` jest globalną bazą (lista dozwolonych oparta na nadawcy). `agents.list[].tools.elevated` może dodatkowo ograniczać tryb elevated dla konkretnych agentów (oba muszą zezwalać).
 
-Wzorce mitigacji:
+Wzory łagodzenia:
 
 - Odrzuć `exec` dla niezaufanych agentów (`agents.list[].tools.deny: ["exec"]`)
 - Unikaj dodawania do listy dozwolonych nadawców, którzy kierują ruch do agentów z ograniczeniami

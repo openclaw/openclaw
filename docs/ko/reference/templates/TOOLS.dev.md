@@ -3,13 +3,6 @@ summary: "개발 에이전트 도구 노트 (C-3PO)"
 read_when:
   - dev Gateway(게이트웨이) 템플릿을 사용하는 경우
   - 기본 dev 에이전트 아이덴티티를 업데이트하는 경우
-x-i18n:
-  source_path: reference/templates/TOOLS.dev.md
-  source_hash: 3d41097967c98116
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:12Z
 ---
 
 # TOOLS.md - 사용자 도구 노트 (편집 가능)
@@ -17,7 +10,7 @@ x-i18n:
 이 파일은 외부 도구와 관례에 대한 _당신의_ 메모를 위한 것입니다.
 이 파일은 어떤 도구가 존재하는지를 정의하지 않으며, OpenClaw 는 내부적으로 기본 제공 도구를 제공합니다.
 
-## 예시
+## 예제
 
 ### imsg
 

@@ -4,13 +4,6 @@ read_when:
   - macOS 앱 기능을 구현할 때
   - macOS 에서 게이트웨이 라이프사이클 또는 노드 브리징을 변경할 때
 title: "macOS 앱"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:06Z
 ---
 
 # OpenClaw macOS 컴패니언 (메뉴 바 + 게이트웨이 브로커)
@@ -19,7 +12,7 @@ macOS 앱은 OpenClaw 를 위한 **메뉴 바 컴패니언**입니다. 권한을
 로컬에서 Gateway(게이트웨이) 를 관리/연결하며 (launchd 또는 수동),
 macOS 기능을 노드로서 에이전트에 노출합니다.
 
-## 수행 기능
+## What it does
 
 - 메뉴 바에 네이티브 알림과 상태를 표시합니다.
 - TCC 프롬프트(알림, 접근성, 화면 녹화, 마이크,
@@ -192,10 +185,9 @@ localhost 에 있는 것처럼 통신할 수 있도록 SSH 터널을 엽니다.
 - **동작:** 임의의 로컬 포트를 사용하지 않으며, 기존의 정상 터널을 재사용하거나 필요 시 재시작합니다.
 - **SSH 형태:** BatchMode +
   ExitOnForwardFailure + keepalive 옵션을 사용하는 `ssh -N -L <local>:127.0.0.1:<remote>`.
-- **IP 보고:** SSH 터널은 loopback 을 사용하므로, 게이트웨이는 노드 IP 를 `127.0.0.1` 로 인식합니다.
-  실제 클라이언트 IP 가 표시되도록 하려면 **Direct (ws/wss)** 전송을 사용하십시오([macOS 원격 액세스](/platforms/mac/remote) 참조).
+- **IP 보고:** SSH 터널은 loopback 을 사용하므로, 게이트웨이는 노드 IP 를 `127.0.0.1` 로 인식합니다. 실제 클라이언트 IP 가 표시되도록 하려면 **Direct (ws/wss)** 전송을 사용하십시오([macOS 원격 액세스](/platforms/mac/remote) 참조).
 
-설정 단계는 [macOS 원격 액세스](/platforms/mac/remote) 를, 프로토콜 세부 사항은 [Gateway 프로토콜](/gateway/protocol) 을 참고하십시오.
+설정 단계는 [macOS 원격 액세스](/platforms/mac/remote) 를, 프로토콜 세부 사항은 [Gateway 프로토콜](/gateway/protocol) 을 참고하십시오. 39. 프로토콜 세부 정보는 [Gateway protocol](/gateway/protocol)을 참조하세요.
 
 ## 관련 문서
 

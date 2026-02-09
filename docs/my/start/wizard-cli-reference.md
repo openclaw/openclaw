@@ -5,19 +5,12 @@ read_when:
   - onboarding ရလဒ်များကို အမှားရှာဖွေနေစဉ် သို့မဟုတ် onboarding client များ ပေါင်းစည်းနေစဉ်
 title: "CLI စတင်မိတ်ဆက်ခြင်း ရည်ညွှန်းချက်"
 sidebarTitle: "CLI reference"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:27Z
 ---
 
 # CLI စတင်မိတ်ဆက်ခြင်း ရည်ညွှန်းချက်
 
-ဤစာမျက်နှာသည် `openclaw onboard` အတွက် ပြည့်စုံသော ရည်ညွှန်းချက်ဖြစ်သည်။
-တိုတောင်းသော လမ်းညွှန်အတွက် [Onboarding Wizard (CLI)](/start/wizard) ကိုကြည့်ပါ။
+ဤစာမျက်နှာသည် `openclaw onboard` အတွက် reference အပြည့်အစုံဖြစ်သည်။
+အကျဉ်းချုပ်လမ်းညွှန်အတွက် [Onboarding Wizard (CLI)](/start/wizard) ကို ကြည့်ပါ။
 
 ## wizard က ဘာတွေ လုပ်ပေးသလဲ
 
@@ -32,33 +25,33 @@ Local mode (မူလသတ်မှတ်ချက်) တွင် အော�
 - Skills တပ်ဆင်ခြင်း
 
 Remote mode သည် ဤစက်ကို အခြားနေရာရှိ gateway တစ်ခုနှင့် ချိတ်ဆက်အလုပ်လုပ်နိုင်အောင် ဖွဲ့စည်းပြင်ဆင်ပေးသည်။
-Remote host ပေါ်တွင် ဘာမှ ထည့်သွင်းခြင်း သို့မဟုတ် ပြောင်းလဲခြင်း မလုပ်ပါ။
+Remote host ပေါ်တွင် မည်သည့်အရာကိုမျှ install သို့မဟုတ် ပြုပြင်မည်မဟုတ်ပါ။
 
 ## Local flow အသေးစိတ်
 
 <Steps>
-  <Step title="ရှိပြီးသား config ကို ရှာဖွေခြင်း">
-    - `~/.openclaw/openclaw.json` ရှိပါက Keep, Modify, သို့မဟုတ် Reset ကို ရွေးချယ်နိုင်သည်။
-    - wizard ကို ပြန်လည်လုပ်ဆောင်ခြင်းသည် Reset ကို ထင်ရှားစွာ ရွေးချယ်မထားလျှင် (သို့မဟုတ် `--reset` ကို ပေးပို့ထားလျှင် မဟုတ်လျှင်) မည်သည့်အရာကိုမှ မဖျက်ပါ။
-    - config မမှန်ကန်ပါက သို့မဟုတ် legacy key များ ပါဝင်နေပါက wizard သည် ရပ်တန့်ပြီး ဆက်လက်လုပ်ဆောင်ရန် `openclaw doctor` ကို အရင် run လုပ်ရန် တောင်းဆိုပါသည်။
-    - Reset သည် `trash` ကို အသုံးပြုပြီး အောက်ပါ scope များကို ရွေးချယ်ခွင့် ပေးပါသည်–
-      - Config သာ
-      - Config + credentials + sessions
-      - Full reset (workspace ကိုပါ ဖယ်ရှားသည်)
-  </Step>
-  <Step title="မော်ဒယ်နှင့် အတည်ပြုချက်">
+  <Step title="Existing config detection">
+    - `~/.openclaw/openclaw.json` ရှိပါက Keep၊ Modify သို့မဟုတ် Reset ကို ရွေးချယ်ပါ။
+    - Wizard ကို ပြန် run လုပ်ခြင်းသည် သင် Reset ကို တိတိကျကျ ရွေးချယ်ခြင်း (သို့မဟုတ် `--reset` ပေးခြင်း) မရှိပါက မည်သည့်အရာကိုမျှ မဖျက်ပါ။
+    - Config မမှန်ကန်ပါက သို့မဟုတ် legacy key များ ပါဝင်ပါက wizard သည် ရပ်ပြီး ဆက်မလုပ်မီ `openclaw doctor` ကို run လုပ်ရန် တောင်းဆိုသည်။
+    - Reset သည် `trash` ကို အသုံးပြုပြီး scope များကို ပေးသည်:
+      - Config သာလျှင်
+      - Config + credential + session
+      - Full reset (workspace ကိုပါ ဖယ်ရှားသည်)  
+</Step>
+  <Step title="Model and auth">
     - ရွေးချယ်စရာ အပြည့်အစုံကို [Auth and model options](#auth-and-model-options) တွင် ဖော်ပြထားပါသည်။
   </Step>
   <Step title="Workspace">
-    - မူလသတ်မှတ်ချက်မှာ `~/.openclaw/workspace` (ပြောင်းလဲနိုင်သည်)။
-    - ပထမဆုံး run အတွက် bootstrap ritual လိုအပ်သည့် workspace ဖိုင်များကို seed လုပ်ပါသည်။
-    - Workspace အပြင်အဆင်: [Agent workspace](/concepts/agent-workspace)။
+    - Default `~/.openclaw/workspace` (ပြောင်းလဲနိုင်သည်)။
+    - First-run bootstrap ritual အတွက် လိုအပ်သော workspace file များကို seed လုပ်ပေးသည်။
+    - အလုပ်ခန်း အပြင်အဆင်: [Agent workspace](/concepts/agent-workspace).
   </Step>
   <Step title="Gateway">
-    - port, bind, auth mode နှင့် tailscale exposure ကို မေးမြန်းပါသည်။
-    - အကြံပြုချက်– loopback ဖြစ်သော်လည်း token auth ကို ဖွင့်ထားပါ။ ဒါမှ local WS client များသည် အတည်ပြုချက် ပြုလုပ်ရပါမည်။
-    - local process အားလုံးကို အပြည့်အဝ ယုံကြည်မှသာ auth ကို ပိတ်ပါ။
-    - loopback မဟုတ်သော bind များတွင် auth လိုအပ်ဆဲဖြစ်သည်။
+    - Port၊ bind၊ auth mode နှင့် tailscale exposure အတွက် မေးမြန်းသည်။
+    - အကြံပြုချက်: loopback အတွက်တောင် token auth ကို ဖွင့်ထားပါ၊ ဒါမှ local WS client များက authenticate လုပ်ရပါမည်။
+    - Local process အားလုံးကို ယုံကြည်နိုင်မှသာ auth ကို ပိတ်ပါ။
+    - Non-loopback bind များတွင်လည်း auth လိုအပ်သည်။
   </Step>
   <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optional QR login
@@ -66,37 +59,39 @@ Remote host ပေါ်တွင် ဘာမှ ထည့်သွင်းခ
     - [Discord](/channels/discord): bot token
     - [Google Chat](/channels/googlechat): service account JSON + webhook audience
     - [Mattermost](/channels/mattermost) plugin: bot token + base URL
-    - [Signal](/channels/signal): optional `signal-cli` ထည့်သွင်းခြင်း + account config
-    - [BlueBubbles](/channels/bluebubbles): iMessage အတွက် အကြံပြုချက်; server URL + password + webhook
-    - [iMessage](/channels/imessage): legacy `imsg` CLI လမ်းကြောင်း + DB access
-    - DM လုံခြုံရေး– မူလသတ်မှတ်ချက်မှာ pairing ဖြစ်သည်။ ပထမဆုံး DM တွင် ကုဒ်တစ်ခု ပို့ပြီး
-      `openclaw pairing approve <channel> <code>` မှတစ်ဆင့် အတည်ပြုပါ သို့မဟုတ် allowlist များကို အသုံးပြုပါ။
-  </Step>
-  <Step title="Daemon ထည့်သွင်းခြင်း">
+    - [Signal](/channels/signal): optional `signal-cli` install + account config
+    - [BlueBubbles](/channels/bluebubbles): iMessage အတွက် အကြံပြုသည်; server URL + password + webhook
+    - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access
+    - DM security: default သည် pairing ဖြစ်သည်။ ပထမဆုံး DM တွင် code တစ်ခု ပို့မည်ဖြစ်ပြီး၊ အောက်ပါအတိုင်း approve လုပ်ပါ
+      `openclaw pairing approve
+46. <code>` သို့မဟုတ် allowlist များကို အသုံးပြုပါ။ <channel><code>` မှတစ်ဆင့် အတည်ပြုပါ သို့မဟုတ် allowlist များကို အသုံးပြုပါ။
+  </Step></Step>
+  <Step title="Daemon install">
     - macOS: LaunchAgent
-      - login လုပ်ထားသော user session လိုအပ်သည်; headless အတွက် custom LaunchDaemon ကို အသုံးပြုရပါမည် (မပို့ဆောင်ပါ)။
-    - Linux နှင့် Windows (WSL2 ဖြင့်): systemd user unit
-      - logout ပြုလုပ်ပြီးနောက် gateway ဆက်လက်အလုပ်လုပ်စေရန် wizard သည် `loginctl enable-linger <user>` ကို ကြိုးစားလုပ်ဆောင်ပါသည်။
-      - sudo ကို တောင်းနိုင်သည် (`/var/lib/systemd/linger` ကို ရေးသားသည်); အရင်ဆုံး sudo မသုံးဘဲ ကြိုးစားပါသည်။
-    - Runtime ရွေးချယ်မှု– Node (အကြံပြုချက်; WhatsApp နှင့် Telegram အတွက် မဖြစ်မနေလိုအပ်သည်)။ Bun ကို မအကြံပြုပါ။
+      - Logged-in user session လိုအပ်သည်; headless အတွက် custom LaunchDaemon ကို အသုံးပြုပါ (မပို့ပေးထားပါ)။
+  - Linux နှင့် Windows (WSL2 မှတဆင့်): systemd user unit
+      - Logout ပြီးနောက် gateway ဆက်လက် run နေရန် wizard သည် `loginctl enable-linger <user>` ကို ကြိုးစား run လုပ်သည်။
+    - sudo ကို မေးနိုင်သည် (`/var/lib/systemd/linger` ကို ရေးရန်); အရင်ဆုံး sudo မပါဘဲ ကြိုးစားသည်။
+      - Runtime ရွေးချယ်မှု: Node (အကြံပြုထားသည်; WhatsApp နှင့် Telegram အတွက် လိုအပ်သည်)။
+    - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun ကို မထောက်ခံပါ။
   </Step>
   <Step title="Health check">
-    - လိုအပ်ပါက gateway ကို စတင်ပြီး `openclaw health` ကို run လုပ်ပါသည်။
-    - `openclaw status --deep` သည် status output ထဲသို့ gateway health probes များ ထည့်ပေးပါသည်။
+    - Gateway ကို (လိုအပ်ပါက) စတင်ပြီး `openclaw health` ကို လုပ်ဆောင်သည်။
+    - `openclaw status --deep` သည် status output ထဲသို့ gateway health probes များကို ထည့်ပေါင်းသည်။
   </Step>
   <Step title="Skills">
-    - ရရှိနိုင်သော Skills များကို ဖတ်ပြီး လိုအပ်ချက်များကို စစ်ဆေးပါသည်။
-    - node manager ကို ရွေးချယ်ခွင့်ပေးသည်– npm သို့မဟုတ် pnpm (bun မအကြံပြု)။
-    - optional dependency များကို ထည့်သွင်းပါသည် (အချို့သည် macOS တွင် Homebrew ကို အသုံးပြုသည်)။
+    - ရရှိနိုင်သော skills များကို ဖတ်ပြီး လိုအပ်ချက်များကို စစ်ဆေးသည်။
+    - node manager ကို ရွေးချယ်နိုင်သည်: npm သို့မဟုတ် pnpm (bun ကို မထောက်ခံပါ)။
+    - optional dependencies များကို တပ်ဆင်သည် (အချို့မှာ macOS တွင် Homebrew ကို အသုံးပြုသည်)။
   </Step>
-  <Step title="ပြီးဆုံးခြင်း">
-    - iOS, Android နှင့် macOS app ရွေးချယ်မှုများ အပါအဝင် အကျဉ်းချုပ်နှင့် နောက်တစ်ဆင့်များကို ပြပါသည်။
+  <Step title="Finish">
+    - အကျဉ်းချုပ်နှင့် နောက်တစ်ဆင့်များ၊ iOS, Android နှင့် macOS app ရွေးချယ်စရာများ အပါအဝင်။
   </Step>
 </Steps>
 
 <Note>
-GUI မတွေ့ရှိပါက wizard သည် browser ဖွင့်ခြင်းအစား Control UI အတွက် SSH port-forward ညွှန်ကြားချက်များကို ပုံနှိပ်ပြသပါသည်။
-Control UI asset များ မရှိပါက wizard သည် build လုပ်ရန် ကြိုးစားပြီး fallback အနေဖြင့် `pnpm ui:build` ကို အသုံးပြုပါသည် (UI dependency များကို အလိုအလျောက် ထည့်သွင်းသည်)။
+GUI ကို မတွေ့ရှိပါက wizard သည် browser ကို ဖွင့်မည့်အစား Control UI အတွက် SSH port-forward လမ်းညွှန်ချက်များကို ပုံနှိပ်ပြသသည်။
+Control UI assets များ မရှိပါက wizard သည် build ပြုလုပ်ရန် ကြိုးစားမည်ဖြစ်ပြီး fallback အဖြစ် `pnpm ui:build` ကို အသုံးပြုသည် (UI deps များကို အလိုအလျောက် တပ်ဆင်သည်)။
 </Note>
 
 ## Remote mode အသေးစိတ်
@@ -113,8 +108,8 @@ Remote mode သည် remote host ပေါ်တွင် မည်သည့်
 - Remote gateway auth လိုအပ်ပါက token (အကြံပြုချက်)
 
 <Note>
-- gateway သည် loopback-only ဖြစ်ပါက SSH tunneling သို့မဟုတ် tailnet ကို အသုံးပြုပါ။
-- Discovery အညွှန်းများ–
+- Gateway သည် loopback-only ဖြစ်ပါက SSH tunneling သို့မဟုတ် tailnet ကို အသုံးပြုပါ။
+- Discovery အချက်အလက်များ:
   - macOS: Bonjour (`dns-sd`)
   - Linux: Avahi (`avahi-browse`)
 </Note>
@@ -122,19 +117,21 @@ Remote mode သည် remote host ပေါ်တွင် မည်သည့်
 ## Auth နှင့် မော်ဒယ် ရွေးချယ်မှုများ
 
 <AccordionGroup>
-  <Accordion title="Anthropic API key (အကြံပြုချက်)">
+  <Accordion title="Anthropic API key (recommended)">
     `ANTHROPIC_API_KEY` ရှိပါက အသုံးပြုသည် သို့မဟုတ် key ကို မေးမြန်းပြီး daemon အသုံးပြုရန် သိမ်းဆည်းပါသည်။
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: Keychain item "Claude Code-credentials" ကို စစ်ဆေးပါသည်
     - Linux နှင့် Windows: `~/.claude/.credentials.json` ရှိပါက ပြန်လည်အသုံးပြုပါသည်
 
+    ```
     macOS တွင် "Always Allow" ကို ရွေးချယ်ပါ။ သို့မှသာ launchd စတင်ခြင်းများ မပိတ်ဆို့ပါ။
+    ```
 
   </Accordion>
   <Accordion title="Anthropic token (setup-token paste)">
-    မည်သည့်စက်ပေါ်မဆို `claude setup-token` ကို run လုပ်ပြီး token ကို paste လုပ်ပါ။
-    နာမည်ပေးနိုင်သည်; မပေးပါက default ကို အသုံးပြုပါသည်။
+    `claude setup-token` ကို မည်သည့်စက်တွင်မဆို လုပ်ဆောင်ပြီး token ကို ကူးထည့်ပါ။
+    နာမည်ပေးနိုင်ပါသည်၊ အလွတ်ထားပါက default ကို အသုံးပြုသည်။
   </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     `~/.codex/auth.json` ရှိပါက wizard သည် ပြန်လည်အသုံးပြုနိုင်ပါသည်။
@@ -142,45 +139,49 @@ Remote mode သည် remote host ပေါ်တွင် မည်သည့်
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow ဖြစ်ပြီး `code#state` ကို paste လုပ်ပါ။
 
+    ```
     မော်ဒယ် မသတ်မှတ်ထားပါက သို့မဟုတ် `openai/*` ဖြစ်ပါက `agents.defaults.model` ကို `openai-codex/gpt-5.3-codex` အဖြစ် သတ်မှတ်ပါသည်။
+    ```
 
   </Accordion>
   <Accordion title="OpenAI API key">
     `OPENAI_API_KEY` ရှိပါက အသုံးပြုသည် သို့မဟုတ် key ကို မေးမြန်းပြီး
     launchd ဖတ်နိုင်စေရန် `~/.openclaw/.env` ထဲသို့ သိမ်းဆည်းပါသည်။
 
+    ```
     မော်ဒယ် မသတ်မှတ်ထားပါက၊ `openai/*` သို့မဟုတ် `openai-codex/*` ဖြစ်ပါက `agents.defaults.model` ကို `openai/gpt-5.1-codex` အဖြစ် သတ်မှတ်ပါသည်။
+    ```
 
   </Accordion>
   <Accordion title="xAI (Grok) API key">
     `XAI_API_KEY` ကို မေးမြန်းပြီး xAI ကို မော်ဒယ် ပံ့ပိုးသူအဖြစ် ဖွဲ့စည်းပြင်ဆင်ပါသည်။
   </Accordion>
   <Accordion title="OpenCode Zen">
-    `OPENCODE_API_KEY` (သို့မဟုတ် `OPENCODE_ZEN_API_KEY`) ကို မေးမြန်းပါသည်။
-    Setup URL: [opencode.ai/auth](https://opencode.ai/auth)။
+    `OPENCODE_API_KEY` (သို့မဟုတ် `OPENCODE_ZEN_API_KEY`) ကို ထည့်သွင်းရန် မေးမြန်းသည်။
+    Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
   <Accordion title="API key (generic)">
     key ကို သင့်အတွက် သိမ်းဆည်းပေးပါသည်။
   </Accordion>
   <Accordion title="Vercel AI Gateway">
-    `AI_GATEWAY_API_KEY` ကို မေးမြန်းပါသည်။
-    အသေးစိတ်– [Vercel AI Gateway](/providers/vercel-ai-gateway)။
+    `AI_GATEWAY_API_KEY` ကို ထည့်သွင်းရန် မေးမြန်းသည်။
+    အသေးစိတ်: [Vercel AI Gateway](/providers/vercel-ai-gateway).
   </Accordion>
   <Accordion title="Cloudflare AI Gateway">
-    account ID, gateway ID နှင့် `CLOUDFLARE_AI_GATEWAY_API_KEY` ကို မေးမြန်းပါသည်။
-    အသေးစိတ်– [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)။
+    account ID, gateway ID နှင့် `CLOUDFLARE_AI_GATEWAY_API_KEY` ကို ထည့်သွင်းရန် မေးမြန်းသည်။
+    အသေးစိတ်: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
   <Accordion title="MiniMax M2.1">
-    Config ကို အလိုအလျောက် ရေးသားပါသည်။
-    အသေးစိတ်– [MiniMax](/providers/minimax)။
+    Config ကို အလိုအလျောက် ရေးသားထားသည်။
+    အသေးစိတ်: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
-    `SYNTHETIC_API_KEY` ကို မေးမြန်းပါသည်။
-    အသေးစိတ်– [Synthetic](/providers/synthetic)။
+    `SYNTHETIC_API_KEY` ကို ထည့်သွင်းရန် မေးမြန်းသည်။
+    အသေးစိတ်: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot နှင့် Kimi Coding">
-    Moonshot (Kimi K2) နှင့် Kimi Coding config များကို အလိုအလျောက် ရေးသားပါသည်။
-    အသေးစိတ်– [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)။
+  <Accordion title="Moonshot and Kimi Coding">
+    Moonshot (Kimi K2) နှင့် Kimi Coding configs များကို အလိုအလျောက် ရေးသားထားသည်။
+    အသေးစိတ်: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
   <Accordion title="Skip">
     အတည်ပြုချက်ကို မဖွဲ့စည်းထားဘဲ ချန်ထားပါသည်။
@@ -221,12 +222,11 @@ Headless နှင့် server အတွက် အကြံပြုချက�
 
 `openclaw agents add` သည် `agents.list[]` နှင့် optional `bindings` ကို ရေးသားပါသည်။
 
-WhatsApp credential များကို `~/.openclaw/credentials/whatsapp/<accountId>/` အောက်တွင် သိမ်းဆည်းပါသည်။
-Session များကို `~/.openclaw/agents/<agentId>/sessions/` အောက်တွင် သိမ်းဆည်းပါသည်။
+WhatsApp အချက်အလက်များကို `~/.openclaw/credentials/whatsapp/<accountId>/` အောက်တွင် သိမ်းဆည်းထားသည်။
+Sessions များကို `~/.openclaw/agents/<agentId>/sessions/` အောက်တွင် သိမ်းဆည်းထားသည်။
 
 <Note>
-ချန်နယ်အချို့ကို plugin အဖြစ် ပို့ဆောင်ပေးပါသည်။ onboarding အတွင်း ရွေးချယ်ပါက wizard သည်
-channel configuration မလုပ်မီ plugin (npm သို့မဟုတ် local path) ကို ထည့်သွင်းရန် မေးမြန်းပါသည်။
+Channel အချို့ကို plugins အဖြစ် ပေးပို့ထားသည်။ Onboarding အတွင်း ရွေးချယ်ပါက wizard သည် channel configuration မလုပ်မီ plugin ကို (npm သို့မဟုတ် local path) တပ်ဆင်ရန် မေးမြန်းသည်။
 </Note>
 
 Gateway wizard RPC–

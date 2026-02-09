@@ -3,13 +3,6 @@ summary: "Agentkörning (inbäddad pi-mono), arbetsyteavtal och sessionsbootstra
 read_when:
   - Vid ändring av agentkörning, bootstrap av arbetsyta eller sessionsbeteende
 title: "Agentkörning"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:03Z
 ---
 
 # Agentkörning 🤖
@@ -41,11 +34,11 @@ Inuti `agents.defaults.workspace` förväntar sig OpenClaw dessa användarredige
 
 Vid första turen i en ny session injicerar OpenClaw innehållet i dessa filer direkt i agentens kontext.
 
-Tomma filer hoppas över. Stora filer trimmas och trunkeras med en markör så att promptar hålls smidiga (läs filen för fullständigt innehåll).
+Tomma filer hoppas över. Stora filer trimmas och trunkeras med en markör så att uppmaningarna förblir magra (läs filen för hela innehållet).
 
 Om en fil saknas injicerar OpenClaw en enda rad med markören ”saknad fil” (och `openclaw setup` skapar en säker standardmall).
 
-`BOOTSTRAP.md` skapas endast för en **helt ny arbetsyta** (inga andra bootstrap-filer finns). Om du tar bort den efter att ritualen slutförts ska den inte återskapas vid senare omstarter.
+`BOOTSTRAP.md` skapas endast för en **helt ny arbetsyta** (inga andra bootstrap-filer närvarande). Om du tar bort det efter avslutad ritual, bör det inte återskapas vid senare omstart.
 
 För att helt inaktivera skapandet av bootstrap-filer (för försådda arbetsytor), sätt:
 
@@ -55,10 +48,10 @@ För att helt inaktivera skapandet av bootstrap-filer (för försådda arbetsyto
 
 ## Inbyggda verktyg
 
-Kärnverktyg (read/exec/edit/write och relaterade systemverktyg) är alltid tillgängliga,
-med förbehåll för verktygspolicy. `apply_patch` är valfritt och styrs av
-`tools.exec.applyPatch`. `TOOLS.md` styr **inte** vilka verktyg som finns; det är
-vägledning för hur _du_ vill att de ska användas.
+Kärnverktyg (läs-/exekvera/redigera/skriva och relaterade systemverktyg) är alltid tillgängliga,
+med förbehåll för verktygspolicy. `apply_patch` är valfritt och gated av
+`tools.exec.applyPatch`. `TOOLS.md` kontrollerar **inte** vilka verktyg som finns; det är
+vägledning för hur _you_ vill att de används.
 
 ## Skills
 
@@ -83,30 +76,32 @@ Sessionsutskrifter lagras som JSONL på:
 
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
-Sessions-ID:t är stabilt och väljs av OpenClaw.
-Äldre Pi/Tau-sessionsmappar läses **inte**.
+Sessions-ID är stabilt och valt av OpenClaw.
+Äldre Pi/Tau sessionsmappar är **inte** lästa.
 
 ## Styrning under strömning
 
-När köläget är `steer` injiceras inkommande meddelanden i den pågående körningen.
-Kön kontrolleras **efter varje verktygsanrop**; om ett köat meddelande finns,
-hoppas återstående verktygsanrop från det aktuella assistentmeddelandet över (felaktiga verktygsresultat med ”Skipped due to queued user message.”), och därefter injiceras det köade användarmeddelandet före nästa assistentsvar.
+När köläget är `steer`, injiceras inkommande meddelanden i den aktuella körningen.
+Kön kontrolleras **efter varje verktygssamtal**; om ett köat meddelande finns
+återstående verktygssamtal från det aktuella assistentmeddelandet hoppas över (felverktyget
+resultat med "Hoppas över på grund av köat användarmeddelande. ), sedan den köade användaren
+meddelande injiceras innan nästa assistent svar.
 
-När köläget är `followup` eller `collect` hålls inkommande meddelanden tills den
-aktuella turen avslutas, och därefter startar en ny agenttur med de köade nyttolasterna. Se
-[Kö](/concepts/queue) för lägen samt debounce-/kapacitetsbeteende.
+När köläget är `followup` eller `collect`, hålls inkommande meddelanden tills
+nuvarande turn slutar, sedan börjar en ny agent vända med köade nyttolaster. Se
+[Queue](/concepts/queue) för läge + debounce/cap-beteende.
 
-Blockstreaming skickar färdiga assistentblock så snart de är klara; det är
-**avstängt som standard** (`agents.defaults.blockStreamingDefault: "off"`).
+Blockstreaming skickar slutförda blockeringar så snart de är färdiga; det är
+**av som standard** (`agents.defaults.blockStreamingDefault: "off"`).
 Justera gränsen via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; standard är text_end).
-Styr mjuk blockindelning med `agents.defaults.blockStreamingChunk` (standard
-800–1200 tecken; föredrar styckebrytningar, sedan radbrytningar; meningar sist).
-Sammanfoga strömmade delar med `agents.defaults.blockStreamingCoalesce` för att minska
-enradsskräp (sammanslagning baserad på inaktivitet före sändning). Kanaler som inte är Telegram kräver
+Kontrollera soft block chunking med `agents.defaults.blockStreamingChunk` (standard är
+800–1200 tecken; föredrar paragraf bryts och sedan newlines; meningar sista).
+Coalesce strömmade bitar med `agents.defaults.blockStreamingCoalesce` för att minska
+enkelraders skräppost (inaktiv sammanslagning innan sändning). Icke-Telegram kanaler kräver
 explicit `*.blockStreaming: true` för att aktivera blocksvar.
-Utförliga verktygssammanfattningar skickas vid verktygsstart (ingen debounce); Control UI
-strömmar verktygsutdata via agenthändelser när det finns tillgängligt.
-Mer detaljer: [Strömning + chunking](/concepts/streaming).
+Verbose verktygssammanfattningar släpps ut vid verktygsstart (ingen debounce); Kontroll UI
+strömmar verktygsutgång via agenthändelser när det är tillgängligt.
+Fler detaljer: [Streaming + chunking](/concepts/streaming).
 
 ## Modellreferenser
 

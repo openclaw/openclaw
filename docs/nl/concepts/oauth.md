@@ -6,13 +6,6 @@ read_when:
   - Je wilt setup-token- of OAuth-authenticatiestromen
   - Je wilt meerdere accounts of profilerouting
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:21Z
 ---
 
 # OAuth
@@ -82,7 +75,7 @@ De interactieve loginstromen van OpenClaw zijn geïmplementeerd in `@mariozechne
 
 ### Anthropic (Claude Pro/Max) setup-token
 
-Vorm van de stroom:
+Stroom vorm:
 
 1. voer `claude setup-token` uit
 2. plak de token in OpenClaw
@@ -118,7 +111,7 @@ De refresh-stroom is automatisch; je hoeft tokens doorgaans niet handmatig te be
 
 Twee patronen:
 
-### 1) Voorkeur: gescheiden agents
+### 1. Voorkeur: gescheiden agents
 
 Als je wilt dat “persoonlijk” en “werk” nooit met elkaar interacteren, gebruik geïsoleerde agents (gescheiden sessies + referenties + werkruimte):
 
@@ -129,7 +122,7 @@ openclaw agents add personal
 
 Configureer vervolgens auth per agent (wizard) en routeer chats naar de juiste agent.
 
-### 2) Geavanceerd: meerdere profielen in één agent
+### 2. Geavanceerd: meerdere profielen in één agent
 
 `auth-profiles.json` ondersteunt meerdere profiel-ID’s voor dezelfde provider.
 

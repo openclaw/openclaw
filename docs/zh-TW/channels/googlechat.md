@@ -3,13 +3,6 @@ summary: "Google Chat 應用程式支援狀態、功能與設定"
 read_when:
   - 進行 Google Chat 頻道功能開發時
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:06Z
 ---
 
 # Google Chat（Chat API）
@@ -25,9 +18,9 @@ x-i18n:
    - 點擊 **Create Credentials** > **Service Account**。
    - 任意命名（例如：`openclaw-chat`）。
    - 權限留空（按 **Continue**）。
-   - 可存取的主體留空（按 **Done**）。
+   - 22. 將可存取的主體留空（按 **Done**）。
 3. 建立並下載 **JSON Key**：
-   - 在 Service Account 清單中，點擊剛建立的帳戶。
+   - 23. 在服務帳戶清單中，點擊你剛建立的那個。
    - 前往 **Keys** 分頁。
    - 點擊 **Add Key** > **Create new key**。
    - 選擇 **JSON** 並按 **Create**。
@@ -54,7 +47,7 @@ x-i18n:
    - 環境變數：`GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - 或設定檔：`channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`。
 8. 設定 webhook audience 的類型與值（需與你的 Chat 應用程式設定相符）。
-9. 啟動 Gateway 閘道器。Google Chat 將會對你的 webhook 路徑發送 POST 請求。
+9. 啟動 Gateway 閘道器. 啟動 Gateway 閘道器。Google Chat 將會對你的 webhook 路徑發送 POST 請求。
 
 ## 新增至 Google Chat
 
@@ -63,18 +56,18 @@ x-i18n:
 1. 前往 [Google Chat](https://chat.google.com/)。
 2. 點擊 **Direct Messages** 旁的 **+**（加號）圖示。
 3. 在搜尋列（平常新增聯絡人的地方）中，輸入你在 Google Cloud Console 設定的 **App name**。
-   - **注意**：由於這是私人應用程式，機器人 _不會_ 出現在「Marketplace」瀏覽清單中，必須以名稱搜尋。
-4. 從結果中選擇你的機器人。
+   - **注意**：由於這是私人應用程式，機器人 _不會_ 出現在「Marketplace」瀏覽清單中，必須以名稱搜尋。 24. 你必須依名稱搜尋它。
+4. 25. 從結果中選擇你的機器人。
 5. 點擊 **Add** 或 **Chat** 以開始 1:1 對話。
 6. 傳送「Hello」以觸發助理！
 
 ## 公開 URL（僅 webhook）
 
-Google Chat webhook 需要一個公開的 HTTPS 端點。基於安全性考量，**僅將 `/googlechat` 路徑暴露到網際網路**。請將 OpenClaw 儀表板與其他敏感端點保留在你的私有網路中。
+Google Chat webhook 需要一個公開的 HTTPS 端點。基於安全性考量，**僅將 `/googlechat` 路徑暴露到網際網路**。請將 OpenClaw 儀表板與其他敏感端點保留在你的私有網路中。 26. 為了安全，**只將 `/googlechat` 路徑對外公開**。 27. 將 OpenClaw 儀表板與其他敏感端點保留在你的私人網路中。
 
 ### 選項 A：Tailscale Funnel（建議）
 
-使用 Tailscale Serve 提供私有儀表板，並使用 Funnel 暴露公開 webhook 路徑。這可保持 `/` 為私有，同時僅暴露 `/googlechat`。
+28. 私人儀表板使用 Tailscale Serve，公開的 webhook 路徑使用 Funnel。 29. 這會保持 `/` 為私人，同時只公開 `/googlechat`。
 
 1. **檢查你的閘道器綁定的位址：**
 
@@ -104,8 +97,8 @@ Google Chat webhook 需要一個公開的 HTTPS 端點。基於安全性考量�
    tailscale funnel --bg --set-path /googlechat http://100.106.161.80:18789/googlechat
    ```
 
-4. **為節點授權 Funnel 存取：**
-   若出現提示，請前往輸出中顯示的授權 URL，於你的 tailnet 原則中啟用此節點的 Funnel。
+4. 30. **授權節點使用 Funnel 存取：**
+       若出現提示，請造訪輸出中顯示的授權 URL，以在你的 tailnet 政策中為此節點啟用 Funnel。
 
 5. **驗證設定：**
 
@@ -122,7 +115,7 @@ Google Chat webhook 需要一個公開的 HTTPS 端點。基於安全性考量�
 
 在 Google Chat 應用程式設定中，請使用公開 URL（不包含 `:8443`）。
 
-> 注意：此設定在重新開機後仍會保留。若要之後移除，請執行 `tailscale funnel reset` 與 `tailscale serve reset`。
+> 31. 注意：此設定在重新開機後仍會保留。 32. 若之後要移除，請執行 `tailscale funnel reset` 與 `tailscale serve reset`。
 
 ### 選項 B：反向代理（Caddy）
 
@@ -143,18 +136,18 @@ your-domain.com {
 - **Path**：`/googlechat` -> `http://localhost:18789/googlechat`
 - **Default Rule**：HTTP 404（Not Found）
 
-## 運作方式
+## How it works
 
-1. Google Chat 會向 Gateway 閘道器發送 webhook POST。每個請求都包含 `Authorization: Bearer <token>` 標頭。
+1. Google Chat 會向 Gateway 閘道器發送 webhook POST。每個請求都包含 `Authorization: Bearer <token>` 標頭。 33. 每個請求都包含 `Authorization: Bearer <token>` 標頭。
 2. OpenClaw 會依據設定的 `audienceType` 與 `audience` 驗證權杖：
    - `audienceType: "app-url"` → audience 為你的 HTTPS webhook URL。
    - `audienceType: "project-number"` → audience 為 Cloud 專案編號。
 3. 訊息會依空間進行路由：
    - 私訊使用工作階段金鑰 `agent:<agentId>:googlechat:dm:<spaceId>`。
    - 空間使用工作階段金鑰 `agent:<agentId>:googlechat:group:<spaceId>`。
-4. 私訊預設需要配對。未知寄件者會收到配對碼；可使用以下指令核准：
+4. 34. 私訊存取預設為配對制。 私訊預設需要配對。未知寄件者會收到配對碼；可使用以下指令核准：
    - `openclaw pairing approve googlechat <code>`
-5. 群組空間預設需要 @ 提及。若提及偵測需要應用程式的使用者名稱，請使用 `botUser`。
+5. 35. 群組空間預設需要 @ 提及。 36. 若提及偵測需要應用程式的使用者名稱，請使用 `botUser`。
 
 ## 目標
 
@@ -204,7 +197,7 @@ your-domain.com {
 - `typingIndicator` 支援 `none`、`message`（預設）以及 `reaction`（回應需要使用者 OAuth）。
 - 附件會透過 Chat API 下載，並儲存在媒體管線中（大小上限由 `mediaMaxMb` 限制）。
 
-## 疑難排解
+## 37. 疑難排解
 
 ### 405 Method Not Allowed
 
@@ -214,9 +207,9 @@ your-domain.com {
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-這表示 webhook 處理器尚未註冊。常見原因包括：
+38. 這表示 webhook 處理器尚未註冊。 39. 常見原因：
 
-1. **頻道未設定**：設定檔中缺少 `channels.googlechat` 區段。請使用以下指令驗證：
+1. **頻道未設定**：設定檔中缺少 `channels.googlechat` 區段。請使用以下指令驗證： 40. 使用以下方式驗證：
 
    ```bash
    openclaw config get channels.googlechat
@@ -224,7 +217,7 @@ status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Al
 
    若回傳「Config path not found」，請新增設定（參見 [設定重點](#config-highlights)）。
 
-2. **外掛未啟用**：檢查外掛狀態：
+2. 1. **外掛未啟用**：檢查外掛狀態：
 
    ```bash
    openclaw plugins list | grep googlechat
@@ -252,7 +245,7 @@ openclaw channels status
 - 若提及門檻阻擋回覆，請將 `botUser` 設為應用程式的使用者資源名稱，並驗證 `requireMention`。
 - 傳送測試訊息時使用 `openclaw logs --follow`，以確認請求是否到達 Gateway 閘道器。
 
-相關文件：
+2. 相關文件：
 
 - [Gateway 設定](/gateway/configuration)
 - [安全性](/gateway/security)

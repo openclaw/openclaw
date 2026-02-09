@@ -4,13 +4,6 @@ read_when:
   - Chcesz przyjaznego dla początkujących wprowadzenia do TUI
   - Potrzebujesz kompletnej listy funkcji, poleceń i skrótów TUI
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:54Z
 ---
 
 # TUI (Terminal UI)

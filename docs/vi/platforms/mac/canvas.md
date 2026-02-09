@@ -5,20 +5,13 @@ read_when:
   - Thêm điều khiển tác tử cho không gian làm việc trực quan
   - Gỡ lỗi việc tải Canvas trong WKWebView
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:41Z
 ---
 
 # Canvas (ứng dụng macOS)
 
-Ứng dụng macOS nhúng **bảng Canvas** do tác tử điều khiển bằng `WKWebView`. Đây
-là một không gian làm việc trực quan nhẹ cho HTML/CSS/JS, A2UI và các bề mặt UI
-tương tác nhỏ.
+Ứng dụng macOS nhúng một **Canvas panel** do agent điều khiển bằng `WKWebView`. It
+is a lightweight visual workspace for HTML/CSS/JS, A2UI, and small interactive
+UI surfaces.
 
 ## Canvas nằm ở đâu
 
@@ -45,7 +38,7 @@ Nếu không có `index.html` ở thư mục gốc, ứng dụng sẽ hiển th�
 - Tự động tải lại khi các tệp Canvas cục bộ thay đổi.
 - Chỉ một bảng Canvas hiển thị tại một thời điểm (phiên sẽ được chuyển khi cần).
 
-Canvas có thể bị tắt từ Settings → **Allow Canvas**. Khi bị tắt, các lệnh node canvas
+Canvas có thể bị vô hiệu hóa từ Cài đặt → **Allow Canvas**. Khi bị vô hiệu hóa, các lệnh node canvas
 trả về `CANVAS_DISABLED`.
 
 ## Bề mặt API cho tác tử
@@ -73,9 +66,9 @@ Ghi chú:
 
 ## A2UI trong Canvas
 
-A2UI được Gateway canvas host lưu trữ và được render bên trong bảng Canvas.
-Khi Gateway quảng bá một Canvas host, ứng dụng macOS sẽ tự động điều hướng đến
-trang host A2UI khi mở lần đầu.
+A2UI is hosted by the Gateway canvas host and rendered inside the Canvas panel.
+When the Gateway advertises a Canvas host, the macOS app auto‑navigates to the
+A2UI host page on first open.
 
 URL host A2UI mặc định:
 

@@ -4,26 +4,15 @@ read_when:
   - Pag-debug ng mga isyu sa Bonjour discovery sa macOS/iOS
   - Pagbabago ng mga uri ng mDNS service, TXT records, o discovery UX
 title: "Bonjour Discovery"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # Bonjour / mDNS discovery
 
-Ginagamit ng OpenClaw ang Bonjour (mDNS / DNS‑SD) bilang **LAN‑only na convenience** para ma-discover
-ang isang aktibong Gateway (WebSocket endpoint). Best‑effort ito at **hindi** pamalit sa SSH o
-Tailnet-based connectivity.
+Gumagamit ang OpenClaw ng Bonjour (mDNS / DNS‑SD) bilang isang **LAN‑only na kaginhawaan** upang matuklasan ang isang aktibong Gateway (WebSocket endpoint). Ito ay best‑effort at **hindi** pumapalit sa SSH o Tailnet‑based connectivity.
 
 ## Wide‑area Bonjour (Unicast DNS‑SD) sa ibabaw ng Tailscale
 
-Kung ang node at gateway ay nasa magkaibang network, hindi tatawid ang multicast mDNS sa
-boundary. Maaari mong panatilihin ang parehong discovery UX sa pamamagitan ng paglipat sa **unicast DNS‑SD**
-("Wide‑Area Bonjour") sa ibabaw ng Tailscale.
+Kung ang node at gateway ay nasa magkaibang network, hindi tatawid ang multicast mDNS sa hangganan. Maaari mong panatilihin ang parehong discovery UX sa pamamagitan ng paglipat sa **unicast DNS‑SD** ("Wide‑Area Bonjour") sa ibabaw ng Tailscale.
 
 High‑level na mga hakbang:
 
@@ -33,8 +22,8 @@ High‑level na mga hakbang:
 3. I-configure ang Tailscale **split DNS** para ang napili mong domain ay mag-resolve sa DNS server na iyon
    para sa mga client (kasama ang iOS).
 
-Sinusuportahan ng OpenClaw ang anumang discovery domain; halimbawa lang ang `openclaw.internal.`.
-Nagba-browse ang mga iOS/Android node sa parehong `local.` at sa iyong naka-configure na wide‑area domain.
+Sinusuportahan ng OpenClaw ang anumang discovery domain; halimbawa lamang ang `openclaw.internal.`.
+Nagba‑browse ang mga iOS/Android node sa parehong `local.` at sa iyong naka‑configure na wide‑area domain.
 
 ### Gateway config (inirerekomenda)
 
@@ -75,8 +64,7 @@ Kapag tinanggap na ng mga client ang tailnet DNS, makaka-browse ang mga iOS node
 
 ### Seguridad ng Gateway listener (inirerekomenda)
 
-Ang Gateway WS port (default `18789`) ay nagba-bind sa loopback bilang default. Para sa LAN/tailnet
-access, mag-bind nang tahasan at panatilihing naka-enable ang auth.
+Ang Gateway WS port (default `18789`) ay nagba‑bind sa loopback bilang default. Para sa LAN/tailnet access, mag‑bind nang tahasan at panatilihing naka‑enable ang auth.
 
 Para sa tailnet‑only na mga setup:
 
@@ -128,8 +116,7 @@ mDNS resolver issue ang tinatamaan mo.
 
 ## Pag-debug sa mga log ng Gateway
 
-Nagsusulat ang Gateway ng rolling log file (ipi-print sa startup bilang
-`gateway log file: ...`). Hanapin ang mga linya ng `bonjour:`, lalo na ang:
+Nagsusulat ang Gateway ng rolling log file (ipinapakita sa startup bilang `gateway log file: ...`). Hanapin ang mga linyang `bonjour:`, lalo na:
 
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
@@ -151,9 +138,7 @@ Kasama sa log ang mga browser state transition at mga pagbabago sa result‑set.
 - **Hindi tumatawid ang Bonjour sa mga network**: gumamit ng Tailnet o SSH.
 - **Naka-block ang multicast**: may ilang Wi‑Fi network na dini-disable ang mDNS.
 - **Sleep / interface churn**: maaaring pansamantalang mag-drop ng mDNS results ang macOS; subukang muli.
-- **Gumagana ang browse pero pumapalya ang resolve**: panatilihing simple ang mga pangalan ng machine (iwasan ang emojis o
-  bantas), tapos i-restart ang Gateway. Mula sa host name nagmumula ang service instance name, kaya ang sobrang komplikadong pangalan ay maaaring
-  makalito sa ilang resolver.
+- **Gumagana ang browse ngunit pumapalya ang resolve**: panatilihing simple ang mga pangalan ng makina (iwasan ang mga emoji o bantas), pagkatapos ay i‑restart ang Gateway. Nagmumula ang service instance name sa host name, kaya ang mga sobrang komplikadong pangalan ay maaaring makalito sa ilang resolver.
 
 ## Mga escaped na instance name (`\032`)
 

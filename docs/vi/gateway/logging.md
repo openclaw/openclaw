@@ -4,13 +4,6 @@ read_when:
   - Thay đổi đầu ra hoặc định dạng ghi log
   - Gỡ lỗi đầu ra CLI hoặc gateway
 title: "Ghi log"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:06Z
 ---
 
 # Ghi log
@@ -33,7 +26,7 @@ OpenClaw có hai “bề mặt” log:
 Định dạng tệp là mỗi dòng một đối tượng JSON.
 
 Tab Logs của Control UI theo dõi (tail) tệp này qua gateway (`logs.tail`).
-CLI cũng có thể làm tương tự:
+8. CLI cũng có thể làm điều tương tự:
 
 ```bash
 openclaw logs --follow
@@ -59,8 +52,8 @@ Bạn có thể tinh chỉnh độ chi tiết của console một cách độc l
 
 ## Che thông tin tóm tắt của công cụ
 
-Các bản tóm tắt công cụ ở mức verbose (ví dụ: `🛠️ Exec: ...`) có thể che các token nhạy cảm trước khi chúng đi vào
-luồng console. Điều này **chỉ áp dụng cho công cụ** và không thay đổi log tệp.
+Tóm tắt công cụ chi tiết (ví dụ: `🛠️ Exec: ...`) có thể che các token nhạy cảm trước khi chúng xuất hiện trên
+luồng console. Điều này là **chỉ cho tools** và không thay đổi log file.
 
 - `logging.redactSensitive`: `off` | `tools` (mặc định: `tools`)
 - `logging.redactPatterns`: mảng các chuỗi regex (ghi đè mặc định)
@@ -102,8 +95,8 @@ openclaw gateway --verbose --ws-log full
 
 ## Định dạng console (ghi log theo hệ thống con)
 
-Bộ định dạng console **nhận biết TTY** và in các dòng nhất quán có tiền tố.
-Các bộ ghi log theo hệ thống con giữ cho đầu ra được nhóm và dễ quét.
+Bộ định dạng console **nhận biết TTY** và in các dòng nhất quán, có tiền tố.
+Logger theo phân hệ giữ đầu ra được nhóm và dễ quét.
 
 Hành vi:
 

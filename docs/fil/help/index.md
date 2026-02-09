@@ -4,13 +4,6 @@ read_when:
   - Bago ka pa lang at gusto mo ang gabay na “ano ang ika-click/ika-run”
   - May nasira at gusto mo ang pinakamabilis na daan papunta sa ayos
 title: "Tulong"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:26Z
 ---
 
 # Tulong

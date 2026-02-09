@@ -1,15 +1,8 @@
 ---
-summary: «Прямые запуски CLI `openclaw agent` (с необязательной доставкой)»
+summary: "Прямые запуски CLI `openclaw agent` (с необязательной доставкой)"
 read_when:
   - При добавлении или изменении точки входа CLI агента
-title: «Отправка агента»
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:00Z
+title: "Отправка агента"
 ---
 
 # `openclaw agent` (прямые запуски агента)

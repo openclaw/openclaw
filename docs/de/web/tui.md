@@ -1,16 +1,9 @@
 ---
-summary: „Terminal-UI (TUI): Verbindung zum Gateway von jedem Rechner aus“
+summary: "„Terminal-UI (TUI): Verbindung zum Gateway von jedem Rechner aus“"
 read_when:
   - Sie möchten eine einsteigerfreundliche Einführung in die TUI
   - Sie benötigen die vollständige Liste der TUI-Funktionen, -Befehle und -Tastenkürzel
-title: „TUI“
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:51Z
+title: "„TUI“"
 ---
 
 # TUI (Terminal-UI)
@@ -62,7 +55,7 @@ Verwenden Sie `--password`, wenn Ihr Gateway Passwortauthentifizierung nutzt.
 ## Senden + Zustellung
 
 - Nachrichten werden an das Gateway gesendet; die Zustellung an Anbieter ist standardmäßig deaktiviert.
-- Zustellung aktivieren:
+- Lieferung abschalten am:
   - `/deliver on`
   - oder über das Einstellungs-Panel
   - oder starten Sie mit `openclaw tui --deliver`
@@ -79,14 +72,14 @@ Verwenden Sie `--password`, wenn Ihr Gateway Passwortauthentifizierung nutzt.
 - Enter: Nachricht senden
 - Esc: Aktiven Lauf abbrechen
 - Ctrl+C: Eingabe leeren (zweimal drücken zum Beenden)
-- Ctrl+D: Beenden
+- Strg+D: Beenden
 - Ctrl+L: Modell-Picker
 - Ctrl+G: Agent-Picker
 - Ctrl+P: Sitzungs-Picker
 - Ctrl+O: Erweiterung der Werkzeugausgabe umschalten
 - Ctrl+T: Sichtbarkeit des Denkens umschalten (lädt den Verlauf neu)
 
-## Slash-Befehle
+## tools/slash-commands.md
 
 Kern:
 

@@ -3,13 +3,6 @@ summary: "متى يعرض OpenClaw مؤشرات الكتابة وكيفية ضب
 read_when:
   - تغيير سلوك مؤشرات الكتابة أو الإعدادات الافتراضية
 title: "مؤشرات الكتابة"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:08Z
 ---
 
 # مؤشرات الكتابة
@@ -27,7 +20,7 @@ x-i18n:
 - **الدردشات الجماعية دون إشارة**: تبدأ الكتابة فقط عند بدء بث نص الرسالة.
 - **تشغيلات النبض (Heartbeat)**: تكون الكتابة معطّلة.
 
-## الأوضاع
+## أوضاع
 
 اضبط `agents.defaults.typingMode` على أحد الخيارات التالية:
 

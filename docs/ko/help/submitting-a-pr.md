@@ -1,13 +1,6 @@
 ---
 summary: "높은 신호의 PR 을 제출하는 방법"
 title: "PR 제출하기"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:19Z
 ---
 
 좋은 PR 은 검토하기 쉽습니다. 리뷰어는 의도를 빠르게 파악하고, 동작을 검증하며, 변경 사항을 안전하게 병합할 수 있어야 합니다. 이 가이드는 사람과 LLM 검토를 모두 고려한 간결하고 신호 밀도가 높은 제출 방법을 다룹니다.
@@ -25,7 +18,7 @@ x-i18n:
 - [ ] 주장은 증거 또는 관찰에 근거해야 합니다.
 - [ ] 좋은 제목: 동사 + 범위 + 결과 (예: `Docs: add PR and issue templates`).
 
-간결함을 유지하십시오. 간결한 리뷰 > 문법. 해당되지 않는 섹션은 생략하십시오.
+간결함을 유지하십시오. 간결한 리뷰 > 문법. Omit any non-applicable sections.
 
 ### 기준 검증 명령 (변경 사항에 대해 실행하고 실패를 수정)
 
@@ -200,7 +193,7 @@ x-i18n:
 - Agent notes:
 ```
 
-### 잡무 / 유지보수
+### Chore/Maintenance
 
 ```md
 #### Summary
@@ -280,7 +273,7 @@ pnpm format
 - Agent notes:
 ```
 
-### 성능
+### Perf
 
 ```md
 #### Summary

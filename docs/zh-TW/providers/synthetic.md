@@ -4,24 +4,17 @@ read_when:
   - 您想要使用 Synthetic 作為模型提供者
   - 您需要設定 Synthetic 的 API 金鑰或基底 URL
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:01Z
 ---
 
 # Synthetic
 
-Synthetic 提供與 Anthropic 相容的端點。OpenClaw 將其註冊為
+Synthetic exposes Anthropic-compatible endpoints. Synthetic 提供與 Anthropic 相容的端點。OpenClaw 將其註冊為
 `synthetic` 提供者，並使用 Anthropic Messages API。
 
 ## 快速開始
 
 1. 設定 `SYNTHETIC_API_KEY`（或執行下方的精靈）。
-2. 執行入門引導：
+2. Run onboarding:
 
 ```bash
 openclaw onboard --auth-choice synthetic-api-key
@@ -69,7 +62,8 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 ```
 
 注意：OpenClaw 的 Anthropic 用戶端會將 `/v1` 附加至基底 URL，因此請使用
-`https://api.synthetic.new/anthropic`（而非 `/anthropic/v1`）。若 Synthetic 變更其基底 URL，請覆寫 `models.providers.synthetic.baseUrl`。
+`https://api.synthetic.new/anthropic`（而非 `/anthropic/v1`）。若 Synthetic 變更其基底 URL，請覆寫 `models.providers.synthetic.baseUrl`。 If Synthetic changes
+its base URL, override `models.providers.synthetic.baseUrl`.
 
 ## 模型目錄
 

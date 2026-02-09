@@ -3,13 +3,6 @@ summary: "Ciclo de vida de la superposición de voz cuando se superponen la pala
 read_when:
   - Ajustar el comportamiento de la superposición de voz
 title: "Superposición de voz"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:14Z
 ---
 
 # Ciclo de vida de la superposición de voz (macOS)
@@ -56,6 +49,7 @@ Audiencia: colaboradores de la app para macOS. Objetivo: mantener la superposici
   ```
 
 - Verifique que solo haya un token de sesión activo; el coordinador debe descartar los callbacks obsoletos.
+
 - Asegúrese de que al soltar pulsar para hablar siempre se llame a `endCapture` con el token activo; si el texto está vacío, espere `dismiss` sin timbre ni envío.
 
 ## Pasos de migración (sugeridos)

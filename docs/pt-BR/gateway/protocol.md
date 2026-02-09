@@ -5,13 +5,6 @@ read_when:
   - Depurando incompatibilidades de protocolo ou falhas de conexão
   - Regenerando esquema/modelos do protocolo
 title: "Protocolo do Gateway"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:02Z
 ---
 
 # Protocolo do Gateway (WebSocket)
@@ -131,7 +124,7 @@ Quando um token de dispositivo é emitido, `hello-ok` também inclui:
 }
 ```
 
-## Enquadramento
+## Moldura
 
 - **Request**: `{type:"req", id, method, params}`
 - **Response**: `{type:"res", id, ok, payload|error}`
@@ -139,7 +132,7 @@ Quando um token de dispositivo é emitido, `hello-ok` também inclui:
 
 Métodos com efeitos colaterais exigem **chaves de idempotência** (veja o esquema).
 
-## Papéis + escopos
+## Funções + Âmbitos
 
 ### Papéis
 
@@ -156,7 +149,7 @@ Escopos comuns:
 - `operator.approvals`
 - `operator.pairing`
 
-### Capacidades/comandos/permissões (nó)
+### Caps/comandos/permissões (nó)
 
 Os nós declaram reivindicações de capacidade no momento da conexão:
 
@@ -219,7 +212,7 @@ O Gateway trata isso como **reivindicações** e aplica listas de permissões no
 - Os clientes podem opcionalmente fixar (pin) a impressão digital do certificado do gateway (veja a configuração `gateway.tls`
   além de `gateway.remote.tlsFingerprint` ou a CLI `--tls-fingerprint`).
 
-## Escopo
+## Enquadramento
 
 Este protocolo expõe a **API completa do gateway** (status, canais, modelos, chat,
 agente, sessões, nós, aprovações, etc.). A superfície exata é definida pelos

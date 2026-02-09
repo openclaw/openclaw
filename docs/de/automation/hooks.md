@@ -4,13 +4,6 @@ read_when:
   - Sie möchten ereignisgesteuerte Automatisierung für /new, /reset, /stop und Agent-Lifecycle-Ereignisse
   - Sie möchten Hooks erstellen, installieren oder debuggen
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:25Z
 ---
 
 # Hooks
@@ -911,7 +904,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 - Automatische Erkennung
 - CLI-Verwaltung
-- Eignungsprüfung
+- Berechtigungsprüfung
 - Bessere Dokumentation
 - Konsistente Struktur
 

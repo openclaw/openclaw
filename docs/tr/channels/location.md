@@ -4,13 +4,6 @@ read_when:
   - Kanal konum ayrıştırması eklerken veya değiştirirken
   - Ajan istemlerinde veya araçlarda konum bağlamı alanlarını kullanırken
 title: "Kanal Konum Ayrıştırması"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:49Z
 ---
 
 # Kanal konum ayrıştırması

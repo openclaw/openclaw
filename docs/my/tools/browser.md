@@ -5,20 +5,12 @@ read_when:
   - openclaw က သင့်ကိုယ်ပိုင် Chrome ကို ဘာကြောင့် အနှောင့်အယှက်ပေးနေသလဲ ဆိုတာကို ချို့ယွင်းချက်ရှာဖွေသည့်အခါ
   - macOS အက်ပ်အတွင်း ဘရောက်ဇာ ဆက်တင်များနှင့် lifecycle ကို အကောင်အထည်ဖော်သည့်အခါ
 title: "Browser (OpenClaw-စီမံခန့်ခွဲထားသော)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:11Z
 ---
 
 # Browser (openclaw-managed)
 
-OpenClaw သည် အေးဂျင့်က ထိန်းချုပ်နိုင်သော **သီးသန့် Chrome/Brave/Edge/Chromium ပရိုဖိုင်** ကို လည်ပတ်စေနိုင်သည်။
-၎င်းသည် သင့်ကိုယ်ပိုင် ဘရောက်ဇာမှ ခွဲခြားထားပြီး Gateway အတွင်းရှိ သေးငယ်သော local
-ထိန်းချုပ်ရေး ဝန်ဆောင်မှု (loopback သာ) ဖြင့် စီမံခန့်ခွဲထားသည်။
+OpenClaw သည် agent က ထိန်းချုပ်နိုင်သော **သီးသန့် Chrome/Brave/Edge/Chromium profile** ကို အလုပ်လုပ်စေနိုင်ပါသည်။
+၎င်းသည် သင်၏ ကိုယ်ရေးကိုယ်တာ browser နှင့် သီးခြားဖြစ်ပြီး Gateway အတွင်းရှိ သေးငယ်သော local control service (loopback သာ) မှတစ်ဆင့် စီမံခန့်ခွဲပါသည်။
 
 Beginner view:
 
@@ -35,7 +27,7 @@ Beginner view:
 - အေးဂျင့် လုပ်ဆောင်ချက်များ (ကလစ်/စာရိုက်/ဆွဲ/ရွေးချယ်), snapshots, screenshots, PDFs။
 - ရွေးချယ်နိုင်သော မျိုးစုံ ပရိုဖိုင် ပံ့ပိုးမှု (`openclaw`, `work`, `remote`, ...)။
 
-ဤဘရောက်ဇာသည် သင့်နေ့စဉ် အသုံးပြုရာ မဟုတ်ပါ။ အေးဂျင့် အလိုအလျောက်လုပ်ဆောင်မှုနှင့် အတည်ပြုခြင်းအတွက် လုံခြုံပြီး ခွဲခြားထားသော မျက်နှာပြင်တစ်ခု ဖြစ်သည်။
+ဤ browser သည် သင်၏ နေ့စဉ် အသုံးပြုသော browser မဟုတ်ပါ။ Agent automation နှင့် verification အတွက် လုံခြုံပြီး သီးခြားထားသော မျက်နှာပြင်တစ်ခု ဖြစ်ပါသည်။
 
 ## Quick start
 
@@ -83,8 +75,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 Notes:
 
-- ဘရောက်ဇာ ထိန်းချုပ်ရေး ဝန်ဆောင်မှုသည် `gateway.port` မှ ဆင်းသက်လာသော ပေါက်နံပါတ်တွင် loopback သို့ bind လုပ်ထားသည်
-  (ပုံမှန်: `18791`၊ gateway + 2 ဖြစ်သည်)။ relay သည် နောက်ထပ် ပေါက် (`18792`) ကို အသုံးပြုသည်။
+- Browser control service သည် `gateway.port` မှ ဆင်းသက်လာသော port တွင် loopback သို့ bind လုပ်ပါသည် (ပုံမှန်: `18791`, gateway + 2)။ Relay သည် နောက်ထပ် port (`18792`) ကို အသုံးပြုပါသည်။
 - Gateway ပေါက်ကို `gateway.port` သို့မဟုတ် `OPENCLAW_GATEWAY_PORT` ဖြင့် ပြောင်းလဲပါက
   ဆင်းသက်လာသော ဘရောက်ဇာ ပေါက်များသည် တူညီသော “family” အတွင်း နေစေရန် ရွှေ့ပြောင်းသွားမည်။
 - `cdpUrl` ကို မသတ်မှတ်ပါက relay ပေါက်ကို ပုံမှန်အသုံးပြုသည်။
@@ -92,14 +83,13 @@ Notes:
 - `remoteCdpHandshakeTimeoutMs` သည် အဝေးမှ CDP WebSocket ရောက်ရှိနိုင်မှု စစ်ဆေးမှုများအတွက် အသုံးပြုသည်။
 - `attachOnly: true` ဆိုသည်မှာ “local ဘရောက်ဇာကို မစတင်ပါနှင့်; လည်ပတ်နေပြီးသား ဖြစ်ပါကသာ ချိတ်ဆက်ပါ” ဟု အဓိပ္ပါယ်ရသည်။
 - `color` + ပရိုဖိုင်တစ်ခုချင်းစီ၏ `color` သည် မည်သည့် ပရိုဖိုင် လှုပ်ရှားနေသည်ကို မြင်နိုင်ရန် ဘရောက်ဇာ UI ကို အရောင်ညှိပေးသည်။
-- ပုံမှန် ပရိုဖိုင်မှာ `chrome` (extension relay) ဖြစ်သည်။ managed ဘရောက်ဇာအတွက် `defaultProfile: "openclaw"` ကို အသုံးပြုပါ။
+- Default profile is `chrome` (extension relay). Managed browser အတွက် `defaultProfile: "openclaw"` ကို အသုံးပြုပါ။
 - Auto-detect အစဉ်: စနစ်ပုံမှန် ဘရောက်ဇာ (Chromium အခြေပြု ဖြစ်ပါက); မဟုတ်ပါက Chrome → Brave → Edge → Chromium → Chrome Canary။
 - Local `openclaw` ပရိုဖိုင်များသည် `cdpPort`/`cdpUrl` ကို အလိုအလျောက် သတ်မှတ်ပေးသည် — အဝေးမှ CDP အတွက်သာ ၎င်းတို့ကို သတ်မှတ်ပါ။
 
 ## Use Brave (or another Chromium-based browser)
 
-သင့် **စနစ်ပုံမှန်** ဘရောက်ဇာသည် Chromium အခြေပြု (Chrome/Brave/Edge စသည်) ဖြစ်ပါက
-OpenClaw သည် အလိုအလျောက် အသုံးပြုပါမည်။ auto-detection ကို ပြောင်းလဲရန် `browser.executablePath` ကို သတ်မှတ်ပါ။
+သင်၏ **system default** browser သည် Chromium-based (Chrome/Brave/Edge/etc) ဖြစ်ပါက OpenClaw က အလိုအလျောက် အသုံးပြုပါသည်။ Auto-detection ကို override လုပ်ရန် `browser.executablePath` ကို သတ်မှတ်ပါ:
 
 CLI ဥပမာ:
 
@@ -134,23 +124,19 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 - **Local control (ပုံမှန်):** Gateway သည် loopback ထိန်းချုပ်ရေး ဝန်ဆောင်မှုကို စတင်ပြီး local ဘရောက်ဇာကို လွှင့်တင်နိုင်သည်။
 - **Remote control (node host):** ဘရောက်ဇာ ရှိသည့် စက်ပေါ်တွင် node host ကို လည်ပတ်စေပြီး Gateway သည် ဘရောက်ဇာ လုပ်ဆောင်ချက်များကို proxy လုပ်ပေးသည်။
-- **Remote CDP:** `browser.profiles.<name>.cdpUrl` (သို့မဟုတ် `browser.cdpUrl`) ကို သတ်မှတ်၍
-  အဝေးမှ Chromium အခြေပြု ဘရောက်ဇာသို့ ချိတ်ဆက်ပါ။ ဤအခါ OpenClaw သည် local ဘရောက်ဇာကို မစတင်ပါ။
+- **Remote CDP:** `browser.profiles.<name>` ကို သတ်မှတ်ပါ.cdpUrl`(သို့မဟုတ်`browser.cdpUrl\`) ကို သတ်မှတ်၍ remote Chromium-based browser နှင့် ချိတ်ဆက်ပါ။ ဤအခြေအနေတွင် OpenClaw သည် local browser ကို မဖွင့်ပါ။
 
 Remote CDP URL များတွင် auth ပါဝင်နိုင်သည်:
 
 - Query tokens (ဥပမာ `https://provider.example?token=<token>`)
 - HTTP Basic auth (ဥပမာ `https://user:pass@provider.example`)
 
-OpenClaw သည် `/json/*` endpoints များကို ခေါ်သည့်အခါနှင့်
-CDP WebSocket သို့ ချိတ်ဆက်သည့်အခါ auth ကို ထိန်းသိမ်းထားသည်။
-tokens များကို config ဖိုင်များထဲတွင် commit မလုပ်ဘဲ environment variables သို့မဟုတ် secrets manager များကို အသုံးပြုရန် အကြံပြုသည်။
+OpenClaw သည် `/json/*` endpoints ကို ခေါ်သောအခါနှင့် CDP WebSocket သို့ ချိတ်ဆက်သောအခါ auth ကို ထိန်းသိမ်းထားပါသည်။ Token များကို config ဖိုင်များတွင် commit မလုပ်ဘဲ environment variables သို့မဟုတ် secrets manager များကို ဦးစားပေးအသုံးပြုပါ။
 
 ## Node browser proxy (zero-config default)
 
-ဘရောက်ဇာ ရှိသည့် စက်ပေါ်တွင် **node host** ကို လည်ပတ်နေပါက OpenClaw သည်
-ဘရောက်ဇာ tool ခေါ်ဆိုမှုများကို ထပ်ဆောင်း ဘရောက်ဇာ config မလိုအပ်ဘဲ ထို node သို့ အလိုအလျောက် လမ်းကြောင်းချထားနိုင်သည်။
-၎င်းသည် remote gateways အတွက် ပုံမှန် လမ်းကြောင်းဖြစ်သည်။
+သင်၏ browser ရှိသည့် စက်ပေါ်တွင် **node host** ကို လုပ်ဆောင်ထားပါက OpenClaw သည် အပို browser config မလိုဘဲ browser tool calls များကို ထို node သို့ အလိုအလျောက် route လုပ်နိုင်ပါသည်။
+၎င်းသည် remote gateways အတွက် ပုံမှန်လမ်းကြောင်း ဖြစ်ပါသည်။
 
 Notes:
 
@@ -162,9 +148,7 @@ Notes:
 
 ## Browserless (hosted remote CDP)
 
-[Browserless](https://browserless.io) သည် HTTPS ဖြင့် CDP endpoints များကို ပံ့ပိုးပေးသော hosted Chromium ဝန်ဆောင်မှု ဖြစ်သည်။
-OpenClaw ဘရောက်ဇာ ပရိုဖိုင်ကို Browserless region endpoint သို့ ချိတ်ဆက်ပြီး
-သင့် API key ဖြင့် authentication ပြုလုပ်နိုင်သည်။
+[Browserless](https://browserless.io) သည် HTTPS မှတစ်ဆင့် CDP endpoints များကို ဖော်ထုတ်ပေးသော hosted Chromium service တစ်ခု ဖြစ်ပါသည်။ OpenClaw browser profile တစ်ခုကို Browserless region endpoint သို့ ချိတ်ဆက်ပြီး သင်၏ API key ဖြင့် authenticate လုပ်နိုင်ပါသည်။
 
 Example:
 
@@ -205,7 +189,7 @@ Remote CDP tips:
 
 ## Profiles (multi-browser)
 
-OpenClaw သည် အမည်ပေးထားသော ပရိုဖိုင်များ (routing configs) များစွာကို ပံ့ပိုးသည်။ ပရိုဖိုင်များမှာ:
+OpenClaw သည် အမည်ပေးထားသော profile များ (routing configs) အများအပြားကို ထောက်ပံ့ပါသည်။ Profile များမှာ အောက်ပါအတိုင်း ဖြစ်နိုင်ပါသည်:
 
 - **openclaw-managed**: ကိုယ်ပိုင် user data directory + CDP port ပါရှိသော သီးသန့် Chromium အခြေပြု ဘရောက်ဇာ instance
 - **remote**: အခြားနေရာတွင် လည်ပတ်နေသော Chromium အခြေပြု ဘရောက်ဇာသို့ ညွှန်ပြသော CDP URL
@@ -239,8 +223,8 @@ Gateway သည် အခြားနေရာတွင် လည်ပတ်န�
 
 ### Sandboxed sessions
 
-အေးဂျင့် ဆက်ရှင်သည် sandboxed ဖြစ်ပါက `browser` tool သည် ပုံမှန်အားဖြင့် `target="sandbox"` (sandbox browser) သို့ ဦးတည်နိုင်သည်။
-Chrome extension relay takeover သည် host ဘရောက်ဇာ ထိန်းချုပ်မှုကို လိုအပ်သဖြင့် အောက်ပါအတိုင်း ပြုလုပ်ပါ:
+Agent session သည် sandboxed ဖြစ်ပါက `browser` tool သည် `target="sandbox"` (sandbox browser) သို့ ပုံမှန်ထားနိုင်ပါသည်။
+Chrome extension relay takeover အတွက် host browser control လိုအပ်သဖြင့် အောက်ပါအတိုင်း လုပ်ဆောင်ပါ:
 
 - ဆက်ရှင်ကို unsandboxed အဖြစ် လည်ပတ်စေပါ၊ သို့မဟုတ်
 - `agents.defaults.sandbox.browser.allowHostControl: true` ကို သတ်မှတ်ပြီး tool ကို ခေါ်သည့်အခါ `target="host"` ကို အသုံးပြုပါ။
@@ -322,9 +306,7 @@ Endpoints အားလုံးသည် `?profile=<name>` ကို လက်�
 
 ### Playwright requirement
 
-အချို့ အင်္ဂါရပ်များ (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) သည်
-Playwright ကို လိုအပ်သည်။ Playwright မတပ်ဆင်ထားပါက ထို endpoints များသည် 501
-error ကို ပြန်ပေးမည်။ openclaw-managed Chrome အတွက် ARIA snapshots နှင့် အခြေခံ screenshots များသည် ဆက်လက် အလုပ်လုပ်ပါသည်။
+အချို့ feature များ (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) သည် Playwright ကို လိုအပ်ပါသည်။ Playwright မတပ်ဆင်ထားပါက ထို endpoints များသည် ပြတ်သားသော 501 error ကို ပြန်ပေးပါသည်။ ARIA snapshots နှင့် အခြေခံ screenshots များသည် openclaw-managed Chrome အတွက် ဆက်လက် အလုပ်လုပ်ပါသည်။
 Chrome extension relay driver အတွက် ARIA snapshots နှင့် screenshots များသည် Playwright ကို လိုအပ်ပါသည်။
 
 `Playwright is not available in this gateway build` ကို မြင်ပါက Playwright package အပြည့်အစုံကို
@@ -333,7 +315,7 @@ OpenClaw ကို browser support ပါဝင်အောင် ပြန်�
 
 #### Docker Playwright install
 
-Gateway ကို Docker တွင် လည်ပတ်နေပါက `npx playwright` ကို ရှောင်ရှားပါ (npm override ပဋိပက္ခများ)။
+သင်၏ Gateway သည် Docker အတွင်း လုပ်ဆောင်နေပါက `npx playwright` ကို ရှောင်ကြဉ်ပါ (npm override conflicts ရှိနိုင်သည်)။
 အစား bundled CLI ကို အသုံးပြုပါ:
 
 ```bash
@@ -341,9 +323,7 @@ docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-ဘရောက်ဇာ downloads များကို ထိန်းသိမ်းရန် `PLAYWRIGHT_BROWSERS_PATH` ကို သတ်မှတ်ပါ (ဥပမာ
-`/home/node/.cache/ms-playwright`) နှင့် `/home/node` ကို
-`OPENCLAW_HOME_VOLUME` သို့မဟုတ် bind mount ဖြင့် ထိန်းသိမ်းထားပါ။ [Docker](/install/docker) ကို ကြည့်ပါ။
+Browser downloads များကို သိမ်းဆည်းထားရန် `PLAYWRIGHT_BROWSERS_PATH` ကို သတ်မှတ်ပါ (ဥပမာ၊ `/home/node/.cache/ms-playwright`) နှင့် `/home/node` ကို `OPENCLAW_HOME_VOLUME` သို့မဟုတ် bind mount ဖြင့် persist ဖြစ်အောင် ပြုလုပ်ထားပါ။ 1. [Docker](/install/docker) ကို ကြည့်ပါ။
 
 ## How it works (internal)
 
@@ -359,8 +339,8 @@ local/remote ဘရောက်ဇာများနှင့် ပရိုဖ
 
 ## CLI quick reference
 
-အမိန့်အားလုံးသည် ပရိုဖိုင်တစ်ခုကို ဦးတည်ရန် `--browser-profile <name>` ကို လက်ခံသည်။
-အမိန့်အားလုံးသည် စက်ဖြင့် ဖတ်နိုင်သော output (တည်ငြိမ် payloads) အတွက် `--json` ကိုလည်း လက်ခံသည်။
+2. အမိန့်အားလုံးသည် သတ်မှတ်ထားသော ပရိုဖိုင်ကို ဦးတည်ရန် `--browser-profile <name>` ကို လက်ခံပါသည်။
+3. အမိန့်အားလုံးသည် စက်ဖတ်ရှုနိုင်သော အထွက်အပေါ် (တည်ငြိမ်သော payloads) အတွက် `--json` ကိုလည်း လက်ခံပါသည်။
 
 Basics:
 
@@ -451,8 +431,8 @@ Notes:
   - `--frame "<iframe selector>"` သည် role snapshots များကို iframe တစ်ခုအတွင်း ကန့်သတ်ပေးသည် (role refs များ `e12` နှင့် တွဲဖက်)။
   - `--interactive` သည် လွယ်ကူစွာ ရွေးနိုင်သော interactive elements စာရင်းပြားတစ်ခုကို ထုတ်ပေးသည် (actions မောင်းနှင်ရန် အကောင်းဆုံး)။
   - `--labels` သည် overlayed ref labels ပါသော viewport-only screenshot ကို ထည့်ပေါင်းပေးသည် (`MEDIA:<path>` ကို ထုတ်ပြ)။
-- `click`/`type`/etc သည် `snapshot` မှ `ref` ကို လိုအပ်သည် (numeric `12` သို့မဟုတ် role ref `e12`)။
-  CSS selectors များကို လုပ်ဆောင်ချက်များအတွက် ရည်ရွယ်ချက်ရှိရှိ မပံ့ပိုးပါ။
+- 4. `click`/`type`/စသည်တို့သည် `snapshot` မှ `ref` တစ်ခု (ကိန်းဂဏန်း `12` သို့မဟုတ် role ref `e12`) လိုအပ်ပါသည်။
+     CSS selectors are intentionally not supported for actions.
 
 ## Snapshots and refs
 
@@ -548,9 +528,9 @@ payload အရွယ်အစားနှင့် သိပ်သည်းမ�
 ## Security & privacy
 
 - openclaw ဘရောက်ဇာ ပရိုဖိုင်တွင် logged-in sessions များ ပါဝင်နိုင်သဖြင့် အရေးကြီးအချက်အလက်အဖြစ် ဆက်ဆံပါ။
-- `browser act kind=evaluate` / `openclaw browser evaluate` နှင့် `wait --fn` သည်
-  စာမျက်နှာ context အတွင်း arbitrary JavaScript ကို အကောင်အထည်ဖော်သည်။ Prompt injection ဖြင့် ဦးတည်စေနိုင်ပါသည်။
-  မလိုအပ်ပါက `browser.evaluateEnabled=false` ဖြင့် ပိတ်ထားပါ။
+- 6. `browser act kind=evaluate` / `openclaw browser evaluate` နှင့် `wait --fn`
+     သည် စာမျက်နှာ context အတွင်း arbitrary JavaScript ကို အကောင်အထည်ဖော် လုပ်ဆောင်ပါသည်။ 7. Prompt injection သည်
+     ဤအရာကို လမ်းကြောင်းပြောင်းစေနိုင်ပါသည်။ 8. မလိုအပ်ပါက `browser.evaluateEnabled=false` ဖြင့် ပိတ်နိုင်ပါသည်။
 - Logins နှင့် anti-bot မှတ်ချက်များ (X/Twitter စသည်) အတွက် [Browser login + X/Twitter posting](/tools/browser-login) ကို ကြည့်ပါ။
 - Gateway/node host ကို private (loopback သို့မဟုတ် tailnet-only) အဖြစ် ထားရှိပါ။
 - Remote CDP endpoints များသည် အားကောင်းပါသည်; tunnel လုပ်ပြီး ကာကွယ်ပါ။

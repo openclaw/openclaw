@@ -3,13 +3,6 @@ summary: "Manual operativo del servicio Gateway, su ciclo de vida y operaciones"
 read_when:
   - Al ejecutar o depurar el proceso del gateway
 title: "Manual operativo del Gateway"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:02Z
 ---
 
 # Manual operativo del servicio Gateway
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - Luego los clientes se conectan a `ws://127.0.0.1:18789` a través del túnel.
+
 - Si se configura un token, los clientes deben incluirlo en `connect.params.auth.token` incluso a través del túnel.
 
 ## Múltiples gateways (mismo host)

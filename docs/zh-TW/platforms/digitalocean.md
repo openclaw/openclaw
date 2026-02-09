@@ -4,13 +4,6 @@ read_when:
   - 在 DigitalOcean 上設定 OpenClaw
   - 尋找便宜的 OpenClaw VPS 主機
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:45Z
 ---
 
 # OpenClaw on DigitalOcean
@@ -23,13 +16,13 @@ x-i18n:
 
 ## 費用比較（2026）
 
-| 提供者       | 方案            | 規格                  | 每月價格       | 備註                          |
-| ------------ | --------------- | --------------------- | -------------- | ----------------------------- |
-| Oracle Cloud | Always Free ARM | 最多 4 OCPU、24GB RAM | $0             | ARM、容量有限／註冊流程較繁瑣 |
-| Hetzner      | CX22            | 2 vCPU、4GB RAM       | €3.79（約 $4） | 最便宜的付費選項              |
-| DigitalOcean | Basic           | 1 vCPU、1GB RAM       | $6             | UI 簡單、文件完善             |
-| Vultr        | Cloud Compute   | 1 vCPU、1GB RAM       | $6             | 地點多                        |
-| Linode       | Nanode          | 1 vCPU、1GB RAM       | $5             | 現已隸屬於 Akamai             |
+| 提供者          | 方案              | 規格                 | 每月價格                        | Notes            |
+| ------------ | --------------- | ------------------ | --------------------------- | ---------------- |
+| Oracle Cloud | Always Free ARM | 最多 4 OCPU、24GB RAM | $0                          | ARM、容量有限／註冊流程較繁瑣 |
+| Hetzner      | CX22            | 2 vCPU、4GB RAM     | €3.79（約 $4） | 最便宜的付費選項         |
+| DigitalOcean | Basic           | 1 vCPU、1GB RAM     | $6                          | UI 簡單、文件完善       |
+| Vultr        | Cloud Compute   | 1 vCPU、1GB RAM     | $6                          | Many locations   |
+| Linode       | Nanode          | 1 vCPU、1GB RAM     | $5                          | 現已隸屬於 Akamai     |
 
 **選擇提供者：**
 
@@ -45,7 +38,7 @@ x-i18n:
 - SSH 金鑰組（或願意使用密碼驗證）
 - 約 20 分鐘
 
-## 1) 建立 Droplet
+## 1. 建立 Droplet
 
 1. 登入 [DigitalOcean](https://cloud.digitalocean.com/)
 2. 點擊 **Create → Droplets**
@@ -63,7 +56,7 @@ x-i18n:
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) 安裝 OpenClaw
+## 3. 安裝 OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) 執行入門引導
+## 4. 執行入門引導
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ openclaw onboard --install-daemon
 - Gateway 閘道器權杖（自動產生）
 - 常駐服務安裝（systemd）
 
-## 5) 驗證 Gateway 閘道器
+## 5. 驗證 Gateway 閘道器
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) 存取控制台
+## 6. 存取控制台
 
-Gateway 閘道器預設僅綁定在 local loopback。要存取控制 UI：
+The gateway binds to loopback by default. 要存取控制介面（Control UI）：
 
 **選項 A：SSH 通道（建議）**
 
@@ -135,7 +128,7 @@ openclaw gateway restart
 
 注意事項：
 
-- Serve 會讓 Gateway 閘道器維持僅限 loopback，並透過 Tailscale 身分標頭進行身分驗證。
+- Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers.
 - 若要改為要求權杖／密碼，請設定 `gateway.auth.allowTailscale: false` 或使用 `gateway.auth.mode: "password"`。
 
 **選項 C：Tailnet 綁定（不使用 Serve）**
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 開啟：`http://<tailscale-ip>:18789`（需要權杖）。
 
-## 7) 連接你的頻道
+## 7. 連接你的頻道
 
 ### Telegram
 
@@ -169,7 +162,7 @@ openclaw channels login whatsapp
 
 ## 針對 1GB RAM 的最佳化
 
-$6 的 Droplet 僅有 1GB RAM。為了讓系統穩定運作：
+$6 的 Droplet 僅有 1GB RAM。為了讓系統穩定運作： To keep things running smoothly:
 
 ### 新增 swap（建議）
 
@@ -199,12 +192,12 @@ htop
 
 ## 持久性
 
-所有狀態資料都位於：
+All state lives in:
 
 - `~/.openclaw/` — 設定、憑證、工作階段資料
 - `~/.openclaw/workspace/` — 工作區（SOUL.md、記憶等）
 
-這些在重新開機後仍會保留。請定期備份：
+These survive reboots. Back them up periodically:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -216,23 +209,23 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud 提供 **Always Free** 的 ARM 執行個體，其效能明顯優於此處任何付費選項，且費用為每月 $0。
 
-| 你能獲得的項目     | 規格               |
-| ------------------ | ------------------ |
-| **4 OCPU**         | ARM Ampere A1      |
-| **24GB RAM**       | 綽綽有餘           |
-| **200GB 儲存空間** | 區塊磁碟           |
-| **永久免費**       | 不會收取信用卡費用 |
+| 你可以獲得什麼        | 規格               |
+| -------------- | ---------------- |
+| **4 OCPU**     | ARM Ampere A1    |
+| **24GB RAM**   | More than enough |
+| **200GB 儲存空間** | 區塊儲存區            |
+| **永久免費**       | 不會收取信用卡費用        |
 
 **注意事項：**
 
-- 註冊流程可能較為挑剔（失敗時請重試）
+- Signup can be finicky (retry if it fails)
 - ARM 架構——大多數功能可用，但部分二進位檔需要 ARM 版本
 
-完整設定指南請參考 [Oracle Cloud](/platforms/oracle)。關於註冊技巧與入會流程的疑難排解，請參考這份 [社群指南](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd)。
+For the full setup guide, see [Oracle Cloud](/platforms/oracle). 如需註冊技巧與註冊流程疑難排解，請參閱此 [社群指南](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd)。
 
 ---
 
-## 疑難排解
+## Troubleshooting
 
 ### Gateway 閘道器無法啟動
 
@@ -261,7 +254,7 @@ free -h
 
 ---
 
-## 另請參閱
+## See Also
 
 - [Hetzner 指南](/install/hetzner) — 更便宜、效能更強
 - [Docker 安裝](/install/docker) — 容器化設定

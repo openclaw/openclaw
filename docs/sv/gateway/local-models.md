@@ -5,22 +5,15 @@ read_when:
   - Du kopplar LM Studio eller en OpenAI‑kompatibel proxy
   - Du behöver den säkraste vägledningen för lokala modeller
 title: "Lokala modeller"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:17Z
 ---
 
 # Lokala modeller
 
-Lokalt är möjligt, men OpenClaw förväntar sig stort kontextfönster + starkt skydd mot prompt‑injektion. Små kort trunkerar kontext och läcker säkerhet. Sikta högt: **≥2 maxade Mac Studio‑maskiner eller motsvarande GPU‑rigg (~30 000 USD+)**. En enda **24 GB**‑GPU fungerar bara för lättare promptar med högre latens. Använd den **största / fullstora modellvarianten du kan köra**; aggressivt kvantiserade eller ”små” checkpoints ökar risken för prompt‑injektion (se [Security](/gateway/security)).
+Lokal är genomförbar, men OpenClaw förväntar sig stort sammanhang + starka försvar mot snabb injektion. Små kort trunkerar sammanhang och läcker säkerhet. Sikta hög: **<unk> 2 maxed-out Mac Studios eller motsvarande GPU rigg (~$30k+)**. En enda **24 GB** GPU fungerar endast för lättare uppmaningar med högre latens. Använd **den största / fullstora modellvarianten du kan köra**; aggressivt kvantifierade eller "små" kontrollpunkter öka risken för snabb injektion (se [Security](/gateway/security)).
 
 ## Rekommenderat: LM Studio + MiniMax M2.1 (Responses API, fullstor)
 
-Bästa lokala stacken just nu. Ladda MiniMax M2.1 i LM Studio, aktivera den lokala servern (standard `http://127.0.0.1:1234`), och använd Responses API för att hålla resonemang separerat från sluttext.
+Bästa nuvarande lokal stack. Ladda MiniMax M2.1 i LM Studio, aktivera den lokala servern (standard `http://127.0.1:1234`), och använd Responses API för att hålla resonemanget separat från slutlig text.
 
 ```json5
 {
@@ -114,12 +107,12 @@ Byt ordning på primär och fallback; behåll samma providers‑block och `model
 
 ### Regional hosting / datarouting
 
-- Hostade MiniMax/Kimi/GLM‑varianter finns också på OpenRouter med regionlåsta endpoints (t.ex. USA‑hostade). Välj den regionala varianten där för att hålla trafiken inom vald jurisdiktion, samtidigt som du använder `models.mode: "merge"` för Anthropic/OpenAI‑fallbacks.
+- Hosted MiniMax/Kimi/GLM varianter finns också på OpenRouter med regionfästa ändpunkter (t.ex., US-hosted). Välj den regionala varianten där för att hålla trafiken i din valda jurisdiktion medan du fortfarande använder `models.mode: "merge"` för Anthropic/OpenAI fallbacks.
 - Endast lokalt är den starkaste integritetsvägen; regional hostning är en mellanväg när du behöver leverantörsfunktioner men vill ha kontroll över dataflödet.
 
 ## Andra OpenAI‑kompatibla lokala proxylösningar
 
-vLLM, LiteLLM, OAI‑proxy eller anpassade gateways fungerar om de exponerar en OpenAI‑liknande `/v1`‑endpoint. Ersätt provider‑blocket ovan med din endpoint och modell‑ID:
+vLLM, LiteLLM, OAI-proxy, eller anpassade gateways fungerar om de exponerar en OpenAI-stil `/v1`-slutpunkt. Ersätt leverantörsblocket ovan med ditt slutpunkt och modell-ID:
 
 ```json5
 {
@@ -151,7 +144,7 @@ Behåll `models.mode: "merge"` så att hostade modeller finns kvar som fallback.
 
 ## Felsökning
 
-- Kan Gateway nå proxyn? `curl http://127.0.0.1:1234/v1/models`.
-- LM Studio‑modellen urladdad? Ladda om; kallstart är en vanlig orsak till ”hängningar”.
-- Kontextfel? Sänk `contextWindow` eller höj serverns gräns.
+- Gateway kan nå proxy? `curl http://127.0.0.1:1234/v1/models`.
+- LM Studio-modell olastad? Ladda om; kallstart är en vanlig “hängande” orsak.
+- Kontextfel? Lägre `contextWindow` eller höja din servergräns.
 - Säkerhet: lokala modeller hoppar över leverantörsfilter; håll agenter smala och komprimering påslagen för att begränsa sprängradien för prompt‑injektion.

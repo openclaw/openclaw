@@ -3,13 +3,6 @@ summary: "Reaktionssemantik som delas över kanaler"
 read_when:
   - Arbetar med reaktioner i valfri kanal
 title: "Reaktioner"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:42Z
 ---
 
 # Reaktionsverktyg

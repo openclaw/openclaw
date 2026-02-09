@@ -3,13 +3,6 @@ summary: "Sessiesnoeien: het inkorten van toolresultaten om contextopblazing te 
 read_when:
   - Je wilt de groei van LLM-context door tooluitvoer verminderen
   - Je stemt agents.defaults.contextPruning af
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:26Z
 ---
 
 # Sessiesnoeien
@@ -72,8 +65,8 @@ Als `agents.defaults.contextTokens` is ingesteld, wordt dit behandeld als een bo
 ## Toolselectie
 
 - `tools.allow` / `tools.deny` ondersteunen `*`‑wildcards.
-- Deny heeft voorrang.
-- Overeenkomsten zijn hoofdletterongevoelig.
+- Weigeren wint.
+- Overeenkomen is hoofdletterongevoelig.
 - Lege toegestane lijst => alle tools toegestaan.
 
 ## Interactie met andere limieten

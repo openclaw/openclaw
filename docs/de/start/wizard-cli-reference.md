@@ -1,17 +1,10 @@
 ---
-summary: „Vollständige Referenz für den CLI-Onboarding-Ablauf, die Authentifizierungs-/Modell-Einrichtung, Ausgaben und Interna“
+summary: "„Vollständige Referenz für den CLI-Onboarding-Ablauf, die Authentifizierungs-/Modell-Einrichtung, Ausgaben und Interna“"
 read_when:
   - Sie benötigen detailliertes Verhalten für openclaw onboard
   - Sie debuggen Onboarding-Ergebnisse oder integrieren Onboarding-Clients
-title: „CLI-Onboarding-Referenz“
-sidebarTitle: „CLI-Referenz“
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:40Z
+title: "„CLI-Onboarding-Referenz“"
+sidebarTitle: "„CLI-Referenz“"
 ---
 
 # CLI-Onboarding-Referenz
@@ -37,16 +30,16 @@ Er installiert oder verändert nichts auf dem Remote-Host.
 ## Details zum lokalen Ablauf
 
 <Steps>
-  <Step title="Erkennung vorhandener Konfiguration">
+  <Step title="Existing config detection">
     - Wenn `~/.openclaw/openclaw.json` existiert, wählen Sie Behalten, Ändern oder Zurücksetzen.
     - Das erneute Ausführen des Assistenten löscht nichts, es sei denn, Sie wählen explizit Zurücksetzen (oder übergeben `--reset`).
     - Wenn die Konfiguration ungültig ist oder veraltete Schlüssel enthält, stoppt der Assistent und fordert Sie auf, vor dem Fortfahren `openclaw doctor` auszuführen.
     - Zurücksetzen verwendet `trash` und bietet folgende Umfänge:
       - Nur Konfiguration
       - Konfiguration + Anmeldedaten + Sitzungen
-      - Vollständiges Zurücksetzen (entfernt auch den Workspace)
-  </Step>
-  <Step title="Modell und Authentifizierung">
+      - Vollständiges Zurücksetzen (entfernt auch den Workspace)  
+</Step>
+  <Step title="Model and auth">
     - Die vollständige Optionsmatrix finden Sie unter [Authentifizierungs- und Modelloptionen](#auth-and-model-options).
   </Step>
   <Step title="Workspace">
@@ -60,7 +53,7 @@ Er installiert oder verändert nichts auf dem Remote-Host.
     - Deaktivieren Sie die Authentifizierung nur, wenn Sie jedem lokalen Prozess vollständig vertrauen.
     - Nicht-Loopback-Binds erfordern weiterhin Authentifizierung.
   </Step>
-  <Step title="Kanäle">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optionales QR-Login
     - [Telegram](/channels/telegram): Bot-Token
     - [Discord](/channels/discord): Bot-Token
@@ -70,7 +63,8 @@ Er installiert oder verändert nichts auf dem Remote-Host.
     - [BlueBubbles](/channels/bluebubbles): empfohlen für iMessage; Server-URL + Passwort + Webhook
     - [iMessage](/channels/imessage): Legacy-`imsg`-CLI-Pfad + DB-Zugriff
     - DM-Sicherheit: Standard ist Pairing. Die erste Direktnachricht sendet einen Code; Genehmigung über
-      `openclaw pairing approve <channel> <code>` oder Verwendung von Allowlists.
+      `openclaw pairing approve <channel><code>` oder Verwendung von Allowlists.
+  </Step><code>` oder Verwendung von Allowlists.
   </Step>
   <Step title="Daemon-Installation">
     - macOS: LaunchAgent
@@ -122,44 +116,50 @@ Was Sie festlegen:
 ## Authentifizierungs- und Modelloptionen
 
 <AccordionGroup>
-  <Accordion title="Anthropic API-Schlüssel (empfohlen)">
+  <Accordion title="Anthropic API key (recommended)">
     Verwendet `ANTHROPIC_API_KEY`, falls vorhanden, oder fordert einen Schlüssel an und speichert ihn anschließend für den Daemon-Betrieb.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: prüft den Keychain-Eintrag „Claude Code-credentials“
     - Linux und Windows: verwendet `~/.claude/.credentials.json` erneut, falls vorhanden
 
+    ```
     Wählen Sie unter macOS „Immer erlauben“, damit Startvorgänge über launchd nicht blockiert werden.
+    ```
 
   </Accordion>
-  <Accordion title="Anthropic-Token (Setup-Token einfügen)">
+  <Accordion title="Anthropic token (setup-token paste)">
     Führen Sie `claude setup-token` auf einer beliebigen Maschine aus und fügen Sie anschließend das Token ein.
     Sie können es benennen; leer verwendet den Standard.
   </Accordion>
-  <Accordion title="OpenAI Code-Abonnement (Wiederverwendung der Codex CLI)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     Wenn `~/.codex/auth.json` existiert, kann der Assistent es wiederverwenden.
   </Accordion>
-  <Accordion title="OpenAI Code-Abonnement (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     Browser-Ablauf; fügen Sie `code#state` ein.
 
+    ```
     Setzt `agents.defaults.model` auf `openai-codex/gpt-5.3-codex`, wenn das Modell nicht gesetzt ist oder `openai/*`.
+    ```
 
   </Accordion>
-  <Accordion title="OpenAI API-Schlüssel">
+  <Accordion title="OpenAI API key">
     Verwendet `OPENAI_API_KEY`, falls vorhanden, oder fordert einen Schlüssel an und speichert ihn in
     `~/.openclaw/.env`, damit launchd ihn lesen kann.
 
+    ```
     Setzt `agents.defaults.model` auf `openai/gpt-5.1-codex`, wenn das Modell nicht gesetzt ist, `openai/*` oder `openai-codex/*`.
+    ```
 
   </Accordion>
-  <Accordion title="xAI (Grok) API-Schlüssel">
+  <Accordion title="xAI (Grok) API key">
     Fordert `XAI_API_KEY` an und konfiguriert xAI als Modellanbieter.
   </Accordion>
   <Accordion title="OpenCode Zen">
     Fordert `OPENCODE_API_KEY` (oder `OPENCODE_ZEN_API_KEY`) an.
     Setup-URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="API-Schlüssel (generisch)">
+  <Accordion title="API key (generic)">
     Speichert den Schlüssel für Sie.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
@@ -174,15 +174,15 @@ Was Sie festlegen:
     Die Konfiguration wird automatisch geschrieben.
     Weitere Details: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (Anthropic-kompatibel)">
+  <Accordion title="Synthetic (Anthropic-compatible)">
     Fordert `SYNTHETIC_API_KEY` an.
     Weitere Details: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot und Kimi Coding">
+  <Accordion title="Moonshot and Kimi Coding">
     Moonshot- (Kimi K2) und Kimi-Coding-Konfigurationen werden automatisch geschrieben.
     Weitere Details: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="Überspringen">
+  <Accordion title="Skip">
     Lässt die Authentifizierung unkonfiguriert.
   </Accordion>
 </AccordionGroup>

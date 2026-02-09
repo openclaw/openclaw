@@ -1,16 +1,9 @@
 ---
 summary: "منصات المراسلة التي يمكن لـ OpenClaw الاتصال بها"
 read_when:
-  - "تريد اختيار قناة دردشة لـ OpenClaw"
-  - "تحتاج إلى نظرة عامة سريعة على منصات المراسلة المدعومة"
+  - تريد اختيار قناة دردشة لـ OpenClaw
+  - تحتاج إلى نظرة عامة سريعة على منصات المراسلة المدعومة
 title: "قنوات الدردشة"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:52Z
 ---
 
 # قنوات الدردشة

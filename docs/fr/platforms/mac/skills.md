@@ -4,13 +4,6 @@ read_when:
   - Mise a jour de l'interface des parametres des Skills macOS
   - Modification des regles de controle ou du comportement d'installation des Skills
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:15Z
 ---
 
 # Skills (macOS)
@@ -30,7 +23,7 @@ L'application macOS expose les Skills OpenClaw via la Gateway (passerelle) ; ell
 - La Gateway n'expose qu'un seul installateur prefere lorsque plusieurs sont fournis
   (brew lorsqu'il est disponible, sinon le gestionnaire node de `skills.install`, npm par defaut).
 
-## Cles d'environnement / API
+## Clés Env/API
 
 - L'application stocke les cles dans `~/.openclaw/openclaw.json` sous `skills.entries.<skillKey>`.
 - `skills.update` met a jour `enabled`, `apiKey` et `env`.

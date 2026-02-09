@@ -5,13 +5,6 @@ read_when:
   - Gusto mo ng production-grade, laging-on na Gateway sa sarili mong VM
   - Gusto mo ng ganap na kontrol sa persistence, mga binary, at asal ng restart
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:53Z
 ---
 
 # OpenClaw sa GCP Compute Engine (Docker, Gabay sa Production VPS)
@@ -20,8 +13,8 @@ x-i18n:
 
 Magpatakbo ng isang persistent na OpenClaw Gateway sa isang GCP Compute Engine VM gamit ang Docker, na may matibay na state, naka-bake na mga binary, at ligtas na asal ng restart.
 
-Kung gusto mo ng "OpenClaw 24/7 sa ~$5-12/buwan", ito ay isang maaasahang setup sa Google Cloud.
-Nag-iiba ang presyo depende sa uri ng makina at rehiyon; piliin ang pinakamaliit na VM na kasya sa iyong workload at mag-scale up kung makaranas ka ng OOM.
+Kung gusto mo ng "OpenClaw 24/7 sa ~$5–12/buwan", ito ay isang maaasahang setup sa Google Cloud.
+Nag-iiba ang presyo ayon sa uri ng makina at rehiyon; piliin ang pinakamaliit na VM na akma sa iyong workload at mag-scale up kung makaranas ka ng OOM.
 
 ## Ano ang gagawin natin (sa simpleng termino)?
 
@@ -37,9 +30,9 @@ Maaaring ma-access ang Gateway sa pamamagitan ng:
 - SSH port forwarding mula sa iyong laptop
 - Direktang pag-expose ng port kung ikaw ang magma-manage ng firewalling at mga token
 
-Gumagamit ang gabay na ito ng Debian sa GCP Compute Engine.
-Gumagana rin ang Ubuntu; i-map lang ang mga package nang naaayon.
-Para sa generic na daloy ng Docker, tingnan ang [Docker](/install/docker).
+5. Gumagamit ang gabay na ito ng Debian sa GCP Compute Engine.
+   Gumagana rin ang Ubuntu; i-map ang mga package nang naaayon.
+6. Para sa generic na Docker flow, tingnan ang [Docker](/install/docker).
 
 ---
 
@@ -72,7 +65,7 @@ Para sa generic na daloy ng Docker, tingnan ang [Docker](/install/docker).
 
 ---
 
-## 1) I-install ang gcloud CLI (o gumamit ng Console)
+## 1. I-install ang gcloud CLI (o gumamit ng Console)
 
 **Opsyon A: gcloud CLI** (inirerekomenda para sa automation)
 
@@ -91,7 +84,7 @@ Lahat ng hakbang ay maaaring gawin sa web UI sa [https://console.cloud.google.co
 
 ---
 
-## 2) Gumawa ng GCP project
+## 2. Gumawa ng GCP project
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) Gumawa ng VM
+## 3. Gumawa ng VM
 
 **Mga uri ng makina:**
 
-| Uri      | Specs                    | Gastos                | Mga tala                           |
-| -------- | ------------------------ | --------------------- | ---------------------------------- |
-| e2-small | 2 vCPU, 2GB RAM          | ~$12/buwan            | Inirerekomenda                     |
-| e2-micro | 2 vCPU (shared), 1GB RAM | Eligible sa free tier | Maaaring mag-OOM sa ilalim ng load |
+| Uri      | Specs                                       | Gastos                     | Mga tala                           |
+| -------- | ------------------------------------------- | -------------------------- | ---------------------------------- |
+| e2-small | 2 vCPU, 2GB RAM                             | ~$12/buwan | Inirerekomenda                     |
+| e2-micro | 2 vCPU (shared), 1GB RAM | Eligible sa free tier      | Maaaring mag-OOM sa ilalim ng load |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) Mag-SSH papasok sa VM
+## 4. Mag-SSH papasok sa VM
 
 **CLI:**
 
@@ -160,11 +153,11 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a
 
 I-click ang button na "SSH" sa tabi ng iyong VM sa Compute Engine dashboard.
 
-Tandaan: Maaaring tumagal ng 1-2 minuto ang SSH key propagation matapos malikha ang VM. Kung tinanggihan ang koneksyon, maghintay at subukang muli.
+Tandaan: Maaaring tumagal ng 1–2 minuto ang pag-propagate ng SSH key pagkatapos malikha ang VM. Kung tinatanggihan ang koneksyon, maghintay at subukang muli.
 
 ---
 
-## 5) I-install ang Docker (sa VM)
+## 5. I-install ang Docker (sa VM)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) I-clone ang OpenClaw repository
+## 6. I-clone ang OpenClaw repository
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,10 +198,10 @@ Ipinapalagay ng gabay na ito na magbu-build ka ng custom image para masiguro ang
 
 ---
 
-## 7) Gumawa ng persistent na mga directory sa host
+## 7. Gumawa ng persistent na mga directory sa host
 
-Ephemeral ang mga Docker container.
-Lahat ng pangmatagalang state ay dapat nasa host.
+10. Ang mga Docker container ay ephemeral.
+    Lahat ng pangmatagalang state ay dapat manatili sa host.
 
 ```bash
 mkdir -p ~/.openclaw
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) I-configure ang mga environment variable
+## 8. I-configure ang mga environment variable
 
 Gumawa ng `.env` sa root ng repository.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose configuration
+## 9. Docker Compose configuration
 
 Gumawa o i-update ang `docker-compose.yml`.
 
@@ -291,10 +284,10 @@ services:
 
 ---
 
-## 10) I-bake ang mga kinakailangang binary sa image (kritikal)
+## 10. I-bake ang mga kinakailangang binary sa image (kritikal)
 
-Ang pag-install ng mga binary sa loob ng tumatakbong container ay isang bitag.
-Anumang mai-install sa runtime ay mawawala sa restart.
+Ang pag-install ng mga binary sa loob ng tumatakbong container ay isang patibong.
+Anumang naka-install sa runtime ay mawawala kapag nag-restart.
 
 Lahat ng external na binary na kinakailangan ng Skills ay dapat i-install sa oras ng image build.
 
@@ -304,8 +297,8 @@ Ipinapakita ng mga halimbawa sa ibaba ang tatlong karaniwang binary lamang:
 - `goplaces` para sa Google Places
 - `wacli` para sa WhatsApp
 
-Mga halimbawa lang ito, hindi kumpletong listahan.
-Maaari kang mag-install ng marami pang binary gamit ang parehong pattern.
+14. Mga halimbawa lamang ito, hindi kumpletong listahan.
+    Maaari kang mag-install ng kasing daming binary hangga't kailangan gamit ang parehong pattern.
 
 Kung magdadagdag ka ng bagong Skills sa hinaharap na umaasa sa karagdagang mga binary, kailangan mong:
 
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) I-build at ilunsad
+## 11. I-build at ilunsad
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ Inaasahang output:
 
 ---
 
-## 12) I-verify ang Gateway
+## 12. I-verify ang Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Tagumpay:
 
 ---
 
-## 13) I-access mula sa iyong laptop
+## 13. I-access mula sa iyong laptop
 
 Gumawa ng SSH tunnel para i-forward ang Gateway port:
 
@@ -412,7 +405,7 @@ I-paste ang iyong gateway token.
 ## Ano ang nagpe-persist at saan (pinagmumulan ng katotohanan)
 
 Tumatakbo ang OpenClaw sa Docker, ngunit ang Docker ay hindi ang pinagmumulan ng katotohanan.
-Lahat ng pangmatagalang state ay dapat mabuhay sa mga restart, rebuild, at reboot.
+Lahat ng pangmatagalang state ay dapat makaligtas sa mga restart, rebuild, at reboot.
 
 | Component                 | Lokasyon                          | Mekanismo ng persistence | Mga tala                                  |
 | ------------------------- | --------------------------------- | ------------------------ | ----------------------------------------- |
@@ -446,7 +439,7 @@ docker compose up -d
 
 **Tinanggihan ang SSH connection**
 
-Maaaring tumagal ng 1-2 minuto ang SSH key propagation matapos malikha ang VM. Maghintay at subukang muli.
+Ang pagpapalaganap ng SSH key ay maaaring tumagal ng 1–2 minuto pagkatapos malikha ang VM. Maghintay at subukang muli.
 
 **Mga isyu sa OS Login**
 
@@ -498,7 +491,7 @@ Para sa automation o CI/CD pipelines, gumawa ng dedikadong service account na ma
      --role="roles/compute.instanceAdmin.v1"
    ```
 
-Iwasan ang paggamit ng Owner role para sa automation. Sundin ang prinsipyo ng least privilege.
+Iwasang gamitin ang Owner role para sa automation. Gamitin ang prinsipyo ng pinakamababang pribilehiyo.
 
 Tingnan ang [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google.com/iam/docs/understanding-roles) para sa detalye ng mga IAM role.
 

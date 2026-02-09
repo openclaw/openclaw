@@ -3,13 +3,6 @@ summary: "packaging scripts ဖြင့် ထုတ်လုပ်သော ma
 read_when:
   - mac debug builds များကို တည်ဆောက်ခြင်း သို့မဟုတ် signing ပြုလုပ်သောအခါ
 title: "macOS Signing"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:47Z
 ---
 
 # mac signing (debug builds)
@@ -18,12 +11,12 @@ x-i18n:
 
 - တည်ငြိမ်သော debug bundle identifier ကို သတ်မှတ်သည်: `ai.openclaw.mac.debug`
 - ထို bundle id ဖြင့် Info.plist ကို ရေးသားသည် (`BUNDLE_ID=...` ဖြင့် override လုပ်နိုင်သည်)
-- [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) ကို ခေါ်ပြီး main binary နှင့် app bundle ကို sign လုပ်သည်။ ထိုသို့လုပ်ခြင်းဖြင့် macOS သည် rebuild တစ်ကြိမ်စီကို တူညီသော signed bundle အဖြစ် သတ်မှတ်ပြီး TCC ခွင့်ပြုချက်များ (notifications, accessibility, screen recording, mic, speech) ကို ထိန်းသိမ်းထားနိုင်သည်။ ခွင့်ပြုချက်များကို တည်ငြိမ်စေရန် အမှန်တကယ်သော signing identity ကို အသုံးပြုပါ။ ad-hoc signing သည် opt-in ဖြစ်ပြီး မခိုင်မာပါ ( [macOS permissions](/platforms/mac/permissions) ကို ကြည့်ပါ)
-- ပုံမှန်အားဖြင့် `CODESIGN_TIMESTAMP=auto` ကို အသုံးပြုသည်။ ၎င်းသည် Developer ID signatures အတွက် trusted timestamps ကို ဖွင့်ပေးသည်။ timestamping ကို ကျော်ရန် (offline debug builds အတွက်) `CODESIGN_TIMESTAMP=off` ကို သတ်မှတ်ပါ
+- `scripts/codesign-mac-app.sh` ကို ခေါ်၍ main binary နှင့် app bundle ကို sign လုပ်ပြီး macOS က rebuild တစ်ကြိမ်ချင်းကို တူညီသော signed bundle အဖြစ် သတ်မှတ်စေကာ TCC permission များ (notifications, accessibility, screen recording, mic, speech) ကို ထိန်းသိမ်းထားနိုင်စေပါသည်။ Permission များ တည်ငြိမ်စေရန် အမှန်တကယ် signing identity ကို အသုံးပြုပါ; ad-hoc သည် opt-in လုပ်ရပြီး မတည်ငြိမ်ပါ ( [macOS permissions](/platforms/mac/permissions) ကို ကြည့်ပါ)။
+- မူလအားဖြင့် `CODESIGN_TIMESTAMP=auto` ကို အသုံးပြုပါသည်; Developer ID signature များအတွက် trusted timestamp များကို ဖွင့်ပေးပါသည်။ Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
 - build metadata ကို Info.plist ထဲသို့ ထည့်သွင်းသည်: `OpenClawBuildTimestamp` (UTC) နှင့် `OpenClawGitCommit` (short hash) — ထိုကြောင့် About pane တွင် build, git နှင့် debug/release channel ကို ပြသနိုင်သည်
 - **Packaging အတွက် Node 22+ လိုအပ်သည်**: script သည် TS builds နှင့် Control UI build ကို လည်ပတ်စေသည်
-- environment မှ `SIGN_IDENTITY` ကို ဖတ်ယူသည်။ သင့် shell rc ထဲသို့ `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (သို့မဟုတ် သင့် Developer ID Application cert) ကို ထည့်သွင်းပါက သင့် cert ဖြင့် အမြဲ sign လုပ်နိုင်ပါသည်။ ad-hoc signing အတွက် `ALLOW_ADHOC_SIGNING=1` သို့မဟုတ် `SIGN_IDENTITY="-"` ဖြင့် အထူးသဘောတူညီချက် ပေးရပါသည် (permission testing အတွက် မအကြံပြုပါ)
-- signing ပြီးနောက် Team ID audit ကို လည်ပတ်ပြီး app bundle အတွင်းရှိ Mach-O တစ်ခုခုကို မတူညီသော Team ID ဖြင့် sign လုပ်ထားပါက မအောင်မြင်အဖြစ် သတ်မှတ်သည်။ ကျော်ရန် `SKIP_TEAM_ID_CHECK=1` ကို သတ်မှတ်ပါ
+- Environment မှ `SIGN_IDENTITY` ကို ဖတ်ပါသည်။ သင့် shell rc ထဲသို့ `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (သို့မဟုတ် Developer ID Application cert) ကို ထည့်၍ အမြဲတမ်း သင့် cert ဖြင့် sign လုပ်နိုင်ပါသည်။ Ad-hoc signing သည် `ALLOW_ADHOC_SIGNING=1` သို့မဟုတ် `SIGN_IDENTITY="-"` ဖြင့် အထူး opt-in လုပ်ရန် လိုအပ်ပါသည် (permission testing အတွက် မအကြံပြုပါ)။
+- Signing ပြီးနောက် Team ID audit ကို chạy လုပ်ပြီး app bundle အတွင်းရှိ Mach-O မည်သည့်အရာမဆို Team ID မတူပါက fail ဖြစ်ပါသည်။ Bypass လုပ်လိုပါက `SKIP_TEAM_ID_CHECK=1` ကို သတ်မှတ်ပါ။
 
 ## Usage
 
@@ -38,7 +31,7 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # dev-only Sparkle Tea
 
 ### Ad-hoc Signing Note
 
-`SIGN_IDENTITY="-"` (ad-hoc) ဖြင့် sign လုပ်သောအခါ script သည် **Hardened Runtime** (`--options runtime`) ကို အလိုအလျောက် ပိတ်ပေးသည်။ ထိုသို့မလုပ်ပါက Team ID တူညီမှု မရှိသော embedded frameworks (Sparkle ကဲ့သို့) ကို app က load လုပ်ရန် ကြိုးစားသည့်အခါ crash ဖြစ်နိုင်ပါသည်။ ad-hoc signatures များကြောင့် TCC permission များ ဆက်လက်တည်ရှိမှု ပျက်စီးသွားနိုင်ပါသည်။ ပြန်လည်ပြုပြင်ရန် အဆင့်များအတွက် [macOS permissions](/platforms/mac/permissions) ကို ကြည့်ပါ။
+`SIGN_IDENTITY="-"` (ad-hoc) ဖြင့် sign လုပ်သောအခါ script သည် **Hardened Runtime** (`--options runtime`) ကို အလိုအလျောက် ပိတ်ပါသည်။ Team ID မတူညီသော embedded framework များ (ဥပမာ Sparkle) ကို app က load လုပ်ရာတွင် crash မဖြစ်စေရန် ဤအရာ လိုအပ်ပါသည်။ Ad-hoc signature များသည် TCC permission များ ဆက်လက်တည်ရှိမှုကိုလည်း ဖျက်စီးပါသည်; ပြန်လည်ပြုပြင်ရန် အဆင့်များအတွက် [macOS permissions](/platforms/mac/permissions) ကို ကြည့်ပါ။
 
 ## About အတွက် Build metadata
 
@@ -47,8 +40,8 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # dev-only Sparkle Tea
 - `OpenClawBuildTimestamp`: package လုပ်ချိန်တွင် ISO8601 UTC
 - `OpenClawGitCommit`: short git hash (မရရှိပါက `unknown`)
 
-About tab သည် ဤ keys များကို ဖတ်ယူပြီး version, build date, git commit နှင့် debug build ဟုတ်/မဟုတ် (`#if DEBUG` ဖြင့်) ကို ပြသပါသည်။ code ပြောင်းလဲပြီးနောက် ဤတန်ဖိုးများကို အသစ်ပြန်ဖြစ်စေရန် packager ကို လည်ပတ်ပါ။
+About tab သည် version, build date, git commit နှင့် debug build ဟုတ်မဟုတ် (`#if DEBUG` မှတစ်ဆင့်) ကို ပြရန် ဤ key များကို ဖတ်ပါသည်။ Code ပြောင်းလဲပြီးနောက် ဤတန်ဖိုးများကို ပြန်လည်အသစ်လုပ်ရန် packager ကို chạy ပါ။
 
 ## Why
 
-TCC ခွင့်ပြုချက်များသည် bundle identifier _နှင့်_ code signature နှစ်ခုလုံးနှင့် ချိတ်ဆက်ထားပါသည်။ UUID များ ပြောင်းလဲနေသော unsigned debug builds များကြောင့် rebuild တစ်ကြိမ်စီအပြီး macOS က ခွင့်ပြုချက်များကို မေ့လျော့သွားခဲ့ပါသည်။ binaries များကို sign လုပ်ခြင်း (ပုံမှန်အားဖြင့် ad‑hoc) နှင့် တည်ငြိမ်သော bundle id/path (`dist/OpenClaw.app`) ကို ထိန်းသိမ်းထားခြင်းဖြင့် builds များအကြား ခွင့်ပြုချက်များကို ဆက်လက်ထိန်းသိမ်းနိုင်ပြီး VibeTunnel ၏ လမ်းကြောင်းနှင့် ကိုက်ညီပါသည်။
+TCC permission များသည် bundle identifier **နှင့်** code signature နှစ်ခုစလုံးနှင့် ချိတ်ဆက်ထားပါသည်။ UUID မပြောင်းလဲဘဲ မထိုးထားသော debug build များကြောင့် macOS သည် rebuild တစ်ကြိမ်စီတိုင်း permissions (grants) များကို မေ့လျော့နေခဲ့သည်။ Binary များကို sign လုပ်ခြင်း (ပုံမှန်အားဖြင့် ad‑hoc) နှင့် bundle id/path (`dist/OpenClaw.app`) ကို တည်ငြိမ်စွာ ထားရှိခြင်းက build များအကြား grants များကို ထိန်းသိမ်းပေးပြီး VibeTunnel နည်းလမ်းနှင့် ကိုက်ညီစေသည်။

@@ -4,13 +4,6 @@ read_when:
   - Gusto mong pamahalaan ang mga hook ng agent
   - Gusto mong mag-install o mag-update ng mga hook
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:21Z
 ---
 
 # `openclaw hooks`
@@ -134,8 +127,7 @@ openclaw hooks enable <name>
 
 I-enable ang isang partikular na hook sa pamamagitan ng pagdaragdag nito sa iyong config (`~/.openclaw/config.json`).
 
-**Tandaan:** Ang mga hook na pinamamahalaan ng mga plugin ay nagpapakita ng `plugin:<id>` sa `openclaw hooks list` at
-hindi maaaring i-enable/i-disable dito. I-enable/i-disable na lang ang plugin.
+26. **Paalala:** Ang mga hook na pinamamahalaan ng mga plugin ay nagpapakita ng `plugin:<id>` sa `openclaw hooks list` at hindi maaaring i-enable/i-disable dito. 27. Sa halip, i-enable/i-disable ang plugin.
 
 **Mga argumento:**
 
@@ -156,7 +148,7 @@ openclaw hooks enable session-memory
 **Ano ang ginagawa nito:**
 
 - Sinusuri kung umiiral ang hook at kung eligible
-- Ina-update ang `hooks.internal.entries.<name>.enabled = true` sa iyong config
+- 28. Ina-update ang `hooks.internal.entries.<name>29. .enabled = true` sa iyong config
 - Sine-save ang config sa disk
 
 **Pagkatapos i-enable:**

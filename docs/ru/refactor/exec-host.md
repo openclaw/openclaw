@@ -4,14 +4,7 @@ read_when:
   - Проектирование маршрутизации exec-хоста или подтверждений exec
   - Реализация раннера узла + UI IPC
   - Добавление режимов безопасности exec-хоста и slash‑команд
-title: "Рефакторинг exec‑хоста"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:16Z
+title: "Рефакторинг Exec хоста"
 ---
 
 # План рефакторинга exec‑хоста
@@ -236,7 +229,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 - Инструмент Gateway (шлюз) `exec` обрабатывает жизненный цикл напрямую (только синхронно).
 
-## Потоки exec
+## Потоки Exec
 
 ### Sandbox‑хост
 
@@ -251,11 +244,11 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ### Хост узла
 
 - Gateway (шлюз) вызывает `node.invoke` с `system.run`.
-- Раннер применяет локальные подтверждения.
+- Бегун требует местных одобрений.
 - Раннер возвращает агрегированный stdout/stderr.
 - Необязательные события Bridge для start/finish/deny.
 
-## Ограничения вывода
+## Записей вывода
 
 - Ограничить суммарный stdout+stderr до **200k**; сохранять **хвост 20k** для событий.
 - Обрезать с понятным суффиксом (например, `"… (truncated)"`).
@@ -266,7 +259,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - Per‑agent, per‑session переопределения; непостоянные, если не сохранены через конфиг.
 - `/elevated on|off|ask|full` остаётся сокращением для `host=gateway security=full` (при `full` подтверждения пропускаются).
 
-## Кроссплатформенная стратегия
+## Кросс-платформенная история
 
 - Служба раннера — переносимая цель выполнения.
 - UI необязателен; если отсутствует, применяется `askFallback`.

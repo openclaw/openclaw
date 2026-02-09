@@ -3,13 +3,6 @@ summary: "OpenClaw macOS 앱에서 작업하는 개발자를 위한 설정 가�
 read_when:
   - macOS 개발 환경 설정
 title: "macOS 개발자 설정"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:42Z
 ---
 
 # macOS 개발자 설정
@@ -23,7 +16,7 @@ x-i18n:
 1. **Xcode 26.2+**: Swift 개발에 필요합니다.
 2. **Node.js 22+ 및 pnpm**: Gateway(게이트웨이), CLI, 패키징 스크립트에 필요합니다.
 
-## 1. 의존성 설치
+## 1) 의존성 설치
 
 프로젝트 전반의 의존성을 설치합니다:
 
@@ -82,7 +75,7 @@ xcrun swift --version
 
 버전이 일치하지 않는 경우 macOS/Xcode 를 업데이트한 후 빌드를 다시 실행하십시오.
 
-### 권한 허용 시 앱 크래시
+### 27. 권한 부여 시 앱 충돌
 
 **음성 인식** 또는 **마이크** 접근을 허용하려 할 때 앱이 크래시된다면, 손상된 TCC 캐시 또는 서명 불일치가 원인일 수 있습니다.
 
@@ -96,7 +89,7 @@ xcrun swift --version
 
 2. 그래도 해결되지 않으면, macOS 에서 "초기 상태"를 강제하기 위해 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) 에서 `BUNDLE_ID` 을 일시적으로 변경하십시오.
 
-### Gateway "Starting..." 상태가 계속 유지됨
+### Gateway "Starting..."
 
 Gateway 상태가 "Starting..." 에서 멈춰 있는 경우, 좀비 프로세스가 포트를 점유하고 있는지 확인하십시오:
 

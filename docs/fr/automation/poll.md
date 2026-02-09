@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de la prise en charge des sondages
   - Debogage des envois de sondages depuis la CLI ou la passerelle
 title: "Sondages"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:24Z
 ---
 
 # Sondages

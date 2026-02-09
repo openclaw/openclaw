@@ -3,13 +3,6 @@ summary: "Étapes de signature pour les builds de débogage macOS générés par
 read_when:
   - Création ou signature de builds mac de débogage
 title: "Signature macOS"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:20Z
 ---
 
 # signature mac (builds de débogage)
@@ -40,7 +33,7 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # dev-only Sparkle Tea
 
 Lors de la signature avec `SIGN_IDENTITY="-"` (ad‑hoc), le script désactive automatiquement le **Hardened Runtime** (`--options runtime`). C’est nécessaire pour éviter des crashs lorsque l’app tente de charger des frameworks embarqués (comme Sparkle) qui ne partagent pas le même ID d’équipe. Les signatures ad‑hoc rompent également la persistance des autorisations TCC ; voir [autorisations macOS](/platforms/mac/permissions) pour les étapes de récupération.
 
-## Métadonnées de build pour « À propos »
+## Construire des métadonnées pour A propos
 
 `package-mac-app.sh` estampille le bundle avec :
 

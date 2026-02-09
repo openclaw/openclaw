@@ -4,19 +4,12 @@ read_when:
   - 你需要逐一提供者的模型設定參考
   - 你想要模型提供者的範例設定或 CLI 入門指令
 title: "模型提供者"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:51Z
 ---
 
 # 模型提供者
 
-本頁涵蓋 **LLM / 模型提供者**（非像 WhatsApp / Telegram 這類聊天頻道）。
-關於模型選擇規則，請參閱 [/concepts/models](/concepts/models)。
+27. 本頁涵蓋 **LLM/模型供應商**（不包含 WhatsApp/Telegram 等聊天通道）。
+28. 有關模型選擇規則，請參閱 [/concepts/models](/concepts/models)。
 
 ## 快速規則
 
@@ -26,8 +19,8 @@ x-i18n:
 
 ## 內建提供者（pi‑ai catalog）
 
-OpenClaw 隨附 pi‑ai catalog。這些提供者**不需要**
-`models.providers` 設定；只要設定驗證並選擇模型即可。
+29. OpenClaw 隨附 pi‑ai 目錄。 30. 這些供應商**不需要**
+    `models.providers` 設定；只要設定驗證並選擇模型即可。
 
 ### OpenAI
 
@@ -99,7 +92,8 @@ OpenClaw 隨附 pi‑ai catalog。這些提供者**不需要**
   - 啟用：`openclaw plugins enable google-gemini-cli-auth`
   - 登入：`openclaw models auth login --provider google-gemini-cli --set-default`
   - 注意：你**不需要**將 client id 或 secret 貼到 `openclaw.json`。CLI 登入流程會將
-    權杖儲存在閘道器主機上的驗證設定檔中。
+    權杖儲存在閘道器主機上的驗證設定檔中。 31. CLI 登入流程會將
+    權杖儲存在閘道主機上的驗證設定檔中。
 
 ### Z.AI（GLM）
 
@@ -192,6 +186,7 @@ Kimi Coding 使用 Moonshot AI 的 Anthropic 相容端點：
 
 Qwen 透過裝置碼流程提供 Qwen Coder + Vision 的 OAuth 存取。
 啟用隨附外掛，然後登入：
+32. 啟用隨附的外掛，然後登入：
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +259,7 @@ ollama pull llama3.3
 }
 ```
 
-當在 `http://127.0.0.1:11434/v1` 本地執行時，Ollama 會自動被偵測。模型建議與自訂設定請參閱 [/providers/ollama](/providers/ollama)。
+33. 在本機以 `http://127.0.0.1:11434/v1` 執行時，會自動偵測到 Ollama。 34. 請參閱 [/providers/ollama](/providers/ollama) 以取得模型建議與自訂設定。
 
 ### 本地代理（LM Studio、vLLM、LiteLLM 等）
 
@@ -305,6 +300,7 @@ ollama pull llama3.3
 
 - 對於自訂提供者，`reasoning`、`input`、`cost`、`contextWindow` 與 `maxTokens` 為選填。
   若省略，OpenClaw 會預設為：
+  35. 若省略，OpenClaw 預設為：
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

@@ -3,13 +3,6 @@ summary: "Agente de desarrollo AGENTS.md (C-3PO)"
 read_when:
   - Al usar las plantillas del gateway de desarrollo
   - Al actualizar la identidad predeterminada del agente de desarrollo
-x-i18n:
-  source_path: reference/templates/AGENTS.dev.md
-  source_hash: 3bb17ab484f02c6d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:30Z
 ---
 
 # AGENTS.md - Espacio de trabajo de OpenClaw

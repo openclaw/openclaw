@@ -4,13 +4,6 @@ read_when:
   - Vous voulez une automatisation pilotée par événements pour /new, /reset, /stop et les événements du cycle de vie de l’agent
   - Vous voulez créer, installer ou déboguer des hooks
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:59Z
 ---
 
 # Hooks
@@ -26,7 +19,7 @@ Les hooks sont de petits scripts qui s’exécutent lorsqu’un événement se p
 
 Les hooks peuvent également être regroupés dans des plugins ; voir [Plugins](/tools/plugin#plugin-hooks).
 
-Cas d’usage courants :
+Utilisations courantes :
 
 - Enregistrer un instantané de mémoire lorsque vous réinitialisez une session
 - Conserver une piste d’audit des commandes pour le dépannage ou la conformité
@@ -807,7 +800,7 @@ Vérifiez les exigences :
 openclaw hooks info my-hook
 ```
 
-Recherchez les éléments manquants :
+Recherche manquante :
 
 - Binaires (vérifiez le PATH)
 - Variables d’environnement

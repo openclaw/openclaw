@@ -4,13 +4,6 @@ read_when:
   - آپ سورس چیک آؤٹ کو محفوظ طریقے سے اپ ڈیٹ کرنا چاہتے ہیں
   - آپ کو `--update` شارٹ ہینڈ کے رویّے کو سمجھنے کی ضرورت ہے
 title: "اپ ڈیٹ"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:13Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,9 @@ Options:
 
 ## `update wizard`
 
-اپ ڈیٹ چینل منتخب کرنے اور اپ ڈیٹ کے بعد Gateway کو ری اسٹارٹ کرنا ہے یا نہیں اس کی تصدیق کے لیے انٹرایکٹو فلو
-(بطورِ طے شدہ ری اسٹارٹ ہوتا ہے)۔ اگر آپ `dev` منتخب کریں اور git چیک آؤٹ موجود نہ ہو، تو یہ
-ایک بنانے کی پیشکش کرتا ہے۔
+Interactive flow to pick an update channel and confirm whether to restart the Gateway
+after updating (default is to restart). If you select `dev` without a git checkout, it
+offers to create one.
 
 ## What it does
 

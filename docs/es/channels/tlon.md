@@ -3,13 +3,6 @@ summary: "Estado de compatibilidad de Tlon/Urbit, capacidades y configuración"
 read_when:
   - Al trabajar en funciones del canal Tlon/Urbit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:42Z
 ---
 
 # Tlon (plugin)

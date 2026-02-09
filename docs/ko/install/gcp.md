@@ -5,13 +5,6 @@ read_when:
   - 자체 VM에서 프로덕션 등급의 항상 켜져 있는 Gateway를 원할 때
   - 영속성, 바이너리, 재시작 동작을 완전히 제어하고 싶을 때
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:36Z
 ---
 
 # GCP Compute Engine에서 OpenClaw 실행 (Docker, 프로덕션 VPS 가이드)
@@ -20,10 +13,10 @@ x-i18n:
 
 Docker를 사용하여 GCP Compute Engine VM에서 내구성 있는 상태, 이미지에 포함된 바이너리, 안전한 재시작 동작을 갖춘 영구적인 OpenClaw Gateway(게이트웨이)를 실행합니다.
 
-"월 ~$5-12로 OpenClaw를 24/7 실행"하고 싶다면, 이는 Google Cloud에서 신뢰할 수 있는 구성입니다.  
+"월 ~$5-12로 OpenClaw를 24/7 실행"하고 싶다면, 이는 Google Cloud에서 신뢰할 수 있는 구성입니다.
 요금은 머신 유형과 리전에 따라 달라집니다. 워크로드에 맞는 가장 작은 VM을 선택하고 OOM이 발생하면 확장하십시오.
 
-## 무엇을 하나요? (간단히)
+## What are we doing (simple terms)?
 
 - GCP 프로젝트 생성 및 결제 활성화
 - Compute Engine VM 생성
@@ -37,8 +30,8 @@ Gateway는 다음 방식으로 접근할 수 있습니다:
 - 노트북에서 SSH 포트 포워딩
 - 방화벽과 토큰을 직접 관리하는 경우 포트를 직접 노출
 
-이 가이드는 GCP Compute Engine의 Debian을 사용합니다.  
-Ubuntu도 작동하며, 패키지를 적절히 매핑하면 됩니다.  
+이 가이드는 GCP Compute Engine의 Debian을 사용합니다.
+Ubuntu도 작동하며, 패키지를 적절히 매핑하면 됩니다.
 일반적인 Docker 흐름은 [Docker](/install/docker)를 참고하십시오.
 
 ---
@@ -56,7 +49,7 @@ Ubuntu도 작동하며, 패키지를 적절히 매핑하면 됩니다.
 
 ---
 
-## 준비물
+## 필요한 사항
 
 - GCP 계정 (e2-micro는 무료 티어 대상)
 - gcloud CLI 설치 (또는 Cloud Console 사용)
@@ -72,7 +65,7 @@ Ubuntu도 작동하며, 패키지를 적절히 매핑하면 됩니다.
 
 ---
 
-## 1) gcloud CLI 설치 (또는 Console 사용)
+## 1. gcloud CLI 설치 (또는 Console 사용)
 
 **옵션 A: gcloud CLI** (자동화에 권장)
 
@@ -91,7 +84,7 @@ gcloud auth login
 
 ---
 
-## 2) GCP 프로젝트 생성
+## 2. GCP 프로젝트 생성
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) VM 생성
+## 3. VM 생성
 
 **머신 유형:**
 
-| 유형     | 사양                   | 비용           | 비고             |
-| -------- | ---------------------- | -------------- | ---------------- |
-| e2-small | 2 vCPU, 2GB RAM        | ~$12/월        | 권장             |
-| e2-micro | 2 vCPU (공유), 1GB RAM | 무료 티어 대상 | 부하 시 OOM 가능 |
+| 유형       | 사양                                      | 비용                     | 참고 자료       |
+| -------- | --------------------------------------- | ---------------------- | ----------- |
+| e2-small | 2 vCPU, 2GB RAM                         | ~$12/월 | 권장          |
+| e2-micro | 2 vCPU (공유), 1GB RAM | 무료 티어 대상               | 부하 시 OOM 가능 |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) VM에 SSH 접속
+## 4. VM에 SSH 접속
 
 **CLI:**
 
@@ -164,7 +157,7 @@ Compute Engine 대시보드에서 VM 옆의 "SSH" 버튼을 클릭하십시오.
 
 ---
 
-## 5) Docker 설치 (VM에서)
+## 5. Docker 설치 (VM에서)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) OpenClaw 리포지토리 클론
+## 6. OpenClaw 리포지토리 클론
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,9 +198,9 @@ cd openclaw
 
 ---
 
-## 7) 영속적인 호스트 디렉토리 생성
+## 7. 영속적인 호스트 디렉토리 생성
 
-Docker 컨테이너는 일시적입니다.  
+Docker 컨테이너는 일시적입니다.
 모든 장기 상태는 호스트에 존재해야 합니다.
 
 ```bash
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) 환경 변수 구성
+## 8. 환경 변수 구성
 
 리포지토리 루트에 `.env`를 생성하십시오.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose 구성
+## 9. Docker Compose 구성
 
 `docker-compose.yml`를 생성하거나 업데이트하십시오.
 
@@ -291,9 +284,9 @@ services:
 
 ---
 
-## 10) 필요한 바이너리를 이미지에 포함시키기 (중요)
+## 10. 필요한 바이너리를 이미지에 포함시키기 (중요)
 
-실행 중인 컨테이너 내부에 바이너리를 설치하는 것은 함정입니다.  
+실행 중인 컨테이너 내부에 바이너리를 설치하는 것은 함정입니다.
 런타임에 설치된 모든 것은 재시작 시 사라집니다.
 
 Skills에서 요구하는 모든 외부 바이너리는 이미지 빌드 시점에 설치되어야 합니다.
@@ -304,7 +297,7 @@ Skills에서 요구하는 모든 외부 바이너리는 이미지 빌드 시점�
 - Google Places를 위한 `goplaces`
 - WhatsApp을 위한 `wacli`
 
-이는 예시일 뿐이며, 전체 목록이 아닙니다.  
+이는 예시일 뿐이며, 전체 목록이 아닙니다.
 같은 패턴을 사용하여 필요한 만큼 바이너리를 설치할 수 있습니다.
 
 나중에 추가 바이너리에 의존하는 새로운 Skills를 추가하면 다음을 수행해야 합니다:
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) 빌드 및 실행
+## 11. 빌드 및 실행
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 12) Gateway 확인
+## 12. Gateway 확인
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ docker compose logs -f openclaw-gateway
 
 ---
 
-## 13) 노트북에서 접근
+## 13. 노트북에서 접근
 
 Gateway 포트를 포워딩하기 위해 SSH 터널을 생성하십시오:
 
@@ -411,21 +404,21 @@ Gateway 토큰을 붙여넣으십시오.
 
 ## 무엇이 어디에 영속되는가 (소스 오브 트루스)
 
-OpenClaw는 Docker에서 실행되지만, Docker는 소스 오브 트루스가 아닙니다.  
+OpenClaw는 Docker에서 실행되지만, Docker는 소스 오브 트루스가 아닙니다.
 모든 장기 상태는 재시작, 재빌드, 재부팅 후에도 유지되어야 합니다.
 
-| 구성 요소          | 위치                              | 영속성 메커니즘        | 비고                        |
-| ------------------ | --------------------------------- | ---------------------- | --------------------------- |
-| Gateway 설정       | `/home/node/.openclaw/`           | 호스트 볼륨 마운트     | `openclaw.json`, 토큰 포함  |
-| 모델 인증 프로필   | `/home/node/.openclaw/`           | 호스트 볼륨 마운트     | OAuth 토큰, API 키          |
-| Skill 설정         | `/home/node/.openclaw/skills/`    | 호스트 볼륨 마운트     | Skill 수준 상태             |
-| 에이전트 작업 공간 | `/home/node/.openclaw/workspace/` | 호스트 볼륨 마운트     | 코드 및 에이전트 아티팩트   |
-| WhatsApp 세션      | `/home/node/.openclaw/`           | 호스트 볼륨 마운트     | QR 로그인 유지              |
-| Gmail 키링         | `/home/node/.openclaw/`           | 호스트 볼륨 + 비밀번호 | `GOG_KEYRING_PASSWORD` 필요 |
-| 외부 바이너리      | `/usr/local/bin/`                 | Docker 이미지          | 빌드 시점에 포함되어야 함   |
-| Node 런타임        | 컨테이너 파일 시스템              | Docker 이미지          | 매 이미지 빌드마다 재구성   |
-| OS 패키지          | 컨테이너 파일 시스템              | Docker 이미지          | 런타임에 설치하지 말 것     |
-| Docker 컨테이너    | 일시적                            | 재시작 가능            | 삭제해도 안전함             |
+| 구성 요소       | 위치                                | 영속성 메커니즘      | 참고 자료                       |
+| ----------- | --------------------------------- | ------------- | --------------------------- |
+| Gateway 설정  | `/home/node/.openclaw/`           | 호스트 볼륨 마운트    | `openclaw.json`, 토큰 포함      |
+| 모델 인증 프로필   | `/home/node/.openclaw/`           | 호스트 볼륨 마운트    | OAuth 토큰, API 키             |
+| Skill 설정    | `/home/node/.openclaw/skills/`    | 호스트 볼륨 마운트    | Skill 수준 상태                 |
+| 에이전트 작업 공간  | `/home/node/.openclaw/workspace/` | 호스트 볼륨 마운트    | 코드 및 에이전트 아티팩트              |
+| WhatsApp 세션 | `/home/node/.openclaw/`           | 호스트 볼륨 마운트    | QR 로그인 유지                   |
+| Gmail 키링    | `/home/node/.openclaw/`           | 호스트 볼륨 + 비밀번호 | `GOG_KEYRING_PASSWORD` 필요   |
+| 외부 바이너리     | `/usr/local/bin/`                 | Docker 이미지    | Must be baked at build time |
+| Node 런타임    | 컨테이너 파일 시스템                       | Docker 이미지    | 매 이미지 빌드마다 재구성              |
+| OS 패키지      | 컨테이너 파일 시스템                       | Docker 이미지    | 런타임에 설치하지 말 것               |
+| Docker 컨테이너 | 일회성입니다                            | 재시작 가능        | 삭제해도 안전함                    |
 
 ---
 

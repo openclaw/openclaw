@@ -5,13 +5,6 @@ read_when:
   - Bạn muốn chạy Gateway ở chế độ theo dõi khi lặp lại chỉnh sửa
   - Bạn cần một quy trình gỡ lỗi có thể lặp lại
 title: "Gỡ lỗi"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:14Z
 ---
 
 # Gỡ lỗi
@@ -21,9 +14,9 @@ nhà cung cấp trộn lập luận vào văn bản thông thường.
 
 ## Ghi đè gỡ lỗi lúc chạy
 
-Dùng `/debug` trong chat để đặt các ghi đè cấu hình **chỉ trong lúc chạy** (trong bộ nhớ, không ghi đĩa).
-`/debug` bị tắt theo mặc định; bật bằng `commands.debug: true`.
-Cách này tiện khi bạn cần bật/tắt các thiết lập ít dùng mà không phải chỉnh sửa `openclaw.json`.
+Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
+`/debug` is disabled by default; enable with `commands.debug: true`.
+This is handy when you need to toggle obscure settings without editing `openclaw.json`.
 
 Ví dụ:
 
@@ -55,8 +48,8 @@ mỗi lần khởi động lại.
 
 ## Hồ sơ dev + gateway dev (--dev)
 
-Dùng hồ sơ dev để cô lập trạng thái và khởi tạo một thiết lập an toàn, có thể bỏ đi cho
-việc gỡ lỗi. Có **hai** cờ `--dev`:
+Use the dev profile to isolate state and spin up a safe, disposable setup for
+debugging. There are **two** `--dev` flags:
 
 - **`--dev` toàn cục (hồ sơ):** cô lập trạng thái dưới `~/.openclaw-dev` và
   mặc định cổng gateway là `19001` (các cổng dẫn xuất thay đổi theo).
@@ -95,8 +88,8 @@ Luồng đặt lại (khởi đầu mới):
 pnpm gateway:dev:reset
 ```
 
-Lưu ý: `--dev` là cờ hồ sơ **toàn cục** và có thể bị một số trình chạy “nuốt”.
-Nếu cần chỉ rõ, hãy dùng dạng biến môi trường:
+Note: `--dev` is a **global** profile flag and gets eaten by some runners.
+42. Nếu bạn cần viết rõ ràng, hãy dùng dạng biến môi trường:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -113,9 +106,9 @@ openclaw gateway stop
 
 ## Ghi log luồng thô (OpenClaw)
 
-OpenClaw có thể ghi log **luồng trợ lý thô** trước mọi lọc/định dạng.
-Đây là cách tốt nhất để xem liệu lập luận có đến dưới dạng delta văn bản thuần
-(hay dưới dạng các khối “thinking” riêng biệt).
+OpenClaw can log the **raw assistant stream** before any filtering/formatting.
+This is the best way to see whether reasoning is arriving as plain text deltas
+(or as separate thinking blocks).
 
 Bật qua CLI:
 

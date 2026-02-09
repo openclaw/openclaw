@@ -5,13 +5,6 @@ read_when:
   - Executando o OpenClaw em dispositivos ARM
   - Construindo uma IA pessoal barata e sempre ativa
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:42Z
 ---
 
 # OpenClaw no Raspberry Pi
@@ -30,12 +23,12 @@ Perfeito para:
 
 | Modelo do Pi    | RAM     | Funciona?   | Observações                      |
 | --------------- | ------- | ----------- | -------------------------------- |
-| **Pi 5**        | 4GB/8GB | ✅ Melhor   | Mais rápido, recomendado         |
-| **Pi 4**        | 4GB     | ✅ Bom      | Ponto ideal para a maioria       |
-| **Pi 4**        | 2GB     | ✅ OK       | Funciona, adicione swap          |
+| **Pi 5**        | 4GB/8GB | ✅ Melhor    | Mais rápido, recomendado         |
+| **Pi 4**        | 4GB     | ✅ Bom       | Ponto ideal para a maioria       |
+| **Pi 4**        | 2GB     | ✅ OK        | Funciona, adicione swap          |
 | **Pi 4**        | 1GB     | ⚠️ Apertado | Possível com swap, config mínima |
-| **Pi 3B+**      | 1GB     | ⚠️ Lento    | Funciona, mas é arrastado        |
-| **Pi Zero 2 W** | 512MB   | ❌          | Não recomendado                  |
+| **Pi 3B+**      | 1GB     | ⚠️ Devagar  | Funciona, mas é arrastado        |
+| **Pi Zero 2 W** | 512MB   | ❌           | Não recomendado                  |
 
 **Especificações mínimas:** 1GB de RAM, 1 núcleo, 500MB de disco  
 **Recomendado:** 2GB+ de RAM, SO 64-bit, cartão SD de 16GB+ (ou SSD USB)
@@ -48,7 +41,7 @@ Perfeito para:
 - Conexão de rede (Ethernet ou WiFi)
 - ~30 minutos
 
-## 1) Gravar o SO
+## 1. Gravar o SO
 
 Use **Raspberry Pi OS Lite (64-bit)** — não é necessário desktop para um servidor headless.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) Configuração do Sistema
+## 3. Configuração do Sistema
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Instalar Node.js 22 (ARM64)
+## 4. Instalar Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Adicionar Swap (Importante para 2GB ou menos)
+## 5. Adicionar Swap (Importante para 2GB ou menos)
 
 O swap evita travamentos por falta de memória:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Instalar o OpenClaw
+## 6. Instalar o OpenClaw
 
 ### Opção A: Instalação Padrão (Recomendada)
 
@@ -134,7 +127,7 @@ npm link
 
 A instalação hackeável dá acesso direto a logs e código — útil para depurar problemas específicos de ARM.
 
-## 7) Executar a Integração Inicial
+## 7. Executar a Integração Inicial
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Acessar o Dashboard
+## 9. Acessar o Dashboard
 
 Como o Pi é headless, use um túnel SSH:
 
@@ -230,13 +223,13 @@ htop
 
 A maioria dos recursos do OpenClaw funciona em ARM64, mas alguns binários externos podem precisar de builds ARM:
 
-| Ferramenta           | Status ARM64 | Observações                         |
-| -------------------- | ------------ | ----------------------------------- |
-| Node.js              | ✅           | Funciona muito bem                  |
-| WhatsApp (Baileys)   | ✅           | JS puro, sem problemas              |
-| Telegram             | ✅           | JS puro, sem problemas              |
+| Ferramenta                              | Status ARM64 | Observações                         |
+| --------------------------------------- | ------------ | ----------------------------------- |
+| Node.js                 | ✅            | Funciona muito bem                  |
+| WhatsApp (Baileys)   | ✅            | JS puro, sem problemas              |
+| Telegram                                | ✅            | JS puro, sem problemas              |
 | gog (Gmail CLI)      | ⚠️           | Verifique se há release ARM         |
-| Chromium (navegador) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (navegador) | ✅            | `sudo apt install chromium-browser` |
 
 Se uma skill falhar, verifique se o binário tem build ARM. Muitas ferramentas em Go/Rust têm; algumas não.
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Comparação de Custos
 
-| Configuração   | Custo Único | Custo Mensal | Observações                    |
-| -------------- | ----------- | ------------ | ------------------------------ |
-| **Pi 4 (2GB)** | ~$45        | $0           | + energia (~$5/ano)            |
-| **Pi 4 (4GB)** | ~$55        | $0           | Recomendado                    |
-| **Pi 5 (4GB)** | ~$60        | $0           | Melhor desempenho              |
-| **Pi 5 (8GB)** | ~$80        | $0           | Exagero, mas à prova do futuro |
-| DigitalOcean   | $0          | $6/mês       | $72/ano                        |
-| Hetzner        | $0          | €3,79/mês    | ~$50/ano                       |
+| Configuração                      | Custo Único          | Custo Mensal | Observações                                            |
+| --------------------------------- | -------------------- | ------------ | ------------------------------------------------------ |
+| **Pi 4 (2GB)** | ~$45 | $0           | + energia (~$5/ano) |
+| **Pi 4 (4GB)** | ~$55 | $0           | Recomendado                                            |
+| **Pi 5 (4GB)** | ~$60 | $0           | Melhor desempenho                                      |
+| **Pi 5 (8GB)** | ~$80 | $0           | Exagero, mas à prova do futuro                         |
+| DigitalOcean                      | $0                   | $6/mês       | $72/ano                                                |
+| Hetzner                           | $0                   | €3,79/mês    | ~$50/ano                               |
 
 **Ponto de equilíbrio:** um Pi se paga em ~6–12 meses em comparação a um VPS na nuvem.
 

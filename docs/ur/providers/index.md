@@ -4,20 +4,14 @@ read_when:
   - آپ ماڈل فراہم کنندہ منتخب کرنا چاہتے ہیں
   - آپ کو معاون LLM بیک اینڈز کا فوری جائزہ درکار ہے
 title: "ماڈل فراہم کنندگان"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # ماڈل فراہم کنندگان
 
-OpenClaw متعدد LLM فراہم کنندگان استعمال کر سکتا ہے۔ کسی فراہم کنندہ کا انتخاب کریں، تصدیق کریں، پھر ڈیفالٹ ماڈل کو `provider/model` کے طور پر سیٹ کریں۔
+OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
+default model as `provider/model`.
 
-چیٹ چینل کی دستاویزات (WhatsApp/Telegram/Discord/Slack/Mattermost (پلگ اِن)/وغیرہ) تلاش کر رہے ہیں؟ [Channels](/channels) دیکھیں۔
+Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? See [Channels](/channels).
 
 ## نمایاں: Venice (Venice AI)
 
@@ -66,5 +60,5 @@ Venice ہماری تجویز کردہ Venice AI سیٹ اپ ہے جو پرائی
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Claude Max/Pro سبسکرپشن کو OpenAI کے موافق API اینڈپوائنٹ کے طور پر استعمال کریں
 
-مکمل فراہم کنندہ کیٹلاگ (xAI، Groq، Mistral، وغیرہ) اور جدید کنفیگریشن کے لیے،
-[Model providers](/concepts/model-providers) دیکھیں۔
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

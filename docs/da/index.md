@@ -3,13 +3,6 @@ summary: "OpenClaw er en multikanal-gateway til AI-agenter, der kører på ethve
 read_when:
   - Introduktion af OpenClaw for nye brugere
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:26Z
 ---
 
 # OpenClaw 🦞
@@ -29,28 +22,27 @@ x-i18n:
     />
 </p>
 
-> _"EXFOLIATE! EXFOLIATE!"_ — En rumhummer, sandsynligvis
+> _"EXFOLIATE! EKFOLIATE!"_ — En rumhummer, sandsynligvis
 
-<p align="center">
-  <strong>Gateway til AI-agenter på ethvert OS på tværs af WhatsApp, Telegram, Discord, iMessage og mere.</strong><br />
-  Send en besked, få et agentsvar direkte fra lommen. Plugins tilføjer Mattermost og mere.
+<p align="center"><strong>Enhver OS gateway for AI agenter på tværs WhatsApp, Telegram, Discord, iMessage og meget mere.</strong><br />
+  Send en besked, få et agent svar fra din lomme. Plugins tilføjer mest og meget mere.
 </p>
 
 <Columns>
-  <Card title="Kom godt i gang" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Installér OpenClaw og få Gateway op at køre på få minutter.
   </Card>
-  <Card title="Kør opsætningsguiden" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     Guidet opsætning med `openclaw onboard` og parringsflows.
   </Card>
-  <Card title="Åbn Control UI" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Start browser-dashboardet til chat, konfiguration og sessioner.
   </Card>
 </Columns>
 
 ## Hvad er OpenClaw?
 
-OpenClaw er en **self-hosted gateway**, der forbinder dine foretrukne chatapps — WhatsApp, Telegram, Discord, iMessage og mere — med AI-kodeagenter som Pi. Du kører én Gateway-proces på din egen maskine (eller en server), og den bliver broen mellem dine beskedapps og en altid tilgængelig AI-assistent.
+OpenClaw er en \*\* self-hosted gateway\*\* der forbinder dine foretrukne chat apps — WhatsApp, Telegram, Discord, iMessage og mere — til AI kodning agenter som Pi. Du kører en enkelt Gateway proces på din egen maskine (eller en server), og det bliver broen mellem dine beskedapps og en altid-tilgængelig AI-assistent.
 
 **Hvem er det til?** Udviklere og power users, der vil have en personlig AI-assistent, som de kan skrive til hvor som helst — uden at give afkald på kontrollen over deres data eller være afhængige af en hosted tjeneste.
 
@@ -80,22 +72,22 @@ Gateway er den eneste sandhedskilde for sessioner, routing og kanalfobindelser.
 ## Centrale funktioner
 
 <Columns>
-  <Card title="Multikanal-gateway" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     WhatsApp, Telegram, Discord og iMessage med én Gateway-proces.
   </Card>
-  <Card title="Plugin-kanaler" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     Tilføj Mattermost og mere med udvidelsespakker.
   </Card>
-  <Card title="Multi-agent-routing" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     Isolerede sessioner pr. agent, workspace eller afsender.
   </Card>
-  <Card title="Mediesupport" icon="image">
+  <Card title="Media support" icon="image">
     Send og modtag billeder, lyd og dokumenter.
   </Card>
   <Card title="Web Control UI" icon="monitor">
     Browser-dashboard til chat, konfiguration, sessioner og noder.
   </Card>
-  <Card title="Mobile noder" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Par iOS- og Android-noder med Canvas-understøttelse.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ Gateway er den eneste sandhedskilde for sessioner, routing og kanalfobindelser.
 ## Hurtig start
 
 <Steps>
-  <Step title="Installér OpenClaw">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Introduktion og installation af tjenesten">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Par WhatsApp og start Gateway">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -121,7 +113,7 @@ Gateway er den eneste sandhedskilde for sessioner, routing og kanalfobindelser.
   </Step>
 </Steps>
 
-Har du brug for den fulde installation og udvikleropsætning? Se [Hurtig start](/start/quickstart).
+Har du brug for den fulde installation og dev opsætning? Se [Hurtig start](/start/quickstart).
 
 ## Dashboard
 
@@ -158,22 +150,22 @@ Eksempel:
 ## Start her
 
 <Columns>
-  <Card title="Dokumentationshubs" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     Al dokumentation og guides, organiseret efter brugsscenarie.
   </Card>
-  <Card title="Konfiguration" href="/gateway/configuration" icon="settings">
+  <Card title="Configuration" href="/gateway/configuration" icon="settings">
     Centrale Gateway-indstillinger, tokens og udbyderkonfiguration.
   </Card>
-  <Card title="Fjernadgang" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     SSH- og tailnet-adgangsmønstre.
   </Card>
-  <Card title="Kanaler" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     Kanal-specifik opsætning for WhatsApp, Telegram, Discord og mere.
   </Card>
-  <Card title="Noder" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     iOS- og Android-noder med parring og Canvas.
   </Card>
-  <Card title="Hjælp" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     Almindelige løsninger og indgang til fejlfinding.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Eksempel:
 ## Lær mere
 
 <Columns>
-  <Card title="Fuld funktionsliste" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     Komplette kanal-, routing- og mediefunktioner.
   </Card>
-  <Card title="Multi-agent-routing" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     Workspace-isolation og sessioner pr. agent.
   </Card>
-  <Card title="Sikkerhed" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     Tokens, tilladelseslister og sikkerhedskontroller.
   </Card>
-  <Card title="Fejlfinding" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Gateway-diagnostik og almindelige fejl.
   </Card>
-  <Card title="Om og credits" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     Projektets oprindelse, bidragydere og licens.
   </Card>
 </Columns>

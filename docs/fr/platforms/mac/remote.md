@@ -3,13 +3,6 @@ summary: "Flux de l’application macOS pour contrôler une Gateway OpenClaw dis
 read_when:
   - Configuration ou debogage du controle mac a distance
 title: "Controle a distance"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:24Z
 ---
 
 # OpenClaw distant (macOS ⇄ hote distant)
@@ -29,7 +22,7 @@ Le mode distant prend en charge deux transports :
 - **Tunnel SSH** (par defaut) : Utilise `ssh -N -L ...` pour transferer le port de la Gateway (passerelle) vers localhost. La Gateway (passerelle) verra l’IP du nœud comme `127.0.0.1` car le tunnel est en loopback.
 - **Direct (ws/wss)** : Se connecte directement a l’URL de la Gateway (passerelle). La Gateway (passerelle) voit l’IP reelle du client.
 
-## Prerequis sur l’hote distant
+## Pré-qs sur l'hôte distant
 
 1. Installer Node + pnpm et compiler/installer la CLI OpenClaw (`pnpm install && pnpm build && pnpm link --global`).
 2. S’assurer que `openclaw` est sur le PATH pour les shells non interactifs (creer un lien symbolique dans `/usr/local/bin` ou `/opt/homebrew/bin` si necessaire).
@@ -71,7 +64,7 @@ Le mode distant prend en charge deux transports :
 - Executez `openclaw channels login --verbose` **sur l’hote distant**. Scannez le QR avec WhatsApp sur votre telephone.
 - Relancez la connexion sur cet hote si l’authentification expire. Le controle de sante signalera les problemes de lien.
 
-## Depannage
+## Problemes courants
 
 - **exit 127 / introuvable** : `openclaw` n’est pas sur le PATH pour les shells non connectes. Ajoutez-le a `/etc/paths`, a votre rc de shell, ou creez un lien symbolique dans `/usr/local/bin`/`/opt/homebrew/bin`.
 - **Echec de la sonde de sante** : verifiez l’accessibilite SSH, le PATH, et que Baileys est connecte (`openclaw status --json`).

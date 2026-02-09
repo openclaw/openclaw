@@ -1,14 +1,7 @@
 ---
 summary: "BOOT.md 를 위한 워크스페이스 템플릿"
 read_when:
-  - "BOOT.md 체크리스트를 추가할 때"
-x-i18n:
-  source_path: reference/templates/BOOT.md
-  source_hash: 63f6c97e2eab74b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:06Z
+  - BOOT.md 체크리스트를 추가할 때
 ---
 
 # BOOT.md

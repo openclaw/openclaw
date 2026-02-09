@@ -4,13 +4,6 @@ read_when:
   - Pagpaplano ng isang pinag-isang network protocol para sa mga node + operator client
   - Pagre-rework ng approvals, pairing, TLS, at presence sa iba’t ibang device
 title: "Clawnet Refactor"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:19Z
 ---
 
 # Clawnet refactor (pag-iisa ng protocol + auth)
@@ -51,10 +44,10 @@ Isang iisa at mahigpit na dokumento para sa:
 
 ## Dalawang protocol
 
-### 1) Gateway WebSocket (control plane)
+### 1. Gateway WebSocket (control plane)
 
 - Buong API surface: config, channels, models, sessions, agent runs, logs, nodes, atbp.
-- Default bind: loopback. Remote access sa pamamagitan ng SSH/Tailscale.
+- 21. Default na bind: loopback. Remote access via SSH/Tailscale.
 - Auth: token/password sa pamamagitan ng `connect`.
 - Walang TLS pinning (umaasa sa loopback/tunnel).
 - Code:
@@ -62,7 +55,7 @@ Isang iisa at mahigpit na dokumento para sa:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (node transport)
+### 2. Bridge (node transport)
 
 - Makitid na allowlist surface, node identity + pairing.
 - JSONL sa ibabaw ng TCP; opsyonal na TLS + cert fingerprint pinning.
@@ -145,7 +138,7 @@ Isang WS protocol na may role + scope.
 
 ### Pangunahing tuntunin
 
-Ang role ay per‑connection, hindi per device. Ang isang device ay maaaring magbukas ng parehong role, nang hiwalay.
+23. Ang role ay per-connection, hindi per device. A device may open both roles, separately.
 
 ---
 
@@ -187,7 +180,7 @@ Mga alternatibo:
 
 ## Silent approval (SSH heuristic)
 
-Tukuyin ito nang malinaw upang maiwasan ang mahina na link. Pumili ng isa:
+Define it precisely to avoid a weak link. 26. Pumili ng isa:
 
 - **Local‑only**: auto‑pair kapag kumonekta ang client sa loopback/Unix socket.
 - **Challenge via SSH**: nag-iisyu ang gateway ng nonce; pinapatunayan ng client ang SSH sa pamamagitan ng pag-fetch nito.
@@ -224,7 +217,7 @@ Gamitin ang kasalukuyang TLS runtime + fingerprint pinning:
 
 ## Kasalukuyan
 
-Nangyayari ang approval sa host ng node (mac app node runtime). Lumalabas ang prompt kung saan tumatakbo ang node.
+27. Ang approval ay nangyayari sa node host (mac app node runtime). Prompt appears where node runs.
 
 ## Iminungkahi
 
@@ -283,8 +276,8 @@ Ang approval ay **hosted ng gateway**, at ang UI ay inihahatid sa mga operator c
 
 ## Stable ID
 
-Kinakailangan para sa auth; hindi kailanman nagbabago.
-Mas gusto:
+29. Kinakailangan para sa auth; hindi kailanman nagbabago.
+    Mas mainam:
 
 - Keypair fingerprint (public key hash).
 

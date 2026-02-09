@@ -3,13 +3,6 @@ summary: "كيفية عمل sandboxing في OpenClaw: الأوضاع، والن�
 title: Sandboxing
 read_when: "عندما تحتاج إلى شرح مخصص لـ sandboxing أو ترغب في ضبط agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:34Z
 ---
 
 # Sandboxing
@@ -32,14 +25,14 @@ x-i18n:
   - يتيح `agents.defaults.sandbox.browser.allowHostControl` للجلسات المعزولة استهداف متصفح المضيف صراحةً.
   - قوائم السماح الاختيارية تضبط `target: "custom"`: `allowedControlUrls`، `allowedControlHosts`، `allowedControlPorts`.
 
-غير معزول:
+ليس صندوق رمل:
 
 - عملية Gateway نفسها.
 - أي أداة يُسمح لها صراحةً بالتشغيل على المضيف (مثل `tools.elevated`).
   - **التنفيذ بصلاحيات مرتفعة يعمل على المضيف ويتجاوز sandboxing.**
   - إذا كان sandboxing معطّلًا، فإن `tools.elevated` لا يغيّر التنفيذ (هو أصلًا على المضيف). راجع [Elevated Mode](/tools/elevated).
 
-## الأوضاع
+## أوضاع
 
 يتحكم `agents.defaults.sandbox.mode` في **متى** يتم استخدام sandboxing:
 

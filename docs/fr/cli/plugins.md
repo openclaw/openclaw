@@ -4,20 +4,13 @@ read_when:
   - Vous souhaitez installer ou gerer des plugins Gateway (passerelle) en processus
   - Vous souhaitez depanner des echecs de chargement de plugins
 title: "plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: c6bf76b1e766b912
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:00Z
 ---
 
 # `openclaw plugins`
 
 Gerez les plugins/extensions du Gateway (passerelle) (charges en processus).
 
-Connexe :
+Liens connexes :
 
 - Systeme de plugins : [Plugins](/plugin)
 - Manifeste de plugin + schema : [Plugin manifest](/plugins/manifest)

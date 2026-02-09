@@ -1,16 +1,9 @@
 ---
 summary: "`openclaw hooks` için CLI başvuru dokümantasyonu (ajan hooks)"
 read_when:
-  - Ajan hooks’larını yönetmek istediğinizde
+  - You want to manage agent hooks
   - Hooks’ları yüklemek veya güncellemek istediğinizde
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:07Z
 ---
 
 # `openclaw hooks`
@@ -86,7 +79,7 @@ Belirli bir hook hakkında ayrıntılı bilgi gösterir.
 openclaw hooks info session-memory
 ```
 
-**Çıktı:**
+**Output:**
 
 ```
 💾 session-memory ✓ Ready
@@ -147,7 +140,7 @@ buradan etkinleştirilemez/devre dışı bırakılamaz. Bunun yerine eklentiyi e
 openclaw hooks enable session-memory
 ```
 
-**Çıktı:**
+**Output:**
 
 ```
 ✓ Enabled hook: 💾 session-memory
@@ -163,7 +156,7 @@ openclaw hooks enable session-memory
 
 - Hooks’ların yeniden yüklenmesi için gateway’i yeniden başlatın (macOS’ta menü çubuğu uygulamasını yeniden başlatın veya geliştirme ortamında gateway sürecini yeniden başlatın).
 
-## Bir Hook’u Devre Dışı Bırakma
+## Disable a Hook
 
 ```bash
 openclaw hooks disable <name>
@@ -181,7 +174,7 @@ Yapılandırmanızı güncelleyerek belirli bir hook’u devre dışı bırakır
 openclaw hooks disable command-logger
 ```
 
-**Çıktı:**
+**Output:**
 
 ```
 ⏸ Disabled hook: 📝 command-logger

@@ -4,13 +4,6 @@ read_when:
   - 更新 macOS Skills 設定 UI
   - 變更 Skills 的管控或安裝行為
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:44Z
 ---
 
 # Skills（macOS）
@@ -37,4 +30,4 @@ macOS 應用程式透過 Gateway 閘道器呈現 OpenClaw Skills；不會在本�
 
 ## 遠端模式
 
-- 安裝與設定更新會在閘道器主機上進行（而非本機 Mac）。
+- Install + config updates happen on the gateway host (not the local Mac).

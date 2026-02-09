@@ -3,13 +3,6 @@ summary: "Architektura bramy WebSocket, komponenty i przepływy klientów"
 read_when:
   - Praca nad protokołem Gateway, klientami lub transportami
 title: "Architektura Gateway"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:10Z
 ---
 
 # Architektura Gateway
@@ -116,6 +109,7 @@ Szczegóły: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing)
 ## Dostęp zdalny
 
 - Preferowane: Tailscale lub VPN.
+
 - Alternatywa: tunel SSH
 
   ```bash
@@ -123,6 +117,7 @@ Szczegóły: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing)
   ```
 
 - To samo uzgodnienie + token uwierzytelniania obowiązują przez tunel.
+
 - TLS + opcjonalne pinning można włączyć dla WS w konfiguracjach zdalnych.
 
 ## Migawka operacyjna

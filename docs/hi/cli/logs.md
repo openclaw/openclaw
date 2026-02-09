@@ -4,13 +4,6 @@ read_when:
   - आपको SSH के बिना दूरस्थ रूप से Gateway लॉग्स टेल करने की आवश्यकता हो
   - आपको टूलिंग के लिए JSON लॉग लाइनों की आवश्यकता हो
 title: "लॉग्स"
-x-i18n:
-  source_path: cli/logs.md
-  source_hash: 911a57f0f3b78412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:59Z
 ---
 
 # `openclaw logs`

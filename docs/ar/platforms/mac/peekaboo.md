@@ -5,19 +5,11 @@ read_when:
   - دمج Peekaboo عبر Swift Package Manager
   - تغيير بروتوكول/مسارات PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:33Z
 ---
 
 # Peekaboo Bridge (أتمتة واجهة مستخدم macOS)
 
-يمكن لـ OpenClaw استضافة **PeekabooBridge** كوسيط محلي لأتمتة واجهة المستخدم مع مراعاة الأذونات.
-يتيح ذلك لـ CLI ‏`peekaboo` قيادة أتمتة واجهة المستخدم مع إعادة استخدام أذونات TCC لتطبيق macOS.
+يمكن لـ OpenClaw استضافة **PeekabooBridge** كوسيط محلي لأتمتة واجهة المستخدم مع مراعاة الأذونات. يتيح ذلك لـ CLI ‏`peekaboo` قيادة أتمتة واجهة المستخدم مع إعادة استخدام أذونات TCC لتطبيق macOS.
 
 ## ما هذا (وما ليس كذلك)
 

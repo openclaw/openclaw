@@ -3,13 +3,6 @@ summary: "Härdning av Telegrams tillåtelselista: prefix + normalisering av bla
 read_when:
   - Vid granskning av historiska ändringar i Telegrams tillåtelselista
 title: "Härdning av Telegrams tillåtelselista"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:08Z
 ---
 
 # Härdning av Telegrams tillåtelselista
@@ -20,8 +13,8 @@ x-i18n:
 
 ## Sammanfattning
 
-Telegram‑tillåtelselistor accepterar nu prefixen `telegram:` och `tg:` skiftlägesokänsligt och tolererar
-oavsiktliga blanksteg. Detta anpassar inkommande kontroller av tillåtelselistan till normaliseringen vid utgående skick.
+Telegram allowlists accepterar nu `telegram:` och `tg:` prefixar skiftläge-okänsligt och tolererar
+oavsiktligt blanktecken. Detta anpassar inkommande tillåtna kontroller med utgående skicka normalisering.
 
 ## Vad som ändrades
 
@@ -38,8 +31,8 @@ Alla dessa accepteras för samma ID:
 
 ## Varför det är viktigt
 
-Kopiera/klistra från loggar eller chatt‑ID:n innehåller ofta prefix och blanksteg. Normalisering undviker
-falska negativa resultat när man avgör om man ska svara i DM:er eller grupper.
+Kopiera/klistra in från loggar eller chatt-ID innehåller ofta prefix och blanktecken. Normalisering undviker
+falska negativ när man beslutar om man ska svara i DMs eller grupper.
 
 ## Relaterad dokumentation
 

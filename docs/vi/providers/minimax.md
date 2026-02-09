@@ -4,18 +4,11 @@ read_when:
   - Bạn muốn dùng các mô hình MiniMax trong OpenClaw
   - Bạn cần hướng dẫn thiết lập MiniMax
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:58Z
 ---
 
 # MiniMax
 
-MiniMax là một công ty AI xây dựng họ mô hình **M2/M2.1**. Bản phát hành hiện tại tập trung vào lập trình là **MiniMax M2.1** (23 tháng 12, 2025), được thiết kế cho các tác vụ phức tạp trong thế giới thực.
+MiniMax is an AI company that builds the **M2/M2.1** model family. 3. Bản phát hành hiện tại tập trung vào lập trình là **MiniMax M2.1** (23 tháng 12, 2025), được xây dựng cho các tác vụ phức tạp trong thế giới thực.
 
 Nguồn: [MiniMax M2.1 release note](https://www.minimax.io/news/minimax-m21)
 
@@ -34,7 +27,7 @@ MiniMax nêu bật các cải tiến sau trong M2.1:
 
 - **Tốc độ:** Lightning là biến thể “nhanh” trong tài liệu giá của MiniMax.
 - **Chi phí:** Bảng giá cho thấy chi phí đầu vào giống nhau, nhưng Lightning có chi phí đầu ra cao hơn.
-- **Định tuyến gói coding:** Back-end Lightning không khả dụng trực tiếp trên gói coding của MiniMax. MiniMax tự động định tuyến hầu hết yêu cầu sang Lightning, nhưng sẽ quay về back-end M2.1 thông thường khi có đột biến lưu lượng.
+- 4. **Định tuyến gói lập trình:** Back-end Lightning không khả dụng trực tiếp trên gói lập trình MiniMax. 5. MiniMax tự động định tuyến hầu hết các yêu cầu tới Lightning, nhưng sẽ quay về back-end M2.1 thông thường khi lưu lượng tăng đột biến.
 
 ## Chọn cách thiết lập
 
@@ -119,8 +112,9 @@ Cấu hình qua CLI:
 
 ### Tùy chọn: Local qua LM Studio (thủ công)
 
-**Phù hợp nhất cho:** suy luận cục bộ với LM Studio.  
-Chúng tôi đã thấy kết quả rất tốt với MiniMax M2.1 trên phần cứng mạnh (ví dụ máy desktop/server) khi dùng local server của LM Studio.
+**Best for:** local inference with LM Studio.
+We have seen strong results with MiniMax M2.1 on powerful hardware (e.g. a
+desktop/server) using LM Studio's local server.
 
 Cấu hình thủ công qua `openclaw.json`:
 
@@ -187,7 +181,8 @@ Sử dụng trình hướng dẫn cấu hình tương tác để thiết lập M
 
 ### “Unknown model: minimax/MiniMax-M2.1”
 
-Điều này thường có nghĩa là **nhà cung cấp MiniMax chưa được cấu hình** (không có mục provider và không tìm thấy hồ sơ xác thực MiniMax/khóa env). Bản sửa cho việc phát hiện này có trong **2026.1.12** (chưa phát hành tại thời điểm viết). Cách khắc phục:
+6. Điều này thường có nghĩa là **nhà cung cấp MiniMax chưa được cấu hình** (không có mục provider và không tìm thấy hồ sơ xác thực/env key MiniMax). A fix for this detection is in
+   **2026.1.12** (unreleased at the time of writing). Fix by:
 
 - Nâng cấp lên **2026.1.12** (hoặc chạy từ mã nguồn `main`), sau đó khởi động lại gateway.
 - Chạy `openclaw configure` và chọn **MiniMax M2.1**, hoặc

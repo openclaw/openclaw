@@ -5,18 +5,11 @@ read_when:
   - स्रोत से iOS ऐप चलाते समय
   - Gateway डिस्कवरी या कैनवास कमांड्स का डिबग करते समय
 title: "iOS ऐप"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:29Z
 ---
 
 # iOS ऐप (नोड)
 
-उपलब्धता: आंतरिक प्रीव्यू। iOS ऐप अभी सार्वजनिक रूप से वितरित नहीं है।
+Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## यह क्या करता है
 
@@ -60,12 +53,12 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-Gateway, `local.` पर `_openclaw-gw._tcp` का विज्ञापन करता है। iOS ऐप इन्हें स्वचालित रूप से सूचीबद्ध करता है।
+The Gateway advertises `_openclaw-gw._tcp` on `local.`. The iOS app lists these automatically.
 
 ### Tailnet (क्रॉस-नेटवर्क)
 
-यदि mDNS अवरुद्ध है, तो एक यूनिकास्ट DNS-SD ज़ोन का उपयोग करें (एक डोमेन चुनें; उदाहरण: `openclaw.internal.`) और Tailscale स्प्लिट DNS।
-CoreDNS उदाहरण के लिए [Bonjour](/gateway/bonjour) देखें।
+If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `openclaw.internal.`) and Tailscale split DNS.
+See [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### मैनुअल होस्ट/पोर्ट
 
@@ -73,7 +66,7 @@ Settings में **Manual Host** सक्षम करें और Gateway �
 
 ## कैनवास + A2UI
 
-iOS नोड एक WKWebView कैनवास रेंडर करता है। इसे संचालित करने के लिए `node.invoke` का उपयोग करें:
+The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

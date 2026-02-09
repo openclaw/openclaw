@@ -4,19 +4,13 @@ read_when:
   - การใช้งานหรือการกำหนดค่าคำสั่งแชต
   - การดีบักการกำหนดเส้นทางคำสั่งหรือสิทธิ์
 title: "Slash Commands"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:12Z
 ---
 
 # Slash commands
 
-คำสั่งถูกจัดการโดย Gateway คำสั่งส่วนใหญ่ต้องถูกส่งเป็นข้อความ **เดี่ยว** ที่ขึ้นต้นด้วย `/`  
-คำสั่งแชต bash สำหรับโฮสต์เท่านั้นใช้ `! <cmd>` (โดยมี `/bash <cmd>` เป็นนามแฝง)
+Commands are handled by the Gateway. คำสั่งถูกจัดการโดย Gateway คำสั่งส่วนใหญ่ต้องถูกส่งเป็นข้อความ **เดี่ยว** ที่ขึ้นต้นด้วย `/`  
+คำสั่งแชต bash สำหรับโฮสต์เท่านั้นใช้ `!
+The host-only bash chat command uses `! <cmd>`(โดยมี`/bash <cmd>\` เป็นนามแฝง)
 
 มีสองระบบที่เกี่ยวข้องกัน:
 
@@ -27,9 +21,11 @@ x-i18n:
   - ในข้อความแบบ directive-only(ข้อความมีเฉพาะ directives) จะคงอยู่ในเซสชันและตอบกลับด้วยการยืนยัน
   - Directives ใช้ได้เฉพาะกับ **authorized senders** (allowlist/การจับคู่ของช่องทางรวมถึง `commands.useAccessGroups`)  
     ผู้ส่งที่ไม่ได้รับอนุญาตจะเห็น directives ถูกปฏิบัติเหมือนข้อความธรรมดา
+    Unauthorized senders see directives treated as plain text.
 
 ยังมี **inline shortcuts** บางรายการ (เฉพาะผู้ส่งที่อยู่ใน allowlist/ได้รับอนุญาต): `/help`, `/commands`, `/status`, `/whoami` (`/id`)  
 จะรันทันที ถูกตัดออกก่อนที่โมเดลจะเห็นข้อความ และข้อความที่เหลือจะดำเนินต่อไปตามโฟลว์ปกติ
+They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
 
 ## Config
 
@@ -54,7 +50,7 @@ x-i18n:
 - `commands.native` (ค่าเริ่มต้น `"auto"`) ลงทะเบียนคำสั่งเนทีฟ
   - Auto: เปิดสำหรับ Discord/Telegram; ปิดสำหรับ Slack(จนกว่าคุณจะเพิ่ม slash commands); ถูกละเลยสำหรับผู้ให้บริการที่ไม่รองรับเนทีฟ
   - ตั้งค่า `channels.discord.commands.native`, `channels.telegram.commands.native`, หรือ `channels.slack.commands.native` เพื่อ override รายผู้ให้บริการ (bool หรือ `"auto"`)
-  - `false` ล้างคำสั่งที่เคยลงทะเบียนไว้ก่อนหน้าบน Discord/Telegram ตอนเริ่มต้น Slack commands จัดการในแอป Slack และจะไม่ถูกลบอัตโนมัติ
+  - `false` clears previously registered commands on Discord/Telegram at startup. `false` ล้างคำสั่งที่เคยลงทะเบียนไว้ก่อนหน้าบน Discord/Telegram ตอนเริ่มต้น Slack commands จัดการในแอป Slack และจะไม่ถูกลบอัตโนมัติ
 - `commands.nativeSkills` (ค่าเริ่มต้น `"auto"`) ลงทะเบียนคำสั่ง **skill** แบบเนทีฟเมื่อรองรับ
   - Auto: เปิดสำหรับ Discord/Telegram; ปิดสำหรับ Slack(Slack ต้องสร้าง slash command ต่อหนึ่ง skill)
   - ตั้งค่า `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, หรือ `channels.slack.commands.nativeSkills` เพื่อ override รายผู้ให้บริการ (bool หรือ `"auto"`)
@@ -115,19 +111,19 @@ Notes:
 - `/usage` ควบคุมส่วนท้ายการใช้งานต่อการตอบ; `/usage cost` พิมพ์สรุปค่าใช้จ่ายในเครื่องจากบันทึกเซสชัน OpenClaw
 - `/restart` ปิดใช้งานเป็นค่าเริ่มต้น; ตั้งค่า `commands.restart: true` เพื่อเปิดใช้งาน
 - `/verbose` มีไว้เพื่อการดีบักและการมองเห็นเพิ่มเติม; ควรปิดไว้ในการใช้งานปกติ
-- `/reasoning` (และ `/verbose`) มีความเสี่ยงในบริบทกลุ่ม: อาจเปิดเผยเหตุผลภายในหรือเอาต์พุตเครื่องมือที่คุณไม่ตั้งใจเปิดเผย แนะนำให้ปิดไว้ โดยเฉพาะในแชตกลุ่ม
+- `/reasoning` (และ `/verbose`) มีความเสี่ยงในบริบทกลุ่ม: อาจเปิดเผยเหตุผลภายในหรือเอาต์พุตเครื่องมือที่คุณไม่ตั้งใจเปิดเผย แนะนำให้ปิดไว้ โดยเฉพาะในแชตกลุ่ม Prefer leaving them off, especially in group chats.
 - **Fast path:** ข้อความที่เป็นคำสั่งล้วนจากผู้ส่งที่อยู่ใน allowlist จะถูกจัดการทันที(ข้ามคิว+โมเดล)
 - **Group mention gating:** ข้อความคำสั่งล้วนจากผู้ส่งที่อยู่ใน allowlist จะข้ามข้อกำหนดการเมนชัน
 - **Inline shortcuts (เฉพาะผู้ส่งใน allowlist):** คำสั่งบางรายการใช้งานได้เมื่อฝังอยู่ในข้อความปกติและจะถูกตัดออกก่อนที่โมเดลจะเห็นข้อความที่เหลือ
   - ตัวอย่าง: `hey /status` กระตุ้นการตอบสถานะ และข้อความที่เหลือจะดำเนินต่อไปตามโฟลว์ปกติ
 - ปัจจุบัน: `/help`, `/commands`, `/status`, `/whoami` (`/id`)
 - ข้อความคำสั่งล้วนจากผู้ที่ไม่ได้รับอนุญาตจะถูกเพิกเฉยอย่างเงียบๆ และโทเคน `/...` แบบอินไลน์จะถูกมองเป็นข้อความธรรมดา
-- **Skill commands:** `user-invocable` skills ถูกเปิดเผยเป็น slash commands ชื่อจะถูกทำความสะอาดเป็น `a-z0-9_` (สูงสุด 32 อักขระ); ชื่อซ้ำจะได้ต่อท้ายด้วยตัวเลข (เช่น `_2`)
+- **Skill commands:** `user-invocable` skills ถูกเปิดเผยเป็น slash commands ชื่อจะถูกทำความสะอาดเป็น `a-z0-9_` (สูงสุด 32 อักขระ); ชื่อซ้ำจะได้ต่อท้ายด้วยตัวเลข (เช่น `_2`) Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
   - `/skill <name> [input]` รัน skill ตามชื่อ(มีประโยชน์เมื่อข้อจำกัดคำสั่งเนทีฟไม่เอื้อให้มีคำสั่งต่อ skill)
   - ค่าเริ่มต้น คำสั่ง skill จะถูกส่งต่อไปยังโมเดลเป็นคำขอปกติ
   - Skills อาจประกาศ `command-dispatch: tool` เพื่อกำหนดเส้นทางคำสั่งไปยังเครื่องมือโดยตรง(กำหนดผลแน่นอน ไม่ใช้โมเดล)
   - ตัวอย่าง: `/prose` (ปลั๊กอิน OpenProse) — ดู [OpenProse](/prose)
-- **Native command arguments:** Discord ใช้ autocomplete สำหรับตัวเลือกแบบไดนามิก(และเมนูปุ่มเมื่อคุณละเว้นอาร์กิวเมนต์ที่จำเป็น) Telegram และ Slack จะแสดงเมนูปุ่มเมื่อคำสั่งรองรับตัวเลือกและคุณละเว้นอาร์กิวเมนต์
+- **Native command arguments:** Discord ใช้ autocomplete สำหรับตัวเลือกแบบไดนามิก(และเมนูปุ่มเมื่อคุณละเว้นอาร์กิวเมนต์ที่จำเป็น) Telegram และ Slack จะแสดงเมนูปุ่มเมื่อคำสั่งรองรับตัวเลือกและคุณละเว้นอาร์กิวเมนต์ Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
 ## Usage surfaces (what shows where)
 
@@ -158,7 +154,7 @@ Notes:
 
 ## Debug overrides
 
-`/debug` ช่วยให้คุณตั้งค่า override คอนฟิกแบบ **เฉพาะขณะรัน** (อยู่ในหน่วยความจำ ไม่เขียนดิสก์) เฉพาะเจ้าของ ปิดใช้งานเป็นค่าเริ่มต้น; เปิดด้วย `commands.debug: true`
+`/debug` ช่วยให้คุณตั้งค่า override คอนฟิกแบบ **เฉพาะขณะรัน** (อยู่ในหน่วยความจำ ไม่เขียนดิสก์) เฉพาะเจ้าของ ปิดใช้งานเป็นค่าเริ่มต้น; เปิดด้วย `commands.debug: true` Owner-only. Disabled by default; enable with `commands.debug: true`.
 
 Examples:
 
@@ -177,7 +173,7 @@ Notes:
 
 ## Config updates
 
-`/config` เขียนไปยังคอนฟิกบนดิสก์ของคุณ (`openclaw.json`) เฉพาะเจ้าของ ปิดใช้งานเป็นค่าเริ่มต้น; เปิดด้วย `commands.config: true`
+`/config` เขียนไปยังคอนฟิกบนดิสก์ของคุณ (`openclaw.json`) เฉพาะเจ้าของ ปิดใช้งานเป็นค่าเริ่มต้น; เปิดด้วย `commands.config: true` Owner-only. Disabled by default; enable with `commands.config: true`.
 
 Examples:
 
@@ -202,4 +198,4 @@ Notes:
   - Slack: `agent:<agentId>:slack:slash:<userId>` (ตั้งค่าพรีฟิกซ์ได้ผ่าน `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (กำหนดเป้าหมายไปยังเซสชันแชตผ่าน `CommandTargetSessionKey`)
 - **`/stop`** กำหนดเป้าหมายไปยังเซสชันแชตที่กำลังใช้งาน เพื่อให้สามารถยกเลิกการรันปัจจุบันได้
-- **Slack:** `channels.slack.slashCommand` ยังรองรับสำหรับคำสั่งแบบ `/openclaw` เพียงรายการเดียว หากคุณเปิด `commands.native` คุณต้องสร้าง Slack slash command หนึ่งรายการต่อคำสั่งที่มีมาให้ในตัว(ชื่อเดียวกับ `/help`) เมนูอาร์กิวเมนต์คำสั่งสำหรับ Slack จะถูกส่งเป็นปุ่ม Block Kit แบบชั่วคราว
+- **Slack:** `channels.slack.slashCommand` ยังรองรับสำหรับคำสั่งแบบ `/openclaw` เพียงรายการเดียว หากคุณเปิด `commands.native` คุณต้องสร้าง Slack slash command หนึ่งรายการต่อคำสั่งที่มีมาให้ในตัว(ชื่อเดียวกับ `/help`) เมนูอาร์กิวเมนต์คำสั่งสำหรับ Slack จะถูกส่งเป็นปุ่ม Block Kit แบบชั่วคราว If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Command argument menus for Slack are delivered as ephemeral Block Kit buttons.

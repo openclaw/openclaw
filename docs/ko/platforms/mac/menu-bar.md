@@ -3,13 +3,6 @@ summary: "메뉴 막대 상태 로직과 사용자에게 노출되는 항목"
 read_when:
   - mac 메뉴 UI 또는 상태 로직을 조정할 때
 title: "메뉴 막대"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:49Z
 ---
 
 # 메뉴 막대 상태 로직
@@ -56,7 +49,7 @@ x-i18n:
 
 - 작업이 활성화된 동안: `<Session role> · <activity label>`
   - 예시: `Main · exec: pnpm test`, `Other · read: apps/macos/Sources/OpenClaw/AppState.swift`.
-- 유휴 상태일 때: 상태 점검 요약으로 되돌아갑니다.
+- 31. 유휴 상태일 때: 상태 요약으로 되돌아갑니다.
 
 ## 이벤트 수집
 
@@ -85,4 +78,4 @@ x-i18n:
 - 메인이 유휴 상태일 때 비메인 세션 작업 트리거: 아이콘/상태에 비메인이 표시되고, 완료될 때까지 안정적으로 유지되는지 확인합니다.
 - 다른 세션이 활성 상태일 때 메인 시작: 아이콘이 즉시 메인으로 전환되는지 확인합니다.
 - 빠른 도구 연속 실행: 배지가 깜박이지 않는지 확인합니다(도구 결과에 대한 TTL 유예).
-- 모든 세션이 유휴 상태가 되면 상태 점검 행이 다시 나타나는지 확인합니다.
+- 32. 모든 세션이 유휴 상태가 되면 상태 행이 다시 나타납니다.

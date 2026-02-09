@@ -3,13 +3,6 @@ summary: "WhatsApp-Integration (Web-Kanal): Login, Inbox, Antworten, Medien und 
 read_when:
   - Arbeit am Verhalten des WhatsApp/Web-Kanals oder an der Inbox-Routinglogik
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:57Z
 ---
 
 # WhatsApp (Web-Kanal)
@@ -211,6 +204,7 @@ Der Assistent verwendet sie, um Ihre **Allowlist/Eigentümer** zu setzen, damit 
 ## Nachrichten-Normalisierung (was das Modell sieht)
 
 - `Body` ist der aktuelle Nachrichtenkörper mit Umschlag.
+
 - Kontext zitierter Antworten wird **immer angehängt**:
 
   ```
@@ -223,6 +217,7 @@ Der Assistent verwendet sie, um Ihre **Allowlist/Eigentümer** zu setzen, damit 
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = zitierter Textkörper oder Medien-Platzhalter
   - `ReplyToSender` = E.164, wenn bekannt
+
 - Eingehende Nachrichten nur mit Medien verwenden Platzhalter:
   - `<media:image|video|audio|document|sticker>`
 
@@ -409,5 +404,5 @@ WhatsApp sendet Audio als **Sprachnachrichten** (PTT-Blase).
 
 **Bun-Runtime**
 
-- Bun wird **nicht empfohlen**. WhatsApp (Baileys) und Telegram sind unter Bun unzuverlässig.  
+- Bun wird **nicht empfohlen**. WhatsApp (Baileys) und Telegram sind unter Bun unzuverlässig.
   Führen Sie das Gateway mit **Node** aus. (Siehe Hinweis zur Runtime in Erste Schritte.)

@@ -5,13 +5,6 @@ read_when:
   - Uso del canvas/cámara del nodo para el contexto del agente
   - Agregar nuevos comandos de nodo o ayudas de CLI
 title: "Nodos"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:10Z
 ---
 
 # Nodos
@@ -289,7 +282,7 @@ Notas:
   Ask/allowlist/full se comportan igual que el host de nodo headless; las solicitudes denegadas devuelven `SYSTEM_RUN_DENIED`.
 - En el host de nodo headless, `system.run` está controlado por aprobaciones de exec (`~/.openclaw/exec-approvals.json`).
 
-## Vinculación de exec al nodo
+## Enlazado del nodo Exec
 
 Cuando hay varios nodos disponibles, puede vincular exec a un nodo específico.
 Esto establece el nodo predeterminado para `exec host=node` (y puede anularse por agente).
@@ -324,7 +317,7 @@ OpenClaw puede ejecutar un **host de nodo headless** (sin UI) que se conecta al
 WebSocket del Gateway y expone `system.run` / `system.which`. Esto es útil en Linux/Windows
 o para ejecutar un nodo mínimo junto a un servidor.
 
-Inícielo:
+Iniciarlo:
 
 ```bash
 openclaw node run --host <gateway-host> --port 18789

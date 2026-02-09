@@ -1,17 +1,10 @@
 ---
-summary: « Backends CLI : solution de repli texte seul via des CLI d’IA locales »
+summary: "Backends CLI : solution de repli texte seul via des CLI d’IA locales"
 read_when:
   - Vous souhaitez un repli fiable lorsque les fournisseurs d’API échouent
   - Vous exécutez Claude Code CLI ou d’autres CLI d’IA locales et souhaitez les réutiliser
   - Vous avez besoin d’un chemin texte seul, sans outils, qui prend néanmoins en charge les sessions et les images
-title: « Backends CLI »
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:41Z
+title: "Backends CLI"
 ---
 
 # Backends CLI (runtime de repli)
@@ -187,7 +180,7 @@ Modes d’entrée :
 - `input: "stdin"` envoie le prompt via stdin.
 - Si le prompt est très long et que `maxPromptArgChars` est défini, stdin est utilisé.
 
-## Valeurs par defaut (integrees)
+## Par défaut (intégré)
 
 OpenClaw fournit une valeur par défaut pour `claude-cli` :
 
@@ -223,7 +216,7 @@ Ne surchargez que si nécessaire (courant : chemin `command` absolu).
   structuré que l’exécution initiale `--json`. Les sessions OpenClaw fonctionnent
   néanmoins normalement.
 
-## Depannage
+## Problemes courants
 
 - **CLI introuvable** : définissez `command` vers un chemin complet.
 - **Nom de modèle incorrect** : utilisez `modelAliases` pour mapper `provider/model` → modèle CLI.

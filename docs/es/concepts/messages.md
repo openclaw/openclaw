@@ -5,13 +5,6 @@ read_when:
   - Aclarar sesiones, modos de cola o comportamiento de streaming
   - Documentar la visibilidad del razonamiento y las implicaciones de uso
 title: "Mensajes"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:16Z
 ---
 
 # Mensajes

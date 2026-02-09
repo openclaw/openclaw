@@ -4,23 +4,16 @@ read_when:
   - आप ऑडियो अटैचमेंट्स के लिए Deepgram स्पीच-टू-टेक्स्ट चाहते हैं
   - आपको Deepgram का एक त्वरित विन्यास उदाहरण चाहिए
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:33Z
 ---
 
 # Deepgram (ऑडियो ट्रांसक्रिप्शन)
 
-Deepgram एक स्पीच-टू-टेक्स्ट API है। OpenClaw में इसका उपयोग **इनबाउंड ऑडियो/वॉइस नोट
-ट्रांसक्रिप्शन** के लिए `tools.media.audio` के माध्यम से किया जाता है।
+Deepgram is a speech-to-text API. In OpenClaw it is used for **inbound audio/voice note
+transcription** via `tools.media.audio`.
 
-सक्षम होने पर, OpenClaw ऑडियो फ़ाइल को Deepgram पर अपलोड करता है और ट्रांसक्रिप्ट को
-रिप्लाई पाइपलाइन में सम्मिलित करता है (`{{Transcript}}` + `[Audio]` ब्लॉक)। यह **स्ट्रीमिंग नहीं** है;
-यह प्री-रिकॉर्डेड ट्रांसक्रिप्शन एंडपॉइंट का उपयोग करता है।
+When enabled, OpenClaw uploads the audio file to Deepgram and injects the transcript
+into the reply pipeline (`{{Transcript}}` + `[Audio]` block). This is **not streaming**;
+it uses the pre-recorded transcription endpoint.
 
 वेबसाइट: [https://deepgram.com](https://deepgram.com)  
 दस्तावेज़: [https://developers.deepgram.com](https://developers.deepgram.com)

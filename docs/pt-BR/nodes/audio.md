@@ -3,13 +3,6 @@ summary: "Como áudios/notas de voz de entrada são baixados, transcritos e inje
 read_when:
   - Ao alterar a transcrição de áudio ou o tratamento de mídia
 title: "Áudio e Notas de Voz"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:20Z
 ---
 
 # Áudio / Notas de Voz — 2026-01-17
@@ -114,7 +107,7 @@ Nota: A detecção de binários é best-effort em macOS/Linux/Windows; garanta q
 - A transcrição fica disponível para templates como `{{Transcript}}`.
 - A saída stdout da CLI é limitada (5MB); mantenha a saída da CLI concisa.
 
-## Armadilhas
+## Pegadas
 
 - As regras de escopo usam “primeira correspondência vence”. `chatType` é normalizado para `direct`, `group` ou `room`.
 - Garanta que sua CLI finalize com código 0 e imprima texto simples; JSON precisa ser ajustado via `jq -r .text`.

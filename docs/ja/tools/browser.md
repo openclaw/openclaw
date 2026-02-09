@@ -5,13 +5,6 @@ read_when:
   - openclaw が自身の Chrome に干渉している理由をデバッグする場合
   - macOS アプリでブラウザー設定およびライフサイクルを実装する場合
 title: "Browser（OpenClaw 管理）"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:25Z
 ---
 
 # Browser（openclaw 管理）
@@ -19,6 +12,8 @@ x-i18n:
 OpenClaw は、エージェントが制御する **専用の Chrome/Brave/Edge/Chromium プロファイル** を実行できます。
 これは個人用ブラウザーから分離されており、Gateway（ゲートウェイ）内の小さなローカル
 制御サービス（local loopback のみ）を通じて管理されます。
+個人用ブラウザから分離され、ゲートウェイ内の小さなローカル
+制御サービスを通じて管理されます(ループバックのみ)。
 
 初心者向けの見方：
 
@@ -28,15 +23,15 @@ OpenClaw は、エージェントが制御する **専用の Chrome/Brave/Edge/C
 - 既定の `chrome` プロファイルは、拡張機能リレー経由で **システム既定の Chromium ブラウザー** を使用します。
   分離された管理対象ブラウザーに切り替えるには `openclaw` を使用します。
 
-## 利用できるもの
+## あなたが得るもの
 
 - **openclaw** という名前の独立したブラウザープロファイル（既定ではオレンジのアクセント）。
 - 決定論的なタブ制御（一覧／オープン／フォーカス／クローズ）。
 - エージェントアクション（クリック／入力／ドラッグ／選択）、スナップショット、スクリーンショット、PDF。
 - オプションのマルチプロファイル対応（`openclaw`、`work`、`remote`、…）。
 
-このブラウザーは **日常使い** ではありません。
-エージェント自動化と検証のための、安全で分離されたサーフェスです。
+このブラウザーは毎日のドライバーではありません。 これは、
+エージェントの自動化と検証のための安全で孤立した表面です。
 
 ## クイックスタート
 
@@ -86,7 +81,7 @@ openclaw browser --browser-profile openclaw snapshot
 注記：
 
 - ブラウザー制御サービスは、`gateway.port` から導出されたポートで loopback にバインドされます
-  （既定：`18791`。gateway + 2）。リレーは次のポート（`18792`）を使用します。
+  （既定：`18791`。gateway + 2）。リレーは次のポート（`18792`）を使用します。 リレーは次のポート (`18792`) を使用します。
 - Gateway ポート（`gateway.port` または `OPENCLAW_GATEWAY_PORT`）を上書きすると、
   派生するブラウザーポートも同じ「ファミリー」を保つようにシフトします。
 - `cdpUrl` は未設定時、既定でリレーポートになります。
@@ -95,7 +90,7 @@ openclaw browser --browser-profile openclaw snapshot
 - `attachOnly: true` は「ローカルブラウザーを起動しない。既に実行中の場合のみアタッチする」を意味します。
 - `color` と各プロファイルの `color` により、どのプロファイルがアクティブか分かるように
   ブラウザー UI を着色します。
-- 既定プロファイルは `chrome`（拡張機能リレー）です。管理対象ブラウザーには `defaultProfile: "openclaw"` を使用します。
+- 既定プロファイルは `chrome`（拡張機能リレー）です。管理対象ブラウザーには `defaultProfile: "openclaw"` を使用します。 管理されたブラウザに `defaultProfile: "openclaw"`を使用します。
 - 自動検出の順序：Chromium ベースのシステム既定ブラウザー、そうでなければ
   Chrome → Brave → Edge → Chromium → Chrome Canary。
 - ローカルの `openclaw` プロファイルは `cdpPort`/`cdpUrl` を自動割り当てします。
@@ -104,7 +99,8 @@ openclaw browser --browser-profile openclaw snapshot
 ## Brave（または他の Chromium ベース）を使用する
 
 **システム既定** のブラウザーが Chromium ベース（Chrome/Brave/Edge など）の場合、
-OpenClaw は自動的にそれを使用します。自動検出を上書きするには `browser.executablePath` を設定します。
+OpenClaw は自動的にそれを使用します。自動検出を上書きするには `browser.executablePath` を設定します。 `browser.executablePath` を
+自動検出を上書きするように設定します:
 
 CLI の例：
 
@@ -140,7 +136,7 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 - **ローカル制御（既定）**：Gateway が loopback 制御サービスを起動し、ローカルブラウザーを起動できます。
 - **リモート制御（node host）**：ブラウザーがあるマシンで node host を実行し、Gateway がブラウザー操作をプロキシします。
 - **リモート CDP**：`browser.profiles.<name>.cdpUrl`（または `browser.cdpUrl`）を設定して、
-  リモートの Chromium ベースブラウザーにアタッチします。この場合、OpenClaw はローカルブラウザーを起動しません。
+  リモートの Chromium ベースブラウザーにアタッチします。この場合、OpenClaw はローカルブラウザーを起動しません。 この場合、OpenClawはローカルブラウザを起動しません。
 
 リモート CDP の URL には認証を含めることができます：
 
@@ -149,13 +145,15 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 OpenClaw は、`/json/*` エンドポイントの呼び出し時および
 CDP WebSocket 接続時に認証を保持します。
-トークンは設定ファイルにコミットするのではなく、環境変数やシークレットマネージャーを使用してください。
+トークンは設定ファイルにコミットするのではなく、環境変数やシークレットマネージャーを使用してください。 設定ファイルにコミットするのではなく、
+トークンの環境変数やシークレットマネージャを優先します。
 
 ## Node ブラウザープロキシ（ゼロ設定の既定）
 
 ブラウザーがあるマシンで **node host** を実行している場合、OpenClaw は追加のブラウザー設定なしで
 ブラウザーツール呼び出しをその node に自動ルーティングできます。
 これはリモート Gateway の既定パスです。
+これは、リモートゲートウェイのデフォルトのパスです。
 
 注記：
 
@@ -169,7 +167,8 @@ CDP WebSocket 接続時に認証を保持します。
 
 [Browserless](https://browserless.io) は、HTTPS 経由で CDP エンドポイントを公開する
 ホスト型 Chromium サービスです。OpenClaw のブラウザープロファイルを
-Browserless のリージョンエンドポイントに向け、API キーで認証できます。
+Browserless のリージョンエンドポイントに向け、API キーで認証できます。 OpenClawブラウザプロファイルを
+ブラウザレスリージョンエンドポイントで指定し、APIキーで認証することができます。
 
 例：
 
@@ -197,11 +196,11 @@ Browserless のリージョンエンドポイントに向け、API キーで認�
 
 ## セキュリティ
 
-要点：
+主なアイデア:
 
 - ブラウザー制御は loopback のみです。アクセスは Gateway の認証または node のペアリングを通じて行われます。
 - Gateway および node host はプライベートネットワーク（Tailscale）上に保ち、公開露出を避けてください。
-- リモート CDP の URL／トークンはシークレットとして扱い、環境変数やシークレットマネージャーを推奨します。
+- リモートの CDP URL/トークンをシークレットとして扱います。
 
 リモート CDP のヒント：
 
@@ -210,7 +209,7 @@ Browserless のリージョンエンドポイントに向け、API キーで認�
 
 ## プロファイル（マルチブラウザー）
 
-OpenClaw は、複数の名前付きプロファイル（ルーティング設定）をサポートします。プロファイルは次のいずれかです：
+OpenClaw は、複数の名前付きプロファイル（ルーティング設定）をサポートします。プロファイルは次のいずれかです： プロファイルは次のようになります:
 
 - **openclaw-managed**：独自のユーザーデータディレクトリと CDP ポートを持つ専用の Chromium ベースブラウザー
 - **remote**：明示的な CDP URL（別所で稼働する Chromium ベースブラウザー）
@@ -250,6 +249,7 @@ Gateway がブラウザー操作をプロキシできるようにしてくださ
 エージェントセッションがサンドボックス化されている場合、`browser` ツールは
 既定で `target="sandbox"`（サンドボックスブラウザー）になることがあります。
 Chrome 拡張機能リレーの引き継ぎにはホストブラウザー制御が必要なため、次のいずれかを行ってください：
+Chrome拡張リレーの乗っ取りにはホストブラウザの制御が必要なので、以下のいずれかが必要です:
 
 - セッションを非サンドボックスで実行する、または
 - `agents.defaults.sandbox.browser.allowHostControl: true` を設定し、ツール呼び出し時に `target="host"` を使用する。
@@ -332,11 +332,10 @@ openclaw browser create-profile \
 
 ### Playwright の要件
 
-一部の機能（ナビゲーション／アクション／AI スナップショット／ロールスナップショット、
-要素スクリーンショット、PDF）には Playwright が必要です。
-Playwright がインストールされていない場合、これらのエンドポイントは明確な 501 エラーを返します。
-ARIA スナップショットと基本的なスクリーンショットは、openclaw 管理の Chrome では引き続き動作します。
-Chrome 拡張機能リレーのドライバーでは、ARIA スナップショットとスクリーンショットに Playwright が必要です。
+いくつかの機能 (ナビゲーション/アクト/AIスナップショット/ロールスナップショット、要素スクリーンショット、PDF)
+Playwrightが必要です。 Playwrightがインストールされていない場合、それらのエンドポイントはクリア501
+エラーを返します。 ARIAのスナップショットと基本的なスクリーンショットは、まだオープンクロー管理Chromeで動作します。
+Chrome拡張リレードライバの場合、ARIAスナップショットとスクリーンショットにはPlaywrightが必要です。
 
 `Playwright is not available in this gateway build` が表示された場合は、完全な
 Playwright パッケージ（`playwright-core` ではありません）をインストールして Gateway を再起動するか、
@@ -346,6 +345,7 @@ Playwright パッケージ（`playwright-core` ではありません）をイン
 
 Gateway を Docker で実行している場合は、`npx playwright`（npm の上書き競合）を避けてください。
 同梱の CLI を使用します：
+代わりにバンドルされた CLI を使用します。
 
 ```bash
 docker compose run --rm openclaw-cli \
@@ -354,7 +354,7 @@ docker compose run --rm openclaw-cli \
 
 ブラウザーのダウンロードを永続化するには、`PLAYWRIGHT_BROWSERS_PATH`（例：`/home/node/.cache/ms-playwright`）を設定し、
 `/home/node` が `OPENCLAW_HOME_VOLUME` または bind mount により永続化されていることを確認してください。
-[Docker](/install/docker) を参照してください。
+[Docker](/install/docker) を参照してください。 [Docker](/install/docker) を参照してください。
 
 ## 仕組み（内部）
 
@@ -371,6 +371,7 @@ docker compose run --rm openclaw-cli \
 
 ## CLI クイックリファレンス
 
+すべてのコマンドは `--browser-profile <name>` を特定のプロファイルをターゲットにします。
 すべてのコマンドは、特定のプロファイルを指定するために `--browser-profile <name>` を受け付けます。
 また、機械可読出力（安定したペイロード）のために `--json` も受け付けます。
 
@@ -472,10 +473,10 @@ docker compose run --rm openclaw-cli \
   - `--interactive` は、操作に最適なフラットで選びやすいインタラクティブ要素一覧を出力します。
   - `--labels` は、参照ラベルをオーバーレイしたビューポート限定のスクリーンショットを追加します
     （`MEDIA:<path>` を出力）。
-
 - `click`/`type`/ などは、`snapshot` から取得した `ref`
   （数値の `12` またはロール参照の `e12`）が必要です。
   CSS セレクターは意図的にアクションではサポートされていません。
+  CSS セレクターは意図的にアクションに対してサポートされていません。
 
 ## スナップショットと参照
 
@@ -578,7 +579,8 @@ JSON のロールスナップショットには `refs` に加え、
 - `browser act kind=evaluate` / `openclaw browser evaluate` および `wait --fn` は、
   ページコンテキストで任意の JavaScript を実行します。
   プロンプトインジェクションにより誘導される可能性があります。
-  不要な場合は `browser.evaluateEnabled=false` で無効化してください。
+  不要な場合は `browser.evaluateEnabled=false` で無効化してください。 17. プロンプトインジェクションによって、
+  これが誘導される可能性があります。 `browser.evaluateEnabled=false` で無効にします。
 - ログインやアンチボットの注意点（X/Twitter など）については、
   [Browser login + X/Twitter posting](/tools/browser-login) を参照してください。
 - Gateway／node host はプライベート（loopback または tailnet のみ）に保ってください。
@@ -596,7 +598,7 @@ Linux 固有の問題（特に snap の Chromium）については、
 - `browser` — ステータス／開始／停止／タブ／オープン／フォーカス／クローズ／
   スナップショット／スクリーンショット／ナビゲーション／アクション
 
-対応関係：
+マップの仕方:
 
 - `browser snapshot` は安定した UI ツリー（AI または ARIA）を返します。
 - `browser act` は、スナップショットの `ref` ID を使用して

@@ -4,13 +4,6 @@ read_when:
   - आप stable/beta/dev के बीच स्विच करना चाहते हैं
   - आप prereleases को टैग या प्रकाशित कर रहे हैं
 title: "Development Channels"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:23Z
 ---
 
 # Development चैनल
@@ -21,7 +14,7 @@ OpenClaw तीन अपडेट चैनल प्रदान करता 
 
 - **stable**: npm dist-tag `latest`.
 - **beta**: npm dist-tag `beta` (परीक्षणाधीन बिल्ड).
-- **dev**: `main` (git) का गतिशील हेड। npm dist-tag: `dev` (प्रकाशित होने पर).
+- npm dist-tag: `dev` (जब publish किया जाता है)। Beta और dev builds में macOS ऐप रिलीज़ **शामिल न भी हो** सकती है।
 
 हम बिल्ड **beta** में भेजते हैं, उनका परीक्षण करते हैं, फिर **जाँचे-परखे बिल्ड को `latest` में प्रमोट करते हैं**
 बिना संस्करण संख्या बदले — npm इंस्टॉल के लिए dist-tags ही सत्य का स्रोत हैं।
@@ -76,7 +69,7 @@ openclaw update --channel dev
 
 ## macOS ऐप उपलब्धता
 
-Beta और dev बिल्ड में **macOS ऐप रिलीज़ शामिल नहीं** हो सकती। यह ठीक है:
+यह ठीक है: Docker **optional** है।
 
 - git टैग और npm dist-tag फिर भी प्रकाशित किए जा सकते हैं।
 - रिलीज़ नोट्स या changelog में “इस beta के लिए कोई macOS बिल्ड नहीं” स्पष्ट रूप से उल्लेख करें।

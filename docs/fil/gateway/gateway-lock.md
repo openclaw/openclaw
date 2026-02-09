@@ -4,13 +4,6 @@ read_when:
   - Kapag nagpapatakbo o nagde-debug ng proseso ng gateway
   - Kapag iniimbestigahan ang pagpapatupad ng single-instance
 title: "Gateway Lock"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Lock ng Gateway

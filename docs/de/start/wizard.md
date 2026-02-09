@@ -5,13 +5,6 @@ read_when:
   - Beim Einrichten einer neuen Maschine
 title: "Onboarding-Assistent (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:28Z
 ---
 
 # Onboarding-Assistent (CLI)
@@ -52,7 +45,7 @@ wodurch `tools.web.search.apiKey` gespeichert wird. Doku: [Web tools](/tools/web
 Der Assistent startet mit **Schnellstart** (Standards) vs. **Erweitert** (volle Kontrolle).
 
 <Tabs>
-  <Tab title="Schnellstart (Standards)">
+  <Tab title="QuickStart (defaults)">
     - Lokales Gateway (loopback)
     - Workspace-Standard (oder bestehender Workspace)
     - Gateway-Port **18789**
@@ -60,7 +53,7 @@ Der Assistent startet mit **Schnellstart** (Standards) vs. **Erweitert** (volle 
     - Tailscale-Exponierung **Aus**
     - Telegram- und WhatsApp-Direktnachrichten standardmäßig auf **Allowlist** (Sie werden nach Ihrer Telefonnummer gefragt)
   </Tab>
-  <Tab title="Erweitert (volle Kontrolle)">
+  <Tab title="Advanced (full control)">
     - Legt jeden Schritt offen (Modus, Workspace, Gateway, Kanäle, Daemon, Skills).
   </Tab>
 </Tabs>

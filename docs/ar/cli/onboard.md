@@ -1,15 +1,8 @@
 ---
 summary: "مرجع CLI للأمر `openclaw onboard` (معالج تهيئة أولية تفاعلي)"
 read_when:
-  - "عندما تريد إعدادًا موجّهًا لـ Gateway ومساحة العمل والمصادقة والقنوات وSkills"
-title: "التهيئة الأولية"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:03Z
+  - عندما تريد إعدادًا موجّهًا لـ Gateway ومساحة العمل والمصادقة والقنوات وSkills
+title: "onboard"
 ---
 
 # `openclaw onboard`

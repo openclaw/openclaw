@@ -5,20 +5,13 @@ read_when:
   - Pakning eller signering af macOS-appen
   - Ændring af bundle-id'er eller app-installationsstier
 title: "macOS-tilladelser"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:27Z
 ---
 
 # macOS-tilladelser (TCC)
 
-macOS-tilladelsesbevillinger er skrøbelige. TCC knytter en tilladelsesbevilling til
-appens kodesignatur, bundle-id og sti på disken. Hvis nogen af disse ændres,
-behandler macOS appen som ny og kan droppe eller skjule prompter.
+macOS tilladelse tilskud er skrøbelige. TCC forbinder en tilladelse med
+appens kode-signatur, bundt-id og på disk-sti. Hvis nogen af disse ændringer,
+macOS behandler app som ny og kan slippe eller skjule prompter.
 
 ## Krav for stabile tilladelser
 
@@ -28,8 +21,8 @@ behandler macOS appen som ny og kan droppe eller skjule prompter.
 - Konsistent signatur: brug et ægte Apple Development- eller Developer ID-certifikat,
   så signaturen forbliver stabil på tværs af genbygninger.
 
-Ad-hoc-signaturer genererer en ny identitet ved hvert build. macOS glemmer tidligere
-bevillinger, og prompter kan forsvinde helt, indtil de forældede poster ryddes.
+Ad-hoc signaturer genererer en ny identitet hver bygning. macOS vil glemme tidligere
+tilskud, og beder kan helt forsvinde, indtil forældede poster er ryddet.
 
 ## Tjekliste til gendannelse, når prompter forsvinder
 
@@ -49,9 +42,9 @@ sudo tccutil reset AppleEvents
 
 ## Tilladelser til filer og mapper (Skrivebord/Dokumenter/Overførsler)
 
-macOS kan også begrænse Skrivebord, Dokumenter og Overførsler for terminal-/baggrundsprocesser. Hvis fillæsning eller mappelister hænger, så giv adgang til den samme proceskontekst, der udfører filoperationerne (for eksempel Terminal/iTerm, en app startet via LaunchAgent eller en SSH-proces).
+macOS kan også gate Desktop, dokumenter og downloads til terminal/baggrundsprocesser. Hvis filen læser eller mappelister hænger, gives adgang til den samme processammenhæng, der udfører filoperationer (f.eks. Terminal/iTerm, LaunchAgent-lanceret app eller SSH proces).
 
 Workaround: flyt filer ind i OpenClaw-arbejdsområdet (`~/.openclaw/workspace`), hvis du vil undgå tilladelser pr. mappe.
 
-Hvis du tester tilladelser, så signér altid med et ægte certifikat. Ad-hoc
-builds er kun acceptable til hurtige lokale kørsler, hvor tilladelser ikke er vigtige.
+Hvis du tester tilladelser, skal du altid underskrive med et rigtigt certifikat. Ad-hoc
+builds er kun acceptable for hurtige lokale kørsler, hvor tilladelser ikke betyder noget.

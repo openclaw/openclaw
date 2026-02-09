@@ -5,19 +5,14 @@ read_when:
   - คุณกำลังเพิ่มตัวจัดรูปแบบช่องทางใหม่หรือการแมปสไตล์
   - คุณกำลังดีบักการถดถอยของการจัดรูปแบบข้ามช่องทาง
 title: "การจัดรูปแบบMarkdown"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:13Z
 ---
 
 # การจัดรูปแบบMarkdown
 
 OpenClawจัดรูปแบบMarkdownขาออกโดยแปลงเป็นการแทนค่ากลางร่วม
-(intermediate representation: IR)ก่อน จากนั้นจึงเรนเดอร์เป็นเอาต์พุตเฉพาะช่องทาง IRจะคงข้อความต้นฉบับไว้ครบถ้วน พร้อมพกพาช่วงสไตล์/ลิงก์ เพื่อให้การแบ่งชิ้นและการเรนเดอร์คงความสอดคล้องกันข้ามช่องทาง
+(intermediate representation: IR)ก่อน จากนั้นจึงเรนเดอร์เป็นเอาต์พุตเฉพาะช่องทาง IRจะคงข้อความต้นฉบับไว้ครบถ้วน พร้อมพกพาช่วงสไตล์/ลิงก์ เพื่อให้การแบ่งชิ้นและการเรนเดอร์คงความสอดคล้องกันข้ามช่องทาง The IR keeps the
+source text intact while carrying style/link spans so chunking and rendering can
+stay consistent across channels.
 
 ## เป้าหมาย
 
@@ -65,7 +60,8 @@ IR (เชิงแผนภาพ):
 ## การจัดการตาราง
 
 ตารางMarkdownไม่ได้รับการรองรับอย่างสม่ำเสมอในไคลเอนต์แชต ใช้
-`markdown.tables`เพื่อควบคุมการแปลงตามช่องทาง(และต่อบัญชี)
+`markdown.tables`เพื่อควบคุมการแปลงตามช่องทาง(และต่อบัญชี) Use
+`markdown.tables` to control conversion per channel (and per account).
 
 - `code`: เรนเดอร์ตารางเป็นบล็อกโค้ด(ค่าเริ่มต้นสำหรับช่องทางส่วนใหญ่)
 - `bullets`: แปลงแต่ละแถวเป็นรายการหัวข้อย่อย(ค่าเริ่มต้นสำหรับSignal+WhatsApp)
@@ -96,13 +92,15 @@ channels:
 
 ## นโยบายลิงก์
 
-- **Slack:** `[label](url)` -> `<url|label>`; URLเปล่ายังคงเป็นเปล่า ปิดautolinkระหว่างการพาร์สเพื่อหลีกเลี่ยงการลิงก์ซ้ำ
+- **Slack:** `[label](url)` -> `<url|label>`; URLเปล่ายังคงเป็นเปล่า ปิดautolinkระหว่างการพาร์สเพื่อหลีกเลี่ยงการลิงก์ซ้ำ Autolink
+  is disabled during parse to avoid double-linking.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>`(โหมดพาร์สHTML)
 - **Signal:** `[label](url)` -> `label (url)` เว้นแต่ป้ายกำกับจะตรงกับURL
 
 ## Spoilers
 
-ตัวทำเครื่องหมายสปอยเลอร์(`||spoiler||`)จะถูกพาร์สเฉพาะสำหรับSignal โดยจะถูกแมปเป็นช่วงสไตล์SPOILER ช่องทางอื่นจะถือเป็นข้อความธรรมดา
+Spoiler markers (`||spoiler||`) are parsed only for Signal, where they map to
+SPOILER style ranges. Other channels treat them as plain text.
 
 ## วิธีเพิ่มหรืออัปเดตตัวจัดรูปแบบช่องทาง
 
@@ -112,7 +110,7 @@ channels:
 4. **เชื่อมอะแดปเตอร์:** อัปเดตอะแดปเตอร์ขาออกของช่องทางให้ใช้ตัวแบ่งชิ้นและตัวเรนเดอร์ใหม่
 5. **ทดสอบ:** เพิ่มหรืออัปเดตการทดสอบรูปแบบ และการทดสอบการส่งขาออกหากช่องทางใช้การแบ่งชิ้น
 
-## จุดที่พลาดบ่อย
+## Common gotchas
 
 - โทเคนมุมของSlack(`<@U123>`, `<#C123>`, `<https://...>`)ต้องถูกรักษาไว้; เอสเคปHTMLดิบอย่างปลอดภัย
 - HTMLของTelegramต้องเอสเคปข้อความนอกแท็กเพื่อหลีกเลี่ยงมาร์กอัปเสียหาย

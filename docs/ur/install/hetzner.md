@@ -6,13 +6,6 @@ read_when:
   - آپ پائیداری، بائنریز اور ری اسٹارٹ رویّے پر مکمل کنٹرول چاہتے ہیں
   - آپ Hetzner یا ملتے جلتے فراہم کنندہ پر Docker میں OpenClaw چلا رہے ہیں
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:30Z
 ---
 
 # Hetzner پر OpenClaw (Docker، پروڈکشن VPS گائیڈ)
@@ -21,8 +14,8 @@ x-i18n:
 
 Docker کا استعمال کرتے ہوئے Hetzner VPS پر ایک مستقل OpenClaw Gateway چلانا، جس میں پائیدار اسٹیٹ، پہلے سے شامل بائنریز، اور محفوظ ری اسٹارٹ رویّہ شامل ہو۔
 
-اگر آپ “تقریباً $5 میں OpenClaw 24/7” چاہتے ہیں، تو یہ سب سے سادہ اور قابلِ اعتماد سیٹ اپ ہے۔  
-Hetzner کی قیمتیں بدلتی رہتی ہیں؛ سب سے چھوٹا Debian/Ubuntu VPS منتخب کریں اور اگر OOMs آئیں تو اسکیل اپ کریں۔
+اگر آپ “OpenClaw 24/7 تقریباً $5” چاہتے ہیں تو یہ سب سے سادہ اور قابلِ اعتماد سیٹ اپ ہے۔
+Hetzner کی قیمتیں بدلتی رہتی ہیں؛ سب سے چھوٹا Debian/Ubuntu VPS منتخب کریں اور اگر OOM آئیں تو اسکیل اپ کریں۔
 
 ## ہم کیا کر رہے ہیں (سادہ الفاظ میں)؟
 
@@ -38,8 +31,8 @@ Gateway تک رسائی کے طریقے:
 - براہِ راست پورٹ ایکسپوژر، اگر آپ فائر وال اور ٹوکنز خود منیج کرتے ہیں
 
 یہ گائیڈ Hetzner پر Ubuntu یا Debian فرض کرتی ہے۔  
-اگر آپ کسی اور Linux VPS پر ہیں تو پیکجز کو اسی حساب سے میپ کریں۔  
-عام Docker فلو کے لیے [Docker](/install/docker) دیکھیں۔
+اگر آپ کسی اور Linux VPS پر ہیں تو پیکجز کو اسی کے مطابق میپ کریں۔
+For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
@@ -71,7 +64,7 @@ Gateway تک رسائی کے طریقے:
 
 ---
 
-## 1) VPS فراہم کریں
+## 1. VPS فراہم کریں
 
 Hetzner میں Ubuntu یا Debian VPS بنائیں۔
 
@@ -81,12 +74,12 @@ Hetzner میں Ubuntu یا Debian VPS بنائیں۔
 ssh root@YOUR_VPS_IP
 ```
 
-یہ گائیڈ فرض کرتی ہے کہ VPS اسٹیٹ فل ہے۔  
-اسے قابلِ تلف انفراسٹرکچر کے طور پر نہ برتیں۔
+This guide assumes the VPS is stateful.
+Do not treat it as disposable infrastructure.
 
 ---
 
-## 2) Docker انسٹال کریں (VPS پر)
+## 2. Docker انسٹال کریں (VPS پر)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) OpenClaw ریپوزٹری کلون کریں
+## 3. OpenClaw ریپوزٹری کلون کریں
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +107,10 @@ cd openclaw
 
 ---
 
-## 4) مستقل ہوسٹ ڈائریکٹریز بنائیں
+## 4. مستقل ہوسٹ ڈائریکٹریز بنائیں
 
-Docker کنٹینرز عارضی ہوتے ہیں۔  
-تمام طویل المدت اسٹیٹ ہوسٹ پر ہونی چاہیے۔
+Docker containers are ephemeral.
+All long-lived state must live on the host.
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) ماحولیاتی متغیرات کنفیگر کریں
+## 5. ماحولیاتی متغیرات کنفیگر کریں
 
 ریپوزٹری روٹ میں `.env` بنائیں۔
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose کنفیگریشن
+## 6. Docker Compose کنفیگریشن
 
 `docker-compose.yml` بنائیں یا اپ ڈیٹ کریں۔
 
@@ -204,10 +197,10 @@ services:
 
 ---
 
-## 7) مطلوبہ بائنریز کو امیج میں شامل کریں (اہم)
+## 7. مطلوبہ بائنریز کو امیج میں شامل کریں (اہم)
 
-چلتے ہوئے کنٹینر کے اندر بائنریز انسٹال کرنا ایک جال ہے۔  
-رن ٹائم پر انسٹال ہونے والی کوئی بھی چیز ری اسٹارٹ پر ضائع ہو جائے گی۔
+Installing binaries inside a running container is a trap.
+Anything installed at runtime will be lost on restart.
 
 Skills کو درکار تمام بیرونی بائنریز امیج بلڈ کے وقت انسٹال ہونی چاہئیں۔
 
@@ -217,8 +210,8 @@ Skills کو درکار تمام بیرونی بائنریز امیج بلڈ کے
 - Google Places کے لیے `goplaces`
 - WhatsApp کے لیے `wacli`
 
-یہ مثالیں ہیں، مکمل فہرست نہیں۔  
-آپ اسی پیٹرن کے ذریعے جتنی چاہیں بائنریز انسٹال کر سکتے ہیں۔
+These are examples, not a complete list.
+You may install as many binaries as needed using the same pattern.
 
 اگر بعد میں آپ نئی Skills شامل کریں جو اضافی بائنریز پر منحصر ہوں، تو آپ کو لازماً:
 
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) بلڈ اور لانچ کریں
+## 8. بلڈ اور لانچ کریں
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) Gateway کی تصدیق کریں
+## 9. Gateway کی تصدیق کریں
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,8 +313,8 @@ ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
 
 ## کیا کہاں محفوظ رہتا ہے (حقیقی ماخذ)
 
-OpenClaw Docker میں چلتا ہے، لیکن Docker حقیقی ماخذ نہیں ہے۔  
-تمام طویل المدت اسٹیٹ کو ری اسٹارٹس، ری بلڈز اور ری بوٹس کے بعد بھی برقرار رہنا چاہیے۔
+OpenClaw runs in Docker, but Docker is not the source of truth.
+All long-lived state must survive restarts, rebuilds, and reboots.
 
 | جزو                  | مقام                              | پائیداری کا طریقہ     | نوٹس                         |
 | -------------------- | --------------------------------- | --------------------- | ---------------------------- |

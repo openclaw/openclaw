@@ -4,20 +4,13 @@ read_when:
   - Pagpapatupad ng mga feature ng macOS app
   - Pagbabago ng lifecycle ng gateway o node bridging sa macOS
 title: "macOS App"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:53Z
 ---
 
 # OpenClaw macOS Companion (menu bar + gateway broker)
 
-Ang macOS app ay ang **menu‑bar companion** para sa OpenClaw. Pinamamahalaan nito ang mga permission,
-ina-attach/pinapatakbo ang Gateway nang lokal (launchd o manual), at inilalantad ang mga kakayahan ng macOS
-sa agent bilang isang node.
+50. Ang macOS app ay ang **menu‑bar companion** para sa OpenClaw. It owns permissions,
+    manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
+    capabilities to the agent as a node.
 
 ## Ano ang ginagawa nito
 
@@ -34,29 +27,28 @@ sa agent bilang isang node.
 
 - **Local** (default): ina-attach ng app ang sarili sa tumatakbong lokal na Gateway kung mayroon;
   kung wala, pinapagana nito ang launchd service via `openclaw gateway install`.
-- **Remote**: kumokonekta ang app sa isang Gateway sa pamamagitan ng SSH/Tailscale at hindi kailanman
-  nagsisimula ng lokal na proseso.
-  Sinisimulan ng app ang lokal na **node host service** para maabot ng remote Gateway ang Mac na ito.
-  Hindi nag-spawn ang app ng Gateway bilang child process.
+- **Remote**: kumokonekta ang app sa isang Gateway sa pamamagitan ng SSH/Tailscale at hindi kailanman nagsisimula ng lokal na proseso.
+  Sinisimulan ng app ang lokal na **node host service** upang maabot ng remote Gateway ang Mac na ito.
+  The app does not spawn the Gateway as a child process.
 
 ## Launchd control
 
-Pinamamahalaan ng app ang per‑user LaunchAgent na may label na `bot.molt.gateway`
-(o `bot.molt.<profile>` kapag gumagamit ng `--profile`/`OPENCLAW_PROFILE`; ang legacy na `com.openclaw.*` ay nag-u-unload pa rin).
+The app manages a per‑user LaunchAgent labeled `bot.molt.gateway`
+(or `bot.molt.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` still unloads).
 
 ```bash
 launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-Palitan ang label ng `bot.molt.<profile>` kapag nagpapatakbo ng named profile.
+Palitan ang label ng `bot.molt.<profile>` kapag nagpapatakbo ng isang pinangalanang profile.
 
 Kung hindi naka-install ang LaunchAgent, paganahin ito mula sa app o patakbuhin ang
 `openclaw gateway install`.
 
 ## Node capabilities (mac)
 
-Ipinapakita ng macOS app ang sarili bilang isang node. Karaniwang mga command:
+Ipinapakita ng macOS app ang sarili nito bilang isang node. Mga karaniwang command:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
@@ -81,8 +73,8 @@ Gateway -> Node Service (WS)
 
 ## Exec approvals (system.run)
 
-Ang `system.run` ay kinokontrol ng **Exec approvals** sa macOS app (Settings → Exec approvals).
-Ang security + ask + allowlist ay naka-store nang lokal sa Mac sa:
+`system.run` ay kinokontrol ng **Exec approvals** sa macOS app (Settings → Exec approvals).
+Security + ask + allowlist are stored locally on the Mac in:
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -195,12 +187,10 @@ component ang remote Gateway na parang nasa localhost ito.
   o nire-restart ito kapag kinakailangan.
 - **SSH shape:** `ssh -N -L <local>:127.0.0.1:<remote>` na may BatchMode +
   ExitOnForwardFailure + keepalive options.
-- **IP reporting:** gumagamit ng loopback ang SSH tunnel, kaya makikita ng gateway ang node
-  IP bilang `127.0.0.1`. Gamitin ang **Direct (ws/wss)** transport kung gusto mong lumabas ang totoong client
-  IP (tingnan ang [macOS remote access](/platforms/mac/remote)).
+- **IP reporting:** the SSH tunnel uses loopback, so the gateway will see the node
+  IP as `127.0.0.1`. Gamitin ang **Direct (ws/wss)** transport kung gusto mong lumabas ang tunay na client IP (tingnan ang [macOS remote access](/platforms/mac/remote)).
 
-Para sa mga hakbang sa setup, tingnan ang [macOS remote access](/platforms/mac/remote). Para sa mga detalye ng protocol,
-tingnan ang [Gateway protocol](/gateway/protocol).
+Para sa mga hakbang sa setup, tingnan ang [macOS remote access](/platforms/mac/remote). Para sa mga detalye ng protocol, tingnan ang [Gateway protocol](/gateway/protocol).
 
 ## Related docs
 

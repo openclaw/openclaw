@@ -5,13 +5,6 @@ read_when:
   - မော်ဒယ်/ပံ့ပိုးသူ ဘတ်ဂ်များအတွက် regression များ ထည့်သွင်းနေသောအခါ
   - Gateway + အေးဂျင့် အပြုအမူကို debug လုပ်နေသောအခါ
 title: "စမ်းသပ်ခြင်း"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:40Z
 ---
 
 # စမ်းသပ်ခြင်း
@@ -277,13 +270,13 @@ Tools + image ဖြင့် gateway smoke ကို လည်ပတ်ရန�
 ရွေးချယ်နိုင်သော အပို ဖုံးလွှမ်းမှု (ရှိရင် ကောင်း):
 
 - xAI: `xai/grok-4` (သို့) နောက်ဆုံး ရနိုင်သော မော်ဒယ်)
-- Mistral: `mistral/`… (tool စွမ်းရည်ရှိ မော်ဒယ်တစ်ခုကို ရွေး)
-- Cerebras: `cerebras/`… (ဝင်ရောက်ခွင့် ရှိပါက)
-- LM Studio: `lmstudio/`… (local; tool calling သည် API mode ပေါ် မူတည်)
+- Mistral: `mistral/`… (သင်ဖွင့်ထားသော “tools” အသုံးပြုနိုင်သော model တစ်ခုကို ရွေးချယ်ပါ)
+- Cerebras: `cerebras/`… (သင် ဝင်ရောက်ခွင့် ရှိရင်)
+- LM Studio: `lmstudio/`… (local; tool calling သည် API mode ပေါ်မူတည်သည်)
 
 ### Vision: image ပို့ခြင်း (attachment → multimodal message)
 
-Image probe ကို လေ့ကျင့်ရန် `OPENCLAW_LIVE_GATEWAY_MODELS` တွင် image စွမ်းရည်ရှိ မော်ဒယ် အနည်းဆုံး တစ်ခု (Claude/Gemini/OpenAI vision-capable variants စသည်) ကို ထည့်သွင်းပါ။
+`OPENCLAW_LIVE_GATEWAY_MODELS` ထဲတွင် image ကို ကိုင်တွယ်နိုင်သော model အနည်းဆုံး တစ်ခု (Claude/Gemini/OpenAI vision-capable variants စသည်) ကို ထည့်သွင်းပါ။ image probe ကို စမ်းသပ်ရန်။
 
 ### Aggregators / အစားထိုး gateway များ
 
@@ -297,16 +290,18 @@ Live မက်ထရစ်စ်တွင် ထည့်သွင်းနိ�
 - Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - `models.providers` မှတဆင့် (custom endpoints): `minimax` (cloud/API) နှင့် OpenAI/Anthropic-compatible proxy မည်သည့်အရာမဆို (LM Studio, vLLM, LiteLLM စသည်)
 
-အကြံပြုချက်: docs တွင် “မော်ဒယ်အားလုံး” ကို hardcode မလုပ်ပါနှင့်။ အာဏာရှိသော စာရင်းမှာ ကိုယ့်စက်ပေါ်တွင် `discoverModels(...)` က ပြန်ပေးသည့်အရာ + ရနိုင်သော key များ ဖြစ်သည်။
+အကြံပြုချက်: docs ထဲတွင် “all models” ကို hardcode မလုပ်ပါနှင့်။ အာဏာရှိသော စာရင်းမှာ သင့်စက်ပေါ်တွင် `discoverModels(...)` ပြန်လာသည့်အရာ + ရရှိနိုင်သော key များ ဖြစ်ပါသည်။
 
 ## Credentials (မည်သည့်အခါမှ commit မလုပ်ပါ)
 
-Live စမ်းသပ်မှုများသည် CLI နှင့် တူညီသောနည်းလမ်းဖြင့် credential များကို ရှာဖွေသည်။ လက်တွေ့ အကျိုးသက်ရောက်မှုများ—
+Live tests တွေက CLI လိုပဲ credentials ကို ရှာဖွေ တွေ့ရှိပါတယ်။ လက်တွေ့ဆိုင်ရာ အကျိုးသက်ရောက်မှုများ:
 
 - CLI အလုပ်လုပ်ပါက live စမ်းသပ်မှုများလည်း တူညီသော key များကို ရှာဖွေတွေ့ရှိသင့်သည်။
+
 - Live စမ်းသပ်မှုတစ်ခုက “no creds” ဟု ဆိုပါက `openclaw models list` / မော်ဒယ်ရွေးချယ်မှုကို debug လုပ်သည့် နည်းတူ debug လုပ်ပါ။
 
 - Profile store: `~/.openclaw/credentials/` (အကြံပြု; စမ်းသပ်မှုများတွင် “profile keys” ဟု ဆိုသည်မှာ ဤအရာ)
+
 - Config: `~/.openclaw/openclaw.json` (သို့) `OPENCLAW_CONFIG_PATH`)
 
 Env key များကို ယုံကြည်အသုံးပြုလိုပါက (ဥပမာ `~/.profile` တွင် export လုပ်ထားခြင်း) `source ~/.profile` ပြုလုပ်ပြီးနောက် ဒေသတွင်း စမ်းသပ်မှုများကို လည်ပတ်ပါ သို့မဟုတ် အောက်ပါ Docker runners များကို အသုံးပြုပါ (၎င်းတို့သည် `~/.profile` ကို container ထဲသို့ mount လုပ်နိုင်သည်)။
@@ -314,7 +309,7 @@ Env key များကို ယုံကြည်အသုံးပြုလ�
 ## Deepgram live (အသံမှ စာသားပြန်ရေး)
 
 - စမ်းသပ်မှု: `src/media-understanding/providers/deepgram/audio.live.test.ts`
-- Enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
+- ဖွင့်ရန်: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
 
 ## Docker runners (ရွေးချယ်နိုင်သော “Linux တွင် အလုပ်လုပ်ကြောင်း” စစ်ဆေးမှုများ)
 

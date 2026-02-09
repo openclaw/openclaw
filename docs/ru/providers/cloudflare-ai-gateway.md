@@ -4,13 +4,6 @@ summary: "Настройка Cloudflare AI Gateway (аутентификация
 read_when:
   - Вы хотите использовать Cloudflare AI Gateway с OpenClaw
   - Вам нужен ID аккаунта, ID Gateway или переменная окружения с ключом API
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:48Z
 ---
 
 # Cloudflare AI Gateway

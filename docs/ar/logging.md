@@ -5,13 +5,6 @@ read_when:
   - تريد تهيئة مستويات أو تنسيقات السجل
   - تقوم باستكشاف الأخطاء وإصلاحها وتحتاج إلى العثور على السجلات بسرعة
 title: "التسجيل"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:51Z
 ---
 
 # التسجيل
@@ -214,7 +207,7 @@ openclaw channels logs --channel whatsapp
 }
 ```
 
-تجاوز عبر البيئة (لمرة واحدة):
+تجاوز الإنف (لمرة واحدة):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

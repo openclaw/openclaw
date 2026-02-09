@@ -1,19 +1,12 @@
 ---
 summary: "Clawnet 重構：統一網路協定、角色、驗證、核准與身分識別"
 read_when:
-  - 規劃節點與操作端用戶端的統一網路協定
-  - 重新設計跨裝置的核准、配對、TLS 與在線狀態
+  - Planning a unified network protocol for nodes + operator clients
+  - 重新設計跨裝置的核准流程、配對、TLS 與線上狀態
 title: "Clawnet 重構"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:39Z
 ---
 
-# Clawnet 重構（協定 + 驗證統一）
+# Clawnet 重構（通訊協定 + 驗證統一）
 
 ## 嗨
 
@@ -21,18 +14,18 @@ x-i18n:
 
 ## 目的
 
-單一、嚴謹的文件，涵蓋：
+Single, rigorous document for:
 
 - 目前狀態：協定、流程、信任邊界。
 - 痛點：核准、多跳路由、UI 重複。
-- 提議的新狀態：單一協定、具範圍的角色、統一驗證／配對、TLS 釘選。
+- 提出的新狀態：單一協定、具範圍的角色、統一的驗證／配對、TLS 釘選。
 - 身分模型：穩定 ID + 可愛的 slug。
 - 遷移計畫、風險、未解問題。
 
 ## 目標（來自討論）
 
 - 所有用戶端使用單一協定（mac app、CLI、iOS、Android、headless node）。
-- 每個網路參與者皆完成驗證與配對。
+- Every network participant authenticated + paired.
 - 角色清楚：nodes 與 operators。
 - 中央化的核准，導向使用者所在的位置。
 - 所有遠端流量皆使用 TLS 加密 + 可選釘選。
@@ -43,18 +36,18 @@ x-i18n:
 
 - 移除能力分離（仍需最小權限）。
 - 在沒有範圍檢查的情況下暴露完整 Gateway 閘道器 控制平面。
-- 讓驗證依賴人類標籤（slug 仍非安全要素）。
+- 讓驗證依賴人工標籤（slug 仍非安全要素）。
 
 ---
 
 # 目前狀態（現況）
 
-## 兩種協定
+## 兩種通訊協定
 
 ### 1）Gateway WebSocket（控制平面）
 
 - 完整 API 範圍：設定、頻道、模型、工作階段、代理程式執行、日誌、節點等。
-- 預設綁定：loopback。遠端存取透過 SSH／Tailscale。
+- 預設綁定：loopback。 透過 SSH／Tailscale 進行遠端存取。
 - 驗證：透過 `connect` 的 token／密碼。
 - 無 TLS 釘選（仰賴 loopback／通道）。
 - 程式碼：
@@ -64,7 +57,7 @@ x-i18n:
 
 ### 2）Bridge（節點傳輸）
 
-- 精簡的允許清單介面，節點身分與配對。
+- 縮小允許清單範圍，節點身分 + 配對。
 - TCP 上的 JSONL；可選 TLS + 憑證指紋釘選。
 - TLS 在探索 TXT 中宣告指紋。
 - 程式碼：
@@ -73,7 +66,7 @@ x-i18n:
   - `src/node-host/bridge-client.ts`
   - `docs/gateway/bridge-protocol.md`
 
-## 目前的控制平面用戶端
+## 目前的控制平面客戶端
 
 - CLI → Gateway WS，透過 `callGateway`（`src/gateway/call.ts`）。
 - macOS app UI → Gateway WS（`GatewayConnection`）。
@@ -85,7 +78,7 @@ x-i18n:
 
 - macOS app 的 node 模式連線至 Gateway bridge（`MacNodeBridgeSession`）。
 - iOS／Android app 連線至 Gateway bridge。
-- 配對 + 每節點 token 儲存在 Gateway。
+- Pairing + per‑node token stored on gateway.
 
 ## 目前的核准流程（執行）
 
@@ -94,21 +87,21 @@ x-i18n:
 - 節點執行階段決定是否核准。
 - UI 提示由 mac app 顯示（當 node == mac app）。
 - 節點回傳 `invoke-res` 給 Gateway。
-- 多跳，UI 與節點主機綁定。
+- 1. 多跳，UI 綁定到節點主機。
 
 ## 目前的在線狀態 + 身分
 
 - WS 用戶端的 Gateway 在線狀態項目。
-- 來自 bridge 的節點在線狀態項目。
+- 來自橋接器的節點在線狀態項目。
 - mac app 可能為同一台機器顯示兩個項目（UI + node）。
-- 節點身分儲存在配對儲存區；UI 身分另行儲存。
+- 4. 節點身分儲存在配對存儲中；UI 身分獨立。
 
 ---
 
 # 問題／痛點
 
 - 需維護兩套協定堆疊（WS + Bridge）。
-- 遠端節點的核准：提示出現在節點主機，而非使用者所在位置。
+- 遠端節點上的核准：提示會出現在節點主機上，而非使用者所在位置。
 - TLS 釘選僅存在於 bridge；WS 依賴 SSH／Tailscale。
 - 身分重複：同一台機器顯示為多個實例。
 - 角色不明確：UI + node + CLI 的能力界線不清。
@@ -117,9 +110,9 @@ x-i18n:
 
 # 提議的新狀態（Clawnet）
 
-## 單一協定，兩種角色
+## 6. 一種協定，兩種角色
 
-單一 WS 協定，具角色 + 範圍。
+單一 WS 通訊協定，具備角色 + 範圍。
 
 - **角色：node**（能力宿主）
 - **角色：operator**（控制平面）
@@ -145,13 +138,13 @@ x-i18n:
 
 ### 關鍵規則
 
-角色是「每個連線」，不是「每個裝置」。同一裝置可分別開啟兩種角色的連線。
+角色是每個連線的屬性，而非每個裝置。 9. 一個裝置可以分別開啟兩種角色。
 
 ---
 
 # 統一的驗證 + 配對
 
-## 用戶端身分
+## 10. 用戶端身分
 
 每個用戶端提供：
 
@@ -159,41 +152,41 @@ x-i18n:
 - `displayName`（人類可讀名稱）。
 - `role` + `scope` + `caps` + `commands`。
 
-## 配對流程（統一）
+## 11. 配對流程（統一）
 
 - 用戶端以未驗證狀態連線。
 - Gateway 為該 `deviceId` 建立 **配對請求**。
 - Operator 收到提示；核准／拒絕。
-- Gateway 發放與下列項目綁定的憑證：
+- 閘道發行與下列項目綁定的憑證：
   - 裝置公開金鑰
   - 角色
-  - 範圍
+  - 範圍（scope）
   - 能力／指令
-- 用戶端保存 token，重新以已驗證狀態連線。
+- 用戶端保存權杖，並以驗證狀態重新連線。
 
 ## 裝置綁定的驗證（避免 bearer token 重播）
 
-首選：裝置金鑰對。
+建議做法：裝置金鑰對。
 
-- 裝置僅生成一次金鑰對。
+- 裝置只需產生一次金鑰對。
 - `deviceId = fingerprint(publicKey)`。
 - Gateway 傳送 nonce；裝置簽署；Gateway 驗證。
-- Token 發放給公開金鑰（持有證明），而非字串。
+- 18. 權杖是發行給公鑰的（持有證明），而不是字串。
 
 替代方案：
 
 - mTLS（用戶端憑證）：最強，但營運複雜度較高。
-- 僅短效 bearer token 作為暫時階段（及早輪替 + 撤銷）。
+- 僅將短期存活的 Bearer 權杖作為暫時階段（輪替 + 提前撤銷）。
 
 ## 靜默核准（SSH 啟發式）
 
-需精確定義以避免弱點。偏好其一：
+20. 精確定義以避免形成弱點。 1. 優先選擇一種：
 
 - **僅限本機**：用戶端經由 loopback／Unix socket 連線時自動配對。
 - **透過 SSH 的挑戰**：Gateway 發出 nonce；用戶端透過取得它來證明 SSH。
 - **實體在場視窗**：在 Gateway 主機 UI 完成一次本機核准後，允許短時間（例如 10 分鐘）自動配對。
 
-所有自動核准皆需記錄與留存。
+22. 始終記錄並保存自動核准。
 
 ---
 
@@ -209,14 +202,14 @@ x-i18n:
 ## 套用至 WS
 
 - WS 伺服器以相同的憑證／金鑰 + 指紋支援 TLS。
-- WS 用戶端可選擇釘選指紋。
+- 3. WS 用戶端可釘選指紋（選用）。
 - 探索為所有端點宣告 TLS + 指紋。
   - 探索僅作為定位提示；絕非信任錨點。
 
 ## 為什麼
 
 - 降低對 SSH／Tailscale 的機密性依賴。
-- 讓遠端行動連線預設即安全。
+- 4. 預設讓遠端行動連線是安全的。
 
 ---
 
@@ -224,11 +217,11 @@ x-i18n:
 
 ## 目前
 
-核准發生在節點主機（mac app 節點執行階段）。提示出現在節點執行的位置。
+5. 核准在節點主機上進行（mac 應用節點執行階段）。 26. 提示出現在節點執行的位置。
 
 ## 提議
 
-核准由 **Gateway 託管**，UI 交付給 operator 用戶端。
+27. 核准由 **gateway** 託管，UI 交付給操作員用戶端。
 
 ### 新流程
 
@@ -236,21 +229,21 @@ x-i18n:
 2. Gateway 建立核准紀錄：`approval.requested`。
 3. Operator UI 顯示提示。
 4. 核准決策送回 Gateway：`approval.resolve`。
-5. 若核准，Gateway 呼叫節點指令。
+5. 28. 若獲核准，閘道會呼叫節點命令。
 6. 節點執行並回傳 `invoke-res`。
 
 ### 核准語義（強化）
 
-- 廣播至所有 operator；僅主動 UI 顯示彈窗（其餘顯示 toast）。
-- 先回覆者生效；Gateway 將後續回覆拒絕為已結案。
-- 預設逾時：N 秒後拒絕（例如 60 秒），並記錄原因。
+- 9. 廣播給所有操作員；只有作用中的 UI 會顯示模態視窗（其他顯示提示）。
+- 30. 以第一次結果為準；閘道會拒絕後續的解決，並標示為已處理。
+- 31. 預設逾時：N 秒後拒絕（例如 60 秒），並記錄原因。
 - 需具 `operator.approvals` scope 才能解決。
 
 ## 好處
 
 - 提示出現在使用者所在位置（mac／手機）。
-- 遠端節點的核准一致。
-- 節點執行階段可保持 headless；不依賴 UI。
+- 32. 為遠端節點提供一致的核准機制。
+- 33. 節點執行階段保持無頭；不依賴 UI。
 
 ---
 
@@ -283,17 +276,17 @@ x-i18n:
 
 ## 穩定 ID
 
-驗證必需；永不變更。
-首選：
+34. 為驗證所必需；且永不變更。
+    建議：
 
-- 金鑰對指紋（公開金鑰雜湊）。
+- 35. 金鑰對指紋（公鑰雜湊）。
 
 ## 可愛的 slug（龍蝦主題）
 
-僅供人類辨識。
+36. 僅為人類可讀標籤。
 
 - 範例：`scarlet-claw`、`saltwave`、`mantis-pinch`。
-- 儲存在 Gateway 登錄中，可編輯。
+- 17. 儲存在 Gateway 登錄中，可編輯。
 - 碰撞處理：`-2`、`-3`。
 
 ## UI 分組
@@ -301,7 +294,7 @@ x-i18n:
 跨角色相同的 `deviceId` → 單一「Instance」列：
 
 - 徽章：`operator`、`node`。
-- 顯示能力 + 最後出現時間。
+- 18. 顯示能力與最後一次出現時間。
 
 ---
 
@@ -309,30 +302,30 @@ x-i18n:
 
 ## 第 0 階段：文件 + 對齊
 
-- 發布本文件。
-- 盤點所有協定呼叫 + 核准流程。
+- 39. 發布此文件。
+- 20. 盤點所有通訊協定呼叫與核准流程。
 
 ## 第 1 階段：為 WS 新增角色／範圍
 
 - 擴充 `connect` 參數，加入 `role`、`scope`、`deviceId`。
-- 為 node 角色加入允許清單控管。
+- 21. 為節點角色新增允許清單（allowlist）門檻。
 
 ## 第 2 階段：Bridge 相容
 
 - 保留 bridge 執行。
 - 平行新增 WS node 支援。
-- 以設定旗標控管功能。
+- 42. 以設定旗標管控功能。
 
 ## 第 3 階段：中央化核准
 
-- 在 WS 中新增核准請求 + 解決事件。
+- 43. 在 WS 中新增核准請求 + 解決事件。
 - 更新 mac app UI 以顯示提示並回應。
-- 節點執行階段停止顯示 UI 提示。
+- 44. 節點執行階段停止提示 UI。
 
 ## 第 4 階段：TLS 統一
 
 - 使用 bridge TLS 執行階段為 WS 新增 TLS 設定。
-- 為用戶端加入釘選。
+- 45. 為用戶端新增釘選。
 
 ## 第 5 階段：淘汰 bridge
 
@@ -341,20 +334,20 @@ x-i18n:
 
 ## 第 6 階段：裝置綁定驗證
 
-- 要求所有非本機連線使用金鑰式身分。
+- 26. 所有非本機連線皆要求以金鑰為基礎的身分識別。
 - 新增撤銷 + 輪替 UI。
 
 ---
 
 # 安全性注意事項
 
-- 角色／允許清單於 Gateway 邊界強制執行。
+- 47. 在閘道邊界強制角色/允許清單。
 - 無 operator scope 的用戶端不得取得「完整」API。
-- **所有** 連線皆需配對。
+- 48. 所有連線都必須配對。
 - TLS + 釘選降低行動端的 MITM 風險。
 - SSH 靜默核准僅為便利；仍需記錄 + 可撤銷。
 - 探索永遠不是信任錨點。
-- 能力宣告需由平台／類型的伺服器允許清單驗證。
+- 49. 能力宣告會依平台/類型由伺服器允許清單進行驗證。
 
 # 串流 + 大型負載（節點媒體）
 
@@ -374,15 +367,15 @@ WS 控制平面適合小型訊息，但節點也會處理：
 
 # 能力 + 指令政策
 
-- 節點回報的能力／指令視為 **宣告**。
+- 30. 節點回報的能力／指令一律視為 **宣告**。
 - Gateway 依平台執行允許清單。
 - 任何新指令需 operator 核准或明確的允許清單變更。
-- 以時間戳稽核變更。
+- Audit changes with timestamps.
 
 # 稽核 + 速率限制
 
-- 記錄：配對請求、核准／拒絕、token 發放／輪替／撤銷。
-- 對配對垃圾訊與核准提示進行速率限制。
+- Log: pairing requests, approvals/denials, token issuance/rotation/revocation.
+- Rate‑limit pairing spam and approval prompts.
 
 # 協定衛生
 
@@ -392,7 +385,7 @@ WS 控制平面適合小型訊息，但節點也會處理：
 
 ---
 
-# 未解問題
+# 開放問題
 
 1. 同一裝置同時執行兩種角色：token 模型
    - 建議每角色獨立 token（node vs operator）。
@@ -403,16 +396,16 @@ WS 控制平面適合小型訊息，但節點也會處理：
    - 後續再考慮按功能細分。
 
 3. Token 輪替 + 撤銷 UX
-   - 角色變更時自動輪替。
+   - Auto‑rotate on role change.
    - 依 deviceId + 角色撤銷的 UI。
 
 4. 探索
    - 擴充現有 Bonjour TXT，加入 WS TLS 指紋 + 角色提示。
-   - 僅視為定位提示。
+   - Treat as locator hints only.
 
 5. 跨網路核准
-   - 廣播至所有 operator 用戶端；主動 UI 顯示彈窗。
-   - 先回覆者生效；Gateway 確保原子性。
+   - Broadcast to all operator clients; active UI shows modal.
+   - First response wins; gateway enforces atomicity.
 
 ---
 

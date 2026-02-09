@@ -4,13 +4,6 @@ summary: "Cloudflare AI Gateway-installatie (authenticatie + modelselectie)"
 read_when:
   - Je wilt Cloudflare AI Gateway gebruiken met OpenClaw
   - Je hebt de account-ID, gateway-ID of API-sleutel-omgevingsvariabele nodig
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # Cloudflare AI Gateway

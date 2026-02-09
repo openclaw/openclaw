@@ -5,13 +5,6 @@ read_when:
   - Je wilt een lokale API-server die de Claude Code CLI omwikkelt
   - Je wilt geld besparen door een abonnement te gebruiken in plaats van API-sleutels
 title: "Claude Max API-proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # Claude Max API-proxy
@@ -20,10 +13,10 @@ x-i18n:
 
 ## Waarom dit gebruiken?
 
-| Aanpak                | Kosten                                                   | Het meest geschikt voor                              |
-| --------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
+| Aanpak                | Kosten                                                                                      | Het meest geschikt voor                              |
+| --------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | Anthropic API         | Betalen per token (~$15/M input, $75/M output voor Opus) | Productie-apps, hoog volume                          |
-| Claude Max-abonnement | $200/maand vast                                          | Persoonlijk gebruik, ontwikkeling, onbeperkt gebruik |
+| Claude Max-abonnement | $200/maand vast                                                                             | Persoonlijk gebruik, ontwikkeling, onbeperkt gebruik |
 
 Als je een Claude Max-abonnement hebt en dit wilt gebruiken met OpenAI-compatibele tools, kan deze proxy je aanzienlijk geld besparen.
 
@@ -97,11 +90,11 @@ Je kunt OpenClaw naar de proxy laten wijzen als een aangepaste OpenAI-compatibel
 
 ## Beschikbare modellen
 
-| Model-ID          | Komt overeen met |
-| ----------------- | ---------------- |
-| `claude-opus-4`   | Claude Opus 4    |
-| `claude-sonnet-4` | Claude Sonnet 4  |
-| `claude-haiku-4`  | Claude Haiku 4   |
+| Model-ID          | Kaarten aan     |
+| ----------------- | --------------- |
+| `claude-opus-4`   | Claude Opus 4   |
+| `claude-sonnet-4` | Claude Sonnet 4 |
+| `claude-haiku-4`  | Claude Haiku 4  |
 
 ## Automatisch starten op macOS
 

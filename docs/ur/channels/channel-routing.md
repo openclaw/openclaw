@@ -3,19 +3,13 @@ summary: "ہر چینل (WhatsApp، Telegram، Discord، Slack) کے لیے رو
 read_when:
   - چینل روٹنگ یا ان باکس کے رویّے میں تبدیلی کرتے وقت
 title: "چینل روٹنگ"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:56Z
 ---
 
 # چینلز اور روٹنگ
 
-OpenClaw جوابات **اسی چینل پر واپس بھیجتا ہے جہاں سے پیغام آیا ہو**۔  
-ماڈل چینل کا انتخاب نہیں کرتا؛ روٹنگ متعین ہوتی ہے اور ہوسٹ کنفیگریشن کے ذریعے کنٹرول کی جاتی ہے۔
+OpenClaw routes replies **back to the channel where a message came from**. The
+model does not choose a channel; routing is deterministic and controlled by the
+host configuration.
 
 ## اہم اصطلاحات
 
@@ -106,8 +100,9 @@ OpenClaw جوابات **اسی چینل پر واپس بھیجتا ہے جہاں
 
 ## WebChat کا رویّہ
 
-WebChat **منتخب ایجنٹ** کے ساتھ منسلک ہوتا ہے اور بطورِ طے شدہ ایجنٹ کے مرکزی سیشن پر ہوتا ہے۔  
-اسی وجہ سے WebChat آپ کو ایک ہی جگہ اس ایجنٹ کے لیے کراس‑چینل سیاق دیکھنے دیتا ہے۔
+WebChat attaches to the **selected agent** and defaults to the agent’s main
+session. Because of this, WebChat lets you see cross‑channel context for that
+agent in one place.
 
 ## جواب کا سیاق
 

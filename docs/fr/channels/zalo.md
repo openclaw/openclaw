@@ -3,13 +3,6 @@ summary: "Statut de prise en charge du bot Zalo, capacites et configuration"
 read_when:
   - Travail sur les fonctionnalites Zalo ou les webhooks
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: 0311d932349f9641
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:56Z
 ---
 
 # Zalo (Bot API)
@@ -31,10 +24,10 @@ Zalo est fourni sous forme de plugin et n’est pas inclus dans l’installation
    - Depuis npm (si publie) : `openclaw plugins install @openclaw/zalo`
    - Ou choisir **Zalo** lors de la prise en main et confirmer l’invite d’installation
 2. Definir le jeton :
-   - Variable d'environnement : `ZALO_BOT_TOKEN=...`
+   - Env: `ZALO_BOT_TOKEN=...`
    - Ou configuration : `channels.zalo.botToken: "..."`.
 3. Redemarrer la Gateway (passerelle) (ou terminer la prise en main).
-4. L’acces aux Messages prives est en mode appairage par defaut ; approuvez le code d’appairage au premier contact.
+4. L'accès DM est appairage par défaut; approuve le code d'appairage au premier contact.
 
 Configuration minimale :
 
@@ -62,7 +55,7 @@ C’est un bon choix pour le support ou les notifications lorsque vous souhaitez
 
 ## Configuration (chemin rapide)
 
-### 1) Creer un jeton de bot (Zalo Bot Platform)
+### 1. Creer un jeton de bot (Zalo Bot Platform)
 
 1. Accedez a **https://bot.zaloplatforms.com** et connectez-vous.
 2. Creez un nouveau bot et configurez ses parametres.
@@ -91,7 +84,7 @@ Prise en charge multi-comptes : utilisez `channels.zalo.accounts` avec des jeto
 3. Redemarrez la Gateway (passerelle). Zalo demarre lorsqu’un jeton est resolu (env ou config).
 4. L’acces aux Messages prives est en mode appairage par defaut. Approuvez le code lorsque le bot est contacte pour la premiere fois.
 
-## Fonctionnement (comportement)
+## Comment ça marche (comportement)
 
 - Les messages entrants sont normalises dans l’enveloppe de canal partagee avec des espaces reserves pour les medias.
 - Les reponses sont toujours routees vers la meme conversation Zalo.
@@ -103,9 +96,9 @@ Prise en charge multi-comptes : utilisez `channels.zalo.accounts` avec des jeto
 - Les telechargements/envois de medias sont plafonnes par `channels.zalo.mediaMaxMb` (valeur par defaut : 5).
 - Le streaming est bloque par defaut, la limite de 2000 caracteres rendant le streaming moins utile.
 
-## Controle d’acces (Messages prives)
+## Contrôle d'accès (DMs)
 
-### Acces aux Messages prives
+### Accès DM
 
 - Par defaut : `channels.zalo.dmPolicy = "pairing"`. Les expéditeurs inconnus recoivent un code d’appairage ; les messages sont ignores jusqu’a approbation (les codes expirent apres 1 heure).
 - Approuver via :
@@ -134,23 +127,23 @@ Prise en charge multi-comptes : utilisez `channels.zalo.accounts` avec des jeto
 
 ## Capacites
 
-| Fonctionnalite    | Statut                             |
-| ----------------- | ---------------------------------- |
-| Messages prives   | ✅ Pris en charge                  |
-| Groupes           | ❌ Bientot disponible (docs Zalo)  |
-| Medias (images)   | ✅ Pris en charge                  |
-| Reactions         | ❌ Non pris en charge              |
-| Fils              | ❌ Non pris en charge              |
-| Sondages          | ❌ Non pris en charge              |
-| Commandes natives | ❌ Non pris en charge              |
-| Streaming         | ⚠️ Bloque (limite 2000 caracteres) |
+| Fonctionnalite                     | Statut                                                |
+| ---------------------------------- | ----------------------------------------------------- |
+| Messages directs                   | ✅ Pris en charge                                      |
+| Groupes                            | ❌ Bientot disponible (docs Zalo)   |
+| Medias (images) | ✅ Pris en charge                                      |
+| Reactions                          | ❌ Non pris en charge                                  |
+| Fil de discussion                  | ❌ Non pris en charge                                  |
+| Sondages                           | ❌ Non pris en charge                                  |
+| Commandes natives                  | ❌ Non pris en charge                                  |
+| Streaming                          | ⚠️ Bloque (limite 2000 caracteres) |
 
 ## Cibles de livraison (CLI/cron)
 
 - Utilisez un identifiant de conversation comme cible.
 - Exemple : `openclaw message send --channel zalo --target 123456789 --message "hi"`.
 
-## Depannage
+## Problemes courants
 
 **Le bot ne repond pas :**
 

@@ -3,13 +3,6 @@ summary: "CLI リファレンス：`openclaw agents`（一覧／追加／削除�
 read_when:
   - 複数の分離されたエージェント（ワークスペース＋ルーティング＋認証）が必要な場合
 title: "エージェント"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:56Z
 ---
 
 # `openclaw agents`

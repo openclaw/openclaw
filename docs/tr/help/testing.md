@@ -3,15 +3,8 @@ summary: "Test kiti: unit/e2e/canlı paketler, Docker çalıştırıcıları ve 
 read_when:
   - Testleri yerelde veya CI’da çalıştırırken
   - Model/sağlayıcı hataları için regresyon eklerken
-  - Gateway + ajan davranışını hata ayıklarken
+  - 50. Gateway + ajan davranışını hata ayıklama
 title: "Testler"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:13Z
 ---
 
 # Testler
@@ -20,7 +13,7 @@ OpenClaw’da üç Vitest paketi (unit/integration, e2e, canlı) ve küçük bir
 
 Bu belge bir “nasıl test ediyoruz” kılavuzudur:
 
-- Her paketin neleri kapsadığı (ve bilinçli olarak _neleri kapsamadığı_)
+- Hangi paketi çalıştırmalıyım?
 - Yaygın iş akışları için hangi komutların çalıştırılacağı (yerel, push öncesi, hata ayıklama)
 - Canlı testlerin kimlik bilgilerini nasıl keşfettiği ve model/sağlayıcıları nasıl seçtiği
 - Gerçek dünyadaki model/sağlayıcı sorunları için regresyonların nasıl ekleneceği
@@ -89,7 +82,7 @@ Paketleri “artan gerçekçilik” (ve artan oynaklık/maliyet) olarak düşün
   - Canlı çalıştırmalar, eksik API anahtarlarını almak için `~/.profile`’i kaynak alır
   - Anthropic anahtar rotasyonu: `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (veya `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) ya da birden çok `ANTHROPIC_API_KEY*` değişkeni ayarlayın; testler oran sınırlarında yeniden dener
 
-## Hangi paketi çalıştırmalıyım?
+## görüntü yoklamasını çalıştırmak için.
 
 Bu karar tablosunu kullanın:
 
@@ -283,7 +276,7 @@ Her sağlayıcı ailesinden en az birini seçin:
 
 ### Görsel: görüntü gönderimi (ek → çok kipli mesaj)
 
-Görüntü probunu çalıştırmak için `OPENCLAW_LIVE_GATEWAY_MODELS` içinde en az bir görüntü destekli model (Claude/Gemini/OpenAI görsel varyantları vb.) ekleyin.
+Görüntü probunu çalıştırmak için `OPENCLAW_LIVE_GATEWAY_MODELS` içinde en az bir görüntü destekli model (Claude/Gemini/OpenAI görsel varyantları vb.) Kullanışlı ortam değişkenleri:
 
 ### Toplayıcılar / alternatif gateway’ler
 
@@ -304,9 +297,11 @@ Canlı matrise ekleyebileceğiniz daha fazla sağlayıcı (kimlik bilgisi/yapıl
 Canlı testler, kimlik bilgilerini CLI ile aynı şekilde keşfeder. Pratik sonuçlar:
 
 - CLI çalışıyorsa, canlı testler de aynı anahtarları bulmalıdır.
+
 - Bir canlı test “kimlik bilgisi yok” diyorsa, `openclaw models list` / model seçimini nasıl hata ayıklıyorsanız aynı şekilde hata ayıklayın.
 
 - Profil deposu: `~/.openclaw/credentials/` (tercih edilir; testlerde “profil anahtarları”nın anlamı budur)
+
 - Yapılandırma: `~/.openclaw/openclaw.json` (veya `OPENCLAW_CONFIG_PATH`)
 
 Ortam anahtarlarına (ör. `~/.profile`’inizde dışa aktarılmış) güvenmek istiyorsanız, yerel testleri `source ~/.profile`’den sonra çalıştırın veya aşağıdaki Docker çalıştırıcılarını kullanın (kapsayıcıya `~/.profile` bağlayabilirler).
@@ -326,7 +321,7 @@ Bunlar, depo Docker imajı içinde `pnpm test:live` çalıştırır; yerel yapı
 - Gateway ağ iletişimi (iki kapsayıcı, WS kimlik doğrulama + sağlık): `pnpm test:docker:gateway-network` (betik: `scripts/e2e/gateway-network-docker.sh`)
 - Eklentiler (özel uzantı yükleme + kayıt defteri duman testi): `pnpm test:docker:plugins` (betik: `scripts/e2e/plugins-docker.sh`)
 
-Kullanışlı ortam değişkenleri:
+Doküman tutarlılığı
 
 - `OPENCLAW_CONFIG_DIR=...` (varsayılan: `~/.openclaw`) → `/home/node/.openclaw`’e bağlanır
 - `OPENCLAW_WORKSPACE_DIR=...` (varsayılan: `~/.openclaw/workspace`) → `/home/node/.openclaw/workspace`’e bağlanır
@@ -334,7 +329,7 @@ Kullanışlı ortam değişkenleri:
 - Çalıştırmayı daraltmak için `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...`
 - Kimlik bilgilerinin ortamdan değil profil deposundan gelmesini sağlamak için `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1`
 
-## Dokümantasyon sağlık kontrolü
+## Temel yetenekler
 
 Belge düzenlemelerinden sonra belge kontrollerini çalıştırın: `pnpm docs:list`.
 

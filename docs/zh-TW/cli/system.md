@@ -3,15 +3,8 @@ summary: "「openclaw system」的 CLI 參考（系統事件、心跳、存在�
 read_when:
   - 你想在不建立 cron 工作的情況下佇列系統事件
   - 你需要啟用或停用心跳
-  - 你想檢視系統存在狀態項目
+  - 31. 你想要檢視系統存在性項目
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:26Z
 ---
 
 # `openclaw system`
@@ -30,9 +23,10 @@ openclaw system presence
 
 ## `system event`
 
-在 **main** 工作階段上佇列一個系統事件。下一次心跳會將其注入
-為提示中的一行 `System:`。使用 `--mode now` 立即觸發心跳；
-`next-heartbeat` 則等待下一個排程的節點。
+32. 在**主要**工作階段上排入一個系統事件。 33. 下一次心跳將會把
+    它以 `System:` 行的形式注入到提示中。 在 **main** 工作階段上佇列一個系統事件。下一次心跳會將其注入
+    為提示中的一行 `System:`。使用 `--mode now` 立即觸發心跳；
+    `next-heartbeat` 則等待下一個排程的節點。
 
 Flags:
 

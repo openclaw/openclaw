@@ -5,13 +5,6 @@ read_when:
   - ARM デバイス上で OpenClaw を実行する場合
   - 安価で常時稼働する個人向け AI を構築する場合
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:53Z
 ---
 
 # Raspberry Pi 上の OpenClaw
@@ -20,7 +13,7 @@ x-i18n:
 
 Raspberry Pi 上で、永続的かつ常時稼働の OpenClaw Gateway（ゲートウェイ）を **約 $35〜80** の初期費用（毎月の料金なし）で実行します。
 
-以下の用途に最適です。
+パーフェクト:
 
 - 24/7 稼働の個人向け AI アシスタント
 - ホームオートメーションのハブ
@@ -28,19 +21,19 @@ Raspberry Pi 上で、永続的かつ常時稼働の OpenClaw Gateway（ゲー�
 
 ## ハードウェア要件
 
-| Pi モデル       | RAM     | 動作可否  | 注記                           |
-| --------------- | ------- | --------- | ------------------------------ |
-| **Pi 5**        | 4GB/8GB | ✅ 最適   | 最速、推奨                     |
+| Pi モデル          | RAM     | 動作可否   | 注記              |
+| --------------- | ------- | ------ | --------------- |
+| **Pi 5**        | 4GB/8GB | ✅ 最適   | 最速、推奨           |
 | **Pi 4**        | 4GB     | ✅ 良好   | 多くのユーザーにとっての最適解 |
-| **Pi 4**        | 2GB     | ✅ 可     | 動作可、スワップ追加を推奨     |
-| **Pi 4**        | 1GB     | ⚠️ 厳しい | スワップ併用で可能、最小構成   |
-| **Pi 3B+**      | 1GB     | ⚠️ 遅い   | 動作するがもたつく             |
-| **Pi Zero 2 W** | 512MB   | ❌        | 非推奨                         |
+| **Pi 4**        | 2GB     | ✅ 可    | 動作可、スワップ追加を推奨   |
+| **Pi 4**        | 1GB     | ⚠️ 厳しい | スワップ併用で可能、最小構成  |
+| **Pi 3B+**      | 1GB     | ⚠️ 遅い  | 動作するがもたつく       |
+| **Pi Zero 2 W** | 512MB   | ❌      | 非推奨             |
 
 **最小要件:** RAM 1GB、1 コア、ディスク 500MB  
 **推奨:** RAM 2GB 以上、64-bit OS、16GB 以上の SD カード（または USB SSD）
 
-## 用意するもの
+## 必要なもの
 
 - Raspberry Pi 4 または 5（2GB 以上推奨）
 - MicroSD カード（16GB 以上）または USB SSD（高性能）
@@ -48,7 +41,7 @@ Raspberry Pi 上で、永続的かつ常時稼働の OpenClaw Gateway（ゲー�
 - ネットワーク接続（Ethernet または WiFi）
 - 約 30 分
 
-## 1) OS を書き込む
+## 1. OS を書き込む
 
 ヘッドレスサーバー用のため、**Raspberry Pi OS Lite (64-bit)** を使用します（デスクトップ不要）。
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) システム設定
+## 3. システム設定
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Node.js 22（ARM64）をインストール
+## 4. Node.js 22（ARM64）をインストール
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) スワップを追加（2GB 以下では重要）
+## 5. スワップを追加（2GB 以下では重要）
 
 スワップはメモリ不足によるクラッシュを防ぎます。
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) OpenClaw をインストール
+## 6. OpenClaw をインストール
 
 ### オプション A: 標準インストール（推奨）
 
@@ -134,7 +127,7 @@ npm link
 
 ハッカブルインストールでは、ログやコードに直接アクセスできます。ARM 固有の問題をデバッグする際に便利です。
 
-## 7) オンボーディングを実行
+## 7. オンボーディングを実行
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) ダッシュボードにアクセス
+## 9. ダッシュボードにアクセス
 
 Pi はヘッドレスのため、SSH トンネルを使用します。
 
@@ -190,7 +183,7 @@ sudo systemctl restart openclaw
 
 ### USB SSD を使用する（大幅な改善）
 
-SD カードは低速で消耗しやすいです。USB SSD を使うとパフォーマンスが大きく向上します。
+SD カードは低速で消耗しやすいです。USB SSD を使うとパフォーマンスが大きく向上します。 USB SSDはパフォーマンスを劇的に向上させます:
 
 ```bash
 # Check if booting from USB
@@ -230,19 +223,19 @@ htop
 
 OpenClaw の多くの機能は ARM64 で動作しますが、外部バイナリの一部は ARM ビルドが必要です。
 
-| ツール             | ARM64 状況 | 注記                                |
-| ------------------ | ---------- | ----------------------------------- |
-| Node.js            | ✅         | 問題なく動作                        |
-| WhatsApp (Baileys) | ✅         | Pure JS、問題なし                   |
-| Telegram           | ✅         | Pure JS、問題なし                   |
-| gog (Gmail CLI)    | ⚠️         | ARM リリースの有無を確認            |
-| Chromium (browser) | ✅         | `sudo apt install chromium-browser` |
+| ツール                                   | ARM64 状況 | 注記                                  |
+| ------------------------------------- | -------- | ----------------------------------- |
+| Node.js               | ✅        | 問題なく動作                              |
+| WhatsApp (Baileys) | ✅        | Pure JS、問題なし                        |
+| Telegram                              | ✅        | Pure JS、問題なし                        |
+| gog (Gmail CLI)    | ⚠️       | ARM リリースの有無を確認                      |
+| Chromium (browser) | ✅        | `sudo apt install chromium-browser` |
 
-Skill が失敗する場合は、そのバイナリに ARM ビルドがあるか確認してください。多くの Go / Rust ツールは対応していますが、対応していないものもあります。
+Skill が失敗する場合は、そのバイナリに ARM ビルドがあるか確認してください。多くの Go / Rust ツールは対応していますが、対応していないものもあります。 Go/Rust ツールの多くはそうでないものもあります。
 
 ### 32-bit と 64-bit
 
-**必ず 64-bit OS を使用してください。** Node.js や多くの最新ツールで必須です。次で確認できます。
+**必ず 64-bit OS を使用してください。** Node.js や多くの最新ツールで必須です。次で確認できます。 以下を確認:
 
 ```bash
 uname -m
@@ -268,7 +261,7 @@ Pi は Gateway のみ（モデルはクラウドで実行）として使うた�
 }
 ```
 
-**Pi 上でローカル LLM を実行しようとしないでください。** 小規模なモデルでも遅すぎます。Claude / GPT に重い処理を任せましょう。
+**Pi 上でローカル LLM を実行しようとしないでください。** 小規模なモデルでも遅すぎます。Claude / GPT に重い処理を任せましょう。 Claude/GPTに重い持ち上げをさせてください。
 
 ---
 
@@ -343,20 +336,20 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## コスト比較
 
-| 構成           | 初期費用 | 月額費用 | 注記                 |
-| -------------- | -------- | -------- | -------------------- |
-| **Pi 4 (2GB)** | ~$45     | $0       | + 電力 (~$5/年)      |
-| **Pi 4 (4GB)** | ~$55     | $0       | 推奨                 |
-| **Pi 5 (4GB)** | ~$60     | $0       | 最高のパフォーマンス |
-| **Pi 5 (8GB)** | ~$80     | $0       | 過剰だが将来性あり   |
-| DigitalOcean   | $0       | $6/月    | $72/年               |
-| Hetzner        | $0       | €3.79/月 | 約 $50/年            |
+| 構成                                | 一回限りのコスト             | 月額費用                    | 注記                                              |
+| --------------------------------- | -------------------- | ----------------------- | ----------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                      | + 電力 (~$5/年) |
+| **Pi 4 (4GB)** | ~$55 | $0                      | 推奨                                              |
+| **Pi 5 (4GB)** | ~$60 | $0                      | 最高のパフォーマンス                                      |
+| **Pi 5 (8GB)** | ~$80 | $0                      | 過剰だが将来性あり                                       |
+| DigitalOcean                      | $0                   | $6/月                    | $72/年                                           |
+| Hetzner                           | $0                   | €3.79/月 | 約 $50/年                                         |
 
 **損益分岐点:** クラウド VPS と比べ、Pi は約 6〜12 か月で元が取れます。
 
 ---
 
-## 関連情報
+## See Also
 
 - [Linux guide](/platforms/linux) — 一般的な Linux セットアップ
 - [DigitalOcean guide](/platforms/digitalocean) — クラウド代替案

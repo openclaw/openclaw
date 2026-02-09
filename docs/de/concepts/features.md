@@ -1,21 +1,14 @@
 ---
-summary: „OpenClaw‑Funktionen über Kanäle, Routing, Medien und UX hinweg.“
+summary: "„OpenClaw‑Funktionen über Kanäle, Routing, Medien und UX hinweg.“"
 read_when:
   - Sie möchten eine vollständige Liste dessen, was OpenClaw unterstützt
-title: „Funktionen“
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:53Z
+title: "Funktionen"
 ---
 
-## Höhepunkte
+## Highlights
 
 <Columns>
-  <Card title="Kanäle" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord und iMessage mit einem einzigen Gateway.
   </Card>
   <Card title="Plugins" icon="plug">
@@ -24,13 +17,13 @@ x-i18n:
   <Card title="Routing" icon="route">
     Multi‑Agent‑Routing mit isolierten Sitzungen.
   </Card>
-  <Card title="Medien" icon="image">
+  <Card title="Media" icon="image">
     Bilder, Audio und Dokumente ein‑ und ausgehend.
   </Card>
-  <Card title="Apps und UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web‑Control‑UI und macOS‑Companion‑App.
   </Card>
-  <Card title="Mobile Nodes" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     iOS‑ und Android‑Nodes mit Canvas‑Unterstützung.
   </Card>
 </Columns>

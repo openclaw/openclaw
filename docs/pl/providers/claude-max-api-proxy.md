@@ -5,13 +5,6 @@ read_when:
   - Chcesz lokalny serwer API, który opakowuje CLI Claude Code
   - Chcesz zaoszczędzić pieniądze, korzystając z subskrypcji zamiast kluczy API
 title: "Proxy API Claude Max"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:30Z
 ---
 
 # Proxy API Claude Max
@@ -20,10 +13,10 @@ x-i18n:
 
 ## Dlaczego warto z tego korzystać?
 
-| Podejście              | Koszt                                                            | Najlepsze zastosowanie                        |
-| ---------------------- | ---------------------------------------------------------------- | --------------------------------------------- |
+| Podejście              | Koszt                                                                                               | Najlepsze zastosowanie                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------- |
 | API Anthropic          | Płatność za token (~15 USD/M wejścia, 75 USD/M wyjścia dla Opus) | Aplikacje produkcyjne, duży wolumen           |
-| Subskrypcja Claude Max | 200 USD/miesiąc ryczałt                                          | Użytek osobisty, rozwój, nielimitowane użycie |
+| Subskrypcja Claude Max | 200 USD/miesiąc ryczałt                                                                             | Użytek osobisty, rozwój, nielimitowane użycie |
 
 Jeśli masz subskrypcję Claude Max i chcesz używać jej z narzędziami zgodnymi z OpenAI, ten proxy może pozwolić na znaczące oszczędności.
 

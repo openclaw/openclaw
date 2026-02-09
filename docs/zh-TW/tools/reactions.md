@@ -3,13 +3,6 @@ summary: "跨頻道共用的反應語意"
 read_when:
   - 在任何頻道中處理反應功能時
 title: "反應"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:29Z
 ---
 
 # 反應工具

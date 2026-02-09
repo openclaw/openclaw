@@ -5,13 +5,6 @@ read_when:
   - Ajustar modos de conexão remota (direto vs SSH)
   - Projetar descoberta de nós + pareamento para nós remotos
 title: "Descoberta e Transportes"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:55Z
 ---
 
 # Descoberta & transportes
@@ -49,7 +42,7 @@ Detalhes de protocolo:
 
 ## Entradas de descoberta (como os clientes aprendem onde o gateway está)
 
-### 1) Bonjour / mDNS (somente LAN)
+### 1. Bonjour / mDNS (somente LAN)
 
 O Bonjour é best-effort e não atravessa redes. Ele é usado apenas para conveniência de “mesma LAN”.
 
@@ -83,7 +76,7 @@ Desativar/substituir:
 - `OPENCLAW_TAILNET_DNS` publica uma dica `tailnetDns` (MagicDNS).
 - `OPENCLAW_CLI_PATH` substitui o caminho da CLI anunciada.
 
-### 2) Tailnet (entre redes)
+### 2. Tailnet (entre redes)
 
 Para configurações no estilo Londres/Viena, o Bonjour não ajuda. O alvo “direto” recomendado é:
 
@@ -91,7 +84,7 @@ Para configurações no estilo Londres/Viena, o Bonjour não ajuda. O alvo “di
 
 Se o gateway conseguir detectar que está sendo executado sob o Tailscale, ele publica `tailnetDns` como uma dica opcional para os clientes (incluindo beacons de área ampla).
 
-### 3) Alvo manual / SSH
+### 3. Alvo manual / SSH
 
 Quando não há rota direta (ou o direto está desativado), os clientes sempre podem se conectar via SSH encaminhando a porta de gateway em loopback.
 

@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez utiliser Synthetic comme fournisseur de modele
   - Vous avez besoin d’une cle API Synthetic ou d’une configuration d’URL de base
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:35Z
 ---
 
 # Synthetic
@@ -21,7 +14,7 @@ Synthetic expose des points de terminaison compatibles avec Anthropic. OpenClaw 
 ## Demarrage rapide
 
 1. Definissez `SYNTHETIC_API_KEY` (ou lancez l’assistant ci-dessous).
-2. Lancez la prise en main :
+2. Exécuter l'intégration :
 
 ```bash
 openclaw onboard --auth-choice synthetic-api-key

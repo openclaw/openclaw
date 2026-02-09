@@ -3,13 +3,6 @@ summary: "Estado del soporte del bot de Telegram, capacidades y configuración"
 read_when:
   - Trabajo en funciones de Telegram o webhooks
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:39Z
 ---
 
 # Telegram (Bot API)
@@ -48,7 +41,7 @@ Configuración mínima:
 
 ## Configuración (ruta rápida)
 
-### 1) Crear un token de bot (BotFather)
+### 1. Crear un token de bot (BotFather)
 
 1. Abra Telegram y chatee con **@BotFather** ([enlace directo](https://t.me/BotFather)). Confirme que el identificador sea exactamente `@BotFather`.
 2. Ejecute `/newbot`, luego siga las indicaciones (nombre + nombre de usuario que termine en `bot`).
@@ -59,7 +52,7 @@ Configuraciones opcionales en BotFather:
 - `/setjoingroups` — permitir/denegar agregar el bot a grupos.
 - `/setprivacy` — controlar si el bot ve todos los mensajes del grupo.
 
-### 2) Configurar el token (env o config)
+### 2. Configurar el token (env o config)
 
 Ejemplo:
 
@@ -307,7 +300,7 @@ Para configuración por cuenta:
 }
 ```
 
-Ámbitos:
+Alcancías:
 
 - `off` — botones en línea deshabilitados
 - `dm` — solo mensajes directos (destinos de grupo bloqueados)
@@ -352,7 +345,7 @@ Use la configuración global cuando todos los bots/cuentas de Telegram deban com
 
 ## Control de acceso (mensajes directos + grupos)
 
-### Acceso a mensajes directos
+### Acceso DM
 
 - Predeterminado: `channels.telegram.dmPolicy = "pairing"`. Los remitentes desconocidos reciben un código de emparejamiento; los mensajes se ignoran hasta aprobarse (los códigos expiran tras 1 hora).
 - Aprobar vía:

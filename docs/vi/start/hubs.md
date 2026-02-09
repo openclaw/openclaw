@@ -3,13 +3,6 @@ summary: "Các hub liên kết tới mọi tài liệu OpenClaw"
 read_when:
   - Bạn muốn có bản đồ đầy đủ của tài liệu
 title: "Các hub tài liệu"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:16Z
 ---
 
 # Các hub tài liệu

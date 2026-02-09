@@ -4,13 +4,6 @@ read_when:
   - У вас есть проблемы с подключением/аутентификацией и вы хотите пошаговые исправления
   - Вы обновились и хотите выполнить проверку корректности
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:16Z
 ---
 
 # `openclaw doctor`

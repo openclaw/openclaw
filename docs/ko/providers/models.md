@@ -4,13 +4,6 @@ read_when:
   - 모델 프로바이더를 선택하려는 경우
   - LLM 인증 + 모델 선택을 위한 빠른 설정 예제가 필요한 경우
 title: "모델 프로바이더 빠른 시작"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:56Z
 ---
 
 # 모델 프로바이더
@@ -55,5 +48,5 @@ Venice 는 프라이버시 우선 추론을 위한 권장 Venice AI 설정이며
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-전체 프로바이더 카탈로그 (xAI, Groq, Mistral 등)와 고급 구성에 대해서는
+전체 제공업체 카탈로그(xAI, Groq, Mistral 등)는 전체 프로바이더 카탈로그 (xAI, Groq, Mistral 등)와 고급 구성에 대해서는
 [Model providers](/concepts/model-providers)를 참고하십시오.

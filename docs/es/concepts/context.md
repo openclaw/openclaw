@@ -5,13 +5,6 @@ read_when:
   - Está depurando por qué el modelo “sabe” algo (o lo olvidó)
   - Quiere reducir la sobrecarga de contexto (/context, /status, /compact)
 title: "Contexto"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:12Z
 ---
 
 # Contexto

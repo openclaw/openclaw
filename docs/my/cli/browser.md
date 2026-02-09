@@ -5,13 +5,6 @@ read_when:
   - အခြားစက်တစ်လုံးပေါ်တွင် လည်ပတ်နေသော browser ကို node host မှတဆင့် ထိန်းချုပ်လိုသည့်အခါ
   - Chrome extension relay ကို အသုံးပြုလိုသည့်အခါ (toolbar ခလုတ်ဖြင့် attach/detach ပြုလုပ်ခြင်း)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## Profiles
 
-Profiles များသည် အမည်ပေးထားသော browser routing config များဖြစ်သည်။ လက်တွေ့တွင်—
+Profiles များသည် browser routing configs များကို အမည်ပေးထားခြင်း ဖြစ်သည်။ လက်တွေ့အသုံးချမှုတွင်:
 
 - `openclaw`: OpenClaw မှ စီမံခန့်ခွဲသော Chrome instance သီးသန့်တစ်ခုကို စတင်ခြင်း/ချိတ်ဆက်ခြင်း (သီးခြား user data dir ဖြင့် ခွဲခြားထားသည်)။
 - `chrome`: Chrome extension relay မှတဆင့် သင်၏ လက်ရှိ Chrome tab များကို ထိန်းချုပ်ခြင်း။
@@ -107,7 +100,7 @@ openclaw browser extension path
 
 ## Remote browser control (node host proxy)
 
-Gateway သည် browser ရှိသည့် စက်နှင့် မတူညီသော စက်ပေါ်တွင် လည်ပတ်နေပါက Chrome/Brave/Edge/Chromium ရှိသည့် စက်ပေါ်တွင် **node host** တစ်ခုကို လည်ပတ်ပါ။ Gateway သည် ထို node သို့ browser လုပ်ဆောင်ချက်များကို proxy လုပ်ပို့မည်ဖြစ်ပြီး (သီးခြား browser control server မလိုအပ်ပါ)။
+Gateway ကို browser နဲ့ မတူတဲ့ စက်ပေါ်မှာ chạy နေပါက Chrome/Brave/Edge/Chromium ရှိတဲ့ စက်ပေါ်မှာ **node host** ကို chạy လုပ်ပါ။ Gateway သည် ထို node သို့ browser actions များကို proxy လုပ်ပေးမည် (သီးခြား browser control server မလိုအပ်ပါ)။
 
 Auto-routing ကို ထိန်းချုပ်ရန် `gateway.nodes.browser.mode` ကို အသုံးပြုပါ၊ node များ အများအပြား ချိတ်ဆက်ထားပါက သီးသန့် node တစ်ခုကို ချိတ်ရန် `gateway.nodes.browser.node` ကို အသုံးပြုပါ။
 

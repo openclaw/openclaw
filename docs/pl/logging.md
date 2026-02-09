@@ -1,17 +1,10 @@
 ---
-summary: „Przegląd logowania: logi plikowe, wyjście konsoli, podgląd w CLI oraz interfejs Control UI”
+summary: "„Przegląd logowania: logi plikowe, wyjście konsoli, podgląd w CLI oraz interfejs Control UI”"
 read_when:
   - Potrzebujesz przyjaznego dla początkujących przeglądu logowania
   - Chcesz skonfigurować poziomy lub formaty logów
   - Rozwiązujesz problemy i musisz szybko znaleźć logi
-title: „Logowanie”
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:43Z
+title: "Logowanie"
 ---
 
 # Logowanie
@@ -24,7 +17,7 @@ OpenClaw zapisuje logi w dwóch miejscach:
 Ta strona wyjaśnia, gdzie znajdują się logi, jak je czytać oraz jak konfigurować
 poziomy i formaty logowania.
 
-## Gdzie znajdują się logi
+## Gdzie logi na żywo
 
 Domyślnie Gateway zapisuje rotujący plik logów w:
 
@@ -215,7 +208,7 @@ Flagi nie rozróżniają wielkości liter i obsługują symbole wieloznaczne (np
 }
 ```
 
-Nadpisanie przez zmienną środowiskową (jednorazowo):
+Zastąpienie Env (jednorazowe):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

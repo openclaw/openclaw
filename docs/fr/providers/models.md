@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez choisir un fournisseur de modèles
   - Vous souhaitez des exemples de configuration rapide pour l’authentification LLM et la sélection de modèles
 title: "Démarrage rapide des fournisseurs de modèles"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: c897ca87805f1ec5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:27Z
 ---
 
 # Fournisseurs de modèles
@@ -53,6 +46,7 @@ Voir [Venice AI](/providers/venice).
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/bedrock)
+- [Qianfan](/providers/qianfan)
 
 Pour le catalogue complet des fournisseurs (xAI, Groq, Mistral, etc.) et la configuration avancée,
 voir [Fournisseurs de modèles](/concepts/model-providers).

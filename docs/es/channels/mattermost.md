@@ -4,13 +4,6 @@ read_when:
   - Configuración de Mattermost
   - Depuración del enrutamiento de Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:37Z
 ---
 
 # Mattermost (plugin)

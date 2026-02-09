@@ -1,15 +1,8 @@
 ---
-summary: „Kuratierte Links zu den am häufigsten verwendeten OpenClaw-Dokumenten.“
+summary: "„Kuratierte Links zu den am häufigsten verwendeten OpenClaw-Dokumenten.“"
 read_when:
   - Sie schnellen Zugriff auf zentrale Dokumentationsseiten wünschen
-title: „Dokumentenverzeichnis“
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:20Z
+title: "Docs-Verzeichnis"
 ---
 
 <Note>

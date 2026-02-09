@@ -4,13 +4,6 @@ read_when:
   - Quiere una sola clave de API para muchos LLM
   - Quiere ejecutar modelos a través de OpenRouter en OpenClaw
 title: "OpenRouter"
-x-i18n:
-  source_path: providers/openrouter.md
-  source_hash: b7e29fc9c456c64d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:22Z
 ---
 
 # OpenRouter

@@ -5,13 +5,6 @@ read_when:
   - အပြောင်းအလဲလုပ်နေစဉ် Gateway（ဂိတ်ဝေး）ကို watch mode ဖြင့် လည်ပတ်စေလိုသောအခါ
   - ပြန်လည်လုပ်ဆောင်နိုင်သော debugging workflow တစ်ခု လိုအပ်သောအခါ
 title: "Debugging"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:33Z
 ---
 
 # Debugging
@@ -20,9 +13,9 @@ x-i18n:
 
 ## Runtime debug overrides
 
-ချတ်အတွင်း `/debug` ကို အသုံးပြုပြီး **runtime-only** config overrides (memory သာ၊ disk မဟုတ်) ကို သတ်မှတ်နိုင်သည်။
-`/debug` သည် မူလအားဖြင့် ပိတ်ထားသည်; `commands.debug: true` ဖြင့် ဖွင့်ပါ။
-`openclaw.json` ကို ပြင်ဆင်ရန်မလိုဘဲ မကြာခဏ မတွေ့ရသော ဆက်တင်များကို toggle လုပ်ရသည့်အခါ အသုံးဝင်သည်။
+chat ထဲတွင် `/debug` ကို အသုံးပြု၍ **runtime-only** config override များ (memory ထဲသာ၊ disk မရေး) ကို သတ်မှတ်ပါ။
+`/debug` သည် default အနေဖြင့် ပိတ်ထားပြီး `commands.debug: true` ဖြင့် ဖွင့်နိုင်ပါသည်။
+`openclaw.json` ကို မတည်းဖြတ်ဘဲ ရှားပါးသော setting များကို ပြောင်းလဲရန် လိုအပ်သည့်အခါ အသုံးဝင်ပါသည်။
 
 ဥပမာများ—
 
@@ -53,7 +46,7 @@ tsx watch src/entry.ts gateway --force
 
 ## Dev profile + dev gateway (--dev)
 
-dev profile ကို အသုံးပြုပြီး state ကို ခွဲခြားထားကာ debugging အတွက် လုံခြုံပြီး အလွယ်တကူ ဖျက်နိုင်သော setup တစ်ခုကို စတင်ပါ။ `--dev` flags **နှစ်ခု** ရှိသည်—
+state ကို သီးခြားထားရန်နှင့် debugging အတွက် လုံခြုံပြီး ခဏတာ အသုံးပြုနိုင်သော setup တစ်ခုကို စတင်ရန် dev profile ကို အသုံးပြုပါ။ **နှစ်ခု** ရှိသော `--dev` flags များ ရှိပါသည်:
 
 - **Global `--dev` (profile):** state ကို `~/.openclaw-dev` အောက်တွင် ခွဲခြားထားပြီး
   gateway port ကို မူလအားဖြင့် `19001` သို့ သတ်မှတ်သည် (ဆက်စပ် port များသည် အတူတကွ ရွှေ့ပြောင်းမည်)။
@@ -92,8 +85,8 @@ Reset flow (အစမှ ပြန်စတင်)—
 pnpm gateway:dev:reset
 ```
 
-မှတ်ချက်—`--dev` သည် **global** profile flag ဖြစ်ပြီး runner အချို့က စုပ်ယူသွားတတ်သည်။
-ထင်ရှားစွာ သတ်မှတ်ရန်လိုပါက env var ပုံစံကို အသုံးပြုပါ—
+မှတ်ချက်: `--dev` သည် **global** profile flag ဖြစ်ပြီး runner အချို့က စုပ်ယူသွားနိုင်ပါသည်။
+အပြည့်အစုံ ဖော်ပြရန် လိုအပ်ပါက env var ပုံစံကို အသုံးပြုပါ:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -110,9 +103,8 @@ openclaw gateway stop
 
 ## Raw stream logging (OpenClaw)
 
-OpenClaw သည် စစ်ထုတ်ခြင်း/ပုံစံချခြင်း မလုပ်မီ **raw assistant stream** ကို log လုပ်နိုင်သည်။
-reasoning သည် plain text deltas အဖြစ် ရောက်လာနေသလား
-(သို့မဟုတ် သီးခြား thinking blocks အဖြစ်) ကို ကြည့်ရှုရန် အကောင်းဆုံးနည်းလမ်း ဖြစ်သည်။
+OpenClaw သည် filtering/formatting မပြုလုပ်မီ **raw assistant stream** ကို log လုပ်နိုင်ပါသည်။
+reasoning သည် plain text deltas အဖြစ် ရောက်လာသလား (သို့မဟုတ် သီးခြား thinking blocks အဖြစ်လား) ကို ကြည့်ရန် အကောင်းဆုံး နည်းလမ်းဖြစ်ပါသည်။
 
 CLI မှတစ်ဆင့် ဖွင့်ရန်—
 

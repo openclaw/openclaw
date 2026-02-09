@@ -3,13 +3,6 @@ summary: "프로젝트의 기원, 기여자, 그리고 라이선스."
 read_when:
   - 프로젝트의 배경 이야기나 기여자 크레딧이 궁금할 때
 title: "크레딧"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:03Z
 ---
 
 ## 이름

@@ -5,13 +5,6 @@ read_when:
   - Debugowanie uwierzytelniania Gateway, trybów bindowania i łączności
   - Wykrywanie bram przez Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:10Z
 ---
 
 # CLI Gateway
@@ -34,7 +27,7 @@ Uruchom lokalny proces Gateway:
 openclaw gateway
 ```
 
-Alias uruchomienia na pierwszym planie:
+Dodatkowe informacje pochodzące ze streszczonego uzasadnienia umieszczenia w wykazie przedstawionego przez Komitet Sankcji:
 
 ```bash
 openclaw gateway run
@@ -149,7 +142,7 @@ Konfiguracja (opcjonalna, używana jako domyślne):
 
 ### `gateway call <method>`
 
-Niskopoziomowe narzędzie RPC.
+Niski poziom pomocnika RPC.
 
 ```bash
 openclaw gateway call status

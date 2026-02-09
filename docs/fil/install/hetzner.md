@@ -6,13 +6,6 @@ read_when:
   - Gusto mo ng ganap na kontrol sa persistence, mga binary, at behavior ng restart
   - Pinapatakbo mo ang OpenClaw sa Docker sa Hetzner o katulad na provider
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # OpenClaw sa Hetzner (Docker, Gabay sa Production VPS)
@@ -21,8 +14,8 @@ x-i18n:
 
 Magpatakbo ng persistent na OpenClaw Gateway sa isang Hetzner VPS gamit ang Docker, na may durable na state, baked-in na mga binary, at ligtas na behavior sa restart.
 
-Kung gusto mo ng “OpenClaw 24/7 sa ~$5”, ito ang pinakasimple at maaasahang setup.  
-Nagbabago ang presyo ng Hetzner; piliin ang pinakamaliit na Debian/Ubuntu VPS at mag-scale up kung makaranas ka ng OOM.
+Kung gusto mo ng “OpenClaw 24/7 sa halagang ~$5”, ito ang pinakasimple at maaasahang setup.
+23. Nagbabago ang pagpepresyo ng Hetzner; piliin ang pinakamaliit na Debian/Ubuntu VPS at mag-scale up kung makaranas ka ng OOMs.
 
 ## Ano ang ginagawa natin (sa simpleng paliwanag)?
 
@@ -38,8 +31,8 @@ Maaaring ma-access ang Gateway sa pamamagitan ng:
 - Direktang pag-expose ng port kung ikaw mismo ang nagma-manage ng firewall at mga token
 
 Ipinapalagay ng gabay na ito ang Ubuntu o Debian sa Hetzner.  
-Kung nasa ibang Linux VPS ka, i-map ang mga package nang naaayon.  
-Para sa generic na Docker flow, tingnan ang [Docker](/install/docker).
+Kung nasa ibang Linux VPS ka, iangkop ang mga package nang naaayon.
+Para sa pangkalahatang daloy ng Docker, tingnan ang [Docker](/install/docker).
 
 ---
 
@@ -71,7 +64,7 @@ Para sa generic na Docker flow, tingnan ang [Docker](/install/docker).
 
 ---
 
-## 1) Mag-provision ng VPS
+## 1. Mag-provision ng VPS
 
 Gumawa ng Ubuntu o Debian VPS sa Hetzner.
 
@@ -81,12 +74,12 @@ Kumonek bilang root:
 ssh root@YOUR_VPS_IP
 ```
 
-Ipinapalagay ng gabay na ito na ang VPS ay stateful.  
-Huwag itong ituring bilang disposable na infrastructure.
+27. Ipinapalagay ng gabay na ito na stateful ang VPS.
+28. Huwag itong ituring bilang disposable infrastructure.
 
 ---
 
-## 2) I-install ang Docker (sa VPS)
+## 2. I-install ang Docker (sa VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) I-clone ang OpenClaw repository
+## 3. I-clone ang OpenClaw repository
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +107,10 @@ Ipinapalagay ng gabay na ito na magbu-build ka ng custom na image para masiguron
 
 ---
 
-## 4) Gumawa ng persistent na mga directory sa host
+## 4. Gumawa ng persistent na mga directory sa host
 
-Ang mga Docker container ay ephemeral.  
-Lahat ng pangmatagalang state ay dapat nasa host.
+Ang mga Docker container ay panandalian.
+30. Lahat ng pangmatagalang estado ay dapat manatili sa host.
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) I-configure ang mga environment variable
+## 5. I-configure ang mga environment variable
 
 Gumawa ng `.env` sa root ng repository.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose configuration
+## 6. Docker Compose configuration
 
 Gumawa o i-update ang `docker-compose.yml`.
 
@@ -204,10 +197,10 @@ services:
 
 ---
 
-## 7) I-bake ang mga kinakailangang binary sa image (kritikal)
+## 7. I-bake ang mga kinakailangang binary sa image (kritikal)
 
-Ang pag-install ng mga binary sa loob ng tumatakbong container ay isang bitag.  
-Anumang na-install sa runtime ay mawawala sa restart.
+Ang pag-install ng mga binary sa loob ng tumatakbong container ay isang bitag.
+Anumang na-install sa oras ng pagtakbo ay mawawala kapag nag-restart.
 
 Lahat ng external na binary na kailangan ng Skills ay dapat i-install sa image build time.
 
@@ -217,7 +210,7 @@ Ipinapakita ng mga halimbawa sa ibaba ang tatlong karaniwang binary lamang:
 - `goplaces` para sa Google Places
 - `wacli` para sa WhatsApp
 
-Mga halimbawa lang ito, hindi kumpletong listahan.  
+Mga halimbawa lamang ito, hindi kumpletong listahan.
 Maaari kang mag-install ng kasing daming binary na kailangan gamit ang parehong pattern.
 
 Kung magdadagdag ka ng mga bagong Skills sa hinaharap na umaasa sa karagdagang mga binary, kailangan mong:
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) I-build at ilunsad
+## 8. I-build at ilunsad
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Inaasahang output:
 
 ---
 
-## 9) I-verify ang Gateway
+## 9. I-verify ang Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,8 +313,8 @@ I-paste ang iyong gateway token.
 
 ## Ano ang persistent at saan (pinagmumulan ng katotohanan)
 
-Tumatakbo ang OpenClaw sa Docker, pero ang Docker ay hindi ang pinagmumulan ng katotohanan.  
-Lahat ng pangmatagalang state ay dapat mabuhay sa mga restart, rebuild, at reboot.
+Tumatakbo ang OpenClaw sa Docker, ngunit ang Docker ay hindi ang source of truth.
+36. Lahat ng pangmatagalang estado ay dapat makaligtas sa mga restart, rebuild, at reboot.
 
 | Component           | Lokasyon                          | Mekanismo ng persistence | Mga tala                                  |
 | ------------------- | --------------------------------- | ------------------------ | ----------------------------------------- |

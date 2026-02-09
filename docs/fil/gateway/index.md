@@ -3,13 +3,6 @@ summary: "Runbook para sa serbisyo ng Gateway, lifecycle, at mga operasyon"
 read_when:
   - Kapag pinapatakbo o dini-debug ang proseso ng gateway
 title: "Gateway Runbook"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # Gateway service runbook
@@ -19,7 +12,7 @@ Huling na-update: 2025-12-09
 ## Ano ito
 
 - Ang laging tumatakbong proseso na may-ari ng iisang koneksyon ng Baileys/Telegram at ng control/event plane.
-- Pinapalitan ang legacy na `gateway` na command. CLI entry point: `openclaw gateway`.
+- 5. Pinapalitan ang legacy na `gateway` command. 6. CLI entry point: `openclaw gateway`.
 - Tumatakbo hanggang ihinto; lalabas na non-zero sa mga fatal error para i-restart ito ng supervisor.
 
 ## Paano patakbuhin (local)
@@ -39,17 +32,17 @@ pnpm gateway:watch
   - Gumagamit ang hot reload ng in-process restart via **SIGUSR1** kapag kailangan.
   - I-disable gamit ang `gateway.reload.mode="off"`.
 - Ibinabind ang WebSocket control plane sa `127.0.0.1:<port>` (default 18789).
-- Ang parehong port ay nagsisilbi rin ng HTTP (control UI, hooks, A2UI). Single-port multiplex.
+- 7. Ang parehong port ay naghahatid din ng HTTP (control UI, hooks, A2UI). 8. Single-port multiplex.
   - OpenAI Chat Completions (HTTP): [`/v1/chat/completions`](/gateway/openai-http-api).
   - OpenResponses (HTTP): [`/v1/responses`](/gateway/openresponses-http-api).
   - Tools Invoke (HTTP): [`/tools/invoke`](/gateway/tools-invoke-http-api).
-- Nagsisimula ng Canvas file server bilang default sa `canvasHost.port` (default `18793`), na naghahain ng `http://<gateway-host>:18793/__openclaw__/canvas/` mula sa `~/.openclaw/workspace/canvas`. I-disable gamit ang `canvasHost.enabled=false` o `OPENCLAW_SKIP_CANVAS_HOST=1`.
+- 9. Nagsisimula ng Canvas file server bilang default sa `canvasHost.port` (default `18793`), na naghahain ng `http://<gateway-host>:18793/__openclaw__/canvas/` mula sa `~/.openclaw/workspace/canvas`. 10. I-disable gamit ang `canvasHost.enabled=false` o `OPENCLAW_SKIP_CANVAS_HOST=1`.
 - Nagla-log sa stdout; gamitin ang launchd/systemd para panatilihing buhay at i-rotate ang mga log.
 - I-pass ang `--verbose` para i-mirror ang debug logging (handshakes, req/res, events) mula sa log file papunta sa stdio kapag nagti-troubleshoot.
 - Gumagamit ang `--force` ng `lsof` para hanapin ang mga listener sa napiling port, nagpapadala ng SIGTERM, nagla-log kung ano ang pinatay, pagkatapos ay sinisimulan ang gateway (mabilis na bumibigo kung wala ang `lsof`).
 - Kung tumatakbo sa ilalim ng supervisor (launchd/systemd/mac app child-process mode), ang stop/restart ay karaniwang nagpapadala ng **SIGTERM**; ang mga mas lumang build ay maaaring ipakita ito bilang `pnpm` `ELIFECYCLE` exit code **143** (SIGTERM), na isang normal na shutdown, hindi crash.
 - Ang **SIGUSR1** ay nagti-trigger ng in-process restart kapag awtorisado (gateway tool/config apply/update, o i-enable ang `commands.restart` para sa manual restarts).
-- Kailangan ang Gateway auth bilang default: itakda ang `gateway.auth.token` (o `OPENCLAW_GATEWAY_TOKEN`) o `gateway.auth.password`. Dapat magpadala ang mga client ng `connect.params.auth.token/password` maliban kung gumagamit ng Tailscale Serve identity.
+- 11. Kinakailangan ang Gateway auth bilang default: itakda ang `gateway.auth.token` (o `OPENCLAW_GATEWAY_TOKEN`) o `gateway.auth.password`. 12. Kailangang magpadala ang mga client ng `connect.params.auth.token/password` maliban kung gumagamit ng Tailscale Serve identity.
 - Ang wizard ay gumagawa na ngayon ng token bilang default, kahit sa loopback.
 - Port precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > default `18789`.
 
@@ -62,17 +55,18 @@ pnpm gateway:watch
   ```
 
 - Pagkatapos, kumokonekta ang mga client sa `ws://127.0.0.1:18789` sa pamamagitan ng tunnel.
+
 - Kung may naka-configure na token, dapat isama ito ng mga client sa `connect.params.auth.token` kahit sa pamamagitan ng tunnel.
 
 ## Maramihang gateway (iisang host)
 
-Karaniwan ay hindi kailangan: kayang pagsilbihan ng isang Gateway ang maraming messaging channel at agent. Gumamit lamang ng maraming Gateway para sa redundancy o mahigpit na isolation (hal: rescue bot).
+13. Karaniwang hindi kailangan: maaaring magsilbi ang isang Gateway ng maraming messaging channels at agents. 14. Gumamit lamang ng maraming Gateways para sa redundancy o mahigpit na isolation (hal: rescue bot).
 
-Sinusuportahan kung ihiwalay ang state + config at gumamit ng natatanging mga port. Buong gabay: [Multiple gateways](/gateway/multiple-gateways).
+15. Sinusuportahan kung ihiwalay mo ang state + config at gumamit ng natatanging mga port. macOS: \`bot.molt.<profile>
 
 Ang mga pangalan ng serbisyo ay profile-aware:
 
-- macOS: `bot.molt.<profile>` (maaaring umiiral pa ang legacy `com.openclaw.*`)
+- 16. macOS: `bot.molt.<profile>17. ` (maaaring umiiral pa rin ang legacy `com.openclaw.*`)
 - Linux: `openclaw-gateway-<profile>.service`
 - Windows: `OpenClaw Gateway (<profile>)`
 
@@ -82,7 +76,7 @@ Ang install metadata ay naka-embed sa service config:
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-Rescue-Bot Pattern: panatilihin ang pangalawang Gateway na hiwalay na may sariling profile, state dir, workspace, at base port spacing. Buong gabay: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
+18. Rescue-Bot Pattern: panatilihing hiwalay ang ikalawang Gateway na may sariling profile, state dir, workspace, at base port spacing. 19. Buong gabay: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### Dev profile (`--dev`)
 
@@ -110,7 +104,7 @@ Derived ports (mga panuntunang pangkalahatan):
 - Base port = `gateway.port` (o `OPENCLAW_GATEWAY_PORT` / `--port`)
 - browser control service port = base + 2 (loopback lang)
 - `canvasHost.port = base + 4` (o `OPENCLAW_CANVAS_HOST_PORT` / config override)
-- Ang Browser profile CDP ports ay auto-allocate mula sa `browser.controlPort + 9 .. + 108` (na pini-persist kada profile).
+- 20. Ang mga Browser profile CDP port ay awtomatikong ina-allocate mula sa `browser.controlPort + 9 .. 21. + 108` (naka-persist bawat profile).
 
 Checklist kada instance:
 
@@ -137,12 +131,12 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 ## Protocol (pananaw ng operator)
 
 - Buong docs: [Gateway protocol](/gateway/protocol) at [Bridge protocol (legacy)](/gateway/bridge-protocol).
-- Mandatory na unang frame mula sa client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
+- 22. Mandatoryong unang frame mula sa client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? 23. } }`.
 - Sumasagot ang Gateway ng `res {type:"res", id, ok:true, payload:hello-ok }` (o `ok:false` na may error, pagkatapos ay magsasara).
 - Pagkatapos ng handshake:
   - Mga request: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Mga event: `{type:"event", event, payload, seq?, stateVersion?}`
-- Mga structured presence entry: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (para sa WS clients, ang `instanceId` ay nagmumula sa `connect.client.instanceId`).
+- }`(para sa WS clients, ang`instanceId`ay galing sa`connect.client.instanceId`). `shutdown`— lalabas ang Gateway; kasama sa payload ang`reason`at opsyonal na`restartExpectedMs\`.
 - Ang mga `agent` na response ay two-stage: una ang `res` ack `{runId,status:"accepted"}`, pagkatapos ay ang final na `res` `{runId,status:"ok"|"error",summary}` matapos matapos ang run; dumarating ang streamed output bilang `event:"agent"`.
 
 ## Mga method (paunang set)
@@ -165,7 +159,7 @@ Tingnan din: [Presence](/concepts/presence) para sa kung paano ginagawa/dinededu
 - `agent` — mga streamed tool/output event mula sa agent run (may seq-tag).
 - `presence` — mga update sa presence (mga delta na may stateVersion) na itinutulak sa lahat ng nakakonektang client.
 - `tick` — periodic keepalive/no-op para kumpirmahin ang pagiging buhay.
-- `shutdown` — lalabas na ang Gateway; kasama sa payload ang `reason` at opsyonal na `restartExpectedMs`. Dapat mag-reconnect ang mga client.
+- Dapat muling kumonek ang mga client. Gumagamit ang mga error ng \`{ code, message, details?, retryable?, retryAfterMs?
 
 ## WebChat integration
 
@@ -188,7 +182,7 @@ Tingnan din: [Presence](/concepts/presence) para sa kung paano ginagawa/dinededu
 
 ## Mga error code (res.error shape)
 
-- Gumagamit ang mga error ng `{ code, message, details?, retryable?, retryAfterMs? }`.
+- 24. Gumagamit ang mga error ng \`{ code, message, details?, retryable?, retryAfterMs? Hindi nire-replay ang mga event.
 - Mga standard na code:
   - `NOT_LINKED` — hindi authenticated ang WhatsApp.
   - `AGENT_TIMEOUT` — hindi tumugon ang agent sa loob ng naka-configure na deadline.
@@ -202,7 +196,7 @@ Tingnan din: [Presence](/concepts/presence) para sa kung paano ginagawa/dinededu
 
 ## Replay / gaps
 
-- Hindi nire-replay ang mga event. Nadidetect ng mga client ang mga seq gap at dapat mag-refresh (`health` + `system-presence`) bago magpatuloy. Ang WebChat at mga macOS client ay awtomatikong nagre-refresh kapag may gap.
+- 25. }`. 26. Ang mga event ay hindi nire-replay. `openclaw gateway install`ay nagsusulat ng`~/Library/LaunchAgents/bot.molt.gateway.plist`(o`bot.molt.<profile>
 
 ## Supervision (halimbawa sa macOS)
 
@@ -213,8 +207,8 @@ Tingnan din: [Presence](/concepts/presence) para sa kung paano ginagawa/dinededu
   - StandardOut/Err: mga path ng file o `syslog`
 - Sa failure, nire-restart ng launchd; ang fatal na misconfig ay dapat magpatuloy sa pag-exit para mapansin ng operator.
 - Ang LaunchAgents ay per-user at nangangailangan ng naka-log in na session; para sa headless setups gumamit ng custom LaunchDaemon (hindi shipped).
-  - Ang `openclaw gateway install` ay nagsusulat ng `~/Library/LaunchAgents/bot.molt.gateway.plist`
-    (o `bot.molt.<profile>.plist`; nililinis ang legacy na `com.openclaw.*`).
+  - 27. Nakikita ng mga client ang mga seq gap at dapat mag-refresh (`health` + `system-presence`) bago magpatuloy.28. `openclaw gateway install` ay nagsusulat ng `~/Library/LaunchAgents/bot.molt.gateway.plist`
+        (o \`bot.molt.<profile>
   - Ang `openclaw doctor` ay nag-audit ng LaunchAgent config at maaaring i-update ito sa kasalukuyang mga default.
 
 ## Pamamahala ng Gateway service (CLI)
@@ -239,27 +233,25 @@ Mga tala:
 - Ang `gateway status` ay nagpi-print ng config path + probe target para maiwasan ang kalituhan ng “localhost vs LAN bind” at profile mismatches.
 - Ang `gateway status` ay nagsasama ng huling gateway error line kapag mukhang tumatakbo ang serbisyo ngunit sarado ang port.
 - Ang `logs` ay nagta-tail ng Gateway file log via RPC (hindi na kailangan ang manual na `tail`/`grep`).
-- Kung may natukoy na ibang gateway-like services, magbibigay ng babala ang CLI maliban kung mga OpenClaw profile service ang mga iyon.
-  Inirerekomenda pa rin namin ang **isang gateway bawat makina** para sa karamihan ng setup; gumamit ng hiwalay na mga profile/port para sa redundancy o rescue bot. Tingnan ang [Multiple gateways](/gateway/multiple-gateways).
+- Inirerekomenda pa rin namin ang **isang gateway bawat makina** para sa karamihan ng setup; gumamit ng hiwalay na mga profile/port para sa redundancy o rescue bot.
+  Tingnan ang [Multiple gateways](/gateway/multiple-gateways). 29. .plist`; nililinis ang legacy `com.openclaw.\*\`).
   - Cleanup: `openclaw gateway uninstall` (kasalukuyang serbisyo) at `openclaw doctor` (legacy migrations).
 - Ang `gateway install` ay no-op kapag naka-install na; gamitin ang `openclaw gateway install --force` para mag-reinstall (mga pagbabago sa profile/env/path).
 
 Bundled mac app:
 
-- Maaaring i-bundle ng OpenClaw.app ang isang Node-based gateway relay at mag-install ng per-user LaunchAgent na may label na
-  `bot.molt.gateway` (o `bot.molt.<profile>`; ang mga legacy na `com.openclaw.*` label ay malinis na na-unload).
+- `; ang mga legacy `com.openclaw.\*\` label ay maayos pa ring na-a-unload).30. Tingnan ang [Multiple gateways](/gateway/multiple-gateways).
 - Para ihinto nang maayos, gamitin ang `openclaw gateway stop` (o `launchctl bootout gui/$UID/bot.molt.gateway`).
 - Para mag-restart, gamitin ang `openclaw gateway restart` (o `launchctl kickstart -k gui/$UID/bot.molt.gateway`).
   - Ang `launchctl` ay gumagana lamang kung naka-install ang LaunchAgent; kung hindi, gamitin muna ang `openclaw gateway install`.
-  - Palitan ang label ng `bot.molt.<profile>` kapag nagpapatakbo ng named profile.
+  - `kapag nagpapatakbo ng named profile.31.`; ang mga legacy `com.openclaw.*` label ay maayos pa ring na-u-unload).
 
 ## Supervision (systemd user unit)
 
-Nag-i-install ang OpenClaw ng **systemd user service** bilang default sa Linux/WSL2. Inirerekomenda namin ang mga user service para sa mga single-user na makina (mas simpleng env, per-user config).
-Gumamit ng **system service** para sa multi-user o always-on na mga server (walang lingering na kailangan, shared supervision).
+Inirerekomenda namin ang mga user service para sa single-user na mga makina (mas simple ang env, per-user config). Gumamit ng **system service** para sa multi-user o always-on na mga server (hindi kailangan ng lingering, shared supervision).
+`openclaw gateway install` ay nagsusulat ng user unit.
 
-Ang `openclaw gateway install` ay nagsusulat ng user unit. Ang `openclaw doctor` ay nag-audit ng
-unit at maaaring i-update ito para tumugma sa kasalukuyang inirerekomendang mga default.
+Ina-audit ng `openclaw doctor` ang unit at maaaring i-update ito upang tumugma sa kasalukuyang inirerekomendang default. Pinapatakbo ito ng onboarding sa Linux/WSL2 (maaaring humingi ng sudo; nagsusulat ng `/var/lib/systemd/linger`).
 
 Gumawa ng `~/.config/systemd/user/openclaw-gateway[-<profile>].service`:
 
@@ -286,16 +278,15 @@ I-enable ang lingering (kailangan para mabuhay ang user service kahit mag-logout
 sudo loginctl enable-linger youruser
 ```
 
-Pinapatakbo ito ng onboarding sa Linux/WSL2 (maaaring mag-prompt para sa sudo; nagsusulat ng `/var/lib/systemd/linger`).
-Pagkatapos, i-enable ang serbisyo:
+32. \` kapag nagpapatakbo ng isang pinangalanang profile.
+    **Alternatibo (system service)** - para sa always-on o multi-user na mga server, maaari kang mag-install ng systemd **system** unit sa halip na user unit (hindi kailangan ng lingering).
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
-**Alternatibo (system service)** — para sa always-on o multi-user na mga server, maaari kang mag-install ng systemd **system** unit sa halip na user unit (walang lingering na kailangan).
-Gumawa ng `/etc/systemd/system/openclaw-gateway[-<profile>].service` (kopyahin ang unit sa itaas,
-palitan ang `WantedBy=multi-user.target`, itakda ang `User=` + `WorkingDirectory=`), pagkatapos ay:
+Gumawa ng `/etc/systemd/system/openclaw-gateway[-<profile>].service` (kopyahin ang unit sa itaas, palitan ang `WantedBy=multi-user.target`, itakda ang `User=` + `WorkingDirectory=`), pagkatapos:
+33. Pinapatakbo ng onboarding ito sa Linux/WSL2 (maaaring humingi ng sudo; nagsusulat sa `/var/lib/systemd/linger`).
 
 ```
 sudo systemctl daemon-reload

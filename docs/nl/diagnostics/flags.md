@@ -4,13 +4,6 @@ read_when:
   - Je hebt gerichte debuglogs nodig zonder het globale logniveau te verhogen
   - Je moet subsysteem-specifieke logs vastleggen voor ondersteuning
 title: "Diagnostische vlaggen"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:20Z
 ---
 
 # Diagnostische vlaggen

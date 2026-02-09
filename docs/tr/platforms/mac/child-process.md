@@ -3,13 +3,6 @@ summary: "macOS’te Gateway yaşam döngüsü (launchd)"
 read_when:
   - mac uygulamasını Gateway yaşam döngüsüyle entegre ederken
 title: "Gateway Yaşam Döngüsü"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:31Z
 ---
 
 # macOS’te Gateway yaşam döngüsü
@@ -17,12 +10,12 @@ x-i18n:
 macOS uygulaması **varsayılan olarak Gateway’i launchd üzerinden yönetir** ve
 Gateway’i bir alt süreç olarak başlatmaz. Önce yapılandırılmış bağlantı noktasında
 zaten çalışmakta olan bir Gateway’e bağlanmayı dener; erişilebilir bir tane yoksa,
-harici `openclaw` CLI aracılığıyla launchd hizmetini etkinleştirir (gömülü çalışma zamanı yoktur).
-Bu, oturum açıldığında güvenilir otomatik başlatma ve çökme durumlarında yeniden
+harici `openclaw` CLI aracılığıyla launchd hizmetini etkinleştirir (gömülü çalışma zamanı yoktur). Bu, oturum açıldığında güvenilir otomatik başlatma ve çökme durumlarında yeniden
 başlatma sağlar.
 
 Alt süreç modu (Gateway’in uygulama tarafından doğrudan başlatılması) bugün
-**kullanımda değildir**. UI ile daha sıkı bir bağa ihtiyacınız varsa, Gateway’i
+**kullanımda değildir**.
+UI ile daha sıkı bir bağa ihtiyacınız varsa, Gateway’i
 bir terminalde manuel olarak çalıştırın.
 
 ## Varsayılan davranış (launchd)
@@ -42,15 +35,13 @@ launchctl bootout gui/$UID/bot.molt.gateway
 
 Adlandırılmış bir profil çalıştırırken etiketi `bot.molt.<profile>` ile değiştirin.
 
-## İmzasız geliştirici derlemeleri
+## İmzalanmamış geliştirici derlemeleri
 
-`scripts/restart-mac.sh --no-sign`, imzalama anahtarlarınız olmadığında hızlı yerel derlemeler içindir.
-launchd’nin imzasız bir röle ikili dosyasına işaret etmesini önlemek için şunları yapar:
+`scripts/restart-mac.sh --no-sign`, imzalama anahtarlarınız olmadığında hızlı yerel derlemeler içindir. launchd’nin imzasız bir röle ikili dosyasına işaret etmesini önlemek için şunları yapar:
 
 - `~/.openclaw/disable-launchagent` yazar.
 
-`scripts/restart-mac.sh`’in imzalı çalıştırmaları, işaretçi mevcutsa bu geçersiz kılmayı temizler.
-Manuel olarak sıfırlamak için:
+`scripts/restart-mac.sh`’in imzalı çalıştırmaları, işaretçi mevcutsa bu geçersiz kılmayı temizler. Manuel olarak sıfırlamak için:
 
 ```bash
 rm ~/.openclaw/disable-launchagent
@@ -63,7 +54,7 @@ macOS uygulamasının **launchd’yi asla kurmaması veya yönetmemesi** için,
 böylece uygulama yalnızca halihazırda çalışan bir Gateway’e bağlanır. Aynı davranışı
 Hata Ayıklama Ayarları’nda da değiştirebilirsiniz.
 
-## Uzak mod
+## Uzaktan mod
 
 Uzak mod, yerel bir Gateway’i asla başlatmaz. Uygulama, uzak ana makineye bir SSH
 tüneli kullanır ve bu tünel üzerinden bağlanır.

@@ -3,13 +3,6 @@ summary: "Status de suporte do app Google Chat, capacidades e configuração"
 read_when:
   - Trabalhando em recursos do canal Google Chat
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:04Z
 ---
 
 # Google Chat (Chat API)

@@ -3,13 +3,6 @@ summary: "Como funciona o sandboxing do OpenClaw: modos, escopos, acesso ao work
 title: Sandboxing
 read_when: "Voce quer uma explicacao dedicada sobre sandboxing ou precisa ajustar agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:10Z
 ---
 
 # Sandboxing
@@ -49,7 +42,7 @@ Nao ficam em sandbox:
   Nota: `"non-main"` e baseado em `session.mainKey` (padrao `"main"`), nao no id do agente.
   Sessoes de grupo/canal usam suas proprias chaves, entao contam como nao principais e serao colocadas em sandbox.
 
-## Escopo
+## Enquadramento
 
 `agents.defaults.sandbox.scope` controla **quantos containers** sao criados:
 

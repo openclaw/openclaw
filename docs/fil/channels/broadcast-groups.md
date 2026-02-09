@@ -5,13 +5,6 @@ read_when:
   - Pag-debug ng mga sagot ng maraming agent sa WhatsApp
 status: experimental
 title: "Broadcast Groups"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:30Z
 ---
 
 # Broadcast Groups
@@ -21,11 +14,11 @@ x-i18n:
 
 ## Overview
 
-Pinapahintulutan ng Broadcast Groups ang maraming agent na magproseso at tumugon sa iisang mensahe nang sabay-sabay. Nagbibigay-daan ito para makabuo ka ng mga specialized na team ng agent na magkakasamang gumagana sa isang WhatsApp group o DM — lahat ay gamit ang iisang phone number.
+Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
 
 Kasalukuyang saklaw: **WhatsApp lamang** (web channel).
 
-Ang broadcast groups ay sinusuri pagkatapos ng channel allowlists at mga patakaran sa pag-activate ng group. Sa mga WhatsApp group, nangangahulugan ito na nangyayari ang broadcast kapag normal na sasagot ang OpenClaw (halimbawa: kapag may mention, depende sa iyong group settings).
+Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
 
 ## Use Cases
 
@@ -77,7 +70,7 @@ Agents:
 
 ### Basic Setup
 
-Magdagdag ng top-level na seksyong `broadcast` (katabi ng `bindings`). Ang mga key ay mga WhatsApp peer id:
+Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids:
 
 - group chats: group JID (hal. `120363403215116621@g.us`)
 - DMs: E.164 phone number (hal. `+15551234567`)
@@ -170,7 +163,7 @@ Pinoproseso ng mga agent nang sunod-sunod (maghihintay ang isa hanggang matapos 
 4. **Kung wala sa broadcast list**:
    - Nalalapat ang normal na routing (unang tumugmang binding)
 
-Tandaan: hindi nilalampasan ng broadcast groups ang channel allowlists o mga patakaran sa pag-activate ng group (mentions/commands/etc). Binabago lang nila kung _aling mga agent ang tatakbo_ kapag kwalipikado ang isang mensahe para iproseso.
+Note: broadcast groups do not bypass channel allowlists or group activation rules (mentions/commands/etc). They only change _which agents run_ when a message is eligible for processing.
 
 ### Session Isolation
 
@@ -214,7 +207,7 @@ Tools: read only
 
 ## Best Practices
 
-### 1. Panatilihing Nakatutok ang mga Agent
+### 1. Keep Agents Focused
 
 Idisenyo ang bawat agent na may iisa at malinaw na responsibilidad:
 
@@ -229,7 +222,7 @@ Idisenyo ang bawat agent na may iisa at malinaw na responsibilidad:
 ✅ **Maganda:** Bawat agent ay may isang trabaho  
 ❌ **Hindi maganda:** Isang generic na "dev-helper" agent
 
-### 2. Gumamit ng Descriptive na mga Pangalan
+### 2. Use Descriptive Names
 
 Gawing malinaw kung ano ang ginagawa ng bawat agent:
 
@@ -243,7 +236,7 @@ Gawing malinaw kung ano ang ginagawa ng bawat agent:
 }
 ```
 
-### 3. I-configure ang Magkakaibang Tool Access
+### 3. Configure Different Tool Access
 
 Bigyan ang mga agent ng mga tool na talagang kailangan lang nila:
 
@@ -260,7 +253,7 @@ Bigyan ang mga agent ng mga tool na talagang kailangan lang nila:
 }
 ```
 
-### 4. Subaybayan ang Performance
+### 4. Monitor Performance
 
 Kapag maraming agent, isaalang-alang ang:
 
@@ -268,9 +261,9 @@ Kapag maraming agent, isaalang-alang ang:
 - Paglilimita ng broadcast groups sa 5–10 agent
 - Paggamit ng mas mabilis na model para sa mas simpleng agent
 
-### 5. Maayos na Pag-handle ng mga Failure
+### 5. Handle Failures Gracefully
 
-Independiyenteng nagfa-fail ang mga agent. Ang error ng isang agent ay hindi humahadlang sa iba:
+Agents fail independently. One agent's error doesn't block others:
 
 ```
 Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]

@@ -1,15 +1,8 @@
 ---
-summary: „Przycinanie sesji: przycinanie wyników narzędzi w celu ograniczenia rozrostu kontekstu”
+summary: "„Przycinanie sesji: przycinanie wyników narzędzi w celu ograniczenia rozrostu kontekstu”"
 read_when:
   - Chcesz ograniczyć wzrost kontekstu LLM wynikający z wyjść narzędzi
   - Dostrajanie agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:12Z
 ---
 
 # Przycinanie sesji
@@ -72,7 +65,7 @@ Jeśli ustawiono `agents.defaults.contextTokens`, jest ono traktowane jako limit
 ## Wybór narzędzi
 
 - `tools.allow` / `tools.deny` obsługują symbole wieloznaczne `*`.
-- Odmowa ma pierwszeństwo.
+- Odmów wygranej.
 - Dopasowanie jest niewrażliwe na wielkość liter.
 - Pusta lista dozwolonych ⇒ wszystkie narzędzia dozwolone.
 

@@ -4,13 +4,6 @@ read_when:
   - Beim Hinzufügen oder Ändern von CLI-Befehlen oder -Optionen
   - Beim Dokumentieren neuer Befehlsoberflächen
 title: "CLI-Referenz"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:28Z
 ---
 
 # CLI-Referenz

@@ -5,20 +5,13 @@ read_when:
   - 從原始碼執行 iOS 應用程式
   - 除錯 Gateway 閘道器探索或畫布命令
 title: "iOS 應用程式"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:39Z
 ---
 
 # iOS 應用程式（Node）
 
-可用性：內部預覽。iOS 應用程式尚未公開發佈。
+可用性：內部預覽。 The iOS app is not publicly distributed yet.
 
-## 功能說明
+## What it does
 
 - 透過 WebSocket（LAN 或 tailnet）連線至 Gateway 閘道器。
 - 提供節點能力：Canvas、螢幕快照、相機擷取、位置、對話模式、語音喚醒。
@@ -30,7 +23,7 @@ x-i18n:
 - 網路路徑：
   - 透過 Bonjour 的同一個 LAN，**或**
   - 透過單播 DNS-SD 的 Tailnet（範例網域：`openclaw.internal.`），**或**
-  - 手動指定主機／連接埠（備援）。
+  - Manual host/port (fallback).
 
 ## 快速開始（配對＋連線）
 
@@ -42,7 +35,7 @@ openclaw gateway --port 18789
 
 2. 在 iOS 應用程式中，開啟 Settings 並選擇已探索到的 Gateway 閘道器（或啟用 Manual Host 並輸入主機／連接埠）。
 
-3. 在閘道器主機上核准配對請求：
+3. Approve the pairing request on the gateway host:
 
 ```bash
 openclaw nodes pending
@@ -60,12 +53,13 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour（LAN）
 
-Gateway 閘道器會在 `local.` 上公告 `_openclaw-gw._tcp`。iOS 應用程式會自動列出這些項目。
+Gateway 閘道器會在 `local.` 上公告 `_openclaw-gw._tcp`。iOS 應用程式會自動列出這些項目。 The iOS app lists these automatically.
 
 ### Tailnet（跨網路）
 
 若 mDNS 被封鎖，請使用單播 DNS-SD 區域（選擇一個網域；範例：`openclaw.internal.`）以及 Tailscale 分割 DNS。
 請參閱 [Bonjour](/gateway/bonjour) 以取得 CoreDNS 範例。
+See [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### 手動主機／連接埠
 
@@ -73,7 +67,7 @@ Gateway 閘道器會在 `local.` 上公告 `_openclaw-gw._tcp`。iOS 應用程�
 
 ## Canvas + A2UI
 
-iOS 節點會渲染 WKWebView 畫布。使用 `node.invoke` 來驅動它：
+iOS 節點會渲染 WKWebView 畫布。使用 `node.invoke` 來驅動它： Use `node.invoke` to drive it:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'
@@ -105,7 +99,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 - `NODE_BACKGROUND_UNAVAILABLE`：將 iOS 應用程式切換到前景（畫布／相機／螢幕命令需要如此）。
 - `A2UI_HOST_NOT_CONFIGURED`：Gateway 閘道器未公告畫布主機 URL；請在 [Gateway 設定](/gateway/configuration) 中檢查 `canvasHost`。
 - 配對提示未出現：執行 `openclaw nodes pending` 並手動核准。
-- 重新安裝後無法重新連線：Keychain 中的配對權杖已被清除；請重新配對節點。
+- 重新安裝後無法重新連線：Keychain 的配對權杖已被清除；請重新配對節點。
 
 ## 相關文件
 

@@ -4,19 +4,12 @@ read_when:
   - Definering eller refaktorering af plugin-arkitekturen
   - Migrering af kanalconnectors til plugin-SDK/runtime
 title: "Refaktorering af Plugin SDK"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:40Z
 ---
 
 # Plugin SDK + Runtime Refaktoreringsplan
 
-Mål: hver beskedconnector er et plugin (medfølgende eller eksternt), der bruger ét stabilt API.
-Ingen plugins importerer direkte fra `src/**`. Alle afhængigheder går via SDK’et eller runtime.
+Målsætning: Hvert beskedstik er et plugin (bundtet eller eksternt) ved hjælp af en stabil API.
+Ingen plugin import fra `src/**` direkte. Alle afhængigheder går gennem SDK eller runtime.
 
 ## Hvorfor nu
 
@@ -25,9 +18,9 @@ Ingen plugins importerer direkte fra `src/**`. Alle afhængigheder går via SDK�
 
 ## Målarkitektur (to lag)
 
-### 1) Plugin SDK (kompileringstid, stabilt, publicerbart)
+### 1. Plugin SDK (kompileringstid, stabilt, publicerbart)
 
-Omfang: typer, hjælpere og konfigurationsværktøjer. Ingen runtime-tilstand, ingen sideeffekter.
+Scope: typer, hjælpere, og config forsyningsselskaber. Ingen runtime tilstand, ingen bivirkninger.
 
 Indhold (eksempler):
 
@@ -44,10 +37,10 @@ Levering:
 - Publicér som `openclaw/plugin-sdk` (eller eksportér fra core under `openclaw/plugin-sdk`).
 - Semver med eksplicitte stabilitetsgarantier.
 
-### 2) Plugin Runtime (eksekveringsflade, injiceret)
+### 2. Plugin Runtime (eksekveringsflade, injiceret)
 
-Omfang: alt der berører core-runtime-adfærd.
-Tilgås via `OpenClawPluginApi.runtime`, så plugins aldrig importerer `src/**`.
+Anvendelse: alt, hvad der rører kernen runtime adfærd.
+Tilgået via `OpenClawPluginApi.runtime` så plugins aldrig importere `src/**`.
 
 Foreslået overflade (minimal men komplet):
 
@@ -195,8 +188,8 @@ Noter:
 ## Kompatibilitet og versionering
 
 - SDK: semver, publiceret, dokumenterede ændringer.
-- Runtime: versioneret pr. core-release. Tilføj `api.runtime.version`.
-- Plugins erklærer et påkrævet runtime-interval (f.eks. `openclawRuntime: ">=2026.2.0"`).
+- Køretid: versioneret pr. kerneudgivelse. Tilføj `api.runtime.version`.
+- Plugins erklærer en krævet runtime rækkevidde (f.eks. `openclawRuntime: ">=2026.2.0"`).
 
 ## Teststrategi
 

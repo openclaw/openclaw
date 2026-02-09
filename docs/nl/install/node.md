@@ -5,13 +5,6 @@ read_when:
   - "Je moet Node.js installeren voordat je OpenClaw installeert"
   - "Je hebt OpenClaw geïnstalleerd maar `openclaw` is geen bekende opdracht"
   - "`npm install -g` mislukt met rechten- of PATH-problemen"
-x-i18n:
-  source_path: install/node.md
-  source_hash: f848d6473a183090
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:30Z
 ---
 
 # Node.js
@@ -32,49 +25,55 @@ Als dit `v22.x.x` of hoger weergeeft, zit je goed. Als Node niet is geïnstallee
   <Tab title="macOS">
     **Homebrew** (aanbevolen):
 
+    ````
     ```bash
     brew install node
     ```
-
+    
     Of download het macOS-installatieprogramma van [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
   <Tab title="Linux">
     **Ubuntu / Debian:**
 
+    ````
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
-
+    
     **Fedora / RHEL:**
-
+    
     ```bash
     sudo dnf install nodejs
     ```
-
+    
     Of gebruik een versiebeheerder (zie hieronder).
+    ````
 
   </Tab>
   <Tab title="Windows">
     **winget** (aanbevolen):
 
+    ````
     ```powershell
     winget install OpenJS.NodeJS.LTS
     ```
-
+    
     **Chocolatey:**
-
+    
     ```powershell
     choco install nodejs-lts
     ```
-
+    
     Of download het Windows-installatieprogramma van [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
 </Tabs>
 
-<Accordion title="Een versiebeheerder gebruiken (nvm, fnm, mise, asdf)">
+<Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
   Versiebeheerders maken het eenvoudig om tussen Node-versies te wisselen. Populaire opties:
 
 - [**fnm**](https://github.com/Schniz/fnm) — snel, cross‑platform
@@ -100,34 +99,38 @@ fnm use 22
 Dit betekent bijna altijd dat de globale bin-map van npm niet in je PATH staat.
 
 <Steps>
-  <Step title="Vind je globale npm-prefix">
+  <Step title="Find your global npm prefix">
     ```bash
     npm prefix -g
     ```
   </Step>
-  <Step title="Controleer of deze in je PATH staat">
+  <Step title="Check if it's on your PATH">
     ```bash
     echo "$PATH"
     ```
 
+    ```
     Zoek in de uitvoer naar `<npm-prefix>/bin` (macOS/Linux) of `<npm-prefix>` (Windows).
+    ```
 
   </Step>
-  <Step title="Voeg deze toe aan het opstartbestand van je shell">
+  <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
         Voeg toe aan `~/.zshrc` of `~/.bashrc`:
 
-        ```bash
-        export PATH="$(npm prefix -g)/bin:$PATH"
         ```
-
-        Open daarna een nieuwe terminal (of voer `rehash` uit in zsh / `hash -r` in bash).
-      </Tab>
-      <Tab title="Windows">
-        Voeg de uitvoer van `npm prefix -g` toe aan je systeem-PATH via Instellingen → Systeem → Omgevingsvariabelen.
-      </Tab>
-    </Tabs>
+            ```bash
+            export PATH="$(npm prefix -g)/bin:$PATH"
+            ```
+        
+            Open daarna een nieuwe terminal (of voer `rehash` uit in zsh / `hash -r` in bash).
+          </Tab>
+          <Tab title="Windows">
+            Voeg de uitvoer van `npm prefix -g` toe aan je systeem-PATH via Instellingen → Systeem → Omgevingsvariabelen.
+          </Tab>
+        </Tabs>
+        ```
 
   </Step>
 </Steps>

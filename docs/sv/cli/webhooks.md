@@ -4,13 +4,6 @@ read_when:
   - Du vill koppla Gmail Pub/Sub-händelser till OpenClaw
   - Du vill använda webhook-hjälparkommandon
 title: "webhooks"
-x-i18n:
-  source_path: cli/webhooks.md
-  source_hash: 785ec62afe6631b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:49Z
 ---
 
 # `openclaw webhooks`

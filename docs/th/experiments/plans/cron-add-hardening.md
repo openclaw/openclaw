@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "การเสริมความแข็งแกร่งของ Cron Add"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:16Z
 ---
 
 # การเสริมความแข็งแกร่งของ Cron Add และการปรับสคีมาให้สอดคล้อง
 
 ## บริบท
 
-บันทึกล็อกของ Gateway（เกตเวย์）ล่าสุดแสดงความล้มเหลว `cron.add` ซ้ำๆ จากพารามิเตอร์ที่ไม่ถูกต้อง (ขาด `sessionTarget`, `wakeMode`, `payload` และ `schedule` ที่รูปแบบผิดพลาด) สิ่งนี้บ่งชี้ว่ามีไคลเอนต์อย่างน้อยหนึ่งตัว (น่าจะเป็นเส้นทางเรียกเครื่องมือของเอเจนต์) กำลังส่งเพย์โหลดงานที่ถูกห่อหรือระบุไม่ครบถ้วน แยกต่างหาก ยังมีความคลาดเคลื่อนระหว่าง enum ของผู้ให้บริการ cron ใน TypeScript, สคีมาของ Gateway（เกตเวย์）, แฟล็ก CLI และชนิดฟอร์มของ UI รวมถึงความไม่ตรงกันของ UI สำหรับ `cron.status` (คาดหวัง `jobCount` ขณะที่ Gateway（เกตเวย์）ส่งกลับ `jobs`)
+Recent gateway logs show repeated `cron.add` failures with invalid parameters (missing `sessionTarget`, `wakeMode`, `payload`, and malformed `schedule`). This indicates that at least one client (likely the agent tool call path) is sending wrapped or partially specified job payloads. Separately, there is drift between cron provider enums in TypeScript, gateway schema, CLI flags, and UI form types, plus a UI mismatch for `cron.status` (expects `jobCount` while gateway returns `jobs`).
 
 ## เป้าหมาย
 
@@ -27,7 +20,7 @@ x-i18n:
 - แก้ไขการแสดงผลจำนวนงานสถานะ cron ใน Control UI
 - เพิ่มการทดสอบเพื่อครอบคลุมการทำให้เป็นรูปแบบปกติและพฤติกรรมของเครื่องมือ
 
-## สิ่งที่ไม่อยู่ในขอบเขต
+## Non-goals
 
 - เปลี่ยนความหมายการตั้งเวลา cron หรือพฤติกรรมการรันงาน
 - เพิ่มชนิดตารางเวลาใหม่หรือการพาร์ส cron expression
@@ -60,7 +53,7 @@ x-i18n:
 - เฝ้าดูบันทึกล็อกของ Gateway（เกตเวย์）เพื่อยืนยันว่าข้อผิดพลาด INVALID_REQUEST ของ `cron.add` ลดลง
 - ยืนยันว่า Control UI แสดงจำนวนงานสถานะ cron หลังรีเฟรช
 
-## งานต่อเนื่อง (ไม่บังคับ)
+## Optional Follow-ups
 
 - ทดสอบ Control UI แบบ smoke ด้วยตนเอง: เพิ่มงาน cron ต่อผู้ให้บริการหนึ่งรายการ + ตรวจสอบจำนวนงานสถานะ
 

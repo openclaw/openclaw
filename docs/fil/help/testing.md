@@ -5,13 +5,6 @@ read_when:
   - Kapag nagdadagdag ng regressions para sa mga bug ng model/provider
   - Kapag nagde-debug ng gateway + agent na behavior
 title: "Testing"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:12Z
 ---
 
 # Testing
@@ -277,13 +270,13 @@ Pumili ng kahit isa bawat provider family:
 Opsyonal na dagdag na saklaw (magandang mayroon):
 
 - xAI: `xai/grok-4` (o pinakabagong available)
-- Mistral: `mistral/`… (pumili ng isang “tools”-capable na model na naka-enable sa iyo)
-- Cerebras: `cerebras/`… (kung may access ka)
-- LM Studio: `lmstudio/`… (lokal; ang tool calling ay depende sa API mode)
+- LM Studio: `lmstudio/`… (pick one “tools” capable model you have enabled)
+- Cerebras: `cerebras/`… (if you have access)
+- Isama ang hindi bababa sa isang image-capable na modelo sa `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, atbp.) (local; tool calling depends on API mode)
 
 ### Vision: image send (attachment → multimodal message)
 
-Isama ang kahit isang image-capable na model sa `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI na may vision-capable variants, atbp.) para ma-exercise ang image probe.
+upang subukan ang image probe. Tip: huwag subukang i-hardcode ang “all models” sa docs.
 
 ### Aggregators / alternate gateways
 
@@ -297,16 +290,18 @@ Mas marami pang provider na puwede mong isama sa live matrix (kung may creds/con
 - Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Sa pamamagitan ng `models.providers` (custom endpoints): `minimax` (cloud/API), kasama ang anumang OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, atbp.)
 
-Tip: huwag subukang i-hardcode ang “lahat ng model” sa docs. Ang authoritative list ay kung ano man ang ibinabalik ng `discoverModels(...)` sa makina mo + kung anong keys ang available.
+Ang awtoritatibong listahan ay kung ano man ang ibinabalik ng `discoverModels(...)` sa iyong machine + kung anu-anong keys ang available. Mga praktikal na implikasyon:
 
 ## Mga credential (huwag kailanman i-commit)
 
-Dinidiskubre ng live tests ang mga credential sa parehong paraan ng CLI. Praktikal na implikasyon:
+Live tests discover credentials the same way the CLI does. DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts\`
 
 - Kung gumagana ang CLI, dapat makita ng live tests ang parehong keys.
+
 - Kung sinasabi ng live test na “no creds”, i-debug ito sa parehong paraan na pagde-debug mo ng `openclaw models list` / model selection.
 
 - Profile store: `~/.openclaw/credentials/` (preferred; ito ang ibig sabihin ng “profile keys” sa tests)
+
 - Config: `~/.openclaw/openclaw.json` (o `OPENCLAW_CONFIG_PATH`)
 
 Kung gusto mong umasa sa env keys (hal. naka-export sa iyong `~/.profile`), magpatakbo ng local tests pagkatapos ng `source ~/.profile`, o gamitin ang mga Docker runner sa ibaba (maaari nilang i-mount ang `~/.profile` sa container).
@@ -314,7 +309,7 @@ Kung gusto mong umasa sa env keys (hal. naka-export sa iyong `~/.profile`), magp
 ## Deepgram live (audio transcription)
 
 - Test: `src/media-understanding/providers/deepgram/audio.live.test.ts`
-- I-enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
+- Enable: \`DEEPGRAM_API_KEY=... EXFOLIATE!"_ — Isang space lobster, marahil
 
 ## Docker runners (opsyonal na “gumagana sa Linux” checks)
 

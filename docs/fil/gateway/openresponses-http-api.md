@@ -4,20 +4,13 @@ read_when:
   - Pag-integrate ng mga client na nagsasalita ng OpenResponses API
   - Gusto mo ng item-based inputs, client tool calls, o SSE events
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # OpenResponses API (HTTP)
 
 Maaaring mag-serve ang Gateway ng OpenClaw ng isang OpenResponses-compatible `POST /v1/responses` endpoint.
 
-Ang endpoint na ito ay **naka-disable bilang default**. I-enable muna ito sa config.
+This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/responses`
 - Parehong port ng Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/responses`
@@ -27,7 +20,7 @@ Sa ilalim ng hood, ang mga request ay isinasagawa bilang isang normal na Gateway
 
 ## Authentication
 
-Ginagamit ang auth configuration ng Gateway. Magpadala ng bearer token:
+Uses the Gateway auth configuration. Magpadala ng bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -92,7 +85,7 @@ mula rito, kaya maaaring magbahagi ng agent session ang mga paulit-ulit na tawag
 
 ## Hugis ng request (sinusuportahan)
 
-Sumusunod ang request sa OpenResponses API na may item-based input. Kasalukuyang suportado:
+The request follows the OpenResponses API with item-based input. Current support:
 
 - `input`: string o array ng mga item object.
 - `instructions`: pinagsasama sa system prompt.
@@ -139,10 +132,10 @@ Tinanggap para sa schema compatibility ngunit ini-ignore kapag binubuo ang promp
 
 ## Mga Tool (client-side function tools)
 
-Magbigay ng mga tool gamit ang `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
+Provide tools with `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
 
-Kung magpasya ang agent na tumawag ng tool, magbabalik ang response ng isang `function_call` output item.
-Pagkatapos, magpadala ka ng follow-up request na may `function_call_output` upang ipagpatuloy ang turn.
+If the agent decides to call a tool, the response returns a `function_call` output item.
+You then send a follow-up request with `function_call_output` to continue the turn.
 
 ## Mga Larawan (`input_image`)
 
@@ -155,8 +148,8 @@ Sinusuportahan ang base64 o URL sources:
 }
 ```
 
-Mga pinapayagang MIME type (kasalukuyan): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
-Max na laki (kasalukuyan): 10MB.
+Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Max size (current): 10MB.
 
 ## Mga File (`input_file`)
 
@@ -183,11 +176,11 @@ Kasalukuyang pag-uugali:
 
 - Ang nilalaman ng file ay dini-decode at idinadagdag sa **system prompt**, hindi sa user message,
   kaya nananatili itong ephemeral (hindi ipinapersist sa session history).
-- Ang mga PDF ay pino-proseso para sa text. Kung kaunti ang nahanap na text, ang mga unang pahina ay
-  ni-ra-rasterize bilang mga larawan at ipinapasa sa model.
+- PDFs are parsed for text. If little text is found, the first pages are rasterized
+  into images and passed to the model.
 
-Ang PDF parsing ay gumagamit ng Node-friendly `pdfjs-dist` legacy build (walang worker). Ang modern
-PDF.js build ay umaasa sa browser workers/DOM globals, kaya hindi ito ginagamit sa Gateway.
+PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
+PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
 
 Mga default sa pag-fetch ng URL:
 

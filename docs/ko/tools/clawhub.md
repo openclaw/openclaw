@@ -5,13 +5,6 @@ read_when:
   - Skills 설치, 검색 또는 게시 시
   - ClawHub CLI 플래그와 동기화 동작 설명 시
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:39Z
 ---
 
 # ClawHub
@@ -41,7 +34,7 @@ ClawHub 는 **OpenClaw 를 위한 공개 Skills 레지스트리**입니다. 이�
 - 악의적이거나 안전하지 않은 Skills 를 신고합니다.
 - 관리자인 경우 숨기기, 숨김 해제, 삭제 또는 차단을 수행할 수 있습니다.
 
-## 대상 사용자 (초보자 친화적)
+## 대상 사용자(초보자 친화적)
 
 OpenClaw 에이전트에 새로운 기능을 추가하고 싶다면, ClawHub 는 Skills 를 찾고 설치하는 가장 쉬운 방법입니다. 백엔드 동작 방식을 알 필요는 없습니다. 다음을 수행할 수 있습니다.
 
@@ -88,7 +81,8 @@ Skill 은 OpenClaw 가 특정 작업을 수행하는 방법을 학습하도록 �
 - Skill 에서 사용하는 선택적 설정, 스크립트 또는 보조 파일
 - 태그, 요약, 설치 요구 사항과 같은 메타데이터
 
-ClawHub 는 메타데이터를 사용하여 디바이스 검색을 강화하고 Skill 기능을 안전하게 노출합니다. 또한 별점 및 다운로드와 같은 사용 신호를 추적하여 순위와 가시성을 개선합니다.
+ClawHub 는 메타데이터를 사용하여 디바이스 검색을 강화하고 Skill 기능을 안전하게 노출합니다.
+또한 별점 및 다운로드와 같은 사용 신호를 추적하여 순위와 가시성을 개선합니다.
 
 ## 서비스 제공 기능 (기능)
 

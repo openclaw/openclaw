@@ -5,13 +5,6 @@ read_when:
   - Al configurar una nueva máquina
 title: "Asistente de incorporación (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:45Z
 ---
 
 # Asistente de incorporación (CLI)
@@ -52,7 +45,7 @@ que almacena `tools.web.search.apiKey`. Documentación: [Herramientas web](/tool
 El asistente comienza con **Inicio rápido** (valores predeterminados) vs **Avanzado** (control total).
 
 <Tabs>
-  <Tab title="Inicio rápido (valores predeterminados)">
+  <Tab title="QuickStart (defaults)">
     - Gateway local (local loopback)
     - Espacio de trabajo predeterminado (o espacio de trabajo existente)
     - Puerto del Gateway **18789**
@@ -60,7 +53,7 @@ El asistente comienza con **Inicio rápido** (valores predeterminados) vs **Avan
     - Exposición por Tailscale **Desactivada**
     - Los mensajes directos de Telegram + WhatsApp se configuran de forma predeterminada con **lista de permitidos** (se le pedirá su número de teléfono)
   </Tab>
-  <Tab title="Avanzado (control total)">
+  <Tab title="Advanced (full control)">
     - Expone cada paso (modo, espacio de trabajo, Gateway, canales, daemon, Skills).
   </Tab>
 </Tabs>

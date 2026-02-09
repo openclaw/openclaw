@@ -5,13 +5,6 @@ read_when:
   - ノードランナー + UI IPC を実装するとき
   - exec ホストのセキュリティモードおよびスラッシュコマンドを追加するとき
 title: "Exec ホストのリファクタリング"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:18Z
 ---
 
 # Exec ホストのリファクタリング計画
@@ -60,7 +53,7 @@ x-i18n:
 
 ### 確認モード
 
-- `off`：確認しません。
+- `off`: 決して聞かない。
 - `on-miss`：許可リストに一致しない場合のみ確認します。
 - `always`：毎回確認します。
 
@@ -214,7 +207,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 ## イベント
 
-### イベントを受信する主体
+### イベントを閲覧する人
 
 - システムイベントは **セッション単位** で、次のプロンプト時にエージェントへ表示されます。
 - gateway のインメモリキュー（`enqueueSystemEvent`）に保存されます。
@@ -309,7 +302,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - 統合テスト：ノードランナーの拒否/許可/確認フロー。
 - Bridge イベントテスト：ノードイベント → システムイベントのルーティング。
 
-## 未解決のリスク
+## オープンなリスク
 
 - UI の利用不可：`askFallback` が遵守されることを保証します。
 - 長時間実行コマンド：タイムアウト + 出力上限に依存します。

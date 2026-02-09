@@ -4,19 +4,12 @@ read_when:
   - रिपॉज़िटरी से स्क्रिप्ट्स चलाते समय
   - ./scripts के अंतर्गत स्क्रिप्ट्स जोड़ते या बदलते समय
 title: "स्क्रिप्ट्स"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:16Z
 ---
 
 # स्क्रिप्ट्स
 
-`scripts/` डायरेक्टरी में स्थानीय वर्कफ़्लो और ऑप्स कार्यों के लिए सहायक स्क्रिप्ट्स शामिल हैं।
-जब कोई कार्य स्पष्ट रूप से किसी स्क्रिप्ट से जुड़ा हो तब इन्हें उपयोग करें; अन्यथा CLI को प्राथमिकता दें।
+The `scripts/` directory contains helper scripts for local workflows and ops tasks.
+Use these when a task is clearly tied to a script; otherwise prefer the CLI.
 
 ## परंपराएँ
 

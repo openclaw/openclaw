@@ -3,13 +3,6 @@ summary: "SSH tünelleri (Gateway WS) ve tailnet'ler kullanarak uzaktan erişim"
 read_when:
   - Uzak gateway kurulumlarını çalıştırırken veya sorun giderirken
 title: "Uzaktan Erişim"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:29Z
 ---
 
 # Uzaktan erişim (SSH, tüneller ve tailnet'ler)
@@ -29,7 +22,7 @@ Bu depo, özel bir ana makinede (masaüstü/sunucu) tek bir Gateway’in (ana) �
 **Gateway ana makinesi**ni “ajanın yaşadığı yer” olarak düşünün. Oturumlara, kimlik doğrulama profillerine, kanallara ve duruma sahiptir.
 Dizüstü/masaüstünüz (ve düğümler) bu ana makineye bağlanır.
 
-### 1) Tailnet’inizde her zaman açık Gateway (VPS veya ev sunucusu)
+### 1. Tailnet’inizde her zaman açık Gateway (VPS veya ev sunucusu)
 
 Gateway’i kalıcı bir ana makinede çalıştırın ve **Tailscale** veya SSH ile erişin.
 
@@ -39,7 +32,7 @@ Gateway’i kalıcı bir ana makinede çalıştırın ve **Tailscale** veya SSH 
 
 Bu, dizüstünüz sık sık uykuya geçtiğinde ancak ajanın her zaman açık olmasını istediğinizde idealdir.
 
-### 2) Ev masaüstü Gateway’i çalıştırır, dizüstü uzaktan kontrol eder
+### 2. Ev masaüstü Gateway’i çalıştırır, dizüstü uzaktan kontrol eder
 
 Dizüstü **ajanı çalıştırmaz**. Uzaktan bağlanır:
 
@@ -48,7 +41,7 @@ Dizüstü **ajanı çalıştırmaz**. Uzaktan bağlanır:
 
 Çalıştırma kılavuzu: [macOS uzaktan erişim](/platforms/mac/remote).
 
-### 3) Dizüstü Gateway’i çalıştırır, diğer makinelerden uzaktan erişim
+### 3. Dizüstü Gateway’i çalıştırır, diğer makinelerden uzaktan erişim
 
 Gateway’i yerelde tutun ancak güvenli biçimde açın:
 
@@ -90,7 +83,7 @@ Not: `18789`’u yapılandırılmış `gateway.port` ile değiştirin (veya `--p
 Not: `--url` geçildiğinde, CLI yapılandırma veya ortam kimlik bilgilerine geri dönmez.
 `--token` veya `--password`’i açıkça ekleyin. Açık kimlik bilgileri eksikse hata oluşur.
 
-## CLI uzaktan varsayılanlar
+## CLI remote defaults
 
 CLI komutlarının varsayılan olarak kullanacağı bir uzak hedefi kalıcı hale getirebilirsiniz:
 

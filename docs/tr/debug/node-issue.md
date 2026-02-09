@@ -4,13 +4,6 @@ read_when:
   - Yalnızca Node’a özgü geliştirme betiklerini veya izleme modu hatalarını ayıklarken
   - OpenClaw’da tsx/esbuild yükleyici çökmelerini incelerken
 title: "Node + tsx Çökmesi"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:16Z
 ---
 
 # Node + tsx "\_\_name bir fonksiyon değil" çökmesi
@@ -27,13 +20,13 @@ OpenClaw’ı Node üzerinden `tsx` ile çalıştırmak başlangıçta şu hata 
 
 Bu durum, geliştirme betiklerinin Bun’dan `tsx`’e geçirilmesinden sonra başladı (commit `2871657e`, 2026-01-06). Aynı çalışma yolu Bun ile sorunsuzdu.
 
-## Ortam
+## Environment
 
 - Node: v25.x (v25.3.0 üzerinde gözlemlendi)
 - tsx: 4.21.0
 - OS: macOS (Node 25 çalıştıran diğer platformlarda da yeniden üretilebilir olması muhtemel)
 
-## Yeniden üretim (yalnızca Node)
+## Repro (Node-only)
 
 ```bash
 # in repo root
@@ -42,7 +35,7 @@ pnpm install
 node --import tsx src/entry.ts status
 ```
 
-## Depoda minimal yeniden üretim
+## Minimal repro in repo
 
 ```bash
 node --import tsx scripts/repro/tsx-name-repro.ts
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Geçici çözümler
 
 - Geliştirme betikleri için Bun kullanın (mevcut geçici geri dönüş).
+
 - Node + tsc izleme kullanın, ardından derlenmiş çıktıyı çalıştırın:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Yerelde doğrulandı: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` Node 25’te çalışıyor.
+
 - Mümkünse TS yükleyicisinde esbuild keepNames’i devre dışı bırakın (`__name` yardımcı fonksiyon eklenmesini engeller); tsx şu anda bunu sunmuyor.
+
 - Sorunun Node 25’e özgü olup olmadığını görmek için `tsx` ile Node LTS (22/24) test edin.
 
 ## Kaynaklar

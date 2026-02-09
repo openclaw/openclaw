@@ -5,13 +5,6 @@ read_when:
   - Está cambiando el comportamiento de la auto-compactación o agregando tareas de mantenimiento de “pre-compactación”
   - Quiere implementar vaciados de memoria o turnos silenciosos del sistema
 title: "Análisis profundo de la gestión de sesiones"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:50Z
 ---
 
 # Gestión de sesiones y compactación (análisis profundo)

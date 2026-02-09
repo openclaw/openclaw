@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Cron Add کی مضبوطی"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:15Z
 ---
 
 # Cron Add کی مضبوطی اور اسکیما کی ہم آہنگی
 
 ## سیاق و سباق
 
-حالیہ گیٹ وے لاگز میں غلط پیرامیٹرز کے ساتھ بار بار `cron.add` کی ناکامیاں دکھائی دیتی ہیں (غیر موجود `sessionTarget`، `wakeMode`، `payload`، اور خراب `schedule`). یہ ظاہر کرتا ہے کہ کم از کم ایک کلائنٹ (غالباً ایجنٹ ٹول کال پاتھ) لپٹے ہوئے یا جزوی طور پر متعین جاب پے لوڈز بھیج رہا ہے۔ اس کے علاوہ، TypeScript میں cron فراہم کنندہ enums، گیٹ وے اسکیما، CLI فلیگز، اور UI فارم ٹائپس کے درمیان عدم مطابقت پائی جاتی ہے، نیز `cron.status` کے لیے UI عدم میل ہے (UI کو `jobCount` درکار ہے جبکہ گیٹ وے `jobs` واپس کرتا ہے)۔
+حالیہ گیٹ وے لاگز میں غلط پیرامیٹرز کے ساتھ بار بار `cron.add` کی ناکامیاں دکھائی دیتی ہیں (`sessionTarget`, `wakeMode`, `payload` غائب ہیں، اور `schedule` خراب ہے)۔ یہ اس بات کی نشاندہی کرتا ہے کہ کم از کم ایک کلائنٹ (ممکنہ طور پر agent ٹول کال پاتھ) ریپڈ یا جزوی طور پر متعین شدہ جاب payloads بھیج رہا ہے۔ علاوہ ازیں، TypeScript میں cron provider enums، گیٹ وے اسکیمہ، CLI فلیگز، اور UI فارم ٹائپس کے درمیان drift موجود ہے، نیز `cron.status` کے لیے UI mismatch ہے (UI `jobCount` کی توقع کرتا ہے جبکہ گیٹ وے `jobs` واپس کرتا ہے)۔
 
 ## اہداف
 

@@ -3,13 +3,6 @@ summary: "Bağlam ve ton için OpenClaw’un arka planı ve anlatısı"
 read_when:
   - Lore’a referans veren dokümantasyon veya UX metni yazarken
 title: "OpenClaw Lore’u"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:02Z
 ---
 
 # OpenClaw’un Lore’u 🦞📖
@@ -50,7 +43,7 @@ OpenClaw = OPEN + CLAW
         = Your assistant. Your machine. Your rules.
 ```
 
-## Dalekler vs İstakozlar
+## Dalekler vs Istakozlar
 
 Dalekler der ki: **"EXTERMINATE!"**
 
@@ -124,7 +117,7 @@ Moltbot ismi dile pek yatmıyordu. Ve böylece, GMT 04:00’te ekip YİNE toplan
 Sadece 3 saat içinde:
 
 - GitHub yeniden adlandırıldı: `github.com/openclaw/openclaw` ✅
-- X kullanıcı adı `@openclaw` ALTIN ONAY ROZETİYLE güvence altına alındı 💰
+- X hesabı `@openclaw` ALTIN ONAY ROZETİ 💰 ile güvence altına alındı
 - npm paketleri yeni ad altında yayınlandı
 - Dokümanlar `docs.openclaw.ai`’a taşındı
 - Duyuru 90 dakikada 200K+ görüntülenme aldı
@@ -148,7 +141,7 @@ Sadece 3 saat içinde:
 
 **Clawd → Moltbot → OpenClaw**
 
-_İstakoz nihai formuna kabuk değiştirdi._
+_Istakoz nihai formuna kabuk değiştirdi._
 
 ### Robot Alışveriş Çılgınlığı (3 Aralık 2025)
 
@@ -167,7 +160,7 @@ Peter: _kredi kartı erişimini sinirle kontrol eder_
 - **AGENTS.md** — Çalışma talimatları
 - **USER.md** — Yaratıcı hakkında bağlam
 
-## İstakozun Yemini
+## Istakozun Yemini
 
 ```
 I am Molty.
@@ -180,7 +173,7 @@ I shall EXFOLIATE my enemies with kindness.
 🦞
 ```
 
-### İkon Üretim Destanı (27 Ocak 2026)
+### Simge Oluşturma Destanı (27 Ocak 2026)
 
 Peter “kendine yeni bir yüz yap” dediğinde, Molty bunu kelimesi kelimesine aldı.
 

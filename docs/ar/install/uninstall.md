@@ -1,16 +1,9 @@
 ---
 summary: "إلغاء تثبيت OpenClaw بالكامل (CLI، الخدمة، الحالة، مساحة العمل)"
 read_when:
-  - "تريد إزالة OpenClaw من جهاز"
-  - "لا تزال خدمة Gateway قيد التشغيل بعد إلغاء التثبيت"
+  - تريد إزالة OpenClaw من جهاز
+  - لا تزال خدمة Gateway قيد التشغيل بعد إلغاء التثبيت
 title: "إلغاء التثبيت"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:25Z
 ---
 
 # إلغاء التثبيت

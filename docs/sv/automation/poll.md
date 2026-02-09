@@ -4,13 +4,6 @@ read_when:
   - Lägga till eller ändra stöd för omröstningar
   - Felsöka skickade omröstningar från CLI eller gateway
 title: "Omröstningar"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:10Z
 ---
 
 # Omröstningar
@@ -64,13 +57,13 @@ Parametrar:
 ## Kanalskillnader
 
 - WhatsApp: 2–12 alternativ, `maxSelections` måste ligga inom antalet alternativ, ignorerar `durationHours`.
-- Discord: 2–10 alternativ, `durationHours` begränsas till 1–768 timmar (standard 24). `maxSelections > 1` aktiverar flerval; Discord stöder inte ett strikt antal val.
-- MS Teams: Omröstningar via Adaptive Card (hanteras av OpenClaw). Ingen inbyggd omröstnings-API; `durationHours` ignoreras.
+- Discord: 2-10 alternativ, `durationHours` fastspänd till 1-768 timmar (standard 24). `maxSelections > 1` aktiverar multi-select; Discord stöder inte ett strikt urvalsantal.
+- MS Teams: Adaptive Card polls (OpenClaw-managed). Ingen infödd enkät API; `durationHours` ignoreras.
 
 ## Agentverktyg (Meddelande)
 
 Använd verktyget `message` med åtgärden `poll` (`to`, `pollQuestion`, `pollOption`, valfri `pollMulti`, `pollDurationHours`, `channel`).
 
-Obs: Discord har inget läge för ”välj exakt N”; `pollMulti` mappas till flerval.
-Teams-omröstningar renderas som Adaptive Cards och kräver att gatewayn förblir online
-för att registrera röster i `~/.openclaw/msteams-polls.json`.
+Obs: Discord har inget ”pick exactly N”-läge; `pollMulti`-kartor för multi-select.
+Lag omröstningar renderas som Adaptive Cards och kräver att porten stannar online
+för att spela in röster i `~/.openclaw/msteams-polls.json`.

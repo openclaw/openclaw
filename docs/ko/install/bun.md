@@ -4,13 +4,6 @@ read_when:
   - 가장 빠른 로컬 개발 루프(bun + watch)를 원할 때
   - Bun 설치/패치/라이프사이클 스크립트 문제에 부딪혔을 때
 title: "Bun (실험적)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:19Z
 ---
 
 # Bun (실험적)
@@ -60,6 +53,6 @@ Bun 은 명시적으로 신뢰되지 않으면 의존성 라이프사이클 스�
 bun pm trust @whiskeysockets/baileys protobufjs
 ```
 
-## 주의사항
+## Caveats
 
 - 일부 스크립트는 여전히 pnpm 을 하드코딩합니다(예: `docs:build`, `ui:*`, `protocol:check`). 현재로서는 해당 스크립트는 pnpm 으로 실행하십시오.

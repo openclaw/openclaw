@@ -5,23 +5,16 @@ read_when:
   - webhook pairing کی خرابیوں کا ازالہ
   - macOS پر iMessage کی کنفیگریشن
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:18Z
 ---
 
 # BlueBubbles (macOS REST)
 
-حیثیت: بنڈلڈ پلگ اِن جو HTTP کے ذریعے BlueBubbles macOS سرور سے بات کرتا ہے۔ **iMessage انضمام کے لیے سفارش کردہ** کیونکہ اس کا API زیادہ بھرپور ہے اور legacy imsg چینل کے مقابلے میں سیٹ اپ آسان ہے۔
+Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
 ## جائزہ
 
 - macOS پر BlueBubbles ہیلپر ایپ کے ذریعے چلتا ہے ([bluebubbles.app](https://bluebubbles.app)).
-- سفارش/جانچا گیا: macOS Sequoia (15)۔ macOS Tahoe (26) کام کرتا ہے؛ تاہم Tahoe پر فی الحال edit ٹوٹا ہوا ہے، اور گروپ آئیکن اپڈیٹس کامیابی رپورٹ کر سکتی ہیں مگر sync نہیں ہوتیں۔
+- Recommended/tested: macOS Sequoia (15). macOS Tahoe (26) works; edit is currently broken on Tahoe, and group icon updates may report success but not sync.
 - OpenClaw اس سے REST API کے ذریعے بات کرتا ہے (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - آنے والے پیغامات webhooks کے ذریعے موصول ہوتے ہیں؛ باہر جانے والے جوابات، ٹائپنگ اشارے، read receipts، اور tapbacks REST کالز ہیں۔
 - attachments اور stickers کو inbound میڈیا کے طور پر ingest کیا جاتا ہے (اور جہاں ممکن ہو ایجنٹ کو دکھایا جاتا ہے)۔
@@ -32,7 +25,9 @@ x-i18n:
 ## فوری آغاز
 
 1. اپنے Mac پر BlueBubbles سرور انسٹال کریں ([bluebubbles.app/install](https://bluebubbles.app/install) پر ہدایات دیکھیں)۔
+
 2. BlueBubbles کنفیگ میں web API فعال کریں اور پاس ورڈ سیٹ کریں۔
+
 3. `openclaw onboard` چلائیں اور BlueBubbles منتخب کریں، یا دستی طور پر کنفیگر کریں:
 
    ```json5
@@ -49,13 +44,14 @@ x-i18n:
    ```
 
 4. BlueBubbles webhooks کو اپنے gateway کی طرف پوائنٹ کریں (مثال: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`)۔
+
 5. gateway شروع کریں؛ یہ webhook ہینڈلر رجسٹر کرے گا اور pairing شروع ہو جائے گی۔
 
 ## Messages.app کو فعال رکھنا (VM / headless سیٹ اپس)
 
-کچھ macOS VM / ہمیشہ آن سیٹ اپس میں Messages.app “idle” ہو سکتی ہے (آنے والے ایونٹس اس وقت تک رک جاتے ہیں جب تک ایپ کھولی/foreground نہ کی جائے)۔ ایک سادہ workaround یہ ہے کہ **ہر 5 منٹ بعد Messages کو poke کیا جائے** بذریعہ AppleScript + LaunchAgent۔
+Some macOS VM / always-on setups can end up with Messages.app going “idle” (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
 
-### 1) AppleScript محفوظ کریں
+### 1. AppleScript محفوظ کریں
 
 اس نام سے محفوظ کریں:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) LaunchAgent انسٹال کریں
+### 2. LaunchAgent انسٹال کریں
 
 اس نام سے محفوظ کریں:
 
@@ -116,7 +112,7 @@ end try
 نوٹس:
 
 - یہ **ہر 300 سیکنڈ** اور **لاگ اِن پر** چلتا ہے۔
-- پہلی بار چلانے پر macOS **Automation** پرامپٹس آ سکتی ہیں (`osascript` → Messages)۔ انہیں اسی user سیشن میں منظور کریں جو LaunchAgent چلاتا ہے۔
+- The first run may trigger macOS **Automation** prompts (`osascript` → Messages). Approve them in the same user session that runs the LaunchAgent.
 
 لوڈ کریں:
 
@@ -156,7 +152,7 @@ DMs:
 - منظوری کے طریقے:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Pairing ڈیفالٹ token exchange ہے۔ تفصیل: [Pairing](/channels/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 
 Groups:
 
@@ -249,7 +245,7 @@ BlueBubbles کنفیگ میں فعال ہونے پر اعلیٰ درجے کی م
 - **removeParticipant**: کسی کو گروپ سے ہٹائیں (`chatGuid`, `address`)
 - **leaveGroup**: گروپ چیٹ چھوڑیں (`chatGuid`)
 - **sendAttachment**: میڈیا/فائلیں بھیجیں (`to`, `buffer`, `filename`, `asVoice`)
-  - Voice memos: `asVoice: true` کو **MP3** یا **CAF** آڈیو کے ساتھ سیٹ کریں تاکہ iMessage voice message کے طور پر بھیجا جائے۔ BlueBubbles voice memos بھیجتے وقت MP3 → CAF میں تبدیل کرتا ہے۔
+  - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
 
 ### Message IDs (مختصر بمقابلہ مکمل)
 
@@ -325,13 +321,13 @@ Provider اختیارات:
 - `chat_id:123`
 - `chat_identifier:...`
 - براہِ راست handles: `+15555550123`, `user@example.com`
-  - اگر کسی براہِ راست handle کے لیے موجودہ DM چیٹ نہ ہو تو OpenClaw `POST /api/v1/chat/new` کے ذریعے ایک بنا دے گا۔ اس کے لیے BlueBubbles Private API کا فعال ہونا ضروری ہے۔
+  - If a direct handle does not have an existing DM chat, OpenClaw will create one via `POST /api/v1/chat/new`. This requires the BlueBubbles Private API to be enabled.
 
 ## سکیورٹی
 
-- Webhook درخواستوں کی تصدیق `guid`/`password` query params یا headers کو `channels.bluebubbles.password` سے موازنہ کر کے کی جاتی ہے۔ `localhost` سے آنے والی درخواستیں بھی قبول ہوتی ہیں۔
+- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`. Requests from `localhost` are also accepted.
 - API پاس ورڈ اور webhook endpoint کو خفیہ رکھیں (انہیں credentials کی طرح برتیں)۔
-- Localhost trust کا مطلب یہ ہے کہ same-host reverse proxy غیر ارادی طور پر پاس ورڈ کو bypass کر سکتا ہے۔ اگر آپ gateway کو proxy کرتے ہیں تو proxy پر auth لازمی بنائیں اور `gateway.trustedProxies` کنفیگر کریں۔ دیکھیں [Gateway security](/gateway/security#reverse-proxy-configuration)۔
+- Localhost trust means a same-host reverse proxy can unintentionally bypass the password. If you proxy the gateway, require auth at the proxy and configure `gateway.trustedProxies`. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - اگر BlueBubbles سرور کو اپنے LAN سے باہر expose کر رہے ہیں تو HTTPS + firewall قواعد فعال کریں۔
 
 ## خرابیوں کا ازالہ
@@ -339,9 +335,9 @@ Provider اختیارات:
 - اگر typing/read ایونٹس کام کرنا بند کر دیں تو BlueBubbles webhook لاگز چیک کریں اور تصدیق کریں کہ gateway پاتھ `channels.bluebubbles.webhookPath` سے میل کھاتا ہے۔
 - Pairing codes ایک گھنٹے بعد ختم ہو جاتے ہیں؛ `openclaw pairing list bluebubbles` اور `openclaw pairing approve bluebubbles <code>` استعمال کریں۔
 - ری ایکشنز کے لیے BlueBubbles private API درکار ہے (`POST /api/v1/message/react`)؛ یقینی بنائیں کہ سرور ورژن اسے فراہم کرتا ہے۔
-- Edit/unsend کے لیے macOS 13+ اور ہم آہنگ BlueBubbles سرور ورژن درکار ہے۔ macOS 26 (Tahoe) پر private API تبدیلیوں کی وجہ سے edit فی الحال خراب ہے۔
+- Edit/unsend require macOS 13+ and a compatible BlueBubbles server version. On macOS 26 (Tahoe), edit is currently broken due to private API changes.
 - macOS 26 (Tahoe) پر گروپ آئیکن اپڈیٹس غیر مستحکم ہو سکتی ہیں: API کامیابی لوٹا سکتی ہے مگر نیا آئیکن sync نہیں ہوتا۔
-- OpenClaw BlueBubbles سرور کے macOS ورژن کی بنیاد پر معروف طور پر خراب کارروائیوں کو خود بخود چھپا دیتا ہے۔ اگر macOS 26 (Tahoe) پر edit پھر بھی نظر آئے تو `channels.bluebubbles.actions.edit=false` کے ذریعے دستی طور پر اسے غیر فعال کریں۔
+- OpenClaw auto-hides known-broken actions based on the BlueBubbles server's macOS version. If edit still appears on macOS 26 (Tahoe), disable it manually with `channels.bluebubbles.actions.edit=false`.
 - اسٹیٹس/ہیلتھ معلومات کے لیے: `openclaw status --all` یا `openclaw status --deep`۔
 
 عمومی چینل ورک فلو کے حوالے کے لیے [Channels](/channels) اور [Plugins](/tools/plugin) گائیڈ دیکھیں۔

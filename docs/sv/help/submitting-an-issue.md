@@ -1,18 +1,11 @@
 ---
 summary: "Att rapportera ärenden och felrapporter med högt signalvärde"
 title: "Skicka in ett ärende"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:28Z
 ---
 
 ## Skicka in ett ärende
 
-Tydliga, koncisa ärenden påskyndar diagnos och åtgärder. Inkludera följande för buggar, regressioner eller funktionsluckor:
+Tydliga och koncisa problem påskyndar diagnos och korrigeringar. Inkludera följande för buggar, regressioner eller luckor i funktionen:
 
 ### Vad som ska ingå
 
@@ -28,7 +21,7 @@ Tydliga, koncisa ärenden påskyndar diagnos och åtgärder. Inkludera följande
 - [ ] Bekräftat att det inte nyligen är åtgärdat/adresserat (särskilt säkerhet)
 - [ ] Påståenden styrkta med bevis eller repro
 
-Var kortfattad. Koncishet > perfekt grammatik.
+Var kortfattad. Terseness > perfekt grammatik.
 
 Validering (kör/åtgärda före PR):
 
@@ -84,7 +77,7 @@ Validering (kör/åtgärda före PR):
 ### Evidence (redacted)
 ```
 
-_Undvik hemligheter/exploateringsdetaljer offentligt. För känsliga ärenden, minimera detaljer och begär privat rapportering._
+_Undvik hemligheter/utnyttja detaljer offentligt. För känsliga frågor, minimera detaljer och begära privat avslöjande._
 
 #### Regressionsrapport
 
@@ -156,4 +149,4 @@ _Undvik hemligheter/exploateringsdetaljer offentligt. För känsliga ärenden, m
 
 ### Skicka in en fix-PR
 
-Ärende före PR är valfritt. Inkludera detaljer i PR om du hoppar över det. Håll PR:en fokuserad, ange ärendenummer, lägg till tester eller förklara varför de saknas, dokumentera beteendeförändringar/risker, inkludera avidentifierade loggar/skärmbilder som bevis och kör korrekt validering innan inlämning.
+Problem innan PR är valfritt. Inkludera information i PR vid hoppning. Håll PR fokuserad, anteckningsproblemsnummer, lägg till tester eller förklara frånvaro, ändringar i dokumentbeteende/risker, inkludera rättade loggar/skärmdumpar som bevis, och kör korrekt validering innan du skickar in.

@@ -4,21 +4,12 @@ read_when:
   - သင် OpenClaw ပလဂ်အင် တစ်ခုကို တည်ဆောက်နေချိန်
   - ပလဂ်အင် config schema ကို ပို့ဆောင်ရန် သို့မဟုတ် ပလဂ်အင် စစ်ဆေးမှု အမှားများကို အမှန်တကယ် ခွဲခြမ်းစိတ်ဖြာရန် လိုအပ်သည့်အခါ
 title: "Plugin Manifest"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # Plugin manifest (openclaw.plugin.json)
 
-ပလဂ်အင်တိုင်းသည် **plugin root** အတွင်း `openclaw.plugin.json` ဖိုင်တစ်ခုကို **မဖြစ်မနေ** ထည့်သွင်းပေးရပါသည်။
-OpenClaw သည် ပလဂ်အင် **ကုဒ်ကို မအလုပ်လုပ်စေဘဲ** configuration ကို စစ်ဆေးရန်အတွက် ဤ manifest ကို အသုံးပြုပါသည်။
-မန်နီဖက်စ် ပျောက်ဆုံးနေခြင်း သို့မဟုတ် မမှန်ကန်ခြင်းကို ပလဂ်အင် အမှားအဖြစ် သတ်မှတ်ပြီး
-config စစ်ဆေးခြင်းကို တားဆီးပါသည်။
+Plugin တစ်ခုချင်းစီတွင် **plugin root** အတွင်း `openclaw.plugin.json` ဖိုင်တစ်ခု **မဖြစ်မနေ** ပါဝင်ရပါမည်။
+OpenClaw သည် plugin code ကို **မ run ဘဲ** configuration ကို validate လုပ်ရန် ဤ manifest ကို အသုံးပြုပါသည်။ မရှိသော သို့မဟုတ် မမှန်ကန်သော manifests များကို plugin errors အဖြစ် သတ်မှတ်ပြီး config validation ကို ပိတ်ဆို့ပါသည်။
 
 ပလဂ်အင် စနစ်အပြည့်အစုံ လမ်းညွှန်ကို ကြည့်ရန်: [Plugins](/tools/plugin)
 
@@ -61,8 +52,7 @@ config စစ်ဆေးခြင်းကို တားဆီးပါသည
 
 - မသိရှိသော `channels.*` ကီးများကို **အမှားများ** အဖြစ် သတ်မှတ်ပါသည်၊ သို့သော်
   channel id ကို ပလဂ်အင် manifest မှ ကြေညာထားပါက ချန်လှပ်ထားနိုင်ပါသည်။
-- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, နှင့် `plugins.slots.*`
-  တို့သည် **ရှာဖွေတွေ့ရှိနိုင်သော** ပလဂ်အင် id များကို ကိုးကားရပါသည်။ မသိရှိသော id များကို **အမှားများ** အဖြစ် သတ်မှတ်ပါသည်။
+- `plugins.entries.<id>``, `plugins.allow`, `plugins.deny`, နှင့် `plugins.slots.\*\` တို့သည် **discoverable** plugin ids များကို reference လုပ်ရပါမည်။ မသိသော ids များကို **errors** အဖြစ် သတ်မှတ်ပါသည်။
 - ပလဂ်အင်ကို ထည့်သွင်းထားပြီးသား ဖြစ်သော်လည်း မန်နီဖက်စ် သို့မဟုတ် schema ပျက်စီးနေခြင်း သို့မဟုတ် ပျောက်ဆုံးနေပါက
   စစ်ဆေးမှု မအောင်မြင်ဘဲ Doctor တွင် ပလဂ်အင် အမှားအဖြစ် အစီရင်ခံပါသည်။
 - ပလဂ်အင် config ရှိနေသော်လည်း ပလဂ်အင်ကို **ပိတ်ထားပါက**၊ config ကို ထိန်းသိမ်းထားပြီး

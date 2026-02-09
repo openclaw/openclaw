@@ -3,13 +3,6 @@ summary: "Statut de prise en charge de l’application Google Chat, capacites et
 read_when:
   - Travail sur les fonctionnalites du canal Google Chat
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3b2bb116cdd12614
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:46Z
 ---
 
 # Google Chat (Chat API)
@@ -108,6 +101,7 @@ Utilisez Tailscale Serve pour le tableau de bord prive et Funnel pour le chemin 
    Si vous y etes invite, visitez l’URL d’autorisation affichee dans la sortie pour activer Funnel pour ce nœud dans la politique de votre tailnet.
 
 5. **Verifiez la configuration :**
+
    ```bash
    tailscale serve status
    tailscale funnel status
@@ -203,7 +197,7 @@ Remarques :
 - `typingIndicator` prend en charge `none`, `message` (par defaut) et `reaction` (la reaction necessite l’OAuth utilisateur).
 - Les pieces jointes sont telechargees via l’API Chat et stockees dans le pipeline media (taille plafonnee par `mediaMaxMb`).
 
-## Depannage
+## Problemes courants
 
 ### 405 Method Not Allowed
 
@@ -232,6 +226,7 @@ Cela signifie que le gestionnaire de webhook n’est pas enregistre. Causes cour
    S’il affiche « disabled », ajoutez `plugins.entries.googlechat.enabled: true` a votre configuration.
 
 3. **Gateway (passerelle) non redemarree** : Apres l’ajout de la configuration, redemarrez la Gateway (passerelle) :
+
    ```bash
    openclaw gateway restart
    ```

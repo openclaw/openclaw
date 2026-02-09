@@ -1,17 +1,10 @@
 ---
-summary: „Eine WhatsApp-Nachricht an mehrere Agenten senden“
+summary: "„Eine WhatsApp-Nachricht an mehrere Agenten senden“"
 read_when:
   - Konfigurieren von Broadcast-Gruppen
   - Debuggen von Multi-Agent-Antworten in WhatsApp
 status: experimental
-title: „Broadcast-Gruppen“
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:18Z
+title: "„Broadcast-Gruppen“"
 ---
 
 # Broadcast-Gruppen
@@ -27,7 +20,7 @@ Aktueller Umfang: **nur WhatsApp** (Web-Kanal).
 
 Broadcast-Gruppen werden nach Kanal-Allowlists und Gruppen-Aktivierungsregeln ausgewertet. In WhatsApp-Gruppen bedeutet dies, dass Broadcasts dann stattfinden, wenn OpenClaw normalerweise antworten würde (zum Beispiel bei Erwähnung, abhängig von Ihren Gruppeneinstellungen).
 
-## Anwendungsfälle
+## Verwende Fälle
 
 ### 1. Spezialisierte Agenten-Teams
 

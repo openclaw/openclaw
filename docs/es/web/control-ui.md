@@ -4,13 +4,6 @@ read_when:
   - Quiere operar el Gateway desde un navegador
   - Quiere acceso a Tailnet sin túneles SSH
 title: "UI de control"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:09Z
 ---
 
 # UI de control (navegador)

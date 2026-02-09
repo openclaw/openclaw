@@ -4,13 +4,6 @@ read_when:
   - Bạn gặp vấn đề kết nối/xác thực và muốn có cách khắc phục có hướng dẫn
   - Bạn vừa cập nhật và muốn kiểm tra nhanh
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:18Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 Ghi chú:
 
-- Các lời nhắc tương tác (như sửa keychain/OAuth) chỉ chạy khi stdin là TTY và `--non-interactive` **không** được đặt. Các lần chạy không có giao diện (cron, Telegram, không có terminal) sẽ bỏ qua lời nhắc.
+- Các prompt tương tác (như sửa keychain/OAuth) chỉ chạy khi stdin là TTY và **không** đặt `--non-interactive`. Các lần chạy không có giao diện (cron, Telegram, không có terminal) sẽ bỏ qua các lời nhắc.
 - `--fix` (bí danh của `--repair`) ghi một bản sao lưu vào `~/.openclaw/openclaw.json.bak` và loại bỏ các khóa cấu hình không xác định, liệt kê từng mục bị loại bỏ.
 
 ## macOS: ghi đè biến môi trường `launchctl`

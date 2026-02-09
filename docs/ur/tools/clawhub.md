@@ -5,18 +5,11 @@ read_when:
   - Skills انسٹال کرنے، تلاش کرنے، یا شائع کرنے کے لیے
   - ClawHub CLI فلیگز اور سنک رویّے کی وضاحت کے لیے
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:06Z
 ---
 
 # ClawHub
 
-ClawHub **OpenClaw کے لیے عوامی Skills رجسٹری** ہے۔ یہ ایک مفت سروس ہے: تمام Skills عوامی، کھلی، اور ہر کسی کے لیے شیئرنگ اور دوبارہ استعمال کے لیے دستیاب ہیں۔ ایک Skill دراصل ایک فولڈر ہوتا ہے جس میں ایک `SKILL.md` فائل (اور معاون متنی فائلیں) شامل ہوتی ہیں۔ آپ ویب ایپ میں Skills براؤز کر سکتے ہیں یا CLI استعمال کر کے Skills تلاش، انسٹال، اپڈیٹ، اور شائع کر سکتے ہیں۔
+ClawHub is the **public skill registry for OpenClaw**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
 
 سائٹ: [clawhub.ai](https://clawhub.ai)
 
@@ -43,7 +36,7 @@ ClawHub **OpenClaw کے لیے عوامی Skills رجسٹری** ہے۔ یہ ای
 
 ## یہ کس کے لیے ہے (مبتدی دوست)
 
-اگر آپ اپنے OpenClaw ایجنٹ میں نئی صلاحیتیں شامل کرنا چاہتے ہیں تو ClawHub Skills تلاش اور انسٹال کرنے کا سب سے آسان طریقہ ہے۔ آپ کو بیک اینڈ کے کام کرنے کے طریقے جاننے کی ضرورت نہیں۔ آپ یہ کر سکتے ہیں:
+If you want to add new capabilities to your OpenClaw agent, ClawHub is the easiest way to find and install skills. You do not need to know how the backend works. You can:
 
 - سادہ زبان میں Skills تلاش کرنا۔
 - ایک Skill کو اپنے ورک اسپیس میں انسٹال کرنا۔
@@ -73,14 +66,16 @@ pnpm add -g clawhub
 
 ## OpenClaw میں اس کی جگہ
 
-بطورِ طے شدہ، CLI Skills کو آپ کی موجودہ ورکنگ ڈائریکٹری کے تحت `./skills` میں انسٹال کرتی ہے۔ اگر OpenClaw ورک اسپیس کنفیگر ہو تو `clawhub` اس ورک اسپیس پر واپس چلی جاتی ہے، جب تک کہ آپ `--workdir` (یا `CLAWHUB_WORKDIR`) کے ذریعے اوور رائیڈ نہ کریں۔ OpenClaw ورک اسپیس Skills کو `<workspace>/skills` سے لوڈ کرتا ہے اور انہیں **اگلے** سیشن میں اٹھا لیتا ہے۔ اگر آپ پہلے سے `~/.openclaw/skills` یا بنڈلڈ Skills استعمال کر رہے ہیں تو ورک اسپیس Skills کو ترجیح حاصل ہوتی ہے۔
+By default, the CLI installs skills into `./skills` under your current working directory. If a OpenClaw workspace is configured, `clawhub` falls back to that workspace unless you override `--workdir` (or `CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.openclaw/skills` or bundled skills, workspace skills take precedence.
 
 Skills کے لوڈ ہونے، شیئر ہونے، اور گیٹنگ کی مزید تفصیل کے لیے دیکھیں:
 [Skills](/tools/skills)
 
 ## Skill سسٹم کا جائزہ
 
-ایک Skill فائلوں کا ورژن شدہ بنڈل ہوتا ہے جو OpenClaw کو کسی مخصوص کام کی انجام دہی سکھاتا ہے۔ ہر شائع کاری ایک نیا ورژن بناتی ہے، اور رجسٹری ورژنز کی تاریخ رکھتی ہے تاکہ صارفین تبدیلیوں کا جائزہ لے سکیں۔
+A skill is a versioned bundle of files that teaches OpenClaw how to perform a
+specific task. Each publish creates a new version, and the registry keeps a
+history of versions so users can audit changes.
 
 ایک عام Skill میں شامل ہوتا ہے:
 
@@ -88,7 +83,9 @@ Skills کے لوڈ ہونے، شیئر ہونے، اور گیٹنگ کی مزی�
 - اختیاری کنفیگز، اسکرپٹس، یا معاون فائلیں جو Skill استعمال کرتی ہے۔
 - ٹیگز، خلاصہ، اور انسٹال کی ضروریات جیسا میٹا ڈیٹا۔
 
-ClawHub ڈسکوری کو طاقت دینے اور Skill کی صلاحیتوں کو محفوظ طریقے سے ظاہر کرنے کے لیے میٹا ڈیٹا استعمال کرتا ہے۔ رجسٹری درجہ بندی اور مرئیت بہتر بنانے کے لیے استعمالی سگنلز (جیسے اسٹارز اور ڈاؤن لوڈز) بھی ٹریک کرتی ہے۔
+ClawHub uses metadata to power discovery and safely expose skill capabilities.
+The registry also tracks usage signals (such as stars and downloads) to improve
+ranking and visibility.
 
 ## سروس کیا فراہم کرتی ہے (خصوصیات)
 
@@ -102,7 +99,9 @@ ClawHub ڈسکوری کو طاقت دینے اور Skill کی صلاحیتوں �
 
 ## سکیورٹی اور موڈریشن
 
-ClawHub بطورِ طے شدہ کھلا ہے۔ کوئی بھی Skills اپلوڈ کر سکتا ہے، مگر شائع کرنے کے لیے GitHub اکاؤنٹ کا کم از کم ایک ہفتہ پرانا ہونا ضروری ہے۔ اس سے جائز تعاون کنندگان کو روکے بغیر بدسلوکی کم ہوتی ہے۔
+ClawHub is open by default. Anyone can upload skills, but a GitHub account must
+be at least one week old to publish. This helps slow down abuse without blocking
+legitimate contributors.
 
 رپورٹنگ اور موڈریشن:
 
@@ -113,7 +112,8 @@ ClawHub بطورِ طے شدہ کھلا ہے۔ کوئی بھی Skills اپلوڈ
 - موڈریٹرز چھپی ہوئی Skills دیکھ سکتے ہیں، انہیں ظاہر کر سکتے ہیں، حذف کر سکتے ہیں، یا صارفین پر پابندی لگا سکتے ہیں۔
 - رپورٹ فیچر کا غلط استعمال اکاؤنٹ پابندیوں کا باعث بن سکتا ہے۔
 
-موڈریٹر بننے میں دلچسپی ہے؟ OpenClaw Discord میں پوچھیں اور کسی موڈریٹر یا مینٹینر سے رابطہ کریں۔
+Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a
+moderator or maintainer.
 
 ## CLI کمانڈز اور پیرامیٹرز
 
@@ -229,11 +229,11 @@ clawhub sync --all
 
 ### مقامی تبدیلیاں بمقابلہ رجسٹری ورژنز
 
-اپڈیٹس مقامی Skill مواد کا موازنہ رجسٹری ورژنز سے ایک مواد ہیش کے ذریعے کرتی ہیں۔ اگر مقامی فائلیں کسی شائع شدہ ورژن سے میچ نہ کریں تو CLI اوور رائٹ کرنے سے پہلے پوچھتی ہے (یا نان اِنٹریکٹو رنز میں `--force` درکار ہوتا ہے)۔
+Updates compare the local skill contents to registry versions using a content hash. If local files do not match any published version, the CLI asks before overwriting (or requires `--force` in non-interactive runs).
 
 ### سنک اسکیننگ اور فال بیک روٹس
 
-`clawhub sync` پہلے آپ کی موجودہ workdir اسکین کرتا ہے۔ اگر کوئی Skills نہ ملیں تو یہ معلوم لیگیسی مقامات پر واپس چلا جاتا ہے (مثال کے طور پر `~/openclaw/skills` اور `~/.openclaw/skills`)۔ یہ اضافی فلیگز کے بغیر پرانی Skill انسٹالیشنز تلاش کرنے کے لیے ڈیزائن کیا گیا ہے۔
+`clawhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/openclaw/skills` and `~/.openclaw/skills`). This is designed to find older skill installs without extra flags.
 
 ### اسٹوریج اور لاک فائل
 
@@ -242,7 +242,7 @@ clawhub sync --all
 
 ### ٹیلی میٹری (انسٹال کاؤنٹس)
 
-جب آپ لاگ اِن ہوتے ہوئے `clawhub sync` چلاتے ہیں تو CLI انسٹال کاؤنٹس کے حساب کے لیے ایک کم سے کم اسنیپ شاٹ بھیجتی ہے۔ آپ اسے مکمل طور پر غیر فعال کر سکتے ہیں:
+When you run `clawhub sync` while logged in, the CLI sends a minimal snapshot to compute install counts. You can disable this entirely:
 
 ```bash
 export CLAWHUB_DISABLE_TELEMETRY=1

@@ -4,13 +4,6 @@ read_when:
   - Webhook اینڈپوائنٹس شامل یا تبدیل کرتے وقت
   - بیرونی نظاموں کو OpenClaw سے جوڑتے وقت
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:02Z
 ---
 
 # Webhooks
@@ -36,7 +29,7 @@ Notes:
 
 ## Auth
 
-ہر درخواست میں hook ٹوکن شامل ہونا لازم ہے۔ ہیڈرز کو ترجیح دیں:
+40. ہر درخواست میں hook ٹوکن شامل ہونا ضروری ہے۔ 41. headers کو ترجیح دیں:
 
 - `Authorization: Bearer <token>` (سفارش کردہ)
 - `x-openclaw-token: <token>`
@@ -81,12 +74,12 @@ Payload:
 
 - `message` **required** (string): ایجنٹ کے لیے پروسیس کرنے کا پرامپٹ یا پیغام۔
 - `name` optional (string): hook کے لیے انسانی قابلِ فہم نام (مثلاً، "GitHub")، جو سیشن خلاصوں میں بطور سابقہ استعمال ہوتا ہے۔
-- `sessionKey` optional (string): ایجنٹ کے سیشن کی شناخت کے لیے استعمال ہونے والی کلید۔ بطورِ طے شدہ ایک رینڈم `hook:<uuid>`۔ مستقل کلید استعمال کرنے سے hook سیاق میں ملٹی ٹرن گفتگو ممکن ہوتی ہے۔
+- 42. `sessionKey` اختیاری (string): ایجنٹ کے سیشن کی شناخت کے لیے استعمال ہونے والی کلید۔ 43. ڈیفالٹ ایک بے ترتیب `hook:<uuid>` ہوتا ہے۔ 44. ایک مستقل کلید استعمال کرنے سے hook کے سیاق و سباق میں ملٹی ٹرن گفتگو ممکن ہوتی ہے۔
 - `wakeMode` optional (`now` | `next-heartbeat`): فوری ہارٹ بیٹ ٹرگر کرنا ہے یا اگلے دورانی چیک کا انتظار کرنا ہے (بطورِ طے شدہ `now`)۔
-- `deliver` optional (boolean): اگر `true` ہو تو ایجنٹ کا جواب میسجنگ چینل پر بھیجا جائے گا۔ بطورِ طے شدہ `true`۔ وہ جوابات جو صرف ہارٹ بیٹ کی توثیق ہوں خودکار طور پر نظرانداز کر دیے جاتے ہیں۔
-- `channel` optional (string): ترسیل کے لیے میسجنگ چینل۔ ان میں سے ایک: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`۔ بطورِ طے شدہ `last`۔
-- `to` optional (string): چینل کے لیے وصول کنندہ کی شناخت (مثلاً، WhatsApp/Signal کے لیے فون نمبر، Telegram کے لیے چیٹ ID، Discord/Slack/Mattermost (plugin) کے لیے چینل ID، MS Teams کے لیے گفتگو ID)۔ بطورِ طے شدہ main سیشن میں آخری وصول کنندہ۔
-- `model` optional (string): ماڈل اووررائیڈ (مثلاً، `anthropic/claude-3-5-sonnet` یا کوئی عرف)۔ اگر پابندی ہو تو اجازت یافتہ ماڈلز کی فہرست میں ہونا لازم ہے۔
+- 45. `deliver` اختیاری (boolean): اگر `true` ہو تو ایجنٹ کا جواب میسجنگ چینل پر بھیج دیا جائے گا۔ 46. ڈیفالٹ `true` ہے۔ 47. وہ جوابات جو صرف heartbeat acknowledgments ہوں، خودکار طور پر چھوڑ دیے جاتے ہیں۔
+- 48. `channel` اختیاری (string): ترسیل کے لیے میسجنگ چینل۔ 49. ان میں سے ایک: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`۔ 50. ڈیفالٹ `last` ہے۔
+- `to` optional (string): The recipient identifier for the channel (e.g., phone number for WhatsApp/Signal, chat ID for Telegram, channel ID for Discord/Slack/Mattermost (plugin), conversation ID for MS Teams). Defaults to the last recipient in the main session.
+- `model` optional (string): Model override (e.g., `anthropic/claude-3-5-sonnet` or an alias). Must be in the allowed model list if restricted.
 - `thinking` optional (string): تھنکنگ لیول اووررائیڈ (مثلاً، `low`, `medium`, `high`)۔
 - `timeoutSeconds` optional (number): ایجنٹ رن کے لیے زیادہ سے زیادہ دورانیہ سیکنڈز میں۔
 
@@ -98,9 +91,9 @@ Effect:
 
 ### `POST /hooks/<name>` (mapped)
 
-حسبِ ضرورت hook نام `hooks.mappings` کے ذریعے حل کیے جاتے ہیں (کنفیگریشن دیکھیں)۔ ایک میپنگ
-من مانی payloads کو `wake` یا `agent` ایکشنز میں تبدیل کر سکتی ہے، اختیاری ٹیمپلیٹس یا
-کوڈ ٹرانسفارمز کے ساتھ۔
+Custom hook names are resolved via `hooks.mappings` (see configuration). A mapping can
+turn arbitrary payloads into `wake` or `agent` actions, with optional templates or
+code transforms.
 
 Mapping options (summary):
 
@@ -113,8 +106,8 @@ Mapping options (summary):
   (`channel` بطورِ طے شدہ `last` ہے اور WhatsApp پر فال بیک کرتا ہے)۔
 - `allowUnsafeExternalContent: true` اس hook کے لیے بیرونی مواد کی حفاظت کے ریپر کو غیر فعال کرتا ہے
   (خطرناک؛ صرف قابلِ اعتماد اندرونی ذرائع کے لیے)۔
-- `openclaw webhooks gmail setup` `openclaw webhooks gmail run` کے لیے `hooks.gmail` کنفیگ لکھتا ہے۔
-  مکمل Gmail واچ فلو کے لیے [Gmail Pub/Sub](/automation/gmail-pubsub) دیکھیں۔
+- `openclaw webhooks gmail setup` writes `hooks.gmail` config for `openclaw webhooks gmail run`.
+  See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
 
 ## Responses
 
@@ -165,6 +158,6 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - hook اینڈپوائنٹس کو loopback، tailnet، یا قابلِ اعتماد ریورس پراکسی کے پیچھے رکھیں۔
 - ایک مخصوص hook ٹوکن استعمال کریں؛ gateway کی auth ٹوکنز دوبارہ استعمال نہ کریں۔
 - webhook لاگز میں حساس خام payloads شامل کرنے سے گریز کریں۔
-- hook payloads کو بطورِ طے شدہ غیر قابلِ اعتماد سمجھا جاتا ہے اور حفاظتی حدود کے ساتھ لپیٹا جاتا ہے۔
-  اگر کسی مخصوص hook کے لیے اسے غیر فعال کرنا ضروری ہو تو اس hook کی میپنگ میں `allowUnsafeExternalContent: true` سیٹ کریں
-  (خطرناک)۔
+- Hook payloads are treated as untrusted and wrapped with safety boundaries by default.
+  If you must disable this for a specific hook, set `allowUnsafeExternalContent: true`
+  in that hook's mapping (dangerous).

@@ -4,13 +4,6 @@ read_when:
   - Du administrerer parrede noder (kameraer, skærm, lærred)
   - Du skal godkende anmodninger eller kalde node-kommandoer
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:06Z
 ---
 
 # `openclaw nodes`
@@ -40,9 +33,9 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` udskriver tabeller for afventende/parrede. Parrede rækker inkluderer den seneste forbindelsesalder (Last Connect).
-Brug `--connected` for kun at vise aktuelt forbundne noder. Brug `--last-connected <duration>` til at
-filtrere til noder, der har oprettet forbindelse inden for en varighed (f.eks. `24h`, `7d`).
+`nodes list` tryk ventende/parrede tabeller. Parrede rækker inkluderer den seneste forbindelsesalder (seneste forbindelse).
+Brug `-- connected` til kun at vise nutidigt forbundne noder. Brug `--last-tilsluttet <duration>` til
+-filter til noder, der er tilsluttet inden for en varighed (f.eks. `24h`, `7d`).
 
 ## Invoke / run
 

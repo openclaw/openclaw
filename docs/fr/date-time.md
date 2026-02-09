@@ -4,13 +4,6 @@ read_when:
   - Vous modifiez la manière dont les horodatages sont affichés au modele ou aux utilisateurs
   - Vous deboguez la mise en forme de l’heure dans les messages ou la sortie de l’invite systeme
 title: "Date et heure"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:30Z
 ---
 
 # Date & heure
@@ -128,7 +121,7 @@ Les champs bruts du fournisseur sont preserves afin que rien ne soit perdu.
 
 Si vous avez besoin de l’heure locale, convertissez-la en aval en utilisant le fuseau horaire connu.
 
-## Documentation connexe
+## Docs associees
 
 - [Invite systeme](/concepts/system-prompt)
 - [Fuseaux horaires](/concepts/timezone)

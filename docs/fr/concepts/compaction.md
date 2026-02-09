@@ -4,13 +4,6 @@ read_when:
   - Vous voulez comprendre l’auto-compaction et /compact
   - Vous deboguez des sessions longues qui atteignent les limites de contexte
 title: "Compaction"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:09Z
 ---
 
 # Fenêtre de contexte & compaction

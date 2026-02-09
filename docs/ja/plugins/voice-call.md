@@ -4,18 +4,12 @@ read_when:
   - OpenClaw から発信の音声通話を行いたい場合
   - voice-call プラグインを設定または開発している場合
 title: "音声通話プラグイン"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:57Z
 ---
 
 # Voice Call（plugin）
 
-OpenClaw 向けの音声通話を提供するプラグインです。発信通知および、着信ポリシーに基づくマルチターンの会話をサポートします。
+OpenClaw 向けの音声通話を提供するプラグインです。発信通知および、着信ポリシーに基づくマルチターンの会話をサポートします。 3. アウトバウンド通知と、
+インバウンドポリシーを伴うマルチターン会話をサポートします。
 
 現在のプロバイダー：
 
@@ -120,12 +114,13 @@ cd ./extensions/voice-call && pnpm install
 - `mock` はローカル開発用のプロバイダーです（ネットワーク呼び出しなし）。
 - `skipSignatureVerification` はローカルテスト専用です。
 - ngrok の free tier を使用する場合は、`publicUrl` に正確な ngrok URL を設定してください。署名検証は常に有効です。
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` は、`tunnel.provider="ngrok"` かつ `serve.bind` がループバック（ngrok のローカルエージェント）の場合 **のみ**、無効な署名の Twilio Webhook を許可します。ローカル開発専用で使用してください。
-- ngrok の free tier URL は変更されたり、インタースティシャル挙動が追加されたりする場合があります。`publicUrl` が変動すると Twilio の署名検証に失敗します。本番環境では、安定したドメインまたは Tailscale の funnel を推奨します。
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` は、`tunnel.provider="ngrok"` かつ `serve.bind` がループバック（ngrok のローカルエージェント）の場合 **のみ**、無効な署名の Twilio Webhook を許可します。ローカル開発専用で使用してください。 ローカル開発者のみに使用します。
+- ngrok の free tier URL は変更されたり、インタースティシャル挙動が追加されたりする場合があります。`publicUrl` が変動すると Twilio の署名検証に失敗します。本番環境では、安定したドメインまたは Tailscale の funnel を推奨します。 生産のために、安定したドメインまたはテイルスケールの漏斗を好む。
 
 ## Webhook のセキュリティ
 
-Gateway の前段にプロキシやトンネルがある場合、プラグインは署名検証のために公開 URL を再構築します。以下のオプションで、どの転送ヘッダーを信頼するかを制御します。
+Gateway の前段にプロキシやトンネルがある場合、プラグインは署名検証のために公開 URL を再構築します。以下のオプションで、どの転送ヘッダーを信頼するかを制御します。 これらのオプションは、どの転送された
+ヘッダが信頼されるかを制御します。
 
 `webhookSecurity.allowedHosts` は、転送ヘッダーからのホストを許可リストに基づいて許可します。
 
@@ -154,7 +149,8 @@ Gateway の前段にプロキシやトンネルがある場合、プラグイン
 
 ## 通話向け TTS
 
-音声通話では、通話中のストリーミング音声に対してコアの `messages.tts` 設定（OpenAI または ElevenLabs）を使用します。プラグイン設定配下で **同一の形状** のまま上書きすることも可能で、`messages.tts` とディープマージされます。
+音声通話では、通話中のストリーミング音声に対してコアの `messages.tts` 設定（OpenAI または ElevenLabs）を使用します。プラグイン設定配下で **同一の形状** のまま上書きすることも可能で、`messages.tts` とディープマージされます。 プラグインの設定では
+**同じ図形** でオーバーライドできます — `messages.tts` と深くマージできます。
 
 ```json5
 {
@@ -234,7 +230,7 @@ Gateway の前段にプロキシやトンネルがある場合、プラグイン
 
 ## 着信通話
 
-着信ポリシーの既定値は `disabled` です。着信通話を有効にするには、以下を設定します：
+インバウンドポリシーのデフォルトは `disabled` です。 着信を有効にするには、以下を設定します。
 
 ```json5
 {
@@ -244,7 +240,7 @@ Gateway の前段にプロキシやトンネルがある場合、プラグイン
 }
 ```
 
-自動応答はエージェントシステムを使用します。以下で調整できます：
+自動応答はエージェントシステムを使用します。以下で調整できます： チューニング:
 
 - `responseModel`
 - `responseSystemPrompt`

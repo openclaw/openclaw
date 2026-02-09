@@ -5,20 +5,13 @@ read_when:
   - आपको अलग-अलग एंडपॉइंट्स, कुंजियाँ और मॉडल संदर्भ समझने हैं
   - आप किसी भी प्रदाता के लिए कॉपी/पेस्ट विन्यास चाहते हैं
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:34Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot, OpenAI-संगत एंडपॉइंट्स के साथ Kimi API प्रदान करता है। प्रदाता को विन्यस्त करें और
-डिफ़ॉल्ट मॉडल को `moonshot/kimi-k2.5` पर सेट करें, या
-Kimi Coding के साथ `kimi-coding/k2p5` का उपयोग करें।
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
+provider and set the default model to `moonshot/kimi-k2.5`, or use
+Kimi Coding with `kimi-coding/k2p5`.
 
 वर्तमान Kimi K2 मॉडल आईडी:
 
@@ -41,7 +34,7 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-टिप्पणी: Moonshot और Kimi Coding अलग-अलग प्रदाता हैं। कुंजियाँ परस्पर विनिमेय नहीं हैं, एंडपॉइंट्स अलग हैं, और मॉडल संदर्भ अलग हैं (Moonshot `moonshot/...` का उपयोग करता है, Kimi Coding `kimi-coding/...` का उपयोग करता है)।
+Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangeable, endpoints differ, and model refs differ (Moonshot uses `moonshot/...`, Kimi Coding uses `kimi-coding/...`).
 
 ## विन्यास स्निपेट (Moonshot API)
 
@@ -142,7 +135,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## नोट्स
 
-- Moonshot मॉडल संदर्भ `moonshot/<modelId>` का उपयोग करते हैं। Kimi Coding मॉडल संदर्भ `kimi-coding/<modelId>` का उपयोग करते हैं।
+- Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi-coding/<modelId>`.
 - आवश्यकता होने पर `models.providers` में मूल्य निर्धारण और संदर्भ मेटाडेटा को ओवरराइड करें।
 - यदि Moonshot किसी मॉडल के लिए अलग संदर्भ सीमाएँ प्रकाशित करता है, तो
   `contextWindow` को तदनुसार समायोजित करें।

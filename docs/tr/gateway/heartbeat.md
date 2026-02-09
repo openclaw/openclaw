@@ -4,13 +4,6 @@ read_when:
   - Heartbeat sıklığını veya mesajlaşmayı ayarlarken
   - Zamanlanmış görevler için heartbeat ile cron arasında karar verirken
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:44Z
 ---
 
 # Heartbeat (Gateway)
@@ -54,7 +47,8 @@ Sorun giderme: [/automation/troubleshooting](/automation/troubleshooting)
 - İstem gövdesi (`agents.defaults.heartbeat.prompt` ile yapılandırılabilir):
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - Heartbeat istemi kullanıcı mesajı olarak **aynen** gönderilir. Sistem istemi bir “Heartbeat” bölümü içerir ve çalıştırma dahili olarak işaretlenir.
-- Aktif saatler (`heartbeat.activeHours`) yapılandırılan saat diliminde kontrol edilir. Pencere dışında heartbeat’ler, pencere içindeki bir sonraki tetiklemeye kadar atlanır.
+- Aktif saatler (`heartbeat.activeHours`) yapılandırılan saat diliminde kontrol edilir.
+  Pencere dışında heartbeat’ler, pencere içindeki bir sonraki tetiklemeye kadar atlanır.
 
 ## Heartbeat isteminin amacı
 
@@ -115,7 +109,7 @@ ve kaydedilir; yalnızca `HEARTBEAT_OK` olan bir mesaj düşürülür.
 - `channels.<channel>.heartbeat` kanal varsayılanlarını geçersiz kılar.
 - `channels.<channel>.accounts.<id>.heartbeat` (çoklu hesap kanalları) kanal başına ayarları geçersiz kılar.
 
-### Ajan başına heartbeat’ler
+### Per-agent heartbeats
 
 Herhangi bir `agents.list[]` girdisi bir `heartbeat` bloğu içeriyorsa,
 **yalnızca o ajanlar** heartbeat çalıştırır. Ajan başına blok,
@@ -210,7 +204,7 @@ Telegram gibi çoklu hesaplı kanallarda belirli bir hesabı hedeflemek için
 - `model`: heartbeat çalıştırmaları için isteğe bağlı model geçersiz kılma (`provider/model`).
 - `includeReasoning`: etkinleştirildiğinde, ayrı `Reasoning:` mesajını da mevcut olduğunda iletir (şekli `/reasoning on` ile aynıdır).
 - `session`: heartbeat çalıştırmaları için isteğe bağlı oturum anahtarı.
-  - `main` (varsayılan): ajanın ana oturumu.
+  - `main` (default): agent main session.
   - Açık oturum anahtarı (`openclaw sessions --json`’den veya [sessions CLI](/cli/sessions) üzerinden kopyalayın).
   - Oturum anahtarı biçimleri: [Sessions](/concepts/session) ve [Groups](/channels/groups) bölümlerine bakın.
 - `target`:
@@ -240,8 +234,7 @@ Telegram gibi çoklu hesaplı kanallarda belirli bir hesabı hedeflemek için
 
 ## Görünürlük denetimleri
 
-Varsayılan olarak, `HEARTBEAT_OK` onayları bastırılırken uyarı içeriği iletilir.
-Bunu kanal veya hesap bazında ayarlayabilirsiniz:
+Varsayılan olarak, `HEARTBEAT_OK` onayları bastırılırken uyarı içeriği iletilir. Bunu kanal veya hesap bazında ayarlayabilirsiniz:
 
 ```yaml
 channels:
@@ -293,12 +286,12 @@ channels:
 
 ### Yaygın kalıplar
 
-| Amaç                                               | Yapılandırma                                                                             |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Varsayılan davranış (sessiz OK’ler, uyarılar açık) | _(yapılandırma gerekmez)_                                                                |
+| Amaç                                                                  | Yapılandırma                                                                             |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Varsayılan davranış (sessiz OK’ler, uyarılar açık) | _(yapılandırma gerekmez)_                                             |
 | Tamamen sessiz (mesaj yok, gösterge yok)           | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Yalnızca gösterge (mesaj yok)                      | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OK’ler yalnızca tek bir kanalda                    | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OK’ler yalnızca tek bir kanalda                                       | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (isteğe bağlı)
 
@@ -308,7 +301,8 @@ ve her 30 dakikada bir dahil edilmesi güvenli.
 
 `HEARTBEAT.md` varsa ancak fiilen boşsa (yalnızca boş satırlar ve
 `# Heading` gibi markdown başlıkları içeriyorsa), OpenClaw API çağrılarını
-kurtarmak için heartbeat çalıştırmasını atlar. Dosya yoksa heartbeat yine çalışır
+kurtarmak için heartbeat çalıştırmasını atlar.
+Dosya yoksa heartbeat yine çalışır
 ve model ne yapacağına karar verir.
 
 İstem şişmesini önlemek için küçük tutun (kısa kontrol listesi veya hatırlatmalar).
@@ -350,7 +344,7 @@ her birinin heartbeat’ini hemen çalıştırır.
 
 Bir sonraki planlı tetiklemeyi beklemek için `--mode next-heartbeat` kullanın.
 
-## Muhakeme iletimi (isteğe bağlı)
+## Reasoning delivery (optional)
 
 Varsayılan olarak, heartbeat’ler yalnızca nihai “yanıt” yükünü iletir.
 

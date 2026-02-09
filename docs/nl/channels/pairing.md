@@ -5,13 +5,6 @@ read_when:
   - Een nieuwe iOS/Android-node koppelen
   - De beveiligingspositie van OpenClaw beoordelen
 title: "Pairing"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # Pairing
@@ -24,7 +17,7 @@ Deze wordt op twee plekken gebruikt:
 
 Beveiligingscontext: [Security](/gateway/security)
 
-## 1) DM-pairing (inkomende chattoegang)
+## 1. DM-pairing (inkomende chattoegang)
 
 Wanneer een kanaal is geconfigureerd met DM-beleid `pairing`, krijgen onbekende afzenders een korte code en wordt hun bericht **niet verwerkt** totdat je goedkeurt.
 
@@ -45,7 +38,7 @@ openclaw pairing approve telegram <CODE>
 
 Ondersteunde kanalen: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
 
-### Waar de status wordt opgeslagen
+### Waar de staat woont
 
 Opgeslagen onder `~/.openclaw/credentials/`:
 
@@ -54,12 +47,12 @@ Opgeslagen onder `~/.openclaw/credentials/`:
 
 Behandel deze als gevoelig (ze bepalen de toegang tot je assistent).
 
-## 2) Node-apparaatpairing (iOS/Android/macOS/headless nodes)
+## 2. Node-apparaatpairing (iOS/Android/macOS/headless nodes)
 
 Nodes verbinden met de Gateway als **apparaten** met `role: node`. De Gateway
 maakt een apparaat-pairingverzoek aan dat moet worden goedgekeurd.
 
-### Een node-apparaat goedkeuren
+### Keur een node apparaat goed
 
 ```bash
 openclaw devices list

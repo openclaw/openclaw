@@ -4,20 +4,13 @@ read_when:
   - 모델에 대해 타임스탬프가 어떻게 정규화되는지 이해해야 할 때
   - 시스템 프롬프트에서 사용자 타임존을 구성할 때
 title: "타임존"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:46Z
 ---
 
 # 타임존
 
 OpenClaw 는 모델이 **단일 기준 시간**을 보도록 타임스탬프를 표준화합니다.
 
-## 메시지 엔벌로프 (기본값: 로컬)
+## 메시지 엔벨로프(기본값은 로컬)
 
 인바운드 메시지는 다음과 같은 엔벌로프로 래핑됩니다:
 
@@ -47,7 +40,7 @@ OpenClaw 는 모델이 **단일 기준 시간**을 보도록 타임스탬프를 
 - `envelopeTimestamp: "off"` 은 엔벌로프 헤더에서 절대 타임스탬프를 제거합니다.
 - `envelopeElapsed: "off"` 은 경과 시간 접미사(`+2m` 스타일)를 제거합니다.
 
-### 예시
+### 예제
 
 **로컬(기본값):**
 
@@ -69,7 +62,7 @@ OpenClaw 는 모델이 **단일 기준 시간**을 보도록 타임스탬프를 
 
 ## 도구 페이로드 (원시 프로바이더 데이터 + 정규화된 필드)
 
-도구 호출(`channels.discord.readMessages`, `channels.slack.readMessages` 등)은 **원시 프로바이더 타임스탬프**를 반환합니다.
+도구 호출(`channels.discord.readMessages`, `channels.slack.readMessages` 등)은 **원시 프로바이더 타임스탬프**를 반환합니다. **원본 제공자 타임스탬프**를 반환합니다.
 일관성을 위해 정규화된 필드도 함께 첨부합니다:
 
 - `timestampMs` (UTC 에포크 밀리초)

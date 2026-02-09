@@ -1,25 +1,18 @@
 ---
-summary: 「Feishu 機器人概覽、功能與設定」
+summary: "32. 飛書機器人總覽、功能與設定"
 read_when:
-  - 「你想要連接 Feishu／Lark 機器人」
-  - 「你正在設定 Feishu 頻道」
+  - 你想要連接 Feishu／Lark 機器人
+  - 你正在設定 Feishu 頻道
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:10Z
 ---
 
-# Feishu 機器人
+# 33. 飛書機器人
 
-Feishu（Lark）是一個供企業用於訊息傳遞與協作的團隊聊天平台。此外掛會使用平台的 WebSocket 事件訂閱，將 OpenClaw 連接到 Feishu／Lark 機器人，讓系統在不暴露公用 webhook URL 的情況下接收訊息。
+Feishu（Lark）是一個供企業用於訊息傳遞與協作的團隊聊天平台。此外掛會使用平台的 WebSocket 事件訂閱，將 OpenClaw 連接到 Feishu／Lark 機器人，讓系統在不暴露公用 webhook URL 的情況下接收訊息。 34. 此外掛透過平台的 WebSocket 事件訂閱，將 OpenClaw 連接至飛書/Lark 機器人，無需公開 Webhook URL 即可接收訊息。
 
 ---
 
-## 需要的外掛
+## 35. 需要此外掛
 
 安裝 Feishu 外掛：
 
@@ -87,8 +80,8 @@ Lark（全球）租戶請使用 [https://open.larksuite.com/app](https://open.la
 ### 2. 建立應用程式
 
 1. 點擊 **Create enterprise app**
-2. 填寫應用程式名稱與描述
-3. 選擇應用程式圖示
+2. 36. 填寫應用程式名稱與描述
+3. 37. 選擇應用程式圖示
 
 ![Create enterprise app](../images/feishu-step2-create-app.png)
 
@@ -140,7 +133,7 @@ Lark（全球）租戶請使用 [https://open.larksuite.com/app](https://open.la
 在 **App Capability** > **Bot**：
 
 1. 啟用機器人能力
-2. 設定機器人名稱
+2. 38. 設定機器人名稱
 
 ![Enable bot capability](../images/feishu-step5-bot-capability.png)
 
@@ -163,7 +156,7 @@ Lark（全球）租戶請使用 [https://open.larksuite.com/app](https://open.la
 ### 7. 發佈應用程式
 
 1. 在 **Version Management & Release** 中建立版本
-2. 提交審核並發佈
+2. 39. 提交審核並發佈
 3. 等待管理員核准（企業應用程式通常會自動核准）
 
 ---
@@ -200,7 +193,7 @@ openclaw channels add
 }
 ```
 
-### 透過環境變數設定
+### 40. 透過環境變數設定
 
 ```bash
 export FEISHU_APP_ID="cli_xxx"
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark（全球）網域
 
-如果你的租戶位於 Lark（國際版），請將網域設定為 `lark`（或完整的網域字串）。你可以在 `channels.feishu.domain` 或每個帳號（`channels.feishu.accounts.<id>.domain`）中設定。
+如果你的租戶位於 Lark（國際版），請將網域設定為 `lark`（或完整的網域字串）。你可以在 `channels.feishu.domain` 或每個帳號（`channels.feishu.accounts.<id> 1. 你可以在 `channels.feishu.domain` 設定，或針對每個帳戶（`channels.feishu.accounts.<id>`.domain`）中設定。
 
 ```json5
 {
@@ -243,13 +236,13 @@ openclaw gateway
 
 ### 3. 核准配對
 
-預設情況下，機器人會回覆一組配對碼。請核准：
+2. 預設情況下，機器人會回覆一個配對碼。 3. 核准它：
 
 ```bash
 openclaw pairing approve feishu <CODE>
 ```
 
-核准後即可正常聊天。
+4. 核准後，你就可以正常聊天。
 
 ---
 
@@ -264,9 +257,10 @@ openclaw pairing approve feishu <CODE>
 
 ## 存取控制
 
-### 私訊
+### 5. 私訊
 
 - **預設**：`dmPolicy: "pairing"`（未知使用者會收到配對碼）
+
 - **核准配對**：
 
   ```bash
@@ -343,7 +337,7 @@ openclaw pairing approve feishu <CODE>
 
 **方法 1（建議）**
 
-1. 啟動 Gateway 閘道器，並在群組中 @提及機器人
+1. 6. 啟動閘道，並在群組中 @提及 機器人
 2. 執行 `openclaw logs --follow`，並尋找 `chat_id`
 
 **方法 2**
@@ -356,7 +350,7 @@ openclaw pairing approve feishu <CODE>
 
 **方法 1（建議）**
 
-1. 啟動 Gateway 閘道器並私訊機器人
+1. 7. 啟動閘道，並私訊機器人
 2. 執行 `openclaw logs --follow`，並尋找 `open_id`
 
 **方法 2**
@@ -371,38 +365,38 @@ openclaw pairing list feishu
 
 ## 常用指令
 
-| 指令      | 說明           |
-| --------- | -------------- |
-| `/status` | 顯示機器人狀態 |
-| `/reset`  | 重置工作階段   |
-| `/model`  | 顯示／切換模型 |
+| 指令        | Description                       |
+| --------- | --------------------------------- |
+| `/status` | 8. 顯示機器人狀態 |
+| `/reset`  | 9. 重設工作階段  |
+| `/model`  | 顯示／切換模型                           |
 
 > 注意：Feishu 目前尚未支援原生命令選單，因此必須以文字方式傳送指令。
 
 ## Gateway 閘道器管理指令
 
-| 指令                       | 說明                          |
-| -------------------------- | ----------------------------- |
-| `openclaw gateway status`  | 顯示 Gateway 閘道器狀態       |
-| `openclaw gateway install` | 安裝／啟動 Gateway 閘道器服務 |
-| `openclaw gateway stop`    | 停止 Gateway 閘道器服務       |
-| `openclaw gateway restart` | 重新啟動 Gateway 閘道器服務   |
-| `openclaw logs --follow`   | 追蹤 Gateway 閘道器日誌       |
+| 指令                         | Description                       |
+| -------------------------- | --------------------------------- |
+| `openclaw gateway status`  | 10. 顯示閘道狀態 |
+| `openclaw gateway install` | 安裝／啟動 Gateway 閘道器服務               |
+| `openclaw gateway stop`    | 停止 Gateway 閘道器服務                  |
+| `openclaw gateway restart` | 重新啟動 Gateway 閘道器服務                |
+| `openclaw logs --follow`   | 追蹤 Gateway 閘道器日誌                  |
 
 ---
 
-## 疑難排解
+## 11. 疑難排解
 
 ### 機器人在群組聊天中沒有回應
 
-1. 確認機器人已加入群組
-2. 確認你有 @提及機器人（預設行為）
+1. 12. 確保已將機器人加入群組
+2. 13. 確保你有 @提及 機器人（預設行為）
 3. 檢查 `groupPolicy` 是否未設定為 `"disabled"`
 4. 檢查日誌：`openclaw logs --follow`
 
-### 機器人未接收訊息
+### 14) 機器人未收到訊息
 
-1. 確認應用程式已發佈並核准
+1. 15. 確保應用程式已發佈並獲得核准
 2. 確認事件訂閱包含 `im.message.receive_v1`
 3. 確認已啟用 **長連線**
 4. 確認應用程式權限完整
@@ -418,7 +412,7 @@ openclaw pairing list feishu
 ### 訊息傳送失敗
 
 1. 確認應用程式具有 `im:message:send_as_bot` 權限
-2. 確認應用程式已發佈
+2. 16. 確保應用程式已發佈
 3. 檢查日誌以取得詳細錯誤
 
 ---
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### 串流
 
-Feishu 透過互動式卡片支援串流回覆。啟用後，機器人會在產生文字時持續更新卡片。
+Feishu 透過互動式卡片支援串流回覆。啟用後，機器人會在產生文字時持續更新卡片。 17. 啟用後，機器人會在產生文字時更新卡片。
 
 ```json5
 {
@@ -534,34 +528,34 @@ Feishu 透過互動式卡片支援串流回覆。啟用後，機器人會在產�
 
 主要選項：
 
-| 設定                                              | 說明                           | 預設值    |
-| ------------------------------------------------- | ------------------------------ | --------- |
-| `channels.feishu.enabled`                         | 啟用／停用頻道                 | `true`    |
-| `channels.feishu.domain`                          | API 網域（`feishu` 或 `lark`） | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                         | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                     | -         |
-| `channels.feishu.accounts.<id>.domain`            | 每帳號 API 網域覆寫            | `feishu`  |
-| `channels.feishu.dmPolicy`                        | 私訊政策                       | `pairing` |
-| `channels.feishu.allowFrom`                       | 私訊允許清單（open_id 清單）   | -         |
-| `channels.feishu.groupPolicy`                     | 群組政策                       | `open`    |
-| `channels.feishu.groupAllowFrom`                  | 群組允許清單                   | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | 需要 @提及                     | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | 啟用群組                       | `true`    |
-| `channels.feishu.textChunkLimit`                  | 訊息分塊大小                   | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | 媒體大小限制                   | `30`      |
-| `channels.feishu.streaming`                       | 啟用串流卡片輸出               | `true`    |
-| `channels.feishu.blockStreaming`                  | 啟用區塊串流                   | `true`    |
+| 設定                                                | Description                                                        | Default   |
+| ------------------------------------------------- | ------------------------------------------------------------------ | --------- |
+| `channels.feishu.enabled`                         | 啟用／停用頻道                                                            | `true`    |
+| `channels.feishu.domain`                          | API 網域（`feishu` 或 `lark`）                                          | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                             | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                         | -         |
+| `channels.feishu.accounts.<id>.domain`            | 每帳號 API 網域覆寫                                                       | `feishu`  |
+| `channels.feishu.dmPolicy`                        | 18. 私訊政策                                    | `pairing` |
+| `channels.feishu.allowFrom`                       | 19. 私訊允許清單（open_id 清單） | -         |
+| `channels.feishu.groupPolicy`                     | 群組政策                                                               | `open`    |
+| `channels.feishu.groupAllowFrom`                  | 群組允許清單                                                             | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | 需要 @提及                                                | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | 啟用群組                                                               | `true`    |
+| `channels.feishu.textChunkLimit`                  | 訊息分塊大小                                                             | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | 媒體大小限制                                                             | `30`      |
+| `channels.feishu.streaming`                       | 啟用串流卡片輸出                                                           | `true`    |
+| `channels.feishu.blockStreaming`                  | 20. 啟用區塊串流                                  | `true`    |
 
 ---
 
 ## dmPolicy 參考
 
-| 值            | 行為                                            |
-| ------------- | ----------------------------------------------- |
-| `"pairing"`   | **預設。** 未知使用者會收到配對碼，必須核准     |
-| `"allowlist"` | 僅允許 `allowFrom` 中的使用者聊天               |
+| 值             | 行為                               |
+| ------------- | -------------------------------- |
+| `"pairing"`   | **預設。** 未知使用者會收到配對碼，必須核准         |
+| `"allowlist"` | 僅允許 `allowFrom` 中的使用者聊天          |
 | `"open"`      | 允許所有使用者（需要在 allowFrom 中設定 `"*"`） |
-| `"disabled"`  | 停用私訊                                        |
+| `"disabled"`  | 21. 停用私訊  |
 
 ---
 
@@ -575,7 +569,7 @@ Feishu 透過互動式卡片支援串流回覆。啟用後，機器人會在產�
 - ✅ 檔案
 - ✅ 音訊
 - ✅ 影片
-- ✅ 貼圖
+- ✅ Stickers
 
 ### 傳送
 

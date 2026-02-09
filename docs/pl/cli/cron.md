@@ -4,13 +4,6 @@ read_when:
   - Chcesz korzystać z zaplanowanych zadań i wybudzeń
   - Debugujesz wykonanie cron i logi
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:55Z
 ---
 
 # `openclaw cron`

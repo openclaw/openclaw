@@ -4,19 +4,12 @@ read_when:
   - Du vill ringa ett utgående röstsamtal från OpenClaw
   - Du konfigurerar eller utvecklar voice-call‑pluginet
 title: "Röstsamtalsplugin"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:11Z
 ---
 
 # Voice Call (plugin)
 
-Röstsamtal för OpenClaw via ett plugin. Stöder utgående notifieringar och
-flerstegs­konversationer med inkommande policyer.
+Röstsamtal för OpenClaw via en plugin. Stöder utgående meddelanden och
+multi-turn konversationer med inkommande policyer.
 
 Nuvarande leverantörer:
 
@@ -121,14 +114,14 @@ Noteringar:
 - `mock` är en lokal dev‑leverantör (inga nätverksanrop).
 - `skipSignatureVerification` är endast för lokal testning.
 - Om du använder ngrok free tier, sätt `publicUrl` till den exakta ngrok‑URL:en; signaturverifiering tillämpas alltid.
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` tillåter Twilio‑webhooks med ogiltiga signaturer **endast** när `tunnel.provider="ngrok"` och `serve.bind` är loopback (ngrok lokal agent). Använd endast för lokal utveckling.
-- URL:er i ngrok free tier kan ändras eller lägga till mellanliggande beteende; om `publicUrl` förändras kommer Twilio‑signaturer att misslyckas. För produktion, föredra en stabil domän eller Tailscale funnel.
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` tillåter Twilio webhooks med ogiltiga signaturer **bara** när `tunnel.provider="ngrok"` och `serve.bind` är loopback (ngrok lokal agent). Använd endast för lokal utvecklare.
+- Ngrok free tier URLs kan ändra eller lägga till interstitiellt beteende; om `publicUrl` drifts, kommer Twilio signaturer misslyckas. För produktion, föredrar en stabil domän eller Tailscale tratt.
 
 ## Webhook-säkerhet
 
-När en proxy eller tunnel ligger framför Gateway återskapar pluginet den
-offentliga URL:en för signaturverifiering. Dessa alternativ styr vilka vidarebefordrade
-headers som betros.
+När en proxy eller tunnel sitter framför Gateway, rekonstruerar pluginen den publika
+-URL:en för signaturverifiering. Dessa alternativ kontrollerar vilka vidarebefordrade
+rubriker är betrodda.
 
 `webhookSecurity.allowedHosts` tillåter värdar från vidarebefordrade headers via tillåtelselista.
 
@@ -158,9 +151,9 @@ Exempel med en stabil publik värd:
 
 ## TTS för samtal
 
-Voice Call använder kärnkonfigurationen `messages.tts` (OpenAI eller ElevenLabs) för
-strömmande tal i samtal. Du kan åsidosätta den under pluginets konfiguration med
-**samma struktur** — den djupsammanfogas med `messages.tts`.
+Röstsamtal använder kärnkonfigurationen `messages.tts` (OpenAI eller ElevenLabs) för
+strömmande tal på samtal. Du kan åsidosätta det under plugin-konfigurationen med
+**samma form** - det djup-merges med `messages.tts`.
 
 ```json5
 {
@@ -240,7 +233,7 @@ Använd endast kärn‑TTS (ingen åsidosättning):
 
 ## Inkommande samtal
 
-Inkommande policy är som standard `disabled`. För att aktivera inkommande samtal, sätt:
+Inkommande policy-standard är `inaktiverad`. Ange för att aktivera inkommande samtal:
 
 ```json5
 {
@@ -250,7 +243,7 @@ Inkommande policy är som standard `disabled`. För att aktivera inkommande samt
 }
 ```
 
-Autosvar använder agentsystemet. Finjustera med:
+Auto-svar använder agentsystemet. Justera med:
 
 - `responseModel`
 - `responseSystemPrompt`

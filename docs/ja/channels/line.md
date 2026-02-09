@@ -5,22 +5,18 @@ read_when:
   - LINE の webhook と認証情報のセットアップが必要な場合
   - LINE 固有のメッセージオプションを使用したい場合
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:47Z
 ---
 
 # LINE（プラグイン）
 
 LINE は LINE Messaging API を介して OpenClaw に接続します。本プラグインはゲートウェイ上で webhook
-レシーバーとして動作し、認証にはチャンネルアクセストークンとチャンネルシークレットを使用します。
+レシーバーとして動作し、認証にはチャンネルアクセストークンとチャンネルシークレットを使用します。 プラグインはゲートウェイでWebhook
+受信者として動作し、
+認証のためにチャンネルアクセストークン+チャンネルシークレットを使用します。
 
-ステータス: プラグイン経由でサポートされています。ダイレクトメッセージ、グループチャット、メディア、位置情報、Flex
-メッセージ、テンプレートメッセージ、クイックリプライがサポートされています。リアクションとスレッドはサポートされていません。
+ステータス: プラグイン経由でサポートされています。 ダイレクトメッセージ、グループチャット、メディア、ロケーション、Flex
+メッセージ、テンプレートメッセージ、およびクイック返信に対応しています。 リアクションとスレッド
+はサポートされていません。
 
 ## プラグインが必要
 
@@ -51,7 +47,8 @@ https://gateway-host/line/webhook
 
 ゲートウェイは LINE の webhook 検証（GET）および受信イベント（POST）に応答します。
 カスタムパスが必要な場合は `channels.line.webhookPath` または
-`channels.line.accounts.<id>.webhookPath` を設定し、それに合わせて URL を更新してください。
+`channels.line.accounts.<id>
+カスタムパスが必要な場合は、`channels.line.webhookPath`または`channels.line.accounts.<id> を設定してください。.webhookPath\` を設定し、それに合わせて URL を更新してください。
 
 ## 設定
 
@@ -108,8 +105,8 @@ https://gateway-host/line/webhook
 
 ## アクセス制御
 
-ダイレクトメッセージは既定でペアリングが有効です。未知の送信者にはペアリングコードが送信され、
-承認されるまでメッセージは無視されます。
+ダイレクトメッセージはデフォルトでペアリングします。 不明な送信者はペアリングコードを取得し、承認されるまで
+メッセージは無視されます。
 
 ```bash
 openclaw pairing list line
@@ -124,7 +121,7 @@ openclaw pairing approve line <CODE>
 - `channels.line.groupAllowFrom`: グループ用に許可された LINE ユーザー ID
 - グループごとの上書き: `channels.line.groups.<groupId>.allowFrom`
 
-LINE ID は大文字と小文字を区別します。有効な ID は次の形式です。
+LINE ID は大文字と小文字を区別します。有効な ID は次の形式です。 有効な ID は以下のようになります:
 
 - ユーザー: `U` + 32 桁の 16 進数
 - グループ: `C` + 32 桁の 16 進数

@@ -4,13 +4,6 @@ read_when:
   - Definindo ou refatorando a arquitetura de plugins
   - Migrando conectores de canal para o SDK/runtime de plugins
 title: "Refatoração do SDK de Plugin"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:50Z
 ---
 
 # Plano de Refatoração do SDK + Runtime de Plugin
@@ -25,7 +18,7 @@ Nenhum plugin importa `src/**` diretamente. Todas as dependências passam pelo S
 
 ## Arquitetura alvo (duas camadas)
 
-### 1) SDK de Plugin (tempo de compilação, estável, publicável)
+### 1. SDK de Plugin (tempo de compilação, estável, publicável)
 
 Escopo: tipos, helpers e utilitários de configuração. Sem estado de runtime, sem efeitos colaterais.
 
@@ -44,7 +37,7 @@ Entrega:
 - Publicar como `openclaw/plugin-sdk` (ou exportar do core sob `openclaw/plugin-sdk`).
 - Semver com garantias explícitas de estabilidade.
 
-### 2) Runtime de Plugin (superfície de execução, injetado)
+### 2. Runtime de Plugin (superfície de execução, injetado)
 
 Escopo: tudo o que toca o comportamento do runtime do core.
 Acessado via `OpenClawPluginApi.runtime` para que os plugins nunca importem `src/**`.

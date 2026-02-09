@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’ı Ollama üzerinden yerel modellerle çalıştırmak istiyorsanız
   - Ollama kurulumu ve yapılandırma rehberine ihtiyaç duyuyorsanız
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:45Z
 ---
 
 # Ollama
@@ -66,7 +59,7 @@ openclaw config set models.providers.ollama.apiKey "ollama-local"
 - `maxTokens`, bağlam penceresinin 10×’u olarak ayarlanır
 - Tüm maliyetler `0` olarak ayarlanır
 
-Bu yaklaşım, manuel model girdilerinden kaçınırken kataloğu Ollama’nın yetenekleriyle uyumlu tutar.
+Bu, katalogu Ollama'nın yetenekleriyle uyumlu tutarken manuel model girişlerinden kaçınır.
 
 Hangi modellerin mevcut olduğunu görmek için:
 
@@ -185,7 +178,7 @@ Ollama’nın yanıt formatıyla ilgili temel SDK’daki [bilinen bir sorun](htt
 
 Akış devre dışı olduğunda yanıtlar tek seferde (akışsız mod) iletilir; bu da iç içe geçmiş içerik/akıl yürütme deltalarının bozuk çıktıya yol açtığı durumu önler.
 
-#### Akışı Yeniden Etkinleştirme (Gelişmiş)
+#### Akışı Yeniden Etkinleştir (Gelişmiş)
 
 Ollama için akışı yeniden etkinleştirmek istiyorsanız (araç destekli modellerde sorunlara yol açabilir):
 

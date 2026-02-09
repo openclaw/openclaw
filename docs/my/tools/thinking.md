@@ -3,13 +3,6 @@ summary: "/think + /verbose အတွက် ညွှန်ကြားချက
 read_when:
   - ဆင်ခြင်စဉ်းစားမှု သို့မဟုတ် verbose ညွှန်ကြားချက်များကို ခွဲခြမ်းဖတ်ရှုခြင်း သို့မဟုတ် မူလသတ်မှတ်ချက်များကို ပြင်ဆင်နေချိန်
 title: "ဆင်ခြင်စဉ်းစားမှု အဆင့်များ"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:19Z
 ---
 
 # ဆင်ခြင်စဉ်းစားမှု အဆင့်များ (/think directives)
@@ -26,7 +19,7 @@ x-i18n:
   - `x-high`, `x_high`, `extra-high`, `extra high`, နှင့် `extra_high` တို့ကို `xhigh` သို့ မാപ്പ်လုပ်ထားသည်။
   - `highest`, `max` တို့ကို `high` သို့ မാപ്പ်လုပ်ထားသည်။
 - Provider မှတ်ချက်များ:
-  - Z.AI (`zai/*`) သည် binary thinking (`on`/`off`) ကိုသာ ပံ့ပိုးသည်။ `off` မဟုတ်သည့် မည်သည့်အဆင့်မဆို `on` အဖြစ် သတ်မှတ်ပြီး (`low` သို့ မാപ്പ်လုပ်သည်)။
+  - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
 
 ## ဖြေရှင်းသတ်မှတ်မှု အစီအစဉ်
 
@@ -39,7 +32,7 @@ x-i18n:
 
 - ညွှန်ကြားချက်သာ ပါသော မက်ဆေ့ချ်တစ်စောင် ပို့ပါ (အလွတ်နေရာများ ခွင့်ပြုသည်)၊ ဥပမာ `/think:medium` သို့မဟုတ် `/t high`။
 - လက်ရှိ ဆက်ရှင်အတွက် (မူလအားဖြင့် ပို့သူတစ်ဦးချင်းစီအလိုက်) ဆက်လက် သက်ရောက်နေမည်ဖြစ်ပြီး `/think:off` ဖြင့် သို့မဟုတ် ဆက်ရှင် အလုပ်မလုပ်ချိန် reset ဖြစ်ပါက ရှင်းလင်းသွားမည်။
-- အတည်ပြု တုံ့ပြန်ချက် မက်ဆေ့ချ် ပို့ပေးမည် (`Thinking level set to high.` / `Thinking disabled.`)။ အဆင့် မမှန်ကန်ပါက (ဥပမာ `/thinking big`) အညွှန်းပါသော အချက်ပြဖြင့် အမိန့်ကို ပယ်ချမည်ဖြစ်ပြီး ဆက်ရှင် အခြေအနေကို မပြောင်းလဲပါ။
+- Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 - လက်ရှိ ဆင်ခြင်စဉ်းစားမှု အဆင့်ကို ကြည့်ရန် အကြောင်းပြန်မပါဘဲ `/think` (သို့မဟုတ် `/think:`) ကို ပို့ပါ။
 
 ## အေးဂျင့်အလိုက် အသုံးချခြင်း
@@ -53,8 +46,8 @@ x-i18n:
 - `/verbose off` သည် ဆက်ရှင် အစားထိုးသတ်မှတ်မှုကို သိမ်းဆည်းထားသည်; Sessions UI တွင် `inherit` ကို ရွေးချယ်ခြင်းဖြင့် ရှင်းလင်းနိုင်သည်။
 - Inline ညွှန်ကြားချက်သည် ထိုမက်ဆေ့ချ်တစ်ခုတည်းအတွက်သာ သက်ရောက်သည်; အခြားအခါများတွင် ဆက်ရှင်/အပြည်ပြည်ဆိုင်ရာ မူလသတ်မှတ်ချက်များ သက်ရောက်သည်။
 - လက်ရှိ verbose အဆင့်ကို ကြည့်ရန် အကြောင်းပြန်မပါဘဲ `/verbose` (သို့မဟုတ် `/verbose:`) ကို ပို့ပါ။
-- verbose ဖွင့်ထားပါက structured tool ရလဒ်များ ထုတ်ပေးသော အေးဂျင့်များ (Pi၊ အခြား JSON အေးဂျင့်များ) သည် tool ခေါ်ယူမှု တစ်ခုချင်းစီကို metadata-only မက်ဆေ့ချ်အဖြစ် ပြန်ပို့မည်ဖြစ်ပြီး ရနိုင်ပါက `<emoji> <tool-name>: <arg>` (path/command) ဖြင့် အစပြုထားမည်။ ဤ tool အကျဉ်းချုပ်များကို tool စတင်ချိန်နှင့်တပြိုင်နက် (bubble သီးသန့်များအဖြစ်) ပို့ပေးပြီး streaming deltas အဖြစ် မပို့ပါ။
-- verbose သည် `full` ဖြစ်ပါက tool ပြီးဆုံးပြီးနောက် output များကိုလည်း (bubble သီးသန့်၊ လုံခြုံသော အရှည်အထိ ဖြတ်တောက်ထား၍) ပို့ပေးမည်။ လည်ပတ်နေစဉ်အတွင်း `/verbose on|full|off` ကို ပြောင်းလဲပါက နောက်ထပ် tool bubble များသည် အသစ်ပြောင်းထားသော သတ်မှတ်ချက်ကို လိုက်နာမည်။
+- When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
+- When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## ဆင်ခြင်စဉ်းစားမှု မြင်နိုင်မှု (/reasoning)
 
@@ -71,8 +64,8 @@ x-i18n:
 
 ## Heartbeats
 
-- Heartbeat probe body သည် သတ်မှတ်ထားသော heartbeat prompt ဖြစ်သည် (မူလသတ်မှတ်ချက်: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`)။ Heartbeat မက်ဆေ့ချ်အတွင်းရှိ Inline ညွှန်ကြားချက်များသည် ပုံမှန်အတိုင်း သက်ရောက်ပါသည် (သို့သော် heartbeats မှတစ်ဆင့် ဆက်ရှင် မူလသတ်မှတ်ချက်များကို မပြောင်းလဲရန် ရှောင်ကြဉ်ပါ)။
-- Heartbeat ပို့ဆောင်မှုသည် မူလအားဖြင့် နောက်ဆုံး payload ကိုသာ ပို့သည်။ သီးသန့် `Reasoning:` မက်ဆေ့ချ်ကိုလည်း (ရနိုင်ပါက) ပို့လိုပါက `agents.defaults.heartbeat.includeReasoning: true` သို့မဟုတ် အေးဂျင့်အလိုက် `agents.list[].heartbeat.includeReasoning: true` ကို သတ်မှတ်ပါ။
+- Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat delivery defaults to the final payload only. To also send the separate `Reasoning:` message (when available), set `agents.defaults.heartbeat.includeReasoning: true` or per-agent `agents.list[].heartbeat.includeReasoning: true`.
 
 ## Web chat UI
 

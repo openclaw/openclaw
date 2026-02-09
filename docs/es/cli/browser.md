@@ -5,13 +5,6 @@ read_when:
   - Usted quiere controlar un navegador que se ejecuta en otra máquina mediante un host de nodo
   - Usted quiere usar el relay de la extensión de Chrome (adjuntar/desadjuntar mediante el botón de la barra de herramientas)
 title: "navegador"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:51Z
 ---
 
 # `openclaw browser`
@@ -59,7 +52,7 @@ Use un perfil específico:
 openclaw browser --browser-profile work tabs
 ```
 
-## Pestañas
+## Tabs
 
 ```bash
 openclaw browser tabs
@@ -70,7 +63,7 @@ openclaw browser close <targetId>
 
 ## Instantánea / captura de pantalla / acciones
 
-Instantánea:
+Snapshot:
 
 ```bash
 openclaw browser snapshot

@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการลบ OpenClaw ออกจากเครื่อง
   - บริการGatewayยังคงทำงานอยู่หลังจากถอนการติดตั้ง
 title: "ถอนการติดตั้ง"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:21Z
 ---
 
 # ถอนการติดตั้ง
@@ -95,7 +88,7 @@ launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-หากคุณใช้โปรไฟล์ ให้แทนที่ป้ายกำกับและชื่อ plist ด้วย `bot.molt.<profile>` ลบ plist แบบเดิม `com.openclaw.*` หากมีอยู่
+หากคุณใช้โปรไฟล์ ให้แทนที่ป้ายกำกับและชื่อ plist ด้วย `bot.molt.<profile>`. `ลบ plist แบบเดิม`com.openclaw.\*\` หากมีอยู่
 
 ### Linux (systemd user unit)
 
@@ -111,6 +104,7 @@ systemctl --user daemon-reload
 
 ชื่องานเริ่มต้นคือ `OpenClaw Gateway` (หรือ `OpenClaw Gateway (<profile>)`)
 สคริปต์งานจะอยู่ภายใต้ไดเรกทอรีสถานะของคุณ
+สคริปต์งานจะอยู่ภายใต้ไดเรกทอรี state ของคุณ
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -125,6 +119,7 @@ Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 
 หากคุณใช้ `https://openclaw.ai/install.sh` หรือ `install.ps1` CLI จะถูกติดตั้งด้วย `npm install -g openclaw@latest`
 ให้ลบออกด้วย `npm rm -g openclaw` (หรือ `pnpm remove -g` / `bun remove -g` หากคุณติดตั้งด้วยวิธีนั้น)
+ลบออกด้วย `npm rm -g openclaw` (หรือ `pnpm remove -g` / `bun remove -g` หากคุณติดตั้งด้วยวิธีนั้น)
 
 ### ซอร์สโค้ดที่เช็กเอาต์ (git clone)
 

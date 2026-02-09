@@ -3,13 +3,6 @@ summary: "Gateway، نوڈز، اور کینوس ہوسٹ کس طرح جڑتے �
 read_when:
   - آپ Gateway کے نیٹ ورکنگ ماڈل کا مختصر منظر چاہتے ہیں
 title: "نیٹ ورک ماڈل"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:16Z
 ---
 
 زیادہ تر آپریشنز Gateway (`openclaw gateway`) کے ذریعے گزرتے ہیں، جو ایک واحد طویل عرصے تک چلنے والا
@@ -17,8 +10,8 @@ x-i18n:
 
 ## بنیادی اصول
 
-- فی ہوسٹ ایک Gateway تجویز کیا جاتا ہے۔ WhatsApp Web سیشن کی ملکیت رکھنے کی اجازت صرف اسی عمل کو ہے۔ ریسکیو بوٹس یا سخت علیحدگی کے لیے، علیحدہ پروفائلز اور پورٹس کے ساتھ متعدد گیٹ ویز چلائیں۔ دیکھیں [Multiple gateways](/gateway/multiple-gateways)۔
-- لوپ بیک پہلے: Gateway WS بطورِ طے شدہ `ws://127.0.0.1:18789` ہوتا ہے۔ وِزَرڈ بطورِ طے شدہ گیٹ وے ٹوکن تیار کرتا ہے، حتیٰ کہ لوپ بیک کے لیے بھی۔ ٹیل نیٹ رسائی کے لیے `openclaw gateway --bind tailnet --token ...` چلائیں کیونکہ نان-لوپ بیک بائنڈز کے لیے ٹوکنز درکار ہوتے ہیں۔
-- نوڈز ضرورت کے مطابق LAN، ٹیل نیٹ، یا SSH کے ذریعے Gateway WS سے جڑتے ہیں۔ لیگیسی TCP برج فرسودہ قرار دیا جا چکا ہے۔
-- کینوس ہوسٹ ایک HTTP فائل سرور ہے جو `canvasHost.port` پر (بطورِ طے شدہ `18793`) چلتا ہے اور نوڈ WebViews کے لیے `/__openclaw__/canvas/` فراہم کرتا ہے۔ دیکھیں [Gateway configuration](/gateway/configuration) (`canvasHost`)۔
-- ریموٹ استعمال عموماً SSH سرنگ یا ٹیل نیٹ VPN کے ذریعے ہوتا ہے۔ دیکھیں [Remote access](/gateway/remote) اور [Discovery](/gateway/discovery)۔
+- 44. فی ہوسٹ ایک گیٹ وے کی سفارش کی جاتی ہے۔ 45. WhatsApp Web سیشن کا مالک ہونے کی اجازت صرف اسی پروسس کو ہے۔ 46. ریسکیو بوٹس یا سخت آئسولیشن کے لیے، آئسولیٹڈ پروفائلز اور پورٹس کے ساتھ متعدد گیٹ ویز چلائیں۔ 47. دیکھیں [Multiple gateways](/gateway/multiple-gateways)۔
+- 48. پہلے لوپ بیک: گیٹ وے WS کا ڈیفالٹ `ws://127.0.0.1:18789` ہے۔ 49. وزرڈ بطورِ ڈیفالٹ ایک گیٹ وے ٹوکن بناتا ہے، حتیٰ کہ لوپ بیک کے لیے بھی۔ 50. ٹیل نیٹ ایکسس کے لیے، `openclaw gateway --bind tailnet --token ...` چلائیں کیونکہ نان-لوپ بیک بائنڈز کے لیے ٹوکنز درکار ہوتے ہیں۔
+- Nodes connect to the Gateway WS over LAN, tailnet, or SSH as needed. The legacy TCP bridge is deprecated.
+- Canvas host is an HTTP file server on `canvasHost.port` (default `18793`) serving `/__openclaw__/canvas/` for node WebViews. See [Gateway configuration](/gateway/configuration) (`canvasHost`).
+- Remote use is typically SSH tunnel or tailnet VPN. See [Remote access](/gateway/remote) and [Discovery](/gateway/discovery).

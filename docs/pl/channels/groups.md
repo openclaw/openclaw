@@ -3,13 +3,6 @@ summary: "Zachowanie czatów grupowych na różnych platformach (WhatsApp/Telegr
 read_when:
   - Zmienianie zachowania czatów grupowych lub kontroli wzmianek
 title: "Grupy"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:14Z
 ---
 
 # Grupy
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Jeśli chcesz...
 
-| Cel                                                            | Co ustawić                                                 |
-| -------------------------------------------------------------- | ---------------------------------------------------------- |
-| Zezwolić na wszystkie grupy, ale odpowiadać tylko na @wzmianki | `groups: { "*": { requireMention: true } }`                |
-| Wyłączyć wszystkie odpowiedzi w grupach                        | `groupPolicy: "disabled"`                                  |
-| Tylko określone grupy                                          | `groups: { "<group-id>": { ... } }` (bez klucza `"*"`)     |
-| Tylko Ty możesz wyzwalać w grupach                             | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Cel                                                                         | Co ustawić                                                                |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Zezwolić na wszystkie grupy, ale odpowiadać tylko na @wzmianki | `groups: { "*": { requireMention: true } }`                               |
+| Wyłączyć wszystkie odpowiedzi w grupach                                     | `groupPolicy: "disabled"`                                                 |
+| Tylko określone grupy                                                       | `groups: { "<group-id>": { ... } }` (bez klucza `"*"`) |
+| Tylko Ty możesz wyzwalać w grupach                                          | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                |
 
 ## Klucze sesji
 
@@ -181,8 +174,8 @@ Kontroluj, jak wiadomości grupowe/pokojowe są obsługiwane per kanał:
 }
 ```
 
-| Polityka      | Zachowanie                                                               |
-| ------------- | ------------------------------------------------------------------------ |
+| Polityka      | Zachowanie                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------- |
 | `"open"`      | Grupy omijają listy dozwolonych; kontrola wzmianek nadal obowiązuje.     |
 | `"disabled"`  | Całkowicie blokuje wszystkie wiadomości grupowe.                         |
 | `"allowlist"` | Zezwala tylko na grupy/pokoje zgodne z skonfigurowaną listą dozwolonych. |
@@ -249,7 +242,7 @@ Odpowiadanie na wiadomość bota liczy się jako domyślna wzmianka (gdy kanał 
 Uwagi:
 
 - `mentionPatterns` to wyrażenia regularne nieczułe na wielkość liter.
-- Platformy zapewniające jawne wzmianki nadal je przekazują; wzorce są rozwiązaniem zapasowym.
+- Powierzchnie zawierające wyraźne wzmianki nadal są pozytywne; wzory są spadkiem.
 - Nadpisanie per-agent: `agents.list[].groupChat.mentionPatterns` (przydatne, gdy wiele agentów współdzieli grupę).
 - Kontrola wzmianek jest egzekwowana tylko wtedy, gdy wykrywanie wzmianek jest możliwe (natywne wzmianki lub skonfigurowane `mentionPatterns`).
 - Domyślne ustawienia Discorda znajdują się w `channels.discord.guilds."*"` (z możliwością nadpisania per gildia/kanał).

@@ -4,13 +4,6 @@ read_when:
   - Ao explicar uso de tokens, custos ou janelas de contexto
   - Ao depurar crescimento de contexto ou comportamento de compactação
 title: "Uso de tokens e custos"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:59Z
 ---
 
 # Uso de tokens e custos

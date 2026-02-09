@@ -3,13 +3,6 @@ summary: "مخططات TypeBox بوصفها المصدر الوحيد للحقي
 read_when:
   - تحديث مخططات البروتوكول أو توليد الشيفرة
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:23Z
 ---
 
 # TypeBox كمصدر الحقيقة للبروتوكول
@@ -52,7 +45,7 @@ Client                    Gateway
 | المراسلة | `send`، `poll`، `agent`، `agent.wait`                     | الآثار الجانبية تتطلب `idempotencyKey` |
 | الدردشة  | `chat.history`، `chat.send`، `chat.abort`، `chat.inject`  | يستخدم WebChat هذه                     |
 | الجلسات  | `sessions.list`، `sessions.patch`، `sessions.delete`      | إدارة الجلسات                          |
-| العُقد   | `node.list`، `node.invoke`، `node.pair.*`                 | Gateway WS + إجراءات العُقد            |
+| Nodes    | `node.list`، `node.invoke`، `node.pair.*`                 | Gateway WS + إجراءات العُقد            |
 | الأحداث  | `tick`، `presence`، `agent`، `chat`، `health`، `shutdown` | دفع من الخادم                          |
 
 القائمة المعتمدة تعيش في `src/gateway/server.ts` (`METHODS`، `EVENTS`).

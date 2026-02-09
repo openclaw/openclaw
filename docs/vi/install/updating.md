@@ -4,23 +4,17 @@ read_when:
   - Cập nhật OpenClaw
   - Có sự cố sau khi cập nhật
 title: "Cập nhật"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:34Z
 ---
 
 # Cập nhật
 
-OpenClaw đang phát triển rất nhanh (trước “1.0”). Hãy coi việc cập nhật như vận hành hạ tầng: cập nhật → chạy kiểm tra → khởi động lại (hoặc dùng `openclaw update`, lệnh này sẽ khởi động lại) → xác minh.
+OpenClaw is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart (or use `openclaw update`, which restarts) → verify.
 
 ## Khuyến nghị: chạy lại trình cài đặt từ website (nâng cấp tại chỗ)
 
-Lộ trình cập nhật **được ưu tiên** là chạy lại trình cài đặt từ website. Trình cài đặt
-phát hiện các bản cài đặt hiện có, nâng cấp tại chỗ, và chạy `openclaw doctor` khi cần.
+The **preferred** update path is to re-run the installer from the website. It
+detects existing installs, upgrades in place, and runs `openclaw doctor` when
+needed.
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -29,6 +23,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Ghi chú:
 
 - Thêm `--no-onboard` nếu bạn không muốn trình hướng dẫn ban đầu chạy lại.
+
 - Với **cài đặt từ mã nguồn**, dùng:
 
   ```bash
@@ -38,6 +33,7 @@ Ghi chú:
   Trình cài đặt sẽ `git pull --rebase` **chỉ** khi repo sạch.
 
 - Với **cài đặt toàn cục**, script sử dụng `npm install -g openclaw@latest` ở bên dưới.
+
 - Ghi chú kế thừa: `clawdbot` vẫn khả dụng như một lớp tương thích.
 
 ## Trước khi cập nhật
@@ -75,7 +71,7 @@ Dùng `--tag <dist-tag|version>` cho việc cài đặt một lần theo tag/phi
 
 Xem [Development channels](/install/development-channels) để biết ngữ nghĩa kênh và ghi chú phát hành.
 
-Lưu ý: với cài đặt npm, gateway ghi một gợi ý cập nhật khi khởi động (kiểm tra tag của kênh hiện tại). Tắt bằng `update.checkOnStart: false`.
+Note: on npm installs, the gateway logs an update hint on startup (checks the current channel tag). Disable via `update.checkOnStart: false`.
 
 Sau đó:
 
@@ -106,11 +102,11 @@ Lệnh này chạy một quy trình cập nhật tương đối an toàn:
 - Cài deps, build, build Control UI, và chạy `openclaw doctor`.
 - Khởi động lại gateway theo mặc định (dùng `--no-restart` để bỏ qua).
 
-Nếu bạn cài qua **npm/pnpm** (không có metadata git), `openclaw update` sẽ cố cập nhật qua trình quản lý gói của bạn. Nếu không phát hiện được bản cài đặt, hãy dùng “Cập nhật (cài đặt toàn cục)” thay thế.
+If you installed via **npm/pnpm** (no git metadata), `openclaw update` will try to update via your package manager. If it can’t detect the install, use “Update (global install)” instead.
 
 ## Cập nhật (Control UI / RPC)
 
-Control UI có **Update & Restart** (RPC: `update.run`). Nó:
+The Control UI has **Update & Restart** (RPC: `update.run`). It:
 
 1. Chạy cùng quy trình cập nhật từ mã nguồn như `openclaw update` (chỉ git checkout).
 2. Ghi một sentinel khởi động lại kèm báo cáo có cấu trúc (đuôi stdout/stderr).
@@ -148,7 +144,7 @@ Ghi chú:
 
 ## Luôn chạy: `openclaw doctor`
 
-Doctor là lệnh “cập nhật an toàn”. Nó cố ý đơn giản: sửa chữa + migrate + cảnh báo.
+Doctor is the “safe update” command. It’s intentionally boring: repair + migrate + warn.
 
 Lưu ý: nếu bạn đang dùng **cài đặt từ mã nguồn** (git checkout), `openclaw doctor` sẽ đề nghị chạy `openclaw update` trước.
 
@@ -176,7 +172,7 @@ openclaw logs --follow
 
 Nếu bạn dùng giám sát:
 
-- macOS launchd (LaunchAgent đóng gói trong app): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (dùng `bot.molt.<profile>`; bản kế thừa `com.openclaw.*` vẫn dùng được)
+- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (use `bot.molt.<profile>`; legacy `com.openclaw.*` still works)
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` chỉ hoạt động nếu dịch vụ đã được cài; nếu không, chạy `openclaw gateway install`.

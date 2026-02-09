@@ -4,13 +4,6 @@ summary: "Vercel AI Gateway کی سیٹ اپ (تصدیق + ماڈل انتخاب
 read_when:
   - آپ OpenClaw کے ساتھ Vercel AI Gateway استعمال کرنا چاہتے ہیں
   - آپ کو API کلید کے ماحولیاتی متغیر یا CLI تصدیقی انتخاب کی ضرورت ہے
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:35Z
 ---
 
 # Vercel AI Gateway

@@ -4,18 +4,11 @@ read_when:
   - Du vil forbinde en Feishu/Lark-bot
   - Du konfigurerer Feishu-kanalen
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:11Z
 ---
 
 # Feishu-bot
 
-Feishu (Lark) er en teamchatplatform, som virksomheder bruger til beskeder og samarbejde. Dette plugin forbinder OpenClaw til en Feishu/Lark-bot ved hjælp af platformens WebSocket-begivenhedsabonnement, så beskeder kan modtages uden at eksponere en offentlig webhook-URL.
+Feishu (Lark) er en team chat platform, der anvendes af virksomheder til at sende beskeder og samarbejde. Dette plugin forbinder OpenClaw til en Feishu/Lark bot ved hjælp af platformens WebSocket event abonnement, så beskeder kan modtages uden at udsætte en offentlig webhook URL.
 
 ---
 
@@ -92,7 +85,7 @@ Lark (global) tenants skal bruge [https://open.larksuite.com/app](https://open.l
 
 ![Create enterprise app](../images/feishu-step2-create-app.png)
 
-### 3. Kopiér legitimationsoplysninger
+### 3. Kopier legitimationsoplysninger
 
 Fra **Credentials & Basic Info**, kopiér:
 
@@ -103,7 +96,7 @@ Fra **Credentials & Basic Info**, kopiér:
 
 ![Get credentials](../images/feishu-step3-credentials.png)
 
-### 4. Konfigurér tilladelser
+### 4. Konfigurer tilladelser
 
 På **Permissions**, klik **Batch import** og indsæt:
 
@@ -144,7 +137,7 @@ I **App Capability** > **Bot**:
 
 ![Enable bot capability](../images/feishu-step5-bot-capability.png)
 
-### 6. Konfigurér event-abonnement
+### 6. Konfigurer event abonnement
 
 ⚠️ **Vigtigt:** før du opsætter event-abonnement, skal du sikre:
 
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark (global) domæne
 
-Hvis din tenant er på Lark (international), så sæt domænet til `lark` (eller en fuld domænestreng). Du kan sætte det i `channels.feishu.domain` eller pr. konto (`channels.feishu.accounts.<id>.domain`).
+Hvis din lejer er på Lark (international), indstil domænet til 'lark' (eller en fuld domænestreng). Du kan indstille det på `channels.feishu.domain` eller per konto (`channels.feishu.accounts.<id>.domain`).
 
 ```json5
 {
@@ -243,7 +236,7 @@ I Feishu, find din bot og send en besked.
 
 ### 3. Godkend parring
 
-Som standard svarer botten med en parringskode. Godkend den:
+Som standard svarer bot med en parringskode. Godkend det:
 
 ```bash
 openclaw pairing approve feishu <CODE>
@@ -267,6 +260,7 @@ Efter godkendelse kan du chatte normalt.
 ### Direkte beskeder
 
 - **Standard**: `dmPolicy: "pairing"` (ukendte brugere får en parringskode)
+
 - **Godkend parring**:
 
   ```bash
@@ -284,7 +278,7 @@ Efter godkendelse kan du chatte normalt.
 - `"allowlist"` = tillad kun `groupAllowFrom`
 - `"disabled"` = deaktivér gruppebeskeder
 
-**2. Krav om omtale** (`channels.feishu.groups.<chat_id>.requireMention`):
+**2. Omtale krav** (`channels.feishu.groups.<chat_id>.requireMention`:
 
 - `true` = kræv @mention (standard)
 - `false` = svar uden omtaler
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### Streaming
 
-Feishu understøtter streaming-svar via interaktive kort. Når det er aktiveret, opdaterer botten et kort, mens den genererer tekst.
+Feishu understøtter streaming svar via interaktive kort. Når aktiveret, opdaterer botten et kort som det genererer tekst.
 
 ```json5
 {
@@ -534,34 +528,34 @@ Fuld konfiguration: [Gateway-konfiguration](/gateway/configuration)
 
 Nøgleindstillinger:
 
-| Indstilling                                       | Beskrivelse                             | Standard  |
-| ------------------------------------------------- | --------------------------------------- | --------- |
-| `channels.feishu.enabled`                         | Aktivér/deaktivér kanal                 | `true`    |
-| `channels.feishu.domain`                          | API-domæne (`feishu` eller `lark`)      | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                  | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                              | -         |
-| `channels.feishu.accounts.<id>.domain`            | Tilsidesættelse af API-domæne pr. konto | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM-politik                              | `pairing` |
-| `channels.feishu.allowFrom`                       | DM-tilladelsesliste (open_id-liste)     | -         |
-| `channels.feishu.groupPolicy`                     | Gruppepolitik                           | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Gruppens tilladelsesliste               | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Kræv @mention                           | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Aktivér gruppe                          | `true`    |
-| `channels.feishu.textChunkLimit`                  | Besked-chunkstørrelse                   | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Mediestørrelsesgrænse                   | `30`      |
-| `channels.feishu.streaming`                       | Aktivér streaming-kortoutput            | `true`    |
-| `channels.feishu.blockStreaming`                  | Aktivér blokstreaming                   | `true`    |
+| Indstilling                                                                                                                                                      | Beskrivelse                                                                 | Standard  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                                                                                                                                        | Aktivér/deaktivér kanal                                                     | `true`    |
+| `channels.feishu.domain`                                                                                                                                         | API-domæne (`feishu` eller `lark`)                       | `feishu`  |
+| \`channels.feishu.accounts.<id>.appId«                                                           | App ID                                                                      | -         |
+| `channels.feishu.accounts.<id>.appSecret`                                                                                                                        | App Secret                                                                  | -         |
+| \`channels.feishu.accounts.<id>.domæne«                                                          | Tilsidesættelse af API-domæne pr. konto                     | `feishu`  |
+| `channels.feishu.dmPolicy`                                                                                                                                       | DM-politik                                                                  | `pairing` |
+| `channels.feishu.allowFrom`                                                                                                                                      | DM-tilladelsesliste (open_id-liste) | -         |
+| `channels.feishu.groupPolicy`                                                                                                                                    | Gruppepolitik                                                               | `open`    |
+| `channels.feishu.groupAllowFrom`                                                                                                                                 | Gruppens tilladelsesliste                                                   | -         |
+| \`channels.feishu.groups.<chat_id>.requireMention« | Kræv @mention                                                  | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`                                                                                                                       | Aktivér gruppe                                                              | `true`    |
+| `channels.feishu.textChunkLimit`                                                                                                                                 | Besked-chunkstørrelse                                                       | `2000`    |
+| `channels.feishu.mediaMaxMb`                                                                                                                                     | Mediestørrelsesgrænse                                                       | `30`      |
+| `channels.feishu.streaming`                                                                                                                                      | Aktivér streaming-kortoutput                                                | `true`    |
+| `channels.feishu.blockStreaming`                                                                                                                                 | Aktivér blokstreaming                                                       | `true`    |
 
 ---
 
 ## dmPolicy-reference
 
-| Værdi         | Adfærd                                                            |
-| ------------- | ----------------------------------------------------------------- |
+| Værdi         | Adfærd                                                                            |
+| ------------- | --------------------------------------------------------------------------------- |
 | `"pairing"`   | **Standard.** Ukendte brugere får en parringskode; skal godkendes |
-| `"allowlist"` | Kun brugere i `allowFrom` kan chatte                              |
-| `"open"`      | Tillad alle brugere (kræver `"*"` i allowFrom)                    |
-| `"disabled"`  | Deaktivér DM’er                                                   |
+| `"allowlist"` | Kun brugere i `allowFrom` kan chatte                                              |
+| `"open"`      | Tillad alle brugere (kræver `"*"` i allowFrom)                 |
+| `"disabled"`  | Deaktivér DM’er                                                                   |
 
 ---
 

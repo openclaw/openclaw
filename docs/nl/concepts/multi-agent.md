@@ -3,13 +3,6 @@ summary: "Multi-agent routing: geïsoleerde agents, kanaalaccounts en bindingen"
 title: Multi-Agent Routering
 read_when: "Je wilt meerdere geïsoleerde agents (werkruimtes + auth) in één Gateway-proces."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:27Z
 ---
 
 # Multi-Agent Routering

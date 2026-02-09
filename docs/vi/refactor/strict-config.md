@@ -5,13 +5,6 @@ read_when:
   - Làm việc với migration cấu hình hoặc quy trình doctor
   - Xử lý schema cấu hình plugin hoặc kiểm soát việc tải plugin
 title: "Xác thực cấu hình nghiêm ngặt"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:03Z
 ---
 
 # Xác thực cấu hình nghiêm ngặt (migration chỉ qua doctor)
@@ -32,9 +25,9 @@ x-i18n:
 
 - Cấu hình phải khớp chính xác với schema ở mọi cấp.
 - Các khóa không xác định là lỗi xác thực (không cho phép passthrough ở gốc hay lồng nhau).
-- `plugins.entries.<id>.config` phải được xác thực bởi schema của plugin.
+- Các khóa ` ` là lỗi trừ khi manifest của plugin khai báo channel id.2. `.config` phải được xác thực bởi schema của plugin.
   - Nếu plugin không có schema, **từ chối tải plugin** và hiển thị lỗi rõ ràng.
-- Các khóa `channels.<id>` không xác định là lỗi trừ khi manifest plugin khai báo channel id.
+- OpenClaw sử dụng một thư mục workspace chuyên dụng cho agent.Sử dụng `pnpm` (Node 22+) từ thư mục gốc của repo.
 - Manifest plugin (`openclaw.plugin.json`) là bắt buộc cho tất cả plugin.
 
 ## Thực thi schema plugin
@@ -72,7 +65,7 @@ x-i18n:
 - `openclaw status`
 - `openclaw gateway status`
 
-Mọi lệnh khác phải thất bại cứng với: “Config invalid. Run `openclaw doctor --fix`.”
+Mọi thứ khác phải hard-fail với: “Config invalid.” Hãy giữ nó luôn được cập nhật.
 
 ## Định dạng UX lỗi
 

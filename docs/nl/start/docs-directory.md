@@ -3,13 +3,6 @@ summary: "Gecureerde links naar de meest gebruikte OpenClaw-documentatie."
 read_when:
   - Je wilt snel toegang tot belangrijke documentatiepagina’s
 title: "Documentatieoverzicht"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:42Z
 ---
 
 <Note>

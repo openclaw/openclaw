@@ -3,13 +3,6 @@ summary: "Verkenning: modelconfiguratie, authenticatieprofielen en fallbackgedra
 read_when:
   - Verkennen van toekomstige ideeën voor modelselectie + authenticatieprofielen
 title: "Verkenning van modelconfiguratie"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:16Z
 ---
 
 # Modelconfiguratie (verkenning)

@@ -5,13 +5,6 @@ read_when:
   - Tailscale 를 통해 원격 Gateway + 로컬 브라우저 자동화가 필요한 경우
   - 브라우저 장악의 보안 영향에 대해 이해하고 싶은 경우
 title: "Chrome 확장 프로그램"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:34Z
 ---
 
 # Chrome 확장 프로그램 (브라우저 릴레이)

@@ -1,17 +1,10 @@
 ---
 summary: "مرجع CLI لأمر `openclaw system` (أحداث النظام، نبضات القلب، الحضور)"
 read_when:
-  - "تريد إدراج حدث نظام دون إنشاء مهمة cron"
-  - "تحتاج إلى تمكين أو تعطيل نبضات القلب"
-  - "تريد فحص إدخالات حضور النظام"
+  - تريد إدراج حدث نظام دون إنشاء مهمة cron
+  - تحتاج إلى تمكين أو تعطيل نبضات القلب
+  - تريد فحص إدخالات حضور النظام
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:02Z
 ---
 
 # `openclaw system`

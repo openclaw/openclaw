@@ -4,13 +4,6 @@ read_when:
   - Du vill ändra standardmodeller eller se status för leverantörsautentisering
   - Du vill skanna tillgängliga modeller/leverantörer och felsöka autentiseringsprofiler
 title: "modeller"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:45Z
 ---
 
 # `openclaw models`
@@ -31,19 +24,19 @@ openclaw models set <model-or-alias>
 openclaw models scan
 ```
 
-`openclaw models status` visar den upplösta standarden/fallbacks samt en autentiseringsöversikt.
-När ögonblicksbilder av leverantörsanvändning finns tillgängliga innehåller avsnittet för OAuth/tokenstatus
-rubriker för leverantörsanvändning.
-Lägg till `--probe` för att köra live‑autentiseringsprober mot varje konfigurerad leverantörsprofil.
-Prober är riktiga förfrågningar (kan förbruka tokens och utlösa hastighetsbegränsningar).
-Använd `--agent <id>` för att inspektera en konfigurerad agents modell-/autentiseringsstatus. När detta utelämnas
-använder kommandot `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` om angivet, annars den
+`openclaw models status` visar den upplösta standard/fallbacks plus en auth översikt.
+När det finns ögonblicksbilder för leverantörsanvändning finns OAuth/token status sektionen innehåller
+leverantörens användningshuvuden.
+Lägg till `--probe` för att köra live auth sonder mot varje konfigurerad leverantörsprofil.
+Probes är verkliga förfrågningar (kan konsumera polletter och utlösa hastighetsbegränsningar).
+Använd `--agent <id>` för att inspektera ett konfigurerat agentens modell/auth-tillstånd. När kommandot utelämnas,
+använder kommandot `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` om satt, annars
 konfigurerade standardagenten.
 
 Noteringar:
 
 - `models set <model-or-alias>` accepterar `provider/model` eller ett alias.
-- Modellreferenser tolkas genom att dela på den **första** `/`. Om modell-ID:t innehåller `/` (OpenRouter‑stil), inkludera leverantörsprefixet (exempel: `openrouter/moonshotai/kimi-k2`).
+- Modellrefs tolkas genom att dela på **först** `/`. Om modell-ID innehåller `/` (OpenRouter-style), inkludera leverantörs-prefix (exempel: `openrouter/moonshotai/kimi-k2`).
 - Om du utelämnar leverantören behandlar OpenClaw indata som ett alias eller en modell för **standardleverantören** (fungerar endast när det inte finns någon `/` i modell-ID:t).
 
 ### `models status`
@@ -77,7 +70,7 @@ openclaw models auth setup-token
 openclaw models auth paste-token
 ```
 
-`models auth login` kör en leverantörsplugins autentiseringsflöde (OAuth/API‑nyckel). Använd
+`models auth login` kör en leverantörs plugins auth flöde (OAuth/API-nyckel). Använd
 `openclaw plugins list` för att se vilka leverantörer som är installerade.
 
 Noteringar:

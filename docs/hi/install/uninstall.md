@@ -4,13 +4,6 @@ read_when:
   - आप किसी मशीन से OpenClaw हटाना चाहते हैं
   - अनइंस्टॉल के बाद भी Gateway सेवा चल रही है
 title: "अनइंस्टॉल"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:25Z
 ---
 
 # अनइंस्टॉल
@@ -88,14 +81,14 @@ rm -rf /Applications/OpenClaw.app
 
 ### macOS (launchd)
 
-डिफ़ॉल्ट लेबल `bot.molt.gateway` है (या `bot.molt.<profile>`; लेगेसी `com.openclaw.*` अभी भी मौजूद हो सकता है):
+डिफ़ॉल्ट लेबल `bot.molt.gateway` है (या `bot.molt.<profile>`; legacy `com.openclaw.*` अभी भी मौजूद हो सकता है):
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-यदि आपने कोई प्रोफ़ाइल उपयोग की है, तो लेबल और plist नाम को `bot.molt.<profile>` से बदलें। यदि मौजूद हों तो किसी भी लेगेसी `com.openclaw.*` plist को हटाएँ।
+यदि आपने कोई प्रोफ़ाइल उपयोग की है, तो लेबल और plist नाम को `bot.molt.<profile>` से बदलें। यदि मौजूद हों, तो किसी भी legacy `com.openclaw.*` plist को हटा दें।
 
 ### Linux (systemd user unit)
 
@@ -110,7 +103,7 @@ systemctl --user daemon-reload
 ### Windows (Scheduled Task)
 
 डिफ़ॉल्ट टास्क नाम `OpenClaw Gateway` है (या `OpenClaw Gateway (<profile>)`)।
-टास्क स्क्रिप्ट आपकी स्टेट डायरेक्टरी के अंतर्गत रहती है।
+टास्क स्क्रिप्ट आपकी state dir के अंतर्गत रहती है।
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,8 +116,8 @@ Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 
 ### सामान्य इंस्टॉल (install.sh / npm / pnpm / bun)
 
-यदि आपने `https://openclaw.ai/install.sh` या `install.ps1` का उपयोग किया है, तो CLI `npm install -g openclaw@latest` के साथ इंस्टॉल की गई थी।
-इसे `npm rm -g openclaw` से हटाएँ (या `pnpm remove -g` / `bun remove -g` यदि आपने उसी तरीके से इंस्टॉल किया था)।
+यदि आपने `https://openclaw.ai/install.sh` या `install.ps1` का उपयोग किया है, तो CLI को `npm install -g openclaw@latest` के साथ इंस्टॉल किया गया था।
+`npm rm -g openclaw` से इसे हटाएँ (या यदि आपने उस तरह से इंस्टॉल किया है तो `pnpm remove -g` / `bun remove -g`)।
 
 ### सोर्स चेकआउट (git clone)
 

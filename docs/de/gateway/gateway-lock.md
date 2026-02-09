@@ -1,16 +1,9 @@
 ---
-summary: „Gateway-Singleton-Schutz durch Binden des WebSocket-Listeners“
+summary: "„Gateway-Singleton-Schutz durch Binden des WebSocket-Listeners“"
 read_when:
   - Beim Ausführen oder Debuggen des Gateway-Prozesses
   - Bei der Untersuchung der Durchsetzung einer Einzelinstanz
-title: „Gateway-Sperre“
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:10Z
+title: "gateway/gateway-lock.md"
 ---
 
 # Gateway-Sperre

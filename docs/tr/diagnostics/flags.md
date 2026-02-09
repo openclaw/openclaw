@@ -1,16 +1,9 @@
 ---
-summary: "Hedefli hata ayıklama günlükleri için tanılama bayrakları"
+summary: "Diagnostics flags for targeted debug logs"
 read_when:
   - Küresel günlükleme seviyelerini yükseltmeden hedefli hata ayıklama günlüklerine ihtiyaç duyduğunuzda
-  - Destek için alt sistemlere özgü günlükleri yakalamanız gerektiğinde
+  - You need to capture subsystem-specific logs for support
 title: "Tanılama Bayrakları"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:11Z
 ---
 
 # Tanılama Bayrakları
@@ -47,7 +40,7 @@ Birden fazla bayrak:
 
 Bayrakları değiştirdikten sonra gateway’i yeniden başlatın.
 
-## Ortam değişkeniyle geçersiz kılma (tek seferlik)
+## Env override (one-off)
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -59,7 +52,7 @@ Tüm bayrakları devre dışı bırakma:
 OPENCLAW_DIAGNOSTICS=0
 ```
 
-## Günlüklerin konumu
+## Günlüklerin gittiği yer
 
 Bayraklar, günlükleri standart tanılama günlük dosyasına yazar. Varsayılan olarak:
 
@@ -69,7 +62,7 @@ Bayraklar, günlükleri standart tanılama günlük dosyasına yazar. Varsayıla
 
 `logging.file` ayarlarsanız bunun yerine o yolu kullanır. Günlükler JSONL biçimindedir (satır başına bir JSON nesnesi). `logging.redactSensitive`’ye bağlı olarak maskeleme (redaction) uygulanmaya devam eder.
 
-## Günlükleri çıkarma
+## Extract logs
 
 En son günlük dosyasını seçin:
 

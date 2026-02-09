@@ -4,13 +4,6 @@ read_when:
   - Zoekt naar de status van de Linux companion-app
   - Plant platformdekking of bijdragen
 title: "Linux-app"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Linux-app

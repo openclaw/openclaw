@@ -6,13 +6,6 @@ read_when:
   - Problemen oplossen bij het instellen van de onboarding-identiteit
 title: "Agent Bootstrapping"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:41Z
 ---
 
 # Agent Bootstrapping

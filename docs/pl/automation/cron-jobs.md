@@ -5,16 +5,9 @@ read_when:
   - Łączenie automatyzacji, które powinny działać z heartbeatami lub obok nich
   - Wybór między heartbeat a cron dla zadań harmonogramowanych
 title: "Zadania Cron"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:23Z
 ---
 
-# Zadania cron (harmonogram Gateway)
+# Zadania crona (Gateway scheduler)
 
 > **Cron czy Heartbeat?** Zobacz [Cron vs Heartbeat](/automation/cron-vs-heartbeat), aby uzyskać wskazówki, kiedy używać każdego z nich.
 
@@ -471,7 +464,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - Sprawdź, czy Gateway działa w sposób ciągły (cron działa wewnątrz procesu Gateway).
 - Dla harmonogramów `cron`: potwierdź strefę czasową (`--tz`) względem strefy hosta.
 
-### Zadanie cykliczne ciągle się opóźnia po błędach
+### Powtarzające się zadanie opóźnia się po niepowodzeniach
 
 - OpenClaw stosuje wykładnicze opóźnienie ponownych prób dla zadań cyklicznych po kolejnych błędach:
   30 s, 1 min, 5 min, 15 min, następnie 60 min między próbami.

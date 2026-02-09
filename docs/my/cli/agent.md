@@ -3,19 +3,12 @@ summary: "Gateway（ဂိတ်ဝေး）မှတစ်ဆင့် `opencla
 read_when:
   - စခရစ်များမှ အေးဂျင့် တစ်ကြိမ်လှည့်ပတ်ကို လည်ပတ်စေလိုသည့်အခါ (အဖြေကို ပို့ပေးရန် ရွေးချယ်နိုင်သည်)
 title: "agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:53Z
 ---
 
 # `openclaw agent`
 
-Gateway（ဂိတ်ဝေး）မှတစ်ဆင့် အေးဂျင့် တစ်ကြိမ်လှည့်ပတ်ကို လည်ပတ်စေပါ (`--local` ကို embedded အတွက် အသုံးပြုပါ)။
-ဖွဲ့စည်းပြင်ဆင်ထားသော အေးဂျင့်ကို တိုက်ရိုက် ဦးတည်ရန် `--agent <id>` ကို အသုံးပြုပါ။
+Gateway မှတစ်ဆင့် agent turn တစ်ကြိမ် chạy ပါ (`--local` ကို embedded အတွက် အသုံးပြုပါ)။
+`--agent <id>` ကို အသုံးပြုပြီး configure လုပ်ထားသော agent ကို တိုက်ရိုက် target လုပ်ပါ။
 
 ဆက်စပ်အရာများ:
 

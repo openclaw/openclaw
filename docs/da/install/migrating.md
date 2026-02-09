@@ -4,13 +4,6 @@ read_when:
   - Du flytter OpenClaw til en ny bærbar/server
   - Du vil bevare sessioner, autentificering og kanal-logins (WhatsApp m.fl.)
 title: "Migreringsguide"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:27Z
 ---
 
 # Migrering af OpenClaw til en ny maskine
@@ -26,7 +19,7 @@ Men der er almindelige faldgruber omkring **profiler**, **tilladelser** og **ufu
 
 ## Før du går i gang (hvad du migrerer)
 
-### 1) Identificér din state-mappe
+### 1. Identificér din state-mappe
 
 De fleste installationer bruger standarden:
 
@@ -43,9 +36,9 @@ Hvis du er i tvivl, så kør på den **gamle** maskine:
 openclaw status
 ```
 
-Se efter omtaler af `OPENCLAW_STATE_DIR` / profil i outputtet. Hvis du kører flere gateways, gentag for hver profil.
+Kig efter omtaler af `OPENCLAW_ STATE_ DIR` / profil i output. Hvis du kører flere gateways, gentages for hver profil.
 
-### 2) Identificér dit workspace
+### 2. Identificér dit workspace
 
 Almindelige standarder:
 
@@ -54,7 +47,7 @@ Almindelige standarder:
 
 Dit workspace er der, hvor filer som `MEMORY.md`, `USER.md` og `memory/*.md` ligger.
 
-### 3) Forstå hvad du bevarer
+### 3. Forstå hvad du bevarer
 
 Hvis du kopierer **både** state-mappen og workspace, bevarer du:
 
@@ -128,7 +121,7 @@ På den **nye** maskine:
 openclaw doctor
 ```
 
-Doctor er den “sikre, kedelige” kommando. Den reparerer services, anvender konfigurationsmigreringer og advarer om uoverensstemmelser.
+Læge er den “sikre kedelig” kommando. Det reparerer tjenester, anvender config migrationer, og advarer om uoverensstemmelser.
 
 Derefter:
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### Faldgrube: kun at kopiere `openclaw.json`
 
-`openclaw.json` er ikke nok. Mange udbydere gemmer tilstand under:
+`openclaw.json` er ikke nok. Mange udbydere opbevarer stat under:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -177,7 +170,7 @@ Hvis du er i fjern-tilstand, så migrér **gateway-værten**.
 
 ### Faldgrube: hemmeligheder i backups
 
-`$OPENCLAW_STATE_DIR` indeholder hemmeligheder (API-nøgler, OAuth-tokens, WhatsApp-legitimationsoplysninger). Behandl backups som produktionshemmeligheder:
+`$OPENCLAW_STATE_DIR` indeholder hemmeligheder (API-nøgler, OAuth tokens, WhatsApp creds). Behandl sikkerhedskopier som produktionshemmeligheder:
 
 - opbevar krypteret
 - undgå deling over usikre kanaler

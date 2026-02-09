@@ -1,15 +1,8 @@
 ---
-summary: 「Gateway 服務的操作手冊，涵蓋生命週期與營運」
+summary: "Gateway 服務的操作手冊，涵蓋生命週期與營運"
 read_when:
-  - 「正在執行或除錯 Gateway 程序時」
-title: 「Gateway 操作手冊」
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:44Z
+  - 正在執行或除錯 Gateway 程序時
+title: "Gateway 操作手冊"
 ---
 
 # Gateway 服務操作手冊
@@ -19,10 +12,10 @@ x-i18n:
 ## 這是什麼
 
 - 一個常駐程序，負責唯一的 Baileys/Telegram 連線以及控制／事件平面。
-- 取代舊版 `gateway` 指令。CLI 入口點：`openclaw gateway`。
-- 持續執行直到停止；遇到致命錯誤會以非零碼結束，讓監督程式重新啟動。
+- 41. 取代舊版的 `gateway` 指令。 取代舊版 `gateway` 指令。CLI 入口點：`openclaw gateway`。
+- 12. 會持續執行直到停止；在致命錯誤時以非零值退出，讓監督程式重新啟動它。
 
-## 如何執行（本機）
+## 43. 如何執行（本機）
 
 ```bash
 openclaw gateway --port 18789
@@ -39,21 +32,21 @@ pnpm gateway:watch
   - 需要時，熱重載會透過 **SIGUSR1** 進行行程內重啟。
   - 使用 `gateway.reload.mode="off"` 停用。
 - 將 WebSocket 控制平面綁定至 `127.0.0.1:<port>`（預設 18789）。
-- 同一個連接埠也提供 HTTP（控制 UI、hooks、A2UI）。單一連接埠多工。
+- 同一個連接埠也提供 HTTP（控制 UI、hooks、A2UI）。單一連接埠多工。 44. 單一連接埠多工。
   - OpenAI Chat Completions（HTTP）：[`/v1/chat/completions`](/gateway/openai-http-api)。
   - OpenResponses（HTTP）：[`/v1/responses`](/gateway/openresponses-http-api)。
   - Tools Invoke（HTTP）：[`/tools/invoke`](/gateway/tools-invoke-http-api)。
-- 預設會在 `canvasHost.port`（預設 `18793`）啟動 Canvas 檔案伺服器，從 `~/.openclaw/workspace/canvas` 提供 `http://<gateway-host>:18793/__openclaw__/canvas/`。使用 `canvasHost.enabled=false` 或 `OPENCLAW_SKIP_CANVAS_HOST=1` 停用。
+- 預設會在 `canvasHost.port`（預設 `18793`）啟動 Canvas 檔案伺服器，從 `~/.openclaw/workspace/canvas` 提供 `http://<gateway-host>:18793/__openclaw__/canvas/`。使用 `canvasHost.enabled=false` 或 `OPENCLAW_SKIP_CANVAS_HOST=1` 停用。 45. 使用 `canvasHost.enabled=false` 或 `OPENCLAW_SKIP_CANVAS_HOST=1` 停用。
 - 記錄輸出至 stdout；使用 launchd/systemd 以保持常駐並進行日誌輪替。
-- 疑難排解時，傳入 `--verbose` 可將除錯日誌（交握、請求／回應、事件）從檔案鏡像到 stdio。
+- 16. 疑難排解時，傳入 `--verbose` 可將日誌檔中的除錯記錄（交握、請求/回應、事件）鏡像到 stdio。
 - `--force` 會使用 `lsof` 在選定的連接埠上尋找監聽者，送出 SIGTERM，記錄終止的程序，然後啟動 Gateway（若缺少 `lsof` 則快速失敗）。
 - 若在監督程式下執行（launchd/systemd/mac app 子程序模式），停止／重啟通常會送出 **SIGTERM**；較舊版本可能顯示為 `pnpm` `ELIFECYCLE` 的結束碼 **143**（SIGTERM），這是正常關閉而非當機。
 - **SIGUSR1** 在授權情況下會觸發行程內重啟（Gateway 工具／設定套用／更新，或啟用 `commands.restart` 以手動重啟）。
-- 預設需要 Gateway 驗證：設定 `gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）或 `gateway.auth.password`。除非使用 Tailscale Serve 身分，否則客戶端必須送出 `connect.params.auth.token/password`。
-- 精靈現在即使在 loopback 上也會預設產生權杖。
+- 預設需要 Gateway 驗證：設定 `gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）或 `gateway.auth.password`。除非使用 Tailscale Serve 身分，否則客戶端必須送出 `connect.params.auth.token/password`。 17. 除非使用 Tailscale Serve 身分識別，否則客戶端必須送出 `connect.params.auth.token/password`。
+- 48. 精靈現在預設會產生權杖，即使在回送位址上也是如此。
 - 連接埠優先順序：`--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > 預設 `18789`。
 
-## 遠端存取
+## 49. 遠端存取
 
 - 建議使用 Tailscale/VPN；否則使用 SSH 通道：
 
@@ -62,15 +55,16 @@ pnpm gateway:watch
   ```
 
 - 客戶端接著透過通道連線至 `ws://127.0.0.1:18789`。
+
 - 若已設定權杖，即使走通道，客戶端仍須在 `connect.params.auth.token` 中包含它。
 
 ## 多個 Gateway（同一主機）
 
-通常不需要：單一 Gateway 可服務多個訊息頻道與代理程式。僅在需要備援或嚴格隔離（例如救援機器人）時才使用多個 Gateway。
+通常不需要：單一 Gateway 可服務多個訊息頻道與代理程式。僅在需要備援或嚴格隔離（例如救援機器人）時才使用多個 Gateway。 在隔離狀態與設定並使用唯一連接埠時可支援。完整指南：[Multiple gateways](/gateway/multiple-gateways)。
 
-在隔離狀態與設定並使用唯一連接埠時可支援。完整指南：[Multiple gateways](/gateway/multiple-gateways)。
+50. 若你隔離狀態與設定並使用唯一的連接埠，即可支援。 21. 完整指南：[Multiple gateways](/gateway/multiple-gateways)。
 
-服務名稱會依設定檔而異：
+22. 服務名稱具備設定檔感知能力：
 
 - macOS：`bot.molt.<profile>`（舊版 `com.openclaw.*` 可能仍存在）
 - Linux：`openclaw-gateway-<profile>.service`
@@ -82,7 +76,7 @@ pnpm gateway:watch
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-救援機器人模式：保留第二個 Gateway，使用其專屬設定檔、狀態目錄、工作區與基準連接埠間距進行隔離。完整指南：[Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)。
+Rescue-Bot Pattern: keep a second Gateway isolated with its own profile, state dir, workspace, and base port spacing. Full guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### 開發設定檔（`--dev`）
 
@@ -105,14 +99,14 @@ openclaw --dev health
 - `canvasHost.port=19005`（推導：`gateway.port+4`）
 - 當你在 `--dev` 下執行 `setup`/`onboard` 時，`agents.defaults.workspace` 的預設值會變為 `~/.openclaw/workspace-dev`。
 
-推導連接埠（經驗法則）：
+25. 衍生連接埠（經驗法則）：
 
 - 基準連接埠 = `gateway.port`（或 `OPENCLAW_GATEWAY_PORT`／`--port`）
 - 瀏覽器控制服務連接埠 = 基準 + 2（僅 loopback）
 - `canvasHost.port = base + 4`（或 `OPENCLAW_CANVAS_HOST_PORT`／設定覆寫）
 - 瀏覽器設定檔 CDP 連接埠會從 `browser.controlPort + 9 .. + 108` 自動配置（每個設定檔持久化）。
 
-每個實例的檢查清單：
+26. 每個實例的檢查清單：
 
 - 唯一的 `gateway.port`
 - 唯一的 `OPENCLAW_CONFIG_PATH`
@@ -120,7 +114,7 @@ openclaw --dev health
 - 唯一的 `agents.defaults.workspace`
 - 獨立的 WhatsApp 號碼（若使用 WA）
 
-每個設定檔的服務安裝：
+27. 每個設定檔的服務安裝：
 
 ```bash
 openclaw --profile main gateway install
@@ -150,7 +144,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - `health` — 完整健康快照（與 `openclaw health --json` 形狀相同）。
 - `status` — 簡短摘要。
 - `system-presence` — 目前 presence 清單。
-- `system-event` — 發佈 presence／系統備註（結構化）。
+- 28. `system-event` — 發佈一則存在/系統備註（結構化）。
 - `send` — 透過作用中的頻道送出訊息。
 - `agent` — 執行代理程式回合（在同一連線上串流事件）。
 - `node.list` — 列出已配對與目前已連線的節點（包含 `caps`、`deviceFamily`、`modelIdentifier`、`paired`、`connected`，以及宣告的 `commands`）。
@@ -165,7 +159,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - `agent` — 代理程式執行的工具／輸出事件串流（帶序號標記）。
 - `presence` — presence 更新（含 stateVersion 的差異）推送至所有已連線的客戶端。
 - `tick` — 週期性 keepalive／no-op 以確認存活。
-- `shutdown` — Gateway 正在結束；酬載包含 `reason` 與可選的 `restartExpectedMs`。客戶端應重新連線。
+- `shutdown` — Gateway 正在結束；酬載包含 `reason` 與可選的 `restartExpectedMs`。客戶端應重新連線。 29. 客戶端應重新連線。
 
 ## WebChat 整合
 
@@ -173,7 +167,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - 遠端使用會走同一個 SSH/Tailscale 通道；若設定了 Gateway 權杖，客戶端會在 `connect` 期間包含它。
 - macOS app 透過單一 WS（共享連線）連線；它從初始快照補齊 presence，並監聽 `presence` 事件以更新 UI。
 
-## 型別與驗證
+## 30. 輸入與驗證
 
 - 伺服器使用 AJV，依協定定義所產生的 JSON Schema 驗證每個入站訊框。
 - 客戶端（TS/Swift）使用產生的型別（TS 直接使用；Swift 透過儲存庫的產生器）。
@@ -202,7 +196,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 
 ## 重播／缺口
 
-- 事件不會重播。客戶端會偵測序號缺口，並應在繼續前重新整理（`health` + `system-presence`）。WebChat 與 macOS 客戶端現在會在出現缺口時自動重新整理。
+- 31. 事件不會被重播。 32. 客戶端會偵測序列缺口，並在繼續之前應重新整理（`health` + `system-presence`）。 33. WebChat 與 macOS 客戶端現在會在出現缺口時自動重新整理。
 
 ## 監督（macOS 範例）
 
@@ -211,7 +205,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
   - Arguments：`gateway`
   - KeepAlive：true
   - StandardOut/Err：檔案路徑或 `syslog`
-- 發生失敗時，launchd 會重啟；致命的設定錯誤應持續結束，讓操作人員注意到。
+- On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents 為每使用者且需要登入的工作階段；無頭環境請使用自訂的 LaunchDaemon（未隨附）。
   - `openclaw gateway install` 會寫入 `~/Library/LaunchAgents/bot.molt.gateway.plist`
     （或 `bot.molt.<profile>.plist`；舊版 `com.openclaw.*` 會被清理）。
@@ -239,8 +233,8 @@ openclaw logs --follow
 - `gateway status` 會列印設定路徑與探測目標，以避免「localhost vs LAN 綁定」混淆與設定檔不匹配。
 - `gateway status` 會在服務看似運行但連接埠關閉時，包含最後一行 Gateway 錯誤。
 - `logs` 會透過 RPC 尾隨 Gateway 檔案日誌（不需手動 `tail`/`grep`）。
-- 若偵測到其他類似 gateway 的服務，CLI 會發出警告，除非它們是 OpenClaw 設定檔服務。
-  我們仍建議 **每台機器一個 Gateway** 作為多數設定；需要備援或救援機器人時，使用隔離的設定檔／連接埠。請參閱 [Multiple gateways](/gateway/multiple-gateways)。
+- If other gateway-like services are detected, the CLI warns unless they are OpenClaw profile services.
+  We still recommend **one gateway per machine** for most setups; use isolated profiles/ports for redundancy or a rescue bot. 37. 參見 [Multiple gateways](/gateway/multiple-gateways)。
   - 清理：`openclaw gateway uninstall`（目前服務）與 `openclaw doctor`（舊版遷移）。
 - `gateway install` 在已安裝時為 no-op；使用 `openclaw gateway install --force` 以重新安裝（設定檔／env／路徑變更）。
 
@@ -251,16 +245,17 @@ openclaw logs --follow
 - 要乾淨停止，使用 `openclaw gateway stop`（或 `launchctl bootout gui/$UID/bot.molt.gateway`）。
 - 要重啟，使用 `openclaw gateway restart`（或 `launchctl kickstart -k gui/$UID/bot.molt.gateway`）。
   - `launchctl` 僅在已安裝 LaunchAgent 時可用；否則請先使用 `openclaw gateway install`。
-  - 執行具名設定檔時，請以 `bot.molt.<profile>` 取代標籤。
+  - 執行具名設定檔時，請以 `bot.molt.<profile> ` 取代標籤。38. \` 在執行具名設定檔時。
 
 ## 監督（systemd 使用者單元）
 
 OpenClaw 在 Linux/WSL2 預設安裝 **systemd 使用者服務**。我們
 建議單一使用者機器使用使用者服務（環境較簡單、每使用者設定）。
-多使用者或常駐伺服器則使用 **系統服務**（不需 lingering，共用監督）。
+多使用者或常駐伺服器則使用 **系統服務**（不需 lingering，共用監督）。 39. 我們建議在單使用者機器上使用使用者服務（環境較簡單、每位使用者各自的設定）。
+40. 對於多使用者或永遠在線的伺服器，請使用 **系統服務**（不需要 lingering，共享監督）。
 
-`openclaw gateway install` 會寫入使用者單元。`openclaw doctor` 會稽核
-單元，並可更新以符合目前建議的預設值。
+`openclaw gateway install` writes the user unit. `openclaw doctor` audits the
+unit and can update it to match the current recommended defaults.
 
 建立 `~/.config/systemd/user/openclaw-gateway[-<profile>].service`：
 
@@ -289,11 +284,14 @@ sudo loginctl enable-linger youruser
 
 入門引導會在 Linux/WSL2 上執行此步驟（可能要求 sudo；寫入 `/var/lib/systemd/linger`）。
 接著啟用服務：
+Then enable the service:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
+**Alternative (system service)** - for always-on or multi-user servers, you can
+install a systemd **system** unit instead of a user unit (no lingering needed).
 **替代方案（系統服務）** — 對於常駐或多使用者伺服器，你可以安裝 systemd **系統** 單元而非使用者單元（不需 lingering）。
 建立 `/etc/systemd/system/openclaw-gateway[-<profile>].service`（複製上述單元，
 切換 `WantedBy=multi-user.target`，設定 `User=` + `WorkingDirectory=`），然後：
@@ -307,7 +305,7 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
 
 Windows 安裝應使用 **WSL2**，並依照上述 Linux systemd 章節。
 
-## 營運檢查
+## Operational checks
 
 - 存活度：開啟 WS 並送出 `req:connect` → 期望收到 `res`，且包含 `payload.type="hello-ok"`（含快照）。
 - 就緒度：呼叫 `health` → 期望收到 `ok: true`，且在 `linkChannel` 中有已連結的頻道（適用時）。
@@ -315,7 +313,7 @@ Windows 安裝應使用 **WSL2**，並依照上述 Linux systemd 章節。
 
 ## 安全保證
 
-- 預設假設每台主機一個 Gateway；若執行多個設定檔，請隔離連接埠／狀態並鎖定正確實例。
+- Assume one Gateway per host by default; if you run multiple profiles, isolate ports/state and target the right instance.
 - 不回退至直接 Baileys 連線；若 Gateway 停止，送出會快速失敗。
 - 非 connect 的第一訊框或格式錯誤的 JSON 會被拒絕並關閉 socket。
 - 優雅關閉：在關閉前送出 `shutdown` 事件；客戶端必須處理關閉並重新連線。

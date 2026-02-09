@@ -4,23 +4,16 @@ read_when:
   - Cắt hoặc xác thực một bản phát hành OpenClaw macOS
   - Cập nhật Sparkle appcast hoặc các tài sản feed
 title: "Phát hành macOS"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:44Z
 ---
 
 # Phát hành OpenClaw macOS (Sparkle)
 
-Ứng dụng này hiện có cập nhật tự động bằng Sparkle. Các bản build phát hành phải được ký bằng Developer ID, nén zip và xuất bản kèm một mục appcast đã ký.
+This app now ships Sparkle auto-updates. Các bản build phát hành phải được ký Developer ID, nén zip và phát hành kèm một mục appcast đã ký.
 
 ## Điều kiện tiên quyết
 
 - Đã cài đặt chứng chỉ Developer ID Application (ví dụ: `Developer ID Application: <Developer Name> (<TEAMID>)`).
-- Đã đặt đường dẫn khóa riêng Sparkle trong biến môi trường là `SPARKLE_PRIVATE_KEY_FILE` (đường dẫn tới khóa riêng ed25519 của Sparkle; khóa công khai được nhúng trong Info.plist). Nếu thiếu, hãy kiểm tra `~/.profile`.
+- Đường dẫn khóa riêng Sparkle được đặt trong môi trường dưới dạng `SPARKLE_PRIVATE_KEY_FILE` (đường dẫn tới khóa riêng ed25519 của Sparkle; khóa công khai được nhúng trong Info.plist). Mặc định theo kiến trúc hiện tại (`$(uname -m)`).
 - Thông tin xác thực Notary (hồ sơ keychain hoặc khóa API) cho `xcrun notarytool` nếu bạn muốn phân phối DMG/zip an toàn với Gatekeeper.
   - Chúng tôi dùng một hồ sơ Keychain tên `openclaw-notary`, được tạo từ các biến môi trường khóa API App Store Connect trong shell profile của bạn:
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
@@ -34,8 +27,8 @@ x-i18n:
 Ghi chú:
 
 - `APP_BUILD` ánh xạ tới `CFBundleVersion`/`sparkle:version`; hãy giữ dạng số và tăng dần (không có `-beta`), nếu không Sparkle sẽ so sánh là bằng nhau.
-- Mặc định theo kiến trúc hiện tại (`$(uname -m)`). Với các bản build phát hành/universal, đặt `BUILD_ARCHS="arm64 x86_64"` (hoặc `BUILD_ARCHS=all`).
-- Dùng `scripts/package-mac-dist.sh` cho các artefact phát hành (zip + DMG + notarization). Dùng `scripts/package-mac-app.sh` cho đóng gói local/dev.
+- Mặc định theo kiến trúc hiện tại (`$(uname -m)`). Đối với các bản build release/universal, đặt `BUILD_ARCHS="arm64 x86_64"` (hoặc `BUILD_ARCHS=all`).
+- Sử dụng `scripts/package-mac-app.sh` cho đóng gói local/dev. Sử dụng `scripts/package-mac-app.sh` để đóng gói cục bộ/dev.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -77,8 +70,8 @@ Dùng trình tạo ghi chú phát hành để Sparkle hiển thị ghi chú HTML
 SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.2.6.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 ```
 
-Tạo ghi chú phát hành HTML từ `CHANGELOG.md` (qua [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) và nhúng chúng vào mục appcast.
-Commit `appcast.xml` đã cập nhật cùng với các tài sản phát hành (zip + dSYM) khi xuất bản.
+Tạo release notes HTML từ `CHANGELOG.md` (thông qua [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) và nhúng chúng vào mục appcast.
+Luồng này cho phép ứng dụng macOS hoạt động như một điều khiển từ xa đầy đủ cho một gateway OpenClaw chạy trên host khác (desktop/server).
 
 ## Xuất bản & xác minh
 

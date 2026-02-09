@@ -4,13 +4,6 @@ read_when:
   - چینل لوکیشن پارسنگ شامل یا ترمیم کرتے وقت
   - ایجنٹ پرامپٹس یا اوزاروں میں لوکیشن سیاق کے فیلڈز استعمال کرتے وقت
 title: "چینل لوکیشن پارسنگ"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:54Z
 ---
 
 # چینل لوکیشن پارسنگ

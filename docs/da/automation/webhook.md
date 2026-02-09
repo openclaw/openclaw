@@ -4,13 +4,6 @@ read_when:
   - Tilføjelse eller ændring af webhook‑endpoints
   - Sammenkobling af eksterne systemer med OpenClaw
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:00Z
 ---
 
 # Webhooks
@@ -36,7 +29,7 @@ Noter:
 
 ## Autentificering
 
-Hver anmodning skal inkludere hook‑tokenet. Foretræk headers:
+Hver anmodning skal indeholde krog token. Foretræk headers:
 
 - `Authorization: Bearer <token>` (anbefalet)
 - `x-openclaw-token: <token>`
@@ -52,7 +45,7 @@ Payload:
 { "text": "System line", "mode": "now" }
 ```
 
-- `text` **påkrævet** (string): Beskrivelsen af hændelsen (f.eks. "Ny e‑mail modtaget").
+- `text` **obligatorisk** (streng): Beskrivelse af begivenheden (f.eks. "Ny e-mail modtaget").
 - `mode` valgfri (`now` | `next-heartbeat`): Om der skal udløses et øjeblikkeligt heartbeat (standard `now`) eller ventes til næste periodiske check.
 
 Effekt:
@@ -80,14 +73,14 @@ Payload:
 ```
 
 - `message` **påkrævet** (string): Prompten eller beskeden, som agenten skal behandle.
-- `name` valgfri (string): Menneskeligt læsbart navn for hooken (f.eks. "GitHub"), bruges som præfiks i sessionsammendrag.
-- `sessionKey` valgfri (string): Nøglen, der bruges til at identificere agentens session. Standard er en tilfældig `hook:<uuid>`. Brug af en konsistent nøgle muliggør en flerturns‑samtale inden for hook‑konteksten.
+- `name` valgfri (streng): Menneskelæseligt navn for krogen (f.eks. "GitHub"), brugt som præfiks i sessionsoversigter.
+- `sessionKey` valgfri (streng): Den nøgle, der bruges til at identificere agentens session. Standard er en tilfældig `hook:<uuid>`. Brug af en konsekvent nøgle giver mulighed for en multi-turn samtale inden for krog konteksten.
 - `wakeMode` valgfri (`now` | `next-heartbeat`): Om der skal udløses et øjeblikkeligt heartbeat (standard `now`) eller ventes til næste periodiske check.
-- `deliver` valgfri (boolean): Hvis `true`, sendes agentens svar til beskedkanalen. Standard er `true`. Svar, der kun er heartbeat‑kvitteringer, springes automatisk over.
-- `channel` valgfri (string): Beskedkanalen til levering. En af: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Standard er `last`.
-- `to` valgfri (string): Modtager‑identifikator for kanalen (f.eks. telefonnummer for WhatsApp/Signal, chat‑ID for Telegram, kanal‑ID for Discord/Slack/Mattermost (plugin), samtale‑ID for MS Teams). Standard er den seneste modtager i hovedsessionen.
-- `model` valgfri (string): Model‑override (f.eks. `anthropic/claude-3-5-sonnet` eller et alias). Skal være på listen over tilladte modeller, hvis der er begrænsninger.
-- `thinking` valgfri (string): Override af tænkeniveau (f.eks. `low`, `medium`, `high`).
+- `deliver` valgfri (boolesk): Hvis `true`, agenten svar vil blive sendt til meddelelseskanalen. Standard er `sand`. Reaktioner, der kun er hjerteslag anerkendelser automatisk springes over.
+- `kanal` valgfri (streng): Meddelelseskanalen til levering. En af: `sidste`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Standard til `sidste`.
+- `til` valgfri (streng): Modtagerens identifikator for kanalen (f.eks. telefonnummer til WhatsApp/Signal, chat-id til Telegram, kanal-id til Discord/Slack/Mattermost (plugin), samtale-id til MS Teams). Standard er den sidste modtager i hovedsessionen.
+- `model` valgfri (streng): Model tilsidesætte (f.eks. `antropic/claude-3-5-sonnet` eller et alias). Skal være i den tilladte model liste, hvis begrænset.
+- `thinking` valgfri (streng): Tænkning niveau tilsidesætte (fx, `low`, `medium`, `high`).
 - `timeoutSeconds` valgfri (number): Maksimal varighed for agentkørslen i sekunder.
 
 Effekt:
@@ -98,9 +91,9 @@ Effekt:
 
 ### `POST /hooks/<name>` (mapped)
 
-Brugerdefinerede hook‑navne slås op via `hooks.mappings` (se konfiguration). En mapping kan
-omdanne vilkårlige payloads til `wake`‑ eller `agent`‑handlinger med valgfrie skabeloner eller
-kode‑transforms.
+Brugerdefinerede krognavne løses via `hooks.mappings` (se konfiguration). En kortlægning kan
+gøre vilkårlige nyttelast til 'wake' eller 'agent' handlinger, med valgfri skabeloner eller
+kode transformer.
 
 Mapping‑muligheder (overblik):
 
@@ -108,13 +101,13 @@ Mapping‑muligheder (overblik):
 - `hooks.mappings` lader dig definere `match`, `action` og skabeloner i konfigurationen.
 - `hooks.transformsDir` + `transform.module` indlæser et JS/TS‑modul til brugerdefineret logik.
 - Brug `match.source` for at beholde et generisk ingest‑endpoint (payload‑drevet routing).
-- TS‑transforms kræver en TS‑loader (f.eks. `bun` eller `tsx`) eller forkompileret `.js` ved runtime.
+- TS transformerer kræver en TS-læsser (f.eks. `bun` eller `tsx`) eller forkompileret `.js` under runtime.
 - Sæt `deliver: true` + `channel`/`to` på mappings for at route svar til en chat‑overflade
   (`channel` har som standard `last` og falder tilbage til WhatsApp).
 - `allowUnsafeExternalContent: true` deaktiverer den eksterne indpakning for indholdssikkerhed for den hook
   (farligt; kun til betroede interne kilder).
-- `openclaw webhooks gmail setup` skriver `hooks.gmail`‑konfiguration for `openclaw webhooks gmail run`.
-  Se [Gmail Pub/Sub](/automation/gmail-pubsub) for det fulde Gmail‑watch‑flow.
+- `openclaw webhooks gmail setup` skriver `hooks.gmail` config for `openclaw webhooks gmail run`.
+  Se [Gmail Pub/Sub](/automation/gmail-pubsub) for det fulde Gmail ur flow.
 
 ## Svar
 
@@ -165,6 +158,6 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Hold hook‑endpoints bag loopback, tailnet eller en betroet reverse proxy.
 - Brug et dedikeret hook‑token; genbrug ikke gateway‑autentificeringstokens.
 - Undgå at inkludere følsomme rå payloads i webhook‑logs.
-- Hook‑payloads behandles som utroværdige og indpakkes som standard med sikkerhedsgrænser.
-  Hvis du absolut skal deaktivere dette for en specifik hook, så sæt `allowUnsafeExternalContent: true`
-  i den hooks mapping (farligt).
+- Hook nyttelast behandles som ubetroet og indpakket med sikkerhedsgrænser som standard.
+  Hvis du skal deaktivere dette for en bestemt krog, sæt `allowUnsafeExternalContent: true`
+  i at krogens kortlægning (farligt).

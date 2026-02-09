@@ -4,13 +4,6 @@ read_when:
   - web_search 에 Brave Search 를 사용하려는 경우
   - BRAVE_API_KEY 또는 요금제 세부 정보가 필요한 경우
 title: "Brave Search"
-x-i18n:
-  source_path: brave-search.md
-  source_hash: 81cd0a13239c13f4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:42Z
 ---
 
 # Brave Search API

@@ -4,13 +4,6 @@ read_when:
   - Actualización de OpenClaw
   - Algo se rompe después de una actualización
 title: "Actualización"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:58Z
 ---
 
 # Actualización
@@ -28,6 +21,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Notas:
 
 - Agregue `--no-onboard` si no quiere que el asistente de incorporación se ejecute de nuevo.
+
 - Para **instalaciones desde código fuente**, use:
 
   ```bash
@@ -37,13 +31,14 @@ Notas:
   El instalador `git pull --rebase` **solo** si el repositorio está limpio.
 
 - Para **instalaciones globales**, el script usa `npm install -g openclaw@latest` internamente.
+
 - Nota heredada: `clawdbot` sigue disponible como shim de compatibilidad.
 
 ## Antes de actualizar
 
 - Sepa cómo instaló: **global** (npm/pnpm) vs **desde código fuente** (git clone).
 - Sepa cómo se está ejecutando su Gateway: **terminal en primer plano** vs **servicio supervisado** (launchd/systemd).
-- Haga una instantánea de su personalización:
+- Instala tu diseño a la medida:
   - Configuración: `~/.openclaw/openclaw.json`
   - Credenciales: `~/.openclaw/credentials/`
   - Espacio de trabajo: `~/.openclaw/workspace`

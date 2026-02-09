@@ -5,13 +5,6 @@ read_when:
   - 偵錯 Android Gateway 閘道器 探索或身分驗證
   - 驗證跨用戶端的聊天歷史一致性
 title: "Android 應用程式"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:43Z
 ---
 
 # Android App（Node）
@@ -22,11 +15,11 @@ x-i18n:
 - 需要 Gateway：是（在 macOS、Linux 或 Windows（透過 WSL2）上執行）。
 - 安裝：[入門指南](/start/getting-started) + [配對](/gateway/pairing)。
 - Gateway：[操作手冊](/gateway) + [設定](/gateway/configuration)。
-  - 通訊協定：[Gateway 通訊協定](/gateway/protocol)（節點 + 控制平面）。
+  - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 
 ## 系統控制
 
-系統控制（launchd/systemd）位於 Gateway 閘道器 主機上。請參閱 [Gateway](/gateway)。
+系統控制（launchd/systemd）位於 Gateway 閘道器 主機上。請參閱 [Gateway](/gateway)。 See [Gateway](/gateway).
 
 ## 連線操作手冊
 
@@ -43,13 +36,13 @@ Android 會直接連線至 Gateway WebSocket（預設 `ws://<host>:18789`），�
   - 手動指定 Gateway 閘道器 主機／連接埠（後備）
 - 你可以在 Gateway 機器上執行 CLI（`openclaw`）（或透過 SSH）。
 
-### 1) 啟動 Gateway
+### 1. 啟動 Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
 ```
 
-在日誌中確認你看到類似以下內容：
+Confirm in logs you see something like:
 
 - `listening on ws://0.0.0.0:18789`
 
@@ -58,7 +51,7 @@ openclaw gateway --port 18789 --verbose
 - 在 Gateway 主機的 `~/.openclaw/openclaw.json` 中設定 `gateway.bind: "tailnet"`。
 - 重新啟動 Gateway／macOS 選單列應用程式。
 
-### 2) 驗證探索（選用）
+### 2. 驗證探索（選用）
 
 在 Gateway 機器上：
 
@@ -70,14 +63,14 @@ dns-sd -B _openclaw-gw._tcp local.
 
 #### 透過單播 DNS-SD 的 Tailnet（Vienna ⇄ London）探索
 
-Android 的 NSD/mDNS 探索無法跨網路。如果你的 Android 節點與 Gateway 位於不同網路，但透過 Tailscale 連線，請改用 Wide-Area Bonjour／單播 DNS-SD：
+Android 的 NSD/mDNS 探索無法跨網路。如果你的 Android 節點與 Gateway 位於不同網路，但透過 Tailscale 連線，請改用 Wide-Area Bonjour／單播 DNS-SD： If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead:
 
 1. 在 Gateway 主機上設定一個 DNS-SD 區域（例如 `openclaw.internal.`），並發布 `_openclaw-gw._tcp` 記錄。
 2. 為你選擇的網域設定 Tailscale 分割 DNS，指向該 DNS 伺服器。
 
 詳細說明與 CoreDNS 設定範例：[Bonjour](/gateway/bonjour)。
 
-### 3) 從 Android 連線
+### 3. 從 Android 連線
 
 在 Android 應用程式中：
 
@@ -91,7 +84,7 @@ Android 的 NSD/mDNS 探索無法跨網路。如果你的 Android 節點與 Gate
 - 手動端點（若已啟用），否則
 - 最後一次探索到的 Gateway（盡力而為）。
 
-### 4) 核准配對（CLI）
+### 4. 核准配對（CLI）
 
 在 Gateway 機器上：
 
@@ -102,9 +95,9 @@ openclaw nodes approve <requestId>
 
 配對詳細資訊：[Gateway 配對](/gateway/pairing)。
 
-### 5) 驗證節點已連線
+### 5. 驗證節點已連線
 
-- 透過節點狀態：
+- Via nodes status:
 
   ```bash
   openclaw nodes status
@@ -116,7 +109,7 @@ openclaw nodes approve <requestId>
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) 聊天 + 歷史
+### 6. 聊天 + 歷史
 
 Android 節點的聊天頁面使用 Gateway 的 **主要工作階段金鑰**（`main`），因此歷史與回覆會與 WebChat 及其他用戶端共用：
 
@@ -124,11 +117,11 @@ Android 節點的聊天頁面使用 Gateway 的 **主要工作階段金鑰**（`
 - 傳送：`chat.send`
 - 推播更新（盡力而為）：`chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + 相機
+### 7. Canvas + 相機
 
 #### Gateway Canvas 主機（建議用於 Web 內容）
 
-如果你希望節點顯示代理程式可在磁碟上編輯的真實 HTML/CSS/JS，請將節點指向 Gateway canvas 主機。
+若你希望節點顯示可由代理在磁碟上編輯的真實 HTML/CSS/JS，請將節點指向 Gateway 的畫布主機。
 
 注意：節點使用位於 `canvasHost.port` 的獨立 canvas 主機（預設 `18793`）。
 
@@ -142,12 +135,13 @@ openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params
 
 Tailnet（選用）：如果兩個裝置都在 Tailscale 上，請使用 MagicDNS 名稱或 tailnet IP 取代 `.local`，例如 `http://<gateway-magicdns>:18793/__openclaw__/canvas/`。
 
+This server injects a live-reload client into HTML and reloads on file changes.
 此伺服器會將即時重新載入用戶端注入 HTML，並在檔案變更時重新載入。
 A2UI 主機位於 `http://<gateway-host>:18793/__openclaw__/a2ui/`。
 
 Canvas 指令（僅前景）：
 
-- `canvas.eval`、`canvas.snapshot`、`canvas.navigate`（使用 `{"url":""}` 或 `{"url":"/"}` 回到預設骨架）。`canvas.snapshot` 會回傳 `{ format, base64 }`（預設 `format="jpeg"`）。
+- `canvas.eval`、`canvas.snapshot`、`canvas.navigate`（使用 `{"url":""}` 或 `{"url":"/"}` 返回預設骨架）。 `canvas.eval`、`canvas.snapshot`、`canvas.navigate`（使用 `{"url":""}` 或 `{"url":"/"}` 回到預設骨架）。`canvas.snapshot` 會回傳 `{ format, base64 }`（預設 `format="jpeg"`）。
 - A2UI：`canvas.a2ui.push`、`canvas.a2ui.reset`（`canvas.a2ui.pushJSONL` 為舊版別名）
 
 相機指令（僅前景；需權限）：

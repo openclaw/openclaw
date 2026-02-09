@@ -3,34 +3,27 @@ summary: "चैनलों, रूटिंग, मीडिया और UX �
 read_when:
   - आप OpenClaw द्वारा समर्थित सभी सुविधाओं की पूरी सूची चाहते हैं
 title: "विशेषताएँ"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:07Z
 ---
 
 ## मुख्य झलकियाँ
 
 <Columns>
-  <Card title="चैनल" icon="message-square">
+  <Card title="Channels" icon="message-square">
     एक ही Gateway के साथ WhatsApp, Telegram, Discord और iMessage।
   </Card>
-  <Card title="प्लगइन्स" icon="plug">
+  <Card title="Plugins" icon="plug">
     एक्सटेंशनों के साथ Mattermost और अन्य जोड़ें।
   </Card>
-  <Card title="रूटिंग" icon="route">
+  <Card title="Routing" icon="route">
     पृथक सत्रों के साथ मल्टी-एजेंट रूटिंग।
   </Card>
-  <Card title="मीडिया" icon="image">
+  <Card title="Media" icon="image">
     छवियाँ, ऑडियो और दस्तावेज़—इनपुट और आउटपुट दोनों।
   </Card>
-  <Card title="ऐप्स और UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     वेब कंट्रोल UI और macOS सहचर ऐप।
   </Card>
-  <Card title="मोबाइल नोड्स" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Canvas समर्थन के साथ iOS और Android नोड्स।
   </Card>
 </Columns>
@@ -55,6 +48,6 @@ x-i18n:
 - पेयरिंग, Canvas, चैट और कैमरा के साथ Android नोड
 
 <Note>
-Legacy Claude, Codex, Gemini और Opencode पथ हटा दिए गए हैं। Pi ही एकमात्र
-कोडिंग एजेंट पथ है।
+50. Legacy Claude, Codex, Gemini, और Opencode paths हटा दिए गए हैं। Pi एकमात्र
+कोडिंग एजेंट पाथ है।
 </Note>

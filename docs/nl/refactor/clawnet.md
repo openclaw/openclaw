@@ -4,13 +4,6 @@ read_when:
   - Een uniform netwerkprotocol plannen voor nodes + operatorclients
   - Goedkeuringen, pairing, TLS en presence over apparaten heen herwerken
 title: "Clawnet-refactor"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:06Z
 ---
 
 # Clawnet-refactor (protocol + auth-unificatie)
@@ -51,7 +44,7 @@ Eén enkel, strikt document voor:
 
 ## Twee protocollen
 
-### 1) Gateway WebSocket (control plane)
+### 1. Gateway WebSocket (control plane)
 
 - Volledig API-oppervlak: config, kanalen, modellen, sessies, agent-runs, logs, nodes, enz.
 - Standaardbinding: loopback. Externe toegang via SSH/Tailscale.
@@ -62,7 +55,7 @@ Eén enkel, strikt document voor:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (node-transport)
+### 2. Bridge (node-transport)
 
 - Smal toegestaan oppervlak, node-identiteit + pairing.
 - JSONL over TCP; optionele TLS + certificaatvingerafdruk-pinning.

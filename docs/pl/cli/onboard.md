@@ -3,13 +3,6 @@ summary: "Referencja CLI dla `openclaw onboard` (interaktywny kreator wdrażania
 read_when:
   - Chcesz przejść przez konfigurację z przewodnikiem dla Gateway, obszaru roboczego, uwierzytelniania, kanałów i Skills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:57Z
 ---
 
 # `openclaw onboard`

@@ -4,18 +4,13 @@ read_when:
   - आप OpenClaw के साथ Amazon Bedrock मॉडल का उपयोग करना चाहते हैं
   - आपको मॉडल कॉल के लिए AWS क्रेडेंशियल/रीजन सेटअप की आवश्यकता है
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:36Z
 ---
 
 # Amazon Bedrock
 
-OpenClaw, pi‑ai के **Bedrock Converse** स्ट्रीमिंग प्रदाता के माध्यम से **Amazon Bedrock** मॉडल का उपयोग कर सकता है। Bedrock प्रमाणीकरण **AWS SDK डिफ़ॉल्ट क्रेडेंशियल चेन** का उपयोग करता है, API कुंजी का नहीं।
+OpenClaw can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
+streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
+not an API key.
 
 ## pi‑ai क्या समर्थन करता है
 
@@ -26,9 +21,9 @@ OpenClaw, pi‑ai के **Bedrock Converse** स्ट्रीमिंग प
 
 ## स्वचालित मॉडल डिस्कवरी
 
-यदि AWS क्रेडेंशियल का पता लगाया जाता है, तो OpenClaw स्वचालित रूप से उन Bedrock
-मॉडल की डिस्कवरी कर सकता है जो **स्ट्रीमिंग** और **टेक्स्ट आउटपुट** का समर्थन करते हैं।
-डिस्कवरी `bedrock:ListFoundationModels` का उपयोग करती है और कैश की जाती है (डिफ़ॉल्ट: 1 घंटा)।
+If AWS credentials are detected, OpenClaw can automatically discover Bedrock
+models that support **streaming** and **text output**. Discovery uses
+`bedrock:ListFoundationModels` and is cached (default: 1 hour).
 
 कॉन्फ़िग विकल्प `models.bedrockDiscovery` के अंतर्गत होते हैं:
 
@@ -105,13 +100,13 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2 इंस्टेंस रोल्स
 
-जब OpenClaw को किसी IAM रोल के साथ जुड़े EC2 इंस्टेंस पर चलाया जाता है, तो AWS SDK
-स्वतः प्रमाणीकरण के लिए इंस्टेंस मेटाडेटा सर्विस (IMDS) का उपयोग करेगा।
-हालाँकि, OpenClaw की क्रेडेंशियल डिटेक्शन वर्तमान में केवल पर्यावरण चर की जाँच करती है,
-IMDS क्रेडेंशियल की नहीं।
+When running OpenClaw on an EC2 instance with an IAM role attached, the AWS SDK
+will automatically use the instance metadata service (IMDS) for authentication.
+However, OpenClaw's credential detection currently only checks for environment
+variables, not IMDS credentials.
 
-**वर्कअराउंड:** यह संकेत देने के लिए `AWS_PROFILE=default` सेट करें कि AWS क्रेडेंशियल
-उपलब्ध हैं। वास्तविक प्रमाणीकरण अभी भी IMDS के माध्यम से इंस्टेंस रोल का उपयोग करता है।
+**Workaround:** Set `AWS_PROFILE=default` to signal that AWS credentials are
+available. The actual authentication still uses the instance role via IMDS.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

@@ -4,13 +4,6 @@ read_when:
   - Aktualizowanie mapowań identyfikatorów modeli urządzeń lub plików NOTICE/licencji
   - Zmiana sposobu wyświetlania nazw urządzeń w interfejsie Instances
 title: "Baza modeli urządzeń"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:34Z
 ---
 
 # Baza modeli urządzeń (przyjazne nazwy)

@@ -4,13 +4,6 @@ read_when:
   - Je wilt een modelprovider kiezen
   - Je hebt een snel overzicht nodig van ondersteunde LLM-backends
 title: "Modelproviders"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # Modelproviders

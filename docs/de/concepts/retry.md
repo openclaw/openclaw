@@ -1,19 +1,12 @@
 ---
-summary: „Wiederholungsrichtlinie für ausgehende Anbieteraufrufe“
+summary: "Richtlinien für ausgehende Provideranrufe wiederholen"
 read_when:
   - „Beim Aktualisieren des Wiederholungsverhaltens oder der Standardwerte von Anbietern“
   - „Beim Debuggen von Sende-Fehlern oder Ratenbegrenzungen von Anbietern“
-title: „Wiederholungsrichtlinie“
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:50Z
+title: "Richtlinie wiederholen"
 ---
 
-# Wiederholungsrichtlinie
+# Retry-Richtlinie
 
 ## Ziele
 

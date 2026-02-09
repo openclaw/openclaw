@@ -3,13 +3,6 @@ summary: "Справка по CLI для `openclaw agent` (отправка од
 read_when:
   - Вам нужно запустить один ход агента из скриптов (при необходимости доставить ответ)
 title: "agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:12Z
 ---
 
 # `openclaw agent`

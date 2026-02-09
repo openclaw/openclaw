@@ -1,17 +1,10 @@
 ---
-summary: „OpenClaw mit lokalen LLMs ausführen (LM Studio, vLLM, LiteLLM, benutzerdefinierte OpenAI-Endpunkte)“
+summary: "„OpenClaw mit lokalen LLMs ausführen (LM Studio, vLLM, LiteLLM, benutzerdefinierte OpenAI-Endpunkte)“"
 read_when:
   - Sie möchten Modelle von Ihrer eigenen GPU-Box bereitstellen
   - Sie binden LM Studio oder einen OpenAI-kompatiblen Proxy an
   - Sie benötigen die sicherste Anleitung für lokale Modelle
-title: „Lokale Modelle“
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:14Z
+title: "Lokale Modelle"
 ---
 
 # Lokale Modelle

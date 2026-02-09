@@ -5,13 +5,6 @@ read_when:
   - Implementeren van UX voor uitvoeringsgoedkeuringen in de macOS-app
   - Beoordelen van prompts voor sandbox-ontsnapping en de implicaties
 title: "Uitvoeringsgoedkeuringen"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # Uitvoeringsgoedkeuringen
@@ -154,7 +147,7 @@ Als een node nog geen uitvoeringsgoedkeuringen adverteert, bewerk dan lokaal
 
 CLI: `openclaw approvals` ondersteunt bewerking voor Gateway of node (zie [Approvals CLI](/cli/approvals)).
 
-## Goedkeuringsstroom
+## Toestemming stroom
 
 Wanneer een prompt vereist is, broadcast de Gateway `exec.approval.requested` naar operatorclients.
 De Control UI en macOS-app handelen dit af via `exec.approval.resolve`, waarna de Gateway de

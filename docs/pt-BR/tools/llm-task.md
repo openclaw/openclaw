@@ -4,13 +4,6 @@ read_when:
   - Você quer uma etapa de LLM apenas em JSON dentro de workflows
   - Você precisa de saída de LLM validada por esquema para automação
 title: "Tarefa de LLM"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:13Z
 ---
 
 # Tarefa de LLM

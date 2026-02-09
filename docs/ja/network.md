@@ -5,13 +5,6 @@ read_when:
   - ローカルアクセスと tailnet アクセス、またはペアリングの問題をデバッグしている場合
   - ネットワーキング関連ドキュメントの正規一覧を確認したい場合
 title: "ネットワーク"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:16Z
 ---
 
 # Network hub

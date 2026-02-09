@@ -5,20 +5,14 @@ read_when:
   - Pag-wire ng automation na dapat tumakbo kasama o kasabay ng mga heartbeat
   - Pagpapasya sa pagitan ng heartbeat at cron para sa mga naka-iskedyul na gawain
 title: "Mga Cron Job"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:50Z
 ---
 
 # Mga cron job (Gateway scheduler)
 
 > **Cron vs Heartbeat?** Tingnan ang [Cron vs Heartbeat](/automation/cron-vs-heartbeat) para sa gabay kung kailan gagamitin ang bawat isa.
 
-Ang cron ay ang built-in scheduler ng Gateway. Pinapanatili nito ang mga job, ginigising ang agent sa tamang oras, at maaaring maghatid ng output pabalik sa isang chat kung nais.
+Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
+the right time, and can optionally deliver output back to a chat.
 
 Kung gusto mo ng _“patakbuhin ito tuwing umaga”_ o _“kalabitin ang agent pagkalipas ng 20 minuto”_, cron ang mekanismo.
 
@@ -71,8 +65,10 @@ Para sa canonical na mga hugis ng JSON at mga halimbawa, tingnan ang [JSON schem
 
 ## Saan naka-store ang mga cron job
 
-Ang mga cron job ay naka-persist sa Gateway host sa `~/.openclaw/cron/jobs.json` bilang default.
-Ini-load ng Gateway ang file sa memory at isinusulat pabalik kapag may pagbabago, kaya ligtas lamang ang manu-manong pag-edit kapag naka-stop ang Gateway. Mas mainam ang `openclaw cron add/edit` o ang cron tool call API para sa mga pagbabago.
+Cron jobs are persisted on the Gateway host at `~/.openclaw/cron/jobs.json` by default.
+The Gateway loads the file into memory and writes it back on changes, so manual edits
+are only safe when the Gateway is stopped. Prefer `openclaw cron add/edit` or the cron
+tool call API for changes.
 
 ## Beginner-friendly na pangkalahatang-ideya
 
@@ -91,7 +87,8 @@ Isipin ang isang cron job bilang: **kailan** tatakbo + **ano** ang gagawin.
    - Main session → `payload.kind = "systemEvent"`
    - Isolated session → `payload.kind = "agentTurn"`
 
-Opsyonal: ang mga one-shot job (`schedule.kind = "at"`) ay nade-delete pagkatapos ng tagumpay bilang default. Itakda ang `deleteAfterRun: false` para panatilihin ang mga ito (magdi-disable sila pagkatapos ng tagumpay).
+Optional: one-shot jobs (`schedule.kind = "at"`) delete after success by default. Set
+`deleteAfterRun: false` to keep them (they will disable after success).
 
 ## Mga Konsepto
 
@@ -104,9 +101,9 @@ Ang isang cron job ay isang naka-store na record na may:
 - opsyonal na **delivery mode** (announce o none).
 - opsyonal na **agent binding** (`agentId`): patakbuhin ang job sa ilalim ng isang partikular na agent; kung wala o hindi kilala, babalik ang gateway sa default agent.
 
-Ang mga job ay kinikilala sa pamamagitan ng isang stable na `jobId` (ginagamit ng CLI/Gateway APIs).
-Sa agent tool calls, `jobId` ang canonical; tinatanggap ang legacy na `id` para sa compatibility.
-Ang mga one-shot job ay awtomatikong nade-delete pagkatapos ng tagumpay bilang default; itakda ang `deleteAfterRun: false` para panatilihin ang mga ito.
+Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
+In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
+One-shot jobs auto-delete after success by default; set `deleteAfterRun: false` to keep them.
 
 ### Mga Schedule
 
@@ -116,20 +113,21 @@ Sinusuportahan ng cron ang tatlong uri ng schedule:
 - `every`: fixed interval (ms).
 - `cron`: 5-field na cron expression na may opsyonal na IANA timezone.
 
-Gumagamit ang mga cron expression ng `croner`. Kapag walang timezone, ginagamit ang lokal na timezone ng Gateway host.
+Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
+local timezone is used.
 
 ### Main vs isolated execution
 
 #### Mga main session job (system events)
 
-Nag-e-enqueue ang mga main job ng system event at opsyonal na ginising ang heartbeat runner.
-Dapat nilang gamitin ang `payload.kind = "systemEvent"`.
+Main jobs enqueue a system event and optionally wake the heartbeat runner.
+They must use `payload.kind = "systemEvent"`.
 
 - `wakeMode: "now"` (default): nagti-trigger ang event ng agarang heartbeat run.
 - `wakeMode: "next-heartbeat"`: naghihintay ang event sa susunod na naka-iskedyul na heartbeat.
 
-Ito ang pinakamainam kapag gusto mo ang normal na heartbeat prompt + main-session context.
-Tingnan ang [Heartbeat](/gateway/heartbeat).
+This is the best fit when you want the normal heartbeat prompt + main-session context.
+See [Heartbeat](/gateway/heartbeat).
 
 #### Mga isolated job (dedicated cron sessions)
 
@@ -169,14 +167,15 @@ Config ng delivery (isolated job lamang):
 - `delivery.to`: channel-specific na target (phone/chat/channel id).
 - `delivery.bestEffort`: iwasang mag-fail ang job kung pumalya ang announce delivery.
 
-Pinipigilan ng announce delivery ang mga messaging tool send para sa run; gamitin ang `delivery.channel`/`delivery.to` para i-target ang chat sa halip. Kapag `delivery.mode = "none"`, walang buod na ipo-post sa main session.
+Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
+to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
 
 Kung wala ang `delivery` para sa mga isolated job, default ng OpenClaw ang `announce`.
 
 #### Daloy ng announce delivery
 
-Kapag `delivery.mode = "announce"`, direktang naghahatid ang cron sa pamamagitan ng outbound channel adapters.
-Hindi pinapaandar ang main agent para bumuo o mag-forward ng mensahe.
+When `delivery.mode = "announce"`, cron delivers directly via the outbound channel adapters.
+The main agent is not spun up to craft or forward the message.
 
 Mga detalye ng behavior:
 
@@ -194,7 +193,9 @@ Ang mga isolated job (`agentTurn`) ay maaaring mag-override ng model at antas ng
 - `model`: Provider/model string (hal., `anthropic/claude-sonnet-4-20250514`) o alias (hal., `opus`)
 - `thinking`: Antas ng thinking (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models lamang)
 
-Tandaan: Maaari mo ring itakda ang `model` sa mga main-session job, ngunit binabago nito ang shared main session model. Inirerekomenda namin ang model overrides lamang para sa mga isolated job upang maiwasan ang hindi inaasahang pagbabago ng context.
+Note: You can set `model` on main-session jobs too, but it changes the shared main
+session model. We recommend model overrides only for isolated jobs to avoid
+unexpected context shifts.
 
 Prayoridad ng resolusyon:
 
@@ -221,7 +222,8 @@ Mga paalala sa format ng target:
 
 #### Mga target ng Telegram delivery (topics / forum threads)
 
-Sinusuportahan ng Telegram ang mga forum topic sa pamamagitan ng `message_thread_id`. Para sa cron delivery, maaari mong i-encode ang topic/thread sa `to` field:
+Telegram supports forum topics via `message_thread_id`. For cron delivery, you can encode
+the topic/thread into the `to` field:
 
 - `-1001234567890` (chat id lamang)
 - `-1001234567890:topic:123` (inirerekomenda: explicit na topic marker)
@@ -233,8 +235,9 @@ Tinatanggap din ang mga prefixed target tulad ng `telegram:...` / `telegram:grou
 
 ## JSON schema para sa tool calls
 
-Gamitin ang mga hugis na ito kapag direktang tinatawag ang Gateway `cron.*` tools (agent tool calls o RPC).
-Tumatanggap ang CLI flags ng mga human duration tulad ng `20m`, ngunit ang mga tool call ay dapat gumamit ng ISO 8601 string para sa `schedule.at` at milliseconds para sa `schedule.everyMs`.
+Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).
+CLI flags accept human durations like `20m`, but tool calls should use an ISO 8601 string
+for `schedule.at` and milliseconds for `schedule.everyMs`.
 
 ### cron.add params
 

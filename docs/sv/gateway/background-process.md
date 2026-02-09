@@ -4,18 +4,11 @@ read_when:
   - Lägga till eller ändra beteende för bakgrundsexekvering
   - Felsökning av långvariga exec-uppgifter
 title: "Bakgrunds-Exec och Processverktyg"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:16Z
 ---
 
 # Bakgrunds-Exec + Processverktyg
 
-OpenClaw kör skalkommandon via verktyget `exec` och behåller långvariga uppgifter i minnet. Verktyget `process` hanterar dessa bakgrundssessioner.
+OpenClaw kör skalkommandon genom verktyget `exec` och håller långvariga uppgifter i minnet. Verktyget `process` hanterar dessa bakgrundssessioner.
 
 ## exec-verktyg
 
@@ -26,7 +19,7 @@ Viktiga parametrar:
 - `background` (bool): kör i bakgrunden direkt
 - `timeout` (sekunder, standard 1800): avsluta processen efter denna timeout
 - `elevated` (bool): kör på värden om upphöjt läge är aktiverat/tillåtet
-- Behöver du en riktig TTY? Sätt `pty: true`.
+- Behöver du en riktig TTY? Ange `pty: true`.
 - `workdir`, `env`
 
 Beteende:
@@ -38,7 +31,7 @@ Beteende:
 
 ## Bryggning av barnprocesser
 
-När långvariga barnprocesser startas utanför exec-/processverktygen (till exempel CLI-återstarter eller gateway-hjälpare), anslut hjälparen för bryggning av barnprocesser så att termineringssignaler vidarebefordras och lyssnare kopplas bort vid avslut/fel. Detta undviker föräldralösa processer på systemd och håller avstängningsbeteendet konsekvent över plattformar.
+När du skapar långlivade barnprocesser utanför exekvera/processverktygen (till exempel återuppstår CLI eller gatewayhjälpare), bifoga brohjälparen för barnprocessen så att uppsägningssignalerna vidarebefordras och lyssnarna är fristående vid exit/fel. Detta undviker övergivna processer på systemd och håller avstängningsbeteendet konsekvent över plattformar.
 
 Miljöåsidosättningar:
 

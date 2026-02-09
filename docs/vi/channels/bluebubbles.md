@@ -5,34 +5,29 @@ read_when:
   - Xử lý sự cố ghép cặp webhook
   - Cấu hình iMessage trên macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:14Z
 ---
 
 # BlueBubbles (macOS REST)
 
-Trạng thái: plugin đi kèm giao tiếp với máy chủ BlueBubbles macOS qua HTTP. **Khuyến nghị cho tích hợp iMessage** nhờ API phong phú hơn và thiết lập dễ hơn so với kênh imsg cũ.
+22. Trạng thái: plugin được bundle, giao tiếp với máy chủ BlueBubbles trên macOS qua HTTP. 23. **Được khuyến nghị cho tích hợp iMessage** nhờ API phong phú hơn và thiết lập dễ hơn so với kênh imsg legacy.
 
 ## Tổng quan
 
 - Chạy trên macOS thông qua ứng dụng trợ giúp BlueBubbles ([bluebubbles.app](https://bluebubbles.app)).
-- Khuyến nghị/đã kiểm thử: macOS Sequoia (15). macOS Tahoe (26) hoạt động; hiện tại chỉnh sửa bị lỗi trên Tahoe, và cập nhật biểu tượng nhóm có thể báo thành công nhưng không đồng bộ.
+- 24. Khuyến nghị/đã kiểm thử: macOS Sequoia (15). 25. macOS Tahoe (26) hoạt động; chỉnh sửa hiện đang bị lỗi trên Tahoe, và cập nhật icon nhóm có thể báo thành công nhưng không đồng bộ.
 - OpenClaw giao tiếp thông qua REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Tin nhắn đến được nhận qua webhook; phản hồi đi, trạng thái gõ, xác nhận đã đọc và tapback là các lời gọi REST.
 - Tệp đính kèm và sticker được nhập như media đến (và hiển thị cho tác tử khi có thể).
-- Ghép cặp/danh sách cho phép hoạt động giống các kênh khác (`/channels/pairing` v.v.) với `channels.bluebubbles.allowFrom` + mã ghép cặp.
+- 26. Ghép cặp/allowlist hoạt động giống các kênh khác (`/channels/pairing` v.v.) với `channels.bluebubbles.allowFrom` + mã ghép cặp.
 - Phản ứng được hiển thị như sự kiện hệ thống giống Slack/Telegram để tác tử có thể “nhắc” chúng trước khi trả lời.
 - Tính năng nâng cao: chỉnh sửa, thu hồi, luồng trả lời, hiệu ứng tin nhắn, quản lý nhóm.
 
 ## Khởi động nhanh
 
 1. Cài đặt máy chủ BlueBubbles trên Mac của bạn (làm theo hướng dẫn tại [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. Trong cấu hình BlueBubbles, bật web API và đặt mật khẩu.
+
 3. Chạy `openclaw onboard` và chọn BlueBubbles, hoặc cấu hình thủ công:
 
    ```json5
@@ -49,13 +44,14 @@ Trạng thái: plugin đi kèm giao tiếp với máy chủ BlueBubbles macOS qu
    ```
 
 4. Trỏ webhook BlueBubbles tới gateway của bạn (ví dụ: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Khởi động gateway; nó sẽ đăng ký trình xử lý webhook và bắt đầu ghép cặp.
 
 ## Giữ Messages.app hoạt động (VM / thiết lập headless)
 
-Một số thiết lập macOS VM / luôn bật có thể khiến Messages.app rơi vào trạng thái “idle” (sự kiện đến dừng lại cho đến khi mở/đưa app ra foreground). Một cách khắc phục đơn giản là **chạm vào Messages mỗi 5 phút** bằng AppleScript + LaunchAgent.
+27. Một số thiết lập macOS VM / always-on có thể khiến Messages.app rơi vào trạng thái “idle” (sự kiện đến bị dừng cho đến khi app được mở/đưa ra foreground). 28. Một cách khắc phục đơn giản là **chọc Messages mỗi 5 phút** bằng AppleScript + LaunchAgent.
 
-### 1) Lưu AppleScript
+### 1. Lưu AppleScript
 
 Lưu với tên:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Cài đặt LaunchAgent
+### 2. Cài đặt LaunchAgent
 
 Lưu với tên:
 
@@ -116,7 +112,7 @@ Lưu với tên:
 Ghi chú:
 
 - Chạy **mỗi 300 giây** và **khi đăng nhập**.
-- Lần chạy đầu có thể kích hoạt lời nhắc **Automation** của macOS (`osascript` → Messages). Hãy chấp thuận trong cùng phiên người dùng chạy LaunchAgent.
+- The first run may trigger macOS **Automation** prompts (`osascript` → Messages). 29. Phê duyệt chúng trong cùng phiên người dùng đang chạy LaunchAgent.
 
 Nạp:
 
@@ -156,7 +152,7 @@ DMs:
 - Phê duyệt qua:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Ghép cặp là cơ chế trao đổi token mặc định. Chi tiết: [Pairing](/channels/pairing)
+- Pairing is the default token exchange. 30. Chi tiết: [Pairing](/channels/pairing)
 
 Nhóm:
 
@@ -249,7 +245,7 @@ Các hành động khả dụng:
 - **removeParticipant**: Xóa người khỏi nhóm (`chatGuid`, `address`)
 - **leaveGroup**: Rời nhóm chat (`chatGuid`)
 - **sendAttachment**: Gửi media/tệp (`to`, `buffer`, `filename`, `asVoice`)
-  - Ghi âm: đặt `asVoice: true` với âm thanh **MP3** hoặc **CAF** để gửi như tin nhắn thoại iMessage. BlueBubbles chuyển đổi MP3 → CAF khi gửi ghi âm.
+  - 31. Voice memo: đặt `asVoice: true` với audio **MP3** hoặc **CAF** để gửi dưới dạng tin nhắn thoại iMessage. 32. BlueBubbles chuyển đổi MP3 → CAF khi gửi voice memo.
 
 ### ID tin nhắn (ngắn vs đầy đủ)
 
@@ -325,13 +321,13 @@ Tùy chọn toàn cục liên quan:
 - `chat_id:123`
 - `chat_identifier:...`
 - Handle trực tiếp: `+15555550123`, `user@example.com`
-  - Nếu handle trực tiếp chưa có DM hiện hữu, OpenClaw sẽ tạo một DM qua `POST /api/v1/chat/new`. Điều này yêu cầu bật BlueBubbles Private API.
+  - If a direct handle does not have an existing DM chat, OpenClaw will create one via `POST /api/v1/chat/new`. This requires the BlueBubbles Private API to be enabled.
 
 ## Bảo mật
 
-- Yêu cầu webhook được xác thực bằng cách so sánh tham số truy vấn hoặc header `guid`/`password` với `channels.bluebubbles.password`. Yêu cầu từ `localhost` cũng được chấp nhận.
+- 33. Các yêu cầu webhook được xác thực bằng cách so sánh tham số truy vấn hoặc header `guid`/`password` với `channels.bluebubbles.password`. 34. Các yêu cầu từ `localhost` cũng được chấp nhận.
 - Giữ bí mật mật khẩu API và endpoint webhook (coi như thông tin xác thực).
-- Tin cậy localhost có nghĩa là reverse proxy cùng máy có thể vô tình bỏ qua mật khẩu. Nếu proxy gateway, hãy yêu cầu xác thực tại proxy và cấu hình `gateway.trustedProxies`. Xem [Gateway security](/gateway/security#reverse-proxy-configuration).
+- 35. Việc tin cậy localhost có nghĩa là một reverse proxy cùng máy có thể vô tình vượt qua mật khẩu. 36. Nếu bạn proxy gateway, hãy yêu cầu xác thực tại proxy và cấu hình `gateway.trustedProxies`. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Bật HTTPS + quy tắc tường lửa trên máy chủ BlueBubbles nếu mở ra ngoài LAN.
 
 ## Xử lý sự cố
@@ -339,9 +335,9 @@ Tùy chọn toàn cục liên quan:
 - Nếu trạng thái gõ/đã đọc ngừng hoạt động, kiểm tra log webhook của BlueBubbles và xác minh đường dẫn gateway khớp `channels.bluebubbles.webhookPath`.
 - Mã ghép cặp hết hạn sau một giờ; dùng `openclaw pairing list bluebubbles` và `openclaw pairing approve bluebubbles <code>`.
 - Phản ứng yêu cầu BlueBubbles private API (`POST /api/v1/message/react`); đảm bảo phiên bản máy chủ có hỗ trợ.
-- Chỉnh sửa/thu hồi yêu cầu macOS 13+ và phiên bản BlueBubbles tương thích. Trên macOS 26 (Tahoe), chỉnh sửa hiện bị lỗi do thay đổi private API.
+- Edit/unsend require macOS 13+ and a compatible BlueBubbles server version. On macOS 26 (Tahoe), edit is currently broken due to private API changes.
 - Cập nhật biểu tượng nhóm có thể không ổn định trên macOS 26 (Tahoe): API có thể trả về thành công nhưng biểu tượng mới không đồng bộ.
-- OpenClaw tự ẩn các hành động đã biết là lỗi dựa trên phiên bản macOS của máy chủ BlueBubbles. Nếu chỉnh sửa vẫn xuất hiện trên macOS 26 (Tahoe), hãy tắt thủ công bằng `channels.bluebubbles.actions.edit=false`.
+- OpenClaw auto-hides known-broken actions based on the BlueBubbles server's macOS version. If edit still appears on macOS 26 (Tahoe), disable it manually with `channels.bluebubbles.actions.edit=false`.
 - Thông tin trạng thái/sức khỏe: `openclaw status --all` hoặc `openclaw status --deep`.
 
 Để tham khảo quy trình kênh nói chung, xem [Channels](/channels) và hướng dẫn [Plugins](/tools/plugin).

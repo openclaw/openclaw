@@ -5,18 +5,11 @@ read_when:
   - คุณต้องการทำความเข้าใจเอ็นด์พอยต์ คีย์ และการอ้างอิงโมเดลที่แยกกัน
   - คุณต้องการคอนฟิกแบบคัดลอก/วางสำหรับผู้ให้บริการใดผู้ให้บริการหนึ่ง
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:29Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot ให้บริการ Kimi API ที่มีเอ็นด์พอยต์เข้ากันได้กับ OpenAI กำหนดค่า
+Moonshot ให้บริการ Kimi API พร้อมเอ็นด์พอยต์ที่เข้ากันได้กับ OpenAI Moonshot ให้บริการ Kimi API ที่มีเอ็นด์พอยต์เข้ากันได้กับ OpenAI กำหนดค่า
 ผู้ให้บริการและตั้งค่าโมเดลเริ่มต้นเป็น `moonshot/kimi-k2.5` หรือใช้
 Kimi Coding กับ `kimi-coding/k2p5`.
 
@@ -41,7 +34,7 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-หมายเหตุ: Moonshot และ Kimi Coding เป็นผู้ให้บริการคนละราย คีย์ไม่สามารถใช้แทนกันได้ เอ็นด์พอยต์แตกต่างกัน และการอ้างอิงโมเดลแตกต่างกัน (Moonshot ใช้ `moonshot/...` ส่วน Kimi Coding ใช้ `kimi-coding/...`).
+หมายเหตุ: Moonshot และ Kimi Coding เป็นผู้ให้บริการแยกจากกัน หมายเหตุ: Moonshot และ Kimi Coding เป็นผู้ให้บริการคนละราย คีย์ไม่สามารถใช้แทนกันได้ เอ็นด์พอยต์แตกต่างกัน และการอ้างอิงโมเดลแตกต่างกัน (Moonshot ใช้ `moonshot/...` ส่วน Kimi Coding ใช้ `kimi-coding/...`).
 
 ## Config snippet (Moonshot API)
 
@@ -142,7 +135,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## Notes
 
-- การอ้างอิงโมเดลของ Moonshot ใช้ `moonshot/<modelId>` การอ้างอิงโมเดลของ Kimi Coding ใช้ `kimi-coding/<modelId>`.
+- การอ้างอิงโมเดลของ Moonshot ใช้ `moonshot/<modelId>` การอ้างอิงโมเดลของ Moonshot ใช้ `moonshot/<modelId>` การอ้างอิงโมเดลของ Kimi Coding ใช้ `kimi-coding/<modelId>`.
 - สามารถแทนที่ข้อมูลราคาและเมทาดาทาคอนเท็กซ์ใน `models.providers` ได้หากจำเป็น
 - หาก Moonshot เผยแพร่ขีดจำกัดคอนเท็กซ์ที่แตกต่างกันสำหรับโมเดลใด ให้ปรับ
   `contextWindow` ให้สอดคล้อง

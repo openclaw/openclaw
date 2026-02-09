@@ -4,13 +4,6 @@ read_when:
   - iMessage-ondersteuning instellen
   - Problemen oplossen bij iMessage verzenden/ontvangen
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:24Z
 ---
 
 # iMessage (legacy: imsg)
@@ -62,7 +55,7 @@ Uitschakelen met:
 }
 ```
 
-## Vereisten
+## Provideropties
 
 - macOS met Berichten aangemeld.
 - Volledige schijftoegang voor OpenClaw + `imsg` (toegang tot de Berichten-database).
@@ -277,7 +270,7 @@ Dit is handig wanneer je een geïsoleerde persoonlijkheid/model wilt voor een sp
 - Optionele bijlage-inname via `channels.imessage.includeAttachments`.
 - Medialimiet via `channels.imessage.mediaMaxMb`.
 
-## Limieten
+## Beperkingen
 
 - Uitgaande tekst wordt gechunked tot `channels.imessage.textChunkLimit` (standaard 4000).
 - Optionele newline-chunking: stel `channels.imessage.chunkMode="newline"` in om te splitsen op lege regels (paragraafgrenzen) vóór lengte-chunking.

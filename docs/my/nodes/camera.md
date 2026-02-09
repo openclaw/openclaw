@@ -4,13 +4,6 @@ read_when:
   - iOS နိုဒ်များ သို့မဟုတ် macOS တွင် ကင်မရာဖမ်းယူမှုကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း ပြုလုပ်နေစဉ်
   - အေးဂျင့်မှ ဝင်ရောက်အသုံးပြုနိုင်သော MEDIA ယာယီဖိုင် လုပ်ငန်းစဉ်များကို တိုးချဲ့နေစဉ်
 title: "ကင်မရာ ဖမ်းယူမှု"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:52Z
 ---
 
 # ကင်မရာ ဖမ်းယူမှု (အေးဂျင့်)
@@ -66,7 +59,7 @@ OpenClaw သည် အေးဂျင့်လုပ်ငန်းစဉ်မ�
 
 ### Foreground လိုအပ်ချက်
 
-`canvas.*` ကဲ့သို့ပင် iOS နိုဒ်သည် **foreground** တွင်သာ `camera.*` အမိန့်များကို ခွင့်ပြုသည်။ Background မှ ခေါ်ယူပါက `NODE_BACKGROUND_UNAVAILABLE` ကို ပြန်ပို့မည်။
+`canvas.*` ကဲ့သို့ပင် iOS node သည် **foreground** တွင်သာ `camera.*` command များကို ခွင့်ပြုပါသည်။ background invocation များသည် `NODE_BACKGROUND_UNAVAILABLE` ကို ပြန်လည်ပေးပါသည်။
 
 ### CLI အကူအညီ (ယာယီဖိုင်များ + MEDIA)
 
@@ -105,7 +98,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ### Android Foreground လိုအပ်ချက်
 
-`canvas.*` ကဲ့သို့ပင် Android နိုဒ်သည် **foreground** တွင်သာ `camera.*` အမိန့်များကို ခွင့်ပြုသည်။ Background မှ ခေါ်ယူပါက `NODE_BACKGROUND_UNAVAILABLE` ကို ပြန်ပို့မည်။
+`canvas.*` ကဲ့သို့ပင် Android node သည် **foreground** တွင်သာ `camera.*` command များကို ခွင့်ပြုပါသည်။ Background invocations တွေက `NODE_BACKGROUND_UNAVAILABLE` ကို ပြန်ပေးပါတယ်။
 
 ### Payload ကာကွယ်မှု
 

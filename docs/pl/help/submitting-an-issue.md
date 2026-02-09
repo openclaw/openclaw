@@ -1,13 +1,6 @@
 ---
 summary: "Zgłaszanie problemów i raportów błędów o wysokiej wartości informacyjnej"
 title: "Zgłaszanie problemu"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:17Z
 ---
 
 ## Zgłaszanie problemu
@@ -138,7 +131,7 @@ _Unikaj sekretów/szczegółów exploitów w publicznych zgłoszeniach. W przypa
 ### Evidence/examples
 ```
 
-#### Dochodzenie
+#### Komisja wszczęła dochodzenie antydumpingowe w odniesieniu do przywozu niektórych rodzajów obuwia ze skórzanymi cholewkami pochodzących z Chińskiej Republiki Ludowej („ChRL”).
 
 ```md
 ### Summary

@@ -3,13 +3,6 @@ summary: "macOS üzerinde OpenClaw için menü çubuğu simge durumları ve anim
 read_when:
   - Menü çubuğu simgesi davranışını değiştirirken
 title: "Menü Çubuğu Simgesi"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:31Z
 ---
 
 # Menü Çubuğu Simge Durumları

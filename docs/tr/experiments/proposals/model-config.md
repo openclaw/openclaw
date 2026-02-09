@@ -3,13 +3,6 @@ summary: "Keşif: model yapılandırması, kimlik doğrulama profilleri ve geri 
 read_when:
   - Gelecekteki model seçimi + kimlik doğrulama profili fikirlerini keşfederken
 title: "Model Yapılandırması Keşfi"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:10Z
 ---
 
 # Model Yapılandırması (Keşif)

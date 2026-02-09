@@ -1,15 +1,8 @@
 ---
-title: 샌드박스 vs 도구 정책 vs Elevated
+title: Sandbox vs Tool Policy vs Elevated
 summary: "도구가 차단되는 이유: 샌드박스 런타임, 도구 허용/차단 정책, Elevated exec 게이트"
 read_when: "'sandbox jail' 에 걸렸거나 도구/Elevated 거부를 보았고 변경해야 할 정확한 구성 키가 필요할 때."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:15Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -66,7 +59,7 @@ openclaw sandbox explain --json
 - **Provider 도구 정책**: `tools.byProvider[provider].allow/deny` 및 `agents.list[].tools.byProvider[provider].allow/deny`
 - **Sandbox 도구 정책** (샌드박스화된 경우에만 적용): `tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` 및 `agents.list[].tools.sandbox.tools.*`
 
-경험 법칙:
+Rules of thumb:
 
 - `deny` 가 항상 우선합니다.
 - `allow` 가 비어 있지 않으면, 나머지는 모두 차단된 것으로 취급됩니다.

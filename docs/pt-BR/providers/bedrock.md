@@ -4,13 +4,6 @@ read_when:
   - Voce quer usar modelos do Amazon Bedrock com o OpenClaw
   - Voce precisa configurar credenciais/região da AWS para chamadas de modelo
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:39Z
 ---
 
 # Amazon Bedrock

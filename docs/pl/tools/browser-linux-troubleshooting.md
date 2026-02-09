@@ -1,14 +1,7 @@
 ---
-summary: „Naprawa problemów z uruchamianiem CDP Chrome/Brave/Edge/Chromium dla sterowania przeglądarką OpenClaw w systemie Linux”
-read_when: „Sterowanie przeglądarką nie działa w systemie Linux, zwłaszcza z Chromium w snap”
-title: „Rozwiązywanie problemów z przeglądarką”
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:43Z
+summary: "„Naprawa problemów z uruchamianiem CDP Chrome/Brave/Edge/Chromium dla sterowania przeglądarką OpenClaw w systemie Linux”"
+read_when: "„Sterowanie przeglądarką nie działa w systemie Linux, zwłaszcza z Chromium w snap”"
+title: "„Rozwiązywanie problemów z przeglądarką”"
 ---
 
 # Rozwiązywanie problemów z przeglądarką (Linux)
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Referencja konfiguracji
 
-| Opcja                    | Opis                                                                             | Domyślne                                                                          |
-| ------------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `browser.enabled`        | Włącza sterowanie przeglądarką                                                   | `true`                                                                            |
+| Opcja                    | Opis                                                                                                | Domyślne                                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Włącza sterowanie przeglądarką                                                                      | `true`                                                                                               |
 | `browser.executablePath` | Ścieżka do binarki przeglądarki opartej na Chromium (Chrome/Brave/Edge/Chromium) | automatycznie wykrywana (preferuje domyślną przeglądarkę, gdy oparta na Chromium) |
-| `browser.headless`       | Uruchamianie bez GUI                                                             | `false`                                                                           |
-| `browser.noSandbox`      | Dodaje flagę `--no-sandbox` (wymaganą w niektórych konfiguracjach Linuksa)       | `false`                                                                           |
-| `browser.attachOnly`     | Nie uruchamia przeglądarki, tylko dołącza do istniejącej                         | `false`                                                                           |
-| `browser.cdpPort`        | Port Chrome DevTools Protocol                                                    | `18800`                                                                           |
+| `browser.headless`       | Uruchamianie bez GUI                                                                                | `false`                                                                                              |
+| `browser.noSandbox`      | Dodaje flagę `--no-sandbox` (wymaganą w niektórych konfiguracjach Linuksa)       | `false`                                                                                              |
+| `browser.attachOnly`     | Nie uruchamia przeglądarki, tylko dołącza do istniejącej                                            | `false`                                                                                              |
+| `browser.cdpPort`        | Port Chrome DevTools Protocol                                                                       | `18800`                                                                                              |
 
 ### Problem: „Chrome extension relay is running, but no tab is connected”
 

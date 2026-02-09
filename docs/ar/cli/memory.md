@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI لأمر `openclaw memory` (الحالة/الفهرسة/البحث)"
 read_when:
-  - "تريد فهرسة الذاكرة الدلالية أو البحث فيها"
-  - "تقوم باستكشاف أخطاء توفر الذاكرة أو الفهرسة وإصلاحها"
+  - تريد فهرسة الذاكرة الدلالية أو البحث فيها
+  - تقوم باستكشاف أخطاء توفر الذاكرة أو الفهرسة وإصلاحها
 title: "الذاكرة"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:04Z
 ---
 
 # `openclaw memory`

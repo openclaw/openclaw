@@ -3,13 +3,6 @@ summary: "Discord botu destek durumu, yetenekleri ve yapılandırması"
 read_when:
   - Discord kanal özellikleri üzerinde çalışırken
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:58Z
 ---
 
 # Discord (Bot API)
@@ -71,15 +64,15 @@ Asgari yapılandırma:
     - `discord` aracı yalnızca geçerli kanal Discord olduğunda açığa çıkar.
 13. Yerel komutlar, paylaşılan `main` oturumu yerine yalıtılmış oturum anahtarları (`agent:<agentId>:discord:slash:<userId>`) kullanır.
 
-Not: Ad → kimlik çözümlemesi sunucu üye aramasını kullanır ve Server Members Intent gerektirir; bot üyeleri arayamıyorsa kimlikleri veya `<@id>` mention’larını kullanın.  
-Not: Slug’lar küçük harflidir ve boşluklar `-` ile değiştirilir. Kanal adları baştaki `#` olmadan slug’lanır.  
+Not: Ad → kimlik çözümlemesi sunucu üye aramasını kullanır ve Server Members Intent gerektirir; bot üyeleri arayamıyorsa kimlikleri veya `<@id>` mention’larını kullanın.
+Not: Slug’lar küçük harflidir ve boşluklar `-` ile değiştirilir. Kanal adları baştaki `#` olmadan slug’lanır.
 Not: Sunucu bağlamı `[from:]` satırları, ping’e hazır yanıtları kolaylaştırmak için `author.tag` + `id` içerir.
 
 ## Yapılandırma yazımları
 
 Varsayılan olarak, Discord `/config set|unset` tarafından tetiklenen yapılandırma güncellemelerini yazabilir (`commands.config: true` gerektirir).
 
-Devre dışı bırakmak için:
+Şununla devre dışı bırakın:
 
 ```json5
 {
@@ -91,7 +84,7 @@ Devre dışı bırakmak için:
 
 Bu, OpenClaw’ı `#help` gibi bir sunucu (guild) kanalında çalıştırmak için “Discord Developer Portal” kurulumudur.
 
-### 1) Discord uygulaması + bot kullanıcısı oluşturma
+### 1. Discord uygulaması + bot kullanıcısı oluşturma
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. Uygulamanızda:
@@ -109,7 +102,7 @@ Discord, “ayrıcalıklı intent”leri açıkça etkinleştirmedikçe engeller
 
 Genellikle **Presence Intent** gerekmez. Botun kendi varlığını ayarlamak (`setPresence` eylemi) gateway OP3 kullanır ve bu intent’i gerektirmez; yalnızca diğer sunucu üyelerinin varlık güncellemelerini almak istiyorsanız gereklidir.
 
-### 3) Davet URL’si oluşturma (OAuth2 URL Generator)
+### 3. Davet URL’si oluşturma (OAuth2 URL Generator)
 
 Uygulamanızda: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Hata ayıklamadıkça ve bota tamamen güvenmedikçe **Administrator**’dan ka�
 
 Oluşturulan URL’yi kopyalayın, açın, sunucunuzu seçin ve botu kurun.
 
-### 4) Kimlikleri alma (sunucu/kullanıcı/kanal)
+### 4. Kimlikleri alma (sunucu/kullanıcı/kanal)
 
 Discord her yerde sayısal kimlikler kullanır; OpenClaw yapılandırması kimlikleri tercih eder.
 
@@ -144,7 +137,7 @@ Discord her yerde sayısal kimlikler kullanır; OpenClaw yapılandırması kimli
 
 ### 5) OpenClaw’ı yapılandırma
 
-#### Belirteç
+#### Token
 
 Bot belirtecini ortam değişkeniyle ayarlayın (sunucularda önerilir):
 
@@ -207,7 +200,7 @@ Notlar:
 - Bot tarafından yazılan mesajlar varsayılan olarak yok sayılır; izin vermek için `channels.discord.allowBots=true` ayarlayın (kendi mesajları yine filtrelenir).
 - Uyarı: Diğer botlara yanıt vermeye izin verirseniz (`channels.discord.allowBots=true`), botlar arası yanıt döngülerini `requireMention`, `channels.discord.guilds.*.channels.<id>.users` izin listeleri ve/veya `AGENTS.md` ve `SOUL.md` içindeki korumaları temizleyerek önleyin.
 
-### 6) Çalıştığını doğrulama
+### 6. Çalıştığını doğrulama
 
 1. Gateway’i başlatın.
 2. Sunucu kanalınızda şunu gönderin: `@Krill hello` (veya bot adınız her neyse).
@@ -221,7 +214,7 @@ Notlar:
   - **Message Content Intent** eksik, veya
   - Botun kanal izinleri yok (Görüntüle/Gönder/Geçmişi Oku), veya
   - Yapılandırmanız mention gerektiriyor ve mention etmediniz, veya
-  - Sunucu/kanal izin listeniz kanalı/kullanıcıyı reddediyor.
+  - Your guild/channel allowlist denies the channel/user.
 - **`requireMention: false` ama hâlâ yanıt yok**:
 - `channels.discord.groupPolicy` varsayılanı **allowlist**’tir; `"open"` olarak ayarlayın veya `channels.discord.guilds` altında bir sunucu girdisi ekleyin (isteğe bağlı olarak `channels.discord.guilds.<id>.channels` altında kanalları listeleyerek kısıtlayın).
   - Yalnızca `DISCORD_BOT_TOKEN` ayarlayıp hiç `channels.discord` bölümü oluşturmazsanız, çalışma zamanı
@@ -400,29 +393,29 @@ kazara Discord ping’lerini önlemek için göndericiyi `Member (PK:System)` ol
 - PK aramaları başarısız olursa (ör. belirteci olmayan özel sistem), proxy’li mesajlar
   bot mesajları olarak değerlendirilir ve `channels.discord.allowBots=true` yoksa düşürülür.
 
-### Araç eylemi varsayılanları
+### Tool action defaults
 
-| Eylem grubu    | Varsayılan | Notlar                                    |
-| -------------- | ---------- | ----------------------------------------- |
-| reactions      | enabled    | Tepki ver + tepkileri listele + emojiList |
-| stickers       | enabled    | Çıkartma gönder                           |
-| emojiUploads   | enabled    | Emoji yükle                               |
-| stickerUploads | enabled    | Çıkartma yükle                            |
-| polls          | enabled    | Anket oluştur                             |
-| permissions    | enabled    | Kanal izin anlık görüntüsü                |
-| messages       | enabled    | Oku/gönder/düzenle/sil                    |
-| threads        | enabled    | Oluştur/listele/yanıtla                   |
-| pins           | enabled    | Sabitle/kaldır/listele                    |
-| search         | enabled    | Mesaj arama (önizleme özelliği)           |
-| memberInfo     | enabled    | Üye bilgisi                               |
-| roleInfo       | enabled    | Rol listesi                               |
-| channelInfo    | enabled    | Kanal bilgisi + liste                     |
-| channels       | enabled    | Kanal/kategori yönetimi                   |
-| voiceStatus    | enabled    | Ses durumu sorgulama                      |
-| events         | enabled    | Zamanlanmış etkinlikleri listele/oluştur  |
-| roles          | disabled   | Rol ekle/çıkar                            |
-| moderation     | disabled   | Zaman aşımı/atma/yasaklama                |
-| presence       | disabled   | Bot durumu/etkinliği (setPresence)        |
+| Eylem grubu    | Varsayılan | Notlar                                                |
+| -------------- | ---------- | ----------------------------------------------------- |
+| reactions      | enabled    | Tepki ver + tepkileri listele + emojiList             |
+| stickers       | enabled    | Send stickers                                         |
+| emojiUploads   | enabled    | Emoji yükle                                           |
+| stickerUploads | enabled    | Upload stickers                                       |
+| polls          | enabled    | Anket oluştur                                         |
+| permissions    | enabled    | Kanal izin anlık görüntüsü                            |
+| messages       | enabled    | Oku/gönder/düzenle/sil                                |
+| threads        | enabled    | Oluştur/listele/yanıtla                               |
+| pins           | enabled    | Sabitle/kaldır/listele                                |
+| search         | enabled    | Mesaj arama (önizleme özelliği)    |
+| memberInfo     | enabled    | Üye bilgisi                                           |
+| roleInfo       | enabled    | Rol listesi                                           |
+| channelInfo    | enabled    | Kanal bilgisi + liste                                 |
+| channels       | enabled    | Kanal/kategori yönetimi                               |
+| voiceStatus    | enabled    | Voice state lookup                                    |
+| events         | enabled    | Zamanlanmış etkinlikleri listele/oluştur              |
+| roles          | disabled   | Rol ekle/çıkar                                        |
+| moderation     | disabled   | Zaman aşımı/atma/yasaklama                            |
+| presence       | disabled   | Bot durumu/etkinliği (setPresence) |
 
 - `replyToMode`: `off` (varsayılan), `first` veya `all`. Yalnızca model bir yanıt etiketi içerdiğinde uygulanır.
 

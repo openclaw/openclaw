@@ -6,13 +6,6 @@ read_when:
   - Déboguer la configuration d’identité lors de la prise en main
 title: "Amorçage de l’agent"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:46Z
 ---
 
 # Amorçage de l’agent
@@ -21,7 +14,7 @@ L’amorçage est le rituel de **première exécution** qui prépare l’espace 
 de l’agent et collecte les informations d’identité. Il a lieu après la prise en
 main, lorsque l’agent démarre pour la première fois.
 
-## Ce que fait l’amorçage
+## Qu'est-ce que l'amorçage fait
 
 Lors de la première exécution de l’agent, OpenClaw amorce l’espace de travail
 (par défaut `~/.openclaw/workspace`) :

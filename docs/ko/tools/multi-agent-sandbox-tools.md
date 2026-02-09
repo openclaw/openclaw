@@ -3,13 +3,6 @@ summary: "에이전트별 샌드박스 + 도구 제한, 우선순위 및 예시"
 title: 멀티 에이전트 샌드박스 & 도구
 read_when: "멀티 에이전트 Gateway(게이트웨이)에서 에이전트별 샌드박스화 또는 에이전트별 도구 허용/차단 정책이 필요할 때."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:42Z
 ---
 
 # 멀티 에이전트 샌드박스 & 도구 구성
@@ -341,9 +334,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## 일반적인 함정: "non-main"
 
-`agents.defaults.sandbox.mode: "non-main"` 는 에이전트 id 가 아니라 `session.mainKey` (기본값 `"main"`)를 기준으로 합니다.
-그룹/채널 세션은 항상 자체 키를 가지므로 non-main 으로 처리되어 샌드박스화됩니다.
-에이전트를 절대 샌드박스화하지 않으려면 `agents.list[].sandbox.mode: "off"` 를 설정하십시오.
+`agents.defaults.sandbox.mode: "non-main"` 는 에이전트 id 가 아니라 `session.mainKey` (기본값 `"main"`)를 기준으로 합니다. 그룹/채널 세션은 항상 자체 키를 가지므로 non-main 으로 처리되어 샌드박스화됩니다. 에이전트를 절대 샌드박스화하지 않으려면 `agents.list[].sandbox.mode: "off"` 를 설정하십시오.
 
 ---
 
@@ -395,7 +386,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ---
 
-## 참고 자료
+## 함께 보기
 
 - [Multi-Agent Routing](/concepts/multi-agent)
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)

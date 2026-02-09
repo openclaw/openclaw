@@ -4,13 +4,6 @@ read_when:
   - Implementando recursos do app macOS
   - Alterando o ciclo de vida do gateway ou a ponte de nós no macOS
 title: "App macOS"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:43Z
 ---
 
 # OpenClaw macOS Companion (barra de menus + corretor do gateway)

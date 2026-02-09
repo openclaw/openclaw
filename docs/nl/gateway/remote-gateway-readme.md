@@ -2,13 +2,6 @@
 summary: "SSH-tunnelinstallatie voor OpenClaw.app die verbinding maakt met een externe gateway"
 read_when: "De macOS-app verbinden met een externe gateway via SSH"
 title: "Installatie van de Remote Gateway"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:23Z
 ---
 
 # OpenClaw.app uitvoeren met een Remote Gateway
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Hoe het werkt
 
-| Component                            | Wat het doet                                                              |
-| ------------------------------------ | ------------------------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Stuurt lokale poort 18789 door naar externe poort 18789                   |
+| Component                            | Wat het doet                                                                                 |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Stuurt lokale poort 18789 door naar externe poort 18789                                      |
 | `ssh -N`                             | SSH zonder het uitvoeren van externe opdrachten (alleen poortdoorsturing) |
-| `KeepAlive`                          | Start de tunnel automatisch opnieuw als deze crasht                       |
-| `RunAtLoad`                          | Start de tunnel wanneer de agent wordt geladen                            |
+| `KeepAlive`                          | Start de tunnel automatisch opnieuw als deze crasht                                          |
+| `RunAtLoad`                          | Start de tunnel wanneer de agent wordt geladen                                               |
 
 OpenClaw.app maakt verbinding met `ws://127.0.0.1:18789` op je clientmachine. De SSH-tunnel stuurt die verbinding door naar poort 18789 op de externe machine waar de Gateway draait.

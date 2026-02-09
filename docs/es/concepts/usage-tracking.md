@@ -4,13 +4,6 @@ read_when:
   - Está conectando superficies de uso/cuotas del proveedor
   - Necesita explicar el comportamiento del seguimiento de uso o los requisitos de autenticación
 title: "Seguimiento de uso"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:18Z
 ---
 
 # Seguimiento de uso

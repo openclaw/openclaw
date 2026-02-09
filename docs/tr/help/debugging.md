@@ -4,17 +4,10 @@ read_when:
   - Ham model çıktısını muhakeme sızıntısı açısından incelemeniz gerekiyor
   - Yineleme yaparken Gateway’i izleme modunda çalıştırmak istiyorsunuz
   - Tekrarlanabilir bir hata ayıklama iş akışına ihtiyacınız var
-title: "Hata Ayıklama"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:26Z
+title: "Hata ayıklama"
 ---
 
-# Hata Ayıklama
+# Hata ayıklama
 
 Bu sayfa, özellikle bir sağlayıcı muhakemeyi normal metne karıştırdığında,
 akış çıktısını incelemek için hata ayıklama yardımcılarını kapsar.
@@ -44,7 +37,7 @@ Hızlı yineleme için gateway’i dosya izleyici altında çalıştırın:
 pnpm gateway:watch --force
 ```
 
-Bu, şuna eşlenir:
+Bu şuna eşlenir:
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -163,4 +156,4 @@ Varsayılan dosya:
 
 - Ham akış günlükleri tam istemleri, araç çıktısını ve kullanıcı verilerini içerebilir.
 - Günlükleri yerel tutun ve hata ayıklamadan sonra silin.
-- Günlükleri paylaşırsanız, önce gizli bilgiler ve KVK/PII verilerini temizleyin.
+- Günlükleri paylaşırsanız, önce sırları ve PII'yi temizleyin.

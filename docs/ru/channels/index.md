@@ -1,16 +1,9 @@
 ---
-summary: «Мессенджинговые платформы, к которым может подключаться OpenClaw»
+summary: "Мессенджинговые платформы, к которым может подключаться OpenClaw"
 read_when:
   - Вы хотите выбрать чат-канал для OpenClaw
   - Вам нужен краткий обзор поддерживаемых мессенджинговых платформ
-title: «Чат-каналы»
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:11Z
+title: "Чат-каналы"
 ---
 
 # Чат-каналы

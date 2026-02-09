@@ -5,13 +5,6 @@ read_when:
   - Kendi VM’inizde üretim seviyesinde, her zaman açık bir Gateway istiyorsanız
   - Kalıcılık, ikililer ve yeniden başlatma davranışı üzerinde tam denetim istiyorsanız
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 # GCP Compute Engine üzerinde OpenClaw (Docker, Üretim VPS Rehberi)
@@ -72,7 +65,7 @@ Genel Docker akışı için [Docker](/install/docker) sayfasına bakın.
 
 ---
 
-## 1) gcloud CLI’yi kurun (veya Console kullanın)
+## 1. gcloud CLI’yi kurun (veya Console kullanın)
 
 **Seçenek A: gcloud CLI** (otomasyon için önerilir)
 
@@ -91,7 +84,7 @@ Tüm adımlar web arayüzü üzerinden yapılabilir: [https://console.cloud.goog
 
 ---
 
-## 2) Bir GCP projesi oluşturun
+## 2. Bir GCP projesi oluşturun
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) VM’i oluşturun
+## 3. VM’i oluşturun
 
 **Makine türleri:**
 
-| Tür      | Özellikler                   | Maliyet               | Notlar                   |
-| -------- | ---------------------------- | --------------------- | ------------------------ |
-| e2-small | 2 vCPU, 2GB RAM              | ~$12/ay               | Önerilir                 |
-| e2-micro | 2 vCPU (paylaşımlı), 1GB RAM | Ücretsiz katman uygun | Yük altında OOM olabilir |
+| Ana makine hacim bağlaması | Özellikler                                      | Maliyet                 | Notlar                   |
+| -------------------------- | ----------------------------------------------- | ----------------------- | ------------------------ |
+| e2-small                   | 2 vCPU, 2GB RAM                                 | ~$12/ay | Önerilir                 |
+| e2-micro                   | 2 vCPU (paylaşımlı), 1GB RAM | Ücretsiz katman uygun   | Yük altında OOM olabilir |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) VM’e SSH ile bağlanın
+## 4. VM’e SSH ile bağlanın
 
 **CLI:**
 
@@ -164,7 +157,7 @@ Not: VM oluşturulduktan sonra SSH anahtarlarının yayılması 1–2 dakika sü
 
 ---
 
-## 5) Docker’ı kurun (VM üzerinde)
+## 5. Docker’ı kurun (VM üzerinde)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) OpenClaw deposunu klonlayın
+## 6. OpenClaw deposunu klonlayın
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,7 +198,7 @@ Bu rehber, ikili kalıcılığını garanti etmek için özel bir görüntü der
 
 ---
 
-## 7) Kalıcı ana makine dizinlerini oluşturun
+## 7. Kalıcı ana makine dizinlerini oluşturun
 
 Docker konteynerleri geçicidir.
 Uzun ömürlü tüm durum ana makinede yaşamalıdır.
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) Ortam değişkenlerini yapılandırın
+## 8. Ortam değişkenlerini yapılandırın
 
 Depo kök dizininde `.env` oluşturun.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose yapılandırması
+## 9. Docker Compose yapılandırması
 
 `docker-compose.yml` oluşturun veya güncelleyin.
 
@@ -291,7 +284,7 @@ services:
 
 ---
 
-## 10) Gerekli ikilileri görüntüye gömün (kritik)
+## 10. Gerekli ikilileri görüntüye gömün (kritik)
 
 Çalışan bir konteynerin içine ikili kurmak bir tuzaktır.
 Çalışma zamanında kurulan her şey yeniden başlatmada kaybolur.
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Derleyin ve başlatın
+## 11. Derleyin ve başlatın
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ Beklenen çıktı:
 
 ---
 
-## 12) Gateway’i doğrulayın
+## 12. Gateway’i doğrulayın
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Başarılı:
 
 ---
 
-## 13) Dizüstü bilgisayarınızdan erişim
+## 13. Dizüstü bilgisayarınızdan erişim
 
 Gateway portunu yönlendirmek için bir SSH tüneli oluşturun:
 
@@ -414,18 +407,18 @@ Gateway belirtecinizi yapıştırın.
 OpenClaw Docker içinde çalışır, ancak Docker tek doğruluk kaynağı değildir.
 Uzun ömürlü tüm durum yeniden başlatmalara, yeniden derlemelere ve yeniden başlatmalara dayanmalıdır.
 
-| Bileşen                 | Konum                             | Kalıcılık mekanizması     | Notlar                              |
-| ----------------------- | --------------------------------- | ------------------------- | ----------------------------------- |
-| Gateway yapılandırması  | `/home/node/.openclaw/`           | Ana makine hacim bağlama  | `openclaw.json`, belirteçler dahil  |
-| Model kimlik profilleri | `/home/node/.openclaw/`           | Ana makine hacim bağlama  | OAuth belirteçleri, API anahtarları |
-| Skill yapılandırmaları  | `/home/node/.openclaw/skills/`    | Ana makine hacim bağlama  | Skill düzeyi durum                  |
-| Ajan çalışma alanı      | `/home/node/.openclaw/workspace/` | Ana makine hacim bağlama  | Kod ve ajan yapıtları               |
-| WhatsApp oturumu        | `/home/node/.openclaw/`           | Ana makine hacim bağlama  | QR girişini korur                   |
-| Gmail anahtarlığı       | `/home/node/.openclaw/`           | Ana makine hacmi + parola | `GOG_KEYRING_PASSWORD` gerektirir   |
-| Harici ikililer         | `/usr/local/bin/`                 | Docker görüntüsü          | Derleme zamanında gömülmelidir      |
-| Node çalışma zamanı     | Konteyner dosya sistemi           | Docker görüntüsü          | Her derlemede yeniden oluşturulur   |
-| OS paketleri            | Konteyner dosya sistemi           | Docker görüntüsü          | Çalışma zamanında kurmayın          |
-| Docker konteyneri       | Geçici                            | Yeniden başlatılabilir    | Yok edilmesi güvenlidir             |
+| Bileşen                                     | Konum                             | Kalıcılık mekanizması      | Notlar                                     |
+| ------------------------------------------- | --------------------------------- | -------------------------- | ------------------------------------------ |
+| Gateway yapılandırması                      | `/home/node/.openclaw/`           | Ana makine hacim bağlaması | `openclaw.json`, belirteçler dahil         |
+| Model kimlik profilleri                     | `/home/node/.openclaw/`           | Ana makine hacim bağlaması | OAuth belirteçleri, API anahtarları        |
+| Skill yapılandırmaları                      | `/home/node/.openclaw/skills/`    | Ana makine hacim bağlaması | Skill düzeyi durum                         |
+| concepts/agent-workspace.md | `/home/node/.openclaw/workspace/` | Ana makine hacim bağlaması | Kod ve ajan artefaktları                   |
+| WhatsApp oturumu                            | `/home/node/.openclaw/`           | Harici ikili dosyalar      | QR girişini korur                          |
+| Gmail anahtarlığı                           | `/home/node/.openclaw/`           | Ana makine hacmi + parola  | `GOG_KEYRING_PASSWORD` gerektirir          |
+| Derleme zamanında imaja gömülmelidir        | `/usr/local/bin/`                 | Docker görüntüsü           | Node çalışma zamanı                        |
+| Çalışma zamanında kurmayın                  | Konteyner dosya sistemi           | Docker görüntüsü           | Her derlemede yeniden oluşturulur          |
+| OS paketleri                                | Konteyner dosya sistemi           | Docker görüntüsü           | Gerekli ikili dosyaları imajın içine gömün |
+| Docker konteyneri                           | Geçicidir                         | Yeniden başlatılabilir     | Yok edilmesi güvenlidir                    |
 
 ---
 

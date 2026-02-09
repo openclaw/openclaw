@@ -5,13 +5,6 @@ read_when:
   - Je wilt een productieklare, altijd-aan Gateway op je eigen VM
   - Je wilt volledige controle over persistentie, binaries en herstartgedrag
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:43Z
 ---
 
 # OpenClaw op GCP Compute Engine (Docker, productie-VPS-gids)
@@ -72,7 +65,7 @@ Voor de generieke Docker-flow, zie [Docker](/install/docker).
 
 ---
 
-## 1) gcloud CLI installeren (of Console gebruiken)
+## 1. gcloud CLI installeren (of Console gebruiken)
 
 **Optie A: gcloud CLI** (aanbevolen voor automatisering)
 
@@ -91,7 +84,7 @@ Alle stappen kunnen via de web-UI op [https://console.cloud.google.com](https://
 
 ---
 
-## 2) Een GCP-project aanmaken
+## 2. Een GCP-project aanmaken
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) De VM aanmaken
+## 3. De VM aanmaken
 
 **Machinetypes:**
 
-| Type     | Specificaties             | Kosten     | Opmerkingen     |
-| -------- | ------------------------- | ---------- | --------------- |
-| e2-small | 2 vCPU, 2GB RAM           | ~$12/maand | Aanbevolen      |
-| e2-micro | 2 vCPU (gedeeld), 1GB RAM | Free tier  | Kan OOM krijgen |
+| Type     | Specificaties                                | Kosten                     | Opmerkingen     |
+| -------- | -------------------------------------------- | -------------------------- | --------------- |
+| e2-small | 2 vCPU, 2GB RAM                              | ~$12/maand | Aanbevolen      |
+| e2-micro | 2 vCPU (gedeeld), 1GB RAM | Free tier                  | Kan OOM krijgen |
 
 **CLI:**
 
@@ -144,11 +137,11 @@ gcloud compute instances create openclaw-gateway \
 3. Regio: `us-central1`, Zone: `us-central1-a`
 4. Machinetype: `e2-small`
 5. Bootdisk: Debian 12, 20GB
-6. Maken
+6. Aanmaken
 
 ---
 
-## 4) SSH inloggen op de VM
+## 4. SSH inloggen op de VM
 
 **CLI:**
 
@@ -164,7 +157,7 @@ Let op: het doorgeven van SSH-sleutels kan 1–2 minuten duren na het aanmaken v
 
 ---
 
-## 5) Docker installeren (op de VM)
+## 5. Docker installeren (op de VM)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) De OpenClaw-repository clonen
+## 6. De OpenClaw-repository clonen
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,7 +198,7 @@ Deze gids gaat ervan uit dat je een custom image bouwt om binaire persistentie t
 
 ---
 
-## 7) Persistente hostmappen aanmaken
+## 7. Persistente hostmappen aanmaken
 
 Docker-containers zijn tijdelijk.
 Alle langlevende status moet op de host staan.
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) Omgevingsvariabelen configureren
+## 8. Omgevingsvariabelen configureren
 
 Maak `.env` aan in de root van de repository.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose-configuratie
+## 9. Docker Compose-configuratie
 
 Maak `docker-compose.yml` aan of werk het bij.
 
@@ -291,7 +284,7 @@ services:
 
 ---
 
-## 10) Vereiste binaries in het image bakken (kritiek)
+## 10. Vereiste binaries in het image bakken (kritiek)
 
 Binaries installeren in een draaiende container is een valkuil.
 Alles wat tijdens runtime wordt geïnstalleerd, gaat verloren bij een herstart.
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Bouwen en starten
+## 11. Bouwen en starten
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ Verwachte uitvoer:
 
 ---
 
-## 12) Gateway verifiëren
+## 12. Gateway verifiëren
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Succes:
 
 ---
 
-## 13) Toegang vanaf je laptop
+## 13. Toegang vanaf je laptop
 
 Maak een SSH-tunnel om de Gateway-poort door te sturen:
 

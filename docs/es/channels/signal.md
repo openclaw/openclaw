@@ -4,13 +4,6 @@ read_when:
   - Configuración del soporte de Signal
   - Depuración de envío/recepción de Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:50Z
 ---
 
 # Signal (signal-cli)
@@ -109,7 +102,7 @@ Esto omite el autoarranque y la espera de inicio dentro de OpenClaw. Para arranq
 
 ## Control de acceso (mensajes directos + grupos)
 
-Mensajes directos:
+DMs:
 
 - Predeterminado: `channels.signal.dmPolicy = "pairing"`.
 - Los remitentes desconocidos reciben un código de emparejamiento; los mensajes se ignoran hasta que se aprueben (los códigos expiran tras 1 hora).

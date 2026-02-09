@@ -4,13 +4,6 @@ read_when:
   - Medya anlama tasarlarken veya yeniden düzenlerken
   - Gelen ses/video/görüntü ön işleme ayarlaması yaparken
 title: "Medya Anlama"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:42Z
 ---
 
 # Medya Anlama (Gelen) — 2026-01-17
@@ -182,11 +175,11 @@ CLI girdileri için, **beklenmedik eşleşmeleri önlemek adına `capabilities`�
 
 ## Sağlayıcı destek matrisi (OpenClaw entegrasyonları)
 
-| Yetenek | Sağlayıcı entegrasyonu                                    | Notlar                                                  |
-| ------- | --------------------------------------------------------- | ------------------------------------------------------- |
-| Görüntü | OpenAI / Anthropic / Google / `pi-ai` üzerinden diğerleri | Kayıttaki görüntü yetenekli herhangi bir model çalışır. |
-| Ses     | OpenAI, Groq, Deepgram, Google                            | Sağlayıcı dökümü (Whisper/Deepgram/Gemini).             |
-| Video   | Google (Gemini API)                                       | Sağlayıcı video anlama.                                 |
+| Yetenek | Sağlayıcı entegrasyonu                                    | Notlar                                                                         |
+| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Görüntü | OpenAI / Anthropic / Google / `pi-ai` üzerinden diğerleri | Kayıttaki görüntü yetenekli herhangi bir model çalışır.        |
+| Ses     | OpenAI, Groq, Deepgram, Google                            | Sağlayıcı dökümü (Whisper/Deepgram/Gemini). |
+| Video   | Google (Gemini API)                    | Sağlayıcı video anlama.                                        |
 
 ## Önerilen sağlayıcılar
 
@@ -218,7 +211,7 @@ Yetenek başına `attachments`, hangi eklerin işlendiğini denetler:
 
 ## Yapılandırma örnekleri
 
-### 1) Paylaşılan modeller listesi + geçersiz kılmalar
+### 1. Paylaşılan modeller listesi + geçersiz kılmalar
 
 ```json5
 {
@@ -255,7 +248,7 @@ Yetenek başına `attachments`, hangi eklerin işlendiğini denetler:
 }
 ```
 
-### 2) Yalnızca Ses + Video (görüntü kapalı)
+### 2. Yalnızca Ses + Video (görüntü kapalı)
 
 ```json5
 {
@@ -295,7 +288,7 @@ Yetenek başına `attachments`, hangi eklerin işlendiğini denetler:
 }
 ```
 
-### 3) İsteğe bağlı görüntü anlama
+### 3. İsteğe bağlı görüntü anlama
 
 ```json5
 {
@@ -326,7 +319,7 @@ Yetenek başına `attachments`, hangi eklerin işlendiğini denetler:
 }
 ```
 
-### 4) Çok kipli tek giriş (açık yetenekler)
+### 4. Çok kipli tek giriş (açık yetenekler)
 
 ```json5
 {
@@ -364,7 +357,7 @@ Yetenek başına `attachments`, hangi eklerin işlendiğini denetler:
 }
 ```
 
-## Durum çıktısı
+## Status output
 
 Medya anlama çalıştığında, `/status` kısa bir özet satırı içerir:
 

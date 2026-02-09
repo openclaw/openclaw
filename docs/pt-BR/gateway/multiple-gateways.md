@@ -4,13 +4,6 @@ read_when:
   - Executando mais de um Gateway na mesma máquina
   - Você precisa de configuração/estado/portas isolados por Gateway
 title: "Múltiplos Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:53Z
 ---
 
 # Múltiplos Gateways (mesmo host)

@@ -1,17 +1,10 @@
 ---
-summary: „Przewodnik po ClawHub: publiczny rejestr Skills + przepływy pracy CLI”
+summary: "„Przewodnik po ClawHub: publiczny rejestr Skills + przepływy pracy CLI”"
 read_when:
   - Wprowadzanie ClawHub dla nowych użytkowników
   - Instalowanie, wyszukiwanie lub publikowanie Skills
   - Wyjaśnianie flag CLI ClawHub i zachowania synchronizacji
-title: „ClawHub”
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:00Z
+title: "ClawHub"
 ---
 
 # ClawHub
@@ -91,7 +84,8 @@ Typowy Skill zawiera:
 - Metadane, takie jak tagi, podsumowanie i wymagania instalacyjne.
 
 ClawHub wykorzystuje metadane do zasilania mechanizmów odkrywania i bezpiecznego
-udostępniania możliwości Skills. Rejestr śledzi także sygnały użycia (takie jak
+udostępniania możliwości Skills.
+Rejestr śledzi także sygnały użycia (takie jak
 gwiazdki i pobrania), aby poprawić ranking i widoczność.
 
 ## Co zapewnia usługa (funkcje)

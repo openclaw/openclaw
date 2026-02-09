@@ -4,13 +4,6 @@ read_when:
   - Gusto mo ng beginner-friendly na walkthrough ng TUI
   - Kailangan mo ang kumpletong listahan ng mga tampok, command, at shortcut ng TUI
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:07Z
 ---
 
 # TUI (Terminal UI)
@@ -113,7 +106,7 @@ Lifecycle ng session:
 - `/settings`
 - `/exit`
 
-Ang iba pang Gateway slash command (hal., `/context`) ay ipinapasa sa Gateway at ipinapakita bilang system output. Tingnan ang [Slash commands](/tools/slash-commands).
+Ang iba pang Gateway slash command (halimbawa, `/context`) ay ipinapasa sa Gateway at ipinapakita bilang system output. Tingnan ang [Slash commands](/tools/slash-commands).
 
 ## Mga local shell command
 
@@ -149,8 +142,8 @@ Ang iba pang Gateway slash command (hal., `/context`) ay ipinapasa sa Gateway at
 - `--thinking <level>`: I-override ang thinking level para sa mga pagpapadala
 - `--timeout-ms <ms>`: Agent timeout sa ms (default sa `agents.defaults.timeoutSeconds`)
 
-Tandaan: kapag itinakda mo ang `--url`, hindi na nagfa-fallback ang TUI sa config o environment credentials.
-Ipasa ang `--token` o `--password` nang tahasan. Error ang kulang sa tahasang credentials.
+Note: when you set `--url`, the TUI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ## Pag-troubleshoot
 

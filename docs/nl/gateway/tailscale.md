@@ -4,13 +4,6 @@ read_when:
   - Het Gateway Control UI buiten localhost beschikbaar maken
   - Toegang tot het tailnet of een openbaar dashboard automatiseren
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Tailscale (Gateway-dashboard)

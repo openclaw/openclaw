@@ -4,13 +4,6 @@ read_when:
   - ပလပ်ဂင်/တိုးချဲ့ချက်များ ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း ပြုလုပ်နေသည့်အချိန်
   - ပလပ်ဂင် ထည့်သွင်းခြင်း သို့မဟုတ် ဖွင့်သုံးစည်းမျဉ်းများကို စာတမ်းရေးသားနေသည့်အချိန်
 title: "Plugins"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:48Z
 ---
 
 # Plugins (Extensions)
@@ -39,7 +32,7 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-3. Gateway ကို ပြန်လည်စတင်ပြီး `plugins.entries.<id>.config` အောက်တွင် ဖွဲ့စည်းပြင်ဆင်ပါ။
+3. 23. Gateway ကို restart လုပ်ပြီးနောက် `plugins.entries.<id>` အောက်တွင် configure လုပ်ပါ။.config\`.
 
 အကောင်အထည်ဖော်ထားသော ပလပ်ဂင် ဥပမာအတွက် [Voice Call](/plugins/voice-call) ကို ကြည့်ပါ။
 
@@ -59,9 +52,7 @@ openclaw plugins install @openclaw/voice-call
 - Qwen OAuth (provider auth) — `qwen-portal-auth` အဖြစ် ထည့်သွင်းပြီးသား (ပုံမှန်အားဖြင့် ပိတ်ထားသည်)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; built‑in `github-copilot` device login နှင့် မတူပါ (ထည့်သွင်းပြီးသား၊ ပုံမှန်အားဖြင့် ပိတ်ထားသည်)
 
-OpenClaw ပလပ်ဂင်များသည် **TypeScript မော်ဂျူးများ** ဖြစ်ပြီး jiti ဖြင့် runtime အချိန်တွင် load လုပ်ပါသည်။
-**Config validation သည် ပလပ်ဂင်ကုဒ်ကို မအကောင်အထည်မဖော်ပါ** — ပလပ်ဂင် manifest နှင့် JSON Schema ကိုသာ အသုံးပြုပါသည်။
-အသေးစိတ်အတွက် [Plugin manifest](/plugins/manifest) ကို ကြည့်ပါ။
+24. OpenClaw plugins များသည် jiti မှတဆင့် runtime တွင် load လုပ်သော **TypeScript modules** များဖြစ်သည်။ 25. **Config validation သည် plugin code ကို မအလုပ်လုပ်စေပါ**; plugin manifest နှင့် JSON Schema ကိုသာ အသုံးပြုသည်။ 26. [Plugin manifest](/plugins/manifest) ကို ကြည့်ပါ။
 
 ပလပ်ဂင်များသည် အောက်ပါအရာများကို မှတ်ပုံတင်နိုင်ပါသည် —
 
@@ -74,13 +65,12 @@ OpenClaw ပလပ်ဂင်များသည် **TypeScript မော်ဂ
 - **Skills** (plugin manifest ထဲတွင် `skills` လမ်းကြောင်းများကို စာရင်းပြုလုပ်ခြင်းဖြင့်)
 - **Auto‑reply commands** (AI agent ကို မခေါ်ဘဲ အလိုအလျောက် အလုပ်လုပ်သည်)
 
-ပလပ်ဂင်များသည် Gateway နှင့် **in‑process** အဖြစ် အလုပ်လုပ်သဖြင့် ယုံကြည်စိတ်ချရသော ကုဒ်အဖြစ် သဘောထားပါ။
-Tool ရေးသားနည်းလမ်းညွှန် — [Plugin agent tools](/plugins/agent-tools)။
+27. Plugins များသည် Gateway နှင့်အတူ **in‑process** အဖြစ် chạy သဖြင့် trusted code အဖြစ် ဆက်ဆံရမည်။
+28. Tool authoring guide: [Plugin agent tools](/plugins/agent-tools)။
 
 ## Runtime helpers
 
-ပလပ်ဂင်များသည် `api.runtime` မှတဆင့် core helper အချို့ကို အသုံးပြုနိုင်ပါသည်။
-Telephony TTS အတွက် —
+29. Plugins များသည် `api.runtime` မှတဆင့် ရွေးချယ်ထားသော core helpers များကို အသုံးပြုနိုင်သည်။ 30. telephony TTS အတွက်:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
@@ -92,7 +82,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 မှတ်ချက်များ —
 
 - core `messages.tts` configuration (OpenAI သို့မဟုတ် ElevenLabs) ကို အသုံးပြုပါသည်။
-- PCM audio buffer နှင့် sample rate ကို ပြန်ပေးပါသည်။ Providers အတွက် plugins များက resample/encode လုပ်ရပါမည်။
+- 31. PCM audio buffer + sample rate ကို ပြန်ပေးသည်။ 32. Plugins များသည် providers များအတွက် resample/encode လုပ်ရမည်။
 - Telephony အတွက် Edge TTS ကို မထောက်ပံ့ပါ။
 
 ## Discovery & precedence
@@ -117,14 +107,9 @@ OpenClaw သည် အောက်ပါအစဉ်အတိုင်း scan �
 
 - `<openclaw>/extensions/*`
 
-Bundled plugins များကို `plugins.entries.<id>.enabled`
-သို့မဟုတ် `openclaw plugins enable <id>` ဖြင့် ထင်ရှားစွာ ဖွင့်ရပါမည်။
-Installed plugins များကို ပုံမှန်အားဖြင့် ဖွင့်ထားသော်လည်း
-တူညီသောနည်းလမ်းဖြင့် ပိတ်နိုင်ပါသည်။
+33. Bundled plugins များကို `plugins.entries.<id>.enabled` သို့မဟုတ် `openclaw plugins enable <id>` ဖြင့် တိတိကျကျ enable လုပ်ရမည်။34. Installed plugins များသည် default အနေဖြင့် enable ဖြစ်သော်လည်း အတူတူသောနည်းလမ်းဖြင့် disable လုပ်နိုင်သည်။ 35. plugin တစ်ခုချင်းစီသည် ၎င်း၏ root တွင် `openclaw.plugin.json` ဖိုင် တစ်ခု ပါဝင်ရမည်။
 
-ပလပ်ဂင်တစ်ခုစီသည် မိမိ၏ root တွင် `openclaw.plugin.json` ဖိုင်ကို ထည့်သွင်းရပါမည်။
-လမ်းကြောင်းတစ်ခုက ဖိုင်ကို ညွှန်ပြထားပါက ပလပ်ဂင် root သည် ထိုဖိုင်၏ directory ဖြစ်ပြီး
-manifest ကို ထိုနေရာတွင် ပါရှိရပါမည်။
+36. path တစ်ခုသည် ဖိုင်တစ်ခုကို ညွှန်ပြနေပါက plugin root သည် ထိုဖိုင်၏ directory ဖြစ်ပြီး manifest ပါဝင်ရမည်။ 37. entry တစ်ခုချင်းစီသည် plugin တစ်ခု ဖြစ်လာမည်။
 
 plugin id တူညီသည့် ပလပ်ဂင်များ အများအပြား ရှိပါက
 အထက်ပါအစဉ်အတိုင်း ပထမဆုံး တွေ့ရှိသော plugin သာ အသုံးပြုမည်ဖြစ်ပြီး
@@ -144,9 +129,7 @@ plugin id တူညီသည့် ပလပ်ဂင်များ အမျ�
 }
 ```
 
-entry တစ်ခုချင်းစီသည် ပလပ်ဂင်တစ်ခု ဖြစ်လာပါသည်။
-pack တွင် extension များ အများအပြား ပါရှိပါက plugin id သည်
-`name/<fileBase>` ဖြစ်လာပါမည်။
+38. pack တွင် extensions များစွာ ပါဝင်ပါက plugin id သည် `name/<fileBase>` ဖြစ်လာမည်။ 39. Channel plugins များသည် `openclaw.channel` မှတဆင့် onboarding metadata နှင့် `openclaw.install` မှတဆင့် install hints များကို ကြော်ငြာနိုင်သည်။
 
 သင့်ပလပ်ဂင်က npm deps များကို import လုပ်ပါက
 `node_modules` ( `npm install` / `pnpm install` ) ကို အသုံးပြုနိုင်ရန်
@@ -154,9 +137,7 @@ pack တွင် extension များ အများအပြား ပါ�
 
 ### Channel catalog metadata
 
-Channel plugins များသည် `openclaw.channel` ဖြင့် onboarding metadata ကို ကြော်ငြာနိုင်ပြီး
-`openclaw.install` ဖြင့် install hints ကို ပေးနိုင်ပါသည်။
-ဤနည်းလမ်းသည် core catalog ကို data မပါစေဘဲ ထားနိုင်ပါသည်။
+40. ထိုသို့လုပ်ခြင်းဖြင့် core catalog ကို data မပါဝင်အောင် ထိန်းထားနိုင်သည်။ 41. OpenClaw သည် **external channel catalogs** များကိုလည်း ပေါင်းစည်းနိုင်သည် (ဥပမာ MPM registry export)။
 
 ဥပမာ —
 
@@ -184,17 +165,13 @@ Channel plugins များသည် `openclaw.channel` ဖြင့် onboard
 }
 ```
 
-OpenClaw သည် **external channel catalogs** များကိုပါ ပေါင်းစည်းနိုင်ပါသည်
-(ဥပမာ — MPM registry export)။
-အောက်ပါနေရာများထဲမှ တစ်ခုတွင် JSON ဖိုင်ကို ထည့်ပါ —
+42. အောက်ပါနေရာများထဲမှ တစ်ခုတွင် JSON ဖိုင်ကို ချထားပါ: 43. သို့မဟုတ် `OPENCLAW_PLUGIN_CATALOG_PATHS` (သို့ `OPENCLAW_MPM_CATALOG_PATHS`) ကို JSON ဖိုင် တစ်ခု သို့မဟုတ် အများအပြား (comma/semicolon/`PATH`-delimited) သို့ ညွှန်ပြပါ။
 
 - `~/.openclaw/mpm/plugins.json`
 - `~/.openclaw/mpm/catalog.json`
 - `~/.openclaw/plugins/catalog.json`
 
-သို့မဟုတ် `OPENCLAW_PLUGIN_CATALOG_PATHS` (သို့မဟုတ် `OPENCLAW_MPM_CATALOG_PATHS`) ကို
-JSON ဖိုင် တစ်ခု သို့မဟုတ် အများအပြား (comma/semicolon/`PATH` ဖြင့် ခွဲထားသည်) သို့ ညွှန်ပြပါ။
-ဖိုင်တစ်ခုချင်းစီတွင် `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }` ပါဝင်ရပါမည်။
+44. ဖိုင်တစ်ခုချင်းစီတွင် `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }` ပါဝင်ရမည်။ 45. `entries.<id>` 46. \`: per‑plugin toggles + config
 
 ## Plugin IDs
 
@@ -229,23 +206,22 @@ Fields —
 - `allow`: allowlist (optional)
 - `deny`: denylist (optional; deny က ဦးစားပေးအနိုင်ရ)
 - `load.paths`: အပို plugin ဖိုင်များ/ဒိုင်ရက်ထရီများ
-- `entries.<id>`: plugin တစ်ခုချင်းစီအလိုက် toggle များ + config
+- 47. Unknown `channels.<id>`48. \` keys များသည် plugin manifest တွင် channel id ကို ကြေညာထားခြင်း မရှိပါက **error** များဖြစ်သည်။
 
 Config ပြောင်းလဲမှုများသည် **Gateway ကို ပြန်လည်စတင်ရန် လိုအပ်ပါသည်**။
 
 Validation စည်းမျဉ်းများ (တင်းကျပ်) —
 
 - `entries`, `allow`, `deny`, သို့မဟုတ် `slots` ထဲရှိ မသိသော plugin id များကို **အမှား** အဖြစ် သတ်မှတ်ပါသည်။
-- plugin manifest က channel id ကို ကြေညာထားခြင်း မရှိပါက
-  မသိသော `channels.<id>` keys များကို **အမှား** အဖြစ် သတ်မှတ်ပါသည်။
+- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
+  the channel id.
 - Plugin config ကို `openclaw.plugin.json` ထဲတွင် ပါဝင်သည့် JSON Schema ဖြင့် စစ်ဆေးပါသည် (`configSchema`)။
 - Plugin ကို ပိတ်ထားပါက ၎င်း၏ config ကို ထိန်းသိမ်းထားပြီး **သတိပေးချက်** ထုတ်ပေးပါမည်။
 
 ## Plugin slots (exclusive categories)
 
-အချို့သော plugin အမျိုးအစားများသည် **exclusive** ဖြစ်ပြီး
-တစ်ချိန်တည်းတွင် တစ်ခုသာ ဖွင့်နိုင်ပါသည်။
-slot ကို ဘယ် plugin ပိုင်မည်ကို `plugins.slots` ဖြင့် ရွေးချယ်ပါ —
+Some plugin categories are **exclusive** (only one active at a time). Use
+`plugins.slots` to select which plugin owns the slot:
 
 ```json5
 {
@@ -257,9 +233,8 @@ slot ကို ဘယ် plugin ပိုင်မည်ကို `plugins.slots
 }
 ```
 
-plugin အများအပြားက `kind: "memory"` ကို ကြေညာထားပါက
-ရွေးချယ်ထားသော plugin တစ်ခုသာ load လုပ်ပြီး
-အခြားများကို diagnostics ဖြင့် ပိတ်ထားပါမည်။
+If multiple plugins declare `kind: "memory"`, only the selected one loads. Others
+are disabled with diagnostics.
 
 ## Control UI (schema + labels)
 
@@ -269,9 +244,8 @@ Control UI သည် `config.schema` (JSON Schema + `uiHints`) ကို အသ�
 OpenClaw သည် တွေ့ရှိထားသော plugins များအပေါ် အခြေခံ၍
 runtime အချိန်တွင် `uiHints` ကို တိုးချဲ့ပါသည် —
 
-- `plugins.entries.<id>` / `.enabled` / `.config` အတွက် plugin တစ်ခုချင်းစီအလိုက် label များ ထည့်သွင်းခြင်း
-- plugin က ပေးထားသည့် optional config field hints များကို
-  အောက်ပါနေရာတွင် ပေါင်းစည်းခြင်း —
+- Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
+- Merges optional plugin-provided config field hints under:
   `plugins.entries.<id>.config.<field>`
 
 သင့် plugin config field များကို label/placeholder ကောင်းကောင်း ပြသလိုပါက
@@ -325,14 +299,13 @@ Plugins များသည် ကိုယ်ပိုင် top‑level command
 
 Plugins များသည် အောက်ပါအရာများအနက် တစ်ခုကို export လုပ်ပါသည် —
 
-- Function တစ်ခု: `(api) => { ... }`
-- Object တစ်ခု: `{ id, name, configSchema, register(api) { ... } }`
+- A function: `(api) => { ... }`
+- An object: `{ id, name, configSchema, register(api) { ... } }`
 
 ## Plugin hooks
 
-Plugins များသည် hooks များကို ထည့်သွင်းပို့ဆောင်ပြီး runtime တွင် မှတ်ပုံတင်နိုင်ပါသည်။
-ဤနည်းလမ်းဖြင့် သီးခြား hook pack ကို မထည့်သွင်းဘဲ
-event‑driven automation ကို plugin တစ်ခုအတွင်း ထုပ်ပိုးနိုင်ပါသည်။
+Plugins can ship hooks and register them at runtime. This lets a plugin bundle
+event-driven automation without a separate hook pack install.
 
 ### Example
 
@@ -359,10 +332,8 @@ Plugins များသည် **model provider auth** flow များကို
 OpenClaw အတွင်းမှ တိုက်ရိုက် ပြုလုပ်နိုင်စေပါသည်
 (အပြင်ဘက် script မလိုအပ်ပါ)။
 
-provider တစ်ခုကို `api.registerProvider(...)` ဖြင့် မှတ်ပုံတင်ပါ။
-provider တစ်ခုချင်းစီသည် auth method တစ်ခု သို့မဟုတ် အများအပြား
-(OAuth, API key, device code စသည်) ကို ဖော်ပြပါသည်။
-ဤ method များသည် အောက်ပါအရာများကို ထောက်ပံ့ပေးပါသည် —
+Register a provider via `api.registerProvider(...)`. Each provider exposes one
+or more auth methods (OAuth, API key, device code, etc.). These methods power:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
 
@@ -412,10 +383,9 @@ api.registerProvider({
 
 ### Register a messaging channel
 
-Plugins များသည် **channel plugins** များကို မှတ်ပုံတင်နိုင်ပြီး
-built‑in channels (WhatsApp, Telegram စသည်) ကဲ့သို့ အလုပ်လုပ်ပါသည်။
-Channel config သည် `channels.<id>` အောက်တွင် ရှိပြီး
-သင့် channel plugin ကုဒ်ဖြင့် validation လုပ်ပါသည်။
+Plugins can register **channel plugins** that behave like built‑in channels
+(WhatsApp, Telegram, etc.). Channel config lives under `channels.<id>` and is
+validated by your channel plugin code.
 
 ```ts
 const myChannel = {
@@ -449,7 +419,7 @@ export default function (api) {
 
 မှတ်ချက်များ —
 
-- config ကို `channels.<id>` အောက်တွင် ထားပါ (`plugins.entries` မဟုတ်ပါ)။
+- Put config under `channels.<id>` (not `plugins.entries`).
 - `meta.label` ကို CLI/UI စာရင်းများအတွက် label အဖြစ် အသုံးပြုပါသည်။
 - `meta.aliases` သည် normalization နှင့် CLI inputs အတွက် alternate ids များ ထည့်ပေးပါသည်။
 - `meta.preferOver` သည် channel နှစ်ခုလုံး configure လုပ်ထားပါက auto‑enable ကို မလုပ်ရန် channel id များကို စာရင်းပြုလုပ်ပါသည်။
@@ -457,13 +427,13 @@ export default function (api) {
 
 ### Write a new messaging channel (step‑by‑step)
 
-**chat surface အသစ်** (messaging channel) တစ်ခု လိုအပ်သောအခါ အသုံးပြုပါ။
-Model provider စာတမ်းများကို `/providers/*` အောက်တွင် ကြည့်ပါ။
+Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
+Model provider docs live under `/providers/*`.
 
 1. id နှင့် config ပုံစံကို ရွေးချယ်ပါ
 
-- Channel config အားလုံးသည် `channels.<id>` အောက်တွင် ရှိပါသည်။
-- multi‑account setups အတွက် `channels.<id>.accounts.<accountId>` ကို ဦးစားပေးပါ။
+- All channel config lives under `channels.<id>`.
+- Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
 
 2. Channel metadata ကို သတ်မှတ်ပါ
 
@@ -537,9 +507,8 @@ export default function (api) {
 }
 ```
 
-plugin ကို load လုပ်ပါ (extensions dir သို့မဟုတ် `plugins.load.paths`)၊
-Gateway ကို ပြန်လည်စတင်ပြီး
-config ထဲရှိ `channels.<id>` ကို ပြင်ဆင်ပါ။
+Load the plugin (extensions dir or `plugins.load.paths`), restart the gateway,
+then configure `channels.<id>` in your config.
 
 ### Agent tools
 
@@ -572,10 +541,9 @@ export default function (api) {
 
 ### Register auto-reply commands
 
-Plugins များသည် **AI agent ကို မခေါ်ဘဲ** အလုပ်လုပ်သော
-custom slash commands များကို မှတ်ပုံတင်နိုင်ပါသည်။
-ဤအရာသည် toggle commands၊ status စစ်ဆေးမှုများ၊
-LLM processing မလိုအပ်သော quick actions များအတွက် အသုံးဝင်ပါသည်။
+Plugins can register custom slash commands that execute **without invoking the
+AI agent**. This is useful for toggle commands, status checks, or quick actions
+that don't need LLM processing.
 
 ```ts
 export default function (api) {
@@ -602,7 +570,7 @@ Command options —
 
 - `name`: command အမည် (ရှေ့ရှိ `/` မပါ)
 - `description`: command စာရင်းများတွင် ပြသမည့် help စာသား
-- `acceptsArgs`: arguments လက်ခံမလား (default: false)။ false ဖြစ်ပြီး arguments ပါလာပါက command သည် မကိုက်ညီဘဲ အခြား handler များသို့ ဆက်လက် လွှဲပြောင်းပါမည်။
+- `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
 - `requireAuth`: ခွင့်ပြုထားသော ပို့သူ လိုအပ်မလား (default: true)
 - `handler`: `{ text: string }` ကို ပြန်ပေးသော function (async ဖြစ်နိုင်)
 
@@ -628,7 +596,7 @@ api.registerCommand({
 - Commands များကို global အဖြစ် မှတ်ပုံတင်ပြီး channel အားလုံးတွင် အသုံးပြုနိုင်ပါသည်။
 - Command အမည်များသည် case‑insensitive ဖြစ်ပါသည် (`/MyStatus` သည် `/mystatus` နှင့် ကိုက်ညီသည်)။
 - Command အမည်များသည် အက္ခရာတစ်လုံးဖြင့် စတင်ပြီး အက္ခရာ၊ နံပါတ်၊ hyphen၊ underscore များသာ ပါဝင်ရပါမည်။
-- `help`, `status`, `reset` စသည့် reserved command အမည်များကို plugin များဖြင့် override မလုပ်နိုင်ပါ။
+- Reserved command names (like `help`, `status`, `reset`, etc.) cannot be overridden by plugins
 - Plugin များအကြား duplicate command မှတ်ပုံတင်ပါက diagnostic error ဖြင့် မအောင်မြင်ပါ။
 
 ### Register background services
@@ -651,9 +619,9 @@ export default function (api) {
 
 ## Skills
 
-Plugins များသည် repo အတွင်း Skill တစ်ခု (`skills/<name>/SKILL.md`) ကို ထည့်သွင်းပို့ဆောင်နိုင်ပါသည်။
-`plugins.entries.<id>.enabled` (သို့မဟုတ် အခြား config gates) ဖြင့် ဖွင့်ထားပြီး
-workspace/managed skills နေရာများတွင် ရှိနေကြောင်း သေချာပါစေ။
+Plugins can ship a skill in the repo (`skills/<name>/SKILL.md`).
+Enable it with `plugins.entries.<id>.enabled` (or other config gates) and ensure
+it’s present in your workspace/managed skills locations.
 
 ## Distribution (npm)
 
@@ -685,8 +653,7 @@ Setup နှင့် အသုံးပြုနည်းအတွက် [Voice
 
 ## Safety notes
 
-Plugins များသည် Gateway နှင့် in‑process အဖြစ် အလုပ်လုပ်ပါသည်။
-ယုံကြည်စိတ်ချရသော ကုဒ်အဖြစ် သဘောထားပါ —
+Plugins run in-process with the Gateway. Treat them as trusted code:
 
 - ယုံကြည်ရသော plugins များကိုသာ ထည့်သွင်းပါ။
 - `plugins.allow` allowlists ကို ဦးစားပေးပါ။

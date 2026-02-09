@@ -5,13 +5,6 @@ read_when:
   - Kailangan mo ng mga non-interactive na halimbawa para sa mga partikular na provider
 title: "CLI Automation"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:55Z
 ---
 
 # CLI Automation
@@ -19,7 +12,7 @@ x-i18n:
 Gamitin ang `--non-interactive` para i-automate ang `openclaw onboard`.
 
 <Note>
-Hindi ipinapahiwatig ng `--json` ang non-interactive mode. Gamitin ang `--non-interactive` (at `--workspace`) para sa mga script.
+`--json` does not imply non-interactive mode. Gamitin ang `--non-interactive` (at `--workspace`) para sa mga script.
 </Note>
 
 ## Baseline na non-interactive na halimbawa
@@ -41,7 +34,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
 ## Mga halimbawa na partikular sa provider
 
 <AccordionGroup>
-  <Accordion title="Halimbawa ng Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Halimbawa ng Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Halimbawa ng Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Halimbawa ng Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Halimbawa ng Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Halimbawa ng Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Halimbawa ng OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,8 +110,7 @@ Magdagdag ng `--json` para sa isang machine-readable na buod.
 
 ## Magdagdag ng isa pang agent
 
-Gamitin ang `openclaw agents add <name>` para lumikha ng hiwalay na agent na may sarili nitong workspace,
-mga session, at mga auth profile. Ang pagtakbo nang walang `--workspace` ay maglulunsad ng wizard.
+Gamitin ang `openclaw agents add <name>` para gumawa ng hiwalay na agent na may sarili nitong workspace, mga session, at auth profile. Ang pagpapatakbo nang walang `--workspace` ay maglulunsad ng wizard.
 
 ```bash
 openclaw agents add work \

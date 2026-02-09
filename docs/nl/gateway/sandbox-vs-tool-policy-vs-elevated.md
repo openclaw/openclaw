@@ -3,13 +3,6 @@ title: Sandbox vs Toolbeleid vs Elevated
 summary: "Waarom een tool is geblokkeerd: sandbox-runtime, tool-toestaan/weigeren-beleid en elevated exec-gates"
 read_when: "Je tegen een 'sandbox jail' aanloopt of een tool/elevated-weigering ziet en exact wilt weten welke config-sleutel je moet aanpassen."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:32Z
 ---
 
 # Sandbox vs Toolbeleid vs Elevated
@@ -31,7 +24,7 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Het toont:
+Het drukt:
 
 - effectieve sandbox-modus/scope/werkruimte-toegang
 - of de sessie momenteel gesandboxed is (main vs non-main)

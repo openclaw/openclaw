@@ -5,13 +5,6 @@ read_when:
   - Vous utilisez deja Nix/NixOS/Home Manager
   - Vous voulez que tout soit fige et gere de maniere declarative
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:01Z
 ---
 
 # Installation Nix
@@ -96,7 +89,7 @@ apps/macos/Sources/OpenClaw/Resources/Info.plist
 (ID de bundle, version/build, Git SHA, cles Sparkle). Cela permet de conserver un plist deterministe pour le packaging SwiftPM
 et les builds Nix (qui ne s’appuient pas sur une chaine d’outils Xcode complete).
 
-## Connexes
+## Associe
 
 - [nix-openclaw](https://github.com/openclaw/nix-openclaw) — guide de configuration complet
 - [Assistant](/start/wizard) — configuration CLI hors Nix

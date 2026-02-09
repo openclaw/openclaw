@@ -4,13 +4,6 @@ read_when:
   - Sie möchten in einem Plugin ein neues Agent-Werkzeug hinzufügen
   - Sie müssen ein Werkzeug per Allowlist optional machen
 title: "Plugin-Agent-Werkzeuge"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:58Z
 ---
 
 # Plugin-Agent-Werkzeuge

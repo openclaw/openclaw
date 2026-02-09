@@ -4,25 +4,18 @@ read_when:
   - /new၊ /reset၊ /stop နှင့် agent lifecycle အဖြစ်အပျက်များအတွက် အဖြစ်အပျက်အခြေပြု အလိုအလျောက်လုပ်ဆောင်မှုများ လိုအပ်သောအခါ
   - hooks များကို တည်ဆောက်ရန်၊ ထည့်သွင်းရန် သို့မဟုတ် debug လုပ်ရန် လိုအပ်သောအခါ
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:30Z
 ---
 
 # Hooks
 
-Hooks သည် agent command များနှင့် အဖြစ်အပျက်များအပေါ် တုံ့ပြန်၍ လုပ်ဆောင်ချက်များကို အလိုအလျောက်လုပ်ဆောင်စေရန် အသုံးပြုနိုင်သော တိုးချဲ့နိုင်သည့် အဖြစ်အပျက်အခြေပြု စနစ်တစ်ခုဖြစ်သည်။ Hooks များကို directory များမှ အလိုအလျောက် ရှာဖွေတွေ့ရှိပြီး CLI commands များဖြင့် စီမံခန့်ခွဲနိုင်သည်။ OpenClaw အတွင်း skills များ အလုပ်လုပ်ပုံနှင့် ဆင်တူသည်။
+Hooks များသည် agent command များနှင့် event များကို တုံ့ပြန်ပြီး အလိုအလျောက်လုပ်ဆောင်မှုများ ပြုလုပ်နိုင်ရန် အဆင့်မြှင့်နိုင်သော event-driven စနစ်တစ်ခုကို ပေးစွမ်းပါသည်။ Hooks များကို directory များမှ အလိုအလျောက် ရှာဖွေတွေ့ရှိပြီး OpenClaw တွင် skills များကို စီမံခန့်ခွဲသကဲ့သို့ CLI command များမှတစ်ဆင့် စီမံနိုင်ပါသည်။
 
 ## Getting Oriented
 
-Hooks များသည် အရာတစ်ခု ဖြစ်ပေါ်လာသည့်အခါ လုပ်ဆောင်သည့် script အငယ်စားများဖြစ်သည်။ အမျိုးအစား နှစ်မျိုးရှိသည်–
+Hooks are small scripts that run when something happens. အမျိုးအစား နှစ်မျိုး ရှိပါသည်:
 
 - **Hooks** (ဤစာမျက်နှာ): agent အဖြစ်အပျက်များဖြစ်ပေါ်လာသည့်အခါ Gateway အတွင်းတွင် run လုပ်သည်၊ ဥပမာ `/new`၊ `/reset`၊ `/stop` သို့မဟုတ် lifecycle အဖြစ်အပျက်များ။
-- **Webhooks**: အပြင်ဘက် HTTP webhooks များဖြစ်ပြီး အခြားစနစ်များမှ OpenClaw တွင် လုပ်ငန်းများကို trigger လုပ်နိုင်စေသည်။ [Webhook Hooks](/automation/webhook) ကိုကြည့်ပါ သို့မဟုတ် Gmail helper commands အတွက် `openclaw webhooks` ကို အသုံးပြုပါ။
+- **Webhooks**: အပြင်ဘက် HTTP webhooks များဖြစ်ပြီး အခြားစနစ်များမှ OpenClaw တွင် အလုပ်များကို trigger လုပ်နိုင်စေပါသည်။ [Webhook Hooks](/automation/webhook) ကို ကြည့်ရှုပါ သို့မဟုတ် Gmail helper command များအတွက် `openclaw webhooks` ကို အသုံးပြုပါ။
 
 Hooks များကို plugins အတွင်းတွင်လည်း bundle လုပ်နိုင်သည်။ [Plugins](/tools/plugin#plugin-hooks) ကိုကြည့်ပါ။
 
@@ -33,7 +26,7 @@ Hooks များကို plugins အတွင်းတွင်လည်း b
 - session စတင်ခြင်း သို့မဟုတ် အဆုံးသတ်ခြင်းတွင် နောက်ဆက်တွဲ အလိုအလျောက်လုပ်ဆောင်မှုများကို trigger လုပ်ခြင်း
 - အဖြစ်အပျက်များ ဖြစ်ပေါ်လာသည့်အခါ agent workspace ထဲသို့ ဖိုင်များရေးသားခြင်း သို့မဟုတ် အပြင်ဘက် API များကို ခေါ်ယူခြင်း
 
-TypeScript function အငယ်စား တစ်ခုရေးနိုင်လျှင် hook တစ်ခုရေးနိုင်သည်။ Hooks များကို အလိုအလျောက် ရှာဖွေတွေ့ရှိပြီး CLI မှတဆင့် enable သို့မဟုတ် disable လုပ်နိုင်သည်။
+TypeScript function သေးသေးလေး တစ်ခု ရေးနိုင်ပါက hook တစ်ခုကို ရေးနိုင်ပါသည်။ Hooks များကို အလိုအလျောက် ရှာဖွေတွေ့ရှိပြီး CLI မှတစ်ဆင့် enable သို့မဟုတ် disable လုပ်နိုင်ပါသည်။
 
 ## Overview
 
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Onboarding
 
-onboarding (`openclaw onboard`) အတွင်း အကြံပြုထားသော hooks များကို enable လုပ်ရန် မေးမြန်းမည်ဖြစ်သည်။ wizard သည် သင့်လျော်သော hooks များကို အလိုအလျောက် ရှာဖွေတွေ့ရှိပြီး ရွေးချယ်နိုင်ရန် ပြသပေးသည်။
+Onboarding (`openclaw onboard`) အတွင်း အကြံပြုထားသော hooks များကို enable လုပ်ရန် သင့်ကို မေးမြန်းပါလိမ့်မည်။ Wizard သည် သင့်လျော်သော hooks များကို အလိုအလျောက် ရှာဖွေတွေ့ရှိပြီး ရွေးချယ်ရန် ပြသပေးပါသည်။
 
 ## Hook Discovery
 
@@ -103,7 +96,7 @@ my-hook/
 
 ## Hook Packs (npm/archives)
 
-Hook packs များသည် `package.json` ထဲတွင် `openclaw.hooks` မှတဆင့် hook တစ်ခု သို့မဟုတ် အများအပြားကို export လုပ်သည့် standard npm packages များဖြစ်သည်။ အောက်ပါအတိုင်း ထည့်သွင်းနိုင်သည်–
+Hook packs များသည် `package.json` အတွင်းရှိ `openclaw.hooks` မှတစ်ဆင့် hook တစ်ခု သို့မဟုတ် တစ်ခုထက်ပို၍ export လုပ်ပေးသော standard npm packages များဖြစ်ပါသည်။ အောက်ပါအတိုင်း install လုပ်ပါ:
 
 ```bash
 openclaw hooks install <path-or-spec>
@@ -121,7 +114,8 @@ openclaw hooks install <path-or-spec>
 }
 ```
 
-entry တစ်ခုချင်းစီသည် `HOOK.md` နှင့် `handler.ts` (သို့မဟုတ် `index.ts`) ပါဝင်သည့် hook directory ကို ညွှန်ပြသည်။ Hook packs များတွင် dependency များ ပါဝင်နိုင်ပြီး ၎င်းတို့ကို `~/.openclaw/hooks/<id>` အောက်တွင် ထည့်သွင်းမည်ဖြစ်သည်။
+Entry တစ်ခုချင်းစီသည် `HOOK.md` နှင့် `handler.ts` (သို့မဟုတ် `index.ts`) ပါဝင်သော hook directory တစ်ခုကို ညွှန်ပြပါသည်။
+Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
 
 ## Hook Structure
 
@@ -249,7 +243,7 @@ gateway စတင်သည့်အခါ trigger လုပ်သည်–
 
 ဤ hooks များသည် event-stream listener မဟုတ်ပါ။ OpenClaw မှ persist မလုပ်မီ tool results များကို plugin များက synchronous အနေဖြင့် ပြင်ဆင်နိုင်စေသည်။
 
-- **`tool_result_persist`**: session transcript သို့ မရေးသားမီ tool results များကို transform လုပ်သည်။ synchronous ဖြစ်ရမည်။ ပြင်ဆင်ပြီးသော tool result payload ကို return လုပ်ပါ သို့မဟုတ် မပြောင်းလဲလိုပါက `undefined` ကို return လုပ်ပါ။ [Agent Loop](/concepts/agent-loop) ကို ကြည့်ပါ။
+- **`tool_result_persist`**: session transcript ထဲသို့ မရေးမီ tool result များကို ပြောင်းလဲပြုပြင်ရန်။ Synchronous ဖြစ်ရပါမည်; ပြင်ဆင်ပြီးသော tool result payload ကို return လုပ်ပါ သို့မဟုတ် မပြောင်းလဲလိုပါက `undefined` ကို return လုပ်ပါ။ [Agent Loop](/concepts/agent-loop) ကို ကြည့်ရှုပါ။
 
 ### Future Events
 
@@ -263,19 +257,19 @@ gateway စတင်သည့်အခါ trigger လုပ်သည်–
 
 ## Creating Custom Hooks
 
-### 1. Choose Location
+### ၁။ တည်နေရာကို ရွေးချယ်ပါ
 
 - **Workspace hooks** (`<workspace>/hooks/`): အေးဂျင့်တစ်ခုချင်းစီအလိုက်၊ အလေးထားမှုအမြင့်ဆုံး
 - **Managed hooks** (`~/.openclaw/hooks/`): workspace များအကြား မျှဝေသုံးစွဲ
 
-### 2. Create Directory Structure
+### ၂။ Directory Structure ကို ဖန်တီးပါ
 
 ```bash
 mkdir -p ~/.openclaw/hooks/my-hook
 cd ~/.openclaw/hooks/my-hook
 ```
 
-### 3. Create HOOK.md
+### ၃။ HOOK.md ကို ဖန်တီးပါ
 
 ```markdown
 ---
@@ -289,7 +283,7 @@ metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
 This hook does something useful when you issue `/new`.
 ```
 
-### 4. Create handler.ts
+### ၄။ handler.ts ကို ဖန်တီးပါ
 
 ```typescript
 import type { HookHandler } from "../../src/hooks/hooks.js";
@@ -306,7 +300,7 @@ const handler: HookHandler = async (event) => {
 export default handler;
 ```
 
-### 5. Enable and Test
+### ၅။ Enable လုပ်ပြီး စမ်းသပ်ပါ
 
 ```bash
 # Verify hook is discovered
@@ -399,7 +393,7 @@ Hooks များတွင် custom configuration ရှိနိုင်သ�
 }
 ```
 
-**Migration**: hook အသစ်များအတွက် discovery-based system အသစ်ကို အသုံးပြုပါ။ Legacy handlers များကို directory-based hooks များပြီးနောက် load လုပ်သည်။
+**Migration**: hook အသစ်များအတွက် discovery-based စနစ်အသစ်ကို အသုံးပြုပါ။ Legacy handler များကို directory-based hooks များပြီးနောက် load လုပ်ပါသည်။
 
 ## CLI Commands
 
@@ -570,8 +564,8 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-gateway စတင်သည့်အခါ (channels စတင်ပြီးနောက်) `BOOT.md` ကို run လုပ်သည်။
-ဤ hook ကို run လုပ်ရန် internal hooks ကို enable လုပ်ထားရမည်။
+Gateway စတင်ချိန်တွင် (channels များ စတင်ပြီးနောက်) `BOOT.md` ကို လုပ်ဆောင်ပါသည်။
+ဤအရာ လည်ပတ်စေရန် internal hooks များကို enable လုပ်ထားရပါမည်။
 
 **Events**: `gateway:startup`
 
@@ -593,7 +587,7 @@ openclaw hooks enable boot-md
 
 ### Keep Handlers Fast
 
-Hooks များသည် command processing အတွင်း run လုပ်သည်။ အလေးမထားဘဲ ပေါ့ပါးစွာ ထားပါ–
+Hooks များသည် command processing အတွင်း လည်ပတ်ပါသည်။ ပေါ့ပါးစွာ ထားရှိပါ:
 
 ```typescript
 // ✓ Good - async work, returns immediately

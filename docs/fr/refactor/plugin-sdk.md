@@ -1,16 +1,9 @@
 ---
-summary: « Plan : un SDK de plugins propre et un runtime pour tous les connecteurs de messagerie »
+summary: "Plan : un SDK de plugins propre et un runtime pour tous les connecteurs de messagerie"
 read_when:
   - Definition ou refactorisation de l’architecture des plugins
   - Migration des connecteurs de canal vers le SDK/runtime de plugins
-title: « Refactorisation du SDK de plugins »
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: d1964e2e47a19ee1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:41Z
+title: "Refactorisation du SDK de plugins"
 ---
 
 # Plan de refactorisation du SDK de plugins + runtime
@@ -25,7 +18,7 @@ Aucun plugin n’importe directement `src/**`. Toutes les dependances passent pa
 
 ## Architecture cible (deux couches)
 
-### 1) SDK de plugins (temps de compilation, stable, publiable)
+### 1. SDK de plugins (temps de compilation, stable, publiable)
 
 Portee : types, helpers et utilitaires de configuration. Aucun etat d’execution, aucun effet de bord.
 
@@ -39,12 +32,12 @@ Contenu (exemples) :
 - Helpers de parametres d’outils : `createActionGate`, `readStringParam`, `readNumberParam`, `readReactionParams`, `jsonResult`.
 - Helper de lien vers la documentation : `formatDocsLink`.
 
-Distribution :
+Livraison:
 
 - Publie en tant que `openclaw/plugin-sdk` (ou exporte depuis le core sous `openclaw/plugin-sdk`).
 - Semver avec garanties de stabilite explicites.
 
-### 2) Runtime de plugins (surface d’execution, injecte)
+### 2. Runtime de plugins (surface d’execution, injecte)
 
 Portee : tout ce qui touche au comportement du runtime du core.
 Accessible via `OpenClawPluginApi.runtime` afin que les plugins n’importent jamais `src/**`.
@@ -211,7 +204,7 @@ Notes :
 - Comment exposer les liens de documentation pour les plugins regroupes vs externes ?
 - Autorise-t-on des imports directs limites du core pour les plugins en depot pendant la transition ?
 
-## Criteres de reussite
+## Critères de succès
 
 - Tous les connecteurs de canal sont des plugins utilisant le SDK + runtime.
 - Aucun import `extensions/**` depuis `src/**`.

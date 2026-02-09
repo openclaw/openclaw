@@ -4,13 +4,6 @@ read_when:
   - Korzystanie z poleceń czatu lub ich konfiguracja
   - Debugowanie routingu poleceń lub uprawnień
 title: "Polecenia slash"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:10Z
 ---
 
 # Polecenia slash

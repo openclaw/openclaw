@@ -1,15 +1,8 @@
 ---
-summary: „Zasady obsługi obrazów i multimediów dla wysyłania, Gateway oraz odpowiedzi agentów”
+summary: "„Zasady obsługi obrazów i multimediów dla wysyłania, Gateway oraz odpowiedzi agentów”"
 read_when:
   - Modyfikowanie potoku multimediów lub załączników
-title: „Obsługa obrazów i multimediów”
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
+title: "Obraz i obsługa mediów"
 ---
 
 # Obsługa obrazów i multimediów — 2025-12-05

@@ -4,13 +4,6 @@ read_when:
   - Erfassen von macOS-Logs oder Untersuchung der Protokollierung privater Daten
   - Debugging von Problemen mit Sprachaktivierung und Sitzungslebenszyklus
 title: "macOS-Protokollierung"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:51Z
 ---
 
 # Protokollierung (macOS)

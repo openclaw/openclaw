@@ -4,22 +4,15 @@ read_when:
   - OpenClaw ကို အပ်ဒိတ်လုပ်နေစဉ်
   - အပ်ဒိတ်ပြီးနောက် တစ်ခုခု ပျက်သွားသောအခါ
 title: "အပ်ဒိတ်လုပ်ခြင်း"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:48Z
 ---
 
 # အပ်ဒိတ်လုပ်ခြင်း
 
-OpenClaw သည် မြန်မြန်ဆန်ဆန် ဖွံ့ဖြိုးနေဆဲ (pre “1.0”) ဖြစ်ပါသည်။ အပ်ဒိတ်များကို infra ကို deploy လုပ်သလို စနစ်တကျ ဆောင်ရွက်ပါ—အပ်ဒိတ် → စစ်ဆေးမှုများ လုပ်ဆောင် → ပြန်လည်စတင် (သို့မဟုတ် `openclaw update` ကို အသုံးပြုပါ၊ ၎င်းသည် restart လုပ်ပါသည်) → အတည်ပြုပါ။
+OpenClaw is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart (or use `openclaw update`, which restarts) → verify.
 
 ## အကြံပြုချက်: ဝဘ်ဆိုက် installer ကို ပြန်လည် chạy လုပ်ပါ (နေရာမပြောင်းဘဲ အပ်ဂရိတ်)
 
-**အကြိုက်ဆုံး** အပ်ဒိတ်လမ်းကြောင်းမှာ ဝဘ်ဆိုက်မှ installer ကို ပြန်လည် chạy လုပ်ခြင်းဖြစ်သည်။ ၎င်းသည် ရှိပြီးသား install များကို ရှာဖွေတွေ့ရှိပြီး နေရာမပြောင်းဘဲ အပ်ဂရိတ်လုပ်ကာ လိုအပ်ပါက `openclaw doctor` ကို chạy လုပ်ပါသည်။
+**အကြံပြုထားသော** အပ်ဒိတ်လုပ်နည်းမှာ ဝဘ်ဆိုဒ်မှ installer ကို ထပ်မံ chạy/run လုပ်ခြင်း ဖြစ်သည်။ ၎င်းသည် ရှိပြီးသား install များကို ရှာဖွေတွေ့ရှိပြီး၊ နေရာတွင်ပင် upgrade လုပ်ကာ လိုအပ်သည့်အခါ `openclaw doctor` ကို chạy/run လုပ်ပေးပါသည်။
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -28,6 +21,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 မှတ်ချက်များ—
 
 - onboarding wizard ကို ထပ်မံ chạy မလုပ်စေလိုပါက `--no-onboard` ကို ထည့်ပါ။
+
 - **source install** များအတွက်—
 
   ```bash
@@ -37,6 +31,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
   repo သန့်ရှင်းနေပါကသာ installer သည် `git pull --rebase` ကို **သာလျှင်** ဆောင်ရွက်ပါမည်။
 
 - **global install** များအတွက် script သည် အတွင်းပိုင်းတွင် `npm install -g openclaw@latest` ကို အသုံးပြုပါသည်။
+
 - Legacy မှတ်ချက်: `clawdbot` ကို compatibility shim အဖြစ် ဆက်လက် အသုံးပြုနိုင်ပါသည်။
 
 ## အပ်ဒိတ်မလုပ်မီ
@@ -74,7 +69,7 @@ openclaw update --channel stable
 
 channel အဓိပ္ပါယ်နှင့် release notes များအတွက် [Development channels](/install/development-channels) ကို ကြည့်ပါ။
 
-မှတ်ချက်: npm installs တွင် Gateway သည် startup အချိန်တွင် update hint ကို log လုပ်ပါသည် (လက်ရှိ channel tag ကို စစ်ဆေးပါသည်)။ `update.checkOnStart: false` ဖြင့် ပိတ်နိုင်ပါသည်။
+မှတ်ချက်: npm ဖြင့် install လုပ်ထားပါက gateway သည် startup အချိန်တွင် update အကြံပြုချက်ကို log ထဲသို့ ရေးသားပါသည် (လက်ရှိ channel tag ကို စစ်ဆေးပါသည်)။ `update.checkOnStart: false` ဖြင့် ပိတ်နိုင်ပါသည်။
 
 ထို့နောက်—
 
@@ -105,11 +100,11 @@ openclaw update
 - deps install လုပ်ပြီး build လုပ်ကာ Control UI ကို build လုပ်ပြီး `openclaw doctor` ကို chạy လုပ်ပါသည်။
 - default အနေဖြင့် Gateway ကို restart လုပ်ပါသည် (`--no-restart` ကို သုံးပါက skip လုပ်နိုင်ပါသည်)။
 
-**npm/pnpm** ဖြင့် install လုပ်ထားပါက (git metadata မရှိပါ) `openclaw update` သည် သင်၏ package manager မှတစ်ဆင့် update လုပ်ရန် ကြိုးစားပါမည်။ install ကို မဖော်ထုတ်နိုင်ပါက “Update (global install)” ကို အသုံးပြုပါ။
+**npm/pnpm** ဖြင့် install လုပ်ထားပါက (git metadata မရှိပါက) `openclaw update` သည် သင်၏ package manager မှတစ်ဆင့် update လုပ်ရန် ကြိုးစားပါလိမ့်မည်။ install ကို မသိရှိနိုင်ပါက “Update (global install)” ကို အသုံးပြုပါ။
 
 ## အပ်ဒိတ် (Control UI / RPC)
 
-Control UI တွင် **Update & Restart** (RPC: `update.run`) ရှိပါသည်။ ၎င်းသည်—
+Control UI တွင် **Update & Restart** (RPC: `update.run`) ပါရှိပါသည်။ ၎င်းသည်:
 
 1. `openclaw update` နှင့်တူသော source-update flow ကို chạy လုပ်ပါသည် (git checkout အတွက်သာ)။
 2. stdout/stderr tail ပါဝင်သည့် structured report ဖြင့် restart sentinel ကို ရေးသားပါသည်။
@@ -147,7 +142,7 @@ openclaw health
 
 ## အမြဲ chạy လုပ်ပါ: `openclaw doctor`
 
-Doctor သည် “လုံခြုံသော အပ်ဒိတ်” command ဖြစ်ပါသည်။ ရည်ရွယ်ချက်မှာ ပျင်းစရာကောင်းအောင်—repair + migrate + warn—သာ ဖြစ်ပါသည်။
+Doctor က “safe update” command ပါ။ ရည်ရွယ်ချက်ရှိရှိ အလွန်ရိုးရှင်းစွာ လုပ်ထားပါသည်: repair + migrate + warn.
 
 မှတ်ချက်: **source install** (git checkout) ပေါ်တွင် ရှိပါက `openclaw doctor` သည် ပထမဦးစွာ `openclaw update` ကို chạy လုပ်ရန် အကြံပြုပါမည်။
 
@@ -175,7 +170,7 @@ openclaw logs --follow
 
 supervised ဖြစ်ပါက—
 
-- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (`bot.molt.<profile>` ကို အသုံးပြုပါ; legacy `com.openclaw.*` သည် ဆက်လက် အသုံးပြုနိုင်ပါသည်)
+- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (use `bot.molt.<profile>`; legacy `com.openclaw.*` သည် ဆက်လက် အသုံးပြုနိုင်ပါသည်)
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` သည် service install လုပ်ထားပါကသာ အလုပ်လုပ်ပါသည်; မရှိပါက `openclaw gateway install` ကို chạy လုပ်ပါ။

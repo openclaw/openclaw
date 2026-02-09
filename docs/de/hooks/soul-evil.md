@@ -1,16 +1,9 @@
 ---
-summary: „SOUL-Evil-Hook (tauscht SOUL.md gegen SOUL_EVIL.md aus)“
+summary: "„SOUL-Evil-Hook (tauscht SOUL.md gegen SOUL_EVIL.md aus)“"
 read_when:
   - Sie möchten den SOUL-Evil-Hook aktivieren oder abstimmen
   - Sie möchten ein Bereinigungsfenster oder einen zufallsbasierten Persona-Wechsel
-title: „SOUL-Evil-Hook“
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:26Z
+title: "SOUL-Evil-Hook"
 ---
 
 # SOUL-Evil-Hook

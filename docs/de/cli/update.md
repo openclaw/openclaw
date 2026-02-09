@@ -1,16 +1,9 @@
 ---
-summary: „CLI-Referenz für `openclaw update` (weitgehend sichere Quellaktualisierung + automatischer Gateway-Neustart)“
+summary: "„CLI-Referenz für `openclaw update` (weitgehend sichere Quellaktualisierung + automatischer Gateway-Neustart)“"
 read_when:
   - Sie möchten einen Source-Checkout sicher aktualisieren
   - Sie müssen das Kurzschreibverhalten von `--update` verstehen
-title: „update“
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:47Z
+title: "„update“"
 ---
 
 # `openclaw update`
@@ -84,7 +77,7 @@ High-level:
 
 1. Erfordert einen sauberen Worktree (keine nicht committeten Änderungen).
 2. Wechselt zum ausgewählten Kanal (Tag oder Branch).
-3. Holt Upstream-Änderungen (nur dev).
+3. Ruft Upstream ab (nur dev).
 4. Nur dev: Preflight-Lint + TypeScript-Build in einem temporären Worktree; wenn der Tip fehlschlägt, wird bis zu 10 Commits zurückgegangen, um den neuesten sauberen Build zu finden.
 5. Rebase auf den ausgewählten Commit (nur dev).
 6. Installiert Abhängigkeiten (pnpm bevorzugt; npm als Fallback).

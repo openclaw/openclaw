@@ -5,13 +5,6 @@ read_when:
   - Android ゲートウェイの検出や認証をデバッグする場合
   - クライアント間でチャット履歴の整合性を確認する場合
 title: "Android アプリ"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:34Z
 ---
 
 # Android アプリ（ノード）
@@ -26,7 +19,7 @@ x-i18n:
 
 ## システム制御
 
-システム制御（launchd / systemd）は Gateway ホスト上にあります。[Gateway](/gateway) を参照してください。
+システム制御（launchd / systemd）は Gateway ホスト上にあります。[Gateway](/gateway) を参照してください。 [Gateway](/gateway) を参照してください。
 
 ## 接続ランブック
 
@@ -43,7 +36,7 @@ Android は Gateway WebSocket（デフォルト `ws://<host>:18789`）に直接�
   - 手動でのゲートウェイホスト / ポート指定（フォールバック）
 - ゲートウェイマシン上で CLI（`openclaw`）を実行できること（または SSH 経由）。
 
-### 1) Gateway を起動する
+### 1. Gateway を起動する
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ tailnet 専用のセットアップ（Vienna ⇄ London には推奨）の場合
 - ゲートウェイホストの `~/.openclaw/openclaw.json` に `gateway.bind: "tailnet"` を設定します。
 - Gateway / macOS メニューバーアプリを再起動します。
 
-### 2) 検出を確認する（任意）
+### 2. 検出を確認する（任意）
 
 ゲートウェイマシンから：
 
@@ -70,14 +63,14 @@ dns-sd -B _openclaw-gw._tcp local.
 
 #### unicast DNS-SD による Tailnet（Vienna ⇄ London）検出
 
-Android の NSD / mDNS 検出はネットワークを越えられません。Android ノードと Gateway が異なるネットワーク上にあり、Tailscale で接続されている場合は、Wide-Area Bonjour / unicast DNS-SD を使用してください：
+Android NSD/mDNSの検出はネットワークを越えません。 Android の NSD / mDNS 検出はネットワークを越えられません。Android ノードと Gateway が異なるネットワーク上にあり、Tailscale で接続されている場合は、Wide-Area Bonjour / unicast DNS-SD を使用してください：
 
 1. ゲートウェイホストに DNS-SD ゾーン（例：`openclaw.internal.`）を設定し、`_openclaw-gw._tcp` レコードを公開します。
 2. 選択したドメインをその DNS サーバーに向けるよう、Tailscale の split DNS を設定します。
 
 詳細および CoreDNS 設定例：[Bonjour](/gateway/bonjour)。
 
-### 3) Android から接続する
+### 3. Android から接続する
 
 Android アプリ内で：
 
@@ -91,7 +84,7 @@ Android アプリ内で：
 - 手動エンドポイント（有効な場合）、それ以外は
 - 最後に検出されたゲートウェイ（ベストエフォート）。
 
-### 4) ペアリングを承認する（CLI）
+### 4. ペアリングを承認する（CLI）
 
 ゲートウェイマシン上で：
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 ペアリングの詳細：[Gateway pairing](/gateway/pairing)。
 
-### 5) ノードが接続されていることを確認する
+### 5. ノードが接続されていることを確認する
 
 - ノードステータスから：
 
@@ -116,7 +109,7 @@ openclaw nodes approve <requestId>
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) チャット + 履歴
+### 6. チャット + 履歴
 
 Android ノードの Chat シートは、Gateway の **primary session key**（`main`）を使用するため、WebChat や他のクライアントと履歴および返信が共有されます：
 
@@ -124,7 +117,7 @@ Android ノードの Chat シートは、Gateway の **primary session key**（`
 - 送信：`chat.send`
 - プッシュ更新（ベストエフォート）：`chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + カメラ
+### 7. Canvas + カメラ
 
 #### Gateway Canvas Host（Web コンテンツ向けに推奨）
 
@@ -142,12 +135,13 @@ openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params
 
 tailnet（任意）：両方のデバイスが Tailscale 上にある場合は、`.local` の代わりに MagicDNS 名または tailnet IP を使用します（例：`http://<gateway-magicdns>:18793/__openclaw__/canvas/`）。
 
+このサーバーは、HTML にライブリロードクライアントを注入し、ファイル変更時にリロードします。
 このサーバーは HTML にライブリロードクライアントを注入し、ファイル変更時に再読み込みを行います。
 A2UI ホストは `http://<gateway-host>:18793/__openclaw__/a2ui/` にあります。
 
 Canvas コマンド（フォアグラウンドのみ）：
 
-- `canvas.eval`、`canvas.snapshot`、`canvas.navigate`（デフォルトのスキャフォールドに戻るには `{"url":""}` または `{"url":"/"}` を使用します）。`canvas.snapshot` は `{ format, base64 }`（デフォルト `format="jpeg"`）を返します。
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (デフォルトの足場に戻るには`{"url":""}`または`{"url":"/"}`を使用します)。 `canvas.eval`、`canvas.snapshot`、`canvas.navigate`（デフォルトのスキャフォールドに戻るには `{"url":""}` または `{"url":"/"}` を使用します）。`canvas.snapshot` は `{ format, base64 }`（デフォルト `format="jpeg"`）を返します。
 - A2UI：`canvas.a2ui.push`、`canvas.a2ui.reset`（`canvas.a2ui.pushJSONL` はレガシーエイリアス）
 
 カメラコマンド（フォアグラウンドのみ、権限による制御あり）：

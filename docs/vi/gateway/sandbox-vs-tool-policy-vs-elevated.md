@@ -3,13 +3,6 @@ title: Sandbox so với Chính sách Tool so với Elevated
 summary: "Vì sao một tool bị chặn: runtime sandbox, chính sách cho phép/chặn tool, và các cổng thực thi elevated"
 read_when: "Khi bạn gặp 'sandbox jail' hoặc thấy tool/elevated bị từ chối và muốn biết chính xác khóa cấu hình cần thay đổi."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:14Z
 ---
 
 # Sandbox so với Chính sách Tool so với Elevated
@@ -71,8 +64,8 @@ Quy tắc kinh nghiệm:
 - `deny` luôn thắng.
 - Nếu `allow` không rỗng, mọi thứ khác được xem là bị chặn.
 - Chính sách tool là điểm dừng cứng: `/exec` không thể ghi đè một tool `exec` đã bị từ chối.
-- `/exec` chỉ thay đổi mặc định của phiên cho người gửi được ủy quyền; nó không cấp quyền truy cập tool.
-  Khóa tool của provider chấp nhận `provider` (ví dụ: `google-antigravity`) hoặc `provider/model` (ví dụ: `openai/gpt-5.2`).
+- `/exec` chỉ thay đổi các mặc định của phiên cho các bên gửi được ủy quyền; nó không cấp quyền truy cập công cụ.
+  Khóa công cụ của nhà cung cấp chấp nhận либо `provider` (ví dụ: `google-antigravity`) hoặc `provider/model` (ví dụ: `openai/gpt-5.2`).
 
 ### Nhóm tool (viết tắt)
 
@@ -110,12 +103,12 @@ Elevated **không** cấp thêm tool; nó chỉ ảnh hưởng đến `exec`.
 - Dùng `/elevated full` để bỏ qua phê duyệt exec cho phiên.
 - Nếu bạn đã chạy trực tiếp, elevated về cơ bản không có tác dụng (vẫn bị chặn bởi cổng).
 - Elevated **không** theo phạm vi skill và **không** ghi đè allow/deny của tool.
-- `/exec` tách biệt với elevated. Nó chỉ điều chỉnh mặc định exec theo phiên cho người gửi được ủy quyền.
+- `/exec` tách biệt với elevated. Nó chỉ điều chỉnh các mặc định exec theo từng phiên cho các bên gửi được ủy quyền.
 
 Các cổng:
 
 - Bật/tắt: `tools.elevated.enabled` (và tùy chọn `agents.list[].tools.elevated.enabled`)
-- Allowlist người gửi: `tools.elevated.allowFrom.<provider>` (và tùy chọn `agents.list[].tools.elevated.allowFrom.<provider>`)
+- Danh sách cho phép người gửi: `tools.elevated.allowFrom.<provider>`` (và tùy chọn `agents.list[].tools.elevated.allowFrom.<provider>\`\`)
 
 Xem [Elevated Mode](/tools/elevated).
 
@@ -132,4 +125,4 @@ Khóa để sửa (chọn một):
 
 ### “Tôi tưởng đây là main, sao lại bị sandbox?”
 
-Ở chế độ `"non-main"`, các khóa group/kênh _không_ phải main. Hãy dùng khóa phiên main (được hiển thị bởi `sandbox explain`) hoặc chuyển chế độ sang `"off"`.
+Trong chế độ `"non-main"`, các khóa nhóm/kênh _không_ phải là main. Sử dụng khóa phiên main (hiển thị bởi `sandbox explain`) hoặc chuyển chế độ sang `"off"`.

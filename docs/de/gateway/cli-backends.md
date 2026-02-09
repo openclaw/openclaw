@@ -5,13 +5,6 @@ read_when:
   - Sie betreiben Claude Code CLI oder andere lokale KI-CLIs und möchten diese wiederverwenden
   - Sie benötigen einen rein textbasierten, werkzeugfreien Pfad, der dennoch Sitzungen und Bilder unterstützt
 title: "CLI-Backends"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:17Z
 ---
 
 # CLI-Backends (Fallback-Runtime)
@@ -140,7 +133,7 @@ Die Provider-ID wird zur linken Seite Ihrer Modell-Referenz:
 }
 ```
 
-## Funktionsweise
+## Wie es funktioniert
 
 1. **Wählt ein Backend aus** basierend auf dem Provider-Präfix (`claude-cli/...`).
 2. **Erstellt einen System-Prompt** unter Verwendung desselben OpenClaw-Prompts + Workspace-Kontext.

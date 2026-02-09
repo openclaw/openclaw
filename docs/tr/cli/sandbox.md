@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "Sandbox kapsayıcılarını yönetin ve etkin sandbox politikasını inceleyin"
 read_when: "Sandbox kapsayıcılarını yönetiyor veya sandbox/araç-politikası davranışını hata ayıklıyorsanız."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:05Z
 ---
 
 # Sandbox CLI

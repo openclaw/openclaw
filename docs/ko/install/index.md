@@ -5,13 +5,6 @@ read_when:
   - 클라우드 플랫폼에 배포하려는 경우
   - 업데이트, 마이그레이션 또는 제거가 필요할 때
 title: "설치"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:28Z
 ---
 
 # 설치
@@ -35,9 +28,10 @@ Windows 에서는 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)�
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="설치 스크립트" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     CLI 를 다운로드하고 npm 을 통해 전역으로 설치한 다음 온보딩 마법사를 실행합니다.
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ Windows 에서는 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)�
         ```
       </Tab>
     </Tabs>
-
+    
     이상입니다 — 스크립트가 Node 감지, 설치, 온보딩을 모두 처리합니다.
-
+    
     온보딩을 건너뛰고 바이너리만 설치하려면 다음을 사용하십시오.
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ Windows 에서는 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)�
         ```
       </Tab>
     </Tabs>
-
+    
     모든 플래그, 환경 변수, CI/자동화 옵션에 대해서는 [Installer internals](/install/installer)를 참고하십시오.
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     이미 Node 22+ 가 설치되어 있고 설치를 직접 관리하고 싶다면 다음을 사용하십시오.
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp 빌드 오류가 발생하나요?">
           (macOS 에서 Homebrew 를 통해 설치하는 경우가 흔한) libvips 가 전역으로 설치되어 있고 `sharp` 가 실패한다면, 미리 빌드된 바이너리를 강제로 사용하십시오.
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           `sharp: Please add node-gyp to your dependencies` 가 표시된다면, 빌드 도구를 설치(macOS: Xcode CLT + `npm install -g node-gyp`)하거나 위의 환경 변수를 사용하십시오.
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ Windows 에서는 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)�
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm 은 빌드 스크립트가 있는 패키지에 대해 명시적인 승인이 필요합니다. 첫 설치에서 "Ignored build scripts" 경고가 표시된 후, `pnpm approve-builds -g` 를 실행하고 나열된 패키지를 선택하십시오.
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="소스에서" icon="github">
+  <Accordion title="From source" icon="github">
     기여자이거나 로컬 체크아웃에서 실행하려는 경우에 적합합니다.
 
+    ```
     <Steps>
       <Step title="클론 및 빌드">
         [OpenClaw repo](https://github.com/openclaw/openclaw)를 클론한 후 빌드하십시오.
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ Windows 에서는 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)�
       </Step>
       <Step title="CLI 연결">
         `openclaw` 명령을 전역에서 사용할 수 있도록 합니다.
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         또는 링크를 건너뛰고, 리포지토리 내부에서 `pnpm openclaw ...` 를 통해 명령을 실행할 수 있습니다.
       </Step>
       <Step title="온보딩 실행">
@@ -137,8 +135,9 @@ Windows 에서는 [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install)�
         ```
       </Step>
     </Steps>
-
+    
     보다 심화된 개발 워크플로우에 대해서는 [Setup](/start/setup)을 참고하십시오.
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## 문제 해결: `openclaw` 을(를) 찾을 수 없음
 
-<Accordion title="PATH 진단 및 수정">
+<Accordion title="PATH diagnosis and fix">
   빠른 진단:
 
 ```bash
@@ -192,19 +191,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Windows 에서는 `npm prefix -g` 의 출력 값을 PATH 에 추가하십시오.
 
-그런 다음 새 터미널을 열거나(zsh 에서는 `rehash`, bash 에서는 `hash -r` 를 실행하십시오).
-</Accordion>
+그런 다음 새 터미널을 열거나(zsh 에서는 `rehash`, bash 에서는 `hash -r` 를 실행하십시오). </Accordion>
 
 ## 업데이트 / 제거
 
 <CardGroup cols={3}>
-  <Card title="업데이트" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     OpenClaw 를 최신 상태로 유지합니다.
   </Card>
-  <Card title="마이그레이션" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     새 머신으로 이동합니다.
   </Card>
-  <Card title="제거" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     OpenClaw 를 완전히 제거합니다.
   </Card>
 </CardGroup>

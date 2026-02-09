@@ -2,13 +2,6 @@
 summary: "Ayusin ang mga isyu sa pagsisimula ng Chrome/Brave/Edge/Chromium CDP para sa kontrol ng browser ng OpenClaw sa Linux"
 read_when: "Nabibigo ang kontrol ng browser sa Linux, lalo na kapag snap Chromium ang gamit"
 title: "Pag-troubleshoot ng Browser"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:59Z
 ---
 
 # Pag-troubleshoot ng Browser (Linux)
@@ -23,7 +16,7 @@ Nabibigo ang browser control server ng OpenClaw na ilunsad ang Chrome/Brave/Edge
 
 ### Root Cause
 
-Sa Ubuntu (at maraming Linux distro), ang default na installation ng Chromium ay isang **snap package**. Ang AppArmor confinement ng Snap ay nakakaistorbo sa paraan kung paano nagla-launch at nagmo-monitor ang OpenClaw ng browser process.
+21. Sa Ubuntu (at maraming Linux distro), ang default na instalasyon ng Chromium ay isang **snap package**. 22. Ang AppArmor confinement ng Snap ay nakikialam sa paraan ng OpenClaw sa pag-spawn at pag-monitor ng browser process.
 
 Ini-install ng `apt install chromium` na command ang isang stub package na nagre-redirect sa snap:
 
@@ -119,19 +112,18 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Sanggunian ng Config
 
-| Option                   | Description                                                                         | Default                                                                  |
-| ------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `browser.enabled`        | I-enable ang kontrol ng browser                                                     | `true`                                                                   |
+| Option                   | Description                                                                                            | Default                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | I-enable ang kontrol ng browser                                                                        | `true`                                                                                      |
 | `browser.executablePath` | Path papunta sa isang Chromium-based na browser binary (Chrome/Brave/Edge/Chromium) | auto-detected (mas pinipili ang default na browser kapag Chromium-based) |
-| `browser.headless`       | Patakbuhin nang walang GUI                                                          | `false`                                                                  |
-| `browser.noSandbox`      | Idagdag ang `--no-sandbox` flag (kailangan para sa ilang Linux setup)               | `false`                                                                  |
-| `browser.attachOnly`     | Huwag ilunsad ang browser, kumabit lang sa umiiral                                  | `false`                                                                  |
-| `browser.cdpPort`        | Port ng Chrome DevTools Protocol                                                    | `18800`                                                                  |
+| `browser.headless`       | Patakbuhin nang walang GUI                                                                             | `false`                                                                                     |
+| `browser.noSandbox`      | Idagdag ang `--no-sandbox` flag (kailangan para sa ilang Linux setup)               | `false`                                                                                     |
+| `browser.attachOnly`     | Huwag ilunsad ang browser, kumabit lang sa umiiral                                                     | `false`                                                                                     |
+| `browser.cdpPort`        | Port ng Chrome DevTools Protocol                                                                       | `18800`                                                                                     |
 
 ### Problema: "Chrome extension relay is running, but no tab is connected"
 
-Ginagamit mo ang `chrome` na profile (extension relay). Inaasahan nitong nakakabit ang OpenClaw
-browser extension sa isang live na tab.
+23. Ginagamit mo ang `chrome` profile (extension relay). 24. Inaasahan nitong nakakabit ang OpenClaw browser extension sa isang live na tab.
 
 Mga opsyon sa pag-aayos:
 

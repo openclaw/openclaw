@@ -5,20 +5,13 @@ read_when:
   - Kailangan mo ng Firecrawl API key
   - Gusto mo ng anti-bot extraction para sa web_fetch
 title: "Firecrawl"
-x-i18n:
-  source_path: tools/firecrawl.md
-  source_hash: 08a7ad45b41af412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Firecrawl
 
-Maaaring gumamit ang OpenClaw ng **Firecrawl** bilang fallback extractor para sa `web_fetch`. Isa itong hosted
-na serbisyo para sa content extraction na sumusuporta sa bot circumvention at caching, na nakakatulong
-para sa mga site na mabigat sa JS o mga page na nagba-block ng karaniwang HTTP fetches.
+20. Maaaring gamitin ng OpenClaw ang **Firecrawl** bilang fallback extractor para sa `web_fetch`. 21. Ito ay isang hosted
+    content extraction service na sumusuporta sa bot circumvention at caching, na nakakatulong
+    sa mga site na mabigat sa JS o mga pahinang nagba-block ng plain HTTP fetches.
 
 ## Kumuha ng API key
 
@@ -48,14 +41,14 @@ para sa mga site na mabigat sa JS o mga page na nagba-block ng karaniwang HTTP f
 Mga tala:
 
 - Ang `firecrawl.enabled` ay default na true kapag may API key.
-- Kinokontrol ng `maxAgeMs` kung gaano katanda ang maaaring mga naka-cache na resulta (ms). Ang default ay 2 araw.
+- 22. Kinokontrol ng `maxAgeMs` kung gaano katanda ang maaaring maging cached na mga resulta (ms). 23. Ang default ay 2 araw.
 
 ## Stealth / bot circumvention
 
-Nag-e-expose ang Firecrawl ng **proxy mode** parameter para sa bot circumvention (`basic`, `stealth`, o `auto`).
-Palaging ginagamit ng OpenClaw ang `proxy: "auto"` kasama ang `storeInCache: true` para sa mga request ng Firecrawl.
-Kung wala ang proxy, ang default ng Firecrawl ay `auto`. Ang `auto` ay nagre-retry gamit ang stealth proxies kapag pumalya ang basic na attempt, na maaaring gumamit ng mas maraming credits
-kumpara sa basic-only scraping.
+Firecrawl exposes a **proxy mode** parameter for bot circumvention (`basic`, `stealth`, or `auto`).
+OpenClaw always uses `proxy: "auto"` plus `storeInCache: true` for Firecrawl requests.
+24. Kapag hindi tinukoy ang proxy, ang Firecrawl ay nagde-default sa `auto`. 25. Ang `auto` ay muling sumusubok gamit ang stealth proxies kung pumalya ang isang basic na pagtatangka, na maaaring gumamit ng mas maraming credits
+kaysa sa basic-only scraping.
 
 ## Paano ginagamit ng `web_fetch` ang Firecrawl
 

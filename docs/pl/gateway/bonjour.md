@@ -4,13 +4,6 @@ read_when:
   - Debugowanie problemów z wykrywaniem Bonjour na macOS/iOS
   - Zmiana typów usług mDNS, rekordów TXT lub UX wykrywania
 title: "Wykrywanie Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Wykrywanie Bonjour / mDNS

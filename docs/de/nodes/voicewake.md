@@ -1,23 +1,16 @@
 ---
-summary: „Globale Sprach-Aktivierungswörter (vom Gateway verwaltet) und wie sie über Nodes hinweg synchronisiert werden“
+summary: "„Globale Sprach-Aktivierungswörter (vom Gateway verwaltet) und wie sie über Nodes hinweg synchronisiert werden“"
 read_when:
-  - „Änderung des Verhaltens oder der Standardwerte von Sprach-Aktivierungswörtern“
+  - Ändern des Sprach-Weckwort-Verhaltens oder Standardeinstellungen
   - „Hinzufügen neuer Node-Plattformen, die eine Synchronisierung der Aktivierungswörter benötigen“
-title: „Sprachaktivierung“
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:41Z
+title: "Sprachaktivierung"
 ---
 
 # Sprachaktivierung (Globale Aktivierungswörter)
 
 OpenClaw behandelt **Aktivierungswörter als eine einzige globale Liste**, die vom **Gateway** (Netzwerk-Gateway) verwaltet wird.
 
-- Es gibt **keine Node-spezifischen benutzerdefinierten Aktivierungswörter**.
+- Es gibt **keine benutzerdefinierten Weckwort**.
 - **Jede Node-/App-UI kann** die Liste bearbeiten; Änderungen werden vom Gateway gespeichert und an alle verteilt.
 - Jedes Gerät behält weiterhin seinen eigenen **Schalter für Sprachaktivierung ein/aus** (lokale UX + Berechtigungen unterscheiden sich).
 

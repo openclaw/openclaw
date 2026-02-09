@@ -4,13 +4,6 @@ read_when:
   - Aygıt model tanımlayıcı eşlemelerini veya NOTICE/lisans dosyalarını güncellerken
   - Instances UI’nin aygıt adlarını nasıl görüntülediğini değiştirirken
 title: "Aygıt Modeli Veritabanı"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:37Z
 ---
 
 # Aygıt modeli veritabanı (kullanıcı dostu adlar)

@@ -3,13 +3,6 @@ summary: "Truy cập từ xa bằng đường hầm SSH (Gateway WS) và tailnet
 read_when:
   - Chạy hoặc xử lý sự cố các thiết lập gateway từ xa
 title: "Truy cập từ xa"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:11Z
 ---
 
 # Truy cập từ xa (SSH, đường hầm, và tailnet)
@@ -26,10 +19,10 @@ Repo này hỗ trợ “truy cập từ xa qua SSH” bằng cách duy trì mộ
 
 ## Các thiết lập VPN/tailnet phổ biến (nơi agent chạy)
 
-Hãy coi **máy chủ gateway** là “nơi agent sống.” Nó sở hữu các phiên, hồ sơ xác thực, kênh và trạng thái.
+Hãy nghĩ **máy chủ Gateway** là “nơi agent sinh sống.” Nó sở hữu các phiên, hồ sơ xác thực, kênh và trạng thái.
 Laptop/desktop của bạn (và các node) kết nối tới máy chủ đó.
 
-### 1) Gateway luôn bật trong tailnet của bạn (VPS hoặc máy chủ tại nhà)
+### 1. Gateway luôn bật trong tailnet của bạn (VPS hoặc máy chủ tại nhà)
 
 Chạy Gateway trên một máy chủ cố định và truy cập qua **Tailscale** hoặc SSH.
 
@@ -39,16 +32,16 @@ Chạy Gateway trên một máy chủ cố định và truy cập qua **Tailscal
 
 Cách này lý tưởng khi laptop của bạn thường xuyên sleep nhưng bạn muốn agent luôn bật.
 
-### 2) Desktop tại nhà chạy Gateway, laptop điều khiển từ xa
+### 2. Desktop tại nhà chạy Gateway, laptop điều khiển từ xa
 
-Laptop **không** chạy agent. Nó kết nối từ xa:
+Máy tính xách tay **không** chạy agent. Nó kết nối từ xa:
 
 - Dùng chế độ **Remote over SSH** của ứng dụng macOS (Settings → General → “OpenClaw runs”).
 - Ứng dụng tự mở và quản lý đường hầm, nên WebChat + kiểm tra tình trạng hoạt động “chạy ngay”.
 
 Runbook: [macOS remote access](/platforms/mac/remote).
 
-### 3) Laptop chạy Gateway, truy cập từ xa từ các máy khác
+### 3. Laptop chạy Gateway, truy cập từ xa từ các máy khác
 
 Giữ Gateway chạy cục bộ nhưng phơi bày an toàn:
 
@@ -86,9 +79,9 @@ Khi đường hầm đã mở:
 - `openclaw health` và `openclaw status --deep` giờ truy cập gateway từ xa qua `ws://127.0.0.1:18789`.
 - `openclaw gateway {status,health,send,agent,call}` cũng có thể nhắm tới URL đã chuyển tiếp qua `--url` khi cần.
 
-Lưu ý: thay `18789` bằng `gateway.port` bạn đã cấu hình (hoặc `--port`/`OPENCLAW_GATEWAY_PORT`).
-Lưu ý: khi bạn truyền `--url`, CLI sẽ không dùng dự phòng từ cấu hình hay biến môi trường.
-Hãy bao gồm `--token` hoặc `--password` một cách rõ ràng. Thiếu thông tin xác thực tường minh là lỗi.
+Lưu ý: thay `18789` bằng `gateway.port` đã cấu hình (hoặc `--port`/`OPENCLAW_GATEWAY_PORT`).
+Lưu ý: khi bạn truyền `--url`, CLI sẽ không fallback sang thông tin xác thực từ cấu hình hoặc môi trường.
+9. Bao gồm `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là một lỗi.
 
 ## Mặc định từ xa của CLI
 
@@ -110,7 +103,7 @@ Khi gateway chỉ bind loopback, giữ URL ở `ws://127.0.0.1:18789` và mở �
 
 ## Chat UI qua SSH
 
-WebChat không còn dùng cổng HTTP riêng. Giao diện chat SwiftUI kết nối trực tiếp tới Gateway WebSocket.
+WebChat không còn sử dụng một cổng HTTP riêng. UI chat SwiftUI kết nối trực tiếp tới Gateway WebSocket.
 
 - Chuyển tiếp `18789` qua SSH (xem trên), rồi kết nối client tới `ws://127.0.0.1:18789`.
 - Trên macOS, ưu tiên chế độ “Remote over SSH” của ứng dụng, chế độ này tự quản lý đường hầm.
@@ -129,7 +122,7 @@ Phiên bản ngắn gọn: **giữ Gateway chỉ bind loopback** trừ khi bạn
 - **Bind không phải loopback** (`lan`/`tailnet`/`custom`, hoặc `auto` khi loopback không khả dụng) phải dùng token/mật khẩu xác thực.
 - `gateway.remote.token` **chỉ** dành cho các lệnh CLI từ xa — **không** bật xác thực cục bộ.
 - `gateway.remote.tlsFingerprint` ghim chứng chỉ TLS từ xa khi dùng `wss://`.
-- **Tailscale Serve** có thể xác thực qua header định danh khi `gateway.auth.allowTailscale: true`.
+- **Tailscale Serve** có thể xác thực qua header danh tính khi `gateway.auth.allowTailscale: true`.
   Đặt thành `false` nếu bạn muốn dùng token/mật khẩu thay thế.
 - Hãy coi điều khiển qua trình duyệt như quyền operator: chỉ trong tailnet + ghép cặp node có chủ đích.
 

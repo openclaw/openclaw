@@ -1,21 +1,14 @@
 ---
 summary: "Paano magsumite ng high-signal na PR"
 title: "Pagsusumite ng PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
-Madaling i-review ang magagandang PR: dapat mabilis na maunawaan ng mga reviewer ang intensyon, ma-verify ang behavior, at ma-merge ang mga pagbabago nang ligtas. Saklaw ng gabay na ito ang mga maigsi at high-signal na submission para sa review ng tao at ng LLM.
+47. Madaling i-review ang magagandang PR: dapat mabilis na maunawaan ng mga reviewer ang layunin, ma-verify ang asal, at ligtas na ma-merge ang mga pagbabago. 48. Sinasaklaw ng gabay na ito ang maiikli at mataas-ang-signal na submission para sa human at LLM review.
 
 ## Ano ang bumubuo sa isang magandang PR
 
 - [ ] Ipaliwanag ang problema, kung bakit ito mahalaga, at ang pagbabago.
-- [ ] Panatilihing nakatuon ang mga pagbabago. Iwasan ang malalawak na refactor.
+- [ ] 49. Panatilihing nakatuon ang mga pagbabago. 50. Iwasan ang malawakang refactor.
 - [ ] Ibuod ang mga pagbabagong nakikita ng user/config/default.
 - [ ] Ilista ang test coverage, mga skip, at mga dahilan.
 - [ ] Magdagdag ng ebidensya: mga log, screenshot, o recording (UI/UX).
@@ -25,7 +18,7 @@ Madaling i-review ang magagandang PR: dapat mabilis na maunawaan ng mga reviewer
 - [ ] I-base ang mga claim sa ebidensya o obserbasyon.
 - [ ] Magandang pamagat: pandiwa + saklaw + kinalabasan (hal., `Docs: add PR and issue templates`).
 
-Maging maigsi; mas mahalaga ang maigsi na review kaysa sa grammar. Alisin ang anumang seksyong hindi naaangkop.
+Be concise; concise review > grammar. Omit any non-applicable sections.
 
 ### Mga baseline validation command (patakbuhin/ayusin ang mga failure para sa iyong pagbabago)
 
@@ -53,7 +46,7 @@ Maging maigsi; mas mahalaga ang maigsi na review kaysa sa grammar. Alisin ang an
 - [ ] Perf: Magdagdag ng before/after na metrics, at paano sinukat.
 - [ ] UX/UI: Mga screenshot/video, banggitin ang epekto sa accessibility.
 - [ ] Infra/Build: Mga environment/beripikasyon.
-- [ ] Security: Ibuod ang risk, repro, beripikasyon, walang sensitibong data. Mga claim na may batayan lamang.
+- [ ] Mga claim na may batayan lamang. _Iwasan ang mga lihim/detalye ng exploit sa publiko.
 
 ## Checklist
 

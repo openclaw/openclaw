@@ -5,27 +5,19 @@ read_when:
   - آپ Claude Code CLI یا دیگر مقامی AI CLI چلا رہے ہیں اور انہیں دوبارہ استعمال کرنا چاہتے ہیں
   - آپ کو ایک صرف-متن، بغیر اوزار کے راستے کی ضرورت ہے جو پھر بھی سیشنز اور تصاویر کو سپورٹ کرے
 title: "CLI بیک اینڈز"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # CLI بیک اینڈز (فال بیک رن ٹائم)
 
-OpenClaw **مقامی AI CLI** کو **صرف-متن فال بیک** کے طور پر چلا سکتا ہے جب API فراہم کنندگان بند ہوں،
-ریٹ لمٹ ہو جائیں، یا عارضی طور پر درست کام نہ کر رہے ہوں۔ یہ جان بوجھ کر محتاط ڈیزائن ہے:
+OpenClaw **local AI CLIs** کو **text‑only fallback** کے طور پر چلا سکتا ہے جب API providers ڈاؤن ہوں، rate‑limited ہوں، یا عارضی طور پر غلط رویہ دکھا رہے ہوں۔ یہ جان بوجھ کر محتاط رکھا گیا ہے:
 
 - **Tools غیر فعال ہیں** (کوئی tool calls نہیں)۔
 - **متن اندر → متن باہر** (قابلِ اعتماد)۔
 - **سیشنز سپورٹڈ ہیں** (تاکہ فالو اپ ٹرنز مربوط رہیں)۔
 - **تصاویر پاس تھرو کی جا سکتی ہیں** اگر CLI امیج پاتھ قبول کرتا ہو۔
 
-یہ بنیادی راستے کے بجائے ایک **حفاظتی جال** کے طور پر ڈیزائن کیا گیا ہے۔ اسے اس وقت استعمال کریں
-جب آپ بیرونی APIs پر انحصار کیے بغیر “ہمیشہ کام کرتا ہے” قسم کے متنی جوابات چاہتے ہوں۔
+یہ **safety net** کے طور پر ڈیزائن کیا گیا ہے، نہ کہ بنیادی راستے کے طور پر۔ Use it when you
+want “always works” text responses without relying on external APIs.
 
 ## مبتدیوں کے لیے فوری آغاز
 
@@ -58,7 +50,7 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
 }
 ```
 
-بس اتنا ہی۔ CLI خود کے علاوہ کسی کلید یا اضافی تصدیقی کنفیگ کی ضرورت نہیں۔
+بس اتنا ہی۔ کوئی keys نہیں، CLI خود کے علاوہ کسی اضافی auth کنفگ کی ضرورت نہیں۔
 
 ## اسے فال بیک کے طور پر استعمال کرنا
 
@@ -96,8 +88,8 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
 agents.defaults.cliBackends
 ```
 
-ہر اندراج ایک **provider id** کے تحت ہوتا ہے (مثلاً `claude-cli`، `my-cli`)۔
-provider id آپ کے ماڈل ریف کا بایاں حصہ بن جاتا ہے:
+ہر entry ایک **provider id** (مثلاً `claude-cli`, `my-cli`) سے keyed ہوتی ہے۔
+The provider id becomes the left side of your model ref:
 
 ```
 <provider>/<model>
@@ -168,10 +160,7 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw base64 تصاویر کو عارضی فائلوں میں لکھے گا۔ اگر `imageArg` سیٹ ہو،
-تو وہ پاتھ CLI آرگز کے طور پر بھیجے جاتے ہیں۔ اگر `imageArg` موجود نہ ہو،
-تو OpenClaw فائل پاتھس کو پرامپٹ کے ساتھ جوڑ دیتا ہے (پاتھ انجیکشن)، جو ان CLIs کے لیے کافی ہے
-جو سادہ پاتھس سے مقامی فائلیں خودکار طور پر لوڈ کرتے ہیں (Claude Code CLI کا رویہ)۔
+OpenClaw base64 تصاویر کو temp فائلوں میں لکھے گا۔ اگر `imageArg` سیٹ ہو تو وہ paths CLI args کے طور پر پاس کی جاتی ہیں۔ اگر `imageArg` موجود نہ ہو تو OpenClaw فائل paths کو prompt کے ساتھ append کر دیتا ہے (path injection)، جو اُن CLIs کے لیے کافی ہے جو سادہ paths سے مقامی فائلیں خود بخود لوڈ کر لیتے ہیں (Claude Code CLI کا رویہ)۔
 
 ## اِن پٹس / آؤٹ پٹس
 
@@ -214,12 +203,12 @@ OpenClaw `codex-cli` کے لیے بھی ایک ڈیفالٹ فراہم کرتا 
 
 ## حدود
 
-- **کوئی OpenClaw tools نہیں** (CLI بیک اینڈ کو کبھی tool calls موصول نہیں ہوتے)۔ کچھ CLIs
-  پھر بھی اپنی اندرونی ایجنٹ ٹولنگ چلا سکتے ہیں۔
+- **کوئی OpenClaw tools نہیں** (CLI backend کو کبھی tool calls موصول نہیں ہوتیں)۔ Some CLIs
+  may still run their own agent tooling.
 - **اسٹریمنگ نہیں** (CLI آؤٹ پٹ اکٹھا کر کے واپس کیا جاتا ہے)۔
 - **اسٹرکچرڈ آؤٹ پٹس** CLI کے JSON فارمیٹ پر منحصر ہیں۔
-- **Codex CLI سیشنز** متن آؤٹ پٹ کے ذریعے resume ہوتے ہیں (JSONL نہیں)، جو ابتدائی
-  `--json` رن کے مقابلے میں کم اسٹرکچرڈ ہے۔ OpenClaw سیشنز معمول کے مطابق کام کرتے رہتے ہیں۔
+- **Codex CLI sessions** resume via text output (no JSONL), which is less
+  structured than the initial `--json` run. OpenClaw sessions پھر بھی معمول کے مطابق کام کرتی ہیں۔
 
 ## خرابیوں کا ازالہ
 

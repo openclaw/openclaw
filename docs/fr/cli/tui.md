@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez une interface utilisateur terminale pour la Gateway (passerelle) (adaptée a l'acces a distance)
   - Vous souhaitez transmettre url/token/session depuis des scripts
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: f0a97d92e08746a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:03Z
 ---
 
 # `openclaw tui`

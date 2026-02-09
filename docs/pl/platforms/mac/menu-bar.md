@@ -3,13 +3,6 @@ summary: "Logika stanu paska menu i to, co jest prezentowane użytkownikom"
 read_when:
   - Dostosowywanie interfejsu menu na macOS lub logiki stanu
 title: "Pasek menu"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:31Z
 ---
 
 # Logika stanu paska menu

@@ -4,20 +4,15 @@ read_when:
   - 你需要將 Deepgram 語音轉文字用於音訊附件
   - 你需要一個快速的 Deepgram 設定範例
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:53Z
 ---
 
 # Deepgram（音訊轉錄）
 
-Deepgram 是一個語音轉文字 API。在 OpenClaw 中，它用於透過 `tools.media.audio` 進行**入站音訊／語音訊息轉錄**。
+Deepgram 是一個語音轉文字 API。在 OpenClaw 中，它用於透過 `tools.media.audio` 進行**入站音訊／語音訊息轉錄**。 In OpenClaw it is used for **inbound audio/voice note
+transcription** via `tools.media.audio`.
 
-啟用後，OpenClaw 會將音訊檔案上傳至 Deepgram，並將轉錄結果注入回覆管線（`{{Transcript}}` + `[Audio]` 區塊）。這**不是串流**；它使用預先錄製的轉錄端點。
+啟用後，OpenClaw 會將音訊檔案上傳至 Deepgram，並將轉錄結果注入回覆管線（`{{Transcript}}` + `[Audio]` 區塊）。這**不是串流**；它使用預先錄製的轉錄端點。 3. 這**不是串流**；
+它使用預先錄製的轉錄端點。
 
 網站：[https://deepgram.com](https://deepgram.com)  
 文件：[https://developers.deepgram.com](https://developers.deepgram.com)

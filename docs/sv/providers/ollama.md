@@ -4,18 +4,11 @@ read_when:
   - Du vill köra OpenClaw med lokala modeller via Ollama
   - Du behöver vägledning för installation och konfiguration av Ollama
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:19Z
 ---
 
 # Ollama
 
-Ollama är en lokal LLM‑runtime som gör det enkelt att köra open‑source‑modeller på din dator. OpenClaw integrerar med Ollamas OpenAI‑kompatibla API och kan **auto‑upptäcka verktygskapabla modeller** när du väljer detta med `OLLAMA_API_KEY` (eller en autentiseringsprofil) och inte definierar en explicit `models.providers.ollama`‑post.
+Ollama är en lokal LLM runtime som gör det enkelt att köra open-source modeller på din maskin. OpenClaw integrerar med Ollamas OpenAI-kompatibla API och kan **automatiskt upptäcka verktygskompatibla modeller** när du väljer in med `OLLAMA_API_KEY` (eller en auth profil) och definierar inte en explicit `modell. roviders.ollama`-post.
 
 ## Snabbstart
 
@@ -181,7 +174,7 @@ Ollama är gratis och körs lokalt, så alla modellkostnader sätts till $0.
 
 ### Strömningskonfiguration
 
-På grund av ett [känt problem](https://github.com/badlogic/pi-mono/issues/1205) i det underliggande SDK:t med Ollamas svarsformat är **strömning inaktiverad som standard** för Ollama‑modeller. Detta förhindrar korrupta svar vid användning av verktygskapabla modeller.
+På grund av ett [känt problem](https://github.com/badlogic/pi-mono/issues/1205) i det underliggande SDK med Ollamas svarsformat, inaktiveras **strömning som standard** för Ollama-modeller. Detta förhindrar skadade svar vid användning av verktygsburna modeller.
 
 När strömning är inaktiverad levereras svaren i ett stycke (icke‑strömmande läge), vilket undviker problemet där sammanflätade innehålls‑/resonemangsdelar orsakar förvrängt utdata.
 
@@ -223,7 +216,7 @@ Du kan också inaktivera strömning för valfri leverantör vid behov:
 
 ### Kontextfönster
 
-För auto‑upptäckta modeller använder OpenClaw kontextfönstret som rapporteras av Ollama när det är tillgängligt, annars används standardvärdet `8192`. Du kan åsidosätta `contextWindow` och `maxTokens` i explicit leverantörskonfig.
+För auto-upptäckta modeller använder OpenClaw kontextfönstret som rapporterats av Ollama när det är tillgängligt, annars är standardinställningen `8192`. Du kan åsidosätta `contextWindow` och `maxTokens` i explicit provider config.
 
 ## Felsökning
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### Inga modeller tillgängliga
 
-OpenClaw auto‑upptäcker endast modeller som rapporterar verktygsstöd. Om din modell inte listas, gör antingen något av följande:
+OpenClaw upptäcker endast modeller som rapporterar verktygsstöd. Om din modell inte är listad, antingen:
 
 - Hämta en verktygskapabel modell, eller
 - Definiera modellen explicit i `models.providers.ollama`.
@@ -270,7 +263,7 @@ ollama serve
 
 ### Korrupta svar eller verktygsnamn i utdata
 
-Om du ser förvrängda svar som innehåller verktygsnamn (som `sessions_send`, `memory_get`) eller fragmenterad text när du använder Ollama‑modeller beror detta på ett uppströmsproblem i SDK:t med strömmande svar. **Detta är åtgärdat som standard** i den senaste OpenClaw‑versionen genom att inaktivera strömning för Ollama‑modeller.
+Om du ser förvanskade svar med verktygsnamn (som `sessions_send`, `memory_get`) eller fragmenterad text vid användning av Ollama-modeller, detta beror på ett uppströms SDK-problem med strömningssvar. **Detta rättas som standard** i den senaste OpenClaw-versionen genom att inaktivera strömning för Ollama-modeller.
 
 Om du manuellt har aktiverat strömning och upplever detta problem:
 

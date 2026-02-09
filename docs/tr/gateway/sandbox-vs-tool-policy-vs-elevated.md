@@ -1,15 +1,8 @@
 ---
-title: Sandbox ile Tool Policy ile Elevated Karşılaştırması
+title: Sandbox vs Tool Policy vs Elevated
 summary: "Bir aracın neden engellendiği: sandbox çalışma zamanı, araç izin/verme politikası ve elevated exec kapıları"
 read_when: "'sandbox jail' ile karşılaştığınızda veya bir tool/elevated reddi gördüğünüzde ve değiştirmeniz gereken tam yapılandırma anahtarını istediğinizde."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:28Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -117,7 +110,7 @@ Kapılar:
 - Etkinleştirme: `tools.elevated.enabled` (ve isteğe bağlı `agents.list[].tools.elevated.enabled`)
 - Gönderen izin listeleri: `tools.elevated.allowFrom.<provider>` (ve isteğe bağlı `agents.list[].tools.elevated.allowFrom.<provider>`)
 
-Bkz. [Elevated Mode](/tools/elevated).
+[Elevated Mode](/tools/elevated).
 
 ## Yaygın “sandbox jail” çözümleri
 

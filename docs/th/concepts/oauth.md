@@ -2,28 +2,21 @@
 summary: "OAuth ใน OpenClaw: การแลกเปลี่ยนโทเคน การจัดเก็บ และรูปแบบหลายบัญชี"
 read_when:
   - คุณต้องการเข้าใจ OAuth ของ OpenClaw แบบครบถ้วนตั้งแต่ต้นจนจบ
-  - คุณพบปัญหาโทเคนถูกทำให้ใช้ไม่ได้/หลุดออกจากระบบ
+  - 12. คุณพบปัญหาโทเค็นถูกทำให้ใช้ไม่ได้ / ถูกล็อกเอาต์
   - คุณต้องการโฟลว์การยืนยันตัวตนแบบ setup-token หรือ OAuth
   - คุณต้องการหลายบัญชีหรือการกำหนดเส้นทางตามโปรไฟล์
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:12Z
 ---
 
 # OAuth
 
-OpenClaw รองรับ “subscription auth” ผ่าน OAuth สำหรับผู้ให้บริการที่มีให้ใช้งาน (โดยเฉพาะ **OpenAI Codex (ChatGPT OAuth)**) สำหรับการสมัครสมาชิก Anthropic ให้ใช้โฟลว์ **setup-token** หน้านี้อธิบาย:
+OpenClaw รองรับ “subscription auth” ผ่าน OAuth สำหรับผู้ให้บริการที่มีให้ใช้งาน (โดยเฉพาะ **OpenAI Codex (ChatGPT OAuth)**) สำหรับการสมัครสมาชิก Anthropic ให้ใช้โฟลว์ **setup-token** หน้านี้อธิบาย: 13. สำหรับการสมัคร Anthropic ให้ใช้โฟลว์ **setup-token** 14. หน้านี้อธิบาย:
 
 - วิธีการทำงานของ **การแลกเปลี่ยนโทเคน** OAuth (PKCE)
 - โทเคนถูก **จัดเก็บ** ที่ใด (และเพราะเหตุใด)
 - วิธีจัดการ **หลายบัญชี** (โปรไฟล์ + การ override ต่อเซสชัน)
 
-OpenClaw ยังรองรับ **provider plugins** ที่มาพร้อมโฟลว์ OAuth หรือ API‑key ของตนเอง รันได้ผ่าน:
+OpenClaw ยังรองรับ **provider plugins** ที่มาพร้อมโฟลว์ OAuth หรือ API‑key ของตนเอง รันได้ผ่าน: 15. รันผ่าน:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -31,7 +24,7 @@ openclaw models auth login --provider <id>
 
 ## Token sink (ทำไมจึงมี)
 
-ผู้ให้บริการ OAuth มักจะออก **refresh token ใหม่** ระหว่างโฟลว์การล็อกอิน/รีเฟรช ผู้ให้บริการบางราย (หรือไคลเอนต์ OAuth) อาจทำให้ refresh token เก่าถูกยกเลิกเมื่อมีการออกตัวใหม่สำหรับผู้ใช้/แอปเดียวกัน
+16. ผู้ให้บริการ OAuth มักจะออก **refresh token ใหม่** ระหว่างโฟลว์การล็อกอิน/รีเฟรช ผู้ให้บริการ OAuth มักจะออก **refresh token ใหม่** ระหว่างโฟลว์การล็อกอิน/รีเฟรช ผู้ให้บริการบางราย (หรือไคลเอนต์ OAuth) อาจทำให้ refresh token เก่าถูกยกเลิกเมื่อมีการออกตัวใหม่สำหรับผู้ใช้/แอปเดียวกัน
 
 อาการที่พบได้จริง:
 
@@ -53,7 +46,7 @@ openclaw models auth login --provider <id>
 
 - `~/.openclaw/credentials/oauth.json` (นำเข้าไปยัง `auth-profiles.json` เมื่อใช้งานครั้งแรก)
 
-ทั้งหมดข้างต้นยังรองรับ `$OPENCLAW_STATE_DIR` (การ override ไดเรกทอรีสถานะ) อ้างอิงฉบับเต็ม: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+17. ทั้งหมดข้างต้นยังเคารพ `$OPENCLAW_STATE_DIR` ด้วย (การแทนที่ไดเรกทอรีสถานะ) ทั้งหมดข้างต้นยังรองรับ `$OPENCLAW_STATE_DIR` (การ override ไดเรกทอรีสถานะ) อ้างอิงฉบับเต็ม: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token (subscription auth)
 
@@ -117,7 +110,7 @@ openclaw models status
 
 มีสองรูปแบบ:
 
-### 1) แนะนำ: แยกเอเจนต์
+### 1. แนะนำ: แยกเอเจนต์
 
 หากต้องการให้ “ส่วนตัว” และ “งาน” ไม่ปะปนกันเลย ให้ใช้เอเจนต์แยกกัน (แยกเซสชัน + ข้อมูลรับรอง + เวิร์กสเปซ):
 
@@ -128,7 +121,7 @@ openclaw agents add personal
 
 จากนั้นตั้งค่าการยืนยันตัวตนต่อเอเจนต์ (ผ่านวิซาร์ด) และกำหนดเส้นทางแชตไปยังเอเจนต์ที่ถูกต้อง
 
-### 2) ขั้นสูง: หลายโปรไฟล์ในเอเจนต์เดียว
+### 2. ขั้นสูง: หลายโปรไฟล์ในเอเจนต์เดียว
 
 `auth-profiles.json` รองรับหลาย ID โปรไฟล์สำหรับผู้ให้บริการเดียวกัน
 

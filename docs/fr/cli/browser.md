@@ -5,25 +5,18 @@ read_when:
   - Vous voulez controler un navigateur s’executant sur une autre machine via un hote de nœud
   - Vous voulez utiliser le relais de l’extension Chrome (attacher/detacher via le bouton de la barre d’outils)
 title: "navigateur"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:48Z
 ---
 
 # `openclaw browser`
 
 Gerer le serveur de controle du navigateur d’OpenClaw et executer des actions de navigateur (onglets, instantanes, captures d’ecran, navigation, clics, saisie).
 
-Lie :
+Liens connexes :
 
 - Outil navigateur + API : [Browser tool](/tools/browser)
 - Relais d’extension Chrome : [Chrome extension](/tools/chrome-extension)
 
-## Options courantes
+## Drapeaux courants
 
 - `--url <gatewayWsUrl>` : URL WebSocket de la Gateway (passerelle) (par defaut depuis la configuration).
 - `--token <token>` : jeton de la Gateway (passerelle) (si requis).
@@ -59,7 +52,7 @@ Utiliser un profil specifique :
 openclaw browser --browser-profile work tabs
 ```
 
-## Onglets
+## Tabs
 
 ```bash
 openclaw browser tabs
@@ -70,7 +63,7 @@ openclaw browser close <targetId>
 
 ## Instantane / capture d’ecran / actions
 
-Instantane :
+Snapshot:
 
 ```bash
 openclaw browser snapshot

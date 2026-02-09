@@ -1,16 +1,9 @@
 ---
-summary: „Użyj OAuth Qwen (warstwa darmowa) w OpenClaw”
+summary: "„Użyj OAuth Qwen (warstwa darmowa) w OpenClaw”"
 read_when:
   - Chcesz używać Qwen z OpenClaw
   - Chcesz uzyskać dostęp OAuth do Qwen Coder w warstwie darmowej
-title: „Qwen”
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:30Z
+title: "Qwen"
 ---
 
 # Qwen

@@ -4,13 +4,6 @@ read_when:
   - Вам нужны структурированные правки файлов в нескольких файлах
   - Вы хотите документировать или отлаживать правки на основе патчей
 title: "Инструмент apply_patch"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:59Z
 ---
 
 # инструмент apply_patch

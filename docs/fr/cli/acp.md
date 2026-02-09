@@ -4,13 +4,6 @@ read_when:
   - Mise en place d’integrations d’IDE basees sur ACP
   - Debogage du routage des sessions ACP vers la Gateway (passerelle)
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:51Z
 ---
 
 # acp

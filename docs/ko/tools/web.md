@@ -5,13 +5,6 @@ read_when:
   - Brave Search API 키 설정이 필요한 경우
   - 웹 검색에 Perplexity Sonar 를 사용하려는 경우
 title: "웹 도구"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:43Z
 ---
 
 # 웹 도구
@@ -36,10 +29,10 @@ OpenClaw 는 두 가지 경량 웹 도구를 제공합니다:
 
 ## 검색 프로바이더 선택
 
-| Provider           | 장점                           | 단점                                 | API 키                                         |
-| ------------------ | ------------------------------ | ------------------------------------ | ---------------------------------------------- |
-| **Brave** (기본값) | 빠름, 구조화된 결과, 무료 티어 | 전통적인 검색 결과                   | `BRAVE_API_KEY`                                |
-| **Perplexity**     | AI 합성 답변, 인용, 실시간     | Perplexity 또는 OpenRouter 접근 필요 | `OPENROUTER_API_KEY` 또는 `PERPLEXITY_API_KEY` |
+| Provider                           | 장점                 | 단점                             | API 키                                        |
+| ---------------------------------- | ------------------ | ------------------------------ | -------------------------------------------- |
+| **Brave** (기본값) | 빠름, 구조화된 결과, 무료 티어 | 전통적인 검색 결과                     | `BRAVE_API_KEY`                              |
+| **Perplexity**                     | AI 합성 답변, 인용, 실시간  | Perplexity 또는 OpenRouter 접근 필요 | `OPENROUTER_API_KEY` 또는 `PERPLEXITY_API_KEY` |
 
 프로바이더별 자세한 내용은 [Brave Search 설정](/brave-search) 과 [Perplexity Sonar](/perplexity) 를 참고하십시오.
 
@@ -82,16 +75,14 @@ OpenClaw 는 두 가지 경량 웹 도구를 제공합니다:
 2. 대시보드에서 **Data for Search** 플랜 (“Data for AI” 아님) 을 선택하고 API 키를 생성합니다.
 3. `openclaw configure --section web` 를 실행하여 키를 구성에 저장합니다 (권장), 또는 환경에서 `BRAVE_API_KEY` 를 설정합니다.
 
-Brave 는 무료 티어와 유료 플랜을 제공합니다. 현재 제한과 가격은 Brave API 포털을 확인하십시오.
+현재 제한과 가격은 Brave API 포털을 확인하십시오.
 
 ### 키 설정 위치 (권장)
 
 **권장:** `openclaw configure --section web` 를 실행하십시오. 이는 `tools.web.search.apiKey` 아래의
 `~/.openclaw/openclaw.json` 에 키를 저장합니다.
 
-**환경 변수 대안:** Gateway 프로세스 환경에서 `BRAVE_API_KEY` 를 설정하십시오.
-Gateway 설치의 경우 `~/.openclaw/.env` (또는 서비스 환경) 에 추가합니다.
-[Env vars](/help/faq#how-does-openclaw-load-environment-variables) 를 참고하십시오.
+**환경 변수 대안:** Gateway 프로세스 환경에서 `BRAVE_API_KEY` 를 설정하십시오. Gateway 설치의 경우 `~/.openclaw/.env` (또는 서비스 환경) 에 추가합니다. [Env vars](/help/faq#how-does-openclaw-load-environment-variables) 를 참고하십시오.
 
 ## Perplexity 사용 (직접 또는 OpenRouter 경유)
 
@@ -128,8 +119,7 @@ Perplexity Sonar 모델은 내장 웹 검색 기능을 제공하며 인용이 �
 }
 ```
 
-**환경 변수 대안:** Gateway 환경에서 `OPENROUTER_API_KEY` 또는 `PERPLEXITY_API_KEY` 를 설정하십시오.
-Gateway 설치의 경우 `~/.openclaw/.env` 에 추가합니다.
+**환경 변수 대안:** Gateway 환경에서 `OPENROUTER_API_KEY` 또는 `PERPLEXITY_API_KEY` 를 설정하십시오. Gateway 설치의 경우 `~/.openclaw/.env` 에 추가합니다.
 
 기본 URL 이 설정되지 않은 경우, OpenClaw 는 API 키 출처에 따라 기본값을 선택합니다:
 
@@ -139,11 +129,11 @@ Gateway 설치의 경우 `~/.openclaw/.env` 에 추가합니다.
 
 ### 사용 가능한 Perplexity 모델
 
-| Model                            | 설명                         | 적합한 용도 |
-| -------------------------------- | ---------------------------- | ----------- |
-| `perplexity/sonar`               | 웹 검색이 포함된 빠른 Q&A    | 빠른 조회   |
-| `perplexity/sonar-pro` (기본값)  | 웹 검색을 포함한 다단계 추론 | 복잡한 질문 |
-| `perplexity/sonar-reasoning-pro` | 체인-오브-소트 분석          | 심층 연구   |
+| Model                                           | 설명                                   | 적합한 용도 |
+| ----------------------------------------------- | ------------------------------------ | ------ |
+| `perplexity/sonar`                              | 웹 검색이 포함된 빠른 Q&A | 빠른 조회  |
+| `perplexity/sonar-pro` (기본값) | 웹 검색을 포함한 다단계 추론                     | 복잡한 질문 |
+| `perplexity/sonar-reasoning-pro`                | 체인-오브-소트 분석                          | 심층 연구  |
 
 ## web_search
 

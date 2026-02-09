@@ -4,13 +4,6 @@ read_when:
   - 머신에서 OpenClaw 를 제거하려는 경우
   - 제거 후에도 게이트웨이 서비스가 계속 실행 중인 경우
 title: "제거"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:28Z
 ---
 
 # 제거

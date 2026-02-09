@@ -1,18 +1,11 @@
 ---
-summary: "Oturum budama: bağlam şişmesini azaltmak için araç sonucu kırpma"
+summary: "Session pruning: tool-result trimming to reduce context bloat"
 read_when:
   - Araç çıktılarından kaynaklanan LLM bağlam büyümesini azaltmak istiyorsunuz
   - agents.defaults.contextPruning ayarını inceliyorsunuz
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:18Z
 ---
 
-# Oturum Budama
+# Session Pruning
 
 Oturum budama, her LLM çağrısından hemen önce bellek içi bağlamdan **eski araç sonuçlarını** kırpar. Diskteki oturum geçmişini **yeniden yazmaz** (`*.jsonl`).
 
@@ -42,7 +35,7 @@ Oturum budama, her LLM çağrısından hemen önce bellek içi bağlamdan **eski
 - Yalnızca `toolResult` iletileri.
 - Kullanıcı + asistan iletileri **asla** değiştirilmez.
 - Son `keepLastAssistants` asistan iletisi korunur; bu kesitten sonraki araç sonuçları budanmaz.
-- Kesiti belirlemek için yeterli asistan iletisi yoksa budama atlanır.
+- If there aren’t enough assistant messages to establish the cutoff, pruning is skipped.
 - **Görüntü blokları** içeren araç sonuçları atlanır (asla kırpılmaz/temizlenmez).
 
 ## Bağlam penceresi tahmini
@@ -72,14 +65,14 @@ Budama, tahmini bir bağlam penceresi kullanır (karakter ≈ belirteç × 4). T
 ## Araç seçimi
 
 - `tools.allow` / `tools.deny`, `*` joker karakterlerini destekler.
-- Reddetme önceliklidir.
-- Eşleşme büyük/küçük harfe duyarsızdır.
+- Deny wins.
+- Matching is case-insensitive.
 - Boş izin listesi => tüm araçlara izin verilir.
 
 ## Diğer sınırlarla etkileşim
 
 - Yerleşik araçlar kendi çıktılarının bir kısmını zaten kırpar; oturum budama, uzun süreli sohbetlerin model bağlamında çok fazla araç çıktısı biriktirmesini önleyen ek bir katmandır.
-- Sıkıştırma (compaction) ayrıdır: sıkıştırma özetler ve kalıcı hale getirir; budama ise istek başına geçicidir. Bkz. [/concepts/compaction](/concepts/compaction).
+- Sıkıştırma (compaction) ayrıdır: sıkıştırma özetler ve kalıcı hale getirir; budama ise istek başına geçicidir. [/concepts/compaction](/concepts/compaction).
 
 ## Varsayılanlar (etkinleştirildiğinde)
 

@@ -1,12 +1,5 @@
 ---
 title: "Pi 통합 아키텍처"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:55Z
 ---
 
 # Pi 통합 아키텍처
@@ -35,12 +28,12 @@ OpenClaw 는 pi SDK 를 사용하여 메시징 Gateway(게이트웨이) 아키�
 }
 ```
 
-| 패키지            | 목적                                                                                          |
-| ----------------- | --------------------------------------------------------------------------------------------- |
-| `pi-ai`           | 핵심 LLM 추상화: `Model`, `streamSimple`, 메시지 타입, 프로바이더 API                         |
-| `pi-agent-core`   | 에이전트 루프, 도구 실행, `AgentMessage` 타입                                                 |
+| 패키지               | 목적                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| `pi-ai`           | 핵심 LLM 추상화: `Model`, `streamSimple`, 메시지 타입, 프로바이더 API                                 |
+| `pi-agent-core`   | 에이전트 루프, 도구 실행, `AgentMessage` 타입                                                                      |
 | `pi-coding-agent` | 고수준 SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, 내장 도구 |
-| `pi-tui`          | 터미널 UI 컴포넌트(OpenClaw 의 로컬 TUI 모드에서 사용)                                        |
+| `pi-tui`          | 터미널 UI 컴포넌트(OpenClaw 의 로컬 TUI 모드에서 사용)                                              |
 
 ## 파일 구조
 
@@ -283,7 +276,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 ## 시스템 프롬프트 구성
 
-시스템 프롬프트는 `buildAgentSystemPrompt()` (`system-prompt.ts`) 에서 빌드됩니다. Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI 참조, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime 메타데이터 섹션을 포함한 전체 프롬프트를 조합합니다. 활성화된 경우 Memory 와 Reactions, 그리고 선택적 컨텍스트 파일 및 추가 시스템 프롬프트 콘텐츠도 포함됩니다. 서브에이전트에서 사용하는 최소 프롬프트 모드를 위해 섹션은 트리밍됩니다.
+시스템 프롬프트는 `buildAgentSystemPrompt()` (`system-prompt.ts`) 에서 빌드됩니다. Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI 참조, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime 메타데이터 섹션을 포함한 전체 프롬프트를 조합합니다. 서브에이전트에서 사용하는 최소 프롬프트 모드를 위해 섹션은 트리밍됩니다.
 
 프롬프트는 세션 생성 후 `applySystemPromptOverrideToSession()` 를 통해 적용됩니다.
 
@@ -318,7 +311,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 `limitHistoryTurns()` 는 채널 유형(DM vs 그룹)에 따라 대화 히스토리를 트리밍합니다.
 
-### 압축
+### 컴팩션
 
 컨텍스트 오버플로우 시 자동 압축이 트리거됩니다. `compactEmbeddedPiSessionDirect()` 는 수동 압축을 처리합니다.
 
@@ -362,7 +355,7 @@ const { model, error, authStorage, modelRegistry } = resolveModel(
 authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
 ```
 
-### 장애 조치
+### 16. 장애 조치
 
 구성된 경우 `FailoverError` 가 모델 폴백을 트리거합니다.
 
@@ -382,7 +375,7 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 
 OpenClaw 는 특수 동작을 위해 커스텀 pi 확장을 로드합니다.
 
-### 압축 안전장치
+### 17. 컴팩션 보호 장치
 
 `pi-extensions/compaction-safeguard.ts` 는 적응형 토큰 예산 책정과 도구 실패 및 파일 작업 요약을 포함한 압축 가드레일을 추가합니다.
 
@@ -419,7 +412,7 @@ if (cfg?.agents?.defaults?.contextPruning?.mode === "cache-ttl") {
 const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
 ```
 
-### 사고/최종 태그 제거
+### 18. 사고/최종 태그 제거
 
 스트리밍 출력은 `<think>`/`<thinking>` 블록을 제거하고 `<final>` 콘텐츠를 추출하도록 처리됩니다.
 
@@ -486,7 +479,7 @@ if (sandboxRoot) {
 }
 ```
 
-## 프로바이더별 처리
+## 19. 제공자별 처리
 
 ### Anthropic
 
@@ -518,15 +511,15 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## Pi CLI 와의 주요 차이점
 
-| 항목            | Pi CLI                  | OpenClaw 임베디드                                                                                |
-| --------------- | ----------------------- | ------------------------------------------------------------------------------------------------ |
-| 호출            | `pi` 명령 / RPC         | `createAgentSession()` 를 통한 SDK                                                               |
-| 도구            | 기본 코딩 도구          | 커스텀 OpenClaw 도구 세트                                                                        |
-| 시스템 프롬프트 | AGENTS.md + 프롬프트    | 채널/컨텍스트별 동적 구성                                                                        |
-| 세션 저장소     | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (또는 `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| 인증            | 단일 자격 증명          | 로테이션을 포함한 다중 프로파일                                                                  |
-| 확장            | 디스크에서 로드         | 프로그래밍 방식 + 디스크 경로                                                                    |
-| 이벤트 처리     | TUI 렌더링              | 콜백 기반(onBlockReply 등)                                                                       |
+| 20. 측면 | Pi CLI                           | OpenClaw 임베디드                                                                                                     |
+| ----------------------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 호출                            | `pi` 명령 / RPC                    | `createAgentSession()` 를 통한 SDK                                                                                   |
+| 도구                            | 기본 코딩 도구                         | 커스텀 OpenClaw 도구 세트                                                                                                |
+| 시스템 프롬프트                      | AGENTS.md + 프롬프트 | 채널/컨텍스트별 동적 구성                                                                                                    |
+| 세션 저장소                        | `~/.pi/agent/sessions/`          | `~/.openclaw/agents/<agentId>/sessions/` (또는 `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| 인증                            | 단일 자격 증명                         | 로테이션을 포함한 다중 프로파일                                                                                                 |
+| 확장                            | 디스크에서 로드                         | 프로그래밍 방식 + 디스크 경로                                                                                                 |
+| 이벤트 처리                        | TUI 렌더링                          | 콜백 기반(onBlockReply 등)                                                                          |
 
 ## 향후 고려 사항
 

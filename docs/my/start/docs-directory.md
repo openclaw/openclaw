@@ -3,18 +3,11 @@ summary: "အသုံးအများဆုံး OpenClaw စာရွက်
 read_when:
   - အရေးကြီးသော စာရွက်စာတမ်း စာမျက်နှာများကို အမြန်ဝင်ရောက်လိုပါက
 title: "စာရွက်စာတမ်း လမ်းညွှန်"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:54Z
 ---
 
 <Note>
-ဤစာမျက်နှာသည် ရွေးချယ်စုစည်းထားသော အညွှန်းတစ်ခုဖြစ်ပါသည်။ အသစ်ဖြစ်ပါက [Getting Started](/start/getting-started) မှ စတင်ပါ။
-စာရွက်စာတမ်းအားလုံး၏ ပြည့်စုံသော မြေပုံအတွက် [Docs hubs](/start/hubs) ကို ကြည့်ပါ။
+This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
+For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 
 ## ဒီမှာစတင်ပါ

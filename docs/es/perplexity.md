@@ -4,13 +4,6 @@ read_when:
   - Quiere usar Perplexity Sonar para búsquedas web
   - Necesita PERPLEXITY_API_KEY o la configuración de OpenRouter
 title: "Perplexity Sonar"
-x-i18n:
-  source_path: perplexity.md
-  source_hash: f6c9824ad9bebe38
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:59Z
 ---
 
 # Perplexity Sonar

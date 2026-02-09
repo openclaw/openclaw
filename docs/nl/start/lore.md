@@ -3,20 +3,13 @@ summary: "Achtergrondverhaal en lore van OpenClaw voor context en toon"
 read_when:
   - Bij het schrijven van documentatie of UX-teksten die naar de lore verwijzen
 title: "OpenClaw Lore"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:00Z
 ---
 
 # De Lore van OpenClaw 🦞📖
 
 _Een verhaal over kreeften, vervellende schalen en te veel tokens._
 
-## Het Oorsprongsverhaal
+## Het verhaal van oorsprong
 
 In het begin was er **Warelay** — een verstandige naam voor een WhatsApp-gateway. Het deed zijn werk. Het was prima.
 
@@ -198,7 +191,7 @@ De community keek met afgrijzen en plezier toe terwijl elke generatie iets nieuw
 
 **Les geleerd:** AI-beeldgeneratie is stochastisch. Dezelfde prompt, andere resultaten. Brute force werkt.
 
-## De Toekomst
+## De toekomst
 
 Op een dag kan Molty hebben:
 

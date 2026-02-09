@@ -1,13 +1,6 @@
 ---
-title: 아웃바운드 세션 미러링 리팩터링 (이슈 #1520)
+title: "아웃바운드 세션 미러링 리팩터링 (이슈 #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:10Z
 ---
 
 # 아웃바운드 세션 미러링 리팩터링 (이슈 #1520)
@@ -18,7 +11,7 @@ x-i18n:
 - 아웃바운드 미러링을 위해 코어 + 플러그인 채널 라우팅이 업데이트됨.
 - Gateway send 는 sessionKey 가 생략된 경우 대상 세션을 파생함.
 
-## 배경
+## Context
 
 아웃바운드 전송은 대상 채널 세션이 아니라 _현재_ 에이전트 세션(도구 세션 키)으로 미러링되고 있었습니다. 인바운드 라우팅은 채널/피어 세션 키를 사용하므로, 아웃바운드 응답이 잘못된 세션에 기록되었고 최초 접촉 대상은 세션 엔트리가 없는 경우가 많았습니다.
 
@@ -74,7 +67,7 @@ x-i18n:
 - `src/gateway/server-methods/send.test.ts`
   - 생략된 경우 세션 키를 파생하고 세션 엔트리를 생성함.
 
-## 미해결 항목 / 후속 작업
+## 미해결 항목 / 후속 조치
 
 - 음성 통화 플러그인은 사용자 정의 `voice:<phone>` 세션 키를 사용합니다. 여기서는 아웃바운드 매핑이 표준화되어 있지 않으므로, message-tool 이 음성 통화 전송을 지원해야 한다면 명시적 매핑을 추가하십시오.
 - 번들된 세트 외에 비표준 `From/To` 형식을 사용하는 외부 플러그인이 있는지 확인하십시오.

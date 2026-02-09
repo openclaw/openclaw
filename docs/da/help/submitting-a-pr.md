@@ -1,21 +1,14 @@
 ---
 summary: "Sådan indsender du en PR med højt signal"
 title: "Indsendelse af en PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:21Z
 ---
 
-Gode PR’er er nemme at gennemgå: anmeldere skal hurtigt kunne forstå intentionen, verificere adfærd og lande ændringer sikkert. Denne guide dækker korte indsendelser med højt signal til både menneskelig og LLM-gennemgang.
+Gode PR'er er nemme at gennemgå: anmeldere bør hurtigt kende hensigten, verificere adfærd, og land ændringer sikkert. Denne vejledning dækker kortfattede, højsignalindsendelser til human og LLM gennemgang.
 
 ## Hvad kendetegner en god PR
 
 - [ ] Forklar problemet, hvorfor det er vigtigt, og ændringen.
-- [ ] Hold ændringerne fokuserede. Undgå brede refaktoreringer.
+- [ ] Behold ændringer fokuseret. Undgå brede refaktorer.
 - [ ] Opsummér bruger-synlige/konfigurations-/standardændringer.
 - [ ] Angiv testdækning, spring over-tests og begrundelser.
 - [ ] Tilføj dokumentation: logs, skærmbilleder eller optagelser (UI/UX).
@@ -25,7 +18,7 @@ Gode PR’er er nemme at gennemgå: anmeldere skal hurtigt kunne forstå intenti
 - [ ] Underbyg påstande med evidens eller observation.
 - [ ] God titel: verbum + scope + resultat (fx `Docs: add PR and issue templates`).
 
-Vær kortfattet; kortfattet review > grammatik. Udelad ikke-relevante afsnit.
+Vær koncise; kortfattet gennemgang > grammatik. Udelad eventuelle ikke-relevante afsnit.
 
 ### Baseline-valideringskommandoer (kør/ret fejl for din ændring)
 
@@ -53,7 +46,7 @@ Vær kortfattet; kortfattet review > grammatik. Udelad ikke-relevante afsnit.
 - [ ] Ydeevne: Tilføj før/efter-målinger og hvordan de er målt.
 - [ ] UX/UI: Skærmbilleder/video, bemærk tilgængelighedspåvirkning.
 - [ ] Infra/Build: Miljøer/validering.
-- [ ] Sikkerhed: Opsummér risiko, reproduktion, verifikation, ingen følsomme data. Kun underbyggede påstande.
+- [ ] Sikkerhed: Resumé risiko, repro, verifikation, ingen følsomme data. Kun jordbaserede fordringer.
 
 ## Tjekliste
 

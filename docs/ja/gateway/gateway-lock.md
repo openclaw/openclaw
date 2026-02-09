@@ -4,13 +4,6 @@ read_when:
   - Gateway プロセスを実行またはデバッグする場合
   - 単一インスタンスの強制を調査する場合
 title: "Gateway ロック"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:45Z
 ---
 
 # Gateway ロック

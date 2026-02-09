@@ -1,21 +1,15 @@
 ---
 summary: "OpenClaw တွင် မော်ဒယ်များစွာကို အသုံးပြုနိုင်ရန် OpenRouter ၏ တစ်စုတစ်စည်း API ကို အသုံးပြုပါ"
 read_when:
-  - "LLM များစွာအတွက် API key တစ်ခုတည်းကို အသုံးပြုလိုသောအခါ"
-  - "OpenClaw အတွင်း OpenRouter မှတစ်ဆင့် မော်ဒယ်များကို အလုပ်လုပ်စေလိုသောအခါ"
+  - LLM များစွာအတွက် API key တစ်ခုတည်းကို အသုံးပြုလိုသောအခါ
+  - OpenClaw အတွင်း OpenRouter မှတစ်ဆင့် မော်ဒယ်များကို အလုပ်လုပ်စေလိုသောအခါ
 title: "OpenRouter"
-x-i18n:
-  source_path: providers/openrouter.md
-  source_hash: b7e29fc9c456c64d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:43Z
 ---
 
 # OpenRouter
 
-OpenRouter သည် endpoint တစ်ခုနှင့် API key တစ်ခုတည်းအောက်တွင် မော်ဒယ်များစွာသို့ တောင်းဆိုမှုများကို လမ်းကြောင်းပြောင်းပေးသော **တစ်စုတစ်စည်း API** ကို ပံ့ပိုးပေးပါသည်။ ၎င်းသည် OpenAI နှင့် ကိုက်ညီမှုရှိသောကြောင့် base URL ကို ပြောင်းလဲခြင်းဖြင့် OpenAI SDK များအများစုကို အသုံးပြုနိုင်ပါသည်။
+OpenRouter provides a **unified API** that routes requests to many models behind a single
+endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
 ## CLI setup
 

@@ -4,13 +4,6 @@ read_when:
   - 新增或修改代理程式工具時
   - 退役或變更 `openclaw-*` Skills 時
 title: "工具"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:22Z
 ---
 
 # 工具（OpenClaw）
@@ -18,11 +11,13 @@ x-i18n:
 OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes 與 cron。
 這些工具取代舊版的 `openclaw-*` Skills：工具具備型別定義、不需要 shelling，
 且代理程式應直接依賴它們。
+These replace the old `openclaw-*` skills: the tools are typed, no shelling,
+and the agent should rely on them directly.
 
 ## 停用工具
 
 你可以在 `openclaw.json` 中，透過 `tools.allow` / `tools.deny` 全域允許或拒絕工具
-（拒絕優先）。這會防止不被允許的工具送往模型提供者。
+（拒絕優先）。這會防止不被允許的工具送往模型提供者。 This prevents disallowed tools from being sent to model providers.
 
 ```json5
 {
@@ -32,7 +27,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 注意事項：
 
-- 比對不區分大小寫。
+- Matching is case-insensitive.
 - 支援 `*` 萬用字元（`"*"` 代表所有工具）。
 - 若 `tools.allow` 僅參照未知或未載入的外掛工具名稱，OpenClaw 會記錄警告並忽略允許清單，以確保核心工具仍可使用。
 
@@ -40,8 +35,9 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 `tools.profile` 會在 `tools.allow`/`tools.deny` 之前設定 **基礎工具允許清單**。
 每個代理程式可覆寫：`agents.list[].tools.profile`。
+Per-agent override: `agents.list[].tools.profile`.
 
-設定檔：
+Profiles:
 
 - `minimal`：僅 `session_status`
 - `coding`：`group:fs`、`group:runtime`、`group:sessions`、`group:memory`、`image`
@@ -70,7 +66,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 }
 ```
 
-範例（全域程式開發設定檔，僅訊息傳遞的支援代理程式）：
+Example (global coding profile, messaging-only support agent):
 
 ```json5
 {
@@ -91,11 +87,11 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 使用 `tools.byProvider` 可針對特定提供者
 （或單一 `provider/model`）**進一步限制** 工具，而不影響你的全域預設值。
 每個代理程式可覆寫：`agents.list[].tools.byProvider`。
+36. 每代理覆寫：`agents.list[].tools.byProvider`。
 
-此設定會在基礎工具設定檔 **之後**、允許/拒絕清單 **之前** 套用，
-因此只能縮小工具集合。
-提供者鍵值可接受 `provider`（例如 `google-antigravity`）或
-`provider/model`（例如 `openai/gpt-5.2`）。
+此設定會在基礎工具設定檔之後、允許／拒絕清單之前套用，因此只能縮小工具集合。
+Provider keys accept either `provider` (e.g. `google-antigravity`) or
+`provider/model` (e.g. `openai/gpt-5.2`).
 
 範例（保留全域程式開發設定檔，但為 Google Antigravity 使用最小工具集）：
 
@@ -146,6 +142,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 工具政策（全域、代理程式、沙箱）支援 `group:*` 項目，可展開為多個工具。
 可在 `tools.allow` / `tools.deny` 中使用。
+Use these in `tools.allow` / `tools.deny`.
 
 可用群組：
 
@@ -172,20 +169,21 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 ## 外掛 + 工具
 
-外掛可在核心工具之外註冊 **額外工具**（以及 CLI 指令）。
-請參閱 [Plugins](/tools/plugin) 了解安裝與設定，並參閱 [Skills](/tools/skills) 了解
-如何將工具使用指引注入提示。部分外掛會隨工具一併提供自己的 Skills
-（例如語音通話外掛）。
+Plugins can register **additional tools** (and CLI commands) beyond the core set.
+See [Plugins](/tools/plugin) for install + config, and [Skills](/tools/skills) for how
+tool usage guidance is injected into prompts. Some plugins ship their own skills
+alongside tools (for example, the voice-call plugin).
 
 可選外掛工具：
 
-- [Lobster](/tools/lobster)：具備可恢復核准的型別化工作流程執行階段（需要在閘道器主機上安裝 Lobster CLI）。
+- [Lobster](/tools/lobster): typed workflow runtime with resumable approvals (requires the Lobster CLI on the gateway host).
 - [LLM Task](/tools/llm-task)：僅 JSON 的 LLM 步驟，用於結構化工作流程輸出（可選的結構驗證）。
 
 ## 工具清單
 
 ### `apply_patch`
 
+Apply structured patches across one or more files. Use for multi-hunk edits.
 在一或多個檔案上套用結構化修補。適用於多段（multi-hunk）編輯。
 實驗性功能：透過 `tools.exec.applyPatch.enabled` 啟用（僅 OpenAI 模型）。
 
@@ -204,15 +202,15 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 - `security`（`deny | allowlist | full`）
 - `ask`（`off | on-miss | always`）
 - `node`（`host=node` 的節點 id/名稱）
-- 需要真正的 TTY？設定 `pty: true`。
+- 需要真正的 TTY？設定 `pty: true`。 Set `pty: true`.
 
 注意事項：
 
 - 背景執行時會回傳 `status: "running"` 與 `sessionId`。
-- 使用 `process` 來輪詢/記錄/寫入/終止/清除背景工作階段。
+- Use `process` to poll/log/write/kill/clear background sessions.
 - 若 `process` 被拒絕，`exec` 會同步執行並忽略 `yieldMs`/`background`。
 - `elevated` 受 `tools.elevated` 與任何 `agents.list[].tools.elevated` 覆寫所控管（兩者皆須允許），且是 `host=gateway` + `security=full` 的別名。
-- `elevated` 僅在代理程式處於沙箱時才會改變行為（否則為 no-op）。
+- `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
 - `host=node` 可指向 macOS 配套應用程式或無介面的節點主機（`openclaw node run`）。
 - 閘道器/節點核准與允許清單：[Exec approvals](/tools/exec-approvals)。
 
@@ -226,7 +224,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 注意事項：
 
-- `poll` 在完成時會回傳新輸出與結束狀態。
+- `poll` returns new output and exit status when complete.
 - `log` 支援以行為基礎的 `offset`/`limit`（省略 `offset` 以擷取最後 N 行）。
 - `process` 以代理程式為作用域；其他代理程式的工作階段不可見。
 
@@ -243,7 +241,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 - 需要 Brave API 金鑰（建議：`openclaw configure --section web`，或設定 `BRAVE_API_KEY`）。
 - 透過 `tools.web.search.enabled` 啟用。
-- 回應會被快取（預設 15 分鐘）。
+- Responses are cached (default 15 min).
 - 設定方式請見 [Web tools](/tools/web)。
 
 ### `web_fetch`
@@ -260,7 +258,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 - 透過 `tools.web.fetch.enabled` 啟用。
 - `maxChars` 會受 `tools.web.fetch.maxCharsCap` 限制（預設 50000）。
-- 回應會被快取（預設 15 分鐘）。
+- Responses are cached (default 15 min).
 - 對於大量 JS 的網站，請優先使用 browser 工具。
 - 設定方式請見 [Web tools](/tools/web)。
 - 可選的反機器人備援請見 [Firecrawl](/tools/firecrawl)。
@@ -293,9 +291,9 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 - 需要 `browser.enabled=true`（預設為 `true`；設定 `false` 以停用）。
 - 所有動作皆接受選用的 `profile` 參數以支援多實例。
 - 省略 `profile` 時，會使用 `browser.defaultProfile`（預設為 "chrome"）。
-- 設定檔名稱：僅限小寫英數與連字號（最長 64 字元）。
-- 連接埠範圍：18800–18899（最多約 100 個設定檔）。
-- 遠端設定檔僅支援附加（不可 start/stop/reset）。
+- Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
+- Port range: 18800-18899 (~100 profiles max).
+- Remote profiles are attach-only (no start/stop/reset).
 - 若連線了具備 browser 能力的節點，工具可能會自動路由至該節點（除非你固定 `target`）。
 - 安裝 Playwright 時，`snapshot` 預設為 `ai`；如需可存取性樹，請使用 `aria`。
 - `snapshot` 亦支援角色快照選項（`interactive`、`compact`、`depth`、`selector`），會回傳如 `e12` 的參照。
@@ -336,7 +334,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 注意事項：
 
-- 相機/螢幕指令需要節點應用程式在前景。
+- Camera/screen commands require the node app to be foregrounded.
 - 影像會回傳 image 區塊 + `MEDIA:<path>`。
 - 影片會回傳 `FILE:<path>`（mp4）。
 - 位置會回傳 JSON 載荷（lat/lon/accuracy/timestamp）。
@@ -370,7 +368,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 注意事項：
 
 - 僅在已設定 `agents.defaults.imageModel`（主要或備援），或可由預設模型 + 已設定的驗證推斷出隱含影像模型時可用（盡力配對）。
-- 直接使用影像模型（與主要聊天模型無關）。
+- Uses the image model directly (independent of the main chat model).
 
 ### `message`
 
@@ -398,7 +396,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 - `send` 會透過 Gateway 閘道器 路由 WhatsApp；其他頻道為直連。
 - `poll` 會為 WhatsApp 與 MS Teams 使用 Gateway 閘道器；Discord 投票為直連。
-- 當訊息工具呼叫綁定至作用中的聊天工作階段時，傳送會受限於該工作階段的目標，以避免跨情境外洩。
+- When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.
 
 ### `cron`
 
@@ -417,7 +415,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 ### `gateway`
 
-重新啟動或套用更新至執行中的 Gateway 閘道器 程序（就地）。
+Restart or apply updates to the running Gateway process (in-place).
 
 核心動作：
 
@@ -434,7 +432,7 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
 
-列出工作階段、檢視逐字稿歷史，或傳送至另一個工作階段。
+List sessions, inspect transcript history, or send to another session.
 
 核心參數：
 
@@ -472,8 +470,8 @@ OpenClaw 提供 **一級代理程式工具**，涵蓋 browser、canvas、nodes �
 - `gatewayToken`（若啟用驗證）
 - `timeoutMs`
 
-注意：當設定 `gatewayUrl` 時，請明確包含 `gatewayToken`。工具不會繼承設定
-或環境中的覆寫憑證，缺少明確憑證會視為錯誤。
+Note: when `gatewayUrl` is set, include `gatewayToken` explicitly. Tools do not inherit config
+or environment credentials for overrides, and missing explicit credentials is an error.
 
 Browser 工具：
 
@@ -496,7 +494,7 @@ Canvas 繪製：
 2. `a2ui_push`（選用）
 3. `snapshot`
 
-節點指定：
+38) 節點目標設定：
 
 1. `nodes` → `status`
 2. 在選定的節點上執行 `describe`
@@ -513,7 +511,7 @@ Canvas 繪製：
 工具會透過兩個平行管道揭露：
 
 1. **系統提示文字**：人類可讀的清單 + 指引。
-2. **工具結構描述**：傳送至模型 API 的結構化函式定義。
+2. **Tool schema**: the structured function definitions sent to the model API.
 
-這表示代理程式同時能看到「有哪些工具」以及「如何呼叫它們」。如果某個工具
-未出現在系統提示或結構描述中，模型就無法呼叫它。
+That means the agent sees both “what tools exist” and “how to call them.” If a tool
+doesn’t appear in the system prompt or the schema, the model cannot call it.

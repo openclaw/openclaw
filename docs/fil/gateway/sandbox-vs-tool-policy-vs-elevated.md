@@ -1,15 +1,8 @@
 ---
-title: Sandbox kumpara sa Tool Policy kumpara sa Elevated
+title: Sandbox vs Tool Policy vs Elevated
 summary: "Bakit naka-block ang isang tool: sandbox runtime, tool allow/deny policy, at mga elevated exec gate"
 read_when: "Kapag tumama ka sa 'sandbox jail' o nakakita ng pagtanggi sa tool/elevated at gusto mo ang eksaktong config key na babaguhin."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:41Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -71,8 +64,8 @@ Mga panuntunang pangkalahatan:
 - `deny` ang laging nananaig.
 - Kapag ang `allow` ay hindi empty, ang lahat ng iba pa ay itinuturing na naka-block.
 - Ang tool policy ang hard stop: hindi maaaring i-override ng `/exec` ang tinanggihang `exec` na tool.
-- Binabago lang ng `/exec` ang session defaults para sa mga awtorisadong sender; hindi ito nagbibigay ng access sa tool.
-  Tumatanggap ang provider tool keys ng alinman sa `provider` (hal. `google-antigravity`) o `provider/model` (hal. `openai/gpt-5.2`).
+- `/exec` only changes session defaults for authorized senders; it does not grant tool access.
+  Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
 
 ### Tool groups (mga shorthand)
 
@@ -110,12 +103,12 @@ Hindi nagbibigay ang Elevated ng dagdag na mga tool; naaapektuhan lang nito ang 
 - Gamitin ang `/elevated full` para laktawan ang exec approvals para sa session.
 - Kung direkta ka nang tumatakbo, ang elevated ay epektibong no-op (naka-gate pa rin).
 - Ang Elevated ay **hindi** skill-scoped at **hindi** nag-o-override ng tool allow/deny.
-- Ang `/exec` ay hiwalay sa elevated. Ina-adjust lang nito ang per-session exec defaults para sa mga awtorisadong sender.
+- `/exec` is separate from elevated. It only adjusts per-session exec defaults for authorized senders.
 
 Mga gate:
 
 - Enablement: `tools.elevated.enabled` (at opsyonal na `agents.list[].tools.elevated.enabled`)
-- Sender allowlists: `tools.elevated.allowFrom.<provider>` (at opsyonal na `agents.list[].tools.elevated.allowFrom.<provider>`)
+- Sender allowlists: `tools.elevated.allowFrom.<provider>` (and optionally `agents.list[].tools.elevated.allowFrom.<provider>`)
 
 Tingnan ang [Elevated Mode](/tools/elevated).
 
@@ -132,4 +125,4 @@ Mga fix-it key (pumili ng isa):
 
 ### “Akala ko main ito, bakit naka-sandbox?”
 
-Sa `"non-main"` na mode, ang mga group/channel key ay _hindi_ main. Gamitin ang main session key (ipinapakita ng `sandbox explain`) o ilipat ang mode sa `"off"`.
+In `"non-main"` mode, group/channel keys are _not_ main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.

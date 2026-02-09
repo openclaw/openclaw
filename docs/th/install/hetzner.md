@@ -6,13 +6,6 @@ read_when:
   - คุณต้องการควบคุมการคงอยู่ของข้อมูล ไบนารี และพฤติกรรมการรีสตาร์ตได้อย่างเต็มที่
   - คุณกำลังรัน OpenClaw ใน Docker บน Hetzner หรือผู้ให้บริการที่คล้ายกัน
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:32Z
 ---
 
 # OpenClaw บน Hetzner (Docker, คู่มือ VPS สำหรับโปรดักชัน)
@@ -21,6 +14,7 @@ x-i18n:
 
 รัน OpenClaw Gateway แบบถาวรบน Hetzner VPS โดยใช้ Docker พร้อมสถานะที่คงทน ไบนารีที่ฝังมาในอิมเมจ และพฤติกรรมการรีสตาร์ตที่ปลอดภัย
 
+If you want “OpenClaw 24/7 for ~$5”, this is the simplest reliable setup.
 หากคุณต้องการ “OpenClaw 24/7 ประมาณ ~$5” นี่คือการตั้งค่าที่ง่ายและเชื่อถือได้ที่สุด  
 ราคาของ Hetzner อาจเปลี่ยนแปลงได้ เลือก VPS Debian/Ubuntu ขนาดเล็กที่สุดก่อน และค่อยขยายเมื่อพบ OOM
 
@@ -37,9 +31,9 @@ x-i18n:
 - การทำ SSH port forwarding จากแล็ปท็อปของคุณ
 - การเปิดพอร์ตโดยตรง หากคุณจัดการไฟร์วอลล์และโทเคนเอง
 
-คู่มือนี้สมมติว่าใช้ Ubuntu หรือ Debian บน Hetzner  
-หากคุณใช้ Linux VPS อื่น ให้แมปแพ็กเกจตามนั้น  
-สำหรับโฟลว์ Docker ทั่วไป ดูที่ [Docker](/install/docker)
+This guide assumes Ubuntu or Debian on Hetzner.  
+If you are on another Linux VPS, map packages accordingly.
+For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
@@ -64,14 +58,14 @@ x-i18n:
 - เวลาประมาณ ~20 นาที
 - Docker และ Docker Compose
 - ข้อมูลรับรองการยืนยันตัวตนของโมเดล
-- ข้อมูลรับรองของผู้ให้บริการ (ไม่บังคับ)
+- Optional provider credentials
   - QR ของ WhatsApp
   - โทเคนบอต Telegram
   - Gmail OAuth
 
 ---
 
-## 1) จัดเตรียม VPS
+## 1. จัดเตรียม VPS
 
 สร้าง Ubuntu หรือ Debian VPS บน Hetzner
 
@@ -83,10 +77,11 @@ ssh root@YOUR_VPS_IP
 
 คู่มือนี้สมมติว่า VPS มีสถานะถาวร  
 อย่าปฏิบัติกับมันเหมือนโครงสร้างพื้นฐานแบบใช้แล้วทิ้ง
+Do not treat it as disposable infrastructure.
 
 ---
 
-## 2) ติดตั้ง Docker (บน VPS)
+## 2. ติดตั้ง Docker (บน VPS)
 
 ```bash
 apt-get update
@@ -103,7 +98,7 @@ docker compose version
 
 ---
 
-## 3) โคลนรีโพซิทอรี OpenClaw
+## 3. โคลนรีโพซิทอรี OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +109,11 @@ cd openclaw
 
 ---
 
-## 4) สร้างไดเรกทอรีถาวรบนโฮสต์
+## 4. สร้างไดเรกทอรีถาวรบนโฮสต์
 
-คอนเทนเนอร์ Docker เป็นแบบชั่วคราว  
-สถานะที่มีอายุยาวทั้งหมดต้องอยู่บนโฮสต์
+Docker containers are ephemeral.
+คอนเทนเนอร์Dockerเป็นแบบชั่วคราว
+สถานะที่ต้องอยู่ระยะยาวทั้งหมดต้องอยู่บนโฮสต์
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +126,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) กำหนดค่าตัวแปรสภาพแวดล้อม
+## 5. กำหนดค่าตัวแปรสภาพแวดล้อม
 
 สร้าง `.env` ที่รูทของรีโพซิทอรี
 
@@ -157,7 +153,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) การกำหนดค่า Docker Compose
+## 6. การกำหนดค่า Docker Compose
 
 สร้างหรืออัปเดต `docker-compose.yml`
 
@@ -204,8 +200,9 @@ services:
 
 ---
 
-## 7) ฝังไบนารีที่จำเป็นลงในอิมเมจ (สำคัญมาก)
+## 7. ฝังไบนารีที่จำเป็นลงในอิมเมจ (สำคัญมาก)
 
+Installing binaries inside a running container is a trap.
 การติดตั้งไบนารีภายในคอนเทนเนอร์ที่กำลังรันอยู่เป็นกับดัก  
 ทุกอย่างที่ติดตั้งตอนรันไทม์จะหายไปเมื่อรีสตาร์ต
 
@@ -217,13 +214,14 @@ services:
 - `goplaces` สำหรับ Google Places
 - `wacli` สำหรับ WhatsApp
 
+These are examples, not a complete list.
 นี่เป็นเพียงตัวอย่าง ไม่ใช่รายการครบถ้วน  
 คุณสามารถติดตั้งไบนารีได้มากเท่าที่ต้องการด้วยรูปแบบเดียวกัน
 
 หากภายหลังคุณเพิ่ม Skills ใหม่ที่พึ่งพาไบนารีเพิ่มเติม คุณต้อง:
 
 1. อัปเดต Dockerfile
-2. รีบิลด์อิมเมจ
+2. สร้างอิมเมจใหม่
 3. รีสตาร์ตคอนเทนเนอร์
 
 **ตัวอย่าง Dockerfile**
@@ -267,7 +265,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) บิลด์และเริ่มใช้งาน
+## 8. บิลด์และเริ่มใช้งาน
 
 ```bash
 docker compose build
@@ -292,7 +290,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) ตรวจสอบ Gateway
+## 9. ตรวจสอบ Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -322,16 +320,18 @@ ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
 
 OpenClaw รันใน Docker แต่ Docker ไม่ใช่แหล่งความจริง  
 สถานะที่มีอายุยาวทั้งหมดต้องอยู่รอดผ่านการรีสตาร์ต รีบิลด์ และรีบูต
+OpenClawรันในDockerแต่Dockerไม่ใช่แหล่งอ้างอิงหลัก
+สถานะที่อยู่ระยะยาวทั้งหมดต้องอยู่รอดจากการรีสตาร์ต การสร้างใหม่ และการรีบูต
 
 | องค์ประกอบ                 | ตำแหน่ง                           | กลไกการคงอยู่         | หมายเหตุ                       |
 | -------------------------- | --------------------------------- | --------------------- | ------------------------------ |
-| คอนฟิก Gateway             | `/home/node/.openclaw/`           | เมานต์โวลุมจากโฮสต์   | รวม `openclaw.json` และโทเคน   |
-| โปรไฟล์ยืนยันตัวตนของโมเดล | `/home/node/.openclaw/`           | เมานต์โวลุมจากโฮสต์   | โทเคน OAuth, คีย์ API          |
-| คอนฟิก Skill               | `/home/node/.openclaw/skills/`    | เมานต์โวลุมจากโฮสต์   | สถานะระดับ Skill               |
-| เวิร์กสเปซเอเจนต์          | `/home/node/.openclaw/workspace/` | เมานต์โวลุมจากโฮสต์   | โค้ดและอาร์ติแฟกต์ของเอเจนต์   |
-| เซสชัน WhatsApp            | `/home/node/.openclaw/`           | เมานต์โวลุมจากโฮสต์   | คงอยู่ของการล็อกอินด้วย QR     |
+| คอนฟิก Gateway             | `/home/node/.openclaw/`           | การเมานต์วอลุ่มโฮสต์  | รวม `openclaw.json` และโทเคน   |
+| โปรไฟล์ยืนยันตัวตนของโมเดล | `/home/node/.openclaw/`           | การเมานต์วอลุ่มโฮสต์  | โทเคน OAuth, คีย์ API          |
+| คอนฟิก Skill               | `/home/node/.openclaw/skills/`    | การเมานต์วอลุ่มโฮสต์  | สถานะระดับ Skill               |
+| เวิร์กสเปซเอเจนต์          | `/home/node/.openclaw/workspace/` | การเมานต์วอลุ่มโฮสต์  | โค้ดและอาร์ติแฟกต์ของเอเจนต์   |
+| เซสชัน WhatsApp            | `/home/node/.openclaw/`           | การเมานต์วอลุ่มโฮสต์  | คงอยู่ของการล็อกอินด้วย QR     |
 | พวงกุญแจ Gmail             | `/home/node/.openclaw/`           | โวลุมโฮสต์ + รหัสผ่าน | ต้องใช้ `GOG_KEYRING_PASSWORD` |
-| ไบนารีภายนอก               | `/usr/local/bin/`                 | อิมเมจ Docker         | ต้องฝังตั้งแต่ตอนบิลด์         |
+| ไบนารีภายนอก               | `/usr/local/bin/`                 | อิมเมจ Docker         | Must be baked at build time    |
 | Node runtime               | ไฟล์ระบบของคอนเทนเนอร์            | อิมเมจ Docker         | รีบิลด์ทุกครั้งที่สร้างอิมเมจ  |
 | แพ็กเกจ OS                 | ไฟล์ระบบของคอนเทนเนอร์            | อิมเมจ Docker         | อย่าติดตั้งตอนรันไทม์          |
-| คอนเทนเนอร์ Docker         | ชั่วคราว                          | รีสตาร์ตได้           | ทำลายได้อย่างปลอดภัย           |
+| คอนเทนเนอร์ Docker         | Ephemeral                         | รีสตาร์ตได้           | ทำลายได้อย่างปลอดภัย           |

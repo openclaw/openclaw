@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez choisir un fournisseur de modèles
   - Vous avez besoin d’un aperçu rapide des backends LLM pris en charge
 title: "Fournisseurs de modèles"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: 84233de8ae3a39e0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:28Z
 ---
 
 # Fournisseurs de modèles
@@ -57,6 +50,7 @@ Voir [Venice AI](/providers/venice).
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI, axé sur la confidentialité)](/providers/venice)
 - [Ollama (modèles locaux)](/providers/ollama)
+- [Qianfan](/providers/qianfan)
 
 ## Fournisseurs de transcription
 

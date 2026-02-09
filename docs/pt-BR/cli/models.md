@@ -4,13 +4,6 @@ read_when:
   - Você quer alterar os modelos padrão ou ver o status de autenticação do provedor
   - Você quer escanear modelos/provedores disponíveis e depurar perfis de autenticação
 title: "modelos"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:23Z
 ---
 
 # `openclaw models`

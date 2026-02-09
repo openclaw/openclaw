@@ -3,13 +3,6 @@ summary: "표면 전반에서의 그룹 채팅 동작 (WhatsApp/Telegram/Discord
 read_when:
   - 그룹 채팅 동작 또는 멘션 게이팅을 변경할 때
 title: "그룹"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:12Z
 ---
 
 # 그룹
@@ -18,7 +11,7 @@ OpenClaw 는 WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Microsoft Tea
 
 ## 초보자 소개 (2분)
 
-OpenClaw 는 사용자의 자체 메시징 계정에서 “동작”합니다. 별도의 WhatsApp 봇 사용자는 존재하지 않습니다.  
+OpenClaw 는 사용자의 자체 메시징 계정에서 “동작”합니다. 별도의 WhatsApp 봇 사용자는 존재하지 않습니다.
 **사용자 본인**이 어떤 그룹에 속해 있다면, OpenClaw 는 해당 그룹을 보고 그곳에서 응답할 수 있습니다.
 
 기본 동작:
@@ -47,12 +40,12 @@ otherwise -> reply
 
 원하는 목표가 있다면…
 
-| 목표                                | 설정할 항목                                                |
-| ----------------------------------- | ---------------------------------------------------------- |
-| 모든 그룹을 허용하되 @멘션에만 응답 | `groups: { "*": { requireMention: true } }`                |
-| 모든 그룹 응답 비활성화             | `groupPolicy: "disabled"`                                  |
-| 특정 그룹만 허용                    | `groups: { "<group-id>": { ... } }` (`"*"` 키 없음)        |
-| 그룹에서 오직 본인만 트리거 가능    | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| 목표                                | 설정할 항목                                                              |
+| --------------------------------- | ------------------------------------------------------------------- |
+| 모든 그룹을 허용하되 @멘션에만 응답 | `groups: { "*": { requireMention: true } }`                         |
+| 모든 그룹 응답 비활성화                     | `groupPolicy: "disabled"`                                           |
+| 특정 그룹만 허용                         | `groups: { "<group-id>": { ... } }` (`"*"` 키 없음) |
+| 그룹에서 오직 본인만 트리거 가능                | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`          |
 
 ## 세션 키
 
@@ -99,7 +92,7 @@ otherwise -> reply
 }
 ```
 
-“호스트 접근 없음” 대신 “그룹은 폴더 X 만 볼 수 있음” 이 필요하다면, `workspaceAccess: "none"` 를 유지하고 허용 목록에 있는 경로만 샌드박스에 마운트하십시오:
+Want “groups can only see folder X” instead of “no host access”? “호스트 접근 없음” 대신 “그룹은 폴더 X 만 볼 수 있음” 이 필요하다면, `workspaceAccess: "none"` 를 유지하고 허용 목록에 있는 경로만 샌드박스에 마운트하십시오:
 
 ```json5
 {
@@ -181,11 +174,11 @@ otherwise -> reply
 }
 ```
 
-| 정책          | 동작                                                          |
-| ------------- | ------------------------------------------------------------- |
+| 정책            | 동작                                                  |
+| ------------- | --------------------------------------------------- |
 | `"open"`      | 그룹은 허용 목록을 우회하며, 멘션 게이팅은 여전히 적용됩니다. |
-| `"disabled"`  | 모든 그룹 메시지를 완전히 차단합니다.                         |
-| `"allowlist"` | 구성된 허용 목록과 일치하는 그룹/룸만 허용합니다.             |
+| `"disabled"`  | 모든 그룹 메시지를 완전히 차단합니다.               |
+| `"allowlist"` | 구성된 허용 목록과 일치하는 그룹/룸만 허용합니다.        |
 
 참고:
 
@@ -253,7 +246,7 @@ otherwise -> reply
 - 에이전트별 재정의: `agents.list[].groupChat.mentionPatterns` (여러 에이전트가 하나의 그룹을 공유할 때 유용).
 - 멘션 게이팅은 멘션 감지가 가능한 경우에만 적용됩니다 (네이티브 멘션 또는 `mentionPatterns` 이 구성된 경우).
 - Discord 기본값은 `channels.discord.guilds."*"` 에 있으며 (길드/채널별 재정의 가능).
-- 그룹 히스토리 컨텍스트는 채널 전반에서 동일하게 래핑되며 **보류 중인 항목만** 포함합니다 (멘션 게이팅으로 인해 건너뛴 메시지). 전역 기본값은 `messages.groupChat.historyLimit`, 재정의는 `channels.<channel>.historyLimit` (또는 `channels.<channel>.accounts.*.historyLimit`) 를 사용하십시오. 비활성화하려면 `0` 를 설정하십시오.
+- Group history context is wrapped uniformly across channels and is **pending-only** (messages skipped due to mention gating); use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (또는 `channels.<channel>.accounts.*.historyLimit`) 를 사용하십시오. 비활성화하려면 `0` 를 설정하십시오.
 
 ## 그룹/채널 도구 제한 (선택 사항)
 

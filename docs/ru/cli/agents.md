@@ -3,13 +3,6 @@ summary: "Справочник CLI для `openclaw agents` (list/add/delete/set
 read_when:
   - Вам нужны несколько изолированных агентов (рабочие пространства + маршрутизация + аутентификация)
 title: "agents"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:08Z
 ---
 
 # `openclaw agents`

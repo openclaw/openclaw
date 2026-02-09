@@ -4,13 +4,6 @@ read_when:
   - Node er forbundet, men kamera-/canvas-/skærm-/exec-værktøjer fejler
   - Du har brug for den mentale model for node-parring versus godkendelser
 title: "Fejlfinding af node"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:27Z
 ---
 
 # Fejlfinding af node
@@ -57,12 +50,12 @@ Hvis du ser `NODE_BACKGROUND_UNAVAILABLE`, så bring node-appen i forgrunden og 
 
 ## Tilladelsesmatrix
 
-| Kapabilitet                  | iOS                                                  | Android                                             | macOS node-app                  | Typisk fejlkode                |
-| ---------------------------- | ---------------------------------------------------- | --------------------------------------------------- | ------------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Kamera (+ mikrofon for kliplyd)                      | Kamera (+ mikrofon for kliplyd)                     | Kamera (+ mikrofon for kliplyd) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Skærmoptagelse (+ mikrofon valgfri)                  | Prompt for skærmoptagelse (+ mikrofon valgfri)      | Skærmoptagelse                  | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Mens appen bruges eller Altid (afhænger af tilstand) | Forgrunds-/baggrundsplacering afhængigt af tilstand | Placerings­tilladelse           | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (node host path)                                 | n/a (node host path)                                | Exec-godkendelser kræves        | `SYSTEM_RUN_DENIED`            |
+| Kapabilitet                  | iOS                                                                     | Android                                                           | macOS node-app                                     | Typisk fejlkode                |
+| ---------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Kamera (+ mikrofon for kliplyd)                      | Kamera (+ mikrofon for kliplyd)                | Kamera (+ mikrofon for kliplyd) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Skærmoptagelse (+ mikrofon valgfri)                  | Prompt for skærmoptagelse (+ mikrofon valgfri) | Skærmoptagelse                                     | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Mens appen bruges eller Altid (afhænger af tilstand) | Forgrunds-/baggrundsplacering afhængigt af tilstand               | Placerings­tilladelse                              | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (node host path)                                 | n/a (node host path)                           | Exec-godkendelser kræves                           | `SYSTEM_RUN_DENIED`            |
 
 ## Parring versus godkendelser
 
@@ -80,8 +73,8 @@ openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-Hvis parring mangler, så godkend node-enheden først.
-Hvis parring er ok, men `system.run` fejler, så ret exec-godkendelser/tilladelsesliste.
+Godkend først indholdselementet, hvis parring mangler.
+Hvis parring er fin, men `system.run` mislykkes, fix exec godkendelser/allowlist.
 
 ## Almindelige node-fejlkoder
 

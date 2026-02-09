@@ -4,13 +4,6 @@ read_when:
   - CLI 명령 또는 옵션을 추가하거나 수정할 때
   - 새로운 명령 표면을 문서화할 때
 title: "CLI 참조"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:19Z
 ---
 
 # CLI 참조
@@ -596,7 +589,7 @@ OpenClaw 는 OAuth/API 자격 증명이 사용 가능한 경우 프로바이더 
 
 ### `health`
 
-실행 중인 Gateway 에서 상태를 가져옵니다.
+실행 중인 게이트웨이에서 상태를 가져옵니다.
 
 옵션:
 
@@ -913,8 +906,7 @@ openclaw models status
 
 ## 노드 호스트
 
-`node`는 **헤드리스 노드 호스트**를 실행하거나 백그라운드 서비스로 관리합니다.
-[`openclaw node`](/cli/node)를 참고하십시오.
+`node`는 **헤드리스 노드 호스트**를 실행하거나 백그라운드 서비스로 관리합니다. [`openclaw node`](/cli/node)를 참고하십시오.
 
 하위 명령:
 

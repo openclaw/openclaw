@@ -1,15 +1,8 @@
 ---
 summary: "Telegram izin listesi güçlendirmesi: önek + boşluk normalizasyonu"
 read_when:
-  - "Geçmiş Telegram izin listesi değişikliklerini gözden geçirirken"
+  - Geçmiş Telegram izin listesi değişikliklerini gözden geçirirken
 title: "Telegram İzin Listesi Güçlendirmesi"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:12Z
 ---
 
 # Telegram İzin Listesi Güçlendirmesi

@@ -1,15 +1,8 @@
 ---
-summary: „Konfiguration und Einrichtung eines Twitch-Chatbots“
+summary: "„Konfiguration und Einrichtung eines Twitch-Chatbots“"
 read_when:
   - Einrichten der Twitch-Chat-Integration für OpenClaw
-title: „Twitch“
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:37Z
+title: "„Twitch“"
 ---
 
 # Twitch (Plugin)

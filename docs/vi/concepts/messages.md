@@ -5,13 +5,6 @@ read_when:
   - Làm rõ phiên, chế độ xếp hàng hoặc hành vi streaming
   - Tài liệu hóa khả năng hiển thị lập luận và các tác động khi sử dụng
 title: "Thông điệp"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:45Z
 ---
 
 # Thông điệp
@@ -33,21 +26,21 @@ Các nút điều chỉnh chính nằm trong cấu hình:
 
 - `messages.*` cho tiền tố, xếp hàng và hành vi nhóm.
 - `agents.defaults.*` cho streaming theo khối và mặc định chia khối.
-- Ghi đè theo kênh (`channels.whatsapp.*`, `channels.telegram.*`, v.v.) cho giới hạn và công tắc streaming.
+- Ghi đè theo kênh (`channels.whatsapp.*`, `channels.telegram.*`, v.v.) cho các giới hạn (caps) và công tắc streaming.
 
 Xem [Cấu hình](/gateway/configuration) để biết đầy đủ lược đồ.
 
 ## Khử trùng lặp thông điệp đến
 
-Các kênh có thể gửi lại cùng một thông điệp sau khi kết nối lại. OpenClaw giữ một
-bộ nhớ đệm ngắn hạn theo khóa kênh/tài khoản/đối tác/phiên/id thông điệp để các lần gửi trùng
-không kích hoạt một lần chạy tác tử khác.
+Channels can redeliver the same message after reconnects. OpenClaw keeps a
+short-lived cache keyed by channel/account/peer/session/message id so duplicate
+deliveries do not trigger another agent run.
 
 ## Chống dội thông điệp đến
 
-Các thông điệp liên tiếp nhanh từ **cùng một người gửi** có thể được gom thành một lượt
-tác tử duy nhất thông qua `messages.inbound`. Chống dội được áp dụng theo phạm vi kênh + cuộc trò chuyện
-và dùng thông điệp gần nhất cho luồng trả lời/ID.
+Các tin nhắn liên tiếp nhanh từ **cùng một người gửi** có thể được gom lại thành một
+lượt agent duy nhất thông qua `messages.inbound`. Debouncing is scoped per channel + conversation
+and uses the most recent message for reply threading/IDs.
 
 Cấu hình (mặc định toàn cục + ghi đè theo kênh):
 
@@ -79,10 +72,9 @@ Phiên thuộc về gateway, không phải client.
 - Nhóm/kênh có khóa phiên riêng.
 - Kho phiên và bản ghi hội thoại nằm trên máy chủ gateway.
 
-Nhiều thiết bị/kênh có thể ánh xạ tới cùng một phiên, nhưng lịch sử không được
-đồng bộ đầy đủ về mọi client. Khuyến nghị: dùng một thiết bị chính cho các cuộc
-trò chuyện dài để tránh ngữ cảnh bị lệch. Control UI và TUI luôn hiển thị bản ghi
-phiên do gateway lưu trữ, nên chúng là nguồn sự thật.
+Nhiều thiết bị/kênh có thể ánh xạ tới cùng một session, nhưng lịch sử không được đồng bộ đầy đủ trở lại mọi client. Recommendation: use one primary device for long
+conversations to avoid divergent context. The Control UI and TUI always show the
+gateway-backed session transcript, so they are the source of truth.
 
 Chi tiết: [Quản lý phiên](/concepts/session).
 
@@ -90,8 +82,8 @@ Chi tiết: [Quản lý phiên](/concepts/session).
 
 OpenClaw tách **phần nội dung prompt** khỏi **phần nội dung lệnh**:
 
-- `Body`: văn bản prompt gửi tới tác tử. Có thể bao gồm phong bì kênh và
-  các wrapper lịch sử tùy chọn.
+- `Body`: prompt text sent to the agent. This may include channel envelopes and
+  optional history wrappers.
 - `CommandBody`: văn bản thô của người dùng để phân tích chỉ thị/lệnh.
 - `RawBody`: bí danh kế thừa của `CommandBody` (giữ để tương thích).
 
@@ -100,20 +92,16 @@ Khi kênh cung cấp lịch sử, nó dùng một wrapper chung:
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
-Đối với **không phải trò chuyện trực tiếp** (nhóm/kênh/phòng), **nội dung thông điệp hiện tại**
-được thêm tiền tố nhãn người gửi (cùng kiểu dùng cho các mục lịch sử). Điều này
-giữ cho thông điệp thời gian thực và thông điệp xếp hàng/lịch sử nhất quán trong prompt của tác tử.
+For **non-direct chats** (groups/channels/rooms), the **current message body** is prefixed with the
+sender label (same style used for history entries). Điều này giữ cho các tin nhắn thời gian thực và các tin nhắn xếp hàng/lịch sử
+nhất quán trong prompt của agent.
 
 Bộ đệm lịch sử là **chỉ-đang-chờ**: chúng bao gồm các thông điệp nhóm _không_
 kích hoạt một lần chạy (ví dụ, thông điệp bị chặn theo đề cập) và **loại trừ** các thông điệp
 đã có trong bản ghi phiên.
 
-Việc loại bỏ chỉ thị chỉ áp dụng cho phần **thông điệp hiện tại** để lịch sử
-giữ nguyên. Các kênh bọc lịch sử nên đặt `CommandBody` (hoặc
-`RawBody`) thành văn bản thông điệp gốc và giữ `Body` là prompt đã kết hợp.
-Bộ đệm lịch sử có thể cấu hình qua `messages.groupChat.historyLimit` (mặc định
-toàn cục) và các ghi đè theo kênh như `channels.slack.historyLimit` hoặc
-`channels.telegram.accounts.<id>.historyLimit` (đặt `0` để tắt).
+Việc loại bỏ directive chỉ áp dụng cho phần **current message** nên lịch sử vẫn được giữ nguyên. `messages.responsePrefix`, `channels.<channel>`
+Bộ đệm lịch sử có thể cấu hình qua `messages.groupChat.historyLimit` (mặc định toàn cục) và các ghi đè theo channel như `channels.slack.historyLimit` hoặc `channels.telegram.accounts.<id>`.historyLimit`(đặt`0\` để vô hiệu hóa).
 
 ## Xếp hàng và lượt theo sau
 
@@ -127,8 +115,8 @@ Chi tiết: [Xếp hàng](/concepts/queue).
 
 ## Streaming, chia khối và gom lô
 
-Streaming theo khối gửi các phản hồi từng phần khi mô hình tạo ra các khối văn bản.
-Chia khối tôn trọng giới hạn văn bản của kênh và tránh tách code được rào.
+Block streaming sends partial replies as the model produces text blocks.
+Chunking respects channel text limits and avoids splitting fenced code.
 
 Các thiết lập chính:
 
@@ -155,7 +143,7 @@ Chi tiết: [Chỉ thị suy nghĩ + lập luận](/tools/thinking) và [Sử d�
 
 Định dạng thông điệp gửi đi được tập trung trong `messages`:
 
-- `messages.responsePrefix`, `channels.<channel>.responsePrefix` và `channels.<channel>.accounts.<id>.responsePrefix` (chuỗi tiền tố gửi đi), cùng `channels.whatsapp.messagePrefix` (tiền tố đến của WhatsApp)
+- `type: "oauth"` → `{ provider, access, refresh, expires, email?`.responsePrefix`, và `channels.<channel>`.accounts.<id>`.responsePrefix`(chuỗi tiền tố outbound theo cơ chế cascade), cùng với`channels.whatsapp.messagePrefix\` (tiền tố inbound của WhatsApp)
 - Luồng trả lời thông qua `replyToMode` và mặc định theo kênh
 
 Chi tiết: [Cấu hình](/gateway/configuration#messages) và tài liệu kênh.

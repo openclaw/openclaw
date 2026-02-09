@@ -4,19 +4,12 @@ read_when:
   - När du använder eller konfigurerar chattkommandon
   - Vid felsökning av kommandoroutning eller behörigheter
 title: "Slashkommandon"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:19:13Z
 ---
 
 # Slashkommandon
 
-Kommandon hanteras av Gateway. De flesta kommandon måste skickas som ett **fristående** meddelande som börjar med `/`.
-Det värd‑endast bash‑chattkommandot använder `! <cmd>` (med `/bash <cmd>` som alias).
+Kommandon hanteras av Gateway. De flesta kommandon måste skickas som ett **standalone** meddelande som börjar med `/`.
+Värd-endast bash chat-kommandot använder `! <cmd>` (med `/bash <cmd>` som ett alias).
 
 Det finns två relaterade system:
 
@@ -25,11 +18,11 @@ Det finns två relaterade system:
   - Direktiv tas bort från meddelandet innan modellen ser det.
   - I vanliga chattmeddelanden (inte enbart direktiv) behandlas de som ”inline‑tips” och **består inte** sessionsinställningar.
   - I meddelanden som endast innehåller direktiv (meddelandet innehåller bara direktiv) består de till sessionen och svarar med en bekräftelse.
-  - Direktiv tillämpas endast för **auktoriserade avsändare** (kanalernas tillåtelselistor/parkoppling plus `commands.useAccessGroups`).
-    Obehöriga avsändare ser direktiv behandlade som vanlig text.
+  - Direktiven tillämpas endast för **auktoriserade avsändare** (kanaltillåtna listor/parkoppling plus `commands.useAccessGroups`).
+    Obehöriga avsändare se direktiv behandlas som ren text.
 
-Det finns också några **inline‑genvägar** (endast tillåtelselista/auktoriserade avsändare): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
-De körs omedelbart, tas bort innan modellen ser meddelandet, och kvarvarande text fortsätter genom det normala flödet.
+Det finns också några **inline-genvägar** (tillåtna/auktoriserade avsändare endast): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
+De körs omedelbart, strippas innan modellen ser meddelandet, och den återstående texten fortsätter genom det normala flödet.
 
 ## Konfig
 
@@ -54,11 +47,11 @@ De körs omedelbart, tas bort innan modellen ser meddelandet, och kvarvarande te
 - `commands.native` (standard `"auto"`) registrerar native‑kommandon.
   - Auto: på för Discord/Telegram; av för Slack (tills du lägger till slashkommandon); ignoreras för leverantörer utan native‑stöd.
   - Sätt `channels.discord.commands.native`, `channels.telegram.commands.native` eller `channels.slack.commands.native` för att åsidosätta per leverantör (bool eller `"auto"`).
-  - `false` rensar tidigare registrerade kommandon på Discord/Telegram vid start. Slack‑kommandon hanteras i Slack‑appen och tas inte bort automatiskt.
+  - `false` rensar tidigare registrerade kommandon på Discord/Telegram vid start. Slack kommandon hanteras i Slack appen och tas inte bort automatiskt.
 - `commands.nativeSkills` (standard `"auto"`) registrerar **skill**‑kommandon nativt när det stöds.
   - Auto: på för Discord/Telegram; av för Slack (Slack kräver att du skapar ett slashkommando per skill).
   - Sätt `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills` eller `channels.slack.commands.nativeSkills` för att åsidosätta per leverantör (bool eller `"auto"`).
-- `commands.bash` (standard `false`) aktiverar `! <cmd>` för att köra värd‑shellkommandon (`/bash <cmd>` är ett alias; kräver `tools.elevated`‑tillåtelselistor).
+- `commands.bash` (standard `false`) aktiverar `! <cmd>` för att köra värdskalskommandon (`/bash <cmd>` är ett alias; kräver `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (standard `2000`) styr hur länge bash väntar innan det växlar till bakgrundsläge (`0` bakgrundar omedelbart).
 - `commands.config` (standard `false`) aktiverar `/config` (läser/skriv­er `openclaw.json`).
 - `commands.debug` (standard `false`) aktiverar `/debug` (endast körningstids‑åsidosättningar).
@@ -97,37 +90,37 @@ Text + native (när aktiverat):
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (skicka `/exec` för att visa aktuellt)
 - `/model <name>` (alias: `/models`; eller `/<alias>` från `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus alternativ som `debounce:2s cap:25 drop:summarize`; skicka `/queue` för att se aktuella inställningar)
-- `/bash <command>` (endast värd; alias för `! <command>`; kräver `commands.bash: true` + `tools.elevated`‑tillåtelselistor)
+- `/bash <command>` (värd; alias för `! <command>`; kräver `commands.bash: true` + `tools.elevated` allowlists)
 
 Endast text:
 
 - `/compact [instructions]` (se [/concepts/compaction](/concepts/compaction))
-- `! <command>` (endast värd; en i taget; använd `!poll` + `!stop` för långvariga jobb)
+- `! <command>` (värd; en åt gången; använd `!poll` + `!stop` för långvariga jobb)
 - `!poll` (kontrollera utdata/status; accepterar valfri `sessionId`; `/bash poll` fungerar också)
 - `!stop` (stoppa det körande bash‑jobbet; accepterar valfri `sessionId`; `/bash stop` fungerar också)
 
 Noteringar:
 
-- Kommandon accepterar en valfri `:` mellan kommandot och argumenten (t.ex. `/think: high`, `/send: on`, `/help:`).
+- Kommandon accepterar ett valfritt `:` mellan kommandot och args (t.ex. `/think: high`, `/send: on`, `/help:`).
 - `/new <model>` accepterar ett modellalias, `provider/model` eller ett leverantörsnamn (fuzzy‑match); om ingen match finns behandlas texten som meddelandets innehåll.
 - För full uppdelning av leverantörsanvändning, använd `openclaw status --usage`.
 - `/allowlist add|remove` kräver `commands.config=true` och respekterar kanalens `configWrites`.
 - `/usage` styr användningsfoten per svar; `/usage cost` skriver ut en lokal kostnadssammanfattning från OpenClaw‑sessionsloggar.
 - `/restart` är avstängd som standard; sätt `commands.restart: true` för att aktivera den.
 - `/verbose` är avsedd för felsökning och extra insyn; håll den **av** vid normal användning.
-- `/reasoning` (och `/verbose`) är riskabla i gruppsammanhang: de kan avslöja intern resonemang eller verktygsutdata som du inte avsåg att exponera. Föredra att lämna dem avstängda, särskilt i gruppchattar.
+- `/resonemang` (och `/verbose`) är riskabelt i gruppinställningar: de kan avslöja internt resonemang eller verktygsutmatning som du inte har för avsikt att exponera. Föredrar att utelämna dem, särskilt i gruppchattar.
 - **Snabb väg:** meddelanden som endast innehåller kommandon från tillåtelselista hanteras omedelbart (kringgår kö + modell).
 - **Grupptomnämnings‑gating:** meddelanden som endast innehåller kommandon från tillåtelselista kringgår krav på omnämnanden.
 - **Inline‑genvägar (endast tillåtelselista):** vissa kommandon fungerar även när de bäddas in i ett vanligt meddelande och tas bort innan modellen ser återstående text.
   - Exempel: `hey /status` triggar ett statussvar och återstående text fortsätter genom det normala flödet.
 - För närvarande: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 - Obehöriga meddelanden som endast innehåller kommandon ignoreras tyst, och inline‑`/...`‑token behandlas som vanlig text.
-- **Skill‑kommandon:** `user-invocable`‑skills exponeras som slashkommandon. Namn saneras till `a-z0-9_` (max 32 tecken); kollisioner får numeriska suffix (t.ex. `_2`).
+- **Färdighetskommandoner:** `user-invocable` -färdigheter exponeras som snedstreckskommandon. Namnen saneras till `a-z0-9_` (max 32 tecken); kollisioner får numeriska suffix (t.ex. `_2`).
   - `/skill <name> [input]` kör en skill efter namn (användbart när native‑kommandogränser hindrar per‑skill‑kommandon).
   - Som standard vidarebefordras skill‑kommandon till modellen som en normal begäran.
   - Skills kan valfritt deklarera `command-dispatch: tool` för att routa kommandot direkt till ett verktyg (deterministiskt, ingen modell).
   - Exempel: `/prose` (OpenProse‑plugin) — se [OpenProse](/prose).
-- **Argument för native‑kommandon:** Discord använder autocomplete för dynamiska alternativ (och knappmenyer när du utelämnar obligatoriska argument). Telegram och Slack visar en knappmeny när ett kommando stöder val och du utelämnar argumentet.
+- **Inhemska kommandoargument:** Discord använder autocomplete för dynamiska alternativ (och knappmenyer när du utelämnar nödvändiga args). Telegram och Slack visar en knappmeny när ett kommando stöder val och du utelämnar argen.
 
 ## Användningsytor (vad som visas var)
 
@@ -158,7 +151,7 @@ Noteringar:
 
 ## Debug‑åsidosättningar
 
-`/debug` låter dig sätta **endast körningstids**‑konfigurationsåsidosättningar (minne, inte disk). Endast ägare. Avstängd som standard; aktivera med `commands.debug: true`.
+`/debug` låter dig ställa in **körtid** konfigurationsöverskridanden (minne, inte disk). Endast ägare. Inaktiverad som standard; aktivera med `commands.debug: true`.
 
 Exempel:
 
@@ -177,7 +170,7 @@ Noteringar:
 
 ## Konfiguppdateringar
 
-`/config` skriver till din konfig på disk (`openclaw.json`). Endast ägare. Avstängd som standard; aktivera med `commands.config: true`.
+`/config` skriver till din on-disk config (`openclaw.json`). Endast ägare. Inaktiverad som standard; aktivera med `commands.config: true`.
 
 Exempel:
 
@@ -202,4 +195,4 @@ Noteringar:
   - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix konfigurerbart via `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (riktar in sig på chattsessionen via `CommandTargetSessionKey`)
 - **`/stop`** riktar in sig på den aktiva chattsessionen så att den kan avbryta den aktuella körningen.
-- **Slack:** `channels.slack.slashCommand` stöds fortfarande för ett enda `/openclaw`‑liknande kommando. Om du aktiverar `commands.native` måste du skapa ett Slack‑slashkommando per inbyggt kommando (samma namn som `/help`). Menyer för kommandoargument i Slack levereras som tillfälliga Block Kit‑knappar.
+- **Slack:** `channels.slack.slashCommand` stöds fortfarande för ett kommando med `/openclaw`-stil. Om du aktiverar `commands.native`, måste du skapa ett Slack slash kommando per inbyggt kommando (samma namn som `/help`). Kommandoargumentmenyer för Slack levereras som kortlivade Block Kit knappar.

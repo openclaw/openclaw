@@ -3,20 +3,13 @@ summary: "mac ऐप Gateway WebChat को कैसे एम्बेड क�
 read_when:
   - mac WebChat दृश्य या loopback पोर्ट का डिबगिंग
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:27Z
 ---
 
 # WebChat (macOS ऐप)
 
-macOS मेनू बार ऐप WebChat UI को एक नेटिव SwiftUI दृश्य के रूप में एम्बेड करता है। यह
-Gateway से कनेक्ट होता है और चयनित एजेंट के लिए डिफ़ॉल्ट रूप से **मुख्य सत्र** का उपयोग करता है
-(अन्य सत्रों के लिए सत्र स्विचर के साथ)।
+The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It
+connects to the Gateway and defaults to the **main session** for the selected
+agent (with a session switcher for other sessions).
 
 - **Local mode**: सीधे स्थानीय Gateway WebSocket से कनेक्ट होता है।
 - **Remote mode**: Gateway कंट्रोल पोर्ट को SSH के माध्यम से फ़ॉरवर्ड करता है और उस
@@ -25,6 +18,7 @@ Gateway से कनेक्ट होता है और चयनित ए
 ## Launch & debugging
 
 - Manual: Lobster मेनू → “Open Chat”.
+
 - परीक्षण के लिए Auto‑open:
 
   ```bash
@@ -37,8 +31,8 @@ Gateway से कनेक्ट होता है और चयनित ए
 
 - Data plane: Gateway WS मेथड्स `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` और इवेंट्स `chat`, `agent`, `presence`, `tick`, `health`।
-- Session: डिफ़ॉल्ट रूप से प्राथमिक सत्र (`main`, या जब scope
-  global हो तो `global`)। UI सत्रों के बीच स्विच कर सकता है।
+- Session: defaults to the primary session (`main`, or `global` when scope is
+  global). The UI can switch between sessions.
 - Onboarding पहले‑रन सेटअप को अलग रखने के लिए एक समर्पित सत्र का उपयोग करता है।
 
 ## Security surface

@@ -5,13 +5,6 @@ description: Typed workflow runtime for OpenClaw — composable pipelines with a
 read_when:
   - Vous souhaitez des workflows déterministes en plusieurs étapes avec des approbations explicites
   - Vous devez reprendre un workflow sans relancer les étapes précédentes
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: ff84e65f4be162ad
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:18Z
 ---
 
 # Lobster
@@ -163,7 +156,7 @@ Notes :
 Installez la CLI Lobster sur le **même hôte** que celui qui exécute la Gateway (passerelle) OpenClaw (voir le [repo Lobster](https://github.com/openclaw/lobster)), et assurez‑vous que `lobster` est dans `PATH`.
 Si vous souhaitez utiliser un emplacement binaire personnalisé, passez un `lobsterPath` **absolu** dans l’appel d’outil.
 
-## Activer l’outil
+## Activez l’outil
 
 Lobster est un outil plugin **optionnel** (désactivé par défaut).
 
@@ -253,7 +246,7 @@ L’utilisateur approuve → reprise :
 
 Un seul workflow. Déterministe. Sûr.
 
-## Paramètres de l’outil
+## Paramètres de l'outil
 
 ### `run`
 
@@ -329,7 +322,7 @@ OpenProse s’associe bien avec Lobster : utilisez `/prose` pour orchestrer la 
 - **Compatible sandbox** — désactivé lorsque le contexte de l’outil est en sandbox.
 - **Renforcé** — `lobsterPath` doit être absolu s’il est spécifié ; délais et plafonds de sortie appliqués.
 
-## Dépannage
+## Problemes courants
 
 - **`lobster subprocess timed out`** → augmentez `timeoutMs` ou scindez un pipeline long.
 - **`lobster output exceeded maxStdoutBytes`** → augmentez `maxStdoutBytes` ou réduisez la taille de la sortie.

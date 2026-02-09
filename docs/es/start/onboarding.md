@@ -5,13 +5,6 @@ read_when:
   - Implementación de autenticación o configuración de identidad
 title: "Incorporación (App de macOS)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:37Z
 ---
 
 # Incorporación (App de macOS)
@@ -19,22 +12,22 @@ x-i18n:
 Este documento describe el flujo de incorporación **actual** en el primer inicio. El objetivo es una experiencia fluida desde el “día 0”: elegir dónde se ejecuta el Gateway, conectar la autenticación, ejecutar el asistente y permitir que el agente se inicialice por sí mismo.
 
 <Steps>
-<Step title="Aprobar advertencia de macOS">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Aprobar búsqueda de redes locales">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Bienvenida y aviso de seguridad">
+<Step title="Welcome and security notice">
 <Frame caption="Lea el aviso de seguridad mostrado y decida en consecuencia">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Local vs Remoto">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -52,7 +45,7 @@ Este documento describe el flujo de incorporación **actual** en el primer inici
 - Use un **token** para acceso desde varias máquinas o enlaces que no sean loopback.
 </Tip>
 </Step>
-<Step title="Permisos">
+<Step title="Permissions">
 <Frame caption="Elija qué permisos desea otorgar a OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -74,7 +67,7 @@ La incorporación solicita permisos TCC necesarios para:
   La app puede instalar la CLI global `openclaw` mediante npm/pnpm para que
   los flujos de trabajo en terminal y las tareas de launchd funcionen de inmediato.
 </Step>
-<Step title="Chat de incorporación (sesión dedicada)">
+<Step title="Onboarding Chat (dedicated session)">
   Después de la configuración, la app abre una sesión de chat de incorporación dedicada para que el agente pueda
   presentarse y guiar los siguientes pasos. Esto mantiene la guía del primer inicio separada
   de su conversación normal. Consulte [Bootstrapping](/start/bootstrapping) para

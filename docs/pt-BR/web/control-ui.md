@@ -4,13 +4,6 @@ read_when:
   - Você quer operar o Gateway a partir de um navegador
   - Você quer acesso via Tailnet sem túneis SSH
 title: "UI de Controle"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:31Z
 ---
 
 # UI de Controle (navegador)
@@ -96,7 +89,7 @@ Notas do painel de Cron jobs:
 - `chat.send` é **não bloqueante**: confirma imediatamente com `{ runId, status: "started" }` e a resposta é transmitida via eventos `chat`.
 - Reenviar com o mesmo `idempotencyKey` retorna `{ status: "in_flight" }` enquanto estiver em execução, e `{ status: "ok" }` após a conclusão.
 - `chat.inject` adiciona uma nota do assistente ao transcript da sessão e transmite um evento `chat` apenas para atualizações de UI (sem execução do agente, sem entrega em canal).
-- Parar:
+- Stop:
   - Clique em **Stop** (chama `chat.abort`)
   - Digite `/stop` (ou `stop|esc|abort|wait|exit|interrupt`) para abortar fora de banda
   - `chat.abort` oferece suporte a `{ sessionKey }` (sem `runId`) para abortar todas as execuções ativas daquela sessão

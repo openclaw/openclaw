@@ -5,13 +5,6 @@ read_when:
   - Vous modifiez le comportement de l’auto-compaction ou ajoutez du nettoyage « pre-compaction »
   - Vous voulez implementer des vidages de memoire ou des tours systeme silencieux
 title: "Analyse approfondie de la gestion des sessions"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: bf3715770ba63436
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:03Z
 ---
 
 # Gestion des sessions et compaction (analyse approfondie)
@@ -76,7 +69,7 @@ OpenClaw les resout via `src/config/sessions.ts`.
 
 Une `sessionKey` identifie _quel compartiment de conversation_ vous utilisez (routage + isolation).
 
-Modeles courants :
+Modèles communs:
 
 - Discussion principale/directe (par agent) : `agent:<agentId>:<mainKey>` (par defaut `main`)
 - Groupe : `agent:<agentId>:<channel>:group:<id>`
@@ -113,7 +106,7 @@ Champs cles (liste non exhaustive) :
 - `sessionFile` : remplacement explicite optionnel du chemin de transcription
 - `chatType` : `direct | group | room` (aide les IU et la politique d’envoi)
 - `provider`, `subject`, `room`, `space`, `displayName` : metadonnees pour l’etiquetage de groupe/canal
-- Bascules :
+- Toggles:
   - `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`
   - `sendPolicy` (remplacement par session)
 - Selection du modele :
@@ -187,7 +180,7 @@ Dans l’agent Pi embarque, l’auto-compaction se declenche dans deux cas :
 
 `contextTokens > contextWindow - reserveTokens`
 
-Ou :
+Où :
 
 - `contextWindow` est la fenetre de contexte du modele
 - `reserveTokens` est la marge reservee pour les invites + la sortie du modele suivante
@@ -267,7 +260,7 @@ Configuration (`agents.defaults.compaction.memoryFlush`) :
 
 Notes :
 
-- L’invite par defaut / l’invite systeme incluent un indice `NO_REPLY` pour supprimer la livraison.
+- L'invite par défaut/système contient un indice `NO_REPLY` pour supprimer la livraison.
 - Le vidage s’execute une fois par cycle de compaction (suivi dans `sessions.json`).
 - Le vidage ne s’execute que pour les sessions Pi embarquees (les backends CLI l’ignorent).
 - Le vidage est ignore lorsque l’espace de travail de la session est en lecture seule (`workspaceAccess: "ro"` ou `"none"`).

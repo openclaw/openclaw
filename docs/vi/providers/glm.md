@@ -4,19 +4,12 @@ read_when:
   - Bạn muốn dùng các mô hình GLM trong OpenClaw
   - Bạn cần quy ước đặt tên mô hình và cách thiết lập
 title: "Các mô hình GLM"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:50Z
 ---
 
 # Các mô hình GLM
 
-GLM là một **họ mô hình** (không phải công ty) được cung cấp thông qua nền tảng Z.AI. Trong OpenClaw, các
-mô hình GLM được truy cập thông qua nhà cung cấp `zai` và các ID mô hình như `zai/glm-4.7`.
+GLM is a **model family** (not a company) available through the Z.AI platform. Trong OpenClaw, các mô hình GLM
+được truy cập thông qua nhà cung cấp `zai` và các ID mô hình như `zai/glm-4.7`.
 
 ## Thiết lập CLI
 

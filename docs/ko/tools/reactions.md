@@ -3,13 +3,6 @@ summary: "채널 전반에 걸쳐 공유되는 리액션 의미 체계"
 read_when:
   - 모든 채널에서 리액션 작업을 할 때
 title: "리액션"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:29Z
 ---
 
 # 리액션 도구

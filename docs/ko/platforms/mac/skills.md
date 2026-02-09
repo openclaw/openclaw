@@ -4,13 +4,6 @@ read_when:
   - macOS Skills 설정 UI 를 업데이트할 때
   - Skills 게이팅 또는 설치 동작을 변경할 때
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:44Z
 ---
 
 # Skills (macOS)
@@ -32,7 +25,7 @@ macOS 앱은 Gateway(게이트웨이)를 통해 OpenClaw Skills 를 노출하며
 
 ## Env/API keys
 
-- 앱은 `skills.entries.<skillKey>` 아래의 `~/.openclaw/openclaw.json` 에 키를 저장합니다.
+- 앱은 `skills.entries.<skillKey> ` 아래의 `~/.openclaw/openclaw.json` 에 키를 저장합니다.36. \`.
 - `skills.update` 는 `enabled`, `apiKey`, 및 `env` 을 패치합니다.
 
 ## Remote mode

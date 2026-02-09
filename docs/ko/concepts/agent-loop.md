@@ -3,13 +3,6 @@ summary: "에이전트 루프 수명주기, 스트림, 그리고 대기 의미�
 read_when:
   - 에이전트 루프 또는 수명주기 이벤트에 대한 정확한 단계별 설명이 필요할 때
 title: "에이전트 루프"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:45Z
 ---
 
 # 에이전트 루프 (OpenClaw)
@@ -144,7 +137,7 @@ OpenClaw 에는 두 가지 훅 시스템이 있습니다:
 - `agent.wait` 기본값: 30초 (대기만). `timeoutMs` 매개변수로 오버라이드합니다.
 - 에이전트 런타임: `agents.defaults.timeoutSeconds` 기본값 600초; `runEmbeddedPiAgent` 중단 타이머에서 강제 적용됩니다.
 
-## 조기 종료가 발생할 수 있는 경우
+## 조기에 종료될 수 있는 지점
 
 - 에이전트 타임아웃 (중단)
 - AbortSignal (취소)

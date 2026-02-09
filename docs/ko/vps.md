@@ -4,13 +4,6 @@ read_when:
   - 클라우드에서 Gateway(게이트웨이) 를 실행하려는 경우
   - VPS/호스팅 가이드의 빠른 개요가 필요한 경우
 title: "VPS 호스팅"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:33Z
 ---
 
 # VPS 호스팅

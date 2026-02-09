@@ -4,13 +4,6 @@ read_when:
   - Agregar o modificar skills
   - Cambiar el control o las reglas de carga de skills
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:13Z
 ---
 
 # Skills (OpenClaw)
@@ -50,15 +43,15 @@ gana el espacio de trabajo, luego gestionadas/locales y después incluidas.
 Los plugins pueden incluir sus propias skills listando directorios `skills` en
 `openclaw.plugin.json` (rutas relativas a la raíz del plugin). Las skills del plugin se cargan
 cuando el plugin está habilitado y participan en las reglas normales de precedencia.
-Puede controlarlas mediante `metadata.openclaw.requires.config` en la entrada de configuración del plugin.
-Vea [Plugins](/tools/plugin) para descubrimiento/configuración y [Tools](/tools) para la
+Puede controlarlas mediante `metadata.openclaw.requires.config` en la entrada de configuración del plugin. Vea [Plugins](/tools/plugin) para descubrimiento/configuración y [Tools](/tools) para la
 superficie de herramientas que esas skills enseñan.
 
 ## ClawHub (instalación + sincronización)
 
 ClawHub es el registro público de skills para OpenClaw. Explore en
 [https://clawhub.com](https://clawhub.com). Úselo para descubrir, instalar, actualizar y
-respaldar skills. Guía completa: [ClawHub](/tools/clawhub).
+respaldar skills.
+Guía completa: [ClawHub](/tools/clawhub).
 
 Flujos comunes:
 
@@ -76,8 +69,7 @@ eso como `<workspace>/skills` en la siguiente sesión.
 ## Notas de seguridad
 
 - Trate las skills de terceros como **código no confiable**. Léalo antes de habilitarlo.
-- Prefiera ejecuciones en sandbox para entradas no confiables y herramientas riesgosas.
-  Vea [Sandboxing](/gateway/sandboxing).
+- Prefiera ejecuciones en sandbox para entradas no confiables y herramientas riesgosas. Vea [Sandboxing](/gateway/sandboxing).
 - `skills.entries.*.env` y `skills.entries.*.apiKey` inyectan secretos en el proceso del **host** para ese
   turno del agente (no en el sandbox). Mantenga los secretos fuera de prompts y registros.
 - Para un modelo de amenazas más amplio y listas de verificación, vea
@@ -191,7 +183,8 @@ Notas:
 - Las especificaciones del instalador pueden incluir `os: ["darwin"|"linux"|"win32"]` para filtrar opciones
   por plataforma.
 - Las instalaciones de Node respetan `skills.install.nodeManager` en `openclaw.json` (predeterminado:
-  npm; opciones: npm/pnpm/yarn/bun). Esto solo afecta a las **instalaciones de skills**; el
+  npm; opciones: npm/pnpm/yarn/bun).
+  Esto solo afecta a las **instalaciones de skills**; el
   runtime del Gateway debería seguir siendo Node (Bun no se recomienda para WhatsApp/Telegram).
 - Instalaciones Go: si falta `go` y `brew` está disponible, el gateway
   instala Go mediante Homebrew primero y establece `GOBIN` en el `bin` de
@@ -232,8 +225,7 @@ Las skills incluidas/gestionadas pueden activarse o desactivarse y recibir valor
 
 Nota: si el nombre de la skill contiene guiones, ponga la clave entre comillas (JSON5 permite claves entrecomilladas).
 
-Las claves de configuración coinciden con el **nombre de la skill** de forma predeterminada.
-Si una skill define `metadata.openclaw.skillKey`, use esa clave bajo `skills.entries`.
+Las claves de configuración coinciden con el **nombre de la skill** de forma predeterminada. Si una skill define `metadata.openclaw.skillKey`, use esa clave bajo `skills.entries`.
 
 Reglas:
 

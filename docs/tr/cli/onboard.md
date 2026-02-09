@@ -3,13 +3,6 @@ summary: "`openclaw onboard` için CLI başvuru belgesi (etkileşimli katılım 
 read_when:
   - gateway, çalışma alanı, kimlik doğrulama, kanallar ve Skills için rehberli kurulum istediğinizde
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:05Z
 ---
 
 # `openclaw onboard`

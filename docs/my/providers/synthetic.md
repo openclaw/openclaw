@@ -4,19 +4,12 @@ read_when:
   - Synthetic ကို မော်ဒယ်ပံ့ပိုးသူအဖြစ် အသုံးပြုလိုသောအခါ
   - Synthetic API ကီး သို့မဟုတ် base URL ကို သတ်မှတ်ရန် လိုအပ်သောအခါ
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:51Z
 ---
 
 # Synthetic
 
-Synthetic သည် Anthropic-ကိုက်ညီသော endpoint များကို ထုတ်ပေးပါသည်။ OpenClaw သည် ၎င်းကို
-`synthetic` ပံ့ပိုးသူအဖြစ် မှတ်ပုံတင်ပြီး Anthropic Messages API ကို အသုံးပြုပါသည်။
+Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
+`synthetic` provider and uses the Anthropic Messages API.
 
 ## Quick setup
 
@@ -68,9 +61,9 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-မှတ်ချက် — OpenClaw ၏ Anthropic client သည် base URL အဆုံးတွင် `/v1` ကို ပေါင်းထည့်ပါသည်၊ ထို့ကြောင့်
-`https://api.synthetic.new/anthropic` ကို အသုံးပြုပါ (`/anthropic/v1` မဟုတ်ပါ)။ Synthetic က
-၎င်း၏ base URL ကို ပြောင်းလဲပါက `models.providers.synthetic.baseUrl` ကို override လုပ်ပါ။
+Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
+`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
+its base URL, override `models.providers.synthetic.baseUrl`.
 
 ## Model catalog
 

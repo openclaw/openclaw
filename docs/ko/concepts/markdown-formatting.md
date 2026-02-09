@@ -5,13 +5,6 @@ read_when:
   - 새로운 채널 포매터 또는 스타일 매핑을 추가할 때
   - 채널 간 서식 회귀를 디버깅할 때
 title: "Markdown 서식"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:41Z
 ---
 
 # Markdown 서식
@@ -110,7 +103,7 @@ channels:
 4. **어댑터 연결:** 새로운 청커와 렌더러를 사용하도록 채널 아웃바운드 어댑터를 업데이트합니다.
 5. **테스트:** 서식 테스트를 추가 또는 업데이트하고, 채널에서 청킹을 사용하는 경우 아웃바운드 전달 테스트를 추가합니다.
 
-## 일반적인 주의 사항
+## 자주 발생하는 함정
 
 - Slack 각도 괄호 토큰(`<@U123>`, `<#C123>`, `<https://...>`)은 반드시 보존해야 하며, 원시 HTML 은 안전하게 이스케이프해야 합니다.
 - Telegram HTML 은 태그 외부의 텍스트를 이스케이프하지 않으면 마크업이 깨질 수 있습니다.

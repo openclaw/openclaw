@@ -4,13 +4,6 @@ read_when:
   - إضافة Skills أو تعديلها
   - تغيير تقييد Skills أو قواعد التحميل
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:17Z
 ---
 
 # Skills (OpenClaw)
@@ -50,8 +43,7 @@ x-i18n:
 يمكن للإضافات شحن Skills خاصة بها عبر إدراج دلائل `skills` في
 `openclaw.plugin.json` (مسارات نسبية إلى جذر الإضافة). يتم تحميل Skills الإضافة
 عند تمكين الإضافة وتشارك في قواعد أولوية Skills المعتادة.
-يمكنك تقييدها عبر `metadata.openclaw.requires.config` على مُدخل تهيئة الإضافة.
-انظر [Plugins](/tools/plugin) للاكتشاف/التهيئة و[Tools](/tools) لواجهة
+يمكنك تقييدها عبر `metadata.openclaw.requires.config` على مُدخل تهيئة الإضافة. انظر [Plugins](/tools/plugin) للاكتشاف/التهيئة و[Tools](/tools) لواجهة
 الأدوات التي تُعلّمها تلك Skills.
 
 ## ClawHub (التثبيت + المزامنة)
@@ -60,7 +52,7 @@ ClawHub هو سجل Skills العام لـ OpenClaw. تصفّح على
 [https://clawhub.com](https://clawhub.com). استخدمه لاكتشاف Skills وتثبيتها وتحديثها والنسخ الاحتياطي لها.
 الدليل الكامل: [ClawHub](/tools/clawhub).
 
-سير العمل الشائع:
+التدفقات المشتركة:
 
 - تثبيت Skill في مساحة العمل:
   - `clawhub install <skill-slug>`
@@ -293,8 +285,7 @@ total = 195 + Σ (97 + len(name_escaped) + len(description_escaped) + len(locati
 
 يشحن OpenClaw مجموعة أساسية من Skills على أنها **Skills مضمّنة** كجزء من
 التثبيت (حزمة npm أو OpenClaw.app). يوجد `~/.openclaw/skills` لتجاوزات محلية
-(على سبيل المثال، تثبيت/ترقيع Skill دون تغيير النسخة المضمّنة).
-Skills مساحة العمل مملوكة للمستخدم وتتجاوز كليهما عند تعارض الأسماء.
+(على سبيل المثال، تثبيت/ترقيع Skill دون تغيير النسخة المضمّنة). Skills مساحة العمل مملوكة للمستخدم وتتجاوز كليهما عند تعارض الأسماء.
 
 ## مرجع التهيئة
 

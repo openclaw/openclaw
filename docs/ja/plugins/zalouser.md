@@ -4,24 +4,17 @@ read_when:
   - OpenClaw で Zalo Personal（非公式）を利用したい場合
   - zalouser プラグインを設定または開発している場合
 title: "Zalo Personal プラグイン"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:47Z
 ---
 
 # Zalo Personal（プラグイン）
 
 `zca-cli` を使用して通常の Zalo ユーザーアカウントを自動化する、プラグイン経由の OpenClaw 向け Zalo Personal サポートです。
 
-> **警告:** 非公式の自動化は、アカウントの停止や BAN につながる可能性があります。自己責任で使用してください。
+> **警告:** 非公式の自動化は、アカウントの停止や BAN につながる可能性があります。自己責任で使用してください。 ご自身の責任においてご利用ください。
 
 ## 命名
 
-チャンネル id は、**個人用 Zalo ユーザーアカウント**（非公式）を自動化することを明確にするため `zalouser` です。将来の公式 Zalo API 統合の可能性に備えて、`zalo` は予約しています。
+チャンネル id は、**個人用 Zalo ユーザーアカウント**（非公式）を自動化することを明確にするため `zalouser` です。将来の公式 Zalo API 統合の可能性に備えて、`zalo` は予約しています。 「zalo」は将来の公式Zalo API統合のために予約されています。
 
 ## 実行場所
 

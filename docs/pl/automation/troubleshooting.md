@@ -5,13 +5,6 @@ read_when:
   - Cron uruchomił się, ale nie dostarczono wiadomości
   - Heartbeat wydaje się milczeć lub być pomijany
 title: "Rozwiązywanie problemów z automatyzacją"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:49Z
 ---
 
 # Rozwiązywanie problemów z automatyzacją

@@ -5,18 +5,11 @@ read_when:
   - 偵錯 macOS 的 Gateway launchd 服務
   - 為 macOS 安裝 Gateway CLI
 title: "macOS 上的 Gateway"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:40Z
 ---
 
 # macOS 上的 Gateway（外部 launchd）
 
-OpenClaw.app 不再內建 Node/Bun 或 Gateway 執行環境。macOS 應用程式
+OpenClaw.app 不再內建 Node/Bun 或閘道執行環境。 OpenClaw.app 不再內建 Node/Bun 或 Gateway 執行環境。macOS 應用程式
 預期安裝**外部**的 `openclaw` CLI，不會將 Gateway 作為子行程啟動，
 而是管理每位使用者的 launchd 服務以保持 Gateway 持續執行
 （或在本機已有 Gateway 正在執行時附加至該 Gateway）。
@@ -59,7 +52,8 @@ Plist 位置（每位使用者）：
 
 ## 版本相容性
 
-macOS 應用程式會檢查 Gateway 版本是否與自身版本相容。若不相容，請更新全域 CLI 以符合應用程式版本。
+macOS App 會檢查閘道版本是否與自身版本一致。 若它們
+不相容，請更新全域 CLI 以符合 App 版本。
 
 ## 煙霧測試
 

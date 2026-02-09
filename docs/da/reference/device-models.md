@@ -4,18 +4,11 @@ read_when:
   - Opdatering af tilknytninger for enhedsmodelidentifikatorer eller NOTICE-/licensfiler
   - Ændring af, hvordan Instances UI viser enhedsnavne
 title: "Enhedsmodel-database"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:37Z
 ---
 
 # Enhedsmodel-database (brugervenlige navne)
 
-macOS Companion-app’en viser brugervenlige Apple-enhedsmodelnavne i **Instances** UI ved at mappe Apple-modelidentifikatorer (f.eks. `iPad16,6`, `Mac16,6`) til menneskeligt læsbare navne.
+Appen macOS følgesvend viser venlige Apple-enhedsnavne i **Instans** UI ved at kortlægge Apple-model-identifikatorer (f.eks. `iPad16,6`, `Mac16,6`) til læsbare navne.
 
 Mappingen medleveres som JSON under:
 

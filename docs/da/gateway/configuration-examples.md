@@ -5,18 +5,11 @@ read_when:
   - Når du leder efter konfigurationseksempler
   - Når du sætter OpenClaw op for første gang
 title: "Konfigurationseksempler"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:11Z
 ---
 
 # Konfigurationseksempler
 
-Eksemplerne nedenfor er tilpasset det aktuelle konfigurationsskema. For den udtømmende reference og noter pr. felt, se [Konfiguration](/gateway/configuration).
+Eksempler nedenfor er afstemt med den aktuelle config skema. For de udtømmende referencesedler og pr. felt henvises til [Configuration](/gateway/configuration).
 
 ## Hurtig start
 
@@ -55,7 +48,7 @@ Gem som `~/.openclaw/openclaw.json`, og du kan DM’e botten fra det nummer.
 
 ## Udvidet eksempel (større valgmuligheder)
 
-> JSON5 lader dig bruge kommentarer og efterstillede kommaer. Almindelig JSON fungerer også.
+> JSON5 lader dig bruge kommentarer og efterfølgende kommaer. Regelmæssig JSON arbejder også.
 
 ```json5
 {
@@ -608,6 +601,6 @@ Hvis mere end én person kan DM’e din bot (flere poster i `allowFrom`, parring
 ## Tips
 
 - Hvis du angiver `dmPolicy: "open"`, skal den tilsvarende `allowFrom`-liste indeholde `"*"`.
-- Udbyder-ID’er varierer (telefonnumre, bruger-ID’er, kanal-ID’er). Brug udbyderens dokumentation til at bekræfte formatet.
+- Udbyder-ID'er adskiller sig (telefonnumre, bruger-IDs, kanal-ID'er). Brug udbyderens dokumenter til at bekræfte formatet.
 - Valgfrie sektioner, der kan tilføjes senere: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
 - Se [Providers](/channels/whatsapp) og [Fejlfinding](/gateway/troubleshooting) for mere detaljerede opsætningsnoter.

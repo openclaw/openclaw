@@ -3,13 +3,6 @@ summary: "Agentsessionverktyg för att lista sessioner, hämta historik och skic
 read_when:
   - Lägga till eller ändra sessionsverktyg
 title: "Sessionsverktyg"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:11Z
 ---
 
 # Sessionsverktyg
@@ -31,7 +24,7 @@ Mål: ett litet verktygsset som är svårt att missbruka, så att agenter kan li
 - Hooks använder `hook:<uuid>` om inget annat uttryckligen anges.
 - Node-sessioner använder `node-<nodeId>` om inget annat uttryckligen anges.
 
-`global` och `unknown` är reserverade värden och listas aldrig. Om `session.scope = "global"`, aliaserar vi det till `main` för alla verktyg så att anropare aldrig ser `global`.
+`global` och `okänd` är reserverade värden och listas aldrig. Om `session.scope = "global"`, alias vi det till `main` för alla verktyg så att den som ringer aldrig ser `global`.
 
 ## sessions_list
 
@@ -96,7 +89,7 @@ Beteende:
 
 - `timeoutSeconds = 0`: köa och returnera `{ runId, status: "accepted" }`.
 - `timeoutSeconds > 0`: vänta upp till N sekunder på slutförande och returnera sedan `{ runId, status: "ok", reply }`.
-- Om väntan tidsgränsas: `{ runId, status: "timeout", error }`. Körningen fortsätter; anropa `sessions_history` senare.
+- Om väntetider ut: `{ runId, status: "timeout", fel }`. Kör fortsätter; anrop `sessions_history` senare.
 - Om körningen misslyckas: `{ runId, status: "error", error }`.
 - Leveransannonser körs efter att primärkörningen slutförts och är best-effort; `status: "ok"` garanterar inte att annonsen levererades.
 - Väntar via gateway `agent.wait` (serversidan) så att återanslutningar inte avbryter väntan.
@@ -162,7 +155,7 @@ Parametrar:
 
 Tillåtelselista:
 
-- `agents.list[].subagents.allowAgents`: lista över agent-id:n som tillåts via `agentId` (`["*"]` för att tillåta alla). Standard: endast den begärande agenten.
+- `agents.list[].subagents.allowAgents`: lista över agent-ID som tillåts via `agentId` (`["*"]` för att tillåta någon). Standard: endast beställaren agent.
 
 Discovery:
 

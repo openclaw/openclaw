@@ -4,13 +4,6 @@ read_when:
   - ノードは接続されているが、camera/canvas/screen/exec ツールが失敗する場合
   - ノードのペアリングと承認のメンタルモデルを理解する必要がある場合
 title: "ノードのトラブルシューティング"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:29Z
 ---
 
 # ノードのトラブルシューティング
@@ -35,7 +28,7 @@ openclaw nodes describe --node <idOrNameOrIp>
 openclaw approvals get --node <idOrNameOrIp>
 ```
 
-正常のサイン:
+正常な信号:
 
 - ノードが接続され、役割 `node` に対してペアリングされています。
 - `nodes describe` に、呼び出している機能が含まれています。
@@ -57,12 +50,12 @@ openclaw logs --follow
 
 ## 権限マトリクス
 
-| 機能                         | iOS                                  | Android                                                 | macOS ノードアプリ               | 典型的な失敗コード             |
-| ---------------------------- | ------------------------------------ | ------------------------------------------------------- | -------------------------------- | ------------------------------ |
-| `camera.snap`、`camera.clip` | カメラ（クリップ音声用にマイク）     | カメラ（クリップ音声用にマイク）                        | カメラ（クリップ音声用にマイク） | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | 画面収録（マイクは任意）             | 画面キャプチャのプロンプト（マイクは任意）              | 画面収録                         | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | 使用中または常に許可（モードに依存） | モードに基づくフォアグラウンド/バックグラウンド位置情報 | 位置情報の権限                   | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | 該当なし（ノードホストのパス）       | 該当なし（ノードホストのパス）                          | 実行承認が必要                   | `SYSTEM_RUN_DENIED`            |
+| Capability                  | iOS                | Android                      | macOS ノードアプリ     | 典型的な失敗コード                      |
+| --------------------------- | ------------------ | ---------------------------- | ---------------- | ------------------------------ |
+| `camera.snap`、`camera.clip` | カメラ（クリップ音声用にマイク）   | カメラ（クリップ音声用にマイク）             | カメラ（クリップ音声用にマイク） | `*_PERMISSION_REQUIRED`        |
+| `screen.record`             | 画面収録（マイクは任意）       | 画面キャプチャのプロンプト（マイクは任意）        | 画面収録             | `*_PERMISSION_REQUIRED`        |
+| `location.get`              | 使用中または常に許可（モードに依存） | モードに基づくフォアグラウンド/バックグラウンド位置情報 | 位置情報の権限          | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                | 該当なし（ノードホストのパス）    | 該当なし（ノードホストのパス）              | 実行承認が必要          | `SYSTEM_RUN_DENIED`            |
 
 ## ペアリングと承認の違い
 
@@ -80,8 +73,8 @@ openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-ペアリングが不足している場合は、まずノードデバイスを承認してください。  
-ペアリングは問題ないが `system.run` が失敗する場合は、実行承認 / 許可リストを修正してください。
+ペアリングがない場合は、最初にノードデバイスを承認してください。
+ペアリングは問題なく、 `system.run` が失敗した場合、 exec approvals/allowlist を修正します。
 
 ## 一般的なノードのエラーコード
 

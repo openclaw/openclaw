@@ -4,13 +4,6 @@ read_when:
   - Noden är ansluten men verktyg för kamera/canvas/skärm/exec misslyckas
   - Du behöver den mentala modellen för nodparning kontra godkännanden
 title: "Felsökning av noder"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:48Z
 ---
 
 # Felsökning av noder
@@ -57,12 +50,12 @@ Om du ser `NODE_BACKGROUND_UNAVAILABLE`, ta fram nodappen i förgrunden och för
 
 ## Behörighetsmatris
 
-| Kapacitet                    | iOS                                         | Android                                    | macOS-nodapp                      | Typisk felkod                  |
-| ---------------------------- | ------------------------------------------- | ------------------------------------------ | --------------------------------- | ------------------------------ |
+| Kapacitet                    | iOS                                                            | Android                                                       | macOS-nodapp                                         | Typisk felkod                  |
+| ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------ |
 | `camera.snap`, `camera.clip` | Kamera (+ mikrofon för klippljud)           | Kamera (+ mikrofon för klippljud)          | Kamera (+ mikrofon för klippljud) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Skärminspelning (+ mikrofon valfri)         | Skärminspelningsprompt (+ mikrofon valfri) | Skärminspelning                   | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Vid användning eller Alltid (beror på läge) | Förgrunds-/bakgrundsplats baserat på läge  | Platsbehörighet                   | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (nodvärdsökväg)                         | n/a (nodvärdsökväg)                        | Exec-godkännanden krävs           | `SYSTEM_RUN_DENIED`            |
+| `screen.record`              | Skärminspelning (+ mikrofon valfri)         | Skärminspelningsprompt (+ mikrofon valfri) | Skärminspelning                                      | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Vid användning eller Alltid (beror på läge) | Förgrunds-/bakgrundsplats baserat på läge                     | Platsbehörighet                                      | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (nodvärdsökväg)                         | n/a (nodvärdsökväg)                        | Exec-godkännanden krävs                              | `SYSTEM_RUN_DENIED`            |
 
 ## Parning kontra godkännanden
 
@@ -80,8 +73,8 @@ openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-Om parning saknas, godkänn nodenheten först.
-Om parningen är OK men `system.run` misslyckas, åtgärda exec-godkännanden/tillåtelselista.
+Om parkoppling saknas, godkänn nodenheten först.
+Om parning är bra men `system.run` misslyckas, åtgärda exec godkännanden/tillåtna lista.
 
 ## Vanliga nodfelkoder
 

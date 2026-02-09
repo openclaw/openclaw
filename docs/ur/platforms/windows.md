@@ -4,20 +4,15 @@ read_when:
   - Windows پر OpenClaw انسٹال کرتے وقت
   - Windows معاون ایپ کی حیثیت تلاش کرتے وقت
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # Windows (WSL2)
 
-Windows پر OpenClaw کی سفارش **WSL2 کے ذریعے** کی جاتی ہے (Ubuntu کی سفارش کی جاتی ہے)۔  
-CLI + Gateway لینکس کے اندر چلتے ہیں، جس سے رن ٹائم یکساں رہتا ہے اور ٹولنگ کہیں زیادہ ہم آہنگ ہوتی ہے (Node/Bun/pnpm، Linux بائنریز، skills)۔  
-Native Windows قدرے مشکل ہو سکتا ہے۔ WSL2 آپ کو مکمل Linux تجربہ دیتا ہے — انسٹال کرنے کے لیے ایک ہی کمانڈ: `wsl --install`۔
+OpenClaw on Windows is recommended **via WSL2** (Ubuntu recommended). The
+CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
+tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Native
+Windows might be trickier. WSL2 gives you the full Linux experience — one command
+to install: `wsl --install`.
 
 Native Windows معاون ایپس منصوبہ بندی میں ہیں۔
 
@@ -62,7 +57,10 @@ openclaw doctor
 
 ## Advanced: WSL سروسز کو LAN پر ایکسپوز کریں (portproxy)
 
-WSL کا اپنا ورچوئل نیٹ ورک ہوتا ہے۔ اگر کسی دوسری مشین کو **WSL کے اندر** چلنے والی سروس تک پہنچنا ہو (SSH، ایک مقامی TTS سرور، یا Gateway)، تو آپ کو Windows پورٹ کو موجودہ WSL IP پر فارورڈ کرنا ہوگا۔ WSL IP ری اسٹارٹ کے بعد بدل جاتا ہے، اس لیے آپ کو فارورڈنگ رول تازہ کرنا پڑ سکتا ہے۔
+WSL has its own virtual network. If another machine needs to reach a service
+running **inside WSL** (SSH, a local TTS server, or the Gateway), you must
+forward a Windows port to the current WSL IP. The WSL IP changes after restarts,
+so you may need to refresh the forwarding rule.
 
 مثال (PowerShell **بطور Administrator**):
 
@@ -103,7 +101,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 
 ## مرحلہ وار WSL2 انسٹال
 
-### 1) WSL2 + Ubuntu انسٹال کریں
+### 1. WSL2 + Ubuntu انسٹال کریں
 
 PowerShell کھولیں (Admin):
 
@@ -116,7 +114,7 @@ wsl --install -d Ubuntu-24.04
 
 اگر Windows کہے تو ری بوٹ کریں۔
 
-### 2) systemd فعال کریں (Gateway انسٹال کے لیے ضروری)
+### 2. systemd فعال کریں (Gateway انسٹال کے لیے ضروری)
 
 اپنے WSL ٹرمینل میں:
 
@@ -139,7 +137,7 @@ Ubuntu دوبارہ کھولیں، پھر تصدیق کریں:
 systemctl --user status
 ```
 
-### 3) OpenClaw انسٹال کریں (WSL کے اندر)
+### 3. OpenClaw انسٹال کریں (WSL کے اندر)
 
 WSL کے اندر Linux Getting Started فلو کی پیروی کریں:
 
@@ -156,4 +154,5 @@ openclaw onboard
 
 ## Windows معاون ایپ
 
-ابھی ہمارے پاس Windows معاون ایپ موجود نہیں ہے۔ اگر آپ اسے ممکن بنانے کے لیے تعاون کرنا چاہتے ہیں تو شراکتیں خوش آئند ہیں۔
+We do not have a Windows companion app yet. Contributions are welcome if you want
+contributions to make it happen.

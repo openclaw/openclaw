@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการใช้ Qwen กับ OpenClaw
   - คุณต้องการการเข้าถึง Qwen Coder แบบ OAuth ระดับฟรี
 title: "Qwen"
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:36Z
 ---
 
 # Qwen
@@ -50,7 +43,7 @@ openclaw models set qwen-portal/coder-model
 
 หากคุณเคยล็อกอินด้วย Qwen Code CLI แล้ว OpenClaw จะซิงค์ข้อมูลรับรองจาก
 `~/.qwen/oauth_creds.json` เมื่อโหลดคลังการยืนยันตัวตน คุณยังคงต้องมีรายการ
-`models.providers.qwen-portal` (ใช้คำสั่งล็อกอินด้านบนเพื่อสร้างรายการ)
+`models.providers.qwen-portal` (ใช้คำสั่งล็อกอินด้านบนเพื่อสร้างรายการ) คุณยังคงต้องมีรายการ `models.providers.qwen-portal` (ใช้คำสั่งล็อกอินด้านบนเพื่อสร้างรายการหนึ่ง)
 
 ## หมายเหตุ
 

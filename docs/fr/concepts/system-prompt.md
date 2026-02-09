@@ -4,13 +4,6 @@ read_when:
   - Modification du texte du prompt systeme, de la liste d’outils ou des sections temps/heartbeat
   - Changement du bootstrap de l’espace de travail ou du comportement d’injection des Skills
 title: "Prompt systeme"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: bef4b2674ba0414c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:32Z
 ---
 
 # Prompt systeme

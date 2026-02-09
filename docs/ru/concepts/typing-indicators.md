@@ -1,15 +1,8 @@
 ---
-summary: «Когда OpenClaw показывает индикаторы набора текста и как их настраивать»
+summary: "Когда OpenClaw показывает индикаторы набора текста и как их настраивать"
 read_when:
   - Изменение поведения или значений по умолчанию для индикаторов набора текста
-title: «Индикаторы набора текста»
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:26Z
+title: "Индикаторы набора текста"
 ---
 
 # Индикаторы набора текста

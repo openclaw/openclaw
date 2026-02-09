@@ -4,25 +4,18 @@ read_when:
   - آپ کو /new، /reset، /stop، اور ایجنٹ لائف سائیکل ایونٹس کے لیے ایونٹ پر مبنی خودکاری درکار ہو
   - آپ ہُکس بنانا، انسٹال کرنا، یا ڈیبگ کرنا چاہتے ہوں
 title: "ہُکس"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:20Z
 ---
 
 # ہُکس
 
-ہُکس ایک قابلِ توسیع ایونٹ پر مبنی نظام فراہم کرتے ہیں جو ایجنٹ کی کمانڈز اور ایونٹس کے جواب میں خودکار اعمال انجام دیتا ہے۔ ہُکس ڈائریکٹریز سے خودکار طور پر دریافت ہو جاتے ہیں اور CLI کمانڈز کے ذریعے منظم کیے جا سکتے ہیں، بالکل اسی طرح جیسے OpenClaw میں Skills کام کرتی ہیں۔
+3. Hooks ایک قابلِ توسیع، ایونٹ پر مبنی نظام فراہم کرتے ہیں جو ایجنٹ کمانڈز اور ایونٹس کے جواب میں خودکار کارروائیوں کے لیے استعمال ہوتا ہے۔ 4. Hooks ڈائریکٹریز سے خودکار طور پر دریافت ہوتے ہیں اور CLI کمانڈز کے ذریعے منظم کیے جا سکتے ہیں، بالکل اسی طرح جیسے OpenClaw میں skills کام کرتی ہیں۔
 
 ## Getting Oriented
 
-ہُکس چھوٹے اسکرپٹس ہوتے ہیں جو کسی واقعے کے پیش آنے پر چلتے ہیں۔ ان کی دو اقسام ہیں:
+5. Hooks چھوٹے اسکرپٹس ہوتے ہیں جو کسی واقعے کے ہونے پر چلتے ہیں۔ 6. ان کی دو اقسام ہیں:
 
 - **Hooks** (یہ صفحہ): Gateway کے اندر چلتے ہیں جب ایجنٹ ایونٹس فائر ہوتے ہیں، جیسے `/new`, `/reset`, `/stop`, یا لائف سائیکل ایونٹس۔
-- **Webhooks**: بیرونی HTTP ویب ہُکس جو دوسرے سسٹمز کو OpenClaw میں کام ٹرگر کرنے دیتے ہیں۔ دیکھیں [Webhook Hooks](/automation/webhook) یا Gmail مددگار کمانڈز کے لیے `openclaw webhooks` استعمال کریں۔
+- 7. **Webhooks**: بیرونی HTTP ویب ہوکس جو دوسرے سسٹمز کو OpenClaw میں کام شروع کرنے دیتے ہیں۔ 8. [Webhook Hooks](/automation/webhook) دیکھیں یا Gmail ہیلپر کمانڈز کے لیے `openclaw webhooks` استعمال کریں۔
 
 ہُکس پلگ اِنز کے اندر بھی بنڈل کیے جا سکتے ہیں؛ دیکھیں [Plugins](/tools/plugin#plugin-hooks)۔
 
@@ -33,7 +26,7 @@ x-i18n:
 - سیشن شروع یا ختم ہونے پر فالو اَپ خودکاری ٹرگر کرنا
 - ایونٹس کے فائر ہونے پر ایجنٹ ورک اسپیس میں فائلیں لکھنا یا بیرونی APIs کال کرنا
 
-اگر آپ ایک چھوٹا TypeScript فنکشن لکھ سکتے ہیں تو آپ ایک ہُک بھی لکھ سکتے ہیں۔ ہُکس خودکار طور پر دریافت ہو جاتے ہیں، اور آپ انہیں CLI کے ذریعے فعال یا غیرفعال کرتے ہیں۔
+9. اگر آپ ایک چھوٹا TypeScript فنکشن لکھ سکتے ہیں، تو آپ ایک hook لکھ سکتے ہیں۔ 10. Hooks خودکار طور پر دریافت ہوتے ہیں، اور آپ انہیں CLI کے ذریعے فعال یا غیر فعال کرتے ہیں۔
 
 ## Overview
 
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Onboarding
 
-آن بورڈنگ (`openclaw onboard`) کے دوران، آپ سے سفارش کردہ ہُکس فعال کرنے کے لیے کہا جائے گا۔ وِزَرڈ خودکار طور پر اہل ہُکس دریافت کرتا ہے اور انہیں انتخاب کے لیے پیش کرتا ہے۔
+11. آن بورڈنگ کے دوران (`openclaw onboard`)، آپ سے تجویز کردہ hooks کو فعال کرنے کے لیے کہا جائے گا۔ 12. وزارڈ خودکار طور پر موزوں hooks دریافت کرتا ہے اور انتخاب کے لیے پیش کرتا ہے۔
 
 ## Hook Discovery
 
@@ -103,7 +96,7 @@ my-hook/
 
 ## Hook Packs (npm/archives)
 
-ہُک پیکس معیاری npm پیکیجز ہوتے ہیں جو `package.json` میں `openclaw.hooks` کے ذریعے ایک یا زیادہ ہُکس ایکسپورٹ کرتے ہیں۔ انہیں انسٹال کریں:
+13. Hook packs معیاری npm پیکجز ہوتے ہیں جو `package.json` میں `openclaw.hooks` کے ذریعے ایک یا زیادہ hooks ایکسپورٹ کرتے ہیں۔ 14. انہیں انسٹال کریں بذریعہ:
 
 ```bash
 openclaw hooks install <path-or-spec>
@@ -121,8 +114,8 @@ openclaw hooks install <path-or-spec>
 }
 ```
 
-ہر اندراج ایک ہُک ڈائریکٹری کی طرف اشارہ کرتا ہے جس میں `HOOK.md` اور `handler.ts` (یا `index.ts`) شامل ہوتے ہیں۔
-ہُک پیکس ڈیپنڈنسیز بھی فراہم کر سکتے ہیں؛ وہ `~/.openclaw/hooks/<id>` کے تحت انسٹال ہوں گی۔
+15. ہر اندراج ایک hook ڈائریکٹری کی طرف اشارہ کرتا ہے جس میں `HOOK.md` اور `handler.ts` (یا `index.ts`) شامل ہوتے ہیں۔
+16. Hook packs اپنے dependencies کے ساتھ آ سکتے ہیں؛ یہ `~/.openclaw/hooks/<id>` کے تحت انسٹال ہوں گے۔
 
 ## Hook Structure
 
@@ -250,7 +243,7 @@ export default myHandler;
 
 یہ ہُکس ایونٹ اسٹریم لسٹنرز نہیں ہیں؛ یہ پلگ اِنز کو اجازت دیتے ہیں کہ OpenClaw کے محفوظ کرنے سے پہلے ٹول نتائج کو ہم وقتی طور پر ایڈجسٹ کریں۔
 
-- **`tool_result_persist`**: سیشن ٹرانسکرپٹ میں لکھنے سے پہلے ٹول نتائج کو تبدیل کریں۔ ہم وقتی ہونا لازم ہے؛ اپ ڈیٹ شدہ ٹول نتیجے کا پے لوڈ واپس کریں یا جوں کا توں رکھنے کے لیے `undefined` لوٹائیں۔ دیکھیں [Agent Loop](/concepts/agent-loop)۔
+- 17. **`tool_result_persist`**: ٹول کے نتائج کو سیشن ٹرانسکرپٹ میں لکھنے سے پہلے تبدیل کریں۔ 18. لازمی طور پر synchronous ہونا چاہیے؛ اپڈیٹ شدہ ٹول رزلٹ payload واپس کریں یا جیسا ہے ویسا رکھنے کے لیے `undefined` لوٹائیں۔ 19. [Agent Loop](/concepts/agent-loop) دیکھیں۔
 
 ### Future Events
 
@@ -264,19 +257,19 @@ export default myHandler;
 
 ## Creating Custom Hooks
 
-### 1. Choose Location
+### 20. 1. 21. مقام منتخب کریں
 
 - **Workspace hooks** (`<workspace>/hooks/`): ہر ایجنٹ کے لیے، سب سے زیادہ ترجیح
 - **Managed hooks** (`~/.openclaw/hooks/`): ورک اسپیسز میں مشترک
 
-### 2. Create Directory Structure
+### 22. 2. 23. ڈائریکٹری اسٹرکچر بنائیں
 
 ```bash
 mkdir -p ~/.openclaw/hooks/my-hook
 cd ~/.openclaw/hooks/my-hook
 ```
 
-### 3. Create HOOK.md
+### 24. 3. HOOK.md بنائیں
 
 ```markdown
 ---
@@ -290,7 +283,7 @@ metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
 This hook does something useful when you issue `/new`.
 ```
 
-### 4. Create handler.ts
+### 25. 4. 26. handler.ts بنائیں
 
 ```typescript
 import type { HookHandler } from "../../src/hooks/hooks.js";
@@ -307,7 +300,7 @@ const handler: HookHandler = async (event) => {
 export default handler;
 ```
 
-### 5. Enable and Test
+### 27. 5. 28. فعال کریں اور ٹیسٹ کریں
 
 ```bash
 # Verify hook is discovered
@@ -400,7 +393,7 @@ openclaw hooks enable my-hook
 }
 ```
 
-**Migration**: نئے ہُکس کے لیے نئی discovery-based سسٹم استعمال کریں۔ لیگیسی ہینڈلرز ڈائریکٹری پر مبنی ہُکس کے بعد لوڈ ہوتے ہیں۔
+**Migration**: Use the new discovery-based system for new hooks. 30. لیگیسی handlers کو ڈائریکٹری پر مبنی hooks کے بعد لوڈ کیا جاتا ہے۔
 
 ## CLI Commands
 
@@ -571,8 +564,8 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-گیٹ وے کے شروع ہونے پر (چینلز کے بعد) `BOOT.md` چلاتا ہے۔
-اس کے چلنے کے لیے اندرونی ہُکس کا فعال ہونا لازم ہے۔
+gateway کے شروع ہونے پر (چینلز کے شروع ہونے کے بعد) `BOOT.md` چلاتا ہے۔
+31. اس کے چلنے کے لیے اندرونی hooks کو فعال ہونا ضروری ہے۔
 
 **Events**: `gateway:startup`
 
@@ -594,7 +587,7 @@ openclaw hooks enable boot-md
 
 ### Keep Handlers Fast
 
-ہُکس کمانڈ پروسیسنگ کے دوران چلتے ہیں۔ انہیں ہلکا پھلکا رکھیں:
+32. Hooks کمانڈ پروسیسنگ کے دوران چلتے ہیں۔ 33. انہیں ہلکا پھلکا رکھیں:
 
 ```typescript
 // ✓ Good - async work, returns immediately

@@ -5,25 +5,15 @@ read_when:
   - macOS ایپ میں ایگزیک منظوری UX نافذ کرتے وقت
   - sandbox سے باہر نکلنے کے پرامپٹس اور ان کے مضمرات کا جائزہ لیتے وقت
 title: "ایگزیک منظوریات"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # ایگزیک منظوریات
 
-ایگزیک منظوریات وہ **companion app / node host guardrail** ہیں جو sandbox میں موجود ایجنٹ کو
-حقیقی ہوسٹ پر کمانڈز چلانے کی اجازت دینے کے لیے استعمال ہوتی ہیں
-(`gateway` یا `node`)۔ اسے حفاظتی انٹرلاک سمجھیں:
-کمانڈز تبھی اجازت پاتی ہیں جب پالیسی + اجازت فہرست + (اختیاری) صارف کی منظوری سب متفق ہوں۔
-ایگزیک منظوریات، ٹول پالیسی اور elevated gating کے **اضافی** طور پر لاگو ہوتی ہیں
-(جب تک elevated کو `full` پر سیٹ نہ کیا گیا ہو، جس میں منظوریات کو چھوڑ دیا جاتا ہے)۔
-موثر پالیسی، `tools.exec.*` اور منظوریات کے ڈیفالٹس میں سے **زیادہ سخت** ہوتی ہے؛
-اگر منظوریات کا کوئی فیلڈ شامل نہ ہو تو `tools.exec` کی قدر استعمال ہوتی ہے۔
+Exec approvals are the **companion app / node host guardrail** for letting a sandboxed agent run
+commands on a real host (`gateway` or `node`). Think of it like a safety interlock:
+commands are allowed only when policy + allowlist + (optional) user approval all agree.
+Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
+Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
 
 اگر companion app کا UI **دستیاب نہ ہو** تو جس درخواست کو پرامپٹ درکار ہو،
 وہ **ask fallback** کے ذریعے حل کی جاتی ہے (ڈیفالٹ: انکار)۔
@@ -105,10 +95,10 @@ macOS تقسیم:
 
 ## اجازت فہرست (ہر ایجنٹ کے لیے)
 
-اجازت فہرستیں **ہر ایجنٹ کے لیے** ہوتی ہیں۔ اگر متعدد ایجنٹس موجود ہوں تو macOS ایپ میں
-جس ایجنٹ میں ترمیم کرنی ہو اسے منتخب کریں۔ پیٹرنز **کیس اِن سینسِٹو گلوب میچز** ہوتے ہیں۔
-پیٹرنز کو **بائنری راستوں** تک حل ہونا چاہیے (صرف basename والی اندراجات نظرانداز کی جاتی ہیں)۔
-لیگیسی `agents.default` اندراجات، لوڈ کے وقت `agents.main` میں منتقل کر دی جاتی ہیں۔
+Allowlists are **per agent**. If multiple agents exist, switch which agent you’re
+editing in the macOS app. Patterns are **case-insensitive glob matches**.
+Patterns should resolve to **binary paths** (basename-only entries are ignored).
+Legacy `agents.default` entries are migrated to `agents.main` on load.
 
 مثالیں:
 
@@ -125,53 +115,48 @@ macOS تقسیم:
 
 ## Auto-allow skill CLIs
 
-جب **Auto-allow skill CLIs** فعال ہو تو معروف Skills کے حوالے سے آنے والے ایگزیکیوٹیبلز
-نوڈز پر اجازت فہرست میں شمار ہوتے ہیں (macOS نوڈ یا ہیڈلیس نوڈ ہوسٹ)۔
-یہ Gateway RPC کے ذریعے اسکل بِن فہرست حاصل کرنے کے لیے `skills.bins` استعمال کرتا ہے۔
-اگر آپ سخت دستی اجازت فہرستیں چاہتے ہیں تو اسے غیر فعال کریں۔
+When **Auto-allow skill CLIs** is enabled, executables referenced by known skills
+are treated as allowlisted on nodes (macOS node or headless node host). This uses
+`skills.bins` over the Gateway RPC to fetch the skill bin list. Disable this if you want strict manual allowlists.
 
 ## Safe bins (stdin-only)
 
-`tools.exec.safeBins` **stdin-only** بائنریز کی ایک چھوٹی فہرست متعین کرتا ہے
-(مثلاً `jq`) جو اجازت فہرست موڈ میں **بغیر** واضح اجازت فہرست اندراجات کے چل سکتی ہیں۔
-Safe bins پوزیشنل فائل آرگز اور راستہ نما ٹوکنز کو مسترد کرتے ہیں، اس لیے وہ صرف
-آنے والی اسٹریم پر کام کر سکتے ہیں۔ اجازت فہرست موڈ میں شیل چیننگ اور ری ڈائریکشنز
-خودکار طور پر اجازت یافتہ نہیں ہوتیں۔
+`tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
+that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
+positional file args and path-like tokens, so they can only operate on the incoming stream.
+Shell chaining and redirections are not auto-allowed in allowlist mode.
 
-شیل چیننگ (`&&`, `||`, `;`) تب اجازت یافتہ ہوتی ہے
-جب ہر ٹاپ لیول سیگمنٹ اجازت فہرست پر پورا اترے
-(بشمول safe bins یا اسکل آٹو-الاؤ)۔ ری ڈائریکشنز اجازت فہرست موڈ میں بدستور غیر معاون ہیں۔
-کمانڈ سبسٹی ٹیوشن (`$()` / بیک ٹِکس) اجازت فہرست پارسنگ کے دوران مسترد کر دی جاتی ہے،
-حتیٰ کہ ڈبل کوٹس کے اندر بھی؛ اگر آپ کو لفظی `$()` متن درکار ہو تو سنگل کوٹس استعمال کریں۔
+Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
+(including safe bins or skill auto-allow). Redirections remain unsupported in allowlist mode.
+Command substitution (`$()` / backticks) is rejected during allowlist parsing, including inside
+double quotes; use single quotes if you need literal `$()` text.
 
 ڈیفالٹ safe bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`۔
 
 ## کنٹرول UI میں ترمیم
 
-ڈیفالٹس، ہر ایجنٹ اوور رائیڈز، اور اجازت فہرستیں ترمیم کرنے کے لیے
-**Control UI → Nodes → Exec approvals** کارڈ استعمال کریں۔
-ایک اسکوپ منتخب کریں (Defaults یا کوئی ایجنٹ)، پالیسی میں ترمیم کریں،
-اجازت فہرست پیٹرنز شامل/ہٹائیں، پھر **Save** کریں۔
-UI ہر پیٹرن کے لیے **last used** میٹاڈیٹا دکھاتا ہے تاکہ فہرست منظم رکھی جا سکے۔
+Use the **Control UI → Nodes → Exec approvals** card to edit defaults, per‑agent
+overrides, and allowlists. Pick a scope (Defaults or an agent), tweak the policy,
+add/remove allowlist patterns, then **Save**. The UI shows **last used** metadata
+per pattern so you can keep the list tidy.
 
-ٹارگٹ سیلیکٹر **Gateway** (لوکل منظوریات) یا کسی **Node** کو منتخب کرتا ہے۔
-نوڈز کو `system.execApprovals.get/set` ایڈورٹائز کرنا لازم ہے (macOS ایپ یا ہیڈلیس نوڈ ہوسٹ)۔
-اگر کوئی نوڈ ابھی ایگزیک منظوریات ایڈورٹائز نہیں کرتا تو اس کی مقامی
-`~/.openclaw/exec-approvals.json` فائل براہِ راست ترمیم کریں۔
+The target selector chooses **Gateway** (local approvals) or a **Node**. Nodes
+must advertise `system.execApprovals.get/set` (macOS app or headless node host).
+If a node does not advertise exec approvals yet, edit its local
+`~/.openclaw/exec-approvals.json` directly.
 
 CLI: `openclaw approvals` گیٹ وے یا نوڈ ایڈیٹنگ کو سپورٹ کرتا ہے
 (دیکھیں [Approvals CLI](/cli/approvals))۔
 
 ## منظوری کا بہاؤ
 
-جب پرامپٹ درکار ہو تو گیٹ وے آپریٹر کلائنٹس کو `exec.approval.requested` براڈکاسٹ کرتا ہے۔
-Control UI اور macOS ایپ اسے `exec.approval.resolve` کے ذریعے حل کرتی ہیں، پھر گیٹ وے
-منظور شدہ درخواست نوڈ ہوسٹ کو فارورڈ کرتا ہے۔
+When a prompt is required, the gateway broadcasts `exec.approval.requested` to operator clients.
+The Control UI and macOS app resolve it via `exec.approval.resolve`, then the gateway forwards the
+approved request to the node host.
 
-جب منظوریات درکار ہوں تو exec ٹول فوراً ایک approval id کے ساتھ واپس آتا ہے۔
-بعد کے سسٹم ایونٹس (`Exec finished` / `Exec denied`) کے ساتھ ربط قائم کرنے کے لیے
-اسی id کو استعمال کریں۔ اگر ٹائم آؤٹ سے پہلے کوئی فیصلہ نہ آئے تو
-درخواست کو منظوری ٹائم آؤٹ سمجھا جاتا ہے اور انکار کی وجہ کے طور پر ظاہر کیا جاتا ہے۔
+When approvals are required, the exec tool returns immediately with an approval id. Use that id to
+correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
+timeout, the request is treated as an approval timeout and surfaced as a denial reason.
 
 تصدیقی ڈائیلاگ میں شامل ہوتا ہے:
 
@@ -189,9 +174,8 @@ Control UI اور macOS ایپ اسے `exec.approval.resolve` کے ذریعے ح
 
 ## چیٹ چینلز تک منظوری فارورڈ کرنا
 
-آپ ایگزیک منظوری کے پرامپٹس کسی بھی چیٹ چینل (بشمول پلگ اِن چینلز) کو فارورڈ کر سکتے ہیں
-اور انہیں `/approve` کے ساتھ منظور کر سکتے ہیں۔
-یہ معمول کے آؤٹ باؤنڈ ڈیلیوری پائپ لائن کا استعمال کرتا ہے۔
+You can forward exec approval prompts to any chat channel (including plugin channels) and approve
+them with `/approve`. This uses the normal outbound delivery pipeline.
 
 کنفیگ:
 
@@ -243,22 +227,18 @@ Gateway -> Node Service (WS)
 - `Exec finished`
 - `Exec denied`
 
-یہ نوڈ کی جانب سے ایونٹ رپورٹ ہونے کے بعد ایجنٹ کے سیشن میں پوسٹ کیے جاتے ہیں۔
-Gateway-host ایگزیک منظوریات بھی کمانڈ کے ختم ہونے پر وہی لائف سائیکل ایونٹس خارج کرتی ہیں
-(اور اختیاری طور پر جب کمانڈ تھریش ہولڈ سے زیادہ دیر تک چل رہی ہو)۔
-منظوری-گیٹڈ ایگزیکس میں انہی پیغامات کے لیے منظوری id کو `runId` کے طور پر دوبارہ استعمال کیا جاتا ہے
-تاکہ آسانی سے ربط قائم ہو سکے۔
+These are posted to the agent’s session after the node reports the event.
+Gateway-host exec approvals emit the same lifecycle events when the command finishes (and optionally when running longer than the threshold).
+Approval-gated execs reuse the approval id as the `runId` in these messages for easy correlation.
 
 ## مضمرات
 
 - **full** طاقتور ہے؛ جہاں ممکن ہو اجازت فہرستوں کو ترجیح دیں۔
 - **ask** آپ کو باخبر رکھتا ہے اور تیز منظوریات کی اجازت دیتا ہے۔
 - ہر ایجنٹ کی اجازت فہرستیں ایک ایجنٹ کی منظوریوں کو دوسرے میں لیک ہونے سے روکتی ہیں۔
-- منظوریات صرف **authorized senders** کی جانب سے آنے والی ہوسٹ ایگزیک درخواستوں پر لاگو ہوتی ہیں۔
-  غیر مجاز بھیجنے والے `/exec` جاری نہیں کر سکتے۔
-- `/exec security=full` مجاز آپریٹرز کے لیے سیشن لیول سہولت ہے اور دانستہ طور پر منظوریات کو چھوڑ دیتا ہے۔
-  ہوسٹ ایگزیک کو سختی سے بلاک کرنے کے لیے منظوریات سکیورٹی کو `deny` پر سیٹ کریں
-  یا ٹول پالیسی کے ذریعے `exec` ٹول کو deny کریں۔
+- Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
+- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design.
+  To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
 
 متعلقہ:
 

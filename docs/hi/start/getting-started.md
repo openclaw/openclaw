@@ -4,13 +4,6 @@ read_when:
   - शून्य से पहली बार सेटअप
   - आप काम करने वाली चैट तक सबसे तेज़ रास्ता चाहते हैं
 title: "आरंभ करें"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:44Z
 ---
 
 # आरंभ करें
@@ -18,10 +11,11 @@ x-i18n:
 लक्ष्य: न्यूनतम सेटअप के साथ शून्य से पहली काम करने वाली चैट तक पहुँचना।
 
 <Info>
-सबसे तेज़ चैट: Control UI खोलें (किसी चैनल सेटअप की आवश्यकता नहीं)। `openclaw dashboard` चलाएँ
-और ब्राउज़र में चैट करें, या
-<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">Gateway होस्ट</Tooltip> पर `http://127.0.0.1:18789/` खोलें।
-दस्तावेज़: [Dashboard](/web/dashboard) और [Control UI](/web/control-ui)।
+यदि macOS ऐप
+किसी रिमोट Gateway से कनेक्ट होता है, तो वर्कस्पेस और बूटस्ट्रैपिंग फ़ाइलें उसी रिमोट
+मशीन पर रहती हैं। यह पेज एक क्यूरेटेड इंडेक्स है।
+<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">Gateway होस्ट</Tooltip>यदि आप नए हैं, तो [Getting Started](/start/getting-started) से शुरुआत करें।
+डॉक्स का पूरा मैप देखने के लिए [Docs hubs](/start/hubs) देखें।
 </Info>
 
 ## पूर्वापेक्षाएँ
@@ -35,7 +29,7 @@ x-i18n:
 ## त्वरित सेटअप (CLI)
 
 <Steps>
-  <Step title="OpenClaw इंस्टॉल करें (अनुशंसित)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +43,35 @@ x-i18n:
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     अन्य इंस्टॉल विधियाँ और आवश्यकताएँ: [Install](/install)।
     </Note>
+    ```
 
   </Step>
-  <Step title="ऑनबोर्डिंग विज़ार्ड चलाएँ">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     विज़ार्ड प्रमाणीकरण, Gateway सेटिंग्स और वैकल्पिक चैनलों को कॉन्फ़िगर करता है।
     विवरण के लिए [Onboarding Wizard](/start/wizard) देखें।
-
-  </Step>
-  <Step title="Gateway जाँचें">
-    यदि आपने सेवा इंस्टॉल की है, तो यह पहले से चल रही होनी चाहिए:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Control UI खोलें">
+  <Step title="Check the Gateway">
+    यदि आपने सेवा इंस्टॉल की है, तो यह पहले से चल रही होनी चाहिए:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,20 +85,24 @@ x-i18n:
 ## वैकल्पिक जाँचें और अतिरिक्त
 
 <AccordionGroup>
-  <Accordion title="Gateway को फ़ोरग्राउंड में चलाएँ">
+  <Accordion title="Run the Gateway in the foreground">
     त्वरित परीक्षणों या समस्या-निवारण के लिए उपयोगी।
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="एक परीक्षण संदेश भेजें">
+  <Accordion title="Send a test message">
     कॉन्फ़िगर किए गए चैनल की आवश्यकता होती है।
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -106,10 +110,10 @@ x-i18n:
 ## और गहराई में जाएँ
 
 <Columns>
-  <Card title="Onboarding Wizard (विवरण)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     पूर्ण CLI विज़ार्ड संदर्भ और उन्नत विकल्प।
   </Card>
-  <Card title="macOS ऐप ऑनबोर्डिंग" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     macOS ऐप के लिए प्रथम-रन प्रवाह।
   </Card>
 </Columns>

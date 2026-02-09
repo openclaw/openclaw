@@ -5,18 +5,11 @@ read_when:
   - エージェントのコンテキストとしてノードの canvas/camera を使用する場合
   - 新しいノードコマンドや CLI ヘルパーを追加する場合
 title: "Nodes"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:41Z
 ---
 
 # Nodes
 
-**ノード**とは、Gateway **WebSocket**（オペレーターと同一ポート）に `role: "node"` で接続し、`node.invoke` を介して（例: `canvas.*`、`camera.*`、`system.*`）といったコマンドサーフェスを公開するコンパニオンデバイス（macOS/iOS/Android/ヘッドレス）です。プロトコルの詳細は次を参照してください: [Gateway protocol](/gateway/protocol)。
+**ノード**とは、Gateway **WebSocket**（オペレーターと同一ポート）に `role: "node"` で接続し、`node.invoke` を介して（例: `canvas.*`、`camera.*`、`system.*`）といったコマンドサーフェスを公開するコンパニオンデバイス（macOS/iOS/Android/ヘッドレス）です。プロトコルの詳細は次を参照してください: [Gateway protocol](/gateway/protocol)。 Protocol details: [Gateway protocol](/gateway/protocol).
 
 レガシートランスポート: [Bridge protocol](/gateway/bridge-protocol)（TCP JSONL。現在のノードでは非推奨/削除済み）。
 
@@ -24,13 +17,13 @@ macOS は **node mode** でも実行できます。メニューバーアプリ�
 
 注記:
 
-- ノードは **周辺機器** であり、ゲートウェイではありません。ゲートウェイサービスは実行しません。
+- ノードは **周辺機器** であり、ゲートウェイではありません。ゲートウェイサービスは実行しません。 ゲートウェイサービスは実行されません。
 - Telegram/WhatsApp などのメッセージはノードではなく **ゲートウェイ** に到達します。
 - トラブルシューティング手順書: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
-**WS ノードはデバイスペアリングを使用します。** ノードは `connect` 中にデバイスアイデンティティを提示し、Gateway は `role: node` 向けのデバイスペアリング要求を作成します。デバイスの CLI（または UI）から承認してください。
+**WS ノードはデバイスペアリングを使用します。** ノードは `connect` 中にデバイスアイデンティティを提示し、Gateway は `role: node` 向けのデバイスペアリング要求を作成します。デバイスの CLI（または UI）から承認してください。 デバイスCLI(またはUI)経由で承認します。
 
 クイック CLI:
 
@@ -49,7 +42,8 @@ openclaw nodes describe --node <idOrNameOrIp>
 
 ## Remote node host (system.run)
 
-Gateway があるマシンとは別のマシンでコマンドを実行したい場合は、**node host** を使用します。モデルは引き続き **gateway** と通信し、`host=node` が選択されていると、ゲートウェイは `exec` 呼び出しを **node host** に転送します。
+ゲートウェイがあるマシン上で動作し、コマンド
+別のマシンで実行する場合は**ノードホスト** を使用します。 Gateway があるマシンとは別のマシンでコマンドを実行したい場合は、**node host** を使用します。モデルは引き続き **gateway** と通信し、`host=node` が選択されていると、ゲートウェイは `exec` 呼び出しを **node host** に転送します。
 
 ### What runs where
 
@@ -67,7 +61,8 @@ openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 
 ### Remote gateway via SSH tunnel (loopback bind)
 
-Gateway がループバック（`gateway.bind=loopback`、ローカルモードのデフォルト）にバインドしている場合、リモートの node host は直接接続できません。SSH トンネルを作成し、トンネルのローカル端を node host に指定してください。
+Gateway がループバック（`gateway.bind=loopback`、ローカルモードのデフォルト）にバインドしている場合、リモートの node host は直接接続できません。SSH トンネルを作成し、トンネルのローカル端を node host に指定してください。 SSHトンネルを作成し、トンネルのローカル端に
+ノードホストを指定します。
 
 例（node host → gateway host）:
 
@@ -109,7 +104,7 @@ openclaw nodes list
 
 ### Allowlist the commands
 
-実行承認は **node host ごと** です。ゲートウェイから許可リストのエントリを追加します:
+実行承認は **node host ごと** です。ゲートウェイから許可リストのエントリを追加します: 許可リストエントリをゲートウェイから追加:
 
 ```bash
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
@@ -214,7 +209,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 
 ## Screen recordings (nodes)
 
-ノードは `screen.record`（mp4）を公開します。例:
+ノードは `screen.record`（mp4）を公開します。例: 2026-02-08T09:22:13Z
 
 ```bash
 openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
@@ -265,6 +260,7 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 
 macOS ノードは `system.run`、`system.notify`、`system.execApprovals.get/set` を公開します。
 ヘッドレス node host は `system.run`、`system.which`、`system.execApprovals.get/set` を公開します。
+ヘッドレスノードホストは `system.run` 、 `system.which` 、 `system.execApprovals.get/set` を公開します。
 
 例:
 
@@ -281,10 +277,12 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 - `system.notify` は `--priority <passive|active|timeSensitive>` および `--delivery <system|overlay|auto>` をサポートします。
 - macOS ノードは `PATH` の上書きを無視します。ヘッドレス node host は、node host の PATH を前置する場合にのみ `PATH` を受け付けます。
 - macOS の node mode では、`system.run` は macOS アプリ内の実行承認（設定 → Exec approvals）によって制御されます。Ask/allowlist/full の挙動はヘッドレス node host と同一で、拒否されたプロンプトは `SYSTEM_RUN_DENIED` を返します。
+  Ask/allowlist/full はヘッドレスノードホストと同じ動作をします。拒否されたプロンプトは `SYSTEM_RUN_DENIIED` を返します。
 - ヘッドレス node host では、`system.run` は実行承認（`~/.openclaw/exec-approvals.json`）によって制御されます。
 
 ## Exec node binding
 
+複数のノードが利用可能な場合、exec を特定のノードにバインドできます。
 複数のノードが利用可能な場合、exec を特定のノードにバインドできます。
 これにより `exec host=node` のデフォルトノードが設定されます（エージェントごとに上書き可能です）。
 
@@ -314,7 +312,8 @@ openclaw config unset agents.list[0].tools.exec.node
 
 ## Headless node host (cross-platform)
 
-OpenClaw は、Gateway WebSocket に接続し `system.run` / `system.which` を公開する **ヘッドレス node host**（UI なし）を実行できます。これは Linux/Windows 上、またはサーバーと並行して最小構成のノードを実行する場合に有用です。
+OpenClaw は、Gateway WebSocket に接続し `system.run` / `system.which` を公開する **ヘッドレス node host**（UI なし）を実行できます。これは Linux/Windows 上、またはサーバーと並行して最小構成のノードを実行する場合に有用です。 これは、Linux/Windows
+またはサーバーと一緒に最小限のノードを実行する場合に便利です。
 
 起動方法:
 
@@ -328,7 +327,8 @@ openclaw node run --host <gateway-host> --port 18789
 - node host は、ノード ID、トークン、表示名、ゲートウェイ接続情報を `~/.openclaw/node.json` に保存します。
 - 実行承認は `~/.openclaw/exec-approvals.json` を介してローカルで強制されます
   （[Exec approvals](/tools/exec-approvals) を参照）。
-- macOS では、ヘッドレス node host は到達可能な場合にコンパニオンアプリの exec host を優先し、アプリが利用不可の場合はローカル実行にフォールバックします。アプリを必須にするには `OPENCLAW_NODE_EXEC_HOST=app` を設定し、フォールバックを無効化するには `OPENCLAW_NODE_EXEC_FALLBACK=0` を設定します。
+- macOS では、ヘッドレス node host は到達可能な場合にコンパニオンアプリの exec host を優先し、アプリが利用不可の場合はローカル実行にフォールバックします。アプリを必須にするには `OPENCLAW_NODE_EXEC_HOST=app` を設定し、フォールバックを無効化するには `OPENCLAW_NODE_EXEC_FALLBACK=0` を設定します。 `OPENCLAW_NODE_EXEC_HOST=app` をアプリ
+  必要にするか、フォールバックを無効にするには`OPENCLAW_NODE_EXEC_FALLBACK=0`を設定します。
 - Gateway の WS が TLS を使用する場合は `--tls` / `--tls-fingerprint` を追加してください。
 
 ## Mac node mode

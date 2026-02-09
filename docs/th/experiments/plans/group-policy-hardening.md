@@ -1,15 +1,8 @@
 ---
-summary: "การเสริมความแข็งแกร่งของรายการอนุญาตTelegram: การทำให้คำนำหน้าและช่องว่างเป็นมาตรฐาน"
+summary: "Telegram allowlist hardening: prefix + whitespace normalization"
 read_when:
   - ทบทวนการเปลี่ยนแปลงรายการอนุญาตTelegramในอดีต
 title: "การเสริมความแข็งแกร่งของรายการอนุญาตTelegram"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:04Z
 ---
 
 # การเสริมความแข็งแกร่งของรายการอนุญาตTelegram
@@ -20,7 +13,7 @@ x-i18n:
 
 ## สรุป
 
-รายการอนุญาตTelegramตอนนี้ยอมรับคำนำหน้า `telegram:` และ `tg:` โดยไม่คำนึงถึงตัวพิมพ์เล็กใหญ่ และทนต่อช่องว่างที่เกิดขึ้นโดยไม่ตั้งใจ การเปลี่ยนแปลงนี้ทำให้การตรวจสอบรายการอนุญาตขาเข้ามีความสอดคล้องกับการทำให้เป็นมาตรฐานของการส่งข้อความขาออก
+รายการอนุญาตTelegramตอนนี้ยอมรับคำนำหน้า `telegram:` และ `tg:` โดยไม่คำนึงถึงตัวพิมพ์เล็กใหญ่ และทนต่อช่องว่างที่เกิดขึ้นโดยไม่ตั้งใจ การเปลี่ยนแปลงนี้ทำให้การตรวจสอบรายการอนุญาตขาเข้ามีความสอดคล้องกับการทำให้เป็นมาตรฐานของการส่งข้อความขาออก This aligns inbound allowlist checks with outbound send normalization.
 
 ## สิ่งที่เปลี่ยนแปลง
 
@@ -37,7 +30,8 @@ x-i18n:
 
 ## เหตุใดจึงสำคัญ
 
-การคัดลอก/วางจากบันทึกหรือIDแชทมักมีคำนำหน้าและช่องว่างติดมาด้วย การทำให้เป็นมาตรฐานช่วยหลีกเลี่ยงผลลบลวงเมื่อพิจารณาว่าควรตอบกลับในDMsหรือกลุ่มหรือไม่
+Copy/paste from logs or chat IDs often includes prefixes and whitespace. Normalizing avoids
+false negatives when deciding whether to respond in DMs or groups.
 
 ## เอกสารที่เกี่ยวข้อง
 

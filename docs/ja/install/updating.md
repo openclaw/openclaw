@@ -4,22 +4,15 @@ read_when:
   - OpenClaw を更新する場合
   - 更新後に問題が発生した場合
 title: "更新"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:33Z
 ---
 
 # 更新
 
-OpenClaw は（「1.0」以前で）急速に進化しています。更新はインフラのデプロイと同様に扱ってください。更新 → チェック実行 → 再起動（または再起動を行う `openclaw update` を使用）→ 検証。
+OpenClawは速く動いています(以下「1.0」とします)。 配送違反のような更新を扱う: 更新 → 小切手を実行 → 再起動する (または `openclaw update` を使用して再起動) → 確認する
 
 ## 推奨：Web サイトのインストーラーを再実行（インプレースアップグレード）
 
-**推奨** の更新経路は、Web サイトのインストーラーを再実行することです。既存のインストールを検出し、インプレースでアップグレードし、必要に応じて `openclaw doctor` を実行します。
+**preferred**の更新パスは、ウェブサイトからインストーラを再実行することです。 36. 既存のインストールを検出し、その場でアップグレードし、必要に応じて `openclaw doctor` を実行します。
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -28,6 +21,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 注記：
 
 - オンボーディングウィザードを再度実行したくない場合は、`--no-onboard` を追加してください。
+
 - **ソースインストール** の場合は、次を使用します。
 
   ```bash
@@ -37,6 +31,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
   インストーラーは、リポジトリがクリーンな場合に **のみ** `git pull --rebase` を行います。
 
 - **グローバルインストール** の場合、スクリプトは内部的に `npm install -g openclaw@latest` を使用します。
+
 - レガシー注記：互換性シムとして `clawdbot` は引き続き利用可能です。
 
 ## 更新前に
@@ -74,7 +69,7 @@ openclaw update --channel stable
 
 チャンネルの意味とリリースノートについては、[Development channels](/install/development-channels) を参照してください。
 
-注記：npm インストールでは、Gateway は起動時に更新ヒントをログに出力します（現在のチャンネルタグを確認）。`update.checkOnStart: false` で無効化できます。
+注記：npm インストールでは、Gateway は起動時に更新ヒントをログに出力します（現在のチャンネルタグを確認）。`update.checkOnStart: false` で無効化できます。 `update.checkOnStart: false` で無効にします。
 
 その後：
 
@@ -105,11 +100,11 @@ openclaw update
 - 依存関係のインストール、ビルド、Control UI のビルドを行い、`openclaw doctor` を実行します。
 - 既定で Gateway を再起動します（スキップするには `--no-restart`）。
 
-**npm/pnpm** でインストールしている場合（git メタデータなし）、`openclaw update` はパッケージマネージャー経由での更新を試みます。インストールを検出できない場合は、「更新（グローバルインストール）」を使用してください。
+**npm/pnpm** でインストールしている場合（git メタデータなし）、`openclaw update` はパッケージマネージャー経由での更新を試みます。インストールを検出できない場合は、「更新（グローバルインストール）」を使用してください。 インストールが検出できない場合は、代わりに "Update (global install)" を使用してください。
 
 ## 更新（Control UI / RPC）
 
-Control UI には **Update & Restart**（RPC：`update.run`）があります。これは次を行います：
+Control UI には **Update & Restart**（RPC：`update.run`）があります。これは次を行います： それ:
 
 1. `openclaw update` と同じソース更新フローを実行します（git checkout のみ）。
 2. 構造化レポート（stdout/stderr の末尾）を含む再起動センチネルを書き込みます。
@@ -147,7 +142,7 @@ openclaw health
 
 ## 常に実行：`openclaw doctor`
 
-Doctor は「安全な更新」コマンドです。意図的に地味で、修復＋移行＋警告を行います。
+Doctor は「安全な更新」コマンドです。意図的に地味で、修復＋移行＋警告を行います。 それは意図的に退屈です:修理+移行+警告。
 
 注記：**ソースインストール**（git checkout）の場合、`openclaw doctor` は最初に `openclaw update` を実行する提案を行います。
 

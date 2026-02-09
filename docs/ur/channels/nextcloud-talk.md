@@ -3,18 +3,11 @@ summary: "Nextcloud Talk کی معاونت کی حیثیت، صلاحیتیں، 
 read_when:
   - Nextcloud Talk چینل کی خصوصیات پر کام کرتے وقت
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:00Z
 ---
 
 # Nextcloud Talk (پلگ اِن)
 
-حیثیت: پلگ اِن (ویب ہُک بوٹ) کے ذریعے معاونت یافتہ۔ براہِ راست پیغامات، رومز، ری ایکشنز، اور مارک ڈاؤن پیغامات معاونت یافتہ ہیں۔
+Status: supported via plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
 ## پلگ اِن درکار ہے
 
@@ -40,6 +33,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 ## فوری سیٹ اپ (مبتدی)
 
 1. Nextcloud Talk پلگ اِن انسٹال کریں۔
+
 2. اپنے Nextcloud سرور پر ایک بوٹ بنائیں:
 
    ```bash
@@ -47,9 +41,11 @@ openclaw plugins install ./extensions/nextcloud-talk
    ```
 
 3. ہدف روم کی سیٹنگز میں بوٹ کو فعال کریں۔
+
 4. OpenClaw کنفیگر کریں:
    - کنفیگ: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - یا env: `NEXTCLOUD_TALK_BOT_SECRET` (صرف ڈیفالٹ اکاؤنٹ)
+
 5. Gateway ری اسٹارٹ کریں (یا آن بورڈنگ مکمل کریں)۔
 
 کم از کم کنفیگ:
@@ -69,14 +65,14 @@ openclaw plugins install ./extensions/nextcloud-talk
 
 ## نوٹس
 
-- بوٹس DMs شروع نہیں کر سکتے۔ صارف کو پہلے بوٹ کو پیغام بھیجنا ہوگا۔
+- Bots cannot initiate DMs. The user must message the bot first.
 - Webhook URL کا Gateway سے قابلِ رسائی ہونا لازم ہے؛ اگر پراکسی کے پیچھے ہوں تو `webhookPublicUrl` سیٹ کریں۔
 - میڈیا اپ لوڈز بوٹ API کے ذریعے معاونت یافتہ نہیں؛ میڈیا URLs کے طور پر بھیجا جاتا ہے۔
 - Webhook پے لوڈ DMs اور رومز میں فرق نہیں کرتا؛ روم ٹائپ کی تلاش فعال کرنے کے لیے `apiUser` + `apiPassword` سیٹ کریں (ورنہ DMs کو رومز سمجھا جاتا ہے)۔
 
 ## رسائی کا کنٹرول (DMs)
 
-- ڈیفالٹ: `channels.nextcloud-talk.dmPolicy = "pairing"`۔ نامعلوم ارسال کنندگان کو جوڑی بنانے کا کوڈ ملتا ہے۔
+- ڈیفالٹ: `channels.nextcloud-talk.dmPolicy = "pairing"`۔ Unknown senders get a pairing code.
 - منظوری کے طریقے:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 - `channels.nextcloud-talk.webhookPath`: webhook پاتھ (ڈیفالٹ: /nextcloud-talk-webhook)۔
 - `channels.nextcloud-talk.webhookPublicUrl`: بیرونی طور پر قابلِ رسائی webhook URL۔
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`۔
-- `channels.nextcloud-talk.allowFrom`: DM اجازت فہرست (صارف IDs)۔ `open` کے لیے `"*"` درکار ہے۔
+- `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`۔
 - `channels.nextcloud-talk.groupAllowFrom`: گروپ اجازت فہرست (صارف IDs)۔
 - `channels.nextcloud-talk.rooms`: ہر روم کی سیٹنگز اور اجازت فہرست۔

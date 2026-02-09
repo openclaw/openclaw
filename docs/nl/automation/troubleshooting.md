@@ -5,13 +5,6 @@ read_when:
   - Cron is uitgevoerd maar er is geen bericht afgeleverd
   - Heartbeat lijkt stil of overgeslagen
 title: "Problemen oplossen bij automatisering"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:01Z
 ---
 
 # Problemen oplossen bij automatisering

@@ -1,17 +1,10 @@
 ---
-summary: „Pairing-Überblick: genehmigen, wer Ihnen Direktnachrichten senden darf + welche Nodes dem Netzwerk beitreten können“
+summary: "Paarübersicht: genehmigen, wer dir DM + welche Knoten beitreten können"
 read_when:
   - Einrichten der Zugriffskontrolle für Direktnachrichten
   - Pairing eines neuen iOS-/Android-Nodes
   - Überprüfung der Sicherheitslage von OpenClaw
-title: „Pairing“
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:18Z
+title: "Pairing"
 ---
 
 # Pairing
@@ -24,7 +17,7 @@ Er wird an zwei Stellen verwendet:
 
 Sicherheitskontext: [Security](/gateway/security)
 
-## 1) DM-Pairing (eingehender Chat-Zugriff)
+## 1. DM-Pairing (eingehender Chat-Zugriff)
 
 Wenn ein Kanal mit der DM-Richtlinie `pairing` konfiguriert ist, erhalten unbekannte Absender einen Kurzcode und ihre Nachricht wird **nicht verarbeitet**, bis Sie genehmigen.
 
@@ -54,7 +47,7 @@ Gespeichert unter `~/.openclaw/credentials/`:
 
 Behandeln Sie diese Daten als sensibel (sie steuern den Zugriff auf Ihren Assistenten).
 
-## 2) Node-Geräte-Pairing (iOS-/Android-/macOS-/headless Nodes)
+## 2. Node-Geräte-Pairing (iOS-/Android-/macOS-/headless Nodes)
 
 Nodes verbinden sich als **Geräte** mit dem Gateway mit `role: node`. Das Gateway
 erstellt eine Geräte-Pairing-Anfrage, die genehmigt werden muss.

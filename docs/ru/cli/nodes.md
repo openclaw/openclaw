@@ -4,13 +4,6 @@ read_when:
   - Вы управляете сопряжёнными узлами (камерами, экраном, холстом)
   - Вам нужно одобрять запросы или вызывать команды узлов
 title: "узлы"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:19Z
 ---
 
 # `openclaw nodes`

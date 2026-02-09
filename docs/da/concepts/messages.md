@@ -5,13 +5,6 @@ read_when:
   - Afklaring af sessioner, køhåndteringsmetoder eller streamingadfærd
   - Dokumentation af synlighed af ræsonnement og konsekvenser for brug
 title: "Meddelelser"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:21Z
 ---
 
 # Meddelelser
@@ -33,21 +26,21 @@ Vigtige indstillinger findes i konfigurationen:
 
 - `messages.*` for præfikser, køhåndtering og gruppeadfærd.
 - `agents.defaults.*` for standarder for blokstreaming og chunking.
-- Kanaloverstyringer (`channels.whatsapp.*`, `channels.telegram.*`, osv.) for grænser og streaming‑til/fra.
+- Kanal tilsidesættelser (`channels.whatsapp.*`, `channels.telegram.*`, etc.) for hætter og streaming skifter.
 
 Se [Konfiguration](/gateway/configuration) for fuldt skema.
 
 ## Indgående deduplikering
 
-Kanaler kan genlevere den samme meddelelse efter genforbindelser. OpenClaw holder en
-kortlivet cache med nøgle af kanal/konto/peer/session/meddelelses-id, så duplikerede
-leveringer ikke udløser endnu et agent‑run.
+Kanaler kan genlevere den samme besked efter genoprettelse. OpenClaw beholder en
+kortlivede cache-nøgle ved kanal/account/peer/session/message id så duplikerede
+-leverancer ikke udløser en anden agent kørsel.
 
 ## Indgående debouncing
 
-Hurtige, efterfølgende meddelelser fra **samme afsender** kan samles i én agent‑tur via
-`messages.inbound`. Debouncing er afgrænset pr. kanal + samtale og bruger den seneste
-meddelelse til svartrådning/ID’er.
+Hurtige meddelelser fra den **samme afsender** kan sendes til en enkelt
+agent slå via `messages.inbound`. Debouncing er scoped per kanal + conversation
+og bruger den seneste meddelelse til svar tråde / IDs.
 
 Konfiguration (global standard + pr. kanal‑overstyringer):
 
@@ -79,10 +72,10 @@ Sessioner ejes af gatewayen, ikke af klienter.
 - Grupper/kanaler får deres egne sessionsnøgler.
 - Sessionslageret og transskripter ligger på gateway‑værten.
 
-Flere enheder/kanaler kan mappe til den samme session, men historik synkroniseres ikke fuldt
-til alle klienter. Anbefaling: brug én primær enhed til lange samtaler for at undgå
-divergerende kontekst. Control UI og TUI viser altid den gateway‑understøttede
-sessionstransskription og er derfor sandhedskilden.
+Flere enheder/kanaler kan kortlægge til den samme session, men historikken er ikke fuldt ud
+synkroniseret tilbage til hver klient. Anbefaling: Brug en primær enhed til lange
+samtaler for at undgå divergerende kontekst. Kontrol-UI og TUI viser altid
+gateway-bakket session udskrift, så de er kilden til sandhed.
 
 Detaljer: [Sessionsstyring](/concepts/session).
 
@@ -90,8 +83,8 @@ Detaljer: [Sessionsstyring](/concepts/session).
 
 OpenClaw adskiller **prompt‑body** fra **kommando‑body**:
 
-- `Body`: prompttekst sendt til agenten. Dette kan inkludere kanalindpakninger og
-  valgfrie historikomslag.
+- `Body`: prompt tekst sendt til agent. Dette kan omfatte kanal konvolutter og
+  valgfri historie indpakninger.
 - `CommandBody`: rå brugertekst til direktiv-/kommandofortolkning.
 - `RawBody`: legacy‑alias for `CommandBody` (bevares for kompatibilitet).
 
@@ -100,20 +93,20 @@ Når en kanal leverer historik, bruger den et delt omslag:
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
-For **ikke‑direkte chats** (grupper/kanaler/rum) præfikses **den aktuelle meddelelses‑body**
-med afsenderetiketten (samme stil som bruges for historikposter). Det holder realtids‑ og
-kø-/historikmeddelelser konsistente i agent‑prompten.
+For **ikke-direkte chats** (grupper/kanaler/rum), er **nuværende meddelelseskort** præfikseret med
+afsenderetiketten (samme stil som for historikindlæg). Dette holder real-time og kø/historik
+beskeder konsistente i agent prompten.
 
 Historikbuffere er **kun afventende**: de inkluderer gruppemeddelelser, der _ikke_
 udløste et run (fx mention‑afgrænsede meddelelser) og **udelukker** meddelelser, der
 allerede er i sessionstransskriptionen.
 
-Fjernelse af direktiver gælder kun for **den aktuelle meddelelses**‑sektion, så historikken
-forbliver intakt. Kanaler, der indpakker historik, bør sætte `CommandBody` (eller
-`RawBody`) til den oprindelige meddelelsestekst og beholde `Body` som den
-samlede prompt. Historikbuffere kan konfigureres via `messages.groupChat.historyLimit` (global
-standard) og pr. kanal‑overstyringer som `channels.slack.historyLimit` eller
-`channels.telegram.accounts.<id>.historyLimit` (sæt `0` for at deaktivere).
+Direktiv stripning gælder kun for \*\* nuværende besked\*\* sektionen, så historie
+forbliver intakt. Kanaler som wrap historie skal sætte `CommandBody` (eller
+`RawBody`) til den oprindelige besked tekst og beholde `Body` som den kombinerede prompt.
+Historie buffere kan konfigureres via `messages.groupChat.historyLimit` (global
+standard) og per-kanal tilsidesætter som `channels.slack.historyLimit` eller
+`channels.telegram.accounts.<id>.historyLimit` (sæt `0` til deaktiveret).
 
 ## Køhåndtering og opfølgninger
 
@@ -127,8 +120,8 @@ Detaljer: [Køhåndtering](/concepts/queue).
 
 ## Streaming, chunking og batching
 
-Blokstreaming sender delvise svar, efterhånden som modellen producerer tekstblokke.
-Chunking respekterer kanalernes tekstgrænser og undgår at splitte indhegnede kodeblokke.
+Blokstreaming sender delvise svar, da modellen producerer tekstblokke.
+Chunking respekterer kanaltekst grænser og undgår at opdele indhegnet kode.
 
 Nøgleindstillinger:
 
@@ -155,7 +148,7 @@ Detaljer: [Thinking + reasoning‑direktiver](/tools/thinking) og [Tokenforbrug]
 
 Udgående meddelelsesformatering er centraliseret i `messages`:
 
-- `messages.responsePrefix`, `channels.<channel>.responsePrefix` og `channels.<channel>.accounts.<id>.responsePrefix` (kaskade for udgående præfiks), plus `channels.whatsapp.messagePrefix` (WhatsApp indgående præfiks)
+- `messages.responsePrefix`, `kanaler.<channel>.responsePrefix`, og `kanaler.<channel>.accounts.<id>.responsePrefix` (udgående præfiks kade), plus `channels.whatsapp.messagePrefix` (WhatsApp indgående præfiks)
 - Svartrådning via `replyToMode` og pr. kanal‑standarder
 
 Detaljer: [Konfiguration](/gateway/configuration#messages) og kanal‑dokumentation.

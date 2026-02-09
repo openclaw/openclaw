@@ -5,13 +5,6 @@ read_when:
   - Görsel çalışma alanı için ajan denetimlerinin eklenmesi
   - WKWebView Canvas yüklemelerinin hata ayıklanması
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:30Z
 ---
 
 # Canvas (macOS uygulaması)

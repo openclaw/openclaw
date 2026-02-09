@@ -3,13 +3,6 @@ summary: "Runtime tác tử (pi-mono nhúng), hợp đồng workspace và khởi
 read_when:
   - Khi thay đổi runtime tác tử, khởi tạo workspace hoặc hành vi phiên
 title: "Runtime tác tử"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:41Z
 ---
 
 # Runtime tác tử 🤖
@@ -41,11 +34,11 @@ Bên trong `agents.defaults.workspace`, OpenClaw mong đợi các tệp có th�
 
 Ở lượt đầu của một phiên mới, OpenClaw chèn trực tiếp nội dung của các tệp này vào ngữ cảnh tác tử.
 
-Các tệp trống sẽ bị bỏ qua. Tệp lớn được cắt bớt và rút gọn kèm một dấu đánh dấu để prompt gọn nhẹ (đọc tệp để xem đầy đủ nội dung).
+`BOOTSTRAP.md` chỉ được tạo cho **workspace hoàn toàn mới** (không có tệp bootstrap nào khác). Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
 
 Nếu một tệp bị thiếu, OpenClaw chèn một dòng đánh dấu “missing file” duy nhất (và `openclaw setup` sẽ tạo một mẫu mặc định an toàn).
 
-`BOOTSTRAP.md` chỉ được tạo cho **workspace hoàn toàn mới** (không có tệp bootstrap nào khác). Nếu bạn xóa nó sau khi hoàn tất nghi thức, nó sẽ không được tạo lại ở các lần khởi động sau.
+ID phiên là ổn định và do OpenClaw chọn. If you delete it after completing the ritual, it should not be recreated on later restarts.
 
 Để tắt hoàn toàn việc tạo tệp bootstrap (cho workspace đã được seed sẵn), đặt:
 
@@ -55,10 +48,10 @@ Nếu một tệp bị thiếu, OpenClaw chèn một dòng đánh dấu “missi
 
 ## Công cụ tích hợp sẵn
 
-Các công cụ lõi (read/exec/edit/write và các công cụ hệ thống liên quan) luôn khả dụng,
-tùy theo chính sách công cụ. `apply_patch` là tùy chọn và bị kiểm soát bởi
-`tools.exec.applyPatch`. `TOOLS.md` **không** kiểm soát công cụ nào tồn tại; nó là
-hướng dẫn cho cách _bạn_ muốn chúng được sử dụng.
+Core tools (read/exec/edit/write and related system tools) are always available,
+subject to tool policy. `apply_patch` is optional and gated by
+`tools.exec.applyPatch`. `TOOLS.md` does **not** control which tools exist; it’s
+guidance for how _you_ want them used.
 
 ## Skills
 
@@ -83,30 +76,31 @@ Bản ghi phiên được lưu dưới dạng JSONL tại:
 
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
-ID phiên là ổn định và do OpenClaw chọn.
-Các thư mục phiên Pi/Tau cũ **không** được đọc.
+Khi chế độ hàng đợi là `steer`, các thông điệp đến sẽ được chèn vào lần chạy hiện tại.
+Legacy Pi/Tau session folders are **not** read.
 
 ## Điều hướng khi streaming
 
-Khi chế độ hàng đợi là `steer`, các tin nhắn đến được chèn vào lượt chạy hiện tại.
-Hàng đợi được kiểm tra **sau mỗi lần gọi công cụ**; nếu có tin nhắn đang chờ,
-các lần gọi công cụ còn lại từ thông điệp trợ lý hiện tại sẽ bị bỏ qua (kết quả công cụ lỗi với "Skipped due to queued user message."), sau đó tin nhắn người dùng đang chờ
-được chèn trước phản hồi trợ lý tiếp theo.
+Khi chế độ hàng đợi là `followup` hoặc `collect`, các thông điệp đến sẽ được giữ lại cho đến khi
+lượt hiện tại kết thúc, sau đó một lượt agent mới bắt đầu với các payload đã xếp hàng.
+The queue is checked **after each tool call**; if a queued message is present,
+remaining tool calls from the current assistant message are skipped (error tool
+results with "Skipped due to queued user message."), then the queued user
+message is injected before the next assistant response.
 
-Khi chế độ hàng đợi là `followup` hoặc `collect`, các tin nhắn đến được giữ lại cho đến khi
-lượt hiện tại kết thúc, rồi bắt đầu một lượt tác tử mới với các payload đang chờ. Xem
-[Queue](/concepts/queue) để biết chế độ + hành vi debounce/cap.
-
-Block streaming gửi các khối trợ lý đã hoàn tất ngay khi xong; nó **tắt theo mặc định** (`agents.defaults.blockStreamingDefault: "off"`).
-Tinh chỉnh ranh giới qua `agents.defaults.blockStreamingBreak` (`text_end` so với `message_end`; mặc định là text_end).
-Kiểm soát việc chia khối mềm bằng `agents.defaults.blockStreamingChunk` (mặc định
+Xem
+[Queue](/concepts/queue) để biết hành vi theo chế độ + debounce/cap. Điều khiển việc chia khối stream mềm bằng `agents.defaults.blockStreamingChunk` (mặc định
 800–1200 ký tự; ưu tiên ngắt đoạn, sau đó là xuống dòng; câu là lựa chọn cuối).
-Gộp các mảnh stream bằng `agents.defaults.blockStreamingCoalesce` để giảm
-spam một dòng (gộp theo thời gian rảnh trước khi gửi). Các kênh không phải Telegram yêu cầu
-`*.blockStreaming: true` rõ ràng để bật trả lời theo khối.
-Tóm tắt công cụ chi tiết được phát tại lúc bắt đầu công cụ (không debounce); UI điều khiển
-stream đầu ra công cụ qua các sự kiện tác tử khi có.
+
+Block streaming sends completed assistant blocks as soon as they finish; it is
+**off by default** (`agents.defaults.blockStreamingDefault: "off"`).
+Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
+Gộp các khối stream bằng `agents.defaults.blockStreamingCoalesce` để giảm spam dòng đơn (gộp dựa trên trạng thái rảnh trước khi gửi).
+Các kênh không phải Telegram yêu cầu
+`*.blockStreaming: true` một cách tường minh để bật phản hồi dạng khối. Non-Telegram channels require
+explicit `*.blockStreaming: true` to enable block replies.
 Chi tiết thêm: [Streaming + chunking](/concepts/streaming).
+Mỗi mô hình đều có **cửa sổ ngữ cảnh** (số token tối đa mà nó có thể nhìn thấy).
 
 ## Tham chiếu mô hình
 

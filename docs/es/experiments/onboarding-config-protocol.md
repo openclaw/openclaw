@@ -2,13 +2,6 @@
 summary: "Notas del protocolo RPC para el asistente de onboarding y el esquema de configuración"
 read_when: "Al cambiar los pasos del asistente de onboarding o los endpoints del esquema de configuración"
 title: "Protocolo de Onboarding y Configuración"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:19Z
 ---
 
 # Protocolo de Onboarding + Configuración

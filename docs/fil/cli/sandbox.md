@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "Pamahalaan ang mga sandbox container at siyasatin ang epektibong sandbox policy"
 read_when: "Pinamamahalaan mo ang mga sandbox container o nagde-debug ng gawi ng sandbox/tool-policy."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:19Z
 ---
 
 # Sandbox CLI
@@ -18,7 +11,7 @@ Pamahalaan ang mga Docker-based na sandbox container para sa hiwalay na pagpapat
 
 ## Pangkalahatang-ideya
 
-Maaaring patakbuhin ng OpenClaw ang mga agent sa hiwalay na Docker container para sa seguridad. Tinutulungan ka ng mga `sandbox` command na pamahalaan ang mga container na ito, lalo na pagkatapos ng mga update o pagbabago sa config.
+Maaaring patakbuhin ng OpenClaw ang mga agent sa mga hiwalay na Docker container para sa seguridad. Tinutulungan ka ng mga `sandbox` command na pamahalaan ang mga container na ito, lalo na pagkatapos ng mga update o pagbabago sa configuration.
 
 ## Mga command
 
@@ -121,9 +114,10 @@ openclaw sandbox recreate --agent alfred
 - Ang mga container ay tina-trim lamang matapos ang 24h ng kawalan ng aktibidad
 - Ang mga agent na regular na ginagamit ay nagpapanatiling tumatakbo ang mga lumang container nang walang hanggan
 
-**Solusyon:** Gamitin ang `openclaw sandbox recreate` upang piliting alisin ang mga lumang container. Awtomatiko silang muling malilikha gamit ang kasalukuyang mga setting kapag muling kailangan.
+**Solusyon:** Gamitin ang `openclaw sandbox recreate` upang pilitin ang pagtanggal ng mga lumang container. Awtomatiko silang muling lilikhain gamit ang kasalukuyang mga setting kapag muling kinailangan.
 
-Tip: mas mainam ang `openclaw sandbox recreate` kaysa sa manu-manong `docker rm`. Ginagamit nito ang naming ng container ng Gateway at iniiwasan ang mga mismatch kapag nagbago ang mga scope/session key.
+Tip: mas piliin ang `openclaw sandbox recreate` kaysa sa manu-manong `docker rm`. Ginagamit nito ang
+pangalanan ng container ng Gateway at iniiwasan ang mga mismatch kapag nagbago ang scope/session keys.
 
 ## Konpigurasyon
 

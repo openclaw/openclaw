@@ -1,16 +1,9 @@
 ---
-summary: ”Schema och exempel för Skills-konfig”
+summary: "”Schema och exempel för Skills-konfig”"
 read_when:
   - Lägga till eller ändra Skills-konfig
   - Justera medföljande tillåtelselista eller installationsbeteende
-title: ”Skills-konfig”
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:43Z
+title: "”Skills-konfig”"
 ---
 
 # Skills-konfig
@@ -47,16 +40,16 @@ All konfiguration som rör Skills finns under `skills` i `~/.openclaw/openclaw.j
 
 ## Fält
 
-- `allowBundled`: valfri tillåtelselista endast för **medföljande** Skills. När den är satt är endast
-  medföljande Skills i listan berättigade (hanterade-/workspace-Skills påverkas inte).
+- `allowBundled`: valfri tillåten lista för **bundna** färdigheter endast. När angiven, är endast
+  medföljande färdigheter i listan berättigade (hanterade / arbetsytor opåverkade).
 - `load.extraDirs`: ytterligare Skills-kataloger att skanna (lägsta prioritet).
 - `load.watch`: bevaka Skills-mappar och uppdatera Skills-ögonblicksbilden (standard: true).
 - `load.watchDebounceMs`: debounce för händelser från Skills-bevakaren i millisekunder (standard: 250).
 - `install.preferBrew`: föredra brew-installatörer när de finns tillgängliga (standard: true).
-- `install.nodeManager`: preferens för Node-installatör (`npm` | `pnpm` | `yarn` | `bun`, standard: npm).
-  Detta påverkar endast **Skills-installationer**; Gateway-körtiden bör fortfarande vara Node
+- `install.nodeManager`: Node installer preferens (`npm` <unk> `pnpm` <unk> `yarn` <unk> `bun`, default: npm).
+  Detta påverkar endast **färdighetsinstallationer**; Gateway runtime bör fortfarande vara Node
   (Bun rekommenderas inte för WhatsApp/Telegram).
-- `entries.<skillKey>`: per-Skill-åsidosättningar.
+- `entries.<skillKey>`: åsidosättningar per skicklighet.
 
 Per-Skill-fält:
 
@@ -66,18 +59,18 @@ Per-Skill-fält:
 
 ## Noteringar
 
-- Nycklar under `entries` mappas som standard till Skill-namnet. Om en Skill definierar
-  `metadata.openclaw.skillKey`, använd den nyckeln i stället.
+- Nycklar under `entries` kartan till skicklighetsnamnet som standard. Om en färdighet definierar
+  `metadata.openclaw.skillKey`, använd den nyckeln istället.
 - Ändringar i Skills plockas upp vid nästa agenttur när bevakaren är aktiverad.
 
 ### Sandboxed Skills + miljövariabler
 
-När en session är **sandboxed** körs Skill-processer inuti Docker. Sandboxing
-ärver **inte** värdens `process.env`.
+När en session är **sandlåda**, färdighet processer körs inuti Docker. Sandlådan
+ärver **inte** värden `process.env`.
 
 Använd något av följande:
 
 - `agents.defaults.sandbox.docker.env` (eller per-agent `agents.list[].sandbox.docker.env`)
 - baka in miljövariablerna i din anpassade sandbox-image
 
-Globala `env` och `skills.entries.<skill>.env/apiKey` gäller endast för **värd**-körningar.
+Global `env` och `skills.entries.<skill>.env/apiKey` gäller endast **värd** körningar.

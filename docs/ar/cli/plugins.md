@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI لأمر `openclaw plugins` (السرد، التثبيت، التمكين/التعطيل، الفحص)"
 read_when:
-  - "تريد تثبيت أو إدارة إضافات Gateway التي تُحمَّل داخل العملية"
-  - "تريد استكشاف أعطال تحميل الإضافات وإصلاحها"
+  - تريد تثبيت أو إدارة إضافات Gateway التي تُحمَّل داخل العملية
+  - تريد تصحيح أخطاء تحميل البرنامج المساعد
 title: "الإضافات"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # `openclaw plugins`

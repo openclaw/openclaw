@@ -3,13 +3,6 @@ summary: "وضع التنفيذ المرتفع وتوجيهات ‎/elevated‎"
 read_when:
   - ضبط الإعدادات الافتراضية لوضع elevated، أو قوائم السماح، أو سلوك أوامر الشرطة المائلة
 title: "وضع Elevated"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:53Z
 ---
 
 # وضع Elevated (توجيهات ‎/elevated‎)

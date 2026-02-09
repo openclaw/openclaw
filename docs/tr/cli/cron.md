@@ -4,13 +4,6 @@ read_when:
   - Zamanlanmış işler ve uyanmalar istediğinizde
   - Cron yürütmesini ve günlüklerini ayıklarken
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:58Z
 ---
 
 # `openclaw cron`

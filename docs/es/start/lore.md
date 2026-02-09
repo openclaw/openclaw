@@ -3,13 +3,6 @@ summary: "Historia de fondo y lore de OpenClaw para contexto y tono"
 read_when:
   - Al escribir documentación o textos de UX que hagan referencia al lore
 title: "Lore de OpenClaw"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:52Z
 ---
 
 # El Lore de OpenClaw 🦞📖

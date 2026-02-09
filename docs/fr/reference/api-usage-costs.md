@@ -5,13 +5,6 @@ read_when:
   - Vous devez auditer les cles, les couts et la visibilite de l'utilisation
   - Vous expliquez le reporting des couts via /status ou /usage
 title: "Utilisation des API et couts"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 807d0d88801e919a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:43Z
 ---
 
 # Utilisation des API et couts
@@ -47,15 +40,15 @@ OpenClaw peut recuperer des identifiants depuis :
   `memorySearch.*`, `talk.apiKey`).
 - **Skills** (`skills.entries.<name>.apiKey`) qui peuvent exporter des cles vers l’environnement du processus du skill.
 
-## Fonctionnalites pouvant consommer des cles
+## Fonctionnalités pouvant dépenser des clés
 
-### 1) Reponses du modele principal (chat + outils)
+### 1. Reponses du modele principal (chat + outils)
 
 Chaque reponse ou appel d’outil utilise le **fournisseur de modele courant** (OpenAI, Anthropic, etc.). C’est la principale source d’utilisation et de cout.
 
 Voir [Models](/providers/models) pour la configuration de la tarification et [Token use & costs](/token-use) pour l’affichage.
 
-### 2) Compréhension des medias (audio/image/video)
+### 2. Compréhension des medias (audio/image/video)
 
 Les medias entrants peuvent etre resumes/transcrits avant l’execution de la reponse. Cela utilise les API des modeles/fournisseurs.
 
@@ -65,19 +58,20 @@ Les medias entrants peuvent etre resumes/transcrits avant l’execution de la re
 
 Voir [Media understanding](/nodes/media-understanding).
 
-### 3) Embeddings de memoire + recherche semantique
+### 3. Embeddings de memoire + recherche semantique
 
 La recherche semantique de la memoire utilise des **API d’embeddings** lorsqu’elle est configuree pour des fournisseurs distants :
 
 - `memorySearch.provider = "openai"` → embeddings OpenAI
 - `memorySearch.provider = "gemini"` → embeddings Gemini
-- Repli optionnel vers OpenAI si les embeddings locaux echouent
+- `memorySearch.provider = "voyage"` → Intégrer le voyage
+- Optionnel de retour à un fournisseur distant si les embeddings locaux échouent
 
 Vous pouvez rester en local avec `memorySearch.provider = "local"` (aucune utilisation d’API).
 
 Voir [Memory](/concepts/memory).
 
-### 4) Outil de recherche web (Brave / Perplexity via OpenRouter)
+### 4. Outil de recherche web (Brave / Perplexity via OpenRouter)
 
 `web_search` utilise des cles API et peut entrainer des frais d’utilisation :
 
@@ -92,7 +86,7 @@ Voir [Memory](/concepts/memory).
 
 Voir [Web tools](/tools/web).
 
-### 5) Outil de recuperation web (Firecrawl)
+### 5. Outil de recuperation web (Firecrawl)
 
 `web_fetch` peut appeler **Firecrawl** lorsqu’une cle API est presente :
 
@@ -102,7 +96,7 @@ Si Firecrawl n’est pas configure, l’outil bascule vers une recuperation dire
 
 Voir [Web tools](/tools/web).
 
-### 6) Instantanes d’utilisation fournisseur (statut/sante)
+### 6. Instantanes d’utilisation fournisseur (statut/sante)
 
 Certaines commandes de statut appellent des **endpoints d’utilisation des fournisseurs** pour afficher des fenetres de quotas ou l’etat de l’authentification.
 Il s’agit generalement d’appels a faible volume, mais ils touchent tout de meme les API des fournisseurs :
@@ -112,20 +106,20 @@ Il s’agit generalement d’appels a faible volume, mais ils touchent tout de m
 
 Voir [Models CLI](/cli/models).
 
-### 7) Resume de sauvegarde de compaction
+### 7. Resume de sauvegarde de compaction
 
 La sauvegarde de compaction peut resumer l’historique de session a l’aide du **modele courant**, ce qui invoque les API des fournisseurs lorsqu’elle s’execute.
 
 Voir [Session management + compaction](/reference/session-management-compaction).
 
-### 8) Analyse / sondage de modele
+### 8. Analyse / sondage de modele
 
 `openclaw models scan` peut sonder des modeles OpenRouter et utilise `OPENROUTER_API_KEY` lorsque
 le sondage est active.
 
 Voir [Models CLI](/cli/models).
 
-### 9) Talk (parole)
+### 9. Talk (parole)
 
 Le mode Talk peut invoquer **ElevenLabs** lorsqu’il est configure :
 
@@ -133,7 +127,7 @@ Le mode Talk peut invoquer **ElevenLabs** lorsqu’il est configure :
 
 Voir [Talk mode](/nodes/talk).
 
-### 10) Skills (API tierces)
+### 10. Skills (API tierces)
 
 Les Skills peuvent stocker `apiKey` dans `skills.entries.<name>.apiKey`. Si un skill utilise cette cle pour des API externes, cela peut entrainer des couts selon le fournisseur du skill.
 

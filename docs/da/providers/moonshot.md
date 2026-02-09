@@ -5,19 +5,12 @@ read_when:
   - Du skal forstå separate endpoints, nøgler og modelreferencer
   - Du vil have copy/paste-konfiguration til enten udbyder
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:32Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot leverer Kimi API’et med OpenAI-kompatible endpoints. Konfigurér
-udbyderen og sæt standardmodellen til `moonshot/kimi-k2.5`, eller brug
+Moonshot giver Kimi API med OpenAI-kompatible endepunkter. Konfigurer udbyderen
+og sæt standardmodellen til `moonshot/kimi-k2.5`, eller brug
 Kimi Coding med `kimi-coding/k2p5`.
 
 Aktuelle Kimi K2-model-id’er:
@@ -41,7 +34,7 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-Bemærk: Moonshot og Kimi Coding er separate udbydere. Nøgler kan ikke bruges på tværs, endpoints er forskellige, og modelreferencer er forskellige (Moonshot bruger `moonshot/...`, Kimi Coding bruger `kimi-coding/...`).
+Bemærk: Moonshot og Kimi Coding er separate udbydere. Nøgler er ikke indbyrdes udskiftelige, endpoints er forskellige, og model refs afviger (Moonshot bruger `moonshot/...`, Kimi Coding bruger `kimi-coding/...`).
 
 ## Konfigurationsudsnit (Moonshot API)
 
@@ -142,7 +135,7 @@ Bemærk: Moonshot og Kimi Coding er separate udbydere. Nøgler kan ikke bruges p
 
 ## Noter
 
-- Moonshot-modelreferencer bruger `moonshot/<modelId>`. Kimi Coding-modelreferencer bruger `kimi-coding/<modelId>`.
+- Moonshot model nægter brug `moonshot/<modelId>`. Kimi Coding model refs use `kimi-coding/<modelId>`.
 - Tilsidesæt prisfastsættelse og kontekstmetadata i `models.providers` efter behov.
 - Hvis Moonshot offentliggør andre kontekstgrænser for en model, så justér
   `contextWindow` tilsvarende.

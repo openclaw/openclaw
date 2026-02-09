@@ -3,18 +3,11 @@ summary: "Supportstatus, funktioner och konfiguration för Nextcloud Talk"
 read_when:
   - Arbetar med kanalfunktioner för Nextcloud Talk
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:28Z
 ---
 
 # Nextcloud Talk (plugin)
 
-Status: stöds via plugin (webhook-bot). Direktmeddelanden, rum, reaktioner och Markdown-meddelanden stöds.
+Status: stöds via plugin (webhook bot). Direktmeddelanden, rum, reaktioner och markdown-meddelanden stöds.
 
 ## Plugin krävs
 
@@ -40,6 +33,7 @@ Detaljer: [Plugins](/tools/plugin)
 ## Snabbstart (nybörjare)
 
 1. Installera pluginet Nextcloud Talk.
+
 2. Skapa en bot på din Nextcloud-server:
 
    ```bash
@@ -47,9 +41,11 @@ Detaljer: [Plugins](/tools/plugin)
    ```
 
 3. Aktivera boten i mål-rummets inställningar.
+
 4. Konfigurera OpenClaw:
    - Konfig: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Eller env: `NEXTCLOUD_TALK_BOT_SECRET` (endast standardkonto)
+
 5. Starta om gatewayn (nätverksgateway) (eller slutför introduktionen).
 
 Minimal konfig:
@@ -69,14 +65,14 @@ Minimal konfig:
 
 ## Noteringar
 
-- Botar kan inte initiera DM. Användaren måste först skriva till boten.
+- Bots kan inte initiera DMs. Användaren måste meddela botten först.
 - Webhook-URL:en måste vara nåbar av Gateway; ange `webhookPublicUrl` om du är bakom en proxy.
 - Medieuppladdningar stöds inte av bot-API:t; media skickas som URL:er.
 - Webhook-payloaden skiljer inte på DM och rum; ange `apiUser` + `apiPassword` för att aktivera uppslag av rumstyp (annars behandlas DM som rum).
 
 ## Åtkomstkontroll (DM)
 
-- Standard: `channels.nextcloud-talk.dmPolicy = "pairing"`. Okända avsändare får en parkod.
+- Standard: `channels.nextcloud-talk.dmPolicy = "pairing"`. Okända avsändare får en parningskod.
 - Godkänn via:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ Leverantörsalternativ:
 - `channels.nextcloud-talk.webhookPath`: webhook-sökväg (standard: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: externt nåbar webhook-URL.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`.
-- `channels.nextcloud-talk.allowFrom`: DM-tillåtelselista (användar-ID:n). `open` kräver `"*"`.
+- `channels.nextcloud-talk.allowFrom`: DM allowlist (användar-ID). `open` kräver `"*"`.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
 - `channels.nextcloud-talk.groupAllowFrom`: grupp-tillåtelselista (användar-ID:n).
 - `channels.nextcloud-talk.rooms`: inställningar per rum och tillåtelselista.

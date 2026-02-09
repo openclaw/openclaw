@@ -4,21 +4,13 @@ read_when:
   - إعداد تكاملات IDE المستندة إلى ACP
   - تصحيح توجيه جلسات ACP إلى Gateway
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # acp
 
 تشغيل جسر ACP (Agent Client Protocol) الذي يتواصل مع OpenClaw Gateway.
 
-يتحدث هذا الأمر ACP عبر stdio لبيئات IDE ويُمرِّر المطالبات إلى Gateway عبر WebSocket.
-ويحافظ على ربط جلسات ACP بمفاتيح جلسات Gateway.
+يتحدث هذا الأمر ACP عبر stdio لبيئات IDE ويُمرِّر المطالبات إلى Gateway عبر WebSocket. ويحافظ على ربط جلسات ACP بمفاتيح جلسات Gateway.
 
 ## Usage
 

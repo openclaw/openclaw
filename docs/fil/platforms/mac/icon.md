@@ -3,13 +3,6 @@ summary: "Mga estado at animasyon ng icon sa menu bar para sa OpenClaw sa macOS"
 read_when:
   - Pagbabago ng gawi ng icon sa menu bar
 title: "Icon sa Menu Bar"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:40Z
 ---
 
 # Mga Estado ng Icon sa Menu Bar
@@ -18,13 +11,13 @@ May-akda: steipete · In-update: 2025-12-06 · Saklaw: macOS app (`apps/macos`)
 
 - **Idle:** Karaniwang animasyon ng icon (pagkurap, paminsan-minsang wiggle).
 - **Paused:** Gumagamit ang status item ng `appearsDisabled`; walang galaw.
-- **Voice trigger (malalaking tainga):** Tinatawag ng voice wake detector ang `AppState.triggerVoiceEars(ttl: nil)` kapag narinig ang wake word, pinananatili ang `earBoostActive=true` habang kinukuha ang utterance. Lumalaki ang tainga (1.9x), nagkakaroon ng bilog na ear holes para sa mas malinaw na readability, pagkatapos ay bumabagsak sa pamamagitan ng `stopVoiceEars()` matapos ang 1s ng katahimikan. Tanging pinapaputok mula sa in-app voice pipeline.
-- **Working (tumatakbong agent):** Pinapagana ng `AppState.isWorking=true` ang “tail/leg scurry” na micro-motion: mas mabilis na leg wiggle at bahagyang offset habang may isinasagawang trabaho. Kasalukuyang tina-toggle sa paligid ng mga run ng WebChat agent; idagdag ang parehong toggle sa iba pang mahahabang gawain kapag ikinabit mo na ang mga ito.
+- **Voice trigger (big ears):** Tinatawag ng voice wake detector ang `AppState.triggerVoiceEars(ttl: nil)` kapag narinig ang wake word, pinananatiling `earBoostActive=true` habang kinukuha ang utterance. Lumalaki ang mga tainga (1.9x), nagkakaroon ng mga bilog na butas sa tainga para sa readability, pagkatapos ay bumababa sa pamamagitan ng `stopVoiceEars()` matapos ang 1s ng katahimikan. Pinapaputok lamang mula sa in-app voice pipeline.
+- **Working (agent running):** Ang `AppState.isWorking=true` ang nagtutulak ng isang “tail/leg scurry” na micro-motion: mas mabilis na wiggle ng mga paa at bahagyang offset habang may ginagawang trabaho. Kasalukuyang tine-toggle sa paligid ng mga run ng WebChat agent; idagdag ang parehong toggle sa paligid ng iba pang mahahabang gawain kapag ikinabit mo ang mga iyon.
 
 Mga wiring point
 
 - Voice wake: tumawag ang runtime/tester ng `AppState.triggerVoiceEars(ttl: nil)` sa trigger at `stopVoiceEars()` matapos ang 1s ng katahimikan para tumugma sa capture window.
-- Aktibidad ng agent: itakda ang `AppStateStore.shared.setWorking(true/false)` sa paligid ng mga work span (tapos na ito sa tawag ng WebChat agent). Panatilihing maikli ang mga span at i-reset sa mga block ng `defer` upang maiwasan ang mga na-stuck na animasyon.
+- Aktibidad ng agent: itakda ang `AppStateStore.shared.setWorking(true/false)` sa paligid ng mga span ng trabaho (nagawa na sa tawag ng WebChat agent). Panatilihing maikli ang mga span at mag-reset sa mga `defer` block upang maiwasan ang na-stuck na mga animation.
 
 Mga hugis at sukat
 

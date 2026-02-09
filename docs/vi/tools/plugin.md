@@ -4,13 +4,6 @@ read_when:
   - Thêm hoặc chỉnh sửa plugin/extension
   - Viết tài liệu về quy tắc cài đặt hoặc tải plugin
 title: "Plugin"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:41:00Z
 ---
 
 # Plugin (Extension)
@@ -38,7 +31,7 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-3. Khởi động lại Gateway, rồi cấu hình trong `plugins.entries.<id>.config`.
+3. 22. Khởi động lại Gateway, sau đó cấu hình dưới `plugins.entries.<id>`..config\`.
 
 Xem [Voice Call](/plugins/voice-call) để có một ví dụ plugin cụ thể.
 
@@ -58,9 +51,7 @@ Xem [Voice Call](/plugins/voice-call) để có một ví dụ plugin cụ thể
 - Qwen OAuth (xác thực nhà cung cấp) — đi kèm dưới dạng `qwen-portal-auth` (tắt theo mặc định)
 - Copilot Proxy (xác thực nhà cung cấp) — cầu nối Copilot Proxy cục bộ cho VS Code; khác với đăng nhập thiết bị `github-copilot` tích hợp sẵn (đi kèm, tắt theo mặc định)
 
-Plugin OpenClaw là các **mô-đun TypeScript** được tải lúc chạy qua jiti. **Việc
-xác thực cấu hình không thực thi mã plugin**; nó dùng manifest plugin và JSON
-Schema. Xem [Plugin manifest](/plugins/manifest).
+OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti. 24. **Xác thực cấu hình không thực thi mã plugin**; nó sử dụng manifest plugin và JSON Schema thay vào đó. 25. Xem [Plugin manifest](/plugins/manifest).
 
 Plugin có thể đăng ký:
 
@@ -73,12 +64,12 @@ Plugin có thể đăng ký:
 - **Skills** (bằng cách liệt kê các thư mục `skills` trong manifest plugin)
 - **Lệnh trả lời tự động** (thực thi mà không gọi tác tử AI)
 
-Plugin chạy **trong cùng tiến trình** với Gateway, vì vậy hãy coi chúng là mã đáng tin cậy.
-Hướng dẫn viết công cụ: [Plugin agent tools](/plugins/agent-tools).
+26. Plugin chạy **in‑process** cùng Gateway, vì vậy hãy coi chúng là mã đáng tin cậy.
+27. Hướng dẫn viết công cụ: [Plugin agent tools](/plugins/agent-tools).
 
 ## Trợ giúp lúc chạy
 
-Plugin có thể truy cập một số helper lõi thông qua `api.runtime`. Với TTS cho thoại:
+Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
@@ -90,7 +81,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 Ghi chú:
 
 - Dùng cấu hình lõi `messages.tts` (OpenAI hoặc ElevenLabs).
-- Trả về bộ đệm âm thanh PCM + tần số lấy mẫu. Plugin phải tự lấy mẫu lại/mã hóa cho nhà cung cấp.
+- Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - Edge TTS không được hỗ trợ cho thoại.
 
 ## Khám phá & thứ tự ưu tiên
@@ -115,12 +106,13 @@ OpenClaw quét theo thứ tự:
 
 - `<openclaw>/extensions/*`
 
-Plugin đi kèm phải được bật tường minh qua `plugins.entries.<id>.enabled`
-hoặc `openclaw plugins enable <id>`. Plugin đã cài thì bật mặc định,
-nhưng có thể tắt theo cùng cách.
+Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
+or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
+but can be disabled the same way.
 
-Mỗi plugin phải có tệp `openclaw.plugin.json` ở thư mục gốc. Nếu một đường dẫn
-trỏ tới tệp, thư mục gốc plugin là thư mục của tệp đó và phải chứa manifest.
+Each plugin must include a `openclaw.plugin.json` file in its root. If a path
+points at a file, the plugin root is the file's directory and must contain the
+manifest.
 
 Nếu nhiều plugin trùng id, bản khớp đầu tiên theo thứ tự trên sẽ thắng
 và các bản có ưu tiên thấp hơn sẽ bị bỏ qua.
@@ -138,16 +130,16 @@ Một thư mục plugin có thể chứa `package.json` với `openclaw.extensio
 }
 ```
 
-Mỗi mục trở thành một plugin. Nếu pack liệt kê nhiều extension, id plugin
-sẽ là `name/<fileBase>`.
+Each entry becomes a plugin. If the pack lists multiple extensions, the plugin id
+becomes `name/<fileBase>`.
 
 Nếu plugin của bạn nhập phụ thuộc npm, hãy cài chúng trong thư mục đó để
 `node_modules` khả dụng (`npm install` / `pnpm install`).
 
 ### Metadata danh mục kênh
 
-Plugin kênh có thể quảng bá metadata hướng dẫn ban đầu qua `openclaw.channel` và
-gợi ý cài đặt qua `openclaw.install`. Điều này giúp lõi không phải mang dữ liệu danh mục.
+Channel plugins can advertise onboarding metadata via `openclaw.channel` and
+install hints via `openclaw.install`. 40. Điều này giúp dữ liệu danh mục lõi không chứa dữ liệu.
 
 Ví dụ:
 
@@ -175,16 +167,13 @@ Ví dụ:
 }
 ```
 
-OpenClaw cũng có thể hợp nhất **các danh mục kênh bên ngoài** (ví dụ, xuất registry MPM).
-Đặt một tệp JSON tại một trong các vị trí:
+41. OpenClaw cũng có thể hợp nhất **các danh mục kênh bên ngoài** (ví dụ: một bản xuất registry MPM). 42. Thả một tệp JSON vào một trong các vị trí:
 
 - `~/.openclaw/mpm/plugins.json`
 - `~/.openclaw/mpm/catalog.json`
 - `~/.openclaw/plugins/catalog.json`
 
-Hoặc trỏ `OPENCLAW_PLUGIN_CATALOG_PATHS` (hoặc `OPENCLAW_MPM_CATALOG_PATHS`) tới
-một hoặc nhiều tệp JSON (phân tách bằng dấu phẩy/chấm phẩy/`PATH`). Mỗi tệp nên
-chứa `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
+43. Hoặc trỏ `OPENCLAW_PLUGIN_CATALOG_PATHS` (hoặc `OPENCLAW_MPM_CATALOG_PATHS`) tới một hoặc nhiều tệp JSON (phân tách bằng dấu phẩy/chấm phẩy/`PATH`). 44. Mỗi tệp nên chứa `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
 
 ## ID plugin
 
@@ -218,23 +207,23 @@ Các trường:
 - `allow`: danh sách cho phép (tùy chọn)
 - `deny`: danh sách chặn (tùy chọn; chặn được ưu tiên)
 - `load.paths`: tệp/thư mục plugin bổ sung
-- `entries.<id>`: bật/tắt theo từng plugin + cấu hình
+- 46. \`entries.<id>\`\`: per‑plugin toggles + config
 
 Thay đổi cấu hình **yêu cầu khởi động lại gateway**.
 
 Quy tắc xác thực (nghiêm ngặt):
 
 - ID plugin không xác định trong `entries`, `allow`, `deny` hoặc `slots` là **lỗi**.
-- Khóa `channels.<id>` không xác định là **lỗi** trừ khi manifest plugin khai báo
-  id kênh.
+- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
+  the channel id.
 - Cấu hình plugin được xác thực bằng JSON Schema nhúng trong
   `openclaw.plugin.json` (`configSchema`).
 - Nếu plugin bị tắt, cấu hình của nó vẫn được giữ và phát ra **cảnh báo**.
 
 ## Khe plugin (danh mục độc quyền)
 
-Một số danh mục plugin là **độc quyền** (chỉ một plugin hoạt động tại một thời điểm). Dùng
-`plugins.slots` để chọn plugin sở hữu khe:
+Some plugin categories are **exclusive** (only one active at a time). Use
+`plugins.slots` to select which plugin owns the slot:
 
 ```json5
 {
@@ -246,8 +235,8 @@ Một số danh mục plugin là **độc quyền** (chỉ một plugin hoạt �
 }
 ```
 
-Nếu nhiều plugin khai báo `kind: "memory"`, chỉ plugin được chọn sẽ tải. Các plugin khác
-bị tắt kèm chẩn đoán.
+If multiple plugins declare `kind: "memory"`, only the selected one loads. Others
+are disabled with diagnostics.
 
 ## Control UI (schema + nhãn)
 
@@ -255,8 +244,8 @@ Control UI dùng `config.schema` (JSON Schema + `uiHints`) để hiển thị bi
 
 OpenClaw bổ sung `uiHints` lúc chạy dựa trên các plugin được phát hiện:
 
-- Thêm nhãn theo từng plugin cho `plugins.entries.<id>` / `.enabled` / `.config`
-- Hợp nhất gợi ý trường cấu hình do plugin cung cấp (tùy chọn) tại:
+- Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
+- Merges optional plugin-provided config field hints under:
   `plugins.entries.<id>.config.<field>`
 
 Nếu bạn muốn các trường cấu hình plugin hiển thị nhãn/placeholder tốt (và đánh dấu bí mật là nhạy cảm),
@@ -308,13 +297,13 @@ Plugin cũng có thể đăng ký các lệnh cấp cao riêng (ví dụ: `openc
 
 Plugin xuất một trong hai:
 
-- Một hàm: `(api) => { ... }`
-- Một đối tượng: `{ id, name, configSchema, register(api) { ... } }`
+- A function: `(api) => { ... }`
+- An object: `{ id, name, configSchema, register(api) { ... } }`
 
 ## Hook plugin
 
-Plugin có thể đóng gói hook và đăng ký chúng lúc chạy. Điều này cho phép plugin
-gói hóa tự động hóa theo sự kiện mà không cần cài pack hook riêng.
+Plugins can ship hooks and register them at runtime. This lets a plugin bundle
+event-driven automation without a separate hook pack install.
 
 ### Ví dụ
 
@@ -338,8 +327,8 @@ Ghi chú:
 Plugin có thể đăng ký luồng **xác thực nhà cung cấp mô hình** để người dùng chạy OAuth hoặc
 thiết lập khóa API ngay trong OpenClaw (không cần script bên ngoài).
 
-Đăng ký nhà cung cấp qua `api.registerProvider(...)`. Mỗi nhà cung cấp cung cấp một
-hoặc nhiều phương thức xác thực (OAuth, khóa API, mã thiết bị, v.v.). Các phương thức này cung cấp năng lực cho:
+Register a provider via `api.registerProvider(...)`. Each provider exposes one
+or more auth methods (OAuth, API key, device code, etc.). These methods power:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
 
@@ -386,9 +375,9 @@ Ghi chú:
 
 ### Đăng ký kênh nhắn tin
 
-Plugin có thể đăng ký **plugin kênh** hoạt động như các kênh tích hợp sẵn
-(WhatsApp, Telegram, v.v.). Cấu hình kênh nằm dưới `channels.<id>` và được
-xác thực bởi mã plugin kênh của bạn.
+Plugins can register **channel plugins** that behave like built‑in channels
+(WhatsApp, Telegram, etc.). Channel config lives under `channels.<id>` and is
+validated by your channel plugin code.
 
 ```ts
 const myChannel = {
@@ -422,7 +411,7 @@ export default function (api) {
 
 Ghi chú:
 
-- Đặt cấu hình dưới `channels.<id>` (không phải `plugins.entries`).
+- Put config under `channels.<id>` (not `plugins.entries`).
 - `meta.label` được dùng làm nhãn trong danh sách CLI/UI.
 - `meta.aliases` thêm các id thay thế cho chuẩn hóa và đầu vào CLI.
 - `meta.preferOver` liệt kê các id kênh để bỏ qua tự động bật khi cả hai được cấu hình.
@@ -430,13 +419,13 @@ Ghi chú:
 
 ### Viết kênh nhắn tin mới (từng bước)
 
-Dùng phần này khi bạn muốn một **bề mặt chat mới** (một “kênh nhắn tin”), không phải nhà cung cấp mô hình.
-Tài liệu nhà cung cấp mô hình nằm dưới `/providers/*`.
+Use this when you want a **new chat surface** (a “messaging channel”), not a model provider.
+Model provider docs live under `/providers/*`.
 
 1. Chọn id + hình dạng cấu hình
 
-- Tất cả cấu hình kênh nằm dưới `channels.<id>`.
-- Ưu tiên `channels.<id>.accounts.<accountId>` cho thiết lập nhiều tài khoản.
+- All channel config lives under `channels.<id>`.
+- Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
 
 2. Định nghĩa metadata kênh
 
@@ -510,8 +499,8 @@ export default function (api) {
 }
 ```
 
-Tải plugin (thư mục extension hoặc `plugins.load.paths`), khởi động lại gateway,
-sau đó cấu hình `channels.<id>` trong cấu hình của bạn.
+Load the plugin (extensions dir or `plugins.load.paths`), restart the gateway,
+then configure `channels.<id>` in your config.
 
 ### Công cụ tác tử
 
@@ -544,9 +533,9 @@ export default function (api) {
 
 ### Đăng ký lệnh trả lời tự động
 
-Plugin có thể đăng ký các lệnh slash tùy chỉnh thực thi **không gọi tác tử AI**. Điều này hữu ích cho
-các lệnh bật/tắt, kiểm tra trạng thái hoặc hành động nhanh
-không cần xử lý LLM.
+Plugins can register custom slash commands that execute **without invoking the
+AI agent**. This is useful for toggle commands, status checks, or quick actions
+that don't need LLM processing.
 
 ```ts
 export default function (api) {
@@ -573,7 +562,7 @@ Tùy chọn lệnh:
 
 - `name`: Tên lệnh (không có ký tự `/` ở đầu)
 - `description`: Văn bản trợ giúp hiển thị trong danh sách lệnh
-- `acceptsArgs`: Lệnh có chấp nhận đối số hay không (mặc định: false). Nếu false và có đối số, lệnh sẽ không khớp và thông điệp sẽ rơi xuống các handler khác
+- `acceptsArgs`: Whether the command accepts arguments (default: false). 48. Nếu là false và có tham số được cung cấp, lệnh sẽ không khớp và thông điệp sẽ rơi xuống các handler khác
 - `requireAuth`: Có yêu cầu người gửi được ủy quyền hay không (mặc định: true)
 - `handler`: Hàm trả về `{ text: string }` (có thể async)
 
@@ -599,7 +588,7 @@ Ghi chú:
 - Lệnh được đăng ký toàn cục và hoạt động trên mọi kênh
 - Tên lệnh không phân biệt hoa/thường (`/MyStatus` khớp `/mystatus`)
 - Tên lệnh phải bắt đầu bằng chữ cái và chỉ chứa chữ cái, số, dấu gạch nối và gạch dưới
-- Tên lệnh dành riêng (như `help`, `status`, `reset`, v.v.) không thể bị plugin ghi đè
+- 49. Tên lệnh được dành riêng (như `help`, `status`, `reset`, v.v.) cannot be overridden by plugins
 - Đăng ký trùng lệnh giữa các plugin sẽ thất bại với lỗi chẩn đoán
 
 ### Đăng ký dịch vụ nền
@@ -622,9 +611,9 @@ export default function (api) {
 
 ## Skills
 
-Plugin có thể đi kèm một skill trong repo (`skills/<name>/SKILL.md`).
-Bật nó bằng `plugins.entries.<id>.enabled` (hoặc các cổng cấu hình khác) và đảm bảo
-nó có mặt trong các vị trí skill workspace/được quản lý.
+Plugins can ship a skill in the repo (`skills/<name>/SKILL.md`).
+Enable it with `plugins.entries.<id>.enabled` (or other config gates) and ensure
+it’s present in your workspace/managed skills locations.
 
 ## Phân phối (npm)
 
@@ -656,7 +645,7 @@ Xem [Voice Call](/plugins/voice-call) và `extensions/voice-call/README.md` đ�
 
 ## Ghi chú an toàn
 
-Plugin chạy trong cùng tiến trình với Gateway. Hãy coi chúng là mã đáng tin cậy:
+3. Plugin chạy trong cùng tiến trình với Gateway. 4. Hãy coi chúng là mã đáng tin cậy:
 
 - Chỉ cài plugin bạn tin tưởng.
 - Ưu tiên danh sách cho phép `plugins.allow`.

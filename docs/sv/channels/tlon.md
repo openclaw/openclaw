@@ -3,23 +3,16 @@ summary: "Supportstatus, funktioner och konfiguration för Tlon/Urbit"
 read_when:
   - Arbetar med funktioner för Tlon/Urbit-kanalen
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:27Z
 ---
 
 # Tlon (plugin)
 
-Tlon är en decentraliserad meddelandetjänst byggd på Urbit. OpenClaw ansluter till ditt Urbit-skepp och kan
-svara på DM och meddelanden i gruppchattar. Gruppsvar kräver som standard en @-omnämning och kan
-ytterligare begränsas via tillåtelselistor.
+Tlon är en decentraliserad budbärare byggd på Urbit. OpenClaw ansluter till ditt Urbit-skepp och kan
+svara på DMs och gruppchattmeddelanden. Gruppsvar kräver ett @ omnämnande som standard och kan
+begränsas ytterligare via tillåtna listor.
 
-Status: stöds via plugin. DM, gruppomnämningar, trådsvar och textbaserad mediefallback
-(URL bifogas till bildtext). Reaktioner, omröstningar och inbyggda mediauppladdningar stöds inte.
+Status: stöds via plugin. DMs, gruppomnämnanden, trådsvar och endast text-media fallback
+(URL läggs till bildtext). Reaktioner, opinionsundersökningar och infödda medieuppladdningar stöds inte.
 
 ## Plugin krävs
 
@@ -64,7 +57,7 @@ Minimal konfig (ett konto):
 
 ## Gruppkanaler
 
-Automatisk Discovery (upptäckt) är aktiverad som standard. Du kan också fästa kanaler manuellt:
+Auto-upptäckten är aktiverad som standard. Du kan också fästa kanaler manuellt:
 
 ```json5
 {
@@ -134,6 +127,6 @@ Använd dessa med `openclaw message send` eller cron-leverans:
 
 ## Noteringar
 
-- Gruppsvar kräver en omnämning (t.ex. `~your-bot-ship`) för att svara.
+- Gruppsvar kräver ett omnämnande (t.ex. `~your-bot-ship`) för att svara.
 - Trådsvar: om inkommande meddelande är i en tråd svarar OpenClaw i tråden.
 - Media: `sendMedia` faller tillbaka till text + URL (ingen inbyggd uppladdning).

@@ -4,13 +4,6 @@ read_when:
   - WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (플러그인)/Signal/iMessage 채널 계정을 추가/제거하려는 경우
   - 채널 상태를 확인하거나 채널 로그를 테일링하려는 경우
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:12Z
 ---
 
 # `openclaw channels`

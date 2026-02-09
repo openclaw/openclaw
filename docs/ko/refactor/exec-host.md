@@ -5,13 +5,6 @@ read_when:
   - 노드 러너 + UI IPC 를 구현할 때
   - exec 호스트 보안 모드와 슬래시 명령을 추가할 때
 title: "Exec 호스트 리팩터링"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:22Z
 ---
 
 # Exec 호스트 리팩터링 계획
@@ -25,7 +18,7 @@ x-i18n:
 - 허용 목록과 _함께_ 또는 _없이_ 작동하는 **ask 모드**를 지원합니다.
 - 크로스 플랫폼: Unix 소켓 + 토큰 인증 (macOS/Linux/Windows 동등성).
 
-## 비목표
+## Non-goals
 
 - 레거시 허용 목록 마이그레이션 또는 레거시 스키마 지원 없음.
 - 노드 exec 에 대한 PTY/스트리밍 없음 (집계된 출력만).
@@ -149,7 +142,7 @@ Ask 는 허용 목록과 **독립적**입니다. 허용 목록은 `always` 또�
 }
 ```
 
-비고:
+Notes:
 
 - 레거시 허용 목록 형식 없음.
 - `askFallback` 는 `ask` 이 필요하고 UI 에 접근할 수 없을 때만 적용됩니다.
@@ -214,7 +207,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 ## 이벤트
 
-### 이벤트를 보는 주체
+### 이벤트를 볼 수 있는 대상
 
 - 시스템 이벤트는 **세션별**이며 다음 프롬프트에서 에이전트에게 표시됩니다.
 - gateway 인메모리 큐 (`enqueueSystemEvent`) 에 저장됩니다.

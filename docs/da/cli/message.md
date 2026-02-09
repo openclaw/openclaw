@@ -4,13 +4,6 @@ read_when:
   - Tilføjelse eller ændring af message CLI-handlinger
   - Ændring af udgående kanaladfærd
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:16Z
 ---
 
 # `openclaw message`
@@ -44,7 +37,7 @@ Målformater (`--target`):
 
 Navneopslag:
 
-- For understøttede udbydere (Discord/Slack/etc.) slås kanalnavne som `Help` eller `#help` op via directory-cachen.
+- For understøttede udbydere (Discord/Slack/etc), kanalnavne som `Help` eller `#help` løses via mappe-cachen.
 - Ved cache-miss vil OpenClaw forsøge et live directory-opslag, når udbyderen understøtter det.
 
 ## Fælles flag

@@ -4,13 +4,6 @@ read_when:
   - OpenClaw에서 아웃바운드 음성 통화를 걸고자 할 때
   - voice-call 플러그인을 구성하거나 개발할 때
 title: "Voice Call 플러그인"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:57Z
 ---
 
 # Voice Call (플러그인)
@@ -233,7 +226,7 @@ Voice Call은 통화 중 스트리밍 음성을 위해 핵심 `messages.tts` 구
 }
 ```
 
-## 인바운드 통화
+## 수신 호출
 
 인바운드 정책의 기본값은 `disabled` 입니다. 인바운드 통화를 활성화하려면 다음을 설정하십시오:
 

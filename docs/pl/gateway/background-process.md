@@ -4,13 +4,6 @@ read_when:
   - Dodawanie lub modyfikowanie zachowania exec w tle
   - Debugowanie długotrwałych zadań exec
 title: "Exec w tle i narzędzie procesów"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:14Z
 ---
 
 # Exec w tle + narzędzie procesów

@@ -1,20 +1,13 @@
 ---
-summary: "重構計畫：exec 主機路由、節點核准與無介面 runner"
+summary: "Refactor plan: exec host routing, node approvals, and headless runner"
 read_when:
   - 設計 exec 主機路由或 exec 核准時
   - 實作節點 runner + UI IPC
   - 新增 exec 主機安全模式與斜線指令
-title: "Exec 主機重構"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:27Z
+title: "Exec Host Refactor"
 ---
 
-# Exec 主機重構計畫
+# Exec host refactor plan
 
 ## 目標
 
@@ -27,7 +20,7 @@ x-i18n:
 
 ## 非目標
 
-- 不進行舊版允許清單移轉或支援舊版結構描述。
+- No legacy allowlist migration or legacy schema support.
 - 不為 node exec 提供 PTY/串流（僅彙總輸出）。
 - 不新增現有 Bridge + Gateway 閘道器 之外的網路層。
 
@@ -60,8 +53,8 @@ x-i18n:
 
 ### 詢問模式
 
-- `off`：從不詢問。
-- `on-miss`：僅在允許清單不符合時詢問。
+- `off`: never ask.
+- `on-miss`: ask only when allowlist does not match.
 - `always`：每次都詢問。
 
 詢問與允許清單 **相互獨立**；允許清單可與 `always` 或 `on-miss` 搭配使用。
@@ -103,7 +96,7 @@ x-i18n:
 - `agents.list[].tools.exec.ask`
 - `agents.list[].tools.exec.node`
 
-### 別名
+### 44. 別名
 
 - `/elevated on` = 為 agent 工作階段設定 `tools.exec.host=gateway`、`tools.exec.security=full`。
 - `/elevated off` = 還原 agent 工作階段先前的 exec 設定。
@@ -115,7 +108,7 @@ x-i18n:
 用途：
 
 - **執行主機**（Gateway 閘道器 或 node runner）的本機政策 + 允許清單。
-- 在沒有 UI 時的詢問備援。
+- 45. 當沒有可用 UI 時，詢問後備方案。
 - UI 用戶端的 IPC 憑證。
 
 建議結構描述（v1）：
@@ -160,13 +153,13 @@ x-i18n:
 ### 角色
 
 - 在本機強制執行 `exec.security` + `exec.ask`。
-- 執行系統指令並回傳輸出。
+- Execute system commands and return output.
 - 發送 exec 生命週期的 Bridge 事件（選用但建議）。
 
 ### 服務生命週期
 
 - macOS 使用 Launchd/daemon；Linux/Windows 使用系統服務。
-- 核准 JSON 儲存在執行主機本機。
+- Approvals JSON is local to the execution host.
 - UI 提供本機 Unix socket；runner 依需求連線。
 
 ## UI 整合（macOS 應用程式）
@@ -175,7 +168,7 @@ x-i18n:
 
 - Unix socket 位置：`~/.openclaw/exec-approvals.sock`（0600）。
 - 權杖儲存在 `exec-approvals.json`（0600）。
-- 對等檢查：僅同 UID。
+- Peer checks: same-UID only.
 - 挑戰/回應：nonce + HMAC(token, request-hash) 以防重放。
 - 短 TTL（例如 10 秒）+ 最大負載 + 速率限制。
 
@@ -184,7 +177,7 @@ x-i18n:
 1. Node 服務自 Gateway 收到 `system.run`。
 2. Node 服務連線至本機 socket，送出提示/exec 請求。
 3. 應用程式驗證對等 + 權杖 + HMAC + TTL，必要時顯示對話框。
-4. 應用程式在 UI 情境中執行指令並回傳輸出。
+4. App executes the command in UI context and returns output.
 5. Node 服務將輸出回傳至 Gateway。
 
 若 UI 缺失：
@@ -206,7 +199,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - 綁定模型：
   - `tools.exec.node` 將 agent 限制到特定節點。
   - 若未設定，agent 可選擇任何節點（政策仍會強制預設）。
-- 節點選擇解析：
+- 50. 節點選擇解析：
   - `nodeId` 精確比對
   - `displayName`（正規化）
   - `remoteIp`
@@ -214,9 +207,9 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 ## 事件
 
-### 事件可見對象
+### Who sees events
 
-- 系統事件為 **每個工作階段**，並在下一次提示時顯示給 agent。
+- System events are **per session** and shown to the agent on the next prompt.
 - 儲存在 Gateway 的記憶體佇列（`enqueueSystemEvent`）。
 
 ### 事件文字
@@ -225,7 +218,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - `Exec finished (node=<id>, id=<runId>, code=<code>)` + 選用的輸出尾段
 - `Exec denied (node=<id>, id=<runId>, <reason>)`
 
-### 傳輸
+### Transport
 
 選項 A（建議）：
 
@@ -251,11 +244,11 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ### Node 主機
 
 - Gateway 以 `system.run` 呼叫 `node.invoke`。
-- Runner 強制執行本機核准。
+- Runner enforces local approvals.
 - Runner 回傳彙總的 stdout/stderr。
-- 選用的 Bridge 事件：開始/完成/拒絕。
+- Optional Bridge events for start/finish/deny.
 
-## 輸出上限
+## Output caps
 
 - 合併 stdout+stderr 上限 **200k**；事件保留 **20k** 尾段。
 - 以明確字尾截斷（例如 `"… (truncated)"`）。
@@ -263,7 +256,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ## 斜線指令
 
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`
-- 每個 agent、每個工作階段的覆寫；除非透過設定儲存，否則不具持久性。
+- Per-agent, per-session overrides; non-persistent unless saved via config.
 - `/elevated on|off|ask|full` 仍是 `host=gateway security=full` 的捷徑（搭配 `full` 跳過核准）。
 
 ## 跨平台說明
@@ -272,7 +265,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - UI 為選用；若缺失，套用 `askFallback`。
 - Windows/Linux 支援相同的核准 JSON + socket 協定。
 
-## 實作階段
+## Implementation phases
 
 ### 第 1 階段：設定 + exec 路由
 
@@ -283,8 +276,8 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ### 第 2 階段：核准儲存 + Gateway 強制
 
 - 實作 `exec-approvals.json` 讀寫器。
-- 為 `gateway` 主機強制允許清單 + 詢問模式。
-- 新增輸出上限。
+- Enforce allowlist + ask modes for `gateway` host.
+- Add output caps.
 
 ### 第 3 階段：node runner 強制
 
@@ -300,22 +293,22 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ### 第 5 階段：UI 潤飾
 
 - Mac 應用程式：允許清單編輯器、每個 agent 切換器、詢問政策 UI。
-- 節點綁定控制（選用）。
+- Node binding controls (optional).
 
 ## 測試計畫
 
-- 單元測試：允許清單比對（glob + 不區分大小寫）。
+- Unit tests: allowlist matching (glob + case-insensitive).
 - 單元測試：政策解析優先順序（工具參數 → agent 覆寫 → 全域）。
-- 整合測試：node runner 拒絕/允許/詢問流程。
+- Integration tests: node runner deny/allow/ask flows.
 - Bridge 事件測試：node 事件 → 系統事件路由。
 
 ## 開放風險
 
 - UI 不可用：確保遵循 `askFallback`。
-- 長時間執行的指令：仰賴逾時 + 輸出上限。
-- 多節點歧義：除非設定節點綁定或明確的節點參數，否則回傳錯誤。
+- Long-running commands: rely on timeout + output caps.
+- Multi-node ambiguity: error unless node binding or explicit node param.
 
-## 相關文件
+## Related docs
 
 - [Exec 工具](/tools/exec)
 - [Exec 核准](/tools/exec-approvals)

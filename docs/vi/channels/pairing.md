@@ -5,26 +5,19 @@ read_when:
   - Ghép cặp một node iOS/Android mới
   - Rà soát tư thế bảo mật của OpenClaw
 title: "Ghép cặp"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:04Z
 ---
 
 # Ghép cặp
 
-“Ghép cặp” là bước **phê duyệt rõ ràng của chủ sở hữu** trong OpenClaw.
-Nó được dùng ở hai nơi:
+“Pairing” is OpenClaw’s explicit **owner approval** step.
+It is used in two places:
 
 1. **Ghép cặp DM** (ai được phép nói chuyện với bot)
 2. **Ghép cặp node** (những thiết bị/node nào được phép tham gia mạng gateway)
 
 Ngữ cảnh bảo mật: [Security](/gateway/security)
 
-## 1) Ghép cặp DM (truy cập chat đến)
+## 1. Ghép cặp DM (truy cập chat đến)
 
 Khi một kênh được cấu hình với chính sách DM `pairing`, người gửi chưa xác định sẽ nhận một mã ngắn và tin nhắn của họ **không được xử lý** cho đến khi bạn phê duyệt.
 
@@ -33,7 +26,7 @@ Các chính sách DM mặc định được ghi trong: [Security](/gateway/secur
 Mã ghép cặp:
 
 - 8 ký tự, chữ hoa, không có ký tự dễ gây nhầm lẫn (`0O1I`).
-- **Hết hạn sau 1 giờ**. Bot chỉ gửi thông báo ghép cặp khi có yêu cầu mới được tạo (xấp xỉ mỗi giờ một lần cho mỗi người gửi).
+- **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
 - Các yêu cầu ghép cặp DM đang chờ được giới hạn **3 yêu cầu cho mỗi kênh** theo mặc định; các yêu cầu bổ sung sẽ bị bỏ qua cho đến khi một yêu cầu hết hạn hoặc được phê duyệt.
 
 ### Phê duyệt một người gửi
@@ -54,10 +47,10 @@ Lưu dưới `~/.openclaw/credentials/`:
 
 Hãy coi những mục này là nhạy cảm (chúng kiểm soát quyền truy cập vào trợ lý của bạn).
 
-## 2) Ghép cặp thiết bị node (iOS/Android/macOS/node headless)
+## 2. Ghép cặp thiết bị node (iOS/Android/macOS/node headless)
 
-Các node kết nối tới Gateway như **thiết bị** với `role: node`. Gateway
-tạo một yêu cầu ghép cặp thiết bị và yêu cầu này phải được phê duyệt.
+Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
+creates a device pairing request that must be approved.
 
 ### Phê duyệt một thiết bị node
 
@@ -76,7 +69,8 @@ Lưu dưới `~/.openclaw/devices/`:
 
 ### Ghi chú
 
-- API `node.pair.*` cũ (CLI: `openclaw nodes pending/approve`) là một kho ghép cặp riêng do gateway sở hữu. Các node WS vẫn yêu cầu ghép cặp thiết bị.
+- The legacy `node.pair.*` API (CLI: `openclaw nodes pending/approve`) is a
+  separate gateway-owned pairing store. WS nodes still require device pairing.
 
 ## Tài liệu liên quan
 

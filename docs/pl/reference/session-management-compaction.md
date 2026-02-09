@@ -1,17 +1,10 @@
 ---
-summary: „Dogłębna analiza: magazyn sesji i transkrypty, cykl życia oraz mechanizmy (auto)kompaktowania”
+summary: "„Dogłębna analiza: magazyn sesji i transkrypty, cykl życia oraz mechanizmy (auto)kompaktowania”"
 read_when:
   - Musisz debugować identyfikatory sesji, JSONL transkryptów lub pola sessions.json
   - Zmieniasz zachowanie auto-kompaktowania lub dodajesz porządkowanie „przed kompaktowaniem”
   - Chcesz zaimplementować opróżnianie pamięci lub ciche tury systemowe
-title: „Zarządzanie sesjami — dogłębna analiza”
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:05Z
+title: "Zarządzanie sesjami Deep Dive"
 ---
 
 # Zarządzanie sesjami i kompaktowanie (dogłębna analiza)
@@ -235,7 +228,7 @@ Możesz obserwować kompaktowanie i stan sesji poprzez:
 
 ---
 
-## Ciche porządkowanie (`NO_REPLY`)
+## Ciche gospodarstwo domowe (`NO_REPLY`)
 
 OpenClaw obsługuje „ciche” tury dla zadań w tle, w których użytkownik nie powinien widzieć wyjścia pośredniego.
 
@@ -288,4 +281,4 @@ Pi udostępnia także hak `session_before_compact` w API rozszerzeń, jednak log
   - okno kontekstu modelu (zbyt małe)
   - ustawienia kompaktowania (`reserveTokens` zbyt wysokie względem okna modelu może powodować wcześniejsze kompaktowanie)
   - nadmiar tool-result: włącz/dostrój przycinanie sesji
-- Wyciek cichych tur? Potwierdź, że odpowiedź zaczyna się od `NO_REPLY` (dokładny token) i że używasz wersji zawierającej poprawkę tłumienia strumieniowania.
+- Ciche skręty przeciekają? Potwierdź, że odpowiedź zaczyna się od `NO_REPLY` (dokładny token) i że używasz wersji zawierającej poprawkę tłumienia strumieniowania.

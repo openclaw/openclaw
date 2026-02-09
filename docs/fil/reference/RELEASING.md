@@ -4,18 +4,11 @@ read_when:
   - Nagka-cut ng bagong npm release
   - Nagka-cut ng bagong macOS app release
   - Nive-verify ang metadata bago mag-publish
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:02Z
 ---
 
 # Checklist ng Release (npm + macOS)
 
-Gamitin ang `pnpm` (Node 22+) mula sa repo root. Panatilihing malinis ang working tree bago mag-tag/mag-publish.
+Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tagging/publishing.
 
 ## Operator trigger
 
@@ -79,7 +72,7 @@ Kapag sinabi ng operator na “release”, agad gawin ang preflight na ito (wala
 
 ### Pag-troubleshoot (mga tala mula sa 2.0.0-beta2 release)
 
-- **Nagha-hang ang npm pack/publish o gumagawa ng napakalaking tarball**: ang macOS app bundle sa `dist/OpenClaw.app` (at mga release zip) ay nasasama sa package. Ayusin sa pamamagitan ng pag-whitelist ng publish contents via `package.json` `files` (isama ang dist subdirs, docs, skills; ibukod ang mga app bundle). Kumpirmahin gamit ang `npm pack --dry-run` na hindi nakalista ang `dist/OpenClaw.app`.
+- **npm pack/publish hangs or produces huge tarball**: the macOS app bundle in `dist/OpenClaw.app` (and release zips) get swept into the package. Fix by whitelisting publish contents via `package.json` `files` (include dist subdirs, docs, skills; exclude app bundles). Confirm with `npm pack --dry-run` that `dist/OpenClaw.app` is not listed.
 - **npm auth web loop para sa dist-tags**: gamitin ang legacy auth para makakuha ng OTP prompt:
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **Bumabagsak ang verification ng `npx` na may `ECOMPROMISED: Lock compromised`**: ulitin gamit ang sariwang cache:
@@ -98,8 +91,8 @@ Kapag sinabi ng operator na “release”, agad gawin ang preflight na ito (wala
 
 ## Saklaw ng pag-publish ng plugin (npm)
 
-Nagpa-publish lang kami ng **umiiral na npm plugins** sa ilalim ng saklaw na `@openclaw/*`. Ang mga bundled
-plugin na wala sa npm ay nananatiling **disk-tree only** (ipinapadala pa rin sa
+We only publish **existing npm plugins** under the `@openclaw/*` scope. Bundled
+plugins that are not on npm stay **disk-tree only** (still shipped in
 `extensions/**`).
 
 Proseso para buuin ang listahan:

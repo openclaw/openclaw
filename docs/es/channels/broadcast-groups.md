@@ -5,13 +5,6 @@ read_when:
   - Depuración de respuestas de múltiples agentes en WhatsApp
 status: experimental
 title: "Grupos de difusión"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:38Z
 ---
 
 # Grupos de difusión
@@ -428,7 +421,7 @@ interface OpenClawConfig {
 
 ## Limitaciones
 
-1. **Máx. de agentes:** No hay un límite estricto, pero 10+ agentes pueden ser lentos
+1. de agentes:\*\* No hay un límite estricto, pero 10+ agentes pueden ser lentos
 2. **Contexto compartido:** Los agentes no ven las respuestas de otros agentes (por diseño)
 3. **Orden de mensajes:** Las respuestas en paralelo pueden llegar en cualquier orden
 4. **Límites de tasa:** Todos los agentes cuentan para los límites de tasa de WhatsApp

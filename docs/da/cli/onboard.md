@@ -3,13 +3,6 @@ summary: "CLI-reference for `openclaw onboard` (interaktiv introduktionsguide)"
 read_when:
   - Du vil have guidet opsætning af gateway, workspace, autentificering, kanaler og Skills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:56Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,5 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` indebærer ikke ikke-interaktiv tilstand. Brug `--non-interactive` til scripts.
+`--json` betyder ikke ikke-interaktiv tilstand. Brug `--non-interactive` til scripts.
 </Note>

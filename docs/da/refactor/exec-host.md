@@ -5,13 +5,6 @@ read_when:
   - Implementering af node runner + UI IPC
   - Tilføjelse af exec-host-sikkerhedstilstande og slash-kommandoer
 title: "Refaktorering af Exec Host"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:57Z
 ---
 
 # Plan for refaktorering af exec-host
@@ -21,7 +14,7 @@ x-i18n:
 - Tilføj `exec.host` + `exec.security` for at route eksekvering på tværs af **sandbox**, **gateway** og **node**.
 - Bevar **sikre** standarder: ingen eksekvering på tværs af hosts, medmindre det eksplicit er aktiveret.
 - Opdel eksekvering i en **headless runner-tjeneste** med valgfri UI (macOS-app) via lokal IPC.
-- Tilbyd **pr. agent**-politik, tilladelsesliste, spørgetilstand og node-binding.
+- Giv **per-agent** politik, allowlist, ask mode og node binding.
 - Understøt **spørgetilstande**, der virker _med_ eller _uden_ tilladelseslister.
 - Platformuafhængigt: Unix-socket + token-autentificering (paritet mellem macOS/Linux/Windows).
 
@@ -216,7 +209,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 ### Hvem ser hændelser
 
-- Systemhændelser er **pr. session** og vises for agenten ved næste prompt.
+- Systembegivenheder er **per session** og vises til agenten ved næste prompt.
 - Gemmes i gatewayens in-memory-kø (`enqueueSystemEvent`).
 
 ### Hændelsestekst
@@ -258,12 +251,12 @@ Mulighed B:
 ## Outputbegrænsninger
 
 - Begræns kombineret stdout+stderr til **200k**; behold **tail 20k** til hændelser.
-- Afkort med et tydeligt suffiks (fx `"… (truncated)"`).
+- Afkort med en klar suffiks (f.eks. `"… (afkortet)"`).
 
 ## Slash-kommandoer
 
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`
-- Pr. agent, pr. session overrides; ikke-persistente medmindre de gemmes via konfiguration.
+- Per-agent, per-session tilsidesættelser; ikke-vedvarende medmindre gemmes via config.
 - `/elevated on|off|ask|full` forbliver en genvej til `host=gateway security=full` (med `full` der springer godkendelser over).
 
 ## Platformuafhængig historie

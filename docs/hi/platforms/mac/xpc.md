@@ -3,18 +3,11 @@ summary: "OpenClaw ऐप, Gateway नोड ट्रांसपोर्ट, 
 read_when:
   - IPC कॉन्ट्रैक्ट्स या मेनू बार ऐप IPC संपादित करते समय
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:33Z
 ---
 
 # OpenClaw macOS IPC आर्किटेक्चर
 
-**वर्तमान मॉडल:** एक स्थानीय Unix सॉकेट **node host service** को **macOS ऐप** से exec अनुमोदनों + `system.run` के लिए जोड़ता है। डिस्कवरी/कनेक्ट जाँच के लिए एक `openclaw-mac` डिबग CLI मौजूद है; एजेंट क्रियाएँ अभी भी Gateway WebSocket और `node.invoke` के माध्यम से प्रवाहित होती हैं। UI ऑटोमेशन PeekabooBridge का उपयोग करता है।
+**Current model:** a local Unix socket connects the **node host service** to the **macOS app** for exec approvals + `system.run`. A `openclaw-mac` debug CLI exists for discovery/connect checks; agent actions still flow through the Gateway WebSocket and `node.invoke`. UI automation uses PeekabooBridge.
 
 ## लक्ष्य
 

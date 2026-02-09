@@ -5,13 +5,6 @@ read_when:
   - मॉडल/प्रदाता बग्स के लिए रिग्रेशन जोड़ते समय
   - Gateway + एजेंट व्यवहार को डिबग करते समय
 title: "टेस्टिंग"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:07Z
 ---
 
 # टेस्टिंग
@@ -277,13 +270,13 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 वैकल्पिक अतिरिक्त कवरेज (अच्छा-सा-हो):
 
 - xAI: `xai/grok-4` (या नवीनतम उपलब्ध)
-- Mistral: `mistral/`… (कोई एक “tools” सक्षम मॉडल चुनें)
-- Cerebras: `cerebras/`… (यदि आपके पास एक्सेस है)
-- LM Studio: `lmstudio/`… (लोकल; टूल कॉलिंग API मोड पर निर्भर करती है)
+- Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
+- Cerebras: `cerebras/`… (if you have access)
+- LM Studio: `lmstudio/`… (local; tool calling API mode पर निर्भर करता है)
 
 ### विज़न: इमेज भेजना (अटैचमेंट → मल्टीमॉडल संदेश)
 
-इमेज प्रोब को एक्सरसाइज़ करने के लिए `OPENCLAW_LIVE_GATEWAY_MODELS` में कम से कम एक इमेज-सक्षम मॉडल शामिल करें (Claude/Gemini/OpenAI विज़न-सक्षम वेरिएंट्स, आदि)।
+Include at least one image-capable model in `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, etc.) इमेज प्रोब को अभ्यास करने के लिए।
 
 ### एग्रीगेटर्स / वैकल्पिक gateways
 
@@ -297,16 +290,18 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - बिल्ट-इन: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - `models.providers` के माध्यम से (कस्टम एंडपॉइंट्स): `minimax` (क्लाउड/API), साथ ही कोई भी OpenAI/Anthropic-संगत प्रॉक्सी (LM Studio, vLLM, LiteLLM, आदि)
 
-सुझाव: दस्तावेज़ों में “सभी मॉडल” हार्डकोड करने की कोशिश न करें। आधिकारिक सूची वही है जो आपकी मशीन पर `discoverModels(...)` लौटाता है + जो भी कुंजियाँ उपलब्ध हैं।
+टिप: डॉक्यूमेंट्स में “all models” को हार्डकोड करने की कोशिश न करें। प्रामाणिक सूची वही है जो `discoverModels(...)` आपकी मशीन पर लौटाता है + जो भी keys उपलब्ध हों।
 
 ## क्रेडेंशियल्स (कभी कमिट न करें)
 
-लाइव टेस्ट्स उसी तरह क्रेडेंशियल्स खोजते हैं जैसे CLI करता है। व्यावहारिक निहितार्थ:
+Live tests credentials को उसी तरह discover करते हैं जैसे CLI करता है। व्यावहारिक प्रभाव:
 
 - यदि CLI काम करता है, तो लाइव टेस्ट्स को वही कुंजियाँ मिलनी चाहिए।
+
 - यदि कोई लाइव टेस्ट “no creds” कहता है, तो उसी तरह डिबग करें जैसे आप `openclaw models list` / मॉडल चयन को करते।
 
 - प्रोफ़ाइल स्टोर: `~/.openclaw/credentials/` (प्राथमिक; टेस्ट्स में “प्रोफ़ाइल कुंजियाँ” का यही अर्थ है)
+
 - कॉन्फ़िग: `~/.openclaw/openclaw.json` (या `OPENCLAW_CONFIG_PATH`)
 
 यदि आप env कुंजियों पर निर्भर रहना चाहते हैं (जैसे आपके `~/.profile` में एक्सपोर्टेड), तो `source ~/.profile` के बाद लोकल टेस्ट्स चलाएँ, या नीचे दिए गए Docker रनर्स का उपयोग करें (वे कंटेनर में `~/.profile` माउंट कर सकते हैं)।
@@ -314,7 +309,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 ## Deepgram लाइव (ऑडियो ट्रांसक्रिप्शन)
 
 - टेस्ट: `src/media-understanding/providers/deepgram/audio.live.test.ts`
-- सक्षम करें: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
+- Enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
 
 ## Docker रनर्स (वैकल्पिक “Linux में काम करता है” जाँच)
 

@@ -6,22 +6,15 @@ read_when:
   - クローン可能でリセットできる macOS 環境が欲しい
   - ローカルとホスト型の macOS VM オプションを比較したい
 title: "macOS VM"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:26Z
 ---
 
 # macOS VM 上の OpenClaw（サンドボックス化）
 
 ## 推奨デフォルト（大多数のユーザー向け）
 
-- **小規模な Linux VPS**：常時稼働の Gateway（ゲートウェイ）と低コストを実現します。[VPS hosting](/vps) を参照してください。
-- **専用ハードウェア**（Mac mini または Linux マシン）：完全な制御と、ブラウザ自動化向けの **住宅用 IP** が必要な場合に適しています。多くのサイトはデータセンター IP をブロックするため、ローカルでのブラウジングの方がうまくいくことが多いです。
-- **ハイブリッド**：安価な VPS に Gateway（ゲートウェイ）を置き、ブラウザ／UI 自動化が必要なときだけ Mac を **node** として接続します。[Nodes](/nodes) と [Gateway remote](/gateway/remote) を参照してください。
+- **小規模な Linux VPS**：常時稼働の Gateway（ゲートウェイ）と低コストを実現します。[VPS hosting](/vps) を参照してください。 [VPSホスティング](/vps)を参照してください。
+- **専用ハードウェア**（Mac mini または Linux マシン）：完全な制御と、ブラウザ自動化向けの **住宅用 IP** が必要な場合に適しています。多くのサイトはデータセンター IP をブロックするため、ローカルでのブラウジングの方がうまくいくことが多いです。 多くのサイトでデータセンターの IP をブロックするため、ローカルブラウジングはしばしばより良い動作します。
+- **ハイブリッド**：安価な VPS に Gateway（ゲートウェイ）を置き、ブラウザ／UI 自動化が必要なときだけ Mac を **node** として接続します。[Nodes](/nodes) と [Gateway remote](/gateway/remote) を参照してください。 [Nodes](/nodes) と [Gateway remote](/gateway/remote) を参照してください。
 
 macOS 専用の機能（iMessage / BlueBubbles）が必要な場合や、日常利用の Mac から厳密に隔離したい場合に、macOS VM を使用してください。
 
@@ -69,7 +62,7 @@ macOS VM への SSH アクセスが得られたら、以下の手順 6 に進ん
 
 ---
 
-## 1) Lume をインストール
+## 1. Lume をインストール
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ lume --version
 
 ---
 
-## 2) macOS VM を作成
+## 2. macOS VM を作成
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-これにより macOS がダウンロードされ、VM が作成されます。VNC ウィンドウが自動的に開きます。
+これにより macOS がダウンロードされ、VM が作成されます。VNC ウィンドウが自動的に開きます。 VNC ウィンドウが自動的に開きます。
 
 注記：ダウンロード時間は接続状況によっては長くなる場合があります。
 
 ---
 
-## 3) セットアップアシスタントを完了
+## 3. セットアップアシスタントを完了
 
 VNC ウィンドウで：
 
@@ -119,7 +112,7 @@ VNC ウィンドウで：
 
 ---
 
-## 4) VM の IP アドレスを取得
+## 4. VM の IP アドレスを取得
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ IP アドレス（通常は `192.168.64.x`）を確認します。
 
 ---
 
-## 5) VM に SSH 接続
+## 5. VM に SSH 接続
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) OpenClaw をインストール
+## 6. OpenClaw をインストール
 
 VM 内で：
 
@@ -152,7 +145,7 @@ openclaw onboard --install-daemon
 
 ---
 
-## 7) チャンネルを設定
+## 7. チャンネルを設定
 
 設定ファイルを編集します：
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) VM をヘッドレスで実行
+## 8. VM をヘッドレスで実行
 
 VM を停止し、表示なしで再起動します：
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-VM はバックグラウンドで実行されます。OpenClaw のデーモンが Gateway（ゲートウェイ）を稼働させ続けます。
+VMはバックグラウンドで実行されます。 VM はバックグラウンドで実行されます。OpenClaw のデーモンが Gateway（ゲートウェイ）を稼働させ続けます。
 
 ステータスを確認するには：
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## 追加：iMessage 連携
 
-これは macOS で実行する際のキラーフィーチャーです。[BlueBubbles](https://bluebubbles.app) を使用して OpenClaw に iMessage を追加します。
+これはmacOS上で実行するというキラーな機能です。 これは macOS で実行する際のキラーフィーチャーです。[BlueBubbles](https://bluebubbles.app) を使用して OpenClaw に iMessage を追加します。
 
 VM 内で：
 
@@ -228,7 +221,7 @@ OpenClaw の設定に追加します：
 }
 ```
 
-Gateway（ゲートウェイ）を再起動します。これでエージェントが iMessage を送受信できるようになります。
+ゲートウェイを再起動します。 Gateway（ゲートウェイ）を再起動します。これでエージェントが iMessage を送受信できるようになります。
 
 詳細な設定手順：[BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,17 +254,17 @@ VM を継続稼働させるには：
 - システム設定 → エネルギーでスリープを無効化
 - 必要に応じて `caffeinate` を使用
 
-真の常時稼働が必要な場合は、専用の Mac mini または小規模な VPS を検討してください。[VPS hosting](/vps) を参照してください。
+真の常時稼働が必要な場合は、専用の Mac mini または小規模な VPS を検討してください。[VPS hosting](/vps) を参照してください。 [VPSホスティング](/vps)を参照してください。
 
 ---
 
 ## トラブルシューティング
 
-| 問題                          | 解決策                                                                                             |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- |
-| VM に SSH 接続できない        | VM のシステム設定で「リモートログイン」が有効になっていることを確認してください                    |
-| VM の IP が表示されない       | VM が完全に起動するまで待ち、`lume get openclaw` を再度実行してください                            |
-| Lume コマンドが見つからない   | `~/.local/bin` を PATH に追加してください                                                          |
+| 問題                    | 解決策                                                              |
+| --------------------- | ---------------------------------------------------------------- |
+| VM に SSH 接続できない       | VM のシステム設定で「リモートログイン」が有効になっていることを確認してください                        |
+| VM の IP が表示されない       | VM が完全に起動するまで待ち、`lume get openclaw` を再度実行してください                  |
+| Lume コマンドが見つからない      | `~/.local/bin` を PATH に追加してください                                  |
 | WhatsApp の QR が読み取れない | `openclaw channels login` を実行する際、ホストではなく VM にログインしていることを確認してください |
 
 ---

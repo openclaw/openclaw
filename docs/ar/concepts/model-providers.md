@@ -4,13 +4,6 @@ read_when:
   - تحتاج إلى مرجع لإعداد النماذج حسب كل موفّر
   - تريد أمثلة تهيئة أو أوامر تهيئة أولية عبر CLI لموفّري النماذج
 title: "موفّرو النماذج"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:19Z
 ---
 
 # موفّرو النماذج

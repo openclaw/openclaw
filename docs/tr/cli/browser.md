@@ -1,17 +1,10 @@
 ---
 summary: "`openclaw browser` için CLI referansı (profiller, sekmeler, eylemler, uzantı aktarımı)"
 read_when:
-  - `openclaw browser` kullanıyor ve yaygın görevler için örnekler istiyorsunuz
+  - "`openclaw browser` kullanıyor ve yaygın görevler için örnekler istiyorsunuz"
   - Başka bir makinede çalışan bir tarayıcıyı bir node ana makinesi üzerinden kontrol etmek istiyorsunuz
   - Chrome uzantı aktarımını kullanmak istiyorsunuz (araç çubuğu düğmesiyle ekle/çıkar)
 title: "tarayıcı"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:02Z
 ---
 
 # `openclaw browser`
@@ -59,7 +52,7 @@ Belirli bir profil kullanın:
 openclaw browser --browser-profile work tabs
 ```
 
-## Sekmeler
+## Tabs
 
 ```bash
 openclaw browser tabs
@@ -82,7 +75,7 @@ Ekran görüntüsü:
 openclaw browser screenshot
 ```
 
-Gezinme/tıklama/yazma (ref tabanlı UI otomasyonu):
+Navigate/click/type (ref-based UI automation):
 
 ```bash
 openclaw browser navigate https://example.com

@@ -5,13 +5,6 @@ read_when:
   - Điều tra các dòng instance bị trùng lặp hoặc lỗi thời
   - Thay đổi kết nối WS của gateway hoặc các beacon sự kiện hệ thống
 title: "Presence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:40Z
 ---
 
 # Presence
@@ -42,27 +35,25 @@ Các mục presence là các đối tượng có cấu trúc với các trườn
 
 Các mục presence được tạo bởi nhiều nguồn và được **hợp nhất**.
 
-### 1) Mục tự thân của Gateway
+### 1. Mục tự thân của Gateway
 
 Gateway luôn khởi tạo một mục “self” khi khởi động để các UI hiển thị máy chủ gateway
 ngay cả trước khi có client nào kết nối.
 
-### 2) Kết nối WebSocket
+### 2. Kết nối WebSocket
 
-Mỗi client WS bắt đầu bằng một yêu cầu `connect`. Khi bắt tay thành công, Gateway
-upsert một mục presence cho kết nối đó.
+Mỗi WS client đều bắt đầu bằng một yêu cầu `connect`. 17. Khi bắt tay thành công, the
+Gateway upsert một bản ghi presence cho kết nối đó.
 
 #### Vì sao các lệnh CLI một‑lần không xuất hiện
 
-CLI thường chỉ kết nối trong thời gian ngắn cho các lệnh một‑lần. Để tránh làm nhiễu
-danh sách Instances, `client.mode === "cli"` **không** được chuyển thành một mục presence.
+18. CLI thường kết nối cho các lệnh ngắn, dùng một lần. Để tránh spam danh sách Instances, `client.mode === "cli"` sẽ **không** được chuyển thành một mục presence.
 
-### 3) Beacon `system-event`
+### 3. Beacon `system-event`
 
-Client có thể gửi các beacon định kỳ giàu thông tin hơn thông qua phương thức
-`system-event`. Ứng dụng mac dùng cách này để báo cáo tên máy chủ, IP và `lastInputSeconds`.
+20. Client có thể gửi các beacon định kỳ phong phú hơn qua phương thức `system-event`. Ứng dụng mac sử dụng điều này để báo cáo tên máy chủ, IP và `lastInputSeconds`.
 
-### 4) Node kết nối (vai trò: node)
+### 4. Node kết nối (vai trò: node)
 
 Khi một node kết nối qua Gateway WebSocket với `role: node`, Gateway sẽ upsert
 một mục presence cho node đó (luồng giống các client WS khác).
@@ -89,9 +80,9 @@ Presence được thiết kế là tạm thời:
 
 ## Lưu ý về kết nối từ xa/đường hầm (IP loopback)
 
-Khi một client kết nối qua đường hầm SSH / chuyển tiếp cổng cục bộ, Gateway có thể
-nhìn thấy địa chỉ từ xa là `127.0.0.1`. Để tránh ghi đè lên IP tốt do client báo cáo,
-các địa chỉ loopback từ xa sẽ bị bỏ qua.
+22. Khi một client kết nối qua đường hầm SSH / chuyển tiếp cổng cục bộ, Gateway có thể
+    thấy địa chỉ từ xa là `127.0.0.1`. 23. Để tránh ghi đè một IP tốt do client báo cáo,
+    địa chỉ loopback từ xa sẽ bị bỏ qua.
 
 ## Bên sử dụng
 

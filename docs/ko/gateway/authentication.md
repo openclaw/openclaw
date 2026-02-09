@@ -4,13 +4,6 @@ read_when:
   - 모델 인증 또는 OAuth 만료 디버깅
   - 인증 또는 자격 증명 저장 문서화
 title: "인증"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:58Z
 ---
 
 # 인증
@@ -131,8 +124,7 @@ openclaw models auth order set --provider anthropic anthropic:default
 openclaw models auth order clear --provider anthropic
 ```
 
-특정 에이전트를 대상으로 하려면 `--agent <id>` 를 사용하십시오.
-생략하면 구성된 기본 에이전트를 사용합니다.
+특정 에이전트를 대상으로 하려면 `--agent <id>` 를 사용하십시오. 생략하면 구성된 기본 에이전트를 사용합니다.
 
 ## 문제 해결
 
@@ -147,8 +139,7 @@ openclaw models status
 
 ### 토큰 만료 임박/만료
 
-어떤 프로필이 만료 중인지 확인하려면 `openclaw models status` 를 실행하십시오.
-프로필이 누락된 경우 `claude setup-token` 를 다시 실행하고 토큰을 다시 붙여넣으십시오.
+어떤 프로필이 만료 중인지 확인하려면 `openclaw models status` 를 실행하십시오. 프로필이 누락된 경우 `claude setup-token` 를 다시 실행하고 토큰을 다시 붙여넣으십시오.
 
 ## 요구 사항
 

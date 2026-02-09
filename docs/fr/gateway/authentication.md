@@ -4,13 +4,6 @@ read_when:
   - Debogage de l’authentification des modeles ou de l’expiration OAuth
   - Documentation de l’authentification ou du stockage des identifiants
 title: "Authentification"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:35Z
 ---
 
 # Authentification
@@ -124,7 +117,7 @@ openclaw models auth order clear --provider anthropic
 
 Utilisez `--agent <id>` pour cibler un agent specifique ; omettez-le pour utiliser l’agent par defaut configure.
 
-## Depannage
+## Problemes courants
 
 ### « Aucune information d’identification trouvee »
 

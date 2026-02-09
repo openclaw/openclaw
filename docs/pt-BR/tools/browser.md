@@ -5,13 +5,6 @@ read_when:
   - Depurar por que o openclaw está interferindo no seu próprio Chrome
   - Implementar configurações e ciclo de vida do navegador no app macOS
 title: "Browser (gerenciado pelo OpenClaw)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:44Z
 ---
 
 # Browser (gerenciado pelo openclaw)
@@ -502,7 +495,7 @@ openclaw browser wait "#main" \
   --timeout-ms 15000
 ```
 
-## Fluxos de depuração
+## Depurar workflows
 
 Quando uma ação falha (ex.: “not visible”, “strict mode violation”, “covered”):
 

@@ -5,19 +5,12 @@ read_when:
   - Lägga till agentkontroller för visuell arbetsyta
   - Felsökning av WKWebView-inläsningar för Canvas
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:57Z
 ---
 
 # Canvas (macOS-app)
 
-macOS-appen bäddar in en agentstyrd **Canvas-panel** med hjälp av `WKWebView`. Den är
-en lättviktig visuell arbetsyta för HTML/CSS/JS, A2UI och små interaktiva
+MacOS appen bäddar in en agentkontrollerad **Canvas panel** med `WKWebView`. Det
+är en lätt visuell arbetsyta för HTML/CSS/JS, A2UI och små interaktiva
 UI-ytor.
 
 ## Var Canvas finns
@@ -45,8 +38,8 @@ Om ingen `index.html` finns i roten visar appen en **inbyggd scaffold-sida**.
 - Laddar om automatiskt när lokala canvas-filer ändras.
 - Endast en Canvas-panel är synlig åt gången (sessionen växlas vid behov).
 
-Canvas kan inaktiveras i Inställningar → **Tillåt Canvas**. När den är inaktiverad returnerar
-canvas-nodkommandon `CANVAS_DISABLED`.
+Canvas kan inaktiveras från Inställningar → **Tillåt Canvas**. När inaktiverad, kanvas
+nod kommandon returnera `CANVAS_DISABLED`.
 
 ## Agent-API-yta
 
@@ -73,9 +66,9 @@ Noteringar:
 
 ## A2UI i Canvas
 
-A2UI hostas av Gateway canvas-värden och renderas inuti Canvas-panelen.
+A2UI är värd för Gateway canvas värd och återges inuti Canvas-panelen.
 När Gateway annonserar en Canvas-värd navigerar macOS-appen automatiskt till
-A2UI-värdsidan vid första öppning.
+A2UI-värdsidan först öppen.
 
 Standard-URL för A2UI-värd:
 

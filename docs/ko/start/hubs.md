@@ -3,13 +3,6 @@ summary: "모든 OpenClaw 문서로 연결되는 허브"
 read_when:
   - 문서 전체의 완전한 지도가 필요할 때
 title: "문서 허브"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:23Z
 ---
 
 # 문서 허브

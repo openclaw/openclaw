@@ -5,18 +5,14 @@ read_when:
   - macOS Gateway launchd सेवा का डिबग करना
   - macOS के लिए Gateway CLI स्थापित करना
 title: "macOS पर Gateway"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:28Z
 ---
 
 # macOS पर Gateway (बाहरी launchd)
 
-OpenClaw.app अब Node/Bun या Gateway रनटाइम को बंडल नहीं करता। macOS ऐप एक **बाहरी** `openclaw` CLI इंस्टॉलेशन की अपेक्षा करता है, Gateway को चाइल्ड प्रोसेस के रूप में प्रारंभ नहीं करता, और Gateway को चालू रखने के लिए प्रति‑उपयोगकर्ता launchd सेवा का प्रबंधन करता है (या यदि पहले से कोई स्थानीय Gateway चल रहा हो तो उससे जुड़ जाता है)।
+OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. The macOS app
+expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
+child process, and manages a per‑user launchd service to keep the Gateway
+running (or attaches to an existing local Gateway if one is already running).
 
 ## CLI इंस्टॉल करें (स्थानीय मोड के लिए आवश्यक)
 
@@ -32,12 +28,12 @@ macOS ऐप का **Install CLI** बटन npm/pnpm के माध्यम
 
 लेबल:
 
-- `bot.molt.gateway` (या `bot.molt.<profile>`; लेगेसी `com.openclaw.*` बना रह सकता है)
+- `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.openclaw.*` may remain)
 
 Plist स्थान (प्रति‑उपयोगकर्ता):
 
 - `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (या `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
+  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
 
 प्रबंधक:
 
@@ -56,7 +52,8 @@ Plist स्थान (प्रति‑उपयोगकर्ता):
 
 ## संस्करण संगतता
 
-macOS ऐप Gateway संस्करण की तुलना अपने संस्करण से करता है। यदि वे असंगत हों, तो ऐप संस्करण से मेल कराने के लिए वैश्विक CLI को अपडेट करें।
+The macOS app checks the gateway version against its own version. If they’re
+incompatible, update the global CLI to match the app version.
 
 ## स्मोक चेक
 

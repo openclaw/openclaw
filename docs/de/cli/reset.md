@@ -2,15 +2,8 @@
 summary: "CLI-Referenz für `openclaw reset` (lokalen Status/Konfiguration zurücksetzen)"
 read_when:
   - Sie möchten den lokalen Status löschen und die CLI installiert lassen
-  - Sie möchten einen Probelauf (Dry-Run), um zu sehen, was entfernt würde
+  - Du möchtest einen Trockenlauf von dem, was entfernt werden würde
 title: "zurücksetzen"
-x-i18n:
-  source_path: cli/reset.md
-  source_hash: 08afed5830f892e0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:40Z
 ---
 
 # `openclaw reset`

@@ -4,13 +4,6 @@ read_when:
   - Meer dan één Gateway op dezelfde machine draaien
   - Je geïsoleerde config/toestand/poorten per Gateway nodig hebt
 title: "Meerdere Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:22Z
 ---
 
 # Meerdere Gateways (zelfde host)
@@ -81,7 +74,7 @@ openclaw --profile rescue onboard
 openclaw --profile rescue gateway install
 ```
 
-## Poortmapping (afgeleid)
+## Port mapping (afgeleid)
 
 Basispoort = `gateway.port` (of `OPENCLAW_GATEWAY_PORT` / `--port`).
 

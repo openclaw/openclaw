@@ -4,18 +4,11 @@ read_when:
   - Hướng dẫn ban đầu cho một phiên bản trợ lý mới
   - Xem xét các tác động về an toàn/quyền hạn
 title: "Thiết lập Trợ lý Cá nhân"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:30Z
 ---
 
 # Xây dựng một trợ lý cá nhân với OpenClaw
 
-OpenClaw là một gateway WhatsApp + Telegram + Discord + iMessage cho các tác tử **Pi**. Plugin bổ sung Mattermost. Hướng dẫn này là thiết lập “trợ lý cá nhân”: một số WhatsApp chuyên dụng hoạt động như tác tử luôn bật của bạn.
+OpenClaw là một gateway WhatsApp + Telegram + Discord + iMessage cho các agent **Pi**. Plugin bổ sung Mattermost. Hướng dẫn này là thiết lập "trợ lý cá nhân": một số WhatsApp chuyên dụng hoạt động như agent luôn bật của bạn.
 
 ## ⚠️ An toàn là trên hết
 
@@ -29,7 +22,7 @@ Hãy bắt đầu thận trọng:
 
 - Luôn đặt `channels.whatsapp.allowFrom` (không bao giờ chạy mở ra toàn thế giới trên máy Mac cá nhân).
 - Dùng một số WhatsApp chuyên dụng cho trợ lý.
-- Heartbeat hiện mặc định mỗi 30 phút. Hãy tắt cho đến khi bạn tin tưởng thiết lập bằng cách đặt `agents.defaults.heartbeat.every: "0m"`.
+- Heartbeats now default to every 30 minutes. Hãy tắt cho đến khi bạn tin tưởng thiết lập bằng cách đặt `agents.defaults.heartbeat.every: "0m"`.
 
 ## Điều kiện tiên quyết
 
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-Nếu bạn liên kết WhatsApp cá nhân với OpenClaw, mọi tin nhắn gửi cho bạn sẽ trở thành “đầu vào của tác tử”. Điều này hiếm khi là điều bạn muốn.
+Nếu bạn liên kết WhatsApp cá nhân với OpenClaw, mọi tin nhắn gửi cho bạn sẽ trở thành “đầu vào của agent”. Điều đó hiếm khi là điều bạn muốn.
 
 ## Khởi động nhanh 5 phút
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 Giờ hãy nhắn tin tới số trợ lý từ điện thoại nằm trong danh sách cho phép của bạn.
 
-Khi onboarding hoàn tất, chúng tôi tự động mở dashboard và in ra một liên kết sạch (không gắn token). Nếu nó yêu cầu xác thực, dán token từ `gateway.auth.token` vào cài đặt Control UI. Để mở lại sau này: `openclaw dashboard`.
+Khi onboarding hoàn tất, chúng tôi tự động mở dashboard và in ra một liên kết sạch (không chứa token). Nếu nó yêu cầu xác thực, hãy dán token từ `gateway.auth.token` vào cài đặt Control UI. Để mở lại sau này: `openclaw dashboard`.
 
 ## Cấp cho tác tử một workspace (AGENTS)
 
 OpenClaw đọc chỉ dẫn vận hành và “bộ nhớ” từ thư mục workspace của nó.
 
-Theo mặc định, OpenClaw dùng `~/.openclaw/workspace` làm workspace của tác tử, và sẽ tạo nó (cùng các tệp khởi đầu `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) tự động khi thiết lập/chạy tác tử lần đầu. `BOOTSTRAP.md` chỉ được tạo khi workspace hoàn toàn mới (nó không nên xuất hiện lại sau khi bạn xóa). `MEMORY.md` là tùy chọn (không tự tạo); khi có, nó được nạp cho các phiên bình thường. Các phiên subagent chỉ chèn `AGENTS.md` và `TOOLS.md`.
+Theo mặc định, OpenClaw sử dụng `~/.openclaw/workspace` làm workspace cho agent và sẽ tự động tạo nó (cùng với các tệp khởi đầu `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) trong quá trình thiết lập/lần chạy agent đầu tiên. `BOOTSTRAP.md` chỉ được tạo khi workspace hoàn toàn mới (nó không nên xuất hiện lại sau khi bạn xóa). `MEMORY.md` is optional (not auto-created); when present, it is loaded for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
 
-Mẹo: hãy coi thư mục này như “bộ nhớ” của OpenClaw và biến nó thành một repo git (tốt nhất là riêng tư) để các tệp `AGENTS.md` + bộ nhớ của bạn được sao lưu. Nếu git đã được cài, các workspace hoàn toàn mới sẽ được tự động khởi tạo.
+Tip: treat this folder like OpenClaw’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up. If git is installed, brand-new workspaces are auto-initialized.
 
 ```bash
 openclaw setup
@@ -168,14 +161,15 @@ Ví dụ:
 
 - Tệp phiên: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - Metadata phiên (mức dùng token, tuyến cuối cùng, v.v.): `~/.openclaw/agents/<agentId>/sessions/sessions.json` (cũ: `~/.openclaw/sessions/sessions.json`)
-- `/new` hoặc `/reset` bắt đầu một phiên mới cho cuộc trò chuyện đó (cấu hình qua `resetTriggers`). Nếu gửi riêng lẻ, tác tử sẽ trả lời một lời chào ngắn để xác nhận việc reset.
+- `/new` hoặc `/reset` bắt đầu một phiên mới cho cuộc chat đó (có thể cấu hình qua `resetTriggers`). Nếu được gửi riêng lẻ, agent sẽ trả lời bằng một lời chào ngắn để xác nhận việc reset.
 - `/compact [instructions]` nén ngữ cảnh phiên và báo cáo ngân sách ngữ cảnh còn lại.
 
 ## Heartbeats (chế độ chủ động)
 
-Theo mặc định, OpenClaw chạy heartbeat mỗi 30 phút với prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`  
-Đặt `agents.defaults.heartbeat.every: "0m"` để tắt.
+By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
+`Read HEARTBEAT.md if it exists (workspace context). Hãy tuân thủ nghiêm ngặt.
+Nếu không có gì cần chú ý, hãy trả lời HEARTBEAT_OK.`
+Đặt `agents.defaults.heartbeat.every: "0m"` để tắt. Do not infer or repeat old tasks from prior chats. Cài đặt trên Linux sử dụng dịch vụ **user** của systemd.
 
 - Nếu `HEARTBEAT.md` tồn tại nhưng thực chất trống (chỉ có dòng trống và tiêu đề markdown như `# Heading`), OpenClaw bỏ qua lượt heartbeat để tiết kiệm API calls.
 - Nếu tệp bị thiếu, heartbeat vẫn chạy và mô hình tự quyết định làm gì.
@@ -198,7 +192,7 @@ Tệp đính kèm đầu vào (ảnh/âm thanh/tài liệu) có thể được �
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (nếu bật chuyển âm thanh sang văn bản)
 
-Tệp đính kèm đầu ra từ tác tử: thêm `MEDIA:<path-or-url>` trên một dòng riêng (không có khoảng trắng). Ví dụ:
+Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own line (no spaces). Ví dụ:
 
 ```
 Here’s the screenshot.

@@ -4,13 +4,6 @@ read_when:
   - Przygotowywanie nowego wydania npm
   - Przygotowywanie nowego wydania aplikacji macOS
   - Weryfikacja metadanych przed publikacją
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:50Z
 ---
 
 # Lista kontrolna wydania (npm + macOS)

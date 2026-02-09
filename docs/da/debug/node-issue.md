@@ -4,13 +4,6 @@ read_when:
   - Fejlfinding af Node-only dev-scripts eller fejl i watch-tilstand
   - Undersøgelse af tsx/esbuild loader-crash i OpenClaw
 title: "Node + tsx Crash"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:10Z
 ---
 
 # Node + tsx "\_\_name er ikke en funktion"-crash
@@ -25,7 +18,7 @@ Kørsel af OpenClaw via Node med `tsx` fejler ved opstart med:
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-Dette begyndte efter skift af dev-scripts fra Bun til `tsx` (commit `2871657e`, 2026-01-06). Den samme runtime-sti virkede med Bun.
+Dette begyndte efter at skifte dev scripts fra Bun til `tsx` (begå `2871657e`, 2026-01-06). Samme runtime sti arbejdede med Bun.
 
 ## Miljø
 
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Noter / hypotese
 
-- `tsx` bruger esbuild til at transformere TS/ESM. esbuilds `keepNames` emitterer en `__name`-helper og wrapper funktionsdefinitioner med `__name(...)`.
+- `tsx` bruger esbuild til at omdanne TS/ESM. esbuild's `keepNames` udsender en `__name` hjælper og wraps funktion definitioner med `__name(...)`.
 - Crashet indikerer, at `__name` findes, men ikke er en funktion ved runtime, hvilket antyder, at helperen mangler eller er overskrevet for dette modul i Node 25 loader-stien.
 - Lignende `__name`-helperproblemer er rapporteret i andre esbuild-forbrugere, når helperen mangler eller omskrives.
 
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Workarounds
 
 - Brug Bun til dev-scripts (nuværende midlertidige revert).
+
 - Brug Node + tsc watch, og kør derefter kompileret output:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Bekræftet lokalt: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` virker på Node 25.
+
 - Deaktivér esbuild keepNames i TS-loaderen hvis muligt (forhindrer indsættelse af `__name`-helperen); tsx eksponerer dette ikke i øjeblikket.
+
 - Test Node LTS (22/24) med `tsx` for at se, om problemet er specifikt for Node 25.
 
 ## Referencer

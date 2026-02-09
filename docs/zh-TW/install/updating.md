@@ -4,22 +4,17 @@ read_when:
   - 更新 OpenClaw
   - 更新後發生問題
 title: "更新"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:40Z
 ---
 
 # 更新
 
-OpenClaw 正在快速演進（「1.0」前）。請像部署基礎設施一樣對待更新：更新 → 執行檢查 → 重新啟動（或使用 `openclaw update`，其會重新啟動）→ 驗證。
+OpenClaw is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart (or use `openclaw update`, which restarts) → verify.
 
 ## 建議作法：重新執行網站安裝程式（原地升級）
 
-**首選** 的更新路徑是重新執行網站上的安裝程式。它會偵測既有安裝、原地升級，並在需要時執行 `openclaw doctor`。
+The **preferred** update path is to re-run the installer from the website. It
+detects existing installs, upgrades in place, and runs `openclaw doctor` when
+needed.
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -28,6 +23,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 注意事項：
 
 - 若不想再次執行入門引導精靈，請加入 `--no-onboard`。
+
 - 對於 **原始碼安裝**，請使用：
 
   ```bash
@@ -37,6 +33,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
   安裝程式**僅**在儲存庫為乾淨狀態時才會 `git pull --rebase`。
 
 - 對於 **全域安裝**，腳本底層會使用 `npm install -g openclaw@latest`。
+
 - 相容性備註：`clawdbot` 仍可作為相容性墊片使用。
 
 ## 更新前
@@ -50,7 +47,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 ## 更新（全域安裝）
 
-全域安裝（擇一）：
+40. 全域安裝（擇一）：
 
 ```bash
 npm i -g openclaw@latest
@@ -74,9 +71,9 @@ openclaw update --channel stable
 
 通道語意與發行說明請見：[Development channels](/install/development-channels)。
 
-注意：在 npm 安裝下，Gateway 閘道器會在啟動時記錄更新提示（檢查目前通道標籤）。可透過 `update.checkOnStart: false` 停用。
+注意：在 npm 安裝下，Gateway 閘道器會在啟動時記錄更新提示（檢查目前通道標籤）。可透過 `update.checkOnStart: false` 停用。 Disable via `update.checkOnStart: false`.
 
-接著：
+然後：
 
 ```bash
 openclaw doctor
@@ -87,7 +84,7 @@ openclaw health
 注意事項：
 
 - 若你的 Gateway 閘道器以服務方式執行，建議使用 `openclaw gateway restart`，不要直接終止 PID。
-- 若你固定在特定版本，請參閱下方「回滾／釘選」。
+- If you’re pinned to a specific version, see “Rollback / pinning” below.
 
 ## 更新（`openclaw update`）
 
@@ -103,19 +100,19 @@ openclaw update
 - 切換到選定的通道（標籤或分支）。
 - 針對已設定的上游（dev 通道）擷取並 rebase。
 - 安裝相依套件、建置、建置 Control UI，並執行 `openclaw doctor`。
-- 預設會重新啟動 Gateway 閘道器（使用 `--no-restart` 可略過）。
+- Restarts the gateway by default (use `--no-restart` to skip).
 
-若你是透過 **npm/pnpm** 安裝（沒有 git 中繼資料），`openclaw update` 會嘗試使用你的套件管理器更新。若無法偵測安裝，請改用「更新（全域安裝）」。
+若你是透過 **npm/pnpm** 安裝（沒有 git 中繼資料），`openclaw update` 會嘗試使用你的套件管理器更新。若無法偵測安裝，請改用「更新（全域安裝）」。 If it can’t detect the install, use “Update (global install)” instead.
 
 ## 更新（Control UI／RPC）
 
-Control UI 提供 **Update & Restart**（RPC：`update.run`）。它會：
+Control UI 提供 **Update & Restart**（RPC：`update.run`）。它會： 重新啟動閘道，並以報告 ping 最後一個作用中的工作階段。
 
 1. 執行與 `openclaw update` 相同的原始碼更新流程（僅限 git checkout）。
 2. 寫入包含結構化報告的重新啟動哨兵（stdout/stderr 尾端）。
-3. 重新啟動 Gateway 閘道器，並將報告回傳給最後一個活躍工作階段。
+3. Restarts the gateway and pings the last active session with the report.
 
-若 rebase 失敗，Gateway 閘道器會中止並在未套用更新的情況下重新啟動。
+If the rebase fails, the gateway aborts and restarts without applying the update.
 
 ## 更新（從原始碼）
 
@@ -143,19 +140,19 @@ openclaw health
 - 當你執行封裝後的 `openclaw` 二進位檔（[`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs)）或使用 Node 執行 `dist/` 時，`pnpm build` 很重要。
 - 若你是從儲存庫 checkout 執行且沒有全域安裝，請使用 `pnpm openclaw ...` 來執行 CLI 指令。
 - 若你直接從 TypeScript 執行（`pnpm openclaw ...`），通常不需要重新建置，但**設定遷移仍然適用** → 請執行 doctor。
-- 在全域安裝與 git 安裝之間切換很容易：安裝另一種方式後，執行 `openclaw doctor`，即可將 Gateway 閘道器服務的進入點改寫為目前安裝。
+- Switching between global and git installs is easy: install the other flavor, then run `openclaw doctor` so the gateway service entrypoint is rewritten to the current install.
 
 ## 務必執行：`openclaw doctor`
 
-Doctor 是「安全更新」指令。它刻意保持單純：修復＋遷移＋警示。
+Doctor 是「安全更新」指令。它刻意保持單純：修復＋遷移＋警示。 It’s intentionally boring: repair + migrate + warn.
 
 注意：若你使用 **原始碼安裝**（git checkout），`openclaw doctor` 會先提議執行 `openclaw update`。
 
 它通常會做的事：
 
 - 遷移已淘汰的設定鍵／舊版設定檔位置。
-- 稽核私訊政策，並對風險較高的「開放」設定提出警告。
-- 檢查 Gateway 閘道器健康狀態，並可提議重新啟動。
+- Audit DM policies and warn on risky “open” settings.
+- Check Gateway health and can offer to restart.
 - 偵測並遷移舊版 Gateway 閘道器服務（launchd/systemd；舊版 schtasks）至目前的 OpenClaw 服務。
 - 在 Linux 上，確保 systemd 使用者 lingering（讓 Gateway 閘道器在登出後仍可存活）。
 
@@ -182,9 +179,9 @@ openclaw logs --follow
 
 作業手冊＋精確服務標籤：[Gateway runbook](/gateway)
 
-## 回滾／釘選（發生問題時）
+## 釘選（全域安裝）
 
-### 釘選（全域安裝）
+### Pin (global install)
 
 安裝已知可用的版本（將 `<version>` 換成最後可正常運作的版本）：
 

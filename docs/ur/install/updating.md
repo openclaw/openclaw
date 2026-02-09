@@ -4,23 +4,16 @@ read_when:
   - OpenClaw کو اپ ڈیٹ کرنا
   - اپ ڈیٹ کے بعد کچھ خراب ہو جائے
 title: "اپ ڈیٹنگ"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:37Z
 ---
 
 # اپ ڈیٹنگ
 
-OpenClaw تیزی سے آگے بڑھ رہا ہے (ابھی “1.0” سے پہلے). اپ ڈیٹس کو انفراسٹرکچر شپ کرنے کی طرح سمجھیں: اپ ڈیٹ → چیکس چلائیں → ری اسٹارٹ کریں (یا `openclaw update` استعمال کریں، جو ری اسٹارٹ کرتا ہے) → تصدیق کریں۔
+OpenClaw تیزی سے آگے بڑھ رہا ہے ("1.0" سے پہلے)۔ اپڈیٹس کو انفراسٹرکچر شپنگ کی طرح سمجھیں: اپڈیٹ → چیکس چلائیں → ری اسٹارٹ (یا `openclaw update` استعمال کریں، جو ری اسٹارٹ کرتا ہے) → تصدیق کریں۔
 
 ## سفارش کردہ: ویب سائٹ انسٹالر دوبارہ چلائیں (اسی جگہ اپ گریڈ)
 
-**ترجیحی** اپ ڈیٹ راستہ یہ ہے کہ ویب سائٹ سے انسٹالر دوبارہ چلایا جائے۔ یہ
-موجودہ انسٹالز کو پہچانتا ہے، اسی جگہ اپ گریڈ کرتا ہے، اور ضرورت پڑنے پر `openclaw doctor` چلاتا ہے۔
+**ترجیحی** اپڈیٹ راستہ ویب سائٹ سے انسٹالر کو دوبارہ چلانا ہے۔ یہ
+موجودہ انسٹالز کو ڈٹیکٹ کرتا ہے، جگہ پر اپگریڈ کرتا ہے، اور ضرورت پڑنے پر `openclaw doctor` چلاتا ہے۔
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -29,6 +22,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 نوٹس:
 
 - اگر آپ نہیں چاہتے کہ آن بورڈنگ وزرڈ دوبارہ چلے تو `--no-onboard` شامل کریں۔
+
 - **سورس انسٹالز** کے لیے استعمال کریں:
 
   ```bash
@@ -38,6 +32,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
   انسٹالر **صرف** اسی صورت میں `git pull --rebase` کرے گا جب ریپو صاف ہو۔
 
 - **گلوبل انسٹالز** کے لیے، اسکرپٹ اندرونی طور پر `npm install -g openclaw@latest` استعمال کرتا ہے۔
+
 - لیگیسی نوٹ: `clawdbot` مطابقتی شِم کے طور پر دستیاب رہتا ہے۔
 
 ## اپ ڈیٹ سے پہلے
@@ -75,7 +70,7 @@ openclaw update --channel stable
 
 چینل کی معنویت اور ریلیز نوٹس کے لیے [Development channels](/install/development-channels) دیکھیں۔
 
-نوٹ: npm انسٹالز میں، gateway اسٹارٹ اپ پر اپ ڈیٹ کا اشارہ لاگ کرتا ہے (موجودہ چینل ٹیگ چیک کرتا ہے)۔ `update.checkOnStart: false` کے ذریعے غیر فعال کریں۔
+نوٹ: npm انسٹالز میں، گیٹ وے اسٹارٹ اپ پر ایک اپڈیٹ ہنٹ لاگ کرتا ہے (موجودہ چینل ٹیگ چیک کرتا ہے)۔ `update.checkOnStart: false` کے ذریعے غیر فعال کریں۔
 
 پھر:
 
@@ -106,11 +101,11 @@ openclaw update
 - ڈپس انسٹال کرتا ہے، بلڈ کرتا ہے، کنٹرول UI بناتا ہے، اور `openclaw doctor` چلاتا ہے۔
 - بطورِ طے شدہ gateway ری اسٹارٹ کرتا ہے (اسکِپ کرنے کے لیے `--no-restart` استعمال کریں)۔
 
-اگر آپ نے **npm/pnpm** کے ذریعے انسٹال کیا ہے (git میٹاڈیٹا نہیں)، تو `openclaw update` آپ کے پیکیج مینیجر کے ذریعے اپ ڈیٹ کرنے کی کوشش کرے گا۔ اگر انسٹال کا پتہ نہ چل سکے، تو اس کے بجائے “Update (global install)” استعمال کریں۔
+اگر آپ نے **npm/pnpm** کے ذریعے انسٹال کیا ہے (git میٹا ڈیٹا کے بغیر)، تو `openclaw update` آپ کے پیکیج مینیجر کے ذریعے اپڈیٹ کرنے کی کوشش کرے گا۔ اگر یہ انسٹال کو ڈٹیکٹ نہیں کر سکتا تو اس کے بجائے “Update (global install)” استعمال کریں۔
 
 ## اپ ڈیٹ (Control UI / RPC)
 
-Control UI میں **Update & Restart** موجود ہے (RPC: `update.run`)۔ یہ:
+The Control UI has **Update & Restart** (RPC: `update.run`). It:
 
 1. `openclaw update` جیسا ہی سورس-اپ ڈیٹ فلو چلاتا ہے (صرف git checkout)۔
 2. ایک اسٹرکچرڈ رپورٹ (stdout/stderr ٹیل) کے ساتھ ری اسٹارٹ سینٹینل لکھتا ہے۔
@@ -148,7 +143,7 @@ openclaw health
 
 ## ہمیشہ چلائیں: `openclaw doctor`
 
-Doctor “محفوظ اپ ڈیٹ” کمانڈ ہے۔ یہ جان بوجھ کر سادہ ہے: مرمت + مائیگریٹ + وارن۔
+Doctor ایک “محفوظ اپڈیٹ” کمانڈ ہے۔ یہ جان بوجھ کر بورنگ ہے: مرمت + مائیگریٹ + وارن۔
 
 نوٹ: اگر آپ **سورس انسٹال** (git checkout) پر ہیں، تو `openclaw doctor` پہلے `openclaw update` چلانے کی پیشکش کرے گا۔
 
@@ -176,7 +171,7 @@ openclaw logs --follow
 
 اگر آپ نگرانی شدہ ہیں:
 
-- macOS launchd (ایپ-بنڈلڈ LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (`bot.molt.<profile>` استعمال کریں؛ لیگیسی `com.openclaw.*` اب بھی کام کرتا ہے)
+- macOS launchd (ایپ-بنڈلڈ LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (استعمال کریں `bot.molt.<profile>``; پرانا `com.openclaw.\*\` اب بھی کام کرتا ہے)
 - Linux systemd یوزر سروس: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` صرف اسی صورت میں کام کرتے ہیں جب سروس انسٹال ہو؛ ورنہ `openclaw gateway install` چلائیں۔

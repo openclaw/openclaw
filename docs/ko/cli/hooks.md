@@ -4,13 +4,6 @@ read_when:
   - 에이전트 훅을 관리하려는 경우
   - 훅을 설치하거나 업데이트하려는 경우
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:25Z
 ---
 
 # `openclaw hooks`

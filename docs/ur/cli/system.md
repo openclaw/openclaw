@@ -5,13 +5,6 @@ read_when:
   - آپ ہارٹ بیٹس کو فعال یا غیرفعال کرنا چاہتے ہوں
   - آپ سسٹم موجودگی کی اندراجات کا معائنہ کرنا چاہتے ہوں
 title: "سسٹم"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:07Z
 ---
 
 # `openclaw system`
@@ -30,9 +23,8 @@ openclaw system presence
 
 ## `system event`
 
-**main** سیشن پر ایک سسٹم ایونٹ قطار میں شامل کریں۔ اگلا ہارٹ بیٹ اسے پرامپٹ میں
-`System:` لائن کے طور پر داخل کرے گا۔ ہارٹ بیٹ کو فوراً متحرک کرنے کے لیے `--mode now` استعمال کریں؛
-`next-heartbeat` اگلی طے شدہ ٹِک کا انتظار کرتا ہے۔
+Enqueue a system event on the **main** session. 12. اگلا ہارٹ بیٹ اسے پرامپٹ میں `System:` لائن کے طور پر شامل کرے گا۔ Use `--mode now` to trigger the heartbeat
+immediately; `next-heartbeat` waits for the next scheduled tick.
 
 Flags:
 

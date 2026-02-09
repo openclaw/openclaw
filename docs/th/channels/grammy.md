@@ -3,13 +3,6 @@ summary: "การผสานรวม Telegram Bot API ผ่าน grammY �
 read_when:
   - กำลังทำงานกับเส้นทาง Telegram หรือ grammY
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:49Z
 ---
 
 # การผสานรวม grammY (Telegram Bot API)

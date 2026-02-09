@@ -4,21 +4,14 @@ read_when:
   - Bạn muốn chọn một nhà cung cấp mô hình
   - Bạn cần tổng quan nhanh về các backend LLM được hỗ trợ
 title: "Nhà cung cấp mô hình"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:51Z
 ---
 
 # Nhà cung cấp mô hình
 
-OpenClaw có thể sử dụng nhiều nhà cung cấp LLM. Hãy chọn một nhà cung cấp, xác thực, sau đó đặt
+OpenClaw can use many LLM providers. Chọn một nhà cung cấp, xác thực, sau đó đặt
 mô hình mặc định là `provider/model`.
 
-Bạn đang tìm tài liệu về các kênh chat (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/v.v.)? Xem [Channels](/channels).
+1. Đang tìm tài liệu về các kênh chat (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/v.v.)? 2. Xem [Channels](/channels).
 
 ## Nổi bật: Venice (Venice AI)
 
@@ -67,5 +60,5 @@ Xem [Venice AI](/providers/venice).
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Sử dụng gói đăng ký Claude Max/Pro như một endpoint API tương thích OpenAI
 
-Để xem danh mục đầy đủ các nhà cung cấp (xAI, Groq, Mistral, v.v.) và cấu hình nâng cao,
-xem [Model providers](/concepts/model-providers).
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

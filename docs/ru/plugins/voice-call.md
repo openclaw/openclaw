@@ -4,13 +4,6 @@ read_when:
   - Вы хотите совершить исходящий голосовой звонок из OpenClaw
   - Вы настраиваете или разрабатываете плагин voice-call
 title: "Плагин Voice Call"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:53Z
 ---
 
 # Voice Call (плагин)

@@ -3,13 +3,6 @@ summary: "TypeBox-schema’s als de enige bron van waarheid voor het gateway-pro
 read_when:
   - Bijwerken van protocols schema’s of codegeneratie
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:28Z
 ---
 
 # TypeBox als bron van waarheid voor het protocol

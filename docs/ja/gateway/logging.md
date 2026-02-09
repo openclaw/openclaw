@@ -4,13 +4,6 @@ read_when:
   - ログ出力やフォーマットを変更する場合
   - CLI または ゲートウェイ の出力をデバッグする場合
 title: "ログ"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:01Z
 ---
 
 # ログ
@@ -34,6 +27,7 @@ OpenClaw には 2 つのログ「表示面」があります。
 
 Control UI の Logs タブは、ゲートウェイ 経由でこのファイルを tail します（`logs.tail`）。
 CLI でも同様に実行できます。
+CLI は同じことができます:
 
 ```bash
 openclaw logs --follow
@@ -49,14 +43,14 @@ openclaw logs --follow
 
 CLI は `console.log/info/warn/error/debug/trace` をキャプチャしてファイルログに書き込みつつ、stdout/stderr への出力は継続します。
 
-コンソールの冗長度は次で個別に調整できます。
+コンソールの詳細度を個別に調整できます。
 
 - `logging.consoleLevel`（既定: `info`）
 - `logging.consoleStyle`（`pretty` | `compact` | `json`）
 
-## ツール要約のマスキング
+## ツール要約の編集
 
-verbose なツール要約（例: `🛠️ Exec: ...`）は、コンソールストリームに到達する前に機密トークンをマスクできます。これは **ツール専用** であり、ファイルログは変更しません。
+verbose なツール要約（例: `🛠️ Exec: ...`）は、コンソールストリームに到達する前に機密トークンをマスクできます。これは **ツール専用** であり、ファイルログは変更しません。 これは**tools-only** で、ファイルログは変更されません。
 
 - `logging.redactSensitive`: `off` | `tools`（既定: `tools`）
 - `logging.redactPatterns`: 正規表現文字列の配列（既定値を上書き）
@@ -98,8 +92,8 @@ openclaw gateway --verbose --ws-log full
 
 ## コンソールの書式設定（サブシステム ログ）
 
-コンソールのフォーマッターは **TTY 対応** で、一貫したプレフィックス付きの行を出力します。
-サブシステム ロガーにより、出力はグループ化され、スキャンしやすくなります。
+コンソールフォーマッタは **TTY-aware** で、固定された線を出力します。
+サブシステムロガーは出力をグループ化してスキャン可能にします。
 
 動作:
 

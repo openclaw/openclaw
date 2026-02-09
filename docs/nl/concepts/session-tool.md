@@ -3,13 +3,6 @@ summary: "Agent-sessietools voor het weergeven van sessies, het ophalen van gesc
 read_when:
   - Sessietools toevoegen of wijzigen
 title: "Sessietools"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:33Z
 ---
 
 # Sessietools
@@ -110,7 +103,7 @@ Gedrag:
   - Elk ander antwoord wordt naar het doelkanaal verzonden.
   - De aankondigingsstap bevat het oorspronkelijke verzoek + antwoord van ronde 1 + het laatste ping‑pong-antwoord.
 
-## Kanaalveld
+## Kanaal veld
 
 - Voor groepen is `channel` het kanaal dat op de sessie-entry is vastgelegd.
 - Voor directe chats mapt `channel` vanaf `lastChannel`.

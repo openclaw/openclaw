@@ -3,13 +3,6 @@ summary: "`openclaw onboard`에 대한 CLI 레퍼런스(대화형 온보딩 마�
 read_when:
   - Gateway(게이트웨이), 워크스페이스, 인증, 채널, Skills에 대한 안내식 설정이 필요할 때
 title: "온보드"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:25Z
 ---
 
 # `openclaw onboard`

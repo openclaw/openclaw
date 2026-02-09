@@ -3,13 +3,6 @@ summary: "Comportamento e configuração para o tratamento de mensagens de grupo
 read_when:
   - Alterar regras de mensagens de grupo ou menções
 title: "Mensagens de grupo"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:59Z
 ---
 
 # Mensagens de grupo (canal web do WhatsApp)

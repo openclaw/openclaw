@@ -5,13 +5,6 @@ read_when:
   - Konfigurieren von TTS-Anbietern oder -Limits
   - Verwenden von /tts-Befehlen
 title: "Text-zu-Sprache"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:01Z
 ---
 
 # Text-zu-Sprache (TTS)
@@ -34,7 +27,8 @@ und Ausgabeformate bereit, jedoch werden nicht alle Optionen vom Edge-Dienst unt
 
 Da Edge TTS ein öffentlicher Webdienst ohne veröffentlichte SLA oder Kontingente ist, sollten Sie ihn
 als Best-Effort betrachten. Wenn Sie garantierte Limits und Support benötigen, verwenden Sie OpenAI
-oder ElevenLabs. Die Speech-REST-API von Microsoft dokumentiert ein Audio-Limit von 10 Minuten pro
+oder ElevenLabs.
+Die Speech-REST-API von Microsoft dokumentiert ein Audio-Limit von 10 Minuten pro
 Anfrage; Edge TTS veröffentlicht keine Limits, daher sollten Sie ähnliche oder niedrigere Limits
 annehmen. citeturn0search3
 
@@ -49,7 +43,8 @@ Edge TTS erfordert **keinen** API-Schlüssel. Wenn keine API-Schlüssel gefunden
 OpenClaw standardmäßig Edge TTS (sofern nicht über `messages.tts.edge.enabled=false` deaktiviert).
 
 Wenn mehrere Anbieter konfiguriert sind, wird der ausgewählte Anbieter zuerst verwendet, die anderen
-dienen als Fallback-Optionen. Die Auto-Zusammenfassung verwendet den konfigurierten
+dienen als Fallback-Optionen.
+Die Auto-Zusammenfassung verwendet den konfigurierten
 `summaryModel` (oder `agents.defaults.model.primary`), daher muss dieser Anbieter ebenfalls authentifiziert sein,
 wenn Sie Zusammenfassungen aktivieren.
 
@@ -388,8 +383,7 @@ Hinweise:
 
 ## Agent-Werkzeug
 
-Das Werkzeug `tts` wandelt Text in Sprache um und gibt einen `MEDIA:`-Pfad zurück.
-Wenn das Ergebnis Telegram-kompatibel ist, enthält das Werkzeug `[[audio_as_voice]]`, sodass
+Das Werkzeug `tts` wandelt Text in Sprache um und gibt einen `MEDIA:`-Pfad zurück. Wenn das Ergebnis Telegram-kompatibel ist, enthält das Werkzeug `[[audio_as_voice]]`, sodass
 Telegram eine Sprachnachrichten-Blase sendet.
 
 ## Gateway-RPC

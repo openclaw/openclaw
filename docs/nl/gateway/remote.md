@@ -3,13 +3,6 @@ summary: "Toegang op afstand via SSH-tunnels (Gateway WS) en tailnets"
 read_when:
   - Bij het uitvoeren of oplossen van problemen met externe Gateway-opstellingen
 title: "Toegang op afstand"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Toegang op afstand (SSH, tunnels en tailnets)
@@ -29,7 +22,7 @@ Deze repo ondersteunt “Op afstand via SSH” door één Gateway (de master) dr
 Zie de **Gateway-host** als “waar de agent draait.” Die beheert sessies, auth-profielen, kanalen en status.
 Je laptop/desktop (en nodes) verbinden met die host.
 
-### 1) Altijd-aan Gateway in je tailnet (VPS of thuisserver)
+### 1. Altijd-aan Gateway in je tailnet (VPS of thuisserver)
 
 Draai de Gateway op een persistente host en bereik deze via **Tailscale** of SSH.
 
@@ -39,7 +32,7 @@ Draai de Gateway op een persistente host en bereik deze via **Tailscale** of SSH
 
 Dit is ideaal wanneer je laptop vaak slaapt maar je de agent altijd aan wilt hebben.
 
-### 2) Thuisdesktop draait de Gateway, laptop is afstandsbediening
+### 2. Thuisdesktop draait de Gateway, laptop is afstandsbediening
 
 De laptop draait **niet** de agent. Deze verbindt extern:
 
@@ -48,7 +41,7 @@ De laptop draait **niet** de agent. Deze verbindt extern:
 
 Runbook: [macOS-toegang op afstand](/platforms/mac/remote).
 
-### 3) Laptop draait de Gateway, externe toegang vanaf andere machines
+### 3. Laptop draait de Gateway, externe toegang vanaf andere machines
 
 Houd de Gateway lokaal maar stel deze veilig beschikbaar:
 

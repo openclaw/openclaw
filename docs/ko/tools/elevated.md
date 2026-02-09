@@ -3,13 +3,6 @@ summary: "Elevated exec 모드와 /elevated 지시문"
 read_when:
   - Elevated 모드 기본값, 허용 목록, 또는 슬래시 명령 동작을 조정할 때
 title: "Elevated 모드"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:32Z
 ---
 
 # Elevated 모드 (/elevated 지시문)

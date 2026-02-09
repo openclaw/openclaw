@@ -3,13 +3,6 @@ summary: "Hébergement statique WebChat en local loopback et utilisation du WS d
 read_when:
   - Débogage ou configuration de l’accès WebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:06Z
 ---
 
 # WebChat (UI WebSocket du Gateway)
@@ -28,7 +21,7 @@ Statut : l’UI de chat SwiftUI macOS/iOS communique directement avec le WebSoc
 2. Ouvrez l’UI WebChat (application macOS/iOS) ou l’onglet de chat de l’UI de contrôle.
 3. Assurez-vous que l’authentification du gateway est configurée (requise par défaut, même en local loopback).
 
-## Fonctionnement (comportement)
+## Comment ça marche (comportement)
 
 - L’UI se connecte au WebSocket du Gateway et utilise `chat.history`, `chat.send` et `chat.inject`.
 - `chat.inject` ajoute une note de l’assistant directement à la transcription et la diffuse à l’UI (sans exécution d’agent).

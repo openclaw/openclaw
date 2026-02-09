@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag o pagbabago ng pag-parse ng lokasyon ng channel
   - Paggamit ng mga field ng konteksto ng lokasyon sa mga prompt o tool ng agent
 title: "Pag-parse ng Lokasyon ng Channel"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:20Z
 ---
 
 # Pag-parse ng lokasyon ng channel

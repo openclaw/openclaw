@@ -1,23 +1,16 @@
 ---
-summary: „Talk-Modus: kontinuierliche Sprachgespräche mit ElevenLabs TTS“
+summary: "„Talk-Modus: kontinuierliche Sprachgespräche mit ElevenLabs TTS“"
 read_when:
   - Implementierung des Talk-Modus auf macOS/iOS/Android
   - Ändern von Sprach-/TTS-/Unterbrechungsverhalten
-title: „Talk-Modus“
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:43Z
+title: "„Talk-Modus“"
 ---
 
 # Talk-Modus
 
 Der Talk-Modus ist eine kontinuierliche Sprachgesprächsschleife:
 
-1. Sprache erfassen
+1. Sprache hören
 2. Transkript an das Modell senden (Hauptsitzung, chat.send)
 3. Auf die Antwort warten
 4. Wiedergabe über ElevenLabs (Streaming-Wiedergabe)

@@ -5,13 +5,6 @@ read_when:
   - Vous avez besoin d’un Gateway distant + d’une automatisation locale du navigateur via Tailscale
   - Vous voulez comprendre les implications de sécurité de la prise de contrôle du navigateur
 title: "Extension Chrome"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:06Z
 ---
 
 # Extension Chrome (relais du navigateur)

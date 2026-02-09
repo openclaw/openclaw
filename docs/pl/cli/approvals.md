@@ -4,13 +4,6 @@ read_when:
   - Chcesz edytować zatwierdzanie wykonania (exec) z poziomu CLI
   - Musisz zarządzać listami dozwolonych na hostach Gateway lub węzłów
 title: "approvals"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:52Z
 ---
 
 # `openclaw approvals`

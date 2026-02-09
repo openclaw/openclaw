@@ -1,20 +1,13 @@
 ---
 title: Fly.io
 description: OpenClaw auf Fly.io bereitstellen
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:49Z
 ---
 
 # Fly.io-Bereitstellung
 
 **Ziel:** OpenClaw Gateway auf einer [Fly.io](https://fly.io)-Maschine mit persistentem Speicher, automatischem HTTPS und Discord-/Kanal-Zugriff.
 
-## Voraussetzungen
+## Was Sie benötigen
 
 - Installierte [flyctl CLI](https://fly.io/docs/hands-on/install-flyctl/)
 - Fly.io-Konto (Free-Tier reicht aus)
@@ -44,7 +37,7 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **Tipp:** Wählen Sie eine Region in Ihrer Nähe. Häufige Optionen: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) fly.toml konfigurieren
+## 2. fly.toml konfigurieren
 
 Bearbeiten Sie `fly.toml`, damit es zu Ihrem App-Namen und Ihren Anforderungen passt.
 
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Zentrale Einstellungen:**
 
-| Einstellung                    | Warum                                                                                      |
-| ------------------------------ | ------------------------------------------------------------------------------------------ |
-| `--bind lan`                   | Bindet an `0.0.0.0`, damit der Fly-Proxy das Gateway erreichen kann                        |
+| Einstellung                    | Warum                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Bindet an `0.0.0.0`, damit der Fly-Proxy das Gateway erreichen kann                                           |
 | `--allow-unconfigured`         | Startet ohne Konfigurationsdatei (Sie erstellen diese später)                              |
 | `internal_port = 3000`         | Muss mit `--port 3000` (oder `OPENCLAW_GATEWAY_PORT`) für Fly-Health-Checks übereinstimmen |
-| `memory = "2048mb"`            | 512 MB sind zu wenig; 2 GB empfohlen                                                       |
-| `OPENCLAW_STATE_DIR = "/data"` | Persistiert den Zustand auf dem Volume                                                     |
+| `memory = "2048mb"`            | 512 MB sind zu wenig; 2 GB empfohlen                                                                          |
+| `OPENCLAW_STATE_DIR = "/data"` | Persistiert den Zustand auf dem Volume                                                                        |
 
-## 3) Secrets setzen
+## 3. Secrets setzen
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -116,7 +109,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 - Behandeln Sie diese Tokens wie Passwörter.
 - **Bevorzugen Sie Umgebungsvariablen gegenüber der Konfigurationsdatei** für alle API-Schlüssel und Tokens. So bleiben Secrets aus `openclaw.json` heraus, wo sie versehentlich offengelegt oder geloggt werden könnten.
 
-## 4) Deploy
+## 4. Deploy
 
 ```bash
 fly deploy
@@ -138,7 +131,7 @@ Sie sollten Folgendes sehen:
 [discord] logged in to discord as xxx
 ```
 
-## 5) Konfigurationsdatei erstellen
+## 5. Konfigurationsdatei erstellen
 
 Melden Sie sich per SSH an der Maschine an, um eine vollständige Konfiguration zu erstellen:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Zugriff auf das Gateway
+## 6. Zugriff auf das Gateway
 
 ### Control UI
 

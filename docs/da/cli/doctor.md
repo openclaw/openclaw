@@ -4,13 +4,6 @@ read_when:
   - Du har forbindelses-/autentificeringsproblemer og vil have guidede løsninger
   - Du har opdateret og vil lave et fornuftstjek
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:59Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 Noter:
 
-- Interaktive prompts (som nøglering-/OAuth-rettelser) kører kun, når stdin er en TTY, og `--non-interactive` **ikke** er sat. Kørsler uden terminal (cron, Telegram, ingen terminal) springer prompts over.
+- Interaktive prompts (som keychain/OAuth fixes) kører kun, når stdin er en TTY og `--non-interactive` er **ikke** sæt. Hovedløse kørsler (cron, Telegram, ingen terminal) vil springe prompter.
 - `--fix` (alias for `--repair`) skriver en backup til `~/.openclaw/openclaw.json.bak` og fjerner ukendte konfigurationsnøgler, hvor hver fjernelse listes.
 
 ## macOS: `launchctl` miljøoverstyringer

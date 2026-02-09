@@ -1,15 +1,8 @@
 ---
 summary: "أصل المشروع، والمساهمون، والترخيص."
 read_when:
-  - "تريد الاطّلاع على خلفية المشروع أو اعتمادات المساهمين"
+  - تريد الاطّلاع على خلفية المشروع أو اعتمادات المساهمين
 title: "الاعتمادات"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:40Z
 ---
 
 ## الاسم

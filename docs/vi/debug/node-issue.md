@@ -4,13 +4,6 @@ read_when:
   - Gỡ lỗi các script dev chỉ dùng Node hoặc lỗi ở chế độ watch
   - Điều tra các sự cố crash của loader tsx/esbuild trong OpenClaw
 title: "Sự cố Node + tsx"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:50Z
 ---
 
 # Sự cố Node + tsx "\_\_name is not a function"
@@ -25,7 +18,7 @@ Chạy OpenClaw qua Node với `tsx` bị lỗi ngay khi khởi động với:
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-Sự cố này bắt đầu sau khi chuyển các script dev từ Bun sang `tsx` (commit `2871657e`, 2026-01-06). Cùng đường chạy runtime đó hoạt động bình thường với Bun.
+Điều này bắt đầu sau khi chuyển các script dev từ Bun sang `tsx` (commit `2871657e`, 2026-01-06). Cùng một đường dẫn runtime đã hoạt động với Bun.
 
 ## Environment
 
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Notes / hypothesis
 
-- `tsx` sử dụng esbuild để biến đổi TS/ESM. Tùy chọn `keepNames` của esbuild phát sinh một helper `__name` và bọc các định nghĩa hàm bằng `__name(...)`.
+- `tsx` dùng esbuild để biến đổi TS/ESM. Tùy chọn `keepNames` của esbuild phát ra helper `__name` và bao bọc các định nghĩa hàm bằng `__name(...)`.
 - Lỗi cho thấy `__name` tồn tại nhưng không phải là một hàm tại runtime, điều này ngụ ý helper bị thiếu hoặc bị ghi đè đối với module này trong đường loader của Node 25.
 - Các vấn đề helper `__name` tương tự đã được báo cáo ở các consumer khác của esbuild khi helper bị thiếu hoặc bị ghi lại.
 
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Workarounds
 
 - Dùng Bun cho các script dev (tạm thời quay lại cách này).
+
 - Dùng Node + tsc watch, sau đó chạy đầu ra đã biên dịch:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Đã xác nhận cục bộ: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` hoạt động trên Node 25.
+
 - Tắt keepNames của esbuild trong TS loader nếu có thể (ngăn chèn helper `__name`); hiện tsx chưa cung cấp tùy chọn này.
+
 - Thử Node LTS (22/24) với `tsx` để xem sự cố có đặc thù Node 25 hay không.
 
 ## References

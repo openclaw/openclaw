@@ -5,13 +5,6 @@ read_when:
   - Clarifier les sessions, les modes de mise en file d’attente ou le comportement de streaming
   - Documenter la visibilite du raisonnement et ses implications d’utilisation
 title: "Messages"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 32a1b0c50616c550
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:21Z
 ---
 
 # Messages
@@ -42,7 +35,7 @@ Voir [Configuration](/gateway/configuration) pour le schema complet.
 Les canaux peuvent redistribuer le meme message apres des reconnexions. OpenClaw conserve un cache de courte duree
 indexe par canal/compte/peer/session/id de message afin que les livraisons en double ne declenchent pas une nouvelle execution de l’agent.
 
-## Anti-rebond (debouncing) entrant
+## Délivrance entrante
 
 Des messages consecutifs rapides provenant du **meme expediteur** peuvent etre regroupes en un seul tour
 d’agent via `messages.inbound`. Le debouncing est delimite par canal + conversation
@@ -129,7 +122,7 @@ Details : [Mise en file d’attente](/concepts/queue).
 Le streaming par blocs envoie des reponses partielles au fur et a mesure que le modele produit des blocs de texte.
 Le decoupage respecte les limites de texte des canaux et evite de scinder le code balise.
 
-Principaux reglages :
+Paramètres de la touche :
 
 - `agents.defaults.blockStreamingDefault` (`on|off`, desactive par defaut)
 - `agents.defaults.blockStreamingBreak` (`text_end|message_end`)

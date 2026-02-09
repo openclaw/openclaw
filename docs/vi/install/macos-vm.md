@@ -6,22 +6,15 @@ read_when:
   - Bạn muốn một môi trường macOS có thể đặt lại và sao chép
   - Bạn muốn so sánh các lựa chọn VM macOS cục bộ và được host
 title: "VM macOS"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:31Z
 ---
 
 # OpenClaw trên VM macOS (Sandboxing)
 
 ## Mặc định được khuyến nghị (đa số người dùng)
 
-- **VPS Linux nhỏ** cho Gateway luôn hoạt động và chi phí thấp. Xem [VPS hosting](/vps).
-- **Phần cứng chuyên dụng** (Mac mini hoặc máy Linux) nếu bạn muốn toàn quyền kiểm soát và **IP dân cư** cho tự động hóa trình duyệt. Nhiều trang chặn IP trung tâm dữ liệu, nên duyệt web cục bộ thường hiệu quả hơn.
-- **Kết hợp:** giữ Gateway trên VPS giá rẻ, và kết nối Mac của bạn như một **node** khi cần tự động hóa trình duyệt/UI. Xem [Nodes](/nodes) và [Gateway remote](/gateway/remote).
+- **Small Linux VPS** for an always-on Gateway and low cost. See [VPS hosting](/vps).
+- **Phần cứng chuyên dụng** (Mac mini hoặc máy Linux) nếu bạn muốn toàn quyền kiểm soát và một **IP dân dụng** cho tự động hóa trình duyệt. Nhiều trang web chặn IP trung tâm dữ liệu, vì vậy duyệt web từ máy cục bộ thường hoạt động tốt hơn.
+- **Hybrid:** keep the Gateway on a cheap VPS, and connect your Mac as a **node** when you need browser/UI automation. See [Nodes](/nodes) and [Gateway remote](/gateway/remote).
 
 Chỉ dùng VM macOS khi bạn thực sự cần các khả năng chỉ có trên macOS (iMessage/BlueBubbles) hoặc muốn cách ly nghiêm ngặt khỏi chiếc Mac dùng hằng ngày.
 
@@ -69,7 +62,7 @@ Khi đã có quyền truy cập SSH vào VM macOS, tiếp tục từ bước 6 b
 
 ---
 
-## 1) Cài đặt Lume
+## 1. Cài đặt Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ Tài liệu: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/
 
 ---
 
-## 2) Tạo VM macOS
+## 2. Tạo VM macOS
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-Lệnh này tải macOS và tạo VM. Một cửa sổ VNC sẽ tự động mở.
+Thao tác này tải macOS và tạo VM. A VNC window opens automatically.
 
 Lưu ý: Việc tải có thể mất thời gian tùy thuộc vào kết nối của bạn.
 
 ---
 
-## 3) Hoàn tất Setup Assistant
+## 3. Hoàn tất Setup Assistant
 
 Trong cửa sổ VNC:
 
@@ -119,7 +112,7 @@ Sau khi hoàn tất, bật SSH:
 
 ---
 
-## 4) Lấy địa chỉ IP của VM
+## 4. Lấy địa chỉ IP của VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Tìm địa chỉ IP (thường là `192.168.64.x`).
 
 ---
 
-## 5) SSH vào VM
+## 5. SSH vào VM
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Thay `youruser` bằng tài khoản bạn đã tạo, và IP bằng IP của VM.
 
 ---
 
-## 6) Cài đặt OpenClaw
+## 6. Cài đặt OpenClaw
 
 Bên trong VM:
 
@@ -152,7 +145,7 @@ Làm theo các bước hướng dẫn ban đầu để thiết lập nhà cung c
 
 ---
 
-## 7) Cấu hình các kênh
+## 7. Cấu hình các kênh
 
 Chỉnh sửa tệp cấu hình:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Chạy VM không giao diện
+## 8. Chạy VM không giao diện
 
 Dừng VM và khởi động lại không có màn hình:
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-VM sẽ chạy nền. Daemon của OpenClaw giữ gateway hoạt động.
+VM chạy trong nền. OpenClaw's daemon keeps the gateway running.
 
 Để kiểm tra trạng thái:
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## Phần thưởng: tích hợp iMessage
 
-Đây là tính năng “đáng giá” nhất khi chạy trên macOS. Dùng [BlueBubbles](https://bluebubbles.app) để thêm iMessage vào OpenClaw.
+This is the killer feature of running on macOS. Use [BlueBubbles](https://bluebubbles.app) to add iMessage to OpenClaw.
 
 Bên trong VM:
 
@@ -228,7 +221,7 @@ Thêm vào cấu hình OpenClaw của bạn:
 }
 ```
 
-Khởi động lại gateway. Bây giờ tác tử của bạn có thể gửi và nhận iMessage.
+Khởi động lại gateway. Now your agent can send and receive iMessages.
 
 Chi tiết thiết lập đầy đủ: [BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,17 +254,17 @@ Giữ VM chạy bằng cách:
 - Tắt chế độ ngủ trong System Settings → Energy Saver
 - Dùng `caffeinate` nếu cần
 
-Để luôn hoạt động thực sự, hãy cân nhắc Mac mini chuyên dụng hoặc VPS nhỏ. Xem [VPS hosting](/vps).
+Để luôn luôn hoạt động thực sự, hãy cân nhắc một Mac mini chuyên dụng hoặc một VPS nhỏ. See [VPS hosting](/vps).
 
 ---
 
 ## Xử lý sự cố
 
-| Vấn đề                      | Giải pháp                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------- |
-| Không SSH vào VM được       | Kiểm tra "Remote Login" đã được bật trong System Settings của VM                            |
-| Không thấy IP của VM        | Chờ VM khởi động hoàn tất, chạy lại `lume get openclaw`                                     |
-| Không tìm thấy lệnh Lume    | Thêm `~/.local/bin` vào PATH của bạn                                                        |
+| Vấn đề                      | Giải pháp                                                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Không SSH vào VM được       | Kiểm tra "Remote Login" đã được bật trong System Settings của VM                                               |
+| Không thấy IP của VM        | Chờ VM khởi động hoàn tất, chạy lại `lume get openclaw`                                                        |
+| Không tìm thấy lệnh Lume    | Thêm `~/.local/bin` vào PATH của bạn                                                                           |
 | Không quét được QR WhatsApp | Đảm bảo bạn đang đăng nhập trong VM (không phải máy chủ) khi chạy `openclaw channels login` |
 
 ---

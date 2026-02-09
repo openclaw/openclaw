@@ -5,13 +5,6 @@ read_when:
   - VPN ဝင်ရောက်ခွင့်ပါသော firewall ခွဲခြားထားသည့် တပ်ဆင်မှုကို လိုအပ်သည့်အခါ
   - အဝေးမှ Debian/Ubuntu ဆာဗာများသို့ တပ်ဆင်မည့်အခါ
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:42Z
 ---
 
 # Ansible ဖြင့် တပ်ဆင်ခြင်း
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 လမ်းညွှန်အပြည့်အစုံ: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> openclaw-ansible repository သည် Ansible ဖြင့် တပ်ဆင်မှုအတွက် အမှန်တကယ် ယုံကြည်စိတ်ချရသော အရင်းအမြစ်ဖြစ်သည်။ ဤစာမျက်နှာမှာ အကျဉ်းချုပ် သုံးသပ်ချက်သာ ဖြစ်သည်။
+> openclaw-ansible repo သည် Ansible deployment အတွက် အမှန်တကယ်ကိုးကားရမည့် အရင်းအမြစ်ဖြစ်ပါသည်။ ဤစာမျက်နှာသည် အကျဉ်းချုပ် အကြမ်းဖျဉ်း ဖြစ်ပါသည်။
 
 ## သင်ရရှိမည့် အရာများ
 
@@ -57,7 +50,7 @@ Ansible playbook သည် အောက်ပါအရာများကို �
 5. **OpenClaw** (ဟို့စ်ပေါ်တွင် တိုက်ရိုက် လည်ပတ်၊ container မသုံး)
 6. **Systemd service** (လုံခြုံရေးတင်းကျပ်မှုပါဝင်သည့် အလိုအလျောက် စတင်မှု)
 
-မှတ်ချက် — Gateway သည် **ဟို့စ်ပေါ်တွင် တိုက်ရိုက် လည်ပတ်သည်** (Docker ထဲတွင် မလည်ပတ်ပါ)၊ သို့သော် agent sandbox များအတွက် ခွဲခြားမှုရရှိစေရန် Docker ကို အသုံးပြုထားသည်။ အသေးစိတ်အတွက် [Sandboxing](/gateway/sandboxing) ကို ကြည့်ပါ။
+မှတ်ချက်: gateway သည် **host ပေါ်တွင် တိုက်ရိုက် chạy လုပ်သည်** (Docker အတွင်းမဟုတ်ပါ)၊ သို့သော် agent sandbox များသည် isolation အတွက် Docker ကို အသုံးပြုပါသည်။ အသေးစိတ်အတွက် [Sandboxing](/gateway/sandboxing) ကို ကြည့်ပါ။
 
 ## တပ်ဆင်ပြီးနောက် ပြင်ဆင်မှု
 
@@ -108,11 +101,11 @@ openclaw channels login
 nmap -p- YOUR_SERVER_IP
 ```
 
-ရလဒ်အနေဖြင့် **port 22 (SSH) သာ ဖွင့်ထားကြောင်း** ပြသရမည်ဖြစ်သည်။ အခြား ဝန်ဆောင်မှုများ (Gateway၊ Docker) အားလုံးကို လော့ခ်ချထားသည်။
+**port 22** (SSH) ကိုသာ ဖွင့်ထားရပါမည်။ အခြား service များအားလုံး (gateway, Docker) ကို lock down လုပ်ထားပါသည်။
 
 ### Docker အသုံးပြုနိုင်မှု
 
-Docker ကို **agent sandbox များ** (ကိရိယာများကို ခွဲခြားထားပြီး အကောင်အထည်ဖော်ရန်) အတွက်သာ ထည့်သွင်းထားပြီး Gateway ကို လည်ပတ်ရန် မသုံးပါ။ Gateway သည် localhost အတွင်းသာ bind လုပ်ထားပြီး Tailscale VPN မှတစ်ဆင့်သာ ဝင်ရောက်နိုင်သည်။
+Docker ကို **agent sandbox များ** (tool execution ကို ခွဲထုတ်ထားရန်) အတွက်သာ တပ်ဆင်ထားပြီး gateway ကို chạy လုပ်ရန် မဟုတ်ပါ။ gateway သည် localhost သို့သာ bind လုပ်ပြီး Tailscale VPN မှတစ်ဆင့် ဝင်ရောက်အသုံးပြုနိုင်ပါသည်။
 
 Sandbox ဆက်တင်များအတွက် [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) ကို ကြည့်ပါ။
 
@@ -140,7 +133,7 @@ ansible-galaxy collection install -r requirements.yml
 
 ## OpenClaw ကို အပ်ဒိတ်လုပ်ခြင်း
 
-Ansible installer သည် OpenClaw ကို လက်ဖြင့် အပ်ဒိတ်လုပ်နိုင်အောင် ပြင်ဆင်ပေးထားသည်။ ပုံမှန် အပ်ဒိတ် လုပ်ငန်းစဉ်အတွက် [Updating](/install/updating) ကို ကြည့်ပါ။
+Ansible installer သည် OpenClaw ကို manual update များအတွက် ပြင်ဆင်ပေးပါသည်။ ပုံမှန် update လုပ်ငန်းစဉ်အတွက် [Updating](/install/updating) ကို ကြည့်ပါ။
 
 Configuration ပြောင်းလဲမှုများအတွက် Ansible playbook ကို ပြန်လည် chạy လုပ်လိုပါက —
 

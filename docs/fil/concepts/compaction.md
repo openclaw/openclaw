@@ -4,22 +4,16 @@ read_when:
   - Gusto mong maunawaan ang auto-compaction at /compact
   - Nagde-debug ka ng mahahabang session na tumatama sa mga limitasyon ng context
 title: "Compaction"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:19Z
 ---
 
 # Context Window & Compaction
 
-Bawat model ay may **context window** (pinakamaraming token na kaya nitong makita). Ang mga pangmatagalang chat ay naiipon ang mga mensahe at resulta ng tool; kapag sumikip ang window, **kino-compact** ng OpenClaw ang mas lumang history upang manatili sa loob ng mga limitasyon.
+Bawat modelo ay may **context window** (pinakamataas na bilang ng token na kaya nitong makita). Ang mga pangmatagalang chat ay nag-iipon ng mga mensahe at tool result; kapag masikip na ang window, ang OpenClaw ay
+**nagko-compact** ng mas lumang history upang manatili sa loob ng mga limitasyon.
 
 ## Ano ang compaction
 
-Ang compaction ay **nagsa-summarize ng mas lumang usapan** sa isang compact na summary entry at pinananatiling buo ang mga kamakailang mensahe. Ang summary ay iniimbak sa session history, kaya ang mga susunod na request ay gagamit ng:
+Ang compaction ay **nagsa-summarize ng mas lumang usapan** sa isang compact na summary entry at pinananatiling buo ang mga kamakailang mensahe. Ang summary ay iniimbak sa session history, kaya ang mga susunod na request ay gumagamit ng:
 
 - Ang compaction summary
 - Mga kamakailang mensahe pagkatapos ng compaction point
@@ -39,7 +33,8 @@ Makikita mo ang:
 - `🧹 Auto-compaction complete` sa verbose mode
 - `/status` na nagpapakita ng `🧹 Compactions: <count>`
 
-Bago ang compaction, maaaring magpatakbo ang OpenClaw ng isang **silent memory flush** turn upang mag-imbak ng mga durable note sa disk. Tingnan ang [Memory](/concepts/memory) para sa mga detalye at config.
+Bago ang compaction, maaaring magpatakbo ang OpenClaw ng isang **silent memory flush** turn upang mag-imbak ng
+durable na mga tala sa disk. Tingnan ang [Memory](/concepts/memory) para sa mga detalye at config.
 
 ## Manual na compaction
 
@@ -51,7 +46,7 @@ Gamitin ang `/compact` (opsyonal na may mga tagubilin) upang pilitin ang isang c
 
 ## Pinagmulan ng context window
 
-Ang context window ay model-specific. Ginagamit ng OpenClaw ang model definition mula sa naka-configure na provider catalog upang matukoy ang mga limitasyon.
+Ang context window ay partikular sa modelo. Ginagamit ng OpenClaw ang model definition mula sa naka-configure na provider catalog upang matukoy ang mga limitasyon.
 
 ## Compaction vs pruning
 

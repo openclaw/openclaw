@@ -5,13 +5,6 @@ read_when:
   - Bạn cần thiết lập cô lập bằng firewall với truy cập qua VPN
   - Bạn đang triển khai lên máy chủ Debian/Ubuntu từ xa
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:20Z
 ---
 
 # Cài đặt Ansible
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 Hướng dẫn đầy đủ: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> Repo openclaw-ansible là nguồn thông tin chính thức cho việc triển khai bằng Ansible. Trang này chỉ là phần tổng quan nhanh.
+> The openclaw-ansible repo is the source of truth for Ansible deployment. This page is a quick overview.
 
 ## Những gì bạn nhận được
 
@@ -57,7 +50,7 @@ Playbook Ansible sẽ cài đặt và cấu hình:
 5. **OpenClaw** (chạy trên host, không container hóa)
 6. **Dịch vụ systemd** (tự khởi động kèm tăng cường bảo mật)
 
-Lưu ý: Gateway chạy **trực tiếp trên host** (không chạy trong Docker), nhưng các sandbox của tác tử sử dụng Docker để cô lập. Xem [Sandboxing](/gateway/sandboxing) để biết chi tiết.
+Note: The gateway runs **directly on the host** (not in Docker), but agent sandboxes use Docker for isolation. Repo openclaw-ansible là nguồn sự thật cho triển khai Ansible.
 
 ## Thiết lập sau cài đặt
 
@@ -108,11 +101,11 @@ Kiểm tra bề mặt tấn công từ bên ngoài:
 nmap -p- YOUR_SERVER_IP
 ```
 
-Kết quả chỉ nên hiển thị **duy nhất cổng 22** (SSH) đang mở. Tất cả dịch vụ khác (gateway, Docker) đều được khóa.
+Should show **only port 22** (SSH) open. Lưu ý: Gateway chạy **trực tiếp trên máy chủ** (không dùng Docker), nhưng sandbox của tác nhân dùng Docker để cách ly.
 
 ### Khả dụng của Docker
 
-Docker được cài đặt cho **sandbox của tác tử** (thực thi công cụ cô lập), không phải để chạy gateway. Gateway chỉ bind vào localhost và được truy cập qua VPN Tailscale.
+Docker is installed for **agent sandboxes** (isolated tool execution), not for running the gateway itself. The gateway binds to localhost only and is accessible via Tailscale VPN.
 
 Xem [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) để cấu hình sandbox.
 
@@ -140,7 +133,7 @@ ansible-galaxy collection install -r requirements.yml
 
 ## Cập nhật OpenClaw
 
-Trình cài đặt Ansible thiết lập OpenClaw để cập nhật thủ công. Xem [Updating](/install/updating) để biết quy trình cập nhật tiêu chuẩn.
+The Ansible installer sets up OpenClaw for manual updates. See [Updating](/install/updating) for the standard update flow.
 
 Để chạy lại playbook Ansible (ví dụ: khi thay đổi cấu hình):
 

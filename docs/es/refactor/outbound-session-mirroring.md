@@ -1,13 +1,6 @@
 ---
-title: Refactorización del Espejado de Sesiones Salientes (Issue #1520)
+title: refactor/outbound-session-mirroring.md #1520)
 description: Seguimiento de notas, decisiones, pruebas y elementos abiertos de la refactorización del espejado de sesiones salientes.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:28Z
 ---
 
 # Refactorización del Espejado de Sesiones Salientes (Issue #1520)
@@ -40,7 +33,7 @@ Los envíos salientes se espejaban en la sesión _actual_ del agente (clave de s
 - La ruta de envío del plugin espeja vía `appendAssistantMessageToSessionTranscript` usando la sessionKey derivada.
 - El envío del Gateway deriva una clave de sesión de destino cuando no se proporciona (agente predeterminado) y garantiza una entrada de sesión.
 
-## Manejo de Hilos/Temas
+## Manejo de hilo/tema
 
 - Slack: replyTo/threadId -> `resolveThreadSessionKeys` (sufijo).
 - Discord: threadId/replyTo -> `resolveThreadSessionKeys` con `useSuffix=false` para coincidir con lo entrante (el id del canal del hilo ya delimita la sesión).

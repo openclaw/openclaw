@@ -5,13 +5,6 @@ read_when:
   - Du behöver icke-interaktiva exempel för specifika leverantörer
 title: "CLI-automatisering"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:30Z
 ---
 
 # CLI-automatisering
@@ -41,7 +34,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
 ## Leverantörsspecifika exempel
 
 <AccordionGroup>
-  <Accordion title="Gemini-exempel">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI-exempel">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway-exempel">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway-exempel">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot-exempel">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Syntetiskt exempel">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen-exempel">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,8 +110,8 @@ Lägg till `--json` för en maskinläsbar sammanfattning.
 
 ## Lägg till ytterligare en agent
 
-Använd `openclaw agents add <name>` för att skapa en separat agent med egen arbetsyta,
-sessioner och autentiseringsprofiler. Att köra utan `--workspace` startar guiden.
+Använd `openclaw agents add <name>` för att skapa en separat agent med sin egen arbetsyta,
+sessioner och auth profiler. Körs utan `--workspace` lanserar guiden.
 
 ```bash
 openclaw agents add work \

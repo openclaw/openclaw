@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการอัปเดตซอร์สเช็กเอาต์อย่างปลอดภัย
   - คุณต้องการทำความเข้าใจพฤติกรรมชอร์ตแฮนด์ของ `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:03Z
 ---
 
 # `openclaw update`
@@ -62,7 +55,8 @@ Options:
 
 โฟลว์แบบโต้ตอบเพื่อเลือกช่องทางการอัปเดตและยืนยันว่าจะรีสตาร์ตGatewayหลังอัปเดตหรือไม่
 (ค่าเริ่มต้นคือรีสตาร์ต) หากคุณเลือก `dev` โดยไม่มี git checkout
-ระบบจะเสนอให้สร้างขึ้นมา
+ระบบจะเสนอให้สร้างขึ้นมา 9. หากคุณเลือก `dev` โดยไม่มี git checkout มันจะ
+เสนอให้สร้างให้หนึ่งรายการ
 
 ## What it does
 

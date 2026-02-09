@@ -1,16 +1,9 @@
 ---
-summary: „Tryb rozmowy: ciągłe rozmowy głosowe z TTS ElevenLabs”
+summary: "„Tryb rozmowy: ciągłe rozmowy głosowe z TTS ElevenLabs”"
 read_when:
   - Implementowanie trybu rozmowy na macOS/iOS/Android
   - Zmienianie zachowania głosu/TTS/przerywania
-title: „Tryb rozmowy”
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
+title: "„Tryb rozmowy”"
 ---
 
 # Tryb rozmowy

@@ -1,19 +1,12 @@
 ---
-summary: „Slash-Befehle: Text vs. nativ, Konfiguration und unterstützte Befehle“
+summary: "„Slash-Befehle: Text vs. nativ, Konfiguration und unterstützte Befehle“"
 read_when:
   - Beim Verwenden oder Konfigurieren von Chat-Befehlen
   - Beim Debuggen von Befehlsrouting oder Berechtigungen
-title: „Slash-Befehle“
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:59Z
+title: "Slash-Befehle"
 ---
 
-# Slash-Befehle
+# tools/slash-commands.md
 
 Befehle werden vom Gateway verarbeitet. Die meisten Befehle müssen als **eigenständige** Nachricht gesendet werden, die mit `/` beginnt.
 Der nur für den Host verfügbare Bash-Chat-Befehl verwendet `! <cmd>` (mit `/bash <cmd>` als Alias).

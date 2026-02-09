@@ -5,13 +5,6 @@ read_when:
   - Cron လုပ်ဆောင်ခဲ့သော်လည်း မက်ဆေ့ချ် မပို့ဆောင်နိုင်ပါက
   - Heartbeat သည် တိတ်ဆိတ်နေသည် သို့မဟုတ် ကျော်သွားသည်ဟု ထင်ရပါက
 title: "Automation ပြဿနာဖြေရှင်းခြင်း"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:56Z
 ---
 
 # Automation ပြဿနာဖြေရှင်းခြင်း

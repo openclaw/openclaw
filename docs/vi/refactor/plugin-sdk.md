@@ -4,19 +4,12 @@ read_when:
   - Xác định hoặc tái cấu trúc kiến trúc plugin
   - Di chuyển các connector kênh sang SDK/runtime plugin
 title: "Tái cấu trúc SDK Plugin"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:05Z
 ---
 
 # Kế hoạch tái cấu trúc SDK + Runtime cho Plugin
 
 Mục tiêu: mọi connector nhắn tin đều là một plugin (đóng gói sẵn hoặc bên ngoài) sử dụng một API ổn định duy nhất.
-Không plugin nào import trực tiếp từ `src/**`. Mọi phụ thuộc đều đi qua SDK hoặc runtime.
+Mọi phụ thuộc đều đi qua SDK hoặc runtime. Phạm vi: các kiểu, helper và tiện ích cấu hình.
 
 ## Vì sao là bây giờ
 
@@ -25,9 +18,9 @@ Không plugin nào import trực tiếp từ `src/**`. Mọi phụ thuộc đề
 
 ## Kiến trúc mục tiêu (hai lớp)
 
-### 1) SDK Plugin (thời điểm biên dịch, ổn định, có thể phát hành)
+### 1. SDK Plugin (thời điểm biên dịch, ổn định, có thể phát hành)
 
-Phạm vi: kiểu dữ liệu, helper và tiện ích cấu hình. Không có trạng thái runtime, không có tác dụng phụ.
+Không có trạng thái runtime, không có tác dụng phụ. Không có trạng thái runtime, không có tác dụng phụ.
 
 Nội dung (ví dụ):
 
@@ -44,10 +37,10 @@ Phát hành:
 - Phát hành dưới dạng `openclaw/plugin-sdk` (hoặc export từ core dưới `openclaw/plugin-sdk`).
 - Theo semver với cam kết ổn định rõ ràng.
 
-### 2) Runtime Plugin (bề mặt thực thi, được inject)
+### 2. Runtime Plugin (bề mặt thực thi, được inject)
 
-Phạm vi: mọi thứ chạm tới hành vi runtime của core.
-Được truy cập thông qua `OpenClawPluginApi.runtime` để plugin không bao giờ import `src/**`.
+Được truy cập qua `OpenClawPluginApi.runtime` để plugin không bao giờ nhập `src/**`.
+Được truy cập qua `OpenClawPluginApi.runtime` để plugin không bao giờ import `src/**`.
 
 Bề mặt đề xuất (tối thiểu nhưng đầy đủ):
 
@@ -195,7 +188,7 @@ Ghi chú:
 ## Tương thích và phiên bản hóa
 
 - SDK: semver, được phát hành, thay đổi có tài liệu.
-- Runtime: được version theo mỗi bản phát hành core. Thêm `api.runtime.version`.
+- Thêm `api.runtime.version`. Add `api.runtime.version`.
 - Plugin khai báo phạm vi runtime yêu cầu (ví dụ: `openclawRuntime: ">=2026.2.0"`).
 
 ## Chiến lược kiểm thử

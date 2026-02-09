@@ -3,14 +3,7 @@ summary: "Subagenci: uruchamianie odizolowanych przebiegów agentów, które og�
 read_when:
   - Chcesz wykonywać pracę w tle/równolegle za pomocą agenta
   - Zmieniasz politykę sessions_spawn lub narzędzi subagenta
-title: "Subagenci"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:56Z
+title: "Podagenci"
 ---
 
 # Subagenci
@@ -36,7 +29,8 @@ Główne cele:
 - Utrzymanie powierzchni narzędzi trudnej do nadużycia: subagenci **nie** otrzymują domyślnie narzędzi sesji.
 - Unikanie zagnieżdżonego fan-outu: subagenci nie mogą uruchamiać subagentów.
 
-Uwaga dotycząca kosztów: każdy subagent ma **własny** kontekst i zużycie tokenów. W przypadku ciężkich lub powtarzalnych zadań ustaw tańszy model dla subagentów, a głównego agenta pozostaw na modelu wyższej jakości. Możesz to skonfigurować przez `agents.defaults.subagents.model` lub nadpisania per-agent.
+Uwaga dotycząca kosztów: każdy subagent ma **własny** kontekst i zużycie tokenów. W przypadku ciężkich lub powtarzalnych zadań ustaw tańszy model dla subagentów, a głównego agenta pozostaw na modelu wyższej jakości.
+Możesz to skonfigurować przez `agents.defaults.subagents.model` lub nadpisania per-agent.
 
 ## Narzędzie
 

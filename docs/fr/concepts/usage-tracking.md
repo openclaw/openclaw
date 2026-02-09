@@ -1,16 +1,9 @@
 ---
-summary: « Surfaces de suivi d’utilisation et exigences d’identification »
+summary: "Surfaces de suivi d’utilisation et exigences d’identification"
 read_when:
   - Vous raccordez des surfaces d’utilisation/quota des fournisseurs
   - Vous devez expliquer le comportement du suivi d’utilisation ou les exigences d’authentification
-title: « Suivi d’utilisation »
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:25Z
+title: "Suivi d’utilisation"
 ---
 
 # Suivi d’utilisation

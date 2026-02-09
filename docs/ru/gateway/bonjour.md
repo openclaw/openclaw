@@ -4,13 +4,6 @@ read_when:
   - Отладка проблем обнаружения Bonjour на macOS/iOS
   - Изменение типов сервисов mDNS, TXT‑записей или UX обнаружения
 title: "Обнаружение Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:39Z
 ---
 
 # Обнаружение Bonjour / mDNS
@@ -75,15 +68,14 @@ dig @<TAILNET_IPV4> -p 53 _openclaw-gw._tcp.openclaw.internal PTR +short
 
 ### Безопасность слушателя Gateway (шлюз) (рекомендуется)
 
-WS‑порт Gateway (шлюз) (по умолчанию `18789`) по умолчанию привязывается к loopback.
-Для доступа по LAN/tailnet выполните явную привязку и оставьте аутентификацию включённой.
+WS‑порт Gateway (шлюз) (по умолчанию `18789`) по умолчанию привязывается к loopback. Для доступа по LAN/tailnet выполните явную привязку и оставьте аутентификацию включённой.
 
 Для конфигураций только с tailnet:
 
 - Установите `gateway.bind: "tailnet"` в `~/.openclaw/openclaw.json`.
 - Перезапустите Gateway (шлюз) (или перезапустите приложение в строке меню macOS).
 
-## Что объявляется
+## Что реклама
 
 Только Gateway (шлюз) объявляет `_openclaw-gw._tcp`.
 

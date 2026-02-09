@@ -5,20 +5,13 @@ read_when:
   - Pagbabago sa behavior ng model fallback o UX ng pagpili
   - Pag-update ng mga probe ng model scan (tools/images)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:34Z
 ---
 
 # Models CLI
 
-Tingnan ang [/concepts/model-failover](/concepts/model-failover) para sa auth profile
-rotation, mga cooldown, at kung paano ito nakikipag-ugnayan sa mga fallback.
-Mabilis na pangkalahatang-ideya ng provider + mga halimbawa: [/concepts/model-providers](/concepts/model-providers).
+See [/concepts/model-failover](/concepts/model-failover) for auth profile
+rotation, cooldowns, and how that interacts with fallbacks.
+Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 ## Paano gumagana ang pagpili ng model
 
@@ -59,24 +52,24 @@ setup-token`).
 - `agents.defaults.models` (allowlist + mga alias + mga parameter ng provider)
 - `models.providers` (mga custom provider na isinusulat sa `models.json`)
 
-Ang mga model ref ay ini-normalize sa lowercase. Ang mga alias ng provider tulad ng `z.ai/*` ay ini-normalize
-sa `zai/*`.
+Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
+to `zai/*`.
 
 Ang mga halimbawa ng konpigurasyon ng provider (kasama ang OpenCode Zen) ay nasa
 [/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy).
 
 ## “Hindi pinapayagan ang model” (at bakit humihinto ang mga reply)
 
-Kapag naka-set ang `agents.defaults.models`, ito ang nagiging **allowlist** para sa `/model` at para sa
-mga override ng session. Kapag pumili ang user ng model na wala sa allowlist na iyon,
-ibinabalik ng OpenClaw ang:
+If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
+session overrides. When a user selects a model that isn’t in that allowlist,
+OpenClaw returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-Nangyayari ito **bago** makabuo ng normal na reply, kaya maaaring magmukhang
-parang “hindi nag-respond.” Ang solusyon ay alinman sa:
+This happens **before** a normal reply is generated, so the message can feel
+like it “didn’t respond.” The fix is to either:
 
 - Idagdag ang model sa `agents.defaults.models`, o
 - I-clear ang allowlist (alisin ang `agents.defaults.models`), o
@@ -113,7 +106,7 @@ Mga tala:
 - Ang `/model` (at `/model list`) ay isang compact, numbered picker (model family + mga available na provider).
 - Ang `/model <#>` ay pumipili mula sa picker na iyon.
 - Ang `/model status` ay ang detalyadong view (mga auth candidate at, kapag naka-configure, provider endpoint `baseUrl` + `api` mode).
-- Ang mga model ref ay pinu-parse sa pamamagitan ng paghahati sa **unang** `/`. Gamitin ang `provider/model` kapag nagta-type ng `/model <ref>`.
+- Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - Kung ang model ID mismo ay naglalaman ng `/` (OpenRouter-style), dapat mong isama ang provider prefix (halimbawa: `/model openrouter/moonshotai/kimi-k2`).
 - Kung aalisin mo ang provider, ituturing ng OpenClaw ang input bilang isang alias o isang model para sa **default provider** (gumagana lamang kapag walang `/` sa model ID).
 
@@ -146,7 +139,7 @@ Ang `openclaw models` (walang subcommand) ay isang shortcut para sa `models stat
 
 ### `models list`
 
-Ipinapakita ang mga naka-configure na model bilang default. Mga kapaki-pakinabang na flag:
+Shows configured models by default. Useful flags:
 
 - `--all`: buong catalog
 - `--local`: mga lokal na provider lang
@@ -156,15 +149,15 @@ Ipinapakita ang mga naka-configure na model bilang default. Mga kapaki-pakinaban
 
 ### `models status`
 
-Ipinapakita ang resolved primary model, mga fallback, image model, at isang auth overview
-ng mga naka-configure na provider. Ipinapakita rin nito ang OAuth expiry status para sa mga profile na natagpuan
-sa auth store (nagbababala sa loob ng 24h bilang default). Ang `--plain` ay nagpi-print lamang ng
+Shows the resolved primary model, fallbacks, image model, and an auth overview
+of configured providers. It also surfaces OAuth expiry status for profiles found
+in the auth store (warns within 24h by default). `--plain` prints only the
 resolved primary model.
-Palaging ipinapakita ang OAuth status (at kasama sa `--json` output). Kung ang isang naka-configure na
-provider ay walang credentials, ang `models status` ay nagpi-print ng seksyong **Missing auth**.
-Kasama sa JSON ang `auth.oauth` (warn window + mga profile) at `auth.providers`
-(epektibong auth bawat provider).
-Gamitin ang `--check` para sa automation (exit `1` kapag missing/expired, `2` kapag mag-e-expire).
+OAuth status is always shown (and included in `--json` output). If a configured
+provider has no credentials, `models status` prints a **Missing auth** section.
+JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
+(effective auth per provider).
+Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
 Ang preferred Anthropic auth ay ang Claude Code CLI setup-token (patakbuhin kahit saan; i-paste sa host ng Gateway kung kailangan):
 
@@ -188,8 +181,8 @@ Mga pangunahing flag:
 - `--set-default`: itakda ang `agents.defaults.model.primary` sa unang selection
 - `--set-image`: itakda ang `agents.defaults.imageModel.primary` sa unang image selection
 
-Nangangailangan ang probing ng OpenRouter API key (mula sa mga auth profile o
-`OPENROUTER_API_KEY`). Kung walang key, gamitin ang `--no-probe` para ilista lang ang mga candidate.
+Probing requires an OpenRouter API key (from auth profiles or
+`OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
 
 Ang mga resulta ng scan ay niraranggo ayon sa:
 
@@ -205,11 +198,11 @@ Input
 - Opsyonal na mga filter: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Mga kontrol sa probe: `--timeout`, `--concurrency`
 
-Kapag pinatakbo sa isang TTY, maaari mong piliin ang mga fallback nang interactive. Sa non‑interactive
-mode, ipasa ang `--yes` para tanggapin ang mga default.
+When run in a TTY, you can select fallbacks interactively. In non‑interactive
+mode, pass `--yes` to accept defaults.
 
 ## Models registry (`models.json`)
 
-Ang mga custom provider sa `models.providers` ay isinusulat sa `models.json` sa ilalim ng
-agent directory (default `~/.openclaw/agents/<agentId>/models.json`). Ang file na ito
-ay mino-merge bilang default maliban kung ang `models.mode` ay naka-set sa `replace`.
+Custom providers in `models.providers` are written into `models.json` under the
+agent directory (default `~/.openclaw/agents/<agentId>/models.json`). This file
+is merged by default unless `models.mode` is set to `replace`.

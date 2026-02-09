@@ -3,13 +3,6 @@ summary: "မီနူးဘား အခြေအနေ လောဂျစ်�
 read_when:
   - mac မီနူး UI သို့မဟုတ် အခြေအနေ လောဂျစ်ကို ချိန်ညှိနေသည့်အခါ
 title: "မီနူးဘား"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # မီနူးဘား အခြေအနေ လောဂျစ်
@@ -23,8 +16,8 @@ x-i18n:
 
 ## အခြေအနေ မော်ဒယ်
 
-- ဆက်ရှင်များ: ဖြစ်ရပ်များသည် `runId` (run တစ်ခုချင်းစီအလိုက်) နှင့် payload အတွင်းရှိ `sessionKey` တို့နှင့်အတူ ဝင်ရောက်လာသည်။ “main” ဆက်ရှင်သည် key `main` ဖြစ်ပြီး မရှိပါက နောက်ဆုံး အပ်ဒိတ်လုပ်ထားသော ဆက်ရှင်ကို အစားထိုး အသုံးပြုသည်။
-- ဦးစားပေးမှု: main သည် အမြဲတမ်း အနိုင်ရသည်။ main အလုပ်လုပ်နေပါက ၎င်း၏ အခြေအနေကို ချက်ချင်း ပြသသည်။ main အလုပ်မလုပ်နေပါက နောက်ဆုံး အလုပ်လုပ်နေသော non‑main ဆက်ရှင်ကို ပြသသည်။ အလုပ်လုပ်နေစဉ်အလယ်တွင် မပြောင်းလဲဘဲ လက်ရှိ ဆက်ရှင် အလုပ်မလုပ်တော့သည့်အခါ သို့မဟုတ် main အလုပ်လုပ်လာသည့်အခါသာ ပြောင်းလဲသည်။
+- 24. Sessions: event များသည် `runId` (run တစ်ခုစီအတွက်) နှင့် payload ထဲရှိ `sessionKey` တို့ဖြင့် ရောက်လာပါသည်။ 25. “main” session သည် key `main` ဖြစ်ပြီး၊ မရှိပါက နောက်ဆုံး update လုပ်ထားသော session ကို fallback အဖြစ် အသုံးပြုပါသည်။
+- 26. ဦးစားပေးမှု: main သည် အမြဲတမ်း အနိုင်ရပါသည်။ If main is active, its state is shown immediately. 28. main သည် idle ဖြစ်ပါက နောက်ဆုံး active ဖြစ်ခဲ့သော non‑main session ကို ပြသပါသည်။ We do not flip‑flop mid‑activity; we only switch when the current session goes idle or main becomes active.
 - လှုပ်ရှားမှု အမျိုးအစားများ:
   - `job`: အဆင့်မြင့် အမိန့် အကောင်အထည်ဖော်ခြင်း (`state: started|streaming|done|error`)။
   - `tool`: `phase: start|result` ကို `toolName` နှင့် `meta/args` တို့ဖြင့် ပြုလုပ်ခြင်း။

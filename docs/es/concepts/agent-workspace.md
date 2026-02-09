@@ -4,13 +4,6 @@ read_when:
   - Necesita explicar el espacio de trabajo del agente o su diseño de archivos
   - Quiere respaldar o migrar un espacio de trabajo del agente
 title: "Espacio de trabajo del agente"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:16Z
 ---
 
 # Espacio de trabajo del agente
@@ -146,7 +139,7 @@ respaldado y sea recuperable.
 Ejecute estos pasos en la máquina donde se ejecuta el Gateway (ahí es donde vive el
 espacio de trabajo).
 
-### 1) Inicializar el repositorio
+### 1. Inicializar el repositorio
 
 Si git está instalado, los espacios de trabajo nuevos se inicializan automáticamente. Si este
 espacio de trabajo aún no es un repositorio, ejecute:
@@ -158,7 +151,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Agregar un remoto privado (opciones fáciles para principiantes)
+### 2. Agregar un remoto privado (opciones fáciles para principiantes)
 
 Opción A: UI web de GitHub
 
@@ -193,7 +186,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Actualizaciones continuas
+### 3. Actualizaciones continuas
 
 ```bash
 git status

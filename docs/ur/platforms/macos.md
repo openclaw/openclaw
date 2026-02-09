@@ -4,20 +4,13 @@ read_when:
   - macOS ایپ کی خصوصیات نافذ کرتے وقت
   - macOS پر گیٹ وے لائف سائیکل یا نوڈ برِجنگ تبدیل کرتے وقت
 title: "macOS ایپ"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:42Z
 ---
 
 # OpenClaw macOS Companion (menu bar + gateway broker)
 
-macOS ایپ OpenClaw کے لیے **مینو بار معاون** ہے۔ یہ اجازتوں کی ملکیت رکھتی ہے،
-Gateway کو مقامی طور پر منظم/منسلک کرتی ہے (launchd یا دستی)، اور macOS کی
-صلاحیتوں کو بطور نوڈ ایجنٹ کے سامنے ظاہر کرتی ہے۔
+23. macOS ایپ OpenClaw کے لیے **مینو‑بار کمپینین** ہے۔ 24. یہ پرمیشنز کی مالک ہے،
+    Gateway کو لوکلی منیج/اٹیچ کرتی ہے (launchd یا مینوئل)، اور macOS
+    کی صلاحیتوں کو ایجنٹ کے لیے ایک نوڈ کے طور پر ایکسپوز کرتی ہے۔
 
 ## What it does
 
@@ -34,29 +27,29 @@ Gateway کو مقامی طور پر منظم/منسلک کرتی ہے (launchd �
 
 - **Local** (بطورِ طے شدہ): اگر کوئی چلتا ہوا مقامی Gateway موجود ہو تو ایپ اس سے منسلک ہو جاتی ہے؛
   بصورتِ دیگر `openclaw gateway install` کے ذریعے launchd سروس فعال کرتی ہے۔
-- **Remote**: ایپ SSH/Tailscale کے ذریعے Gateway سے جڑتی ہے اور کبھی
-  مقامی پراسیس شروع نہیں کرتی۔
-  ایپ مقامی **node host service** شروع کرتی ہے تاکہ ریموٹ Gateway اس میک تک پہنچ سکے۔
-  ایپ Gateway کو بطور چائلڈ پراسیس شروع نہیں کرتی۔
+- 25. **ریموٹ**: ایپ SSH/Tailscale کے ذریعے Gateway سے کنیکٹ کرتی ہے اور کبھی
+      لوکل پروسس شروع نہیں کرتی۔
+  26. ایپ لوکل **node host service** شروع کرتی ہے تاکہ ریموٹ Gateway اس Mac تک پہنچ سکے۔
+  27. ایپ Gateway کو چائلڈ پروسس کے طور پر اسپان نہیں کرتی۔
 
 ## Launchd control
 
-ایپ فی-یوزر LaunchAgent کو منظم کرتی ہے جس کا لیبل `bot.molt.gateway` ہوتا ہے
-(یا `bot.molt.<profile>` جب `--profile`/`OPENCLAW_PROFILE` استعمال ہوں؛ پرانا `com.openclaw.*` اب بھی unload کرتا ہے)۔
+28. ایپ فی‑یوزر LaunchAgent کو منیج کرتی ہے جس کا لیبل `bot.molt.gateway`
+    (یا `bot.molt.<profile>`29. `جب`--profile`/`OPENCLAW_PROFILE`استعمال ہو؛ لیگیسی`com.openclaw.\*\` اب بھی ان لوڈ ہو جاتا ہے)۔
 
 ```bash
 launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-نامزد پروفائل چلانے پر لیبل کو `bot.molt.<profile>` سے بدل دیں۔
+30. نامزد پروفائل چلانے پر لیبل کو `bot.molt.<profile>` سے بدلیں۔31. macOS ایپ خود کو ایک نوڈ کے طور پر پیش کرتی ہے۔
 
 اگر LaunchAgent انسٹال نہیں ہے تو ایپ سے اسے فعال کریں یا
 `openclaw gateway install` چلائیں۔
 
 ## Node capabilities (mac)
 
-macOS ایپ خود کو ایک نوڈ کے طور پر پیش کرتی ہے۔ عام کمانڈز:
+32. `system.run` macOS ایپ میں **Exec approvals** کے ذریعے کنٹرول ہوتا ہے (Settings → Exec approvals)۔ عام کمانڈز:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
@@ -81,8 +74,9 @@ Gateway -> Node Service (WS)
 
 ## Exec approvals (system.run)
 
-`system.run` کو macOS ایپ میں **Exec approvals** (Settings → Exec approvals) کے ذریعے کنٹرول کیا جاتا ہے۔
-سکیورٹی + پوچھ گچھ + اجازت فہرست مقامی طور پر میک پر یہاں محفوظ ہوتی ہیں:
+33. سیکیورٹی + ask + allowlist لوکلی Mac پر یہاں محفوظ ہوتے ہیں:
+34. **IP رپورٹنگ:** SSH ٹنل لوپ بیک استعمال کرتی ہے، اس لیے گیٹ وے کو نوڈ
+    IP `127.0.0.1` کے طور پر نظر آئے گا۔
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -195,12 +189,10 @@ macOS ایپ کی ڈسکوری پائپ لائن (NWBrowser + tailnet DNS‑SD f
   یا ضرورت پڑنے پر اسے دوبارہ شروع کرتی ہے۔
 - **SSH shape:** `ssh -N -L <local>:127.0.0.1:<remote>` بمع BatchMode +
   ExitOnForwardFailure + keepalive اختیارات۔
-- **IP reporting:** SSH سرنگ loopback استعمال کرتی ہے، اس لیے گیٹ وے نوڈ
-  IP کو `127.0.0.1` کے طور پر دیکھے گا۔ اگر آپ چاہتے ہیں کہ اصل کلائنٹ
-  IP ظاہر ہو تو **Direct (ws/wss)** ٹرانسپورٹ استعمال کریں (دیکھیں [macOS remote access](/platforms/mac/remote))۔
+- 35. اگر آپ چاہتے ہیں کہ اصل کلائنٹ IP ظاہر ہو تو **Direct (ws/wss)** ٹرانسپورٹ استعمال کریں
+      (دیکھیں [macOS remote access](/platforms/mac/remote))۔ 36. سیٹ اپ کے مراحل کے لیے، دیکھیں [macOS remote access](/platforms/mac/remote)۔
 
-سیٹ اپ کے مراحل کے لیے دیکھیں [macOS remote access](/platforms/mac/remote)۔ پروٹوکول کی
-تفصیلات کے لیے دیکھیں [Gateway protocol](/gateway/protocol)۔
+37. پروٹوکول کی تفصیلات کے لیے، دیکھیں [Gateway protocol](/gateway/protocol)۔ 38. **ٹِپ:** اگر انسٹینس کری ایشن "Out of capacity" کے ساتھ ناکام ہو جائے تو کسی اور availability domain کی کوشش کریں یا بعد میں دوبارہ ٹرائی کریں۔
 
 ## Related docs
 

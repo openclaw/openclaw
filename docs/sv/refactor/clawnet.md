@@ -4,13 +4,6 @@ read_when:
   - Planering av ett enhetligt nätverksprotokoll för noder + operatörsklienter
   - Omarbetning av godkännanden, parkoppling, TLS och närvaro över enheter
 title: "Clawnet-omstrukturering"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:43Z
 ---
 
 # Clawnet-omstrukturering (protokoll + autentiseringsförening)
@@ -51,10 +44,10 @@ Ett enda, rigoröst dokument för:
 
 ## Två protokoll
 
-### 1) Gateway WebSocket (kontrollplan)
+### 1. Gateway WebSocket (kontrollplan)
 
 - Full API‑yta: konfig, kanaler, modeller, sessioner, agentkörningar, loggar, noder m.m.
-- Standardbindning: loopback. Fjärråtkomst via SSH/Tailscale.
+- Default bind: loopback. Fjärråtkomst via SSH/Tailscale.
 - Autentisering: token/lösenord via `connect`.
 - Ingen TLS‑pinning (förlitar sig på loopback/tunnel).
 - Kod:
@@ -62,7 +55,7 @@ Ett enda, rigoröst dokument för:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (nodtransport)
+### 2. Bridge (nodtransport)
 
 - Smal tillåtelselista, nodidentitet + parkoppling.
 - JSONL över TCP; valfri TLS + certifikatfingeravtryckspin­ning.
@@ -145,7 +138,7 @@ Ett enda WS‑protokoll med roll + omfång.
 
 ### Nyckelregel
 
-Roll är per anslutning, inte per enhet. En enhet kan öppna båda rollerna, separat.
+Rollen är per anslutning, inte per enhet. En enhet kan öppna båda rollerna separat.
 
 ---
 
@@ -187,7 +180,7 @@ Alternativ:
 
 ## Tyst godkännande (SSH‑heuristik)
 
-Definiera exakt för att undvika en svag länk. Föredra ett:
+Definiera det just för att undvika en svag länk. Föredrar ett:
 
 - **Endast lokalt**: auto‑parkoppla när klient ansluter via loopback/Unix‑socket.
 - **Utmaning via SSH**: gateway utfärdar nonce; klient bevisar SSH genom att hämta den.
@@ -224,7 +217,7 @@ Använd nuvarande TLS‑runtime + fingeravtryckspin­ning:
 
 ## Nuvarande
 
-Godkännande sker på nodvärden (mac‑appens nod‑runtime). Prompten visas där noden körs.
+Godkännande sker på nod värd (Mac app nod runtime). Fråga visas där noden körs.
 
 ## Föreslaget
 
@@ -283,8 +276,8 @@ Godkännande är **gateway‑värdbaserat**, UI levereras till operatörskliente
 
 ## Stabilt ID
 
-Krävs för autentisering; ändras aldrig.
-Föredras:
+Krävs för författare; aldrig ändras.
+Föredraget:
 
 - Fingeravtryck av nyckelpar (hash av publik nyckel).
 

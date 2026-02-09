@@ -6,19 +6,12 @@ read_when:
   - Fejlsøgning af introduktionens identitetsopsætning
 title: "Agent-bootstrapping"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:37Z
 ---
 
 # Agent-bootstrapping
 
-Bootstrapping er **første‑kørsel**‑ritualet, der forbereder et agent‑arbejdsområde og
-indsamler identitetsoplysninger. Det sker efter introduktion, når agenten starter
+Bootstrapping er det **første-runde-** ritual, der forbereder et agent-arbejdsrum, og
+indsamler identitetsoplysninger. Det sker efter onboarding, når agenten starter
 for første gang.
 
 ## Hvad bootstrapping gør
@@ -33,8 +26,9 @@ Ved agentens første kørsel bootstrapper OpenClaw arbejdsområdet (standard
 
 ## Hvor det kører
 
-Bootstrapping kører altid på **gateway-værten**. Hvis macOS‑appen forbinder til en
-fjern Gateway, ligger arbejdsområdet og bootstrapping‑filerne på den fjernmaskine.
+Bootstrapping kører altid på **gateway vært**. Hvis macOS appen forbinder til
+en ekstern Gateway, lever arbejdsrummet og bootstrapping filer på den eksterne
+-maskine.
 
 <Note>
 Når Gateway kører på en anden maskine, redigér arbejdsområdefiler på gateway-værten

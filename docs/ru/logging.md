@@ -5,13 +5,6 @@ read_when:
   - Вы хотите настроить уровни или форматы логов
   - Вы устраняете неполадки и хотите быстро найти логи
 title: "Логирование"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:04Z
 ---
 
 # Логирование
@@ -205,7 +198,8 @@ openclaw channels logs --channel whatsapp
 ### Флаги диагностики (таргетированные логи)
 
 Используйте флаги, чтобы включать дополнительные, точечные debug-логи без
-повышения `logging.level`. Флаги нечувствительны к регистру и поддерживают
+повышения `logging.level`.
+Флаги нечувствительны к регистру и поддерживают
 шаблоны (например, `telegram.*` или `*`).
 
 ```json
@@ -331,7 +325,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`,
     `openclaw.sessionKey`, `openclaw.sessionId`
 
-### Сэмплирование и сброс
+### Отбор проб + сброс
 
 - Сэмплирование трейсов: `diagnostics.otel.sampleRate` (0.0–1.0, только корневые спаны).
 - Интервал экспорта метрик: `diagnostics.otel.flushIntervalMs` (минимум 1000 мс).

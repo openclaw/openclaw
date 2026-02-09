@@ -4,25 +4,18 @@ read_when:
   - Exponera Gateway-kontrollgränssnittet utanför localhost
   - Automatisera åtkomst till tailnet eller offentlig instrumentpanel
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:29Z
 ---
 
 # Tailscale (Gateway-instrumentpanel)
 
-OpenClaw kan automatiskt konfigurera Tailscale **Serve** (tailnet) eller **Funnel** (offentlig) för
-Gateway-instrumentpanelen och WebSocket-porten. Detta gör att Gateway förblir bunden till loopback medan
-Tailscale tillhandahåller HTTPS, routning och (för Serve) identitetshuvuden.
+OpenClaw kan automatiskt konfigurera Tailscale **Serve** (tailnet) eller **Funnel** (offentligt) för
+Gateway-instrumentpanelen och WebSocket-porten. Detta håller Gateway bunden till loopback medan
+Tailscale tillhandahåller HTTPS, routing och (för server) identitetshuvuden.
 
 ## Lägen
 
-- `serve`: Endast tailnet Serve via `tailscale serve`. Gateway stannar på `127.0.0.1`.
-- `funnel`: Offentlig HTTPS via `tailscale funnel`. OpenClaw kräver ett delat lösenord.
+- `serve`: Endast Tailnet-Serve via `tailscale serve`. Gateway stannar på `127.0.1`.
+- `trattel`: Offentlig HTTPS via `tailscale tratt`. OpenClaw kräver ett delat lösenord.
 - `off`: Standard (ingen Tailscale-automatisering).
 
 ## Autentisering
@@ -32,15 +25,15 @@ Sätt `gateway.auth.mode` för att styra handskakningen:
 - `token` (standard när `OPENCLAW_GATEWAY_TOKEN` är satt)
 - `password` (delad hemlighet via `OPENCLAW_GATEWAY_PASSWORD` eller konfig)
 
-När `tailscale.mode = "serve"` och `gateway.auth.allowTailscale` är `true`,
-kan giltiga Serve-proxyförfrågningar autentiseras via Tailscales identitetshuvuden
-(`tailscale-user-login`) utan att ange token/lösenord. OpenClaw verifierar
-identiteten genom att slå upp `x-forwarded-for`-adressen via den lokala Tailscale-
-demonen (`tailscale whois`) och matcha den mot huvudet innan den accepteras.
-OpenClaw behandlar endast en förfrågan som Serve när den anländer från loopback med
-Tailscales `x-forwarded-for`, `x-forwarded-proto` och `x-forwarded-host`
--huvuden.
-För att kräva explicita inloggningsuppgifter, sätt `gateway.auth.allowTailscale: false` eller
+När `tailscale.mode = "serve"` och` gateway.auth.allowTailscale` är `true`,
+giltig Serve proxy förfrågningar kan autentiseras via Tailscale identitetshuvuden
+(`tailscale-user-login`) utan att ange ett token/lösenord. OpenClaw verifierar
+identiteten genom att lösa `x-forwarded-for`-adressen via den lokala Tailscale
+-demonen (`tailscale whois`) och matcha den med huvudet innan den accepteras.
+OpenClaw behandlar endast en begäran som Serve när den anländer från loopback med
+Tailscale's `x-forwarded-for`, `x-forwarded-proto` och `x-forwarded-host`
+headers.
+För att kräva explicita användaruppgifter, ange `gateway.auth.allowTailscale: false` eller
 tvinga `gateway.auth.mode: "password"`.
 
 ## Konfig-exempel
@@ -107,14 +100,14 @@ openclaw gateway --tailscale funnel --auth password
   eller `tailscale funnel`-konfiguration vid nedstängning.
 - `gateway.bind: "tailnet"` är en direkt Tailnet-bindning (ingen HTTPS, ingen Serve/Funnel).
 - `gateway.bind: "auto"` föredrar loopback; använd `tailnet` om du vill ha endast tailnet.
-- Serve/Funnel exponerar endast **Gateway-kontroll-UI + WS**. Noder ansluter över
-  samma Gateway-WS-slutpunkt, så Serve kan fungera för nodåtkomst.
+- Serva/Trnel endast exponera **Gateway control UI + WS**. Noder ansluter över
+  samma Gateway WS slutpunkt, så Serve kan fungera för nod åtkomst.
 
 ## Webbläsarkontroll (fjärr-Gateway + lokal webbläsare)
 
-Om du kör Gateway på en maskin men vill styra en webbläsare på en annan maskin,
-kör en **node host** på webbläsarmaskinen och håll båda på samma tailnet.
-Gateway kommer att proxyera webbläsaråtgärder till noden; ingen separat kontrollserver eller Serve-URL behövs.
+Om du kör Gateway på en maskin men vill köra en webbläsare på en annan maskin,
+kör en **nod värd** på webbläsarmaskinen och hålla båda på samma tailnet.
+Gateway kommer proxy webbläsare åtgärder till noden, ingen separat kontrollserver eller Serve URL behövs.
 
 Undvik Funnel för webbläsarkontroll; behandla nodparning som operatörsåtkomst.
 

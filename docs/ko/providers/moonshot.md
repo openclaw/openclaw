@@ -5,19 +5,11 @@ read_when:
   - 분리된 엔드포인트, 키, 모델 참조를 이해해야 할 때
   - 어느 프로바이더든 복사/붙여넣기 설정을 원할 때
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:57Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot 은 OpenAI 호환 엔드포인트를 제공하는 Kimi API 를 제공합니다.  
-프로바이더를 구성하고 기본 모델을 `moonshot/kimi-k2.5` 로 설정하거나,  
+Moonshot 은 OpenAI 호환 엔드포인트를 제공하는 Kimi API 를 제공합니다. 프로바이더를 구성하고 기본 모델을 `moonshot/kimi-k2.5` 로 설정하거나,  
 `kimi-coding/k2p5` 를 사용하는 Kimi Coding 을 이용하십시오.
 
 현재 Kimi K2 모델 ID:

@@ -5,13 +5,6 @@ read_when:
   - Solução de problemas de pareamento por webhook
   - Configurando o iMessage no macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:06Z
 ---
 
 # BlueBubbles (REST no macOS)
@@ -32,7 +25,9 @@ Status: plugin empacotado que se comunica com o servidor BlueBubbles no macOS vi
 ## Início rápido
 
 1. Instale o servidor BlueBubbles no seu Mac (siga as instruções em [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. Na configuração do BlueBubbles, habilite a API web e defina uma senha.
+
 3. Execute `openclaw onboard` e selecione BlueBubbles, ou configure manualmente:
 
    ```json5
@@ -49,13 +44,14 @@ Status: plugin empacotado que se comunica com o servidor BlueBubbles no macOS vi
    ```
 
 4. Aponte os webhooks do BlueBubbles para o seu gateway (exemplo: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Inicie o gateway; ele registrará o manipulador de webhook e iniciará o pareamento.
 
 ## Mantendo o Messages.app ativo (VM / setups headless)
 
 Alguns setups de VM no macOS / sempre ligados podem acabar com o Messages.app ficando “ocioso” (eventos de entrada param até que o app seja aberto/colocado em primeiro plano). Uma solução simples é **cutucar o Messages a cada 5 minutos** usando um AppleScript + LaunchAgent.
 
-### 1) Salve o AppleScript
+### 1. Salve o AppleScript
 
 Salve como:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Instale um LaunchAgent
+### 2. Instale um LaunchAgent
 
 Salve como:
 

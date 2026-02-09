@@ -1,13 +1,6 @@
 ---
 summary: "Cómo enviar un PR de alta señal"
 title: "Envío de un PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:41Z
 ---
 
 Los buenos PR son fáciles de revisar: los revisores deben comprender rápidamente la intención, verificar el comportamiento y integrar los cambios de forma segura. Esta guía cubre envíos concisos y de alta señal para revisión humana y por LLM.
@@ -98,7 +91,7 @@ Sea conciso; revisión concisa > gramática. Omita cualquier sección no aplicab
 
 ## Plantillas por tipo de PR (reemplace con su tipo)
 
-### Arreglo
+### Solución
 
 ```md
 #### Summary
@@ -280,7 +273,7 @@ pnpm format
 - Agent notes:
 ```
 
-### Rendimiento
+### Perf
 
 ```md
 #### Summary

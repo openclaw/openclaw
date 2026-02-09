@@ -2,14 +2,7 @@
 summary: "Dostęp i uwierzytelnianie pulpitu Gateway (Control UI)"
 read_when:
   - Zmieniasz tryby uwierzytelniania lub ekspozycji pulpitu
-title: "Pulpit"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:44Z
+title: "Panel"
 ---
 
 # Pulpit (Control UI)
@@ -40,7 +33,7 @@ Preferuj localhost, Tailscale Serve lub tunel SSH.
 - Otwórz ponownie w dowolnym momencie: `openclaw dashboard` (kopiuje link, otwiera przeglądarkę, jeśli to możliwe, pokazuje wskazówkę SSH w trybie headless).
 - Jeśli UI poprosi o uwierzytelnienie, wklej token z `gateway.auth.token` (lub `OPENCLAW_GATEWAY_TOKEN`) w ustawieniach Control UI.
 
-## Podstawy tokenów (lokalnie vs zdalnie)
+## Podstawy tokenu (lokalny vs remote)
 
 - **Localhost**: otwórz `http://127.0.0.1:18789/`.
 - **Źródło tokenu**: `gateway.auth.token` (lub `OPENCLAW_GATEWAY_TOKEN`); UI zapisuje kopię w localStorage po połączeniu.

@@ -5,13 +5,6 @@ read_when:
   - Skills installeren, zoeken of publiceren
   - CLI-vlaggen en sync-gedrag van ClawHub uitleggen
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:59Z
 ---
 
 # ClawHub

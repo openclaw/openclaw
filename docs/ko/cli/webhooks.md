@@ -4,13 +4,6 @@ read_when:
   - Gmail Pub/Sub 이벤트를 OpenClaw에 연결하려는 경우
   - 웹훅 헬퍼 명령이 필요한 경우
 title: "웹훅"
-x-i18n:
-  source_path: cli/webhooks.md
-  source_hash: 785ec62afe6631b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:31Z
 ---
 
 # `openclaw webhooks`

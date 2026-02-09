@@ -6,13 +6,6 @@ read_when:
   - persistence၊ binaries နှင့် restart အပြုအမူများကို အပြည့်အဝ ထိန်းချုပ်လိုသောအခါ
   - Hetzner သို့မဟုတ် ဆင်တူသော provider ပေါ်တွင် Docker ဖြင့် OpenClaw ကို လည်ပတ်နေသောအခါ
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # Hetzner ပေါ်ရှိ OpenClaw (Docker, Production VPS လမ်းညွှန်)
@@ -21,8 +14,8 @@ x-i18n:
 
 Docker ကို အသုံးပြု၍ Hetzner VPS ပေါ်တွင် တည်ငြိမ်သော state၊ binary များကို image အတွင်း ထည့်သွင်းထားခြင်းနှင့် restart လုပ်ရာတွင် လုံခြုံစိတ်ချရသော အပြုအမူတို့ပါဝင်သည့် OpenClaw Gateway ကို အမြဲတမ်း လည်ပတ်စေခြင်း။
 
-“OpenClaw ကို ၂၄/၇ အတွက် ~$5 နဲ့ အသုံးပြုချင်တယ်” ဆိုပါက ယုံကြည်စိတ်ချရဆုံးနှင့် အလွယ်ကူဆုံး တပ်ဆင်နည်းဖြစ်ပါသည်။
-Hetzner ၏ စျေးနှုန်းများမှာ ပြောင်းလဲနိုင်ပါသည်။ အနည်းဆုံး Debian/Ubuntu VPS ကို ရွေးချယ်ပြီး OOM (memory မလုံလောက်မှု) ဖြစ်လာပါက အရွယ်အစားတိုးချဲ့ပါ။
+“OpenClaw ကို ~$5 နဲ့ 24/7 သုံးချင်ရင်” ဒီ setup က အလွယ်ဆုံးနဲ့ ယုံကြည်စိတ်ချရဆုံးပါ။
+Hetzner စျေးနှုန်းများ ပြောင်းလဲနိုင်ပါသည်။ အသေးဆုံး Debian/Ubuntu VPS ကို ရွေးချယ်ပြီး OOM များ ဖြစ်လာပါက scale up လုပ်ပါ။
 
 ## ဘာလုပ်မလဲ (ရိုးရှင်းစွာ)?
 
@@ -38,8 +31,8 @@ Gateway ကို ဝင်ရောက်နိုင်သော နည်း�
 - firewall နှင့် token များကို ကိုယ်တိုင် စီမံနိုင်ပါက port ကို တိုက်ရိုက် ဖွင့်၍
 
 ဤလမ်းညွှန်သည် Hetzner ပေါ်ရှိ Ubuntu သို့မဟုတ် Debian ကို အခြေခံထားပါသည်။  
-အခြား Linux VPS ဖြစ်ပါက package များကို ကိုက်ညီအောင် ပြောင်းလဲပါ။
-အထွေထွေ Docker လုပ်ငန်းစဉ်အတွက် [Docker](/install/docker) ကို ကြည့်ပါ။
+အခြား Linux VPS ကို အသုံးပြုနေပါက packages များကို သင့်လျော်အောင် mapping လုပ်ပါ။
+အထွေထွေ Docker flow အတွက် [Docker](/install/docker) ကို ကြည့်ပါ။
 
 ---
 
@@ -71,7 +64,7 @@ Gateway ကို ဝင်ရောက်နိုင်သော နည်း�
 
 ---
 
-## 1) VPS ကို Provision လုပ်ခြင်း
+## 1. VPS ကို Provision လုပ်ခြင်း
 
 Hetzner တွင် Ubuntu သို့မဟုတ် Debian VPS တစ်လုံးကို ဖန်တီးပါ။
 
@@ -81,12 +74,12 @@ root အဖြစ် ချိတ်ဆက်ပါ-
 ssh root@YOUR_VPS_IP
 ```
 
-ဤလမ်းညွှန်သည် VPS ကို stateful အဖြစ် သတ်မှတ်ထားပါသည်။
-disposable infrastructure အဖြစ် မသတ်မှတ်ပါနှင့်။
+ဤလမ်းညွှန်သည် VPS သည် stateful ဖြစ်သည်ဟု ယူဆထားပါသည်။
+၎င်းကို disposable infrastructure အဖြစ် မသတ်မှတ်ပါနှင့်။
 
 ---
 
-## 2) Docker ကို ထည့်သွင်းခြင်း (VPS ပေါ်တွင်)
+## 2. Docker ကို ထည့်သွင်းခြင်း (VPS ပေါ်တွင်)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) OpenClaw repository ကို Clone လုပ်ခြင်း
+## 3. OpenClaw repository ကို Clone လုပ်ခြင်း
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +107,10 @@ binary persistence ကို အာမခံရန် custom image တစ်ခ�
 
 ---
 
-## 4) persistence အတွက် host directory များ ဖန်တီးခြင်း
+## 4. persistence အတွက် host directory များ ဖန်တီးခြင်း
 
-Docker container များသည် ephemeral ဖြစ်ပါသည်။
-ရေရှည် အသုံးပြုမည့် state အားလုံးကို host ပေါ်တွင် ထားရပါမည်။
+Docker containers များသည် ephemeral ဖြစ်ပါသည်။
+အချိန်ကြာရှည်အသုံးပြုမည့် state အားလုံးကို host ပေါ်တွင်သာ ထားရမည်။
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) environment variables ကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
+## 5. environment variables ကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
 
 repository root တွင် `.env` ကို ဖန်တီးပါ။
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose ဖွဲ့စည်းမှု
+## 6. Docker Compose ဖွဲ့စည်းမှု
 
 `docker-compose.yml` ကို ဖန်တီးပါ သို့မဟုတ် အပ်ဒိတ်လုပ်ပါ။
 
@@ -204,10 +197,10 @@ services:
 
 ---
 
-## 7) လိုအပ်သော binary များကို image အတွင်း bake လုပ်ခြင်း (အရေးကြီး)
+## 7. လိုအပ်သော binary များကို image အတွင်း bake လုပ်ခြင်း (အရေးကြီး)
 
-လည်ပတ်နေသော container အတွင်း binary များကို ထည့်သွင်းခြင်းသည် အန္တရာယ်ရှိသော လမ်းကြောင်းဖြစ်ပါသည်။
-runtime အတွင်း ထည့်သွင်းထားသမျှသည် restart ပြုလုပ်သည့်အခါ ပျောက်သွားပါမည်။
+လည်ပတ်နေသော container အတွင်း binaries ကို install လုပ်ခြင်းသည် ထောင်ချောက်တစ်ခုဖြစ်သည်။
+runtime အတွင်း install လုပ်ထားသမျှ အရာအားလုံးသည် restart ပြုလုပ်ပါက ပျောက်ကွယ်သွားမည်ဖြစ်သည်။
 
 Skills များလိုအပ်သော အပြင်ဘက် binary အားလုံးကို image build အချိန်တွင် ထည့်သွင်းရပါမည်။
 
@@ -217,8 +210,8 @@ Skills များလိုအပ်သော အပြင်ဘက် binary �
 - Google Places အတွက် `goplaces`
 - WhatsApp အတွက် `wacli`
 
-ဤအရာများသည် ဥပမာသာ ဖြစ်ပြီး ပြည့်စုံသော စာရင်းမဟုတ်ပါ။
-တူညီသော pattern ဖြင့် binary များကို လိုအပ်သလောက် ထည့်သွင်းနိုင်ပါသည်။
+ဒါတွေက ဥပမာတွေသာ ဖြစ်ပြီး အပြည့်အစုံ စာရင်း မဟုတ်ပါ။
+တူညီသော pattern ကို အသုံးပြုပြီး လိုအပ်သလောက် binaries များကို install လုပ်နိုင်ပါသည်။
 
 နောက်ပိုင်းတွင် binary အသစ်များကို မူတည်သော Skills အသစ်များ ထည့်ပါက-
 
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Build နှင့် Launch
+## 8. Build နှင့် Launch
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) Gateway ကို စစ်ဆေးခြင်း
+## 9. Gateway ကို စစ်ဆေးခြင်း
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,8 +313,8 @@ gateway token ကို ကူးထည့်ပါ။
 
 ## ဘာတွေ ဘယ်နေရာမှာ သိမ်းဆည်းထားသလဲ (source of truth)
 
-OpenClaw သည် Docker အတွင်း လည်ပတ်သော်လည်း Docker ကို source of truth အဖြစ် မသတ်မှတ်ပါ။
-ရေရှည် state အားလုံးသည် restart၊ rebuild နှင့် reboot များကို ခံနိုင်ရည်ရှိရပါမည်။
+OpenClaw သည် Docker အတွင်း လည်ပတ်သော်လည်း Docker သည် source of truth မဟုတ်ပါ။
+အချိန်ကြာရှည်အသုံးပြုမည့် state အားလုံးသည် restarts, rebuilds နှင့် reboots များကို ကျော်လွှားနိုင်ရပါမည်။
 
 | Component           | Location                          | Persistence mechanism  | Notes                             |
 | ------------------- | --------------------------------- | ---------------------- | --------------------------------- |

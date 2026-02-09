@@ -2,15 +2,8 @@
 summary: "การป้องกันGatewayแบบซิงเกิลตันด้วยการผูกตัวรับฟังWebSocket"
 read_when:
   - ขณะรันหรือดีบักโปรเซสGateway
-  - เมื่อตรวจสอบการบังคับให้ทำงานได้เพียงอินสแตนซ์เดียว
+  - 44. การตรวจสอบการบังคับใช้แบบอินสแตนซ์เดียว
 title: "Gateway Lock"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:08Z
 ---
 
 # Gateway lock

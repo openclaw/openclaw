@@ -3,13 +3,6 @@ summary: "Comportamento de chats em grupo entre superfícies (WhatsApp/Telegram/
 read_when:
   - Alterar o comportamento de chats em grupo ou o controle por menções
 title: "Grupos"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:15Z
 ---
 
 # Grupos
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Se você quiser...
 
-| Objetivo                                               | O que configurar                                           |
-| ------------------------------------------------------ | ---------------------------------------------------------- |
-| Permitir todos os grupos, mas responder só em @menções | `groups: { "*": { requireMention: true } }`                |
-| Desativar todas as respostas em grupos                 | `groupPolicy: "disabled"`                                  |
-| Apenas grupos específicos                              | `groups: { "<group-id>": { ... } }` (sem a chave `"*"`)    |
-| Apenas você pode acionar em grupos                     | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Objetivo                                                            | O que configurar                                                           |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Permitir todos os grupos, mas responder só em @menções | `groups: { "*": { requireMention: true } }`                                |
+| Desativar todas as respostas em grupos                              | `groupPolicy: "disabled"`                                                  |
+| Apenas grupos específicos                                           | `groups: { "<group-id>": { ... } }` (sem a chave `"*"`) |
+| Apenas você pode acionar em grupos                                  | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                 |
 
 ## Chaves de sessão
 
@@ -181,8 +174,8 @@ Controle como mensagens de grupo/sala são tratadas por canal:
 }
 ```
 
-| Política      | Comportamento                                                                    |
-| ------------- | -------------------------------------------------------------------------------- |
+| Política      | Comportamento                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------ |
 | `"open"`      | Grupos ignoram listas de permissões; controle por menções ainda se aplica.       |
 | `"disabled"`  | Bloquear todas as mensagens de grupo por completo.                               |
 | `"allowlist"` | Permitir apenas grupos/salas que correspondam à lista de permissões configurada. |
@@ -204,7 +197,7 @@ Modelo mental rápido (ordem de avaliação para mensagens de grupo):
 2. listas de permissões de grupo (`*.groups`, `*.groupAllowFrom`, lista específica do canal)
 3. controle por menções (`requireMention`, `/activation`)
 
-## Controle por menções (padrão)
+## Mencionar gating (padrão)
 
 Mensagens de grupo exigem uma menção, a menos que sejam substituídas por grupo. Os padrões vivem por subsistema em `*.groups."*"`.
 

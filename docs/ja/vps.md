@@ -4,13 +4,6 @@ read_when:
   - クラウドで Gateway（ゲートウェイ）を実行したい場合
   - VPS/ホスティングのガイドを手早く把握したい場合
 title: "VPS ホスティング"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:34Z
 ---
 
 # VPS ホスティング
@@ -27,7 +20,7 @@ x-i18n:
 - **Hetzner（Docker）**: [Hetzner](/install/hetzner)
 - **GCP（Compute Engine）**: [GCP](/install/gcp)
 - **exe.dev**（VM + HTTPS プロキシ）: [exe.dev](/install/exe-dev)
-- **AWS（EC2/Lightsail/無料枠）**: こちらも問題なく動作します。動画ガイド:
+- **AWS (EC2/Lightsail/free tier)**: うまく動作します。 ビデオガイド:
   [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
 ## クラウド構成の仕組み
@@ -37,6 +30,7 @@ x-i18n:
 - VPS を信頼できる唯一の情報源として扱い、状態とワークスペースを **バックアップ** してください。
 - セキュアな既定値: Gateway を loopback のままにし、SSH トンネルまたは Tailscale Serve 経由でアクセスします。
   `lan`/`tailnet` にバインドする場合は、`gateway.auth.token` または `gateway.auth.password` を必須にしてください。
+  `lan`/`tailnet` にバインドする場合は、 `gateway.auth.token` または `gateway.auth.password` が必要です。
 
 リモートアクセス: [Gateway remote](/gateway/remote)  
 プラットフォーム ハブ: [Platforms](/platforms)
@@ -45,6 +39,7 @@ x-i18n:
 
 Gateway をクラウドに置いたまま、ローカル デバイス
 （Mac/iOS/Android/ヘッドレス）上の **ノード** とペアリングできます。ノードはローカルの画面/カメラ/キャンバスおよび `system.run`
-の機能を提供し、Gateway はクラウドに留まります。
+の機能を提供し、Gateway はクラウドに留まります。 ノードは、ゲートウェイがクラウドにとどまる間、ローカルのスクリーン/カメラ/キャンバスと `system.run`
+機能を提供します。
 
 ドキュメント: [Nodes](/nodes), [Nodes CLI](/cli/nodes)

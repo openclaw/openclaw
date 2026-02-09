@@ -4,20 +4,13 @@ read_when:
   - Bạn muốn OpenCode Zen để truy cập mô hình
   - Bạn muốn danh sách mô hình được tuyển chọn, thân thiện với lập trình
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:55Z
 ---
 
 # OpenCode Zen
 
-OpenCode Zen là **danh sách các mô hình được tuyển chọn** do đội ngũ OpenCode đề xuất cho các tác tử lập trình.
-Đây là một tùy chọn truy cập mô hình được lưu trữ, sử dụng khóa API và nhà cung cấp `opencode`.
-Zen hiện đang ở giai đoạn beta.
+OpenCode Zen is a **curated list of models** recommended by the OpenCode team for coding agents.
+It is an optional, hosted model access path that uses an API key and the `opencode` provider.
+24. Zen hiện đang ở giai đoạn beta.
 
 ## Thiết lập CLI
 

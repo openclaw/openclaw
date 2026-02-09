@@ -5,20 +5,13 @@ read_when:
   - heartbeat များနှင့်အတူ သို့မဟုတ် အတူတကွ လည်ပတ်ရမည့် automation ကို ချိတ်ဆက်ခြင်း
   - အချိန်ဇယားချထားသော အလုပ်များအတွက် heartbeat နှင့် cron ကြား ရွေးချယ်ဆုံးဖြတ်ခြင်း
 title: "Cron Jobs"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:38Z
 ---
 
 # Cron jobs (Gateway scheduler)
 
 > **Cron vs Heartbeat?** မည်သည့်အချိန်တွင် မည်သို့အသုံးပြုရမည်ကို လမ်းညွှန်ချက်အတွက် [Cron vs Heartbeat](/automation/cron-vs-heartbeat) ကိုကြည့်ပါ။
 
-Cron သည် Gateway တွင် ထည့်သွင်းထားသော scheduler ဖြစ်သည်။ ၎င်းသည် job များကို သိမ်းဆည်းထားပြီး အချိန်မှန်အောင် agent ကို နိုးထစေကာ လိုအပ်ပါက output ကို chat သို့ ပြန်ပို့ပေးနိုင်သည်။
+5. Cron သည် Gateway ၏ built-in scheduler ဖြစ်သည်။ 6. ၎င်းသည် job များကို သိမ်းဆည်းထားပြီး၊ အချိန်မှန်အောင် agent ကို နိုးထစေကာ၊ ရွေးချယ်နိုင်ပါက output ကို chat သို့ ပြန်ပို့နိုင်သည်။
 
 _“မနက်တိုင်း အလုပ်လုပ်ပါ”_ သို့မဟုတ် _“မိနစ် ၂၀ အတွင်း agent ကို နိုးပါ”_ လိုအပ်ပါက cron ကို အသုံးပြုရပါမည်။
 
@@ -71,8 +64,8 @@ Canonical JSON ပုံစံများနှင့် ဥပမာမျာ�
 
 ## Cron jobs များ သိမ်းဆည်းထားသည့် နေရာ
 
-Cron jobs များကို ပုံမှန်အားဖြင့် Gateway ဟို့စ်ရှိ `~/.openclaw/cron/jobs.json` တွင် သိမ်းဆည်းထားသည်။
-Gateway သည် ဖိုင်ကို memory ထဲသို့ load လုပ်ပြီး ပြောင်းလဲမှုရှိသည့်အခါ ပြန်ရေးသွင်းပါသည်၊ ထို့ကြောင့် Gateway ရပ်နားထားချိန်တွင်သာ manual ပြင်ဆင်မှုများ လုံခြုံပါသည်။ ပြောင်းလဲမှုများအတွက် `openclaw cron add/edit` သို့မဟုတ် cron tool call API ကို ဦးစားပေးအသုံးပြုပါ။
+7. Cron job များကို ပုံမှန်အားဖြင့် Gateway host ရှိ `~/.openclaw/cron/jobs.json` တွင် သိမ်းဆည်းထားသည်။
+8. Gateway သည် ဖိုင်ကို memory ထဲသို့ load လုပ်ပြီး ပြောင်းလဲမှုရှိပါက ပြန်ရေးသွားသောကြောင့် Gateway ကို ရပ်ထားချိန်တွင်သာ လက်ဖြင့် ပြင်ဆင်ခြင်းသည် လုံခြုံသည်။ 9. ပြောင်းလဲရန် `openclaw cron add/edit` သို့မဟုတ် cron tool call API ကို ဦးစားပေးအသုံးပြုပါ။
 
 ## Beginner-friendly overview
 
@@ -91,7 +84,7 @@ Cron job ကို **ဘယ်အချိန်** လည်ပတ်မည် +
    - Main session → `payload.kind = "systemEvent"`
    - Isolated session → `payload.kind = "agentTurn"`
 
-ရွေးချယ်နိုင်သော အချက်—တစ်ကြိမ်တည်း job များ (`schedule.kind = "at"`) သည် အောင်မြင်ပြီးနောက် ပုံမှန်အားဖြင့် ဖျက်သိမ်းပါသည်။ သိမ်းထားလိုပါက `deleteAfterRun: false` ကို သတ်မှတ်ပါ (အောင်မြင်ပြီးနောက် disable ဖြစ်ပါမည်)။
+10) ရွေးချယ်စရာ: one-shot job များ (`schedule.kind = "at"`) သည် အောင်မြင်ပြီးနောက် ပုံမှန်အားဖြင့် အလိုအလျောက် ဖျက်ပစ်သည်။ 11. ၎င်းတို့ကို ဆက်လက်ထားလိုပါက `deleteAfterRun: false` ကို သတ်မှတ်ပါ (အောင်မြင်ပြီးနောက် disable ဖြစ်သွားမည်)။
 
 ## Concepts
 
@@ -104,9 +97,9 @@ Cron job တစ်ခုတွင် အောက်ပါအချက်မျ�
 - ရွေးချယ်နိုင်သော **delivery mode** (announce သို့မဟုတ် none)။
 - ရွေးချယ်နိုင်သော **agent binding** (`agentId`): သတ်မှတ်ထားသော agent ဖြင့် လည်ပတ်စေခြင်း; မရှိပါက သို့မဟုတ် မသိပါက Gateway သည် default agent သို့ ပြန်လည်ရွေးချယ်ပါသည်။
 
-Jobs များကို တည်ငြိမ်သော `jobId` ဖြင့် ခွဲခြားသတ်မှတ်ပါသည် (CLI/Gateway APIs တွင် အသုံးပြုသည်)။
-Agent tool calls တွင် `jobId` သည် canonical ဖြစ်ပြီး legacy `id` ကို compatibility အတွက် လက်ခံပါသည်။
-တစ်ကြိမ်တည်း job များသည် ပုံမှန်အားဖြင့် အောင်မြင်ပြီးနောက် auto-delete ဖြစ်ပါသည်; သိမ်းထားလိုပါက `deleteAfterRun: false` ကို သတ်မှတ်ပါ။
+12. Job များကို တည်ငြိမ်သော `jobId` ဖြင့် သတ်မှတ်ထားသည် (CLI/Gateway API များတွင် အသုံးပြုသည်)။
+    In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
+13. One-shot job များသည် အောင်မြင်ပြီးနောက် ပုံမှန်အားဖြင့် အလိုအလျောက် ဖျက်ပစ်သည်။ ဆက်လက်ထားလိုပါက `deleteAfterRun: false` ကို သတ်မှတ်ပါ။
 
 ### Schedules
 
@@ -116,20 +109,21 @@ Cron သည် schedule အမျိုးအစား သုံးမျို�
 - `every`: သတ်မှတ်ထားသော interval (ms)။
 - `cron`: IANA timezone ရွေးချယ်နိုင်သော 5-field cron expression။
 
-Cron expressions များတွင် `croner` ကို အသုံးပြုပါသည်။ Timezone မပါပါက Gateway ဟို့စ်၏ local timezone ကို အသုံးပြုပါသည်။
+15. Cron expression များသည် `croner` ကို အသုံးပြုသည်။ If a timezone is omitted, the Gateway host’s
+    local timezone is used.
 
 ### Main vs isolated execution
 
 #### Main session jobs (system events)
 
-Main jobs များသည် system event ကို queue ထဲသို့ ထည့်ပြီး လိုအပ်ပါက heartbeat runner ကို နိုးထစေပါသည်။
-၎င်းတို့သည် `payload.kind = "systemEvent"` ကို အသုံးပြုရပါမည်။
+17. Main job များသည် system event တစ်ခုကို enqueue လုပ်ပြီး ရွေးချယ်နိုင်ပါက heartbeat runner ကို နိုးထစေသည်။
+18. ၎င်းတို့သည် `payload.kind = "systemEvent"` ကို အသုံးပြုရမည်။
 
 - `wakeMode: "now"` (default): event သည် ချက်ချင်း heartbeat ကို လည်ပတ်စေသည်။
 - `wakeMode: "next-heartbeat"`: event သည် နောက် scheduled heartbeat ကို စောင့်ဆိုင်းသည်။
 
-ပုံမှန် heartbeat prompt + main-session context ကို လိုအပ်သည့်အခါ အကောင်းဆုံး ကိုက်ညီပါသည်။
-[Heartbeat](/gateway/heartbeat) ကိုကြည့်ပါ။
+19. သာမန် heartbeat prompt + main-session context ကို လိုချင်သောအခါ ဤနည်းလမ်းသည် အကောင်းဆုံး ကိုက်ညီသည်။
+    See [Heartbeat](/gateway/heartbeat).
 
 #### Isolated jobs (dedicated cron sessions)
 
@@ -169,14 +163,14 @@ Delivery config (isolated jobs only)—
 - `delivery.to`: channel-specific target (ဖုန်း/ချက်/ချန်နယ် id)။
 - `delivery.bestEffort`: announce delivery မအောင်မြင်ပါက job ကို မဖျက်သိမ်းရန်။
 
-Announce delivery သည် run အတွက် messaging tool sends များကို တားဆီးပါသည်; chat ကို target လုပ်လိုပါက `delivery.channel`/`delivery.to` ကို အသုံးပြုပါ။ `delivery.mode = "none"` ဖြစ်ပါက main session သို့ အကျဉ်းချုပ် မတင်ပါ။
+21. Announce delivery သည် run အတွင်း messaging tool send များကို ဖိနှိပ်ထားသည်။ Chat ကို ရည်ညွှန်းရန် `delivery.channel`/`delivery.to` ကို အသုံးပြုပါ။ 22. `delivery.mode = "none"` ဖြစ်ပါက main session သို့ summary ကို မတင်ပါ။
 
 Isolated jobs များအတွက် `delivery` မသတ်မှတ်ထားပါက OpenClaw သည် ပုံမှန်အားဖြင့် `announce` ကို အသုံးပြုပါသည်။
 
 #### Announce delivery flow
 
-`delivery.mode = "announce"` ဖြစ်ပါက cron သည် outbound channel adapters မှတဆင့် တိုက်ရိုက် ပို့ဆောင်ပါသည်။
-Main agent ကို မစတင်ဘဲ မက်ဆေ့ချ်ကို ဖန်တီး သို့မဟုတ် ပြန်ပို့ခြင်း မလုပ်ပါ။
+When `delivery.mode = "announce"`, cron delivers directly via the outbound channel adapters.
+24. စာကို ဖန်တီးခြင်း သို့မဟုတ် လွှဲပြောင်းပို့ခြင်းအတွက် main agent ကို မဖွင့်ပေးပါ။
 
 အပြုအမူ အသေးစိတ်—
 
@@ -194,7 +188,7 @@ Isolated jobs (`agentTurn`) များသည် model နှင့် thinking
 - `model`: Provider/model string (ဥပမာ `anthropic/claude-sonnet-4-20250514`) သို့မဟုတ် alias (ဥပမာ `opus`)
 - `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models များသာ)
 
-မှတ်ချက်—Main-session jobs များတွင်လည်း `model` ကို သတ်မှတ်နိုင်သော်လည်း shared main session model ကို ပြောင်းလဲသွားစေပါသည်။ မမျှော်လင့်သော context ပြောင်းလဲမှုများ မဖြစ်စေရန် isolated jobs များတွင်သာ model override များကို အကြံပြုပါသည်။
+25. မှတ်ချက်: main-session job များတွင်လည်း `model` ကို သတ်မှတ်နိုင်သော်လည်း shared main session model ကို ပြောင်းလဲသွားစေသည်။ 26. မမျှော်လင့်သော context ပြောင်းလဲမှုများကို ရှောင်ရှားရန် isolated job များအတွက်သာ model override များကို အကြံပြုပါသည်။
 
 Resolution priority—
 
@@ -221,7 +215,7 @@ Target format သတိပေးချက်များ—
 
 #### Telegram delivery targets (topics / forum threads)
 
-Telegram သည် forum topics ကို `message_thread_id` မှတဆင့် ပံ့ပိုးပါသည်။ Cron delivery အတွက် topic/thread ကို `to` field ထဲသို့ encode လုပ်နိုင်ပါသည်—
+27. Telegram သည် `message_thread_id` ဖြင့် forum topic များကို ထောက်ပံ့သည်။ 28. Cron delivery အတွက် topic/thread ကို `to` field ထဲတွင် encode လုပ်နိုင်သည်။
 
 - `-1001234567890` (chat id သာ)
 - `-1001234567890:topic:123` (အကြံပြု: explicit topic marker)
@@ -233,8 +227,8 @@ Telegram သည် forum topics ကို `message_thread_id` မှတဆင့
 
 ## JSON schema for tool calls
 
-Gateway `cron.*` tools များကို တိုက်ရိုက် ခေါ်ယူသည့်အခါ (agent tool calls သို့မဟုတ် RPC) အတွက် အောက်ပါ ပုံစံများကို အသုံးပြုပါ။
-CLI flags များသည် `20m` ကဲ့သို့သော human durations ကို လက်ခံပါသော်လည်း tool calls များတွင် `schedule.at` အတွက် ISO 8601 string နှင့် `schedule.everyMs` အတွက် milliseconds ကို အသုံးပြုရပါမည်။
+29. Gateway `cron.*` tool များကို တိုက်ရိုက်ခေါ်သောအခါ (agent tool call သို့မဟုတ် RPC) ဤ shape များကို အသုံးပြုပါ။
+30. CLI flag များသည် `20m` ကဲ့သို့ လူသားနားလည်လွယ်သော duration များကို လက်ခံသော်လည်း tool call များတွင် `schedule.at` အတွက် ISO 8601 string နှင့် `schedule.everyMs` အတွက် milliseconds ကို အသုံးပြုရမည်။
 
 ### cron.add params
 

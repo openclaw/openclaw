@@ -3,13 +3,6 @@ summary: "`openclaw agents`에 대한 CLI 참조 (목록/추가/삭제/아이덴
 read_when:
   - 여러 개의 격리된 에이전트 (워크스페이스 + 라우팅 + 인증)가 필요할 때
 title: "에이전트"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:11Z
 ---
 
 # `openclaw agents`

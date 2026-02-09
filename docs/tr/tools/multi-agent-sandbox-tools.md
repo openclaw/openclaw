@@ -3,13 +3,6 @@ summary: "Ajan başına sandbox ve araç kısıtlamaları, öncelik ve örnekler
 title: Çok Ajanlı Sandbox ve Araçlar
 read_when: "Çok ajanlı bir Gateway’de ajan başına sandboxing veya ajan başına araç izin/verme ya da engelleme politikaları istiyorsanız."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:00Z
 ---
 
 # Çok Ajanlı Sandbox ve Araçlar Yapılandırması
@@ -147,7 +140,7 @@ Sandboxing’in çalışma zamanındaki davranışı için [Sandboxing](/gateway
 
 **Sonuç:**
 
-- Varsayılan ajanlar kodlama araçlarını alır
+- 33. varsayılan ajanlar kodlama araçlarına sahiptir
 - `support` ajanı yalnızca mesajlaşma içindir (+ Slack aracı)
 
 ---
@@ -212,7 +205,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 - `agents.list[].sandbox.{docker,browser,prune}.*`, ilgili ajan için `agents.defaults.sandbox.{docker,browser,prune}.*`’ü geçersiz kılar (sandbox kapsamı `"shared"`’e çözümlendiğinde yok sayılır).
 
-### Araç Kısıtlamaları
+### 34. Araç Kısıtlamaları
 
 Filtreleme sırası:
 
@@ -257,9 +250,9 @@ Azaltma desenleri:
 
 ---
 
-## Tek Ajandan Geçiş
+## 35. Tek Ajandan Geçiş
 
-**Önce (tek ajan):**
+36. **Önce (tek ajan):**
 
 ```json
 {
@@ -305,7 +298,7 @@ Eski `agent.*` yapılandırmaları `openclaw doctor` tarafından taşınır; bun
 
 ## Araç Kısıtlama Örnekleri
 
-### Salt Okunur Ajan
+### 37. Salt okunur Ajan
 
 ```json
 {
@@ -342,8 +335,7 @@ Eski `agent.*` yapılandırmaları `openclaw doctor` tarafından taşınır; bun
 
 ## Yaygın Tuzak: "non-main"
 
-`agents.defaults.sandbox.mode: "non-main"`, ajan kimliğine değil `session.mainKey`’ya (varsayılan `"main"`) dayanır.
-Grup/kanal oturumları her zaman kendi anahtarlarını alır; bu nedenle non-main olarak
+`agents.defaults.sandbox.mode: "non-main"`, ajan kimliğine değil `session.mainKey`’ya (varsayılan `"main"`) dayanır. Grup/kanal oturumları her zaman kendi anahtarlarını alır; bu nedenle non-main olarak
 ele alınır ve sandbox içine alınır. Bir ajanın asla sandbox’a girmemesini istiyorsanız
 `agents.list[].sandbox.mode: "off"`’i ayarlayın.
 

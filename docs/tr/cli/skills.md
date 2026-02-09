@@ -4,13 +4,6 @@ read_when:
   - Hangi skill’lerin kullanılabilir ve çalışmaya hazır olduğunu görmek istiyorsunuz
   - Skill’ler için eksik ikililer/ortam değişkenleri/yapılandırmayı hata ayıklamak istiyorsunuz
 title: "skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:01Z
 ---
 
 # `openclaw skills`

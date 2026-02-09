@@ -3,13 +3,6 @@ summary: "Referência da CLI para `openclaw configure` (prompts interativos de c
 read_when:
   - Você quer ajustar credenciais, dispositivos ou padrões do agente de forma interativa
 title: "configurar"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:13Z
 ---
 
 # `openclaw configure`

@@ -4,13 +4,6 @@ read_when:
   - Je wilt een Feishu/Lark-bot verbinden
   - Je de Feishu-channel configureert
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:22Z
 ---
 
 # Feishu-bot
@@ -262,11 +255,12 @@ Na goedkeuring kun je normaal chatten.
 
 ---
 
-## Toegangsbeheer
+## Toegangs beheer
 
 ### Directe berichten
 
 - **Standaard**: `dmPolicy: "pairing"` (onbekende gebruikers krijgen een koppelingscode)
+
 - **Koppeling goedkeuren**:
 
   ```bash
@@ -276,7 +270,7 @@ Na goedkeuring kun je normaal chatten.
 
 - **Toegestane-lijstmodus**: stel `channels.feishu.allowFrom` in met toegestane Open ID's
 
-### Groepschats
+### Groep chats
 
 **1. Groepsbeleid** (`channels.feishu.groupPolicy`):
 
@@ -449,7 +443,7 @@ openclaw pairing list feishu
 }
 ```
 
-### Berichtlimieten
+### Limiet bericht
 
 - `textChunkLimit`: uitgaande tekstblokgrootte (standaard: 2000 tekens)
 - `mediaMaxMb`: upload-/downloadlimiet voor media (standaard: 30 MB)
@@ -528,40 +522,40 @@ Zie [Groeps-/gebruikers-ID's ophalen](#get-groupuser-ids) voor tips om deze op t
 
 ---
 
-## Configuratiereferentie
+## Configuratie referentie
 
 Volledige configuratie: [Gateway-configuratie](/gateway/configuration)
 
 Belangrijke opties:
 
-| Instelling                                        | Beschrijving                         | Standaard |
-| ------------------------------------------------- | ------------------------------------ | --------- |
-| `channels.feishu.enabled`                         | Kanaal in-/uitschakelen              | `true`    |
-| `channels.feishu.domain`                          | API-domein (`feishu` of `lark`)      | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                               | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                           | -         |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API-domeinoverschrijving | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM-beleid                            | `pairing` |
-| `channels.feishu.allowFrom`                       | DM-toegestane lijst (open_id-lijst)  | -         |
-| `channels.feishu.groupPolicy`                     | Groepsbeleid                         | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Groepstoegestane lijst               | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | @vermelding vereist                  | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Groep inschakelen                    | `true`    |
-| `channels.feishu.textChunkLimit`                  | Berichtblokgrootte                   | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Medialimiet                          | `30`      |
-| `channels.feishu.streaming`                       | Streamingkaart-uitvoer inschakelen   | `true`    |
-| `channels.feishu.blockStreaming`                  | Blokstreaming inschakelen            | `true`    |
+| Instelling                                        | Beschrijving                                                                | Standaard |
+| ------------------------------------------------- | --------------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | Kanaal in-/uitschakelen                                                     | `true`    |
+| `channels.feishu.domain`                          | API-domein (`feishu` of `lark`)                          | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                      | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                  | -         |
+| `channels.feishu.accounts.<id>.domain`            | Per-account API-domeinoverschrijving                                        | `feishu`  |
+| `channels.feishu.dmPolicy`                        | DM-beleid                                                                   | `pairing` |
+| `channels.feishu.allowFrom`                       | DM-toegestane lijst (open_id-lijst) | -         |
+| `channels.feishu.groupPolicy`                     | Groepsbeleid                                                                | `open`    |
+| `channels.feishu.groupAllowFrom`                  | Groepstoegestane lijst                                                      | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | @vermelding vereist                                            | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | Groep inschakelen                                                           | `true`    |
+| `channels.feishu.textChunkLimit`                  | Berichtblokgrootte                                                          | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | Medialimiet                                                                 | `30`      |
+| `channels.feishu.streaming`                       | Streamingkaart-uitvoer inschakelen                                          | `true`    |
+| `channels.feishu.blockStreaming`                  | Blokstreaming inschakelen                                                   | `true`    |
 
 ---
 
 ## dmPolicy-referentie
 
-| Waarde        | Gedrag                                                                                    |
-| ------------- | ----------------------------------------------------------------------------------------- |
+| Waarde        | Gedrag                                                                                                    |
+| ------------- | --------------------------------------------------------------------------------------------------------- |
 | `"pairing"`   | **Standaard.** Onbekende gebruikers krijgen een koppelingscode; moeten worden goedgekeurd |
-| `"allowlist"` | Alleen gebruikers in `allowFrom` kunnen chatten                                           |
-| `"open"`      | Alle gebruikers toestaan (vereist `"*"` in allowFrom)                                     |
-| `"disabled"`  | DM's uitschakelen                                                                         |
+| `"allowlist"` | Alleen gebruikers in `allowFrom` kunnen chatten                                                           |
+| `"open"`      | Alle gebruikers toestaan (vereist `"*"` in allowFrom)                                  |
+| `"disabled"`  | DM's uitschakelen                                                                                         |
 
 ---
 

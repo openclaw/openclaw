@@ -2,13 +2,6 @@
 summary: "새 에이전트를 위한 최초 실행 의식"
 read_when:
   - 작업공간을 수동으로 부트스트랩할 때
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:07Z
 ---
 
 # BOOTSTRAP.md - Hello, World

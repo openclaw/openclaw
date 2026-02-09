@@ -4,21 +4,11 @@ read_when:
   - OpenClaw တွင် MiniMax မော်ဒယ်များကို အသုံးပြုလိုပါက
   - MiniMax တပ်ဆင်မှု လမ်းညွှန်ချက်များ လိုအပ်ပါက
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:57Z
 ---
 
 # MiniMax
 
-MiniMax သည် **M2/M2.1** မော်ဒယ် မိသားစုကို ဖန်တီးထားသော AI ကုမ္ပဏီဖြစ်သည်။ လက်ရှိ
-ကုဒ်ရေးသားမှုအပေါ် အလေးပေးထားသော ထုတ်လွှင့်မှုမှာ **MiniMax M2.1**
-(ဒီဇင်ဘာ 23၊ 2025) ဖြစ်ပြီး အမှန်တကယ် လောကအတွင်းရှိ ရှုပ်ထွေးသော လုပ်ငန်းများအတွက်
-တည်ဆောက်ထားပါသည်။
+MiniMax သည် **M2/M2.1** model family ကို တည်ဆောက်သော AI ကုမ္ပဏီဖြစ်သည်။ လက်ရှိ coding ကို အဓိကထားသော release သည် **MiniMax M2.1** (December 23, 2025) ဖြစ်ပြီး လက်တွေ့ကမ္ဘာရှိ complex tasks များအတွက် တည်ဆောက်ထားသည်။
 
 ရင်းမြစ်: [MiniMax M2.1 release note](https://www.minimax.io/news/minimax-m21)
 
@@ -39,9 +29,7 @@ MiniMax မှ M2.1 တွင် အောက်ပါ တိုးတက်မ�
 
 - **မြန်နှုန်း:** Lightning သည် MiniMax ၏ စျေးနှုန်း စာရွက်စာတမ်းများတွင် “မြန်ဆန်” ဗားရှင်းအဖြစ် ဖော်ပြထားသည်။
 - **ကုန်ကျစရိတ်:** input ကုန်ကျစရိတ် တူညီသော်လည်း Lightning တွင် output ကုန်ကျစရိတ် ပိုမိုမြင့်မားသည်။
-- **Coding plan routing:** Lightning back-end ကို MiniMax coding plan တွင် တိုက်ရိုက် မရနိုင်ပါ။
-  MiniMax သည် တောင်းဆိုမှု အများစုကို Lightning သို့ အလိုအလျောက် ပို့ဆောင်ပေးသော်လည်း
-  traffic မြင့်တက်ချိန်တွင် ပုံမှန် M2.1 back-end သို့ ပြန်လည် လွှဲပြောင်းအသုံးပြုပါသည်။
+- **Coding plan routing:** MiniMax coding plan တွင် Lightning back-end ကို တိုက်ရိုက် အသုံးမပြုနိုင်ပါ။ MiniMax သည် requests အများစုကို Lightning သို့ auto-route လုပ်ပေးသော်လည်း traffic spike ဖြစ်သည့်အချိန်တွင် regular M2.1 back-end သို့ fallback လုပ်ပါသည်။
 
 ## တပ်ဆင်ပုံ ရွေးချယ်ခြင်း
 
@@ -126,9 +114,8 @@ CLI မှတစ်ဆင့် ဖွဲ့စည်းပြင်ဆင်ပ
 
 ### ရွေးချယ်နိုင်သောအချက်: LM Studio ဖြင့် Local (manual)
 
-**သင့်တော်သောအခြေအနေ:** LM Studio ဖြင့် local inference ပြုလုပ်လိုပါက။
-အားကောင်းသော ဟာ့ဒ်ဝဲ (ဥပမာ desktop/server) တွင် LM Studio ၏ local server ကို အသုံးပြုပြီး
-MiniMax M2.1 မှ ရလဒ်ကောင်းများ ရရှိခဲ့သည်ကို တွေ့ရှိထားပါသည်။
+**Best for:** LM Studio ဖြင့် local inference လုပ်ရန်။
+အစွမ်းထက် hardware (ဥပမာ desktop/server) ပေါ်တွင် LM Studio ၏ local server ကို အသုံးပြုသောအခါ MiniMax M2.1 နှင့် အလွန်ကောင်းသော ရလဒ်များကို တွေ့ရှိခဲ့ပါသည်။
 
 `openclaw.json` မှတစ်ဆင့် manual ဖွဲ့စည်းပြင်ဆင်ပါ–
 
@@ -195,10 +182,7 @@ JSON ကို မတည်းဖြတ်ဘဲ MiniMax ကို သတ်မ�
 
 ### “Unknown model: minimax/MiniMax-M2.1”
 
-ဤအရာသည် အများအားဖြင့် **MiniMax provider ကို မဖွဲ့စည်းထားခြင်း** (provider entry မရှိခြင်း
-နှင့် MiniMax auth profile/env key မတွေ့ရှိခြင်း) ကို ဆိုလိုပါသည်။ ဤသိရှိမှု ပြဿနာအတွက်
-ပြင်ဆင်ချက်ကို **2026.1.12** တွင် ထည့်သွင်းထားပြီး (ရေးသားချိန်တွင် မထုတ်ပြန်သေးပါ)။
-အောက်ပါအတိုင်း ပြင်ဆင်နိုင်ပါသည်–
+ဤအရာသည် ပုံမှန်အားဖြင့် **MiniMax provider ကို မconfigure လုပ်ထားခြင်း** (provider entry မရှိခြင်းနှင့် MiniMax auth profile/env key မတွေ့ရှိခြင်း) ကို ဆိုလိုပါသည်။ ဤ detection အတွက် fix တစ်ခုကို **2026.1.12** (ရေးသားချိန်တွင် မထုတ်ပြန်ရသေး) တွင် ထည့်သွင်းထားပါသည်။ ပြုပြင်ရန်:
 
 - **2026.1.12** သို့ upgrade လုပ်ပါ (သို့မဟုတ် source မှ `main` ဖြင့် လည်ပတ်ပါ)၊ ထို့နောက် gateway ကို ပြန်လည်စတင်ပါ။
 - `openclaw configure` ကို လုပ်ဆောင်ပြီး **MiniMax M2.1** ကို ရွေးချယ်ပါ၊ သို့မဟုတ်

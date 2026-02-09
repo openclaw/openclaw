@@ -1,15 +1,8 @@
 ---
-summary: „Routing wieloagentowy: izolowane agenty, konta kanałów i powiązania”
+summary: "„Routing wieloagentowy: izolowane agenty, konta kanałów i powiązania”"
 title: Routing wieloagentowy
-read_when: „Gdy chcesz mieć wiele izolowanych agentów (obszary robocze + uwierzytelnianie) w jednym procesie Gateway.”
+read_when: "„Gdy chcesz mieć wiele izolowanych agentów (obszary robocze + uwierzytelnianie) w jednym procesie Gateway.”"
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Routing wieloagentowy
@@ -89,8 +82,7 @@ Pozwala to **wielu osobom** współdzielić jeden serwer Gateway, zachowując iz
 
 ## Jeden numer WhatsApp, wiele osób (podział DM)
 
-Możesz kierować **różne DM-y WhatsApp** do różnych agentów, pozostając przy **jednym koncie WhatsApp**.
-Dopasuj po nadawcy E.164 (np. `+15551234567`) za pomocą `peer.kind: "dm"`. Odpowiedzi nadal wychodzą z tego samego numeru WhatsApp (brak tożsamości nadawcy per agent).
+Możesz kierować **różne DM-y WhatsApp** do różnych agentów, pozostając przy **jednym koncie WhatsApp**. Dopasuj po nadawcy E.164 (np. `+15551234567`) za pomocą `peer.kind: "dm"`. Odpowiedzi nadal wychodzą z tego samego numeru WhatsApp (brak tożsamości nadawcy per agent).
 
 Ważny szczegół: czaty bezpośrednie zapadają się do **głównego klucza sesji** agenta, więc prawdziwa izolacja wymaga **jednego agenta na osobę**.
 

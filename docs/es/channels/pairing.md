@@ -1,17 +1,10 @@
 ---
-summary: "Resumen del emparejamiento: aprobar quién puede enviarle mensajes directos + qué nodos pueden unirse"
+summary: "Resumen de emparejamiento: aprueba quién puede DM + qué nodos pueden unirse"
 read_when:
   - Configurar el control de acceso a mensajes directos
   - Emparejar un nuevo nodo iOS/Android
   - Revisar la postura de seguridad de OpenClaw
 title: "Emparejamiento"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:38Z
 ---
 
 # Emparejamiento
@@ -24,7 +17,7 @@ Se utiliza en dos lugares:
 
 Contexto de seguridad: [Security](/gateway/security)
 
-## 1) Emparejamiento de mensajes directos (acceso entrante al chat)
+## 1. Emparejamiento de mensajes directos (acceso entrante al chat)
 
 Cuando un canal se configura con la política de mensajes directos `pairing`, los remitentes desconocidos reciben un código corto y su mensaje **no se procesa** hasta que usted apruebe.
 
@@ -54,7 +47,7 @@ Almacenado bajo `~/.openclaw/credentials/`:
 
 Trate estos elementos como sensibles (controlan el acceso a su asistente).
 
-## 2) Emparejamiento de dispositivos de nodo (nodos iOS/Android/macOS/headless)
+## 2. Emparejamiento de dispositivos de nodo (nodos iOS/Android/macOS/headless)
 
 Los nodos se conectan al Gateway como **dispositivos** con `role: node`. El Gateway
 crea una solicitud de emparejamiento de dispositivo que debe ser aprobada.

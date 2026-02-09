@@ -5,21 +5,14 @@ read_when:
   - Felsöka protokollmismatchar eller anslutningsfel
   - Återskapa protokollscheman/-modeller
 title: "Gateway-protokoll"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:27Z
 ---
 
 # Gateway-protokoll (WebSocket)
 
-Gateway WS-protokollet är det **enda kontrollplanet + nodtransporten** för
-OpenClaw. Alla klienter (CLI, webb-UI, macOS-app, iOS/Android-noder, headless
-noder) ansluter via WebSocket och deklarerar sin **roll** + **omfattning** vid
-handskakning.
+Gateway WS-protokollet är **enda styrplan + nodtransport** för
+OpenClaw. Alla klienter (CLI, web UI, macOS app, iOS/Android noder, headless
+noder) ansluter via WebSocket och deklarerar sin **roll** + **scope** vid
+handskakningstid.
 
 ## Transport
 
@@ -162,7 +155,7 @@ Noder deklarerar kapabilitetsanspråk vid anslutning:
 
 - `caps`: övergripande kapabilitetskategorier.
 - `commands`: tillåtelselista för kommandon som får anropas.
-- `permissions`: detaljerade växlar (t.ex. `screen.record`, `camera.capture`).
+- `permissions`: granulära växlar (t.ex. `screen.record`, `camera.capture`).
 
 Gateway behandlar dessa som **anspråk** och upprätthåller tillåtelselistor på serversidan.
 
@@ -195,9 +188,9 @@ Gateway behandlar dessa som **anspråk** och upprätthåller tillåtelselistor p
 
 - Om `OPENCLAW_GATEWAY_TOKEN` (eller `--token`) är inställd måste `connect.params.auth.token`
   matcha, annars stängs socketen.
-- Efter parning utfärdar Gateway en **enhetstoken** med omfattning enligt anslutningens
-  roll + omfattningar. Den returneras i `hello-ok.auth.deviceToken` och bör
-  sparas av klienten för framtida anslutningar.
+- Efter parning utfärdar Gatewayen en **enhetskoden** som omfattades av anslutningen
+  roll + omfattning. Det returneras i `hello-ok.auth.deviceToken` och bör vara
+  ihärdigt av klienten för framtida anslutningar.
 - Enhetstoken kan roteras/återkallas via `device.token.rotate` och
   `device.token.revoke` (kräver omfattningen `operator.pairing`).
 
@@ -210,9 +203,9 @@ Gateway behandlar dessa som **anspråk** och upprätthåller tillåtelselistor p
   är aktiverat.
 - **Lokala** anslutningar inkluderar loopback och gateway-värdens egen tailnet-adress
   (så att same-host-tailnet-bindningar fortfarande kan auto-godkännas).
-- Alla WS-klienter måste inkludera identiteten `device` under `connect` (operatör + nod).
-  Kontroll-UI kan utelämna den **endast** när `gateway.controlUi.allowInsecureAuth` är aktiverat
-  (eller `gateway.controlUi.dangerouslyDisableDeviceAuth` för break-glass-användning).
+- Alla WS-klienter måste inkludera `device` -identitet under `connect` (operator + node).
+  Control UI kan utelämna det **bara** när `gateway.controlUi.allowInsecureAuth` är aktiverat
+  (eller `gateway.controlUi.dangerouslyDisableDeviceAuth` för användning med glasbrott).
 - Icke-lokala anslutningar måste signera den serverlevererade `connect.challenge`-noncen.
 
 ## TLS + pinning
@@ -223,6 +216,6 @@ Gateway behandlar dessa som **anspråk** och upprätthåller tillåtelselistor p
 
 ## Omfattning
 
-Detta protokoll exponerar **hela gateway-API:t** (status, kanaler, modeller, chatt,
-agent, sessioner, noder, godkännanden m.m.). Den exakta ytan definieras av
-TypeBox-scheman i `src/gateway/protocol/schema.ts`.
+Detta protokoll exponerar **hela gateway API** (status, kanaler, modeller, chatt,
+agent, sessioner, noder, godkännanden, etc.). Den exakta ytan definieras av scheman
+TypeBox i `src/gateway/protocol/schema.ts`.

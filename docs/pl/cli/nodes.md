@@ -4,13 +4,6 @@ read_when:
   - Zarządzasz sparowanymi węzłami (kamery, ekran, płótno)
   - Musisz zatwierdzać żądania lub wywoływać polecenia węzłów
 title: "węzły"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:59Z
 ---
 
 # `openclaw nodes`
@@ -53,7 +46,7 @@ openclaw nodes run --raw "git status"
 openclaw nodes run --agent main --node <id|name|ip> --raw "git status"
 ```
 
-Flagi wywołania:
+Wywołaj flagi:
 
 - `--params <json>`: ciąg obiektu JSON (domyślnie `{}`).
 - `--invoke-timeout <ms>`: limit czasu wywołania węzła (domyślnie `15000`).

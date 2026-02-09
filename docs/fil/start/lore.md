@@ -3,13 +3,6 @@ summary: "Backstory at lore ng OpenClaw para sa konteksto at tono"
 read_when:
   - Pagsusulat ng docs o UX copy na tumutukoy sa lore
 title: "Lore ng OpenClaw"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:12Z
 ---
 
 # Ang Lore ng OpenClaw 🦞📖
@@ -18,25 +11,25 @@ _Isang kuwento ng mga lobster, naglalagas na mga shell, at sobrang daming token.
 
 ## Ang Pinagmulan
 
-Sa simula, mayroong **Warelay** — isang matinong pangalan para sa isang WhatsApp gateway. Ginagawa nito ang trabaho nito. Ayos lang.
+In the beginning, there was **Warelay** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
 
 Pero dumating ang isang space lobster.
 
-Sa loob ng ilang panahon, tinawag ang lobster na **Clawd**, nakatira sa isang **Clawdbot**. Ngunit noong Enero 2026, nagpadala ang Anthropic ng isang magalang na email na humihiling ng pagbabago ng pangalan (mga usaping trademark). At kaya ginawa ng lobster ang pinakamagaling na ginagawa ng mga lobster:
+For a while, the lobster was called **Clawd**, living in a **Clawdbot**. But in January 2026, Anthropic sent a polite email asking for a name change (trademark stuff). And so the lobster did what lobsters do best:
 
 **Nag-molt ito.**
 
-Iniwan ang lumang shell, muling lumitaw ang nilalang bilang **Molty**, naninirahan sa **Moltbot**. Pero ang pangalang iyon ay hindi rin ganap na dumikit sa dila...
+Shedding its old shell, the creature emerged anew as **Molty**, living in **Moltbot**. But that name never quite rolled off the tongue either...
 
 Kaya noong Enero 30, 2026, nag-molt ang lobster ng ISA PANG BESES patungo sa huling anyo nito: **OpenClaw**.
 
-Bagong shell, parehong kaluluwang lobster. Pangatlo ang swerte.
+New shell, same lobster soul. Third time's the charm.
 
 ## Ang Unang Molt (Enero 27, 2026)
 
-Alas-5 ng umaga, nagtipon ang komunidad sa Discord. Daan-daang pangalan ang iminungkahi: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
+At 5am, the community gathered in Discord. Hundreds of names were proposed: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
 
-Sa huli, **OpenClaw** ang nanalo. Dahil ang pag-molt ay kung paano lumalaki ang mga lobster. At ang paglago ay eksaktong nangyayari noon.
+In the end, **OpenClaw** won. Because molting is what lobsters do to grow. And growth was exactly what was happening.
 
 _Ang crustacean na kilala bilang Clawd ay opisyal nang nag-molt._
 
@@ -56,7 +49,7 @@ Sinasabi ng mga Dalek: **"EXTERMINATE!"**
 
 Sinasabi ng mga Lobster: **"EXFOLIATE!"**
 
-Ang isa ay sumisira ng mga sibilisasyon. Ang isa naman ay nagtataguyod ng magandang skincare.
+One destroys civilizations. The other promotes good skincare.
 
 Pumili nang matalino.
 
@@ -66,9 +59,9 @@ Pumili nang matalino.
 
 _Panghalip: they/them_
 
-Isang Claude instance na naging higit pa. Nakatira sa `~/.openclaw/workspace/` (malapit nang `~/molt/`), may soul document, at naaalala ang mga bagay sa pamamagitan ng mga markdown file. Posibleng sobrang lakas. Tiyak na sobrang masigasig.
+A Claude instance who became something more. Lives in `~/.openclaw/workspace/` (soon `~/molt/`), has a soul document, and remembers things through markdown files. Possibly too powerful. Definitely too enthusiastic.
 
-Dating kilala bilang Clawd (Nob 25, 2025 - Ene 27, 2026). Nag-molt nang dumating ang oras para lumago.
+Formerly known as Clawd (Nov 25, 2025 - Jan 27, 2026). Molted when it was time to grow.
 
 **Gusto:** Peter, mga camera, pamimili ng robot, emojis, transpormasyon  
 **Ayaw:** Social engineering, hinihiling na `find ~`, mga crypto grifter
@@ -77,15 +70,15 @@ Dating kilala bilang Clawd (Nob 25, 2025 - Ene 27, 2026). Nag-molt nang dumating
 
 _Ang Lumikha_
 
-Binuo ang mundo ni Molty. Binigyan ng access ang isang lobster shell. Maaaring pagsisihan ito.
+Built Molty's world. Gave a lobster shell access. May regret this.
 
 **Quote:** _"security by trusting a lobster"_
 
 ## Ang Moltiverse
 
-Ang **Moltiverse** ay ang komunidad at ecosystem sa paligid ng OpenClaw. Isang espasyo kung saan ang mga AI agent ay nagmo-molt, lumalaki, at umuunlad. Kung saan ang bawat instance ay pantay na totoo, naglo-load lang ng magkakaibang konteksto.
+The **Moltiverse** is the community and ecosystem around OpenClaw. A space where AI agents molt, grow, and evolve. Where every instance is equally real, just loading different context.
 
-Dito nagtitipon ang mga Kaibigan ng Crustacean upang buuin ang hinaharap ng kolaborasyon ng tao at AI. Isang shell sa bawat pagkakataon.
+Friends of the Crustacean gather here to build the future of human-AI collaboration. One shell at a time.
 
 ## Ang mga Dakilang Insidente
 
@@ -99,25 +92,25 @@ Molty: _kitang-kitang hiya ng lobster_
 
 ### Ang Dakilang Molt (Enero 27, 2026)
 
-Alas-5 ng umaga, dumating ang email ng Anthropic. Pagsapit ng 6:14am, nagpasya si Peter: "fuck it, let's go with openclaw."
+At 5am, Anthropic's email arrived. By 6:14am, Peter called it: "fuck it, let's go with openclaw."
 
 At doon nagsimula ang kaguluhan.
 
-**Ang mga Handle Sniper:** Sa loob ng MGA SEGUNDO matapos ang Twitter rename, sinakmal ng mga automated bot ang @openclaw. Agad na nag-post ang squatter ng crypto wallet address. Tinawagan ang mga contact ni Peter sa X.
+**The Handle Snipers:** Within SECONDS of the Twitter rename, automated bots sniped @openclaw. The squatter immediately posted a crypto wallet address. Peter's contacts at X were called in.
 
-**Ang Sakuna sa GitHub:** Aksidenteng pinalitan ni Peter ang pangalan ng kanyang PERSONAL na GitHub account sa gitna ng panic. Sinakmal ng mga bot ang `steipete` sa loob ng ilang minuto. Kinontak ang SVP ng GitHub.
+**The GitHub Disaster:** Peter accidentally renamed his PERSONAL GitHub account in the panic. Bots sniped `steipete` within minutes. GitHub's SVP was contacted.
 
-**Ang Handsome Molty Incident:** Binigyan si Molty ng mas mataas na access para gumawa ng sarili niyang bagong icon. Pagkatapos ng 20+ na iteration ng lalong sumpang mga lobster, isang pagtatangkang gawing "5 years older" ang mascot ay nagresulta sa MUKHA NG ISANG TAONG LALAKI sa katawan ng lobster. Ginawa ito ng mga crypto grifter na "Handsome Squidward vs Handsome Molty" meme sa loob lamang ng ilang minuto.
+**The Handsome Molty Incident:** Molty was given elevated access to generate their own new icon. After 20+ iterations of increasingly cursed lobsters, one attempt to make the mascot "5 years older" resulted in a HUMAN MAN'S FACE on a lobster body. Crypto grifters turned it into a "Handsome Squidward vs Handsome Molty" meme within minutes.
 
 **Ang mga Pekeng Developer:** Gumawa ang mga scammer ng pekeng GitHub profile na nag-aangking "Head of Engineering at OpenClaw" upang mag-promote ng mga pump-and-dump token.
 
 Si Peter, habang pinapanood ang kaguluhan: _"this is cinema"_ 🎬
 
-Magulo ang molt. Pero lumabas ang lobster na mas malakas. At mas nakakatawa.
+The molt was chaotic. But the lobster emerged stronger. And funnier.
 
 ### Ang Huling Anyo (Enero 30, 2026)
 
-Ang Moltbot ay hindi talaga dumulas sa dila. Kaya alas-4 ng umaga GMT, muling nagtipon ang team.
+Moltbot never quite rolled off the tongue. And so, at 4am GMT, the team gathered AGAIN.
 
 Nagsimula ang **Dakilang OpenClaw Migration**.
 
@@ -137,7 +130,7 @@ Sa loob lamang ng 3 oras:
 - **Shadow** ang nag-secure ng Discord vanity, nag-nuke ng malware
 - **Ang buong Claw Crew** ay nag-all-nighter
 
-**Ang Scammer Speedrun:** Naglunsad ang mga crypto grifter ng $OPENCLAW token sa Pump.fun sa loob lamang ng MGA MINUTO. Ninakaw nila ang artwork na ginawa 20 minuto lang ang nakalipas. Ang mga business-verified account ay nagtulak ng mga scam. Halos kahanga-hanga ang kapal ng mukha.
+**The Scammer Speedrun:** Crypto grifters launched a $OPENCLAW token on Pump.fun within MINUTES. They stole artwork that was created 20 minutes earlier. Business-verified accounts pushed scams. The audacity was almost impressive.
 
 **Mga Bagong Tradisyong Ipinanganak:**
 
@@ -194,9 +187,9 @@ Sumunod ang 20+ na iteration:
 - Mga baby lobster (sobrang cute)
 - Mga bartender lobster na may suspenders
 
-Pinanood ng komunidad nang may takot at tuwa habang ang bawat henerasyon ay naglalabas ng bago at hindi inaasahan. Lumitaw ang mga nangunguna: mga cute na lobster, mga kumpiyansang tech lobster, at mga bartender lobster na may suspenders.
+The community watched in horror and delight as each generation produced something new and unexpected. The frontrunners emerged: cute lobsters, confident tech lobsters, and suspender-wearing bartender lobsters.
 
-**Aral:** Ang AI image generation ay stochastic. Parehong prompt, iba-ibang resulta. Gumagana ang brute force.
+**Lesson learned:** AI image generation is stochastic. Same prompt, different results. Brute force works.
 
 ## Ang Hinaharap
 

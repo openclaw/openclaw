@@ -4,13 +4,6 @@ read_when:
   - चैनल लोकेशन पार्सिंग जोड़ते या संशोधित करते समय
   - एजेंट प्रॉम्प्ट्स या टूल्स में लोकेशन संदर्भ फ़ील्ड का उपयोग करते समय
 title: "चैनल लोकेशन पार्सिंग"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:53Z
 ---
 
 # चैनल लोकेशन पार्सिंग

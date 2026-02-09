@@ -1,18 +1,11 @@
 ---
 summary: "Nộp issue và báo cáo lỗi có tín hiệu cao"
 title: "Gửi một Issue"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:09Z
 ---
 
 ## Gửi một Issue
 
-Issue rõ ràng, súc tích giúp chẩn đoán và sửa lỗi nhanh hơn. Với lỗi, hồi quy hoặc thiếu tính năng, hãy bao gồm các mục sau:
+Tạo issue trước PR là tùy chọn. Bao gồm các nội dung sau cho lỗi, hồi quy hoặc khoảng trống tính năng:
 
 ### Những gì cần bao gồm
 
@@ -28,7 +21,7 @@ Issue rõ ràng, súc tích giúp chẩn đoán và sửa lỗi nhanh hơn. Vớ
 - [ ] Xác nhận chưa được sửa/giải quyết gần đây (đặc biệt là bảo mật)
 - [ ] Mọi khẳng định đều có bằng chứng hoặc cách tái hiện
 
-Hãy ngắn gọn. Ngắn gọn > ngữ pháp hoàn hảo.
+Ngắn gọn. Súc tích > ngữ pháp hoàn hảo.
 
 Xác thực (chạy/sửa trước PR):
 
@@ -84,7 +77,7 @@ Xác thực (chạy/sửa trước PR):
 ### Evidence (redacted)
 ```
 
-_Tránh đưa bí mật/chi tiết khai thác ra công khai. Với vấn đề nhạy cảm, hãy giảm thiểu chi tiết và yêu cầu công bố riêng tư._
+_Tránh tiết lộ bí mật/chi tiết khai thác nơi công cộng._ Với các vấn đề nhạy cảm, giảm thiểu chi tiết và yêu cầu tiết lộ riêng tư._
 
 #### Báo cáo hồi quy
 
@@ -156,4 +149,4 @@ _Tránh đưa bí mật/chi tiết khai thác ra công khai. Với vấn đề n
 
 ### Gửi PR sửa lỗi
 
-Issue trước PR là tùy chọn. Nếu bỏ qua, hãy đưa đầy đủ chi tiết trong PR. Giữ PR tập trung, ghi rõ số issue, thêm test hoặc giải thích lý do không có, tài liệu hóa thay đổi hành vi/rủi ro, đính kèm log/ảnh chụp màn hình đã ẩn thông tin làm bằng chứng, và chạy xác thực phù hợp trước khi gửi.
+Giữ PR tập trung, ghi chú số issue, thêm test hoặc giải thích lý do không có, tài liệu hóa các thay đổi/hệ quả về hành vi, bao gồm log/ảnh chụp màn hình đã được che thông tin nhạy cảm làm bằng chứng, và chạy xác thực phù hợp trước khi gửi. Nếu bỏ qua, hãy đưa chi tiết vào PR. Mistral: `mistral/`…

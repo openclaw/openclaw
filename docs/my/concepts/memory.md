@@ -3,21 +3,13 @@ summary: "OpenClaw မေမိုရီ အလုပ်လုပ်ပုံ (w
 read_when:
   - မေမိုရီ ဖိုင်အလွှာအဆင့်နှင့် လုပ်ငန်းစဉ်ကို သိလိုသောအခါ
   - အလိုအလျောက် pre-compaction မေမိုရီ ရှင်းထုတ်ခြင်းကို ချိန်ညှိလိုသောအခါ
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:25Z
 ---
 
 # Memory
 
-OpenClaw မေမိုရီသည် **agent workspace အတွင်းရှိ ရိုးရိုး Markdown ဖိုင်များ** ဖြစ်သည်။ ဖိုင်များသည် အမှန်တရား၏ အရင်းအမြစ် ဖြစ်ပြီး မော်ဒယ်သည် ဒစ်စ်သို့ ရေးသားထားသော အရာများကိုသာ “မှတ်မိ” နိုင်သည်။
+31. OpenClaw memory သည် **agent workspace ထဲရှိ plain Markdown** ဖြစ်ပါသည်။ 32. File များသည် source of truth ဖြစ်ပြီး၊ model သည် disk သို့ ရေးသားထားသော အရာများကိုသာ “မှတ်မိ” ပါသည်။
 
-မေမိုရီ ရှာဖွေရေး ကိရိယာများကို လက်ရှိ အသက်ဝင်နေသော memory plugin (ပုံမှန်အားဖြင့်:
-`memory-core`) က ပံ့ပိုးပေးသည်။ memory plugins များကို `plugins.slots.memory = "none"` ဖြင့် ပိတ်နိုင်သည်။
+33. Memory search tools များကို active memory plugin (default: `memory-core`) မှ ပံ့ပိုးပေးပါသည်။ 34. Memory plugins များကို `plugins.slots.memory = "none"` ဖြင့် ပိတ်နိုင်ပါသည်။
 
 ## Memory files (Markdown)
 
@@ -30,20 +22,19 @@ OpenClaw မေမိုရီသည် **agent workspace အတွင်းရ�
   - ရွေးချယ်စီစဉ်ထားသော ရေရှည်မေမိုရီ။
   - **အဓိက၊ ကိုယ်ပိုင် ဆက်ရှင်တွင်သာ ဖတ်သည်** (အုပ်စု အခြေအနေများတွင် မဖတ်ပါ)။
 
-ဤဖိုင်များသည် workspace (`agents.defaults.workspace`, ပုံမှန်
-`~/.openclaw/workspace`) အောက်တွင် တည်ရှိသည်။ ဖွဲ့စည်းပုံ အပြည့်အစုံအတွက် [Agent workspace](/concepts/agent-workspace) ကို ကြည့်ပါ။
+35. ဤ file များသည် workspace (`agents.defaults.workspace`, default `~/.openclaw/workspace`) အောက်တွင် ရှိပါသည်။ 36. Layout အပြည့်အစုံအတွက် [Agent workspace](/concepts/agent-workspace) ကို ကြည့်ပါ။
 
 ## Memory ကို ဘယ်အချိန် ရေးသင့်သလဲ
 
 - ဆုံးဖြတ်ချက်များ၊ နှစ်သက်မှုများ၊ ရေရှည် အသုံးဝင်မည့် အချက်အလက်များကို `MEMORY.md` သို့ ရေးပါ။
 - နေ့စဉ် မှတ်စုများနှင့် လက်ရှိ အလုပ်လုပ်နေသော အကြောင်းအရာများကို `memory/YYYY-MM-DD.md` သို့ ရေးပါ။
 - တစ်ယောက်ယောက်က “ဒါကို မှတ်ထားပါ” ဟုပြောပါက RAM ထဲ မထားဘဲ ရေးချပါ။
-- ဤအပိုင်းသည် ဆက်လက် ဖွံ့ဖြိုးနေဆဲ ဖြစ်သည်။ မော်ဒယ်ကို မေမိုရီ သိမ်းဆည်းရန် သတိပေးခြင်းက အထောက်အကူ ဖြစ်သည်။
+- 37. ဤဧရိယာသည် ဆက်လက် ဖွံ့ဖြိုးနေဆဲ ဖြစ်ပါသည်။ 38. Model ကို memory များ သိမ်းဆည်းရန် သတိပေးခြင်းက အထောက်အကူဖြစ်ပြီး၊ ၎င်းသည် ဘာလုပ်ရမည်ကို သိပါသည်။
 - တစ်ခုခုကို တည်တံ့စေလိုပါက **bot ကို မေမိုရီထဲ ရေးပေးရန် တောင်းဆိုပါ**။
 
 ## Automatic memory flush (pre-compaction ping)
 
-ဆက်ရှင်သည် **auto-compaction အနီးသို့ ရောက်လာသောအခါ** OpenClaw သည် **အသံမထွက်သော agentic turn** တစ်ခုကို အစပျိုးပြီး context ကို compact မလုပ်မီ **ရေရှည် မေမိုရီကို ရေးသားရန်** မော်ဒယ်ကို သတိပေးသည်။ ပုံမှန် prompt များတွင် မော်ဒယ်က _ပြန်ကြားနိုင်သည်_ ဟု ဖော်ပြထားသော်လည်း ပုံမှန်အားဖြင့် `NO_REPLY` သည် သင့်တော်သော တုံ့ပြန်မှု ဖြစ်သဖြင့် အသုံးပြုသူ မမြင်ရပါ။
+39. Session သည် **auto-compaction နီးကပ်လာသောအခါ** OpenClaw သည် **silent, agentic turn** ကို trigger လုပ်ပြီး context ကို compact မလုပ်မီ durable memory ကို ရေးသားရန် model ကို သတိပေးပါသည်။ 40. Default prompts များတွင် model သည် _reply လုပ်နိုင်သည်_ ဟု ပြောထားသော်လည်း၊ အသုံးများသောအခါ `NO_REPLY` သည် မှန်ကန်သော တုံ့ပြန်မှုဖြစ်ပြီး user သည် ဤ turn ကို မမြင်ရပါ။
 
 ဤအပြုအမူကို `agents.defaults.compaction.memoryFlush` ဖြင့် ထိန်းချုပ်ထားသည် —
 
@@ -86,7 +77,7 @@ Defaults —
 
 - ပုံမှန်အားဖြင့် ဖွင့်ထားသည်။
 - မေမိုရီ ဖိုင် ပြောင်းလဲမှုများကို စောင့်ကြည့်သည် (debounced)။
-- ပုံမှန်အားဖြင့် remote embeddings ကို အသုံးပြုသည်။ `memorySearch.provider` မသတ်မှတ်ထားပါက OpenClaw သည် အလိုအလျောက် ရွေးချယ်သည် —
+- 41. Default အနေဖြင့် remote embeddings ကို အသုံးပြုပါသည်။ 42. `memorySearch.provider` ကို မသတ်မှတ်ထားပါက OpenClaw သည် auto-select လုပ်ပါသည်။
   1. `local` ကို `memorySearch.local.modelPath` သတ်မှတ်ထားပြီး ဖိုင် ရှိပါက။
   2. OpenAI key ကို ဖြေရှင်းနိုင်ပါက `openai`။
   3. Gemini key ကို ဖြေရှင်းနိုင်ပါက `gemini`။
@@ -95,20 +86,15 @@ Defaults —
 - Local mode သည် node-llama-cpp ကို အသုံးပြုပြီး `pnpm approve-builds` လိုအပ်နိုင်သည်။
 - SQLite အတွင်း vector search ကို မြန်ဆန်စေရန် sqlite-vec (ရရှိနိုင်ပါက) ကို အသုံးပြုသည်။
 
-Remote embeddings များအတွက် embedding provider ၏ API key **မဖြစ်မနေ လိုအပ်** သည်။ OpenClaw သည် auth profiles၊ `models.providers.*.apiKey` သို့မဟုတ် environment
-variables မှ key များကို ဖြေရှင်းသည်။ Codex OAuth သည် chat/completions ကိုသာ ဖုံးလွှမ်းပြီး memory search အတွက် embeddings ကို **မဖြည့်ဆည်းနိုင်ပါ**။ Gemini အတွက် `GEMINI_API_KEY` သို့မဟုတ်
-`models.providers.google.apiKey` ကို အသုံးပြုပါ။ Voyage အတွက် `VOYAGE_API_KEY` သို့မဟုတ်
-`models.providers.voyage.apiKey` ကို အသုံးပြုပါ။ custom OpenAI-compatible endpoint ကို အသုံးပြုပါက
-`memorySearch.remote.apiKey` (နှင့် ရွေးချယ်နိုင်သော `memorySearch.remote.headers`) ကို သတ်မှတ်ပါ။
+43. Remote embeddings များသည် embedding provider အတွက် API key ကို **လိုအပ်ပါသည်**။ 44. OpenClaw သည် auth profiles, `models.providers.*.apiKey`, သို့မဟုတ် environment variables များမှ key များကို resolve လုပ်ပါသည်။ 45. Codex OAuth သည် chat/completions ကိုသာ ဖုံးလွှမ်းပြီး memory search အတွက် embeddings ကို **မဖြည့်ဆည်းနိုင်ပါ**။ 46. Gemini အတွက် `GEMINI_API_KEY` သို့မဟုတ် `models.providers.google.apiKey` ကို အသုံးပြုပါ။ 47. Voyage အတွက် `VOYAGE_API_KEY` သို့မဟုတ် `models.providers.voyage.apiKey` ကို အသုံးပြုပါ။ 48. Custom OpenAI-compatible endpoint ကို အသုံးပြုပါက `memorySearch.remote.apiKey` (နှင့် optional `memorySearch.remote.headers`) ကို သတ်မှတ်ပါ။
 
 ### QMD backend (experimental)
 
-Built-in SQLite indexer အစား
-[QMD](https://github.com/tobi/qmd) ကို အသုံးပြုလိုပါက `memory.backend = "qmd"` ကို သတ်မှတ်ပါ။ QMD သည် BM25 + vectors + reranking ကို ပေါင်းစပ်ထားသော local-first search sidecar ဖြစ်သည်။ Markdown သည် အမှန်တရား၏ အရင်းအမြစ်အဖြစ် ဆက်လက်ရှိနေပြီး OpenClaw သည် retrieval အတွက် QMD ကို shell ဖြင့် ခေါ်ယူသည်။ အချက်အလက်များ —
+49. Built-in SQLite indexer ကို [QMD](https://github.com/tobi/qmd) ဖြင့် ပြောင်းလဲရန် `memory.backend = "qmd"` ကို သတ်မှတ်ပါ။ QMD သည် BM25 + vectors + reranking ကို ပေါင်းစပ်ထားသော local-first search sidecar ဖြစ်ပါသည်။ 50. Markdown သည် source of truth အဖြစ် ဆက်လက် ရှိနေပြီး၊ OpenClaw သည် retrieval အတွက် QMD ကို shell out လုပ်ပါသည်။ ၁။ အဓိကအချက်များ:
 
 **Prereqs**
 
-- ပုံမှန်အားဖြင့် ပိတ်ထားသည်။ config တစ်ခုချင်းစီအလိုက် `memory.backend = "qmd"` ဖြင့် ဖွင့်ပါ။
+- ၂။ မူလအနေဖြင့် ပိတ်ထားသည်။ ၃။ config တစ်ခုချင်းစီအလိုက် opt in လုပ်ရန် (`memory.backend = "qmd"`)။
 - QMD CLI ကို သီးခြား ထည့်သွင်းရမည် (`bun install -g https://github.com/tobi/qmd` သို့မဟုတ်
   release ကို ရယူပါ) နှင့် `qmd` binary သည် gateway ၏ `PATH` ပေါ်တွင် ရှိရမည်။
 - QMD သည် extension များ ခွင့်ပြုထားသော SQLite build လိုအပ်သည် (`brew install sqlite` on
@@ -118,7 +104,7 @@ Built-in SQLite indexer အစား
 - Gateway သည် QMD ကို self-contained XDG home အဖြစ်
   `~/.openclaw/agents/<agentId>/qmd/` အောက်တွင် `XDG_CONFIG_HOME` နှင့်
   `XDG_CACHE_HOME` သတ်မှတ်၍ လည်ပတ်စေသည်။
-- OS အထောက်အပံ့: macOS နှင့် Linux သည် Bun + SQLite ထည့်သွင်းပြီးပါက အဆင်ပြေစွာ အလုပ်လုပ်သည်။ Windows အတွက် WSL2 ဖြင့် အကောင်းဆုံး ပံ့ပိုးထားသည်။
+- ၄။ OS ပံ့ပိုးမှု: Bun + SQLite ကို ထည့်သွင်းပြီးပါက macOS နှင့် Linux သည် out of the box အလုပ်လုပ်သည်။ ၅။ Windows အတွက် WSL2 မှတစ်ဆင့် အသုံးပြုခြင်းသည် အကောင်းဆုံးဖြစ်သည်။
 
 **Sidecar အလုပ်လုပ်ပုံ**
 
@@ -130,8 +116,7 @@ Built-in SQLite indexer အစား
   ပုံမှန် 5 မိနစ်) တွင် လည်ပတ်စေသည်။
 - Boot refresh ကို ယခု ပုံမှန်အားဖြင့် background တွင် လည်ပတ်စေသဖြင့် chat စတင်မှု မပိတ်ဆို့တော့ပါ။ ယခင်
   blocking အပြုအမူကို ဆက်ထားလိုပါက `memory.qmd.update.waitForBootSync = true` ကို သတ်မှတ်ပါ။
-- Search များကို `qmd query --json` ဖြင့် လည်ပတ်သည်။ QMD မအောင်မြင်ပါက သို့မဟုတ် binary မရှိပါက
-  OpenClaw သည် builtin SQLite manager သို့ အလိုအလျောက် ပြန်လည်ပြောင်းပြီး memory tools များ ဆက်လက် အလုပ်လုပ်စေသည်။
+- ၆။ ရှာဖွေမှုများကို `qmd query --json` ဖြင့် လုပ်ဆောင်သည်။ ၇။ QMD မအောင်မြင်ပါက သို့မဟုတ် binary မရှိပါက၊ OpenClaw သည် builtin SQLite manager သို့ အလိုအလျောက် ပြန်လည်ပြောင်းသုံးပြီး memory tools များ ဆက်လက်အလုပ်လုပ်နိုင်စေရန် ထောက်ပံ့ပေးသည်။
 - OpenClaw သည် ယနေ့အချိန်တွင် QMD embed batch-size tuning ကို မဖော်ပြပါ။ batch အပြုအမူကို
   QMD ကိုယ်တိုင် ထိန်းချုပ်သည်။
 - **ပထမဆုံး search သည် နှေးကွေးနိုင်သည်**: ပထမဆုံး `qmd query` လည်ပတ်ချိန်တွင် QMD သည် local GGUF models (reranker/query
@@ -140,9 +125,8 @@ Built-in SQLite indexer အစား
   - Model များကို ကိုယ်တိုင် ကြိုတင် ဒေါင်းလုပ်လုပ်ပြီး (OpenClaw အသုံးပြုသည့် index ကို အပူပေးလိုပါက)
     agent ၏ XDG dirs ဖြင့် one-off query တစ်ခုကို လည်ပတ်ပါ။
 
-    OpenClaw ၏ QMD state သည် သင့် **state dir** အောက်တွင် ရှိသည် (ပုံမှန် `~/.openclaw`)။
-    OpenClaw အသုံးပြုသည့် XDG vars တူညီစေရန် export လုပ်ခြင်းဖြင့်
-    `qmd` ကို အတူတူ index သို့ ညွှန်ပြနိုင်သည် —
+    ၈။ OpenClaw ၏ QMD state သည် သင့် **state dir** အောက်တွင် ရှိသည် (မူလအားဖြင့် `~/.openclaw`)။
+    ၉။ OpenClaw အသုံးပြုသည့် XDG vars တူညီစွာ export လုပ်ခြင်းဖြင့် `qmd` ကို တူညီသော index ကိုညွှန်ပြနိုင်သည်:
 
     ```bash
     # Pick the same state dir OpenClaw uses
@@ -176,9 +160,8 @@ Built-in SQLite indexer အစား
   `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`)။
 - `limits`: recall payload ကို clamp လုပ်သည် (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`)။
-- `scope`: [`session.sendPolicy`](/gateway/configuration#session) နှင့် schema တူညီသည်။
-  ပုံမှန်အားဖြင့် DM-only (`deny` အားလုံး၊ `allow` direct chats) ဖြစ်ပြီး
-  အုပ်စု/ချန်နယ်များတွင် QMD hits များ ပေါ်လာစေရန် loosen လုပ်နိုင်သည်။
+- ၁၀။ `scope`: [`session.sendPolicy`](/gateway/configuration#session) နှင့် တူညီသော schema ဖြစ်သည်။
+  ၁၁။ မူလသတ်မှတ်ချက်မှာ DM-only ဖြစ်သည် (`deny` အားလုံး၊ `allow` direct chats) ဖြစ်ပြီး group/channel များတွင် QMD hits များ ပြသလိုပါက လျော့ပေါ့နိုင်သည်။
 - Workspace ပြင်ပမှ ရင်းမြစ်ယူသော snippet များသည်
   `memory_search` ရလဒ်များတွင် `qmd/<collection>/<relative-path>` အဖြစ် ပေါ်လာသည်။ `memory_get` သည် ထို prefix ကို နားလည်ပြီး
   သတ်မှတ်ထားသော QMD collection root မှ ဖတ်သည်။
@@ -214,10 +197,7 @@ memory: {
 **Citations & fallback**
 
 - Backend မည်သို့ဖြစ်စေ `memory.citations` သက်ဆိုင်သည် (`auto`/`on`/`off`)။
-- `qmd` လည်ပတ်သည့်အခါ ရလဒ်များကို ဘယ် engine က ပံ့ပိုးခဲ့သည်ကို diagnostics တွင် ပြသနိုင်ရန်
-  `status().backend = "qmd"` ကို tag လုပ်သည်။ QMD subprocess ထွက်သွားပါက သို့မဟုတ် JSON output ကို parse မလုပ်နိုင်ပါက
-  search manager သည် သတိပေးချက် မှတ်တမ်းတင်ပြီး builtin provider
-  (ရှိပြီးသား Markdown embeddings) ကို ပြန်ပေးသည်။
+- ၁၂။ `qmd` လည်ပတ်သောအခါ `status().backend = "qmd"` ဟု tag လုပ်ထားသဖြင့် diagnostics တွင် မည်သည့် engine က ရလဒ်များကို ပံ့ပိုးခဲ့သည်ကို ပြသနိုင်သည်။ ၁၃။ QMD subprocess ထွက်သွားပါက သို့မဟုတ် JSON output ကို parse မလုပ်နိုင်ပါက၊ search manager သည် warning ကို log လုပ်ပြီး QMD ပြန်လည်အလုပ်လုပ်လာသည်အထိ builtin provider (ရှိပြီးသား Markdown embeddings) ကို ပြန်ပေးသည်။
 
 ### Additional memory paths
 
@@ -294,7 +274,7 @@ Fallbacks —
 
 Batch indexing (OpenAI + Gemini) —
 
-- OpenAI နှင့် Gemini embeddings အတွက် ပုံမှန်အားဖြင့် ဖွင့်ထားသည်။ ပိတ်လိုပါက `agents.defaults.memorySearch.remote.batch.enabled = false` ကို သတ်မှတ်ပါ။
+- ၁၄။ OpenAI နှင့် Gemini embeddings အတွက် မူလအနေဖြင့် ဖွင့်ထားသည်။ ၁၅။ ပိတ်လိုပါက `agents.defaults.memorySearch.remote.batch.enabled = false` ဟု သတ်မှတ်ပါ။
 - ပုံမှန် အပြုအမူသည် batch ပြီးဆုံးသည်အထိ စောင့်သည်။ လိုအပ်ပါက `remote.batch.wait`, `remote.batch.pollIntervalMs`, နှင့် `remote.batch.timeoutMinutes` ကို ချိန်ညှိပါ။
 - အပြိုင် submit လုပ်မည့် batch jobs အရေအတွက်ကို ထိန်းချုပ်ရန် `remote.batch.concurrency` ကို သတ်မှတ်ပါ (ပုံမှန်: 2)။
 - Batch mode သည် `memorySearch.provider = "openai"` သို့မဟုတ် `"gemini"` ဖြစ်သည့်အခါ အသုံးပြုကာ သက်ဆိုင်ရာ API key ကို အသုံးပြုသည်။
@@ -341,23 +321,16 @@ Local mode —
 
 ### How the memory tools work
 
-- `memory_search` သည် `MEMORY.md` + `memory/**/*.md` မှ Markdown chunk များကို semantic search လုပ်သည်
-  (~400 token target, 80-token overlap)။ snippet စာသား (~700 chars ကန့်သတ်),
-  ဖိုင်လမ်းကြောင်း၊ လိုင်းအကွာအဝေး၊ score၊ provider/model နှင့် local → remote embeddings သို့ fallback ဖြစ်ခဲ့မဖြစ်ခဲ့ကို ပြန်ပေးသည်။
-  ဖိုင်အပြည့်အစုံကို မပြန်ပေးပါ။
-- `memory_get` သည် သတ်မှတ်ထားသော memory Markdown ဖိုင်ကို (workspace-relative) ဖတ်ပြီး
-  စတင်လိုင်းမှ သို့မဟုတ် N လိုင်းအထိ ဖတ်နိုင်သည်။ `MEMORY.md` / `memory/` အပြင်ဘက် လမ်းကြောင်းများကို ပယ်ချသည်။
+- ၁၆။ `memory_search` သည် `MEMORY.md` နှင့် `memory/**/*.md` ထဲမှ Markdown chunks (~400 token ပန်းတိုင်၊ 80-token overlap) ကို semantic အရ ရှာဖွေသည်။ ၁၇။ snippet စာသား (~700 chars အထိ ကန့်သတ်), file path, line range, score, provider/model နှင့် local → remote embeddings သို့ fallback ဖြစ်ခဲ့/မဖြစ်ခဲ့ ကို ပြန်ပေးသည်။ ၁၈။ ဖိုင်အပြည့်အစုံ payload ကို မပြန်ပေးပါ။
+- ၁၉။ `memory_get` သည် သတ်မှတ်ထားသော memory Markdown ဖိုင် (workspace-relative) ကို ဖတ်ပြီး၊ လိုအပ်ပါက စတင်လိုင်းနှင့် လိုင်းအရေအတွက် N ကို သတ်မှတ်နိုင်သည်။ ၂၀။ `MEMORY.md` / `memory/` အပြင်ဘက်ရှိ paths များကို ငြင်းပယ်သည်။
 - ကိရိယာ ၂ ခုစလုံးသည် agent အတွက် `memorySearch.enabled` true ဖြစ်မှသာ ဖွင့်ထားသည်။
 
 ### What gets indexed (and when)
 
 - ဖိုင်အမျိုးအစား: Markdown သာ (`MEMORY.md`, `memory/**/*.md`)။
 - Index သိမ်းဆည်းရာ: per-agent SQLite ကို `~/.openclaw/memory/<agentId>.sqlite` တွင် သိမ်းဆည်းသည် (`agents.defaults.memorySearch.store.path` ဖြင့် ချိန်ညှိနိုင်ပြီး `{agentId}` token ကို ထောက်ပံ့သည်)။
-- Freshness: `MEMORY.md` + `memory/` အပေါ် watcher တစ်ခုက index ကို dirty အဖြစ် မှတ်သားသည် (debounce 1.5s)။
-  Sync ကို ဆက်ရှင် စတင်ချိန်၊ search လုပ်ချိန်၊ သို့မဟုတ် interval တစ်ခုအလိုက် အစီအစဉ်ချပြီး asynchronous လည်ပတ်သည်။
-  Session transcript များသည် delta threshold များကို အသုံးပြုပြီး background sync ကို အစပျိုးသည်။
-- Reindex triggers: index သည် embedding **provider/model + endpoint fingerprint + chunking params** ကို သိမ်းထားသည်။
-  ထိုအရာများ ပြောင်းလဲပါက OpenClaw သည် store အားလုံးကို အလိုအလျောက် reset လုပ်ပြီး ပြန်လည် index လုပ်သည်။
+- Freshness: `MEMORY.md` + `memory/` ကို watcher လုပ်ထားပြီး index ကို dirty အဖြစ်မှတ်သားပါသည် (debounce 1.5s)။ ၂၂။ Sync ကို session စတင်ချိန်၊ search လုပ်ချိန် သို့မဟုတ် အချိန်အပိုင်းအခြားအလိုက် စီစဉ်ထားပြီး asynchronous အနေဖြင့် လည်ပတ်သည်။ ၂၃။ Session transcripts များသည် delta thresholds ကို အသုံးပြု၍ background sync ကို trigger လုပ်သည်။
+- ၂၄။ Reindex triggers: index သည် embedding **provider/model + endpoint fingerprint + chunking params** ကို သိမ်းဆည်းထားသည်။ ၂၅။ အဆိုပါ အချက်များထဲမှ တစ်ခုခု ပြောင်းလဲပါက OpenClaw သည် အလိုအလျောက် reset လုပ်ပြီး store အပြည့်အစုံကို reindex လုပ်သည်။
 
 ### Hybrid search (BM25 + vector)
 
@@ -368,53 +341,51 @@ Local mode —
 
 တို့ကို ပေါင်းစပ် အသုံးပြုသည်။
 
-Platform ပေါ်တွင် full-text search မရရှိနိုင်ပါက OpenClaw သည် vector-only search သို့ fallback လုပ်သည်။
-
 #### Why hybrid?
 
-Vector search သည် “အဓိပ္ပါယ် တူသည်” ကို ကောင်းစွာ ရှာနိုင်သည် —
+၂၆။ Vector search သည် “အဓိပ္ပါယ်တူညီမှု” ကို ရှာဖွေရန် အလွန်ကောင်းမွန်သည်:
 
-- “Mac Studio gateway host” နှင့် “gateway ကို လည်ပတ်နေသော စက်”
-- “debounce file updates” နှင့် “ရေးတိုင်း index မလုပ်ရန်”
+- ၂၇။ “Mac Studio gateway host” နှင့် “gateway ကို လည်ပတ်နေသော စက်”
+- ၂၈။ “debounce file updates” နှင့် “ရေးသွင်းမှုတိုင်းတွင် indexing မလုပ်ရန်”
 
-သို့သော် တိကျပြီး signal မြင့်သော token များအတွက်တော့ အားနည်းနိုင်သည် —
+၂၉။ သို့သော် တိကျပြီး signal မြင့်သော tokens များအတွက် အားနည်းနိုင်သည်:
 
 - IDs (`a828e60`, `b3b9895a…`)
 - code symbols (`memorySearch.query.hybrid`)
 - error strings (“sqlite-vec unavailable”)
 
-BM25 (full-text) သည် အပြန်အလှန်အားဖြင့် တိကျသော token များတွင် အားကောင်းပြီး paraphrase များတွင် အားနည်းသည်။
-Hybrid search သည် လက်တွေ့ကျသော အလယ်အလတ်ဖြစ်ပြီး **retrieval signal နှစ်မျိုးလုံးကို အသုံးပြုခြင်း** ဖြင့်
-“သဘာဝဘာသာစကား” query များနှင့် “မြက်တောထဲက အပ်ရှာခြင်း” query များ နှစ်မျိုးစလုံးတွင် ရလဒ်ကောင်းများ ရရှိစေသည်။
+၃၀။ BM25 (full-text) သည် ဆန့်ကျင်ဘက်ဖြစ်ပြီး တိကျသော tokens များတွင် အားကောင်းသော်လည်း paraphrases များတွင် အားနည်းသည်။
+၃၁။ Hybrid search သည် လက်တွေ့ကျသော အလယ်လမ်းဖြစ်ပြီး **retrieval signals နှစ်မျိုးလုံးကို အသုံးပြုခြင်း** ဖြင့် “natural language” queries နှင့် “needle in a haystack” queries နှစ်မျိုးလုံးအတွက် ကောင်းမွန်သော ရလဒ်များကို ရရှိစေသည်။
 
 #### How we merge results (the current design)
 
-Implementation အကျဉ်းချုပ် —
+၃၂။ Implementation sketch:
 
-1. နှစ်ဘက်စလုံးမှ candidate pool ကို ရယူသည် —
+1. ၃၃။ နှစ်ဖက်စလုံးမှ candidate pool ကို ရယူပါ:
 
-- **Vector**: cosine similarity အရ ထိပ်ဆုံး `maxResults * candidateMultiplier`။
-- **BM25**: FTS5 BM25 rank အရ ထိပ်ဆုံး `maxResults * candidateMultiplier` (နည်းလေလေ ပိုကောင်း)။
+- နှစ်ဘက်စလုံးမှ candidate pool ကို ရယူသည် —
+- ၃၄။ **BM25**: FTS5 BM25 rank ဖြင့် top `maxResults * candidateMultiplier` (နိမ့်လေလေ ပိုကောင်း)။
 
-2. BM25 rank ကို 0..1 ခန့်မှန်း score အဖြစ် ပြောင်းသည် —
+2. **Vector**: cosine similarity အရ ထိပ်ဆုံး `maxResults * candidateMultiplier`။
 
 - `textScore = 1 / (1 + max(0, bm25Rank))`
 
-3. chunk id ဖြင့် candidates များကို ပေါင်းပြီး weighted score ကို တွက်ချက်သည် —
+3. ၃၅။ chunk id အလိုက် candidates များကို union လုပ်ပြီး weighted score ကို တွက်ချက်ပါ:
 
 - `finalScore = vectorWeight * vectorScore + textWeight * textScore`
 
 မှတ်ချက်များ —
 
-- `vectorWeight` + `textWeight` ကို config ဖြေရှင်းချိန်တွင် 1.0 သို့ normalize လုပ်ထားသဖြင့် weight များသည် ရာခိုင်နှုန်းကဲ့သို့ အလုပ်လုပ်သည်။
-- Embeddings မရရှိနိုင်ပါက (သို့မဟုတ် provider က zero-vector ပြန်ပေးပါက) BM25 ကို ဆက်လက် လည်ပတ်ပြီး keyword match များကို ပြန်ပေးသည်။
-- FTS5 မဖန်တီးနိုင်ပါက vector-only search ကို ဆက်ထားသည် (hard failure မလုပ်ပါ)။
+- ၃၆။ `vectorWeight` + `textWeight` ကို config resolution တွင် 1.0 သို့ normalize လုပ်ထားသဖြင့် weights များသည် ရာခိုင်နှုန်းများကဲ့သို့ အပြုအမူပြုသည်။
+- ၃၇။ embeddings မရနိုင်ပါက (သို့မဟုတ် provider မှ zero-vector ပြန်ပါက) BM25 ကို ဆက်လက်လုပ်ဆောင်ပြီး keyword matches များကို ပြန်ပေးသည်။
+- ၃၈။ FTS5 ကို မဖန်တီးနိုင်ပါက vector-only search ကို ထိန်းထားပြီး hard failure မလုပ်ပါ။
+
+၃၉။ ၎င်းသည် “IR-theory perfect” မဟုတ်သော်လည်း ရိုးရှင်း၊ မြန်ဆန်ပြီး အမှန်တကယ်ရှိသော notes များတွင် recall/precision ကို တိုးတက်စေတတ်သည်။
+၄၀။ နောက်ပိုင်းတွင် ပိုမိုရှုပ်ထွေးစေလိုပါက အများအားဖြင့် လုပ်ဆောင်သည့် နောက်တစ်ဆင့်များမှာ Reciprocal Rank Fusion (RRF) သို့မဟုတ် score normalization (min/max သို့မဟုတ် z-score) ကို ပေါင်းစပ်မီ လုပ်ခြင်း ဖြစ်သည်။
 
 ဤဒီဇိုင်းသည် “IR-theory အပြည့်အစုံ” မဟုတ်သော်လည်း ရိုးရှင်း၊ မြန်ဆန်ပြီး လက်တွေ့ မှတ်စုများတွင် recall/precision ကို တိုးတက်စေတတ်သည်။
 နောက်ထပ် အဆင့်မြင့်လိုပါက Reciprocal Rank Fusion (RRF) သို့မဟုတ် score normalization
 (min/max သို့မဟုတ် z-score) ကို ပေါင်းစပ်နိုင်သည်။
-
-Config —
 
 ```json5
 agents: {
@@ -435,11 +406,11 @@ agents: {
 
 ### Embedding cache
 
+၄၁။ OpenClaw သည် SQLite ထဲတွင် **chunk embeddings** ကို cache လုပ်နိုင်ပြီး reindexing နှင့် မကြာခဏ update များ (အထူးသဖြင့် session transcripts) တွင် မပြောင်းလဲသော စာသားများကို ပြန်လည် embed မလုပ်ရအောင် ကူညီသည်။
+
 OpenClaw သည် **chunk embedding များကို SQLite တွင် cache လုပ်** နိုင်ပြီး
 reindexing နှင့် မကြာခဏ update များ (အထူးသဖြင့် session transcript များ) တွင်
 မပြောင်းလဲသော စာသားကို ပြန်လည် embed မလုပ်စေရန် ကူညီသည်။
-
-Config —
 
 ```json5
 agents: {
@@ -456,8 +427,8 @@ agents: {
 
 ### Session memory search (experimental)
 
-**session transcript များကို index လုပ်** ပြီး `memory_search` ဖြင့် ပြသနိုင်သည်။
-ဤအရာသည် experimental flag အောက်တွင်သာ ရှိသည်။
+၄၂။ ရွေးချယ်နိုင်စွာ **session transcripts** ကို index လုပ်ပြီး `memory_search` မှတစ်ဆင့် ပြသနိုင်သည်။
+၄၃။ ဤအရာသည် experimental flag အောက်တွင်သာ အသုံးပြုနိုင်သည်။
 
 ```json5
 agents: {
@@ -470,17 +441,16 @@ agents: {
 }
 ```
 
-မှတ်ချက်များ —
+မှတ်ချက်များ-
 
-- Session indexing သည် **opt-in** ဖြစ်သည် (ပုံမှန် ပိတ်ထားသည်)။
-- Session update များကို debounce လုပ်ပြီး delta threshold များ ကျော်လွန်သည့်အခါ **asynchronous အဖြစ် index လုပ်** သည် (best-effort)။
-- `memory_search` သည် indexing ကို မပိတ်ဆို့ပါ။ background sync ပြီးဆုံးသည်အထိ ရလဒ်များ အနည်းငယ် မလတ်ဆတ်နိုင်ပါ။
-- ရလဒ်များတွင် snippet များသာ ပါဝင်ပြီး `memory_get` သည် မေမိုရီ ဖိုင်များအတွက်သာ ဆက်လက် ကန့်သတ်ထားသည်။
-- Session indexing သည် agent တစ်ခုချင်းစီအလိုက် ခွဲထားသည် (အဆိုပါ agent ၏ session log များကိုသာ index လုပ်သည်)။
-- Session log များသည် ဒစ်စ်ပေါ်တွင် တည်ရှိသည် (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`)။ filesystem access ရှိသူ မည်သူမဆို ဖတ်နိုင်သဖြင့်
-  disk access ကို trust boundary အဖြစ် သတ်မှတ်စဉ်းစားပါ။ ပိုမို တင်းကျပ်လိုပါက agent များကို OS user သို့မဟုတ် host ခွဲ၍ လည်ပတ်ပါ။
+- ၄၄။ Session indexing သည် **opt-in** ဖြစ်ပြီး (မူလအားဖြင့် ပိတ်ထားသည်)။
+- ၄၅။ Session updates များကို debounce လုပ်ပြီး delta thresholds ကို ကျော်လွန်သည့်အခါ **asynchronously index** လုပ်သည် (best-effort)။
+- ၄၆။ `memory_search` သည် indexing ကို စောင့်မနေဘဲ လုပ်ဆောင်ပြီး background sync မပြီးမချင်း ရလဒ်များသည် အနည်းငယ်ဟောင်းနေနိုင်သည်။
+- ၄၇။ ရလဒ်များတွင် snippet များသာ ပါဝင်ပြီး `memory_get` သည် memory ဖိုင်များအတွက်သာ ကန့်သတ်ထားသည်။
+- ၄၈။ Session indexing ကို agent တစ်ခုချင်းစီအလိုက် ခွဲထားပြီး (ထို agent ၏ session logs များသာ index လုပ်သည်)။
+- ၄၉။ Session logs များကို disk ပေါ်တွင် သိမ်းထားသည် (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`)။ ၅၀။ filesystem access ရှိသည့် process/user မည်သူမဆို ဖတ်နိုင်သောကြောင့် disk access ကို trust boundary အဖြစ် သတ်မှတ်၍ ဆက်ဆံပါ။ For stricter isolation, run agents under separate OS users or hosts.
 
-Delta thresholds (ပုံမှန်တန်ဖိုးများ) —
+Delta thresholds (defaults shown):
 
 ```json5
 agents: {
@@ -499,12 +469,14 @@ agents: {
 
 ### SQLite vector acceleration (sqlite-vec)
 
+When the sqlite-vec extension is available, OpenClaw stores embeddings in a
+SQLite virtual table (`vec0`) and performs vector distance queries in the
+database. This keeps search fast without loading every embedding into JS.
+
 sqlite-vec extension ရရှိနိုင်ပါက OpenClaw သည် embedding များကို
 SQLite virtual table (`vec0`) တွင် သိမ်းဆည်းပြီး
 database အတွင်းတွင် vector distance query များကို ဆောင်ရွက်သည်။
 ဤနည်းလမ်းသည် embedding အားလုံးကို JS ထဲ မတင်ဘဲ search ကို မြန်ဆန်စေသည်။
-
-Configuration (ရွေးချယ်နိုင်သည်) —
 
 ```json5
 agents: {
@@ -523,23 +495,19 @@ agents: {
 
 မှတ်ချက်များ —
 
-- `enabled` သည် ပုံမှန် true ဖြစ်သည်။ ပိတ်ထားပါက
-  သိမ်းဆည်းထားသော embedding များအပေါ် in-process cosine similarity သို့ fallback လုပ်သည်။
-- sqlite-vec extension မရှိပါက သို့မဟုတ် load မလုပ်နိုင်ပါက OpenClaw သည်
-  error ကို မှတ်တမ်းတင်ပြီး JS fallback ဖြင့် ဆက်လက် လည်ပတ်သည် (vector table မရှိပါ)။
-- `extensionPath` သည် bundled sqlite-vec path ကို override လုပ်သည် (custom build များ သို့မဟုတ်
-  non-standard install location များတွင် အသုံးဝင်သည်)။
+- `enabled` defaults to true; when disabled, search falls back to in-process
+  cosine similarity over stored embeddings.
+- If the sqlite-vec extension is missing or fails to load, OpenClaw logs the
+  error and continues with the JS fallback (no vector table).
+- `extensionPath` overrides the bundled sqlite-vec path (useful for custom builds
+  or non-standard install locations).
 
 ### Local embedding auto-download
 
-- ပုံမှန် local embedding မော်ဒယ်: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB)။
-- `memorySearch.provider = "local"` ဖြစ်ပါက `node-llama-cpp` သည် `modelPath` ကို ဖြေရှင်းပြီး
-  GGUF မရှိပါက cache (သို့မဟုတ် `local.modelCacheDir` သတ်မှတ်ထားပါက ထိုနေရာ) သို့ **အလိုအလျောက် ဒေါင်းလုပ်လုပ်** ကာ load လုပ်သည်။
-  Retry လုပ်ပါက download ဆက်လက် ပြန်စတင်သည်။
-- Native build လိုအပ်ချက်: `pnpm approve-builds` ကို run လုပ်ပြီး `node-llama-cpp` ကို ရွေးကာ
-  ထို့နောက် `pnpm rebuild node-llama-cpp` ကို လုပ်ပါ။
-- Fallback: local setup မအောင်မြင်ပါက နှင့် `memorySearch.fallback = "openai"` ဖြစ်ပါက
-  OpenClaw သည် remote embeddings (`openai/text-embedding-3-small` ကို မ override လုပ်ထားပါက) သို့ အလိုအလျောက် ပြောင်းပြီး အကြောင်းရင်းကို မှတ်တမ်းတင်သည်။
+- Default local embedding model: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB).
+- When `memorySearch.provider = "local"`, `node-llama-cpp` resolves `modelPath`; if the GGUF is missing it **auto-downloads** to the cache (or `local.modelCacheDir` if set), then loads it. Downloads resume on retry.
+- Native build requirement: run `pnpm approve-builds`, pick `node-llama-cpp`, then `pnpm rebuild node-llama-cpp`.
+- Fallback: if local setup fails and `memorySearch.fallback = "openai"`, we automatically switch to remote embeddings (`openai/text-embedding-3-small` unless overridden) and record the reason.
 
 ### Custom OpenAI-compatible endpoint example
 
@@ -562,8 +530,7 @@ agents: {
 }
 ```
 
-မှတ်ချက်များ —
+မှတ်ချက်များ-
 
-- `remote.*` သည် `models.providers.openai.*` ထက် ဦးစားပေးသည်။
-- `remote.headers` သည် OpenAI headers များနှင့် merge လုပ်သည်။ key များ ပဋိပက္ခဖြစ်ပါက remote က အနိုင်ရသည်။
-  OpenAI defaults ကို အသုံးပြုလိုပါက `remote.headers` ကို ချန်ထားပါ။
+- `remote.*` takes precedence over `models.providers.openai.*`.
+- `remote.headers` merge with OpenAI headers; remote wins on key conflicts. Omit `remote.headers` to use the OpenAI defaults.

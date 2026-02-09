@@ -3,22 +3,15 @@ summary: "Sådan fungerer OpenClaw sandboxing: tilstande, omfang, workspace-adga
 title: Sandboxing
 read_when: "Du vil have en dedikeret forklaring af sandboxing eller skal finjustere agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:24Z
 ---
 
 # Sandboxing
 
-OpenClaw kan køre **værktøjer inde i Docker-containere** for at reducere blast radius.
-Dette er **valgfrit** og styres af konfiguration (`agents.defaults.sandbox` eller
-`agents.list[].sandbox`). Hvis sandboxing er slået fra, kører værktøjer på værten.
-Gateway bliver på værten; værktøjseksekvering kører i en isoleret sandbox,
-når det er aktiveret.
+OpenClaw kan køre **værktøjer inde Docker containere** for at reducere blastradius.
+Dette er **valgfri** og styres af konfiguration (`agents.defaults.sandbox` eller
+`agents.list[].sandbox`). Hvis sandkassen er slukket, skal værktøjerne køres på værten.
+Gatewayen forbliver på værten; udførelse af værktøj kører i en isoleret sandkasse
+når aktiveret.
 
 Dette er ikke en perfekt sikkerhedsgrænse, men det begrænser markant filsystem-
 og procesadgang, når modellen gør noget dumt.
@@ -27,8 +20,8 @@ og procesadgang, når modellen gør noget dumt.
 
 - Værktøjseksekvering (`exec`, `read`, `write`, `edit`, `apply_patch`, `process`, osv.).
 - Valgfri sandboxet browser (`agents.defaults.sandbox.browser`).
-  - Som standard starter sandbox-browseren automatisk (sikrer at CDP er tilgængelig), når browser-værktøjet har brug for den.
-    Konfigurer via `agents.defaults.sandbox.browser.autoStart` og `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
+  - Som standard starter sandkasse-browseren auto-starter (sikrer, at CDP er tilgængelig), når browserværktøjet har brug for det.
+    Konfigurere via `agents.defaults.sandbox.browser.autoStart` og `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
   - `agents.defaults.sandbox.browser.allowHostControl` lader sandboxede sessioner målrette værtsbrowseren eksplicit.
   - Valgfrie tilladelseslister afgrænser `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
@@ -37,7 +30,7 @@ Ikke sandboxet:
 - Selve Gateway-processen.
 - Ethvert værktøj, der eksplicit er tilladt at køre på værten (fx `tools.elevated`).
   - **Elevated exec kører på værten og omgår sandboxing.**
-  - Hvis sandboxing er slået fra, ændrer `tools.elevated` ikke eksekveringen (allerede på værten). Se [Elevated Mode](/tools/elevated).
+  - Hvis sandboxing er slukket, ændrer 'tools.elevated' ikke kørsel (allerede på vært). Se [Elevated Mode](/tools/elevated).
 
 ## Tilstande
 
@@ -45,9 +38,9 @@ Ikke sandboxet:
 
 - `"off"`: ingen sandboxing.
 - `"non-main"`: sandbox kun **ikke-hoved** sessioner (standard, hvis du vil have normale chats på værten).
-- `"all"`: hver session kører i en sandbox.
-  Bemærk: `"non-main"` er baseret på `session.mainKey` (standard `"main"`), ikke agent-id.
-  Gruppe-/kanalsessioner bruger deres egne nøgler, så de tæller som ikke-hoved og vil blive sandboxet.
+- `"alle"`: hver session kører i en sandkasse.
+  Bemærk: `"non-main"` er baseret på `session.mainKey` (standard `"main"`), ikke agent id.
+  Gruppe/kanal sessioner bruger deres egne nøgler, så de tæller som ikke-main og vil blive sandboxed.
 
 ## Omfang
 
@@ -65,18 +58,18 @@ Ikke sandboxet:
 - `"ro"`: monterer agent-workspacet skrivebeskyttet på `/agent` (deaktiverer `write`/`edit`/`apply_patch`).
 - `"rw"`: monterer agent-workspacet med læse/skrive på `/workspace`.
 
-Indgående medier kopieres ind i det aktive sandbox-workspace (`media/inbound/*`).
-Skills-note: `read`-værktøjet er sandbox-rodfæstet. Med `workspaceAccess: "none"`
-spejler OpenClaw egnede skills ind i sandbox-workspacet (`.../skills`), så
-de kan læses. Med `"rw"` er workspace-skills læsbare fra
+Indgående medier kopieres ind i det aktive arbejdsområde for sandkasse (`media/inbound/*`).
+Noter om færdigheder: værktøjet 'læst' er sandkasse-rooted. Med `workspaceAccess: "none"`,
+OpenClaw spejler kvalificerede færdigheder i sandkasse-arbejdsområdet (`.../skills`) så
+de kan læses. Med `"rw"`, arbejdsområde færdigheder kan læses fra
 `/workspace/skills`.
 
 ## Brugerdefinerede bind mounts
 
-`agents.defaults.sandbox.docker.binds` monterer ekstra værtsmapper ind i containeren.
-Format: `host:container:mode` (fx `"/home/user/source:/source:rw"`).
+`agents.defaults.sandbox.docker.binds` monterer yderligere værtsmapper i beholderen.
+Format: `vært:container:mode` (fx, `"/home/user/source:/source:rw"`).
 
-Globale og pr.-agent binds **flettes** (ikke erstattes). Under `scope: "shared"` ignoreres pr.-agent binds.
+Globale og per-agent bindinger er **sammenflettede** (ikke erstattet). Under `scope: "shared"`, per-agent binds ignoreres.
 
 Eksempel (skrivebeskyttet kilde + docker socket):
 
@@ -121,10 +114,10 @@ Byg det én gang:
 scripts/sandbox-setup.sh
 ```
 
-Bemærk: standard-imaget inkluderer **ikke** Node. Hvis en skill kræver Node (eller
-andre runtimes), så enten bag et custom image eller installér via
-`sandbox.docker.setupCommand` (kræver netværksudgang + skrivbar root +
-root-bruger).
+Bemærk: Standardbilledet indeholder **ikke** Node. Hvis en dygtighed behøver Node (eller
+andre runtimes), enten bage et brugerdefineret billede eller installere via
+`sandbox. ocker.setupCommand` (kræver netværkegress + skrivbar root +
+root bruger).
 
 Sandboxet browser-image:
 
@@ -132,7 +125,7 @@ Sandboxet browser-image:
 scripts/sandbox-browser-setup.sh
 ```
 
-Som standard kører sandbox-containere **uden netværk**.
+Som standard kører sandkasse containere med **intet netværk**.
 Tilsidesæt med `agents.defaults.sandbox.docker.network`.
 
 Docker-installationer og den containeriserede gateway findes her:
@@ -140,42 +133,42 @@ Docker-installationer og den containeriserede gateway findes her:
 
 ## setupCommand (engangs container-opsætning)
 
-`setupCommand` kører **én gang** efter sandbox-containeren er oprettet (ikke ved hver kørsel).
-Den eksekveres inde i containeren via `sh -lc`.
+`setupCommand` kører **en gang** efter sandkassen er oprettet (ikke på hver kørsel).
+Det udfører inde i beholderen via `sh -lc`.
 
 Stier:
 
 - Global: `agents.defaults.sandbox.docker.setupCommand`
-- Pr. agent: `agents.list[].sandbox.docker.setupCommand`
+- Per-agent: `agents.list[].sandbox.docker.setupCommand`
 
 Almindelige faldgruber:
 
 - Standard `docker.network` er `"none"` (ingen egress), så pakkeinstallationer vil fejle.
 - `readOnlyRoot: true` forhindrer skrivninger; sæt `readOnlyRoot: false` eller bag et custom image.
 - `user` skal være root for pakkeinstallationer (udelad `user` eller sæt `user: "0:0"`).
-- Sandbox exec arver **ikke** værts-`process.env`. Brug
-  `agents.defaults.sandbox.docker.env` (eller et custom image) til skill API-nøgler.
+- Sandbox exec arver **ikke** vært `process.env`. Brug
+  `agents.defaults.sandbox.docker.env` (eller et brugerdefineret billede) for dygtighed API nøgler.
 
 ## Værktøjspolitik + flugtveje
 
-Tillad/afvis-politikker for værktøjer gælder stadig før sandbox-regler. Hvis et værktøj er afvist
-globalt eller pr. agent, bringer sandboxing det ikke tilbage.
+Værktøjet tillader/benægter politikker gælder stadig før sandkasse regler. Hvis et værktøj nægtes
+globalt eller per agent, bringer sandboxing ikke det tilbage.
 
-`tools.elevated` er en eksplicit flugtvej, der kører `exec` på værten.
-`/exec`-direktiver gælder kun for autoriserede afsendere og vedvarer pr. session; for hårdt at deaktivere
-`exec`, brug værktøjspolitik-afvis (se [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
+`tools.elevated` er en eksplicit undslippe luge, der kører `exec` på værten.
+`/exec` direktiver gælder kun for autoriserede afsendere og varer ved pr. mødeperiode; til hard-deaktivere
+`exec`, brug værktøj politik benægte (se [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
 Fejlfinding:
 
 - Brug `openclaw sandbox explain` til at inspicere effektiv sandbox-tilstand, værktøjspolitik og fix-it-konfigurationsnøgler.
-- Se [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for den mentale model “hvorfor er dette blokeret?”.
-  Hold det låst ned.
+- Se [Sandkasse vs værktøjspolitik vs forhøjet](/gateway/sandbox-vs-tool-policy-vs-elevated) for “hvorfor er denne blokeret?” mental model.
+  Hold den låst nede.
 
 ## Multi-agent-tilsidesættelser
 
-Hver agent kan tilsidesætte sandbox + værktøjer:
-`agents.list[].sandbox` og `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox-værktøjspolitik).
-Se [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for præcedens.
+Hver agent kan tilsidesætte sandkasse + værktøjer:
+`agents.list[].sandbox` og `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandkasse værktøjspolitik).
+Se [Multi-Agent Sandbox & Værktøjer](/tools/multi-agent-sandbox-tools) for forrang.
 
 ## Minimal aktiveringseksempel
 

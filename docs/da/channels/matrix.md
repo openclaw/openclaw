@@ -3,24 +3,17 @@ summary: "Matrix-supportstatus, funktioner og konfiguration"
 read_when:
   - Arbejder med Matrix-kanalfunktioner
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:11Z
 ---
 
 # Matrix (plugin)
 
-Matrix er en åben, decentraliseret beskedprotokol. OpenClaw forbinder som en Matrix-**bruger**
-på enhver homeserver, så du skal have en Matrix-konto til botten. Når den er logget ind, kan du sende DM’er
-direkte til botten eller invitere den til rum (Matrix “grupper”). Beeper er også en gyldig klient,
-men kræver at E2EE er aktiveret.
+Matrix er en åben, decentraliseret meddelelsesprotokol. OpenClaw forbinder som en Matrix **bruger**
+på en hvilken som helst hjemmeserver, så du har brug for en Matrix-konto til boten. Når den er logget ind, kan du DM
+botten direkte eller invitere den til rum (Matrix "grupper"). Bieper er også en gyldig klientmulighed,
+men det kræver E2EE at være aktiveret.
 
-Status: understøttet via plugin (@vector-im/matrix-bot-sdk). Direkte beskeder, rum, tråde, medier, reaktioner,
-afstemninger (send + poll-start som tekst), placering og E2EE (med kryptosupport).
+Status: understøttet via plugin (@vector-im/matrix-bot-sdk). Direkte beskeder, værelser, tråde, medier, reaktioner,
+meningsmålinger (send + poll-start som tekst), placering og E2EE (med kryptostøtte).
 
 ## Plugin påkrævet
 
@@ -48,10 +41,13 @@ Detaljer: [Plugins](/tools/plugin)
 1. Installér Matrix-plugin’et:
    - Fra npm: `openclaw plugins install @openclaw/matrix`
    - Fra et lokalt checkout: `openclaw plugins install ./extensions/matrix`
+
 2. Opret en Matrix-konto på en homeserver:
    - Se hostingmuligheder på [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Eller host selv.
+
 3. Hent en adgangstoken til botkontoen:
+
    - Brug Matrix login-API’et med `curl` på din homeserver:
 
    ```bash
@@ -79,10 +75,12 @@ Detaljer: [Plugins](/tools/plugin)
    - Hvis begge er sat, har konfigurationen forrang.
    - Med adgangstoken hentes bruger-id automatisk via `/whoami`.
    - Når den er sat, skal `channels.matrix.userId` være det fulde Matrix-id (eksempel: `@bot:example.org`).
+
 5. Genstart gateway’en (eller afslut introduktionen).
-6. Start en DM med botten eller invitér den til et rum fra en Matrix-klient
-   (Element, Beeper m.fl.; se [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper kræver E2EE,
-   så sæt `channels.matrix.encryption: true` og verificér enheden.
+
+6. Start en DM med botten eller inviter den til et rum fra enhver Matrix klient
+   (Element, Beeper, etc.; se [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Bieper kræver E2EE,
+   så sæt `channels.matrix.encryption: true` og verificer enheden.
 
 Minimal konfiguration (adgangstoken, bruger-id hentes automatisk):
 
@@ -124,7 +122,7 @@ Aktivér med `channels.matrix.encryption: true`:
 - Hvis kryptomodullet indlæses, dekrypteres krypterede rum automatisk.
 - Udgående medier krypteres ved afsendelse til krypterede rum.
 - Ved første forbindelse anmoder OpenClaw om enhedsverifikation fra dine andre sessioner.
-- Verificér enheden i en anden Matrix-klient (Element m.fl.) for at aktivere nøgledeling.
+- Kontroller enheden i en anden Matrix klient (Element, osv.) for at aktivere nøgledeling.
 - Hvis kryptomodullet ikke kan indlæses, deaktiveres E2EE, og krypterede rum dekrypteres ikke;
   OpenClaw logger en advarsel.
 - Hvis du ser fejl om manglende kryptomodul (for eksempel `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -134,13 +132,13 @@ Aktivér med `channels.matrix.encryption: true`:
 
 Kryptotilstand gemmes pr. konto + adgangstoken i
 `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
-(SQLite-database). Synkroniseringstilstand ligger side om side i `bot-storage.json`.
-Hvis adgangstoken (enhed) ændres, oprettes et nyt lager, og botten skal
-re-verificeres for krypterede rum.
+(SQLite database). Synkroniser tilstand lever sammen med det i `bot-storage.json`.
+Hvis adgangstoken (enheden) ændres, oprettes en ny butik, og botten skal være
+re-verificeret for krypterede rum.
 
-**Enhedsverifikation:**
-Når E2EE er aktiveret, anmoder botten om verifikation fra dine andre sessioner ved opstart.
-Åbn Element (eller en anden klient), og godkend verifikationsanmodningen for at etablere tillid.
+**Enhedsbekræftelse:**
+Når E2EE er aktiveret, vil botten anmode om bekræftelse fra dine andre sessioner ved opstart.
+Åbn Element (eller en anden klient) og godkend verifikationsanmodningen for at etablere tillid.
 Når den er verificeret, kan botten dekryptere beskeder i krypterede rum.
 
 ## Routingmodel
@@ -150,16 +148,16 @@ Når den er verificeret, kan botten dekryptere beskeder i krypterede rum.
 
 ## Adgangskontrol (DM’er)
 
-- Standard: `channels.matrix.dm.policy = "pairing"`. Ukendte afsendere får en parringskode.
+- Standard: `channels.matrix.dm.policy = "pairing"`. Ukendt afsendere får en parringskode.
 - Godkend via:
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - Offentlige DM’er: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
-- `channels.matrix.dm.allowFrom` accepterer fulde Matrix-bruger-id’er (eksempel: `@user:server`). Opsætningsguiden resolver visningsnavne til bruger-id’er, når katalogsøgningen finder et enkelt, præcist match.
+- `channels.matrix.dm.allowFrom` accepterer fulde Matrix bruger-id'er (eksempel: `@user:server`). Guiden løser visningsnavne til brugernavne, når mappesøgning finder en enkelt nøjagtig match.
 
 ## Rum (grupper)
 
-- Standard: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Brug `channels.defaults.groupPolicy` til at tilsidesætte standarden, når den ikke er sat.
+- Standard: `channels.matrix.groupPolicy = "allowlist"` (mention-begrænset). Brug `channels.defaults.groupPolicy` for at tilsidesætte standarden, når den ikke er angivet.
 - Tilladelseslist rum med `channels.matrix.groups` (rum-id’er eller aliaser; navne resolveres til id’er, når katalogsøgningen finder et enkelt, præcist match):
 
 ```json5
@@ -197,17 +195,17 @@ Når den er verificeret, kan botten dekryptere beskeder i krypterede rum.
 
 ## Funktioner
 
-| Funktion          | Status                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------- |
-| Direkte beskeder  | ✅ Understøttet                                                                              |
-| Rum               | ✅ Understøttet                                                                              |
-| Tråde             | ✅ Understøttet                                                                              |
-| Medier            | ✅ Understøttet                                                                              |
+| Funktion          | Status                                                                                                         |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| Direkte beskeder  | ✅ Understøttet                                                                                                 |
+| Rum               | ✅ Understøttet                                                                                                 |
+| Tråde             | ✅ Understøttet                                                                                                 |
+| Medier            | ✅ Understøttet                                                                                                 |
 | E2EE              | ✅ Understøttet (kryptomodul påkrævet)                                                       |
 | Reaktioner        | ✅ Understøttet (send/læs via værktøjer)                                                     |
 | Afstemninger      | ✅ Afsendelse understøttet; indgående poll-start konverteres til tekst (svar/slut ignoreres) |
 | Placering         | ✅ Understøttet (geo-URI; højde ignoreres)                                                   |
-| Native kommandoer | ✅ Understøttet                                                                              |
+| Native kommandoer | ✅ Understøttet                                                                                                 |
 
 ## Fejlfinding
 
@@ -253,7 +251,7 @@ Udbyderindstillinger:
 - `channels.matrix.textChunkLimit`: udgående tekststørrelse pr. chunk (tegn).
 - `channels.matrix.chunkMode`: `length` (standard) eller `newline` for at splitte på tomme linjer (afsnitsgrænser) før længdeopdeling.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (standard: parring).
-- `channels.matrix.dm.allowFrom`: DM-tilladelsesliste (fulde Matrix-bruger-id’er). `open` kræver `"*"`. Guiden resolverer navne til id’er, når det er muligt.
+- `channels.matrix.dm.allowFrom`: DM allowlist (full Matrix user IDs). `open` kræver `"*"`. Guiden løser navne til ID'er når det er muligt.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (standard: tilladelsesliste).
 - `channels.matrix.groupAllowFrom`: tilladte afsendere for gruppemeddelelser (fulde Matrix-bruger-id’er).
 - `channels.matrix.allowlistOnly`: gennemtving tilladelseslistregler for DM’er + rum.

@@ -3,13 +3,6 @@ summary: "用於聊天 UI 的 Loopback WebChat 靜態主機與 Gateway WebSocket
 read_when:
   - 偵錯或設定 WebChat 存取時
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:39Z
 ---
 
 # WebChat（Gateway WebSocket UI）
@@ -24,16 +17,16 @@ x-i18n:
 
 ## 快速開始
 
-1. 啟動 Gateway 閘道器。
+1. 啟動 Gateway 閘道器.
 2. 開啟 WebChat UI（macOS/iOS 應用程式）或 Control UI 的聊天分頁。
-3. 確認已設定 Gateway 閘道器的身分驗證（預設為必要，即使是在 loopback 上）。
+3. 47. 確保已設定 gateway 驗證（預設為必須，即使在 loopback 上）。
 
 ## 運作方式（行為）
 
 - UI 會連線至 Gateway WebSocket，並使用 `chat.history`、`chat.send` 與 `chat.inject`。
 - `chat.inject` 會直接將助理備註附加到對話紀錄，並廣播至 UI（不會執行代理程式）。
-- 歷史紀錄一律從 Gateway 閘道器取得（不進行本機檔案監看）。
-- 若 Gateway 閘道器無法連線，WebChat 將為唯讀模式。
+- 48. 歷史紀錄一律從 gateway 取得（不會監看本地檔案）。
+- If the gateway is unreachable, WebChat is read-only.
 
 ## 遠端使用
 
@@ -46,9 +39,9 @@ x-i18n:
 
 頻道選項：
 
-- 沒有專用的 `webchat.*` 區塊。WebChat 會使用 Gateway 閘道器端點與下方的身分驗證設定。
+- 50. 沒有專用的 `webchat.*` 區塊。 WebChat uses the gateway endpoint + auth settings below.
 
-相關的全域選項：
+Related global options:
 
 - `gateway.port`、`gateway.bind`：WebSocket 主機／連接埠。
 - `gateway.auth.mode`、`gateway.auth.token`、`gateway.auth.password`：WebSocket 身分驗證。

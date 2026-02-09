@@ -4,13 +4,6 @@ read_when:
   - macOS लॉग कैप्चर करते समय या निजी डेटा लॉगिंग की जाँच करते समय
   - वॉइस वेक/सत्र लाइफ़साइकिल समस्याओं का डिबग करते समय
 title: "macOS लॉगिंग"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:31Z
 ---
 
 # लॉगिंग (macOS)
@@ -21,17 +14,17 @@ OpenClaw macOS ऐप लॉग्स को swift-log (डिफ़ॉल्ट
 
 - Verbosity: **Debug pane → Logs → App logging → Verbosity**
 - सक्षम करें: **Debug pane → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
-- स्थान: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (स्वचालित रूप से रोटेट होता है; पुराने फ़ाइलों के नाम के अंत में `.1`, `.2`, … जुड़ते हैं)
+- 14. लोकेशन: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (अपने‑आप रोटेट होता है; पुराने फ़ाइलों के साथ `.1`, `.2`, … जोड़ा जाता है)
 - साफ़ करें: **Debug pane → Logs → App logging → “Clear”**
 
 टिप्पणियाँ:
 
-- यह **डिफ़ॉल्ट रूप से बंद** रहता है। केवल सक्रिय डिबगिंग के दौरान ही सक्षम करें।
+- 15. यह **डिफ़ॉल्ट रूप से बंद** है। 16. केवल सक्रिय रूप से डिबग करते समय ही सक्षम करें।
 - फ़ाइल को संवेदनशील मानें; समीक्षा के बिना साझा न करें।
 
 ## macOS पर यूनिफ़ाइड लॉगिंग का निजी डेटा
 
-यूनिफ़ाइड लॉगिंग अधिकांश पेलोड्स को तब तक रिडैक्ट करती है जब तक कोई सबसिस्टम `privacy -off` में ऑप्ट-इन न करे। Peter के macOS पर [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) लेख के अनुसार, यह नियंत्रण `/Library/Preferences/Logging/Subsystems/` में एक plist द्वारा होता है, जो सबसिस्टम नाम से कीड होता है। केवल नए लॉग एंट्रीज़ ही फ़्लैग को अपनाती हैं, इसलिए किसी समस्या को पुनः उत्पन्न करने से पहले इसे सक्षम करें।
+17. यूनिफ़ाइड लॉगिंग अधिकांश पेलोड्स को रेडैक्ट कर देती है, जब तक कोई सबसिस्टम `privacy -off` में ऑप्ट‑इन न करे। 18. पीटर की macOS पर [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) वाली लिखावट के अनुसार, यह `/Library/Preferences/Logging/Subsystems/` में सबसिस्टम नाम से की गई plist द्वारा नियंत्रित होता है। 19. केवल नई लॉग एंट्रियाँ ही फ़्लैग को अपनाती हैं, इसलिए किसी समस्या को दोहराने से पहले इसे सक्षम करें।
 
 ## OpenClaw के लिए सक्षम करें (`bot.molt`)
 

@@ -3,13 +3,6 @@ summary: "Roteamento multiagente: agentes isolados, contas de canal e vínculos"
 title: Roteamento Multiagente
 read_when: "Voce quer varios agentes isolados (workspaces + autenticação) em um unico processo do gateway."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:47Z
 ---
 
 # Roteamento Multiagente
@@ -39,8 +32,7 @@ disponiveis em `~/.openclaw/skills`. Veja [Skills: por agente vs compartilhadas]
 
 O Gateway pode hospedar **um agente** (padrão) ou **muitos agentes** lado a lado.
 
-**Nota sobre workspace:** o workspace de cada agente é o **cwd padrão**, não um sandbox rígido.
-Caminhos relativos são resolvidos dentro do workspace, mas caminhos absolutos podem
+**Nota sobre workspace:** o workspace de cada agente é o **cwd padrão**, não um sandbox rígido. Caminhos relativos são resolvidos dentro do workspace, mas caminhos absolutos podem
 alcançar outras localizações do host, a menos que o sandboxing esteja habilitado. Veja
 [Sandboxing](/gateway/sandboxing).
 

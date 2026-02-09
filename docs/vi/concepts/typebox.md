@@ -3,20 +3,14 @@ summary: "Schema TypeBox làm nguồn sự thật duy nhất cho giao thức Gat
 read_when:
   - Cập nhật schema giao thức hoặc codegen
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:53Z
 ---
 
 # TypeBox là nguồn sự thật cho giao thức
 
 Cập nhật lần cuối: 2026-01-10
 
-TypeBox là một thư viện schema ưu tiên TypeScript. Chúng tôi dùng nó để định nghĩa **giao thức WebSocket của Gateway** (bắt tay, request/response, sự kiện máy chủ). Các schema này điều khiển **xác thực lúc chạy**, **xuất JSON Schema**, và **codegen Swift** cho ứng dụng macOS. Một nguồn sự thật; mọi thứ khác đều được sinh tự động.
+TypeBox là một thư viện schema ưu tiên TypeScript. Chúng tôi dùng nó để định nghĩa **giao thức Gateway WebSocket** (bắt tay, yêu cầu/phản hồi, sự kiện máy chủ). Các schema đó
+thúc đẩy **xác thực thời gian chạy**, **xuất JSON Schema** và **sinh mã Swift** cho ứng dụng macOS. Một nguồn sự thật; mọi thứ khác đều được sinh ra.
 
 Nếu bạn muốn bối cảnh giao thức ở mức cao hơn, hãy bắt đầu với
 [Kiến trúc Gateway](/concepts/architecture).
@@ -27,11 +21,12 @@ Mỗi thông điệp WS của Gateway là một trong ba frame:
 
 - **Request**: `{ type: "req", id, method, params }`
 - **Response**: `{ type: "res", id, ok, payload | error }`
-- **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
+- **Event**: `{ type: "event", event, payload, seq?, stateVersion?
+  }` Khung đầu tiên **phải** là một yêu cầu `connect`.
 
-Frame đầu tiên **bắt buộc** phải là một request `connect`. Sau đó, client có thể gọi
-các method (ví dụ: `health`, `send`, `chat.send`) và đăng ký sự kiện (ví dụ:
-`presence`, `tick`, `agent`).
+Sau đó, client có thể gọi
+các phương thức (ví dụ: `health`, `send`, `chat.send`) và đăng ký sự kiện (ví dụ:
+`presence`, `tick`, `agent`). **Phía máy chủ**: mọi khung đến đều được xác thực bằng AJV.
 
 Luồng kết nối (tối thiểu):
 
@@ -77,8 +72,8 @@ Danh sách có thẩm quyền nằm ở `src/gateway/server.ts` (`METHODS`, `EVE
 
 ## Cách các schema được dùng lúc chạy
 
-- **Phía máy chủ**: mọi frame đi vào đều được xác thực bằng AJV. Bắt tay chỉ
-  chấp nhận một request `connect` có params khớp với `ConnectParams`.
+- Bắt tay chỉ
+  chấp nhận một yêu cầu `connect` có params khớp với `ConnectParams`. JSON Schema được sinh ra nằm trong repo tại `dist/protocol.schema.json`.
 - **Phía client**: client JS xác thực các frame sự kiện và phản hồi trước khi
   sử dụng chúng.
 - **Bề mặt method**: Gateway công bố các `methods` và
@@ -281,7 +276,7 @@ Các loại frame không xác định được giữ nguyên dưới dạng payl
 
 ## JSON schema trực tiếp
 
-JSON Schema được sinh nằm trong repo tại `dist/protocol.schema.json`. Tệp thô đã xuất bản thường có tại:
+Tệp thô đã phát hành thường có sẵn tại: Chỉ báo đang gõ được gửi tới kênh chat trong khi một lần chạy đang hoạt động.
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 

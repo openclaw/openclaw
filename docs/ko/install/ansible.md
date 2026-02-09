@@ -5,13 +5,6 @@ read_when:
   - VPN 액세스가 포함된 방화벽 격리 설정이 필요할 때
   - 원격 Debian/Ubuntu 서버에 배포할 때
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:25Z
 ---
 
 # Ansible 설치
@@ -30,7 +23,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 >
 > openclaw-ansible 저장소는 Ansible 배포에 대한 단일 기준 소스입니다. 이 페이지는 간략한 개요를 제공합니다.
 
-## 제공되는 기능
+## What You Get
 
 - 🔒 **방화벽 우선 보안**: UFW + Docker 격리 (SSH + Tailscale 만 접근 가능)
 - 🔐 **Tailscale VPN**: 서비스를 공개하지 않고도 안전한 원격 액세스
@@ -46,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 - **네트워크**: 패키지 설치를 위한 인터넷 연결
 - **Ansible**: 2.14+ (빠른 시작 스크립트로 자동 설치됨)
 
-## 설치되는 구성 요소
+## What Gets Installed
 
 Ansible 플레이북은 다음을 설치 및 구성합니다:
 

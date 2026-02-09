@@ -4,13 +4,6 @@ read_when:
   - Вы хотите выбрать провайдера модели
   - Вам нужны быстрые примеры настройки аутентификации LLM и выбора модели
 title: "Быстрый старт по провайдерам моделей"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:50Z
 ---
 
 # Провайдеры моделей

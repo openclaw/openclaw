@@ -5,19 +5,12 @@ read_when:
   - Du behöver en Firecrawl API-nyckel
   - Du vill ha anti-bot-extraktion för web_fetch
 title: "Firecrawl"
-x-i18n:
-  source_path: tools/firecrawl.md
-  source_hash: 08a7ad45b41af412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:37Z
 ---
 
 # Firecrawl
 
-OpenClaw kan använda **Firecrawl** som en reservextraktor för `web_fetch`. Det är en värdbaserad
-tjänst för innehållsextraktion som stöder kringgående av bot-skydd och cachning, vilket hjälper
+OpenClaw kan använda **Firecrawl** som reservextraherare för `web_fetch`. Det är en värd
+content extraction service som stöder bot kringgå och caching, vilket hjälper
 med JS-tunga webbplatser eller sidor som blockerar vanliga HTTP-hämtningar.
 
 ## Skaffa en API-nyckel
@@ -48,14 +41,14 @@ med JS-tunga webbplatser eller sidor som blockerar vanliga HTTP-hämtningar.
 Noteringar:
 
 - `firecrawl.enabled` är som standard true när en API-nyckel finns.
-- `maxAgeMs` styr hur gamla cachade resultat får vara (ms). Standard är 2 dagar.
+- `maxAgeMs` kontrollerar hur gamla cachade resultat kan vara (ms). Standard är 2 dagar.
 
 ## Stealth / kringgående av bot-skydd
 
-Firecrawl exponerar en parameter för **proxy-läge** för kringgående av bot-skydd (`basic`, `stealth` eller `auto`).
-OpenClaw använder alltid `proxy: "auto"` plus `storeInCache: true` för Firecrawl-förfrågningar.
-Om proxy utelämnas använder Firecrawl som standard `auto`. `auto` försöker igen med stealth-proxys om ett grundläggande försök misslyckas, vilket kan använda fler krediter
-än endast grundläggande skrapning.
+Firecrawl exponerar en **proxyläge** parameter för att kringgå botar (`basic`, `stealth`, eller `auto`).
+OpenClaw använder alltid `proxy: "auto"` plus `storeInCache: true` för Firecrawl förfrågningar.
+Om proxy utelämnas, är Firecrawl standard `auto`. `auto` försöker med stealth proxies om ett grundläggande försök misslyckas, vilket kan använda fler krediter
+än basic-only scraping.
 
 ## Hur `web_fetch` använder Firecrawl
 

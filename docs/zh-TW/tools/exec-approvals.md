@@ -5,27 +5,18 @@ read_when:
   - 在 macOS 應用程式中實作 Exec 核准 UX
   - 檢視沙箱逃逸提示與其影響
 title: "Exec 核准"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:47Z
 ---
 
 # Exec 核准
 
-Exec 核准是 **配套應用程式 / 節點主機防護欄**，用於允許沙箱化的代理程式在真實主機上執行命令
-（`gateway` 或 `node`）。可將其視為一個安全互鎖：
-只有在「政策 + 允許清單 +（選用）使用者核准」全部同意時，命令才會被允許。
-Exec 核准是 **額外** 加在工具政策與 elevated 門檻之上（除非 elevated 設為 `full`，此時會略過核准）。
-有效政策取 `tools.exec.*` 與核准預設值中 **較嚴格者**；若省略某個核准欄位，則使用 `tools.exec` 的值。
+2. Exec 核准是**伴生應用程式 / 節點主機護欄**，用來允許沙箱化代理在真實主機（`gateway` 或 `node`）上執行指令。 Think of it like a safety interlock:
+   commands are allowed only when policy + allowlist + (optional) user approval all agree.
+   Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
+3. 實際生效的政策是 `tools.exec.*` 與核准預設值中**較嚴格**者；如果省略某個核准欄位，則使用 `tools.exec` 的值。
 
-若配套應用程式 UI **不可用**，任何需要提示的請求
-會由 **ask fallback** 處理（預設：拒絕）。
+6. 如果**伴生應用程式 UI 無法使用**，任何需要提示的請求都會由 **ask 後備機制** 處理（預設：拒絕）。
 
-## 適用範圍
+## 7. 適用範圍
 
 Exec 核准會在執行主機本地端強制套用：
 
@@ -89,7 +80,7 @@ macOS 分流：
 ### Ask（`exec.ask`）
 
 - **off**：永不提示。
-- **on-miss**：僅在允許清單未命中時提示。
+- 8. **on-miss**：僅在允許清單未匹配時才提示。
 - **always**：每個命令都提示。
 
 ### Ask fallback（`askFallback`）
@@ -102,9 +93,9 @@ macOS 分流：
 
 ## 允許清單（每個代理程式）
 
-允許清單是 **每個代理程式** 各自獨立。若存在多個代理程式，請在 macOS 應用程式中切換正在編輯的代理程式。
-比對模式為 **不區分大小寫的 glob**。模式應解析為 **二進位檔路徑**（僅檔名的項目會被忽略）。
-舊版的 `agents.default` 項目會在載入時移轉為 `agents.main`。
+9. 允許清單是**以代理為單位**。 10. 如果存在多個代理，請在 macOS 應用程式中切換你正在編輯的代理。 11. 模式為**不區分大小寫的 glob 比對**。
+10. 模式應解析為**二進位路徑**（僅檔名的項目會被忽略）。
+11. 舊版 `agents.default` 項目在載入時會遷移到 `agents.main`。
 
 範例：
 
@@ -112,7 +103,7 @@ macOS 分流：
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 
-每個允許清單項目會追蹤：
+14. 每個允許清單項目會追蹤：
 
 - **id**：用於 UI 身分識別的穩定 UUID（選用）
 - **last used**：最後使用時間戳記
@@ -121,48 +112,35 @@ macOS 分流：
 
 ## 自動允許 Skills CLI
 
-啟用 **Auto-allow skill CLIs** 後，已知 Skills 所引用的可執行檔
-會在節點（macOS 節點或無頭節點主機）上視為已列入允許清單。此功能會透過 Gateway RPC 使用
-`skills.bins` 來取得 skill 的 bin 清單。若你希望嚴格採用手動允許清單，請停用此功能。
+15. 啟用 **Auto-allow skill CLIs** 時，已知技能所引用的可執行檔會在節點上視為已加入允許清單（macOS 節點或無頭節點主機）。 16. 這會透過 Gateway RPC 使用 `skills.bins` 來取得技能二進位清單。 17. 如果你想要嚴格的手動允許清單，請停用此功能。
 
 ## 安全 bin（僅 stdin）
 
-`tools.exec.safeBins` 定義了一小組 **僅 stdin** 的二進位檔（例如 `jq`），
-在允許清單模式下 **不需要** 明確的允許清單項目即可執行。安全 bin 會拒絕
-位置式檔案引數與類路徑權杖，因此只能對輸入串流進行操作。
-在允許清單模式下，不會自動允許 shell 串接與重新導向。
+18. `tools.exec.safeBins` 定義了一小組**僅 stdin** 的二進位檔（例如 `jq`），可在允許清單模式下**不需**明確的允許清單項目即可執行。 19. Safe bins 會拒絕位置式檔案參數與類似路徑的權杖，因此它們只能操作傳入的串流。
+19. 在允許清單模式下，不會自動允許 shell 串接與重新導向。
 
-當每個最上層區段都符合允許清單（包含安全 bin 或 Skill 自動允許）時，
-允許 shell 串接（`&&`、`||`、`;`）。
-在允許清單模式下，重新導向仍不支援。
-在允許清單解析期間會拒絕命令替換（`$()` / 反引號），即使在
-雙引號內亦然；若需要字面上的 `$()` 文字，請使用單引號。
+21. 當每個頂層區段都符合允許清單（包含 safe bins 或技能自動允許）時，才允許 shell 串接（`&&`、`||`、`;`）。 22. 在允許清單模式下仍不支援重新導向。
+22. 在允許清單解析期間會拒絕指令替換（`$()` / 反引號），即使在雙引號內也是如此；若需要字面上的 `$()` 文字，請使用單引號。
 
 預設安全 bin：`jq`、`grep`、`cut`、`sort`、`uniq`、`head`、`tail`、`tr`、`wc`。
 
 ## 控制 UI 編輯
 
-使用 **Control UI → Nodes → Exec 核准** 卡片來編輯預設值、每個代理程式的
-覆寫設定，以及允許清單。選擇一個範圍（預設或某個代理程式），調整政策，
-新增／移除允許清單模式，然後按下 **Save**。UI 會顯示每個模式的 **last used**
-中繼資料，協助你保持清單整潔。
+24. 使用 **Control UI → Nodes → Exec approvals** 卡片來編輯預設值、每代理覆寫與允許清單。 25. 選擇一個範圍（預設值或某個代理），調整政策，新增/移除允許清單模式，然後按 **Save**。 26. UI 會顯示每個模式的**最近使用**中繼資料，方便你保持清單整潔。
 
-目標選擇器可選 **Gateway**（本地核准）或 **Node**。節點
-必須宣告 `system.execApprovals.get/set`（macOS 應用程式或無頭節點主機）。
-若某節點尚未宣告 exec 核准，請直接編輯其本地
-`~/.openclaw/exec-approvals.json`。
+27. 目標選擇器可選擇 **Gateway**（本機核准）或 **Node**。 28. 節點必須宣告 `system.execApprovals.get/set`（macOS 應用程式或無頭節點主機）。
+28. 如果節點尚未宣告 exec 核准，請直接編輯其本機的 `~/.openclaw/exec-approvals.json`。
 
 CLI：`openclaw approvals` 支援 Gateway 或 Node 的編輯（請參閱 [Approvals CLI](/cli/approvals)）。
 
-## 核准流程
+## 30. 核准流程
 
 當需要提示時，Gateway 會向操作員用戶端廣播 `exec.approval.requested`。
 Control UI 與 macOS 應用程式會透過 `exec.approval.resolve` 進行處理，接著 Gateway 會將
 已核准的請求轉送至節點主機。
+31. Control UI 與 macOS 應用程式會透過 `exec.approval.resolve` 進行處理，然後 gateway 會將已核准的請求轉送至節點主機。
 
-當需要核准時，exec 工具會立即回傳一個核准 id。請使用該 id 來
-關聯後續的系統事件（`Exec finished` / `Exec denied`）。
-若在逾時前未收到決策，該請求會被視為核准逾時，並以拒絕理由呈現。
+32. 當需要核准時，exec 工具會立即回傳一個核准 id。 33. 使用該 id 來關聯後續的系統事件（`Exec finished` / `Exec denied`）。 34. 如果在逾時前沒有收到決策，該請求會被視為核准逾時，並以拒絕原因呈現。
 
 確認對話框包含：
 
@@ -180,8 +158,7 @@ Control UI 與 macOS 應用程式會透過 `exec.approval.resolve` 進行處理�
 
 ## 將核准轉送至聊天頻道
 
-你可以將 exec 核准提示轉送到任何聊天頻道（包含外掛頻道），並以
-`/approve` 進行核准。此功能使用一般的對外傳遞管線。
+35. 你可以將 exec 核准提示轉送到任何聊天頻道（包含外掛頻道），並使用 `/approve` 進行核准。 36. 這會使用一般的對外傳遞管線。
 
 設定：
 
@@ -233,21 +210,20 @@ Exec 生命週期會以系統訊息呈現：
 - `Exec finished`
 - `Exec denied`
 
-這些訊息會在節點回報事件後張貼至代理程式的工作階段。
-Gateway 主機上的 exec 核准在命令完成時（以及可選地在執行時間超過門檻時）
-也會發出相同的生命週期事件。
-受核准門檻管控的 exec 會在這些訊息中重用核准 id 作為 `runId`，以利關聯。
+37. 這些事件會在節點回報後張貼到代理的工作階段中。
+38. Gateway 主機上的 exec 核准在指令完成時（以及可選地在執行時間超過門檻時）會發出相同的生命週期事件。
+39. 受核准門控的 exec 會在這些訊息中重用核准 id 作為 `runId`，以便輕鬆關聯。
 
-## 影響
+## 40. 影響
 
-- **full** 權限強大；能用允許清單時請優先使用。
-- **ask** 能讓你持續掌握狀況，同時仍可快速核准。
+- 41. **full** 很強大；能用允許清單時請優先使用。
+- 42. **ask** 讓你隨時掌握，同時仍可快速核准。
 - 每個代理程式的允許清單可防止某一代理程式的核准外洩到其他代理程式。
-- 核准僅適用於來自 **authorized senders** 的主機 exec 請求。未授權的寄件者無法發出 `/exec`。
-- `/exec security=full` 是為已授權操作員提供的工作階段層級便利功能，且設計上會略過核准。
-  若要硬性封鎖主機 exec，請將核准安全性設為 `deny`，或在工具政策中拒絕 `exec` 工具。
+- 43. 核准僅適用於來自**已授權傳送者**的主機 exec 請求。 Unauthorized senders cannot issue `/exec`.
+- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design.
+  To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
 
-相關：
+Related:
 
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)

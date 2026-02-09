@@ -4,18 +4,12 @@ read_when:
   - Du vill välja en modellleverantör
   - Du vill ha snabba exempel för LLM-autentisering + modellval
 title: "Snabbstart för modellleverantörer"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:14Z
 ---
 
 # Modellleverantörer
 
-OpenClaw kan använda många LLM-leverantörer. Välj en, autentisera och ställ sedan in standardmodellen som `provider/model`.
+OpenClaw kan använda många LMM-leverantörer. Välj en, autentisera, ställ sedan in standardmodellen
+som `provider/model`.
 
 ## Höjdpunkt: Venice (Venice AI)
 
@@ -54,4 +48,5 @@ Se [Venice AI](/providers/venice).
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-För den fullständiga leverantörskatalogen (xAI, Groq, Mistral m.fl.) och avancerad konfiguration, se [Model providers](/concepts/model-providers).
+För hela leverantörskatalogen (xAI, Groq, Mistral, etc.) och avancerad konfiguration,
+se [Modellleverantörer](/concepts/model-providers).

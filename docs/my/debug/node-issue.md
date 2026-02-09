@@ -4,13 +4,6 @@ read_when:
   - Node-only dev စကရစ်များ သို့မဟုတ် watch mode ပျက်ကွက်မှုများကို Debug လုပ်နေချိန်
   - OpenClaw တွင် tsx/esbuild loader ပျက်ကွက်မှုများကို စုံစမ်းစစ်ဆေးနေချိန်
 title: "Node + tsx ပျက်ကွက်မှု"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:19Z
 ---
 
 # Node + tsx "\_\_name is not a function" ပျက်ကွက်မှု
@@ -25,7 +18,7 @@ Node ဖြင့် OpenClaw ကို `tsx` အသုံးပြု၍ ပြ
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-Bun မှ `tsx` သို့ dev စကရစ်များ ပြောင်းလဲပြီးနောက် (commit `2871657e`, 2026-01-06) မှ စတင်ဖြစ်ပေါ်လာခဲ့ပါသည်။ Bun ကို အသုံးပြုသော runtime လမ်းကြောင်းတူတူမှာတော့ အလုပ်လုပ်နေခဲ့ပါသည်။
+ဤအရာသည် dev scripts များကို Bun မှ `tsx` သို့ ပြောင်းလဲပြီးနောက် စတင်ဖြစ်ပေါ်လာပါသည် (commit `2871657e`, 2026-01-06)။ တူညီသော runtime path သည် Bun နှင့်အတူ အလုပ်လုပ်ခဲ့ပါသည်။
 
 ## ပတ်ဝန်းကျင်
 
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## မှတ်ချက်များ / အယူအဆ
 
-- `tsx` သည် TS/ESM ကို ပြောင်းလဲရန် esbuild ကို အသုံးပြုပါသည်။ esbuild ၏ `keepNames` သည် `__name` helper တစ်ခုကို ထုတ်ပေးပြီး function အဓိပ္ပါယ်များကို `__name(...)` ဖြင့် ဖုံးအုပ်ပါသည်။
+- `tsx` သည် TS/ESM ကို ပြောင်းလဲရန် esbuild ကို အသုံးပြုပါသည်။ esbuild ၏ `keepNames` သည် `__name` helper ကို ထုတ်ပေးပြီး function definition များကို `__name(...)` ဖြင့် ပတ်လည်ထုပ်ပိုးပါသည်။
 - ပျက်ကွက်မှုသည် runtime တွင် `__name` ရှိနေသော်လည်း function မဟုတ်ကြောင်း ပြသနေပြီး Node 25 loader လမ်းကြောင်းတွင် 해당 module အတွက် helper ပျောက်ဆုံးခြင်း သို့မဟုတ် အစားထိုးရေးသားခံရခြင်း ဖြစ်နိုင်ကြောင်း အရိပ်အမြွက်ပေးပါသည်။
 - esbuild ကို အသုံးပြုသော အခြား consumer များတွင်လည်း helper ပျောက်ဆုံးခြင်း သို့မဟုတ် ပြန်လည်ရေးသားခံရခြင်းကြောင့် ဖြစ်ပေါ်သော ဆင်တူ `__name` helper ပြဿနာများကို အစီရင်ခံထားပြီးဖြစ်ပါသည်။
 
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## ဖြေရှင်းနည်းများ
 
 - dev စကရစ်များအတွက် Bun ကို အသုံးပြုပါ (ယာယီ ပြန်ပြောင်းအသုံးပြုခြင်း)။
+
 - Node + tsc watch ကို အသုံးပြုပြီး compile ထွက်လာသော output ကို ပြေးပါ—
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - ဒေသတွင်း အတည်ပြုထားသည်—`pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` သည် Node 25 တွင် အလုပ်လုပ်ပါသည်။
+
 - ဖြစ်နိုင်ပါက TS loader တွင် esbuild keepNames ကို ပိတ်ပါ ( `__name` helper ထည့်သွင်းမှုကို ကာကွယ်ပေးသည်)၊ သို့သော် tsx သည် ယခုအချိန်တွင် ၎င်းကို ဖော်ထုတ်မပေးသေးပါ။
+
 - ပြဿနာသည် Node 25 သီးသန့်ဖြစ်မဖြစ် စစ်ဆေးရန် `tsx` ဖြင့် Node LTS (22/24) ကို စမ်းသပ်ပါ။
 
 ## ကိုးကားချက်များ

@@ -1,17 +1,10 @@
 ---
-summary: „Verwenden Sie ein Claude-Max/Pro-Abonnement als OpenAI-kompatiblen API-Endpunkt“
+summary: "„Verwenden Sie ein Claude-Max/Pro-Abonnement als OpenAI-kompatiblen API-Endpunkt“"
 read_when:
   - Sie möchten ein Claude-Max-Abonnement mit OpenAI-kompatiblen Tools verwenden
   - Sie möchten einen lokalen API-Server, der die Claude Code CLI kapselt
   - Sie möchten Geld sparen, indem Sie ein Abonnement statt API-Schlüsseln verwenden
-title: „Claude Max API Proxy“
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:02Z
+title: "Claude Max API Proxy"
 ---
 
 # Claude Max API Proxy
@@ -20,10 +13,10 @@ x-i18n:
 
 ## Warum dies verwenden?
 
-| Ansatz                | Kosten                                                                  | Am besten geeignet für                                |
-| --------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------- |
+| Ansatz                | Kosten                                                                                                                                     | Am besten geeignet für                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
 | Anthropic API         | Zahlung pro Token (~15 $ pro Mio. Input, 75 $ pro Mio. Output für Opus) | Produktionsanwendungen, hohes Volumen                 |
-| Claude-Max-Abonnement | 200 $/Monat pauschal                                                    | Persönliche Nutzung, Entwicklung, unbegrenzte Nutzung |
+| Claude-Max-Abonnement | 200 $/Monat pauschal                                                                                                                       | Persönliche Nutzung, Entwicklung, unbegrenzte Nutzung |
 
 Wenn Sie ein Claude-Max-Abonnement haben und es mit OpenAI-kompatiblen Tools verwenden möchten, kann Ihnen dieser Proxy erheblich Geld sparen.
 
@@ -97,7 +90,7 @@ Sie können OpenClaw so konfigurieren, dass der Proxy als benutzerdefinierter Op
 
 ## Verfügbare Modelle
 
-| Modell-ID         | Zuordnung       |
+| Modell-ID         | Karten zu       |
 | ----------------- | --------------- |
 | `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |

@@ -4,13 +4,6 @@ read_when:
   - การอัปเดตพฤติกรรมหรือค่าเริ่มต้นของการลองซ้ำของผู้ให้บริการ
   - การดีบักข้อผิดพลาดการส่งของผู้ให้บริการหรือการจำกัดอัตรา
 title: "นโยบายการลองซ้ำ"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:05Z
 ---
 
 # นโยบายการลองซ้ำ

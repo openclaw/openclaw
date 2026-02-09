@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez un travail en arrière-plan/parallèle via l’agent
   - Vous modifiez la politique sessions_spawn ou l’outil de sous-agent
 title: "Sous-agents"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:14Z
 ---
 
 # Sous-agents
@@ -36,7 +29,8 @@ Objectifs principaux :
 - Rendre la surface des outils difficile à utiliser à mauvais escient : les sous-agents n’obtiennent **pas** les outils de session par défaut.
 - Éviter l’éventail imbriqué : les sous-agents ne peuvent pas lancer de sous-agents.
 
-Note sur les coûts : chaque sous-agent possède **son propre** contexte et sa propre consommation de tokens. Pour les tâches lourdes ou répétitives, définissez un modèle moins coûteux pour les sous-agents et conservez votre agent principal sur un modèle de meilleure qualité. Vous pouvez configurer cela via `agents.defaults.subagents.model` ou via des surcharges par agent.
+Note sur les coûts : chaque sous-agent possède **son propre** contexte et sa propre consommation de tokens. Pour les tâches lourdes ou répétitives, définissez un modèle moins coûteux pour les sous-agents et conservez votre agent principal sur un modèle de meilleure qualité.
+Vous pouvez configurer cela via `agents.defaults.subagents.model` ou via des surcharges par agent.
 
 ## Outil
 
@@ -47,7 +41,7 @@ Utilisez `sessions_spawn` :
 - Modèle par défaut : hérite de l’appelant, sauf si vous définissez `agents.defaults.subagents.model` (ou par agent `agents.list[].subagents.model`) ; un `sessions_spawn.model` explicite prévaut toujours.
 - Raisonnement par défaut : hérite de l’appelant, sauf si vous définissez `agents.defaults.subagents.thinking` (ou par agent `agents.list[].subagents.thinking`) ; un `sessions_spawn.thinking` explicite prévaut toujours.
 
-Paramètres de l’outil :
+Tool params:
 
 - `task` (requis)
 - `label?` (optionnel)

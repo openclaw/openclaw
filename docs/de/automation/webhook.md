@@ -4,13 +4,6 @@ read_when:
   - Hinzufügen oder Ändern von Webhook-Endpunkten
   - Anbinden externer Systeme an OpenClaw
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:11Z
 ---
 
 # Webhooks
@@ -57,7 +50,7 @@ Payload:
 
 Wirkung:
 
-- Stellt ein Systemereignis für die **Haupt**-Sitzung in die Warteschlange
+- Schlange ein System-Ereignis für die **Haupt** Sitzung ein
 - Wenn `mode=now`, wird ein sofortiger Heartbeat ausgelöst
 
 ### `POST /hooks/agent`

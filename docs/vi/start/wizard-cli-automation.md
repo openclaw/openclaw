@@ -5,13 +5,6 @@ read_when:
   - Bạn cần các ví dụ không tương tác cho từng nhà cung cấp cụ thể
 title: "Tự động hóa CLI"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:14Z
 ---
 
 # Tự động hóa CLI
@@ -19,7 +12,7 @@ x-i18n:
 Sử dụng `--non-interactive` để tự động hóa `openclaw onboard`.
 
 <Note>
-`--json` không đồng nghĩa với chế độ không tương tác. Hãy dùng `--non-interactive` (và `--workspace`) cho các script.
+`--json` không ngụ ý chế độ không tương tác. Use `--non-interactive` (and `--workspace`) for scripts.
 </Note>
 
 ## Ví dụ không tương tác cơ bản
@@ -41,7 +34,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
 ## Ví dụ theo từng nhà cung cấp
 
 <AccordionGroup>
-  <Accordion title="Ví dụ Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,8 +110,7 @@ Thêm `--json` để có bản tóm tắt ở dạng máy có thể đọc.
 
 ## Thêm một tác tử khác
 
-Sử dụng `openclaw agents add <name>` để tạo một tác tử riêng với workspace,
-phiên và hồ sơ xác thực của riêng nó. Chạy mà không có `--workspace` sẽ khởi chạy trình hướng dẫn.
+Dùng `openclaw agents add <name>` để tạo một agent riêng với workspace, phiên và hồ sơ xác thực riêng. Chạy không có `--workspace` sẽ khởi động trình hướng dẫn.
 
 ```bash
 openclaw agents add work \

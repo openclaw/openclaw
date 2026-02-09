@@ -3,13 +3,6 @@ summary: "Ciclo de vida do agent loop, streams e semântica de espera"
 read_when:
   - Você precisa de um passo a passo exato do agent loop ou dos eventos do ciclo de vida
 title: "Agent Loop"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:40Z
 ---
 
 # Agent Loop (OpenClaw)

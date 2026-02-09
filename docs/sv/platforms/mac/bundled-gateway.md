@@ -5,21 +5,14 @@ read_when:
   - Felsökning av macOS gateway launchd-tjänsten
   - Installera gateway CLI för macOS
 title: "Gateway på macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:54Z
 ---
 
 # Gateway på macOS (extern launchd)
 
-OpenClaw.app paketerar inte längre Node/Bun eller Gateway‑körningen. macOS‑appen
-förutsätter en **extern** `openclaw` CLI‑installation, startar inte Gateway som en
-underprocess och hanterar en launchd‑tjänst per användare för att hålla Gateway
-igång (eller ansluter till en befintlig lokal Gateway om en redan körs).
+OpenClaw.app innehåller inte längre Node/Bun eller Gateway runtime. MacOS-appen
+förväntar sig en **externt** `openclaw` CLI installera, spawnar inte Gateway som en
+barnprocess, och hanterar en 'per-användare' launchd-tjänst för att hålla Gateway
+igång (eller fäster till en befintlig lokal Gateway om man redan kör).
 
 ## Installera CLI (krävs för lokalt läge)
 
@@ -35,7 +28,7 @@ macOS‑appens knapp **Install CLI** kör samma flöde via npm/pnpm (bun rekomme
 
 Etikett:
 
-- `bot.molt.gateway` (eller `bot.molt.<profile>`; äldre `com.openclaw.*` kan finnas kvar)
+- `bot.molt.gateway` (or `bot.molt.<profile>`; äldre `com.openclaw.*` kan finnas kvar)
 
 Plist‑plats (per användare):
 
@@ -60,8 +53,8 @@ Loggning:
 
 ## Versionskompatibilitet
 
-macOS‑appen kontrollerar gateway‑versionen mot sin egen version. Om de är
-inkompatibla uppdaterar du den globala CLI:n så att den matchar appversionen.
+MacOS-appen kontrollerar gatewayversionen mot sin egen version. Om de är
+inkompatibla, uppdatera den globala CLI för att matcha app-versionen.
 
 ## Snabbkontroll
 

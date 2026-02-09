@@ -1,13 +1,6 @@
 ---
-title: Omstrukturering av spegling av utgående sessioner (Issue #1520)
+title: "Omstrukturering av spegling av utgående sessioner (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:23Z
 ---
 
 # Omstrukturering av spegling av utgående sessioner (Issue #1520)
@@ -20,7 +13,7 @@ x-i18n:
 
 ## Kontext
 
-Utgående sändningar speglades till den _aktuella_ agent-sessionen (verktygssessionens nyckel) snarare än målkanalens session. Inkommande routing använder kanal-/peer‑sessionnycklar, så utgående svar hamnade i fel session och förstakontaktmål saknade ofta sessionsposter.
+Utgående sändningar speglades i _current_ -sessionen (verktygets sessionsnyckel) istället för målkanalens session. Inkommande routing använder kanal/peer sessionsnycklar, så utgående svar landade i fel session och första-kontakt mål ofta saknade sessionsposter.
 
 ## Mål
 
@@ -58,7 +51,7 @@ Utgående sändningar speglades till den _aktuella_ agent-sessionen (verktygsses
 
 ## Beslut
 
-- **Härledning av session för Gateway-sändning**: om `sessionKey` tillhandahålls, använd den. Om den utelämnas, härled en sessionKey från mål + standardagent och spegla dit.
+- **Gateway skicka sessionshärledning**: om `sessionKey` tillhandahålls, använd den. Om utelämnas, härleda en sessionKey från mål + standardagent och spegla där.
 - **Skapande av sessionspost**: använd alltid `recordSessionMetaFromInbound` med `Provider/From/To/ChatType/AccountId/Originating*` i linje med inkommande format.
 - **Målnormalisering**: utgående routing använder lösta mål (efter `resolveChannelTarget`) när de finns tillgängliga.
 - **Versalisering av sessionnycklar**: kanonisera sessionnycklar till gemener vid skrivning och under migreringar.
@@ -76,7 +69,7 @@ Utgående sändningar speglades till den _aktuella_ agent-sessionen (verktygsses
 
 ## Öppna punkter / uppföljningar
 
-- Röst­samtalspluginen använder anpassade `voice:<phone>`-sessionnycklar. Utgående mappning är inte standardiserad här; om message-tool ska stödja röst­samtalssändningar, lägg till explicit mappning.
+- Voice-call plugin använder anpassade `voice:<phone>` sessionsnycklar. Utgående kartläggning är inte standardiserad här; om meddelande-verktyg bör stödja röstsamtal skickar, lägg till explicit kartläggning.
 - Bekräfta om någon extern plugin använder icke‑standardiserade `From/To`-format utöver den medföljande uppsättningen.
 
 ## Filer som berörts

@@ -3,13 +3,6 @@ summary: "`openclaw onboard` के लिए CLI संदर्भ (इंट�
 read_when:
   - आपको Gateway, वर्कस्पेस, प्रमाणीकरण, चैनल और Skills के लिए मार्गदर्शित सेटअप चाहिए
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:59Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,5 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` का अर्थ नॉन-इंटरैक्टिव मोड नहीं है। स्क्रिप्ट्स के लिए `--non-interactive` का उपयोग करें।
+`--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.
 </Note>

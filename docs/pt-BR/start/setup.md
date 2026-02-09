@@ -4,13 +4,6 @@ read_when:
   - Configurando uma nova máquina
   - Você quer o “último e melhor” sem quebrar sua configuração pessoal
 title: "Configuração"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:04Z
 ---
 
 # Configuração
@@ -88,7 +81,7 @@ Se o onboarding não estiver disponível na sua build:
 
 Objetivo: trabalhar no Gateway em TypeScript, obter hot reload e manter a UI do app do macOS anexada.
 
-### 0) (Opcional) Execute também o app do macOS a partir do código-fonte
+### 0. (Opcional) Execute também o app do macOS a partir do código-fonte
 
 Se você também quiser o app do macOS no bleeding edge:
 
@@ -96,7 +89,7 @@ Se você também quiser o app do macOS no bleeding edge:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Inicie o Gateway de desenvolvimento
+### 1. Inicie o Gateway de desenvolvimento
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` executa o gateway em modo watch e recarrega em alterações de TypeScript.
 
-### 2) Aponte o app do macOS para o seu Gateway em execução
+### 2. Aponte o app do macOS para o seu Gateway em execução
 
 No **OpenClaw.app**:
 
 - Modo de conexão: **Local**
   O app vai se anexar ao gateway em execução na porta configurada.
 
-### 3) Verifique
+### 3. Verifique
 
 - O status do Gateway no app deve mostrar **“Using existing gateway …”**
 - Ou via CLI:

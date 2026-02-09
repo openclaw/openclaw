@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’ı güncelleme
   - Bir güncellemeden sonra bir şeyler bozulduğunda
 title: "Güncelleme"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 # Güncelleme
@@ -28,6 +21,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Notlar:
 
 - Karşılama sihirbazının tekrar çalışmasını istemiyorsanız `--no-onboard` ekleyin.
+
 - **Kaynaktan kurulumlar** için şunu kullanın:
 
   ```bash
@@ -37,13 +31,14 @@ Notlar:
   Yükleyici, depo temizse **yalnızca** `git pull --rebase` yapar.
 
 - **Global kurulumlar** için betik, perde arkasında `npm install -g openclaw@latest` kullanır.
+
 - Eski not: `clawdbot` bir uyumluluk katmanı olarak kullanılabilir durumda kalır.
 
 ## Güncellemeden önce
 
 - Nasıl kurduğunuzu bilin: **global** (npm/pnpm) vs **kaynaktan** (git clone).
 - Gateway’inizin nasıl çalıştığını bilin: **ön planda terminal** vs **denetimli servis** (launchd/systemd).
-- Özelleştirmelerinizin anlık görüntüsünü alın:
+- Snapshot your tailoring:
   - Yapılandırma: `~/.openclaw/openclaw.json`
   - Kimlik bilgileri: `~/.openclaw/credentials/`
   - Çalışma alanı: `~/.openclaw/workspace`
@@ -173,7 +168,7 @@ openclaw gateway --port 18789
 openclaw logs --follow
 ```
 
-Denetimli çalışıyorsanız:
+If you’re supervised:
 
 - macOS launchd (uygulama paketli LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (`bot.molt.<profile>` kullanın; eski `com.openclaw.*` hâlâ çalışır)
 - Linux systemd kullanıcı servisi: `systemctl --user restart openclaw-gateway[-<profile>].service`
@@ -205,7 +200,7 @@ openclaw doctor
 openclaw gateway restart
 ```
 
-### Tarihe göre sabitle (kaynaktan)
+### Pin (source) by date
 
 Bir tarihten bir commit seçin (örnek: “2026-01-01 itibarıyla main’in durumu”):
 

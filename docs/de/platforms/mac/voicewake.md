@@ -3,13 +3,6 @@ summary: "Sprachaktivierung und Push-to-Talk-Modi sowie Routing-Details in der m
 read_when:
   - Arbeit an Sprachaktivierungs- oder PTT-Pfaden
 title: "Sprachaktivierung"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:01Z
 ---
 
 # Sprachaktivierung & Push-to-Talk

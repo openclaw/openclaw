@@ -3,18 +3,11 @@ summary: "Session pruning: trimning af værktøjsresultater for at reducere kont
 read_when:
   - Du vil reducere væksten i LLM-kontekst fra værktøjsoutput
   - Du finjusterer agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:16Z
 ---
 
 # Session pruning
 
-Session pruning trimmer **gamle værktøjsresultater** fra den in-memory kontekst lige før hvert LLM-kald. Det **omskriver ikke** sessionshistorikken på disk (`*.jsonl`).
+Session beskæresakse trimmer **gamle værktøj resultater** fra in-memory context lige før hvert LLM opkald. Det gør **ikke** omskrive on-disk sessionshistorikken (`*.jsonl`).
 
 ## Hvornår det kører
 
@@ -32,7 +25,7 @@ Session pruning trimmer **gamle værktøjsresultater** fra den in-memory konteks
 
 ## Hvad dette forbedrer (omkostning + cache-adfærd)
 
-- **Hvorfor prune:** Anthropic prompt caching gælder kun inden for TTL. Hvis en session er inaktiv ud over TTL, gen-cacher den næste anmodning hele prompten, medmindre du trimmer den først.
+- **Hvorfor beskære:** Antropisk prompt caching gælder kun inden for TTL. Hvis en session går i tomgang forbi TTL, den næste anmodning re-caches den fulde prompt, medmindre du trimme den først.
 - **Hvad bliver billigere:** pruning reducerer størrelsen af **cacheWrite** for den første anmodning efter TTL udløber.
 - **Hvorfor TTL-nulstillingen betyder noget:** når pruning kører, nulstilles cache-vinduet, så efterfølgende anmodninger kan genbruge den friskcachende prompt i stedet for at gen-cache hele historikken igen.
 - **Hvad det ikke gør:** pruning tilføjer ikke tokens eller “fordobler” omkostninger; det ændrer kun, hvad der caches ved den første post‑TTL-anmodning.
@@ -47,7 +40,7 @@ Session pruning trimmer **gamle værktøjsresultater** fra den in-memory konteks
 
 ## Estimering af kontekstvindue
 
-Pruning bruger et estimeret kontekstvindue (tegn ≈ tokens × 4). Basisvinduet fastlægges i denne rækkefølge:
+Beskæring bruger et anslået kontekstvindue (tegn ≈ tokens × 4). Grundvinduet er løst i denne rækkefølge:
 
 1. `models.providers.*.models[].contextWindow`-override.
 2. Modeldefinition `contextWindow` (fra modelregistret).
@@ -79,7 +72,7 @@ Hvis `agents.defaults.contextTokens` er sat, behandles den som et loft (min) på
 ## Samspil med andre grænser
 
 - Indbyggede værktøjer afkorter allerede deres eget output; session pruning er et ekstra lag, der forhindrer, at langvarige chats akkumulerer for meget værktøjsoutput i modelkonteksten.
-- Komprimering er separat: komprimering opsummerer og persisterer, pruning er forbigående pr. anmodning. Se [/concepts/compaction](/concepts/compaction).
+- Komprimering er separat: Komprimering opsummerer og fortsætter, beskæring er forbigående per anmodning. Se [/concepts/compaction](/concepts/compaction).
 
 ## Standarder (når aktiveret)
 

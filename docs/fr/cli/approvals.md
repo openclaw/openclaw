@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez modifier les approbations d’execution depuis la CLI
   - Vous devez gérer des listes d’autorisation sur des hôtes de Gateway (passerelle) ou de nœud
 title: "approbations"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:45Z
 ---
 
 # `openclaw approvals`
@@ -18,7 +11,7 @@ x-i18n:
 Gérez les approbations d’execution pour l’**hôte local**, l’**hôte de Gateway (passerelle)** ou un **hôte de nœud**.
 Par défaut, les commandes ciblent le fichier d’approbations local sur le disque. Utilisez `--gateway` pour cibler la Gateway (passerelle), ou `--node` pour cibler un nœud spécifique.
 
-Connexe :
+Liens connexes :
 
 - Approbations d’execution : [Exec approvals](/tools/exec-approvals)
 - Nœuds : [Nodes](/nodes)

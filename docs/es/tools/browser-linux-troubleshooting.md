@@ -2,13 +2,6 @@
 summary: "Solucione problemas de inicio de CDP de Chrome/Brave/Edge/Chromium para el control del navegador de OpenClaw en Linux"
 read_when: "El control del navegador falla en Linux, especialmente con Chromium instalado mediante snap"
 title: "Solución de problemas del navegador"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:45Z
 ---
 
 # Solución de problemas del navegador (Linux)
@@ -110,7 +103,7 @@ Verifique el estado:
 curl -s http://127.0.0.1:18791/ | jq '{running, pid, chosenBrowser}'
 ```
 
-Pruebe la navegación:
+Prueba de navegación:
 
 ```bash
 curl -s -X POST http://127.0.0.1:18791/start
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Referencia de configuración
 
-| Opción                   | Descripción                                                                         | Predeterminado                                                                           |
-| ------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `browser.enabled`        | Habilitar el control del navegador                                                  | `true`                                                                                   |
+| Opción                   | Descripción                                                                                            | Predeterminado                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Habilitar el control del navegador                                                                     | `true`                                                                                                      |
 | `browser.executablePath` | Ruta a un binario de navegador basado en Chromium (Chrome/Brave/Edge/Chromium)      | detección automática (prefiere el navegador predeterminado cuando es basado en Chromium) |
-| `browser.headless`       | Ejecutar sin GUI                                                                    | `false`                                                                                  |
-| `browser.noSandbox`      | Agregar la bandera `--no-sandbox` (necesaria para algunas configuraciones de Linux) | `false`                                                                                  |
-| `browser.attachOnly`     | No iniciar el navegador, solo adjuntarse a uno existente                            | `false`                                                                                  |
-| `browser.cdpPort`        | Puerto del Chrome DevTools Protocol                                                 | `18800`                                                                                  |
+| `browser.headless`       | Ejecutar sin GUI                                                                                       | `false`                                                                                                     |
+| `browser.noSandbox`      | Agregar la bandera `--no-sandbox` (necesaria para algunas configuraciones de Linux) | `false`                                                                                                     |
+| `browser.attachOnly`     | No iniciar el navegador, solo adjuntarse a uno existente                                               | `false`                                                                                                     |
+| `browser.cdpPort`        | Puerto del Chrome DevTools Protocol                                                                    | `18800`                                                                                                     |
 
 ### Problema: "Chrome extension relay is running, but no tab is connected"
 

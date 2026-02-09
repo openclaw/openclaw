@@ -4,13 +4,6 @@ read_when:
   - Je moet de agent-werkruimte of de bestandsindeling uitleggen
   - Je wilt een agent-werkruimte back-uppen of migreren
 title: "Agent-werkruimte"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:26Z
 ---
 
 # Agent-werkruimte
@@ -24,9 +17,9 @@ opgeslagen.
 
 **Belangrijk:** de werkruimte is de **standaard cwd**, geen harde sandbox. Tools
 lossen relatieve paden op ten opzichte van de werkruimte, maar absolute paden
-kunnen nog steeds elders op de host uitkomen, tenzij sandboxing is ingeschakeld.
-Als je isolatie nodig hebt, gebruik [`agents.defaults.sandbox`](/gateway/sandboxing)
-(en/of per‑agent sandbox-config). Wanneer sandboxing is ingeschakeld en
+kunnen nog steeds elders op de host uitkomen, tenzij sandboxing is ingeschakeld. Als je isolatie nodig hebt, gebruik [`agents.defaults.sandbox`](/gateway/sandboxing)
+(en/of per‑agent sandbox-config).
+Wanneer sandboxing is ingeschakeld en
 `workspaceAccess` niet `"rw"` is, werken tools binnen een sandbox-
 werkruimte onder `~/.openclaw/sandboxes`, niet in je host-werkruimte.
 
@@ -63,7 +56,8 @@ veroorzaken, omdat er steeds maar één werkruimte actief is.
 
 **Aanbeveling:** houd één actieve werkruimte. Als je de extra mappen niet meer
 gebruikt, archiveer ze of verplaats ze naar de prullenbak (bijvoorbeeld
-`trash ~/openclaw`). Als je bewust meerdere werkruimtes aanhoudt, zorg er dan voor
+`trash ~/openclaw`).
+Als je bewust meerdere werkruimtes aanhoudt, zorg er dan voor
 dat `agents.defaults.workspace` naar de actieve wijst.
 
 `openclaw doctor` waarschuwt wanneer het extra werkruimtemappen detecteert.
@@ -95,7 +89,7 @@ Dit zijn de standaardbestanden die OpenClaw in de werkruimte verwacht:
 
 - `HEARTBEAT.md`
   - Optionele kleine checklist voor heartbeat-runs.
-  - Houd het kort om tokenverbruik te beperken.
+  - Houd het kort om te voorkomen dat het token brandt.
 
 - `BOOT.md`
   - Optionele opstartchecklist die wordt uitgevoerd bij een Gateway-herstart
@@ -151,7 +145,7 @@ git-repository zodat ze is geback-upt en herstelbaar.
 Voer deze stappen uit op de machine waar de Gateway draait (daar bevindt zich de
 werkruimte).
 
-### 1) Initialiseer de repo
+### 1. Initialiseer de repo
 
 Als git is geïnstalleerd, worden gloednieuwe werkruimtes automatisch
 geïnitialiseerd. Als deze werkruimte nog geen repo is, voer dan uit:
@@ -163,7 +157,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Voeg een privé remote toe (beginnersvriendelijke opties)
+### 2. Voeg een privé remote toe (beginnersvriendelijke opties)
 
 Optie A: GitHub web-UI
 
@@ -198,7 +192,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Doorlopende updates
+### 3. Doorlopende updates
 
 ```bash
 git status

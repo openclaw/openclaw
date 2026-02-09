@@ -1,16 +1,9 @@
 ---
 summary: "نظرة عامة على عائلة نماذج GLM + كيفية استخدامها في OpenClaw"
 read_when:
-  - "تريد استخدام نماذج GLM في OpenClaw"
-  - "تحتاج إلى اتفاقية تسمية النماذج والإعداد"
+  - تريد استخدام نماذج GLM في OpenClaw
+  - تحتاج إلى اتفاقية تسمية النماذج والإعداد
 title: "نماذج GLM"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:31Z
 ---
 
 # نماذج GLM

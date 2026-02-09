@@ -1,13 +1,6 @@
 ---
 summary: "Comment soumettre une PR à fort signal"
 title: "Soumettre une PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:41Z
 ---
 
 Les bonnes PR sont faciles à relire : les reviewers doivent rapidement comprendre l’intention, vérifier le comportement et intégrer les changements en toute sécurité. Ce guide couvre des soumissions concises et à fort signal pour une relecture humaine et par LLM.
@@ -58,7 +51,7 @@ Soyez concis ; une relecture concise > la grammaire. Omettez toute section non
 ## Checklist
 
 - [ ] Problème/intention clairs
-- [ ] Périmètre ciblé
+- [ ] Portée ciblée
 - [ ] Lister les changements de comportement
 - [ ] Lister les tests et leurs résultats
 - [ ] Étapes de test manuel (le cas échéant)
@@ -280,7 +273,7 @@ pnpm format
 - Agent notes:
 ```
 
-### Performance
+### Perf
 
 ```md
 #### Summary

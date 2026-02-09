@@ -4,18 +4,11 @@ read_when:
   - 你想要使用單一 API 金鑰存取多個 LLM
   - 你需要百度 Qianfan 的設定指引
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:03Z
 ---
 
 # Qianfan 提供者指南
 
-Qianfan 是百度的 MaaS 平台，提供**統一 API**，可透過單一端點與 API 金鑰，將請求路由至多個模型。它相容於 OpenAI，因此只要切換基底 URL，多數 OpenAI SDK 即可運作。
+Qianfan 是百度的 MaaS 平台，提供**統一 API**，可透過單一端點與 API 金鑰，將請求路由至多個模型。它相容於 OpenAI，因此只要切換基底 URL，多數 OpenAI SDK 即可運作。 It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
 ## 先決條件
 
@@ -26,7 +19,7 @@ Qianfan 是百度的 MaaS 平台，提供**統一 API**，可透過單一端點�
 ## 取得你的 API 金鑰
 
 1. 前往 [Qianfan Console](https://console.bce.baidu.com/qianfan/ais/console/apiKey)
-2. 建立新應用程式或選取既有應用程式
+2. Create a new application or select an existing one
 3. 產生 API 金鑰（格式：`bce-v3/ALTAK-...`）
 4. 複製 API 金鑰以供 OpenClaw 使用
 
@@ -36,7 +29,7 @@ Qianfan 是百度的 MaaS 平台，提供**統一 API**，可透過單一端點�
 openclaw onboard --auth-choice qianfan-api-key
 ```
 
-## 相關文件
+## Related Documentation
 
 - [OpenClaw 設定](/gateway/configuration)
 - [模型提供者](/concepts/model-providers)

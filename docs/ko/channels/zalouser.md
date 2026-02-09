@@ -4,13 +4,6 @@ read_when:
   - OpenClaw용 Zalo Personal 설정
   - Zalo Personal 로그인 또는 메시지 흐름 디버깅
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:11Z
 ---
 
 # Zalo Personal (비공식)
@@ -54,7 +47,7 @@ Gateway(게이트웨이) 머신에는 `zca` 바이너리가 `PATH` 에서 사용
 ```
 
 4. Gateway(게이트웨이)를 재시작합니다(또는 온보딩을 완료합니다).
-5. 다이렉트 메시지 접근은 기본적으로 페어링 방식입니다. 최초 접촉 시 페어링 코드를 승인하십시오.
+5. 최초 접촉 시 페어링 코드를 승인하십시오.
 
 ## 무엇인가
 
@@ -62,7 +55,7 @@ Gateway(게이트웨이) 머신에는 `zca` 바이너리가 `PATH` 에서 사용
 - `zca msg ...` 를 사용하여 응답(텍스트/미디어/링크)을 전송합니다.
 - Zalo Bot API 를 사용할 수 없는 “개인 계정” 사용 사례를 위해 설계되었습니다.
 
-## 명명 규칙
+## 이름 지정
 
 채널 id 는 비공식 **Zalo 개인 사용자 계정** 자동화임을 명확히 하기 위해 `zalouser` 입니다. 향후 공식 Zalo API 통합 가능성을 위해 `zalo` 는 예약해 둡니다.
 

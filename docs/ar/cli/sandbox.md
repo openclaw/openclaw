@@ -1,18 +1,11 @@
 ---
-title: واجهة سطر الأوامر لـ Sandbox
+title: رملد CLI
 summary: "إدارة حاويات sandbox وفحص سياسة sandbox الفعلية"
 read_when: "عندما تكون تدير حاويات sandbox أو تقوم بتصحيح سلوك sandbox/سياسة الأدوات."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:07Z
 ---
 
-# واجهة سطر الأوامر لـ Sandbox
+# رملد CLI
 
 إدارة حاويات sandbox المعتمدة على Docker لتنفيذ الوكلاء بشكل معزول.
 

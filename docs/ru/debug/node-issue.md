@@ -4,13 +4,6 @@ read_when:
   - Отладка dev-скриптов только для Node или сбоев в режиме watch
   - Исследование сбоев загрузчика tsx/esbuild в OpenClaw
 title: "Сбой Node + tsx"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:30Z
 ---
 
 # Сбой Node + tsx «\_\_name is not a function»
@@ -27,7 +20,7 @@ x-i18n:
 
 Это началось после переключения dev-скриптов с Bun на `tsx` (коммит `2871657e`, 2026-01-06). Тот же путь выполнения работал с Bun.
 
-## Окружение
+## Среда
 
 - Node: v25.x (наблюдалось на v25.3.0)
 - tsx: 4.21.0
@@ -42,7 +35,7 @@ pnpm install
 node --import tsx src/entry.ts status
 ```
 
-## Минимальное воспроизведение в репозитории
+## Минимальное повторение в репозитории
 
 ```bash
 node --import tsx scripts/repro/tsx-name-repro.ts
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Обходные пути
 
 - Использовать Bun для dev-скриптов (текущий временный откат).
+
 - Использовать Node + tsc в режиме watch, затем запускать скомпилированный вывод:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Подтверждено локально: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` работает на Node 25.
+
 - Отключить keepNames esbuild в загрузчике TS, если возможно (предотвращает вставку helper `__name`); tsx в настоящее время этого не предоставляет.
+
 - Протестировать Node LTS (22/24) с `tsx`, чтобы проверить, специфична ли проблема для Node 25.
 
 ## Ссылки

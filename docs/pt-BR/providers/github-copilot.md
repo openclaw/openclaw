@@ -4,13 +4,6 @@ read_when:
   - Você quer usar o GitHub Copilot como provedor de modelo
   - Você precisa do fluxo `openclaw models auth login-github-copilot`
 title: "GitHub Copilot"
-x-i18n:
-  source_path: providers/github-copilot.md
-  source_hash: 503e0496d92c921e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:38Z
 ---
 
 # GitHub Copilot
@@ -21,13 +14,14 @@ O GitHub Copilot é o assistente de programação com IA do GitHub. Ele fornece 
 
 ## Duas formas de usar o Copilot no OpenClaw
 
-### 1) Provedor GitHub Copilot integrado (`github-copilot`)
+### 1. Provedor GitHub Copilot integrado (`github-copilot`)
 
 Use o fluxo nativo de login por dispositivo para obter um token do GitHub e, em seguida, trocá-lo por tokens da API do Copilot quando o OpenClaw for executado. Este é o caminho **padrão** e mais simples, pois não exige o VS Code.
 
-### 2) Plugin Copilot Proxy (`copilot-proxy`)
+### 2. Plugin Copilot Proxy (`copilot-proxy`)
 
-Use a extensão **Copilot Proxy** do VS Code como uma ponte local. O OpenClaw se comunica com o endpoint `/v1` do proxy e usa a lista de modelos que você configura lá. Escolha esta opção quando você já executa o Copilot Proxy no VS Code ou precisa rotear por ele. Você deve habilitar o plugin e manter a extensão do VS Code em execução.
+Use a extensão **Copilot Proxy** do VS Code como uma ponte local. O OpenClaw se comunica com o endpoint `/v1` do proxy e usa a lista de modelos que você configura lá. Escolha esta opção quando você já executa o Copilot Proxy no VS Code ou precisa rotear por ele.
+Você deve habilitar o plugin e manter a extensão do VS Code em execução.
 
 Use o GitHub Copilot como um provedor de modelo (`github-copilot`). O comando de login executa o fluxo de dispositivo do GitHub, salva um perfil de autenticação e atualiza sua configuração para usar esse perfil.
 

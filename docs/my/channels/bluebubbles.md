@@ -5,23 +5,16 @@ read_when:
   - webhook pairing ပြဿနာများကို ဖြေရှင်းနေချိန်
   - macOS တွင် iMessage ကို ပြင်ဆင်သတ်မှတ်နေချိန်
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:29Z
 ---
 
 # BlueBubbles (macOS REST)
 
-အခြေအနေ: BlueBubbles macOS ဆာဗာနှင့် HTTP ဖြင့် ဆက်သွယ်သော bundled plugin ဖြစ်သည်။ **iMessage ပေါင်းစည်းရန် အထူးအကြံပြုပါသည်** — legacy imsg ချန်နယ်နှင့် နှိုင်းယှဉ်ပါက API ပိုမိုကြွယ်ဝပြီး တပ်ဆင်ရ လွယ်ကူပါသည်။
+12. Status: BlueBubbles macOS server နှင့် HTTP ဖြင့် ဆက်သွယ်သော bundled plugin ဖြစ်သည်။ 13. **iMessage integration အတွက် အကြံပြုထားသည်** — legacy imsg channel နှင့် နှိုင်းယှဉ်ပါက API ပိုမိုကြွယ်ဝပြီး setup ပိုမိုလွယ်ကူသည်။
 
 ## အနှစ်ချုပ်
 
 - macOS ပေါ်တွင် BlueBubbles helper app ဖြင့် လည်ပတ်ပါသည် ([bluebubbles.app](https://bluebubbles.app))။
-- အကြံပြု/စမ်းသပ်ပြီး: macOS Sequoia (15)။ macOS Tahoe (26) တွင် လည်ပတ်နိုင်သော်လည်း edit လုပ်ဆောင်ချက်သည် လက်ရှိတွင် ပျက်နေပြီး group icon အပြောင်းအလဲများသည် အောင်မြင်ကြောင်း ပြသသော်လည်း sync မဖြစ်နိုင်ပါ။
+- 14. အကြံပြု/စမ်းသပ်ပြီး: macOS Sequoia (15)။ 15. macOS Tahoe (26) သည် အလုပ်လုပ်သည်; သို့သော် Tahoe တွင် edit သည် လက်ရှိတွင် ပျက်နေပြီး group icon update များသည် အောင်မြင်သည်ဟု ပြနိုင်သော်လည်း sync မဖြစ်နိုင်ပါ။
 - OpenClaw သည် ၎င်း၏ REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`) ဖြင့် ဆက်သွယ်ပါသည်။
 - ဝင်လာသော မက်ဆေ့ချ်များကို webhooks မှတစ်ဆင့် လက်ခံပြီး၊ ပြန်ကြားချက်များ၊ စာရိုက်နေမှု အညွှန်းများ၊ read receipts နှင့် tapbacks များကို REST calls ဖြင့် ပို့ပါသည်။
 - Attachments နှင့် stickers များကို inbound media အဖြစ် လက်ခံပြီး (ဖြစ်နိုင်သမျှ agent ထံ ပြသပေးပါသည်)။
@@ -32,7 +25,9 @@ x-i18n:
 ## အမြန်စတင်ရန်
 
 1. သင်၏ Mac တွင် BlueBubbles server ကို ထည့်သွင်းပါ ([bluebubbles.app/install](https://bluebubbles.app/install) တွင် လမ်းညွှန်ချက်များကို လိုက်နာပါ)။
+
 2. BlueBubbles config တွင် web API ကို ဖွင့်ပြီး password သတ်မှတ်ပါ။
+
 3. `openclaw onboard` ကို chạy လုပ်ပြီး BlueBubbles ကို ရွေးချယ်ပါ၊ သို့မဟုတ် လက်ဖြင့် ပြင်ဆင်သတ်မှတ်ပါ—
 
    ```json5
@@ -49,13 +44,14 @@ x-i18n:
    ```
 
 4. BlueBubbles webhooks ကို သင့် gateway သို့ ညွှန်ပြပါ (ဥပမာ: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`)။
+
 5. Gateway ကို စတင်ပါ; webhook handler ကို မှတ်ပုံတင်ပြီး pairing ကို စတင်ပါမည်။
 
 ## Messages.app ကို ဆက်လက် လည်ပတ်အောင် ထိန်းထားခြင်း (VM / headless setups)
 
-အချို့ macOS VM / အမြဲဖွင့်ထားသည့် setups များတွင် Messages.app သည် “idle” ဖြစ်သွားနိုင်ပြီး (incoming events မလာတော့ဘဲ app ကို ဖွင့်/foreground ပြန်မလုပ်မချင်း ရပ်တန့်နေတတ်သည်)။ လွယ်ကူသော ဖြေရှင်းနည်းတစ်ခုမှာ **၅ မိနစ်တစ်ကြိမ် Messages ကို poke လုပ်ခြင်း** ဖြစ်ပြီး AppleScript + LaunchAgent ကို အသုံးပြုနိုင်ပါသည်။
+16. macOS VM / always-on setup အချို့တွင် Messages.app သည် “idle” ဖြစ်သွားနိုင်ပြီး (app ကို ဖွင့်ခြင်း သို့မဟုတ် foreground မလုပ်မချင်း incoming event များ ရပ်တန့်သွားသည်)။ A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
 
-### 1) AppleScript ကို သိမ်းဆည်းပါ
+### 1. AppleScript ကို သိမ်းဆည်းပါ
 
 အောက်ပါအမည်ဖြင့် သိမ်းဆည်းပါ—
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) LaunchAgent ကို ထည့်သွင်းပါ
+### 2. LaunchAgent ကို ထည့်သွင်းပါ
 
 အောက်ပါအမည်ဖြင့် သိမ်းဆည်းပါ—
 
@@ -116,7 +112,7 @@ end try
 မှတ်ချက်များ—
 
 - ဤအရာသည် **၃၀၀ စက္ကန့်တိုင်း** နှင့် **login အချိန်တွင်** chạy လုပ်ပါသည်။
-- ပထမအကြိမ် chạy လုပ်ရာတွင် macOS **Automation** ခွင့်ပြုချက်များ (`osascript` → Messages) ကို မေးနိုင်ပါသည်။ LaunchAgent ကို chạy သည့် user session အတွင်း အတည်ပြုပါ။
+- 18. ပထမဆုံး run တွင် macOS **Automation** prompt များ (`osascript` → Messages) ပေါ်လာနိုင်သည်။ 19. LaunchAgent ကို chạy သည့် user session တစ်ခုတည်းအတွင်း ထို prompt များကို အတည်ပြုပါ။
 
 Load လုပ်ရန်—
 
@@ -156,7 +152,7 @@ DMs:
 - အတည်ပြုရန်—
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Pairing သည် မူလ token exchange ဖြစ်ပါသည်။ အသေးစိတ်: [Pairing](/channels/pairing)
+- Pairing is the default token exchange. 21. အသေးစိတ်: [Pairing](/channels/pairing)
 
 Groups:
 
@@ -249,7 +245,7 @@ Config တွင် ဖွင့်ထားပါက BlueBubbles သည် အ�
 - **removeParticipant**: group မှ လူတစ်ဦး ဖယ် (`chatGuid`, `address`)
 - **leaveGroup**: group chat မှ ထွက် (`chatGuid`)
 - **sendAttachment**: media/files ပို့ (`to`, `buffer`, `filename`, `asVoice`)
-  - Voice memos: iMessage voice message အဖြစ် ပို့ရန် **MP3** သို့မဟုတ် **CAF** အသံဖြင့် `asVoice: true` ကို သတ်မှတ်ပါ။ BlueBubbles သည် voice memos ပို့ရာတွင် MP3 → CAF ကို ပြောင်းလဲပေးပါသည်။
+  - 22. Voice memo များ: iMessage voice message အဖြစ် ပို့ရန် **MP3** သို့မဟုတ် **CAF** audio နှင့်အတူ `asVoice: true` ကို သတ်မှတ်ပါ။ 23. Voice memo ပို့သည့်အခါ BlueBubbles သည် MP3 ကို CAF အဖြစ် ပြောင်းလဲပေးသည်။
 
 ### Message IDs (short vs full)
 
@@ -325,13 +321,13 @@ Provider options—
 - `chat_id:123`
 - `chat_identifier:...`
 - Direct handles: `+15555550123`, `user@example.com`
-  - Direct handle တစ်ခုတွင် ရှိပြီးသား DM chat မရှိပါက OpenClaw သည် `POST /api/v1/chat/new` ဖြင့် အသစ်တစ်ခု ဖန်တီးပါမည်။ ၎င်းအတွက် BlueBubbles Private API ကို ဖွင့်ထားရန် လိုအပ်ပါသည်။
+  - 24. Direct handle တွင် ရှိပြီးသား DM chat မရှိပါက OpenClaw သည် `POST /api/v1/chat/new` မှတစ်ဆင့် အသစ်တစ်ခု ဖန်တီးပေးမည်ဖြစ်သည်။ 25. ထိုအတွက် BlueBubbles Private API ကို enable လုပ်ထားရမည်။
 
 ## Security
 
-- Webhook requests များကို `guid`/`password` query params သို့မဟုတ် headers များကို `channels.bluebubbles.password` နှင့် နှိုင်းယှဉ်ခြင်းဖြင့် authentication လုပ်ပါသည်။ `localhost` မှ လာသော requests များကိုလည်း လက်ခံပါသည်။
+- 26. Webhook request များကို `guid`/`password` query param သို့မဟုတ် header များကို `channels.bluebubbles.password` နှင့် နှိုင်းယှဉ်ခြင်းဖြင့် authentication ပြုလုပ်သည်။ 27. `localhost` မှ လာသော request များကိုလည်း လက်ခံသည်။
 - API password နှင့် webhook endpoint ကို လျှို့ဝှက်ထားပါ (credentials ကဲ့သို့ ကိုင်တွယ်ပါ)။
-- Localhost trust ကြောင့် same-host reverse proxy တစ်ခုက password ကို မရည်ရွယ်ဘဲ ကျော်လွှားနိုင်ပါသည်။ Gateway ကို proxy လုပ်ပါက proxy တွင် auth ကို လိုအပ်အောင် သတ်မှတ်ပြီး `gateway.trustedProxies` ကို ပြင်ဆင်ပါ။ [Gateway security](/gateway/security#reverse-proxy-configuration) ကို ကြည့်ပါ။
+- 28. Localhost trust ကြောင့် same-host reverse proxy တစ်ခုသည် မလိုလားအပ်ဘဲ password ကို ကျော်ဖြတ်နိုင်သည်။ 29. Gateway ကို proxy လုပ်ပါက proxy တွင် auth ကို မဖြစ်မနေ တောင်းခံပြီး `gateway.trustedProxies` ကို configure လုပ်ပါ။ 30. [Gateway security](/gateway/security#reverse-proxy-configuration) ကို ကြည့်ပါ။
 - LAN အပြင်သို့ ဖွင့်ထားပါက BlueBubbles server တွင် HTTPS + firewall rules များကို ဖွင့်ပါ။
 
 ## Troubleshooting
@@ -339,9 +335,9 @@ Provider options—
 - Typing/read events မလုပ်တော့ပါက BlueBubbles webhook logs ကို စစ်ဆေးပြီး gateway path သည် `channels.bluebubbles.webhookPath` နှင့် ကိုက်ညီကြောင်း အတည်ပြုပါ။
 - Pairing codes များသည် တစ်နာရီအကြာတွင် သက်တမ်းကုန်ပါသည်; `openclaw pairing list bluebubbles` နှင့် `openclaw pairing approve bluebubbles <code>` ကို အသုံးပြုပါ။
 - Reactions များအတွက် BlueBubbles private API (`POST /api/v1/message/react`) လိုအပ်ပါသည်; server version တွင် ထုတ်ပေးထားကြောင်း သေချာပါစေ။
-- Edit/unsend များအတွက် macOS 13+ နှင့် ကိုက်ညီသော BlueBubbles server version လိုအပ်ပါသည်။ macOS 26 (Tahoe) တွင် private API ပြောင်းလဲမှုကြောင့် edit သည် လက်ရှိတွင် ပျက်နေပါသည်။
+- 31. Edit/unsend သည် macOS 13+ နှင့် ကိုက်ညီသော BlueBubbles server version ကို လိုအပ်သည်။ 32. macOS 26 (Tahoe) တွင် private API ပြောင်းလဲမှုကြောင့် edit သည် လက်ရှိတွင် ပျက်နေပါသည်။
 - macOS 26 (Tahoe) တွင် group icon updates များသည် မတည်ငြိမ်နိုင်ပါသည်—API သည် အောင်မြင်ကြောင်း ပြန်ပေးနိုင်သော်လည်း icon အသစ် မ sync ဖြစ်နိုင်ပါသည်။
-- OpenClaw သည် BlueBubbles server ၏ macOS version အပေါ် မူတည်၍ သိပြီးသား ပျက်နေသော actions များကို အလိုအလျောက် ဖျောက်ထားပါသည်။ macOS 26 (Tahoe) တွင် edit ပေါ်နေသေးပါက `channels.bluebubbles.actions.edit=false` ဖြင့် လက်ဖြင့် ပိတ်ပါ။
+- 33. OpenClaw သည် BlueBubbles server ၏ macOS version အပေါ် အခြေခံ၍ သိပြီးသား ပျက်နေသော action များကို အလိုအလျောက် ဖျောက်ထားသည်။ 34. macOS 26 (Tahoe) တွင် edit ပေါ်နေသေးပါက `channels.bluebubbles.actions.edit=false` ဖြင့် လက်ဖြင့် ပိတ်ပါ။
 - Status/health အချက်အလက်များအတွက်: `openclaw status --all` သို့မဟုတ် `openclaw status --deep`။
 
 ချန်နယ် လုပ်ငန်းစဉ် အထွေထွေကို သိရှိရန် [Channels](/channels) နှင့် [Plugins](/tools/plugin) လမ်းညွှန်ကို ကြည့်ပါ။

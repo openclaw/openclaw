@@ -3,20 +3,16 @@ summary: "Gateway プロトコルの単一の信頼できる情報源として�
 read_when:
   - プロトコルスキーマやコード生成を更新する場合
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:45Z
 ---
 
 # プロトコルの信頼できる情報源としての TypeBox
 
 最終更新日: 2026-01-10
 
-TypeBox は TypeScript ファーストのスキーマライブラリです。私たちはこれを使用して **Gateway WebSocket プロトコル**（ハンドシェイク、リクエスト/レスポンス、サーバーイベント）を定義しています。これらのスキーマは **ランタイム検証**、**JSON Schema のエクスポート**、および macOS アプリ向けの **Swift コード生成** を駆動します。単一の信頼できる情報源があり、その他はすべて生成されます。
+TypeBox は TypeScript ファーストのスキーマライブラリです。私たちはこれを使用して **Gateway WebSocket プロトコル**（ハンドシェイク、リクエスト/レスポンス、サーバーイベント）を定義しています。これらのスキーマは **ランタイム検証**、**JSON Schema のエクスポート**、および macOS アプリ向けの **Swift コード生成** を駆動します。単一の信頼できる情報源があり、その他はすべて生成されます。 **Gateway
+WebSocket プロトコル** (ハンドシェイク、リクエスト、レスポンス、サーバーイベント) を定義します。 これらのスキーマ
+はmacOSアプリの**ランタイム検証**、**JSONスキーマエクスポート**、**Swiftコード**を
+ドライブします。 真実の一つの源;他のすべてが生成されます。
 
 より高レベルのプロトコルの文脈を知りたい場合は、[Gateway アーキテクチャ](/concepts/architecture) から始めてください。
 
@@ -28,8 +24,9 @@ TypeBox は TypeScript ファーストのスキーマライブラリです。私
 - **Response**: `{ type: "res", id, ok, payload | error }`
 - **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
 
-最初のフレームは **必ず** `connect` リクエストでなければなりません。その後、クライアントはメソッド（例: `health`, `send`, `chat.send`）を呼び出し、イベント（例:
-`presence`, `tick`, `agent`）を購読できます。
+最初のフレームは `connect` リクエストでなければなりません。 その後、クライアントは
+メソッド(例: `health`, `send`, `chat.send`)を呼び出し、イベント(例:
+`presence`, `tick`, `agent`)を購読することができます。
 
 接続フロー（最小）:
 
@@ -44,14 +41,14 @@ Client                    Gateway
 
 一般的なメソッド + イベント:
 
-| Category  | Examples                                                  | Notes                                  |
-| --------- | --------------------------------------------------------- | -------------------------------------- |
-| Core      | `connect`, `health`, `status`                             | `connect` が最初である必要があります   |
+| Category  | Examples                                                  | Notes                        |
+| --------- | --------------------------------------------------------- | ---------------------------- |
+| Core      | `connect`, `health`, `status`                             | `connect` が最初である必要があります      |
 | Messaging | `send`, `poll`, `agent`, `agent.wait`                     | 副作用には `idempotencyKey` が必要です |
 | Chat      | `chat.history`, `chat.send`, `chat.abort`, `chat.inject`  | WebChat はこれらを使用します           |
-| Sessions  | `sessions.list`, `sessions.patch`, `sessions.delete`      | セッション管理                         |
-| Nodes     | `node.list`, `node.invoke`, `node.pair.*`                 | Gateway WS + ノードアクション          |
-| Events    | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | サーバープッシュ                       |
+| Sessions  | `sessions.list`, `sessions.patch`, `sessions.delete`      | セッション管理                      |
+| Nodes     | `node.list`, `node.invoke`, `node.pair.*`                 | Gateway WS + ノードアクション        |
+| Events    | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | サーバープッシュ                     |
 
 正式な一覧は `src/gateway/server.ts`（`METHODS`, `EVENTS`）にあります。
 
@@ -75,7 +72,8 @@ Client                    Gateway
 
 ## ランタイムでのスキーマの使用方法
 
-- **サーバー側**: すべての受信フレームは AJV で検証されます。ハンドシェイクは、params が `ConnectParams` に一致する `connect` リクエストのみを受け付けます。
+- **サーバー側**: すべての受信フレームは AJV で検証されます。ハンドシェイクは、params が `ConnectParams` に一致する `connect` リクエストのみを受け付けます。 ハンドシェイクのみ
+  は、パラメータが `ConnectParams` にマッチする`connect` リクエストを受け付けます。
 - **クライアント側**: JS クライアントは、イベントおよびレスポンスフレームを使用前に検証します。
 - **メソッドサーフェス**: Gateway は、サポートされている `methods` と `events` を `hello-ok` で通知します。
 
@@ -278,6 +276,7 @@ Swift ジェネレーターは次を出力します:
 
 生成された JSON Schema は、リポジトリ内の `dist/protocol.schema.json` にあります。
 公開されている raw ファイルは、通常次の場所で利用できます:
+公開された生ファイルは通常、以下で利用できます：
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 

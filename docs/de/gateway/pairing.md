@@ -1,24 +1,19 @@
 ---
-summary: „Gateway-eigenes Node-Pairing (Option B) für iOS und andere entfernte Nodes“
+summary: "„Gateway-eigenes Node-Pairing (Option B) für iOS und andere entfernte Nodes“"
 read_when:
   - „Implementierung von Genehmigungen für Node-Pairing ohne macOS-UI“
   - „Hinzufügen von CLI-Flows zur Genehmigung entfernter Nodes“
   - „Erweiterung des Gateway-Protokolls um Node-Verwaltung“
-title: „Gateway-eigenes Pairing“
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:19Z
+title: "Gateway-eigene Paarung"
 ---
 
 # Gateway-eigenes Pairing (Option B)
 
 Beim Gateway-eigenen Pairing ist das **Gateway** die maßgebliche Instanz dafür, welche Nodes beitreten dürfen. UIs (macOS-App, zukünftige Clients) sind lediglich Frontends, die ausstehende Anfragen genehmigen oder ablehnen.
 
-**Wichtig:** WS-Nodes verwenden **Geräte-Pairing** (Rolle `node`) während `connect`. `node.pair.*` ist ein separater Pairing-Speicher und steuert den WS-Handshake **nicht**. Nur Clients, die explizit `node.pair.*` aufrufen, nutzen diesen Flow.
+**Wichtig:** WS-Nodes verwenden **Geräte-Pairing** (Rolle `node`) während `connect`.
+`node.pair.*` ist ein separater Pairing-Speicher und steuert den WS-Handshake **nicht**.
+Nur Clients, die explizit `node.pair.*` aufrufen, nutzen diesen Flow.
 
 ## Konzepte
 

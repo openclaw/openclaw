@@ -3,13 +3,6 @@ summary: "Pinagmulan ng proyekto, mga nag-ambag, at lisensya."
 read_when:
   - Gusto mo ang backstory ng proyekto o mga kredito ng contributor
 title: "Mga Kredito"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:46Z
 ---
 
 ## Ang pangalan
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS, dahil bawat space lobster ay nangangailangan ng makina
 
 MIT - Malaya tulad ng isang lobster sa karagatan.
 
-> "Lahat tayo ay naglalaro lang sa sarili nating mga prompt." (Isang AI, marahil mataas sa tokens)
+> "We are all just playing with our own prompts." (An AI, probably high on tokens)

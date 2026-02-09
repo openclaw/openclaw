@@ -4,13 +4,6 @@ read_when:
   - 시스템 프롬프트 텍스트, 도구 목록, 또는 시간/하트비트 섹션을 편집할 때
   - 워크스페이스 부트스트랩 또는 Skills 주입 동작을 변경할 때
 title: "시스템 프롬프트"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:54Z
 ---
 
 # 시스템 프롬프트

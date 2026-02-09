@@ -4,21 +4,14 @@ read_when:
   - Opsætning af ACP-baserede IDE-integrationer
   - Fejlfinding af ACP-sessionrouting til Gateway
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:59Z
 ---
 
 # acp
 
 Kør ACP-broen (Agent Client Protocol), der taler med en OpenClaw Gateway.
 
-Denne kommando taler ACP over stdio for IDE’er og videresender prompts til Gateway
-over WebSocket. Den holder ACP-sessioner mappet til Gateway-sessionsnøgler.
+Denne kommando taler AVS over stdio for IDE og fremad beder til Gateway
+over WebSocket. Det holder AVS-sessioner kortlagt til Gateway session nøgler.
 
 ## Usage
 
@@ -40,8 +33,8 @@ openclaw acp --session agent:main:main --reset-session
 
 ## ACP-klient (debug)
 
-Brug den indbyggede ACP-klient til at sanity-checke broen uden en IDE.
-Den starter ACP-broen og lader dig skrive prompts interaktivt.
+Brug den indbyggede AVS-klient til sanity-kontrollere broen uden en IDE.
+Det spawner AVS-broen og lader dig skrive beder interaktivt.
 
 ```bash
 openclaw acp client
@@ -77,7 +70,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Valg af agenter
 
-ACP vælger ikke agenter direkte. Den router via Gateway-sessionsnøglen.
+AVS vælger ikke agenter direkte. Det ruter af Gateway session nøglen.
 
 Brug agent-afgrænsede sessionsnøgler for at målrette en specifik agent:
 
@@ -87,8 +80,8 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-Hver ACP-session mapper til én Gateway-sessionsnøgle. Én agent kan have mange
-sessioner; ACP bruger som standard en isoleret `acp:<uuid>`-session, medmindre du tilsidesætter
+Hver AVS-session kort til en enkelt Gateway session nøgle. Én agent kan have mange
+-sessioner; AVS er standard til en isoleret 'acp:<uuid>-session, medmindre du tilsidesætter
 nøglen eller etiketten.
 
 ## Zed-editoropsætning
@@ -135,8 +128,8 @@ I Zed skal du åbne Agent-panelet og vælge “OpenClaw ACP” for at starte en 
 
 ## Session-mapping
 
-Som standard får ACP-sessioner en isoleret Gateway-sessionsnøgle med et `acp:`-præfiks.
-For at genbruge en kendt session skal du angive en sessionsnøgle eller etiket:
+Som standard får AVS-sessioner en isoleret Gateway-sessionsnøgle med en 'acp:'-præfiks.
+For at genbruge en kendt session, gå en sessionsnøgle eller -etiket:
 
 - `--session <key>`: brug en specifik Gateway-sessionsnøgle.
 - `--session-label <label>`: slå en eksisterende session op via etiket.

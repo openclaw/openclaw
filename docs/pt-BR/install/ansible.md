@@ -5,13 +5,6 @@ read_when:
   - Você precisa de uma configuração isolada por firewall com acesso via VPN
   - Você está implantando em servidores remotos Debian/Ubuntu
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:10Z
 ---
 
 # Instalação com Ansible

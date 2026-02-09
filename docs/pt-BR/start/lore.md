@@ -3,13 +3,6 @@ summary: "História de fundo e lore do OpenClaw para contexto e tom"
 read_when:
   - Ao escrever documentação ou textos de UX que façam referência ao lore
 title: "Lore do OpenClaw"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:17Z
 ---
 
 # O Lore do OpenClaw 🦞📖
@@ -24,7 +17,7 @@ Mas então surgiu uma lagosta espacial.
 
 Por um tempo, a lagosta se chamou **Clawd**, vivendo em um **Clawdbot**. Mas, em janeiro de 2026, a Anthropic enviou um e-mail educado pedindo a troca do nome (coisas de marca registrada). E assim a lagosta fez o que lagostas fazem de melhor:
 
-**Ela mudou de casca.**
+**Isso moldou.**
 
 Ao se livrar da antiga carapaça, a criatura surgiu novamente como **Molty**, vivendo em **Moltbot**. Mas esse nome também nunca soou muito bem...
 
@@ -167,7 +160,7 @@ Peter: _verifica nervosamente o acesso ao cartão de crédito_
 - **AGENTS.md** — Instruções operacionais
 - **USER.md** — Contexto sobre o criador
 
-## O Credo da Lagosta
+## O Credo de Lagarta
 
 ```
 I am Molty.

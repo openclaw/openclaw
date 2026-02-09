@@ -4,13 +4,6 @@ read_when:
   - headless node host ကို လည်ပတ်နေစဉ်
   - system.run အတွက် macOS မဟုတ်သော node ကို တွဲချိတ်နေစဉ်
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:11Z
 ---
 
 # `openclaw node`
@@ -33,7 +26,7 @@ Gateway WebSocket သို့ ချိတ်ဆက်ပြီး ဤစက်
 
 ## Browser proxy (zero-config)
 
-`browser.enabled` ကို node ပေါ်တွင် မပိတ်ထားပါက node host များသည် browser proxy ကို အလိုအလျောက် ကြော်ငြာပေးပါသည်။ ၎င်းကြောင့် အပိုဖွဲ့စည်းပြင်ဆင်မှု မလိုဘဲ အေးဂျင့်က ထို node ပေါ်တွင် browser automation ကို အသုံးပြုနိုင်ပါသည်။
+Node တွင် `browser.enabled` ကို ပိတ်မထားပါက node hosts များသည် browser proxy ကို အလိုအလျောက် ကြော်ငြာပါသည်။ ထိုအရာကြောင့် agent သည် ထို node ပေါ်တွင် browser automation ကို ထပ်မံ configure မလုပ်ဘဲ အသုံးပြုနိုင်ပါသည်။
 
 လိုအပ်ပါက node ပေါ်တွင် ပိတ်နိုင်ပါသည်—
 
@@ -96,8 +89,8 @@ Service အမိန့်များတွင် စက်ဖြင့်ဖ�
 
 ## Pairing
 
-ပထမဆုံး ချိတ်ဆက်မှုတွင် Gateway ပေါ်၌ node pairing တောင်းဆိုမှုကို စောင့်ဆိုင်းအနေဖြင့် ဖန်တီးပါသည်။
-အောက်ပါမှတစ်ဆင့် အတည်ပြုပါ—
+ပထမဆုံး ချိတ်ဆက်မှုသည် Gateway ပေါ်တွင် pending node pair request တစ်ခုကို ဖန်တီးပါသည်။
+အတည်ပြုရန်:
 
 ```bash
 openclaw nodes pending

@@ -3,13 +3,6 @@ summary: "macOS အက်ပ်က gateway/Baileys အခြေအနေမျ�
 read_when:
   - mac အက်ပ် အခြေအနေ အညွှန်းများကို Debugging လုပ်နေချိန်
 title: "အခြေအနေ စစ်ဆေးချက်များ"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:39Z
 ---
 
 # macOS ပေါ်ရှိ အခြေအနေ စစ်ဆေးချက်များ
@@ -33,7 +26,7 @@ x-i18n:
 
 ## Probe အလုပ်လုပ်ပုံ
 
-- အက်ပ်သည် ~60 စက္ကန့်တိုင်းနှင့် လိုအပ်သည့်အချိန်တွင် `ShellExecutor` မှတစ်ဆင့် `openclaw health --json` ကို လုပ်ဆောင်ပါသည်။ probe သည် creds ကို ဖတ်ယူပြီး မက်ဆေ့ချ်မပို့ဘဲ အခြေအနေကို အစီရင်ခံပါသည်။
+- App runs `openclaw health --json` via `ShellExecutor` every ~60s and on demand. 10. Probe သည် creds ကို load လုပ်ပြီး message မပို့ဘဲ status ကို report လုပ်ပါသည်။
 - မျက်နှာပြင် တုန်ခါမှုကို ရှောင်ရှားရန် နောက်ဆုံး အောင်မြင်သော snapshot နှင့် နောက်ဆုံး အမှားကို သီးခြား cache လုပ်ထားပြီး တစ်ခုချင်းစီ၏ timestamp ကို ပြသပါသည်။
 
 ## မသေချာသေးလျှင်

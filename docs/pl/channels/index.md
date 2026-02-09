@@ -4,13 +4,6 @@ read_when:
   - Chcesz wybrać kanał czatu dla OpenClaw
   - Potrzebujesz szybkiego przeglądu obsługiwanych platform komunikacyjnych
 title: "Kanały czatu"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:52Z
 ---
 
 # Kanały czatu

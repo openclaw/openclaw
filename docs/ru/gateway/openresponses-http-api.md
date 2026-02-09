@@ -4,13 +4,6 @@ read_when:
   - Интеграция клиентов, которые говорят по API OpenResponses
   - Вам нужны входы на основе items, клиентские вызовы инструментов или события SSE
 title: "API OpenResponses"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:43Z
 ---
 
 # OpenResponses API (HTTP)
@@ -51,7 +44,7 @@ Gateway (шлюз) OpenClaw может обслуживать совместим
 
 - `x-openclaw-session-key: <sessionKey>` для полного контроля маршрутизации сеансов.
 
-## Включение эндпоинта
+## Включение endpoint
 
 Установите `gateway.http.endpoints.responses.enabled` в `true`:
 
@@ -309,7 +302,7 @@ curl -sS http://127.0.0.1:18789/v1/responses \
   }'
 ```
 
-С потоковой передачей:
+Стриминг:
 
 ```bash
 curl -N http://127.0.0.1:18789/v1/responses \

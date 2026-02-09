@@ -4,19 +4,11 @@ read_when:
   - تصدیق کی معیاد ختم ہونے کی نگرانی یا الرٹس سیٹ کرتے وقت
   - Claude Code / Codex OAuth ریفریش چیکس کو خودکار بناتے وقت
 title: "Auth نگرانی"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:50Z
 ---
 
 # Auth نگرانی
 
-OpenClaw `openclaw models status` کے ذریعے OAuth کی معیاد ختم ہونے کی صحت (health) ظاہر کرتا ہے۔ اسے
-خودکاری اور الرٹس کے لیے استعمال کریں؛ فون ورک فلو کے لیے اسکرپٹس اختیاری اضافے ہیں۔
+OpenClaw `openclaw models status` کے ذریعے OAuth کی معیاد ختم ہونے کی صحت ظاہر کرتا ہے۔ اسے آٹومیشن اور الرٹنگ کے لیے استعمال کریں؛ فون ورک فلو کے لیے اسکرپٹس اختیاری اضافے ہیں۔
 
 ## ترجیحی: CLI چیک (پورٹیبل)
 
@@ -34,8 +26,7 @@ openclaw models status --check
 
 ## اختیاری اسکرپٹس (ops / فون ورک فلو)
 
-یہ `scripts/` کے تحت موجود ہیں اور **اختیاری** ہیں۔ یہ گیٹ وے ہوسٹ تک SSH رسائی فرض کرتے ہیں
-اور systemd + Termux کے لیے ٹیون کیے گئے ہیں۔
+These live under `scripts/` and are **optional**. یہ گیٹ وے ہوسٹ تک SSH رسائی فرض کرتے ہیں اور systemd + Termux کے لیے ٹیون کیے گئے ہیں۔
 
 - `scripts/claude-auth-status.sh` اب `openclaw models status --json` کو
   واحد ماخذِ حقیقت کے طور پر استعمال کرتا ہے (اگر CLI دستیاب نہ ہو تو براہِ راست فائل ریڈز پر واپس جاتا ہے)،

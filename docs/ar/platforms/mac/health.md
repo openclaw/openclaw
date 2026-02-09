@@ -2,14 +2,7 @@
 summary: "كيفية قيام تطبيق macOS بالإبلاغ عن حالات سلامة Gateway/Baileys"
 read_when:
   - تصحيح مؤشرات سلامة تطبيق mac
-title: "فحوصات السلامة"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:30Z
+title: "الفحص الصحي"
 ---
 
 # فحوصات السلامة على macOS

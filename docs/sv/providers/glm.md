@@ -4,18 +4,12 @@ read_when:
   - Du vill använda GLM-modeller i OpenClaw
   - Du behöver namngivningskonventionen och konfigureringen av modeller
 title: "GLM-modeller"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:05Z
 ---
 
 # GLM-modeller
 
-GLM är en **modellfamilj** (inte ett företag) som är tillgänglig via Z.AI-plattformen. I OpenClaw nås GLM‑modeller via leverantören `zai` och modell-ID:n som `zai/glm-4.7`.
+GLM är en **modellfamilj** (inte ett företag) som finns tillgänglig via Z.AI-plattformen. I OpenClaw nås GLM
+modeller via `zai`-leverantören och modell-ID som `zai/glm-4.7`.
 
 ## CLI-konfigurering
 

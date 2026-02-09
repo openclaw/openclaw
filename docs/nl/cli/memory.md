@@ -4,13 +4,6 @@ read_when:
   - Je wilt semantisch geheugen indexeren of doorzoeken
   - Je bent bezig met het debuggen van geheugenbeschikbaarheid of indexering
 title: "geheugen"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:10Z
 ---
 
 # `openclaw memory`

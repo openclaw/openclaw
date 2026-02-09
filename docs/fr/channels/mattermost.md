@@ -4,13 +4,6 @@ read_when:
   - Configuration de Mattermost
   - Debogage du routage Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 57fabe5eb0efbcb8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:37Z
 ---
 
 # Mattermost (plugin)
@@ -64,7 +57,7 @@ Configuration minimale :
 
 ## Variables d'environnement (compte par defaut)
 
-Definissez-les sur l’hote de la passerelle si vous preferez utiliser des variables d'environnement :
+Définissez ces paramètres sur l'hôte de la passerelle si vous préférez les variables env :
 
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
@@ -97,7 +90,7 @@ Notes :
 - `onchar` repond toujours aux @mentions explicites.
 - `channels.mattermost.requireMention` est respecte pour les configurations heritees, mais `chatmode` est prefere.
 
-## Controle d'acces (Messages prives)
+## Contrôle d'accès (DMs)
 
 - Par defaut : `channels.mattermost.dmPolicy = "pairing"` (les expéditeurs inconnus recoivent un code d’appairage).
 - Approbation via :
@@ -138,7 +131,7 @@ Mattermost prend en charge plusieurs comptes sous `channels.mattermost.accounts`
 }
 ```
 
-## Depannage
+## Problemes courants
 
 - Aucune reponse dans les canaux : assurez-vous que le bot est dans le canal et mentionnez-le (oncall), utilisez un prefixe de declenchement (onchar) ou definissez `chatmode: "onmessage"`.
 - Erreurs d’authentification : verifiez le jeton du bot, l’URL de base et que le compte est active.

@@ -4,14 +4,7 @@ read_when:
   - Você precisa depurar ids de sessão, JSONL de transcrições ou campos de sessions.json
   - Você está alterando o comportamento de auto-compactação ou adicionando rotinas de organização “pré-compactação”
   - Você quer implementar despejos de memória ou turnos silenciosos do sistema
-title: "Análise aprofundada do gerenciamento de sessões"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:13Z
+title: "Gerenciamento de sessão profunda mergulho"
 ---
 
 # Gerenciamento de Sessões & Compactação (Análise aprofundada)
@@ -19,7 +12,7 @@ x-i18n:
 Este documento explica como o OpenClaw gerencia sessões de ponta a ponta:
 
 - **Roteamento de sessão** (como mensagens de entrada mapeiam para um `sessionKey`)
-- **Armazenamento de sessões** (`sessions.json`) e o que ele acompanha
+- **Loja de sessão** (`sessions.json`) e o que ele controla
 - **Persistência de transcrições** (`*.jsonl`) e sua estrutura
 - **Higiene de transcrições** (ajustes específicos do provedor antes das execuções)
 - **Limites de contexto** (janela de contexto vs. tokens acompanhados)

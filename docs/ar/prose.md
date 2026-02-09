@@ -1,17 +1,10 @@
 ---
 summary: "OpenProse: سير عمل ‎.prose‎، أوامر الشرطة المائلة، والحالة في OpenClaw"
 read_when:
-  - "تريد تشغيل أو كتابة سير عمل ‎.prose‎"
-  - "تريد تمكين إضافة OpenProse"
-  - "تحتاج إلى فهم تخزين الحالة"
+  - تريد تشغيل أو كتابة سير عمل ‎.prose‎
+  - تريد تمكين إضافة OpenProse
+  - تحتاج إلى فهم تخزين الحالة
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:37Z
 ---
 
 # OpenProse
@@ -22,7 +15,7 @@ OpenProse هو تنسيق سير عمل محمول يعتمد على Markdown أ
 
 ## ما الذي يمكنه فعله
 
-- بحث وتركيب متعدد الوكلاء مع توازي صريح.
+- البحوث المتعددة العوامل + التوليف بالتوازي الواضح.
 - سير عمل قابلة للتكرار وآمنة للموافقات (مراجعة الشيفرة، فرز الحوادث، مسارات المحتوى).
 - برامج `.prose` قابلة لإعادة الاستخدام يمكنك تشغيلها عبر بيئات تشغيل الوكلاء المدعومة.
 
@@ -40,7 +33,7 @@ openclaw plugins enable open-prose
 
 مستندات ذات صلة: [Plugins](/tools/plugin)، [Plugin manifest](/plugins/manifest)، [Skills](/tools/skills).
 
-## أمر الشرطة المائلة
+## أمر Slash
 
 يسجّل OpenProse الأمر `/prose` كأمر Skills يمكن للمستخدم استدعاؤه. يوجّه هذا الأمر إلى تعليمات آلة OpenProse الافتراضية ويستخدم أدوات OpenClaw من الداخل.
 
@@ -103,7 +96,7 @@ context: { findings, draft }
 ~/.prose/agents/
 ```
 
-## أوضاع الحالة
+## أوضاع الدولة
 
 يدعم OpenProse عدة خلفيات للحالة:
 

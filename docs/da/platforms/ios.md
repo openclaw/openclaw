@@ -5,18 +5,11 @@ read_when:
   - Kørsel af iOS-appen fra kildekode
   - Fejlfinding af gateway-discovery eller canvas-kommandoer
 title: "iOS-app"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:28Z
 ---
 
 # iOS-app (Node)
 
-Tilgængelighed: intern forhåndsvisning. iOS-appen er endnu ikke offentligt distribueret.
+Tilgængelighed: intern forhåndsvisning. IOS-appen er endnu ikke offentligt distribueret.
 
 ## Hvad den gør
 
@@ -60,7 +53,7 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-Gateway annoncerer `_openclaw-gw._tcp` på `local.`. iOS-appen viser disse automatisk.
+Gateway annoncerer `_openclaw-gw._tcp` på `local.`. IOS-appen viser disse automatisk.
 
 ### Tailnet (på tværs af netværk)
 
@@ -73,7 +66,7 @@ I Indstillinger skal du aktivere **Manuel vært** og indtaste gateway-vært + po
 
 ## Canvas + A2UI
 
-iOS-noden renderer et WKWebView-canvas. Brug `node.invoke` til at styre det:
+iOS node gør en WKWebView lærred. Brug `node.invoke` til at drive den:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

@@ -3,13 +3,6 @@ summary: "ဝင်ရောက်လာသော အသံ/အသံမက်�
 read_when:
   - အသံစာသားပြောင်းခြင်း သို့မဟုတ် မီဒီယာ ကိုင်တွယ်ပုံကို ပြောင်းလဲသည့်အခါ
 title: "အသံနှင့် အသံမက်ဆေ့ချ်များ"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:46Z
 ---
 
 # အသံ / အသံမက်ဆေ့ချ်များ — 2026-01-17
@@ -37,9 +30,9 @@ OpenClaw သည် အောက်ပါ အစီအစဉ်အတိုင်
 2. **Gemini CLI** (`gemini`) ကို `read_many_files` ဖြင့် အသုံးပြုခြင်း
 3. **Provider keys** (OpenAI → Groq → Deepgram → Google)
 
-အလိုအလျောက် သိရှိမှုကို ပိတ်ရန် `tools.media.audio.enabled: false` ကို သတ်မှတ်ပါ။
+auto-detection ကို ပိတ်ရန် `tools.media.audio.enabled: false` ကို သတ်မှတ်ပါ။
 စိတ်ကြိုက်ပြင်ဆင်ရန် `tools.media.audio.models` ကို သတ်မှတ်ပါ။
-မှတ်ချက် — Binary သိရှိမှုသည် macOS/Linux/Windows အနှံ့ best-effort ဖြစ်သည်; CLI ကို `PATH` တွင် ရှိကြောင်း သေချာပါစေ (`~` ကို ချဲ့ထွင်ပေးသည်) သို့မဟုတ် CLI မော်ဒယ်ကို command path အပြည့်အစုံဖြင့် တိုက်ရိုက် သတ်မှတ်ပါ။
+မှတ်ချက်: binary detection သည် macOS/Linux/Windows အနှံ့ best‑effort ဖြစ်ပါသည်; CLI ကို `PATH` တွင် ရှိနေစေရန် (ကျွန်ုပ်တို့သည် `~` ကို ချဲ့ထွင်ပါသည်) သို့မဟုတ် CLI မော်ဒယ်ကို အပြည့်အစုံ command path ဖြင့် အတိအကျ သတ်မှတ်ပါ။
 
 ## Config ဥပမာများ
 
@@ -107,8 +100,8 @@ OpenClaw သည် အောက်ပါ အစီအစဉ်အတိုင်
 - Deepgram သည် `provider: "deepgram"` ကို အသုံးပြုသောအခါ `DEEPGRAM_API_KEY` ကို ဖမ်းယူအသုံးပြုသည်။
 - Deepgram setup အသေးစိတ်: [Deepgram (audio transcription)](/providers/deepgram)။
 - Audio providers များသည် `tools.media.audio` မှတဆင့် `baseUrl`, `headers`, နှင့် `providerOptions` ကို override လုပ်နိုင်သည်။
-- မူလ အရွယ်အစားကန့်သတ်ချက်မှာ 20MB (`tools.media.audio.maxBytes`) ဖြစ်သည်။ အရွယ်အစားကျော်လွန်သော အသံကို အဆိုပါ မော်ဒယ်အတွက် ကျော်သွားပြီး နောက် entry ကို စမ်းသပ်သည်။
-- အသံအတွက် မူလ `maxChars` သည် **မသတ်မှတ်ထားပါ** (transcript အပြည့်အစုံ)။ အထွက်ကို လျှော့ချရန် `tools.media.audio.maxChars` သို့မဟုတ် per-entry `maxChars` ကို သတ်မှတ်ပါ။
+- default size cap သည် 20MB ဖြစ်ပါသည် (`tools.media.audio.maxBytes`)။ အရွယ်အစားကြီးလွန်းသော audio များကို ထို model အတွက် ကျော်သွားပြီး နောက် entry ကို စမ်းသပ်ပါသည်။
+- audio အတွက် default `maxChars` သည် **မသတ်မှတ်ထားပါ** (transcript အပြည့်အစုံ)။ output ကို လျှော့ချရန် `tools.media.audio.maxChars` သို့မဟုတ် per-entry `maxChars` ကို သတ်မှတ်ပါ။
 - OpenAI ၏ အလိုအလျောက် မူလသတ်မှတ်ချက်မှာ `gpt-4o-mini-transcribe` ဖြစ်သည်; ပိုမိုတိကျစေရန် `model: "gpt-4o-transcribe"` ကို သတ်မှတ်ပါ။
 - အသံမက်ဆေ့ချ်များ အများအပြားကို ကိုင်တွယ်ရန် `tools.media.audio.attachments` ကို အသုံးပြုပါ (`mode: "all"` + `maxAttachments`)။
 - Transcript ကို template များတွင် `{{Transcript}}` အဖြစ် အသုံးပြုနိုင်သည်။
@@ -116,6 +109,6 @@ OpenClaw သည် အောက်ပါ အစီအစဉ်အတိုင်
 
 ## သတိပြုရန် အချက်များ
 
-- Scope စည်းမျဉ်းများတွင် ပထမဆုံး ကိုက်ညီသည့် စည်းမျဉ်းက အနိုင်ရသည်။ `chatType` ကို `direct`, `group`, သို့မဟုတ် `room` အဖြစ် normalize လုပ်သည်။
+- Scope စည်းမျဉ်းများတွင် ပထမဆုံး ကိုက်ညီသည့်အရာကို ဦးစားပေးပါသည်။ `chatType` ကို `direct`, `group`, သို့မဟုတ် `room` ဟု normalize လုပ်ပါသည်။
 - သင့် CLI သည် exit code 0 ဖြင့် အဆုံးသတ်ပြီး plain text ကို ထုတ်ပေးကြောင်း သေချာပါစေ; JSON ကို `jq -r .text` ဖြင့် ပြုပြင်ညှိနှိုင်းရပါမည်။
 - အချိန်ကန့်သတ်ချက်များကို သင့်တင့်စွာ ထားပါ (`timeoutSeconds`, မူလ 60s) သို့မဟုတ် ပြန်ကြားချက် queue ကို ပိတ်ဆို့နိုင်ပါသည်။

@@ -5,13 +5,6 @@ read_when:
   - Quiere configurar niveles o formatos de logs
   - Está solucionando problemas y necesita encontrar logs rápidamente
 title: "Logging"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:07Z
 ---
 
 # Logging
@@ -214,7 +207,7 @@ Las flags no distinguen mayúsculas/minúsculas y admiten comodines (p. ej., `te
 }
 ```
 
-Anulación por variable de entorno (puntual):
+Anulación de Env (une-off):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

@@ -5,18 +5,11 @@ read_when:
   - การดีบักบริการlaunchdของGatewayบนmacOS
   - การติดตั้งGateway CLIสำหรับmacOS
 title: "GatewayบนmacOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:23Z
 ---
 
 # GatewayบนmacOS(launchdภายนอก)
 
-OpenClaw.appไม่รวมNode/Bunหรือรันไทม์Gatewayอีกต่อไป แอปmacOSคาดหวังการติดตั้งCLI `openclaw` แบบ**ภายนอก** ไม่สตาร์ทGatewayเป็นโปรเซสลูก และจัดการบริการlaunchdต่อผู้ใช้เพื่อให้Gatewayทำงานต่อเนื่อง(หรือแนบกับGatewayภายในเครื่องที่กำลังทำงานอยู่แล้วหากมี)
+OpenClaw.app ไม่ได้บันเดิล Node/Bun หรือรันไทม์ Gateway อีกต่อไป OpenClaw.appไม่รวมNode/Bunหรือรันไทม์Gatewayอีกต่อไป แอปmacOSคาดหวังการติดตั้งCLI `openclaw` แบบ**ภายนอก** ไม่สตาร์ทGatewayเป็นโปรเซสลูก และจัดการบริการlaunchdต่อผู้ใช้เพื่อให้Gatewayทำงานต่อเนื่อง(หรือแนบกับGatewayภายในเครื่องที่กำลังทำงานอยู่แล้วหากมี)
 
 ## ติดตั้งCLI(จำเป็นสำหรับโหมดLocal)
 
@@ -56,7 +49,7 @@ Label:
 
 ## ความเข้ากันได้ของเวอร์ชัน
 
-แอปmacOSจะตรวจสอบเวอร์ชันของGatewayเทียบกับเวอร์ชันของแอป หากไม่เข้ากัน ให้ อัปเดตCLIแบบโกลบอลให้ตรงกับเวอร์ชันของแอป
+แอป macOS จะตรวจสอบเวอร์ชันของ gateway เทียบกับเวอร์ชันของตัวเอง แอปmacOSจะตรวจสอบเวอร์ชันของGatewayเทียบกับเวอร์ชันของแอป หากไม่เข้ากัน ให้ อัปเดตCLIแบบโกลบอลให้ตรงกับเวอร์ชันของแอป
 
 ## การตรวจสอบเบื้องต้น
 

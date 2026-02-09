@@ -4,18 +4,11 @@ read_when:
   - آپ Ollama کے ذریعے لوکل ماڈلز کے ساتھ OpenClaw چلانا چاہتے ہیں
   - آپ کو Ollama کے سیٹ اپ اور کنفیگریشن کی رہنمائی درکار ہے
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:45Z
 ---
 
 # Ollama
 
-Ollama ایک لوکل LLM رن ٹائم ہے جو آپ کی مشین پر اوپن سورس ماڈلز چلانا آسان بناتا ہے۔ OpenClaw، Ollama کے OpenAI-مطابقت پذیر API کے ساتھ انضمام رکھتا ہے اور جب آپ `OLLAMA_API_KEY` (یا ایک auth پروفائل) کے ساتھ آپٹ اِن کرتے ہیں اور کوئی واضح `models.providers.ollama` انٹری متعین نہیں کرتے تو **ٹول کی صلاحیت رکھنے والے ماڈلز کو خودکار طور پر دریافت** کر سکتا ہے۔
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## فوری آغاز
 
@@ -181,7 +174,7 @@ Ollama مفت ہے اور لوکل طور پر چلتا ہے، اس لیے تم�
 
 ### اسٹریمنگ کنفیگریشن
 
-بنیادی SDK میں Ollama کے ریسپانس فارمیٹ کے ساتھ ایک [معروف مسئلے](https://github.com/badlogic/pi-mono/issues/1205) کی وجہ سے، Ollama ماڈلز کے لیے **اسٹریمنگ بطورِ طے شدہ غیر فعال** ہے۔ یہ ٹول کی صلاحیت رکھنے والے ماڈلز استعمال کرتے وقت خراب ریسپانسز سے بچاتا ہے۔
+Due to a [known issue](https://github.com/badlogic/pi-mono/issues/1205) in the underlying SDK with Ollama's response format, **streaming is disabled by default** for Ollama models. This prevents corrupted responses when using tool-capable models.
 
 جب اسٹریمنگ غیر فعال ہو تو جوابات ایک ہی بار میں فراہم کیے جاتے ہیں (نان-اسٹریمنگ موڈ)، جس سے وہ مسئلہ ختم ہو جاتا ہے جہاں باہم ملی ہوئی مواد/ریزَننگ ڈیلٹاز آؤٹ پٹ کو بگاڑ دیتی ہیں۔
 
@@ -223,7 +216,7 @@ Ollama مفت ہے اور لوکل طور پر چلتا ہے، اس لیے تم�
 
 ### کانٹیکسٹ ونڈوز
 
-خودکار طور پر دریافت شدہ ماڈلز کے لیے، OpenClaw Ollama کی رپورٹ کردہ کانٹیکسٹ ونڈو استعمال کرتا ہے؛ بصورت دیگر بطورِ طے شدہ `8192` استعمال ہوتا ہے۔ آپ واضح فراہم کنندہ کنفیگ میں `contextWindow` اور `maxTokens` کو اووررائیڈ کر سکتے ہیں۔
+For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it defaults to `8192`. You can override `contextWindow` and `maxTokens` in explicit provider config.
 
 ## خرابیوں کا ازالہ
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### کوئی ماڈل دستیاب نہیں
 
-OpenClaw صرف اُن ماڈلز کو خودکار طور پر دریافت کرتا ہے جو ٹول سپورٹ رپورٹ کرتے ہیں۔ اگر آپ کا ماڈل فہرست میں نہیں ہے تو یا تو:
+OpenClaw only auto-discovers models that report tool support. If your model isn't listed, either:
 
 - ٹول کی صلاحیت رکھنے والا ماڈل پل کریں، یا
 - `models.providers.ollama` میں ماڈل کو واضح طور پر متعین کریں۔
@@ -270,7 +263,7 @@ ollama serve
 
 ### خراب ریسپانسز یا آؤٹ پٹ میں ٹول نام
 
-اگر آپ Ollama ماڈلز استعمال کرتے وقت بگڑے ہوئے جوابات دیکھیں جن میں ٹول نام (جیسے `sessions_send`, `memory_get`) یا ٹکڑوں میں بٹا ہوا متن شامل ہو، تو یہ اسٹریمنگ ریسپانسز کے ساتھ اپ اسٹریم SDK مسئلے کی وجہ سے ہے۔ تازہ ترین OpenClaw ورژن میں Ollama ماڈلز کے لیے اسٹریمنگ کو غیر فعال کر کے **یہ مسئلہ بطورِ طے شدہ حل کر دیا گیا ہے**۔
+If you see garbled responses containing tool names (like `sessions_send`, `memory_get`) or fragmented text when using Ollama models, this is due to an upstream SDK issue with streaming responses. **This is fixed by default** in the latest OpenClaw version by disabling streaming for Ollama models.
 
 اگر آپ نے دستی طور پر اسٹریمنگ فعال کی ہے اور یہ مسئلہ پیش آ رہا ہے:
 

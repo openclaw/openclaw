@@ -1,13 +1,6 @@
 ---
-title: Refactor ng Outbound Session Mirroring (Isyu #1520)
+title: "Refactor ng Outbound Session Mirroring (Isyu #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:56Z
 ---
 
 # Refactor ng Outbound Session Mirroring (Isyu #1520)
@@ -20,7 +13,7 @@ x-i18n:
 
 ## Konteksto
 
-Ang mga outbound send ay mina-mirror sa _kasalukuyang_ agent session (tool session key) sa halip na sa target channel session. Gumagamit ang inbound routing ng mga channel/peer session key, kaya napupunta ang mga outbound na tugon sa maling session at ang mga first-contact target ay kadalasang walang mga entry ng session.
+32. Ang mga outbound send ay na-mirror sa _kasalukuyang_ agent session (tool session key) sa halip na sa target channel session. 33. Ang inbound routing ay gumagamit ng channel/peer session keys, kaya ang mga outbound response ay napunta sa maling session at ang mga first-contact target ay madalas na walang mga session entry.
 
 ## Mga Layunin
 
@@ -58,7 +51,7 @@ Ang mga outbound send ay mina-mirror sa _kasalukuyang_ agent session (tool sessi
 
 ## Mga Desisyon
 
-- **Gateway send session derivation**: kung ang `sessionKey` ay ibinigay, gamitin ito. Kapag hindi ibinigay, mag-derive ng sessionKey mula sa target + default agent at doon mag-mirror.
+- 34. **Gateway send session derivation**: kung ibinigay ang `sessionKey`, gamitin ito. 35. Kung hindi isinama, mag-derive ng isang sessionKey mula sa target + default agent at doon i-mirror.
 - **Paglikha ng entry ng session**: palaging gamitin ang `recordSessionMetaFromInbound` na may `Provider/From/To/ChatType/AccountId/Originating*` na naka-align sa mga inbound format.
 - **Target normalization**: ang outbound routing ay gumagamit ng mga resolved target (post `resolveChannelTarget`) kapag available.
 - **Casing ng session key**: i-canonicalize ang mga session key sa lowercase sa pagsulat at sa panahon ng mga migration.
@@ -76,7 +69,7 @@ Ang mga outbound send ay mina-mirror sa _kasalukuyang_ agent session (tool sessi
 
 ## Mga Open Item / Follow-up
 
-- Ang voice-call plugin ay gumagamit ng custom na `voice:<phone>` session key. Hindi standardized ang outbound mapping dito; kung dapat suportahan ng message-tool ang voice-call sends, magdagdag ng explicit mapping.
+- 36. Ang voice-call plugin ay gumagamit ng custom na `voice:<phone>` session keys. 37. Ang outbound mapping ay hindi standardized dito; kung ang message-tool ay dapat sumuporta sa voice-call sends, magdagdag ng explicit na mapping.
 - Kumpirmahin kung may external plugin na gumagamit ng non-standard na `From/To` na mga format lampas sa bundled set.
 
 ## Mga File na Na-touch

@@ -5,13 +5,6 @@ read_when:
   - Depuração de descoberta ou autenticação do gateway Android
   - Verificação de paridade do histórico de chat entre clientes
 title: "App Android"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:29Z
 ---
 
 # App Android (Nó)
@@ -43,7 +36,7 @@ O Android se conecta diretamente ao WebSocket do Gateway (padrão `ws://<host>:1
   - Host/porta do gateway manual (fallback)
 - Voce consegue executar a CLI (`openclaw`) na máquina do gateway (ou via SSH).
 
-### 1) Inicie o Gateway
+### 1. Inicie o Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Para setups somente em tailnet (recomendado para Viena ⇄ Londres), faça o bin
 - Defina `gateway.bind: "tailnet"` em `~/.openclaw/openclaw.json` no host do gateway.
 - Reinicie o Gateway / app de menubar do macOS.
 
-### 2) Verifique a descoberta (opcional)
+### 2. Verifique a descoberta (opcional)
 
 A partir da máquina do gateway:
 
@@ -77,7 +70,7 @@ A descoberta NSD/mDNS do Android não atravessa redes. Se o nó Android e o gate
 
 Detalhes e exemplo de configuração do CoreDNS: [Bonjour](/gateway/bonjour).
 
-### 3) Conecte a partir do Android
+### 3. Conecte a partir do Android
 
 No app Android:
 
@@ -91,7 +84,7 @@ Após o primeiro pareamento bem-sucedido, o Android reconecta automaticamente ao
 - Endpoint manual (se habilitado), caso contrário
 - O ultimo gateway descoberto (melhor esforço).
 
-### 4) Aprove o pareamento (CLI)
+### 4. Aprove o pareamento (CLI)
 
 Na máquina do gateway:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Detalhes do pareamento: [Pareamento do Gateway](/gateway/pairing).
 
-### 5) Verifique se o nó esta conectado
+### 5. Verifique se o nó esta conectado
 
 - Via status dos nós:
 
@@ -116,7 +109,7 @@ Detalhes do pareamento: [Pareamento do Gateway](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + histórico
+### 6. Chat + histórico
 
 A aba Chat do nó Android usa a **chave de sessão primária** do gateway (`main`), portanto o histórico e as respostas são compartilhados com o WebChat e outros clientes:
 
@@ -124,7 +117,7 @@ A aba Chat do nó Android usa a **chave de sessão primária** do gateway (`main
 - Enviar: `chat.send`
 - Atualizações push (melhor esforço): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + câmera
+### 7. Canvas + câmera
 
 #### Host do Canvas do Gateway (recomendado para conteudo web)
 

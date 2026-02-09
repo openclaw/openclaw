@@ -4,13 +4,6 @@ read_when:
   - Voce esta movendo o OpenClaw para um novo laptop/servidor
   - Voce quer preservar sessoes, autenticacao e logins de canais (WhatsApp, etc.)
 title: "Guia de Migracao"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:21Z
 ---
 
 # Migrando o OpenClaw para uma nova maquina
@@ -26,7 +19,7 @@ Mas existem armadilhas comuns relacionadas a **perfis**, **permissoes** e **copi
 
 ## Antes de comecar (o que voce esta migrando)
 
-### 1) Identifique seu diretorio de estado
+### 1. Identifique seu diretorio de estado
 
 A maioria das instalacoes usa o padrao:
 
@@ -45,7 +38,7 @@ openclaw status
 
 Procure por mencoes a `OPENCLAW_STATE_DIR` / perfil na saida. Se voce executa varios gateways, repita para cada perfil.
 
-### 2) Identifique seu workspace
+### 2. Identifique seu workspace
 
 Padroes comuns:
 
@@ -54,7 +47,7 @@ Padroes comuns:
 
 Seu workspace e onde arquivos como `MEMORY.md`, `USER.md` e `memory/*.md` ficam.
 
-### 3) Entenda o que voce vai preservar
+### 3. Entenda o que voce vai preservar
 
 Se voce copiar **ambos** o diretorio de estado e o workspace, voce mantem:
 
@@ -66,7 +59,7 @@ Se voce copiar **ambos** o diretorio de estado e o workspace, voce mantem:
 
 Se voce copiar **apenas** o workspace (por exemplo, via Git), voce **nao** preserva:
 
-- sessoes
+- sessões
 - credenciais
 - logins de canais
 

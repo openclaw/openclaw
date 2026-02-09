@@ -4,13 +4,6 @@ read_when:
   - Du vill ha en nybörjarvänlig genomgång av TUI
   - Du behöver den kompletta listan över TUI-funktioner, kommandon och genvägar
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:59Z
 ---
 
 # TUI (Terminal-UI)
@@ -49,7 +42,7 @@ Använd `--password` om din Gateway använder lösenordsautentisering.
 
 ## Mental modell: agenter + sessioner
 
-- Agenter är unika slugs (t.ex. `main`, `research`). Gateway exponerar listan.
+- Agenter är unika sniglar (t.ex. `main`, `research`). Gateway exponerar listan.
 - Sessioner tillhör den aktuella agenten.
 - Sessionsnycklar lagras som `agent:<agentId>:<sessionKey>`.
   - Om du skriver `/session main` expanderar TUI det till `agent:<currentAgent>:main`.
@@ -113,7 +106,7 @@ Sessionslivscykel:
 - `/settings`
 - `/exit`
 
-Andra Gateway-slash-kommandon (till exempel `/context`) vidarebefordras till Gateway och visas som systemutdata. Se [Slash-kommandon](/tools/slash-commands).
+Andra snedstreckskommandon (till exempel `/context`) vidarebefordras till Gateway och visas som systemutgång. Se [Slash kommandon](/tools/slash-commands).
 
 ## Lokala skal-kommandon
 
@@ -149,8 +142,8 @@ Andra Gateway-slash-kommandon (till exempel `/context`) vidarebefordras till Gat
 - `--thinking <level>`: Åsidosätt tänkenivå för sändningar
 - `--timeout-ms <ms>`: Agent-timeout i ms (standard `agents.defaults.timeoutSeconds`)
 
-Obs: när du sätter `--url` faller TUI inte tillbaka till konfig eller miljöuppgifter.
-Skicka `--token` eller `--password` uttryckligen. Saknade uttryckliga uppgifter är ett fel.
+Obs: När du anger `--url`, faller TUI inte tillbaka till config eller miljö uppgifter.
+Passera `--token` eller` --lösenord` explicit. Saknar explicita referenser är ett fel.
 
 ## Felsökning
 

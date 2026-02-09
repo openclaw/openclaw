@@ -1,16 +1,9 @@
 ---
 summary: "「openclaw node」（無頭節點主機）的 CLI 參考文件"
 read_when:
-  - 執行無頭節點主機時
+  - Running the headless node host
   - 為 system.run 配對非 macOS 的節點
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:26Z
 ---
 
 # `openclaw node`
@@ -18,7 +11,7 @@ x-i18n:
 執行一個**無頭節點主機**，連線至 Gateway WebSocket，並在此機器上公開
 `system.run` / `system.which`。
 
-## 為什麼要使用節點主機？
+## Why use a node host?
 
 當你希望代理程式在你的網路中**於其他機器上執行指令**，但不想在那些機器上安裝完整的 macOS 配套應用程式時，請使用節點主機。
 
@@ -32,7 +25,9 @@ x-i18n:
 
 ## 瀏覽器代理（零設定）
 
-如果節點上未停用 `browser.enabled`，節點主機會自動公告一個瀏覽器代理。這可讓代理程式在該節點上使用瀏覽器自動化，而無需額外設定。
+Node hosts automatically advertise a browser proxy if `browser.enabled` is not
+disabled on the node. This lets the agent use browser automation on that node
+without extra configuration.
 
 如有需要，可在節點上停用：
 
@@ -63,7 +58,7 @@ openclaw node run --host <gateway-host> --port 18789
 
 ## 服務（背景）
 
-將無頭節點主機安裝為使用者服務。
+Install a headless node host as a user service.
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789
@@ -93,10 +88,10 @@ openclaw node uninstall
 
 服務指令接受 `--json` 以取得機器可讀的輸出。
 
-## 配對
+## Pairing
 
-第一次連線會在 Gateway 上建立一個待處理的節點配對請求。
-請透過以下方式核准：
+The first connection creates a pending node pair request on the Gateway.
+Approve it via:
 
 ```bash
 openclaw nodes pending

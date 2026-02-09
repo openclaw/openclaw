@@ -2,27 +2,18 @@
 summary: "အမွေဆက်ခံ `openclaw-*` skills များကို အစားထိုးသည့် OpenClaw အတွက် Agent tool surface (browser, canvas, nodes, message, cron)"
 read_when:
   - Agent tools များကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း
-  - `openclaw-*` skills များကို ရပ်နားခြင်း သို့မဟုတ် ပြောင်းလဲခြင်း
+  - "`openclaw-*` skills များကို ရပ်နားခြင်း သို့မဟုတ် ပြောင်းလဲခြင်း"
 title: "Tools"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:09Z
 ---
 
 # Tools (OpenClaw)
 
-OpenClaw သည် browser, canvas, nodes နှင့် cron အတွက် **ပထမတန်းစား agent tools** များကို ထုတ်ပေးထားပါသည်။
-ဤ tools များသည် အဟောင်း `openclaw-*` skills များကို အစားထိုးထားပြီး tool များသည် typed ဖြစ်ကာ shell ကို မခေါ်သုံးပါ။
-Agent သည် ထို tools များကို တိုက်ရိုက် ယုံကြည်အသုံးပြုသင့်ပါသည်။
+OpenClaw သည် browser, canvas, nodes နှင့် cron အတွက် **first-class agent tools** များကို ထုတ်ပေးထားသည်။
+ဤအရာများသည် ယခင် `openclaw-*` skills များကို အစားထိုးပြီး tools များသည် typed ဖြစ်ကာ shelling မလိုအပ်သဖြင့် agent သည် တိုက်ရိုက် အသုံးပြုသင့်သည်။
 
 ## Tools များကို ပိတ်ခြင်း
 
-`openclaw.json` အတွင်းရှိ `tools.allow` / `tools.deny` ဖြင့် tools များကို ကမ္ဘာလုံးဆိုင်ရာ အနေဖြင့် ခွင့်ပြု/ပိတ်ပင်နိုင်ပါသည်
-(deny က အနိုင်ရပါသည်)။ ဤသည်မှာ ခွင့်မပြုထားသော tools များကို model providers များထံ ပို့ခြင်းကို တားဆီးပေးပါသည်။
+`openclaw.json` ထဲတွင် `tools.allow` / `tools.deny` ကို အသုံးပြုပြီး tools များကို global အနေဖြင့် allow/deny လုပ်နိုင်သည် (deny က အနိုင်ရသည်)။ ဤအရာသည် ခွင့်မပြုထားသော tools များကို model providers များထံ မပို့စေရန် ကာကွယ်ပေးသည်။
 
 ```json5
 {
@@ -38,8 +29,8 @@ Agent သည် ထို tools များကို တိုက်ရို�
 
 ## Tool profiles (အခြေခံ allowlist)
 
-`tools.profile` သည် `tools.allow`/`tools.deny` မတိုင်မီ **အခြေခံ tool allowlist** ကို သတ်မှတ်ပေးပါသည်။
-Agent တစ်ခုချင်းစီအလိုက် override: `agents.list[].tools.profile`။
+`tools.profile` သည် `tools.allow`/`tools.deny` မတိုင်မီ **အခြေခံ tool allowlist** ကို သတ်မှတ်ပေးသည်။
+Agent အလိုက် override: `agents.list[].tools.profile`။
 
 Profiles:
 
@@ -88,14 +79,11 @@ Profiles:
 
 ## Provider-specific tool policy
 
-ကမ္ဘာလုံးဆိုင်ရာ မူလသတ်မှတ်ချက်များကို မပြောင်းလဲဘဲ provider တစ်ခုချင်းစီအတွက်
-(or တစ်ခုတည်းသော `provider/model`) tools များကို **ပိုမိုကန့်သတ်ရန်** `tools.byProvider` ကို အသုံးပြုပါ။
-Agent တစ်ခုချင်းစီအလိုက် override: `agents.list[].tools.byProvider`။
+Global default များကို မပြောင်းဘဲ provider သီးသန့် (သို့မဟုတ် `provider/model` တစ်ခုတည်း) အတွက် tools ကို **ထပ်မံ ကန့်သတ်ရန်** `tools.byProvider` ကို အသုံးပြုပါ။
+Agent အလိုက် override: `agents.list[].tools.byProvider`။
 
-ဤသည်ကို အခြေခံ tool profile အပြီး၊ allow/deny lists မတိုင်မီ **အသုံးချပါသည်**၊
-ထို့ကြောင့် tool set ကိုသာ ပိုမိုကျဉ်းကျပ်စေနိုင်ပါသည်။
-Provider keys များသည် `provider` (ဥပမာ `google-antigravity`) သို့မဟုတ်
-`provider/model` (ဥပမာ `openai/gpt-5.2`) ကို လက်ခံပါသည်။
+၎င်းကို အခြေခံ tool profile **နောက်မှ** နှင့် allow/deny lists **မတိုင်မီ** အသုံးချသည်၊ ထို့ကြောင့် tool set ကိုသာ ပိုမို ကျဉ်းမြောင်းစေနိုင်သည်။
+Provider key များသည် `provider` (ဥပမာ `google-antigravity`) သို့မဟုတ် `provider/model` (ဥပမာ `openai/gpt-5.2`) ကို လက်ခံသည်။
 
 ဥပမာ (ကမ္ဘာလုံးဆိုင်ရာ coding profile ကို ထားရှိပြီး Google Antigravity အတွက် tools အနည်းဆုံးသာ):
 
@@ -144,8 +132,8 @@ Provider keys များသည် `provider` (ဥပမာ `google-antigravity
 
 ## Tool groups (အတိုချုံး)
 
-Tool policies (global, agent, sandbox) များသည် tool အများအပြားအဖြစ် ချဲ့ထွင်သည့် `group:*` entries များကို ထောက်ပံ့ပါသည်။
-ဤအရာများကို `tools.allow` / `tools.deny` တွင် အသုံးပြုပါ။
+Tool policy များ (global, agent, sandbox) တွင် tools များစွာသို့ ချဲ့ထွင်သည့် `group:*` entries ကို ထောက်ပံ့သည်။
+`tools.allow` / `tools.deny` တွင် ထိုများကို အသုံးပြုပါ။
 
 ရရှိနိုင်သော groups များ:
 
@@ -172,11 +160,8 @@ Tool policies (global, agent, sandbox) များသည် tool အမျာ�
 
 ## Plugins + tools
 
-Plugins များသည် core set အပြင် **ထပ်ဆောင်း tools** (နှင့် CLI commands) များကို မှတ်ပုံတင်နိုင်ပါသည်။
-တပ်ဆင်ခြင်းနှင့် ဖွဲ့စည်းပြင်ဆင်ခြင်းအတွက် [Plugins](/tools/plugin) ကိုကြည့်ပါ၊
-prompt များအတွင်း tool အသုံးပြုမှု လမ်းညွှန်ချက်များ ထည့်သွင်းပုံအတွက် [Skills](/tools/skills) ကိုကြည့်ပါ။
-Plugin အချို့သည် tools များနှင့်အတူ ၎င်းတို့၏ ကိုယ်ပိုင် skills များကိုလည်း ပို့ဆောင်ပေးပါသည်
-(ဥပမာ voice-call plugin)။
+Plugins များသည် core set ထက် ကျော်လွန်သော **ထပ်ဆောင်း tools** (နှင့် CLI commands) ကို register လုပ်နိုင်သည်။
+Install + config အတွက် [Plugins](/tools/plugin) ကိုကြည့်ပါ၊ tool usage guidance ကို prompt များထဲသို့ မည်သို့ inject လုပ်သည်ကို သိရန် [Skills](/tools/skills) ကိုကြည့်ပါ။ Plugins အချို့သည် tools များနှင့်အတူ ကိုယ်ပိုင် skills များကိုပါ ပို့ဆောင်လာသည် (ဥပမာ voice-call plugin)။
 
 ရွေးချယ်နိုင်သော plugin tools များ:
 
@@ -187,8 +172,8 @@ Plugin အချို့သည် tools များနှင့်အတူ �
 
 ### `apply_patch`
 
-ဖိုင်တစ်ခု သို့မဟုတ် အများအပြားအပေါ် structured patches များကို အသုံးချပါ။ multi-hunk edits အတွက် အသုံးပြုပါ။
-စမ်းသပ်ဆဲ: `tools.exec.applyPatch.enabled` ဖြင့် ဖွင့်ပါ (OpenAI models သာ)။
+ဖိုင်တစ်ခု သို့မဟုတ် များစွာတွင် structured patches များကို အသုံးချပါ။ Multi-hunk edits အတွက် အသုံးပြုပါ။
+Experimental: `tools.exec.applyPatch.enabled` မှတဆင့် enable လုပ်ပါ (OpenAI models များသာ)။
 
 ### `exec`
 
@@ -205,7 +190,7 @@ workspace အတွင်း shell commands များကို လည်ပ�
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (`host=node` အတွက် node id/name)
-- အမှန်တကယ် TTY လိုအပ်ပါသလား? `pty: true` ကို သတ်မှတ်ပါ။
+- တကယ့် TTY လိုအပ်ပါသလား? `pty: true` ကို သတ်မှတ်ပါ။
 
 မှတ်ချက်များ:
 
@@ -473,9 +458,7 @@ Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (auth ကို ဖွင့်ထားပါက)
 - `timeoutMs`
 
-မှတ်ချက်: `gatewayUrl` ကို သတ်မှတ်ထားပါက `gatewayToken` ကို ထင်ရှားစွာ ထည့်ပါ။
-Tools များသည် overrides အတွက် config သို့မဟုတ် environment credentials များကို အမွေဆက်ခံမယူပါ။
-Explicit credentials မပါရှိပါက အမှားအယွင်း ဖြစ်ပါသည်။
+မှတ်ချက်: `gatewayUrl` ကို သတ်မှတ်ထားပါက `gatewayToken` ကို တိတိကျကျ ထည့်သွင်းပါ။ Tools များသည် override များအတွက် config သို့မဟုတ် environment credentials ကို အမွေဆက်ခံမထားဘဲ၊ လိုအပ်သော credentials ကို တိတိကျကျ မထည့်ပါက အမှားဖြစ်သည်။
 
 Browser tool:
 
@@ -517,5 +500,4 @@ Tools များကို parallel channels နှစ်ခုဖြင့် 
 1. **System prompt text**: လူဖတ်လို့ရသော စာရင်း + လမ်းညွှန်ချက်များ။
 2. **Tool schema**: model API သို့ ပို့သော structured function definitions များ။
 
-ထို့ကြောင့် agent သည် “ဘယ် tools များရှိသလဲ” နှင့် “ဘယ်လို ခေါ်သုံးရမလဲ” နှစ်ခုစလုံးကို မြင်တွေ့ပါသည်။
-System prompt သို့မဟုတ် schema ထဲတွင် မပေါ်လာသော tool တစ်ခုကို model က ခေါ်မသုံးနိုင်ပါ။
+အဆိုပါအချက်သည် agent သည် “ရှိနေသော tools များ” နှင့် “မည်သို့ ခေါ်ဆိုရမည်” ကို နှစ်မျိုးလုံး မြင်နိုင်သည်ဟု ဆိုလိုသည်။ System prompt သို့မဟုတ် schema ထဲတွင် မပေါ်လာသော tool တစ်ခုကို model က ခေါ်ဆိုနိုင်မည် မဟုတ်ပါ။

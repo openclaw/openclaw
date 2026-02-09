@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag o pagbabago ng pagkuha ng camera sa mga iOS node o macOS
   - Pagpapalawak ng mga MEDIA temp-file workflow na naa-access ng agent
 title: "Pagkuha ng Camera"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # Pagkuha ng camera (agent)
@@ -66,7 +59,7 @@ Ang lahat ng access sa camera ay dumadaan sa **mga setting na kontrolado ng user
 
 ### Kinakailangan sa foreground
 
-Katulad ng `canvas.*`, pinapayagan lamang ng iOS node ang mga command na `camera.*` kapag nasa **foreground**. Ang mga invocation sa background ay nagbabalik ng `NODE_BACKGROUND_UNAVAILABLE`.
+Tulad ng `canvas.*`, pinapayagan lamang ng iOS node ang mga `camera.*` na command sa **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI helper (temp files + MEDIA)
 
@@ -105,7 +98,7 @@ Kung kulang ang mga pahintulot, magpo-prompt ang app kapag posible; kung tinangg
 
 ### Kinakailangan sa foreground ng Android
 
-Katulad ng `canvas.*`, pinapayagan lamang ng Android node ang mga command na `camera.*` kapag nasa **foreground**. Ang mga invocation sa background ay nagbabalik ng `NODE_BACKGROUND_UNAVAILABLE`.
+Tulad ng `canvas.*`, pinapayagan lamang ng Android node ang mga `camera.*` na command kapag nasa **foreground**. Ang mga invocation sa background ay nagbabalik ng `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### Payload guard
 

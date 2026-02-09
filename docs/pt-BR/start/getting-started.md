@@ -4,13 +4,6 @@ read_when:
   - Primeira configuração do zero
   - Voce quer o caminho mais rápido para um chat funcional
 title: "Primeiros passos"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:59Z
 ---
 
 # Primeiros passos
@@ -35,7 +28,7 @@ Verifique sua versão do Node com `node --version` se tiver dúvidas.
 ## Início rápido (CLI)
 
 <Steps>
-  <Step title="Instalar o OpenClaw (recomendado)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ Verifique sua versão do Node com `node --version` se tiver dúvidas.
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     Outros métodos de instalação e requisitos: [Instalar](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="Executar o assistente de integração inicial">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     O assistente configura autenticação, configurações do gateway e canais opcionais.
     Veja [Onboarding Wizard](/start/wizard) para detalhes.
-
-  </Step>
-  <Step title="Verificar o Gateway">
-    Se voce instalou o serviço, ele já deve estar em execução:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Abrir a Control UI">
+  <Step title="Check the Gateway">
+    Se voce instalou o serviço, ele já deve estar em execução:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,31 +84,35 @@ Se a Control UI carregar, seu Gateway está pronto para uso.
 ## Verificações opcionais e extras
 
 <AccordionGroup>
-  <Accordion title="Executar o Gateway em primeiro plano">
+  <Accordion title="Run the Gateway in the foreground">
     Útil para testes rápidos ou solução de problemas.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="Enviar uma mensagem de teste">
+  <Accordion title="Send a test message">
     Requer um canal configurado.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
 
-## Aprofunde-se
+## Aprofundar
 
 <Columns>
-  <Card title="Onboarding Wizard (detalhes)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Referência completa do assistente de CLI e opções avançadas.
   </Card>
-  <Card title="Integração inicial do app macOS" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     Fluxo da primeira execução para o app macOS.
   </Card>
 </Columns>

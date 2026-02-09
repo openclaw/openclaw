@@ -2,13 +2,6 @@
 summary: "Notes de protocole RPC pour l’assistant de prise en main et le schéma de configuration"
 read_when: "Modification des étapes de l’assistant de prise en main ou des points de terminaison du schéma de configuration"
 title: "Protocole de prise en main et de configuration"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:29Z
 ---
 
 # Protocole de prise en main + configuration

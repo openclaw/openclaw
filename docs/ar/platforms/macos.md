@@ -4,13 +4,6 @@ read_when:
   - تنفيذ ميزات تطبيق macOS
   - تغيير دورة حياة Gateway أو ربط العُقد على macOS
 title: "تطبيق macOS"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:45Z
 ---
 
 # تطبيق OpenClaw المُرافِق على macOS (شريط القوائم + وسيط Gateway)
@@ -29,7 +22,7 @@ x-i18n:
 - يستضيف اختياريًا **PeekabooBridge** لأتمتة واجهة المستخدم.
 - يثبّت CLI العام (`openclaw`) عبر npm/pnpm عند الطلب (لا يُنصح باستخدام bun لبيئة تشغيل Gateway).
 
-## الوضع المحلي مقابل الوضع البعيد
+## الوضع المحلي مقابل البعيد
 
 - **Local** (الافتراضي): يرتبط التطبيق بـ Gateway محلي قيد التشغيل إن وُجد؛
   وإلا فإنه يفعّل خدمة launchd عبر `openclaw gateway install`.
@@ -137,7 +130,7 @@ open 'openclaw://agent?message=Hello%20from%20deep%20link'
 - بدون `key`، يطلب التطبيق التأكيد.
 - مع `key` صالح، يكون التشغيل غير مراقَب (مقصود للأتمتات الشخصية).
 
-## تدفّق التهيئة الأولية (نموذجي)
+## تدفق أونبواردك (نموذجي)
 
 1. تثبيت وتشغيل **OpenClaw.app**.
 2. إكمال قائمة التحقق من الأذونات (مطالبات TCC).

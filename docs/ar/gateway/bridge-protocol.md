@@ -5,13 +5,6 @@ read_when:
   - عند التحقيق في إخفاقات الإقران أو مصادقة الجسر
   - عند تدقيق سطح العُقد المعرّض عبر الـ Gateway
 title: "بروتوكول الجسر"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:19Z
 ---
 
 # بروتوكول الجسر (نقل العُقد القديمة)

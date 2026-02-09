@@ -3,13 +3,6 @@ summary: "Design af kommandokø, der serialiserer indgående auto-svar-kørsler"
 read_when:
   - Ændring af udførelse eller samtidighed for auto-svar
 title: "Kommandokø"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Kommandokø (2026-01-16)
@@ -33,17 +26,17 @@ Vi serialiserer indgående auto-svar-kørsler (alle kanaler) gennem en lille in-
 
 Indgående beskeder kan styre den aktuelle kørsel, vente på en opfølgende tur eller gøre begge dele:
 
-- `steer`: injicér straks i den aktuelle kørsel (annullerer afventende værktøjskald efter næste værktøjsgrænse). Hvis der ikke streames, falder den tilbage til opfølgning.
+- `steer`: Injicer straks ind i det aktuelle løb (afbryder afventende værktøjskald efter næste værktøjs grænse). Hvis den ikke strømmer, falder tilbage til opfølgning.
 - `followup`: sæt i kø til næste agenttur, efter den aktuelle kørsel slutter.
-- `collect`: sammenlæg alle køede beskeder til **én** opfølgende tur (standard). Hvis beskeder målretter forskellige kanaler/tråde, drænes de individuelt for at bevare routing.
+- `collect`: coalesce alle beskeder i køen i en **single** opfølgningskurs (standard). Hvis beskeder målrettes mod forskellige kanaler/tråde, dræner de individuelt for at bevare routing.
 - `steer-backlog` (aka `steer+backlog`): styr nu **og** bevar beskeden til en opfølgende tur.
 - `interrupt` (legacy): afbryd den aktive kørsel for den session, og kør derefter den nyeste besked.
 - `queue` (legacy alias): samme som `steer`.
 
-Steer-backlog betyder, at du kan få et opfølgende svar efter den styrede kørsel, så
-streaming-overflader kan se ud som dubletter. Foretræk `collect`/`steer`, hvis du vil have
-ét svar pr. indgående besked.
-Send `/queue collect` som en selvstændig kommando (pr. session), eller sæt `messages.queue.byChannel.discord: "collect"`.
+Steer-backlog betyder, at du kan få en opfølgningsreaktion efter det styrede løb, så
+streaming overflader kan ligne dubletter. Foretræk `collect`/`steer` hvis du ønsker
+et svar pr. indgående besked.
+Send `/queue collect` som en standalone kommando (per-session) eller sæt `messages.queue.byChannel.discord: "collect"`.
 
 Standarder (når de ikke er sat i konfigurationen):
 
@@ -70,11 +63,11 @@ Konfigurér globalt eller pr. kanal via `messages.queue`:
 Indstillinger gælder for `followup`, `collect` og `steer-backlog` (og for `steer`, når den falder tilbage til opfølgning):
 
 - `debounceMs`: vent på stilhed før start af en opfølgende tur (forhindrer “fortsæt, fortsæt”).
-- `cap`: maks. antal køede beskeder pr. session.
+- `cap`: maks. antal beskeder i køen pr. session.
 - `drop`: overflow-politik (`old`, `new`, `summarize`).
 
-Summarize bevarer en kort punktliste over droppede beskeder og injicerer den som en syntetisk opfølgende prompt.
-Standarder: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
+Opsummerer holder en kort kugleliste over droppede meddelelser og injicerer det som en syntetisk opfølgning prompt.
+Standard: `debounceMs: 1000`, `cap: 20`, `drop: summaris`.
 
 ## Tilsidesættelser pr. session
 

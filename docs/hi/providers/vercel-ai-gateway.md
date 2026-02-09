@@ -4,13 +4,6 @@ summary: "Vercel AI Gateway सेटअप (प्रमाणीकरण + �
 read_when:
   - आप OpenClaw के साथ Vercel AI Gateway का उपयोग करना चाहते हैं
   - आपको API कुंजी पर्यावरण चर या CLI प्रमाणीकरण विकल्प की आवश्यकता है
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:40Z
 ---
 
 # Vercel AI Gateway

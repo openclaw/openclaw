@@ -5,20 +5,13 @@ read_when:
   - Pag-package o pag-sign ng macOS app
   - Pagbabago ng mga bundle ID o mga path ng pag-install ng app
 title: "Mga Permiso ng macOS"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:42Z
 ---
 
 # Mga permiso ng macOS (TCC)
 
-Marupok ang mga grant ng permiso sa macOS. Iniuugnay ng TCC ang isang grant ng permiso sa
-code signature ng app, bundle identifier, at path sa disk. Kapag may nagbago sa alinman,
-itinuturing ng macOS na bago ang app at maaaring alisin o itago ang mga prompt.
+Marupok ang mga macOS permission grant. Iniuugnay ng TCC ang isang permission grant sa
+code signature, bundle identifier, at path sa disk ng app. Kung alinman sa mga iyon ay magbago,
+itinuturing ng macOS ang app bilang bago at maaaring alisin o itago ang mga prompt.
 
 ## Mga kinakailangan para sa matatag na mga permiso
 
@@ -28,7 +21,8 @@ itinuturing ng macOS na bago ang app at maaaring alisin o itago ang mga prompt.
 - Pare-parehong signature: gumamit ng tunay na Apple Development o Developer ID certificate
   para manatiling stable ang signature sa mga rebuild.
 
-Ang mga ad-hoc signature ay bumubuo ng bagong identity sa bawat build. Makakalimutan ng macOS ang mga naunang grant, at maaaring tuluyang mawala ang mga prompt hanggang malinisan ang mga stale na entry.
+5. Ang mga ad-hoc signature ay bumubuo ng bagong identity sa bawat build. macOS will forget previous
+   grants, and prompts can disappear entirely until the stale entries are cleared.
 
 ## Checklist sa pag-recover kapag nawawala ang mga prompt
 
@@ -48,9 +42,9 @@ sudo tccutil reset AppleEvents
 
 ## Mga permiso sa Files at Folders (Desktop/Documents/Downloads)
 
-Maaari ring higpitan ng macOS ang Desktop, Documents, at Downloads para sa mga terminal/background na proseso. Kung nagha-hang ang pagbabasa ng file o paglista ng directory, i-grant ang access sa parehong process context na nagsasagawa ng mga operasyon sa file (halimbawa Terminal/iTerm, app na inilunsad ng LaunchAgent, o SSH process).
+macOS may also gate Desktop, Documents, and Downloads for terminal/background processes. If file reads or directory listings hang, grant access to the same process context that performs file operations (for example Terminal/iTerm, LaunchAgent-launched app, or SSH process).
 
 Workaround: ilipat ang mga file sa OpenClaw workspace (`~/.openclaw/workspace`) kung nais mong iwasan ang per-folder na mga grant.
 
-Kung nagte-test ka ng mga permiso, palaging mag-sign gamit ang tunay na certificate. Ang mga ad-hoc
-na build ay katanggap-tanggap lamang para sa mabilis na lokal na pagtakbo kung saan hindi mahalaga ang mga permiso.
+If you are testing permissions, always sign with a real certificate. Ad-hoc
+builds are only acceptable for quick local runs where permissions do not matter.

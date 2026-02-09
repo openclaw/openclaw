@@ -3,13 +3,6 @@ summary: "`openclaw onboard` အတွက် CLI ကိုးကားချက�
 read_when:
   - Gateway၊ workspace၊ auth၊ ချန်နယ်များနှင့် Skills များကို လမ်းညွှန်ပေးထားသည့် တပ်ဆင်ခြင်း လိုအပ်သောအခါ
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,5 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` သည် non-interactive mode ဖြစ်သည်ဟု မဆိုလိုပါ။ script များအတွက် `--non-interactive` ကို အသုံးပြုပါ။
+`--json` သည် non-interactive mode ကို အလိုအလျောက် မဆိုလိုပါ။ Script များအတွက် `--non-interactive` ကို အသုံးပြုပါ။
 </Note>

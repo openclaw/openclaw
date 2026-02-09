@@ -1,12 +1,5 @@
 ---
 title: "Pi ပေါင်းစည်းမှု ဆောက်လုပ်ပုံ အင်ဂျင်နီယာဖွဲ့စည်းမှု"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:04Z
 ---
 
 # Pi ပေါင်းစည်းမှု ဆောက်လုပ်ပုံ အင်ဂျင်နီယာဖွဲ့စည်းမှု
@@ -15,7 +8,7 @@ x-i18n:
 
 ## အကျဉ်းချုပ်
 
-OpenClaw သည် pi SDK ကို အသုံးပြု၍ ၎င်း၏ မက်ဆေ့ချ်ပို့ဆောင်ရေး Gateway ဆောက်လုပ်ပုံအတွင်း AI coding agent ကို ထည့်သွင်းထားသည်။ pi ကို subprocess အဖြစ် ဖန်တီးခြင်း သို့မဟုတ် RPC mode ကို အသုံးပြုခြင်းမပြုဘဲ OpenClaw သည် `createAgentSession()` မှတစ်ဆင့် pi ၏ `AgentSession` ကို တိုက်ရိုက် import လုပ်၍ instantiate ပြုလုပ်သည်။ ဤ embedded နည်းလမ်းသည် အောက်ပါ အားသာချက်များကို ပေးစွမ်းသည်—
+7. OpenClaw သည် ၎င်း၏ messaging gateway architecture အတွင်းသို့ AI coding agent တစ်ခုကို embed လုပ်ရန် pi SDK ကို အသုံးပြုပါသည်။ 8. pi ကို subprocess အဖြစ် spawn လုပ်ခြင်း သို့မဟုတ် RPC mode ကို အသုံးပြုခြင်းအစား OpenClaw သည် `createAgentSession()` မှတဆင့် pi ၏ `AgentSession` ကို တိုက်ရိုက် import လုပ်ပြီး instantiate လုပ်ပါသည်။ 9. ဤ embedded approach သည် အောက်ပါအချက်များကို ပံ့ပိုးပေးပါသည်:
 
 - session lifecycle နှင့် event handling ကို အပြည့်အဝ ထိန်းချုပ်နိုင်ခြင်း
 - Custom tool injection (messaging, sandbox, channel-specific actions)
@@ -35,12 +28,12 @@ OpenClaw သည် pi SDK ကို အသုံးပြု၍ ၎င်း၏ 
 }
 ```
 
-| Package           | ရည်ရွယ်ချက်                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
+| Package           | ရည်ရွယ်ချက်                                                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | အခြေခံ LLM abstraction များ: `Model`, `streamSimple`, message types, provider APIs                     |
-| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` အမျိုးအစားများ                                              |
+| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` အမျိုးအစားများ                                                              |
 | `pi-coding-agent` | အဆင့်မြင့် SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, built-in tools |
-| `pi-tui`          | Terminal UI အစိတ်အပိုင်းများ (OpenClaw ၏ local TUI mode တွင် အသုံးပြုသည်)                              |
+| `pi-tui`          | Terminal UI အစိတ်အပိုင်းများ (OpenClaw ၏ local TUI mode တွင် အသုံးပြုသည်)                           |
 
 ## File Structure
 
@@ -137,7 +130,7 @@ src/agents/
 
 ## Core Integration Flow
 
-### 1. Embedded Agent ကို အလုပ်လုပ်စေခြင်း
+### 10. 1. 11. Embedded Agent ကို Run လုပ်ခြင်း
 
 အဓိက entry point သည် `pi-embedded-runner/run.ts` ထဲရှိ `runEmbeddedPiAgent()` ဖြစ်သည်—
 
@@ -161,7 +154,7 @@ const result = await runEmbeddedPiAgent({
 });
 ```
 
-### 2. Session ဖန်တီးခြင်း
+### 12. 2. 13. Session ဖန်တီးခြင်း
 
 `runEmbeddedAttempt()` အတွင်း ( `runEmbeddedPiAgent()` မှ ခေါ်ယူသည်) pi SDK ကို အသုံးပြုထားသည်—
 
@@ -198,7 +191,7 @@ const { session } = await createAgentSession({
 applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
-### 3. Event Subscription
+### 14. 3. 15. Event Subscription
 
 `subscribeEmbeddedPiSession()` သည် pi ၏ `AgentSession` ဖြစ်ရပ်များကို subscribe ပြုလုပ်သည်—
 
@@ -225,7 +218,7 @@ const subscription = subscribeEmbeddedPiSession({
 - `agent_start` / `agent_end`
 - `auto_compaction_start` / `auto_compaction_end`
 
-### 4. Prompting
+### 16. 4. 17. Prompting
 
 setup ပြီးနောက် session ကို prompt လုပ်သည်—
 
@@ -249,7 +242,7 @@ SDK သည် agent loop အပြည့်အစုံကို ကိုင်
 
 ### Tool Definition Adapter
 
-pi-agent-core ၏ `AgentTool` သည် pi-coding-agent ၏ `ToolDefinition` ထက် `execute` signature မတူညီပါ။ `pi-tool-definition-adapter.ts` ထဲရှိ adapter သည် ယင်းကို ချိတ်ဆက်ပေးသည်—
+18. pi-agent-core ၏ `AgentTool` တွင် pi-coding-agent ၏ `ToolDefinition` နှင့် မတူသော `execute` signature တစ်ခု ရှိပါသည်။ 19. `pi-tool-definition-adapter.ts` ထဲရှိ adapter သည် ဤအရာကို bridge လုပ်ပေးပါသည်:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -283,7 +276,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 ## System Prompt တည်ဆောက်ခြင်း
 
-system prompt ကို `buildAgentSystemPrompt()` (`system-prompt.ts`) တွင် တည်ဆောက်သည်။ ၎င်းတွင် Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata အပါအဝင် အပိုင်းများကို စုစည်းထားပြီး Memory နှင့် Reactions (enable လုပ်ထားပါက) နှင့် optional context files နှင့် အပို system prompt အကြောင်းအရာများလည်း ပါဝင်သည်။ subagents များအသုံးပြုသည့် minimal prompt mode အတွက် အပိုင်းများကို ချုံ့ထားသည်။
+20. system prompt ကို `buildAgentSystemPrompt()` (`system-prompt.ts`) တွင် တည်ဆောက်ပါသည်။ It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. 22. subagents များအတွက် အသုံးပြုသော minimal prompt mode တွင် section များကို trim လုပ်ထားပါသည်။
 
 session ဖန်တီးပြီးနောက် `applySystemPromptOverrideToSession()` မှတစ်ဆင့် prompt ကို အသုံးချသည်—
 
@@ -296,7 +289,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### Session Files
 
-Session များသည် tree structure (id/parentId ချိတ်ဆက်မှု) ပါရှိသော JSONL ဖိုင်များဖြစ်သည်။ Pi ၏ `SessionManager` သည် persistence ကို ကိုင်တွယ်ပေးသည်—
+23. Session များသည် tree structure (id/parentId ချိတ်ဆက်မှု) ပါသော JSONL ဖိုင်များဖြစ်ပါသည်။ 24. Pi ၏ `SessionManager` သည် persistence ကို ကိုင်တွယ်ပါသည်:
 
 ```typescript
 const sessionManager = SessionManager.open(params.sessionFile);
@@ -320,7 +313,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### Compaction
 
-context overflow ဖြစ်သည့်အခါ auto-compaction ကို လုပ်ဆောင်သည်။ manual compaction ကို `compactEmbeddedPiSessionDirect()` က ကိုင်တွယ်သည်—
+25. context overflow ဖြစ်လာသောအခါ auto-compaction ကို trigger လုပ်ပါသည်။ 26. `compactEmbeddedPiSessionDirect()` သည် manual compaction ကို ကိုင်တွယ်ပါသည်:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -518,15 +511,15 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## Pi CLI နှင့် ကွာခြားချက်များ
 
-| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                                     |
-| --------------- | ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| Invocation      | `pi` command / RPC      | `createAgentSession()` မှတစ်ဆင့် SDK                                                                  |
-| Tools           | Default coding tools    | OpenClaw ၏ custom tool suite                                                                          |
-| System prompt   | AGENTS.md + prompts     | channel/context အလိုက် dynamic                                                                        |
-| Session storage | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (သို့မဟုတ် `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth            | အထောက်အထားတစ်ခုတည်း     | လှည့်လည်အသုံးပြုနိုင်သော multi-profile                                                                |
-| Extensions      | disk မှ load လုပ်သည်    | Programmatic + disk paths                                                                             |
-| Event handling  | TUI rendering           | Callback အခြေပြု (onBlockReply စသည်)                                                                  |
+| Aspect          | Pi CLI                              | OpenClaw Embedded                                                                                                        |
+| --------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Invocation      | `pi` command / RPC                  | `createAgentSession()` မှတစ်ဆင့် SDK                                                                                     |
+| Tools           | Default coding tools                | OpenClaw ၏ custom tool suite                                                                                             |
+| System prompt   | AGENTS.md + prompts | channel/context အလိုက် dynamic                                                                                           |
+| Session storage | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (သို့မဟုတ် `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Auth            | အထောက်အထားတစ်ခုတည်း                 | လှည့်လည်အသုံးပြုနိုင်သော multi-profile                                                                                   |
+| Extensions      | disk မှ load လုပ်သည်                | Programmatic + disk paths                                                                                                |
+| Event handling  | TUI rendering                       | Callback အခြေပြု (onBlockReply စသည်)                                                                  |
 
 ## အနာဂတ် စဉ်းစားရန် အချက်များ
 

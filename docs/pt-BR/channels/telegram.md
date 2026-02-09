@@ -3,13 +3,6 @@ summary: "Status de suporte do bot do Telegram, capacidades e configuração"
 read_when:
   - Trabalhando em recursos ou webhooks do Telegram
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:04Z
 ---
 
 # Telegram (Bot API)
@@ -48,7 +41,7 @@ Configuração mínima:
 
 ## Configuração (caminho rápido)
 
-### 1) Criar um token de bot (BotFather)
+### 1. Criar um token de bot (BotFather)
 
 1. Abra o Telegram e converse com **@BotFather** ([link direto](https://t.me/BotFather)). Confirme que o handle é exatamente `@BotFather`.
 2. Execute `/newbot`, depois siga as instruções (nome + nome de usuário terminando em `bot`).
@@ -59,7 +52,7 @@ Configurações opcionais do BotFather:
 - `/setjoingroups` — permitir/negar adicionar o bot a grupos.
 - `/setprivacy` — controlar se o bot vê todas as mensagens do grupo.
 
-### 2) Configurar o token (env ou config)
+### 2. Configurar o token (env ou config)
 
 Exemplo:
 
@@ -463,7 +456,7 @@ Para envios via ferramenta de mensagens, defina `asVoice: true` com um `media` d
 
 O OpenClaw oferece suporte a receber e enviar figurinhas do Telegram com cache inteligente.
 
-### Recebendo figurinhas
+### Recebendo adesivos
 
 Quando um usuário envia uma figurinha, o OpenClaw a trata com base no tipo de figurinha:
 
@@ -480,7 +473,7 @@ Campo de contexto de template disponível ao receber figurinhas:
   - `fileUniqueId` — ID estável para consulta no cache
   - `cachedDescription` — descrição de visão em cache quando disponível
 
-### Cache de figurinhas
+### Cache de adesivo
 
 As figurinhas são processadas pelas capacidades de visão da IA para gerar descrições. Como as mesmas figurinhas são frequentemente enviadas repetidamente, o OpenClaw armazena essas descrições em cache para evitar chamadas redundantes à API.
 
@@ -513,7 +506,7 @@ As figurinhas são processadas pelas capacidades de visão da IA para gerar desc
 
 O cache é populado automaticamente conforme as figurinhas são recebidas. Não há gerenciamento manual de cache necessário.
 
-### Enviando figurinhas
+### Enviando stickers
 
 O agente pode enviar e buscar figurinhas usando as ações `sticker` e `sticker-search`. Elas são desabilitadas por padrão e devem ser habilitadas na config:
 
@@ -546,7 +539,7 @@ Parâmetros:
 - `replyTo` (opcional) — ID da mensagem à qual responder.
 - `threadId` (opcional) — ID do tópico de mensagem para tópicos de fórum.
 
-**Buscar figurinhas:**
+**Procure por adesivos:**
 
 O agente pode buscar figurinhas em cache por descrição, emoji ou nome do conjunto:
 

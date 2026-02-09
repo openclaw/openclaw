@@ -3,13 +3,6 @@ summary: "macOS 에서의 Gateway(게이트웨이) 수명 주기 (launchd)"
 read_when:
   - mac 앱을 Gateway(게이트웨이) 수명 주기와 통합할 때
 title: "Gateway(게이트웨이) 수명 주기"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:42Z
 ---
 
 # macOS 에서의 Gateway(게이트웨이) 수명 주기
@@ -22,7 +15,8 @@ Gateway(게이트웨이)를 자식 프로세스로 생성하지 않습니다. �
 보장합니다.
 
 자식 프로세스 모드(앱이 직접 Gateway(게이트웨이)를 생성)는 현재 **사용되지
-않습니다**. UI 와의 더 긴밀한 결합이 필요하다면, 터미널에서 Gateway(게이트웨이)를
+않습니다**.
+UI 와의 더 긴밀한 결합이 필요하다면, 터미널에서 Gateway(게이트웨이)를
 수동으로 실행하십시오.
 
 ## 기본 동작 (launchd)
@@ -46,8 +40,7 @@ launchctl bootout gui/$UID/bot.molt.gateway
 
 ## 서명되지 않은 개발 빌드
 
-`scripts/restart-mac.sh --no-sign` 는 서명 키가 없는 빠른 로컬 빌드를 위한 것입니다.
-launchd 가 서명되지 않은 릴레이 바이너리를 가리키지 않도록 다음을 수행합니다:
+`scripts/restart-mac.sh --no-sign` 는 서명 키가 없는 빠른 로컬 빌드를 위한 것입니다. launchd 가 서명되지 않은 릴레이 바이너리를 가리키지 않도록 다음을 수행합니다:
 
 - `~/.openclaw/disable-launchagent` 를 작성합니다.
 
@@ -62,13 +55,11 @@ rm ~/.openclaw/disable-launchagent
 
 macOS 앱이 **launchd 를 설치하거나 관리하지 않도록** 강제하려면,
 `--attach-only` (또는 `--no-launchd`) 로 실행하십시오. 이는 `~/.openclaw/disable-launchagent`
-를 설정하여, 앱이 이미 실행 중인 Gateway(게이트웨이)에만 연결하도록 합니다.
-동일한 동작은 디버그 설정에서도 전환할 수 있습니다.
+를 설정하여, 앱이 이미 실행 중인 Gateway(게이트웨이)에만 연결하도록 합니다. 동일한 동작은 디버그 설정에서도 전환할 수 있습니다.
 
 ## 원격 모드
 
-원격 모드는 로컬 Gateway(게이트웨이)를 절대 시작하지 않습니다.
-앱은 원격 호스트로 SSH 터널을 사용하고 해당 터널을 통해 연결합니다.
+원격 모드는 로컬 Gateway(게이트웨이)를 절대 시작하지 않습니다. 앱은 원격 호스트로 SSH 터널을 사용하고 해당 터널을 통해 연결합니다.
 
 ## launchd 를 선호하는 이유
 

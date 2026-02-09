@@ -3,13 +3,6 @@ summary: "حالة دعم Matrix، والإمكانات، والتهيئة"
 read_when:
   - العمل على ميزات قناة Matrix
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:14Z
 ---
 
 # Matrix (إضافة)
@@ -48,10 +41,13 @@ openclaw plugins install ./extensions/matrix
 1. تثبيت إضافة Matrix:
    - من npm: `openclaw plugins install @openclaw/matrix`
    - من نسخة محلية: `openclaw plugins install ./extensions/matrix`
+
 2. إنشاء حساب Matrix على خادم منزلي:
    - تصفّح خيارات الاستضافة على [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - أو استضِفه بنفسك.
+
 3. الحصول على رمز وصول لحساب البوت:
+
    - استخدم واجهة تسجيل الدخول في Matrix مع `curl` على خادمك المنزلي:
 
    ```bash
@@ -76,10 +72,12 @@ openclaw plugins install ./extensions/matrix
 4. تهيئة بيانات الاعتماد:
    - متغيرات البيئة: `MATRIX_HOMESERVER`، `MATRIX_ACCESS_TOKEN` (أو `MATRIX_USER_ID` + `MATRIX_PASSWORD`)
    - أو في التهيئة: `channels.matrix.*`
-   - إذا تم تعيين الاثنين، فللتهيئة أولوية.
+   - إذا تم تعيين التهيئة تكون لها الأسبقية.
    - عند استخدام رمز الوصول: يتم جلب معرّف المستخدم تلقائيًا عبر `/whoami`.
    - عند التعيين، يجب أن يكون `channels.matrix.userId` هو معرّف Matrix الكامل (مثال: `@bot:example.org`).
+
 5. أعد تشغيل Gateway (أو أكمل التهيئة الأولية).
+
 6. ابدأ رسالة مباشرة مع البوت أو ادعه إلى غرفة من أي عميل Matrix
    (Element، Beeper، إلخ؛ انظر [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). يتطلب Beeper تفعيل E2EE،
    لذا اضبط `channels.matrix.encryption: true` وتحقق من الجهاز.
@@ -124,7 +122,7 @@ openclaw plugins install ./extensions/matrix
 - إذا تم تحميل وحدة التشفير، فسيتم فك تشفير الغرف المشفّرة تلقائيًا.
 - تُشفَّر الوسائط الصادرة عند الإرسال إلى غرف مشفّرة.
 - عند الاتصال الأول، يطلب OpenClaw التحقق من الجهاز من جلساتك الأخرى.
-- تحقّق من الجهاز في عميل Matrix آخر (Element، إلخ) لتمكين مشاركة المفاتيح.
+- تحقّق من الجهاز في عميل Matrix آخر (Element، إلخ) لتمكين مشاركة المفاتيح. لتمكين مشاركة المفتاح.
 - إذا تعذّر تحميل وحدة التشفير، يتم تعطيل E2EE ولن يتم فك تشفير الغرف المشفّرة؛
   ويسجّل OpenClaw تحذيرًا.
 - إذا رأيت أخطاء وحدة تشفير مفقودة (على سبيل المثال، `@matrix-org/matrix-sdk-crypto-nodejs-*`)،
@@ -197,17 +195,17 @@ openclaw plugins install ./extensions/matrix
 
 ## الإمكانات
 
-| الميزة           | الحالة                                                                            |
-| ---------------- | --------------------------------------------------------------------------------- |
-| الرسائل المباشرة | ✅ مدعومة                                                                         |
-| الغرف            | ✅ مدعومة                                                                         |
-| السلاسل          | ✅ مدعومة                                                                         |
-| الوسائط          | ✅ مدعومة                                                                         |
+| الميزة           | الحالة                                                                                              |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| الرسائل المباشرة | ✅ مدعومة                                                                                            |
+| الغرف            | ✅ مدعومة                                                                                            |
+| Threads          | ✅ مدعومة                                                                                            |
+| الوسائط          | ✅ مدعومة                                                                                            |
 | E2EE             | ✅ مدعوم (يتطلب وحدة تشفير)                                                       |
 | التفاعلات        | ✅ مدعومة (إرسال/قراءة عبر الأدوات)                                               |
 | الاستطلاعات      | ✅ الإرسال مدعوم؛ تُحوَّل بدايات الاستطلاع الواردة إلى نص (تجاهل الردود/النهايات) |
 | الموقع           | ✅ مدعوم (URI جغرافي؛ يتم تجاهل الارتفاع)                                         |
-| الأوامر الأصلية  | ✅ مدعومة                                                                         |
+| الأوامر الأصلية  | ✅ مدعومة                                                                                            |
 
 ## استكشاف الأخطاء وإصلاحها
 
@@ -221,7 +219,7 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-ثم أكّد حالة إقران الرسائل المباشرة إذا لزم الأمر:
+ثم قم بتأكيد حالة إقران DM إذا لزم الأمر:
 
 ```bash
 openclaw pairing list matrix

@@ -1,16 +1,9 @@
 ---
 summary: "Bun ورک فلو (تجرباتی): pnpm کے مقابلے میں انسٹالیشن اور ممکنہ مسائل"
 read_when:
-  - "آپ سب سے تیز لوکل ڈیولپمنٹ لوپ چاہتے ہیں (bun + watch)"
-  - "آپ کو Bun کی install/patch/lifecycle اسکرپٹس سے متعلق مسائل پیش آئے ہیں"
+  - آپ سب سے تیز لوکل ڈیولپمنٹ لوپ چاہتے ہیں (bun + watch)
+  - آپ کو Bun کی install/patch/lifecycle اسکرپٹس سے متعلق مسائل پیش آئے ہیں
 title: "Bun (تجرباتی)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:21Z
 ---
 
 # Bun (تجرباتی)
@@ -18,7 +11,7 @@ x-i18n:
 مقصد: اس ریپو کو **Bun** کے ساتھ چلانا (اختیاری، WhatsApp/Telegram کے لیے سفارش نہیں کی جاتی)
 اور pnpm ورک فلو سے انحراف کیے بغیر۔
 
-⚠️ **Gateway رن ٹائم کے لیے سفارش نہیں کی جاتی** (WhatsApp/Telegram کی خرابیاں)۔ پروڈکشن کے لیے Node استعمال کریں۔
+38. ⚠️ **Gateway runtime کے لیے تجویز نہیں کیا جاتا** (WhatsApp/Telegram بگز)۔ Use Node for production.
 
 ## Status
 
@@ -34,7 +27,7 @@ x-i18n:
 bun install
 ```
 
-نوٹ: `bun.lock`/`bun.lockb` gitignored ہیں، اس لیے کسی بھی صورت میں ریپو میں غیر ضروری تبدیلیاں نہیں ہوتیں۔ اگر آپ _لاگ فائل میں کوئی تحریر نہیں چاہتے_ تو:
+Note: `bun.lock`/`bun.lockb` are gitignored, so there’s no repo churn either way. If you want _no lockfile writes_:
 
 ```sh
 bun install --no-save
@@ -49,8 +42,8 @@ bun run vitest run
 
 ## Bun lifecycle اسکرپٹس (بطورِ طے شدہ مسدود)
 
-Bun انحصارات کی lifecycle اسکرپٹس کو اس وقت تک مسدود کر سکتا ہے جب تک انہیں صراحتاً قابلِ اعتماد نہ بنایا جائے (`bun pm untrusted` / `bun pm trust`)۔
-اس ریپو کے لیے، عام طور پر مسدود ہونے والی اسکرپٹس درکار نہیں ہیں:
+Bun may block dependency lifecycle scripts unless explicitly trusted (`bun pm untrusted` / `bun pm trust`).
+For this repo, the commonly blocked scripts are not required:
 
 - `@whiskeysockets/baileys` `preinstall`: Node کے major ورژن >= 20 کی جانچ (ہم Node 22+ چلاتے ہیں)۔
 - `protobufjs` `postinstall`: غیر مطابقت پذیر ورژن اسکیمز کے بارے میں انتباہات جاری کرتی ہیں (کوئی بلڈ آرٹیفیکٹس نہیں)۔
@@ -63,4 +56,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## Caveats
 
-- کچھ اسکرپٹس اب بھی pnpm کو ہارڈکوڈ کرتی ہیں (مثلاً `docs:build`, `ui:*`, `protocol:check`)۔ فی الحال انہیں pnpm کے ذریعے ہی چلائیں۔
+- Some scripts still hardcode pnpm (e.g. `docs:build`, `ui:*`, `protocol:check`). 39. فی الحال انہیں pnpm کے ذریعے چلائیں۔

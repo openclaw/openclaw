@@ -1,12 +1,5 @@
 ---
 title: "Pi 整合架構"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:57Z
 ---
 
 # Pi 整合架構
@@ -15,14 +8,14 @@ x-i18n:
 
 ## 概覽
 
-OpenClaw 使用 pi SDK，將 AI 程式設計代理程式嵌入其訊息 Gateway 閘道器架構中。OpenClaw 並非以子行程方式啟動 pi，或使用 RPC 模式，而是透過 `createAgentSession()` 直接匯入並實例化 pi 的 `AgentSession`。此種嵌入式方式提供：
+OpenClaw 使用 pi SDK，將 AI 程式設計代理程式嵌入其訊息 Gateway 閘道器架構中。OpenClaw 並非以子行程方式啟動 pi，或使用 RPC 模式，而是透過 `createAgentSession()` 直接匯入並實例化 pi 的 `AgentSession`。此種嵌入式方式提供： Instead of spawning pi as a subprocess or using RPC mode, OpenClaw directly imports and instantiates pi's `AgentSession` via `createAgentSession()`. This embedded approach provides:
 
 - 對工作階段生命週期與事件處理的完整控制
 - 自訂工具注入（訊息、沙箱、頻道專屬動作）
 - 依頻道／情境調整的系統提示
-- 具備分支／壓縮支援的工作階段持久化
-- 多帳號驗證設定檔輪替與失敗接手
-- 與提供者無關的模型切換
+- Session persistence with branching/compaction support
+- 具備故障轉移的多帳號驗證設定檔輪替
+- 與供應商無關的模型切換
 
 ## 套件相依性
 
@@ -35,12 +28,12 @@ OpenClaw 使用 pi SDK，將 AI 程式設計代理程式嵌入其訊息 Gateway 
 }
 ```
 
-| 套件              | 用途                                                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------ |
-| `pi-ai`           | 核心 LLM 抽象：`Model`、`streamSimple`、訊息型別、提供者 API                               |
-| `pi-agent-core`   | 代理程式迴圈、工具執行、`AgentMessage` 型別                                                |
+| 套件                | 用途                                                                              |
+| ----------------- | ------------------------------------------------------------------------------- |
+| `pi-ai`           | 核心 LLM 抽象：`Model`、`streamSimple`、訊息型別、提供者 API                                   |
+| `pi-agent-core`   | 代理程式迴圈、工具執行、`AgentMessage` 型別                                                   |
 | `pi-coding-agent` | 高階 SDK：`createAgentSession`、`SessionManager`、`AuthStorage`、`ModelRegistry`、內建工具 |
-| `pi-tui`          | 終端機 UI 元件（用於 OpenClaw 的本機 TUI 模式）                                            |
+| `pi-tui`          | 終端機 UI 元件（用於 OpenClaw 的本機 TUI 模式）                                               |
 
 ## 檔案結構
 
@@ -249,7 +242,7 @@ SDK 會處理完整的代理程式迴圈：傳送至 LLM、執行工具呼叫、
 
 ### 工具定義轉接器
 
-pi-agent-core 的 `AgentTool` 與 pi-coding-agent 的 `ToolDefinition` 在 `execute` 簽章上不同。位於 `pi-tool-definition-adapter.ts` 的轉接器負責銜接兩者：
+pi-agent-core 的 `AgentTool` 與 pi-coding-agent 的 `ToolDefinition` 在 `execute` 簽章上不同。位於 `pi-tool-definition-adapter.ts` 的轉接器負責銜接兩者： The adapter in `pi-tool-definition-adapter.ts` bridges this:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -283,7 +276,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 ## 系統提示建構
 
-系統提示在 `buildAgentSystemPrompt()`（`system-prompt.ts`）中建構。其組合完整提示，包含 Tooling、Tool Call Style、安全防護、OpenClaw CLI 參考、Skills、文件、Workspace、Sandbox、Messaging、Reply Tags、Voice、Silent Replies、Heartbeats、執行期中繼資料，以及在啟用時的 Memory 與 Reactions，並可加入選用的情境檔案與額外系統提示內容。各區段在供子代理程式使用的最小提示模式下會被裁剪。
+系統提示在 `buildAgentSystemPrompt()`（`system-prompt.ts`）中建構。其組合完整提示，包含 Tooling、Tool Call Style、安全防護、OpenClaw CLI 參考、Skills、文件、Workspace、Sandbox、Messaging、Reply Tags、Voice、Silent Replies、Heartbeats、執行期中繼資料，以及在啟用時的 Memory 與 Reactions，並可加入選用的情境檔案與額外系統提示內容。各區段在供子代理程式使用的最小提示模式下會被裁剪。 它會組裝包含多個區段的完整提示詞，包括 Tooling、Tool Call Style、安全防護欄、OpenClaw CLI 參考、Skills、Docs、Workspace、Sandbox、Messaging、Reply Tags、Voice、Silent Replies、Heartbeats、Runtime 中繼資料，以及在啟用時的 Memory 與 Reactions，並可選擇性加入情境檔案與額外的系統提示內容。 在子代理使用的最小提示模式中，區段會被裁剪。
 
 提示會在建立工作階段後，透過 `applySystemPromptOverrideToSession()` 套用：
 
@@ -296,7 +289,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### 工作階段檔案
 
-工作階段為具備樹狀結構（id/parentId 連結）的 JSONL 檔案。pi 的 `SessionManager` 負責持久化：
+工作階段為具備樹狀結構（id/parentId 連結）的 JSONL 檔案。pi 的 `SessionManager` 負責持久化： Pi's `SessionManager` handles persistence:
 
 ```typescript
 const sessionManager = SessionManager.open(params.sessionFile);
@@ -320,7 +313,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### 壓縮
 
-在情境溢位時會自動觸發壓縮。`compactEmbeddedPiSessionDirect()` 負責手動壓縮：
+Auto-compaction triggers on context overflow. 在情境溢位時會自動觸發壓縮。`compactEmbeddedPiSessionDirect()` 負責手動壓縮：
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -339,7 +332,7 @@ const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false 
 const profileOrder = resolveAuthProfileOrder({ cfg, store: authStore, provider, preferredProfile });
 ```
 
-設定檔在失敗時會輪替，並追蹤冷卻時間：
+Profiles rotate on failures with cooldown tracking:
 
 ```typescript
 await markAuthProfileFailure({ store, profileId, reason, cfg, agentDir });
@@ -382,7 +375,7 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 
 OpenClaw 會載入自訂的 pi 擴充，以提供專門行為：
 
-### 壓縮防護
+### 壓縮防護機制
 
 `pi-extensions/compaction-safeguard.ts` 為壓縮加入防護措施，包含自適應權杖預算，以及工具失敗與檔案操作摘要：
 
@@ -393,7 +386,7 @@ if (resolveCompactionMode(params.cfg) === "safeguard") {
 }
 ```
 
-### 情境修剪
+### Context Pruning
 
 `pi-extensions/context-pruning.ts` 實作基於快取 TTL 的情境修剪：
 
@@ -486,7 +479,7 @@ if (sandboxRoot) {
 }
 ```
 
-## 提供者專屬處理
+## 供應商特定處理
 
 ### Anthropic
 
@@ -518,15 +511,15 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## 與 Pi CLI 的主要差異
 
-| 面向         | Pi CLI                  | OpenClaw 嵌入式                                                                                 |
-| ------------ | ----------------------- | ----------------------------------------------------------------------------------------------- |
-| 呼叫方式     | `pi` 指令／RPC          | 透過 `createAgentSession()` 的 SDK                                                              |
-| 工具         | 預設程式設計工具        | 自訂 OpenClaw 工具套件                                                                          |
-| 系統提示     | AGENTS.md + 提示        | 依頻道／情境動態生成                                                                            |
-| 工作階段儲存 | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/`（或 `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`） |
-| 驗證         | 單一憑證                | 多設定檔並可輪替                                                                                |
-| 擴充         | 從磁碟載入              | 程式化 + 磁碟路徑                                                                               |
-| 事件處理     | TUI 繪製                | 以回呼為基礎（onBlockReply 等）                                                                 |
+| 面向     | Pi CLI                         | OpenClaw 嵌入式                                                                                 |
+| ------ | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| 呼叫方式   | `pi` 指令／RPC                    | 透過 `createAgentSession()` 的 SDK                                                              |
+| 工具     | Default coding tools           | 自訂 OpenClaw 工具套件                                                                             |
+| 系統提示   | AGENTS.md + 提示 | 依頻道／情境動態生成                                                                                   |
+| 工作階段儲存 | `~/.pi/agent/sessions/`        | `~/.openclaw/agents/<agentId>/sessions/`（或 `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`） |
+| Auth   | 單一憑證                           | Multi-profile with rotation                                                                  |
+| 擴充     | 從磁碟載入                          | 程式化 + 磁碟路徑                                                                                   |
+| 事件處理   | TUI 繪製                         | 以回呼為基礎（onBlockReply 等）                                                                       |
 
 ## 未來考量
 

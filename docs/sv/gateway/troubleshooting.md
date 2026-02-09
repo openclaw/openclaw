@@ -4,19 +4,12 @@ read_when:
   - Felsökningshubben pekade dig hit för djupare diagnos
   - Du behöver stabila, symtombaserade runbook-avsnitt med exakta kommandon
 title: "Felsökning"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:39Z
 ---
 
 # Gateway-felsökning
 
-Den här sidan är den djupgående runbooken.
-Börja på [/help/troubleshooting](/help/troubleshooting) om du först vill ha det snabba triageflödet.
+Denna sida är den djupa runboken.
+Börja på [/help/troubleshooting](/help/troubleshooting) om du vill ha det snabba triage-flödet först.
 
 ## Kommandostege
 
@@ -117,7 +110,7 @@ Leta efter:
 Vanliga signaturer:
 
 - `Gateway start blocked: set gateway.mode=local` → lokalt gateway-läge är inte aktiverat.
-- `refusing to bind gateway ... without auth` → bindning utanför loopback utan token/lösenord.
+- `vägrar att binda gateway ... utan auth` → non-loopback binda utan token/lösenord.
 - `another gateway instance is already listening` / `EADDRINUSE` → portkonflikt.
 
 Relaterat:
@@ -242,7 +235,7 @@ Vanliga signaturer:
 - `Failed to start Chrome CDP on port` → webbläsarprocessen kunde inte startas.
 - `browser.executablePath not found` → den konfigurerade sökvägen är ogiltig.
 - `Chrome extension relay is running, but no tab is connected` → tilläggsrelä inte anslutet.
-- `Browser attachOnly is enabled ... not reachable` → profil med endast ”attach” har inget nåbart mål.
+- `Browser attachOnly är aktiverad... ej nåbar` → bifogad profil har inget nåbart mål.
 
 Relaterat:
 
@@ -254,7 +247,7 @@ Relaterat:
 
 De flesta problem efter uppgradering beror på konfigdrift eller striktare standarder som nu tillämpas.
 
-### 1) Autentisering och URL-överskrivningsbeteende har ändrats
+### 1. Autentisering och URL-överskrivningsbeteende har ändrats
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Vanliga signaturer:
 - `gateway connect failed:` → fel URL-mål.
 - `unauthorized` → slutpunkt nåbar men fel autentisering.
 
-### 2) Bindning och autentiseringsskydd är striktare
+### 2. Bindning och autentiseringsskydd är striktare
 
 ```bash
 openclaw config get gateway.bind
@@ -289,10 +282,10 @@ Vad du ska kontrollera:
 
 Vanliga signaturer:
 
-- `refusing to bind gateway ... without auth` → missmatch mellan bindning och autentisering.
+- `vägrar att binda gateway ... utan auth` → bind+auth matchar inte.
 - `RPC probe: failed` medan runtime kör → gatewayen lever men är otillgänglig med aktuell auth/url.
 
-### 3) Parkoppling och enhetsidentitet har ändrats
+### 3. Parkoppling och enhetsidentitet har ändrats
 
 ```bash
 openclaw devices list

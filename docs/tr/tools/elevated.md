@@ -2,14 +2,7 @@
 summary: "Yükseltilmiş exec modu ve /elevated yönergeleri"
 read_when:
   - Yükseltilmiş mod varsayılanlarını, izin listelerini veya slash komutu davranışını ayarlarken
-title: "Yükseltilmiş Mod"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:53Z
+title: "Elevated Modu"
 ---
 
 # Yükseltilmiş Mod (/elevated yönergeleri)
@@ -42,7 +35,7 @@ x-i18n:
 2. Oturum geçersiz kılma (yalnızca yönerge içeren bir mesaj gönderilerek ayarlanır).
 3. Küresel varsayılan (yapılandırmadaki `agents.defaults.elevatedDefault`).
 
-## Oturum varsayılanı ayarlama
+## Oturum varsayılanını ayarlama
 
 - **Yalnızca** yönerge olan bir mesaj gönderin (boşluklara izin verilir), örn. `/elevated full`.
 - Bir onay yanıtı gönderilir (`Elevated mode set to full...` / `Elevated mode disabled.`).

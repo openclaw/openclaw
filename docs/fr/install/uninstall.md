@@ -1,21 +1,14 @@
 ---
-summary: « Désinstaller OpenClaw complètement (CLI, service, état, espace de travail) »
+summary: "Désinstaller OpenClaw complètement (CLI, service, état, espace de travail)"
 read_when:
   - Vous souhaitez supprimer OpenClaw d’une machine
   - Le service Gateway (passerelle) fonctionne encore après la désinstallation
-title: « Désinstaller »
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:02Z
+title: "Désinstaller"
 ---
 
 # Désinstaller
 
-Deux options :
+Deux chemins :
 
 - **Méthode simple** si `openclaw` est encore installé.
 - **Suppression manuelle du service** si la CLI a disparu mais que le service fonctionne toujours.

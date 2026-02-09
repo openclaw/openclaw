@@ -3,13 +3,6 @@ summary: "โฮสต์สแตติกของLoopback WebChatและก
 read_when:
   - การดีบักหรือการกำหนดค่าการเข้าถึงWebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:48Z
 ---
 
 # WebChat (Gateway（เกตเวย์） WebSocket UI)
@@ -24,7 +17,7 @@ x-i18n:
 
 ## เริ่มต้นอย่างรวดเร็ว
 
-1. เริ่มต้นGateway
+1. เริ่มต้น Gateway
 2. เปิดUI WebChat（แอปmacOS/iOS）หรือแท็บแชตของUIควบคุม
 3. ตรวจสอบให้แน่ใจว่าได้กำหนดค่าการยืนยันตัวตนของGatewayแล้ว（จำเป็นโดยค่าเริ่มต้น แม้บน local loopback）
 
@@ -46,7 +39,7 @@ x-i18n:
 
 ตัวเลือกของช่องทาง:
 
-- ไม่มีบล็อก `webchat.*` เฉพาะ WebChatใช้เอ็นด์พอยต์ของGatewayร่วมกับการตั้งค่าการยืนยันตัวตนด้านล่าง
+- ไม่มีบล็อก `webchat.*` เฉพาะ WebChat ใช้เอ็นด์พอยต์ของเกตเวย์ + การตั้งค่าการยืนยันตัวตนด้านล่าง
 
 ตัวเลือกส่วนกลางที่เกี่ยวข้อง:
 

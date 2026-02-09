@@ -5,18 +5,11 @@ read_when:
   - 尋找設定範例
   - 第一次設定 OpenClaw
 title: "設定範例"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:58Z
 ---
 
 # 設定範例
 
-以下範例皆與目前的設定結構描述對齊。完整參考與各欄位說明，請參閱 [Configuration](/gateway/configuration)。
+Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
 ## 快速開始
 
@@ -31,7 +24,7 @@ x-i18n:
 
 儲存為 `~/.openclaw/openclaw.json`，即可從該號碼私訊機器人。
 
-### 建議入門設定
+### Recommended starter
 
 ```json5
 {
@@ -55,7 +48,7 @@ x-i18n:
 
 ## 擴展示例（主要選項）
 
-> JSON5 允許使用註解與尾隨逗號；一般 JSON 也可使用。
+> JSON5 允許使用註解與尾隨逗號；一般 JSON 也可使用。 Regular JSON works too.
 
 ```json5
 {
@@ -548,7 +541,7 @@ x-i18n:
 }
 ```
 
-### 工作用機器人（受限存取）
+### Work bot (restricted access)
 
 ```json5
 {
@@ -608,6 +601,6 @@ x-i18n:
 ## 提示
 
 - 若你設定了 `dmPolicy: "open"`，對應的 `allowFrom` 清單必須包含 `"*"`。
-- 提供者 ID 的格式各異（電話號碼、使用者 ID、頻道 ID）。請參閱各提供者文件以確認格式。
+- 提供者 ID 的格式各異（電話號碼、使用者 ID、頻道 ID）。請參閱各提供者文件以確認格式。 Use the provider docs to confirm the format.
 - 可於之後新增的選用區段：`web`、`browser`、`ui`、`discovery`、`canvasHost`、`talk`、`signal`、`imessage`。
 - 更深入的設定說明，請參閱 [Providers](/channels/whatsapp) 與 [Troubleshooting](/gateway/troubleshooting)。

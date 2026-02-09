@@ -5,20 +5,12 @@ read_when:
   - Pag-debug kung bakit nakikialam ang openclaw sa sarili mong Chrome
   - Pagpapatupad ng mga setting at lifecycle ng browser sa macOS app
 title: "Browser (pinamamahalaan ng OpenClaw)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:48Z
 ---
 
 # Browser (pinamamahalaan ng openclaw)
 
-Kayang magpatakbo ang OpenClaw ng **dedikadong Chrome/Brave/Edge/Chromium profile** na kinokontrol ng agent.
-Hiwalay ito sa personal mong browser at pinamamahalaan sa pamamagitan ng isang maliit na lokal na
-control service sa loob ng Gateway (loopback lang).
+33. Maaaring magpatakbo ang OpenClaw ng isang **dedikadong Chrome/Brave/Edge/Chromium profile** na kinokontrol ng agent.
+34. Ito ay nakahiwalay sa iyong personal na browser at pinamamahalaan sa pamamagitan ng isang maliit na lokal na control service sa loob ng Gateway (loopback lamang).
 
 Pananaw ng baguhan:
 
@@ -35,8 +27,8 @@ Pananaw ng baguhan:
 - Mga aksyon ng agent (click/type/drag/select), snapshots, screenshots, PDFs.
 - Opsyonal na multi-profile support (`openclaw`, `work`, `remote`, ...).
 
-Ang browser na ito ay **hindi** para sa pang-araw-araw na gamit. Isa itong ligtas at hiwalay na surface para sa
-agent automation at verification.
+35. Ang browser na ito ay **hindi** para sa pang-araw-araw na paggamit. 17. Ito ay isang ligtas at hiwalay na surface para sa
+    agent automation at beripikasyon.
 
 ## Mabilis na pagsisimula
 
@@ -86,8 +78,7 @@ Ang mga setting ng browser ay nasa `~/.openclaw/openclaw.json`.
 
 Mga tala:
 
-- Ang browser control service ay nagba-bind sa loopback sa isang port na hinango mula sa `gateway.port`
-  (default: `18791`, na gateway + 2). Ginagamit ng relay ang susunod na port (`18792`).
+- 37. Ang browser control service ay nagbi-bind sa loopback sa isang port na hinango mula sa `gateway.port` (default: `18791`, na gateway + 2). 38. Ginagamit ng relay ang susunod na port (`18792`).
 - Kung i-o-override mo ang Gateway port (`gateway.port` o `OPENCLAW_GATEWAY_PORT`),
   lilipat ang mga hinangong browser port para manatili sa parehong “family”.
 - Ang `cdpUrl` ay default sa relay port kapag hindi nakatakda.
@@ -95,15 +86,13 @@ Mga tala:
 - Ang `remoteCdpHandshakeTimeoutMs` ay nalalapat sa mga remote CDP WebSocket reachability check.
 - Ang `attachOnly: true` ay nangangahulugang “huwag kailanman mag-launch ng lokal na browser; kumabit lang kung tumatakbo na.”
 - Ang `color` + per-profile na `color` ay nagbibigay-kulay sa UI ng browser para makita mo kung aling profile ang aktibo.
-- Ang default profile ay `chrome` (extension relay). Gamitin ang `defaultProfile: "openclaw"` para sa pinamamahalaang browser.
+- 39. Ang default na profile ay `chrome` (extension relay). 18. Gamitin ang `defaultProfile: "openclaw"` para sa managed browser.
 - Auto-detect order: system default browser kung Chromium-based; kung hindi, Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Ang mga lokal na `openclaw` profile ay awtomatikong nag-a-assign ng `cdpPort`/`cdpUrl` — itakda lang ang mga iyon para sa remote CDP.
 
 ## Gumamit ng Brave (o ibang Chromium-based na browser)
 
-Kung ang **system default** browser mo ay Chromium-based (Chrome/Brave/Edge/etc),
-awtomatikong gagamitin ito ng OpenClaw. Itakda ang `browser.executablePath` para i-override ang
-auto-detection:
+41. Kung ang iyong **system default** browser ay batay sa Chromium (Chrome/Brave/Edge/etc), awtomatikong ginagamit ito ng OpenClaw. 42. Itakda ang `browser.executablePath` para i-override ang auto-detection:
 
 Halimbawa sa CLI:
 
@@ -138,23 +127,22 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 - **Lokal na kontrol (default):** sinisimulan ng Gateway ang loopback control service at kayang mag-launch ng lokal na browser.
 - **Remote na kontrol (node host):** magpatakbo ng node host sa machine na may browser; ipo-proxy ng Gateway ang mga aksyon ng browser papunta rito.
-- **Remote CDP:** itakda ang `browser.profiles.<name>.cdpUrl` (o `browser.cdpUrl`) para
-  kumabit sa isang remote na Chromium-based na browser. Sa kasong ito, hindi magla-launch ng lokal na browser ang OpenClaw.
+- 43. **Remote CDP:** itakda ang `browser.profiles.<name>`.cdpUrl`(or`browser.cdpUrl\`) to
+      attach to a remote Chromium-based browser. 20. Sa kasong ito, hindi maglulunsad ang OpenClaw ng lokal na browser.
 
 Maaaring magsama ng auth ang mga remote CDP URL:
 
 - Query tokens (hal., `https://provider.example?token=<token>`)
 - HTTP Basic auth (hal., `https://user:pass@provider.example`)
 
-Pinananatili ng OpenClaw ang auth kapag tumatawag sa mga endpoint ng `/json/*` at kapag kumokonekta
-sa CDP WebSocket. Mas mainam ang paggamit ng mga environment variable o secrets manager para sa
-mga token kaysa i-commit ang mga ito sa config files.
+21. Pinananatili ng OpenClaw ang auth kapag tumatawag sa mga endpoint na `/json/*` at kapag kumokonekta
+    sa CDP WebSocket. 22. Mas mainam ang mga environment variable o secrets manager para sa
+    mga token sa halip na i-commit ang mga ito sa mga config file.
 
 ## Node browser proxy (zero-config na default)
 
-Kung magpapatakbo ka ng **node host** sa machine na may browser mo, kayang
-awtomatikong i-route ng OpenClaw ang mga browser tool call papunta sa node na iyon nang walang dagdag na browser config.
-Ito ang default na ruta para sa mga remote gateway.
+48. Kung nagpapatakbo ka ng **node host** sa makinang may browser mo, maaaring awtomatikong i-route ng OpenClaw ang mga tawag ng browser tool sa node na iyon nang walang karagdagang browser config.
+49. Ito ang default na path para sa mga remote gateway.
 
 Mga tala:
 
@@ -166,9 +154,8 @@ Mga tala:
 
 ## Browserless (hosted remote CDP)
 
-Ang [Browserless](https://browserless.io) ay isang hosted Chromium service na naglalantad ng
-mga CDP endpoint sa HTTPS. Maaari mong ituro ang isang OpenClaw browser profile sa isang
-Browserless region endpoint at mag-authenticate gamit ang iyong API key.
+24. Ang [Browserless](https://browserless.io) ay isang hosted na serbisyo ng Chromium na naglalantad ng
+    mga CDP endpoint sa pamamagitan ng HTTPS. Maaari mong ituro ang isang OpenClaw browser profile sa isang Browserless region endpoint at mag-authenticate gamit ang iyong API key.
 
 Halimbawa:
 
@@ -241,8 +228,8 @@ Kung tumatakbo ang Gateway sa ibang lugar, magpatakbo ng node host sa machine ng
 
 ### Mga sandboxed na session
 
-Kung ang agent session ay naka-sandbox, maaaring mag-default ang `browser` tool sa `target="sandbox"` (sandbox browser).
-Ang pag-takeover ng Chrome extension relay ay nangangailangan ng host browser control, kaya alinman sa:
+Kung ang agent session ay naka-sandbox, ang `browser` tool ay maaaring mag-default sa `target="sandbox"` (sandbox browser).
+Ang Chrome extension relay takeover ay nangangailangan ng kontrol sa host browser, kaya alinman sa:
 
 - patakbuhin ang session na hindi naka-sandbox, o
 - itakda ang `agents.defaults.sandbox.browser.allowHostControl: true` at gamitin ang `target="host"` kapag tinatawag ang tool.
@@ -325,9 +312,9 @@ Tinatanggap ng lahat ng endpoint ang `?profile=<name>`.
 ### Kinakailangan ang Playwright
 
 Ang ilang feature (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) ay nangangailangan ng
-Playwright. Kung hindi naka-install ang Playwright, magbabalik ang mga endpoint na iyon ng malinaw na 501
+Playwright. Kung hindi naka-install ang Playwright, ang mga endpoint na iyon ay magbabalik ng malinaw na 501
 error. Gumagana pa rin ang ARIA snapshots at mga basic screenshot para sa openclaw-managed Chrome.
-Para sa Chrome extension relay driver, nangangailangan ng Playwright ang ARIA snapshots at screenshots.
+Para sa Chrome extension relay driver, ang ARIA snapshots at screenshots ay nangangailangan ng Playwright.
 
 Kung makita mo ang `Playwright is not available in this gateway build`, i-install ang buong
 Playwright package (hindi `playwright-core`) at i-restart ang gateway, o muling i-install ang
@@ -335,17 +322,16 @@ OpenClaw na may browser support.
 
 #### Docker Playwright install
 
-Kung tumatakbo ang Gateway mo sa Docker, iwasan ang `npx playwright` (mga conflict sa npm override).
-Gamitin na lang ang bundled CLI:
+Kung ang iyong Gateway ay tumatakbo sa Docker, iwasan ang `npx playwright` (mga conflict sa npm override).
+25. Gamitin na lang ang bundled CLI:
 
 ```bash
 docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-Para mapanatili ang mga browser download, itakda ang `PLAYWRIGHT_BROWSERS_PATH` (halimbawa,
-`/home/node/.cache/ms-playwright`) at tiyaking naka-persist ang `/home/node` sa pamamagitan ng
-`OPENCLAW_HOME_VOLUME` o isang bind mount. Tingnan ang [Docker](/install/docker).
+Upang mapanatili ang browser downloads, itakda ang `PLAYWRIGHT_BROWSERS_PATH` (halimbawa,
+`/home/node/.cache/ms-playwright`) at tiyaking ang `/home/node` ay naka-persist sa pamamagitan ng `OPENCLAW_HOME_VOLUME` o isang bind mount. See [Docker](/install/docker).
 
 ## Paano ito gumagana (internal)
 
@@ -361,8 +347,8 @@ magpalit ng lokal/remote na mga browser at profile.
 
 ## Mabilisang sanggunian ng CLI
 
-Tinatanggap ng lahat ng command ang `--browser-profile <name>` para i-target ang isang partikular na profile.
-Tinatanggap din ng lahat ng command ang `--json` para sa machine-readable na output (stable payloads).
+27. Lahat ng command ay tumatanggap ng `--browser-profile <name>` upang tukuyin ang isang partikular na profile.
+    Lahat ng command ay tumatanggap din ng `--json` para sa machine-readable na output (stable payloads).
 
 Mga basic:
 
@@ -454,8 +440,8 @@ Mga tala:
   - Ang `--frame "<iframe selector>"` ay naglilimita ng role snapshot sa isang iframe (kapareha ng mga role ref tulad ng `e12`).
   - Ang `--interactive` ay naglalabas ng flat at madaling piliing listahan ng mga interactive element (pinakamainam para sa pag-drive ng mga aksyon).
   - Ang `--labels` ay nagdaragdag ng viewport-only screenshot na may overlayed na mga ref label (nagpi-print ng `MEDIA:<path>`).
-- Ang `click`/`type`/atbp ay nangangailangan ng `ref` mula sa `snapshot` (numeric na `12` o role ref na `e12`).
-  Hindi sinusuportahan ang mga CSS selector para sa mga aksyon.
+- Ang `click`/`type`/atbp ay nangangailangan ng isang `ref` mula sa `snapshot` (alinman sa numeric na `12` o role ref na `e12`).
+  Ang mga CSS selector ay sadyang hindi sinusuportahan para sa mga action.
 
 ## Mga snapshot at ref
 
@@ -550,8 +536,8 @@ Kapaki-pakinabang ang mga ito para sa mga workflow na “gawing umasal ang site 
 
 - Ang openclaw browser profile ay maaaring maglaman ng mga naka-login na session; ituring itong sensitibo.
 - Ang `browser act kind=evaluate` / `openclaw browser evaluate` at `wait --fn`
-  ay nagpapatakbo ng arbitrary JavaScript sa page context. Maaaring idirekta ito ng prompt injection.
-  I-disable ito gamit ang `browser.evaluateEnabled=false` kung hindi mo ito kailangan.
+  ay nagsasagawa ng arbitrary JavaScript sa page context. Maaaring idirekta ng prompt injection
+  ito. 28. I-disable ito gamit ang `browser.evaluateEnabled=false` kung hindi mo ito kailangan.
 - Para sa mga login at anti-bot na tala (X/Twitter, atbp.), tingnan ang [Browser login + X/Twitter posting](/tools/browser-login).
 - Panatilihing pribado ang Gateway/node host (loopback o tailnet-only).
 - Makapangyarihan ang mga remote CDP endpoint; i-tunnel at protektahan ang mga ito.

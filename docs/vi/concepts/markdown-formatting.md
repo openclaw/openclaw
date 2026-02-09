@@ -5,20 +5,13 @@ read_when:
   - Bạn đang thêm một formatter kênh mới hoặc ánh xạ kiểu dáng
   - Bạn đang gỡ lỗi các lỗi hồi quy về định dạng giữa các kênh
 title: "Định dạng Markdown"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:40Z
 ---
 
 # Định dạng Markdown
 
-OpenClaw định dạng Markdown gửi ra bằng cách chuyển đổi nó thành một biểu diễn trung gian dùng chung
-(IR) trước khi render đầu ra theo từng kênh. IR giữ nguyên văn bản nguồn trong khi mang theo
-các span kiểu dáng/liên kết để việc chunking và render có thể nhất quán trên các kênh.
+10. OpenClaw định dạng Markdown đầu ra bằng cách chuyển đổi nó sang một biểu diễn trung gian dùng chung (IR) trước khi render đầu ra theo từng kênh. The IR keeps the
+    source text intact while carrying style/link spans so chunking and rendering can
+    stay consistent across channels.
 
 ## Mục tiêu
 
@@ -69,8 +62,7 @@ IR (sơ đồ):
 
 ## Xử lý bảng
 
-Bảng Markdown không được hỗ trợ nhất quán giữa các ứng dụng chat. Dùng
-`markdown.tables` để kiểm soát việc chuyển đổi theo từng kênh (và theo từng tài khoản).
+Markdown tables are not consistently supported across chat clients. 11. Sử dụng `markdown.tables` để kiểm soát việc chuyển đổi theo từng kênh (và theo từng tài khoản).
 
 - `code`: render bảng thành khối code (mặc định cho hầu hết các kênh).
 - `bullets`: chuyển mỗi hàng thành các gạch đầu dòng (mặc định cho Signal + WhatsApp).
@@ -104,15 +96,14 @@ Nếu bạn cần thêm thông tin về hành vi chunking giữa các kênh, xem
 
 ## Chính sách liên kết
 
-- **Slack:** `[label](url)` -> `<url|label>`; URL trần vẫn giữ nguyên. Autolink
-  bị tắt trong lúc parse để tránh tạo liên kết kép.
+- 12. **Slack:** `[label](url)` -> `<url|label>`; URL trần vẫn giữ nguyên. Autolink
+      is disabled during parse to avoid double-linking.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (chế độ parse HTML).
 - **Signal:** `[label](url)` -> `label (url)` trừ khi nhãn trùng với URL.
 
 ## Spoiler
 
-Các dấu spoiler (`||spoiler||`) chỉ được parse cho Signal, nơi chúng ánh xạ sang
-các dải kiểu SPOILER. Các kênh khác coi chúng là văn bản thuần.
+13. Dấu đánh dấu spoiler (`||spoiler||`) chỉ được phân tích cho Signal, nơi chúng được ánh xạ thành các vùng kiểu SPOILER. Other channels treat them as plain text.
 
 ## Cách thêm hoặc cập nhật một formatter kênh
 

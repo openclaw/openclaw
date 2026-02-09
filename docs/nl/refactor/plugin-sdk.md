@@ -4,13 +4,6 @@ read_when:
   - Het definiëren of herstructureren van de plugin-architectuur
   - Het migreren van kanaalconnectoren naar de plugin-SDK/runtime
 title: "Plugin-SDK-refactor"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:46Z
 ---
 
 # Plugin-SDK + Runtime Refactorplan
@@ -25,7 +18,7 @@ Geen enkele plugin importeert rechtstreeks uit `src/**`. Alle afhankelijkheden l
 
 ## Doelarchitectuur (twee lagen)
 
-### 1) Plugin-SDK (compile-time, stabiel, publiceerbaar)
+### 1. Plugin-SDK (compile-time, stabiel, publiceerbaar)
 
 Scope: types, helpers en config-hulpmiddelen. Geen runtime-status, geen side-effects.
 
@@ -39,12 +32,12 @@ Inhoud (voorbeelden):
 - Tool-param-helpers: `createActionGate`, `readStringParam`, `readNumberParam`, `readReactionParams`, `jsonResult`.
 - Docs-link-helper: `formatDocsLink`.
 
-Distributie:
+Levering:
 
 - Publiceer als `openclaw/plugin-sdk` (of exporteer vanuit core onder `openclaw/plugin-sdk`).
 - Semver met expliciete stabiliteitsgaranties.
 
-### 2) Plugin-Runtime (uitvoeringsoppervlak, geïnjecteerd)
+### 2. Plugin-Runtime (uitvoeringsoppervlak, geïnjecteerd)
 
 Scope: alles wat core runtime-gedrag raakt.
 Toegankelijk via `OpenClawPluginApi.runtime`, zodat plugins nooit `src/**` importeren.

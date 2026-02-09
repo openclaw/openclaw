@@ -4,20 +4,13 @@ read_when:
   - Integrering af klienter, der taler OpenResponses API
   - Du ønsker item-baserede input, klientværktøjskald eller SSE-events
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:26Z
 ---
 
 # OpenResponses API (HTTP)
 
 OpenClaws Gateway kan betjene et OpenResponses-kompatibelt `POST /v1/responses` endpoint.
 
-Dette endpoint er **deaktiveret som standard**. Aktivér det først i konfigurationen.
+Dette endepunkt er **deaktiveret som standard**. Aktiver det i config først.
 
 - `POST /v1/responses`
 - Samme port som Gateway (WS + HTTP-multiplex): `http://<gateway-host>:<port>/v1/responses`
@@ -27,7 +20,7 @@ Under motorhjelmen udføres forespørgsler som et normalt Gateway-agentkørsel (
 
 ## Autentificering
 
-Bruger Gateways autentificeringskonfiguration. Send et bearer-token:
+Bruger Gateway auth konfiguration. Send et bærer-token:
 
 - `Authorization: Bearer <token>`
 
@@ -92,7 +85,7 @@ fra den, så gentagne kald kan dele en agentsession.
 
 ## Forespørgselsformat (understøttet)
 
-Forespørgslen følger OpenResponses API med item-baseret input. Nuværende understøttelse:
+Anmodningen følger OpenResponses API med elementbaseret input. Nuværende support:
 
 - `input`: streng eller array af item-objekter.
 - `instructions`: flettes ind i systemprompten.
@@ -139,10 +132,10 @@ Accepteres for skemakompatibilitet, men ignoreres ved opbygning af prompten.
 
 ## Værktøjer (klientside funktionsværktøjer)
 
-Angiv værktøjer med `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
+Giv værktøjer med `værktøjer: [{ type: "funktion", funktion: { navn, beskrivelse?, parametre? } }]`.
 
-Hvis agenten beslutter at kalde et værktøj, returnerer svaret et `function_call` output-item.
-Du sender derefter en opfølgende forespørgsel med `function_call_output` for at fortsætte turen.
+Hvis agenten beslutter at kalde et værktøj, returnerer svaret et `function_call` output element.
+Du sender derefter en opfølgningsanmodning med `function_call_output` for at fortsætte turen.
 
 ## Billeder (`input_image`)
 
@@ -155,8 +148,8 @@ Understøtter base64- eller URL-kilder:
 }
 ```
 
-Tilladte MIME-typer (aktuelt): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
-Maks. størrelse (aktuelt): 10MB.
+Tilladte MIME-typer (nuværende): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Maks. størrelse (nuværende): 10MB.
 
 ## Filer (`input_file`)
 
@@ -177,17 +170,17 @@ Understøtter base64- eller URL-kilder:
 Tilladte MIME-typer (aktuelt): `text/plain`, `text/markdown`, `text/html`, `text/csv`,
 `application/json`, `application/pdf`.
 
-Maks. størrelse (aktuelt): 5MB.
+Maks. størrelse (nuværende): 5MB.
 
 Nuværende adfærd:
 
 - Filindhold dekodes og tilføjes til **systemprompten**, ikke brugermeddelelsen,
   så det forbliver efemerisk (ikke gemt i sessionshistorikken).
-- PDF’er parses for tekst. Hvis der findes lidt tekst, rasteriseres de første sider
-  til billeder og sendes til modellen.
+- PDF-filer fortolkes for tekst. Hvis der er fundet lidt tekst, bliver de første sider rasteriseret
+  til billeder og sendt til modellen.
 
-PDF-parsning bruger den Node-venlige `pdfjs-dist` legacy-build (uden worker). Den moderne
-PDF.js-build forventer browser-workers/DOM-globals og bruges derfor ikke i Gateway.
+PDF-parsing bruger Node-venlige `pdfjs-dist` arv build (ingen arbejder). Den moderne
+PDF.js build forventer browser workers/DOM globals, så det ikke bruges i Gateway.
 
 Standardindstillinger for URL-hentning:
 

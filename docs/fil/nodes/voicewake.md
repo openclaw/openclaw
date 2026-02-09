@@ -4,13 +4,6 @@ read_when:
   - Binabago ang behavior o mga default ng voice wake words
   - Nagdaragdag ng mga bagong node platform na nangangailangan ng wake word sync
 title: "Voice Wake"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:36Z
 ---
 
 # Voice Wake (Mga Global Wake Word)
@@ -42,7 +35,7 @@ Hugis:
 
 Mga tala:
 
-- Ang mga trigger ay bine-normalize (tinatanggal ang whitespace, inaalis ang mga empty). Ang mga empty na listahan ay bumabalik sa mga default.
+- Ang mga trigger ay nino‑normalize (tinatabas, inaalis ang mga walang laman). Ang mga walang lamang listahan ay bumabalik sa mga default.
 - May ipinapatupad na mga limit para sa kaligtasan (mga cap sa bilang/haba).
 
 ### Mga Event

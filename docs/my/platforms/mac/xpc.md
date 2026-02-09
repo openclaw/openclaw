@@ -3,18 +3,11 @@ summary: "OpenClaw အက်ပ်၊ Gateway နိုဒ် ပို့ဆေ
 read_when:
   - IPC စာချုပ်များ သို့မဟုတ် မီနူးဘား အက်ပ် IPC ကို ပြင်ဆင်နေချိန်
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:45Z
 ---
 
 # OpenClaw macOS IPC အင်ဂျင်နီယာဖွဲ့စည်းပုံ
 
-**လက်ရှိ မော်ဒယ်:** local Unix socket တစ်ခုက **node host service** ကို **macOS app** နှင့် ချိတ်ဆက်ထားပြီး exec approvals + `system.run` အတွက် အသုံးပြုသည်။ `openclaw-mac` အတွက် discovery/connect စစ်ဆေးရန် debug CLI တစ်ခု ရှိပြီး agent အရေးယူမှုများသည် Gateway WebSocket နှင့် `node.invoke` မှတစ်ဆင့် ဆက်လက် စီးဆင်းသည်။ UI automation အတွက် PeekabooBridge ကို အသုံးပြုသည်။
+**Current model:** local Unix socket တစ်ခုဖြင့် **node host service** နှင့် **macOS app** ကို exec approvals + `system.run` အတွက် ချိတ်ဆက်ထားသည်။ Discovery/connect စစ်ဆေးရန် `openclaw-mac` debug CLI တစ်ခု ရှိသည်; agent actions များသည် Gateway WebSocket နှင့် `node.invoke` မှတစ်ဆင့် ဆက်လက် လုပ်ဆောင်သည်။ UI automation သည် PeekabooBridge ကို အသုံးပြုသည်။
 
 ## ရည်မှန်းချက်များ
 

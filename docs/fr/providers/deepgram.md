@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez utiliser la reconnaissance vocale Deepgram pour les pièces jointes audio
   - Vous avez besoin d’un exemple de configuration Deepgram rapide
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: 8f19e072f0867211
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:25Z
 ---
 
 # Deepgram (Transcription audio)

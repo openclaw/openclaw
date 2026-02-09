@@ -3,13 +3,6 @@ summary: "grammY کے ذریعے Telegram Bot API انضمام بمع سیٹ ا�
 read_when:
   - Telegram یا grammY راستوں پر کام کرتے وقت
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:53Z
 ---
 
 # grammY انضمام (Telegram Bot API)
@@ -23,12 +16,12 @@ x-i18n:
 # ہم نے کیا بھیجا
 
 - **واحد کلائنٹ راستہ:** fetch پر مبنی نفاذ ہٹا دیا گیا؛ grammY اب واحد Telegram کلائنٹ ہے (send + gateway) اور grammY throttler بطورِ طے شدہ فعال ہے۔
-- **Gateway:** `monitorTelegramProvider` ایک grammY `Bot` بناتا ہے، mention/allowlist gating وائر کرتا ہے، `getFile`/`download` کے ذریعے میڈیا ڈاؤن لوڈ کرتا ہے، اور `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument` کے ساتھ جوابات پہنچاتا ہے۔ `webhookCallback` کے ذریعے long-poll یا webhook کی سپورٹ۔
+- **Gateway:** `monitorTelegramProvider` builds a grammY `Bot`, wires mention/allowlist gating, media download via `getFile`/`download`, and delivers replies with `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument`. Supports long-poll or webhook via `webhookCallback`.
 - **Proxy:** اختیاری `channels.telegram.proxy` grammY کے `client.baseFetch` کے ذریعے `undici.ProxyAgent` استعمال کرتا ہے۔
-- **Webhook سپورٹ:** `webhook-set.ts`، `setWebhook/deleteWebhook` کو ریپ کرتا ہے؛ `webhook.ts` صحت (health) اور graceful shutdown کے ساتھ callback ہوسٹ کرتا ہے۔ Gateway اس وقت webhook موڈ فعال کرتا ہے جب `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` سیٹ ہوں (ورنہ یہ long-poll کرتا ہے)۔
+- **Webhook support:** `webhook-set.ts` wraps `setWebhook/deleteWebhook`; `webhook.ts` hosts the callback with health + graceful shutdown. Gateway enables webhook mode when `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` are set (otherwise it long-polls).
 - **Sessions:** براہِ راست چیٹس ایجنٹ کے مرکزی سیشن (`agent:<agentId>:<mainKey>`) میں ضم ہو جاتی ہیں؛ گروپس `agent:<agentId>:telegram:group:<chatId>` استعمال کرتے ہیں؛ جوابات اسی چینل پر واپس جاتے ہیں۔
 - **Config knobs:** `channels.telegram.botToken`, `channels.telegram.dmPolicy`, `channels.telegram.groups` (allowlist + mention ڈیفالٹس), `channels.telegram.allowFrom`, `channels.telegram.groupAllowFrom`, `channels.telegram.groupPolicy`, `channels.telegram.mediaMaxMb`, `channels.telegram.linkPreview`, `channels.telegram.proxy`, `channels.telegram.webhookSecret`, `channels.telegram.webhookUrl`۔
-- **Draft streaming:** اختیاری `channels.telegram.streamMode` نجی topic چیٹس میں `sendMessageDraft` استعمال کرتا ہے (Bot API 9.3+)۔ یہ چینل بلاک اسٹریمنگ سے الگ ہے۔
+- **Draft streaming:** optional `channels.telegram.streamMode` uses `sendMessageDraft` in private topic chats (Bot API 9.3+). This is separate from channel block streaming.
 - **Tests:** grammY mocks DM + گروپ mention gating اور outbound send کو کور کرتے ہیں؛ مزید میڈیا/webhook fixtures خوش آئند ہیں۔
 
 Open questions

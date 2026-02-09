@@ -4,13 +4,6 @@ read_when:
   - Debugowanie skryptów deweloperskich tylko dla Node lub awarii trybu watch
   - Badanie awarii loadera tsx/esbuild w OpenClaw
 title: "Awaria Node + tsx"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:10Z
 ---
 
 # Awaria Node + tsx „\_\_name is not a function”
@@ -65,9 +58,10 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 - `2871657e` (2026-01-06): skrypty zmienione z Bun na tsx, aby Bun był opcjonalny.
 - Wcześniej (ścieżka Bun) działały `openclaw status` i `gateway:watch`.
 
-## Obejścia
+## Prace
 
 - Użycie Bun do skryptów deweloperskich (obecne tymczasowe cofnięcie).
+
 - Użycie Node + watch tsc, a następnie uruchamianie skompilowanego wyjścia:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Potwierdzone lokalnie: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` działa na Node 25.
+
 - Wyłączenie keepNames esbuild w loaderze TS, jeśli to możliwe (zapobiega wstawianiu pomocnika `__name`); tsx obecnie tego nie udostępnia.
+
 - Przetestowanie Node LTS (22/24) z `tsx`, aby sprawdzić, czy problem jest specyficzny dla Node 25.
 
 ## Odniesienia

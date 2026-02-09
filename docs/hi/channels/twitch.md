@@ -3,18 +3,11 @@ summary: "Twitch चैट बॉट का विन्यास और से�
 read_when:
   - OpenClaw के लिए Twitch चैट एकीकरण सेट करते समय
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:09Z
 ---
 
 # Twitch (प्लगइन)
 
-IRC कनेक्शन के माध्यम से Twitch चैट समर्थन। OpenClaw एक Twitch उपयोगकर्ता (बॉट खाता) के रूप में कनेक्ट होता है ताकि चैनलों में संदेश प्राप्त और भेज सके।
+Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
 
 ## आवश्यक प्लगइन
 
@@ -48,7 +41,7 @@ openclaw plugins install ./extensions/twitch
    - यदि दोनों सेट हैं, तो config को प्राथमिकता मिलेगी (env फ़ॉलबैक केवल डिफ़ॉल्ट खाते के लिए है)।
 5. Gateway शुरू करें।
 
-**⚠️ महत्वपूर्ण:** अनधिकृत उपयोगकर्ताओं द्वारा बॉट को ट्रिगर करने से रोकने के लिए एक्सेस कंट्रोल (`allowFrom` या `allowedRoles`) जोड़ें। `requireMention` का डिफ़ॉल्ट मान `true` है।
+**⚠️ Important:** Add access control (`allowFrom` or `allowedRoles`) to prevent unauthorized users from triggering the bot. `requireMention` defaults to `true`.
 
 न्यूनतम config:
 
@@ -84,7 +77,7 @@ openclaw plugins install ./extensions/twitch
 - सुनिश्चित करें कि स्कोप्स `chat:read` और `chat:write` चुने गए हों
 - **Client ID** और **Access Token** कॉपी करें
 
-मैन्युअल ऐप रजिस्ट्रेशन की आवश्यकता नहीं है। टोकन कई घंटों बाद समाप्त हो जाते हैं।
+No manual app registration needed. Tokens expire after several hours.
 
 ### बॉट कॉन्फ़िगर करें
 
@@ -124,11 +117,11 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-हार्ड allowlist के लिए `allowFrom` को प्राथमिकता दें। यदि आप भूमिका-आधारित एक्सेस चाहते हैं, तो इसके बजाय `allowedRoles` का उपयोग करें।
+Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
 
 **उपलब्ध भूमिकाएँ:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`।
 
-**User ID क्यों?** उपयोगकर्ता नाम बदल सकते हैं, जिससे प्रतिरूपण संभव हो जाता है। User ID स्थायी होते हैं।
+**Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
 अपना Twitch user ID खोजें: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (अपने Twitch उपयोगकर्ता नाम को ID में बदलें)
 
@@ -153,7 +146,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ## मल्टी-अकाउंट समर्थन
 
-प्रति-खाता टोकन के साथ `channels.twitch.accounts` का उपयोग करें। साझा पैटर्न के लिए [`gateway/configuration`](/gateway/configuration) देखें।
+Use `channels.twitch.accounts` with per-account tokens. See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
 उदाहरण (एक बॉट खाता दो चैनलों में):
 
@@ -218,8 +211,8 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ### भूमिका-आधारित एक्सेस (वैकल्पिक)
 
-`allowFrom` एक हार्ड allowlist है। सेट होने पर, केवल वही user ID अनुमत होंगे।
-यदि आप भूमिका-आधारित एक्सेस चाहते हैं, तो `allowFrom` को अनसेट छोड़ें और इसके बजाय `allowedRoles` कॉन्फ़िगर करें:
+`allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+If you want role-based access, leave `allowFrom` unset and configure `allowedRoles` instead:
 
 ```json5
 {
@@ -237,7 +230,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ### @mention आवश्यकता अक्षम करें
 
-डिफ़ॉल्ट रूप से, `requireMention` का मान `true` है। सभी संदेशों पर प्रतिक्रिया देने के लिए इसे अक्षम करने हेतु:
+By default, `requireMention` is `true`. To disable and respond to all messages:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Access token refreshed for user 123456 (expires in 14400s)
 - `channels.twitch.accessToken` - OAuth access token (सरलीकृत सिंगल-अकाउंट config)
 - `channels.twitch.clientId` - Twitch Client ID (सरलीकृत सिंगल-अकाउंट config)
 - `channels.twitch.channel` - जॉइन करने के लिए चैनल (सरलीकृत सिंगल-अकाउंट config)
-- `channels.twitch.accounts.<accountName>` - मल्टी-अकाउंट config (ऊपर दिए गए सभी खाता फ़ील्ड)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
 
 पूर्ण उदाहरण:
 

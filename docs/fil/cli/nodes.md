@@ -4,13 +4,6 @@ read_when:
   - Pinamamahalaan mo ang mga ipinares na node (mga camera, screen, canvas)
   - Kailangan mong aprubahan ang mga kahilingan o mag-invoke ng mga command ng node
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:17Z
 ---
 
 # `openclaw nodes`
@@ -40,9 +33,9 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` nagpi-print ng mga talahanayan ng pending/ipinares. Kasama sa mga ipinares na row ang pinakahuling edad ng koneksyon (Last Connect).
-Gamitin ang `--connected` para ipakita lamang ang mga kasalukuyang nakakonektang node. Gamitin ang `--last-connected <duration>` para
-salain sa mga node na kumonekta sa loob ng isang duration (hal. `24h`, `7d`).
+Ang `nodes list` ay nagpi-print ng mga pending/paired table. Kasama sa mga paired row ang pinakabagong edad ng koneksyon (Last Connect).
+Gamitin ang `--connected` upang ipakita lamang ang mga kasalukuyang nakakonektang node. Gamitin ang `--last-connected <duration>` upang
+salain ang mga node na kumonekta sa loob ng isang tagal (hal. `24h`, `7d`).
 
 ## Invoke / run
 

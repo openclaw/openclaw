@@ -4,19 +4,12 @@ read_when:
   - 使用或設定聊天指令時
   - 偵錯指令路由或權限時
 title: "斜線指令"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:00Z
 ---
 
 # 斜線指令
 
-指令由 Gateway 閘道器 處理。多數指令必須以**獨立**訊息送出，且以 `/` 開頭。
-僅限主機的 bash 聊天指令使用 `! <cmd>`（`/bash <cmd>` 為別名）。
+29. 指令由 Gateway 處理。 30. 大多數指令必須作為**獨立**訊息傳送，且以 `/` 開頭。
+    The host-only bash chat command uses `! <cmd>`（`/bash <cmd>` 為別名）。
 
 有兩個相關的系統：
 
@@ -27,9 +20,11 @@ x-i18n:
   - 在僅含 directive 的訊息（訊息只包含 directives）中，它們會持久化到工作階段，並回覆確認。
   - Directives 僅會套用於**已授權的寄件者**（頻道允許清單／配對，加上 `commands.useAccessGroups`）。
     未授權的寄件者會看到 directives 被當作一般文字處理。
+    32. 未授權的傳送者會看到指示被當作純文字處理。
 
 另有一些**內嵌捷徑**（僅限允許清單／已授權寄件者）：`/help`、`/commands`、`/status`、`/whoami`（`/id`）。
 它們會立即執行，並在模型看到訊息前被移除，其餘文字會依正常流程繼續處理。
+They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
 
 ## 設定
 
@@ -54,7 +49,7 @@ x-i18n:
 - `commands.native`（預設 `"auto"`）註冊原生指令。
   - Auto：Discord／Telegram 為開；Slack 為關（直到你加入斜線指令）；對不支援原生的提供者會被忽略。
   - 設定 `channels.discord.commands.native`、`channels.telegram.commands.native` 或 `channels.slack.commands.native` 以依提供者覆寫（bool 或 `"auto"`）。
-  - `false` 會在啟動時清除 Discord／Telegram 先前註冊的指令。Slack 指令由 Slack 應用程式管理，且不會自動移除。
+  - `false` clears previously registered commands on Discord/Telegram at startup. `false` 會在啟動時清除 Discord／Telegram 先前註冊的指令。Slack 指令由 Slack 應用程式管理，且不會自動移除。
 - `commands.nativeSkills`（預設 `"auto"`）在支援時以原生方式註冊 **skill** 指令。
   - Auto：Discord／Telegram 為開；Slack 為關（Slack 需要為每個 skill 建立一個斜線指令）。
   - 設定 `channels.discord.commands.nativeSkills`、`channels.telegram.commands.nativeSkills` 或 `channels.slack.commands.nativeSkills` 以依提供者覆寫（bool 或 `"auto"`）。
@@ -115,19 +110,19 @@ x-i18n:
 - `/usage` 控制每次回應的使用量頁尾；`/usage cost` 會從 OpenClaw 工作階段記錄列印本地成本摘要。
 - `/restart` 預設停用；設定 `commands.restart: true` 以啟用。
 - `/verbose` 用於偵錯與額外可見性；一般使用時請保持**關閉**。
-- `/reasoning`（以及 `/verbose`）在群組情境中具風險：可能揭露你不打算公開的內部推理或工具輸出。建議保持關閉，尤其是在群聊中。
+- `/reasoning`（以及 `/verbose`）在群組情境中具風險：可能揭露你不打算公開的內部推理或工具輸出。建議保持關閉，尤其是在群聊中。 Prefer leaving them off, especially in group chats.
 - **快速路徑：** 來自允許清單寄件者的僅指令訊息會立即處理（略過佇列 + 模型）。
 - **群組提及閘控：** 來自允許清單寄件者的僅指令訊息會略過提及需求。
 - **內嵌捷徑（僅限允許清單寄件者）：** 某些指令也可內嵌在一般訊息中，並在模型看到剩餘文字前被移除。
   - 範例：`hey /status` 會觸發狀態回覆，其餘文字會依正常流程繼續。
 - 目前支援：`/help`、`/commands`、`/status`、`/whoami`（`/id`）。
 - 未授權的僅指令訊息會被靜默忽略，而內嵌的 `/...` token 會被視為一般文字。
-- **Skill 指令：** `user-invocable` skills 會以斜線指令形式公開。名稱會被清理為 `a-z0-9_`（最長 32 字元）；發生衝突時會加上數字尾碼（例如：`_2`）。
+- **Skill 指令：** `user-invocable` skills 會以斜線指令形式公開。名稱會被清理為 `a-z0-9_`（最長 32 字元）；發生衝突時會加上數字尾碼（例如：`_2`）。 Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
   - `/skill <name> [input]` 依名稱執行 skill（當原生指令限制無法為每個 skill 建立指令時很有用）。
-  - 預設情況下，skill 指令會作為一般請求轉送給模型。
+  - By default, skill commands are forwarded to the model as a normal request.
   - Skills 可選擇宣告 `command-dispatch: tool`，以將指令直接路由到工具（具決定性，不經模型）。
   - 範例：`/prose`（OpenProse 外掛）— 請見 [OpenProse](/prose)。
-- **原生指令參數：** Discord 針對動態選項使用自動完成（當省略必要參數時也會顯示按鈕選單）。Telegram 與 Slack 在指令支援選項且你省略參數時，會顯示按鈕選單。
+- **Native command arguments:** Discord uses autocomplete for dynamic options (and button menus when you omit required args). Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
 ## 使用介面（顯示位置）
 
@@ -156,9 +151,9 @@ x-i18n:
 - `/model <#>` 從該選擇器中選擇（並在可能時偏好目前的提供者）。
 - `/model status` 顯示詳細檢視，包括設定的提供者端點（`baseUrl`）與 API 模式（`api`）（若可用）。
 
-## 偵錯覆寫
+## Debug overrides
 
-`/debug` 讓你設定**僅執行期**的設定覆寫（僅記憶體，不寫入磁碟）。僅限擁有者。預設停用；使用 `commands.debug: true` 啟用。
+`/debug` 讓你設定**僅執行期**的設定覆寫（僅記憶體，不寫入磁碟）。僅限擁有者。預設停用；使用 `commands.debug: true` 啟用。 Owner-only. 42. 預設停用；以 `commands.debug: true` 啟用。
 
 範例：
 
@@ -177,7 +172,7 @@ x-i18n:
 
 ## 設定更新
 
-`/config` 會寫入磁碟上的設定（`openclaw.json`）。僅限擁有者。預設停用；使用 `commands.config: true` 啟用。
+`/config` 會寫入磁碟上的設定（`openclaw.json`）。僅限擁有者。預設停用；使用 `commands.config: true` 啟用。 Owner-only. Disabled by default; enable with `commands.config: true`.
 
 範例：
 
@@ -191,10 +186,10 @@ x-i18n:
 
 注意事項：
 
-- 寫入前會驗證設定；無效的變更會被拒絕。
+- Config is validated before write; invalid changes are rejected.
 - `/config` 的更新會在重新啟動後持續存在。
 
-## 介面注意事項
+## 46. 介面備註
 
 - **文字指令** 在一般聊天工作階段中執行（私訊共用 `main`，群組各自有其工作階段）。
 - **原生指令** 使用隔離的工作階段：
@@ -202,4 +197,4 @@ x-i18n:
   - Slack：`agent:<agentId>:slack:slash:<userId>`（前綴可透過 `channels.slack.slashCommand.sessionPrefix` 設定）
   - Telegram：`telegram:slash:<userId>`（透過 `CommandTargetSessionKey` 指向聊天工作階段）
 - **`/stop`** 會指向目前的聊天工作階段，以便中止目前的執行。
-- **Slack：** 仍支援單一 `/openclaw` 風格指令的 `channels.slack.slashCommand`。若啟用 `commands.native`，你必須為每個內建指令建立一個 Slack 斜線指令（名稱與 `/help` 相同）。Slack 的指令參數選單會以暫時性的 Block Kit 按鈕提供。
+- **Slack：** 仍支援單一 `/openclaw` 風格指令的 `channels.slack.slashCommand`。若啟用 `commands.native`，你必須為每個內建指令建立一個 Slack 斜線指令（名稱與 `/help` 相同）。Slack 的指令參數選單會以暫時性的 Block Kit 按鈕提供。 47. 若你啟用 `commands.native`，必須為每個內建指令建立一個 Slack 斜線指令（名稱與 `/help` 相同）。 Command argument menus for Slack are delivered as ephemeral Block Kit buttons.

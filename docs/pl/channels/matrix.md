@@ -1,15 +1,8 @@
 ---
-summary: „Status obsługi Matrix, możliwości i konfiguracja”
+summary: "„Status obsługi Matrix, możliwości i konfiguracja”"
 read_when:
   - Prace nad funkcjami kanału Matrix
-title: „Matrix”
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:12Z
+title: "„Matrix”"
 ---
 
 # Matrix (wtyczka)
@@ -48,10 +41,13 @@ Szczegóły: [Plugins](/tools/plugin)
 1. Zainstaluj wtyczkę Matrix:
    - Z npm: `openclaw plugins install @openclaw/matrix`
    - Z lokalnego checkoutu: `openclaw plugins install ./extensions/matrix`
+
 2. Utwórz konto Matrix na homeserverze:
    - Przeglądaj opcje hostingu na [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Lub hostuj samodzielnie.
+
 3. Uzyskaj token dostępu dla konta bota:
+
    - Użyj API logowania Matrix z `curl` na swoim homeserverze:
 
    ```bash
@@ -79,7 +75,9 @@ Szczegóły: [Plugins](/tools/plugin)
    - Jeśli oba są ustawione, konfiguracja ma pierwszeństwo.
    - Przy użyciu tokenu dostępu: ID użytkownika jest pobierane automatycznie przez `/whoami`.
    - Gdy ustawione, `channels.matrix.userId` powinno być pełnym ID Matrix (przykład: `@bot:example.org`).
+
 5. Zrestartuj gateway (lub zakończ onboarding).
+
 6. Rozpocznij DM z botem lub zaproś go do pokoju z dowolnego klienta Matrix
    (Element, Beeper itd.; zob. [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper wymaga E2EE,
    więc ustaw `channels.matrix.encryption: true` i zweryfikuj urządzenie.
@@ -124,7 +122,7 @@ Włącz za pomocą `channels.matrix.encryption: true`:
 - Jeśli moduł crypto się załaduje, zaszyfrowane pokoje są odszyfrowywane automatycznie.
 - Wychodzące media są szyfrowane przy wysyłaniu do zaszyfrowanych pokoi.
 - Przy pierwszym połączeniu OpenClaw żąda weryfikacji urządzenia z innych sesji.
-- Zweryfikuj urządzenie w innym kliencie Matrix (Element itd.), aby włączyć udostępnianie kluczy.
+- Zweryfikuj urządzenie w innym kliencie Matrix (Element itd.), aby włączyć udostępnianie kluczy. aby włączyć udostępnianie kluczy.
 - Jeśli moduł crypto nie może zostać załadowany, E2EE jest wyłączone, a zaszyfrowane pokoje nie będą odszyfrowywane;
   OpenClaw zapisze ostrzeżenie w logach.
 - Jeśli pojawiają się błędy braku modułu crypto (np. `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -197,17 +195,17 @@ Po weryfikacji bot może odszyfrowywać wiadomości w zaszyfrowanych pokojach.
 
 ## Możliwości
 
-| Funkcja           | Status                                                                                                          |
-| ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| Wiadomości DM     | ✅ Obsługiwane                                                                                                  |
-| Pokoje            | ✅ Obsługiwane                                                                                                  |
-| Wątki             | ✅ Obsługiwane                                                                                                  |
-| Media             | ✅ Obsługiwane                                                                                                  |
-| E2EE              | ✅ Obsługiwane (wymagany moduł crypto)                                                                          |
-| Reakcje           | ✅ Obsługiwane (wysyłanie/odczyt przez narzędzia)                                                               |
-| Ankiety           | ✅ Wysyłanie obsługiwane; przychodzące starty ankiet konwertowane do tekstu (odpowiedzi/zakończenia ignorowane) |
-| Lokalizacja       | ✅ Obsługiwane (URI geo; wysokość ignorowana)                                                                   |
-| Polecenia natywne | ✅ Obsługiwane                                                                                                  |
+| Funkcja                 | Status                                                                                                                            |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Wiadomości bezpośrednie | ✅ Obsługiwane                                                                                                                     |
+| Pokoje                  | ✅ Obsługiwane                                                                                                                     |
+| Wątki                   | ✅ Obsługiwane                                                                                                                     |
+| Media                   | ✅ Obsługiwane                                                                                                                     |
+| E2EE                    | ✅ Obsługiwane (wymagany moduł crypto)                                                                          |
+| Reakcje                 | ✅ Obsługiwane (wysyłanie/odczyt przez narzędzia)                                                               |
+| Ankiety                 | ✅ Wysyłanie obsługiwane; przychodzące starty ankiet konwertowane do tekstu (odpowiedzi/zakończenia ignorowane) |
+| Lokalizacja             | ✅ Obsługiwane (URI geo; wysokość ignorowana)                                                                   |
+| Polecenia natywne       | ✅ Obsługiwane                                                                                                                     |
 
 ## Rozwiązywanie problemów
 
@@ -227,7 +225,7 @@ Następnie, w razie potrzeby, potwierdź stan parowania DM:
 openclaw pairing list matrix
 ```
 
-Typowe problemy:
+Częste awarie:
 
 - Zalogowany, ale wiadomości z pokoi są ignorowane: pokój zablokowany przez `groupPolicy` lub listę dozwolonych pokoi.
 - DM-y ignorowane: nadawca oczekuje na zatwierdzenie, gdy `channels.matrix.dm.policy="pairing"`.

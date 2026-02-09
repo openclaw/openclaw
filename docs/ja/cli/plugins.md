@@ -4,13 +4,6 @@ read_when:
   - インプロセスの Gateway（ゲートウェイ）プラグインをインストールまたは管理したい場合
   - プラグインの読み込み失敗をデバッグしたい場合
 title: "プラグイン"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:14Z
 ---
 
 # `openclaw plugins`
@@ -35,9 +28,9 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-バンドルされたプラグインは OpenClaw とともに提供されますが、初期状態では無効です。`plugins enable` を使用して有効化します。
+バンドルされたプラグインは OpenClaw とともに提供されますが、初期状態では無効です。`plugins enable` を使用して有効化します。 9. 有効化するには `plugins enable` を使用してください。
 
-すべてのプラグインは、インラインの JSON Schema（`configSchema`、空であっても）を含む `openclaw.plugin.json` ファイルを同梱する必要があります。マニフェストまたはスキーマが欠落している、または無効な場合、プラグインは読み込まれず、設定の検証に失敗します。
+すべてのプラグインは、インラインの JSON Schema（`configSchema`、空であっても）を含む `openclaw.plugin.json` ファイルを同梱する必要があります。マニフェストまたはスキーマが欠落している、または無効な場合、プラグインは読み込まれず、設定の検証に失敗します。 10. マニフェストやスキーマが欠落している、または無効な場合、プラグインは読み込まれず、設定検証は失敗します。
 
 ### インストール
 
@@ -45,7 +38,7 @@ openclaw plugins update --all
 openclaw plugins install <path-or-spec>
 ```
 
-セキュリティに関する注意: プラグインのインストールはコードの実行と同様に扱ってください。固定（ピン留め）されたバージョンを推奨します。
+セキュリティに関する注意: プラグインのインストールはコードの実行と同様に扱ってください。固定（ピン留め）されたバージョンを推奨します。 ピン留めされたバージョンを好みます。
 
 対応アーカイブ: `.zip`、`.tgz`、`.tar.gz`、`.tar`。
 

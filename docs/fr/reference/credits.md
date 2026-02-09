@@ -3,13 +3,6 @@ summary: "Origine du projet, contributeurs et licence."
 read_when:
   - Vous souhaitez connaître l'histoire du projet ou les credits des contributeurs
 title: "Credits"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: d55e520313e13102
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:37Z
 ---
 
 ## Le nom
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS, parce que chaque homard de l’espace a besoin d’une
 
 MIT - Libre comme un homard dans l’ocean.
 
-> « Nous ne faisons tous que jouer avec nos propres prompts. » (Une IA, probablement en overdose de tokens)
+> « Nous ne faisons tous que jouer avec nos propres prompts. » (Une IA, probablement en overdose de tokens)

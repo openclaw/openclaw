@@ -4,19 +4,12 @@ read_when:
   - คุณต้องการใช้ Perplexity Sonar สำหรับการค้นหาเว็บ
   - คุณต้องการ PERPLEXITY_API_KEY หรือการตั้งค่า OpenRouter
 title: "Perplexity Sonar"
-x-i18n:
-  source_path: perplexity.md
-  source_hash: f6c9824ad9bebe38
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:19Z
 ---
 
 # Perplexity Sonar
 
-OpenClaw สามารถใช้ Perplexity Sonar สำหรับเครื่องมือ `web_search` ได้ คุณสามารถเชื่อมต่อ
-ผ่าน API โดยตรงของ Perplexity หรือผ่าน OpenRouter
+45. OpenClaw สามารถใช้ Perplexity Sonar สำหรับเครื่องมือ `web_search` OpenClaw สามารถใช้ Perplexity Sonar สำหรับเครื่องมือ `web_search` ได้ คุณสามารถเชื่อมต่อ
+    ผ่าน API โดยตรงของ Perplexity หรือผ่าน OpenRouter
 
 ## ตัวเลือก API
 

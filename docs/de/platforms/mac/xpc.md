@@ -1,15 +1,8 @@
 ---
-summary: „macOS-IPC-Architektur für die OpenClaw-App, den Gateway-Node-Transport und PeekabooBridge“
+summary: "„macOS-IPC-Architektur für die OpenClaw-App, den Gateway-Node-Transport und PeekabooBridge“"
 read_when:
   - Bearbeiten von IPC-Verträgen oder der IPC der Menüleisten-App
-title: „macOS-IPC“
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:58Z
+title: "„macOS-IPC“"
 ---
 
 # OpenClaw macOS-IPC-Architektur
@@ -22,7 +15,7 @@ x-i18n:
 - Eine kleine Angriffsfläche für Automatisierung: Gateway + Node-Befehle sowie PeekabooBridge für UI-Automatisierung.
 - Vorhersehbare Berechtigungen: immer dieselbe signierte Bundle-ID, gestartet durch launchd, sodass TCC-Freigaben bestehen bleiben.
 
-## Funktionsweise
+## Wie es funktioniert
 
 ### Gateway + Node-Transport
 

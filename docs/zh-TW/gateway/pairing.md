@@ -1,38 +1,34 @@
 ---
 summary: "適用於 iOS 與其他遠端節點的 Gateway 擁有節點配對（選項 B）"
 read_when:
-  - 在沒有 macOS UI 的情況下實作節點配對核准
+  - Implementing node pairing approvals without macOS UI
   - 新增用於核准遠端節點的 CLI 流程
   - 以節點管理擴充 Gateway 通訊協定
 title: "Gateway 擁有的配對"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:08Z
 ---
 
 # Gateway 擁有的配對（選項 B）
 
-在 Gateway 擁有的配對中，**Gateway** 是決定哪些節點允許加入的唯一事實來源。UI（macOS 應用程式、未來的客戶端）僅作為前端，用於核准或拒絕待處理的請求。
+In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
+are allowed to join. 9. UI（macOS 應用程式、未來的客戶端）僅是前端，用來核准或拒絕待處理的請求。
 
 **重要：** WS 節點在 `connect` 期間使用 **device pairing**（角色 `node`）。`node.pair.*` 是獨立的配對儲存區，且**不會**限制 WS 握手。只有明確呼叫 `node.pair.*` 的客戶端才會使用此流程。
+`node.pair.*` is a separate pairing store and does **not** gate the WS handshake.
+Only clients that explicitly call `node.pair.*` use this flow.
 
 ## 概念
 
-- **待處理請求**：節點請求加入；需要核准。
-- **已配對節點**：已核准且取得已發行驗證權杖的節點。
-- **傳輸**：Gateway WS 端點負責轉送請求，但不決定成員資格。（舊版 TCP 橋接支援已淘汰／移除。）
+- 12. **待處理請求**：節點請求加入；需要核准。
+- **Paired node**: approved node with an issued auth token.
+- 14. **傳輸層**：Gateway 的 WS 端點會轉送請求，但不決定成員資格。 (Legacy TCP bridge support is deprecated/removed.)
 
 ## 配對運作方式
 
-1. 節點連線至 Gateway WS 並請求配對。
+1. A node connects to the Gateway WS and requests pairing.
 2. Gateway 儲存一筆 **待處理請求** 並發送 `node.pair.requested`。
 3. 你核准或拒絕該請求（透過 CLI 或 UI）。
-4. 核准後，Gateway 會發行一個 **新的權杖**（重新配對時會輪替權杖）。
-5. 節點使用該權杖重新連線，並成為「已配對」。
+4. On approval, the Gateway issues a **new token** (tokens are rotated on re‑pair).
+5. The node reconnects using the token and is now “paired”.
 
 待處理請求會在 **5 分鐘** 後自動到期。
 
@@ -66,7 +62,8 @@ openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 注意事項：
 
 - `node.pair.request` 對每個節點具有冪等性：重複呼叫會回傳相同的待處理請求。
-- 核准 **一定** 會產生全新的權杖；`node.pair.request` **不會** 回傳任何權杖。
+- Approval **always** generates a fresh token; no token is ever returned from
+  `node.pair.request`.
 - 請求可包含 `silent: true`，作為自動核准流程的提示。
 
 ## 自動核准（macOS 應用程式）
@@ -74,13 +71,13 @@ openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 當符合以下條件時，macOS 應用程式可選擇嘗試 **靜默核准**：
 
 - 請求被標記為 `silent`，且
-- 應用程式能以相同使用者驗證至閘道器主機的 SSH 連線。
+- the app can verify an SSH connection to the gateway host using the same user.
 
-若靜默核准失敗，則回退至一般的「核准／拒絕」提示。
+21. 若靜默核准失敗，會回退到一般的「核准/拒絕」提示。
 
-## 儲存（本機、私有）
+## Storage (local, private)
 
-配對狀態儲存在 Gateway 狀態目錄下（預設為 `~/.openclaw`）：
+23. 配對狀態儲存在 Gateway 狀態目錄下（預設為 `~/.openclaw`）：
 
 - `~/.openclaw/nodes/paired.json`
 - `~/.openclaw/nodes/pending.json`
@@ -89,11 +86,11 @@ openclaw nodes rename --node <id|name|ip> --name "Living Room iPad"
 
 安全性注意事項：
 
-- 權杖屬於機密；請將 `paired.json` 視為敏感資料。
-- 輪替權杖需要重新核准（或刪除節點項目）。
+- Tokens are secrets; treat `paired.json` as sensitive.
+- Rotating a token requires re-approval (or deleting the node entry).
 
-## 傳輸行為
+## Transport behavior
 
-- 傳輸層為 **無狀態**；不儲存成員資格。
+- The transport is **stateless**; it does not store membership.
 - 若 Gateway 離線或停用配對，節點將無法配對。
 - 若 Gateway 處於遠端模式，配對仍會針對遠端 Gateway 的儲存區進行。

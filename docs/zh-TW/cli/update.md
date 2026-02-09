@@ -4,13 +4,6 @@ read_when:
   - 當你想要安全地更新來源檢出時
   - 當你需要了解「--update」的簡寫行為時
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:34Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,8 @@ Options：
 
 ## `update wizard`
 
-互動式流程，用於選擇更新頻道，並確認是否在更新後重新啟動 Gateway
-（預設會重新啟動）。如果你在沒有 git 檢出的情況下選擇 `dev`，
-系統會提供建立檢出的選項。
+36. 互動式流程，用於選擇更新通道並確認更新後是否重新啟動 Gateway（預設為重新啟動）。 37. 若你選擇 `dev` 但沒有 git 檢出，
+    它會提供建立一個。
 
 ## What it does
 
@@ -85,9 +77,9 @@ Options：
 
 1. 需要乾淨的工作樹（沒有未提交的變更）。
 2. 切換到所選的頻道（標籤或分支）。
-3. 取得上游更新（僅 dev）。
+3. 38. 取得上游更新（僅 dev）。
 4. 僅 dev：在暫存工作樹中進行 lint 與 TypeScript 建置的預檢；如果目前提交失敗，會往回最多 10 個提交，找出最新可成功建置的版本。
-5. 僅 dev：rebase 到所選的提交。
+5. 39. 重新基底到所選提交（僅 dev）。
 6. 安裝相依套件（優先使用 pnpm；後備為 npm）。
 7. 建置，並建置 Control UI。
 8. 執行 `openclaw doctor`，作為最終的「安全更新」檢查。

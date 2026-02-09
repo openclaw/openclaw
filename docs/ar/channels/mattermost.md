@@ -4,13 +4,6 @@ read_when:
   - إعداد Mattermost
   - تصحيح مسارات Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:54Z
 ---
 
 # Mattermost (مكوّن إضافي)
@@ -97,7 +90,7 @@ openclaw plugins install ./extensions/mattermost
 - `onchar` لا يزال يستجيب للإشارات @ الصريحة.
 - `channels.mattermost.requireMention` مُراعى في التهيئات القديمة، لكن يُفضَّل `chatmode`.
 
-## التحكم بالوصول (الرسائل الخاصة)
+## التحكم في الوصول (الرسائل المباشرة)
 
 - الافتراضي: `channels.mattermost.dmPolicy = "pairing"` (يحصل المرسلون غير المعروفين على رمز إقران).
 - الموافقة عبر:

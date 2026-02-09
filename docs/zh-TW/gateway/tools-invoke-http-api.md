@@ -1,30 +1,23 @@
 ---
-summary: 「透過 Gateway HTTP 端點直接呼叫單一工具」
+summary: "透過 Gateway HTTP 端點直接呼叫單一工具"
 read_when:
-  - 「在不執行完整代理程式回合的情況下呼叫工具」
-  - 「建置需要工具政策強制的自動化」
-title: 「工具呼叫 API」
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:11Z
+  - 在不執行完整代理程式回合的情況下呼叫工具
+  - 建置需要工具政策強制的自動化
+title: "工具呼叫 API"
 ---
 
 # Tools Invoke（HTTP）
 
-OpenClaw 的 Gateway 閘道器提供一個簡單的 HTTP 端點，可直接呼叫單一工具。此端點永遠啟用，但會受到 Gateway 閘道器身分驗證與工具政策的管控。
+OpenClaw 的 Gateway 閘道器提供一個簡單的 HTTP 端點，可直接呼叫單一工具。此端點永遠啟用，但會受到 Gateway 閘道器身分驗證與工具政策的管控。 It is always enabled, but gated by Gateway auth and tool policy.
 
 - `POST /tools/invoke`
 - 與 Gateway 閘道器相同的連接埠（WS + HTTP 多工）：`http://<gateway-host>:<port>/tools/invoke`
 
 預設最大負載大小為 2 MB。
 
-## 身分驗證
+## Authentication
 
-使用 Gateway 閘道器的身分驗證設定。請送出 bearer token：
+Uses the Gateway auth configuration. Send a bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -33,7 +26,7 @@ OpenClaw 的 Gateway 閘道器提供一個簡單的 HTTP 端點，可直接呼�
 - 當 `gateway.auth.mode="token"` 時，使用 `gateway.auth.token`（或 `OPENCLAW_GATEWAY_TOKEN`）。
 - 當 `gateway.auth.mode="password"` 時，使用 `gateway.auth.password`（或 `OPENCLAW_GATEWAY_PASSWORD`）。
 
-## 請求本文
+## Request body
 
 ```json
 {
@@ -50,7 +43,7 @@ OpenClaw 的 Gateway 閘道器提供一個簡單的 HTTP 端點，可直接呼�
 - `tool`（string，必填）：要呼叫的工具名稱。
 - `action`（string，選填）：若工具結構描述支援 `action`，且 args 負載未提供該值，則會對應並注入至 args。
 - `args`（object，選填）：工具專屬的引數。
-- `sessionKey`（string，選填）：目標工作階段金鑰。若省略或為 `"main"`，Gateway 閘道器會使用已設定的主要工作階段金鑰（遵循 `session.mainKey` 與預設代理程式，或在全域範圍使用 `global`）。
+- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and default agent, or `global` in global scope).
 - `dryRun`（boolean，選填）：保留供未來使用；目前會被忽略。
 
 ## 政策 + 路由行為

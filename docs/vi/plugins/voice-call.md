@@ -4,19 +4,12 @@ read_when:
   - Bạn muốn thực hiện một cuộc gọi thoại đi từ OpenClaw
   - Bạn đang cấu hình hoặc phát triển plugin voice-call
 title: "Plugin Voice Call"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:54Z
 ---
 
 # Voice Call (plugin)
 
-Cuộc gọi thoại cho OpenClaw thông qua một plugin. Hỗ trợ thông báo cuộc gọi đi và
-các cuộc hội thoại nhiều lượt với chính sách cuộc gọi đến.
+Voice calls for OpenClaw via a plugin. Supports outbound notifications and
+multi-turn conversations with inbound policies.
 
 Các nhà cung cấp hiện tại:
 
@@ -121,14 +114,13 @@ Ghi chú:
 - `mock` là nhà cung cấp dev local (không gọi mạng).
 - `skipSignatureVerification` chỉ dành cho kiểm thử local.
 - Nếu bạn dùng ngrok gói miễn phí, đặt `publicUrl` thành đúng URL ngrok; việc xác minh chữ ký luôn được áp dụng.
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` cho phép webhook Twilio với chữ ký không hợp lệ **chỉ khi** `tunnel.provider="ngrok"` và `serve.bind` là loopback (agent ngrok local). Chỉ dùng cho dev local.
-- URL ngrok gói miễn phí có thể thay đổi hoặc thêm hành vi trung gian; nếu `publicUrl` bị lệch, chữ ký Twilio sẽ thất bại. Với production, ưu tiên domain ổn định hoặc Tailscale funnel.
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Chỉ dùng cho môi trường phát triển cục bộ.
+- Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
 
 ## Bảo mật Webhook
 
-Khi có proxy hoặc đường hầm đứng trước Gateway, plugin sẽ tái tạo
-URL công khai để xác minh chữ ký. Các tùy chọn này kiểm soát việc tin cậy
-các header được chuyển tiếp.
+When a proxy or tunnel sits in front of the Gateway, the plugin reconstructs the
+public URL for signature verification. Các tùy chọn này kiểm soát những header được chuyển tiếp nào là đáng tin cậy.
 
 `webhookSecurity.allowedHosts` cho phép danh sách host từ các header chuyển tiếp.
 
@@ -158,9 +150,9 @@ Ví dụ với một host công khai ổn định:
 
 ## TTS cho cuộc gọi
 
-Voice Call sử dụng cấu hình `messages.tts` cốt lõi (OpenAI hoặc ElevenLabs) để
-phát giọng nói streaming trong cuộc gọi. Bạn có thể ghi đè dưới cấu hình plugin
-với **cùng cấu trúc** — nó được deep‑merge với `messages.tts`.
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+**same shape** — it deep‑merges with `messages.tts`.
 
 ```json5
 {
@@ -240,7 +232,7 @@ Chỉ ghi đè model OpenAI cho cuộc gọi (ví dụ deep‑merge):
 
 ## Cuộc gọi đến
 
-Chính sách cuộc gọi đến mặc định là `disabled`. Để bật cuộc gọi đến, đặt:
+Inbound policy defaults to `disabled`. Để bật cuộc gọi inbound, hãy đặt:
 
 ```json5
 {
@@ -250,7 +242,7 @@ Chính sách cuộc gọi đến mặc định là `disabled`. Để bật cuộ
 }
 ```
 
-Tự động phản hồi sử dụng hệ thống agent. Tinh chỉnh bằng:
+Auto-responses use the agent system. Tune with:
 
 - `responseModel`
 - `responseSystemPrompt`

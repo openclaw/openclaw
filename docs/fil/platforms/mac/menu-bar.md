@@ -3,13 +3,6 @@ summary: "Lohika ng status ng menu bar at kung ano ang ipinapakita sa mga user"
 read_when:
   - Pag-aayos ng mac menu UI o lohika ng status
 title: "Menu Bar"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:46Z
 ---
 
 # Lohika ng Status ng Menu Bar
@@ -23,8 +16,8 @@ x-i18n:
 
 ## Modelo ng estado
 
-- Mga session: dumarating ang mga event na may `runId` (per-run) kasama ang `sessionKey` sa payload. Ang “main” session ay ang key na `main`; kung wala ito, babalik kami sa pinakahuling na-update na session.
-- Prayoridad: laging nangingibabaw ang main. Kung aktibo ang main, agad na ipinapakita ang estado nito. Kung idle ang main, ipinapakita ang pinakahuling aktibong non‑main session. Hindi kami nagfa-flip‑flop sa kalagitnaan ng aktibidad; lilipat lang kami kapag naging idle ang kasalukuyang session o naging aktibo ang main.
+- Mga session: dumarating ang mga event na may `runId` (per-run) kasama ang `sessionKey` sa payload. Ang “main” na session ay ang key na `main`; kung wala ito, babalik tayo sa pinakahuling na-update na session.
+- Prayoridad: laging nananalo ang main. 1. Kapag aktibo ang main, agad na ipinapakita ang estado nito. Kung idle ang main, ipinapakita ang pinakahuling aktibong non‑main na session. Hindi kami nagpapalit-palit sa gitna ng aktibidad; nagpapalit lamang kami kapag naging idle ang kasalukuyang session o naging aktibo ang main.
 - Mga uri ng aktibidad:
   - `job`: high‑level na pag-execute ng command (`state: started|streaming|done|error`).
   - `tool`: `phase: start|result` na may `toolName` at `meta/args`.

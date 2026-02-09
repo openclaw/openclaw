@@ -4,13 +4,6 @@ read_when:
   - Başsız node ana makinesini çalıştırırken
   - system.run için macOS olmayan bir node’u eşleştirirken
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:03Z
 ---
 
 # `openclaw node`
@@ -22,7 +15,7 @@ Gateway WebSocket’e bağlanan ve bu makinede
 
 Ağınızdaki **diğer makinelerde komut çalıştırmak** istediğinizde ve oralara tam bir macOS yardımcı uygulaması kurmak istemediğinizde bir node ana makinesi kullanın.
 
-Yaygın kullanım senaryoları:
+Yaygın kullanım örnekleri:
 
 - Uzak Linux/Windows makinelerinde komut çalıştırma (derleme sunucuları, laboratuvar makineleri, NAS).
 - Exec işlemlerini gateway üzerinde **sandboxed** tutup, onaylanmış çalıştırmaları diğer ana makinelere devretme.
@@ -93,7 +86,7 @@ openclaw node uninstall
 
 Servis komutları, makine tarafından okunabilir çıktı için `--json` kabul eder.
 
-## Eşleştirme
+## Pairing
 
 İlk bağlantı, Gateway üzerinde beklemede olan bir node eşleştirme isteği oluşturur.
 Şuradan onaylayın:

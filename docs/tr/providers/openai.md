@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’da OpenAI modellerini kullanmak istiyorsunuz
   - API anahtarları yerine Codex aboneliği ile kimlik doğrulama istiyorsunuz
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:32Z
 ---
 
 # OpenAI
@@ -30,7 +23,7 @@ openclaw onboard --auth-choice openai-api-key
 openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```
 
-### Yapılandırma parçası
+### Yapılandırma parçacığı
 
 ```json5
 {

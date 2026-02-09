@@ -3,34 +3,27 @@ summary: "Kanallar, yönlendirme, medya ve UX genelinde OpenClaw yetenekleri."
 read_when:
   - OpenClaw’ın neleri desteklediğine dair tam bir liste istiyorsanız
 title: "Özellikler"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:09Z
 ---
 
 ## Öne çıkanlar
 
 <Columns>
-  <Card title="Kanallar" icon="message-square">
+  <Card title="Channels" icon="message-square">
     Tek bir Gateway ile WhatsApp, Telegram, Discord ve iMessage.
   </Card>
-  <Card title="Eklentiler" icon="plug">
+  <Card title="Plugins" icon="plug">
     Uzantılarla Mattermost ve daha fazlasını ekleyin.
   </Card>
-  <Card title="Yönlendirme" icon="route">
+  <Card title="Routing" icon="route">
     İzole oturumlarla çoklu ajan yönlendirmesi.
   </Card>
-  <Card title="Medya" icon="image">
+  <Card title="Media" icon="image">
     Görseller, ses ve belgeler; giriş ve çıkış.
   </Card>
-  <Card title="Uygulamalar ve UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web Control UI ve macOS yardımcı uygulaması.
   </Card>
-  <Card title="Mobil düğümler" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Canvas desteğiyle iOS ve Android düğümleri.
   </Card>
 </Columns>

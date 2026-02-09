@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 플러그인을 구축하고 있을 때
   - 플러그인 설정 스키마를 배포하거나 플러그인 검증 오류를 디버그해야 할 때
 title: "플러그인 매니페스트"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:54Z
 ---
 
 # 플러그인 매니페스트 (openclaw.plugin.json)

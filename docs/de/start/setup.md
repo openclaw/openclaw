@@ -1,16 +1,9 @@
 ---
-summary: „Erweiterte Einrichtung und Entwicklungs-Workflows für OpenClaw“
+summary: "„Erweiterte Einrichtung und Entwicklungs-Workflows für OpenClaw“"
 read_when:
   - Einrichten eines neuen Rechners
   - Sie möchten „neueste + beste Version“, ohne Ihre persönliche Einrichtung zu gefährden
-title: „Einrichtung“
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:34Z
+title: "Einrichtung"
 ---
 
 # Einrichtung
@@ -22,13 +15,13 @@ Details zum Assistenten finden Sie unter [Onboarding Wizard](/start/wizard).
 
 Zuletzt aktualisiert: 2026-01-01
 
-## Kurzfassung
+## TL;DR
 
 - **Anpassungen liegen außerhalb des Repos:** `~/.openclaw/workspace` (Workspace) + `~/.openclaw/openclaw.json` (Konfiguration).
 - **Stabiler Workflow:** Installieren Sie die macOS‑App; lassen Sie sie den gebündelten Gateway ausführen.
 - **Bleeding‑Edge‑Workflow:** Führen Sie den Gateway selbst über `pnpm gateway:watch` aus und lassen Sie dann die macOS‑App im lokalen Modus andocken.
 
-## Voraussetzungen (aus dem Quellcode)
+## Voraussetzungen (von der Quelle)
 
 - Node `>=22`
 - `pnpm`
@@ -41,7 +34,7 @@ Wenn Sie „100 % auf mich zugeschnitten“ _und_ einfache Updates möchten, h
 - **Konfiguration:** `~/.openclaw/openclaw.json` (JSON/JSON5‑ähnlich)
 - **Workspace:** `~/.openclaw/workspace` (Skills, Prompts, Memories; als privates Git‑Repo anlegen)
 
-Einmalig bootstrappen:
+Bootstrap einmal:
 
 ```bash
 openclaw setup
@@ -88,7 +81,7 @@ Wenn Onboarding in Ihrem Build nicht verfügbar ist:
 
 Ziel: Am TypeScript‑Gateway arbeiten, Hot Reload erhalten und die macOS‑App‑UI verbunden halten.
 
-### 0) (Optional) Auch die macOS‑App aus dem Quellcode ausführen
+### 0. (Optional) Auch die macOS‑App aus dem Quellcode ausführen
 
 Wenn Sie die macOS‑App ebenfalls auf dem Bleeding Edge möchten:
 
@@ -96,7 +89,7 @@ Wenn Sie die macOS‑App ebenfalls auf dem Bleeding Edge möchten:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Dev‑Gateway starten
+### 1. Dev‑Gateway starten
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` führt den Gateway im Watch‑Modus aus und lädt bei TypeScript‑Änderungen neu.
 
-### 2) macOS‑App auf Ihren laufenden Gateway zeigen lassen
+### 2. macOS‑App auf Ihren laufenden Gateway zeigen lassen
 
 In **OpenClaw.app**:
 
 - Verbindungsmodus: **Lokal**
   Die App dockt an den laufenden Gateway auf dem konfigurierten Port an.
 
-### 3) Verifizieren
+### 3. Verifizieren
 
 - Der Gateway‑Status in der App sollte **„Using existing gateway …“** anzeigen
 - Oder per CLI:
@@ -121,7 +114,7 @@ In **OpenClaw.app**:
 openclaw health
 ```
 
-### Häufige Stolpersteine
+### Gewöhnliche Fußwaffen
 
 - **Falscher Port:** Gateway‑WS verwendet standardmäßig `ws://127.0.0.1:18789`; halten Sie App und CLI auf demselben Port.
 - **Wo Zustände liegen:**
@@ -129,7 +122,7 @@ openclaw health
   - Sitzungen: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
 
-## Zuordnung der Anmeldedatenspeicherung
+## Anmeldedaten Speicherkarte
 
 Nutzen Sie dies beim Debuggen von Auth oder um zu entscheiden, was gesichert werden soll:
 

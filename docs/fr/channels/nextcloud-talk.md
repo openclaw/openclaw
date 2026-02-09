@@ -3,13 +3,6 @@ summary: "Statut de prise en charge, capacites et configuration de Nextcloud Tal
 read_when:
   - Travail sur les fonctionnalites du canal Nextcloud Talk
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 4062946ebf333903
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:38Z
 ---
 
 # Nextcloud Talk (plugin)
@@ -40,14 +33,19 @@ Details : [Plugins](/plugin)
 ## Demarrage rapide (debutant)
 
 1. Installez le plugin Nextcloud Talk.
+
 2. Sur votre serveur Nextcloud, creez un bot :
+
    ```bash
    ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
+
 3. Activez le bot dans les parametres du salon cible.
+
 4. Configurez OpenClaw :
    - Config : `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Ou env : `NEXTCLOUD_TALK_BOT_SECRET` (compte par defaut uniquement)
+
 5. Redemarrez la Gateway (passerelle) (ou terminez la prise en main).
 
 Configuration minimale :
@@ -72,7 +70,7 @@ Configuration minimale :
 - Les televersements de medias ne sont pas pris en charge par l’API du bot ; les medias sont envoyes sous forme d’URL.
 - La charge utile du webhook ne distingue pas Messages prives et salons ; definissez `apiUser` + `apiPassword` pour activer les recherches de type de salon (sinon les Messages prives sont traites comme des salons).
 
-## Controle d’acces (Messages prives)
+## Contrôle d'accès (DMs)
 
 - Par defaut : `channels.nextcloud-talk.dmPolicy = "pairing"`. Les expediteurs inconnus recoivent un code d’appairage.
 - Approuver via :
@@ -104,9 +102,9 @@ Configuration minimale :
 
 | Fonctionnalite    | Statut             |
 | ----------------- | ------------------ |
-| Messages prives   | Pris en charge     |
+| Messages directs  | Pris en charge     |
 | Salons            | Pris en charge     |
-| Fils              | Non pris en charge |
+| Fil de discussion | Non pris en charge |
 | Medias            | URL uniquement     |
 | Reactions         | Pris en charge     |
 | Commandes natives | Non pris en charge |

@@ -4,13 +4,6 @@ read_when:
   - Aynı makinede birden fazla Gateway çalıştırıyorsanız
   - Her Gateway için yalıtılmış yapılandırma/durum/portlara ihtiyacınız varsa
 title: "Birden Fazla Gateway"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:15Z
 ---
 
 # Birden Fazla Gateway (aynı ana makine)
@@ -53,7 +46,7 @@ openclaw --profile rescue gateway install
 Aynı ana makinede, aşağıdakilere sahip ikinci bir Gateway çalıştırın:
 
 - profil/yapılandırma
-- durum dizini
+- state dir
 - çalışma alanı
 - temel port (ve türetilmiş portlar)
 

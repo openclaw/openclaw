@@ -4,20 +4,13 @@ read_when:
   - Vous voulez voir quels Skills sont disponibles et prets a l’execution
   - Vous voulez depanner des binaires/variables d'environnement/config manquants pour les Skills
 title: "skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:06Z
 ---
 
 # `openclaw skills`
 
 Inspectez les Skills (integres + espace de travail + remplacements geres) et voyez ce qui est eligible par rapport aux exigences manquantes.
 
-Connexe :
+Liens connexes :
 
 - Systeme de Skills : [Skills](/tools/skills)
 - Configuration des Skills : [Skills config](/tools/skills-config)

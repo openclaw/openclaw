@@ -5,13 +5,6 @@ read_when:
   - آپ کو VPN رسائی کے ساتھ فائر وال سے الگ سیٹ اپ درکار ہے
   - آپ ریموٹ Debian/Ubuntu سرورز پر ڈپلائے کر رہے ہیں
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:30Z
 ---
 
 # Ansible انسٹالیشن
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 مکمل رہنما: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> openclaw-ansible ریپو Ansible ڈپلائمنٹ کے لیے مستند ماخذ ہے۔ یہ صفحہ ایک مختصر جائزہ فراہم کرتا ہے۔
+> The openclaw-ansible repo is the source of truth for Ansible deployment. This page is a quick overview.
 
 ## آپ کو کیا ملتا ہے
 
@@ -57,7 +50,7 @@ Ansible پلے بک درج ذیل کو انسٹال اور کنفیگر کرتی
 5. **OpenClaw** (ہوسٹ پر مبنی، کنٹینرائزڈ نہیں)
 6. **Systemd سروس** (سکیورٹی سختی کے ساتھ خودکار آغاز)
 
-نوٹ: Gateway **براہِ راست ہوسٹ پر** چلتا ہے (Docker میں نہیں)، لیکن ایجنٹ sandbox آئسولیشن کے لیے Docker استعمال کرتے ہیں۔ تفصیلات کے لیے [Sandboxing](/gateway/sandboxing) دیکھیں۔
+Note: The gateway runs **directly on the host** (not in Docker), but agent sandboxes use Docker for isolation. See [Sandboxing](/gateway/sandboxing) for details.
 
 ## انسٹالیشن کے بعد سیٹ اپ
 
@@ -108,11 +101,11 @@ openclaw channels login
 nmap -p- YOUR_SERVER_IP
 ```
 
-اس میں **صرف پورٹ 22** (SSH) کھلا دکھنا چاہیے۔ دیگر تمام سروسز (Gateway، Docker) لاک ڈاؤن ہیں۔
+Should show **only port 22** (SSH) open. All other services (gateway, Docker) are locked down.
 
 ### Docker دستیابی
 
-Docker **ایجنٹ sandbox** (الگ تھلگ اوزار اجرا) کے لیے انسٹال ہوتا ہے، خود Gateway چلانے کے لیے نہیں۔ Gateway صرف localhost پر بائنڈ ہوتا ہے اور Tailscale VPN کے ذریعے قابلِ رسائی ہے۔
+Docker is installed for **agent sandboxes** (isolated tool execution), not for running the gateway itself. 36. گیٹ وے صرف localhost سے بائنڈ ہوتا ہے اور Tailscale VPN کے ذریعے قابلِ رسائی ہے۔
 
 sandbox کنفیگریشن کے لیے [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) دیکھیں۔
 
@@ -140,7 +133,7 @@ ansible-galaxy collection install -r requirements.yml
 
 ## OpenClaw کی اپڈیٹنگ
 
-Ansible انسٹالر OpenClaw کو دستی اپڈیٹس کے لیے سیٹ اپ کرتا ہے۔ معیاری اپڈیٹ فلو کے لیے [Updating](/install/updating) دیکھیں۔
+37. Ansible انسٹالر OpenClaw کو دستی اپڈیٹس کے لیے سیٹ اپ کرتا ہے۔ See [Updating](/install/updating) for the standard update flow.
 
 Ansible پلے بک دوبارہ چلانے کے لیے (مثلاً کنفیگریشن تبدیلیوں کے لیے):
 

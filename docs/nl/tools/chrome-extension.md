@@ -5,13 +5,6 @@ read_when:
   - Je hebt een externe Gateway + lokale browserautomatisering via Tailscale nodig
   - Je wilt de beveiligingsimplicaties van browserovername begrijpen
 title: "Chrome-extensie"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:56Z
 ---
 
 # Chrome-extensie (browserrelais)

@@ -4,13 +4,6 @@ read_when:
   - Linux yardımcı uygulama durumunu ararken
   - Platform kapsamını veya katkıları planlarken
 title: "Linux Uygulaması"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:26Z
 ---
 
 # Linux Uygulaması
@@ -74,7 +67,7 @@ openclaw doctor
 OpenClaw, varsayılan olarak bir systemd **kullanıcı** hizmeti kurar. Paylaşımlı veya her zaman açık sunucular için **sistem** hizmeti kullanın. Tam birim örneği ve yönergeler
 [Gateway runbook](/gateway) içinde yer alır.
 
-Asgari kurulum:
+Minimal kurulum:
 
 `~/.config/systemd/user/openclaw-gateway[-<profile>].service` oluşturun:
 

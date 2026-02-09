@@ -1,16 +1,9 @@
 ---
 summary: "نظرة عامة على بوت Feishu، الميزات، والتهيئة"
 read_when:
-  - "تريد ربط بوت Feishu/Lark"
-  - "تقوم بتهيئة قناة Feishu"
+  - تريد ربط بوت Feishu/Lark
+  - تقوم بتهيئة قناة Feishu
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:13Z
 ---
 
 # بوت Feishu
@@ -267,6 +260,7 @@ openclaw pairing approve feishu <CODE>
 ### الرسائل المباشرة
 
 - **الافتراضي**: `dmPolicy: "pairing"` (يحصل المستخدمون غير المعروفين على رمز اقتران)
+
 - **الموافقة على الاقتران**:
 
   ```bash
@@ -356,7 +350,7 @@ openclaw pairing approve feishu <CODE>
 
 **الطريقة 1 (موصى بها)**
 
-1. شغّل Gateway وأرسل رسالة مباشرة إلى البوت
+1. بدء تشغيل البوابة و DM البوت
 2. شغّل `openclaw logs --follow` وابحث عن `open_id`
 
 **الطريقة 2**
@@ -534,34 +528,34 @@ openclaw pairing list feishu
 
 الخيارات الرئيسية:
 
-| الإعداد                                           | الوصف                                         | الافتراضي |
-| ------------------------------------------------- | --------------------------------------------- | --------- |
-| `channels.feishu.enabled`                         | تفعيل/تعطيل القناة                            | `true`    |
-| `channels.feishu.domain`                          | نطاق API ‏(`feishu` أو `lark`)                | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                        | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                    | -         |
-| `channels.feishu.accounts.<id>.domain`            | تجاوز نطاق API لكل حساب                       | `feishu`  |
-| `channels.feishu.dmPolicy`                        | سياسة الرسائل المباشرة                        | `pairing` |
+| الإعداد                                           | الوصف                                                                                 | الافتراضي |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | تفعيل/تعطيل القناة                                                                    | `true`    |
+| `channels.feishu.domain`                          | نطاق API ‏(`feishu` أو `lark`)                                     | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                                | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                            | -         |
+| `channels.feishu.accounts.<id>.domain`            | تجاوز نطاق API لكل حساب                                                               | `feishu`  |
+| `channels.feishu.dmPolicy`                        | سياسة DM                                                                              | `pairing` |
 | `channels.feishu.allowFrom`                       | قائمة السماح للرسائل المباشرة (قائمة open_id) | -         |
-| `channels.feishu.groupPolicy`                     | سياسة المجموعات                               | `open`    |
-| `channels.feishu.groupAllowFrom`                  | قائمة السماح للمجموعات                        | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | اشتراط @mention                               | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | تفعيل المجموعات                               | `true`    |
-| `channels.feishu.textChunkLimit`                  | حجم مقطع الرسالة                              | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | حد حجم الوسائط                                | `30`      |
-| `channels.feishu.streaming`                       | تفعيل إخراج البطاقات المتدفقة                 | `true`    |
-| `channels.feishu.blockStreaming`                  | تفعيل بثّ الكتل                               | `true`    |
+| `channels.feishu.groupPolicy`                     | سياسة المجموعات                                                                       | `open`    |
+| `channels.feishu.groupAllowFrom`                  | قائمة السماح للمجموعات                                                                | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | اشتراط @mention                                                          | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | تفعيل المجموعات                                                                       | `true`    |
+| `channels.feishu.textChunkLimit`                  | حجم مقطع الرسالة                                                                      | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | حد حجم الوسائط                                                                        | `30`      |
+| `channels.feishu.streaming`                       | تفعيل إخراج البطاقات المتدفقة                                                         | `true`    |
+| `channels.feishu.blockStreaming`                  | تفعيل بثّ الكتل                                                                       | `true`    |
 
 ---
 
 ## مرجع dmPolicy
 
-| القيمة        | السلوك                                                                    |
-| ------------- | ------------------------------------------------------------------------- |
+| القيمة        | السلوك                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------- |
 | `"pairing"`   | **الافتراضي.** يحصل المستخدمون غير المعروفين على رمز اقتران؛ يجب الموافقة |
-| `"allowlist"` | يمكن فقط للمستخدمين الموجودين في `allowFrom` الدردشة                      |
-| `"open"`      | السماح لجميع المستخدمين (يتطلب `"*"` في allowFrom)                        |
-| `"disabled"`  | تعطيل الرسائل المباشرة                                                    |
+| `"allowlist"` | يمكن فقط للمستخدمين الموجودين في `allowFrom` الدردشة                                      |
+| `"open"`      | السماح لجميع المستخدمين (يتطلب `"*"` في allowFrom)                     |
+| `"disabled"`  | تعطيل DMs                                                                                 |
 
 ---
 

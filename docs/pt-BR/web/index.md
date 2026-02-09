@@ -4,13 +4,6 @@ read_when:
   - Você quer acessar o Gateway via Tailscale
   - Você quer a UI de Controle no navegador e edição de configuração
 title: "Web"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:19Z
 ---
 
 # Web (Gateway)

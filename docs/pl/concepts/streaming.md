@@ -1,20 +1,13 @@
 ---
-summary: "Zachowanie strumieniowania i porcjowania (odpowiedzi blokowe, strumieniowanie wersji roboczej, limity)"
+summary: "Strumieniowanie + zachowanie chunkingu (blokuj odpowiedzi, szkic streamingu, limity)"
 read_when:
   - Wyjaśnianie, jak działa strumieniowanie lub porcjowanie w kanałach
   - Zmiana zachowania strumieniowania blokowego lub porcjowania kanałów
   - Debugowanie zduplikowanych/wczesnych odpowiedzi blokowych lub strumieniowania wersji roboczej
-title: "Strumieniowanie i porcjowanie"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:22Z
+title: "Strumieniowanie i czowanie"
 ---
 
-# Strumieniowanie + porcjowanie
+# Strumieniowanie + chunking
 
 OpenClaw ma dwie oddzielne warstwy „strumieniowania”:
 
@@ -112,7 +105,7 @@ Mapowanie:
 Przypomnienie o lokalizacji konfiguracji: domyślne wartości `blockStreaming*` znajdują się pod
 `agents.defaults`, a nie w konfiguracji głównej.
 
-## Strumieniowanie wersji roboczej w Telegramie (quasi-tokenowe)
+## Strumieniowanie projektu Telegram (token ish)
 
 Telegram jest jedynym kanałem ze strumieniowaniem wersji roboczej:
 
@@ -120,7 +113,7 @@ Telegram jest jedynym kanałem ze strumieniowaniem wersji roboczej:
 - `channels.telegram.streamMode: "partial" | "block" | "off"`.
   - `partial`: aktualizacje wersji roboczej z najnowszym tekstem strumienia.
   - `block`: aktualizacje wersji roboczej w porcjowanych blokach (te same reguły porcjownika).
-  - `off`: brak strumieniowania wersji roboczej.
+  - `off`: brak projektu streamingu.
 - Konfiguracja porcji wersji roboczej (tylko dla `streamMode: "block"`): `channels.telegram.draftChunk` (domyślne: `minChars: 200`, `maxChars: 800`).
 - Strumieniowanie wersji roboczej jest niezależne od strumieniowania blokowego; odpowiedzi blokowe są domyślnie wyłączone i włączane tylko przez `*.blockStreaming: true` na kanałach innych niż Telegram.
 - Odpowiedź końcowa jest nadal zwykłą wiadomością.

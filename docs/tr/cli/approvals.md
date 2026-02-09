@@ -3,14 +3,7 @@ summary: "CLI için `openclaw approvals` başvurusu (gateway veya node ana makin
 read_when:
   - CLI üzerinden exec onaylarını düzenlemek istediğinizde
   - Gateway veya node ana makinelerinde izin listelerini yönetmeniz gerektiğinde
-title: "onaylar"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:57Z
+title: "cli/approvals.md"
 ---
 
 # `openclaw approvals`

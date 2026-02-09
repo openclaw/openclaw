@@ -3,13 +3,6 @@ summary: "إتاحة نقطة نهاية HTTP متوافقة مع OpenAI لمس�
 read_when:
   - دمج الأدوات التي تتوقع OpenAI Chat Completions
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:13Z
 ---
 
 # OpenAI Chat Completions (HTTP)

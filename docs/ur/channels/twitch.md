@@ -3,18 +3,11 @@ summary: "Twitch چیٹ بوٹ کی کنفیگریشن اور سیٹ اپ"
 read_when:
   - OpenClaw کے لیے Twitch چیٹ انٹیگریشن سیٹ اپ کرتے وقت
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:13Z
 ---
 
 # Twitch (پلگ ان)
 
-IRC کنکشن کے ذریعے Twitch چیٹ سپورٹ۔ OpenClaw ایک Twitch صارف (بوٹ اکاؤنٹ) کے طور پر کنیکٹ ہوتا ہے تاکہ چینلز میں پیغامات وصول اور ارسال کر سکے۔
+Twitch chat support via IRC connection. OpenClaw ایک Twitch صارف (بوٹ اکاؤنٹ) کے طور پر کنیکٹ ہوتا ہے تاکہ چینلز میں پیغامات وصول اور بھیج سکے۔
 
 ## مطلوبہ پلگ ان
 
@@ -48,7 +41,7 @@ openclaw plugins install ./extensions/twitch
    - اگر دونوں سیٹ ہوں تو کنفیگ کو ترجیح دی جاتی ہے (env فالبیک صرف ڈیفالٹ اکاؤنٹ کے لیے ہے)۔
 5. گیٹ وے شروع کریں۔
 
-**⚠️ اہم:** غیر مجاز صارفین کو بوٹ ٹرگر کرنے سے روکنے کے لیے رسائی کنٹرول (`allowFrom` یا `allowedRoles`) شامل کریں۔ `requireMention` بطورِ طے شدہ `true` ہے۔
+**⚠️ اہم:** غیر مجاز صارفین کو بوٹ ٹرگر کرنے سے روکنے کے لیے رسائی کنٹرول (`allowFrom` یا `allowedRoles`) شامل کریں۔ `requireMention` کی ڈیفالٹ ویلیو `true` ہوتی ہے۔
 
 کم سے کم کنفیگ:
 
@@ -84,7 +77,7 @@ openclaw plugins install ./extensions/twitch
 - تصدیق کریں کہ اسکوپس `chat:read` اور `chat:write` منتخب ہیں
 - **Client ID** اور **Access Token** کاپی کریں
 
-کسی دستی ایپ رجسٹریشن کی ضرورت نہیں۔ ٹوکن چند گھنٹوں بعد ختم ہو جاتے ہیں۔
+کسی دستی ایپ رجسٹریشن کی ضرورت نہیں۔ ٹوکنز چند گھنٹوں بعد ایکسپائر ہو جاتے ہیں۔
 
 ### بوٹ کنفیگر کریں
 
@@ -124,11 +117,11 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-سخت اجازت فہرست کے لیے `allowFrom` کو ترجیح دیں۔ اگر آپ کردار پر مبنی رسائی چاہتے ہیں تو اس کے بجائے `allowedRoles` استعمال کریں۔
+سخت allowlist کے لیے `allowFrom` کو ترجیح دیں۔ اگر آپ رول پر مبنی رسائی چاہتے ہیں تو اس کے بجائے `allowedRoles` استعمال کریں۔
 
 **دستیاب کردار:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`۔
 
-**یوزر آئی ڈی کیوں؟** یوزرنیم تبدیل ہو سکتے ہیں، جس سے نقالی ممکن ہو جاتی ہے۔ یوزر آئی ڈیز مستقل ہوتی ہیں۔
+**User IDs کیوں؟** یوزرنیم بدل سکتے ہیں، جس سے نقالی ممکن ہو جاتی ہے۔ User IDs مستقل ہوتے ہیں۔
 
 اپنا Twitch یوزر آئی ڈی تلاش کریں: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (اپنا Twitch یوزرنیم آئی ڈی میں تبدیل کریں)
 
@@ -153,7 +146,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ## ملٹی اکاؤنٹ سپورٹ
 
-ہر اکاؤنٹ کے لیے الگ ٹوکنز کے ساتھ `channels.twitch.accounts` استعمال کریں۔ مشترکہ پیٹرن کے لیے [`gateway/configuration`](/gateway/configuration) دیکھیں۔
+فی اکاؤنٹ ٹوکنز کے ساتھ `channels.twitch.accounts` استعمال کریں۔ See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
 مثال (ایک بوٹ اکاؤنٹ دو چینلز میں):
 
@@ -218,8 +211,8 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ### کردار پر مبنی رسائی (متبادل)
 
-`allowFrom` ایک سخت اجازت فہرست ہے۔ جب سیٹ ہو تو صرف وہی یوزر آئی ڈیز مجاز ہوں گی۔
-اگر آپ کردار پر مبنی رسائی چاہتے ہیں تو `allowFrom` کو غیر سیٹ چھوڑ دیں اور اس کے بجائے `allowedRoles` کنفیگر کریں:
+`allowFrom` ایک سخت allowlist ہے۔ جب سیٹ کیا جائے تو صرف وہی user IDs اجازت یافتہ ہوں گی۔
+اگر آپ رول پر مبنی رسائی چاہتے ہیں تو `allowFrom` خالی چھوڑ دیں اور اس کے بجائے `allowedRoles` کنفیگر کریں:
 
 ```json5
 {
@@ -237,7 +230,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ### @mention کی شرط غیر فعال کریں
 
-بطورِ طے شدہ، `requireMention`، `true` ہوتا ہے۔ تمام پیغامات پر جواب دینے کے لیے اسے غیر فعال کریں:
+ڈیفالٹ طور پر، `requireMention` کی ویلیو `true` ہوتی ہے۔ غیر فعال کرنے اور تمام پیغامات کا جواب دینے کے لیے:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Access token refreshed for user 123456 (expires in 14400s)
 - `channels.twitch.accessToken` - OAuth ایکسس ٹوکن (سادہ سنگل اکاؤنٹ کنفیگ)
 - `channels.twitch.clientId` - Twitch Client ID (سادہ سنگل اکاؤنٹ کنفیگ)
 - `channels.twitch.channel` - شامل ہونے والا چینل (سادہ سنگل اکاؤنٹ کنفیگ)
-- `channels.twitch.accounts.<accountName>` - ملٹی اکاؤنٹ کنفیگ (اوپر کے تمام اکاؤنٹ فیلڈز)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (اوپر دیے گئے تمام اکاؤنٹ فیلڈز)
 
 مکمل مثال:
 

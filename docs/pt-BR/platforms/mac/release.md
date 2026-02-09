@@ -4,13 +4,6 @@ read_when:
   - Ao cortar ou validar um lançamento do OpenClaw para macOS
   - Ao atualizar o appcast do Sparkle ou os ativos do feed
 title: "Lançamento do macOS"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:31Z
 ---
 
 # Lançamento do OpenClaw para macOS (Sparkle)

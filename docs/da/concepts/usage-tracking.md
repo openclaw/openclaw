@@ -4,13 +4,6 @@ read_when:
   - Du kobler udbyderes brugs-/kvoteoverflader
   - Du skal forklare adfærd for brugsregistrering eller autentificeringskrav
 title: "Brugsregistrering"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:08Z
 ---
 
 # Brugsregistrering
@@ -22,7 +15,7 @@ x-i18n:
 
 ## Hvor det vises
 
-- `/status` i chats: emoji‑rig statuskort med sessionstokens + estimeret omkostning (kun API-nøgle). Udbyderbrug vises for den **aktuelle modeludbyder**, når det er tilgængeligt.
+- `/status` i chats: emoji-rige statuskort med sessionstokens + anslåede omkostninger (API-nøgle kun). Brug af udbyder viser for **nuværende model udbyderen** når det er tilgængeligt.
 - `/usage off|tokens|full` i chats: brugsfodnote pr. svar (OAuth viser kun tokens).
 - `/usage cost` i chats: lokal omkostningsoversigt aggregeret fra OpenClaw-sessionslogge.
 - CLI: `openclaw status --usage` udskriver en fuld opdeling pr. udbyder.

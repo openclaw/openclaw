@@ -4,19 +4,12 @@ read_when:
   - Pagse-set up ng monitoring o mga alert para sa pag-expire ng auth
   - Pag-automate ng mga check sa OAuth refresh ng Claude Code / Codex
 title: "Auth Monitoring"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:20Z
 ---
 
 # Auth monitoring
 
-Inilalantad ng OpenClaw ang kalagayan ng OAuth expiry sa pamamagitan ng `openclaw models status`. Gamitin ito para sa
-automation at pag-alerto; opsyonal lamang ang mga script para sa mga workflow sa telepono.
+OpenClaw exposes OAuth expiry health via `openclaw models status`. Use that for
+automation and alerting; scripts are optional extras for phone workflows.
 
 ## Inirerekomenda: CLI check (portable)
 
@@ -34,8 +27,8 @@ Gumagana ito sa cron/systemd at hindi nangangailangan ng dagdag na mga script.
 
 ## Opsyonal na mga script (ops / mga workflow sa telepono)
 
-Matatagpuan ang mga ito sa ilalim ng `scripts/` at **opsyonal**. Ipinapalagay nila ang SSH access sa
-host ng gateway at naka-tune para sa systemd + Termux.
+These live under `scripts/` and are **optional**. They assume SSH access to the
+gateway host and are tuned for systemd + Termux.
 
 - Ang `scripts/claude-auth-status.sh` ay gumagamit na ngayon ng `openclaw models status --json` bilang
   source of truth (bumabalik sa direktang pagbasa ng file kung hindi available ang CLI),

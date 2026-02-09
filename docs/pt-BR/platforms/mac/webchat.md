@@ -3,13 +3,6 @@ summary: "Como o app para mac incorpora o WebChat do gateway e como depurá-lo"
 read_when:
   - Depuração da visualização WebChat no mac ou da porta de loopback
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:29Z
 ---
 
 # WebChat (app macOS)
@@ -25,6 +18,7 @@ se conecta ao Gateway e, por padrão, usa a **sessão principal** do agente sele
 ## Inicialização e depuração
 
 - Manual: menu Lobster → “Open Chat”.
+
 - Abertura automática para testes:
 
   ```bash

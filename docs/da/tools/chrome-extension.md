@@ -5,13 +5,6 @@ read_when:
   - Du har brug for fjern-Gateway + lokal browserautomatisering via Tailscale
   - Du vil forstå sikkerhedsmæssige konsekvenser ved overtagelse af browseren
 title: "Chrome-udvidelse"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:49Z
 ---
 
 # Chrome-udvidelse (browser-relæ)
@@ -53,7 +46,7 @@ openclaw browser extension path
 
 ## Opdateringer (ingen build-trin)
 
-Udvidelsen leveres sammen med OpenClaw-udgivelsen (npm-pakken) som statiske filer. Der er intet separat “build”-trin.
+Udvidelsen skibe inde i OpenClaw frigivelse (npm pakke) som statiske filer. Der er ingen separat “build” trin.
 
 Efter opgradering af OpenClaw:
 
@@ -107,13 +100,13 @@ Hvis du ser `!`:
 
 ### Lokal Gateway (samme maskine som Chrome) — som regel **ingen ekstra trin**
 
-Hvis Gateway kører på samme maskine som Chrome, starter den browser control service på loopback
-og starter automatisk relæserveren. Udvidelsen taler med det lokale relæ; CLI-/værktøjskald går til Gateway.
+Hvis Gateway kører på den samme maskine som Chrome, det starter browserens kontroltjeneste på loopback
+og auto-starter relæserveren. Udvidelsen taler til den lokale relæ; CLI/tool opkald gå til Gateway.
 
 ### Fjern-Gateway (Gateway kører et andet sted) — **kør en node-vært**
 
-Hvis din Gateway kører på en anden maskine, skal du starte en node-vært på den maskine, der kører Chrome.
-Gateway vil proxy browserhandlinger til den node; udvidelsen + relæet forbliver lokale på browsermaskinen.
+Hvis din Gateway kører på en anden maskine, skal du starte en nodevært på den maskine, der kører Chrome.
+Den Gateway vil proxy browser handlinger til det indholdselement; udvidelsen + relæ ophold lokalt til browsermaskinen.
 
 Hvis flere noder er tilsluttet, kan du fastgøre én med `gateway.nodes.browser.node` eller sætte `gateway.nodes.browser.mode`.
 
@@ -156,15 +149,15 @@ Fejlfinding: `openclaw sandbox explain`
 
 `openclaw browser extension path` udskriver den **installerede** mappe på disken, der indeholder udvidelsesfilerne.
 
-CLI’en udskriver bevidst **ikke** en `node_modules`-sti. Kør altid `openclaw browser extension install` først for at kopiere udvidelsen til en stabil placering under din OpenClaw-tilstandsmappe.
+CLI forsætligt gør \*\* ikke\*\* udskrive en `node_modules` sti. Altid køre `openclaw browser udvidelse install` først til at kopiere udvidelsen til en stabil placering under din OpenClaw stat mappe.
 
 Hvis du flytter eller sletter den installationsmappe, vil Chrome markere udvidelsen som defekt, indtil du genindlæser den fra en gyldig sti.
 
 ## Sikkerhedsmæssige konsekvenser (læs dette)
 
-Dette er kraftfuldt og risikabelt. Betragt det som at give modellen “hænder på din browser”.
+Det er stærkt og risikabelt. Behandl det som at give modellen “hænder på din browser”.
 
-- Udvidelsen bruger Chromes debugger-API (`chrome.debugger`). Når den er tilsluttet, kan modellen:
+- Udvidelsen bruger Chromes debugger API (`chrome.debugger`). Når den er fastgjort, kan modellen:
   - klikke/indtaste/navigere i den fane
   - læse sideindhold
   - få adgang til alt, hvad fanens indloggede session har adgang til

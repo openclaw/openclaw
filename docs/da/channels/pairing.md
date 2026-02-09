@@ -5,26 +5,19 @@ read_when:
   - Paring af en ny iOS/Android-node
   - Gennemgang af OpenClaws sikkerhedsprofil
 title: "Pairing"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:53Z
 ---
 
 # Pairing
 
-“Pairing” er OpenClaws eksplicitte trin for **ejerens godkendelse**.
-Det bruges to steder:
+“Parring” er OpenClaws eksplicitte **ejer godkendelse** trin.
+Det anvendes to steder:
 
 1. **DM-pairing** (hvem der må tale med botten)
 2. **Node-pairing** (hvilke enheder/noder der må tilsluttes gateway-netværket)
 
 Sikkerhedskontekst: [Security](/gateway/security)
 
-## 1) DM-pairing (indgående chatadgang)
+## 1. DM-pairing (indgående chatadgang)
 
 Når en kanal er konfigureret med DM-politik `pairing`, får ukendte afsendere en kort kode, og deres besked bliver **ikke behandlet**, før du godkender.
 
@@ -33,7 +26,7 @@ Standard DM-politikker er dokumenteret i: [Security](/gateway/security)
 Pairing-koder:
 
 - 8 tegn, store bogstaver, ingen tvetydige tegn (`0O1I`).
-- **Udløber efter 1 time**. Botten sender kun pairing-beskeden, når en ny anmodning oprettes (cirka én gang i timen pr. afsender).
+- **Udløber efter 1 time**. Botten sender kun parringsbeskeden når en ny anmodning oprettes (omtrent en gang i timen pr. afsender).
 - Afventende DM-pairing-anmodninger er som standard begrænset til **3 pr. kanal**; yderligere anmodninger ignoreres, indtil én udløber eller bliver godkendt.
 
 ### Godkend en afsender
@@ -54,10 +47,10 @@ Gemmes under `~/.openclaw/credentials/`:
 
 Behandl disse som følsomme (de styrer adgangen til din assistent).
 
-## 2) Node-enhedspairing (iOS/Android/macOS/headless-noder)
+## 2. Node-enhedspairing (iOS/Android/macOS/headless-noder)
 
-Noder forbinder til Gateway som **enheder** med `role: node`. Gateway
-opretter en enhedspairing-anmodning, som skal godkendes.
+Knuder forbinder til Gateway som **enheder** med `rolle: node`. Gateway
+opretter en enhedsparringsanmodning, der skal godkendes.
 
 ### Godkend en node-enhed
 
@@ -76,7 +69,8 @@ Gemmes under `~/.openclaw/devices/`:
 
 ### Noter
 
-- Den ældre `node.pair.*`-API (CLI: `openclaw nodes pending/approve`) er et separat, gateway-ejet pairing-lager. WS-noder kræver stadig enhedspairing.
+- Arven `node.pair.*` API (CLI: `openclaw nodes pending/approve`) er en
+  separat gateway-ejet parringsbutik. WS knudepunkter kræver stadig enhedsparring.
 
 ## Relaterede dokumenter
 

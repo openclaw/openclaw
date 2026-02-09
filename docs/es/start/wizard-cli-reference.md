@@ -5,13 +5,6 @@ read_when:
   - Está depurando los resultados de la incorporación o integrando clientes de incorporación
 title: "Referencia de incorporación por CLI"
 sidebarTitle: "Referencia de CLI"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:54Z
 ---
 
 # Referencia de incorporación por CLI
@@ -28,7 +21,7 @@ El modo local (predeterminado) lo guía a través de:
 - Configuración del Gateway (puerto, bind, autenticación, Tailscale)
 - Canales y proveedores (Telegram, WhatsApp, Discord, Google Chat, plugin de Mattermost, Signal)
 - Instalación del daemon (LaunchAgent o unidad de usuario systemd)
-- Verificación de estado
+- Revisión de salud
 - Configuración de Skills
 
 El modo remoto configura esta máquina para conectarse a un gateway en otro lugar.
@@ -37,19 +30,19 @@ No instala ni modifica nada en el host remoto.
 ## Detalles del flujo local
 
 <Steps>
-  <Step title="Detección de configuración existente">
+  <Step title="Existing config detection">
     - Si existe `~/.openclaw/openclaw.json`, elija Mantener, Modificar o Restablecer.
     - Volver a ejecutar el asistente no borra nada a menos que elija explícitamente Restablecer (o pase `--reset`).
     - Si la configuración es inválida o contiene claves heredadas, el asistente se detiene y le pide que ejecute `openclaw doctor` antes de continuar.
     - El restablecimiento usa `trash` y ofrece alcances:
       - Solo configuración
       - Configuración + credenciales + sesiones
-      - Restablecimiento completo (también elimina el espacio de trabajo)
-  </Step>
-  <Step title="Modelo y autenticación">
+      - Restablecimiento completo (también elimina el espacio de trabajo)  
+</Step>
+  <Step title="Model and auth">
     - La matriz completa de opciones está en [Opciones de autenticación y modelos](#auth-and-model-options).
   </Step>
-  <Step title="Espacio de trabajo">
+  <Step title="Workspace">
     - Predeterminado `~/.openclaw/workspace` (configurable).
     - Inicializa los archivos del espacio de trabajo necesarios para el ritual de arranque de la primera ejecución.
     - Diseño del espacio de trabajo: [Espacio de trabajo del Agente](/concepts/agent-workspace).
@@ -60,7 +53,7 @@ No instala ni modifica nada en el host remoto.
     - Deshabilite la autenticación solo si confía plenamente en todos los procesos locales.
     - Los binds que no son loopback aún requieren autenticación.
   </Step>
-  <Step title="Canales">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): inicio de sesión por QR opcional
     - [Telegram](/channels/telegram): token del bot
     - [Discord](/channels/discord): token del bot
@@ -70,7 +63,8 @@ No instala ni modifica nada en el host remoto.
     - [BlueBubbles](/channels/bluebubbles): recomendado para iMessage; URL del servidor + contraseña + webhook
     - [iMessage](/channels/imessage): ruta CLI heredada `imsg` + acceso a la base de datos
     - Seguridad de mensajes directos: el valor predeterminado es el emparejamiento. El primer mensaje directo envía un código; apruébelo mediante
-      `openclaw pairing approve <channel> <code>` o use listas de permitidos.
+      `openclaw pairing approve <channel><code>` o use listas de permitidos.
+  </Step><code>` o use listas de permitidos.
   </Step>
   <Step title="Instalación del daemon">
     - macOS: LaunchAgent
@@ -122,44 +116,50 @@ Lo que configura:
 ## Opciones de autenticación y modelos
 
 <AccordionGroup>
-  <Accordion title="Clave de API de Anthropic (recomendada)">
+  <Accordion title="Anthropic API key (recommended)">
     Usa `ANTHROPIC_API_KEY` si está presente o solicita una clave, y luego la guarda para uso del daemon.
   </Accordion>
-  <Accordion title="OAuth de Anthropic (Claude Code CLI)">
+  <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: verifica el ítem del Llavero "Claude Code-credentials"
     - Linux y Windows: reutiliza `~/.claude/.credentials.json` si está presente
 
+    ```
     En macOS, elija "Permitir siempre" para que los inicios de launchd no se bloqueen.
+    ```
 
   </Accordion>
-  <Accordion title="Token de Anthropic (pegado de token de configuración)">
+  <Accordion title="Anthropic token (setup-token paste)">
     Ejecute `claude setup-token` en cualquier máquina y luego pegue el token.
     Puede nombrarlo; en blanco usa el valor predeterminado.
   </Accordion>
-  <Accordion title="Suscripción OpenAI Code (reutilización de Codex CLI)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     Si existe `~/.codex/auth.json`, el asistente puede reutilizarlo.
   </Accordion>
-  <Accordion title="Suscripción OpenAI Code (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     Flujo en el navegador; pegue `code#state`.
 
+    ```
     Establece `agents.defaults.model` en `openai-codex/gpt-5.3-codex` cuando el modelo no está configurado o es `openai/*`.
+    ```
 
   </Accordion>
-  <Accordion title="Clave de API de OpenAI">
+  <Accordion title="OpenAI API key">
     Usa `OPENAI_API_KEY` si está presente o solicita una clave, y luego la guarda en
     `~/.openclaw/.env` para que launchd pueda leerla.
 
+    ```
     Establece `agents.defaults.model` en `openai/gpt-5.1-codex` cuando el modelo no está configurado, es `openai/*` o `openai-codex/*`.
+    ```
 
   </Accordion>
-  <Accordion title="Clave de API de xAI (Grok)">
+  <Accordion title="xAI (Grok) API key">
     Solicita `XAI_API_KEY` y configura xAI como proveedor de modelos.
   </Accordion>
   <Accordion title="OpenCode Zen">
     Solicita `OPENCODE_API_KEY` (o `OPENCODE_ZEN_API_KEY`).
     URL de configuración: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="Clave de API (genérica)">
+  <Accordion title="API key (generic)">
     Almacena la clave por usted.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
@@ -174,15 +174,15 @@ Lo que configura:
     La configuración se escribe automáticamente.
     Más detalles: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (compatible con Anthropic)">
+  <Accordion title="Synthetic (Anthropic-compatible)">
     Solicita `SYNTHETIC_API_KEY`.
     Más detalles: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot y Kimi Coding">
+  <Accordion title="Moonshot and Kimi Coding">
     Las configuraciones de Moonshot (Kimi K2) y Kimi Coding se escriben automáticamente.
     Más detalles: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="Omitir">
+  <Accordion title="Skip">
     Deja la autenticación sin configurar.
   </Accordion>
 </AccordionGroup>

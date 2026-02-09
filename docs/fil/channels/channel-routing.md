@@ -3,18 +3,13 @@ summary: "Mga patakaran sa routing bawat channel (WhatsApp, Telegram, Discord, S
 read_when:
   - Pagbabago ng channel routing o behavior ng inbox
 title: "Channel Routing"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:21Z
 ---
 
 # Mga channel at routing
 
-Niri-route ng OpenClaw ang mga reply **pabalik sa channel kung saan nanggaling ang mensahe**. Hindi pumipili ng channel ang model; deterministic ang routing at kinokontrol ng host configuration.
+OpenClaw routes replies **back to the channel where a message came from**. The
+model does not choose a channel; routing is deterministic and controlled by the
+host configuration.
 
 ## Mga pangunahing termino
 
@@ -105,7 +100,9 @@ Maaari mong i-override ang store path sa pamamagitan ng `session.store` at `{age
 
 ## Behavior ng WebChat
 
-Ang WebChat ay kumakabit sa **napiling agent** at default sa main session ng agent. Dahil dito, pinapahintulutan ng WebChat na makita mo ang cross‑channel context para sa agent na iyon sa iisang lugar.
+WebChat attaches to the **selected agent** and defaults to the agent’s main
+session. Because of this, WebChat lets you see cross‑channel context for that
+agent in one place.
 
 ## Context ng reply
 

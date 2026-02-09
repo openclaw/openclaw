@@ -4,13 +4,6 @@ read_when:
   - Вы новичок и хотите руководство «что нажать/запустить»
   - Что-то сломалось, и вам нужен самый быстрый путь к исправлению
 title: "Помощь"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:31Z
 ---
 
 # Помощь

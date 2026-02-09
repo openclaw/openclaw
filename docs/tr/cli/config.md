@@ -3,13 +3,6 @@ summary: "`openclaw config` için CLI başvurusu (yapılandırma değerlerini al
 read_when:
   - Yapılandırmayı etkileşimli olmadan okumak veya düzenlemek istediğinizde
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:57Z
 ---
 
 # `openclaw config`

@@ -4,20 +4,13 @@ read_when:
   - آپ OpenClaw میں MiniMax ماڈلز چاہتے ہیں
   - آپ کو MiniMax کے سیٹ اپ کی رہنمائی درکار ہے
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:43Z
 ---
 
 # MiniMax
 
-MiniMax ایک AI کمپنی ہے جو **M2/M2.1** ماڈل فیملی تیار کرتی ہے۔ موجودہ
-کوڈنگ پر مرکوز ریلیز **MiniMax M2.1** ہے (23 دسمبر 2025)، جو
-حقیقی دنیا کے پیچیدہ کاموں کے لیے بنائی گئی ہے۔
+MiniMax is an AI company that builds the **M2/M2.1** model family. The current
+coding-focused release is **MiniMax M2.1** (December 23, 2025), built for
+real-world complex tasks.
 
 ماخذ: [MiniMax M2.1 ریلیز نوٹ](https://www.minimax.io/news/minimax-m21)
 
@@ -38,9 +31,9 @@ MiniMax نے M2.1 میں درج ذیل بہتریوں کو نمایاں کیا �
 
 - **رفتار:** Lightning، MiniMax کی قیمتوں کی دستاویزات میں “تیز” ویریئنٹ ہے۔
 - **لاگت:** قیمتوں میں ان پٹ لاگت یکساں دکھائی گئی ہے، مگر Lightning کی آؤٹ پٹ لاگت زیادہ ہے۔
-- **کوڈنگ پلان روٹنگ:** Lightning بیک اینڈ MiniMax کے
-  کوڈنگ پلان پر براہِ راست دستیاب نہیں ہے۔ MiniMax زیادہ تر درخواستوں کو خودکار طور پر Lightning کی طرف روٹ کرتا ہے، لیکن
-  ٹریفک میں اضافے کے دوران باقاعدہ M2.1 بیک اینڈ پر واپس آ جاتا ہے۔
+- **Coding plan routing:** The Lightning back-end isn’t directly available on the MiniMax
+  coding plan. MiniMax auto-routes most requests to Lightning, but falls back to the
+  regular M2.1 back-end during traffic spikes.
 
 ## سیٹ اپ منتخب کریں
 
@@ -125,9 +118,9 @@ CLI کے ذریعے کنفیگر کریں:
 
 ### اختیاری: LM Studio کے ذریعے لوکل (دستی)
 
-**بہترین کے لیے:** LM Studio کے ساتھ لوکل inference۔
-ہم نے طاقتور ہارڈویئر (مثلاً
-ڈیسک ٹاپ/سرور) پر LM Studio کے لوکل سرور کے ذریعے MiniMax M2.1 کے ساتھ مضبوط نتائج دیکھے ہیں۔
+**Best for:** local inference with LM Studio.
+We have seen strong results with MiniMax M2.1 on powerful hardware (e.g. a
+desktop/server) using LM Studio's local server.
 
 `openclaw.json` کے ذریعے دستی طور پر کنفیگر کریں:
 
@@ -194,9 +187,9 @@ JSON میں ترمیم کیے بغیر MiniMax سیٹ کرنے کے لیے inter
 
 ### “Unknown model: minimax/MiniMax-M2.1”
 
-اس کا مطلب عموماً یہ ہوتا ہے کہ **MiniMax فراہم کنندہ کنفیگر نہیں ہے**
-(نہ کوئی provider انٹری ہے اور نہ MiniMax auth پروفائل/ماحولیاتی کلید ملی ہے)۔
-اس شناخت کے لیے ایک حل **2026.1.12** میں شامل ہے (تحریر کے وقت ریلیز نہیں ہوا تھا)۔ حل کے لیے:
+This usually means the **MiniMax provider isn’t configured** (no provider entry
+and no MiniMax auth profile/env key found). A fix for this detection is in
+**2026.1.12** (unreleased at the time of writing). Fix by:
 
 - **2026.1.12** پر اپ گریڈ کریں (یا سورس سے `main` چلائیں)، پھر Gateway کو ری اسٹارٹ کریں۔
 - `openclaw configure` چلائیں اور **MiniMax M2.1** منتخب کریں، یا

@@ -4,13 +4,6 @@ read_when:
   - Ao usar ou modificar a ferramenta exec
   - Ao depurar comportamento de stdin ou TTY
 title: "Ferramenta Exec"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:19Z
 ---
 
 # Ferramenta Exec
@@ -158,7 +151,7 @@ Enviar (somente CR):
 { "tool": "process", "action": "submit", "sessionId": "<id>" }
 ```
 
-Colar (delimitado por padrão):
+Colar (pulverizado por padrão):
 
 ```json
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }

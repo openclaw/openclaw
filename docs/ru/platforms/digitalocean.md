@@ -4,13 +4,6 @@ read_when:
   - Настройка OpenClaw на DigitalOcean
   - Поиск дешёвого VPS-хостинга для OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:51Z
 ---
 
 # OpenClaw на DigitalOcean
@@ -23,13 +16,13 @@ x-i18n:
 
 ## Сравнение стоимости (2026)
 
-| Провайдер    | План            | Характеристики      | Цена/мес.   | Примечания                                         |
-| ------------ | --------------- | ------------------- | ----------- | -------------------------------------------------- |
-| Oracle Cloud | Always Free ARM | до 4 OCPU, 24GB RAM | $0          | ARM, ограниченная доступность / нюансы регистрации |
+| Провайдер    | План            | Характеристики      | Цена/мес.                                      | Примечания                                         |
+| ------------ | --------------- | ------------------- | -------------------------------------------------------------- | -------------------------------------------------- |
+| Oracle Cloud | Always Free ARM | до 4 OCPU, 24GB RAM | $0                                                             | ARM, ограниченная доступность / нюансы регистрации |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM     | €3.79 (~$4) | Самый дешёвый платный вариант                      |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM     | $6          | Простой интерфейс, хорошая документация            |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM     | $6          | Много локаций                                      |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM     | $5          | Теперь часть Akamai                                |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM     | $6                                                             | Простой интерфейс, хорошая документация            |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM     | $6                                                             | Много локаций                                      |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM     | $5                                                             | Теперь часть Akamai                                |
 
 **Выбор провайдера:**
 
@@ -45,7 +38,7 @@ x-i18n:
 - Пара SSH-ключей (или готовность использовать аутентификацию по паролю)
 - ~20 минут
 
-## 1) Создание Droplet
+## 1. Создание Droplet
 
 1. Войдите в [DigitalOcean](https://cloud.digitalocean.com/)
 2. Нажмите **Create → Droplets**
@@ -63,7 +56,7 @@ x-i18n:
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Установка OpenClaw
+## 3. Установка OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Запуск онбординга
+## 4. Запуск онбординга
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ openclaw onboard --install-daemon
 - Токен Gateway (шлюза) (генерируется автоматически)
 - Установку демона (systemd)
 
-## 5) Проверка Gateway (шлюза)
+## 5. Проверка Gateway (шлюза)
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Доступ к панели управления
+## 6. Доступ к панели управления
 
 По умолчанию Gateway (шлюз) привязывается к local loopback. Чтобы получить доступ к Control UI:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Откройте: `http://<tailscale-ip>:18789` (требуется токен).
 
-## 7) Подключение каналов
+## 7. Подключение каналов
 
 ### Telegram
 
@@ -197,7 +190,7 @@ htop
 
 ---
 
-## Сохранность данных
+## Постоянство
 
 Все состояния хранятся в:
 
@@ -216,14 +209,14 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud предлагает ARM-инстансы **Always Free**, которые значительно мощнее любого платного варианта здесь — за $0/месяц.
 
-| Что вы получаете       | Характеристики       |
-| ---------------------- | -------------------- |
-| **4 OCPU**             | ARM Ampere A1        |
-| **24GB RAM**           | Более чем достаточно |
-| **200GB storage**      | Блочный том          |
-| **Навсегда бесплатно** | Без списаний с карты |
+| Что вы получаете       | Характеристики          |
+| ---------------------- | ----------------------- |
+| **4 OCPU**             | ARM Ampere A1           |
+| **24GB RAM**           | Более чем достаточно    |
+| **200GB storage**      | Заблокировать громкость |
+| **Навсегда бесплатно** | Без списаний с карты    |
 
-**Ограничения:**
+**Caveats:**
 
 - Регистрация может быть капризной (повторите попытку при неудаче)
 - Архитектура ARM — большинство вещей работает, но некоторым бинарникам нужны ARM-сборки

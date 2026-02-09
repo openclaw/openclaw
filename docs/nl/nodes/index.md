@@ -5,13 +5,6 @@ read_when:
   - Node-canvas/camera gebruiken voor agentcontext
   - Nieuwe node-opdrachten of CLI-hulpprogramma’s toevoegen
 title: "Nodes"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:47Z
 ---
 
 # Nodes
@@ -149,7 +142,7 @@ Gerelateerd:
 - [Exec-tool](/tools/exec)
 - [Exec-goedkeuringen](/tools/exec-approvals)
 
-## Opdrachten aanroepen
+## Opdrachten inademen
 
 Low-level (ruwe RPC):
 
@@ -316,7 +309,7 @@ openclaw config unset tools.exec.node
 openclaw config unset agents.list[0].tools.exec.node
 ```
 
-## Rechtenkaart
+## Machtigingen kaart
 
 Nodes kunnen een `permissions`-kaart opnemen in `node.list` / `node.describe`, gesleuteld op permissienaam (bijv. `screenRecording`, `accessibility`) met booleaanse waarden (`true` = verleend).
 

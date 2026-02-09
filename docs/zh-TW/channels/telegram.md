@@ -1,30 +1,23 @@
 ---
-summary: 「Telegram 機器人支援狀態、功能與設定」
+summary: "Telegram bot support status, capabilities, and configuration"
 read_when:
   - 進行 Telegram 功能或 webhook 相關工作時
-title: 「Telegram」
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:24Z
+title: "Telegram"
 ---
 
 # Telegram（Bot API）
 
-狀態：透過 grammY 支援機器人私訊（DM）＋群組，已達可用於正式環境。預設使用長輪詢；可選 webhook。
+Status: production-ready for bot DMs + groups via grammY. Long-polling by default; webhook optional.
 
 ## 快速設定（新手）
 
-1. 使用 **@BotFather** 建立機器人（[直接連結](https://t.me/BotFather)）。確認帳號名稱完全為 `@BotFather`，然後複製權杖。
+1. 使用 **@BotFather** 建立機器人（[直接連結](https://t.me/BotFather)）。確認帳號名稱完全為 `@BotFather`，然後複製權杖。 Confirm the handle is exactly `@BotFather`, then copy the token.
 2. 設定權杖：
-   - 環境變數：`TELEGRAM_BOT_TOKEN=...`
+   - Env: `TELEGRAM_BOT_TOKEN=...`
    - 或設定檔：`channels.telegram.botToken: "..."`。
-   - 若同時設定，設定檔優先（環境變數僅作為預設帳號的後備）。
-3. 啟動 Gateway 閘道器。
-4. 私訊（DM）存取預設採用配對；首次聯繫時核准配對碼。
+   - If both are set, config takes precedence (env fallback is default-account only).
+3. 啟動 Gateway 閘道器.
+4. DM access is pairing by default; approve the pairing code on first contact.
 
 最小設定：
 
@@ -40,7 +33,7 @@ x-i18n:
 }
 ```
 
-## 內容說明
+## 這是什麼
 
 - 由 Gateway 閘道器擁有的 Telegram Bot API 頻道。
 - 決定性路由：回覆會送回 Telegram；模型不會選擇頻道。
@@ -50,9 +43,9 @@ x-i18n:
 
 ### 1）建立機器人權杖（BotFather）
 
-1. 開啟 Telegram 並與 **@BotFather** 對話（[直接連結](https://t.me/BotFather)）。確認帳號名稱完全為 `@BotFather`。
+1. 開啟 Telegram 並與 **@BotFather** 對話（[直接連結](https://t.me/BotFather)）。確認帳號名稱完全為 `@BotFather`。 Confirm the handle is exactly `@BotFather`.
 2. 執行 `/newbot`，依提示操作（名稱＋以 `bot` 結尾的使用者名稱）。
-3. 複製權杖並妥善保存。
+3. Copy the token and store it safely.
 
 可選的 BotFather 設定：
 
@@ -76,13 +69,13 @@ x-i18n:
 }
 ```
 
-環境變數選項：`TELEGRAM_BOT_TOKEN=...`（適用於預設帳號）。
-若同時設定環境變數與設定檔，設定檔優先。
+Env option: `TELEGRAM_BOT_TOKEN=...` (works for the default account).
+If both env and config are set, config takes precedence.
 
-多帳號支援：使用 `channels.telegram.accounts` 搭配每個帳號的權杖，並可選擇 `name`。共用模式請參考 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
+多帳號支援：使用 `channels.telegram.accounts` 搭配每個帳號的權杖，並可選擇 `name`。共用模式請參考 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。 See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-3. 啟動 Gateway 閘道器。當解析到權杖時（設定檔優先，環境變數後備）Telegram 即會啟動。
-4. 私訊（DM）存取預設為配對。首次聯繫機器人時核准配對碼。
+3. 啟動 Gateway 閘道器. Telegram starts when a token is resolved (config first, env fallback).
+4. DM access defaults to pairing. Approve the code when the bot is first contacted.
 5. 群組：加入機器人，決定隱私／管理員行為（如下），然後設定 `channels.telegram.groups` 以控制提及（mention）閘控與允許清單。
 
 ## 權杖＋隱私＋權限（Telegram 端）
@@ -90,32 +83,34 @@ x-i18n:
 ### 權杖建立（BotFather）
 
 - `/newbot` 會建立機器人並回傳權杖（請保密）。
-- 若權杖外洩，請透過 @BotFather 撤銷／重新產生，並更新設定。
+- If a token leaks, revoke/regenerate it via @BotFather and update your config.
 
 ### 群組訊息可見性（隱私模式）
 
 Telegram 機器人預設啟用 **隱私模式**，限制其可接收的群組訊息。
 若機器人需要看到「所有」群組訊息，有兩種方式：
+If your bot must see _all_ group messages, you have two options:
 
 - 使用 `/setprivacy` 停用隱私模式 **或**
-- 將機器人加入為群組 **管理員**（管理員機器人可接收所有訊息）。
+- Add the bot as a group **admin** (admin bots receive all messages).
 
 **注意：** 切換隱私模式後，Telegram 需要將機器人自每個群組移除並重新加入，變更才會生效。
 
 ### 群組權限（管理員權限）
 
-管理員狀態在群組內（Telegram UI）設定。管理員機器人一律會接收所有群組訊息；若需要完整可見性，請使用管理員。
+管理員狀態在群組內（Telegram UI）設定。管理員機器人一律會接收所有群組訊息；若需要完整可見性，請使用管理員。 Admin bots always receive all
+group messages, so use admin if you need full visibility.
 
 ## 運作方式（行為）
 
-- 進站訊息會正規化為共用頻道封裝，包含回覆脈絡與媒體占位符。
+- Inbound messages are normalized into the shared channel envelope with reply context and media placeholders.
 - 群組回覆預設需要提及（原生 @mention 或 `agents.list[].groupChat.mentionPatterns`／`messages.groupChat.mentionPatterns`）。
 - 多代理程式覆寫：在 `agents.list[].groupChat.mentionPatterns` 設定各代理程式的比對模式。
 - 回覆一律路由回相同的 Telegram 聊天。
 - 長輪詢使用 grammY runner，依聊天進行序列化；整體並行度由 `agents.defaults.maxConcurrent` 限制。
 - Telegram Bot API 不支援已讀回條；不存在 `sendReadReceipts` 選項。
 
-## 草稿串流
+## Draft streaming
 
 OpenClaw 可在 Telegram 私訊（DM）中使用 `sendMessageDraft` 串流部分回覆。
 
@@ -138,6 +133,7 @@ OpenClaw 可在 Telegram 私訊（DM）中使用 `sendMessageDraft` 串流部分
 
 OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`）註冊到 Telegram 的機器人選單。
 你可以透過設定加入自訂指令至選單：
+You can add custom commands to the menu via config:
 
 ```json5
 {
@@ -163,7 +159,7 @@ OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`
 
 - 自訂指令僅是 **選單項目**；除非你在其他地方處理，否則 OpenClaw 不會實作其行為。
 - 指令名稱會被正規化（移除前導 `/`、轉為小寫），且必須符合 `a-z`、`0-9`、`_`（1–32 字元）。
-- 自訂指令 **不可覆寫原生指令**。衝突會被忽略並記錄。
+- Custom commands **cannot override native commands**. Conflicts are ignored and logged.
 - 若停用 `commands.native`，只會註冊自訂指令（若沒有則清空）。
 
 ## 限制
@@ -171,13 +167,13 @@ OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`
 - 對外文字會分塊至 `channels.telegram.textChunkLimit`（預設 4000）。
 - 可選的換行分塊：設定 `channels.telegram.chunkMode="newline"`，在長度分塊前先依空白行（段落邊界）分割。
 - 媒體下載／上傳上限為 `channels.telegram.mediaMaxMb`（預設 5）。
-- Telegram Bot API 請求在 `channels.telegram.timeoutSeconds` 後逾時（透過 grammY 預設 500）。可調低以避免長時間卡住。
-- 群組歷史脈絡使用 `channels.telegram.historyLimit`（或 `channels.telegram.accounts.*.historyLimit`），後備為 `messages.groupChat.historyLimit`。設定 `0` 可停用（預設 50）。
-- 私訊（DM）歷史可用 `channels.telegram.dmHistoryLimit`（使用者回合）限制；每位使用者可用 `channels.telegram.dms["<user_id>"].historyLimit` 覆寫。
+- Telegram Bot API 請求在 `channels.telegram.timeoutSeconds` 後逾時（透過 grammY 預設 500）。可調低以避免長時間卡住。 Set lower to avoid long hangs.
+- 群組歷史脈絡使用 `channels.telegram.historyLimit`（或 `channels.telegram.accounts.*.historyLimit`），後備為 `messages.groupChat.historyLimit`。設定 `0` 可停用（預設 50）。 Set `0` to disable (default 50).
+- 私訊（DM）歷史可用 `channels.telegram.dmHistoryLimit`（使用者回合）限制；每位使用者可用 `channels.telegram.dms["<user_id>"].historyLimit` 覆寫。 私訊歷史可用 `channels.msteams.dmHistoryLimit`（使用者輪次）限制。每位使用者可用 `channels.telegram.dms["<user_id>"].historyLimit` 覆寫。
 
 ## 群組啟用模式
 
-預設情況下，機器人只會回應群組中的提及（`@botname` 或 `agents.list[].groupChat.mentionPatterns` 中的模式）。要變更此行為：
+預設情況下，機器人只會回應群組中的提及（`@botname` 或 `agents.list[].groupChat.mentionPatterns` 中的模式）。要變更此行為： To change this behavior:
 
 ### 透過設定（建議）
 
@@ -194,7 +190,8 @@ OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`
 ```
 
 **重要：** 設定 `channels.telegram.groups` 會建立 **允許清單** — 僅接受列出的群組（或 `"*"`）。
-論壇主題會繼承其父群組的設定（allowFrom、requireMention、skills、prompts），除非你在 `channels.telegram.groups.<groupId>.topics.<topicId>` 下新增每主題覆寫。
+論壇主題會繼承其父群組的設定（allowFrom、requireMention、skills、prompts），除非你在 `channels.telegram.groups.<groupId>
+Forum topics inherit their parent group config (allowFrom, requireMention, skills, prompts) unless you add per-topic overrides under `channels.telegram.groups.<groupId>.topics.<topicId>\`.
 
 允許所有群組且一律回應：
 
@@ -231,7 +228,7 @@ OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`
 - `/activation always` — 回應所有訊息
 - `/activation mention` — 需要提及（預設）
 
-**注意：** 指令只會更新工作階段狀態。若要跨重新啟動持久化，請使用設定檔。
+**Note:** Commands update session state only. For persistent behavior across restarts, use config.
 
 ### 取得群組聊天 ID
 
@@ -239,15 +236,15 @@ OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`
 
 **提示：** 取得你自己的使用者 ID，可私訊機器人（它會回覆你的使用者 ID／配對訊息），或在啟用指令後使用 `/whoami`。
 
-**隱私提示：** `@userinfobot` 是第三方機器人。若你偏好，請將機器人加入群組、傳送一則訊息，並使用 `openclaw logs --follow` 讀取 `chat.id`，或使用 Bot API 的 `getUpdates`。
+**Privacy note:** `@userinfobot` is a third-party bot. **隱私提示：** `@userinfobot` 是第三方機器人。若你偏好，請將機器人加入群組、傳送一則訊息，並使用 `openclaw logs --follow` 讀取 `chat.id`，或使用 Bot API 的 `getUpdates`。
 
 ## 設定寫入
 
 預設允許 Telegram 寫入由頻道事件或 `/config set|unset` 觸發的設定更新。
 
-發生於：
+This happens when:
 
-- 群組升級為超級群組，Telegram 發出 `migrate_to_chat_id`（聊天 ID 變更）。OpenClaw 可自動遷移 `channels.telegram.groups`。
+- 群組升級為超級群組，Telegram 發出 `migrate_to_chat_id`（聊天 ID 變更）。OpenClaw 可自動遷移 `channels.telegram.groups`。 OpenClaw can migrate `channels.telegram.groups` automatically.
 - 你在 Telegram 聊天中執行 `/config set` 或 `/config unset`（需要 `commands.config: true`）。
 
 停用方式：
@@ -260,7 +257,7 @@ OpenClaw 會在啟動時，將原生指令（如 `/status`、`/reset`、`/model`
 
 ## 主題（論壇超級群組）
 
-Telegram 論壇主題在每則訊息中包含 `message_thread_id`。OpenClaw：
+Telegram 論壇主題在每則訊息中包含 `message_thread_id`。OpenClaw： OpenClaw:
 
 - 將 `:topic:<threadId>` 附加到 Telegram 群組的工作階段金鑰，使每個主題相互隔離。
 - 傳送輸入中指示與回覆時包含 `message_thread_id`，確保回覆留在主題內。
@@ -269,7 +266,7 @@ Telegram 論壇主題在每則訊息中包含 `message_thread_id`。OpenClaw：
 - 可在 `channels.telegram.groups.<chatId>.topics.<threadId>` 下進行主題專屬設定（skills、允許清單、自動回覆、系統提示、停用）。
 - 主題設定會繼承群組設定（requireMention、允許清單、skills、prompts、enabled），除非在主題層級覆寫。
 
-私人聊天在某些邊緣情況下也可能包含 `message_thread_id`。OpenClaw 會保持 DM 工作階段金鑰不變，但若存在，回覆／草稿串流仍會使用該 thread id。
+Private chats can include `message_thread_id` in some edge cases. 私人聊天在某些邊緣情況下也可能包含 `message_thread_id`。OpenClaw 會保持 DM 工作階段金鑰不變，但若存在，回覆／草稿串流仍會使用該 thread id。
 
 ## 內嵌按鈕
 
@@ -313,6 +310,7 @@ Telegram 支援含回呼按鈕的內嵌鍵盤。
 - `all` — 私訊＋群組
 - `allowlist` — 私訊＋群組，但僅允許符合 `allowFrom`/`groupAllowFrom` 的寄件者（與控制指令相同規則）
 
+Default: `allowlist`.
 預設：`allowlist`。
 舊版：`capabilities: ["inlineButtons"]` = `inlineButtons: "all"`。
 
@@ -346,29 +344,29 @@ Telegram 功能可在兩個層級設定（以上為物件形式；仍支援舊�
 - `channels.telegram.capabilities`：全域預設功能設定，套用至所有 Telegram 帳號，除非被覆寫。
 - `channels.telegram.accounts.<account>.capabilities`：每帳號功能設定，覆寫該帳號的全域預設。
 
-當所有 Telegram 機器人／帳號需要相同行為時，使用全域設定。當不同機器人需要不同行為（例如一個僅處理私訊、另一個允許群組）時，使用每帳號設定。
+當所有 Telegram 機器人／帳號需要相同行為時，使用全域設定。當不同機器人需要不同行為（例如一個僅處理私訊、另一個允許群組）時，使用每帳號設定。 Use per-account configuration when different bots need different behaviors (for example, one account only handles DMs while another is allowed in groups).
 
 ## 存取控制（私訊＋群組）
 
-### 私訊（DM）存取
+### DM access
 
-- 預設：`channels.telegram.dmPolicy = "pairing"`。未知寄件者會收到配對碼；在核准前訊息會被忽略（配對碼 1 小時後過期）。
-- 核准方式：
+- 預設：`channels.telegram.dmPolicy = "pairing"`。未知寄件者在核准前會被忽略。 未知寄件者會收到配對碼；在核准前會忽略訊息（配對碼 1 小時後到期）。
+- Approve via:
   - `openclaw pairing list telegram`
   - `openclaw pairing approve telegram <CODE>`
-- 配對是 Telegram 私訊的預設權杖交換機制。詳情：[配對](/channels/pairing)
-- `channels.telegram.allowFrom` 接受數字使用者 ID（建議）或 `@username` 項目。**不是** 機器人使用者名稱；請使用人類寄件者的 ID。精靈可接受 `@username`，並在可能時解析為數字 ID。
+- Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/channels/pairing)
+- `channels.telegram.allowFrom` 接受數字使用者 ID（建議）或 `@username` 項目。**不是** 機器人使用者名稱；請使用人類寄件者的 ID。精靈可接受 `@username`，並在可能時解析為數字 ID。 It is **not** the bot username; use the human sender’s ID. The wizard accepts `@username` and resolves it to the numeric ID when possible.
 
 #### 尋找你的 Telegram 使用者 ID
 
 較安全（無第三方機器人）：
 
-1. 啟動 Gateway 閘道器並私訊你的機器人。
+1. Start the gateway and DM your bot.
 2. 執行 `openclaw logs --follow`，並尋找 `from.id`。
 
 替代方案（官方 Bot API）：
 
-1. 私訊你的機器人。
+1. DM your bot.
 2. 使用你的機器人權杖擷取更新，讀取 `message.from.id`：
 
    ```bash
@@ -415,7 +413,7 @@ Telegram 功能可在兩個層級設定（以上為物件形式；仍支援舊�
 }
 ```
 
-## 長輪詢 vs webhook
+## Long-polling vs webhook
 
 - 預設：長輪詢（不需要公開 URL）。
 - Webhook 模式：設定 `channels.telegram.webhookUrl` 與 `channels.telegram.webhookSecret`（可選 `channels.telegram.webhookPath`）。
@@ -435,14 +433,14 @@ Telegram 支援透過標籤進行選擇性的回覆串接：
 
 ## 音訊訊息（語音 vs 檔案）
 
-Telegram 會區分 **語音便條**（圓形氣泡）與 **音訊檔案**（中繼資料卡）。
-OpenClaw 為了相容性，預設使用音訊檔案。
+Telegram distinguishes **voice notes** (round bubble) from **audio files** (metadata card).
+OpenClaw defaults to audio files for backward compatibility.
 
 若要在代理程式回覆中強制使用語音便條氣泡，請在回覆任意位置加入此標籤：
 
 - `[[audio_as_voice]]` — 以語音便條而非檔案傳送音訊。
 
-該標籤會自實際送出的文字中移除。其他頻道會忽略此標籤。
+The tag is stripped from the delivered text. Other channels ignore this tag.
 
 使用訊息工具傳送時，請設定 `asVoice: true`，並提供相容語音的音訊 `media` URL
 （存在媒體時，`message` 為可選）：
@@ -457,19 +455,19 @@ OpenClaw 為了相容性，預設使用音訊檔案。
 }
 ```
 
-## 貼圖
+## Stickers
 
 OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
 
-### 接收貼圖
+### Receiving stickers
 
-當使用者傳送貼圖時，OpenClaw 會依貼圖類型處理：
+When a user sends a sticker, OpenClaw handles it based on the sticker type:
 
-- **靜態貼圖（WEBP）：** 下載並透過視覺能力處理。貼圖會以 `<media:sticker>` 占位符呈現在訊息內容中。
-- **動態貼圖（TGS）：** 略過（不支援處理 Lottie 格式）。
+- **Static stickers (WEBP):** Downloaded and processed through vision. The sticker appears as a `<media:sticker>` placeholder in the message content.
+- **Animated stickers (TGS):** Skipped (Lottie format not supported for processing).
 - **影片貼圖（WEBM）：** 略過（不支援處理影片格式）。
 
-接收貼圖時可用的樣板脈絡欄位：
+Template context field available when receiving stickers:
 
 - `Sticker` — 物件，包含：
   - `emoji` — 與貼圖關聯的表情符號
@@ -478,15 +476,15 @@ OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
   - `fileUniqueId` — 用於快取查詢的穩定 ID
   - `cachedDescription` — 可用時的快取視覺描述
 
-### 貼圖快取
+### Sticker cache
 
-貼圖會透過 AI 的視覺能力產生描述。由於相同貼圖常被重複傳送，OpenClaw 會快取這些描述以避免重複的 API 呼叫。
+Stickers are processed through the AI's vision capabilities to generate descriptions. Since the same stickers are often sent repeatedly, OpenClaw caches these descriptions to avoid redundant API calls.
 
 **運作方式：**
 
-1. **首次遇到：** 將貼圖影像送至 AI 進行視覺分析，產生描述（例如：「一隻熱情揮手的卡通貓」）。
-2. **快取儲存：** 將描述與貼圖的檔案 ID、表情符號與貼圖集名稱一併保存。
-3. **再次遇到：** 再次看到相同貼圖時，直接使用快取描述，不再將影像送至 AI。
+1. **首次遇到：** 將貼圖影像送至 AI 進行視覺分析，產生描述（例如：「一隻熱情揮手的卡通貓」）。 The AI generates a description (e.g., "A cartoon cat waving enthusiastically").
+2. **Cache storage:** The description is saved along with the sticker's file ID, emoji, and set name.
+3. **Subsequent encounters:** When the same sticker is seen again, the cached description is used directly. The image is not sent to the AI.
 
 **快取位置：** `~/.openclaw/telegram/sticker-cache.json`
 
@@ -506,14 +504,14 @@ OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
 **效益：**
 
 - 避免對相同貼圖重複呼叫視覺 API，降低成本
-- 快取貼圖回應更快（無視覺處理延遲）
-- 可依快取描述進行貼圖搜尋
+- Faster response times for cached stickers (no vision processing delay)
+- Enables sticker search functionality based on cached descriptions
 
-快取會在接收貼圖時自動填充，無需手動管理。
+The cache is populated automatically as stickers are received. There is no manual cache management required.
 
-### 傳送貼圖
+### Sending stickers
 
-代理程式可使用 `sticker` 與 `sticker-search` 動作來傳送與搜尋貼圖。這些功能預設停用，需在設定中啟用：
+The agent can send and search stickers using the `sticker` and `sticker-search` actions. These are disabled by default and must be enabled in config:
 
 ```json5
 {
@@ -540,13 +538,13 @@ OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
 
 參數：
 
-- `fileId`（必填）— 貼圖的 Telegram 檔案 ID。可在接收貼圖時從 `Sticker.fileId` 取得，或來自 `sticker-search` 的搜尋結果。
+- `fileId`（必填）— 貼圖的 Telegram 檔案 ID。可在接收貼圖時從 `Sticker.fileId` 取得，或來自 `sticker-search` 的搜尋結果。 Obtain this from `Sticker.fileId` when receiving a sticker, or from a `sticker-search` result.
 - `replyTo`（選填）— 要回覆的訊息 ID。
 - `threadId`（選填）— 論壇主題的訊息執行緒 ID。
 
-**搜尋貼圖：**
+**Search for stickers:**
 
-代理程式可依描述、表情符號或貼圖集名稱搜尋快取貼圖：
+The agent can search cached stickers by description, emoji, or set name:
 
 ```json5
 {
@@ -557,7 +555,7 @@ OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
 }
 ```
 
-回傳快取中符合的貼圖：
+Returns matching stickers from the cache:
 
 ```json5
 {
@@ -574,7 +572,7 @@ OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
 }
 ```
 
-搜尋會在描述文字、表情符號字元與貼圖集名稱上進行模糊比對。
+The search uses fuzzy matching across description text, emoji characters, and set names.
 
 **含執行緒的範例：**
 
@@ -591,6 +589,7 @@ OpenClaw 支援接收與傳送 Telegram 貼圖，並具備智慧快取。
 
 ## 串流（草稿）
 
+Telegram can stream **draft bubbles** while the agent is generating a response.
 Telegram 可在代理程式產生回覆時串流 **草稿氣泡**。
 OpenClaw 使用 Bot API 的 `sendMessageDraft`（非實際訊息），並在完成後以一般訊息送出最終回覆。
 
@@ -610,6 +609,7 @@ OpenClaw 使用 Bot API 的 `sendMessageDraft`（非實際訊息），並在完�
   - `channels.telegram.draftChunk: { minChars?, maxChars?, breakPreference? }`
     - 預設：`minChars: 200`、`maxChars: 800`、`breakPreference: "paragraph"`（限制至 `channels.telegram.textChunkLimit`）。
 
+Note: draft streaming is separate from **block streaming** (channel messages).
 注意：草稿串流與 **區塊串流**（頻道訊息）是不同機制。
 區塊串流預設關閉；若你想要提早送出 Telegram 訊息而非草稿更新，需設定 `channels.telegram.blockStreaming: true`。
 
@@ -618,10 +618,11 @@ OpenClaw 使用 Bot API 的 `sendMessageDraft`（非實際訊息），並在完�
 - `/reasoning stream` 會在產生回覆期間，將推理內容串流至草稿氣泡，完成後再送出不含推理的最終答案。
 - 若 `channels.telegram.streamMode` 為 `off`，則停用推理串流。
   更多背景：[串流＋分塊](/concepts/streaming)。
+  More context: [Streaming + chunking](/concepts/streaming).
 
 ## 重試策略
 
-對外的 Telegram API 呼叫在暫時性網路／429 錯誤時，會以指數退避與抖動重試。透過 `channels.telegram.retry` 設定。請參閱 [重試策略](/concepts/retry)。
+對外的 Telegram API 呼叫在暫時性網路／429 錯誤時，會以指數退避與抖動重試。透過 `channels.telegram.retry` 設定。請參閱 [重試策略](/concepts/retry)。 Configure via `channels.telegram.retry`. See [Retry policy](/concepts/retry).
 
 ## 代理程式工具（訊息＋反應）
 
@@ -634,11 +635,11 @@ OpenClaw 使用 Bot API 的 `sendMessageDraft`（非實際訊息），並在完�
 ## 反應通知
 
 **反應的運作方式：**
-Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非訊息負載中的屬性。當使用者加入反應時，OpenClaw 會：
+Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非訊息負載中的屬性。當使用者加入反應時，OpenClaw 會： When a user adds a reaction, OpenClaw:
 
 1. 從 Telegram API 接收 `message_reaction` 更新
 2. 轉換為 **系統事件**，格式為：`"Telegram reaction added: {emoji} by {user} on msg {id}"`
-3. 使用與一般訊息 **相同的工作階段金鑰** 將系統事件入列
+3. Enqueues the system event using the **same session key** as regular messages
 4. 當該對話的下一則訊息到達時，系統事件會被清空並前置到代理程式的脈絡中
 
 代理程式會在對話歷史中以 **系統通知** 看到反應，而非訊息中繼資料。
@@ -656,7 +657,7 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
   - `"minimal"` — 代理程式可節制地反應（建議：每 5–10 次交流 1 次）
   - `"extensive"` — 代理程式可在適當時機較為頻繁地反應
 
-**論壇群組：** 論壇群組中的反應會包含 `message_thread_id`，並使用如 `agent:main:telegram:group:{chatId}:topic:{threadId}` 的工作階段金鑰，確保同一主題內的反應與訊息保持一致。
+**論壇群組：** 論壇群組中的反應會包含 `message_thread_id`，並使用如 `agent:main:telegram:group:{chatId}:topic:{threadId}` 的工作階段金鑰，確保同一主題內的反應與訊息保持一致。 This ensures reactions and messages in the same topic stay together.
 
 **設定範例：**
 
@@ -682,7 +683,7 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
 - 使用聊天 ID（`123456789`）或使用者名稱（`@name`）作為目標。
 - 範例：`openclaw message send --channel telegram --target 123456789 --message "hi"`。
 
-## 疑難排解
+## Troubleshooting
 
 **機器人在群組中對非提及訊息沒有回應：**
 
@@ -696,7 +697,7 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
 
 - 若設定了 `channels.telegram.groups`，群組必須被列出或使用 `"*"`
 - 檢查 @BotFather 的隱私設定 →「Group Privacy」應為 **OFF**
-- 確認機器人確實是成員（而非僅為沒有讀取權限的管理員）
+- 1. 驗證機器人實際上是成員（而不只是沒有讀取權限的管理員）
 - 檢查 Gateway 閘道器日誌：`openclaw logs --follow`（尋找「skipping group message」）
 
 **機器人會回應提及，但不回應 `/activation always`：**
@@ -716,7 +717,7 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
 
 **機器人啟動後靜默停止回應（或記錄 `HttpError: Network request ... failed`）：**
 
-- 某些主機會優先將 `api.telegram.org` 解析為 IPv6。若你的伺服器沒有可用的 IPv6 對外連線，grammY 可能卡在僅 IPv6 的請求。
+- 某些主機會優先將 `api.telegram.org` 解析為 IPv6。若你的伺服器沒有可用的 IPv6 對外連線，grammY 可能卡在僅 IPv6 的請求。 2. 如果你的伺服器沒有可用的 IPv6 對外連線，grammY 可能會在僅支援 IPv6 的請求上卡住。
 - 解法：啟用 IPv6 對外連線 **或** 強制 `api.telegram.org` 走 IPv4（例如加入使用 IPv4 A 記錄的 `/etc/hosts`，或在作業系統 DNS 堆疊中偏好 IPv4），然後重新啟動 Gateway 閘道器。
 - 快速檢查：`dig +short api.telegram.org A` 與 `dig +short api.telegram.org AAAA`，確認 DNS 回傳內容。
 
@@ -730,7 +731,7 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
 - `channels.telegram.botToken`：機器人權杖（BotFather）。
 - `channels.telegram.tokenFile`：從檔案路徑讀取權杖。
 - `channels.telegram.dmPolicy`：`pairing | allowlist | open | disabled`（預設：配對）。
-- `channels.telegram.allowFrom`：私訊允許清單（ID／使用者名稱）。`open` 需要 `"*"`。
+- `channels.telegram.allowFrom`：私訊允許清單（ID／使用者名稱）。`open` 需要 `"*"`。 3. `open` 需要 `"*"`。
 - `channels.telegram.groupPolicy`：`open | allowlist | disabled`（預設：允許清單）。
 - `channels.telegram.groupAllowFrom`：群組寄件者允許清單（ID／使用者名稱）。
 - `channels.telegram.groups`：每群組預設值＋允許清單（全域預設請用 `"*"`）。
@@ -752,7 +753,7 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
 - `channels.telegram.streamMode`：`off | partial | block`（草稿串流）。
 - `channels.telegram.mediaMaxMb`：進站／對外媒體上限（MB）。
 - `channels.telegram.retry`：對外 Telegram API 呼叫的重試策略（次數、minDelayMs、maxDelayMs、jitter）。
-- `channels.telegram.network.autoSelectFamily`：覆寫 Node 的 autoSelectFamily（true＝啟用，false＝停用）。Node 22 預設停用以避免 Happy Eyeballs 逾時。
+- `channels.telegram.network.autoSelectFamily`：覆寫 Node 的 autoSelectFamily（true＝啟用，false＝停用）。Node 22 預設停用以避免 Happy Eyeballs 逾時。 4. 在 Node 22 中預設為停用，以避免 Happy Eyeballs 逾時。
 - `channels.telegram.proxy`：Bot API 呼叫的代理 URL（SOCKS／HTTP）。
 - `channels.telegram.webhookUrl`：啟用 webhook 模式（需要 `channels.telegram.webhookSecret`）。
 - `channels.telegram.webhookSecret`：webhook 密鑰（設定 webhookUrl 時必填）。
@@ -764,9 +765,10 @@ Telegram 的反應會以 **獨立的 `message_reaction` 事件** 到達，而非
 - `channels.telegram.reactionNotifications`：`off | own | all` — 控制哪些反應會觸發系統事件（未設定時預設：`own`）。
 - `channels.telegram.reactionLevel`：`off | ack | minimal | extensive` — 控制代理程式的反應能力（未設定時預設：`minimal`）。
 
-相關的全域選項：
+5. 相關的全域選項：
 
 - `agents.list[].groupChat.mentionPatterns`（提及閘控模式）。
 - `messages.groupChat.mentionPatterns`（全域後備）。
-- `commands.native`（預設為 `"auto"` → Telegram／Discord 開啟、Slack 關閉）、`commands.text`、`commands.useAccessGroups`（指令行為）。可用 `channels.telegram.commands.native` 覆寫。
+- `commands.native`（預設為 `"auto"` → Telegram／Discord 開啟、Slack 關閉）、`commands.text`、`commands.useAccessGroups`（指令行為）。可用 `channels.telegram.commands.native` 覆寫。 依預設，沙箱容器 **沒有網路**。
+  可使用 `channels.telegram.commands.native` 覆寫。
 - `messages.responsePrefix`、`messages.ackReaction`、`messages.ackReactionScope`、`messages.removeAckAfterReply`。

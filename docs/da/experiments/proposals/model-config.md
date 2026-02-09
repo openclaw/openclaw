@@ -3,19 +3,12 @@ summary: "Udforskning: modelkonfiguration, godkendelsesprofiler og fallback-adf�
 read_when:
   - Udforsker fremtidige idéer til modelvalg + godkendelsesprofiler
 title: "Udforskning af modelkonfiguration"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:09Z
 ---
 
 # Modelkonfiguration (Udforskning)
 
-Dette dokument samler **idéer** til fremtidig modelkonfiguration. Det er ikke en
-leveringsklar specifikation. For nuværende adfærd, se:
+Dette dokument indfanger **ideer** til fremtidig modelkonfiguration. Det er ikke et
+shipping spec. For aktuel opførsel, se:
 
 - [Modeller](/concepts/models)
 - [Model-failover](/concepts/model-failover)

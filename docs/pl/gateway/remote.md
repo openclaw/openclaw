@@ -3,13 +3,6 @@ summary: "Zdalny dostęp z użyciem tuneli SSH (Gateway WS) i sieci tailnet"
 read_when:
   - Uruchamianie lub rozwiązywanie problemów z konfiguracjami zdalnego gateway
 title: "Zdalny dostęp"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:21Z
 ---
 
 # Zdalny dostęp (SSH, tunele i sieci tailnet)
@@ -29,7 +22,7 @@ To repozytorium obsługuje tryb „zdalnie przez SSH” poprzez utrzymywanie poj
 Traktuj **host Gateway** jako „miejsce, w którym działa agent”. To on posiada sesje, profile uwierzytelniania, kanały i stan.
 Twój laptop/desktop (oraz węzły) łączą się z tym hostem.
 
-### 1) Gateway zawsze włączony w Twojej sieci tailnet (VPS lub serwer domowy)
+### 1. Gateway zawsze włączony w Twojej sieci tailnet (VPS lub serwer domowy)
 
 Uruchom Gateway na hoście stałym i uzyskuj do niego dostęp przez **Tailscale** lub SSH.
 
@@ -39,7 +32,7 @@ Uruchom Gateway na hoście stałym i uzyskuj do niego dostęp przez **Tailscale*
 
 To rozwiązanie jest idealne, gdy laptop często przechodzi w uśpienie, a chcesz, aby agent był zawsze dostępny.
 
-### 2) Domowy desktop uruchamia Gateway, laptop jest zdalnym sterowaniem
+### 2. Domowy desktop uruchamia Gateway, laptop jest zdalnym sterowaniem
 
 Laptop **nie** uruchamia agenta. Łączy się zdalnie:
 
@@ -48,7 +41,7 @@ Laptop **nie** uruchamia agenta. Łączy się zdalnie:
 
 Runbook: [zdalny dostęp na macOS](/platforms/mac/remote).
 
-### 3) Laptop uruchamia Gateway, zdalny dostęp z innych maszyn
+### 3. Laptop uruchamia Gateway, zdalny dostęp z innych maszyn
 
 Zachowaj Gateway lokalnie, ale wystaw go bezpiecznie:
 
@@ -81,7 +74,7 @@ Utwórz lokalny tunel do zdalnego Gateway WS:
 ssh -N -L 18789:127.0.0.1:18789 user@host
 ```
 
-Gdy tunel jest aktywny:
+Z tunelem w górę:
 
 - `openclaw health` oraz `openclaw status --deep` docierają teraz do zdalnego gateway przez `ws://127.0.0.1:18789`.
 - `openclaw gateway {status,health,send,agent,call}` może również wskazywać przekazany URL przez `--url`, gdy jest to potrzebne.

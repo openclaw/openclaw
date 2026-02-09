@@ -1,16 +1,9 @@
 ---
 summary: "Справочник CLI для `openclaw voicecall` (поверхность команд плагина voice-call)"
 read_when:
-  - "Вы используете плагин voice-call и хотите точки входа CLI"
-  - "Вам нужны быстрые примеры для `voicecall call|continue|status|tail|expose`"
+  - Вы используете плагин voice-call и хотите точки входа CLI
+  - Вам нужны быстрые примеры для `voicecall call|continue|status|tail|expose`
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:19Z
 ---
 
 # `openclaw voicecall`
@@ -30,7 +23,7 @@ openclaw voicecall continue --call-id <id> --message "Any questions?"
 openclaw voicecall end --call-id <id>
 ```
 
-## Публикация вебхуков (Tailscale)
+## Выделение вебхуков (хвостовая шкала)
 
 ```bash
 openclaw voicecall expose --mode serve

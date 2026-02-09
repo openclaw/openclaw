@@ -2,13 +2,6 @@
 summary: "HEARTBEAT.md 를 위한 워크스페이스 템플릿"
 read_when:
   - 워크스페이스를 수동으로 부트스트랩할 때
-x-i18n:
-  source_path: reference/templates/HEARTBEAT.md
-  source_hash: 873e6dc451fac35d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:07Z
 ---
 
 # HEARTBEAT.md

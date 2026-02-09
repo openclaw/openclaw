@@ -5,13 +5,6 @@ read_when:
   - Du använder redan Nix/NixOS/Home Manager
   - Du vill att allt ska vara pinnat och hanteras deklarativt
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:41Z
 ---
 
 # Nix-installation
@@ -39,7 +32,7 @@ Reference the nix-openclaw README for module options.
 
 > **📦 Fullständig guide: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> Repo:t nix-openclaw är den primära källan för Nix-installation. Den här sidan är bara en snabb översikt.
+> Den nix-openclaw repo är källan till sanningen för Nix installation. Denna sida är bara en snabb översikt.
 
 ## Vad du får
 
@@ -54,15 +47,15 @@ Reference the nix-openclaw README for module options.
 
 När `OPENCLAW_NIX_MODE=1` är satt (automatiskt med nix-openclaw):
 
-OpenClaw stöder ett **Nix-läge** som gör konfigurationen deterministisk och inaktiverar flöden för automatisk installation.
+OpenClaw stöder ett **Nix-läge** som gör konfigurationen deterministisk och inaktiverar automatiska installationsflöden.
 Aktivera det genom att exportera:
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
-På macOS ärver GUI-appen inte automatiskt shell-miljövariabler. Du kan
-också aktivera Nix-läge via defaults:
+På macOS ärver GUI-appen inte automatiskt shell env vars. Du kan
+också aktivera Nix-läge via standard:
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
@@ -92,9 +85,9 @@ Paketeringsflödet för macOS förväntar sig en stabil Info.plist-mall på:
 apps/macos/Sources/OpenClaw/Resources/Info.plist
 ```
 
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) kopierar denna mall in i app-paketet och patchar dynamiska fält
-(bundle-ID, version/build, Git SHA, Sparkle-nycklar). Detta håller plist-filen deterministisk för SwiftPM-
-paketering och Nix-byggen (som inte förlitar sig på en full Xcode-verktygskedja).
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) kopierar denna mall till appbuntet och patchar dynamiska fält
+(bunt ID, version/build, Git SHA, Sparkle nycklar). Detta håller plist deterministisk för SwiftPM
+förpackningar och Nix bygger (som inte förlitar sig på en fullständig Xcode verktygskedja).
 
 ## Relaterat
 

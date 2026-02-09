@@ -3,20 +3,13 @@ title: CLI de la sandbox
 summary: "Gérer les conteneurs de sandbox et inspecter la politique de sandbox effective"
 read_when: "Vous gérez des conteneurs de sandbox ou déboguez le comportement de la sandbox ou des politiques d’outils."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:04Z
 ---
 
 # CLI de la sandbox
 
 Gérez des conteneurs de sandbox basés sur Docker pour l’exécution isolée des agents.
 
-## Vue d’ensemble
+## Présentation
 
 OpenClaw peut exécuter des agents dans des conteneurs Docker isolés pour la sécurité. Les commandes `sandbox` vous aident à gérer ces conteneurs, en particulier après des mises à jour ou des changements de configuration.
 

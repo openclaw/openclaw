@@ -4,13 +4,6 @@ read_when:
   - Tilføjelse eller ændring af kameraoptagelse på iOS-noder eller macOS
   - Udvidelse af agenttilgængelige MEDIA-tempfil-workflows
 title: "Kameraoptagelse"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:33Z
 ---
 
 # Kameraoptagelse (agent)
@@ -66,7 +59,7 @@ Al kameraadgang er låst bag **brugerstyrede indstillinger**.
 
 ### Krav om forgrund
 
-Ligesom `canvas.*` tillader iOS-noden kun `camera.*`-kommandoer i **forgrunden**. Kald i baggrunden returnerer `NODE_BACKGROUND_UNAVAILABLE`.
+Ligesom `canvas.*`, tillader iOS-noden kun `kamera.*` kommandoer i **forgrunden**. Baggrundsangivelser returnerer `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI-hjælper (tempfiler + MEDIA)
 
@@ -105,7 +98,7 @@ Hvis tilladelser mangler, vil appen spørge, når det er muligt; hvis de nægtes
 
 ### Android-krav om forgrund
 
-Ligesom `canvas.*` tillader Android-noden kun `camera.*`-kommandoer i **forgrunden**. Kald i baggrunden returnerer `NODE_BACKGROUND_UNAVAILABLE`.
+Ligesom `canvas.*`, tillader Android-knuden kun `kamera.*` kommandoer i **forgrunden**. Baggrundsangivelser returnerer `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### Payload-værn
 

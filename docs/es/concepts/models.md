@@ -5,13 +5,6 @@ read_when:
   - Cambiar el comportamiento de alternativas de modelos o la UX de selección
   - Actualizar sondeos de escaneo de modelos (herramientas/imágenes)
 title: "CLI de modelos"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:21Z
 ---
 
 # CLI de modelos

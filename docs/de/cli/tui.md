@@ -4,13 +4,6 @@ read_when:
   - Sie möchten eine Terminal-UI für das Gateway (remote-tauglich)
   - Sie möchten URL/Token/Sitzung aus Skripten übergeben
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: aa6f37b960926997
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:44Z
 ---
 
 # `openclaw tui`

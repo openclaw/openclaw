@@ -6,20 +6,13 @@ read_when:
   - آن بورڈنگ کے دوران شناختی سیٹ اپ کی خرابیوں کی جانچ
 title: "ایجنٹ بوٹ اسٹرَیپنگ"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:41Z
 ---
 
 # ایجنٹ بوٹ اسٹرَیپنگ
 
-بوٹ اسٹرَیپنگ **پہلی بار چلنے** کا عمل ہے جو ایجنٹ کی ورک اسپیس تیار کرتا ہے اور
-شناخت کی تفصیلات جمع کرتا ہے۔ یہ آن بورڈنگ کے بعد، اس وقت انجام پاتا ہے جب ایجنٹ
-پہلی مرتبہ شروع ہوتا ہے۔
+Bootstrapping is the **first‑run** ritual that prepares an agent workspace and
+collects identity details. It happens after onboarding, when the agent starts
+for the first time.
 
 ## بوٹ اسٹرَیپنگ کیا کرتا ہے
 
@@ -33,8 +26,9 @@ x-i18n:
 
 ## یہ کہاں چلتا ہے
 
-بوٹ اسٹرَیپنگ ہمیشہ **گیٹ وے ہوسٹ** پر چلتا ہے۔ اگر macOS ایپ کسی ریموٹ Gateway سے
-جڑتی ہے تو ورک اسپیس اور بوٹ اسٹرَیپنگ فائلیں اسی ریموٹ مشین پر موجود ہوتی ہیں۔
+Bootstrapping always runs on the **gateway host**. If the macOS app connects to
+a remote Gateway, the workspace and bootstrapping files live on that remote
+machine.
 
 <Note>
 جب Gateway کسی دوسری مشین پر چل رہا ہو، تو ورک اسپیس فائلوں میں ترمیم گیٹ وے ہوسٹ

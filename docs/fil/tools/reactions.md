@@ -3,13 +3,6 @@ summary: "Semantika ng reaksyon na ibinabahagi sa iba’t ibang channel"
 read_when:
   - Kapag nagtatrabaho sa mga reaksyon sa anumang channel
 title: "Mga Reaksyon"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:53Z
 ---
 
 # Mga tool para sa reaksyon

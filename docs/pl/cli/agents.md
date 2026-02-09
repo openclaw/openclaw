@@ -2,14 +2,7 @@
 summary: "Dokumentacja referencyjna CLI dla `openclaw agents` (list/add/delete/set identity)"
 read_when:
   - Chcesz mieć wiele odizolowanych agentów (obszary robocze + routing + uwierzytelnianie)
-title: "agenci"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:53Z
+title: "cli/agents.md"
 ---
 
 # `openclaw agents`
@@ -38,7 +31,7 @@ Każdy obszar roboczy agenta może zawierać `IDENTITY.md` w katalogu głównym 
 - Przykładowa ścieżka: `~/.openclaw/workspace/IDENTITY.md`
 - `set-identity --from-identity` odczytuje z katalogu głównego obszaru roboczego (lub z jawnie wskazanego `--identity-file`)
 
-Ścieżki do awatarów są rozwiązywane względem katalogu głównego obszaru roboczego.
+Ścieżki awatara rozwiązują względem głównego obszaru roboczego.
 
 ## Ustaw tożsamość
 

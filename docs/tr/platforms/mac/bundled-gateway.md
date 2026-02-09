@@ -5,13 +5,6 @@ read_when:
   - macOS gateway launchd hizmeti hata ayıklanırken
   - macOS için gateway CLI kurulurken
 title: "macOS üzerinde Gateway"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:28Z
 ---
 
 # macOS üzerinde Gateway (harici launchd)
@@ -54,7 +47,7 @@ Davranış:
 - Yapılandırılan portta bir Gateway zaten çalışıyorsa, uygulama yeni bir tane
   başlatmak yerine ona bağlanır.
 
-Günlükleme:
+Logging:
 
 - launchd stdout/err: `/tmp/openclaw/openclaw-gateway.log`
 
@@ -63,7 +56,7 @@ Günlükleme:
 macOS uygulaması gateway sürümünü kendi sürümüyle karşılaştırır. Uyumsuzlarsa,
 uygulama sürümüyle eşleşecek şekilde global CLI’yi güncelleyin.
 
-## Hızlı kontrol
+## Duman testi
 
 ```bash
 openclaw --version

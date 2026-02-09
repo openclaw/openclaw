@@ -3,20 +3,13 @@ summary: "Khi nào OpenClaw hiển thị chỉ báo đang gõ và cách tinh ch�
 read_when:
   - Thay đổi hành vi hoặc giá trị mặc định của chỉ báo đang gõ
 title: "Chỉ báo đang gõ"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:45Z
 ---
 
 # Chỉ báo đang gõ
 
-Chỉ báo đang gõ được gửi tới kênh chat trong khi một run đang hoạt động. Dùng
-`agents.defaults.typingMode` để kiểm soát **khi nào** việc gõ bắt đầu và `typingIntervalSeconds`
-để kiểm soát **tần suất** làm mới.
+Sử dụng
+`agents.defaults.typingMode` để kiểm soát **khi nào** bắt đầu gõ và `typingIntervalSeconds`
+để kiểm soát **tần suất** làm mới. `thinking` chỉ kích hoạt nếu lần chạy stream lập luận (`reasoningLevel: "stream"`).
 
 ## Mặc định
 
@@ -68,8 +61,8 @@ Bạn có thể ghi đè chế độ hoặc nhịp làm mới theo từng phiên
 
 - Chế độ `message` sẽ không hiển thị đang gõ cho các phản hồi chỉ có im lặng (ví dụ token
   `NO_REPLY` dùng để chặn đầu ra).
-- `thinking` chỉ kích hoạt nếu run stream suy luận (`reasoningLevel: "stream"`).
-  Nếu mô hình không phát ra các delta suy luận, việc hiển thị đang gõ sẽ không bắt đầu.
+- Nếu mô hình không phát ra các delta lập luận, việc gõ sẽ không bắt đầu.
+  `typingIntervalSeconds` kiểm soát **nhịp làm mới**, không phải thời điểm bắt đầu.
 - Heartbeat không bao giờ hiển thị đang gõ, bất kể chế độ nào.
-- `typingIntervalSeconds` kiểm soát **nhịp làm mới**, không phải thời điểm bắt đầu.
-  Giá trị mặc định là 6 giây.
+- Mặc định là 6 giây.
+  `/status` trong chat: thẻ trạng thái giàu emoji với token phiên + chi phí ước tính (chỉ API key).

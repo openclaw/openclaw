@@ -4,20 +4,13 @@ read_when:
   - توصيل مُحفِّزات صندوق وارد Gmail بـ OpenClaw
   - إعداد دفع Pub/Sub لإيقاظ الوكيل
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:58Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 الهدف: مراقبة Gmail -> دفع Pub/Sub -> `gog gmail watch serve` -> Webhook لـ OpenClaw.
 
-## المتطلبات المسبقة
+## المسبق
 
 - تثبيت `gcloud` وتسجيل الدخول ([دليل التثبيت](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - تثبيت `gog` (gogcli) وتفويضه لحساب Gmail ([gogcli.sh](https://gogcli.sh/)).
@@ -120,7 +113,7 @@ openclaw webhooks gmail setup \
 `hooks.gmail.tailscale.target` (أو `--tailscale-target`) إلى عنوان URL كامل مثل
 `http://127.0.0.1:8788/gmail-pubsub` وطابق `hooks.gmail.serve.path`.
 
-هل تريد نقطة نهاية مخصّصة؟ استخدم `--push-endpoint <url>` أو `--tailscale off`.
+هل تريد نقطة نهاية مخصصة؟ هل تريد نقطة نهاية مخصّصة؟ استخدم `--push-endpoint <url>` أو `--tailscale off`.
 
 ملاحظة المنصّة: على macOS يقوم المعالج بتثبيت `gcloud` و`gogcli` و`tailscale`
 عبر Homebrew؛ وعلى Linux قم بتثبيتها يدويًا أولًا.
@@ -150,7 +143,7 @@ gcloud config set project <project-id>
 
 ملاحظة: تتطلب مراقبة Gmail أن يكون موضوع Pub/Sub في نفس المشروع الخاص بعميل OAuth.
 
-2. تمكين واجهات برمجة التطبيقات:
+2. تمكين APIs:
 
 ```bash
 gcloud services enable gmail.googleapis.com pubsub.googleapis.com

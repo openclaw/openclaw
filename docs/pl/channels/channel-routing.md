@@ -3,13 +3,6 @@ summary: "Reguły routingu per kanał (WhatsApp, Telegram, Discord, Slack) oraz 
 read_when:
   - Zmiana routingu kanałów lub zachowania skrzynki odbiorczej
 title: "Routing kanałów"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:50Z
 ---
 
 # Kanały i routing

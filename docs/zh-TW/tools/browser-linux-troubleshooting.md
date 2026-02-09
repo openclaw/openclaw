@@ -1,14 +1,7 @@
 ---
-summary: 「修復 Linux 上用於 OpenClaw 瀏覽器控制的 Chrome / Brave / Edge / Chromium CDP 啟動問題」
-read_when: 「在 Linux 上瀏覽器控制失敗，特別是使用 snap Chromium 時」
-title: 「瀏覽器疑難排解」
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:24Z
+summary: "修復 Linux 上用於 OpenClaw 瀏覽器控制的 Chrome / Brave / Edge / Chromium CDP 啟動問題"
+read_when: "在 Linux 上瀏覽器控制失敗，特別是使用 snap Chromium 時"
+title: "瀏覽器疑難排解"
 ---
 
 # 瀏覽器疑難排解（Linux）
@@ -23,7 +16,7 @@ OpenClaw 的瀏覽器控制伺服器在啟動 Chrome / Brave / Edge / Chromium �
 
 ### 根本原因
 
-在 Ubuntu（以及許多 Linux 發行版）上，預設的 Chromium 安裝是 **snap 套件**。Snap 的 AppArmor 侷限會干擾 OpenClaw 啟動與監控瀏覽器處理程序的方式。
+On Ubuntu (and many Linux distros), the default Chromium installation is a **snap package**. Snap's AppArmor confinement interferes with how OpenClaw spawns and monitors the browser process.
 
 `apt install chromium` 指令會安裝一個重新導向到 snap 的 stub 套件：
 
@@ -102,7 +95,7 @@ WantedBy=default.target
 
 啟用方式：`systemctl --user enable --now openclaw-browser.service`
 
-### 驗證瀏覽器是否正常運作
+### 1. 驗證瀏覽器是否正常運作
 
 檢查狀態：
 
@@ -119,26 +112,26 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### 設定參考
 
-| 選項                     | 說明                                                                | 預設值                                         |
-| ------------------------ | ------------------------------------------------------------------- | ---------------------------------------------- |
-| `browser.enabled`        | 啟用瀏覽器控制                                                      | `true`                                         |
+| 選項                       | Description                                            | Default                      |
+| ------------------------ | ------------------------------------------------------ | ---------------------------- |
+| `browser.enabled`        | 啟用瀏覽器控制                                                | `true`                       |
 | `browser.executablePath` | Chromium 系列瀏覽器二進位檔路徑（Chrome / Brave / Edge / Chromium） | 自動偵測（偏好 Chromium 系列的系統預設瀏覽器） |
-| `browser.headless`       | 以無 GUI 模式執行                                                   | `false`                                        |
-| `browser.noSandbox`      | 新增 `--no-sandbox` 旗標（某些 Linux 環境需要）                     | `false`                                        |
-| `browser.attachOnly`     | 不啟動瀏覽器，只附加到既有實例                                      | `false`                                        |
-| `browser.cdpPort`        | Chrome DevTools Protocol 連接埠                                     | `18800`                                        |
+| `browser.headless`       | 以無 GUI 模式執行                                            | `false`                      |
+| `browser.noSandbox`      | 新增 `--no-sandbox` 旗標（某些 Linux 環境需要）                    | `false`                      |
+| `browser.attachOnly`     | 不啟動瀏覽器，只附加到既有實例                                        | `false`                      |
+| `browser.cdpPort`        | Chrome DevTools Protocol 連接埠                           | `18800`                      |
 
 ### 問題：「Chrome extension relay is running, but no tab is connected」
 
-你正在使用 `chrome` 設定檔（extension relay）。它預期 OpenClaw
-瀏覽器擴充功能會附加到一個正在運作的分頁。
+You’re using the `chrome` profile (extension relay). It expects the OpenClaw
+browser extension to be attached to a live tab.
 
 修正方式：
 
 1. **使用受管理的瀏覽器：** `openclaw browser start --browser-profile openclaw`
    （或設定 `browser.defaultProfile: "openclaw"`）。
-2. **使用 extension relay：** 安裝擴充功能、開啟一個分頁，然後點擊
-   OpenClaw 擴充功能圖示以進行附加。
+2. **Use the extension relay:** install the extension, open a tab, and click the
+   OpenClaw extension icon to attach it.
 
 注意事項：
 

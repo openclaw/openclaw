@@ -1,16 +1,9 @@
 ---
-summary: 「將 OpenClaw 的安裝從一台機器移動（遷移）到另一台」
+summary: "將 OpenClaw 的安裝從一台機器移動（遷移）到另一台"
 read_when:
-  - 「您正在將 OpenClaw 移到新的筆電／伺服器」
-  - 「您希望保留工作階段、身分驗證與頻道登入（WhatsApp 等）」
-title: 「遷移指南」
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:36Z
+  - 您正在將 OpenClaw 移到新的筆電／伺服器
+  - 您希望保留工作階段、身分驗證與頻道登入（WhatsApp 等）
+title: "遷移指南"
 ---
 
 # 將 OpenClaw 遷移到新機器
@@ -26,7 +19,7 @@ x-i18n:
 
 ## 開始之前（您要遷移的內容）
 
-### 1) 確認您的狀態目錄
+### 1. 確認您的狀態目錄
 
 多數安裝使用預設值：
 
@@ -43,9 +36,9 @@ x-i18n:
 openclaw status
 ```
 
-在輸出中尋找提及 `OPENCLAW_STATE_DIR`／profile 的內容。若您執行多個 Gateway 閘道器，請對每個 profile 重複確認。
+Look for mentions of `OPENCLAW_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
 
-### 2) 確認您的工作區
+### 2. 確認您的工作區
 
 常見預設值：
 
@@ -54,19 +47,19 @@ openclaw status
 
 您的工作區是存放如 `MEMORY.md`、`USER.md` 與 `memory/*.md` 等檔案的位置。
 
-### 3) 了解您將保留哪些內容
+### 3. 了解您將保留哪些內容
 
 若您同時複製 **狀態目錄** 與 **工作區**，將保留：
 
 - Gateway 閘道器 設定（`openclaw.json`）
 - 身分驗證設定檔／API 金鑰／OAuth 權杖
-- 工作階段歷史與代理程式狀態
+- Session history + agent state
 - 頻道狀態（例如 WhatsApp 登入／工作階段）
 - 您的工作區檔案（記憶、Skills 筆記等）
 
 若您 **只** 複製工作區（例如透過 Git），則 **不會** 保留：
 
-- 工作階段
+- cli/sessions.md
 - 憑證
 - 頻道登入
 
@@ -102,7 +95,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 
 此階段若入門引導建立了新的 `~/.openclaw/` 也沒關係 — 您會在下一步覆蓋它。
 
-### 步驟 2 — 將狀態目錄與工作區複製到新機器
+### Step 2 — Copy the state dir + workspace to the new machine
 
 請同時複製 **兩者**：
 
@@ -111,7 +104,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 
 常見方式：
 
-- `scp` 這些 tar 封存檔並解壓縮
+- `scp` the tarballs and extract
 - 透過 SSH `rsync -a`
 - 使用外接硬碟
 
@@ -128,9 +121,9 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 openclaw doctor
 ```
 
-Doctor 是「安全且穩定」的指令。它會修復服務、套用設定遷移，並對不一致之處提出警告。
+Doctor 是「安全且穩定」的指令。它會修復服務、套用設定遷移，並對不一致之處提出警告。 It repairs services, applies config migrations, and warns about mismatches.
 
-接著執行：
+然後：
 
 ```bash
 openclaw gateway restart
@@ -145,7 +138,7 @@ openclaw status
 
 - 設定變更未生效
 - 頻道遺失／被登出
-- 工作階段歷史為空
+- empty session history
 
 修正方式：使用**相同**的 profile／狀態目錄來執行您已遷移的 Gateway 閘道器，然後重新執行：
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### 踩雷：只複製 `openclaw.json`
 
-僅有 `openclaw.json` 並不足夠。許多提供者會將狀態儲存在以下位置：
+僅有 `openclaw.json` 並不足夠。許多提供者會將狀態儲存在以下位置： Many providers store state under:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -164,24 +157,24 @@ openclaw doctor
 
 ### 踩雷：權限／擁有權
 
-若您以 root 複製或更換了使用者，Gateway 閘道器 可能無法讀取憑證或工作階段。
+If you copied as root or changed users, the gateway may fail to read credentials/sessions.
 
-修正方式：確認狀態目錄與工作區的擁有者為執行 Gateway 閘道器 的使用者。
+Fix: ensure the state dir + workspace are owned by the user running the gateway.
 
 ### 踩雷：在遠端／本機模式之間遷移
 
-- 若您的 UI（WebUI／TUI）指向 **遠端** Gateway 閘道器，則工作階段儲存與工作區屬於遠端主機。
+- If your UI (WebUI/TUI) points at a **remote** gateway, the remote host owns the session store + workspace.
 - 遷移您的筆電並不會移動遠端 Gateway 閘道器 的狀態。
 
 若您處於遠端模式，請遷移 **閘道器主機**。
 
 ### 踩雷：備份中的機密資料
 
-`$OPENCLAW_STATE_DIR` 包含機密（API 金鑰、OAuth 權杖、WhatsApp 憑證）。請將備份視同正式環境的機密資料：
+`$OPENCLAW_STATE_DIR` 包含機密（API 金鑰、OAuth 權杖、WhatsApp 憑證）。請將備份視同正式環境的機密資料： Treat backups like production secrets:
 
 - 以加密方式儲存
 - 避免透過不安全的通道分享
-- 若懷疑外洩，請輪替金鑰
+- rotate keys if you suspect exposure
 
 ## 驗證檢查清單
 
@@ -189,10 +182,10 @@ openclaw doctor
 
 - `openclaw status` 顯示 Gateway 閘道器 正在執行
 - 您的頻道仍保持連線（例如 WhatsApp 不需要重新配對）
-- 儀表板可開啟並顯示既有的工作階段
+- The dashboard opens and shows existing sessions
 - 您的工作區檔案（記憶、設定）皆存在
 
-## 相關
+## Related
 
 - [Doctor](/gateway/doctor)
 - [Gateway troubleshooting](/gateway/troubleshooting)

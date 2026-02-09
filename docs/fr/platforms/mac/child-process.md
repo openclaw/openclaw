@@ -3,13 +3,6 @@ summary: "Cycle de vie de la Gateway sur macOS (launchd)"
 read_when:
   - Integration de l'application mac avec le cycle de vie de la Gateway
 title: "Cycle de vie de la Gateway"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:16Z
 ---
 
 # Cycle de vie de la Gateway sur macOS
@@ -22,7 +15,8 @@ embarque). Cela vous offre un demarrage automatique fiable a la connexion et un
 redemarrage en cas de crash.
 
 Le mode processus enfant (Gateway lancee directement par l’application) **n’est
-pas utilise** aujourd’hui. Si vous avez besoin d’un couplage plus etroit avec l’UI,
+pas utilise** aujourd’hui.
+Si vous avez besoin d’un couplage plus etroit avec l’UI,
 lancez la Gateway manuellement dans un terminal.
 
 ## Comportement par defaut (launchd)
@@ -63,8 +57,7 @@ rm ~/.openclaw/disable-launchagent
 
 Pour forcer l’application macOS a **ne jamais installer ni gerer launchd**, lancez-la
 avec `--attach-only` (ou `--no-launchd`). Cela definit `~/.openclaw/disable-launchagent`, de sorte
-que l’application ne fait que se connecter a une Gateway deja en cours d’execution.
-Vous pouvez activer le meme comportement dans les Parametres de debogage.
+que l’application ne fait que se connecter a une Gateway deja en cours d’execution. Vous pouvez activer le meme comportement dans les Parametres de debogage.
 
 ## Mode distant
 

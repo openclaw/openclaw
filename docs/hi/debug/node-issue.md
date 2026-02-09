@@ -4,13 +4,6 @@ read_when:
   - केवल Node वाले dev स्क्रिप्ट्स या watch मोड विफलताओं का डिबग करते समय
   - OpenClaw में tsx/esbuild लोडर क्रैश की जाँच करते समय
 title: "Node + tsx क्रैश"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:13Z
 ---
 
 # Node + tsx "\_\_name is not a function" क्रैश
@@ -25,7 +18,7 @@ Node के साथ OpenClaw चलाने पर `tsx` के साथ स
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-यह समस्या dev स्क्रिप्ट्स को Bun से `tsx` में स्विच करने के बाद शुरू हुई (कमिट `2871657e`, 2026-01-06)। वही रनटाइम पथ Bun के साथ काम कर रहा था।
+12. यह dev scripts को Bun से `tsx` पर स्विच करने के बाद शुरू हुआ (commit `2871657e`, 2026-01-06)। 13. वही runtime path Bun के साथ काम करता था।
 
 ## परिवेश
 
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## नोट्स / परिकल्पना
 
-- `tsx` TS/ESM को ट्रांसफ़ॉर्म करने के लिए esbuild का उपयोग करता है। esbuild का `keepNames` एक `__name` हेल्पर उत्सर्जित करता है और फ़ंक्शन परिभाषाओं को `__name(...)` के साथ रैप करता है।
+- 14. `tsx` TS/ESM को transform करने के लिए esbuild का उपयोग करता है। 15. esbuild का `keepNames` एक `__name` helper emit करता है और function definitions को `__name(...)` के साथ wrap करता है।
 - क्रैश यह दर्शाता है कि रनटाइम पर `__name` मौजूद है लेकिन फ़ंक्शन नहीं है, जिसका अर्थ है कि Node 25 लोडर पथ में इस मॉड्यूल के लिए हेल्पर गायब है या ओवरराइट हो गया है।
 - ऐसे ही `__name` हेल्पर से जुड़े मुद्दे अन्य esbuild उपभोक्ताओं में भी रिपोर्ट हुए हैं, जब हेल्पर गायब हो जाता है या पुनर्लेखित हो जाता है।
 
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## वैकल्पिक उपाय
 
 - dev स्क्रिप्ट्स के लिए Bun का उपयोग करें (वर्तमान अस्थायी रिवर्ट)।
+
 - Node + tsc watch का उपयोग करें, फिर संकलित आउटपुट चलाएँ:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - स्थानीय रूप से पुष्टि की गई: Node 25 पर `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` काम करता है।
+
 - यदि संभव हो तो TS लोडर में esbuild keepNames को अक्षम करें (यह `__name` हेल्पर के सम्मिलन को रोकता है); tsx वर्तमान में इसे एक्सपोज़ नहीं करता।
+
 - Node LTS (22/24) को `tsx` के साथ परीक्षण करें ताकि पता चले कि यह समस्या केवल Node 25 तक सीमित है या नहीं।
 
 ## संदर्भ

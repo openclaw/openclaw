@@ -4,24 +4,16 @@ read_when:
   - Du vill använda OpenAI-modeller i OpenClaw
   - Du vill använda Codex-prenumerationsautentisering i stället för API-nycklar
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:10Z
 ---
 
 # OpenAI
 
-OpenAI tillhandahåller utvecklar-API:er för GPT-modeller. Codex stöder **ChatGPT-inloggning** för
-prenumerationsåtkomst eller **API-nyckel**-inloggning för användningsbaserad åtkomst. Codex Cloud
-kräver ChatGPT-inloggning.
+OpenAI tillhandahåller utvecklarAPI:er för GPT-modeller. Codex stöder **ChatGPT-inloggning** för prenumerations-
+åtkomst eller **API-nyckel** inloggning för användarbaserad åtkomst. Codex moln kräver ChatGPT inloggning.
 
 ## Alternativ A: OpenAI API-nyckel (OpenAI Platform)
 
-**Bäst för:** direkt API-åtkomst och användningsbaserad debitering.
+**Bäst för:** direkt API-åtkomst och användarbaserad fakturering.
 Hämta din API-nyckel från OpenAI-instrumentpanelen.
 
 ### CLI-konfigurering
@@ -43,8 +35,8 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 ## Alternativ B: OpenAI Code (Codex)-prenumeration
 
-**Bäst för:** att använda ChatGPT/Codex-prenumerationsåtkomst i stället för en API-nyckel.
-Codex Cloud kräver ChatGPT-inloggning, medan Codex CLI stöder ChatGPT- eller API-nyckel-inloggning.
+**Bäst för:** med prenumerationsåtkomst för ChatGPT/Codex istället för en API-nyckel.
+Codex cloud kräver ChatGPT inloggning, medan Codex CLI stöder ChatGPT eller API-nyckel inloggning.
 
 ### CLI-konfigurering (Codex OAuth)
 

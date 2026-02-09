@@ -4,19 +4,12 @@ read_when:
   - Paggamit o pag-configure ng mga chat command
   - Pag-debug ng routing o mga pahintulot ng command
 title: "Slash Commands"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:20Z
 ---
 
 # Slash commands
 
-Ang mga command ay hinahawakan ng Gateway. Karamihan sa mga command ay dapat ipadala bilang **standalone** na mensahe na nagsisimula sa `/`.
-Ginagamit ng host-only na bash chat command ang `! <cmd>` (na may `/bash <cmd>` bilang alias).
+Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
+The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
 May dalawang magkakaugnay na sistema:
 
@@ -25,11 +18,11 @@ May dalawang magkakaugnay na sistema:
   - Tinatanggal ang mga directive mula sa mensahe bago ito makita ng model.
   - Sa normal na mga chat message (hindi directive-only), itinuturing silang “inline hints” at **hindi** nagpapanatili ng mga setting ng session.
   - Sa directive-only na mga mensahe (ang mensahe ay naglalaman lamang ng mga directive), nagpapanatili sila sa session at nagre-reply ng isang acknowledgement.
-  - Ang mga directive ay ina-apply lamang para sa **awtorisadong mga sender** (channel allowlists/pairing kasama ang `commands.useAccessGroups`).
-    Ang mga hindi awtorisadong sender ay makakakita ng mga directive na itinuturing bilang plain text.
+  - Directives are only applied for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+    Unauthorized senders see directives treated as plain text.
 
-Mayroon ding ilang **inline shortcuts** (allowlisted/awtorisadong sender lamang): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
-Agad silang tumatakbo, tinatanggal bago makita ng model ang mensahe, at ang natitirang teksto ay nagpapatuloy sa normal na daloy.
+There are also a few **inline shortcuts** (allowlisted/authorized senders only): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
+They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
 
 ## Config
 
@@ -54,11 +47,11 @@ Agad silang tumatakbo, tinatanggal bago makita ng model ang mensahe, at ang nati
 - `commands.native` (default `"auto"`) ay nagrerehistro ng mga native command.
   - Auto: naka-on para sa Discord/Telegram; naka-off para sa Slack (hanggang magdagdag ka ng slash commands); hindi pinapansin para sa mga provider na walang native support.
   - Itakda ang `channels.discord.commands.native`, `channels.telegram.commands.native`, o `channels.slack.commands.native` para i-override kada provider (bool o `"auto"`).
-  - Nililinis ng `false` ang mga naunang nairehistrong command sa Discord/Telegram sa startup. Ang mga Slack command ay pinamamahalaan sa Slack app at hindi awtomatikong inaalis.
+  - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
 - `commands.nativeSkills` (default `"auto"`) ay nagrerehistro ng mga **skill** command nang native kapag sinusuportahan.
   - Auto: naka-on para sa Discord/Telegram; naka-off para sa Slack (kinakailangan ng Slack ang paggawa ng isang slash command kada skill).
   - Itakda ang `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, o `channels.slack.commands.nativeSkills` para i-override kada provider (bool o `"auto"`).
-- `commands.bash` (default `false`) ay nag-e-enable sa `! <cmd>` na magpatakbo ng mga host shell command (`/bash <cmd>` ay isang alias; nangangailangan ng `tools.elevated` allowlists).
+- `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (default `2000`) ay kumokontrol kung gaano katagal maghihintay ang bash bago lumipat sa background mode (`0` ay agad na nagba-background).
 - `commands.config` (default `false`) ay nag-e-enable sa `/config` (nagbabasa/nagsusulat ng `openclaw.json`).
 - `commands.debug` (default `false`) ay nag-e-enable sa `/debug` (runtime-only na mga override).
@@ -97,12 +90,12 @@ Text + native (kapag naka-enable):
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (magpadala ng `/exec` para ipakita ang kasalukuyan)
 - `/model <name>` (alias: `/models`; o `/<alias>` mula sa `agents.defaults.models.*.alias`)
 - `/queue <mode>` (kasama ang mga opsyon tulad ng `debounce:2s cap:25 drop:summarize`; magpadala ng `/queue` para makita ang kasalukuyang mga setting)
-- `/bash <command>` (host-only; alias para sa `! <command>`; nangangailangan ng `commands.bash: true` + `tools.elevated` allowlists)
+- `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
 
 Text-only:
 
 - `/compact [instructions]` (tingnan ang [/concepts/compaction](/concepts/compaction))
-- `! <command>` (host-only; isa-isa; gamitin ang `!poll` + `!stop` para sa mga long-running na job)
+- `! <command>` (host-only; one at a time; use `!poll` + `!stop` for long-running jobs)
 - `!poll` (suriin ang output / status; tumatanggap ng opsyonal na `sessionId`; gumagana rin ang `/bash poll`)
 - `!stop` (ihinto ang tumatakbong bash job; tumatanggap ng opsyonal na `sessionId`; gumagana rin ang `/bash stop`)
 
@@ -115,19 +108,19 @@ Mga tala:
 - Kinokontrol ng `/usage` ang per-response na usage footer; ang `/usage cost` ay nagpi-print ng lokal na cost summary mula sa mga log ng OpenClaw session.
 - Ang `/restart` ay naka-disable bilang default; itakda ang `commands.restart: true` para i-enable ito.
 - Ang `/verbose` ay para sa pag-debug at dagdag na visibility; panatilihing **off** sa normal na paggamit.
-- Ang `/reasoning` (at `/verbose`) ay delikado sa mga group setting: maaari nilang ilantad ang internal reasoning o tool output na hindi mo balak ilabas. Mas mainam na iwanan silang naka-off, lalo na sa mga group chat.
+- `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** ang mga command-only na mensahe mula sa allowlisted na sender ay hinahawakan agad (nilalampasan ang queue + model).
 - **Group mention gating:** ang mga command-only na mensahe mula sa allowlisted na sender ay nilalampasan ang mga kinakailangan sa mention.
 - **Inline shortcuts (allowlisted sender lamang):** ang ilang command ay gumagana rin kapag naka-embed sa isang normal na mensahe at tinatanggal bago makita ng model ang natitirang teksto.
   - Halimbawa: ang `hey /status` ay nagti-trigger ng status reply, at ang natitirang teksto ay nagpapatuloy sa normal na daloy.
 - Sa kasalukuyan: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 - Ang mga hindi awtorisadong command-only na mensahe ay tahimik na binabalewala, at ang mga inline `/...` token ay itinuturing bilang plain text.
-- **Skill commands:** ang mga `user-invocable` na skill ay inilalantad bilang slash commands. Nililinis ang mga pangalan sa `a-z0-9_` (max 32 chars); ang mga banggaan ay binibigyan ng numeric na suffix (hal. `_2`).
+- **Skill commands:** `user-invocable` skills are exposed as slash commands. Names are sanitized to `a-z0-9_` (max 32 chars); collisions get numeric suffixes (e.g. `_2`).
   - Pinapatakbo ng `/skill <name> [input]` ang isang skill ayon sa pangalan (kapaki-pakinabang kapag ang mga limitasyon ng native command ay pumipigil sa per-skill na mga command).
   - Bilang default, ang mga skill command ay ipinapasa sa model bilang isang normal na request.
   - Maaaring opsyonal na magdeklara ang mga Skill ng `command-dispatch: tool` upang i-route ang command direkta sa isang tool (deterministic, walang model).
   - Halimbawa: `/prose` (OpenProse plugin) — tingnan ang [OpenProse](/prose).
-- **Native command arguments:** gumagamit ang Discord ng autocomplete para sa mga dynamic na opsyon (at mga button menu kapag tinanggal mo ang kinakailangang arg). Ang Telegram at Slack ay nagpapakita ng button menu kapag ang isang command ay sumusuporta sa mga pagpipilian at tinanggal mo ang arg.
+- Ipinapakita ng Telegram at Slack ang isang button menu kapag ang isang command ay may suportadong mga pagpipilian at inalis mo ang arg. Telegram and Slack show a button menu when a command supports choices and you omit the arg.
 
 ## Usage surfaces (ano ang lumalabas saan)
 
@@ -158,7 +151,7 @@ Mga tala:
 
 ## Debug overrides
 
-Pinapahintulutan ng `/debug` ang pagtatakda ng **runtime-only** na mga config override (memory, hindi disk). Owner-only. Naka-disable bilang default; i-enable gamit ang `commands.debug: true`.
+`/debug` lets you set **runtime-only** config overrides (memory, not disk). Naka-disable bilang default; paganahin gamit ang `commands.debug: true`. Ang `/config` ay nagsusulat sa iyong on-disk config (`openclaw.json`).
 
 Mga halimbawa:
 
@@ -177,7 +170,7 @@ Mga tala:
 
 ## Config updates
 
-Ang `/config` ay nagsusulat sa iyong on-disk na config (`openclaw.json`). Owner-only. Naka-disable bilang default; i-enable gamit ang `commands.config: true`.
+Owner-only. Naka-disable bilang default; paganahin gamit ang `commands.config: true`. **Slack:** Ang `channels.slack.slashCommand` ay suportado pa rin para sa iisang `/openclaw`-style na command.
 
 Mga halimbawa:
 
@@ -202,4 +195,4 @@ Mga tala:
   - Slack: `agent:<agentId>:slack:slash:<userId>` (ang prefix ay configurable sa pamamagitan ng `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (tinutumbok ang chat session sa pamamagitan ng `CommandTargetSessionKey`)
 - Ang **`/stop`** ay tumutumbok sa aktibong chat session upang ma-abort nito ang kasalukuyang run.
-- **Slack:** sinusuportahan pa rin ang `channels.slack.slashCommand` para sa iisang `/openclaw`-style na command. Kung i-enable mo ang `commands.native`, kailangan mong gumawa ng isang Slack slash command kada built-in na command (parehong mga pangalan gaya ng `/help`). Ang mga command argument menu para sa Slack ay inihahatid bilang ephemeral na Block Kit buttons.
+- **Slack:** `channels.slack.slashCommand` is still supported for a single `/openclaw`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Ang mga sub-agent ay mga background agent run na nililikha mula sa isang umiiral na agent run.

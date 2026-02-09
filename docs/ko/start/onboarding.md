@@ -5,13 +5,6 @@ read_when:
   - 인증 또는 아이덴티티 설정 구현 시
 title: "온보딩 (macOS 앱)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:22Z
 ---
 
 # 온보딩 (macOS 앱)
@@ -19,22 +12,22 @@ x-i18n:
 이 문서는 **현재**의 최초 실행 온보딩 흐름을 설명합니다. 목표는 매끄러운 'day 0' 경험입니다. 즉, Gateway(게이트웨이)가 실행될 위치를 선택하고, 인증을 연결하며, 마법사를 실행하고, 에이전트가 스스로 부트스트랩하도록 하는 것입니다.
 
 <Steps>
-<Step title="macOS 경고 승인">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="로컬 네트워크 찾기 승인">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="환영 및 보안 안내">
+<Step title="Welcome and security notice">
 <Frame caption="표시되는 보안 안내를 읽고 그에 따라 결정하십시오">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="로컬 vs 원격">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -52,7 +45,7 @@ x-i18n:
 - 다중 머신 접근 또는 non‑loopback 바인딩에는 **토큰**을 사용하십시오.
 </Tip>
 </Step>
-<Step title="권한">
+<Step title="Permissions">
 <Frame caption="OpenClaw 에 부여할 권한을 선택하십시오">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -61,7 +54,7 @@ x-i18n:
 
 - 자동화 (AppleScript)
 - 알림
-- 손쉬운 사용
+- 접근성
 - 화면 기록
 - 마이크
 - 음성 인식
@@ -73,7 +66,7 @@ x-i18n:
   <Info>이 단계는 선택 사항입니다</Info>
   앱은 npm/pnpm 을 통해 전역 `openclaw` CLI 를 설치할 수 있으므로, 터미널 워크플로와 launchd 작업이 즉시 동작합니다.
 </Step>
-<Step title="온보딩 채팅 (전용 세션)">
+<Step title="Onboarding Chat (dedicated session)">
   설정이 완료되면 앱은 전용 온보딩 채팅 세션을 열어 에이전트가 자신을 소개하고 다음 단계를 안내하도록 합니다. 이는 최초 실행 가이드를 일반 대화와 분리합니다. 첫 번째 에이전트 실행 동안 게이트웨이 호스트에서 발생하는 작업에 대해서는 [Bootstrapping](/start/bootstrapping)을 참고하십시오.
 </Step>
 </Steps>

@@ -5,29 +5,22 @@ read_when:
   - Kapag nagse-setup ng bagong makina
 title: "Onboarding Wizard (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:01Z
 ---
 
 # Onboarding Wizard (CLI)
 
-Ang onboarding wizard ang **inirerekomendang** paraan para i-set up ang OpenClaw sa macOS,
-Linux, o Windows (via WSL2; lubos na inirerekomenda).
-Kino-configure nito ang lokal na Gateway o isang remote Gateway connection, pati ang mga channel, skills,
-at mga default ng workspace sa isang ginabayang daloy.
+The onboarding wizard is the **recommended** way to set up OpenClaw on macOS,
+Linux, or Windows (via WSL2; strongly recommended).
+It configures a local Gateway or a remote Gateway connection, plus channels, skills,
+and workspace defaults in one guided flow.
 
 ```bash
 openclaw onboard
 ```
 
 <Info>
-Pinakamabilis na unang chat: buksan ang Control UI (hindi kailangan ng channel setup). Patakbuhin ang
-`openclaw dashboard` at makipag-chat sa browser. Docs: [Dashboard](/web/dashboard).
+Fastest first chat: open the Control UI (no channel setup needed). Run
+`openclaw dashboard` and chat in the browser. Docs: [Dashboard](/web/dashboard).
 </Info>
 
 Para mag-reconfigure sa ibang pagkakataon:
@@ -38,13 +31,13 @@ openclaw agents add <name>
 ```
 
 <Note>
-Hindi ibig sabihin ng `--json` ay non-interactive mode. Para sa mga script, gamitin ang `--non-interactive`.
+`--json` does not imply non-interactive mode. For scripts, use `--non-interactive`.
 </Note>
 
 <Tip>
-Inirerekomenda: mag-set up ng Brave Search API key para magamit ng agent ang `web_search`
-(`web_fetch` ay gumagana kahit walang key). Pinakamadaling paraan: `openclaw configure --section web`
-na nag-i-store ng `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
+Recommended: set up a Brave Search API key so the agent can use `web_search`
+(`web_fetch` works without a key). 1. Pinakamadaling paraan: `openclaw configure --section web`
+na nag-iimbak ng `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## QuickStart vs Advanced
@@ -69,8 +62,8 @@ Nagsisimula ang wizard sa **QuickStart** (mga default) kumpara sa **Advanced** (
 
 **Local mode (default)** ay ginagabayan ka sa mga hakbang na ito:
 
-1. **Model/Auth** — Anthropic API key (inirerekomenda), OAuth, OpenAI, o iba pang provider. Pumili ng default na model.
-2. **Workspace** — Lokasyon para sa mga agent file (default `~/.openclaw/workspace`). Nagse-seed ng mga bootstrap file.
+1. 3. **Model/Auth** — Anthropic API key (inirerekomenda), OAuth, OpenAI, o iba pang provider. 4. Pumili ng default na modelo.
+2. 5. **Workspace** — Lokasyon para sa mga agent file (default `~/.openclaw/workspace`). 14. Nagsi-seed ng mga bootstrap file.
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
 4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, o iMessage.
 5. **Daemon** — Nag-i-install ng LaunchAgent (macOS) o systemd user unit (Linux/WSL2).
@@ -78,17 +71,16 @@ Nagsisimula ang wizard sa **QuickStart** (mga default) kumpara sa **Advanced** (
 7. **Skills** — Nag-i-install ng mga inirerekomendang skills at mga opsyonal na dependency.
 
 <Note>
-Ang muling pagpapatakbo ng wizard ay **hindi** nagbubura ng anuman maliban kung tahasan mong piliin ang **Reset** (o ipasa ang `--reset`).
-Kung invalid ang config o may mga legacy key, hihilingin ng wizard na patakbuhin mo muna ang `openclaw doctor`.
+15. Ang muling pagpapatakbo ng wizard ay **hindi** nagbubura ng anuman maliban kung tahasan mong piliin ang **Reset** (o ipasa ang `--reset`).
+8. Kung hindi wasto ang config o may mga legacy key, hihilingin ng wizard na patakbuhin mo muna ang `openclaw doctor`.
 </Note>
 
-Ang **Remote mode** ay kino-configure lamang ang lokal na client para kumonekta sa isang Gateway sa ibang lugar.
-**Hindi** ito nag-i-install o nagbabago ng anuman sa remote host.
+9. **Remote mode** ay kino-configure lamang ang lokal na client para kumonekta sa isang Gateway sa ibang lugar.
+10. **Hindi** ito nag-i-install o nagbabago ng anuman sa remote host.
 
 ## Magdagdag ng isa pang agent
 
-Gamitin ang `openclaw agents add <name>` para lumikha ng hiwalay na agent na may sarili nitong workspace,
-mga session, at auth profile. Ang pagpapatakbo nang walang `--workspace` ay maglulunsad ng wizard.
+11. Gamitin ang `openclaw agents add <name>` para lumikha ng hiwalay na agent na may sariling workspace, mga session, at auth profile. 12. Ang pagpapatakbo nang walang `--workspace` ay naglulunsad ng wizard.
 
 Ano ang itinatakda nito:
 

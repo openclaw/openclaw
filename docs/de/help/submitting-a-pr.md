@@ -1,13 +1,6 @@
 ---
-summary: „So reichen Sie einen PR mit hoher Aussagekraft ein“
-title: „Einen PR einreichen“
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:27Z
+summary: "Wie man eine hohe PR sendet"
+title: "PR einreichen"
 ---
 
 Gute PRs sind leicht zu prüfen: Reviewer sollten die Absicht schnell verstehen, das Verhalten verifizieren und Änderungen sicher zusammenführen können. Dieser Leitfaden behandelt prägnante PRs mit hoher Aussagekraft für menschliche und LLM‑Reviews.
@@ -63,7 +56,7 @@ Seien Sie prägnant; prägnante Reviews > Grammatik. Lassen Sie nicht zutreffend
 - [ ] Tests und Ergebnisse aufgelistet
 - [ ] Manuelle Testschritte (falls zutreffend)
 - [ ] Keine Geheimnisse/privaten Daten
-- [ ] Belegbasiert
+- [ ] Evidenzbasiert
 
 ## Allgemeine PR‑Vorlage
 

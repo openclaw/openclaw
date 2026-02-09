@@ -4,13 +4,6 @@ read_when:
   - Quiere editar aprobaciones de ejecución desde la CLI
   - Necesita administrar listas de permitidos en hosts del Gateway o de nodo
 title: "aprobaciones"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:47Z
 ---
 
 # `openclaw approvals`

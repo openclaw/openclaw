@@ -3,13 +3,6 @@ summary: "mac 앱의 음성 웨이크 및 푸시 투 토크 모드와 라우팅 
 read_when:
   - 음성 웨이크 또는 PTT 경로를 작업할 때
 title: "음성 웨이크"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:57Z
 ---
 
 # 음성 웨이크 & 푸시 투 토크
@@ -43,7 +36,7 @@ x-i18n:
 - 웨이크 런타임 재시작은 더 이상 오버레이 가시성에 의해 차단되지 않습니다.
 - 오버레이 닫기 완료 시 `VoiceSessionCoordinator`를 통해 `VoiceWakeRuntime.refresh(...)`가 트리거되므로, X 버튼으로 수동 닫기를 해도 항상 청취가 재개됩니다.
 
-## 푸시 투 토크 세부 사항
+## 37. 푸시 투 토크 세부 사항
 
 - 핫키 감지는 **오른쪽 Option**(`keyCode 61` + `.option`)에 대해 전역 `.flagsChanged` 모니터를 사용합니다. 이벤트는 관찰만 하며 가로채지 않습니다.
 - 캡처 파이프라인은 `VoicePushToTalk`에 위치합니다. 즉시 음성 인식을 시작하고 부분 결과를 오버레이로 스트리밍하며, 해제 시 `VoiceWakeForwarder`를 호출합니다.

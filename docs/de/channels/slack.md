@@ -1,14 +1,7 @@
 ---
-summary: „Slack-Einrichtung für Socket- oder HTTP-Webhook-Modus“
-read_when: „Einrichtung von Slack oder Debugging des Slack-Socket-/HTTP-Modus“
-title: „Slack“
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:54Z
+summary: "„Slack-Einrichtung für Socket- oder HTTP-Webhook-Modus“"
+read_when: "„Einrichtung von Slack oder Debugging des Slack-Socket-/HTTP-Modus“"
+title: "Slack"
 ---
 
 # Slack
@@ -384,11 +377,11 @@ Ack-Reaktion zu entfernen, nachdem der Bot geantwortet hat.
 
 Standardmäßig antwortet OpenClaw im Hauptkanal. Verwenden Sie `channels.slack.replyToMode`, um automatisches Threading zu steuern:
 
-| Modus   | Verhalten                                                                                                                                                                                    |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Standard.** Antwort im Hauptkanal. Thread nur, wenn die auslösende Nachricht bereits in einem Thread war.                                                                                  |
+| Modus   | Verhalten                                                                                                                                                                                                                                       |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **Standard.** Antwort im Hauptkanal. Thread nur, wenn die auslösende Nachricht bereits in einem Thread war.                                                                                     |
 | `first` | Erste Antwort geht in den Thread (unter der auslösenden Nachricht), nachfolgende Antworten gehen in den Hauptkanal. Nützlich, um Kontext sichtbar zu halten und Thread-Clutter zu vermeiden. |
-| `all`   | Alle Antworten gehen in den Thread. Hält Unterhaltungen zusammen, kann aber die Sichtbarkeit reduzieren.                                                                                     |
+| `all`   | Alle Antworten gehen in den Thread. Hält Unterhaltungen zusammen, kann aber die Sichtbarkeit reduzieren.                                                                                                        |
 
 Der Modus gilt sowohl für Auto-Antworten als auch für Agenten-Werkzeugaufrufe (`slack sendMessage`).
 
@@ -513,7 +506,7 @@ Kanaloptionen (`channels.slack.channels.<id>` oder `channels.slack.channels.<nam
 - `systemPrompt`: zusätzlicher System-Prompt für den Kanal (kombiniert mit Thema/Zweck).
 - `enabled`: setzen Sie `false`, um den Kanal zu deaktivieren.
 
-## Zustellziele
+## Lieferziele
 
 Verwenden Sie diese für Cron-/CLI-Sendungen:
 

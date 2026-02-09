@@ -4,19 +4,12 @@ read_when:
   - Gusto mong pumili ng provider ng model
   - Gusto mo ng mga halimbawa ng mabilis na setup para sa LLM auth + pagpili ng model
 title: "Mabilis na Pagsisimula ng Model Provider"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # Mga Provider ng Model
 
-Maaaring gumamit ang OpenClaw ng maraming LLM provider. Pumili ng isa, mag-authenticate, at pagkatapos ay itakda ang default
-model bilang `provider/model`.
+OpenClaw can use many LLM providers. Pick one, authenticate, then set the default
+model as `provider/model`.
 
 ## Highlight: Venice (Venice AI)
 
@@ -55,5 +48,5 @@ Tingnan ang [Venice AI](/providers/venice).
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-Para sa kumpletong catalog ng provider (xAI, Groq, Mistral, atbp.) at advanced na konpigurasyon,
-tingnan ang [Mga provider ng model](/concepts/model-providers).
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

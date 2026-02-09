@@ -3,13 +3,6 @@ summary: "チャンネル、ルーティング、メディア、UX にわたる 
 read_when:
   - OpenClaw がサポートする内容の全一覧を確認したい場合
 title: "機能"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:22Z
 ---
 
 ## Highlights
@@ -25,7 +18,7 @@ x-i18n:
     分離されたセッションによるマルチエージェントルーティング。
   </Card>
   <Card title="Media" icon="image">
-    画像、音声、ドキュメントの送受信に対応します。
+    画像、音声、ドキュメントの入出力。
   </Card>
   <Card title="Apps and UI" icon="monitor">
     Web Control UI と macOS コンパニオンアプリ。
@@ -55,6 +48,8 @@ x-i18n:
 - ペアリング、Canvas、チャット、カメラを備えた Android ノード
 
 <Note>
+従来のクロード、コーデックス、Gemini、および Opencode パスが削除されました。 
 従来の Claude、Codex、Gemini、Opencode のパスは削除されています。Pi が唯一の
 コーディングエージェントパスです。
+
 </Note>

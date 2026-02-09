@@ -1,16 +1,9 @@
 ---
 summary: "مهام LLM بخرج JSON فقط لسير العمل (أداة إضافة اختيارية)"
 read_when:
-  - "تريد خطوة LLM بخرج JSON فقط داخل سير العمل"
-  - "تحتاج إلى خرج LLM مُتحقَّق منه بالمخطط لأغراض الأتمتة"
+  - تريد خطوة LLM بخرج JSON فقط داخل سير العمل
+  - تحتاج إلى خرج LLM مُتحقَّق منه بالمخطط لأغراض الأتمتة
 title: "مهمة LLM"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:45Z
 ---
 
 # مهمة LLM
@@ -75,7 +68,7 @@ x-i18n:
 `allowedModels` هي قائمة سماح لسلاسل `provider/model`. عند ضبطها، يُرفَض أي طلب
 خارج القائمة.
 
-## معاملات الأداة
+## Tool parameters
 
 - `prompt` (سلسلة، مطلوب)
 - `input` (أيّ نوع، اختياري)

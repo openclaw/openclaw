@@ -5,13 +5,6 @@ read_when:
   - LM Studio 또는 OpenAI 호환 프록시를 연결하는 경우
   - 가장 안전한 로컬 모델 가이던스가 필요한 경우
 title: "로컬 모델"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:07Z
 ---
 
 # 로컬 모델
@@ -152,6 +145,6 @@ vLLM, LiteLLM, OAI-proxy 또는 사용자 지정 게이트웨이는 OpenAI 스�
 ## 문제 해결
 
 - Gateway(게이트웨이) 가 프록시에 도달합니까? `curl http://127.0.0.1:1234/v1/models`.
-- LM Studio 모델이 언로드되었습니까? 다시 로드하십시오. 콜드 스타트는 흔한 '멈춤' 원인입니다.
+- LM Studio 모델이 언로드되었습니까? Reload; cold start is a common “hanging” cause.
 - 컨텍스트 오류가 발생합니까? `contextWindow` 을 낮추거나 서버 한도를 높이십시오.
 - 안전성: 로컬 모델은 프로바이더 측 필터를 건너뜁니다. 에이전트를 좁게 유지하고 컴팩션을 켜서 프롬프트 인젝션의 영향 범위를 제한하십시오.

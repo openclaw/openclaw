@@ -5,13 +5,6 @@ read_when:
   - Implémentation du runner de nœud + IPC UI
   - Ajout des modes de sécurité de l’hôte d’exécution et des commandes slash
 title: "Refactorisation de l’hôte d’exécution"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:52Z
 ---
 
 # Plan de refactorisation de l’hôte d’exécution
@@ -82,7 +75,7 @@ Ask est **indépendant** de l’allowlist ; l’allowlist peut être utilisée 
 
 ## Surface de configuration
 
-### Paramètres d’outil
+### Paramètres de l'outil
 
 - `exec.host` (optionnel) : `sandbox | gateway | node`.
 - `exec.security` (optionnel) : `deny | allowlist | full`.
@@ -248,7 +241,7 @@ Option B :
 - Le processus gateway s’exécute sur sa propre machine.
 - Applique `exec-approvals.json` local (sécurité/ask/allowlist).
 
-### Hôte nœud
+### Hôte du noeud
 
 - Le gateway appelle `node.invoke` avec `system.run`.
 - Le runner applique les approbations locales.

@@ -3,13 +3,6 @@ title: CLI Sandbox
 summary: "Zarządzanie kontenerami sandbox oraz inspekcja efektywnej polityki sandbox"
 read_when: "Gdy zarządzasz kontenerami sandbox lub debugujesz zachowanie sandbox/polityki narzędzi."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:04Z
 ---
 
 # CLI Sandbox

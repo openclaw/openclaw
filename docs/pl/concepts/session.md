@@ -3,13 +3,6 @@ summary: "Zasady zarządzania sesjami, klucze i trwałość dla czatów"
 read_when:
   - Modyfikowanie obsługi sesji lub przechowywania
 title: "Zarządzanie sesjami"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:33Z
 ---
 
 # Zarządzanie sesjami

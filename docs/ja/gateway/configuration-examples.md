@@ -5,22 +5,15 @@ read_when:
   - 設定例を探しているとき
   - OpenClaw を初めてセットアップするとき
 title: "設定例"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:45Z
 ---
 
 # 設定例
 
-以下の例は、現在の設定スキーマに準拠しています。網羅的なリファレンスや各フィールドの注記については、[Configuration](/gateway/configuration) を参照してください。
+以下の例は現在の設定スキーマと整列しています。 以下の例は、現在の設定スキーマに準拠しています。網羅的なリファレンスや各フィールドの注記については、[Configuration](/gateway/configuration) を参照してください。
 
 ## クイックスタート
 
-### 最小構成
+### 絶対最小値
 
 ```json5
 {
@@ -55,7 +48,7 @@ x-i18n:
 
 ## 拡張例（主要オプション）
 
-> JSON5 ではコメントや末尾のカンマを使用できます。通常の JSON でも動作します。
+> JSON5 ではコメントや末尾のカンマを使用できます。通常の JSON でも動作します。 通常の JSON も動作します。
 
 ```json5
 {
@@ -608,6 +601,6 @@ x-i18n:
 ## ヒント
 
 - `dmPolicy: "open"` を設定した場合、対応する `allowFrom` のリストには `"*"` を含める必要があります。
-- プロバイダー ID は異なります（電話番号、ユーザー ID、チャンネル ID など）。形式は各プロバイダーのドキュメントで確認してください。
+- プロバイダーIDが異なります (電話番号、ユーザーID、チャンネルID)。 プロバイダドキュメントを使用してフォーマットを確認します。
 - 後から追加できるオプションのセクション: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`。
 - 詳細なセットアップの注記については、[Providers](/channels/whatsapp) および [Troubleshooting](/gateway/troubleshooting) を参照してください。

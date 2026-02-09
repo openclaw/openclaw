@@ -5,13 +5,6 @@ read_when:
   - Вы хотите развернуть систему на облачной платформе
   - Вам нужно обновить, мигрировать или удалить установку
 title: "Установка"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:46Z
 ---
 
 # Установка
@@ -35,9 +28,10 @@ x-i18n:
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="Скрипт-установщик" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     Загружает CLI, устанавливает его глобально через npm и запускает мастер первичной настройки.
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ x-i18n:
         ```
       </Tab>
     </Tabs>
-
+    
     Готово — скрипт выполняет обнаружение Node, установку и первичную настройку.
-
+    
     Чтобы пропустить первичную настройку и просто установить бинарный файл:
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ x-i18n:
         ```
       </Tab>
     </Tabs>
-
+    
     Все флаги, переменные окружения и варианты для CI/автоматизации см. в разделе [Внутреннее устройство установщика](/install/installer).
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     Если у вас уже есть Node 22+ и вы предпочитаете управлять установкой самостоятельно:
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="Ошибки сборки sharp?">
           Если у вас глобально установлен libvips (часто на macOS через Homebrew) и `sharp` завершается с ошибкой, принудительно используйте предварительно собранные бинарные файлы:
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           Если вы видите `sharp: Please add node-gyp to your dependencies`, установите инструменты сборки (macOS: Xcode CLT + `npm install -g node-gyp`) или используйте указанную выше переменную окружения.
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ x-i18n:
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm требует явного подтверждения для пакетов со скриптами сборки. После того как первая установка покажет предупреждение «Ignored build scripts», выполните `pnpm approve-builds -g` и выберите перечисленные пакеты.
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="Из исходников" icon="github">
+  <Accordion title="From source" icon="github">
     Для контрибьюторов или тех, кто хочет запускать из локального репозитория.
 
+    ```
     <Steps>
       <Step title="Клонировать и собрать">
         Клонируйте [репозиторий OpenClaw](https://github.com/openclaw/openclaw) и выполните сборку:
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ x-i18n:
       </Step>
       <Step title="Подключить CLI">
         Сделайте команду `openclaw` доступной глобально:
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         Либо пропустите связывание и запускайте команды через `pnpm openclaw ...` изнутри репозитория.
       </Step>
       <Step title="Запустить первичную настройку">
@@ -137,8 +135,9 @@ x-i18n:
         ```
       </Step>
     </Steps>
-
+    
     Для более глубоких рабочих процессов разработки см. раздел [Настройка](/start/setup).
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## Устранение неполадок: `openclaw` не найден
 
-<Accordion title="Диагностика и исправление PATH">
+<Accordion title="PATH diagnosis and fix">
   Быстрая диагностика:
 
 ```bash
@@ -192,19 +191,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 В Windows добавьте вывод команды `npm prefix -g` в PATH.
 
-Затем откройте новый терминал (или выполните `rehash` в zsh / `hash -r` в bash).
-</Accordion>
+Затем откройте новый терминал (или выполните `rehash` в zsh / `hash -r` в bash). </Accordion>
 
 ## Обновление / удаление
 
 <CardGroup cols={3}>
-  <Card title="Обновление" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Поддерживайте OpenClaw в актуальном состоянии.
   </Card>
-  <Card title="Миграция" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     Перенос на новую машину.
   </Card>
-  <Card title="Удаление" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     Полностью удалить OpenClaw.
   </Card>
 </CardGroup>

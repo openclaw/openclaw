@@ -4,20 +4,13 @@ read_when:
   - OpenClaw 用の Zalo Personal をセットアップする場合
   - Zalo Personal のログインやメッセージフローをデバッグする場合
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:00Z
 ---
 
 # Zalo Personal（非公式）
 
-ステータス: 実験的。この統合は `zca-cli` を介して **個人の Zalo アカウント** を自動化します。
+状態: 実験的。 ステータス: 実験的。この統合は `zca-cli` を介して **個人の Zalo アカウント** を自動化します。
 
-> **警告:** これは非公式の統合であり、アカウント停止／BAN につながる可能性があります。自己責任で使用してください。
+> **警告:** これは非公式の統合であり、アカウント停止／BAN につながる可能性があります。自己責任で使用してください。 ご自身の責任においてご利用ください。
 
 ## 必要なプラグイン
 
@@ -56,7 +49,7 @@ Gateway マシンには、`PATH` に `zca` バイナリが存在する必要が�
 4. Gateway を再起動します（またはオンボーディングを完了します）。
 5. ダイレクトメッセージ（DM）のアクセスはデフォルトでペアリングです。初回接触時にペアリングコードを承認してください。
 
-## 概要
+## これは何か
 
 - 受信メッセージの受信に `zca listen` を使用します。
 - 返信（テキスト／メディア／リンク）の送信に `zca msg ...` を使用します。
@@ -64,7 +57,7 @@ Gateway マシンには、`PATH` に `zca` バイナリが存在する必要が�
 
 ## 命名
 
-チャンネル ID は `zalouser` です。**個人の Zalo ユーザーアカウント**（非公式）を自動化することを明確にするためです。将来の公式 Zalo API 統合の可能性に備え、`zalo` は予約しています。
+チャンネル ID は `zalouser` です。**個人の Zalo ユーザーアカウント**（非公式）を自動化することを明確にするためです。将来の公式 Zalo API 統合の可能性に備え、`zalo` は予約しています。 「zalo」は将来の公式Zalo API統合のために予約されています。
 
 ## ID の検索（ディレクトリ）
 
@@ -85,6 +78,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 `channels.zalouser.dmPolicy` は `pairing | allowlist | open | disabled` をサポートします（デフォルト: `pairing`）。
 `channels.zalouser.allowFrom` はユーザー ID または名前を受け付けます。ウィザードは、利用可能な場合に `zca friend find` を介して名前を ID に解決します。
+`channels.zalouser.allowFrom` はユーザーIDまたは名前を受け付けます。 利用可能な場合、ウィザードは「zca friend find」を介して名前をIDに解決します。
 
 承認方法:
 
@@ -93,7 +87,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## グループアクセス（任意）
 
-- デフォルト: `channels.zalouser.groupPolicy = "open"`（グループを許可）。未設定の場合、`channels.defaults.groupPolicy` を使用して既定値を上書きできます。
+- デフォルト: `channels.zalouser.groupPolicy = "open"`（グループを許可）。未設定の場合、`channels.defaults.groupPolicy` を使用して既定値を上書きできます。 .tools`: チャンネル上書きがない場合に使用される、チームごとのデフォルトツールポリシー上書き（`allow`/`deny`/`alsoAllow\`）。
 - 許可リストで制限するには:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups`（キーはグループ ID または名前）
@@ -119,7 +113,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## マルチアカウント
 
-アカウントは zca プロファイルにマッピングされます。例:
+アカウントは zca プロファイルにマッピングされます。例: 2026-02-08T09:22:13Z
 
 ```json5
 {

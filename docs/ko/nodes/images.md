@@ -3,13 +3,6 @@ summary: "send, Gateway(게이트웨이), 에이전트 응답을 위한 이미�
 read_when:
   - 미디어 파이프라인 또는 첨부 파일을 수정할 때
 title: "이미지 및 미디어 지원"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:34Z
 ---
 
 # Image & Media Support — 2025-12-05
@@ -55,7 +48,7 @@ WhatsApp 채널은 **Baileys Web**을 통해 실행됩니다. 이 문서는 send
 - 미디어 이해( `tools.media.*` 또는 공유 `tools.media.models`로 구성된 경우)는 템플릿 적용 전에 실행되며, `Body`에 `[Image]`, `[Audio]`, `[Video]` 블록을 삽입할 수 있습니다.
   - 오디오는 `{{Transcript}}`를 설정하고, 슬래시 명령이 계속 작동하도록 명령 파싱에 전사본을 사용합니다.
   - 비디오와 이미지 설명은 명령 파싱을 위해 캡션 텍스트를 보존합니다.
-- 기본적으로 첫 번째로 일치하는 이미지/오디오/비디오 첨부 파일만 처리됩니다. 여러 첨부 파일을 처리하려면 `tools.media.<cap>.attachments`를 설정하십시오.
+- 기본적으로 첫 번째로 일치하는 이미지/오디오/비디오 첨부 파일만 처리됩니다. 여러 첨부 파일을 처리하려면 `tools.media.<cap>11. 여러 첨부 파일을 처리하기 위한 `.attachments\`.
 
 ## 제한 및 오류
 

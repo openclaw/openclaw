@@ -1,17 +1,10 @@
 ---
 title: "建立 Skills"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:23Z
 ---
 
 # 建立自訂 Skills 🛠
 
-OpenClaw 的設計目標是易於擴充。「Skills」是為你的助理新增新功能的主要方式。
+OpenClaw is designed to be easily extensible. "Skills" are the primary way to add new capabilities to your assistant.
 
 ## 什麼是 Skill？
 
@@ -21,7 +14,7 @@ Skill 是一個目錄，內含一個 `SKILL.md` 檔案（用於向 LLM 提供指
 
 ### 1. 建立目錄
 
-Skills 會存在於你的工作區，通常位於 `~/.openclaw/workspace/skills/`。為你的 Skill 建立一個新資料夾：
+Skills 會存在於你的工作區，通常位於 `~/.openclaw/workspace/skills/`。為你的 Skill 建立一個新資料夾： Create a new folder for your skill:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
@@ -29,7 +22,7 @@ mkdir -p ~/.openclaw/workspace/skills/hello-world
 
 ### 2. 定義 `SKILL.md`
 
-在該目錄中建立一個 `SKILL.md` 檔案。此檔案使用 YAML frontmatter 作為中繼資料，並以 Markdown 撰寫指示內容。
+Create a `SKILL.md` file in that directory. 在該目錄中建立一個 `SKILL.md` 檔案。此檔案使用 YAML frontmatter 作為中繼資料，並以 Markdown 撰寫指示內容。
 
 ```markdown
 ---
@@ -48,7 +41,7 @@ When the user asks for a greeting, use the `echo` tool to say "Hello from your c
 
 ### 4. 重新整理 OpenClaw
 
-請你的代理程式「refresh skills」，或重新啟動 Gateway 閘道器。OpenClaw 會探索新的目錄並索引 `SKILL.md`。
+Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discover the new directory and index the `SKILL.md`.
 
 ## 最佳實務
 

@@ -4,18 +4,12 @@ read_when:
   - คุณต้องการใช้โมเดล Amazon Bedrock กับ OpenClaw
   - คุณต้องการตั้งค่าข้อมูลประจำตัว/ภูมิภาคของ AWS สำหรับการเรียกโมเดล
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:44Z
 ---
 
 # Amazon Bedrock
 
-OpenClaw สามารถใช้โมเดล **Amazon Bedrock** ผ่านผู้ให้บริการสตรีมมิง **Bedrock Converse** ของ pi‑ai ได้ การยืนยันตัวตนของ Bedrock ใช้ **AWS SDK default credential chain** ไม่ใช่คีย์API
+OpenClaw สามารถใช้โมเดล **Amazon Bedrock** ผ่านผู้ให้บริการสตรีมมิง **Bedrock Converse** ของ pi‑ai ได้ การยืนยันตัวตนของ Bedrock ใช้ **AWS SDK default credential chain** ไม่ใช่คีย์API 39. การยืนยันตัวตนของ Bedrock ใช้ **AWS SDK default credential chain**
+ไม่ใช่ API key
 
 ## สิ่งที่ pi‑ai รองรับ
 
@@ -26,7 +20,8 @@ OpenClaw สามารถใช้โมเดล **Amazon Bedrock** ผ่า
 
 ## การค้นหาโมเดลอัตโนมัติ
 
-หากตรวจพบข้อมูลประจำตัว AWS, OpenClaw สามารถค้นหาโมเดล Bedrock ที่รองรับ **การสตรีม** และ **เอาต์พุตข้อความ** ได้โดยอัตโนมัติ การค้นหาใช้ `bedrock:ListFoundationModels` และมีการแคช (ค่าเริ่มต้น: 1 ชั่วโมง)
+หากตรวจพบข้อมูลประจำตัว AWS, OpenClaw สามารถค้นหาโมเดล Bedrock ที่รองรับ **การสตรีม** และ **เอาต์พุตข้อความ** ได้โดยอัตโนมัติ การค้นหาใช้ `bedrock:ListFoundationModels` และมีการแคช (ค่าเริ่มต้น: 1 ชั่วโมง) 40. การค้นหาใช้
+`bedrock:ListFoundationModels` และมีการแคชไว้ (ค่าเริ่มต้น: 1 ชั่วโมง)
 
 ตัวเลือกคอนฟิกอยู่ภายใต้ `models.bedrockDiscovery`:
 
@@ -104,8 +99,10 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 ## บทบาทอินสแตนซ์ EC2
 
 เมื่อรัน OpenClaw บนอินสแตนซ์ EC2 ที่มีการแนบบทบาท IAM, AWS SDK จะใช้บริการเมทาดาทาของอินสแตนซ์ (IMDS) เพื่อยืนยันตัวตนโดยอัตโนมัติ อย่างไรก็ตาม การตรวจจับข้อมูลประจำตัวของ OpenClaw ในปัจจุบันตรวจสอบเฉพาะตัวแปรสภาพแวดล้อม ไม่ได้ตรวจสอบข้อมูลประจำตัวจาก IMDS
+41. อย่างไรก็ตาม การตรวจจับข้อมูลรับรองของ OpenClaw ในปัจจุบันตรวจสอบเฉพาะตัวแปรสภาพแวดล้อม
+ไม่ใช่ข้อมูลรับรองจาก IMDS
 
-**วิธีแก้ไขชั่วคราว:** ตั้งค่า `AWS_PROFILE=default` เพื่อส่งสัญญาณว่ามีข้อมูลประจำตัว AWS พร้อมใช้งาน การยืนยันตัวตนจริงยังคงใช้บทบาทอินสแตนซ์ผ่าน IMDS
+**วิธีแก้ไขชั่วคราว:** ตั้งค่า `AWS_PROFILE=default` เพื่อส่งสัญญาณว่ามีข้อมูลประจำตัว AWS พร้อมใช้งาน การยืนยันตัวตนจริงยังคงใช้บทบาทอินสแตนซ์ผ่าน IMDS 42. การยืนยันตัวตนจริงยังคงใช้ role ของอินสแตนซ์ผ่าน IMDS
 
 ```bash
 # Add to ~/.bashrc or your shell profile

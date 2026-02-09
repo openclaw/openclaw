@@ -5,13 +5,6 @@ read_when:
   - Sie möchten den Gateway im Watch-Modus während der Iteration ausführen
   - Sie benötigen einen wiederholbaren Debugging-Workflow
 title: "Debugging"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:29Z
 ---
 
 # Debugging
@@ -44,7 +37,7 @@ Für schnelle Iterationen führen Sie den Gateway unter dem Dateiwächter aus:
 pnpm gateway:watch --force
 ```
 
-Dies entspricht:
+Diese Karten zu:
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -129,7 +122,7 @@ Optionale Pfadüberschreibung:
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Äquivalente Umgebungsvariablen:
+Äquivalente env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

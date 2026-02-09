@@ -4,13 +4,6 @@ read_when:
   - 디바이스 페어링 요청을 승인할 때
   - 디바이스 토큰을 로테이션하거나 폐기해야 할 때
 title: "디바이스"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:18Z
 ---
 
 # `openclaw devices`

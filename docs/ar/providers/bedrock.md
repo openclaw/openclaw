@@ -1,16 +1,9 @@
 ---
 summary: "استخدام نماذج Amazon Bedrock (واجهة Converse API) مع OpenClaw"
 read_when:
-  - "تريد استخدام نماذج Amazon Bedrock مع OpenClaw"
-  - "تحتاج إلى إعداد بيانات اعتماد AWS/المنطقة لاستدعاءات النماذج"
+  - تريد استخدام نماذج Amazon Bedrock مع OpenClaw
+  - تحتاج إلى إعداد بيانات اعتماد AWS/المنطقة لاستدعاءات النماذج
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:36Z
 ---
 
 # Amazon Bedrock
@@ -108,11 +101,11 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 ## أدوار مثيلات EC2
 
 عند تشغيل OpenClaw على مثيل EC2 مع إرفاق دور IAM، سيستخدم AWS SDK تلقائيًا خدمة
-بيانات تعريف المثيل (IMDS) للمصادقة. ومع ذلك، فإن اكتشاف بيانات الاعتماد في
+بيانات تعريف المثيل (IMDS) للمصادقة.
+ومع ذلك، فإن اكتشاف بيانات الاعتماد في
 OpenClaw يتحقق حاليًا من متغيرات البيئة فقط، وليس من بيانات اعتماد IMDS.
 
-**حل بديل:** عيّن `AWS_PROFILE=default` للإشارة إلى أن بيانات اعتماد AWS متاحة.
-تستمر المصادقة الفعلية في استخدام دور المثيل عبر IMDS.
+**حل بديل:** عيّن `AWS_PROFILE=default` للإشارة إلى أن بيانات اعتماد AWS متاحة. تستمر المصادقة الفعلية في استخدام دور المثيل عبر IMDS.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

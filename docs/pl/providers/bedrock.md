@@ -4,13 +4,6 @@ read_when:
   - Chcesz używać modeli Amazon Bedrock z OpenClaw
   - Potrzebujesz konfiguracji poświadczeń/regionu AWS do wywołań modeli
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:32Z
 ---
 
 # Amazon Bedrock
@@ -103,7 +96,8 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## Role instancji EC2
 
-Podczas uruchamiania OpenClaw na instancji EC2 z dołączoną rolą IAM, AWS SDK automatycznie użyje usługi metadanych instancji (IMDS) do uwierzytelniania. Jednak wykrywanie poświadczeń w OpenClaw obecnie sprawdza tylko zmienne środowiskowe, a nie poświadczenia IMDS.
+Podczas uruchamiania OpenClaw na instancji EC2 z dołączoną rolą IAM, AWS SDK automatycznie użyje usługi metadanych instancji (IMDS) do uwierzytelniania.
+Jednak wykrywanie poświadczeń w OpenClaw obecnie sprawdza tylko zmienne środowiskowe, a nie poświadczenia IMDS.
 
 **Obejście:** Ustaw `AWS_PROFILE=default`, aby zasygnalizować, że poświadczenia AWS są dostępne. Faktyczne uwierzytelnianie nadal używa roli instancji przez IMDS.
 

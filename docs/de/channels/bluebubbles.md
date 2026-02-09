@@ -1,17 +1,10 @@
 ---
-summary: „iMessage über den BlueBubbles‑macOS‑Server (REST Senden/Empfangen, Tippen, Reaktionen, Pairing, erweiterte Aktionen).“
+summary: "„iMessage über den BlueBubbles‑macOS‑Server (REST Senden/Empfangen, Tippen, Reaktionen, Pairing, erweiterte Aktionen).“"
 read_when:
   - Einrichten des BlueBubbles‑Kanals
   - Fehlerbehebung beim Webhook‑Pairing
   - Konfigurieren von iMessage auf macOS
-title: „BlueBubbles“
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:28Z
+title: "„BlueBubbles“"
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ Status: Gebündeltes Plugin, das über HTTP mit dem BlueBubbles‑macOS‑Server
 ## Schnellstart
 
 1. Installieren Sie den BlueBubbles‑Server auf Ihrem Mac (folgen Sie den Anweisungen unter [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. Aktivieren Sie in der BlueBubbles‑Konfiguration die Web‑API und setzen Sie ein Passwort.
+
 3. Führen Sie `openclaw onboard` aus und wählen Sie BlueBubbles, oder konfigurieren Sie manuell:
 
    ```json5
@@ -49,13 +44,14 @@ Status: Gebündeltes Plugin, das über HTTP mit dem BlueBubbles‑macOS‑Server
    ```
 
 4. Richten Sie die BlueBubbles‑Webhooks auf Ihr Gateway (Beispiel: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Starten Sie das Gateway; es registriert den Webhook‑Handler und beginnt mit dem Pairing.
 
 ## Messages.app aktiv halten (VM‑/Headless‑Setups)
 
 Einige macOS‑VM‑/Always‑On‑Setups können dazu führen, dass Messages.app „idle“ geht (eingehende Ereignisse stoppen, bis die App geöffnet/in den Vordergrund gebracht wird). Ein einfacher Workaround ist, **Messages alle 5 Minuten anzustoßen** – per AppleScript + LaunchAgent.
 
-### 1) AppleScript speichern
+### 1. AppleScript speichern
 
 Speichern Sie dies als:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) LaunchAgent installieren
+### 2. LaunchAgent installieren
 
 Speichern Sie dies als:
 
@@ -149,7 +145,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 
 ## Zugriffskontrolle (Direktnachrichten + Gruppen)
 
-Direktnachrichten:
+DMs:
 
 - Standard: `channels.bluebubbles.dmPolicy = "pairing"`.
 - Unbekannte Absender erhalten einen Pairing‑Code; Nachrichten werden bis zur Freigabe ignoriert (Codes laufen nach 1 Stunde ab).

@@ -4,20 +4,13 @@ read_when:
   - Gmail gelen kutusu tetikleyicilerini OpenClaw’a bağlama
   - Ajan uyandırma için Pub/Sub push kurulumu
 title: "Gmail Pub/Sub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:02Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 Amaç: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw webhook.
 
-## Ön Koşullar
+## Önkoşullar
 
 - `gcloud` kurulu ve oturum açılmış ([kurulum kılavuzu](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) kurulu ve Gmail hesabı için yetkilendirilmiş ([gogcli.sh](https://gogcli.sh/)).

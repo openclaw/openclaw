@@ -4,19 +4,12 @@ read_when:
   - Du behöver en referens för modellkonfiguration per leverantör
   - Du vill ha exempel på konfigurationer eller CLI-kommandon för introduktion till modellleverantörer
 title: "Modellleverantörer"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:04Z
 ---
 
 # Modellleverantörer
 
-Den här sidan täcker **LLM-/modellleverantörer** (inte chattkanaler som WhatsApp/Telegram).
-För regler för modellval, se [/concepts/models](/concepts/models).
+Denna sida omfattar **LLM/modellleverantörer** (ej chattkanaler som WhatsApp/Telegram).
+För modellurvalsregler, se [/concepts/models](/concepts/models).
 
 ## Snabba regler
 
@@ -26,8 +19,8 @@ För regler för modellval, se [/concepts/models](/concepts/models).
 
 ## Inbyggda leverantörer (pi-ai-katalogen)
 
-OpenClaw levereras med pi‑ai-katalogen. Dessa leverantörer kräver **ingen**
-`models.providers`-konfig; ange bara autentisering + välj en modell.
+OpenClaw fartyg med pi‐ai katalog. Dessa leverantörer kräver **nej**
+`models.providers` config; sätt bara auth + välj en modell.
 
 ### OpenAI
 
@@ -98,8 +91,8 @@ OpenClaw levereras med pi‑ai-katalogen. Dessa leverantörer kräver **ingen**
 - Gemini CLI OAuth levereras som ett medföljande plugin (`google-gemini-cli-auth`, inaktiverat som standard).
   - Aktivera: `openclaw plugins enable google-gemini-cli-auth`
   - Logga in: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Obs: du klistrar **inte** in ett klient-ID eller hemlighet i `openclaw.json`. CLI-inloggningsflödet lagrar
-    tokens i autentiseringsprofiler på gateway-värden.
+  - Obs: du behöver **inte** klistra in ett klient-id eller hemligt i `openclaw.json`. CLI-inloggningsflödet lagrar
+    tokens i auth profiler på gateway-värden.
 
 ### Z.AI (GLM)
 
@@ -190,8 +183,8 @@ Kimi Coding använder Moonshot AI:s Anthropic-kompatibla endpoint:
 
 ### Qwen OAuth (gratisnivå)
 
-Qwen tillhandahåller OAuth-åtkomst till Qwen Coder + Vision via ett device-code-flöde.
-Aktivera det medföljande pluginet och logga sedan in:
+Qwen ger OAuth åtkomst till Qwen Coder + Vision via ett enhets-kodflöde.
+Aktivera det medföljande pluginet, logga sedan in:
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +257,7 @@ ollama pull llama3.3
 }
 ```
 
-Ollama upptäcks automatiskt vid lokal körning på `http://127.0.0.1:11434/v1`. Se [/providers/ollama](/providers/ollama) för modellrekommendationer och anpassad konfiguration.
+Ollama upptäcks automatiskt när den körs lokalt på `http://127.0.0.1:11434/v1`. Se [/providers/ollama](/providers/ollama) för modellrekommendationer och anpassad konfiguration.
 
 ### Lokala proxys (LM Studio, vLLM, LiteLLM, m.fl.)
 
@@ -303,8 +296,8 @@ Exempel (OpenAI‑kompatibel):
 
 Noteringar:
 
-- För anpassade leverantörer är `reasoning`, `input`, `cost`, `contextWindow` och `maxTokens` valfria.
-  När de utelämnas använder OpenClaw som standard:
+- För anpassade leverantörer, `resonemang`, `input`, `cost`, `contextWindow` och `maxTokens` är frivilliga.
+  När OpenClaw utelämnas är standard för OpenClaw att:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

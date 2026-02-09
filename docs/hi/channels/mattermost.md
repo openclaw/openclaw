@@ -4,20 +4,13 @@ read_when:
   - Mattermost सेटअप करते समय
   - Mattermost रूटिंग का डिबग करते समय
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:55Z
 ---
 
 # Mattermost (प्लगइन)
 
-स्थिति: प्लगइन के माध्यम से समर्थित (बॉट टोकन + WebSocket इवेंट्स)। चैनल, समूह और DMs समर्थित हैं।
-Mattermost एक स्व-होस्ट करने योग्य टीम मैसेजिंग प्लेटफ़ॉर्म है; उत्पाद विवरण और डाउनलोड के लिए आधिकारिक साइट
-[mattermost.com](https://mattermost.com) देखें।
+Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
+Mattermost is a self-hostable team messaging platform; see the official site at
+[mattermost.com](https://mattermost.com) for product details and downloads.
 
 ## प्लगइन आवश्यक
 
@@ -69,11 +62,11 @@ openclaw plugins install ./extensions/mattermost
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-Env vars केवल **डिफ़ॉल्ट** खाते (`default`) पर लागू होते हैं। अन्य खातों के लिए विन्यास मानों का उपयोग करना होगा।
+Env vars apply only to the **default** account (`default`). Other accounts must use config values.
 
 ## चैट मोड
 
-Mattermost DMs का स्वतः उत्तर देता है। चैनल व्यवहार `chatmode` द्वारा नियंत्रित होता है:
+Mattermost responds to DMs automatically. Channel behavior is controlled by `chatmode`:
 
 - `oncall` (डिफ़ॉल्ट): चैनलों में केवल @mention होने पर उत्तर दें।
 - `onmessage`: हर चैनल संदेश का उत्तर दें।

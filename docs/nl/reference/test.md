@@ -3,13 +3,6 @@ summary: "Hoe je tests lokaal uitvoert (vitest) en wanneer je force-/coverage-mo
 read_when:
   - Tests uitvoeren of oplossen
 title: "Tests"
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:43Z
 ---
 
 # Tests
@@ -17,8 +10,11 @@ x-i18n:
 - Volledige testkit (suites, live, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: Beëindigt alle achterblijvende gateway-processen die de standaard control-poort bezet houden en voert vervolgens de volledige Vitest-suite uit met een geïsoleerde gateway-poort, zodat servertests niet botsen met een draaiende instantie. Gebruik dit wanneer een eerdere gateway-run poort 18789 bezet heeft achtergelaten.
+
 - `pnpm test:coverage`: Voert Vitest uit met V8-coverage. Globale drempels zijn 70% voor lines/branches/functions/statements. Coverage sluit integratie-zware entrypoints uit (CLI-wiring, gateway/telegram-bridges, webchat statische server) om de doelstelling te richten op unit-testbare logica.
+
 - `pnpm test:e2e`: Voert gateway end-to-end smoketests uit (multi-instance WS/HTTP/node-koppeling).
+
 - `pnpm test:live`: Voert provider live tests uit (minimax/zai). Vereist API-sleutels en `LIVE=1` (of provider-specifieke `*_LIVE_TEST=1`) om uitgeschakelde tests te activeren.
 
 ## Model-latencybench (lokale sleutels)

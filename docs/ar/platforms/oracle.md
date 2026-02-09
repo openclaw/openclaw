@@ -5,13 +5,6 @@ read_when:
   - البحث عن استضافة VPS منخفضة التكلفة لـ OpenClaw
   - الرغبة في تشغيل OpenClaw على مدار 24/7 على خادم صغير
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:44Z
 ---
 
 # OpenClaw على Oracle Cloud (OCI)
@@ -23,17 +16,17 @@ x-i18n:
 يمكن أن تكون الطبقة المجانية من Oracle خيارًا مناسبًا لـ OpenClaw (خصوصًا إذا كان لديك حساب OCI بالفعل)، لكنها تأتي مع بعض التنازلات:
 
 - معمارية ARM (معظم الأشياء تعمل، لكن بعض الثنائيات قد تكون x86 فقط)
-- السعة وعملية التسجيل قد تكون غير مستقرة أحيانًا
+- السعة والاشتراك يمكن أن يكونا جيدين
 
 ## مقارنة التكاليف (2026)
 
-| المزوّد      | الخطة           | المواصفات            | السعر/شهر | الملاحظات             |
-| ------------ | --------------- | -------------------- | --------- | --------------------- |
-| Oracle Cloud | Always Free ARM | حتى 4 OCPU، 24GB RAM | $0        | ARM، سعة محدودة       |
-| Hetzner      | CX22            | 2 vCPU، 4GB RAM      | ~ $4      | أرخص خيار مدفوع       |
-| DigitalOcean | Basic           | 1 vCPU، 1GB RAM      | $6        | واجهة سهلة، توثيق جيد |
-| Vultr        | Cloud Compute   | 1 vCPU، 1GB RAM      | $6        | مواقع عديدة           |
-| Linode       | Nanode          | 1 vCPU، 1GB RAM      | $5        | أصبح جزءًا من Akamai  |
+| Provider     | الخطة           | المواصفات            | السعر/شهر            | الملاحظات             |
+| ------------ | --------------- | -------------------- | -------------------- | --------------------- |
+| Oracle Cloud | Always Free ARM | حتى 4 OCPU، 24GB RAM | $0                   | ARM، سعة محدودة       |
+| Hetzner      | CX22            | 2 vCPU، 4GB RAM      | ~ $4 | أرخص خيار مدفوع       |
+| DigitalOcean | Basic           | 1 vCPU، 1GB RAM      | $6                   | واجهة سهلة، توثيق جيد |
+| Vultr        | Cloud Compute   | 1 vCPU، 1GB RAM      | $6                   | مواقع عديدة           |
+| Linode       | Nanode          | 1 vCPU، 1GB RAM      | $5                   | أصبح جزءًا من Akamai  |
 
 ---
 
@@ -43,7 +36,7 @@ x-i18n:
 - حساب Tailscale (مجاني على [tailscale.com](https://tailscale.com))
 - حوالي 30 دقيقة
 
-## 1) إنشاء مثيل OCI
+## 1. إنشاء مثيل OCI
 
 1. سجّل الدخول إلى [Oracle Cloud Console](https://cloud.oracle.com/)
 2. انتقل إلى **Compute → Instances → Create Instance**
@@ -60,7 +53,7 @@ x-i18n:
 
 **نصيحة:** إذا فشل إنشاء المثيل برسالة «Out of capacity»، جرّب نطاق توفر مختلف أو أعد المحاولة لاحقًا. سعة الطبقة المجانية محدودة.
 
-## 2) الاتصال والتحديث
+## 2. الاتصال والتحديث
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **ملاحظة:** `build-essential` مطلوب لتجميع بعض الاعتمادات على ARM.
 
-## 3) تهيئة المستخدم واسم المضيف
+## 3. تهيئة المستخدم واسم المضيف
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) تثبيت Tailscale
+## 4. تثبيت Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **من الآن فصاعدًا، اتصل عبر Tailscale:** `ssh ubuntu@openclaw` (أو استخدم عنوان IP الخاص بـ Tailscale).
 
-## 5) تثبيت OpenClaw
+## 5. تثبيت OpenClaw
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,7 +107,7 @@ source ~/.bashrc
 
 > ملاحظة: إذا واجهت مشكلات بناء أصلية على ARM، ابدأ بحزم النظام (مثل `sudo apt install -y build-essential`) قبل اللجوء إلى Homebrew.
 
-## 6) تهيئة Gateway (loopback + مصادقة الرمز) وتمكين Tailscale Serve
+## 6. تهيئة Gateway (loopback + مصادقة الرمز) وتمكين Tailscale Serve
 
 استخدم مصادقة الرمز كخيار افتراضي. فهي متوقعة وتجنّب الحاجة إلى أي أعلام «insecure auth» في واجهة Control.
 
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) التحقق
+## 7. التحقق
 
 ```bash
 # Check version
@@ -149,7 +142,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) تأمين VCN
+## 8. تأمين VCN
 
 بعد التأكد من أن كل شيء يعمل، قم بتأمين VCN لحظر جميع الحركة باستثناء Tailscale. تعمل Virtual Cloud Network في OCI كجدار حماية على حافة الشبكة — حيث يتم حظر الحركة قبل وصولها إلى المثيل.
 

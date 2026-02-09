@@ -4,13 +4,6 @@ read_when:
   - Configuración de OpenClaw en DigitalOcean
   - Buscando alojamiento VPS económico para OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:06Z
 ---
 
 # OpenClaw en DigitalOcean
@@ -23,13 +16,13 @@ Si desea una opción de $0/mes y no le importa ARM + una configuración específ
 
 ## Comparación de costos (2026)
 
-| Proveedor    | Plan            | Especificaciones       | Precio/mes  | Notas                                                |
-| ------------ | --------------- | ---------------------- | ----------- | ---------------------------------------------------- |
-| Oracle Cloud | Always Free ARM | hasta 4 OCPU, 24GB RAM | $0          | ARM, capacidad limitada / peculiaridades de registro |
+| Proveedor    | Plan            | Especificaciones       | Precio/mes                                                     | Notas                                                |
+| ------------ | --------------- | ---------------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
+| Oracle Cloud | Always Free ARM | hasta 4 OCPU, 24GB RAM | $0                                                             | ARM, capacidad limitada / peculiaridades de registro |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM        | €3.79 (~$4) | Opción de pago más barata                            |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6          | UI sencilla, buena documentación                     |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6          | Muchas ubicaciones                                   |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5          | Ahora parte de Akamai                                |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6                                                             | UI sencilla, buena documentación                     |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6                                                             | Muchas ubicaciones                                   |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5                                                             | Ahora parte de Akamai                                |
 
 **Elección de proveedor:**
 
@@ -45,7 +38,7 @@ Si desea una opción de $0/mes y no le importa ARM + una configuración específ
 - Par de claves SSH (o disposición para usar autenticación por contraseña)
 - ~20 minutos
 
-## 1) Crear un Droplet
+## 1. Crear un Droplet
 
 1. Inicie sesión en [DigitalOcean](https://cloud.digitalocean.com/)
 2. Haga clic en **Create → Droplets**
@@ -63,7 +56,7 @@ Si desea una opción de $0/mes y no le importa ARM + una configuración específ
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Instalar OpenClaw
+## 3. Instalar OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Ejecutar el onboarding
+## 4. Ejecutar el onboarding
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ El asistente lo guiará a través de:
 - Token del Gateway (generado automáticamente)
 - Instalación del daemon (systemd)
 
-## 5) Verificar el Gateway
+## 5. Verificar el Gateway
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Acceder al panel
+## 6. Acceder al panel
 
 El Gateway se enlaza a loopback de forma predeterminada. Para acceder a la UI de control:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Abrir: `http://<tailscale-ip>:18789` (se requiere token).
 
-## 7) Conecte sus canales
+## 7. Conecte sus canales
 
 ### Telegram
 

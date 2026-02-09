@@ -4,20 +4,13 @@ read_when:
   - グローバルなログレベルを上げずに、対象を絞ったデバッグログが必要な場合
   - サポートのためにサブシステム固有のログを取得する必要がある場合
 title: "診断フラグ"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:42Z
 ---
 
 # 診断フラグ
 
-診断フラグを使用すると、全体で冗長なログを有効にすることなく、対象を絞ったデバッグログを有効化できます。フラグはオプトインであり、サブシステムがそれらをチェックしない限り影響はありません。
+診断フラグを使用すると、全体で冗長なログを有効にすることなく、対象を絞ったデバッグログを有効化できます。フラグはオプトインであり、サブシステムがそれらをチェックしない限り影響はありません。 フラグはオプトインで、サブシステムがチェックしない限り効果はありません。
 
-## 仕組み
+## How it works
 
 - フラグは文字列です（大文字と小文字は区別されません）。
 - 設定、または環境変数によるオーバーライドでフラグを有効化できます。
@@ -47,7 +40,7 @@ x-i18n:
 
 フラグを変更した後は、ゲートウェイを再起動してください。
 
-## 環境変数によるオーバーライド（単発）
+## Envオーバーライド（ワンオフ）
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -59,15 +52,15 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 OPENCLAW_DIAGNOSTICS=0
 ```
 
-## ログの出力先
+## ログがどこに行くか
 
-フラグは標準の診断ログファイルにログを出力します。デフォルトでは次の場所です:
+フラグは標準の診断ログファイルにログを出力します。デフォルトでは次の場所です: デフォルト:
 
 ```
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
-`logging.file` を設定した場合は、そのパスが使用されます。ログは JSONL（1 行につき 1 つの JSON オブジェクト）です。リダクションは `logging.redactSensitive` に基づいて引き続き適用されます。
+`logging.file` を設定した場合は、代わりにそのパスを使用してください。 `logging.file` を設定した場合は、そのパスが使用されます。ログは JSONL（1 行につき 1 つの JSON オブジェクト）です。リダクションは `logging.redactSensitive` に基づいて引き続き適用されます。 リアクションは `logging.redactSensitive` に基づいて適用されます。
 
 ## ログの抽出
 
@@ -93,6 +86,6 @@ tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"
 
 ## 注記
 
-- `logging.level` が `warn` より高く設定されている場合、これらのログは抑制される可能性があります。デフォルトの `info` で問題ありません。
+- `logging.level` が `warn` より高く設定されている場合、これらのログは抑制される可能性があります。デフォルトの `info` で問題ありません。 デフォルトの `info` で問題ありません。
 - フラグは有効のままでも安全です。特定のサブシステムに対するログ量にのみ影響します。
 - ログの出力先、レベル、リダクションを変更するには、[/logging](/logging) を使用してください。

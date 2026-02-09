@@ -1,23 +1,16 @@
 ---
 summary: "Bun वर्कफ़्लो (प्रयोगात्मक): pnpm की तुलना में इंस्टॉल और सामान्य समस्याएँ"
 read_when:
-  - "आप सबसे तेज़ स्थानीय डेवलपमेंट लूप चाहते हैं (bun + watch)"
-  - "आप Bun के install/patch/lifecycle script से जुड़ी समस्याओं से टकराते हैं"
+  - आप सबसे तेज़ स्थानीय डेवलपमेंट लूप चाहते हैं (bun + watch)
+  - आप Bun के install/patch/lifecycle script से जुड़ी समस्याओं से टकराते हैं
 title: "Bun (प्रयोगात्मक)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:20Z
 ---
 
 # Bun (प्रयोगात्मक)
 
 लक्ष्य: pnpm वर्कफ़्लो से अलग हुए बिना इस रिपॉज़िटरी को **Bun** के साथ चलाना (वैकल्पिक, WhatsApp/Telegram के लिए अनुशंसित नहीं)।
 
-⚠️ **Gateway रनटाइम के लिए अनुशंसित नहीं** (WhatsApp/Telegram बग्स)। प्रोडक्शन के लिए Node का उपयोग करें।
+प्रोडक्शन के लिए Node का उपयोग करें। Note: `bun.lock`/`bun.lockb` gitignored हैं, इसलिए किसी भी तरह repo churn नहीं होता।
 
 ## Status
 
@@ -33,7 +26,7 @@ x-i18n:
 bun install
 ```
 
-टिप्पणी: `bun.lock`/`bun.lockb` gitignored हैं, इसलिए किसी भी तरीके से रिपॉज़िटरी में बदलाव नहीं होता। यदि आप _कोई lockfile लिखना नहीं_ चाहते हैं:
+अगर आप _no lockfile writes_ चाहते हैं: Bun, dependency lifecycle scripts को तब तक ब्लॉक कर सकता है जब तक उन्हें स्पष्ट रूप से trusted न किया जाए (`bun pm untrusted` / `bun pm trust`)।
 
 ```sh
 bun install --no-save
@@ -48,8 +41,8 @@ bun run vitest run
 
 ## Bun lifecycle scripts (डिफ़ॉल्ट रूप से अवरुद्ध)
 
-जब तक स्पष्ट रूप से भरोसा न किया जाए, Bun निर्भरताओं के lifecycle scripts को अवरुद्ध कर सकता है (`bun pm untrusted` / `bun pm trust`)।
-इस रिपॉज़िटरी के लिए, आम तौर पर अवरुद्ध होने वाले scripts आवश्यक नहीं हैं:
+इस repo के लिए, आमतौर पर ब्लॉक होने वाले scripts आवश्यक नहीं हैं:
+कुछ scripts अभी भी pnpm को हार्डकोड करते हैं (उदा. `docs:build`, `ui:*`, `protocol:check`)।
 
 - `@whiskeysockets/baileys` `preinstall`: Node major >= 20 की जाँच करता है (हम Node 22+ चलाते हैं)।
 - `protobufjs` `postinstall`: असंगत संस्करण योजनाओं के बारे में चेतावनियाँ देता है (कोई बिल्ड आर्टिफ़ैक्ट नहीं)।
@@ -62,4 +55,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## Caveats
 
-- कुछ scripts अभी भी pnpm को हार्डकोड करते हैं (उदा. `docs:build`, `ui:*`, `protocol:check`)। फिलहाल उन्हें pnpm के माध्यम से चलाएँ।
+- अभी के लिए उन्हें pnpm के ज़रिए चलाएँ। **dev**: `main` का moving head (git)।

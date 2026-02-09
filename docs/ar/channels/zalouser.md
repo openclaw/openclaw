@@ -1,16 +1,9 @@
 ---
 summary: "دعم حساب Zalo الشخصي عبر zca-cli (تسجيل دخول QR)، الإمكانات، والتهيئة"
 read_when:
-  - "إعداد Zalo Personal لـ OpenClaw"
-  - "تصحيح أخطاء تسجيل دخول Zalo Personal أو تدفّق الرسائل"
+  - إعداد Zalo Personal لـ OpenClaw
+  - تصحيح أخطاء تسجيل دخول Zalo Personal أو تدفّق الرسائل
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:58Z
 ---
 
 # Zalo Personal (غير رسمي)
@@ -94,11 +87,11 @@ openclaw directory groups list --channel zalouser --query "work"
 ## الوصول إلى المجموعات (اختياري)
 
 - الافتراضي: `channels.zalouser.groupPolicy = "open"` (المجموعات مسموحة). استخدم `channels.defaults.groupPolicy` لتجاوز الافتراضي عند عدم الضبط.
-- التقييد بقائمة سماح عبر:
+- تقييد قائمة السماح مع:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups` (المفاتيح هي معرّفات المجموعات أو أسماؤها)
 - حظر جميع المجموعات: `channels.zalouser.groupPolicy = "disabled"`.
-- يمكن لمعالج التهيئة أن يطالب بقوائم سماح للمجموعات.
+- يمكن لمعالج التكوين أن يطلب قوائم السماح للمجموعة.
 - عند بدء التشغيل، يقوم OpenClaw بتحويل أسماء المجموعات/المستخدمين في قوائم السماح إلى معرّفات ويُسجّل المطابقة؛ وتُحتفظ الإدخالات غير المحلولة كما كُتبت.
 
 مثال:

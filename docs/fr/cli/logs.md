@@ -4,20 +4,13 @@ read_when:
   - Vous devez suivre à distance les journaux de la Gateway (passerelle) (sans SSH)
   - Vous voulez des lignes de journaux JSON pour l’outillage
 title: "journaux"
-x-i18n:
-  source_path: cli/logs.md
-  source_hash: 911a57f0f3b78412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:56Z
 ---
 
 # `openclaw logs`
 
 Suivre en continu les journaux de fichiers de la Gateway (passerelle) via RPC (fonctionne en mode distant).
 
-Lié :
+Liens connexes :
 
 - Vue d’ensemble de la journalisation : [Journalisation](/logging)
 

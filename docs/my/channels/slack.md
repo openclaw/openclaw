@@ -2,13 +2,6 @@
 summary: "Socket သို့မဟုတ် HTTP webhook မုဒ်အတွက် Slack တပ်ဆင်မှု"
 read_when: "Slack ကို တပ်ဆင်နေစဉ် သို့မဟုတ် Slack socket/HTTP မုဒ်ကို ပြဿနာရှာဖွေနေစဉ်"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:56Z
 ---
 
 # Slack
@@ -38,9 +31,9 @@ x-i18n:
 ### တပ်ဆင်ခြင်း
 
 1. [https://api.slack.com/apps](https://api.slack.com/apps) တွင် Slack app တစ်ခု (From scratch) ဖန်တီးပါ။
-2. **Socket Mode** → ဖွင့်ပါ။ ထို့နောက် **Basic Information** → **App-Level Tokens** → scope `connections:write` ဖြင့် **Generate Token and Scopes** ကို လုပ်ပါ။ **App Token** (`xapp-...`) ကို ကူးယူပါ။
-3. **OAuth & Permissions** → bot token scopes များ ထည့်ပါ (အောက်ပါ manifest ကို အသုံးပြုပါ)။ **Install to Workspace** ကို နှိပ်ပါ။ **Bot User OAuth Token** (`xoxb-...`) ကို ကူးယူပါ။
-4. ရွေးချယ်စရာ: **OAuth & Permissions** → **User Token Scopes** ကို ထည့်ပါ (အောက်ပါ read-only စာရင်းကို ကြည့်ပါ)။ App ကို ပြန်လည် install လုပ်ပြီး **User OAuth Token** (`xoxp-...`) ကို ကူးယူပါ။
+2. **App Token** (`xapp-...`) ကို ကူးယူပါ။ **OAuth & Permissions** → bot token scopes များကို ထည့်ပါ (အောက်ပါ manifest ကို အသုံးပြုပါ)။ **Install to Workspace** ကို နှိပ်ပါ။
+3. **Bot User OAuth Token** (`xoxb-...`) ကို ကူးယူပါ။ မဖြစ်မနေ မဟုတ်ပါ: **OAuth & Permissions** → **User Token Scopes** ကို ထည့်ပါ (အောက်ပါ read-only စာရင်းကို ကြည့်ပါ)။ App ကို ပြန်လည် install လုပ်ပြီး **User OAuth Token** (`xoxp-...`) ကို ကူးယူပါ။
+4. Slash Commands → `channels.slack.slashCommand` ကို အသုံးပြုပါက `/openclaw` ကို ဖန်တီးပါ။ Native commands ကို ဖွင့်ထားပါက built-in command တစ်ခုစီအတွက် slash command တစ်ခုစီကို ထည့်ပါ (`/help` နှင့် အမည်တူ)။
 5. **Event Subscriptions** → events ကို ဖွင့်ပြီး အောက်ပါများကို subscribe လုပ်ပါ။
    - `message.*` (edit/delete/thread broadcast များ ပါဝင်)
    - `app_mention`
@@ -49,12 +42,13 @@ x-i18n:
    - `channel_rename`
    - `pin_added`, `pin_removed`
 6. ဖတ်ရှုစေလိုသော ချန်နယ်များသို့ bot ကို ဖိတ်ကြားပါ။
-7. Slash Commands → `channels.slack.slashCommand` ကို အသုံးပြုပါက `/openclaw` ကို ဖန်တီးပါ။ native commands ကို ဖွင့်ထားပါက built-in command တစ်ခုချင်းစီအတွက် slash command တစ်ခုစီ ထည့်ရပါမည် (`/help` နှင့် အမည်တူ)။ Slack အတွက် native ကို ပုံမှန်အားဖြင့် ပိတ်ထားပြီး `channels.slack.commands.native: true` ကို သတ်မှတ်မှသာ ဖွင့်ပါမည် (global `commands.native` သည် `"auto"` ဖြစ်ပြီး Slack ကို ပိတ်ထားသည်)။
+7. Slack အတွက် Native သည် ပုံမှန်အားဖြင့် ပိတ်ထားပြီး `channels.slack.commands.native: true` ကို သတ်မှတ်မှသာ ဖွင့်ပါမည် (global `commands.native` သည် `"auto"` ဖြစ်ပြီး Slack ကို ပိတ်ထားစေပါသည်)။ ပုံစံတူ အသုံးပြုနည်းအတွက် [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) ကို ကြည့်ပါ။ OpenClaw သည် Slack user token (`xoxp-...`) ကို ဖတ်ရှုမှုလုပ်ငန်းများ (history,
+   pins, reactions, emoji, member info) အတွက် အသုံးပြုနိုင်ပါသည်။
 8. **App Home** → **Messages Tab** ကို ဖွင့်ပြီး အသုံးပြုသူများ bot ကို DM ပို့နိုင်စေရန် ပြုလုပ်ပါ။
 
 scope များနှင့် events များ တစ်ပြိုင်နက်တည်း ဖြစ်စေရန် အောက်ပါ manifest ကို အသုံးပြုပါ။
 
-အကောင့်အများအပြား ပံ့ပိုးမှု: အကောင့်တစ်ခုချင်းစီအတွက် token များနှင့် ရွေးချယ်စရာ `name` ဖြင့် `channels.slack.accounts` ကို အသုံးပြုပါ။ ပုံစံတူ အသုံးပြုနည်းအတွက် [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) ကို ကြည့်ပါ။
+Multi-account ပံ့ပိုးမှု: per-account token များနှင့် optional `name` ကို အသုံးပြု၍ `channels.slack.accounts` ကို အသုံးပြုပါ။ ပုံမှန်အားဖြင့် ၎င်းသည် read-only အဖြစ် ဆက်လက်ရှိနေပါသည်: reads များသည် user token ရှိပါက ၎င်းကို ဦးစားပေးအသုံးပြုပြီး writes များသည် သင်က အထူးအနေဖြင့် မရွေးချယ်ပါက bot token ကိုသာ အသုံးပြုပါသည်။
 
 ### OpenClaw config (Socket မုဒ်)
 
@@ -79,10 +73,11 @@ env vars ဖြင့် token များ သတ်မှတ်ပါ (အက�
 
 ### User token (ရွေးချယ်စရာ)
 
-OpenClaw သည် ဖတ်ရှုရေးရာ လုပ်ဆောင်ချက်များ (history,
-pins, reactions, emoji, member info) အတွက် Slack user token (`xoxp-...`) ကို အသုံးပြုနိုင်ပါသည်။ ပုံမှန်အားဖြင့် read-only အဖြစ်သာ ထားရှိပြီး ဖတ်ခြင်းများတွင် user token ကို ဦးစားပေးသော်လည်း ရေးသားခြင်းများတွင် bot token ကိုသာ အသုံးပြုပါသည်၊ သင်က တိတိကျကျ opt-in မလုပ်ပါက မပြောင်းလဲပါ။ `userTokenReadOnly: false` ရှိသော်လည်း bot token ရရှိနေပါက ရေးသားခြင်းအတွက် bot token ကိုပင် ဦးစားပေးပါသည်။
+`userTokenReadOnly: false` ဖြစ်နေသော်လည်း bot token ရရှိနိုင်ပါက writes များအတွက် bot token ကို ဦးစားပေးနေဆဲဖြစ်ပါသည်။ User token များကို config ဖိုင်တွင် သတ်မှတ်ရပါသည် (env var ပံ့ပိုးမှု မရှိပါ)။ Multi-account အတွက် `channels.slack.accounts.<id>
+.userToken` ကို သတ်မှတ်ပါ။
 
-User token များကို config ဖိုင်အတွင်းသာ သတ်မှတ်နိုင်ပြီး env var မပံ့ပိုးပါ။ အကောင့်အများအပြားအတွက် `channels.slack.accounts.<id>.userToken` ကို သတ်မှတ်ပါ။
+Write လုပ်ငန်းများ (မက်ဆေ့ချ် ပို့/ပြင်/ဖျက်၊ reaction ထည့်/ဖယ်၊ pin/unpin,
+ဖိုင်တင်ခြင်း) သည် ပုံမှန်အားဖြင့် bot token ကို အသုံးပြုပါသည်။ `userTokenReadOnly: false` ဖြစ်ပြီး bot token မရှိပါက OpenClaw သည် user token သို့ ပြန်လည်အသုံးပြုပါသည်။.userToken\`.
 
 bot + app + user token များပါသော ဥပမာ:
 
@@ -119,19 +114,19 @@ userTokenReadOnly ကို အထူးသတ်မှတ်ထားသော 
 
 - ဖတ်ရှုရေးရာ လုပ်ဆောင်ချက်များ (history, reactions list, pins list, emoji list, member info,
   search) သည် user token ရှိပါက ဦးစားပေးပြီး မရှိပါက bot token ကို အသုံးပြုပါသည်။
-- ရေးသားရေးရာ လုပ်ဆောင်ချက်များ (မက်ဆေ့ချ် ပို့/ပြင်/ဖျက်, reactions ထည့်/ဖယ်, pin/unpin,
-  ဖိုင်တင်) သည် ပုံမှန်အားဖြင့် bot token ကို အသုံးပြုပါသည်။ `userTokenReadOnly: false` ဖြစ်ပြီး
-  bot token မရှိပါက OpenClaw သည် user token သို့ ပြန်လည် လှမ်းအသုံးပြုပါသည်။
+- Write operations (send/edit/delete messages, add/remove reactions, pin/unpin,
+  file uploads) use the bot token by default. If `userTokenReadOnly: false` and
+  no bot token is available, OpenClaw falls back to the user token.
 
 ### History context
 
 - `channels.slack.historyLimit` (သို့မဟုတ် `channels.slack.accounts.*.historyLimit`) သည် prompt ထဲသို့ ထည့်သွင်းမည့် ချန်နယ်/အုပ်စု မက်ဆေ့ချ် အရေအတွက်ကို ထိန်းချုပ်ပါသည်။
-- `messages.groupChat.historyLimit` သို့ ပြန်လည် fallback လုပ်ပါသည်။ ပိတ်ရန် `0` ကို သတ်မှတ်ပါ (ပုံမှန် 50)။
+- `messages.groupChat.historyLimit` ကို fallback အဖြစ် အသုံးပြုသည်။ ပိတ်ရန် `0` ကို သတ်မှတ်ပါ (မူလတန်ဖိုး 50)။
 
 ## HTTP မုဒ် (Events API)
 
-Slack မှ HTTPS ဖြင့် သင်၏ Gateway ကို ချိတ်ဆက်နိုင်သောအခါ HTTP webhook မုဒ်ကို အသုံးပြုပါ (server deployment များတွင် ပုံမှန်)။
-HTTP မုဒ်သည် Events API + Interactivity + Slash Commands ကို request URL တစ်ခုတည်းဖြင့် အသုံးပြုပါသည်။
+သင့် Gateway ကို Slack က HTTPS ဖြင့် ချိတ်ဆက်နိုင်သောအခါ HTTP webhook mode ကို အသုံးပြုပါ (ပုံမှန်အားဖြင့် server deployment များအတွက်)။
+HTTP mode သည် Events API + Interactivity + Slash Commands ကို shared request URL တစ်ခုဖြင့် အသုံးပြုသည်။
 
 ### တပ်ဆင်ခြင်း (HTTP မုဒ်)
 
@@ -161,12 +156,11 @@ Request URL ဥပမာ:
 }
 ```
 
-အကောင့်အများအပြား HTTP မုဒ်: `channels.slack.accounts.<id>.mode = "http"` ကို သတ်မှတ်ပြီး အကောင့်တစ်ခုချင်းစီအတွက်
-`webhookPath` ကို သီးသန့်ပေးပါ၊ Slack app တစ်ခုချင်းစီသည် မိမိကိုယ်ပိုင် URL သို့ ချိတ်ဆက်နိုင်စေရန်။
+Multi-account HTTP mode: `channels.slack.accounts.<id>` ကို သတ်မှတ်ပါ.mode = "http"\` ဟု သတ်မှတ်ပြီး account တစ်ခုချင်းစီအတွက် ထူးခြားသော
 
 ### Manifest (ရွေးချယ်စရာ)
 
-App ကို အမြန်ဖန်တီးရန် အောက်ပါ Slack app manifest ကို အသုံးပြုပါ (အမည်/command ကို လိုအပ်သလို ပြင်ဆင်နိုင်သည်)။ user token ကို ပြင်ဆင်သတ်မှတ်မည်ဆိုပါက user scopes များကို ထည့်ပါ။
+`webhookPath` ကို ပေးပါ၊ Slack app တစ်ခုချင်းစီက ကိုယ်ပိုင် URL ကို ညွှန်းနိုင်စေရန်။ ဒီ Slack app manifest ကို အသုံးပြုပြီး app ကို မြန်မြန် ဖန်တီးပါ (အမည်/command ကို လိုအပ်သလို ပြင်ဆင်နိုင်သည်)။
 
 ```json
 {
@@ -256,12 +250,11 @@ App ကို အမြန်ဖန်တီးရန် အောက်ပါ S
 }
 ```
 
-native commands ကို ဖွင့်ပါက ထုတ်ပြရန် command တစ်ခုချင်းစီအတွက် `slash_commands` entry တစ်ခုစီ ထည့်ပါ (`/help` စာရင်းနှင့် ကိုက်ညီရပါမည်)။ `channels.slack.commands.native` ဖြင့် override လုပ်နိုင်ပါသည်။
+user token ကို ပြင်ဆင်သတ်မှတ်ရန် စီစဉ်ထားပါက user scopes များကို ထည့်သွင်းပါ။ native commands ကို ဖွင့်ထားပါက ဖော်ပြလိုသော command တစ်ခုချင်းစီအတွက် `slash_commands` entry တစ်ခုစီ ထည့်ပါ (`/help` စာရင်းနှင့် ကိုက်ညီရပါမည်)။
 
 ## Scopes (လက်ရှိ vs ရွေးချယ်စရာ)
 
-Slack Conversations API သည် type-scoped ဖြစ်ပါသည်။ သင် အမှန်တကယ် အသုံးပြုမည့် conversation အမျိုးအစားများ (channels, groups, im, mpim) အတွက်သာ scopes များ လိုအပ်ပါသည်။ အကြမ်းဖျဉ်းအတွက်
-[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) ကို ကြည့်ပါ။
+`channels.slack.commands.native` ဖြင့် override လုပ်နိုင်သည်။ Slack ၏ Conversations API သည် type အလိုက် scope ခွဲထားသည် — သင် တကယ် အသုံးပြုမည့် conversation type များ (channels, groups, im, mpim) အတွက်သာ scopes လိုအပ်ပါသည်။
 
 ### Bot token scopes (လိုအပ်သည်)
 
@@ -310,7 +303,8 @@ Slack Conversations API သည် type-scoped ဖြစ်ပါသည်။ သ
 
 ## Config
 
-Slack သည် Socket Mode သာ အသုံးပြုပါသည် (HTTP webhook server မရှိ)။ token နှစ်ခုလုံး ပေးရပါမည်။
+အကျဉ်းချုပ်အတွက် ကြည့်ပါ
+[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) ။ Slack သည် Socket Mode ကိုသာ အသုံးပြုသည် (HTTP webhook server မရှိပါ)။
 
 ```json
 {
@@ -364,9 +358,8 @@ token များကို env vars ဖြင့်လည်း ပေးနိ
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
-Ack reaction များကို global အနေနှင့် `messages.ackReaction` +
-`messages.ackReactionScope` ဖြင့် ထိန်းချုပ်ပါသည်။ bot ပြန်လည်ဖြေကြားပြီးနောက်
-ack reaction ကို ဖယ်ရှားရန် `messages.removeAckAfterReply` ကို အသုံးပြုပါ။
+token နှစ်ခုစလုံးကို ပေးပါ: Ack reactions များကို `messages.ackReaction` +
+`messages.ackReactionScope` ဖြင့် global အဆင့်တွင် ထိန်းချုပ်သည်။
 
 ## ကန့်သတ်ချက်များ
 
@@ -376,13 +369,13 @@ ack reaction ကို ဖယ်ရှားရန် `messages.removeAckAfterRe
 
 ## Reply threading
 
-ပုံမှန်အားဖြင့် OpenClaw သည် main channel တွင် ပြန်ကြားပါသည်။ automatic threading ကို ထိန်းချုပ်ရန် `channels.slack.replyToMode` ကို အသုံးပြုပါ။
+bot က ပြန်ကြားပြီးနောက် ack reaction ကို ဖယ်ရှားရန် `messages.removeAckAfterReply` ကို အသုံးပြုပါ။ မူလအနေဖြင့် OpenClaw သည် main channel တွင် ပြန်ကြားသည်။
 
-| Mode    | Behavior                                                                                                                                                                     |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **ပုံမှန်။** main channel တွင် ပြန်ကြားပါသည်။ triggering message သည် thread အတွင်းရှိပါကသာ thread ဖြင့် ပြန်ကြားပါသည်။                                                       |
-| `first` | ပထမဆုံး ပြန်ကြားချက်ကို thread ထဲသို့ ပို့ပြီး နောက်တစ်ကြိမ်များကို main channel သို့ ပို့ပါသည်။ context ကို မြင်သာစေပြီး thread များ များပြားခြင်းကို ရှောင်ရှားနိုင်ပါသည်။ |
-| `all`   | ပြန်ကြားချက်အားလုံးကို thread ထဲသို့ ပို့ပါသည်။ စကားဝိုင်းများကို တစ်နေရာတည်း ထိန်းထားနိုင်သော်လည်း မြင်သာမှု လျော့နည်းနိုင်ပါသည်။                                           |
+| Mode    | Behavior                                                                                                                                                                                                                                      |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | automatic threading ကို ထိန်းချုပ်ရန် `channels.slack.replyToMode` ကို အသုံးပြုပါ: **မူလတန်ဖိုး။** main channel တွင် ပြန်ကြားသည်။                                                                                             |
+| `first` | trigger ဖြစ်စေသော message သည် thread အတွင်းရှိပြီးသားဖြစ်ပါကသာ thread ထဲတွင် ပြန်ကြားသည်။ ပထမဆုံး ပြန်ကြားချက်သည် thread (trigger message အောက်တွင်) သို့ သွားပြီး နောက်ထပ် ပြန်ကြားချက်များသည် main channel သို့ သွားသည်။ |
+| `all`   | context ကို မြင်သာစေပြီး thread များ အလွန်များခြင်းကို ရှောင်ရှားရန် အသုံးဝင်သည်။ ပြန်ကြားချက်အားလုံးကို thread ထဲသို့သာ ပို့သည်။                                                                                                             |
 
 ဤ mode သည် auto-replies နှင့် agent tool calls (`slack sendMessage`) နှစ်ခုလုံးအတွက် အသုံးဝင်ပါသည်။
 
@@ -412,7 +405,7 @@ ack reaction ကို ဖယ်ရှားရန် `messages.removeAckAfterRe
 
 ဦးစားပေးမှု အစီအစဉ်:
 
-1. `replyToModeByChatType.<chatType>`
+1. စကားဝိုင်းများကို ထိန်းသိမ်းထားနိုင်သော်လည်း မြင်သာမှု လျော့နည်းနိုင်သည်။`replyToModeByChatType.<chatType>`
 2. `replyToMode`
 3. provider ပုံမှန် (`off`)
 
@@ -472,7 +465,7 @@ Group DM များကို thread လုပ်ပြီး ချန်န�
 - ချန်နယ်များသည် `agent:<agentId>:slack:channel:<channelId>` session များသို့ ချိတ်ဆက်ပါသည်။
 - Slash commands များသည် `agent:<agentId>:slack:slash:<userId>` session များကို အသုံးပြုပါသည် (prefix ကို `channels.slack.slashCommand.sessionPrefix` ဖြင့် ပြင်ဆင်နိုင်)။
 - Slack မှ `channel_type` ကို မပေးပါက OpenClaw သည် channel ID prefix (`D`, `C`, `G`) မှ ခန့်မှန်းပြီး session key များ တည်ငြိမ်စေရန် `channel` ကို ပုံမှန်အဖြစ် သတ်မှတ်ပါသည်။
-- Native command registration သည် `commands.native` ကို အသုံးပြုပြီး (global ပုံမှန် `"auto"` → Slack ပိတ်) workspace အလိုက် `channels.slack.commands.native` ဖြင့် override လုပ်နိုင်ပါသည်။ Text command များသည် သီးသန့် `/...` မက်ဆေ့ချ်များ လိုအပ်ပြီး `commands.text: false` ဖြင့် ပိတ်နိုင်ပါသည်။ Slack slash commands များကို Slack app အတွင်း စီမံခန့်ခွဲပြီး အလိုအလျောက် မဖယ်ရှားပါ။ command များအတွက် access-group စစ်ဆေးမှုကို ကျော်ရန် `commands.useAccessGroups: false` ကို အသုံးပြုပါ။
+- `Native command registration သည်`commands.native`(global မူလတန်ဖိုး "auto" → Slack ပိတ်ထား) ကို အသုံးပြုပြီး workspace အလိုက်`channels.slack.commands.native`ဖြင့် override လုပ်နိုင်သည်။ Text commands များသည် standalone`/...`message များ လိုအပ်ပြီး`commands.text: false\` ဖြင့် ပိတ်နိုင်သည်။ Slack slash commands များကို Slack app အတွင်းတွင် စီမံခန့်ခွဲရပြီး အလိုအလျောက် ဖယ်ရှားမပေးပါ။
 - Command အပြည့်အစုံနှင့် config: [Slash commands](/tools/slash-commands)
 
 ## DM လုံခြုံရေး (pairing)
@@ -480,21 +473,21 @@ Group DM များကို thread လုပ်ပြီး ချန်န�
 - ပုံမှန်: `channels.slack.dm.policy="pairing"` — မသိသော DM ပို့သူများကို pairing code ပေးပြီး (၁ နာရီအကြာ သက်တမ်းကုန်)။
 - အတည်ပြုရန်: `openclaw pairing approve slack <code>` ကို အသုံးပြုပါ။
 - လူတိုင်း ခွင့်ပြုရန်: `channels.slack.dm.policy="open"` နှင့် `channels.slack.dm.allowFrom=["*"]` ကို သတ်မှတ်ပါ။
-- `channels.slack.dm.allowFrom` သည် user ID, @handle သို့မဟုတ် email များကို လက်ခံပါသည် (token များ ခွင့်ပြုပါက စတင်ချိန်တွင် ဖြေရှင်းပေးပါသည်)။ wizard သည် setup အတွင်း username များကို လက်ခံပြီး token များ ခွင့်ပြုပါက id များသို့ ပြောင်းလဲပေးပါသည်။
+- command များအတွက် access-group စစ်ဆေးမှုကို ကျော်လွှားရန် `commands.useAccessGroups: false` ကို အသုံးပြုပါ။ `channels.slack.dm.allowFrom` သည် user IDs, @handles သို့မဟုတ် emails များကို လက်ခံပြီး (token များ ခွင့်ပြုပါက startup အချိန်တွင် resolve လုပ်သည်)။
 
 ## Group policy
 
 - `channels.slack.groupPolicy` သည် ချန်နယ် ကိုင်တွယ်ပုံကို ထိန်းချုပ်ပါသည် (`open|disabled|allowlist`)။
 - `allowlist` သည် ချန်နယ်များကို `channels.slack.channels` အတွင်း စာရင်းသွင်းထားရန် လိုအပ်ပါသည်။
-- `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` ကိုသာ သတ်မှတ်ပြီး `channels.slack` အပိုင်းကို မဖန်တီးပါက runtime ပုံမှန်အနေဖြင့် `groupPolicy` ကို `open` ဟု သတ်မှတ်ပါသည်။ ပိုမို တင်းကျပ်စေရန် `channels.slack.groupPolicy`,
-  `channels.defaults.groupPolicy` သို့မဟုတ် channel allowlist ကို ထည့်ပါ။
+- wizard သည် setup အတွင်း usernames များကို လက်ခံပြီး token များ ခွင့်ပြုပါက ids များသို့ resolve လုပ်သည်။ `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` ကိုသာ သတ်မှတ်ပြီး `channels.slack` section ကို မဖန်တီးပါက runtime သည် `groupPolicy` ကို `open` ဟု မူလအနေဖြင့် သတ်မှတ်သည်။
 - Configure wizard သည် `#channel` အမည်များကို လက်ခံပြီး ဖြစ်နိုင်ပါက ID များသို့ ပြောင်းလဲပေးပါသည်
   (public + private)။ ကိုက်ညီမှု များစွာရှိပါက active channel ကို ဦးစားပေးပါသည်။
 - စတင်ချိန်တွင် OpenClaw သည် allowlist များအတွင်း channel/user အမည်များကို ID များသို့ ပြောင်းလဲပြီး (token များ ခွင့်ပြုပါက)
   mapping ကို log ထုတ်ပြပါသည်။ မဖြေရှင်းနိုင်သော entry များကို မူလအတိုင်း ထားရှိပါသည်။
 - **ချန်နယ် မည်သည့်တစ်ခုမျှ မခွင့်ပြုလိုပါက** `channels.slack.groupPolicy: "disabled"` ကို သတ်မှတ်ပါ (သို့မဟုတ် အလွတ် allowlist ကို ထားပါ)။
 
-Channel ရွေးချယ်စရာများ (`channels.slack.channels.<id>` သို့မဟုတ် `channels.slack.channels.<name>`):
+lock down လုပ်ရန် `channels.slack.groupPolicy`,
+`channels.defaults.groupPolicy` သို့မဟုတ် channel allowlist တစ်ခု ထည့်ပါ။Channel options (`channels.slack.channels.<id>`` သို့မဟုတ် `channels.slack.channels.<name>\`
 
 - `allow`: `groupPolicy="allowlist"` ဖြစ်ပါက ချန်နယ်ကို ခွင့်ပြု/ပိတ်။
 - `requireMention`: ချန်နယ်အတွက် mention gating။
@@ -528,8 +521,9 @@ Slack tool actions များကို `channels.slack.actions.*` ဖြင့
 ## လုံခြုံရေး မှတ်ချက်များ
 
 - ရေးသားရေးရာ လုပ်ဆောင်ချက်များကို ပုံမှန်အားဖြင့် bot token ဖြင့်သာ လုပ်ဆောင်ပြီး state ပြောင်းလဲမှုများကို app ၏ bot permission နှင့် identity အတွင်း ထိန်းသိမ်းထားပါသည်။
-- `userTokenReadOnly: false` ကို သတ်မှတ်ပါက bot token မရှိသည့်အခါ user token ကို ရေးသားရေးရာ လုပ်ဆောင်ချက်များအတွက် အသုံးပြုနိုင်ပြီး
-  ထိုလုပ်ဆောင်ချက်များသည် app ကို install လုပ်သော အသုံးပြုသူ၏ access ဖြင့် လုပ်ဆောင်ပါသည်။ user token ကို အလွန်အရေးကြီးသော အခွင့်အရေးရှိသည်ဟု သဘောထားပြီး action gates နှင့် allowlists များကို တင်းကျပ်စွာ ထိန်းထားပါ။
+- Setting `userTokenReadOnly: false` allows the user token to be used for write
+  operations when a bot token is unavailable, which means actions run with the
+  installing user's access. `userTokenReadOnly: false` ကို သတ်မှတ်ပါက bot token မရရှိနိုင်သည့်အခါ user token ကို write operations များအတွက် အသုံးပြုခွင့်ပေးပြီး လုပ်ဆောင်ချက်များသည် installing user ၏ access ဖြင့် လည်ပတ်မည်ဖြစ်သည်။
 - user-token writes ကို ဖွင့်ပါက user token တွင် မျှော်လင့်ထားသော write scopes (`chat:write`, `reactions:write`, `pins:write`,
   `files:write`) ပါဝင်ကြောင်း သေချာစေရန်၊ မပါဝင်ပါက အဆိုပါ လုပ်ဆောင်ချက်များ မအောင်မြင်ပါ။
 
@@ -564,7 +558,7 @@ Triage လုပ်ငန်းစဉ်အတွက်: [/channels/troubleshoot
 - Mention gating ကို `channels.slack.channels` ဖြင့် ထိန်းချုပ်ပါသည် (`requireMention` ကို `true` ဟု သတ်မှတ်ပါ)။ `agents.list[].groupChat.mentionPatterns` (သို့မဟုတ် `messages.groupChat.mentionPatterns`) ကိုလည်း mention အဖြစ် ရေတွက်ပါသည်။
 - Multi-agent override: agent တစ်ခုချင်းစီအလိုက် pattern များကို `agents.list[].groupChat.mentionPatterns` တွင် သတ်မှတ်ပါ။
 - Reaction notification များသည် `channels.slack.reactionNotifications` ကို လိုက်နာပါသည် (mode `allowlist` ဖြင့် `reactionAllowlist` ကို အသုံးပြုပါ)။
-- Bot ရေးသားသော မက်ဆေ့ချ်များကို ပုံမှန်အားဖြင့် လျစ်လျူရှုထားပြီး `channels.slack.allowBots` သို့မဟုတ် `channels.slack.channels.<id>.allowBots` ဖြင့် ဖွင့်နိုင်ပါသည်။
-- သတိပေးချက်: အခြား bot များကို ပြန်ကြားခွင့်ပေးပါက (`channels.slack.allowBots=true` သို့မဟုတ် `channels.slack.channels.<id>.allowBots=true`) bot-to-bot reply loop မဖြစ်စေရန် `requireMention`, `channels.slack.channels.<id>.users` allowlists များနှင့်/သို့မဟုတ် `AGENTS.md` နှင့် `SOUL.md` အတွင်း guardrail များကို ရှင်းလင်းစွာ သတ်မှတ်ထားပါ။
+- user token ကို အလွန်အရေးကြီးသော အခွင့်အာဏာရှိသည့်အရာအဖြစ် သတ်မှတ်ပြီး action gates နှင့် allowlists များကို တင်းကျပ်စွာ ထိန်းသိမ်းပါ။bot မှ ရေးသားထားသော messages များကို မူလအနေဖြင့် မလက်ခံပါ — `channels.slack.allowBots` သို့မဟုတ် `channels.slack.channels.<id>` ဖြင့် ဖွင့်နိုင်သည်။
+- .allowBots`.သတိပေးချက်: အခြား bot များထံ ပြန်ကြားမှုကို ခွင့်ပြုပါက (`channels.slack.allowBots=true`သို့မဟုတ်`channels.slack.channels.<id>`.allowBots=true`), `requireMention`, `channels.slack.channels.<id>`
 - Slack tool အတွက် reaction ဖယ်ရှားမှု အပြုအမူများကို [/tools/reactions](/tools/reactions) တွင် ဖော်ပြထားပါသည်။
 - Attachment များကို ခွင့်ပြုထားပြီး အရွယ်အစားကန့်သတ်ချက်အောက်တွင် ရှိပါက media store သို့ ဒေါင်းလုဒ် ပြုလုပ်ပါသည်။

@@ -4,18 +4,11 @@ read_when:
   - マシンから OpenClaw を削除したい場合
   - アンインストール後も ゲートウェイ サービスが実行され続けている場合
 title: "アンインストール"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:19Z
 ---
 
 # アンインストール
 
-2 つの方法があります。
+2つのパス:
 
 - **簡単な方法**：`openclaw` がまだインストールされている場合。
 - **手動でのサービス削除**：CLI が削除されているが、サービスがまだ実行中の場合。
@@ -80,7 +73,7 @@ rm -rf /Applications/OpenClaw.app
 注記：
 
 - プロファイル（`--profile` / `OPENCLAW_PROFILE`）を使用していた場合は、各状態ディレクトリごとに手順 3 を繰り返してください（既定値は `~/.openclaw-<profile>` です）。
-- リモート モードでは、状態ディレクトリは **Gateway ホスト** 上にあるため、手順 1～4 もそこで実行してください。
+- リモートモードでは、state dir は **gateway host** に住んでいるので、ステップ1-4 も実行してください。
 
 ## 手動でのサービス削除（CLI がインストールされていない）
 
@@ -95,7 +88,7 @@ launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-プロファイルを使用していた場合は、ラベルと plist 名を `bot.molt.<profile>` に置き換えてください。存在する場合は、レガシーの `com.openclaw.*` plist を削除してください。
+プロファイルを使用していた場合は、ラベルと plist 名を `bot.molt.<profile>`. `に置き換えてください。存在する場合は、レガシーの`com.openclaw.\*\` plist を削除してください。
 
 ### Linux（systemd ユーザー ユニット）
 
@@ -111,6 +104,7 @@ systemctl --user daemon-reload
 
 既定のタスク名は `OpenClaw Gateway`（または `OpenClaw Gateway (<profile>)`）です。  
 タスク スクリプトは状態ディレクトリ配下にあります。
+タスクスクリプトは状態dirの下に保存されます。
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -125,6 +119,7 @@ Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 
 `https://openclaw.ai/install.sh` または `install.ps1` を使用した場合、CLI は `npm install -g openclaw@latest` でインストールされています。  
 `npm rm -g openclaw` で削除してください（その方法でインストールした場合は `pnpm remove -g` / `bun remove -g` を使用します）。
+`npm rm -g openclaw` で削除します。または、`pnpm remove -g` / `bun remove -g` をインストールします。
 
 ### ソース チェックアウト（git clone）
 

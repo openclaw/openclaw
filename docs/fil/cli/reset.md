@@ -4,13 +4,6 @@ read_when:
   - Gusto mong burahin ang lokal na state habang nananatiling naka-install ang CLI
   - Gusto mo ng dry-run kung ano ang matatanggal
 title: "reset"
-x-i18n:
-  source_path: cli/reset.md
-  source_hash: 08afed5830f892e0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:17Z
 ---
 
 # `openclaw reset`

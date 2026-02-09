@@ -3,22 +3,15 @@ summary: "Paano gumagana ang memory ng OpenClaw (mga workspace file + awtomatiko
 read_when:
   - Gusto mo ang layout ng memory file at workflow
   - Gusto mong i-tune ang awtomatikong pre-compaction memory flush
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:11Z
 ---
 
 # Memory
 
-Ang memory ng OpenClaw ay **plain Markdown sa agent workspace**. Ang mga file ang
-pinagmumulan ng katotohanan; ang model ay “naaalala” lamang ang naisusulat sa disk.
+Ang OpenClaw memory ay **plain Markdown sa agent workspace**. Ang mga file ang
+pinagmumulan ng katotohanan; ang modelo ay “naaalala” lamang ang naisusulat sa disk.
 
 Ang mga memory search tool ay ibinibigay ng aktibong memory plugin (default:
-`memory-core`). I-disable ang mga memory plugin gamit ang `plugins.slots.memory = "none"`.
+`memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
 
 ## Mga memory file (Markdown)
 
@@ -31,23 +24,23 @@ Ginagamit ng default na workspace layout ang dalawang layer ng memory:
   - Kinuradang pangmatagalang memory.
   - **I-load lamang sa pangunahing, pribadong session** (hindi kailanman sa mga group context).
 
-Matatagpuan ang mga file na ito sa ilalim ng workspace (`agents.defaults.workspace`, default
-`~/.openclaw/workspace`). Tingnan ang [Agent workspace](/concepts/agent-workspace) para sa buong layout.
+These files live under the workspace (`agents.defaults.workspace`, default
+`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
 ## Kailan magsusulat ng memory
 
 - Ang mga desisyon, kagustuhan, at matitibay na katotohanan ay ilagay sa `MEMORY.md`.
 - Ang pang-araw-araw na tala at tumatakbong konteksto ay ilagay sa `memory/YYYY-MM-DD.md`.
 - Kapag may nagsabing “tandaan ito,” isulat ito (huwag itago sa RAM).
-- Patuloy pang umuunlad ang bahaging ito. Nakakatulong na paalalahanan ang model na mag-imbak ng mga alaala; alam nito ang gagawin.
+- This area is still evolving. It helps to remind the model to store memories; it will know what to do.
 - Kung gusto mong manatili ang isang bagay, **hilingin sa bot na isulat ito** sa memory.
 
 ## Awtomatikong memory flush (pre-compaction ping)
 
-Kapag ang isang session ay **malapit sa auto-compaction**, nagti-trigger ang OpenClaw ng **tahimik,
-agentic turn** na nagpapaalala sa model na magsulat ng matibay na memory **bago**
-ma-compact ang konteksto. Tahasang sinasabi ng mga default prompt na _maaaring tumugon_ ang model,
-ngunit kadalasan ay `NO_REPLY` ang tamang sagot kaya hindi ito nakikita ng user.
+When a session is **close to auto-compaction**, OpenClaw triggers a **silent,
+agentic turn** that reminds the model to write durable memory **before** the
+context is compacted. The default prompts explicitly say the model _may reply_,
+but usually `NO_REPLY` is the correct response so the user never sees this turn.
 
 Ito ay kinokontrol ng `agents.defaults.compaction.memoryFlush`:
 
@@ -91,7 +84,7 @@ Mga default:
 
 - Naka-enable bilang default.
 - Binabantayan ang mga memory file para sa mga pagbabago (debounced).
-- Gumagamit ng remote embeddings bilang default. Kung hindi naka-set ang `memorySearch.provider`, awtomatikong pumipili ang OpenClaw:
+- Uses remote embeddings by default. If `memorySearch.provider` is not set, OpenClaw auto-selects:
   1. `local` kung may naka-configure na `memorySearch.local.modelPath` at umiiral ang file.
   2. `openai` kung maresolba ang OpenAI key.
   3. `gemini` kung maresolba ang Gemini key.
@@ -100,24 +93,24 @@ Mga default:
 - Ang local mode ay gumagamit ng node-llama-cpp at maaaring mangailangan ng `pnpm approve-builds`.
 - Gumagamit ng sqlite-vec (kapag available) para pabilisin ang vector search sa loob ng SQLite.
 
-Ang remote embeddings ay **nangangailangan** ng API key para sa embedding provider. Nireresolba ng OpenClaw
-ang mga key mula sa auth profiles, `models.providers.*.apiKey`, o mga environment
-variable. Sinasaklaw lamang ng Codex OAuth ang chat/completions at **hindi** sapat para sa
-embeddings para sa memory search. Para sa Gemini, gamitin ang `GEMINI_API_KEY` o
-`models.providers.google.apiKey`. Para sa Voyage, gamitin ang `VOYAGE_API_KEY` o
-`models.providers.voyage.apiKey`. Kapag gumagamit ng custom OpenAI-compatible endpoint,
-i-set ang `memorySearch.remote.apiKey` (at opsyonal ang `memorySearch.remote.headers`).
+Remote embeddings **require** an API key for the embedding provider. OpenClaw
+resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
+variables. Codex OAuth only covers chat/completions and does **not** satisfy
+embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
+`models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
+`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (eksperimental)
 
-I-set ang `memory.backend = "qmd"` upang palitan ang built-in SQLite indexer ng
-[QMD](https://github.com/tobi/qmd): isang local-first search sidecar na pinagsasama ang
-BM25 + vectors + reranking. Nanatiling Markdown ang pinagmumulan ng katotohanan; nagshi-shell
-ang OpenClaw palabas sa QMD para sa retrieval. Mga pangunahing punto:
+Set `memory.backend = "qmd"` to swap the built-in SQLite indexer for
+[QMD](https://github.com/tobi/qmd): a local-first search sidecar that combines
+BM25 + vectors + reranking. Markdown stays the source of truth; OpenClaw shells
+out to QMD for retrieval. Key points:
 
 **Mga paunang kinakailangan**
 
-- Disabled bilang default. Mag-opt in per-config (`memory.backend = "qmd"`).
+- Disabled by default. Opt in per-config (`memory.backend = "qmd"`).
 - I-install ang QMD CLI nang hiwalay (`bun install -g https://github.com/tobi/qmd` o kumuha
   ng release) at tiyaking nasa `PATH` ng gateway ang `qmd` binary.
 - Kailangan ng QMD ng SQLite build na nagpapahintulot ng extensions (`brew install sqlite` sa
@@ -127,7 +120,8 @@ ang OpenClaw palabas sa QMD para sa retrieval. Mga pangunahing punto:
 - Pinapatakbo ng gateway ang QMD sa isang self-contained XDG home sa ilalim ng
   `~/.openclaw/agents/<agentId>/qmd/` sa pamamagitan ng pag-set ng `XDG_CONFIG_HOME` at
   `XDG_CACHE_HOME`.
-- OS support: gumagana ang macOS at Linux out of the box kapag naka-install na ang Bun + SQLite. Pinakamainam ang Windows sa pamamagitan ng WSL2.
+- OS support: macOS and Linux work out of the box once Bun + SQLite are
+  installed. Windows is best supported via WSL2.
 
 **Paano tumatakbo ang sidecar**
 
@@ -140,9 +134,9 @@ ang OpenClaw palabas sa QMD para sa retrieval. Mga pangunahing punto:
 - Ang boot refresh ay tumatakbo na ngayon sa background bilang default upang hindi
   ma-block ang pagsisimula ng chat; i-set ang `memory.qmd.update.waitForBootSync = true` para panatilihin ang dating
   blocking na pag-uugali.
-- Tumatakbo ang mga search sa pamamagitan ng `qmd query --json`. Kung pumalya ang QMD o nawawala ang binary,
-  awtomatikong bumabalik ang OpenClaw sa builtin SQLite manager upang patuloy na gumana
-  ang mga memory tool.
+- Searches run via `qmd query --json`. If QMD fails or the binary is missing,
+  OpenClaw automatically falls back to the builtin SQLite manager so memory tools
+  keep working.
 - Hindi pa inilalantad ng OpenClaw ang QMD embed batch-size tuning sa kasalukuyan; ang batch behavior ay
   kinokontrol mismo ng QMD.
 - **Maaaring mabagal ang unang search**: maaaring mag-download ang QMD ng lokal na GGUF models
@@ -151,9 +145,9 @@ ang OpenClaw palabas sa QMD para sa retrieval. Mga pangunahing punto:
   - Kung gusto mong i-pre-download ang mga model nang mano-mano (at painitin ang parehong index na
     ginagamit ng OpenClaw), magpatakbo ng one-off query gamit ang XDG dirs ng agent.
 
-    Ang QMD state ng OpenClaw ay nasa ilalim ng iyong **state dir** (default sa `~/.openclaw`).
-    Maaari mong ituro ang `qmd` sa eksaktong kaparehong index sa pamamagitan ng pag-export ng parehong XDG vars
-    na ginagamit ng OpenClaw:
+    OpenClaw’s QMD state lives under your **state dir** (defaults to `~/.openclaw`).
+    You can point `qmd` at the exact same index by exporting the same XDG vars
+    OpenClaw uses:
 
     ```bash
     # Pick the same state dir OpenClaw uses
@@ -187,9 +181,9 @@ ang OpenClaw palabas sa QMD para sa retrieval. Mga pangunahing punto:
   `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`).
 - `limits`: i-clamp ang recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
-- `scope`: kaparehong schema ng [`session.sendPolicy`](/gateway/configuration#session).
-  Default ay DM-only (`deny` lahat, `allow` direct chats); luwagan ito upang ilantad ang mga QMD
-  hit sa mga group/channel.
+- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
+  Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
+  hits in groups/channels.
 - Ang mga snippet na nagmula sa labas ng workspace ay lilitaw bilang
   `qmd/<collection>/<relative-path>` sa mga resulta ng `memory_search`; nauunawaan ng `memory_get`
   ang prefix na iyon at nagbabasa mula sa naka-configure na QMD collection root.
@@ -227,10 +221,10 @@ memory: {
 **Mga citation at fallback**
 
 - Nalalapat ang `memory.citations` anuman ang backend (`auto`/`on`/`off`).
-- Kapag tumatakbo ang `qmd`, tina-tag namin ang `status().backend = "qmd"` upang ipakita ng diagnostics kung aling
-  engine ang nagsilbi ng mga resulta. Kung magsara ang QMD subprocess o hindi ma-parse ang JSON output,
-  nagla-log ng babala ang search manager at ibinabalik ang builtin provider
-  (umiiral na Markdown embeddings) hanggang makabawi ang QMD.
+- When `qmd` runs, we tag `status().backend = "qmd"` so diagnostics show which
+  engine served the results. If the QMD subprocess exits or JSON output can’t be
+  parsed, the search manager logs a warning and returns the builtin provider
+  (existing Markdown embeddings) until QMD recovers.
 
 ### Mga karagdagang path ng memory
 
@@ -307,7 +301,7 @@ Mga fallback:
 
 Batch indexing (OpenAI + Gemini):
 
-- Naka-enable bilang default para sa OpenAI at Gemini embeddings. I-set ang `agents.defaults.memorySearch.remote.batch.enabled = false` upang i-disable.
+- Enabled by default for OpenAI and Gemini embeddings. Set `agents.defaults.memorySearch.remote.batch.enabled = false` to disable.
 - Ang default na pag-uugali ay naghihintay sa pagkumpleto ng batch; i-tune ang `remote.batch.wait`, `remote.batch.pollIntervalMs`, at `remote.batch.timeoutMinutes` kung kailangan.
 - I-set ang `remote.batch.concurrency` upang kontrolin kung ilang batch job ang isinusumite namin nang sabay (default: 2).
 - Nalalapat ang batch mode kapag `memorySearch.provider = "openai"` o `"gemini"` at gumagamit ng kaukulang API key.
@@ -352,16 +346,16 @@ Local mode:
 
 ### Paano gumagana ang mga memory tool
 
-- Ang `memory_search` ay semantikong naghahanap sa mga Markdown chunk (~400 token target, 80-token overlap) mula sa `MEMORY.md` + `memory/**/*.md`. Ibinabalik nito ang snippet text (limitadong ~700 char), file path, saklaw ng linya, score, provider/model, at kung nag-fallback kami mula local → remote embeddings. Walang ibinabalik na buong file payload.
-- Binabasa ng `memory_get` ang isang partikular na memory Markdown file (workspace-relative), opsyonal mula sa panimulang linya at para sa N linya. Tinatanggihan ang mga path sa labas ng `MEMORY.md` / `memory/`.
+- `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
+- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
 - Ang parehong tool ay naka-enable lamang kapag nagre-resolve sa true ang `memorySearch.enabled` para sa agent.
 
 ### Ano ang ini-index (at kailan)
 
 - Uri ng file: Markdown lamang (`MEMORY.md`, `memory/**/*.md`).
 - Imbakan ng index: per-agent SQLite sa `~/.openclaw/memory/<agentId>.sqlite` (nako-configure sa pamamagitan ng `agents.defaults.memorySearch.store.path`, sumusuporta sa `{agentId}` token).
-- Freshness: watcher sa `MEMORY.md` + `memory/` ang nagmamarka sa index bilang dirty (debounce 1.5s). Isinaschedule ang sync sa simula ng session, sa search, o sa isang interval at tumatakbo nang asynchronous. Gumagamit ang mga session transcript ng delta threshold upang mag-trigger ng background sync.
-- Mga trigger ng reindex: iniimbak ng index ang embedding **provider/model + endpoint fingerprint + chunking params**. Kapag nagbago ang alinman sa mga iyon, awtomatikong nire-reset at nire-reindex ng OpenClaw ang buong store.
+- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
+- Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, OpenClaw automatically resets and reindexes the entire store.
 
 ### Hybrid search (BM25 + vector)
 
@@ -385,9 +379,9 @@ Ngunit mahina ito sa eksaktong, high-signal na token:
 - mga simbolo ng code (`memorySearch.query.hybrid`)
 - mga error string (“sqlite-vec unavailable”)
 
-Kabaligtaran ang BM25 (full-text): malakas sa eksaktong token, mas mahina sa paraphrase.
-Ang hybrid search ang praktikal na gitna: **gamitin ang parehong retrieval signal** upang makakuha ng
-magagandang resulta para sa parehong “natural language” na query at “needle in a haystack” na query.
+BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
+Hybrid search is the pragmatic middle ground: **use both retrieval signals** so you get
+good results for both “natural language” queries and “needle in a haystack” queries.
 
 #### Paano namin pinagsasama ang mga resulta (kasalukuyang disenyo)
 
@@ -412,9 +406,9 @@ Mga tala:
 - Kung hindi available ang embeddings (o nagbalik ang provider ng zero-vector), pinapatakbo pa rin namin ang BM25 at ibinabalik ang mga keyword match.
 - Kung hindi malikha ang FTS5, pinapanatili namin ang vector-only search (walang hard failure).
 
-Hindi ito “perpekto ayon sa IR-theory,” ngunit simple, mabilis, at karaniwang nagpapabuti ng recall/precision sa mga totoong tala.
-Kung gusto naming pagandahin pa sa hinaharap, karaniwang susunod na hakbang ang Reciprocal Rank Fusion (RRF) o score normalization
-(min/max o z-score) bago paghaluin.
+This isn’t “IR-theory perfect”, but it’s simple, fast, and tends to improve recall/precision on real notes.
+If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
+(min/max or z-score) before mixing.
 
 Config:
 
@@ -456,8 +450,8 @@ agents: {
 
 ### Session memory search (eksperimental)
 
-Maaari mong opsyonal na i-index ang **mga session transcript** at ilantad ang mga ito sa pamamagitan ng `memory_search`.
-Ito ay nasa likod ng isang experimental flag.
+You can optionally index **session transcripts** and surface them via `memory_search`.
+This is gated behind an experimental flag.
 
 ```json5
 agents: {
@@ -477,7 +471,7 @@ Mga tala:
 - Ang `memory_search` ay hindi kailanman nagba-block sa indexing; maaaring bahagyang luma ang mga resulta hanggang matapos ang background sync.
 - Ang mga resulta ay snippet lamang; nananatiling limitado sa mga memory file ang `memory_get`.
 - Ang session indexing ay hiwalay bawat agent (tanging ang mga session log ng agent na iyon ang ini-index).
-- Nasa disk ang mga session log (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Anumang proseso/user na may filesystem access ay maaaring magbasa nito, kaya ituring ang disk access bilang trust boundary. Para sa mas mahigpit na isolation, patakbuhin ang mga agent sa ilalim ng magkakahiwalay na OS user o host.
+- Session logs live on disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. Para sa mas mahigpit na isolation, patakbuhin ang mga agent sa magkakahiwalay na OS users o hosts.
 
 Mga delta threshold (ipinapakita ang mga default):
 
@@ -498,9 +492,9 @@ agents: {
 
 ### SQLite vector acceleration (sqlite-vec)
 
-Kapag available ang sqlite-vec extension, iniimbak ng OpenClaw ang embeddings sa isang
-SQLite virtual table (`vec0`) at nagsasagawa ng vector distance query sa
-database. Pinananatiling mabilis ang search nang hindi nilo-load ang bawat embedding sa JS.
+Kapag available ang sqlite-vec extension, iniimbak ng OpenClaw ang mga embedding sa isang
+SQLite virtual table (`vec0`) at nagsasagawa ng mga vector distance query sa
+database. Pinananatiling mabilis ang paghahanap nito nang hindi nilo-load ang bawat embedding sa JS.
 
 Configuration (opsyonal):
 
@@ -531,7 +525,7 @@ Mga tala:
 ### Awtomatikong pag-download ng local embedding
 
 - Default na local embedding model: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB).
-- Kapag `memorySearch.provider = "local"`, nireresolba ng `node-llama-cpp` ang `modelPath`; kung nawawala ang GGUF ay **awtomatikong dina-download** ito sa cache (o `local.modelCacheDir` kung naka-set), pagkatapos ay nilo-load. Nagpapatuloy ang mga download sa retry.
+- Kapag `memorySearch.provider = "local"`, nireresolba ng `node-llama-cpp` ang `modelPath`; kung wala ang GGUF, ito ay **auto-downloads** papunta sa cache (o `local.modelCacheDir` kung naka-set), at saka nilo-load. Nagpapatuloy ang mga download kapag nag-retry.
 - Kinakailangan sa native build: patakbuhin ang `pnpm approve-builds`, piliin ang `node-llama-cpp`, pagkatapos ay `pnpm rebuild node-llama-cpp`.
 - Fallback: kung pumalya ang local setup at `memorySearch.fallback = "openai"`, awtomatiko kaming lilipat sa remote embeddings (`openai/text-embedding-3-small` maliban kung i-override) at itinatala ang dahilan.
 
@@ -559,4 +553,4 @@ agents: {
 Mga tala:
 
 - Mas may prioridad ang `remote.*` kaysa sa `models.providers.openai.*`.
-- Ang `remote.headers` ay pinagsasama sa OpenAI headers; nananalo ang remote sa key conflicts. Alisin ang `remote.headers` upang gamitin ang mga default ng OpenAI.
+- Ang `remote.headers` ay nagme-merge sa mga OpenAI header; nananalo ang remote kapag may key conflicts. Tanggalin ang `remote.headers` para gamitin ang mga default ng OpenAI.

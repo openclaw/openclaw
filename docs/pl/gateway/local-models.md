@@ -5,18 +5,11 @@ read_when:
   - Integrujesz LM Studio lub proxy zgodne z OpenAI
   - Potrzebujesz najbezpieczniejszych wytycznych dla modeli lokalnych
 title: "Modele lokalne"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:12Z
 ---
 
 # Modele lokalne
 
-Lokalnie da się to zrobić, ale OpenClaw oczekuje dużego kontekstu oraz silnych zabezpieczeń przed prompt injection. Małe karty obcinają kontekst i powodują wycieki bezpieczeństwa. Celuj wysoko: **≥2 w pełni wyposażone Mac Studio lub równoważny zestaw GPU (~30 tys. USD+)**. Pojedynczy GPU **24 GB** działa tylko dla lżejszych promptów i z wyższymi opóźnieniami. Używaj **największego / pełnowymiarowego wariantu modelu, jaki możesz uruchomić**; agresywnie kwantyzowane lub „małe” checkpointy zwiększają ryzyko prompt injection (zob. [Security](/gateway/security)).
+Lokalnie da się to zrobić, ale OpenClaw oczekuje dużego kontekstu oraz silnych zabezpieczeń przed prompt injection. Małe karty obcinają kontekst i powodują wycieki bezpieczeństwa. Celuj wysoko: \*\*≥2 w pełni wyposażone Mac Studio lub równoważny zestaw GPU (~30 tys. Pojedynczy GPU **24 GB** działa tylko dla lżejszych promptów i z wyższymi opóźnieniami. Używaj **największego / pełnowymiarowego wariantu modelu, jaki możesz uruchomić**; agresywnie kwantyzowane lub „małe” checkpointy zwiększają ryzyko prompt injection (zob. [Security](/gateway/security)).
 
 ## Zalecane: LM Studio + MiniMax M2.1 (Responses API, pełny rozmiar)
 

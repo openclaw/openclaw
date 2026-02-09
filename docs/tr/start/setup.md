@@ -4,13 +4,6 @@ read_when:
   - Yeni bir makine kurarken
   - Kişisel kurulumunuzu bozmadan “en yeni + en iyiyi” istiyorsanız
 title: "Kurulum"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:53Z
 ---
 
 # Kurulum
@@ -28,13 +21,13 @@ Son güncelleme: 2026-01-01
 - **Kararlı iş akışı:** macOS uygulamasını yükleyin; paketli Gateway’i çalıştırmasına izin verin.
 - **En yeni iş akışı:** Gateway’i `pnpm gateway:watch` üzerinden kendiniz çalıştırın; ardından macOS uygulamasının Yerel modda bağlanmasına izin verin.
 
-## Ön koşullar (kaynaktan)
+## Ön Koşullar (kaynaktan)
 
 - Node `>=22`
 - `pnpm`
 - Docker (isteğe bağlı; yalnızca konteynerli kurulum/e2e için — bkz. [Docker](/install/docker))
 
-## Özelleştirme stratejisi (güncellemeler can yakmasın)
+## Uyarlama stratejisi (böylece güncellemeler zarar vermez)
 
 “%100 bana özel” _ve_ kolay güncellemeler istiyorsanız, özelleştirmenizi şuralarda tutun:
 
@@ -74,7 +67,7 @@ node openclaw.mjs gateway --port 18789 --verbose
 openclaw channels login
 ```
 
-5. Sağlama yapın:
+5. 1. Sağlamlık kontrolü:
 
 ```bash
 openclaw health
@@ -88,7 +81,7 @@ Onboarding derlemenizde mevcut değilse:
 
 Amaç: TypeScript Gateway üzerinde çalışmak, sıcak yeniden yükleme almak, macOS uygulaması UI’sini bağlı tutmak.
 
-### 0) (İsteğe bağlı) macOS uygulamasını da kaynaktan çalıştırın
+### 0. (İsteğe bağlı) macOS uygulamasını da kaynaktan çalıştırın
 
 macOS uygulamasını da en yeni sürümde istiyorsanız:
 
@@ -96,7 +89,7 @@ macOS uygulamasını da en yeni sürümde istiyorsanız:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Geliştirme Gateway’ini başlatın
+### 1. Geliştirme Gateway’ini başlatın
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch`, gateway’i izleme modunda çalıştırır ve TypeScript değişikliklerinde yeniden yükler.
 
-### 2) macOS uygulamasını çalışan Gateway’inize yönlendirin
+### 2. macOS uygulamasını çalışan Gateway’inize yönlendirin
 
 **OpenClaw.app** içinde:
 
 - Bağlantı Modu: **Yerel**
   Uygulama, yapılandırılmış bağlantı noktasındaki çalışan gateway’e bağlanır.
 
-### 3) Doğrulayın
+### 3. Doğrulayın
 
 - Uygulama içi Gateway durumu **“Using existing gateway …”** olarak görünmelidir
 - Ya da CLI üzerinden:
@@ -121,7 +114,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### Yaygın tuzaklar
+### 2. Yaygın tuzaklar
 
 - **Yanlış port:** Gateway WS varsayılanı `ws://127.0.0.1:18789`; uygulama + CLI aynı portta olmalıdır.
 - **Durumun yaşadığı yerler:**

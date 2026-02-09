@@ -4,13 +4,6 @@ read_when:
   - Einrichten der Überwachung oder von Warnmeldungen zum Auth-Ablauf
   - Automatisieren von Prüfungen zur OAuth-Aktualisierung für Claude Code / Codex
 title: "Auth-Überwachung"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:58Z
 ---
 
 # Auth-Überwachung

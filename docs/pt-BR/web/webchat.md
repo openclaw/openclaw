@@ -3,13 +3,6 @@ summary: "Host estático do WebChat em loopback e uso de WS do Gateway para a UI
 read_when:
   - Depuração ou configuração do acesso ao WebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:18Z
 ---
 
 # WebChat (UI WebSocket do Gateway)

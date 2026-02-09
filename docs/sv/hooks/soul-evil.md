@@ -4,25 +4,18 @@ read_when:
   - Du vill aktivera eller justera SOUL Evil-hooken
   - Du vill ha ett rensningsfönster eller ett slumpmässigt persona-byte
 title: "SOUL Evil-hook"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:31Z
 ---
 
 # SOUL Evil-hook
 
-SOUL Evil-hooken byter ut det **injicerade** `SOUL.md`-innehållet mot `SOUL_EVIL.md` under
-ett rensningsfönster eller genom slumpmässig chans. Den modifierar **inte** filer på disk.
+SOUL Evil krok byter **injicerade** `SOUL.md`-innehållet med `SOUL_EVIL.md` under
+ett rensningsfönster eller av slumpmässig slump. Det ändrar **inte** filer på disken.
 
 ## Hur det fungerar
 
-När `agent:bootstrap` körs kan hooken ersätta `SOUL.md`-innehållet i minnet
-innan systemprompten sätts samman. Om `SOUL_EVIL.md` saknas eller är tom,
-loggar OpenClaw en varning och behåller den normala `SOUL.md`.
+När `agent:bootstrap` körs kan kroken ersätta innehållet `SOUL.md` i minne
+innan systemprompten är monterad. Om `SOUL_EVIL.md` saknas eller är tom, loggar
+OpenClaw en varning och behåller den normala `SOUL.md`.
 
 Körningar av underagenter inkluderar **inte** `SOUL.md` i sina bootstrap-filer, så denna hook
 har ingen effekt på underagenter.

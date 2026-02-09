@@ -3,13 +3,6 @@ summary: "OpenClaw macOS uygulaması üzerinde çalışan geliştiriciler için 
 read_when:
   - macOS geliştirme ortamının kurulumu
 title: "macOS Geliştirici Kurulumu"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:33Z
 ---
 
 # macOS Geliştirici Kurulumu
@@ -23,7 +16,7 @@ Uygulamayı derlemeden önce aşağıdakilerin yüklü olduğundan emin olun:
 1. **Xcode 26.2+**: Swift geliştirme için gereklidir.
 2. **Node.js 22+ & pnpm**: gateway, CLI ve paketleme betikleri için gereklidir.
 
-## 1. Bağımlılıkları Yükleyin
+## 1) Bağımlılıkları Yükleyin
 
 Proje genelindeki bağımlılıkları yükleyin:
 
@@ -82,7 +75,7 @@ xcrun swift --version
 
 Sürümler eşleşmiyorsa, macOS/Xcode’u güncelleyin ve derlemeyi yeniden çalıştırın.
 
-### İzin Verme Sırasında Uygulama Çöküyor
+### İzin Verildiğinde Uygulama Çöküyor
 
 Uygulama **Speech Recognition** veya **Microphone** erişimine izin vermeye çalıştığınızda çöküyorsa, bunun nedeni bozulmuş bir TCC önbelleği veya imza uyumsuzluğu olabilir.
 

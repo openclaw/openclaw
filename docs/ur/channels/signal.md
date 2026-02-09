@@ -4,18 +4,11 @@ read_when:
   - Signal سپورٹ سیٹ اپ کرنا
   - Signal بھیجنے/موصول کرنے کی خرابیوں کی جانچ
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:12Z
 ---
 
 # Signal (signal-cli)
 
-حیثیت: بیرونی CLI انضمام۔ Gateway HTTP JSON-RPC + SSE کے ذریعے `signal-cli` سے بات کرتا ہے۔
+Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
 
 ## فوری سیٹ اپ (مبتدی)
 
@@ -88,7 +81,7 @@ x-i18n:
 }
 ```
 
-ملٹی اکاؤنٹ سپورٹ: ہر اکاؤنٹ کے لیے کنفیگ کے ساتھ `channels.signal.accounts` استعمال کریں اور اختیاری طور پر `name`۔ مشترکہ پیٹرن کے لیے [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) دیکھیں۔
+Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
 ## بیرونی ڈیمَن موڈ (httpUrl)
 
@@ -105,7 +98,7 @@ x-i18n:
 }
 ```
 
-یہ OpenClaw کے اندر آٹو-اسپان اور اسٹارٹ اپ ویٹ کو چھوڑ دیتا ہے۔ آٹو-اسپان کے ساتھ سست اسٹارٹس کے لیے `channels.signal.startupTimeoutMs` سیٹ کریں۔
+This skips auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
 
 ## رسائی کا کنٹرول (DMs + گروپس)
 
@@ -116,7 +109,7 @@ DMs:
 - منظوری کے طریقے:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- پیئرنگ Signal DMs کے لیے ڈیفالٹ ٹوکن ایکسچینج ہے۔ تفصیلات: [Pairing](/channels/pairing)
+- Pairing is the default token exchange for Signal DMs. Details: [Pairing](/channels/pairing)
 - صرف UUID والے ارسال کنندگان (`sourceUuid` سے) `channels.signal.allowFrom` میں `uuid:<id>` کے طور پر محفوظ کیے جاتے ہیں۔
 
 گروپس:
@@ -137,7 +130,7 @@ DMs:
 - اٹیچمنٹس سپورٹڈ ہیں (base64، `signal-cli` سے حاصل شدہ)۔
 - ڈیفالٹ میڈیا حد: `channels.signal.mediaMaxMb` (ڈیفالٹ 8)۔
 - میڈیا ڈاؤن لوڈ چھوڑنے کے لیے `channels.signal.ignoreAttachments` استعمال کریں۔
-- گروپ ہسٹری سیاق `channels.signal.historyLimit` (یا `channels.signal.accounts.*.historyLimit`) استعمال کرتا ہے، اور `messages.groupChat.historyLimit` پر فال بیک کرتا ہے۔ بند کرنے کے لیے `0` سیٹ کریں (ڈیفالٹ 50)۔
+- Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## ٹائپنگ + ریڈ رسیدیں
 
@@ -166,7 +159,7 @@ message action=react channel=signal target=signal:group:<groupId> targetAuthor=u
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive`۔
   - `off`/`ack` ایجنٹ ری ایکشنز کو بند کرتا ہے (میسج ٹول `react` ایرر دے گا)۔
   - `minimal`/`extensive` ایجنٹ ری ایکشنز فعال کرتا ہے اور رہنمائی کی سطح سیٹ کرتا ہے۔
-- ہر اکاؤنٹ اوور رائیڈز: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`۔
+- Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
 ## ڈیلیوری اہداف (CLI/cron)
 
@@ -219,11 +212,11 @@ openclaw pairing list signal
 - `channels.signal.ignoreStories`: ڈیمَن سے اسٹوریز نظرانداز کریں۔
 - `channels.signal.sendReadReceipts`: ریڈ رسیدیں فارورڈ کریں۔
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (ڈیفالٹ: پیئرنگ)۔
-- `channels.signal.allowFrom`: DM اجازت فہرست (E.164 یا `uuid:<id>`)۔ `open` کے لیے `"*"` درکار ہے۔ Signal میں یوزرنیمز نہیں؛ فون/UUID آئی ڈیز استعمال کریں۔
+- `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal میں صارف نام نہیں ہوتے؛ فون/UUID آئی ڈیز استعمال کریں۔
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (ڈیفالٹ: اجازت فہرست)۔
 - `channels.signal.groupAllowFrom`: گروپ ارسال کنندہ اجازت فہرست۔
 - `channels.signal.historyLimit`: سیاق کے طور پر شامل کرنے کے لیے زیادہ سے زیادہ گروپ پیغامات (0 بند کرتا ہے)۔
-- `channels.signal.dmHistoryLimit`: صارف ٹرنز میں DM ہسٹری حد۔ فی صارف اوور رائیڈز: `channels.signal.dms["<phone_or_uuid>"].historyLimit`۔
+- `channels.signal.dmHistoryLimit`: صارف کے ٹرنز میں DM ہسٹری کی حد۔ فی صارف اووررائیڈز: `channels.signal.dms["<phone_or_uuid>"].historyLimit`۔
 - `channels.signal.textChunkLimit`: آؤٹ باؤنڈ چنک سائز (حروف)۔
 - `channels.signal.chunkMode`: `length` (ڈیفالٹ) یا `newline` تاکہ لمبائی چنکنگ سے پہلے خالی لائنوں (پیراگراف کی حدیں) پر تقسیم ہو۔
 - `channels.signal.mediaMaxMb`: اِن باؤنڈ/آؤٹ باؤنڈ میڈیا حد (MB)۔

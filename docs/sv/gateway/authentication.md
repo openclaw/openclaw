@@ -4,18 +4,13 @@ read_when:
   - Felsökning av modellautentisering eller OAuth-utgång
   - Dokumentation av autentisering eller lagring av autentiseringsuppgifter
 title: "Autentisering"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:16Z
 ---
 
 # Autentisering
 
-OpenClaw stöder OAuth och API-nycklar för modellleverantörer. För Anthropic‑konton rekommenderar vi att du använder en **API-nyckel**. För åtkomst via Claude‑prenumeration, använd den långlivade token som skapats av `claude setup-token`.
+OpenClaw stöder OAuth och API-nycklar för modellleverantörer. För antropiska
+konton rekommenderar vi att du använder en **API-nyckel**. För Claude prenumerationsaccess använder
+den långlivade token skapad av `claude setup-token`.
 
 Se [/concepts/oauth](/concepts/oauth) för det fullständiga OAuth‑flödet och lagringslayouten.
 
@@ -54,7 +49,8 @@ Se [Help](/help) för detaljer om arv av miljövariabler (`env.shellEnv`,
 
 ## Anthropic: setup-token (prenumerationsautentisering)
 
-För Anthropic är den rekommenderade vägen en **API‑nyckel**. Om du använder en Claude‑prenumeration stöds även setup‑token‑flödet. Kör det på **gateway‑värden**:
+För Anthropic, är den rekommenderade sökvägen en **API-nyckel**. Om du använder en Claude
+-prenumeration, stöds även setup-token-flödet. Kör det på **gateway-värden**:
 
 ```bash
 claude setup-token
@@ -138,8 +134,8 @@ openclaw models status
 
 ### Token håller på att gå ut/har gått ut
 
-Kör `openclaw models status` för att bekräfta vilken profil som håller på att gå ut. Om profilen
-saknas, kör `claude setup-token` igen och klistra in token på nytt.
+Kör `openclaw models status` för att bekräfta vilken profil som löper ut. Om profilen
+saknas, reerun `claude setup-token` och klistra in token igen.
 
 ## Krav
 

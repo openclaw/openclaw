@@ -2,13 +2,6 @@
 summary: "Configuração do Slack para modo socket ou webhook HTTP"
 read_when: "Ao configurar o Slack ou depurar o modo socket/HTTP do Slack"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:39Z
 ---
 
 # Slack
@@ -384,11 +377,11 @@ reação de ack após o bot responder.
 
 Por padrão, o OpenClaw responde no canal principal. Use `channels.slack.replyToMode` para controlar o encadeamento automático:
 
-| Modo    | Comportamento                                                                                                                                                                           |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Padrão.** Responder no canal principal. Só cria thread se a mensagem de disparo já estiver em uma thread.                                                                             |
+| Modo    | Comportamento                                                                                                                                                                                                                              |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`   | **Padrão.** Responder no canal principal. Só cria thread se a mensagem de disparo já estiver em uma thread.                                                                                |
 | `first` | A primeira resposta vai para a thread (sob a mensagem de disparo); respostas subsequentes vão para o canal principal. Útil para manter o contexto visível evitando poluição de threads. |
-| `all`   | Todas as respostas vão para a thread. Mantém conversas contidas, mas pode reduzir a visibilidade.                                                                                       |
+| `all`   | Todas as respostas vão para a thread. Mantém conversas contidas, mas pode reduzir a visibilidade.                                                                                                          |
 
 O modo se aplica tanto a respostas automáticas quanto a chamadas de ferramentas do agente (`slack sendMessage`).
 

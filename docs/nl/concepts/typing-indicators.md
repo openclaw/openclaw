@@ -3,13 +3,6 @@ summary: "Wanneer OpenClaw typindicatoren toont en hoe je ze afstemt"
 read_when:
   - Het gedrag of de standaardwaarden van typindicatoren wijzigen
 title: "Typindicatoren"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:18Z
 ---
 
 # Typindicatoren

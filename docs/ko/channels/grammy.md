@@ -3,13 +3,6 @@ summary: "grammY 를 통한 Telegram Bot API 통합과 설정 참고 사항"
 read_when:
   - Telegram 또는 grammY 경로를 작업할 때
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:51Z
 ---
 
 # grammY 통합 (Telegram Bot API)

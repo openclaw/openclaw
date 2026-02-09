@@ -4,13 +4,6 @@ read_when:
   - 리포지토리에서 스크립트를 실행할 때
   - ./scripts 아래에 스크립트를 추가하거나 변경할 때
 title: "스크립트"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:10Z
 ---
 
 # 스크립트
@@ -18,7 +11,7 @@ x-i18n:
 `scripts/` 디렉토리에는 로컬 워크플로와 운영 작업을 위한 헬퍼 스크립트가 포함되어 있습니다.
 작업이 명확하게 특정 스크립트와 연결된 경우에만 이를 사용하고, 그렇지 않으면 CLI 를 우선적으로 사용하십시오.
 
-## 규칙
+## Conventions
 
 - 스크립트는 문서나 릴리스 체크리스트에서 참조되지 않는 한 **선택 사항**입니다.
 - 가능한 경우 CLI 표면을 우선하십시오 (예: 인증 모니터링은 `openclaw models status --check` 을 사용합니다).

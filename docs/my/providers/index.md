@@ -4,20 +4,13 @@ read_when:
   - မော်ဒယ် ပံ့ပိုးသူကို ရွေးချယ်လိုသောအခါ
   - ပံ့ပိုးထားသော LLM backend များ၏ အကျဉ်းချုပ်ကို အမြန်ကြည့်လိုသောအခါ
 title: "မော်ဒယ် ပံ့ပိုးသူများ"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:45Z
 ---
 
 # မော်ဒယ် ပံ့ပိုးသူများ
 
-OpenClaw သည် LLM ပံ့ပိုးသူ အမျိုးမျိုးကို အသုံးပြုနိုင်သည်။ ပံ့ပိုးသူတစ်ခုကို ရွေးချယ်ပြီး အထောက်အထားပြုလုပ်ကာ မူလ မော်ဒယ်ကို `provider/model` အဖြစ် သတ်မှတ်ပါ။
+OpenClaw သည် LLM providers များစွာကို အသုံးပြုနိုင်ပါသည်။ Provider တစ်ခုကို ရွေးချယ်၍ authenticate လုပ်ပြီး default model ကို `provider/model` အဖြစ် သတ်မှတ်ပါ။
 
-ချတ် ချန်နယ် စာရွက်စာတမ်းများ (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/စသည်) ကို ရှာနေပါသလား။ [Channels](/channels) ကို ကြည့်ပါ။
+Chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.) ကို ရှာနေပါသလား? [Channels](/channels) ကို ကြည့်ပါ။
 
 ## အထူးအလေးပေးချက်: Venice (Venice AI)
 
@@ -66,4 +59,4 @@ Venice သည် ကိုယ်ရေးကိုယ်တာကို ဦး�
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Claude Max/Pro စာရင်းသွင်းမှုကို OpenAI နှင့် ကိုက်ညီသော API endpoint အဖြစ် အသုံးပြုနိုင်သည်
 
-ပံ့ပိုးသူ အပြည့်အစုံ စာရင်း (xAI, Groq, Mistral စသည်) နှင့် အဆင့်မြင့် ဖွဲ့စည်းပြင်ဆင်မှုများအတွက် [Model providers](/concepts/model-providers) ကို ကြည့်ပါ။
+Provider catalog အပြည့်အစုံ (xAI, Groq, Mistral, etc.) အတွက် နှင့် advanced configuration များအတွက် [Model providers](/concepts/model-providers) ကို ကြည့်ပါ။

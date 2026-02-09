@@ -4,13 +4,6 @@ read_when:
   - Du hanterar parade noder (kameror, skärm, canvas)
   - Du behöver godkänna förfrågningar eller anropa nodkommandon
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:45Z
 ---
 
 # `openclaw nodes`
@@ -40,9 +33,9 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` skriver ut tabeller för väntande/parade. Parade rader inkluderar den senaste anslutningens ålder (Last Connect).
-Använd `--connected` för att endast visa noder som är anslutna just nu. Använd `--last-connected <duration>` för att
-filtrera till noder som anslöt inom en tidsperiod (t.ex. `24h`, `7d`).
+`nodes list` skriver ut väntande/parade tabeller. Parkopplade rader inkluderar den senaste anslutningsåldern (Last Connect).
+Använd `--connected` för att bara visa nuvarande-anslutna noder. Använd `--last-connected <duration>` till
+filter till noder som ansluts inom en varaktighet (t.ex. `24h`, `7d`).
 
 ## Anropa / kör
 

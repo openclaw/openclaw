@@ -4,13 +4,6 @@ read_when:
   - Incorporar una nueva instancia de asistente
   - Revisar implicaciones de seguridad/permisos
 title: "Configuración del asistente personal"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:45Z
 ---
 
 # Creación de un asistente personal con OpenClaw

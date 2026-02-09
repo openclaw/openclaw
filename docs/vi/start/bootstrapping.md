@@ -6,20 +6,13 @@ read_when:
   - Gỡ lỗi thiết lập danh tính trong quá trình hướng dẫn ban đầu
 title: "Khởi tạo tác tử"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:09Z
 ---
 
 # Khởi tạo tác tử
 
-Bootstrapping là nghi thức **chạy lần đầu** chuẩn bị không gian làm việc của tác tử và
-thu thập thông tin danh tính. Nó diễn ra sau onboarding, khi tác tử khởi động
-lần đầu tiên.
+Bootstrapping is the **first‑run** ritual that prepares an agent workspace and
+collects identity details. It happens after onboarding, when the agent starts
+for the first time.
 
 ## Bootstrapping làm gì
 
@@ -33,9 +26,9 @@ lần đầu tiên.
 
 ## Nơi nó chạy
 
-Bootstrapping luôn chạy trên **máy chủ gateway**. Nếu ứng dụng macOS kết nối tới
-một Gateway từ xa, không gian làm việc và các tệp bootstrapping sẽ nằm trên máy
-từ xa đó.
+Bootstrapping always runs on the **gateway host**. If the macOS app connects to
+a remote Gateway, the workspace and bootstrapping files live on that remote
+machine.
 
 <Note>
 Khi Gateway chạy trên một máy khác, hãy chỉnh sửa các tệp không gian làm việc trên

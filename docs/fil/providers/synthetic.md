@@ -4,19 +4,12 @@ read_when:
   - Gusto mong gamitin ang Synthetic bilang model provider
   - Kailangan mo ng Synthetic API key o setup ng base URL
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:47Z
 ---
 
 # Synthetic
 
-Inilalantad ng Synthetic ang mga Anthropic-compatible na endpoint. Nirerehistro ito ng OpenClaw bilang
-`synthetic` provider at ginagamit ang Anthropic Messages API.
+Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
+`synthetic` provider and uses the Anthropic Messages API.
 
 ## Mabilis na setup
 
@@ -68,9 +61,9 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-Tandaan: Idinadagdag ng Anthropic client ng OpenClaw ang `/v1` sa base URL, kaya gamitin ang
-`https://api.synthetic.new/anthropic` (hindi ang `/anthropic/v1`). Kung babaguhin ng Synthetic ang
-base URL nito, i-override ang `models.providers.synthetic.baseUrl`.
+Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
+`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
+its base URL, override `models.providers.synthetic.baseUrl`.
 
 ## Catalog ng model
 

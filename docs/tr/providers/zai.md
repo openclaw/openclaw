@@ -4,13 +4,6 @@ read_when:
   - OpenClaw içinde Z.AI / GLM modellerini istiyorsanız
   - Basit bir ZAI_API_KEY kurulumu gerekiyorsa
 title: "Z.AI"
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Z.AI
@@ -27,7 +20,7 @@ openclaw onboard --auth-choice zai-api-key
 openclaw onboard --zai-api-key "$ZAI_API_KEY"
 ```
 
-## Yapılandırma parçası
+## Yapılandırma parçacığı
 
 ```json5
 {

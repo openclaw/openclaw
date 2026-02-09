@@ -4,13 +4,6 @@ read_when:
   - Sie betreiben mehr als einen Gateway auf derselben Maschine
   - Sie benötigen isolierte Konfiguration/Zustand/Ports pro Gateway
 title: "Mehrere Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:16Z
 ---
 
 # Mehrere Gateways (gleicher Host)
@@ -53,7 +46,7 @@ openclaw --profile rescue gateway install
 Betreiben Sie einen zweiten Gateway auf demselben Host mit jeweils eigener:
 
 - Profil/Konfiguration
-- Zustandsverzeichnis
+- state Verzeichnis
 - Workspace
 - Basis-Port (plus abgeleitete Ports)
 
@@ -98,7 +91,7 @@ Wenn Sie einen dieser Werte in der Konfiguration oder über Umgebungsvariablen �
 - Wenn Sie explizite CDP-Ports benötigen, setzen Sie `browser.profiles.<name>.cdpPort` pro Instanz.
 - Remote-Chrome: Verwenden Sie `browser.profiles.<name>.cdpUrl` (pro Profil, pro Instanz).
 
-## Manuelles Env-Beispiel
+## Manuelles env-Beispiel
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/main.json \

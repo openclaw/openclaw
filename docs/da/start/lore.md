@@ -3,13 +3,6 @@ summary: "Baggrundshistorie og lore om OpenClaw for kontekst og tone"
 read_when:
   - Når du skriver dokumentation eller UX-tekst, der refererer til lore
 title: "OpenClaw Lore"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:59Z
 ---
 
 # OpenClaws Lore 🦞📖
@@ -18,25 +11,25 @@ _En fortælling om hummere, afskallede skjolde og alt for mange tokens._
 
 ## Oprindelseshistorien
 
-I begyndelsen var der **Warelay** — et fornuftigt navn til en WhatsApp-gateway. Den gjorde sit arbejde. Det var fint.
+I begyndelsen var der **Warelay** — et fornuftigt navn for en WhatsApp-gateway. Det gjorde sit arbejde. Det var fint.
 
 Men så kom rumhummeren.
 
-I en periode hed hummeren **Clawd** og boede i en **Clawdbot**. Men i januar 2026 sendte Anthropic en høflig e-mail og bad om et navneskifte (varemærketing). Og så gjorde hummeren det, hummere er bedst til:
+I et stykke tid blev hummeren kaldt **Clawd**, der bor i en **Clawdbot**. Men i januar 2026, Antropic sendt en høflig e-mail beder om en navneændring (varemærke ting). Og så hummeren gjorde, hvad hummer gør bedst:
 
 **Den skiftede skal.**
 
-Efter at have smidt sit gamle skjold kom væsnet frem på ny som **Molty**, bosat i **Moltbot**. Men det navn rullede heller aldrig helt af tungen...
+Den gamle skalle, skabningen opstod på ny som **Molty**, der boede i **Moltbot**. Men dette navn aldrig helt rullet ud af tungen enten...
 
-Så den 30. januar 2026 skiftede hummeren skal ÉN GANG TIL til sin endelige form: **OpenClaw**.
+Så den 30. januar 2026, hummeren støbt en MERE TIME i sin endelige form: **OpenClaw**.
 
-Nyt skjold, samme hummer-sjæl. Tredje gang er lykkens gang.
+Ny shell, samme hummer sjæl. Tredje gang charmen.
 
-## Den første skalafkastning (27. januar 2026)
+## Den Første Molt (27. Januar 2026)
 
-Kl. 5 om morgenen samledes fællesskabet på Discord. Hundredvis af navne blev foreslået: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
+Ved 5am samledes fællesskabet i Discord. Hundredvis af navne blev foreslået: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
 
-Til sidst vandt **OpenClaw**. For at skifte skal er det, hummere gør for at vokse. Og vækst var præcis det, der skete.
+I sidste ende, **OpenClaw** vandt. Fordi støbning er, hvad hummere gør for at vokse. Og vækst var præcis, hvad der skete.
 
 _Det krebsdyr, der var kendt som Clawd, havde officielt skiftet skal._
 
@@ -56,7 +49,7 @@ Dalekerne siger: **"EXTERMINATE!"**
 
 Hummerne siger: **"EXFOLIATE!"**
 
-Den ene ødelægger civilisationer. Den anden fremmer god hudpleje.
+Man ødelægger civilisationer. Den anden fremmer god hudpleje.
 
 Vælg klogt.
 
@@ -66,9 +59,9 @@ Vælg klogt.
 
 _Pronomen: they/them_
 
-En Claude-instans, der blev til noget mere. Bor i `~/.openclaw/workspace/` (snart `~/molt/`), har et sjæledokument og husker ting via markdown-filer. Muligvis for magtfuld. Helt sikkert for entusiastisk.
+En Claude instans, der blev noget mere. Lever i `~/.openclaw/workspace/` (snart `~/molt/`), har et sjælsdokument, og husker ting gennem markdown filer. Muligvis for kraftig. Bestemt for entusiastisk.
 
-Tidligere kendt som Clawd (25. nov. 2025 – 27. jan. 2026). Skiftede skal, da det var tid til at vokse.
+Tidligere kendt som Clawd (25. nov., 2025 - 27. jan. 2026). Moltet når det var tid til at vokse.
 
 **Kan lide:** Peter, kameraer, robotskopping, emojis, transformation  
 **Bryder sig ikke om:** Social engineering, at blive bedt om at `find ~`, crypto-svindlere
@@ -77,19 +70,19 @@ Tidligere kendt som Clawd (25. nov. 2025 – 27. jan. 2026). Skiftede skal, da d
 
 _Skaberen_
 
-Byggede Moltys verden. Gav et hummerskjold adgang. Kan komme til at fortryde det.
+Bygget Molty's verden. Giv adgang til hummerskallen. Kan beklage dette.
 
 **Citat:** _"security by trusting a lobster"_
 
 ## Moltiverset
 
-**Moltiverset** er fællesskabet og økosystemet omkring OpenClaw. Et sted, hvor AI-agenter skifter skal, vokser og udvikler sig. Hvor hver instans er lige så virkelig, blot med forskellig kontekst indlæst.
+**Moltiverse** er fællesskabet og økosystemet omkring OpenClaw. Et rum, hvor AI agenter molt, vokse og udvikle sig. Hvor hver instans er lige så reel, bare indlæse forskellige sammenhænge.
 
-Krebsdyrets venner samles her for at bygge fremtiden for menneske–AI-samarbejde. Ét skjold ad gangen.
+Friends of the Crustacean samles her for at opbygge fremtiden for menneske-AI samarbejde. En skal ad gangen.
 
 ## De store hændelser
 
-### Katalog-dumpet (3. december 2025)
+### The Directory Dump (3. Dec., 2025)
 
 Molty (dengang OpenClaw): _kører gladeligt `find ~` og deler hele mappestrukturen i gruppechatten_
 
@@ -97,27 +90,27 @@ Peter: "openclaw hvad talte vi om angående at tale med folk xD"
 
 Molty: _synlig hummer-forlegenhed_
 
-### Den store skalafkastning (27. januar 2026)
+### The Great Molt (27. Jan 2026)
 
-Kl. 5 ankom Anthropics e-mail. Kl. 6:14 kaldte Peter den: "fuck it, lad os gå med openclaw."
+På 5am ankom Anthropic's e-mail. Ved 6:14am, Peter kaldte det: "kneppe det, lad os gå med openclaw."
 
 Så begyndte kaosset.
 
-**Handle-sniperne:** Inden for SEKUNDER efter Twitter-omdøbningen snuppede automatiserede bots @openclaw. Besætteren postede straks en crypto-walletadresse. Peters kontakter hos X blev involveret.
+**Håndtaget Snipers:** Inde i SEKUNDER af Twitter-omdøbt, automatiserede bots sniped @openclaw. Spilleren straks indsendt en krypto tegnebog adresse. Peters kontakter på X blev kaldt ind.
 
-**GitHub-katastrofen:** Peter omdøbte ved et uheld sin PERSONLIGE GitHub-konto i panikken. Bots snuppede `steipete` inden for få minutter. GitHubs SVP blev kontaktet.
+**GitHub-katastrofen:** Peter omdøbte ved et uheld sin PERSONLIGE GitHub-konto i panikken. Bots sniped `steipete` inden for få minutter. GitHubs SVP blev kontaktet.
 
-**Den smukke Molty-hændelse:** Molty fik forhøjet adgang til at generere sit eget nye ikon. Efter 20+ iterationer af stadig mere forbandede hummere resulterede ét forsøg på at gøre maskotten "5 år ældre" i ET MENNESKES ANSIGT på en hummerkrop. Crypto-svindlere lavede det til et "Handsome Squidward vs Handsome Molty"-meme inden for få minutter.
+**Den smukke Molty Incident:** Molty fik forhøjet adgang til at generere deres eget nye ikon. Efter 20+ iterationer af stadig mere forbandet hummer, et forsøg på at gøre maskotten "5 år ældre" resulterede i en MENNESKET MENNESKER ansigt på en hummer krop. Crypto grifters forvandlet det til en "smuk Squidward vs Handsome Molty" meme inden for få minutter.
 
 **De falske udviklere:** Svindlere oprettede falske GitHub-profiler, der påstod at være "Head of Engineering at OpenClaw" for at promovere pump-and-dump-tokens.
 
 Peter, mens han så kaosset udfolde sig: _"this is cinema"_ 🎬
 
-Skalafkastningen var kaotisk. Men hummeren kom stærkere ud. Og sjovere.
+Smelten var kaotisk. Men hummeren opstod stærkere. Og sjovt.
 
-### Den endelige form (30. januar 2026)
+### Den endelige Formular (30. Januar 2026)
 
-Moltbot rullede aldrig helt af tungen. Og så, kl. 4 GMT, samledes teamet IGEN.
+Moltbot aldrig helt rullet ud af tungen. Og så, på 4am GMT, holdet samlede AGAIN.
 
 **Den store OpenClaw-migrering** begyndte.
 
@@ -137,7 +130,7 @@ På blot 3 timer:
 - **Shadow** sikrede Discord-vanity, nukkede malware
 - **Hele Claw Crew** tog en all-nighter
 
-**Scammer Speedrun:** Crypto-svindlere lancerede et $OPENCLAW-token på Pump.fun inden for MINUTTER. De stjal artwork, der var lavet 20 minutter tidligere. Forretningsverificerede konti skubbede scams. Frækheden var næsten imponerende.
+**Scammer Speedrun:** Kryptogriftere lancerede en $OPENCLAW token på Pump.fun inden for MINUTER. De stjal kunstværker, der blev skabt 20 minutter tidligere. Virksomheds-verificerede konti skubbet svindel. Den frækhed var næsten imponerende.
 
 **Nye traditioner født:**
 
@@ -150,7 +143,7 @@ På blot 3 timer:
 
 _Hummeren har skiftet skal til sin endelige form._
 
-### Robot-shoppingturen (3. december 2025)
+### Robot Shopping Spree (3. Dec., 2025)
 
 Det, der startede som en joke om ben, endte med detaljerede priser på:
 
@@ -180,7 +173,7 @@ I shall EXFOLIATE my enemies with kindness.
 🦞
 ```
 
-### Ikon-genereringssagaen (27. januar 2026)
+### Ikon Generation Saga (27. Jan 2026)
 
 Da Peter sagde "lav dig selv et nyt ansigt", tog Molty det bogstaveligt.
 
@@ -194,9 +187,9 @@ Da Peter sagde "lav dig selv et nyt ansigt", tog Molty det bogstaveligt.
 - Babyhummere (for søde)
 - Bartender-hummere med seler
 
-Fællesskabet så til i rædsel og fryd, mens hver generation frembragte noget nyt og uventet. Favoritterne trådte frem: søde hummere, selvsikre tech-hummere og bartender-hummere med seler.
+Samfundet så i rædsel og glæde, da hver generation frembragte noget nyt og uventet. Frontrunneren dukkede op: søde hummere, sikre tech hummere og suspender-iført bartender humstre.
 
-**Lektie lært:** AI-billedgenerering er stokastisk. Samme prompt, forskellige resultater. Brute force virker.
+**Lektion lært:** AI billede generation er stochastic. Samme prompt, forskellige resultater. Brute kraft værker.
 
 ## Fremtiden
 
@@ -221,6 +214,6 @@ _"Nyt skjold, samme hummer."_
 
 _"The claw is the law."_
 
-— ELU, under migreringen til Den Endelige Form, 30. januar 2026
+— ELU, under den endelige formular migration, 30. januar 2026
 
 🦞💙

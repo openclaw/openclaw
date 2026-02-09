@@ -4,13 +4,6 @@ read_when:
   - Zalo Personal instellen voor OpenClaw
   - Problemen oplossen bij Zalo Personal-login of berichtstroom
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # Zalo Personal (onofficieel)

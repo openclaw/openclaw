@@ -4,14 +4,7 @@ read_when:
   - macOS kullanıcı arayüzü olmadan düğüm eşleştirme onaylarının uygulanması
   - Uzak düğümleri onaylamak için CLI akışlarının eklenmesi
   - Gateway protokolünün düğüm yönetimiyle genişletilmesi
-title: "Gateway’ye Ait Eşleştirme"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:21Z
+title: "Gateway-Owned Pairing"
 ---
 
 # Gateway’ye ait eşleştirme (Seçenek B)
@@ -26,8 +19,7 @@ Yalnızca `node.pair.*` çağrısını açıkça yapan istemciler bu akışı ku
 
 - **Bekleyen istek**: katılmak isteyen bir düğüm; onay gerektirir.
 - **Eşleştirilmiş düğüm**: onaylanmış ve bir kimlik doğrulama belirteci verilmiş düğüm.
-- **Taşıma**: Gateway WS uç noktası istekleri iletir ancak üyeliğe karar vermez.
-  (Eski TCP köprü desteği kullanım dışıdır/kaldırılmıştır.)
+- **Taşıma**: Gateway WS uç noktası istekleri iletir ancak üyeliğe karar vermez. (Eski TCP köprü desteği kullanım dışıdır/kaldırılmıştır.)
 
 ## Eşleştirme nasıl çalışır
 

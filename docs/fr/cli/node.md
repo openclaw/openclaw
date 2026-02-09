@@ -4,13 +4,6 @@ read_when:
   - Exécution de l’hôte de nœud sans interface
   - Appairage d’un nœud non macOS pour system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:01Z
 ---
 
 # `openclaw node`

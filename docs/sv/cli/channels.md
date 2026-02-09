@@ -4,13 +4,6 @@ read_when:
   - Du vill lägga till/ta bort kanalkonton (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - Du vill kontrollera kanalstatus eller följa kanalloggar
 title: "kanaler"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:33Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - Kör `openclaw status --deep` för en bred kontroll.
 - Använd `openclaw doctor` för guidade åtgärder.
-- `openclaw channels list` skriver ut `Claude: HTTP 403 ... user:profile` → användningsöversikten kräver `user:profile`-omfånget. Använd `--no-usage`, eller tillhandahåll en claude.ai-sessionsnyckel (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), eller autentisera på nytt via Claude Code CLI.
+- `openclaw channellist` skriver ut `Claude: HTTP 403 ... user:profile` → användnings ögonblicksbild behöver `user:profile` omfattning. Använd `--no-usage`, eller ge en claude.ai sessionsnyckel (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), eller re-auth via Claude Code CLI.
 
 ## Förmågekontroll
 
@@ -68,7 +61,7 @@ Noteringar:
 
 - `--channel` är valfri; utelämna den för att lista alla kanaler (inklusive tillägg).
 - `--target` accepterar `channel:<id>` eller ett rått numeriskt kanal-id och gäller endast Discord.
-- Kontrollerna är leverantörsspecifika: Discord-intents + valfria kanalbehörigheter; Slack-bot- och användaromfång; Telegram-botflaggor + webhook; Signal-daemonversion; MS Teams app-token + Graph-roller/omfång (annoterade där känt). Kanaler utan kontroller rapporterar `Probe: unavailable`.
+- Probes är leverantörsspecifikt: Discord-intentioner + valfria kanaltillstånd; Slack bot + användaromfång; Telegram bot flaggor + webhook; Signal daemon version; MS Teams app token + Graph roller/scope (kommenterad där känd). Kanaler utan sonder rapporterar `Probe: otillgängliga`.
 
 ## Lös namn till ID:n
 

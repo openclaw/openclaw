@@ -6,20 +6,13 @@ read_when:
   - Вам нужна сбрасываемая среда macOS, которую можно клонировать
   - Вы хотите сравнить локальные и размещённые варианты macOS VM
 title: "macOS VM"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:50Z
 ---
 
 # OpenClaw на macOS VM (Sandboxing)
 
 ## Рекомендуемый вариант по умолчанию (для большинства пользователей)
 
-- **Небольшой Linux VPS** для постоянно работающего Gateway (шлюз) и низкой стоимости. См. [VPS hosting](/vps).
+- **Небольшой Linux VPS** для постоянно работающего Gateway (шлюз) и низкой стоимости. См. См. [VPS hosting](/vps).
 - **Выделенное оборудование** (Mac mini или Linux‑сервер), если вам нужен полный контроль и **резидентный IP** для браузерной автоматизации. Многие сайты блокируют IP дата‑центров, поэтому локальный браузинг часто работает лучше.
 - **Гибрид:** держите Gateway (шлюз) на дешёвом VPS и подключайте свой Mac как **узел**, когда нужна автоматизация браузера/UI. См. [Nodes](/nodes) и [Gateway remote](/gateway/remote).
 
@@ -69,7 +62,7 @@ x-i18n:
 
 ---
 
-## 1) Установка Lume
+## 1. Установка Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ lume --version
 
 ---
 
-## 2) Создание macOS VM
+## 2. Создание macOS VM
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 3) Завершение Setup Assistant
+## 3. Завершение Setup Assistant
 
 В окне VNC:
 
@@ -119,7 +112,7 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 4) Получение IP‑адреса VM
+## 4. Получение IP‑адреса VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ lume get openclaw
 
 ---
 
-## 5) Подключение по SSH к VM
+## 5. Подключение по SSH к VM
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) Установка OpenClaw
+## 6. Установка OpenClaw
 
 Внутри VM:
 
@@ -152,7 +145,7 @@ openclaw onboard --install-daemon
 
 ---
 
-## 7) Настройка каналов
+## 7. Настройка каналов
 
 Отредактируйте файл конфига:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Запуск VM без графического интерфейса
+## 8. Запуск VM без графического интерфейса
 
 Остановите VM и перезапустите без дисплея:
 
@@ -261,17 +254,17 @@ lume run openclaw --no-display
 - Отключите сон в System Settings → Energy Saver
 - При необходимости используйте `caffeinate`
 
-Для по‑настоящему постоянной работы рассмотрите выделенный Mac mini или небольшой VPS. См. [VPS hosting](/vps).
+Для истинных всегда рассмотрите специализированный Mac mini или небольшой VPS. См. [VPS hosting](/vps).
 
 ---
 
 ## Устранение неполадок
 
-| Проблема                       | Решение                                                                                   |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| Не удаётся подключиться по SSH | Проверьте, что «Remote Login» включён в System Settings VM                                |
-| IP VM не отображается          | Дождитесь полной загрузки VM и снова выполните `lume get openclaw`                        |
-| Команда Lume не найдена        | Добавьте `~/.local/bin` в PATH                                                            |
+| Проблема                       | Решение                                                                                                      |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Не удаётся подключиться по SSH | Проверьте, что «Remote Login» включён в System Settings VM                                                   |
+| IP VM не отображается          | Дождитесь полной загрузки VM и снова выполните `lume get openclaw`                                           |
+| Команда Lume не найдена        | Добавьте `~/.local/bin` в PATH                                                                               |
 | QR WhatsApp не сканируется     | Убедитесь, что вы вошли именно в VM (а не на хосте) при запуске `openclaw channels login` |
 
 ---

@@ -4,30 +4,23 @@ read_when:
   - 你需要為瀏覽器自動化登入網站
   - 你想要在 X/Twitter 發佈更新
 title: "瀏覽器登入"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:27Z
 ---
 
-# 瀏覽器登入 + X/Twitter 發佈
+# 5. 瀏覽器登入 + X/Twitter 發文
 
 ## 手動登入（建議）
 
 當網站需要登入時，請在**主機**的瀏覽器設定檔（OpenClaw 瀏覽器）中**自行手動登入**。
 
-**不要**將你的憑證提供給模型。自動化登入經常會觸發反機器人防護，並可能鎖定帳戶。
+18. **不要**將你的憑證提供給模型。 Automated logins often trigger anti‑bot defenses and can lock the account.
 
 返回主要的瀏覽器文件：[Browser](/tools/browser)。
 
 ## 使用的是哪個 Chrome 設定檔？
 
-OpenClaw 會控制一個**專用的 Chrome 設定檔**（名稱為 `openclaw`，介面帶有橘色調）。這與你日常使用的瀏覽器設定檔是分開的。
+OpenClaw 會控制一個**專用的 Chrome 設定檔**（名稱為 `openclaw`，介面帶有橘色調）。這與你日常使用的瀏覽器設定檔是分開的。 This is separate from your daily browser profile.
 
-有兩種簡單的存取方式：
+Two easy ways to access it:
 
 1. **請代理程式開啟瀏覽器**，然後由你自行登入。
 2. **透過 CLI 開啟**：
@@ -41,14 +34,14 @@ openclaw browser open https://x.com
 
 ## X/Twitter：建議流程
 
-- **閱讀／搜尋／討論串：** 使用**主機**瀏覽器（手動登入）。
-- **發佈更新：** 使用**主機**瀏覽器（手動登入）。
+- **Read/search/threads:** use the **host** browser (manual login).
+- **Post updates:** use the **host** browser (manual login).
 
-## 沙箱隔離 + 主機瀏覽器存取
+## Sandboxing + host browser access
 
-沙箱隔離的瀏覽器工作階段**較容易**觸發機器人偵測。對於 X/Twitter（以及其他嚴格的網站），請優先使用**主機**瀏覽器。
+Sandboxed browser sessions are **more likely** to trigger bot detection. For X/Twitter (and other strict sites), prefer the **host** browser.
 
-如果代理程式在沙箱中，瀏覽器工具會預設使用沙箱。若要允許主機控制：
+19. 如果代理在沙箱中，瀏覽器工具預設會使用該沙箱。 To allow host control:
 
 ```json5
 {
@@ -65,10 +58,10 @@ openclaw browser open https://x.com
 }
 ```
 
-接著指定主機瀏覽器：
+Then target the host browser:
 
 ```bash
 openclaw browser open https://x.com --browser-profile openclaw --target host
 ```
 
-或為負責發佈更新的代理程式停用沙箱隔離。
+Or disable sandboxing for the agent that posts updates.

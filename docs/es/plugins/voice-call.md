@@ -4,13 +4,6 @@ read_when:
   - Quiere realizar una llamada de voz saliente desde OpenClaw
   - Está configurando o desarrollando el plugin de llamadas de voz
 title: "Plugin de Llamadas de Voz"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:20Z
 ---
 
 # Llamadas de Voz (plugin)

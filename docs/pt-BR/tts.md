@@ -5,13 +5,6 @@ read_when:
   - Configurando provedores ou limites de TTS
   - Usando comandos /tts
 title: "Texto para Fala"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:39Z
 ---
 
 # Texto para fala (TTS)

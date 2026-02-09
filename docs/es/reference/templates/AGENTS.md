@@ -2,13 +2,6 @@
 summary: "Plantilla de espacio de trabajo para AGENTS.md"
 read_when:
   - Inicialización manual de un espacio de trabajo
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:42Z
 ---
 
 # AGENTS.md - Su espacio de trabajo
@@ -93,7 +86,7 @@ En chats grupales donde recibe cada mensaje, sea **inteligente sobre cuándo con
 - Puede aportar valor genuino (información, perspectiva, ayuda)
 - Algo ingenioso o gracioso encaja de forma natural
 - Corrige desinformación importante
-- Se le pide un resumen
+- Resumiendo cuando se le pregunta
 
 **Permanezca en silencio (HEARTBEAT_OK) cuando:**
 

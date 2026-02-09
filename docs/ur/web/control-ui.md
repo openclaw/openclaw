@@ -4,13 +4,6 @@ read_when:
   - آپ براؤزر سے Gateway کو چلانا چاہتے ہیں
   - آپ SSH سرنگوں کے بغیر Tailnet رسائی چاہتے ہیں
 title: "کنٹرول UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:07Z
 ---
 
 # کنٹرول UI (براؤزر)
@@ -34,14 +27,14 @@ x-i18n:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-  ڈیش بورڈ کی سیٹنگز پینل آپ کو ٹوکن محفوظ کرنے دیتا ہے؛ پاس ورڈز محفوظ نہیں کیے جاتے۔
-  آن بورڈنگ وزارڈ بطورِ طے شدہ ایک گیٹ وے ٹوکن بناتا ہے، لہٰذا پہلی کنکشن پر اسے یہاں پیسٹ کریں۔
+  ڈیش بورڈ سیٹنگز پینل آپ کو ایک ٹوکن محفوظ کرنے دیتا ہے؛ پاس ورڈز محفوظ نہیں کیے جاتے۔
+  آن بورڈنگ وزرڈ بطورِ ڈیفالٹ ایک گیٹ وے ٹوکن بناتا ہے، اس لیے پہلی بار کنیکٹ کرتے وقت اسے یہاں پیسٹ کریں۔
 
 ## ڈیوائس جوڑی بنانا (پہلا کنکشن)
 
-جب آپ کسی نئے براؤزر یا ڈیوائس سے کنٹرول UI سے جڑتے ہیں تو Gateway
-ایک **یک وقتی جوڑی منظوری** درکار کرتا ہے — چاہے آپ اسی Tailnet پر ہوں
-`gateway.auth.allowTailscale: true` کے ساتھ۔ یہ غیر مجاز رسائی روکنے کے لیے ایک حفاظتی اقدام ہے۔
+جب آپ کسی نئے براؤزر یا ڈیوائس سے Control UI سے کنیکٹ ہوتے ہیں تو Gateway
+**ایک بار کی پیئرنگ منظوری** درکار کرتا ہے — چاہے آپ اسی Tailnet پر ہوں
+اور `gateway.auth.allowTailscale: true` ہو۔ یہ غیر مجاز رسائی کو روکنے کے لیے ایک سیکیورٹی اقدام ہے۔
 
 **آپ کیا دیکھیں گے:** "disconnected (1008): pairing required"
 
@@ -55,14 +48,14 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-منظوری کے بعد، ڈیوائس یاد رکھی جاتی ہے اور دوبارہ منظوری درکار نہیں ہوگی جب تک
-آپ اسے `openclaw devices revoke --device <id> --role <role>` کے ساتھ منسوخ نہ کریں۔ ٹوکن روٹیشن اور منسوخی کے لیے
+منظوری کے بعد، ڈیوائس یاد رکھی جاتی ہے اور دوبارہ منظوری درکار نہیں ہوتی
+جب تک آپ اسے `openclaw devices revoke --device <id> --role <role>` سے منسوخ نہ کریں۔ ٹوکن روٹیشن اور منسوخی کے لیے
 [Devices CLI](/cli/devices) دیکھیں۔
 
 **نوٹس:**
 
 - لوکل کنکشنز (`127.0.0.1`) خودکار طور پر منظور ہو جاتے ہیں۔
-- ریموٹ کنکشنز (LAN، Tailnet وغیرہ) کے لیے واضح منظوری درکار ہوتی ہے۔
+- ریموٹ کنیکشنز (LAN، Tailnet وغیرہ) واضح منظوری کے متقاضی ہوتے ہیں۔
 - ہر براؤزر پروفائل ایک منفرد ڈیوائس ID بناتا ہے، اس لیے براؤزر تبدیل کرنے یا
   براؤزر ڈیٹا صاف کرنے پر دوبارہ جوڑی بنانا لازم ہوگا۔
 
@@ -70,7 +63,7 @@ openclaw devices approve <requestId>
 
 - Gateway WS کے ذریعے ماڈل سے چیٹ (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - چیٹ میں ٹول کالز کی اسٹریمنگ + لائیو ٹول آؤٹ پٹ کارڈز (ایجنٹ ایونٹس)
-- چینلز: WhatsApp/Telegram/Discord/Slack + پلگ اِن چینلز (Mattermost وغیرہ) کی حالت + QR لاگ اِن + فی چینل کنفیگ (`channels.status`, `web.login.*`, `config.patch`)
+- چینلز: WhatsApp/Telegram/Discord/Slack + پلگ اِن چینلز (Mattermost وغیرہ) اسٹیٹس + QR لاگ اِن + فی چینل کنفیگ (`channels.status`, `web.login.*`, `config.patch`)
 - انسٹینسز: موجودگی فہرست + ریفریش (`system-presence`)
 - سیشنز: فہرست + فی سیشن تھنکنگ/وربوز اوور رائیڈز (`sessions.list`, `sessions.patch`)
 - کرون جابز: فہرست/شامل کریں/چلائیں/فعال کریں/غیرفعال کریں + رن ہسٹری (`cron.*`)
@@ -87,7 +80,7 @@ openclaw devices approve <requestId>
 
 کرون جابز پینل نوٹس:
 
-- علیحدہ جابز کے لیے، ڈیلیوری بطورِ طے شدہ اعلانِ خلاصہ ہوتی ہے۔ اگر آپ صرف اندرونی رنز چاہتے ہیں تو none پر سوئچ کر سکتے ہیں۔
+- الگ تھلگ جابز کے لیے، ڈیلیوری بطورِ ڈیفالٹ اعلانِ خلاصہ ہوتی ہے۔ اگر آپ صرف اندرونی رنز چاہتے ہوں تو آپ اسے none پر سوئچ کر سکتے ہیں۔
 - جب announce منتخب ہو تو چینل/ٹارگٹ فیلڈز ظاہر ہوتے ہیں۔
 
 ## چیٹ رویّہ
@@ -114,13 +107,11 @@ openclaw gateway --tailscale serve
 
 - `https://<magicdns>/` (یا آپ کا کنفیگر کیا گیا `gateway.controlUi.basePath`)
 
-بطورِ طے شدہ، Serve درخواستیں Tailscale شناختی ہیڈرز کے ذریعے تصدیق کر سکتی ہیں
-(`tailscale-user-login`) جب `gateway.auth.allowTailscale` `true` ہو۔ OpenClaw
-شناخت کی تصدیق `x-forwarded-for` ایڈریس کو `tailscale whois` کے ساتھ حل کر کے
-اور اسے ہیڈر سے میچ کر کے کرتا ہے، اور صرف اسی وقت قبول کرتا ہے جب
-درخواست لوپ بیک پر Tailscale کے `x-forwarded-*` ہیڈرز کے ساتھ آئے۔ سیٹ کریں
-`gateway.auth.allowTailscale: false` (یا زبردستی `gateway.auth.mode: "password"`)
-اگر آپ Serve ٹریفک کے لیے بھی ٹوکن/پاس ورڈ لازم کرنا چاہتے ہیں۔
+بطورِ ڈیفالٹ، Serve کی درخواستیں Tailscale شناختی ہیڈرز
+(`tailscale-user-login`) کے ذریعے توثیق کر سکتی ہیں جب `gateway.auth.allowTailscale` کی قدر `true` ہو۔ OpenClaw شناخت کی تصدیق `x-forwarded-for` ایڈریس کو
+`tailscale whois` کے ذریعے حل کر کے اور اسے ہیڈر سے میچ کر کے کرتا ہے، اور ان کو صرف تب قبول کرتا ہے جب
+درخواست لوپ بیک پر Tailscale کے `x-forwarded-*` ہیڈرز کے ساتھ آئے۔ اگر آپ Serve ٹریفک کے لیے بھی ٹوکن/پاس ورڈ لازمی بنانا چاہتے ہوں تو
+`gateway.auth.allowTailscale: false` سیٹ کریں (یا زبردستی `gateway.auth.mode: "password"` کریں)۔
 
 ### Tailnet پر بائنڈ + ٹوکن
 
@@ -137,8 +128,7 @@ openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
 ## غیر محفوظ HTTP
 
 اگر آپ ڈیش بورڈ کو سادہ HTTP پر کھولیں (`http://<lan-ip>` یا `http://<tailscale-ip>`)،
-تو براؤزر **غیر محفوظ کانٹیکسٹ** میں چلتا ہے اور WebCrypto کو بلاک کرتا ہے۔ بطورِ طے شدہ،
-OpenClaw ڈیوائس شناخت کے بغیر کنٹرول UI کنکشنز کو **بلاک** کرتا ہے۔
+تو براؤزر **غیر محفوظ سیاق** میں چلتا ہے اور WebCrypto کو بلاک کر دیتا ہے۔ بطورِ ڈیفالٹ، OpenClaw ڈیوائس شناخت کے بغیر Control UI کنیکشنز کو **بلاک** کرتا ہے۔
 
 **سفارش کردہ حل:** HTTPS استعمال کریں (Tailscale Serve) یا UI کو لوکلی کھولیں:
 
@@ -157,13 +147,13 @@ OpenClaw ڈیوائس شناخت کے بغیر کنٹرول UI کنکشنز کو
 }
 ```
 
-یہ کنٹرول UI کے لیے ڈیوائس شناخت + جوڑی بنانا غیر فعال کر دیتا ہے (حتیٰ کہ HTTPS پر بھی)۔ صرف اسی صورت استعمال کریں جب آپ نیٹ ورک پر بھروسا کرتے ہوں۔
+یہ Control UI کے لیے ڈیوائس شناخت + پیئرنگ کو غیر فعال کر دیتا ہے (حتیٰ کہ HTTPS پر بھی)۔ صرف اسی صورت استعمال کریں جب آپ نیٹ ورک پر بھروسہ کرتے ہوں۔
 
 HTTPS سیٹ اپ رہنمائی کے لیے [Tailscale](/gateway/tailscale) دیکھیں۔
 
 ## UI کی بلڈنگ
 
-Gateway جامد فائلیں `dist/control-ui` سے فراہم کرتا ہے۔ انہیں یوں بلڈ کریں:
+Gateway جامد فائلیں `dist/control-ui` سے فراہم کرتا ہے۔ انہیں اس طرح بِلڈ کریں:
 
 ```bash
 pnpm ui:build # auto-installs UI deps on first run
@@ -185,7 +175,7 @@ pnpm ui:dev # auto-installs UI deps on first run
 
 ## ڈیبگنگ/ٹیسٹنگ: ڈیو سرور + ریموٹ Gateway
 
-کنٹرول UI جامد فائلیں ہیں؛ WebSocket ٹارگٹ قابلِ کنفیگ ہے اور HTTP اوریجن سے مختلف ہو سکتا ہے۔ یہ اس وقت مفید ہے جب آپ لوکل Vite ڈیو سرور چاہتے ہوں مگر Gateway کہیں اور چل رہا ہو۔
+Control UI جامد فائلوں پر مشتمل ہے؛ WebSocket ٹارگٹ قابلِ کنفیگریشن ہے اور HTTP اوریجن سے مختلف ہو سکتا ہے۔ یہ اس وقت مفید ہے جب آپ Vite dev server کو مقامی طور پر چلانا چاہتے ہوں لیکن Gateway کہیں اور چل رہا ہو۔
 
 1. UI ڈیو سرور شروع کریں: `pnpm ui:dev`
 2. اس طرح کا URL کھولیں:
@@ -204,8 +194,8 @@ http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-toke
 
 - `gatewayUrl` لوڈ کے بعد localStorage میں محفوظ ہوتا ہے اور URL سے ہٹا دیا جاتا ہے۔
 - `token` localStorage میں محفوظ ہوتا ہے؛ `password` صرف میموری میں رکھا جاتا ہے۔
-- جب `gatewayUrl` سیٹ ہو، UI کنفیگ یا ماحول کی اسناد پر فال بیک نہیں کرتا۔
-  `token` (یا `password`) واضح طور پر فراہم کریں۔ واضح اسناد کی کمی ایک غلطی ہے۔
+- جب `gatewayUrl` سیٹ کیا جاتا ہے تو UI کنفیگ یا ماحول کی اسناد پر واپس نہیں جاتا۔
+  `token` (یا `password`) کو واضح طور پر فراہم کریں۔ واضح اسناد کا نہ ہونا ایک خرابی ہے۔
 - جب Gateway TLS کے پیچھے ہو (Tailscale Serve، HTTPS پراکسی وغیرہ) تو `wss://` استعمال کریں۔
 - `gatewayUrl` صرف ٹاپ لیول ونڈو میں قبول کیا جاتا ہے (ایمبیڈڈ نہیں) تاکہ کلک جیکنگ روکی جا سکے۔
 - کراس اوریجن ڈیو سیٹ اپس کے لیے (مثلاً `pnpm ui:dev` سے ریموٹ Gateway)، UI

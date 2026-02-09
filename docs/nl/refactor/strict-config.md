@@ -5,13 +5,6 @@ read_when:
   - Werken aan configmigraties of doctor-workflows
   - Afhandelen van plugin-configschema’s of het blokkeren van plugin-load
 title: "Strikte configvalidatie"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # Strikte configvalidatie (alleen-doctor-migraties)
@@ -74,9 +67,9 @@ Toegestaan (alleen diagnostisch):
 
 Alles andere moet hard falen met: “Config ongeldig. Voer `openclaw doctor --fix` uit.”
 
-## Fout-UX-opmaak
+## Error UX format
 
-- Eén samenvattende kop.
+- Enkele koptekst kop.
 - Gegroepeerde secties:
   - Onbekende sleutels (volledige paden)
   - Legacy sleutels / benodigde migraties

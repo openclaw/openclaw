@@ -1,16 +1,9 @@
 ---
-summary: « Mise à jour d’OpenClaw en toute sécurité (installation globale ou depuis la source), avec stratégie de retour arrière »
+summary: "Mise à jour d’OpenClaw en toute sécurité (installation globale ou depuis la source), avec stratégie de retour arrière"
 read_when:
   - Mise à jour d’OpenClaw
   - Quelque chose se casse après une mise à jour
-title: « Mise à jour »
-x-i18n:
-  source_path: install/updating.md
-  source_hash: 38cccac0839f0f22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:13Z
+title: "Mise à jour"
 ---
 
 # Mise à jour
@@ -29,19 +22,24 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Notes :
 
 - Ajoutez `--no-onboard` si vous ne voulez pas relancer l’assistant de prise en main.
+
 - Pour les **installations depuis la source**, utilisez :
+
   ```bash
   curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
   ```
+
   L’installateur effectuera `git pull --rebase` **uniquement** si le dépôt est propre.
+
 - Pour les **installations globales**, le script utilise `npm install -g openclaw@latest` en interne.
+
 - Note héritage : `clawdbot` reste disponible comme shim de compatibilité.
 
 ## Avant de mettre à jour
 
 - Sachez comment vous avez installé : **global** (npm/pnpm) vs **depuis la source** (git clone).
 - Sachez comment votre Gateway (passerelle) s’exécute : **terminal au premier plan** vs **service supervisé** (launchd/systemd).
-- Sauvegardez vos personnalisations :
+- Instantané votre adaptation :
   - Config : `~/.openclaw/openclaw.json`
   - Identifiants : `~/.openclaw/credentials/`
   - Espace de travail : `~/.openclaw/workspace`

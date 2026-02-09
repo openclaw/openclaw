@@ -3,13 +3,6 @@ summary: "မျက်နှာပြင်များအနှံ့ (WhatsApp
 read_when:
   - အုပ်စုချတ် အပြုအမူ သို့မဟုတ် mention gating ကို ပြောင်းလဲသည့်အခါ
 title: "အုပ်စုများ"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:31Z
 ---
 
 # အုပ်စုများ
@@ -18,8 +11,8 @@ OpenClaw သည် မျက်နှာပြင်များအနှံ့�
 
 ## စတင်သူအတွက် အကျဉ်းချုပ် (၂ မိနစ်)
 
-OpenClaw သည် သင့်ကိုယ်ပိုင် မက်ဆေ့ချ်အကောင့်များပေါ်တွင်ပင် “နေထိုင်” လုပ်ဆောင်ပါသည်။ သီးခြား WhatsApp bot အသုံးပြုသူ မရှိပါ။
-**သင်** အုပ်စုတစ်ခုအတွင်းရှိနေပါက OpenClaw သည် အဲဒီအုပ်စုကို မြင်နိုင်ပြီး အဲဒီနေရာမှာပင် ပြန်ကြားနိုင်ပါသည်။
+OpenClaw “lives” on your own messaging accounts. There is no separate WhatsApp bot user.
+If **you** are in a group, OpenClaw can see that group and respond there.
 
 မူလအပြုအမူ (Default behavior) —
 
@@ -47,12 +40,12 @@ otherwise -> reply
 
 သင် လိုချင်ပါက —
 
-| ရည်ရွယ်ချက်                                                        | ချိန်ညှိရမည့်အရာ                                           |
-| ------------------------------------------------------------------ | ---------------------------------------------------------- |
-| အုပ်စုအားလုံးကို ခွင့်ပြုပေမယ့် @mention လုပ်မှသာ ပြန်ကြားစေလိုပါက | `groups: { "*": { requireMention: true } }`                |
-| အုပ်စုအားလုံးတွင် ပြန်ကြားမှု ပိတ်လိုပါက                           | `groupPolicy: "disabled"`                                  |
-| အုပ်စု သတ်မှတ်ချက်အချို့သာ ခွင့်ပြုလိုပါက                          | `groups: { "<group-id>": { ... } }` (`"*"` ကီး မလို)       |
-| အုပ်စုတွင် သင်သာ လှုံ့ဆော်နိုင်စေရန်                               | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| ရည်ရွယ်ချက်                                                                     | ချိန်ညှိရမည့်အရာ                                                      |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| အုပ်စုအားလုံးကို ခွင့်ပြုပေမယ့် @mention လုပ်မှသာ ပြန်ကြားစေလိုပါက | `groups: { "*": { requireMention: true } }`                           |
+| အုပ်စုအားလုံးတွင် ပြန်ကြားမှု ပိတ်လိုပါက                                        | `groupPolicy: "disabled"`                                             |
+| အုပ်စု သတ်မှတ်ချက်အချို့သာ ခွင့်ပြုလိုပါက                                       | `groups: { "<group-id>": { ... } }` (no `"*"` key) |
+| အုပ်စုတွင် သင်သာ လှုံ့ဆော်နိုင်စေရန်                                            | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`            |
 
 ## ဆက်ရှင် ကီးများ
 
@@ -65,14 +58,14 @@ otherwise -> reply
 
 ဟုတ်ပါတယ် — သင့် “ကိုယ်ရေးကိုယ်တာ” လှုပ်ရှားမှုများသည် **DMs** ဖြစ်ပြီး “အများပြည်သူ” လှုပ်ရှားမှုများသည် **အုပ်စုများ** ဖြစ်ပါက ဤပုံစံသည် ကောင်းစွာ အလုပ်လုပ်ပါသည်။
 
-အကြောင်းရင်းမှာ — single-agent mode တွင် DMs များသည် အများအားဖြင့် **အဓိက** ဆက်ရှင် ကီး (`agent:main:main`) သို့ ရောက်ရှိပြီး အုပ်စုများသည် အမြဲတမ်း **non-main** ဆက်ရှင် ကီးများ (`agent:main:<channel>:group:<id>`) ကို အသုံးပြုပါသည်။ သင် `mode: "non-main"` ဖြင့် sandboxing ကို ဖွင့်ထားပါက အုပ်စု ဆက်ရှင်များသည် Docker အတွင်းတွင် လည်ပတ်မည်ဖြစ်ပြီး သင့်အဓိက DM ဆက်ရှင်မှာ ဟို့စ်ပေါ်တွင် ဆက်လက် ရှိနေပါမည်။
+Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in Docker while your main DM session stays on-host.
 
 ဤအရာကြောင့် အေးဂျင့် “ဦးနှောက်” တစ်ခု (မျှဝေထားသော workspace + မှတ်ဉာဏ်) ကို အသုံးပြုနိုင်ပြီး လုပ်ဆောင်မှု အနေအထား နှစ်မျိုး ရရှိပါသည် —
 
 - **DMs**: ကိရိယာ အပြည့်အစုံ (ဟို့စ်)
 - **အုပ်စုများ**: sandbox + ကန့်သတ်ထားသော ကိရိယာများ (Docker)
 
-> အကယ်၍ အလုပ်ခန်း/ပုဂ္ဂိုလ်ရေး အခန်းကဏ္ဍများကို တကယ့်ကို ခွဲခြားထားရမည်ဆိုပါက (“ကိုယ်ရေးကိုယ်တာ” နှင့် “အများပြည်သူ” ကို မည်သည့်အခါမှ မရောနှောရ) အေးဂျင့် ဒုတိယတစ်ခု + bindings ကို အသုံးပြုပါ။ [Multi-Agent Routing](/concepts/multi-agent) ကို ကြည့်ပါ။
+> If you need truly separate workspaces/personas (“personal” and “public” must never mix), use a second agent + bindings. See [Multi-Agent Routing](/concepts/multi-agent).
 
 ဥပမာ (DMs ကို ဟို့စ်ပေါ်တွင်၊ အုပ်စုများကို sandboxed + messaging-only ကိရိယာများ) —
 
@@ -99,7 +92,7 @@ otherwise -> reply
 }
 ```
 
-“ဟို့စ်ကို မဝင်ရောက်စေ” အစား “အုပ်စုများသည် folder X ကိုသာ မြင်နိုင်စေ” လိုပါက `workspaceAccess: "none"` ကို ထိန်းထားပြီး ခွင့်ပြုထားသော လမ်းကြောင်းများကိုသာ sandbox ထဲသို့ mount လုပ်ပါ —
+Want “groups can only see folder X” instead of “no host access”? Keep `workspaceAccess: "none"` and mount only allowlisted paths into the sandbox:
 
 ```json5
 {
@@ -191,9 +184,9 @@ otherwise -> reply
 
 - `groupPolicy` သည် mention-gating ( @mention လိုအပ်မှု ) နှင့် သီးခြားဖြစ်ပါသည်။
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: `groupAllowFrom` ကို အသုံးပြုပါ (fallback: ထင်ရှားစွာ သတ်မှတ်ထားသော `allowFrom`)။
-- Discord: ခွင့်ပြုစာရင်းတွင် `channels.discord.guilds.<id>.channels` ကို အသုံးပြုပါသည်။
+- Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
 - Slack: ခွင့်ပြုစာရင်းတွင် `channels.slack.channels` ကို အသုံးပြုပါသည်။
-- Matrix: ခွင့်ပြုစာရင်းတွင် `channels.matrix.groups` (room IDs, aliases, သို့မဟုတ် အမည်များ) ကို အသုံးပြုပါသည်။ ပို့သူများကို ကန့်သတ်ရန် `channels.matrix.groupAllowFrom` ကို အသုံးပြုနိုင်ပြီး room အလိုက် `users` ခွင့်ပြုစာရင်းများကိုလည်း ပံ့ပိုးပါသည်။
+- Matrix: allowlist uses `channels.matrix.groups` (room IDs, aliases, or names). Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
 - Group DMs များကို သီးခြား ထိန်းချုပ်ပါသည် (`channels.discord.dm.*`, `channels.slack.dm.*`)။
 - Telegram ခွင့်ပြုစာရင်းသည် user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) သို့မဟုတ် usernames (`"@alice"` သို့မဟုတ် `"alice"`) နှင့် ကိုက်ညီနိုင်ပြီး prefix များသည် case-insensitive ဖြစ်ပါသည်။
 - မူလတန်ဖိုးမှာ `groupPolicy: "allowlist"` ဖြစ်ပြီး သင့်အုပ်စု ခွင့်ပြုစာရင်းသည် အလွတ်ဖြစ်ပါက အုပ်စု မက်ဆေ့ချ်များကို ပိတ်ထားပါသည်။
@@ -206,9 +199,9 @@ otherwise -> reply
 
 ## Mention gating (မူလ)
 
-အုပ်စု မက်ဆေ့ချ်များသည် အုပ်စုအလိုက် override မလုပ်ထားပါက mention လိုအပ်ပါသည်။ မူလတန်ဖိုးများကို `*.groups."*"` အောက်ရှိ subsystem အလိုက် ထားရှိပါသည်။
+Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-bot မက်ဆေ့ချ်တစ်ခုကို reply ပြန်လုပ်ခြင်းသည် implicit mention အဖြစ် တွက်ချက်ပါသည် (ချန်နယ်က reply metadata ကို ပံ့ပိုးပါက)။ ဤအရာသည် Telegram, WhatsApp, Slack, Discord, Microsoft Teams တွင် သက်ရောက်ပါသည်။
+Replying to a bot message counts as an implicit mention (when the channel supports reply metadata). This applies to Telegram, WhatsApp, Slack, Discord, and Microsoft Teams.
 
 ```json5
 {
@@ -253,14 +246,14 @@ bot မက်ဆေ့ချ်တစ်ခုကို reply ပြန်လု
 - အေးဂျင့်အလိုက် override: `agents.list[].groupChat.mentionPatterns` (အေးဂျင့်များစွာက အုပ်စုတစ်ခုကို မျှဝေသုံးစွဲသည့်အခါ အသုံးဝင်ပါသည်)။
 - Mention detection လုပ်နိုင်သည့်အခါ (native mentions သို့မဟုတ် `mentionPatterns` ကို စီစဉ်ထားပါက) သာ mention gating ကို အတည်ပြုအကောင်အထည်ဖော်ပါသည်။
 - Discord မူလတန်ဖိုးများကို `channels.discord.guilds."*"` အောက်တွင် ထားရှိပြီး guild/ချန်နယ်အလိုက် override လုပ်နိုင်ပါသည်။
-- အုပ်စု သမိုင်းကြောင်း context ကို ချန်နယ်များအနှံ့ တစ်သမတ်တည်း wrap လုပ်ထားပြီး **pending-only** ဖြစ်ပါသည် (mention gating ကြောင့် ကျော်လွှားထားသော မက်ဆေ့ချ်များ)။ အထွေထွေ မူလတန်ဖိုးအတွက် `messages.groupChat.historyLimit` ကို၊ override များအတွက် `channels.<channel>.historyLimit` (သို့မဟုတ် `channels.<channel>.accounts.*.historyLimit`) ကို အသုံးပြုပါ။ ပိတ်ရန် `0` ကို သတ်မှတ်ပါ။
+- Group history context is wrapped uniformly across channels and is **pending-only** (messages skipped due to mention gating); use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 
 ## အုပ်စု/ချန်နယ် ကိရိယာ ကန့်သတ်မှုများ (ရွေးချယ်နိုင်)
 
 ချန်နယ် ဖွဲ့စည်းမှုအချို့တွင် **အုပ်စု/room/ချန်နယ် တစ်ခုအတွင်း** အသုံးပြုနိုင်သည့် ကိရိယာများကို ကန့်သတ်နိုင်ပါသည်။
 
 - `tools`: အုပ်စုတစ်ခုလုံးအတွက် ကိရိယာများကို allow/deny ပြုလုပ်ရန်။
-- `toolsBySender`: အုပ်စုအတွင်း ပို့သူအလိုက် override များ (ကီးများမှာ ချန်နယ်အလိုက် sender IDs/usernames/emails/ဖုန်းနံပါတ်များ ဖြစ်နိုင်သည်)။ wildcard အဖြစ် `"*"` ကို အသုံးပြုပါ။
+- `toolsBySender`: per-sender overrides within the group (keys are sender IDs/usernames/emails/phone numbers depending on the channel). Use `"*"` as a wildcard.
 
 ဆုံးဖြတ် အစဉ် (အသေးစိတ်ဆုံးက အနိုင်ရ) —
 
@@ -296,7 +289,7 @@ bot မက်ဆေ့ချ်တစ်ခုကို reply ပြန်လု
 
 ## အုပ်စု ခွင့်ပြုစာရင်းများ
 
-`channels.whatsapp.groups`, `channels.telegram.groups`, သို့မဟုတ် `channels.imessage.groups` ကို စီစဉ်ထားပါက ထိုကီးများသည် အုပ်စု ခွင့်ပြုစာရင်းအဖြစ် လုပ်ဆောင်ပါသည်။ မူလ mention အပြုအမူကို ထားရှိရင်း အုပ်စုအားလုံးကို ခွင့်ပြုလိုပါက `"*"` ကို အသုံးပြုပါ။
+When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
 အများအားဖြင့် အသုံးပြုသော ရည်ရွယ်ချက်များ (copy/paste) —
 
@@ -356,7 +349,7 @@ bot မက်ဆေ့ချ်တစ်ခုကို reply ပြန်လု
 - `/activation mention`
 - `/activation always`
 
-ပိုင်ရှင်ကို `channels.whatsapp.allowFrom` ဖြင့် သတ်မှတ်ပါသည် (မသတ်မှတ်ထားပါက bot ၏ ကိုယ်ပိုင် E.164 ကို အသုံးပြုပါသည်)။ အမိန့်ကို သီးသန့် မက်ဆေ့ချ်အဖြစ် ပို့ပါ။ အခြား မျက်နှာပြင်များတွင် ယခုအချိန်တွင် `/activation` ကို မလက်ခံပါ။
+Owner is determined by `channels.whatsapp.allowFrom` (or the bot’s self E.164 when unset). Send the command as a standalone message. Other surfaces currently ignore `/activation`.
 
 ## Context အကွက်များ
 
@@ -368,7 +361,7 @@ bot မက်ဆေ့ချ်တစ်ခုကို reply ပြန်လု
 - `WasMentioned` (mention gating ရလဒ်)
 - Telegram forum topics များတွင် `MessageThreadId` နှင့် `IsForum` ကိုလည်း ထည့်သွင်းပါသည်။
 
-အေးဂျင့် system prompt တွင် အုပ်စု ဆက်ရှင် အသစ်၏ ပထမဆုံး အလှည့်တွင် group intro ကို ထည့်သွင်းပါသည်။ ၎င်းတွင် လူသားလို ပြန်ကြားရန်၊ Markdown ဇယားများကို ရှောင်ရန်၊ literal `\n` အစီအစဉ်များကို မရိုက်ရန် သတိပေးထားပါသည်။
+The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, and avoid typing literal `\n` sequences.
 
 ## iMessage အထူးသတ်မှတ်ချက်များ
 

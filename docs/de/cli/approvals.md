@@ -4,13 +4,6 @@ read_when:
   - Sie möchten Exec-Freigaben über die CLI bearbeiten
   - Sie müssen Allowlists auf Gateway- oder Node-Hosts verwalten
 title: "approvals"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:24Z
 ---
 
 # `openclaw approvals`
@@ -18,7 +11,7 @@ x-i18n:
 Verwalten Sie Exec-Freigaben für den **lokalen Host**, den **Gateway-Host** oder einen **Node-Host**.
 Standardmäßig zielen Befehle auf die lokale Freigabedatei auf dem Datenträger. Verwenden Sie `--gateway`, um das Gateway anzusprechen, oder `--node`, um einen bestimmten Node anzusprechen.
 
-Zugehörig:
+Verwandt:
 
 - Exec-Freigaben: [Exec approvals](/tools/exec-approvals)
 - Nodes: [Nodes](/nodes)

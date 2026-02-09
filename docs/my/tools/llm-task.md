@@ -4,13 +4,6 @@ read_when:
   - လုပ်ငန်းစဉ်များအတွင်း JSON-only LLM အဆင့်တစ်ခု လိုအပ်သောအခါ
   - အလိုအလျောက်လုပ်ဆောင်မှုအတွက် schema ဖြင့် စစ်ဆေးထားသော LLM အထွက် လိုအပ်သောအခါ
 title: "LLM Task"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:59Z
 ---
 
 # LLM Task
@@ -72,8 +65,7 @@ x-i18n:
 }
 ```
 
-`allowedModels` သည် `provider/model` string များ၏ allowlist ဖြစ်ပါသည်။ သတ်မှတ်ထားပါက စာရင်းအပြင်ဘက်ရှိ
-request များအားလုံးကို ပယ်ချပါမည်။
+`allowedModels` သည် `provider/model` string များ၏ allowlist ဖြစ်သည်။ သတ်မှတ်ထားပါက စာရင်းအပြင်ရှိသော request မည်သည့်တစ်ခုမဆို ငြင်းပယ်ခံရမည် ဖြစ်သည်။
 
 ## Tool parameters
 

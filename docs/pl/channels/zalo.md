@@ -3,13 +3,6 @@ summary: "Status obsługi bota Zalo, możliwości i konfiguracja"
 read_when:
   - Praca nad funkcjami Zalo lub webhookami
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:04Z
 ---
 
 # Zalo (Bot API)
@@ -31,7 +24,7 @@ Zalo jest dostarczane jako wtyczka i nie jest dołączone do instalacji rdzenia.
    - Z npm (jeśli opublikowana): `openclaw plugins install @openclaw/zalo`
    - Lub wybierz **Zalo** w onboardingu i potwierdź monit instalacji
 2. Ustaw token:
-   - Zmienna środowiskowa: `ZALO_BOT_TOKEN=...`
+   - Wpis: `ZALO_BOT_TOKEN=...`
    - Lub konfiguracja: `channels.zalo.botToken: "..."`.
 3. Zrestartuj gateway (lub zakończ onboarding).
 4. Dostęp do DM-ów domyślnie wymaga parowania; zatwierdź kod parowania przy pierwszym kontakcie.
@@ -62,7 +55,7 @@ To dobre rozwiązanie do wsparcia lub powiadomień, gdy potrzebne jest determini
 
 ## Konfiguracja (szybka ścieżka)
 
-### 1) Utwórz token bota (Zalo Bot Platform)
+### 1. Utwórz token bota (Zalo Bot Platform)
 
 1. Przejdź do [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) i zaloguj się.
 2. Utwórz nowego bota i skonfiguruj jego ustawienia.
@@ -134,16 +127,16 @@ Obsługa wielu kont: użyj `channels.zalo.accounts` z tokenami per konto oraz op
 
 ## Możliwości
 
-| Funkcja                 | Status                             |
-| ----------------------- | ---------------------------------- |
-| Wiadomości bezpośrednie | ✅ Obsługiwane                     |
-| Grupy                   | ❌ Wkrótce (wg dokumentacji Zalo)  |
-| Media (obrazy)          | ✅ Obsługiwane                     |
-| Reakcje                 | ❌ Nieobsługiwane                  |
-| Wątki                   | ❌ Nieobsługiwane                  |
-| Ankiety                 | ❌ Nieobsługiwane                  |
-| Polecenia natywne       | ❌ Nieobsługiwane                  |
-| Strumieniowanie         | ⚠️ Zablokowane (limit 2000 znaków) |
+| Funkcja                           | Status                                                |
+| --------------------------------- | ----------------------------------------------------- |
+| Wiadomości bezpośrednie           | ✅ Obsługiwane                                         |
+| Grupy                             | ❌ Wkrótce (wg dokumentacji Zalo)   |
+| Media (obrazy) | ✅ Obsługiwane                                         |
+| Reakcje                           | ❌ Nieobsługiwane                                      |
+| Wątki                             | ❌ Nieobsługiwane                                      |
+| Ankiety                           | ❌ Nieobsługiwane                                      |
+| Polecenia natywne                 | ❌ Nieobsługiwane                                      |
+| Strumieniowanie                   | ⚠️ Zablokowane (limit 2000 znaków) |
 
 ## Cele dostarczania (CLI/cron)
 

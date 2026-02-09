@@ -4,13 +4,6 @@ read_when:
   - 모델 접근을 위해 OpenCode Zen 이 필요할 때
   - 코딩에 친화적인 모델의 큐레이션된 목록이 필요할 때
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:58Z
 ---
 
 # OpenCode Zen

@@ -4,13 +4,6 @@ read_when:
   - Sie verwalten gekoppelte Nodes (Kameras, Bildschirm, Canvas)
   - Sie müssen Anfragen genehmigen oder Node-Befehle ausführen
 title: "Nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:41Z
 ---
 
 # `openclaw nodes`

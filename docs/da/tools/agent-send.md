@@ -3,19 +3,12 @@ summary: "Direkte `openclaw agent`-CLI-kørsler (med valgfri levering)"
 read_when:
   - Tilføjelse eller ændring af agentens CLI-entrypoint
 title: "Agent-afsendelse"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:45Z
 ---
 
 # `openclaw agent` (direkte agentkørsler)
 
-`openclaw agent` kører én enkelt agenttur uden at kræve en indgående chatbesked.
-Som standard går den **gennem Gateway**; tilføj `--local` for at tvinge den indlejrede
+`openclaw agent` kører en enkelt agent dreje uden at behøve en indgående chat besked.
+Som standard går det **gennem Gateway**; tilføj `-- local` for at tvinge den indlejrede
 runtime på den aktuelle maskine.
 
 ## Adfærd

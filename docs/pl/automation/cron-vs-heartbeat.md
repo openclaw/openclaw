@@ -5,13 +5,6 @@ read_when:
   - Konfigurowanie monitorowania w tle lub powiadomień
   - Optymalizacja użycia tokenów dla okresowych sprawdzeń
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:08Z
 ---
 
 # Cron vs Heartbeat: Kiedy używać którego
@@ -20,14 +13,14 @@ Zarówno heartbeat, jak i zadania cron umożliwiają uruchamianie zadań według
 
 ## Szybki przewodnik decyzyjny
 
-| Przypadek użycia                  | Zalecane              | Dlaczego                                           |
-| --------------------------------- | --------------------- | -------------------------------------------------- |
-| Sprawdzanie skrzynki co 30 min    | Heartbeat             | Grupuje z innymi sprawdzeniami, świadome kontekstu |
-| Wysyłka dziennego raportu o 9:00  | Cron (izolowany)      | Wymagane dokładne wyczucie czasu                   |
-| Monitorowanie kalendarza wydarzeń | Heartbeat             | Naturalne dopasowanie do okresowej świadomości     |
-| Cotygodniowa głęboka analiza      | Cron (izolowany)      | Zadanie samodzielne, może używać innego modelu     |
-| Przypomnij za 20 minut            | Cron (główny, `--at`) | Jednorazowe z precyzyjnym czasem                   |
-| Kontrola kondycji projektu w tle  | Heartbeat             | Korzysta z istniejącego cyklu                      |
+| Przypadek użycia                                 | Zalecane                                 | Dlaczego                                           |
+| ------------------------------------------------ | ---------------------------------------- | -------------------------------------------------- |
+| Sprawdzanie skrzynki co 30 min                   | Heartbeat                                | Grupuje z innymi sprawdzeniami, świadome kontekstu |
+| Wysyłka dziennego raportu o 9:00 | Cron (izolowany)      | Wymagane dokładne wyczucie czasu                   |
+| Monitorowanie kalendarza wydarzeń                | Heartbeat                                | Naturalne dopasowanie do okresowej świadomości     |
+| Cotygodniowa głęboka analiza                     | Cron (izolowany)      | Zadanie samodzielne, może używać innego modelu     |
+| Przypomnij za 20 minut                           | Cron (główny, `--at`) | Jednorazowe z precyzyjnym czasem                   |
+| Kontrola kondycji projektu w tle                 | Heartbeat                                | Piggybacks w istniejącym cyklu                     |
 
 ## Heartbeat: Okresowa świadomość
 
@@ -133,7 +126,7 @@ openclaw cron add \
 
 Zobacz [Cron jobs](/automation/cron-jobs), aby uzyskać pełne referencje CLI.
 
-## Schemat decyzyjny
+## Schemat podejmowania decyzji
 
 ```
 Does the task need to run at an EXACT time?
@@ -223,12 +216,12 @@ Zobacz [Lobster](/tools/lobster), aby poznać pełne użycie i przykłady.
 Zarówno heartbeat, jak i cron mogą wchodzić w interakcję z główną sesją, ale w różny sposób:
 
 |          | Heartbeat                             | Cron (główny)                      | Cron (izolowany)                    |
-| -------- | ------------------------------------- | ---------------------------------- | ----------------------------------- |
-| Sesja    | Główna                                | Główna (przez zdarzenie systemowe) | `cron:<jobId>`                      |
-| Historia | Współdzielona                         | Współdzielona                      | Świeża przy każdym uruchomieniu     |
-| Kontekst | Pełny                                 | Pełny                              | Brak (start od zera)                |
-| Model    | Model głównej sesji                   | Model głównej sesji                | Można nadpisać                      |
-| Wyjście  | Dostarczane, jeśli nie `HEARTBEAT_OK` | Prompt heartbeat + zdarzenie       | Ogłoszenie podsumowania (domyślnie) |
+| -------- | ------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------ |
+| Sesja    | Główna                                | Główna (przez zdarzenie systemowe) | `cron:<jobId>`                                         |
+| Historia | Udostępnione                          | Udostępnione                                          | Świeża przy każdym uruchomieniu                        |
+| Kontekst | Pełny                                 | Pełny                                                 | Brak (start od zera)                |
+| Model    | Model głównej sesji                   | Model głównej sesji                                   | Można nadpisać                                         |
+| Wyjście  | Dostarczane, jeśli nie `HEARTBEAT_OK` | Prompt heartbeat + zdarzenie                          | Ogłoszenie podsumowania (domyślnie) |
 
 ### Kiedy używać cron w głównej sesji
 
@@ -251,7 +244,7 @@ openclaw cron add \
 
 Użyj `--session isolated`, gdy chcesz:
 
-- Czystą kartę bez wcześniejszego kontekstu
+- Czysty łupek bez wcześniejszego kontekstu
 - Inne ustawienia modelu lub sposobu myślenia
 - Bezpośrednie ogłaszanie podsumowań na kanał
 - Historię, która nie zaśmieca głównej sesji
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Kwestie kosztowe
 
-| Mechanizm        | Profil kosztów                                                 |
-| ---------------- | -------------------------------------------------------------- |
-| Heartbeat        | Jedna tura co N minut; skaluje się z rozmiarem HEARTBEAT.md    |
+| Mechanizm                           | Profil kosztów                                                                    |
+| ----------------------------------- | --------------------------------------------------------------------------------- |
+| Heartbeat                           | Jedna tura co N minut; skaluje się z rozmiarem HEARTBEAT.md       |
 | Cron (główny)    | Dodaje zdarzenie do następnego heartbeat (bez izolowanej tury) |
-| Cron (izolowany) | Pełna tura agenta na zadanie; można użyć tańszego modelu       |
+| Cron (izolowany) | Pełna tura agenta na zadanie; można użyć tańszego modelu                          |
 
 **Wskazówki**:
 

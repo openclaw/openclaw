@@ -5,18 +5,14 @@ read_when:
   - Du lägger till en ny kanalformatterare eller stilmappning
   - Du felsöker formateringsregressioner mellan kanaler
 title: "Markdown-formatering"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:59Z
 ---
 
 # Markdown-formatering
 
-OpenClaw formaterar utgående Markdown genom att konvertera den till en gemensam intermediär representation (IR) innan kanalspecifik utdata renderas. IR behåller källtexten intakt samtidigt som den bär stil-/länkspann, så att chunking och rendering kan förbli konsekventa mellan kanaler.
+OpenClaw-format utgående Markdown genom att konvertera det till en delad mellanliggande
+representation (IR) före rendering av kanalspecifik utgång. IR håller
+källtext intakt medan du bär stil/länk spänner över så att chunking och rendering kan
+vara konsekvent över alla kanaler.
 
 ## Mål
 
@@ -63,8 +59,8 @@ IR (schematiskt):
 
 ## Tabellhantering
 
-Markdown-tabeller stöds inte konsekvent mellan chattklienter. Använd
-`markdown.tables` för att styra konvertering per kanal (och per konto).
+Markdown-tabeller stöds inte konsekvent över chattklienter. Använd
+`markdown.tables` för att kontrollera konvertering per kanal (och per konto).
 
 - `code`: rendera tabeller som kodblock (standard för de flesta kanaler).
 - `bullets`: konvertera varje rad till punktlistor (standard för Signal + WhatsApp).
@@ -95,13 +91,15 @@ Om du behöver mer om chunking-beteende mellan kanaler, se
 
 ## Länkpolicy
 
-- **Slack:** `[label](url)` -> `<url|label>`; nakna URL:er förblir nakna. Autolänkning är inaktiverad under parsning för att undvika dubbellänkning.
+- **Slack:** `[label](url)` -> `<url|label>`; nakna webbadresser förblir bla. Autolink
+  är inaktiverat under tolk för att undvika dubbelkoppling.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML-parsläge).
 - **Signal:** `[label](url)` -> `label (url)` om inte etiketten matchar URL:en.
 
 ## Spoilers
 
-Spoilermarkörer (`||spoiler||`) parsas endast för Signal, där de mappas till SPOILER-stilintervall. Andra kanaler behandlar dem som vanlig text.
+Spoilermarkörer (`<unk> spoiler<unk> `) tolkas endast för Signal, där de kartlägger
+SPOILER stilintervall. Andra kanaler behandlar dem som ren text.
 
 ## Hur man lägger till eller uppdaterar en kanalformatterare
 

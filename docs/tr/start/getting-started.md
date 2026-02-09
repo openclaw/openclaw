@@ -4,13 +4,6 @@ read_when:
   - Sıfırdan ilk kurulum
   - Çalışan bir sohbete en hızlı yolu istiyorsunuz
 title: "Başlarken"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:42Z
 ---
 
 # Başlarken
@@ -20,11 +13,11 @@ Amaç: minimum kurulumla sıfırdan çalışan ilk sohbete ulaşmak.
 <Info>
 En hızlı sohbet: Control UI'yi açın (kanal kurulumu gerekmez). `openclaw dashboard` çalıştırın
 ve tarayıcıda sohbet edin ya da
-<Tooltip headline="Gateway host" tip="OpenClaw gateway hizmetini çalıştıran makine.">gateway ana makinesi</Tooltip> üzerinde `http://127.0.0.1:18789/` açın.
+<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">gateway ana makinesi</Tooltip>üzerinde `http://127.0.0.1:18789/` açın.
 Belgeler: [Dashboard](/web/dashboard) ve [Control UI](/web/control-ui).
 </Info>
 
-## Ön koşullar
+## Ön Koşullar
 
 - Node 22 veya daha yeni
 
@@ -35,7 +28,7 @@ Emin değilseniz Node sürümünüzü `node --version` ile kontrol edin.
 ## Hızlı kurulum (CLI)
 
 <Steps>
-  <Step title="OpenClaw'ı yükleyin (önerilir)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ Emin değilseniz Node sürümünüzü `node --version` ile kontrol edin.
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     Diğer yükleme yöntemleri ve gereksinimler: [Install](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="Onboarding sihirbazını çalıştırın">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     Sihirbaz; kimlik doğrulama, gateway ayarları ve isteğe bağlı kanalları yapılandırır.
     Ayrıntılar için [Onboarding Wizard](/start/wizard) sayfasına bakın.
-
-  </Step>
-  <Step title="Gateway'i kontrol edin">
-    Hizmeti yüklediyseniz, zaten çalışıyor olmalıdır:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Control UI'yi açın">
+  <Step title="Check the Gateway">
+    Hizmeti yüklediyseniz, zaten çalışıyor olmalıdır:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,31 +84,35 @@ Control UI yükleniyorsa, Gateway'iniz kullanıma hazırdır.
 ## İsteğe bağlı kontroller ve ekstralar
 
 <AccordionGroup>
-  <Accordion title="Gateway'i ön planda çalıştırın">
+  <Accordion title="Run the Gateway in the foreground">
     Hızlı testler veya sorun giderme için kullanışlıdır.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="Test mesajı gönderin">
+  <Accordion title="Send a test message">
     Yapılandırılmış bir kanal gerektirir.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
 
-## Daha derine inin
+## Daha derine in
 
 <Columns>
-  <Card title="Onboarding Wizard (ayrıntılar)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Tam CLI sihirbaz başvurusu ve gelişmiş seçenekler.
   </Card>
-  <Card title="macOS uygulaması onboarding" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     macOS uygulaması için ilk çalıştırma akışı.
   </Card>
 </Columns>

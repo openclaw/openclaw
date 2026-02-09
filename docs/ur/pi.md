@@ -1,12 +1,5 @@
 ---
 title: "Pi انضمامی معماری"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:50Z
 ---
 
 # Pi انضمامی معماری
@@ -15,7 +8,7 @@ x-i18n:
 
 ## جائزہ
 
-OpenClaw، pi SDK استعمال کرتا ہے تاکہ اپنی میسجنگ gateway معماری میں ایک AI کوڈنگ ایجنٹ کو ایمبیڈ کیا جا سکے۔ pi کو بطور سب پروسیس چلانے یا RPC موڈ استعمال کرنے کے بجائے، OpenClaw براہِ راست pi کے `AgentSession` کو `createAgentSession()` کے ذریعے امپورٹ اور انسٹینشی ایٹ کرتا ہے۔ یہ ایمبیڈڈ طریقہ درج ذیل فوائد فراہم کرتا ہے:
+OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway architecture. Instead of spawning pi as a subprocess or using RPC mode, OpenClaw directly imports and instantiates pi's `AgentSession` via `createAgentSession()`. This embedded approach provides:
 
 - سیشن لائف سائیکل اور ایونٹ ہینڈلنگ پر مکمل کنٹرول
 - حسبِ ضرورت ٹول انجیکشن (میسجنگ، sandbox، چینل کے مطابق اعمال)
@@ -35,12 +28,12 @@ OpenClaw، pi SDK استعمال کرتا ہے تاکہ اپنی میسجنگ ga
 }
 ```
 
-| Package           | Purpose                                                                                              |
-| ----------------- | ---------------------------------------------------------------------------------------------------- |
+| Package           | Purpose                                                                                                              |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | بنیادی LLM تجریدات: `Model`, `streamSimple`, پیغام کی اقسام، فراہم کنندہ APIs                        |
-| `pi-agent-core`   | ایجنٹ لوپ، ٹول ایکزیکیوشن، `AgentMessage` اقسام                                                      |
+| `pi-agent-core`   | ایجنٹ لوپ، ٹول ایکزیکیوشن، `AgentMessage` اقسام                                                                      |
 | `pi-coding-agent` | اعلیٰ سطحی SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, بلٹ اِن ٹولز |
-| `pi-tui`          | ٹرمینل UI اجزاء (OpenClaw کے لوکل TUI موڈ میں استعمال ہوتے ہیں)                                      |
+| `pi-tui`          | ٹرمینل UI اجزاء (OpenClaw کے لوکل TUI موڈ میں استعمال ہوتے ہیں)                                   |
 
 ## فائل اسٹرکچر
 
@@ -137,7 +130,7 @@ src/agents/
 
 ## بنیادی انضمامی بہاؤ
 
-### 1. ایمبیڈڈ ایجنٹ چلانا
+### 1. Running an Embedded Agent
 
 اہم انٹری پوائنٹ `runEmbeddedPiAgent()` ہے جو `pi-embedded-runner/run.ts` میں واقع ہے:
 
@@ -161,7 +154,7 @@ const result = await runEmbeddedPiAgent({
 });
 ```
 
-### 2. سیشن کی تخلیق
+### 2. Session Creation
 
 `runEmbeddedAttempt()` کے اندر (جسے `runEmbeddedPiAgent()` کال کرتا ہے)، pi SDK استعمال کیا جاتا ہے:
 
@@ -198,7 +191,7 @@ const { session } = await createAgentSession({
 applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
-### 3. ایونٹ سبسکرپشن
+### 3. Event Subscription
 
 `subscribeEmbeddedPiSession()`، pi کے `AgentSession` ایونٹس کو سبسکرائب کرتا ہے:
 
@@ -225,7 +218,7 @@ const subscription = subscribeEmbeddedPiSession({
 - `agent_start` / `agent_end`
 - `auto_compaction_start` / `auto_compaction_end`
 
-### 4. پرامپٹنگ
+### 1. 4. 2. پرامپٹنگ
 
 سیٹ اپ کے بعد، سیشن کو پرامپٹ کیا جاتا ہے:
 
@@ -249,7 +242,7 @@ SDK مکمل ایجنٹ لوپ سنبھالتا ہے: LLM کو بھیجنا، ٹ
 
 ### ٹول ڈیفینیشن ایڈاپٹر
 
-pi-agent-core کا `AgentTool`، pi-coding-agent کے `ToolDefinition` کے مقابلے میں مختلف `execute` سِگنیچر رکھتا ہے۔ `pi-tool-definition-adapter.ts` میں موجود ایڈاپٹر اس خلا کو پُر کرتا ہے:
+3. pi-agent-core کا `AgentTool`، pi-coding-agent کے `ToolDefinition` سے مختلف `execute` سگنیچر رکھتا ہے۔ 4. `pi-tool-definition-adapter.ts` میں موجود ایڈاپٹر اس خلا کو پُر کرتا ہے:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -283,7 +276,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 ## سسٹم پرامپٹ کی تشکیل
 
-سسٹم پرامپٹ `buildAgentSystemPrompt()` (`system-prompt.ts`) میں بنایا جاتا ہے۔ یہ Tooling، Tool Call Style، Safety guardrails، OpenClaw CLI حوالہ، Skills، Docs، Workspace، Sandbox، Messaging، Reply Tags، Voice، Silent Replies، Heartbeats، Runtime metadata، اور فعال ہونے پر Memory اور Reactions، نیز اختیاری context فائلز اور اضافی سسٹم پرامپٹ مواد سمیت مکمل پرامپٹ تیار کرتا ہے۔ سب ایجنٹس کے لیے استعمال ہونے والے minimal prompt موڈ میں حصے مختصر کر دیے جاتے ہیں۔
+5. سسٹم پرامپٹ `buildAgentSystemPrompt()` (`system-prompt.ts`) میں بنایا جاتا ہے۔ 6. یہ مختلف حصوں کے ساتھ ایک مکمل پرامپٹ تیار کرتا ہے جن میں Tooling، Tool Call Style، Safety guardrails، OpenClaw CLI reference، Skills، Docs، Workspace، Sandbox، Messaging، Reply Tags، Voice، Silent Replies، Heartbeats، Runtime metadata شامل ہیں، اور جب فعال ہوں تو Memory اور Reactions بھی، نیز اختیاری context فائلیں اور اضافی سسٹم پرامپٹ مواد۔ Sections are trimmed for minimal prompt mode used by subagents.
 
 یہ پرامپٹ سیشن کی تخلیق کے بعد `applySystemPromptOverrideToSession()` کے ذریعے لاگو کیا جاتا ہے:
 
@@ -296,7 +289,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### سیشن فائلز
 
-سیشنز JSONL فائلز ہوتے ہیں جن میں درختی ساخت (id/parentId لنکنگ) ہوتی ہے۔ pi کا `SessionManager` پائیداری کو سنبھالتا ہے:
+8. سیشنز JSONL فائلیں ہوتی ہیں جن میں درختی ساخت ہوتی ہے (id/parentId لنکنگ کے ساتھ)۔ Pi's `SessionManager` handles persistence:
 
 ```typescript
 const sessionManager = SessionManager.open(params.sessionFile);
@@ -320,7 +313,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### کمپیکشن
 
-سیاق کے اوورفلو پر آٹو-کمپیکشن ٹرگر ہوتا ہے۔ دستی کمپیکشن کو `compactEmbeddedPiSessionDirect()` سنبھالتا ہے:
+10. کانٹیکسٹ اوورفلو پر خودکار کمپیکشن ٹرگر ہو جاتی ہے۔ 11. `compactEmbeddedPiSessionDirect()` دستی کمپیکشن کو سنبھالتا ہے:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -518,15 +511,15 @@ import { ... } from "@mariozechner/pi-tui";
 
 ## Pi CLI سے کلیدی فرق
 
-| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                              |
-| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
-| Invocation      | `pi` کمانڈ / RPC        | SDK بذریعہ `createAgentSession()`                                                              |
-| Tools           | ڈیفالٹ کوڈنگ ٹولز       | حسبِ ضرورت OpenClaw ٹول سوٹ                                                                    |
-| System prompt   | AGENTS.md + پرامپٹس     | فی چینل/سیاق متحرک                                                                             |
-| Session storage | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (یا `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth            | واحد اسناد              | روٹیشن کے ساتھ ملٹی پروفائل                                                                    |
-| Extensions      | ڈسک سے لوڈ کیے جاتے ہیں | پروگراماتی + ڈسک راستے                                                                         |
-| Event handling  | TUI رینڈرنگ             | کال بیک پر مبنی (onBlockReply وغیرہ)                                                           |
+| Aspect          | Pi CLI                              | OpenClaw Embedded                                                                                                 |
+| --------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Invocation      | `pi` کمانڈ / RPC                    | SDK بذریعہ `createAgentSession()`                                                                                 |
+| Tools           | ڈیفالٹ کوڈنگ ٹولز                   | حسبِ ضرورت OpenClaw ٹول سوٹ                                                                                       |
+| System prompt   | AGENTS.md + پرامپٹس | فی چینل/سیاق متحرک                                                                                                |
+| Session storage | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (یا `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Auth            | واحد اسناد                          | روٹیشن کے ساتھ ملٹی پروفائل                                                                                       |
+| Extensions      | ڈسک سے لوڈ کیے جاتے ہیں             | پروگراماتی + ڈسک راستے                                                                                            |
+| Event handling  | TUI رینڈرنگ                         | کال بیک پر مبنی (onBlockReply وغیرہ)                                                           |
 
 ## مستقبل کے لیے غور و فکر
 

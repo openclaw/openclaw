@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "Plan Gateway OpenResponses"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:20Z
 ---
 
 # Plan integracji Gateway OpenResponses
@@ -28,9 +21,9 @@ zdarzenia strumieniowe. Specyfikacja OpenResponses definiuje `/v1/responses`, a 
 
 - Dodać punkt końcowy `/v1/responses`, który jest zgodny z semantyką OpenResponses.
 - Zachować Chat Completions jako warstwę kompatybilności, którą łatwo wyłączyć i ostatecznie usunąć.
-- Ustandaryzować walidację i parsowanie przy użyciu odizolowanych, wielokrotnego użytku schematów.
+- Standaryzować walidację i analizowanie z izolowanymi schematami wielokrotnego użytku.
 
-## Poza zakresem
+## Inne cele
 
 - Pełna zgodność funkcjonalna z OpenResponses w pierwszym etapie (obrazy, pliki, narzędzia hostowane).
 - Zastępowanie wewnętrznej logiki wykonywania agentów lub orkiestracji narzędzi.
@@ -40,7 +33,7 @@ zdarzenia strumieniowe. Specyfikacja OpenResponses definiuje `/v1/responses`, a 
 
 Źródła: OpenAPI OpenResponses, strona specyfikacji OpenResponses oraz wpis na blogu Hugging Face.
 
-Kluczowe wnioski:
+Wyodrębniono kluczowe punkty:
 
 - `POST /v1/responses` akceptuje pola `CreateResponseBody` takie jak `model`, `input` (ciąg znaków lub
   `ItemParam[]`), `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens` oraz
@@ -82,7 +75,7 @@ Kluczowe wnioski:
 - Opcjonalny przyszły krok: mapowanie żądań Chat Completions na obsługę Responses w celu uproszczenia
   ścieżki usuwania.
 
-## Zakres wsparcia – faza 1
+## Faza 1 Podzestaw wsparcia
 
 - Akceptować `input` jako ciąg znaków lub `ItemParam[]` z rolami wiadomości oraz `function_call_output`.
 - Wyodrębniać wiadomości systemowe i deweloperskie do `extraSystemPrompt`.

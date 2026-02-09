@@ -5,19 +5,11 @@ read_when:
   - Integrando o Peekaboo via Swift Package Manager
   - Alterando o protocolo/caminhos do PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:29Z
 ---
 
 # Peekaboo Bridge (automação de UI no macOS)
 
-O OpenClaw pode hospedar o **PeekabooBridge** como um broker local de automação de UI, consciente de permissões.
-Isso permite que a CLI `peekaboo` conduza a automação de UI reutilizando as permissões TCC do app do macOS.
+O OpenClaw pode hospedar o **PeekabooBridge** como um broker local de automação de UI, consciente de permissões. Isso permite que a CLI `peekaboo` conduza a automação de UI reutilizando as permissões TCC do app do macOS.
 
 ## O que é (e o que não é)
 

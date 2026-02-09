@@ -5,13 +5,6 @@ read_when:
   - Op zoek naar goedkope VPS-hosting voor OpenClaw
   - Wil 24/7 OpenClaw op een kleine server
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:47Z
 ---
 
 # OpenClaw op Oracle Cloud (OCI)
@@ -27,13 +20,13 @@ De gratis laag van Oracle kan een goede keuze zijn voor OpenClaw (vooral als je 
 
 ## Kostenvergelijking (2026)
 
-| Provider     | Abonnement      | Specificaties        | Prijs/maand | Notities                   |
-| ------------ | --------------- | -------------------- | ----------- | -------------------------- |
-| Oracle Cloud | Always Free ARM | tot 4 OCPU, 24GB RAM | $0          | ARM, beperkte capaciteit   |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM      | ~ $4        | Goedkoopste betaalde optie |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM      | $6          | Eenvoudige UI, goede docs  |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM      | $6          | Veel locaties              |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM      | $5          | Nu onderdeel van Akamai    |
+| Provider     | Plan            | Specificaties        | Prijs/maand          | Notities                   |
+| ------------ | --------------- | -------------------- | -------------------- | -------------------------- |
+| Oracle Cloud | Always Free ARM | tot 4 OCPU, 24GB RAM | $0                   | ARM, beperkte capaciteit   |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM      | ~ $4 | Goedkoopste betaalde optie |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM      | $6                   | Eenvoudige UI, goede docs  |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM      | $6                   | Veel locaties              |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM      | $5                   | Nu onderdeel van Akamai    |
 
 ---
 
@@ -43,7 +36,7 @@ De gratis laag van Oracle kan een goede keuze zijn voor OpenClaw (vooral als je 
 - Tailscale-account (gratis op [tailscale.com](https://tailscale.com))
 - ~30 minuten
 
-## 1) Een OCI-instantie maken
+## 1. Een OCI-instantie maken
 
 1. Log in op de [Oracle Cloud Console](https://cloud.oracle.com/)
 2. Ga naar **Compute → Instances → Create Instance**
@@ -60,7 +53,7 @@ De gratis laag van Oracle kan een goede keuze zijn voor OpenClaw (vooral als je 
 
 **Tip:** Als het aanmaken van de instantie faalt met "Out of capacity", probeer een andere availability domain of probeer het later opnieuw. De capaciteit van de free tier is beperkt.
 
-## 2) Verbinden en bijwerken
+## 2. Verbinden en bijwerken
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Let op:** `build-essential` is vereist voor ARM-compilatie van sommige afhankelijkheden.
 
-## 3) Gebruiker en hostnaam configureren
+## 3. Gebruiker en hostnaam configureren
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Tailscale installeren
+## 4. Tailscale installeren
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **Vanaf nu verbinden via Tailscale:** `ssh ubuntu@openclaw` (of gebruik het Tailscale-IP).
 
-## 5) OpenClaw installeren
+## 5. OpenClaw installeren
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,7 +107,7 @@ Wanneer je wordt gevraagd "How do you want to hatch your bot?", kies **"Do this 
 
 > Let op: Als je tegen ARM-native buildproblemen aanloopt, begin met systeempakketten (bijv. `sudo apt install -y build-essential`) voordat je naar Homebrew grijpt.
 
-## 6) Gateway configureren (loopback + tokenauthenticatie) en Tailscale Serve inschakelen
+## 6. Gateway configureren (loopback + tokenauthenticatie) en Tailscale Serve inschakelen
 
 Gebruik tokenauthenticatie als standaard. Dit is voorspelbaar en voorkomt dat je “insecure auth”-flags in de Control UI nodig hebt.
 
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Verifiëren
+## 7. Verifiëren
 
 ```bash
 # Check version
@@ -149,7 +142,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) VCN-beveiliging vergrendelen
+## 8. VCN-beveiliging vergrendelen
 
 Nu alles werkt, vergrendel je de VCN om al het verkeer behalve Tailscale te blokkeren. Het Virtual Cloud Network van OCI fungeert als firewall aan de netwerkgrens — verkeer wordt geblokkeerd voordat het je instantie bereikt.
 
@@ -189,7 +182,7 @@ Deze setup neemt vaak de _noodzaak_ weg voor extra host-gebaseerde firewallregel
 
 ### Wat al is beschermd
 
-| Traditionele stap       | Nodig?       | Waarom                                                                                          |
+| Traditionele stap       | Benodigd?    | Waarom                                                                                          |
 | ----------------------- | ------------ | ----------------------------------------------------------------------------------------------- |
 | UFW firewall            | Nee          | VCN blokkeert verkeer voordat het de instantie bereikt                                          |
 | fail2ban                | Nee          | Geen bruteforce als poort 22 op VCN is geblokkeerd                                              |

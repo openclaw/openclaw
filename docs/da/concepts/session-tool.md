@@ -3,13 +3,6 @@ summary: "Agent-sessionværktøjer til at liste sessioner, hente historik og sen
 read_when:
   - Tilføjelse eller ændring af session tools
 title: "Session Tools"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:24Z
 ---
 
 # Session Tools
@@ -31,7 +24,7 @@ Mål: et lille, svært-at-misbruge sæt værktøjer, så agenter kan liste sessi
 - Hooks bruger `hook:<uuid>`, medmindre andet er angivet eksplicit.
 - Node-sessioner bruger `node-<nodeId>`, medmindre andet er angivet eksplicit.
 
-`global` og `unknown` er reserverede værdier og listes aldrig. Hvis `session.scope = "global"`, aliaser vi den til `main` for alle tools, så kaldere aldrig ser `global`.
+`global` og `ukendt` er reserverede værdier og er aldrig listet. If `session.scope = "global"`, we alias it to `main` for all tools so callers never see `global`.
 
 ## sessions_list
 
@@ -40,7 +33,7 @@ List sessioner som et array af rækker.
 Parametre:
 
 - `kinds?: string[]` filter: en af `"main" | "group" | "cron" | "hook" | "node" | "other"`
-- `limit?: number` maks. rækker (standard: serverstandard, clamp fx 200)
+- `limit?: number` max rækker (standard: serverstandard, tang, f.eks. 200)
 - `activeMinutes?: number` kun sessioner opdateret inden for N minutter
 - `messageLimit?: number` 0 = ingen beskeder (standard 0); >0 = inkluder de seneste N beskeder
 
@@ -73,7 +66,7 @@ Hent transkript for én session.
 Parametre:
 
 - `sessionKey` (påkrævet; accepterer sessionsnøgle eller `sessionId` fra `sessions_list`)
-- `limit?: number` maks. beskeder (serveren clampler)
+- `grænse?: nummer` maks beskeder (server tangs)
 - `includeTools?: boolean` (standard false)
 
 Adfærd:
@@ -96,7 +89,7 @@ Adfærd:
 
 - `timeoutSeconds = 0`: sæt i kø og returnér `{ runId, status: "accepted" }`.
 - `timeoutSeconds > 0`: vent op til N sekunder på færdiggørelse, og returnér derefter `{ runId, status: "ok", reply }`.
-- Hvis ventetiden udløber: `{ runId, status: "timeout", error }`. Kørsel fortsætter; kald `sessions_history` senere.
+- Hvis ventetider ud: `{ runId, status: "timeout", error }`. Kør fortsætter; kald `sessions_history` senere.
 - Hvis kørslen fejler: `{ runId, status: "error", error }`.
 - Annonceringskørsler efter levering sker efter den primære kørsel er fuldført og er best-effort; `status: "ok"` garanterer ikke, at annoncen blev leveret.
 - Venter via gateway `agent.wait` (server-side), så genforbindelser ikke afbryder ventetiden.
@@ -104,7 +97,7 @@ Adfærd:
 - Efter den primære kørsel er fuldført, kører OpenClaw en **reply-back loop**:
   - Runde 2+ skifter mellem anmoder- og målagent.
   - Svar præcist `REPLY_SKIP` for at stoppe ping‑pong.
-  - Maks. antal ture er `session.agentToAgent.maxPingPongTurns` (0–5, standard 5).
+  - Maks. drejninger er `session.agentToAgent.maxPingPongTurns` (0–5, standard 5).
 - Når løkken slutter, kører OpenClaw **agent‑til‑agent announce step** (kun målagent):
   - Svar præcist `ANNOUNCE_SKIP` for at forblive tavs.
   - Ethvert andet svar sendes til målkanalen.
@@ -162,7 +155,7 @@ Parametre:
 
 Tilladelsesliste:
 
-- `agents.list[].subagents.allowAgents`: liste over agent-id’er tilladt via `agentId` (`["*"]` for at tillade alle). Standard: kun anmoderagenten.
+- `agents.list[].subagents.allowAgents`: liste over agenter tilladt via `agentId` (`["*"]` for at tillade nogen). Standard: kun anmoderen.
 
 Discovery:
 
@@ -178,7 +171,7 @@ Adfærd:
 - Svar præcist `ANNOUNCE_SKIP` under announce-trinnet for at forblive tavs.
 - Announce-svar normaliseres til `Status`/`Result`/`Notes`; `Status` kommer fra runtime-udfald (ikke modeltekst).
 - Sub-agent-sessioner arkiveres automatisk efter `agents.defaults.subagents.archiveAfterMinutes` (standard: 60).
-- Announce-svar inkluderer en statistiklinje (runtime, tokens, sessionKey/sessionId, transkriptsti og evt. omkostning).
+- Annonceringssvar omfatter en statistik linje (runtime, tokens, sessionKey/sessionId, udskrift sti, og valgfri omkostninger).
 
 ## Sandbox Session Visibility
 

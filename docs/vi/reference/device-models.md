@@ -4,13 +4,6 @@ read_when:
   - Cập nhật ánh xạ định danh mẫu thiết bị hoặc các tệp NOTICE/giấy phép
   - Thay đổi cách UI Instances hiển thị tên thiết bị
 title: "Cơ sở dữ liệu mẫu thiết bị"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:01Z
 ---
 
 # Cơ sở dữ liệu mẫu thiết bị (tên thân thiện)

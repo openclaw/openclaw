@@ -4,13 +4,6 @@ read_when:
   - Pierwsza konfiguracja od zera
   - Chcesz najszybszej ścieżki do działającego czatu
 title: "Pierwsze kroki"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:42Z
 ---
 
 # Pierwsze kroki
@@ -20,11 +13,11 @@ Cel: przejść od zera do pierwszego działającego czatu przy minimalnej konfig
 <Info>
 Najszybszy czat: otwórz Control UI (bez potrzeby konfiguracji kanałów). Uruchom `openclaw dashboard`
 i czatuj w przeglądarce albo otwórz `http://127.0.0.1:18789/` na
-<Tooltip headline="Gateway host" tip="Maszyna uruchamiająca usługę OpenClaw Gateway.">hoście Gateway</Tooltip>.
+<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">hoście Gateway</Tooltip>.
 Dokumentacja: [Dashboard](/web/dashboard) oraz [Control UI](/web/control-ui).
 </Info>
 
-## Wymagania wstępne
+## Prereqs
 
 - Node 22 lub nowszy
 
@@ -35,7 +28,7 @@ Jeśli nie masz pewności, sprawdź wersję Node poleceniem `node --version`.
 ## Szybka konfiguracja (CLI)
 
 <Steps>
-  <Step title="Zainstaluj OpenClaw (zalecane)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ Jeśli nie masz pewności, sprawdź wersję Node poleceniem `node --version`.
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     Inne metody instalacji i wymagania: [Instalacja](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="Uruchom kreator wdrożenia">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     Kreator konfiguruje uwierzytelnianie, ustawienia Gateway oraz opcjonalne kanały.
     Zobacz [Kreator wdrożenia](/start/wizard), aby poznać szczegóły.
-
-  </Step>
-  <Step title="Sprawdź Gateway">
-    Jeśli zainstalowałeś usługę, powinna już działać:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Otwórz Control UI">
+  <Step title="Check the Gateway">
+    Jeśli zainstalowałeś usługę, powinna już działać:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,20 +84,24 @@ Jeśli Control UI się ładuje, Twój Gateway jest gotowy do użycia.
 ## Opcjonalne sprawdzenia i dodatki
 
 <AccordionGroup>
-  <Accordion title="Uruchom Gateway na pierwszym planie">
+  <Accordion title="Run the Gateway in the foreground">
     Przydatne do szybkich testów lub rozwiązywania problemów.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="Wyślij wiadomość testową">
+  <Accordion title="Send a test message">
     Wymaga skonfigurowanego kanału.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -106,10 +109,10 @@ Jeśli Control UI się ładuje, Twój Gateway jest gotowy do użycia.
 ## Zagłęb się dalej
 
 <Columns>
-  <Card title="Kreator wdrożenia (szczegóły)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Pełne odniesienie do kreatora CLI oraz opcje zaawansowane.
   </Card>
-  <Card title="Wdrożenie aplikacji na macOS" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     Przebieg pierwszego uruchomienia aplikacji na macOS.
   </Card>
 </Columns>

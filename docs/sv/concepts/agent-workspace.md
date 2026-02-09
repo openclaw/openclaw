@@ -4,29 +4,22 @@ read_when:
   - Du behöver förklara agentens arbetsyta eller dess fillayout
   - Du vill säkerhetskopiera eller migrera en agents arbetsyta
 title: "Agentens arbetsyta"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:02Z
 ---
 
 # Agentens arbetsyta
 
 Arbetsytan är agentens hem. Det är den enda arbetskatalog som används för
-filverktyg och för arbetsytekontext. Håll den privat och behandla den som minne.
+filverktyg och för arbetsytan. Håll den privat och behandla den som minne.
 
 Detta är separat från `~/.openclaw/`, som lagrar konfig, autentiseringsuppgifter och
 sessioner.
 
-**Viktigt:** arbetsytan är **standard‑cwd**, inte en hård sandbox. Verktyg
+**Viktigt:** arbetsytan är **standard cwd**, inte en hård sandlåda. Verktyg
 löser relativa sökvägar mot arbetsytan, men absoluta sökvägar kan fortfarande nå
-andra platser på värden om inte sandboxing är aktiverat. Om du behöver isolering,
-använd [`agents.defaults.sandbox`](/gateway/sandboxing) (och/eller sandbox‑konfig per agent).
-När sandboxing är aktiverat och `workspaceAccess` inte är `"rw"`, arbetar
-verktyg i en sandbox‑arbetsyta under `~/.openclaw/sandboxes`, inte i din arbetsyta på värden.
+någon annanstans på värden såvida inte sandlådan är aktiverad. Om du behöver isolering, använd
+[`agents.defaults.sandbox`](/gateway/sandboxing) (och/eller per-agent sandbox config).
+När sandlådan är aktiverad och `workspaceAccess` är inte `"rw"`, använder verktyg
+i en sandlåda arbetsyta under `~/.openclaw/sandlådor`, inte din värd arbetsyta.
 
 ## Standardplats
 
@@ -55,14 +48,14 @@ bootstrap‑filer:
 
 ## Extra arbetsytemappar
 
-Äldre installationer kan ha skapat `~/openclaw`. Att behålla flera
-arbetsytekataloger kan orsaka förvirrande autentisering eller tillståndsdrift,
-eftersom endast en arbetsyta är aktiv åt gången.
+Äldre installationer kan ha skapat `~/openclaw`. Att hålla flera arbetsytor
+-kataloger runt kan orsaka förvirrande auth eller tillståndsavdrift, eftersom endast en
+arbetsyta är aktiv åt gången.
 
-**Rekommendation:** behåll en enda aktiv arbetsyta. Om du inte längre använder de
-extra mapparna, arkivera eller flytta dem till Papperskorgen (till exempel
-`trash ~/openclaw`). Om du avsiktligt behåller flera arbetsytor, se till att
-`agents.defaults.workspace` pekar på den aktiva.
+**Rekommendation:** behålla en enda aktiv arbetsyta. Om du inte längre använder extramapparna
+arkivera eller flytta dem till papperskorgen (till exempel `trash ~/openclaw`).
+Om du avsiktligt behåller flera arbetsytor, se till att
+`agents.defaults.workspace` pekar till den aktiva.
 
 `openclaw doctor` varnar när den upptäcker extra arbetsytekataloger.
 
@@ -121,11 +114,11 @@ Se [Memory](/concepts/memory) för arbetsflödet och automatisk minnesspolning.
 - `canvas/` (valfri)
   - Canvas‑UI‑filer för nodvisningar (till exempel `canvas/index.html`).
 
-Om någon bootstrap‑fil saknas injicerar OpenClaw en markör för ”saknad fil” i
-sessionen och fortsätter. Stora bootstrap‑filer trunkeras när de injiceras;
+Om någon bootstrap-fil saknas, injicerar OpenClaw en "saknad fil" markör i
+sessionen och fortsätter. Stora bootstrap-filer trunkeras när de injiceras;
 justera gränsen med `agents.defaults.bootstrapMaxChars` (standard: 20000).
-`openclaw setup` kan återskapa saknade standarder utan att skriva över befintliga
-filer.
+`openclaw setup` kan återskapa saknade standardinställningar utan att skriva över befintliga
+-filer.
 
 ## Vad som INTE finns i arbetsytan
 
@@ -141,15 +134,15 @@ utanför versionskontroll.
 
 ## Git‑backup (rekommenderad, privat)
 
-Behandla arbetsytan som privat minne. Lägg den i ett **privat** git‑repo så att den
-är säkerhetskopierad och kan återställas.
+Behandla arbetsytan som privat minne. Sätt den i en **privat** git repo så den är
+säkerhetskopierad och återställbar.
 
 Kör dessa steg på maskinen där Gateway körs (det är där arbetsytan finns).
 
-### 1) Initiera repot
+### 1. Initiera repot
 
 Om git är installerat initieras helt nya arbetsytor automatiskt. Om denna
-arbetsyta inte redan är ett repo, kör:
+arbetsyta inte redan är en repo, köra:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -158,7 +151,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Lägg till en privat fjärr (nybörjarvänliga alternativ)
+### 2. Lägg till en privat fjärr (nybörjarvänliga alternativ)
 
 Alternativ A: GitHub webb‑UI
 
@@ -193,7 +186,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Löpande uppdateringar
+### 3. Löpande uppdateringar
 
 ```bash
 git status
@@ -234,7 +227,7 @@ Föreslagen `.gitignore`‑start:
 
 ## Avancerade noteringar
 
-- Multi‑agent‑routing kan använda olika arbetsytor per agent. Se
-  [Channel routing](/channels/channel-routing) för routningskonfiguration.
+- Multi-agent routing kan använda olika arbetsytor per agent. Se
+  [Kanalrouting](/channels/channel-routing) för routingkonfiguration.
 - Om `agents.defaults.sandbox` är aktiverat kan icke‑huvudsessioner använda
   sandbox‑arbetsytor per session under `agents.defaults.sandbox.workspaceRoot`.

@@ -1,17 +1,10 @@
 ---
 title: "Skills تخلیق کرنا"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:41Z
 ---
 
 # حسبِ ضرورت Skills بنانا 🛠
 
-OpenClaw کو اس طرح ڈیزائن کیا گیا ہے کہ اسے آسانی سے توسیع دی جا سکے۔ "Skills" آپ کے اسسٹنٹ میں نئی صلاحیتیں شامل کرنے کا بنیادی طریقہ ہیں۔
+OpenClaw is designed to be easily extensible. "Skills" are the primary way to add new capabilities to your assistant.
 
 ## Skill کیا ہے؟
 
@@ -19,17 +12,17 @@ OpenClaw کو اس طرح ڈیزائن کیا گیا ہے کہ اسے آسانی
 
 ## مرحلہ وار: آپ کی پہلی Skill
 
-### 1. ڈائریکٹری بنائیں
+### 1. Create the Directory
 
-Skills آپ کے ورک اسپیس میں ہوتی ہیں، عموماً `~/.openclaw/workspace/skills/` میں۔ اپنی Skill کے لیے ایک نیا فولڈر بنائیں:
+Skills live in your workspace, usually `~/.openclaw/workspace/skills/`. Create a new folder for your skill:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
 ```
 
-### 2. `SKILL.md` کی تعریف کریں
+### 2. Define the `SKILL.md`
 
-اسی ڈائریکٹری میں ایک `SKILL.md` فائل بنائیں۔ یہ فائل میٹاڈیٹا کے لیے YAML فرنٹ میٹر اور ہدایات کے لیے Markdown استعمال کرتی ہے۔
+Create a `SKILL.md` file in that directory. This file uses YAML frontmatter for metadata and Markdown for instructions.
 
 ```markdown
 ---
@@ -42,13 +35,13 @@ description: A simple skill that says hello.
 When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
 ```
 
-### 3. ٹولز شامل کریں (اختیاری)
+### 3. Add Tools (Optional)
 
 آپ فرنٹ میٹر میں حسبِ ضرورت ٹولز کی تعریف کر سکتے ہیں یا ایجنٹ کو موجودہ سسٹم ٹولز استعمال کرنے کی ہدایت دے سکتے ہیں (جیسے `bash` یا `browser`)۔
 
-### 4. OpenClaw کو ریفریش کریں
+### 4. Refresh OpenClaw
 
-اپنے ایجنٹ سے کہیں کہ "refresh skills" کرے یا gateway کو دوبارہ شروع کریں۔ OpenClaw نئی ڈائریکٹری دریافت کرے گا اور `SKILL.md` کو انڈیکس کرے گا۔
+Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discover the new directory and index the `SKILL.md`.
 
 ## بہترین طریقۂ کار
 

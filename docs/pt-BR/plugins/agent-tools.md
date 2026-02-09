@@ -4,13 +4,6 @@ read_when:
   - Você quer adicionar uma nova ferramenta de agente em um plugin
   - Você precisa tornar uma ferramenta opt-in via listas de permissões
 title: "Ferramentas de agente de plugin"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:38Z
 ---
 
 # Ferramentas de agente de plugin

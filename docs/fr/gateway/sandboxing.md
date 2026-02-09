@@ -3,13 +3,6 @@ summary: "Fonctionnement du sandboxing d’OpenClaw : modes, portées, accès à
 title: Sandboxing
 read_when: "Vous voulez une explication dédiée du sandboxing ou devez ajuster agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: 184fc53001fc6b28
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:55Z
 ---
 
 # Sandboxing
@@ -49,7 +42,7 @@ Non sandboxé :
   Remarque : `"non-main"` est basé sur `session.mainKey` (par défaut `"main"`), et non sur l’identifiant d’agent.
   Les sessions de groupe/canal utilisent leurs propres clés ; elles sont donc considérées comme non principales et seront sandboxées.
 
-## Portée
+## Périmètre d'application
 
 `agents.defaults.sandbox.scope` contrôle **le nombre de conteneurs** créés :
 
@@ -148,7 +141,7 @@ Chemins :
 - Global : `agents.defaults.sandbox.docker.setupCommand`
 - Par agent : `agents.list[].sandbox.docker.setupCommand`
 
-Pièges courants :
+Pièges communs:
 
 - La valeur par défaut de `docker.network` est `"none"` (pas de sortie), donc les installations de paquets échoueront.
 - `readOnlyRoot: true` empêche les écritures ; définissez `readOnlyRoot: false` ou intégrez une image personnalisée.

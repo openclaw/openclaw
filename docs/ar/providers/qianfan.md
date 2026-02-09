@@ -1,16 +1,9 @@
 ---
 summary: "استخدم واجهة Qianfan البرمجية الموحّدة للوصول إلى العديد من النماذج في OpenClaw"
 read_when:
-  - "تريد مفتاح API واحدًا للعديد من نماذج LLM"
-  - "تحتاج إلى إرشادات إعداد Baidu Qianfan"
+  - تريد مفتاح API واحدًا للعديد من نماذج LLM
+  - تحتاج إلى إرشادات إعداد Baidu Qianfan
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:31Z
 ---
 
 # دليل موفّر Qianfan

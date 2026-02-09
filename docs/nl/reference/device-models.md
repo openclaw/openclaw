@@ -4,13 +4,6 @@ read_when:
   - Bijwerken van toewijzingen van apparaatmodelidentifiers of NOTICE-/licentiebestanden
   - Wijzigen van hoe de Instances-UI apparaatnamen weergeeft
 title: "Apparaatmodeldatabase"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:39Z
 ---
 
 # Apparaatmodeldatabase (gebruiksvriendelijke namen)

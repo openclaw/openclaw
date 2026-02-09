@@ -4,13 +4,6 @@ read_when:
   - Skills yapılandırması eklerken veya değiştirirken
   - Paketli izin listesi veya kurulum davranışını ayarlarken
 title: "Skills Yapılandırması"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:47Z
 ---
 
 # Skills Yapılandırması
@@ -78,6 +71,6 @@ ana makinenin `process.env` değerini **devralmaz**.
 Aşağıdakilerden birini kullanın:
 
 - `agents.defaults.sandbox.docker.env` (veya ajan başına `agents.list[].sandbox.docker.env`)
-- ortam değişkenlerini özel sandbox imajınıza gömün
+- 48. ortamı özel sandbox imajınıza gömün
 
 Genel `env` ve `skills.entries.<skill>.env/apiKey` yalnızca **ana makine** çalıştırmaları için geçerlidir.

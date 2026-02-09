@@ -4,27 +4,21 @@ read_when:
   - Pagpapaliwanag ng paggamit ng token, mga gastos, o mga context window
   - Pag-debug ng paglaki ng context o pag-uugali ng compaction
 title: "Paggamit ng Token at Mga Gastos"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Paggamit ng token at mga gastos
 
-Sinusubaybayan ng OpenClaw ang **mga token**, hindi mga character. Model-specific ang mga token, pero karamihan sa mga OpenAI-style na model ay nag-a-average ng ~4 na character bawat token para sa English na teksto.
+OpenClaw tracks **tokens**, not characters. Tokens are model-specific, but most
+OpenAI-style models average ~4 characters per token for English text.
 
 ## Paano binubuo ang system prompt
 
-Binubuo ng OpenClaw ang sarili nitong system prompt sa bawat run. Kabilang dito ang:
+OpenClaw assembles its own system prompt on every run. It includes:
 
 - Listahan ng mga tool + maiikling paglalarawan
 - Listahan ng Skills (metadata lang; ang mga instruction ay nilo-load on demand gamit ang `read`)
 - Mga instruction para sa self-update
-- Workspace + mga bootstrap file (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` kapag bago). Ang malalaking file ay tina-truncate ng `agents.defaults.bootstrapMaxChars` (default: 20000).
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000).
 - Oras (UTC + timezone ng user)
 - Mga reply tag + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -42,7 +36,7 @@ Lahat ng natatanggap ng model ay binibilang sa context limit:
 - Mga compaction summary at pruning artifact
 - Mga provider wrapper o safety header (hindi nakikita, pero binibilang pa rin)
 
-Para sa praktikal na breakdown (bawat injected file, mga tool, Skills, at laki ng system prompt), gamitin ang `/context list` o `/context detail`. Tingnan ang [Context](/concepts/context).
+For a practical breakdown (per injected file, tools, skills, and system prompt size), use `/context list` or `/context detail`. See [Context](/concepts/context).
 
 ## Paano makita ang kasalukuyang paggamit ng token
 
@@ -53,6 +47,7 @@ Gamitin ang mga ito sa chat:
 - `/usage off|tokens|full` → nag-a-append ng **per-response na usage footer** sa bawat reply.
   - Nagpe-persist kada session (naka-store bilang `responseUsage`).
   - Ang OAuth auth ay **nagtatago ng gastos** (token lang).
+- `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Iba pang surface:
 
@@ -68,22 +63,24 @@ Tinatantiya ang mga gastos mula sa pricing config ng iyong model:
 models.providers.<provider>.models[].cost
 ```
 
-Ito ay **USD kada 1M token** para sa `input`, `output`, `cacheRead`, at
-`cacheWrite`. Kung kulang ang pricing, token lang ang ipinapakita ng OpenClaw. Ang mga OAuth token ay
-hindi kailanman nagpapakita ng dollar na gastos.
+Ito ay **USD bawat 1M token** para sa `input`, `output`, `cacheRead`, at
+`cacheWrite`. Kung walang pricing, tokens lang ang ipinapakita ng OpenClaw. Ang mga OAuth token
+ever ay hindi nagpapakita ng dolyar na gastos.
 
 ## Cache TTL at epekto ng pruning
 
-Ang provider prompt caching ay naaangkop lang sa loob ng cache TTL window. Maaaring
-opsyonal na patakbuhin ng OpenClaw ang **cache-ttl pruning**: pinu-prune nito ang session kapag nag-expire na ang cache TTL, pagkatapos ay nire-reset ang cache window para ang mga susunod na request ay muling makagamit ng bagong cache na context sa halip na i-re-cache ang buong history. Pinapababa nito ang cache write costs kapag ang isang session ay naging idle lampas sa TTL.
+Ang provider prompt caching ay nalalapat lamang sa loob ng cache TTL window. Maaaring
+opsyonal na patakbuhin ng OpenClaw ang **cache-ttl pruning**: pinu-prune nito ang session kapag nag-expire ang cache TTL, pagkatapos ay nire-reset ang cache window upang ang mga susunod na request ay muling magamit ang bagong naka-cache na context sa halip na muling i-cache ang buong history. Pinapanatiling mas mababa nito ang mga gastos sa cache write kapag ang isang session ay nananatiling idle lampas sa TTL.
 
 I-configure ito sa [Gateway configuration](/gateway/configuration) at tingnan ang
 mga detalye ng behavior sa [Session pruning](/concepts/session-pruning).
 
-Maaaring panatilihing **warm** ng heartbeat ang cache sa mga idle gap. Kung ang model cache TTL mo ay `1h`, ang pagtatakda ng heartbeat interval na bahagyang mas mababa rito (hal., `55m`) ay maaaring makaiwas sa muling pag-cache ng buong prompt, kaya nababawasan ang cache write costs.
+Maaaring panatilihing **warm** ng heartbeat ang cache sa mga idle gap. Kung ang model cache TTL
+mo ay `1h`, ang pagtatakda ng heartbeat interval na bahagyang mas mababa rito (hal., `55m`) ay maaaring makaiwas sa muling pag-cache ng buong prompt, na nagpapababa ng mga gastos sa cache write.
 
-Para sa Anthropic API pricing, mas mura nang malaki ang cache reads kaysa sa input
-tokens, habang ang cache writes ay sinisingil sa mas mataas na multiplier. Tingnan ang prompt caching pricing ng Anthropic para sa pinakabagong mga rate at TTL multiplier:
+Para sa Anthropic API pricing, ang mga cache read ay mas mura kaysa sa input
+tokens, habang ang mga cache write ay sinisingil sa mas mataas na multiplier. Tingnan ang Anthropic’s
+prompt caching pricing para sa pinakabagong mga rate at TTL multiplier:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 
 ### Halimbawa: panatilihing warm ang 1h cache gamit ang heartbeat

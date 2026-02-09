@@ -6,13 +6,6 @@ read_when:
   - Chcesz resetowalne środowisko macOS, które można klonować
   - Chcesz porównać lokalne i hostowane opcje maszyn wirtualnych macOS
 title: "Maszyny wirtualne macOS"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
 ---
 
 # OpenClaw na maszynach wirtualnych macOS (sandboxing)
@@ -69,7 +62,7 @@ Gdy masz dostęp SSH do maszyny wirtualnej macOS, przejdź do kroku 6 poniżej.
 
 ---
 
-## 1) Zainstaluj Lume
+## 1. Zainstaluj Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ Dokumentacja: [Instalacja Lume](https://cua.ai/docs/lume/guide/getting-started/i
 
 ---
 
-## 2) Utwórz maszynę wirtualną macOS
+## 2. Utwórz maszynę wirtualną macOS
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ Uwaga: Pobieranie może potrwać w zależności od połączenia.
 
 ---
 
-## 3) Ukończ Asystenta konfiguracji
+## 3. Ukończ Asystenta konfiguracji
 
 W oknie VNC:
 
@@ -119,7 +112,7 @@ Po zakończeniu konfiguracji włącz SSH:
 
 ---
 
-## 4) Uzyskaj adres IP VM
+## 4. Uzyskaj adres IP VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Znajdź adres IP (zwykle `192.168.64.x`).
 
 ---
 
-## 5) Zaloguj się do VM przez SSH
+## 5. Zaloguj się do VM przez SSH
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Zastąp `youruser` nazwą konta, które utworzyłeś, oraz IP adresem IP Twojej 
 
 ---
 
-## 6) Zainstaluj OpenClaw
+## 6. Zainstaluj OpenClaw
 
 Wewnątrz VM:
 
@@ -152,7 +145,7 @@ Postępuj zgodnie z monitami onboardingu, aby skonfigurować dostawcę modelu (A
 
 ---
 
-## 7) Skonfiguruj kanały
+## 7. Skonfiguruj kanały
 
 Edytuj plik konfiguracyjny:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Uruchom VM bez interfejsu graficznego
+## 8. Uruchom VM bez interfejsu graficznego
 
 Zatrzymaj VM i uruchom ponownie bez wyświetlania:
 
@@ -257,7 +250,7 @@ lume run openclaw --no-display
 
 Utrzymuj VM w działaniu poprzez:
 
-- Podłączenie Maca do zasilania
+- Trwa podłączanie Maca
 - Wyłączenie uśpienia w Ustawieniach systemowych → Oszczędzanie energii
 - Użycie `caffeinate`, jeśli to konieczne
 
@@ -267,11 +260,11 @@ Dla prawdziwego trybu zawsze włączonego rozważ dedykowanego Maca mini lub ma�
 
 ## Rozwiązywanie problemów
 
-| Problem                          | Rozwiązanie                                                                                          |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Nie można połączyć się przez SSH | Sprawdź, czy „Zdalne logowanie” jest włączone w Ustawieniach systemowych VM                          |
-| Nie wyświetla się IP VM          | Poczekaj, aż VM w pełni się uruchomi, ponownie uruchom `lume get openclaw`                           |
-| Nie znaleziono polecenia Lume    | Dodaj `~/.local/bin` do PATH                                                                         |
+| Problem                          | Rozwiązanie                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Nie można połączyć się przez SSH | Sprawdź, czy „Zdalne logowanie” jest włączone w Ustawieniach systemowych VM                                             |
+| Nie wyświetla się IP VM          | Poczekaj, aż VM w pełni się uruchomi, ponownie uruchom `lume get openclaw`                                              |
+| Nie znaleziono polecenia Lume    | Dodaj `~/.local/bin` do PATH                                                                                            |
 | Kod QR WhatsApp nie skanuje      | Upewnij się, że jesteś zalogowany do VM (a nie hosta) podczas uruchamiania `openclaw channels login` |
 
 ---

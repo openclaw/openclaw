@@ -1,15 +1,8 @@
 ---
 summary: "استضافة WebChat الثابتة عبر loopback واستخدام WebSocket الخاص بـ Gateway لواجهة الدردشة"
 read_when:
-  - "عند تصحيح الأخطاء أو تهيئة الوصول إلى WebChat"
+  - عند تصحيح الأخطاء أو تهيئة الوصول إلى WebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:50Z
 ---
 
 # WebChat (واجهة WebSocket الخاصة بـ Gateway)

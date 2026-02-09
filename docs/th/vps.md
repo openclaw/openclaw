@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการรันGatewayบนคลาวด์
   - คุณต้องการภาพรวมอย่างรวดเร็วของคู่มือVPS/การโฮสต์
 title: "การโฮสต์VPS"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:46Z
 ---
 
 # การโฮสต์VPS
@@ -27,6 +20,7 @@ x-i18n:
 - **GCP (Compute Engine)**: [GCP](/install/gcp)
 - **exe.dev** (VM + พร็อกซีHTTPS): [exe.dev](/install/exe-dev)
 - **AWS (EC2/Lightsail/free tier)**: ใช้งานได้ดีเช่นกัน วิดีโอไกด์:
+  [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547) วิดีโอแนะนำ:
   [https://x.com/techfrenAJ/status/2014934471095812547](https://x.com/techfrenAJ/status/2014934471095812547)
 
 ## การตั้งค่าบนคลาวด์ทำงานอย่างไร
@@ -36,6 +30,7 @@ x-i18n:
 - ถือว่าVPSเป็นแหล่งความจริงหลัก และ**สำรองข้อมูล**สถานะ + เวิร์กสเปซ
 - ค่าเริ่มต้นที่ปลอดภัย: ให้Gatewayอยู่บน loopback และเข้าถึงผ่านอุโมงค์SSHหรือ Tailscale Serve
   หาก bind ไปที่ `lan`/`tailnet` ให้บังคับใช้ `gateway.auth.token` หรือ `gateway.auth.password`
+  หากผูกกับ `lan`/`tailnet` ต้องกำหนด `gateway.auth.token` หรือ `gateway.auth.password`
 
 การเข้าถึงระยะไกล: [Gateway remote](/gateway/remote)  
 ฮับแพลตฟอร์ม: [Platforms](/platforms)
@@ -44,6 +39,6 @@ x-i18n:
 
 คุณสามารถคงGatewayไว้บนคลาวด์ และจับคู่ **โหนด** บนอุปกรณ์ภายในเครื่องของคุณ
 (Mac/iOS/Android/headless) โหนดให้ความสามารถด้านหน้าจอ/กล้อง/แคนวาสภายในเครื่อง และความสามารถ `system.run`
-ในขณะที่Gatewayยังคงอยู่บนคลาวด์
+ในขณะที่Gatewayยังคงอยู่บนคลาวด์ Nodes ให้ความสามารถหน้าจอ/กล้อง/แคนวาสภายในเครื่อง และ `system.run` ในขณะที่ Gateway ยังคงอยู่บนคลาวด์
 
 เอกสาร: [Nodes](/nodes), [Nodes CLI](/cli/nodes)

@@ -4,13 +4,6 @@ read_when:
   - Je wilt één API-sleutel voor veel LLM's
   - Je hebt begeleiding nodig bij het instellen van Baidu Qianfan
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:40Z
 ---
 
 # Qianfan Provider-handleiding

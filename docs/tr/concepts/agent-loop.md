@@ -1,15 +1,8 @@
 ---
 summary: "Ajan döngüsü yaşam döngüsü, akışlar ve bekleme semantiği"
 read_when:
-  - Ajan döngüsünün veya yaşam döngüsü olaylarının birebir bir adım adım anlatımına ihtiyaç duyduğunuzda
-title: "Ajan Döngüsü"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:24Z
+  - You need an exact walkthrough of the agent loop or lifecycle events
+title: "Agent Loop"
 ---
 
 # Ajan Döngüsü (OpenClaw)
@@ -34,7 +27,7 @@ döngünün uçtan uca nasıl bağlandığını açıklar.
    - model + düşünme/ayrıntı varsayılanlarını çözümler
    - Skills anlık görüntüsünü yükler
    - `runEmbeddedPiAgent`’yı (pi-agent-core çalışma zamanı) çağırır
-   - gömülü döngü bir tane üretmezse **yaşam döngüsü bitiş/hata** olayı yayar
+   - emits **lifecycle end/error** if the embedded loop does not emit one
 3. `runEmbeddedPiAgent`:
    - oturum başına ve global kuyruklar üzerinden çalıştırmaları serileştirir
    - modeli + kimlik doğrulama profilini çözümler ve pi oturumunu oluşturur
@@ -54,7 +47,7 @@ döngünün uçtan uca nasıl bağlandığını açıklar.
 - Çalıştırmalar, oturum anahtarı başına (oturum şeridi) ve isteğe bağlı olarak global bir şerit üzerinden serileştirilir.
 - Bu, araç/oturum yarışlarını önler ve oturum geçmişini tutarlı tutar.
 - Mesajlaşma kanalları, bu şerit sistemini besleyen kuyruk modlarını (collect/steer/followup) seçebilir.
-  Bkz. [Command Queue](/concepts/queue).
+  [Command Queue](/concepts/queue).
 
 ## Oturum + çalışma alanı hazırlığı
 
@@ -114,8 +107,8 @@ Kanca API’si ve kayıt ayrıntıları için [Plugins](/tools/plugin#plugin-hoo
 
 ## Yanıt şekillendirme + bastırma
 
-- Nihai yükler şunlardan oluşturulur:
-  - asistan metni (ve isteğe bağlı akıl yürütme)
+- Final payloads are assembled from:
+  - assistant text (and optional reasoning)
   - satır içi araç özetleri (ayrıntı açık + izinliyse)
   - model hata verdiğinde asistan hata metni
 - `NO_REPLY`, sessiz bir belirteç olarak kabul edilir ve giden yüklerden filtrelenir.
@@ -145,7 +138,7 @@ Kanca API’si ve kayıt ayrıntıları için [Plugins](/tools/plugin#plugin-hoo
 - `agent.wait` varsayılan: 30 sn (yalnızca bekleme). `timeoutMs` parametresiyle geçersiz kılınır.
 - Ajan çalışma zamanı: `agents.defaults.timeoutSeconds` varsayılan 600 sn; `runEmbeddedPiAgent` iptal zamanlayıcısında uygulanır.
 
-## Erken bitebileceği durumlar
+## Where things can end early
 
 - Ajan zaman aşımı (iptal)
 - AbortSignal (iptal)

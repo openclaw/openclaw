@@ -5,13 +5,6 @@ read_when:
   - iOS uygulamasını kaynaktan çalıştırırken
   - Gateway keşfi veya canvas komutlarını hata ayıklarken
 title: "iOS Uygulaması"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:31Z
 ---
 
 # iOS Uygulaması (Node)

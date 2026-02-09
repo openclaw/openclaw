@@ -4,13 +4,6 @@ read_when:
   - Prise en main d’une nouvelle instance d’assistant
   - Revue des implications de sécurité et de permissions
 title: "Configuration d’un assistant personnel"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 55cd0c67e5e3b28e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:55Z
 ---
 
 # Créer un assistant personnel avec OpenClaw
@@ -87,7 +80,7 @@ Lorsque la prise en main est terminée, nous ouvrons automatiquement le tableau 
 
 OpenClaw lit les instructions de fonctionnement et la « mémoire » depuis le répertoire de l’espace de travail.
 
-Par défaut, OpenClaw utilise `~/.openclaw/workspace` comme espace de travail de l’agent, et le crée (ainsi que les fichiers de démarrage `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatiquement lors de la configuration ou du premier lancement de l’agent. `BOOTSTRAP.md` n’est créé que lorsque l’espace de travail est entièrement nouveau (il ne doit pas réapparaître après suppression).
+Par défaut, OpenClaw utilise `~/.openclaw/workspace` comme espace de travail de l’agent, et le crée (ainsi que les fichiers de démarrage `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatiquement lors de la configuration ou du premier lancement de l’agent. `BOOTSTRAP.md` n’est créé que lorsque l’espace de travail est entièrement nouveau (il ne doit pas réapparaître après suppression). `MEMORY.md` est facultatif (pas créé automatiquement) ; lorsqu'il est présent, il est chargé pour les sessions normales. Les sessions de sous-agents n'injectent que `AGENTS.md` et `TOOLS.md`.
 
 Astuce : traitez ce dossier comme la « mémoire » d’OpenClaw et faites-en un dépôt git (idéalement privé) afin que vos `AGENTS.md` + fichiers de mémoire soient sauvegardés. Si git est installé, les espaces de travail tout neufs sont initialisés automatiquement.
 

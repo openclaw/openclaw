@@ -4,19 +4,12 @@ read_when:
   - प्लगइन आर्किटेक्चर को परिभाषित या पुनर्गठित करते समय
   - चैनल कनेक्टर्स को प्लगइन SDK/रनटाइम में माइग्रेट करते समय
 title: "प्लगइन SDK पुनर्गठन"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:50Z
 ---
 
 # प्लगइन SDK + रनटाइम पुनर्गठन योजना
 
-लक्ष्य: हर मैसेजिंग कनेक्टर एक प्लगइन हो (बंडल्ड या बाहरी) जो एक स्थिर API का उपयोग करे।
-कोई भी प्लगइन सीधे `src/**` से इम्पोर्ट न करे। सभी निर्भरताएँ SDK या रनटाइम के माध्यम से जाएँ।
+Goal: every messaging connector is a plugin (bundled or external) using one stable API.
+No plugin imports from `src/**` directly. All dependencies go through the SDK or runtime.
 
 ## अभी क्यों
 
@@ -25,9 +18,9 @@ x-i18n:
 
 ## लक्ष्य आर्किटेक्चर (दो स्तर)
 
-### 1) प्लगइन SDK (कम्पाइल-टाइम, स्थिर, प्रकाशित करने योग्य)
+### 1. प्लगइन SDK (कम्पाइल-टाइम, स्थिर, प्रकाशित करने योग्य)
 
-दायरा: टाइप्स, हेल्पर्स, और कॉन्फ़िग यूटिलिटीज़। कोई रनटाइम स्टेट नहीं, कोई साइड इफ़ेक्ट नहीं।
+Scope: types, helpers, and config utilities. No runtime state, no side effects.
 
 सामग्री (उदाहरण):
 
@@ -44,10 +37,10 @@ x-i18n:
 - `openclaw/plugin-sdk` के रूप में प्रकाशित करें (या `openclaw/plugin-sdk` के अंतर्गत कोर से एक्सपोर्ट करें)।
 - स्पष्ट स्थिरता गारंटी के साथ Semver।
 
-### 2) प्लगइन रनटाइम (एक्सीक्यूशन सतह, इंजेक्टेड)
+### 2. प्लगइन रनटाइम (एक्सीक्यूशन सतह, इंजेक्टेड)
 
-दायरा: वह सब कुछ जो कोर रनटाइम व्यवहार को छूता है।
-`OpenClawPluginApi.runtime` के माध्यम से एक्सेस किया जाता है ताकि प्लगइन्स कभी `src/**` इम्पोर्ट न करें।
+Scope: everything that touches core runtime behavior.
+Accessed via `OpenClawPluginApi.runtime` so plugins never import `src/**`.
 
 प्रस्तावित सतह (न्यूनतम लेकिन पूर्ण):
 
@@ -195,7 +188,7 @@ export type PluginRuntime = {
 ## संगतता और संस्करणिंग
 
 - SDK: semver, प्रकाशित, प्रलेखित परिवर्तन।
-- रनटाइम: प्रति कोर रिलीज़ संस्करणित। `api.runtime.version` जोड़ें।
+- Runtime: versioned per core release. Add `api.runtime.version`.
 - प्लगइन्स आवश्यक रनटाइम रेंज घोषित करते हैं (उदा., `openclawRuntime: ">=2026.2.0"`)।
 
 ## परीक्षण रणनीति

@@ -4,13 +4,6 @@ read_when:
   - Model için zaman damgalarının nasıl normalize edildiğini anlamanız gerektiğinde
   - Sistem istemleri için kullanıcı saat dilimini yapılandırırken
 title: "Saat Dilimleri"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:11Z
 ---
 
 # Saat Dilimleri
@@ -49,7 +42,7 @@ Bunu şu şekilde geçersiz kılabilirsiniz:
 
 ### Örnekler
 
-**Yerel (varsayılan):**
+**Local (default):**
 
 ```
 [Signal Alice +1555 2026-01-18 00:19 PST] hello

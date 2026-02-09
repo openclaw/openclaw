@@ -4,13 +4,6 @@ read_when:
   - تريد إضافة/إزالة حسابات القنوات (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (ملحق)/Signal/iMessage)
   - تريد التحقق من حالة القناة أو تتبّع سجلات القناة
 title: "القنوات"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:55Z
 ---
 
 # `openclaw channels`
@@ -70,7 +63,7 @@ openclaw channels capabilities --channel discord --target channel:123
 - يقبل `--target` `channel:<id>` أو معرّف قناة رقميًا خامًا، وينطبق فقط على Discord.
 - تختلف الفحوصات حسب الموفّر: نيات Discord + أذونات القنوات الاختيارية؛ نطاقات Slack للبوت + المستخدم؛ أعلام بوت Telegram + webhook؛ إصدار daemon لـ Signal؛ رمز تطبيق Microsoft Teams + أدوار/نطاقات Graph (مع تعليقات حيثما كان معروفًا). القنوات التي لا تحتوي على فحوصات تُبلِغ عن `Probe: unavailable`.
 
-## تحويل الأسماء إلى معرّفات
+## حل الأسماء إلى المعرفات
 
 تحويل أسماء القنوات/المستخدمين إلى معرّفات باستخدام دليل الموفّر:
 

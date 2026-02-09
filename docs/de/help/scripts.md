@@ -1,16 +1,9 @@
 ---
-summary: „Repository-Skripte: Zweck, Umfang und Sicherheitshinweise“
+summary: "„Repository-Skripte: Zweck, Umfang und Sicherheitshinweise“"
 read_when:
   - Ausführen von Skripten aus dem Repository
   - Hinzufügen oder Ändern von Skripten unter ./scripts
-title: „Skripte“
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:25Z
+title: "Skripte"
 ---
 
 # Skripte

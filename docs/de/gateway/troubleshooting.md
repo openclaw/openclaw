@@ -4,13 +4,6 @@ read_when:
   - Der Fehlerbehebungs-Hub hat Sie für eine tiefere Diagnose hierher verwiesen
   - Sie benötigen stabile, symptomorientierte Runbook-Abschnitte mit exakten Befehlen
 title: "Fehlerbehebung"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:33Z
 ---
 
 # Gateway-Fehlerbehebung
@@ -254,7 +247,7 @@ Verwandt:
 
 Die meisten Probleme nach einem Upgrade sind Konfigurationsdrift oder nun durchgesetzte strengere Standardwerte.
 
-### 1) Verhalten bei Authentifizierung und URL-Overrides geändert
+### 1. Verhalten bei Authentifizierung und URL-Overrides geändert
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Häufige Signaturen:
 - `gateway connect failed:` → falsches URL-Ziel.
 - `unauthorized` → Endpunkt erreichbar, aber falsche Authentifizierung.
 
-### 2) Bind- und Auth-Guardrails sind strenger
+### 2. Bind- und Auth-Guardrails sind strenger
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ Häufige Signaturen:
 - `refusing to bind gateway ... without auth` → Bind+Auth-Abweichung.
 - `RPC probe: failed` während die Runtime läuft → Gateway lebt, ist aber mit aktueller Auth/URL nicht erreichbar.
 
-### 3) Kopplungs- und Geräteidentitätsstatus geändert
+### 3. Kopplungs- und Geräteidentitätsstatus geändert
 
 ```bash
 openclaw devices list

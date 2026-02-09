@@ -4,13 +4,6 @@ read_when:
   - Düğümler + operatör istemcileri için birleşik bir ağ protokolü planlanırken
   - Cihazlar genelinde onaylar, eşleştirme, TLS ve varlık (presence) yeniden ele alınırken
 title: "Clawnet Yeniden Düzenleme"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:15Z
 ---
 
 # Clawnet yeniden düzenleme (protokol + kimlik doğrulama birleştirme)
@@ -51,7 +44,7 @@ Merhaba Peter — harika bir yön; bu, daha basit bir UX ve daha güçlü bir g�
 
 ## İki protokol
 
-### 1) Gateway WebSocket (kontrol düzlemi)
+### 1. Gateway WebSocket (kontrol düzlemi)
 
 - Tam API yüzeyi: yapılandırma, kanallar, modeller, oturumlar, ajan çalıştırmaları, günlükler, node’lar vb.
 - Varsayılan bağlama: loopback. Uzak erişim SSH/Tailscale üzerinden.
@@ -62,7 +55,7 @@ Merhaba Peter — harika bir yön; bu, daha basit bir UX ve daha güçlü bir g�
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (node taşıması)
+### 2. Bridge (node taşıması)
 
 - Dar izin listesi yüzeyi, node kimliği + eşleştirme.
 - TCP üzerinde JSONL; isteğe bağlı TLS + sertifika parmak izi pinleme.
@@ -91,7 +84,7 @@ Merhaba Peter — harika bir yön; bu, daha basit bir UX ve daha güçlü bir g�
 
 - Ajan, Gateway üzerinden `system.run` kullanır.
 - Gateway, bridge üzerinden node’u çağırır.
-- Node çalışma zamanı onaya karar verir.
+- Node runtime decides approval.
 - UI istemi mac uygulaması tarafından gösterilir (node == mac uygulaması olduğunda).
 - Node, Gateway’e `invoke-res` döndürür.
 - Çoklu atlama, UI node ana makinesine bağlı.
@@ -169,7 +162,7 @@ Her istemci şunları sağlar:
   - rol(ler)
   - kapsam(lar)
   - yetenekler/komutlar
-- İstemci belirteci kalıcılaştırır, kimlik doğrulanmış olarak yeniden bağlanır.
+- Client persists token, reconnects authenticated.
 
 ## Cihaza bağlı kimlik doğrulama (bearer belirteci tekrarını önleme)
 
@@ -222,7 +215,7 @@ Mevcut TLS çalışma zamanı + parmak izi pinlemeyi kullanın:
 
 # Onayların yeniden tasarımı (merkezi)
 
-## Mevcut
+## Current
 
 Onay, node ana makinesinde (mac uygulaması node çalışma zamanı) gerçekleşir. İstem, node’un çalıştığı yerde görünür.
 
@@ -249,7 +242,7 @@ Onay **gateway barındırmalıdır**, UI operatör istemcilerine teslim edilir.
 ## Faydalar
 
 - İstem, kullanıcının olduğu yerde görünür (mac/telefon).
-- Uzak node’lar için tutarlı onaylar.
+- Consistent approvals for remote nodes.
 - Node çalışma zamanı headless kalır; UI bağımlılığı yoktur.
 
 ---
@@ -332,7 +325,7 @@ Roller genelinde aynı `deviceId` → tek “Instance” satırı:
 ## Aşama 4: TLS birleştirme
 
 - Bridge TLS çalışma zamanını kullanarak WS için TLS yapılandırması ekle.
-- İstemcilere pinleme ekle.
+- Add pinning to clients.
 
 ## Aşama 5: Bridge’i kullanımdan kaldırma
 
@@ -400,7 +393,7 @@ Sürüklenmeyi önlemek için uygulamadan önce birini seçin.
 
 2. Operator kapsam ayrıntı düzeyi
    - read/write/admin + onaylar + eşleştirme (asgari uygulanabilir).
-   - Daha sonra özellik bazlı kapsamları değerlendirin.
+   - Consider per‑feature scopes later.
 
 3. Belirteç döndürme + iptal UX’i
    - Rol değişikliğinde otomatik döndürme.
@@ -410,7 +403,7 @@ Sürüklenmeyi önlemek için uygulamadan önce birini seçin.
    - Mevcut Bonjour TXT’yi WS TLS parmak izi + rol ipuçlarını içerecek şekilde genişletin.
    - Yalnızca konum ipuçları olarak ele alın.
 
-5. Ağlar arası onay
+5. Cross‑network approval
    - Tüm operatör istemcilerine yayınlayın; etkin UI modal gösterir.
    - İlk yanıt kazanır; gateway atomikliği uygular.
 

@@ -2,27 +2,20 @@
 summary: "OpenClaw کے لیے ایجنٹ ٹول سطح (براؤزر، کینوس، نوڈز، میسج، کرون) جو پرانے `openclaw-*` skills کی جگہ لیتی ہے"
 read_when:
   - ایجنٹ ٹولز شامل یا ترمیم کرتے وقت
-  - `openclaw-*` skills کو ریٹائر یا تبدیل کرتے وقت
+  - "`openclaw-*` skills کو ریٹائر یا تبدیل کرتے وقت"
 title: "Tools"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:45Z
 ---
 
 # Tools (OpenClaw)
 
-OpenClaw براؤزر، کینوس، نوڈز، اور کرون کے لیے **فرسٹ کلاس ایجنٹ ٹولز** فراہم کرتا ہے۔
-یہ پرانی `openclaw-*` skills کی جگہ لیتے ہیں: ٹولز ٹائپڈ ہیں، شیلنگ نہیں ہوتی،
-اور ایجنٹ کو براہِ راست انہی پر انحصار کرنا چاہیے۔
+OpenClaw exposes **first-class agent tools** for browser, canvas, nodes, and cron.
+These replace the old `openclaw-*` skills: the tools are typed, no shelling,
+and the agent should rely on them directly.
 
 ## ٹولز کو غیر فعال کرنا
 
-آپ `openclaw.json` میں `tools.allow` / `tools.deny` کے ذریعے ٹولز کو عالمی طور پر اجازت/عدم اجازت دے سکتے ہیں
-(عدم اجازت غالب رہتی ہے)۔ اس سے غیر مجاز ٹولز کو ماڈل فراہم کنندگان تک بھیجنے سے روکا جاتا ہے۔
+You can globally allow/deny tools via `tools.allow` / `tools.deny` in `openclaw.json`
+(deny wins). This prevents disallowed tools from being sent to model providers.
 
 ```json5
 {
@@ -38,8 +31,8 @@ OpenClaw براؤزر، کینوس، نوڈز، اور کرون کے لیے **ف
 
 ## ٹول پروفائلز (بنیادی اجازت فہرست)
 
-`tools.profile`، `tools.allow`/`tools.deny` سے پہلے ایک **بنیادی ٹول اجازت فہرست** سیٹ کرتا ہے۔
-ہر ایجنٹ کے لیے اوور رائیڈ: `agents.list[].tools.profile`۔
+`tools.profile` sets a **base tool allowlist** before `tools.allow`/`tools.deny`.
+Per-agent override: `agents.list[].tools.profile`.
 
 پروفائلز:
 
@@ -88,14 +81,14 @@ OpenClaw براؤزر، کینوس، نوڈز، اور کرون کے لیے **ف
 
 ## فراہم کنندہ کے لحاظ سے ٹول پالیسی
 
-`tools.byProvider` استعمال کریں تاکہ مخصوص فراہم کنندگان
-(یا ایک واحد `provider/model`) کے لیے ٹولز کو **مزید محدود** کیا جا سکے، بغیر عالمی ڈیفالٹس بدلے۔
-ہر ایجنٹ کے لیے اوور رائیڈ: `agents.list[].tools.byProvider`۔
+Use `tools.byProvider` to **further restrict** tools for specific providers
+(or a single `provider/model`) without changing your global defaults.
+Per-agent override: `agents.list[].tools.byProvider`.
 
-یہ **بنیادی ٹول پروفائل کے بعد** اور **allow/deny فہرستوں سے پہلے** لاگو ہوتی ہے،
-اس لیے یہ صرف ٹول سیٹ کو تنگ کر سکتی ہے۔
-فراہم کنندہ کی کلیدیں یا تو `provider` (مثلاً `google-antigravity`) قبول کرتی ہیں یا
-`provider/model` (مثلاً `openai/gpt-5.2`)۔
+This is applied **after** the base tool profile and **before** allow/deny lists,
+so it can only narrow the tool set.
+Provider keys accept either `provider` (e.g. `google-antigravity`) or
+`provider/model` (e.g. `openai/gpt-5.2`).
 
 مثال (عالمی کوڈنگ پروفائل برقرار رکھیں، مگر Google Antigravity کے لیے کم سے کم ٹولز):
 
@@ -144,8 +137,8 @@ OpenClaw براؤزر، کینوس، نوڈز، اور کرون کے لیے **ف
 
 ## ٹول گروپس (شارٹ ہینڈز)
 
-ٹول پالیسیاں (عالمی، ایجنٹ، sandbox) `group:*` اندراجات کو سپورٹ کرتی ہیں جو متعدد ٹولز میں پھیلتے ہیں۔
-انہیں `tools.allow` / `tools.deny` میں استعمال کریں۔
+ٹول پالیسیز (گلوبل، ایجنٹ، سینڈباکس) `group:*` اندراجات کی حمایت کرتی ہیں جو متعدد ٹولز میں پھیل جاتے ہیں.
+Use these in `tools.allow` / `tools.deny`.
 
 دستیاب گروپس:
 
@@ -172,11 +165,8 @@ OpenClaw براؤزر، کینوس، نوڈز، اور کرون کے لیے **ف
 
 ## پلگ اِنز + ٹولز
 
-پلگ اِنز بنیادی سیٹ سے آگے **اضافی ٹولز** (اور CLI کمانڈز) رجسٹر کر سکتے ہیں۔
-انسٹال + کنفیگ کے لیے [Plugins](/tools/plugin) دیکھیں، اور اس بارے میں کہ
-ٹول استعمال کی رہنمائی پرامپٹس میں کیسے شامل کی جاتی ہے، [Skills](/tools/skills) دیکھیں۔
-کچھ پلگ اِنز ٹولز کے ساتھ اپنی skills بھی فراہم کرتے ہیں
-(مثلاً، وائس کال پلگ اِن)۔
+Plugins can register **additional tools** (and CLI commands) beyond the core set.
+انسٹال + کنفیگ کے لیے [Plugins](/tools/plugin) دیکھیں، اور یہ جاننے کے لیے [Skills](/tools/skills) دیکھیں کہ ٹول کے استعمال کی رہنمائی پرامپٹس میں کیسے شامل کی جاتی ہے۔ کچھ پلگ انز اپنے ٹولز کے ساتھ اپنی اسکلز بھی فراہم کرتے ہیں (مثال کے طور پر، وائس کال پلگ ان)۔
 
 اختیاری پلگ اِن ٹولز:
 
@@ -187,7 +177,7 @@ OpenClaw براؤزر، کینوس، نوڈز، اور کرون کے لیے **ف
 
 ### `apply_patch`
 
-ایک یا زیادہ فائلوں میں ساختہ پیچز لاگو کریں۔ ملٹی ہنک ایڈیٹس کے لیے استعمال کریں۔
+ایک یا ایک سے زیادہ فائلوں پر اسٹرکچرڈ پیچز لاگو کریں۔ ملٹی ہنک ایڈیٹس کے لیے استعمال کریں۔
 تجرباتی: `tools.exec.applyPatch.enabled` کے ذریعے فعال کریں (صرف OpenAI ماڈلز)۔
 
 ### `exec`
@@ -473,8 +463,7 @@ Gateway بیکڈ ٹولز (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (اگر auth فعال ہو)
 - `timeoutMs`
 
-نوٹ: جب `gatewayUrl` سیٹ ہو، تو `gatewayToken` واضح طور پر شامل کریں۔ ٹولز اوور رائیڈز کے لیے کنفیگ
-یا ماحول کی اسناد وراثت میں نہیں لیتے، اور واضح اسناد کی عدم موجودگی ایک خرابی ہے۔
+نوٹ: جب `gatewayUrl` سیٹ ہو، تو `gatewayToken` کو واضح طور پر شامل کریں۔ ٹولز اوور رائیڈز کے لیے کنفیگ یا انوائرمنٹ کریڈینشلز وراثت میں نہیں لیتے، اور واضح کریڈینشلز کا نہ ہونا ایک ایرر ہے۔
 
 براؤزر ٹول:
 
@@ -516,5 +505,4 @@ Gateway بیکڈ ٹولز (`canvas`, `nodes`, `cron`):
 1. **سسٹم پرامپٹ متن**: انسان کے لیے قابلِ مطالعہ فہرست + رہنمائی۔
 2. **ٹول اسکیما**: ماڈل API کو بھیجی جانے والی ساختہ فنکشن تعریفیں۔
 
-اس کا مطلب ہے کہ ایجنٹ دونوں چیزیں دیکھتا ہے: “کون سے ٹولز موجود ہیں” اور “انہیں کیسے کال کرنا ہے۔”
-اگر کوئی ٹول سسٹم پرامپٹ یا اسکیما میں ظاہر نہیں ہوتا، تو ماڈل اسے کال نہیں کر سکتا۔
+اس کا مطلب ہے کہ ایجنٹ دونوں چیزیں دیکھتا ہے: “کون سے ٹولز موجود ہیں” اور “انہیں کیسے کال کرنا ہے۔” اگر کوئی ٹول سسٹم پرامپٹ یا اسکیما میں ظاہر نہیں ہوتا، تو ماڈل اسے کال نہیں کر سکتا۔

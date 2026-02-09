@@ -5,13 +5,6 @@ read_when:
   - Implementando UX de aprovação de exec no app macOS
   - Revisando prompts de escape do sandbox e implicações
 title: "Aprovações de Exec"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:18Z
 ---
 
 # Aprovações de exec

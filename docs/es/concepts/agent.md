@@ -3,13 +3,6 @@ summary: "Runtime del agente (pi-mono integrado), contrato del espacio de trabaj
 read_when:
   - Al cambiar el runtime del agente, el arranque del espacio de trabajo o el comportamiento de la sesión
 title: "Runtime del agente"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:14Z
 ---
 
 # Runtime del agente 🤖

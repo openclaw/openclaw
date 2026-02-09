@@ -4,18 +4,11 @@ read_when:
   - Signal ပံ့ပိုးမှုကို တပ်ဆင်ချိန်
   - Signal ပို့/လက်ခံမှုကို ပြဿနာရှာဖွေချိန်
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:21Z
 ---
 
 # Signal (signal-cli)
 
-အခြေအနေ: အပြင်ပိုင်း CLI ပေါင်းစည်းမှု။ Gateway သည် HTTP JSON-RPC + SSE မှတစ်ဆင့် `signal-cli` နှင့် ဆက်သွယ်သည်။
+အခြေအနေ: ပြင်ပ CLI ပေါင်းစည်းမှု။ Gateway သည် `signal-cli` နှင့် HTTP JSON-RPC + SSE ဖြင့် ဆက်သွယ်ပါသည်။
 
 ## Quick setup (beginner)
 
@@ -88,7 +81,7 @@ x-i18n:
 }
 ```
 
-အကောင့်များစွာ ပံ့ပိုးမှု: per-account config နှင့် optional `name` ဖြင့် `channels.signal.accounts` ကို အသုံးပြုပါ။ မျှဝေထားသော ပုံစံအတွက် [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) ကို ကြည့်ပါ။
+Multi-account ပံ့ပိုးမှု: `channels.signal.accounts` ကို account တစ်ခုချင်းစီအတွက် config နှင့် မဖြစ်မနေ မဟုတ်သော `name` ဖြင့် အသုံးပြုပါ။ ပုံစံတူ အသုံးပြုနည်းအတွက် [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) ကို ကြည့်ပါ။
 
 ## External daemon mode (httpUrl)
 
@@ -105,7 +98,7 @@ x-i18n:
 }
 ```
 
-ဤနည်းလမ်းသည် OpenClaw အတွင်း auto-spawn နှင့် စတင်စောင့်ဆိုင်းမှုကို ကျော်လွှားသည်။ auto-spawn သုံးရာတွင် စတင်မှု နှေးကွေးပါက `channels.signal.startupTimeoutMs` ကို သတ်မှတ်ပါ။
+ဤအရာသည် OpenClaw အတွင်း auto-spawn နှင့် startup wait ကို ကျော်လွှားသွားပါသည်။ Auto-spawn အသုံးပြုစဉ် စတင်နှေးကွေးပါက `channels.signal.startupTimeoutMs` ကို သတ်မှတ်ပါ။
 
 ## Access control (DMs + groups)
 
@@ -116,7 +109,7 @@ DM များ:
 - အတည်ပြုရန်:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- Pairing သည် Signal DM များအတွက် မူလ token လဲလှယ်နည်း ဖြစ်သည်။ အသေးစိတ်: [Pairing](/channels/pairing)
+- Pairing သည် Signal DMs အတွက် ပုံမှန် token လဲလှယ်နည်းဖြစ်ပါသည်။ အသေးစိတ်: [Pairing](/channels/pairing)
 - `sourceUuid` မှ လာသော UUID-only ပို့သူများကို `channels.signal.allowFrom` တွင် `uuid:<id>` အဖြစ် သိမ်းဆည်းသည်။
 
 အုပ်စုများ:
@@ -137,7 +130,7 @@ DM များ:
 - Attachments ကို ပံ့ပိုးထားသည် (base64 ကို `signal-cli` မှ ရယူသည်)။
 - မီဒီယာ မူလ ကန့်သတ်ချက်: `channels.signal.mediaMaxMb` (မူလ 8)။
 - မီဒီယာ ဒေါင်းလုဒ်မလုပ်ရန် `channels.signal.ignoreAttachments` ကို အသုံးပြုပါ။
-- အုပ်စု သမိုင်း အကြောင်းအရာအတွက် `channels.signal.historyLimit` (သို့) `channels.signal.accounts.*.historyLimit` ကို အသုံးပြုပြီး `messages.groupChat.historyLimit` သို့ fallback ပြုလုပ်သည်။ ပိတ်ရန် `0` ကို သတ်မှတ်ပါ (မူလ 50)။
+- Group history context သည် `channels.signal.historyLimit` (သို့မဟုတ် `channels.signal.accounts.*.historyLimit`) ကို အသုံးပြုပြီး `messages.groupChat.historyLimit` သို့ ပြန်လည်ကျဆင်းအသုံးပြုပါသည်။ ပိတ်ရန် `0` ကို သတ်မှတ်ပါ (ပုံမှန် 50)။
 
 ## Typing + ဖတ်ပြီး အမှတ်အသားများ
 
@@ -166,7 +159,9 @@ Config:
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive`။
   - `off`/`ack` သည် အေးဂျင့် reaction များကို ပိတ်သည် (message tool `react` သည် error ပြမည်)။
   - `minimal`/`extensive` သည် အေးဂျင့် reaction များကို ဖွင့်ပြီး လမ်းညွှန်မှု အဆင့်ကို သတ်မှတ်သည်။
-- Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`။
+- Account တစ်ခုချင်းစီအလိုက် override များ: `channels.signal.accounts.<id>
+  .actions.reactions`, `channels.signal.accounts.<id>
+  .reactionLevel`။`channels.signal.allowFrom`: DM ခွင့်ပြုစာရင်း (E.164 သို့မဟုတ် `uuid:<id>`)။`open` သည် `"*"` ကို လိုအပ်ပါသည်။
 
 ## Delivery targets (CLI/cron)
 
@@ -219,11 +214,11 @@ Provider options:
 - `channels.signal.ignoreStories`: daemon မှ stories များကို လျစ်လျူရှုခြင်း။
 - `channels.signal.sendReadReceipts`: read receipt များကို လွှဲပြောင်းပို့ဆောင်ခြင်း။
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (မူလ: pairing)။
-- `channels.signal.allowFrom`: DM allowlist (E.164 သို့မဟုတ် `uuid:<id>`)။ `open` သည် `"*"` လိုအပ်သည်။ Signal တွင် username မရှိပါ; ဖုန်း/UUID ID များကို အသုံးပြုပါ။
+- Signal တွင် username မရှိပါ; ဖုန်းနံပါတ်/UUID id များကို အသုံးပြုပါ။ `channels.signal.dmHistoryLimit`: အသုံးပြုသူ turn အလိုက် DM history ကန့်သတ်ချက်။ အသုံးပြုသူတစ်ဦးချင်းစီအတွက် override များ: `channels.signal.dms["<phone_or_uuid>"].historyLimit`။
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (မူလ: allowlist)။
 - `channels.signal.groupAllowFrom`: အုပ်စု ပို့သူ allowlist။
 - `channels.signal.historyLimit`: အကြောင်းအရာအဖြစ် ထည့်သွင်းမည့် အုပ်စု မက်ဆေ့ချ် အများဆုံး (0 သည် ပိတ်သည်)။
-- `channels.signal.dmHistoryLimit`: အသုံးပြုသူအလိုက် DM သမိုင်း ကန့်သတ်ချက် (turns)။ Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`။
+- **Socket Mode** → ဖွင့်ပါ။ Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: ထွက်သွားသော chunk အရွယ်အစား (chars)။
 - `channels.signal.chunkMode`: `length` (မူလ) သို့မဟုတ် အလွတ်လိုင်းများ (စာပိုဒ်နယ်နိမိတ်) တွင် ခွဲရန် `newline` ကို အသုံးပြုပါ။
 - `channels.signal.mediaMaxMb`: ဝင်/ထွက် မီဒီယာ ကန့်သတ်ချက် (MB)။

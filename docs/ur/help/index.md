@@ -4,13 +4,6 @@ read_when:
   - آپ نئے ہیں اور “میں کیا کلک/چلاؤں” والی رہنمائی چاہتے ہیں
   - کچھ خراب ہو گیا ہے اور آپ تیز ترین راستہ چاہتے ہیں
 title: "مدد"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:13Z
 ---
 
 # مدد

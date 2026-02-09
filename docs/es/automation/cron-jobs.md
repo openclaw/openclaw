@@ -1,17 +1,10 @@
 ---
 summary: "Tareas cron + activaciones para el programador del Gateway"
 read_when:
-  - Programar trabajos en segundo plano o activaciones
+  - Programar tareas de fondo o despertar
   - Conectar automatizaciones que deban ejecutarse con o junto a los latidos
   - Decidir entre latido y cron para tareas programadas
 title: "Tareas Cron"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:47Z
 ---
 
 # Tareas cron (programador del Gateway)

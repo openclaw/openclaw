@@ -4,20 +4,13 @@ read_when:
   - /new, /reset, /stop 및 에이전트 라이프사이클 이벤트를 위한 이벤트 기반 자동화가 필요할 때
   - hooks 를 빌드, 설치 또는 디버그하고자 할 때
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:09Z
 ---
 
 # Hooks
 
 Hooks 는 에이전트 명령과 이벤트에 대응하여 작업을 자동화하기 위한 확장 가능한 이벤트 기반 시스템을 제공합니다. Hooks 는 디렉토리에서 자동으로 발견되며, OpenClaw 에서 skills 가 동작하는 방식과 유사하게 CLI 명령으로 관리할 수 있습니다.
 
-## 개요 파악
+## Getting Oriented
 
 Hooks 는 어떤 일이 발생할 때 실행되는 작은 스크립트입니다. 두 가지 종류가 있습니다:
 
@@ -40,7 +33,7 @@ Hooks 는 플러그인 내부에 번들로 포함될 수도 있습니다. 자세
 hooks 시스템을 통해 다음을 수행할 수 있습니다:
 
 - `/new` 이 실행될 때 세션 컨텍스트를 메모리에 저장
-- 감사 목적을 위해 모든 명령 로깅
+- Log all commands for auditing
 - 에이전트 라이프사이클 이벤트에 대한 사용자 정의 자동화 트리거
 - 코어 코드를 수정하지 않고 OpenClaw 동작 확장
 
@@ -79,7 +72,7 @@ openclaw hooks check
 openclaw hooks info session-memory
 ```
 
-### 온보딩
+### Onboarding
 
 온보딩(`openclaw onboard`) 중에는 권장 hooks 를 활성화하라는 안내를 받게 됩니다. 마법사는 적합한 hooks 를 자동으로 발견하여 선택할 수 있도록 제시합니다.
 
@@ -121,7 +114,7 @@ openclaw hooks install <path-or-spec>
 }
 ```
 
-각 항목은 `HOOK.md` 와 `handler.ts` (또는 `index.ts`)를 포함하는 hook 디렉토리를 가리킵니다.  
+각 항목은 `HOOK.md` 와 `handler.ts` (또는 `index.ts`)를 포함하는 hook 디렉토리를 가리킵니다.
 Hook 팩은 의존성을 포함할 수 있으며, 이들은 `~/.openclaw/hooks/<id>` 아래에 설치됩니다.
 
 ## Hook 구조
@@ -340,7 +333,7 @@ openclaw hooks enable my-hook
 }
 ```
 
-### Hook 별 설정
+### Per-Hook Configuration
 
 Hooks 는 사용자 정의 설정을 가질 수 있습니다:
 
@@ -571,7 +564,7 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-게이트웨이가 시작될 때(채널 시작 이후) `BOOT.md` 을 실행합니다.  
+게이트웨이가 시작될 때(채널 시작 이후) `BOOT.md` 을 실행합니다.
 이를 실행하려면 내부 hooks 가 활성화되어 있어야 합니다.
 
 **이벤트**: `gateway:startup`
@@ -806,7 +799,7 @@ Session reset
 openclaw hooks info my-hook
 ```
 
-다음 누락 여부를 확인하십시오:
+Look for missing:
 
 - 바이너리(PATH 확인)
 - 환경 변수
@@ -914,7 +907,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 - 더 나은 문서화
 - 일관된 구조
 
-## 참고 자료
+## See Also
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Bundled Hooks README](https://github.com/openclaw/openclaw/tree/main/src/hooks/bundled)

@@ -4,22 +4,14 @@ read_when:
   - Nag-i-install ng OpenClaw sa Windows
   - Naghahanap ng status ng Windows companion app
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # Windows (WSL2)
 
-Inirerekomenda ang OpenClaw sa Windows **sa pamamagitan ng WSL2** (inirerekomenda ang Ubuntu). Ang
-CLI + Gateway ay tumatakbo sa loob ng Linux, na nagpapanatiling consistent ang runtime at ginagawang
-mas compatible ang tooling (Node/Bun/pnpm, Linux binaries, Skills). Maaaring mas tricky ang native
-Windows. Binibigay ng WSL2 ang buong Linux experience — isang command lang para mag-install:
-`wsl --install`.
+Inirerekomenda ang OpenClaw sa Windows **sa pamamagitan ng WSL2** (inirerekomenda ang Ubuntu). The
+CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
+tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Maaaring mas mahirap ang native Windows. WSL2 gives you the full Linux experience — one command
+to install: `wsl --install`.
 
 Pinaplano ang mga native Windows companion app.
 
@@ -64,10 +56,10 @@ openclaw doctor
 
 ## Advanced: i-expose ang mga WSL service sa LAN (portproxy)
 
-May sarili itong virtual network ang WSL. Kung kailangan ng ibang machine na maabot ang isang service
-na tumatakbo **sa loob ng WSL** (SSH, isang local TTS server, o ang Gateway), kailangan mong
-i-forward ang isang Windows port papunta sa kasalukuyang WSL IP. Nagbabago ang WSL IP pagkatapos ng
-mga restart, kaya maaaring kailangan mong i-refresh ang forwarding rule.
+May sarili itong virtual network ang WSL. If another machine needs to reach a service
+running **inside WSL** (SSH, a local TTS server, or the Gateway), you must
+forward a Windows port to the current WSL IP. The WSL IP changes after restarts,
+so you may need to refresh the forwarding rule.
 
 Halimbawa (PowerShell **bilang Administrator**):
 
@@ -109,7 +101,7 @@ Mga tala:
 
 ## Step-by-step na WSL2 install
 
-### 1) I-install ang WSL2 + Ubuntu
+### 1. I-install ang WSL2 + Ubuntu
 
 Buksan ang PowerShell (Admin):
 
@@ -122,7 +114,7 @@ wsl --install -d Ubuntu-24.04
 
 Mag-reboot kung hihingin ng Windows.
 
-### 2) I-enable ang systemd (kinakailangan para sa Gateway install)
+### 2. I-enable ang systemd (kinakailangan para sa Gateway install)
 
 Sa iyong WSL terminal:
 
@@ -145,7 +137,7 @@ Buksan muli ang Ubuntu, saka i-verify:
 systemctl --user status
 ```
 
-### 3) I-install ang OpenClaw (sa loob ng WSL)
+### 3. I-install ang OpenClaw (sa loob ng WSL)
 
 Sundin ang Linux Getting Started flow sa loob ng WSL:
 
@@ -162,5 +154,4 @@ Buong gabay: [Pagsisimula](/start/getting-started)
 
 ## Windows companion app
 
-Wala pa kaming Windows companion app sa ngayon. Bukas ang kontribusyon kung gusto mong
-tumulong para magawa ito.
+Wala pa kaming Windows companion app sa ngayon. Malugod naming tinatanggap ang mga kontribusyon kung gusto mong tumulong para mangyari ito.

@@ -3,13 +3,6 @@ summary: "세션을 나열하고, 기록을 가져오며, 세션 간 메시지�
 read_when:
   - 세션 도구를 추가하거나 수정할 때
 title: "세션 도구"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:54Z
 ---
 
 # 세션 도구

@@ -1,16 +1,9 @@
 ---
-summary: « Utiliser MiniMax M2.1 dans OpenClaw »
+summary: "Utiliser MiniMax M2.1 dans OpenClaw"
 read_when:
   - Vous souhaitez des modèles MiniMax dans OpenClaw
   - Vous avez besoin de conseils de configuration MiniMax
-title: « MiniMax »
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 5bbd47fa3327e40c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:34Z
+title: "MiniMax"
 ---
 
 # MiniMax
@@ -119,7 +112,7 @@ Configurer via la CLI :
 
 ### Optionnel : local via LM Studio (manuel)
 
-**Idéal pour :** inférence locale avec LM Studio.  
+**Idéal pour :** inférence locale avec LM Studio.
 Nous avons observé d’excellents résultats avec MiniMax M2.1 sur du matériel puissant (par ex. un ordinateur de bureau/serveur) en utilisant le serveur local de LM Studio.
 
 Configurer manuellement via `openclaw.json` :
@@ -183,7 +176,7 @@ Utilisez l’assistant de configuration interactif pour définir MiniMax sans mo
 - Voir [/concepts/model-providers](/concepts/model-providers) pour les règles des fournisseurs.
 - Utilisez `openclaw models list` et `openclaw models set minimax/MiniMax-M2.1` pour changer.
 
-## Dépannage
+## Problemes courants
 
 ### « Unknown model: minimax/MiniMax-M2.1 »
 

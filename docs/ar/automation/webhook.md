@@ -4,13 +4,6 @@ read_when:
   - إضافة أو تغيير نقاط نهاية Webhook
   - ربط الأنظمة الخارجية بـ OpenClaw
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:58Z
 ---
 
 # Webhooks

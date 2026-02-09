@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’da Xiaomi MiMo modellerini istiyorsunuz
   - XIAOMI_API_KEY kurulumu yapmanız gerekiyor
 title: "Xiaomi MiMo"
-x-i18n:
-  source_path: providers/xiaomi.md
-  source_hash: 366fd2297b2caf8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Xiaomi MiMo
@@ -34,7 +27,7 @@ openclaw onboard --auth-choice xiaomi-api-key
 openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
 ```
 
-## Yapılandırma parçası
+## Yapılandırma parçacığı
 
 ```json5
 {

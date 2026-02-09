@@ -4,19 +4,12 @@ read_when:
   - Brug eller konfigurer chatkommandoer
   - Fejlfinding af kommandorouting eller tilladelser
 title: "Slash-kommandoer"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:06Z
 ---
 
 # Slash-kommandoer
 
-Kommandoer håndteres af Gateway. De fleste kommandoer skal sendes som en **selvstændig** besked, der starter med `/`.
-Den værtsbegrænsede bash-chatkommando bruger `! <cmd>` (med `/bash <cmd>` som alias).
+Kommandoer håndteres af Porten. De fleste kommandoer skal sendes som en **standalone** besked, der starter med `/`.
+Kommandoen host- only bash chat bruger `! <cmd>` (med `/bash <cmd>` som et alias).
 
 Der er to relaterede systemer:
 
@@ -25,11 +18,11 @@ Der er to relaterede systemer:
   - Direktiver fjernes fra beskeden, før modellen ser den.
   - I normale chatbeskeder (ikke kun-direktiv) behandles de som “inline-hints” og **persistérer ikke** sessionsindstillinger.
   - I beskeder, der kun består af direktiver (beskeden indeholder kun direktiver), persistérer de til sessionen og svarer med en bekræftelse.
-  - Direktiver anvendes kun for **autoriserede afsendere** (kanalens tilladelseslister/parring plus `commands.useAccessGroups`).
-    Uautoriserede afsendere ser direktiver behandlet som almindelig tekst.
+  - Direktiver anvendes kun for **autoriserede afsendere** (kanal allowlists/parring plus `commands.useAccessGroups`).
+    Uautoriserede afsendere ser direktiver, der behandles som almindelig tekst.
 
-Der findes også nogle få **inline-genveje** (kun tilladte/autoriserede afsendere): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
-De kører med det samme, fjernes før modellen ser beskeden, og den resterende tekst fortsætter gennem det normale flow.
+Der er også et par **inline genveje** (tilladt/autoriserede afsendere kun): `/help`, `/commands`, `/status`, `/whoami` (`/id`).
+De kører straks, er strippet før modellen ser meddelelsen, og den resterende tekst fortsætter gennem den normale flow.
 
 ## Konfiguration
 
@@ -54,11 +47,11 @@ De kører med det samme, fjernes før modellen ser beskeden, og den resterende t
 - `commands.native` (standard `"auto"`) registrerer native kommandoer.
   - Auto: til for Discord/Telegram; fra for Slack (indtil du tilføjer slash-kommandoer); ignoreres for udbydere uden native understøttelse.
   - Sæt `channels.discord.commands.native`, `channels.telegram.commands.native` eller `channels.slack.commands.native` for at tilsidesætte pr. udbyder (bool eller `"auto"`).
-  - `false` rydder tidligere registrerede kommandoer på Discord/Telegram ved opstart. Slack-kommandoer administreres i Slack-appen og fjernes ikke automatisk.
+  - `false` rydder tidligere registrerede kommandoer på Discord/Telegram ved opstart. Slack kommandoer administreres i Slack app'en og fjernes ikke automatisk.
 - `commands.nativeSkills` (standard `"auto"`) registrerer **skill**-kommandoer nativt, når det understøttes.
   - Auto: til for Discord/Telegram; fra for Slack (Slack kræver oprettelse af en slash-kommando pr. skill).
   - Sæt `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills` eller `channels.slack.commands.nativeSkills` for at tilsidesætte pr. udbyder (bool eller `"auto"`).
-- `commands.bash` (standard `false`) aktiverer `! <cmd>` til at køre værts-shellkommandoer (`/bash <cmd>` er et alias; kræver `tools.elevated`-tilladelseslister).
+- `commands.bash` (standard `false`) aktiverer `! <cmd>` for at køre vært shell kommandoer (`/bash <cmd>` er et alias; kræver `tools.elevated` allowlists).
 - `commands.bashForegroundMs` (standard `2000`) styrer, hvor længe bash venter, før der skiftes til baggrundstilstand (`0` baggrundsætter med det samme).
 - `commands.config` (standard `false`) aktiverer `/config` (læser/skriver `openclaw.json`).
 - `commands.debug` (standard `false`) aktiverer `/debug` (kun runtime-tilsidesættelser).
@@ -97,12 +90,12 @@ Tekst + native (når aktiveret):
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` for at vise aktuelt)
 - `/model <name>` (alias: `/models`; eller `/<alias>` fra `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus muligheder som `debounce:2s cap:25 drop:summarize`; send `/queue` for at se aktuelle indstillinger)
-- `/bash <command>` (kun vært; alias for `! <command>`; kræver `commands.bash: true` + `tools.elevated`-tilladelseslister)
+- `/bash <command>` (kun vært; alias for `! <command>`; kræver `commands.bash: true` + `tools.elevated` tilladlister)
 
 Kun tekst:
 
 - `/compact [instructions]` (se [/concepts/compaction](/concepts/compaction))
-- `! <command>` (kun vært; én ad gangen; brug `!poll` + `!stop` til langvarige jobs)
+- `! <command>` (kun vært; én ad gangen; brug `!poll` + `!stop` til langvarige job)
 - `!poll` (tjek output/status; accepterer valgfri `sessionId`; `/bash poll` virker også)
 - `!stop` (stop det kørende bash-job; accepterer valgfri `sessionId`; `/bash stop` virker også)
 
@@ -115,19 +108,19 @@ Noter:
 - `/usage` styrer brugsfodnoten pr. svar; `/usage cost` udskriver en lokal omkostningsoversigt fra OpenClaw-sessionslogs.
 - `/restart` er deaktiveret som standard; sæt `commands.restart: true` for at aktivere det.
 - `/verbose` er beregnet til fejlfinding og ekstra synlighed; hold den **slået fra** ved normal brug.
-- `/reasoning` (og `/verbose`) er risikable i gruppeindstillinger: de kan afsløre intern ræsonnering eller værktøjsoutput, som du ikke havde til hensigt at eksponere. Foretræk at lade dem være slået fra, især i gruppechats.
+- `/ræsonnement` (og `/verbose`) er risikabelt i gruppeindstillinger: de kan afsløre intern ræsonnement eller værktøj output du ikke havde til hensigt at forklare. Foretrækker at forlade dem, især i gruppechats.
 - **Hurtig sti:** kommando-kun-beskeder fra tilladte afsendere håndteres med det samme (omgår kø + model).
 - **Gruppe-mention-gating:** kommando-kun-beskeder fra tilladte afsendere omgår krav om mentions.
 - **Inline-genveje (kun tilladte afsendere):** visse kommandoer virker også, når de er indlejret i en normal besked, og fjernes før modellen ser den resterende tekst.
   - Eksempel: `hey /status` udløser et statussvar, og den resterende tekst fortsætter gennem det normale flow.
 - Aktuelt: `/help`, `/commands`, `/status`, `/whoami` (`/id`).
 - Uautoriserede kommando-kun-beskeder ignoreres stiltiende, og inline `/...`-tokens behandles som almindelig tekst.
-- **Skill-kommandoer:** `user-invocable` skills eksponeres som slash-kommandoer. Navne renses til `a-z0-9_` (maks. 32 tegn); kollisioner får numeriske suffikser (fx `_2`).
+- **Færdighedskommandoer:** `bruger-uigenkaldelig` færdigheder er afsløret som skråstreg kommandoer. Navne desinficeres til `a-z0-9_` (max 32 tegn); kollisioner får numeriske suffikser (f.eks. `_2`).
   - `/skill <name> [input]` kører en skill efter navn (nyttigt når native kommandogrænser forhindrer pr.-skill-kommandoer).
   - Som standard videresendes skill-kommandoer til modellen som en normal anmodning.
   - Skills kan valgfrit erklære `command-dispatch: tool` for at route kommandoen direkte til et værktøj (deterministisk, ingen model).
   - Eksempel: `/prose` (OpenProse-plugin) — se [OpenProse](/prose).
-- **Native kommandoargumenter:** Discord bruger autocomplete til dynamiske muligheder (og knapmenuer, når du udelader påkrævede argumenter). Telegram og Slack viser en knapmenu, når en kommando understøtter valg, og du udelader argumentet.
+- **Indfødte kommando argumenter:** Discord bruger autofuldførelse til dynamiske indstillinger (og knapmenuer, når du udelader nødvendige args). Telegram og Slack viser en knap menu, når en kommando understøtter valg, og du udelader arg.
 
 ## Brugsflader (hvad vises hvor)
 
@@ -154,11 +147,11 @@ Noter:
 
 - `/model` og `/model list` viser en kompakt, nummereret vælger (modelfamilie + tilgængelige udbydere).
 - `/model <#>` vælger fra den vælger (og foretrækker den aktuelle udbyder, når det er muligt).
-- `/model status` viser den detaljerede visning, inkl. konfigureret udbyder-endpoint (`baseUrl`) og API-tilstand (`api`), når tilgængelig.
+- `/model status` viser den detaljerede visning, herunder konfigureret udbyder endpoint (`baseUrl`) og API mode (`api`) når tilgængelig.
 
 ## Debug-tilsidesættelser
 
-`/debug` lader dig sætte **kun runtime** konfigurationstilsidesættelser (hukommelse, ikke disk). Kun ejer. Deaktiveret som standard; aktivér med `commands.debug: true`.
+`/debug` lader dig angive **runtime-only** config overrides (hukommelse, ikke disk). Udelukkende ejer. Deaktiveret som standard; aktivér med `commands.debug: true`.
 
 Eksempler:
 
@@ -177,7 +170,7 @@ Noter:
 
 ## Konfigurationsopdateringer
 
-`/config` skriver til din konfiguration på disk (`openclaw.json`). Kun ejer. Deaktiveret som standard; aktivér med `commands.config: true`.
+`/config` skriver til din konfiguration på disken (`openclaw.json`). Udelukkende ejer. Deaktiveret som standard; aktivér med `commands.config: true`.
 
 Eksempler:
 
@@ -202,4 +195,4 @@ Noter:
   - Slack: `agent:<agentId>:slack:slash:<userId>` (præfiks kan konfigureres via `channels.slack.slashCommand.sessionPrefix`)
   - Telegram: `telegram:slash:<userId>` (målretter chatsessionen via `CommandTargetSessionKey`)
 - **`/stop`** målretter den aktive chatsession, så den kan afbryde den aktuelle kørsel.
-- **Slack:** `channels.slack.slashCommand` understøttes stadig for en enkelt `/openclaw`-lignende kommando. Hvis du aktiverer `commands.native`, skal du oprette én Slack slash-kommando pr. indbygget kommando (samme navne som `/help`). Kommando-argumentmenuer for Slack leveres som flygtige Block Kit-knapper.
+- **Slack:** `channels.slack.slashCommand` er stadig understøttet for en enkelt `/openclaw`-lignende kommando. Hvis du aktiverer `commands.native`, skal du oprette en Slack skråstreg kommando pr. indbygget kommando (samme navne som `/help`). Kommando argument menuer til Slack leveres som flygtige Block Kit knapper.

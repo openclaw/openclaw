@@ -4,13 +4,6 @@ read_when:
   - Przechwytywanie logów macOS lub badanie logowania danych prywatnych
   - Debugowanie problemów z wybudzaniem głosowym i cyklem życia sesji
 title: "Logowanie macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
 ---
 
 # Logowanie (macOS)

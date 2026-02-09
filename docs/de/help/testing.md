@@ -1,17 +1,10 @@
 ---
-summary: „Testkit: Unit-/E2E-/Live-Suiten, Docker-Runner und was jeder Test abdeckt“
+summary: "„Testkit: Unit-/E2E-/Live-Suiten, Docker-Runner und was jeder Test abdeckt“"
 read_when:
   - Beim lokalen Ausführen von Tests oder in CI
   - Beim Hinzufügen von Regressionen für Modell-/Anbieter-Bugs
   - Beim Debuggen des Gateway- und Agent-Verhaltens
-title: „Tests“
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:57Z
+title: "„Tests“"
 ---
 
 # Tests
@@ -111,7 +104,7 @@ Live-Tests sind in zwei Ebenen aufgeteilt, um Fehler zu isolieren:
   - Erkannte Modelle auflisten
   - Mit `getApiKeyForModel` Modelle auswählen, für die Sie Zugangsdaten haben
   - Pro Modell eine kleine Completion ausführen (und gezielte Regressionen, wo nötig)
-- Aktivierung:
+- So wird aktiviert:
   - `pnpm test:live` (oder `OPENCLAW_LIVE_TEST=1`, wenn Vitest direkt aufgerufen wird)
 - Setzen Sie `OPENCLAW_LIVE_MODELS=modern` (oder `all`, Alias für modern), um diese Suite tatsächlich auszuführen; andernfalls wird sie übersprungen, damit `pnpm test:live` auf Gateway-Smoke fokussiert bleibt
 - Modellauswahl:
@@ -131,7 +124,7 @@ Live-Tests sind in zwei Ebenen aufgeteilt, um Fehler zu isolieren:
 
 - Test: `src/gateway/gateway-models.profiles.live.test.ts`
 - Ziel:
-  - Ein In-Prozess-Gateway starten
+  - Ein In-Process Gateway aufdrehen
   - Eine `agent:dev:*`-Sitzung erstellen/patchen (Modell-Override pro Lauf)
   - Modelle-mit-Schlüsseln iterieren und prüfen:
     - „sinnvolle“ Antwort (keine Tools)
@@ -143,7 +136,7 @@ Live-Tests sind in zwei Ebenen aufgeteilt, um Fehler zu isolieren:
   - `exec+read`-Probe: Der Test bittet den Agenten, per `exec` eine Nonce in eine Temp-Datei zu schreiben und sie anschließend per `read` zurückzugeben.
   - Image-Probe: Der Test hängt eine generierte PNG (Katze + randomisierter Code) an und erwartet, dass das Modell `cat <CODE>` zurückgibt.
   - Implementierungsreferenz: `src/gateway/gateway-models.profiles.live.test.ts` und `src/gateway/live-image-probe.ts`.
-- Aktivierung:
+- So wird aktiviert:
   - `pnpm test:live` (oder `OPENCLAW_LIVE_TEST=1`, wenn Vitest direkt aufgerufen wird)
 - Modellauswahl:
   - Standard: moderne Allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
@@ -221,7 +214,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 
 ### Empfohlene Live-Rezepte
 
-Enge, explizite Allowlists sind am schnellsten und am wenigsten fehleranfällig:
+Schmale, explizite Zulassungslisten sind am schnellsten und am wenigsten flakisch:
 
 - Einzelnes Modell, direkt (kein Gateway):
   - `OPENCLAW_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
@@ -304,9 +297,11 @@ Tipp: Versuchen Sie nicht, „alle Modelle“ in Dokus fest zu codieren. Die ma�
 Live-Tests finden Zugangsdaten auf die gleiche Weise wie die CLI. Praktische Konsequenzen:
 
 - Wenn die CLI funktioniert, sollten Live-Tests dieselben Schlüssel finden.
+
 - Wenn ein Live-Test „keine Zugangsdaten“ meldet, debuggen Sie genauso wie bei `openclaw models list` / Modellauswahl.
 
 - Profil-Store: `~/.openclaw/credentials/` (bevorzugt; das ist mit „Profil-Schlüssel“ in den Tests gemeint)
+
 - Konfiguration: `~/.openclaw/openclaw.json` (oder `OPENCLAW_CONFIG_PATH`)
 
 Wenn Sie sich auf Env-Schlüssel verlassen wollen (z. B. in Ihrer `~/.profile` exportiert), führen Sie lokale Tests nach `source ~/.profile` aus oder verwenden Sie die Docker-Runner unten (sie können `~/.profile` in den Container mounten).
@@ -326,7 +321,7 @@ Diese führen `pnpm test:live` innerhalb des Repo-Docker-Images aus, mounten Ihr
 - Gateway-Netzwerk (zwei Container, WS-Auth + Health): `pnpm test:docker:gateway-network` (Skript: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (Custom-Extension-Laden + Registry-Smoke): `pnpm test:docker:plugins` (Skript: `scripts/e2e/plugins-docker.sh`)
 
-Nützliche Umgebungsvariablen:
+Nützliche env vars:
 
 - `OPENCLAW_CONFIG_DIR=...` (Standard: `~/.openclaw`) gemountet nach `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (Standard: `~/.openclaw/workspace`) gemountet nach `/home/node/.openclaw/workspace`

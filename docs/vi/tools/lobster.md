@@ -5,13 +5,6 @@ description: Runtime workflow có kiểu cho OpenClaw — các pipeline có th�
 read_when:
   - Bạn muốn các workflow nhiều bước có tính quyết định với phê duyệt rõ ràng
   - Bạn cần tiếp tục một workflow mà không phải chạy lại các bước trước đó
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:44Z
 ---
 
 # Lobster
@@ -20,11 +13,11 @@ Lobster là một workflow shell cho phép OpenClaw chạy các chuỗi công c�
 
 ## Hook
 
-Trợ lý của bạn có thể tự xây dựng các công cụ để quản lý chính nó. Hãy yêu cầu một workflow, và 30 phút sau bạn sẽ có một CLI cùng các pipeline chạy trong một lần gọi. Lobster là mảnh ghép còn thiếu: pipeline có tính quyết định, phê duyệt rõ ràng và trạng thái có thể tiếp tục.
+Your assistant can build the tools that manage itself. Ask for a workflow, and 30 minutes later you have a CLI plus pipelines that run as one call. Lobster is the missing piece: deterministic pipelines, explicit approvals, and resumable state.
 
 ## Why
 
-Ngày nay, các workflow phức tạp cần rất nhiều lần gọi công cụ qua lại. Mỗi lần gọi đều tốn token, và LLM phải điều phối từng bước. Lobster chuyển việc điều phối đó vào một runtime có kiểu:
+Today, complex workflows require many back-and-forth tool calls. Each call costs tokens, and the LLM has to orchestrate every step. Lobster moves that orchestration into a typed runtime:
 
 - **Một lần gọi thay vì nhiều lần**: OpenClaw chạy một lần gọi công cụ Lobster và nhận về kết quả có cấu trúc.
 - **Phê duyệt tích hợp sẵn**: Các tác động phụ (gửi email, đăng bình luận) sẽ dừng workflow cho đến khi được phê duyệt rõ ràng.
@@ -32,22 +25,22 @@ Ngày nay, các workflow phức tạp cần rất nhiều lần gọi công cụ
 
 ## Vì sao dùng DSL thay vì chương trình thuần?
 
-Lobster được thiết kế có chủ đích là nhỏ gọn. Mục tiêu không phải là “một ngôn ngữ mới”, mà là một đặc tả pipeline có thể dự đoán, thân thiện với AI, với phê duyệt và token tiếp tục là công dân hạng nhất.
+Lobster is intentionally small. The goal is not "a new language," it's a predictable, AI-friendly pipeline spec with first-class approvals and resume tokens.
 
 - **Phê duyệt/tiếp tục được tích hợp sẵn**: Một chương trình thông thường có thể hỏi ý kiến con người, nhưng không thể _tạm dừng và tiếp tục_ với một token bền vững nếu bạn không tự xây dựng runtime đó.
 - **Tính quyết định + khả năng kiểm toán**: Pipeline là dữ liệu, nên dễ ghi log, so sánh diff, chạy lại và rà soát.
 - **Bề mặt bị ràng buộc cho AI**: Ngữ pháp nhỏ gọn + truyền JSON giúp giảm các nhánh mã “sáng tạo” và khiến việc kiểm tra hợp lệ trở nên thực tế.
 - **Chính sách an toàn được tích hợp**: Timeout, giới hạn đầu ra, kiểm tra sandbox và danh sách cho phép được runtime áp dụng, không phải từng script.
-- **Vẫn có thể lập trình**: Mỗi bước có thể gọi bất kỳ CLI hay script nào. Nếu bạn muốn JS/TS, hãy sinh các tệp `.lobster` từ mã.
+- **Still programmable**: Each step can call any CLI or script. If you want JS/TS, generate `.lobster` files from code.
 
 ## Cách hoạt động
 
-OpenClaw khởi chạy CLI cục bộ `lobster` ở **chế độ tool** và phân tích một phong bì JSON từ stdout.
-Nếu pipeline tạm dừng để chờ phê duyệt, công cụ sẽ trả về một `resumeToken` để bạn có thể tiếp tục sau.
+OpenClaw launches the local `lobster` CLI in **tool mode** and parses a JSON envelope from stdout.
+If the pipeline pauses for approval, the tool returns a `resumeToken` so you can continue later.
 
 ## Mẫu: CLI nhỏ + pipe JSON + phê duyệt
 
-Xây dựng các lệnh nhỏ nói chuyện bằng JSON, rồi nối chúng thành một lần gọi Lobster duy nhất. (Tên lệnh bên dưới chỉ là ví dụ — hãy thay bằng của bạn.)
+Build tiny commands that speak JSON, then chain them into a single Lobster call. (Example command names below — swap in your own.)
 
 ```bash
 inbox list --json
@@ -73,7 +66,7 @@ Nếu pipeline yêu cầu phê duyệt, hãy tiếp tục với token:
 }
 ```
 
-AI kích hoạt workflow; Lobster thực thi các bước. Các cổng phê duyệt giúp tác động phụ luôn rõ ràng và có thể kiểm toán.
+AI triggers the workflow; Lobster executes the steps. Approval gates keep side effects explicit and auditable.
 
 Ví dụ: ánh xạ các mục đầu vào thành các lần gọi công cụ:
 
@@ -84,8 +77,9 @@ gog.gmail.search --query 'newer_than:1d' \
 
 ## Các bước LLM chỉ dùng JSON (llm-task)
 
-Với các workflow cần **một bước LLM có cấu trúc**, hãy bật công cụ plugin tùy chọn
-`llm-task` và gọi nó từ Lobster. Cách này giữ workflow có tính quyết định trong khi vẫn cho phép bạn phân loại/tóm tắt/soạn thảo bằng mô hình.
+For workflows that need a **structured LLM step**, enable the optional
+`llm-task` plugin tool and call it from Lobster. This keeps the workflow
+deterministic while still letting you classify/summarize/draft with a model.
 
 Bật công cụ:
 
@@ -129,7 +123,7 @@ Xem [LLM Task](/tools/llm-task) để biết chi tiết và các tùy chọn c�
 
 ## Tệp workflow (.lobster)
 
-Lobster có thể chạy các tệp workflow YAML/JSON với các trường `name`, `args`, `steps`, `env`, `condition` và `approval`. Trong các lần gọi công cụ của OpenClaw, đặt `pipeline` thành đường dẫn tệp.
+Lobster can run YAML/JSON workflow files with `name`, `args`, `steps`, `env`, `condition`, and `approval` fields. In OpenClaw tool calls, set `pipeline` to the file path.
 
 ```yaml
 name: inbox-triage
@@ -159,8 +153,8 @@ Ghi chú:
 
 ## Cài đặt Lobster
 
-Cài đặt CLI Lobster trên **cùng máy chủ** chạy OpenClaw Gateway (xem [repo Lobster](https://github.com/openclaw/lobster)), và đảm bảo `lobster` nằm trong `PATH`.
-Nếu bạn muốn dùng vị trí binary tùy chỉnh, hãy truyền một `lobsterPath` **tuyệt đối** trong lần gọi công cụ.
+Install the Lobster CLI on the **same host** that runs the OpenClaw Gateway (see the [Lobster repo](https://github.com/openclaw/lobster)), and ensure `lobster` is on `PATH`.
+If you want to use a custom binary location, pass an **absolute** `lobsterPath` in the tool call.
 
 ## Bật công cụ
 
@@ -195,9 +189,9 @@ Hoặc theo từng tác tử:
 
 Tránh dùng `tools.allow: ["lobster"]` trừ khi bạn chủ ý chạy ở chế độ danh sách cho phép hạn chế.
 
-Lưu ý: danh sách cho phép là tùy chọn đối với các plugin tùy chọn. Nếu danh sách cho phép của bạn chỉ nêu
-các công cụ plugin (như `lobster`), OpenClaw vẫn giữ các công cụ lõi được bật. Để hạn chế các công cụ lõi,
-hãy đưa các công cụ hoặc nhóm lõi bạn muốn vào danh sách cho phép.
+Note: allowlists are opt-in for optional plugins. If your allowlist only names
+plugin tools (like `lobster`), OpenClaw keeps core tools enabled. To restrict core
+tools, include the core tools or groups you want in the allowlist too.
 
 ## Ví dụ: phân loại email
 
@@ -250,7 +244,7 @@ Người dùng phê duyệt → tiếp tục:
 }
 ```
 
-Một workflow. Có tính quyết định. An toàn.
+One workflow. Deterministic. Safe.
 
 ## Tham số công cụ
 
@@ -315,11 +309,11 @@ Nếu `requiresApproval` xuất hiện, hãy xem prompt và quyết định:
 - `approve: true` → tiếp tục và cho phép các tác động phụ
 - `approve: false` → hủy và kết thúc workflow
 
-Dùng `approve --preview-from-stdin --limit N` để đính kèm bản xem trước JSON vào yêu cầu phê duyệt mà không cần glue jq/heredoc tùy chỉnh. Token tiếp tục giờ đã gọn nhẹ: Lobster lưu trạng thái tiếp tục workflow dưới thư mục trạng thái của nó và trả về một khóa token nhỏ.
+Use `approve --preview-from-stdin --limit N` to attach a JSON preview to approval requests without custom jq/heredoc glue. Resume tokens are now compact: Lobster stores workflow resume state under its state dir and hands back a small token key.
 
 ## OpenProse
 
-OpenProse kết hợp rất tốt với Lobster: dùng `/prose` để điều phối chuẩn bị đa tác tử, rồi chạy một pipeline Lobster cho các phê duyệt có tính quyết định. Nếu một chương trình Prose cần Lobster, hãy cho phép công cụ `lobster` cho các tác tử con thông qua `tools.subagents.tools`. Xem [OpenProse](/prose).
+2. OpenProse kết hợp rất tốt với Lobster: dùng `/prose` để điều phối chuẩn bị đa tác tử, sau đó chạy một pipeline Lobster cho các phê duyệt mang tính quyết định. 3. Nếu một chương trình Prose cần Lobster, hãy cho phép công cụ `lobster` cho các tác tử con thông qua `tools.subagents.tools`. 4. Xem [OpenProse](/prose).
 
 ## An toàn
 
@@ -342,7 +336,7 @@ OpenProse kết hợp rất tốt với Lobster: dùng `/prose` để điều ph
 
 ## Case study: workflow cộng đồng
 
-Một ví dụ công khai: một CLI “second brain” + các pipeline Lobster quản lý ba kho Markdown (cá nhân, đối tác, dùng chung). CLI xuất JSON cho thống kê, danh sách inbox và quét nội dung cũ; Lobster nối các lệnh đó thành các workflow như `weekly-review`, `inbox-triage`, `memory-consolidation` và `shared-task-sync`, mỗi workflow đều có cổng phê duyệt. AI xử lý phần phán đoán (phân loại) khi có thể và quay về các quy tắc có tính quyết định khi không có.
+5. Một ví dụ công khai: một CLI “second brain” + các pipeline Lobster quản lý ba kho Markdown (cá nhân, đối tác, dùng chung). 6. CLI xuất JSON cho thống kê, danh sách inbox và quét mục cũ; Lobster xâu chuỗi các lệnh đó thành các workflow như `weekly-review`, `inbox-triage`, `memory-consolidation` và `shared-task-sync`, mỗi workflow có các cổng phê duyệt. 7. AI xử lý phần phán đoán (phân loại) khi có thể và quay về các quy tắc mang tính quyết định khi không có.
 
 - Thread: [https://x.com/plattenschieber/status/2014508656335770033](https://x.com/plattenschieber/status/2014508656335770033)
 - Repo: [https://github.com/bloomedai/brain-cli](https://github.com/bloomedai/brain-cli)

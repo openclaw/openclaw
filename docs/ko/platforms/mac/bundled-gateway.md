@@ -5,13 +5,6 @@ read_when:
   - macOS Gateway(게이트웨이) launchd 서비스 디버깅
   - macOS용 Gateway(게이트웨이) CLI 설치
 title: "macOS의 Gateway(게이트웨이)"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:42Z
 ---
 
 # macOS의 Gateway(게이트웨이) (외부 launchd)

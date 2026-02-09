@@ -1,17 +1,10 @@
 ---
 title: "Skapa Skills"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:37Z
 ---
 
 # Skapa anpassade Skills 🛠
 
-OpenClaw är utformat för att vara lätt att bygga ut. ”Skills” är det primära sättet att lägga till nya funktioner till din assistent.
+OpenClaw är utformad för att vara lätt att utöka. "Skickligheter" är det primära sättet att lägga till nya förmågor till din assistent.
 
 ## Vad är en Skill?
 
@@ -19,9 +12,9 @@ En skill är en katalog som innehåller en `SKILL.md`-fil (som ger instruktioner
 
 ## Steg-för-steg: Din första Skill
 
-### 1. Skapa katalogen
+### 1. Skapa katalog
 
-Skills finns i din arbetsyta, vanligtvis `~/.openclaw/workspace/skills/`. Skapa en ny mapp för din skill:
+Färdigheter lever i din arbetsyta, vanligtvis `~/.openclaw/workspace/skills/`. Skapa en ny mapp för din skicklighet:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
@@ -29,7 +22,7 @@ mkdir -p ~/.openclaw/workspace/skills/hello-world
 
 ### 2. Definiera `SKILL.md`
 
-Skapa en `SKILL.md`-fil i den katalogen. Den här filen använder YAML-frontmatter för metadata och Markdown för instruktioner.
+Skapa en 'SKILL.md' fil i den katalogen. Denna fil använder YAML frontmatter för metadata och Markdown för instruktioner.
 
 ```markdown
 ---
@@ -48,7 +41,7 @@ Du kan definiera anpassade verktyg i frontmatter eller instruera agenten att anv
 
 ### 4. Uppdatera OpenClaw
 
-Be din agent att ”refresh skills” eller starta om gateway (nätverksgateway). OpenClaw kommer att upptäcka den nya katalogen och indexera `SKILL.md`.
+Be din agent att "uppdatera färdigheter" eller starta om porten. OpenClaw kommer att upptäcka den nya katalogen och indexera `SKILL.md`.
 
 ## Bästa praxis
 

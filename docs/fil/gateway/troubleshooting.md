@@ -4,19 +4,12 @@ read_when:
   - Itinuro ka rito ng troubleshooting hub para sa mas malalim na diagnosis
   - Kailangan mo ng matatag na mga seksyon ng runbook na batay sa sintomas na may eksaktong mga command
 title: "Pag-troubleshoot"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:46Z
 ---
 
 # Pag-troubleshoot ng Gateway
 
-Ang pahinang ito ang malalim na runbook.
-Magsimula sa [/help/troubleshooting](/help/troubleshooting) kung gusto mo munang sundan ang mabilis na triage flow.
+Ito ang malalim na runbook.
+Magsimula sa [/help/troubleshooting](/help/troubleshooting) kung gusto mo muna ang mabilis na triage flow.
 
 ## Hagdan ng command
 
@@ -242,7 +235,7 @@ Karaniwang mga signature:
 - `Failed to start Chrome CDP on port` → nabigong mag-launch ang browser process.
 - `browser.executablePath not found` → invalid ang naka-configure na path.
 - `Chrome extension relay is running, but no tab is connected` → hindi naka-attach ang extension relay.
-- `Browser attachOnly is enabled ... not reachable` → ang attach-only profile ay walang reachable na target.
+- `Browser attachOnly is enabled ... not reachable` → ang attach-only profile ay walang maaabot na target.
 
 Kaugnay:
 
@@ -254,7 +247,7 @@ Kaugnay:
 
 Karamihan ng pagkasira pagkatapos ng upgrade ay dahil sa config drift o mas mahigpit na mga default na ipinatutupad na ngayon.
 
-### 1) Nagbago ang behavior ng auth at URL override
+### 1. Nagbago ang behavior ng auth at URL override
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Karaniwang mga signature:
 - `gateway connect failed:` → maling URL target.
 - `unauthorized` → reachable ang endpoint pero maling auth.
 
-### 2) Mas mahigpit ang bind at auth guardrails
+### 2. Mas mahigpit ang bind at auth guardrails
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ Karaniwang mga signature:
 - `refusing to bind gateway ... without auth` → hindi tugma ang bind+auth.
 - `RPC probe: failed` habang tumatakbo ang runtime → buhay ang gateway pero hindi naa-access gamit ang kasalukuyang auth/url.
 
-### 3) Nagbago ang estado ng pairing at device identity
+### 3. Nagbago ang estado ng pairing at device identity
 
 ```bash
 openclaw devices list

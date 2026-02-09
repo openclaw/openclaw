@@ -5,13 +5,6 @@ read_when:
   - Implementeren van authenticatie- of identiteitsinstellingen
 title: "Onboarding (macOS‑app)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:47Z
 ---
 
 # Onboarding (macOS‑app)
@@ -21,22 +14,22 @@ soepele “dag 0”-ervaring: kies waar de Gateway draait, verbind authenticatie
 wizard en laat de agent zichzelf bootstrapen.
 
 <Steps>
-<Step title="macOS-waarschuwing goedkeuren">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Toegang tot lokale netwerken goedkeuren">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Welkom en beveiligingsmelding">
+<Step title="Welcome and security notice">
 <Frame caption="Lees de weergegeven beveiligingsmelding en beslis dienovereenkomstig">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Lokaal vs. op afstand">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -56,7 +49,7 @@ Waar draait de **Gateway**?
 - Gebruik een **token** voor toegang vanaf meerdere machines of niet‑loopback‑bindings.
 </Tip>
 </Step>
-<Step title="Rechten">
+<Step title="Permissions">
 <Frame caption="Kies welke rechten je aan OpenClaw wilt geven">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -78,7 +71,7 @@ Onboarding vraagt TCC-rechten aan die nodig zijn voor:
   De app kan de globale `openclaw` CLI via npm/pnpm installeren zodat terminal‑
   workflows en launchd‑taken direct werken.
 </Step>
-<Step title="Onboardingchat (toegewijde sessie)">
+<Step title="Onboarding Chat (dedicated session)">
   Na de installatie opent de app een speciale onboardingchat‑sessie zodat de agent zich kan
   voorstellen en de volgende stappen kan begeleiden. Dit houdt begeleiding bij de eerste start
   gescheiden van je normale gesprek. Zie [Bootstrapping](/start/bootstrapping) voor

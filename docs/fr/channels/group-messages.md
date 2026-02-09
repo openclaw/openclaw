@@ -3,13 +3,6 @@ summary: "Comportement et configuration de la gestion des messages de groupe Wha
 read_when:
   - Modification des règles de messages de groupe ou des mentions
 title: "Messages de groupe"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:43Z
 ---
 
 # Messages de groupe (canal web WhatsApp)
@@ -78,7 +71,7 @@ Seul le numéro du propriétaire (depuis `channels.whatsapp.allowFrom`, ou l’E
 
 ## Tests / vérification
 
-- Test manuel :
+- Fumée manuelle:
   - Envoyez un ping `@openclaw` dans le groupe et confirmez une réponse qui fait référence au nom de l’expéditeur.
   - Envoyez un second ping et vérifiez que le bloc d’historique est inclus puis effacé au tour suivant.
 - Vérifiez les journaux de la Gateway (passerelle) (exécutez avec `--verbose`) pour voir des entrées `inbound web message` montrant `from: <groupJid>` et le suffixe `[from: …]`.

@@ -5,23 +5,16 @@ read_when:
   - Binabago ang block streaming o channel chunking behavior
   - Pag-debug ng duplicate/maagang block replies o draft streaming
 title: "Streaming at Chunking"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Streaming + chunking
 
 May dalawang magkahiwalay na “streaming” layer ang OpenClaw:
 
-- **Block streaming (mga channel):** naglalabas ng mga tapos nang **block** habang nagsusulat ang assistant. Ito ay mga normal na mensahe ng channel (hindi mga token delta).
+- **Block streaming (mga channel):** maglabas ng mga natapos na **block** habang sumusulat ang assistant. These are normal channel messages (not token deltas).
 - **Token-ish streaming (Telegram lamang):** ina-update ang isang **draft bubble** gamit ang bahagyang teksto habang nagge-generate; ang final na mensahe ay ipinapadala sa dulo.
 
-Wala pang **tunay na token streaming** papunta sa mga external na mensahe ng channel sa ngayon. Ang Telegram draft streaming lang ang may partial-stream surface.
+There is **no real token streaming** to external channel messages today. Telegram draft streaming is the only partial-stream surface.
 
 ## Block streaming (mga mensahe ng channel)
 
@@ -49,7 +42,7 @@ Legend:
 - Mga channel override: `*.blockStreaming` (at mga per-account na variant) para pilitin ang `"on"`/`"off"` kada channel.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` o `"message_end"`.
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
-- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (pagsamahin ang mga streamed block bago ipadala).
+- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (pagsamahin ang mga na-stream na block bago ipadala).
 - Channel hard cap: `*.textChunkLimit` (hal., `channels.whatsapp.textChunkLimit`).
 - Channel chunk mode: `*.chunkMode` (`length` default, `newline` naghahati sa mga blank line (hangganan ng talata) bago ang length chunking).
 - Discord soft cap: `channels.discord.maxLinesPerMessage` (default 17) naghahati ng mahahabang reply para maiwasan ang UI clipping.
@@ -74,9 +67,9 @@ Ang `maxChars` ay naka-clamp sa channel `textChunkLimit`, kaya hindi ka maaaring
 
 ## Coalescing (pagsasanib ng mga streamed block)
 
-Kapag naka-enable ang block streaming, puwedeng **pagsamahin ng OpenClaw ang magkakasunod na block chunk**
-bago ipadala. Binabawasan nito ang “single-line spam” habang nagbibigay pa rin
-ng progresibong output.
+When block streaming is enabled, OpenClaw can **merge consecutive block chunks**
+before sending them out. Binabawasan nito ang “single-line spam” habang nagbibigay pa rin ng
+progressive output.
 
 - Naghihintay ang coalescing ng mga **idle gap** (`idleMs`) bago mag-flush.
 - Ang mga buffer ay may cap na `maxChars` at magfa-flush kung lalampas dito.
@@ -89,9 +82,9 @@ ng progresibong output.
 
 ## Human-like na pacing sa pagitan ng mga block
 
-Kapag naka-enable ang block streaming, maaari kang magdagdag ng **randomized na pause** sa pagitan ng
-mga block reply (pagkatapos ng unang block). Ginagawa nitong mas natural ang
-pakiramdam ng mga multi-bubble na tugon.
+When block streaming is enabled, you can add a **randomized pause** between
+block replies (after the first block). This makes multi-bubble responses feel
+more natural.
 
 - Config: `agents.defaults.humanDelay` (override kada agent sa pamamagitan ng `agents.list[].humanDelay`).
 - Mga mode: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
@@ -101,13 +94,13 @@ pakiramdam ng mga multi-bubble na tugon.
 
 Ito ay tumutugma sa:
 
-- **I-stream ang mga chunk:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (maglabas habang nagpapatuloy). Kailangan din ng mga non-Telegram channel ang `*.blockStreaming: true`.
+- **Stream chunks:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (maglabas habang nagpapatuloy). Non-Telegram channels also need `*.blockStreaming: true`.
 - **I-stream ang lahat sa dulo:** `blockStreamingBreak: "message_end"` (isang flush, posibleng maraming chunk kung napakahaba).
 - **Walang block streaming:** `blockStreamingDefault: "off"` (final reply lamang).
 
-**Tala sa channel:** Para sa mga non-Telegram channel, naka-**off** ang block streaming maliban kung
-`*.blockStreaming` ay tahasang itinakda sa `true`. Maaaring mag-stream ng mga draft ang Telegram
-(`channels.telegram.streamMode`) nang walang block replies.
+**Channel note:** For non-Telegram channels, block streaming is **off unless**
+`*.blockStreaming` is explicitly set to `true`. Telegram can stream drafts
+(`channels.telegram.streamMode`) without block replies.
 
 Paalala sa lokasyon ng config: ang mga default ng `blockStreaming*` ay nasa ilalim ng
 `agents.defaults`, hindi sa root config.

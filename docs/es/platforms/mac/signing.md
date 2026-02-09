@@ -3,13 +3,6 @@ summary: "Pasos de firma para compilaciones de depuración de macOS generadas po
 read_when:
   - Compilando o firmando compilaciones de depuración de mac
 title: "Firma en macOS"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:13Z
 ---
 
 # firma en mac (compilaciones de depuración)

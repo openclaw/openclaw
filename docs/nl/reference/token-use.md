@@ -4,13 +4,6 @@ read_when:
   - Uitleggen van tokengebruik, kosten of contextvensters
   - Debuggen van contextgroei of compactiegedrag
 title: "Tokengebruik en kosten"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:48Z
 ---
 
 # Tokengebruik & kosten

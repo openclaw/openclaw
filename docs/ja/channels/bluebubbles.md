@@ -5,23 +5,16 @@ read_when:
   - Webhook ペアリングのトラブルシューティング
   - macOS での iMessage 設定
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:08Z
 ---
 
 # BlueBubbles（macOS REST）
 
-ステータス: BlueBubbles macOS サーバーと HTTP で通信する同梱プラグインです。レガシーの imsg チャンネルと比較して API がより豊富でセットアップが容易なため、**iMessage 連携には推奨**されます。
+ステータス: BlueBubbles macOS サーバーと HTTP で通信する同梱プラグインです。レガシーの imsg チャンネルと比較して API がより豊富でセットアップが容易なため、**iMessage 連携には推奨**されます。 \*\*iMessage 統合に推奨されます。API が豊富で、従来の imsg チャネルと比較して簡単にセットアップできます。
 
 ## 概要
 
 - BlueBubbles ヘルパーアプリ（[bluebubbles.app](https://bluebubbles.app)）経由で macOS 上で動作します。
-- 推奨／検証済み: macOS Sequoia（15）。macOS Tahoe（26）も動作しますが、Tahoe では現在 edit が壊れており、グループアイコン更新は成功と表示されても同期されない場合があります。
+- 推奨/テスト: macOS Sequoia (15). 推奨／検証済み: macOS Sequoia（15）。macOS Tahoe（26）も動作しますが、Tahoe では現在 edit が壊れており、グループアイコン更新は成功と表示されても同期されない場合があります。
 - OpenClaw は REST API（`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`）を通じて通信します。
 - 受信メッセージは webhooks で到着し、送信返信、入力中インジケーター、既読通知、Tapback は REST 呼び出しです。
 - 添付ファイルとステッカーはインバウンドメディアとして取り込まれ（可能な場合はエージェントに表示されます）。
@@ -32,7 +25,9 @@ x-i18n:
 ## クイックスタート
 
 1. Mac に BlueBubbles サーバーをインストールします（[bluebubbles.app/install](https://bluebubbles.app/install) の手順に従ってください）。
+
 2. BlueBubbles の設定で Web API を有効化し、パスワードを設定します。
+
 3. `openclaw onboard` を実行して BlueBubbles を選択するか、手動で設定します。
 
    ```json5
@@ -49,15 +44,16 @@ x-i18n:
    ```
 
 4. BlueBubbles の webhooks をゲートウェイに向けます（例: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）。
+
 5. ゲートウェイを起動します。Webhook ハンドラーが登録され、ペアリングが開始されます。
 
 ## Messages.app を起動状態に保つ（VM／ヘッドレス環境）
 
-一部の macOS VM／常時稼働環境では、Messages.app が「アイドル」状態になり（アプリを開く／フォアグラウンドにするまで受信イベントが停止）、問題が発生することがあります。簡単な回避策として、AppleScript + LaunchAgent を使って **5 分ごとに Messages を刺激**します。
+一部の macOS VM／常時稼働環境では、Messages.app が「アイドル」状態になり（アプリを開く／フォアグラウンドにするまで受信イベントが停止）、問題が発生することがあります。簡単な回避策として、AppleScript + LaunchAgent を使って **5 分ごとに Messages を刺激**します。 簡単な回避策として、AppleScript + LaunchAgent を使用して 5 分ごとにメッセージを送信することができます。
 
-### 1) AppleScript を保存
+### 1. AppleScript を保存
 
-次の名前で保存します。
+名前を付けて保存:
 
 - `~/Scripts/poke-messages.scpt`
 
@@ -78,9 +74,9 @@ on error
 end try
 ```
 
-### 2) LaunchAgent をインストール
+### 2. LaunchAgent をインストール
 
-次の名前で保存します。
+名前を付けて保存:
 
 - `~/Library/LaunchAgents/com.user.poke-messages.plist`
 
@@ -116,7 +112,7 @@ end try
 注記:
 
 - **300 秒ごと**および**ログイン時**に実行されます。
-- 初回実行時に macOS の **Automation** プロンプト（`osascript` → Messages）が表示される場合があります。LaunchAgent を実行する同一ユーザーセッションで承認してください。
+- 初回実行時に macOS の **Automation** プロンプト（`osascript` → Messages）が表示される場合があります。LaunchAgent を実行する同一ユーザーセッションで承認してください。 LaunchAgent を実行するのと同じユーザーセッションでそれらを承認します。
 
 読み込み:
 
@@ -133,7 +129,7 @@ BlueBubbles は対話型セットアップウィザードで利用できます�
 openclaw onboard
 ```
 
-ウィザードでは次を入力します。
+ウィザードのプロンプト:
 
 - **Server URL**（必須）: BlueBubbles サーバーのアドレス（例: `http://192.168.1.100:1234`）
 - **Password**（必須）: BlueBubbles Server 設定の API パスワード
@@ -156,7 +152,7 @@ DM:
 - 承認方法:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- ペアリングは既定のトークン交換方式です。詳細: [Pairing](/channels/pairing)
+- ペアリングはデフォルトのトークン交換です。 詳細: [Pairing](/channels/pairing)
 
 グループ:
 
@@ -194,7 +190,7 @@ BlueBubbles は、iMessage／WhatsApp の挙動に合わせたグループチャ
 - コマンド認可の判定に `allowFrom` と `groupAllowFrom` を使用します。
 - 許可された送信者は、グループでメンションがなくても制御コマンドを実行できます。
 
-## 入力中表示 + 既読通知
+## 入力+開封通知
 
 - **入力中インジケーター**: 応答生成の前後で自動送信されます。
 - **既読通知**: `channels.bluebubbles.sendReadReceipts` で制御します（既定: `true`）。
@@ -249,7 +245,7 @@ BlueBubbles は、設定で有効化すると高度なメッセージアクシ�
 - **removeParticipant**: グループから参加者を削除（`chatGuid`, `address`）
 - **leaveGroup**: グループチャットから退出（`chatGuid`）
 - **sendAttachment**: メディア／ファイルを送信（`to`, `buffer`, `filename`, `asVoice`）
-  - ボイスメモ: **MP3** または **CAF** 音声を iMessage のボイスメッセージとして送信するには `asVoice: true` を設定します。BlueBubbles は送信時に MP3 → CAF に変換します。
+  - ボイスメモ: **MP3** または **CAF** 音声を iMessage のボイスメッセージとして送信するには `asVoice: true` を設定します。BlueBubbles は送信時に MP3 → CAF に変換します。 BlueBubbles はボイスメモの送信時に MP3 → CAF を変換します。
 
 ### メッセージ ID（短縮 vs 完全）
 
@@ -325,13 +321,13 @@ OpenClaw は、トークン節約のために _短縮_ メッセージ ID（例:
 - `chat_id:123`
 - `chat_identifier:...`
 - 直接ハンドル: `+15555550123`, `user@example.com`
-  - 直接ハンドルに既存の DM チャットがない場合、OpenClaw は `POST /api/v1/chat/new` を介して作成します。これには BlueBubbles Private API を有効化する必要があります。
+  - 直接ハンドルに既存の DM チャットがない場合、OpenClaw は `POST /api/v1/chat/new` を介して作成します。これには BlueBubbles Private API を有効化する必要があります。 BlueBubbles Private API を有効にする必要があります。
 
 ## セキュリティ
 
-- Webhook リクエストは、`guid`/`password` のクエリパラメータまたはヘッダーを `channels.bluebubbles.password` と比較して認証されます。`localhost` からのリクエストも受け付けられます。
+- Webhook リクエストは、`guid`/`password` のクエリパラメータまたはヘッダーを `channels.bluebubbles.password` と比較して認証されます。`localhost` からのリクエストも受け付けられます。 `localhost` からのリクエストも受け付けます。
 - API パスワードと Webhook エンドポイントは機密情報として厳重に管理してください。
-- localhost 信頼により、同一ホストのリバースプロキシが意図せずパスワードをバイパスする可能性があります。ゲートウェイをプロキシする場合は、プロキシ側で認証を必須にし、`gateway.trustedProxies` を設定してください。詳細は [Gateway security](/gateway/security#reverse-proxy-configuration) を参照してください。
+- localhost 信頼により、同一ホストのリバースプロキシが意図せずパスワードをバイパスする可能性があります。ゲートウェイをプロキシする場合は、プロキシ側で認証を必須にし、`gateway.trustedProxies` を設定してください。詳細は [Gateway security](/gateway/security#reverse-proxy-configuration) を参照してください。 ゲートウェイをプロキシする場合は、プロキシで認証を行い、`gateway.trustedProxies` を設定する必要があります。 [Gateway security](/gateway/security#reverse-proxy-configuration) を参照してください。
 - LAN 外に公開する場合は、BlueBubbles サーバーで HTTPS とファイアウォールルールを有効化してください。
 
 ## トラブルシューティング
@@ -339,9 +335,9 @@ OpenClaw は、トークン節約のために _短縮_ メッセージ ID（例:
 - 入力中／既読イベントが動作しなくなった場合は、BlueBubbles の webhook ログを確認し、ゲートウェイのパスが `channels.bluebubbles.webhookPath` と一致していることを確認してください。
 - ペアリングコードは 1 時間で失効します。`openclaw pairing list bluebubbles` と `openclaw pairing approve bluebubbles <code>` を使用してください。
 - リアクションには BlueBubbles Private API（`POST /api/v1/message/react`）が必要です。サーバーバージョンが公開していることを確認してください。
-- 編集／送信取り消しには macOS 13 以降と互換性のある BlueBubbles サーバーバージョンが必要です。macOS 26（Tahoe）では、Private API の変更により edit は現在壊れています。
+- 編集／送信取り消しには macOS 13 以降と互換性のある BlueBubbles サーバーバージョンが必要です。macOS 26（Tahoe）では、Private API の変更により edit は現在壊れています。 macOS 26 (Tahoe) では、プライベート API の変更により現在編集が中断されています。
 - macOS 26（Tahoe）ではグループアイコン更新が不安定な場合があります。API は成功を返しても、新しいアイコンが同期されないことがあります。
-- OpenClaw は、BlueBubbles サーバーの macOS バージョンに基づいて既知の不具合があるアクションを自動的に非表示にします。macOS 26（Tahoe）で edit が表示され続ける場合は、`channels.bluebubbles.actions.edit=false` で手動で無効化してください。
+- OpenClaw は、BlueBubbles サーバーの macOS バージョンに基づいて既知の不具合があるアクションを自動的に非表示にします。macOS 26（Tahoe）で edit が表示され続ける場合は、`channels.bluebubbles.actions.edit=false` で手動で無効化してください。 macOS 26 (Tahoe) でまだ編集が表示されている場合は、`channels.bluebubbles.actions.edit=false` で手動で無効にします。
 - ステータス／ヘルス情報: `openclaw status --all` または `openclaw status --deep`。
 
 一般的なチャンネルのワークフローについては、[Channels](/channels) および [Plugins](/tools/plugin) ガイドを参照してください。

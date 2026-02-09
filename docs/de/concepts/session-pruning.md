@@ -1,15 +1,8 @@
 ---
-summary: „Session Pruning: Kürzen von Werkzeugergebnissen zur Reduzierung von Kontextaufblähung“
+summary: "„Session Pruning: Kürzen von Werkzeugergebnissen zur Reduzierung von Kontextaufblähung“"
 read_when:
   - Sie möchten das Wachstum des LLM‑Kontexts durch Werkzeugausgaben reduzieren
   - Sie stimmen agents.defaults.contextPruning ab
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:59Z
 ---
 
 # Session Pruning
@@ -72,8 +65,8 @@ Wenn `agents.defaults.contextTokens` gesetzt ist, wird es als Obergrenze (min) f
 ## Werkzeugauswahl
 
 - `tools.allow` / `tools.deny` unterstützen `*`‑Wildcards.
-- „Deny“ hat Vorrang.
-- Abgleich ist nicht zwischen Groß‑/Kleinschreibung unterscheidend.
+- Siege nicht zu.
+- Der Abgleich ist nicht case-sensitiv.
 - Leere Allowlist ⇒ alle Werkzeuge erlaubt.
 
 ## Interaktion mit anderen Limits

@@ -4,20 +4,13 @@ read_when:
   - OpenResponses API بولنے والے کلائنٹس کو ضم کرتے وقت
   - آپ کو آئٹم پر مبنی اِن پٹس، کلائنٹ ٹول کالز، یا SSE ایونٹس درکار ہوں
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:26Z
 ---
 
 # OpenResponses API (HTTP)
 
 OpenClaw کا Gateway ایک OpenResponses کے مطابق `POST /v1/responses` اینڈپوائنٹ فراہم کر سکتا ہے۔
 
-یہ اینڈپوائنٹ **بطورِ طے شدہ غیرفعال** ہوتا ہے۔ پہلے کنفیگ میں اسے فعال کریں۔
+This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/responses`
 - Gateway کے ساتھ ایک ہی پورٹ (WS + HTTP ملٹی پلیکس): `http://<gateway-host>:<port>/v1/responses`
@@ -27,7 +20,7 @@ OpenClaw کا Gateway ایک OpenResponses کے مطابق `POST /v1/responses` 
 
 ## Authentication
 
-Gateway کی تصدیقی کنفیگریشن استعمال ہوتی ہے۔ بیئرر ٹوکن بھیجیں:
+Uses the Gateway auth configuration. Send a bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -92,7 +85,7 @@ Gateway کی تصدیقی کنفیگریشن استعمال ہوتی ہے۔ بی
 
 ## Request shape (supported)
 
-درخواست OpenResponses API کے مطابق آئٹم پر مبنی اِن پٹ کے ساتھ ہوتی ہے۔ موجودہ سپورٹ:
+The request follows the OpenResponses API with item-based input. Current support:
 
 - `input`: اسٹرنگ یا آئٹم آبجیکٹس کی فہرست۔
 - `instructions`: سسٹم پرامپٹ میں ضم کیا جاتا ہے۔
@@ -139,10 +132,10 @@ Gateway کی تصدیقی کنفیگریشن استعمال ہوتی ہے۔ بی
 
 ## Tools (client-side function tools)
 
-`tools: [{ type: "function", function: { name, description?, parameters? } }]` کے ساتھ ٹولز فراہم کریں۔
+Provide tools with `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
 
-اگر ایجنٹ کسی ٹول کو کال کرنے کا فیصلہ کرے، تو جواب میں `function_call` آؤٹ پٹ آئٹم واپس آتا ہے۔
-اس کے بعد ٹرن جاری رکھنے کے لیے `function_call_output` کے ساتھ فالو اَپ درخواست بھیجیں۔
+If the agent decides to call a tool, the response returns a `function_call` output item.
+You then send a follow-up request with `function_call_output` to continue the turn.
 
 ## Images (`input_image`)
 
@@ -155,8 +148,8 @@ base64 یا URL ذرائع کی سپورٹ:
 }
 ```
 
-اجازت یافتہ MIME اقسام (فی الحال): `image/jpeg`, `image/png`, `image/gif`, `image/webp`۔
-زیادہ سے زیادہ سائز (فی الحال): 10MB۔
+Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Max size (current): 10MB.
 
 ## Files (`input_file`)
 
@@ -183,11 +176,11 @@ base64 یا URL ذرائع کی سپورٹ:
 
 - فائل کا مواد ڈی کوڈ کر کے **سسٹم پرامپٹ** میں شامل کیا جاتا ہے، صارف کے پیغام میں نہیں،
   اس لیے یہ عارضی رہتا ہے (سیشن ہسٹری میں محفوظ نہیں ہوتا)۔
-- PDFs سے متن نکالا جاتا ہے۔ اگر متن کم ملے تو ابتدائی صفحات کو راسٹرائز کر کے
-  تصاویر کی صورت میں ماڈل کو بھیجا جاتا ہے۔
+- PDFs are parsed for text. If little text is found, the first pages are rasterized
+  into images and passed to the model.
 
-PDF پارسنگ Node کے لیے موزوں `pdfjs-dist` لیگیسی بلڈ استعمال کرتی ہے (بغیر ورکر)۔ جدید
-PDF.js بلڈ براؤزر ورکرز/DOM گلوبلز کی توقع کرتا ہے، اس لیے Gateway میں استعمال نہیں کیا جاتا۔
+PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
+PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
 
 URL فِچ کے بطورِ طے شدہ اختیارات:
 

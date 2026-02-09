@@ -5,13 +5,6 @@ read_when:
   - "Вам нужно установить Node.js перед установкой OpenClaw"
   - "Вы установили OpenClaw, но `openclaw` — команда не найдена"
   - "npm install -g завершается с ошибками прав доступа или PATH"
-x-i18n:
-  source_path: install/node.md
-  source_hash: f848d6473a183090
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:43Z
 ---
 
 # Node.js
@@ -32,49 +25,55 @@ node -v
   <Tab title="macOS">
     **Homebrew** (рекомендуется):
 
+    ````
     ```bash
     brew install node
     ```
-
+    
     Либо загрузите установщик для macOS с [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
   <Tab title="Linux">
     **Ubuntu / Debian:**
 
+    ````
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
-
+    
     **Fedora / RHEL:**
-
+    
     ```bash
     sudo dnf install nodejs
     ```
-
+    
     Либо используйте менеджер версий (см. ниже).
+    ````
 
   </Tab>
   <Tab title="Windows">
     **winget** (рекомендуется):
 
+    ````
     ```powershell
     winget install OpenJS.NodeJS.LTS
     ```
-
+    
     **Chocolatey:**
-
+    
     ```powershell
     choco install nodejs-lts
     ```
-
+    
     Либо загрузите установщик для Windows с [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
 </Tabs>
 
-<Accordion title="Использование менеджера версий (nvm, fnm, mise, asdf)">
+<Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
   Менеджеры версий позволяют легко переключаться между версиями Node. Популярные варианты:
 
 - [**fnm**](https://github.com/Schniz/fnm) — быстрый, кроссплатформенный
@@ -100,34 +99,38 @@ fnm use 22
 Это почти всегда означает, что каталог глобальных бинарников npm не добавлен в PATH.
 
 <Steps>
-  <Step title="Найдите глобальный префикс npm">
+  <Step title="Find your global npm prefix">
     ```bash
     npm prefix -g
     ```
   </Step>
-  <Step title="Проверьте, есть ли он в PATH">
+  <Step title="Check if it's on your PATH">
     ```bash
     echo "$PATH"
     ```
 
+    ```
     Ищите `<npm-prefix>/bin` (macOS/Linux) или `<npm-prefix>` (Windows) в выводе.
+    ```
 
   </Step>
-  <Step title="Добавьте его в файл запуска вашей оболочки">
+  <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
         Добавьте в `~/.zshrc` или `~/.bashrc`:
 
-        ```bash
-        export PATH="$(npm prefix -g)/bin:$PATH"
         ```
-
-        Затем откройте новый терминал (или выполните `rehash` в zsh / `hash -r` в bash).
-      </Tab>
-      <Tab title="Windows">
-        Добавьте вывод `npm prefix -g` в системный PATH через «Параметры → Система → Переменные среды».
-      </Tab>
-    </Tabs>
+            ```bash
+            export PATH="$(npm prefix -g)/bin:$PATH"
+            ```
+        
+            Затем откройте новый терминал (или выполните `rehash` в zsh / `hash -r` в bash).
+          </Tab>
+          <Tab title="Windows">
+            Добавьте вывод `npm prefix -g` в системный PATH через «Параметры → Система → Переменные среды».
+          </Tab>
+        </Tabs>
+        ```
 
   </Step>
 </Steps>

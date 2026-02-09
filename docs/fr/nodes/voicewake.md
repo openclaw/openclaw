@@ -4,20 +4,13 @@ read_when:
   - Modification du comportement ou des valeurs par defaut des mots de reveil vocaux
   - Ajout de nouvelles plateformes de nœuds necessitant la synchronisation des mots de reveil
 title: "Reveil vocal"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:06Z
 ---
 
 # Reveil vocal (mots de reveil globaux)
 
 OpenClaw traite les **mots de reveil comme une liste globale unique** detenue par la **Gateway (passerelle)**.
 
-- Il n’existe **aucun mot de reveil personnalise par nœud**.
+- Il n'y a \*\*pas de mots de réveil personnalisés par node \*\*.
 - **Toute interface de nœud/application peut modifier** la liste ; les changements sont persistés par la Gateway et diffuses a tous.
 - Chaque appareil conserve toutefois son propre interrupteur **Reveil vocal active/desactive** (UX locale + permissions differentes).
 
@@ -27,7 +20,7 @@ Les mots de reveil sont stockes sur la machine de la Gateway a l’emplacement s
 
 - `~/.openclaw/settings/voicewake.json`
 
-Structure :
+Forme :
 
 ```json
 { "triggers": ["openclaw", "claude", "computer"], "updatedAtMs": 1730000000000 }
@@ -68,5 +61,5 @@ Qui le recoit :
 
 ### Nœud Android
 
-- Expose un editeur de mots de reveil dans les Parametres.
+- Expose un éditeur Wake Words dans les paramètres.
 - Appelle `voicewake.set` via le WS de la Gateway afin que les modifications se synchronisent partout.

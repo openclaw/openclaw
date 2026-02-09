@@ -4,13 +4,6 @@ read_when:
   - macOS Skills ဆက်တင် UI ကို အပ်ဒိတ်လုပ်နေစဉ်
   - Skills ကို ကန့်သတ်ခြင်း သို့မဟုတ် ထည့်သွင်းတပ်ဆင်မှု အပြုအမူများကို ပြောင်းလဲနေစဉ်
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:40Z
 ---
 
 # Skills (macOS)
@@ -32,7 +25,7 @@ macOS အက်ပ်သည် Gateway（ဂိတ်ဝေး）မှတစ်
 
 ## Env/API keys
 
-- အက်ပ်သည် ကီးများကို `~/.openclaw/openclaw.json` အောက်ရှိ `skills.entries.<skillKey>` တွင် သိမ်းဆည်းထားသည်။
+- App သည် keys များကို `~/.openclaw/openclaw.json` အောက်ရှိ `skills.entries.<skillKey>` တွင် သိမ်းဆည်းထားသည်။`.`
 - `skills.update` သည် `enabled`, `apiKey`, နှင့် `env` ကို patch လုပ်သည်။
 
 ## Remote mode

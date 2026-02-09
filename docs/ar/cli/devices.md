@@ -4,13 +4,6 @@ read_when:
   - أنت توافق على طلبات إقران الأجهزة
   - تحتاج إلى تدوير رموز الأجهزة أو إلغائها
 title: "الأجهزة"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:57Z
 ---
 
 # `openclaw devices`
@@ -54,7 +47,7 @@ openclaw devices rotate --device <deviceId> --role operator --scope operator.rea
 
 ### `openclaw devices revoke --device <id> --role <role>`
 
-إلغاء رمز جهاز لدور محدّد.
+إلغاء رمز الجهاز لدور محدد.
 
 ```
 openclaw devices revoke --device <deviceId> --role node
@@ -73,5 +66,5 @@ openclaw devices revoke --device <deviceId> --role node
 
 ## Notes
 
-- يعيد تدوير الرمز رمزًا جديدًا (حسّاسًا). عامله كسِرّ.
+- يعيد تدوير الرمز رمزًا جديدًا (حسّاسًا). معاملته كسرا.
 - تتطلب هذه الأوامر نطاق `operator.pairing` (أو `operator.admin`).

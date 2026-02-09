@@ -4,13 +4,6 @@ read_when:
   - Skills 설정을 추가하거나 수정할 때
   - 번들된 allowlist 또는 설치 동작을 조정할 때
 title: "Skills 설정"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:32Z
 ---
 
 # Skills 설정
@@ -70,7 +63,7 @@ Skill 별 필드:
   `metadata.openclaw.skillKey`를 정의하는 경우 해당 키를 대신 사용합니다.
 - watcher 가 활성화되어 있으면 skills 변경 사항은 다음 에이전트 턴에서 반영됩니다.
 
-### 샌드박스화된 skills + 환경 변수
+### 샌드박스된 스킬 + 환경 변수
 
 세션이 **샌드박스화된** 경우, skill 프로세스는 Docker 내부에서 실행됩니다. 샌드박스는
 호스트의 `process.env`를 **상속하지 않습니다**.
@@ -78,6 +71,6 @@ Skill 별 필드:
 다음 중 하나를 사용하십시오:
 
 - `agents.defaults.sandbox.docker.env`(또는 에이전트 별 `agents.list[].sandbox.docker.env`)
-- 사용자 지정 샌드박스 이미지에 환경 변수를 베이크
+- 사용자 정의 샌드박스 이미지에 환경 변수를 베이크하세요
 
 전역 `env` 및 `skills.entries.<skill>.env/apiKey`는 **호스트** 실행에만 적용됩니다.

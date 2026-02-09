@@ -4,13 +4,6 @@ read_when:
   - Du godkender anmodninger om enhedsparring
   - Du skal rotere eller tilbagekalde enhedstokens
 title: "enheder"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:57Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC-timeout.
 - `--json`: JSON-output (anbefalet til scripting).
 
-Bemærk: Når du angiver `--url`, falder CLI ikke tilbage til konfiguration eller legitimationsoplysninger fra miljøet.
-Angiv `--token` eller `--password` eksplicit. Manglende eksplicitte legitimationsoplysninger er en fejl.
+Bemærk: Når du angiver `--url`, falder CLI ikke tilbage til config eller miljø legitimationsoplysninger.
+Pass `--token` eller `--password` eksplicitt. Manglende eksplicitte legitimationsoplysninger er en fejl.
 
 ## Noter
 
-- Tokenrotation returnerer et nyt token (følsomt). Behandl det som en hemmelighed.
+- Token rotation giver en ny token (følsom). Behandl det som en hemmelighed.
 - Disse kommandoer kræver `operator.pairing`- (eller `operator.admin`-) scope.

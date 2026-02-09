@@ -4,19 +4,12 @@ read_when:
   - Du vil indeksere eller søge i semantisk hukommelse
   - Du fejlretter hukommelsestilgængelighed eller indeksering
 title: "hukommelse"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:04Z
 ---
 
 # `openclaw memory`
 
-Administrér indeksering og søgning i semantisk hukommelse.
-Leveret af det aktive hukommelses-plugin (standard: `memory-core`; angiv `plugins.slots.memory = "none"` for at deaktivere).
+Administrer semantisk hukommelse indeksering og søgning.
+Leveret af det aktive hukommelse plugin (standard: `memory-core`; sæt `plugins.slots.memory = "none"` til at deaktivere).
 
 Relateret:
 

@@ -3,13 +3,6 @@ summary: "`openclaw agents` کے لیے CLI حوالہ (فہرست/شامل/حذ
 read_when:
   - آپ کو متعدد علیحدہ ایجنٹس (ورک اسپیسز + روٹنگ + تصدیق) درکار ہوں
 title: "ایجنٹس"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:57Z
 ---
 
 # `openclaw agents`

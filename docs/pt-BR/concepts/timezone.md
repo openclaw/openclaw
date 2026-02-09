@@ -4,13 +4,6 @@ read_when:
   - Você precisa entender como os timestamps são normalizados para o modelo
   - Configurar o fuso horário do usuário para prompts do sistema
 title: "Fusos horários"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:38Z
 ---
 
 # Fusos horários

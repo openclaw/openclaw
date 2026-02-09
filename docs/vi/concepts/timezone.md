@@ -4,13 +4,6 @@ read_when:
   - Bạn cần hiểu cách dấu thời gian được chuẩn hóa cho mô hình
   - Cấu hình múi giờ người dùng cho system prompt
 title: "Múi giờ"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:42Z
 ---
 
 # Múi giờ
@@ -69,8 +62,8 @@ Bạn có thể ghi đè bằng:
 
 ## Payload của công cụ (dữ liệu thô từ nhà cung cấp + các trường đã chuẩn hóa)
 
-Các lời gọi công cụ (`channels.discord.readMessages`, `channels.slack.readMessages`, v.v.) trả về **dấu thời gian thô từ nhà cung cấp**.
-Chúng tôi cũng đính kèm các trường đã chuẩn hóa để đảm bảo tính nhất quán:
+Các lệnh gọi công cụ (`channels.discord.readMessages`, `channels.slack.readMessages`, v.v.) trả về **dấu thời gian thô của nhà cung cấp**.
+Chúng tôi cũng đính kèm các trường đã được chuẩn hóa để đảm bảo tính nhất quán:
 
 - `timestampMs` (epoch mili-giây UTC)
 - `timestampUtc` (chuỗi ISO 8601 UTC)
@@ -79,8 +72,8 @@ Các trường thô từ nhà cung cấp được giữ nguyên.
 
 ## Múi giờ người dùng cho system prompt
 
-Đặt `agents.defaults.userTimezone` để cho mô hình biết múi giờ cục bộ của người dùng. Nếu không
-được đặt, OpenClaw sẽ xác định **múi giờ máy chủ tại thời điểm chạy** (không ghi cấu hình).
+Đặt `agents.defaults.userTimezone` để cho mô hình biết múi giờ địa phương của người dùng. Nếu nó
+chưa được đặt, OpenClaw sẽ phân giải **múi giờ máy chủ tại thời điểm chạy** (không ghi cấu hình).
 
 ```json5
 {

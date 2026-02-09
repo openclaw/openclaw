@@ -4,20 +4,13 @@ read_when:
   - မော်ဒယ်အသုံးပြုခွင့်အတွက် OpenCode Zen ကို လိုအပ်ပါက
   - ကုဒ်ရေးသားမှုအတွက် သင့်လျော်သော မော်ဒယ်များ၏ ရွေးချယ်စိစစ်ထားသော စာရင်းကို လိုအပ်ပါက
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:47Z
 ---
 
 # OpenCode Zen
 
-OpenCode Zen သည် ကုဒ်ရေးသားသည့် အေးဂျင့်များအတွက် OpenCode အဖွဲ့မှ အကြံပြုထားသော **ရွေးချယ်စိစစ်ထားသော မော်ဒယ်များစာရင်း** ဖြစ်သည်။
-API key ကို အသုံးပြုသော ရွေးချယ်နိုင်သော hosted မော်ဒယ်အသုံးပြုခွင့်လမ်းကြောင်းတစ်ခုဖြစ်ပြီး `opencode` provider ကို အသုံးပြုသည်။
-Zen သည် လက်ရှိ beta အဆင့်တွင် ရှိပါသည်။
+OpenCode Zen is a **curated list of models** recommended by the OpenCode team for coding agents.
+It is an optional, hosted model access path that uses an API key and the `opencode` provider.
+Zen is currently in beta.
 
 ## CLI setup
 

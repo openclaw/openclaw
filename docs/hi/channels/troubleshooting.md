@@ -4,13 +4,6 @@ read_when:
   - चैनल ट्रांसपोर्ट कनेक्टेड दिखाता है लेकिन उत्तर विफल होते हैं
   - गहन प्रदाता दस्तावेज़ों से पहले आपको चैनल-विशिष्ट जाँच की आवश्यकता है
 title: "चैनल समस्या-निवारण"
-x-i18n:
-  source_path: channels/troubleshooting.md
-  source_hash: 30443f9aa52c4e0c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:01Z
 ---
 
 # चैनल समस्या-निवारण

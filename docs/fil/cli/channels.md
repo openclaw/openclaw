@@ -4,13 +4,6 @@ read_when:
   - Gusto mong magdagdag/mag-alis ng mga channel account (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - Gusto mong tingnan ang status ng channel o mag-tail ng mga log ng channel
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:22Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - Patakbuhin ang `openclaw status --deep` para sa malawak na probe.
 - Gamitin ang `openclaw doctor` para sa guided na mga ayos.
-- Ipiniprint ng `openclaw channels list` ang `Claude: HTTP 403 ... user:profile` → ang snapshot ng paggamit ay nangangailangan ng `user:profile` scope. Gamitin ang `--no-usage`, o magbigay ng claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), o mag-re-auth sa pamamagitan ng Claude Code CLI.
+- 35. Ang `openclaw channels list` ay nagpi-print ng `Claude: HTTP 403 ...` 36. `user:profile` → ang usage snapshot ay nangangailangan ng `user:profile` scope. 37. Gamitin ang `--no-usage`, o magbigay ng claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), o muling mag-auth sa pamamagitan ng Claude Code CLI.
 
 ## Probe ng mga kakayahan
 
@@ -68,7 +61,7 @@ Mga tala:
 
 - Opsyonal ang `--channel`; alisin ito para ilista ang bawat channel (kasama ang mga extension).
 - Tumatanggap ang `--target` ng `channel:<id>` o ng raw na numeric channel id at nalalapat lamang sa Discord.
-- Provider-specific ang mga probe: Discord intents + opsyonal na mga permiso ng channel; Slack bot + user scopes; Telegram bot flags + webhook; bersyon ng Signal daemon; MS Teams app token + Graph roles/scopes (may anotasyon kung saan alam). Ang mga channel na walang probe ay nag-uulat ng `Probe: unavailable`.
+- 38. Ang mga probe ay provider-specific: Discord intents + opsyonal na channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes (may anotasyon kung saan alam). 39. Ang mga channel na walang probe ay nag-uulat ng `Probe: unavailable`.
 
 ## I-resolve ang mga pangalan sa mga ID
 

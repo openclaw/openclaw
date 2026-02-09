@@ -5,13 +5,6 @@ read_when:
   - Implementando autenticação ou configuração de identidade
 title: "Integração inicial (App macOS)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:01Z
 ---
 
 # Integração inicial (App macOS)
@@ -19,22 +12,22 @@ x-i18n:
 Este documento descreve o fluxo **atual** de integração inicial na primeira execução. O objetivo é uma experiência suave no “dia 0”: escolher onde o Gateway roda, conectar a autenticação, executar o assistente e deixar o agente se inicializar sozinho.
 
 <Steps>
-<Step title="Aprovar aviso do macOS">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Aprovar descoberta de redes locais">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Boas-vindas e aviso de segurança">
+<Step title="Welcome and security notice">
 <Frame caption="Leia o aviso de segurança exibido e decida conforme apropriado">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Local vs Remoto">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -52,7 +45,7 @@ Onde o **Gateway** roda?
 - Use um **token** para acesso em várias máquinas ou para binds non-loopback.
 </Tip>
 </Step>
-<Step title="Permissões">
+<Step title="Permissions">
 <Frame caption="Escolha quais permissões você deseja conceder ao OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -73,7 +66,7 @@ A integração inicial solicita permissões TCC necessárias para:
   <Info>Esta etapa é opcional</Info>
   O app pode instalar a CLI global `openclaw` via npm/pnpm para que fluxos de trabalho no terminal e tarefas do launchd funcionem imediatamente.
 </Step>
-<Step title="Chat de integração inicial (sessão dedicada)">
+<Step title="Onboarding Chat (dedicated session)">
   Após a configuração, o app abre uma sessão de chat dedicada à integração inicial para que o agente possa se apresentar e orientar os próximos passos. Isso mantém a orientação da primeira execução separada da sua conversa normal. Veja [Bootstrapping](/start/bootstrapping) para entender o que acontece no host do gateway durante a primeira execução do agente.
 </Step>
 </Steps>

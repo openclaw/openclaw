@@ -1,15 +1,8 @@
 ---
 summary: "Reaktionssemantik, die kanalübergreifend geteilt wird"
 read_when:
-  - "Bei der Arbeit mit Reaktionen in jedem Kanal"
+  - Bei der Arbeit mit Reaktionen in jedem Kanal
 title: "Reaktionen"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:35Z
 ---
 
 # Reaktions-Tooling

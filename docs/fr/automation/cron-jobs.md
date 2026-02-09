@@ -5,13 +5,6 @@ read_when:
   - Câbler des automatisations qui doivent s’exécuter avec ou en parallèle des heartbeats
   - Choisir entre heartbeat et cron pour les tâches planifiées
 title: "Tâches Cron"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: 523721a7da2c4e27
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:47Z
 ---
 
 # Tâches cron (planificateur du Gateway)
@@ -23,6 +16,8 @@ au bon moment et peut, en option, renvoyer la sortie vers un chat.
 
 Si vous voulez _« exécuter ceci chaque matin »_ ou _« réveiller l’agent dans 20 minutes »_,
 cron est le mécanisme adapté.
+
+Dépannage : [/automation/troubleshooting](/automation/troubleshooting)
 
 ## TL;DR
 
@@ -130,8 +125,8 @@ local de l’hôte du Gateway est utilisé.
 Les tâches principales mettent en file d’attente un événement système et peuvent, en option, réveiller le runner de heartbeat.
 Elles doivent utiliser `payload.kind = "systemEvent"`.
 
-- `wakeMode: "next-heartbeat"` (par défaut) : l’événement attend le prochain heartbeat planifié.
 - `wakeMode: "now"` : l’événement déclenche un heartbeat immédiat.
+- `wakeMode: "next-heartbeat"` (par défaut) : l’événement attend le prochain heartbeat planifié.
 
 C’est le meilleur choix lorsque vous voulez le prompt de heartbeat normal + le contexte de session principale.
 Voir [Heartbeat](/gateway/heartbeat).
@@ -201,7 +196,7 @@ Détails de comportement :
 
 Les tâches isolées (`agentTurn`) peuvent remplacer le modèle et le niveau de raisonnement :
 
-- `model` : chaîne fournisseur/modèle (par ex. `anthropic/claude-sonnet-4-20250514`) ou alias (par ex. `opus`)
+- `model` : chaîne fournisseur/modèle (par ex. `anthropic/claude-sonnet-4-20250514`) ou alias (par ex.
 - `thinking` : niveau de raisonnement (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` ; modèles GPT-5.2 + Codex uniquement)
 
 Remarque : vous pouvez aussi définir `model` sur les tâches de session principale, mais cela modifie le modèle partagé de la
@@ -427,7 +422,7 @@ openclaw cron edit <jobId> --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
-Exécution manuelle (debug) :
+Lancement manuel (force est la valeur par défaut, utilisez `--due` pour ne s'exécuter que lorsque due) :
 
 ```bash
 openclaw cron run <jobId> --force
@@ -460,13 +455,20 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - `cron.run` (forcé ou dû), `cron.runs`
   Pour des événements système immédiats sans tâche, utilisez [`openclaw system event`](/cli/system).
 
-## Depannage
+## Problemes courants
 
 ### « Rien ne s’exécute »
 
 - Vérifiez que cron est activé : `cron.enabled` et `OPENCLAW_SKIP_CRON`.
 - Vérifiez que le Gateway fonctionne en continu (cron s’exécute dans le processus du Gateway).
 - Pour les planifications `cron` : confirmez le fuseau horaire (`--tz`) par rapport au fuseau de l’hôte.
+
+### Une tâche récurrente ne cesse de retarder après les échecs
+
+- OpenClaw applique une nouvelle tentative exponentielle pour les tâches récurrentes après des erreurs consécutives :
+  30s, 1m, 5m, 15m, puis 60m entre les tentatives.
+- Le backoff se réinitialise automatiquement après la prochaine exécution réussie.
+- Les jobs one-shot (`at`) sont désactivés après un lancement de terminal (`ok`, `error`, ou `skipped`) et ne recommencent pas.
 
 ### Telegram livre au mauvais endroit
 

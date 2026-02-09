@@ -4,13 +4,6 @@ read_when:
   - عند إضافة أدوات الوكيل أو تعديلها
   - عند إيقاف مهارات `openclaw-*` أو تغييرها
 title: "الأدوات"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:41Z
 ---
 
 # الأدوات (OpenClaw)
@@ -204,7 +197,7 @@ x-i18n:
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (معرّف/اسم العُقدة لـ `host=node`)
-- هل تحتاج TTY حقيقيًا؟ اضبط `pty: true`.
+- هل تحتاج TTY حقيقيًا؟ اضبط `pty: true`. تعيين `pty: true`.
 
 ملاحظات:
 

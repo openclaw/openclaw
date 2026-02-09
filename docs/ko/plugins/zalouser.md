@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 에서 Zalo 개인(비공식) 지원이 필요할 때
   - zalouser 플러그인을 구성하거나 개발할 때
 title: "Zalo 개인 플러그인"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:52Z
 ---
 
 # Zalo 개인 (플러그인)

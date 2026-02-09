@@ -5,13 +5,6 @@ read_when:
   - Debugging von Protokollinkompatibilitäten oder Verbindungsfehlern
   - Neuerstellung von Protokollschemas/-modellen
 title: "Gateway-Protokoll"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:26Z
 ---
 
 # Gateway-Protokoll (WebSocket)
@@ -96,7 +89,7 @@ Wenn ein Gerätetoken ausgegeben wird, enthält `hello-ok` außerdem:
 }
 ```
 
-### Node‑Beispiel
+### Knoten-Beispiel
 
 ```json
 {
@@ -177,7 +170,7 @@ Das Gateway behandelt diese als **Claims** und erzwingt serverseitige Allowlists
 - Nodes können `skills.bins` aufrufen, um die aktuelle Liste der Skill‑Executables
   für Auto‑Allow‑Prüfungen abzurufen.
 
-## Exec‑Freigaben
+## Exec-Genehmigungen
 
 - Wenn eine Exec‑Anfrage eine Freigabe benötigt, sendet das Gateway `exec.approval.requested` als Broadcast.
 - Operator‑Clients lösen dies durch Aufruf von `exec.approval.resolve` (erfordert den Scope `operator.approvals`).
@@ -195,9 +188,9 @@ Das Gateway behandelt diese als **Claims** und erzwingt serverseitige Allowlists
 
 - Wenn `OPENCLAW_GATEWAY_TOKEN` (oder `--token`) gesetzt ist, muss `connect.params.auth.token`
   übereinstimmen, andernfalls wird der Socket geschlossen.
-- Nach dem Pairing gibt das Gateway ein **Gerätetoken** aus, das auf die Verbindungsrolle
-  - Scopes begrenzt ist. Es wird in `hello-ok.auth.deviceToken` zurückgegeben und sollte vom Client
-    für zukünftige Verbindungen persistiert werden.
+- Nach der Paarung stellt das Gateway einen **Geräte-Token** dar, der auf die Verbindung
+  Rolle + Skala reicht. Es wird in `hello-ok.auth.deviceToken` zurückgegeben und sollte vom Client
+  für zukünftige Verbindungen persistiert werden.
 - Gerätetoken können über `device.token.rotate` und
   `device.token.revoke` rotiert/widerrufen werden (erfordert den Scope `operator.pairing`).
 

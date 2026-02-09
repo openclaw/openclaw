@@ -3,13 +3,6 @@ summary: "Профиль пользователя агента разработ�
 read_when:
   - Используются шаблоны dev Gateway (шлюза)
   - Обновляется идентичность агента разработки по умолчанию
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:52Z
 ---
 
 # USER.md - Профиль пользователя

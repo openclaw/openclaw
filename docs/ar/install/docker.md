@@ -1,16 +1,9 @@
 ---
 summary: "إعداد اختياري قائم على Docker وتهيئة أولية لـ OpenClaw"
 read_when:
-  - "تريد Gateway مُحَوْسَبًا بالحاويات بدل التثبيتات المحلية"
-  - "تقوم بالتحقق من مسار Docker"
+  - تريد Gateway مُحَوْسَبًا بالحاويات بدل التثبيتات المحلية
+  - تقوم بالتحقق من مسار Docker
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:57Z
 ---
 
 # Docker (اختياري)
@@ -48,12 +41,12 @@ Docker **اختياري**. استخدمه فقط إذا كنت تريد Gateway 
 يقوم هذا السكربت بما يلي:
 
 - يبني صورة الـ Gateway
-- يشغّل معالج التهيئة الأولية
+- تشغيل معالج أونبواردينغ
 - يطبع تلميحات إعداد الموفّرين الاختيارية
 - يبدأ الـ Gateway عبر Docker Compose
 - يولّد رمز Gateway ويكتبه إلى `.env`
 
-متغيرات بيئة اختيارية:
+إختيار النيف فار:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — تثبيت حِزَم apt إضافية أثناء البناء
 - `OPENCLAW_EXTRA_MOUNTS` — إضافة ربطات bind إضافية من المضيف
@@ -63,14 +56,14 @@ Docker **اختياري**. استخدمه فقط إذا كنت تريد Gateway 
 
 - افتح `http://127.0.0.1:18789/` في المتصفح.
 - الصق الرمز في واجهة التحكم (الإعدادات → الرمز).
-- هل تحتاج العنوان مرة أخرى؟ شغّل `docker compose run --rm openclaw-cli dashboard --no-open`.
+- هل تحتاج إلى عنوان URL مرة أخرى؟ هل تحتاج العنوان مرة أخرى؟ شغّل `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 يكتب الإعداد/مساحة العمل على المضيف:
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-تعمل على VPS؟ راجع [Hetzner (Docker VPS)](/install/hetzner).
+تشغيل على VPS؟ تعمل على VPS؟ راجع [Hetzner (Docker VPS)](/install/hetzner).
 
 ### المسار اليدوي (compose)
 
@@ -172,8 +165,7 @@ export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg build-essential"
 
 ### حاوية متقدمة/كاملة الميزات (اختياري)
 
-صورة Docker الافتراضية **أمنية أولًا** وتعمل كمستخدم غير جذري `node`.
-يقلّل ذلك سطح الهجوم، لكنه يعني:
+صورة Docker الافتراضية **أمنية أولًا** وتعمل كمستخدم غير جذري `node`. يقلّل ذلك سطح الهجوم، لكنه يعني:
 
 - عدم تثبيت حِزَم النظام أثناء التشغيل
 - عدم وجود Homebrew افتراضيًا
@@ -478,7 +470,7 @@ scripts/sandbox-browser-setup.sh
 
 ملاحظات:
 
-- الوضع المرئي (Xvfb) يقلّل حظر البوتات مقارنة بالوضع دون واجهة.
+- الرأسي (Xvfb) يقلل من حجب البوت مقابل بلا رأس.
 - يمكن استخدام الوضع دون واجهة عبر ضبط `agents.defaults.sandbox.browser.headless=true`.
 - لا حاجة لبيئة سطح مكتب كاملة (GNOME)؛ يوفر Xvfb العرض.
 
@@ -543,7 +535,7 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 
 ### استراتيجية التنظيف
 
-مفتاحان:
+عقدات:
 
 - `prune.idleHours`: إزالة الحاويات غير المستخدمة خلال X ساعات (0 = تعطيل)
 - `prune.maxAgeDays`: إزالة الحاويات الأقدم من X أيام (0 = تعطيل)

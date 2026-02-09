@@ -3,13 +3,6 @@ summary: "Sandbox por agente + restrições de ferramentas, precedência e exemp
 title: Sandbox e Ferramentas Multiagente
 read_when: "Você quer sandboxing por agente ou políticas de permitir/negar ferramentas por agente em um gateway multiagente."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:20Z
 ---
 
 # Configuração de Sandbox e Ferramentas Multiagente

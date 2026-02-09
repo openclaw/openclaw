@@ -3,19 +3,13 @@ summary: "CLI 参照：`openclaw agent`（Gateway（ゲートウェイ）経由�
 read_when:
   - スクリプトから 1 回のエージェントターンを実行したい場合（オプションで返信を配信）
 title: "agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:51Z
 ---
 
 # `openclaw agent`
 
 Gateway（ゲートウェイ）経由でエージェントターンを実行します（埋め込みの場合は `--local` を使用してください）。
 設定済みのエージェントを直接指定するには `--agent <id>` を使用します。
+設定されたエージェントを直接ターゲットにするには、 `--agent <id>` を使用します。
 
 関連項目：
 

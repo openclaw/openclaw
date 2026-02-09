@@ -1,15 +1,8 @@
 ---
 summary: "탐색: 모델 설정, 인증 프로필, 그리고 폴백 동작"
 read_when:
-  - "향후 모델 선택 + 인증 프로필 아이디어를 탐색할 때"
+  - 향후 모델 선택 + 인증 프로필 아이디어를 탐색할 때
 title: "모델 설정 탐색"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:53Z
 ---
 
 # 모델 설정 (탐색)

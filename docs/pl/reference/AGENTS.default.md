@@ -3,13 +3,6 @@ summary: "Domyślne instrukcje agenta OpenClaw oraz lista Skills dla konfiguracj
 read_when:
   - Rozpoczynanie nowej sesji agenta OpenClaw
   - Włączanie lub audyt domyślnych Skills
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:45Z
 ---
 
 # AGENTS.md — Osobisty Asystent OpenClaw (domyślny)

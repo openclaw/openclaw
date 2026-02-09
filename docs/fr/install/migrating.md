@@ -4,13 +4,6 @@ read_when:
   - Vous deplacez OpenClaw vers un nouvel ordinateur portable/serveur
   - Vous souhaitez conserver les sessions, l'authentification et les connexions aux canaux (WhatsApp, etc.)
 title: "Guide de migration"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:06Z
 ---
 
 # Migration d’OpenClaw vers une nouvelle machine
@@ -26,7 +19,7 @@ Mais il existe des pieges frequents autour des **profils**, des **permissions** 
 
 ## Avant de commencer (ce que vous migrez)
 
-### 1) Identifier votre repertoire d’etat
+### 1. Identifier votre repertoire d’etat
 
 La plupart des installations utilisent la valeur par defaut :
 
@@ -45,16 +38,16 @@ openclaw status
 
 Recherchez les mentions de `OPENCLAW_STATE_DIR` / profile dans la sortie. Si vous executez plusieurs passerelles, repetez pour chaque profil.
 
-### 2) Identifier votre espace de travail
+### 2. Identifier votre espace de travail
 
-Valeurs par defaut courantes :
+Valeurs par défaut:
 
 - `~/.openclaw/workspace/` (espace de travail recommande)
 - un dossier personnalise que vous avez cree
 
 Votre espace de travail est l’endroit ou se trouvent des fichiers comme `MEMORY.md`, `USER.md` et `memory/*.md`.
 
-### 3) Comprendre ce que vous conserverez
+### 3. Comprendre ce que vous conserverez
 
 Si vous copiez **a la fois** le repertoire d’etat et l’espace de travail, vous conservez :
 
@@ -173,15 +166,15 @@ Correctif : assurez-vous que le repertoire d’etat et l’espace de travail app
 - Si votre interface (WebUI/TUI) pointe vers une passerelle **distante**, l’hote distant possede le stockage des sessions et l’espace de travail.
 - Migrer votre ordinateur portable ne deplacera pas l’etat de la passerelle distante.
 
-Si vous etes en mode distant, migrez l’**hote de la passerelle**.
+Si vous êtes en mode distant, migrez l'**hôte de passerelle**.
 
 ### Piege : secrets dans les sauvegardes
 
 `$OPENCLAW_STATE_DIR` contient des secrets (cles API, jetons OAuth, identifiants WhatsApp). Traitez les sauvegardes comme des secrets de production :
 
-- stockez-les chiffre
+- stockage chiffré
 - evitez le partage via des canaux non securises
-- faites tourner les cles si vous soupconnez une exposition
+- faire pivoter les touches si vous soupçonnez l'exposition
 
 ## Liste de verification
 

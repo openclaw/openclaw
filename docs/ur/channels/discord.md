@@ -3,13 +3,6 @@ summary: "Discord بوٹ کی سپورٹ کی حیثیت، صلاحیتیں، ا
 read_when:
   - Discord چینل کی خصوصیات پر کام کرتے وقت
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # Discord (Bot API)
@@ -55,25 +48,25 @@ x-i18n:
 3. OpenClaw کو `channels.discord.token` کے ساتھ کنفیگر کریں (یا فالبیک کے طور پر `DISCORD_BOT_TOKEN`)۔
 4. gateway چلائیں؛ جب ٹوکن دستیاب ہو تو یہ Discord چینل خودکار طور پر شروع کرتا ہے (کنفیگ پہلے، env فالبیک) اور `channels.discord.enabled`، `false` نہ ہو۔
    - اگر آپ env vars کو ترجیح دیتے ہیں تو `DISCORD_BOT_TOKEN` سیٹ کریں (کنفیگ بلاک اختیاری ہے)۔
-5. Direct chats: ترسیل کے وقت `user:<id>` (یا `<@id>` mention) استعمال کریں؛ تمام موڑ مشترکہ `main` سیشن میں جاتے ہیں۔ سادہ عددی IDs مبہم ہیں اور مسترد کر دیے جاتے ہیں۔
-6. Guild چینلز: ترسیل کے لیے `channel:<channelId>` استعمال کریں۔ mentions بطورِ طے شدہ لازمی ہیں اور ہر guild یا چینل کے لیے سیٹ کی جا سکتی ہیں۔
-7. Direct chats: بطورِ طے شدہ `channels.discord.dm.policy` کے ذریعے محفوظ (default: `"pairing"`)۔ نامعلوم بھیجنے والوں کو pairing کوڈ ملتا ہے (1 گھنٹے بعد میعاد ختم)؛ `openclaw pairing approve discord <code>` کے ذریعے منظور کریں۔
+5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session. Bare numeric IDs are ambiguous and rejected.
+6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
+7. Direct chats: secure by default via `channels.discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code (expires after 1 hour); approve via `openclaw pairing approve discord <code>`.
    - پرانا “کسی کے لیے بھی کھلا” رویہ برقرار رکھنے کے لیے: `channels.discord.dm.policy="open"` اور `channels.discord.dm.allowFrom=["*"]` سیٹ کریں۔
    - سخت allowlist کے لیے: `channels.discord.dm.policy="allowlist"` سیٹ کریں اور بھیجنے والوں کو `channels.discord.dm.allowFrom` میں درج کریں۔
    - تمام DMs نظرانداز کرنے کے لیے: `channels.discord.dm.enabled=false` یا `channels.discord.dm.policy="disabled"` سیٹ کریں۔
 8. Group DMs بطورِ طے شدہ نظرانداز؛ `channels.discord.dm.groupEnabled` سے فعال کریں اور اختیاری طور پر `channels.discord.dm.groupChannels` سے محدود کریں۔
 9. اختیاری guild قواعد: `channels.discord.guilds` سیٹ کریں، guild id (ترجیحی) یا slug کے ساتھ، اور فی چینل قواعد۔
-10. اختیاری native کمانڈز: `commands.native` بطورِ طے شدہ `"auto"` ہے (Discord/Telegram کے لیے آن، Slack کے لیے آف)۔ `channels.discord.commands.native: true|false|"auto"` سے اووررائیڈ کریں؛ `false` پہلے سے رجسٹرڈ کمانڈز صاف کرتا ہے۔ ٹیکسٹ کمانڈز `commands.text` کے ذریعے کنٹرول ہوتی ہیں اور انہیں علیحدہ `/...` پیغامات کے طور پر بھیجنا لازم ہے۔ کمانڈز کے لیے رسائی گروپ چیکس بائی پاس کرنے کو `commands.useAccessGroups: false` استعمال کریں۔
+10. Optional native commands: `commands.native` defaults to `"auto"` (on for Discord/Telegram, off for Slack). Override with `channels.discord.commands.native: true|false|"auto"`; `false` clears previously registered commands. Text commands are controlled by `commands.text` and must be sent as standalone `/...` messages. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
     - مکمل کمانڈ فہرست + کنفیگ: [Slash commands](/tools/slash-commands)
-11. اختیاری guild سیاقی تاریخ: `channels.discord.historyLimit` (default 20، فالبیک `messages.groupChat.historyLimit`) سیٹ کریں تاکہ mention پر جواب دیتے وقت آخری N guild پیغامات شامل ہوں۔ غیر فعال کرنے کے لیے `0` سیٹ کریں۔
+11. Optional guild context history: set `channels.discord.historyLimit` (default 20, falls back to `messages.groupChat.historyLimit`) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
 12. Reactions: ایجنٹ `discord` ٹول کے ذریعے reactions ٹرگر کر سکتا ہے (گِیٹ `channels.discord.actions.*`)۔
     - Reaction ہٹانے کے semantics: [/tools/reactions](/tools/reactions) دیکھیں۔
     - `discord` ٹول صرف اس وقت ظاہر ہوتا ہے جب موجودہ چینل Discord ہو۔
 13. Native کمانڈز مشترکہ `main` سیشن کے بجائے الگ تھلگ سیشن کیز (`agent:<agentId>:discord:slash:<userId>`) استعمال کرتی ہیں۔
 
-نوٹ: نام → id حل کرنے کے لیے guild ممبر سرچ استعمال ہوتی ہے اور Server Members Intent درکار ہے؛ اگر بوٹ ممبرز تلاش نہ کر سکے تو ids یا `<@id>` mentions استعمال کریں۔
-نوٹ: Slugs lowercase ہوتے ہیں اور اسپیسز کو `-` سے بدلا جاتا ہے۔ چینل نام بغیر ابتدائی `#` کے slug ہوتے ہیں۔
-نوٹ: Guild سیاق `[from:]` لائنیں `author.tag` + `id` شامل کرتی ہیں تاکہ ping-ready جوابات آسان ہوں۔
+Note: Name → id resolution uses guild member search and requires Server Members Intent; if the bot can’t search members, use ids or `<@id>` mentions.
+Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
+Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-ready replies easy.
 
 ## Config writes
 
@@ -91,7 +84,7 @@ x-i18n:
 
 یہ “Discord Developer Portal” سیٹ اپ ہے جس کے ذریعے OpenClaw کو سرور (guild) چینل جیسے `#help` میں چلایا جاتا ہے۔
 
-### 1) Discord ایپ + بوٹ یوزر بنائیں
+### 1. Discord ایپ + بوٹ یوزر بنائیں
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. اپنی ایپ میں:
@@ -107,9 +100,9 @@ Discord “privileged intents” کو بلاک کرتا ہے جب تک آپ ان
 - **Message Content Intent** (زیادہ تر guilds میں پیغام متن پڑھنے کے لیے لازمی؛ اس کے بغیر “Used disallowed intents” نظر آئے گا یا بوٹ کنیکٹ ہو جائے گا مگر پیغامات پر ردِعمل نہیں دے گا)
 - **Server Members Intent** (سفارش کردہ؛ کچھ ممبر/یوزر تلاشوں اور guilds میں allowlist میچنگ کے لیے درکار)
 
-عموماً **Presence Intent** کی ضرورت نہیں ہوتی۔ بوٹ کی اپنی موجودگی سیٹ کرنا (`setPresence` ایکشن) gateway OP3 استعمال کرتا ہے اور اس intent کی ضرورت نہیں؛ یہ صرف اس وقت درکار ہے جب آپ دوسرے guild ممبرز کی presence اپ ڈیٹس وصول کرنا چاہتے ہوں۔
+You usually do **not** need **Presence Intent**. Setting the bot's own presence (`setPresence` action) uses gateway OP3 and does not require this intent; it is only needed if you want to receive presence updates about other guild members.
 
-### 3) دعوتی URL بنائیں (OAuth2 URL Generator)
+### 3. دعوتی URL بنائیں (OAuth2 URL Generator)
 
 اپنی ایپ میں: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Discord “privileged intents” کو بلاک کرتا ہے جب تک آپ ان
 
 تیار شدہ URL کاپی کریں، کھولیں، اپنا سرور منتخب کریں، اور بوٹ انسٹال کریں۔
 
-### 4) ids حاصل کریں (guild/user/channel)
+### 4. ids حاصل کریں (guild/user/channel)
 
 Discord ہر جگہ عددی ids استعمال کرتا ہے؛ OpenClaw کنفیگ ids کو ترجیح دیتا ہے۔
 
@@ -163,7 +156,7 @@ env var کے ذریعے بوٹ ٹوکن سیٹ کریں (سرورز پر سفا�
 }
 ```
 
-ملٹی اکاؤنٹ سپورٹ: ہر اکاؤنٹ کے ٹوکنز اور اختیاری `name` کے ساتھ `channels.discord.accounts` استعمال کریں۔ مشترکہ پیٹرن کے لیے [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) دیکھیں۔
+ملٹی اکاؤنٹ سپورٹ: ہر اکاؤنٹ کے ٹوکنز کے ساتھ `channels.discord.accounts` استعمال کریں اور اختیاری `name` شامل کریں۔ See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
 #### Allowlist + چینل روٹنگ
 
@@ -202,12 +195,12 @@ env var کے ذریعے بوٹ ٹوکن سیٹ کریں (سرورز پر سفا�
 - ملٹی ایجنٹ اووررائیڈ: `agents.list[].groupChat.mentionPatterns` پر فی ایجنٹ پیٹرنز سیٹ کریں۔
 - اگر `channels` موجود ہو تو فہرست میں شامل نہ ہونے والا کوئی بھی چینل بطورِ طے شدہ مسترد ہو جاتا ہے۔
 - تمام چینلز پر ڈیفالٹس لاگو کرنے کے لیے `"*"` چینل انٹری استعمال کریں؛ واضح چینل انٹریز وائلڈکارڈ پر غالب آتی ہیں۔
-- Threads پیرنٹ چینل کی کنفیگ وراثت میں لیتے ہیں (allowlist، `requireMention`، skills، prompts، وغیرہ) جب تک آپ thread چینل id واضح طور پر شامل نہ کریں۔
-- Owner اشارہ: جب فی-guild یا فی-چینل `users` allowlist بھیجنے والے سے میچ کرے تو OpenClaw اسے سسٹم پرامپٹ میں owner سمجھتا ہے۔ چینلز کے پار عالمی owner کے لیے `commands.ownerAllowFrom` سیٹ کریں۔
+- Threads inherit parent channel config (allowlist, `requireMention`, skills, prompts, etc.) unless you add the thread channel id explicitly.
+- Owner hint: when a per-guild or per-channel `users` allowlist matches the sender, OpenClaw treats that sender as the owner in the system prompt. For a global owner across channels, set `commands.ownerAllowFrom`.
 - بوٹ کی اپنی تحریر کردہ پیغامات بطورِ طے شدہ نظرانداز ہوتے ہیں؛ اجازت دینے کے لیے `channels.discord.allowBots=true` سیٹ کریں (اپنے پیغامات فلٹر رہتے ہیں)۔
-- انتباہ: اگر آپ دوسرے بوٹس کو جواب دینے کی اجازت دیتے ہیں (`channels.discord.allowBots=true`) تو bot-to-bot لوپس سے بچنے کے لیے `requireMention`، `channels.discord.guilds.*.channels.<id>.users` allowlists، اور/یا `AGENTS.md` اور `SOUL.md` میں guardrails صاف کریں۔
+- Warning: If you allow replies to other bots (`channels.discord.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.discord.guilds.*.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 
-### 6) تصدیق کریں کہ یہ کام کر رہا ہے
+### 6. تصدیق کریں کہ یہ کام کر رہا ہے
 
 1. gateway شروع کریں۔
 2. اپنے سرور چینل میں بھیجیں: `@Krill hello` (یا جو بھی آپ کے بوٹ کا نام ہو)۔
@@ -223,14 +216,14 @@ env var کے ذریعے بوٹ ٹوکن سیٹ کریں (سرورز پر سفا�
   - آپ کی کنفیگ mentions لازمی کرتی ہے اور آپ نے mention نہیں کیا، یا
   - آپ کی guild/چینل allowlist چینل/یوزر کو مسترد کرتی ہے۔
 - **`requireMention: false` مگر پھر بھی کوئی جواب نہیں**:
-- `channels.discord.groupPolicy` بطورِ طے شدہ **allowlist** ہے؛ اسے `"open"` پر سیٹ کریں یا `channels.discord.guilds` کے تحت guild انٹری شامل کریں (اختیاری طور پر چینلز کو `channels.discord.guilds.<id>.channels` کے تحت محدود کریں)۔
-  - اگر آپ صرف `DISCORD_BOT_TOKEN` سیٹ کریں اور کبھی `channels.discord` سیکشن نہ بنائیں تو رن ٹائم
-    `groupPolicy` کو بطورِ طے شدہ `open` پر سیٹ کر دیتا ہے۔ لاک ڈاؤن کے لیے `channels.discord.groupPolicy`،
-    `channels.defaults.groupPolicy`، یا guild/چینل allowlist شامل کریں۔
-- `requireMention` کو `channels.discord.guilds` (یا کسی مخصوص چینل) کے تحت ہونا چاہیے۔ اوپری سطح پر `channels.discord.requireMention` نظرانداز ہوتا ہے۔
-- **Permission audits** (`channels status --probe`) صرف عددی چینل IDs چیک کرتے ہیں۔ اگر آپ slugs/نام `channels.discord.guilds.*.channels` کیز کے طور پر استعمال کریں تو آڈٹ اجازتیں تصدیق نہیں کر سکتا۔
+- `channels.discord.groupPolicy` defaults to **allowlist**; set it to `"open"` or add a guild entry under `channels.discord.guilds` (optionally list channels under `channels.discord.guilds.<id>.channels` to restrict).
+  - If you only set `DISCORD_BOT_TOKEN` and never create a `channels.discord` section, the runtime
+    defaults `groupPolicy` to `open`. Add `channels.discord.groupPolicy`,
+    `channels.defaults.groupPolicy`, or a guild/channel allowlist to lock it down.
+- `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
+- **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs کام نہیں کرتیں**: `channels.discord.dm.enabled=false`، `channels.discord.dm.policy="disabled"`، یا ابھی تک منظوری نہیں ملی (`channels.discord.dm.policy="pairing"`)۔
-- **Discord میں Exec approvals**: Discord DMs میں exec approvals کے لیے **button UI** سپورٹ کرتا ہے (Allow once / Always allow / Deny)۔ `/approve <id> ...` صرف forwarded approvals کے لیے ہے اور Discord کے بٹن پرامپٹس حل نہیں کرے گا۔ اگر آپ `❌ Failed to submit approval: Error: unknown approval id` دیکھیں یا UI ظاہر نہ ہو تو چیک کریں:
+- **Exec approvals in Discord**: Discord supports a **button UI** for exec approvals in DMs (Allow once / Always allow / Deny). `/approve <id> ...` is only for forwarded approvals and won’t resolve Discord’s button prompts. If you see `❌ Failed to submit approval: Error: unknown approval id` or the UI never shows up, check:
   - اپنی کنفیگ میں `channels.discord.execApprovals.enabled: true`۔
   - آپ کا Discord user ID `channels.discord.execApprovals.approvers` میں درج ہو (UI صرف approvers کو بھیجی جاتی ہے)۔
   - DM پرامپٹ میں بٹن استعمال کریں (**Allow once**، **Always allow**، **Deny**)۔
@@ -248,7 +241,7 @@ env var کے ذریعے بوٹ ٹوکن سیٹ کریں (سرورز پر سفا�
 
 ## Retry policy
 
-بیرونی Discord API کالز rate limits (429) پر Discord `retry_after` استعمال کرتے ہوئے retry کرتی ہیں (جب دستیاب ہو)، exponential backoff اور jitter کے ساتھ۔ `channels.discord.retry` کے ذریعے کنفیگر کریں۔ [Retry policy](/concepts/retry) دیکھیں۔
+Outbound Discord API calls retry on rate limits (429) using Discord `retry_after` when available, with exponential backoff and jitter. Configure via `channels.discord.retry`. See [Retry policy](/concepts/retry).
 
 ## Config
 
@@ -320,39 +313,39 @@ env var کے ذریعے بوٹ ٹوکن سیٹ کریں (سرورز پر سفا�
 }
 ```
 
-Ack reactions عالمی سطح پر `messages.ackReaction` +
-`messages.ackReactionScope` کے ذریعے کنٹرول ہوتے ہیں۔ جواب دینے کے بعد
-ack reaction صاف کرنے کے لیے `messages.removeAckAfterReply` استعمال کریں۔
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`. Use `messages.removeAckAfterReply` to clear the
+ack reaction after the bot replies.
 
 - `dm.enabled`: تمام DMs نظرانداز کرنے کے لیے `false` سیٹ کریں (default `true`)۔
-- `dm.policy`: DM رسائی کنٹرول (`pairing` سفارش کردہ)۔ `"open"` کے لیے `dm.allowFrom=["*"]` درکار ہے۔
-- `dm.allowFrom`: DM allowlist (user ids یا نام)۔ `dm.policy="allowlist"` کے ذریعے استعمال اور `dm.policy="open"` کی توثیق کے لیے۔ wizard یوزرنیمز قبول کرتا ہے اور جب بوٹ ممبرز تلاش کر سکتا ہو تو انہیں ids میں حل کرتا ہے۔
+- `dm.policy`: DM access control (`pairing` recommended). `"open"` requires `dm.allowFrom=["*"]`.
+- `dm.allowFrom`: DM allowlist (user ids or names). Used by `dm.policy="allowlist"` and for `dm.policy="open"` validation. The wizard accepts usernames and resolves them to ids when the bot can search members.
 - `dm.groupEnabled`: group DMs فعال کریں (default `false`)۔
 - `dm.groupChannels`: group DM چینل ids یا slugs کے لیے اختیاری allowlist۔
 - `groupPolicy`: guild چینل ہینڈلنگ کنٹرول (`open|disabled|allowlist`)؛ `allowlist` کے لیے چینل allowlists درکار ہیں۔
 - `guilds`: فی-guild قواعد، guild id (ترجیحی) یا slug کے ساتھ۔
 - `guilds."*"`: جب کوئی واضح انٹری نہ ہو تو لاگو ہونے والی فی-guild ڈیفالٹ سیٹنگز۔
-- `guilds.<id>.slug`: ڈسپلے ناموں کے لیے اختیاری دوستانہ slug۔
-- `guilds.<id>.users`: اختیاری فی-guild یوزر allowlist (ids یا نام)۔
-- `guilds.<id>.tools`: اختیاری فی-guild ٹول پالیسی اووررائیڈز (`allow`/`deny`/`alsoAllow`)، جب چینل اووررائیڈ موجود نہ ہو۔
-- `guilds.<id>.toolsBySender`: guild سطح پر فی-بھیجنے والا ٹول پالیسی اووررائیڈز (چینل اووررائیڈ نہ ہونے پر لاگو؛ `"*"` وائلڈکارڈ سپورٹ)۔
-- `guilds.<id>.channels.<channel>.allow`: جب `groupPolicy="allowlist"` ہو تو چینل کو allow/deny کریں۔
-- `guilds.<id>.channels.<channel>.requireMention`: چینل کے لیے mention gating۔
-- `guilds.<id>.channels.<channel>.tools`: اختیاری فی-چینل ٹول پالیسی اووررائیڈز (`allow`/`deny`/`alsoAllow`)۔
-- `guilds.<id>.channels.<channel>.toolsBySender`: چینل کے اندر فی-بھیجنے والا ٹول پالیسی اووررائیڈز (`"*"` وائلڈکارڈ سپورٹ)۔
-- `guilds.<id>.channels.<channel>.users`: اختیاری فی-چینل یوزر allowlist۔
-- `guilds.<id>.channels.<channel>.skills`: skill فلٹر (خالی چھوڑیں = تمام skills، خالی فہرست = کوئی نہیں)۔
-- `guilds.<id>.channels.<channel>.systemPrompt`: چینل کے لیے اضافی system prompt۔ Discord چینل ٹاپکس **غیر معتبر** سیاق کے طور پر شامل کیے جاتے ہیں (system prompt نہیں)۔
-- `guilds.<id>.channels.<channel>.enabled`: چینل غیر فعال کرنے کے لیے `false` سیٹ کریں۔
-- `guilds.<id>.channels`: چینل قواعد (کیز چینل slugs یا ids ہیں)۔
-- `guilds.<id>.requireMention`: فی-guild mention تقاضا (فی چینل اووررائیڈ ممکن)۔
-- `guilds.<id>.reactionNotifications`: reaction system event موڈ (`off`, `own`, `all`, `allowlist`)۔
-- `textChunkLimit`: بیرونی ٹیکسٹ chunk سائز (chars)۔ Default: 2000۔
+- `guilds.<id>.slug`: optional friendly slug used for display names.
+- `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
+- `guilds.<id>.tools`: optional per-guild tool policy overrides (`allow`/`deny`/`alsoAllow`) used when the channel override is missing.
+- `guilds.<id>.toolsBySender`: optional per-sender tool policy overrides at the guild level (applies when the channel override is missing; `"*"` wildcard supported).
+- `guilds.<id>.channels.<channel>.allow`: allow/deny the channel when `groupPolicy="allowlist"`.
+- `guilds.<id>.channels.<channel>.requireMention`: mention gating for the channel.
+- `guilds.<id>.channels.<channel>.tools`: optional per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `guilds.<id>.channels.<channel>.toolsBySender`: optional per-sender tool policy overrides within the channel (`"*"` wildcard supported).
+- `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
+- `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
+- `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel. Discord channel topics are injected as **untrusted** context (not system prompt).
+- `guilds.<id>.channels.<channel>.enabled`: set `false` to disable the channel.
+- `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
+- `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
+- `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
+- `textChunkLimit`: outbound text chunk size (chars). Default: 2000.
 - `chunkMode`: `length` (default) صرف `textChunkLimit` سے تجاوز پر تقسیم کرتا ہے؛ `newline` لمبائی سے پہلے خالی لائنوں پر تقسیم کرتا ہے۔
-- `maxLinesPerMessage`: فی پیغام نرم زیادہ سے زیادہ لائن کاؤنٹ۔ Default: 17۔
+- `maxLinesPerMessage`: soft max line count per message. Default: 17.
 - `mediaMaxMb`: ڈسک پر محفوظ ہونے والی inbound میڈیا کو clamp کریں۔
 - `historyLimit`: mention پر جواب دیتے وقت شامل کیے جانے والے حالیہ guild پیغامات کی تعداد (default 20؛ فالبیک `messages.groupChat.historyLimit`; `0` غیر فعال کرتا ہے)۔
-- `dmHistoryLimit`: DM تاریخ کی حد (یوزر ٹرنز میں)۔ فی-یوزر اووررائیڈز: `dms["<user_id>"].historyLimit`۔
+- `dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `dms["<user_id>"].historyLimit`.
 - `retry`: بیرونی Discord API کالز کے لیے retry پالیسی (attempts, minDelayMs, maxDelayMs, jitter)۔
 - `pluralkit`: PluralKit proxied پیغامات حل کریں تاکہ سسٹم ممبرز الگ بھیجنے والوں کے طور پر نظر آئیں۔
 - `actions`: فی-ایکشن ٹول گیٹس؛ سب کی اجازت کے لیے خالی چھوڑیں (غیر فعال کرنے کے لیے `false` سیٹ کریں)۔
@@ -363,20 +356,20 @@ ack reaction صاف کرنے کے لیے `messages.removeAckAfterReply` استع
   - `roles` (رول شامل/ہٹانا، default `false`)
   - `moderation` (timeout/kick/ban، default `false`)
   - `presence` (بوٹ اسٹیٹس/ایکٹیویٹی، default `false`)
-- `execApprovals`: Discord-only exec approval DMs (button UI)۔ `enabled`, `approvers`, `agentFilter`, `sessionFilter` سپورٹ کرتا ہے۔
+- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
 
-Reaction notifications `guilds.<id>.reactionNotifications` استعمال کرتی ہیں:
+Reaction notifications use `guilds.<id>.reactionNotifications`:
 
 - `off`: کوئی reaction events نہیں۔
 - `own`: بوٹ کے اپنے پیغامات پر reactions (default)۔
 - `all`: تمام پیغامات پر تمام reactions۔
-- `allowlist`: `guilds.<id>.users` سے آنے والی reactions تمام پیغامات پر (خالی فہرست غیر فعال کرتی ہے)۔
+- `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
 
 ### PluralKit (PK) سپورٹ
 
-PK lookups فعال کریں تاکہ proxied پیغامات بنیادی سسٹم + ممبر میں حل ہوں۔
-فعال ہونے پر، OpenClaw allowlists کے لیے ممبر شناخت استعمال کرتا ہے اور
-غلطی سے Discord pings سے بچنے کے لیے بھیجنے والے کو `Member (PK:System)` کے طور پر لیبل کرتا ہے۔
+Enable PK lookups so proxied messages resolve to the underlying system + member.
+When enabled, OpenClaw uses the member identity for allowlists and labels the
+sender as `Member (PK:System)` to avoid accidental Discord pings.
 
 ```json5
 {
@@ -393,7 +386,7 @@ PK lookups فعال کریں تاکہ proxied پیغامات بنیادی سسٹ
 
 Allowlist نوٹس (PK فعال):
 
-- `dm.allowFrom`, `guilds.<id>.users`, یا فی-چینل `users` میں `pk:<memberId>` استعمال کریں۔
+- Use `pk:<memberId>` in `dm.allowFrom`, `guilds.<id>.users`, or per-channel `users`.
 - ممبر ڈسپلے نام بھی نام/slug کے ذریعے میچ ہوتے ہیں۔
 - Lookups **اصل** Discord message ID استعمال کرتے ہیں (pre-proxy پیغام)، اس لیے
   PK API اسے صرف اپنی 30 منٹ کی ونڈو کے اندر حل کرتی ہے۔
@@ -402,37 +395,37 @@ Allowlist نوٹس (PK فعال):
 
 ### Tool action defaults
 
-| Action group   | Default  | Notes                              |
-| -------------- | -------- | ---------------------------------- |
-| reactions      | enabled  | React + list reactions + emojiList |
-| stickers       | enabled  | اسٹیکرز بھیجیں                     |
-| emojiUploads   | enabled  | ایموجیز اپ لوڈ کریں                |
-| stickerUploads | enabled  | اسٹیکرز اپ لوڈ کریں                |
-| polls          | enabled  | پولز بنائیں                        |
-| permissions    | enabled  | چینل اجازتوں کا اسنیپ شاٹ          |
-| messages       | enabled  | پڑھیں/بھیجیں/ترمیم/حذف             |
-| threads        | enabled  | بنائیں/فہرست/جواب                  |
-| pins           | enabled  | پن/ان پن/فہرست                     |
+| Action group   | Default  | Notes                                                 |
+| -------------- | -------- | ----------------------------------------------------- |
+| reactions      | enabled  | React + list reactions + emojiList                    |
+| stickers       | enabled  | اسٹیکرز بھیجیں                                        |
+| emojiUploads   | enabled  | ایموجیز اپ لوڈ کریں                                   |
+| stickerUploads | enabled  | اسٹیکرز اپ لوڈ کریں                                   |
+| polls          | enabled  | پولز بنائیں                                           |
+| permissions    | enabled  | چینل اجازتوں کا اسنیپ شاٹ                             |
+| messages       | enabled  | پڑھیں/بھیجیں/ترمیم/حذف                                |
+| threads        | enabled  | بنائیں/فہرست/جواب                                     |
+| pins           | enabled  | پن/ان پن/فہرست                                        |
 | search         | enabled  | پیغام تلاش (پری ویو فیچر)          |
-| memberInfo     | enabled  | ممبر معلومات                       |
-| roleInfo       | enabled  | رول فہرست                          |
-| channelInfo    | enabled  | چینل معلومات + فہرست               |
-| channels       | enabled  | چینل/کیٹیگری مینجمنٹ               |
-| voiceStatus    | enabled  | وائس اسٹیٹ تلاش                    |
-| events         | enabled  | شیڈولڈ ایونٹس فہرست/بنائیں         |
-| roles          | disabled | رول شامل/ہٹائیں                    |
-| moderation     | disabled | Timeout/kick/ban                   |
+| memberInfo     | enabled  | ممبر معلومات                                          |
+| roleInfo       | enabled  | رول فہرست                                             |
+| channelInfo    | enabled  | چینل معلومات + فہرست                                  |
+| channels       | enabled  | چینل/کیٹیگری مینجمنٹ                                  |
+| voiceStatus    | enabled  | وائس اسٹیٹ تلاش                                       |
+| events         | enabled  | شیڈولڈ ایونٹس فہرست/بنائیں                            |
+| roles          | disabled | رول شامل/ہٹائیں                                       |
+| moderation     | disabled | Timeout/kick/ban                                      |
 | presence       | disabled | بوٹ اسٹیٹس/ایکٹیویٹی (setPresence) |
 
-- `replyToMode`: `off` (default)، `first`، یا `all`۔ صرف تب لاگو ہوتا ہے جب ماڈل میں reply tag شامل ہو۔
+- `replyToMode`: `off` (default), `first`, or `all`. Applies only when the model includes a reply tag.
 
 ## Reply tags
 
 تھریڈڈ جواب کی درخواست کے لیے، ماڈل اپنی آؤٹ پٹ میں ایک ٹیگ شامل کر سکتا ہے:
 
 - `[[reply_to_current]]` — ٹرگر کرنے والے Discord پیغام کو جواب۔
-- `[[reply_to:<id>]]` — سیاق/تاریخ سے مخصوص message id کو جواب۔
-  موجودہ message ids پرامپٹس میں `[message_id: …]` کے طور پر شامل ہوتے ہیں؛ تاریخ کی انٹریز میں ids پہلے سے شامل ہوتے ہیں۔
+- `[[reply_to:<id>]]` — reply to a specific message id from context/history.
+  Current message ids are appended to prompts as `[message_id: …]`; history entries already include ids.
 
 رویّہ `channels.discord.replyToMode` کے ذریعے کنٹرول ہوتا ہے:
 
@@ -445,8 +438,8 @@ Allowlist میچنگ نوٹس:
 - `allowFrom`/`users`/`groupChannels` ids، نام، tags، یا `<@id>` جیسے mentions قبول کرتے ہیں۔
 - `discord:`/`user:` (یوزرز) اور `channel:` (group DMs) جیسے prefixes سپورٹڈ ہیں۔
 - کسی بھی بھیجنے والے/چینل کی اجازت کے لیے `*` استعمال کریں۔
-- جب `guilds.<id>.channels` موجود ہو تو فہرست میں شامل نہ ہونے والے چینلز بطورِ طے شدہ مسترد ہوتے ہیں۔
-- جب `guilds.<id>.channels` حذف ہو تو allowlisted guild کے تمام چینلز کی اجازت ہوتی ہے۔
+- When `guilds.<id>.channels` is present, channels not listed are denied by default.
+- When `guilds.<id>.channels` is omitted, all channels in the allowlisted guild are allowed.
 - **کوئی چینل اجازت نہ دینے** کے لیے `channels.discord.groupPolicy: "disabled"` سیٹ کریں (یا خالی allowlist رکھیں)۔
 - کنفیگر وزارڈ `Guild/Channel` نام (عوامی + نجی) قبول کرتا ہے اور ممکن ہو تو انہیں IDs میں حل کرتا ہے۔
 - اسٹارٹ اپ پر، OpenClaw allowlists میں چینل/یوزر نام IDs میں حل کرتا ہے (جب بوٹ ممبرز تلاش کر سکے)
@@ -473,8 +466,8 @@ Native کمانڈ نوٹس:
 - `timeout`, `kick`, `ban`
 - `setPresence` (بوٹ ایکٹیویٹی اور آن لائن اسٹیٹس)
 
-Discord message ids شامل کیے گئے سیاق (`[discord message id: …]` اور تاریخ لائنز) میں نمایاں کیے جاتے ہیں تاکہ ایجنٹ انہیں ہدف بنا سکے۔
-Emoji یونیکوڈ (مثلاً `✅`) یا کسٹم ایموجی نحو جیسے `<:party_blob:1234567890>` ہو سکتے ہیں۔
+Discord message ids are surfaced in the injected context (`[discord message id: …]` and history lines) so the agent can target them.
+Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:1234567890>`.
 
 ## Safety & ops
 

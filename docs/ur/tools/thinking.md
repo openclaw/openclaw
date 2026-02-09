@@ -3,13 +3,6 @@ summary: "‏/think + /verbose کے لیے ہدایتی نحو اور یہ ما�
 read_when:
   - thinking یا verbose ہدایات کی parsing یا ڈیفالٹس کو ایڈجسٹ کرتے وقت
 title: "Thinking Levels"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:52Z
 ---
 
 # Thinking Levels (/think directives)
@@ -26,7 +19,7 @@ x-i18n:
   - `x-high`, `x_high`, `extra-high`, `extra high`, اور `extra_high` کا نقشہ `xhigh` سے ملتا ہے۔
   - `highest`, `max` کا نقشہ `high` سے ملتا ہے۔
 - Provider نوٹس:
-  - Z.AI (`zai/*`) صرف binary thinking (`on`/`off`) کو سپورٹ کرتا ہے۔ کوئی بھی non-`off` لیول `on` سمجھا جاتا ہے (جسے `low` پر میپ کیا جاتا ہے)۔
+  - Z.AI (`zai/*`) صرف بائنری تھنکنگ (`on`/`off`) کو سپورٹ کرتا ہے۔ `off` کے علاوہ کوئی بھی لیول `on` سمجھا جاتا ہے (اور `low` پر میپ کیا جاتا ہے)۔
 
 ## Resolution order
 
@@ -39,7 +32,7 @@ x-i18n:
 
 - ایسا پیغام بھیجیں جو **صرف** ہدایت پر مشتمل ہو (whitespace کی اجازت ہے)، مثلاً `/think:medium` یا `/t high`۔
 - یہ موجودہ session کے لیے برقرار رہتا ہے (بطورِ طے شدہ per-sender)؛ `/think:off` یا session idle reset سے صاف ہو جاتا ہے۔
-- تصدیقی جواب بھیجا جاتا ہے (`Thinking level set to high.` / `Thinking disabled.`)۔ اگر لیول غلط ہو (مثلاً `/thinking big`) تو کمانڈ مسترد کر دی جاتی ہے اور اشارہ دیا جاتا ہے، جبکہ session state بغیر تبدیلی کے رہتی ہے۔
+- تصدیقی جواب بھیجا جاتا ہے (`Thinking level set to high.` / `Thinking disabled.`)۔ اگر لیول غلط ہو (مثلاً `/thinking big`)، تو کمانڈ اشارے کے ساتھ مسترد کر دی جاتی ہے اور سیشن اسٹیٹ بغیر تبدیلی کے رہتی ہے۔
 - موجودہ thinking لیول دیکھنے کے لیے بغیر آرگومنٹ `/think` (یا `/think:`) بھیجیں۔
 
 ## ایجنٹ کے لحاظ سے اطلاق
@@ -53,8 +46,8 @@ x-i18n:
 - `/verbose off` ایک واضح session override محفوظ کرتا ہے؛ اسے Sessions UI میں `inherit` منتخب کر کے صاف کریں۔
 - Inline ہدایت صرف اسی پیغام پر اثر انداز ہوتی ہے؛ بصورت دیگر session/global ڈیفالٹس لاگو ہوتے ہیں۔
 - موجودہ verbose لیول دیکھنے کے لیے بغیر آرگومنٹ `/verbose` (یا `/verbose:`) بھیجیں۔
-- جب verbose آن ہو، تو جو ایجنٹس structured tool نتائج بھیجتے ہیں (Pi، دیگر JSON ایجنٹس) ہر tool call کو اپنی الگ metadata-only پیغام کے طور پر واپس بھیجتے ہیں، جہاں دستیاب ہو وہاں `<emoji> <tool-name>: <arg>` (path/command) کے prefix کے ساتھ۔ یہ tool summaries ہر tool کے شروع ہوتے ہی بھیج دی جاتی ہیں (الگ bubbles)، streaming deltas کے طور پر نہیں۔
-- جب verbose `full` ہو، تو tool outputs مکمل ہونے کے بعد بھی فارورڈ کیے جاتے ہیں (الگ bubble، محفوظ لمبائی تک truncate کیے ہوئے)۔ اگر run کے دوران `/verbose on|full|off` toggle کیا جائے تو بعد کے tool bubbles نئی setting کی پابندی کرتے ہیں۔
+- جب verbose آن ہو، تو وہ ایجنٹس جو اسٹرکچرڈ ٹول رزلٹس (Pi، دیگر JSON ایجنٹس) بھیجتے ہیں، ہر ٹول کال کو اپنی الگ میٹاڈیٹا-اونلی میسج کے طور پر واپس بھیجتے ہیں، جہاں دستیاب ہو `<emoji> <tool-name>: <arg>` (path/command) کے پری فکس کے ساتھ۔ یہ ٹول خلاصے ہر ٹول کے شروع ہوتے ہی بھیجے جاتے ہیں (الگ ببلز)، نہ کہ اسٹریمنگ ڈیلٹاز کے طور پر۔
+- جب verbose `full` ہو، تو مکمل ہونے کے بعد ٹول آؤٹ پٹس بھی فارورڈ کیے جاتے ہیں (الگ ببل، محفوظ لمبائی تک مختصر کیے ہوئے)۔ اگر آپ رن کے دوران `/verbose on|full|off` ٹوگل کریں، تو بعد میں آنے والے ٹول ببلز نئی سیٹنگ کے مطابق ہوں گے۔
 
 ## Reasoning visibility (/reasoning)
 
@@ -71,8 +64,8 @@ x-i18n:
 
 ## Heartbeats
 
-- Heartbeat probe body کنفیگر کردہ heartbeat prompt ہوتا ہے (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`)۔ heartbeat پیغام میں inline ہدایات معمول کے مطابق لاگو ہوتی ہیں (لیکن heartbeats سے session defaults بدلنے سے گریز کریں)۔
-- Heartbeat delivery بطورِ طے شدہ صرف final payload تک محدود ہوتی ہے۔ الگ `Reasoning:` پیغام بھی بھیجنے کے لیے (جب دستیاب ہو)، `agents.defaults.heartbeat.includeReasoning: true` یا per-agent `agents.list[].heartbeat.includeReasoning: true` سیٹ کریں۔
+- Heartbeat probe باڈی کنفیگر شدہ heartbeat پرامپٹ ہوتی ہے (ڈیفالٹ: `Read HEARTBEAT.md if it exists (workspace context). 16. Follow it strictly. 17. Do not infer or repeat old tasks from prior chats. 18. If nothing needs attention, reply HEARTBEAT_OK.`)۔ اس پر سختی سے عمل کریں۔ پچھلی چیٹس سے پرانے کاموں کا اندازہ نہ لگائیں اور نہ ہی انہیں دہرائیں۔ اگر کسی چیز پر توجہ کی ضرورت نہ ہو تو HEARTBEAT_OK جواب دیں۔ heartbeat پیغام میں inline ہدایات معمول کے مطابق لاگو ہوتی ہیں (لیکن heartbeats سے سیشن ڈیفالٹس تبدیل کرنے سے گریز کریں)۔
+- Heartbeat کی ترسیل ڈیفالٹ طور پر صرف فائنل پے لوڈ تک محدود ہوتی ہے۔ الگ `Reasoning:` پیغام بھی بھیجنے کے لیے (جب دستیاب ہو)، `agents.defaults.heartbeat.includeReasoning: true` یا فی ایجنٹ `agents.list[].heartbeat.includeReasoning: true` سیٹ کریں۔
 
 ## Web chat UI
 

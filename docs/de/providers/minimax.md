@@ -4,13 +4,6 @@ read_when:
   - Sie möchten MiniMax-Modelle in OpenClaw verwenden
   - Sie benötigen Anleitungen zur MiniMax-Einrichtung
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:14Z
 ---
 
 # MiniMax
@@ -38,8 +31,7 @@ MiniMax hebt in M2.1 folgende Verbesserungen hervor:
 
 - **Geschwindigkeit:** Lightning ist die „schnelle“ Variante in der MiniMax-Preisdokumentation.
 - **Kosten:** Die Preisgestaltung zeigt gleiche Eingabekosten, aber Lightning hat höhere Ausgabekosten.
-- **Routing im Coding-Plan:** Das Lightning-Back-End ist im MiniMax Coding Plan nicht direkt verfügbar.
-  MiniMax routet die meisten Anfragen automatisch zu Lightning, fällt jedoch bei
+- **Routing im Coding-Plan:** Das Lightning-Back-End ist im MiniMax Coding Plan nicht direkt verfügbar. MiniMax routet die meisten Anfragen automatisch zu Lightning, fällt jedoch bei
   Lastspitzen auf das reguläre M2.1-Back-End zurück.
 
 ## Einrichtung auswählen
@@ -126,8 +118,7 @@ Konfiguration über die CLI:
 ### Optional: Lokal über LM Studio (manuell)
 
 **Am besten geeignet für:** lokale Inferenz mit LM Studio.
-Wir haben starke Ergebnisse mit MiniMax M2.1 auf leistungsfähiger Hardware (z. B.
-Desktop/Server) unter Verwendung des lokalen Servers von LM Studio gesehen.
+Wir haben starke Ergebnisse mit MiniMax M2.1 auf leistungsfähiger Hardware (z. B. Desktop/Server) unter Verwendung des lokalen Servers von LM Studio gesehen.
 
 Manuelle Konfiguration über `openclaw.json`:
 
@@ -195,8 +186,7 @@ Verwenden Sie den interaktiven Konfigurationsassistenten, um MiniMax einzurichte
 ### „Unknown model: minimax/MiniMax-M2.1“
 
 Das bedeutet in der Regel, dass der **MiniMax-Anbieter nicht konfiguriert ist**
-(kein Anbietereintrag und kein MiniMax-Auth-Profil bzw. keine Umgebungsvariable gefunden).
-Eine Korrektur für diese Erkennung ist in **2026.1.12** enthalten (zum Zeitpunkt des Schreibens noch nicht veröffentlicht). Beheben Sie dies durch:
+(kein Anbietereintrag und kein MiniMax-Auth-Profil bzw. Eine Korrektur für diese Erkennung ist in **2026.1.12** enthalten (zum Zeitpunkt des Schreibens noch nicht veröffentlicht). Beheben Sie dies durch:
 
 - Aktualisieren auf **2026.1.12** (oder aus dem Quellcode ausführen `main`), anschließend den Gateway neu starten.
 - Ausführen von `openclaw configure` und Auswahl von **MiniMax M2.1**, oder

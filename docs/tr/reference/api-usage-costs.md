@@ -5,13 +5,6 @@ read_when:
   - Anahtarları, maliyetleri ve kullanım görünürlüğünü denetlemeniz gerekiyor
   - /status veya /usage maliyet raporlamasını açıklıyorsunuz
 title: "API Kullanımı ve Maliyetler"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 908bfc17811b8f4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:49Z
 ---
 
 # API kullanımı ve maliyetler
@@ -49,14 +42,14 @@ OpenClaw, kimlik bilgilerini şuralardan alabilir:
 
 ## Anahtar harcayabilen özellikler
 
-### 1) Çekirdek model yanıtları (sohbet + araçlar)
+### 1. Çekirdek model yanıtları (sohbet + araçlar)
 
 Her yanıt veya araç çağrısı **geçerli model sağlayıcısını** (OpenAI, Anthropic vb.) kullanır. Bu,
 kullanım ve maliyetin birincil kaynağıdır.
 
 Fiyatlandırma yapılandırması için [Modeller](/providers/models) ve görüntüleme için [Token kullanımı ve maliyetler](/reference/token-use) bölümüne bakın.
 
-### 2) Medya anlama (ses/görüntü/video)
+### 2. Medya anlama (ses/görüntü/video)
 
 Gelen medya, yanıt çalışmadan önce özetlenebilir veya yazıya dökülebilir. Bu, model/sağlayıcı API’lerini kullanır.
 
@@ -66,7 +59,7 @@ Gelen medya, yanıt çalışmadan önce özetlenebilir veya yazıya dökülebili
 
 Bkz. [Medya anlama](/nodes/media-understanding).
 
-### 3) Bellek gömmeleri + anlamsal arama
+### 3. Bellek gömmeleri + anlamsal arama
 
 Anlamsal bellek araması, uzak sağlayıcılar için yapılandırıldığında **gömme API’lerini** kullanır:
 
@@ -77,9 +70,9 @@ Anlamsal bellek araması, uzak sağlayıcılar için yapılandırıldığında *
 
 `memorySearch.provider = "local"` ile yerel tutabilirsiniz (API kullanımı yok).
 
-Bkz. [Bellek](/concepts/memory).
+[Bellek](/concepts/memory).
 
-### 4) Web arama aracı (Brave / Perplexity via OpenRouter)
+### 4. Web arama aracı (Brave / Perplexity via OpenRouter)
 
 `web_search`, API anahtarlarını kullanır ve kullanım ücretlerine yol açabilir:
 
@@ -92,9 +85,9 @@ Bkz. [Bellek](/concepts/memory).
 - **Saniyede 1 istek**
 - Doğrulama için **kredi kartı gerekli** (yükseltmedikçe ücret yok)
 
-Bkz. [Web araçları](/tools/web).
+[Web araçları](/tools/web).
 
-### 5) Web getirme aracı (Firecrawl)
+### 5. Web getirme aracı (Firecrawl)
 
 `web_fetch`, bir API anahtarı mevcut olduğunda **Firecrawl** çağırabilir:
 
@@ -102,9 +95,9 @@ Bkz. [Web araçları](/tools/web).
 
 Firecrawl yapılandırılmamışsa, araç doğrudan getirme + okunabilirlik yöntemine geri döner (ücretli API yok).
 
-Bkz. [Web araçları](/tools/web).
+[Web araçları](/tools/web).
 
-### 6) Sağlayıcı kullanım anlık görüntüleri (durum/sağlık)
+### 6. Sağlayıcı kullanım anlık görüntüleri (durum/sağlık)
 
 Bazı durum komutları, kota pencerelerini veya kimlik doğrulama sağlığını göstermek için **sağlayıcı kullanım uç noktalarını** çağırır.
 Bunlar genellikle düşük hacimli çağrılardır ancak yine de sağlayıcı API’lerine isabet eder:
@@ -112,31 +105,31 @@ Bunlar genellikle düşük hacimli çağrılardır ancak yine de sağlayıcı AP
 - `openclaw status --usage`
 - `openclaw models status --json`
 
-Bkz. [Models CLI](/cli/models).
+[Models CLI](/cli/models).
 
-### 7) Sıkıştırma koruması özetleme
+### 7. Sıkıştırma koruması özetleme
 
 Sıkıştırma koruması, **geçerli modeli** kullanarak oturum geçmişini özetleyebilir; çalıştığında sağlayıcı API’lerini çağırır.
 
-Bkz. [Oturum yönetimi + sıkıştırma](/reference/session-management-compaction).
+[Oturum yönetimi + sıkıştırma](/reference/session-management-compaction).
 
-### 8) Model tarama / yoklama
+### 8. Model tarama / yoklama
 
 `openclaw models scan`, OpenRouter modellerini yoklayabilir ve yoklama etkinleştirildiğinde `OPENROUTER_API_KEY` kullanır.
 
-Bkz. [Models CLI](/cli/models).
+[Models CLI](/cli/models).
 
-### 9) Konuşma (speech)
+### 9. Konuşma (speech)
 
 Konuşma modu, yapılandırıldığında **ElevenLabs** çağırabilir:
 
 - `ELEVENLABS_API_KEY` veya `talk.apiKey`
 
-Bkz. [Konuşma modu](/nodes/talk).
+[Konuşma modu](/nodes/talk).
 
-### 10) Skills (üçüncü taraf API’ler)
+### 10. Skills (üçüncü taraf API’ler)
 
 Skills, `apiKey`’ü `skills.entries.<name>.apiKey` içinde saklayabilir. Bir skill bu anahtarı harici
 API’ler için kullanırsa, skill’in sağlayıcısına göre maliyet oluşturabilir.
 
-Bkz. [Skills](/tools/skills).
+[Skills](/tools/skills).

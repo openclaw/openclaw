@@ -2,35 +2,28 @@
 summary: "Capacidades do OpenClaw em canais, roteamento, mídia e UX."
 read_when:
   - Voce quer uma lista completa do que o OpenClaw oferece
-title: "Recursos"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:30Z
+title: "Funcionalidades"
 ---
 
 ## Destaques
 
 <Columns>
-  <Card title="Canais" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord e iMessage com um único Gateway.
   </Card>
   <Card title="Plugins" icon="plug">
     Adicione Mattermost e mais com extensões.
   </Card>
-  <Card title="Roteamento" icon="route">
+  <Card title="Routing" icon="route">
     Roteamento multiagente com sessões isoladas.
   </Card>
-  <Card title="Mídia" icon="image">
+  <Card title="Media" icon="image">
     Imagens, áudio e documentos de entrada e saída.
   </Card>
-  <Card title="Apps e UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     UI de Controle Web e aplicativo complementar para macOS.
   </Card>
-  <Card title="Nós móveis" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Nós iOS e Android com suporte a Canvas.
   </Card>
 </Columns>

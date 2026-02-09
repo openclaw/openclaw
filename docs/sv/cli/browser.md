@@ -5,13 +5,6 @@ read_when:
   - Du vill styra en webbläsare som körs på en annan maskin via en node host
   - Du vill använda Chrome-tilläggsreläet (anslut/koppla från via verktygsfältsknappen)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:37Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## Profiler
 
-Profiler är namngivna routningskonfigar för webbläsare. I praktiken:
+Profiler namnges webbläsare routing konfigurationer. I praktiken:
 
 - `openclaw`: startar/ansluter till en dedikerad OpenClaw-hanterad Chrome-instans (isolerad användardatakatalog).
 - `chrome`: styr dina befintliga Chrome-flikar via Chrome-tilläggsreläet.
@@ -107,7 +100,7 @@ Fullständig guide: [Chrome extension](/tools/chrome-extension)
 
 ## Fjärrstyrning av webbläsare (node host-proxy)
 
-Om Gateway körs på en annan maskin än webbläsaren, kör en **node host** på maskinen som har Chrome/Brave/Edge/Chromium. Gateway kommer att proxya webbläsaråtgärder till den noden (ingen separat server för webbläsarstyrning krävs).
+Om Gateway körs på en annan maskin än webbläsaren, kör en **nod värd** på maskinen som har Chrome/Brave/Edge/Chromium. Gateway kommer proxy webbläsare åtgärder till den noden (ingen separat webbläsare kontrollserver krävs).
 
 Använd `gateway.nodes.browser.mode` för att styra automatisk routning och `gateway.nodes.browser.node` för att låsa till en specifik nod om flera är anslutna.
 

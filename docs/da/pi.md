@@ -1,12 +1,5 @@
 ---
 title: "Pi-integrationsarkitektur"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:43Z
 ---
 
 # Pi-integrationsarkitektur
@@ -15,7 +8,7 @@ Dette dokument beskriver, hvordan OpenClaw integrerer med [pi-coding-agent](http
 
 ## Overblik
 
-OpenClaw bruger pi SDK’et til at indlejre en AI-kodeagent i sin messaging gateway-arkitektur. I stedet for at starte pi som en underproces eller bruge RPC-tilstand importerer og instantierer OpenClaw direkte pi’s `AgentSession` via `createAgentSession()`. Denne indlejrede tilgang giver:
+OpenClaw bruger pi SDK til at integrere en AI-kodning agent i sin messaging gateway arkitektur. I stedet for at gyde pi som en underproces eller ved hjælp af RPC tilstand, OpenClaw direkte importerer og instantierer pi's `AgentSession` via `createAgentSession()`. Denne integrerede tilgang giver:
 
 - Fuld kontrol over sessionens livscyklus og hændelseshåndtering
 - Brugerdefineret værktøjsinjektion (messaging, sandbox, kanal-specifikke handlinger)
@@ -35,12 +28,12 @@ OpenClaw bruger pi SDK’et til at indlejre en AI-kodeagent i sin messaging gate
 }
 ```
 
-| Pakke             | Formål                                                                                                      |
-| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| Pakke             | Formål                                                                                                                      |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Kerne-LLM-abstraktioner: `Model`, `streamSimple`, meddelelsestyper, udbyder-API’er                          |
-| `pi-agent-core`   | Agent-loop, værktøjsudførelse, `AgentMessage`-typer                                                         |
+| `pi-agent-core`   | Agent-loop, værktøjsudførelse, `AgentMessage`-typer                                                                         |
 | `pi-coding-agent` | Højniveau-SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, indbyggede værktøjer |
-| `pi-tui`          | Terminal-UI-komponenter (bruges i OpenClaws lokale TUI-tilstand)                                            |
+| `pi-tui`          | Terminal-UI-komponenter (bruges i OpenClaws lokale TUI-tilstand)                                         |
 
 ## Filstruktur
 
@@ -137,7 +130,7 @@ src/agents/
 
 ## Kerneintegrationsflow
 
-### 1. Kørsel af en indlejret agent
+### 1. Kører en indlejret agent
 
 Det primære indgangspunkt er `runEmbeddedPiAgent()` i `pi-embedded-runner/run.ts`:
 
@@ -161,7 +154,7 @@ const result = await runEmbeddedPiAgent({
 });
 ```
 
-### 2. Oprettelse af session
+### 2. Oprettelse Af Session
 
 Inde i `runEmbeddedAttempt()` (kaldt af `runEmbeddedPiAgent()`) bruges pi SDK’et:
 
@@ -198,7 +191,7 @@ const { session } = await createAgentSession({
 applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
-### 3. Hændelsesabonnement
+### 3. Begivenheds Abonnement
 
 `subscribeEmbeddedPiSession()` abonnerer på pi’s `AgentSession`-hændelser:
 
@@ -225,7 +218,7 @@ Håndterede hændelser omfatter:
 - `agent_start` / `agent_end`
 - `auto_compaction_start` / `auto_compaction_end`
 
-### 4. Prompting
+### 4. Forslag
 
 Efter opsætning promptes sessionen:
 
@@ -249,7 +242,7 @@ SDK’et håndterer hele agent-loopet: afsendelse til LLM, udførelse af værkt�
 
 ### Adapter til værktøjsdefinition
 
-pi-agent-core’s `AgentTool` har en anden `execute`-signatur end pi-coding-agent’s `ToolDefinition`. Adapteren i `pi-tool-definition-adapter.ts` bygger bro mellem disse:
+pi-agent-core's `AgentTool` har en anden `execute` signatur end pi-coding-agent's `ToolDefinition`. Adapteren i 'pi-tool-definition-adapter.ts' broer dette:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -283,7 +276,7 @@ Dette sikrer, at OpenClaws politikfiltrering, sandbox-integration og udvidede v�
 
 ## Opbygning af systemprompt
 
-Systemprompten bygges i `buildAgentSystemPrompt()` (`system-prompt.ts`). Den samler en fuld prompt med sektioner som Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI-reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime-metadata samt Memory og Reactions når aktiveret, og valgfrie kontekstfiler og ekstra systemprompt-indhold. Sektioner trimmes for minimal prompt-tilstand, der bruges af underagenter.
+Systemet prompt er bygget i `buildAgentSystemPrompt()` (`system-prompt.ts`). Det samler en fuld prompt med sektioner, herunder Tooling, Tool Call Style, Sikkerhed guardrails, OpenClaw CLI reference, Færdigheder, Dokumenter, Arbejdsplads, Sandbox, Besked, Svar Tags, Stemme, tavs gengivelser, Heartbeats, Runtime metadata, plus hukommelse og reaktioner, når aktiveret, og valgfri kontekstfiler og ekstra system prompt indhold. Sektioner trimmes for minimal prompt tilstand bruges af underagenter.
 
 Prompten anvendes efter oprettelse af session via `applySystemPromptOverrideToSession()`:
 
@@ -296,7 +289,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### Sessionsfiler
 
-Sessioner er JSONL-filer med træstruktur (id/parentId-kobling). Pi’s `SessionManager` håndterer persistens:
+Sessioner er JSONL filer med træstruktur (ID / parent Id linking). Pi's `SessionManager` håndterer vedholdenhed:
 
 ```typescript
 const sessionManager = SessionManager.open(params.sessionFile);
@@ -320,7 +313,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 ### Komprimering
 
-Automatisk komprimering udløses ved kontekst-overløb. `compactEmbeddedPiSessionDirect()` håndterer manuel komprimering:
+Auto-komprimering udløser ved kontekstoverløb. `compactEmbeddedPiSessionDirect()` håndterer manuel komprimering:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -518,15 +511,15 @@ Dette giver den interaktive terminaloplevelse, der minder om pi’s oprindelige 
 
 ## Vigtige forskelle fra Pi CLI
 
-| Aspekt              | Pi CLI                        | OpenClaw indlejret                                                                                |
-| ------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------- |
-| Kald                | `pi`-kommando / RPC           | SDK via `createAgentSession()`                                                                    |
-| Værktøjer           | Standard kodeværktøjer        | Brugerdefineret OpenClaw-værktøjssuite                                                            |
-| Systemprompt        | AGENTS.md + prompts           | Dynamisk pr. kanal/kontekst                                                                       |
-| Sessionslagring     | `~/.pi/agent/sessions/`       | `~/.openclaw/agents/<agentId>/sessions/` (eller `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth                | Enkelt legitimationsoplysning | Multi-profil med rotation                                                                         |
-| Udvidelser          | Indlæses fra disk             | Programmatisk + diskstier                                                                         |
-| Hændelseshåndtering | TUI-rendering                 | Callback-baseret (onBlockReply m.m.)                                                              |
+| Aspekt              | Pi CLI                              | OpenClaw indlejret                                                                                                   |
+| ------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Kald                | `pi`-kommando / RPC                 | SDK via `createAgentSession()`                                                                                       |
+| Værktøjer           | Standard kodeværktøjer              | Brugerdefineret OpenClaw-værktøjssuite                                                                               |
+| Systemprompt        | AGENTS.md + prompts | Dynamisk pr. kanal/kontekst                                                                          |
+| Sessionslagring     | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (eller `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Auth                | Enkelt legitimationsoplysning       | Multi-profil med rotation                                                                                            |
+| Udvidelser          | Indlæses fra disk                   | Programmatisk + diskstier                                                                                            |
+| Hændelseshåndtering | TUI-rendering                       | Callback-baseret (onBlockReply m.m.)                              |
 
 ## Fremtidige overvejelser
 

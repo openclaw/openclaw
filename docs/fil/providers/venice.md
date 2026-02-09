@@ -4,20 +4,13 @@ read_when:
   - Gusto mo ng inference na nakatuon sa privacy sa OpenClaw
   - Gusto mo ng gabay sa setup ng Venice AI
 title: "Venice AI"
-x-i18n:
-  source_path: providers/venice.md
-  source_hash: 2453a6ec3a715c24
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:03Z
 ---
 
 # Venice AI (Venice highlight)
 
 Ang **Venice** ay ang aming highlight na Venice setup para sa privacy-first inference na may opsyonal na anonymized na access sa mga proprietary na modelo.
 
-Nagbibigay ang Venice AI ng AI inference na nakatuon sa privacy, na may suporta para sa uncensored na mga modelo at access sa mga pangunahing proprietary na modelo sa pamamagitan ng kanilang anonymized proxy. Lahat ng inference ay pribado bilang default—walang training sa iyong data, walang logging.
+Venice AI provides privacy-focused AI inference with support for uncensored models and access to major proprietary models through their anonymized proxy. All inference is private by default—no training on your data, no logging.
 
 ## Bakit Venice sa OpenClaw
 
@@ -30,10 +23,10 @@ Nagbibigay ang Venice AI ng AI inference na nakatuon sa privacy, na may suporta 
 
 Nag-aalok ang Venice ng dalawang antas ng privacy — mahalagang maunawaan ito para makapili ng tamang modelo:
 
-| Mode           | Paglalarawan                                                                                                                             | Mga Modelo                                      |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| **Private**    | Ganap na pribado. Ang mga prompt/response ay **hindi kailanman iniimbak o nilolog**. Ephemeral.                                          | Llama, Qwen, DeepSeek, Venice Uncensored, atbp. |
-| **Anonymized** | Dinadaan sa Venice na may tinanggal na metadata. Ang underlying provider (OpenAI, Anthropic) ay nakakakita ng anonymized na mga request. | Claude, GPT, Gemini, Grok, Kimi, MiniMax        |
+| Mode           | Paglalarawan                                                                                                                                                            | Mga Modelo                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **Private**    | Fully private. Prompts/responses are **never stored or logged**. Ephemeral.                                             | Llama, Qwen, DeepSeek, Venice Uncensored, atbp. |
+| **Anonymized** | Proxied through Venice with metadata stripped. The underlying provider (OpenAI, Anthropic) sees anonymized requests. | Claude, GPT, Gemini, Grok, Kimi, MiniMax                        |
 
 ## Mga Tampok
 
@@ -48,13 +41,13 @@ Nag-aalok ang Venice ng dalawang antas ng privacy — mahalagang maunawaan ito p
 
 ## Setup
 
-### 1. Kumuha ng API Key
+### 1. Get API Key
 
 1. Mag-sign up sa [venice.ai](https://venice.ai)
 2. Pumunta sa **Settings → API Keys → Create new key**
 3. Kopyahin ang iyong API key (format: `vapi_xxxxxxxxxxxx`)
 
-### 2. I-configure ang OpenClaw
+### 2) I-configure ang OpenClaw
 
 **Opsyon A: Environment Variable**
 
@@ -83,7 +76,7 @@ openclaw onboard --non-interactive \
   --venice-api-key "vapi_xxxxxxxxxxxx"
 ```
 
-### 3. I-verify ang Setup
+### 3. Verify Setup
 
 ```bash
 openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
@@ -91,7 +84,7 @@ openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
 
 ## Pagpili ng Modelo
 
-Pagkatapos ng setup, ipinapakita ng OpenClaw ang lahat ng available na Venice models. Pumili batay sa iyong pangangailangan:
+2. Pagkatapos ng setup, ipinapakita ng OpenClaw ang lahat ng available na Venice models. Pick based on your needs:
 
 - **Default (aming rekomendasyon)**: `venice/llama-3.3-70b` para sa pribado at balanseng performance.
 - **Pinakamahusay na overall quality**: `venice/claude-opus-45` para sa mahihirap na gawain (nanatiling pinakamalakas ang Opus).
@@ -134,69 +127,69 @@ openclaw models list | grep venice
 
 ### Mga Private Model (15) — Ganap na Pribado, Walang Logging
 
-| Model ID                         | Pangalan                | Context (tokens) | Mga Tampok              |
-| -------------------------------- | ----------------------- | ---------------- | ----------------------- |
-| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k             | General                 |
-| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k             | Mabilis, magaang        |
-| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k             | Complex na gawain       |
-| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k             | Reasoning               |
-| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k             | General                 |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k             | Code                    |
-| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k             | General                 |
-| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k             | Vision                  |
-| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k              | Mabilis, reasoning      |
-| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k             | Reasoning               |
-| `venice-uncensored`              | Venice Uncensored       | 32k              | Uncensored              |
-| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k             | Vision                  |
-| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k             | Vision                  |
-| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k             | General                 |
-| `zai-org-glm-4.7`                | GLM 4.7                 | 202k             | Reasoning, multilingual |
+| Model ID                         | Pangalan                                   | Context (tokens) | Mga Tampok              |
+| -------------------------------- | ------------------------------------------ | ----------------------------------- | ----------------------- |
+| `llama-3.3-70b`                  | Llama 3.3 70B              | 131k                                | General                 |
+| `llama-3.2-3b`                   | Llama 3.2 3B               | 131k                                | Mabilis, magaang        |
+| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B    | 131k                                | Complex na gawain       |
+| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking                        | 131k                                | Reasoning               |
+| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct                        | 131k                                | General                 |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B                           | 262k                                | Code                    |
+| `qwen3-next-80b`                 | Qwen3 Next 80B                             | 262k                                | General                 |
+| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B                              | 262k                                | Vision                  |
+| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k                                 | Mabilis, reasoning      |
+| `deepseek-v3.2`                  | DeepSeek V3.2              | 163k                                | Reasoning               |
+| `venice-uncensored`              | Venice Uncensored                          | 32k                                 | Uncensored              |
+| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k                                | Vision                  |
+| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct                       | 202k                                | Vision                  |
+| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B                        | 131k                                | General                 |
+| `zai-org-glm-4.7`                | GLM 4.7                    | 202k                                | Reasoning, multilingual |
 
 ### Mga Anonymized Model (10) — Sa pamamagitan ng Venice Proxy
 
-| Model ID                 | Orihinal          | Context (tokens) | Mga Tampok        |
-| ------------------------ | ----------------- | ---------------- | ----------------- |
-| `claude-opus-45`         | Claude Opus 4.5   | 202k             | Reasoning, vision |
-| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k             | Reasoning, vision |
-| `openai-gpt-52`          | GPT-5.2           | 262k             | Reasoning         |
-| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k             | Reasoning, vision |
-| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k             | Reasoning, vision |
-| `gemini-3-flash-preview` | Gemini 3 Flash    | 262k             | Reasoning, vision |
-| `grok-41-fast`           | Grok 4.1 Fast     | 262k             | Reasoning, vision |
-| `grok-code-fast-1`       | Grok Code Fast 1  | 262k             | Reasoning, code   |
-| `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k             | Reasoning         |
-| `minimax-m21`            | MiniMax M2.1      | 202k             | Reasoning         |
+| Model ID                 | Orihinal                          | Context (tokens) | Mga Tampok        |
+| ------------------------ | --------------------------------- | ----------------------------------- | ----------------- |
+| `claude-opus-45`         | Claude Opus 4.5   | 202k                                | Reasoning, vision |
+| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k                                | Reasoning, vision |
+| `openai-gpt-52`          | GPT-5.2           | 262k                                | Reasoning         |
+| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k                                | Reasoning, vision |
+| `gemini-3-pro-preview`   | Gemini 3 Pro                      | 202k                                | Reasoning, vision |
+| `gemini-3-flash-preview` | Gemini 3 Flash                    | 262k                                | Reasoning, vision |
+| `grok-41-fast`           | Grok 4.1 Fast     | 262k                                | Reasoning, vision |
+| `grok-code-fast-1`       | Grok Code Fast 1                  | 262k                                | Reasoning, code   |
+| `kimi-k2-thinking`       | Kimi K2 Thinking                  | 262k                                | Reasoning         |
+| `minimax-m21`            | MiniMax M2.1      | 202k                                | Reasoning         |
 
 ## Model Discovery
 
-Awtomatikong dini-discover ng OpenClaw ang mga modelo mula sa Venice API kapag naka-set ang `VENICE_API_KEY`. Kung hindi maabot ang API, babalik ito sa isang static na catalog.
+4. Awtomatikong nadidiskubre ng OpenClaw ang mga model mula sa Venice API kapag naka-set ang `VENICE_API_KEY`. 5. Kung hindi maabot ang API, babalik ito sa isang static na catalog.
 
 Ang endpoint na `/models` ay public (walang auth na kailangan para sa listing), ngunit ang inference ay nangangailangan ng valid na API key.
 
 ## Streaming at Tool Support
 
-| Tampok               | Suporta                                                                   |
-| -------------------- | ------------------------------------------------------------------------- |
-| **Streaming**        | ✅ Lahat ng modelo                                                        |
+| Tampok               | Suporta                                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------------- |
+| **Streaming**        | ✅ Lahat ng modelo                                                                           |
 | **Function calling** | ✅ Karamihan ng mga modelo (tingnan ang `supportsFunctionCalling` sa API) |
-| **Vision/Images**    | ✅ Mga modelong may markang "Vision" na tampok                            |
-| **JSON mode**        | ✅ Supported sa pamamagitan ng `response_format`                          |
+| **Vision/Images**    | ✅ Mga modelong may markang "Vision" na tampok                                               |
+| **JSON mode**        | ✅ Supported sa pamamagitan ng `response_format`                                             |
 
 ## Presyo
 
-Gumagamit ang Venice ng credit-based na sistema. Tingnan ang [venice.ai/pricing](https://venice.ai/pricing) para sa kasalukuyang mga rate:
+6. Gumagamit ang Venice ng credit-based na sistema. 7. Tingnan ang [venice.ai/pricing](https://venice.ai/pricing) para sa kasalukuyang mga rate:
 
 - **Mga private model**: Karaniwang mas mababa ang gastos
 - **Mga anonymized model**: Katulad ng direktang API pricing + maliit na bayad ng Venice
 
 ## Paghahambing: Venice vs Direktang API
 
-| Aspeto       | Venice (Anonymized)                | Direktang API              |
-| ------------ | ---------------------------------- | -------------------------- |
-| **Privacy**  | Tinanggal ang metadata, anonymized | Nakakabit sa iyong account |
-| **Latency**  | +10-50ms (proxy)                   | Direkta                    |
-| **Features** | Karamihan ng tampok ay supported   | Buong features             |
-| **Billing**  | Venice credits                     | Billing ng provider        |
+| Aspeto       | Venice (Anonymized) | Direktang API              |
+| ------------ | -------------------------------------- | -------------------------- |
+| **Privacy**  | Tinanggal ang metadata, anonymized     | Nakakabit sa iyong account |
+| **Latency**  | +10-50ms (proxy)    | Direkta                    |
+| **Features** | Karamihan ng tampok ay supported       | Buong features             |
+| **Billing**  | Venice credits                         | Billing ng provider        |
 
 ## Mga Halimbawa ng Paggamit
 
@@ -230,11 +223,11 @@ Tiyaking nagsisimula ang key sa `vapi_`.
 
 ### Hindi available ang modelo
 
-Dynamic na nag-a-update ang Venice model catalog. Patakbuhin ang `openclaw models list` para makita ang mga kasalukuyang available na modelo. Maaaring pansamantalang offline ang ilang modelo.
+The Venice model catalog updates dynamically. 9. Patakbuhin ang `openclaw models list` para makita ang mga kasalukuyang available na model. 10. Maaaring pansamantalang offline ang ilang model.
 
 ### Mga isyu sa koneksyon
 
-Ang Venice API ay nasa `https://api.venice.ai/api/v1`. Tiyaking pinapayagan ng iyong network ang HTTPS connections.
+11. Ang Venice API ay nasa `https://api.venice.ai/api/v1`. 12. Tiyaking pinapayagan ng iyong network ang mga HTTPS connection.
 
 ## Halimbawa ng config file
 

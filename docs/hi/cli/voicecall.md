@@ -4,18 +4,11 @@ read_when:
   - आप voice-call प्लगइन का उपयोग करते हैं और CLI एंट्री पॉइंट्स चाहते हैं
   - आप `voicecall call|continue|status|tail|expose` के लिए त्वरित उदाहरण चाहते हैं
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:05Z
 ---
 
 # `openclaw voicecall`
 
-`voicecall` एक प्लगइन-प्रदान किया गया कमांड है। यह केवल तब दिखाई देता है जब voice-call प्लगइन इंस्टॉल और सक्षम हो।
+19. `voicecall` एक प्लगइन-प्रदान किया गया कमांड है। 20. यह केवल तभी दिखाई देता है जब voice-call प्लगइन इंस्टॉल और सक्षम हो।
 
 प्राथमिक दस्तावेज़:
 
@@ -38,4 +31,4 @@ openclaw voicecall expose --mode funnel
 openclaw voicecall unexpose
 ```
 
-सुरक्षा टिप्पणी: वेबहुक एंडपॉइंट को केवल उन्हीं नेटवर्क्स तक एक्सपोज़ करें जिन पर आप भरोसा करते हैं। जहाँ संभव हो, Funnel की बजाय Tailscale Serve को प्राथमिकता दें।
+21. सुरक्षा नोट: webhook endpoint को केवल उन नेटवर्क्स तक ही एक्सपोज़ करें जिन पर आप भरोसा करते हैं। 22. जहाँ संभव हो Funnel की बजाय Tailscale Serve को प्राथमिकता दें।

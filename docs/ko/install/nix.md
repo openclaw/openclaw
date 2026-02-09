@@ -5,13 +5,6 @@ read_when:
   - 이미 Nix/NixOS/Home Manager 를 사용하고 있을 때
   - 모든 것을 고정하고 선언적으로 관리하고 싶을 때
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:26Z
 ---
 
 # Nix 설치
@@ -41,7 +34,7 @@ Reference the nix-openclaw README for module options.
 >
 > nix-openclaw 저장소는 Nix 설치에 대한 단일 진실 공급원입니다. 이 페이지는 간단한 개요만 제공합니다.
 
-## 제공되는 것
+## 1. 제공되는 내용
 
 - Gateway(게이트웨이) + macOS 앱 + 도구(whisper, spotify, cameras) — 모두 고정됨
 - 재부팅 후에도 유지되는 Launchd 서비스

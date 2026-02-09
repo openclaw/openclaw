@@ -5,13 +5,6 @@ read_when:
   - Halihazırda Nix/NixOS/Home Manager kullanıyorsanız
   - Her şeyin sabitlenmiş ve bildirime dayalı olarak yönetilmesini istiyorsanız
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:26Z
 ---
 
 # Nix Kurulumu
@@ -45,7 +38,7 @@ Reference the nix-openclaw README for module options.
 
 - Gateway + macOS uygulaması + araçlar (whisper, spotify, kameralar) — tamamı sabitlenmiş
 - Yeniden başlatmalardan sonra da çalışan Launchd servisi
-- Bildirime dayalı yapılandırmaya sahip eklenti sistemi
+- Plugin system with declarative config
 - Anında geri alma: `home-manager switch --rollback`
 
 ---

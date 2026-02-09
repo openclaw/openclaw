@@ -4,18 +4,11 @@ read_when:
   - Feishu/Lark bot ကို ချိတ်ဆက်လိုသောအခါ
   - Feishu ချန်နယ်ကို ဖွဲ့စည်းပြင်ဆင်နေသောအခါ
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:25Z
 ---
 
 # Feishu bot
 
-Feishu (Lark) သည် ကုမ္ပဏီများအတွက် စာတိုပေးပို့ခြင်းနှင့် ပူးပေါင်းလုပ်ဆောင်ခြင်းများတွင် အသုံးပြုသော အဖွဲ့လိုက် ချတ်ပလက်ဖောင်းတစ်ခုဖြစ်သည်။ ဤ plugin သည် ပလက်ဖောင်း၏ WebSocket ဖြစ်ရပ်စာရင်းသွင်းမှုကို အသုံးပြုပြီး OpenClaw ကို Feishu/Lark bot နှင့် ချိတ်ဆက်ပေးသဖြင့် အများပြည်သူသုံး webhook URL ကို မဖော်ထုတ်ဘဲ မက်ဆေ့ချ်များကို လက်ခံနိုင်ပါသည်။
+Feishu (Lark) is a team chat platform used by companies for messaging and collaboration. This plugin connects OpenClaw to a Feishu/Lark bot using the platform’s WebSocket event subscription so messages can be received without exposing a public webhook URL.
 
 ---
 
@@ -78,13 +71,13 @@ openclaw channels add
 
 ## အဆင့် ၁: Feishu app တစ်ခု ဖန်တီးခြင်း
 
-### ၁. Feishu Open Platform ကို ဖွင့်ပါ
+### 1. Open Feishu Open Platform
 
 [Feishu Open Platform](https://open.feishu.cn/app) သို့ ဝင်ရောက်ပြီး လက်မှတ်ထိုးဝင်ပါ။
 
 Lark (global) tenant များအတွက် [https://open.larksuite.com/app](https://open.larksuite.com/app) ကို အသုံးပြုရမည်ဖြစ်ပြီး Feishu config တွင် `domain: "lark"` ကို သတ်မှတ်ပါ။
 
-### ၂. App တစ်ခု ဖန်တီးပါ
+### 2. Create an app
 
 1. **Create enterprise app** ကို နှိပ်ပါ
 2. App အမည်နှင့် ဖော်ပြချက်ကို ဖြည့်ပါ
@@ -92,7 +85,7 @@ Lark (global) tenant များအတွက် [https://open.larksuite.com/app
 
 ![Create enterprise app](../images/feishu-step2-create-app.png)
 
-### ၃. အထောက်အထားများကို ကူးယူပါ
+### 3. Copy credentials
 
 **Credentials & Basic Info** မှ အောက်ပါအချက်များကို ကူးယူပါ—
 
@@ -103,7 +96,7 @@ Lark (global) tenant များအတွက် [https://open.larksuite.com/app
 
 ![Get credentials](../images/feishu-step3-credentials.png)
 
-### ၄. ခွင့်ပြုချက်များကို ဖွဲ့စည်းပါ
+### 4. Configure permissions
 
 **Permissions** တွင် **Batch import** ကို နှိပ်ပြီး အောက်ပါကို ကူးထည့်ပါ—
 
@@ -135,7 +128,7 @@ Lark (global) tenant များအတွက် [https://open.larksuite.com/app
 
 ![Configure permissions](../images/feishu-step4-permissions.png)
 
-### ၅. Bot စွမ်းရည်ကို ဖွင့်ပါ
+### 5. Bot စွမ်းရည်ကို ဖွင့်ပါ
 
 **App Capability** > **Bot** အောက်တွင်—
 
@@ -144,7 +137,7 @@ Lark (global) tenant များအတွက် [https://open.larksuite.com/app
 
 ![Enable bot capability](../images/feishu-step5-bot-capability.png)
 
-### ၆. Event subscription ကို ဖွဲ့စည်းပါ
+### 6. Configure event subscription
 
 ⚠️ **အရေးကြီး:** Event subscription ကို မသတ်မှတ်မီ အောက်ပါအချက်များကို သေချာစွာ စစ်ဆေးပါ—
 
@@ -160,7 +153,7 @@ Lark (global) tenant များအတွက် [https://open.larksuite.com/app
 
 ![Configure event subscription](../images/feishu-step6-event-subscription.png)
 
-### ၇. App ကို ထုတ်ဝေပါ
+### 7. Publish the app
 
 1. **Version Management & Release** တွင် version တစ်ခု ဖန်တီးပါ
 2. စစ်ဆေးအတည်ပြုရန် တင်သွင်းပြီး ထုတ်ဝေပါ
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark (global) domain
 
-Tenant သည် Lark (နိုင်ငံတကာ) ဖြစ်ပါက domain ကို `lark` (သို့မဟုတ် domain အပြည့်အစုံ) အဖြစ် သတ်မှတ်ပါ။ `channels.feishu.domain` တွင် သတ်မှတ်နိုင်သလို အကောင့်တစ်ခုချင်းစီအလိုက် (`channels.feishu.accounts.<id>.domain`) လည်း သတ်မှတ်နိုင်ပါသည်။
+If your tenant is on Lark (international), set the domain to `lark` (or a full domain string). You can set it at `channels.feishu.domain` or per account (`channels.feishu.accounts.<id>.domain`).
 
 ```json5
 {
@@ -231,19 +224,19 @@ Tenant သည် Lark (နိုင်ငံတကာ) ဖြစ်ပါက dom
 
 ## အဆင့် ၃: စတင်ခြင်း + စမ်းသပ်ခြင်း
 
-### ၁. Gateway ကို စတင်ပါ
+### 1. Start the gateway
 
 ```bash
 openclaw gateway
 ```
 
-### ၂. စမ်းသပ်မက်ဆေ့ချ် ပို့ပါ
+### 2. Send a test message
 
 Feishu တွင် သင့် bot ကို ရှာဖွေပြီး မက်ဆေ့ချ်တစ်စောင် ပို့ပါ။
 
-### ၃. Pairing ကို အတည်ပြုပါ
+### 3. Approve pairing
 
-ပုံမှန်အားဖြင့် bot သည် pairing code ဖြင့် ပြန်ကြားပါသည်။ အတည်ပြုပါ—
+By default, the bot replies with a pairing code. Approve it:
 
 ```bash
 openclaw pairing approve feishu <CODE>
@@ -267,6 +260,7 @@ openclaw pairing approve feishu <CODE>
 ### Direct messages
 
 - **ပုံမှန်**: `dmPolicy: "pairing"` (မသိသူများသည် pairing code ကို ရရှိပါသည်)
+
 - **Pairing အတည်ပြုခြင်း**:
 
   ```bash
@@ -278,13 +272,13 @@ openclaw pairing approve feishu <CODE>
 
 ### Group chats
 
-**၁. Group policy** (`channels.feishu.groupPolicy`)—
+**1. Group policy** (`channels.feishu.groupPolicy`):
 
 - `"open"` = အုပ်စုအတွင်းရှိ လူတိုင်းကို ခွင့်ပြုပါ (ပုံမှန်)
 - `"allowlist"` = `groupAllowFrom` ကိုသာ ခွင့်ပြုပါ
 - `"disabled"` = အုပ်စုမက်ဆေ့ချ်များကို ပိတ်ပါ
 
-**၂. Mention လိုအပ်ချက်** (`channels.feishu.groups.<chat_id>.requireMention`)—
+**2. Mention requirement** (`channels.feishu.groups.<chat_id>.requireMention`):
 
 - `true` = @mention လိုအပ်သည် (ပုံမှန်)
 - `false` = mention မလိုအပ်ဘဲ ပြန်ကြားပါ
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### Streaming
 
-Feishu သည် interactive cards များမှတစ်ဆင့် streaming ပြန်ကြားမှုများကို ပံ့ပိုးပါသည်။ ဖွင့်ထားပါက bot သည် စာသားကို ဖန်တီးသည့်အခါ card ကို အပ်ဒိတ်လုပ်ပါသည်။
+Feishu supports streaming replies via interactive cards. When enabled, the bot updates a card as it generates text.
 
 ```json5
 {
@@ -534,34 +528,34 @@ Routing အကွက်များ—
 
 အဓိက ရွေးချယ်စရာများ—
 
-| Setting                                           | ဖော်ပြချက်                                    | ပုံမှန်   |
-| ------------------------------------------------- | --------------------------------------------- | --------- |
-| `channels.feishu.enabled`                         | ချန်နယ်ကို ဖွင့်/ပိတ်                         | `true`    |
-| `channels.feishu.domain`                          | API domain (`feishu` သို့မဟုတ် `lark`)        | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                        | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                    | -         |
-| `channels.feishu.accounts.<id>.domain`            | အကောင့်တစ်ခုချင်းစီအလိုက် API domain override | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM မူဝါဒ                                      | `pairing` |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id စာရင်း)                 | -         |
-| `channels.feishu.groupPolicy`                     | Group မူဝါဒ                                   | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                               | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | @mention လိုအပ်ချက်                           | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Group ကို ဖွင့်                               | `true`    |
-| `channels.feishu.textChunkLimit`                  | မက်ဆေ့ချ် အပိုင်း အရွယ်အစား                   | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | မီဒီယာ အရွယ်အစား ကန့်သတ်ချက်                  | `30`      |
-| `channels.feishu.streaming`                       | Streaming card output ကို ဖွင့်               | `true`    |
-| `channels.feishu.blockStreaming`                  | Block streaming ကို ဖွင့်                     | `true`    |
+| Setting                                           | ဖော်ပြချက်                                                            | ပုံမှန်   |
+| ------------------------------------------------- | --------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | ချန်နယ်ကို ဖွင့်/ပိတ်                                                 | `true`    |
+| `channels.feishu.domain`                          | API domain (`feishu` သို့မဟုတ် `lark`)             | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                            | -         |
+| `channels.feishu.accounts.<id>.domain`            | အကောင့်တစ်ခုချင်းစီအလိုက် API domain override                         | `feishu`  |
+| `channels.feishu.dmPolicy`                        | DM မူဝါဒ                                                              | `pairing` |
+| `channels.feishu.allowFrom`                       | DM allowlist (open_id စာရင်း) | -         |
+| `channels.feishu.groupPolicy`                     | Group မူဝါဒ                                                           | `open`    |
+| `channels.feishu.groupAllowFrom`                  | Group allowlist                                                       | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | @mention လိုအပ်ချက်                                      | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | Group ကို ဖွင့်                                                       | `true`    |
+| `channels.feishu.textChunkLimit`                  | မက်ဆေ့ချ် အပိုင်း အရွယ်အစား                                           | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | မီဒီယာ အရွယ်အစား ကန့်သတ်ချက်                                          | `30`      |
+| `channels.feishu.streaming`                       | Streaming card output ကို ဖွင့်                                       | `true`    |
+| `channels.feishu.blockStreaming`                  | Block streaming ကို ဖွင့်                                             | `true`    |
 
 ---
 
 ## dmPolicy reference
 
-| Value         | အပြုအမူ                                                               |
-| ------------- | --------------------------------------------------------------------- |
-| `"pairing"`   | **ပုံမှန်။** မသိသူများသည် pairing code ကို ရရှိပြီး အတည်ပြုရမည်       |
-| `"allowlist"` | `allowFrom` ထဲရှိ အသုံးပြုသူများသာ ချတ်လုပ်နိုင်သည်                   |
+| Value         | အပြုအမူ                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `"pairing"`   | **ပုံမှန်။** မသိသူများသည် pairing code ကို ရရှိပြီး အတည်ပြုရမည်                          |
+| `"allowlist"` | `allowFrom` ထဲရှိ အသုံးပြုသူများသာ ချတ်လုပ်နိုင်သည်                                      |
 | `"open"`      | အသုံးပြုသူအားလုံးကို ခွင့်ပြုသည် (`"*"` ကို allowFrom တွင် လိုအပ်သည်) |
-| `"disabled"`  | DM များကို ပိတ်ပါ                                                     |
+| `"disabled"`  | DM များကို ပိတ်ပါ                                                                        |
 
 ---
 

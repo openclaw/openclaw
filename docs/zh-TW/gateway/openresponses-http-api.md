@@ -4,20 +4,13 @@ read_when:
   - 整合使用 OpenResponses API 的用戶端
   - 你需要以項目為基礎的輸入、用戶端工具呼叫，或 SSE 事件
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:12Z
 ---
 
 # OpenResponses API（HTTP）
 
 OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /v1/responses` 端點。
 
-此端點 **預設為停用**。請先在設定中啟用。
+此端點 **預設為停用**。請先在設定中啟用。 Enable it in config first.
 
 - `POST /v1/responses`
 - 與 Gateway 閘道器相同的連接埠（WS + HTTP 多工）：`http://<gateway-host>:<port>/v1/responses`
@@ -25,9 +18,9 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 在底層，請求會以一般的 Gateway 代理程式執行方式來處理（與
 `openclaw agent` 使用相同的程式碼路徑），因此路由、權限與設定都會符合你的 Gateway 閘道器。
 
-## 身分驗證
+## Authentication
 
-使用 Gateway 的身分驗證設定。請傳送 bearer token：
+Uses the Gateway auth configuration. Send a bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -51,7 +44,7 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 
 - `x-openclaw-session-key: <sessionKey>` 以完全控制工作階段路由。
 
-## 啟用端點
+## Enabling the endpoint
 
 將 `gateway.http.endpoints.responses.enabled` 設為 `true`：
 
@@ -83,16 +76,16 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 }
 ```
 
-## 工作階段行為
+## Session behavior
 
-預設情況下，此端點 **每個請求皆為無狀態**（每次呼叫都會產生新的工作階段金鑰）。
+By default the endpoint is **stateless per request** (a new session key is generated each call).
 
 如果請求包含 OpenResponses 的 `user` 字串，Gateway 閘道器會從該值推導出穩定的工作階段金鑰，
 讓重複呼叫可以共用同一個代理程式工作階段。
 
-## 請求結構（支援）
+## Request shape (supported)
 
-請求遵循 OpenResponses API，並使用以項目為基礎的輸入。目前支援：
+請求遵循 OpenResponses API，並使用以項目為基礎的輸入。目前支援： Current support:
 
 - `input`：字串或項目物件陣列。
 - `instructions`：合併到系統提示中。
@@ -119,7 +112,7 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 
 - `system` 與 `developer` 會附加到系統提示中。
 - 最近的 `user` 或 `function_call_output` 項目會成為「目前訊息」。
-- 較早的使用者／助理訊息會作為歷史內容納入上下文。
+- Earlier user/assistant messages are included as history for context.
 
 ### `function_call_output`（回合制工具）
 
@@ -143,6 +136,7 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 
 如果代理程式決定呼叫某個工具，回應會回傳一個 `function_call` 輸出項目。
 接著你需要傳送一個包含 `function_call_output` 的後續請求，以繼續該回合。
+You then send a follow-up request with `function_call_output` to continue the turn.
 
 ## 圖片（`input_image`）
 
@@ -157,6 +151,7 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 
 允許的 MIME 類型（目前）：`image/jpeg`、`image/png`、`image/gif`、`image/webp`。
 最大大小（目前）：10MB。
+Max size (current): 10MB.
 
 ## 檔案（`input_file`）
 
@@ -181,19 +176,19 @@ OpenClaw 的 Gateway 閘道器可以提供一個相容 OpenResponses 的 `POST /
 
 目前行為：
 
-- 檔案內容會被解碼並加入 **系統提示**，而不是使用者訊息，
-  因此其內容是暫時性的（不會持久化到工作階段歷史中）。
-- PDF 會被解析為文字。如果找到的文字很少，則會將前幾頁轉換為影像，
-  並傳遞給模型。
+- File content is decoded and added to the **system prompt**, not the user message,
+  so it stays ephemeral (not persisted in session history).
+- PDFs are parsed for text. 1. 如果偵測到的文字很少，會將前幾頁光柵化成圖片並傳遞給模型。
 
 PDF 解析使用對 Node 友善的 `pdfjs-dist` 舊版建置（不使用 worker）。較新的
-PDF.js 建置需要瀏覽器 worker／DOM 全域物件，因此未在 Gateway 閘道器中使用。
+PDF.js 建置需要瀏覽器 worker／DOM 全域物件，因此未在 Gateway 閘道器中使用。 The modern
+PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
 
 URL 擷取預設值：
 
 - `files.allowUrl`：`true`
 - `images.allowUrl`：`true`
-- 請求具備防護（DNS 解析、私有 IP 封鎖、重新導向上限、逾時）。
+- Requests are guarded (DNS resolution, private IP blocking, redirect caps, timeouts).
 
 ## 檔案與圖片限制（設定）
 
@@ -241,7 +236,7 @@ URL 擷取預設值：
 }
 ```
 
-省略時的預設值：
+Defaults when omitted:
 
 - `maxBodyBytes`：20MB
 - `files.maxBytes`：5MB
@@ -263,7 +258,7 @@ URL 擷取預設值：
 - 每一行事件為 `event: <type>` 與 `data: <json>`
 - 串流以 `data: [DONE]` 結束
 
-目前會發送的事件類型：
+Event types currently emitted:
 
 - `response.created`
 - `response.in_progress`
@@ -278,7 +273,7 @@ URL 擷取預設值：
 
 ## 使用量
 
-當底層提供者回報權杖計數時，會填入 `usage`。
+`usage` is populated when the underlying provider reports token counts.
 
 ## 錯誤
 

@@ -1,23 +1,16 @@
 ---
-summary: 「Models CLI：列出、設定、別名、備援、掃描、狀態」
+summary: "Models CLI：列出、設定、別名、備援、掃描、狀態"
 read_when:
   - 新增或修改 Models CLI（models list/set/scan/aliases/fallbacks）
   - 變更模型備援行為或選擇 UX
   - 更新模型掃描探測（工具／圖片）
-title: 「Models CLI」
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:50Z
+title: "Models CLI"
 ---
 
 # Models CLI
 
-關於身分驗證設定檔輪替、冷卻時間，以及它們如何與備援互動，請參閱 [/concepts/model-failover](/concepts/model-failover)。
-提供者快速概覽與範例：[/concepts/model-providers](/concepts/model-providers)。
+36. 有關驗證設定檔輪替、冷卻時間，以及其如何與回退互動，請參閱 [/concepts/model-failover](/concepts/model-failover)。
+37. 供應商快速總覽與範例：[/concepts/model-providers](/concepts/model-providers)。
 
 ## 模型選擇如何運作
 
@@ -25,9 +18,10 @@ OpenClaw 依下列順序選擇模型：
 
 1. **主要** 模型（`agents.defaults.model.primary` 或 `agents.defaults.model`）。
 2. `agents.defaults.model.fallbacks` 中的 **備援**（依順序）。
-3. **提供者身分驗證失效轉移** 會在切換到下一個模型前，於同一提供者內部先行處理。
+3. 38. **供應商驗證回退** 會在供應商內部發生，然後才移至
+       下一個模型。
 
-相關說明：
+39) 相關：
 
 - `agents.defaults.models` 是 OpenClaw 可使用的模型允許清單／目錄（含別名）。
 - `agents.defaults.imageModel` **僅在** 主要模型無法接受圖片時使用。
@@ -48,27 +42,27 @@ openclaw onboard
 
 它可為常見提供者設定模型與身分驗證，包含 **OpenAI Code（Codex）訂閱**（OAuth）與 **Anthropic**（建議使用 API 金鑰；亦支援 `claude setup-token`）。
 
-## 設定金鑰（概覽）
+## 40. 設定鍵（總覽）
 
 - `agents.defaults.model.primary` 與 `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel.primary` 與 `agents.defaults.imageModel.fallbacks`
 - `agents.defaults.models`（允許清單 + 別名 + 提供者參數）
 - `models.providers`（自訂提供者會寫入 `models.json`）
 
-模型參照會正規化為小寫。像 `z.ai/*` 這樣的提供者別名會正規化為 `zai/*`。
+1. 模型參考會正規化為小寫。 2. 像 `z.ai/*` 這樣的提供者別名會正規化為 `zai/*`。
 
 提供者設定範例（包含 OpenCode Zen）位於
 [/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy)。
 
 ## 「Model is not allowed」（以及為何回覆會停止）
 
-若設定了 `agents.defaults.models`，它會成為 `/model` 與工作階段覆寫的 **允許清單**。當使用者選擇不在該允許清單中的模型時，OpenClaw 會回傳：
+若設定了 `agents.defaults.models`，它會成為 `/model` 與工作階段覆寫的 **允許清單**。當使用者選擇不在該允許清單中的模型時，OpenClaw 會回傳： 3. 當使用者選擇的模型不在允許清單中時，OpenClaw 會回傳：
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-這會在產生一般回覆 **之前** 發生，因此訊息可能感覺像是「沒有回應」。修正方式為其一：
+這會在產生一般回覆 **之前** 發生，因此訊息可能感覺像是「沒有回應」。修正方式為其一： 4. 修正方式是以下其中之一：
 
 - 將模型加入 `agents.defaults.models`，或
 - 清除允許清單（移除 `agents.defaults.models`），或
@@ -105,7 +99,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 - `/model`（以及 `/model list`）是精簡的編號選擇器（模型家族 + 可用提供者）。
 - `/model <#>` 會從該選擇器中選取。
 - `/model status` 是詳細檢視（身分驗證候選，以及在設定時顯示的提供者端點 `baseUrl` + `api` 模式）。
-- 模型參照會以 **第一個** `/` 進行分割。輸入 `/model <ref>` 時請使用 `provider/model`。
+- 5. 模型參考是透過在**第一個** `/` 處進行分割來解析的。 模型參照會以 **第一個** `/` 進行分割。輸入 `/model <ref>` 時請使用 `provider/model`。
 - 若模型 ID 本身包含 `/`（OpenRouter 風格），你必須包含提供者前綴（例如：`/model openrouter/moonshotai/kimi-k2`）。
 - 若省略提供者，OpenClaw 會將輸入視為別名或 **預設提供者** 的模型（僅在模型 ID 中沒有 `/` 時可用）。
 
@@ -138,7 +132,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-預設顯示已設定的模型。實用旗標：
+6. 預設會顯示已設定的模型。 7. 實用的旗標：
 
 - `--all`：完整目錄
 - `--local`：僅本地提供者
@@ -148,10 +142,10 @@ openclaw models image-fallbacks clear
 
 ### `models status`
 
-顯示已解析的主要模型、備援、圖片模型，以及已設定提供者的身分驗證概覽。它也會呈現驗證儲存庫中找到之設定檔的 OAuth 到期狀態（預設在 24 小時內警告）。`--plain` 僅列印已解析的主要模型。
-OAuth 狀態一律顯示（並包含於 `--json` 輸出）。若已設定的提供者沒有憑證，`models status` 會列印 **Missing auth** 區段。
-JSON 內容包含 `auth.oauth`（警告視窗 + 設定檔）與 `auth.providers`（每個提供者的有效身分驗證）。
-自動化請使用 `--check`（缺少／過期時以 `1` 結束，將到期時以 `2` 結束）。
+8. 顯示已解析的主要模型、備援模型、影像模型，以及已設定提供者的驗證總覽。 9. 也會顯示在驗證儲存區中找到的設定檔的 OAuth 到期狀態（預設在 24 小時內到期會警告）。 10. `--plain` 只會輸出已解析的主要模型。
+9. OAuth 狀態一定會顯示（並包含在 `--json` 輸出中）。 12. 如果已設定的提供者沒有憑證，`models status` 會列印 **Missing auth** 區段。
+10. JSON 會包含 `auth.oauth`（警告視窗 + 設定檔）以及 `auth.providers`（各提供者的實際驗證）。
+11. 在自動化中使用 `--check`（缺少/已過期時結束碼為 `1`，即將到期時為 `2`）。
 
 Anthropic 建議的身分驗證方式為 Claude Code CLI 的 setup-token（可在任何地方執行；必要時貼到閘道器主機）：
 
@@ -175,24 +169,24 @@ openclaw models status
 - `--set-image`：將 `agents.defaults.imageModel.primary` 設為第一個圖片選擇
 
 探測需要 OpenRouter API 金鑰（來自身分驗證設定檔或
-`OPENROUTER_API_KEY`）。沒有金鑰時，請使用 `--no-probe` 僅列出候選項目。
+`OPENROUTER_API_KEY`）。沒有金鑰時，請使用 `--no-probe` 僅列出候選項目。 15. 沒有金鑰時，使用 `--no-probe` 只列出候選項目。
 
 掃描結果的排序依據：
 
 1. 圖片支援
 2. 工具延遲
-3. 內容長度上限
-4. 參數數量
+3. 16. 上下文大小
+4. 17. 參數數量
 
-輸入
+Input
 
 - OpenRouter `/models` 清單（篩選 `:free`）
 - 需要來自身分驗證設定檔或 `OPENROUTER_API_KEY` 的 OpenRouter API 金鑰（見 [/environment](/help/environment)）
 - 選用篩選條件：`--max-age-days`、`--min-params`、`--provider`、`--max-candidates`
 - 探測控制：`--timeout`、`--concurrency`
 
-在 TTY 中執行時，你可以互動式地選擇備援。在非互動模式下，傳入 `--yes` 以接受預設值。
+18. 在 TTY 中執行時，可以互動式地選擇備援模型。 19. 在非互動模式下，傳入 `--yes` 以接受預設值。
 
 ## 模型登錄表（`models.json`）
 
-`models.providers` 中的自訂提供者會寫入代理程式目錄下的 `models.json`（預設為 `~/.openclaw/agents/<agentId>/models.json`）。此檔案預設會被合併，除非將 `models.mode` 設為 `replace`。
+`models.providers` 中的自訂提供者會寫入代理程式目錄下的 `models.json`（預設為 `~/.openclaw/agents/<agentId>/models.json`）。此檔案預設會被合併，除非將 `models.mode` 設為 `replace`。 20. 除非將 `models.mode` 設為 `replace`，否則此檔案預設會被合併。

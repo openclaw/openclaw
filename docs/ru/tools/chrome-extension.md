@@ -5,13 +5,6 @@ read_when:
   - Вам нужен удалённый Gateway + локальная автоматизация браузера через Tailscale
   - Вы хотите понять последствия для безопасности при перехвате управления браузером
 title: "Расширение Chrome"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:11Z
 ---
 
 # Расширение Chrome (браузерный релей)

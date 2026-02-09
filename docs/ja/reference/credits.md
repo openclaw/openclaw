@@ -3,13 +3,6 @@ summary: "プロジェクトの起源、貢献者、ライセンス。"
 read_when:
   - プロジェクトの背景や貢献者のクレジットを知りたいとき
 title: "クレジット"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:03Z
 ---
 
 ## 名前の由来
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS。なぜなら、すべての宇宙ロブスターに�
 
 MIT - 海を自由に泳ぐロブスターのように自由です。
 
-> 「私たちは皆、自分自身のプロンプトで遊んでいるだけだ。」（トークンを摂り過ぎた AI かもしれない）
+> 「私たちは皆、自分自身のプロンプトで遊んでいるだけだ。」（トークンを摂り過ぎた AI かもしれない） (AI、おそらくトークンが高い)

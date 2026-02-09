@@ -3,18 +3,11 @@ summary: "Status for Zalo-botunderstøttelse, funktioner og konfiguration"
 read_when:
   - Arbejder med Zalo-funktioner eller webhooks
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:07Z
 ---
 
 # Zalo (Bot API)
 
-Status: eksperimentel. Kun direkte beskeder; grupper kommer snart ifølge Zalo-dokumentationen.
+Status: eksperimentel. Kun direkte meddelelser; grupper der kommer snart pr. Zalo docs.
 
 ## Plugin påkrævet
 
@@ -52,8 +45,8 @@ Minimal konfiguration:
 
 ## Hvad det er
 
-Zalo er en Vietnam-fokuseret beskedapp; dens Bot API lader Gateway køre en bot til 1:1-samtaler.
-Det er et godt match til support eller notifikationer, hvor du ønsker deterministisk routing tilbage til Zalo.
+Zalo er en Vietnam-fokuseret messaging app; dens Bot API lader Gateway køre en bot for 1:1 samtaler.
+Det er en god egnet til støtte eller meddelelser, hvor du ønsker deterministisk routing tilbage til Zalo.
 
 - En Zalo Bot API-kanal ejet af Gateway.
 - Deterministisk routing: svar går tilbage til Zalo; modellen vælger aldrig kanaler.
@@ -62,7 +55,7 @@ Det er et godt match til support eller notifikationer, hvor du ønsker determini
 
 ## Opsætning (hurtig sti)
 
-### 1) Opret et bot-token (Zalo Bot Platform)
+### 1. Opret et bot-token (Zalo Bot Platform)
 
 1. Gå til [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) og log ind.
 2. Opret en ny bot og konfigurer dens indstillinger.
@@ -88,8 +81,8 @@ Miljøvariabel: `ZALO_BOT_TOKEN=...` (virker kun for standardkontoen).
 
 Understøttelse af flere konti: brug `channels.zalo.accounts` med tokens pr. konto og valgfri `name`.
 
-3. Genstart gateway. Zalo starter, når et token findes (miljøvariabel eller konfiguration).
-4. DM-adgang er som standard parring. Godkend koden, når botten kontaktes første gang.
+3. Genstart gatewayen. Zalo starter, når en token er løst (env eller config).
+4. DM adgang er standard til parring. Godkend koden, når botten først kontaktes.
 
 ## Sådan virker det (adfærd)
 
@@ -111,7 +104,7 @@ Understøttelse af flere konti: brug `channels.zalo.accounts` med tokens pr. kon
 - Godkend via:
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- Parring er standard token-udveksling. Detaljer: [Pairing](/channels/pairing)
+- Parring er standard token udveksling. Detaljer: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` accepterer numeriske bruger-id’er (ingen opslag af brugernavne tilgængelig).
 
 ## Long-polling vs. webhook
@@ -134,16 +127,16 @@ Understøttelse af flere konti: brug `channels.zalo.accounts` med tokens pr. kon
 
 ## Funktioner
 
-| Funktion          | Status                         |
-| ----------------- | ------------------------------ |
-| Direkte beskeder  | ✅ Understøttet                |
-| Grupper           | ❌ Kommer snart (ifølge Zalo)  |
-| Medier (billeder) | ✅ Understøttet                |
-| Reaktioner        | ❌ Ikke understøttet           |
-| Tråde             | ❌ Ikke understøttet           |
-| Afstemninger      | ❌ Ikke understøttet           |
-| Native kommandoer | ❌ Ikke understøttet           |
-| Streaming         | ⚠️ Blokeret (2000-tegnsgrænse) |
+| Funktion                             | Status                                            |
+| ------------------------------------ | ------------------------------------------------- |
+| Direkte beskeder                     | ✅ Understøttet                                    |
+| Grupper                              | ❌ Kommer snart (ifølge Zalo)   |
+| Medier (billeder) | ✅ Understøttet                                    |
+| Reaktioner                           | ❌ Ikke understøttet                               |
+| Tråde                                | ❌ Ikke understøttet                               |
+| Afstemninger                         | ❌ Ikke understøttet                               |
+| Native kommandoer                    | ❌ Ikke understøttet                               |
+| Streaming                            | ⚠️ Blokeret (2000-tegnsgrænse) |
 
 ## Leveringsmål (CLI/cron)
 
@@ -175,7 +168,7 @@ Udbyderindstillinger:
 - `channels.zalo.botToken`: bot-token fra Zalo Bot Platform.
 - `channels.zalo.tokenFile`: læs token fra filsti.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (standard: parring).
-- `channels.zalo.allowFrom`: DM-tilladelsesliste (bruger-id’er). `open` kræver `"*"`. Opsætningsguiden vil bede om numeriske id’er.
+- `channels.zalo.allowFrom`: DM allowlist (bruger IDs). `open` kræver `"*"`. Guiden vil bede om numeriske ID'er.
 - `channels.zalo.mediaMaxMb`: grænse for ind-/udgående medier (MB, standard 5).
 - `channels.zalo.webhookUrl`: aktivér webhook-tilstand (HTTPS kræves).
 - `channels.zalo.webhookSecret`: webhook-hemmelighed (8-256 tegn).
@@ -184,13 +177,13 @@ Udbyderindstillinger:
 
 Indstillinger for flere konti:
 
-- `channels.zalo.accounts.<id>.botToken`: token pr. konto.
-- `channels.zalo.accounts.<id>.tokenFile`: tokenfil pr. konto.
+- `channels.zalo.accounts.<id>.botToken`: per-konto token.
+- `channels.zalo.accounts.<id>.tokenFile`: per-konto token fil.
 - `channels.zalo.accounts.<id>.name`: visningsnavn.
-- `channels.zalo.accounts.<id>.enabled`: aktivér/deaktivér konto.
+- `channels.zalo.accounts.<id>.enabled`: aktivér/deaktiver konto.
 - `channels.zalo.accounts.<id>.dmPolicy`: DM-politik pr. konto.
-- `channels.zalo.accounts.<id>.allowFrom`: tilladelsesliste pr. konto.
-- `channels.zalo.accounts.<id>.webhookUrl`: webhook-URL pr. konto.
-- `channels.zalo.accounts.<id>.webhookSecret`: webhook-hemmelighed pr. konto.
-- `channels.zalo.accounts.<id>.webhookPath`: webhook-sti pr. konto.
-- `channels.zalo.accounts.<id>.proxy`: proxy-URL pr. konto.
+- `channels.zalo.accounts.<id>.allowFra`: tilladt pr. konto.
+- `channels.zalo.accounts.<id>.webhookUrl`: webhook URL pr. konto.
+- `channels.zalo.accounts.<id>.webhookSecret`: webhook hemmelighed pr. konto.
+- `channels.zalo.accounts.<id>.webhookPath`: stien pr. konto webhook.
+- `channels.zalo.accounts.<id>.proxy`: proxy URL pr. konto.

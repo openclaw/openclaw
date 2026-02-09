@@ -5,13 +5,6 @@ read_when:
   - Arka plan izleme veya bildirimler kurarken
   - Periyodik kontroller için token kullanımını optimize ederken
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:08Z
 ---
 
 # Cron vs Heartbeat: Hangisi Ne Zaman Kullanılmalı
@@ -20,14 +13,14 @@ Hem heartbeat’ler hem de cron işleri, görevleri bir zaman çizelgesine göre
 
 ## Hızlı Karar Rehberi
 
-| Kullanım Senaryosu                        | Önerilen            | Neden                                            |
-| ----------------------------------------- | ------------------- | ------------------------------------------------ |
-| Gelen kutusunu her 30 dakikada kontrol et | Heartbeat           | Diğer kontrollerle gruplanır, bağlam farkındadır |
-| Her gün tam 9:00’da rapor gönder          | Cron (izole)        | Kesin zamanlama gerekir                          |
-| Takvimde yaklaşan etkinlikleri izle       | Heartbeat           | Periyodik farkındalık için doğal uyum            |
-| Haftalık derin analiz çalıştır            | Cron (izole)        | Bağımsız görev, farklı model kullanılabilir      |
-| 20 dakika sonra hatırlat                  | Cron (main, `--at`) | Tek seferlik ve kesin zamanlama                  |
-| Arka plan proje sağlık kontrolü           | Heartbeat           | Mevcut döngüden faydalanır                       |
+| Kullanım Senaryosu                               | Önerilen                               | Neden                                                     |
+| ------------------------------------------------ | -------------------------------------- | --------------------------------------------------------- |
+| Gelen kutusunu her 30 dakikada kontrol et        | Heartbeat                              | Diğer kontrollerle birlikte, bağlam farkındalıklı gruplar |
+| Her gün tam 9:00’da rapor gönder | Cron (isolated)     | Kesin zamanlama gerekir                                   |
+| Takvimde yaklaşan etkinlikleri izle              | Heartbeat                              | Periyodik farkındalık için doğal uyum                     |
+| Haftalık derin analiz çalıştır                   | Cron (isolated)     | Bağımsız görev, farklı model kullanılabilir               |
+| 20 dakika sonra hatırlat                         | Cron (main, `--at`) | Hassas zamanlamayla tek seferlik                          |
+| Arka plan proje sağlık kontrolü                  | Heartbeat                              | Mevcut döngüyü kullanır                                   |
 
 ## Heartbeat: Periyodik Farkındalık
 
@@ -222,20 +215,20 @@ Tam kullanım ve örnekler için [Lobster](/tools/lobster) sayfasına bakın.
 
 Hem heartbeat hem de cron ana oturumla etkileşime girebilir, ancak farklı şekillerde:
 
-|        | Heartbeat                            | Cron (main)             | Cron (isolated)                 |
-| ------ | ------------------------------------ | ----------------------- | ------------------------------- |
-| Oturum | Ana                                  | Ana (sistem olayıyla)   | `cron:<jobId>`                  |
-| Geçmiş | Paylaşılan                           | Paylaşılan              | Her çalıştırmada yeni           |
-| Bağlam | Tam                                  | Tam                     | Yok (temiz başlar)              |
-| Model  | Ana oturum modeli                    | Ana oturum modeli       | Geçersiz kılınabilir            |
-| Çıktı  | `HEARTBEAT_OK` değilse teslim edilir | Heartbeat istemi + olay | Varsayılan olarak özet duyurusu |
+|        | Heartbeat                            | Cron (main)           | Cron (isolated)    |
+| ------ | ------------------------------------ | ---------------------------------------- | ------------------------------------- |
+| Oturum | Ana                                  | Ana (sistem olayıyla) | `cron:<jobId>`                        |
+| Geçmiş | Paylaşılan                           | Paylaşılan                               | Her çalıştırmada taze                 |
+| Bağlam | Tam                                  | Tam                                      | Yok (temiz başlar) |
+| Model  | Ana oturum modeli                    | Ana oturum modeli                        | Geçersiz kılabilir                    |
+| Çıktı  | `HEARTBEAT_OK` değilse teslim edilir | Heartbeat istemi + olay                  | Varsayılan olarak özet duyurusu       |
 
 ### Ana oturum cron ne zaman kullanılmalı
 
 Aşağıdakileri istediğinizde `--session main` ile `--system-event` kullanın:
 
 - Hatırlatmanın/olayın ana oturum bağlamında görünmesi
-- Ajanın bunu bir sonraki heartbeat’te tam bağlamla ele alması
+- Bir sonraki kalp atışı sırasında tam bağlamla ele alması için ajan
 - Ayrı bir izole çalıştırma olmaması
 
 ```bash
@@ -254,7 +247,7 @@ Aşağıdakileri istediğinizde `--session isolated` kullanın:
 - Önceki bağlam olmadan temiz bir başlangıç
 - Farklı model veya düşünme ayarları
 - Özetleri doğrudan bir kanala duyurmak
-- Ana oturumu kalabalıklaştırmayan bir geçmiş
+- Ana oturumu kalabalıklaştırmayan geçmiş
 
 ```bash
 openclaw cron add \
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Maliyet Hususları
 
-| Mekanizma       | Maliyet Profili                                           |
-| --------------- | --------------------------------------------------------- |
-| Heartbeat       | Her N dakikada bir tur; HEARTBEAT.md boyutuyla ölçeklenir |
-| Cron (main)     | Bir sonraki heartbeat’e olay ekler (izole tur yok)        |
-| Cron (isolated) | İş başına tam ajan turu; daha ucuz model kullanılabilir   |
+| Mekanizma                          | Maliyet Profili                                                           |
+| ---------------------------------- | ------------------------------------------------------------------------- |
+| Heartbeat                          | Her N dakikada bir tur; HEARTBEAT.md boyutuyla ölçeklenir |
+| Cron (main)     | Bir sonraki heartbeat’e olay ekler (izole tur yok)     |
+| Cron (isolated) | İş başına tam ajan turu; daha ucuz model kullanılabilir                   |
 
 **İpuçları**:
 

@@ -1,18 +1,11 @@
 ---
-summary: 「在價格實惠的 Hetzner VPS（Docker）上 24/7 執行 OpenClaw Gateway 閘道器，具備可持久狀態與內建二進位檔」
+summary: "在價格實惠的 Hetzner VPS（Docker）上 24/7 執行 OpenClaw Gateway 閘道器，具備可持久狀態與內建二進位檔"
 read_when:
-  - 「你想在雲端 VPS（而非你的筆電）上 24/7 執行 OpenClaw」
-  - 「你想在自己的 VPS 上部署生產等級、永遠在線的 Gateway 閘道器」
-  - 「你想完全掌控持久化、二進位檔與重新啟動行為」
-  - 「你正在 Hetzner 或類似供應商上以 Docker 執行 OpenClaw」
-title: 「Hetzner」
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:33Z
+  - 你想在雲端 VPS（而非你的筆電）上 24/7 執行 OpenClaw
+  - 你想在自己的 VPS 上部署生產等級、永遠在線的 Gateway 閘道器
+  - You want full control over persistence, binaries, and restart behavior
+  - 你正在 Hetzner 或類似供應商上以 Docker 執行 OpenClaw
+title: "Hetzner"
 ---
 
 # Hetzner 上的 OpenClaw（Docker，生產 VPS 指南）
@@ -21,6 +14,7 @@ x-i18n:
 
 使用 Docker 在 Hetzner VPS 上執行具備持久狀態、內建二進位檔，且可安全重新啟動的 OpenClaw Gateway 閘道器。
 
+如果你想要「約 ~$5 的 OpenClaw 24/7」，這是最簡單且可靠的設定。
 如果你想要「約 ~$5 的 OpenClaw 24/7」，這是最簡單且可靠的設定。
 Hetzner 的價格可能會變動；請選擇最小的 Debian／Ubuntu VPS，若遇到 OOM 再升級。
 
@@ -35,11 +29,11 @@ Hetzner 的價格可能會變動；請選擇最小的 Debian／Ubuntu VPS，若�
 Gateway 閘道器可透過以下方式存取：
 
 - 從你的筆電進行 SSH 連接埠轉送
-- 若你自行管理防火牆與權杖，則可直接開放連接埠
+- 如果你自行管理防火牆與權杖，可直接對外暴露連接埠
 
 本指南假設你在 Hetzner 上使用 Ubuntu 或 Debian。  
-若你使用其他 Linux VPS，請對應調整套件。
-若要查看通用的 Docker 流程，請參閱 [Docker](/install/docker)。
+如果你使用的是其他 Linux VPS，請相應對應套件名稱。
+如需通用的 Docker 流程，請參考 [Docker](/install/docker)。
 
 ---
 
@@ -50,13 +44,13 @@ Gateway 閘道器可透過以下方式存取：
 3. 複製 OpenClaw 儲存庫
 4. 建立持久化的主機目錄
 5. 設定 `.env` 與 `docker-compose.yml`
-6. 將必要的二進位檔烘焙進映像檔
+6. 將所需的二進位檔案烘焙進映像檔中
 7. `docker compose up -d`
-8. 驗證持久化與 Gateway 閘道器存取
+8. 11. 驗證持久性與 Gateway 存取
 
 ---
 
-## 你需要準備的項目
+## 你需要的項目
 
 - 具備 root 存取權的 Hetzner VPS
 - 從你的筆電進行 SSH 連線
@@ -71,7 +65,7 @@ Gateway 閘道器可透過以下方式存取：
 
 ---
 
-## 1) 建立 VPS
+## 1. 建立 VPS
 
 在 Hetzner 建立一台 Ubuntu 或 Debian VPS。
 
@@ -83,10 +77,11 @@ ssh root@YOUR_VPS_IP
 
 本指南假設該 VPS 是有狀態的。
 請勿將其視為可隨意丟棄的基礎設施。
+請勿將其視為一次性基礎設施。
 
 ---
 
-## 2) 在 VPS 上安裝 Docker
+## 2. 在 VPS 上安裝 Docker
 
 ```bash
 apt-get update
@@ -103,21 +98,21 @@ docker compose version
 
 ---
 
-## 3) 複製 OpenClaw 儲存庫
+## 3. 複製 OpenClaw 儲存庫
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 ```
 
-本指南假設你會建置自訂映像檔，以確保二進位檔的持久性。
+15. 本指南假設你會建立自訂映像以保證二進位檔案的持久性。
 
 ---
 
-## 4) 建立持久化的主機目錄
+## 4. 建立持久化的主機目錄
 
 Docker 容器是短暫的。
-所有長期存在的狀態都必須放在主機上。
+所有長期存在的狀態都必須存放在主機上。
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +125,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) 設定環境變數
+## 5. 設定環境變數
 
 在儲存庫根目錄建立 `.env`。
 
@@ -157,7 +152,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose 設定
+## 6. Docker Compose 設定
 
 建立或更新 `docker-compose.yml`。
 
@@ -204,12 +199,12 @@ services:
 
 ---
 
-## 7) 將必要的二進位檔烘焙進映像檔（關鍵）
+## 7. 將必要的二進位檔烘焙進映像檔（關鍵）
 
-在執行中的容器內安裝二進位檔是一個陷阱。
-任何在執行期安裝的內容，都會在重新啟動時遺失。
+在執行中的容器內安裝二進位檔案是一個陷阱。
+任何在執行時安裝的內容都會在重新啟動後遺失。
 
-Skills 所需的所有外部二進位檔，都必須在映像檔建置時安裝。
+技能所需的所有外部二進位檔都必須在映像建置時安裝。
 
 以下範例僅示範三種常見的二進位檔：
 
@@ -217,8 +212,8 @@ Skills 所需的所有外部二進位檔，都必須在映像檔建置時安裝�
 - 用於 Google Places 的 `goplaces`
 - 用於 WhatsApp 的 `wacli`
 
-這些只是範例，並非完整清單。
-你可以使用相同的模式安裝任意數量的二進位檔。
+以下僅為範例，並非完整清單。
+22. 你可以使用相同的模式安裝任意數量的二進位檔案。
 
 若你之後新增依賴其他二進位檔的 Skills，必須：
 
@@ -267,14 +262,14 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) 建置並啟動
+## 8. 建置並啟動
 
 ```bash
 docker compose build
 docker compose up -d openclaw-gateway
 ```
 
-驗證二進位檔：
+23. 驗證二進位檔案：
 
 ```bash
 docker compose exec openclaw-gateway which gog
@@ -282,7 +277,7 @@ docker compose exec openclaw-gateway which goplaces
 docker compose exec openclaw-gateway which wacli
 ```
 
-預期輸出：
+24. 預期輸出：
 
 ```
 /usr/local/bin/gog
@@ -292,7 +287,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) 驗證 Gateway 閘道器
+## 9. 驗證 Gateway 閘道器
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -314,24 +309,25 @@ ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
 
 `http://127.0.0.1:18789/`
 
-貼上你的 Gateway 閘道器權杖。
+貼上你的 gateway 權杖。
 
 ---
 
-## 各項內容的持久化位置（事實來源）
+## 26. 什麼資料持久化於何處（真實來源）
 
 OpenClaw 在 Docker 中執行，但 Docker 不是事實來源。
 所有長期存在的狀態，都必須能在重新啟動、重建與重新開機後存活。
+27. 所有長期存在的狀態都必須能在重新啟動、重建與重新開機後存活。
 
-| 元件               | 位置                              | 持久化機制         | 備註                        |
-| ------------------ | --------------------------------- | ------------------ | --------------------------- |
-| Gateway 設定       | `/home/node/.openclaw/`           | 主機 Volume 掛載   | 包含 `openclaw.json`、權杖  |
-| 模型身分驗證設定檔 | `/home/node/.openclaw/`           | 主機 Volume 掛載   | OAuth 權杖、API 金鑰        |
-| Skill 設定         | `/home/node/.openclaw/skills/`    | 主機 Volume 掛載   | Skill 層級狀態              |
-| 代理程式工作區     | `/home/node/.openclaw/workspace/` | 主機 Volume 掛載   | 程式碼與代理程式成品        |
-| WhatsApp 工作階段  | `/home/node/.openclaw/`           | 主機 Volume 掛載   | 保留 QR 登入狀態            |
-| Gmail 金鑰圈       | `/home/node/.openclaw/`           | 主機 Volume + 密碼 | 需要 `GOG_KEYRING_PASSWORD` |
-| 外部二進位檔       | `/usr/local/bin/`                 | Docker 映像檔      | 必須在建置時烘焙            |
-| Node 執行環境      | 容器檔案系統                      | Docker 映像檔      | 每次映像檔建置都會重建      |
-| OS 套件            | 容器檔案系統                      | Docker 映像檔      | 請勿在執行期安裝            |
-| Docker 容器        | 短暫                              | 可重新啟動         | 可安全銷毀                  |
+| 元件            | 位置                                | 持久化機制          | 注意事項                      |
+| ------------- | --------------------------------- | -------------- | ------------------------- |
+| Gateway 設定    | `/home/node/.openclaw/`           | 主機磁碟區掛載        | 包含 `openclaw.json`、權杖     |
+| 模型身分驗證設定      | `/home/node/.openclaw/`           | 主機磁碟區掛載        | OAuth 權杖、API 金鑰           |
+| Skill 設定      | `/home/node/.openclaw/skills/`    | 主機磁碟區掛載        | Skill 層級狀態                |
+| 代理程式工作區       | `/home/node/.openclaw/workspace/` | 主機磁碟區掛載        | 程式碼與代理程式成品                |
+| WhatsApp 工作階段 | `/home/node/.openclaw/`           | 主機磁碟區掛載        | 保留 QR 登入狀態                |
+| Gmail 金鑰圈     | `/home/node/.openclaw/`           | 主機 Volume + 密碼 | 需要 `GOG_KEYRING_PASSWORD` |
+| 外部二進位檔        | `/usr/local/bin/`                 | Docker 映像檔     | 必須在建置時烘焙                  |
+| Node 執行環境     | 容器檔案系統                            | Docker 映像檔     | 每次映像檔建置都會重建               |
+| OS 套件         | 容器檔案系統                            | Docker 映像檔     | 請勿在執行期安裝                  |
+| Docker 容器     | 短暫                                | 可重新啟動          | 可安全銷毀                     |

@@ -4,13 +4,6 @@ read_when:
   - Gusto mo ng murang laging-on na Linux host para sa Gateway
   - Gusto mo ng remote Control UI access nang hindi nagpapatakbo ng sarili mong VPS
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:34Z
 ---
 
 # exe.dev
@@ -34,8 +27,8 @@ Ipinapalagay ng pahinang ito ang default na **exeuntu** image ng exe.dev. Kung p
 
 ## Automated Install gamit ang Shelley
 
-Ang Shelley, ang agent ng [exe.dev](https://exe.dev), ay kayang mag-install ng OpenClaw agad gamit ang aming
-prompt. Ang ginamit na prompt ay ang nasa ibaba:
+Si Shelley, ang agent ng [exe.dev](https://exe.dev), ay maaaring mag-install ng OpenClaw kaagad gamit ang aming
+prompt. Ang prompt na ginamit ay nasa ibaba:
 
 ```
 Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw device approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## Manual na pag-install
 
-## 1) Gumawa ng VM
+## 1. Gumawa ng VM
 
 Mula sa iyong device:
 
@@ -57,16 +50,16 @@ Pagkatapos ay kumonek:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: panatilihing **stateful** ang VM na ito. Nag-iimbak ang OpenClaw ng state sa ilalim ng `~/.openclaw/` at `~/.openclaw/workspace/`.
+Tip: panatilihing **stateful** ang VM na ito. Iniimbak ng OpenClaw ang state sa ilalim ng `~/.openclaw/` at `~/.openclaw/workspace/`.
 
-## 2) I-install ang mga paunang kinakailangan (sa VM)
+## 2. I-install ang mga paunang kinakailangan (sa VM)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) I-install ang OpenClaw
+## 3. I-install ang OpenClaw
 
 Patakbuhin ang OpenClaw install script:
 
@@ -74,7 +67,7 @@ Patakbuhin ang OpenClaw install script:
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) I-setup ang nginx para i-proxy ang OpenClaw sa port 8000
+## 4. I-setup ang nginx para i-proxy ang OpenClaw sa port 8000
 
 I-edit ang `/etc/nginx/sites-enabled/default` gamit ang
 
@@ -108,12 +101,12 @@ server {
 }
 ```
 
-## 5) I-access ang OpenClaw at magbigay ng mga pribilehiyo
+## 5. I-access ang OpenClaw at magbigay ng mga pribilehiyo
 
-I-access ang `https://<vm-name>.exe.xyz/` (tingnan ang Control UI output mula sa onboarding). Kung humingi ito ng auth, i-paste ang
-token mula sa `gateway.auth.token` sa VM (kunin gamit ang `openclaw config get gateway.auth.token`, o bumuo ng bago
+I-access ang `https://<vm-name>.exe.xyz/` (tingnan ang output ng Control UI mula sa onboarding). Kung humingi ito ng auth, i-paste ang
+token mula sa `gateway.auth.token` sa VM (kunin gamit ang `openclaw config get gateway.auth.token`, o gumawa ng bago
 gamit ang `openclaw doctor --generate-gateway-token`). I-approve ang mga device gamit ang `openclaw devices list` at
-`openclaw devices approve <requestId>`. Kapag may duda, gamitin ang Shelley mula sa iyong browser!
+`openclaw devices approve <requestId>`. Kapag may pagdududa, gamitin si Shelley mula sa iyong browser!
 
 ## Remote Access
 

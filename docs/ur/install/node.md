@@ -5,18 +5,11 @@ read_when:
   - "OpenClaw انسٹال کرنے سے پہلے آپ کو Node.js انسٹال کرنا ہو"
   - "آپ نے OpenClaw انسٹال کر لیا ہو لیکن `openclaw` کمانڈ نہ مل رہی ہو"
   - "`npm install -g` اجازتوں یا PATH کے مسائل کے ساتھ ناکام ہو رہا ہو"
-x-i18n:
-  source_path: install/node.md
-  source_hash: f848d6473a183090
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # Node.js
 
-OpenClaw کے لیے **Node 22 یا اس سے نیا** درکار ہے۔ [انسٹالر اسکرپٹ](/install#install-methods) خودکار طور پر Node کو شناخت کر کے انسٹال کر دے گا — یہ صفحہ اس صورت کے لیے ہے جب آپ Node کو خود سیٹ اپ کرنا چاہتے ہوں اور یہ یقینی بنانا چاہتے ہوں کہ سب کچھ درست طور پر منسلک ہے (ورژنز، PATH، گلوبل انسٹالز)۔
+OpenClaw کو **Node 22 یا نیا** درکار ہے۔ [installer script](/install#install-methods) خودکار طور پر Node کو ڈٹیکٹ اور انسٹال کرے گا — یہ صفحہ اُن صورتوں کے لیے ہے جب آپ Node خود سیٹ اپ کرنا چاہتے ہوں اور یقینی بنانا چاہتے ہوں کہ سب کچھ درست طریقے سے وائرڈ ہے (ورژنز، PATH، گلوبل انسٹالز)۔
 
 ## اپنا ورژن چیک کریں
 
@@ -24,7 +17,7 @@ OpenClaw کے لیے **Node 22 یا اس سے نیا** درکار ہے۔ [انس
 node -v
 ```
 
-اگر یہ `v22.x.x` یا اس سے زیادہ پرنٹ کرے تو سب ٹھیک ہے۔ اگر Node انسٹال نہیں ہے یا ورژن بہت پرانا ہے تو نیچے دیا گیا کوئی انسٹال طریقہ منتخب کریں۔
+اگر یہ `v22.x.x` یا اس سے زیادہ پرنٹ کرے تو آپ ٹھیک ہیں۔ اگر Node انسٹال نہیں ہے یا ورژن بہت پرانا ہے تو نیچے دیا گیا کوئی انسٹال طریقہ منتخب کریں۔
 
 ## Node انسٹال کریں
 
@@ -32,50 +25,56 @@ node -v
   <Tab title="macOS">
     **Homebrew** (سفارش کردہ):
 
+    ````
     ```bash
     brew install node
     ```
-
+    
     یا [nodejs.org](https://nodejs.org/) سے macOS انسٹالر ڈاؤن لوڈ کریں۔
+    ````
 
   </Tab>
   <Tab title="Linux">
     **Ubuntu / Debian:**
 
+    ````
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
-
+    
     **Fedora / RHEL:**
-
+    
     ```bash
     sudo dnf install nodejs
     ```
-
+    
     یا ورژن مینیجر استعمال کریں (نیچے دیکھیں)۔
+    ````
 
   </Tab>
   <Tab title="Windows">
     **winget** (سفارش کردہ):
 
+    ````
     ```powershell
     winget install OpenJS.NodeJS.LTS
     ```
-
+    
     **Chocolatey:**
-
+    
     ```powershell
     choco install nodejs-lts
     ```
-
+    
     یا [nodejs.org](https://nodejs.org/) سے Windows انسٹالر ڈاؤن لوڈ کریں۔
+    ````
 
   </Tab>
 </Tabs>
 
-<Accordion title="ورژن مینیجر کا استعمال (nvm, fnm, mise, asdf)">
-  ورژن مینیجرز آپ کو Node کے مختلف ورژنز کے درمیان آسانی سے سوئچ کرنے دیتے ہیں۔ مقبول اختیارات:
+<Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
+  ورژن مینیجرز آپ کو Node کے ورژنز کے درمیان آسانی سے سوئچ کرنے دیتے ہیں۔ مقبول آپشنز:
 
 - [**fnm**](https://github.com/Schniz/fnm) — تیز، کراس پلیٹ فارم
 - [**nvm**](https://github.com/nvm-sh/nvm) — macOS/Linux پر وسیع پیمانے پر استعمال ہوتا ہے
@@ -89,7 +88,7 @@ fnm use 22
 ```
 
   <Warning>
-  یقینی بنائیں کہ آپ کا ورژن مینیجر آپ کی شیل کی اسٹارٹ اپ فائل میں initialized ہو (`~/.zshrc` یا `~/.bashrc`)۔ اگر ایسا نہیں ہے تو نئی ٹرمینل سیشنز میں `openclaw` نہیں مل سکتا کیونکہ PATH میں Node کی bin ڈائریکٹری شامل نہیں ہوگی۔
+  یقینی بنائیں کہ آپ کا ورژن مینیجر آپ کی شیل اسٹارٹ اپ فائل (`~/.zshrc` یا `~/.bashrc`) میں initialized ہے۔ If it isn't, `openclaw` may not be found in new terminal sessions because the PATH won't include Node's bin directory.
   </Warning>
 </Accordion>
 
@@ -100,34 +99,38 @@ fnm use 22
 اس کا مطلب تقریباً ہمیشہ یہ ہوتا ہے کہ npm کی گلوبل bin ڈائریکٹری آپ کے PATH میں شامل نہیں ہے۔
 
 <Steps>
-  <Step title="اپنا گلوبل npm prefix معلوم کریں">
+  <Step title="Find your global npm prefix">
     ```bash
     npm prefix -g
     ```
   </Step>
-  <Step title="چیک کریں کہ آیا یہ PATH میں ہے">
+  <Step title="Check if it's on your PATH">
     ```bash
     echo "$PATH"
     ```
 
+    ```
     آؤٹ پٹ میں `<npm-prefix>/bin` (macOS/Linux) یا `<npm-prefix>` (Windows) تلاش کریں۔
+    ```
 
   </Step>
-  <Step title="اسے اپنی شیل اسٹارٹ اپ فائل میں شامل کریں">
+  <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
         `~/.zshrc` یا `~/.bashrc` میں شامل کریں:
 
-        ```bash
-        export PATH="$(npm prefix -g)/bin:$PATH"
         ```
-
-        پھر نئی ٹرمینل کھولیں (یا zsh میں `rehash` چلائیں / bash میں `hash -r`)۔
-      </Tab>
-      <Tab title="Windows">
-        `npm prefix -g` کے آؤٹ پٹ کو Settings → System → Environment Variables کے ذریعے اپنے سسٹم PATH میں شامل کریں۔
-      </Tab>
-    </Tabs>
+            ```bash
+            export PATH="$(npm prefix -g)/bin:$PATH"
+            ```
+        
+            پھر نئی ٹرمینل کھولیں (یا zsh میں `rehash` چلائیں / bash میں `hash -r`)۔
+          </Tab>
+          <Tab title="Windows">
+            `npm prefix -g` کے آؤٹ پٹ کو Settings → System → Environment Variables کے ذریعے اپنے سسٹم PATH میں شامل کریں۔
+          </Tab>
+        </Tabs>
+        ```
 
   </Step>
 </Steps>

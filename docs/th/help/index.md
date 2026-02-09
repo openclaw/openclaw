@@ -4,13 +4,6 @@ read_when:
   - คุณเป็นผู้ใช้ใหม่และต้องการคู่มือแบบ“ต้องคลิก/รันอะไร”
   - เกิดปัญหาและต้องการเส้นทางแก้ไขที่เร็วที่สุด
 title: "ความช่วยเหลือ"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:10Z
 ---
 
 # ความช่วยเหลือ

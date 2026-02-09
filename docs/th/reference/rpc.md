@@ -4,18 +4,11 @@ read_when:
   - การเพิ่มหรือเปลี่ยนการเชื่อมต่อCLIภายนอก
   - การดีบักอะแดปเตอร์RPC(signal-cli, imsg)
 title: "อะแดปเตอร์RPC"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:40Z
 ---
 
 # อะแดปเตอร์RPC
 
-OpenClawผสานรวมCLIภายนอกผ่านJSON-RPC ปัจจุบันมีการใช้งานอยู่สองแพตเทิร์น
+OpenClawผสานรวมCLIภายนอกผ่านJSON-RPC ปัจจุบันมีการใช้งานอยู่สองแพตเทิร์น เมื่อกำหนดทั้ง daily และ idle ไว้พร้อมกัน ตัวที่หมดอายุก่อนจะเป็นตัวชนะ
 
 ## แพตเทิร์นA: HTTP daemon (signal-cli)
 

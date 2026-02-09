@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou modificar migrações do doctor
   - Ao introduzir mudanças de configuração incompatíveis
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:14Z
 ---
 
 # Doctor
@@ -91,17 +84,17 @@ cat ~/.openclaw/openclaw.json
 
 ## Comportamento detalhado e justificativa
 
-### 0) Atualização opcional (instalações via git)
+### 0. Atualização opcional (instalações via git)
 
 Se isto for um checkout git e o doctor estiver sendo executado de forma interativa, ele oferece
 atualizar (fetch/rebase/build) antes de executar o doctor.
 
-### 1) Normalização de configuração
+### 1. Normalização de configuração
 
 Se a configuração contiver formatos de valores legados (por exemplo `messages.ackReaction`
 sem uma sobrescrita específica por canal), o doctor os normaliza para o esquema atual.
 
-### 2) Migrações de chaves de configuração legadas
+### 2. Migrações de chaves de configuração legadas
 
 Quando a configuração contém chaves obsoletas, outros comandos se recusam a executar e pedem
 que você execute `openclaw doctor`.
@@ -139,7 +132,7 @@ sobrescreve o catálogo OpenCode Zen integrado de `@mariozechner/pi-ai`. Isso po
 forçar todos os modelos a usar uma única API ou zerar custos. O Doctor emite um aviso
 para que você possa remover a sobrescrita e restaurar o roteamento de API + custos por modelo.
 
-### 3) Migrações de estado legado (layout em disco)
+### 3. Migrações de estado legado (layout em disco)
 
 O Doctor pode migrar layouts antigos em disco para a estrutura atual:
 
@@ -157,7 +150,7 @@ as sessões legadas + diretório do agente na inicialização para que históric
 caiam no caminho por agente sem uma execução manual do doctor. A autenticação do WhatsApp é
 intencionalmente migrada apenas via `openclaw doctor`.
 
-### 4) Verificações de integridade do estado (persistência de sessão, roteamento e segurança)
+### 4. Verificações de integridade do estado (persistência de sessão, roteamento e segurança)
 
 O diretório de estado é o tronco operacional. Se ele desaparecer, você perde
 sessões, credenciais, logs e configuração (a menos que tenha backups em outro lugar).
@@ -182,7 +175,7 @@ O Doctor verifica:
 - **Permissões do arquivo de configuração**: avisa se `~/.openclaw/openclaw.json` é legível por
   grupo/mundo e oferece restringir para `600`.
 
-### 5) Saúde de autenticação de modelos (expiração de OAuth)
+### 5. Saúde de autenticação de modelos (expiração de OAuth)
 
 O Doctor inspeciona perfis OAuth no armazenamento de autenticação, avisa quando tokens estão
 expirando/expirados e pode atualizá-los quando seguro. Se o perfil Anthropic Claude Code estiver
@@ -195,54 +188,52 @@ O Doctor também relata perfis de autenticação que estão temporariamente inut
 - cooldowns curtos (rate limits/timeouts/falhas de autenticação)
 - desativações mais longas (falhas de faturamento/crédito)
 
-### 6) Validação do modelo de Hooks
+### 6. Validação do modelo de Hooks
 
 Se `hooks.gmail.model` estiver definido, o doctor valida a referência do modelo contra o
 catálogo e a lista de permissões e avisa quando não resolverá ou não é permitido.
 
-### 7) Reparo de imagem de sandbox
+### 7. Reparo de imagem de sandbox
 
 Quando sandboxing está habilitado, o doctor verifica imagens Docker e oferece construir ou
 alternar para nomes legados se a imagem atual estiver ausente.
 
-### 8) Migrações de serviços do Gateway e dicas de limpeza
+### 8. Migrações de serviços do Gateway e dicas de limpeza
 
 O Doctor detecta serviços legados do gateway (launchd/systemd/schtasks) e
-oferece removê-los e instalar o serviço OpenClaw usando a porta atual do gateway.
-Ele também pode varrer serviços semelhantes a gateways extras e imprimir dicas de limpeza.
+oferece removê-los e instalar o serviço OpenClaw usando a porta atual do gateway. Ele também pode varrer serviços semelhantes a gateways extras e imprimir dicas de limpeza.
 Serviços do gateway OpenClaw nomeados por perfil são considerados de primeira classe e não
 são sinalizados como “extras”.
 
-### 9) Avisos de segurança
+### 9. Avisos de segurança
 
 O Doctor emite avisos quando um provedor está aberto a DMs sem uma lista de permissões, ou
 quando uma política está configurada de forma perigosa.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 Se estiver executando como um serviço de usuário do systemd, o doctor garante que o linger
 esteja habilitado para que o gateway permaneça ativo após o logout.
 
-### 11) Status das Skills
+### 11. Status das Skills
 
 O Doctor imprime um resumo rápido de Skills elegíveis/ausentes/bloqueadas para o workspace atual.
 
-### 12) Verificações de autenticação do Gateway (token local)
+### 12. Verificações de autenticação do Gateway (token local)
 
-O Doctor avisa quando `gateway.auth` está ausente em um gateway local e oferece gerar um token.
-Use `openclaw doctor --generate-gateway-token` para forçar a criação de token em automação.
+O Doctor avisa quando `gateway.auth` está ausente em um gateway local e oferece gerar um token. Use `openclaw doctor --generate-gateway-token` para forçar a criação de token em automação.
 
-### 13) Verificação de saúde do Gateway + reinício
+### 13. Verificação de saúde do Gateway + reinício
 
 O Doctor executa uma verificação de saúde e oferece reiniciar o gateway quando ele parece
 não saudável.
 
-### 14) Avisos de status de canais
+### 14. Avisos de status de canais
 
 Se o gateway estiver saudável, o doctor executa uma sondagem de status de canais e relata
 avisos com correções sugeridas.
 
-### 15) Auditoria + reparo da configuração do supervisor
+### 15. Auditoria + reparo da configuração do supervisor
 
 O Doctor verifica a configuração instalada do supervisor (launchd/systemd/schtasks) quanto a
 padrões ausentes ou desatualizados (por exemplo, dependências network-online do systemd e
@@ -257,14 +248,14 @@ Notas:
 - `openclaw doctor --repair --force` sobrescreve configurações personalizadas do supervisor.
 - Você sempre pode forçar uma regravação completa via `openclaw gateway install --force`.
 
-### 16) Diagnósticos de runtime + porta do Gateway
+### 16. Diagnósticos de runtime + porta do Gateway
 
 O Doctor inspeciona o runtime do serviço (PID, último status de saída) e avisa quando o
 serviço está instalado, mas não está realmente em execução. Ele também verifica colisões
 de porta na porta do gateway (padrão `18789`) e relata causas prováveis (gateway já
 em execução, túnel SSH).
 
-### 17) Melhores práticas de runtime do Gateway
+### 17. Melhores práticas de runtime do Gateway
 
 O Doctor avisa quando o serviço do gateway é executado em Bun ou em um caminho de Node
 gerenciado por versões (`nvm`, `fnm`, `volta`, `asdf`, etc.). Canais de WhatsApp + Telegram exigem Node,
@@ -272,12 +263,12 @@ e caminhos de gerenciadores de versão podem quebrar após upgrades porque o ser
 carrega o init do shell. O Doctor oferece migrar para uma instalação de Node do sistema
 quando disponível (Homebrew/apt/choco).
 
-### 18) Gravação de configuração + metadados do assistente
+### 18. Gravação de configuração + metadados do assistente
 
 O Doctor persiste quaisquer alterações de configuração e registra metadados do assistente
 para registrar a execução do doctor.
 
-### 19) Dicas de workspace (backup + sistema de memória)
+### 19. Dicas de workspace (backup + sistema de memória)
 
 O Doctor sugere um sistema de memória de workspace quando ausente e imprime uma dica de
 backup se o workspace ainda não estiver sob git.

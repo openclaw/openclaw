@@ -3,13 +3,6 @@ summary: "Zalo 봇 지원 상태, 기능 및 구성"
 read_when:
   - Zalo 기능 또는 웹훅 작업 시
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:19Z
 ---
 
 # Zalo (Bot API)
@@ -31,7 +24,7 @@ Zalo 는 플러그인으로 제공되며 코어 설치에 번들되어 있지 �
    - npm 에서 (게시된 경우): `openclaw plugins install @openclaw/zalo`
    - 또는 온보딩에서 **Zalo** 를 선택하고 설치 프롬프트를 확인합니다.
 2. 토큰을 설정합니다:
-   - 환경 변수: `ZALO_BOT_TOKEN=...`
+   - Env: `ZALO_BOT_TOKEN=...`
    - 또는 구성: `channels.zalo.botToken: "..."`.
 3. Gateway(게이트웨이) 를 재시작합니다(또는 온보딩을 완료합니다).
 4. DM 접근은 기본적으로 페어링입니다. 최초 접촉 시 페어링 코드를 승인합니다.
@@ -62,7 +55,7 @@ Zalo 는 베트남 중심의 메시징 앱입니다. Bot API 를 통해 Gateway(
 
 ## Setup (fast path)
 
-### 1) 봇 토큰 생성 (Zalo Bot Platform)
+### 1. 봇 토큰 생성 (Zalo Bot Platform)
 
 1. [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) 로 이동하여 로그인합니다.
 2. 새 봇을 생성하고 설정을 구성합니다.
@@ -134,16 +127,16 @@ Zalo 는 베트남 중심의 메시징 앱입니다. Bot API 를 통해 Gateway(
 
 ## Capabilities
 
-| 기능            | 상태                        |
-| --------------- | --------------------------- |
-| 다이렉트 메시지 | ✅ 지원됨                   |
-| 그룹            | ❌ 곧 제공 (Zalo 문서 기준) |
-| 미디어 (이미지) | ✅ 지원됨                   |
-| 반응            | ❌ 미지원                   |
-| 스레드          | ❌ 미지원                   |
-| 투표            | ❌ 미지원                   |
-| 네이티브 명령   | ❌ 미지원                   |
-| 스트리밍        | ⚠️ 차단됨 (2000 자 제한)    |
+| 기능                           | 상태                                     |
+| ---------------------------- | -------------------------------------- |
+| 다이렉트 메시지                     | ✅ 지원됨                                  |
+| 그룹                           | ❌ 곧 제공 (Zalo 문서 기준) |
+| 미디어 (이미지) | ✅ 지원됨                                  |
+| 반응                           | ❌ 미지원                                  |
+| 스레드                          | ❌ 미지원                                  |
+| 투표                           | ❌ 미지원                                  |
+| 네이티브 명령                      | ❌ 미지원                                  |
+| 스트리밍                         | ⚠️ 차단됨 (2000 자 제한)  |
 
 ## Delivery targets (CLI/cron)
 
@@ -152,7 +145,7 @@ Zalo 는 베트남 중심의 메시징 앱입니다. Bot API 를 통해 Gateway(
 
 ## Troubleshooting
 
-**봇이 응답하지 않는 경우:**
+**봇이 응답하지 않음:**
 
 - 토큰이 유효한지 확인합니다: `openclaw channels status --probe`
 - 발신자가 승인되었는지 확인합니다(페어링 또는 allowFrom)

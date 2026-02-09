@@ -4,18 +4,11 @@ read_when:
   - Ollama を介してローカルモデルで OpenClaw を実行したい場合
   - Ollama のセットアップおよび設定ガイダンスが必要な場合
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:05Z
 ---
 
 # Ollama
 
-Ollama は、オープンソースモデルを自身のマシンで簡単に実行できるローカル LLM ランタイムです。OpenClaw は Ollama の OpenAI 互換 API と統合されており、`OLLAMA_API_KEY`（または認証プロファイル）を指定してオプトインし、明示的な `models.providers.ollama` エントリーを定義しない場合、**ツール対応モデルを自動検出**できます。
+Ollama は、オープンソースモデルを自身のマシンで簡単に実行できるローカル LLM ランタイムです。OpenClaw は Ollama の OpenAI 互換 API と統合されており、`OLLAMA_API_KEY`（または認証プロファイル）を指定してオプトインし、明示的な `models.providers.ollama` エントリーを定義しない場合、**ツール対応モデルを自動検出**できます。 OpenClawはOllamaのOpenAI対応APIと統合し、明示的な`モデルを定義しないで、`OLLAMA_API_KEY`（または認証プロファイル）を選択すると**ツール対応モデルを自動検出**することができます。 roviders.ollama`項目。
 
 ## クイックスタート
 
@@ -181,7 +174,7 @@ Ollama は無料でローカル実行されるため、すべてのモデルコ�
 
 ### ストリーミング設定
 
-Ollama のレスポンス形式に関する基盤 SDK の [既知の問題](https://github.com/badlogic/pi-mono/issues/1205) により、**Ollama モデルではストリーミングはデフォルトで無効**になっています。これにより、ツール対応モデル使用時の破損したレスポンスを防止します。
+Ollama のレスポンス形式に関する基盤 SDK の [既知の問題](https://github.com/badlogic/pi-mono/issues/1205) により、**Ollama モデルではストリーミングはデフォルトで無効**になっています。これにより、ツール対応モデル使用時の破損したレスポンスを防止します。 これにより、ツール対応モデルの使用時に破損した応答を防ぎます。
 
 ストリーミングが無効な場合、レスポンスは一括で配信され（非ストリーミングモード）、コンテンツ／推論のデルタが混在して出力が崩れる問題を回避できます。
 
@@ -223,7 +216,7 @@ Ollama でストリーミングを再有効化したい場合（ツール対応�
 
 ### コンテキストウィンドウ
 
-自動検出されたモデルについては、OpenClaw は利用可能な場合に Ollama が報告するコンテキストウィンドウを使用し、そうでない場合は `8192` を既定値として使用します。明示的なプロバイダー設定では、`contextWindow` および `maxTokens` を上書きできます。
+自動検出されたモデルについては、OpenClaw は利用可能な場合に Ollama が報告するコンテキストウィンドウを使用し、そうでない場合は `8192` を既定値として使用します。明示的なプロバイダー設定では、`contextWindow` および `maxTokens` を上書きできます。 明示的なプロバイダ設定で `contextWindow` と `maxTokens` を上書きできます。
 
 ## トラブルシューティング
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### 利用可能なモデルがない
 
-OpenClaw は、ツールサポートを報告するモデルのみを自動検出します。モデルが一覧に表示されない場合は、次のいずれかを行ってください:
+OpenClaw は、ツールサポートを報告するモデルのみを自動検出します。モデルが一覧に表示されない場合は、次のいずれかを行ってください: モデルがリストされていない場合は、次のいずれかを実行します。
 
 - ツール対応モデルを取得する、または
 - `models.providers.ollama` にモデルを明示的に定義する。
@@ -270,14 +263,14 @@ ollama serve
 
 ### レスポンスの破損や出力内のツール名
 
-Ollama モデル使用時に、`sessions_send`、`memory_get` のようなツール名を含む文字化けしたレスポンスや断片化されたテキストが表示される場合、これはストリーミングレスポンスに関する上流 SDK の問題が原因です。最新の OpenClaw バージョンでは、Ollama モデルのストリーミングを無効化することで**既定で修正**されています。
+Ollama モデル使用時に、`sessions_send`、`memory_get` のようなツール名を含む文字化けしたレスポンスや断片化されたテキストが表示される場合、これはストリーミングレスポンスに関する上流 SDK の問題が原因です。最新の OpenClaw バージョンでは、Ollama モデルのストリーミングを無効化することで**既定で修正**されています。 \*\*これはOllamaモデルのストリーミングを無効にすることにより、最新のOpenClawバージョンでデフォルトで修正されています。
 
 ストリーミングを手動で有効化してこの問題が発生した場合は、次のいずれかを行ってください:
 
 1. Ollama のモデルエントリーから `streaming: true` 設定を削除する、または
 2. Ollama モデルに対して `streaming: false` を明示的に設定する（[ストリーミング設定](#ストリーミング-configuration) を参照）
 
-## 関連項目
+## See Also
 
 - [Model Providers](/concepts/model-providers) - すべてのプロバイダーの概要
 - [Model Selection](/concepts/models) - モデルの選び方

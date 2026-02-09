@@ -5,13 +5,6 @@ read_when:
   - Yeni bir kanal biçimlendiricisi veya stil eşlemesi eklendiğinde
   - Kanallar arasında biçimlendirme regresyonları ayıklandığında
 title: "Markdown Biçimlendirme"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:17Z
 ---
 
 # Markdown biçimlendirme
@@ -21,14 +14,14 @@ temsile (IR) dönüştürerek biçimlendirir. IR, kaynak metni olduğu gibi koru
 stil/bağlantı aralıklarını taşır; böylece parçalama ve render işlemleri kanallar
 arasında tutarlı kalır.
 
-## Amaçlar
+## Hedefler
 
 - **Tutarlılık:** tek ayrıştırma adımı, birden fazla render motoru.
 - **Güvenli parçalama:** satır içi biçimlendirme parçalara bölünmeden önce metni ayırma.
 - **Kanala uyum:** Markdown’ı yeniden ayrıştırmadan aynı IR’yi Slack mrkdwn, Telegram HTML
   ve Signal stil aralıklarına eşleme.
 
-## Hat
+## Pipeline
 
 1. **Markdown ayrıştırma -> IR**
    - IR, düz metin ile stil aralıkları (kalın/italik/üstü çizili/kod/spoiler) ve bağlantı aralıklarından oluşur.
@@ -126,7 +119,7 @@ stil aralıklarına eşlenir. Diğer kanallar bunları düz metin olarak ele al�
 5. **Test:** biçim testleri ekleyin veya güncelleyin; kanal parçalama kullanıyorsa
    bir giden teslimat testi ekleyin.
 
-## Yaygın tuzaklar
+## Common gotchas
 
 - Slack köşeli parantez belirteçleri (`<@U123>`, `<#C123>`, `<https://...>`) korunmalıdır; ham HTML’yi güvenle kaçışlayın.
 - Telegram HTML, bozuk işaretlemeyi önlemek için etiketler dışındaki metnin kaçışlanmasını gerektirir.

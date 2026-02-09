@@ -4,18 +4,11 @@ read_when:
   - Du vill ansluta en Feishu/Lark-bot
   - Du konfigurerar Feishu-kanalen
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:30Z
 ---
 
 # Feishu-bot
 
-Feishu (Lark) är en teamchattplattform som används av företag för meddelanden och samarbete. Detta plugin ansluter OpenClaw till en Feishu/Lark-bot med hjälp av plattformens WebSocket-händelseprenumeration, så att meddelanden kan tas emot utan att exponera en publik webhook-URL.
+Feishu (Lark) är en teamchattplattform som används av företag för meddelanden och samarbete. Denna plugin ansluter OpenClaw till en Feishu/Lark bot med hjälp av plattformens WebSocket event prenumeration så att meddelanden kan tas emot utan att exponera en publik webhook-URL.
 
 ---
 
@@ -78,7 +71,7 @@ Välj **Feishu** och ange sedan App ID och App Secret.
 
 ## Steg 1: Skapa en Feishu-app
 
-### 1. Öppna Feishu Open Platform
+### 1. Öppna Feishu Öppen plattform
 
 Besök [Feishu Open Platform](https://open.feishu.cn/app) och logga in.
 
@@ -92,7 +85,7 @@ Lark‑tenants (globalt) ska använda [https://open.larksuite.com/app](https://o
 
 ![Create enterprise app](../images/feishu-step2-create-app.png)
 
-### 3. Kopiera autentiseringsuppgifter
+### 3. Kopiera inloggningsuppgifter
 
 Från **Credentials & Basic Info**, kopiera:
 
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark-domän (global)
 
-Om din tenant är på Lark (internationellt), ställ in domänen till `lark` (eller en fullständig domänsträng). Du kan ställa in den i `channels.feishu.domain` eller per konto (`channels.feishu.accounts.<id>.domain`).
+Om din hyresgäst är på Lark (internationell), ange domänen till `lark` (eller en full domänsträng). Du kan ställa in den i `channels.feishu.domain` eller per konto (`channels.feishu.accounts.<id>.domain`).
 
 ```json5
 {
@@ -231,7 +224,7 @@ Om din tenant är på Lark (internationellt), ställ in domänen till `lark` (el
 
 ## Steg 3: Starta + testa
 
-### 1. Starta gateway
+### 1. Starta gatewayn
 
 ```bash
 openclaw gateway
@@ -241,9 +234,9 @@ openclaw gateway
 
 I Feishu, hitta din bot och skicka ett meddelande.
 
-### 3. Godkänn parning
+### 3. Godkänn parkoppling
 
-Som standard svarar boten med en parningskod. Godkänn den:
+Som standard svarar botten med en parningskod. Godkänn det:
 
 ```bash
 openclaw pairing approve feishu <CODE>
@@ -267,6 +260,7 @@ Efter godkännande kan du chatta normalt.
 ### Direktmeddelanden
 
 - **Standard**: `dmPolicy: "pairing"` (okända användare får en parningskod)
+
 - **Godkänn parning**:
 
   ```bash
@@ -284,7 +278,7 @@ Efter godkännande kan du chatta normalt.
 - `"allowlist"` = tillåt endast `groupAllowFrom`
 - `"disabled"` = inaktivera gruppmeddelanden
 
-**2. Krav på omnämnande** (`channels.feishu.groups.<chat_id>.requireMention`):
+**2. Nämn krav** (`channels.feishu.groups.<chat_id>.requireNämna`):
 
 - `true` = kräver @omnämnande (standard)
 - `false` = svara utan omnämnanden
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### Strömning
 
-Feishu stöder strömmande svar via interaktiva kort. När detta är aktiverat uppdaterar boten ett kort medan den genererar text.
+Feishu stöder strömmande svar via interaktiva kort. När den är aktiverad uppdaterar boten ett kort eftersom det genererar text.
 
 ```json5
 {
@@ -534,34 +528,34 @@ Fullständig konfiguration: [Gateway-konfiguration](/gateway/configuration)
 
 Viktiga alternativ:
 
-| Inställning                                       | Beskrivning                          | Standard  |
-| ------------------------------------------------- | ------------------------------------ | --------- |
-| `channels.feishu.enabled`                         | Aktivera/inaktivera kanal            | `true`    |
-| `channels.feishu.domain`                          | API-domän (`feishu` eller `lark`)    | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                               | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                           | -         |
-| `channels.feishu.accounts.<id>.domain`            | Åsidosättning av API-domän per konto | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM-policy                            | `pairing` |
-| `channels.feishu.allowFrom`                       | DM-tillåtelselista (open_id-lista)   | -         |
-| `channels.feishu.groupPolicy`                     | Grupppolicy                          | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Grupp-tillåtelselista                | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Kräv @omnämnande                     | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Aktivera grupp                       | `true`    |
-| `channels.feishu.textChunkLimit`                  | Meddelandesegmentstorlek             | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Mediastorleksgräns                   | `30`      |
-| `channels.feishu.streaming`                       | Aktivera strömmande kortutdata       | `true`    |
-| `channels.feishu.blockStreaming`                  | Aktivera blockstreaming              | `true`    |
+| Inställning                                       | Beskrivning                                                                | Standard  |
+| ------------------------------------------------- | -------------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | Aktivera/inaktivera kanal                                                  | `true`    |
+| `channels.feishu.domain`                          | API-domän (`feishu` eller `lark`)                       | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                     | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                 | -         |
+| `channels.feishu.accounts.<id>.domain`            | Åsidosättning av API-domän per konto                                       | `feishu`  |
+| `channels.feishu.dmPolicy`                        | DM-policy                                                                  | `pairing` |
+| `channels.feishu.allowFrom`                       | DM-tillåtelselista (open_id-lista) | -         |
+| `channels.feishu.groupPolicy`                     | Grupppolicy                                                                | `open`    |
+| `channels.feishu.groupAllowFrom`                  | Grupp-tillåtelselista                                                      | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | Kräv @omnämnande                                              | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | Aktivera grupp                                                             | `true`    |
+| `channels.feishu.textChunkLimit`                  | Meddelandesegmentstorlek                                                   | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | Mediastorleksgräns                                                         | `30`      |
+| `channels.feishu.streaming`                       | Aktivera strömmande kortutdata                                             | `true`    |
+| `channels.feishu.blockStreaming`                  | Aktivera blockstreaming                                                    | `true`    |
 
 ---
 
 ## dmPolicy-referens
 
-| Värde         | Beteende                                                           |
-| ------------- | ------------------------------------------------------------------ |
+| Värde         | Beteende                                                                           |
+| ------------- | ---------------------------------------------------------------------------------- |
 | `"pairing"`   | **Standard.** Okända användare får en parningskod; måste godkännas |
-| `"allowlist"` | Endast användare i `allowFrom` kan chatta                          |
-| `"open"`      | Tillåt alla användare (kräver `"*"` i allowFrom)                   |
-| `"disabled"`  | Inaktivera DM                                                      |
+| `"allowlist"` | Endast användare i `allowFrom` kan chatta                                          |
+| `"open"`      | Tillåt alla användare (kräver `"*"` i allowFrom)                |
+| `"disabled"`  | Inaktivera DM                                                                      |
 
 ---
 

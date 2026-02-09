@@ -3,13 +3,6 @@ summary: "OpenClaw ایک کثیر-چینل Gateway ہے جو AI ایجنٹس ک
 read_when:
   - نئے صارفین کو OpenClaw سے متعارف کراتے وقت
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:26Z
 ---
 
 # OpenClaw 🦞
@@ -29,11 +22,10 @@ x-i18n:
     />
 </p>
 
-> _"EXFOLIATE! EXFOLIATE!"_ — غالباً ایک خلائی لابسٹر
+> _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
 
-<p align="center">
-  <strong>WhatsApp، Telegram، Discord، iMessage اور مزید پر AI ایجنٹس کے لیے کسی بھی OS کا Gateway۔</strong><br />
-  ایک پیغام بھیجیں، اپنی جیب سے ایجنٹ کا جواب حاصل کریں۔ پلگ اِنز Mattermost اور مزید شامل کرتے ہیں۔
+<p align="center"><strong>Any OS gateway for AI agents across WhatsApp, Telegram, Discord, iMessage, and more.</strong><br />
+  Send a message, get an agent response from your pocket. 35. پلگ اِنز Mattermost اور مزید شامل کرتے ہیں۔
 </p>
 
 <Columns>
@@ -50,7 +42,7 @@ x-i18n:
 
 ## What is OpenClaw?
 
-OpenClaw ایک **self-hosted gateway** ہے جو آپ کی پسندیدہ چیٹ ایپس — WhatsApp، Telegram، Discord، iMessage، اور مزید — کو Pi جیسے AI کوڈنگ ایجنٹس سے جوڑتا ہے۔ آپ اپنی مشین (یا سرور) پر ایک واحد Gateway پروسیس چلاتے ہیں، اور یہ آپ کی میسجنگ ایپس اور ہمیشہ دستیاب AI اسسٹنٹ کے درمیان پل بن جاتا ہے۔
+OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — WhatsApp, Telegram, Discord, iMessage, and more — to AI coding agents like Pi. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
 
 **یہ کس کے لیے ہے؟** ڈویلپرز اور پاور یوزرز کے لیے جو ایک ذاتی AI اسسٹنٹ چاہتے ہیں جسے وہ کہیں سے بھی پیغام بھیج سکیں — اپنے ڈیٹا پر کنٹرول چھوڑے بغیر یا کسی hosted سروس پر انحصار کیے بغیر۔
 
@@ -121,7 +113,7 @@ Gateway سیشنز، routing، اور چینل کنکشنز کے لیے واحد
   </Step>
 </Steps>
 
-کیا آپ کو مکمل انسٹال اور dev سیٹ اپ درکار ہے؟ [Quick start](/start/quickstart) دیکھیں۔
+Need the full install and dev setup? See [Quick start](/start/quickstart).
 
 ## Dashboard
 

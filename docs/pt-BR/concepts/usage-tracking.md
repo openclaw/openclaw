@@ -4,13 +4,6 @@ read_when:
   - Você está conectando superfícies de uso/cota de provedores
   - Você precisa explicar o comportamento do rastreamento de uso ou os requisitos de autenticação
 title: "Rastreamento de uso"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:41Z
 ---
 
 # Rastreamento de uso

@@ -4,13 +4,6 @@ read_when:
   - Ajustar a cadência ou as mensagens do heartbeat
   - Decidir entre heartbeat e cron para tarefas agendadas
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:11Z
 ---
 
 # Heartbeat (Gateway)
@@ -290,12 +283,12 @@ channels:
 
 ### Padrões comuns
 
-| Objetivo                                               | Configuração                                                                             |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| Comportamento padrão (OKs silenciosos, alertas ativos) | _(nenhuma configuração necessária)_                                                      |
+| Objetivo                                                                  | Configuração                                                                             |
+| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Comportamento padrão (OKs silenciosos, alertas ativos) | _(nenhuma configuração necessária)_                                   |
 | Totalmente silencioso (sem mensagens, sem indicador)   | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Apenas indicador (sem mensagens)                       | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OKs em apenas um canal                                 | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OKs em apenas um canal                                                    | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (opcional)
 
@@ -365,6 +358,5 @@ desativado em chats de grupo.
 
 ## Consciência de custo
 
-Os heartbeats executam turnos completos do agente. Intervalos mais curtos consomem mais tokens.
-Mantenha `HEARTBEAT.md` pequeno e considere um `model` ou `target: "none"` mais barato se você
+Os heartbeats executam turnos completos do agente. Intervalos mais curtos consomem mais tokens. Mantenha `HEARTBEAT.md` pequeno e considere um `model` ou `target: "none"` mais barato se você
 quiser apenas atualizações de estado internas.

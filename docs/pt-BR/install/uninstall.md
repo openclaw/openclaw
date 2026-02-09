@@ -4,13 +4,6 @@ read_when:
   - Você quer remover o OpenClaw de uma máquina
   - O serviço do gateway ainda está em execução após a desinstalação
 title: "Desinstalar"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:13Z
 ---
 
 # Desinstalar

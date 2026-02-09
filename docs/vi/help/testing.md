@@ -5,13 +5,6 @@ read_when:
   - Thêm hồi quy cho lỗi mô hình/nhà cung cấp
   - Gỡ lỗi hành vi gateway + tác tử
 title: "Kiểm thử"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:49Z
 ---
 
 # Kiểm thử
@@ -277,13 +270,13 @@ Chọn ít nhất một cho mỗi họ nhà cung cấp:
 Bao phủ bổ sung tùy chọn (có thì tốt):
 
 - xAI: `xai/grok-4` (hoặc bản mới nhất)
-- Mistral: `mistral/`… (chọn một mô hình có khả năng “tools” mà bạn đã bật)
-- Cerebras: `cerebras/`… (nếu bạn có quyền truy cập)
-- LM Studio: `lmstudio/`… (cục bộ; gọi công cụ phụ thuộc chế độ API)
+- Cerebras: `cerebras/`… (chọn một model “tools” mà bạn đã bật)
+- (nếu bạn có quyền truy cập) LM Studio: `lmstudio/`…
+- (cục bộ; việc gọi công cụ phụ thuộc vào chế độ API) (local; tool calling depends on API mode)
 
 ### Thị giác: gửi ảnh (đính kèm → thông điệp đa phương thức)
 
-Bao gồm ít nhất một mô hình có khả năng ảnh trong `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI có thị giác, v.v.) để chạy probe ảnh.
+Bao gồm ít nhất một model có khả năng xử lý hình ảnh trong `OPENCLAW_LIVE_GATEWAY_MODELS` (các biến thể Claude/Gemini/OpenAI có vision, v.v.) to exercise the image probe.
 
 ### Trình tổng hợp / gateway thay thế
 
@@ -297,16 +290,18 @@ Các nhà cung cấp khác bạn có thể đưa vào ma trận live (nếu có 
 - Tích hợp sẵn: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Qua `models.providers` (endpoint tùy chỉnh): `minimax` (cloud/API), cùng mọi proxy tương thích OpenAI/Anthropic (LM Studio, vLLM, LiteLLM, v.v.)
 
-Mẹo: đừng cố hardcode “tất cả mô hình” trong tài liệu. Danh sách chuẩn là những gì `discoverModels(...)` trả về trên máy của bạn + các khóa sẵn có.
+Mẹo: đừng cố hardcode “tất cả các model” trong tài liệu. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
 
 ## Thông tin xác thực (không bao giờ commit)
 
-Test live phát hiện thông tin xác thực giống hệt CLI. Hệ quả thực tế:
+Live tests discover credentials the same way the CLI does. Hệ quả thực tế:
 
 - Nếu CLI chạy được, test live sẽ tìm thấy cùng khóa.
+
 - Nếu test live báo “không có creds”, hãy gỡ lỗi giống như khi gỡ lỗi `openclaw models list` / chọn mô hình.
 
 - Kho profile: `~/.openclaw/credentials/` (ưu tiên; đây là ý nghĩa của “profile keys” trong test)
+
 - Cấu hình: `~/.openclaw/openclaw.json` (hoặc `OPENCLAW_CONFIG_PATH`)
 
 Nếu bạn muốn dựa vào khóa env (ví dụ đã export trong `~/.profile`), hãy chạy test cục bộ sau `source ~/.profile`, hoặc dùng các runner Docker bên dưới (chúng có thể mount `~/.profile` vào container).
@@ -314,7 +309,7 @@ Nếu bạn muốn dựa vào khóa env (ví dụ đã export trong `~/.profile`
 ## Deepgram live (chuyển âm thanh thành văn bản)
 
 - Test: `src/media-understanding/providers/deepgram/audio.live.test.ts`
-- Bật: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
+- Enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
 
 ## Runner Docker (tùy chọn, kiểm tra “chạy được trên Linux”)
 

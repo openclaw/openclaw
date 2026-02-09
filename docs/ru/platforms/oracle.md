@@ -1,17 +1,10 @@
 ---
-summary: «OpenClaw в Oracle Cloud (Always Free ARM)»
+summary: "OpenClaw в Oracle Cloud (Always Free ARM)"
 read_when:
   - Настройка OpenClaw в Oracle Cloud
   - Поиск недорогого VPS-хостинга для OpenClaw
   - Нужен OpenClaw 24/7 на небольшом сервере
-title: «Oracle Cloud»
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:02Z
+title: "Oracle Cloud"
 ---
 
 # OpenClaw в Oracle Cloud (OCI)
@@ -23,17 +16,17 @@ x-i18n:
 Бесплатный тир Oracle хорошо подходит для OpenClaw (особенно если у вас уже есть учётная запись OCI), но у него есть компромиссы:
 
 - ARM‑архитектура (большинство вещей работает, но некоторые бинарники могут быть только x86)
-- Ограниченная ёмкость и нестабильность при регистрации/создании ресурсов
+- Мощность и регистрация могут быть окончательно
 
 ## Сравнение стоимости (2026)
 
-| Провайдер    | План            | Характеристики       | Цена/мес | Примечания                       |
-| ------------ | --------------- | -------------------- | -------- | -------------------------------- |
-| Oracle Cloud | Always Free ARM | до 4 OCPU, 24 ГБ RAM | $0       | ARM, ограниченная ёмкость        |
-| Hetzner      | CX22            | 2 vCPU, 4 ГБ RAM     | ~ $4     | Самый дешёвый платный вариант    |
-| DigitalOcean | Basic           | 1 vCPU, 1 ГБ RAM     | $6       | Удобный UI, хорошая документация |
-| Vultr        | Cloud Compute   | 1 vCPU, 1 ГБ RAM     | $6       | Много локаций                    |
-| Linode       | Nanode          | 1 vCPU, 1 ГБ RAM     | $5       | Теперь часть Akamai              |
+| Провайдер    | План            | Характеристики       | Цена/мес             | Примечания                       |
+| ------------ | --------------- | -------------------- | -------------------- | -------------------------------- |
+| Oracle Cloud | Always Free ARM | до 4 OCPU, 24 ГБ RAM | $0                   | ARM, ограниченная ёмкость        |
+| Hetzner      | CX22            | 2 vCPU, 4 ГБ RAM     | ~ $4 | Самый дешёвый платный вариант    |
+| DigitalOcean | Basic           | 1 vCPU, 1 ГБ RAM     | $6                   | Удобный UI, хорошая документация |
+| Vultr        | Cloud Compute   | 1 vCPU, 1 ГБ RAM     | $6                   | Много локаций                    |
+| Linode       | Nanode          | 1 vCPU, 1 ГБ RAM     | $5                   | Теперь часть Akamai              |
 
 ---
 
@@ -43,7 +36,7 @@ x-i18n:
 - Учётная запись Tailscale (бесплатно на [tailscale.com](https://tailscale.com))
 - ~30 минут
 
-## 1) Создание инстанса OCI
+## 1. Создание инстанса OCI
 
 1. Войдите в [Oracle Cloud Console](https://cloud.oracle.com/)
 2. Перейдите в **Compute → Instances → Create Instance**
@@ -60,7 +53,7 @@ x-i18n:
 
 **Совет:** если создание инстанса завершается ошибкой «Out of capacity», попробуйте другой домен доступности или повторите попытку позже. Ёмкость бесплатного тира ограничена.
 
-## 2) Подключение и обновление
+## 2. Подключение и обновление
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Примечание:** для ARM‑компиляции некоторых зависимостей требуется `build-essential`.
 
-## 3) Настройка пользователя и hostname
+## 3. Настройка пользователя и hostname
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Установка Tailscale
+## 4. Установка Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **С этого момента подключайтесь через Tailscale:** `ssh ubuntu@openclaw` (или используйте IP Tailscale).
 
-## 5) Установка OpenClaw
+## 5. Установка OpenClaw
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,7 +107,7 @@ source ~/.bashrc
 
 > Примечание: если возникнут проблемы со сборкой под ARM, начните с системных пакетов (например, `sudo apt install -y build-essential`), прежде чем использовать Homebrew.
 
-## 6) Настройка Gateway (шлюз) (loopback + аутентификация по токену) и включение Tailscale Serve
+## 6. Настройка Gateway (шлюз) (loopback + аутентификация по токену) и включение Tailscale Serve
 
 Используйте аутентификацию по токену по умолчанию. Это предсказуемо и не требует каких‑либо флагов Control UI для «небезопасной аутентификации».
 
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Проверка
+## 7. Проверка
 
 ```bash
 # Check version
@@ -149,7 +142,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) Усиление безопасности VCN
+## 8. Усиление безопасности VCN
 
 Теперь, когда всё работает, ограничьте VCN, заблокировав весь трафик, кроме Tailscale. Virtual Cloud Network в OCI действует как firewall на границе сети — трафик блокируется до того, как он достигнет инстанса.
 
@@ -286,9 +279,9 @@ uname -m  # Should show aarch64
 
 ---
 
-## Постоянство данных
+## Постоянство
 
-Все данные хранятся в:
+Все состояния хранятся в:
 
 - `~/.openclaw/` — конфиг, учётные данные, данные сеансов
 - `~/.openclaw/workspace/` — рабочее пространство (SOUL.md, память, артефакты)

@@ -5,33 +5,26 @@ read_when:
   - Thiết lập giám sát nền hoặc thông báo
   - Tối ưu hóa việc sử dụng token cho các kiểm tra định kỳ
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:01Z
 ---
 
 # Cron vs Heartbeat: Khi nào nên dùng từng loại
 
-Cả heartbeat và cron jobs đều cho phép bạn chạy tác vụ theo lịch. Hướng dẫn này giúp bạn chọn cơ chế phù hợp cho trường hợp sử dụng của mình.
+Cả heartbeat và cron job đều cho phép bạn chạy tác vụ theo lịch. Hướng dẫn này giúp bạn chọn cơ chế phù hợp cho trường hợp sử dụng của mình.
 
 ## Hướng dẫn quyết định nhanh
 
-| Trường hợp sử dụng                | Khuyến nghị         | Lý do                                         |
-| --------------------------------- | ------------------- | --------------------------------------------- |
-| Kiểm tra hộp thư mỗi 30 phút      | Heartbeat           | Gộp với các kiểm tra khác, nhận biết ngữ cảnh |
+| Trường hợp sử dụng                | Khuyến nghị                            | Lý do                                         |
+| --------------------------------- | -------------------------------------- | --------------------------------------------- |
+| Kiểm tra hộp thư mỗi 30 phút      | Heartbeat                              | Gộp với các kiểm tra khác, nhận biết ngữ cảnh |
 | Gửi báo cáo hằng ngày đúng 9 giờ  | Cron (isolated)     | Cần thời điểm chính xác                       |
-| Theo dõi lịch cho sự kiện sắp tới | Heartbeat           | Phù hợp tự nhiên cho nhận biết định kỳ        |
+| Theo dõi lịch cho sự kiện sắp tới | Heartbeat                              | Phù hợp tự nhiên cho nhận biết định kỳ        |
 | Chạy phân tích sâu hằng tuần      | Cron (isolated)     | Tác vụ độc lập, có thể dùng mô hình khác      |
 | Nhắc tôi sau 20 phút              | Cron (main, `--at`) | Một lần, thời điểm chính xác                  |
-| Kiểm tra sức khỏe dự án nền       | Heartbeat           | Tận dụng chu kỳ hiện có                       |
+| Kiểm tra sức khỏe dự án nền       | Heartbeat                              | Tận dụng chu kỳ hiện có                       |
 
 ## Heartbeat: Nhận biết định kỳ
 
-Heartbeat chạy trong **main session** theo khoảng thời gian đều đặn (mặc định: 30 phút). Chúng được thiết kế để tác tử kiểm tra mọi thứ và làm nổi bật những gì quan trọng.
+Heartbeat chạy trong **phiên chính** theo một khoảng thời gian đều đặn (mặc định: 30 phút). Chúng được thiết kế để agent kiểm tra tình hình và đưa ra bất cứ điều gì quan trọng.
 
 ### Khi nào nên dùng heartbeat
 
@@ -192,8 +185,8 @@ openclaw cron add --name "Call back" --at "2h" --session main --system-event "Ca
 
 ## Lobster: Quy trình xác định với phê duyệt
 
-Lobster là runtime quy trình cho **pipeline công cụ nhiều bước** cần thực thi xác định và phê duyệt rõ ràng.
-Dùng khi tác vụ không chỉ là một lượt tác tử, và bạn muốn một quy trình có thể tiếp tục với các điểm kiểm tra của con người.
+Lobster là runtime quy trình làm việc cho **pipeline công cụ nhiều bước** cần thực thi mang tính quyết định và phê duyệt rõ ràng.
+Hãy dùng nó khi tác vụ không chỉ là một lượt agent duy nhất, và bạn muốn một quy trình có thể tiếp tục lại với các điểm kiểm soát của con người.
 
 ### Khi Lobster phù hợp
 
@@ -206,8 +199,8 @@ Dùng khi tác vụ không chỉ là một lượt tác tử, và bạn muốn m
 - **Heartbeat/cron** quyết định _khi nào_ một lần chạy xảy ra.
 - **Lobster** định nghĩa _những bước nào_ diễn ra khi lần chạy bắt đầu.
 
-Với quy trình theo lịch, dùng cron hoặc heartbeat để kích hoạt một lượt tác tử gọi Lobster.
-Với quy trình ad-hoc, gọi Lobster trực tiếp.
+Đối với các quy trình làm việc theo lịch, hãy dùng cron hoặc heartbeat để kích hoạt một lượt agent gọi Lobster.
+Đối với các quy trình làm việc ad-hoc, hãy gọi Lobster trực tiếp.
 
 ### Ghi chú vận hành (từ mã nguồn)
 
@@ -223,12 +216,12 @@ Xem [Lobster](/tools/lobster) để biết cách dùng và ví dụ đầy đủ
 Cả heartbeat và cron đều có thể tương tác với main session, nhưng theo cách khác nhau:
 
 |          | Heartbeat                    | Cron (main)                 | Cron (isolated)              |
-| -------- | ---------------------------- | --------------------------- | ---------------------------- |
-| Phiên    | Main                         | Main (qua sự kiện hệ thống) | `cron:<jobId>`               |
-| Lịch sử  | Dùng chung                   | Dùng chung                  | Mới mỗi lần chạy             |
-| Ngữ cảnh | Đầy đủ                       | Đầy đủ                      | Không (bắt đầu sạch)         |
-| Mô hình  | Mô hình main session         | Mô hình main session        | Có thể ghi đè                |
-| Đầu ra   | Gửi nếu không `HEARTBEAT_OK` | Prompt heartbeat + sự kiện  | Thông báo tóm tắt (mặc định) |
+| -------- | ---------------------------- | ---------------------------------------------- | ----------------------------------------------- |
+| Phiên    | Main                         | Main (qua sự kiện hệ thống) | `cron:<jobId>`                                  |
+| Lịch sử  | Dùng chung                   | Dùng chung                                     | Mới mỗi lần chạy                                |
+| Ngữ cảnh | Đầy đủ                       | Đầy đủ                                         | Không (bắt đầu sạch)         |
+| Mô hình  | Mô hình main session         | Mô hình main session                           | Có thể ghi đè                                   |
+| Đầu ra   | Gửi nếu không `HEARTBEAT_OK` | Prompt heartbeat + sự kiện                     | Thông báo tóm tắt (mặc định) |
 
 ### Khi nào dùng cron main session
 
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Cân nhắc chi phí
 
-| Cơ chế          | Hồ sơ chi phí                                                  |
-| --------------- | -------------------------------------------------------------- |
-| Heartbeat       | Một lượt mỗi N phút; tăng theo kích thước HEARTBEAT.md         |
-| Cron (main)     | Thêm sự kiện vào heartbeat tiếp theo (không có lượt cô lập)    |
-| Cron (isolated) | Một lượt tác tử đầy đủ cho mỗi job; có thể dùng mô hình rẻ hơn |
+| Cơ chế                             | Hồ sơ chi phí                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------ |
+| Heartbeat                          | Một lượt mỗi N phút; tăng theo kích thước HEARTBEAT.md         |
+| Cron (main)     | Thêm sự kiện vào heartbeat tiếp theo (không có lượt cô lập) |
+| Cron (isolated) | Một lượt tác tử đầy đủ cho mỗi job; có thể dùng mô hình rẻ hơn                 |
 
 **Mẹo**:
 

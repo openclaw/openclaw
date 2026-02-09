@@ -5,13 +5,6 @@ read_when:
   - "تحتاج إلى تثبيت Node.js قبل تثبيت OpenClaw"
   - "قمت بتثبيت OpenClaw لكن يظهر الخطأ بأن الأمر `openclaw` غير موجود"
   - "يفشل `npm install -g` بسبب الأذونات أو مشاكل PATH"
-x-i18n:
-  source_path: install/node.md
-  source_hash: f848d6473a183090
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:27Z
 ---
 
 # Node.js
@@ -32,49 +25,55 @@ node -v
   <Tab title="macOS">
     **Homebrew** (موصى به):
 
+    ````
     ```bash
     brew install node
     ```
-
+    
     أو قم بتنزيل مُثبّت macOS من [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
   <Tab title="Linux">
     **Ubuntu / Debian:**
 
+    ````
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
-
+    
     **Fedora / RHEL:**
-
+    
     ```bash
     sudo dnf install nodejs
     ```
-
+    
     أو استخدم مدير إصدارات (انظر أدناه).
+    ````
 
   </Tab>
   <Tab title="Windows">
     **winget** (موصى به):
 
+    ````
     ```powershell
     winget install OpenJS.NodeJS.LTS
     ```
-
+    
     **Chocolatey:**
-
+    
     ```powershell
     choco install nodejs-lts
     ```
-
+    
     أو قم بتنزيل مُثبّت Windows من [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
 </Tabs>
 
-<Accordion title="استخدام مدير إصدارات (nvm، fnm، mise، asdf)">
+<Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
   تتيح لك مدراء الإصدارات التبديل بين إصدارات Node بسهولة. من الخيارات الشائعة:
 
 - [**fnm**](https://github.com/Schniz/fnm) — سريع ومتعدد المنصات
@@ -100,34 +99,38 @@ fnm use 22
 يعني هذا في الغالب أن دليل bin العام لـ npm غير موجود على PATH.
 
 <Steps>
-  <Step title="اعثر على بادئة npm العامة">
+  <Step title="Find your global npm prefix">
     ```bash
     npm prefix -g
     ```
   </Step>
-  <Step title="تحقق مما إذا كانت على PATH">
+  <Step title="Check if it's on your PATH">
     ```bash
     echo "$PATH"
     ```
 
+    ```
     ابحث عن `<npm-prefix>/bin` (macOS/Linux) أو `<npm-prefix>` (Windows) في المخرجات.
+    ```
 
   </Step>
-  <Step title="أضِفها إلى ملف بدء تشغيل الصدفة">
+  <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
         أضِف إلى `~/.zshrc` أو `~/.bashrc`:
 
-        ```bash
-        export PATH="$(npm prefix -g)/bin:$PATH"
         ```
-
-        ثم افتح طرفية جديدة (أو شغّل `rehash` في zsh / `hash -r` في bash).
-      </Tab>
-      <Tab title="Windows">
-        أضِف مخرجات `npm prefix -g` إلى PATH الخاص بالنظام عبر الإعدادات → النظام → متغيرات البيئة.
-      </Tab>
-    </Tabs>
+            ```bash
+            export PATH="$(npm prefix -g)/bin:$PATH"
+            ```
+        
+            ثم افتح طرفية جديدة (أو شغّل `rehash` في zsh / `hash -r` في bash).
+          </Tab>
+          <Tab title="Windows">
+            أضِف مخرجات `npm prefix -g` إلى PATH الخاص بالنظام عبر الإعدادات → النظام → متغيرات البيئة.
+          </Tab>
+        </Tabs>
+        ```
 
   </Step>
 </Steps>

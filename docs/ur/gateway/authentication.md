@@ -4,20 +4,13 @@ read_when:
   - ماڈل تصدیق یا OAuth کی میعاد ختم ہونے کی خرابیوں کی جانچ کے وقت
   - تصدیق یا اسناد کے ذخیرے کی دستاویز بندی کرتے وقت
 title: "تصدیق"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:15Z
 ---
 
 # تصدیق
 
-OpenClaw ماڈل فراہم کنندگان کے لیے OAuth اور API کلیدوں کی معاونت کرتا ہے۔ Anthropic
-اکاؤنٹس کے لیے ہم **API کلید** استعمال کرنے کی سفارش کرتے ہیں۔ Claude سبسکرپشن تک رسائی کے لیے،
-`claude setup-token` کے ذریعے تخلیق کیا گیا طویل المدتی ٹوکن استعمال کریں۔
+OpenClaw ماڈل فراہم کنندگان کے لیے OAuth اور API keys کو سپورٹ کرتا ہے۔ Anthropic
+اکاؤنٹس کے لیے، ہم **API key** استعمال کرنے کی سفارش کرتے ہیں۔ Claude سبسکرپشن ایکسس کے لیے،
+`claude setup-token` کے ذریعے بنایا گیا long‑lived ٹوکن استعمال کریں۔
 
 OAuth کے مکمل فلو اور اسٹوریج لے آؤٹ کے لیے
 [/concepts/oauth](/concepts/oauth) دیکھیں۔
@@ -58,9 +51,8 @@ env inheritance کی تفصیلات کے لیے [Help](/help) دیکھیں
 
 ## Anthropic: setup-token (سبسکرپشن تصدیق)
 
-Anthropic کے لیے سفارش کردہ راستہ **API کلید** ہے۔ اگر آپ Claude
-سبسکرپشن استعمال کر رہے ہیں تو setup-token فلو بھی دستیاب ہے۔
-اسے **گیٹ وے ہوسٹ** پر چلائیں:
+Anthropic کے لیے، تجویز کردہ راستہ **API key** ہے۔ اگر آپ Claude
+سبسکرپشن استعمال کر رہے ہیں، تو setup-token فلو بھی سپورٹڈ ہے۔ اسے **gateway host** پر چلائیں:
 
 ```bash
 claude setup-token
@@ -150,8 +142,8 @@ openclaw models status
 
 ### ٹوکن کی میعاد ختم ہو رہی ہے/ختم ہو چکی ہے
 
-یہ تصدیق کرنے کے لیے کہ کون سا پروفائل ختم ہو رہا ہے، `openclaw models status` چلائیں۔
-اگر پروفائل موجود نہیں ہے تو `claude setup-token` دوبارہ چلائیں اور ٹوکن پھر سے پیسٹ کریں۔
+`openclaw models status` چلائیں تاکہ یہ تصدیق ہو سکے کہ کون سا پروفائل expire ہو رہا ہے۔ اگر پروفائل
+غائب ہو، تو `claude setup-token` دوبارہ چلائیں اور ٹوکن دوبارہ پیسٹ کریں۔
 
 ## ضروریات
 

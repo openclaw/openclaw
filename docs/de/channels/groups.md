@@ -1,15 +1,8 @@
 ---
-summary: „Verhalten von Gruppenchats über Oberflächen hinweg (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/Microsoft Teams)“
+summary: "„Verhalten von Gruppenchats über Oberflächen hinweg (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/Microsoft Teams)“"
 read_when:
   - Ändern des Verhaltens von Gruppenchats oder der Mention-Gating-Regeln
-title: „Gruppen“
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:27Z
+title: "„Gruppen“"
 ---
 
 # Gruppen
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Wenn Sie möchten …
 
-| Ziel                                                    | Einstellung                                                |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| Alle Gruppen zulassen, aber nur auf @mentions antworten | `groups: { "*": { requireMention: true } }`                |
-| Alle Gruppenantworten deaktivieren                      | `groupPolicy: "disabled"`                                  |
-| Nur bestimmte Gruppen                                   | `groups: { "<group-id>": { ... } }` (kein `"*"`-Schlüssel) |
-| Nur Sie können in Gruppen auslösen                      | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Ziel                                                                 | Einstellung                                                                   |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Alle Gruppen zulassen, aber nur auf @mentions antworten | `groups: { "*": { requireMention: true } }`                                   |
+| Alle Gruppenantworten deaktivieren                                   | `groupPolicy: "disabled"`                                                     |
+| Nur bestimmte Gruppen                                                | `groups: { "<group-id>": { ... } }` (kein `"*"`-Schlüssel) |
+| Nur Sie können in Gruppen auslösen                                   | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                    |
 
 ## Sitzungsschlüssel
 
@@ -181,8 +174,8 @@ Steuern Sie, wie Gruppen-/Raumnachrichten pro Kanal behandelt werden:
 }
 ```
 
-| Richtlinie    | Verhalten                                                                 |
-| ------------- | ------------------------------------------------------------------------- |
+| Richtlinien   | Verhalten                                                                                 |
+| ------------- | ----------------------------------------------------------------------------------------- |
 | `"open"`      | Gruppen umgehen Allowlists; Mention-Gating gilt weiterhin.                |
 | `"disabled"`  | Alle Gruppennachrichten vollständig blockieren.                           |
 | `"allowlist"` | Nur Gruppen/Räume zulassen, die der konfigurierten Allowlist entsprechen. |

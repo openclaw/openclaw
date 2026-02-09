@@ -4,18 +4,11 @@ read_when:
   - Thêm hoặc sửa đổi các lệnh hoặc tùy chọn CLI
   - Ghi tài liệu cho các bề mặt lệnh mới
 title: "Tham chiếu CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:22Z
 ---
 
 # Tham chiếu CLI
 
-Trang này mô tả hành vi CLI hiện tại. Nếu các lệnh thay đổi, hãy cập nhật tài liệu này.
+Trang này mô tả hành vi CLI hiện tại. `openclaw plugins enable <id>` / `disable <id>` — bật/tắt \`plugins.entries.<id>
 
 ## Trang lệnh
 
@@ -262,7 +255,7 @@ Quản lý các phần mở rộng và cấu hình của chúng:
 - `openclaw plugins enable <id>` / `disable <id>` — bật/tắt `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — báo cáo lỗi tải plugin.
 
-Hầu hết thay đổi plugin yêu cầu khởi động lại gateway. Xem [/plugin](/tools/plugin).
+Xem [/plugin](/tools/plugin). Xem [/plugin](/tools/plugin).
 
 ## Memory
 
@@ -350,8 +343,7 @@ Trình hướng dẫn cấu hình tương tác (mô hình, kênh, skills, gatewa
 
 ### `config`
 
-Các trợ giúp cấu hình không tương tác (get/set/unset). Chạy `openclaw config` không kèm
-lệnh con sẽ mở trình hướng dẫn.
+Các trợ giúp cấu hình không tương tác (get/set/unset). Thiết lập + runner hook Gmail Pub/Sub.
 
 Lệnh con:
 
@@ -456,7 +448,7 @@ Lệnh con:
 
 ### `webhooks gmail`
 
-Thiết lập + chạy hook Gmail Pub/Sub. Xem [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Xem [/automation/gmail-pubsub](/automation/gmail-pubsub). Helper DNS khám phá diện rộng (CoreDNS + Tailscale).
 
 Lệnh con:
 
@@ -465,7 +457,7 @@ Lệnh con:
 
 ### `dns setup`
 
-Trợ giúp DNS khám phá diện rộng (CoreDNS + Tailscale). Xem [/gateway/discovery](/gateway/discovery).
+Trợ giúp DNS khám phá diện rộng (CoreDNS + Tailscale). `openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
 
 Tùy chọn:
 
@@ -531,7 +523,7 @@ Tùy chọn:
 
 #### `agents add [name]`
 
-Thêm một tác tử cô lập mới. Chạy trình hướng dẫn có dẫn dắt trừ khi truyền cờ (hoặc `--non-interactive`); `--workspace` là bắt buộc trong chế độ không tương tác.
+Thêm một agent độc lập mới. Chạy trình hướng dẫn có hướng dẫn trừ khi có cờ (hoặc `--non-interactive`) được truyền; `--workspace` là bắt buộc ở chế độ không tương tác.
 
 Tùy chọn:
 
@@ -542,7 +534,7 @@ Tùy chọn:
 - `--non-interactive`
 - `--json`
 
-Đặc tả ràng buộc dùng `channel[:accountId]`. Khi bỏ qua `accountId` cho WhatsApp, id tài khoản mặc định được dùng.
+`gateway status` cũng hiển thị các dịch vụ gateway cũ hoặc bổ sung khi có thể phát hiện (`--deep` thêm các quét ở mức hệ thống). When `accountId` is omitted for WhatsApp, the default account id is used.
 
 #### `agents delete <id>`
 
@@ -694,7 +686,7 @@ Ghi chú:
 
 - `gateway status` mặc định thăm dò RPC của Gateway bằng cổng/cấu hình đã phân giải của dịch vụ (ghi đè bằng `--url/--token/--password`).
 - `gateway status` hỗ trợ `--no-probe`, `--deep` và `--json` cho scripting.
-- `gateway status` cũng hiển thị các dịch vụ gateway cũ hoặc bổ sung khi có thể phát hiện (`--deep` thêm quét cấp hệ thống). Các dịch vụ OpenClaw đặt tên theo hồ sơ được xem là hạng nhất và không bị gắn cờ “extra”.
+- `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Các dịch vụ OpenClaw được đặt tên theo profile được xem là hạng nhất và không bị gắn cờ là "extra".
 - `gateway status` in đường dẫn cấu hình CLI đang dùng so với cấu hình mà dịch vụ có khả năng dùng (env của dịch vụ), cùng URL mục tiêu thăm dò đã phân giải.
 - `gateway install|uninstall|start|stop|restart` hỗ trợ `--json` cho scripting (đầu ra mặc định vẫn thân thiện với người).
 - `gateway install` mặc định dùng runtime Node; bun **không được khuyến nghị** (lỗi WhatsApp/Telegram).
@@ -721,9 +713,9 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Các trợ giúp CLI của Gateway (dùng `--url`, `--token`, `--password`, `--timeout`, `--expect-final` cho các lệnh con RPC).
-Khi bạn truyền `--url`, CLI sẽ không tự động áp dụng cấu hình hoặc thông tin xác thực từ môi trường.
-Hãy bao gồm `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là lỗi.
+Các trợ giúp Gateway CLI (dùng `--url`, `--token`, `--password`, `--timeout`, `--expect-final` cho các lệnh con RPC).
+Khi bạn truyền `--url`, CLI không tự động áp dụng thông tin xác thực từ cấu hình hoặc môi trường.
+Bao gồm `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là một lỗi.
 
 Lệnh con:
 
@@ -789,7 +781,7 @@ Tùy chọn:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-Luôn bao gồm tổng quan xác thực và trạng thái hết hạn OAuth cho các hồ sơ trong kho xác thực.
+Luôn bao gồm tổng quan xác thực và trạng thái hết hạn OAuth cho các profile trong kho xác thực.
 `--probe` chạy các yêu cầu trực tiếp (có thể tiêu tốn token và kích hoạt giới hạn tốc độ).
 
 ### `models set <model>`
@@ -895,7 +887,7 @@ Tùy chọn:
 
 ## Cron
 
-Quản lý các tác vụ theo lịch (RPC của Gateway). Xem [/automation/cron-jobs](/automation/cron-jobs).
+Quản lý các job đã lên lịch (Gateway RPC). Xem [/automation/cron-jobs](/automation/cron-jobs).
 
 Lệnh con:
 
@@ -913,7 +905,7 @@ Tất cả các lệnh `cron` chấp nhận `--url`, `--token`, `--timeout`, `--
 
 ## Node host
 
-`node` chạy một **node host headless** hoặc quản lý nó như một dịch vụ nền. Xem
+`node` chạy một **máy chủ node không giao diện (headless)** hoặc quản lý nó như một dịch vụ nền. Xem
 [`openclaw node`](/cli/node).
 
 Lệnh con:
@@ -927,7 +919,7 @@ Lệnh con:
 
 ## Nodes
 
-`nodes` giao tiếp với Gateway và nhắm tới các node đã ghép cặp. Xem [/nodes](/nodes).
+`nodes` giao tiếp với Gateway và nhắm tới các node đã được ghép cặp. Xem [/nodes](/nodes).
 
 Tùy chọn chung:
 
@@ -969,7 +961,7 @@ Vị trí:
 
 ## Trình duyệt
 
-CLI điều khiển trình duyệt (Chrome/Brave/Edge/Chromium chuyên dụng). Xem [`openclaw browser`](/cli/browser) và [Công cụ Browser](/tools/browser).
+CLI điều khiển trình duyệt (Chrome/Brave/Edge/Chromium chuyên dụng). Xem [`openclaw browser`](/cli/browser) và [Browser tool](/tools/browser).
 
 Tùy chọn chung:
 

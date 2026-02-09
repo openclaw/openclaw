@@ -4,18 +4,11 @@ read_when:
   - Utformning eller omarbetning av medieförståelse
   - Justering av förbehandling av inkommande ljud/video/bild
 title: "Medieförståelse"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:59Z
 ---
 
 # Medieförståelse (inkommande) — 2026-01-17
 
-OpenClaw kan **sammanfatta inkommande media** (bild/ljud/video) innan svarsflödet körs. Det identifierar automatiskt när lokala verktyg eller leverantörsnycklar finns tillgängliga och kan inaktiveras eller anpassas. Om förståelse är avstängd får modellerna fortfarande originalfilerna/URL:erna som vanligt.
+OpenClaw kan **sammanfatta inkommande media** (bild/ljud/video) innan svarsledningen körs. Det detekterar automatiskt när lokala verktyg eller leverantörsnycklar är tillgängliga, och kan inaktiveras eller anpassas. Om förståelsen är avstängd får modellerna fortfarande de ursprungliga filerna/webbadresserna som vanligt.
 
 ## Mål
 
@@ -137,8 +130,8 @@ Regler:
 
 ### Automatisk identifiering av medieförståelse (standard)
 
-Om `tools.media.<capability>.enabled` **inte** är satt till `false` och du inte har
-konfigurerat modeller, identifierar OpenClaw automatiskt i denna ordning och **stannar vid första
+Om `tools.media.<capability>.enabled` är **inte** satt till `false` och du har inte
+konfigurerade modeller, OpenClaw auto-detekterar i denna ordning och **stannar vid det första
 fungerande alternativet**:
 
 1. **Lokala CLI:er** (endast ljud; om installerade)
@@ -169,24 +162,24 @@ Obs: Binär identifiering är best‑effort över macOS/Linux/Windows; säkerst�
 
 ## Kapaciteter (valfritt)
 
-Om du sätter `capabilities` körs posten endast för dessa medietyper. För delade
-listor kan OpenClaw härleda standarder:
+Om du anger `capabilities`, posten körs endast för dessa mediatyper. För delade
+listor kan OpenClaw dra slutsatsen standard:
 
 - `openai`, `anthropic`, `minimax`: **bild**
 - `google` (Gemini API): **bild + ljud + video**
 - `groq`: **ljud**
 - `deepgram`: **ljud**
 
-För CLI‑poster, **ange `capabilities` explicit** för att undvika överraskande matchningar.
-Om du utelämnar `capabilities` är posten kvalificerad för listan den förekommer i.
+För CLI-poster, **ställ in `kapaciteter` explicitt** för att undvika överraskande matcher.
+Om du utelämnar `capabilities`, är posten berättigad till listan den visas i.
 
 ## Matris för leverantörsstöd (OpenClaw‑integrationer)
 
-| Kapacitet | Leverantörsintegration                          | Noteringar                                           |
-| --------- | ----------------------------------------------- | ---------------------------------------------------- |
-| Bild      | OpenAI / Anthropic / Google / andra via `pi-ai` | Alla bildkapabla modeller i registret fungerar.      |
+| Kapacitet | Leverantörsintegration                          | Noteringar                                                                              |
+| --------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Bild      | OpenAI / Anthropic / Google / andra via `pi-ai` | Alla bildkapabla modeller i registret fungerar.                         |
 | Ljud      | OpenAI, Groq, Deepgram, Google                  | Leverantörstranskribering (Whisper/Deepgram/Gemini). |
-| Video     | Google (Gemini API)                             | Leverantörsbaserad videoförståelse.                  |
+| Video     | Google (Gemini API)          | Leverantörsbaserad videoförståelse.                                     |
 
 ## Rekommenderade leverantörer
 
@@ -218,7 +211,7 @@ När `mode: "all"` märks utdata som `[Image 1/2]`, `[Audio 2/2]`, osv.
 
 ## Konfigexempel
 
-### 1) Delad modellista + åsidosättningar
+### 1. Delad modellista + åsidosättningar
 
 ```json5
 {
@@ -255,7 +248,7 @@ När `mode: "all"` märks utdata som `[Image 1/2]`, `[Audio 2/2]`, osv.
 }
 ```
 
-### 2) Endast ljud + video (bild av)
+### 2. Endast ljud + video (bild av)
 
 ```json5
 {
@@ -295,7 +288,7 @@ När `mode: "all"` märks utdata som `[Image 1/2]`, `[Audio 2/2]`, osv.
 }
 ```
 
-### 3) Valfri bildförståelse
+### 3. Valfri bildförståelse
 
 ```json5
 {
@@ -326,7 +319,7 @@ När `mode: "all"` märks utdata som `[Image 1/2]`, `[Audio 2/2]`, osv.
 }
 ```
 
-### 4) Multimodal enskild post (explicita kapaciteter)
+### 4. Multimodal enskild post (explicita kapaciteter)
 
 ```json5
 {
@@ -376,7 +369,7 @@ Detta visar utfall per kapacitet samt vald leverantör/modell när tillämpligt.
 
 ## Noteringar
 
-- Förståelse är **best‑effort**. Fel blockerar inte svar.
+- Förståelse är **bäst-ansträngning**. Fel blockerar inte svar.
 - Bilagor skickas fortfarande till modeller även när förståelse är inaktiverad.
 - Använd `scope` för att begränsa var förståelse körs (t.ex. endast DM).
 

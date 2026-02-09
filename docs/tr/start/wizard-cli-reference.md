@@ -5,13 +5,6 @@ read_when:
   - Onboarding sonuçlarını hata ayıklarken veya onboarding istemcilerini entegre ederken
 title: "CLI Onboarding Referansı"
 sidebarTitle: "CLI referansı"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:04Z
 ---
 
 # CLI Onboarding Referansı
@@ -37,19 +30,19 @@ Uzak ana makinede hiçbir şey kurmaz veya değiştirmez.
 ## Yerel akış ayrıntıları
 
 <Steps>
-  <Step title="Mevcut yapılandırmanın algılanması">
+  <Step title="Existing config detection">
     - `~/.openclaw/openclaw.json` varsa, Koru, Değiştir veya Sıfırla seçeneklerinden birini seçin.
     - Wizard’ı yeniden çalıştırmak, açıkça Sıfırla’yı seçmedikçe (veya `--reset` geçmedikçe) hiçbir şeyi silmez.
     - Yapılandırma geçersizse veya eski anahtarlar içeriyorsa, wizard durur ve devam etmeden önce `openclaw doctor` çalıştırmanızı ister.
     - Sıfırlama `trash` kullanır ve kapsamlar sunar:
       - Yalnızca yapılandırma
       - Yapılandırma + kimlik bilgileri + oturumlar
-      - Tam sıfırlama (çalışma alanını da kaldırır)
-  </Step>
-  <Step title="Model ve kimlik doğrulama">
+      - Tam sıfırlama (çalışma alanını da kaldırır)  
+</Step>
+  <Step title="Model and auth">
     - Tüm seçenek matrisi [Kimlik doğrulama ve model seçenekleri](#auth-and-model-options) bölümündedir.
   </Step>
-  <Step title="Çalışma alanı">
+  <Step title="Workspace">
     - Varsayılan `~/.openclaw/workspace` (yapılandırılabilir).
     - İlk çalıştırma bootstrap ritüeli için gereken çalışma alanı dosyalarını oluşturur.
     - Çalışma alanı düzeni: [Ajan çalışma alanı](/concepts/agent-workspace).
@@ -60,7 +53,7 @@ Uzak ana makinede hiçbir şey kurmaz veya değiştirmez.
     - Yalnızca tüm yerel süreçlere tamamen güveniyorsanız kimlik doğrulamayı devre dışı bırakın.
     - Loopback olmayan bind’ler yine kimlik doğrulama gerektirir.
   </Step>
-  <Step title="Kanallar">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): isteğe bağlı QR girişi
     - [Telegram](/channels/telegram): bot belirteci
     - [Discord](/channels/discord): bot belirteci
@@ -70,7 +63,8 @@ Uzak ana makinede hiçbir şey kurmaz veya değiştirmez.
     - [BlueBubbles](/channels/bluebubbles): iMessage için önerilir; sunucu URL’si + parola + webhook
     - [iMessage](/channels/imessage): eski `imsg` CLI yolu + DB erişimi
     - DM güvenliği: varsayılan eşleştirmedir. İlk DM bir kod gönderir; şu yollarla onaylayın:
-      `openclaw pairing approve <channel> <code>` veya izin listelerini kullanın.
+      `openclaw pairing approve <channel><code>` veya izin listelerini kullanın.
+  </Step><code>` veya izin listelerini kullanın.
   </Step>
   <Step title="Daemon kurulumu">
     - macOS: LaunchAgent
@@ -107,7 +101,7 @@ Uzak mod, bu makineyi başka bir yerdeki bir gateway’e bağlanacak şekilde ya
 Uzak mod, uzak ana makinede hiçbir şey kurmaz veya değiştirmez.
 </Info>
 
-Ayarladıklarınız:
+7. Ayarladıklarınız:
 
 - Uzak gateway URL’si (`ws://...`)
 - Uzak gateway kimlik doğrulaması gerekiyorsa belirteç (önerilir)
@@ -122,44 +116,50 @@ Ayarladıklarınız:
 ## Kimlik doğrulama ve model seçenekleri
 
 <AccordionGroup>
-  <Accordion title="Anthropic API anahtarı (önerilir)">
+  <Accordion title="Anthropic API key (recommended)">
     Mevcutsa `ANTHROPIC_API_KEY` kullanır veya bir anahtar ister; ardından daemon kullanımı için kaydeder.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: Keychain öğesi "Claude Code-credentials" kontrol edilir
     - Linux ve Windows: mevcutsa `~/.claude/.credentials.json` yeniden kullanılır
 
+    ```
     macOS’ta, launchd başlatmalarının engellenmemesi için "Always Allow" seçin.
+    ```
 
   </Accordion>
-  <Accordion title="Anthropic belirteci (setup-token yapıştırma)">
+  <Accordion title="Anthropic token (setup-token paste)">
     Herhangi bir makinede `claude setup-token` çalıştırın, ardından belirteci yapıştırın.
     İsim verebilirsiniz; boş bırakılırsa varsayılan kullanılır.
   </Accordion>
-  <Accordion title="OpenAI Code aboneliği (Codex CLI yeniden kullanımı)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     `~/.codex/auth.json` varsa, wizard bunu yeniden kullanabilir.
   </Accordion>
-  <Accordion title="OpenAI Code aboneliği (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     Tarayıcı akışı; `code#state` yapıştırın.
 
+    ```
     Model ayarlanmamışsa veya `openai/*` ise `agents.defaults.model`’yi `openai-codex/gpt-5.3-codex` olarak ayarlar.
+    ```
 
   </Accordion>
-  <Accordion title="OpenAI API anahtarı">
+  <Accordion title="OpenAI API key">
     Mevcutsa `OPENAI_API_KEY` kullanır veya bir anahtar ister; ardından launchd’ın okuyabilmesi için
     `~/.openclaw/.env` içine kaydeder.
 
+    ```
     Model ayarlanmamışsa, `openai/*` veya `openai-codex/*` ise `agents.defaults.model`’yi `openai/gpt-5.1-codex` olarak ayarlar.
+    ```
 
   </Accordion>
-  <Accordion title="xAI (Grok) API anahtarı">
+  <Accordion title="xAI (Grok) API key">
     `XAI_API_KEY` ister ve xAI’yi bir model sağlayıcı olarak yapılandırır.
   </Accordion>
   <Accordion title="OpenCode Zen">
     `OPENCODE_API_KEY` (veya `OPENCODE_ZEN_API_KEY`) ister.
     Kurulum URL’si: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="API anahtarı (genel)">
+  <Accordion title="API key (generic)">
     Anahtarı sizin için saklar.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
@@ -174,15 +174,15 @@ Ayarladıklarınız:
     Yapılandırma otomatik olarak yazılır.
     Daha fazla ayrıntı: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (Anthropic uyumlu)">
+  <Accordion title="Synthetic (Anthropic-compatible)">
     `SYNTHETIC_API_KEY` ister.
     Daha fazla ayrıntı: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot ve Kimi Coding">
+  <Accordion title="Moonshot and Kimi Coding">
     Moonshot (Kimi K2) ve Kimi Coding yapılandırmaları otomatik yazılır.
     Daha fazla ayrıntı: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="Atla">
+  <Accordion title="Skip">
     Kimlik doğrulamayı yapılandırmadan bırakır.
   </Accordion>
 </AccordionGroup>
@@ -244,7 +244,7 @@ Signal kurulum davranışı:
 - `~/.openclaw/tools/signal-cli/<version>/` altına kaydeder
 - Yapılandırmaya `channels.signal.cliPath` yazar
 - JVM derlemeleri Java 21 gerektirir
-- Mümkün olduğunda yerel (native) derlemeler kullanılır
+- 8. Mevcut olduğunda yerel derlemeler kullanılır
 - Windows, WSL2 kullanır ve WSL içinde Linux signal-cli akışını izler
 
 ## İlgili belgeler

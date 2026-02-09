@@ -2,13 +2,6 @@
 summary: "Åtgärda CDP-startproblem för Chrome/Brave/Edge/Chromium för OpenClaw webbläsarkontroll på Linux"
 read_when: "Webbläsarkontroll misslyckas på Linux, särskilt med snap Chromium"
 title: "Felsökning av webbläsare"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:35Z
 ---
 
 # Felsökning av webbläsare (Linux)
@@ -23,7 +16,7 @@ OpenClaws server för webbläsarkontroll misslyckas med att starta Chrome/Brave/
 
 ### Grundorsak
 
-På Ubuntu (och många Linuxdistributioner) är standardinstallationen av Chromium ett **snap-paket**. Snaps AppArmor-isolering stör hur OpenClaw startar och övervakar webbläsarprocessen.
+På Ubuntu (och många Linuxdistributioner) är standardinstallationen för Chromium ett **snap-paket**. Snap's AppArmor-inneslutning stör hur OpenClaw skapar och övervakar webbläsarprocessen.
 
 Kommandot `apt install chromium` installerar ett stubbpaket som omdirigerar till snap:
 
@@ -119,19 +112,19 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Konfigreferens
 
-| Alternativ               | Beskrivning                                                                 | Standard                                                                 |
-| ------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `browser.enabled`        | Aktivera webbläsarkontroll                                                  | `true`                                                                   |
+| Alternativ               | Beskrivning                                                                                    | Standard                                                                                    |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Aktivera webbläsarkontroll                                                                     | `true`                                                                                      |
 | `browser.executablePath` | Sökväg till en Chromium-baserad webbläsarbinär (Chrome/Brave/Edge/Chromium) | auto-detected (föredrar standardwebbläsaren när den är Chromium-baserad) |
-| `browser.headless`       | Kör utan GUI                                                                | `false`                                                                  |
-| `browser.noSandbox`      | Lägg till flaggan `--no-sandbox` (krävs för vissa Linux-uppsättningar)      | `false`                                                                  |
-| `browser.attachOnly`     | Starta inte webbläsaren, anslut endast till befintlig                       | `false`                                                                  |
-| `browser.cdpPort`        | Port för Chrome DevTools Protocol                                           | `18800`                                                                  |
+| `browser.headless`       | Kör utan GUI                                                                                   | `false`                                                                                     |
+| `browser.noSandbox`      | Lägg till flaggan `--no-sandbox` (krävs för vissa Linux-uppsättningar)      | `false`                                                                                     |
+| `browser.attachOnly`     | Starta inte webbläsaren, anslut endast till befintlig                                          | `false`                                                                                     |
+| `browser.cdpPort`        | Port för Chrome DevTools Protocol                                                              | `18800`                                                                                     |
 
 ### Problem: "Chrome extension relay is running, but no tab is connected"
 
-Du använder profilen `chrome` (tilläggsrelä). Den förväntar sig att OpenClaw
-webbläsartillägg är anslutet till en aktiv flik.
+Du använder `chrome`-profilen (förlängningsrelä). Den förväntar sig att webbläsartillägget OpenClaw
+ska anslutas till en live-flik.
 
 Åtgärdsalternativ:
 

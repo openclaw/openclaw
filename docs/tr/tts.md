@@ -5,13 +5,6 @@ read_when:
   - TTS sağlayıcılarını veya sınırlarını yapılandırma
   - /tts komutlarını kullanma
 title: "Metinden Konuşmaya"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:12Z
 ---
 
 # Metinden konuşmaya (TTS)
@@ -29,7 +22,8 @@ OpenClaw’ın ses gönderebildiği her yerde çalışır; Telegram’da yuvarla
 
 Edge TTS, `node-edge-tts` kütüphanesi aracılığıyla Microsoft Edge’in çevrimiçi nöral TTS hizmetini kullanır. Barındırılan bir hizmettir (yerel değildir), Microsoft’un uç noktalarını kullanır ve bir API anahtarı gerektirmez. `node-edge-tts` konuşma yapılandırma seçeneklerini ve çıktı biçimlerini sunar; ancak tüm seçenekler Edge hizmeti tarafından desteklenmez. citeturn2search0
 
-Edge TTS yayımlanmış bir SLA veya kota olmadan herkese açık bir web hizmeti olduğundan, en iyi çaba esasına göre değerlendirin. Garantili sınırlar ve destek gerekiyorsa OpenAI veya ElevenLabs kullanın. Microsoft’un Speech REST API belgeleri istek başına 10 dakikalık ses sınırı belirtir; Edge TTS sınır yayımlamaz, bu nedenle benzer veya daha düşük sınırlar varsayılmalıdır. citeturn0search3
+Edge TTS yayımlanmış bir SLA veya kota olmadan herkese açık bir web hizmeti olduğundan, en iyi çaba esasına göre değerlendirin. Garantili sınırlar ve destek gerekiyorsa OpenAI veya ElevenLabs kullanın.
+Microsoft’un Speech REST API belgeleri istek başına 10 dakikalık ses sınırı belirtir; Edge TTS sınır yayımlamaz, bu nedenle benzer veya daha düşük sınırlar varsayılmalıdır. citeturn0search3
 
 ## İsteğe bağlı anahtarlar
 
@@ -237,8 +231,7 @@ Varsayılan olarak model tek bir yanıt için TTS yönergeleri **üretebilir**.
 `messages.tts.auto` `tagged` olduğunda, sesi tetiklemek için bu yönergeler gereklidir.
 
 Etkinleştirildiğinde model, tek bir yanıt için sesi geçersiz kılmak üzere `[[tts:...]]` yönergeleri
-ve ayrıca yalnızca seste görünmesi gereken ifadeleri (kahkaha, şarkı söyleme ipuçları vb.)
-sağlamak için isteğe bağlı bir `[[tts:text]]...[[/tts:text]]` bloğu üretebilir.
+ve ayrıca yalnızca seste görünmesi gereken ifadeleri (kahkaha, şarkı söyleme ipuçları vb.) sağlamak için isteğe bağlı bir `[[tts:text]]...[[/tts:text]]` bloğu üretebilir.
 
 Örnek yanıt yükü:
 

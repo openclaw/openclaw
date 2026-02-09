@@ -1,16 +1,9 @@
 ---
-summary: „Anthropic Claude über API-Schlüssel oder Setup-Token in OpenClaw verwenden“
+summary: "„Anthropic Claude über API-Schlüssel oder Setup-Token in OpenClaw verwenden“"
 read_when:
   - Sie möchten Anthropic-Modelle in OpenClaw verwenden
   - Sie möchten ein Setup-Token anstelle von API-Schlüsseln verwenden
-title: „Anthropic“
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:08Z
+title: "„Anthropic“"
 ---
 
 # Anthropic (Claude)
@@ -50,10 +43,10 @@ OpenClaw unterstützt die Prompt-Caching-Funktion von Anthropic. Dies ist **nur 
 
 Verwenden Sie den Parameter `cacheRetention` in Ihrer Modellkonfiguration:
 
-| Wert    | Cache-Dauer  | Beschreibung                            |
-| ------- | ------------ | --------------------------------------- |
-| `none`  | Kein Caching | Prompt-Caching deaktivieren             |
-| `short` | 5 Minuten    | Standard für API-Schlüssel-Auth         |
+| Wert    | Cache-Dauer  | Beschreibung                                               |
+| ------- | ------------ | ---------------------------------------------------------- |
+| `none`  | Kein Caching | Prompt-Caching deaktivieren                                |
+| `short` | 5 Minuten    | Standard für API-Schlüssel-Auth                            |
 | `long`  | 1 Stunde     | Erweiterter Cache (erfordert Beta-Flag) |
 
 ```json5

@@ -4,13 +4,6 @@ read_when:
   - Ollama 를 통해 로컬 모델로 OpenClaw 를 실행하려는 경우
   - Ollama 설정 및 구성 가이드가 필요한 경우
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:07Z
 ---
 
 # Ollama
@@ -277,7 +270,7 @@ Ollama 모델을 사용할 때 `sessions_send`, `memory_get` 와 같은 도구 �
 1. Ollama 모델 항목에서 `streaming: true` 구성을 제거하거나
 2. Ollama 모델에 대해 `streaming: false` 를 명시적으로 설정하십시오([스트리밍 구성](#streaming-configuration) 참고)
 
-## 참고 자료
+## 참고
 
 - [Model Providers](/concepts/model-providers) - 모든 프로바이더 개요
 - [Model Selection](/concepts/models) - 모델 선택 방법

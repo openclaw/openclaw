@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification des migrations de Doctor
   - Introduction de changements de configuration incompatibles
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:03Z
 ---
 
 # Doctor
@@ -91,24 +84,24 @@ cat ~/.openclaw/openclaw.json
 
 ## Comportement detaille et justification
 
-### 0) Mise a jour optionnelle (installations git)
+### 0. Mise a jour optionnelle (installations git)
 
 S’il s’agit d’un depot git et que Doctor s’execute en mode interactif, il propose de
 mettre a jour (fetch/rebase/build) avant d’executer Doctor.
 
-### 1) Normalisation de la configuration
+### 1. Normalisation de la configuration
 
 Si la configuration contient des formes de valeurs heritees (par exemple `messages.ackReaction`
 sans substitution specifique au canal), Doctor les normalise vers le schema actuel.
 
-### 2) Migrations des cles de configuration heritees
+### 2. Migrations des cles de configuration heritees
 
 Lorsque la configuration contient des cles obsoletes, les autres commandes refusent de s’executer et vous demandent
 d’executer `openclaw doctor`.
 
 Doctor va :
 
-- Expliquer quelles cles heritees ont ete trouvees.
+- Expliquer quelles clés anciennes ont été trouvées.
 - Afficher la migration appliquee.
 - Reecrire `~/.openclaw/openclaw.json` avec le schema mis a jour.
 
@@ -139,7 +132,7 @@ remplace le catalogue OpenCode Zen integre depuis `@mariozechner/pi-ai`. Cela pe
 forcer tous les modeles sur une seule API ou annuler les couts. Doctor avertit afin que vous puissiez
 supprimer la substitution et restaurer le routage API et les couts par modele.
 
-### 3) Migrations d’etat herite (structure disque)
+### 3. Migrations d’etat herite (structure disque)
 
 Doctor peut migrer d’anciennes structures sur disque vers la structure actuelle :
 
@@ -157,7 +150,7 @@ automatiquement les sessions heritees + le repertoire agent au demarrage afin qu
 arrivent dans le chemin par agent sans execution manuelle de Doctor. L’authentification WhatsApp
 est volontairement migree uniquement via `openclaw doctor`.
 
-### 4) Verifications d’integrite de l’etat (persistance des sessions, routage et securite)
+### 4. Verifications d’integrite de l’etat (persistance des sessions, routage et securite)
 
 Le repertoire d’etat est le tronc cerebral operationnel. S’il disparait, vous perdez
 les sessions, les identifiants, les journaux et la configuration (sauf si vous avez des sauvegardes ailleurs).
@@ -182,7 +175,7 @@ Doctor verifie :
 - **Permissions du fichier de configuration** : avertit si `~/.openclaw/openclaw.json` est
   lisible par le groupe/le monde et propose de resserrer a `600`.
 
-### 5) Sante de l’authentification des modeles (expiration OAuth)
+### 5. Sante de l’authentification des modeles (expiration OAuth)
 
 Doctor inspecte les profils OAuth dans le magasin d’authentification, avertit lorsque les jetons
 expirent/sont expires et peut les rafraichir lorsque c’est sans risque. Si le profil Anthropic Claude Code
@@ -195,55 +188,54 @@ Doctor signale egalement les profils d’authentification temporairement inutili
 - courts delais de refroidissement (limites de debit/delais/erreurs d’authentification)
 - desactivations plus longues (facturation/echec de credit)
 
-### 6) Validation du modele Hooks
+### 6. Validation du modele Hooks
 
 Si `hooks.gmail.model` est defini, Doctor valide la reference du modele par rapport au
 catalogue et a la liste d’autorisation et avertit lorsqu’elle ne se resout pas ou est interdite.
 
-### 7) Reparation de l’image sandbox
+### 7. Reparation de l’image sandbox
 
 Lorsque le sandboxing est active, Doctor verifie les images Docker et propose de construire ou
 de basculer vers des noms herites si l’image actuelle est manquante.
 
-### 8) Migrations des services de Gateway et indications de nettoyage
+### 8. Migrations des services de Gateway et indications de nettoyage
 
 Doctor detecte les services de gateway herites (launchd/systemd/schtasks) et
-propose de les supprimer et d’installer le service OpenClaw en utilisant le port de gateway actuel.
-Il peut egalement analyser la presence de services de type gateway supplementaires et afficher des indications de nettoyage.
+propose de les supprimer et d’installer le service OpenClaw en utilisant le port de gateway actuel. Il peut egalement analyser la presence de services de type gateway supplementaires et afficher des indications de nettoyage.
 Les services de gateway OpenClaw nommes par profil sont consideres de premiere classe et ne sont pas
 signales comme « supplementaires ».
 
-### 9) Avertissements de securite
+### 9. Avertissements de securite
 
 Doctor emet des avertissements lorsqu’un fournisseur est ouvert aux Messages prives sans liste d’autorisation,
 ou lorsqu’une politique est configuree de maniere dangereuse.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 S’il s’execute en tant que service utilisateur systemd, Doctor s’assure que le linger est active afin que la
 gateway reste active apres la deconnexion.
 
-### 11) Etat des Skills
+### 11. Etat des Skills
 
 Doctor affiche un resume rapide des Skills eligibles/manquants/bloques pour l’espace de travail actuel.
 
-### 12) Verifications d’authentification de la Gateway (jeton local)
+### 12. Verifications d’authentification de la Gateway (jeton local)
 
 Doctor avertit lorsque `gateway.auth` est manquant sur une gateway locale et propose de
 generer un jeton. Utilisez `openclaw doctor --generate-gateway-token` pour forcer la creation du jeton
 en automatisation.
 
-### 13) Controle de sante de la Gateway + redemarrage
+### 13. Controle de sante de la Gateway + redemarrage
 
 Doctor effectue un controle de sante et propose de redemarrer la gateway lorsqu’elle semble
 malsaine.
 
-### 14) Avertissements d’etat des canaux
+### 14. Avertissements d’etat des canaux
 
 Si la gateway est saine, Doctor execute une sonde d’etat des canaux et signale
 les avertissements avec des corrections suggerees.
 
-### 15) Audit + reparation de la configuration du superviseur
+### 15. Audit + reparation de la configuration du superviseur
 
 Doctor verifie la configuration du superviseur installee (launchd/systemd/schtasks) pour
 des valeurs par defaut manquantes ou obsoletes (par ex., dependances systemd network-online et
@@ -258,14 +250,14 @@ Notes :
 - `openclaw doctor --repair --force` ecrase les configurations personnalisees du superviseur.
 - Vous pouvez toujours forcer une reecriture complete via `openclaw gateway install --force`.
 
-### 16) Diagnostics d’execution de la Gateway + port
+### 16. Diagnostics d’execution de la Gateway + port
 
 Doctor inspecte l’execution du service (PID, dernier etat de sortie) et avertit lorsque le
 service est installe mais n’est pas reellement en cours d’execution. Il verifie egalement les collisions
 de port sur le port de la gateway (par defaut `18789`) et signale les causes probables (gateway deja
 en cours d’execution, tunnel SSH).
 
-### 17) Bonnes pratiques d’execution de la Gateway
+### 17. Bonnes pratiques d’execution de la Gateway
 
 Doctor avertit lorsque le service de la gateway s’execute sur Bun ou un chemin Node gere par un gestionnaire
 de versions (`nvm`, `fnm`, `volta`, `asdf`, etc.). Les canaux WhatsApp + Telegram
@@ -273,12 +265,12 @@ necessitent Node, et les chemins des gestionnaires de versions peuvent se rompre
 service ne charge pas l’initialisation de votre shell. Doctor propose de migrer vers une installation Node systeme
 lorsqu’elle est disponible (Homebrew/apt/choco).
 
-### 18) Ecriture de la configuration + metadonnees de l’assistant
+### 18. Ecriture de la configuration + metadonnees de l’assistant
 
 Doctor persiste toutes les modifications de configuration et appose des metadonnees d’assistant pour
 enregistrer l’execution de Doctor.
 
-### 19) Conseils d’espace de travail (sauvegarde + systeme de memoire)
+### 19. Conseils d’espace de travail (sauvegarde + systeme de memoire)
 
 Doctor suggere un systeme de memoire d’espace de travail lorsqu’il est absent et affiche un conseil de sauvegarde
 si l’espace de travail n’est pas deja sous git.

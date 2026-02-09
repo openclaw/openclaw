@@ -5,13 +5,6 @@ read_when:
   - Sie möchten das OpenProse-Plugin aktivieren
   - Sie müssen die Zustandspeicherung verstehen
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:05Z
 ---
 
 # OpenProse
@@ -81,7 +74,7 @@ session "Merge the findings + draft into a final answer."
 context: { findings, draft }
 ```
 
-## Dateipfade
+## Datei-Orte
 
 OpenProse speichert den Zustand unter `.prose/` in Ihrem Workspace:
 

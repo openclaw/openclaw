@@ -5,13 +5,6 @@ read_when:
   - Je hebt een door de firewall geïsoleerde installatie met VPN-toegang nodig
   - Je implementeert op externe Debian/Ubuntu-servers
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:32Z
 ---
 
 # Ansible-installatie
@@ -39,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 - 🚀 **Installatie met één opdracht**: Volledige implementatie in minuten
 - 🔧 **Systemd-integratie**: Automatisch starten bij boot met verharding
 
-## Vereisten
+## Provideropties
 
 - **OS**: Debian 11+ of Ubuntu 20.04+
 - **Toegang**: Root- of sudo-rechten

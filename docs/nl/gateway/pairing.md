@@ -5,13 +5,6 @@ read_when:
   - Toevoegen van CLI-flows voor het goedkeuren van externe nodes
   - Uitbreiden van het gatewayprotocol met nodebeheer
 title: "Door de Gateway beheerde koppeling"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:28Z
 ---
 
 # Door de Gateway beheerde koppeling (Optie B)

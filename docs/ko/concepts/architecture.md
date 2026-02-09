@@ -3,13 +3,6 @@ summary: "WebSocket 게이트웨이 아키텍처, 구성 요소 및 클라이언
 read_when:
   - 게이트웨이 프로토콜, 클라이언트 또는 전송을 작업할 때
 title: "게이트웨이 아키텍처"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:41Z
 ---
 
 # 게이트웨이 아키텍처
@@ -109,6 +102,7 @@ Client                    Gateway
 ## 원격 액세스
 
 - 권장: Tailscale 또는 VPN.
+
 - 대안: SSH 터널
 
   ```bash
@@ -116,6 +110,7 @@ Client                    Gateway
   ```
 
 - 동일한 핸드셰이크 + 인증 토큰이 터널을 통해 적용됩니다.
+
 - 원격 설정에서 WS 에 대해 TLS + 선택적 핀닝을 활성화할 수 있습니다.
 
 ## 운영 스냅샷

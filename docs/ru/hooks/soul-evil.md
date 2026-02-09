@@ -4,13 +4,6 @@ read_when:
   - Вы хотите включить или настроить хук SOUL Evil
   - Вам нужно окно очистки или случайная смена персоны
 title: "Хук SOUL Evil"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:35Z
 ---
 
 # Хук SOUL Evil

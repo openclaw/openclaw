@@ -4,13 +4,6 @@ read_when:
   - تحديث تعيينات معرّفات نماذج الأجهزة أو ملفات NOTICE/الترخيص
   - تغيير كيفية عرض واجهة Instances لأسماء الأجهزة
 title: "قاعدة بيانات نماذج الأجهزة"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:37Z
 ---
 
 # قاعدة بيانات نماذج الأجهزة (الأسماء الودّية)

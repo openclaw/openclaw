@@ -4,13 +4,6 @@ read_when:
   - 프로바이더별 모델 설정 참고가 필요할 때
   - 모델 프로바이더용 예시 설정 또는 CLI 온보딩 명령이 필요할 때
 title: "모델 프로바이더"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:46Z
 ---
 
 # 모델 프로바이더

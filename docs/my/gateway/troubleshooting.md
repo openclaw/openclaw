@@ -4,19 +4,12 @@ read_when:
   - ပြဿနာဖြေရှင်းရေး ဟပ်မှ အနက်ရှိုင်းဆုံး ခွဲခြားစစ်ဆေးရန် ဒီနေရာကို ညွှန်ပြထားသောအခါ
   - တိကျသော အမိန့်များပါဝင်သည့် လက္ခဏာအခြေပြု လမ်းညွှန်ပိုင်းများ လိုအပ်သောအခါ
 title: "ပြဿနာဖြေရှင်းခြင်း"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:50Z
 ---
 
 # Gateway ပြဿနာဖြေရှင်းခြင်း
 
-ဒီစာမျက်နှာသည် အနက်ရှိုင်းဆုံး runbook ဖြစ်သည်။
-အမြန်ဆုံး triage လုပ်ငန်းစဉ်ကို အရင်ကြည့်လိုပါက [/help/troubleshooting](/help/troubleshooting) မှ စတင်ပါ။
+ဤစာမျက်နှာသည် deep runbook ဖြစ်ပါသည်။
+မြန်ဆန်သော triage flow ကို အရင်လိုချင်ပါက [/help/troubleshooting](/help/troubleshooting) မှ စတင်ပါ။
 
 ## Command ladder
 
@@ -117,7 +110,7 @@ openclaw gateway status --deep
 ပုံမှန်တွေ့ရသော လက္ခဏာများ–
 
 - `Gateway start blocked: set gateway.mode=local` → local gateway mode ကို ဖွင့်မထားခြင်း။
-- `refusing to bind gateway ... without auth` → token/password မပါဘဲ non-loopback bind လုပ်ထားခြင်း။
+- `refusing to bind gateway ... without auth` → token/စကားဝှက် မပါဘဲ non-loopback bind လုပ်ရန် ကြိုးပမ်းခြင်း။
 - `another gateway instance is already listening` / `EADDRINUSE` → ပို့တ် အပြိုင်အဆိုင် ဖြစ်ခြင်း။
 
 ဆက်စပ်–
@@ -242,7 +235,7 @@ openclaw doctor
 - `Failed to start Chrome CDP on port` → browser process ကို စတင်မနိုင်ခြင်း။
 - `browser.executablePath not found` → သတ်မှတ်ထားသော လမ်းကြောင်း မမှန်ကန်ခြင်း။
 - `Chrome extension relay is running, but no tab is connected` → extension relay မချိတ်ဆက်ထားခြင်း။
-- `Browser attachOnly is enabled ... not reachable` → attach-only profile တွင် ရောက်နိုင်သော target မရှိခြင်း။
+- `Browser attachOnly is enabled ... not reachable` → attach-only profile တွင် ရောက်ရှိနိုင်သော target မရှိပါ။
 
 ဆက်စပ်–
 
@@ -254,7 +247,7 @@ openclaw doctor
 
 အဆင့်မြှင့်ပြီးနောက် ဖြစ်ပေါ်သော ပြဿနာအများစုသည် config drift သို့မဟုတ် ယခုအချိန်တွင် ပိုမိုတင်းကျပ်စွာ သတ်မှတ်ထားသော default များကို အကောင်အထည်ဖော်လိုက်ခြင်းကြောင့် ဖြစ်တတ်သည်။
 
-### 1) Auth နှင့် URL override အပြုအမူ ပြောင်းလဲခဲ့သည်
+### 1. Auth နှင့် URL override အပြုအမူ ပြောင်းလဲခဲ့သည်
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ openclaw config get gateway.auth.mode
 - `gateway connect failed:` → URL ပစ်မှတ် မှားယွင်းခြင်း။
 - `unauthorized` → endpoint သို့ ရောက်နိုင်သော်လည်း auth မမှန်ကန်ခြင်း။
 
-### 2) Bind နှင့် auth guardrails များ ပိုမိုတင်းကျပ်လာသည်
+### 2. Bind နှင့် auth guardrails များ ပိုမိုတင်းကျပ်လာသည်
 
 ```bash
 openclaw config get gateway.bind
@@ -289,10 +282,10 @@ openclaw logs --follow
 
 ပုံမှန်တွေ့ရသော လက္ခဏာများ–
 
-- `refusing to bind gateway ... without auth` → bind နှင့် auth မကိုက်ညီခြင်း။
+- `refusing to bind gateway ... without auth` → bind + auth မကိုက်ညီခြင်း။
 - runtime လည်ပတ်နေစဉ် `RPC probe: failed` → Gateway သက်ရှိနေသော်လည်း လက်ရှိ auth/URL ဖြင့် မရောက်နိုင်ခြင်း။
 
-### 3) Pairing နှင့် device identity အခြေအနေ ပြောင်းလဲခဲ့သည်
+### 3. Pairing နှင့် device identity အခြေအနေ ပြောင်းလဲခဲ့သည်
 
 ```bash
 openclaw devices list

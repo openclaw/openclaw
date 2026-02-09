@@ -4,13 +4,6 @@ read_when:
   - Quiere acceder al Gateway a través de Tailscale
   - Quiere la IU de Control en el navegador y la edición de configuración
 title: "Web"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:00Z
 ---
 
 # Web (Gateway)
@@ -113,7 +106,7 @@ Abra:
   [Tailscale](/gateway/tailscale) y [Seguridad](/gateway/security).
 - `gateway.tailscale.mode: "funnel"` requiere `gateway.auth.mode: "password"` (contraseña compartida).
 
-## Compilación de la IU
+## Construcción de la UI
 
 El Gateway sirve archivos estáticos desde `dist/control-ui`. Compílelos con:
 

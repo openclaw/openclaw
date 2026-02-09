@@ -4,13 +4,6 @@ read_when:
   - 동일한 머신에서 둘 이상의 Gateway(게이트웨이)를 실행하는 경우
   - Gateway(게이트웨이)별로 격리된 구성/상태/포트가 필요한 경우
 title: "다중 Gateway(게이트웨이)"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:03Z
 ---
 
 # 다중 Gateway(게이트웨이) (동일 호스트)
@@ -23,7 +16,7 @@ x-i18n:
 - `OPENCLAW_STATE_DIR` — 인스턴스별 세션, 자격 증명, 캐시
 - `agents.defaults.workspace` — 인스턴스별 작업 공간 루트
 - `gateway.port` (또는 `--port`) — 인스턴스별로 고유해야 함
-- 파생 포트(브라우저/캔버스)는 서로 겹치지 않아야 함
+- Derived ports (browser/canvas) must not overlap
 
 이 항목들이 공유되면 구성 경합과 포트 충돌이 발생합니다.
 
@@ -48,12 +41,12 @@ openclaw --profile main gateway install
 openclaw --profile rescue gateway install
 ```
 
-## 구조용 봇 가이드
+## Rescue-bot guide
 
 동일한 호스트에서 다음 항목을 각각 분리하여 두 번째 Gateway(게이트웨이)를 실행하십시오.
 
 - 프로파일/구성
-- 상태 디렉토리
+- state dir
 - 작업 공간
 - 기본 포트(및 파생 포트)
 

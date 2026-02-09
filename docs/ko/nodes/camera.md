@@ -4,13 +4,6 @@ read_when:
   - iOS 노드 또는 macOS에서 카메라 캡처를 추가하거나 수정할 때
   - 에이전트가 접근 가능한 MEDIA 임시 파일 워크플로를 확장할 때
 title: "카메라 캡처"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:35Z
 ---
 
 # 카메라 캡처(에이전트)
@@ -107,7 +100,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 `canvas.*` 와 마찬가지로, Android 노드는 **포그라운드**에서만 `camera.*` 명령을 허용합니다. 백그라운드 호출은 `NODE_BACKGROUND_UNAVAILABLE` 를 반환합니다.
 
-### 페이로드 가드
+### 10. 페이로드 가드
 
 사진은 base64 페이로드를 5 MB 미만으로 유지하기 위해 재압축됩니다.
 

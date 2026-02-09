@@ -4,13 +4,6 @@ read_when:
   - Bir model sağlayıcısı seçmek istiyorsanız
   - LLM kimlik doğrulaması + model seçimi için hızlı kurulum örnekleri istiyorsanız
 title: "Model Sağlayıcısı Hızlı Başlangıç"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:33Z
 ---
 
 # Model Sağlayıcıları

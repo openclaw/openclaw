@@ -3,13 +3,6 @@ summary: "Gruppechat-adfærd på tværs af overflader (WhatsApp/Telegram/Discord
 read_when:
   - Ændring af gruppechat-adfærd eller mention-gating
 title: "Grupper"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:10Z
 ---
 
 # Grupper
@@ -18,8 +11,8 @@ OpenClaw behandler gruppechats ensartet på tværs af overflader: WhatsApp, Tele
 
 ## Begynderintro (2 minutter)
 
-OpenClaw “lever” på dine egne beskedkonti. Der er ingen separat WhatsApp-botbruger.
-Hvis **du** er i en gruppe, kan OpenClaw se den gruppe og svare der.
+OpenClaw “lives” på dine egne beskedkonti. Der er ingen separat WhatsApp bot bruger.
+Hvis **du** er i en gruppe, kan OpenClaw se denne gruppe og svare der.
 
 Standardadfærd:
 
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Hvis du vil...
 
-| Mål                                           | Hvad der skal sættes                                       |
-| --------------------------------------------- | ---------------------------------------------------------- |
-| Tillad alle grupper men svar kun på @mentions | `groups: { "*": { requireMention: true } }`                |
-| Deaktivér alle gruppesvar                     | `groupPolicy: "disabled"`                                  |
-| Kun specifikke grupper                        | `groups: { "<group-id>": { ... } }` (ingen `"*"`-nøgle)    |
-| Kun du kan udløse i grupper                   | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Mål                                                        | Hvad der skal sættes                                                        |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Tillad alle grupper men svar kun på @mentions | `groups: { "*": { requireMention: true } }`                                 |
+| Deaktivér alle gruppesvar                                  | `groupPolicy: "disabled"`                                                   |
+| Kun specifikke grupper                                     | `grupper: { "<group-id>": { ... } }` (ingen `"*"` nøgle) |
+| Kun du kan udløse i grupper                                | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                  |
 
 ## Session-nøgler
 
@@ -65,14 +58,14 @@ Hvis du vil...
 
 Ja — dette fungerer godt, hvis din “personlige” trafik er **DM’er**, og din “offentlige” trafik er **grupper**.
 
-Hvorfor: i single-agent-tilstand lander DM’er typisk i **hoved**-sessionsnøglen (`agent:main:main`), mens grupper altid bruger **ikke-hoved**-sessionsnøgler (`agent:main:<channel>:group:<id>`). Hvis du aktiverer sandboxing med `mode: "non-main"`, kører disse gruppesessioner i Docker, mens din primære DM-session forbliver på værten.
+Hvorfor: I enkelt-agent tilstand, lander DMs typisk i **main** sessionsnøglen (`agent:main:main`), mens grupper altid bruger **ikke-main** sessionsnøgler (`agent:main:<channel>:group:<id>`). Hvis du aktiverer sandboxing med `tilstand: "non-main"`, kører disse gruppesessioner i Docker, mens din primære DM session forbliver på værten.
 
 Det giver dig én agent-“hjerne” (delt arbejdsområde + hukommelse), men to udførelsespositioner:
 
 - **DM’er**: fulde værktøjer (vært)
 - **Grupper**: sandbox + begrænsede værktøjer (Docker)
 
-> Hvis du har brug for reelt adskilte arbejdsområder/personaer (“personlig” og “offentlig” må aldrig blandes), så brug en anden agent + bindings. Se [Multi-Agent Routing](/concepts/multi-agent).
+> Hvis du virkelig har brug for separate arbejdsområder/personas (“personlige” og “offentlige” må aldrig blande), skal du bruge en anden agent + bindinger. Se [Multi-Agent Routing](/concepts/multi-agent).
 
 Eksempel (DM’er på vært, grupper sandboxed + kun beskedværktøjer):
 
@@ -99,7 +92,7 @@ Eksempel (DM’er på vært, grupper sandboxed + kun beskedværktøjer):
 }
 ```
 
-Vil du have “grupper kan kun se mappe X” i stedet for “ingen værtsadgang”? Behold `workspaceAccess: "none"` og montér kun tilladelseslistede stier ind i sandboxen:
+Vil du have “grupper kan kun se mappe X” i stedet for “ingen vært adgang”? Behold `workspaceAccess: "none"` og monter kun tilladte stier i sandkassen:
 
 ```json5
 {
@@ -181,8 +174,8 @@ Styr hvordan gruppe-/rumbeskeder håndteres pr. kanal:
 }
 ```
 
-| Politik       | Adfærd                                                                  |
-| ------------- | ----------------------------------------------------------------------- |
+| Politik       | Adfærd                                                                                  |
+| ------------- | --------------------------------------------------------------------------------------- |
 | `"open"`      | Grupper omgår tilladelseslister; mention-gating gælder stadig.          |
 | `"disabled"`  | Blokér alle gruppemeddelelser fuldstændigt.                             |
 | `"allowlist"` | Tillad kun grupper/rum, der matcher den konfigurerede tilladelsesliste. |
@@ -191,9 +184,9 @@ Noter:
 
 - `groupPolicy` er adskilt fra mention-gating (som kræver @mentions).
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: brug `groupAllowFrom` (fallback: eksplicit `allowFrom`).
-- Discord: tilladelseslisten bruger `channels.discord.guilds.<id>.channels`.
+- Discord: allowlist uses `channels.discord.guilds.<id>.kanaler`.
 - Slack: tilladelseslisten bruger `channels.slack.channels`.
-- Matrix: tilladelseslisten bruger `channels.matrix.groups` (rum-id’er, aliaser eller navne). Brug `channels.matrix.groupAllowFrom` til at begrænse afsendere; pr.-rum `users`-tilladelseslister understøttes også.
+- Matrix: allowlist bruger `channels.matrix.groups` (room IDs, aliaser eller navne). Brug `channels.matrix.groupAllowFrom` for at begrænse afsendere; per-room `users` tilladelser lister understøttes også.
 - Gruppe-DM’er styres separat (`channels.discord.dm.*`, `channels.slack.dm.*`).
 - Telegram-tilladelseslisten kan matche bruger-id’er (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) eller brugernavne (`"@alice"` eller `"alice"`); præfikser er ikke store/små-bogstavsfølsomme.
 - Standard er `groupPolicy: "allowlist"`; hvis din gruppetilladelsesliste er tom, blokeres gruppemeddelelser.
@@ -206,9 +199,9 @@ Hurtig mental model (evalueringsrækkefølge for gruppemeddelelser):
 
 ## Mention-gating (standard)
 
-Gruppemeddelelser kræver en mention, medmindre det tilsidesættes pr. gruppe. Standarder findes pr. subsystem under `*.groups."*"`.
+Gruppebeskeder kræver en nævnelse, medmindre tilsidesættes pr. gruppe. Standard live pr. delsystem under `*.groups."*"`.
 
-At svare på en botbesked tæller som en implicit mention (når kanalen understøtter svar-metadata). Dette gælder for Telegram, WhatsApp, Slack, Discord og Microsoft Teams.
+Svar på en bot besked tæller som en implicit omtale (når kanalen understøtter svar metadata). Dette gælder for Telegram, WhatsApp, Slack, Discord, og Microsoft Teams.
 
 ```json5
 {
@@ -253,14 +246,14 @@ Noter:
 - Pr.-agent-override: `agents.list[].groupChat.mentionPatterns` (nyttigt når flere agenter deler en gruppe).
 - Mention-gating håndhæves kun, når mention-detektion er mulig (native mentions eller `mentionPatterns` er konfigureret).
 - Discord-standarder findes i `channels.discord.guilds."*"` (kan tilsidesættes pr. guild/kanal).
-- Gruppehistorik-kontekst indpakkes ensartet på tværs af kanaler og er **kun-ventende** (meddelelser sprunget over pga. mention-gating); brug `messages.groupChat.historyLimit` for den globale standard og `channels.<channel>.historyLimit` (eller `channels.<channel>.accounts.*.historyLimit`) for overrides. Sæt `0` for at deaktivere.
+- Gruppehistorik kontekst er indpakket ensartet på tværs af kanaler og er **ventende kun** (meddelelser sprunget over grundet at nævne gating); brug `beskeder. roupChat.historyLimit` for den globale standard og `kanaler.<channel>.historyLimit` (eller 'kanaler).<channel>.accounts.\*.historyLimit`) for tilsidesættelser. Sæt `0\` til deaktiveret.
 
 ## Gruppe-/kanalværktøjsbegrænsninger (valgfrit)
 
 Nogle kanalkonfigurationer understøtter begrænsning af, hvilke værktøjer der er tilgængelige **inde i en specifik gruppe/rum/kanal**.
 
 - `tools`: tillad/afvis værktøjer for hele gruppen.
-- `toolsBySender`: pr.-afsender-overrides inden for gruppen (nøgler er afsender-id’er/brugernavne/e-mails/telefonnumre afhængigt af kanalen). Brug `"*"` som jokertegn.
+- `toolsBySender`: per-afsender tilsidesættelser i gruppen (nøgler er afsender-IDs/brugernavn/e-mails/telefonnumre afhængigt af kanalen). Brug `"*"` som et jokertegn.
 
 Opløsningsrækkefølge (mest specifik vinder):
 
@@ -296,7 +289,7 @@ Noter:
 
 ## Gruppetilladelseslister
 
-Når `channels.whatsapp.groups`, `channels.telegram.groups` eller `channels.imessage.groups` er konfigureret, fungerer nøglerne som en gruppetilladelsesliste. Brug `"*"` til at tillade alle grupper, mens standard mention-adfærd stadig sættes.
+Når `channels.whatsapp.groups`, `channels.telegram.groups`, eller `channels.imessage.groups` er konfigureret, så fungerer nøglerne som en gruppe allowlist. Brug `"*"` for at tillade alle grupper mens du stadig sætter standard omtale adfærd.
 
 Almindelige intentioner (kopiér/indsæt):
 
@@ -356,7 +349,7 @@ Gruppeejere kan slå aktivering til/fra pr. gruppe:
 - `/activation mention`
 - `/activation always`
 
-Ejer bestemmes af `channels.whatsapp.allowFrom` (eller bot’ens egen E.164, når den ikke er sat). Send kommandoen som en selvstændig besked. Andre overflader ignorerer i øjeblikket `/activation`.
+Ejer bestemmes af `channels.whatsapp.allowFrom` (eller bot’s self E.164 når fra). Send kommandoen som en standalone besked. Andre overflader ignorerer i øjeblikket `/aktivering`.
 
 ## Kontekstfelter
 
@@ -368,7 +361,7 @@ Indgående gruppepayloads sætter:
 - `WasMentioned` (resultat af mention-gating)
 - Telegram-forumemner inkluderer også `MessageThreadId` og `IsForum`.
 
-Agentens systemprompt inkluderer en gruppeintro ved første tur i en ny gruppesession. Den minder modellen om at svare som et menneske, undgå Markdown-tabeller og undgå at skrive bogstavelige `\n`-sekvenser.
+Agent system prompt omfatter en gruppe intro på den første tur af en ny gruppe session. Det minder modellen om at reagere som et menneske, undgå Markdown tabeller, og undgå at skrive bogstavelige `\n` sekvenser.
 
 ## iMessage-specifikt
 

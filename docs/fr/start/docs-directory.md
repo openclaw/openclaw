@@ -3,13 +3,6 @@ summary: "Liens sélectionnés vers les documents OpenClaw les plus utilisés."
 read_when:
   - Vous souhaitez un accès rapide aux pages clés de la documentation
 title: "Repertoire de documentation"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 6ce20ed8e5191fb2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:45Z
 ---
 
 <Note>
@@ -26,7 +19,7 @@ Pour une cartographie complète de la documentation, consultez les [Hubs de docu
 - [Commandes slash](/tools/slash-commands)
 - [Routage multi-agents](/concepts/multi-agent)
 - [Mise à jour et restauration](/install/updating)
-- [Appairage (Message prive et nœuds)](/start/pairing)
+- [Association (DM et nœud)](/channels/pairing)
 - [Mode Nix](/install/nix)
 - [Configuration de l’assistant OpenClaw](/start/openclaw)
 - [Skills](/tools/skills)

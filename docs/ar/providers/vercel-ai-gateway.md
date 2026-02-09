@@ -4,13 +4,6 @@ summary: "إعداد بوابة Vercel AI (المصادقة + اختيار ال�
 read_when:
   - تريد استخدام بوابة Vercel AI مع OpenClaw
   - تحتاج إلى متغير بيئة مفتاح واجهة برمجة التطبيقات أو خيار المصادقة عبر CLI
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:36Z
 ---
 
 # بوابة Vercel AI

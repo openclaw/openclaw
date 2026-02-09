@@ -3,13 +3,6 @@ summary: "SSH 터널 (Gateway WS) 및 tailnet을 사용한 원격 액세스"
 read_when:
   - 원격 Gateway 설정을 실행하거나 문제를 해결할 때
 title: "원격 액세스"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:15Z
 ---
 
 # 원격 액세스 (SSH, 터널, 그리고 tailnet)
@@ -29,7 +22,7 @@ x-i18n:
 **Gateway 호스트**를 '에이전트가 위치한 곳'으로 생각하십시오. 이 호스트가 세션, 인증 프로필, 채널, 상태를 소유합니다.
 노트북/데스크톱 (및 노드)은 이 호스트에 연결합니다.
 
-### 1) tailnet 에서 항상 실행되는 Gateway (VPS 또는 홈 서버)
+### 1. tailnet 에서 항상 실행되는 Gateway (VPS 또는 홈 서버)
 
 지속적인 호스트에서 Gateway 를 실행하고 **Tailscale** 또는 SSH 로 접근합니다.
 
@@ -39,7 +32,7 @@ x-i18n:
 
 노트북이 자주 잠자기 상태가 되지만 에이전트를 항상 실행하고 싶을 때 이상적입니다.
 
-### 2) 홈 데스크톱이 Gateway 를 실행하고, 노트북이 원격 제어
+### 2. 홈 데스크톱이 Gateway 를 실행하고, 노트북이 원격 제어
 
 노트북은 에이전트를 실행하지 않습니다. 원격으로 연결합니다:
 
@@ -48,7 +41,7 @@ x-i18n:
 
 런북: [macOS 원격 액세스](/platforms/mac/remote).
 
-### 3) 노트북이 Gateway 를 실행하고, 다른 머신에서 원격 액세스
+### 3. 노트북이 Gateway 를 실행하고, 다른 머신에서 원격 액세스
 
 Gateway 를 로컬로 유지하되 안전하게 노출합니다:
 
@@ -81,7 +74,7 @@ Gateway 를 로컬로 유지하되 안전하게 노출합니다:
 ssh -N -L 18789:127.0.0.1:18789 user@host
 ```
 
-터널이 활성화되면:
+With the tunnel up:
 
 - `openclaw health` 및 `openclaw status --deep` 가 `ws://127.0.0.1:18789` 를 통해 원격 gateway 에 접근합니다.
 - 필요 시 `openclaw gateway {status,health,send,agent,call}` 도 `--url` 를 통해 포워딩된 URL 을 대상으로 할 수 있습니다.

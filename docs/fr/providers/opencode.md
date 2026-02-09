@@ -4,13 +4,6 @@ read_when:
   - Vous voulez OpenCode Zen pour l'acces aux modeles
   - Vous voulez une liste selectionnee de modeles adaptes au code
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:30Z
 ---
 
 # OpenCode Zen

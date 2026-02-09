@@ -3,13 +3,6 @@ summary: "Hướng dẫn thiết lập cho lập trình viên làm việc trên 
 read_when:
   - Thiết lập môi trường phát triển macOS
 title: "Thiết lập Dev macOS"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:39Z
 ---
 
 # Thiết lập cho lập trình viên macOS
@@ -23,7 +16,7 @@ Trước khi build ứng dụng, hãy đảm bảo bạn đã cài đặt các t
 1. **Xcode 26.2+**: Bắt buộc cho phát triển Swift.
 2. **Node.js 22+ & pnpm**: Bắt buộc cho gateway, CLI và các script đóng gói.
 
-## 1. Cài đặt Dependencies
+## 1) Cài đặt Dependencies
 
 Cài đặt các dependency dùng chung cho toàn bộ dự án:
 
@@ -31,7 +24,7 @@ Cài đặt các dependency dùng chung cho toàn bộ dự án:
 pnpm install
 ```
 
-## 2. Build và đóng gói ứng dụng
+## 2. Build and Package the App
 
 Để build ứng dụng macOS và đóng gói thành `dist/OpenClaw.app`, chạy:
 
@@ -44,7 +37,7 @@ Nếu bạn không có chứng chỉ Apple Developer ID, script sẽ tự độn
 Để biết các chế độ chạy dev, cờ ký (signing flags) và cách xử lý sự cố Team ID, xem README của ứng dụng macOS:
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **Lưu ý**: Các ứng dụng được ký ad-hoc có thể kích hoạt cảnh báo bảo mật. Nếu ứng dụng crash ngay lập tức với lỗi "Abort trap 6", hãy xem phần [Xử lý sự cố](#troubleshooting).
+> **Lưu ý**: Ứng dụng ký ad-hoc có thể kích hoạt các lời nhắc bảo mật. Nếu ứng dụng crash ngay lập tức với "Abort trap 6", hãy xem mục [Troubleshooting](#troubleshooting).
 
 ## 3. Cài đặt CLI
 
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-Nếu một phiên chạy thủ công đang chiếm cổng, hãy dừng tiến trình đó (Ctrl+C). Trong trường hợp cuối cùng, hãy kill PID bạn đã tìm được ở trên.
+If a manual run is holding the port, stop that process (Ctrl+C). Như một biện pháp cuối cùng, hãy kill PID bạn đã tìm ở trên.

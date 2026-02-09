@@ -2,13 +2,6 @@
 summary: "Socket 또는 HTTP 웹훅 모드를 위한 Slack 설정"
 read_when: "Slack 설정 또는 Slack socket/HTTP 모드 디버깅 시"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:43Z
 ---
 
 # Slack
@@ -58,7 +51,7 @@ x-i18n:
 
 ### OpenClaw 설정 (Socket 모드)
 
-환경 변수로 토큰을 설정합니다 (권장):
+환경 변수로 토큰을 설정하세요 (권장):
 
 - `SLACK_APP_TOKEN=xapp-...`
 - `SLACK_BOT_TOKEN=xoxb-...`
@@ -126,7 +119,8 @@ userTokenReadOnly 를 명시적으로 설정한 예시 (사용자 토큰 쓰기 
 
 ## HTTP 모드 (Events API)
 
-Gateway(게이트웨이) 가 HTTPS 를 통해 Slack 에서 접근 가능한 경우 (일반적인 서버 배포) HTTP 웹훅 모드를 사용합니다. HTTP 모드는 Events API + Interactivity + Slash Commands 를 공유 요청 URL 로 사용합니다.
+Gateway(게이트웨이) 가 HTTPS 를 통해 Slack 에서 접근 가능한 경우 (일반적인 서버 배포) HTTP 웹훅 모드를 사용합니다.
+HTTP 모드는 Events API + Interactivity + Slash Commands 를 공유 요청 URL 로 사용합니다.
 
 ### 설정 (HTTP 모드)
 
@@ -291,7 +285,7 @@ Slack Conversations API 는 타입별 범위를 사용합니다. 실제로 사�
 - `emoji:read`
 - `search:read`
 
-### 현재는 불필요 (향후 가능성)
+### 오늘은 필요 없음 (하지만 향후 필요할 가능성 있음)
 
 - `mpim:write` (`conversations.open` 를 통한 그룹 DM 열기/DM 시작을 추가하는 경우에만)
 - `groups:write` (비공개 채널 관리: 생성/이름 변경/초대/보관을 추가하는 경우에만)
@@ -352,7 +346,7 @@ Slack 는 Socket 모드만 사용합니다 (HTTP 웹훅 서버 없음). 두 토�
 }
 ```
 
-토큰은 환경 변수로도 제공할 수 있습니다:
+토큰은 환경 변수를 통해서도 제공할 수 있습니다:
 
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
@@ -370,11 +364,11 @@ Ack 반응은 `messages.ackReaction` +
 
 기본적으로 OpenClaw 는 메인 채널에 답글을 보냅니다. 자동 스레딩을 제어하려면 `channels.slack.replyToMode` 를 사용하십시오:
 
-| 모드    | 동작                                                                                                                                                |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **기본값.** 메인 채널에 답글. 트리거 메시지가 이미 스레드인 경우에만 스레드로 답글합니다.                                                           |
+| 모드      | 동작                                                                                                                                        |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **기본값.** 메인 채널에 답글. 트리거 메시지가 이미 스레드인 경우에만 스레드로 답글합니다.                                     |
 | `first` | 첫 번째 답글은 스레드 (트리거 메시지 아래) 로 보내고, 이후 답글은 메인 채널로 보냅니다. 컨텍스트를 유지하면서 스레드 난잡함을 줄이는 데 유용합니다. |
-| `all`   | 모든 답글을 스레드로 보냅니다. 대화를 한 곳에 유지하지만 가시성이 낮아질 수 있습니다.                                                               |
+| `all`   | 모든 답글을 스레드로 보냅니다. 대화를 한 곳에 유지하지만 가시성이 낮아질 수 있습니다.                                                         |
 
 이 모드는 자동 응답과 에이전트 도구 호출 (`slack sendMessage`) 모두에 적용됩니다.
 
@@ -510,12 +504,12 @@ cron/CLI 전송 시 다음을 사용하십시오:
 
 Slack 도구 작업은 `channels.slack.actions.*` 로 게이팅할 수 있습니다:
 
-| 작업 그룹  | 기본값  | 참고                    |
-| ---------- | ------- | ----------------------- |
-| reactions  | enabled | 반응 추가 + 목록        |
-| messages   | enabled | 읽기/전송/편집/삭제     |
-| pins       | enabled | 고정/해제/목록          |
-| memberInfo | enabled | 멤버 정보               |
+| 작업 그룹      | 기본값     | 참고            |
+| ---------- | ------- | ------------- |
+| reactions  | enabled | 반응 추가 + 목록    |
+| messages   | enabled | 읽기/전송/편집/삭제   |
+| pins       | enabled | 고정/해제/목록      |
+| memberInfo | enabled | 멤버 정보         |
 | emojiList  | enabled | 사용자 지정 이모지 목록 |
 
 ## 보안 참고 사항
@@ -526,7 +520,7 @@ Slack 도구 작업은 `channels.slack.actions.*` 로 게이팅할 수 있습니
   쓰기 작업에 사용할 수 있으며, 이는 설치 사용자의 접근 권한으로 작업이 실행됨을 의미합니다. 사용자 토큰은 매우 높은 권한을 가지므로
   작업 게이트와 허용 목록을 엄격히 관리하십시오.
 - 사용자 토큰 쓰기를 활성화하는 경우, 사용자 토큰에 예상되는 쓰기 범위 (`chat:write`, `reactions:write`, `pins:write`,
-  `files:write`) 가 포함되어 있는지 확인하십시오. 그렇지 않으면 해당 작업이 실패합니다.
+  `files:write`) 가 포함되어 있는지 확인하십시오.
 
 ## 문제 해결
 
@@ -559,7 +553,7 @@ openclaw pairing list slack
 - 멘션 게이팅은 `channels.slack.channels` 로 제어됩니다 (`requireMention` 를 `true` 로 설정). `agents.list[].groupChat.mentionPatterns` (또는 `messages.groupChat.mentionPatterns`) 도 멘션으로 계산됩니다.
 - 다중 에이전트 재정의: `agents.list[].groupChat.mentionPatterns` 에 에이전트별 패턴을 설정하십시오.
 - 반응 알림은 `channels.slack.reactionNotifications` 를 따릅니다 (`reactionAllowlist` 를 `allowlist` 모드와 함께 사용).
-- 봇 작성 메시지는 기본적으로 무시됩니다. `channels.slack.allowBots` 또는 `channels.slack.channels.<id>.allowBots` 로 활성화하십시오.
+- 봇 작성 메시지는 기본적으로 무시됩니다. `channels.slack.allowBots` 또는 `channels.slack.channels.<id> .allowBots` 로 활성화하십시오..allowBots\`.
 - 경고: 다른 봇에 대한 답글을 허용하는 경우 (`channels.slack.allowBots=true` 또는 `channels.slack.channels.<id>.allowBots=true`), `requireMention`, `channels.slack.channels.<id>.users` 허용 목록 및/또는 `AGENTS.md` 와 `SOUL.md` 의 명확한 가드레일로 봇 간 무한 답글 루프를 방지하십시오.
 - Slack 도구의 반응 제거 의미론은 [/tools/reactions](/tools/reactions) 를 참조하십시오.
 - 첨부 파일은 허용되고 크기 제한 내인 경우 미디어 저장소로 다운로드됩니다.

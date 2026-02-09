@@ -3,13 +3,6 @@ summary: "لوپ بیک WebChat اسٹیٹک ہوسٹ اور چیٹ UI کے لی
 read_when:
   - WebChat رسائی کی خرابیوں کا ازالہ یا کنفیگریشن کرتے وقت
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:45Z
 ---
 
 # WebChat (Gateway WebSocket UI)
@@ -46,7 +39,7 @@ x-i18n:
 
 چینل کے اختیارات:
 
-- کوئی مخصوص `webchat.*` بلاک نہیں۔ WebChat نیچے دیے گئے gateway endpoint اور auth سیٹنگز استعمال کرتا ہے۔
+- `webchat.*` کے لیے کوئی مخصوص بلاک نہیں۔ WebChat نیچے دی گئی gateway endpoint اور auth سیٹنگز استعمال کرتا ہے۔
 
 متعلقہ عالمی اختیارات:
 

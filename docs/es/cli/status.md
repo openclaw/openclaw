@@ -4,13 +4,6 @@ read_when:
   - Quiere un diagnóstico rápido de la salud del canal + destinatarios de sesiones recientes
   - Quiere un estado “all” pegable para depuración
 title: "estado"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:02Z
 ---
 
 # `openclaw status`

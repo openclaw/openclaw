@@ -5,25 +5,18 @@ read_when:
   - Bạn muốn một máy chủ API cục bộ bọc quanh Claude Code CLI
   - Bạn muốn tiết kiệm chi phí bằng cách dùng gói đăng ký thay vì khóa API
 title: "Claude Max API Proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:52Z
 ---
 
 # Claude Max API Proxy
 
-**claude-max-api-proxy** là một công cụ cộng đồng giúp phơi bày gói đăng ký Claude Max/Pro của bạn như một endpoint API tương thích OpenAI. Nhờ đó, bạn có thể dùng gói đăng ký với bất kỳ công cụ nào hỗ trợ định dạng API OpenAI.
+**claude-max-api-proxy** là một công cụ cộng đồng cho phép xuất gói đăng ký Claude Max/Pro của bạn dưới dạng endpoint API tương thích OpenAI. Điều này cho phép bạn sử dụng gói đăng ký của mình với bất kỳ công cụ nào hỗ trợ định dạng API OpenAI.
 
 ## Vì sao nên dùng?
 
-| Cách tiếp cận  | Chi phí                                              | Phù hợp nhất                                     |
-| -------------- | ---------------------------------------------------- | ------------------------------------------------ |
+| Cách tiếp cận  | Chi phí                                                                                 | Phù hợp nhất                                     |
+| -------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------ |
 | Anthropic API  | Trả theo token (~$15/M input, $75/M output cho Opus) | Ứng dụng sản xuất, lưu lượng cao                 |
-| Gói Claude Max | $200/tháng cố định                                   | Dùng cá nhân, phát triển, sử dụng không giới hạn |
+| Gói Claude Max | $200/tháng cố định                                                                      | Dùng cá nhân, phát triển, sử dụng không giới hạn |
 
 Nếu bạn có gói Claude Max và muốn dùng với các công cụ tương thích OpenAI, proxy này có thể giúp bạn tiết kiệm đáng kể.
 

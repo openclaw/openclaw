@@ -5,13 +5,6 @@ read_when:
   - Cron wurde ausgeführt, aber es wurde keine Nachricht zugestellt
   - Heartbeat wirkt stumm oder wurde übersprungen
 title: "Fehlerbehebung bei Automatisierung"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:04Z
 ---
 
 # Fehlerbehebung bei Automatisierung

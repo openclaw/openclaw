@@ -4,13 +4,6 @@ read_when:
   - การตั้งค่า OpenClaw บน DigitalOcean
   - มองหาโฮสต์ VPS ราคาประหยัดสำหรับ OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:29Z
 ---
 
 # OpenClaw บน DigitalOcean
@@ -23,13 +16,13 @@ x-i18n:
 
 ## เปรียบเทียบค่าใช้จ่าย (2026)
 
-| ผู้ให้บริการ | แพ็กเกจ         | สเปก                    | ราคา/เดือน  | หมายเหตุ                             |
-| ------------ | --------------- | ----------------------- | ----------- | ------------------------------------ |
-| Oracle Cloud | Always Free ARM | สูงสุด 4 OCPU, 24GB RAM | $0          | ARM, ความจุจำกัด/ขั้นตอนสมัครยุ่งยาก |
+| ผู้ให้บริการ | แผน             | Specs                   | ราคา/เดือน                                                     | หมายเหตุ                             |
+| ------------ | --------------- | ----------------------- | -------------------------------------------------------------- | ------------------------------------ |
+| Oracle Cloud | Always Free ARM | สูงสุด 4 OCPU, 24GB RAM | $0                                                             | ARM, ความจุจำกัด/ขั้นตอนสมัครยุ่งยาก |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM         | €3.79 (~$4) | ตัวเลือกแบบเสียเงินที่ถูกที่สุด      |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6          | UI ใช้งานง่าย เอกสารดี               |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6          | มีหลายโลเคชัน                        |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5          | ปัจจุบันเป็นส่วนหนึ่งของ Akamai      |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6                                                             | UI ใช้งานง่าย เอกสารดี               |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6                                                             | มีหลายโลเคชัน                        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5                                                             | ปัจจุบันเป็นส่วนหนึ่งของ Akamai      |
 
 **การเลือกผู้ให้บริการ:**
 
@@ -45,7 +38,7 @@ x-i18n:
 - คู่กุญแจ SSH (หรือยอมรับการใช้รหัสผ่าน)
 - เวลาประมาณ ~20 นาที
 
-## 1) สร้าง Droplet
+## 1. สร้าง Droplet
 
 1. เข้าสู่ระบบที่ [DigitalOcean](https://cloud.digitalocean.com/)
 2. คลิก **Create → Droplets**
@@ -63,7 +56,7 @@ x-i18n:
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) ติดตั้ง OpenClaw
+## 3. ติดตั้ง OpenClaw
 
 ```bash
 # Update system
@@ -80,20 +73,20 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) รันขั้นตอน Onboarding
+## 4. รันขั้นตอน Onboarding
 
 ```bash
 openclaw onboard --install-daemon
 ```
 
-ตัวช่วยจะพาคุณตั้งค่า:
+ตัวช่วยจะพาคุณไปทีละขั้นตอน:
 
 - การยืนยันตัวตนของโมเดล (คีย์API หรือ OAuth)
 - การตั้งค่าช่องทาง (Telegram, WhatsApp, Discord ฯลฯ)
 - Gateway token (สร้างอัตโนมัติ)
 - การติดตั้ง Daemon (systemd)
 
-## 5) ตรวจสอบ Gateway
+## 5. ตรวจสอบ Gateway
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) เข้าถึงแดชบอร์ด
+## 6. เข้าถึงแดชบอร์ด
 
-Gateway จะ bind กับ loopback เป็นค่าเริ่มต้น หากต้องการเข้าถึง Control UI:
+Gateway จะ bind กับ loopback เป็นค่าเริ่มต้น หากต้องการเข้าถึง Control UI: เพื่อเข้าถึง Control UI:
 
 **ตัวเลือก A: อุโมงค์SSH (แนะนำ)**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 เปิด: `http://<tailscale-ip>:18789` (ต้องใช้โทเคน)
 
-## 7) เชื่อมต่อช่องทางของคุณ
+## 7. เชื่อมต่อช่องทางของคุณ
 
 ### Telegram
 
@@ -169,7 +162,7 @@ openclaw channels login whatsapp
 
 ## การปรับแต่งสำหรับ RAM 1GB
 
-Droplet ราคา $6 มี RAM เพียง 1GB เพื่อให้ทำงานได้ราบรื่น:
+Droplet ราคา $6 มี RAM เพียง 1GB เพื่อให้ทำงานได้ราบรื่น: เพื่อให้ทุกอย่างทำงานได้อย่างราบรื่น:
 
 ### เพิ่ม swap (แนะนำ)
 
@@ -197,14 +190,14 @@ htop
 
 ---
 
-## ความคงอยู่ของข้อมูล
+## การคงอยู่ของข้อมูล
 
 สถานะทั้งหมดอยู่ที่:
 
 - `~/.openclaw/` — คอนฟิก ข้อมูลรับรอง ข้อมูลเซสชัน
 - `~/.openclaw/workspace/` — เวิร์กสเปซ (SOUL.md, หน่วยความจำ ฯลฯ)
 
-ข้อมูลเหล่านี้จะคงอยู่หลังรีบูต ควรสำรองข้อมูลเป็นระยะ:
+สิ่งเหล่านี้จะคงอยู่หลังการรีบูต สำรองข้อมูลเป็นระยะ:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -216,7 +209,7 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud มีอินสแตนซ์ ARM แบบ **Always Free** ที่ทรงพลังกว่าตัวเลือกแบบเสียเงินทั้งหมดในหน้านี้ — ในราคา $0/เดือน
 
-| สิ่งที่ได้รับ     | สเปก                  |
+| สิ่งที่ได้รับ     | Specs                 |
 | ----------------- | --------------------- |
 | **4 OCPUs**       | ARM Ampere A1         |
 | **24GB RAM**      | มากเกินพอ             |
@@ -228,7 +221,7 @@ Oracle Cloud มีอินสแตนซ์ ARM แบบ **Always Free** ท
 - การสมัครอาจจุกจิก (ลองใหม่หากล้มเหลว)
 - สถาปัตยกรรม ARM — ส่วนใหญ่ใช้งานได้ แต่บางไบนารีต้องใช้เวอร์ชัน ARM
 
-ดูคู่มือการตั้งค่าแบบเต็มได้ที่ [Oracle Cloud](/platforms/oracle) และสำหรับเคล็ดลับการสมัครและการแก้ไขปัญหาขั้นตอน enrollment ดูที่ [คู่มือชุมชน](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd)
+ดูคู่มือการตั้งค่าแบบเต็มได้ที่ [Oracle Cloud](/platforms/oracle) และสำหรับเคล็ดลับการสมัครและการแก้ไขปัญหาขั้นตอน enrollment ดูที่ [คู่มือชุมชน](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) สำหรับเคล็ดลับการสมัครและการแก้ไขปัญหาในกระบวนการลงทะเบียน ดูที่ [คู่มือชุมชน](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) นี้
 
 ---
 

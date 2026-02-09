@@ -5,18 +5,11 @@ read_when:
   - macOS の gateway launchd サービスのデバッグ
   - macOS 向け gateway CLI のインストール
 title: "macOS 上の Gateway"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:32Z
 ---
 
 # macOS 上の Gateway（外部 launchd）
 
-OpenClaw.app には、Node/Bun や Gateway ランタイムはもはや同梱されていません。macOS アプリは **外部** の `openclaw` CLI インストールを前提としており、Gateway を子プロセスとして起動しません。代わりに、Gateway を実行し続けるためのユーザー単位の launchd サービスを管理します（すでにローカルで Gateway が起動している場合は、それに接続します）。
+OpenClaw.app がNode/Bun や Gateway のランタイムをバンドルしなくなりました。 OpenClaw.app には、Node/Bun や Gateway ランタイムはもはや同梱されていません。macOS アプリは **外部** の `openclaw` CLI インストールを前提としており、Gateway を子プロセスとして起動しません。代わりに、Gateway を実行し続けるためのユーザー単位の launchd サービスを管理します（すでにローカルで Gateway が起動している場合は、それに接続します）。
 
 ## CLI のインストール（ローカルモードに必須）
 
@@ -57,6 +50,7 @@ Plist の場所（ユーザー単位）:
 ## バージョン互換性
 
 macOS アプリは、gateway のバージョンを自身のバージョンと照合します。互換性がない場合は、アプリのバージョンに合わせてグローバル CLI を更新してください。
+互換性がない場合は、グローバルCLIをアプリのバージョンに合わせて更新してください。
 
 ## スモークチェック
 

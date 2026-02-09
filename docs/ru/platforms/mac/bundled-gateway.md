@@ -5,13 +5,6 @@ read_when:
   - Отладка сервиса launchd Gateway (шлюз) на macOS
   - Установка CLI Gateway (шлюз) для macOS
 title: "Gateway (шлюз) на macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:44Z
 ---
 
 # Gateway (шлюз) на macOS (внешний launchd)
@@ -54,7 +47,7 @@ npm install -g openclaw@<version>
 - Если Gateway (шлюз) уже запущен на настроенном порту, приложение подключается к нему
   вместо запуска нового экземпляра.
 
-Журналы:
+Метка:
 
 - stdout/err launchd: `/tmp/openclaw/openclaw-gateway.log`
 
@@ -63,7 +56,7 @@ npm install -g openclaw@<version>
 Приложение для macOS проверяет версию Gateway (шлюз) на соответствие собственной версии. Если они
 несовместимы, обновите глобальный CLI до версии, соответствующей версии приложения.
 
-## Быстрая проверка
+## Дым
 
 ```bash
 openclaw --version

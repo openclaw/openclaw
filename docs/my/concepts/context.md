@@ -5,18 +5,11 @@ read_when:
   - မော်ဒယ်က ဘာကြောင့် အချက်အလက်တစ်ခုကို “သိနေ” သို့မဟုတ် “မေ့သွား” သလဲ ဆိုတာ စစ်ဆေးနေတဲ့အခါ
   - context အလွန်အကျွံ သုံးစွဲမှုကို လျှော့ချချင်တဲ့အခါ (/context, /status, /compact)
 title: "Context"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:28Z
 ---
 
 # Context
 
-“Context” ဆိုတာ **run တစ်ခုအတွက် OpenClaw က မော်ဒယ်ထံ ပို့လိုက်တဲ့ အရာအားလုံး** ကို ဆိုလိုပါတယ်။ ဒါဟာ မော်ဒယ်ရဲ့ **context window** (token ကန့်သတ်ချက်) အတွင်းမှာ ကန့်သတ်ထားပါတယ်။
+6. “Context” ဆိုသည်မှာ **run တစ်ကြိမ်အတွက် OpenClaw က model ဆီသို့ ပို့သော အရာအားလုံး** ကို ဆိုလိုပါသည်။ 7. ၎င်းကို model ၏ **context window** (token limit) ဖြင့် ကန့်သတ်ထားပါသည်။
 
 အစပြုသူအတွက် စိတ်ကူးပုံစံ—
 
@@ -96,7 +89,7 @@ Top tools (schema size):
 
 ## OpenClaw က system prompt ကို ဘယ်လို တည်ဆောက်သလဲ
 
-System prompt ကို **OpenClaw ပိုင်ဆိုင်** ပြီး run တစ်ခါချင်းစီ ပြန်လည် တည်ဆောက်ပါတယ်။ ပါဝင်တာတွေက—
+8. System prompt သည် **OpenClaw ပိုင်ဆိုင်သော အရာ** ဖြစ်ပြီး run တစ်ကြိမ်စီတွင် ပြန်လည် တည်ဆောက်ပါသည်။ 9. ၎င်းတွင် ပါဝင်သည်မှာ:
 
 - Tool စာရင်း + အကျဉ်းချုပ် ဖော်ပြချက်များ။
 - Skills စာရင်း (metadata သာ; အောက်တွင် ကြည့်ပါ)။
@@ -119,26 +112,26 @@ System prompt ကို **OpenClaw ပိုင်ဆိုင်** ပြီး
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (ပထမဆုံး run တွင်သာ)
 
-ဖိုင်အကြီးများကို ဖိုင်တစ်ခုချင်းစီအလိုက် `agents.defaults.bootstrapMaxChars` ကို အသုံးပြုပြီး ဖြတ်တောက်ပါတယ် (default `20000` characters)။ `/context` မှာ **raw vs injected** အရွယ်အစားများနဲ့ ဖြတ်တောက်ခဲ့/မခဲ့ ကို ပြသပါတယ်။
+10. Large files များကို file တစ်ခုချင်းစီအလိုက် `agents.defaults.bootstrapMaxChars` (default `20000` chars) ဖြင့် truncate လုပ်ပါသည်။ 11. `/context` သည် **raw vs injected** size များနှင့် truncation ဖြစ်ပေါ်ခဲ့သလား ဆိုသည်ကို ပြသပါသည်။
 
 ## Skills: inject လုပ်ထားတာ vs လိုအပ်မှ load လုပ်တာ
 
-System prompt ထဲမှာ အကျဉ်းချုပ်ထားတဲ့ **skills list** (အမည် + ဖော်ပြချက် + တည်နေရာ) ပါဝင်ပါတယ်။ ဒီစာရင်းဟာ context overhead တကယ်ရှိပါတယ်။
+12. System prompt ထဲတွင် compact ဖြစ်သော **skills list** (name + description + location) ပါဝင်ပါသည်။ 13. ဤစာရင်းတွင် အမှန်တကယ် overhead ရှိပါသည်။
 
-Skill instructions ကို ပုံမှန်အားဖြင့် မထည့်သွင်းပါဘူး။ မော်ဒယ်က လိုအပ်တဲ့အချိန်မှာသာ skill ရဲ့ `SKILL.md` ကို `read` လုပ်ဖို့ မျှော်လင့်ထားပါတယ်။
+14. Skill instructions များကို default အနေဖြင့် မထည့်သွင်းပါ။ 15. Model သည် လိုအပ်သည့်အချိန်တွင်သာ skill ၏ `SKILL.md` ကို **ဖတ်ရန် မျှော်လင့်ထားပါသည်**။
 
 ## Tools: ကုန်ကျစရိတ် နှစ်မျိုးရှိပါတယ်
 
 Tools တွေက context ကို နည်းလမ်း နှစ်မျိုးနဲ့ သက်ရောက်စေပါတယ်—
 
 1. System prompt ထဲက **Tool list စာသား** (“Tooling” အနေနဲ့ သင်မြင်ရတာ)။
-2. **Tool schemas** (JSON)။ မော်ဒယ်က tool ကို ခေါ်နိုင်အောင် ပို့ပေးရပြီး၊ plain text အနေနဲ့ မမြင်ရပေမယ့် context ထဲမှာ ထည့်တွက်ပါတယ်။
+2. 16. **Tool schemas** (JSON)။ 17. Model က tools များကို ခေါ်နိုင်ရန်အတွက် ၎င်းတို့ကို model ဆီသို့ ပို့ပါသည်။ 18. သင် plain text အဖြစ် မမြင်ရသော်လည်း ၎င်းတို့သည် context ထဲတွင် ရေတွက်ပါသည်။
 
 `/context detail` က အကြီးဆုံး tool schema များကို ခွဲပြထားလို့ ဘာတွေက အဓိက占နေသလဲ သိနိုင်ပါတယ်။
 
 ## Commands, directives, နှင့် “inline shortcuts”
 
-Slash commands တွေကို Gateway က ကိုင်တွယ်ပါတယ်။ အပြုအမူ မတူညီတဲ့ အမျိုးအစားအချို့ရှိပါတယ်—
+19. Slash commands များကို Gateway မှ ကိုင်တွယ်ပါသည်။ 20. အပြုအမူ မျိုးစုံ ရှိပါသည်:
 
 - **Standalone commands**: မက်ဆေ့ချ်တစ်ခုလုံးက `/...` သာ ဖြစ်နေရင် command အဖြစ် run လုပ်ပါတယ်။
 - **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` တွေကို မော်ဒယ် မမြင်ခင် ဖယ်ရှားလိုက်ပါတယ်။

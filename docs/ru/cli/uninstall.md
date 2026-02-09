@@ -4,13 +4,6 @@ read_when:
   - Вы хотите удалить службу Gateway (шлюз) и/или локальное состояние
   - Вы хотите сначала выполнить dry-run
 title: "удаление"
-x-i18n:
-  source_path: cli/uninstall.md
-  source_hash: 8d6c3890923f18f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:18Z
 ---
 
 # `openclaw uninstall`

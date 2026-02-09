@@ -5,13 +5,6 @@ read_when:
   - Cron は実行されたがメッセージが配信されなかった
   - Heartbeat が無音またはスキップされているように見える
 title: "オートメーションのトラブルシューティング"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:48Z
 ---
 
 # オートメーションのトラブルシューティング

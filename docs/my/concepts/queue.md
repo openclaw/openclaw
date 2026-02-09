@@ -3,13 +3,6 @@ summary: "အဝင် auto-reply အလုပ်လုပ်ဆောင်မ�
 read_when:
   - Auto-reply အကောင်အထည်ဖော်မှု သို့မဟုတ် concurrency ကို ပြောင်းလဲသောအခါ
 title: "Command Queue"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:28Z
 ---
 
 # Command Queue (2026-01-16)
@@ -33,17 +26,17 @@ x-i18n:
 
 အဝင်မက်ဆေ့ချ်များသည် လက်ရှိ run ကို ထိန်းညှိနိုင်သည်၊ နောက်ထပ် turn ကို စောင့်နိုင်သည်၊ သို့မဟုတ် နှစ်ခုစလုံးကို ပြုလုပ်နိုင်သည်–
 
-- `steer`: လက်ရှိ run ထဲသို့ ချက်ချင်း ထည့်သွင်းခြင်း (နောက် tool boundary အပြီး pending tool calls များကို ပယ်ဖျက်သည်)။ Streaming မလုပ်ပါက followup သို့ ပြန်လည်ကျရောက်မည်။
+- `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
 - `followup`: လက်ရှိ run ပြီးဆုံးပြီးနောက် နောက် agent turn အတွက် enqueue ပြုလုပ်ခြင်း။
-- `collect`: queued မက်ဆေ့ချ်အားလုံးကို **တစ်ခုတည်းသော** followup turn အဖြစ် ပေါင်းစည်းခြင်း (မူလသတ်မှတ်ချက်)။ မက်ဆေ့ချ်များသည် ချန်နယ်/threads မတူပါက routing ကို ထိန်းသိမ်းရန် သီးသန့်စီ ထုတ်လုပ်လုပ်ဆောင်မည်။
+- `collect`: coalesce all queued messages into a **single** followup turn (default). If messages target different channels/threads, they drain individually to preserve routing.
 - `steer-backlog` (aka `steer+backlog`): ယခု steer ပြုလုပ်ပြီး **အပြင်** followup turn အတွက် မက်ဆေ့ချ်ကို သိမ်းဆည်းထားခြင်း။
 - `interrupt` (legacy): ထို session အတွက် active run ကို ဖျက်သိမ်းပြီး နောက်ဆုံးရ မက်ဆေ့ချ်ကို လုပ်ဆောင်ခြင်း။
 - `queue` (legacy alias): `steer` နှင့် အတူတူ ဖြစ်သည်။
 
-Steer-backlog သည် steered run ပြီးနောက် followup တုံ့ပြန်မှု တစ်ခု ထပ်မံရနိုင်သဖြင့်
-streaming surface များတွင် ထပ်တူထပ်မျှ ဖြစ်နေသကဲ့သို့ မြင်ရနိုင်သည်။ အဝင်မက်ဆေ့ချ် တစ်ခုလျှင်
-တုံ့ပြန်မှု တစ်ခုသာ လိုလားပါက `collect`/`steer` ကို အသုံးပြုရန် အကြံပြုသည်။
-`/queue collect` ကို standalone command (per-session) အဖြစ် ပို့ပါ သို့မဟုတ် `messages.queue.byChannel.discord: "collect"` ကို သတ်မှတ်ပါ။
+Steer-backlog means you can get a followup response after the steered run, so
+streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
+one response per inbound message.
+Send `/queue collect` as a standalone command (per-session) or set `messages.queue.byChannel.discord: "collect"`.
 
 Defaults (config တွင် မသတ်မှတ်ထားသောအခါ):
 
@@ -73,8 +66,8 @@ Options များသည် `followup`, `collect`, နှင့် `steer-back
 - `cap`: session တစ်ခုလျှင် queued မက်ဆေ့ချ် အများဆုံးအရေအတွက်။
 - `drop`: overflow policy (`old`, `new`, `summarize`)။
 
-Summarize သည် ပယ်ချထားသော မက်ဆေ့ချ်များကို အတိုချုံး bullet list အဖြစ် ထားရှိပြီး synthetic followup prompt အဖြစ် ထည့်သွင်းပေးသည်။
-Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`။
+Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
+Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 ## Per-session overrides
 

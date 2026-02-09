@@ -4,13 +4,6 @@ read_when:
   - チャンネルの健全性と最近のセッション受信者を素早く診断したいとき
   - デバッグ用に貼り付け可能な「すべて」のステータスが欲しいとき
 title: "status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:16Z
 ---
 
 # `openclaw status`

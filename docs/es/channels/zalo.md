@@ -3,13 +3,6 @@ summary: "Estado de compatibilidad del bot de Zalo, capacidades y configuración
 read_when:
   - Trabajando en funciones o webhooks de Zalo
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:56Z
 ---
 
 # Zalo (Bot API)
@@ -31,7 +24,7 @@ Zalo se distribuye como un plugin y no está incluido en la instalación princip
    - Desde npm (si está publicado): `openclaw plugins install @openclaw/zalo`
    - O elija **Zalo** en el onboarding y confirme el aviso de instalación
 2. Configure el token:
-   - Variable de entorno: `ZALO_BOT_TOKEN=...`
+   - Env: `ZALO_BOT_TOKEN=...`
    - O configuración: `channels.zalo.botToken: "..."`.
 3. Reinicie el Gateway (o finalice el onboarding).
 4. El acceso a mensajes directos se empareja de forma predeterminada; apruebe el código de emparejamiento en el primer contacto.
@@ -62,7 +55,7 @@ Es una buena opción para soporte o notificaciones cuando se desea un enrutamien
 
 ## Configuración (ruta rápida)
 
-### 1) Crear un token de bot (Zalo Bot Platform)
+### 1. Crear un token de bot (Zalo Bot Platform)
 
 1. Vaya a [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) e inicie sesión.
 2. Cree un nuevo bot y configure sus ajustes.
@@ -105,7 +98,7 @@ Soporte multi-cuenta: use `channels.zalo.accounts` con tokens por cuenta y `name
 
 ## Control de acceso (mensajes directos)
 
-### Acceso a mensajes directos
+### Acceso DM
 
 - Predeterminado: `channels.zalo.dmPolicy = "pairing"`. Los remitentes desconocidos reciben un código de emparejamiento; los mensajes se ignoran hasta que se aprueban (los códigos expiran después de 1 hora).
 - Aprobar mediante:
@@ -134,16 +127,16 @@ Soporte multi-cuenta: use `channels.zalo.accounts` con tokens por cuenta y `name
 
 ## Capacidades
 
-| Función           | Estado                       |
-| ----------------- | ---------------------------- |
-| Mensajes directos | ✅ Compatible                |
-| Grupos            | ❌ Próximamente (según Zalo) |
-| Medios (imágenes) | ✅ Compatible                |
-| Reacciones        | ❌ No compatible             |
-| Hilos             | ❌ No compatible             |
-| Encuestas         | ❌ No compatible             |
-| Comandos nativos  | ❌ No compatible             |
-| Streaming         | ⚠️ Bloqueado (límite 2000)   |
+| Función                              | Estado                                         |
+| ------------------------------------ | ---------------------------------------------- |
+| Mensajes directos                    | ✅ Compatible                                   |
+| Grupos                               | ❌ Próximamente (según Zalo) |
+| Medios (imágenes) | ✅ Compatible                                   |
+| Reacciones                           | ❌ No compatible                                |
+| Hilos                                | ❌ No compatible                                |
+| Encuestas                            | ❌ No compatible                                |
+| Comandos nativos                     | ❌ No compatible                                |
+| Streaming                            | ⚠️ Bloqueado (límite 2000)  |
 
 ## Destinos de entrega (CLI/cron)
 

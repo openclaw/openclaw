@@ -5,23 +5,16 @@ read_when:
   - Ikaw ay nagbabago ng transcript sanitization o lohika ng pag-ayos ng tool-call
   - Ikaw ay nag-iimbestiga ng mga mismatch ng tool-call id sa iba’t ibang provider
 title: "Transcript Hygiene"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:59Z
 ---
 
 # Transcript Hygiene (Mga Fixup ng Provider)
 
-Inilalarawan ng dokumentong ito ang **provider-specific na mga fix** na inilalapat sa mga transcript bago ang isang run
-(pagbubuo ng model context). Ito ay mga **in-memory** na pagsasaayos na ginagamit para matugunan ang mahihigpit
-na kinakailangan ng provider. Ang mga hygiene step na ito ay **hindi** nirerewrite ang nakaimbak na JSONL transcript
-sa disk; gayunpaman, ang hiwalay na session-file repair pass ay maaaring mag-rewrite ng mga malformed na JSONL file
-sa pamamagitan ng pag-drop ng mga invalid na linya bago i-load ang session. Kapag may naganap na repair, bina-backup
-ang orihinal na file katabi ng session file.
+Inilalarawan ng dokumentong ito ang **provider-specific fixes** na inilalapat sa mga transcript bago ang isang run
+(pagbubuo ng model context). Ito ay mga **in-memory** na pagsasaayos na ginagamit upang matugunan ang mahigpit na
+mga kinakailangan ng provider. Ang mga hakbang na ito sa hygiene ay **hindi** muling isinusulat ang naka-store na JSONL transcript
+sa disk; gayunpaman, ang isang hiwalay na session-file repair pass ay maaaring muling magsulat ng mga malformed JSONL file
+sa pamamagitan ng pag-drop ng mga invalid na linya bago i-load ang session. Kapag may naganap na repair, ang orihinal
+na file ay bina-back up katabi ng session file.
 
 Kasama sa saklaw ang:
 
@@ -68,9 +61,9 @@ Implementasyon:
 
 ## Pandaigdigang panuntunan: malformed na tool calls
 
-Ang mga assistant tool-call block na kulang sa parehong `input` at `arguments` ay dini-drop
+Ang mga assistant tool-call block na nawawala ang parehong `input` at `arguments` ay inaalis
 bago buuin ang model context. Pinipigilan nito ang mga provider rejection mula sa bahagyang
-na-persist na tool calls (halimbawa, pagkatapos ng rate limit failure).
+na-persist na tool call (halimbawa, pagkatapos ng rate limit failure).
 
 Implementasyon:
 
@@ -131,6 +124,6 @@ Bago ang release na 2026.1.22, nag-apply ang OpenClaw ng maraming layer ng trans
   - Pag-drop ng mga empty assistant error turn.
   - Pag-trim ng assistant content pagkatapos ng mga tool call.
 
-Ang komplikasyong ito ay nagdulot ng mga cross-provider regression (kapansin-pansin ang pagpapares ng `openai-responses`
-`call_id|fc_id`). Inalis ng cleanup noong 2026.1.22 ang extension, isinentro ang lohika sa runner, at ginawang **no-touch**
-ang OpenAI bukod sa image sanitization.
+Ang komplikasyong ito ay nagdulot ng cross-provider regressions (lalo na ang `openai-responses`
+`call_id|fc_id` pairing). Inalis ng 2026.1.22 cleanup ang extension, isinentro ang
+logic sa runner, at ginawang **no-touch** ang OpenAI lampas sa image sanitization.

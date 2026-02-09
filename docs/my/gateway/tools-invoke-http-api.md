@@ -4,18 +4,11 @@ read_when:
   - အေးဂျင့် လှည့်ပတ်မှုအပြည့်အစုံ မပြေးဆွဲဘဲ ကိရိယာများကို ခေါ်ဆိုလိုသည့်အခါ
   - ကိရိယာ မူဝါဒအကောင်အထည်ဖော်မှု လိုအပ်သော အလိုအလျောက်လုပ်ငန်းများ တည်ဆောက်သည့်အခါ
 title: "Tools Invoke API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:27Z
 ---
 
 # Tools Invoke (HTTP)
 
-OpenClaw ၏ Gateway သည် ကိရိယာတစ်ခုကို တိုက်ရိုက် ခေါ်ဆိုအသုံးပြုနိုင်ရန် ရိုးရှင်းသော HTTP အဆုံးမှတ်ကို ဖော်ထုတ်ပေးထားသည်။ ၎င်းကို အမြဲတမ်း ဖွင့်ထားသော်လည်း Gateway အထောက်အထားအတည်ပြုခြင်းနှင့် ကိရိယာ မူဝါဒများဖြင့် ထိန်းချုပ်ထားသည်။
+OpenClaw ၏ Gateway သည် tool တစ်ခုတည်းကို တိုက်ရိုက် ခေါ်ယူရန်အတွက် ရိုးရှင်းသော HTTP endpoint တစ်ခုကို ဖော်ပြထားပါသည်။ အမြဲတမ်း ဖွင့်ထားသော်လည်း Gateway auth နှင့် tool policy ဖြင့် ကန့်သတ်ထားပါသည်။
 
 - `POST /tools/invoke`
 - Gateway နှင့် တူညီသော ပေါက် (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -24,7 +17,7 @@ OpenClaw ၏ Gateway သည် ကိရိယာတစ်ခုကို တိ
 
 ## Authentication
 
-Gateway အထောက်အထားအတည်ပြုခြင်း ဖွဲ့စည်းပြင်ဆင်မှုကို အသုံးပြုသည်။ bearer token ကို ပို့ပါ။
+Gateway auth configuration ကို အသုံးပြုပါသည်။ Bearer token တစ်ခု ပို့ပါ:
 
 - `Authorization: Bearer <token>`
 
@@ -50,7 +43,7 @@ Fields:
 - `tool` (string, လိုအပ်): ခေါ်ဆိုမည့် ကိရိယာအမည်။
 - `action` (string, မလိုအပ်): ကိရိယာ schema မှ `action` ကို ထောက်ပံ့ပြီး args payload တွင် မပါရှိပါက args ထဲသို့ ချိတ်ဆက်သွားမည်။
 - `args` (object, မလိုအပ်): ကိရိယာအလိုက် သီးသန့် arguments များ။
-- `sessionKey` (string, မလိုအပ်): ရည်ရွယ်သည့် ဆက်ရှင် ကီး။ မထည့်ထားပါက သို့မဟုတ် `"main"` ဖြစ်ပါက Gateway သည် ဖွဲ့စည်းထားသော အဓိက ဆက်ရှင် ကီးကို အသုံးပြုမည် ( `session.mainKey` နှင့် ပုံမှန် အေးဂျင့်ကို လိုက်နာခြင်း သို့မဟုတ် global scope တွင် `global` ကို အသုံးပြုခြင်း)။
+- `sessionKey` (string, optional): ပစ်မှတ် session key ဖြစ်သည်။ မထည့်ထားပါက သို့မဟုတ် `"main"` ဖြစ်ပါက Gateway သည် ပြင်ဆင်ထားသော main session key ကို အသုံးပြုပါမည် (`session.mainKey` နှင့် default agent ကို လေးစားလိုက်နာပြီး၊ global scope တွင် `global` ကို အသုံးပြုပါသည်)။
 - `dryRun` (boolean, မလိုအပ်): အနာဂတ် အသုံးပြုရန် သိမ်းဆည်းထားခြင်းဖြစ်ပြီး လက်ရှိတွင် မသုံးပါ။
 
 ## Policy + routing behavior

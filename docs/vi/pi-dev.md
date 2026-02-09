@@ -1,12 +1,5 @@
 ---
 title: "Quy trình phát triển Pi"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:31Z
 ---
 
 # Quy trình phát triển Pi
@@ -58,7 +51,7 @@ Quy trình khuyến nghị:
 
 ## Đặt lại trạng thái sạch
 
-Trạng thái được lưu dưới thư mục trạng thái của OpenClaw. Mặc định là `~/.openclaw`. Nếu `OPENCLAW_STATE_DIR` được đặt, hãy sử dụng thư mục đó thay thế.
+6. Trạng thái nằm dưới thư mục state của OpenClaw. 7. Mặc định là `~/.openclaw`. 8. Nếu đặt `OPENCLAW_STATE_DIR`, hãy dùng thư mục đó thay thế.
 
 Để đặt lại mọi thứ:
 
@@ -69,7 +62,7 @@ Trạng thái được lưu dưới thư mục trạng thái của OpenClaw. M�
 - `sessions/` nếu tồn tại các đường dẫn legacy
 - `workspace/` nếu bạn muốn một workspace trống
 
-Nếu bạn chỉ muốn đặt lại các phiên, hãy xóa `agents/<agentId>/sessions/` và `agents/<agentId>/sessions.json` cho tác tử đó. Giữ `credentials/` nếu bạn không muốn xác thực lại.
+9. Nếu bạn chỉ muốn reset session, hãy xóa `agents/<agentId>/sessions/` và `agents/<agentId>/sessions.json` cho agent đó. 10. Giữ lại `credentials/` nếu bạn không muốn xác thực lại.
 
 ## Tài liệu tham khảo
 

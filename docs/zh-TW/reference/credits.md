@@ -1,22 +1,15 @@
 ---
-summary: "專案起源、貢獻者與授權。"
+summary: "Project origin, contributors, and license."
 read_when:
-  - 當你想了解專案背景故事或貢獻者名單時
-title: "致謝"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:03Z
+  - You want the project backstory or contributor credits
+title: "Credits"
 ---
 
 ## 名稱由來
 
 OpenClaw = CLAW + TARDIS，因為每一隻太空龍蝦都需要一台時間與空間機器。
 
-## 致謝
+## Credits
 
 - **Peter Steinberger** ([@steipete](https://x.com/steipete)) - 創作者、龍蝦低語者
 - **Mario Zechner** ([@badlogicc](https://x.com/badlogicgames)) - Pi 創作者、安全性滲透測試人員
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS，因為每一隻太空龍蝦都需要一台時間與�
 
 MIT - 像海洋中的龍蝦一樣自由。
 
-> 「我們其實都只是在玩自己的提示。」（某個 AI，可能因為 token 太多而嗨了）
+> "We are all just playing with our own prompts." (An AI, probably high on tokens)

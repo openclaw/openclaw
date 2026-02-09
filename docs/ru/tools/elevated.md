@@ -3,13 +3,6 @@ summary: "Повышенный режим выполнения и директи
 read_when:
   - Настройка значений по умолчанию повышенного режима, списков разрешённых или поведения slash-команд
 title: "Повышенный режим"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:06Z
 ---
 
 # Повышенный режим (/elevated directives)

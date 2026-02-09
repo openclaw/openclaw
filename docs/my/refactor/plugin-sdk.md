@@ -4,19 +4,12 @@ read_when:
   - Plugin ဗိသုကာကို သတ်မှတ်ခြင်း သို့မဟုတ် ပြန်လည်ဖွဲ့စည်းခြင်း ပြုလုပ်နေချိန်
   - ချန်နယ်ချိတ်ဆက်မှုများကို plugin SDK/runtime သို့ ပြောင်းရွှေ့နေချိန်
 title: "Plugin SDK ပြန်လည်ဖွဲ့စည်းခြင်း"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:07Z
 ---
 
 # Plugin SDK + Runtime ပြန်လည်ဖွဲ့စည်းရေး အစီအစဉ်
 
-ရည်မှန်းချက် — မက်ဆေ့ချ်ချန်နယ် ချိတ်ဆက်မှုတိုင်းသည် plugin (အတွဲလိုက် သို့မဟုတ် အပြင်ဘက်) ဖြစ်ပြီး တည်ငြိမ်သော API တစ်ခုတည်းကို အသုံးပြုရမည်။
-Plugin မည်သည့်ခုမဆို `src/**` မှ တိုက်ရိုက် import မလုပ်ရပါ။ အားလုံးသော မူတည်ချက်များကို SDK သို့မဟုတ် runtime မှတစ်ဆင့်သာ သုံးရမည်။
+43. ရည်မှန်းချက်: messaging connector တိုင်းသည် stable API တစ်ခုကို အသုံးပြုသော plugin (bundled သို့မဟုတ် external) ဖြစ်ရမည်။
+44. Plugin များသည် `src/**` မှ တိုက်ရိုက် import မလုပ်ရ။ 45. Dependencies အားလုံးကို SDK သို့မဟုတ် runtime မှတစ်ဆင့်သာ သုံးပါ။
 
 ## ယခုအချိန်တွင် ဘာကြောင့်လိုအပ်သလဲ
 
@@ -25,9 +18,9 @@ Plugin မည်သည့်ခုမဆို `src/**` မှ တိုက်�
 
 ## ရည်ရွယ်ထားသော ဗိသုကာ (အလွှာနှစ်ခု)
 
-### 1) Plugin SDK (compile-time, တည်ငြိမ်၊ ထုတ်ဝေနိုင်)
+### 1. Plugin SDK (compile-time, တည်ငြိမ်၊ ထုတ်ဝေနိုင်)
 
-အကျယ်အဝန်း — types, helpers နှင့် config utility များ။ runtime state မရှိ၊ side effect မရှိ။
+46. Scope: types, helpers, နှင့် config utilities။ 47. Runtime state မရှိ၊ side effects မရှိ။
 
 ပါဝင်သည့်အရာများ (ဥပမာများ):
 
@@ -44,10 +37,10 @@ Plugin မည်သည့်ခုမဆို `src/**` မှ တိုက်�
 - `openclaw/plugin-sdk` အဖြစ် ထုတ်ဝေခြင်း (သို့မဟုတ် core အောက်တွင် `openclaw/plugin-sdk` အဖြစ် export ပြုလုပ်ခြင်း)။
 - Semver နှင့် တည်ငြိမ်မှုအပေါ် သတ်မှတ်ချက်အတိအကျ ပါဝင်ရမည်။
 
-### 2) Plugin Runtime (လုပ်ဆောင်ရေးအလွှာ၊ inject လုပ်ပေးထားသည်)
+### 2. Plugin Runtime (လုပ်ဆောင်ရေးအလွှာ၊ inject လုပ်ပေးထားသည်)
 
-အကျယ်အဝန်း — core runtime အပြုအမူကို ထိတွေ့သော အရာအားလုံး။
-Plugin များသည် `OpenClawPluginApi.runtime` မှတစ်ဆင့်သာ အသုံးပြုရပြီး `src/**` ကို တိုက်ရိုက် import မလုပ်ရ။
+48. Scope: core runtime behavior ကို ထိတွေ့သည့် အရာအားလုံး။
+49. Plugin များသည် `OpenClawPluginApi.runtime` မှတစ်ဆင့် access လုပ်ရပြီး `src/**` ကို import မလုပ်ရ။
 
 အဆိုပြုထားသော surface (နည်းသော်လည်း ပြည့်စုံ):
 
@@ -195,7 +188,7 @@ export type PluginRuntime = {
 ## ကိုက်ညီမှုနှင့် ဗားရှင်းစနစ်
 
 - SDK: semver၊ ထုတ်ဝေထားပြီး၊ ပြောင်းလဲမှုများကို စာရွက်စာတမ်းပြုလုပ်ထားသည်။
-- Runtime: core release တစ်ခုချင်းစီအလိုက် ဗားရှင်းသတ်မှတ်သည်။ `api.runtime.version` ကို ထည့်သွင်းပါ။
+- 50. Runtime: core release အလိုက် versioned ဖြစ်သည်။ `api.runtime.version` ကို ထည့်ပါ။
 - Plugin များသည် လိုအပ်သော runtime အကွာအဝေးကို ကြေညာရမည် (ဥပမာ — `openclawRuntime: ">=2026.2.0"`)။
 
 ## စမ်းသပ်မှု မဟာဗျူဟာ

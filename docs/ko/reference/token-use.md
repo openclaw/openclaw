@@ -4,13 +4,6 @@ read_when:
   - 토큰 사용량, 비용 또는 컨텍스트 윈도우를 설명할 때
   - 컨텍스트 증가 또는 압축 동작을 디버깅할 때
 title: "토큰 사용 및 비용"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:21Z
 ---
 
 # 토큰 사용 및 비용

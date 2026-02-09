@@ -4,19 +4,11 @@ read_when:
   - Thiết lập giám sát hoặc cảnh báo hết hạn xác thực
   - Tự động hóa kiểm tra làm mới OAuth cho Claude Code / Codex
 title: "Giám sát xác thực"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:43Z
 ---
 
 # Giám sát xác thực
 
-OpenClaw cung cấp trạng thái sức khỏe hết hạn OAuth thông qua `openclaw models status`. Hãy dùng nó cho
-tự động hóa và cảnh báo; các script chỉ là tùy chọn bổ sung cho quy trình trên điện thoại.
+OpenClaw hiển thị tình trạng hết hạn OAuth thông qua `openclaw models status`. Hãy dùng điều này cho tự động hóa và cảnh báo; các script là phần bổ sung tùy chọn cho các quy trình làm việc trên điện thoại.
 
 ## Ưu tiên: kiểm tra bằng CLI (đa nền tảng)
 
@@ -34,8 +26,7 @@ Cách này hoạt động với cron/systemd và không cần script bổ sung.
 
 ## Script tùy chọn (ops / quy trình điện thoại)
 
-Các script này nằm trong `scripts/` và là **tùy chọn**. Chúng giả định có quyền truy cập SSH vào
-máy chủ gateway và được tinh chỉnh cho systemd + Termux.
+Chúng nằm trong `scripts/` và là **tùy chọn**. Chúng giả định có quyền truy cập SSH vào máy chủ gateway và được tinh chỉnh cho systemd + Termux.
 
 - `scripts/claude-auth-status.sh` hiện dùng `openclaw models status --json` làm
   nguồn sự thật (dự phòng bằng cách đọc trực tiếp file nếu CLI không khả dụng),

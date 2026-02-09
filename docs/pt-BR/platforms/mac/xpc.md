@@ -3,13 +3,6 @@ summary: "Arquitetura de IPC do macOS para o app OpenClaw, transporte de nó do 
 read_when:
   - Editando contratos de IPC ou IPC do app da barra de menus
 title: "IPC do macOS"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:33Z
 ---
 
 # Arquitetura de IPC do OpenClaw no macOS

@@ -3,13 +3,6 @@ summary: "Installatiehandleiding voor ontwikkelaars die aan de OpenClaw macOS-ap
 read_when:
   - Het instellen van de macOS-ontwikkelomgeving
 title: "macOS Dev-installatie"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:34Z
 ---
 
 # macOS-ontwikkelaarsinstallatie
@@ -23,7 +16,7 @@ Zorg ervoor dat je vóór het bouwen van de app het volgende hebt geïnstalleerd
 1. **Xcode 26.2+**: Vereist voor Swift-ontwikkeling.
 2. **Node.js 22+ & pnpm**: Vereist voor de Gateway, CLI en verpakkingsscripts.
 
-## 1. Afhankelijkheden installeren
+## 1) Afhankelijkheden installeren
 
 Installeer de projectbrede afhankelijkheden:
 

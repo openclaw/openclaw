@@ -1,15 +1,8 @@
 ---
-summary: „Status der Discord-Bot-Unterstützung, Funktionen und Konfiguration“
+summary: "„Status der Discord-Bot-Unterstützung, Funktionen und Konfiguration“"
 read_when:
   - Arbeit an Discord-Kanal-Funktionen
-title: „Discord“
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:04Z
+title: "Discord"
 ---
 
 # Discord (Bot API)
@@ -48,7 +41,7 @@ Minimale Konfiguration:
 - Gruppen-DMs werden standardmäßig ignoriert; aktivieren Sie sie über `channels.discord.dm.groupEnabled` und beschränken Sie sie optional über `channels.discord.dm.groupChannels`.
 - Deterministisches Routing beibehalten: Antworten gehen immer an den Kanal zurück, auf dem sie eingegangen sind.
 
-## Funktionsweise
+## Wie es funktioniert
 
 1. Erstellen Sie eine Discord-Anwendung → Bot, aktivieren Sie die benötigten Intents (DMs + Guild-Nachrichten + Nachrichteninhalt) und kopieren Sie das Bot-Token.
 2. Laden Sie den Bot mit den erforderlichen Berechtigungen auf Ihren Server ein, um Nachrichten dort zu lesen/senden, wo Sie ihn verwenden möchten.
@@ -71,8 +64,8 @@ Minimale Konfiguration:
     - Das Werkzeug `discord` ist nur verfügbar, wenn der aktuelle Kanal Discord ist.
 13. Native Befehle verwenden isolierte Sitzungsschlüssel (`agent:<agentId>:discord:slash:<userId>`) statt der gemeinsamen Sitzung `main`.
 
-Hinweis: Namens-→ID-Auflösung nutzt die Guild-Mitgliedersuche und erfordert Server Members Intent; wenn der Bot keine Mitglieder suchen kann, verwenden Sie IDs oder `<@id>`-Erwähnungen.  
-Hinweis: Slugs sind klein geschrieben, Leerzeichen werden durch `-` ersetzt. Kanalnamen werden ohne das führende `#` gesluggified.  
+Hinweis: Namens-→ID-Auflösung nutzt die Guild-Mitgliedersuche und erfordert Server Members Intent; wenn der Bot keine Mitglieder suchen kann, verwenden Sie IDs oder `<@id>`-Erwähnungen.
+Hinweis: Slugs sind klein geschrieben, Leerzeichen werden durch `-` ersetzt. Kanalnamen werden ohne das führende `#` gesluggified.
 Hinweis: Guild-Kontextzeilen `[from:]` enthalten `author.tag` + `id`, um ping-fähige Antworten zu erleichtern.
 
 ## Konfigurationsschreibzugriffe
@@ -91,7 +84,7 @@ Deaktivieren mit:
 
 Dies ist die Einrichtung im „Discord Developer Portal“ für den Betrieb von OpenClaw in einem Server-(Guild-)Kanal wie `#help`.
 
-### 1) Discord-App + Bot-Benutzer erstellen
+### 1. Discord-App + Bot-Benutzer erstellen
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. In Ihrer App:
@@ -109,7 +102,7 @@ Unter **Bot** → **Privileged Gateway Intents** aktivieren Sie:
 
 In der Regel benötigen Sie **Presence Intent** **nicht**. Das Setzen der eigenen Präsenz des Bots (Aktion `setPresence`) verwendet Gateway OP3 und erfordert diesen Intent nicht; er ist nur nötig, wenn Sie Präsenz-Updates anderer Guild-Mitglieder empfangen möchten.
 
-### 3) Einladungs-URL erzeugen (OAuth2 URL Generator)
+### 3. Einladungs-URL erzeugen (OAuth2 URL Generator)
 
 In Ihrer App: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Vermeiden Sie **Administrator**, außer Sie debuggen und vertrauen dem Bot volls
 
 Kopieren Sie die generierte URL, öffnen Sie sie, wählen Sie Ihren Server aus und installieren Sie den Bot.
 
-### 4) IDs ermitteln (Guild/Benutzer/Kanal)
+### 4. IDs ermitteln (Guild/Benutzer/Kanal)
 
 Discord verwendet überall numerische IDs; die OpenClaw-Konfiguration bevorzugt IDs.
 
@@ -202,12 +195,12 @@ Hinweise:
 - Multi-Agent-Override: Setzen Sie pro Agent Muster unter `agents.list[].groupChat.mentionPatterns`.
 - Wenn `channels` vorhanden ist, werden alle nicht aufgeführten Kanäle standardmäßig abgelehnt.
 - Verwenden Sie einen `"*"`-Kanal-Eintrag, um Standardwerte für alle Kanäle anzuwenden; explizite Kanal-Einträge überschreiben den Platzhalter.
-- Threads erben die Konfiguration des Elternkanals (Allowlist, `requireMention`, Skills, Prompts usw.), sofern Sie die Thread-Kanal-ID nicht explizit hinzufügen.
+- Threads erben die Konfiguration des Elternkanals (Allowlist, `requireMention`, Skills, Prompts usw.), sofern Sie die Thread-Kanal-ID nicht explizit hinzufügen. es sei denn, Sie fügen die Thread-Kanal-ID explizit hinzu.
 - Owner-Hinweis: Wenn eine Allowlist `users` pro Guild oder pro Kanal auf den Absender zutrifft, behandelt OpenClaw diesen Absender im System-Prompt als Owner. Für einen globalen Owner über alle Kanäle hinweg setzen Sie `commands.ownerAllowFrom`.
 - Vom Bot verfasste Nachrichten werden standardmäßig ignoriert; setzen Sie `channels.discord.allowBots=true`, um sie zuzulassen (eigene Nachrichten bleiben gefiltert).
 - Warnung: Wenn Sie Antworten an andere Bots erlauben (`channels.discord.allowBots=true`), verhindern Sie Bot-zu-Bot-Schleifen mit `requireMention`, `channels.discord.guilds.*.channels.<id>.users`-Allowlists und/oder klaren Schutzmechanismen in `AGENTS.md` und `SOUL.md`.
 
-### 6) Funktion prüfen
+### 6. Funktion prüfen
 
 1. Starten Sie das Gateway.
 2. Senden Sie im Serverkanal: `@Krill hello` (oder wie auch immer Ihr Bot heißt).
@@ -402,27 +395,27 @@ Allowlist-Hinweise (PK aktiviert):
 
 ### Standardwerte für Tool-Aktionen
 
-| Aktionsgruppe  | Standard    | Hinweise                                     |
-| -------------- | ----------- | -------------------------------------------- |
-| reactions      | aktiviert   | Reagieren + Reaktionen auflisten + emojiList |
-| stickers       | aktiviert   | Sticker senden                               |
-| emojiUploads   | aktiviert   | Emojis hochladen                             |
-| stickerUploads | aktiviert   | Sticker hochladen                            |
-| polls          | aktiviert   | Umfragen erstellen                           |
-| permissions    | aktiviert   | Kanal-Berechtigungssnapshot                  |
-| messages       | aktiviert   | Lesen/senden/bearbeiten/löschen              |
-| threads        | aktiviert   | Erstellen/auflisten/antworten                |
-| pins           | aktiviert   | Anpinnen/abpinnen/auflisten                  |
-| search         | aktiviert   | Nachrichtensuche (Vorschaufunktion)          |
-| memberInfo     | aktiviert   | Mitgliederinformationen                      |
-| roleInfo       | aktiviert   | Rollenliste                                  |
-| channelInfo    | aktiviert   | Kanalinfo + Liste                            |
-| channels       | aktiviert   | Kanal-/Kategorieverwaltung                   |
-| voiceStatus    | aktiviert   | Voice-Statusabfrage                          |
-| events         | aktiviert   | Geplante Events auflisten/erstellen          |
-| roles          | deaktiviert | Rollen hinzufügen/entfernen                  |
-| moderation     | deaktiviert | Timeout/Kick/Ban                             |
-| presence       | deaktiviert | Bot-Status/Aktivität (setPresence)           |
+| Aktionsgruppe  | Standard    | Hinweise                                               |
+| -------------- | ----------- | ------------------------------------------------------ |
+| reactions      | aktiviert   | Reagieren + Reaktionen auflisten + emojiList           |
+| stickers       | aktiviert   | Sticker senden                                         |
+| emojiUploads   | aktiviert   | Emojis hochladen                                       |
+| stickerUploads | aktiviert   | Sticker hochladen                                      |
+| polls          | aktiviert   | Umfragen erstellen                                     |
+| permissions    | aktiviert   | Kanal-Berechtigungssnapshot                            |
+| messages       | aktiviert   | Lesen/senden/bearbeiten/löschen                        |
+| threads        | aktiviert   | Erstellen/auflisten/antworten                          |
+| pins           | aktiviert   | Anpinnen/abpinnen/auflisten                            |
+| search         | aktiviert   | Nachrichtensuche (Vorschaufunktion) |
+| memberInfo     | aktiviert   | Mitgliederinformationen                                |
+| roleInfo       | aktiviert   | Rollenliste                                            |
+| channelInfo    | aktiviert   | Kanalinfo + Liste                                      |
+| channels       | aktiviert   | Kanal-/Kategorieverwaltung                             |
+| voiceStatus    | aktiviert   | Voice-Statusabfrage                                    |
+| events         | aktiviert   | Geplante Events auflisten/erstellen                    |
+| roles          | deaktiviert | Rollen hinzufügen/entfernen                            |
+| moderation     | deaktiviert | Timeout/Kick/Ban                                       |
+| presence       | deaktiviert | Bot-Status/Aktivität (setPresence)  |
 
 - `replyToMode`: `off` (Standard), `first` oder `all`. Gilt nur, wenn das Modell ein Antwort-Tag enthält.
 

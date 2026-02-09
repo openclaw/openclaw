@@ -3,13 +3,6 @@ summary: "Telegram-tilladelsesliste-hærdning: præfiks + normalisering af melle
 read_when:
   - Gennemgang af historiske ændringer i Telegram-tilladelseslisten
 title: "Telegram-tilladelsesliste-hærdning"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:10Z
 ---
 
 # Telegram-tilladelsesliste-hærdning
@@ -20,8 +13,8 @@ x-i18n:
 
 ## Resumé
 
-Telegram-tilladelseslister accepterer nu `telegram:`- og `tg:`-præfikser uafhængigt af store/små bogstaver og tolererer
-utilsigtede mellemrum. Dette afstemmer indgående tilladelseslistekontroller med normalisering ved udgående afsendelse.
+Telegram tillader nu acceptere `telegram:` og `tg:` præfikser case-ufølsomt og tolerere
+utilsigtet blanke tegn. Dette justerer indgående tilladsliste kontrol med udgående sende normalisering.
 
 ## Hvad er ændret
 
@@ -38,8 +31,8 @@ Alle disse accepteres for samme ID:
 
 ## Hvorfor det er vigtigt
 
-Kopi/indsæt fra logs eller chat-id’er indeholder ofte præfikser og mellemrum. Normalisering undgår
-falske negative, når der besluttes, om der skal svares i DM’er eller grupper.
+Kopier / indsæt fra logs eller chat IDs indeholder ofte præfikser og mellemrum. Normalisering undgår
+falske negativer, når de beslutter, om de skal reagere i DMs eller grupper.
 
 ## Relaterede dokumenter
 

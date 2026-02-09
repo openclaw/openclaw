@@ -2,13 +2,6 @@
 summary: "Plantilla de espacio de trabajo para SOUL.md"
 read_when:
   - Arranque de un espacio de trabajo manualmente
-x-i18n:
-  source_path: reference/templates/SOUL.md
-  source_hash: b62a054ecddb4545
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:31Z
 ---
 
 # SOUL.md - Quién es usted

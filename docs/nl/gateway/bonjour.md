@@ -4,13 +4,6 @@ read_when:
   - Debuggen van Bonjour-discoveryproblemen op macOS/iOS
   - Wijzigen van mDNS-servicetypen, TXT-records of discovery-UX
 title: "Bonjour-discovery"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Bonjour / mDNS-discovery
@@ -26,7 +19,7 @@ multicast mDNS niet over die grens. Je kunt dezelfde discovery‑UX behouden
 door over te schakelen op **unicast DNS‑SD**
 ("Wide‑Area Bonjour") over Tailscale.
 
-Stappen op hoofdlijnen:
+Hogere stappen op niveau:
 
 1. Draai een DNS‑server op de Gateway-host (bereikbaar via Tailnet).
 2. Publiceer DNS‑SD‑records voor `_openclaw-gw._tcp` onder een aparte zone
@@ -112,7 +105,7 @@ De Gateway adverteert kleine niet‑geheime hints om UI‑flows handig te maken:
 
 Handige ingebouwde tools:
 
-- Instanties doorzoeken:
+- Blader door instanties:
 
   ```bash
   dns-sd -B _openclaw-gw._tcp local.

@@ -1,16 +1,9 @@
 ---
-summary: „Überblick über die GLM-Modellfamilie + Nutzung in OpenClaw“
+summary: "„Überblick über die GLM-Modellfamilie + Nutzung in OpenClaw“"
 read_when:
   - Sie möchten GLM-Modelle in OpenClaw verwenden
   - Sie benötigen die Modellbenennungskonvention und das Setup
-title: „GLM-Modelle“
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:01Z
+title: "„GLM-Modelle“"
 ---
 
 # GLM-Modelle

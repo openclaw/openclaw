@@ -3,24 +3,17 @@ summary: "Lifecycle ng agent loop, mga stream, at semantika ng paghihintay"
 read_when:
   - Kailangan mo ng eksaktong walkthrough ng agent loop o mga kaganapan sa lifecycle
 title: "Loop ng Agent"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:38Z
 ---
 
 # Loop ng Agent (OpenClaw)
 
-Ang agentic loop ay ang buo at “tunay” na pagtakbo ng isang agent: intake → pagbuo ng context → model inference →
-pagpapatakbo ng tool → pag-stream ng mga sagot → persistence. Ito ang awtoritatibong landas na nagiging
-mga aksyon at pinal na sagot ang isang mensahe, habang pinananatiling consistent ang estado ng session.
+Ang agentic loop ang buong “tunay” na run ng isang agent: intake → context assembly → model inference →
+tool execution → streaming replies → persistence. Ito ang awtoritatibong landas na ginagawang mga aksyon at isang huling tugon ang isang mensahe,
+habang pinananatiling konsistent ang session state.
 
-Sa OpenClaw, ang isang loop ay isang solong, serialized na run bawat session na naglalabas ng mga kaganapan
-sa lifecycle at stream habang nag-iisip ang model, tumatawag ng mga tool, at nag-i-stream ng output.
-Ipinapaliwanag ng doc na ito kung paano naka-wire end-to-end ang authentic na loop na iyon.
+Sa OpenClaw, ang isang loop ay isang solong, serialized na run kada session na naglalabas ng lifecycle at stream events
+habang nag-iisip ang modelo, tumatawag ng mga tool, at nag-i-stream ng output. Ipinapaliwanag ng dokumentong ito kung paano ang autentikong loop na iyon ay
+nakakabit end-to-end.
 
 ## Mga entry point
 
@@ -47,7 +40,7 @@ Ipinapaliwanag ng doc na ito kung paano naka-wire end-to-end ang authentic na lo
    - mga lifecycle event => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
 5. Ginagamit ng `agent.wait` ang `waitForAgentJob`:
    - naghihintay ng **lifecycle end/error** para sa `runId`
-   - ibinabalik ang `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+   - nagbabalik ng `{ status: ok|error|timeout, startedAt, endedAt, error?` }\`
 
 ## Queueing + concurrency
 
@@ -79,7 +72,7 @@ May dalawang hook system ang OpenClaw:
 ### Internal hooks (Gateway hooks)
 
 - **`agent:bootstrap`**: tumatakbo habang binubuo ang mga bootstrap file bago ma-finalize ang system prompt.
-  Gamitin ito para magdagdag/magbawas ng mga bootstrap context file.
+  Gamitin ito para magdagdag/mag-alis ng mga bootstrap context file.
 - **Command hooks**: `/new`, `/reset`, `/stop`, at iba pang command event (tingnan ang Hooks doc).
 
 Tingnan ang [Hooks](/automation/hooks) para sa setup at mga halimbawa.
@@ -142,7 +135,7 @@ Tingnan ang [Plugins](/tools/plugin#plugin-hooks) para sa hook API at mga detaly
 
 ## Mga timeout
 
-- Default ng `agent.wait`: 30s (ang paghihintay lang). Ina-override ng `timeoutMs` param.
+- Default ng `agent.wait`: 30s (ang paghihintay lang). Ina-override ng `timeoutMs` na parameter.
 - Agent runtime: default ng `agents.defaults.timeoutSeconds` na 600s; ipinapatupad sa `runEmbeddedPiAgent` abort timer.
 
 ## Mga lugar kung saan puwedeng matapos nang maaga

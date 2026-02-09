@@ -1,12 +1,5 @@
 ---
 title: "Pi-integratiearchitectuur"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:52Z
 ---
 
 # Pi-integratiearchitectuur
@@ -35,12 +28,12 @@ OpenClaw gebruikt de pi SDK om een AI-coderingsagent in te bedden in zijn messag
 }
 ```
 
-| Pakket            | Doel                                                                                                      |
-| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| Pakket            | Doel                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Kern-LLM-abstracties: `Model`, `streamSimple`, berichttypen, provider-API’s                               |
-| `pi-agent-core`   | Agent-loop, tooluitvoering, `AgentMessage`-typen                                                          |
+| `pi-agent-core`   | Agent-loop, tooluitvoering, `AgentMessage`-typen                                                                          |
 | `pi-coding-agent` | Hoog-niveau SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, ingebouwde tools |
-| `pi-tui`          | Terminal-UI-componenten (gebruikt in OpenClaw’s lokale TUI-modus)                                         |
+| `pi-tui`          | Terminal-UI-componenten (gebruikt in OpenClaw’s lokale TUI-modus)                                      |
 
 ## Bestandsstructuur
 
@@ -318,7 +311,7 @@ trackSessionManagerAccess(params.sessionFile);
 
 `limitHistoryTurns()` trimt de conversatiegeschiedenis op basis van kanaaltype (DM versus groep).
 
-### Compactie
+### Compaction
 
 Auto-compactie wordt geactiveerd bij contextoverloop. `compactEmbeddedPiSessionDirect()` handelt handmatige compactie af:
 
@@ -382,7 +375,7 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 
 OpenClaw laadt aangepaste pi-extensies voor gespecialiseerd gedrag:
 
-### Compactiebescherming
+### Beveiligde Compactie
 
 `pi-extensions/compaction-safeguard.ts` voegt guardrails toe aan compactie, waaronder adaptieve tokenbudgettering plus samenvattingen van toolfouten en bestandsoperaties:
 
@@ -438,7 +431,7 @@ Antwoordrichtlijnen zoals `[[media:url]]`, `[[voice]]`, `[[reply:id]]` worden ge
 const { text: cleanedText, mediaUrls, audioAsVoice, replyToId } = consumeReplyDirectives(chunk);
 ```
 
-## Foutafhandeling
+## Fout bij afhandelen
 
 ### Foutclassificatie
 
@@ -518,15 +511,15 @@ Dit biedt een interactieve terminalervaring vergelijkbaar met pi’s native modu
 
 ## Belangrijkste verschillen met Pi CLI
 
-| Aspect            | Pi CLI                    | OpenClaw Embedded                                                                              |
-| ----------------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
-| Aanroep           | `pi`-opdracht / RPC       | SDK via `createAgentSession()`                                                                 |
-| Tools             | Standaard coderings-tools | Aangepaste OpenClaw-toolset                                                                    |
-| Systeemprompt     | AGENTS.md + prompts       | Dynamisch per kanaal/context                                                                   |
-| Sessiestorage     | `~/.pi/agent/sessions/`   | `~/.openclaw/agents/<agentId>/sessions/` (of `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth              | Enkele referentie         | Multi-profiel met rotatie                                                                      |
-| Extensies         | Geladen vanaf schijf      | Programmatic + schijfpaden                                                                     |
-| Event-afhandeling | TUI-rendering             | Callback-gebaseerd (onBlockReply, enz.)                                                        |
+| Aspect            | Pi CLI                              | OpenClaw Embedded                                                                                                 |
+| ----------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Aanroep           | `pi`-opdracht / RPC                 | SDK via `createAgentSession()`                                                                                    |
+| Tools             | Standaard coderings-tools           | Aangepaste OpenClaw-toolset                                                                                       |
+| Systeemprompt     | AGENTS.md + prompts | Dynamisch per kanaal/context                                                                                      |
+| Sessiestorage     | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (of `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Auth              | Enkele inloggegevens                | Multi-profiel met rotatie                                                                                         |
+| Extensies         | Geladen vanaf schijf                | Programmatic + schijfpaden                                                                                        |
+| Event-afhandeling | TUI-rendering                       | Callback-gebaseerd (onBlockReply, enz.)                                        |
 
 ## Toekomstige overwegingen
 

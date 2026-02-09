@@ -5,13 +5,6 @@ read_when:
   - Arbejde med konfigurationsmigreringer eller doctor-workflows
   - Håndtering af plugin-konfigurationsskemaer eller gating af plugin-indlæsning
 title: "Streng konfigurationsvalidering"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:37Z
 ---
 
 # Streng konfigurationsvalidering (doctor-kun-migreringer)
@@ -32,9 +25,9 @@ x-i18n:
 
 - Konfigurationen skal matche skemaet præcist på alle niveauer.
 - Ukendte nøgler er valideringsfejl (ingen passthrough ved rod eller indlejret).
-- `plugins.entries.<id>.config` skal valideres af pluginets skema.
+- `plugins.entries.<id>.config` skal valideres ved plugin's skema.
   - Hvis et plugin mangler et skema, **afvis indlæsning af pluginet** og vis en klar fejl.
-- Ukendte `channels.<id>`-nøgler er fejl, medmindre et plugin-manifest erklærer kanal-id’et.
+- Ukendt `kanaler.<id>` nøgler er fejl, medmindre et plugin manifest erklærer kanal id.
 - Plugin-manifester (`openclaw.plugin.json`) er påkrævet for alle plugins.
 
 ## Håndhævelse af plugin-skema
@@ -72,7 +65,7 @@ Tilladt (kun diagnostik):
 - `openclaw status`
 - `openclaw gateway status`
 
-Alt andet skal fejle hårdt med: “Konfigurationen er ugyldig. Kør `openclaw doctor --fix`.”
+Alt andet skal fejle hårdnakket med: “Config ugyldig. Kør `openclaw læge --fix`.”
 
 ## Fejl-UX-format
 

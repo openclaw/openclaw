@@ -4,13 +4,6 @@ read_when:
   - Thêm hoặc chỉnh sửa cấu hình Skills
   - Điều chỉnh danh sách cho phép gói sẵn hoặc hành vi cài đặt
 title: "Cấu hình Skills"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:30Z
 ---
 
 # Cấu hình Skills
@@ -47,16 +40,16 @@ Tất cả cấu hình liên quan đến skills nằm dưới `skills` trong `~/
 
 ## Trường
 
-- `allowBundled`: danh sách cho phép tùy chọn cho **skills gói sẵn** בלבד. Khi được đặt, chỉ
-  các skills gói sẵn trong danh sách mới đủ điều kiện (skills được quản lý/workspace không bị ảnh hưởng).
+- 50. `allowBundled`: danh sách cho phép tùy chọn chỉ dành cho các kỹ năng **được đóng gói**. When set, only
+      bundled skills in the list are eligible (managed/workspace skills unaffected).
 - `load.extraDirs`: các thư mục skill bổ sung để quét (độ ưu tiên thấp nhất).
 - `load.watch`: theo dõi các thư mục skill và làm mới ảnh chụp skills (mặc định: true).
 - `load.watchDebounceMs`: debounce cho các sự kiện watcher của skill tính bằng mili giây (mặc định: 250).
 - `install.preferBrew`: ưu tiên trình cài đặt brew khi có sẵn (mặc định: true).
-- `install.nodeManager`: tùy chọn trình cài đặt node (`npm` | `pnpm` | `yarn` | `bun`, mặc định: npm).
-  Điều này chỉ ảnh hưởng đến **cài đặt skill**; runtime của Gateway vẫn nên là Node
-  (không khuyến nghị Bun cho WhatsApp/Telegram).
-- `entries.<skillKey>`: ghi đè theo từng skill.
+- `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
+  This only affects **skill installs**; the Gateway runtime should still be Node
+  (Bun not recommended for WhatsApp/Telegram).
+- `entries.<skillKey>`: per-skill overrides.
 
 Các trường theo từng skill:
 
@@ -66,18 +59,18 @@ Các trường theo từng skill:
 
 ## Ghi chú
 
-- Các khóa dưới `entries` ánh xạ tới tên skill theo mặc định. Nếu một skill định nghĩa
-  `metadata.openclaw.skillKey`, hãy dùng khóa đó thay thế.
+- Keys under `entries` map to the skill name by default. If a skill defines
+  `metadata.openclaw.skillKey`, use that key instead.
 - Các thay đổi đối với skills sẽ được áp dụng ở lượt tác tử tiếp theo khi watcher được bật.
 
 ### Skills sandboxed + biến môi trường
 
-Khi một phiên được **sandboxed**, các tiến trình skill chạy bên trong Docker. Sandbox
-**không** kế thừa `process.env` của máy chủ.
+1. Khi một phiên làm việc được **sandboxed**, các tiến trình kỹ năng sẽ chạy bên trong Docker. 2. Sandbox **không** kế thừa `process.env` của máy chủ.
 
 Hãy dùng một trong các cách sau:
 
 - `agents.defaults.sandbox.docker.env` (hoặc `agents.list[].sandbox.docker.env` theo từng tác tử)
 - bake biến môi trường vào image sandbox tùy chỉnh của bạn
 
-`env` và `skills.entries.<skill>.env/apiKey` toàn cục chỉ áp dụng cho các lần chạy trên **máy chủ**.
+3. `env` toàn cục và `skills.entries.<skill>`
+4. `.env/apiKey` chỉ áp dụng cho các lần chạy trên **host**.5. OpenClaw sử dụng các thư mục kỹ năng **tương thích [AgentSkills](https://agentskills.io)** để dạy agent cách sử dụng công cụ.

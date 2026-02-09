@@ -5,13 +5,6 @@ read_when:
   - Sie ändern das Auto-Kompaktionsverhalten oder fügen „Pre-Compaction“-Housekeeping hinzu
   - Sie möchten Memory-Flushes oder stille System-Turns implementieren
 title: "Session-Management – Deep Dive"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:36Z
 ---
 
 # Session-Management & Kompaktierung (Deep Dive)

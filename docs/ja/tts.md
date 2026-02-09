@@ -1,21 +1,15 @@
 ---
-summary: 「送信される返信のためのテキスト読み上げ（TTS）」
+summary: "送信される返信のためのテキスト読み上げ（TTS）"
 read_when:
   - 返信に対してテキスト読み上げを有効化する場合
   - TTS プロバイダーや制限を設定する場合
   - /tts コマンドを使用する場合
-title: 「テキスト読み上げ」
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:58Z
+title: "テキスト読み上げ"
 ---
 
 # テキスト読み上げ（TTS）
 
+OpenClawはElevenLabs、OpenAI、またはEdge TTSを使用してアウトバウンドリプライをオーディオに変換できます。
 OpenClaw は、ElevenLabs、OpenAI、または Edge TTS を使用して、送信される返信を音声に変換できます。
 OpenClaw が音声を送信できるすべての場所で動作し、Telegram では丸いボイスノートのバブルとして表示されます。
 
@@ -29,11 +23,15 @@ OpenClaw が音声を送信できるすべての場所で動作し、Telegram �
 
 Edge TTS は、`node-edge-tts` ライブラリを介して Microsoft Edge のオンライン ニューラル TTS サービスを使用します。
 これはローカルではなくホステッド サービスであり、Microsoft のエンドポイントを使用し、API キーは不要です。
-`node-edge-tts` は音声設定オプションや出力フォーマットを公開していますが、すべてのオプションが Edge サービスでサポートされているわけではありません。citeturn2search0
+`node-edge-tts` は音声設定オプションや出力フォーマットを公開していますが、すべてのオプションが Edge サービスでサポートされているわけではありません。citeturn2search0 27. これはホスト型サービス（ローカルではありません）で、Microsoft のエンドポイントを使用し、
+API キーは不要です。 `node-edge-tts` は音声設定オプションと
+出力フォーマットを公開しますが、エッジサービスではすべてのオプションがサポートされているわけではありません。 <unk> cite<unk> turn2search0<unk>
 
+Edge TTSは公開されたSLAまたはクォータを持たない公開Webサービスであるため、
+を最善の努力として扱います。 制限とサポートが保証される必要がある場合は、OpenAIまたはElevenLabsを使用してください。
 Edge TTS は公開 Web サービスであり、公開された SLA やクォータがないため、ベストエフォートとして扱ってください。
 保証された制限やサポートが必要な場合は、OpenAI または ElevenLabs を使用してください。
-Microsoft の Speech REST API では、1 リクエストあたり 10 分の音声制限が文書化されていますが、Edge TTS は制限を公開していないため、同等またはそれ以下と想定してください。citeturn0search3
+Microsoft の Speech REST API では、1 リクエストあたり 10 分の音声制限が文書化されていますが、Edge TTS は制限を公開していないため、同等またはそれ以下と想定してください。citeturn0search3 <unk> cite<unk> turn0search3<unk>
 
 ## 任意のキー
 
@@ -42,8 +40,9 @@ OpenAI または ElevenLabs を使用する場合：
 - `ELEVENLABS_API_KEY`（または `XI_API_KEY`）
 - `OPENAI_API_KEY`
 
-Edge TTS には **API キーは不要** です。API キーが見つからない場合、OpenClaw は Edge TTS をデフォルトで使用します（`messages.tts.edge.enabled=false` で無効化されていない場合）。
+Edge TTSはAPIキーを必要としません。 Edge TTS には **API キーは不要** です。API キーが見つからない場合、OpenClaw は Edge TTS をデフォルトで使用します（`messages.tts.edge.enabled=false` で無効化されていない場合）。
 
+複数のプロバイダが設定されている場合、選択されたプロバイダが最初に使用され、他のプロバイダはフォールバックオプションです。
 複数のプロバイダーが設定されている場合、選択されたプロバイダーが最初に使用され、他はフォールバック オプションとして利用されます。
 自動要約は設定された `summaryModel`（または `agents.defaults.model.primary`）を使用するため、
 要約を有効にする場合、そのプロバイダーも認証されている必要があります。
@@ -59,7 +58,7 @@ Edge TTS には **API キーは不要** です。API キーが見つからない
 
 ## デフォルトで有効ですか？
 
-いいえ。自動 TTS はデフォルトで **オフ** です。設定で `messages.tts.auto` を使用するか、
+いいえ. 自動TTSはデフォルトで**オフ**です。 いいえ。自動 TTS はデフォルトで **オフ** です。設定で `messages.tts.auto` を使用するか、
 セッションごとに `/tts always`（エイリアス: `/tts on`）で有効化してください。
 
 TTS をオンにすると Edge TTS はデフォルトで **有効** になり、
@@ -69,6 +68,7 @@ OpenAI や ElevenLabs の API キーが利用できない場合に自動的に�
 
 TTS の設定は、`openclaw.json` 内の `messages.tts` 配下にあります。
 完全なスキーマは [Gateway configuration](/gateway/configuration) を参照してください。
+28. 完全なスキーマは [Gateway configuration](/gateway/configuration) にあります。
 
 ### 最小構成（有効化 + プロバイダー）
 
@@ -214,7 +214,7 @@ TTS の設定は、`openclaw.json` 内の `messages.tts` 配下にあります�
 - `summaryModel`: 自動要約用の任意の低コスト モデル。デフォルトは `agents.defaults.model.primary`。
   - `provider/model` または設定済みのモデル エイリアスを受け付けます。
 - `modelOverrides`: モデルが TTS ディレクティブを出力することを許可（デフォルトでオン）。
-- `maxTextLength`: TTS 入力のハード上限（文字数）。超過すると `/tts audio` が失敗します。
+- `maxTextLength`: TTS 入力のハード上限（文字数）。超過すると `/tts audio` が失敗します。 `/tts audio` を超えると失敗します。
 - `timeoutMs`: リクエスト タイムアウト（ms）。
 - `prefsPath`: ローカル prefs JSON パスを上書き（プロバイダー／制限／要約）。
 - `apiKey` の値は、環境変数（`ELEVENLABS_API_KEY`/`XI_API_KEY`、`OPENAI_API_KEY`）にフォールバックします。
@@ -240,6 +240,7 @@ TTS の設定は、`openclaw.json` 内の `messages.tts` 配下にあります�
 
 デフォルトでは、モデルは単一の返信に対して TTS ディレクティブを出力 **できます**。
 `messages.tts.auto` が `tagged` の場合、これらのディレクティブが音声生成をトリガーするために必須となります。
+`messages.tts.auto` が `tagged` の場合、これらのディレクティブはオーディオをトリガーするのに必要です。
 
 有効時、モデルは単一の返信に対して音声を上書きするための `[[tts:...]]` ディレクティブを出力でき、
 さらにオプションで `[[tts:text]]...[[/tts:text]]` ブロックを使用して、
@@ -316,9 +317,9 @@ Here you go.
 - **その他のチャンネル**: MP3（ElevenLabs では `mp3_44100_128`、OpenAI では `mp3`）。
   - 44.1kHz / 128kbps が音声明瞭度のデフォルト バランスです。
 - **Edge TTS**: `edge.outputFormat` を使用（デフォルト `audio-24khz-48kbitrate-mono-mp3`）。
-  - `node-edge-tts` は `outputFormat` を受け付けますが、すべてのフォーマットが Edge サービスから利用できるわけではありません。citeturn2search0
-  - 出力フォーマットの値は Microsoft Speech の出力フォーマットに従います（Ogg/WebM Opus を含む）。citeturn1search0
-  - Telegram の `sendVoice` は OGG/MP3/M4A を受け付けます。保証された Opus ボイスノートが必要な場合は OpenAI/ElevenLabs を使用してください。citeturn1search1
+  - `node-edge-tts` は `outputFormat` を受け付けますが、すべてのフォーマットが Edge サービスから利用できるわけではありません。citeturn2search0 <unk> cite<unk> turn2search0<unk>
+  - 出力フォーマットの値は Microsoft Speech の出力フォーマットに従います（Ogg/WebM Opus を含む）。citeturn1search0 <unk> cite<unk> turn1search0<unk>
+  - Telegram の `sendVoice` は OGG/MP3/M4A を受け付けます。保証された Opus ボイスノートが必要な場合は OpenAI/ElevenLabs を使用してください。citeturn1search1 <unk> cite<unk> turn1search1<unk>
   - 設定された Edge 出力フォーマットが失敗した場合、OpenClaw は MP3 で再試行します。
 
 OpenAI/ElevenLabs のフォーマットは固定です。Telegram はボイスノート UX のために Opus を期待します。
@@ -354,9 +355,10 @@ Reply -> TTS enabled?
 
 コマンドは 1 つだけです: `/tts`。
 有効化の詳細は [Slash commands](/tools/slash-commands) を参照してください。
+有効化の詳細については、[Slash commands](/tools/slash-commands)を参照してください。
 
 Discord の注記: `/tts` は Discord の組み込みコマンドのため、OpenClaw は
-そこで `/voice` をネイティブ コマンドとして登録します。テキスト `/tts ...` も引き続き使用できます。
+そこで `/voice` をネイティブ コマンドとして登録します。テキスト `/tts ...` も引き続き使用できます。 テキスト`/tts ...`はまだ動作します。
 
 ```
 /tts off
@@ -383,6 +385,8 @@ Discord の注記: `/tts` は Discord の組み込みコマンドのため、Ope
 `tts` ツールはテキストを音声に変換し、`MEDIA:` パスを返します。
 結果が Telegram 互換の場合、このツールは `[[audio_as_voice]]` を含めるため、
 Telegram はボイス バブルを送信します。
+の結果がテレグラムと互換性がある場合、ツールは `[[audio_as_voice]]`を含むため、
+テレグラムはボイスバブルを送信します。
 
 ## Gateway RPC
 

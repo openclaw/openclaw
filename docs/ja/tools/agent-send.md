@@ -3,20 +3,13 @@ summary: "直接 `openclaw agent` CLI 実行（任意の配信）"
 read_when:
   - エージェント CLI エントリーポイントの追加または変更時
 title: "エージェント送信"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:21Z
 ---
 
 # `openclaw agent`（直接エージェント実行）
 
-`openclaw agent` は、インバウンドのチャットメッセージを必要とせずに、単一のエージェントターンを実行します。
-既定では **Gateway（ゲートウェイ）を経由** します。`--local` を追加すると、現在のマシン上の組み込み
-ランタイムを強制的に使用します。
+`openclawエージェント`は、着信チャットメッセージを必要とせずにエージェントターンを1回実行します。
+デフォルトでは、**ゲートウェイを通過**; `--local` を追加して、現在のマシンに埋め込まれた
+ランタイムを強制します。
 
 ## 動作
 

@@ -5,13 +5,6 @@ read_when:
   - အဝေးမှ ချိတ်ဆက်မှု မုဒ်များ (direct vs SSH) ကို ချိန်ညှိခြင်း
   - အဝေးမှ node များအတွက် node discovery + pairing ကို ဒီဇိုင်းဆွဲခြင်း
 title: "Discovery နှင့် Transports"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:30Z
 ---
 
 # Discovery & transports
@@ -25,7 +18,7 @@ OpenClaw တွင် မျက်နှာပြင်ပေါ်တွင် 
 
 ## Terms
 
-- **Gateway**: အခြေအနေများ (sessions, pairing, node registry) ကို ပိုင်ဆိုင်ပြီး channel များကို လည်ပတ်စေသော တစ်ခုတည်းသော ရေရှည်လည်ပတ်နေသည့် gateway process။ ပုံမှန်အားဖြင့် host တစ်ခုလျှင် တစ်ခုသာ အသုံးပြုကြပြီး သီးခြားခွဲထားသော multi-gateway setup များလည်း ဖြစ်နိုင်သည်။
+- **Gateway**: a single long-running gateway process that owns state (sessions, pairing, node registry) and runs channels. Most setups use one per host; isolated multi-gateway setups are possible.
 - **Gateway WS (control plane)**: ပုံမှန်အားဖြင့် `127.0.0.1:18789` ပေါ်တွင်ရှိသော WebSocket endpoint ဖြစ်ပြီး `gateway.bind` မှတစ်ဆင့် LAN/tailnet သို့ bind လုပ်နိုင်သည်။
 - **Direct WS transport**: LAN/tailnet သို့ မျက်နှာမူထားသော Gateway WS endpoint (SSH မလိုအပ်)။
 - **SSH transport (fallback)**: SSH မှတစ်ဆင့် `127.0.0.1:18789` ကို forward လုပ်၍ အဝေးမှ ထိန်းချုပ်ခြင်း။
@@ -49,9 +42,9 @@ Protocol အသေးစိတ်များ —
 
 ## Discovery inputs (client များက gateway ကို ဘယ်လို သိလာသလဲ)
 
-### 1) Bonjour / mDNS (LAN အတွက်သာ)
+### 1. Bonjour / mDNS (LAN အတွက်သာ)
 
-Bonjour သည် best-effort ဖြစ်ပြီး network များကို မဖြတ်ကျော်နိုင်ပါ။ “LAN တူ” အတွက် အဆင်ပြေစေရန်သာ အသုံးပြုသည်။
+Bonjour is best-effort and does not cross networks. It is only used for “same LAN” convenience.
 
 Target direction —
 
@@ -83,15 +76,15 @@ Disable/override —
 - `OPENCLAW_TAILNET_DNS` သည် `tailnetDns` hint (MagicDNS) ကို ထုတ်ပြန်သည်။
 - `OPENCLAW_CLI_PATH` သည် ကြော်ငြာထားသော CLI path ကို override လုပ်သည်။
 
-### 2) Tailnet (network အကြား)
+### 2. Tailnet (network အကြား)
 
-London/Vienna ပုံစံ setup များအတွက် Bonjour သည် မကူညီနိုင်ပါ။ အကြံပြုထားသော “direct” target သည် —
+For London/Vienna style setups, Bonjour won’t help. The recommended “direct” target is:
 
 - Tailscale MagicDNS name (အကြိုက်ဆုံး) သို့မဟုတ် တည်ငြိမ်သော tailnet IP ဖြစ်သည်။
 
 gateway သည် Tailscale အောက်တွင် လည်ပတ်နေသည်ကို ရှာဖွေနိုင်ပါက client များအတွက် optional hint အဖြစ် `tailnetDns` ကို ထုတ်ပြန်ပေးသည် (wide-area beacons များအပါအဝင်)။
 
-### 3) Manual / SSH target
+### 3. Manual / SSH target
 
 တိုက်ရိုက်လမ်းကြောင်း မရှိသည့်အခါ (သို့မဟုတ် direct ကို ပိတ်ထားသည့်အခါ) client များသည် loopback gateway port ကို forward လုပ်ခြင်းဖြင့် SSH မှတစ်ဆင့် အမြဲချိတ်ဆက်နိုင်သည်။
 

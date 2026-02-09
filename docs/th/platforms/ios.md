@@ -5,18 +5,11 @@ read_when:
   - การรันแอป iOS จากซอร์สโค้ด
   - การดีบักการค้นหาGatewayหรือคำสั่งแคนวาส
 title: "แอป iOS"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:24Z
 ---
 
 # แอป iOS (โหนด)
 
-สถานะการใช้งาน: ตัวอย่างภายใน แอป iOS ยังไม่เปิดแจกจ่ายสาธารณะ
+สถานะความพร้อมใช้งาน: พรีวิวภายใน สถานะการใช้งาน: ตัวอย่างภายใน แอป iOS ยังไม่เปิดแจกจ่ายสาธารณะ
 
 ## ทำอะไรได้บ้าง
 
@@ -66,6 +59,7 @@ Gateway จะประกาศ `_openclaw-gw._tcp` บน `local.` แอป i
 
 หาก mDNS ถูกบล็อก ให้ใช้โซน unicast DNS-SD (เลือกโดเมน; ตัวอย่าง: `openclaw.internal.`) และ Tailscale split DNS
 ดู [Bonjour](/gateway/bonjour) สำหรับตัวอย่าง CoreDNS
+ดู [Bonjour](/gateway/bonjour) สำหรับตัวอย่าง CoreDNS
 
 ### ระบุโฮสต์/พอร์ตด้วยตนเอง
 
@@ -73,7 +67,7 @@ Gateway จะประกาศ `_openclaw-gw._tcp` บน `local.` แอป i
 
 ## Canvas + A2UI
 
-โหนด iOS เรนเดอร์แคนวาสด้วย WKWebView ใช้ `node.invoke` เพื่อควบคุม:
+โหนด iOS เรนเดอร์แคนวาสด้วย WKWebView ใช้ `node.invoke` เพื่อควบคุม: ใช้ `node.invoke` เพื่อควบคุมการทำงาน:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

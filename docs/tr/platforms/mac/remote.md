@@ -1,15 +1,8 @@
 ---
 summary: "SSH üzerinden uzak bir OpenClaw gateway’ini kontrol etmek için macOS uygulama akışı"
 read_when:
-  - Uzak mac denetimini kurarken veya hata ayıklarken
+  - Uzaktan Mac kontrolünü kurma veya hata ayıklama
 title: "Uzaktan Denetim"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 # Uzak OpenClaw (macOS ⇄ uzak ana makine)
@@ -29,7 +22,7 @@ Uzak mod iki taşıma yöntemini destekler:
 - **SSH tüneli** (varsayılan): Gateway portunu localhost’a yönlendirmek için `ssh -N -L ...` kullanır. Tünel local loopback olduğu için gateway, düğüm IP’sini `127.0.0.1` olarak görür.
 - **Doğrudan (ws/wss)**: Gateway URL’sine doğrudan bağlanır. Gateway gerçek istemci IP’sini görür.
 
-## Uzak ana makinede ön koşullar
+## Uzak ana bilgisayardaki ön koşullar
 
 1. Node + pnpm’i kurun ve OpenClaw CLI’yi derleyip/yükleyin (`pnpm install && pnpm build && pnpm link --global`).
 2. Etkileşimsiz kabuklar için `openclaw`’in PATH üzerinde olduğundan emin olun (gerekirse `/usr/local/bin` veya `/opt/homebrew/bin` içine sembolik bağlantı oluşturun).
@@ -55,7 +48,7 @@ Uzak mod iki taşıma yöntemini destekler:
 - **Doğrudan (ws/wss)**: Web Chat, yapılandırılmış gateway URL’sine doğrudan bağlanır.
 - Artık ayrı bir WebChat HTTP sunucusu yoktur.
 
-## İzinler
+## Permissions
 
 - Uzak ana makine, yerel ile aynı TCC onaylarına ihtiyaç duyar (Otomasyon, Erişilebilirlik, Ekran Kaydı, Mikrofon, Konuşma Tanıma, Bildirimler). Bir kez vermek için o makinede onboarding’i çalıştırın.
 - Düğümler, ajanların nelerin kullanılabilir olduğunu bilmesi için izin durumlarını `node.list` / `node.describe` üzerinden ilan eder.

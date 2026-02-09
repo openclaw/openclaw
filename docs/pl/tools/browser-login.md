@@ -1,16 +1,9 @@
 ---
-summary: „Ręczne logowania do automatyzacji przeglądarki + publikowanie na X/Twitter”
+summary: "„Ręczne logowania do automatyzacji przeglądarki + publikowanie na X/Twitter”"
 read_when:
   - Musisz logować się do serwisów na potrzeby automatyzacji przeglądarki
   - Chcesz publikować aktualizacje na X/Twitter
-title: „Logowanie w przeglądarce”
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:42Z
+title: "„Logowanie w przeglądarce”"
 ---
 
 # Logowanie w przeglądarce + publikowanie na X/Twitter

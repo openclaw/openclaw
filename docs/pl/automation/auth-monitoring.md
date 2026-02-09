@@ -4,13 +4,6 @@ read_when:
   - Konfigurowanie monitorowania wygaśnięcia uwierzytelniania lub alertów
   - Automatyzowanie sprawdzania odświeżania OAuth w Claude Code / Codex
 title: "Monitorowanie uwierzytelniania"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:46Z
 ---
 
 # Monitorowanie uwierzytelniania

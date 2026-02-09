@@ -3,13 +3,6 @@ summary: "`openclaw config`에 대한 CLI 참조(구성 값 가져오기/설정�
 read_when:
   - 구성을 비대화형으로 읽거나 편집하려는 경우
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:18Z
 ---
 
 # `openclaw config`

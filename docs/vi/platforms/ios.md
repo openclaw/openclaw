@@ -5,18 +5,11 @@ read_when:
   - Chạy ứng dụng iOS từ mã nguồn
   - Gỡ lỗi khám phá gateway hoặc các lệnh canvas
 title: "Ứng dụng iOS"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:35Z
 ---
 
 # Ứng dụng iOS (Node)
 
-Tình trạng: bản xem trước nội bộ. Ứng dụng iOS hiện chưa được phân phối công khai.
+Availability: internal preview. The iOS app is not publicly distributed yet.
 
 ## Chức năng
 
@@ -60,11 +53,11 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-Gateway quảng bá `_openclaw-gw._tcp` trên `local.`. Ứng dụng iOS sẽ tự động liệt kê các gateway này.
+The Gateway advertises `_openclaw-gw._tcp` on `local.`. The iOS app lists these automatically.
 
 ### Tailnet (xuyên mạng)
 
-Nếu mDNS bị chặn, hãy dùng một vùng unicast DNS-SD (chọn một domain; ví dụ: `openclaw.internal.`) và cấu hình Tailscale split DNS.
+Nếu mDNS bị chặn, hãy sử dụng một vùng DNS-SD unicast (chọn một domain; ví dụ: `openclaw.internal.`) và Tailscale split DNS.
 Xem [Bonjour](/gateway/bonjour) để biết ví dụ CoreDNS.
 
 ### Host/cổng thủ công
@@ -73,7 +66,7 @@ Trong Settings, bật **Manual Host** và nhập host + cổng của gateway (m�
 
 ## Canvas + A2UI
 
-Node iOS hiển thị canvas bằng WKWebView. Sử dụng `node.invoke` để điều khiển:
+The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

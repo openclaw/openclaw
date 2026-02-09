@@ -4,24 +4,17 @@ read_when:
   - OpenClaw တွင် Anthropic မော်ဒယ်များကို အသုံးပြုလိုပါသည်
   - API ကီးများအစား setup-token ကို အသုံးပြုလိုပါသည်
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:53Z
 ---
 
 # Anthropic (Claude)
 
-Anthropic သည် **Claude** မော်ဒယ် မိသားစုကို ဖန်တီးထားပြီး API မှတစ်ဆင့် အသုံးပြုခွင့် ပံ့ပိုးပေးပါသည်။
-OpenClaw တွင် API ကီး သို့မဟုတ် **setup-token** ဖြင့် အတည်ပြုနိုင်ပါသည်။
+Anthropic သည် **Claude** model family ကို တည်ဆောက်ပြီး API မှတဆင့် အသုံးပြုခွင့်ပေးပါသည်။
+OpenClaw တွင် API key သို့မဟုတ် **setup-token** ဖြင့် authenticate လုပ်နိုင်ပါသည်။
 
 ## Option A: Anthropic API ကီး
 
-**အကောင်းဆုံး သင့်တော်မှု:** ပုံမှန် API အသုံးပြုမှုနှင့် အသုံးပြုမှုပေါ်မူတည်သည့် ငွေပေးချေမှု။
-Anthropic Console တွင် သင့် API ကီးကို ဖန်တီးပါ။
+**Best for:** standard API access နှင့် usage-based billing အတွက် အသင့်တော်ဆုံး။
+Anthropic Console တွင် သင့် API key ကို ဖန်တီးပါ။
 
 ### CLI တပ်ဆင်ခြင်း
 
@@ -44,16 +37,16 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt caching (Anthropic API)
 
-OpenClaw သည် Anthropic ၏ prompt caching အင်္ဂါရပ်ကို ထောက်ပံ့ပါသည်။ ၎င်းသည် **API-only** ဖြစ်ပြီး subscription အတည်ပြုမှုတွင် cache ဆက်တင်များကို မလေးစားပါ။
+OpenClaw သည် Anthropic ၏ prompt caching feature ကို ထောက်ပံ့ပါသည်။ ဤအရာသည် **API-only** ဖြစ်ပြီး subscription auth သည် cache settings များကို မလေးစားပါ။
 
 ### Configuration
 
 သင့်မော်ဒယ် config တွင် `cacheRetention` ပါရာမီတာကို အသုံးပြုပါ:
 
-| Value   | Cache ကြာချိန် | ဖော်ပြချက်                                 |
-| ------- | -------------- | ------------------------------------------ |
-| `none`  | Cache မလုပ်ပါ  | Prompt caching ကို ပိတ်ထားသည်              |
-| `short` | ၅ မိနစ်        | API ကီး အတည်ပြုမှုအတွက် မူလသတ်မှတ်ချက်     |
+| Value   | Cache ကြာချိန် | ဖော်ပြချက်                                                    |
+| ------- | -------------- | ------------------------------------------------------------- |
+| `none`  | Cache မလုပ်ပါ  | Prompt caching ကို ပိတ်ထားသည်                                 |
+| `short` | ၅ မိနစ်        | API ကီး အတည်ပြုမှုအတွက် မူလသတ်မှတ်ချက်                        |
 | `long`  | ၁ နာရီ         | တိုးချဲ့ထားသော cache (beta flag လိုအပ်သည်) |
 
 ```json5
@@ -72,7 +65,7 @@ OpenClaw သည် Anthropic ၏ prompt caching အင်္ဂါရပ်က�
 
 ### Defaults
 
-Anthropic API ကီး အတည်ပြုမှုကို အသုံးပြုသောအခါ OpenClaw သည် Anthropic မော်ဒယ်အားလုံးအတွက် `cacheRetention: "short"` (၅ မိနစ် cache) ကို အလိုအလျောက် အသုံးပြုပါသည်။ Config တွင် `cacheRetention` ကို သတ်မှတ်ခြင်းဖြင့် အစားထိုးနိုင်ပါသည်။
+Anthropic API Key authentication ကို အသုံးပြုသောအခါ OpenClaw သည် Anthropic models အားလုံးအတွက် `cacheRetention: "short"` (5-minute cache) ကို အလိုအလျောက် သတ်မှတ်ပေးပါသည်။ Config တွင် `cacheRetention` ကို တိတိကျကျ သတ်မှတ်ခြင်းဖြင့် override လုပ်နိုင်ပါသည်။
 
 ### Legacy parameter
 
@@ -92,7 +85,7 @@ provider headers ကို သင် အစားထိုးပါက ( [/gatew
 
 ### setup-token ကို ရယူရာနေရာ
 
-Setup-token များကို Anthropic Console မဟုတ်ဘဲ **Claude Code CLI** မှ ဖန်တီးပါသည်။ **မည်သည့် စက်ပေါ်တွင်မဆို** လည်ပတ်နိုင်ပါသည်:
+Setup-tokens များကို Anthropic Console မှ မဟုတ်ဘဲ **Claude Code CLI** မှ ဖန်တီးပါသည်။ **မည်သည့် machine မဆို** တွင် ဤအရာကို run လုပ်နိုင်ပါသည်။
 
 ```bash
 claude setup-token
@@ -128,21 +121,20 @@ openclaw onboard --auth-choice setup-token
 ## မှတ်ချက်များ
 
 - `claude setup-token` ဖြင့် setup-token ကို ဖန်တီးပြီး ကူးထည့်ပါ၊ သို့မဟုတ် Gateway ဟို့စ် ပေါ်တွင် `openclaw models auth setup-token` ကို လည်ပတ်ပါ။
-- Claude subscription တွင် “OAuth token refresh failed …” ကို တွေ့ပါက setup-token ဖြင့် ပြန်လည် အတည်ပြုပါ။ [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription) ကို ကြည့်ပါ။
+- Claude subscription တွင် “OAuth token refresh failed …” ကို မြင်ရပါက setup-token ဖြင့် re-auth လုပ်ပါ။ [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription) ကို ကြည့်ပါ။
 - အတည်ပြုမှု အသေးစိတ်နှင့် ပြန်လည်အသုံးပြု စည်းမျဉ်းများကို [/concepts/oauth](/concepts/oauth) တွင် ကြည့်ပါ။
 
 ## ပြဿနာဖြေရှင်းခြင်း
 
 **401 အမှားများ / token ရုတ်တရက် မမှန်တော့ခြင်း**
 
-- Claude subscription အတည်ပြုမှုသည် သက်တမ်းကုန်နိုင်သည် သို့မဟုတ် ပြန်လည်ရုပ်သိမ်းခံရနိုင်သည်။ `claude setup-token` ကို ပြန်လည် လည်ပတ်ပြီး
-  **Gateway ဟို့စ်** ထဲသို့ ကူးထည့်ပါ။
+- Claude subscription auth သည် သက်တမ်းကုန်နိုင်သလို revoke လုပ်ခံရနိုင်ပါသည်။ `claude setup-token` ကို ပြန်လည် run လုပ်ပြီး **gateway host** ထဲသို့ paste လုပ်ပါ။
 - Claude CLI login သည် အခြားစက်ပေါ်တွင် ရှိပါက
   Gateway ဟို့စ် ပေါ်တွင် `openclaw models auth paste-token --provider anthropic` ကို အသုံးပြုပါ။
 
 **provider "anthropic" အတွက် API ကီး မတွေ့ပါ**
 
-- Auth သည် **အေးဂျင့်တစ်ခုချင်းစီအလိုက်** ဖြစ်ပါသည်။ အေးဂျင့်အသစ်များသည် အဓိက အေးဂျင့်၏ ကီးများကို အလိုအလျောက် မယူဆောင်ပါ။
+- Auth သည် **agent တစ်ခုချင်းစီအလိုက်** ဖြစ်ပါသည်။ Agent အသစ်များသည် main agent ၏ keys များကို inherit မလုပ်ပါ။
 - ထိုအေးဂျင့်အတွက် onboarding ကို ပြန်လည် လုပ်ဆောင်ပါ၊ သို့မဟုတ် Gateway ဟို့စ် ထဲသို့ setup-token / API ကီး ကို ကူးထည့်ပြီး `openclaw models status` ဖြင့် အတည်ပြုပါ။
 
 **profile `anthropic:default` အတွက် အထောက်အထား မတွေ့ပါ**

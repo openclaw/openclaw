@@ -4,19 +4,12 @@ read_when:
   - خرابیوں کے ازالے کے ہب نے گہری تشخیص کے لیے آپ کو یہاں بھیجا ہو
   - آپ کو علامات پر مبنی مستحکم رن بُک حصے اور عین کمانڈز درکار ہوں
 title: "خرابیوں کا ازالہ"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:31Z
 ---
 
 # Gateway کی خرابیوں کا ازالہ
 
-یہ صفحہ تفصیلی رن بُک ہے۔
-اگر آپ پہلے تیز ٹرائیج فلو چاہتے ہیں تو [/help/troubleshooting](/help/troubleshooting) سے آغاز کریں۔
+This page is the deep runbook.
+Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
 
 ## کمانڈ سیڑھی
 
@@ -117,7 +110,7 @@ openclaw gateway status --deep
 عام نشانیاں:
 
 - `Gateway start blocked: set gateway.mode=local` → لوکل گیٹ وے موڈ فعال نہیں۔
-- `refusing to bind gateway ... without auth` → ٹوکن/پاس ورڈ کے بغیر non-loopback بائنڈ۔
+- `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → پورٹ تنازع۔
 
 متعلقہ:
@@ -242,7 +235,7 @@ openclaw doctor
 - `Failed to start Chrome CDP on port` → براؤزر پروسیس لانچ نہ ہو سکا۔
 - `browser.executablePath not found` → کنفیگر کیا گیا پاتھ غلط ہے۔
 - `Chrome extension relay is running, but no tab is connected` → ایکسٹینشن ریلے اٹیچ نہیں۔
-- `Browser attachOnly is enabled ... not reachable` → attach-only پروفائل کا کوئی قابلِ رسائی ہدف نہیں۔
+- `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 متعلقہ:
 
@@ -254,7 +247,7 @@ openclaw doctor
 
 زیادہ تر اپ گریڈ کے بعد خرابی کنفیگ ڈرفٹ یا اب نافذ ہونے والی سخت تر ڈیفالٹس کی وجہ سے ہوتی ہے۔
 
-### 1) Auth اور URL اوور رائیڈ رویہ تبدیل ہو گیا
+### 1. Auth اور URL اوور رائیڈ رویہ تبدیل ہو گیا
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ openclaw config get gateway.auth.mode
 - `gateway connect failed:` → غلط URL ہدف۔
 - `unauthorized` → اینڈپوائنٹ قابلِ رسائی مگر auth غلط۔
 
-### 2) بائنڈ اور auth گارڈ ریلز زیادہ سخت ہیں
+### 2. بائنڈ اور auth گارڈ ریلز زیادہ سخت ہیں
 
 ```bash
 openclaw config get gateway.bind
@@ -289,10 +282,10 @@ openclaw logs --follow
 
 عام نشانیاں:
 
-- `refusing to bind gateway ... without auth` → بائنڈ+auth عدم مطابقت۔
+- `refusing to bind gateway ... without auth` → bind+auth mismatch.
 - `RPC probe: failed` جبکہ رن ٹائم چل رہا ہو → گیٹ وے زندہ مگر موجودہ auth/url کے ساتھ ناقابلِ رسائی۔
 
-### 3) pairing اور ڈیوائس شناخت کی حالت تبدیل ہو گئی
+### 3. pairing اور ڈیوائس شناخت کی حالت تبدیل ہو گئی
 
 ```bash
 openclaw devices list

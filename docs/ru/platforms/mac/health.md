@@ -2,14 +2,7 @@
 summary: "Как приложение для macOS сообщает о состояниях здоровья Gateway/Baileys"
 read_when:
   - Отладка индикаторов здоровья приложения для macOS
-title: "Проверки состояния"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:43Z
+title: "Проверки здоровья"
 ---
 
 # Проверки состояния на macOS

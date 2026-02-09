@@ -5,13 +5,6 @@ read_when:
   - Implementeren van node runner + UI IPC
   - Toevoegen van exec-hostbeveiligingsmodi en slash-commando’s
 title: "Exec-hostrefactor"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:00Z
 ---
 
 # Exec-hostrefactorplan
@@ -31,7 +24,7 @@ x-i18n:
 - Geen PTY/streaming voor node-exec (alleen geaggregeerde uitvoer).
 - Geen nieuwe netwerklaag naast de bestaande Bridge + Gateway.
 
-## Beslissingen (vastgezet)
+## Besluiten (vergrendeld)
 
 - **Config-sleutels:** `exec.host` + `exec.security` (per-agent override toegestaan).
 - **Elevatie:** behoud `/elevated` als alias voor volledige gateway-toegang.

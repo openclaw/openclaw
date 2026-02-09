@@ -3,30 +3,23 @@ summary: "WhatsApp گروپ پیغامات کی ہینڈلنگ کے لیے رو�
 read_when:
   - گروپ پیغام کے قواعد یا مینشنز تبدیل کرتے وقت
 title: "گروپ پیغامات"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:04Z
 ---
 
 # گروپ پیغامات (WhatsApp ویب چینل)
 
 مقصد: Clawd کو WhatsApp گروپس میں موجود رہنے دینا، صرف پنگ ہونے پر بیدار کرنا، اور اس تھریڈ کو ذاتی DM سیشن سے الگ رکھنا۔
 
-نوٹ: `agents.list[].groupChat.mentionPatterns` اب Telegram/Discord/Slack/iMessage کے لیے بھی استعمال ہوتا ہے؛ یہ دستاویز WhatsApp سے متعلق مخصوص رویّے پر مرکوز ہے۔ ملٹی ایجنٹ سیٹ اپس کے لیے `agents.list[].groupChat.mentionPatterns` ہر ایجنٹ کے لیے سیٹ کریں (یا بطور عالمی فال بیک `messages.groupChat.mentionPatterns` استعمال کریں)۔
+Note: `agents.list[].groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/iMessage as well; this doc focuses on WhatsApp-specific behavior. For multi-agent setups, set `agents.list[].groupChat.mentionPatterns` per agent (or use `messages.groupChat.mentionPatterns` as a global fallback).
 
 ## کیا نافذ ہے (2025-12-03)
 
-- ایکٹیویشن موڈز: `mention` (بطورِ طے شدہ) یا `always`۔ `mention` کے لیے پنگ درکار ہے (اصل WhatsApp @-مینشنز بذریعہ `mentionedJids`، regex پیٹرنز، یا متن میں کہیں بھی بوٹ کا E.164)۔ `always` ہر پیغام پر ایجنٹ کو بیدار کرتا ہے مگر جواب صرف اسی وقت دینا چاہیے جب معنی خیز قدر شامل ہو؛ بصورت دیگر خاموش ٹوکن `NO_REPLY` واپس کرتا ہے۔ ڈیفالٹس کنفیگ (`channels.whatsapp.groups`) میں سیٹ کیے جا سکتے ہیں اور ہر گروپ کے لیے `/activation` کے ذریعے اوور رائیڈ ہو سکتے ہیں۔ جب `channels.whatsapp.groups` سیٹ ہو تو یہ گروپ allowlist کے طور پر بھی کام کرتا ہے (سب کو اجازت دینے کے لیے `"*"` شامل کریں)۔
-- گروپ پالیسی: `channels.whatsapp.groupPolicy` یہ کنٹرول کرتا ہے کہ گروپ پیغامات قبول ہوں یا نہیں (`open|disabled|allowlist`)۔ `allowlist`، `channels.whatsapp.groupAllowFrom` استعمال کرتا ہے (فال بیک: واضح `channels.whatsapp.allowFrom`)۔ ڈیفالٹ `allowlist` ہے (جب تک ارسال کنندگان شامل نہ کریں، بلاک رہتا ہے)۔
-- ہر گروپ کے لیے سیشنز: سیشن کیز `agent:<agentId>:whatsapp:group:<jid>` جیسی ہوتی ہیں، لہٰذا `/verbose on` یا `/think high` جیسی کمانڈز (بطور علیحدہ پیغامات بھیجی گئی) اسی گروپ تک محدود رہتی ہیں؛ ذاتی DM اسٹیٹ متاثر نہیں ہوتی۔ گروپ تھریڈز کے لیے ہارٹ بیٹس چھوڑ دیے جاتے ہیں۔
-- سیاق داخل کرنا: **صرف زیرِ التوا** گروپ پیغامات (ڈیفالٹ 50) جنہوں نے رن ٹرگر نہیں کیا، `[Chat messages since your last reply - for context]` کے تحت بطور سابقہ شامل کیے جاتے ہیں، اور ٹرگر کرنے والی لائن `[Current message - respond to this]` کے تحت ہوتی ہے۔ جو پیغامات پہلے ہی سیشن میں ہوں وہ دوبارہ شامل نہیں کیے جاتے۔
+- Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Defaults can be set in config (`channels.whatsapp.groups`) and overridden per group via `/activation`. When `channels.whatsapp.groups` is set, it also acts as a group allowlist (include `"*"` to allow all).
+- Group policy: `channels.whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` uses `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Default is `allowlist` (blocked until you add senders).
+- Per-group sessions: session keys look like `agent:<agentId>:whatsapp:group:<jid>` so commands such as `/verbose on` or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
+- Context injection: **pending-only** group messages (default 50) that _did not_ trigger a run are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`. Messages already in the session are not re-injected.
 - بھیجنے والے کی نمایاں شناخت: ہر گروپ بیچ اب `[from: Sender Name (+E164)]` پر ختم ہوتا ہے تاکہ Pi کو معلوم ہو کہ کون بول رہا ہے۔
 - عارضی/ویو-ونس: متن/مینشن نکالنے سے پہلے ہم انہیں اَن ریپ کر دیتے ہیں، اس لیے ان کے اندر موجود پنگز بھی ٹرگر کریں گے۔
-- گروپ سسٹم پرامپٹ: گروپ سیشن کی پہلی باری پر (اور جب بھی `/activation` موڈ تبدیل کرے) ہم سسٹم پرامپٹ میں `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.` جیسا مختصر بلرب داخل کرتے ہیں۔ اگر میٹاڈیٹا دستیاب نہ ہو تب بھی ہم ایجنٹ کو بتاتے ہیں کہ یہ گروپ چیٹ ہے۔
+- Group system prompt: on the first turn of a group session (and whenever `/activation` changes the mode) we inject a short blurb into the system prompt like `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.` If metadata isn’t available we still tell the agent it’s a group chat.
 
 ## کنفیگ مثال (WhatsApp)
 
@@ -67,14 +60,14 @@ x-i18n:
 - `/activation mention`
 - `/activation always`
 
-صرف مالک نمبر (`channels.whatsapp.allowFrom` سے، یا اگر سیٹ نہ ہو تو بوٹ کا اپنا E.164) یہ تبدیل کر سکتا ہے۔ موجودہ ایکٹیویشن موڈ دیکھنے کے لیے گروپ میں بطور علیحدہ پیغام `/status` بھیجیں۔
+Only the owner number (from `channels.whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## استعمال کیسے کریں
 
 1. اپنے WhatsApp اکاؤنٹ (جس پر OpenClaw چل رہا ہو) کو گروپ میں شامل کریں۔
-2. `@openclaw …` کہیں (یا نمبر شامل کریں)۔ جب تک آپ `groupPolicy: "open"` سیٹ نہ کریں، صرف allowlist کیے گئے ارسال کنندگان ہی ٹرگر کر سکتے ہیں۔
+2. Say `@openclaw …` (or include the number). Only allowlisted senders can trigger it unless you set `groupPolicy: "open"`.
 3. ایجنٹ پرامپٹ میں حالیہ گروپ سیاق شامل ہوگا اور آخر میں `[from: …]` مارکر ہوگا تاکہ وہ درست شخص کو مخاطب کر سکے۔
-4. سیشن لیول ہدایات (`/verbose on`, `/think high`, `/new` یا `/reset`, `/compact`) صرف اسی گروپ کے سیشن پر لاگو ہوتی ہیں؛ انہیں بطور علیحدہ پیغامات بھیجیں تاکہ رجسٹر ہوں۔ آپ کا ذاتی DM سیشن آزاد رہتا ہے۔
+4. Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
 ## جانچ / تصدیق
 

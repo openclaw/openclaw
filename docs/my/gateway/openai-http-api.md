@@ -3,20 +3,13 @@ summary: "Gateway မှ OpenAI နှင့် ကိုက်ညီသော /
 read_when:
   - OpenAI Chat Completions ကို မျှော်မှန်းထားသော ကိရိယာများနှင့် ပေါင်းစည်းသည့်အခါ
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:23Z
 ---
 
 # OpenAI Chat Completions (HTTP)
 
 OpenClaw ၏ Gateway သည် OpenAI နှင့် ကိုက်ညီသော Chat Completions endpoint အသေးစားတစ်ခုကို ဝန်ဆောင်မှုပေးနိုင်သည်။
 
-ဤ endpoint သည် **ပုံမှန်အားဖြင့် ပိတ်ထားသည်**။ အရင်ဆုံး config တွင် ဖွင့်ပေးရပါမည်။
+ဤ endpoint ကို **မူလအနေဖြင့် ပိတ်ထားသည်**။ config ထဲမှာ အရင်ဆုံး enable လုပ်ပါ။
 
 - `POST /v1/chat/completions`
 - Gateway နှင့် တူညီသော port (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
@@ -25,7 +18,7 @@ OpenClaw ၏ Gateway သည် OpenAI နှင့် ကိုက်ညီသ�
 
 ## Authentication
 
-Gateway auth configuration ကို အသုံးပြုသည်။ bearer token တစ်ခု ပို့ပါ—
+Gateway auth configuration ကို အသုံးပြုပါတယ်။ bearer token တစ်ခု ပို့ပါ။
 
 - `Authorization: Bearer <token>`
 

@@ -4,13 +4,6 @@ read_when:
   - Chcesz wnioskowania ukierunkowanego na prywatność w OpenClaw
   - Chcesz wskazówek konfiguracji Venice AI
 title: "Venice AI"
-x-i18n:
-  source_path: providers/venice.md
-  source_hash: 2453a6ec3a715c24
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:51Z
 ---
 
 # Venice AI (wyróżnienie Venice)
@@ -30,10 +23,10 @@ Venice AI zapewnia wnioskowanie AI ukierunkowane na prywatność, ze wsparciem d
 
 Venice oferuje dwa poziomy prywatności — ich zrozumienie jest kluczowe przy wyborze modelu:
 
-| Tryb               | Opis                                                                                                                 | Modele                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| **Prywatny**       | W pełni prywatny. Prompty/odpowiedzi **nigdy nie są przechowywane ani logowane**. Efemeryczne.                       | Llama, Qwen, DeepSeek, Venice Uncensored itp. |
-| **Zanonimizowany** | Przekazywany przez Venice z usuniętymi metadanymi. Dostawca bazowy (OpenAI, Anthropic) widzi zanonimizowane żądania. | Claude, GPT, Gemini, Grok, Kimi, MiniMax      |
+| Tryb               | Opis                                                                                                                                                                    | Modele                                                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Prywatny**       | W pełni prywatny. Prompty/odpowiedzi **nigdy nie są przechowywane ani logowane**. Efemeryczne.                          | Llama, Qwen, DeepSeek, Venice Uncensored itp. |
+| **Zanonimizowany** | Przekazywany przez Venice z usuniętymi metadanymi. Dostawca bazowy (OpenAI, Anthropic) widzi zanonimizowane żądania. | Claude, GPT, Gemini, Grok, Kimi, MiniMax                      |
 
 ## Funkcje
 
@@ -54,7 +47,7 @@ Venice oferuje dwa poziomy prywatności — ich zrozumienie jest kluczowe przy w
 2. Przejdź do **Settings → API Keys → Create new key**
 3. Skopiuj klucz API (format: `vapi_xxxxxxxxxxxx`)
 
-### 2. Skonfiguruj OpenClaw
+### 2) Skonfiguruj OpenClaw
 
 **Opcja A: Zmienna środowiskowa**
 
@@ -119,7 +112,7 @@ openclaw models list | grep venice
 
 ## Który model wybrać?
 
-| Zastosowanie                   | Rekomendowany model              | Dlaczego                                          |
+| Przypadek użycia               | Rekomendowany model              | Dlaczego                                          |
 | ------------------------------ | -------------------------------- | ------------------------------------------------- |
 | **Czat ogólny**                | `llama-3.3-70b`                  | Dobry do wszystkiego, w pełni prywatny            |
 | **Najlepsza ogólna jakość**    | `claude-opus-45`                 | Opus pozostaje najsilniejszy do trudnych zadań    |
@@ -134,38 +127,38 @@ openclaw models list | grep venice
 
 ### Modele prywatne (15) — W pełni prywatne, bez logowania
 
-| ID modelu                        | Nazwa                   | Kontekst (tokeny) | Funkcje                     |
-| -------------------------------- | ----------------------- | ----------------- | --------------------------- |
-| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k              | Ogólne                      |
-| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k              | Szybki, lekki               |
-| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k              | Złożone zadania             |
-| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k              | Wnioskowanie                |
-| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k              | Ogólne                      |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k              | Kod                         |
-| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k              | Ogólne                      |
-| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k              | Wizja                       |
-| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k               | Szybki, wnioskowanie        |
-| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k              | Wnioskowanie                |
-| `venice-uncensored`              | Venice Uncensored       | 32k               | Bez cenzury                 |
-| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k              | Wizja                       |
-| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k              | Wizja                       |
-| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k              | Ogólne                      |
-| `zai-org-glm-4.7`                | GLM 4.7                 | 202k              | Wnioskowanie, wielojęzyczne |
+| ID modelu                        | Nazwa                                      | Kontekst (tokeny) | Funkcje                     |
+| -------------------------------- | ------------------------------------------ | ------------------------------------ | --------------------------- |
+| `llama-3.3-70b`                  | Llama 3.3 70B              | 131k                                 | Ogólne                      |
+| `llama-3.2-3b`                   | Llama 3.2 3B               | 131k                                 | Szybki, lekki               |
+| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B    | 131k                                 | Złożone zadania             |
+| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking                        | 131k                                 | Rozumowanie                 |
+| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct                        | 131k                                 | Ogólne                      |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B                           | 262k                                 | Kod                         |
+| `qwen3-next-80b`                 | Qwen3 Next 80B                             | 262k                                 | Ogólne                      |
+| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B                              | 262k                                 | Wizja                       |
+| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k                                  | Szybkie rozumowanie         |
+| `deepseek-v3.2`                  | DeepSeek V3.2              | 163k                                 | Rozumowanie                 |
+| `venice-uncensored`              | Venice Uncensored                          | 32k                                  | Niecenzurowane              |
+| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k                                 | Wizja                       |
+| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct                       | 202k                                 | Wizja                       |
+| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B                        | 131k                                 | Ogólne                      |
+| `zai-org-glm-4.7`                | GLM 4.7                    | 202k                                 | Wnioskowanie, wielojęzyczne |
 
 ### Modele zanonimizowane (10) — przez proxy Venice
 
-| ID modelu                | Oryginał          | Kontekst (tokeny) | Funkcje             |
-| ------------------------ | ----------------- | ----------------- | ------------------- |
-| `claude-opus-45`         | Claude Opus 4.5   | 202k              | Wnioskowanie, wizja |
-| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k              | Wnioskowanie, wizja |
-| `openai-gpt-52`          | GPT-5.2           | 262k              | Wnioskowanie        |
-| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k              | Wnioskowanie, wizja |
-| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k              | Wnioskowanie, wizja |
-| `gemini-3-flash-preview` | Gemini 3 Flash    | 262k              | Wnioskowanie, wizja |
-| `grok-41-fast`           | Grok 4.1 Fast     | 262k              | Wnioskowanie, wizja |
-| `grok-code-fast-1`       | Grok Code Fast 1  | 262k              | Wnioskowanie, kod   |
-| `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k              | Wnioskowanie        |
-| `minimax-m21`            | MiniMax M2.1      | 202k              | Wnioskowanie        |
+| ID modelu                | Oryginał                          | Kontekst (tokeny) | Funkcje             |
+| ------------------------ | --------------------------------- | ------------------------------------ | ------------------- |
+| `claude-opus-45`         | Claude Opus 4.5   | 202k                                 | Wnioskowanie, wizja |
+| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k                                 | Wnioskowanie, wizja |
+| `openai-gpt-52`          | GPT-5.2           | 262k                                 | Rozumowanie         |
+| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k                                 | Wnioskowanie, wizja |
+| `gemini-3-pro-preview`   | Gemini 3 Pro                      | 202k                                 | Wnioskowanie, wizja |
+| `gemini-3-flash-preview` | Gemini 3 Flash                    | 262k                                 | Wnioskowanie, wizja |
+| `grok-41-fast`           | Grok 4.1 Fast     | 262k                                 | Wnioskowanie, wizja |
+| `grok-code-fast-1`       | Grok Code Fast 1                  | 262k                                 | Wnioskowanie, kod   |
+| `kimi-k2-thinking`       | Kimi K2 Thinking                  | 262k                                 | Rozumowanie         |
+| `minimax-m21`            | MiniMax M2.1      | 202k                                 | Rozumowanie         |
 
 ## Wykrywanie modeli
 
@@ -175,12 +168,12 @@ Punkt końcowy `/models` jest publiczny (lista bez uwierzytelniania), ale wniosk
 
 ## Strumieniowanie i wsparcie narzędzi
 
-| Funkcja                 | Wsparcie                                                      |
-| ----------------------- | ------------------------------------------------------------- |
-| **Strumieniowanie**     | ✅ Wszystkie modele                                           |
+| Funkcja                 | Wsparcie                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| **Strumieniowanie**     | ✅ Wszystkie modele                                                              |
 | **Wywoływanie funkcji** | ✅ Większość modeli (sprawdź `supportsFunctionCalling` w API) |
-| **Wizja/obrazy**        | ✅ Modele oznaczone funkcją „Vision”                          |
-| **Tryb JSON**           | ✅ Obsługiwany przez `response_format`                        |
+| **Wizja/obrazy**        | ✅ Modele oznaczone funkcją „Vision”                                             |
+| **Tryb JSON**           | ✅ Obsługiwany przez `response_format`                                           |
 
 ## Cennik
 
@@ -191,12 +184,12 @@ Venice korzysta z systemu opartego na kredytach. Aktualne stawki znajdziesz na [
 
 ## Porównanie: Venice vs bezpośrednie API
 
-| Aspekt          | Venice (zanonimizowane)         | Bezpośrednie API     |
-| --------------- | ------------------------------- | -------------------- |
-| **Prywatność**  | Metadane usunięte, anonimizacja | Konto powiązane      |
-| **Opóźnienie**  | +10–50 ms (proxy)               | Bezpośrednie         |
-| **Funkcje**     | Większość funkcji obsługiwana   | Pełne funkcje        |
-| **Rozliczenia** | Kredyty Venice                  | Rozliczenia dostawcy |
+| Aspekt          | Venice (zanonimizowane) | Bezpośrednie API  |
+| --------------- | ------------------------------------------ | ----------------- |
+| **Prywatność**  | Metadane usunięte, anonimizacja            | Konto powiązane   |
+| **Opóźnienie**  | +10–50 ms (proxy)       | Bezpośrednie      |
+| **Funkcje**     | Większość funkcji obsługiwana              | Pełne funkcje     |
+| **Rozliczenia** | Kredyty Venice                             | Rachunek dostawcy |
 
 ## Przykłady użycia
 

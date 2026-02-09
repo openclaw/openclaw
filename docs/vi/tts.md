@@ -5,19 +5,12 @@ read_when:
   - Cấu hình nhà cung cấp TTS hoặc giới hạn
   - Sử dụng lệnh /tts
 title: "Chuyển văn bản thành giọng nói"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:53Z
 ---
 
 # Chuyển văn bản thành giọng nói (TTS)
 
-OpenClaw có thể chuyển các phản hồi gửi đi thành âm thanh bằng ElevenLabs, OpenAI hoặc Edge TTS.
-Tính năng này hoạt động ở mọi nơi OpenClaw có thể gửi âm thanh; Telegram sẽ hiển thị bong bóng ghi âm tròn.
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## Dịch vụ được hỗ trợ
 
@@ -27,15 +20,13 @@ Tính năng này hoạt động ở mọi nơi OpenClaw có thể gửi âm than
 
 ### Ghi chú về Edge TTS
 
-Edge TTS sử dụng dịch vụ TTS thần kinh trực tuyến của Microsoft Edge thông qua thư viện
-`node-edge-tts`. Đây là dịch vụ được lưu trữ (không chạy cục bộ), sử dụng các endpoint của Microsoft và
-không yêu cầu khóa API. `node-edge-tts` cung cấp các tùy chọn cấu hình giọng nói và
-định dạng đầu ra, nhưng không phải tất cả các tùy chọn đều được dịch vụ Edge hỗ trợ. citeturn2search0
+Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
+library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
+not require an API key. `node-edge-tts` exposes speech configuration options and
+output formats, but not all options are supported by the Edge service. citeturn2search0
 
-Vì Edge TTS là dịch vụ web công khai không có SLA hoặc hạn mức được công bố, hãy xem đây là
-best-effort. Nếu bạn cần giới hạn đảm bảo và hỗ trợ, hãy dùng OpenAI hoặc ElevenLabs.
-Tài liệu Speech REST API của Microsoft nêu giới hạn âm thanh 10 phút mỗi yêu cầu; Edge TTS
-không công bố giới hạn, vì vậy hãy giả định giới hạn tương tự hoặc thấp hơn. citeturn0search3
+Vì Edge TTS là một dịch vụ web công cộng không có SLA hoặc hạn mức được công bố, hãy xem nó như cơ chế best‑effort. 23. Nếu bạn cần giới hạn và hỗ trợ được đảm bảo, hãy dùng OpenAI hoặc ElevenLabs.
+Microsoft Speech REST API tài liệu hóa giới hạn âm thanh 10 phút cho mỗi yêu cầu; Edge TTS không công bố giới hạn, vì vậy hãy giả định các giới hạn tương tự hoặc thấp hơn. 24. citeturn0search3
 
 ## Khóa tùy chọn
 
@@ -44,12 +35,11 @@ Nếu bạn muốn dùng OpenAI hoặc ElevenLabs:
 - `ELEVENLABS_API_KEY` (hoặc `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS **không** yêu cầu khóa API. Nếu không tìm thấy khóa API nào, OpenClaw mặc định
-dùng Edge TTS (trừ khi bị tắt qua `messages.tts.edge.enabled=false`).
+Edge TTS **không** yêu cầu khóa API. 37. Nếu không tìm thấy khóa API nào, OpenClaw mặc định
+sử dụng Edge TTS (trừ khi bị vô hiệu hóa qua `messages.tts.edge.enabled=false`).
 
 Nếu cấu hình nhiều nhà cung cấp, nhà cung cấp được chọn sẽ được dùng trước và các nhà cung cấp còn lại là phương án dự phòng.
-Tự động tóm tắt sử dụng `summaryModel` (hoặc `agents.defaults.model.primary`) đã cấu hình,
-vì vậy nhà cung cấp đó cũng phải được xác thực nếu bạn bật tóm tắt.
+Tự động tóm tắt sử dụng `summaryModel` đã cấu hình (hoặc `agents.defaults.model.primary`), vì vậy nhà cung cấp đó cũng phải được xác thực nếu bạn bật tóm tắt.
 
 ## Liên kết dịch vụ
 
@@ -62,8 +52,8 @@ vì vậy nhà cung cấp đó cũng phải được xác thực nếu bạn b�
 
 ## Mặc định có bật không?
 
-Không. Auto‑TTS **tắt** theo mặc định. Hãy bật trong cấu hình bằng
-`messages.tts.auto` hoặc theo từng phiên với `/tts always` (bí danh: `/tts on`).
+Không. 38. Auto‑TTS **tắt** theo mặc định. 39. Bật trong cấu hình với
+`messages.tts.auto` hoặc theo từng phiên bằng `/tts always` (bí danh: `/tts on`).
 
 Edge TTS **được** bật theo mặc định khi TTS được bật, và sẽ tự động được dùng
 khi không có khóa API OpenAI hoặc ElevenLabs.
@@ -71,7 +61,7 @@ khi không có khóa API OpenAI hoặc ElevenLabs.
 ## Cấu hình
 
 Cấu hình TTS nằm dưới `messages.tts` trong `openclaw.json`.
-Schema đầy đủ có trong [Cấu hình Gateway](/gateway/configuration).
+Schema đầy đủ ở [Gateway configuration](/gateway/configuration).
 
 ### Cấu hình tối thiểu (bật + nhà cung cấp)
 
@@ -217,7 +207,7 @@ Sau đó chạy:
 - `summaryModel`: mô hình rẻ tùy chọn cho auto‑summary; mặc định là `agents.defaults.model.primary`.
   - Chấp nhận `provider/model` hoặc một bí danh mô hình đã cấu hình.
 - `modelOverrides`: cho phép mô hình phát ra chỉ thị TTS (bật theo mặc định).
-- `maxTextLength`: giới hạn cứng cho đầu vào TTS (ký tự). `/tts audio` sẽ thất bại nếu vượt quá.
+- 40. `maxTextLength`: giới hạn cứng cho đầu vào TTS (ký tự). `/tts audio` sẽ thất bại nếu vượt quá.
 - `timeoutMs`: thời gian chờ yêu cầu (ms).
 - `prefsPath`: ghi đè đường dẫn JSON prefs cục bộ (nhà cung cấp/giới hạn/tóm tắt).
 - Các giá trị `apiKey` sẽ dùng biến môi trường (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
@@ -241,12 +231,10 @@ Sau đó chạy:
 
 ## Ghi đè do mô hình điều khiển (bật mặc định)
 
-Theo mặc định, mô hình **có thể** phát ra chỉ thị TTS cho một phản hồi đơn lẻ.
+Theo mặc định, mô hình **có thể** phát ra các chỉ thị TTS cho một phản hồi duy nhất.
 Khi `messages.tts.auto` là `tagged`, các chỉ thị này là bắt buộc để kích hoạt âm thanh.
 
-Khi bật, mô hình có thể phát ra các chỉ thị `[[tts:...]]` để ghi đè giọng nói
-cho một phản hồi, kèm theo khối `[[tts:text]]...[[/tts:text]]` tùy chọn để
-cung cấp thẻ biểu cảm (tiếng cười, gợi ý hát, v.v.) chỉ xuất hiện trong âm thanh.
+Khi được bật, mô hình có thể phát ra các chỉ thị `[[tts:...]]` để ghi đè giọng nói cho một phản hồi duy nhất, cùng với khối tùy chọn `[[tts:text]]...[[/tts:text]]` để cung cấp các thẻ biểu cảm (cười, gợi ý hát, v.v.) chỉ xuất hiện trong âm thanh.
 
 Ví dụ payload phản hồi:
 
@@ -319,11 +307,11 @@ Các giá trị này ghi đè `messages.tts.*` cho máy chủ đó.
 - **Các kênh khác**: MP3 (`mp3_44100_128` từ ElevenLabs, `mp3` từ OpenAI).
   - 44.1kHz / 128kbps là cân bằng mặc định cho độ rõ của giọng nói.
 - **Edge TTS**: dùng `edge.outputFormat` (mặc định `audio-24khz-48kbitrate-mono-mp3`).
-  - `node-edge-tts` chấp nhận một `outputFormat`, nhưng không phải mọi định dạng đều khả dụng
-    từ dịch vụ Edge. citeturn2search0
-  - Giá trị định dạng đầu ra tuân theo Microsoft Speech output formats (bao gồm Ogg/WebM Opus). citeturn1search0
-  - Telegram `sendVoice` chấp nhận OGG/MP3/M4A; hãy dùng OpenAI/ElevenLabs nếu bạn cần
-    ghi chú giọng Opus được đảm bảo. citeturn1search1
+  - 41. `node-edge-tts` chấp nhận một `outputFormat`, nhưng không phải tất cả các định dạng đều khả dụng
+        từ dịch vụ Edge. 42. citeturn2search0
+  - 43. Giá trị định dạng đầu ra tuân theo các định dạng đầu ra Microsoft Speech (bao gồm Ogg/WebM Opus). citeturn1search0
+  - 25. Telegram `sendVoice` chấp nhận OGG/MP3/M4A; hãy dùng OpenAI/ElevenLabs nếu bạn cần
+        các ghi chú giọng nói Opus được đảm bảo. 45. citeturn1search1
   - Nếu định dạng đầu ra Edge đã cấu hình thất bại, OpenClaw sẽ thử lại với MP3.
 
 Các định dạng OpenAI/ElevenLabs là cố định; Telegram mong đợi Opus cho UX voice‑note.
@@ -359,10 +347,9 @@ Reply -> TTS enabled?
 ## Cách dùng lệnh slash
 
 Chỉ có một lệnh: `/tts`.
-Xem [Slash commands](/tools/slash-commands) để biết chi tiết bật tính năng.
+Xem [Slash commands](/tools/slash-commands) để biết chi tiết kích hoạt.
 
-Ghi chú Discord: `/tts` là lệnh tích hợp sẵn của Discord, vì vậy OpenClaw đăng ký
-`/voice` làm lệnh gốc tại đó. Văn bản `/tts ...` vẫn hoạt động.
+Lưu ý Discord: `/tts` là lệnh tích hợp sẵn của Discord, vì vậy OpenClaw đăng ký `/voice` làm lệnh gốc ở đó. 46. Văn bản `/tts ...` vẫn hoạt động.
 
 ```
 /tts off
@@ -386,9 +373,7 @@ Ghi chú:
 
 ## Công cụ tác tử
 
-Công cụ `tts` chuyển văn bản thành giọng nói và trả về một đường dẫn `MEDIA:`. Khi
-kết quả tương thích với Telegram, công cụ sẽ bao gồm `[[audio_as_voice]]` để
-Telegram gửi bong bóng ghi âm.
+Công cụ `tts` chuyển văn bản thành giọng nói và trả về một đường dẫn `MEDIA:`. Khi kết quả tương thích với Telegram, công cụ sẽ bao gồm `[[audio_as_voice]]` để Telegram gửi bong bóng thoại.
 
 ## Gateway RPC
 

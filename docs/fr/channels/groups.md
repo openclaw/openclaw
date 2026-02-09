@@ -3,13 +3,6 @@ summary: "Comportement des discussions de groupe sur les différentes surfaces (
 read_when:
   - Modification du comportement des discussions de groupe ou du filtrage par mention
 title: "Groupes"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:52Z
 ---
 
 # Groupes
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Si vous voulez…
 
-| Objectif                                                          | Paramètre à définir                                        |
-| ----------------------------------------------------------------- | ---------------------------------------------------------- |
-| Autoriser tous les groupes mais répondre uniquement aux @mentions | `groups: { "*": { requireMention: true } }`                |
-| Désactiver toutes les réponses de groupe                          | `groupPolicy: "disabled"`                                  |
-| Uniquement des groupes spécifiques                                | `groups: { "<group-id>": { ... } }` (sans clé `"*"`)       |
-| Vous seul pouvez déclencher dans les groupes                      | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Objectif                                                                       | Ce qu'il faut définir                                                   |
+| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Autoriser tous les groupes mais répondre uniquement aux @mentions | `groups: { "*": { requireMention: true } }`                             |
+| Désactiver toutes les réponses de groupe                                       | `groupPolicy: "disabled"`                                               |
+| Uniquement des groupes spécifiques                                             | `groups: { "<group-id>": { ... } }` (sans clé `"*"`) |
+| Vous seul pouvez déclencher dans les groupes                                   | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`              |
 
 ## Clés de session
 
@@ -181,8 +174,8 @@ Contrôlez la manière dont les messages de groupe/salle sont traités par canal
 }
 ```
 
-| Politique     | Comportement                                                                                     |
-| ------------- | ------------------------------------------------------------------------------------------------ |
+| Politique     | Comportement                                                                                                     |
+| ------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `"open"`      | Les groupes contournent les listes d’autorisation ; le filtrage par mention s’applique toujours. |
 | `"disabled"`  | Bloquer entièrement tous les messages de groupe.                                                 |
 | `"allowlist"` | Autoriser uniquement les groupes/salles correspondant à la liste d’autorisation configurée.      |
@@ -204,7 +197,7 @@ Modèle mental rapide (ordre d’évaluation pour les messages de groupe) :
 2. listes d’autorisation de groupe (`*.groups`, `*.groupAllowFrom`, liste spécifique au canal)
 3. filtrage par mention (`requireMention`, `/activation`)
 
-## Filtrage par mention (par défaut)
+## Mentionner la barrière (par défaut)
 
 Les messages de groupe nécessitent une mention, sauf remplacement par groupe. Les valeurs par défaut se trouvent par sous-système sous `*.groups."*"`.
 

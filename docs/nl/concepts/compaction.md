@@ -4,13 +4,6 @@ read_when:
   - Je wilt auto-compaction en /compact begrijpen
   - Je debugt lange sessies die contextlimieten bereiken
 title: "Compaction"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:19Z
 ---
 
 # Contextvenster & Compaction

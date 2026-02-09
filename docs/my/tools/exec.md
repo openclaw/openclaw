@@ -4,20 +4,13 @@ read_when:
   - exec ကိရိယာကို အသုံးပြုခြင်း သို့မဟုတ် ပြုပြင်ပြောင်းလဲခြင်း
   - stdin သို့မဟုတ် TTY အပြုအမူများကို အမှားရှာဖွေခြင်း
 title: "Exec ကိရိယာ"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:27Z
 ---
 
 # Exec ကိရိယာ
 
-workspace အတွင်း shell အမိန့်များကို လည်ပတ်စေပါသည်။ `process` မှတဆင့် ရှေ့တန်း (foreground) + နောက်ခံ (background) လည်ပတ်မှုကို ပံ့ပိုးပါသည်။
+workspace အတွင်း shell commands များကို လည်ပတ်စေပါ။ `process` ကို အသုံးပြုပြီး foreground + background execution ကို ထောက်ပံ့သည်။
 `process` ကို ခွင့်မပြုထားပါက `exec` သည် synchronous အဖြစ် လည်ပတ်ပြီး `yieldMs`/`background` ကို လျစ်လျူရှုပါသည်။
-နောက်ခံ ဆက်ရှင်များကို အေးဂျင့်တစ်ခုချင်းစီအလိုက် ကန့်သတ်ထားပြီး `process` သည် အေးဂျင့်တူညီသူမှ ဆက်ရှင်များကိုသာ မြင်နိုင်ပါသည်။
+Background sessions များကို agent အလိုက် scope ချထားပြီး `process` သည် agent တစ်ခုတည်းမှ sessions များကိုသာ မြင်နိုင်သည်။
 
 ## ပါရာမီတာများ
 
@@ -43,7 +36,7 @@ workspace အတွင်း shell အမိန့်များကို လ�
 - နိုဒ်များ များစွာ ရှိပါက တစ်ခုရွေးရန် `exec.node` သို့မဟုတ် `tools.exec.node` ကို သတ်မှတ်ပါ။
 - Windows မဟုတ်သော ဟို့စ်များတွင် `SHELL` ကို သတ်မှတ်ထားပါက exec သည် ၎င်းကို အသုံးပြုပါသည်; `SHELL` သည် `fish` ဖြစ်ပါက fish နှင့် မကိုက်ညီသော script များကို ရှောင်ရှားရန် `PATH` မှ `bash` (သို့မဟုတ် `sh`) ကို ဦးစားပေးပြီး၊ မရှိပါက `SHELL` သို့ ပြန်လည်ကျသွားပါသည်။
 - ဟို့စ်ပေါ် လည်ပတ်မှု (`gateway`/`node`) သည် binary hijacking သို့မဟုတ် ထိုးသွင်းထားသော code များကို တားဆီးရန် `env.PATH` နှင့် loader အစားထိုးမှုများ (`LD_*`/`DYLD_*`) ကို ငြင်းပယ်ပါသည်။
-- အရေးကြီးသည်– sandboxing သည် **မူလအနေဖြင့် ပိတ်ထားသည်**။ sandboxing ပိတ်ထားပါက `host=sandbox` သည် gateway host ပေါ်တွင် တိုက်ရိုက် (container မရှိ) လည်ပတ်ပြီး **အတည်ပြုချက် မလိုအပ်ပါ**။ အတည်ပြုချက်များ လိုအပ်စေရန် `host=gateway` ဖြင့် လည်ပတ်ပြီး exec approvals ကို ပြင်ဆင်သတ်မှတ်ပါ (သို့မဟုတ် sandboxing ကို ဖွင့်ပါ)။
+- အရေးကြီးသည်– sandboxing သည် **default အနေဖြင့် ပိတ်ထားသည်**။ Sandboxing ပိတ်ထားပါက `host=sandbox` သည် gateway host ပေါ်တွင် တိုက်ရိုက် run လုပ်ပြီး (container မရှိ) **approvals မလိုအပ်ပါ**။ Approvals လိုအပ်စေရန် `host=gateway` ဖြင့် run လုပ်ပြီး exec approvals ကို configure လုပ်ပါ (သို့မဟုတ် sandboxing ကို ဖွင့်ပါ)။
 
 ## Config
 
@@ -70,11 +63,12 @@ workspace အတွင်း shell အမိန့်များကို လ�
 
 ### PATH ကို ကိုင်တွယ်ပုံ
 
-- `host=gateway`: သင့် login-shell ၏ `PATH` ကို exec ပတ်ဝန်းကျင်ထဲသို့ ပေါင်းစည်းပါသည်။ ဟို့စ်ပေါ် လည်ပတ်မှုအတွက် `env.PATH` အစားထိုးမှုများကို ငြင်းပယ်ပါသည်။ daemon ကိုယ်တိုင်ကတော့ အနည်းဆုံး `PATH` ဖြင့် လည်ပတ်နေပါသည်:
+- `host=gateway` သည် သင့် login-shell ၏ `PATH` ကို exec environment ထဲသို့ ပေါင်းထည့်ပေးသည်။ Host execution အတွက် `env.PATH` override များကို လက်မခံပါ။ Daemon ကိုယ်တိုင်သည် minimal `PATH` ဖြင့် ဆက်လက် run လုပ်နေဆဲဖြစ်သည်။
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
-- `host=sandbox`: container အတွင်း `sh -lc` (login shell) ကို လည်ပတ်စေသဖြင့် `/etc/profile` သည် `PATH` ကို ပြန်လည်သတ်မှတ်နိုင်ပါသည်။ OpenClaw သည် profile source ပြီးနောက် အတွင်းရေး env var တစ်ခုမှတဆင့် `env.PATH` ကို အရှေ့တွင် ထည့်ပေါင်းပါသည် (shell interpolation မရှိပါ)； `tools.exec.pathPrepend` လည်း ဤနေရာတွင် သက်ရောက်ပါသည်။
-- `host=node`: သင်ပို့သော ပိတ်မထားသော env အစားထိုးမှုများကိုသာ နိုဒ်သို့ ပို့ပါသည်။ ဟို့စ်ပေါ် လည်ပတ်မှုအတွက် `env.PATH` အစားထိုးမှုများကို ငြင်းပယ်ပါသည်။ headless node host များသည် node host PATH ကို အရှေ့မှ ထည့်ပေါင်းသည့်အခါသာ `PATH` ကို လက်ခံပါသည် (အစားထိုးခြင်း မဟုတ်ပါ)။ macOS နိုဒ်များသည် `PATH` အစားထိုးမှုများကို လုံးဝ ပယ်ဖျက်ပါသည်။
+- `host=sandbox` သည် container အတွင်း `sh -lc` (login shell) ကို run လုပ်သောကြောင့် `/etc/profile` က `PATH` ကို ပြန်လည်သတ်မှတ်နိုင်သည်။
+  OpenClaw သည် profile sourcing ပြီးနောက် internal env var မှတဆင့် `env.PATH` ကို prepend လုပ်သည် (shell interpolation မရှိ)၊ `tools.exec.pathPrepend` သည်လည်း ဤနေရာတွင် သက်ဆိုင်သည်။
+- `host=node` သည် သင်ပို့လိုက်သော non-blocked env override များကိုသာ node သို့ ပို့သည်။ Host execution အတွက် `env.PATH` override များကို လက်မခံပါ။ Headless node hosts များသည် node host ၏ PATH ကို prepend လုပ်သောအခါတွင်သာ `PATH` ကို လက်ခံသည် (အစားထိုးခြင်း မပြုလုပ်ပါ)။ macOS nodes များသည် `PATH` override များကို လုံးဝ ဖယ်ရှားပစ်သည်။
 
 အေးဂျင့်တစ်ခုချင်းစီအလိုက် နိုဒ်ချိတ်ဆက်မှု (config တွင် အေးဂျင့်စာရင်း အညွှန်းကို အသုံးပြုပါ):
 
@@ -87,8 +81,8 @@ Control UI: Nodes tab တွင် တူညီသော သတ်မှတ်�
 
 ## ဆက်ရှင် အစားထိုးမှုများ (`/exec`)
 
-`/exec` ကို အသုံးပြုပြီး `host`, `security`, `ask`, နှင့် `node` အတွက် **ဆက်ရှင်တစ်ခုချင်းစီအလိုက်** မူလတန်ဖိုးများကို သတ်မှတ်ပါ။
-လက်ရှိတန်ဖိုးများကို ပြရန် `/exec` ကို အ арг မပါဘဲ ပို့ပါ။
+`/exec` ကို အသုံးပြုပြီး `host`, `security`, `ask`, နှင့် `node` အတွက် **per-session** default များကို သတ်မှတ်နိုင်သည်။
+Argument မပါဘဲ `/exec` ကို ပို့ပါက လက်ရှိ value များကို ပြသသည်။
 
 ဥပမာ:
 
@@ -98,26 +92,19 @@ Control UI: Nodes tab တွင် တူညီသော သတ်မှတ်�
 
 ## ခွင့်ပြုချက် မော်ဒယ်
 
-`/exec` သည် **ခွင့်ပြုထားသော ပို့သူများ** (channel allowlists/paired plus `commands.useAccessGroups`) အတွက်သာ လိုက်နာပါသည်။
-၎င်းသည် **ဆက်ရှင် အခြေအနေကိုသာ** ပြင်ဆင်ပြီး config သို့ မရေးပါ။ exec ကို အပြီးတိုင် ပိတ်ရန် tool
-policy (`tools.deny: ["exec"]` သို့မဟုတ် အေးဂျင့်တစ်ခုချင်းစီအလိုက်) မှတဆင့် ငြင်းပယ်ပါ။
-`security=full` နှင့် `ask=off` ကို အထူးသတ်မှတ်မထားလျှင် ဟို့စ် အတည်ပြုချက်များသည် ဆက်လက် သက်ရောက်နေပါသည်။
+`/exec` သည် **authorized senders** များအတွက်သာ အလုပ်လုပ်သည် (channel allowlists/pairing နှင့် `commands.useAccessGroups`)။
+ဤအရာသည် **session state ကိုသာ** update လုပ်ပြီး config ကို မရေးပါ။ Exec ကို အပြည့်အဝ ပိတ်ရန် tool policy မှတဆင့် deny လုပ်ပါ (`tools.deny: ["exec"]` သို့မဟုတ် per-agent)။ `security=full` နှင့် `ask=off` ကို ထင်ရှားစွာ သတ်မှတ်ထားခြင်း မရှိပါက host approvals များသည် ဆက်လက် သက်ဆိုင်နေသည်။
 
 ## Exec approvals (companion app / node host)
 
-sandboxed အေးဂျင့်များသည် `exec` ကို gateway သို့မဟုတ် node host ပေါ်တွင် လည်ပတ်မီ တောင်းဆိုချက်တစ်ခုချင်းစီအတွက် အတည်ပြုချက် လိုအပ်နိုင်ပါသည်။
-မူဝါဒ၊ allowlist နှင့် UI လုပ်ငန်းစဉ်များအတွက် [Exec approvals](/tools/exec-approvals) ကို ကြည့်ပါ။
+Sandboxed agents များသည် `exec` ကို gateway သို့မဟုတ် node host ပေါ်တွင် run မလုပ်မီ request တစ်ခုချင်းစီအတွက် approval လိုအပ်စေနိုင်သည်။
+Policy၊ allowlist နှင့် UI flow အတွက် [Exec approvals](/tools/exec-approvals) ကို ကြည့်ပါ။
 
-အတည်ပြုချက်များ လိုအပ်သည့်အခါ exec ကိရိယာသည် ချက်ချင်း ပြန်လာပြီး
-`status: "approval-pending"` နှင့် အတည်ပြု ID တစ်ခုကို ပေးပါသည်။ အတည်ပြုပြီးပါက (သို့မဟုတ် ငြင်းပယ်/အချိန်ကုန်လွန်ပါက)
-Gateway သည် စနစ်ဖြစ်ရပ်များ (`Exec finished` / `Exec denied`) ကို ထုတ်လွှတ်ပါသည်။ အမိန့်သည်
-`tools.exec.approvalRunningNoticeMs` ပြီးနောက်တောင် ဆက်လက် လည်ပတ်နေပါက `Exec running` အကြောင်းကြားချက် တစ်ကြိမ်တည်းကို ထုတ်ပေးပါသည်။
+Approvals လိုအပ်ပါက exec tool သည် ချက်ချင်း ပြန်လည်ဖြေကြားပြီး `status: "approval-pending"` နှင့် approval id ကို ပြန်ပေးသည်။ Approved (သို့မဟုတ် denied / timed out) ဖြစ်သည့်အခါ Gateway သည် system events (`Exec finished` / `Exec denied`) ကို ထုတ်လွှတ်သည်။ Command သည် `tools.exec.approvalRunningNoticeMs` ကျော်လွန်၍ ဆက်လက် run နေပါက `Exec running` notice တစ်ကြိမ်သာ ထုတ်လွှတ်သည်။
 
 ## Allowlist + safe bins
 
-Allowlist အကောင်အထည်ဖော်မှုသည် **ဖြေရှင်းပြီးသော binary လမ်းကြောင်းများကိုသာ** ကိုက်ညီစစ်ဆေးပါသည် (basename ဖြင့် မကိုက်ညီပါ)။
-`security=allowlist` ဖြစ်ပါက shell အမိန့်များကို pipeline အပိုင်းအစ တစ်ခုချင်းစီအားလုံးသည် allowlist ထဲရှိခြင်း သို့မဟုတ် safe bin ဖြစ်မှသာ အလိုအလျောက် ခွင့်ပြုပါသည်။
-Chaining (`;`, `&&`, `||`) နှင့် redirection များကို allowlist မုဒ်တွင် ငြင်းပယ်ပါသည်။
+Allowlist enforcement သည် **resolved binary paths** များနှင့်သာ ကိုက်ညီစစ်ဆေးသည် (basename ကို မကိုက်ညီစစ်ဆေးပါ)။ `security=allowlist` ဖြစ်သောအခါ shell commands များကို pipeline segment တိုင်းသည် allowlist ထဲတွင်ရှိခြင်း သို့မဟုတ် safe bin ဖြစ်ခြင်း အခြေအနေတွင်သာ auto-allow လုပ်သည်။ Allowlist mode တွင် chaining (`;`, `&&`, `||`) နှင့် redirections များကို လက်မခံပါ။
 
 ## ဥပမာများ
 
@@ -156,8 +143,8 @@ Paste (မူလအားဖြင့် bracketed):
 
 ## apply_patch (စမ်းသပ်ဆဲ)
 
-`apply_patch` သည် ဖိုင်များစွာကို ဖွဲ့စည်းပုံတကျ ပြင်ဆင်ရန် `exec` ၏ subtool တစ်ခု ဖြစ်ပါသည်။
-သီးသန့် ဖွင့်ပါ:
+`apply_patch` သည် structured multi-file edits အတွက် `exec` ၏ subtool တစ်ခုဖြစ်သည်။
+၎င်းကို ထင်ရှားစွာ ဖွင့်ပါ:
 
 ```json5
 {

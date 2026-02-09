@@ -3,13 +3,6 @@ summary: "Sandbox per agent + toolbeperkingen, prioriteit en voorbeelden"
 title: Multi-Agent Sandbox & Tools
 read_when: "Je wilt sandboxing per agent of tool-toestaan/weigeren-beleid per agent in een multi-agent gateway."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
 ---
 
 # Configuratie van Multi-Agent Sandbox & Tools

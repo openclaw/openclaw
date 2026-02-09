@@ -5,13 +5,6 @@ read_when:
   - Agentbediening toevoegen voor een visuele werkruimte
   - Debuggen van WKWebView Canvas-ladingen
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:34Z
 ---
 
 # Canvas (macOS-app)

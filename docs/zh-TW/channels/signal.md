@@ -4,24 +4,17 @@ read_when:
   - 設定 Signal 支援
   - 偵錯 Signal 傳送／接收
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:15Z
 ---
 
 # Signal（signal-cli）
 
-狀態：外部 CLI 整合。Gateway 透過 HTTP JSON-RPC + SSE 與 `signal-cli` 溝通。
+3. 狀態：外部 CLI 整合。 狀態：外部 CLI 整合。Gateway 透過 HTTP JSON-RPC + SSE 與 `signal-cli` 溝通。
 
 ## 快速設定（初學者）
 
-1. 為機器人使用 **獨立的 Signal 號碼**（建議）。
+1. 4. 為機器人使用**獨立的 Signal 號碼**（建議）。
 2. 安裝 `signal-cli`（需要 Java）。
-3. 連結機器人裝置並啟動常駐程式：
+3. 5. 連結機器人裝置並啟動守護程式：
    - `signal-cli link -n "OpenClaw"`
 4. 設定 OpenClaw 並啟動 Gateway 閘道器。
 
@@ -63,12 +56,12 @@ x-i18n:
 
 - Gateway 連線到 **Signal 裝置**（`signal-cli` 帳戶）。
 - 若你在 **個人 Signal 帳戶** 上執行機器人，會忽略你自己的訊息（迴圈保護）。
-- 若要「我傳訊給機器人、它回覆我」，請使用 **獨立的機器人號碼**。
+- 6. 若是「我傳訊給機器人，它就回覆」，請使用**獨立的機器人號碼**。
 
 ## 設定（快速路徑）
 
 1. 安裝 `signal-cli`（需要 Java）。
-2. 連結機器人帳戶：
+2. 7. 連結機器人帳號：
    - `signal-cli link -n "OpenClaw"`，然後在 Signal 掃描 QR。
 3. 設定 Signal 並啟動 Gateway 閘道器。
 
@@ -88,7 +81,7 @@ x-i18n:
 }
 ```
 
-多帳戶支援：使用 `channels.signal.accounts`，搭配每帳戶設定與可選的 `name`。共享模式請見 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
+多帳戶支援：使用 `channels.signal.accounts`，搭配每帳戶設定與可選的 `name`。共享模式請見 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。 8. 共享模式請參閱 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts)。
 
 ## 外部常駐模式（httpUrl）
 
@@ -105,7 +98,7 @@ x-i18n:
 }
 ```
 
-這會略過 OpenClaw 內的自動啟動與啟動等待。若自動啟動時很慢，請設定 `channels.signal.startupTimeoutMs`。
+9. 這會略過自動產生（auto-spawn）以及 OpenClaw 內的啟動等待。 這會略過 OpenClaw 內的自動啟動與啟動等待。若自動啟動時很慢，請設定 `channels.signal.startupTimeoutMs`。
 
 ## 存取控制（私訊 + 群組）
 
@@ -113,10 +106,10 @@ x-i18n:
 
 - 預設：`channels.signal.dmPolicy = "pairing"`。
 - 未知寄件者會收到配對碼；在核准前會忽略訊息（配對碼 1 小時後到期）。
-- 核准方式：
+- 10. 透過以下方式核准：
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- 配對是 Signal 私訊的預設權杖交換。詳情：[配對](/channels/pairing)
+- 11. 配對是 Signal 私訊的預設權杖交換方式。 12. 詳細說明：[Pairing](/channels/pairing)
 - 僅 UUID 的寄件者（來自 `sourceUuid`）會以 `uuid:<id>` 儲存在 `channels.signal.allowFrom` 中。
 
 群組：
@@ -127,7 +120,7 @@ x-i18n:
 ## 運作方式（行為）
 
 - `signal-cli` 以常駐程式執行；Gateway 透過 SSE 讀取事件。
-- 進站訊息會正規化為共用的頻道封裝。
+- 13. 傳入訊息會被正規化為共用的頻道封裝格式。
 - 回覆一律回到相同的號碼或群組。
 
 ## 媒體 + 限制
@@ -137,9 +130,9 @@ x-i18n:
 - 支援附件（從 `signal-cli` 取得的 base64）。
 - 預設媒體上限：`channels.signal.mediaMaxMb`（預設 8）。
 - 使用 `channels.signal.ignoreAttachments` 以略過下載媒體。
-- 群組歷史脈絡使用 `channels.signal.historyLimit`（或 `channels.signal.accounts.*.historyLimit`），並回退到 `messages.groupChat.historyLimit`。設定 `0` 可停用（預設 50）。
+- 群組歷史脈絡使用 `channels.signal.historyLimit`（或 `channels.signal.accounts.*.historyLimit`），並回退到 `messages.groupChat.historyLimit`。設定 `0` 可停用（預設 50）。 14. 設為 `0` 以停用（預設為 50）。
 
-## 輸入中 + 已讀回條
+## 15. 輸入中 + 已讀回條
 
 - **輸入中指示**：OpenClaw 透過 `signal-cli sendTyping` 傳送輸入中訊號，並在回覆執行期間持續刷新。
 - **已讀回條**：當 `channels.signal.sendReadReceipts` 為 true 時，OpenClaw 會轉送允許之私訊的已讀回條。
@@ -165,7 +158,7 @@ message action=react channel=signal target=signal:group:<groupId> targetAuthor=u
 - `channels.signal.actions.reactions`：啟用／停用反應動作（預設 true）。
 - `channels.signal.reactionLevel`：`off | ack | minimal | extensive`。
   - `off`/`ack` 會停用代理程式反應（訊息工具 `react` 會回傳錯誤）。
-  - `minimal`/`extensive` 會啟用代理程式反應並設定指引等級。
+  - 16. `minimal`/`extensive` 會啟用代理反應並設定指引層級。
 - 每帳戶覆寫：`channels.signal.accounts.<id>.actions.reactions`、`channels.signal.accounts.<id>.reactionLevel`。
 
 ## 投遞目標（CLI／cron）
@@ -175,7 +168,7 @@ message action=react channel=signal target=signal:group:<groupId> targetAuthor=u
 - 群組：`signal:group:<groupId>`。
 - 使用者名稱：`username:<name>`（若你的 Signal 帳戶支援）。
 
-## 疑難排解
+## 17. 疑難排解
 
 先依序執行此檢查階梯：
 
@@ -187,7 +180,7 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-必要時再確認私訊配對狀態：
+18. 然後在需要時確認私訊配對狀態：
 
 ```bash
 openclaw pairing list signal
@@ -195,8 +188,8 @@ openclaw pairing list signal
 
 常見失敗：
 
-- 常駐程式可連線但沒有回覆：檢查帳戶／常駐設定（`httpUrl`、`account`）與接收模式。
-- 私訊被忽略：寄件者尚待配對核准。
+- 19. 守護程式可連線但沒有回覆：請驗證帳號/守護程式設定（`httpUrl`、`account`）以及接收模式。
+- 20. 私訊被忽略：寄件者仍在等待配對核准。
 - 群組訊息被忽略：群組寄件者／提及的閘控阻擋了投遞。
 
 分流流程請見：[/channels/troubleshooting](/channels/troubleshooting)。
@@ -216,19 +209,19 @@ openclaw pairing list signal
 - `channels.signal.startupTimeoutMs`：啟動等待逾時（毫秒，上限 120000）。
 - `channels.signal.receiveMode`：`on-start | manual`。
 - `channels.signal.ignoreAttachments`：略過附件下載。
-- `channels.signal.ignoreStories`：忽略來自常駐程式的限時動態。
+- 21. `channels.signal.ignoreStories`：忽略來自守護程式的限時動態。
 - `channels.signal.sendReadReceipts`：轉送已讀回條。
 - `channels.signal.dmPolicy`：`pairing | allowlist | open | disabled`（預設：配對）。
-- `channels.signal.allowFrom`：私訊允許清單（E.164 或 `uuid:<id>`）。`open` 需要 `"*"`。Signal 沒有使用者名稱；請使用電話／UUID 識別。
+- `channels.signal.allowFrom`：私訊允許清單（E.164 或 `uuid:<id>`）。`open` 需要 `"*"`。Signal 沒有使用者名稱；請使用電話／UUID 識別。 22. `open` 需要使用 `"*"`。 23. Signal 沒有使用者名稱；請使用電話/UUID 識別碼。
 - `channels.signal.groupPolicy`：`open | allowlist | disabled`（預設：允許清單）。
 - `channels.signal.groupAllowFrom`：群組寄件者允許清單。
 - `channels.signal.historyLimit`：作為脈絡包含的群組訊息上限（0 代表停用）。
-- `channels.signal.dmHistoryLimit`：私訊歷史上限（以使用者回合計）。每使用者覆寫：`channels.signal.dms["<phone_or_uuid>"].historyLimit`。
+- 24. `channels.signal.dmHistoryLimit`：以使用者回合計算的私訊歷史上限。 `channels.signal.dmHistoryLimit`：私訊歷史上限（以使用者回合計）。每使用者覆寫：`channels.signal.dms["<phone_or_uuid>"].historyLimit`。
 - `channels.signal.textChunkLimit`：出站分段大小（字元）。
 - `channels.signal.chunkMode`：`length`（預設）或 `newline`，在長度分段前先依空白行（段落邊界）分割。
 - `channels.signal.mediaMaxMb`：進站／出站媒體上限（MB）。
 
-相關的全域選項：
+25. 相關的全域選項：
 
 - `agents.list[].groupChat.mentionPatterns`（Signal 不支援原生提及）。
 - `messages.groupChat.mentionPatterns`（全域回退）。

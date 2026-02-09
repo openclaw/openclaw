@@ -1,15 +1,8 @@
 ---
-summary: „Lebenszyklus der Agenten-Schleife, Streams und Warte-Semantik“
+summary: "„Lebenszyklus der Agenten-Schleife, Streams und Warte-Semantik“"
 read_when:
   - Sie benötigen eine exakte Schritt-für-Schritt-Erklärung der Agenten-Schleife oder der Lebenszyklusereignisse
-title: „Agenten-Schleife“
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:58Z
+title: "„Agenten-Schleife“"
 ---
 
 # Agenten-Schleife (OpenClaw)

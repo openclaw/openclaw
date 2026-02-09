@@ -5,13 +5,6 @@ read_when:
   - Je hebt niet-interactieve voorbeelden nodig voor specifieke providers
 title: "CLI-automatisering"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:47Z
 ---
 
 # CLI-automatisering
@@ -41,7 +34,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
 ## Providerspecifieke voorbeelden
 
 <AccordionGroup>
-  <Accordion title="Gemini-voorbeeld">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI-voorbeeld">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway-voorbeeld">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway-voorbeeld">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot-voorbeeld">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetisch voorbeeld">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Voeg `--json` toe voor een machineleesbare samenvatting.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen-voorbeeld">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

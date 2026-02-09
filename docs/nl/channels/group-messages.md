@@ -3,13 +3,6 @@ summary: "Gedrag en configuratie voor het afhandelen van WhatsApp-groepsberichte
 read_when:
   - Groepsberichtregels of mentions wijzigen
 title: "Groepsberichten"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:10Z
 ---
 
 # Groepsberichten (WhatsApp web-kanaal)

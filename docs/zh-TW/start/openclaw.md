@@ -1,21 +1,14 @@
 ---
-summary: 「將 OpenClaw 作為個人助理執行的端到端指南，並附帶安全注意事項」
+summary: "將 OpenClaw 作為個人助理執行的端到端指南，並附帶安全注意事項"
 read_when:
   - 為新的助理實例進行入門引導
   - 檢視安全性／權限影響
-title: 「個人助理設定」
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:29Z
+title: "個人助理設定"
 ---
 
 # 使用 OpenClaw 建立個人助理
 
-OpenClaw 是一個用於 **Pi** 代理程式的 WhatsApp + Telegram + Discord + iMessage Gateway 閘道器。外掛可加入 Mattermost。本指南說明「個人助理」設定：一個專用的 WhatsApp 號碼，其行為就像你隨時在線的代理程式。
+OpenClaw 是一個用於 **Pi** 代理程式的 WhatsApp + Telegram + Discord + iMessage Gateway 閘道器。外掛可加入 Mattermost。本指南說明「個人助理」設定：一個專用的 WhatsApp 號碼，其行為就像你隨時在線的代理程式。 外掛會新增 Mattermost。 本指南是「個人助理」設定：一個專用的 WhatsApp 號碼，表現得就像你隨時在線的代理。
 
 ## ⚠️ 安全優先
 
@@ -29,7 +22,7 @@ OpenClaw 是一個用於 **Pi** 代理程式的 WhatsApp + Telegram + Discord + 
 
 - 一律設定 `channels.whatsapp.allowFrom`（切勿在你的個人 Mac 上對全世界開放）。
 - 為助理使用專用的 WhatsApp 號碼。
-- 心跳目前預設為每 30 分鐘一次。在你信任此設定之前，請透過設定 `agents.defaults.heartbeat.every: "0m"` 停用。
+- 心跳現在預設為每 30 分鐘一次。 心跳目前預設為每 30 分鐘一次。在你信任此設定之前，請透過設定 `agents.defaults.heartbeat.every: "0m"` 停用。
 
 ## 先決條件
 
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-如果你將個人的 WhatsApp 連結到 OpenClaw，所有傳給你的訊息都會變成「代理程式輸入」。這通常不是你想要的。
+如果你將個人的 WhatsApp 連結到 OpenClaw，所有傳給你的訊息都會變成「代理程式輸入」。這通常不是你想要的。 21. 那通常不是你想要的。
 
 ## 5 分鐘快速開始
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 現在，從你的允許清單手機向助理號碼傳送訊息。
 
-當入門完成時，我們會自動開啟儀表板並列印一個乾淨（非權杖化）的連結。若提示需要驗證，請將 `gateway.auth.token` 中的權杖貼到 Control UI 設定中。之後要重新開啟：`openclaw dashboard`。
+當新手引導完成時，我們會自動開啟儀表板並列印一個乾淨的（未包含 token）連結。 如果它提示進行驗證，請將 `gateway.auth.token` 中的 token 貼到 Control UI 設定中。 稍後重新開啟：`openclaw dashboard`。
 
 ## 為代理程式提供工作區（AGENTS）
 
 OpenClaw 會從其工作區目錄讀取操作指示與「記憶」。
 
-預設情況下，OpenClaw 使用 `~/.openclaw/workspace` 作為代理程式工作區，並會在設定／首次代理程式執行時自動建立（以及起始的 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`）。`BOOTSTRAP.md` 僅在工作區全新時建立（刪除後不應再出現）。`MEMORY.md` 為選用（不會自動建立）；存在時，會在一般工作階段載入。子代理程式工作階段只會注入 `AGENTS.md` 與 `TOOLS.md`。
+預設情況下，OpenClaw 使用 `~/.openclaw/workspace` 作為代理程式工作區，並會在設定／首次代理程式執行時自動建立（以及起始的 `AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`）。`BOOTSTRAP.md` 僅在工作區全新時建立（刪除後不應再出現）。`MEMORY.md` 為選用（不會自動建立）；存在時，會在一般工作階段載入。子代理程式工作階段只會注入 `AGENTS.md` 與 `TOOLS.md`。 `BOOTSTRAP.md` 只會在工作區全新時建立（刪除後不應再次出現）。 `MEMORY.md` 是選用的（不會自動建立）；存在時，會在一般工作階段中載入。 子代理工作階段只會注入 `AGENTS.md` 和 `TOOLS.md`。
 
-提示：將此資料夾視為 OpenClaw 的「記憶」，並將其設為 git repo（理想情況下為私有），以便備份你的 `AGENTS.md` 與記憶檔案。若已安裝 git，全新的工作區會自動初始化。
+提示：將此資料夾視為 OpenClaw 的「記憶」，並將其設為 git repo（理想情況下為私有），以便備份你的 `AGENTS.md` 與記憶檔案。若已安裝 git，全新的工作區會自動初始化。 如果已安裝 git，全新的工作區會自動初始化。
 
 ```bash
 openclaw setup
@@ -168,8 +161,8 @@ OpenClaw 預設即是良好的助理設定，但你通常會想調整：
 
 - 工作階段檔案：`~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - 工作階段中繼資料（權杖用量、最後路由等）：`~/.openclaw/agents/<agentId>/sessions/sessions.json`（舊版：`~/.openclaw/sessions/sessions.json`）
-- `/new` 或 `/reset` 會為該聊天啟動新的工作階段（可透過 `resetTriggers` 設定）。若單獨傳送，代理程式會以簡短問候回覆以確認重置。
-- `/compact [instructions]` 會壓縮工作階段內容並回報剩餘的內容預算。
+- `/new` 或 `/reset` 會為該聊天啟動新的工作階段（可透過 `resetTriggers` 設定）。若單獨傳送，代理程式會以簡短問候回覆以確認重置。 30. 若單獨傳送，代理會以簡短的問候回覆以確認重設。
+- `/compact [instructions]` 會壓縮工作階段內容，並回報剩餘的內容預算。
 
 ## 心跳（主動模式）
 
@@ -190,7 +183,7 @@ OpenClaw 預設即是良好的助理設定，但你通常會想調整：
 }
 ```
 
-## 媒體輸入與輸出
+## 32. 媒體輸入與輸出
 
 傳入的附件（圖片／音訊／文件）可透過樣板呈現在你的指令中：
 
@@ -198,7 +191,7 @@ OpenClaw 預設即是良好的助理設定，但你通常會想調整：
 - `{{MediaUrl}}`（偽 URL）
 - `{{Transcript}}`（若已啟用音訊轉錄）
 
-代理程式的傳出附件：在單獨一行中包含 `MEDIA:<path-or-url>`（不可有空格）。範例：
+代理程式的傳出附件：在單獨一行中包含 `MEDIA:<path-or-url>`（不可有空格）。範例： 範例：
 
 ```
 Here’s the screenshot.
@@ -207,7 +200,7 @@ MEDIA:https://example.com/screenshot.png
 
 OpenClaw 會擷取這些內容，並將其作為媒體與文字一併傳送。
 
-## 營運檢查清單
+## 操作檢查清單
 
 ```bash
 openclaw status          # local status (creds, sessions, queued events)

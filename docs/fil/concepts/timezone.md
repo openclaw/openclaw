@@ -4,13 +4,6 @@ read_when:
   - Kailangan mong maunawaan kung paano ni-normalize ang mga timestamp para sa model
   - Pagko-configure ng timezone ng user para sa mga system prompt
 title: "Mga Timezone"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:22Z
 ---
 
 # Mga Timezone
@@ -69,8 +62,8 @@ Maaari mo itong i-override gamit ang:
 
 ## Mga tool payload (raw provider data + mga normalized na field)
 
-Ang mga tool call (`channels.discord.readMessages`, `channels.slack.readMessages`, atbp.) ay nagbabalik ng **raw provider timestamps**.
-Naglalakip din kami ng mga normalized na field para sa konsistensi:
+Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages`, etc.) return **raw provider timestamps**.
+We also attach normalized fields for consistency:
 
 - `timestampMs` (UTC epoch milliseconds)
 - `timestampUtc` (ISO 8601 UTC string)
@@ -79,8 +72,8 @@ Pinananatili ang mga raw provider field.
 
 ## Timezone ng user para sa system prompt
 
-Itakda ang `agents.defaults.userTimezone` upang ipaalam sa model ang lokal na time zone ng user. Kapag ito ay
-hindi nakatakda, nireresolba ng OpenClaw ang **timezone ng host sa runtime** (walang isinusulat na config).
+Set `agents.defaults.userTimezone` to tell the model the user's local time zone. If it is
+unset, OpenClaw resolves the **host timezone at runtime** (no config write).
 
 ```json5
 {

@@ -3,18 +3,11 @@ summary: "ပို့ခြင်း၊ Gateway နှင့် agent အဖြ
 read_when:
   - မီဒီယာ ပိုက်လိုင်း သို့မဟုတ် ပူးတွဲဖိုင်များကို ပြင်ဆင်နေစဉ်
 title: "ပုံရိပ်နှင့် မီဒီယာ ပံ့ပိုးမှု"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # ပုံရိပ် & မီဒီယာ ပံ့ပိုးမှု — 2025-12-05
 
-WhatsApp ချန်နယ်ကို **Baileys Web** ဖြင့် လည်ပတ်ပါသည်။ ဤစာတမ်းသည် ပို့ခြင်း၊ Gateway နှင့် agent အဖြေများအတွက် လက်ရှိ မီဒီယာ ကိုင်တွယ်မှု စည်းမျဉ်းများကို ဖော်ပြထားပါသည်။
+WhatsApp channel က **Baileys Web** ကို အသုံးပြုပြီး အလုပ်လုပ်ပါတယ်။ ဤစာရွက်စာတမ်းသည် send, gateway နှင့် agent replies များအတွက် လက်ရှိ media ကိုင်တွယ်မှု စည်းမျဉ်းများကို ဖော်ပြထားပါသည်။
 
 ## ရည်မှန်းချက်များ
 
@@ -42,7 +35,7 @@ WhatsApp ချန်နယ်ကို **Baileys Web** ဖြင့် လည�
 
 ## Auto-Reply ပိုက်လိုင်း
 
-- `getReplyFromConfig` သည် `{ text?, mediaUrl?, mediaUrls? }` ကို ပြန်ပေးသည်။
+- `getReplyFromConfig` သည် `{ text?, mediaUrl?, mediaUrls? }` ကို ပြန်ပေးပါသည်။
 - မီဒီယာ ပါရှိသည့်အခါ ဝဘ် ပို့သူသည် `openclaw message send` နှင့် တူညီသော ပိုက်လိုင်းကို အသုံးပြု၍ local လမ်းကြောင်းများ သို့မဟုတ် URL များကို ဖြေရှင်းသည်။
 - မီဒီယာ အချက်အလက် အများအပြား ပါရှိပါက အစဉ်လိုက် တစ်ခုချင်းစီ ပို့သည်။
 
@@ -55,7 +48,7 @@ WhatsApp ချန်နယ်ကို **Baileys Web** ဖြင့် လည�
 - မီဒီယာ နားလည်မှု ( `tools.media.*` သို့မဟုတ် မျှဝေထားသော `tools.media.models` ဖြင့် ပြင်ဆင်ထားပါက) သည် templating မတိုင်မီ လည်ပတ်ပြီး `Body` ထဲသို့ `[Image]`, `[Audio]`, နှင့် `[Video]` block များကို ထည့်သွင်းနိုင်သည်။
   - အသံအတွက် `{{Transcript}}` ကို သတ်မှတ်ပြီး slash command များ ဆက်လက် အလုပ်လုပ်နိုင်စေရန် transcript ကို command parsing အတွက် အသုံးပြုသည်။
   - ဗီဒီယိုနှင့် ပုံရိပ် ဖော်ပြချက်များသည် command parsing အတွက် caption စာသားကို ထိန်းသိမ်းထားသည်။
-- မူလအနေဖြင့် ကိုက်ညီသည့် ပုံ/အသံ/ဗီဒီယို ပူးတွဲဖိုင် ပထမတစ်ခုသာ လုပ်ဆောင်သည်; ပူးတွဲဖိုင် အများအပြားကို လုပ်ဆောင်ရန် `tools.media.<cap>.attachments` ကို သတ်မှတ်ပါ။
+- default အနေဖြင့် ကိုက်ညီသည့် ပထမဆုံး image/audio/video attachment ကိုသာ process လုပ်ပါသည်; attachment များစွာကို process လုပ်ရန် `tools.media.<cap>.attachments` ကို သတ်မှတ်ပါ။
 
 ## ကန့်သတ်ချက်များ & အမှားများ
 

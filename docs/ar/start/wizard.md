@@ -5,13 +5,6 @@ read_when:
   - عند إعداد جهاز جديد
 title: "معالج التهيئة الأولية (CLI)"
 sidebarTitle: "التهيئة الأولية: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:49Z
 ---
 
 # معالج التهيئة الأولية (CLI)
@@ -52,7 +45,7 @@ openclaw agents add <name>
 يبدأ المعالج بخيار **البدء السريع** (الإعدادات الافتراضية) مقابل **المتقدم** (تحكم كامل).
 
 <Tabs>
-  <Tab title="البدء السريع (الإعدادات الافتراضية)">
+  <Tab title="QuickStart (defaults)">
     - Gateway محلية (loopback)
     - مساحة عمل افتراضية (أو مساحة عمل موجودة)
     - منفذ Gateway **18789**
@@ -60,12 +53,12 @@ openclaw agents add <name>
     - تعريض Tailscale **مُعطّل**
     - الرسائل الخاصة عبر Telegram وWhatsApp افتراضيًا على **allowlist** (سيُطلب منك رقم هاتفك)
   </Tab>
-  <Tab title="المتقدم (تحكم كامل)">
+  <Tab title="Advanced (full control)">
     - يعرض كل خطوة (الوضع، مساحة العمل، Gateway، القنوات، الخادم، Skills).
   </Tab>
 </Tabs>
 
-## ما الذي يقوم المعالج بتهيئته
+## ما هي تشكيلات المعالج
 
 **الوضع المحلي (الافتراضي)** يرشدك عبر الخطوات التالية:
 

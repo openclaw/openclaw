@@ -4,13 +4,6 @@ read_when:
   - Du vill installera eller hantera in-process Gateway-plugins
   - Du vill felsöka fel vid laddning av plugins
 title: "plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:45Z
 ---
 
 # `openclaw plugins`
@@ -35,12 +28,12 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-Medföljande plugins levereras med OpenClaw men startar inaktiverade. Använd `plugins enable` för att
+Paketerade plugins fartyg med OpenClaw men start inaktiverad. Använd `plugins enable` för att
 aktivera dem.
 
-Alla plugins måste levereras med en `openclaw.plugin.json`-fil med ett inbäddat JSON Schema
-(`configSchema`, även om det är tomt). Saknade/ogiltiga manifest eller scheman förhindrar
-att pluginen laddas och gör att konfigvalideringen misslyckas.
+Alla plugins måste skicka en `openclaw.plugin.json`-fil med en inline JSON Schema
+(`configSchema`, även om den är tom). Saknade/ogiltiga manifest eller scheman hindrar
+pluginen från att ladda och misslyckas validering av konfigurationen.
 
 ### Installera
 
@@ -48,7 +41,7 @@ att pluginen laddas och gör att konfigvalideringen misslyckas.
 openclaw plugins install <path-or-spec>
 ```
 
-Säkerhetsnotering: behandla plugininstallationer som att köra kod. Föredra pinnade versioner.
+Säkerhetsanmärkning: behandla plugin installationer som kör kod. Föredrar fästa versioner.
 
 Stödda arkiv: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 

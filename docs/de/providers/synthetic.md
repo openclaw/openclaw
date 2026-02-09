@@ -1,16 +1,9 @@
 ---
-summary: „Verwenden Sie die Anthropic-kompatible API von Synthetic in OpenClaw“
+summary: "„Verwenden Sie die Anthropic-kompatible API von Synthetic in OpenClaw“"
 read_when:
   - Sie möchten Synthetic als Modellanbieter verwenden
   - Sie benötigen einen Synthetic-API-Schlüssel oder eine Base-URL-Einrichtung
-title: „Synthetic“
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:10Z
+title: "Synthetic"
 ---
 
 # Synthetic

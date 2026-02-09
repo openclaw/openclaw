@@ -5,29 +5,22 @@ read_when:
   - نئی مشین سیٹ اپ کرنا
 title: "آن بورڈنگ وزارڈ (CLI)"
 sidebarTitle: "آن بورڈنگ: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:45Z
 ---
 
 # آن بورڈنگ وزارڈ (CLI)
 
-آن بورڈنگ وزارڈ macOS،
-Linux، یا Windows (WSL2 کے ذریعے؛ سختی سے سفارش کردہ) پر OpenClaw سیٹ اپ کرنے کا **سفارش کردہ** طریقہ ہے۔
-یہ ایک ہی رہنمائی شدہ عمل میں مقامی Gateway یا ریموٹ Gateway کنکشن، نیز چینلز، Skills،
-اور ورک اسپیس کی طے شدہ ترتیبات کنفیگر کرتا ہے۔
+The onboarding wizard is the **recommended** way to set up OpenClaw on macOS,
+Linux, or Windows (via WSL2; strongly recommended).
+It configures a local Gateway or a remote Gateway connection, plus channels, skills,
+and workspace defaults in one guided flow.
 
 ```bash
 openclaw onboard
 ```
 
 <Info>
-سب سے تیز پہلا چیٹ: Control UI کھولیں (چینل سیٹ اپ درکار نہیں)۔ چلائیں
-`openclaw dashboard` اور براؤزر میں چیٹ کریں۔ دستاویزات: [Dashboard](/web/dashboard)۔
+Fastest first chat: open the Control UI (no channel setup needed). Run
+`openclaw dashboard` and chat in the browser. Docs: [Dashboard](/web/dashboard).
 </Info>
 
 بعد میں دوبارہ کنفیگر کرنے کے لیے:
@@ -38,13 +31,13 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` کا مطلب غیر تعاملی موڈ نہیں ہے۔ اسکرپٹس کے لیے `--non-interactive` استعمال کریں۔
+`--json` does not imply non-interactive mode. For scripts, use `--non-interactive`.
 </Note>
 
 <Tip>
-سفارش کردہ: Brave Search API کلید سیٹ اپ کریں تاکہ ایجنٹ `web_search` استعمال کر سکے
-(`web_fetch` کلید کے بغیر بھی کام کرتا ہے)۔ سب سے آسان راستہ: `openclaw configure --section web`
-جو `tools.web.search.apiKey` محفوظ کرتا ہے۔ دستاویزات: [Web tools](/tools/web)۔
+Recommended: set up a Brave Search API key so the agent can use `web_search`
+(`web_fetch` works without a key). Easiest path: `openclaw configure --section web`
+which stores `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## QuickStart بمقابلہ Advanced
@@ -69,8 +62,8 @@ openclaw agents add <name>
 
 **Local mode (default)** آپ کو ان مراحل سے گزارتا ہے:
 
-1. **Model/Auth** — Anthropic API کلید (سفارش کردہ)، OAuth، OpenAI، یا دیگر فراہم کنندگان۔ ایک ڈیفالٹ ماڈل منتخب کریں۔
-2. **Workspace** — ایجنٹ فائلوں کے لیے مقام (ڈیفالٹ `~/.openclaw/workspace`)۔ بوٹ اسٹرَیپ فائلیں شامل کرتا ہے۔
+1. **Model/Auth** — Anthropic API key (recommended), OAuth, OpenAI, or other providers. Pick a default model.
+2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** — پورٹ، بائنڈ ایڈریس، تصدیقی موڈ، Tailscale ایکسپوژر۔
 4. **Channels** — WhatsApp، Telegram، Discord، Google Chat، Mattermost، Signal، BlueBubbles، یا iMessage۔
 5. **Daemon** — LaunchAgent (macOS) یا systemd یوزر یونٹ (Linux/WSL2) انسٹال کرتا ہے۔
@@ -78,17 +71,17 @@ openclaw agents add <name>
 7. **Skills** — سفارش کردہ Skills اور اختیاری dependencies انسٹال کرتا ہے۔
 
 <Note>
-وزارڈ کو دوبارہ چلانے سے **کچھ بھی** حذف نہیں ہوتا جب تک آپ واضح طور پر **Reset** منتخب نہ کریں (یا `--reset` پاس نہ کریں)۔
-اگر کنفیگ غلط ہو یا اس میں legacy کیز شامل ہوں، تو وزارڈ آپ سے پہلے `openclaw doctor` چلانے کو کہتا ہے۔
+Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).
+If the config is invalid or contains legacy keys, the wizard asks you to run `openclaw doctor` first.
 </Note>
 
-**Remote mode** صرف مقامی کلائنٹ کو کسی اور جگہ موجود Gateway سے کنیکٹ کرنے کے لیے کنفیگر کرتا ہے۔
-یہ ریموٹ ہوسٹ پر کچھ بھی انسٹال یا تبدیل **نہیں** کرتا۔
+**Remote mode** only configures the local client to connect to a Gateway elsewhere.
+It does **not** install or change anything on the remote host.
 
 ## ایک اور ایجنٹ شامل کریں
 
-`openclaw agents add <name>` استعمال کریں تاکہ الگ ورک اسپیس،
-سیشنز، اور تصدیقی پروفائلز کے ساتھ ایک علیحدہ ایجنٹ بنایا جا سکے۔ `--workspace` کے بغیر چلانے سے وزارڈ لانچ ہو جاتا ہے۔
+Use `openclaw agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 یہ کیا سیٹ کرتا ہے:
 

@@ -5,13 +5,6 @@ read_when:
   - Gedrag van model-fallbacks of selectie-UX wijzigen
   - Model-scanprobes bijwerken (tools/afbeeldingen)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Models CLI
@@ -193,7 +186,7 @@ Probing vereist een OpenRouter API-sleutel (uit auth-profielen of
 
 Scanresultaten worden gerangschikt op:
 
-1. Afbeeldingsondersteuning
+1. Ondersteuning voor afbeeldingen
 2. Tool-latentie
 3. Contextgrootte
 4. Aantal parameters

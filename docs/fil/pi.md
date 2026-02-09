@@ -1,12 +1,5 @@
 ---
 title: "Arkitektura ng Integrasyon ng Pi"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:02Z
 ---
 
 # Arkitektura ng Integrasyon ng Pi
@@ -15,7 +8,7 @@ Inilalarawan ng dokumentong ito kung paano nag-iintegrate ang OpenClaw sa [pi-co
 
 ## Pangkalahatang-ideya
 
-Ginagamit ng OpenClaw ang pi SDK upang i-embed ang isang AI coding agent sa loob ng messaging gateway architecture nito. Sa halip na patakbuhin ang pi bilang subprocess o gumamit ng RPC mode, direktang ini-import at ini-instantiate ng OpenClaw ang `AgentSession` ng pi sa pamamagitan ng `createAgentSession()`. Ang embedded na approach na ito ay nagbibigay ng:
+Gumagamit ang OpenClaw ng pi SDK upang i‑embed ang isang AI coding agent sa arkitektura ng messaging gateway nito. Sa halip na mag‑spawn ng pi bilang subprocess o gumamit ng RPC mode, direktang ini‑import at ini‑instantiate ng OpenClaw ang `AgentSession` ng pi sa pamamagitan ng `createAgentSession()`. Ang naka‑embed na pamamaraang ito ay nagbibigay ng:
 
 - Buong kontrol sa lifecycle ng session at event handling
 - Custom na tool injection (messaging, sandbox, mga aksyong partikular sa channel)
@@ -35,12 +28,12 @@ Ginagamit ng OpenClaw ang pi SDK upang i-embed ang isang AI coding agent sa loob
 }
 ```
 
-| Package           | Layunin                                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| Package           | Layunin                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Mga core na abstraction ng LLM: `Model`, `streamSimple`, mga uri ng mensahe, provider APIs                   |
-| `pi-agent-core`   | Agent loop, pagpapatupad ng tool, mga uri ng `AgentMessage`                                                  |
+| `pi-agent-core`   | Agent loop, pagpapatupad ng tool, mga uri ng `AgentMessage`                                                                  |
 | `pi-coding-agent` | High-level SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, mga built-in na tool |
-| `pi-tui`          | Mga component ng terminal UI (ginagamit sa lokal na TUI mode ng OpenClaw)                                    |
+| `pi-tui`          | Mga component ng terminal UI (ginagamit sa lokal na TUI mode ng OpenClaw)                                 |
 
 ## Istruktura ng File
 
@@ -137,7 +130,7 @@ src/agents/
 
 ## Pangunahing Daloy ng Integrasyon
 
-### 1. Pagpapatakbo ng Embedded Agent
+### 1. Pagpapatakbo ng Isang Naka‑embed na Agent
 
 Ang pangunahing entry point ay `runEmbeddedPiAgent()` sa `pi-embedded-runner/run.ts`:
 
@@ -161,7 +154,7 @@ const result = await runEmbeddedPiAgent({
 });
 ```
 
-### 2. Paglikha ng Session
+### 2. Session Creation
 
 Sa loob ng `runEmbeddedAttempt()` (tinatawag ng `runEmbeddedPiAgent()`), ginagamit ang pi SDK:
 
@@ -198,7 +191,7 @@ const { session } = await createAgentSession({
 applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
-### 3. Subscription sa Event
+### 3. Event Subscription
 
 Nag-susubscribe ang `subscribeEmbeddedPiSession()` sa mga event ng `AgentSession` ng pi:
 
@@ -225,7 +218,7 @@ Kasama sa mga hinahawakang event ang:
 - `agent_start` / `agent_end`
 - `auto_compaction_start` / `auto_compaction_end`
 
-### 4. Pag-prompt
+### 4. Prompting
 
 Pagkatapos ng setup, bina-prompt ang session:
 
@@ -249,7 +242,7 @@ Hinahawakan ng SDK ang buong agent loop: pagpapadala sa LLM, pagpapatupad ng mga
 
 ### Adapter ng Depinisyon ng Tool
 
-Ang `AgentTool` ng pi-agent-core ay may ibang `execute` signature kumpara sa `ToolDefinition` ng pi-coding-agent. Tinutulay ito ng adapter sa `pi-tool-definition-adapter.ts`:
+Ang `AgentTool` ng pi-agent-core ay may ibang `execute` signature kaysa sa `ToolDefinition` ng pi-coding-agent. The adapter in `pi-tool-definition-adapter.ts` bridges this:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -283,7 +276,7 @@ Tinitiyak nito na nananatiling pare-pareho sa lahat ng provider ang policy filte
 
 ## Pagbuo ng System Prompt
 
-Ang system prompt ay binubuo sa `buildAgentSystemPrompt()` (`system-prompt.ts`). Binubuo nito ang isang kumpletong prompt na may mga seksyon kabilang ang Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, pati na ang Memory at Reactions kapag naka-enable, at mga opsyonal na context file at dagdag na system prompt content. Ang mga seksyon ay tina-trim para sa minimal prompt mode na ginagamit ng mga subagent.
+Binubuo ang system prompt sa `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
 
 Ina-apply ang prompt pagkatapos malikha ang session sa pamamagitan ng `applySystemPromptOverrideToSession()`:
 
@@ -296,7 +289,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### Mga File ng Session
 
-Ang mga session ay mga JSONL file na may istrukturang puno (pagkakaugnay ng id/parentId). Hinahawakan ng `SessionManager` ng pi ang persistence:
+Sessions are JSONL files with tree structure (id/parentId linking). Pi's `SessionManager` handles persistence:
 
 ```typescript
 const sessionManager = SessionManager.open(params.sessionFile);
@@ -320,7 +313,7 @@ Tini-trim ng `limitHistoryTurns()` ang history ng pag-uusap batay sa uri ng chan
 
 ### Compaction
 
-Awtomatikong nagti-trigger ang compaction kapag may context overflow. Hinahawakan ng `compactEmbeddedPiSessionDirect()` ang manual compaction:
+Auto-compaction triggers on context overflow. Pinangangasiwaan ng `compactEmbeddedPiSessionDirect()` ang manual compaction:
 
 ```typescript
 const compactResult = await compactEmbeddedPiSessionDirect({
@@ -518,15 +511,15 @@ Nagbibigay ito ng interactive na karanasan sa terminal na katulad ng native mode
 
 ## Mga Pangunahing Pagkakaiba mula sa Pi CLI
 
-| Aspeto          | Pi CLI                  | OpenClaw Embedded                                                                             |
-| --------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
-| Invocation      | `pi` command / RPC      | SDK sa pamamagitan ng `createAgentSession()`                                                  |
-| Mga Tool        | Default na coding tools | Custom na tool suite ng OpenClaw                                                              |
-| System prompt   | AGENTS.md + mga prompt  | Dynamic kada channel/konteksto                                                                |
-| Session storage | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (o `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth            | Isang credential        | Multi-profile na may rotation                                                                 |
-| Mga Extension   | Niloload mula sa disk   | Programmatic + mga disk path                                                                  |
-| Event handling  | TUI rendering           | Callback-based (onBlockReply, atbp.)                                                          |
+| Aspeto          | Pi CLI                                 | OpenClaw Embedded                                                                                                |
+| --------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Invocation      | `pi` command / RPC                     | SDK sa pamamagitan ng `createAgentSession()`                                                                     |
+| Mga Tool        | Default na coding tools                | Custom na tool suite ng OpenClaw                                                                                 |
+| System prompt   | AGENTS.md + mga prompt | Dynamic kada channel/konteksto                                                                                   |
+| Session storage | `~/.pi/agent/sessions/`                | `~/.openclaw/agents/<agentId>/sessions/` (o `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Auth            | Isang credential                       | Multi-profile na may rotation                                                                                    |
+| Mga Extension   | Niloload mula sa disk                  | Programmatic + mga disk path                                                                                     |
+| Event handling  | TUI rendering                          | Callback-based (onBlockReply, atbp.)                                          |
 
 ## Mga Konsiderasyon sa Hinaharap
 

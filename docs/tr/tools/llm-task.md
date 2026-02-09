@@ -4,13 +4,6 @@ read_when:
   - İş akışları içinde yalnızca JSON kullanan bir LLM adımı istediğinizde
   - Otomasyon için şema doğrulamalı LLM çıktısına ihtiyaç duyduğunuzda
 title: "LLM Görevi"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:46Z
 ---
 
 # LLM Görevi

@@ -5,13 +5,6 @@ read_when:
   - Praca nad migracjami konfiguracji lub przepływami Doctor
   - Obsługa schematów konfiguracji wtyczek lub bramkowanie ładowania wtyczek
 title: "Ścisła walidacja konfiguracji"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:39Z
 ---
 
 # Ścisła walidacja konfiguracji (migracje wyłącznie przez Doctor)
@@ -19,11 +12,11 @@ x-i18n:
 ## Cele
 
 - **Odrzucanie nieznanych kluczy konfiguracji wszędzie** (korzeń + zagnieżdżenia).
-- **Odrzucanie konfiguracji wtyczek bez schematu**; taka wtyczka nie jest ładowana.
+- **Odrzuć konfigurację wtyczki bez schematu**; nie załaduj tej wtyczki.
 - **Usunięcie legacy auto-migracji przy ładowaniu**; migracje uruchamiane wyłącznie przez Doctor.
 - **Automatyczne uruchamianie Doctor (tryb dry-run) przy starcie**; jeśli konfiguracja jest nieprawidłowa, blokowanie poleceń niediagnostycznych.
 
-## Poza zakresem
+## Inne cele
 
 - Zgodność wsteczna przy ładowaniu (starsze klucze nie są automatycznie migrowane).
 - Ciche usuwanie nierozpoznanych kluczy.
@@ -47,7 +40,7 @@ x-i18n:
 - Komunikat błędu zawiera:
   - Identyfikator wtyczki
   - Powód (brak schematu / nieprawidłowa konfiguracja)
-  - Ścieżki, które nie przeszły walidacji
+  - Ścieżka(y), które nie sprawdziły się
 - Wyłączone wtyczki zachowują swoją konfigurację, ale Doctor + logi prezentują ostrzeżenie.
 
 ## Przepływ Doctor

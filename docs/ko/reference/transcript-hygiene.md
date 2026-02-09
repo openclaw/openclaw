@@ -2,16 +2,9 @@
 summary: "참고: 프로바이더별 트랜스크립트 정화 및 복구 규칙"
 read_when:
   - 트랜스크립트 형태와 관련된 프로바이더 요청 거부를 디버깅할 때
-  - 트랜스크립트 정화 또는 도구 호출 복구 로직을 변경할 때
+  - 25. 당신은 전사본 정제나 도구 호출 복구 로직을 변경하고 있다
   - 프로바이더 간 도구 호출 id 불일치를 조사할 때
 title: "트랜스크립트 위생"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:23Z
 ---
 
 # 트랜스크립트 위생 (프로바이더 보정)

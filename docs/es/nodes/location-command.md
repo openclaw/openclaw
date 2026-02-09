@@ -4,13 +4,6 @@ read_when:
   - Agregar soporte de nodo de ubicación o UI de permisos
   - Diseñar flujos de ubicación en segundo plano + push
 title: "Comando de ubicación"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:59Z
 ---
 
 # Comando de ubicación (nodos)
@@ -92,7 +85,7 @@ Errores (códigos estables):
 Objetivo: el modelo puede solicitar ubicación incluso cuando el nodo está en segundo plano, pero solo cuando:
 
 - El usuario seleccionó **Siempre**.
-- El SO concede ubicación en segundo plano.
+- El sistema operativo proporciona una ubicación en segundo plano.
 - La app puede ejecutarse en segundo plano para ubicación (modo de fondo de iOS / servicio en primer plano de Android o permiso especial).
 
 Flujo activado por push (futuro):

@@ -5,13 +5,6 @@ read_when:
   - Badanie zduplikowanych lub nieaktualnych wierszy instancji
   - Zmienianie połączeń WS Gateway lub sygnałów systemowych
 title: "Obecność"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
 ---
 
 # Obecność
@@ -42,12 +35,12 @@ Wpisy obecności są obiektami o ustrukturyzowanych polach, takich jak:
 
 Wpisy obecności są generowane przez wiele źródeł i **scalane**.
 
-### 1) Wpis własny Gateway
+### 1. Wpis własny Gateway
 
 Gateway zawsze inicjuje wpis „self” przy uruchomieniu, aby interfejsy użytkownika
 pokazywały host Gateway nawet zanim połączą się jakiekolwiek klienci.
 
-### 2) Połączenie WebSocket
+### 2. Połączenie WebSocket
 
 Każdy klient WS zaczyna od żądania `connect`. Po pomyślnym uściśnięciu dłoni
 Gateway wykonuje upsert wpisu obecności dla tego połączenia.
@@ -57,12 +50,12 @@ Gateway wykonuje upsert wpisu obecności dla tego połączenia.
 CLI często łączy się na krótkie, jednorazowe polecenia. Aby uniknąć zaśmiecania listy
 Instances, `client.mode === "cli"` **nie** jest zamieniane na wpis obecności.
 
-### 3) Sygnały (beacons) `system-event`
+### 3. Sygnały (beacons) `system-event`
 
 Klienci mogą wysyłać bogatsze, okresowe sygnały przez metodę `system-event`. Aplikacja
 na macOS używa tego do raportowania nazwy hosta, adresu IP oraz `lastInputSeconds`.
 
-### 4) Połączenia węzłów (rola: node)
+### 4. Połączenia węzłów (rola: node)
 
 Gdy węzeł łączy się przez WebSocket Gateway z `role: node`, Gateway wykonuje upsert
 wpisu obecności dla tego węzła (ten sam przepływ co dla innych klientów WS).
@@ -87,7 +80,7 @@ Obecność jest celowo efemeryczna:
 
 Dzięki temu lista pozostaje świeża i unika nieograniczonego wzrostu zużycia pamięci.
 
-## Zastrzeżenie dotyczące zdalnych połączeń/tuneli (adresy loopback)
+## Zdalny / tunel (adresy IP loopback)
 
 Gdy klient łączy się przez tunel SSH / lokalne przekierowanie portów, Gateway może
 widzieć adres zdalny jako `127.0.0.1`. Aby nie nadpisywać poprawnego adresu IP

@@ -4,25 +4,18 @@ read_when:
   - Eksponering af Gateway Control UI uden for localhost
   - Automatisering af adgang til tailnet eller offentligt dashboard
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:21Z
 ---
 
 # Tailscale (Gateway-dashboard)
 
-OpenClaw kan automatisk konfigurere Tailscale **Serve** (tailnet) eller **Funnel** (offentlig) til
-Gateway-dashboardet og WebSocket-porten. Det holder Gateway bundet til loopback, mens
-Tailscale leverer HTTPS, routing og (for Serve) identitets-headere.
+OpenClaw kan automatisk konfigurere Tailscale **Serve** (tailnet) eller **Funnel** (offentlig) for
+Gateway dashboard og WebSocket port. Dette holder Gateway bundet til loopback, mens
+Tailscale giver HTTPS, routing, og (for Servere) identitet overskrifter.
 
 ## Tilstande
 
-- `serve`: Kun tailnet Serve via `tailscale serve`. Gatewayen forbliver på `127.0.0.1`.
-- `funnel`: Offentlig HTTPS via `tailscale funnel`. OpenClaw kræver en delt adgangskode.
+- `serve`: Tailnet-only Serve via `tailscale serve`. Porten forbliver på `127.0.0.1`.
+- `tragt`: Offentlige HTTPS via `skræddersy tragt`. OpenClaw kræver en delt adgangskode.
 - `off`: Standard (ingen Tailscale-automatisering).
 
 ## Autentificering
@@ -32,16 +25,16 @@ Sæt `gateway.auth.mode` for at styre handshaket:
 - `token` (standard når `OPENCLAW_GATEWAY_TOKEN` er sat)
 - `password` (delt hemmelighed via `OPENCLAW_GATEWAY_PASSWORD` eller konfiguration)
 
-Når `tailscale.mode = "serve"` og `gateway.auth.allowTailscale` er `true`,
-kan gyldige Serve-proxyanmodninger autentificere via Tailscale-identitets-headere
-(`tailscale-user-login`) uden at angive token/adgangskode. OpenClaw verificerer
-identiteten ved at resolve `x-forwarded-for`-adressen via den lokale Tailscale-
-daemon (`tailscale whois`) og matcher den med headeren, før den accepteres.
-OpenClaw betragter kun en anmodning som Serve, når den ankommer fra loopback med
-Tailscales `x-forwarded-for`, `x-forwarded-proto` og `x-forwarded-host`-
-headere.
-For at kræve eksplicitte legitimationsoplysninger, sæt `gateway.auth.allowTailscale: false` eller
-tving `gateway.auth.mode: "password"`.
+Når `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
+valid Serve proxy requests can authenticate via Tailscale identity headers
+(`tailscale-user-login`) without supply a token/password. OpenClaw verificerer
+identiteten ved at løse 'x-forwarded-for'-adressen via den lokale Tailscale
+-dæmonen ('tailscale whois') og matche den til headeren, før den accepteres.
+OpenClaw behandler kun en anmodning som Servere, når den ankommer fra loopback med
+Tailscales `x-forwarded-for`, `x-forwarded-proto`, og `x-forwarded-host`
+headers.
+For at kræve udtrykkelige legitimationsoplysninger, angiv `gateway.auth.allowTailscale: false` eller
+force `gateway.auth.mode: "password"`.
 
 ## Konfigurationseksempler
 
@@ -107,14 +100,14 @@ openclaw gateway --tailscale funnel --auth password
   eller `tailscale funnel`-konfiguration ved nedlukning.
 - `gateway.bind: "tailnet"` er en direkte Tailnet-binding (ingen HTTPS, ingen Serve/Funnel).
 - `gateway.bind: "auto"` foretrækker loopback; brug `tailnet`, hvis du vil have kun Tailnet.
-- Serve/Funnel eksponerer kun **Gateway control UI + WS**. Noder forbinder over
-  det samme Gateway WS-endpoint, så Serve kan fungere til nodeadgang.
+- Serve/Tragt kun udsætte **Gateway control UI + WS**. Knuder forbinder over
+  det samme Gateway WS-endepunkt, så Serve kan arbejde for node adgang.
 
 ## Browserkontrol (fjern-Gateway + lokal browser)
 
-Hvis du kører Gatewayen på én maskine, men vil styre en browser på en anden maskine,
-så kør en **node host** på browsermaskinen og hold begge på samme tailnet.
-Gatewayen vil proxy browserhandlinger til noden; ingen separat kontrolserver eller Serve-URL er nødvendig.
+Hvis du kører Gateway på en maskine, men ønsker at køre en browser på en anden maskine,
+køre en **node vært** på browseren maskine og holde begge på den samme hale.
+Gateway vil proxy browser handlinger til indholdselementet, ingen separat kontrolserver eller Serverér URL nødvendig.
 
 Undgå Funnel til browserkontrol; behandl node-parring som operatøradgang.
 

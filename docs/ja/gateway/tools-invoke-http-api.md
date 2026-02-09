@@ -4,18 +4,11 @@ read_when:
   - フルエージェントのターンを実行せずにツールを呼び出す場合
   - ツールポリシーの適用が必要な自動化を構築する場合
 title: "Tools Invoke API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:59Z
 ---
 
 # Tools Invoke（HTTP）
 
-OpenClaw の Gateway は、単一のツールを直接呼び出すためのシンプルな HTTP エンドポイントを公開しています。これは常に有効ですが、Gateway の認証およびツールポリシーによって制御されます。
+OpenClaw の Gateway は、単一のツールを直接呼び出すためのシンプルな HTTP エンドポイントを公開しています。これは常に有効ですが、Gateway の認証およびツールポリシーによって制御されます。 常に有効になっていますが、Gatewayの認証とツールポリシーに基づいています。
 
 - `POST /tools/invoke`
 - Gateway と同じポート（WS + HTTP の多重化）：`http://<gateway-host>:<port>/tools/invoke`
@@ -24,7 +17,7 @@ OpenClaw の Gateway は、単一のツールを直接呼び出すためのシ�
 
 ## 認証
 
-Gateway の認証設定を使用します。ベアラートークンを送信してください。
+ゲートウェイ認証設定を使用します。 ベアラートトークンを送信:
 
 - `Authorization: Bearer <token>`
 
@@ -50,7 +43,7 @@ Gateway の認証設定を使用します。ベアラートークンを送信し
 - `tool`（string、必須）: 呼び出すツール名。
 - `action`（string、任意）: ツールスキーマが `action` をサポートし、args ペイロードで省略された場合に args にマッピングされます。
 - `args`（object、任意）: ツール固有の引数。
-- `sessionKey`（string、任意）: 対象のセッションキー。省略された場合、または `"main"` の場合、Gateway は設定されたメインのセッションキーを使用します（`session.mainKey` およびデフォルトエージェントを尊重するか、グローバルスコープでは `global` を使用します）。
+- `sessionKey` (string, optional): ターゲットセッションキー。 `sessionKey`（string、任意）: 対象のセッションキー。省略された場合、または `"main"` の場合、Gateway は設定されたメインのセッションキーを使用します（`session.mainKey` およびデフォルトエージェントを尊重するか、グローバルスコープでは `global` を使用します）。
 - `dryRun`（boolean、任意）: 将来使用のために予約されています。現在は無視されます。
 
 ## ポリシー + ルーティングの挙動

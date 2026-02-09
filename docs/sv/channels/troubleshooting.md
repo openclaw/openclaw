@@ -4,13 +4,6 @@ read_when:
   - Kanaltransporten säger ansluten men svar misslyckas
   - Du behöver kanalspecifika kontroller innan djupare leverantörsdokumentation
 title: "Kanalfelsökning"
-x-i18n:
-  source_path: channels/troubleshooting.md
-  source_hash: 30443f9aa52c4e0c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:33Z
 ---
 
 # Kanalfelsökning
@@ -39,8 +32,8 @@ Hälsosam baslinje:
 
 ### WhatsApp-felsignaturer
 
-| Symptom                                       | Snabbaste kontrollen                                      | Åtgärd                                                                          |
-| --------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Symptom                                       | Snabbaste kontrollen                                      | Åtgärd                                                                                          |
+| --------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | Ansluten men inga DM-svar                     | `openclaw pairing list whatsapp`                          | Godkänn avsändare eller byt DM-policy/tillåtelselista.                          |
 | Gruppmeddelanden ignoreras                    | Kontrollera `requireMention` + omnämnandemönster i konfig | Nämn boten eller lätta på omnämnandepolicyn för gruppen.                        |
 | Slumpmässiga frånkopplingar/omloggningsloopar | `openclaw channels status --probe` + loggar               | Logga in igen och verifiera att katalogen för autentiseringsuppgifter är frisk. |
@@ -51,8 +44,8 @@ Fullständig felsökning: [/channels/whatsapp#troubleshooting-quick](/channels/w
 
 ### Telegram-felsignaturer
 
-| Symptom                                  | Snabbaste kontrollen                              | Åtgärd                                                        |
-| ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
+| Symptom                                  | Snabbaste kontrollen                              | Åtgärd                                                                        |
+| ---------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `/start` men inget användbart svarsflöde | `openclaw pairing list telegram`                  | Godkänn parkoppling eller ändra DM-policy.                    |
 | Bot online men gruppen förblir tyst      | Verifiera omnämnandekrav och botens sekretessläge | Inaktivera sekretessläge för gruppsynlighet eller nämn boten. |
 | Sändningsfel med nätverksfel             | Inspektera loggar för Telegram API-anropsfel      | Åtgärda DNS/IPv6/proxy-routing till `api.telegram.org`.       |
@@ -63,8 +56,8 @@ Fullständig felsökning: [/channels/telegram#troubleshooting](/channels/telegra
 
 ### Discord-felsignaturer
 
-| Symptom                         | Snabbaste kontrollen                              | Åtgärd                                                           |
-| ------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------- |
+| Symptom                         | Snabbaste kontrollen                              | Åtgärd                                                                           |
+| ------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------- |
 | Bot online men inga server-svar | `openclaw channels status --probe`                | Tillåt server/kanal och verifiera intent för meddelandeinnehåll. |
 | Gruppmeddelanden ignoreras      | Kontrollera loggar för droppade omnämnandespärrar | Nämn boten eller sätt server/kanal `requireMention: false`.      |
 | DM-svar saknas                  | `openclaw pairing list discord`                   | Godkänn DM-parkoppling eller justera DM-policy.                  |
@@ -75,8 +68,8 @@ Fullständig felsökning: [/channels/discord#troubleshooting](/channels/discord#
 
 ### Slack-felsignaturer
 
-| Symptom                            | Snabbaste kontrollen                                   | Åtgärd                                                 |
-| ---------------------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
+| Symptom                            | Snabbaste kontrollen                                   | Åtgärd                                                                 |
+| ---------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------- |
 | Socket-läge anslutet men inga svar | `openclaw channels status --probe`                     | Verifiera app-token + bot-token och nödvändiga scopes. |
 | DM blockerade                      | `openclaw pairing list slack`                          | Godkänn parkoppling eller lätta på DM-policy.          |
 | Kanalmeddelande ignoreras          | Kontrollera `groupPolicy` och kanalens tillåtelselista | Tillåt kanalen eller byt policy till `open`.           |
@@ -87,8 +80,8 @@ Fullständig felsökning: [/channels/slack#troubleshooting](/channels/slack#trou
 
 ### iMessage- och BlueBubbles-felsignaturer
 
-| Symptom                              | Snabbaste kontrollen                                                       | Åtgärd                                                     |
-| ------------------------------------ | -------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Symptom                              | Snabbaste kontrollen                                                       | Åtgärd                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | Inga inkommande händelser            | Verifiera webhook/server-åtkomlighet och appbehörigheter                   | Åtgärda webhook-URL eller BlueBubbles-serverns tillstånd.  |
 | Kan skicka men inte ta emot på macOS | Kontrollera macOS integritetsbehörigheter för Meddelanden-automation       | Återbevilja TCC-behörigheter och starta om kanalprocessen. |
 | DM-avsändare blockerad               | `openclaw pairing list imessage` eller `openclaw pairing list bluebubbles` | Godkänn parkoppling eller uppdatera tillåtelselistan.      |
@@ -102,8 +95,8 @@ Fullständig felsökning:
 
 ### Signal-felsignaturer
 
-| Symptom                     | Snabbaste kontrollen                                       | Åtgärd                                                       |
-| --------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------ |
+| Symptom                     | Snabbaste kontrollen                                       | Åtgärd                                                                       |
+| --------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | Daemon nåbar men boten tyst | `openclaw channels status --probe`                         | Verifiera `signal-cli` daemon-URL/konto och mottagningsläge. |
 | DM blockerad                | `openclaw pairing list signal`                             | Godkänn avsändare eller justera DM-policy.                   |
 | Grupp-svar triggas inte     | Kontrollera gruppens tillåtelselista och omnämnandemönster | Lägg till avsändare/grupp eller lätta på spärrar.            |
@@ -114,8 +107,8 @@ Fullständig felsökning: [/channels/signal#troubleshooting](/channels/signal#tr
 
 ### Matrix-felsignaturer
 
-| Symptom                                | Snabbaste kontrollen                               | Åtgärd                                                 |
-| -------------------------------------- | -------------------------------------------------- | ------------------------------------------------------ |
+| Symptom                                | Snabbaste kontrollen                               | Åtgärd                                                                 |
+| -------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------- |
 | Inloggad men ignorerar rumsmeddelanden | `openclaw channels status --probe`                 | Kontrollera `groupPolicy` och rummets tillåtelselista. |
 | DM behandlas inte                      | `openclaw pairing list matrix`                     | Godkänn avsändare eller justera DM-policy.             |
 | Krypterade rum misslyckas              | Verifiera kryptomodul och krypteringsinställningar | Aktivera krypteringsstöd och gå med/synka rummet igen. |

@@ -2,16 +2,9 @@
 summary: "Forskningsnoter: offline hukommelsessystem til Clawd-workspaces (Markdown som source-of-truth + afledt indeks)"
 read_when:
   - Design af workspace-hukommelse (~/.openclaw/workspace) ud over daglige Markdown-logs
-  - Beslutning: selvstændig CLI vs. dyb OpenClaw-integration
+  - Deciding: standalone CLI vs dyb OpenClaw integration
   - Tilføjelse af offline genkaldelse + refleksion (retain/recall/reflect)
 title: "Workspace Memory Research"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:33Z
 ---
 
 # Workspace Memory v2 (offline): forskningsnoter
@@ -34,7 +27,7 @@ Den er svag til:
 - genfinding med høj recall (“hvad besluttede vi om X?”, “sidste gang vi prøvede Y?”)
 - entitetscentrerede svar (“fortæl mig om Alice / The Castle / warelay”) uden at genlæse mange filer
 - stabilitet i holdninger/præferencer (og evidens, når de ændrer sig)
-- tidsmæssige begrænsninger (“hvad var sandt i nov. 2025?”) og konfliktløsning
+- tidsbegrænsninger (“hvad der var sandt i løbet af Nov 2025?”) og konfliktløsning
 
 ## Designmål
 
@@ -87,7 +80,7 @@ Foreslået workspace-layout:
 
 Noter:
 
-- **Daglig log forbliver daglig log**. Ingen grund til at gøre den til JSON.
+- **Daglig log forbliver dagbog**. Ingen grund til at gøre det til JSON.
 - Filerne `bank/` er **kuraterede**, produceret af refleksionsjobs, og kan stadig redigeres manuelt.
 - `memory.md` forbliver “lille + kerne-agtig”: de ting, du vil have Clawd til at se i hver session.
 
@@ -132,7 +125,7 @@ Eksempel:
 Minimal parsing:
 
 - Type-præfiks: `W` (world), `B` (experience/biographical), `O` (opinion), `S` (observation/summary; typisk genereret)
-- Entiteter: `@Peter`, `@warelay` osv. (slugs mappes til `bank/entities/*.md`)
+- Enheder: `@Peter`, `@warelay`, etc (slugs map to `bank/entities/*.md`)
 - Holdningskonfidens: `O(c=0.0..1.0)` valgfri
 
 Hvis du ikke vil have, at forfattere skal tænke over det: refleksionsjobbet kan udlede disse bullets fra resten af loggen, men at have en eksplicit `## Retain`-sektion er den nemmeste “kvalitetsløftestang”.
@@ -143,8 +136,8 @@ Genkaldelse bør understøtte:
 
 - **leksikal**: “find eksakte termer / navne / kommandoer” (FTS5)
 - **entitet**: “fortæl mig om X” (entitetssider + entitetslinkede fakta)
-- **tidslig**: “hvad skete der omkring 27. nov.” / “siden sidste uge”
-- **holdning**: “hvad foretrækker Peter?” (med konfidens + evidens)
+- **temporal**: “hvad der skete omkring november 27” / “siden sidste uge”
+- **opinion**: “hvad foretrækker Peter her?” (med tillid + evidens)
 
 Returformat bør være agent-venligt og citere kilder:
 
@@ -160,7 +153,7 @@ Refleksion er et planlagt job (dagligt eller heartbeat `ultrathink`), der:
 
 - opdaterer `bank/entities/*.md` fra nylige fakta (entitetssammendrag)
 - opdaterer `bank/opinions.md`-konfidens baseret på forstærkning/modsigelse
-- foreslår evt. redigeringer til `memory.md` (“kerne-agtige” varige fakta)
+- eventuelt foreslår redigeringer til `memory.md` (“core-ish” holdbare facts)
 
 Udvikling af holdninger (simpel, forklarbar):
 

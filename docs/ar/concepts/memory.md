@@ -3,13 +3,6 @@ summary: "كيف تعمل ذاكرة OpenClaw (ملفات مساحة العمل 
 read_when:
   - تريد تخطيط ملفات الذاكرة وسير العمل
   - تريد ضبط التفريغ التلقائي للذاكرة قبل الدمج
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:05Z
 ---
 
 # الذاكرة
@@ -126,8 +119,7 @@ QMD للاسترجاع. نقاط أساسية:
 - تشغّل البوابة QMD ضمن منزل XDG مستقل تحت
   `~/.openclaw/agents/<agentId>/qmd/` عبر تعيين `XDG_CONFIG_HOME` و
   `XDG_CACHE_HOME`.
-- دعم أنظمة التشغيل: يعمل macOS وLinux مباشرةً بمجرد تثبيت Bun + SQLite.
-  يُفضَّل دعم Windows عبر WSL2.
+- دعم أنظمة التشغيل: يعمل macOS وLinux مباشرةً بمجرد تثبيت Bun + SQLite. يُفضَّل دعم Windows عبر WSL2.
 
 **كيفية عمل المكوّن الجانبي**
 
@@ -298,7 +290,7 @@ agents: {
 إذا لم ترغب في تعيين مفتاح API، استخدم `memorySearch.provider = "local"` أو اضبط
 `memorySearch.fallback = "none"`.
 
-الرجوعيات الاحتياطية:
+الارتداد:
 
 - يمكن أن تكون `memorySearch.fallback` واحدة من `openai` أو `gemini` أو `local` أو `none`.
 - يُستخدم المزوّد الاحتياطي فقط عندما يفشل مزوّد التضمين الأساسي.

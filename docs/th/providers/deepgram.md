@@ -4,19 +4,12 @@ read_when:
   - คุณต้องการใช้ Deepgram แปลงเสียงเป็นข้อความสำหรับไฟล์เสียงแนบ
   - คุณต้องการตัวอย่างคอนฟิก Deepgram แบบรวดเร็ว
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:29Z
 ---
 
 # Deepgram (การถอดเสียงจากเสียง)
 
-Deepgram เป็น API สำหรับแปลงเสียงเป็นข้อความ ใน OpenClaw จะใช้สำหรับ **การถอดเสียงไฟล์เสียง/โน้ตเสียงขาเข้า**
-ผ่าน `tools.media.audio`.
+47. Deepgram คือ API สำหรับแปลงเสียงเป็นข้อความ Deepgram เป็น API สำหรับแปลงเสียงเป็นข้อความ ใน OpenClaw จะใช้สำหรับ **การถอดเสียงไฟล์เสียง/โน้ตเสียงขาเข้า**
+    ผ่าน `tools.media.audio`.
 
 เมื่อเปิดใช้งาน OpenClaw จะอัปโหลดไฟล์เสียงไปยัง Deepgram และแทรกข้อความถอดเสียง
 เข้าสู่ไปป์ไลน์การตอบกลับ (`{{Transcript}}` + บล็อก `[Audio]`). วิธีนี้ **ไม่ใช่การสตรีม**;

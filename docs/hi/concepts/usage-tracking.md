@@ -4,13 +4,6 @@ read_when:
   - आप प्रदाता उपयोग/कोटा सतहों को वायर कर रहे हों
   - आपको उपयोग ट्रैकिंग व्यवहार या प्रमाणीकरण आवश्यकताओं की व्याख्या करनी हो
 title: "उपयोग ट्रैकिंग"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:07Z
 ---
 
 # उपयोग ट्रैकिंग
@@ -22,7 +15,7 @@ x-i18n:
 
 ## यह कहाँ दिखाई देता है
 
-- चैट्स में `/status`: सत्र टोकन + अनुमानित लागत (केवल API key) के साथ इमोजी‑समृद्ध स्टेटस कार्ड। उपलब्ध होने पर **वर्तमान मॉडल प्रदाता** के लिए प्रदाता उपयोग दिखता है।
+- 4. चैट्स में `/status`: emoji‑rich status card जिसमें session tokens + अनुमानित लागत (केवल API key) दिखती है। 5. Provider usage उपलब्ध होने पर **current model provider** के लिए दिखाई जाती है।
 - चैट्स में `/usage off|tokens|full`: प्रति‑प्रतिक्रिया उपयोग फ़ुटर (OAuth केवल टोकन दिखाता है)।
 - चैट्स में `/usage cost`: OpenClaw सत्र लॉग्स से संकलित स्थानीय लागत सारांश।
 - CLI: `openclaw status --usage` प्रति‑प्रदाता का पूर्ण ब्रेकडाउन प्रिंट करता है।

@@ -3,13 +3,6 @@ summary: "Ciclo de vida del Gateway en macOS (launchd)"
 read_when:
   - Integración de la app de mac con el ciclo de vida del Gateway
 title: "Ciclo de vida del Gateway"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:04Z
 ---
 
 # Ciclo de vida del Gateway en macOS

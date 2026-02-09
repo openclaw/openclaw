@@ -2,18 +2,11 @@
 summary: "Thiết lập đường hầm SSH cho OpenClaw.app kết nối tới một gateway từ xa"
 read_when: "Kết nối ứng dụng macOS tới một gateway từ xa qua SSH"
 title: "Thiết lập Gateway từ xa"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:01Z
 ---
 
 # Chạy OpenClaw.app với Gateway từ xa
 
-OpenClaw.app sử dụng đường hầm SSH để kết nối tới một gateway từ xa. Hướng dẫn này sẽ chỉ cho bạn cách thiết lập.
+OpenClaw.app dùng đường hầm SSH để kết nối tới gateway từ xa. Hướng dẫn này cho bạn thấy cách thiết lập.
 
 ## Tổng quan
 
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Cách hoạt động
 
-| Thành phần                           | Chức năng                                                   |
-| ------------------------------------ | ----------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Chuyển tiếp cổng cục bộ 18789 tới cổng 18789 trên máy từ xa |
-| `ssh -N`                             | SSH không thực thi lệnh từ xa (chỉ chuyển tiếp cổng)        |
-| `KeepAlive`                          | Tự động khởi động lại đường hầm nếu bị lỗi                  |
-| `RunAtLoad`                          | Khởi động đường hầm khi agent được nạp                      |
+| Thành phần                           | Chức năng                                                               |
+| ------------------------------------ | ----------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Chuyển tiếp cổng cục bộ 18789 tới cổng 18789 trên máy từ xa             |
+| `ssh -N`                             | SSH không thực thi lệnh từ xa (chỉ chuyển tiếp cổng) |
+| `KeepAlive`                          | Tự động khởi động lại đường hầm nếu bị lỗi                              |
+| `RunAtLoad`                          | Khởi động đường hầm khi agent được nạp                                  |
 
-OpenClaw.app kết nối tới `ws://127.0.0.1:18789` trên máy khách của bạn. Đường hầm SSH sẽ chuyển tiếp kết nối đó tới cổng 18789 trên máy từ xa, nơi Gateway đang chạy.
+OpenClaw.app kết nối tới `ws://127.0.0.1:18789` trên máy khách của bạn. Đường hầm SSH chuyển tiếp kết nối đó tới cổng 18789 trên máy từ xa nơi Gateway đang chạy.

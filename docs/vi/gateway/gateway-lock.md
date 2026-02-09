@@ -4,13 +4,6 @@ read_when:
   - Khi chạy hoặc gỡ lỗi tiến trình gateway
   - Khi điều tra việc thực thi chạy một phiên bản duy nhất
 title: "Khóa Gateway"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:54Z
 ---
 
 # Khóa Gateway

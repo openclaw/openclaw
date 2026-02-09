@@ -2,20 +2,13 @@
 summary: "Kør flere OpenClaw Gateways på én vært (isolering, porte og profiler)"
 read_when:
   - Kørsel af mere end én Gateway på den samme maskine
-  - Du har brug for isoleret konfiguration/tilstand/porte pr. Gateway
+  - Du skal have isoleret konfig/stat/porte per Gateway
 title: "Flere Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:15Z
 ---
 
 # Flere Gateways (samme vært)
 
-De fleste opsætninger bør bruge én Gateway, fordi en enkelt Gateway kan håndtere flere messaging-forbindelser og agenter. Hvis du har brug for stærkere isolering eller redundans (f.eks. en redningsbot), kan du køre separate Gateways med isolerede profiler/porte.
+De fleste opsætninger bør bruge en Gateway, fordi en enkelt Gateway kan håndtere flere messaging-forbindelser og agenter. Hvis du har brug for stærkere isolation eller redundans (fx, en redning bot), køre separate Gateways med isolerede profiler/porte.
 
 ## Isolerings-tjekliste (påkrævet)
 
@@ -87,7 +80,7 @@ Basisport = `gateway.port` (eller `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - browserkontroltjeneste-port = basis + 2 (kun loopback)
 - `canvasHost.port = base + 4`
-- Browserprofil-CDP-porte allokeres automatisk fra `browser.controlPort + 9 .. + 108`
+- Browser profil CDP porte auto-allokere fra `browser.controlPort + 9 .. + 108`
 
 Hvis du tilsidesætter nogen af disse i konfiguration eller miljøvariabler, skal du holde dem unikke pr. instans.
 
@@ -95,8 +88,8 @@ Hvis du tilsidesætter nogen af disse i konfiguration eller miljøvariabler, ska
 
 - Fastlås **ikke** `browser.cdpUrl` til de samme værdier på flere instanser.
 - Hver instans kræver sin egen browserkontrolport og CDP-interval (afledt af dens gateway-port).
-- Hvis du har brug for eksplicitte CDP-porte, skal du sætte `browser.profiles.<name>.cdpPort` pr. instans.
-- Fjern-Chrome: brug `browser.profiles.<name>.cdpUrl` (pr. profil, pr. instans).
+- Hvis du har brug for eksplicitte CDP-porte, angiv `browser.profiler.<name>.cdpPort` pr. instans.
+- Remote Chrome: brug `browser.profiler.<name>.cdpUrl` (pr. profil, pr. instans).
 
 ## Manuel env-eksempel
 

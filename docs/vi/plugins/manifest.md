@@ -4,20 +4,14 @@ read_when:
   - Bạn đang xây dựng một plugin OpenClaw
   - Bạn cần phát hành schema cấu hình plugin hoặc gỡ lỗi các lỗi xác thực plugin
 title: "Manifest Plugin"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:52Z
 ---
 
 # Manifest plugin (openclaw.plugin.json)
 
-Mỗi plugin **phải** kèm theo một tệp `openclaw.plugin.json` trong **thư mục gốc của plugin**.
-OpenClaw dùng manifest này để xác thực cấu hình **mà không cần thực thi mã plugin**.
-Manifest bị thiếu hoặc không hợp lệ được xem là lỗi plugin và sẽ chặn việc xác thực cấu hình.
+Every plugin **must** ship a `openclaw.plugin.json` file in the **plugin root**.
+OpenClaw uses this manifest to validate configuration **without executing plugin
+code**. Missing or invalid manifests are treated as plugin errors and block
+config validation.
 
 Xem hướng dẫn đầy đủ về hệ thống plugin: [Plugins](/tools/plugin).
 
@@ -60,8 +54,8 @@ Các khóa tùy chọn:
 
 - Các khóa `channels.*` không xác định là **lỗi**, trừ khi id kênh được khai báo bởi
   một manifest plugin.
-- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny` và `plugins.slots.*`
-  phải tham chiếu tới các id plugin **có thể khám phá**. Id không xác định là **lỗi**.
+- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, and `plugins.slots.*`
+  must reference **discoverable** plugin ids. Unknown ids are **errors**.
 - Nếu một plugin đã được cài đặt nhưng manifest hoặc schema bị hỏng hoặc thiếu,
   việc xác thực sẽ thất bại và Doctor báo lỗi plugin.
 - Nếu cấu hình plugin tồn tại nhưng plugin bị **vô hiệu hóa**, cấu hình vẫn được giữ lại và

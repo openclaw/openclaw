@@ -5,13 +5,6 @@ read_when:
   - Skills yükleme, arama veya yayımlama
   - ClawHub CLI bayraklarını ve senkronizasyon davranışını açıklama
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:03Z
 ---
 
 # ClawHub
@@ -41,7 +34,7 @@ Site: [clawhub.ai](https://clawhub.ai)
 - Kötüye kullanım veya güvensiz skills’i raporlamak.
 - Moderatörseniz gizleme, görünür yapma, silme veya yasaklama işlemleri yapmak.
 
-## Kimler için (başlangıç seviyesine uygun)
+## 22. Kime yönelik (başlangıç dostu)
 
 OpenClaw ajanınıza yeni yetenekler eklemek istiyorsanız, ClawHub skills bulup yüklemenin en kolay yoludur. Arka ucun nasıl çalıştığını bilmeniz gerekmez. Şunları yapabilirsiniz:
 
@@ -75,8 +68,7 @@ pnpm add -g clawhub
 
 Varsayılan olarak CLI, skills’i geçerli çalışma dizininiz altında `./skills` konumuna yükler. Bir OpenClaw çalışma alanı yapılandırılmışsa, `clawhub`, `--workdir` (veya `CLAWHUB_WORKDIR`) ile geçersiz kılmadığınız sürece o çalışma alanına geri düşer. OpenClaw, çalışma alanı skills’lerini `<workspace>/skills` konumundan yükler ve bunları **bir sonraki** oturumda algılar. Zaten `~/.openclaw/skills` veya paketlenmiş skills kullanıyorsanız, çalışma alanı skills’leri önceliklidir.
 
-Skills’in nasıl yüklendiği, paylaşıldığı ve sınırlandığı hakkında daha fazla ayrıntı için bkz.
-[Skills](/tools/skills).
+Skills’in nasıl yüklendiği, paylaşıldığı ve sınırlandığı hakkında daha fazla ayrıntı için bkz. [Skills](/tools/skills).
 
 ## Skill sistemi genel bakış
 
@@ -88,7 +80,8 @@ Tipik bir skill şunları içerir:
 - Skill tarafından kullanılan isteğe bağlı yapılandırmalar, betikler veya destekleyici dosyalar.
 - Etiketler, özet ve yükleme gereksinimleri gibi meta veriler.
 
-ClawHub, keşfi güçlendirmek ve skill yeteneklerini güvenli biçimde sunmak için meta verileri kullanır. Kayıt defteri ayrıca sıralama ve görünürlüğü iyileştirmek için kullanım sinyallerini (yıldızlar ve indirmeler gibi) izler.
+ClawHub, keşfi güçlendirmek ve skill yeteneklerini güvenli biçimde sunmak için meta verileri kullanır.
+Kayıt defteri ayrıca sıralama ve görünürlüğü iyileştirmek için kullanım sinyallerini (yıldızlar ve indirmeler gibi) izler.
 
 ## Hizmetin sundukları (özellikler)
 

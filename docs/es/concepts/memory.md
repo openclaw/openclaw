@@ -3,13 +3,6 @@ summary: "Cómo funciona la memoria de OpenClaw (archivos del espacio de trabajo
 read_when:
   - Quiere el diseño de archivos de memoria y el flujo de trabajo
   - Quiere ajustar el vaciado automático de memoria previo a la compactación
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:56Z
 ---
 
 # Memoria
@@ -413,7 +406,8 @@ Notas:
 - Si FTS5 no se puede crear, mantenemos la búsqueda solo vectorial (sin fallo duro).
 
 Esto no es “perfecto según la teoría de IR”, pero es simple, rápido y tiende a mejorar
-recall/precisión en notas reales. Si queremos ponernos más sofisticados después,
+recall/precisión en notas reales.
+Si queremos ponernos más sofisticados después,
 los siguientes pasos comunes son la Fusión de Rango Recíproco (RRF) o la normalización
 de puntuaciones (mín/máx o z-score) antes de mezclar.
 
@@ -436,7 +430,7 @@ agents: {
 }
 ```
 
-### Caché de incrustaciones
+### Embedding cache
 
 OpenClaw puede almacenar en caché **incrustaciones de fragmentos** en SQLite para que la reindexación y las
 actualizaciones frecuentes (especialmente transcripciones de sesión) no vuelvan a incrustar texto sin cambios.

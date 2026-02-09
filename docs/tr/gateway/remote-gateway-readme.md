@@ -2,13 +2,6 @@
 summary: "OpenClaw.app’in uzak bir gateway’e bağlanması için SSH tüneli kurulumu"
 read_when: "macOS uygulamasını SSH üzerinden uzak bir gateway’e bağlarken"
 title: "Uzak Gateway Kurulumu"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:16Z
 ---
 
 # OpenClaw.app’i Uzak Bir Gateway ile Çalıştırma
@@ -122,7 +115,7 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
 Tünel artık şunları yapacaktır:
 
 - Oturum açtığınızda otomatik olarak başlar
-- Çökerse yeniden başlatır
+- Restart if it crashes
 - Arka planda çalışmaya devam eder
 
 Eski not: varsa kalan `com.openclaw.ssh-tunnel` LaunchAgent’ı kaldırın.
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Nasıl Çalışır
 
-| Bileşen                              | Ne Yapar                                                    |
-| ------------------------------------ | ----------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Yerel 18789 portunu uzak 18789 portuna yönlendirir          |
+| Bileşen                              | Ne Yapar                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| `LocalForward 18789 127.0.0.1:18789` | Yerel 18789 portunu uzak 18789 portuna yönlendirir                             |
 | `ssh -N`                             | Uzak komutlar çalıştırmadan SSH (yalnızca port yönlendirme) |
-| `KeepAlive`                          | Çökerse tüneli otomatik olarak yeniden başlatır             |
-| `RunAtLoad`                          | Ajan yüklendiğinde tüneli başlatır                          |
+| `KeepAlive`                          | Çökerse tüneli otomatik olarak yeniden başlatır                                |
+| `RunAtLoad`                          | Ajan yüklendiğinde tüneli başlatır                                             |
 
 OpenClaw.app, istemci makinenizdeki `ws://127.0.0.1:18789` adresine bağlanır. SSH tüneli bu bağlantıyı, Gateway’in çalıştığı uzak makinedeki 18789 portuna yönlendirir.

@@ -5,13 +5,6 @@ read_when:
   - 자동 컴팩션 동작을 변경하거나 '사전 컴팩션' 하우스키핑을 추가할 때
   - 메모리 플러시 또는 사용자에게 보이지 않는 시스템 턴을 구현하려는 경우
 title: "세션 관리 심층 분석"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:29Z
 ---
 
 # 세션 관리 & 컴팩션 (심층 분석)
@@ -74,7 +67,7 @@ OpenClaw 는 `src/config/sessions.ts` 를 통해 이를 해석합니다.
 
 ## 세션 키 (`sessionKey`)
 
-`sessionKey` 는 *어떤 대화 버킷*에 있는지를 식별합니다(라우팅 + 격리).
+`sessionKey` 는 _어떤 대화 버킷_에 있는지를 식별합니다(라우팅 + 격리).
 
 일반적인 패턴:
 

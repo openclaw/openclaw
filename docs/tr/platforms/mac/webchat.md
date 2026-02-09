@@ -3,13 +3,6 @@ summary: "macOS uygulamasının gateway WebChat’i nasıl gömdüğü ve bunun 
 read_when:
   - macOS WebChat görünümü veya loopback portu hata ayıklanırken
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:31Z
 ---
 
 # WebChat (macOS uygulaması)
@@ -22,6 +15,7 @@ macOS menü çubuğu uygulaması, WebChat kullanıcı arayüzünü yerel bir Swi
 ## Başlatma ve hata ayıklama
 
 - Manuel: Lobster menüsü → “Sohbeti Aç”.
+
 - Test için otomatik açma:
 
   ```bash

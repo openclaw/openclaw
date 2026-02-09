@@ -4,13 +4,6 @@ read_when:
   - Uso o configuración de comandos de chat
   - Depuración del enrutamiento de comandos o permisos
 title: "Comandos de barra"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:14Z
 ---
 
 # Comandos de barra
@@ -156,7 +149,7 @@ Notas:
 - `/model <#>` selecciona desde ese selector (y prefiere el proveedor actual cuando es posible).
 - `/model status` muestra la vista detallada, incluido el endpoint del proveedor configurado (`baseUrl`) y el modo de API (`api`) cuando está disponible.
 
-## Sobrescrituras de depuración
+## Debug overrides
 
 `/debug` le permite establecer sobrescrituras de configuración **solo en tiempo de ejecución** (memoria, no disco). Solo propietario. Deshabilitado por defecto; habilítelo con `commands.debug: true`.
 

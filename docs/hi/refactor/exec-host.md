@@ -5,13 +5,6 @@ read_when:
   - नोड रनर + UI IPC लागू करते समय
   - exec होस्ट सुरक्षा मोड और स्लैश कमांड जोड़ते समय
 title: "Exec होस्ट रीफैक्टर"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:54Z
 ---
 
 # Exec होस्ट रीफैक्टर योजना
@@ -258,7 +251,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ## Output caps
 
 - संयुक्त stdout+stderr को **200k** पर सीमित करें; इवेंट्स के लिए **tail 20k** रखें।
-- स्पष्ट suffix के साथ truncate करें (उदा., `"… (truncated)"`)।
+- Truncate with a clear suffix (e.g., `"… (truncated)"`).
 
 ## Slash commands
 

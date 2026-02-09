@@ -4,19 +4,12 @@ read_when:
   - Bạn muốn chỉnh sửa phê duyệt exec từ CLI
   - Bạn cần quản lý danh sách cho phép trên gateway hoặc máy chủ node
 title: "approvals"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:11Z
 ---
 
 # `openclaw approvals`
 
-Quản lý phê duyệt exec cho **máy chủ cục bộ**, **máy chủ gateway**, hoặc **máy chủ node**.
-Theo mặc định, các lệnh nhắm tới tệp phê duyệt cục bộ trên đĩa. Dùng `--gateway` để nhắm tới gateway, hoặc `--node` để nhắm tới một node cụ thể.
+Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
+By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
 
 Liên quan:
 

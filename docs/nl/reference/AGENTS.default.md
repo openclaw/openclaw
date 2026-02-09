@@ -3,13 +3,6 @@ summary: "Standaard OpenClaw-agentinstructies en Skills-overzicht voor de persoo
 read_when:
   - Een nieuwe OpenClaw-agent­sessie starten
   - Standaard Skills inschakelen of auditen
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:49Z
 ---
 
 # AGENTS.md — OpenClaw Persoonlijke Assistent (standaard)
@@ -57,7 +50,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - Lees `SOUL.md`, `USER.md`, `memory.md` en vandaag+gisteren in `memory/`.
 - Doe dit vóórdat je antwoordt.
 
-## Ziel (vereist)
+## Ziel (verplicht)
 
 - `SOUL.md` definieert identiteit, toon en grenzen. Houd dit actueel.
 - Als je `SOUL.md` wijzigt, informeer de gebruiker.

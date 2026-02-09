@@ -3,13 +3,6 @@ summary: "Các bước ký cho các bản build debug macOS được tạo bởi
 read_when:
   - Khi build hoặc ký các bản build debug mac
 title: "Ký macOS"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:44Z
 ---
 
 # ký mac (bản build debug)
@@ -18,12 +11,12 @@ x-i18n:
 
 - đặt một bundle identifier debug ổn định: `ai.openclaw.mac.debug`
 - ghi Info.plist với bundle id đó (có thể ghi đè qua `BUNDLE_ID=...`)
-- gọi [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) để ký binary chính và app bundle, để macOS coi mỗi lần build lại là cùng một bundle đã ký và giữ các quyền TCC (thông báo, trợ năng, ghi màn hình, mic, giọng nói). Để quyền ổn định, hãy dùng danh tính ký thật; ký ad-hoc là tùy chọn và mong manh (xem [quyền macOS](/platforms/mac/permissions)).
-- dùng `CODESIGN_TIMESTAMP=auto` theo mặc định; nó bật trusted timestamps cho chữ ký Developer ID. Đặt `CODESIGN_TIMESTAMP=off` để bỏ timestamping (các bản build debug offline).
+- calls [`scripts/codesign-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/codesign-mac-app.sh) to sign the main binary and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). mặc định dùng `CODESIGN_TIMESTAMP=auto`; nó bật trusted timestamps cho chữ ký Developer ID.
+- uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Đặt `CODESIGN_TIMESTAMP=off` để bỏ qua việc đóng dấu thời gian (các bản build debug ngoại tuyến).
 - chèn metadata build vào Info.plist: `OpenClawBuildTimestamp` (UTC) và `OpenClawGitCommit` (hash ngắn) để bảng About có thể hiển thị build, git, và kênh debug/release.
 - **Đóng gói yêu cầu Node 22+**: script chạy các bản build TS và build Control UI.
-- đọc `SIGN_IDENTITY` từ biến môi trường. Thêm `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (hoặc chứng chỉ Developer ID Application của bạn) vào shell rc để luôn ký bằng chứng chỉ của bạn. Ký ad-hoc yêu cầu chủ động bật qua `ALLOW_ADHOC_SIGNING=1` hoặc `SIGN_IDENTITY="-"` (không khuyến nghị cho việc kiểm thử quyền).
-- chạy kiểm tra Team ID sau khi ký và sẽ thất bại nếu bất kỳ Mach-O nào trong app bundle được ký bởi một Team ID khác. Đặt `SKIP_TEAM_ID_CHECK=1` để bỏ qua.
+- Thêm `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (hoặc chứng chỉ Developer ID Application của bạn) vào shell rc để luôn ký bằng chứng chỉ của bạn. Ký ad-hoc yêu cầu opt-in rõ ràng qua `ALLOW_ADHOC_SIGNING=1` hoặc `SIGN_IDENTITY="-"` (không khuyến nghị cho việc kiểm thử quyền). Ad-hoc signing requires explicit opt-in via `ALLOW_ADHOC_SIGNING=1` or `SIGN_IDENTITY="-"` (not recommended for permission testing).
+- runs a Team ID audit after signing and fails if any Mach-O inside the app bundle is signed by a different Team ID. Set `SKIP_TEAM_ID_CHECK=1` to bypass.
 
 ## Cách dùng
 
@@ -38,7 +31,7 @@ DISABLE_LIBRARY_VALIDATION=1 scripts/package-mac-app.sh   # dev-only Sparkle Tea
 
 ### Lưu ý về ký ad-hoc
 
-Khi ký với `SIGN_IDENTITY="-"` (ad-hoc), script tự động tắt **Hardened Runtime** (`--options runtime`). Điều này cần thiết để tránh crash khi ứng dụng cố gắng tải các framework nhúng (như Sparkle) không dùng chung Team ID. Chữ ký ad-hoc cũng làm mất khả năng duy trì quyền TCC; xem [quyền macOS](/platforms/mac/permissions) để biết các bước khôi phục.
+Điều này là cần thiết để tránh crash khi ứng dụng cố tải các framework nhúng (như Sparkle) không dùng chung Team ID. This is necessary to prevent crashes when the app attempts to load embedded frameworks (like Sparkle) that do not share the same Team ID. Ad-hoc signatures also break TCC permission persistence; see [macOS permissions](/platforms/mac/permissions) for recovery steps.
 
 ## Metadata build cho About
 
@@ -47,8 +40,8 @@ Khi ký với `SIGN_IDENTITY="-"` (ad-hoc), script tự động tắt **Hardened
 - `OpenClawBuildTimestamp`: ISO8601 UTC tại thời điểm đóng gói
 - `OpenClawGitCommit`: hash git ngắn (hoặc `unknown` nếu không có)
 
-Tab About đọc các khóa này để hiển thị phiên bản, ngày build, commit git, và liệu đây có phải là bản build debug hay không (qua `#if DEBUG`). Hãy chạy lại trình đóng gói để làm mới các giá trị này sau khi thay đổi mã.
+The About tab reads these keys to show version, build date, git commit, and whether it’s a debug build (via `#if DEBUG`). Run the packager to refresh these values after code changes.
 
 ## Lý do
 
-Quyền TCC được gắn với bundle identifier _và_ chữ ký mã. Các bản build debug chưa ký với UUID thay đổi đã khiến macOS quên các quyền đã cấp sau mỗi lần build lại. Việc ký các binary (ad-hoc theo mặc định) và giữ bundle id/đường dẫn cố định (`dist/OpenClaw.app`) giúp bảo toàn các quyền giữa các lần build, phù hợp với cách tiếp cận của VibeTunnel.
+TCC permissions are tied to the bundle identifier _and_ code signature. Unsigned debug builds with changing UUIDs were causing macOS to forget grants after each rebuild. Signing the binaries (ad‑hoc by default) and keeping a fixed bundle id/path (`dist/OpenClaw.app`) preserves the grants between builds, matching the VibeTunnel approach.

@@ -4,18 +4,11 @@ read_when:
   - Du bruger voice-call-pluginet og vil have CLI-indgangspunkterne
   - Du vil have hurtige eksempler på `voicecall call|continue|status|tail|expose`
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:59Z
 ---
 
 # `openclaw voicecall`
 
-`voicecall` er en plugin-leveret kommando. Den vises kun, hvis voice-call-pluginet er installeret og aktiveret.
+`voicecall` er en plugin-levereret kommando. Det vises kun, hvis plugin'et til telefonopkald er installeret og aktiveret.
 
 Primær dokumentation:
 
@@ -38,4 +31,4 @@ openclaw voicecall expose --mode funnel
 openclaw voicecall unexpose
 ```
 
-Sikkerhedsnote: eksponér kun webhook-endpointet til netværk, du har tillid til. Foretræk Tailscale Serve frem for Funnel, når det er muligt.
+Sikkerhedsnote: Udsæt kun webhook endpoint til netværk, du stoler på. Foretræk Tailscale Serveres over Tragt, når det er muligt.

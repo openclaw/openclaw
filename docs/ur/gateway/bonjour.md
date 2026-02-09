@@ -4,26 +4,15 @@ read_when:
   - macOS/iOS پر Bonjour ڈسکوری کے مسائل کی ڈیبگنگ
   - mDNS سروس ٹائپس، TXT ریکارڈز، یا ڈسکوری UX میں تبدیلی
 title: "Bonjour ڈسکوری"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # Bonjour / mDNS ڈسکوری
 
-OpenClaw، Bonjour (mDNS / DNS‑SD) کو **صرف LAN کی سہولت** کے طور پر استعمال کرتا ہے تاکہ
-ایک فعال Gateway (WebSocket اینڈپوائنٹ) دریافت کیا جا سکے۔ یہ best‑effort ہے اور
-SSH یا Tailnet پر مبنی کنیکٹیوٹی کا **متبادل نہیں** ہے۔
+OpenClaw ایک **صرف‑LAN سہولت** کے طور پر Bonjour (mDNS / DNS‑SD) استعمال کرتا ہے تاکہ ایک فعال Gateway (WebSocket endpoint) دریافت کیا جا سکے۔ یہ best‑effort ہے اور SSH یا Tailnet‑based connectivity کی **جگہ نہیں لیتا**۔
 
 ## Tailscale پر Wide‑area Bonjour (Unicast DNS‑SD)
 
-اگر نوڈ اور گیٹ وے مختلف نیٹ ورکس پر ہوں تو ملٹی کاسٹ mDNS
-حد عبور نہیں کر پاتا۔ آپ **unicast DNS‑SD**
-("Wide‑Area Bonjour") پر سوئچ کر کے Tailscale کے ذریعے وہی ڈسکوری UX برقرار رکھ سکتے ہیں۔
+اگر node اور gateway مختلف نیٹ ورکس پر ہوں تو multicast mDNS اس حد (boundary) کو عبور نہیں کرے گا۔ آپ **unicast DNS‑SD** ("Wide‑Area Bonjour") پر Tailscale کے ذریعے سوئچ کر کے وہی discovery UX برقرار رکھ سکتے ہیں۔
 
 اعلیٰ سطحی مراحل:
 
@@ -33,8 +22,8 @@ SSH یا Tailnet پر مبنی کنیکٹیوٹی کا **متبادل نہیں**
 3. Tailscale **split DNS** کنفیگر کریں تاکہ آپ کا منتخب ڈومین کلائنٹس
    (بشمول iOS) کے لیے اسی DNS سرور کے ذریعے resolve ہو۔
 
-OpenClaw کسی بھی ڈسکوری ڈومین کی حمایت کرتا ہے؛ `openclaw.internal.` محض ایک مثال ہے۔
-iOS/Android نوڈز `local.` اور آپ کے کنفیگر کردہ wide‑area ڈومین دونوں کو براؤز کرتے ہیں۔
+OpenClaw کسی بھی discovery domain کو سپورٹ کرتا ہے؛ `openclaw.internal.` محض ایک مثال ہے۔
+iOS/Android nodes `local.` اور آپ کے کنفیگر کیے گئے wide‑area domain دونوں کو براؤز کرتے ہیں۔
 
 ### Gateway کنفیگ (سفارش کردہ)
 
@@ -75,8 +64,7 @@ Tailscale ایڈمن کنسول میں:
 
 ### Gateway listener سکیورٹی (سفارش کردہ)
 
-Gateway WS پورٹ (بطورِ طے شدہ `18789`) ڈیفالٹ طور پر loopback پر bind ہوتی ہے۔ LAN/tailnet
-رسائی کے لیے واضح طور پر bind کریں اور تصدیق فعال رکھیں۔
+The Gateway WS port (default `18789`) binds to loopback by default. LAN/tailnet رسائی کے لیے، واضح طور پر bind کریں اور auth کو فعال رکھیں۔
 
 صرف tailnet سیٹ اپس کے لیے:
 
@@ -128,8 +116,7 @@ mDNS resolver مسئلہ ہوتا ہے۔
 
 ## Gateway لاگز میں ڈیبگنگ
 
-Gateway ایک rolling لاگ فائل لکھتا ہے (اسٹارٹ اپ پر
-`gateway log file: ...` کے طور پر پرنٹ ہوتی ہے)۔ `bonjour:` لائنز تلاش کریں، خاص طور پر:
+Gateway ایک rolling log فائل لکھتا ہے (startup پر پرنٹ ہوتی ہے بطور `gateway log file: ...`)۔ `bonjour:` والی لائنیں دیکھیں، خاص طور پر:
 
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
@@ -151,9 +138,7 @@ iOS نوڈ، `NWBrowser` استعمال کر کے `_openclaw-gw._tcp` دریاف
 - **Bonjour نیٹ ورکس عبور نہیں کرتا**: Tailnet یا SSH استعمال کریں۔
 - **ملٹی کاسٹ بلاک**: کچھ Wi‑Fi نیٹ ورکس mDNS کو غیر فعال کر دیتے ہیں۔
 - **Sleep / انٹرفیس churn**: macOS عارضی طور پر mDNS نتائج گرا سکتا ہے؛ دوبارہ کوشش کریں۔
-- **براؤز کام کرتا ہے مگر resolve ناکام**: مشین کے نام سادہ رکھیں (ایموجیز یا
-  رموزِ اوقاف سے پرہیز کریں)، پھر Gateway ری اسٹارٹ کریں۔ سروس انسٹینس نام
-  ہوسٹ نام سے اخذ ہوتا ہے، اس لیے حد سے زیادہ پیچیدہ نام کچھ resolvers کو الجھا سکتے ہیں۔
+- **Browse کام کرتا ہے مگر resolve ناکام**: مشین کے نام سادہ رکھیں (emojis یا punctuation سے گریز کریں)، پھر Gateway ری اسٹارٹ کریں۔ سروس instance کا نام host name سے اخذ ہوتا ہے، اس لیے حد سے زیادہ پیچیدہ نام کچھ resolvers کو کنفیوز کر سکتے ہیں۔
 
 ## Escaped انسٹینس نام (`\032`)
 

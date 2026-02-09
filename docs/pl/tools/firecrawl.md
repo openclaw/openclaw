@@ -1,17 +1,10 @@
 ---
-summary: „Zapasowe użycie Firecrawl dla web_fetch (anty‑bot + ekstrakcja z cache)”
+summary: "„Zapasowe użycie Firecrawl dla web_fetch (anty‑bot + ekstrakcja z cache)”"
 read_when:
   - Chcesz ekstrakcję WWW opartą na Firecrawl
   - Potrzebujesz klucza API Firecrawl
   - Chcesz ekstrakcję anty‑bot dla web_fetch
-title: „Firecrawl”
-x-i18n:
-  source_path: tools/firecrawl.md
-  source_hash: 08a7ad45b41af412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:42Z
+title: "Firecrawl"
 ---
 
 # Firecrawl

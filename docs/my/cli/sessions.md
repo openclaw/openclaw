@@ -3,13 +3,6 @@ summary: "`openclaw sessions` အတွက် CLI ကိုးကားချက
 read_when:
   - သိမ်းဆည်းထားသော ဆက်ရှင်များကို စာရင်းပြုလုပ်ကြည့်ရှုလိုပြီး မကြာသေးမီ လှုပ်ရှားမှုများကို မြင်ချင်သောအခါ
 title: "ဆက်ရှင်များ"
-x-i18n:
-  source_path: cli/sessions.md
-  source_hash: d8866ef166c0dea5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:03Z
 ---
 
 # `openclaw sessions`

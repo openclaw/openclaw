@@ -3,13 +3,6 @@ summary: "Gabay sa setup para sa mga developer na nagtatrabaho sa OpenClaw macOS
 read_when:
   - Pagse-set up ng macOS development environment
 title: "macOS Dev Setup"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:41Z
 ---
 
 # Setup para sa macOS Developer
@@ -23,7 +16,7 @@ Bago i-build ang app, tiyaking naka-install ang mga sumusunod:
 1. **Xcode 26.2+**: Kinakailangan para sa Swift development.
 2. **Node.js 22+ & pnpm**: Kinakailangan para sa Gateway, CLI, at mga packaging script.
 
-## 1. I-install ang mga Dependency
+## 1) I-install ang mga Dependency
 
 I-install ang mga dependency sa buong proyekto:
 
@@ -44,7 +37,7 @@ Kung wala kang Apple Developer ID certificate, awtomatikong gagamit ang script n
 Para sa mga dev run mode, signing flags, at pag-troubleshoot ng Team ID, tingnan ang macOS app README:
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **Tala**: Ang mga app na ad-hoc signed ay maaaring mag-trigger ng mga security prompt. Kung agad na nagka-crash ang app na may "Abort trap 6", tingnan ang seksyong [Pag-troubleshoot](#troubleshooting).
+> **Tandaan**: Ang mga ad-hoc na signed app ay maaaring mag-trigger ng mga security prompt. Kung agad na nagka-crash ang app na may "Abort trap 6", tingnan ang seksyong [Troubleshooting](#troubleshooting).
 
 ## 3. I-install ang CLI
 
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-Kung may manual run na humahawak sa port, ihinto ang prosesong iyon (Ctrl+C). Bilang huling remedyo, i-kill ang PID na nahanap mo sa itaas.
+Kung may manu-manong run na humahawak sa port, ihinto ang prosesong iyon (Ctrl+C). Bilang huling hakbang, patayin ang PID na nahanap mo sa itaas.

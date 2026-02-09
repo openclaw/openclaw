@@ -5,13 +5,6 @@ read_when:
   - आपको विशिष्ट प्रदाताओं के लिए गैर-इंटरैक्टिव उदाहरणों की आवश्यकता हो
 title: "CLI स्वचालन"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:44Z
 ---
 
 # CLI स्वचालन
@@ -19,7 +12,7 @@ x-i18n:
 `--non-interactive` का उपयोग करके `openclaw onboard` को स्वचालित करें।
 
 <Note>
-`--json` का अर्थ गैर-इंटरैक्टिव मोड नहीं होता। स्क्रिप्ट के लिए `--non-interactive` (और `--workspace`) का उपयोग करें।
+`--json` का मतलब non-interactive मोड नहीं होता। स्क्रिप्ट्स के लिए `--non-interactive` (और `--workspace`) का उपयोग करें।
 </Note>
 
 ## आधारभूत गैर-इंटरैक्टिव उदाहरण
@@ -41,7 +34,7 @@ openclaw onboard --non-interactive \
 ## प्रदाता-विशिष्ट उदाहरण
 
 <AccordionGroup>
-  <Accordion title="Gemini उदाहरण">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI उदाहरण">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway उदाहरण">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway उदाहरण">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot उदाहरण">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic उदाहरण">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen उदाहरण">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,7 +110,7 @@ openclaw onboard --non-interactive \
 
 ## एक और एजेंट जोड़ें
 
-अपने स्वयं के वर्कस्पेस, सत्रों और प्रमाणीकरण प्रोफ़ाइलों के साथ एक अलग एजेंट बनाने के लिए `openclaw agents add <name>` का उपयोग करें। `--workspace` के बिना चलाने पर विज़ार्ड प्रारंभ होता है।
+`openclaw agents add <name>` का उपयोग करके एक अलग एजेंट बनाएं, जिसका अपना workspace, sessions और auth profiles हों। `--workspace` के बिना चलाने पर विज़ार्ड लॉन्च होता है।
 
 ```bash
 openclaw agents add work \

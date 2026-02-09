@@ -2,13 +2,6 @@
 summary: "Configuración de un túnel SSH para OpenClaw.app al conectarse a un Gateway remoto"
 read_when: "Conectar la app de macOS a un Gateway remoto mediante SSH"
 title: "Configuración del Gateway remoto"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:33Z
 ---
 
 # Ejecutar OpenClaw.app con un Gateway remoto
@@ -123,7 +116,7 @@ El túnel ahora:
 
 - Se iniciará automáticamente cuando usted inicie sesión
 - Se reiniciará si falla
-- Se mantendrá en ejecución en segundo plano
+- Sigue corriendo en segundo plano
 
 Nota heredada: elimine cualquier LaunchAgent `com.openclaw.ssh-tunnel` restante si existe.
 
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Cómo funciona
 
-| Componente                           | Qué hace                                                    |
-| ------------------------------------ | ----------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Reenvía el puerto local 18789 al puerto remoto 18789        |
+| Componente                           | Qué hace                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------ |
+| `LocalForward 18789 127.0.0.1:18789` | Reenvía el puerto local 18789 al puerto remoto 18789                           |
 | `ssh -N`                             | SSH sin ejecutar comandos remotos (solo reenvío de puertos) |
-| `KeepAlive`                          | Reinicia automáticamente el túnel si falla                  |
-| `RunAtLoad`                          | Inicia el túnel cuando se carga el agente                   |
+| `KeepAlive`                          | Reinicia automáticamente el túnel si falla                                     |
+| `RunAtLoad`                          | Inicia el túnel cuando se carga el agente                                      |
 
 OpenClaw.app se conecta a `ws://127.0.0.1:18789` en su máquina cliente. El túnel SSH reenvía esa conexión al puerto 18789 en la máquina remota donde se está ejecutando el Gateway.

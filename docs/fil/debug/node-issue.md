@@ -4,13 +4,6 @@ read_when:
   - Pag-debug ng mga Node-only dev script o mga pagkabigo sa watch mode
   - Pag-iimbestiga ng mga pag-crash ng tsx/esbuild loader sa OpenClaw
 title: "Node + tsx Pag-crash"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:30Z
 ---
 
 # Node + tsx "\_\_name is not a function" pag-crash
@@ -25,7 +18,7 @@ Ang pagpapatakbo ng OpenClaw sa pamamagitan ng Node na may `tsx` ay nabibigo sa 
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-Nagsimula ito matapos ilipat ang mga dev script mula Bun patungong `tsx` (commit `2871657e`, 2026-01-06). Gumagana ang parehong runtime path kapag Bun ang gamit.
+This began after switching dev scripts from Bun to `tsx` (commit `2871657e`, 2026-01-06). Ginagamit ng `tsx` ang esbuild para i-transform ang TS/ESM.
 
 ## Kapaligiran
 
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Mga tala / haka-haka
 
-- Gumagamit ang `tsx` ng esbuild para i-transform ang TS/ESM. Ang `keepNames` ng esbuild ay nag-e-emit ng `__name` helper at binabalot ang mga function definition gamit ang `__name(...)`.
+- Ang `keepNames` ng esbuild ay naglalabas ng `__name` helper at binabalutan ang mga function definition ng `__name(...)`. esbuild’s `keepNames` emits a `__name` helper and wraps function definitions with `__name(...)`.
 - Ipinapahiwatig ng pag-crash na umiiral ang `__name` ngunit hindi ito isang function sa runtime, na nagpapahiwatig na nawawala o na-overwrite ang helper para sa module na ito sa Node 25 loader path.
 - May mga kahalintulad na isyu sa `__name` helper na naiulat sa iba pang esbuild consumer kapag nawawala o nire-rewrite ang helper.
 
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Mga workaround
 
 - Gumamit ng Bun para sa mga dev script (kasalukuyang pansamantalang revert).
+
 - Gumamit ng Node + tsc watch, pagkatapos ay patakbuhin ang compiled output:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Nakumpirma nang lokal: gumagana ang `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` sa Node 25.
+
 - I-disable ang esbuild keepNames sa TS loader kung posible (pinipigilan ang pagpasok ng `__name` helper); kasalukuyang hindi ito ine-expose ng tsx.
+
 - Subukan ang Node LTS (22/24) gamit ang `tsx` upang makita kung Node 25–specific ang isyu.
 
 ## Mga sanggunian

@@ -6,13 +6,6 @@ read_when:
   - Vous souhaitez des flux d’authentification setup-token ou OAuth
   - Vous souhaitez plusieurs comptes ou un routage par profil
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:19Z
 ---
 
 # OAuth
@@ -117,7 +110,7 @@ Le flux d’actualisation est automatique ; vous n’avez généralement pas bes
 
 Deux modèles :
 
-### 1) Préféré : agents séparés
+### 1. Préféré : agents séparés
 
 Si vous voulez que « personnel » et « travail » n’interagissent jamais, utilisez des agents isolés (sessions + identifiants + espace de travail séparés) :
 
@@ -128,7 +121,7 @@ openclaw agents add personal
 
 Configurez ensuite l’authentification par agent (assistant) et routez les discussions vers le bon agent.
 
-### 2) Avancé : plusieurs profils dans un seul agent
+### 2. Avancé : plusieurs profils dans un seul agent
 
 `auth-profiles.json` prend en charge plusieurs identifiants de profil pour un même fournisseur.
 

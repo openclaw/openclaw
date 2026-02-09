@@ -5,13 +5,6 @@ read_when:
   - Binabago mo ang gawi ng auto-compaction o nagdaragdag ng “pre-compaction” housekeeping
   - Gusto mong magpatupad ng mga memory flush o silent system turn
 title: "Masusing Pag-aaral sa Pamamahala ng Session"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:17Z
 ---
 
 # Pamamahala ng Session at Compaction (Masusing Pag-aaral)
@@ -96,7 +89,7 @@ Mga patnubay:
 
 - **Reset** (`/new`, `/reset`) ay lumilikha ng bagong `sessionId` para sa `sessionKey` na iyon.
 - **Daily reset** (default na 4:00 AM lokal na oras sa host ng Gateway) ay lumilikha ng bagong `sessionId` sa susunod na mensahe matapos ang hangganan ng reset.
-- **Idle expiry** (`session.reset.idleMinutes` o legacy `session.idleMinutes`) ay lumilikha ng bagong `sessionId` kapag may dumating na mensahe matapos ang idle window. Kapag parehong naka-configure ang daily + idle, kung alin ang maunang mag-expire ang masusunod.
+- **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 
 Detalye ng implementasyon: ang desisyon ay nangyayari sa `initSessionState()` sa `src/auto-reply/reply/session.ts`.
 
@@ -174,7 +167,7 @@ Pagkatapos ng compaction, makikita ng mga susunod na turn ang:
 - Ang buod ng compaction
 - Mga mensahe pagkatapos ng `firstKeptEntryId`
 
-Ang compaction ay **persistent** (hindi tulad ng session pruning). Tingnan ang [/concepts/session-pruning](/concepts/session-pruning).
+Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
 ---
 
@@ -282,10 +275,10 @@ Naglalantad din ang Pi ng isang `session_before_compact` hook sa extension API, 
 
 ## Checklist sa pag-troubleshoot
 
-- Mali ang session key? Magsimula sa [/concepts/session](/concepts/session) at kumpirmahin ang `sessionKey` sa `/status`.
-- Hindi tugma ang store vs transcript? Kumpirmahin ang host ng Gateway at ang store path mula sa `openclaw status`.
-- Compaction spam? Suriin:
+- Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
+- Store vs transcript mismatch? Confirm the Gateway host and the store path from `openclaw status`.
+- Compaction spam? Check:
   - context window ng model (masyadong maliit)
   - mga setting ng compaction (`reserveTokens` na masyadong mataas para sa window ng model ay maaaring magdulot ng mas maagang compaction)
   - tool-result bloat: i-enable/i-tune ang session pruning
-- May tumatagas na silent turn? Kumpirmahin na ang reply ay nagsisimula sa `NO_REPLY` (eksaktong token) at nasa build ka na may kasamang streaming suppression fix.
+- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (exact token) and you’re on a build that includes the streaming suppression fix.

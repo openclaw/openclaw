@@ -4,23 +4,16 @@ read_when:
   - Tìm hỗ trợ hệ điều hành hoặc đường dẫn cài đặt
   - Quyết định nơi chạy Gateway
 title: "Nền tảng"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:31Z
 ---
 
 # Nền tảng
 
-Lõi OpenClaw được viết bằng TypeScript. **Node là runtime được khuyến nghị**.
-Bun không được khuyến nghị cho Gateway (lỗi WhatsApp/Telegram).
+47. OpenClaw core được viết bằng TypeScript. 48. **Node là runtime được khuyến nghị**.
+48. Bun không được khuyến nghị cho Gateway (lỗi WhatsApp/Telegram).
 
-Ứng dụng đồng hành có sẵn cho macOS (ứng dụng thanh menu) và các node di động (iOS/Android). Ứng dụng đồng hành cho Windows và
-Linux đang được lên kế hoạch, nhưng Gateway hiện đã được hỗ trợ đầy đủ.
-Ứng dụng đồng hành native cho Windows cũng đang được lên kế hoạch; khuyến nghị chạy Gateway qua WSL2.
+50. Có các ứng dụng companion cho macOS (ứng dụng menu bar) và các node di động (iOS/Android). Windows and
+    Linux companion apps are planned, but the Gateway is fully supported today.
+    Native companion apps for Windows are also planned; the Gateway is recommended via WSL2.
 
 ## Chọn hệ điều hành của bạn
 
@@ -56,5 +49,5 @@ Sử dụng một trong các cách sau (đều được hỗ trợ):
 
 Đích dịch vụ phụ thuộc vào hệ điều hành:
 
-- macOS: LaunchAgent (`bot.molt.gateway` hoặc `bot.molt.<profile>`; legacy `com.openclaw.*`)
+- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.openclaw.*`)
 - Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)

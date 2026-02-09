@@ -3,13 +3,6 @@ summary: "Twitch sohbet botu yapılandırması ve kurulumu"
 read_when:
   - OpenClaw için Twitch sohbet entegrasyonunu kurarken
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:09Z
 ---
 
 # Twitch (eklenti)
@@ -277,7 +270,7 @@ openclaw channels status --probe
 - Belirtecin `chat:read` ve `chat:write` kapsamlarına sahip olduğunu kontrol edin
 - Belirteç yenileme kullanıyorsanız `clientSecret` ve `refreshToken`’nin ayarlı olduğunu doğrulayın
 
-### Belirteç yenileme çalışmıyor
+### Token refresh not working
 
 **Yenileme olayları için günlükleri kontrol edin:**
 

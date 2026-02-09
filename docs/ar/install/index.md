@@ -5,18 +5,11 @@ read_when:
   - ترغب في النشر على منصة سحابية
   - تحتاج إلى التحديث أو الترحيل أو إلغاء التثبيت
 title: "التثبيت"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:30Z
 ---
 
 # التثبيت
 
-هل اتبعت بالفعل [بدء الاستخدام](/start/getting-started)؟ أنت جاهز — هذه الصفحة مخصّصة لطرق التثبيت البديلة، والتعليمات الخاصة بالمنصّات، وأعمال الصيانة.
+هل تابعت بالفعل [بدء](/start/getting-started)؟ هل اتبعت بالفعل [بدء الاستخدام](/start/getting-started)؟ أنت جاهز — هذه الصفحة مخصّصة لطرق التثبيت البديلة، والتعليمات الخاصة بالمنصّات، وأعمال الصيانة.
 
 ## متطلبات النظام
 
@@ -35,9 +28,10 @@ x-i18n:
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="برنامج التثبيت النصي" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     يقوم بتنزيل CLI وتثبيته بشكل عام عبر npm، ثم تشغيل معالج التهيئة الأولية.
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ x-i18n:
         ```
       </Tab>
     </Tabs>
-
+    
     هذا كل شيء — يتكفّل البرنامج باكتشاف Node وتثبيته والتهيئة الأولية.
-
+    
     لتجاوز التهيئة الأولية والاكتفاء بتثبيت الملف التنفيذي:
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ x-i18n:
         ```
       </Tab>
     </Tabs>
-
+    
     للاطلاع على جميع الأعلام ومتغيرات البيئة وخيارات CI/الأتمتة، راجع [Installer internals](/install/installer).
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     إذا كان لديك بالفعل Node 22+ وتفضّل إدارة التثبيت بنفسك:
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="أخطاء بناء sharp؟">
           إذا كان لديك libvips مثبتًا بشكل عام (شائع على macOS عبر Homebrew) وفشل `sharp`، فقم بفرض استخدام الثنائيات المُسبقة البناء:
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           إذا رأيت `sharp: Please add node-gyp to your dependencies`، فإمّا أن تثبّت أدوات البناء (macOS: Xcode CLT + `npm install -g node-gyp`) أو استخدم متغير البيئة أعلاه.
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ x-i18n:
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         يتطلّب pnpm موافقة صريحة للحِزم التي تحتوي على نصوص بناء. بعد أن يُظهر التثبيت الأول تحذير «Ignored build scripts»، شغّل `pnpm approve-builds -g` واختر الحِزم المدرجة.
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="من المصدر" icon="github">
+  <Accordion title="From source" icon="github">
     للمساهمين أو لأي شخص يرغب في التشغيل من نسخة محلية.
 
+    ```
     <Steps>
       <Step title="الاستنساخ والبناء">
         استنسخ [مستودع OpenClaw](https://github.com/openclaw/openclaw) ثم ابنِ المشروع:
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ x-i18n:
       </Step>
       <Step title="ربط CLI">
         اجعل الأمر `openclaw` متاحًا بشكل عام:
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         بديلًا عن ذلك، يمكنك تجاوز الربط وتشغيل الأوامر عبر `pnpm openclaw ...` من داخل المستودع.
       </Step>
       <Step title="تشغيل التهيئة الأولية">
@@ -137,8 +135,9 @@ x-i18n:
         ```
       </Step>
     </Steps>
-
+    
     لمزيد من مسارات العمل التطويرية المتقدمة، راجع [الإعداد](/start/setup).
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -153,7 +152,7 @@ x-i18n:
     تثبيت تصريحي عبر Nix.
   </Card>
   <Card title="Ansible" href="/install/ansible" icon="server">
-    تزويد أساطيل الأنظمة آليًا.
+    توفير الأسطول الآلي.
   </Card>
   <Card title="Bun" href="/install/bun" icon="zap">
     استخدام CLI فقط عبر بيئة Bun.
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## استكشاف الأخطاء وإصلاحها: `openclaw` غير موجود
 
-<Accordion title="تشخيص PATH وإصلاحه">
+<Accordion title="PATH diagnosis and fix">
   تشخيص سريع:
 
 ```bash
@@ -192,19 +191,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 على Windows، أضِف ناتج `npm prefix -g` إلى PATH.
 
-ثم افتح طرفية جديدة (أو `rehash` في zsh / `hash -r` في bash).
-</Accordion>
+ثم افتح طرفية جديدة (أو `rehash` في zsh / `hash -r` في bash). </Accordion>
 
 ## التحديث / إلغاء التثبيت
 
 <CardGroup cols={3}>
-  <Card title="التحديث" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     حافظ على تحديث OpenClaw.
   </Card>
-  <Card title="الترحيل" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     الانتقال إلى جهاز جديد.
   </Card>
-  <Card title="إلغاء التثبيت" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     إزالة OpenClaw بالكامل.
   </Card>
 </CardGroup>

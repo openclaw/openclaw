@@ -4,13 +4,6 @@ read_when:
   - DigitalOcean ပေါ်တွင် OpenClaw ကို တပ်ဆင်နေချိန်
   - OpenClaw အတွက် စျေးသက်သာသော VPS hosting ကို ရှာဖွေနေချိန်
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:48Z
 ---
 
 # DigitalOcean ပေါ်ရှိ OpenClaw
@@ -23,13 +16,13 @@ DigitalOcean ပေါ်တွင် **တစ်လ $6** (သို့မဟု
 
 ## ကုန်ကျစရိတ် နှိုင်းယှဉ်မှု (2026)
 
-| Provider     | Plan            | Specs                  | Price/mo    | Notes                                 |
-| ------------ | --------------- | ---------------------- | ----------- | ------------------------------------- |
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0          | ARM, limited capacity / signup quirks |
+| Provider     | Plan            | Specs                  | Price/mo                                                       | Notes                                 |
+| ------------ | --------------- | ---------------------- | -------------------------------------------------------------- | ------------------------------------- |
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0                                                             | ARM, limited capacity / signup quirks |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM        | €3.79 (~$4) | Cheapest paid option                  |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6          | Easy UI, good docs                    |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6          | Many locations                        |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5          | Now part of Akamai                    |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6                                                             | Easy UI, good docs                    |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6                                                             | Many locations                        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5                                                             | Now part of Akamai                    |
 
 **Provider ကို ရွေးချယ်ခြင်း:**
 
@@ -45,7 +38,7 @@ DigitalOcean ပေါ်တွင် **တစ်လ $6** (သို့မဟု
 - SSH key pair (သို့မဟုတ် password auth ကို အသုံးပြုလိုစိတ်ရှိခြင်း)
 - ~ မိနစ် ၂၀
 
-## 1) Droplet တစ်ခု ဖန်တီးပါ
+## 1. Droplet တစ်ခု ဖန်တီးပါ
 
 1. [DigitalOcean](https://cloud.digitalocean.com/) သို့ လော့ဂ်အင် ဝင်ပါ
 2. **Create → Droplets** ကို နှိပ်ပါ
@@ -63,7 +56,7 @@ DigitalOcean ပေါ်တွင် **တစ်လ $6** (သို့မဟု
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) OpenClaw ကို ထည့်သွင်းတပ်ဆင်ပါ
+## 3. OpenClaw ကို ထည့်သွင်းတပ်ဆင်ပါ
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Onboarding ကို လုပ်ဆောင်ပါ
+## 4. Onboarding ကို လုပ်ဆောင်ပါ
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ wizard သည် အောက်ပါတို့ကို အဆင့်လ�
 - Gateway token (အလိုအလျောက် ထုတ်ပေးသည်)
 - Daemon installation (systemd)
 
-## 5) Gateway ကို အတည်ပြုပါ
+## 5. Gateway ကို အတည်ပြုပါ
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Dashboard သို့ ဝင်ရောက်ခြင်း
+## 6. Dashboard သို့ ဝင်ရောက်ခြင်း
 
-Gateway သည် ပုံမှန်အားဖြင့် loopback သို့သာ bind လုပ်ထားပါသည်။ Control UI ကို ဝင်ရောက်ရန်—
+35. gateway သည် ပုံမှန်အားဖြင့် loopback သို့ bind လုပ်ထားပါသည်။ 36. Control UI ကို ဝင်ရောက်ရန်:
 
 **Option A: SSH Tunnel (အကြံပြု)**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 ဖွင့်ရန်: `http://<tailscale-ip>:18789` (token လိုအပ်သည်)။
 
-## 7) သင်၏ Channels များကို ချိတ်ဆက်ပါ
+## 7. သင်၏ Channels များကို ချိတ်ဆက်ပါ
 
 ### Telegram
 
@@ -169,7 +162,7 @@ openclaw channels login whatsapp
 
 ## 1GB RAM အတွက် အကောင်းဆုံး ပြင်ဆင်မှုများ
 
-$6 droplet တွင် RAM 1GB သာရှိပါသည်။ အဆင်ပြေစွာ လည်ပတ်နိုင်ရန်—
+37. $6 droplet တွင် RAM 1GB သာရှိပါသည်။ To keep things running smoothly:
 
 ### Swap ထည့်ပါ (အကြံပြု)
 
@@ -204,7 +197,7 @@ State အားလုံးကို အောက်ပါတို့တွင�
 - `~/.openclaw/` — config, credentials, session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory စသည်)
 
-ဤအရာများသည် reboot ပြုလုပ်ပြီးနောက်တွင်လည်း မပျောက်ပါ။ အချိန်ကာလအလိုက် backup ပြုလုပ်ပါ—
+39. ဤအရာများသည် reboot ပြုလုပ်ပြီးနောက်လည်း ဆက်လက်တည်ရှိပါသည်။ 40. ၎င်းတို့ကို အချိန်အခါအားလျော်စွာ backup လုပ်ပါ:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -228,7 +221,7 @@ Oracle Cloud သည် **Always Free** ARM instances များကို ပ�
 - Signup လုပ်စဉ် အနည်းငယ် စိတ်ရှုပ်စရာ ရှိနိုင်သည် (မအောင်မြင်ပါက ထပ်ကြိုးစားပါ)
 - ARM architecture — အများစု အလုပ်လုပ်သော်လည်း binary အချို့မှာ ARM build လိုအပ်သည်
 
-Setup လမ်းညွှန် အပြည့်အစုံအတွက် [Oracle Cloud](/platforms/oracle) ကို ကြည့်ပါ။ Signup အကြံပြုချက်များနှင့် enrollment လုပ်ငန်းစဉ်အတွင်း ပြဿနာဖြေရှင်းနည်းများအတွက် ဤ [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) ကို ကြည့်ပါ။
+41. setup လမ်းညွှန်အပြည့်အစုံအတွက် [Oracle Cloud](/platforms/oracle) ကို ကြည့်ပါ။ 42. signup အကြံပြုချက်များနှင့် enrollment လုပ်ငန်းစဉ်ကို troubleshooting လုပ်ရန်အတွက် ဤ [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) ကို ကြည့်ပါ။
 
 ---
 

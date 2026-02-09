@@ -1,16 +1,9 @@
 ---
-summary: « Utilisez l’API unifiée de Qianfan pour accéder à de nombreux modèles dans OpenClaw »
+summary: "Utilisez l’API unifiée de Qianfan pour accéder à de nombreux modèles dans OpenClaw"
 read_when:
   - Vous voulez une seule clé API pour de nombreux LLM
   - Vous avez besoin de conseils de configuration pour Baidu Qianfan
-title: « Qianfan »
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:38Z
+title: "Qianfan"
 ---
 
 # Guide du fournisseur Qianfan

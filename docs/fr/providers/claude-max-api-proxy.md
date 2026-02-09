@@ -1,17 +1,10 @@
 ---
-summary: « Utiliser un abonnement Claude Max/Pro comme point de terminaison d’API compatible OpenAI »
+summary: "Utiliser un abonnement Claude Max/Pro comme point de terminaison d’API compatible OpenAI"
 read_when:
   - Vous souhaitez utiliser un abonnement Claude Max avec des outils compatibles OpenAI
   - Vous souhaitez un serveur d’API local qui encapsule le CLI Claude Code
   - Vous souhaitez economiser de l’argent en utilisant un abonnement plutot que des cles d’API
-title: « Proxy d’API Claude Max »
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 63b61096b96b720c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:27Z
+title: "Proxy d’API Claude Max"
 ---
 
 # Proxy d’API Claude Max
@@ -20,10 +13,10 @@ x-i18n:
 
 ## Pourquoi l’utiliser ?
 
-| Approche              | Cout                                                                   | Ideal pour                                     |
-| --------------------- | ---------------------------------------------------------------------- | ---------------------------------------------- |
+| Approche              | Coût                                                                                                      | Ideal pour                                     |
+| --------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | API Anthropic         | Paiement par jeton (~15 $ / M en entree, 75 $ / M en sortie pour Opus) | Applications de production, volume eleve       |
-| Abonnement Claude Max | 200 $ / mois, forfait                                                  | Usage personnel, developpement, usage illimite |
+| Abonnement Claude Max | 200 $ / mois, forfait                                                                                     | Usage personnel, developpement, usage illimite |
 
 Si vous avez un abonnement Claude Max et souhaitez l’utiliser avec des outils compatibles OpenAI, ce proxy peut vous faire economiser une somme importante.
 
@@ -97,7 +90,7 @@ Vous pouvez configurer OpenClaw pour pointer vers le proxy comme point de termin
 
 ## Modeles disponibles
 
-| ID du modele      | Correspond a    |
+| ID du modele      | Cartes à        |
 | ----------------- | --------------- |
 | `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |

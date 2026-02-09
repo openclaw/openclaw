@@ -4,19 +4,11 @@ read_when:
   - SOUL Evil 훅을 활성화하거나 조정하려는 경우
   - 퍼지 윈도우 또는 무작위 확률 기반 페르소나 전환이 필요한 경우
 title: "SOUL Evil 훅"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:17Z
 ---
 
 # SOUL Evil 훅
 
-SOUL Evil 훅은 퍼지 윈도우 동안 또는 무작위 확률에 따라 **주입된** `SOUL.md` 콘텐츠를 `SOUL_EVIL.md` 로 교체합니다.
-디스크의 파일은 **수정하지 않습니다**.
+SOUL Evil 훅은 퍼지 윈도우 동안 또는 무작위 확률에 따라 **주입된** `SOUL.md` 콘텐츠를 `SOUL_EVIL.md` 로 교체합니다. 디스크의 파일은 **수정하지 않습니다**.
 
 ## 작동 방식
 
@@ -71,6 +63,6 @@ openclaw hooks enable soul-evil
 - 디스크에 어떤 파일도 작성되거나 수정되지 않습니다.
 - 부트스트랩 목록에 `SOUL.md` 이 없으면, 이 훅은 아무 동작도 하지 않습니다.
 
-## 참고 자료
+## See Also
 
 - [Hooks](/automation/hooks)

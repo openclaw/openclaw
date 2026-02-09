@@ -1,17 +1,10 @@
 ---
-summary: „Cron-Jobs + Wakeups für den Gateway-Scheduler“
+summary: "„Cron-Jobs + Wakeups für den Gateway-Scheduler“"
 read_when:
   - Planen von Hintergrundjobs oder Wakeups
   - Verdrahten von Automatisierungen, die mit oder neben Heartbeats laufen sollen
   - Entscheidung zwischen Heartbeat und Cron für geplante Aufgaben
-title: „Cron Jobs“
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:25Z
+title: "„Cron Jobs“"
 ---
 
 # Cron-Jobs (Gateway-Scheduler)
@@ -443,7 +436,7 @@ openclaw cron edit <jobId> \
   --thinking low
 ```
 
-Ausführungsverlauf:
+Verlauf ausführen:
 
 ```bash
 openclaw cron runs --id <jobId> --limit 50

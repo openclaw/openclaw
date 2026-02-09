@@ -4,19 +4,12 @@ read_when:
   - Du vil foretage et udgående taleopkald fra OpenClaw
   - Du konfigurerer eller udvikler voice-call-pluginet
 title: "Voice Call-plugin"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:36Z
 ---
 
 # Voice Call (plugin)
 
-Taleopkald til OpenClaw via et plugin. Understøtter udgående notifikationer og
-samtaler i flere omgange med indgående politikker.
+Stemmeopkald til OpenClaw via et plugin. Understøtter udgående meddelelser og
+multi-turn samtaler med indgående politikker.
 
 Nuværende udbydere:
 
@@ -122,14 +115,14 @@ Noter:
 - `mock` er en lokal dev-udbyder (ingen netværkskald).
 - `skipSignatureVerification` er kun til lokal test.
 - Hvis du bruger ngrok free tier, skal du sætte `publicUrl` til den præcise ngrok-URL; signaturverifikation håndhæves altid.
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` tillader Twilio-webhooks med ugyldige signaturer **kun** når `tunnel.provider="ngrok"` og `serve.bind` er loopback (ngrok lokal agent). Brug kun til lokal udvikling.
-- Ngrok free tier-URL’er kan ændre sig eller tilføje interstitiel adfærd; hvis `publicUrl` afviger, vil Twilio-signaturer fejle. Til produktion bør du foretrække et stabilt domæne eller Tailscale funnel.
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` tillader Twilio webhooks med ugyldige signaturer **kun** når `tunnel.provider="ngrok"` og `serve.bind` er loopback (ngrok local agent). Må kun anvendes til lokal dev.
+- Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signaturer will fail. Til produktion foretrækker et stabilt domæne eller Tailscale tragt.
 
 ## Webhook-sikkerhed
 
-Når en proxy eller tunnel står foran Gateway, rekonstruerer pluginet den
-offentlige URL til signaturverifikation. Disse indstillinger styrer, hvilke
-videresendte headers der er tillid til.
+Når en proxy eller tunnel sidder foran Gateway, rekonstruerer plugin den offentlige URL
+for signaturverifikation. Disse indstillinger styrer som videresendte
+overskrifter er betroede.
 
 `webhookSecurity.allowedHosts` tilladelseslister værter fra videresendte headers.
 
@@ -159,9 +152,9 @@ Eksempel med en stabil offentlig vært:
 
 ## TTS til opkald
 
-Voice Call bruger kerne-`messages.tts`-konfigurationen (OpenAI eller ElevenLabs)
-til streamet tale på opkald. Du kan tilsidesætte den under plugin-konfigurationen
-med **samme struktur** — den deep-merger med `messages.tts`.
+Stemmeopkald bruger kernen `messages.tts` konfiguration (OpenAI eller ElevenLabs) til
+streaming af tale ved opkald. Du kan tilsidesætte det under plugin config med
+**samme form** — det dybe-fusionerer med `messages.tts`.
 
 ```json5
 {
@@ -241,7 +234,7 @@ Tilsidesæt kun OpenAI-modellen for opkald (deep-merge-eksempel):
 
 ## Indgående opkald
 
-Indgående politik er som standard `disabled`. For at aktivere indgående opkald skal du sætte:
+Indgående politik er standard til `deaktiveret`. For at aktivere indgående opkald, indstillet:
 
 ```json5
 {
@@ -251,7 +244,7 @@ Indgående politik er som standard `disabled`. For at aktivere indgående opkald
 }
 ```
 
-Auto-svar bruger agent-systemet. Justér med:
+Auto-svar bruge agent-systemet. Tune med:
 
 - `responseModel`
 - `responseSystemPrompt`

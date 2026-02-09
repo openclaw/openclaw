@@ -1,15 +1,8 @@
 ---
 title: Sandbox vs. Tool-Policy vs. Erhöht
-summary: „Warum ein Werkzeug blockiert ist: Sandbox-Laufzeit, Tool-Allow/Deny-Policy und erhöhte Exec-Gates“
-read_when: „Wenn Sie auf ‚Sandbox-Gefängnis‘ stoßen oder eine Tool-/Elevated-Verweigerung sehen und den exakten Konfigurationsschlüssel ändern möchten.“
+summary: "„Warum ein Werkzeug blockiert ist: Sandbox-Laufzeit, Tool-Allow/Deny-Policy und erhöhte Exec-Gates“"
+read_when: "„Wenn Sie auf ‚Sandbox-Gefängnis‘ stoßen oder eine Tool-/Elevated-Verweigerung sehen und den exakten Konfigurationsschlüssel ändern möchten.“"
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:27Z
 ---
 
 # Sandbox vs. Tool-Policy vs. Erhöht
@@ -31,7 +24,7 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Er gibt aus:
+Es druckt:
 
 - effektiven Sandbox-Modus/Scope/Workspace-Zugriff
 - ob die Sitzung aktuell sandboxed ist (Hauptsitzung vs. Nicht‑Hauptsitzung)

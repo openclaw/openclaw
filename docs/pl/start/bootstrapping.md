@@ -2,17 +2,10 @@
 summary: "Rytuał inicjalnego uruchomienia agenta, który zasiewa obszar roboczy oraz pliki tożsamości"
 read_when:
   - Zrozumienie, co dzieje się przy pierwszym uruchomieniu agenta
-  - Wyjaśnienie, gdzie znajdują się pliki inicjalizacji
+  - Wyjaśnianie gdzie są pliki bootstrapping na żywo
   - Debugowanie konfiguracji tożsamości podczas onboardingu
 title: "Inicjalizacja agenta"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:37Z
 ---
 
 # Inicjalizacja agenta
@@ -20,7 +13,7 @@ x-i18n:
 Inicjalizacja to rytuał **pierwszego uruchomienia**, który przygotowuje obszar roboczy agenta i
 zbiera szczegóły tożsamości. Zachodzi po onboardingu, gdy agent uruchamia się po raz pierwszy.
 
-## Co robi inicjalizacja
+## Co robi bootstrapping
 
 Przy pierwszym uruchomieniu agenta OpenClaw inicjalizuje obszar roboczy (domyślnie
 `~/.openclaw/workspace`):

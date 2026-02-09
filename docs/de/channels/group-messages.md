@@ -1,15 +1,8 @@
 ---
-summary: „Verhalten und Konfiguration für die Verarbeitung von WhatsApp-Gruppennachrichten (mentionPatterns werden kanalübergreifend geteilt)“
+summary: "„Verhalten und Konfiguration für die Verarbeitung von WhatsApp-Gruppennachrichten (mentionPatterns werden kanalübergreifend geteilt)“"
 read_when:
   - Ändern von Regeln für Gruppennachrichten oder Erwähnungen
-title: „Gruppennachrichten“
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:15Z
+title: "„Gruppennachrichten“"
 ---
 
 # Gruppennachrichten (WhatsApp-Web-Kanal)

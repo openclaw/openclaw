@@ -3,16 +3,9 @@ summary: "Ritual de inicialização do agente que prepara o workspace e os arqui
 read_when:
   - Entender o que acontece na primeira execução do agente
   - Explicar onde ficam os arquivos de bootstrapping
-  - Depurar a configuração de identidade durante a integração inicial
+  - Configuração de identidade de depuração
 title: "Bootstrapping do Agente"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:56Z
 ---
 
 # Bootstrapping do Agente

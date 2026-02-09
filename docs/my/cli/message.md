@@ -4,13 +4,6 @@ read_when:
   - မက်ဆေ့ချ် CLI လုပ်ဆောင်ချက်များကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း ပြုလုပ်သောအခါ
   - ထွက်ပေါ်သည့် ချန်နယ် အပြုအမူများကို ပြောင်းလဲသောအခါ
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:20Z
 ---
 
 # `openclaw message`

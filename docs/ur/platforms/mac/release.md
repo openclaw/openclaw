@@ -4,23 +4,16 @@ read_when:
   - OpenClaw macOS ریلیز کو کاٹتے یا اس کی توثیق کرتے وقت
   - Sparkle appcast یا فیڈ اثاثوں کو اپ ڈیٹ کرتے وقت
 title: "macOS ریلیز"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:30Z
 ---
 
 # OpenClaw macOS ریلیز (Sparkle)
 
-یہ ایپ اب Sparkle خودکار اپ ڈیٹس کے ساتھ فراہم کی جاتی ہے۔ ریلیز بلڈز کا Developer ID کے ساتھ سائن ہونا، زِپ ہونا، اور دستخط شدہ appcast اندراج کے ساتھ شائع ہونا لازم ہے۔
+یہ ایپ اب Sparkle آٹو‑اپڈیٹس کے ساتھ شپ ہوتی ہے۔ ریلیز بلڈز کو Developer ID سے سائن کیا جانا، زِپ کیا جانا، اور ایک سائن شدہ appcast انٹری کے ساتھ شائع کیا جانا ضروری ہے۔
 
 ## پیشگی تقاضے
 
 - Developer ID Application سرٹیفکیٹ انسٹال ہو (مثال: `Developer ID Application: <Developer Name> (<TEAMID>)`)۔
-- Sparkle نجی کلید کا راستہ ماحول میں `SPARKLE_PRIVATE_KEY_FILE` کے طور پر سیٹ ہو (آپ کی Sparkle ed25519 نجی کلید کا راستہ؛ عوامی کلید Info.plist میں شامل ہوتی ہے)۔ اگر یہ موجود نہ ہو تو `~/.profile` چیک کریں۔
+- Sparkle پرائیویٹ کی کی پاتھ ماحول میں `SPARKLE_PRIVATE_KEY_FILE` کے طور پر سیٹ کریں (آپ کی Sparkle ed25519 پرائیویٹ کی کی پاتھ؛ پبلک کی Info.plist میں شامل ہوتی ہے)۔ اگر یہ موجود نہ ہو تو `~/.profile` چیک کریں۔
 - `xcrun notarytool` کے لیے نوٹری اسناد (کی چین پروفائل یا API کلید)، اگر آپ Gatekeeper-محفوظ DMG/zip تقسیم چاہتے ہیں۔
   - ہم `openclaw-notary` نامی Keychain پروفائل استعمال کرتے ہیں، جو App Store Connect API کلید کے env vars سے آپ کے شیل پروفائل میں بنایا گیا ہے:
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
@@ -34,8 +27,8 @@ x-i18n:
 نوٹس:
 
 - `APP_BUILD`، `CFBundleVersion`/`sparkle:version` سے میپ ہوتا ہے؛ اسے عددی اور یک سمت (monotonic) رکھیں (`-beta` نہیں)، ورنہ Sparkle اسے برابر سمجھتا ہے۔
-- بطورِ طے شدہ موجودہ آرکیٹیکچر (`$(uname -m)`) استعمال ہوتا ہے۔ ریلیز/یونیورسل بلڈز کے لیے `BUILD_ARCHS="arm64 x86_64"` (یا `BUILD_ARCHS=all`) سیٹ کریں۔
-- ریلیز اثاثوں (zip + DMG + نوٹرائزیشن) کے لیے `scripts/package-mac-dist.sh` استعمال کریں۔ لوکل/ڈیولپمنٹ پیکیجنگ کے لیے `scripts/package-mac-app.sh` استعمال کریں۔
+- ڈیفالٹ طور پر موجودہ آرکیٹیکچر (`$(uname -m)`) استعمال ہوتا ہے۔ ریلیز/یونیورسل بلڈز کے لیے `BUILD_ARCHS="arm64 x86_64"` (یا `BUILD_ARCHS=all`) سیٹ کریں۔
+- ریلیز آرٹیفیکٹس (zip + DMG + notarization) کے لیے `scripts/package-mac-dist.sh` استعمال کریں۔ لوکل/ڈیولپمنٹ پیکیجنگ کے لیے `scripts/package-mac-app.sh` استعمال کریں۔
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -77,8 +70,8 @@ ditto -c -k --keepParent apps/macos/.build/release/OpenClaw.app.dSYM dist/OpenCl
 SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.2.6.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 ```
 
-یہ `CHANGELOG.md` سے HTML ریلیز نوٹس بناتا ہے ([`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh) کے ذریعے) اور انہیں appcast اندراج میں شامل کرتا ہے۔
-شائع کرتے وقت اپ ڈیٹ شدہ `appcast.xml` کو ریلیز اثاثوں (zip + dSYM) کے ساتھ کمٹ کریں۔
+`CHANGELOG.md` سے HTML ریلیز نوٹس تیار کرتا ہے (بذریعہ [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) اور انہیں appcast انٹری میں ایمبیڈ کرتا ہے۔
+شائع کرتے وقت ریلیز اثاثوں (zip + dSYM) کے ساتھ اپ ڈیٹ شدہ `appcast.xml` کمٹ کریں۔
 
 ## شائع کریں اور توثیق کریں
 
@@ -87,6 +80,6 @@ SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh di
 - جانچ:
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`، 200 ریٹرن کرے۔
   - اثاثوں کے اپ لوڈ کے بعد `curl -I <enclosure url>`، 200 ریٹرن کرے۔
-  - کسی پچھلے عوامی بلڈ پر، About ٹیب سے “Check for Updates…” چلائیں اور تصدیق کریں کہ Sparkle نیا بلڈ صاف طور پر انسٹال کرتا ہے۔
+  - کسی پچھلی پبلک بلڈ پر، About ٹیب سے “Check for Updates…” چلائیں اور تصدیق کریں کہ Sparkle نئی بلڈ کو صاف طریقے سے انسٹال کرتا ہے۔
 
 تعریفِ تکمیل: سائن شدہ ایپ اور appcast شائع ہوں، پرانی انسٹال شدہ ورژن سے اپ ڈیٹ فلو درست کام کرے، اور ریلیز اثاثے GitHub ریلیز کے ساتھ منسلک ہوں۔

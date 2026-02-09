@@ -5,13 +5,6 @@ read_when:
   - Du ændrer auto-kompakteringsadfærd eller tilføjer “pre-compaction” housekeeping
   - Du vil implementere memory flushes eller tavse systemturns
 title: "Dybdegående gennemgang af sessionstyring"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:06Z
 ---
 
 # Sessionstyring & kompaktering (dybdegående)
@@ -96,7 +89,7 @@ Tommelfingerregler:
 
 - **Reset** (`/new`, `/reset`) opretter en ny `sessionId` for den `sessionKey`.
 - **Dagligt reset** (standard kl. 04:00 lokal tid på gateway-værten) opretter en ny `sessionId` ved den næste besked efter reset-grænsen.
-- **Idle-udløb** (`session.reset.idleMinutes` eller legacy `session.idleMinutes`) opretter en ny `sessionId`, når en besked ankommer efter idle-vinduet. Når både daglig og idle er konfigureret, vinder den, der udløber først.
+- **Tomgang udløb** (`session.reset.idleMinutes` eller arv `session.idleMinutes`) skaber en ny `sessionId` når en besked ankommer efter tomgang vinduet. Når dagligt + inaktiv begge er konfigureret, alt efter hvad der udløber første gevinst.
 
 Implementeringsdetalje: beslutningen sker i `initSessionState()` i `src/auto-reply/reply/session.ts`.
 
@@ -174,7 +167,7 @@ Efter kompaktering ser fremtidige turns:
 - Kompakteringsresuméet
 - Beskeder efter `firstKeptEntryId`
 
-Kompaktering er **persistent** (i modsætning til session pruning). Se [/concepts/session-pruning](/concepts/session-pruning).
+Komprimering er **persistent** (i modsætning til sessionsbeskæring). Se [/concepts/session-pruning](/concepts/session-beskæring).
 
 ---
 
@@ -283,10 +276,10 @@ flush-logik ligger på Gateway-siden i dag.
 
 ## Fejlfindingstjekliste
 
-- Forkert sessionsnøgle? Start med [/concepts/session](/concepts/session) og bekræft `sessionKey` i `/status`.
-- Uoverensstemmelse mellem lager og transskript? Bekræft gateway-værten og lagerstien fra `openclaw status`.
-- Kompakteringsspam? Tjek:
+- Session nøgle forkert? Start med [/concepts/session](/concepts/session) og bekræft `sessionKey` i `/status`.
+- Gem vs afskriften uoverensstemmelse? Bekræft Gateway-værten og butiksstien fra `openclaw status`.
+- Kompakt spam? Tjek:
   - modelkontekstvindue (for lille)
   - kompakteringsindstillinger (`reserveTokens` for høj i forhold til modelvinduet kan give tidligere kompaktering)
   - tool-result-bloat: aktivér/justér session pruning
-- Tavse turns lækker? Bekræft at svaret starter med `NO_REPLY` (præcis token), og at du er på en build, der inkluderer streaming-undertrykkelsesfixet.
+- Lydløs bliver utæt? Bekræft svaret starter med `NO_REPLY` (eksakt token), og du er på en bygning, der omfatter streaming suppression fix.

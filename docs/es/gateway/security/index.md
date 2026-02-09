@@ -3,13 +3,6 @@ summary: "Consideraciones de seguridad y modelo de amenazas para ejecutar un gat
 read_when:
   - Al agregar funciones que amplían el acceso o la automatización
 title: "Seguridad"
-x-i18n:
-  source_path: gateway/security/index.md
-  source_hash: 5566bbbbbf7364ec
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:44Z
 ---
 
 # Seguridad 🔒
@@ -204,14 +197,14 @@ Esto evita la fuga de contexto entre usuarios y mantiene los chats grupales aisl
 
 ### Modo seguro de mensajes directos (recomendado)
 
-Trate el fragmento anterior como **modo seguro de mensajes directos**:
+Trata el fragmento anterior como **modo DM seguro**:
 
 - Predeterminado: `session.dmScope: "main"` (todos los mensajes directos comparten una sesión para continuidad).
 - Modo seguro de mensajes directos: `session.dmScope: "per-channel-peer"` (cada par canal+remitente obtiene un contexto de mensajes directos aislado).
 
 Si ejecuta varias cuentas en el mismo canal, use `per-account-channel-peer` en su lugar. Si la misma persona se comunica con usted en varios canales, use `session.identityLinks` para colapsar esas sesiones de mensajes directos en una identidad canónica. Vea [Gestión de sesiones](/concepts/session) y [Configuración](/gateway/configuration).
 
-## Listas de permitidos (mensajes directos + grupos) — terminología
+## Listas de permisos (DM + grupos) — terminología
 
 OpenClaw tiene dos capas separadas de “¿quién puede activarme?”:
 
@@ -232,7 +225,7 @@ La inyección de prompts ocurre cuando un atacante crea un mensaje que manipula 
 
 Incluso con prompts del sistema fuertes, **la inyección de prompts no está resuelta**. Las barreras del prompt del sistema son solo guía suave; la aplicación dura proviene de la política de herramientas, aprobaciones de exec, sandboxing y listas de permitidos de canales (y los operadores pueden deshabilitarlas por diseño). Lo que ayuda en la práctica:
 
-- Mantenga bloqueados los mensajes directos entrantes (emparejamiento/listas de permitidos).
+- Mantener bloqueados los DMs entrantes (emparejamiento/listas permitidas).
 - Prefiera el gating por mención en grupos; evite bots “siempre activos” en salas públicas.
 - Trate enlaces, adjuntos e instrucciones pegadas como hostiles por defecto.
 - Ejecute herramientas sensibles en un sandbox; mantenga secretos fuera del sistema de archivos accesible por el agente.
@@ -315,7 +308,7 @@ Esto es ingeniería social 101. Crear desconfianza, fomentar el husmeo.
 
 ## Endurecimiento de configuración (ejemplos)
 
-### 0) Permisos de archivos
+### 0. Permisos de archivos
 
 Mantenga configuración + estado privados en el host del Gateway:
 
@@ -442,7 +435,8 @@ Vea [Tailscale](/gateway/tailscale) y [Resumen web](/web).
 
 ### 0.6.1) Control del navegador vía host de nodo (recomendado)
 
-Si su Gateway es remoto pero el navegador se ejecuta en otra máquina, ejecute un **host de nodo** en la máquina del navegador y deje que el Gateway proxifique las acciones del navegador (ver [Herramienta de navegador](/tools/browser)). Trate el emparejamiento de nodos como acceso de administrador.
+Si su Gateway es remoto pero el navegador se ejecuta en otra máquina, ejecute un **host de nodo** en la máquina del navegador y deje que el Gateway proxifique las acciones del navegador (ver [Herramienta de navegador](/tools/browser)).
+Trate el emparejamiento de nodos como acceso de administrador.
 
 Patrón recomendado:
 
@@ -487,7 +481,7 @@ Recomendaciones:
 
 Detalles: [Registro](/gateway/logging)
 
-### 1) Mensajes directos: emparejamiento por defecto
+### 1. DMs: emparejamiento por defecto
 
 ```json5
 {
@@ -495,7 +489,7 @@ Detalles: [Registro](/gateway/logging)
 }
 ```
 
-### 2) Grupos: requerir mención en todas partes
+### 2. Grupos: requerir mención en todas partes
 
 ```json
 {
@@ -535,7 +529,7 @@ Ya puede construir un perfil de solo lectura combinando:
 
 Podríamos agregar un único flag `readOnlyMode` más adelante para simplificar esta configuración.
 
-### 5) Línea base segura (copiar/pegar)
+### 5. Línea base segura (copiar/pegar)
 
 Una configuración de “valores seguros” que mantiene el Gateway privado, requiere emparejamiento de mensajes directos y evita bots de grupo siempre activos:
 
@@ -710,7 +704,7 @@ Incluya directrices de seguridad en el prompt del sistema de su agente:
 
 Si su IA hace algo malo:
 
-### Contener
+### Contiene
 
 1. **Deténgalo:** detenga la app macOS (si supervisa el Gateway) o termine su proceso `openclaw gateway`.
 2. **Cierre la exposición:** establezca `gateway.bind: "loopback"` (o deshabilite Tailscale Funnel/Serve) hasta entender qué ocurrió.
@@ -751,7 +745,9 @@ Si falla, hay nuevos candidatos aún no en la línea base.
 2. Entienda las herramientas:
    - `detect-secrets scan` encuentra candidatos y los compara con la línea base.
    - `detect-secrets audit` abre una revisión interactiva para marcar cada elemento de la línea base como real o falso positivo.
+
 3. Para secretos reales: rótelos/elimínelos, luego vuelva a ejecutar el escaneo para actualizar la línea base.
+
 4. Para falsos positivos: ejecute la auditoría interactiva y márquelos como falsos:
 
    ```bash

@@ -5,13 +5,6 @@ read_when:
   - Blokstreaming of kanaal-chunkinggedrag wijzigen
   - Dubbele/vroege blokantwoorden of conceptstreaming debuggen
 title: "Streaming en Chunking"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Streaming + chunking
@@ -99,7 +92,7 @@ natuurlijker aanvoelen.
 
 ## “Chunks streamen of alles”
 
-Dit komt overeen met:
+Deze kaarten naar:
 
 - **Chunks streamen:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (uitzenden terwijl je bezig bent). Niet-Telegram-kanalen hebben ook `*.blockStreaming: true` nodig.
 - **Alles aan het einde streamen:** `blockStreamingBreak: "message_end"` (één keer flushen, mogelijk meerdere chunks als het erg lang is).

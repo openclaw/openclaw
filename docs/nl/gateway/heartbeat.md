@@ -4,13 +4,6 @@ read_when:
   - Het aanpassen van heartbeat-cadans of berichten
   - Beslissen tussen heartbeat en cron voor geplande taken
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:45Z
 ---
 
 # Heartbeat (Gateway)
@@ -88,7 +81,7 @@ Buiten heartbeats wordt een losstaande `HEARTBEAT_OK` aan het begin/einde van ee
 bericht verwijderd en gelogd; een bericht dat alleen `HEARTBEAT_OK` is, wordt
 verworpen.
 
-## Configuratie
+## Config
 
 ```json5
 {
@@ -207,7 +200,7 @@ accounts zoals Telegram:
 }
 ```
 
-### Veldnotities
+### Veld notities
 
 - `every`: heartbeat-interval (duurstring; standaardeenheid = minuten).
 - `model`: optionele model-override voor heartbeat-runs (`provider/model`).
@@ -318,12 +311,12 @@ channels:
 
 ### Veelvoorkomende patronen
 
-| Doel                                           | Config                                                                                   |
-| ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Standaardgedrag (stille OK's, alerts aan)      | _(geen configuratie nodig)_                                                              |
+| Doel                                                              | Config                                                                                   |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Standaardgedrag (stille OK's, alerts aan)      | _(geen configuratie nodig)_                                           |
 | Volledig stil (geen berichten, geen indicator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Alleen indicator (geen berichten)              | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OK's alleen in één kanaal                      | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OK's alleen in één kanaal                                         | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (optioneel)
 
@@ -333,7 +326,8 @@ klein, stabiel en veilig om elke 30 minuten op te nemen.
 
 Als `HEARTBEAT.md` bestaat maar effectief leeg is (alleen lege regels en
 markdown-koppen zoals `# Heading`), slaat OpenClaw de heartbeat-run over om
-API-aanroepen te besparen. Als het bestand ontbreekt, draait de heartbeat nog
+API-aanroepen te besparen.
+Als het bestand ontbreekt, draait de heartbeat nog
 steeds en beslist het model wat te doen.
 
 Houd het klein (korte checklist of herinneringen) om prompt-opblazing te vermijden.

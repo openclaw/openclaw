@@ -5,25 +5,19 @@ read_when:
   - 你正在執行 Claude Code CLI 或其他本機 AI CLI，並想要重複使用它們
   - 你需要一條僅文字、無工具，但仍支援工作階段與圖片的路徑
 title: "CLI 後端"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:04Z
 ---
 
 # CLI 後端（備援執行階段）
 
-OpenClaw 可以在 API 提供者當機、被限流，或暫時行為異常時，執行 **本機 AI CLI** 作為 **純文字備援**。此設計刻意保守：
+OpenClaw 可以在 API 提供者當機、被限流，或暫時行為異常時，執行 **本機 AI CLI** 作為 **純文字備援**。此設計刻意保守： This is intentionally conservative:
 
 - **停用工具**（不進行工具呼叫）。
 - **文字輸入 → 文字輸出**（可靠）。
 - **支援工作階段**（後續回合可保持連貫）。
 - **可傳遞圖片**（若 CLI 接受圖片路徑）。
 
-這是作為 **安全網** 而非主要路徑來設計。當你需要「一定能運作」的文字回應，且不想依賴外部 API 時使用。
+This is designed as a **safety net** rather than a primary path. Use it when you
+want “always works” text responses without relying on external APIs.
 
 ## 新手友善的快速開始
 
@@ -56,9 +50,9 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
 }
 ```
 
-就這樣。不需要金鑰，也不需要除了 CLI 本身之外的額外身分驗證設定。
+That’s it. 就這樣。不需要金鑰，也不需要除了 CLI 本身之外的額外身分驗證設定。
 
-## 作為備援使用
+## Using it as a fallback
 
 將 CLI 後端加入你的備援清單，讓它只在主要模型失敗時才執行：
 
@@ -83,7 +77,8 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
 注意事項：
 
 - 如果你使用 `agents.defaults.models`（允許清單），必須包含 `claude-cli/...`。
-- 若主要提供者失敗（身分驗證、速率限制、逾時），OpenClaw 會接著嘗試 CLI 後端。
+- If the primary provider fails (auth, rate limits, timeouts), OpenClaw will
+  try the CLI backend next.
 
 ## 設定概覽
 
@@ -93,8 +88,8 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.3-codex
 agents.defaults.cliBackends
 ```
 
-每個項目都以 **提供者 id** 作為鍵（例如 `claude-cli`、`my-cli`）。
-提供者 id 會成為模型參照的左側：
+Each entry is keyed by a **provider id** (e.g. `claude-cli`, `my-cli`).
+The provider id becomes the left side of your model ref:
 
 ```
 <provider>/<model>
@@ -136,15 +131,15 @@ agents.defaults.cliBackends
 }
 ```
 
-## 運作方式
+## How it works
 
 1. **選擇後端**：依提供者前綴（`claude-cli/...`）。
 2. **建立系統提示**：使用相同的 OpenClaw 提示與工作區內容。
 3. **執行 CLI**：若支援，會帶入工作階段 id 以保持歷史一致。
 4. **解析輸出**：解析 JSON 或純文字，並回傳最終文字。
-5. **保存工作階段 id**：每個後端各自保存，讓後續回合重用相同的 CLI 工作階段。
+5. **Persists session ids** per backend, so follow-ups reuse the same CLI session.
 
-## 工作階段
+## Sessions
 
 - 若 CLI 支援工作階段，請設定 `sessionArg`（例如 `--session-id`）或
   `sessionArgs`（當需要將 ID 插入多個旗標時，使用佔位符 `{sessionId}`）。
@@ -153,7 +148,7 @@ agents.defaults.cliBackends
   （用於非 JSON 的復原）。
 - `sessionMode`：
   - `always`：一律送出工作階段 id（若未儲存則建立新的 UUID）。
-  - `existing`：僅在先前已儲存時才送出工作階段 id。
+  - `existing`: only send a session id if one was stored before.
   - `none`：永不送出工作階段 id。
 
 ## 圖片（直通）
@@ -165,12 +160,12 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw 會將 base64 圖片寫入暫存檔。若設定了 `imageArg`，這些
-路徑會作為 CLI 參數傳遞。若缺少 `imageArg`，OpenClaw 會將
-檔案路徑附加到提示中（路徑注入），這對會從純路徑自動載入本機檔案的 CLI
-已足夠（Claude Code CLI 的行為）。
+OpenClaw will write base64 images to temp files. If `imageArg` is set, those
+paths are passed as CLI args. If `imageArg` is missing, OpenClaw appends the
+file paths to the prompt (path injection), which is enough for CLIs that auto-
+load local files from plain paths (Claude Code CLI behavior).
 
-## 輸入／輸出
+## Inputs / outputs
 
 - `output: "json"`（預設）嘗試解析 JSON，並擷取文字與工作階段 id。
 - `output: "jsonl"` 解析 JSONL 串流（Codex CLI `--json`），並擷取
@@ -183,7 +178,7 @@ OpenClaw 會將 base64 圖片寫入暫存檔。若設定了 `imageArg`，這些
 - `input: "stdin"` 透過 stdin 傳送提示。
 - 若提示非常長且設定了 `maxPromptArgChars`，則使用 stdin。
 
-## 預設值（內建）
+## Defaults (built-in)
 
 OpenClaw 內建 `claude-cli` 的預設：
 
@@ -207,18 +202,20 @@ OpenClaw 也內建 `codex-cli` 的預設：
 - `imageArg: "--image"`
 - `sessionMode: "existing"`
 
-僅在需要時覆寫（常見：使用絕對 `command` 路徑）。
+Override only if needed (common: absolute `command` path).
 
 ## 限制
 
 - **沒有 OpenClaw 工具**（CLI 後端永遠不會接收工具呼叫）。部分 CLI
-  仍可能執行其自身的代理程式工具。
+  仍可能執行其自身的代理程式工具。 Some CLIs
+  may still run their own agent tooling.
 - **不支援串流**（CLI 輸出會先收集再回傳）。
 - **結構化輸出** 取決於 CLI 的 JSON 格式。
 - **Codex CLI 工作階段** 透過文字輸出復原（非 JSONL），其結構化程度
-  低於初次的 `--json` 執行。OpenClaw 的工作階段仍可正常運作。
+  低於初次的 `--json` 執行。OpenClaw 的工作階段仍可正常運作。 OpenClaw sessions still work
+  normally.
 
-## 疑難排解
+## Troubleshooting
 
 - **找不到 CLI**：將 `command` 設為完整路徑。
 - **模型名稱錯誤**：使用 `modelAliases` 將 `provider/model` 對應到 CLI 模型。

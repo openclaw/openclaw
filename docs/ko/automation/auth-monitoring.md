@@ -4,13 +4,6 @@ read_when:
   - 인증 만료 모니터링 또는 알림을 설정할 때
   - Claude Code / Codex OAuth 갱신 확인을 자동화할 때
 title: "인증 모니터링"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:38Z
 ---
 
 # 인증 모니터링

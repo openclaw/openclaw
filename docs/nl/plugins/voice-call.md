@@ -4,13 +4,6 @@ read_when:
   - Je wilt een uitgaand spraakgesprek plaatsen vanuit OpenClaw
   - Je bent de voice-call plugin aan het configureren of ontwikkelen
 title: "Voice Call-plugin"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:41Z
 ---
 
 # Voice Call (plugin)
@@ -238,7 +231,7 @@ Alleen het OpenAI-model voor gesprekken overschrijven (deep‑merge-voorbeeld):
 }
 ```
 
-## Inkomende gesprekken
+## Inkomende oproepen
 
 Het inkomende beleid staat standaard op `disabled`. Om inkomende gesprekken in te schakelen, stel in:
 

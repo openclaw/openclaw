@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "OpenResponses Gateway-plan"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:20Z
 ---
 
 # OpenResponses Gateway-integrationsplan
@@ -20,9 +13,9 @@ x-i18n:
 OpenClaw Gateway eksponerer i øjeblikket et minimalt OpenAI-kompatibelt Chat Completions-endpoint på
 `/v1/chat/completions` (se [OpenAI Chat Completions](/gateway/openai-http-api)).
 
-Open Responses er en åben inferensstandard baseret på OpenAI Responses API. Den er designet
-til agentiske workflows og bruger item-baserede input samt semantiske streaming-events. OpenResponses-
-specifikationen definerer `/v1/responses`, ikke `/v1/chat/completions`.
+Åbne svar er en åben inferens standard baseret på OpenAI svar API. Det er designet
+til agentiske arbejdsgange og bruger item-baserede input plus semantiske streaming begivenheder. OpenResponses
+spec definerer `/v1/responses`, ikke `/v1/chat/completions`.
 
 ## Goals
 

@@ -5,13 +5,6 @@ read_when:
   - Nagde-debug ka ng local vs tailnet access o pairing
   - Gusto mo ang kanonikal na listahan ng mga networking docs
 title: "Network"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Network hub

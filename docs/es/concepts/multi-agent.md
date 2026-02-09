@@ -3,13 +3,6 @@ summary: "Enrutamiento multiagente: agentes aislados, cuentas de canal y enlaces
 title: Enrutamiento multiagente
 read_when: "Quiere múltiples agentes aislados (espacios de trabajo + autenticación) en un solo proceso de Gateway."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:22Z
 ---
 
 # Enrutamiento multiagente

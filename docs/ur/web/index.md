@@ -4,13 +4,6 @@ read_when:
   - آپ Tailscale کے ذریعے Gateway تک رسائی چاہتے ہیں
   - آپ براؤزر کنٹرول UI اور کنفیگ ایڈیٹنگ چاہتے ہیں
 title: "ویب"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:47Z
 ---
 
 # ویب (Gateway)
@@ -20,17 +13,17 @@ Gateway، Gateway WebSocket کے اسی پورٹ سے ایک چھوٹا **برا
 - بطورِ طے شدہ: `http://<host>:18789/`
 - اختیاری سابقہ: `gateway.controlUi.basePath` سیٹ کریں (مثلاً `/openclaw`)
 
-صلاحیتیں [کنٹرول UI](/web/control-ui) میں موجود ہیں۔
-یہ صفحہ بائنڈ موڈز، سکیورٹی، اور ویب پر سامنے آنے والی سطحوں پر توجہ دیتا ہے۔
+صلاحیتیں [Control UI](/web/control-ui) میں موجود ہیں۔
+یہ صفحہ bind موڈز، سیکیورٹی، اور ویب پر ظاہر ہونے والی سرفیسز پر توجہ دیتا ہے۔
 
 ## ویب ہُکس
 
-جب `hooks.enabled=true` ہو، تو Gateway اسی HTTP سرور پر ایک چھوٹا ویب ہُک اینڈپوائنٹ بھی فراہم کرتا ہے۔
-تصدیق اور پےلوڈز کے لیے [Gateway کنفیگریشن](/gateway/configuration) → `hooks` دیکھیں۔
+جب `hooks.enabled=true` ہو تو Gateway اسی HTTP سرور پر ایک چھوٹا webhook endpoint بھی فراہم کرتا ہے۔
+تصدیق اور payloads کے لیے [Gateway configuration](/gateway/configuration) → `hooks` دیکھیں۔
 
 ## کنفیگ (بطورِ طے شدہ فعال)
 
-کنٹرول UI بطورِ طے شدہ **فعال** ہوتا ہے جب اثاثے موجود ہوں (`dist/control-ui`)۔
+جب assets موجود ہوں (`dist/control-ui`) تو Control UI **بطورِ ڈیفالٹ فعال** ہوتا ہے۔
 آپ اسے کنفیگ کے ذریعے کنٹرول کر سکتے ہیں:
 
 ```json5
@@ -108,9 +101,7 @@ openclaw gateway
 - UI `connect.params.auth.token` یا `connect.params.auth.password` بھیجتا ہے۔
 - کنٹرول UI اینٹی کلک جیکنگ ہیڈرز بھیجتا ہے اور صرف same-origin براؤزر
   WebSocket کنکشنز قبول کرتا ہے، الا یہ کہ `gateway.controlUi.allowedOrigins` سیٹ ہو۔
-- Serve کے ساتھ، Tailscale شناختی ہیڈرز اس وقت تصدیق پوری کر سکتے ہیں جب
-  `gateway.auth.allowTailscale`، `true` ہو (ٹوکن/پاس ورڈ درکار نہیں)۔ واضح اسناد لازم کرنے کے لیے
-  `gateway.auth.allowTailscale: false` سیٹ کریں۔ [Tailscale](/gateway/tailscale) اور [سکیورٹی](/gateway/security) دیکھیں۔
+- Serve کے ساتھ، جب `gateway.auth.allowTailscale` `true` ہو تو Tailscale شناختی ہیڈرز تصدیق کو پورا کر سکتے ہیں (token/password درکار نہیں)۔ واضح اسناد کی ضرورت کے لیے `gateway.auth.allowTailscale: false` سیٹ کریں۔ [Tailscale](/gateway/tailscale) اور [Security](/gateway/security) دیکھیں۔
 - `gateway.tailscale.mode: "funnel"` کے لیے `gateway.auth.mode: "password"` (مشترکہ پاس ورڈ) درکار ہے۔
 
 ## UI بنانا

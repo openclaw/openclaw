@@ -3,21 +3,16 @@ summary: "Mga TypeBox schema bilang iisang pinanggagalingan ng katotohanan para 
 read_when:
   - Pag-a-update ng mga protocol schema o codegen
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:30Z
 ---
 
 # TypeBox bilang pinagmumulan ng katotohanan ng protocol
 
 Huling na-update: 2026-01-10
 
-Ang TypeBox ay isang TypeScript-first na schema library. Ginagamit namin ito para tukuyin ang **Gateway
-WebSocket protocol** (handshake, request/response, mga event ng server). Ang mga schema na iyon ang nagtutulak ng **runtime validation**, **JSON Schema export**, at **Swift codegen** para sa macOS app. Isang pinagmumulan ng katotohanan; lahat ng iba pa ay generated.
+TypeBox is a TypeScript-first schema library. We use it to define the **Gateway
+WebSocket protocol** (handshake, request/response, server events). Those schemas
+drive **runtime validation**, **JSON Schema export**, and **Swift codegen** for
+the macOS app. One source of truth; everything else is generated.
 
 Kung gusto mo ang mas mataas na antas na konteksto ng protocol, magsimula sa
 [Gateway architecture](/concepts/architecture).
@@ -30,8 +25,8 @@ Bawat Gateway WS message ay isa sa tatlong frame:
 - **Response**: `{ type: "res", id, ok, payload | error }`
 - **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
 
-Ang unang frame **dapat** ay isang `connect` request. Pagkatapos nito, puwedeng tumawag ang mga client ng
-mga method (hal. `health`, `send`, `chat.send`) at mag-subscribe sa mga event (hal.
+The first frame **must** be a `connect` request. After that, clients can call
+methods (e.g. `health`, `send`, `chat.send`) and subscribe to events (e.g.
 `presence`, `tick`, `agent`).
 
 Daloy ng koneksyon (minimal):
@@ -78,7 +73,8 @@ Ang awtoritatibong listahan ay nasa `src/gateway/server.ts` (`METHODS`, `EVENTS`
 
 ## Paano ginagamit ang mga schema sa runtime
 
-- **Server side**: bawat inbound frame ay vine-validate gamit ang AJV. Ang handshake ay tumatanggap lamang ng `connect` request na ang params ay tumutugma sa `ConnectParams`.
+- **Server side**: every inbound frame is validated with AJV. The handshake only
+  accepts a `connect` request whose params match `ConnectParams`.
 - **Client side**: ang JS client ay vine-validate ang mga event at response frame bago gamitin ang mga ito.
 - **Method surface**: ina-advertise ng Gateway ang suportadong `methods` at `events` sa `hello-ok`.
 
@@ -279,8 +275,8 @@ Ang mga hindi kilalang frame type ay pinapanatili bilang raw payloads para sa fo
 
 ## Live schema JSON
 
-Ang generated JSON Schema ay nasa repo sa `dist/protocol.schema.json`. Ang
-na-publish na raw file ay karaniwang available sa:
+Generated JSON Schema is in the repo at `dist/protocol.schema.json`. The
+published raw file is typically available at:
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 

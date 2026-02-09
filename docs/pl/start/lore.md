@@ -1,15 +1,8 @@
 ---
-summary: „Historia i lore OpenClaw dla kontekstu i tonu”
+summary: "„Historia i lore OpenClaw dla kontekstu i tonu”"
 read_when:
   - Pisanie dokumentacji lub treści UX, które odwołują się do lore
-title: „Lore OpenClaw”
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:59Z
+title: "„Lore OpenClaw”"
 ---
 
 # Lore OpenClaw 🦞📖
@@ -50,7 +43,7 @@ OpenClaw = OPEN + CLAW
         = Your assistant. Your machine. Your rules.
 ```
 
-## Dalekowie kontra Homary
+## Daleks vs Lobstry
 
 Dalekowie mówią: **„EXTERMINATE!”**
 
@@ -167,7 +160,7 @@ Peter: _nerwowo sprawdza dostęp do karty kredytowej_
 - **AGENTS.md** — instrukcje operacyjne
 - **USER.md** — kontekst dotyczący twórcy
 
-## Credo homara
+## Lobster Utworzony
 
 ```
 I am Molty.
@@ -191,7 +184,7 @@ Nastąpiło 20+ iteracji:
 - Homar Krogan z Mass Effect
 - „STARCLAW SOLUTIONS” (AI wymyśliła firmę)
 - Wiele przeklętych homarów z ludzką twarzą
-- Małe homary (za słodkie)
+- Małe homary (zbyt słodkie)
 - Homary-barmani z szelkami
 
 Społeczność obserwowała z przerażeniem i zachwytem, jak każda generacja przynosiła coś nowego i nieoczekiwanego. Wyłonili się faworyci: urocze homary, pewne siebie technologiczne homary oraz barmani w szelkach.

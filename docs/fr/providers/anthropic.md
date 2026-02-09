@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez utiliser des modeles Anthropic dans OpenClaw
   - Vous souhaitez utiliser un setup-token au lieu de cles API
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: 5e50b3bca35be37e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:30Z
 ---
 
 # Anthropic (Claude)
@@ -50,11 +43,11 @@ OpenClaw prend en charge la fonctionnalite de mise en cache des prompts d’Anth
 
 Utilisez le parametre `cacheRetention` dans la configuration de votre modele :
 
-| Valeur  | Duree du cache | Description                                           |
-| ------- | -------------- | ----------------------------------------------------- |
-| `none`  | Pas de cache   | Desactiver la mise en cache des prompts               |
-| `short` | 5 minutes      | Valeur par defaut pour l’authentification par cle API |
-| `long`  | 1 heure        | Cache etendu (necessite le drapeau beta)              |
+| Valeur  | Duree du cache | Description                                                 |
+| ------- | -------------- | ----------------------------------------------------------- |
+| `none`  | Pas de cache   | Desactiver la mise en cache des prompts                     |
+| `short` | 5 minutes      | Valeur par defaut pour l’authentification par cle API       |
+| `long`  | 1 heure        | Cache etendu (necessite le drapeau beta) |
 
 ```json5
 {
@@ -70,7 +63,7 @@ Utilisez le parametre `cacheRetention` dans la configuration de votre modele :
 }
 ```
 
-### Valeurs par defaut
+### Valeurs par défaut
 
 Lors de l’utilisation de l’authentification par cle API Anthropic, OpenClaw applique automatiquement `cacheRetention: "short"` (cache de 5 minutes) a tous les modeles Anthropic. Vous pouvez remplacer ce comportement en definissant explicitement `cacheRetention` dans votre configuration.
 
@@ -117,7 +110,7 @@ openclaw models auth paste-token --provider anthropic
 openclaw onboard --auth-choice setup-token
 ```
 
-### Extrait de configuration
+### Configuration du snippet (setup-token)
 
 ```json5
 {
@@ -131,7 +124,7 @@ openclaw onboard --auth-choice setup-token
 - Si vous voyez « OAuth token refresh failed … » avec un abonnement Claude, re-authentifiez-vous avec un setup-token. Voir [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - Les details d’authentification et les regles de reutilisation sont decrits dans [/concepts/oauth](/concepts/oauth).
 
-## Depannage
+## Problemes courants
 
 **Erreurs 401 / token soudainement invalide**
 

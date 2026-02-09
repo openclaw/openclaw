@@ -3,20 +3,13 @@ summary: "Chạy trực tiếp CLI `openclaw agent` (có tùy chọn gửi kết
 read_when:
   - Thêm hoặc chỉnh sửa điểm vào CLI của agent
 title: "Gửi Agent"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:18Z
 ---
 
 # `openclaw agent` (chạy agent trực tiếp)
 
-`openclaw agent` chạy một lượt agent đơn lẻ mà không cần tin nhắn chat đầu vào.
-Theo mặc định, lệnh đi **qua Gateway (cổng kết nối)**; thêm `--local` để buộc
-runtime nhúng trên máy hiện tại.
+`openclaw agent` runs a single agent turn without needing an inbound chat message.
+By default it goes **through the Gateway**; add `--local` to force the embedded
+runtime on the current machine.
 
 ## Hành vi
 

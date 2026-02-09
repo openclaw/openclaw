@@ -1,25 +1,18 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:35Z
 ---
 
 # Fly.io 部署
 
 **目標：** 在 [Fly.io](https://fly.io) 的機器上執行 OpenClaw Gateway 閘道器，具備持久化儲存、自動 HTTPS，以及 Discord／頻道存取。
 
-## 你需要準備的項目
+## What you need
 
 - 已安裝 [flyctl CLI](https://fly.io/docs/hands-on/install-flyctl/)
 - Fly.io 帳戶（免費方案即可）
 - 模型身分驗證：Anthropic API 金鑰（或其他提供者金鑰）
-- 頻道憑證：Discord 機器人權杖、Telegram 權杖等
+- Channel credentials: Discord bot token, Telegram token, etc.
 
 ## 新手快速路徑
 
@@ -42,13 +35,13 @@ fly apps create my-openclaw
 fly volumes create openclaw_data --size 1 --region iad
 ```
 
-**提示：** 選擇離你最近的區域。常見選項：`lhr`（London）、`iad`（Virginia）、`sjc`（San Jose）。
+**Tip:** Choose a region close to you. Common options: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) 設定 fly.toml
+## 2. 設定 fly.toml
 
 編輯 `fly.toml` 以符合你的 app 名稱與需求。
 
-**安全性注意事項：** 預設設定會暴露公開 URL。若要進行沒有公開 IP 的強化部署，請參考 [Private Deployment](#private-deployment-hardened) 或使用 `fly.private.toml`。
+**Security note:** The default config exposes a public URL. **安全性注意事項：** 預設設定會暴露公開 URL。若要進行沒有公開 IP 的強化部署，請參考 [Private Deployment](#private-deployment-hardened) 或使用 `fly.private.toml`。
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **關鍵設定：**
 
-| 設定                           | 原因                                                                        |
-| ------------------------------ | --------------------------------------------------------------------------- |
-| `--bind lan`                   | 綁定至 `0.0.0.0`，讓 Fly 的 proxy 能夠連線到 Gateway 閘道器                 |
-| `--allow-unconfigured`         | 在沒有設定檔的情況下啟動（之後你會建立）                                    |
+| 設定                             | 原因                                                          |
+| ------------------------------ | ----------------------------------------------------------- |
+| `--bind lan`                   | 綁定至 `0.0.0.0`，讓 Fly 的 proxy 能夠連線到 Gateway 閘道器               |
+| `--allow-unconfigured`         | 在沒有設定檔的情況下啟動（之後你會建立）                                        |
 | `internal_port = 3000`         | 必須與 `--port 3000`（或 `OPENCLAW_GATEWAY_PORT`）相符，供 Fly 健康檢查使用 |
-| `memory = "2048mb"`            | 512MB 太小；建議 2GB                                                        |
-| `OPENCLAW_STATE_DIR = "/data"` | 在 volume 上持久化狀態                                                      |
+| `memory = "2048mb"`            | 512MB 太小；建議 2GB                                             |
+| `OPENCLAW_STATE_DIR = "/data"` | 在 volume 上持久化狀態                                             |
 
-## 3) 設定 secrets
+## 3. 設定 secrets
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -113,16 +106,16 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 **注意事項：**
 
 - 非 loopback 綁定（`--bind lan`）為了安全性需要 `OPENCLAW_GATEWAY_TOKEN`。
-- 將這些權杖視同密碼。
-- **所有 API 金鑰與權杖請優先使用環境變數**，而非設定檔。這可避免 secrets 出現在 `openclaw.json` 中而被意外暴露或記錄。
+- Treat these tokens like passwords.
+- **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
 
-## 4) 部署
+## 4. 部署
 
 ```bash
 fly deploy
 ```
 
-第一次部署會建置 Docker 映像（約 2–3 分鐘）。後續部署會更快。
+第一次部署會建置 Docker 映像（約 2–3 分鐘）。後續部署會更快。 Subsequent deploys are faster.
 
 部署後，請驗證：
 
@@ -138,7 +131,7 @@ fly logs
 [discord] logged in to discord as xxx
 ```
 
-## 5) 建立設定檔
+## 5. 建立設定檔
 
 透過 SSH 進入機器以建立正式的設定檔：
 
@@ -209,7 +202,7 @@ EOF
 - 環境變數：`DISCORD_BOT_TOKEN`（建議用於 secrets）
 - 設定檔：`channels.discord.token`
 
-若使用環境變數，則無需在設定檔中加入權杖。Gateway 閘道器會自動讀取 `DISCORD_BOT_TOKEN`。
+If using env var, no need to add token to config. 閘道會自動讀取 `DISCORD_BOT_TOKEN`。
 
 重新啟動以套用：
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) 存取 Gateway 閘道器
+## 6. 存取 Gateway 閘道器
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Fly 無法透過設定的連接埠連到 Gateway 閘道器。
 
 ### OOM／記憶體問題
 
-容器持續重新啟動或被終止。徵兆：`SIGABRT`、`v8::internal::Runtime_AllocateInYoungGeneration`，或無聲重新啟動。
+Container keeps restarting or getting killed. 容器持續重新啟動或被終止。徵兆：`SIGABRT`、`v8::internal::Runtime_AllocateInYoungGeneration`，或無聲重新啟動。
 
 **修正：** 在 `fly.toml` 中提高記憶體：
 
@@ -276,7 +269,7 @@ Fly 無法透過設定的連接埠連到 Gateway 閘道器。
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**注意：** 512MB 太小。1GB 可能可用，但在負載或詳細記錄下可能 OOM。**建議 2GB。**
+**注意：** 512MB 太小。1GB 可能可用，但在負載或詳細記錄下可能 OOM。**建議 2GB。** 25. 1GB 可能可行，但在高負載或詳細記錄日誌時可能會發生 OOM。 **建議使用 2GB。**
 
 ### Gateway 鎖定問題
 
@@ -295,7 +288,7 @@ fly machine restart <machine-id>
 
 ### 設定未被讀取
 
-若使用 `--allow-unconfigured`，Gateway 閘道器會建立最小設定。你在 `/data/openclaw.json` 的自訂設定應在重新啟動後被讀取。
+如果使用 `--allow-unconfigured`，閘道會建立最小設定。 若使用 `--allow-unconfigured`，Gateway 閘道器會建立最小設定。你在 `/data/openclaw.json` 的自訂設定應在重新啟動後被讀取。
 
 請確認設定存在：
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### 透過 SSH 寫入設定
 
-`fly ssh console -C` 指令不支援 shell 重新導向。要寫入設定檔：
+`fly ssh console -C` 指令不支援 shell 重新導向。要寫入設定檔： 28. 要寫入設定檔：
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -316,7 +309,7 @@ fly sftp shell
 > put /local/path/config.json /data/openclaw.json
 ```
 
-**注意：** 若檔案已存在，`fly sftp` 可能失敗。請先刪除：
+**注意：** 若檔案已存在，`fly sftp` 可能失敗。請先刪除： 29. 請先刪除：
 
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
@@ -324,7 +317,7 @@ fly ssh console --command "rm /data/openclaw.json"
 
 ### 狀態未持久化
 
-若重新啟動後遺失憑證或工作階段，表示狀態目錄寫入了容器檔案系統。
+31. 若在重新啟動後遺失憑證或工作階段，表示狀態目錄正在寫入容器的檔案系統。
 
 **修正：** 確保在 `fly.toml` 中設定 `OPENCLAW_STATE_DIR=/data`，然後重新部署。
 
@@ -357,13 +350,13 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**注意：** 在 `fly deploy` 之後，機器命令可能會重設為 `fly.toml` 中的內容。若你做過手動變更，請在部署後重新套用。
+**注意：** 在 `fly deploy` 之後，機器命令可能會重設為 `fly.toml` 中的內容。若你做過手動變更，請在部署後重新套用。 32. 若你進行過手動變更，請在部署後重新套用。
 
 ## 私有部署（強化）
 
-預設情況下，Fly 會配置公開 IP，使你的 Gateway 閘道器可透過 `https://your-app.fly.dev` 存取。這很方便，但代表你的部署可被網際網路掃描器（Shodan、Censys 等）發現。
+預設情況下，Fly 會配置公開 IP，使你的 Gateway 閘道器可透過 `https://your-app.fly.dev` 存取。這很方便，但代表你的部署可被網際網路掃描器（Shodan、Censys 等）發現。 34. 這很方便，但代表你的部署可被網路掃描器（Shodan、Censys 等）發現。
 
-若要 **完全不對外公開** 的強化部署，請使用私有範本。
+35. 若要進行 **無任何公開暴露** 的強化部署，請使用私有範本。
 
 ### 何時使用私有部署
 
@@ -435,9 +428,9 @@ fly wireguard create
 fly ssh console -a my-openclaw
 ```
 
-### 私有部署的 Webhook
+### 36. 私有部署的 Webhooks
 
-若需要 webhook 回呼（Twilio、Telnyx 等）且不想對外公開：
+若需要 webhook 回呼（Twilio、Telnyx 等）且不想對外公開： 37. 在沒有公開暴露的情況下：
 
 1. **ngrok 通道**－在容器內或以 sidecar 執行 ngrok
 2. **Tailscale Funnel**－透過 Tailscale 暴露特定路徑
@@ -464,16 +457,16 @@ fly ssh console -a my-openclaw
 }
 ```
 
-ngrok 通道在容器內執行，並提供公開的 webhook URL，而不會暴露 Fly app 本身。請將 `webhookSecurity.allowedHosts` 設為公開通道的主機名稱，以便接受轉送的 Host 標頭。
+ngrok 通道在容器內執行，並提供公開的 webhook URL，而不會暴露 Fly app 本身。請將 `webhookSecurity.allowedHosts` 設為公開通道的主機名稱，以便接受轉送的 Host 標頭。 38. 將 `webhookSecurity.allowedHosts` 設為公開通道的主機名稱，以便接受轉送的 host header。
 
 ### 安全性效益
 
-| 面向            | 公開     | 私有       |
-| --------------- | -------- | ---------- |
-| 網際網路掃描器  | 可被發現 | 隱藏       |
-| 直接攻擊        | 可能     | 被阻擋     |
-| Control UI 存取 | 瀏覽器   | Proxy／VPN |
-| Webhook 傳遞    | 直接     | 透過通道   |
+| 面向            | 公開   | 私有        |
+| ------------- | ---- | --------- |
+| 網際網路掃描器       | 可被發現 | 隱藏        |
+| 直接攻擊          | 可能   | 被阻擋       |
+| Control UI 存取 | 瀏覽器  | Proxy／VPN |
+| Webhook 傳遞    | 直接   | 透過通道      |
 
 ## 注意事項
 

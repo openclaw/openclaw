@@ -5,13 +5,6 @@ read_when:
   - Je wilt logniveaus of -formaten configureren
   - Je bent problemen aan het oplossen en wilt logs snel vinden
 title: "Logging"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:49Z
 ---
 
 # Logging
@@ -214,7 +207,7 @@ Flags zijn hoofdletterongevoelig en ondersteunen wildcards (bijv. `telegram.*` o
 }
 ```
 
-Omgevingsoverride (eenmalig):
+Env-override (eenmalig):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

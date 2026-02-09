@@ -5,13 +5,6 @@ read_when:
   - Je hebt een Brave Search API-sleutel nodig
   - Je wilt Perplexity Sonar gebruiken voor webzoekopdrachten
 title: "Webtools"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
 ---
 
 # Webtools
@@ -36,10 +29,10 @@ Dit is **geen** browserautomatisering. Voor JS-zware sites of inlogflows, gebrui
 
 ## Een zoekprovider kiezen
 
-| Provider              | Voordelen                                          | Nadelen                                   | API-sleutel                                  |
-| --------------------- | -------------------------------------------------- | ----------------------------------------- | -------------------------------------------- |
+| Provider                                 | Voordelen                                          | Nadelen                                   | API-sleutel                                  |
+| ---------------------------------------- | -------------------------------------------------- | ----------------------------------------- | -------------------------------------------- |
 | **Brave** (standaard) | Snel, gestructureerde resultaten, gratis tier      | Traditionele zoekresultaten               | `BRAVE_API_KEY`                              |
-| **Perplexity**        | AI-gesynthetiseerde antwoorden, citaties, realtime | Vereist Perplexity- of OpenRouter-toegang | `OPENROUTER_API_KEY` of `PERPLEXITY_API_KEY` |
+| **Perplexity**                           | AI-gesynthetiseerde antwoorden, citaties, realtime | Vereist Perplexity- of OpenRouter-toegang | `OPENROUTER_API_KEY` of `PERPLEXITY_API_KEY` |
 
 Zie [Brave Search setup](/brave-search) en [Perplexity Sonar](/perplexity) voor providerspecifieke details.
 
@@ -90,8 +83,7 @@ actuele limieten en prijzen.
 **Aanbevolen:** voer `openclaw configure --section web` uit. Dit slaat de sleutel op in
 `~/.openclaw/openclaw.json` onder `tools.web.search.apiKey`.
 
-**Omgevingsalternatief:** stel `BRAVE_API_KEY` in in de Gateway-procesomgeving.
-Voor een gateway-installatie, plaats dit in `~/.openclaw/.env` (of je
+**Omgevingsalternatief:** stel `BRAVE_API_KEY` in in de Gateway-procesomgeving. Voor een gateway-installatie, plaats dit in `~/.openclaw/.env` (of je
 service-omgeving). Zie [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Perplexity gebruiken (direct of via OpenRouter)
@@ -140,17 +132,17 @@ Als er geen base-URL is ingesteld, kiest OpenClaw een standaard op basis van de 
 
 ### Beschikbare Perplexity-modellen
 
-| Model                              | Beschrijving                              | Beste voor            |
-| ---------------------------------- | ----------------------------------------- | --------------------- |
-| `perplexity/sonar`                 | Snelle Q&A met webzoekopdrachten          | Snelle zoekopdrachten |
-| `perplexity/sonar-pro` (standaard) | Meertraps redeneren met webzoekopdrachten | Complexe vragen       |
-| `perplexity/sonar-reasoning-pro`   | Chain-of-thought-analyse                  | Diepgaand onderzoek   |
+| Model                                                 | Beschrijving                                         | Beste voor            |
+| ----------------------------------------------------- | ---------------------------------------------------- | --------------------- |
+| `perplexity/sonar`                                    | Snelle Q&A met webzoekopdrachten | Snelle zoekopdrachten |
+| `perplexity/sonar-pro` (standaard) | Meertraps redeneren met webzoekopdrachten            | Complexe vragen       |
+| `perplexity/sonar-reasoning-pro`                      | Chain-of-thought-analyse                             | Diepgaand onderzoek   |
 
 ## web_search
 
 Zoek op het web met je geconfigureerde provider.
 
-### Vereisten
+### Provideropties
 
 - `tools.web.search.enabled` mag niet `false` zijn (standaard: ingeschakeld)
 - API-sleutel voor je gekozen provider:

@@ -3,13 +3,6 @@ summary: "채팅을 위한 세션 관리 규칙, 키, 그리고 영속성"
 read_when:
   - 세션 처리 또는 저장을 수정할 때
 title: "세션 관리"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:05Z
 ---
 
 # 세션 관리
@@ -62,12 +55,12 @@ OpenClaw 는 **에이전트당 하나의 다이렉트 채팅 세션**을 기본�
 
 ## Gateway(게이트웨이)가 단일 진실 원본입니다
 
-모든 세션 상태는 **게이트웨이**(“마스터” OpenClaw)가 **소유**합니다. UI 클라이언트(macOS 앱, WebChat 등)는 로컬 파일을 읽는 대신, 세션 목록과 토큰 수를 게이트웨이에 질의해야 합니다.
+모든 세션 상태는 **게이트웨이**(“마스터” OpenClaw)가 **소유**합니다. UI 클라이언트(macOS 앱, WebChat 등) UI 클라이언트(macOS 앱, WebChat 등)는 로컬 파일을 읽는 대신, 세션 목록과 토큰 수를 게이트웨이에 질의해야 합니다.
 
 - **원격 모드**에서는 관심 있는 세션 저장소가 Mac 이 아니라 원격 게이트웨이 호스트에 있습니다.
 - UI 에 표시되는 토큰 수는 게이트웨이 저장소 필드(`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`)에서 가져옵니다. 클라이언트는 JSONL 트랜스크립트를 파싱하여 합계를 “보정”하지 않습니다.
 
-## 상태가 저장되는 위치
+## 상태 저장 위치
 
 - **게이트웨이 호스트**:
   - 저장 파일: `~/.openclaw/agents/<agentId>/sessions/sessions.json` (에이전트별).
@@ -204,8 +197,7 @@ OpenClaw 는 기본적으로 LLM 호출 직전에 인메모리 컨텍스트에�
 - `threadId`: 채널이 지원하는 경우의 스레드/토픽 id
   출처 필드는 다이렉트 메시지, 채널, 그룹에 대해 채워집니다. 커넥터가
   전달 라우팅만 업데이트하는 경우(예: DM 메인 세션을 최신 상태로 유지하기 위해)
-  에도 세션이 설명 메타데이터를 유지하도록 인바운드 컨텍스트를 제공해야 합니다.
-  확장은 인바운드 컨텍스트에 `ConversationLabel`,
+  에도 세션이 설명 메타데이터를 유지하도록 인바운드 컨텍스트를 제공해야 합니다. 확장은 인바운드 컨텍스트에 `ConversationLabel`,
   `GroupSubject`, `GroupChannel`, `GroupSpace`, `SenderName` 를 보내고
   `recordSessionMetaFromInbound` 을(를) 호출하거나(또는 동일한 컨텍스트를
   `updateLastRoute` 에 전달) 이를 수행할 수 있습니다.

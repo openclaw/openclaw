@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Cron Add सुदृढ़ीकरण"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:16Z
 ---
 
 # Cron Add सुदृढ़ीकरण एवं स्कीमा संरेखण
 
 ## संदर्भ
 
-हाल के Gateway लॉग में अमान्य पैरामीटरों (गायब `sessionTarget`, `wakeMode`, `payload`, और विकृत `schedule`) के साथ बार-बार `cron.add` विफलताएँ दिख रही हैं। यह दर्शाता है कि कम-से-कम एक क्लाइंट (संभवतः एजेंट टूल कॉल पाथ) रैप किए हुए या आंशिक रूप से निर्दिष्ट जॉब पेलोड भेज रहा है। अलग से, TypeScript, Gateway स्कीमा, CLI फ़्लैग्स, और UI फ़ॉर्म टाइप्स में cron प्रदाता enums के बीच असंगति है, साथ ही `cron.status` के लिए UI मिसमैच भी है (UI `jobCount` की अपेक्षा करता है जबकि Gateway `jobs` लौटाता है)।
+29. हाल के gateway logs में invalid parameters (missing `sessionTarget`, `wakeMode`, `payload`, और malformed `schedule`) के साथ बार‑बार `cron.add` failures दिखाई दे रहे हैं। 30. यह संकेत देता है कि कम से कम एक client (संभवतः agent tool call path) wrapped या आंशिक रूप से निर्दिष्ट job payloads भेज रहा है। 31. अलग से, TypeScript, gateway schema, CLI flags, और UI form types में cron provider enums के बीच drift है, साथ ही `cron.status` के लिए UI mismatch भी है (UI `jobCount` अपेक्षित करता है जबकि gateway `jobs` लौटाता है)।
 
 ## लक्ष्य
 

@@ -1,16 +1,9 @@
 ---
 summary: "اسٹیبل، بیٹا، اور ڈیو چینلز: معنیات، سوئچنگ، اور ٹیگنگ"
 read_when:
-  - "آپ اسٹیبل/بیٹا/ڈیو کے درمیان سوئچ کرنا چاہتے ہیں"
-  - "آپ پری ریلیزز کو ٹیگ یا شائع کر رہے ہیں"
+  - آپ اسٹیبل/بیٹا/ڈیو کے درمیان سوئچ کرنا چاہتے ہیں
+  - آپ پری ریلیزز کو ٹیگ یا شائع کر رہے ہیں
 title: "Development Channels"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:23Z
 ---
 
 # Development channels
@@ -21,7 +14,7 @@ OpenClaw تین اپڈیٹ چینلز فراہم کرتا ہے:
 
 - **stable**: npm dist-tag `latest`۔
 - **beta**: npm dist-tag `beta` (زیرِ آزمائش بلڈز)۔
-- **dev**: `main` (git) کی متحرک ہیڈ۔ npm dist-tag: `dev` (جب شائع کیا جائے)۔
+- **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
 
 ہم بلڈز کو **beta** پر بھیجتے ہیں، ان کی جانچ کرتے ہیں، پھر **جانچ شدہ بلڈ کو `latest` پر ترقی دیتے ہیں**
 بغیر ورژن نمبر بدلے — npm انسٹالز کے لیے dist-tags ہی واحد ماخذِ حقیقت ہیں۔
@@ -76,7 +69,7 @@ openclaw update --channel dev
 
 ## macOS app availability
 
-بیٹا اور ڈیو بلڈز میں **macOS ایپ ریلیز شامل نہ بھی ہو سکتی ہے**۔ یہ ٹھیک ہے:
+Beta and dev builds may **not** include a macOS app release. That’s OK:
 
 - git ٹیگ اور npm dist-tag پھر بھی شائع کیے جا سکتے ہیں۔
 - ریلیز نوٹس یا چینج لاگ میں “اس بیٹا کے لیے macOS بلڈ نہیں” کی وضاحت کریں۔

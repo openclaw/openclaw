@@ -1,17 +1,10 @@
 ---
-summary: „Integrierter Browsersteuerungsdienst + Aktionsbefehle“
+summary: "„Integrierter Browsersteuerungsdienst + Aktionsbefehle“"
 read_when:
   - Hinzufügen agentengesteuerter Browserautomatisierung
   - Debuggen, warum OpenClaw mit Ihrem eigenen Chrome interferiert
   - Implementieren von Browsereinstellungen und -lebenszyklus in der macOS-App
-title: „Browser (OpenClaw-verwaltet)“
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:08Z
+title: "„Browser (OpenClaw-verwaltet)“"
 ---
 
 # Browser (openclaw-verwaltet)
@@ -196,7 +189,7 @@ Hinweise:
 
 ## Sicherheit
 
-Kernideen:
+Schlüsselideen:
 
 - Die Browsersteuerung ist ausschließlich Loopback; der Zugriff erfolgt über die Authentifizierung des Gateway oder die Node-Paarung.
 - Halten Sie das Gateway und alle Node-Hosts in einem privaten Netzwerk (Tailscale); vermeiden Sie öffentliche Exposition.
@@ -343,8 +336,7 @@ docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-Um Browser-Downloads zu persistieren, setzen Sie `PLAYWRIGHT_BROWSERS_PATH` (z. B.
-`/home/node/.cache/ms-playwright`) und stellen Sie sicher, dass `/home/node` über
+Um Browser-Downloads zu persistieren, setzen Sie `PLAYWRIGHT_BROWSERS_PATH` (z. B. `/home/node/.cache/ms-playwright`) und stellen Sie sicher, dass `/home/node` über
 `OPENCLAW_HOME_VOLUME` oder ein Bind-Mount persistiert wird. Siehe [Docker](/install/docker).
 
 ## Funktionsweise (intern)
@@ -550,8 +542,7 @@ Diese sind nützlich für Workflows nach dem Muster „die Seite soll sich wie X
 
 - Das openclaw-Browserprofil kann eingeloggte Sitzungen enthalten; behandeln Sie es als sensibel.
 - `browser act kind=evaluate` / `openclaw browser evaluate` und `wait --fn`
-  führen beliebiges JavaScript im Seitenkontext aus. Prompt-Injection kann dies steuern.
-  Deaktivieren Sie es mit `browser.evaluateEnabled=false`, wenn Sie es nicht benötigen.
+  führen beliebiges JavaScript im Seitenkontext aus. Prompt-Injection kann dies steuern. Deaktivieren Sie es mit `browser.evaluateEnabled=false`, wenn Sie es nicht benötigen.
 - Hinweise zu Logins und Anti-Bot-Themen (X/Twitter usw.) finden Sie unter [Browser login + X/Twitter posting](/tools/browser-login).
 - Halten Sie Gateway/Node-Host privat (Loopback oder nur Tailnet).
 - Remote-CDP-Endpunkte sind mächtig; tunneln und schützen Sie sie.
@@ -567,7 +558,7 @@ Der Agent erhält **ein Werkzeug** für Browserautomatisierung:
 
 - `browser` — Status/Start/Stopp/Tabs/Öffnen/Fokussieren/Schließen/Snapshot/Screenshot/Navigation/Aktion
 
-Abbildung:
+Wie es kartiert:
 
 - `browser snapshot` gibt eine stabile UI-Struktur zurück (AI oder ARIA).
 - `browser act` verwendet die Snapshot-`ref`-IDs zum Klicken/Tippen/Ziehen/Auswählen.

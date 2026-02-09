@@ -4,19 +4,12 @@ read_when:
   - Bạn muốn sử dụng Synthetic làm nhà cung cấp mô hình
   - Bạn cần thiết lập khóa API hoặc base URL của Synthetic
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:00Z
 ---
 
 # Synthetic
 
-Synthetic cung cấp các endpoint tương thích Anthropic. OpenClaw đăng ký nó là nhà cung cấp
-`synthetic` và sử dụng Anthropic Messages API.
+Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
+`synthetic` provider and uses the Anthropic Messages API.
 
 ## Thiết lập nhanh
 
@@ -68,9 +61,8 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-Lưu ý: Ứng dụng khách Anthropic của OpenClaw sẽ thêm `/v1` vào base URL, vì vậy hãy dùng
-`https://api.synthetic.new/anthropic` (không phải `/anthropic/v1`). Nếu Synthetic thay đổi
-base URL, hãy ghi đè `models.providers.synthetic.baseUrl`.
+29. Lưu ý: Ứng dụng client Anthropic của OpenClaw sẽ thêm `/v1` vào base URL, vì vậy hãy dùng `https://api.synthetic.new/anthropic` (không phải `/anthropic/v1`). If Synthetic changes
+    its base URL, override `models.providers.synthetic.baseUrl`.
 
 ## Danh mục mô hình
 

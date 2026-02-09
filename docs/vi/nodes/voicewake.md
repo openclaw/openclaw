@@ -4,13 +4,6 @@ read_when:
   - Thay đổi hành vi hoặc giá trị mặc định của từ đánh thức bằng giọng nói
   - Thêm các nền tảng node mới cần đồng bộ từ đánh thức
 title: "Voice Wake"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:30Z
 ---
 
 # Voice Wake (Từ đánh thức toàn cục)
@@ -42,7 +35,7 @@ Dạng dữ liệu:
 
 Ghi chú:
 
-- Các trigger được chuẩn hóa (cắt khoảng trắng, loại bỏ chuỗi rỗng). Danh sách rỗng sẽ quay về giá trị mặc định.
+- 2. Các trigger được chuẩn hóa (cắt khoảng trắng, loại bỏ giá trị rỗng). 3. Danh sách rỗng sẽ quay về giá trị mặc định.
 - Có áp dụng giới hạn để đảm bảo an toàn (giới hạn số lượng/độ dài).
 
 ### Sự kiện

@@ -3,13 +3,6 @@ summary: "Lógica del estado de la barra de menús y lo que se muestra a los usu
 read_when:
   - Ajustando la UI del menú de mac o la lógica de estado
 title: "Barra de menús"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:09Z
 ---
 
 # Lógica del estado de la barra de menús
@@ -70,7 +63,7 @@ x-i18n:
   - `edit`: ruta más tipo de cambio inferido de `meta`/recuentos de diff.
   - respaldo: nombre de la herramienta.
 
-## Anulación de depuración
+## Debug override
 
 - Ajustes ▸ Depuración ▸ selector “Icon override”:
   - `System (auto)` (predeterminado)

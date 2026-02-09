@@ -5,22 +5,16 @@ read_when:
   - Du ändrar logik för sanering av transkript eller reparation av verktygsanrop
   - Du utreder mismatch av verktygsanrops-id mellan leverantörer
 title: "Transkripthygien"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:34Z
 ---
 
 # Transkripthygien (leverantörsfixar)
 
-Detta dokument beskriver **leverantörsspecifika korrigeringar** som tillämpas på transkript före en körning
-(uppbyggnad av modellkontext). Dessa är **minnesbaserade** justeringar som används för att uppfylla strikta
-leverantörskrav. Dessa hygienåtgärder skriver **inte** om det lagrade JSONL‑transkriptet på disk; däremot kan
-en separat reparationspass för sessionsfiler skriva om felaktiga JSONL‑filer genom att ta bort ogiltiga rader
-innan sessionen läses in. När en reparation sker säkerhetskopieras originalfilen tillsammans med sessionsfilen.
+Det här dokumentet beskriver **leverantörsspecifika rättelser** som tillämpas på avskrifter före en körning
+(bygger modellkontext). Dessa är **in-memory** justeringar som används för att uppfylla strikta
+leverantörskrav. Dessa hygiensteg skriver **inte** om den lagrade JSONL-avskriften
+på disken; Dock kan en separat session-fil reparationspass skriva om felaktigt formatterade JSONL-filer
+genom att släppa ogiltiga rader innan sessionen laddas. När en reparation sker, säkerhetskopieras den ursprungliga
+filen tillsammans med sessionsfilen.
 
 Omfattningen inkluderar:
 
@@ -67,9 +61,9 @@ Implementering:
 
 ## Global regel: felaktiga verktygsanrop
 
-Assistentens verktygsanropsblock som saknar både `input` och `arguments` tas bort
-innan modellkontexten byggs. Detta förhindrar leverantörsavvisningar från delvis
-persistenta verktygsanrop (till exempel efter ett fel på grund av hastighetsbegränsning).
+Assistant tool-call block som saknar både `input` och `arguments` släpps
+innan modellkontext byggs. Detta förhindrar leverantörsavslag från delvis
+ihållande verktygssamtal (till exempel efter ett hastighetsfel).
 
 Implementering:
 
@@ -130,6 +124,6 @@ Före version 2026.1.22 tillämpade OpenClaw flera lager av transkripthygien:
   - Borttagning av tomma assistent‑fel­turer.
   - Trimming av assistentens innehåll efter verktygsanrop.
 
-Denna komplexitet orsakade regressioner mellan leverantörer (särskilt parning av `openai-responses`
-`call_id|fc_id`). Rensningen i 2026.1.22 tog bort tillägget, centraliserade
-logiken i köraren och gjorde OpenAI till **no‑touch** utöver bildsanering.
+Denna komplexitet orsakade cross-provider regressioner (särskilt `openai-responses`
+`call_id<unk> fc_id` parning). 2026.1.22 rensningen tog bort tillägget, centraliserad
+logik i löparen och gjorde OpenAI **no-touch** bortom bildsanering.

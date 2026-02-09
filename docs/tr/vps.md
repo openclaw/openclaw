@@ -4,13 +4,6 @@ read_when:
   - Gateway'i bulutta çalıştırmak istiyorsanız
   - VPS/barındırma kılavuzlarının hızlı bir haritasına ihtiyacınız varsa
 title: "VPS Barındırma"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:47Z
 ---
 
 # VPS barındırma

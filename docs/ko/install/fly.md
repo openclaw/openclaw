@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Fly.io 에 OpenClaw 배포
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:32Z
 ---
 
 # Fly.io 배포
@@ -44,7 +37,7 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **팁:** 가까운 리전을 선택하십시오. 일반적인 옵션: `lhr` (런던), `iad` (버지니아), `sjc` (산호세).
 
-## 2) fly.toml 구성
+## 2. fly.toml 구성
 
 앱 이름과 요구 사항에 맞게 `fly.toml` 를 편집하십시오.
 
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **주요 설정:**
 
-| 설정                           | 이유                                                                             |
-| ------------------------------ | -------------------------------------------------------------------------------- |
-| `--bind lan`                   | Fly 의 프록시가 게이트웨이에 도달할 수 있도록 `0.0.0.0` 에 바인딩                |
-| `--allow-unconfigured`         | 설정 파일 없이 시작 (이후 생성)                                                  |
+| 설정                             | 이유                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| `--bind lan`                   | Fly 의 프록시가 게이트웨이에 도달할 수 있도록 `0.0.0.0` 에 바인딩                                          |
+| `--allow-unconfigured`         | 설정 파일 없이 시작 (이후 생성)                                               |
 | `internal_port = 3000`         | Fly 헬스 체크를 위해 `--port 3000` (또는 `OPENCLAW_GATEWAY_PORT`) 와 일치해야 함 |
-| `memory = "2048mb"`            | 512MB 는 너무 작음; 2GB 권장                                                     |
-| `OPENCLAW_STATE_DIR = "/data"` | 볼륨에 상태를 영구 저장                                                          |
+| `memory = "2048mb"`            | 512MB 는 너무 작음; 2GB 권장                                                                |
+| `OPENCLAW_STATE_DIR = "/data"` | 볼륨에 상태를 영구 저장                                                                        |
 
-## 3) 시크릿 설정
+## 3. 시크릿 설정
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -116,13 +109,13 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 - 이러한 토큰은 비밀번호처럼 취급하십시오.
 - **모든 API 키와 토큰은 설정 파일보다 환경 변수를 우선** 사용하십시오. 이렇게 하면 `openclaw.json` 에서 실수로 노출되거나 로그에 기록되는 것을 방지할 수 있습니다.
 
-## 4) 배포
+## 4. 배포
 
 ```bash
 fly deploy
 ```
 
-첫 배포 시 Docker 이미지가 빌드되며 (~2-3 분) 이후 배포는 더 빠릅니다.
+첫 배포 시 Docker 이미지가 빌드되며 (~2-3 분) 이후 배포는 더 빠릅니다. Subsequent deploys are faster.
 
 배포 후 다음을 확인하십시오:
 
@@ -138,7 +131,7 @@ fly logs
 [discord] logged in to discord as xxx
 ```
 
-## 5) 설정 파일 생성
+## 5. 설정 파일 생성
 
 머신에 SSH 로 접속하여 적절한 설정을 생성하십시오:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Gateway 접근
+## 6. Gateway 접근
 
 ### Control UI
 
@@ -293,7 +286,7 @@ fly machine restart <machine-id>
 
 잠금 파일은 `/data/gateway.*.lock` 에 있습니다 (하위 디렉토리 아님).
 
-### 설정이 읽히지 않는 경우
+### Config Not Being Read
 
 `--allow-unconfigured` 를 사용하는 경우 게이트웨이는 최소 설정을 생성합니다. `/data/openclaw.json` 의 사용자 지정 설정은 재시작 시 읽혀야 합니다.
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### private 배포에서의 웹훅
 
-공개 노출 없이 웹훅 콜백 (Twilio, Telnyx 등) 이 필요한 경우:
+공개 노출 없이 웹훅 콜백 (Twilio, Telnyx 등) 이 필요한 경우: without public exposure:
 
 1. **ngrok 터널** - 컨테이너 내부 또는 사이드카로 ngrok 실행
 2. **Tailscale Funnel** - Tailscale 을 통해 특정 경로 노출
@@ -468,12 +461,12 @@ ngrok 터널은 컨테이너 내부에서 실행되며 Fly 앱 자체를 노출�
 
 ### 보안 이점
 
-| 항목            | Public    | Private    |
-| --------------- | --------- | ---------- |
-| 인터넷 스캐너   | 발견 가능 | 숨김       |
-| 직접 공격       | 가능      | 차단됨     |
-| Control UI 접근 | 브라우저  | 프록시/VPN |
-| 웹훅 전달       | 직접      | 터널 경유  |
+| Aspect        | Public | Private |
+| ------------- | ------ | ------- |
+| 인터넷 스캐너       | 발견 가능  | 숨김      |
+| 직접 공격         | 가능     | 차단됨     |
+| Control UI 접근 | 브라우저   | 프록시/VPN |
+| 웹훅 전달         | 직접     | 터널 경유   |
 
 ## 참고 사항
 

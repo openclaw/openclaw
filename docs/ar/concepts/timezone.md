@@ -4,13 +4,6 @@ read_when:
   - تحتاج إلى فهم كيفية توحيد الطوابع الزمنية للنموذج
   - تهيئة المنطقة الزمنية للمستخدم في مطالبات النظام
 title: "المناطق الزمنية"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:09Z
 ---
 
 # المناطق الزمنية
@@ -69,7 +62,7 @@ x-i18n:
 
 ## حمولات الأدوات (بيانات الموفّر الخام + حقول مُوحَّدة)
 
-تعيد استدعاءات الأدوات (`channels.discord.readMessages`، `channels.slack.readMessages`، إلخ) **طوابع زمنية خام من الموفّر**.
+تعيد استدعاءات الأدوات (`channels.discord.readMessages`، `channels.slack.readMessages`، إلخ) **طوابع زمنية خام من الموفّر**. إرجاع **الطوابع الزمنية للمزود الخام**.
 كما نُرفِق حقولًا مُوحَّدة لتحقيق الاتساق:
 
 - `timestampMs` (ميلي ثانية من حقبة UTC)

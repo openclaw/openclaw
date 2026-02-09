@@ -1,15 +1,8 @@
 ---
-summary: „Wann OpenClaw Tippindikatoren anzeigt und wie Sie sie anpassen“
+summary: "„Wann OpenClaw Tippindikatoren anzeigt und wie Sie sie anpassen“"
 read_when:
   - „Ändern des Verhaltens oder der Standardwerte von Tippindikatoren“
-title: „Tippindikatoren“
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:03Z
+title: "„Tippindikatoren“"
 ---
 
 # Tippindikatoren

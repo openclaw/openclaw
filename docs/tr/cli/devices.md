@@ -4,13 +4,6 @@ read_when:
   - Cihaz eşleştirme isteklerini onaylıyorsunuz
   - Cihaz belirteçlerini döndürmeniz veya iptal etmeniz gerekiyor
 title: "cihazlar"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:02Z
 ---
 
 # `openclaw devices`

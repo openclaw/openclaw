@@ -6,13 +6,6 @@ read_when:
   - setup-token veya OAuth kimlik doğrulama akışlarını istiyorsunuz
   - Birden fazla hesap veya profil yönlendirmesi istiyorsunuz
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:17Z
 ---
 
 # OAuth
@@ -30,7 +23,7 @@ akışlarını sağlayan **sağlayıcı eklentilerini** de destekler. Şu şekil
 openclaw models auth login --provider <id>
 ```
 
-## Belirteç havuzu (neden var)
+## The token sink (why it exists)
 
 OAuth sağlayıcıları, giriş/yenileme akışları sırasında genellikle **yeni bir yenileme belirteci** üretir. Bazı sağlayıcılar (veya OAuth istemcileri), aynı kullanıcı/uygulama için yeni bir belirteç verildiğinde daha eski yenileme belirteçlerini geçersiz kılabilir.
 
@@ -118,7 +111,7 @@ Yenileme akışı otomatiktir; genellikle belirteçleri manuel olarak yönetmeni
 
 İki desen:
 
-### 1) Tercih edilen: ayrı ajanlar
+### 1. Tercih edilen: ayrı ajanlar
 
 “kişisel” ve “iş”in asla etkileşime girmemesini istiyorsanız, yalıtılmış ajanlar kullanın (ayrı oturumlar + kimlik bilgileri + çalışma alanı):
 
@@ -129,7 +122,7 @@ openclaw agents add personal
 
 Ardından ajan başına kimlik doğrulamayı (sihirbaz) yapılandırın ve sohbetleri doğru ajana yönlendirin.
 
-### 2) Gelişmiş: tek ajan içinde birden fazla profil
+### 2. Gelişmiş: tek ajan içinde birden fazla profil
 
 `auth-profiles.json`, aynı sağlayıcı için birden fazla profil kimliğini destekler.
 

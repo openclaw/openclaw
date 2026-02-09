@@ -4,13 +4,6 @@ read_when:
   - Chcesz zainstalować lub zarządzać wtyczkami Gateway działającymi w procesie
   - Chcesz debugować niepowodzenia ładowania wtyczek
 title: "wtyczki"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:55Z
 ---
 
 # `openclaw plugins`

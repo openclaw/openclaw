@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez supprimer le service de la Gateway (passerelle) et/ou l’état local
   - Vous souhaitez d’abord effectuer une exécution à blanc
 title: "désinstaller"
-x-i18n:
-  source_path: cli/uninstall.md
-  source_hash: 8d6c3890923f18f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:04Z
 ---
 
 # `openclaw uninstall`

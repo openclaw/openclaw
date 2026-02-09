@@ -3,13 +3,6 @@ summary: "Guide de configuration pour les developpeurs travaillant sur l’appli
 read_when:
   - Configuration de l’environnement de developpement macOS
 title: "Configuration dev macOS"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 4ea67701bd58b751
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:18Z
 ---
 
 # Configuration developpeur macOS
@@ -20,10 +13,10 @@ Ce guide couvre les etapes necessaires pour compiler et executer l’application
 
 Avant de compiler l’application, assurez-vous d’avoir installe les elements suivants :
 
-1.  **Xcode 26.2+** : Requis pour le developpement Swift.
-2.  **Node.js 22+ & pnpm** : Requis pour la passerelle, la CLI et les scripts de packaging.
+1. **Xcode 26.2+** : Requis pour le developpement Swift.
+2. **Node.js 22+ & pnpm** : Requis pour la passerelle, la CLI et les scripts de packaging.
 
-## 1. Installer les dependances
+## 1) Installer les dependances
 
 Installez les dependances a l’echelle du projet :
 
@@ -52,9 +45,9 @@ L’application macOS attend une installation globale de la CLI `openclaw` pour 
 
 **Pour l’installer (recommande) :**
 
-1.  Ouvrez l’application OpenClaw.
-2.  Allez dans l’onglet des parametres **General**.
-3.  Cliquez sur **« Install CLI »**.
+1. Ouvrez l’application OpenClaw.
+2. Allez dans l’onglet des parametres **General**.
+3. Cliquez sur **« Install CLI »**.
 
 Alternativement, installez-la manuellement :
 
@@ -62,7 +55,7 @@ Alternativement, installez-la manuellement :
 npm install -g openclaw@<version>
 ```
 
-## Depannage
+## Problemes courants
 
 ### Echec de compilation : incompatibilite de toolchain ou de SDK
 
@@ -89,12 +82,14 @@ Si l’application plante lorsque vous essayez d’autoriser l’acces a la **Re
 **Correctif :**
 
 1. Reinitialisez les autorisations TCC :
+
    ```bash
    tccutil reset All bot.molt.mac.debug
    ```
+
 2. Si cela echoue, modifiez temporairement `BUNDLE_ID` dans [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) afin de forcer une « table rase » cote macOS.
 
-### Gateway (passerelle) bloquee sur « Starting... »
+### Gateway (passerelle) bloquee sur « Starting...
 
 Si l’etat de la passerelle reste sur « Starting... », verifiez si un processus zombie occupe le port :
 

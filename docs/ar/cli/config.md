@@ -1,15 +1,8 @@
 ---
 summary: "مرجع CLI لأمر `openclaw config` (الحصول/التعيين/إلغاء التعيين لقيم التهيئة)"
 read_when:
-  - "عندما تريد قراءة التهيئة أو تحريرها بشكل غير تفاعلي"
+  - عندما تريد قراءة التهيئة أو تحريرها بشكل غير تفاعلي
 title: "التهيئة"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # `openclaw config`

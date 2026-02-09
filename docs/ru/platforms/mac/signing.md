@@ -1,15 +1,8 @@
 ---
-summary: «Шаги подписания для отладочных сборок macOS, сгенерированных скриптами упаковки»
+summary: "Шаги подписания для отладочных сборок macOS, сгенерированных скриптами упаковки"
 read_when:
   - Сборка или подписание отладочных сборок macOS
-title: «Подписание macOS»
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:51Z
+title: "Подписание macOS"
 ---
 
 # подписание mac (отладочные сборки)

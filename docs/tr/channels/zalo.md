@@ -3,13 +3,6 @@ summary: "Zalo bot destek durumu, yetenekler ve yapılandırma"
 read_when:
   - Zalo özellikleri veya web kancaları üzerinde çalışırken
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:08Z
 ---
 
 # Zalo (Bot API)
@@ -31,7 +24,7 @@ Zalo bir eklenti olarak sunulur ve çekirdek kurulumla birlikte gelmez.
    - npm’den (yayınlandıysa): `openclaw plugins install @openclaw/zalo`
    - Ya da ilk katılımda **Zalo**’yu seçip yükleme istemini onaylayın
 2. Belirteci ayarlayın:
-   - Ortam değişkeni: `ZALO_BOT_TOKEN=...`
+   - Env: `ZALO_BOT_TOKEN=...`
    - Ya da yapılandırma: `channels.zalo.botToken: "..."`.
 3. Gateway’i yeniden başlatın (veya ilk katılımı tamamlayın).
 4. DM erişimi varsayılan olarak eşleştirmedir; ilk temasta eşleştirme kodunu onaylayın.
@@ -62,7 +55,7 @@ Zalo’ya deterministik yönlendirme istediğiniz destek veya bildirim senaryola
 
 ## Kurulum (hızlı yol)
 
-### 1) Bot belirteci oluşturma (Zalo Bot Platform)
+### 1. Bot belirteci oluşturma (Zalo Bot Platform)
 
 1. [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) adresine gidin ve oturum açın.
 2. Yeni bir bot oluşturun ve ayarlarını yapılandırın.
@@ -132,18 +125,18 @@ Ortam seçeneği: `ZALO_BOT_TOKEN=...` (yalnızca varsayılan hesap için çalı
 - **Çıkartmalar**: Günlüğe alınır ancak tam olarak işlenmez (ajan yanıtı yok).
 - **Desteklenmeyen türler**: Günlüğe alınır (ör. korumalı kullanıcılardan gelen mesajlar).
 
-## Yetenekler
+## Capabilities
 
-| Özellik            | Durum                                |
-| ------------------ | ------------------------------------ |
-| Doğrudan mesajlar  | ✅ Destekleniyor                     |
-| Gruplar            | ❌ Yakında (Zalo belgelerine göre)   |
-| Medya (görüntüler) | ✅ Destekleniyor                     |
-| Tepkiler           | ❌ Desteklenmiyor                    |
-| Konular            | ❌ Desteklenmiyor                    |
-| Anketler           | ❌ Desteklenmiyor                    |
-| Yerel komutlar     | ❌ Desteklenmiyor                    |
-| Streaming          | ⚠️ Engellendi (2000 karakter sınırı) |
+| Özellik                               | Status                                                  |
+| ------------------------------------- | ------------------------------------------------------- |
+| Doğrudan mesajlar                     | ✅ Destekleniyor                                         |
+| Gruplar                               | ❌ Yakında (Zalo belgelerine göre)    |
+| Medya (görüntüler) | ✅ Destekleniyor                                         |
+| Tepkiler                              | ❌ Desteklenmiyor                                        |
+| Konular                               | ❌ Desteklenmiyor                                        |
+| Polls                                 | ❌ Desteklenmiyor                                        |
+| Native commands                       | ❌ Desteklenmiyor                                        |
+| Streaming                             | ⚠️ Engellendi (2000 karakter sınırı) |
 
 ## Teslim hedefleri (CLI/cron)
 

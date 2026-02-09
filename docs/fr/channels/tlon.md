@@ -3,13 +3,6 @@ summary: "Statut de prise en charge, capacites et configuration de Tlon/Urbit"
 read_when:
   - Travail sur les fonctionnalites du canal Tlon/Urbit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 19d7ffe23e82239f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:42Z
 ---
 
 # Tlon (plugin)

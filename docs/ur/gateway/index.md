@@ -3,13 +3,6 @@ summary: "Gateway سروس، لائف سائیکل، اور آپریشنز کے 
 read_when:
   - Gateway پروسیس کو چلانے یا ڈیبگ کرنے کے دوران
 title: "Gateway رن بُک"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # Gateway سروس رن بُک
@@ -19,7 +12,7 @@ x-i18n:
 ## یہ کیا ہے
 
 - ہمیشہ فعال رہنے والا پروسیس جو واحد Baileys/Telegram کنکشن اور کنٹرول/ایونٹ پلین کا مالک ہوتا ہے۔
-- لیگیسی `gateway` کمانڈ کی جگہ لیتا ہے۔ CLI انٹری پوائنٹ: `openclaw gateway`۔
+- لیگیسی `gateway` کمانڈ کی جگہ لیتا ہے۔ CLI entry point: `openclaw gateway`.
 - روکے جانے تک چلتا رہتا ہے؛ مہلک غلطیوں پر نان زیرو کے ساتھ خارج ہوتا ہے تاکہ سپروائزر اسے دوبارہ شروع کرے۔
 
 ## کیسے چلائیں (لوکل)
@@ -39,17 +32,17 @@ pnpm gateway:watch
   - ہاٹ ری لوڈ ضرورت پڑنے پر **SIGUSR1** کے ذریعے ان-پروسیس ری اسٹارٹ استعمال کرتا ہے۔
   - `gateway.reload.mode="off"` کے ساتھ غیر فعال کریں۔
 - WebSocket کنٹرول پلین کو `127.0.0.1:<port>` پر بائنڈ کرتا ہے (ڈیفالٹ 18789)۔
-- یہی پورٹ HTTP بھی فراہم کرتی ہے (کنٹرول UI، ہُکس، A2UI)۔ سنگل-پورٹ ملٹی پلیکسیشن۔
+- The same port also serves HTTP (control UI, hooks, A2UI). Single-port multiplex.
   - OpenAI Chat Completions (HTTP): [`/v1/chat/completions`](/gateway/openai-http-api)۔
   - OpenResponses (HTTP): [`/v1/responses`](/gateway/openresponses-http-api)۔
   - Tools Invoke (HTTP): [`/tools/invoke`](/gateway/tools-invoke-http-api)۔
-- بطورِ طے شدہ `canvasHost.port` پر Canvas فائل سرور شروع کرتا ہے (ڈیفالٹ `18793`)، جو `http://<gateway-host>:18793/__openclaw__/canvas/` کو `~/.openclaw/workspace/canvas` سے سروس کرتا ہے۔ `canvasHost.enabled=false` یا `OPENCLAW_SKIP_CANVAS_HOST=1` کے ساتھ غیر فعال کریں۔
+- Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__openclaw__/canvas/` from `~/.openclaw/workspace/canvas`. Disable with `canvasHost.enabled=false` or `OPENCLAW_SKIP_CANVAS_HOST=1`.
 - stdout پر لاگز لکھتا ہے؛ اسے زندہ رکھنے اور لاگز گھمانے کے لیے launchd/systemd استعمال کریں۔
 - خرابیوں کے ازالے کے دوران لاگ فائل سے stdio میں ڈیبگ لاگنگ (ہینڈ شیکس، req/res، ایونٹس) کی مررنگ کے لیے `--verbose` پاس کریں۔
 - `--force` منتخب پورٹ پر لسٹنرز تلاش کرنے کے لیے `lsof` استعمال کرتا ہے، SIGTERM بھیجتا ہے، جسے اس نے بند کیا اس کا لاگ بناتا ہے، پھر گیٹ وے شروع کرتا ہے (اگر `lsof` غائب ہو تو فوراً ناکام ہو جاتا ہے)۔
 - اگر آپ سپروائزر (launchd/systemd/mac app child-process mode) کے تحت چلاتے ہیں تو اسٹاپ/ری اسٹارٹ عموماً **SIGTERM** بھیجتا ہے؛ پرانی بلڈز میں یہ `pnpm` `ELIFECYCLE` ایگزٹ کوڈ **143** (SIGTERM) کے طور پر ظاہر ہو سکتا ہے، جو نارمل شٹ ڈاؤن ہے، کریش نہیں۔
 - **SIGUSR1** مجاز ہونے پر ان-پروسیس ری اسٹارٹ ٹرگر کرتا ہے (gateway ٹول/کنفیگ اپلائی/اپڈیٹ، یا دستی ری اسٹارٹس کے لیے `commands.restart` فعال کریں)۔
-- Gateway تصدیق بطورِ طے شدہ درکار ہے: `gateway.auth.token` (یا `OPENCLAW_GATEWAY_TOKEN`) یا `gateway.auth.password` سیٹ کریں۔ کلائنٹس کو `connect.params.auth.token/password` بھیجنا ہوگا، الا یہ کہ Tailscale Serve شناخت استعمال ہو۔
+- Gateway auth is required by default: set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) or `gateway.auth.password`. Clients must send `connect.params.auth.token/password` unless using Tailscale Serve identity.
 - وزرڈ اب بطورِ طے شدہ ٹوکن جنریٹ کرتا ہے، حتیٰ کہ loopback پر بھی۔
 - پورٹ کی ترجیح: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > ڈیفالٹ `18789`۔
 
@@ -62,17 +55,18 @@ pnpm gateway:watch
   ```
 
 - پھر کلائنٹس سرنگ کے ذریعے `ws://127.0.0.1:18789` سے کنیکٹ کرتے ہیں۔
+
 - اگر ٹوکن کنفیگر ہو، تو سرنگ کے ذریعے بھی کلائنٹس کو اسے `connect.params.auth.token` میں شامل کرنا ہوگا۔
 
 ## متعدد گیٹ ویز (ایک ہی ہوسٹ)
 
-عام طور پر غیر ضروری: ایک Gateway متعدد میسجنگ چینلز اور ایجنٹس کو سروس دے سکتا ہے۔ متعدد Gateways صرف ریڈنڈنسی یا سخت آئسولیشن (مثلاً ریسکیو بوٹ) کے لیے استعمال کریں۔
+Usually unnecessary: one Gateway can serve multiple messaging channels and agents. Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
 
-اگر آپ اسٹیٹ + کنفیگ کو الگ رکھیں اور منفرد پورٹس استعمال کریں تو سپورٹڈ ہے۔ مکمل گائیڈ: [Multiple gateways](/gateway/multiple-gateways)۔
+Supported if you isolate state + config and use unique ports. Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 سروس نام پروفائل-آگاہ ہیں:
 
-- macOS: `bot.molt.<profile>` (لیگیسی `com.openclaw.*` اب بھی موجود ہو سکتا ہے)
+- macOS: `bot.molt.<profile>` (legacy `com.openclaw.*` may still exist)
 - Linux: `openclaw-gateway-<profile>.service`
 - Windows: `OpenClaw Gateway (<profile>)`
 
@@ -82,7 +76,7 @@ pnpm gateway:watch
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-ریسکیو-بوٹ پیٹرن: ایک دوسرا Gateway اپنے الگ پروفائل، اسٹیٹ ڈائریکٹری، ورک اسپیس، اور بیس پورٹ اسپیسنگ کے ساتھ آئسولیٹ رکھیں۔ مکمل گائیڈ: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)۔
+Rescue-Bot Pattern: keep a second Gateway isolated with its own profile, state dir, workspace, and base port spacing. Full guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### ڈیو پروفائل (`--dev`)
 
@@ -110,7 +104,7 @@ openclaw --dev health
 - بیس پورٹ = `gateway.port` (یا `OPENCLAW_GATEWAY_PORT` / `--port`)
 - براؤزر کنٹرول سروس پورٹ = بیس + 2 (صرف loopback)
 - `canvasHost.port = base + 4` (یا `OPENCLAW_CANVAS_HOST_PORT` / کنفیگ اوور رائیڈ)
-- براؤزر پروفائل CDP پورٹس `browser.controlPort + 9 .. + 108` سے خودکار الاٹ ہوتے ہیں (ہر پروفائل کے لیے برقرار رہتے ہیں)۔
+- Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108` (persisted per profile).
 
 ہر انسٹینس کے لیے چیک لسٹ:
 
@@ -137,12 +131,12 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 ## پروٹوکول (آپریٹر ویو)
 
 - مکمل دستاویزات: [Gateway protocol](/gateway/protocol) اور [Bridge protocol (legacy)](/gateway/bridge-protocol)۔
-- کلائنٹ سے لازمی پہلا فریم: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`۔
+- Mandatory first frame from client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
 - Gateway جواب دیتا ہے `res {type:"res", id, ok:true, payload:hello-ok }` (یا `ok:false` غلطی کے ساتھ، پھر بند)۔
 - ہینڈ شیک کے بعد:
   - ریکویسٹس: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - ایونٹس: `{type:"event", event, payload, seq?, stateVersion?}`
-- اسٹرکچرڈ پریزنس انٹریز: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (WS کلائنٹس کے لیے، `instanceId`، `connect.client.instanceId` سے آتا ہے)۔
+- Structured presence entries: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (for WS clients, `instanceId` comes from `connect.client.instanceId`).
 - `agent` ریسپانسز دو مرحلوں میں ہوتے ہیں: پہلے `res` ack `{runId,status:"accepted"}`، پھر رن مکمل ہونے کے بعد حتمی `res` `{runId,status:"ok"|"error",summary}`؛ اسٹریمنگ آؤٹ پٹ `event:"agent"` کے طور پر آتا ہے۔
 
 ## طریقے (ابتدائی سیٹ)
@@ -165,7 +159,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - `agent` — ایجنٹ رن سے اسٹریمنگ ٹول/آؤٹ پٹ ایونٹس (seq-tagged)۔
 - `presence` — پریزنس اپڈیٹس (stateVersion کے ساتھ ڈیلٹاز) تمام کنیکٹڈ کلائنٹس کو پُش کی جاتی ہیں۔
 - `tick` — زندہ ہونے کی تصدیق کے لیے وقفے وقفے سے keepalive/no-op۔
-- `shutdown` — Gateway بند ہو رہا ہے؛ پے لوڈ میں `reason` اور اختیاری `restartExpectedMs` شامل ہیں۔ کلائنٹس کو دوبارہ کنیکٹ کرنا چاہیے۔
+- `shutdown` — Gateway is exiting; payload includes `reason` and optional `restartExpectedMs`. Clients should reconnect.
 
 ## WebChat انضمام
 
@@ -188,7 +182,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 
 ## ایرر کوڈز (res.error اسٹرکچر)
 
-- غلطیاں `{ code, message, details?, retryable?, retryAfterMs? }` استعمال کرتی ہیں۔
+- Errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 - معیاری کوڈز:
   - `NOT_LINKED` — WhatsApp مستند نہیں۔
   - `AGENT_TIMEOUT` — ایجنٹ مقررہ ڈیڈ لائن کے اندر جواب نہیں دے سکا۔
@@ -202,7 +196,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 
 ## ری پلے / گیپس
 
-- ایونٹس ری پلے نہیں ہوتے۔ کلائنٹس seq گیپس کا پتہ لگا کر آگے بڑھنے سے پہلے ریفریش (`health` + `system-presence`) کریں۔ WebChat اور macOS کلائنٹس اب گیپ پر خودکار ریفریش کرتے ہیں۔
+- Events are not replayed. Clients detect seq gaps and should refresh (`health` + `system-presence`) before continuing. WebChat and macOS clients now auto-refresh on gap.
 
 ## سپروِژن (macOS مثال)
 
@@ -213,8 +207,8 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
   - StandardOut/Err: فائل پاتھس یا `syslog`
 - ناکامی پر launchd دوبارہ شروع کرتا ہے؛ مہلک غلط کنفیگریشن میں مسلسل ایگزٹ ہونا چاہیے تاکہ آپریٹر کو علم ہو۔
 - LaunchAgents فی-یوزر ہوتے ہیں اور لاگ اِن سیشن درکار ہوتا ہے؛ ہیڈ لیس سیٹ اپس کے لیے کسٹم LaunchDaemon استعمال کریں (شپ نہیں کیا جاتا)۔
-  - `openclaw gateway install`، `~/Library/LaunchAgents/bot.molt.gateway.plist` لکھتا ہے
-    (یا `bot.molt.<profile>.plist`; لیگیسی `com.openclaw.*` صاف کر دیا جاتا ہے)۔
+  - `openclaw gateway install` writes `~/Library/LaunchAgents/bot.molt.gateway.plist`
+    (or `bot.molt.<profile>.plist`; legacy `com.openclaw.*` is cleaned up).
   - `openclaw doctor` LaunchAgent کنفیگ کا آڈٹ کرتا ہے اور اسے موجودہ ڈیفالٹس کے مطابق اپڈیٹ کر سکتا ہے۔
 
 ## Gateway سروس مینجمنٹ (CLI)
@@ -239,28 +233,28 @@ openclaw logs --follow
 - `gateway status` “localhost بمقابلہ LAN bind” الجھن اور پروفائل عدم مطابقت سے بچنے کے لیے کنفیگ پاتھ + پروب ٹارگٹ پرنٹ کرتا ہے۔
 - `gateway status` اس وقت آخری gateway ایرر لائن شامل کرتا ہے جب سروس چلتی نظر آئے مگر پورٹ بند ہو۔
 - `logs` RPC کے ذریعے Gateway فائل لاگ کو ٹیل کرتا ہے (دستی `tail`/`grep` کی ضرورت نہیں)۔
-- اگر دیگر gateway-جیسی سروسز ملیں تو CLI وارن کرتا ہے، الا یہ کہ وہ OpenClaw پروفائل سروسز ہوں۔
-  زیادہ تر سیٹ اپس کے لیے ہم اب بھی **فی مشین ایک gateway** کی سفارش کرتے ہیں؛ ریڈنڈنسی یا ریسکیو بوٹ کے لیے آئسولیٹڈ پروفائلز/پورٹس استعمال کریں۔ دیکھیں [Multiple gateways](/gateway/multiple-gateways)۔
+- If other gateway-like services are detected, the CLI warns unless they are OpenClaw profile services.
+  We still recommend **one gateway per machine** for most setups; use isolated profiles/ports for redundancy or a rescue bot. See [Multiple gateways](/gateway/multiple-gateways).
   - صفائی: `openclaw gateway uninstall` (موجودہ سروس) اور `openclaw doctor` (لیگیسی مائیگریشنز)۔
 - `gateway install` پہلے سے انسٹال ہونے پر نو-آپ ہے؛ دوبارہ انسٹال کے لیے `openclaw gateway install --force` استعمال کریں (پروفائل/env/پاتھ تبدیلیاں)۔
 
 بنڈلڈ mac ایپ:
 
-- OpenClaw.app ایک Node-بیسڈ gateway ریلے بنڈل کر سکتی ہے اور فی-یوزر LaunchAgent انسٹال کرتی ہے جس کا لیبل
-  `bot.molt.gateway` ہوتا ہے (یا `bot.molt.<profile>`; لیگیسی `com.openclaw.*` لیبلز بھی صاف طور پر ان لوڈ ہو جاتے ہیں)۔
+- OpenClaw.app can bundle a Node-based gateway relay and install a per-user LaunchAgent labeled
+  `bot.molt.gateway` (or `bot.molt.<profile>1. `; legacy `com.openclaw.*` labels still unload cleanly).
 - اسے صاف طور پر روکنے کے لیے `openclaw gateway stop` استعمال کریں (یا `launchctl bootout gui/$UID/bot.molt.gateway`)۔
 - ری اسٹارٹ کے لیے `openclaw gateway restart` استعمال کریں (یا `launchctl kickstart -k gui/$UID/bot.molt.gateway`)۔
   - `launchctl` صرف اسی وقت کام کرتا ہے جب LaunchAgent انسٹال ہو؛ ورنہ پہلے `openclaw gateway install` استعمال کریں۔
-  - نامزد پروفائل چلانے پر لیبل کو `bot.molt.<profile>` سے بدل دیں۔
+  - 2. لیبل کو `bot.molt.<profile>` سے بدلیں3. \` جب کسی نامزد پروفائل کو چلایا جا رہا ہو۔
 
 ## سپروِژن (systemd یوزر یونٹ)
 
-OpenClaw لینکس/WSL2 پر بطورِ طے شدہ **systemd یوزر سروس** انسٹال کرتا ہے۔ ہم
-سنگل-یوزر مشینوں کے لیے یوزر سروسز کی سفارش کرتے ہیں (سادہ ماحول، فی-یوزر کنفیگ)۔
-ملٹی-یوزر یا ہمیشہ آن سرورز کے لیے **سسٹم سروس** استعمال کریں (لِنگرنگ درکار نہیں، مشترکہ سپروِژن)۔
+4. OpenClaw لینکس/WSL2 پر بطورِ ڈیفالٹ ایک **systemd user service** انسٹال کرتا ہے۔ 5. ہم
+   واحد صارف مشینوں کے لیے یوزر سروسز کی سفارش کرتے ہیں (سادہ ماحول، فی صارف کنفیگ)۔
+5. کثیر صارف یا ہمیشہ آن سرورز کے لیے **system service** استعمال کریں (lingering کی ضرورت نہیں، مشترکہ نگرانی)۔
 
-`openclaw gateway install` یوزر یونٹ لکھتا ہے۔ `openclaw doctor` یونٹ کا آڈٹ کرتا ہے اور
-اسے موجودہ سفارش کردہ ڈیفالٹس کے مطابق اپڈیٹ کر سکتا ہے۔
+7. `openclaw gateway install` یوزر یونٹ لکھتا ہے۔ 8. `openclaw doctor` یونٹ کا آڈٹ کرتا ہے
+   اور اسے موجودہ تجویز کردہ ڈیفالٹس کے مطابق اپڈیٹ کر سکتا ہے۔
 
 `~/.config/systemd/user/openclaw-gateway[-<profile>].service` بنائیں:
 
@@ -287,16 +281,15 @@ WantedBy=default.target
 sudo loginctl enable-linger youruser
 ```
 
-آن بورڈنگ لینکس/WSL2 پر یہ چلاتا ہے (ممکن ہے sudo مانگے؛ `/var/lib/systemd/linger` لکھتا ہے)۔
-پھر سروس فعال کریں:
+9. آن بورڈنگ یہ عمل لینکس/WSL2 پر چلاتی ہے (sudo کے لیے پرامپٹ آ سکتا ہے؛ `/var/lib/systemd/linger` لکھتی ہے)۔
+10. پھر سروس کو فعال کریں:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
-**متبادل (سسٹم سروس)** — ہمیشہ آن یا ملٹی-یوزر سرورز کے لیے، یوزر یونٹ کے بجائے systemd **سسٹم** یونٹ انسٹال کریں (لِنگرنگ درکار نہیں)۔
-`/etc/systemd/system/openclaw-gateway[-<profile>].service` بنائیں (اوپر والا یونٹ کاپی کریں،
-`WantedBy=multi-user.target` تبدیل کریں، `User=` + `WorkingDirectory=` سیٹ کریں)، پھر:
+11. **متبادل (system service)** - ہمیشہ آن یا کثیر صارف سرورز کے لیے، آپ یوزر یونٹ کے بجائے systemd **system** یونٹ انسٹال کر سکتے ہیں (lingering درکار نہیں)۔
+12. `/etc/systemd/system/openclaw-gateway[-<profile>].service` بنائیں (اوپر والا یونٹ کاپی کریں، `WantedBy=multi-user.target` پر سوئچ کریں، `User=` + `WorkingDirectory=` سیٹ کریں)، پھر:
 
 ```
 sudo systemctl daemon-reload

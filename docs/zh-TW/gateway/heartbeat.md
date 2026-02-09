@@ -1,16 +1,9 @@
 ---
-summary: 「Heartbeat 輪詢訊息與通知規則」
+summary: "Heartbeat 輪詢訊息與通知規則"
 read_when:
   - 調整 Heartbeat 節奏或訊息方式
   - 在排程任務中決定使用 Heartbeat 或 Cron
-title: 「Heartbeat」
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:27Z
+title: "Heartbeat"
 ---
 
 # Heartbeat（Gateway 閘道器）
@@ -24,7 +17,7 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 ## 快速開始（初學者）
 
 1. 保持 Heartbeat 啟用（預設為 `30m`，或在 Anthropic OAuth/setup-token 情況下為 `1h`），或設定你自己的節奏。
-2. 在代理程式工作區建立一個小型的 `HEARTBEAT.md` 檢查清單（選用但建議）。
+2. 6. 在代理的工作區建立一個精簡的 `HEARTBEAT.md` 檢查清單（選用但建議）。
 3. 決定 Heartbeat 訊息要送到哪裡（預設為 `target: "last"`）。
 4. 選用：啟用 Heartbeat 推理內容傳遞，以提高透明度。
 5. 選用：限制 Heartbeat 僅在活躍時段執行（本地時間）。
@@ -46,18 +39,18 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 }
 ```
 
-## 預設值
+## 7. 預設值
 
-- 間隔：`30m`（若偵測到 Anthropic OAuth/setup-token 驗證模式，則為 `1h`）。設定 `agents.defaults.heartbeat.every` 或每個代理程式的 `agents.list[].heartbeat.every`；使用 `0m` 可停用。
+- 48. 間隔：`30m`（或當偵測到 Anthropic OAuth/setup-token 為驗證模式時為 `1h`）。 間隔：`30m`（若偵測到 Anthropic OAuth/setup-token 驗證模式，則為 `1h`）。設定 `agents.defaults.heartbeat.every` 或每個代理程式的 `agents.list[].heartbeat.every`；使用 `0m` 可停用。
 - 提示詞主體（可透過 `agents.defaults.heartbeat.prompt` 設定）：
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-- Heartbeat 提示詞會 **逐字** 作為使用者訊息送出。系統提示詞包含「Heartbeat」區段，且該次執行會在內部被標記。
-- 活躍時段（`heartbeat.activeHours`）會依設定的時區檢查。
-  在時段之外，Heartbeat 會被略過，直到下一次落在時段內的 tick。
+- 9. 心跳提示會**逐字**作為使用者訊息送出。 10. 系統提示包含「Heartbeat」章節，且此次執行會在內部被標記。
+- Active hours (`heartbeat.activeHours`) are checked in the configured timezone.
+  12. 在視窗之外，心跳會被略過，直到下一次進入視窗內的 tick。
 
 ## Heartbeat 提示詞的用途
 
-預設提示詞刻意保持廣泛：
+13. 預設提示刻意設計為寬泛：
 
 - **背景任務**：「Consider outstanding tasks」會促使代理程式檢視後續事項（收件匣、行事曆、提醒、佇列中的工作），並浮現任何緊急項目。
 - **人類狀態檢查**：「Checkup sometimes on your human during day time」會促使偶爾發送輕量的「需要幫忙嗎？」訊息，並透過你設定的本地時區避免夜間干擾（見 [/concepts/timezone](/concepts/timezone)）。
@@ -67,7 +60,7 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 ## 回應合約
 
 - 若沒有需要注意的事項，請回覆 **`HEARTBEAT_OK`**。
-- 在 Heartbeat 執行期間，OpenClaw 會在回覆 **開頭或結尾** 出現 `HEARTBEAT_OK` 時，將其視為 ack。該權杖會被移除，且若剩餘內容 **≤ `ackMaxChars`**（預設：300），則整則回覆會被丟棄。
+- 在 Heartbeat 執行期間，OpenClaw 會在回覆 **開頭或結尾** 出現 `HEARTBEAT_OK` 時，將其視為 ack。該權杖會被移除，且若剩餘內容 **≤ `ackMaxChars`**（預設：300），則整則回覆會被丟棄。 14. 會移除權杖，且若剩餘內容 **≤ `ackMaxChars`**（預設：300），回覆將被丟棄。
 - 若 `HEARTBEAT_OK` 出現在回覆 **中間**，則不會被特殊處理。
 - 若為警示訊息，**請勿** 包含 `HEARTBEAT_OK`；僅回傳警示文字。
 
@@ -94,7 +87,7 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 }
 ```
 
-### 範圍與優先順序
+### Scope and precedence
 
 - `agents.defaults.heartbeat` 設定全域 Heartbeat 行為。
 - `agents.list[].heartbeat` 會疊加在其上；若任何代理程式具有 `heartbeat` 區塊，則 **只有那些代理程式** 會執行 Heartbeat。
@@ -106,7 +99,7 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 
 若任何 `agents.list[]` 項目包含 `heartbeat` 區塊，則 **只有那些代理程式**
 會執行 Heartbeat。每代理程式的區塊會疊加在 `agents.defaults.heartbeat` 之上
-（因此你可以先設定共用預設，再針對個別代理程式覆寫）。
+（因此你可以先設定共用預設，再針對個別代理程式覆寫）。 16. 每個代理的區塊會疊加在 `agents.defaults.heartbeat` 之上（因此可一次設定共用預設，並為各代理覆寫）。
 
 範例：兩個代理程式，只有第二個代理程式執行 Heartbeat。
 
@@ -157,7 +150,7 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 }
 ```
 
-在此視窗之外（東岸時間上午 9 點前或晚上 10 點後），Heartbeat 會被略過。下一次落在視窗內的排程 tick 會正常執行。
+17. 在此視窗之外（東部時間上午 9 點前或晚上 10 點後），心跳會被略過。 18. 下一個排程在視窗內的 tick 會正常執行。
 
 ### 多帳號範例
 
@@ -188,7 +181,7 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 }
 ```
 
-### 欄位說明
+### 19. 欄位說明
 
 - `every`：Heartbeat 間隔（時間長度字串；預設單位 = 分鐘）。
 - `model`：Heartbeat 執行時的選用模型覆寫（`provider/model`）。
@@ -196,16 +189,16 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 - `session`：Heartbeat 執行的選用工作階段金鑰。
   - `main`（預設）：代理程式主工作階段。
   - 明確的工作階段金鑰（從 `openclaw sessions --json` 或 [sessions CLI](/cli/sessions) 複製）。
-  - 工作階段金鑰格式：請參閱 [Sessions](/concepts/session) 與 [Groups](/channels/groups)。
+  - 20. 工作階段金鑰格式：請參閱 [Sessions](/concepts/session) 與 [Groups](/channels/groups)。
 - `target`：
   - `last`（預設）：傳遞到最後使用的外部頻道。
   - 明確指定頻道：`whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`。
   - `none`：執行 Heartbeat，但 **不進行** 外部傳遞。
 - `to`：選用的收件者覆寫（頻道專屬 ID，例如 WhatsApp 的 E.164 或 Telegram 聊天 ID）。
-- `accountId`：多帳號頻道的選用帳號 ID。當 `target: "last"` 時，帳號 ID 會套用到解析後的最後一個頻道（若該頻道支援帳號）；否則會被忽略。若帳號 ID 與解析後頻道中已設定的帳號不符，則會略過傳遞。
-- `prompt`：覆寫預設提示詞主體（不合併）。
+- 21. `accountId`：多帳號通道的選用帳號 ID。 `accountId`：多帳號頻道的選用帳號 ID。當 `target: "last"` 時，帳號 ID 會套用到解析後的最後一個頻道（若該頻道支援帳號）；否則會被忽略。若帳號 ID 與解析後頻道中已設定的帳號不符，則會略過傳遞。 If the account id does not match a configured account for the resolved channel, delivery is skipped.
+- 23. `prompt`：覆寫預設提示內容（不合併）。
 - `ackMaxChars`：在 `HEARTBEAT_OK` 之後允許傳遞的最大字元數。
-- `activeHours`：將 Heartbeat 執行限制在時間視窗內。物件包含 `start`（HH:MM，含）、`end`（HH:MM，不含；允許使用 `24:00` 作為一天結束），以及選用的 `timezone`。
+- `activeHours`：將 Heartbeat 執行限制在時間視窗內。物件包含 `start`（HH:MM，含）、`end`（HH:MM，不含；允許使用 `24:00` 作為一天結束），以及選用的 `timezone`。 24. 物件包含 `start`（HH:MM，含）、`end`（HH:MM，不含；允許 `24:00` 作為一天結束），以及選用的 `timezone`。
   - 省略或 `"user"`：若有設定，使用你的 `agents.defaults.userTimezone`，否則回退至主機系統時區。
   - `"local"`：永遠使用主機系統時區。
   - 任何 IANA 識別碼（例如 `America/New_York`）：直接使用；若無效，則回退至上述 `"user"` 行為。
@@ -215,9 +208,9 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 
 - Heartbeat 預設在代理程式的主工作階段中執行（`agent:<id>:<mainKey>`），
   或在 `session.scope = "global"` 時使用 `global`。設定 `session` 可覆寫為
-  特定頻道的工作階段（Discord/WhatsApp 等）。
+  特定頻道的工作階段（Discord/WhatsApp 等）。 25. 設定 `session` 以覆寫為特定通道的工作階段（Discord/WhatsApp 等）。
 - `session` 只影響執行脈絡；實際傳遞由 `target` 與 `to` 控制。
-- 若要傳遞到特定頻道／收件者，請設定 `target` + `to`。搭配
+- To deliver to a specific channel/recipient, set `target` + `to`. 若要傳遞到特定頻道／收件者，請設定 `target` + `to`。搭配
   `target: "last"` 時，會使用該工作階段最後的外部頻道進行傳遞。
 - 若主佇列繁忙，Heartbeat 會被略過並稍後重試。
 - 若 `target` 解析後沒有外部目的地，執行仍會發生，但不會送出對外訊息。
@@ -226,8 +219,8 @@ Heartbeat 會在主工作階段中執行 **週期性的代理程式回合**，�
 
 ## 可見度控制
 
-預設情況下，`HEARTBEAT_OK` 確認訊息會被抑制，而警示內容仍會傳遞。
-你可以依頻道或依帳號調整：
+By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is
+delivered. 28. 你可以依通道或依帳號調整此行為：
 
 ```yaml
 channels:
@@ -246,7 +239,7 @@ channels:
           showAlerts: false # Suppress alert delivery for this account
 ```
 
-優先順序：每帳號 → 每頻道 → 頻道預設 → 內建預設。
+29. 優先順序：每帳號 → 每通道 → 通道預設 → 內建預設。
 
 ### 各旗標的作用
 
@@ -256,7 +249,7 @@ channels:
 
 若 **三者皆為 false**，OpenClaw 會完全略過 Heartbeat 執行（不呼叫模型）。
 
-### 每頻道與每帳號範例
+### 30. 每通道 vs 每帳號的範例
 
 ```yaml
 channels:
@@ -279,22 +272,22 @@ channels:
 
 ### 常見模式
 
-| 目標                          | 設定                                                                                     |
-| ----------------------------- | ---------------------------------------------------------------------------------------- |
-| 預設行為（靜默 OK，警示開啟） | _(無需設定)_                                                                             |
+| 目標               | 設定                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| 預設行為（靜默 OK，警示開啟） | _(無需設定)_                                                              |
 | 完全靜默（無訊息、無指示）    | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| 僅指示（無訊息）              | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| 僅在單一頻道顯示 OK           | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| 僅指示（無訊息）         | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| 僅在單一頻道顯示 OK      | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md（選用）
 
-若工作區中存在 `HEARTBEAT.md` 檔案，預設提示詞會要求代理程式讀取它。
-可將其視為你的「Heartbeat 檢查清單」：小型、穩定，且適合每 30 分鐘都包含。
+31. 若工作區存在 `HEARTBEAT.md` 檔案，預設提示會指示代理讀取它。 32. 把它視為你的「心跳檢查清單」：小巧、穩定，且可每 30 分鐘安全地包含。
 
 若 `HEARTBEAT.md` 存在但實質上是空的（僅包含空白行與像 `# Heading` 這樣的 Markdown 標題），OpenClaw 會略過 Heartbeat 執行以節省 API 呼叫。
 若檔案不存在，Heartbeat 仍會執行，由模型自行決定要做什麼。
+若檔案不存在，心跳仍會執行，並由模型決定要做什麼。
 
-請保持內容精簡（短檢查清單或提醒），以避免提示詞膨脹。
+33. 保持精簡（短清單或提醒）以避免提示膨脹。
 
 `HEARTBEAT.md` 範例：
 
@@ -334,18 +327,14 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 
 ## 推理內容傳遞（選用）
 
-預設情況下，Heartbeat 只會傳遞最終的「答案」負載。
+34. 預設情況下，心跳僅投遞最終的「答案」負載。
 
 若你希望提高透明度，請啟用：
 
 - `agents.defaults.heartbeat.includeReasoning: true`
 
-啟用後，Heartbeat 也會額外傳遞一則以
-`Reasoning:` 為前綴的訊息（格式與 `/reasoning on` 相同）。
-當代理程式管理多個工作階段／codex，且你想知道它為何決定通知你時，這會很有用 — 但也可能洩漏比你期望更多的內部細節。建議在群組聊天中保持關閉。
+35. 啟用後，心跳也會投遞一則以 `Reasoning:` 為前綴的獨立訊息（外觀與 `/reasoning on` 相同）。 36. 當代理管理多個工作階段/法典且你想知道它為何決定 ping 你時，這會很有用——但也可能洩漏比你期望更多的內部細節。 7. 在群組聊天中，建議保持關閉。
 
 ## 成本考量
 
-Heartbeat 會執行完整的代理程式回合。較短的間隔會消耗更多權杖。
-請保持 `HEARTBEAT.md` 精簡，並考慮使用較便宜的 `model` 或 `target: "none"`，
-若你只需要內部狀態更新。
+38. 心跳會執行完整的代理回合。 39. 較短的間隔會消耗更多權杖。 40. 保持 `HEARTBEAT.md` 精簡，並在只需要內部狀態更新時，考慮使用較便宜的 `model` 或 `target: "none"`。

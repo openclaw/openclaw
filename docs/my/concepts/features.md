@@ -3,13 +3,6 @@ summary: "ချန်နယ်များ၊ လမ်းကြောင်း
 read_when:
   - OpenClaw က ဘာတွေကို ပံ့ပိုးထားသလဲဆိုတာ အပြည့်အစုံ သိချင်သောအခါ
 title: "အင်္ဂါရပ်များ"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:12Z
 ---
 
 ## Highlights
@@ -55,6 +48,5 @@ x-i18n:
 - pairing၊ Canvas၊ စကားပြော နှင့် ကင်မရာ ပါဝင်သည့် Android နိုဒ်
 
 <Note>
-Legacy Claude၊ Codex၊ Gemini နှင့် Opencode လမ်းကြောင်းများကို ဖယ်ရှားထားပါသည်။ Pi သာလျှင်
-coding agent လမ်းကြောင်းအဖြစ် အသုံးပြုပါသည်။
+21. Legacy Claude, Codex, Gemini နှင့် Opencode paths များကို ဖယ်ရှားပြီး ဖြစ်ပါသည်။ 22. Pi သည် တစ်ခုတည်းသော coding agent path ဖြစ်ပါသည်။
 </Note>

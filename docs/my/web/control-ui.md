@@ -4,13 +4,6 @@ read_when:
   - ဘရောက်ဇာမှ Gateway ကို လည်ပတ်လိုသောအခါ
   - SSH တန်နယ်များ မသုံးဘဲ Tailnet ဝင်ရောက်လိုသောအခါ
 title: "Control UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:32Z
 ---
 
 # Control UI (ဘရောက်ဇာ)
@@ -34,15 +27,12 @@ Auth ကို WebSocket handshake အတွင်း အောက်ပါအ�
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-  ဒက်ရှ်ဘုတ် ဆက်တင် ပန်နယ်မှ token ကို သိမ်းဆည်းနိုင်ပါသည်; စကားဝှက်များကို မသိမ်းဆည်းပါ။
-  onboarding wizard သည် ပုံမှန်အားဖြင့် gateway token ကို ထုတ်ပေးထားသဖြင့် ပထမဆုံး ချိတ်ဆက်ရာတွင် ဤနေရာတွင် ကူးထည့်ပါ။
+  Dashboard settings panel တွင် token ကို သိမ်းဆည်းနိုင်သော်လည်း password များကို မသိမ်းဆည်းပါ။
+  Onboarding wizard သည် default အနေဖြင့် gateway token ကို ဖန်တီးပေးသောကြောင့် ပထမဆုံး connect လုပ်ချိန်တွင် ဤနေရာတွင် paste လုပ်ပါ။
 
 ## စက်ပစ္စည်း ချိတ်ဆက်အတည်ပြုခြင်း (ပထမဆုံး ချိတ်ဆက်မှု)
 
-Control UI ကို ဘရောက်ဇာအသစ် သို့မဟုတ် စက်ပစ္စည်းအသစ်မှ ချိတ်ဆက်သောအခါ Gateway သည်
-**တစ်ကြိမ်သာ ချိတ်ဆက်အတည်ပြုခြင်း** ကို တောင်းဆိုပါသည် — `gateway.auth.allowTailscale: true` ဖြင့်
-တူညီသော Tailnet အတွင်းရှိနေသော်လည်း ဖြစ်ပါသည်။ ၎င်းသည်
-ခွင့်မပြုထားသော ဝင်ရောက်မှုများကို တားဆီးရန် လုံခြုံရေး အစီအမံတစ်ရပ်ဖြစ်ပါသည်။
+Browser သို့မဟုတ် device အသစ်တစ်ခုမှ Control UI ကို connect လုပ်သောအခါ Gateway သည် **one-time pairing approval** ကို တောင်းဆိုပါသည် — `gateway.auth.allowTailscale: true` ဖြင့် Tailnet တူနေပါစေ။ ဤသည်မှာ ခွင့်ပြုချက်မရှိသော access ကို တားဆီးရန် လုံခြုံရေး အစီအမံ ဖြစ်ပါသည်။
 
 **မြင်ရမည့်အရာ:** "disconnected (1008): pairing required"
 
@@ -56,14 +46,12 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-အတည်ပြုပြီးနောက် စက်ပစ္စည်းကို မှတ်သားထားမည်ဖြစ်ပြီး `openclaw devices revoke --device <id> --role <role>` ဖြင့် မဖယ်ရှားမချင်း
-ထပ်မံ အတည်ပြုရန် မလိုတော့ပါ။ Token ပြောင်းလဲခြင်းနှင့် ဖယ်ရှားခြင်းအတွက်
-[Devices CLI](/cli/devices) ကို ကြည့်ပါ။
+တစ်ကြိမ် approve လုပ်ပြီးပါက device ကို မှတ်ထားပြီး `openclaw devices revoke --device <id> --role <role>` ဖြင့် revoke မလုပ်မချင်း ထပ်မံ approve လိုအပ်မည် မဟုတ်ပါ။ Token rotation နှင့် revocation အတွက် [Devices CLI](/cli/devices) ကို ကြည့်ပါ။
 
 **မှတ်ချက်များ:**
 
 - Local ချိတ်ဆက်မှုများ (`127.0.0.1`) ကို အလိုအလျောက် အတည်ပြုပါသည်။
-- Remote ချိတ်ဆက်မှုများ (LAN၊ Tailnet စသည်) တွင် အတိအလင်း အတည်ပြုရန် လိုအပ်ပါသည်။
+- Remote connections (LAN, Tailnet စသည်) ကို explicit approval လိုအပ်ပါသည်။
 - ဘရောက်ဇာ ပရိုဖိုင်တစ်ခုစီသည် ထူးခြားသော device ID တစ်ခုကို ဖန်တီးသဖြင့်
   ဘရောက်ဇာ ပြောင်းလဲခြင်း သို့မဟုတ် ဘရောက်ဇာဒေတာ ဖျက်ရှင်းခြင်း ပြုလုပ်ပါက
   ထပ်မံ ချိတ်ဆက်အတည်ပြုရပါမည်။
@@ -72,7 +60,7 @@ openclaw devices approve <requestId>
 
 - Gateway WS မှတစ်ဆင့် မော်ဒယ်နှင့် ချတ်လုပ်ခြင်း (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Chat အတွင်း tool calls များကို stream လုပ်ခြင်း + live tool output cards (agent events)
-- ချန်နယ်များ: WhatsApp/Telegram/Discord/Slack + plugin ချန်နယ်များ (Mattermost စသည်) အခြေအနေ + QR လော့ဂ်အင် + ချန်နယ်တစ်ခုချင်းစီအလိုက် ဖွဲ့စည်းပြင်ဆင်မှု (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost စသည်)။ status + QR login + channel အလိုက် config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: ရှိနေမှု စာရင်း + ပြန်လည်သစ်တင်ခြင်း (`system-presence`)
 - Sessions: စာရင်း + ဆက်ရှင်တစ်ခုချင်းစီအတွက် thinking/verbose အစားထိုးခြင်း (`sessions.list`, `sessions.patch`)
 - Cron jobs: စာရင်း/ထည့်သွင်း/အလုပ်လုပ်စေ/ဖွင့်/ပိတ် + အလုပ်လုပ်ခဲ့သည့် မှတ်တမ်း (`cron.*`)
@@ -89,7 +77,7 @@ openclaw devices approve <requestId>
 
 Cron jobs panel မှတ်ချက်များ:
 
-- သီးခြားထားသော jobs များအတွက် ပို့ဆောင်မှုကို ပုံမှန်အားဖြင့် အကျဉ်းချုပ် ကြေညာခြင်း သတ်မှတ်ထားပါသည်။ အတွင်းရေးသာ လည်ပတ်စေလိုပါက none သို့ ပြောင်းနိုင်ပါသည်။
+- Isolated jobs များအတွက် delivery သည် default အနေဖြင့် summary ကို ကြေညာပေးပါသည်။ internal-only runs လိုပါက none သို့ ပြောင်းလဲနိုင်ပါသည်။
 - announce ကို ရွေးချယ်ထားပါက Channel/target အကွက်များ ပေါ်လာပါသည်။
 
 ## Chat အပြုအမူ
@@ -116,12 +104,7 @@ openclaw gateway --tailscale serve
 
 - `https://<magicdns>/` (သို့မဟုတ် သင်သတ်မှတ်ထားသော `gateway.controlUi.basePath`)
 
-ပုံမှန်အားဖြင့် Serve request များသည် `gateway.auth.allowTailscale` သည် `true` ဖြစ်နေသည့်အခါ
-Tailscale identity headers (`tailscale-user-login`) မှတစ်ဆင့် authentication ပြုလုပ်နိုင်ပါသည်။ OpenClaw သည်
-`x-forwarded-for` လိပ်စာကို `tailscale whois` ဖြင့် ဖြေရှင်း၍ header နှင့် ကိုက်ညီမှုရှိမရှိ စစ်ဆေးကာ
-request သည် loopback သို့ Tailscale ၏ `x-forwarded-*` headers ဖြင့် ဝင်လာသောအခါတွင်သာ လက်ခံပါသည်။
-Serve traffic အတွက်တောင် token/password ကို မဖြစ်မနေ လိုအပ်စေလိုပါက
-`gateway.auth.allowTailscale: false` ကို သတ်မှတ်ပါ (သို့မဟုတ် `gateway.auth.mode: "password"` ကို အတင်းအကျပ် သတ်မှတ်ပါ)။
+default အနေဖြင့် `gateway.auth.allowTailscale` သည် `true` ဖြစ်ပါက Serve requests များသည် Tailscale identity headers (`tailscale-user-login`) ဖြင့် authentication လုပ်နိုင်ပါသည်။ 1. OpenClaw သည် `x-forwarded-for` လိပ်စာကို `tailscale whois` ဖြင့် resolve လုပ်ပြီး header နှင့် ကိုက်ညီမှုကို စစ်ဆေးကာ၊ Tailscale ၏ `x-forwarded-*` headers ပါရှိသည့် loopback သို့ request ဝင်ရောက်လာသောအခါတွင်သာ လက်ခံပါသည်။ 2. Serve traffic အတွက်တောင် token/password လိုအပ်စေချင်ပါက `gateway.auth.allowTailscale: false` (သို့) `gateway.auth.mode: "password"` ကို force လုပ်ပါ။
 
 ### Tailnet သို့ bind လုပ်၍ token သုံးခြင်း
 
@@ -137,9 +120,7 @@ UI ဆက်တင်များထဲသို့ token ကို ကူးထ
 
 ## Insecure HTTP
 
-plain HTTP (`http://<lan-ip>` သို့မဟုတ် `http://<tailscale-ip>`) ဖြင့် dashboard ကို ဖွင့်ပါက
-ဘရောက်ဇာသည် **non-secure context** ဖြင့် လည်ပတ်ပြီး WebCrypto ကို တားဆီးပါသည်။ ပုံမှန်အားဖြင့်
-OpenClaw သည် device identity မရှိသော Control UI ချိတ်ဆက်မှုများကို **ပိတ်ဆို့** ပါသည်။
+3. Dashboard ကို plain HTTP (`http://<lan-ip>` သို့မဟုတ် `http://<tailscale-ip>`) ဖြင့်ဖွင့်ပါက browser သည် **non-secure context** အဖြစ် လည်ပတ်ပြီး WebCrypto ကို ပိတ်ဆို့ပါသည်။ 4. ပုံမှန်အားဖြင့် OpenClaw သည် device identity မပါသော Control UI connections ကို **ပိတ်ဆို့** ပါသည်။
 
 **အကြံပြု ဖြေရှင်းချက်:** HTTPS (Tailscale Serve) ကို အသုံးပြုပါ သို့မဟုတ် UI ကို local မှ ဖွင့်ပါ။
 
@@ -158,14 +139,13 @@ OpenClaw သည် device identity မရှိသော Control UI ချိတ
 }
 ```
 
-ဤအရာသည် Control UI အတွက် device identity + pairing ကို ပိတ်ပင်ပါသည် (HTTPS ပေါ်တွင်ပါ)။
-ကွန်ယက်ကို ယုံကြည်နိုင်မှသာ အသုံးပြုပါ။
+5. ဤအရာသည် Control UI အတွက် device identity + pairing ကို (HTTPS ပေါ်တွင်တောင်) ပိတ်ထားပါသည်။ 6. ကွန်ယက်ကို ယုံကြည်နိုင်ပါကသာ အသုံးပြုပါ။
 
 HTTPS တပ်ဆင်ခြင်း လမ်းညွှန်အတွက် [Tailscale](/gateway/tailscale) ကို ကြည့်ပါ။
 
 ## UI ကို တည်ဆောက်ခြင်း
 
-Gateway သည် static ဖိုင်များကို `dist/control-ui` မှ ဝန်ဆောင်မှုပေးပါသည်။ အောက်ပါအတိုင်း build လုပ်ပါ။
+7. Gateway သည် static files များကို `dist/control-ui` မှ serve လုပ်ပါသည်။ 8. အောက်ပါအတိုင်း build လုပ်ပါ:
 
 ```bash
 pnpm ui:build # auto-installs UI deps on first run
@@ -187,7 +167,7 @@ pnpm ui:dev # auto-installs UI deps on first run
 
 ## Debugging/testing: dev server + remote Gateway
 
-Control UI သည် static ဖိုင်များဖြစ်ပြီး WebSocket target ကို ဖွဲ့စည်းပြင်ဆင်နိုင်ပါသည်၊ HTTP origin နှင့် မတူနိုင်ပါသည်။ ဤအရာသည် Vite dev server ကို local မှ အသုံးပြုချင်ပြီး Gateway ကို အခြားနေရာတွင် လည်ပတ်နေစေချင်သောအခါ အဆင်ပြေပါသည်။
+9. Control UI သည် static files ဖြစ်ပြီး WebSocket target ကို configure လုပ်နိုင်သဖြင့် HTTP origin နှင့် မတူနိုင်ပါသည်။ 10. Vite dev server ကို local တွင်အသုံးပြုပြီး Gateway ကို အခြားနေရာတွင် run လုပ်လိုသောအခါ အဆင်ပြေပါသည်။
 
 1. UI dev server ကို စတင်ပါ: `pnpm ui:dev`
 2. အောက်ပါကဲ့သို့ URL တစ်ခုကို ဖွင့်ပါ:
@@ -206,8 +186,8 @@ http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-toke
 
 - `gatewayUrl` ကို load ပြီးနောက် localStorage တွင် သိမ်းဆည်းပြီး URL မှ ဖယ်ရှားပါသည်။
 - `token` ကို localStorage တွင် သိမ်းဆည်းပါသည်; `password` ကို မေမိုရီတွင်သာ ထားရှိပါသည်။
-- `gatewayUrl` ကို သတ်မှတ်ထားပါက UI သည် config သို့မဟုတ် environment credentials သို့ ပြန်မလှန်ပါ။
-  `token` (သို့မဟုတ် `password`) ကို အတိအလင်း ပေးရပါမည်။ အတိအလင်း credentials မရှိပါက အမှားဖြစ်ပါသည်။
+- 11. `gatewayUrl` ကို set လုပ်ထားပါက UI သည် config သို့မဟုတ် environment credentials သို့ ပြန်မလှည့်ပါ။
+  12. `token` (သို့) `password` ကို ထင်ရှားစွာ ပေးရပါသည်။ 13. ထင်ရှားသော credentials မပါရှိပါက error ဖြစ်ပါသည်။
 - Gateway သည် TLS (Tailscale Serve၊ HTTPS proxy စသည်) အောက်တွင်ရှိပါက `wss://` ကို အသုံးပြုပါ။
 - Clickjacking ကို ကာကွယ်ရန် `gatewayUrl` ကို top-level window တွင်သာ လက်ခံပါသည် (embed မလုပ်နိုင်)။
 - Cross-origin dev setup များ (ဥပမာ `pnpm ui:dev` မှ remote Gateway သို့) အတွက် UI origin ကို

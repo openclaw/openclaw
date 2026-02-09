@@ -4,13 +4,6 @@ read_when:
   - Chcesz obsługiwać Gateway z poziomu przeglądarki
   - Chcesz mieć dostęp do Tailnet bez tuneli SSH
 title: "Control UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:01Z
 ---
 
 # Control UI (przeglądarka)

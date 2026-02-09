@@ -3,18 +3,11 @@ summary: "Status for Nextcloud Talk-support, funktioner og konfiguration"
 read_when:
   - Arbejder med Nextcloud Talk-kanalfunktioner
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:58Z
 ---
 
 # Nextcloud Talk (plugin)
 
-Status: understøttet via plugin (webhook-bot). Direkte beskeder, rum, reaktioner og markdown-beskeder understøttes.
+Status: understøttet via plugin (webhook bot). Direkte beskeder, værelser, reaktioner og markdown beskeder understøttes.
 
 ## Plugin påkrævet
 
@@ -40,6 +33,7 @@ Detaljer: [Plugins](/tools/plugin)
 ## Hurtig opsætning (begynder)
 
 1. Installér Nextcloud Talk-pluginet.
+
 2. Opret en bot på din Nextcloud-server:
 
    ```bash
@@ -47,9 +41,11 @@ Detaljer: [Plugins](/tools/plugin)
    ```
 
 3. Aktivér botten i indstillingerne for det ønskede rum.
+
 4. Konfigurér OpenClaw:
    - Konfiguration: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Eller env: `NEXTCLOUD_TALK_BOT_SECRET` (kun standardkonto)
+
 5. Genstart gatewayen (eller afslut introduktionen).
 
 Minimal konfiguration:
@@ -69,14 +65,14 @@ Minimal konfiguration:
 
 ## Noter
 
-- Bots kan ikke initiere direkte beskeder. Brugeren skal først skrive til botten.
+- Bots kan ikke starte DMs. Brugeren skal først sende en besked til botten.
 - Webhook-URL’en skal kunne nås af Gateway; sæt `webhookPublicUrl` hvis du er bag en proxy.
 - Medieuploads understøttes ikke af bot-API’et; medier sendes som URL’er.
 - Webhook-payloaden skelner ikke mellem direkte beskeder og rum; sæt `apiUser` + `apiPassword` for at aktivere opslag af rumtyper (ellers behandles direkte beskeder som rum).
 
 ## Adgangskontrol (direkte beskeder)
 
-- Standard: `channels.nextcloud-talk.dmPolicy = "pairing"`. Ukendte afsendere får en parringskode.
+- Standard: `channels.nextcloud-talk.dmPolicy = "pairing"`. Ukendt afsendere får en parringskode.
 - Godkend via:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ Udbyderindstillinger:
 - `channels.nextcloud-talk.webhookPath`: webhook-sti (standard: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: eksternt tilgængelig webhook-URL.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`.
-- `channels.nextcloud-talk.allowFrom`: tilladelsesliste for direkte beskeder (bruger-id’er). `open` kræver `"*"`.
+- `channels.nextcloud-talk.allowFrom`: DM allowlist (bruger IDs). `open` kræver `"*"`.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`.
 - `channels.nextcloud-talk.groupAllowFrom`: tilladelsesliste for grupper (bruger-id’er).
 - `channels.nextcloud-talk.rooms`: indstillinger og tilladelsesliste pr. rum.

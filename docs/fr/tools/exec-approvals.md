@@ -5,13 +5,6 @@ read_when:
   - Implémentation de l’UX d’approbation d’exécution dans l’application macOS
   - Revue des invites d’échappement du sandbox et de leurs implications
 title: "Approbations d’exécution"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 97736427752eb905
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:14Z
 ---
 
 # Approbations d’exécution

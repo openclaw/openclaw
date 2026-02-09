@@ -3,13 +3,6 @@ summary: "Kanallar arasında paylaşılan tepki semantiği"
 read_when:
   - Herhangi bir kanalda tepkiler üzerinde çalışırken
 title: "Tepkiler"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:44Z
 ---
 
 # Tepki araçları

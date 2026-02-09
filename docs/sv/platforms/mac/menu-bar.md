@@ -3,13 +3,6 @@ summary: "Statuslogik för menyraden och vad som visas för användare"
 read_when:
   - Justering av mac-menyns UI eller statuslogik
 title: "Menyrad"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:03Z
 ---
 
 # Statuslogik för menyraden
@@ -23,8 +16,8 @@ x-i18n:
 
 ## Tillståndsmodell
 
-- Sessioner: händelser anländer med `runId` (per körning) plus `sessionKey` i nyttolasten. Den ”huvudsakliga” sessionen är nyckeln `main`; om den saknas faller vi tillbaka till den senast uppdaterade sessionen.
-- Prioritet: huvudsessionen vinner alltid. Om huvudsessionen är aktiv visas dess tillstånd omedelbart. Om huvudsessionen är inaktiv visas den senast aktiva icke‑huvudsessionen. Vi växlar inte fram och tillbaka mitt under aktivitet; vi byter endast när den aktuella sessionen blir inaktiv eller när huvudsessionen blir aktiv.
+- Sessioner: händelser anländer med `runId` (per-run) plus `sessionKey` i nyttolasten. “main” sessionen är nyckeln `main`; om den saknas, vi faller tillbaka till den senast uppdaterade sessionen.
+- Prioritet: main alltid vinner. Om huvud är aktiv, dess tillstånd visas omedelbart. Om huvud är inaktiv, den senaste aktiva non‐main sessionen visas. Vi växlar inte flip‐flop mid‐activity; vi växlar bara när den aktuella sessionen går vilande eller main blir aktiv.
 - Aktivitetstyper:
   - `job`: exekvering av kommandon på hög nivå (`state: started|streaming|done|error`).
   - `tool`: `phase: start|result` med `toolName` och `meta/args`.

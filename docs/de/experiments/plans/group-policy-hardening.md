@@ -1,15 +1,8 @@
 ---
-summary: „Telegram-Allowlist-Härtung: Präfix- und Whitespace-Normalisierung“
+summary: "„Telegram-Allowlist-Härtung: Präfix- und Whitespace-Normalisierung“"
 read_when:
   - Überprüfung historischer Änderungen an der Telegram-Allowlist
-title: „Telegram-Allowlist-Härtung“
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:04Z
+title: "Telegram-Allowlist-Härtung"
 ---
 
 # Telegram-Allowlist-Härtung

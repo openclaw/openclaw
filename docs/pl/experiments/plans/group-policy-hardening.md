@@ -3,13 +3,6 @@ summary: "Utwardzanie listy dozwolonych Telegrama: normalizacja prefiksów i bia
 read_when:
   - Przeglądanie historycznych zmian listy dozwolonych Telegrama
 title: "Utwardzanie listy dozwolonych Telegrama"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:05Z
 ---
 
 # Utwardzanie listy dozwolonych Telegrama

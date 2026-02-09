@@ -3,13 +3,6 @@ summary: "CLI-referens för `openclaw configure` (interaktiva konfigurationsfrå
 read_when:
   - Du vill justera autentiseringsuppgifter, enheter eller agentstandarder interaktivt
 title: "konfigurera"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:37Z
 ---
 
 # `openclaw configure`
@@ -19,8 +12,8 @@ Interaktiv prompt för att konfigurera autentiseringsuppgifter, enheter och agen
 Obs: Avsnittet **Model** innehåller nu ett flerval för
 `agents.defaults.models`-tillåtelselistan (vad som visas i `/model` och i modellväljaren).
 
-Tips: `openclaw config` utan underkommando öppnar samma guide. Använd
-`openclaw config get|set|unset` för icke-interaktiva ändringar.
+Tips: `openclaw config` utan ett underkommando öppnar samma trollkarl. Använd
+`openclaw config get<unk> set<unk> unset` för icke-interaktiva redigeringar.
 
 Relaterat:
 
@@ -29,8 +22,8 @@ Relaterat:
 
 Noteringar:
 
-- Att välja var Gateway körs uppdaterar alltid `gateway.mode`. Du kan välja ”Continue” utan andra avsnitt om det är allt du behöver.
-- Kanalorienterade tjänster (Slack/Discord/Matrix/Microsoft Teams) frågar efter tillåtelselistor för kanaler/rum under konfigureringen. Du kan ange namn eller ID:n; guiden löser namn till ID:n när det är möjligt.
+- Välja var Gateway körs uppdaterar alltid `gateway.mode`. Du kan välja "Fortsätt" utan andra sektioner om det är allt du behöver.
+- Kanalorienterade tjänster (Slut/Discord/Matrix/Microsoft Teams) prompt för kanal/rum allowlists under installationen. Du kan ange namn eller ID; guiden löser namn till ID när det är möjligt.
 
 ## Exempel
 

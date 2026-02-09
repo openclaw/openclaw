@@ -3,13 +3,6 @@ summary: "تصميم طابور الأوامر الذي يُسلسِل تشغي�
 read_when:
   - تغيير تنفيذ الردّ التلقائي أو التزامن
 title: "طابور الأوامر"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:19Z
 ---
 
 # طابور الأوامر (2026-01-16)

@@ -5,13 +5,6 @@ read_when:
   - Investigación de filas de instancias duplicadas u obsoletas
   - Cambio de la conexión WS del Gateway o de los beacons de eventos del sistema
 title: "Presencia"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:17Z
 ---
 
 # Presencia
@@ -42,12 +35,12 @@ Las entradas de presencia son objetos estructurados con campos como:
 
 Las entradas de presencia son producidas por múltiples fuentes y se **combinan**.
 
-### 1) Entrada propia del Gateway
+### 1. Entrada propia del Gateway
 
 El Gateway siempre inicializa una entrada “self” al arrancar para que las IU muestren el host del gateway
 incluso antes de que se conecten clientes.
 
-### 2) Conexión WebSocket
+### 2. Conexión WebSocket
 
 Cada cliente WS comienza con una solicitud `connect`. Tras un handshake exitoso, el
 Gateway hace un upsert de una entrada de presencia para esa conexión.
@@ -57,12 +50,12 @@ Gateway hace un upsert de una entrada de presencia para esa conexión.
 La CLI suele conectarse para comandos cortos y puntuales. Para evitar saturar la
 lista de Instances, `client.mode === "cli"` **no** se convierte en una entrada de presencia.
 
-### 3) Beacons `system-event`
+### 3. Beacons `system-event`
 
 Los clientes pueden enviar beacons periódicos más completos mediante el método `system-event`. La app de macOS
 usa esto para informar el nombre de host, la IP y `lastInputSeconds`.
 
-### 4) Conexiones de nodos (rol: node)
+### 4. Conexiones de nodos (rol: node)
 
 Cuando un nodo se conecta por el WebSocket del Gateway con `role: node`, el Gateway
 hace un upsert de una entrada de presencia para ese nodo (el mismo flujo que otros clientes WS).

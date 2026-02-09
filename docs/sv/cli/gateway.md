@@ -5,13 +5,6 @@ read_when:
   - Felsöka Gateway-autentisering, bindningslägen och anslutning
   - Upptäcka gateways via Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:50Z
 ---
 
 # Gateway CLI
@@ -42,10 +35,10 @@ openclaw gateway run
 
 Noteringar:
 
-- Som standard vägrar Gateway att starta om inte `gateway.mode=local` är satt i `~/.openclaw/openclaw.json`. Använd `--allow-unconfigured` för ad-hoc-/utvecklingskörningar.
+- Som standard vägrar Gateway att starta om inte `gateway.mode=local` är satt i `~/.openclaw/openclaw.json`. Använd `--allow-unconfigured` för ad-hoc/dev körs.
 - Bindning utanför loopback utan autentisering blockeras (säkerhetsräcke).
 - `SIGUSR1` triggar en omstart i processen när den är auktoriserad (aktivera `commands.restart` eller använd gateway-verktyget/konfig apply/update).
-- `SIGINT`/`SIGTERM`-hanterare stoppar gateway-processen, men återställer inte något anpassat terminaltillstånd. Om du omsluter CLI:n med en TUI eller råläge-inmatning, återställ terminalen före avslut.
+- `SIGINT`/`SIGTERM`-hanterare stoppar gatewayprocessen, men de återställer inte något anpassat terminaltillstånd. Om du sveper in CLI med en TUI eller raw-mode ingång, återställ terminalen innan avfarten.
 
 ### Alternativ
 
@@ -85,8 +78,8 @@ Delade alternativ (där de stöds):
 - `--timeout <ms>`: timeout/budget (varierar per kommando).
 - `--expect-final`: vänta på ett ”final”-svar (agentanrop).
 
-Obs: när du sätter `--url` faller CLI:n inte tillbaka till konfig eller miljöuppgifter.
-Skicka `--token` eller `--password` explicit. Avsaknad av explicita autentiseringsuppgifter är ett fel.
+Notera: När du anger `--url`, faller CLI inte tillbaka till config eller miljöuppgifter.
+Passera `--token` eller` --lösenord` explicit. Saknar explicita referenser är ett fel.
 
 ### `gateway health`
 
@@ -114,12 +107,12 @@ Alternativ:
 
 ### `gateway probe`
 
-`gateway probe` är kommandot för att ”felsöka allt”. Det sonderar alltid:
+`gateway probe` är kommandot ”debug everything”. Det alltid probes:
 
 - din konfigurerade fjärr-gateway (om satt), och
 - localhost (loopback) **även om fjärr är konfigurerad**.
 
-Om flera gateways är nåbara skriver den ut alla. Flera gateways stöds när du använder isolerade profiler/portar (t.ex. en räddningsbot), men de flesta installationer kör fortfarande en enda gateway.
+Om flera gateways är nåbara, skriver det ut dem alla. Flera gateways stöds när du använder isolerade profiler/portar (t.ex. en räddningsbot), men de flesta installationer kör fortfarande en enda gateway.
 
 ```bash
 openclaw gateway probe
@@ -183,7 +176,7 @@ Endast gateways med Bonjour-upptäckt aktiverad (standard) annonserar beaconn.
 Wide-Area discovery-poster inkluderar (TXT):
 
 - `role` (gateway-rollhint)
-- `transport` (transporthint, t.ex. `gateway`)
+- `transport` (transportledtråd, t.ex. `gateway`)
 - `gatewayPort` (WebSocket-port, vanligtvis `18789`)
 - `sshPort` (SSH-port; standard `22` om den inte finns)
 - `tailnetDns` (MagicDNS-värdnamn, när tillgängligt)

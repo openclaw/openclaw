@@ -6,22 +6,15 @@ read_when:
   - clone လုပ်နိုင်ပြီး reset ပြန်လုပ်နိုင်သော macOS ပတ်ဝန်းကျင်လိုအပ်သည့်အခါ
   - local နှင့် hosted macOS VM ရွေးချယ်စရာများကို နှိုင်းယှဉ်လိုသည့်အခါ
 title: "macOS VM များ"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # macOS VM များပေါ်ရှိ OpenClaw (Sandboxing)
 
 ## အကြံပြုထားသော မူလရွေးချယ်မှု (အသုံးပြုသူအများစုအတွက်)
 
-- **အသေးစား Linux VPS** ကို Gateway အမြဲဖွင့်ထားရန်နှင့် ကုန်ကျစရိတ်နည်းစေရန် အသုံးပြုပါ။ [VPS hosting](/vps) ကို ကြည့်ပါ။
-- **Dedicated hardware** (Mac mini သို့မဟုတ် Linux box) ကို အပြည့်အဝထိန်းချုပ်နိုင်ရန်နှင့် browser automation အတွက် **residential IP** လိုအပ်ပါက အသုံးပြုပါ။ ဝဘ်ဆိုက်များစွာက data center IP များကို ပိတ်ပင်ထားသဖြင့် local browsing သည် ပိုကောင်းလေ့ရှိသည်။
-- **Hybrid:** စျေးပေါသော VPS ပေါ်တွင် Gateway ကိုထားပြီး browser/UI automation လိုအပ်သည့်အချိန်တွင် သင့် Mac ကို **node** အဖြစ် ချိတ်ဆက်ပါ။ [Nodes](/nodes) နှင့် [Gateway remote](/gateway/remote) ကို ကြည့်ပါ။
+- **Small Linux VPS** for an always-on Gateway and low cost. See [VPS hosting](/vps).
+- **Dedicated hardware** (Mac mini or Linux box) if you want full control and a **residential IP** for browser automation. site အများအပြားက data center IPs ကို ပိတ်ထားတဲ့အတွက် local browsing က ပိုကောင်းတတ်ပါတယ်။
+- **Hybrid:** keep the Gateway on a cheap VPS, and connect your Mac as a **node** when you need browser/UI automation. See [Nodes](/nodes) and [Gateway remote](/gateway/remote).
 
 macOS သာလျှင်ရနိုင်သော စွမ်းရည်များ (iMessage/BlueBubbles) လိုအပ်သည့်အခါ သို့မဟုတ် နေ့စဉ်အသုံးပြုနေသော Mac မှ တင်းကျပ်စွာ ခွဲခြားထားလိုသည့်အခါ macOS VM ကို အသုံးပြုပါ။
 
@@ -69,7 +62,7 @@ macOS VM သို့ SSH ဝင်ရောက်နိုင်ပါက အ�
 
 ---
 
-## 1) Lume ကို ထည့်သွင်းခြင်း
+## 1. Lume ကို ထည့်သွင်းခြင်း
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ Docs: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/install
 
 ---
 
-## 2) macOS VM ကို ဖန်တီးခြင်း
+## 2. macOS VM ကို ဖန်တီးခြင်း
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-ဤအဆင့်တွင် macOS ကို download လုပ်ပြီး VM ကို ဖန်တီးပါသည်။ VNC window တစ်ခု အလိုအလျောက် ဖွင့်ပါမည်။
+This downloads macOS and creates the VM. A VNC window opens automatically.
 
 မှတ်ချက်: သင့်အင်တာနက်ချိတ်ဆက်မှုအပေါ် မူတည်၍ download သည် အချိန်ယူနိုင်ပါသည်။
 
 ---
 
-## 3) Setup Assistant ကို ပြီးစီးစေခြင်း
+## 3. Setup Assistant ကို ပြီးစီးစေခြင်း
 
 VNC window အတွင်း—
 
@@ -119,7 +112,7 @@ Setup ပြီးဆုံးပါက SSH ကို ဖွင့်ပါ—
 
 ---
 
-## 4) VM ၏ IP လိပ်စာကို ရယူခြင်း
+## 4. VM ၏ IP လိပ်စာကို ရယူခြင်း
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ IP လိပ်စာကို ရှာပါ (အများအားဖြ�
 
 ---
 
-## 5) VM သို့ SSH ဝင်ရောက်ခြင်း
+## 5. VM သို့ SSH ဝင်ရောက်ခြင်း
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) OpenClaw ကို ထည့်သွင်းခြင်း
+## 6. OpenClaw ကို ထည့်သွင်းခြင်း
 
 VM အတွင်း—
 
@@ -152,7 +145,7 @@ onboarding မေးခွန်းများကို လိုက်နာ�
 
 ---
 
-## 7) ချန်နယ်များကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
+## 7. ချန်နယ်များကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
 
 config ဖိုင်ကို ပြင်ဆင်ပါ—
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) VM ကို headless အဖြစ် လည်ပတ်စေခြင်း
+## 8. VM ကို headless အဖြစ် လည်ပတ်စေခြင်း
 
 VM ကို ရပ်တန့်ပြီး display မပါဘဲ ပြန်စတင်ပါ—
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-VM သည် နောက်ခံတွင် လည်ပတ်နေပါမည်။ OpenClaw ၏ daemon သည် Gateway ကို ဆက်လက် လည်ပတ်စေပါသည်။
+The VM runs in the background. OpenClaw's daemon keeps the gateway running.
 
 အခြေအနေ စစ်ဆေးရန်—
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## Bonus: iMessage ပေါင်းစည်းမှု
 
-ဤသည်မှာ macOS ပေါ်တွင် လည်ပတ်ခြင်း၏ အဓိကအားသာချက် ဖြစ်သည်။ [BlueBubbles](https://bluebubbles.app) ကို အသုံးပြုပြီး OpenClaw သို့ iMessage ကို ထည့်သွင်းပါ။
+This is the killer feature of running on macOS. Use [BlueBubbles](https://bluebubbles.app) to add iMessage to OpenClaw.
 
 VM အတွင်း—
 
@@ -228,7 +221,7 @@ OpenClaw config ထဲသို့ ထည့်ပါ—
 }
 ```
 
-Gateway ကို ပြန်စတင်ပါ။ ယခု သင့် agent သည် iMessage များကို ပို့လက်ခံနိုင်ပါပြီ။
+Gateway（ဂိတ်ဝေး） ကို ပြန်လည်စတင်ပါ။ Now your agent can send and receive iMessages.
 
 အသေးစိတ် setup: [BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,7 +254,7 @@ VM ကို ဆက်လက် လည်ပတ်စေရန်—
 - System Settings → Energy Saver တွင် sleep ကို ပိတ်ပါ
 - လိုအပ်ပါက `caffeinate` ကို အသုံးပြုပါ
 
-အမြဲဖွင့်ထားရန် အမှန်တကယ်လိုအပ်ပါက dedicated Mac mini သို့မဟုတ် အသေးစား VPS ကို စဉ်းစားပါ။ [VPS hosting](/vps) ကို ကြည့်ပါ။
+For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosting](/vps).
 
 ---
 

@@ -4,24 +4,17 @@ read_when:
   - आप OpenClaw में Anthropic मॉडल का उपयोग करना चाहते हैं
   - आप API कुंजियों के बजाय setup-token चाहते हैं
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:34Z
 ---
 
 # Anthropic (Claude)
 
-Anthropic **Claude** मॉडल परिवार बनाता है और API के माध्यम से एक्सेस प्रदान करता है।
-OpenClaw में आप API कुंजी या **setup-token** के साथ प्रमाणीकरण कर सकते हैं।
+Anthropic builds the **Claude** model family and provides access via an API.
+In OpenClaw you can authenticate with an API key or a **setup-token**.
 
 ## विकल्प A: Anthropic API कुंजी
 
-**उपयुक्त:** मानक API एक्सेस और उपयोग-आधारित बिलिंग।
-Anthropic Console में अपनी API कुंजी बनाएँ।
+**Best for:** standard API access and usage-based billing.
+Create your API key in the Anthropic Console.
 
 ### CLI सेटअप
 
@@ -44,16 +37,16 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt caching (Anthropic API)
 
-OpenClaw, Anthropic की prompt caching सुविधा का समर्थन करता है। यह **केवल API** के लिए है; सब्सक्रिप्शन प्रमाणीकरण कैश सेटिंग्स का सम्मान नहीं करता।
+OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
 
 ### Configuration
 
 अपने मॉडल विन्यास में `cacheRetention` पैरामीटर का उपयोग करें:
 
-| Value   | Cache Duration | Description                        |
-| ------- | -------------- | ---------------------------------- |
-| `none`  | No caching     | Prompt caching अक्षम करें          |
-| `short` | 5 minutes      | API Key प्रमाणीकरण के लिए डिफ़ॉल्ट |
+| Value   | Cache Duration | Description                                           |
+| ------- | -------------- | ----------------------------------------------------- |
+| `none`  | No caching     | Prompt caching अक्षम करें                             |
+| `short` | 5 minutes      | API Key प्रमाणीकरण के लिए डिफ़ॉल्ट                    |
 | `long`  | 1 hour         | विस्तारित कैश (beta फ़्लैग आवश्यक) |
 
 ```json5
@@ -72,7 +65,7 @@ OpenClaw, Anthropic की prompt caching सुविधा का समर्
 
 ### Defaults
 
-Anthropic API Key प्रमाणीकरण का उपयोग करते समय, OpenClaw सभी Anthropic मॉडलों के लिए स्वचालित रूप से `cacheRetention: "short"` (5‑मिनट कैश) लागू करता है। आप अपने विन्यास में स्पष्ट रूप से `cacheRetention` सेट करके इसे ओवरराइड कर सकते हैं।
+When using Anthropic API Key authentication, OpenClaw automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
 
 ### Legacy parameter
 
@@ -91,7 +84,7 @@ OpenClaw में Anthropic API अनुरोधों के लिए `exte
 
 ### setup-token कहाँ प्राप्त करें
 
-Setup-token **Claude Code CLI** द्वारा बनाए जाते हैं, न कि Anthropic Console द्वारा। आप इसे **किसी भी मशीन** पर चला सकते हैं:
+Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. You can run this on **any machine**:
 
 ```bash
 claude setup-token
@@ -127,21 +120,21 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - `claude setup-token` के साथ setup-token जनरेट करें और उसे पेस्ट करें, या Gateway होस्ट पर `openclaw models auth setup-token` चलाएँ।
-- यदि Claude सब्सक्रिप्शन पर “OAuth token refresh failed …” दिखाई दे, तो setup-token के साथ पुनः प्रमाणीकरण करें। देखें [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription)।
+- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - प्रमाणीकरण विवरण + पुनः उपयोग नियम [/concepts/oauth](/concepts/oauth) में हैं।
 
 ## Troubleshooting
 
 **401 त्रुटियाँ / टोकन अचानक अमान्य**
 
-- Claude सब्सक्रिप्शन प्रमाणीकरण समाप्त हो सकता है या रद्द किया जा सकता है। `claude setup-token` पुनः चलाएँ
-  और इसे **Gateway होस्ट** में पेस्ट करें।
+- Claude subscription auth can expire or be revoked. Re-run `claude setup-token`
+  and paste it into the **gateway host**.
 - यदि Claude CLI लॉगिन किसी दूसरी मशीन पर है, तो Gateway होस्ट पर
   `openclaw models auth paste-token --provider anthropic` का उपयोग करें।
 
 **प्रदाता "anthropic" के लिए कोई API कुंजी नहीं मिली**
 
-- प्रमाणीकरण **प्रति एजेंट** होता है। नए एजेंट मुख्य एजेंट की कुंजियाँ विरासत में नहीं लेते।
+- Auth is **per agent**. New agents don’t inherit the main agent’s keys.
 - उस एजेंट के लिए onboarding पुनः चलाएँ, या Gateway होस्ट पर setup-token / API कुंजी पेस्ट करें,
   फिर `openclaw models status` के साथ सत्यापित करें।
 

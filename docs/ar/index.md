@@ -3,13 +3,6 @@ summary: "OpenClaw هي بوابة متعددة القنوات لوكلاء ال
 read_when:
   - تقديم OpenClaw للوافدين الجدد
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:31Z
 ---
 
 # OpenClaw 🦞
@@ -31,19 +24,18 @@ x-i18n:
 
 > _«قَشِّر! قَشِّر!»_ — جراد بحر فضائي، على الأرجح
 
-<p align="center">
-  <strong>بوابة تعمل على أي نظام تشغيل لوكلاء الذكاء الاصطناعي عبر WhatsApp وTelegram وDiscord وiMessage وغيرها.</strong><br />
+<p align="center"><strong>بوابة تعمل على أي نظام تشغيل لوكلاء الذكاء الاصطناعي عبر WhatsApp وTelegram وDiscord وiMessage وغيرها.</strong><br />
   أرسل رسالة، واحصل على رد من وكيل مباشرة من جيبك. تضيف الإضافات دعم Mattermost وغيرها.
 </p>
 
 <Columns>
-  <Card title="ابدأ الآن" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     ثبّت OpenClaw وشغّل Gateway خلال دقائق.
   </Card>
-  <Card title="تشغيل معالج الإعداد" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     إعداد موجّه باستخدام `openclaw onboard` وتدفّقات الاقتران.
   </Card>
-  <Card title="فتح واجهة التحكّم" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     شغّل لوحة التحكم في المتصفح للدردشة والتهيئة والجلسات.
   </Card>
 </Columns>
@@ -80,22 +72,22 @@ Gateway هو مصدر الحقيقة الوحيد للجلسات والتوجي�
 ## القدرات الرئيسية
 
 <Columns>
-  <Card title="Gateway متعددة القنوات" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     WhatsApp وTelegram وDiscord وiMessage باستخدام عملية Gateway واحدة.
   </Card>
-  <Card title="قنوات عبر الإضافات" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     أضف Mattermost وغيرها عبر حزم التوسعة.
   </Card>
-  <Card title="توجيه متعدد الوكلاء" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     جلسات معزولة لكل وكيل أو مساحة عمل أو مُرسِل.
   </Card>
-  <Card title="دعم الوسائط" icon="image">
+  <Card title="Media support" icon="image">
     إرسال واستقبال الصور والصوتيات والمستندات.
   </Card>
-  <Card title="واجهة تحكّم ويب" icon="monitor">
+  <Card title="Web Control UI" icon="monitor">
     لوحة تحكم في المتصفح للدردشة والتهيئة والجلسات والعُقد.
   </Card>
-  <Card title="عُقد جوّالة" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     إقران عُقد iOS وAndroid مع دعم Canvas.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ Gateway هو مصدر الحقيقة الوحيد للجلسات والتوجي�
 ## البدء السريع
 
 <Steps>
-  <Step title="تثبيت OpenClaw">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="التهيئة الأولية وتثبيت الخدمة">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="اقتران WhatsApp وتشغيل Gateway">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -121,7 +113,7 @@ Gateway هو مصدر الحقيقة الوحيد للجلسات والتوجي�
   </Step>
 </Steps>
 
-هل تحتاج إلى التثبيت الكامل وإعداد التطوير؟ راجع [البدء السريع](/start/quickstart).
+هل تحتاج إلى التثبيت الكامل وإعداد التطوير؟ راجع [البدء السريع](/start/quickstart). انظر [البداية السريعة](/start/quickstart).
 
 ## لوحة التحكم
 
@@ -158,22 +150,22 @@ Gateway هو مصدر الحقيقة الوحيد للجلسات والتوجي�
 ## ابدأ من هنا
 
 <Columns>
-  <Card title="محاور التوثيق" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     جميع المستندات والأدلة، منظّمة حسب حالة الاستخدام.
   </Card>
-  <Card title="التهيئة" href="/gateway/configuration" icon="settings">
+  <Card title="Configuration" href="/gateway/configuration" icon="settings">
     إعدادات Gateway الأساسية والرموز وتهيئة الموفّرين.
   </Card>
-  <Card title="الوصول عن بُعد" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     أنماط الوصول عبر SSH وtailnet.
   </Card>
-  <Card title="القنوات" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     إعدادات خاصة بالقنوات لـ WhatsApp وTelegram وDiscord وغيرها.
   </Card>
-  <Card title="العُقد" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     عُقد iOS وAndroid مع الاقتران وCanvas.
   </Card>
-  <Card title="المساعدة" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     حلول شائعة ونقطة بدء لاستكشاف الأخطاء وإصلاحها.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Gateway هو مصدر الحقيقة الوحيد للجلسات والتوجي�
 ## تعرّف على المزيد
 
 <Columns>
-  <Card title="قائمة الميزات الكاملة" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     قدرات القنوات والتوجيه والوسائط بالكامل.
   </Card>
-  <Card title="توجيه متعدد الوكلاء" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     عزل مساحات العمل والجلسات لكل وكيل.
   </Card>
-  <Card title="الأمان" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     الرموز وقوائم السماح وضوابط السلامة.
   </Card>
-  <Card title="استكشاف الأخطاء وإصلاحها" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     تشخيص Gateway والأخطاء الشائعة.
   </Card>
-  <Card title="حول المشروع والاعتمادات" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     أصول المشروع والمساهمون والترخيص.
   </Card>
 </Columns>

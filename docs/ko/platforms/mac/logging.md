@@ -4,13 +4,6 @@ read_when:
   - macOS 로그를 캡처하거나 개인정보 데이터 로깅을 조사할 때
   - 음성 웨이크/세션 라이프사이클 문제를 디버깅할 때
 title: "macOS 로깅"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:42Z
 ---
 
 # 로깅 (macOS)

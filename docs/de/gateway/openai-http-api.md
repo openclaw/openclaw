@@ -1,15 +1,8 @@
 ---
-summary: „Stellen Sie einen OpenAI‑kompatiblen /v1/chat/completions‑HTTP‑Endpunkt über das Gateway bereit“
+summary: "„Stellen Sie einen OpenAI‑kompatiblen /v1/chat/completions‑HTTP‑Endpunkt über das Gateway bereit“"
 read_when:
   - Integration von Werkzeugen, die OpenAI Chat Completions erwarten
-title: „OpenAI Chat Completions“
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:15Z
+title: "„OpenAI Chat Completions“"
 ---
 
 # OpenAI Chat Completions (HTTP)

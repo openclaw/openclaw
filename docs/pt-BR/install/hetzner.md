@@ -6,13 +6,6 @@ read_when:
   - Você quer controle total sobre persistência, binários e comportamento de reinício
   - Você está executando o OpenClaw em Docker na Hetzner ou em um provedor similar
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:19Z
 ---
 
 # OpenClaw na Hetzner (Docker, Guia de Produção em VPS)
@@ -71,7 +64,7 @@ Para o fluxo genérico de Docker, veja [Docker](/install/docker).
 
 ---
 
-## 1) Provisionar o VPS
+## 1. Provisionar o VPS
 
 Crie um VPS Ubuntu ou Debian na Hetzner.
 
@@ -86,7 +79,7 @@ Não o trate como infraestrutura descartável.
 
 ---
 
-## 2) Instalar Docker (no VPS)
+## 2. Instalar Docker (no VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Clonar o repositório OpenClaw
+## 3. Clonar o repositório OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,7 +107,7 @@ Este guia assume que você irá criar uma imagem personalizada para garantir a p
 
 ---
 
-## 4) Criar diretórios persistentes no host
+## 4. Criar diretórios persistentes no host
 
 Contêineres Docker são efêmeros.
 Todo estado de longa duração deve viver no host.
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Configurar variáveis de ambiente
+## 5. Configurar variáveis de ambiente
 
 Crie `.env` na raiz do repositório.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Configuração do Docker Compose
+## 6. Configuração do Docker Compose
 
 Crie ou atualize `docker-compose.yml`.
 
@@ -204,7 +197,7 @@ services:
 
 ---
 
-## 7) Incorporar os binários necessários na imagem (crítico)
+## 7. Incorporar os binários necessários na imagem (crítico)
 
 Instalar binários dentro de um contêiner em execução é uma armadilha.
 Qualquer coisa instalada em tempo de execução será perdida no reinício.
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Construir e iniciar
+## 8. Construir e iniciar
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Saída esperada:
 
 ---
 
-## 9) Verificar o Gateway
+## 9. Verificar o Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -323,15 +316,15 @@ Cole o token do seu gateway.
 O OpenClaw roda em Docker, mas o Docker não é a fonte da verdade.
 Todo estado de longa duração deve sobreviver a reinícios, reconstruções e reboots.
 
-| Componente                       | Localização                       | Mecanismo de persistência  | Notas                               |
-| -------------------------------- | --------------------------------- | -------------------------- | ----------------------------------- |
-| Configuração do Gateway          | `/home/node/.openclaw/`           | Montagem de volume do host | Inclui `openclaw.json`, tokens      |
-| Perfis de autenticação do modelo | `/home/node/.openclaw/`           | Montagem de volume do host | Tokens OAuth, chaves de API         |
-| Configurações de Skills          | `/home/node/.openclaw/skills/`    | Montagem de volume do host | Estado no nível da Skill            |
-| Workspace do agente              | `/home/node/.openclaw/workspace/` | Montagem de volume do host | Código e artefatos do agente        |
-| Sessão do WhatsApp               | `/home/node/.openclaw/`           | Montagem de volume do host | Preserva o login por QR             |
-| Keyring do Gmail                 | `/home/node/.openclaw/`           | Volume do host + senha     | Requer `GOG_KEYRING_PASSWORD`       |
-| Binários externos                | `/usr/local/bin/`                 | Imagem Docker              | Devem ser incorporados no build     |
-| Runtime do Node                  | Sistema de arquivos do contêiner  | Imagem Docker              | Reconstruído a cada build da imagem |
-| Pacotes do SO                    | Sistema de arquivos do contêiner  | Imagem Docker              | Não instale em tempo de execução    |
-| Contêiner Docker                 | Efêmero                           | Reiniciável                | Seguro para destruir                |
+| Componente                       | Localização                       | Mecanismo de persistência  | Notas                                  |
+| -------------------------------- | --------------------------------- | -------------------------- | -------------------------------------- |
+| Configuração do Gateway          | `/home/node/.openclaw/`           | Montagem de volume do host | Inclui `openclaw.json`, tokens         |
+| Perfis de autenticação do modelo | `/home/node/.openclaw/`           | Montagem de volume do host | Tokens OAuth, chaves de API            |
+| Configurações de Skills          | `/home/node/.openclaw/skills/`    | Montagem de volume do host | Estado no nível da Skill               |
+| Workspace do agente              | `/home/node/.openclaw/workspace/` | Montagem de volume do host | Código e artefatos do agente           |
+| Sessão do WhatsApp               | `/home/node/.openclaw/`           | Montagem de volume do host | Preserva o login por QR                |
+| Keyring do Gmail                 | `/home/node/.openclaw/`           | Volume do host + senha     | Requer `GOG_KEYRING_PASSWORD`          |
+| Binários externos                | `/usr/local/bin/`                 | Imagem Docker              | Deve ser assado no tempo de construção |
+| Runtime do Node                  | Sistema de arquivos do contêiner  | Imagem Docker              | Reconstruído a cada build da imagem    |
+| Pacotes do SO                    | Sistema de arquivos do contêiner  | Imagem Docker              | Não instale em tempo de execução       |
+| Contêiner Docker                 | Efêmero                           | Reiniciável                | Seguro para destruir                   |

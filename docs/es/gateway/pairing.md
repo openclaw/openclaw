@@ -5,13 +5,6 @@ read_when:
   - Adición de flujos de CLI para aprobar nodos remotos
   - Extensión del protocolo del Gateway con gestión de nodos
 title: "Emparejamiento propiedad del Gateway"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:35Z
 ---
 
 # Emparejamiento propiedad del Gateway (Opción B)

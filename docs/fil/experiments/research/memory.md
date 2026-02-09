@@ -2,16 +2,9 @@
 summary: "Mga tala sa pananaliksik: offline na sistema ng memorya para sa mga workspace ng Clawd (Markdown bilang source-of-truth + derived index)"
 read_when:
   - Pagdidisenyo ng workspace memory (~/.openclaw/workspace) lampas sa pang-araw-araw na Markdown logs
-  - Pagdedesisyon: standalone CLI vs malalim na integrasyon sa OpenClaw
+  - Deciding: mga limitasyon sa oras (“ano ang totoo noong Nob 2025?”)
   - Pagdaragdag ng offline recall + reflection (retain/recall/reflect)
 title: "Pananaliksik sa Workspace Memory"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:42Z
 ---
 
 # Workspace Memory v2 (offline): mga tala sa pananaliksik
@@ -34,7 +27,7 @@ Mahina ito para sa:
 - high-recall na retrieval (“ano ang napagdesisyunan natin tungkol sa X?”, “huling beses na sinubukan natin ang Y?”)
 - entity-centric na sagot (“sabihin mo sa akin ang tungkol kay Alice / The Castle / warelay”) nang hindi muling binabasa ang maraming file
 - katatagan ng opinyon/preference (at ebidensya kapag nagbago)
-- mga constraint sa oras (“ano ang totoo noong Nob 2025?”) at conflict resolution
+- at conflict resolution and conflict resolution
 
 ## Mga layunin sa disenyo
 
@@ -87,7 +80,7 @@ Iminungkahing layout ng workspace:
 
 Mga tala:
 
-- **Nanatiling daily log ang daily log**. Hindi kailangang gawing JSON.
+- Hindi na kailangang gawing JSON. Mga entity: `@Peter`, `@warelay`, atbp (ang mga slug ay nagmamapa sa `bank/entities/*.md`)
 - Ang mga file na `bank/` ay **curated**, ginagawa ng mga reflection job, at maaari pa ring i-edit nang mano-mano.
 - Ang `memory.md` ay nananatiling “maliit + core-ish”: ang mga bagay na gusto mong makita ng Clawd sa bawat session.
 
@@ -132,7 +125,7 @@ Halimbawa:
 Minimal na parsing:
 
 - Type prefix: `W` (world), `B` (experience/biographical), `O` (opinion), `S` (observation/summary; karaniwang generated)
-- Entities: `@Peter`, `@warelay`, atbp. (ang mga slug ay nagma-map sa `bank/entities/*.md`)
+- **opinyon**: “ano ang mas gusto ni Peter?”
 - Opinion confidence: `O(c=0.0..1.0)` opsyonal
 
 Kung ayaw mong isipin ito ng mga author: maaaring i-infer ng reflect job ang mga bullet na ito mula sa natitirang log, ngunit ang pagkakaroon ng explicit na `## Retain` na seksyon ang pinakamadaling “quality lever”.
@@ -144,7 +137,7 @@ Dapat suportahan ng recall ang:
 - **lexical**: “hanapin ang eksaktong terms / pangalan / commands” (FTS5)
 - **entity**: “sabihin mo sa akin ang tungkol sa X” (entity pages + entity-linked facts)
 - **temporal**: “ano ang nangyari bandang Nob 27” / “mula noong nakaraang linggo”
-- **opinion**: “ano ang preference ni Peter?” (may confidence + ebidensya)
+- (may kumpiyansa + ebidensya) (with confidence + evidence)
 
 Ang format ng ibinabalik ay dapat agent-friendly at may citation ng sources:
 

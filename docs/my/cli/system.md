@@ -5,13 +5,6 @@ read_when:
   - heartbeats ကို ဖွင့်ရန် သို့မဟုတ် ပိတ်ရန် လိုအပ်သောအခါ
   - စနစ် presence အချက်အလက်များကို စစ်ဆေးလိုသောအခါ
 title: "စနစ်"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:12Z
 ---
 
 # `openclaw system`
@@ -29,7 +22,7 @@ openclaw system presence
 
 ## `system event`
 
-**main** ဆက်ရှင်တွင် စနစ်ဖြစ်ရပ်တစ်ခုကို enqueue လုပ်ပါ။ နောက်လာမည့် heartbeat သည် ၎င်းကို prompt အတွင်း `System:` လိုင်းအဖြစ် ထည့်သွင်းပေးပါလိမ့်မည်။ heartbeat ကို ချက်ချင်း လှုံ့ဆော်ရန် `--mode now` ကို အသုံးပြုပါ; `next-heartbeat` သည် အချိန်ဇယားအတိုင်း နောက်တစ်ကြိမ် tick ကို စောင့်ပါသည်။
+**main** session ပေါ်တွင် system event တစ်ခုကို enqueue လုပ်ပါ။ နောက်ထပ် heartbeat သည် prompt ထဲတွင် `System:` line အဖြစ် ထည့်သွင်းပေးပါမည်။ Heartbeat ကို ချက်ချင်း ဖြစ်ပေါ်စေရန် `--mode now` ကို အသုံးပြုပါ; `next-heartbeat` သည် နောက်လာမည့် scheduled tick ကို စောင့်ပါသည်။
 
 Flags:
 

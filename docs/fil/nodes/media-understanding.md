@@ -4,18 +4,11 @@ read_when:
   - Pagdidisenyo o pagre‑refactor ng media understanding
   - Pag‑tune ng inbound audio/video/image preprocessing
 title: "Media Understanding"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:52Z
 ---
 
 # Media Understanding (Inbound) — 2026-01-17
 
-Kayang **ibuod ng OpenClaw ang inbound media** (image/audio/video) bago tumakbo ang reply pipeline. Awtomatiko nitong nade-detect kung may available na local tools o provider keys, at maaari itong i-disable o i-customize. Kapag naka-off ang understanding, natatanggap pa rin ng mga model ang mga orihinal na file/URL gaya ng dati.
+Maaaring **ibuod ng OpenClaw ang papasok na media** (image/audio/video) bago tumakbo ang reply pipeline. Awtomatiko nitong nade-detect kapag available ang mga lokal na tool o provider key, at maaaring i-disable o i-customize. Kung hindi maayos ang pag-unawa, tatanggap pa rin ang mga modelo ng mga orihinal na file/URL gaya ng dati.
 
 ## Mga layunin
 
@@ -137,9 +130,9 @@ Mga panuntunan:
 
 ### Auto‑detect ng media understanding (default)
 
-Kung ang `tools.media.<capability>.enabled` ay **hindi** naka‑set sa `false` at wala kang
-na‑configure na mga model, awtomatikong nagde‑detect ang OpenClaw sa ganitong pagkakasunod at **humihinto sa unang
-gumaganang opsyon**:
+If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’t
+configured models, OpenClaw auto-detects in this order and **stops at the first
+working option**:
 
 1. **Local CLIs** (audio lamang; kung naka‑install)
    - `sherpa-onnx-offline` (nangangailangan ng `SHERPA_ONNX_MODEL_DIR` na may encoder/decoder/joiner/tokens)
@@ -169,24 +162,24 @@ Tala: Best‑effort ang binary detection sa macOS/Linux/Windows; tiyaking nasa `
 
 ## Mga capability (opsyonal)
 
-Kung magse‑set ka ng `capabilities`, tatakbo lang ang entry para sa mga uri ng media na iyon. Para sa mga shared
-list, maaaring i‑infer ng OpenClaw ang mga default:
+If you set `capabilities`, the entry only runs for those media types. Para sa mga shared
+listahan, maaaring maghinuha ang OpenClaw ng mga default:
 
 - `openai`, `anthropic`, `minimax`: **image**
 - `google` (Gemini API): **image + audio + video**
 - `groq`: **audio**
 - `deepgram`: **audio**
 
-Para sa mga CLI entry, **itakda ang `capabilities` nang tahasan** upang maiwasan ang mga nakakagulat na match.
-Kapag inalis mo ang `capabilities`, eligible ang entry para sa listahang kinalalagyan nito.
+Para sa mga CLI entry, **itakda ang `capabilities` nang tahasan** upang maiwasan ang nakakagulat na mga tugma.
+Kung aalisin mo ang `capabilities`, ang entry ay eligible para sa listahang kinabibilangan nito.
 
 ## Provider support matrix (mga integrasyon ng OpenClaw)
 
-| Capability | Integrasyon ng provider                                        | Mga tala                                                 |
-| ---------- | -------------------------------------------------------------- | -------------------------------------------------------- |
-| Image      | OpenAI / Anthropic / Google / iba pa sa pamamagitan ng `pi-ai` | Gumagana ang anumang image‑capable na model sa registry. |
-| Audio      | OpenAI, Groq, Deepgram, Google                                 | Provider transcription (Whisper/Deepgram/Gemini).        |
-| Video      | Google (Gemini API)                                            | Provider video understanding.                            |
+| Capability | Integrasyon ng provider                                        | Mga tala                                                                             |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Image      | OpenAI / Anthropic / Google / iba pa sa pamamagitan ng `pi-ai` | Gumagana ang anumang image‑capable na model sa registry.             |
+| Audio      | OpenAI, Groq, Deepgram, Google                                 | Provider transcription (Whisper/Deepgram/Gemini). |
+| Video      | Google (Gemini API)                         | Provider video understanding.                                        |
 
 ## Mga inirerekomendang provider
 
@@ -218,7 +211,7 @@ Kapag `mode: "all"`, nilalabelan ang mga output bilang `[Image 1/2]`, `[Audio 2/
 
 ## Mga halimbawa ng config
 
-### 1) Shared models list + overrides
+### 1. Shared models list + overrides
 
 ```json5
 {
@@ -255,7 +248,7 @@ Kapag `mode: "all"`, nilalabelan ang mga output bilang `[Image 1/2]`, `[Audio 2/
 }
 ```
 
-### 2) Audio + Video lamang (image off)
+### 2. Audio + Video lamang (image off)
 
 ```json5
 {
@@ -295,7 +288,7 @@ Kapag `mode: "all"`, nilalabelan ang mga output bilang `[Image 1/2]`, `[Audio 2/
 }
 ```
 
-### 3) Opsyonal na image understanding
+### 3. Opsyonal na image understanding
 
 ```json5
 {
@@ -326,7 +319,7 @@ Kapag `mode: "all"`, nilalabelan ang mga output bilang `[Image 1/2]`, `[Audio 2/
 }
 ```
 
-### 4) Multi‑modal na iisang entry (explicit capabilities)
+### 4. Multi‑modal na iisang entry (explicit capabilities)
 
 ```json5
 {
@@ -376,7 +369,7 @@ Ipinapakita nito ang kinalabasan kada capability at ang napiling provider/model 
 
 ## Mga tala
 
-- **Best‑effort** ang understanding. Hindi hinaharangan ng mga error ang mga reply.
+- Ang understanding ay **best‑effort**. Hindi hinaharangan ng mga error ang mga reply.
 - Ipinapasa pa rin ang mga attachment sa mga model kahit naka‑disable ang understanding.
 - Gamitin ang `scope` para limitahan kung saan tumatakbo ang understanding (hal. mga DM lamang).
 

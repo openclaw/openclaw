@@ -5,13 +5,6 @@ read_when:
   - Добавление агентных элементов управления для визуального рабочего пространства
   - Отладка загрузок Canvas в WKWebView
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:46Z
 ---
 
 # Canvas (приложение для macOS)

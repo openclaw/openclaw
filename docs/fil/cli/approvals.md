@@ -4,19 +4,12 @@ read_when:
   - Gusto mong mag-edit ng mga exec approval mula sa CLI
   - Kailangan mong pamahalaan ang mga allowlist sa gateway o mga node host
 title: "mga pag-apruba"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:18Z
 ---
 
 # `openclaw approvals`
 
-Pamahalaan ang mga exec approval para sa **local host**, **gateway host**, o isang **node host**.
-Bilang default, tina-target ng mga command ang lokal na approvals file sa disk. Gamitin ang `--gateway` para i-target ang gateway, o ang `--node` para i-target ang isang partikular na node.
+28. Pamahalaan ang mga exec approval para sa **local host**, **gateway host**, o isang **node host**.
+29. Bilang default, ang mga command ay tumatarget sa lokal na approvals file sa disk. 30. Gamitin ang `--gateway` upang i-target ang gateway, o `--node` upang i-target ang isang partikular na node.
 
 Related:
 

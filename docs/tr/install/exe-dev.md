@@ -4,13 +4,6 @@ read_when:
   - Gateway için ucuz, her zaman açık bir Linux ana makinesine ihtiyacınız var
   - Kendi VPS’inizi çalıştırmadan uzaktan Control UI erişimi istiyorsunuz
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:22Z
 ---
 
 # exe.dev
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## Manuel kurulum
 
-## 1) VM’yi oluşturun
+## 1. VM’yi oluşturun
 
 Cihazınızdan:
 
@@ -59,14 +52,14 @@ ssh <vm-name>.exe.xyz
 
 İpucu: Bu VM’yi **durum bilgili (stateful)** tutun. OpenClaw durumu `~/.openclaw/` ve `~/.openclaw/workspace/` altında saklar.
 
-## 2) Ön koşulları kurun (VM üzerinde)
+## 2. Ön koşulları kurun (VM üzerinde)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) OpenClaw’ı kurun
+## 3. OpenClaw’ı kurun
 
 OpenClaw kurulum betiğini çalıştırın:
 
@@ -74,7 +67,7 @@ OpenClaw kurulum betiğini çalıştırın:
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) OpenClaw’ı 8000 portuna proxy’lemek için nginx’i ayarlayın
+## 4. OpenClaw’ı 8000 portuna proxy’lemek için nginx’i ayarlayın
 
 `/etc/nginx/sites-enabled/default` dosyasını aşağıdakiyle düzenleyin:
 
@@ -108,7 +101,7 @@ server {
 }
 ```
 
-## 5) OpenClaw’a erişin ve ayrıcalıkları verin
+## 5. OpenClaw’a erişin ve ayrıcalıkları verin
 
 `https://<vm-name>.exe.xyz/` adresine erişin (onboarding sırasında Control UI çıktısına bakın). Kimlik doğrulama isterse,
 VM üzerindeki `gateway.auth.token`’ten belirteci yapıştırın ( `openclaw config get gateway.auth.token` ile alın ya da

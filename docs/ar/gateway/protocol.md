@@ -5,13 +5,6 @@ read_when:
   - استكشاف عدم تطابق البروتوكول أو أعطال الاتصال وإصلاحها
   - إعادة توليد مخططات/نماذج البروتوكول
 title: "بروتوكول Gateway"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:21Z
 ---
 
 # بروتوكول Gateway (WebSocket)
@@ -131,7 +124,7 @@ Gateway → العميل:
 }
 ```
 
-## التأطير
+## إطارات
 
 - **طلب**: `{type:"req", id, method, params}`
 - **استجابة**: `{type:"res", id, ok, payload|error}`
@@ -146,7 +139,7 @@ Gateway → العميل:
 - `operator` = عميل مستوى التحكم (CLI/واجهة مستخدم/أتمتة).
 - `node` = مضيف قدرات (كاميرا/شاشة/لوحة/‏system.run).
 
-### النطاقات (المشغّل)
+### النطاقات (المشغل)
 
 نطاقات شائعة:
 
@@ -182,7 +175,7 @@ Gateway → العميل:
 - عندما يتطلب طلب التنفيذ موافقة، يقوم Gateway ببث `exec.approval.requested`.
 - تحسم عملاء المشغّل ذلك عبر استدعاء `exec.approval.resolve` (يتطلب نطاق `operator.approvals`).
 
-## إدارة الإصدارات
+## الإصدارات
 
 - `PROTOCOL_VERSION` موجود في `src/gateway/protocol/schema.ts`.
 - يرسل العملاء `minProtocol` + `maxProtocol`؛ ويرفض الخادم عدم التطابق.

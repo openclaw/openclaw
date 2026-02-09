@@ -3,13 +3,6 @@ summary: "セッションの一覧表示、履歴の取得、およびセッシ�
 read_when:
   - セッション ツールの追加または変更時
 title: "セッション ツール"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:46Z
 ---
 
 # セッション ツール
@@ -31,7 +24,7 @@ x-i18n:
 - フックは、明示的に設定されていない限り `hook:<uuid>` を使用します。
 - ノード セッションは、明示的に設定されていない限り `node-<nodeId>` を使用します。
 
-`global` と `unknown` は予約値であり、一覧には表示されません。`session.scope = "global"` の場合、すべてのツールで `main` にエイリアスされ、呼び出し側が `global` を目にすることはありません。
+`global` と `unknown` は予約されており、一覧に表示されません。 `global` と `unknown` は予約値であり、一覧には表示されません。`session.scope = "global"` の場合、すべてのツールで `main` にエイリアスされ、呼び出し側が `global` を目にすることはありません。
 
 ## sessions_list
 
@@ -96,13 +89,13 @@ x-i18n:
 
 - `timeoutSeconds = 0`：キューに入れて `{ runId, status: "accepted" }` を返します。
 - `timeoutSeconds > 0`：完了まで最大 N 秒待機し、その後 `{ runId, status: "ok", reply }` を返します。
-- 待機がタイムアウトした場合：`{ runId, status: "timeout", error }`。実行は継続され、後で `sessions_history` を呼び出してください。
+- 待機がタイムアウトした場合：`{ runId, status: "timeout", error }`。実行は継続され、後で `sessions_history` を呼び出してください。 実行を続けます; 後で `sessions_history` を呼び出します。
 - 実行が失敗した場合：`{ runId, status: "error", error }`。
 - 配信のアナウンス実行は一次実行の完了後に行われ、ベストエフォートです。`status: "ok"` はアナウンスの配信を保証しません。
 - 待機はゲートウェイ `agent.wait`（サーバー側）経由で行われるため、再接続で待機が中断されません。
 - 一次実行には、エージェント間メッセージのコンテキストが注入されます。
 - 一次実行の完了後、OpenClaw は **reply-back ループ** を実行します：
-  - ラウンド 2 以降は、リクエスター エージェントとターゲット エージェントが交互に応答します。
+  - ラウンド2+は、要求者とターゲットエージェントを交互に切り替えます。
   - ping‑pong を停止するには、正確に `REPLY_SKIP` と返信してください。
   - 最大ターン数は `session.agentToAgent.maxPingPongTurns`（0–5、デフォルト 5）です。
 - ループ終了後、OpenClaw は **エージェント間アナウンス ステップ**（ターゲット エージェントのみ）を実行します：
@@ -162,7 +155,7 @@ x-i18n:
 
 許可リスト：
 
-- `agents.list[].subagents.allowAgents`：`agentId`（任意を許可する場合は `["*"]`）経由で許可されるエージェント id の一覧。デフォルト：リクエスター エージェントのみ。
+- `agents.list[].subagents.allowAgents`：`agentId`（任意を許可する場合は `["*"]`）経由で許可されるエージェント id の一覧。デフォルト：リクエスター エージェントのみ。 デフォルト: リクエスターエージェントのみ。
 
 検出：
 

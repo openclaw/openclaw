@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "OpenResponses-Gateway-Plan"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:14Z
 ---
 
 # OpenResponses-Gateway-Integrationsplan
@@ -38,7 +31,7 @@ Open Responses ist ein offener Inferenzstandard, der auf der OpenAI Responses AP
 
 Quellen: OpenResponses OpenAPI, OpenResponses-Spezifikationsseite und der Hugging-Face-Blogbeitrag.
 
-Zentrale Erkenntnisse:
+Schlüsselpunkte extrahiert:
 
 - `POST /v1/responses` akzeptiert `CreateResponseBody`-Felder wie `model`, `input` (String oder
   `ItemParam[]`), `instructions`, `tools`, `tool_choice`, `stream`, `max_output_tokens` und

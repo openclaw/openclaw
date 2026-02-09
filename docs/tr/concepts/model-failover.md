@@ -4,13 +4,6 @@ read_when:
   - Kimlik doğrulama profili rotasyonu, bekleme süreleri veya model geri dönüşü davranışını teşhis ederken
   - Kimlik doğrulama profilleri veya modeller için failover kurallarını güncellerken
 title: "Model Failover"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:21Z
 ---
 
 # Model failover
@@ -60,14 +53,14 @@ Açık bir sıra yapılandırılmamışsa, OpenClaw round‑robin sırası kulla
 - **İkincil anahtar:** `usageStats.lastUsed` (her tür içinde eskiden yeniye).
 - **Beklemede/devre dışı profiller** sona taşınır ve en erken bitişe göre sıralanır.
 
-### Oturum yapışkanlığı (önbellek dostu)
+### Session stickiness (cache-friendly)
 
 OpenClaw, sağlayıcı önbelleklerini sıcak tutmak için **seçilen kimlik doğrulama profilini oturum başına sabitler**.
 Her istekte rotasyon yapmaz. Sabitlenen profil şu durumlara kadar yeniden kullanılır:
 
 - oturum sıfırlanırsa (`/new` / `/reset`)
 - bir sıkıştırma tamamlanırsa (sıkıştırma sayacı artar)
-- profil beklemede/devre dışı olursa
+- profil bekleme süresinde/devre dışı
 
 `/model …@<profileId>` üzerinden manuel seçim, o oturum için bir **kullanıcı geçersiz kılması** ayarlar
 ve yeni bir oturum başlayana kadar otomatik olarak döndürülmez.
@@ -84,7 +77,7 @@ Aynı sağlayıcı için hem bir OAuth profili hem de bir API anahtarı profili 
 - `auth.order[provider] = ["provider:profileId"]` ile sabitleyin veya
 - (Kullandığınız UI/sohbet yüzeyi destekliyorsa) profil geçersiz kılmasıyla `/model …` üzerinden oturum başına geçersiz kılma kullanın.
 
-## Bekleme süreleri
+## Cooldowns
 
 Bir profil, kimlik doğrulama/hız limiti hataları (ya da hız sınırlaması gibi görünen bir zaman aşımı) nedeniyle başarısız olduğunda, OpenClaw onu beklemeye alır ve bir sonraki profile geçer.
 Biçim/geçersiz‑istek hataları (örneğin Cloud Code Assist araç çağrısı kimliği doğrulama hataları) da
@@ -135,8 +128,7 @@ Varsayılanlar:
 
 ## Model geri dönüşü
 
-Bir sağlayıcı için tüm profiller başarısız olursa, OpenClaw `agents.defaults.model.fallbacks` içindeki bir sonraki modele geçer.
-Bu; kimlik doğrulama hataları, hız limitleri ve profil rotasyonunu tüketen zaman aşımları için geçerlidir
+Bir sağlayıcı için tüm profiller başarısız olursa, OpenClaw `agents.defaults.model.fallbacks` içindeki bir sonraki modele geçer. Bu; kimlik doğrulama hataları, hız limitleri ve profil rotasyonunu tüketen zaman aşımları için geçerlidir
 (diğer hatalar geri dönüşü ilerletmez).
 
 Bir çalıştırma model geçersiz kılmasıyla (hook’lar veya CLI) başlarsa, yapılandırılmış geri dönüşler denendikten sonra geri dönüşler yine `agents.defaults.model.primary`’te sona erer.

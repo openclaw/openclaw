@@ -4,13 +4,6 @@ read_when:
   - Je hebt gestructureerde bestandsbewerkingen over meerdere bestanden nodig
   - Je wilt patch-gebaseerde bewerkingen documenteren of debuggen
 title: "apply_patch-tool"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # apply_patch-tool

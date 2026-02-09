@@ -3,13 +3,6 @@ summary: "Gruppchattbeteende över ytor (WhatsApp/Telegram/Discord/Slack/Signal/
 read_when:
   - Ändrar gruppchattbeteende eller nämningsstyrning
 title: "Grupper"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:32Z
 ---
 
 # Grupper
@@ -18,8 +11,8 @@ OpenClaw behandlar gruppchattar konsekvent över ytor: WhatsApp, Telegram, Disco
 
 ## Nybörjarintro (2 minuter)
 
-OpenClaw ”lever” på dina egna meddelandekonton. Det finns ingen separat WhatsApp-botanvändare.
-Om **du** är med i en grupp kan OpenClaw se den gruppen och svara där.
+OpenClaw “lever” på dina egna meddelandekonton. Det finns ingen separat WhatsApp bot användare.
+Om **du** är i en grupp, kan OpenClaw se den gruppen och svara där.
 
 Standardbeteende:
 
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Om du vill…
 
-| Mål                                               | Vad som ska ställas in                                     |
-| ------------------------------------------------- | ---------------------------------------------------------- |
-| Tillåt alla grupper men svara bara på @-nämningar | `groups: { "*": { requireMention: true } }`                |
-| Inaktivera alla gruppsvar                         | `groupPolicy: "disabled"`                                  |
-| Endast specifika grupper                          | `groups: { "<group-id>": { ... } }` (ingen `"*"`-nyckel)   |
-| Endast du kan trigga i grupper                    | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Mål                                                            | Vad som ska ställas in                                                       |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| Tillåt alla grupper men svara bara på @-nämningar | `groups: { "*": { requireMention: true } }`                                  |
+| Inaktivera alla gruppsvar                                      | `groupPolicy: "disabled"`                                                    |
+| Endast specifika grupper                                       | `grupper: { "<group-id>": { ... } }` (ingen `"*"` nyckel) |
+| Endast du kan trigga i grupper                                 | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                   |
 
 ## Sessionsnycklar
 
@@ -65,14 +58,14 @@ Om du vill…
 
 Ja — detta fungerar bra om din ”personliga” trafik är **DM** och din ”offentliga” trafik är **grupper**.
 
-Varför: i single-agent-läge hamnar DM vanligtvis i **huvud**sessionsnyckeln (`agent:main:main`), medan grupper alltid använder **icke-huvud**sessionsnycklar (`agent:main:<channel>:group:<id>`). Om du aktiverar sandboxing med `mode: "non-main"` körs dessa gruppsessioner i Docker medan din huvudsakliga DM-session stannar på värden.
+Varför: I enagent-läge landar DMs vanligtvis i **main** sessionsnyckeln (`agent:main:main`), medan grupper alltid använder **icke-main** sessionsnycklar (`agent:main:<channel>:group:<id>`). Om du aktiverar sandboxning med `mode: "non-main"`, dessa gruppsessioner körs i Docker medan din huvudsakliga DM-session förblir on-host.
 
 Detta ger dig ett agent-”hjärna” (delad arbetsyta + minne), men två exekveringslägen:
 
 - **DM**: fulla verktyg (värd)
 - **Grupper**: sandbox + begränsade verktyg (Docker)
 
-> Om du behöver verkligt separata arbetsytor/personas (”personligt” och ”offentligt” får aldrig blandas), använd en andra agent + bindningar. Se [Multi-Agent Routing](/concepts/multi-agent).
+> Om du verkligen behöver separata arbetsytor/personas ("personliga" och "offentliga" får aldrig blandas), använd en andra agent + bindningar. Se [Multi-Agent Routing](/concepts/multi-agent).
 
 Exempel (DM på värd, grupper sandboxade + endast meddelandeverktyg):
 
@@ -99,7 +92,7 @@ Exempel (DM på värd, grupper sandboxade + endast meddelandeverktyg):
 }
 ```
 
-Vill du ha ”grupper kan bara se mapp X” i stället för ”ingen värdåtkomst”? Behåll `workspaceAccess: "none"` och montera endast tillåtelselista-godkända sökvägar i sandboxen:
+Vill du ha “grupper kan bara se mapp X” istället för “ingen värdtillgång”? Behåll `workspaceAccess: "none"` och montera endast tillåtna sökvägar i sandlådan:
 
 ```json5
 {
@@ -181,8 +174,8 @@ Styr hur grupp-/rumsmeddelanden hanteras per kanal:
 }
 ```
 
-| Policy        | Beteende                                                                  |
-| ------------- | ------------------------------------------------------------------------- |
+| Policy        | Beteende                                                                                  |
+| ------------- | ----------------------------------------------------------------------------------------- |
 | `"open"`      | Grupper kringgår tillåtelselistor; nämningsstyrning gäller fortfarande.   |
 | `"disabled"`  | Blockera alla gruppmeddelanden helt.                                      |
 | `"allowlist"` | Tillåt endast grupper/rum som matchar den konfigurerade tillåtelselistan. |
@@ -191,9 +184,9 @@ Noteringar:
 
 - `groupPolicy` är separat från nämningsstyrning (som kräver @-nämningar).
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: använd `groupAllowFrom` (fallback: explicit `allowFrom`).
-- Discord: tillåtelselistan använder `channels.discord.guilds.<id>.channels`.
+- Discord: allowlist använder `channels.discord.guilds.<id>.kanaler`.
 - Slack: tillåtelselistan använder `channels.slack.channels`.
-- Matrix: tillåtelselistan använder `channels.matrix.groups` (rums-ID:n, alias eller namn). Använd `channels.matrix.groupAllowFrom` för att begränsa avsändare; per-rum `users`-tillåtelselistor stöds också.
+- Matrix: allowlist använder `channels.matrix.groups` (rumsnummer, alias eller namn). Använd `channels.matrix.groupAllowFrom` för att begränsa avsändare; per-rum-`users` allowlists stöds också.
 - Grupp-DM styrs separat (`channels.discord.dm.*`, `channels.slack.dm.*`).
 - Telegram-tillåtelselistan kan matcha användar-ID:n (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) eller användarnamn (`"@alice"` eller `"alice"`); prefix är skiftlägesokänsliga.
 - Standard är `groupPolicy: "allowlist"`; om din grupp-tillåtelselista är tom blockeras gruppmeddelanden.
@@ -206,9 +199,9 @@ Snabb mental modell (utvärderingsordning för gruppmeddelanden):
 
 ## Nämningsstyrning (standard)
 
-Gruppmeddelanden kräver en nämning om det inte åsidosätts per grupp. Standardvärden finns per delsystem under `*.groups."*"`.
+Gruppmeddelanden kräver ett omnämnande om de inte åsidosätts per grupp. Standard live per delsystem under `*.groups."*"`.
 
-Att svara på ett botmeddelande räknas som en implicit nämning (när kanalen stöder svarsmetadata). Detta gäller Telegram, WhatsApp, Slack, Discord och Microsoft Teams.
+Svaret på en bot meddelande räknas som ett implicit omnämnande (när kanalen stöder svar metadata). Detta gäller Telegram, WhatsApp, Slack, Discord och Microsoft Teams.
 
 ```json5
 {
@@ -253,14 +246,14 @@ Noteringar:
 - Per-agent-åsidosättning: `agents.list[].groupChat.mentionPatterns` (användbart när flera agenter delar en grupp).
 - Nämningsstyrning tillämpas endast när nämningsdetektion är möjlig (inbyggda nämningar eller när `mentionPatterns` är konfigurerade).
 - Discord-standarder finns i `channels.discord.guilds."*"` (kan åsidosättas per guild/kanal).
-- Grupphistorikkontext omsluts enhetligt över kanaler och är **endast väntande** (meddelanden som hoppats över p.g.a. nämningsstyrning); använd `messages.groupChat.historyLimit` för den globala standarden och `channels.<channel>.historyLimit` (eller `channels.<channel>.accounts.*.historyLimit`) för åsidosättningar. Sätt `0` för att inaktivera.
+- Grupphistorikkontext är insvept jämnt över kanaler och är **väntande** (meddelanden överhoppade på grund av omnämnande gating); använd `meddelanden. roupChat.historyLimit` för den globala standarden och `kanaler.<channel>.historyLimit` (eller `kanaler.<channel>.accounts.*.historyLimit`) för åsidosättningar. Sätt `0` till att inaktivera.
 
 ## Verktygsbegränsningar för grupp/kanal (valfritt)
 
 Vissa kanal-konfigurer stöder begränsning av vilka verktyg som är tillgängliga **inom en specifik grupp/rum/kanal**.
 
 - `tools`: tillåt/nekade verktyg för hela gruppen.
-- `toolsBySender`: per-avsändare-åsidosättningar inom gruppen (nycklar är avsändar-ID:n/användarnamn/e-postadresser/telefonnummer beroende på kanal). Använd `"*"` som jokertecken.
+- `toolsBySender`: åsidosätter per avsändare inom gruppen (nycklar är avsändar-ID/användarnamn/e-post/telefonnummer beroende på kanal). Använd `"*"` som ett jokertecken.
 
 Upplösningsordning (mest specifikt vinner):
 
@@ -292,11 +285,11 @@ Exempel (Telegram):
 Noteringar:
 
 - Verktygsbegränsningar för grupp/kanal tillämpas utöver global/agent-verktygspolicy (nekande vinner fortfarande).
-- Vissa kanaler använder annan nästning för rum/kanaler (t.ex. Discord `guilds.*.channels.*`, Slack `channels.*`, MS Teams `teams.*.channels.*`).
+- Vissa kanaler använder olika häckning för rum/kanaler (t.ex. Discord `guilds.*.channels.*`, Slack `channels.*`, MS Teams `teams.*.channels.*`).
 
 ## Grupp-tillåtelselistor
 
-När `channels.whatsapp.groups`, `channels.telegram.groups` eller `channels.imessage.groups` är konfigurerad fungerar nycklarna som en grupp-tillåtelselista. Använd `"*"` för att tillåta alla grupper samtidigt som standardbeteende för nämningar sätts.
+När `channels.whatsapp.groups`, `channels.telegram.groups`, eller `channels.imessage.groups` är konfigurerad, tangenterna fungerar som en grupptillåten lista. Använd `"*"` för att tillåta alla grupper medan du fortfarande anger standardbeteende.
 
 Vanliga avsikter (kopiera/klistra in):
 
@@ -356,7 +349,7 @@ Gruppägare kan växla per-grupp-aktivering:
 - `/activation mention`
 - `/activation always`
 
-Ägare bestäms av `channels.whatsapp.allowFrom` (eller botens egna E.164 när den inte är satt). Skicka kommandot som ett fristående meddelande. Andra ytor ignorerar för närvarande `/activation`.
+Ägare bestäms av `channels.whatsapp.allowFrom` (eller botens själv E.164 när unset). Skicka kommandot som ett fristående meddelande. Andra ytor ignorerar för närvarande `/activation`.
 
 ## Kontextfält
 
@@ -368,7 +361,7 @@ Inkommande grupppayloads sätter:
 - `WasMentioned` (resultat av nämningsstyrning)
 - Telegram-forumämnen inkluderar även `MessageThreadId` och `IsForum`.
 
-Agentens systemprompt inkluderar en gruppintroduktion vid första turen i en ny gruppsession. Den påminner modellen om att svara som en människa, undvika Markdown-tabeller och undvika att skriva bokstavliga `\n`-sekvenser.
+Agentsystemet prompten innehåller en grupp intro på den första vändningen av en ny grupp session. Den påminner modellen om att svara som en människa, undvika markdown tabeller och undvika att skriva bokstavliga `\n` sekvenser.
 
 ## iMessage-specifikt
 

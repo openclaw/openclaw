@@ -4,13 +4,6 @@ read_when:
   - ڈیوائس ماڈل شناخت کار میپنگز یا NOTICE/لائسنس فائلوں کو اپڈیٹ کرتے وقت
   - Instances UI میں ڈیوائس ناموں کی نمائش کے طریقے میں تبدیلی کرتے وقت
 title: "ڈیوائس ماڈل ڈیٹابیس"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:37Z
 ---
 
 # ڈیوائس ماڈل ڈیٹابیس (دوستانہ نام)

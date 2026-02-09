@@ -5,13 +5,6 @@ read_when:
   - 세션, 큐잉 모드, 또는 스트리밍 동작을 명확히 할 때
   - 추론 가시성과 사용상의 영향을 문서화할 때
 title: "메시지"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:48Z
 ---
 
 # 메시지
@@ -29,21 +22,21 @@ Inbound message
   -> outbound replies (channel limits + chunking)
 ```
 
-주요 조정 항목은 구성에 있습니다:
+주요 설정은 구성에 있습니다:
 
 - 접두사, 큐잉, 그룹 동작을 위한 `messages.*`.
 - 블록 스트리밍과 청킹 기본값을 위한 `agents.defaults.*`.
-- 캡과 스트리밍 토글을 위한 채널 오버라이드(`channels.whatsapp.*`, `channels.telegram.*` 등).
+- 캡과 스트리밍 토글을 위한 채널 오버라이드(`channels.whatsapp.*`, `channels.telegram.*` 등). 제한값과 스트리밍 토글을 위한 것입니다.
 
 전체 스키마는 [Configuration](/gateway/configuration)을 참고하십시오.
 
-## 수신 중복 제거
+## 인바운드 중복 제거
 
 채널은 재연결 이후 동일한 메시지를 재전송할 수 있습니다. OpenClaw 는
 채널/계정/피어/세션/메시지 ID 로 키된 단기 캐시를 유지하여 중복 전달이
 다시 에이전트를 실행하지 않도록 합니다.
 
-## 수신 디바운싱
+## 인바운드 디바운싱
 
 **동일 발신자**로부터의 빠른 연속 메시지는 `messages.inbound` 를 통해 단일
 에이전트 턴으로 배치될 수 있습니다. 디바운싱은 채널 + 대화 단위로 범위가
@@ -86,7 +79,7 @@ Inbound message
 
 자세한 내용: [Session management](/concepts/session).
 
-## 수신 본문과 히스토리 컨텍스트
+## 인바운드 본문 및 히스토리 컨텍스트
 
 OpenClaw 는 **프롬프트 본문**과 **명령 본문**을 분리합니다:
 
@@ -101,22 +94,20 @@ OpenClaw 는 **프롬프트 본문**과 **명령 본문**을 분리합니다:
 - `[Current message - respond to this]`
 
 **비 다이렉트 채팅**(그룹/채널/룸)의 경우, **현재 메시지 본문** 앞에
-발신자 라벨이 접두됩니다(히스토리 항목에 사용되는 것과 동일한 스타일).
-이는 실시간 메시지와 큐잉/히스토리 메시지를 에이전트 프롬프트에서
+발신자 라벨이 접두됩니다(히스토리 항목에 사용되는 것과 동일한 스타일). 이는 실시간 메시지와 큐잉/히스토리 메시지를 에이전트 프롬프트에서
 일관되게 유지합니다.
 
 히스토리 버퍼는 **보류 전용**입니다. 즉, 실행을 트리거하지 않은 그룹 메시지
 (예: 멘션 게이트 메시지)를 포함하고, 이미 세션 트랜스크립트에 있는 메시지는
 **제외**합니다.
 
-지시어 스트리핑은 **현재 메시지** 섹션에만 적용되어 히스토리는 보존됩니다.
-히스토리를 래핑하는 채널은 원본 메시지 텍스트로 `CommandBody`(또는
+지시어 스트리핑은 **현재 메시지** 섹션에만 적용되어 히스토리는 보존됩니다. 히스토리를 래핑하는 채널은 원본 메시지 텍스트로 `CommandBody`(또는
 `RawBody`)를 설정하고, 결합된 프롬프트로 `Body` 를 유지해야 합니다.
 히스토리 버퍼는 `messages.groupChat.historyLimit`(전역 기본값)과 `channels.slack.historyLimit` 또는
 `channels.telegram.accounts.<id>.historyLimit` 같은 채널별 오버라이드로 구성할 수 있습니다
 (비활성화하려면 `0` 를 설정).
 
-## 큐잉과 후속 처리
+## 큐잉 및 후속 처리
 
 이미 실행이 활성 상태인 경우, 수신 메시지는 큐에 적재되거나 현재 실행으로
 유도되거나 후속 턴을 위해 수집될 수 있습니다.

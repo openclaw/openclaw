@@ -4,13 +4,6 @@ read_when:
   - Du vill ta bort OpenClaw från en maskin
   - Gateway-tjänsten körs fortfarande efter avinstallation
 title: "Avinstallera"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:41Z
 ---
 
 # Avinstallera
@@ -88,14 +81,14 @@ Använd detta om gateway-tjänsten fortsätter att köras men `openclaw` saknas.
 
 ### macOS (launchd)
 
-Standardetiketten är `bot.molt.gateway` (eller `bot.molt.<profile>`; äldre `com.openclaw.*` kan fortfarande finnas):
+Standardetikett är `bot.molt.gateway` (eller `bot.molt.<profile>`; äldre `com.openclaw.*` kan fortfarande finnas):
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-Om du använde en profil, ersätt etiketten och plist-namnet med `bot.molt.<profile>`. Ta bort eventuella äldre `com.openclaw.*`-plistfiler om de finns.
+Om du använde en profil, ersätt etiketten och plist namnet med `bot.molt.<profile>`. Ta bort alla äldre `com.openclaw.*` listor om närvarande.
 
 ### Linux (systemd användarenhet)
 
@@ -109,8 +102,8 @@ systemctl --user daemon-reload
 
 ### Windows (Schemalagd uppgift)
 
-Standardnamnet på uppgiften är `OpenClaw Gateway` (eller `OpenClaw Gateway (<profile>)`).
-Uppgiftsskriptet ligger under din tillståndskatalog.
+Standardnamnet för uppgiften är `OpenClaw Gateway` (eller `OpenClaw Gateway (<profile>)`).
+Uppgiften skriptet lever under ditt tillstånd dir.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,7 +116,7 @@ Om du använde en profil, ta bort motsvarande uppgiftsnamn och `~\.openclaw-<pro
 
 ### Normal installation (install.sh / npm / pnpm / bun)
 
-Om du använde `https://openclaw.ai/install.sh` eller `install.ps1` installerades CLI med `npm install -g openclaw@latest`.
+Om du använde `https://openclaw.ai/install.sh` eller `install.ps1`, installerades CLI med `npm install -g openclaw@latest`.
 Ta bort den med `npm rm -g openclaw` (eller `pnpm remove -g` / `bun remove -g` om du installerade på det sättet).
 
 ### Källkodsutcheckning (git clone)

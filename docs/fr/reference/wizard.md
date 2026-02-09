@@ -1,18 +1,11 @@
 ---
 summary: "Référence complète de l’assistant d’onboarding CLI : chaque étape, option et champ de configuration"
 read_when:
-  - Rechercher une étape ou une option spécifique de l’assistant
+  - Recherche d'une étape ou d'un drapeau de l'assistant spécifique
   - Automatiser l’onboarding avec le mode non interactif
-  - Déboguer le comportement de l’assistant
+  - Comportement de l'assistant de débogage
 title: "Référence de l’assistant d’onboarding"
-sidebarTitle: "Référence de l’assistant"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 1dd46ad12c53668c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:00Z
+sidebarTitle: "reference/wizard.md"
 ---
 
 # Référence de l’assistant d’onboarding
@@ -23,7 +16,7 @@ Pour une vue d’ensemble, voir [Onboarding Wizard](/start/wizard).
 ## Détails du flux (mode local)
 
 <Steps>
-  <Step title="Détection de configuration existante">
+  <Step title="Existing config detection">
     - Si `~/.openclaw/openclaw.json` existe, choisissez **Conserver / Modifier / Réinitialiser**.
     - Relancer l’assistant ne supprime **rien** sauf si vous choisissez explicitement **Réinitialiser**
       (ou passez `--reset`).
@@ -32,9 +25,9 @@ Pour une vue d’ensemble, voir [Onboarding Wizard](/start/wizard).
     - La réinitialisation utilise `trash` (jamais `rm`) et propose des portées :
       - Configuration uniquement
       - Configuration + identifiants + sessions
-      - Réinitialisation complète (supprime aussi l’espace de travail)
-  </Step>
-  <Step title="Modèle/Auth">
+      - Réinitialisation complète (supprime aussi l’espace de travail)  
+</Step>
+  <Step title="Model/Auth">
     - **Clé API Anthropic (recommandé)** : utilise `ANTHROPIC_API_KEY` si présent ou demande une clé, puis l’enregistre pour l’utilisation par le daemon.
     - **OAuth Anthropic (Claude Code CLI)** : sur macOS, l’assistant vérifie l’élément Trousseau « Claude Code-credentials » (choisissez « Toujours autoriser » afin que les démarrages launchd ne soient pas bloqués) ; sur Linux/Windows, il réutilise `~/.claude/.credentials.json` s’il est présent.
     - **Jeton Anthropic (coller le setup-token)** : exécutez `claude setup-token` sur n’importe quelle machine, puis collez le jeton (vous pouvez le nommer ; vide = par défaut).
@@ -42,6 +35,7 @@ Pour une vue d’ensemble, voir [Onboarding Wizard](/start/wizard).
     - **Abonnement OpenAI Code (Codex) (OAuth)** : flux navigateur ; collez le `code#state`.
       - Définit `agents.defaults.model` sur `openai-codex/gpt-5.2` lorsque le modèle n’est pas défini ou vaut `openai/*`.
     - **Clé API OpenAI** : utilise `OPENAI_API_KEY` si présent ou demande une clé, puis l’enregistre dans `~/.openclaw/.env` afin que launchd puisse la lire.
+    - **xAI (Grok) API key**: invite pour `XAI_API_KEY` et configure xAI en tant que fournisseur de modèles.
     - **OpenCode Zen (proxy multi‑modèles)** : demande `OPENCODE_API_KEY` (ou `OPENCODE_ZEN_API_KEY`, à obtenir sur https://opencode.ai/auth).
     - **Clé API** : enregistre la clé pour vous.
     - **Vercel AI Gateway (proxy multi‑modèles)** : demande `AI_GATEWAY_API_KEY`.
@@ -59,24 +53,24 @@ Pour une vue d’ensemble, voir [Onboarding Wizard](/start/wizard).
     - Choisissez un modèle par défaut parmi les options détectées (ou saisissez fournisseur/modèle manuellement).
     - L’assistant exécute une vérification du modèle et avertit si le modèle configuré est inconnu ou si l’authentification manque.
     - Les identifiants OAuth se trouvent dans `~/.openclaw/credentials/oauth.json` ; les profils d’authentification se trouvent dans `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (clés API + OAuth).
-    - Plus de détails : [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - Plus de détails : [/concepts/oauth](/concepts/oauth)    
+<Note>
     Astuce headless/serveur : terminez l’OAuth sur une machine avec un navigateur, puis copiez
     `~/.openclaw/credentials/oauth.json` (ou `$OPENCLAW_STATE_DIR/credentials/oauth.json`) vers l’hôte de la Gateway (passerelle).
     </Note>
   </Step>
-  <Step title="Espace de travail">
+  <Step title="Workspace">
     - `~/.openclaw/workspace` par défaut (configurable).
     - Initialise les fichiers d’espace de travail nécessaires au rituel de démarrage de l’agent.
-    - Disposition complète de l’espace de travail + guide de sauvegarde : [Agent workspace](/concepts/agent-workspace)
-  </Step>
+    - Disposition complète de l’espace de travail + guide de sauvegarde : [Agent workspace](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - Port, liaison, mode d’authentification, exposition Tailscale.
     - Recommandation d’authentification : conservez **Token** même en loopback afin que les clients WS locaux doivent s’authentifier.
     - Désactivez l’authentification uniquement si vous faites entièrement confiance à chaque processus local.
     - Les liaisons non‑loopback nécessitent toujours une authentification.
   </Step>
-  <Step title="Canaux">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp) : connexion QR optionnelle.
     - [Telegram](/channels/telegram) : jeton de bot.
     - [Discord](/channels/discord) : jeton de bot.
@@ -85,7 +79,8 @@ Pour une vue d’ensemble, voir [Onboarding Wizard](/start/wizard).
     - [Signal](/channels/signal) : installation `signal-cli` optionnelle + configuration du compte.
     - [BlueBubbles](/channels/bluebubbles) : **recommandé pour iMessage** ; URL du serveur + mot de passe + webhook.
     - [iMessage](/channels/imessage) : chemin CLI `imsg` hérité + accès à la base de données.
-    - Sécurité des Messages prives : le mode par défaut est l’appairage. Le premier Message prive envoie un code ; approuvez via `openclaw pairing approve <channel> <code>` ou utilisez des listes d’autorisation.
+    - Sécurité des Messages prives : le mode par défaut est l’appairage. Le premier Message prive envoie un code ; approuvez via `openclaw pairing approve <channel><code>` ou utilisez des listes d’autorisation.
+  </Step><code>` ou utilisez des listes d’autorisation.
   </Step>
   <Step title="Installation du daemon">
     - macOS : LaunchAgent
@@ -137,7 +132,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Exemple Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -147,7 +142,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemple Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -157,7 +152,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemple Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -167,7 +162,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemple Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -179,7 +174,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemple Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -189,7 +184,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemple Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -199,7 +194,7 @@ Ajoutez `--json` pour un récapitulatif lisible par machine.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemple OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

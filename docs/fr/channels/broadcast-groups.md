@@ -5,13 +5,6 @@ read_when:
   - Débogage des réponses multi-agents dans WhatsApp
 status: experimental
 title: "Groupes de diffusion"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:41Z
 ---
 
 # Groupes de diffusion
@@ -19,7 +12,7 @@ x-i18n:
 **Statut :** Expérimental  
 **Version :** Ajouté dans 2026.1.9
 
-## Vue d’ensemble
+## Présentation
 
 Les groupes de diffusion permettent à plusieurs agents de traiter et de répondre simultanément au même message. Cela vous permet de créer des équipes d’agents spécialisés qui travaillent ensemble dans un même groupe WhatsApp ou message privé — le tout en utilisant un seul numéro de téléphone.
 
@@ -80,7 +73,7 @@ Agents:
 Ajoutez une section de premier niveau `broadcast` (à côté de `bindings`). Les clés sont des identifiants de pairs WhatsApp :
 
 - discussions de groupe : JID du groupe (par ex. `120363403215116621@g.us`)
-- messages privés : numéro de téléphone E.164 (par ex. `+15551234567`)
+- DM: numéro de téléphone E.164 (par exemple `+15551234567`)
 
 ```json
 {
@@ -311,7 +304,7 @@ Les groupes de diffusion fonctionnent aux côtés du routage existant :
 
 **Priorité :** `broadcast` a la priorité sur `bindings`.
 
-## Dépannage
+## Problemes courants
 
 ### Les agents ne répondent pas
 

@@ -5,13 +5,6 @@ read_when:
   - 설정 마이그레이션 또는 doctor 워크플로를 작업할 때
   - 플러그인 설정 스키마 또는 플러그인 로드 게이팅을 처리할 때
 title: "엄격한 설정 검증"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:08Z
 ---
 
 # 엄격한 설정 검증 (doctor 전용 마이그레이션)
@@ -23,7 +16,7 @@ x-i18n:
 - **로드 시 레거시 자동 마이그레이션 제거**; 마이그레이션은 doctor 를 통해서만 실행됩니다.
 - **시작 시 doctor (dry-run) 자동 실행**; 유효하지 않으면 비진단 명령을 차단합니다.
 
-## 비목표
+## Non-goals
 
 - 로드 시 하위 호환성 (레거시 키는 자동 마이그레이션되지 않음).
 - 인식되지 않은 키의 무음 삭제.

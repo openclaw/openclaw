@@ -4,13 +4,6 @@ read_when:
   - El hub de solución de problemas lo dirigió aquí para un diagnóstico más profundo
   - Necesita secciones estables del runbook basadas en síntomas con comandos exactos
 title: "Solución de problemas"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:50Z
 ---
 
 # Solución de problemas del Gateway
@@ -50,7 +43,7 @@ openclaw logs --follow
 
 Busque:
 
-- Emparejamiento pendiente para remitentes de mensajes directos.
+- Emparejamiento pendiente para los remitentes DM.
 - Restricción de menciones en grupos (`requireMention`, `mentionPatterns`).
 - Desajustes en la lista de permitidos de canal/grupo.
 
@@ -254,7 +247,7 @@ Relacionado:
 
 La mayoría de las fallas posteriores a una actualización son deriva de configuración o valores predeterminados más estrictos que ahora se están aplicando.
 
-### 1) Cambió el comportamiento de autenticación y anulación de URL
+### 1. Cambió el comportamiento de autenticación y anulación de URL
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Firmas comunes:
 - `gateway connect failed:` → destino de URL incorrecto.
 - `unauthorized` → endpoint alcanzable pero autenticación incorrecta.
 
-### 2) Los guardarraíles de enlace y autenticación son más estrictos
+### 2. Los guardarraíles de enlace y autenticación son más estrictos
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ Firmas comunes:
 - `refusing to bind gateway ... without auth` → desajuste entre enlace y autenticación.
 - `RPC probe: failed` mientras el runtime está en ejecución → gateway activo pero inaccesible con la autenticación/url actual.
 
-### 3) Cambió el estado de emparejamiento e identidad del dispositivo
+### 3. Cambió el estado de emparejamiento e identidad del dispositivo
 
 ```bash
 openclaw devices list

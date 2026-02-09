@@ -4,13 +4,6 @@ read_when:
   - Обновление интерфейса настроек Skills для macOS
   - Изменение ограничений Skills или поведения установки
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:46Z
 ---
 
 # Skills (macOS)

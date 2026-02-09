@@ -4,13 +4,6 @@ read_when:
   - Ikaw ay nag-aapruba ng mga kahilingan sa pagpapares ng device
   - Kailangan mong mag-rotate o mag-revoke ng mga token ng device
 title: "mga device"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:17Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC timeout.
 - `--json`: JSON output (inirerekomenda para sa scripting).
 
-Tandaan: kapag itinakda mo ang `--url`, hindi babalik ang CLI sa config o mga kredensyal mula sa environment.
-Ipasa ang `--token` o `--password` nang tahasan. Ang kawalan ng tahasang kredensyal ay isang error.
+5. Paalala: kapag itinakda mo ang `--url`, hindi na babalik ang CLI sa config o mga credential mula sa environment.
+6. Ipasa nang tahasan ang `--token` o `--password`. 7. Ang kakulangan ng tahasang credential ay isang error.
 
 ## Mga tala
 
-- Ang pag-ikot ng token ay nagbabalik ng bagong token (sensitibo). Tratuhin ito bilang isang lihim.
+- 8. Ang token rotation ay nagbabalik ng bagong token (sensitibo). 9. Ituring ito bilang isang lihim.
 - Kinakailangan ng mga command na ito ang `operator.pairing` (o `operator.admin`) scope.

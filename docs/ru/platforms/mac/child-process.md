@@ -3,13 +3,6 @@ summary: "Жизненный цикл Gateway (шлюза) на macOS (launchd)"
 read_when:
   - Интеграция приложения для macOS с жизненным циклом Gateway (шлюза)
 title: "Жизненный цикл Gateway"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:45Z
 ---
 
 # Жизненный цикл Gateway (шлюза) на macOS

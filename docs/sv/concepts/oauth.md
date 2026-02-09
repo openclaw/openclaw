@@ -6,24 +6,17 @@ read_when:
   - Du vill använda setup-token eller OAuth-autentiseringsflöden
   - Du vill ha flera konton eller profilroutning
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:00Z
 ---
 
 # OAuth
 
-OpenClaw stöder ”prenumerationsautentisering” via OAuth för leverantörer som erbjuder det (i synnerhet **OpenAI Codex (ChatGPT OAuth)**). För Anthropic-prenumerationer använder du **setup-token**-flödet. Den här sidan förklarar:
+OpenClaw stöder “prenumerationsförfattar” via OAuth för leverantörer som erbjuder det (särskilt **OpenAI Codex (ChatGPT OAuth)**). För antropiska prenumerationer, använd **setup-token** flödet. Denna sida förklarar:
 
 - hur OAuth **tokenutbyte** fungerar (PKCE)
 - var token **lagras** (och varför)
 - hur man hanterar **flera konton** (profiler + åsidosättningar per session)
 
-OpenClaw stöder även **leverantörsplugins** som levereras med egna OAuth- eller API‑nyckel-
+OpenClaw stöder också **plugins för leverantörer** som skickar sina egna OAuth eller API‐key
 flöden. Kör dem via:
 
 ```bash
@@ -32,7 +25,7 @@ openclaw models auth login --provider <id>
 
 ## Token-sänkan (varför den finns)
 
-OAuth-leverantörer utfärdar ofta en **ny uppdateringstoken** under inloggnings-/uppdateringsflöden. Vissa leverantörer (eller OAuth-klienter) kan ogiltigförklara äldre uppdateringstoken när en ny utfärdas för samma användare/app.
+OAuth leverantörer ofta mint en **ny uppdatera token** under inloggning/uppdatera flöden. Vissa leverantörer (eller OAuth klienter) kan ogiltigförklara äldre uppdateringstoken när en ny utfärdas för samma användare/app.
 
 Praktiskt symptom:
 
@@ -54,7 +47,7 @@ Hemligheter lagras **per agent**:
 
 - `~/.openclaw/credentials/oauth.json` (importeras till `auth-profiles.json` vid första användning)
 
-Alla ovanstående respekterar även `$OPENCLAW_STATE_DIR` (åsidosättning av state-katalog). Fullständig referens: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+Alla ovanstående respekterar också `$OPENCLAW_STATE_DIR` (state dir override). Fullständig referens: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token (prenumerationsautentisering)
 
@@ -118,7 +111,7 @@ Uppdateringsflödet är automatiskt; du behöver i allmänhet inte hantera token
 
 Två mönster:
 
-### 1) Föredraget: separata agenter
+### 1. Föredraget: separata agenter
 
 Om du vill att ”privat” och ”arbete” aldrig ska interagera, använd isolerade agenter (separata sessioner + autentiseringsuppgifter + arbetsyta):
 
@@ -129,7 +122,7 @@ openclaw agents add personal
 
 Konfigurera sedan autentisering per agent (guide) och routa chattar till rätt agent.
 
-### 2) Avancerat: flera profiler i en agent
+### 2. Avancerat: flera profiler i en agent
 
 `auth-profiles.json` stöder flera profil-ID:n för samma leverantör.
 

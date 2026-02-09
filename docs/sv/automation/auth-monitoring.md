@@ -4,19 +4,12 @@ read_when:
   - Konfigurering av övervakning eller aviseringar för auth‑utgång
   - Automatisering av kontroller för OAuth‑uppdatering i Claude Code / Codex
 title: "Auth‑övervakning"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:06Z
 ---
 
 # Auth‑övervakning
 
-OpenClaw exponerar OAuth‑utgångshälsa via `openclaw models status`. Använd detta för
-automatisering och aviseringar; skript är valfria tillägg för telefonarbetsflöden.
+OpenClaw avslöjar OAuth utgången hälsa via `openclaw models status`. Använd det för
+automatisering och varning; skript är valfria extramaterial för telefonens arbetsflöden.
 
 ## Rekommenderat: CLI‑kontroll (portabel)
 
@@ -34,8 +27,8 @@ Detta fungerar i cron/systemd och kräver inga extra skript.
 
 ## Valfria skript (ops / telefonarbetsflöden)
 
-Dessa finns under `scripts/` och är **valfria**. De förutsätter SSH‑åtkomst till
-gateway‑värden och är anpassade för systemd + Termux.
+Dessa lever under `scripts/` och är **valbara**. De antar SSH-åtkomst till
+gateway-värden och är inställda för systemd + Termux.
 
 - `scripts/claude-auth-status.sh` använder nu `openclaw models status --json` som
   sanningskälla (med fallback till direkta filläsningar om CLI inte är tillgängligt),

@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn truy cập Gateway qua Tailscale
   - Bạn muốn dùng Control UI trên trình duyệt và chỉnh sửa cấu hình
 title: "Web"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:35Z
 ---
 
 # Web (Gateway)
@@ -25,13 +18,13 @@ Trang này tập trung vào các chế độ bind, bảo mật và các bề m�
 
 ## Webhooks
 
-Khi `hooks.enabled=true`, Gateway cũng mở một endpoint webhook nhỏ trên cùng máy chủ HTTP.
-Xem [Gateway configuration](/gateway/configuration) → `hooks` để biết xác thực + payload.
+When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
+See [Gateway configuration](/gateway/configuration) → `hooks` for auth + payloads.
 
 ## Config (bật mặc định)
 
-Control UI **được bật mặc định** khi có sẵn tài nguyên (`dist/control-ui`).
-Bạn có thể kiểm soát qua cấu hình:
+The Control UI is **enabled by default** when assets are present (`dist/control-ui`).
+Bạn có thể điều khiển nó qua cấu hình:
 
 ```json5
 {
@@ -108,10 +101,10 @@ Mở:
 - UI gửi `connect.params.auth.token` hoặc `connect.params.auth.password`.
 - Control UI gửi các header chống clickjacking và chỉ chấp nhận kết nối websocket
   từ trình duyệt cùng nguồn trừ khi đặt `gateway.controlUi.allowedOrigins`.
-- Khi dùng Serve, các header định danh Tailscale có thể đáp ứng xác thực khi
-  `gateway.auth.allowTailscale` là `true` (không cần token/mật khẩu). Đặt
-  `gateway.auth.allowTailscale: false` để yêu cầu thông tin xác thực rõ ràng. Xem
-  [Tailscale](/gateway/tailscale) và [Security](/gateway/security).
+- Với Serve, các header danh tính Tailscale có thể đáp ứng xác thực khi
+  `gateway.auth.allowTailscale` là `true` (không cần token/mật khẩu). 36. Đặt
+  `gateway.auth.allowTailscale: false` để yêu cầu thông tin xác thực rõ ràng. See
+  [Tailscale](/gateway/tailscale) and [Security](/gateway/security).
 - `gateway.tailscale.mode: "funnel"` yêu cầu `gateway.auth.mode: "password"` (mật khẩu dùng chung).
 
 ## Xây dựng UI

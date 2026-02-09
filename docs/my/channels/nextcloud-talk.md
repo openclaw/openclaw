@@ -3,18 +3,11 @@ summary: "Nextcloud Talk အတွက် ပံ့ပိုးမှုအခြ
 read_when:
   - Nextcloud Talk ချန်နယ် အင်္ဂါရပ်များပေါ်တွင် အလုပ်လုပ်နေစဉ်
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:00Z
 ---
 
 # Nextcloud Talk (plugin)
 
-အခြေအနေ: plugin (webhook bot) ဖြင့် ပံ့ပိုးထားသည်။ Direct messages၊ rooms၊ reactions နှင့် markdown မက်ဆေ့ချ်များကို ပံ့ပိုးထားသည်။
+အခြေအနေ: plugin (webhook bot) ဖြင့် ထောက်ပံ့ထားသည်။ Direct message များ၊ room များ၊ reaction များနှင့် markdown message များကို ထောက်ပံ့ထားသည်။
 
 ## Plugin လိုအပ်သည်
 
@@ -40,6 +33,7 @@ OpenClaw သည် local install လမ်းကြောင်းကို အ�
 ## Quick setup (beginner)
 
 1. Nextcloud Talk plugin ကို ထည့်သွင်းတပ်ဆင်ပါ။
+
 2. သင်၏ Nextcloud server တွင် bot တစ်ခု ဖန်တီးပါ:
 
    ```bash
@@ -47,9 +41,11 @@ OpenClaw သည် local install လမ်းကြောင်းကို အ�
    ```
 
 3. ဦးတည်ထားသော room ၏ settings တွင် bot ကို ဖွင့်ပါ။
+
 4. OpenClaw ကို ဖွဲ့စည်းပြင်ဆင်ပါ:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - သို့မဟုတ် env: `NEXTCLOUD_TALK_BOT_SECRET` (default account အတွက်သာ)
+
 5. Gateway ကို ပြန်လည်စတင်ပါ (သို့မဟုတ် onboarding ကို ပြီးစီးပါ)။
 
 အနည်းဆုံး config:
@@ -69,14 +65,14 @@ OpenClaw သည် local install လမ်းကြောင်းကို အ�
 
 ## Notes
 
-- Bots များသည် DMs ကို ကိုယ်တိုင် စတင်မပို့နိုင်ပါ။ အသုံးပြုသူက bot ကို ပထမဦးစွာ မက်ဆေ့ချ်ပို့ရပါမည်။
+- Bot များသည် DM ကို ကိုယ်တိုင် မစတင်နိုင်ပါ။ User သည် အရင်ဆုံး bot သို့ message ပို့ရပါမည်။
 - Webhook URL ကို Gateway မှ ဝင်ရောက်နိုင်ရပါမည်။ proxy အောက်တွင်ရှိပါက `webhookPublicUrl` ကို သတ်မှတ်ပါ။
 - Bot API မှ media uploads ကို မပံ့ပိုးပါ; media များကို URL အဖြစ် ပို့ဆောင်ပါသည်။
 - Webhook payload သည် DMs နှင့် rooms ကို ခွဲခြားမပြသပါ; room-type lookup များကို ဖွင့်ရန် `apiUser` + `apiPassword` ကို သတ်မှတ်ပါ (မဟုတ်ပါက DMs များကို rooms အဖြစ် ဆက်ဆံပါမည်)။
 
 ## Access control (DMs)
 
-- Default: `channels.nextcloud-talk.dmPolicy = "pairing"`။ မသိသော ပို့သူများသည် pairing code ကို ရရှိပါမည်။
+- မူလ: `channels.nextcloud-talk.dmPolicy = "pairing"`။ မသိသော ပို့သူများသည် pairing code ကို ရရှိပါသည်။
 - အတည်ပြုရန်:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ Provider options:
 - `channels.nextcloud-talk.webhookPath`: webhook path (default: /nextcloud-talk-webhook)။
 - `channels.nextcloud-talk.webhookPublicUrl`: ပြင်ပမှ ဝင်ရောက်နိုင်သော webhook URL။
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`။
-- `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs)။ `open` သည် `"*"` ကို လိုအပ်ပါသည်။
+- `channels.nextcloud-talk.allowFrom`: DM allowlist (user ID များ)။ `open` အတွက် `"*"` လိုအပ်ပါသည်။
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`။
 - `channels.nextcloud-talk.groupAllowFrom`: group allowlist (user IDs)။
 - `channels.nextcloud-talk.rooms`: per-room settings နှင့် allowlist။

@@ -4,13 +4,6 @@ read_when:
   - Adicionar ou alterar endpoints de webhook
   - Conectar sistemas externos ao OpenClaw
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:54Z
 ---
 
 # Webhooks
@@ -165,6 +158,7 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Mantenha endpoints de hook atrás de local loopback, tailnet ou um proxy reverso confiável.
 - Use um token de hook dedicado; não reutilize tokens de autenticação do gateway.
 - Evite incluir payloads brutos sensíveis nos logs de webhook.
-- Payloads de hook são tratados como não confiáveis e envolvidos por limites de segurança por padrão.
+- As cargas de gancho são tratadas como não confiáveis e dentro de limites de segurança por padrão.
+  Payloads de hook são tratados como não confiáveis e envolvidos por limites de segurança por padrão.
   Se você precisar desativar isso para um hook específico, defina `allowUnsafeExternalContent: true`
   no mapeamento desse hook (perigoso).

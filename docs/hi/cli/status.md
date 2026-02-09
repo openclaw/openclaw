@@ -4,13 +4,6 @@ read_when:
   - आपको चैनल स्वास्थ्य + हाल के सत्र प्राप्तकर्ताओं का त्वरित निदान चाहिए
   - आपको डिबगिंग के लिए पेस्ट करने योग्य “all” स्थिति चाहिए
 title: "status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:00Z
 ---
 
 # `openclaw status`

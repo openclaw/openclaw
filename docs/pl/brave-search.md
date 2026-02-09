@@ -1,16 +1,9 @@
 ---
-summary: „Konfiguracja API Brave Search dla web_search”
+summary: "„Konfiguracja API Brave Search dla web_search”"
 read_when:
   - Chcesz używać Brave Search do web_search
   - Potrzebujesz klucza BRAVE_API_KEY lub informacji o planach
-title: „Brave Search”
-x-i18n:
-  source_path: brave-search.md
-  source_hash: 81cd0a13239c13f4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:44Z
+title: "„Brave Search”"
 ---
 
 # API Brave Search

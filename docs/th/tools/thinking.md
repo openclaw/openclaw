@@ -3,13 +3,6 @@ summary: "ไวยากรณ์คำสั่งสำหรับ/think+/ve
 read_when:
   - ปรับการพาร์สหรือค่าเริ่มต้นของคำสั่งthinkingหรือverbose
 title: "ระดับการคิด"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:56Z
 ---
 
 # ระดับการคิด (/think directives)
@@ -53,8 +46,8 @@ x-i18n:
 - `/verbose off` จะเก็บการเขียนทับระดับเซสชันแบบชัดเจน; ล้างได้ผ่านSessions UIโดยเลือก `inherit`.
 - คำสั่งอินไลน์มีผลเฉพาะข้อความนั้น; ค่าเริ่มต้นระดับเซสชัน/ส่วนกลางจะถูกใช้ในกรณีอื่น
 - ส่ง `/verbose` (หรือ `/verbose:`) โดยไม่ระบุอาร์กิวเมนต์เพื่อดูระดับverboseปัจจุบัน
-- เมื่อverboseเปิดอยู่ เอเจนต์ที่ส่งผลลัพธ์เครื่องมือแบบมีโครงสร้าง(Pi,เอเจนต์JSONอื่นๆ)จะส่งการเรียกเครื่องมือแต่ละครั้งกลับมาเป็นข้อความเมทาดาทาอย่างเดียว แยกเป็นแต่ละข้อความ โดยขึ้นต้นด้วย `<emoji> <tool-name>: <arg>` เมื่อมี(พาธ/คำสั่ง) สรุปเครื่องมือเหล่านี้จะถูกส่งทันทีที่เครื่องมือเริ่มทำงาน(เป็นบับเบิลแยก) ไม่ใช่เดลตาสตรีม
-- เมื่อverboseเป็น `full` เอาต์พุตเครื่องมือจะถูกส่งต่อหลังเสร็จสิ้นด้วย(บับเบิลแยก ตัดความยาวให้อยู่ในขอบเขตปลอดภัย) หากคุณสลับ `/verbose on|full|off` ระหว่างที่งานกำลังรัน บับเบิลเครื่องมือถัดไปจะยึดตามการตั้งค่าใหม่
+- เมื่อverboseเปิดอยู่ เอเจนต์ที่ส่งผลลัพธ์เครื่องมือแบบมีโครงสร้าง(Pi,เอเจนต์JSONอื่นๆ)จะส่งการเรียกเครื่องมือแต่ละครั้งกลับมาเป็นข้อความเมทาดาทาอย่างเดียว แยกเป็นแต่ละข้อความ โดยขึ้นต้นด้วย `<emoji> <tool-name>: <arg>` เมื่อมี(พาธ/คำสั่ง) สรุปเครื่องมือเหล่านี้จะถูกส่งทันทีที่เครื่องมือเริ่มทำงาน(เป็นบับเบิลแยก) ไม่ใช่เดลตาสตรีม These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
+- เมื่อverboseเป็น `full` เอาต์พุตเครื่องมือจะถูกส่งต่อหลังเสร็จสิ้นด้วย(บับเบิลแยก ตัดความยาวให้อยู่ในขอบเขตปลอดภัย) หากคุณสลับ `/verbose on|full|off` ระหว่างที่งานกำลังรัน บับเบิลเครื่องมือถัดไปจะยึดตามการตั้งค่าใหม่ If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## การมองเห็นการให้เหตุผล (/reasoning)
 
@@ -72,7 +65,7 @@ x-i18n:
 ## Heartbeats
 
 - เนื้อหาprobeของHeartbeatคือพรอมต์Heartbeatที่กำหนดค่าไว้(ค่าเริ่มต้น: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). คำสั่งอินไลน์ในข้อความHeartbeatจะมีผลตามปกติ(แต่ควรหลีกเลี่ยงการเปลี่ยนค่าเริ่มต้นระดับเซสชันจากHeartbeat)
-- การส่งHeartbeatค่าเริ่มต้นจะส่งเฉพาะเพย์โหลดสุดท้ายเท่านั้น หากต้องการส่งข้อความ `Reasoning:` แยกด้วย(เมื่อมี) ให้ตั้งค่า `agents.defaults.heartbeat.includeReasoning: true` หรือแบบต่อเอเจนต์ด้วย `agents.list[].heartbeat.includeReasoning: true`.
+- Heartbeat delivery defaults to the final payload only. การส่งHeartbeatค่าเริ่มต้นจะส่งเฉพาะเพย์โหลดสุดท้ายเท่านั้น หากต้องการส่งข้อความ `Reasoning:` แยกด้วย(เมื่อมี) ให้ตั้งค่า `agents.defaults.heartbeat.includeReasoning: true` หรือแบบต่อเอเจนต์ด้วย `agents.list[].heartbeat.includeReasoning: true`.
 
 ## Web chat UI
 

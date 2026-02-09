@@ -3,13 +3,6 @@ summary: "Regras de tratamento de imagens e mídia para envios, gateway e respos
 read_when:
   - Modificando o pipeline de mídia ou anexos
 title: "Suporte a Imagens e Mídia"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:21Z
 ---
 
 # Suporte a Imagens e Mídia — 2025-12-05

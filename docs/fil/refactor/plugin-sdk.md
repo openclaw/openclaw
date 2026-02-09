@@ -4,19 +4,12 @@ read_when:
   - Pagtukoy o pagre-refactor ng plugin architecture
   - Pag-migrate ng mga channel connector papunta sa plugin SDK/runtime
 title: "Refactor ng Plugin SDK"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Plugin SDK + Runtime Refactor Plan
 
-Layunin: ang bawat messaging connector ay isang plugin (bundled o external) na gumagamit ng iisang stable API.
-Walang plugin ang mag-i-import nang direkta mula sa `src/**`. Lahat ng dependency ay dadaan sa SDK o runtime.
+38. Layunin: bawat messaging connector ay isang plugin (bundled o external) na gumagamit ng isang stable na API.
+39. Walang plugin ang dapat mag-import nang direkta mula sa `src/**`. 40. Lahat ng dependency ay dumadaan sa SDK o runtime.
 
 ## Bakit ngayon
 
@@ -25,9 +18,9 @@ Walang plugin ang mag-i-import nang direkta mula sa `src/**`. Lahat ng dependenc
 
 ## Target na arkitektura (dalawang layer)
 
-### 1) Plugin SDK (compile-time, stable, publishable)
+### 1. Plugin SDK (compile-time, stable, publishable)
 
-Saklaw: mga type, helper, at config utility. Walang runtime state, walang side effect.
+41. Saklaw: mga type, helper, at config utility. 42. Walang runtime state, walang side effect.
 
 Mga nilalaman (mga halimbawa):
 
@@ -44,10 +37,10 @@ Delivery:
 - I-publish bilang `openclaw/plugin-sdk` (o i-export mula sa core sa ilalim ng `openclaw/plugin-sdk`).
 - Semver na may malinaw na garantiya sa stability.
 
-### 2) Plugin Runtime (execution surface, injected)
+### 2. Plugin Runtime (execution surface, injected)
 
-Saklaw: lahat ng humahawak sa core runtime behavior.
-Ina-access sa pamamagitan ng `OpenClawPluginApi.runtime` upang hindi kailanman mag-import ang mga plugin ng `src/**`.
+43. Saklaw: lahat ng humahawak sa core runtime behavior.
+44. Ina-access sa pamamagitan ng `OpenClawPluginApi.runtime` upang ang mga plugin ay hindi kailanman mag-import ng `src/**`.
 
 Iminungkahing surface (minimal ngunit kumpleto):
 
@@ -195,7 +188,7 @@ Mga tala:
 ## Compatibility at versioning
 
 - SDK: semver, published, may dokumentadong pagbabago.
-- Runtime: naka-version per core release. Magdagdag ng `api.runtime.version`.
+- 45. Runtime: versioned kada core release. 46. Idagdag ang `api.runtime.version`.
 - Nagdedeklara ang mga plugin ng kinakailangang runtime range (hal., `openclawRuntime: ">=2026.2.0"`).
 
 ## Testing strategy

@@ -1,16 +1,9 @@
 ---
-summary: „Optionale Docker-basierte Einrichtung und Onboarding für OpenClaw“
+summary: "„Optionale Docker-basierte Einrichtung und Onboarding für OpenClaw“"
 read_when:
   - Sie möchten ein containerisiertes Gateway anstelle lokaler Installationen
   - Sie validieren den Docker-Flow
-title: „Docker“
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:00Z
+title: "„Docker“"
 ---
 
 # Docker (optional)
@@ -48,8 +41,8 @@ Vom Repo-Root aus:
 Dieses Skript:
 
 - baut das Gateway-Image
-- führt den Onboarding-Assistenten aus
-- gibt optionale Hinweise zur Anbieter-Einrichtung aus
+- betreibt den Onboarding-Assistenten
+- druckt optionale Einrichtungshinweise für Anbieter aus
 - startet das Gateway über Docker Compose
 - generiert ein Gateway-Token und schreibt es nach `.env`
 
@@ -230,7 +223,8 @@ Sicherheitskompromiss.
 ### Schnellere Rebuilds (empfohlen)
 
 Um Rebuilds zu beschleunigen, ordnen Sie Ihr Dockerfile so, dass Abhängigkeits-Layer gecacht
-werden. Dadurch wird `pnpm install` nicht erneut ausgeführt, solange sich Lockfiles nicht ändern:
+werden.
+Dadurch wird `pnpm install` nicht erneut ausgeführt, solange sich Lockfiles nicht ändern:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -321,7 +315,7 @@ pnpm test:docker:qr
 
 Deep Dive: [Sandboxing](/gateway/sandboxing)
 
-### Funktionsweise
+### Was es tut
 
 Wenn `agents.defaults.sandbox` aktiviert ist, führen **Nicht-Hauptsitzungen** Werkzeuge in einem Docker-
 Container aus. Das Gateway bleibt auf Ihrem Host, die Werkzeugausführung ist jedoch isoliert:
@@ -588,5 +582,4 @@ Beispiel:
   aus).
 - Benutzerdefinierte Werkzeuge nicht gefunden: OpenClaw führt Befehle mit `sh -lc`
   (Login-Shell) aus, die `/etc/profile` sourced und dabei PATH zurücksetzen kann. Setzen Sie
-  `docker.env.PATH`, um Ihre benutzerdefinierten Werkzeugpfade voranzustellen (z. B.
-  `/custom/bin:/usr/local/share/npm-global/bin`), oder fügen Sie ein Skript unter `/etc/profile.d/` in Ihrem Dockerfile hinzu.
+  `docker.env.PATH`, um Ihre benutzerdefinierten Werkzeugpfade voranzustellen (z. B. `/custom/bin:/usr/local/share/npm-global/bin`), oder fügen Sie ein Skript unter `/etc/profile.d/` in Ihrem Dockerfile hinzu.

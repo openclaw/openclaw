@@ -4,16 +4,9 @@ read_when:
   - Dodawanie obsługi węzła lokalizacji lub interfejsu uprawnień
   - Projektowanie przepływów lokalizacji w tle + powiadomień push
 title: "Polecenie lokalizacji"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:25Z
 ---
 
-# Polecenie lokalizacji (węzły)
+# nodes/location-command.md
 
 ## TL;DR
 

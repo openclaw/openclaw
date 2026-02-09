@@ -2,14 +2,7 @@
 summary: "คู่มือปฏิบัติงานสำหรับบริการ Gateway วงจรชีวิต และการดำเนินงาน"
 read_when:
   - เมื่อรันหรือดีบักกระบวนการGateway
-title: "คู่มือปฏิบัติงานGateway"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
+title: "Gateway Runbook"
 ---
 
 # คู่มือปฏิบัติงานบริการGateway
@@ -19,7 +12,7 @@ x-i18n:
 ## คืออะไร
 
 - กระบวนการที่ทำงานตลอดเวลาซึ่งเป็นเจ้าของการเชื่อมต่อ Baileys/Telegram เพียงหนึ่งเดียวและระนาบควบคุม/อีเวนต์
-- แทนที่คำสั่งเดิม `gateway` จุดเริ่มต้นCLI: `openclaw gateway`.
+- Replaces the legacy `gateway` command. แทนที่คำสั่งเดิม `gateway` จุดเริ่มต้นCLI: `openclaw gateway`.
 - ทำงานต่อเนื่องจนกว่าจะหยุด; ออกด้วยรหัสไม่เป็นศูนย์เมื่อเกิดข้อผิดพลาดร้ายแรงเพื่อให้ตัวควบคุมรีสตาร์ต
 
 ## วิธีรัน (ภายในเครื่อง)
@@ -39,7 +32,7 @@ pnpm gateway:watch
   - การรีโหลดร้อนใช้การรีสตาร์ตภายในโปรเซสผ่าน **SIGUSR1** เมื่อจำเป็น
   - ปิดใช้งานด้วย `gateway.reload.mode="off"`.
 - ผูก WebSocket ระนาบควบคุมกับ `127.0.0.1:<port>` (ค่าเริ่มต้น 18789).
-- พอร์ตเดียวกันนี้ให้บริการ HTTP ด้วย (UI ควบคุม, hooks, A2UI) การมัลติเพล็กซ์พอร์ตเดียว
+- พอร์ตเดียวกันนี้ให้บริการ HTTP ด้วย (UI ควบคุม, hooks, A2UI) การมัลติเพล็กซ์พอร์ตเดียว Single-port multiplex.
   - OpenAI Chat Completions (HTTP): [`/v1/chat/completions`](/gateway/openai-http-api).
   - OpenResponses (HTTP): [`/v1/responses`](/gateway/openresponses-http-api).
   - Tools Invoke (HTTP): [`/tools/invoke`](/gateway/tools-invoke-http-api).
@@ -62,13 +55,14 @@ pnpm gateway:watch
   ```
 
 - จากนั้นไคลเอนต์เชื่อมต่อไปยัง `ws://127.0.0.1:18789` ผ่านอุโมงค์
+
 - หากตั้งค่าโทเคนไว้ ไคลเอนต์ต้องแนบใน `connect.params.auth.token` แม้ผ่านอุโมงค์
 
 ## หลายGateway (โฮสต์เดียวกัน)
 
-โดยปกติไม่จำเป็น: Gatewayหนึ่งตัวสามารถให้บริการหลายช่องทางข้อความและเอเจนต์ ใช้หลายGatewayเฉพาะเพื่อความซ้ำซ้อนหรือการแยกที่เข้มงวด (เช่น บอตกู้ภัย)
+โดยปกติไม่จำเป็น: Gatewayหนึ่งตัวสามารถให้บริการหลายช่องทางข้อความและเอเจนต์ ใช้หลายGatewayเฉพาะเพื่อความซ้ำซ้อนหรือการแยกที่เข้มงวด (เช่น บอตกู้ภัย) Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
 
-รองรับหากคุณแยกสถานะ+คอนฟิกและใช้พอร์ตที่ไม่ซ้ำ คู่มือเต็ม: [Multiple gateways](/gateway/multiple-gateways).
+รองรับหากคุณแยกสถานะ+คอนฟิกและใช้พอร์ตที่ไม่ซ้ำ คู่มือเต็ม: [Multiple gateways](/gateway/multiple-gateways). Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ชื่อบริการรองรับโปรไฟล์:
 
@@ -82,7 +76,7 @@ pnpm gateway:watch
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-รูปแบบRescue-Bot: คงGatewayตัวที่สองแยกด้วยโปรไฟล์ของตนเอง ไดเรกทอรีสถานะ เวิร์กสเปซ และการเว้นระยะพอร์ตฐาน คู่มือเต็ม: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
+รูปแบบRescue-Bot: คงGatewayตัวที่สองแยกด้วยโปรไฟล์ของตนเอง ไดเรกทอรีสถานะ เวิร์กสเปซ และการเว้นระยะพอร์ตฐาน คู่มือเต็ม: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide). Full guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### โปรไฟล์Dev (`--dev`)
 
@@ -165,7 +159,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - `agent` — อีเวนต์เครื่องมือ/เอาต์พุตที่สตรีมจากการรันเอเจนต์ (มีแท็กลำดับ).
 - `presence` — การอัปเดต presence (เดลตาพร้อม stateVersion) ถูกผลักไปยังไคลเอนต์ที่เชื่อมต่อทั้งหมด.
 - `tick` — keepalive/no-op ตามรอบเพื่อยืนยันการมีชีวิต.
-- `shutdown` — Gateway กำลังออก; เพย์โหลดมี `reason` และ `restartExpectedMs` ที่เป็นตัวเลือก ไคลเอนต์ควรเชื่อมต่อใหม่
+- `shutdown` — Gateway กำลังออก; เพย์โหลดมี `reason` และ `restartExpectedMs` ที่เป็นตัวเลือก ไคลเอนต์ควรเชื่อมต่อใหม่ Clients should reconnect.
 
 ## การผสานรวม WebChat
 
@@ -202,7 +196,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 
 ## Replay / ช่องว่าง
 
-- อีเวนต์ไม่ถูกเล่นซ้ำ ไคลเอนต์ตรวจจับช่องว่างลำดับและควรรีเฟรช (`health` + `system-presence`) ก่อนดำเนินการต่อ WebChat และไคลเอนต์macOS จะรีเฟรชอัตโนมัติเมื่อพบช่องว่าง
+- Events are not replayed. Clients detect seq gaps and should refresh (`health` + `system-presence`) before continuing. อีเวนต์ไม่ถูกเล่นซ้ำ ไคลเอนต์ตรวจจับช่องว่างลำดับและควรรีเฟรช (`health` + `system-presence`) ก่อนดำเนินการต่อ WebChat และไคลเอนต์macOS จะรีเฟรชอัตโนมัติเมื่อพบช่องว่าง
 
 ## การกำกับดูแล (ตัวอย่างmacOS)
 
@@ -241,6 +235,7 @@ openclaw logs --follow
 - `logs` ไล่ดูล็อกไฟล์Gatewayผ่าน RPC (ไม่ต้อง `tail`/`grep` ด้วยตนเอง)
 - หากตรวจพบบริการคล้ายGatewayอื่นๆ CLI จะเตือนเว้นแต่จะเป็นบริการโปรไฟล์OpenClaw
   เรายังแนะนำ **หนึ่งGatewayต่อเครื่อง** สำหรับการตั้งค่าส่วนใหญ่; ใช้โปรไฟล์/พอร์ตที่แยกเพื่อความซ้ำซ้อนหรือบอตกู้ภัย ดู [Multiple gateways](/gateway/multiple-gateways).
+  We still recommend **one gateway per machine** for most setups; use isolated profiles/ports for redundancy or a rescue bot. See [Multiple gateways](/gateway/multiple-gateways).
   - การทำความสะอาด: `openclaw gateway uninstall` (บริการปัจจุบัน) และ `openclaw doctor` (การย้ายเดิม)
 - `gateway install` ไม่ทำอะไรเมื่อมีการติดตั้งอยู่แล้ว; ใช้ `openclaw gateway install --force` เพื่อติดตั้งใหม่ (เปลี่ยนโปรไฟล์/env/พาธ)
 
@@ -257,7 +252,10 @@ openclaw logs --follow
 
 OpenClaw ติดตั้ง **systemd user service** โดยค่าเริ่มต้นบน Linux/WSL2 เรา
 แนะนำบริการผู้ใช้สำหรับเครื่องผู้ใช้เดี่ยว (env ง่าย คอนฟิกต่อผู้ใช้)
-ใช้ **system service** สำหรับหลายผู้ใช้หรือเซิร์ฟเวอร์ที่เปิดตลอด (ไม่ต้อง lingering การกำกับดูแลร่วม)
+ใช้ **system service** สำหรับหลายผู้ใช้หรือเซิร์ฟเวอร์ที่เปิดตลอด (ไม่ต้อง lingering การกำกับดูแลร่วม) We
+recommend user services for single-user machines (simpler env, per-user config).
+Use a **system service** for multi-user or always-on servers (no lingering
+required, shared supervision).
 
 `openclaw gateway install` เขียน user unit. `openclaw doctor` ตรวจสอบ
 unit และอัปเดตให้ตรงกับค่าเริ่มต้นที่แนะนำปัจจุบันได้
@@ -294,6 +292,8 @@ sudo loginctl enable-linger youruser
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
+**Alternative (system service)** - for always-on or multi-user servers, you can
+install a systemd **system** unit instead of a user unit (no lingering needed).
 **ทางเลือก (system service)** - สำหรับเซิร์ฟเวอร์ที่เปิดตลอดหรือหลายผู้ใช้ คุณสามารถติดตั้ง systemd **system** unit แทน user unit (ไม่ต้อง lingering)
 สร้าง `/etc/systemd/system/openclaw-gateway[-<profile>].service` (คัดลอก unit ด้านบน,
 สลับ `WantedBy=multi-user.target`, ตั้งค่า `User=` + `WorkingDirectory=`), จากนั้น:

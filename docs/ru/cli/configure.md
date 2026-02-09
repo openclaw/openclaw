@@ -3,13 +3,6 @@ summary: "Справка CLI для `openclaw configure` (интерактивн
 read_when:
   - Вам нужно интерактивно настроить учётные данные, устройства или параметры агента по умолчанию
 title: "configure"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:11Z
 ---
 
 # `openclaw configure`

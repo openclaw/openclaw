@@ -1,16 +1,9 @@
 ---
-summary: 「imsg（stdio 上の JSON-RPC）によるレガシー iMessage サポート。新規セットアップでは BlueBubbles の使用を推奨します。」
+summary: "imsg（stdio 上の JSON-RPC）によるレガシー iMessage サポート。新規セットアップでは BlueBubbles の使用を推奨します。 新しいセットアップはBlueBubblesを使用する必要があります。"
 read_when:
   - iMessage サポートのセットアップ
   - iMessage の送受信のデバッグ
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:10Z
 ---
 
 # iMessage（レガシー: imsg）
@@ -19,7 +12,7 @@ x-i18n:
 >
 > `imsg` チャンネルはレガシーな外部 CLI 統合であり、将来のリリースで削除される可能性があります。
 
-ステータス: レガシーな外部 CLI 統合。Gateway は `imsg rpc`（stdio 上の JSON-RPC）を起動します。
+ステータス:レガシーの外部CLI統合。 ステータス: レガシーな外部 CLI 統合。Gateway は `imsg rpc`（stdio 上の JSON-RPC）を起動します。
 
 ## クイックセットアップ（初心者）
 
@@ -73,15 +66,15 @@ x-i18n:
 
 送受信が失敗する場合（例: `imsg rpc` が非ゼロで終了する、タイムアウトする、またはゲートウェイがハングしているように見える）、macOS の権限プロンプトが承認されていないことが一般的な原因です。
 
-macOS はアプリ／プロセスのコンテキストごとに TCC 権限を付与します。`imsg` を実行するのと同じコンテキスト（例: Terminal / iTerm、LaunchAgent セッション、または SSH 起動プロセス）でプロンプトを承認してください。
+macOS はアプリ／プロセスのコンテキストごとに TCC 権限を付与します。`imsg` を実行するのと同じコンテキスト（例: Terminal / iTerm、LaunchAgent セッション、または SSH 起動プロセス）でプロンプトを承認してください。 `imsg` を実行するのと同じコンテキストでプロンプトを許可する (例えば、Terminal/iTerm、LaunchAgent セッション、SSH が起動したプロセス)。
 
 チェックリスト:
 
-- **フルディスクアクセス**: OpenClaw を実行しているプロセス（および `imsg` を実行する任意のシェル／SSH ラッパー）にアクセスを許可します。これは Messages データベース（`chat.db`）の読み取りに必要です。
+- **フルディスクアクセス**: OpenClaw を実行しているプロセス（および `imsg` を実行する任意のシェル／SSH ラッパー）にアクセスを許可します。これは Messages データベース（`chat.db`）の読み取りに必要です。 メッセージデータベース(`chat.db`)を読み込むために必要です。
 - **オートメーション → Messages**: 送信のために、OpenClaw を実行しているプロセス（および／またはターミナル）に **Messages.app** の制御を許可します。
 - **`imsg` CLI の健全性**: `imsg` がインストールされており、RPC（`imsg rpc --help`）をサポートしていることを確認します。
 
-ヒント: OpenClaw がヘッドレス（LaunchAgent / systemd / SSH）で実行されている場合、macOS のプロンプトは見逃しやすくなります。GUI ターミナルで一度だけ対話的なコマンドを実行してプロンプトを強制表示し、その後再試行してください:
+ヒント: OpenClaw がヘッドレス（LaunchAgent / systemd / SSH）で実行されている場合、macOS のプロンプトは見逃しやすくなります。GUI ターミナルで一度だけ対話的なコマンドを実行してプロンプトを強制表示し、その後再試行してください: GUI端末で一回限りの対話型コマンドを実行して、プロンプトを強制的に実行してから再試行してください:
 
 ```bash
 imsg chats --limit 1
@@ -110,9 +103,9 @@ imsg send <handle> "test"
 6. `ssh <bot-macos-user>@localhost true` がパスワードなしで動作するように SSH を設定します。
 7. ボットユーザーとして `imsg` を実行する SSH ラッパーを指すよう、`channels.imessage.accounts.bot.cliPath` を設定します。
 
-初回実行時の注意: 送受信には、_ボット macOS ユーザー_ での GUI 承認（オートメーション + フルディスクアクセス）が必要になる場合があります。`imsg rpc` が停止しているように見える、または終了する場合は、そのユーザーでログイン（画面共有が便利）し、一度だけ `imsg chats --limit 1` / `imsg send ...` を実行してプロンプトを承認してから再試行してください。[macOS プライバシーとセキュリティ TCC のトラブルシューティング](#troubleshooting-macos-privacy-and-security-tcc) を参照してください。
+最初の実行ノート: _bot macOS user_ の GUI の承認(Automation + Full Disk Access)が必要になる場合があります。 `imsg rpc` が立ち往生または終了しているように見える場合は、そのユーザーにログインしてください (スクリーン共有のヘルプを参照してください)、一度だけの `imsg chats --limit 1` / `imsg sent を実行してください。 .`、プロンプトを承認し、再試行してください。 [macOS のプライバシーとセキュリティ TCCのトラブルシューティング](#troubleshooting-macos-privacy-and-security-tcc)を参照してください。
 
-ラッパーの例（`chmod +x`）。`<bot-macos-user>` を実際の macOS ユーザー名に置き換えてください:
+ラッパーの例 (`chmod +x`) ラッパーの例（`chmod +x`）。`<bot-macos-user>` を実際の macOS ユーザー名に置き換えてください:
 
 ```bash
 #!/usr/bin/env bash
@@ -148,7 +141,7 @@ exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@local
 
 ### リモート／SSH バリアント（任意）
 
-別の Mac で iMessage を使用したい場合は、SSH 経由でリモート macOS ホスト上の `imsg` を実行するラッパーを指すよう、`channels.imessage.cliPath` を設定します。OpenClaw は stdio のみを必要とします。
+別の Mac で iMessage を使用したい場合は、SSH 経由でリモート macOS ホスト上の `imsg` を実行するラッパーを指すよう、`channels.imessage.cliPath` を設定します。OpenClaw は stdio のみを必要とします。 OpenClawはstdioしか必要ありません。
 
 ラッパーの例:
 
@@ -157,7 +150,7 @@ exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@local
 exec ssh -T gateway-host imsg "$@"
 ```
 
-**リモート添付ファイル:** `cliPath` が SSH 経由でリモートホストを指す場合、Messages データベース内の添付ファイルパスはリモートマシン上のファイルを参照します。`channels.imessage.remoteHost` を設定することで、OpenClaw は SCP 経由で自動的に取得できます:
+**リモート添付ファイル:** `cliPath` が SSH 経由でリモートホストを指す場合、Messages データベース内の添付ファイルパスはリモートマシン上のファイルを参照します。`channels.imessage.remoteHost` を設定することで、OpenClaw は SCP 経由で自動的に取得できます: `channels.imessage.remoteHost`を設定すると、OpenClawはSCP上でこれらを自動的に取得できます。
 
 ```json5
 {
@@ -171,7 +164,7 @@ exec ssh -T gateway-host imsg "$@"
 }
 ```
 
-`remoteHost` が設定されていない場合、OpenClaw はラッパースクリプト内の SSH コマンドを解析して自動検出を試みます。信頼性のため、明示的な設定を推奨します。
+`remoteHost` が設定されていない場合、OpenClaw はラッパースクリプト内の SSH コマンドを解析して自動検出を試みます。信頼性のため、明示的な設定を推奨します。 信頼性のために明示的な構成が推奨されます。
 
 #### Tailscale 経由のリモート Mac（例）
 
@@ -220,7 +213,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 - `ssh bot@mac-mini.tailnet-1234.ts.net` がプロンプトなしで動作するように SSH 鍵を使用してください。
 - 添付ファイルを SCP で取得できるよう、`remoteHost` は SSH の接続先と一致させてください。
 
-マルチアカウント対応: アカウントごとの設定と任意の `name` を用いて `channels.imessage.accounts` を使用します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。`~/.openclaw/openclaw.json` は（トークンを含むことが多いため）コミットしないでください。
+マルチアカウントサポート: アカウントごとの設定とオプションの `name` で `channels.imessage.accounts` を使用します。 マルチアカウント対応: アカウントごとの設定と任意の `name` を使用して `channels.signal.accounts` を指定します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。 `~/.openclaw/openclaw.json` をコミットしないでください(トークンが含まれることが多いです)。
 
 ## アクセス制御（DM + グループ）
 
@@ -231,7 +224,7 @@ DM:
 - 承認方法:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- ペアリングは iMessage DM のデフォルトのトークン交換です。詳細: [Pairing](/channels/pairing)
+- ペアリングは iMessage DM のデフォルトのトークン交換です。詳細: [Pairing](/channels/pairing) 詳細: [Pairing](/channels/pairing)
 
 グループ:
 
@@ -240,7 +233,7 @@ DM:
 - iMessage にはネイティブのメンション メタデータがないため、メンション ゲーティングには `agents.list[].groupChat.mentionPatterns`（または `messages.groupChat.mentionPatterns`）を使用します。
 - マルチエージェント上書き: `agents.list[].groupChat.mentionPatterns` にエージェントごとのパターンを設定します。
 
-## 仕組み（挙動）
+## 動作の仕組み（挙動）
 
 - `imsg` がメッセージイベントをストリームし、ゲートウェイが共有チャンネル エンベロープに正規化します。
 - 返信は常に同じチャット ID またはハンドルにルーティングされます。
@@ -270,7 +263,7 @@ DM:
 }
 ```
 
-これは、特定のスレッドに対して分離された人格／モデルを使用したい場合に有用です（[マルチエージェント ルーティング](/concepts/multi-agent) を参照）。ファイルシステムの分離については [サンドボックス化](/gateway/sandboxing) を参照してください。
+これは、特定のスレッドに対して分離された人格／モデルを使用したい場合に有用です（[マルチエージェント ルーティング](/concepts/multi-agent) を参照）。ファイルシステムの分離については [サンドボックス化](/gateway/sandboxing) を参照してください。 ファイルシステムの分離については、 [Sandboxing](/gateway/sandboxing) を参照してください。
 
 ## メディア + 制限
 
@@ -307,15 +300,15 @@ imsg chats --limit 20
 - `channels.imessage.enabled`: チャンネル起動の有効／無効。
 - `channels.imessage.cliPath`: `imsg` へのパス。
 - `channels.imessage.dbPath`: Messages DB パス。
-- `channels.imessage.remoteHost`: `cliPath` がリモート Mac を指す場合の、SCP 添付転送用 SSH ホスト（例: `user@gateway-host`）。未設定時は SSH ラッパーから自動検出されます。
+- `channels.imessage.remoteHost`: `cliPath` がリモート Mac を指す場合の、SCP 添付転送用 SSH ホスト（例: `user@gateway-host`）。未設定時は SSH ラッパーから自動検出されます。 設定されていない場合、SSHラッパーから自動検出されました。
 - `channels.imessage.service`: `imessage | sms | auto`。
 - `channels.imessage.region`: SMS リージョン。
 - `channels.imessage.dmPolicy`: `pairing | allowlist | open | disabled`（デフォルト: ペアリング）。
-- `channels.imessage.allowFrom`: DM 許可リスト（ハンドル、メール、E.164 番号、または `chat_id:*`）。`open` には `"*"` が必要です。iMessage にはユーザー名がないため、ハンドルまたはチャット ターゲットを使用してください。
+- `channels.imessage.allowFrom`: DM 許可リスト（ハンドル、メール、E.164 番号、または `chat_id:*`）。`open` には `"*"` が必要です。iMessage にはユーザー名がないため、ハンドルまたはチャット ターゲットを使用してください。 `open`には`"*"`が必要です。 iMessage にユーザー名がありません。ハンドルまたはチャットターゲットを使用します。
 - `channels.imessage.groupPolicy`: `open | allowlist | disabled`（デフォルト: 許可リスト）。
 - `channels.imessage.groupAllowFrom`: グループ送信者許可リスト。
 - `channels.imessage.historyLimit` / `channels.imessage.accounts.*.historyLimit`: コンテキストとして含める最大グループ メッセージ数（0 で無効）。
-- `channels.imessage.dmHistoryLimit`: ユーザー ターン数での DM 履歴上限。ユーザーごとの上書き: `channels.imessage.dms["<handle>"].historyLimit`。
+- `channels.imessage.dmHistoryLimit`: ユーザターンのDM履歴制限。 `channels.imessage.dmHistoryLimit`: ユーザー ターン数での DM 履歴上限。ユーザーごとの上書き: `channels.imessage.dms["<handle>"].historyLimit`。
 - `channels.imessage.groups`: グループごとのデフォルト + 許可リスト（グローバル デフォルトには `"*"` を使用）。
 - `channels.imessage.includeAttachments`: 添付ファイルをコンテキストに取り込む。
 - `channels.imessage.mediaMaxMb`: 受信／送信メディア上限（MB）。

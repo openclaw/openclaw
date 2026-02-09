@@ -1,15 +1,8 @@
 ---
-summary: «السلوك والتهيئة لمعالجة رسائل مجموعات WhatsApp (تتم مشاركة mentionPatterns عبر الواجهات)»
+summary: "السلوك والتهيئة لمعالجة رسائل مجموعات WhatsApp (تتم مشاركة mentionPatterns عبر الواجهات)"
 read_when:
-  - «تغيير قواعد رسائل المجموعات أو الإشارات»
-title: «رسائل المجموعات»
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:03Z
+  - تغيير قواعد رسائل المجموعات أو الإشارات
+title: "رسائل المجموعات"
 ---
 
 # رسائل المجموعات (قناة WhatsApp web)
@@ -78,7 +71,7 @@ x-i18n:
 
 ## الاختبار / التحقق
 
-- اختبار يدوي سريع:
+- دخان يدوي:
   - أرسل تنبيه `@openclaw` في المجموعة وتحقق من وجود رد يشير إلى اسم المُرسِل.
   - أرسل تنبيهًا ثانيًا وتحقق من تضمين كتلة السجل ثم مسحها في الدور التالي.
 - تحقّق من سجلات Gateway (شغّل مع `--verbose`) لرؤية إدخالات `inbound web message` التي تُظهِر `from: <groupJid>` واللاحقة `[from: …]`.

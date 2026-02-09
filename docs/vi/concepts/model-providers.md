@@ -4,19 +4,12 @@ read_when:
   - Bạn cần tài liệu tham chiếu thiết lập mô hình theo từng nhà cung cấp
   - Bạn muốn xem cấu hình mẫu hoặc các lệnh CLI hướng dẫn ban đầu cho nhà cung cấp mô hình
 title: "Nhà cung cấp mô hình"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:44Z
 ---
 
 # Nhà cung cấp mô hình
 
-Trang này bao quát **các nhà cung cấp LLM/mô hình** (không phải các kênh chat như WhatsApp/Telegram).
-Để biết quy tắc chọn mô hình, xem [/concepts/models](/concepts/models).
+This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
+Để biết quy tắc chọn model, xem [/concepts/models](/concepts/models).
 
 ## Quy tắc nhanh
 
@@ -26,8 +19,8 @@ Trang này bao quát **các nhà cung cấp LLM/mô hình** (không phải các 
 
 ## Nhà cung cấp tích hợp sẵn (danh mục pi‑ai)
 
-OpenClaw đi kèm danh mục pi‑ai. Các nhà cung cấp này **không**
-yêu cầu cấu hình `models.providers`; chỉ cần thiết lập xác thực + chọn mô hình.
+OpenClaw được phát hành kèm catalog pi‑ai. Các nhà cung cấp này **không yêu cầu**
+cấu hình `models.providers`; chỉ cần đặt auth + chọn một mô hình.
 
 ### OpenAI
 
@@ -98,8 +91,7 @@ yêu cầu cấu hình `models.providers`; chỉ cần thiết lập xác thực
 - OAuth Gemini CLI được phát hành như một plugin đóng gói (`google-gemini-cli-auth`, mặc định tắt).
   - Bật: `openclaw plugins enable google-gemini-cli-auth`
   - Đăng nhập: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Lưu ý: bạn **không** dán client id hoặc secret vào `openclaw.json`. Luồng đăng nhập CLI
-    lưu token trong các hồ sơ xác thực trên máy chủ gateway.
+  - Lưu ý: bạn **không** dán client id hoặc secret vào `openclaw.json`. Luồng đăng nhập CLI lưu trữ token trong các hồ sơ xác thực trên máy chủ gateway.
 
 ### Z.AI (GLM)
 
@@ -190,8 +182,8 @@ Kimi Coding dùng endpoint tương thích Anthropic của Moonshot AI:
 
 ### Qwen OAuth (gói miễn phí)
 
-Qwen cung cấp quyền truy cập OAuth tới Qwen Coder + Vision qua luồng device-code.
-Bật plugin đóng gói, sau đó đăng nhập:
+Qwen cung cấp quyền truy cập OAuth vào Qwen Coder + Vision thông qua luồng device-code.
+Bật plugin đi kèm, sau đó đăng nhập:
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +256,7 @@ ollama pull llama3.3
 }
 ```
 
-Ollama được tự động phát hiện khi chạy cục bộ tại `http://127.0.0.1:11434/v1`. Xem [/providers/ollama](/providers/ollama) để biết khuyến nghị mô hình và cấu hình tùy chỉnh.
+Ollama được tự động phát hiện khi chạy cục bộ tại `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
 ### Proxy cục bộ (LM Studio, vLLM, LiteLLM, v.v.)
 
@@ -303,8 +295,8 @@ Ví dụ (tương thích OpenAI):
 
 Ghi chú:
 
-- Với các nhà cung cấp tùy chỉnh, `reasoning`, `input`, `cost`, `contextWindow` và `maxTokens` là tùy chọn.
-  Khi bỏ qua, OpenClaw mặc định:
+- Đối với các provider tùy chỉnh, `reasoning`, `input`, `cost`, `contextWindow` và `maxTokens` là tùy chọn.
+  Khi bị lược bỏ, OpenClaw mặc định:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

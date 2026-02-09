@@ -4,19 +4,12 @@ read_when:
   - Gusto mong pumili ng chat channel para sa OpenClaw
   - Kailangan mo ng mabilis na pangkalahatang-ideya ng mga sinusuportahang messaging platform
 title: "Mga Chat Channel"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:19Z
 ---
 
 # Mga Chat Channel
 
-Maaaring makipag-usap sa iyo ang OpenClaw sa anumang chat app na ginagamit mo na. Kumokonekta ang bawat channel sa pamamagitan ng Gateway.
-Sinusuportahan ang text sa lahat; nag-iiba-iba ang media at reactions depende sa channel.
+Maaaring makipag-usap sa iyo ang OpenClaw sa anumang chat app na ginagamit mo na. Bawat channel ay kumokonekta sa pamamagitan ng Gateway.
+Sinusuportahan ang text sa lahat ng dako; nag-iiba ang media at reactions ayon sa channel.
 
 ## Mga sinusuportahang channel
 
@@ -44,8 +37,8 @@ Sinusuportahan ang text sa lahat; nag-iiba-iba ang media at reactions depende sa
 ## Mga tala
 
 - Maaaring tumakbo nang sabay-sabay ang mga channel; mag-configure ng marami at iruruta ng OpenClaw kada chat.
-- Karaniwang pinakamabilis ang setup sa **Telegram** (simpleng bot token). Nangangailangan ang WhatsApp ng QR pairing at
-  nag-iimbak ng mas maraming state sa disk.
+- Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
+  stores more state on disk.
 - Nag-iiba ang behavior ng mga grupo depende sa channel; tingnan ang [Groups](/channels/groups).
 - Ipinapatupad ang DM pairing at mga allowlist para sa kaligtasan; tingnan ang [Security](/gateway/security).
 - Mga internal ng Telegram: [mga tala ng grammY](/channels/grammy).

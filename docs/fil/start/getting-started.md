@@ -4,13 +4,6 @@ read_when:
   - Unang beses na setup mula sa zero
   - Gusto mo ang pinakamabilis na daan papunta sa gumaganang chat
 title: "Pagsisimula"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:00Z
 ---
 
 # Pagsisimula
@@ -18,10 +11,10 @@ x-i18n:
 Layunin: mula zero hanggang sa unang gumaganang chat na may minimal na setup.
 
 <Info>
-Pinakamabilis na chat: buksan ang Control UI (hindi kailangan ng channel setup). Patakbuhin ang `openclaw dashboard`
-at makipag-chat sa browser, o buksan ang `http://127.0.0.1:18789/` sa
+Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`
+and chat in the browser, or open `http://127.0.0.1:18789/` on the
 <Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">host ng Gateway</Tooltip>.
-Docs: [Dashboard](/web/dashboard) at [Control UI](/web/control-ui).
+Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 </Info>
 
 ## Mga paunang kinakailangan
@@ -35,7 +28,7 @@ Suriin ang iyong bersyon ng Node gamit ang `node --version` kung hindi ka sigura
 ## Mabilis na setup (CLI)
 
 <Steps>
-  <Step title="I-install ang OpenClaw (inirerekomenda)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ Suriin ang iyong bersyon ng Node gamit ang `node --version` kung hindi ka sigura
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     Iba pang mga paraan ng pag-install at mga kinakailangan: [Install](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="Patakbuhin ang onboarding wizard">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     Kino-configure ng wizard ang auth, mga setting ng Gateway, at mga opsyonal na channel.
     Tingnan ang [Onboarding Wizard](/start/wizard) para sa mga detalye.
-
-  </Step>
-  <Step title="Suriin ang Gateway">
-    Kung na-install mo ang service, dapat ay tumatakbo na ito:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Buksan ang Control UI">
+  <Step title="Check the Gateway">
+    Kung na-install mo ang service, dapat ay tumatakbo na ito:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,20 +84,24 @@ Kung naglo-load ang Control UI, handa na ang iyong Gateway para gamitin.
 ## Opsyonal na mga pagsusuri at dagdag
 
 <AccordionGroup>
-  <Accordion title="Patakbuhin ang Gateway sa foreground">
+  <Accordion title="Run the Gateway in the foreground">
     Kapaki-pakinabang para sa mabilisang mga test o pag-troubleshoot.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="Magpadala ng test na mensahe">
+  <Accordion title="Send a test message">
     Nangangailangan ng naka-configure na channel.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -106,7 +109,7 @@ Kung naglo-load ang Control UI, handa na ang iyong Gateway para gamitin.
 ## Lumalim pa
 
 <Columns>
-  <Card title="Onboarding Wizard (mga detalye)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Kumpletong sanggunian ng CLI wizard at mga advanced na opsyon.
   </Card>
   <Card title="macOS app onboarding" href="/start/onboarding">

@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou modificar a análise de localização de canais
   - Ao usar campos de contexto de localização em prompts ou ferramentas do agente
 title: "Análise de localização de canais"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:55Z
 ---
 
 # Análise de localização de canais

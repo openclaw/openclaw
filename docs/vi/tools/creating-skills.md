@@ -1,12 +1,5 @@
 ---
 title: "Tạo Skills"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:21Z
 ---
 
 # Tạo Skills Tùy chỉnh 🛠
@@ -19,17 +12,17 @@ Một skill là một thư mục chứa tệp `SKILL.md` (cung cấp hướng d�
 
 ## Từng bước: Skill đầu tiên của bạn
 
-### 1. Tạo thư mục
+### 3. 1. 4. Tạo thư mục
 
-Skills nằm trong workspace của bạn, thường là `~/.openclaw/workspace/skills/`. Tạo một thư mục mới cho skill của bạn:
+Skills nằm trong workspace của bạn, thường là `~/.openclaw/workspace/skills/`. 6. Tạo một thư mục mới cho skill của bạn:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
 ```
 
-### 2. Định nghĩa `SKILL.md`
+### 7. 2. Định nghĩa `SKILL.md`
 
-Tạo tệp `SKILL.md` trong thư mục đó. Tệp này sử dụng frontmatter YAML cho metadata và Markdown cho hướng dẫn.
+9. Tạo một tệp `SKILL.md` trong thư mục đó. Tệp này sử dụng frontmatter YAML cho siêu dữ liệu và Markdown cho hướng dẫn.
 
 ```markdown
 ---
@@ -42,13 +35,13 @@ description: A simple skill that says hello.
 When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
 ```
 
-### 3. Thêm công cụ (Tùy chọn)
+### 11. 3. Thêm Tools (Tùy chọn)
 
 Bạn có thể định nghĩa các công cụ tùy chỉnh trong frontmatter hoặc hướng dẫn tác tử sử dụng các công cụ hệ thống hiện có (như `bash` hoặc `browser`).
 
-### 4. Làm mới OpenClaw
+### 4. 14. Làm mới OpenClaw
 
-Yêu cầu tác tử của bạn "refresh skills" hoặc khởi động lại gateway. OpenClaw sẽ phát hiện thư mục mới và lập chỉ mục `SKILL.md`.
+45. Hãy yêu cầu agent của bạn "refresh skills" hoặc khởi động lại gateway. 16. OpenClaw sẽ phát hiện thư mục mới và lập chỉ mục tệp `SKILL.md`.
 
 ## Thực hành tốt nhất
 

@@ -5,13 +5,6 @@ read_when:
   - Vous devez comprendre les endpoints, cles et references de modele separes
   - Vous voulez une configuration a copier/coller pour l’un ou l’autre fournisseur
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 73b8b691b923ce3d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:27Z
 ---
 
 # Moonshot AI (Kimi)

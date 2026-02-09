@@ -4,13 +4,6 @@ read_when:
   - Vous avez besoin de journaux de debogage cibles sans augmenter les niveaux de journalisation globaux
   - Vous devez capturer des journaux specifiques a un sous-systeme pour le support
 title: "Indicateurs de diagnostic"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:28Z
 ---
 
 # Indicateurs de diagnostic
@@ -19,9 +12,9 @@ Les indicateurs de diagnostic vous permettent d’activer des journaux de deboga
 
 ## Fonctionnement
 
-- Les indicateurs sont des chaines (insensibles a la casse).
+- Les marqueurs sont des chaînes (insensibles à la casse).
 - Vous pouvez activer des indicateurs dans la configuration ou via une surcharge par variable d’environnement.
-- Les caracteres generiques sont pris en charge :
+- Les jokers sont pris en charge :
   - `telegram.*` correspond a `telegram.http`
   - `*` active tous les indicateurs
 
@@ -47,7 +40,7 @@ Plusieurs indicateurs :
 
 Redemarrez le Gateway (passerelle) apres avoir modifie les indicateurs.
 
-## Surcharge par variable d’environnement (ponctuelle)
+## Surcharge d'Env (unique)
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -59,7 +52,7 @@ Desactiver tous les indicateurs :
 OPENCLAW_DIAGNOSTICS=0
 ```
 
-## Destination des journaux
+## Où vont les logs
 
 Les indicateurs emettent des journaux dans le fichier de diagnostics standard. Par defaut :
 

@@ -4,13 +4,6 @@ read_when:
   - Configurando monitoramento de expiração de autenticação ou alertas
   - Automatizando verificações de renovação de OAuth do Claude Code / Codex
 title: "Monitoramento de autenticação"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:41Z
 ---
 
 # Monitoramento de autenticação

@@ -5,13 +5,6 @@ read_when:
   - Gateway प्रमाणीकरण, बाइंड मोड, और कनेक्टिविटी का डिबग करते समय
   - Bonjour के माध्यम से Gateways की खोज (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:11Z
 ---
 
 # Gateway CLI
@@ -42,10 +35,10 @@ openclaw gateway run
 
 टिप्पणियाँ:
 
-- डिफ़ॉल्ट रूप से, Gateway तब तक शुरू होने से मना करता है जब तक `gateway.mode=local` को `~/.openclaw/openclaw.json` में सेट न किया गया हो। ऐड-हॉक/डेव रन के लिए `--allow-unconfigured` का उपयोग करें।
+- By default, the Gateway refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs.
 - प्रमाणीकरण के बिना loopback से आगे बाइंड करना अवरुद्ध है (सुरक्षा गार्डरेल)।
 - `SIGUSR1` अधिकृत होने पर इन-प्रोसेस रीस्टार्ट ट्रिगर करता है ( `commands.restart` सक्षम करें या gateway tool/config apply/update का उपयोग करें)।
-- `SIGINT`/`SIGTERM` हैंडलर्स Gateway प्रक्रिया को रोकते हैं, लेकिन वे किसी भी कस्टम टर्मिनल स्थिति को पुनर्स्थापित नहीं करते। यदि आप CLI को TUI या raw-mode इनपुट के साथ रैप करते हैं, तो बाहर निकलने से पहले टर्मिनल को पुनर्स्थापित करें।
+- `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don’t restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
 ### विकल्प
 
@@ -85,8 +78,8 @@ openclaw gateway run
 - `--timeout <ms>`: टाइमआउट/बजट (कमांड के अनुसार भिन्न)।
 - `--expect-final`: “final” प्रतिक्रिया की प्रतीक्षा करें (agent कॉल्स)।
 
-टिप्पणी: जब आप `--url` सेट करते हैं, तो CLI config या environment credentials पर वापस नहीं जाता।
-`--token` या `--password` को स्पष्ट रूप से पास करें। स्पष्ट credentials का अभाव एक त्रुटि है।
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ### `gateway health`
 
@@ -114,12 +107,12 @@ openclaw gateway status --json
 
 ### `gateway probe`
 
-`gateway probe` “सब कुछ डिबग करें” कमांड है। यह हमेशा प्रोब करता है:
+`gateway probe` is the “debug everything” command. It always probes:
 
 - आपका कॉन्फ़िगर किया गया रिमोट Gateway (यदि सेट हो), और
 - localhost (loopback) **भले ही रिमोट कॉन्फ़िगर हो**।
 
-यदि कई Gateways पहुँच योग्य हों, तो यह सभी को प्रिंट करता है। अलग-थलग प्रोफ़ाइल/पोर्ट्स (जैसे, एक रेस्क्यू बॉट) के साथ कई Gateways समर्थित हैं, लेकिन अधिकांश इंस्टॉलेशन अभी भी एक ही Gateway चलाते हैं।
+If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 
 ```bash
 openclaw gateway probe

@@ -3,24 +3,17 @@ summary: "Katayuan ng suporta sa Matrix, mga kakayahan, at konpigurasyon"
 read_when:
   - Nagtatrabaho sa mga feature ng Matrix channel
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:40Z
 ---
 
 # Matrix (plugin)
 
-Ang Matrix ay isang bukas at desentralisadong messaging protocol. Kumokonekta ang OpenClaw bilang isang Matrix **user**
-sa anumang homeserver, kaya kailangan mo ng Matrix account para sa bot. Kapag naka-log in na ito, maaari kang mag-DM
-direkta sa bot o imbitahin ito sa mga room (Matrix na “groups”). Valid na client option din ang Beeper,
-ngunit nangangailangan ito na naka-enable ang E2EE.
+Matrix is an open, decentralized messaging protocol. OpenClaw connects as a Matrix **user**
+on any homeserver, so you need a Matrix account for the bot. Kapag ito ay naka-log in na, maaari mo itong i-DM
+direkta o imbitahan sa mga room (Matrix "groups"). Beeper is a valid client option too,
+but it requires E2EE to be enabled.
 
-Katayuan: suportado sa pamamagitan ng plugin (@vector-im/matrix-bot-sdk). Direct messages, rooms, threads, media, reactions,
-polls (send + poll-start bilang text), location, at E2EE (na may crypto support).
+Status: supported via plugin (@vector-im/matrix-bot-sdk). Direct messages, rooms, threads, media, reactions,
+polls (send + poll-start as text), location, and E2EE (with crypto support).
 
 ## Kinakailangang plugin
 
@@ -48,10 +41,13 @@ Mga detalye: [Plugins](/tools/plugin)
 1. I-install ang Matrix plugin:
    - Mula sa npm: `openclaw plugins install @openclaw/matrix`
    - Mula sa local checkout: `openclaw plugins install ./extensions/matrix`
+
 2. Gumawa ng Matrix account sa isang homeserver:
    - Tingnan ang mga hosting option sa [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - O i-host mo ito mismo.
+
 3. Kumuha ng access token para sa bot account:
+
    - Gamitin ang Matrix login API gamit ang `curl` sa iyong homeserver:
 
    ```bash
@@ -79,9 +75,11 @@ Mga detalye: [Plugins](/tools/plugin)
    - Kung parehong naka-set, mas may prioridad ang config.
    - Kapag may access token: awtomatikong kinukuha ang user ID sa pamamagitan ng `/whoami`.
    - Kapag naka-set, ang `channels.matrix.userId` ay dapat ang buong Matrix ID (halimbawa: `@bot:example.org`).
+
 5. I-restart ang Gateway (o tapusin ang onboarding).
-6. Magsimula ng DM sa bot o imbitahin ito sa isang room mula sa anumang Matrix client
-   (Element, Beeper, atbp.; tingnan ang [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Nangangailangan ang Beeper ng E2EE,
+
+6. Start a DM with the bot or invite it to a room from any Matrix client
+   (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Nangangailangan ang Beeper ng E2EE,
    kaya itakda ang `channels.matrix.encryption: true` at i-verify ang device.
 
 Minimal na config (access token, awtomatikong kinukuha ang user ID):
@@ -124,7 +122,7 @@ I-enable gamit ang `channels.matrix.encryption: true`:
 - Kapag nag-load ang crypto module, awtomatikong nade-decrypt ang mga encrypted room.
 - Ang outbound media ay naka-encrypt kapag nagpapadala sa mga encrypted room.
 - Sa unang koneksyon, humihiling ang OpenClaw ng device verification mula sa iyong iba pang session.
-- I-verify ang device sa ibang Matrix client (Element, atbp.) para paganahin ang key sharing.
+- Verify the device in another Matrix client (Element, etc.) upang i-enable ang key sharing.
 - Kapag hindi ma-load ang crypto module, madi-disable ang E2EE at hindi ma-decrypt ang mga encrypted room;
   maglo-log ang OpenClaw ng babala.
 - Kung makakita ka ng mga error tungkol sa nawawalang crypto module (halimbawa, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -132,16 +130,16 @@ I-enable gamit ang `channels.matrix.encryption: true`:
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` o kunin ang binary gamit ang
   `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js`.
 
-Ang crypto state ay iniimbak kada account + access token sa
+Ang crypto state ay iniimbak per account + access token sa
 `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
-(SQLite database). Ang sync state ay nasa tabi nito sa `bot-storage.json`.
-Kapag nagbago ang access token (device), gagawa ng bagong store at kailangang
-muling ma-verify ang bot para sa mga encrypted room.
+(SQLite database). Sync state lives alongside it in `bot-storage.json`.
+If the access token (device) changes, a new store is created and the bot must be
+re-verified for encrypted rooms.
 
-**Pag-verify ng device:**
+**Device verification:**
 Kapag naka-enable ang E2EE, hihiling ang bot ng verification mula sa iyong iba pang session sa startup.
-Buksan ang Element (o ibang client) at aprubahan ang verification request para maitatag ang tiwala.
-Kapag na-verify na, makaka-decrypt na ang bot ng mga mensahe sa mga encrypted room.
+Buksan ang Element (o ibang client) at aprubahan ang verification request upang magtatag ng tiwala.
+Kapag na-verify na, kayang i-decrypt ng bot ang mga mensahe sa mga encrypted room.
 
 ## Routing model
 
@@ -150,16 +148,16 @@ Kapag na-verify na, makaka-decrypt na ang bot ng mga mensahe sa mga encrypted ro
 
 ## Kontrol sa access (DMs)
 
-- Default: `channels.matrix.dm.policy = "pairing"`. Ang mga hindi kilalang sender ay makakatanggap ng pairing code.
+- Default: `channels.matrix.dm.policy = "pairing"`. Unknown senders get a pairing code.
 - Aprubahan sa pamamagitan ng:
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - Mga public DM: `channels.matrix.dm.policy="open"` kasama ang `channels.matrix.dm.allowFrom=["*"]`.
-- Tumatanggap ang `channels.matrix.dm.allowFrom` ng buong Matrix user ID (halimbawa: `@user:server`). Nireresolba ng wizard ang mga display name patungo sa user ID kapag ang directory search ay nakahanap ng iisang eksaktong tugma.
+- `channels.matrix.dm.allowFrom` ay tumatanggap ng buong Matrix user ID (halimbawa: `@user:server`). Nire-resolve ng wizard ang mga display name tungo sa mga user ID kapag ang directory search ay nakahanap ng iisang eksaktong tugma.
 
 ## Mga room (groups)
 
-- Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Gamitin ang `channels.defaults.groupPolicy` para i-override ang default kapag hindi naka-set.
+- Default: `channels.matrix.groupPolicy = "allowlist"` (mention-gated). Use `channels.defaults.groupPolicy` to override the default when unset.
 - I-allowlist ang mga room gamit ang `channels.matrix.groups` (mga room ID o alias; nireresolba ang mga pangalan patungo sa ID kapag ang directory search ay nakahanap ng iisang eksaktong tugma):
 
 ```json5
@@ -197,17 +195,17 @@ Kapag na-verify na, makaka-decrypt na ang bot ng mga mensahe sa mga encrypted ro
 
 ## Mga kakayahan
 
-| Feature         | Katayuan                                                                                                   |
-| --------------- | ---------------------------------------------------------------------------------------------------------- |
-| Direct messages | ✅ Supported                                                                                               |
-| Rooms           | ✅ Supported                                                                                               |
-| Threads         | ✅ Supported                                                                                               |
-| Media           | ✅ Supported                                                                                               |
+| Feature         | Katayuan                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Direct messages | ✅ Supported                                                                                                                  |
+| Rooms           | ✅ Supported                                                                                                                  |
+| Threads         | ✅ Supported                                                                                                                  |
+| Media           | ✅ Supported                                                                                                                  |
 | E2EE            | ✅ Supported (kinakailangan ang crypto module)                                                             |
 | Reactions       | ✅ Supported (send/read sa pamamagitan ng tools)                                                           |
 | Polls           | ✅ Suportado ang send; ang mga inbound poll start ay kino-convert sa text (binale-wala ang responses/ends) |
 | Location        | ✅ Supported (geo URI; binale-wala ang altitude)                                                           |
-| Native commands | ✅ Supported                                                                                               |
+| Native commands | ✅ Supported                                                                                                                  |
 
 ## Pag-troubleshoot
 
@@ -253,7 +251,7 @@ Mga opsyon ng provider:
 - `channels.matrix.textChunkLimit`: laki ng outbound text chunk (chars).
 - `channels.matrix.chunkMode`: `length` (default) o `newline` para hatiin sa mga blankong linya (mga hangganan ng talata) bago ang length chunking.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.matrix.dm.allowFrom`: DM allowlist (buong Matrix user ID). Nangangailangan ang `open` ng `"*"`. Nireresolba ng wizard ang mga pangalan patungo sa ID kapag posible.
+- `channels.matrix.dm.allowFrom`: DM allowlist (full Matrix user IDs). `open` requires `"*"`. The wizard resolves names to IDs when possible.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (default: allowlist).
 - `channels.matrix.groupAllowFrom`: mga allowlisted sender para sa group messages (buong Matrix user ID).
 - `channels.matrix.allowlistOnly`: ipilit ang mga panuntunan ng allowlist para sa mga DM + room.

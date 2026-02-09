@@ -3,13 +3,6 @@ summary: "Status wsparcia Nextcloud Talk, możliwości i konfiguracja"
 read_when:
   - Prace nad funkcjami kanału Nextcloud Talk
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:56Z
 ---
 
 # Nextcloud Talk (wtyczka)
@@ -40,6 +33,7 @@ Szczegóły: [Plugins](/tools/plugin)
 ## Szybka konfiguracja (dla początkujących)
 
 1. Zainstaluj wtyczkę Nextcloud Talk.
+
 2. Na serwerze Nextcloud utwórz bota:
 
    ```bash
@@ -47,9 +41,11 @@ Szczegóły: [Plugins](/tools/plugin)
    ```
 
 3. Włącz bota w ustawieniach docelowego pokoju.
+
 4. Skonfiguruj OpenClaw:
    - Konfiguracja: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Lub zmienne środowiskowe: `NEXTCLOUD_TALK_BOT_SECRET` (tylko konto domyślne)
+
 5. Uruchom ponownie gateway (lub zakończ onboarding).
 
 Minimalna konfiguracja:

@@ -2,16 +2,9 @@
 summary: "Справочник CLI для `openclaw system` (системные события, сигналы keepalive, присутствие)"
 read_when:
   - Вы хотите поставить системное событие в очередь без создания cron-задачи
-  - Вам нужно включить или отключить сигналы keepalive
+  - Вам нужно включить или отключить heartbeats
   - Вы хотите просмотреть записи системного присутствия
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:19Z
 ---
 
 # `openclaw system`
@@ -42,7 +35,7 @@ openclaw system presence
 
 ## `system heartbeat last|enable|disable`
 
-Управление сигналами keepalive:
+Управление сердечками:
 
 - `last`: показать последнее событие сигнала keepalive.
 - `enable`: включить сигналы keepalive обратно (используйте, если они были отключены).

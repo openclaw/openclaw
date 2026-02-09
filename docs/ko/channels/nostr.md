@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 가 Nostr 를 통해 다이렉트 메시지를 수신하도록 하려는 경우
   - 탈중앙화 메시징을 설정하는 경우
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:08Z
 ---
 
 # Nostr
@@ -21,7 +14,7 @@ Nostr 는 소셜 네트워킹을 위한 탈중앙화 프로토콜입니다. 이 
 
 ## 설치 (온디맨드)
 
-### 온보딩 (권장)
+### Onboarding (recommended)
 
 - 온보딩 마법사 (`openclaw onboard`) 및 `openclaw channels add` 에서 선택적 채널 플러그인이 나열됩니다.
 - Nostr 를 선택하면 온디맨드로 플러그인 설치를 안내합니다.
@@ -78,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## 구성 참조
 
-| 키           | 유형     | 기본값                                      | 설명                           |
-| ------------ | -------- | ------------------------------------------- | ------------------------------ |
-| `privateKey` | string   | required                                    | `nsec` 또는 hex 형식의 개인 키 |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | 릴레이 URL (WebSocket)         |
-| `dmPolicy`   | string   | `pairing`                                   | DM 접근 정책                   |
-| `allowFrom`  | string[] | `[]`                                        | 허용된 발신자 공개 키          |
-| `enabled`    | boolean  | `true`                                      | 채널 활성화/비활성화           |
-| `name`       | string   | -                                           | 표시 이름                      |
-| `profile`    | object   | -                                           | NIP-01 프로필 메타데이터       |
+| 키            | 유형                                                           | 기본값                                         | 설명                                     |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | -------------------------------------- |
+| `privateKey` | string                                                       | required                                    | `nsec` 또는 hex 형식의 개인 키                 |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | 릴레이 URL (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM 접근 정책                               |
+| `allowFrom`  | string[] | `[]`                                        | 허용된 발신자 공개 키                           |
+| `enabled`    | boolean                                                      | `true`                                      | 채널 활성화/비활성화                            |
+| `name`       | string                                                       | -                                           | 표시 이름                                  |
+| `profile`    | object                                                       | -                                           | NIP-01 프로필 메타데이터                       |
 
 ## 프로필 메타데이터
 
@@ -164,7 +157,7 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 }
 ```
 
-팁:
+Tips:
 
 - 중복 대비를 위해 2-3 개의 릴레이를 사용하십시오.
 - 릴레이를 과도하게 사용하지 마십시오 (지연, 중복).
@@ -173,12 +166,12 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## 프로토콜 지원
 
-| NIP    | 상태   | 설명                                 |
-| ------ | ------ | ------------------------------------ |
-| NIP-01 | 지원됨 | 기본 이벤트 형식 + 프로필 메타데이터 |
-| NIP-04 | 지원됨 | 암호화된 DM (`kind:4`)               |
-| NIP-17 | 계획됨 | 기프트 래핑된 DM                     |
-| NIP-44 | 계획됨 | 버전 관리 암호화                     |
+| NIP    | 상태  | 설명                                    |
+| ------ | --- | ------------------------------------- |
+| NIP-01 | 지원됨 | 기본 이벤트 형식 + 프로필 메타데이터                 |
+| NIP-04 | 지원됨 | 암호화된 DM (`kind:4`) |
+| NIP-17 | 계획됨 | 기프트 래핑된 DM                            |
+| NIP-44 | 계획됨 | 버전 관리 암호화                             |
 
 ## 테스트
 
@@ -204,7 +197,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 1. 로그에서 봇 공개 키 (npub) 를 확인합니다.
 2. Nostr 클라이언트 (Damus, Amethyst 등) 를 엽니다.
-3. 봇 공개 키로 DM 을 보냅니다.
+3. DM the bot pubkey.
 4. 응답을 확인합니다.
 
 ## 문제 해결

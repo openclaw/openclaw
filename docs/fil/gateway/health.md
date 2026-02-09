@@ -3,13 +3,6 @@ summary: "Mga hakbang sa health check para sa connectivity ng channel"
 read_when:
   - Pag-diagnose ng kalusugan ng WhatsApp channel
 title: "Mga Health Check"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:29Z
 ---
 
 # Mga Health Check (CLI)
@@ -28,8 +21,8 @@ Maikling gabay para i-verify ang connectivity ng channel nang hindi nanghuhula.
 ## Mas malalim na diagnostics
 
 - Mga kredensyal sa disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (dapat kamakailan ang mtime).
-- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (maaaring i-override ang path sa config). Ang bilang at mga kamakailang recipient ay ipinapakita sa pamamagitan ng `status`.
-- Relink flow: `openclaw channels logout && openclaw channels login --verbose` kapag lumitaw ang mga status code na 409–515 o `loggedOut` sa mga log. (Tandaan: ang QR login flow ay awtomatikong magre-restart nang isang beses para sa status 515 pagkatapos ng pairing.)
+- Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`.
+- Relink flow: `openclaw channels logout && openclaw channels login --verbose` kapag lumitaw ang mga status code 409–515 o `loggedOut` sa mga log. (Tandaan: ang QR login flow ay awtomatikong nagre-restart nang isang beses para sa status 515 pagkatapos ng pairing.)
 
 ## Kapag may pumalya
 
@@ -39,4 +32,4 @@ Maikling gabay para i-verify ang connectivity ng channel nang hindi nanghuhula.
 
 ## Dedikadong "health" command
 
-Humihingi ang `openclaw health --json` sa tumatakbong Gateway ng health snapshot nito (walang direktang channel sockets mula sa CLI). Iuulat nito ang naka-link na creds/edad ng auth kapag available, mga buod ng probe kada channel, buod ng session-store, at tagal ng probe. Lalabas ito na non-zero kapag hindi maabot ang Gateway o pumalya/nag-timeout ang probe. Gamitin ang `--timeout <ms>` para i-override ang default na 10s.
+`openclaw health --json` ay humihingi sa tumatakbong Gateway ng health snapshot nito (walang direktang channel socket mula sa CLI). Ipinapakita nito ang edad ng naka-link na creds/auth kapag available, mga per-channel probe summary, buod ng session-store, at tagal ng probe. It exits non-zero if the Gateway is unreachable or the probe fails/timeouts. Gamitin ang `--timeout <ms>` upang i-override ang default na 10s.

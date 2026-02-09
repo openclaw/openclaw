@@ -4,20 +4,13 @@ read_when:
   - Implementering af macOS-appfunktioner
   - Ændring af gateway-livscyklus eller node-bridging på macOS
 title: "macOS-app"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:43Z
 ---
 
 # OpenClaw macOS-ledsager (menulinje + gateway-broker)
 
-macOS-appen er **menulinje-ledsageren** til OpenClaw. Den ejer tilladelser,
-administrerer/tilkobler Gateway lokalt (launchd eller manuelt) og eksponerer macOS‑
-funktioner til agenten som en node.
+MacOS-appen er **menulinjens følgesvend** for OpenClaw. Det ejer tilladelser,
+administrerer/tillægger Gateway lokalt (launchd eller manual), og udsætter macOS
+-kapaciteter for agenten som et knudepunkt.
 
 ## Hvad den gør
 
@@ -34,29 +27,29 @@ funktioner til agenten som en node.
 
 - **Lokal** (standard): appen tilkobler sig en kørende lokal Gateway, hvis den findes;
   ellers aktiverer den launchd-tjenesten via `openclaw gateway install`.
-- **Fjern**: appen forbinder til en Gateway over SSH/Tailscale og starter aldrig
+- **Fjern**: Appen forbinder til en Gateway over SSH/Tailscale og starter aldrig
   en lokal proces.
-  Appen starter den lokale **node-værtstjeneste**, så den fjerne Gateway kan nå denne Mac.
-  Appen starter ikke Gateway som en underproces.
+  Appen starter den lokale **node host service**, så den eksterne Gateway kan nå denne Mac.
+  Appen spawner ikke porten som et barn proces.
 
 ## Launchd-styring
 
-Appen administrerer en per-bruger LaunchAgent med etiketten `bot.molt.gateway`
-(eller `bot.molt.<profile>` ved brug af `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` aflaster stadig).
+Appen styrer en per-bruger LaunchAgent mærket `bot.molt.gateway`
+(eller `bot.molt.<profile>` ved brug af `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` aflæsning).
 
 ```bash
 launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-Erstat etiketten med `bot.molt.<profile>` ved kørsel af en navngiven profil.
+Erstat etiketten med bot.molt.<profile>\` når du kører en navngiven profil.
 
 Hvis LaunchAgent ikke er installeret, kan du aktivere den fra appen eller køre
 `openclaw gateway install`.
 
 ## Node-funktioner (mac)
 
-macOS-appen præsenterer sig som en node. Almindelige kommandoer:
+MacOS app præsenterer sig selv som et knudepunkt. Almindelige kommandoer:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Kamera: `camera.snap`, `camera.clip`
@@ -81,8 +74,8 @@ Gateway -> Node Service (WS)
 
 ## Exec-godkendelser (system.run)
 
-`system.run` styres af **Exec-godkendelser** i macOS-appen (Indstillinger → Exec-godkendelser).
-Sikkerhed + spørg + tilladelsesliste gemmes lokalt på Mac’en i:
+`system.run` styres af **Exec godkendelser** i macOS appen (Settings → Exec godkendelser).
+Sikkerhed + ask + tilladt liste gemmes lokalt på Mac i:
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -195,12 +188,12 @@ komponenter kan tale med en fjern Gateway, som om den var på localhost.
   eller genstarter den efter behov.
 - **SSH-form:** `ssh -N -L <local>:127.0.0.1:<remote>` med BatchMode +
   ExitOnForwardFailure + keepalive-indstillinger.
-- **IP-rapportering:** SSH-tunnelen bruger loopback, så gatewayen vil se node-IP’en
-  som `127.0.0.1`. Brug **Direct (ws/wss)** transport, hvis du vil have den reelle klient-
-  IP vist (se [macOS remote access](/platforms/mac/remote)).
+- **IP-rapportering:** SSH-tunnelen bruger loopback, så gatewayen vil se noden
+  IP som `127.0.0.1`. Brug **Direkte (ws/wss)** transport, hvis du ønsker, at den rigtige klient
+  IP skal vises (se [macOS fjernadgang](/platforms/mac/remote)).
 
-For opsætningstrin, se [macOS remote access](/platforms/mac/remote). For protokol-
-detaljer, se [Gateway protocol](/gateway/protocol).
+For opsætningstrin, se [macOS fjernadgang](/platforms/mac/remote). For detaljer vedrørende protokol
+, se [Gatewayprotokol] (/gateway/protocol).
 
 ## Relaterede dokumenter
 

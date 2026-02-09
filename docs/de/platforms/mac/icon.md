@@ -1,15 +1,8 @@
 ---
-summary: „Status der Menüleisten‑Symbole und Animationen für OpenClaw unter macOS“
+summary: "„Status der Menüleisten‑Symbole und Animationen für OpenClaw unter macOS“"
 read_when:
   - Ändern des Verhaltens des Menüleisten‑Symbols
-title: „Menüleisten‑Symbol“
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:54Z
+title: "„Menüleisten‑Symbol“"
 ---
 
 # Zustände des Menüleisten‑Symbols

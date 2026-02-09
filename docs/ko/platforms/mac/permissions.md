@@ -5,13 +5,6 @@ read_when:
   - macOS 앱을 패키징하거나 서명할 때
   - 번들 ID 또는 앱 설치 경로를 변경할 때
 title: "macOS 권한"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:43Z
 ---
 
 # macOS 권한(TCC)
@@ -29,7 +22,7 @@ Ad-hoc 서명은 매 빌드마다 새로운 식별자를 생성합니다. macOS 
 
 ## 프롬프트가 사라졌을 때의 복구 체크리스트
 
-1. 앱을 종료합니다.
+1. 33. 앱을 종료합니다.
 2. 시스템 설정 -> 개인정보 보호 및 보안에서 앱 항목을 제거합니다.
 3. 동일한 경로에서 앱을 다시 실행하고 권한을 다시 부여합니다.
 4. 프롬프트가 여전히 나타나지 않으면 `tccutil` 로 TCC 항목을 재설정한 후 다시 시도합니다.

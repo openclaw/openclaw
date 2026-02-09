@@ -5,13 +5,6 @@ read_when:
   - 設定マイグレーションや doctor ワークフローに取り組む場合
   - プラグイン設定スキーマやプラグイン読み込みのゲーティングを扱う場合
 title: "厳格な設定バリデーション"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:02Z
 ---
 
 # 厳格な設定バリデーション（doctor 専用マイグレーション）
@@ -54,10 +47,10 @@ x-i18n:
 
 - Doctor は設定が読み込まれる**たびに**実行されます（デフォルトはドライラン）。
 - 設定が無効な場合:
-  - サマリーと実行可能なエラーを表示。
+  - サマリーと実行可能なエラーを表示します。
   - 指示：`openclaw doctor --fix`。
 - `openclaw doctor --fix`:
-  - マイグレーションを適用。
+  - 移行を適用します。
   - 未知のキーを削除。
   - 更新された設定を書き込み。
 
@@ -72,7 +65,7 @@ x-i18n:
 - `openclaw status`
 - `openclaw gateway status`
 
-それ以外はすべて、次のメッセージでハード失敗させます： 「設定が無効です。`openclaw doctor --fix` を実行してください。」
+それ以外はすべて失敗しなければなりません。「設定が無効です。 `openclaw doctor --fix` を実行します。
 
 ## エラー UX 形式
 

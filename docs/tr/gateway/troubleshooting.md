@@ -4,13 +4,6 @@ read_when:
   - Sorun giderme merkezi sizi daha derin teşhis için buraya yönlendirdiyse
   - Kesin komutlarla kararlı, belirtiye dayalı runbook bölümlerine ihtiyacınız varsa
 title: "Sorun Giderme"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Gateway sorun giderme
@@ -48,7 +41,7 @@ openclaw config get channels
 openclaw logs --follow
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - DM gönderenleri için eşleştirmenin beklemede olması.
 - Grup bahsetme kısıtlaması (`requireMention`, `mentionPatterns`).
@@ -78,7 +71,7 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - Doğru probe URL'si ve gösterge paneli URL'si.
 - İstemci ile gateway arasında kimlik doğrulama modu/belirteci uyumsuzluğu.
@@ -108,7 +101,7 @@ openclaw doctor
 openclaw gateway status --deep
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - Çıkış ipuçlarıyla birlikte `Runtime: stopped`.
 - Hizmet yapılandırması uyumsuzluğu (`Config (cli)` ile `Config (service)`).
@@ -138,7 +131,7 @@ openclaw logs --follow
 openclaw config get channels
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - DM politikası (`pairing`, `allowlist`, `open`, `disabled`).
 - Grup izin listesi ve bahsetme gereksinimleri.
@@ -169,7 +162,7 @@ openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - Cron etkin ve bir sonraki uyanış mevcut.
 - İş çalıştırma geçmişi durumu (`ok`, `skipped`, `error`).
@@ -200,7 +193,7 @@ openclaw logs --follow
 openclaw status
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - Beklenen yeteneklerle çevrimiçi düğüm.
 - Kamera/mikrofon/konum/ekran için işletim sistemi izinleri.
@@ -231,7 +224,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-Bakılacaklar:
+Şunları arayın:
 
 - Geçerli tarayıcı yürütülebilir dosya yolu.
 - CDP profilinin erişilebilirliği.
@@ -254,7 +247,7 @@ Yaygın imzalar:
 
 Güncelleme sonrası bozulmaların çoğu yapılandırma kayması ya da artık daha sıkı varsayılanların uygulanmasından kaynaklanır.
 
-### 1) Kimlik doğrulama ve URL geçersiz kılma davranışı değişti
+### 1. Kimlik doğrulama ve URL geçersiz kılma davranışı değişti
 
 ```bash
 openclaw gateway status
@@ -263,7 +256,7 @@ openclaw config get gateway.remote.url
 openclaw config get gateway.auth.mode
 ```
 
-Kontrol edilecekler:
+Bakılacaklar:
 
 - `gateway.mode=remote` ise, yerel hizmetiniz sağlamken CLI çağrıları uzak hedefi işaret ediyor olabilir.
 - Açık `--url` çağrıları, saklanan kimlik bilgilerine geri dönmez.
@@ -273,7 +266,7 @@ Yaygın imzalar:
 - `gateway connect failed:` → yanlış URL hedefi.
 - `unauthorized` → uç nokta erişilebilir ancak kimlik doğrulama yanlış.
 
-### 2) Bağlama ve kimlik doğrulama korkulukları daha sıkı
+### 2. Bağlama ve kimlik doğrulama korkulukları daha sıkı
 
 ```bash
 openclaw config get gateway.bind
@@ -282,7 +275,7 @@ openclaw gateway status
 openclaw logs --follow
 ```
 
-Kontrol edilecekler:
+Bakılacaklar:
 
 - Loopback dışı bağlamalar (`lan`, `tailnet`, `custom`) için kimlik doğrulama yapılandırılmalıdır.
 - `gateway.token` gibi eski anahtarlar `gateway.auth.token` yerine geçmez.
@@ -292,7 +285,7 @@ Yaygın imzalar:
 - `refusing to bind gateway ... without auth` → bağlama+kimlik doğrulama uyumsuzluğu.
 - Çalışma zamanı çalışırken `RPC probe: failed` → gateway canlı ancak mevcut kimlik doğrulama/url ile erişilemez.
 
-### 3) Eşleştirme ve cihaz kimliği durumu değişti
+### 3. Eşleştirme ve cihaz kimliği durumu değişti
 
 ```bash
 openclaw devices list
@@ -301,7 +294,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-Kontrol edilecekler:
+Bakılacaklar:
 
 - Gösterge paneli/düğümler için bekleyen cihaz onayları.
 - Politika veya kimlik değişikliklerinden sonra bekleyen DM eşleştirme onayları.

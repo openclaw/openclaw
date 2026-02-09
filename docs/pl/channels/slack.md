@@ -2,13 +2,6 @@
 summary: "Konfiguracja Slacka w trybie gniazda lub webhooka HTTP"
 read_when: "Konfigurowanie Slacka lub debugowanie trybu gniazda/HTTP w Slacku"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:39Z
 ---
 
 # Slack
@@ -269,7 +262,7 @@ API Conversations Slacka jest typowane zakresem: potrzebujesz tylko zakresów dl
 typów konwersacji, z których faktycznie korzystasz (channels, groups, im, mpim). Zobacz
 [https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) – przegląd.
 
-### Zakresy tokena bota (wymagane)
+### Zakresy tokenów bota (wymagane)
 
 - `chat:write` (wysyłanie/aktualizacja/usuwanie wiadomości przez `chat.postMessage`)
   [https://docs.slack.dev/reference/methods/chat.postMessage](https://docs.slack.dev/reference/methods/chat.postMessage)
@@ -304,7 +297,7 @@ Dodaj je w **User Token Scopes**, jeśli konfigurujesz `channels.slack.userToken
 - `emoji:read`
 - `search:read`
 
-### Niewymagane obecnie (ale prawdopodobnie w przyszłości)
+### Dziś niepotrzebne (ale prawdopodobna przyszłość)
 
 - `mpim:write` (tylko jeśli dodamy otwieranie DM-ów grupowych/rozpoczynanie DM przez `conversations.open`)
 - `groups:write` (tylko jeśli dodamy zarządzanie kanałami prywatnymi: tworzenie/zmiana nazwy/zapraszanie/archiwizacja)
@@ -384,11 +377,11 @@ reakcję potwierdzenia po odpowiedzi bota.
 
 Domyślnie OpenClaw odpowiada w głównym kanale. Użyj `channels.slack.replyToMode`, aby kontrolować automatyczne wątkowanie:
 
-| Tryb    | Zachowanie                                                                                                                                                                       |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Domyślny.** Odpowiedź w głównym kanale. Wątek tylko wtedy, gdy wiadomość wyzwalająca była już w wątku.                                                                         |
+| Tryb    | Zachowanie                                                                                                                                                                                                                          |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **Domyślny.** Odpowiedź w głównym kanale. Wątek tylko wtedy, gdy wiadomość wyzwalająca była już w wątku.                                                                            |
 | `first` | Pierwsza odpowiedź trafia do wątku (pod wiadomością wyzwalającą), kolejne odpowiedzi do głównego kanału. Przydatne do zachowania kontekstu przy ograniczaniu bałaganu w wątkach. |
-| `all`   | Wszystkie odpowiedzi trafiają do wątku. Utrzymuje rozmowy w jednym miejscu, ale może zmniejszać widoczność.                                                                      |
+| `all`   | Wszystkie odpowiedzi trafiają do wątku. Utrzymuje rozmowy w jednym miejscu, ale może zmniejszać widoczność.                                                                                         |
 
 Tryb dotyczy zarówno automatycznych odpowiedzi, jak i wywołań narzędzi agenta (`slack sendMessage`).
 
@@ -562,7 +555,7 @@ Następnie, w razie potrzeby, potwierdź stan parowania DM:
 openclaw pairing list slack
 ```
 
-Typowe awarie:
+Częste awarie:
 
 - Połączenie jest nawiązane, ale brak odpowiedzi w kanałach: kanał zablokowany przez `groupPolicy` lub nie znajduje się na liście dozwolonych `channels.slack.channels`.
 - DM-y ignorowane: nadawca niezatwierdzony, gdy `channels.slack.dm.policy="pairing"`.

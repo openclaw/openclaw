@@ -4,18 +4,11 @@ read_when:
   - Pagdaragdag o pagbabago ng mga CLI command o opsyon
   - Pagdodokumento ng mga bagong command surface
 title: "Sanggunian ng CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:22Z
 ---
 
 # Sanggunian ng CLI
 
-Inilalarawan ng pahinang ito ang kasalukuyang asal ng CLI. Kung may magbago sa mga command, i-update ang doc na ito.
+30. Inilalarawan ng pahinang ito ang kasalukuyang gawi ng CLI. 31. Kung magbago ang mga utos, i-update ang dokumentong ito.
 
 ## Mga pahina ng command
 
@@ -259,10 +252,10 @@ Pamahalaan ang mga extension at ang kanilang config:
 - `openclaw plugins list` — tuklasin ang mga plugin (gamitin ang `--json` para sa machine output).
 - `openclaw plugins info <id>` — ipakita ang mga detalye ng isang plugin.
 - `openclaw plugins install <path|.tgz|npm-spec>` — mag-install ng plugin (o magdagdag ng plugin path sa `plugins.load.paths`).
-- `openclaw plugins enable <id>` / `disable <id>` — i-toggle ang `plugins.entries.<id>.enabled`.
+- 32. `openclaw plugins enable <id>` / `disable <id>` — i-toggle ang `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — iulat ang mga error sa pag-load ng plugin.
 
-Karamihan sa mga pagbabago sa plugin ay nangangailangan ng restart ng gateway. Tingnan ang [/plugin](/tools/plugin).
+33. Karamihan sa mga pagbabago sa plugin ay nangangailangan ng restart ng gateway. 34. Tingnan ang [/plugin](/tools/plugin).
 
 ## Memory
 
@@ -274,7 +267,7 @@ Vector search sa `MEMORY.md` + `memory/*.md`:
 
 ## Mga chat slash command
 
-Sinusuportahan ng mga chat message ang mga `/...` command (text at native). Tingnan ang [/tools/slash-commands](/tools/slash-commands).
+35. Sinusuportahan ng mga chat message ang mga `/...` na utos (text at native). 36. Tingnan ang [/tools/slash-commands](/tools/slash-commands).
 
 Mga highlight:
 
@@ -314,7 +307,7 @@ Mga opsyon:
 - `--token-provider <id>` (non-interactive; ginagamit kasama ng `--auth-choice token`)
 - `--token <token>` (non-interactive; ginagamit kasama ng `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
-- `--token-expires-in <duration>` (non-interactive; hal. `365d`, `12h`)
+- 37. `--token-expires-in <duration>` (non-interactive; hal. `365d`, `12h`)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
 - `--openrouter-api-key <key>`
@@ -350,8 +343,7 @@ Interactive na configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Mga non-interactive na config helper (get/set/unset). Ang pagpapatakbo ng `openclaw config` nang walang
-subcommand ay maglulunsad ng wizard.
+38. Mga non-interactive na config helper (get/set/unset). 39. Ang pagpapatakbo ng `openclaw config` nang walang subcommand ay maglulunsad ng wizard.
 
 Mga subcommand:
 
@@ -456,7 +448,7 @@ Mga subcommand:
 
 ### `webhooks gmail`
 
-Setup + runner ng Gmail Pub/Sub hook. Tingnan ang [/automation/gmail-pubsub](/automation/gmail-pubsub).
+40. Gmail Pub/Sub hook setup + runner. 41. Tingnan ang [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Mga subcommand:
 
@@ -465,7 +457,7 @@ Mga subcommand:
 
 ### `dns setup`
 
-Wide-area discovery DNS helper (CoreDNS + Tailscale). Tingnan ang [/gateway/discovery](/gateway/discovery).
+42. Wide-area discovery DNS helper (CoreDNS + Tailscale). 43. Tingnan ang [/gateway/discovery](/gateway/discovery).
 
 Mga opsyon:
 
@@ -494,7 +486,7 @@ Mga subcommand:
 Mga halimbawa:
 
 - `openclaw message send --target +15555550123 --message "Hi"`
-- `openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
+- 44. `openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" 45. --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
 
@@ -531,7 +523,7 @@ Mga opsyon:
 
 #### `agents add [name]`
 
-Magdagdag ng bagong isolated agent. Pinapatakbo ang guided wizard maliban kung may mga flag (o `--non-interactive`); kinakailangan ang `--workspace` sa non-interactive mode.
+46. Magdagdag ng bagong isolated agent. 47. Pinapatakbo ang guided wizard maliban kung may ipinasa na mga flag (o `--non-interactive`); kinakailangan ang `--workspace` sa non-interactive mode.
 
 Mga opsyon:
 
@@ -542,7 +534,7 @@ Mga opsyon:
 - `--non-interactive`
 - `--json`
 
-Gumagamit ang binding specs ng `channel[:accountId]`. Kapag inalis ang `accountId` para sa WhatsApp, ginagamit ang default account id.
+48. Gumagamit ang mga binding spec ng `channel[:accountId]`. 49. Kapag inalis ang `accountId` para sa WhatsApp, ginagamit ang default na account id.
 
 #### `agents delete <id>`
 
@@ -694,7 +686,7 @@ Mga tala:
 
 - Ang `gateway status` ay nagpo-probe sa Gateway RPC bilang default gamit ang resolved port/config ng service (i-override gamit ang `--url/--token/--password`).
 - Sinusuportahan ng `gateway status` ang `--no-probe`, `--deep`, at `--json` para sa scripting.
-- Ang `gateway status` ay naglalantad din ng legacy o dagdag na gateway service kapag natutukoy (`--deep` ay nagdaragdag ng system-level scan). Ang mga OpenClaw service na pinangalanan ayon sa profile ay itinuturing na first-class at hindi bina-flag bilang "extra".
+- 50. Ang `gateway status` ay nagpapakita rin ng mga legacy o karagdagang gateway service kapag kaya nitong matukoy ang mga ito (`--deep` ay nagdaragdag ng system-level na pag-scan). Ang mga serbisyong OpenClaw na pinangalanan ayon sa profile ay itinuturing na first-class at hindi tinatag bilang "extra".
 - Ang `gateway status` ay nagpi-print kung aling config path ang ginagamit ng CLI kumpara sa malamang na ginagamit ng service (service env), kasama ang resolved probe target URL.
 - Ang `gateway install|uninstall|start|stop|restart` ay sumusuporta sa `--json` para sa scripting (mananatiling human-friendly ang default output).
 - Ang `gateway install` ay default sa Node runtime; **hindi inirerekomenda** ang bun (mga bug sa WhatsApp/Telegram).
@@ -721,9 +713,9 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Mga Gateway CLI helper (gamitin ang `--url`, `--token`, `--password`, `--timeout`, `--expect-final` para sa mga RPC subcommand).
-Kapag ipinasa mo ang `--url`, hindi awtomatikong ina-apply ng CLI ang config o environment credentials.
-Isama nang tahasan ang `--token` o `--password`. Ang kakulangan ng tahasang credentials ay error.
+Mga helper ng Gateway CLI (gamitin ang `--url`, `--token`, `--password`, `--timeout`, `--expect-final` para sa mga RPC subcommand).
+Kapag ipinasa mo ang `--url`, hindi awtomatikong ina-apply ng CLI ang mga kredensyal mula sa config o environment.
+Isama ang `--token` o `--password` nang tahasan. Ang kakulangan ng tahasang kredensyal ay isang error.
 
 Mga subcommand:
 
@@ -790,7 +782,7 @@ Mga opsyon:
 - `--probe-max-tokens <n>`
 
 Palaging kasama ang auth overview at OAuth expiry status para sa mga profile sa auth store.
-Ang `--probe` ay nagpapatakbo ng live request (maaaring kumonsumo ng token at mag-trigger ng rate limit).
+Ang `--probe` ay nagpapatakbo ng mga live na request (maaaring kumonsumo ng mga token at mag-trigger ng rate limits).
 
 ### `models set <model>`
 
@@ -895,7 +887,7 @@ Mga opsyon:
 
 ## Cron
 
-Pamahalaan ang mga scheduled job (Gateway RPC). Tingnan ang [/automation/cron-jobs](/automation/cron-jobs).
+Pamahalaan ang mga naka-iskedyul na job (Gateway RPC). Tingnan ang [/automation/cron-jobs](/automation/cron-jobs).
 
 Mga subcommand:
 
@@ -913,7 +905,7 @@ Tumatanggap ang lahat ng `cron` na command ng `--url`, `--token`, `--timeout`, `
 
 ## Node host
 
-Ang `node` ay nagpapatakbo ng **headless node host** o pinamamahalaan ito bilang background service. Tingnan ang
+Ang `node` ay nagpapatakbo ng isang **headless node host** o pinamamahalaan ito bilang background service. Tingnan ang
 [`openclaw node`](/cli/node).
 
 Mga subcommand:
@@ -927,7 +919,7 @@ Mga subcommand:
 
 ## Nodes
 
-Nakikipag-usap ang `nodes` sa Gateway at tina-target ang mga paired node. Tingnan ang [/nodes](/nodes).
+Ang `nodes` ay nakikipag-usap sa Gateway at tinatarget ang mga naka-pair na node. Tingnan ang [/nodes](/nodes).
 
 Mga karaniwang opsyon:
 

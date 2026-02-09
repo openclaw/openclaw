@@ -5,13 +5,6 @@ read_when:
   - Debugging der Android-Gateway-Erkennung oder -Authentifizierung
   - Überprüfen der Chat-Verlaufsparität über Clients hinweg
 title: "Android-App"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:51Z
 ---
 
 # Android-App (Node)
@@ -43,7 +36,7 @@ Android verbindet sich direkt mit dem Gateway-WebSocket (Standard `ws://<host>:1
   - Manueller Gateway-Host/-Port (Fallback)
 - Sie können die CLI (`openclaw`) auf der Gateway-Maschine ausführen (oder per SSH).
 
-### 1) Gateway starten
+### 1. Gateway starten
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Für reine Tailnet-Setups (empfohlen für Wien ⇄ London) binden Sie das Gatewa
 - Setzen Sie `gateway.bind: "tailnet"` in `~/.openclaw/openclaw.json` auf dem Gateway-Host.
 - Starten Sie das Gateway / die macOS-Menüleisten-App neu.
 
-### 2) Discovery überprüfen (optional)
+### 2. Discovery überprüfen (optional)
 
 Von der Gateway-Maschine:
 
@@ -77,7 +70,7 @@ Android-NSD/mDNS-Discovery funktioniert nicht netzwerkübergreifend. Wenn sich I
 
 Details und Beispiel-CoreDNS-Konfiguration: [Bonjour](/gateway/bonjour).
 
-### 3) Von Android verbinden
+### 3. Von Android verbinden
 
 In der Android-App:
 
@@ -91,7 +84,7 @@ Nach dem ersten erfolgreichen Pairing verbindet sich Android beim Start automati
 - Manueller Endpunkt (falls aktiviert), andernfalls
 - Das zuletzt entdeckte Gateway (Best-Effort).
 
-### 4) Pairing freigeben (CLI)
+### 4. Pairing freigeben (CLI)
 
 Auf der Gateway-Maschine:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Pairing-Details: [Gateway-Pairing](/gateway/pairing).
 
-### 5) Prüfen, ob der Node verbunden ist
+### 5. Prüfen, ob der Node verbunden ist
 
 - Über den Node-Status:
 
@@ -116,7 +109,7 @@ Pairing-Details: [Gateway-Pairing](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + Verlauf
+### 6. Chat + Verlauf
 
 Das Chat-Panel des Android-Nodes verwendet den **primären Sitzungsschlüssel** des Gateways (`main`), sodass Verlauf und Antworten mit WebChat und anderen Clients geteilt werden:
 
@@ -124,7 +117,7 @@ Das Chat-Panel des Android-Nodes verwendet den **primären Sitzungsschlüssel** 
 - Senden: `chat.send`
 - Push-Updates (Best-Effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + Kamera
+### 7. Canvas + Kamera
 
 #### Gateway Canvas Host (empfohlen für Webinhalte)
 

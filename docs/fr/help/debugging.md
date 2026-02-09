@@ -5,13 +5,6 @@ read_when:
   - Vous souhaitez exécuter la Gateway (passerelle) en mode watch pendant vos itérations
   - Vous avez besoin d’un workflow de débogage reproductible
 title: "Débogage"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:40Z
 ---
 
 # Débogage
@@ -19,7 +12,7 @@ x-i18n:
 Cette page couvre les aides au débogage pour la sortie en streaming, en particulier
 lorsqu’un fournisseur mélange le raisonnement dans le texte normal.
 
-## Remplacements de débogage à l’exécution
+## Surcharge de débogage d'exécution
 
 Utilisez `/debug` dans le chat pour définir des remplacements de configuration **uniquement à l’exécution** (en mémoire, pas sur disque).
 `/debug` est désactivé par défaut ; activez-le avec `commands.debug: true`.
@@ -44,7 +37,7 @@ Pour des itérations rapides, exécutez la gateway sous le surveillant de fichie
 pnpm gateway:watch --force
 ```
 
-Cela correspond à :
+Ceci correspond à :
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -96,7 +89,8 @@ pnpm gateway:dev:reset
 ```
 
 Remarque : `--dev` est un indicateur de profil **global** et est absorbé par
-certains runners. Si vous devez l’indiquer explicitement, utilisez la forme en variable d’environnement :
+certains runners.
+Si vous devez l’indiquer explicitement, utilisez la forme en variable d’environnement :
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -129,7 +123,7 @@ Remplacement de chemin optionnel :
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Variables d’environnement équivalentes :
+Variantes équivalentes env :
 
 ```bash
 OPENCLAW_RAW_STREAM=1

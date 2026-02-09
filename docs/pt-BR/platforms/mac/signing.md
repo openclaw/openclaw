@@ -3,13 +3,6 @@ summary: "Etapas de assinatura para builds de depuração do macOS geradas por s
 read_when:
   - Criando ou assinando builds de depuração do mac
 title: "Assinatura no macOS"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:31Z
 ---
 
 # assinatura no mac (builds de depuração)

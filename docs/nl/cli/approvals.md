@@ -4,13 +4,6 @@ read_when:
   - Je wilt uitvoeringsgoedkeuringen bewerken via de CLI
   - Je moet toegestane lijsten beheren op Gateway- of node-hosts
 title: "goedkeuringen"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:06Z
 ---
 
 # `openclaw approvals`

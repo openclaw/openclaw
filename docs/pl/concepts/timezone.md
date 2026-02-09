@@ -4,13 +4,6 @@ read_when:
   - Musisz zrozumieć, jak znaczniki czasu są normalizowane dla modelu
   - Konfigurowanie strefy czasowej użytkownika dla promptów systemowych
 title: "Strefy czasowe"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:07Z
 ---
 
 # Strefy czasowe

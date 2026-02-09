@@ -4,13 +4,6 @@ read_when:
   - Gusto mong hanapin ang mga id ng contact/grupo/sarili para sa isang channel
   - Nagde-develop ka ng adapter ng directory ng channel
 title: "directory"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:15Z
 ---
 
 # `openclaw directory`

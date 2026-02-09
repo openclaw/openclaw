@@ -5,18 +5,11 @@ read_when:
   - Du felsöker varför modellen ”vet” något (eller har glömt det)
   - Du vill minska kontextöverhead (/context, /status, /compact)
 title: "Kontext"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:00Z
 ---
 
 # Kontext
 
-”Kontext” är **allt OpenClaw skickar till modellen för en körning**. Den begränsas av modellens **kontextfönster** (token-gräns).
+“Context” är **allt OpenClaw skickar till modellen för en kör**. Den begränsas av modellens **sammanhangsfönster** (token limit).
 
 Mental modell för nybörjare:
 
@@ -28,7 +21,7 @@ Kontext är _inte samma sak_ som ”minne”: minne kan lagras på disk och ladd
 
 ## Snabbstart (inspektera kontext)
 
-- `/status` → snabb vy av ”hur fullt är mitt fönster?” + sessionsinställningar.
+- `/status` → snabb “hur full är mitt fönster?” visa + sessionsinställningar.
 - `/context list` → vad som injiceras + ungefärliga storlekar (per fil + totalt).
 - `/context detail` → djupare uppdelning: per fil, per verktygsschemastorlek, per Skill-poststorlek och systempromptens storlek.
 - `/usage tokens` → lägg till en användningsfot per svar i normala svar.
@@ -96,7 +89,7 @@ Allt som modellen tar emot räknas, inklusive:
 
 ## Hur OpenClaw bygger systemprompten
 
-Systemprompten ägs av **OpenClaw** och byggs om vid varje körning. Den innehåller:
+Systemprompten är **OpenClaw-owned** och byggde om varje körning. Den inkluderar:
 
 - Verktygslista + korta beskrivningar.
 - Skills-lista (endast metadata; se nedan).
@@ -119,26 +112,26 @@ Som standard injicerar OpenClaw en fast uppsättning arbetsytefiler (om de finns
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (endast vid första körningen)
 
-Stora filer trunkeras per fil med `agents.defaults.bootstrapMaxChars` (standard `20000` tecken). `/context` visar **råa vs injicerade** storlekar och om trunkering skedde.
+Stora filer är trunkerade per-fil med `agents.defaults.bootstrapMaxChars` (standard `20000`-tecken). `/context` visar **rå vs injicerade** storlekar och om trunkering hände.
 
 ## Skills: vad som injiceras vs laddas vid behov
 
-Systemprompten innehåller en kompakt **Skills-lista** (namn + beskrivning + plats). Denna lista har verklig overhead.
+Systemprompten innehåller en kompakt **kompetenslista** (namn + beskrivning + plats). Denna lista har verkliga omkostnader.
 
-Skill-instruktioner inkluderas _inte_ som standard. Modellen förväntas `read` Skillens `SKILL.md` **endast när det behövs**.
+Färdighetsinstruktioner är _inte_ inkluderade som standard. Modellen förväntas `läsa` färdighetens `SKILL.md` **endast när det behövs**.
 
 ## Verktyg: det finns två kostnader
 
 Verktyg påverkar kontexten på två sätt:
 
 1. **Verktygslistans text** i systemprompten (det du ser som ”Tooling”).
-2. **Verktygsscheman** (JSON). Dessa skickas till modellen så att den kan anropa verktyg. De räknas mot kontexten även om du inte ser dem som vanlig text.
+2. **Tool schemas** (JSON). Dessa skickas till modellen så att den kan ringa verktyg. De räknas mot sammanhang även om du inte ser dem som ren text.
 
 `/context detail` bryter ned de största verktygsschemana så att du kan se vad som dominerar.
 
 ## Kommandon, direktiv och ”inline-genvägar”
 
-Slash-kommandon hanteras av Gateway. Det finns några olika beteenden:
+Slash kommandon hanteras av Gateway. Det finns några olika beteenden:
 
 - **Fristående kommandon**: ett meddelande som endast är `/...` körs som ett kommando.
 - **Direktiv**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` tas bort innan modellen ser meddelandet.

@@ -4,13 +4,6 @@ read_when:
   - Quiere usar speech-to-text de Deepgram para adjuntos de audio
   - Necesita un ejemplo rápido de configuración de Deepgram
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:16Z
 ---
 
 # Deepgram (Transcripción de audio)

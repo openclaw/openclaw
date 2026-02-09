@@ -4,13 +4,6 @@ read_when:
   - Diagnostiquer la rotation des profils d’authentification, les delais de refroidissement ou le comportement de bascule des modeles
   - Mettre a jour les regles de bascule pour les profils d’authentification ou les modeles
 title: "Bascule de modele"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:23Z
 ---
 
 # Bascule de modele
@@ -129,7 +122,7 @@ L’etat est stocke dans `auth-profiles.json` :
 }
 ```
 
-Valeurs par defaut :
+Équivalent en variable d’environnement :
 
 - Le backoff de facturation commence a **5 heures**, double a chaque echec de facturation et est plafonne a **24 heures**.
 - Les compteurs de backoff sont reinitialises si le profil n’a pas echoue pendant **24 heures** (configurable).

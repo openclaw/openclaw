@@ -3,13 +3,6 @@ summary: "Statut de prise en charge du bot Discord, capacites et configuration"
 read_when:
   - Travail sur les fonctionnalites du canal Discord
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:28Z
 ---
 
 # Discord (API Bot)
@@ -26,7 +19,7 @@ Statut : pret pour les Messages prives et les canaux texte de guildes via la pas
    - Si les deux sont definis, la config est prioritaire (le repli env est reserve au compte par defaut).
 4. Invitez le bot sur votre serveur avec les permissions de message (creez un serveur prive si vous voulez uniquement des Messages prives).
 5. Demarrez la Gateway (passerelle).
-6. L’acces en Messages prives est apparie par defaut ; approuvez le code d’appariement au premier contact.
+6. L'accès DM est appairage par défaut; approuve le code d'appairage au premier contact.
 
 Configuration minimale :
 
@@ -91,7 +84,7 @@ Desactivez avec :
 
 Il s’agit de la configuration du « Discord Developer Portal » pour executer OpenClaw dans un canal de serveur (guilde) comme `#help`.
 
-### 1) Creer l’application Discord + l’utilisateur bot
+### 1. Creer l’application Discord + l’utilisateur bot
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. Dans votre application :
@@ -109,7 +102,7 @@ Dans **Bot** → **Privileged Gateway Intents**, activez :
 
 Vous n’avez generalement **pas** besoin de **Presence Intent**. Definir la presence du bot (action `setPresence`) utilise l’OP3 de la passerelle et ne requiert pas cet intent ; il n’est necessaire que si vous souhaitez recevoir des mises a jour de presence d’autres membres de guilde.
 
-### 3) Generer une URL d’invitation (OAuth2 URL Generator)
+### 3. Generer une URL d’invitation (OAuth2 URL Generator)
 
 Dans votre application : **OAuth2** → **URL Generator**
 
@@ -132,14 +125,14 @@ Evitez **Administrator** sauf pour le debogage et si vous faites entierement con
 
 Copiez l’URL generee, ouvrez-la, choisissez votre serveur et installez le bot.
 
-### 4) Recuperer les id (guilde/utilisateur/canal)
+### 4. Recuperer les id (guilde/utilisateur/canal)
 
 Discord utilise des id numeriques partout ; la config OpenClaw prefere les id.
 
 1. Discord (bureau/web) → **User Settings** → **Advanced** → activez **Developer Mode**
 2. Clic droit :
    - Nom du serveur → **Copy Server ID** (id de guilde)
-   - Canal (par ex. `#help`) → **Copy Channel ID**
+   - `#help`) → **Copy Channel ID**
    - Votre utilisateur → **Copy User ID**
 
 ### 5) Configurer OpenClaw
@@ -207,13 +200,13 @@ Notes :
 - Les messages rediges par des bots sont ignores par defaut ; definissez `channels.discord.allowBots=true` pour les autoriser (vos propres messages restent filtres).
 - Avertissement : si vous autorisez les reponses a d’autres bots (`channels.discord.allowBots=true`), evitez les boucles bot-a-bot avec des allowlists `requireMention`, `channels.discord.guilds.*.channels.<id>.users` et/ou des garde-fous clairs dans `AGENTS.md` et `SOUL.md`.
 
-### 6) Verifier le fonctionnement
+### 6. Verifier le fonctionnement
 
 1. Demarrez la Gateway (passerelle).
 2. Dans votre canal de serveur, envoyez : `@Krill hello` (ou quel que soit le nom de votre bot).
 3. Si rien ne se passe : consultez **Depannage** ci-dessous.
 
-### Depannage
+### Problemes courants
 
 - D’abord : lancez `openclaw doctor` et `openclaw channels status --probe` (avertissements actionnables + audits rapides).
 - **« Used disallowed intents »** : activez **Message Content Intent** (et probablement **Server Members Intent**) dans le Developer Portal, puis redemarrez la Gateway (passerelle).
@@ -233,7 +226,7 @@ Notes :
 - **Approbations d’exec dans Discord** : Discord prend en charge une **interface a boutons** pour les approbations d’exec en Messages prives (Autoriser une fois / Toujours autoriser / Refuser). `/approve <id> ...` est reserve aux approbations transferees et ne resoudra pas les invites a boutons de Discord. Si vous voyez `❌ Failed to submit approval: Error: unknown approval id` ou si l’UI n’apparait jamais, verifiez :
   - `channels.discord.execApprovals.enabled: true` dans votre config.
   - Que votre ID utilisateur Discord figure dans `channels.discord.execApprovals.approvers` (l’UI n’est envoyee qu’aux approbateurs).
-  - Utilisez les boutons dans l’invite en Message prive (**Autoriser une fois**, **Toujours autoriser**, **Refuser**).
+  - Utilisez les boutons dans l'invite de MP (**Autoriser une fois**, **Toujours autoriser**, **Refuser**).
   - Voir [Exec approvals](/tools/exec-approvals) et [Slash commands](/tools/slash-commands) pour le flux global d’approbations et de commandes.
 
 ## Capacites et limites
@@ -400,29 +393,29 @@ Notes sur les allowlists (PK active) :
 - Si les recherches PK echouent (par ex., systeme prive sans jeton), les messages proxifies
   sont traites comme des messages de bot et sont ignores sauf si `channels.discord.allowBots=true`.
 
-### Valeurs par defaut des actions d’outils
+### Action par défaut de l'outil
 
-| Groupe d’actions | Defaut    | Notes                                         |
-| ---------------- | --------- | --------------------------------------------- |
-| reactions        | active    | React + lister reactions + emojiList          |
-| stickers         | active    | Envoyer des stickers                          |
-| emojiUploads     | active    | Televerser des emojis                         |
-| stickerUploads   | active    | Televerser des stickers                       |
-| polls            | active    | Creer des sondages                            |
-| permissions      | active    | Instantane des permissions de canal           |
-| messages         | active    | Lire/envoyer/modifier/supprimer               |
-| threads          | active    | Creer/lister/repondre                         |
-| pins             | active    | Epingler/retirer/lister                       |
-| search           | active    | Recherche de messages (fonctionnalite apercu) |
-| memberInfo       | active    | Infos membre                                  |
-| roleInfo         | active    | Liste des roles                               |
-| channelInfo      | active    | Infos canal + liste                           |
-| channels         | active    | Gestion canaux/categories                     |
-| voiceStatus      | active    | Consultation de l’etat vocal                  |
-| events           | active    | Lister/creer des evenements programmes        |
-| roles            | desactive | Ajout/suppression de roles                    |
-| moderation       | desactive | Timeout/expulsion/bannissement                |
-| presence         | desactive | Statut/activite du bot (setPresence)          |
+| Groupe d’actions | Par défaut | Notes                                                            |
+| ---------------- | ---------- | ---------------------------------------------------------------- |
+| reactions        | active     | React + lister reactions + emojiList                             |
+| stickers         | active     | Envoyer des stickers                                             |
+| emojiUploads     | active     | Televerser des emojis                                            |
+| stickerUploads   | active     | Televerser des stickers                                          |
+| polls            | active     | Creer des sondages                                               |
+| permissions      | active     | Instantane des permissions de canal                              |
+| messages         | active     | Lire/envoyer/modifier/supprimer                                  |
+| threads          | active     | Creer/lister/repondre                                            |
+| pins             | active     | Epingler/retirer/lister                                          |
+| search           | active     | Recherche de messages (fonctionnalite apercu) |
+| memberInfo       | active     | Infos membre                                                     |
+| roleInfo         | active     | Liste des roles                                                  |
+| channelInfo      | active     | Infos canal + liste                                              |
+| channels         | active     | Gestion canaux/categories                                        |
+| voiceStatus      | active     | Recherche d'état vocal                                           |
+| events           | active     | Lister/creer des evenements programmes                           |
+| roles            | desactive  | Ajout/suppression de roles                                       |
+| moderation       | desactive  | Timeout/expulsion/bannissement                                   |
+| presence         | desactive  | Statut/activite du bot (setPresence)          |
 
 - `replyToMode` : `off` (defaut), `first`, ou `all`. S’applique uniquement lorsque le modele inclut une balise de reponse.
 

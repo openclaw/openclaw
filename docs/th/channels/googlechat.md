@@ -3,13 +3,6 @@ summary: "สถานะการรองรับ ความสามาร
 read_when:
   - ทำงานเกี่ยวกับฟีเจอร์ช่องทาง Google Chat
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:02Z
 ---
 
 # Google Chat (Chat API)
@@ -54,7 +47,7 @@ x-i18n:
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - หรือคอนฟิก: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`
 8. ตั้งค่า webhook audience type + value (ต้องตรงกับคอนฟิกของแอป Chat)
-9. เริ่ม Gateway โดย Google Chat จะ POST มายังพาธ webhook ของคุณ
+9. เริ่มต้น Gateway 26. Google Chat จะ POST มายังพาธ webhook ของคุณ
 
 ## Add to Google Chat
 
@@ -63,18 +56,18 @@ x-i18n:
 1. ไปที่ [Google Chat](https://chat.google.com/)
 2. คลิกไอคอน **+** (บวก) ถัดจาก **Direct Messages**
 3. ในแถบค้นหา (ที่ใช้เพิ่มคน) พิมพ์ **App name** ที่คุณตั้งค่าไว้ใน Google Cloud Console
-   - **หมายเหตุ**: บอตจะ _ไม่_ ปรากฏในรายการเรียกดู "Marketplace" เนื่องจากเป็นแอปส่วนตัว คุณต้องค้นหาด้วยชื่อเท่านั้น
+   - **หมายเหตุ**: บอตจะ _ไม่_ ปรากฏในรายการเรียกดู "Marketplace" เนื่องจากเป็นแอปส่วนตัว คุณต้องค้นหาด้วยชื่อเท่านั้น 27. คุณต้องค้นหามันด้วยชื่อ
 4. เลือกบอตของคุณจากผลลัพธ์
 5. คลิก **Add** หรือ **Chat** เพื่อเริ่มการสนทนาแบบ 1:1
 6. ส่ง "Hello" เพื่อกระตุ้นผู้ช่วย!
 
 ## Public URL (Webhook-only)
 
-Google Chat webhooks ต้องการ HTTPS endpoint แบบสาธารณะ เพื่อความปลอดภัย **ให้เปิดเผยเฉพาะพาธ `/googlechat` เท่านั้น** สู่อินเทอร์เน็ต เก็บแดชบอร์ด OpenClaw และ endpoint ที่อ่อนไหวอื่นๆ ไว้ในเครือข่ายส่วนตัว
+28. webhook ของ Google Chat ต้องการ endpoint HTTPS สาธารณะ Google Chat webhooks ต้องการ HTTPS endpoint แบบสาธารณะ เพื่อความปลอดภัย **ให้เปิดเผยเฉพาะพาธ `/googlechat` เท่านั้น** สู่อินเทอร์เน็ต เก็บแดชบอร์ด OpenClaw และ endpoint ที่อ่อนไหวอื่นๆ ไว้ในเครือข่ายส่วนตัว 29. เก็บแดชบอร์ด OpenClaw และ endpoint ที่มีความอ่อนไหวอื่น ๆ ไว้ในเครือข่ายส่วนตัวของคุณ
 
 ### Option A: Tailscale Funnel (Recommended)
 
-ใช้ Tailscale Serve สำหรับแดชบอร์ดแบบส่วนตัว และ Funnel สำหรับพาธ webhook สาธารณะ วิธีนี้จะคง `/` ไว้เป็นส่วนตัว ขณะเดียวกันเปิดเผยเฉพาะ `/googlechat`
+ใช้ Tailscale Serve สำหรับแดชบอร์ดแบบส่วนตัว และ Funnel สำหรับพาธ webhook สาธารณะ วิธีนี้จะคง `/` ไว้เป็นส่วนตัว ขณะเดียวกันเปิดเผยเฉพาะ `/googlechat` 30. วิธีนี้จะทำให้ `/` เป็นส่วนตัว ขณะเปิดเผยเฉพาะ `/googlechat`
 
 1. **ตรวจสอบว่า Gateway bind กับที่อยู่อะไร:**
 
@@ -122,7 +115,7 @@ URL webhook สาธารณะของคุณจะเป็น:
 
 ใช้ URL สาธารณะ (ไม่รวม `:8443`) ในคอนฟิกของแอป Google Chat
 
-> หมายเหตุ: การกำหนดค่านี้คงอยู่แม้รีบูต หากต้องการลบภายหลัง ให้รัน `tailscale funnel reset` และ `tailscale serve reset`
+> 31. หมายเหตุ: การกำหนดค่านี้คงอยู่แม้รีบูต หมายเหตุ: การกำหนดค่านี้คงอยู่แม้รีบูต หากต้องการลบภายหลัง ให้รัน `tailscale funnel reset` และ `tailscale serve reset`
 
 ### Option B: Reverse Proxy (Caddy)
 
@@ -145,16 +138,16 @@ your-domain.com {
 
 ## How it works
 
-1. Google Chat ส่ง webhook POST มายัง Gateway โดยแต่ละคำขอจะมีเฮดเดอร์ `Authorization: Bearer <token>`
+1. เริ่ม Gateway โดย Google Chat จะ POST มายังพาธ webhook ของคุณ Google Chat ส่ง webhook POST มายัง Gateway โดยแต่ละคำขอจะมีเฮดเดอร์ `Authorization: Bearer <token>`
 2. OpenClaw ตรวจสอบโทเคนกับ `audienceType` + `audience` ที่ตั้งค่าไว้:
    - `audienceType: "app-url"` → audience คือ HTTPS webhook URL ของคุณ
    - `audienceType: "project-number"` → audience คือหมายเลข Cloud project
 3. ข้อความจะถูกส่งต่อโดยอิงตาม space:
    - DMs ใช้ session key `agent:<agentId>:googlechat:dm:<spaceId>`
    - Spaces ใช้ session key `agent:<agentId>:googlechat:group:<spaceId>`
-4. การเข้าถึง DM เป็นแบบ pairing ตามค่าเริ่มต้น ผู้ส่งที่ไม่รู้จักจะได้รับ pairing code ให้อนุมัติด้วย:
+4. 32. การเข้าถึง DM เป็นแบบจับคู่ (pairing) ตามค่าเริ่มต้น การเข้าถึง DM เป็นแบบ pairing ตามค่าเริ่มต้น ผู้ส่งที่ไม่รู้จักจะได้รับ pairing code ให้อนุมัติด้วย:
    - `openclaw pairing approve googlechat <code>`
-5. Group spaces ต้องมีการ @-mention ตามค่าเริ่มต้น ใช้ `botUser` หากการตรวจจับ mention ต้องการชื่อผู้ใช้ของแอป
+5. 33. พื้นที่กลุ่มต้องมีการ @-mention ตามค่าเริ่มต้น Group spaces ต้องมีการ @-mention ตามค่าเริ่มต้น ใช้ `botUser` หากการตรวจจับ mention ต้องการชื่อผู้ใช้ของแอป
 
 ## Targets
 
@@ -214,9 +207,9 @@ Notes:
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-แสดงว่า webhook handler ยังไม่ได้ถูกลงทะเบียน สาเหตุที่พบบ่อย:
+แสดงว่า webhook handler ยังไม่ได้ถูกลงทะเบียน สาเหตุที่พบบ่อย: 34. สาเหตุที่พบบ่อย:
 
-1. **ยังไม่ได้กำหนดค่าช่องทาง**: ส่วน `channels.googlechat` ขาดหายไปจากคอนฟิก ตรวจสอบด้วย:
+1. **ยังไม่ได้กำหนดค่าช่องทาง**: ส่วน `channels.googlechat` ขาดหายไปจากคอนฟิก ตรวจสอบด้วย: ตรวจสอบด้วย:
 
    ```bash
    openclaw config get channels.googlechat

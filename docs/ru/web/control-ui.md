@@ -1,16 +1,9 @@
 ---
 summary: "Браузерный UI управления для Gateway (чат, узлы, конфиг)"
 read_when:
-  - "Вы хотите управлять Gateway из браузера"
-  - "Вам нужен доступ через Tailnet без SSH-туннелей"
+  - Вы хотите управлять Gateway из браузера
+  - Вам нужен доступ через Tailnet без SSH-туннелей
 title: "UI управления"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:19Z
 ---
 
 # UI управления (браузер)
@@ -57,8 +50,7 @@ openclaw devices approve <requestId>
 ```
 
 После одобрения устройство запоминается и не потребует повторного подтверждения, пока
-вы не отзовёте его с помощью `openclaw devices revoke --device <id> --role <role>`. См.
-[Devices CLI](/cli/devices) для ротации токенов и отзыва.
+вы не отзовёте его с помощью `openclaw devices revoke --device <id> --role <role>`. [Devices CLI](/cli/devices) для ротации токенов и отзыва.
 
 **Примечания:**
 

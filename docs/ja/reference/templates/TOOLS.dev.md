@@ -3,19 +3,12 @@ summary: "Dev エージェントツールのメモ（C-3PO）"
 read_when:
   - dev ゲートウェイのテンプレートを使用する場合
   - 既定の dev エージェント ID を更新する場合
-x-i18n:
-  source_path: reference/templates/TOOLS.dev.md
-  source_hash: 3d41097967c98116
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:01Z
 ---
 
 # TOOLS.md - ユーザーツールに関するメモ（編集可）
 
-このファイルは、外部ツールや慣習についての「あなた」自身のメモ用です。
-どのツールが存在するかを定義するものではありません。OpenClaw は内部で組み込みツールを提供します。
+このファイルは外部ツールや規則に関する_あなたの_ノート用です。
+どのツールが存在するかは定義されていません。OpenClawは組み込みツールを内部的に提供します。
 
 ## 例
 

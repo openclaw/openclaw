@@ -4,13 +4,6 @@ read_when:
   - آپ ایجنٹ ہکس کا نظم کرنا چاہتے ہیں
   - آپ ہکس انسٹال یا اپڈیٹ کرنا چاہتے ہیں
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:04Z
 ---
 
 # `openclaw hooks`
@@ -134,8 +127,8 @@ openclaw hooks enable <name>
 
 اپنی کنفیگ (`~/.openclaw/config.json`) میں شامل کر کے کسی مخصوص ہک کو فعال کریں۔
 
-**نوٹ:** پلگ اِنز کے ذریعے مینیج کیے گئے ہکس `openclaw hooks list` میں `plugin:<id>` دکھاتے ہیں اور
-یہاں سے فعال/غیرفعال نہیں کیے جا سکتے۔ اس کے بجائے پلگ اِن کو فعال/غیرفعال کریں۔
+**Note:** Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and
+can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **دلائل:**
 
@@ -156,7 +149,7 @@ openclaw hooks enable session-memory
 **یہ کیا کرتا ہے:**
 
 - چیک کرتا ہے کہ ہک موجود ہے اور اہل ہے
-- آپ کی کنفیگ میں `hooks.internal.entries.<name>.enabled = true` کو اپڈیٹ کرتا ہے
+- Updates `hooks.internal.entries.<name>.enabled = true` in your config
 - کنفیگ کو ڈسک پر محفوظ کرتا ہے
 
 **فعال کرنے کے بعد:**

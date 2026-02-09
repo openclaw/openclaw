@@ -4,13 +4,6 @@ read_when:
   - Tilføjelse af understøttelse for lokationsnode eller tilladelses-UI
   - Design af baggrundslokation + push-flows
 title: "Lokationskommando"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:28Z
 ---
 
 # Lokationskommando (noder)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## Hvorfor en vælger (ikke bare en kontakt)
 
-OS-tilladelser er på flere niveauer. Vi kan eksponere en vælger i appen, men OS’et afgør stadig den faktiske tildeling.
+OS tilladelser er flere niveauer. Vi kan afsløre en selector i app, men OS beslutter stadig det faktiske tilskud.
 
-- iOS/macOS: brugeren kan vælge **Mens i brug** eller **Altid** i systemprompter/Indstillinger. Appen kan anmode om opgradering, men OS’et kan kræve Indstillinger.
+- iOS/macOS: bruger kan vælge **Når du bruger** eller **Altid** i systemprompts/Indstillinger. App kan anmode om opgradering, men OS kan kræve Indstillinger.
 - Android: baggrundslokation er en separat tilladelse; på Android 10+ kræver det ofte et flow via Indstillinger.
 - Præcis lokation er en separat tildeling (iOS 14+ “Præcis”, Android “fin” vs. “grov”).
 
@@ -47,7 +40,7 @@ UI-adfærd:
 
 ## Tilladelseskortlægning (node.permissions)
 
-Valgfrit. macOS-noden rapporterer `location` via tilladelseskortet; iOS/Android kan udelade det.
+Valgfri. macOS node reports `location` via tilladelseskortet; iOS/Android kan udelade det.
 
 ## Kommando: `location.get`
 
@@ -103,7 +96,7 @@ Push-udløst flow (fremtid):
 
 Noter:
 
-- iOS: Altid-tilladelse + baggrundslokationstilstand kræves. Silent push kan blive throttlet; forvent sporadiske fejl.
+- iOS: Altid tilladelse + baggrundsplaceringstilstand kræves. Lydløs tryk kan blive nedbrudt; forventer periodisk svigt.
 - Android: baggrundslokation kan kræve en foreground service; ellers forvent afvisning.
 
 ## Model-/værktøjsintegration
@@ -116,5 +109,5 @@ Noter:
 
 - Fra: “Lokationsdeling er deaktiveret.”
 - Mens i brug: “Kun når OpenClaw er åben.”
-- Altid: “Tillad baggrundslokation. Kræver systemtilladelse.”
-- Præcis: “Brug præcis GPS-lokation. Slå fra for at dele omtrentlig lokation.”
+- Altid: “Tillad baggrunds placering. Kræver systemtilladelse.”
+- Præcis “Brug præcis GPS-placering. Slå fra for at dele omtrentlige placering.”

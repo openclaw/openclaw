@@ -4,13 +4,6 @@ read_when:
   - Du vill uppdatera en källutcheckning på ett säkert sätt
   - Du behöver förstå förkortningsbeteendet för `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:49Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,9 @@ Alternativ:
 
 ## `update wizard`
 
-Interaktivt flöde för att välja uppdateringskanal och bekräfta om Gateway ska startas om
-efter uppdatering (standard är att starta om). Om du väljer `dev` utan en git-utcheckning
-erbjuder den att skapa en.
+Interaktivt flöde för att välja en uppdateringskanal och bekräfta om du vill starta om Gateway
+efter uppdatering (standard är att starta om). Om du väljer `dev` utan en git kassan, det
+erbjuder att skapa en.
 
 ## Vad den gör
 

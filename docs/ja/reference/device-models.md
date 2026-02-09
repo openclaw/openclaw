@@ -4,13 +4,6 @@ read_when:
   - デバイスモデル識別子の対応表や NOTICE／ライセンス ファイルを更新する場合
   - Instances UI がデバイス名を表示する方法を変更する場合
 title: "デバイスモデル データベース"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:00Z
 ---
 
 # デバイスモデル データベース（分かりやすい名称）
@@ -23,7 +16,7 @@ macOS のコンパニオンアプリは、Apple のモデル識別子（例: `iP
 
 ## データソース
 
-現在、この対応表は MIT ライセンスの次のリポジトリからベンダリングしています。
+我々は現在、MITライセンスリポジトリからマッピングをベンダーします:
 
 - `kyle-seongwoo-jun/apple-device-identifiers`
 

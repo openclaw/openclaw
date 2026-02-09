@@ -4,13 +4,6 @@ read_when:
   - macOS günlüklerini yakalarken veya özel veri günlüklemeyi incelerken
   - Sesle uyandırma/oturum yaşam döngüsü sorunlarını ayıklarken
 title: "macOS Günlükleme"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:30Z
 ---
 
 # Günlükleme (macOS)
@@ -21,7 +14,7 @@ OpenClaw, macOS uygulama günlüklerini swift-log üzerinden yönlendirir (varsa
 
 - Ayrıntı düzeyi: **Hata Ayıklama paneli → Logs → App logging → Verbosity**
 - Etkinleştir: **Hata Ayıklama paneli → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
-- Konum: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (otomatik olarak döner; eski dosyalar `.1`, `.2`, … ile sonlandırılır)
+- Konum: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (otomatik olarak döner; eski dosyalar `.1`, `.2`, …
 - Temizle: **Hata Ayıklama paneli → Logs → App logging → “Clear”**
 
 Notlar:
@@ -57,7 +50,7 @@ sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Lo
 - Yeniden başlatma gerekmez; logd dosyayı hızla fark eder, ancak yalnızca yeni günlük satırları özel yükleri içerir.
 - Daha zengin çıktıyı mevcut yardımcıyla görüntüleyin; örn. `./scripts/clawlog.sh --category WebChat --last 5m`.
 
-## Hata ayıklamadan sonra devre dışı bırakma
+## Hata ayıklamadan sonra devre dışı bırakın
 
 - Geçersiz kılmayı kaldırın: `sudo rm /Library/Preferences/Logging/Subsystems/bot.molt.plist`.
 - İsteğe bağlı olarak, logd’un geçersiz kılmayı hemen bırakmasını zorlamak için `sudo log config --reload` çalıştırın.

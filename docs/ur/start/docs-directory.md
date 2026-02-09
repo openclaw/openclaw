@@ -3,18 +3,11 @@ summary: "سب سے زیادہ استعمال ہونے والی OpenClaw دست�
 read_when:
   - آپ کو کلیدی دستاویزی صفحات تک فوری رسائی درکار ہو
 title: "دستاویزات کی فہرست"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:42Z
 ---
 
 <Note>
-یہ صفحہ ایک منتخب اشاریہ ہے۔ اگر آپ نئے ہیں تو [ابتدائی رہنمائی](/start/getting-started) سے آغاز کریں۔
-دستاویزات کے مکمل نقشے کے لیے [Docs hubs](/start/hubs) دیکھیں۔
+This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
+For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 
 ## یہاں سے شروع کریں

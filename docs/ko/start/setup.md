@@ -4,13 +4,6 @@ read_when:
   - 새 머신을 설정할 때
   - 개인 설정을 깨뜨리지 않으면서 '최신 + 최고의 기능'을 원할 때
 title: "설정"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:26Z
 ---
 
 # 설정
@@ -28,7 +21,7 @@ x-i18n:
 - **안정적인 워크플로:** macOS 앱을 설치하고, 번들된 Gateway(게이트웨이)를 실행하게 둡니다.
 - **최신 워크플로:** `pnpm gateway:watch` 를 통해 Gateway(게이트웨이)를 직접 실행한 다음, macOS 앱을 로컬 모드로 연결합니다.
 
-## 사전 요구 사항 (소스 기준)
+## 사전 요구사항(소스 기준)
 
 - Node `>=22`
 - `pnpm`
@@ -41,7 +34,7 @@ x-i18n:
 - **설정:** `~/.openclaw/openclaw.json` (JSON/JSON5 유사)
 - **워크스페이스:** `~/.openclaw/workspace` (skills, 프롬프트, 메모리; 비공개 git 레포로 만드십시오)
 
-초기 부트스트랩은 한 번만 수행합니다:
+부트스트랩 한 번:
 
 ```bash
 openclaw setup
@@ -88,15 +81,15 @@ openclaw health
 
 목표: TypeScript Gateway(게이트웨이)를 작업하면서 핫 리로드를 사용하고, macOS 앱 UI 는 연결된 상태로 유지합니다.
 
-### 0) (선택 사항) macOS 앱도 소스에서 실행하기
+### 0. (선택 사항) macOS 앱도 소스에서 실행하기
 
-macOS 앱 역시 최신 상태로 사용하려면:
+최신(블리딩 엣지) macOS 앱도 원하신다면:
 
 ```bash
 ./scripts/restart-mac.sh
 ```
 
-### 1) 개발용 Gateway(게이트웨이) 시작
+### 1. 개발용 Gateway(게이트웨이) 시작
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` 는 watch 모드에서 gateway 를 실행하며 TypeScript 변경 시 다시 로드합니다.
 
-### 2) macOS 앱을 실행 중인 Gateway(게이트웨이)에 연결하기
+### 2. macOS 앱을 실행 중인 Gateway(게이트웨이)에 연결하기
 
 **OpenClaw.app** 에서:
 
 - 연결 모드: **Local**
   앱은 설정된 포트에서 실행 중인 gateway 에 연결됩니다.
 
-### 3) 확인
+### 3. 확인
 
 - 앱 내 Gateway 상태가 **“Using existing gateway …”** 로 표시되어야 합니다.
 - 또는 CLI 를 통해 확인:
@@ -121,7 +114,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### 자주 발생하는 함정
+### 자주 겪는 함정
 
 - **잘못된 포트:** Gateway WS 기본값은 `ws://127.0.0.1:18789` 입니다. 앱과 CLI 가 동일한 포트를 사용하도록 하십시오.
 - **상태 저장 위치:**

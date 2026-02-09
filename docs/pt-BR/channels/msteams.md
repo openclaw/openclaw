@@ -3,13 +3,6 @@ summary: "Status de suporte, capacidades e configuração do bot do Microsoft Te
 read_when:
   - Trabalhando em recursos do canal do MS Teams
 title: "Microsoft Teams"
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:56Z
 ---
 
 # Microsoft Teams (plugin)
@@ -162,14 +155,14 @@ Antes de configurar o OpenClaw, você precisa criar um recurso Azure Bot.
 1. Acesse [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot)
 2. Preencha a aba **Basics**:
 
-   | Campo              | Valor                                                     |
-   | ------------------ | --------------------------------------------------------- |
+   | Campo              | Valor                                                                                                        |
+   | ------------------ | ------------------------------------------------------------------------------------------------------------ |
    | **Bot handle**     | Nome do seu bot, ex.: `openclaw-msteams` (deve ser único) |
-   | **Subscription**   | Selecione sua assinatura do Azure                         |
-   | **Resource group** | Crie um novo ou use um existente                          |
-   | **Pricing tier**   | **Free** para dev/testes                                  |
-   | **Type of App**    | **Single Tenant** (recomendado — veja a nota abaixo)      |
-   | **Creation type**  | **Create new Microsoft App ID**                           |
+   | **Subscription**   | Selecione sua assinatura do Azure                                                                            |
+   | **Resource group** | Crie um novo ou use um existente                                                                             |
+   | **Pricing tier**   | **Free** para dev/testes                                                                                     |
+   | **Type of App**    | **Single Tenant** (recomendado — veja a nota abaixo)                                      |
+   | **Creation type**  | **Create new Microsoft App ID**                                                                              |
 
 > **Aviso de descontinuação:** a criação de novos bots multi-tenant foi descontinuada após 2025-07-31. Use **Single Tenant** para novos bots.
 
@@ -278,6 +271,7 @@ Isso geralmente é mais fácil do que editar manifestos JSON manualmente.
    ```
 
    Você também pode usar variáveis de ambiente em vez de chaves de configuração:
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -410,12 +404,12 @@ Adiciona:
 
 ### RSC vs Graph API
 
-| Capacidade                  | Permissões RSC              | Graph API                                   |
-| --------------------------- | --------------------------- | ------------------------------------------- |
-| **Mensagens em tempo real** | Sim (via webhook)           | Não (apenas polling)                        |
-| **Mensagens históricas**    | Não                         | Sim (pode consultar histórico)              |
-| **Complexidade de setup**   | Apenas manifesto do app     | Requer consentimento admin + fluxo de token |
-| **Funciona offline**        | Não (precisa estar rodando) | Sim (consultar a qualquer momento)          |
+| Capacidade                  | Permissões RSC                                 | Graph API                                             |
+| --------------------------- | ---------------------------------------------- | ----------------------------------------------------- |
+| **Mensagens em tempo real** | Sim (via webhook)           | Não (apenas polling)               |
+| **Mensagens históricas**    | Não                                            | Sim (pode consultar histórico)     |
+| **Complexidade de setup**   | Apenas manifesto do app                        | Requer consentimento admin + fluxo de token           |
+| **Funciona offline**        | Não (precisa estar rodando) | Sim (consultar a qualquer momento) |
 
 **Conclusão:** RSC é para escuta em tempo real; Graph API é para acesso histórico. Para recuperar mensagens perdidas enquanto offline, você precisa da Graph API com `ChannelMessage.Read.All` (requer consentimento de administrador).
 
@@ -488,10 +482,10 @@ Principais configurações (veja `/gateway/configuration` para padrões comparti
 
 O Teams introduziu recentemente dois estilos de UI de canal sobre o mesmo modelo de dados subjacente:
 
-| Estilo                     | Descrição                                                    | `replyStyle` recomendado |
-| -------------------------- | ------------------------------------------------------------ | ------------------------ |
-| **Posts** (clássico)       | Mensagens aparecem como cards com respostas em thread abaixo | `thread` (padrão)        |
-| **Threads** (estilo Slack) | Mensagens fluem linearmente, mais como o Slack               | `top-level`              |
+| Estilo                                        | Descrição                                                    | `replyStyle` recomendado             |
+| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------ |
+| **Posts** (clássico)       | Mensagens aparecem como cards com respostas em thread abaixo | `thread` (padrão) |
+| **Threads** (estilo Slack) | Mensagens fluem linearmente, mais como o Slack               | `top-level`                          |
 
 **O problema:** a API do Teams não expõe qual estilo de UI um canal usa. Se você usar o `replyStyle` errado:
 
@@ -532,11 +526,11 @@ Cabeçalhos de autorização são anexados apenas para hosts em `channels.msteam
 
 Bots podem enviar arquivos em DMs usando o fluxo FileConsentCard (integrado). No entanto, **enviar arquivos em chats/canais de grupo** requer configuração adicional:
 
-| Contexto                        | Como os arquivos são enviados                   | Configuração necessária                         |
-| ------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
-| **DMs**                         | FileConsentCard → usuário aceita → bot envia    | Funciona automaticamente                        |
-| **Chats/canais de grupo**       | Upload no SharePoint → link de compartilhamento | Requer `sharePointSiteId` + permissões do Graph |
-| **Imagens (qualquer contexto)** | Inline codificado em Base64                     | Funciona automaticamente                        |
+| Contexto                                           | Como os arquivos são enviados                   | Configuração necessária                         |
+| -------------------------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
+| **DMs**                                            | FileConsentCard → usuário aceita → bot envia    | Funciona fora da caixa                          |
+| **Chats/canais de grupo**                          | Upload no SharePoint → link de compartilhamento | Requer `sharePointSiteId` + permissões do Graph |
+| **Imagens (qualquer contexto)** | Inline codificado em Base64                     | Funciona fora da caixa                          |
 
 ### Por que chats em grupo precisam do SharePoint
 
@@ -579,18 +573,18 @@ Bots não têm um drive pessoal do OneDrive (o endpoint da Graph API `/me/drive`
 
 ### Comportamento de compartilhamento
 
-| Permissão                               | Comportamento de compartilhamento                             |
-| --------------------------------------- | ------------------------------------------------------------- |
-| `Sites.ReadWrite.All` apenas            | Link de compartilhamento para toda a organização              |
+| Permissão                               | Comportamento de compartilhamento                                                |
+| --------------------------------------- | -------------------------------------------------------------------------------- |
+| `Sites.ReadWrite.All` apenas            | Link de compartilhamento para toda a organização                                 |
 | `Sites.ReadWrite.All` + `Chat.Read.All` | Link de compartilhamento por usuário (apenas membros do chat) |
 
 O compartilhamento por usuário é mais seguro, pois apenas os participantes do chat podem acessar o arquivo. Se a permissão `Chat.Read.All` estiver ausente, o bot retorna ao compartilhamento para toda a organização.
 
 ### Comportamento de fallback
 
-| Cenário                                                  | Resultado                                                    |
-| -------------------------------------------------------- | ------------------------------------------------------------ |
-| Chat em grupo + arquivo + `sharePointSiteId` configurado | Upload no SharePoint, enviar link de compartilhamento        |
+| Cenário                                                  | Resultado                                                                       |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Chat em grupo + arquivo + `sharePointSiteId` configurado | Upload no SharePoint, enviar link de compartilhamento                           |
 | Chat em grupo + arquivo + sem `sharePointSiteId`         | Tentar upload no OneDrive (pode falhar), enviar apenas texto |
 | Chat pessoal + arquivo                                   | Fluxo FileConsentCard (funciona sem SharePoint)              |
 | Qualquer contexto + imagem                               | Inline codificado em Base64 (funciona sem SharePoint)        |
@@ -643,11 +637,11 @@ Veja a [documentação do Adaptive Cards](https://adaptivecards.io/) para o esqu
 
 Os destinos do MSTeams usam prefixos para distinguir entre usuários e conversas:
 
-| Tipo de destino    | Formato                          | Exemplo                                             |
-| ------------------ | -------------------------------- | --------------------------------------------------- |
-| Usuário (por ID)   | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`         |
+| Tipo de destino                       | Formato                          | Exemplo                                                                |
+| ------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
+| Usuário (por ID)   | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                            |
 | Usuário (por nome) | `user:<display-name>`            | `user:John Smith` (requer Graph API)                |
-| Grupo/canal        | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`            |
+| Grupo/canal                           | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                               |
 | Grupo/canal (raw)  | `<conversation-id>`              | `19:abc123...@thread.tacv2` (se contiver `@thread`) |
 
 **Exemplos de CLI:**
@@ -728,13 +722,13 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 Bots têm suporte limitado em canais privados:
 
-| Recurso                           | Canais padrão | Canais privados             |
-| --------------------------------- | ------------- | --------------------------- |
-| Instalação do bot                 | Sim           | Limitado                    |
-| Mensagens em tempo real (webhook) | Sim           | Pode não funcionar          |
-| Permissões RSC                    | Sim           | Pode se comportar diferente |
-| @menções                          | Sim           | Se o bot for acessível      |
-| Histórico via Graph API           | Sim           | Sim (com permissões)        |
+| Funcionalidade                                       | Canais padrão | Canais privados                         |
+| ---------------------------------------------------- | ------------- | --------------------------------------- |
+| Instalação do bot                                    | Sim           | Limitado                                |
+| Mensagens em tempo real (webhook) | Sim           | Pode não funcionar                      |
+| Permissões RSC                                       | Sim           | Pode se comportar diferente             |
+| @menções                                | Sim           | Se o bot for acessível                  |
+| Histórico via Graph API                              | Sim           | Sim (com permissões) |
 
 **Alternativas se canais privados não funcionarem:**
 

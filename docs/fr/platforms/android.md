@@ -5,13 +5,6 @@ read_when:
   - Débogage de la découverte ou de l’authentification de la Gateway Android
   - Vérification de la parité de l’historique de chat entre les clients
 title: "Application Android"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 9cd02f12065ce2bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:14Z
 ---
 
 # Application Android (nœud)
@@ -43,7 +36,7 @@ Android se connecte directement au WebSocket de la Gateway (par défaut `ws://<h
   - Hôte/port de la Gateway saisis manuellement (solution de secours)
 - Vous pouvez exécuter la CLI (`openclaw`) sur la machine de la Gateway (ou via SSH).
 
-### 1) Démarrer la Gateway
+### 1. Démarrer la Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Pour des configurations uniquement via tailnet (recommandé pour Vienne ⇄ Lond
 - Définissez `gateway.bind: "tailnet"` dans `~/.openclaw/openclaw.json` sur l’hôte de la Gateway.
 - Redémarrez la Gateway / l’app de barre de menus macOS.
 
-### 2) Vérifier la découverte (optionnel)
+### 2. Vérifier la découverte (optionnel)
 
 Depuis la machine de la Gateway :
 
@@ -77,7 +70,7 @@ La découverte Android NSD/mDNS ne traverse pas les réseaux. Si votre nœud And
 
 Détails et exemple de configuration CoreDNS : [Bonjour](/gateway/bonjour).
 
-### 3) Se connecter depuis Android
+### 3. Se connecter depuis Android
 
 Dans l’application Android :
 
@@ -91,7 +84,7 @@ Après le premier appairage réussi, Android se reconnecte automatiquement au la
 - Point de terminaison manuel (s’il est activé), sinon
 - La dernière Gateway découverte (meilleur effort).
 
-### 4) Approuver l’appairage (CLI)
+### 4. Approuver l’appairage (CLI)
 
 Sur la machine de la Gateway :
 
@@ -102,18 +95,21 @@ openclaw nodes approve <requestId>
 
 Détails de l’appairage : [Appairage de la Gateway](/gateway/pairing).
 
-### 5) Vérifier que le nœud est connecté
+### 5. Vérifier que le nœud est connecté
 
 - Via l’état des nœuds :
+
   ```bash
   openclaw nodes status
   ```
+
 - Via la Gateway :
+
   ```bash
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + historique
+### 6. Chat + historique
 
 La feuille Chat du nœud Android utilise la **clé de session primaire** de la Gateway (`main`), de sorte que l’historique et les réponses sont partagés avec WebChat et les autres clients :
 
@@ -121,7 +117,7 @@ La feuille Chat du nœud Android utilise la **clé de session primaire** de la G
 - Envoi : `chat.send`
 - Mises à jour push (meilleur effort) : `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + caméra
+### 7. Canvas + caméra
 
 #### Hôte Canvas de la Gateway (recommandé pour le contenu web)
 

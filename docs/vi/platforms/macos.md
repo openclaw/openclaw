@@ -4,20 +4,13 @@ read_when:
   - Triển khai các tính năng ứng dụng macOS
   - Thay đổi vòng đời gateway hoặc cầu nối node trên macOS
 title: "Ứng dụng macOS"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:58Z
 ---
 
 # Ứng dụng đồng hành OpenClaw trên macOS (menu bar + gateway broker)
 
-Ứng dụng macOS là **ứng dụng đồng hành trên thanh menu** cho OpenClaw. Ứng dụng này quản lý các quyền,
-quản lý/gắn kết với Gateway cục bộ (launchd hoặc thủ công), và phơi bày các
-khả năng của macOS cho tác tử dưới dạng một node.
+The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
+manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
+capabilities to the agent as a node.
 
 ## Nó làm gì
 
@@ -34,29 +27,29 @@ khả năng của macOS cho tác tử dưới dạng một node.
 
 - **Local** (mặc định): ứng dụng gắn vào một Gateway cục bộ đang chạy nếu có;
   nếu không, nó kích hoạt dịch vụ launchd qua `openclaw gateway install`.
-- **Remote**: ứng dụng kết nối tới một Gateway qua SSH/Tailscale và không bao giờ
-  khởi động tiến trình cục bộ.
-  Ứng dụng khởi động **dịch vụ node host** cục bộ để Gateway từ xa có thể truy cập máy Mac này.
-  Ứng dụng không sinh Gateway như một tiến trình con.
+- **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
+  a local process.
+  The app starts the local **node host service** so the remote Gateway can reach this Mac.
+  The app does not spawn the Gateway as a child process.
 
 ## Điều khiển Launchd
 
-Ứng dụng quản lý một LaunchAgent theo từng người dùng với nhãn `bot.molt.gateway`
-(hoặc `bot.molt.<profile>` khi dùng `--profile`/`OPENCLAW_PROFILE`; bản legacy `com.openclaw.*` vẫn có thể unload).
+The app manages a per‑user LaunchAgent labeled `bot.molt.gateway`
+(or `bot.molt.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` still unloads).
 
 ```bash
 launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-Thay nhãn bằng `bot.molt.<profile>` khi chạy một profile được đặt tên.
+Replace the label with `bot.molt.<profile>` when running a named profile.
 
 Nếu LaunchAgent chưa được cài đặt, hãy bật nó từ ứng dụng hoặc chạy
 `openclaw gateway install`.
 
 ## Khả năng node (mac)
 
-Ứng dụng macOS tự trình bày như một node. Các lệnh phổ biến:
+The macOS app presents itself as a node. Các lệnh thường dùng:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
@@ -81,8 +74,8 @@ Gateway -> Node Service (WS)
 
 ## Phê duyệt Exec (system.run)
 
-`system.run` được kiểm soát bởi **Exec approvals** trong ứng dụng macOS (Settings → Exec approvals).
-Bảo mật + hỏi + allowlist được lưu cục bộ trên máy Mac tại:
+`system.run` is controlled by **Exec approvals** in the macOS app (Settings → Exec approvals).
+Security + ask + allowlist are stored locally on the Mac in:
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -195,9 +188,12 @@ có thể nói chuyện với Gateway từ xa như thể nó đang ở localhost
   hoặc khởi động lại nếu cần.
 - **Dạng SSH:** `ssh -N -L <local>:127.0.0.1:<remote>` với BatchMode +
   ExitOnForwardFailure + các tùy chọn keepalive.
-- **Báo cáo IP:** đường hầm SSH dùng loopback, vì vậy gateway sẽ thấy IP node là `127.0.0.1`. Dùng transport **Direct (ws/wss)** nếu bạn muốn IP client thật xuất hiện (xem [macOS remote access](/platforms/mac/remote)).
+- **IP reporting:** the SSH tunnel uses loopback, so the gateway will see the node
+  IP as `127.0.0.1`. Use **Direct (ws/wss)** transport if you want the real client
+  IP to appear (see [macOS remote access](/platforms/mac/remote)).
 
-Để biết các bước thiết lập, xem [macOS remote access](/platforms/mac/remote). Để biết chi tiết giao thức, xem [Gateway protocol](/gateway/protocol).
+For setup steps, see [macOS remote access](/platforms/mac/remote). For protocol
+details, see [Gateway protocol](/gateway/protocol).
 
 ## Tài liệu liên quan
 

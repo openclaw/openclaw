@@ -4,24 +4,17 @@ read_when:
   - Du vill ha stöd för Zalo Personal (inofficiellt) i OpenClaw
   - Du konfigurerar eller utvecklar zalouser‑pluginet
 title: "Zalo Personal‑plugin"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:05Z
 ---
 
 # Zalo Personal (plugin)
 
 Stöd för Zalo Personal i OpenClaw via ett plugin som använder `zca-cli` för att automatisera ett vanligt Zalo‑användarkonto.
 
-> **Varning:** Inofficiell automatisering kan leda till avstängning/ban av kontot. Använd på egen risk.
+> **Varning:** Inofficiell automatisering kan leda till kontoavstängning/avstängning. Använd på egen risk.
 
 ## Namngivning
 
-Kanal‑id är `zalouser` för att tydliggöra att detta automatiserar ett **personligt Zalo‑användarkonto** (inofficiellt). Vi reserverar `zalo` för en eventuell framtida officiell Zalo‑API‑integration.
+Kanalid är `zalouser` för att göra det explicit detta automatiserar ett **personligt Zalo användarkonto** (inofficiellt). Vi håller `zalo` reserverad för en potentiell framtida officiell Zalo API-integration.
 
 ## Var den körs
 

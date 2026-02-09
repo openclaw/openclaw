@@ -4,18 +4,11 @@ read_when:
   - Tilføjelse eller ændring af CLI-kommandoer eller -indstillinger
   - Dokumentation af nye kommandoflader
 title: "CLI-reference"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:03Z
 ---
 
 # CLI-reference
 
-Denne side beskriver den aktuelle CLI-adfærd. Hvis kommandoer ændres, skal dette dokument opdateres.
+Denne side beskriver den aktuelle CLI opførsel. Hvis kommandoer ændres, skal du opdatere denne dokument.
 
 ## Kommandosider
 
@@ -259,10 +252,10 @@ Administrér udvidelser og deres konfiguration:
 - `openclaw plugins list` — find plugins (brug `--json` til maskinoutput).
 - `openclaw plugins info <id>` — vis detaljer for et plugin.
 - `openclaw plugins install <path|.tgz|npm-spec>` — installér et plugin (eller tilføj en plugin-sti til `plugins.load.paths`).
-- `openclaw plugins enable <id>` / `disable <id>` — slå `plugins.entries.<id>.enabled` til/fra.
+- `openclaw plugins aktiverer <id>` / `disable <id>` — skift `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — rapportér plugin-indlæsningsfejl.
 
-De fleste plugin-ændringer kræver genstart af gatewayen. Se [/plugin](/tools/plugin).
+De fleste plugin ændringer kræver en gateway genstart. Se [/plugin](/tools/plugin).
 
 ## Hukommelse
 
@@ -274,7 +267,7 @@ Vektorsøgning over `MEMORY.md` + `memory/*.md`:
 
 ## Chat slash-kommandoer
 
-Chatbeskeder understøtter `/...`-kommandoer (tekst og native). Se [/tools/slash-commands](/tools/slash-commands).
+Chatbeskeder understøtter `/...` kommandoer (tekst og indfødt). Se [/tools/slash-commands](/tools/slash-commands).
 
 Highlights:
 
@@ -350,7 +343,7 @@ Interaktiv konfigurationsguide (modeller, kanaler, skills, gateway).
 
 ### `config`
 
-Ikke-interaktive konfigurationshjælpere (get/set/unset). Kørsel af `openclaw config` uden
+Ikke-interaktive konfig hjælpere (get/set/unset). Kører `openclaw config` uden
 underkommando starter guiden.
 
 Underkommandoer:
@@ -456,7 +449,7 @@ Underkommandoer:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook-opsætning + runner. Se [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Opsætning af Gmail Pub/Sub hook + runner. Se [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Underkommandoer:
 
@@ -465,7 +458,7 @@ Underkommandoer:
 
 ### `dns setup`
 
-Wide-area discovery DNS-hjælper (CoreDNS + Tailscale). Se [/gateway/discovery](/gateway/discovery).
+Wide-area opdagelse DNS hjælper (CoreDNS + Tailscale). Se [/gateway/discovery](/gateway/discovery).
 
 Indstillinger:
 
@@ -494,7 +487,7 @@ Underkommandoer:
 Eksempler:
 
 - `openclaw message send --target +15555550123 --message "Hi"`
-- `openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
+- `openclaw besked meningsmåling --channel discord --target kanal:123 --poll-spørgsmål "Snack?" --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
 
@@ -531,7 +524,7 @@ Indstillinger:
 
 #### `agents add [name]`
 
-Tilføj en ny isoleret agent. Kører den guidede guide, medmindre flags (eller `--non-interactive`) er angivet; `--workspace` er påkrævet i ikke-interaktiv tilstand.
+Tilføj en ny isoleret agent. Kører guiden med mindre flag (eller `--non-interactive`) er passeret; `--workspace` er påkrævet i ikke-interaktiv tilstand.
 
 Indstillinger:
 
@@ -542,7 +535,7 @@ Indstillinger:
 - `--non-interactive`
 - `--json`
 
-Bindingsspecifikationer bruger `channel[:accountId]`. Når `accountId` udelades for WhatsApp, bruges standardkonto-id’et.
+Binding specs bruge `kanal[:accountId]`. Når `accountId` er udeladt for WhatsApp, bruges standard konto-id.
 
 #### `agents delete <id>`
 
@@ -694,7 +687,7 @@ Noter:
 
 - `gateway status` prober Gateway RPC som standard ved brug af tjenestens løste port/konfiguration (overstyr med `--url/--token/--password`).
 - `gateway status` understøtter `--no-probe`, `--deep` og `--json` til scripting.
-- `gateway status` viser også legacy- eller ekstra gateway-tjenester, når de kan detekteres (`--deep` tilføjer systemniveau-scans). Profilnavngivne OpenClaw-tjenester behandles som førsteklasses og markeres ikke som “ekstra”.
+- `gateway status` også overflader arv eller ekstra gateway tjenester, når det kan opdage dem (`--deep` tilføjer system-niveau scanninger). Profile-navngivne OpenClaw tjenester behandles som førsteklasses og markeres ikke som "ekstra".
 - `gateway status` udskriver, hvilken konfigurationssti CLI’en bruger vs. hvilken konfiguration tjenesten sandsynligvis bruger (tjeneste-env), samt den løste probe-mål-URL.
 - `gateway install|uninstall|start|stop|restart` understøtter `--json` til scripting (standardoutput forbliver menneskevenligt).
 - `gateway install` bruger som standard Node-runtime; bun **anbefales ikke** (WhatsApp/Telegram-fejl).
@@ -721,8 +714,8 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Gateway CLI-hjælpere (brug `--url`, `--token`, `--password`, `--timeout`, `--expect-final` til RPC-underkommandoer).
-Når du angiver `--url`, anvender CLI’en ikke automatisk konfiguration eller miljølegitimationsoplysninger.
+Gateway CLI hjælpere (brug `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for RPC underkommandoer).
+Når du passerer `--url`, CLI ikke automatisk anvende config eller miljø legitimationsoplysninger.
 Inkludér `--token` eller `--password` eksplicit. Manglende eksplicitte legitimationsoplysninger er en fejl.
 
 Underkommandoer:
@@ -789,8 +782,8 @@ Indstillinger:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-Inkluderer altid auth-overblik og OAuth-udløbsstatus for profiler i auth-lageret.
-`--probe` kører live-forespørgsler (kan forbruge tokens og udløse rate limits).
+Altid inkluderer auth oversigt og OAuth udløbsstatus for profiler i auth Store.
+`--probe` kører live anmodninger (kan forbruge tokens og udløse hastighedsgrænser).
 
 ### `models set <model>`
 
@@ -895,7 +888,7 @@ Indstillinger:
 
 ## Cron
 
-Administrér planlagte jobs (Gateway RPC). Se [/automation/cron-jobs](/automation/cron-jobs).
+Administrer planlagte jobs (Gateway RPC). Se [/automation/cron-jobs](/automation/cron-jobs).
 
 Underkommandoer:
 
@@ -913,8 +906,8 @@ Alle `cron`-kommandoer accepterer `--url`, `--token`, `--timeout`, `--expect-fin
 
 ## Node host
 
-`node` kører en **headless node host** eller administrerer den som en baggrundstjeneste. Se
-[`openclaw node`](/cli/node).
+`node` kører en **hovedløs knudevært** eller håndterer det som en baggrundstjeneste. Se
+['openclaw node'](/cli/node).
 
 Underkommandoer:
 
@@ -927,7 +920,7 @@ Underkommandoer:
 
 ## Nodes
 
-`nodes` taler med Gatewayen og målretter parrede noder. Se [/nodes](/nodes).
+`noder` samtaler med Gateway og mål parrede knuder. Se [/nodes](/nodes).
 
 Fælles indstillinger:
 
@@ -969,7 +962,7 @@ Placering:
 
 ## Browser
 
-Browser-kontrol-CLI (dedikeret Chrome/Brave/Edge/Chromium). Se [`openclaw browser`](/cli/browser) og [Browser-værktøjet](/tools/browser).
+Browser kontrol CLI (dedikeret Chrome/Brave/Edge/Chromium). Se [`openclaw browser`](/cli/browser) og [Browser værktøj](/tools/browser).
 
 Fælles indstillinger:
 

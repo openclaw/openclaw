@@ -4,13 +4,6 @@ read_when:
   - Вам нужно управлять хуками агента
   - Вам нужно установить или обновить хуки
 title: "хуки"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:23Z
 ---
 
 # `openclaw hooks`
@@ -241,7 +234,7 @@ openclaw hooks update --all
 - `--all`: Обновить все отслеживаемые пакеты хуков
 - `--dry-run`: Показать, что изменится, без записи
 
-## Хуки, входящие в комплект
+## Bundled Hooks
 
 ### session-memory
 

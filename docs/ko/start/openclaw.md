@@ -4,13 +4,6 @@ read_when:
   - 새 어시스턴스 인스턴스 온보딩
   - 안전/권한 영향 검토
 title: "개인 비서 설정"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:28Z
 ---
 
 # OpenClaw 로 개인 비서 만들기
@@ -38,7 +31,7 @@ OpenClaw 는 **Pi** 에이전트를 위한 WhatsApp + Telegram + Discord + iMess
 
 ## 두 대의 휴대전화 설정(권장)
 
-다음 구성을 권장합니다:
+이것을 원하신다면:
 
 ```
 Your Phone (personal)          Second Phone (assistant)
@@ -118,7 +111,7 @@ openclaw setup
 }
 ```
 
-## '비서'로 만드는 설정
+## 이를 “어시스턴트”로 바꾸는 설정
 
 OpenClaw 는 기본적으로 좋은 비서 설정을 사용하지만, 일반적으로 다음을 조정하게 됩니다:
 

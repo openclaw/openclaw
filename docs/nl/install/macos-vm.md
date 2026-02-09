@@ -6,13 +6,6 @@ read_when:
   - Je wilt een resetbare macOS-omgeving die je kunt klonen
   - Je wilt lokale versus gehoste macOS-VM-opties vergelijken
 title: "macOS-VM's"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # OpenClaw op macOS-VM's (Sandboxing)
@@ -56,7 +49,7 @@ Zodra je SSH-toegang hebt tot een macOS-VM, ga verder bij stap 6 hieronder.
 3. Voltooi Setup Assistant, schakel Remote Login (SSH) in
 4. `lume run openclaw --no-display`
 5. Log in via SSH, installeer OpenClaw, configureer kanalen
-6. Klaar
+6. Voltooid
 
 ---
 
@@ -69,7 +62,7 @@ Zodra je SSH-toegang hebt tot een macOS-VM, ga verder bij stap 6 hieronder.
 
 ---
 
-## 1) Installeer Lume
+## 1. Installeer Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ Docs: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/install
 
 ---
 
-## 2) Maak de macOS-VM aan
+## 2. Maak de macOS-VM aan
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ Let op: Het downloaden kan even duren, afhankelijk van je verbinding.
 
 ---
 
-## 3) Voltooi Setup Assistant
+## 3. Voltooi Setup Assistant
 
 In het VNC-venster:
 
@@ -119,7 +112,7 @@ Schakel na het voltooien van de setup SSH in:
 
 ---
 
-## 4) Verkrijg het IP-adres van de VM
+## 4. Verkrijg het IP-adres van de VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Zoek het IP-adres (meestal `192.168.64.x`).
 
 ---
 
-## 5) SSH inloggen op de VM
+## 5. SSH inloggen op de VM
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Vervang `youruser` door het account dat je hebt aangemaakt, en het IP door het I
 
 ---
 
-## 6) Installeer OpenClaw
+## 6. Installeer OpenClaw
 
 Binnen de VM:
 
@@ -152,7 +145,7 @@ Volg de onboarding-prompts om je model provider in te stellen (Anthropic, OpenAI
 
 ---
 
-## 7) Kanalen configureren
+## 7. Kanalen configureren
 
 Bewerk het config-bestand:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Draai de VM headless
+## 8. Draai de VM headless
 
 Stop de VM en start opnieuw zonder display:
 
@@ -253,7 +246,7 @@ lume run openclaw --no-display
 
 ---
 
-## 24/7 draaien
+## 24/7 uitgevoerd
 
 Houd de VM draaiende door:
 
@@ -267,11 +260,11 @@ Voor echt altijd-aan, overweeg een dedicated Mac mini of een kleine VPS. Zie [VP
 
 ## Problemen oplossen
 
-| Probleem                    | Oplossing                                                                                         |
-| --------------------------- | ------------------------------------------------------------------------------------------------- |
-| Kan niet via SSH in VM      | Controleer of "Remote Login" is ingeschakeld in de Systeeminstellingen van de VM                  |
-| VM-IP wordt niet getoond    | Wacht tot de VM volledig is opgestart, voer `lume get openclaw` opnieuw uit                       |
-| Lume-commando niet gevonden | Voeg `~/.local/bin` toe aan je PATH                                                               |
+| Probleem                    | Oplossing                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Kan niet via SSH in VM      | Controleer of "Remote Login" is ingeschakeld in de Systeeminstellingen van de VM                                     |
+| VM-IP wordt niet getoond    | Wacht tot de VM volledig is opgestart, voer `lume get openclaw` opnieuw uit                                          |
+| Lume-commando niet gevonden | Voeg `~/.local/bin` toe aan je PATH                                                                                  |
 | WhatsApp QR scant niet      | Zorg dat je bent ingelogd in de VM (niet de host) bij het uitvoeren van `openclaw channels login` |
 
 ---

@@ -3,20 +3,13 @@ summary: "براہِ راست `openclaw agent` CLI رنز (اختیاری ترس
 read_when:
   - ایجنٹ CLI اینٹری پوائنٹ شامل کرتے یا ترمیم کرتے وقت
 title: "Agent Send"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:42Z
 ---
 
 # `openclaw agent` (براہِ راست ایجنٹ رنز)
 
-`openclaw agent` کسی ان باؤنڈ چیٹ پیغام کی ضرورت کے بغیر ایک واحد ایجنٹ ٹرن چلاتا ہے۔
-بطورِ طے شدہ یہ **Gateway کے ذریعے** جاتا ہے؛ موجودہ مشین پر ایمبیڈڈ
-رن ٹائم کو مجبور کرنے کے لیے `--local` شامل کریں۔
+`openclaw agent` runs a single agent turn without needing an inbound chat message.
+By default it goes **through the Gateway**; add `--local` to force the embedded
+runtime on the current machine.
 
 ## رویّہ
 

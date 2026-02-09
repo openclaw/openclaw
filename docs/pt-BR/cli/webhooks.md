@@ -4,13 +4,6 @@ read_when:
   - Você quer conectar eventos do Gmail Pub/Sub ao OpenClaw
   - Você quer comandos auxiliares de webhook
 title: "webhooks"
-x-i18n:
-  source_path: cli/webhooks.md
-  source_hash: 785ec62afe6631b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:28Z
 ---
 
 # `openclaw webhooks`

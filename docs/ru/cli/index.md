@@ -4,13 +4,6 @@ read_when:
   - Добавление или изменение команд или параметров CLI
   - Документирование новых поверхностей команд
 title: "Справочник CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:18Z
 ---
 
 # Справочник CLI
@@ -276,7 +269,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 Сообщения чата поддерживают команды `/...` (текстовые и нативные). См. [/tools/slash-commands](/tools/slash-commands).
 
-Основные возможности:
+Выделить:
 
 - `/status` для быстрой диагностики.
 - `/config` для сохранённых изменений конфига.
@@ -456,7 +449,7 @@ openclaw status --deep
 
 ### `webhooks gmail`
 
-Настройка и запуск хука Gmail Pub/Sub. См. [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Настройка и запуск хука Gmail Pub/Sub. [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Подкоманды:
 
@@ -895,7 +888,7 @@ openclaw models status
 
 ## Cron
 
-Управление запланированными заданиями (RPC Gateway). См. [/automation/cron-jobs](/automation/cron-jobs).
+Управление запланированными заданиями (RPC Gateway). [/automation/cron-jobs](/automation/cron-jobs).
 
 Подкоманды:
 
@@ -913,8 +906,7 @@ openclaw models status
 
 ## Хост узла
 
-`node` запускает **headless node host** или управляет им как фоновым сервисом. См.
-[`openclaw node`](/cli/node).
+`node` запускает **headless node host** или управляет им как фоновым сервисом. См. [`openclaw node`](/cli/node).
 
 Подкоманды:
 

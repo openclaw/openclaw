@@ -4,13 +4,6 @@ read_when:
   - Du vil tilføje/fjerne kanalkonti (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - Du vil tjekke kanalstatus eller følge kanallogs
 title: "kanaler"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:00Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - Kør `openclaw status --deep` for en bred probe.
 - Brug `openclaw doctor` til guidede rettelser.
-- `openclaw channels list` udskriver `Claude: HTTP 403 ... user:profile` → brugssnapshot kræver `user:profile`-scope. Brug `--no-usage`, eller angiv en claude.ai sessionsnøgle (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), eller re-autentificér via Claude Code CLI.
+- `openclaw channels list` udskriver `Claude: HTTP 403 ... user:profile` → brug snapshot brug for `user:profile` anvendelsesområde. Brug `--no-usage`, eller giv en claude.ai sessionsnøgle (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), eller re-auth via Claude Code CLI.
 
 ## Kapabilitetsprobe
 
@@ -68,7 +61,7 @@ Noter:
 
 - `--channel` er valgfri; udelad den for at liste alle kanaler (inklusive udvidelser).
 - `--target` accepterer `channel:<id>` eller et råt numerisk kanal-id og gælder kun for Discord.
-- Prober er udbyderspecifikke: Discord intents + valgfrie kanaltilladelser; Slack bot- + user-scopes; Telegram bot-flags + webhook; Signal daemon-version; MS Teams app-token + Graph-roller/scopes (annoteret hvor kendt). Kanaler uden prober rapporterer `Probe: unavailable`.
+- Sonder er udbyder-specifikke: Discord hensigter + valgfri kanal tilladelser; Slack bot + bruger anvendelsesområder; Telegram bot flag + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes (annoteret hvor kendt). Kanaler uden sonder rapportere `Probe: utilgængelig`.
 
 ## Opløs navne til ID’er
 

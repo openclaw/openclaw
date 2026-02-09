@@ -2,14 +2,7 @@
 summary: "Ontwerp van een opdrachtwachtrij die inkomende auto-reply-runs serialiseert"
 read_when:
   - Bij het wijzigen van auto-reply-uitvoering of gelijktijdigheid
-title: "Opdrachtwachtrij"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:22Z
+title: "Opdracht wachtrij"
 ---
 
 # Opdrachtwachtrij (2026-01-16)

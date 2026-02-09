@@ -5,16 +5,9 @@ read_when:
   - تم تشغيل Cron ولكن لم يتم تسليم أي رسالة
   - يبدو أن Heartbeat صامت أو تم تخطيه
 title: "استكشاف أخطاء الأتمتة وإصلاحها"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:50Z
 ---
 
-# استكشاف أخطاء الأتمتة وإصلاحها
+# automation/troubleshooting.md
 
 استخدم هذه الصفحة لمشكلات المجدول والتسليم (`cron` + `heartbeat`).
 
@@ -51,7 +44,7 @@ openclaw logs --follow
 - المهمة مُمكّنة ولديها جدول/منطقة زمنية صالحة.
 - `cron runs` يُظهر `ok` أو سبب تخطٍّ صريح.
 
-أنماط شائعة:
+التوقيعات المشتركة:
 
 - `cron: scheduler disabled; jobs will not run automatically` → تم تعطيل cron في التهيئة/متغيرات البيئة.
 - `cron: timer tick failed` → تعطل نبض المجدول؛ افحص سياق المكدس/السجلات المحيطة.
@@ -72,7 +65,7 @@ openclaw logs --follow
 - تم تعيين وضع/هدف التسليم للمهام المعزولة.
 - فحص القناة يبلّغ بأن القناة الهدف متصلة.
 
-أنماط شائعة:
+التوقيعات المشتركة:
 
 - نجح التشغيل لكن وضع التسليم هو `none` → لا يُتوقع إرسال رسالة خارجية.
 - هدف التسليم مفقود/غير صالح (`channel`/`to`) → قد ينجح التشغيل داخليًا لكنه يتجاوز الإرسال الخارجي.
@@ -92,7 +85,7 @@ openclaw channels status --probe
 - Heartbeat مُمكّن بفاصل غير صفري.
 - آخر نتيجة Heartbeat هي `ran` (أو أن سبب التخطي مفهوم).
 
-أنماط شائعة:
+التوقيعات المشتركة:
 
 - `heartbeat skipped` مع `reason=quiet-hours` → خارج `activeHours`.
 - `requests-in-flight` → المسار الرئيسي مشغول؛ تم تأجيل Heartbeat.
@@ -116,7 +109,7 @@ openclaw logs --follow
 - Heartbeat `activeHours` يستخدم دقة المنطقة الزمنية المُهيّأة (`user`، `local`، أو منطقة IANA صريحة).
 - الطوابع الزمنية ISO بدون منطقة زمنية تُعامل على أنها UTC لجدولات cron `at`.
 
-أنماط شائعة:
+التوقيعات المشتركة:
 
 - تعمل المهام في وقت ساعة حائط غير صحيح بعد تغييرات المنطقة الزمنية للمضيف.
 - يتم تخطي Heartbeat دائمًا خلال ساعات النهار لديك لأن `activeHours.timezone` غير صحيح.

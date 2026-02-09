@@ -3,20 +3,13 @@ summary: "Twitch 聊天機器人設定與安裝"
 read_when:
   - 為 OpenClaw 設定 Twitch 聊天整合
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:18Z
 ---
 
 # Twitch（外掛）
 
-透過 IRC 連線提供 Twitch 聊天支援。OpenClaw 會以 Twitch 使用者（機器人帳號）身分連線，以在頻道中接收與傳送訊息。
+透過 IRC 連線提供 Twitch 聊天支援。OpenClaw 會以 Twitch 使用者（機器人帳號）身分連線，以在頻道中接收與傳送訊息。 33. OpenClaw 會以 Twitch 使用者（機器人帳號）的身分連線，以在頻道中接收與傳送訊息。
 
-## 需要外掛
+## 34. 需要外掛
 
 Twitch 以外掛形式提供，未隨核心安裝一起提供。
 
@@ -26,7 +19,7 @@ Twitch 以外掛形式提供，未隨核心安裝一起提供。
 openclaw plugins install @openclaw/twitch
 ```
 
-本機檢出（從 git 儲存庫執行時）：
+本地檢出（從 git 儲存庫執行時）：
 
 ```bash
 openclaw plugins install ./extensions/twitch
@@ -36,7 +29,7 @@ openclaw plugins install ./extensions/twitch
 
 ## 快速設定（初學者）
 
-1. 為機器人建立一個專用的 Twitch 帳號（或使用既有帳號）。
+1. 35. 為機器人建立一個專用的 Twitch 帳號（或使用既有帳號）。
 2. 產生認證：[Twitch Token Generator](https://twitchtokengenerator.com/)
    - 選擇 **Bot Token**
    - 確認已勾選權限範圍 `chat:read` 與 `chat:write`
@@ -45,10 +38,10 @@ openclaw plugins install ./extensions/twitch
 4. 設定權杖：
    - 環境變數：`OPENCLAW_TWITCH_ACCESS_TOKEN=...`（僅預設帳號）
    - 或設定檔：`channels.twitch.accessToken`
-   - 若同時設定，設定檔優先（環境變數回退僅適用於預設帳號）。
-5. 啟動 Gateway 閘道器。
+   - 36. 若兩者皆設定，則以設定檔為優先（環境變數僅作為預設帳號的後備）。
+5. 啟動 Gateway 閘道器.
 
-**⚠️ 重要：** 請加入存取控制（`allowFrom` 或 `allowedRoles`）以防止未授權使用者觸發機器人。`requireMention` 預設為 `true`。
+**⚠️ 重要：** 請加入存取控制（`allowFrom` 或 `allowedRoles`）以防止未授權使用者觸發機器人。`requireMention` 預設為 `true`。 37. `requireMention` 預設為 `true`。
 
 最小設定：
 
@@ -84,9 +77,9 @@ openclaw plugins install ./extensions/twitch
 - 確認已勾選權限範圍 `chat:read` 與 `chat:write`
 - 複製 **Client ID** 與 **Access Token**
 
-無需手動註冊應用程式。權杖在數小時後到期。
+38. 無需手動註冊應用程式。 39. 權杖會在數小時後過期。
 
-### 設定機器人
+### 40. 設定機器人
 
 **環境變數（僅預設帳號）：**
 
@@ -110,7 +103,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-若同時設定環境變數與設定檔，設定檔優先。
+If both env and config are set, config takes precedence.
 
 ### 存取控制（建議）
 
@@ -124,15 +117,15 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-建議使用 `allowFrom` 作為硬性允許清單。若想要以角色為基礎的存取，則改用 `allowedRoles`。
+Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
 
 **可用角色：** `"moderator"`、`"owner"`、`"vip"`、`"subscriber"`、`"all"`。
 
-**為何使用使用者 ID？** 使用者名稱可能變更，導致冒充風險。使用者 ID 是永久的。
+**為何使用使用者 ID？** 使用者名稱可能變更，導致冒充風險。使用者 ID 是永久的。 User IDs are permanent.
 
 查找你的 Twitch 使用者 ID：[https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/)（將你的 Twitch 使用者名稱轉換為 ID）
 
-## 權杖重新整理（選用）
+## Token refresh (optional)
 
 來自 [Twitch Token Generator](https://twitchtokengenerator.com/) 的權杖無法自動重新整理——到期時需重新產生。
 
@@ -149,11 +142,11 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-機器人會在到期前自動重新整理權杖，並記錄重新整理事件。
+The bot automatically refreshes tokens before expiration and logs refresh events.
 
 ## 多帳號支援
 
-使用 `channels.twitch.accounts` 搭配各帳號的權杖。共用模式請參閱 [`gateway/configuration`](/gateway/configuration)。
+使用 `channels.twitch.accounts` 搭配各帳號的權杖。共用模式請參閱 [`gateway/configuration`](/gateway/configuration)。 See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
 範例（一個機器人帳號加入兩個頻道）：
 
@@ -180,7 +173,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-**注意：** 每個帳號都需要自己的權杖（每個頻道一個權杖）。
+**Note:** Each account needs its own token (one token per channel).
 
 ## 存取控制
 
@@ -218,8 +211,8 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ### 以角色為基礎的存取（替代方案）
 
-`allowFrom` 是硬性允許清單。設定後，僅允許這些使用者 ID。
-若要以角色為基礎的存取，請保持 `allowFrom` 未設定，並改為設定 `allowedRoles`：
+`allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+If you want role-based access, leave `allowFrom` unset and configure `allowedRoles` instead:
 
 ```json5
 {
@@ -237,7 +230,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ### 停用 @mention 要求
 
-預設 `requireMention` 為 `true`。若要停用並回應所有訊息：
+By default, `requireMention` is `true`. To disable and respond to all messages:
 
 ```json5
 {
@@ -253,7 +246,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-## 疑難排解
+## Troubleshooting
 
 首先，執行診斷指令：
 
@@ -262,14 +255,14 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-### 機器人沒有回應訊息
+### Bot doesn't respond to messages
 
 **檢查存取控制：** 確認你的使用者 ID 在 `allowFrom` 中，或暫時移除
 `allowFrom` 並設定 `allowedRoles: ["all"]` 以進行測試。
 
 **確認機器人在頻道中：** 機器人必須加入 `channel` 指定的頻道。
 
-### 權杖問題
+### Token issues
 
 **「Failed to connect」或身分驗證錯誤：**
 
@@ -277,7 +270,7 @@ openclaw channels status --probe
 - 檢查權杖是否具備 `chat:read` 與 `chat:write` 權限範圍
 - 若使用權杖重新整理，確認已設定 `clientSecret` 與 `refreshToken`
 
-### 權杖重新整理無法運作
+### Token refresh not working
 
 **檢查日誌中的重新整理事件：**
 
@@ -375,7 +368,7 @@ Access token refreshed for user 123456 (expires in 14400s)
 - **將權杖視同密碼** - 切勿將權杖提交至 git
 - **長時間運作的機器人請使用自動權杖重新整理**
 - **存取控制請使用使用者 ID 允許清單**，避免使用使用者名稱
-- **監控日誌** 以追蹤權杖重新整理事件與連線狀態
+- **Monitor logs** for token refresh events and connection status
 - **最小化權杖權限範圍** - 僅請求 `chat:read` 與 `chat:write`
 - **若卡住**：確認沒有其他程序佔用工作階段後，重新啟動 Gateway 閘道器
 

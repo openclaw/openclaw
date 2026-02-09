@@ -4,13 +4,6 @@ read_when:
   - Wijzigen van het gedrag of de standaardwaarden van voice wake words
   - Toevoegen van nieuwe nodeplatforms die wake word-synchronisatie nodig hebben
 title: "Voice Wake"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:30Z
 ---
 
 # Voice Wake (Globale wake words)

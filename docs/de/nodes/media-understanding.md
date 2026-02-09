@@ -1,16 +1,9 @@
 ---
-summary: „Eingehende Bild-/Audio-/Video-Erkennung (optional) mit Anbieter- und CLI-Fallbacks“
+summary: "„Eingehende Bild-/Audio-/Video-Erkennung (optional) mit Anbieter- und CLI-Fallbacks“"
 read_when:
   - Entwurf oder Refactoring der Medienerkennung
   - Feinabstimmung der eingehenden Audio-/Video-/Bildvorverarbeitung
-title: „Medienerkennung“
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:53Z
+title: "Medienverständnis"
 ---
 
 # Medienerkennung (Eingehend) — 2026-01-17
@@ -182,11 +175,11 @@ Wenn Sie `capabilities` weglassen, ist der Eintrag für die Liste geeignet, in d
 
 ## Anbieter-Unterstützungsmatrix (OpenClaw-Integrationen)
 
-| Fähigkeit | Anbieter-Integration                              | Hinweise                                          |
-| --------- | ------------------------------------------------- | ------------------------------------------------- |
-| Bild      | OpenAI / Anthropic / Google / andere über `pi-ai` | Jedes bildfähige Modell im Register funktioniert. |
+| Fähigkeit | Anbieter-Integration                              | Hinweise                                                                             |
+| --------- | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Bild      | OpenAI / Anthropic / Google / andere über `pi-ai` | Jedes bildfähige Modell im Register funktioniert.                    |
 | Audio     | OpenAI, Groq, Deepgram, Google                    | Anbieter-Transkription (Whisper/Deepgram/Gemini). |
-| Video     | Google (Gemini API)                               | Anbieter-Videoerkennung.                          |
+| Video     | Google (Gemini API)            | Anbieter-Videoerkennung.                                             |
 
 ## Empfohlene Anbieter
 
@@ -206,7 +199,7 @@ Wenn Sie `capabilities` weglassen, ist der Eintrag für die Liste geeignet, in d
 - `google/gemini-3-flash-preview` (schnell), `google/gemini-3-pro-preview` (umfangreicher).
 - CLI-Fallback: `gemini`-CLI (unterstützt `read_file` für Video/Audio).
 
-## Anhangsrichtlinie
+## Anhang-Richtlinie
 
 Die fähigkeitsbezogene `attachments` steuert, welche Anhänge verarbeitet werden:
 
@@ -214,11 +207,11 @@ Die fähigkeitsbezogene `attachments` steuert, welche Anhänge verarbeitet werde
 - `maxAttachments`: Begrenzung der verarbeiteten Anzahl (Standard **1**)
 - `prefer`: `first`, `last`, `path`, `url`
 
-Wenn `mode: "all"`, werden Ausgaben als `[Image 1/2]`, `[Audio 2/2]` usw. beschriftet.
+Wenn `mode: "all"`, werden Ausgaben als `[Image 1/2]`, `[Audio 2/2]` usw.
 
 ## Konfigurationsbeispiele
 
-### 1) Gemeinsame Modellliste + Überschreibungen
+### 1. Gemeinsame Modellliste + Überschreibungen
 
 ```json5
 {
@@ -255,7 +248,7 @@ Wenn `mode: "all"`, werden Ausgaben als `[Image 1/2]`, `[Audio 2/2]` usw. beschr
 }
 ```
 
-### 2) Nur Audio + Video (Bild aus)
+### 2. Nur Audio + Video (Bild aus)
 
 ```json5
 {
@@ -295,7 +288,7 @@ Wenn `mode: "all"`, werden Ausgaben als `[Image 1/2]`, `[Audio 2/2]` usw. beschr
 }
 ```
 
-### 3) Optionale Bilderkennung
+### 3. Optionale Bilderkennung
 
 ```json5
 {
@@ -326,7 +319,7 @@ Wenn `mode: "all"`, werden Ausgaben als `[Image 1/2]`, `[Audio 2/2]` usw. beschr
 }
 ```
 
-### 4) Multimodaler Einzeleintrag (explizite Fähigkeiten)
+### 4. Multimodaler Einzeleintrag (explizite Fähigkeiten)
 
 ```json5
 {
@@ -378,7 +371,7 @@ Diese zeigt pro Fähigkeit die Ergebnisse sowie den gewählten Anbieter/das Mode
 
 - Die Erkennung ist **Best-Effort**. Fehler blockieren Antworten nicht.
 - Anhänge werden auch dann an Modelle weitergereicht, wenn die Erkennung deaktiviert ist.
-- Verwenden Sie `scope`, um einzuschränken, wo die Erkennung läuft (z. B. nur Direktnachrichten).
+- Verwenden Sie `scope`, um einzuschränken, wo die Erkennung läuft (z. B.
 
 ## Verwandte Dokumente
 

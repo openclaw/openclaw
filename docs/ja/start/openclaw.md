@@ -4,18 +4,11 @@ read_when:
   - 新しいアシスタントインスタンスのオンボーディング時
   - 安全性／権限の影響を確認する際
 title: "パーソナルアシスタントのセットアップ"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:26Z
 ---
 
 # OpenClaw でパーソナルアシスタントを構築する
 
-OpenClaw は **Pi** エージェント向けの WhatsApp + Telegram + Discord + iMessage ゲートウェイです。プラグインにより Mattermost が追加されます。本ガイドは「パーソナルアシスタント」構成を対象としています。つまり、常時稼働のエージェントとして振る舞う、専用の WhatsApp 番号を 1 つ用意する構成です。
+OpenClaw は **Pi** エージェント向けの WhatsApp + Telegram + Discord + iMessage ゲートウェイです。プラグインにより Mattermost が追加されます。本ガイドは「パーソナルアシスタント」構成を対象としています。つまり、常時稼働のエージェントとして振る舞う、専用の WhatsApp 番号を 1 つ用意する構成です。 プラグインはMattermostを追加します。 このガイドは「パーソナルアシスタント」のセットアップです:常時エージェントのように振る舞う専用のWhatsApp番号。
 
 ## ⚠️ 安全第一
 
@@ -29,7 +22,7 @@ OpenClaw は **Pi** エージェント向けの WhatsApp + Telegram + Discord + 
 
 - 必ず `channels.whatsapp.allowFrom` を設定してください（個人用 Mac をインターネットに全面公開してはいけません）。
 - アシスタント専用の WhatsApp 番号を使用してください。
-- ハートビートは現在、既定で 30 分ごとです。セットアップを信頼できるようになるまでは、`agents.defaults.heartbeat.every: "0m"` を設定して無効化してください。
+- Heartbeats は 30 分ごとにデフォルトになりました。 ハートビートは現在、既定で 30 分ごとです。セットアップを信頼できるようになるまでは、`agents.defaults.heartbeat.every: "0m"` を設定して無効化してください。
 
 ## 前提条件
 
@@ -38,7 +31,7 @@ OpenClaw は **Pi** エージェント向けの WhatsApp + Telegram + Discord + 
 
 ## 2 台のスマートフォン構成（推奨）
 
-目指す構成はこれです。
+以下が欲しい:
 
 ```
 Your Phone (personal)          Second Phone (assistant)
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-個人用の WhatsApp を OpenClaw にリンクすると、あなた宛てのすべてのメッセージが「エージェント入力」になります。これはほとんどの場合、望ましくありません。
+個人用の WhatsApp を OpenClaw にリンクすると、あなた宛てのすべてのメッセージが「エージェント入力」になります。これはほとんどの場合、望ましくありません。 あなたが望むことはめったにありません。
 
 ## 5 分クイックスタート
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 次に、許可リストに入っているあなたの電話から、アシスタントの番号にメッセージを送信してください。
 
-オンボーディングが完了すると、ダッシュボードが自動で開き、クリーンな（トークンを含まない）リンクが表示されます。認証を求められた場合は、`gateway.auth.token` にあるトークンを Control UI の設定に貼り付けてください。後から再度開くには `openclaw dashboard` を使用します。
+初期登録が完了すると、ダッシュボードを自動的に開き、トークン化されていないクリーンなリンクを印刷します。 authを求める場合は、`gateway.auth.token`からトークンをControl UI設定に貼り付けます。 後で再度開くには: `openclawダッシュボード` 。
 
 ## エージェントにワークスペースを与える（AGENTS）
 
 OpenClaw は、ワークスペースディレクトリから操作指示や「記憶」を読み込みます。
 
-既定では、OpenClaw はエージェントのワークスペースとして `~/.openclaw/workspace` を使用し、セットアップ時または最初のエージェント実行時に自動で作成します（さらにスターターとして `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md` も作成されます）。`BOOTSTRAP.md` は、ワークスペースが完全に新規の場合にのみ作成されます（削除後に再作成されるべきではありません）。`MEMORY.md` は任意（自動作成されません）で、存在する場合は通常セッションで読み込まれます。サブエージェントのセッションでは `AGENTS.md` と `TOOLS.md` のみが注入されます。
+既定では、OpenClaw はエージェントのワークスペースとして `~/.openclaw/workspace` を使用し、セットアップ時または最初のエージェント実行時に自動で作成します（さらにスターターとして `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md` も作成されます）。`BOOTSTRAP.md` は、ワークスペースが完全に新規の場合にのみ作成されます（削除後に再作成されるべきではありません）。`MEMORY.md` は任意（自動作成されません）で、存在する場合は通常セッションで読み込まれます。サブエージェントのセッションでは `AGENTS.md` と `TOOLS.md` のみが注入されます。 `BOOTSTRAP.md` はワークスペースが新しい場合にのみ作成されます (削除後に戻ってくるべきではありません)。 `MEMORY.md` はオプションです(自動作成ではありません)。存在する場合、通常のセッションでロードされます。 Subagent セッションは `AGENTS.md` と `TOOLS.md` のみを注入します。
 
-ヒント: このフォルダは OpenClaw の「記憶」として扱い、（理想的にはプライベートな）git リポジトリにしてください。そうすることで `AGENTS.md` とメモリファイルがバックアップされます。git がインストールされている場合、新規ワークスペースは自動で初期化されます。
+ヒント: このフォルダは OpenClaw の「記憶」として扱い、（理想的にはプライベートな）git リポジトリにしてください。そうすることで `AGENTS.md` とメモリファイルがバックアップされます。git がインストールされている場合、新規ワークスペースは自動で初期化されます。 git がインストールされている場合、新しいワークスペースは自動初期化されます。
 
 ```bash
 openclaw setup
@@ -168,7 +161,7 @@ OpenClaw は既定で良好なアシスタント設定になっていますが�
 
 - セッションファイル: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - セッションメタデータ（トークン使用量、最後のルートなど）: `~/.openclaw/agents/<agentId>/sessions/sessions.json`（旧形式: `~/.openclaw/sessions/sessions.json`）
-- `/new` または `/reset` を送信すると、そのチャットの新しいセッションが開始されます（`resetTriggers` で設定可能）。単独で送信した場合、リセット確認として短い挨拶が返されます。
+- `/new` または `/reset` を送信すると、そのチャットの新しいセッションが開始されます（`resetTriggers` で設定可能）。単独で送信した場合、リセット確認として短い挨拶が返されます。 単独で送信された場合、エージェントはリセットを確認するために短いあいさつで返信します。
 - `/compact [instructions]` はセッションコンテキストを圧縮し、残りのコンテキスト予算を報告します。
 
 ## ハートビート（プロアクティブモード）
@@ -198,7 +191,7 @@ OpenClaw は既定で良好なアシスタント設定になっていますが�
 - `{{MediaUrl}}`（疑似 URL）
 - `{{Transcript}}`（音声文字起こしが有効な場合）
 
-エージェントからの送信添付ファイルは、1 行単独（スペースなし）で `MEDIA:<path-or-url>` を含めてください。例:
+エージェントからの送信添付ファイルは、1 行単独（スペースなし）で `MEDIA:<path-or-url>` を含めてください。例: 例：
 
 ```
 Here’s the screenshot.

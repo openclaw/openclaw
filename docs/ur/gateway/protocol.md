@@ -5,31 +5,23 @@ read_when:
   - پروٹوکول عدم مطابقت یا کنکشن کی ناکامیوں کی ڈیبگنگ کے دوران
   - پروٹوکول اسکیما/ماڈلز کو دوبارہ تیار کرتے وقت
 title: "Gateway پروٹوکول"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:23Z
 ---
 
 # Gateway پروٹوکول (WebSocket)
 
-Gateway WS پروٹوکول OpenClaw کے لیے **واحد کنٹرول پلین + نوڈ ٹرانسپورٹ** ہے۔
-تمام کلائنٹس (CLI، ویب UI، macOS ایپ، iOS/Android نوڈز، ہیڈلیس
-نوڈز) WebSocket کے ذریعے کنیکٹ ہوتے ہیں اور ہینڈشیک کے وقت اپنا **role**
-
-- **scope** ظاہر کرتے ہیں۔
+The Gateway WS protocol is the **single control plane + node transport** for
+OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
+nodes) connect over WebSocket and declare their **role** + **scope** at
+handshake time.
 
 ## Transport
 
-- WebSocket، JSON payloads کے ساتھ ٹیکسٹ فریمز۔
-- پہلا فریم **لازم** ہے کہ `connect` درخواست ہو۔
+- WebSocket, text frames with JSON payloads.
+- First frame **must** be a `connect` request.
 
 ## Handshake (connect)
 
-Gateway → Client (پری کنیکٹ چیلنج):
+Gateway → Client (pre-connect challenge):
 
 ```json
 {
@@ -85,7 +77,7 @@ Gateway → Client:
 }
 ```
 
-جب ڈیوائس ٹوکن جاری کیا جاتا ہے، تو `hello-ok` میں یہ بھی شامل ہوتا ہے:
+When a device token is issued, `hello-ok` also includes:
 
 ```json
 {
@@ -97,7 +89,7 @@ Gateway → Client:
 }
 ```
 
-### Node مثال
+### Node example
 
 ```json
 {
@@ -138,18 +130,18 @@ Gateway → Client:
 - **Response**: `{type:"res", id, ok, payload|error}`
 - **Event**: `{type:"event", event, payload, seq?, stateVersion?}`
 
-سائیڈ ایفیکٹ رکھنے والے طریقوں کے لیے **idempotency keys** درکار ہیں (اسکیما دیکھیں)۔
+Side-effecting methods require **idempotency keys** (see schema).
 
 ## Roles + scopes
 
 ### Roles
 
-- `operator` = کنٹرول پلین کلائنٹ (CLI/UI/automation)۔
-- `node` = صلاحیت ہوسٹ (camera/screen/canvas/system.run)۔
+- `operator` = control plane client (CLI/UI/automation).
+- `node` = capability host (camera/screen/canvas/system.run).
 
 ### Scopes (operator)
 
-عام اسکوپس:
+Common scopes:
 
 - `operator.read`
 - `operator.write`
@@ -159,69 +151,69 @@ Gateway → Client:
 
 ### Caps/commands/permissions (node)
 
-نوڈز کنیکٹ کے وقت صلاحیتی دعوے (capability claims) ظاہر کرتے ہیں:
+Nodes declare capability claims at connect time:
 
-- `caps`: اعلیٰ سطحی صلاحیتی زمروں۔
-- `commands`: invoke کے لیے کمانڈ اجازت فہرست۔
-- `permissions`: باریک کنٹرول ٹوگلز (مثلاً `screen.record`, `camera.capture`)۔
+- `caps`: high-level capability categories.
+- `commands`: command allowlist for invoke.
+- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
 
-Gateway ان کو **claims** کے طور پر لیتا ہے اور سرور سائیڈ اجازت فہرستوں کو نافذ کرتا ہے۔
+The Gateway treats these as **claims** and enforces server-side allowlists.
 
 ## Presence
 
-- `system-presence` ڈیوائس شناخت کے مطابق کلید شدہ اندراجات واپس کرتا ہے۔
-- Presence اندراجات میں `deviceId`, `roles`، اور `scopes` شامل ہوتے ہیں تاکہ UI ایک ہی ڈیوائس کے لیے ایک ہی قطار دکھا سکے
-  چاہے وہ **operator** اور **node** دونوں کے طور پر کنیکٹ ہو۔
+- `system-presence` returns entries keyed by device identity.
+- 1. Presence entries میں `deviceId`, `roles` اور `scopes` شامل ہوتے ہیں تاکہ UIs ہر ڈیوائس کے لیے ایک ہی قطار دکھا سکیں
+     چاہے وہ بیک وقت **operator** اور **node** کے طور پر کنیکٹ ہو۔
 
-### Node معاون طریقے
+### 2. Node helper methods
 
-- نوڈز خودکار اجازت چیک کے لیے موجودہ skill executables کی فہرست حاصل کرنے کو `skills.bins` کال کر سکتے ہیں۔
+- 3. Nodes خودکار اجازت (auto-allow) کی جانچ کے لیے موجودہ skill executables کی فہرست حاصل کرنے کے لیے `skills.bins` کو کال کر سکتے ہیں۔
 
-## Exec منظوریات
+## ایگزیک منظوریات
 
-- جب کسی exec درخواست کو منظوری درکار ہو، گیٹ وے `exec.approval.requested` نشر کرتا ہے۔
-- Operator کلائنٹس `exec.approval.resolve` کال کر کے حل کرتے ہیں (اس کے لیے `operator.approvals` scope درکار ہے)۔
+- 4. جب کسی exec درخواست کو منظوری درکار ہو، تو گیٹ وے `exec.approval.requested` براڈکاسٹ کرتا ہے۔
+- 5. Operator کلائنٹس `exec.approval.resolve` کال کر کے حل کرتے ہیں (اس کے لیے `operator.approvals` اسکوپ درکار ہے)۔
 
 ## Versioning
 
-- `PROTOCOL_VERSION`، `src/gateway/protocol/schema.ts` میں موجود ہوتا ہے۔
+- `PROTOCOL_VERSION` `src/gateway/protocol/schema.ts` میں موجود ہے۔
 - کلائنٹس `minProtocol` + `maxProtocol` بھیجتے ہیں؛ سرور عدم مطابقت کو مسترد کر دیتا ہے۔
-- اسکیماز + ماڈلز TypeBox تعریفات سے تیار کیے جاتے ہیں:
+- 6. Schemas + models، TypeBox definitions سے جنریٹ کیے جاتے ہیں:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
   - `pnpm protocol:check`
 
 ## Auth
 
-- اگر `OPENCLAW_GATEWAY_TOKEN` (یا `--token`) سیٹ ہو، تو `connect.params.auth.token`
-  لازماً مطابقت رکھنا چاہیے ورنہ ساکٹ بند کر دیا جاتا ہے۔
-- pairing کے بعد، Gateway کنکشن کے role + scopes کے مطابق ایک **device token** جاری کرتا ہے۔
-  یہ `hello-ok.auth.deviceToken` میں واپس کیا جاتا ہے اور مستقبل کے کنکشنز کے لیے
-  کلائنٹ کو اسے محفوظ کرنا چاہیے۔
-- ڈیوائس ٹوکنز کو `device.token.rotate` اور
-  `device.token.revoke` کے ذریعے گھمایا/منسوخ کیا جا سکتا ہے (اس کے لیے `operator.pairing` scope درکار ہے)۔
+- 7. اگر `OPENCLAW_GATEWAY_TOKEN` (یا `--token`) سیٹ ہو، تو `connect.params.auth.token`
+     کا میچ ہونا لازمی ہے ورنہ ساکٹ بند کر دی جاتی ہے۔
+- 8. pairing کے بعد، گیٹ وے کنکشن کے رول + اسکوپس تک محدود ایک **device token** جاری کرتا ہے۔ 9. یہ `hello-ok.auth.deviceToken` میں واپس کیا جاتا ہے اور آئندہ کنیکشنز کے لیے
+     کلائنٹ کو اسے محفوظ کرنا چاہیے۔
+- 10. Device tokens کو `device.token.rotate` اور
+      `device.token.revoke` کے ذریعے روٹیٹ/ریووٖک کیا جا سکتا ہے (اس کے لیے `operator.pairing` اسکوپ درکار ہے)۔
 
 ## Device identity + pairing
 
-- نوڈز کو ایک مستحکم ڈیوائس شناخت (`device.id`) شامل کرنی چاہیے جو
-  keypair fingerprint سے اخذ کی گئی ہو۔
-- Gateways ہر ڈیوائس + role کے لیے ٹوکن جاری کرتے ہیں۔
-- نئے ڈیوائس IDs کے لیے pairing منظوری درکار ہوتی ہے، الا یہ کہ مقامی خودکار منظوری فعال ہو۔
-- **Local** کنکشنز میں loopback اور گیٹ وے ہوسٹ کا اپنا tailnet پتہ شامل ہوتا ہے
-  (تاکہ ایک ہی ہوسٹ پر tailnet binds بھی خودکار منظوری حاصل کر سکیں)۔
-- تمام WS کلائنٹس کو `connect` کے دوران `device` شناخت شامل کرنا **لازم** ہے (operator + node)۔
-  Control UI اسے **صرف** اسی وقت چھوڑ سکتا ہے جب `gateway.controlUi.allowInsecureAuth` فعال ہو
-  (یا بریک گلاس استعمال کے لیے `gateway.controlUi.dangerouslyDisableDeviceAuth`)۔
-- غیر مقامی کنکشنز کو سرور کی جانب سے فراہم کردہ `connect.challenge` nonce پر دستخط کرنا ہوں گے۔
+- 11. Nodes کو ایک مستحکم ڈیوائس شناخت (`device.id`) شامل کرنی چاہیے جو
+      keypair fingerprint سے اخذ کی گئی ہو۔
+- 12. Gateways ہر ڈیوائس + رول کے لیے ٹوکن جاری کرتے ہیں۔
+- Pairing approvals are required for new device IDs unless local auto-approval
+  is enabled.
+- 14. **Local** کنیکشنز میں loopback اور گیٹ وے ہوسٹ کا اپنا tailnet ایڈریس شامل ہوتا ہے
+      (تاکہ اسی ہوسٹ کے tailnet binds بھی auto-approve ہو سکیں)۔
+- 15. تمام WS کلائنٹس کو `connect` کے دوران `device` شناخت شامل کرنی لازمی ہے (operator + node)۔
+  16. Control UI اسے **صرف** اسی صورت میں چھوڑ سکتی ہے جب `gateway.controlUi.allowInsecureAuth` فعال ہو
+      (یا ہنگامی استعمال کے لیے `gateway.controlUi.dangerouslyDisableDeviceAuth`)۔
+- Non-local connections must sign the server-provided `connect.challenge` nonce.
 
 ## TLS + pinning
 
-- WS کنکشنز کے لیے TLS کی معاونت موجود ہے۔
-- کلائنٹس اختیاری طور پر گیٹ وے سرٹیفکیٹ فنگرپرنٹ کو pin کر سکتے ہیں (دیکھیں `gateway.tls`
-  کنفیگ کے ساتھ `gateway.remote.tlsFingerprint` یا CLI `--tls-fingerprint`)۔
+- 18. WS کنیکشنز کے لیے TLS سپورٹ موجود ہے۔
+- 19. کلائنٹس اختیاری طور پر گیٹ وے سرٹیفکیٹ فنگرپرنٹ پن کر سکتے ہیں (دیکھیے `gateway.tls`
+      کنفیگ کے ساتھ `gateway.remote.tlsFingerprint` یا CLI `--tls-fingerprint`)۔
 
 ## Scope
 
-یہ پروٹوکول **مکمل گیٹ وے API** کو ظاہر کرتا ہے (status، channels، models، chat،
-agent، sessions، nodes، approvals، وغیرہ)۔ درست سطح TypeBox اسکیماز میں
-`src/gateway/protocol/schema.ts` کے اندر متعین ہے۔
+20. یہ پروٹوکول **مکمل گیٹ وے API** کو ایکسپوز کرتا ہے (status, channels, models, chat,
+    agent, sessions, nodes, approvals، وغیرہ)۔ The exact surface is defined by the
+    TypeBox schemas in `src/gateway/protocol/schema.ts`.

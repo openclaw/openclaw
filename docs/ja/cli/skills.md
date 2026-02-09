@@ -4,13 +4,6 @@ read_when:
   - 利用可能で実行準備が整っている Skills を確認したいとき
   - Skills に必要なバイナリ／環境変数／設定の不足をデバッグしたいとき
 title: "skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:17Z
 ---
 
 # `openclaw skills`

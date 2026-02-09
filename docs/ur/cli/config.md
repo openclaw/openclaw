@@ -3,19 +3,12 @@ summary: "CLI حوالہ برائے `openclaw config` (کنفیگ ویلیوز �
 read_when:
   - آپ کنفیگ کو غیر تعاملی طور پر پڑھنا یا ترمیم کرنا چاہتے ہیں
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:54Z
 ---
 
 # `openclaw config`
 
-کنفیگ مددگار: راستے کے ذریعے ویلیوز حاصل کریں/سیٹ کریں/ان سیٹ کریں۔ ذیلی کمانڈ کے بغیر چلانے پر
-کنفیگریشن وزارڈ کھلتا ہے (بالکل `openclaw configure` کی طرح)۔
+کنفیگ مددگار: راستے کے ذریعے ویلیوز حاصل/سیٹ/ان سیٹ کریں۔ سب کمانڈ کے بغیر چلائیں تاکہ کنفیگر وزرڈ کھلے
+(وہی جو `openclaw configure`)۔
 
 ## مثالیں
 
@@ -45,8 +38,8 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 
 ## ویلیوز
 
-جہاں ممکن ہو ویلیوز کو JSON5 کے طور پر پارس کیا جاتا ہے؛ بصورتِ دیگر انہیں اسٹرنگ سمجھا جاتا ہے۔
-JSON5 پارسنگ لازم کرنے کے لیے `--json` استعمال کریں۔
+قدریں جہاں ممکن ہو JSON5 کے طور پر پارس کی جاتی ہیں؛ بصورت دیگر انہیں اسٹرنگز سمجھا جاتا ہے۔
+Use `--json` to require JSON5 parsing.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"

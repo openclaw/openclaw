@@ -4,13 +4,6 @@ read_when:
   - تريد تعديل موافقات التنفيذ من خلال CLI
   - تحتاج إلى إدارة قوائم السماح على مضيف Gateway أو مضيفي العُقد
 title: "الموافقات"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:53Z
 ---
 
 # `openclaw approvals`

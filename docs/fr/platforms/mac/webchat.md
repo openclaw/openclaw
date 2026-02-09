@@ -3,13 +3,6 @@ summary: "Comment l’app mac integre le WebChat de la Gateway (passerelle) et c
 read_when:
   - Debogage de la vue WebChat mac ou du port loopback
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 04ff448758e53009
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:21Z
 ---
 
 # WebChat (app macOS)
@@ -25,13 +18,16 @@ selectionne (avec un selecteur de session pour les autres sessions).
 ## Lancement et debogage
 
 - Manuel : menu Lobster → « Ouvrir le chat ».
+
 - Ouverture automatique pour les tests :
+
   ```bash
   dist/OpenClaw.app/Contents/MacOS/OpenClaw --webchat
   ```
+
 - Journaux : `./scripts/clawlog.sh` (sous-systeme `bot.molt`, categorie `WebChatSwiftUI`).
 
-## Cablage
+## Comment il est câblé
 
 - Plan de donnees : methodes WS de la Gateway (passerelle) `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` et evenements `chat`, `agent`, `presence`, `tick`, `health`.

@@ -4,13 +4,6 @@ read_when:
   - Bewerken van systeemprompttekst, toolslijst of tijd-/heartbeat-secties
   - Wijzigen van werkruimte-bootstrap of gedrag voor Skills-injectie
 title: "Systeemprompt"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:26Z
 ---
 
 # Systeemprompt

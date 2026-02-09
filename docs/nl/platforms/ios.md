@@ -5,13 +5,6 @@ read_when:
   - De iOS-app vanuit broncode draaien
   - Gateway Discovery of canvas-opdrachten debuggen
 title: "iOS-app"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:33Z
 ---
 
 # iOS-app (Node)
@@ -24,7 +17,7 @@ Beschikbaarheid: interne preview. De iOS-app wordt nog niet publiekelijk gedistr
 - Stelt node-mogelijkheden beschikbaar: Canvas, schermafbeelding, cameracapture, locatie, talk-modus, voice wake.
 - Ontvangt `node.invoke`-opdrachten en rapporteert node-statusgebeurtenissen.
 
-## Vereisten
+## Provideropties
 
 - Gateway die op een ander apparaat draait (macOS, Linux of Windows via WSL2).
 - Netwerkpad:

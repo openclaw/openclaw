@@ -4,13 +4,6 @@ read_when:
   - Anlamsal belleği indekslemek veya aramak istiyorsunuz
   - Bellek kullanılabilirliğini veya indekslemeyi hata ayıklıyorsunuz
 title: "bellek"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:59Z
 ---
 
 # `openclaw memory`

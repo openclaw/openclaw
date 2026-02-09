@@ -4,18 +4,11 @@ read_when:
   - Lägga till eller ändra CLI-kommandon eller alternativ
   - Dokumentera nya kommandoytor
 title: "CLI-referens"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:35Z
 ---
 
 # CLI-referens
 
-Den här sidan beskriver aktuellt CLI-beteende. Om kommandon ändras, uppdatera detta dokument.
+Denna sida beskriver det aktuella CLI-beteendet. Om kommandon ändras, uppdatera detta dokument.
 
 ## Kommandosidor
 
@@ -259,10 +252,10 @@ Hantera tillägg och deras konfig:
 - `openclaw plugins list` — upptäck plugins (använd `--json` för maskinutdata).
 - `openclaw plugins info <id>` — visa detaljer för ett plugin.
 - `openclaw plugins install <path|.tgz|npm-spec>` — installera ett plugin (eller lägg till en plugin-sökväg till `plugins.load.paths`).
-- `openclaw plugins enable <id>` / `disable <id>` — växla `plugins.entries.<id>.enabled`.
+- `openclaw plugins aktivera <id>` / `inaktivera <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — rapportera plugin-inläsningsfel.
 
-De flesta plugin-ändringar kräver en omstart av gateway. Se [/plugin](/tools/plugin).
+De flesta plugin-ändringar kräver en omstart av gatewayen. Se [/plugin](/tools/plugin).
 
 ## Minne
 
@@ -274,7 +267,7 @@ Vektorsökning över `MEMORY.md` + `memory/*.md`:
 
 ## Chattens snedstreckskommandon
 
-Chattmeddelanden stöder `/...`-kommandon (text och native). Se [/tools/slash-commands](/tools/slash-commands).
+Chattmeddelanden stöder `/...` kommandon (text och inföding). Se [/tools/slash-commands](/tools/slash-commands).
 
 Höjdpunkter:
 
@@ -314,7 +307,7 @@ Alternativ:
 - `--token-provider <id>` (icke-interaktiv; används med `--auth-choice token`)
 - `--token <token>` (icke-interaktiv; används med `--auth-choice token`)
 - `--token-profile-id <id>` (icke-interaktiv; standard: `<provider>:manual`)
-- `--token-expires-in <duration>` (icke-interaktiv; t.ex. `365d`, `12h`)
+- `--token-expires-in <duration>` (non-interactive; e.g. `365d`, `12h`)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
 - `--openrouter-api-key <key>`
@@ -350,8 +343,8 @@ Interaktiv konfigurationsguide (modeller, kanaler, skills, gateway).
 
 ### `config`
 
-Icke-interaktiva konfig-hjälpare (get/set/unset). Att köra `openclaw config` utan
-underkommando startar guiden.
+Icke-interaktiva konfigurationshjälpare (får/set/unset). Kör `openclaw config` utan
+-underkommandot startar guiden.
 
 Underkommandon:
 
@@ -456,7 +449,7 @@ Underkommandon:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub-hook-konfigurering + körning. Se [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Gmail Pub/Sub hook setup + runner. Se [/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Underkommandon:
 
@@ -465,7 +458,7 @@ Underkommandon:
 
 ### `dns setup`
 
-DNS-hjälpare för bredområdesupptäckt (CoreDNS + Tailscale). Se [/gateway/discovery](/gateway/discovery).
+Wide-area upptäckt DNS-hjälpare (CoreDNS + Tailscale). Se [/gateway/discovery](/gateway/discovery).
 
 Alternativ:
 
@@ -494,7 +487,7 @@ Underkommandon:
 Exempel:
 
 - `openclaw message send --target +15555550123 --message "Hi"`
-- `openclaw message poll --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
+- `openclaw meddelande omröstning --channel discord --target channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
 
@@ -531,7 +524,7 @@ Alternativ:
 
 #### `agents add [name]`
 
-Lägg till en ny isolerad agent. Kör den guidade guiden om inte flaggor (eller `--non-interactive`) skickas; `--workspace` krävs i icke-interaktivt läge.
+Lägg till en ny isolerad agent. Kör den guidade guiden såvida flaggor (eller `--non-interactive`) inte passeras; `--workspace` krävs i icke-interaktivt läge.
 
 Alternativ:
 
@@ -542,7 +535,7 @@ Alternativ:
 - `--non-interactive`
 - `--json`
 
-Bindningsspecifikationer använder `channel[:accountId]`. När `accountId` utelämnas för WhatsApp används standardkonto-id.
+Bindande specifikationer använder `channel[:accountId]`. När `accountId` utelämnas för WhatsApp används standardkonto-id
 
 #### `agents delete <id>`
 
@@ -694,7 +687,7 @@ Noteringar:
 
 - `gateway status` probar Gateway-RPC som standard med tjänstens upplösta port/konfig (åsidosätt med `--url/--token/--password`).
 - `gateway status` stöder `--no-probe`, `--deep` och `--json` för skriptning.
-- `gateway status` visar även äldre eller extra gateway-tjänster när den kan upptäcka dem (`--deep` lägger till systemnivåskanningar). Profilnamngivna OpenClaw-tjänster behandlas som förstklassiga och flaggas inte som ”extra”.
+- `gatewaystatus` ytor också äldre eller extra gateway-tjänster när det kan upptäcka dem (`--deep` lägger till systemnivåskanningar). Profil-namngivna OpenClaw-tjänster behandlas som förstklassiga och flaggas inte som "extra".
 - `gateway status` skriver ut vilken konfigsökväg CLI använder jämfört med vilken konfig tjänsten sannolikt använder (tjänstens miljö), samt den upplösta mål-URL:en för proben.
 - `gateway install|uninstall|start|stop|restart` stöder `--json` för skriptning (standardutdata förblir människovänlig).
 - `gateway install` använder Node-runtime som standard; bun är **inte rekommenderat** (WhatsApp/Telegram-buggar).
@@ -722,8 +715,8 @@ openclaw logs --no-color
 ### `gateway <subcommand>`
 
 Gateway CLI-hjälpare (använd `--url`, `--token`, `--password`, `--timeout`, `--expect-final` för RPC-underkommandon).
-När du skickar `--url` tillämpar CLI inte automatiskt konfig eller miljöuppgifter.
-Inkludera `--token` eller `--password` explicit. Saknade explicita uppgifter är ett fel.
+När du skickar `--url`, CLI inte auto-tillämpa konfiguration eller miljö uppgifter.
+Inkludera `--token` eller` --lösenord` explicit. Saknar explicita referenser är ett fel.
 
 Underkommandon:
 
@@ -789,8 +782,8 @@ Alternativ:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-Inkluderar alltid autentiseringsöversikten och OAuth-utgångsstatus för profiler i autentiseringslagret.
-`--probe` kör live-förfrågningar (kan förbruka tokens och trigga hastighetsbegränsningar).
+Inkluderar alltid auth översikten och OAuth utgångsstatus för profiler i auth butiken.
+`--probe` kör live-förfrågningar (kan konsumera tokens och utlösa hastighetsbegränsningar).
 
 ### `models set <model>`
 
@@ -913,7 +906,7 @@ Alla `cron`-kommandon accepterar `--url`, `--token`, `--timeout`, `--expect-fina
 
 ## Nodvärd
 
-`node` kör en **headless nodvärd** eller hanterar den som en bakgrundstjänst. Se
+`node` kör en **huvudlös nod värd** eller hanterar den som en bakgrundstjänst. Se
 [`openclaw node`](/cli/node).
 
 Underkommandon:
@@ -927,7 +920,7 @@ Underkommandon:
 
 ## Noder
 
-`nodes` kommunicerar med Gateway och riktar sig mot parade noder. Se [/nodes](/nodes).
+`nodes` talar till Gateway och mål parade noder. Se [/nodes](/nodes).
 
 Vanliga alternativ:
 
@@ -969,7 +962,7 @@ Plats:
 
 ## Webbläsare
 
-CLI för webbläsarstyrning (dedikerad Chrome/Brave/Edge/Chromium). Se [`openclaw browser`](/cli/browser) och [Browser tool](/tools/browser).
+Webbläsarkontroll CLI (dedikerad Chrome/Brave/Edge/Chromium). Se [`openclaw browser`](/cli/browser) och [Browser tool](/tools/browser).
 
 Vanliga alternativ:
 

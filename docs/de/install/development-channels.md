@@ -4,13 +4,6 @@ read_when:
   - Sie möchten zwischen Stable/Beta/Dev wechseln
   - Sie taggen oder veröffentlichen Vorabversionen
 title: "Entwicklungskanäle"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:30Z
 ---
 
 # Entwicklungskanäle

@@ -3,13 +3,6 @@ summary: "Renforcement de la liste d’autorisation Telegram : normalisation de
 read_when:
   - Lors de la revue des changements historiques de la liste d’autorisation Telegram
 title: "Renforcement de la liste d’autorisation Telegram"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: a2eca5fcc8537694
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:28Z
 ---
 
 # Renforcement de la liste d’autorisation Telegram
@@ -18,7 +11,7 @@ x-i18n:
 **Statut** : Complet  
 **PR** : #216
 
-## Resume
+## Summary
 
 Les listes d’autorisation Telegram acceptent désormais les prefixes `telegram:` et `tg:` sans distinction de casse, et tolerent
 les espaces accidentels. Cela aligne les verifications entrantes de la liste d’autorisation avec la normalisation des envois sortants.
@@ -38,8 +31,7 @@ Tous les elements suivants sont acceptes pour le meme identifiant :
 
 ## Pourquoi c’est important
 
-Le copier/coller depuis les journaux ou les identifiants de discussion inclut souvent des prefixes et des espaces.
-La normalisation evite des faux negatifs lors de la decision de repondre dans les Messages prives ou les groupes.
+Le copier/coller depuis les journaux ou les identifiants de discussion inclut souvent des prefixes et des espaces. La normalisation evite des faux negatifs lors de la decision de repondre dans les Messages prives ou les groupes.
 
 ## Documents associes
 

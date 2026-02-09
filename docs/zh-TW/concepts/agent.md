@@ -1,15 +1,8 @@
 ---
-summary: 「Agent 執行期（內嵌的 pi-mono）、工作區合約，以及工作階段啟動」
+summary: "Agent 執行期（內嵌的 pi-mono）、工作區合約，以及工作階段啟動"
 read_when:
   - 變更 agent 執行期、工作區啟動，或工作階段行為時
-title: 「Agent 執行期」
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:41Z
+title: "Agent 執行期"
 ---
 
 # Agent 執行期 🤖
@@ -27,7 +20,7 @@ OpenClaw 使用單一的 agent 工作區目錄（`agents.defaults.workspace`）�
 如果啟用 `agents.defaults.sandbox`，非主要工作階段可以改用位於 `agents.defaults.sandbox.workspaceRoot` 底下的每工作階段工作區（請參閱
 [Gateway 設定](/gateway/configuration)）。
 
-## 啟動檔案（注入）
+## 38. 啟動檔案（已注入）
 
 在 `agents.defaults.workspace` 內，OpenClaw 預期存在以下可由使用者編輯的檔案：
 
@@ -40,11 +33,11 @@ OpenClaw 使用單一的 agent 工作區目錄（`agents.defaults.workspace`）�
 
 在新工作階段的第一個回合，OpenClaw 會將這些檔案的內容直接注入 agent 的情境中。
 
-空白檔案會被略過。大型檔案會被修剪並截斷，並加上標記，以保持提示精簡（如需完整內容請直接閱讀檔案）。
+空白檔案會被略過。大型檔案會被修剪並截斷，並加上標記，以保持提示精簡（如需完整內容請直接閱讀檔案）。 39. 大型檔案會被修剪並以標記截斷，以保持提示精簡（完整內容請閱讀檔案）。
 
 若檔案缺失，OpenClaw 會注入單一行「缺少檔案」標記（且 `openclaw setup` 會建立安全的預設範本）。
 
-`BOOTSTRAP.md` 僅會在**全新的工作區**（不存在其他啟動檔案）時建立。若你在完成儀式後刪除它，之後重新啟動時不應再次建立。
+40. `BOOTSTRAP.md` 僅會在**全新工作區**時建立（不存在其他啟動檔案）。 1. 如果你在完成儀式後將其刪除，它在之後的重新啟動中不應該被重新建立。
 
 若要完全停用啟動檔案的建立（用於預先佈署的工作區），請設定：
 
@@ -52,9 +45,11 @@ OpenClaw 使用單一的 agent 工作區目錄（`agents.defaults.workspace`）�
 { agent: { skipBootstrap: true } }
 ```
 
-## 內建工具
+## 2. 內建工具
 
-核心工具（read/exec/edit/write 與相關系統工具）始終可用，但會受工具政策限制。`apply_patch` 為選用，且受 `tools.exec.applyPatch` 控制。`TOOLS.md` **不會**控制有哪些工具存在；它僅是指引你希望工具如何被使用。
+3. 核心工具（read/exec/edit/write 及相關系統工具）始終可用，
+   受工具政策約束。 核心工具（read/exec/edit/write 與相關系統工具）始終可用，但會受工具政策限制。`apply_patch` 為選用，且受 `tools.exec.applyPatch` 控制。`TOOLS.md` **不會**控制有哪些工具存在；它僅是指引你希望工具如何被使用。 4. `TOOLS.md` **不會** 控制哪些工具存在；它是
+   關於你希望如何使用它們的指引。
 
 ## Skills
 
@@ -73,22 +68,24 @@ OpenClaw 重用 pi-mono 程式碼庫中的部分元件（模型／工具），�
 - 不使用 pi-coding agent 執行期。
 - 不會讀取任何 `~/.pi/agent` 或 `<workspace>/.pi` 設定。
 
-## 工作階段
+## Sessions
 
-工作階段逐字稿會以 JSONL 格式儲存在：
+5. 工作階段逐字稿以 JSONL 格式儲存於：
 
 - `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
-工作階段 ID 為穩定值，並由 OpenClaw 選擇。
-舊版 Pi／Tau 的工作階段資料夾**不會**被讀取。
+6. 工作階段 ID 是穩定的，並由 OpenClaw 選擇。
+7. 舊版 Pi/Tau 工作階段資料夾 **不會** 被讀取。
 
-## 串流期間的導引控制
+## 8. 串流時的引導
 
-當佇列模式為 `steer` 時，傳入訊息會被注入目前的執行流程。
-佇列會在**每次工具呼叫之後**檢查；若存在排隊中的訊息，將略過目前助理訊息中剩餘的工具呼叫（回傳錯誤工具結果，內容為「Skipped due to queued user message.」），接著在下一次助理回應前注入排隊中的使用者訊息。
+9. 當佇列模式為 `steer` 時，傳入訊息會被注入到目前的執行中。
+10. 佇列會在**每次工具呼叫之後**檢查；如果存在佇列中的訊息，
+    目前助理訊息中剩餘的工具呼叫會被跳過（錯誤工具結果顯示為「Skipped due to queued user message.」），然後在下一次助理回應前注入佇列中的使用者訊息。
 
 當佇列模式為 `followup` 或 `collect` 時，傳入訊息會被保留，直到目前回合結束，接著以排隊的負載啟動新的 agent 回合。模式與防抖／上限行為請參閱
-[Queue](/concepts/queue)。
+[Queue](/concepts/queue)。 11. 請參閱
+[Queue](/concepts/queue) 以了解模式與 debounce/cap 行為。
 
 區塊串流會在助理區塊完成後立即送出；預設為**關閉**（`agents.defaults.blockStreamingDefault: "off"`）。
 可透過 `agents.defaults.blockStreamingBreak` 調整邊界（`text_end` 與 `message_end`；預設為 text_end）。
@@ -98,6 +95,13 @@ OpenClaw 重用 pi-mono 程式碼庫中的部分元件（模型／工具），�
 `*.blockStreaming: true` 才能啟用區塊回覆。
 詳細的工具摘要會在工具啟動時送出（不進行防抖）；當可用時，控制介面會透過 agent 事件串流工具輸出。
 更多細節：[Streaming + chunking](/concepts/streaming)。
+12. 透過 `agents.defaults.blockStreamingBreak` 調整邊界（`text_end` vs `message_end`；預設為 text_end）。
+13. 使用 `agents.defaults.blockStreamingChunk` 控制軟性區塊分割（預設為
+800–1200 字元；優先段落分隔，其次換行，最後才是句子）。
+14. 使用 `agents.defaults.blockStreamingCoalesce` 合併串流區塊，以減少單行垃圾訊息（在送出前基於閒置時間進行合併）。 15. 非 Telegram 頻道需要
+明確設定 `*.blockStreaming: true` 才能啟用區塊回覆。
+16. 詳細的工具摘要會在工具啟動時發出（無 debounce）；控制 UI 會在可用時透過代理事件串流工具輸出。
+17. 更多細節：[Streaming + chunking](/concepts/streaming)。
 
 ## 模型參照
 

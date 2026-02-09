@@ -5,18 +5,11 @@ read_when:
   - Pag-install, paghahanap, o pag-publish ng skills
   - Pagpapaliwanag ng mga flag ng ClawHub CLI at behavior ng sync
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:15Z
 ---
 
 # ClawHub
 
-Ang ClawHub ay ang **pampublikong skill registry para sa OpenClaw**. Isa itong libreng serbisyo: lahat ng skills ay pampubliko, bukas, at nakikita ng lahat para sa pagbabahagi at muling paggamit. Ang isang skill ay simpleng isang folder na may `SKILL.md` file (kasama ang mga suportang text file). Maaari kang mag-browse ng skills sa web app o gumamit ng CLI para maghanap, mag-install, mag-update, at mag-publish ng skills.
+30. Ang ClawHub ay ang **pampublikong skill registry para sa OpenClaw**. Ito ay isang libreng serbisyo: lahat ng skill ay pampubliko, bukas, at nakikita ng lahat para sa pagbabahagi at muling paggamit. A skill is just a folder with a `SKILL.md` file (plus supporting text files). Maaari kang mag-browse ng mga skill sa web app o gamitin ang CLI upang maghanap, mag-install, mag-update, at mag-publish ng mga skill.
 
 Site: [clawhub.ai](https://clawhub.ai)
 
@@ -43,7 +36,7 @@ Site: [clawhub.ai](https://clawhub.ai)
 
 ## Para kanino ito (beginner-friendly)
 
-Kung gusto mong magdagdag ng mga bagong kakayahan sa iyong OpenClaw agent, ang ClawHub ang pinakamadaling paraan para maghanap at mag-install ng skills. Hindi mo kailangang malaman kung paano gumagana ang backend. Maaari kang:
+Kung nais mong magdagdag ng mga bagong kakayahan sa iyong OpenClaw agent, ang ClawHub ang pinakamadaling paraan upang makahanap at mag-install ng mga skill. Hindi mo kailangang malaman kung paano gumagana ang backend. 32. Maaari kang:
 
 - Maghanap ng skills gamit ang plain language.
 - Mag-install ng skill sa iyong workspace.
@@ -73,14 +66,16 @@ pnpm add -g clawhub
 
 ## Paano ito umaangkop sa OpenClaw
 
-Bilang default, ini-install ng CLI ang skills sa `./skills` sa ilalim ng iyong kasalukuyang working directory. Kung naka-configure ang isang OpenClaw workspace, ang `clawhub` ay babalik sa workspace na iyon maliban kung i-override mo ang `--workdir` (o `CLAWHUB_WORKDIR`). Ikinakarga ng OpenClaw ang workspace skills mula sa `<workspace>/skills` at makukuha ang mga ito sa **susunod** na session. Kung gumagamit ka na ng `~/.openclaw/skills` o mga bundled skills, mas may prayoridad ang workspace skills.
+Bilang default, ini-install ng CLI ang mga skill sa `./skills` sa ilalim ng iyong kasalukuyang working directory. 33. Kung may naka-configure na OpenClaw workspace, babalik ang `clawhub` sa workspace na iyon maliban kung i-override mo ang `--workdir` (o `CLAWHUB_WORKDIR`). Ilo-load ng OpenClaw ang mga workspace skill mula sa `<workspace>/skills` at kukunin ang mga ito sa **susunod** na session. 34. Kung gumagamit ka na ng `~/.openclaw/skills` o mga bundled skill, mas may prioridad ang mga skill sa workspace.
 
 Para sa mas detalyadong paliwanag kung paano nilo-load, sini-share, at ginagate ang skills, tingnan ang
 [Skills](/tools/skills).
 
 ## Pangkalahatang-ideya ng skill system
 
-Ang isang skill ay isang versioned na bundle ng mga file na nagtuturo sa OpenClaw kung paano magsagawa ng isang partikular na gawain. Bawat publish ay lumilikha ng bagong version, at pinananatili ng registry ang history ng mga version para ma-audit ng mga user ang mga pagbabago.
+35. Ang isang skill ay isang versioned na bundle ng mga file na nagtuturo sa OpenClaw kung paano magsagawa ng isang
+    partikular na gawain. Bawat publish ay lumilikha ng bagong bersyon, at pinapanatili ng registry ang isang
+    kasaysayan ng mga bersyon upang ma-audit ng mga user ang mga pagbabago.
 
 Karaniwang kasama sa isang skill ang:
 
@@ -88,7 +83,9 @@ Karaniwang kasama sa isang skill ang:
 - Opsyonal na mga config, script, o suportang file na ginagamit ng skill.
 - Metadata tulad ng tags, buod, at mga kinakailangan sa pag-install.
 
-Ginagamit ng ClawHub ang metadata para paganahin ang discovery at ligtas na ilantad ang mga kakayahan ng skill. Sinusubaybayan din ng registry ang mga usage signal (tulad ng stars at downloads) para mapahusay ang ranking at visibility.
+Gumagamit ang ClawHub ng metadata upang paganahin ang discovery at ligtas na ilantad ang mga kakayahan ng skill.
+Sinusubaybayan din ng registry ang mga usage signal (tulad ng mga star at download) upang mapabuti ang
+ranking at visibility.
 
 ## Ano ang ibinibigay ng serbisyo (mga tampok)
 
@@ -102,7 +99,9 @@ Ginagamit ng ClawHub ang metadata para paganahin ang discovery at ligtas na ilan
 
 ## Seguridad at moderation
 
-Bukas ang ClawHub bilang default. Kahit sino ay maaaring mag-upload ng skills, ngunit kailangang ang GitHub account ay hindi bababa sa isang linggo na ang edad para makapag-publish. Nakakatulong ito na pabagalin ang abuso nang hindi hinaharangan ang mga lehitimong contributor.
+Bukas ang ClawHub bilang default. Maaaring mag-upload ng mga skill ang sinuman, ngunit ang isang GitHub account ay dapat
+hindi bababa sa isang linggong gulang upang makapag-publish. Nakakatulong ito na pabagalin ang pang-aabuso nang hindi hinaharangan ang
+mga lehitimong contributor.
 
 Pag-report at moderation:
 
@@ -113,7 +112,8 @@ Pag-report at moderation:
 - Maaaring tingnan ng mga moderator ang mga naka-hide na skill, i-unhide ang mga ito, i-delete, o mag-ban ng mga user.
 - Ang pag-abuso sa report feature ay maaaring magresulta sa pag-ban ng account.
 
-Interesado bang maging moderator? Magtanong sa OpenClaw Discord at makipag-ugnayan sa isang moderator o maintainer.
+Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a
+moderator or maintainer.
 
 ## Mga command at parameter ng CLI
 
@@ -229,11 +229,11 @@ clawhub sync --all
 
 ### Mga lokal na pagbabago vs mga version sa registry
 
-Inihahambing ng mga update ang lokal na nilalaman ng skill sa mga version sa registry gamit ang content hash. Kung ang mga lokal na file ay hindi tumutugma sa alinmang published version, magtatanong ang CLI bago mag-overwrite (o mangangailangan ng `--force` sa mga non-interactive na run).
+Updates compare the local skill contents to registry versions using a content hash. If local files do not match any published version, the CLI asks before overwriting (or requires `--force` in non-interactive runs).
 
 ### Pag-scan ng sync at mga fallback root
 
-Ini-scan ng `clawhub sync` ang iyong kasalukuyang workdir muna. Kung walang makitang skills, babalik ito sa mga kilalang legacy location (halimbawa `~/openclaw/skills` at `~/.openclaw/skills`). Dinisenyo ito para mahanap ang mga mas lumang skill install nang hindi nangangailangan ng dagdag na flag.
+`clawhub sync` scans your current workdir first. If no skills are found, it falls back to known legacy locations (for example `~/openclaw/skills` and `~/.openclaw/skills`). 36. Dinisenyo ito upang mahanap ang mas matatandang skill install nang walang karagdagang flag.
 
 ### Storage at lockfile
 
@@ -242,7 +242,7 @@ Ini-scan ng `clawhub sync` ang iyong kasalukuyang workdir muna. Kung walang maki
 
 ### Telemetry (bilang ng install)
 
-Kapag pinatakbo mo ang `clawhub sync` habang naka-log in, nagpapadala ang CLI ng minimal na snapshot para kalkulahin ang bilang ng install. Maaari mo itong i-disable nang buo:
+When you run `clawhub sync` while logged in, the CLI sends a minimal snapshot to compute install counts. 37. Maaari mo itong ganap na i-disable:
 
 ```bash
 export CLAWHUB_DISABLE_TELEMETRY=1

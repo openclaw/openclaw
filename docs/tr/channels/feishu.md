@@ -4,13 +4,6 @@ read_when:
   - Bir Feishu/Lark botu bağlamak istiyorsunuz
   - Feishu kanalını yapılandırıyorsunuz
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:10Z
 ---
 
 # Feishu botu
@@ -200,7 +193,7 @@ openclaw channels add
 }
 ```
 
-### Ortam değişkenleri ile yapılandırma
+### Configure via environment variables
 
 ```bash
 export FEISHU_APP_ID="cli_xxx"
@@ -267,6 +260,7 @@ Onaydan sonra normal şekilde sohbet edebilirsiniz.
 ### Doğrudan mesajlar
 
 - **Varsayılan**: `dmPolicy: "pairing"` (bilinmeyen kullanıcılar eşleştirme kodu alır)
+
 - **Eşleştirmeyi onayla**:
 
   ```bash
@@ -371,23 +365,23 @@ openclaw pairing list feishu
 
 ## Yaygın komutlar
 
-| Komut     | Açıklama               |
+| Command   | Açıklama               |
 | --------- | ---------------------- |
 | `/status` | Bot durumunu göster    |
-| `/reset`  | Oturumu sıfırla        |
+| `/reset`  | Reset the session      |
 | `/model`  | Modeli göster/değiştir |
 
 > Not: Feishu henüz yerel komut menülerini desteklemediğinden, komutlar metin olarak gönderilmelidir.
 
 ## Gateway yönetim komutları
 
-| Komut                      | Açıklama                         |
+| Command                    | Açıklama                         |
 | -------------------------- | -------------------------------- |
 | `openclaw gateway status`  | Gateway durumunu göster          |
 | `openclaw gateway install` | Gateway servisini yükle/başlat   |
 | `openclaw gateway stop`    | Gateway servisini durdur         |
 | `openclaw gateway restart` | Gateway servisini yeniden başlat |
-| `openclaw logs --follow`   | Gateway günlüklerini izle        |
+| `openclaw logs --follow`   | Tail gateway logs                |
 
 ---
 
@@ -471,7 +465,7 @@ Feishu, etkileşimli kartlar üzerinden akış yanıtlarını destekler. Etkinle
 
 Tam yanıt gönderilmeden önce beklemek için `streaming: false` ayarını yapın.
 
-### Çoklu ajan yönlendirme
+### Multi-agent routing
 
 Feishu DM’lerini veya gruplarını farklı ajanlara yönlendirmek için `bindings` kullanın.
 
@@ -534,40 +528,40 @@ Tüm yapılandırma: [Gateway yapılandırması](/gateway/configuration)
 
 Temel seçenekler:
 
-| Ayar                                              | Açıklama                                | Varsayılan |
-| ------------------------------------------------- | --------------------------------------- | ---------- |
-| `channels.feishu.enabled`                         | Kanalı etkinleştir/devre dışı bırak     | `true`     |
-| `channels.feishu.domain`                          | API alan adı (`feishu` veya `lark`)     | `feishu`   |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                  | -          |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                              | -          |
-| `channels.feishu.accounts.<id>.domain`            | Hesap bazlı API alan adı geçersiz kılma | `feishu`   |
-| `channels.feishu.dmPolicy`                        | DM politikası                           | `pairing`  |
-| `channels.feishu.allowFrom`                       | DM izin listesi (open_id listesi)       | -          |
-| `channels.feishu.groupPolicy`                     | Grup politikası                         | `open`     |
-| `channels.feishu.groupAllowFrom`                  | Grup izin listesi                       | -          |
-| `channels.feishu.groups.<chat_id>.requireMention` | @bahsetme zorunlu                       | `true`     |
-| `channels.feishu.groups.<chat_id>.enabled`        | Grubu etkinleştir                       | `true`     |
-| `channels.feishu.textChunkLimit`                  | Mesaj parça boyutu                      | `2000`     |
-| `channels.feishu.mediaMaxMb`                      | Medya boyut limiti                      | `30`       |
-| `channels.feishu.streaming`                       | Akış kartı çıktısını etkinleştir        | `true`     |
-| `channels.feishu.blockStreaming`                  | Blok halinde akışı etkinleştir          | `true`     |
+| Ayar                                              | Açıklama                                                                  | Varsayılan |
+| ------------------------------------------------- | ------------------------------------------------------------------------- | ---------- |
+| `channels.feishu.enabled`                         | Kanalı etkinleştir/devre dışı bırak                                       | `true`     |
+| `channels.feishu.domain`                          | API alan adı (`feishu` veya `lark`)                    | `feishu`   |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                    | -          |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                | -          |
+| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override                                           | `feishu`   |
+| `channels.feishu.dmPolicy`                        | DM politikası                                                             | `pairing`  |
+| `channels.feishu.allowFrom`                       | DM izin listesi (open_id listesi) | -          |
+| `channels.feishu.groupPolicy`                     | Grup politikası                                                           | `open`     |
+| `channels.feishu.groupAllowFrom`                  | Grup izin listesi                                                         | -          |
+| `channels.feishu.groups.<chat_id>.requireMention` | @bahsetme zorunlu                                            | `true`     |
+| `channels.feishu.groups.<chat_id>.enabled`        | Grubu etkinleştir                                                         | `true`     |
+| `channels.feishu.textChunkLimit`                  | Mesaj parça boyutu                                                        | `2000`     |
+| `channels.feishu.mediaMaxMb`                      | Medya boyut limiti                                                        | `30`       |
+| `channels.feishu.streaming`                       | Akış kartı çıktısını etkinleştir                                          | `true`     |
+| `channels.feishu.blockStreaming`                  | Blok halinde akışı etkinleştir                                            | `true`     |
 
 ---
 
 ## dmPolicy başvurusu
 
-| Değer         | Davranış                                                                     |
-| ------------- | ---------------------------------------------------------------------------- |
+| Değer         | Davranış                                                                                     |
+| ------------- | -------------------------------------------------------------------------------------------- |
 | `"pairing"`   | **Varsayılan.** Bilinmeyen kullanıcılar eşleştirme kodu alır; onaylanmalıdır |
-| `"allowlist"` | Yalnızca `allowFrom` içindeki kullanıcılar sohbet edebilir                   |
-| `"open"`      | Tüm kullanıcılara izin ver (allowFrom içinde `"*"` gerektirir)               |
-| `"disabled"`  | DM’leri devre dışı bırak                                                     |
+| `"allowlist"` | Yalnızca `allowFrom` içindeki kullanıcılar sohbet edebilir                                   |
+| `"open"`      | Tüm kullanıcılara izin ver (allowFrom içinde `"*"` gerektirir)            |
+| `"disabled"`  | DM’leri devre dışı bırak                                                                     |
 
 ---
 
 ## Desteklenen mesaj türleri
 
-### Alma
+### Receive
 
 - ✅ Metin
 - ✅ Zengin metin (post)

@@ -4,13 +4,6 @@ read_when:
   - Signal desteğini kurma
   - Signal gönderme/alma hata ayıklama
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:09Z
 ---
 
 # Signal (signal-cli)
@@ -51,7 +44,7 @@ Minimal yapılandırma:
 
 Varsayılan olarak Signal, `/config set|unset` tarafından tetiklenen yapılandırma güncellemelerini yazmaya izinlidir (`commands.config: true` gerektirir).
 
-Devre dışı bırakmak için:
+Şununla devre dışı bırakın:
 
 ```json5
 {

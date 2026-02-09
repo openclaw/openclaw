@@ -4,21 +4,14 @@ read_when:
   - Tìm trạng thái ứng dụng đồng hành trên Linux
   - Lập kế hoạch phạm vi nền tảng hoặc đóng góp
 title: "Ứng dụng Linux"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:34Z
 ---
 
 # Ứng dụng Linux
 
-Gateway được hỗ trợ đầy đủ trên Linux. **Node là runtime được khuyến nghị**.
-Không khuyến nghị dùng Bun cho Gateway (lỗi WhatsApp/Telegram).
+The Gateway is fully supported on Linux. **Node là runtime được khuyến nghị**.
+Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
-Các ứng dụng đồng hành Linux gốc đang được lên kế hoạch. Hoan nghênh đóng góp nếu bạn muốn giúp xây dựng.
+Native Linux companion apps are planned. Contributions are welcome if you want to help build one.
 
 ## Lộ trình nhanh cho người mới (VPS)
 
@@ -71,9 +64,9 @@ openclaw doctor
 
 ## Điều khiển hệ thống (systemd user unit)
 
-OpenClaw mặc định cài đặt một dịch vụ systemd **user**. Dùng dịch vụ **system**
-cho máy chủ dùng chung hoặc luôn bật. Ví dụ unit đầy đủ và hướng dẫn
-có trong [runbook Gateway](/gateway).
+OpenClaw installs a systemd **user** service by default. Use a **system**
+service for shared or always-on servers. The full unit example and guidance
+live in the [Gateway runbook](/gateway).
 
 Thiết lập tối thiểu:
 

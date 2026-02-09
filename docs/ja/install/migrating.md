@@ -4,13 +4,6 @@ read_when:
   - OpenClaw を新しいノートパソコン／サーバーに移行する場合
   - セッション、認証、チャンネルログイン（WhatsApp など）を保持したい場合
 title: "移行ガイド"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:24Z
 ---
 
 # OpenClaw を新しいマシンへ移行する
@@ -26,7 +19,7 @@ x-i18n:
 
 ## 開始前に（何を移行するのか）
 
-### 1) 状態ディレクトリを特定する
+### 1. 状態ディレクトリを特定する
 
 多くのインストールでは既定値が使われます。
 
@@ -43,9 +36,9 @@ x-i18n:
 openclaw status
 ```
 
-出力内の `OPENCLAW_STATE_DIR` / プロファイルへの言及を確認します。複数のゲートウェイを実行している場合は、各プロファイルについて繰り返してください。
+出力内の `OPENCLAW_STATE_DIR` / プロファイルへの言及を確認します。複数のゲートウェイを実行している場合は、各プロファイルについて繰り返してください。 複数のゲートウェイを実行する場合は、プロファイルごとに繰り返します。
 
-### 2) ワークスペースを特定する
+### 2. ワークスペースを特定する
 
 一般的な既定値は次のとおりです。
 
@@ -54,7 +47,7 @@ openclaw status
 
 ワークスペースには、`MEMORY.md`、`USER.md`、`memory/*.md` などのファイルがあります。
 
-### 3) 保持される内容を理解する
+### 3. 保持される内容を理解する
 
 **状態ディレクトリ**と**ワークスペース**の**両方**をコピーした場合、次が保持されます。
 
@@ -111,7 +104,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 
 一般的な方法は次のとおりです。
 
-- `scp` で tarball を転送して展開
+- `scp` the tarball and extract
 - `rsync -a` を使用して SSH 経由で転送
 - 外付けドライブ
 
@@ -128,7 +121,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 openclaw doctor
 ```
 
-Doctor は「安全で堅実」なコマンドです。サービスを修復し、設定の移行を適用し、不一致について警告します。
+医師は「安全な退屈」コマンドです。 それはサービスを修復し、設定の移行を適用し、不一致について警告します。
 
 その後、次を実行します。
 
@@ -137,7 +130,7 @@ openclaw gateway restart
 openclaw status
 ```
 
-## よくある落とし穴（と回避方法）
+## 一般的なフットガン（および回避方法）
 
 ### 落とし穴: プロファイル／状態ディレクトリの不一致
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### 落とし穴: `openclaw.json` だけをコピーしている
 
-`openclaw.json` だけでは不十分です。多くのプロバイダーは次の配下に状態を保存します。
+`openclaw.json` だけでは不十分です。多くのプロバイダーは次の配下に状態を保存します。 多くのプロバイダーは以下の条件でストアします:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -177,7 +170,7 @@ root でコピーした、またはユーザーを変更した場合、ゲート
 
 ### 落とし穴: バックアップ内のシークレット
 
-`$OPENCLAW_STATE_DIR` にはシークレット（API キー、OAuth トークン、WhatsApp の認証情報）が含まれます。バックアップは本番シークレットと同様に扱ってください。
+`$OPENCLAW_STATE_DIR` にはシークレット（API キー、OAuth トークン、WhatsApp の認証情報）が含まれます。バックアップは本番シークレットと同様に扱ってください。 バックアップを本番用の秘密情報のように扱う:
 
 - 暗号化して保管する
 - 安全でないチャンネルで共有しない

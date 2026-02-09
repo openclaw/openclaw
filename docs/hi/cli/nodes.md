@@ -4,13 +4,6 @@ read_when:
   - आप जोड़े गए नोड्स (कैमरे, स्क्रीन, कैनवास) का प्रबंधन कर रहे हों
   - आपको अनुरोधों को अनुमोदित करना हो या नोड कमांड्स को आह्वान करना हो
 title: "नोड्स"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:04Z
 ---
 
 # `openclaw nodes`
@@ -40,9 +33,9 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` लंबित/जोड़े गए तालिकाएँ प्रिंट करता है। जोड़े गए पंक्तियों में सबसे हालिया कनेक्ट आयु (Last Connect) शामिल होती है।
-केवल वर्तमान में कनेक्टेड नोड्स दिखाने के लिए `--connected` का उपयोग करें। `--last-connected <duration>` का उपयोग करके
-किसी अवधि के भीतर कनेक्ट हुए नोड्स तक फ़िल्टर करें (उदा. `24h`, `7d`)।
+`nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
+Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
+filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 
 ## Invoke / run
 

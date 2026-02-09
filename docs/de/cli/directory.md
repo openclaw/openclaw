@@ -4,13 +4,6 @@ read_when:
   - Sie möchten Kontakt-/Gruppen-/Selbst-IDs für einen Kanal nachschlagen
   - Sie entwickeln einen Kanal-Verzeichnisadapter
 title: "directory"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:33Z
 ---
 
 # `openclaw directory`

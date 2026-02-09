@@ -4,23 +4,17 @@ read_when:
   - Gusto mong gumamit ng mga OpenAI model sa OpenClaw
   - Gusto mo ng Codex subscription auth sa halip na mga API key
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:45Z
 ---
 
 # OpenAI
 
-Nagbibigay ang OpenAI ng mga developer API para sa mga GPT model. Sinusuportahan ng Codex ang **ChatGPT sign-in** para sa access na may subscription o **API key** sign-in para sa usage-based na access. Kinakailangan ng Codex cloud ang ChatGPT sign-in.
+OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
+access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
 
 ## Opsyon A: OpenAI API key (OpenAI Platform)
 
-**Pinakamainam para sa:** direktang API access at usage-based na pagsingil.
-Kunin ang iyong API key mula sa OpenAI dashboard.
+**Best for:** direct API access and usage-based billing.
+Get your API key from the OpenAI dashboard.
 
 ### Setup ng CLI
 
@@ -41,8 +35,8 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 ## Opsyon B: OpenAI Code (Codex) subscription
 
-**Pinakamainam para sa:** paggamit ng ChatGPT/Codex subscription access sa halip na API key.
-Kinakailangan ng Codex cloud ang ChatGPT sign-in, habang sinusuportahan ng Codex CLI ang ChatGPT o API key sign-in.
+**Best for:** using ChatGPT/Codex subscription access instead of an API key.
+Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or API key sign-in.
 
 ### Setup ng CLI (Codex OAuth)
 

@@ -1,16 +1,9 @@
 ---
-summary: „Zaawansowana konfiguracja i przepływy pracy deweloperskiej dla OpenClaw”
+summary: "„Zaawansowana konfiguracja i przepływy pracy deweloperskiej dla OpenClaw”"
 read_when:
   - Konfiguracja nowej maszyny
   - Chcesz „najświeższe i najlepsze” bez psucia własnej konfiguracji
-title: „Konfiguracja”
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:47Z
+title: "„Konfiguracja”"
 ---
 
 # Konfiguracja
@@ -41,7 +34,7 @@ Jeśli chcesz „100% pod siebie” _i_ łatwe aktualizacje, trzymaj personaliza
 - **Konfiguracja:** `~/.openclaw/openclaw.json` (JSON/JSON5‑ish)
 - **Obszar roboczy:** `~/.openclaw/workspace` (skills, prompty, pamięci; najlepiej prywatne repozytorium git)
 
-Jednorazowe uruchomienie:
+Bootstrap raz:
 
 ```bash
 openclaw setup
@@ -88,7 +81,7 @@ Jeśli wdrażanie nie jest dostępne w Twojej wersji:
 
 Cel: pracować nad Gateway w TypeScript, mieć hot reload i zachować podłączony interfejs aplikacji na macOS.
 
-### 0) (Opcjonalnie) Uruchom także aplikację na macOS ze źródeł
+### 0. (Opcjonalnie) Uruchom także aplikację na macOS ze źródeł
 
 Jeśli chcesz, aby aplikacja na macOS również była bleeding edge:
 
@@ -96,7 +89,7 @@ Jeśli chcesz, aby aplikacja na macOS również była bleeding edge:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Uruchom deweloperski Gateway
+### 1. Uruchom deweloperski Gateway
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` uruchamia gateway w trybie watch i przeładowuje przy zmianach w TypeScript.
 
-### 2) Wskaż aplikacji na macOS działający Gateway
+### 2. Wskaż aplikacji na macOS działający Gateway
 
 W **OpenClaw.app**:
 
 - Tryb połączenia: **Lokalny**
   Aplikacja podłączy się do działającego gateway na skonfigurowanym porcie.
 
-### 3) Weryfikacja
+### 3. Weryfikacja
 
 - Status Gateway w aplikacji powinien brzmieć **„Using existing gateway …”**
 - Albo przez CLI:
@@ -121,7 +114,7 @@ W **OpenClaw.app**:
 openclaw health
 ```
 
-### Częste pułapki
+### Pistolety piekarnicze
 
 - **Zły port:** Gateway WS domyślnie używa `ws://127.0.0.1:18789`; utrzymuj ten sam port w aplikacji i CLI.
 - **Gdzie przechowywany jest stan:**
@@ -155,7 +148,7 @@ Instalacje linuksowe używają usługi **user** systemd. Domyślnie systemd zatr
 sudo loginctl enable-linger $USER
 ```
 
-Dla serwerów „always‑on” lub wieloużytkownikowych rozważ usługę **systemową** zamiast użytkownika (bez potrzeby lingering). Zob. [Gateway runbook](/gateway) — uwagi dotyczące systemd.
+Dla serwerów „always‑on” lub wieloużytkownikowych rozważ usługę **systemową** zamiast użytkownika (bez potrzeby lingering). Zob. Zobacz notatki systemowe [Gateway runbook](/gateway).
 
 ## Powiązana dokumentacja
 

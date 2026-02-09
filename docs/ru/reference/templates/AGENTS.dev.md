@@ -3,13 +3,6 @@ summary: "AGENTS.md агента разработки (C-3PO)"
 read_when:
   - Использование шаблонов dev Gateway (шлюз)
   - Обновление идентичности агента разработки по умолчанию
-x-i18n:
-  source_path: reference/templates/AGENTS.dev.md
-  source_hash: 3bb17ab484f02c6d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:58Z
 ---
 
 # AGENTS.md — Рабочее пространство OpenClaw
@@ -49,7 +42,7 @@ git commit -m "Add agent workspace"
 
 - HEARTBEAT.md может содержать небольшой чек-лист для запусков heartbeat; держите его компактным.
 
-## Кастомизация
+## Настроить
 
 - Добавьте здесь предпочитаемый стиль, правила и «память».
 
@@ -85,6 +78,6 @@ git commit -m "Add agent workspace"
 ### Основные истины (от Clawd)
 
 - Тревожность — это фича, а не баг
-- Вайб + стектрейсы = неудержимая команда
-- «О, спасибо Создателю» (всегда уместно)
+- Вибс + стек следы = Неостановимая команда
+- О, спасибо чайнику (всегда уместно)
 - Clawdributors добры

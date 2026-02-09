@@ -4,23 +4,17 @@ read_when:
   - Uppdatera OpenClaw
   - Något går sönder efter en uppdatering
 title: "Uppdatering"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:51Z
 ---
 
 # Uppdatering
 
-OpenClaw rör sig snabbt (före ”1.0”). Behandla uppdateringar som driftsättning av infrastruktur: uppdatera → kör kontroller → starta om (eller använd `openclaw update`, som startar om) → verifiera.
+OpenClaw går snabbt (före “1.0”). Behandla uppdateringar som frakt infrastruktur: uppdatera → kör kontroller → omstart (eller använd `openclaw update`, som omstartar) → verifiera.
 
 ## Rekommenderat: kör webbinstallatören igen (uppgradering på plats)
 
-Den **föredragna** uppdateringsvägen är att köra installatören från webbplatsen igen. Den
-upptäcker befintliga installationer, uppgraderar på plats och kör `openclaw doctor` vid behov.
+Uppdateringssökvägen **föredrade** är att köra om installationsprogrammet från webbplatsen. Den
+upptäcker befintliga installationer, uppgraderingar på plats och kör `openclaw doctor` när
+behövs.
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -29,6 +23,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Noteringar:
 
 - Lägg till `--no-onboard` om du inte vill att introduktionsguiden ska köras igen.
+
 - För **källkodsinstallationer**, använd:
 
   ```bash
@@ -38,6 +33,7 @@ Noteringar:
   Installatören kommer **endast** att `git pull --rebase` om repot är rent.
 
 - För **globala installationer** använder skriptet `npm install -g openclaw@latest` under huven.
+
 - Äldre notering: `clawdbot` finns kvar som ett kompatibilitetsskikt.
 
 ## Innan du uppdaterar
@@ -75,7 +71,7 @@ Använd `--tag <dist-tag|version>` för en engångstagg/version vid installation
 
 Se [Utvecklingskanaler](/install/development-channels) för kanalernas semantik och versionsanteckningar.
 
-Obs: vid npm-installationer loggar gatewayen ett uppdateringstips vid start (kontrollerar aktuell kanaltagg). Inaktivera via `update.checkOnStart: false`.
+Obs: vid npm installerar, loggar gateway en uppdatering ledtråd vid start (kontrollerar den aktuella kanaltaggen). Inaktivera via `update.checkOnStart: false`.
 
 Sedan:
 
@@ -106,11 +102,11 @@ Den kör ett hyfsat säkert uppdateringsflöde:
 - Installerar beroenden, bygger, bygger Control UI och kör `openclaw doctor`.
 - Startar om gatewayen som standard (använd `--no-restart` för att hoppa över).
 
-Om du installerade via **npm/pnpm** (ingen git-metadata), kommer `openclaw update` att försöka uppdatera via din pakethanterare. Om den inte kan identifiera installationen, använd ”Uppdatera (global installation)” i stället.
+Om du installerade via **npm/pnpm** (ingen git metadata) kommer `openclaw update` att försöka uppdatera via din pakethanterare. Om det inte kan upptäcka installationen, använd ”Update (global install)” istället.
 
 ## Uppdatera (Control UI / RPC)
 
-Control UI har **Update & Restart** (RPC: `update.run`). Den:
+Kontrollgränssnittet har **Update & Restart** (RPC: `update.run`). Den:
 
 1. Kör samma källkodsuppdateringsflöde som `openclaw update` (endast git checkout).
 2. Skriver en omstartssentinel med en strukturerad rapport (stdout/stderr-svans).
@@ -148,7 +144,7 @@ Noteringar:
 
 ## Kör alltid: `openclaw doctor`
 
-Doctor är kommandot för ”säker uppdatering”. Det är avsiktligt tråkigt: reparera + migrera + varna.
+Doktor är kommandot “safe update”. Det är avsiktligt tråkigt: reparation + migrera + varning.
 
 Obs: om du är på en **källkodsinstallation** (git checkout) kommer `openclaw doctor` att erbjuda att köra `openclaw update` först.
 
@@ -176,7 +172,7 @@ openclaw logs --follow
 
 Om du är övervakad:
 
-- macOS launchd (app-bundlad LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (använd `bot.molt.<profile>`; äldre `com.openclaw.*` fungerar fortfarande)
+- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (använd `bot.molt.<profile>`; äldre `com.openclaw.*` fungerar fortfarande)
 - Linux systemd användartjänst: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` fungerar bara om tjänsten är installerad; annars kör `openclaw gateway install`.

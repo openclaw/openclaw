@@ -5,13 +5,6 @@ read_when:
   - 你需要針對特定提供者的非互動式範例
 title: "CLI 自動化"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:20Z
 ---
 
 # CLI 自動化
@@ -19,7 +12,9 @@ x-i18n:
 使用 `--non-interactive` 來自動化 `openclaw onboard`。
 
 <Note>
+
 `--json` 不代表非互動模式。請在腳本中使用 `--non-interactive`（以及 `--workspace`）。
+ Use `--non-interactive` (and `--workspace`) for scripts.
 </Note>
 
 ## 基本的非互動式範例
@@ -41,7 +36,7 @@ openclaw onboard --non-interactive \
 ## 提供者專屬範例
 
 <AccordionGroup>
-  <Accordion title="Gemini 範例">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +46,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI 範例">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +56,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway 範例">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +66,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway 範例">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +78,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot 範例">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +88,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic 範例">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +98,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen 範例">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,7 +112,8 @@ openclaw onboard --non-interactive \
 
 ## 新增另一個代理程式
 
-使用 `openclaw agents add <name>` 建立具有獨立工作區、工作階段與身分驗證設定檔的代理程式。未使用 `--workspace` 執行時，將啟動精靈。
+Use `openclaw agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 ```bash
 openclaw agents add work \
@@ -137,10 +133,10 @@ openclaw agents add work \
 注意事項：
 
 - 預設工作區遵循 `~/.openclaw/workspace-<agentId>`。
-- 加入 `bindings` 以路由傳入訊息（精靈可完成此設定）。
+- 39. 新增 `bindings` 以路由傳入訊息（精靈也可完成此操作）。
 - 非互動式旗標：`--model`、`--agent-dir`、`--bind`、`--non-interactive`。
 
-## 相關文件
+## Related docs
 
 - 入門引導中心：[Onboarding Wizard (CLI)](/start/wizard)
 - 完整參考：[CLI Onboarding Reference](/start/wizard-cli-reference)

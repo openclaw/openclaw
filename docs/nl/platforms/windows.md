@@ -4,21 +4,13 @@ read_when:
   - OpenClaw installeren op Windows
   - Zoeken naar de status van de Windows companion-app
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:36Z
 ---
 
 # Windows (WSL2)
 
 OpenClaw op Windows wordt aanbevolen **via WSL2** (Ubuntu aanbevolen). De
 CLI + Gateway draaien binnen Linux, wat de runtime consistent houdt en de
-compatibiliteit van tooling aanzienlijk vergroot (Node/Bun/pnpm, Linux-binaries, Skills).
-Native Windows kan lastiger zijn. WSL2 geeft je de volledige Linux-ervaring — één opdracht
+compatibiliteit van tooling aanzienlijk vergroot (Node/Bun/pnpm, Linux-binaries, Skills). Native Windows kan lastiger zijn. WSL2 geeft je de volledige Linux-ervaring — één opdracht
 om te installeren: `wsl --install`.
 
 Native Windows companion-apps staan gepland.
@@ -109,7 +101,7 @@ Notities:
 
 ## Stap-voor-stap WSL2-installatie
 
-### 1) Installeer WSL2 + Ubuntu
+### 1. Installeer WSL2 + Ubuntu
 
 Open PowerShell (Admin):
 
@@ -122,7 +114,7 @@ wsl --install -d Ubuntu-24.04
 
 Herstart als Windows daarom vraagt.
 
-### 2) systemd inschakelen (vereist voor Gateway-installatie)
+### 2. systemd inschakelen (vereist voor Gateway-installatie)
 
 In je WSL-terminal:
 
@@ -145,7 +137,7 @@ Open Ubuntu opnieuw en controleer vervolgens:
 systemctl --user status
 ```
 
-### 3) OpenClaw installeren (binnen WSL)
+### 3. OpenClaw installeren (binnen WSL)
 
 Volg de Linux-flow **Aan de slag** binnen WSL:
 

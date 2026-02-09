@@ -1,16 +1,9 @@
 ---
-summary: "Legacy na suporta sa iMessage sa pamamagitan ng imsg (JSON-RPC sa stdio). Ang mga bagong setup ay dapat gumamit ng BlueBubbles."
+summary: "46. Legacy na suporta sa iMessage sa pamamagitan ng imsg (JSON-RPC sa stdio). 47. Ang mga bagong setup ay dapat gumamit ng BlueBubbles."
 read_when:
   - Pagse-setup ng suporta sa iMessage
   - Pag-debug ng pagpapadala/pagtanggap ng iMessage
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:40Z
 ---
 
 # iMessage (legacy: imsg)
@@ -19,7 +12,7 @@ x-i18n:
 >
 > Ang channel na `imsg` ay isang legacy na external-CLI integration at maaaring alisin sa mga susunod na release.
 
-Status: legacy external CLI integration. Nag-i-spawn ang Gateway ng `imsg rpc` (JSON-RPC sa stdio).
+48. Status: legacy external CLI integration. 49. Ang gateway ay nag-i-spawn ng `imsg rpc` (JSON-RPC sa stdio).
 
 ## Quick setup (beginner)
 
@@ -73,15 +66,15 @@ I-disable gamit ang:
 
 Kung pumalya ang pagpapadala/pagtanggap (halimbawa, nag-e-exit ang `imsg rpc` na may non-zero, nagti-time out, o tila nagha-hang ang gateway), karaniwang sanhi nito ang macOS permission prompt na hindi naaprubahan.
 
-Nagbibigay ang macOS ng TCC permissions per app/process context. Aprubahan ang mga prompt sa parehong context na nagpapatakbo ng `imsg` (halimbawa, Terminal/iTerm, isang LaunchAgent session, o prosesong inilunsad sa SSH).
+50. Ang macOS ay nagbibigay ng TCC permissions per app/process context. Approve prompts in the same context that runs `imsg` (for example, Terminal/iTerm, a LaunchAgent session, or an SSH-launched process).
 
 Checklist:
 
-- **Full Disk Access**: payagan ang access para sa prosesong nagpapatakbo ng OpenClaw (at anumang shell/SSH wrapper na nag-e-execute ng `imsg`). Kinakailangan ito para mabasa ang Messages database (`chat.db`).
+- **Full Disk Access**: allow access for the process running OpenClaw (and any shell/SSH wrapper that executes `imsg`). Ito ay kinakailangan upang mabasa ang Messages database (`chat.db`).
 - **Automation → Messages**: payagan ang prosesong nagpapatakbo ng OpenClaw (at/o ang iyong terminal) na kontrolin ang **Messages.app** para sa outbound na pagpapadala.
 - **`imsg` CLI health**: tiyaking naka-install ang `imsg` at sumusuporta sa RPC (`imsg rpc --help`).
 
-Tip: Kung tumatakbo ang OpenClaw nang headless (LaunchAgent/systemd/SSH), madaling makaligtaan ang macOS prompt. Magpatakbo ng isang beses na interactive command sa isang GUI terminal para pilitin ang prompt, pagkatapos ay subukan muli:
+Tip: Kung ang OpenClaw ay tumatakbo nang headless (LaunchAgent/systemd/SSH), maaaring madaling makaligtaan ang macOS prompt. Run a one-time interactive command in a GUI terminal to force the prompt, then retry:
 
 ```bash
 imsg chats --limit 1
@@ -110,9 +103,9 @@ Kung gusto mong magpadala ang bot mula sa **hiwalay na iMessage identity** (at m
 6. I-set up ang SSH para gumana ang `ssh <bot-macos-user>@localhost true` nang walang password.
 7. Ituro ang `channels.imessage.accounts.bot.cliPath` sa isang SSH wrapper na nagpapatakbo ng `imsg` bilang bot user.
 
-Unang takbo na tala: maaaring mangailangan ang pagpapadala/pagtanggap ng mga GUI approval (Automation + Full Disk Access) sa _bot macOS user_. Kung mukhang naka-stuck o nag-e-exit ang `imsg rpc`, mag-log in sa user na iyon (nakakatulong ang Screen Sharing), magpatakbo ng isang beses na `imsg chats --limit 1` / `imsg send ...`, aprubahan ang mga prompt, pagkatapos ay subukan muli. Tingnan ang [Pag-troubleshoot sa macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
+First-run note: sending/receiving may require GUI approvals (Automation + Full Disk Access) in the _bot macOS user_. Kung mukhang naka-stuck o biglang nag-e-exit ang `imsg rpc`, mag-log in sa user na iyon (nakakatulong ang Screen Sharing), magpatakbo ng one-time `imsg chats --limit 1` / `imsg send ...`, aprubahan ang mga prompt, saka subukang muli. See [Troubleshooting macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
 
-Halimbawang wrapper (`chmod +x`). Palitan ang `<bot-macos-user>` ng iyong aktwal na macOS username:
+Example wrapper (`chmod +x`). Replace `<bot-macos-user>` with your actual macOS username:
 
 ```bash
 #!/usr/bin/env bash
@@ -148,7 +141,7 @@ Para sa mga single-account setup, gumamit ng flat options (`channels.imessage.cl
 
 ### Remote/SSH variant (opsyonal)
 
-Kung gusto mo ng iMessage sa ibang Mac, itakda ang `channels.imessage.cliPath` sa isang wrapper na nagpapatakbo ng `imsg` sa remote macOS host sa pamamagitan ng SSH. Kailangan lang ng OpenClaw ang stdio.
+If you want iMessage on another Mac, set `channels.imessage.cliPath` to a wrapper that runs `imsg` on the remote macOS host over SSH. Kailangan lang ng OpenClaw ang stdio.
 
 Halimbawang wrapper:
 
@@ -157,7 +150,7 @@ Halimbawang wrapper:
 exec ssh -T gateway-host imsg "$@"
 ```
 
-**Remote attachments:** Kapag ang `cliPath` ay nakaturo sa remote host sa pamamagitan ng SSH, ang mga attachment path sa Messages database ay tumutukoy sa mga file sa remote machine. Kayang awtomatikong kunin ng OpenClaw ang mga ito sa SCP sa pamamagitan ng pag-set ng `channels.imessage.remoteHost`:
+**Remote attachments:** When `cliPath` points to a remote host via SSH, attachment paths in the Messages database reference files on the remote machine. OpenClaw can automatically fetch these over SCP by setting `channels.imessage.remoteHost`:
 
 ```json5
 {
@@ -171,7 +164,7 @@ exec ssh -T gateway-host imsg "$@"
 }
 ```
 
-Kung hindi naka-set ang `remoteHost`, susubukan ng OpenClaw na awtomatikong tukuyin ito sa pamamagitan ng pag-parse ng SSH command sa iyong wrapper script. Inirerekomenda ang explicit na config para sa pagiging maaasahan.
+If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH command in your wrapper script. Explicit configuration is recommended for reliability.
 
 #### Remote Mac sa pamamagitan ng Tailscale (halimbawa)
 
@@ -220,7 +213,7 @@ Mga tala:
 - Gumamit ng SSH keys para gumana ang `ssh bot@mac-mini.tailnet-1234.ts.net` nang walang mga prompt.
 - Dapat tumugma ang `remoteHost` sa SSH target para makuha ng SCP ang mga attachment.
 
-Suporta sa maraming account: gamitin ang `channels.imessage.accounts` na may per-account na config at opsyonal na `name`. Tingnan ang [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) para sa shared pattern. Huwag i-commit ang `~/.openclaw/openclaw.json` (madalas itong naglalaman ng mga token).
+Multi-account support: gamitin ang `channels.imessage.accounts` na may per-account config at opsyonal na `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don't commit `~/.openclaw/openclaw.json` (it often contains tokens).
 
 ## Kontrol sa access (DMs + groups)
 
@@ -231,7 +224,7 @@ DMs:
 - Aprubahan sa pamamagitan ng:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- Ang pairing ang default na token exchange para sa iMessage DMs. Mga detalye: [Pairing](/channels/pairing)
+- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/channels/pairing)
 
 Groups:
 
@@ -270,7 +263,7 @@ Halimbawa:
 }
 ```
 
-Kapaki-pakinabang ito kapag gusto mo ng hiwalay na personalidad/model para sa isang partikular na thread (tingnan ang [Multi-agent routing](/concepts/multi-agent)). Para sa filesystem isolation, tingnan ang [Sandboxing](/gateway/sandboxing).
+This is useful when you want an isolated personality/model for a specific thread (see [Multi-agent routing](/concepts/multi-agent)). For filesystem isolation, see [Sandboxing](/gateway/sandboxing).
 
 ## Media + limits
 
@@ -307,15 +300,15 @@ Mga opsyon ng provider:
 - `channels.imessage.enabled`: i-enable/i-disable ang startup ng channel.
 - `channels.imessage.cliPath`: path papunta sa `imsg`.
 - `channels.imessage.dbPath`: path ng Messages DB.
-- `channels.imessage.remoteHost`: SSH host para sa SCP attachment transfer kapag ang `cliPath` ay nakaturo sa remote Mac (hal., `user@gateway-host`). Auto-detected mula sa SSH wrapper kung hindi naka-set.
+- `channels.imessage.remoteHost`: SSH host for SCP attachment transfer when `cliPath` points to a remote Mac (e.g., `user@gateway-host`). Auto-detected from SSH wrapper if not set.
 - `channels.imessage.service`: `imessage | sms | auto`.
 - `channels.imessage.region`: SMS region.
 - `channels.imessage.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.imessage.allowFrom`: DM allowlist (mga handle, email, E.164 na numero, o `chat_id:*`). Nangangailangan ang `open` ng `"*"`. Walang username ang iMessage; gumamit ng mga handle o chat target.
+- `channels.imessage.allowFrom`: DM allowlist (handles, emails, E.164 numbers, or `chat_id:*`). `open` requires `"*"`. iMessage has no usernames; use handles or chat targets.
 - `channels.imessage.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.imessage.groupAllowFrom`: group sender allowlist.
 - `channels.imessage.historyLimit` / `channels.imessage.accounts.*.historyLimit`: max na mga group message na isasama bilang context (0 ay nagdi-disable).
-- `channels.imessage.dmHistoryLimit`: DM history limit sa user turns. Per-user overrides: `channels.imessage.dms["<handle>"].historyLimit`.
+- `channels.imessage.dmHistoryLimit`: limit ng DM history sa bilang ng user turns. Per-user overrides: `channels.imessage.dms["<handle>"].historyLimit`.
 - `channels.imessage.groups`: per-group defaults + allowlist (gamitin ang `"*"` para sa global defaults).
 - `channels.imessage.includeAttachments`: i-ingest ang mga attachment sa context.
 - `channels.imessage.mediaMaxMb`: inbound/outbound media cap (MB).

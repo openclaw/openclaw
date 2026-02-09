@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: OpenClaw implementeren op Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:43Z
 ---
 
 # Fly.io-implementatie
@@ -44,7 +37,7 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **Tip:** Kies een regio dicht bij jou. Veelgebruikte opties: `lhr` (Londen), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) fly.toml configureren
+## 2. fly.toml configureren
 
 Bewerk `fly.toml` zodat deze overeenkomt met je app-naam en vereisten.
 
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Belangrijke instellingen:**
 
-| Instelling                     | Waarom                                                                                 |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| `--bind lan`                   | Bindt aan `0.0.0.0` zodat de proxy van Fly de Gateway kan bereiken                     |
+| Instelling                     | Waarom                                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Bindt aan `0.0.0.0` zodat de proxy van Fly de Gateway kan bereiken                                        |
 | `--allow-unconfigured`         | Start zonder configbestand (je maakt er later een)                                     |
 | `internal_port = 3000`         | Moet overeenkomen met `--port 3000` (of `OPENCLAW_GATEWAY_PORT`) voor Fly-healthchecks |
-| `memory = "2048mb"`            | 512MB is te klein; 2GB aanbevolen                                                      |
-| `OPENCLAW_STATE_DIR = "/data"` | Houdt status persistent op het volume                                                  |
+| `memory = "2048mb"`            | 512MB is te klein; 2GB aanbevolen                                                                         |
+| `OPENCLAW_STATE_DIR = "/data"` | Houdt status persistent op het volume                                                                     |
 
-## 3) Secrets instellen
+## 3. Secrets instellen
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -116,7 +109,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 - Behandel deze tokens als wachtwoorden.
 - **Geef de voorkeur aan omgevingsvariabelen boven het configbestand** voor alle API-sleutels en tokens. Zo blijven secrets uit `openclaw.json`, waar ze per ongeluk blootgesteld of gelogd kunnen worden.
 
-## 4) Deployen
+## 4. Deployen
 
 ```bash
 fly deploy
@@ -138,7 +131,7 @@ Je zou moeten zien:
 [discord] logged in to discord as xxx
 ```
 
-## 5) Configbestand maken
+## 5. Configbestand maken
 
 Log via SSH in op de machine om een juiste config te maken:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Toegang tot de Gateway
+## 6. Toegang tot de Gateway
 
 ### Control UI
 
@@ -322,7 +315,7 @@ fly sftp shell
 fly ssh console --command "rm /data/openclaw.json"
 ```
 
-### Status wordt niet persistent opgeslagen
+### Staat niet Persisterend
 
 Als je na een herstart referenties of sessies verliest, schrijft de statusmap naar het containerbestandssysteem.
 
@@ -470,7 +463,7 @@ De ngrok-tunnel draait in de container en levert een publieke webhook-URL zonder
 
 | Aspect             | Publiek  | Privé       |
 | ------------------ | -------- | ----------- |
-| Internetscanners   | Vindbaar | Verborgen   |
+| Internetscanners   | Vindbaar | Hidden      |
 | Directe aanvallen  | Mogelijk | Geblokkeerd |
 | Control UI-toegang | Browser  | Proxy/VPN   |
 | Webhook-bezorging  | Direct   | Via tunnel  |

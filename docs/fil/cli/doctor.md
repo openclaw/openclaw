@@ -4,13 +4,6 @@ read_when:
   - Mayroon kang mga isyu sa connectivity/auth at gusto mo ng ginabayang mga ayos
   - Nag-update ka at gusto mo ng sanity check
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:20Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 Mga tala:
 
-- Ang mga interactive prompt (gaya ng keychain/OAuth fixes) ay tumatakbo lamang kapag ang stdin ay isang TTY at **hindi** naka-set ang `--non-interactive`. Ang mga headless run (cron, Telegram, walang terminal) ay lalaktawan ang mga prompt.
+- 12. Ang mga interactive prompt (tulad ng keychain/OAuth fixes) ay tatakbo lamang kapag ang stdin ay isang TTY at **hindi** nakatakda ang `--non-interactive`. 13. Ang mga headless run (cron, Telegram, walang terminal) ay lalaktawan ang mga prompt.
 - Ang `--fix` (alias para sa `--repair`) ay nagsusulat ng backup sa `~/.openclaw/openclaw.json.bak` at inaalis ang mga hindi kilalang config key, na inililista ang bawat tinanggal.
 
 ## macOS: `launchctl` env overrides

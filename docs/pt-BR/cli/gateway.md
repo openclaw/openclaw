@@ -5,13 +5,6 @@ read_when:
   - Depurando autenticação do Gateway, modos de bind e conectividade
   - Descobrindo gateways via Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:27Z
 ---
 
 # Gateway CLI

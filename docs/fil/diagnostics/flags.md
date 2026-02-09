@@ -4,18 +4,11 @@ read_when:
   - Kailangan mo ng target na debug logs nang hindi itinataas ang global logging levels
   - Kailangan mong kumuha ng mga log na partikular sa subsystem para sa support
 title: "Mga Diagnostics Flag"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Mga Diagnostics Flag
 
-Pinapahintulutan ka ng diagnostics flags na i-enable ang target na debug logs nang hindi binubuksan ang verbose logging sa lahat ng lugar. Opt-in ang mga flag at walang epekto maliban kung sinusuri sila ng isang subsystem.
+Ang mga flag ay opt-in at walang epekto maliban kung sinusuri sila ng isang subsystem. Naglalabas ang mga flag ng mga log sa standard diagnostics log file.
 
 ## Paano ito gumagana
 
@@ -61,13 +54,13 @@ OPENCLAW_DIAGNOSTICS=0
 
 ## Saan napupunta ang mga log
 
-Naglalabas ang mga flag ng mga log sa standard diagnostics log file. Bilang default:
+Bilang default: By default:
 
 ```
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
-Kung itatakda mo ang `logging.file`, gamitin ang path na iyon sa halip. Ang mga log ay JSONL (isang JSON object bawat linya). Patuloy na nalalapat ang redaction batay sa `logging.redactSensitive`.
+If you set `logging.file`, use that path instead. Logs are JSONL (one JSON object per line). Redaction still applies based on `logging.redactSensitive`.
 
 ## Kunin ang mga log
 
@@ -93,6 +86,6 @@ Para sa mga remote gateway, maaari mo ring gamitin ang `openclaw logs --follow` 
 
 ## Mga tala
 
-- Kung ang `logging.level` ay mas mataas kaysa `warn`, maaaring ma-suppress ang mga log na ito. Ayos na ang default na `info`.
+- If `logging.level` is set higher than `warn`, these logs may be suppressed. Default `info` is fine.
 - Ligtas na iwanang naka-enable ang mga flag; naaapektuhan lang nila ang dami ng log para sa partikular na subsystem.
 - Gamitin ang [/logging](/logging) para baguhin ang mga destinasyon ng log, mga level, at redaction.

@@ -2,16 +2,9 @@
 summary: "Onderzoeksnotities: offline geheugensysteem voor Clawd-werkruimtes (Markdown als bron van waarheid + afgeleide index)"
 read_when:
   - Ontwerpen van werkruimtegeheugen (~/.openclaw/workspace) voorbij dagelijkse Markdown-logs
-  - Beslissen: zelfstandige CLI vs diepe OpenClaw-integratie
+  - Deciding: "Beslissen: zelfstandige CLI vs diepe OpenClaw-integratie"
   - Offline terughalen + reflectie toevoegen (retain/recall/reflect)
 title: "Werkruimtegeheugenonderzoek"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:38Z
 ---
 
 # Werkruimtegeheugen v2 (offline): onderzoeksnotities
@@ -99,7 +92,7 @@ Voeg een afgeleide index toe onder de werkruimte (niet noodzakelijk door git gev
 ~/.openclaw/workspace/.memory/index.sqlite
 ```
 
-Onderbouw dit met:
+Terug met:
 
 - SQLite-schema voor feiten + entiteitskoppelingen + opiniemetadata
 - SQLite **FTS5** voor lexicale recall (snel, klein, offline)

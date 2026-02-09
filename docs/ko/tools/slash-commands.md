@@ -4,13 +4,6 @@ read_when:
   - 채팅 명령어 사용 또는 구성 시
   - 명령어 라우팅 또는 권한 디버깅 시
 title: "슬래시 명령어"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:59Z
 ---
 
 # 슬래시 명령어

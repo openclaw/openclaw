@@ -4,13 +4,6 @@ read_when:
   - macOS لاگز کی گرفت یا نجی ڈیٹا کی لاگنگ کی تفتیش کرتے وقت
   - وائس ویک/سیشن لائف سائیکل کے مسائل کی ڈیبگنگ کرتے وقت
 title: "macOS لاگنگ"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:28Z
 ---
 
 # لاگنگ (macOS)
@@ -21,17 +14,17 @@ OpenClaw macOS ایپ کے لاگز کو swift-log کے ذریعے روٹ کرت
 
 - Verbosity: **Debug pane → Logs → App logging → Verbosity**
 - Enable: **Debug pane → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
-- Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (خودکار طور پر گردش کرتا ہے؛ پرانی فائلوں کے آخر میں `.1`, `.2`, … لگایا جاتا ہے)
+- مقام: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (خودکار طور پر روٹیٹ ہوتا ہے؛ پرانی فائلوں کے آخر میں `.1`، `.2`، … لگ جاتا ہے)
 - Clear: **Debug pane → Logs → App logging → “Clear”**
 
 نوٹس:
 
-- یہ **بطورِ طے شدہ بند** ہے۔ صرف فعال ڈیبگنگ کے دوران ہی فعال کریں۔
+- یہ **ڈیفالٹ طور پر بند** ہے۔ صرف اس وقت فعال کریں جب آپ واقعی ڈیبگ کر رہے ہوں۔
 - فائل کو حساس سمجھیں؛ نظرِ ثانی کے بغیر اسے شیئر نہ کریں۔
 
 ## macOS پر یونیفائیڈ لاگنگ میں نجی ڈیٹا
 
-یونیفائیڈ لاگنگ زیادہ تر payloads کو ریڈیکٹ کرتی ہے جب تک کوئی سب سسٹم `privacy -off` میں شامل ہونے کا انتخاب نہ کرے۔ Peter کی macOS پر [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) والی تحریر کے مطابق، یہ ایک plist کے ذریعے کنٹرول ہوتا ہے جو `/Library/Preferences/Logging/Subsystems/` میں سب سسٹم کے نام کی کلید کے ساتھ ہوتا ہے۔ صرف نئے لاگ اندراجات ہی اس فلیگ کو اختیار کرتے ہیں، اس لیے مسئلہ دوبارہ پیدا کرنے سے پہلے اسے فعال کریں۔
+یونفائیڈ لاگنگ زیادہ تر پےلوڈز کو ریڈیکٹ کر دیتی ہے جب تک کہ کوئی سب سسٹم `privacy -off` میں آپٹ اِن نہ کرے۔ پیٹر کی macOS پر [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) والی تحریر کے مطابق، یہ `/Library/Preferences/Logging/Subsystems/` میں موجود ایک plist کے ذریعے کنٹرول ہوتا ہے جو سب سسٹم کے نام سے کیڈ ہوتی ہے۔ صرف نئے لاگ انٹریز ہی اس فلیگ کو حاصل کرتی ہیں، اس لیے مسئلہ دوبارہ پیدا کرنے سے پہلے اسے فعال کریں۔
 
 ## OpenClaw کے لیے فعال کریں (`bot.molt`)
 

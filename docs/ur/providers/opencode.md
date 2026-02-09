@@ -4,19 +4,12 @@ read_when:
   - آپ ماڈل تک رسائی کے لیے OpenCode Zen چاہتے ہیں
   - آپ کو کوڈنگ کے لیے موزوں ماڈلز کی ایک منتخب فہرست درکار ہے
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:29Z
 ---
 
 # OpenCode Zen
 
-OpenCode Zen، OpenCode ٹیم کی جانب سے کوڈنگ ایجنٹس کے لیے تجویز کردہ **ماڈلز کی منتخب فہرست** ہے۔
-یہ ایک اختیاری، ہوسٹڈ ماڈل رسائی کا راستہ ہے جو API کلید اور `opencode` فراہم کنندہ استعمال کرتا ہے۔
+OpenCode Zen کوڈنگ ایجنٹس کے لیے OpenCode ٹیم کی جانب سے تجویز کردہ **ماڈلز کی منتخب فہرست** ہے۔
+یہ ایک اختیاری، ہوسٹڈ ماڈل رسائی کا راستہ ہے جو API key اور `opencode` provider استعمال کرتا ہے۔
 Zen اس وقت بیٹا میں ہے۔
 
 ## CLI سیٹ اپ

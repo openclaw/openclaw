@@ -4,13 +4,6 @@ read_when:
   - Heartbeat cadence သို့မဟုတ် မက်ဆေ့ချ်ပို့ပုံကို ချိန်ညှိရာတွင်
   - အချိန်ဇယားထားသော တာဝန်များအတွက် heartbeat နှင့် cron တို့ထဲမှ ရွေးချယ်ရာတွင်
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:00Z
 ---
 
 # Heartbeat (Gateway)
@@ -48,25 +41,26 @@ Config ဥပမာ:
 
 ## Defaults
 
-- Interval: `30m` (Anthropic OAuth/setup-token ကို auth mode အဖြစ် တွေ့ရှိသောအခါ `1h`)။ `agents.defaults.heartbeat.every` သို့မဟုတ် agent တစ်ခုချင်းစီအလိုက် `agents.list[].heartbeat.every` ကို သတ်မှတ်နိုင်ပြီး ပိတ်ရန် `0m` ကို အသုံးပြုပါ။
+- 17. Interval: `30m` (Anthropic OAuth/setup-token ကို auth mode အဖြစ် တွေ့ရှိပါက `1h`)။ 18. `agents.defaults.heartbeat.every` သို့မဟုတ် agent တစ်ခုချင်းစီအတွက် `agents.list[].heartbeat.every` ကို သတ်မှတ်ပါ; disable ပြုလုပ်ရန် `0m` ကို အသုံးပြုပါ။
 - Prompt body (`agents.defaults.heartbeat.prompt` မှတစ်ဆင့် ပြင်ဆင်နိုင်သည်):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-- Heartbeat prompt ကို user message အဖြစ် **အတိအကျ 그대로** ပို့သည်။ System prompt တွင် “Heartbeat” အပိုင်း ပါဝင်ပြီး run ကို အတွင်းပိုင်းအဖြစ် အမှတ်အသားပြုထားသည်။
-- Active hours (`heartbeat.activeHours`) ကို သတ်မှတ်ထားသော timezone အတွင်း စစ်ဆေးသည်။ သတ်မှတ်ထားသော အချိန်ပြင်ပတွင် heartbeats များကို နောက်တစ်ကြိမ် အချိန်အတွင်း tick ဖြစ်သည့်အထိ ကျော်လွှားထားမည်ဖြစ်သည်။
+  `Read HEARTBEAT.md if it exists (workspace context). 20. ၎င်းကို တိတိကျကျ လိုက်နာပါ။ 21. ယခင် chat များမှ အလုပ်များကို ခန့်မှန်းခြင်း သို့မဟုတ် ထပ်မံ ပြောကြားခြင်း မပြုလုပ်ပါနှင့်။ အာရုံစိုက်ရန် အရာမရှိပါက `HEARTBEAT_OK.\` ဟုပြန်လည်ဖြေကြားပါ။
+- 23. Heartbeat prompt ကို user message အဖြစ် **verbatim** ပို့ပေးပါသည်။ System prompt တွင် “Heartbeat” အပိုင်းပါဝင်ပြီး run ကို အတွင်းပိုင်းအနေဖြင့် flag ပြုလုပ်ထားပါသည်။
+- 25. Active hours (`heartbeat.activeHours`) ကို သတ်မှတ်ထားသော timezone အရ စစ်ဆေးပါသည်။
+  26. အချိန်ကန့်သတ်ချက် အပြင်ဘက်တွင် heartbeats များကို နောက်တစ်ကြိမ် tick အတွင်းသို့ ဝင်ရောက်သည်အထိ ကျော်သွားပါသည်။
 
 ## Heartbeat prompt ရဲ့ ရည်ရွယ်ချက်
 
 ပုံမှန် prompt သည် ရည်ရွယ်ချက်အရ ကျယ်ပြန့်စွာ ထားရှိထားသည်။
 
 - **Background tasks**: “Consider outstanding tasks” သည် agent ကို လိုက်နာရန် ကျန်ရှိနေသော အလုပ်များ (inbox, calendar, reminders, queued work) ကို ပြန်လည်စစ်ဆေးပြီး အရေးပေါ်အရာများကို ထုတ်ဖော်စေရန် လှုံ့ဆော်သည်။
-- **Human check-in**: “Checkup sometimes on your human during day time” သည် တစ်ခါတစ်ရံ “ဘာလိုအပ်ပါသလဲ?” ဟု ပေါ့ပါးသော မေးမြန်းချက် ပို့စေရန် လှုံ့ဆော်ပြီး သတ်မှတ်ထားသော local timezone ကို အသုံးပြုကာ ညအချိန် spam မဖြစ်စေရန် ကာကွယ်ထားသည် ([/concepts/timezone](/concepts/timezone) ကို ကြည့်ပါ)။
+- 27. **Human check-in**: “Checkup sometimes on your human during day time” သည် နေ့အချိန်တွင် အခါအားလျော်စွာ ပေါ့ပါးသော “ဘာလိုအပ်ပါသလဲ?” မေးခွန်းကို ပို့ပေးပြီး သတ်မှတ်ထားသော local timezone ကို အသုံးပြု၍ ညအချိန် spam မဖြစ်စေရန် ရှောင်ရှားပါသည် (see [/concepts/timezone](/concepts/timezone))။
 
 Heartbeat ကို အလွန်တိကျသည့် အလုပ်တစ်ခုလုပ်စေလိုပါက (ဥပမာ “check Gmail PubSub stats” သို့မဟုတ် “verify gateway health”) `agents.defaults.heartbeat.prompt` (သို့မဟုတ် `agents.list[].heartbeat.prompt`) ကို custom body အဖြစ် သတ်မှတ်နိုင်ပါသည် (verbatim ပို့သည်)။
 
 ## Response contract
 
 - သတိထားရန် မလိုအပ်ပါက **`HEARTBEAT_OK`** ဖြင့် ပြန်ကြားပါ။
-- Heartbeat run အတွင်း OpenClaw သည် `HEARTBEAT_OK` ကို ပြန်ကြားချက်၏ **အစ သို့မဟုတ် အဆုံး** တွင် တွေ့ရှိပါက ack အဖြစ် သတ်မှတ်သည်။ Token ကို ဖယ်ရှားပြီး ကျန်ရှိသော အကြောင်းအရာသည် **≤ `ackMaxChars`** (ပုံမှန်: 300) ဖြစ်ပါက reply ကို ပယ်ချမည်။
+- 28. Heartbeat run များအတွင်း OpenClaw သည် `HEARTBEAT_OK` ကို reply ၏ **အစ သို့မဟုတ် အဆုံး** တွင် ပေါ်လာပါက ack အဖြစ် လက်ခံပါသည်။ 29. Token ကို ဖယ်ရှားပြီး ကျန်ရှိသော content သည် **≤ `ackMaxChars`** (default: 300) ဖြစ်ပါက reply ကို drop လုပ်ပါသည်။
 - `HEARTBEAT_OK` သည် ပြန်ကြားချက်၏ **အလယ်** တွင် ပါရှိပါက အထူးအဖြစ် မယူဆပါ။
 - Alert များအတွက် **`HEARTBEAT_OK` မထည့်ပါနှင့်**; alert စာသားကိုသာ ပြန်ပို့ပါ။
 
@@ -98,12 +92,12 @@ Heartbeat မဟုတ်သည့် အခြေအနေတွင် မက�
 - `agents.defaults.heartbeat` သည် global heartbeat အပြုအမူကို သတ်မှတ်သည်။
 - `agents.list[].heartbeat` သည် အပေါ်မှ ပေါင်းစည်းပြီး မည်သည့် agent တွင်မဆို `heartbeat` block ရှိပါက **ထို agent များသာ** heartbeats ကို လုပ်ဆောင်မည်။
 - `channels.defaults.heartbeat` သည် ချန်နယ်အားလုံးအတွက် visibility defaults ကို သတ်မှတ်သည်။
-- `channels.<channel>.heartbeat` သည် ချန်နယ် default များကို override လုပ်သည်။
-- `channels.<channel>.accounts.<id>.heartbeat` (multi-account channels) သည် per-channel settings ကို override လုပ်သည်။
+- 30. `channels.<channel>`31. `.heartbeat` သည် channel default များကို override ပြုလုပ်ပါသည်။
+- 32. `channels.<channel>`33. `.accounts.<id>``.heartbeat` (multi-account channels) သည် channel တစ်ခုချင်းစီ၏ setting များကို override လုပ်ပါသည်။
 
 ### Per-agent heartbeats
 
-မည်သည့် `agents.list[]` entry တွင်မဆို `heartbeat` block ပါရှိပါက **ထို agent များသာ** heartbeats ကို လုပ်ဆောင်မည်ဖြစ်သည်။ Per-agent block သည် `agents.defaults.heartbeat` အပေါ်မှ ပေါင်းစည်းသဖြင့် (shared defaults ကို တစ်ကြိမ်သာ သတ်မှတ်ပြီး agent တစ်ခုချင်းစီအလိုက် override လုပ်နိုင်သည်)။
+35. `agents.list[]` entry တစ်ခုခုတွင် `heartbeat` block ပါရှိပါက **ထို agent များသာ** heartbeat ကို run လုပ်ပါသည်။ 36. Agent တစ်ခုချင်းစီ၏ block သည် `agents.defaults.heartbeat` အပေါ်တွင် merge လုပ်ပါသည် (shared default များကို တစ်ကြိမ်သာ သတ်မှတ်ပြီး agent အလိုက် override ပြုလုပ်နိုင်ပါသည်)။
 
 ဥပမာ: agent နှစ်ခုရှိပြီး ဒုတိယ agent တစ်ခုသာ heartbeats ကို လုပ်ဆောင်သည်။
 
@@ -154,7 +148,7 @@ Timezone တစ်ခုအတွင်း အလုပ်ချိန်မျ�
 }
 ```
 
-ဤအချိန်ပြင်ပတွင် (Eastern အချိန် 9am မတိုင်မီ သို့မဟုတ် 10pm နောက်ပိုင်း) heartbeats များကို ကျော်လွှားထားပြီး နောက်တစ်ကြိမ် သတ်မှတ်အချိန်အတွင်း tick ဖြစ်ပါက ပုံမှန်အတိုင်း လုပ်ဆောင်မည်ဖြစ်သည်။
+37. ဤ window အပြင်ဘက်တွင် (Eastern အချိန် မနက် 9 နာရီမတိုင်မီ သို့မဟုတ် ည 10 နာရီနောက်ပိုင်း) heartbeats များကို ကျော်သွားပါသည်။ 38. Window အတွင်းသို့ ဝင်ရောက်သည့် နောက်တစ်ကြိမ် scheduled tick တွင် ပုံမှန်အတိုင်း run လုပ်ပါသည်။
 
 ### Multi account example
 
@@ -199,10 +193,10 @@ Telegram ကဲ့သို့ multi-account channels များတွင် �
   - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`။
   - `none`: heartbeat ကို run လုပ်သော်လည်း external သို့ **မပို့ပါ**။
 - `to`: optional recipient override (channel-specific id; ဥပမာ WhatsApp အတွက် E.164 သို့မဟုတ် Telegram chat id)။
-- `accountId`: multi-account channels အတွက် optional account id။ `target: "last"` ဖြစ်ပါက account id ကို resolved last channel သို့ သက်ဆိုင်ရာ အကောင့်များကို ပံ့ပိုးပါက အသုံးချမည်၊ မပံ့ပိုးပါက လျစ်လျူရှုမည်။ Account id သည် resolved channel အတွက် သတ်မှတ်ထားသော အကောင့်နှင့် မကိုက်ညီပါက ပို့ခြင်းကို ကျော်လွှားမည်။
+- 39. `accountId`: multi-account channel များအတွက် optional account id ဖြစ်ပါသည်။ 40. `target: "last"` ဖြစ်ပါက account id သည် account များကို ထောက်ပံ့သော resolved last channel တွင်သာ သက်ဆိုင်ပြီး မထောက်ပံ့ပါက လျစ်လျူရှုပါသည်။ 41. Account id သည် resolved channel အတွက် config ပြုလုပ်ထားသော account နှင့် မကိုက်ညီပါက delivery ကို ကျော်သွားပါသည်။
 - `prompt`: default prompt body ကို override လုပ်သည် (merge မလုပ်ပါ)။
 - `ackMaxChars`: `HEARTBEAT_OK` နောက်ပိုင်း ပို့မည့်အခါ ခွင့်ပြုထားသော အများဆုံး characters။
-- `activeHours`: heartbeat runs ကို အချိန်ကန့်သတ်ချက်တစ်ခုအတွင်းသာ ကန့်သတ်သည်။ `start` (HH:MM, inclusive), `end` (HH:MM exclusive; အဆုံးနေ့အတွက် `24:00` ခွင့်ပြု), နှင့် optional `timezone` ပါဝင်သည့် object။
+- 42. `activeHours`: heartbeat run များကို အချိန်ကန့်သတ်ချက်အတွင်းသာ ချုပ်ချယ်ပါသည်။ 43. `start` (HH:MM, inclusive), `end` (HH:MM exclusive; နေ့အဆုံးအတွက် `24:00` ကို ခွင့်ပြုသည်) နှင့် optional `timezone` ပါဝင်သော object ဖြစ်ပါသည်။
   - ဖယ်ရှားထားပါက သို့မဟုတ် `"user"`: `agents.defaults.userTimezone` ကို သတ်မှတ်ထားပါက အသုံးပြုပြီး မရှိပါက host system timezone သို့ ပြန်လည်ကျရောက်မည်။
   - `"local"`: host system timezone ကို အမြဲအသုံးပြုသည်။
   - မည်သည့် IANA identifier မဆို (ဥပမာ `America/New_York`): တိုက်ရိုက် အသုံးပြုမည်၊ မမှန်ကန်ပါက အထက်ပါ `"user"` အပြုအမူသို့ ပြန်လည်ကျရောက်မည်။
@@ -210,16 +204,16 @@ Telegram ကဲ့သို့ multi-account channels များတွင် �
 
 ## Delivery behavior
 
-- Heartbeats များကို ပုံမှန်အားဖြင့် agent ၏ main session (`agent:<id>:<mainKey>`) တွင် run လုပ်သည်၊ သို့မဟုတ် `session.scope = "global"` ဖြစ်ပါက `global` တွင် run လုပ်သည်။ သတ်မှတ်ချန်နယ် session (Discord/WhatsApp စသည်) သို့ override လုပ်ရန် `session` ကို သတ်မှတ်ပါ။
+- 44. Heartbeat များသည် default အနေဖြင့် agent ၏ main session (`agent:<id>:<mainKey>`) တွင် run လုပ်ပြီး `session.scope = "global"` ဖြစ်ပါက `global` ကို အသုံးပြုပါသည်။ Channel session တစ်ခုကို သတ်မှတ်၍ override လုပ်ရန် `session` ကို သတ်မှတ်ပါ (Discord/WhatsApp စသည်)။
 - `session` သည် run context ကိုသာ သက်ရောက်စေပြီး delivery ကို `target` နှင့် `to` မှ ထိန်းချုပ်သည်။
-- သတ်မှတ်ချန်နယ်/လက်ခံသူထံ ပို့ရန် `target` + `to` ကို သတ်မှတ်ပါ။ `target: "last"` ဖြင့် ထို session အတွက် နောက်ဆုံး external channel ကို အသုံးပြု၍ ပို့မည်။
+- 46. သီးခြား channel/recipient သို့ ပို့ရန် `target` + `to` ကို သတ်မှတ်ပါ။ 47. `target: "last"` ဖြင့် delivery သည် ထို session အတွက် နောက်ဆုံး အသုံးပြုခဲ့သော external channel ကို အသုံးပြုပါသည်။
 - Main queue အလုပ်များနေပါက heartbeat ကို ကျော်လွှားပြီး နောက်မှ ပြန်ကြိုးစားမည်။
 - `target` သည် external destination မရှိပါက run ကို ဆက်လုပ်သော်လည်း outbound မက်ဆေ့ချ် မပို့ပါ။
 - Heartbeat-only ပြန်ကြားချက်များသည် session ကို အသက်ရှင်စေမထားဘဲ နောက်ဆုံး `updatedAt` ကို ပြန်လည်ထားရှိသဖြင့် idle expiry သည် ပုံမှန်အတိုင်း ဖြစ်မည်။
 
 ## Visibility controls
 
-ပုံမှန်အားဖြင့် `HEARTBEAT_OK` acknowledgments များကို ဖျောက်ထားပြီး alert အကြောင်းအရာများကိုသာ ပို့ပေးသည်။ ၎င်းကို ချန်နယ်တစ်ခုချင်းစီ သို့မဟုတ် account တစ်ခုချင်းစီအလိုက် ချိန်ညှိနိုင်သည်။
+48. Default အနေဖြင့် alert content ကို ပို့နေစဉ် `HEARTBEAT_OK` acknowledgment များကို ဖိနှိပ်ထားပါသည်။ 49. Channel သို့မဟုတ် account အလိုက် ဤအပြုအမူကို ပြင်ဆင်နိုင်ပါသည်။
 
 ```yaml
 channels:
@@ -271,18 +265,21 @@ channels:
 
 ### Common patterns
 
-| Goal                                               | Config                                                                                   |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| ပုံမှန်အပြုအမူ (OK များကို တိတ်ဆိတ်၊ alerts ဖွင့်) | _(config မလိုအပ်)_                                                                       |
+| Goal                                                                  | Config                                                                                   |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| ပုံမှန်အပြုအမူ (OK များကို တိတ်ဆိတ်၊ alerts ဖွင့်) | _(config မလိုအပ်)_                                                    |
 | လုံးဝ တိတ်ဆိတ် (မက်ဆေ့ချ်မရှိ၊ indicator မရှိ)     | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Indicator-only (မက်ဆေ့ချ်မရှိ)                     | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| ချန်နယ်တစ်ခုတွင်သာ OK များ                         | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| ချန်နယ်တစ်ခုတွင်သာ OK များ                                            | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (optional)
 
-Workspace အတွင်း `HEARTBEAT.md` ဖိုင် ရှိပါက ပုံမှန် prompt သည် agent ကို ၎င်းကို ဖတ်ရန် ညွှန်ကြားသည်။ ၎င်းကို “heartbeat checklist” ဟု စဉ်းစားနိုင်ပြီး သေးငယ်၊ တည်ငြိမ်ပြီး မိနစ် 30 တစ်ကြိမ် ပါဝင်စေရန် လုံခြုံပါသည်။
+50. Workspace တွင် `HEARTBEAT.md` file ရှိပါက default prompt သည် agent ကို ၎င်းကို ဖတ်ရန် ညွှန်ကြားပါသည်။ Think of it as your “heartbeat checklist”: small, stable, and
+    safe to include every 30 minutes.
 
-`HEARTBEAT.md` ရှိသော်လည်း အမှန်တကယ် အလွတ်ဖြစ်နေပါက (အလွတ်လိုင်းများနှင့် `# Heading` ကဲ့သို့ markdown headers များသာ) OpenClaw သည် API calls ကို ချွေတာရန် heartbeat run ကို ကျော်လွှားမည်။ ဖိုင် မရှိပါက heartbeat သည် ဆက်လက် run လုပ်ပြီး မော်ဒယ်က ဘာလုပ်မလဲ ဆုံးဖြတ်မည်။
+If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
+headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+ဖိုင် မရှိပါက heartbeat သည် ဆက်လက် လည်ပတ်ပြီး မော်ဒယ်က ဘာလုပ်မည်ကို ဆုံးဖြတ်ပါသည်။
 
 Prompt အရွယ်အစား မတိုးစေရန် သေးငယ်စွာ ထားပါ (short checklist သို့မဟုတ် reminders)။
 
@@ -329,8 +326,12 @@ Agents အများအပြားတွင် `heartbeat` ကို သတ�
 
 - `agents.defaults.heartbeat.includeReasoning: true`
 
-ဖွင့်ထားပါက heartbeats များသည် `Reasoning:` ဖြင့် အစပြုသော သီးခြား မက်ဆေ့ချ်တစ်ခုကိုပါ ပို့မည်ဖြစ်သည် (`/reasoning on` နှင့် ပုံစံတူ)။ Agent သည် sessions/codexes များစွာကို စီမံခန့်ခွဲနေသည့်အခါ ဘာကြောင့် သင့်ကို ping လုပ်ရသည်ကို သိရန် အသုံးဝင်နိုင်သော်လည်း သင် မလိုချင်သည့် အတွင်းပိုင်းအသေးစိတ်များကို ဖော်ထုတ်နိုင်ပါသည်။ Group chats များတွင် ပိတ်ထားခြင်းကို ဦးစားပေးပါ။
+When enabled, heartbeats will also deliver a separate message prefixed
+`Reasoning:` (same shape as `/reasoning on`). Agent က session/codex များစွာကို စီမံခန့်ခွဲနေစဉ် သင့်အား ping လုပ်ရန် ဆုံးဖြတ်ခဲ့ရသည့် အကြောင်းရင်းကို မြင်လိုပါက အသုံးဝင်နိုင်ပါသည် — သို့သော် သင်မလိုလားသော အတွင်းပိုင်း အသေးစိတ်အချက်အလက်များ ပေါက်ကြားနိုင်ပါသည်။ Prefer keeping it
+off in group chats.
 
 ## Cost awareness
 
-Heartbeats များသည် full agent turns ကို run လုပ်သည်။ Interval တိုလေလေ token အသုံးစရိတ် ပိုများလေလေ ဖြစ်သည်။ `HEARTBEAT.md` ကို သေးငယ်စွာ ထားပြီး အတွင်းပိုင်း state updates သာ လိုအပ်ပါက ပိုစျေးသက်သာသော `model` သို့မဟုတ် `target: "none"` ကို စဉ်းစားပါ။
+Heartbeats run full agent turns. Shorter intervals burn more tokens. Keep
+`HEARTBEAT.md` small and consider a cheaper `model` or `target: "none"` if you
+only want internal state updates.

@@ -1,16 +1,9 @@
 ---
-summary: „Globalne słowa wybudzania głosem (należące do Gateway) i sposób ich synchronizacji między węzłami”
+summary: "„Globalne słowa wybudzania głosem (należące do Gateway) i sposób ich synchronizacji między węzłami”"
 read_when:
   - Zmiana zachowania lub ustawień domyślnych słów wybudzania głosem
   - Dodawanie nowych platform węzłów, które wymagają synchronizacji słów wybudzania
-title: „Wybudzanie głosem”
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:22Z
+title: "Wybudzanie głosem"
 ---
 
 # Wybudzanie głosem (globalne słowa wybudzania)

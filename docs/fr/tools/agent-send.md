@@ -3,13 +3,6 @@ summary: "Executions directes du CLI `openclaw agent` (avec livraison optionnell
 read_when:
   - Ajout ou modification du point d’entree du CLI de l’agent
 title: "Envoi d’agent"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:56Z
 ---
 
 # `openclaw agent` (executions directes de l’agent)
@@ -46,7 +39,7 @@ openclaw agent --to +15555550123 --message "Summon reply" --deliver
 openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
 ```
 
-## Options
+## Drapeaux
 
 - `--local` : execution locale (necessite les cles API du fournisseur de modele dans votre shell)
 - `--deliver` : envoyer la reponse vers le canal choisi

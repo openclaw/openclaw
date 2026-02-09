@@ -5,13 +5,6 @@ read_when:
   - "OpenClaw 를 설치하기 전에 Node.js 를 설치해야 할 때"
   - "OpenClaw 를 설치했지만 `openclaw` 명령을 찾을 수 없을 때"
   - "npm install -g 가 권한 또는 PATH 문제로 실패할 때"
-x-i18n:
-  source_path: install/node.md
-  source_hash: f848d6473a183090
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:27Z
 ---
 
 # Node.js
@@ -32,49 +25,55 @@ node -v
   <Tab title="macOS">
     **Homebrew** (권장):
 
+    ````
     ```bash
     brew install node
     ```
-
+    
     또는 [nodejs.org](https://nodejs.org/) 에서 macOS 설치 프로그램을 다운로드하십시오.
+    ````
 
   </Tab>
   <Tab title="Linux">
     **Ubuntu / Debian:**
 
+    ````
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
-
+    
     **Fedora / RHEL:**
-
+    
     ```bash
     sudo dnf install nodejs
     ```
-
+    
     또는 버전 매니저를 사용할 수 있습니다(아래 참조).
+    ````
 
   </Tab>
   <Tab title="Windows">
     **winget** (권장):
 
+    ````
     ```powershell
     winget install OpenJS.NodeJS.LTS
     ```
-
+    
     **Chocolatey:**
-
+    
     ```powershell
     choco install nodejs-lts
     ```
-
+    
     또는 [nodejs.org](https://nodejs.org/) 에서 Windows 설치 프로그램을 다운로드하십시오.
+    ````
 
   </Tab>
 </Tabs>
 
-<Accordion title="버전 매니저 사용 (nvm, fnm, mise, asdf)">
+<Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
   버전 매니저를 사용하면 Node 버전을 쉽게 전환할 수 있습니다. 널리 사용되는 옵션은 다음과 같습니다.
 
 - [**fnm**](https://github.com/Schniz/fnm) — 빠르고 크로스 플랫폼
@@ -100,34 +99,38 @@ fnm use 22
 이는 거의 항상 npm 의 전역 bin 디렉토리가 PATH 에 포함되어 있지 않다는 의미입니다.
 
 <Steps>
-  <Step title="npm 전역 prefix 찾기">
+  <Step title="Find your global npm prefix">
     ```bash
     npm prefix -g
     ```
   </Step>
-  <Step title="PATH 에 포함되어 있는지 확인">
+  <Step title="Check if it's on your PATH">
     ```bash
     echo "$PATH"
     ```
 
+    ```
     출력에서 `<npm-prefix>/bin` (macOS / Linux) 또는 `<npm-prefix>` (Windows) 를 확인하십시오.
+    ```
 
   </Step>
-  <Step title="셸 시작 파일에 추가">
+  <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
         `~/.zshrc` 또는 `~/.bashrc` 에 추가하십시오:
 
-        ```bash
-        export PATH="$(npm prefix -g)/bin:$PATH"
         ```
-
-        그런 다음 새 터미널을 열거나(zsh 에서는 `rehash`, bash 에서는 `hash -r` 실행) 변경 사항을 적용하십시오.
-      </Tab>
-      <Tab title="Windows">
-        `npm prefix -g` 의 출력 값을 설정 → 시스템 → 환경 변수에서 시스템 PATH 에 추가하십시오.
-      </Tab>
-    </Tabs>
+            ```bash
+            export PATH="$(npm prefix -g)/bin:$PATH"
+            ```
+        
+            그런 다음 새 터미널을 열거나(zsh 에서는 `rehash`, bash 에서는 `hash -r` 실행) 변경 사항을 적용하십시오.
+          </Tab>
+          <Tab title="Windows">
+            `npm prefix -g` 의 출력 값을 설정 → 시스템 → 환경 변수에서 시스템 PATH 에 추가하십시오.
+          </Tab>
+        </Tabs>
+        ```
 
   </Step>
 </Steps>

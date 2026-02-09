@@ -5,19 +5,12 @@ read_when:
   - TTS ပံ့ပိုးသူများ သို့မဟုတ် ကန့်သတ်ချက်များကို ဖွဲ့စည်းပြင်ဆင်ခြင်း
   - /tts အမိန့်များကို အသုံးပြုခြင်း
 title: "စာသားမှ အသံ"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:35Z
 ---
 
 # စာသားမှ အသံ (TTS)
 
-OpenClaw သည် ElevenLabs၊ OpenAI သို့မဟုတ် Edge TTS ကို အသုံးပြုပြီး အပြန်အလှန်ပို့သော အဖြေများကို အသံအဖြစ် ပြောင်းလဲပေးနိုင်သည်။
-OpenClaw မှ အသံပို့နိုင်သည့် နေရာတိုင်းတွင် အလုပ်လုပ်ပြီး Telegram တွင် ဝိုင်းပတ်သော voice-note bubble ကို ရရှိမည်ဖြစ်သည်။
+OpenClaw can convert outbound replies into audio using ElevenLabs, OpenAI, or Edge TTS.
+It works anywhere OpenClaw can send audio; Telegram gets a round voice-note bubble.
 
 ## ပံ့ပိုးထားသော ဝန်ဆောင်မှုများ
 
@@ -27,15 +20,11 @@ OpenClaw မှ အသံပို့နိုင်သည့် နေရာတ
 
 ### Edge TTS မှတ်ချက်များ
 
-Edge TTS သည် Microsoft Edge ၏ အွန်လိုင်း neural TTS ဝန်ဆောင်မှုကို `node-edge-tts`
-စာကြည့်တိုက်မှတစ်ဆင့် အသုံးပြုသည်။ ၎င်းသည် ဟို့စ်ထားသော ဝန်ဆောင်မှု (local မဟုတ်) ဖြစ်ပြီး Microsoft ၏ endpoint များကို အသုံးပြုသော်လည်း
-API key မလိုအပ်ပါ။ `node-edge-tts` သည် အသံဖွဲ့စည်းမှု ရွေးချယ်စရာများနှင့်
-အထွက်ဖော်မတ်များကို ပံ့ပိုးပေးသော်လည်း Edge ဝန်ဆောင်မှုတွင် ရွေးချယ်စရာအားလုံးကို မပံ့ပိုးပါ။ citeturn2search0
+Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
+library. ၎င်းသည် hosted service (local မဟုတ်ပါ) ဖြစ်ပြီး Microsoft ၏ endpoints များကို အသုံးပြုကာ API key မလိုအပ်ပါ။ `node-edge-tts` သည် speech configuration options နှင့် output formats များကို ဖော်ပြပေးထားသော်လည်း Edge service မှာ option အားလုံးကို မထောက်ပံ့ပါ။ citeturn2search0
 
-Edge TTS သည် ထုတ်ပြန်ထားသော SLA သို့မဟုတ် quota မရှိသည့် အများသုံး ဝက်ဘ်ဝန်ဆောင်မှုဖြစ်သောကြောင့်
-best‑effort အဖြစ်သာ သဘောထားသင့်သည်။ အာမခံထားသော ကန့်သတ်ချက်များနှင့် အထောက်အပံ့လိုအပ်ပါက OpenAI သို့မဟုတ် ElevenLabs ကို အသုံးပြုပါ။
-Microsoft ၏ Speech REST API တွင် တစ်ကြိမ်တောင်းဆိုမှုလျှင် အသံ ၁၀ မိနစ် ကန့်သတ်ချက်ကို ဖော်ပြထားပြီး
-Edge TTS တွင် ကန့်သတ်ချက်များကို မထုတ်ပြန်ထားသောကြောင့် ဆင်တူ သို့မဟုတ် ပိုနိမ့်နိုင်သည်ဟု ယူဆပါ။ citeturn0search3
+Edge TTS သည် ထုတ်ပြန်ထားသော SLA သို့မဟုတ် quota မရှိသည့် public web service ဖြစ်သောကြောင့် best-effort အဖြစ်သာ သတ်မှတ်အသုံးပြုသင့်ပါသည်။ အကန့်အသတ်အာမခံချက်နှင့် support လိုအပ်ပါက OpenAI သို့မဟုတ် ElevenLabs ကို အသုံးပြုပါ။
+Microsoft ၏ Speech REST API စာရွက်စာတမ်းအရ request တစ်ခုလျှင် audio ၁၀ မိနစ်ကန့်သတ်ချက်ရှိသည်ဟု ဖော်ပြထားပြီး Edge TTS သည် ကန့်သတ်ချက်မထုတ်ပြန်ထားသဖြင့် အလားတူ သို့မဟုတ် ပိုနည်းသော ကန့်သတ်ချက်များဟု ခန့်မှန်းသင့်ပါသည်။ citeturn0search3
 
 ## ရွေးချယ်နိုင်သော ကီးများ
 
@@ -44,13 +33,10 @@ OpenAI သို့မဟုတ် ElevenLabs ကို အသုံးပြု
 - `ELEVENLABS_API_KEY` (သို့မဟုတ် `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS သည် API key **မလိုအပ်ပါ**။ API key မတွေ့ရှိပါက OpenClaw သည်
-Edge TTS ကို မူလအဖြစ် အသုံးပြုမည်ဖြစ်သည် (`messages.tts.edge.enabled=false` ဖြင့် ပိတ်မထားလျှင်)။
+Edge TTS သည် API key **မလိုအပ်ပါ**။ API key မတွေ့ရှိပါက OpenClaw သည် Edge TTS ကို default အဖြစ် အသုံးပြုပါသည် (`messages.tts.edge.enabled=false` ဖြင့် ပိတ်ထားခြင်း မရှိပါက)။
 
-ပံ့ပိုးသူများကို အများအပြား ဖွဲ့စည်းထားပါက ရွေးချယ်ထားသော ပံ့ပိုးသူကို အရင်အသုံးပြုပြီး
-အခြားများကို အစားထိုးအဖြစ် အသုံးပြုပါမည်။
-Auto-summary သည် ဖွဲ့စည်းထားသော `summaryModel` (သို့မဟုတ် `agents.defaults.model.primary`) ကို အသုံးပြုသဖြင့်
-အကျဉ်းချုပ်ကို ဖွင့်ထားပါက ထိုပံ့ပိုးသူကိုလည်း အတည်ပြုထားရပါမည်။
+provider များကို များစွာ configure လုပ်ထားပါက ရွေးချယ်ထားသော provider ကို ပထမဦးစွာ အသုံးပြုပြီး အခြားများကို fallback အဖြစ် အသုံးပြုပါသည်။
+Auto-summary သည် configure လုပ်ထားသော `summaryModel` (သို့မဟုတ် `agents.defaults.model.primary`) ကို အသုံးပြုသဖြင့် summary များကို enable လုပ်ပါက ထို provider ကိုလည်း authentication ပြုလုပ်ထားရပါမည်။
 
 ## ဝန်ဆောင်မှု လင့်ခ်များ
 
@@ -63,16 +49,15 @@ Auto-summary သည် ဖွဲ့စည်းထားသော `summaryModel`
 
 ## မူလအတိုင်း ဖွင့်ထားပါသလား?
 
-မဟုတ်ပါ။ Auto‑TTS ကို မူလအတိုင်း **ပိတ်ထား** ပါသည်။ config တွင်
-`messages.tts.auto` ဖြင့် သို့မဟုတ် session တစ်ခုချင်းစီအလိုက် `/tts always` (alias: `/tts on`) ဖြင့် ဖွင့်နိုင်ပါသည်။
+No. Auto‑TTS သည် default အနေဖြင့် **ပိတ်ထားပါသည်**။ config တွင် `messages.tts.auto` ဖြင့် သို့မဟုတ် session အလိုက် `/tts always` (alias: `/tts on`) ဖြင့် enable လုပ်နိုင်ပါသည်။
 
 TTS ကို ဖွင့်ထားသည့်အခါ Edge TTS သည် မူလအတိုင်း **ဖွင့်ထား** ပြီး
 OpenAI သို့မဟုတ် ElevenLabs API key မရှိပါက အလိုအလျောက် အသုံးပြုပါမည်။
 
 ## ဖွဲ့စည်းပြင်ဆင်ခြင်း (Config)
 
-TTS config သည် `openclaw.json` အတွင်းရှိ `messages.tts` အောက်တွင် တည်ရှိပါသည်။
-အပြည့်အစုံ schema ကို [Gateway configuration](/gateway/configuration) တွင် ကြည့်နိုင်ပါသည်။
+TTS config သည် `openclaw.json` ထဲရှိ `messages.tts` အောက်တွင် ရှိပါသည်။
+Schema အပြည့်အစုံကို [Gateway configuration](/gateway/configuration) တွင် ကြည့်နိုင်ပါသည်။
 
 ### အနည်းဆုံး config (ဖွင့်ခြင်း + ပံ့ပိုးသူ)
 
@@ -218,7 +203,7 @@ TTS config သည် `openclaw.json` အတွင်းရှိ `messages.tts` 
 - `summaryModel`: auto-summary အတွက် စျေးသက်သာသော model ရွေးချယ်နိုင်မှု; မူလမှာ `agents.defaults.model.primary` ဖြစ်သည်။
   - `provider/model` သို့မဟုတ် ဖွဲ့စည်းထားသော model alias ကို လက်ခံပါသည်။
 - `modelOverrides`: model ကို TTS ညွှန်ကြားချက်များ ထုတ်ပေးခွင့်ပြုခြင်း (မူလအတိုင်း ဖွင့်ထား)။
-- `maxTextLength`: TTS input အတွက် အမြင့်ဆုံး ကန့်သတ်ချက် (chars)။ ကျော်လွန်ပါက `/tts audio` ဖြစ်ပါသည်။
+- `maxTextLength`: TTS input အတွက် အမြင့်ဆုံး ကန့်သတ်ချက် (characters) ဖြစ်ပါသည်။ ကန့်သတ်ချက်ကျော်လွန်ပါက `/tts audio` မအောင်မြင်ပါ။
 - `timeoutMs`: request timeout (ms)။
 - `prefsPath`: local prefs JSON path ကို အစားထိုး သတ်မှတ်ခြင်း (provider/limit/summary)။
 - `apiKey` တန်ဖိုးများသည် env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`) သို့ ပြန်လည်သွားပါသည်။
@@ -242,8 +227,8 @@ TTS config သည် `openclaw.json` အတွင်းရှိ `messages.tts` 
 
 ## Model မှ မောင်းနှင်သော အစားထိုးများ (မူလအတိုင်း ဖွင့်ထား)
 
-မူလအနေဖြင့် model သည် အဖြေတစ်ခုအတွက် TTS ညွှန်ကြားချက်များကို **ထုတ်ပေးနိုင်ပါသည်**။
-`messages.tts.auto` သည် `tagged` ဖြစ်ပါက အသံကို ဖြစ်စေရန် ဤညွှန်ကြားချက်များ လိုအပ်ပါသည်။
+default အနေဖြင့် model သည် reply တစ်ခုအတွက် TTS directives ကို ထုတ်ပေးနိုင်ပါသည်။
+`messages.tts.auto` ကို `tagged` အဖြစ် သတ်မှတ်ထားပါက audio ကို trigger လုပ်ရန် အဆိုပါ directives မဖြစ်မနေ လိုအပ်ပါသည်။
 
 ဖွင့်ထားသည့်အခါ model သည် အဖြေတစ်ခုအတွက် အသံကို အစားထိုးရန် `[[tts:...]]`
 ညွှန်ကြားချက်များကို ထုတ်ပေးနိုင်ပြီး၊ ထို့အပြင် ရွေးချယ်နိုင်သော `[[tts:text]]...[[/tts:text]]` block တစ်ခုဖြင့်
@@ -320,10 +305,9 @@ Slash commands များသည် local overrides များကို `pref
 - **အခြား ချန်နယ်များ**: MP3 (ElevenLabs မှ `mp3_44100_128`, OpenAI မှ `mp3`)။
   - 44.1kHz / 128kbps သည် စကားပြော အသံရှင်းလင်းမှုအတွက် မူလ ချိန်ညှိချက် ဖြစ်သည်။
 - **Edge TTS**: `edge.outputFormat` ကို အသုံးပြုသည် (မူလ `audio-24khz-48kbitrate-mono-mp3`)။
-  - `node-edge-tts` သည် `outputFormat` ကို လက်ခံသော်လည်း Edge ဝန်ဆောင်မှုမှ ဖော်မတ်အားလုံး မရရှိနိုင်ပါ။ citeturn2search0
-  - အထွက်ဖော်မတ် တန်ဖိုးများသည် Microsoft Speech output formats ကို လိုက်နာပါသည် (Ogg/WebM Opus ပါဝင်)။ citeturn1search0
-  - Telegram `sendVoice` သည် OGG/MP3/M4A ကို လက်ခံပါသည်; အာမခံထားသော Opus voice notes လိုအပ်ပါက
-    OpenAI/ElevenLabs ကို အသုံးပြုပါ။ citeturn1search1
+  - `node-edge-tts` သည် `outputFormat` ကို လက်ခံသော်လည်း Edge service မှာ format အားလုံး မရနိုင်ပါ။ citeturn2search0
+  - Output format တန်ဖိုးများသည် Microsoft Speech output formats (Ogg/WebM Opus အပါအဝင်) ကို လိုက်နာပါသည်။ citeturn1search0
+  - Telegram ၏ `sendVoice` သည် OGG/MP3/M4A ကို လက်ခံပါသည်; Opus voice notes ကို အာမခံလိုပါက OpenAI/ElevenLabs ကို အသုံးပြုပါ။ citeturn1search1
   - Edge output ဖော်မတ် မအောင်မြင်ပါက OpenClaw သည် MP3 ဖြင့် ပြန်လည်ကြိုးစားပါသည်။
 
 OpenAI/ElevenLabs ဖော်မတ်များသည် တိတိကျကျ သတ်မှတ်ထားပြီး Telegram သည် voice-note UX အတွက် Opus ကို မျှော်လင့်ပါသည်။
@@ -357,11 +341,10 @@ Reply -> TTS enabled?
 
 ## Slash command အသုံးပြုနည်း
 
-အမိန့်တစ်ခုသာ ရှိပါသည်- `/tts`။
-ဖွင့်အသုံးပြုရန် အသေးစိတ်ကို [Slash commands](/tools/slash-commands) တွင် ကြည့်ပါ။
+command တစ်ခုတည်းသာ ရှိပါသည်: `/tts`။
+enable လုပ်နည်း အသေးစိတ်ကို [Slash commands](/tools/slash-commands) တွင် ကြည့်ပါ။
 
-Discord မှတ်ချက်- `/tts` သည် Discord တွင် built‑in အမိန့်ဖြစ်သောကြောင့် OpenClaw သည်
-အဲဒီနေရာတွင် native အမိန့်အဖြစ် `/voice` ကို မှတ်ပုံတင်ပါသည်။ စာသားဖြင့် `/tts ...` ကိုလည်း အသုံးပြုနိုင်ပါသည်။
+Discord မှတ်ချက်: `/tts` သည် Discord ၏ built-in command ဖြစ်သောကြောင့် OpenClaw သည် အဲဒီနေရာတွင် native command အဖြစ် `/voice` ကို register လုပ်ပါသည်။ Text `/tts ...` သည် ဆက်လက် အလုပ်လုပ်ပါသည်။
 
 ```
 /tts off
@@ -385,9 +368,7 @@ Discord မှတ်ချက်- `/tts` သည် Discord တွင် built‑
 
 ## Agent tool
 
-`tts` tool သည် စာသားကို အသံအဖြစ် ပြောင်းလဲပြီး `MEDIA:` path ကို ပြန်ပေးပါသည်။
-ရလဒ်သည် Telegram နှင့် ကိုက်ညီပါက tool သည် `[[audio_as_voice]]` ကို ထည့်သွင်းပေးပြီး
-Telegram မှ voice bubble အဖြစ် ပို့စေပါသည်။
+`tts` tool သည် text ကို speech သို့ ပြောင်းလဲပြီး `MEDIA:` path ကို ပြန်ပေးပါသည်။ ရလဒ်သည် Telegram နှင့် ကိုက်ညီပါက Telegram မှ voice bubble ပို့ရန် `[[audio_as_voice]]` ကို tool က ထည့်သွင်းပေးပါသည်။
 
 ## Gateway RPC
 

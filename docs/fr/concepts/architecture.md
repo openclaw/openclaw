@@ -3,20 +3,13 @@ summary: "Architecture de la passerelle WebSocket, composants et flux clients"
 read_when:
   - Travail sur le protocole de la passerelle, les clients ou les transports
 title: "Architecture de la passerelle"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: c636d5d8a5e62806
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:15Z
 ---
 
 # Architecture de la passerelle
 
 Derniere mise a jour : 2026-01-22
 
-## Vue d’ensemble
+## Présentation
 
 - Une **Gateway (passerelle)** unique et de longue duree possede toutes les surfaces de messagerie (WhatsApp via
   Baileys, Telegram via grammY, Slack, Discord, Signal, iMessage, WebChat).
@@ -116,11 +109,15 @@ Details : [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
 ## Acces distant
 
 - Recommande : Tailscale ou VPN.
+
 - Alternative : tunnel SSH
+
   ```bash
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
+
 - Le meme handshake + jeton d’authentification s’appliquent via le tunnel.
+
 - TLS + pinning optionnel peuvent etre actives pour WS dans les configurations distantes.
 
 ## Instantane des operations

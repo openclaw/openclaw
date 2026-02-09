@@ -1,15 +1,8 @@
 ---
-summary: «Семантика реакций, общая для всех каналов»
+summary: "Семантика реакций, общая для всех каналов"
 read_when:
   - При работе с реакциями в любом канале
-title: «Реакции»
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:57Z
+title: "Реакции"
 ---
 
 # Инструменты реакций

@@ -4,18 +4,11 @@ read_when:
   - คุณต้องการเลือกผู้ให้บริการโมเดล
   - คุณต้องการภาพรวมอย่างรวดเร็วของแบ็กเอนด์LLMที่รองรับ
 title: "ผู้ให้บริการโมเดล"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:30Z
 ---
 
 # ผู้ให้บริการโมเดล
 
-OpenClawสามารถใช้ผู้ให้บริการLLMได้หลายราย เลือกผู้ให้บริการ ทำการยืนยันตัวตน จากนั้นตั้งค่า
+OpenClaw สามารถใช้ผู้ให้บริการ LLM ได้หลายราย OpenClawสามารถใช้ผู้ให้บริการLLMได้หลายราย เลือกผู้ให้บริการ ทำการยืนยันตัวตน จากนั้นตั้งค่า
 โมเดลเริ่มต้นเป็น `provider/model`.
 
 กำลังมองหาเอกสารช่องทางแชต(WhatsApp/Telegram/Discord/Slack/Mattermost(ปลั๊กอิน)/ฯลฯ)? ดูที่ [Channels](/channels).
@@ -68,4 +61,4 @@ Veniceคือการตั้งค่า Venice AI ที่เราแน
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - ใช้การสมัครสมาชิก Claude Max/Pro เป็นเอ็นด์พอยต์APIที่เข้ากันได้กับ OpenAI
 
 สำหรับแคตตาล็อกผู้ให้บริการทั้งหมด(xAI, Groq, Mistral, ฯลฯ)และการกำหนดค่าขั้นสูง
-ดูที่ [Model providers](/concepts/model-providers).
+ดูที่ [Model providers](/concepts/model-providers). และการกำหนดค่าขั้นสูง ดูที่ [Model providers](/concepts/model-providers)

@@ -2,16 +2,9 @@
 summary: "Araştırma notları: Clawd çalışma alanları için çevrimdışı bellek sistemi (Markdown tek gerçek kaynak + türetilmiş indeks)"
 read_when:
   - Günlük Markdown günlüklerinin ötesinde çalışma alanı belleği (~/.openclaw/workspace) tasarlarken
-  - Karar verirken: bağımsız CLI mi yoksa OpenClaw ile derin entegrasyon mu
+  - Deciding: "Karar verirken: bağımsız CLI mi yoksa OpenClaw ile derin entegrasyon mu"
   - Çevrimdışı geri çağırma + yansıtma eklerken (retain/recall/reflect)
 title: "Çalışma Alanı Belleği Araştırması"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:33Z
 ---
 
 # Workspace Memory v2 (offline): araştırma notları
@@ -29,7 +22,7 @@ Mevcut kurulum (günlük başına bir dosya) şu konularda mükemmeldir:
 - git destekli dayanıklılık + denetlenebilirlik
 - düşük sürtünmeli yakalama (“sadece yaz”)
 
-Zayıf olduğu noktalar:
+It’s weak for:
 
 - yüksek geri çağırma gerektiren erişim (“X hakkında neye karar vermiştik?”, “Y’yi en son ne zaman denedik?”)
 - çok sayıda dosyayı yeniden okumadan varlık merkezli yanıtlar (“Alice / The Castle / warelay hakkında anlat”)
@@ -56,14 +49,14 @@ Harmanlanacak iki parça:
 
 2. **Hindsight tarzı bellek altlığı**
 
-- gözlemlenen ile inanılan ile özetlenenin ayrılması
+- separate what’s observed vs what’s believed vs what’s summarized
 - retain/recall/reflect desteği
 - kanıta dayalı olarak evrilebilen güven taşıyan görüşler
 - varlık farkındalıklı geri çağırma + zamansal sorgular (tam bilgi grafikleri olmadan bile)
 
 ## Önerilen mimari (Markdown tek gerçek kaynak + türetilmiş indeks)
 
-### Kanonik depo (git dostu)
+### Canonical store (git-friendly)
 
 `~/.openclaw/workspace`’i kanonik, insan tarafından okunabilir bellek olarak tutun.
 
@@ -99,7 +92,7 @@ Notlar:
 ~/.openclaw/workspace/.memory/index.sqlite
 ```
 
-Şunlarla destekleyin:
+Back it with:
 
 - gerçekler + varlık bağlantıları + görüş metadatası için SQLite şeması
 - sözcüksel geri çağırma için SQLite **FTS5** (hızlı, küçük, offline)
@@ -129,7 +122,7 @@ Burada önemli olan Hindsight içgörüsü: küçük parçalar değil, **anlatı
 - O(c=0.95) @Peter: Prefers concise replies (&lt;1500 chars) on WhatsApp; long content goes into files.
 ```
 
-Asgari ayrıştırma:
+Minimal ayrıştırma:
 
 - Tür öneki: `W` (world), `B` (experience/biographical), `O` (opinion), `S` (observation/summary; genellikle üretilir)
 - Varlıklar: `@Peter`, `@warelay` vb. (slug’lar `bank/entities/*.md`’e eşlenir)
@@ -205,13 +198,13 @@ Bellek araçlarının küçük bir CLI + kütüphane katmanı olması amaçlanı
 - SQLite FTS + (isteğe bağlı) basit gömmelerle başlayın; UX kazanımlarının çoğunu hemen elde edersiniz.
 - SuCo/HNSW/ScaNN sınıfı çözümleri ancak şunlar olduğunda düşünün:
   - derlem büyük olduğunda (on/binlerce yüz binlerce parça)
-  - kaba kuvvet gömme araması çok yavaşladığında
+  - brute-force embedding search becomes too slow
   - geri çağırma kalitesi sözcüksel arama tarafından anlamlı biçimde darboğaza girdiğinde
 
 Offline dostu alternatifler (artan karmaşıklıkla):
 
 - SQLite FTS5 + metadata filtreleri (sıfır ML)
-- Gömmeler + kaba kuvvet (parça sayısı düşükse şaşırtıcı derecede uzun süre çalışır)
+- Embeddings + brute force (works surprisingly far if chunk count is low)
 - HNSW indeksi (yaygın, sağlam; bir kütüphane bağlaması gerekir)
 - SuCo (araştırma düzeyi; gömülebilecek sağlam bir uygulama varsa cazip)
 
@@ -222,7 +215,7 @@ Açık soru:
 
 ## En küçük faydalı pilot
 
-Asgari ama hâlâ faydalı bir sürüm istiyorsanız:
+If you want a minimal, still-useful version:
 
 - `bank/` varlık sayfaları ve günlüklerde bir `## Retain` bölümü ekleyin.
 - Atıflarla (yol + satır numaraları) geri çağırma için SQLite FTS kullanın.

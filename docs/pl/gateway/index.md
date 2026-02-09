@@ -1,15 +1,8 @@
 ---
 summary: "Runbook dla usługi Gateway, jej cyklu życia i operacji"
 read_when:
-  - "Uruchamianie lub debugowanie procesu gateway"
+  - Uruchamianie lub debugowanie procesu gateway
 title: "Runbook Gateway"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:57Z
 ---
 
 # Runbook usługi Gateway
@@ -20,7 +13,7 @@ Ostatnia aktualizacja: 2025-12-09
 
 - Zawsze uruchomiony proces, który posiada pojedyncze połączenie Baileys/Telegram oraz płaszczyznę sterowania/zdarzeń.
 - Zastępuje starsze polecenie `gateway`. Punkt wejścia CLI: `openclaw gateway`.
-- Działa do momentu zatrzymania; kończy się kodem różnym od zera przy błędach krytycznych, aby nadzorca go zrestartował.
+- Uruchomienie do zatrzymania; wyjdzie poza zero przy błędach śmiertelnych, więc przełożony ponownie je uruchomi.
 
 ## Jak uruchomić (lokalnie)
 
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - Następnie klienci łączą się z `ws://127.0.0.1:18789` przez tunel.
+
 - Jeśli skonfigurowano token, klienci muszą dołączyć go w `connect.params.auth.token`, nawet przez tunel.
 
 ## Wiele gatewayów (ten sam host)

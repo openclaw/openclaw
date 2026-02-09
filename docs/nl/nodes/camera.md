@@ -4,13 +4,6 @@ read_when:
   - Bij het toevoegen of wijzigen van cameravastlegging op iOS-nodes of macOS
   - Bij het uitbreiden van door agenten toegankelijke MEDIA-tempbestandworkflows
 title: "Cameravastlegging"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:36Z
 ---
 
 # Cameravastlegging (agent)
@@ -94,7 +87,7 @@ Notities:
   - Standaard: **aan** (ontbrekende sleutel wordt als ingeschakeld behandeld).
   - Wanneer uit: `camera.*`-opdrachten retourneren `CAMERA_DISABLED`.
 
-### Rechten
+### Permissions
 
 - Android vereist runtime-rechten:
   - `CAMERA` voor zowel `camera.snap` als `camera.clip`.

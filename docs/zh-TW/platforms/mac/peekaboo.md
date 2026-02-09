@@ -5,18 +5,12 @@ read_when:
   - 透過 Swift Package Manager 整合 Peekaboo
   - 變更 PeekabooBridge 通訊協定／路徑
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:44Z
 ---
 
 # Peekaboo Bridge（macOS UI 自動化）
 
-OpenClaw 可將 **PeekabooBridge** 作為本機、具備權限感知的 UI 自動化
+OpenClaw can host **PeekabooBridge** as a local, permission‑aware UI automation
+broker. OpenClaw 可將 **PeekabooBridge** 作為本機、具備權限感知的 UI 自動化
 代理來託管。這讓 `peekaboo` CLI 能夠驅動 UI 自動化，同時重用
 macOS 應用程式的 TCC 權限。
 
@@ -32,8 +26,8 @@ macOS 應用程式的 TCC 權限。
 
 - 設定 → **啟用 Peekaboo Bridge**
 
-啟用後，OpenClaw 會啟動本機 UNIX socket 伺服器。若停用，Host 會停止，
-而 `peekaboo` 將回退至其他可用的 Host。
+When enabled, OpenClaw starts a local UNIX socket server. If disabled, the host
+is stopped and `peekaboo` will fall back to other available hosts.
 
 ## Client 探索順序
 
@@ -44,7 +38,7 @@ Peekaboo Client 通常依下列順序嘗試 Host：
 3. OpenClaw.app（精簡代理）
 
 使用 `peekaboo bridge status --verbose` 檢視目前啟用的 Host 以及
-正在使用的 socket 路徑。你也可以覆寫為：
+正在使用的 socket 路徑。你也可以覆寫為： You can override with:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -59,10 +53,10 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## 快照行為（自動化）
 
-快照會儲存在記憶體中，並在短時間後自動到期。
-若需要較長的保留時間，請由 Client 重新擷取。
+Snapshots are stored in memory and expire automatically after a short window.
+If you need longer retention, re‑capture from the client.
 
-## 疑難排解
+## Troubleshooting
 
 - 若 `peekaboo` 回報「bridge client is not authorized」，請確認 Client
   已正確簽署，或僅在 **debug** 模式下使用 `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` 來執行 Host。

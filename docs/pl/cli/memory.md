@@ -4,13 +4,6 @@ read_when:
   - Chcesz indeksować lub przeszukiwać pamięć semantyczną
   - Debugujesz dostępność pamięci lub proces indeksowania
 title: "pamięć"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:57Z
 ---
 
 # `openclaw memory`

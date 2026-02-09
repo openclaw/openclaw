@@ -1,22 +1,15 @@
 ---
 summary: "Çoklu ajan yönlendirmesi: yalıtılmış ajanlar, kanal hesapları ve bağlamalar"
-title: Çoklu Ajan Yönlendirmesi
+title: Multi-Agent Routing
 read_when: "Tek bir gateway sürecinde birden fazla yalıtılmış ajan (çalışma alanları + kimlik doğrulama) istiyorsunuz."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:27Z
 ---
 
-# Çoklu Ajan Yönlendirmesi
+# Multi-Agent Routing
 
 Amaç: tek bir çalışan Gateway içinde birden fazla _yalıtılmış_ ajan (ayrı çalışma alanı + `agentDir` + oturumlar) ve birden fazla kanal hesabı (örn. iki WhatsApp). Gelen mesajlar, bağlamalar aracılığıyla bir ajana yönlendirilir.
 
-## “Tek ajan” nedir?
+## What is “one agent”?
 
 Bir **ajan**, aşağıdakilerin her birine sahip, kapsamı tamamen ayrılmış bir beyindir:
 
@@ -31,19 +24,17 @@ Kimlik doğrulama profilleri **ajan başınadır**. Her ajan, kendi aşağıdaki
 ```
 
 Ana ajan kimlik bilgileri otomatik olarak **paylaşılmaz**. `agentDir`’yi
-ajanlar arasında asla yeniden kullanmayın (kimlik doğrulama/oturum çakışmalarına yol açar).
-Kimlik bilgilerini paylaşmak istiyorsanız, `auth-profiles.json`’yi diğer ajanın
+ajanlar arasında asla yeniden kullanmayın (kimlik doğrulama/oturum çakışmalarına yol açar). Kimlik bilgilerini paylaşmak istiyorsanız, `auth-profiles.json`’yi diğer ajanın
 `agentDir` dizinine kopyalayın.
 
 Skills, her çalışma alanının `skills/` klasörü üzerinden ajan başınadır; paylaşılan Skills
-`~/.openclaw/skills`’dan kullanılabilir. Bkz. [Skills: ajan başına vs paylaşılan](/tools/skills#per-agent-vs-shared-skills).
+`~/.openclaw/skills`’dan kullanılabilir. [Skills: ajan başına vs paylaşılan](/tools/skills#per-agent-vs-shared-skills).
 
 Gateway **tek bir ajanı** (varsayılan) veya **birden çok ajanı** yan yana barındırabilir.
 
 **Çalışma alanı notu:** her ajanın çalışma alanı **varsayılan cwd**’dir; katı bir
 sandbox değildir. Göreli yollar çalışma alanı içinde çözülür; ancak mutlak yollar,
-sandboxing etkin değilse ana makinedeki diğer konumlara erişebilir. Bkz.
-[Sandboxing](/gateway/sandboxing).
+sandboxing etkin değilse ana makinedeki diğer konumlara erişebilir. [Sandboxing](/gateway/sandboxing).
 
 ## Yollar (hızlı harita)
 
@@ -53,7 +44,7 @@ sandboxing etkin değilse ana makinedeki diğer konumlara erişebilir. Bkz.
 - Ajan dizini: `~/.openclaw/agents/<agentId>/agent` (veya `agents.list[].agentDir`)
 - Oturumlar: `~/.openclaw/agents/<agentId>/sessions`
 
-### Tek ajan modu (varsayılan)
+### Single-agent mode (default)
 
 Hiçbir şey yapmazsanız, OpenClaw tek bir ajan çalıştırır:
 
@@ -72,7 +63,7 @@ openclaw agents add work
 
 Ardından, gelen mesajları yönlendirmek için `bindings` ekleyin (veya sihirbazın eklemesine izin verin).
 
-Doğrulamak için:
+Şu komutla doğrulayın:
 
 ```bash
 openclaw agents list --bindings
@@ -135,8 +126,7 @@ Bağlamalar **deterministiktir** ve **en spesifik olan kazanır**:
 
 ## Birden fazla hesap / telefon numarası
 
-**Birden fazla hesabı** destekleyen kanallar (örn. WhatsApp), her oturumu tanımlamak için `accountId` kullanır.
-Her bir `accountId` farklı bir ajana yönlendirilebilir; böylece tek bir sunucu,
+**Birden fazla hesabı** destekleyen kanallar (örn. WhatsApp), her oturumu tanımlamak için `accountId` kullanır. Her bir `accountId` farklı bir ajana yönlendirilebilir; böylece tek bir sunucu,
 oturumları karıştırmadan birden fazla telefon numarasını barındırabilir.
 
 ## Kavramlar

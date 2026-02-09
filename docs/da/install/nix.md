@@ -5,13 +5,6 @@ read_when:
   - Du bruger allerede Nix/NixOS/Home Manager
   - Du vil have, at alt er fastlåst og administreret deklarativt
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:22Z
 ---
 
 # Nix-installation
@@ -39,7 +32,7 @@ Reference the nix-openclaw README for module options.
 
 > **📦 Fuld guide: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> nix-openclaw-repoet er den autoritative kilde til Nix-installation. Denne side er blot et hurtigt overblik.
+> Den nix-openclaw repo er kilden til sandheden for Nix installation. Denne side er blot et hurtigt overblik.
 
 ## Hvad du får
 
@@ -54,15 +47,15 @@ Reference the nix-openclaw README for module options.
 
 Når `OPENCLAW_NIX_MODE=1` er sat (automatisk med nix-openclaw):
 
-Understøtter OpenClaw en **Nix-tilstand**, der gør konfiguration deterministisk og deaktiverer auto-installationsflows.
-Aktivér den ved at eksportere:
+OpenClaw understøtter en \*\* Nix-tilstand \*\*, der gør konfigurationen deterministisk og deaktiverer auto-installationsstrømme.
+Aktiver det ved at eksportere:
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
-På macOS arver GUI-appen ikke automatisk shell-miljøvariabler. Du kan
-også aktivere Nix-tilstand via defaults:
+På macOS er GUI app ikke automatisk arve shell env vars. Du kan
+også aktivere Nix tilstand via standardværdier:
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
@@ -92,9 +85,9 @@ Pakkeringsflowet for macOS forventer en stabil Info.plist-skabelon på:
 apps/macos/Sources/OpenClaw/Resources/Info.plist
 ```
 
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) kopierer denne skabelon ind i app-bundlet og patcher dynamiske felter
-(bundle-ID, version/build, Git SHA, Sparkle-nøgler). Dette holder plist’en deterministisk for SwiftPM-
-pakkering og Nix-builds (som ikke er afhængige af et fuldt Xcode-toolchain).
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) kopierer denne skabelon til apppakken og patches dynamiske felter
+(bundle ID, version/build, Git SHA, Sparkle nøgler). Dette holder plist deterministisk for SwiftPM
+emballage og Nix bygger (som ikke er afhængig af en fuld Xcode værktøjskæde).
 
 ## Relateret
 

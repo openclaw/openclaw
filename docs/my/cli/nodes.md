@@ -4,13 +4,6 @@ read_when:
   - တွဲဖက်ထားသော နိုဒ်များ (ကင်မရာ၊ စခရင်၊ ကန်ဗတ်စ်) ကို စီမံခန့်ခွဲနေသောအခါ
   - တောင်းဆိုချက်များကို အတည်ပြုရန် သို့မဟုတ် နိုဒ် အမိန့်များကို invoke လုပ်ရန် လိုအပ်သောအခါ
 title: "နိုဒ်များ"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:08Z
 ---
 
 # `openclaw nodes`
@@ -40,8 +33,8 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` သည် pending/paired ဇယားများကို ထုတ်ပြပါသည်။ Paired အတန်းများတွင် နောက်ဆုံး ချိတ်ဆက်ခဲ့သည့် အချိန်ကာလ (Last Connect) ကို ပါဝင်ပြသပါသည်။
-လက်ရှိ ချိတ်ဆက်နေသော နိုဒ်များကိုသာ ပြရန် `--connected` ကို အသုံးပြုပါ။ ထို့အပြင် `--last-connected <duration>` ကို အသုံးပြု၍ သတ်မှတ်ထားသော ကာလအတွင်း ချိတ်ဆက်ခဲ့သည့် နိုဒ်များသာ စစ်ထုတ်နိုင်ပါသည် (ဥပမာ—`24h`, `7d`)။
+`nodes list` သည် pending/paired table များကို ပုံနှိပ်ပြသပါသည်။ Paired row များတွင် နောက်ဆုံး ချိတ်ဆက်ခဲ့သော အချိန်ကာလ (Last Connect) ပါဝင်ပါသည်။
+လက်ရှိ ချိတ်ဆက်နေသော node များကိုသာ ပြရန် `--connected` ကို အသုံးပြုပါ။ `--last-connected <duration>` ကို အသုံးပြုပြီး သတ်မှတ်ထားသော ကာလအတွင်း ချိတ်ဆက်ခဲ့သော node များကိုသာ စစ်ထုတ်ပြပါ (ဥပမာ: `24h`, `7d`)။
 
 ## Invoke / run
 

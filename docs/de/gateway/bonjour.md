@@ -4,13 +4,6 @@ read_when:
   - Debugging von Bonjour-Erkennungsproblemen unter macOS/iOS
   - Ändern von mDNS-Servicetypen, TXT-Records oder der Discovery-UX
 title: "Bonjour-Erkennung"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:17Z
 ---
 
 # Bonjour / mDNS-Erkennung
@@ -25,7 +18,7 @@ Wenn sich Node und Gateway in unterschiedlichen Netzwerken befinden, überschrei
 multicast‑mDNS die Netzwerkgrenze nicht. Sie können die gleiche Discovery‑UX beibehalten,
 indem Sie auf **Unicast DNS‑SD** („Wide‑Area Bonjour“) über Tailscale umstellen.
 
-Grobablauf:
+Hochwertige Schritte:
 
 1. Betreiben Sie einen DNS‑Server auf dem Gateway‑Host (über das Tailnet erreichbar).
 2. Veröffentlichen Sie DNS‑SD‑Records für `_openclaw-gw._tcp` unter einer dedizierten Zone
@@ -84,7 +77,7 @@ Für reine Tailnet‑Setups:
 - Setzen Sie `gateway.bind: "tailnet"` in `~/.openclaw/openclaw.json`.
 - Starten Sie den Gateway neu (oder starten Sie die macOS‑Menüleisten‑App neu).
 
-## Was annonciert wird
+## Was werbt
 
 Nur der Gateway annonciert `_openclaw-gw._tcp`.
 
@@ -153,8 +146,7 @@ Das Log enthält Zustandsübergänge des Browsers und Änderungen der Ergebnisme
 - **Multicast blockiert**: Einige WLAN‑Netze deaktivieren mDNS.
 - **Sleep / Interface‑Wechsel**: macOS kann mDNS‑Ergebnisse vorübergehend verwerfen; erneut versuchen.
 - **Durchsuchen funktioniert, Auflösen schlägt fehl**: Halten Sie Rechnernamen einfach
-  (vermeiden Sie Emojis oder Satzzeichen) und starten Sie anschließend den Gateway neu.
-  Der Service‑Instanzname leitet sich vom Hostnamen ab; zu komplexe Namen können einige
+  (vermeiden Sie Emojis oder Satzzeichen) und starten Sie anschließend den Gateway neu. Der Service‑Instanzname leitet sich vom Hostnamen ab; zu komplexe Namen können einige
   Resolver verwirren.
 
 ## Escaped Instanznamen (`\032`)

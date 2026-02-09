@@ -1,15 +1,8 @@
 ---
-summary: „Logik des Menüleistenstatus und was Benutzern angezeigt wird“
+summary: "„Logik des Menüleistenstatus und was Benutzern angezeigt wird“"
 read_when:
   - Optimierung der macOS-Menü-UI oder der Statuslogik
-title: „Menüleiste“
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:55Z
+title: "„Menüleiste“"
 ---
 
 # Logik des Menüleistenstatus
@@ -45,7 +38,7 @@ x-i18n:
 - `attach` → 📎
 - Standard → 🛠️
 
-### Visuelle Zuordnung
+### Visuelles Mapping
 
 - `idle`: normales Critter.
 - `workingMain`: Badge mit Glyph, volle Tönung, „arbeitende“ Beinanimation.

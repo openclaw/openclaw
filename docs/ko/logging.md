@@ -1,17 +1,10 @@
 ---
 summary: "로깅 개요: 파일 로그, 콘솔 출력, CLI 테일링, Control UI"
 read_when:
-  - 로깅에 대한 초보자 친화적인 개요가 필요할 때
+  - 4. 로깅에 대한 초보자 친화적인 개요가 필요합니다
   - 로그 레벨 또는 형식을 구성하고 싶을 때
   - 문제를 해결하면서 로그를 빠르게 찾아야 할 때
 title: "로깅"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:47Z
 ---
 
 # 로깅
@@ -133,7 +126,7 @@ openclaw channels logs --channel whatsapp
 - `compact`: 더 촘촘한 출력 (긴 세션에 적합).
 - `json`: 라인당 JSON (로그 프로세서용).
 
-### 마스킹
+### 5. 민감 정보 마스킹
 
 도구 요약은 콘솔에 표시되기 전에 민감한 토큰을 마스킹할 수 있습니다:
 
@@ -209,7 +202,7 @@ openclaw channels logs --channel whatsapp
 }
 ```
 
-환경 변수 오버라이드 (일회성):
+6. 환경 변수 오버라이드(일회성):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -304,7 +297,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 - `openclaw.session.stuck_age_ms` (히스토그램, 속성: `openclaw.state`)
 - `openclaw.run.attempt` (카운터, 속성: `openclaw.attempt`)
 
-### 내보낸 스팬 (이름 + 주요 속성)
+### 7. 내보낸 스팬(이름 + 주요 속성)
 
 - `openclaw.model.usage`
   - `openclaw.channel`, `openclaw.provider`, `openclaw.model`

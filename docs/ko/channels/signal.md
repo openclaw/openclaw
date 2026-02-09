@@ -4,13 +4,6 @@ read_when:
   - Signal 지원 설정
   - Signal 송수신 디버깅
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:16Z
 ---
 
 # Signal (signal-cli)
@@ -41,7 +34,7 @@ x-i18n:
 }
 ```
 
-## 개요
+## 무엇인가요
 
 - `signal-cli` 를 통한 Signal 채널 (libsignal 내장 아님).
 - 결정적 라우팅: 응답은 항상 Signal 로 되돌아갑니다.
@@ -63,7 +56,7 @@ x-i18n:
 
 - 게이트웨이는 **Signal 디바이스** (`signal-cli` 계정) 에 연결됩니다.
 - **개인 Signal 계정**으로 봇을 실행하면, 자신의 메시지는 무시됩니다 (루프 보호).
-- "내가 봇에게 문자하면 답장한다" 시나리오에는 **별도의 봇 번호**를 사용합니다.
+- "봇에게 문자를 보내면 답장하는" 경우에는 **별도의 봇 번호**를 사용하세요.
 
 ## 설정 (빠른 경로)
 

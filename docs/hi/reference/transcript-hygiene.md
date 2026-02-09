@@ -5,18 +5,16 @@ read_when:
   - आप ट्रांसक्रिप्ट सैनिटाइजेशन या टूल-कॉल मरम्मत लॉजिक बदल रहे हों
   - आप प्रदाताओं के बीच टूल-कॉल आईडी असंगतियों की जाँच कर रहे हों
 title: "ट्रांसक्रिप्ट स्वच्छता"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:50Z
 ---
 
 # ट्रांसक्रिप्ट स्वच्छता (प्रदाता सुधार)
 
-यह दस्तावेज़ रन से पहले (मॉडल संदर्भ बनाते समय) ट्रांसक्रिप्ट पर लागू किए जाने वाले **प्रदाता-विशिष्ट सुधारों** का वर्णन करता है। ये **इन-मेमोरी** समायोजन हैं, जिनका उपयोग कड़े प्रदाता आवश्यकताओं को पूरा करने के लिए किया जाता है। ये स्वच्छता चरण डिस्क पर संग्रहीत JSONL ट्रांसक्रिप्ट को **पुनर्लेखित नहीं** करते; हालांकि, एक अलग सत्र-फ़ाइल मरम्मत चरण सत्र लोड होने से पहले अमान्य पंक्तियाँ हटाकर विकृत JSONL फ़ाइलों को पुनर्लेखित कर सकता है। जब मरम्मत होती है, तो मूल फ़ाइल को सत्र फ़ाइल के साथ बैकअप किया जाता है।
+यह दस्तावेज़ रन से पहले ट्रांसक्रिप्ट्स पर लागू किए गए **प्रोवाइडर-विशिष्ट सुधारों** का वर्णन करता है
+(मॉडल कॉन्टेक्स्ट बनाना)। These are **in-memory** adjustments used to satisfy strict
+provider requirements. These hygiene steps do **not** rewrite the stored JSONL transcript
+on disk; however, a separate session-file repair pass may rewrite malformed JSONL files
+by dropping invalid lines before the session is loaded. When a repair occurs, the original
+file is backed up alongside the session file.
 
 दायरे में शामिल हैं:
 
@@ -63,9 +61,9 @@ x-i18n:
 
 ## वैश्विक नियम: विकृत टूल कॉल
 
-वे असिस्टेंट टूल-कॉल ब्लॉक जिनमें `input` और `arguments` दोनों अनुपस्थित हैं, उन्हें
-मॉडल संदर्भ बनने से पहले हटा दिया जाता है। यह आंशिक रूप से सहेजे गए टूल कॉल (उदाहरण के लिए,
-रेट लिमिट विफलता के बाद) से होने वाले प्रदाता अस्वीकरणों को रोकता है।
+Assistant tool-call blocks that are missing both `input` and `arguments` are dropped
+before model context is built. This prevents provider rejections from partially
+persisted tool calls (for example, after a rate limit failure).
 
 इम्प्लीमेंटेशन:
 
@@ -126,5 +124,6 @@ x-i18n:
   - खाली असिस्टेंट त्रुटि टर्न हटाना।
   - टूल कॉल के बाद असिस्टेंट सामग्री को ट्रिम करना।
 
-इस जटिलता ने क्रॉस-प्रदाता रिग्रेशन पैदा किए (विशेष रूप से `openai-responses`
-`call_id|fc_id` युग्मन)। 2026.1.22 की सफ़ाई में इस एक्सटेंशन को हटा दिया गया, लॉजिक को रनर में केंद्रीकृत किया गया, और OpenAI को इमेज सैनिटाइजेशन से आगे **no-touch** बना दिया गया।
+This complexity caused cross-provider regressions (notably `openai-responses`
+`call_id|fc_id` pairing). The 2026.1.22 cleanup removed the extension, centralized
+logic in the runner, and made OpenAI **no-touch** beyond image sanitization.

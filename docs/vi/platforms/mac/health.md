@@ -3,13 +3,6 @@ summary: "Cách ứng dụng macOS báo cáo trạng thái sức khỏe của ga
 read_when:
   - Gỡ lỗi các chỉ báo sức khỏe của ứng dụng mac
 title: "Kiểm tra sức khỏe"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:38Z
 ---
 
 # Kiểm tra sức khỏe trên macOS
@@ -33,7 +26,7 @@ Cách xem liệu kênh đã liên kết có đang hoạt động tốt từ ứn
 
 ## Cách thăm dò hoạt động
 
-- Ứng dụng chạy `openclaw health --json` qua `ShellExecutor` mỗi ~60 giây và theo yêu cầu. Thăm dò tải thông tin xác thực và báo cáo trạng thái mà không gửi tin nhắn.
+- Ứng dụng chạy `openclaw health --json` thông qua `ShellExecutor` mỗi ~60 giây và theo yêu cầu. Probe tải thông tin xác thực và báo cáo trạng thái mà không gửi thông điệp.
 - Lưu riêng ảnh chụp tốt gần nhất và lỗi gần nhất để tránh nhấp nháy; hiển thị dấu thời gian của từng mục.
 
 ## Khi cần kiểm tra thêm

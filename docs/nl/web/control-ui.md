@@ -4,13 +4,6 @@ read_when:
   - Je wilt de Gateway vanuit een browser bedienen
   - Je wilt Tailnet-toegang zonder SSH-tunnels
 title: "Control UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:02Z
 ---
 
 # Control UI (browser)

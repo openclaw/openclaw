@@ -3,13 +3,6 @@ summary: "`openclaw configure` အတွက် CLI ကိုးကားချ�
 read_when:
   - အထောက်အထားများ၊ စက်ပစ္စည်းများ သို့မဟုတ် အေးဂျင့် ပုံသေသတ်မှတ်ချက်များကို အပြန်အလှန် ပြင်ဆင်လိုသောအခါ
 title: "configure"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:07Z
 ---
 
 # `openclaw configure`
@@ -18,7 +11,7 @@ x-i18n:
 
 မှတ်ချက်: **မော်ဒယ်** အပိုင်းတွင် ယခုအခါ `agents.defaults.models` ခွင့်ပြုစာရင်း ( `/model` နှင့် မော်ဒယ် ရွေးချယ်မှုတွင် ပြသ되는အရာများ) အတွက် အများရွေးချယ်နိုင်သော ရွေးချယ်မှု ပါဝင်လာပါသည်။
 
-အကြံပြုချက်: အခွဲအမိန့် မပါဘဲ `openclaw config` ကို အသုံးပြုပါက တူညီသော လမ်းညွှန်ကိရိယာ (wizard) ကို ဖွင့်ပါသည်။ အပြန်အလှန် မဟုတ်သော ပြင်ဆင်မှုများအတွက် `openclaw config get|set|unset` ကို အသုံးပြုပါ။
+အကြံပြုချက်: subcommand မပါသော `openclaw config` သည် အတူတူသော wizard ကို ဖွင့်ပေးသည်။ non-interactive edits များအတွက် `openclaw config get|set|unset` ကို အသုံးပြုပါ။
 
 ဆက်စပ်အကြောင်းအရာများ:
 
@@ -27,8 +20,8 @@ x-i18n:
 
 မှတ်ချက်များ:
 
-- Gateway（ဂိတ်ဝေး） ကို ဘယ်နေရာမှာ လည်ပတ်မည်ကို ရွေးချယ်သည့်အခါတိုင်း `gateway.mode` ကို အမြဲ အပ်ဒိတ်လုပ်ပါသည်။ အခြားအပိုင်းများ မလိုအပ်ပါက "Continue" ကိုသာ ရွေးချယ်နိုင်ပါသည်။
-- ချန်နယ်ကို အခြေခံသည့် ဝန်ဆောင်မှုများ (Slack/Discord/Matrix/Microsoft Teams) သည် တပ်ဆင်စဉ် ချန်နယ်/အခန်း ခွင့်ပြုစာရင်းများကို မေးမြန်းပါသည်။ အမည်များ သို့မဟုတ် ID များကို ထည့်သွင်းနိုင်ပြီး ဖြစ်နိုင်ပါက လမ်းညွှန်ကိရိယာသည် အမည်များကို ID များအဖြစ် ဖြေရှင်းပေးပါသည်။
+- Gateway chạy မည့်နေရာကို ရွေးချယ်ခြင်းသည် အမြဲတမ်း `gateway.mode` ကို update လုပ်သည်။ လိုအပ်ချက်များ မရှိပါက အခြား section များမရွေးဘဲ "Continue" ကို ရွေးနိုင်သည်။
+- Channel-oriented services (Slack/Discord/Matrix/Microsoft Teams) များသည် setup အတွင်း channel/room allowlists အတွက် prompt လုပ်မည်။ အမည်များ သို့မဟုတ် IDs များကို ထည့်နိုင်ပြီး wizard သည် ဖြစ်နိုင်ပါက အမည်များကို IDs များသို့ resolve လုပ်ပေးသည်။
 
 ## ဥပမာများ
 

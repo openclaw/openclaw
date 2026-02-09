@@ -4,13 +4,6 @@ read_when:
   - Je wilt een snelle beveiligingsaudit uitvoeren op config/status
   - Je wilt veilige “fix”-suggesties toepassen (chmod, strakkere standaardwaarden)
 title: "beveiliging"
-x-i18n:
-  source_path: cli/security.md
-  source_hash: 96542b4784e53933
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:11Z
 ---
 
 # `openclaw security`

@@ -1,21 +1,14 @@
 ---
 summary: "Utforskning: modellkonfiguration, autentiseringsprofiler och fallback-beteende"
 read_when:
-  - "Utforskar framtida idéer för modellval + autentiseringsprofiler"
+  - Utforskar framtida idéer för modellval + autentiseringsprofiler
 title: "Utforskning av modellkonfig"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:16Z
 ---
 
 # Modellkonfig (Utforskning)
 
-Det här dokumentet samlar **idéer** för framtida modellkonfiguration. Det är inte en
-levererad specifikation. För nuvarande beteende, se:
+Det här dokumentet fångar **idéer** för framtida modellkonfiguration. Det är inte en
+frakt spec. För aktuellt beteende, se:
 
 - [Models](/concepts/models)
 - [Model failover](/concepts/model-failover)

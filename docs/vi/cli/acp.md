@@ -4,21 +4,14 @@ read_when:
   - Thiết lập các tích hợp IDE dựa trên ACP
   - Gỡ lỗi định tuyến phiên ACP tới Gateway
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:13Z
 ---
 
 # acp
 
 Chạy cầu nối ACP (Agent Client Protocol) giao tiếp với một OpenClaw Gateway.
 
-Lệnh này nói ACP qua stdio cho các IDE và chuyển tiếp prompt tới Gateway
-qua WebSocket. Nó giữ các phiên ACP được ánh xạ tới khóa phiên của Gateway.
+Lệnh này giao tiếp ACP qua stdio cho các IDE và chuyển tiếp prompt tới Gateway
+qua WebSocket. It keeps ACP sessions mapped to Gateway session keys.
 
 ## Usage
 
@@ -40,7 +33,7 @@ openclaw acp --session agent:main:main --reset-session
 
 ## ACP client (debug)
 
-Sử dụng ACP client tích hợp sẵn để kiểm tra nhanh cầu nối mà không cần IDE.
+Use the built-in ACP client to sanity-check the bridge without an IDE.
 Nó khởi chạy cầu nối ACP và cho phép bạn nhập prompt tương tác.
 
 ```bash
@@ -77,7 +70,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Selecting agents
 
-ACP không chọn tác tử trực tiếp. Nó định tuyến theo khóa phiên của Gateway.
+ACP does not pick agents directly. Nó định tuyến theo khóa phiên Gateway.
 
 Sử dụng khóa phiên theo phạm vi tác tử để nhắm tới một tác tử cụ thể:
 
@@ -87,8 +80,8 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-Mỗi phiên ACP ánh xạ tới một khóa phiên Gateway duy nhất. Một tác tử có thể có
-nhiều phiên; ACP mặc định dùng một phiên `acp:<uuid>` biệt lập trừ khi bạn ghi đè
+Each ACP session maps to a single Gateway session key. Một agent có thể có nhiều
+phiên; ACP mặc định dùng một phiên `acp:<uuid>` tách biệt trừ khi bạn ghi đè
 khóa hoặc nhãn.
 
 ## Zed editor setup
@@ -135,8 +128,8 @@ Trong Zed, mở bảng Agent và chọn “OpenClaw ACP” để bắt đầu m�
 
 ## Session mapping
 
-Theo mặc định, các phiên ACP nhận một khóa phiên Gateway biệt lập với tiền tố `acp:`.
-Để dùng lại một phiên đã biết, hãy truyền khóa phiên hoặc nhãn:
+By default, ACP sessions get an isolated Gateway session key with an `acp:` prefix.
+Để tái sử dụng một phiên đã biết, hãy truyền vào khóa phiên hoặc nhãn:
 
 - `--session <key>`: dùng một khóa phiên Gateway cụ thể.
 - `--session-label <label>`: phân giải một phiên hiện có theo nhãn.

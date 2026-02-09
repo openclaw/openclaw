@@ -1,16 +1,9 @@
 ---
-summary: „OpenClaw-Plugins/-Erweiterungen: Discovery, Konfiguration und Sicherheit“
+summary: "„OpenClaw-Plugins/-Erweiterungen: Discovery, Konfiguration und Sicherheit“"
 read_when:
   - Hinzufügen oder Ändern von Plugins/Erweiterungen
   - Dokumentation von Regeln zur Plugin-Installation oder -Ladung
-title: „Plugins“
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:04Z
+title: "„Plugins“"
 ---
 
 # Plugins (Erweiterungen)
@@ -74,7 +67,7 @@ Plugins können registrieren:
 Plugins laufen **im selben Prozess** wie das Gateway; behandeln Sie sie daher als vertrauenswürdigen Code.
 Leitfaden zur Tool-Erstellung: [Plugin agent tools](/plugins/agent-tools).
 
-## Laufzeit-Hilfsfunktionen
+## Laufzeithelfer
 
 Plugins können über `api.runtime` auf ausgewählte Core-Hilfsfunktionen zugreifen. Für Telefonie-TTS:
 

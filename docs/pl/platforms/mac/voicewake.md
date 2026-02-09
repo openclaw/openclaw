@@ -3,18 +3,11 @@ summary: "Tryby wybudzania głosem i push‑to‑talk oraz szczegóły routingu 
 read_when:
   - Praca nad ścieżkami wybudzania głosem lub PTT
 title: "Wybudzanie głosem"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:39Z
 ---
 
 # Wybudzanie głosem i Push‑to‑Talk
 
-## Tryby
+## Mody
 
 - **Tryb wybudzania słowem kluczowym** (domyślny): zawsze włączony rozpoznawacz mowy czeka na tokeny wyzwalające (`swabbleTriggerWords`). Po dopasowaniu rozpoczyna przechwytywanie, wyświetla nakładkę z tekstem częściowym i automatycznie wysyła po wykryciu ciszy.
 - **Push‑to‑talk (przytrzymanie prawego Option)**: przytrzymaj prawy klawisz Option, aby rozpocząć przechwytywanie natychmiast — bez wyzwalacza. Nakładka jest widoczna podczas przytrzymania; zwolnienie finalizuje i przekazuje po krótkim opóźnieniu, aby umożliwić korektę tekstu.

@@ -4,20 +4,13 @@ read_when:
   - Du vill använda Amazon Bedrock‑modeller med OpenClaw
   - Du behöver konfigurera AWS‑autentisering/region för modellanrop
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:08Z
 ---
 
 # Amazon Bedrock
 
-OpenClaw kan använda **Amazon Bedrock**‑modeller via pi‑ai:s strömmande
-**Bedrock Converse**‑leverantör. Bedrock‑autentisering använder **AWS SDK:s
-standardkedja för autentiseringsuppgifter**, inte en API‑nyckel.
+OpenClaw kan använda **Amazon Bedrock** modeller via pi‐ais **Bedrock Converse**
+streamingleverantör. Bedrock auth använder **AWS SDK standard autentiseringskedjan**,
+inte en API-nyckel.
 
 ## Vad pi‑ai stöder
 
@@ -28,9 +21,9 @@ standardkedja för autentiseringsuppgifter**, inte en API‑nyckel.
 
 ## Automatisk modellupptäckt
 
-Om AWS‑autentiseringsuppgifter upptäcks kan OpenClaw automatiskt upptäcka
-Bedrock‑modeller som stöder **streaming** och **textutdata**. Upptäckten använder
-`bedrock:ListFoundationModels` och cachelagras (standard: 1 timme).
+Om AWS autentiseringsuppgifter upptäcks kan OpenClaw automatiskt upptäcka Bedrock
+modeller som stöder **strömning** och **textutgång**. Discovery använder
+`bedrock:ListFoundationModels` och cachas (standard: 1 timme).
 
 Konfigalternativ finns under `models.bedrockDiscovery`:
 
@@ -107,13 +100,13 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2‑instansroller
 
-När OpenClaw körs på en EC2‑instans med en IAM‑roll kopplad kommer AWS SDK
-automatiskt att använda instansens metadatatjänst (IMDS) för autentisering.
-OpenClaws detektering av autentiseringsuppgifter kontrollerar dock för närvarande
-endast miljövariabler, inte IMDS‑uppgifter.
+När du kör OpenClaw på en EC2-instans med en IAM-roll bifogad, AWS SDK
+kommer automatiskt att använda instans metadatatjänst (IMDS) för autentisering.
+OpenClaws autentiseringskontroller kontrollerar för närvarande bara om omgivningen
+-variabler, inte IMDS-autentiseringsuppgifter.
 
-**Tillfällig lösning:** Sätt `AWS_PROFILE=default` för att signalera att AWS‑uppgifter
-är tillgängliga. Själva autentiseringen använder fortfarande instansrollen via IMDS.
+**Lösning:** Ange `AWS_PROFILE=default` att signalera att AWS autentiseringsuppgifter är
+tillgängliga. Själva autentiseringen använder fortfarande instansrollen via IMDS.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

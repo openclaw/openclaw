@@ -6,22 +6,15 @@ read_when:
   - آپ ایک ایسا macOS ماحول چاہتے ہیں جسے ری سیٹ کیا جا سکے اور کلون کیا جا سکے
   - آپ لوکل بمقابلہ ہوسٹڈ macOS VM کے اختیارات کا موازنہ کرنا چاہتے ہیں
 title: "macOS VMs"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # macOS VMs پر OpenClaw (Sandboxing)
 
 ## سفارش کردہ ڈیفالٹ (زیادہ تر صارفین)
 
-- **چھوٹا Linux VPS** ہمیشہ آن Gateway اور کم لاگت کے لیے۔ دیکھیں [VPS hosting](/vps)۔
-- **مخصوص ہارڈویئر** (Mac mini یا Linux باکس) اگر آپ مکمل کنٹرول اور براؤزر آٹومیشن کے لیے **ریزیڈینشل IP** چاہتے ہیں۔ بہت سی سائٹس ڈیٹا سینٹر IPs کو بلاک کرتی ہیں، اس لیے لوکل براؤزنگ اکثر بہتر کام کرتی ہے۔
-- **ہائبرڈ:** Gateway کو سستے VPS پر رکھیں، اور جب براؤزر/UI آٹومیشن کی ضرورت ہو تو اپنے Mac کو **نوڈ** کے طور پر جوڑیں۔ دیکھیں [Nodes](/nodes) اور [Gateway remote](/gateway/remote)۔
+- **Small Linux VPS** for an always-on Gateway and low cost. See [VPS hosting](/vps).
+- **Dedicated hardware** (Mac mini or Linux box) if you want full control and a **residential IP** for browser automation. Many sites block data center IPs, so local browsing often works better.
+- **Hybrid:** keep the Gateway on a cheap VPS, and connect your Mac as a **node** when you need browser/UI automation. See [Nodes](/nodes) and [Gateway remote](/gateway/remote).
 
 macOS VM اس وقت استعمال کریں جب آپ کو خاص طور پر macOS تک محدود صلاحیتوں (iMessage/BlueBubbles) کی ضرورت ہو یا اپنے روزمرہ Mac سے سخت علیحدگی چاہتے ہوں۔
 
@@ -69,7 +62,7 @@ macOS VM اس وقت استعمال کریں جب آپ کو خاص طور پر m
 
 ---
 
-## 1) Lume انسٹال کریں
+## 1. Lume انسٹال کریں
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ lume --version
 
 ---
 
-## 2) macOS VM بنائیں
+## 2. macOS VM بنائیں
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-یہ macOS ڈاؤن لوڈ کرتا ہے اور VM بناتا ہے۔ VNC ونڈو خود بخود کھل جاتی ہے۔
+This downloads macOS and creates the VM. A VNC window opens automatically.
 
 نوٹ: آپ کے کنکشن پر منحصر ہے، ڈاؤن لوڈ میں کچھ وقت لگ سکتا ہے۔
 
 ---
 
-## 3) Setup Assistant مکمل کریں
+## 3. Setup Assistant مکمل کریں
 
 VNC ونڈو میں:
 
@@ -119,7 +112,7 @@ VNC ونڈو میں:
 
 ---
 
-## 4) VM کا IP ایڈریس حاصل کریں
+## 4. VM کا IP ایڈریس حاصل کریں
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ IP ایڈریس تلاش کریں (عام طور پر `192.168.64.x`)۔
 
 ---
 
-## 5) VM میں SSH کریں
+## 5. VM میں SSH کریں
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) OpenClaw انسٹال کریں
+## 6. OpenClaw انسٹال کریں
 
 VM کے اندر:
 
@@ -152,7 +145,7 @@ openclaw onboard --install-daemon
 
 ---
 
-## 7) چینلز کنفیگر کریں
+## 7. چینلز کنفیگر کریں
 
 کنفیگ فائل ایڈٹ کریں:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) VM کو headless چلائیں
+## 8. VM کو headless چلائیں
 
 VM کو روکیں اور بغیر ڈسپلے کے دوبارہ شروع کریں:
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-VM پس منظر میں چلتا ہے۔ OpenClaw کا ڈیمون gateway کو چلتا رکھتا ہے۔
+The VM runs in the background. OpenClaw's daemon keeps the gateway running.
 
 اسٹیٹس چیک کرنے کے لیے:
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## بونس: iMessage انضمام
 
-یہ macOS پر چلانے کی سب سے بڑی خصوصیت ہے۔ OpenClaw میں iMessage شامل کرنے کے لیے [BlueBubbles](https://bluebubbles.app) استعمال کریں۔
+This is the killer feature of running on macOS. Use [BlueBubbles](https://bluebubbles.app) to add iMessage to OpenClaw.
 
 VM کے اندر:
 
@@ -228,7 +221,7 @@ VM کے اندر:
 }
 ```
 
-gateway کو ری اسٹارٹ کریں۔ اب آپ کا ایجنٹ iMessages بھیج اور وصول کر سکتا ہے۔
+gateway کو ری اسٹارٹ کریں۔ Now your agent can send and receive iMessages.
 
 مکمل سیٹ اپ کی تفصیلات: [BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,17 +254,17 @@ VM کو چلتا رکھنے کے لیے:
 - System Settings → Energy Saver میں سلیپ غیر فعال کریں
 - ضرورت ہو تو `caffeinate` استعمال کریں
 
-حقیقی ہمیشہ آن کے لیے، ایک مخصوص Mac mini یا چھوٹے VPS پر غور کریں۔ دیکھیں [VPS hosting](/vps)۔
+For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosting](/vps).
 
 ---
 
 ## خرابیوں کا ازالہ
 
-| مسئلہ                         | حل                                                                                        |
-| ----------------------------- | ----------------------------------------------------------------------------------------- |
-| VM میں SSH نہیں ہو رہا        | تصدیق کریں کہ VM کی System Settings میں "Remote Login" فعال ہے                            |
-| VM IP نظر نہیں آ رہا          | VM کے مکمل بوٹ ہونے کا انتظار کریں، پھر `lume get openclaw` دوبارہ چلائیں                 |
-| Lume کمانڈ نہیں مل رہی        | `~/.local/bin` کو اپنے PATH میں شامل کریں                                                 |
+| مسئلہ                         | حل                                                                                                           |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| VM میں SSH نہیں ہو رہا        | تصدیق کریں کہ VM کی System Settings میں "Remote Login" فعال ہے                                               |
+| VM IP نظر نہیں آ رہا          | VM کے مکمل بوٹ ہونے کا انتظار کریں، پھر `lume get openclaw` دوبارہ چلائیں                                    |
+| Lume کمانڈ نہیں مل رہی        | `~/.local/bin` کو اپنے PATH میں شامل کریں                                                                    |
 | WhatsApp QR اسکین نہیں ہو رہا | یقینی بنائیں کہ `openclaw channels login` چلاتے وقت آپ VM میں لاگ اِن ہیں (ہوسٹ میں نہیں) |
 
 ---

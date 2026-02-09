@@ -1,20 +1,13 @@
 ---
-summary: „Exec-Freigaben, Allowlists und Sandbox-Escape-Prompts“
+summary: "Exec Genehmigungen, Zulassungen und Sandbox Escape-Eingabeaufforderungen"
 read_when:
-  - Konfigurieren von Exec-Freigaben oder Allowlists
+  - Konfigurieren von Exec Genehmigungen oder Zulassungslisten
   - Implementierung der Exec-Freigabe-UX in der macOS-App
   - Überprüfung von Sandbox-Escape-Prompts und deren Auswirkungen
-title: „Exec-Freigaben“
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:51Z
+title: "Exec Genehmigungen"
 ---
 
-# Exec-Freigaben
+# Exec-Genehmigungen
 
 Exec-Freigaben sind die **Companion-App-/Node-Host-Schutzmaßnahme**, um einem in einer Sandbox laufenden Agenten das Ausführen von
 Befehlen auf einem echten Host zu erlauben (`gateway` oder `node`). Stellen Sie sich dies wie eine Sicherheitsverriegelung vor:
@@ -25,7 +18,7 @@ Die wirksame Richtlinie ist die **strengere** aus `tools.exec.*` und den Standar
 Wenn die Companion-App-UI **nicht verfügbar** ist, wird jede Anfrage, die eine Abfrage erfordert,
 durch den **Ask-Fallback** aufgelöst (Standard: verweigern).
 
-## Geltungsbereich
+## Wo es zutrifft
 
 Exec-Freigaben werden lokal auf dem Ausführungshost durchgesetzt:
 
@@ -144,8 +137,7 @@ Standardmäßige sichere Bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tai
 
 Verwenden Sie die Karte **Control UI → Nodes → Exec-Freigaben**, um Standardwerte, agentenspezifische
 Überschreibungen und Allowlists zu bearbeiten. Wählen Sie einen Geltungsbereich (Standardwerte oder einen Agenten),
-passen Sie die Richtlinie an, fügen Sie Allowlist-Muster hinzu oder entfernen Sie sie und klicken Sie dann auf **Save**.
-Die UI zeigt **last used**-Metadaten pro Muster an, damit Sie die Liste übersichtlich halten können.
+passen Sie die Richtlinie an, fügen Sie Allowlist-Muster hinzu oder entfernen Sie sie und klicken Sie dann auf **Save**. Die UI zeigt **last used**-Metadaten pro Muster an, damit Sie die Liste übersichtlich halten können.
 
 Der Zielselektor wählt **Gateway** (lokale Freigaben) oder einen **Node**. Nodes
 müssen `system.execApprovals.get/set` bewerben (macOS-App oder Headless-Node-Host).
@@ -154,7 +146,7 @@ Wenn ein Node noch keine Exec-Freigaben bewirbt, bearbeiten Sie dessen lokale
 
 CLI: `openclaw approvals` unterstützt die Bearbeitung von Gateway oder Node (siehe [Approvals CLI](/cli/approvals)).
 
-## Freigabeablauf
+## Genehmigungsfluss
 
 Wenn eine Abfrage erforderlich ist, sendet das Gateway `exec.approval.requested` an Operator-Clients.
 Die Control UI und die macOS-App lösen dies über `exec.approval.resolve` auf, anschließend leitet das Gateway die
@@ -237,9 +229,9 @@ Diese werden in der Sitzung des Agenten gepostet, nachdem der Node das Ereignis 
 Exec-Freigaben auf dem Gateway-Host geben dieselben Lebenszyklusereignisse aus, wenn der Befehl beendet ist (und optional, wenn er länger als die Schwelle läuft).
 Freigabe-gebundene Execs verwenden die Freigabe-ID als `runId` in diesen Meldungen zur einfachen Korrelation.
 
-## Auswirkungen
+## Implikationen
 
-- **full** ist mächtig; bevorzugen Sie nach Möglichkeit Allowlists.
+- **voll** ist mächtig; bevorzugen Sie Zulassungslisten wenn möglich.
 - **ask** hält Sie eingebunden und ermöglicht dennoch schnelle Freigaben.
 - Pro-Agent-Allowlists verhindern, dass Freigaben eines Agenten auf andere übergreifen.
 - Freigaben gelten nur für Host-Exec-Anfragen von **autorisierten Absendern**. Nicht autorisierte Absender können `/exec` nicht ausführen.

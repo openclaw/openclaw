@@ -2,13 +2,6 @@
 summary: "Modele d'espace de travail pour TOOLS.md"
 read_when:
   - Mise en place manuelle d'un espace de travail
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:39Z
 ---
 
 # TOOLS.md - Notes locales

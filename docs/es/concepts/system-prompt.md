@@ -4,13 +4,6 @@ read_when:
   - Edición del texto del system prompt, la lista de herramientas o las secciones de tiempo/latidos
   - Cambio del bootstrap del espacio de trabajo o del comportamiento de inyección de Skills
 title: "System Prompt"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:21Z
 ---
 
 # System Prompt

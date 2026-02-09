@@ -4,13 +4,6 @@ read_when:
   - OpenClaw ile Amazon Bedrock modellerini kullanmak istiyorsunuz
   - Model çağrıları için AWS kimlik bilgileri/bölge kurulumuna ihtiyacınız var
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:37Z
 ---
 
 # Amazon Bedrock
@@ -112,8 +105,7 @@ kimlik doğrulama için otomatik olarak instance metadata service’i (IMDS) kul
 Ancak OpenClaw’ın kimlik bilgisi algılaması şu anda yalnızca ortam değişkenlerini
 kontrol eder; IMDS kimlik bilgilerini kontrol etmez.
 
-**Geçici çözüm:** AWS kimlik bilgilerinin mevcut olduğunu belirtmek için `AWS_PROFILE=default` ayarlayın.
-Gerçek kimlik doğrulama yine IMDS üzerinden instance rolünü kullanır.
+**Geçici çözüm:** AWS kimlik bilgilerinin mevcut olduğunu belirtmek için `AWS_PROFILE=default` ayarlayın. Gerçek kimlik doğrulama yine IMDS üzerinden instance rolünü kullanır.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

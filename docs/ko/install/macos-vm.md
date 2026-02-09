@@ -6,13 +6,6 @@ read_when:
   - 복제 가능한 초기화 가능한 macOS 환경이 필요할 때
   - 로컬 vs 호스팅 macOS VM 옵션을 비교하고 싶을 때
 title: "macOS VM"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:32Z
 ---
 
 # macOS VM 에서의 OpenClaw (샌드박스화)
@@ -31,7 +24,7 @@ macOS 전용 기능(iMessage/BlueBubbles)이 필요하거나 일상적인 Mac �
 
 [Lume](https://cua.ai/docs/lume)를 사용하여 기존 Apple Silicon Mac 에서 샌드박스화된 macOS VM 으로 OpenClaw 를 실행합니다.
 
-다음과 같은 이점이 있습니다:
+This gives you:
 
 - 격리된 전체 macOS 환경(호스트는 깨끗하게 유지)
 - BlueBubbles 를 통한 iMessage 지원(Linux/Windows 에서는 불가능)
@@ -56,11 +49,11 @@ macOS VM 에 SSH 접근이 가능해지면 아래 6단계부터 진행하십시�
 3. 설정 도우미 완료, 원격 로그인(SSH) 활성화
 4. `lume run openclaw --no-display`
 5. SSH 접속 후 OpenClaw 설치, 채널 구성
-6. 완료
+6. Done
 
 ---
 
-## 준비 사항(Lume)
+## What you need (Lume)
 
 - Apple Silicon Mac(M1/M2/M3/M4)
 - 호스트에 macOS Sequoia 이상
@@ -69,7 +62,7 @@ macOS VM 에 SSH 접근이 가능해지면 아래 6단계부터 진행하십시�
 
 ---
 
-## 1) Lume 설치
+## 1. Lume 설치
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ lume --version
 
 ---
 
-## 2) macOS VM 생성
+## 2. macOS VM 생성
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 3) 설정 도우미 완료
+## 3. 설정 도우미 완료
 
 VNC 창에서:
 
@@ -119,7 +112,7 @@ VNC 창에서:
 
 ---
 
-## 4) VM 의 IP 주소 확인
+## 4. VM 의 IP 주소 확인
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ IP 주소를 확인하십시오(보통 `192.168.64.x`).
 
 ---
 
-## 5) VM 에 SSH 접속
+## 5. VM 에 SSH 접속
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) OpenClaw 설치
+## 6. OpenClaw 설치
 
 VM 내부에서:
 
@@ -152,7 +145,7 @@ openclaw onboard --install-daemon
 
 ---
 
-## 7) 채널 구성
+## 7. 채널 구성
 
 구성 파일을 편집합니다:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) 헤드리스로 VM 실행
+## 8. 헤드리스로 VM 실행
 
 VM 을 중지한 뒤 디스플레이 없이 다시 시작합니다:
 
@@ -267,12 +260,12 @@ VM 을 계속 실행하려면:
 
 ## 문제 해결
 
-| 문제                     | 해결 방법                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------ |
-| VM 에 SSH 접속 불가      | VM 의 시스템 설정에서 "원격 로그인" 이 활성화되어 있는지 확인하십시오                |
-| VM IP 가 표시되지 않음   | VM 이 완전히 부팅될 때까지 기다린 후 `lume get openclaw` 를 다시 실행하십시오        |
-| Lume 명령을 찾을 수 없음 | `~/.local/bin` 를 PATH 에 추가하십시오                                               |
-| WhatsApp QR 스캔 실패    | `openclaw channels login` 실행 시 호스트가 아닌 VM 에 로그인되어 있는지 확인하십시오 |
+| 문제                | 해결 방법                                                        |
+| ----------------- | ------------------------------------------------------------ |
+| VM 에 SSH 접속 불가    | VM 의 시스템 설정에서 "원격 로그인" 이 활성화되어 있는지 확인하십시오                    |
+| VM IP 가 표시되지 않음   | VM 이 완전히 부팅될 때까지 기다린 후 `lume get openclaw` 를 다시 실행하십시오       |
+| Lume 명령을 찾을 수 없음  | `~/.local/bin` 를 PATH 에 추가하십시오                               |
+| WhatsApp QR 스캔 실패 | `openclaw channels login` 실행 시 호스트가 아닌 VM 에 로그인되어 있는지 확인하십시오 |
 
 ---
 

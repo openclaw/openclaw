@@ -4,13 +4,6 @@ read_when:
   - Vous voulez des modèles GLM dans OpenClaw
   - Vous avez besoin de la convention de nommage des modèles et de la configuration
 title: "Modèles GLM"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:28Z
 ---
 
 # Modèles GLM

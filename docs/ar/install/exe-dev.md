@@ -1,16 +1,9 @@
 ---
 summary: "تشغيل OpenClaw Gateway على exe.dev ‏(آلة افتراضية + وكيل HTTPS) للوصول عن بُعد"
 read_when:
-  - "تريد مضيف لينكس منخفض التكلفة يعمل دائمًا لـ Gateway"
-  - "تريد وصولًا عن بُعد إلى واجهة التحكم دون تشغيل VPS خاص بك"
+  - تريد مضيف لينكس منخفض التكلفة يعمل دائمًا لـ Gateway
+  - تريد وصولًا عن بُعد إلى واجهة التحكم دون تشغيل VPS خاص بك
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:23Z
 ---
 
 # exe.dev
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## التثبيت اليدوي
 
-## 1) إنشاء الآلة الافتراضية
+## 1. إنشاء الآلة الافتراضية
 
 من جهازك:
 
@@ -59,14 +52,14 @@ ssh <vm-name>.exe.xyz
 
 نصيحة: اجعل هذه الآلة الافتراضية **ذات حالة**. يخزّن OpenClaw الحالة تحت `~/.openclaw/` و `~/.openclaw/workspace/`.
 
-## 2) تثبيت المتطلبات المسبقة (على الآلة الافتراضية)
+## 2. تثبيت المتطلبات المسبقة (على الآلة الافتراضية)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) تثبيت OpenClaw
+## 3. تثبيت OpenClaw
 
 شغّل نص تثبيت OpenClaw:
 
@@ -74,7 +67,7 @@ sudo apt-get install -y git curl jq ca-certificates openssl
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) إعداد nginx لعمل وكيل لـ OpenClaw إلى المنفذ 8000
+## 4. إعداد nginx لعمل وكيل لـ OpenClaw إلى المنفذ 8000
 
 حرّر `/etc/nginx/sites-enabled/default` باستخدام
 
@@ -108,7 +101,7 @@ server {
 }
 ```
 
-## 5) الوصول إلى OpenClaw ومنح الصلاحيات
+## 5. الوصول إلى OpenClaw ومنح الصلاحيات
 
 ادخل إلى `https://<vm-name>.exe.xyz/` (راجع مخرجات واجهة التحكم من التهيئة الأولية). إذا طُلبت المصادقة، الصق
 الرمز من `gateway.auth.token` على الآلة الافتراضية (يمكن استرجاعه عبر `openclaw config get gateway.auth.token`، أو إنشاؤه

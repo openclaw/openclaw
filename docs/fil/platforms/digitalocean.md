@@ -4,13 +4,6 @@ read_when:
   - Pagse-setup ng OpenClaw sa DigitalOcean
   - Naghahanap ng murang VPS hosting para sa OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # OpenClaw sa DigitalOcean
@@ -23,13 +16,13 @@ Kung gusto mo ng $0/buwan na opsyon at ayos lang sa iyo ang ARM + provider-speci
 
 ## Paghahambing ng Gastos (2026)
 
-| Provider     | Plan            | Specs                     | Presyo/buwan | Mga tala                                    |
-| ------------ | --------------- | ------------------------- | ------------ | ------------------------------------------- |
-| Oracle Cloud | Always Free ARM | hanggang 4 OCPU, 24GB RAM | $0           | ARM, limitadong capacity / quirks sa signup |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM           | €3.79 (~$4)  | Pinakamurang bayad na opsyon                |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6           | Madaling UI, magagandang docs               |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6           | Maraming lokasyon                           |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5           | Bahagi na ngayon ng Akamai                  |
+| Provider     | Plan            | Specs                     | Presyo/buwan                                                   | Mga tala                                    |
+| ------------ | --------------- | ------------------------- | -------------------------------------------------------------- | ------------------------------------------- |
+| Oracle Cloud | Always Free ARM | hanggang 4 OCPU, 24GB RAM | $0                                                             | ARM, limitadong capacity / quirks sa signup |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM           | €3.79 (~$4) | Pinakamurang bayad na opsyon                |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6                                                             | Madaling UI, magagandang docs               |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6                                                             | Maraming lokasyon                           |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5                                                             | Bahagi na ngayon ng Akamai                  |
 
 **Pagpili ng provider:**
 
@@ -45,7 +38,7 @@ Kung gusto mo ng $0/buwan na opsyon at ayos lang sa iyo ang ARM + provider-speci
 - SSH key pair (o kahandaang gumamit ng password auth)
 - ~20 minuto
 
-## 1) Gumawa ng Droplet
+## 1. Gumawa ng Droplet
 
 1. Mag-log in sa [DigitalOcean](https://cloud.digitalocean.com/)
 2. I-click ang **Create → Droplets**
@@ -63,7 +56,7 @@ Kung gusto mo ng $0/buwan na opsyon at ayos lang sa iyo ang ARM + provider-speci
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) I-install ang OpenClaw
+## 3. I-install ang OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Patakbuhin ang Onboarding
+## 4. Patakbuhin ang Onboarding
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ Gagabayan ka ng wizard sa:
 - Gateway token (auto-generated)
 - Pag-install ng daemon (systemd)
 
-## 5) I-verify ang Gateway
+## 5. I-verify ang Gateway
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) I-access ang Dashboard
+## 6. I-access ang Dashboard
 
-Ang gateway ay naka-bind sa loopback bilang default. Para ma-access ang Control UI:
+The gateway binds to loopback by default. To access the Control UI:
 
 **Opsyon A: SSH Tunnel (inirerekomenda)**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Buksan: `http://<tailscale-ip>:18789` (kailangan ng token).
 
-## 7) Ikonekta ang Iyong mga Channel
+## 7. Ikonekta ang Iyong mga Channel
 
 ### Telegram
 
@@ -169,7 +162,7 @@ Tingnan ang [Channels](/channels) para sa iba pang provider.
 
 ## Mga Optimisasyon para sa 1GB RAM
 
-Ang $6 na droplet ay may 1GB RAM lang. Para manatiling maayos ang takbo:
+The $6 droplet only has 1GB RAM. To keep things running smoothly:
 
 ### Magdagdag ng swap (inirerekomenda)
 
@@ -204,7 +197,7 @@ Lahat ng state ay nasa:
 - `~/.openclaw/` — config, credentials, session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory, atbp.)
 
-Nanatili ang mga ito kahit mag-reboot. I-backup ang mga ito pana-panahon:
+These survive reboots. Back them up periodically:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -228,7 +221,7 @@ Nag-aalok ang Oracle Cloud ng **Always Free** ARM instances na mas makapangyarih
 - Maaaring maging maselan ang signup (subukang muli kung pumalya)
 - ARM architecture — karamihan ay gumagana, pero may ilang binary na nangangailangan ng ARM builds
 
-Para sa buong gabay sa setup, tingnan ang [Oracle Cloud](/platforms/oracle). Para sa mga tip sa signup at pag-troubleshoot ng enrollment process, tingnan ang [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
+Para sa kumpletong gabay sa setup, tingnan ang [Oracle Cloud](/platforms/oracle). Para sa mga tip sa pag-sign up at pag-troubleshoot ng proseso ng enrollment, tingnan ang [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
 
 ---
 

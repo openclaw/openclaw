@@ -3,13 +3,6 @@ summary: "Schematy TypeBox jako pojedyncze źródło prawdy dla protokołu Gatew
 read_when:
   - Aktualizacja schematów protokołu lub codegen
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:16Z
 ---
 
 # TypeBox jako źródło prawdy protokołu
@@ -265,7 +258,7 @@ Generator Swift emituje:
 
 Nieznane typy ramek są zachowywane jako surowe payloady w celu kompatybilności w przód.
 
-## Wersjonowanie i kompatybilność
+## Versioning + compatibility
 
 - `PROTOCOL_VERSION` znajduje się w `src/gateway/protocol/schema.ts`.
 - Klienci wysyłają `minProtocol` + `maxProtocol`; serwer odrzuca niezgodności.

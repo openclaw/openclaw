@@ -5,13 +5,6 @@ read_when:
   - Ändern des Block-Streamings oder des Kanal-Chunking-Verhaltens
   - Debugging von doppelten/frühen Blockantworten oder Entwurfs-Streaming
 title: "Streaming und Chunking"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:08Z
 ---
 
 # Streaming + Chunking
@@ -95,10 +88,10 @@ Wenn Block-Streaming aktiviert ist, können Sie zwischen Blockantworten (nach de
 
 ## „Chunks streamen oder alles auf einmal“
 
-Dies bildet ab:
+Diese Karten zu:
 
 - **Chunks streamen:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (Ausgabe während der Generierung). Nicht-Telegram-Kanäle benötigen zusätzlich `*.blockStreaming: true`.
-- **Alles am Ende streamen:** `blockStreamingBreak: "message_end"` (einmal flushen, ggf. mehrere Chunks bei sehr langen Antworten).
+- **Alles am Ende streamen:** `blockStreamingBreak: "message_end"` (einmal flushen, ggf.
 - **Kein Block-Streaming:** `blockStreamingDefault: "off"` (nur finale Antwort).
 
 **Kanalhinweis:** Für Nicht-Telegram-Kanäle ist Block-Streaming **aus, sofern**

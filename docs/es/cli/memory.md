@@ -4,13 +4,6 @@ read_when:
   - Quiere indexar o buscar memoria semántica
   - Está depurando la disponibilidad de la memoria o la indexación
 title: "memoria"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:56Z
 ---
 
 # `openclaw memory`

@@ -5,19 +5,12 @@ read_when:
   - ماڈل فالبیک رویّے یا انتخابی UX میں تبدیلی کرتے وقت
   - ماڈل اسکین پروبز (tools/images) کو اپڈیٹ کرتے وقت
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # Models CLI
 
-تصدیقی پروفائل روٹیشن، کول ڈاؤنز، اور یہ فالبیکس کے ساتھ کیسے تعامل کرتا ہے، اس کے لیے [/concepts/model-failover](/concepts/model-failover) دیکھیں۔
-فراہم کنندگان کا فوری جائزہ + مثالیں: [/concepts/model-providers](/concepts/model-providers)۔
+24. تصدیقی پروفائل روٹیشن، کول ڈاؤنز، اور یہ کہ وہ فالبیکس کے ساتھ کیسے تعامل کرتے ہیں—کے لیے دیکھیں [/concepts/model-failover](/concepts/model-failover)۔
+    Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 ## ماڈل انتخاب کیسے کام کرتا ہے
 
@@ -57,23 +50,24 @@ setup-token` بھی سپورٹڈ ہے)۔
 - `agents.defaults.models` (allowlist + عرفیات + فراہم کنندہ پیرامیٹرز)
 - `models.providers` (حسبِ ضرورت فراہم کنندگان جو `models.json` میں لکھے جاتے ہیں)
 
-ماڈل حوالہ جات کو lowercase میں نارملائز کیا جاتا ہے۔ فراہم کنندہ کی عرفیات جیسے `z.ai/*` نارملائز ہو کر
-`zai/*` بن جاتی ہیں۔
+Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
+to `zai/*`.
 
 فراہم کنندہ کنفیگریشن کی مثالیں (بشمول OpenCode Zen) یہاں موجود ہیں:
 [/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy)۔
 
 ## “Model is not allowed” (اور جوابات کیوں رک جاتے ہیں)
 
-اگر `agents.defaults.models` سیٹ ہو، تو یہ `/model` اور سیشن اووررائیڈز کے لیے **allowlist** بن جاتا ہے۔
-جب صارف ایسا ماڈل منتخب کرے جو اس allowlist میں نہ ہو، OpenClaw یہ واپس کرتا ہے:
+If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
+session overrides. When a user selects a model that isn’t in that allowlist,
+OpenClaw returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-یہ **عام جواب** بننے سے **پہلے** ہوتا ہے، اس لیے پیغام یوں محسوس ہو سکتا ہے کہ “جواب نہیں آیا”۔
-حل یہ ہے کہ یا تو:
+This happens **before** a normal reply is generated, so the message can feel
+like it “didn’t respond.” The fix is to either:
 
 - ماڈل کو `agents.defaults.models` میں شامل کریں، یا
 - allowlist صاف کریں (یعنی `agents.defaults.models` ہٹا دیں)، یا
@@ -110,7 +104,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 - `/model` (اور `/model list`) ایک مختصر، نمبر شدہ picker ہے (ماڈل فیملی + دستیاب فراہم کنندگان)۔
 - `/model <#>` اسی picker سے انتخاب کرتا ہے۔
 - `/model status` تفصیلی منظر ہے (auth امیدواران اور، جب کنفیگر ہو، فراہم کنندہ اینڈپوائنٹ `baseUrl` + `api` موڈ)۔
-- ماڈل حوالہ جات **پہلے** `/` پر اسپلٹ کر کے پارس کیے جاتے ہیں۔ `/model <ref>` ٹائپ کرتے وقت `provider/model` استعمال کریں۔
+- Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - اگر خود ماڈل ID میں `/` شامل ہو (OpenRouter طرز)، تو آپ کو فراہم کنندہ کا prefix شامل کرنا ہوگا (مثال: `/model openrouter/moonshotai/kimi-k2`)۔
 - اگر آپ فراہم کنندہ چھوڑ دیں، OpenClaw ان پٹ کو عرف یا **ڈیفالٹ فراہم کنندہ** کے ماڈل کے طور پر سمجھتا ہے (یہ تب ہی کام کرتا ہے جب ماڈل ID میں `/` نہ ہو)۔
 
@@ -143,7 +137,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-ڈیفالٹ طور پر کنفیگر کیے گئے ماڈلز دکھاتا ہے۔ مفید flags:
+Shows configured models by default. Useful flags:
 
 - `--all`: مکمل کیٹلاگ
 - `--local`: صرف لوکل فراہم کنندگان
@@ -153,14 +147,14 @@ openclaw models image-fallbacks clear
 
 ### `models status`
 
-حل شدہ primary ماڈل، فالبیکس، امیج ماڈل، اور کنفیگر شدہ فراہم کنندگان کا auth جائزہ دکھاتا ہے۔
-یہ auth اسٹور میں موجود پروفائلز کے لیے OAuth کی میعاد ختم ہونے کی حالت بھی ظاہر کرتا ہے
-(ڈیفالٹ طور پر 24 گھنٹوں کے اندر وارن کرتا ہے)۔ `--plain` صرف حل شدہ primary ماڈل پرنٹ کرتا ہے۔
-OAuth اسٹیٹس ہمیشہ دکھایا جاتا ہے (اور `--json` آؤٹ پٹ میں شامل ہوتا ہے)۔
-اگر کسی کنفیگر شدہ فراہم کنندہ کے پاس اسناد نہ ہوں تو `models status` **Missing auth** سیکشن پرنٹ کرتا ہے۔
-JSON میں `auth.oauth` (warn ونڈو + پروفائلز) اور `auth.providers`
-(ہر فراہم کنندہ کے لیے مؤثر auth) شامل ہوتے ہیں۔
-آٹومیشن کے لیے `--check` استعمال کریں (missing/expired ہونے پر exit `1`، اور expiring ہونے پر `2`)۔
+Shows the resolved primary model, fallbacks, image model, and an auth overview
+of configured providers. It also surfaces OAuth expiry status for profiles found
+in the auth store (warns within 24h by default). `--plain` prints only the
+resolved primary model.
+OAuth status is always shown (and included in `--json` output). 25. اگر کسی کنفیگر شدہ فراہم کنندہ کے پاس اسناد نہ ہوں، تو `models status` ایک **Missing auth** سیکشن پرنٹ کرتا ہے۔
+JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
+(effective auth per provider).
+Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
 Anthropic کے لیے ترجیحی auth، Claude Code CLI کا setup-token ہے (کہیں بھی چلائیں؛ ضرورت ہو تو گیٹ وے ہوسٹ پر پیسٹ کریں):
 
@@ -184,8 +178,8 @@ openclaw models status
 - `--set-default`: `agents.defaults.model.primary` کو پہلی سلیکشن پر سیٹ کریں
 - `--set-image`: `agents.defaults.imageModel.primary` کو پہلی امیج سلیکشن پر سیٹ کریں
 
-پروبنگ کے لیے OpenRouter API کلید درکار ہے (auth پروفائلز سے یا
-`OPENROUTER_API_KEY`)۔ کلید کے بغیر، صرف امیدواروں کی فہرست کے لیے `--no-probe` استعمال کریں۔
+Probing requires an OpenRouter API key (from auth profiles or
+`OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
 
 اسکین نتائج کی درجہ بندی یوں کی جاتی ہے:
 
@@ -201,11 +195,11 @@ openclaw models status
 - اختیاری فلٹرز: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - پروب کنٹرولز: `--timeout`, `--concurrency`
 
-TTY میں چلانے پر آپ فالبیکس کو انٹرایکٹو طور پر منتخب کر سکتے ہیں۔ نان‑انٹرایکٹو
-موڈ میں، ڈیفالٹس قبول کرنے کے لیے `--yes` پاس کریں۔
+When run in a TTY, you can select fallbacks interactively. In non‑interactive
+mode, pass `--yes` to accept defaults.
 
 ## ماڈلز رجسٹری (`models.json`)
 
-`models.providers` میں موجود حسبِ ضرورت فراہم کنندگان، ایجنٹ ڈائریکٹری کے تحت `models.json` میں لکھے جاتے ہیں
-(ڈیفالٹ `~/.openclaw/agents/<agentId>/models.json`)۔ یہ فائل
-ڈیفالٹ طور پر مرج کی جاتی ہے، الا یہ کہ `models.mode` کو `replace` پر سیٹ کیا جائے۔
+Custom providers in `models.providers` are written into `models.json` under the
+agent directory (default `~/.openclaw/agents/<agentId>/models.json`). This file
+is merged by default unless `models.mode` is set to `replace`.

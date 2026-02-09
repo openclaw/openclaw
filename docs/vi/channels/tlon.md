@@ -3,23 +3,16 @@ summary: "Trạng thái hỗ trợ, khả năng và cấu hình cho Tlon/Urbit"
 read_when:
   - Làm việc trên các tính năng kênh Tlon/Urbit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:06Z
 ---
 
 # Tlon (plugin)
 
-Tlon là một trình nhắn tin phi tập trung xây dựng trên Urbit. OpenClaw kết nối với ship Urbit của bạn và có thể
-phản hồi tin nhắn riêng (DM) và tin nhắn trò chuyện nhóm. Phản hồi trong nhóm mặc định yêu cầu có @ mention và có thể
-được hạn chế thêm thông qua danh sách cho phép.
+Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
+respond to DMs and group chat messages. Group replies require an @ mention by default and can
+be further restricted via allowlists.
 
-Trạng thái: được hỗ trợ thông qua plugin. Hỗ trợ DM, mention trong nhóm, trả lời theo luồng, và dự phòng media chỉ văn bản
-(URL được gắn vào chú thích). Không hỗ trợ reactions, polls và tải lên media gốc.
+Status: supported via plugin. DMs, group mentions, thread replies, and text-only media fallback
+(URL appended to caption). Reactions, polls, and native media uploads are not supported.
 
 ## Cần plugin
 
@@ -64,7 +57,7 @@ Cấu hình tối thiểu (một tài khoản):
 
 ## Kênh nhóm
 
-Tự động khám phá được bật theo mặc định. Bạn cũng có thể ghim kênh thủ công:
+Auto-discovery is enabled by default. You can also pin channels manually:
 
 ```json5
 {

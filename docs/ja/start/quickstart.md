@@ -2,15 +2,8 @@
 summary: "クイックスタートは「はじめに」に移動しました。"
 read_when:
   - 最速でセットアップ手順を確認したい場合
-  - 以前のリンクから案内された場合
+  - 古いリンクからここに送信されました
 title: "クイックスタート"
-x-i18n:
-  source_path: start/quickstart.md
-  source_hash: c03779abfcd92ec9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:12Z
 ---
 
 # クイックスタート

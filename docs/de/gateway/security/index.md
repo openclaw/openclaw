@@ -1,15 +1,8 @@
 ---
-summary: „Sicherheitsüberlegungen und Bedrohungsmodell für den Betrieb eines KI-Gateways mit Shell-Zugriff“
+summary: "„Sicherheitsüberlegungen und Bedrohungsmodell für den Betrieb eines KI-Gateways mit Shell-Zugriff“"
 read_when:
   - Beim Hinzufügen von Funktionen, die Zugriff oder Automatisierung erweitern
-title: „Sicherheit“
-x-i18n:
-  source_path: gateway/security/index.md
-  source_hash: 5566bbbbbf7364ec
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:41Z
+title: "Security"
 ---
 
 # Sicherheit 🔒
@@ -56,7 +49,7 @@ Beginnen Sie mit dem kleinsten Zugriff, der noch funktioniert, und erweitern Sie
 
 Wenn Sie `--deep` ausführen, versucht OpenClaw außerdem eine Best‑Effort‑Live‑Gateway‑Probe.
 
-## Übersicht zur Speicherung von Anmeldeinformationen
+## Anmeldedaten Speicherkarte
 
 Nutzen Sie dies bei der Zugriffskontrolle oder der Entscheidung, was gesichert werden soll:
 
@@ -70,7 +63,7 @@ Nutzen Sie dies bei der Zugriffskontrolle oder der Entscheidung, was gesichert w
 
 ## Sicherheits‑Audit‑Checkliste
 
-Behandeln Sie die Findings in dieser Prioritätsreihenfolge:
+Wenn das Audit Ergebnisse ausgibt, behandeln Sie dies als Priorität der Reihenfolge:
 
 1. **Alles „offen“ + Werkzeuge aktiviert**: Zuerst DMs/Gruppen absichern (Pairing/Allowlists), dann Werkzeugrichtlinien/Sandboxing verschärfen.
 2. **Öffentliche Netzwerkexponierung** (LAN-Bind, Funnel, fehlende Auth): Sofort beheben.
@@ -106,7 +99,8 @@ Wenn `trustedProxies` konfiguriert ist, verwendet das Gateway `X-Forwarded-For`�
 
 ## Lokale Sitzungsprotokolle liegen auf der Festplatte
 
-OpenClaw speichert Sitzungs‑Transkripte auf der Festplatte unter `~/.openclaw/agents/<agentId>/sessions/*.jsonl`. Das ist für Sitzungskontinuität und (optional) Sitzungs‑Memory‑Indexierung erforderlich, bedeutet aber auch, dass **jeder Prozess/Nutzer mit Dateisystemzugriff diese Logs lesen kann**. Behandeln Sie den Datenträgerzugriff als Vertrauensgrenze und sperren Sie die Berechtigungen auf `~/.openclaw` (siehe Audit‑Abschnitt unten). Wenn Sie stärkere Isolation zwischen Agenten benötigen, führen Sie sie unter getrennten OS‑Benutzern oder auf getrennten Hosts aus.
+OpenClaw speichert Sitzungs‑Transkripte auf der Festplatte unter `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
+Das ist für Sitzungskontinuität und (optional) Sitzungs‑Memory‑Indexierung erforderlich, bedeutet aber auch, dass **jeder Prozess/Nutzer mit Dateisystemzugriff diese Logs lesen kann**. Behandeln Sie den Datenträgerzugriff als Vertrauensgrenze und sperren Sie die Berechtigungen auf `~/.openclaw` (siehe Audit‑Abschnitt unten). Wenn Sie stärkere Isolation zwischen Agenten benötigen, führen Sie sie unter getrennten OS‑Benutzern oder auf getrennten Hosts aus.
 
 ## Node‑Ausführung (system.run)
 
@@ -314,7 +308,7 @@ Sozialtechnik 101. Misstrauen säen, zum Schnüffeln ermutigen.
 
 ## Konfigurations‑Härtung (Beispiele)
 
-### 0) Dateiberechtigungen
+### 0. Dateiberechtigungen
 
 Halten Sie Konfiguration + State auf dem Gateway‑Host privat:
 
@@ -405,7 +399,8 @@ Setzen Sie ein Token, sodass **alle** WS‑Clients authentifizieren müssen:
 
 Doctor kann eines für Sie erzeugen: `openclaw doctor --generate-gateway-token`.
 
-Hinweis: `gateway.remote.token` gilt **nur** für Remote‑CLI‑Aufrufe; es schützt nicht den lokalen WS‑Zugriff. Optional: Remote‑TLS pinnen mit `gateway.remote.tlsFingerprint` bei Nutzung von `wss://`.
+Hinweis: `gateway.remote.token` gilt **nur** für Remote‑CLI‑Aufrufe; es schützt nicht den lokalen WS‑Zugriff.
+Optional: Remote‑TLS pinnen mit `gateway.remote.tlsFingerprint` bei Nutzung von `wss://`.
 
 Lokales Geräte‑Pairing:
 
@@ -440,7 +435,8 @@ Siehe [Tailscale](/gateway/tailscale) und [Web‑Überblick](/web).
 
 ### 0.6.1) Browser‑Steuerung über Node‑Host (empfohlen)
 
-Wenn Ihr Gateway remote ist, der Browser aber auf einer anderen Maschine läuft, betreiben Sie einen **Node‑Host** auf der Browser‑Maschine und lassen Sie das Gateway Browser‑Aktionen proxyen (siehe [Browser‑Werkzeug](/tools/browser)). Behandeln Sie Node‑Pairing wie Admin‑Zugriff.
+Wenn Ihr Gateway remote ist, der Browser aber auf einer anderen Maschine läuft, betreiben Sie einen **Node‑Host** auf der Browser‑Maschine und lassen Sie das Gateway Browser‑Aktionen proxyen (siehe [Browser‑Werkzeug](/tools/browser)).
+Behandeln Sie Node‑Pairing wie Admin‑Zugriff.
 
 Empfohlenes Muster:
 
@@ -485,7 +481,7 @@ Empfehlungen:
 
 Details: [Logging](/gateway/logging)
 
-### 1) DMs: Pairing standardmäßig
+### 1. DMs: Pairing standardmäßig
 
 ```json5
 {
@@ -493,7 +489,7 @@ Details: [Logging](/gateway/logging)
 }
 ```
 
-### 2) Gruppen: Erwähnung überall erforderlich
+### 2. Gruppen: Erwähnung überall erforderlich
 
 ```json
 {
@@ -533,7 +529,7 @@ Sie können bereits ein Read‑Only‑Profil aufbauen durch Kombination von:
 
 Möglicherweise fügen wir später ein einzelnes `readOnlyMode`‑Flag hinzu, um diese Konfiguration zu vereinfachen.
 
-### 5) Sicheres Baseline‑Profil (Copy/Paste)
+### 5. Sicheres Baseline‑Profil (Copy/Paste)
 
 Eine „sichere Standard“-Konfiguration, die das Gateway privat hält, DM‑Pairing erfordert und Always‑On‑Gruppenbots vermeidet:
 
@@ -577,7 +573,8 @@ Wichtig: `tools.elevated` ist der globale Escape‑Hatch, der exec auf dem Host 
 
 ## Risiken der Browser‑Steuerung
 
-Das Aktivieren der Browser‑Steuerung gibt dem Modell die Fähigkeit, einen echten Browser zu steuern. Wenn dieses Browser‑Profil bereits eingeloggte Sitzungen enthält, kann das Modell auf diese Konten und Daten zugreifen. Behandeln Sie Browser‑Profile als **sensiblen Zustand**:
+Das Aktivieren der Browser‑Steuerung gibt dem Modell die Fähigkeit, einen echten Browser zu steuern.
+Wenn dieses Browser‑Profil bereits eingeloggte Sitzungen enthält, kann das Modell auf diese Konten und Daten zugreifen. Behandeln Sie Browser‑Profile als **sensiblen Zustand**:
 
 - Bevorzugen Sie ein dediziertes Profil für den Agenten (das Standard‑`openclaw`‑Profil).
 - Vermeiden Sie es, den Agenten auf Ihr persönliches Daily‑Driver‑Profil zu richten.
@@ -592,7 +589,8 @@ Das Aktivieren der Browser‑Steuerung gibt dem Modell die Fähigkeit, einen ech
 
 ## Pro‑Agent‑Zugriffsprofile (Multi‑Agent)
 
-Mit Multi‑Agent‑Routing kann jeder Agent seine eigene Sandbox + Werkzeugrichtlinie haben: Nutzen Sie dies, um **vollen Zugriff**, **Read‑Only** oder **keinen Zugriff** pro Agent zu vergeben. Siehe [Multi‑Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) für Details und Prioritätsregeln.
+Mit Multi‑Agent‑Routing kann jeder Agent seine eigene Sandbox + Werkzeugrichtlinie haben: Nutzen Sie dies, um **vollen Zugriff**, **Read‑Only** oder **keinen Zugriff** pro Agent zu vergeben.
+Siehe [Multi‑Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) für Details und Prioritätsregeln.
 
 Häufige Anwendungsfälle:
 
@@ -704,7 +702,7 @@ Nehmen Sie Sicherheitsleitlinien in den System‑Prompt Ihres Agenten auf:
 
 Wenn Ihre KI etwas Schlechtes tut:
 
-### Eindämmen
+### Enthält
 
 1. **Stoppen:** macOS‑App stoppen (falls sie das Gateway überwacht) oder Ihren `openclaw gateway`‑Prozess beenden.
 2. **Exponierung schließen:** `gateway.bind: "loopback"` setzen (oder Tailscale Funnel/Serve deaktivieren), bis Sie verstehen, was passiert ist.
@@ -731,7 +729,8 @@ Wenn Ihre KI etwas Schlechtes tut:
 
 ## Secret Scanning (detect-secrets)
 
-CI führt `detect-secrets scan --baseline .secrets.baseline` im `secrets`‑Job aus. Wenn es fehlschlägt, gibt es neue Kandidaten, die noch nicht in der Baseline sind.
+CI führt `detect-secrets scan --baseline .secrets.baseline` im `secrets`‑Job aus.
+Wenn es fehlschlägt, gibt es neue Kandidaten, die noch nicht in der Baseline sind.
 
 ### Wenn CI fehlschlägt
 
@@ -744,7 +743,9 @@ CI führt `detect-secrets scan --baseline .secrets.baseline` im `secrets`‑Job 
 2. Werkzeuge verstehen:
    - `detect-secrets scan` findet Kandidaten und vergleicht sie mit der Baseline.
    - `detect-secrets audit` öffnet eine interaktive Prüfung, um jedes Baseline‑Element als echt oder False Positive zu markieren.
+
 3. Für echte Geheimnisse: rotieren/entfernen und dann den Scan erneut ausführen, um die Baseline zu aktualisieren.
+
 4. Für False Positives: die interaktive Prüfung ausführen und sie als falsch markieren:
 
    ```bash
@@ -780,7 +781,7 @@ Eine Schwachstelle in OpenClaw gefunden? Bitte verantwortungsvoll melden:
 
 1. E‑Mail: [security@openclaw.ai](mailto:security@openclaw.ai)
 2. Nicht öffentlich posten, bis behoben
-3. Wir nennen Sie als Entdecker (falls gewünscht anonym)
+3. Wir schreiben Ihnen ein (es sei denn, Sie bevorzugen Anonymität)
 
 ---
 

@@ -3,13 +3,6 @@ summary: "Outils de session d’agent pour lister les sessions, recuperer l’hi
 read_when:
   - Ajout ou modification des outils de session
 title: "Outils de session"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:34Z
 ---
 
 # Outils de session
@@ -23,7 +16,7 @@ Objectif : un ensemble d’outils réduit et difficile a mal utiliser afin que 
 - `sessions_send`
 - `sessions_spawn`
 
-## Modele de cles
+## Modèle de clé
 
 - Le compartiment de discussion directe principal est toujours la cle litterale `"main"` (resolue vers la cle principale de l’agent courant).
 - Les discussions de groupe utilisent `agent:<agentId>:<channel>:group:<id>` ou `agent:<agentId>:<channel>:channel:<id>` (fournir la cle complete).

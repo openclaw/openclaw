@@ -4,18 +4,15 @@ read_when:
   - Installera OpenClaw på Windows
   - Söker status för Windows companion-app
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:06Z
 ---
 
 # Windows (WSL2)
 
-OpenClaw på Windows rekommenderas **via WSL2** (Ubuntu rekommenderas). CLI + Gateway körs inuti Linux, vilket håller körmiljön konsekvent och gör verktyg betydligt mer kompatibla (Node/Bun/pnpm, Linux-binärer, Skills). Native Windows kan vara knepigare. WSL2 ger dig hela Linux-upplevelsen — ett kommando för att installera: `wsl --install`.
+OpenClaw på Windows rekommenderas **via WSL2** (Ubuntu rekommenderas).
+CLI + Gateway körs inuti Linux, vilket håller körtiden konsekvent och gör
+verktyg betydligt mer kompatibla (Node/Bun/pnpm, Linux-binärer, färdigheter). Inhemska
+Windows kan vara knepigare. WSL2 ger dig den fullständiga Linuxupplevelsen — ett kommando
+för att installera: `wsl --install`.
 
 Native Windows companion-appar är planerade.
 
@@ -60,9 +57,9 @@ openclaw doctor
 
 ## Avancerat: exponera WSL-tjänster över LAN (portproxy)
 
-WSL har sitt eget virtuella nätverk. Om en annan maskin behöver nå en tjänst
-som körs **inuti WSL** (SSH, en lokal TTS-server eller Gateway), måste du
-vidarebefordra en Windows-port till den aktuella WSL-IP:n. WSL-IP:n ändras efter omstarter,
+WSL har ett eget virtuellt nätverk. Om en annan maskin behöver nå en tjänst
+som kör **inuti WSL** (SSH, en lokal TTS-server, eller Gateway), du måste
+vidarebefordra en Windows-port till den nuvarande WSL IP. WSL IP ändringarna efter omstarten,
 så du kan behöva uppdatera vidarebefordringsregeln.
 
 Exempel (PowerShell **som administratör**):
@@ -105,7 +102,7 @@ Noteringar:
 
 ## Steg-för-steg WSL2-installation
 
-### 1) Installera WSL2 + Ubuntu
+### 1. Installera WSL2 + Ubuntu
 
 Öppna PowerShell (Admin):
 
@@ -118,7 +115,7 @@ wsl --install -d Ubuntu-24.04
 
 Starta om om Windows ber om det.
 
-### 2) Aktivera systemd (krävs för Gateway-installation)
+### 2. Aktivera systemd (krävs för Gateway-installation)
 
 I din WSL-terminal:
 
@@ -141,7 +138,7 @@ wsl --shutdown
 systemctl --user status
 ```
 
-### 3) Installera OpenClaw (inuti WSL)
+### 3. Installera OpenClaw (inuti WSL)
 
 Följ Linux-flödet för Kom igång inuti WSL:
 
@@ -158,5 +155,5 @@ Fullständig guide: [Kom igång](/start/getting-started)
 
 ## Windows companion-app
 
-Vi har ännu ingen Windows companion-app. Bidrag välkomnas om du vill hjälpa till
-att få den på plats.
+Vi har inte en Windows följeslagare app än. Bidrag är välkomna om du vill att
+bidrag ska få det att hända.

@@ -1,17 +1,10 @@
 ---
-title: لوبستر
-summary: «بيئة تشغيل لسير عمل مُنَمَّط لـ OpenClaw مع بوابات موافقة قابلة للاستئناف.»
+title: Lobster
+summary: "بيئة تشغيل لسير عمل مُنَمَّط لـ OpenClaw مع بوابات موافقة قابلة للاستئناف."
 description: Typed workflow runtime for OpenClaw — composable pipelines with approval gates.
 read_when:
   - تريد سير عمل حتميًا متعدد الخطوات مع موافقات صريحة
   - تحتاج إلى استئناف سير عمل دون إعادة تشغيل الخطوات السابقة
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:16Z
 ---
 
 # Lobster

@@ -4,21 +4,14 @@ read_when:
   - Gusto mong pumili ng model provider
   - Kailangan mo ng mabilis na pangkalahatang-ideya ng mga sinusuportahang LLM backend
 title: "Mga Model Provider"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:47Z
 ---
 
 # Mga Model Provider
 
-Maaaring gumamit ang OpenClaw ng maraming LLM provider. Pumili ng provider, mag-authenticate, pagkatapos ay itakda ang
-default na model bilang `provider/model`.
+OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
+default model as `provider/model`.
 
-Naghahanap ng mga doc para sa chat channel (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/atbp.)? Tingnan ang [Channels](/channels).
+Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? See [Channels](/channels).
 
 ## Highlight: Venice (Venice AI)
 
@@ -67,5 +60,5 @@ Tingnan ang [Venice AI](/providers/venice).
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Gamitin ang Claude Max/Pro subscription bilang OpenAI-compatible na API endpoint
 
-Para sa kumpletong catalog ng provider (xAI, Groq, Mistral, atbp.) at advanced na konpigurasyon,
-tingnan ang [Model providers](/concepts/model-providers).
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

@@ -1,16 +1,9 @@
 ---
-summary: „Manuelle Logins für Browser-Automatisierung + Posten auf X/Twitter“
+summary: "„Manuelle Logins für Browser-Automatisierung + Posten auf X/Twitter“"
 read_when:
   - Sie müssen sich für Browser-Automatisierung bei Websites anmelden
   - Sie möchten Updates auf X/Twitter posten
-title: „Browser-Login“
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:27Z
+title: "„Browser-Login“"
 ---
 
 # Browser-Login + X/Twitter-Posting

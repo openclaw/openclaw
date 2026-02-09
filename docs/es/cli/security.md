@@ -4,13 +4,6 @@ read_when:
   - Quiere ejecutar una auditoría rápida de seguridad sobre la configuración/el estado
   - Quiere aplicar sugerencias seguras de “corrección” (chmod, endurecer valores predeterminados)
 title: "seguridad"
-x-i18n:
-  source_path: cli/security.md
-  source_hash: 96542b4784e53933
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:00Z
 ---
 
 # `openclaw security`

@@ -4,13 +4,6 @@ read_when:
   - لوکیشن نوڈ سپورٹ یا اجازتوں کی UI شامل کرتے وقت
   - بیک گراؤنڈ لوکیشن + پُش فلو ڈیزائن کرتے وقت
 title: "لوکیشن کمانڈ"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:27Z
 ---
 
 # لوکیشن کمانڈ (نوڈز)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## سلیکٹر کیوں (صرف سوئچ کیوں نہیں)
 
-OS کی اجازتیں کثیر سطحی ہوتی ہیں۔ ہم ایپ کے اندر سلیکٹر ظاہر کر سکتے ہیں، لیکن اصل منظوری OS ہی طے کرتا ہے۔
+OS permissions are multi-level. We can expose a selector in-app, but the OS still decides the actual grant.
 
-- iOS/macOS: صارف سسٹم پرامپٹس/سیٹنگز میں **While Using** یا **Always** منتخب کر سکتا ہے۔ ایپ اپ گریڈ کی درخواست کر سکتی ہے، مگر OS سیٹنگز کی شرط لگا سکتا ہے۔
+- iOS/macOS: user can choose **While Using** or **Always** in system prompts/Settings. App can request upgrade, but OS may require Settings.
 - Android: بیک گراؤنڈ لوکیشن ایک الگ اجازت ہے؛ Android 10+ پر عموماً سیٹنگز فلو درکار ہوتا ہے۔
 - Precise location ایک علیحدہ منظوری ہے (iOS 14+ “Precise”، Android میں “fine” بمقابلہ “coarse”)۔
 
@@ -47,7 +40,7 @@ UI رویّہ:
 
 ## اجازتوں کی میپنگ (node.permissions)
 
-اختیاری۔ macOS نوڈ اجازتوں کے نقشے کے ذریعے `location` رپورٹ کرتا ہے؛ iOS/Android اسے چھوڑ سکتے ہیں۔
+Optional. macOS node reports `location` via the permissions map; iOS/Android may omit it.
 
 ## کمانڈ: `location.get`
 
@@ -103,7 +96,7 @@ Errors (مستحکم کوڈز):
 
 نوٹس:
 
-- iOS: Always اجازت + بیک گراؤنڈ لوکیشن موڈ درکار۔ سائلنٹ پُش محدود کی جا سکتی ہے؛ وقفے وقفے سے ناکامی کی توقع رکھیں۔
+- iOS: Always permission + background location mode required. Silent push may be throttled; expect intermittent failures.
 - Android: بیک گراؤنڈ لوکیشن کے لیے فورگراؤنڈ سروس درکار ہو سکتی ہے؛ بصورتِ دیگر انکار متوقع ہے۔
 
 ## ماڈل/ٹولنگ انضمام
@@ -116,5 +109,5 @@ Errors (مستحکم کوڈز):
 
 - بند: “لوکیشن شیئرنگ غیر فعال ہے۔”
 - While Using: “صرف جب OpenClaw کھلا ہو۔”
-- Always: “بیک گراؤنڈ لوکیشن کی اجازت دیں۔ سسٹم اجازت درکار ہے۔”
-- Precise: “درست GPS لوکیشن استعمال کریں۔ تخمینی لوکیشن شیئر کرنے کے لیے بند کریں۔”
+- Always: “Allow background location. Requires system permission.”
+- Precise: “Use precise GPS location. Toggle off to share approximate location.”

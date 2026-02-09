@@ -3,13 +3,6 @@ summary: "Elevated exec မုဒ်နှင့် /elevated ညွှန်က
 read_when:
   - Elevated မုဒ်၏ ပုံမှန်တန်ဖိုးများ၊ allowlist များ သို့မဟုတ် slash command အပြုအမူကို ပြင်ဆင်ချိန်
 title: "Elevated Mode"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:10Z
 ---
 
 # Elevated Mode (/elevated directives)
@@ -26,10 +19,10 @@ x-i18n:
 
 ## ထိန်းချုပ်နိုင်သည့် အရာများ (နှင့် မထိန်းချုပ်နိုင်သည့် အရာများ)
 
-- **အသုံးပြုနိုင်မှု ဂိတ်များ**: `tools.elevated` သည် ကမ္ဘာလုံးဆိုင်ရာ အခြေခံတန်း ဖြစ်သည်။ `agents.list[].tools.elevated` သည် အေးဂျင့်တစ်ခုချင်းစီအလိုက် elevated ကို ထပ်မံ ကန့်သတ်နိုင်သည် (နှစ်ဖက်စလုံး ခွင့်ပြုရပါသည်)။
+- 14. **Availability gates**: `tools.elevated` သည် ကမ္ဘာလုံးဆိုင်ရာ အခြေခံအဆင့်ဖြစ်ပါသည်။ 15. `agents.list[].tools.elevated` သည် agent တစ်ခုချင်းစီအလိုက် elevated ကို ထပ်မံ ကန့်သတ်နိုင်ပါသည် (နှစ်ဖက်စလုံး ခွင့်ပြုရပါမည်)။
 - **ဆက်ရှင်အလိုက် state**: `/elevated on|off|ask|full` သည် လက်ရှိ ဆက်ရှင် key အတွက် elevated အဆင့်ကို သတ်မှတ်သည်။
 - **Inline directive**: စာသားအတွင်းရှိ `/elevated on|ask|full` သည် ထိုစာသားတစ်ခုတည်းအတွက်သာ သက်ရောက်သည်။
-- **အုပ်စုများ**: အုပ်စုချတ်များတွင် elevated directives ကို အေးဂျင့်ကို mention လုပ်ထားသည့်အခါသာ လက်ခံသည်။ mention လိုအပ်ချက်ကို ကျော်လွှားသော command-only မက်ဆေ့ချ်များကို mention လုပ်ထားသကဲ့သို့ ဆက်ဆံသည်။
+- 16. **Groups**: Group chat များတွင် elevated directives များကို agent ကို mention လုပ်ထားသောအခါတွင်သာ လိုက်နာဆောင်ရွက်ပါသည်။ 17. Mention လိုအပ်ချက်ကို ကျော်ဖြတ်သော command-only မက်ဆေ့ချ်များကို mention လုပ်ထားသည်ဟု သတ်မှတ်ပါသည်။
 - **ဟို့စ်ပေါ်တွင် အကောင်အထည်ဖော်ခြင်း**: elevated သည် `exec` ကို Gateway ဟို့စ်ပေါ်သို့ အတင်း ချမှတ်သည်။ `full` သည် `security=full` ကိုလည်း သတ်မှတ်ပေးသည်။
 - **အတည်ပြုချက်များ**: `full` သည် exec အတည်ပြုချက်များကို ကျော်လွှားသည်။ `on`/`ask` သည် allowlist/ask စည်းမျဉ်းများ လိုအပ်သည့်အခါ အတည်ပြုချက်များကို လိုက်နာသည်။
 - **Unsandboxed အေးဂျင့်များ**: တည်နေရာအတွက် မည်သည့် အပြောင်းအလဲမှ မဖြစ်ပါ။ gating, logging နှင့် status များကိုသာ သက်ရောက်သည်။
@@ -55,7 +48,7 @@ x-i18n:
 - ပို့သူ allowlist: `tools.elevated.allowFrom` နှင့် provider အလိုက် allowlists များ (ဥပမာ `discord`, `whatsapp`)။
 - အေးဂျင့်အလိုက် gate: `agents.list[].tools.elevated.enabled` (ရွေးချယ်နိုင်သည်; ထပ်မံ ကန့်သတ်နိုင်ခြင်းသာ ရှိသည်)။
 - အေးဂျင့်အလိုက် allowlist: `agents.list[].tools.elevated.allowFrom` (ရွေးချယ်နိုင်သည်; သတ်မှတ်ထားပါက ပို့သူသည် ကမ္ဘာလုံးဆိုင်ရာ + အေးဂျင့်အလိုက် allowlists နှစ်ခုစလုံးနှင့် ကိုက်ညီရပါသည်)။
-- Discord fallback: `tools.elevated.allowFrom.discord` ကို ချန်လှပ်ထားပါက `channels.discord.dm.allowFrom` စာရင်းကို fallback အဖြစ် အသုံးပြုသည်။ `tools.elevated.allowFrom.discord` ( `[]` ဖြစ်စေ) ကို သတ်မှတ်၍ override လုပ်နိုင်သည်။ အေးဂျင့်အလိုက် allowlists များတွင် fallback ကို မအသုံးပြုပါ။
+- 18. Discord fallback: `tools.elevated.allowFrom.discord` ကို မထည့်ထားပါက `channels.discord.dm.allowFrom` စာရင်းကို fallback အဖြစ် အသုံးပြုပါသည်။ 19. Override လုပ်ရန် `tools.elevated.allowFrom.discord` ကို ( `[]` ပါဝင်သော်လည်း ) သတ်မှတ်ပါ။ 20. Agent တစ်ခုချင်းစီအလိုက် allowlist များသည် fallback ကို **မ** အသုံးပြုပါ။
 - ဂိတ်အားလုံး ဖြတ်ကျော်ရပါသည်။ မဟုတ်ပါက elevated ကို မရရှိနိုင်ဟု ဆက်ဆံပါသည်။
 
 ## Logging + status

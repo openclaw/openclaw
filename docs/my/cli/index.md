@@ -4,18 +4,11 @@ read_when:
   - CLI အမိန့်များ သို့မဟုတ် ရွေးချယ်မှုများကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်းအချိန်
   - အမိန့် မျက်နှာပြင်အသစ်များကို စာရွက်စာတမ်းရေးသားရာတွင်
 title: "CLI ကိုးကားချက်"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:20Z
 ---
 
 # CLI ကိုးကားချက်
 
-ဤစာမျက်နှာသည် လက်ရှိ CLI အပြုအမူကို ဖော်ပြထားသည်။ အမိန့်များ ပြောင်းလဲပါက ဤစာရွက်စာတမ်းကို အပ်ဒိတ်လုပ်ပါ။
+ဒီစာမျက်နှာမှာ လက်ရှိ CLI behavior ကို ဖော်ပြထားပါသည်။ command များ ပြောင်းလဲပါက ဒီ doc ကို update လုပ်ပါ။
 
 ## Command pages
 
@@ -259,10 +252,10 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw plugins list` — plugins များကို ရှာဖွေပါ (machine output အတွက် `--json` ကို အသုံးပြုပါ)။
 - `openclaw plugins info <id>` — plugin တစ်ခုအတွက် အသေးစိတ် ပြသပါ။
 - `openclaw plugins install <path|.tgz|npm-spec>` — plugin တစ်ခုကို ထည့်သွင်းပါ (သို့မဟုတ် plugin လမ်းကြောင်းကို `plugins.load.paths` ထဲသို့ ထည့်ပါ)။
-- `openclaw plugins enable <id>` / `disable <id>` — `plugins.entries.<id>.enabled` ကို ဖွင့်/ပိတ် ပြုလုပ်ပါ။
+- `openclaw plugins enable <id>` / `disable <id>` — `plugins.entries.<id>` ကို toggle လုပ်ပါ.enabled\`.
 - `openclaw plugins doctor` — plugin load အမှားများကို အစီရင်ခံပါ။
 
-plugin ပြောင်းလဲမှုများအများစုတွင် gateway ကို ပြန်လည်စတင်ရန် လိုအပ်သည်။ [/plugin](/tools/plugin) ကို ကြည့်ပါ။
+Plugin အပြောင်းအလဲအများစုမှာ gateway ကို restart လုပ်ရန်လိုအပ်ပါသည်။ [/plugin](/tools/plugin) ကို ကြည့်ပါ။
 
 ## Memory
 
@@ -274,7 +267,7 @@ plugin ပြောင်းလဲမှုများအများစုတ�
 
 ## Chat slash commands
 
-Chat မက်ဆေ့ချ်များတွင် `/...` အမိန့်များ (စာသားနှင့် native) ကို ပံ့ပိုးသည်။ [/tools/slash-commands](/tools/slash-commands) ကို ကြည့်ပါ။
+Chat message များသည် `/...` command များကို (text နှင့် native) ထောက်ပံ့ပေးပါသည်။ [/tools/slash-commands](/tools/slash-commands) ကို ကြည့်ပါ။
 
 Highlights—
 
@@ -350,7 +343,7 @@ Interactive configuration wizard (models, channels, skills, gateway)။
 
 ### `config`
 
-Non-interactive config အကူအညီများ (get/set/unset)။ `openclaw config` ကို subcommand မပါဘဲ လည်ပတ်ပါက wizard ကို စတင်ပါသည်။
+non-interactive config helper များ (get/set/unset)။ `openclaw config` ကို subcommand မပါဘဲ run လုပ်ပါက wizard ကို စတင်ပေးပါသည်။
 
 Subcommands—
 
@@ -455,7 +448,7 @@ Subcommands—
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook setup + runner။ [/automation/gmail-pubsub](/automation/gmail-pubsub) ကို ကြည့်ပါ။
+Gmail Pub/Sub hook setup နှင့် runner။ [/automation/gmail-pubsub](/automation/gmail-pubsub) ကို ကြည့်ပါ။
 
 Subcommands—
 
@@ -464,7 +457,7 @@ Subcommands—
 
 ### `dns setup`
 
-ဝေးလံသော နေရာများအတွက် discovery DNS helper (CoreDNS + Tailscale)။ [/gateway/discovery](/gateway/discovery) ကို ကြည့်ပါ။
+Wide-area discovery DNS helper (CoreDNS + Tailscale)။ [/gateway/discovery](/gateway/discovery) ကို ကြည့်ပါ။
 
 Options—
 
@@ -530,7 +523,7 @@ Options—
 
 #### `agents add [name]`
 
-သီးခြား agent အသစ် တစ်ခု ထည့်ပါ။ flags (သို့မဟုတ် `--non-interactive`) မပေးပါက guided wizard ကို လည်ပတ်ပါမည်; non-interactive မုဒ်တွင် `--workspace` လိုအပ်သည်။
+isolated agent အသစ်တစ်ခု ထည့်ပါ။ flag များ (သို့မဟုတ် `--non-interactive`) ကို မပေးထားပါက guided wizard ကို run လုပ်ပါသည်; non-interactive mode တွင် `--workspace` လိုအပ်ပါသည်။
 
 Options—
 
@@ -541,7 +534,7 @@ Options—
 - `--non-interactive`
 - `--json`
 
-Binding specs များသည် `channel[:accountId]` ကို အသုံးပြုသည်။ WhatsApp အတွက် `accountId` မပေးထားပါက မူလ account id ကို အသုံးပြုသည်။
+Binding spec များသည် `channel[:accountId]` ကို အသုံးပြုပါသည်။ WhatsApp အတွက် `accountId` ကို ချန်လှပ်ထားပါက default account id ကို အသုံးပြုပါသည်။
 
 #### `agents delete <id>`
 
@@ -693,7 +686,7 @@ Subcommands—
 
 - `gateway status` သည် service ၏ ဖြေရှင်းထားသော port/config ကို အသုံးပြု၍ မူလအားဖြင့် Gateway RPC ကို probe လုပ်သည် (`--url/--token/--password` ဖြင့် override လုပ်နိုင်)။
 - `gateway status` သည် scripting အတွက် `--no-probe`, `--deep`, `--json` ကို ပံ့ပိုးသည်။
-- `gateway status` သည် legacy သို့မဟုတ် ထပ်မံရှိသော gateway services များကိုလည်း ရှာဖွေပြသနိုင်သည် (`--deep` သည် system-level scans ကို ထပ်တိုး)။ Profile အမည်ဖြင့် အမည်ပေးထားသော OpenClaw services များကို first-class အဖြစ် ဆက်ဆံပြီး “extra” ဟု မမှတ်သားပါ။
+- `gateway status` သည် detect လုပ်နိုင်ပါက legacy သို့မဟုတ် extra gateway service များကိုပါ ဖော်ပြပေးပါသည် (`--deep` သည် system-level scan များကို ထည့်ပေါင်းပါသည်)။ profile အမည်ဖြင့် ခေါ်ထားသော OpenClaw service များကို first-class အဖြစ် သတ်မှတ်ပြီး “extra” ဟု မ flag လုပ်ပါ။
 - `gateway status` သည် CLI အသုံးပြုနေသော config လမ်းကြောင်းနှင့် service အသုံးပြုနိုင်ခြေရှိသော config (service env) ကို နှိုင်းယှဉ်ပုံနှိပ်ပြီး probe target URL ကို ပြပါသည်။
 - `gateway install|uninstall|start|stop|restart` သည် scripting အတွက် `--json` ကို ပံ့ပိုးသည် (မူလ output သည် လူဖတ်ရလွယ်ကူနေသည်)။
 - `gateway install` သည် Node runtime ကို မူလအသုံးပြုသည်; bun ကို **မအကြံပြုပါ** (WhatsApp/Telegram bugs)။
@@ -720,9 +713,9 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Gateway CLI အကူအညီများ (RPC subcommands အတွက် `--url`, `--token`, `--password`, `--timeout`, `--expect-final` ကို အသုံးပြုပါ)။
-`--url` ကို ပေးပါက CLI သည် config သို့မဟုတ် environment credentials များကို အလိုအလျောက် မအသုံးချပါ။
-`--token` သို့မဟုတ် `--password` ကို သီးခြား ပေးရပါမည်။ အထောက်အထားကို ထည့်မပေးပါက အမှားဖြစ်သည်။
+Gateway CLI helper များ (RPC subcommand များအတွက် `--url`, `--token`, `--password`, `--timeout`, `--expect-final` ကို အသုံးပြုပါ)။
+`--url` ကို ပေးလိုက်ပါက CLI သည် config သို့မဟုတ် environment credential များကို auto-apply မလုပ်ပါ။
+`--token` သို့မဟုတ် `--password` ကို ထည့်သွင်းပါ။ credential ကို တိတိကျကျ မပေးထားပါက error ဖြစ်ပါသည်။
 
 Subcommands—
 
@@ -788,8 +781,8 @@ Options—
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-auth store ထဲရှိ profiles များအတွက် auth overview နှင့် OAuth သက်တမ်းကုန်ခြင်း အခြေအနေကို အမြဲ ပါဝင်ပြသသည်။
-`--probe` သည် တိုက်ရိုက် request များကို လုပ်ဆောင်ပြီး tokens ကို အသုံးပြုနိုင်ကာ rate limits ကို လှုံ့ဆော်နိုင်သည်။
+auth store ထဲရှိ profile များအတွက် auth overview နှင့် OAuth expiry status ကို အမြဲတမ်း ထည့်သွင်းပြသပါသည်။
+`--probe` သည် live request များကို run လုပ်ပါသည် (token များကို သုံးစွဲနိုင်ပြီး rate limit ကို trigger ဖြစ်စေနိုင်ပါသည်)။
 
 ### `models set <model>`
 
@@ -894,7 +887,7 @@ Options—
 
 ## Cron
 
-အချိန်ဇယားထားသော jobs များကို စီမံခန့်ခွဲပါ (Gateway RPC)။ [/automation/cron-jobs](/automation/cron-jobs) ကို ကြည့်ပါ။
+scheduled job များကို စီမံခန့်ခွဲပါ (Gateway RPC)။ [/automation/cron-jobs](/automation/cron-jobs) ကို ကြည့်ပါ။
 
 Subcommands—
 
@@ -912,8 +905,7 @@ Subcommands—
 
 ## Node host
 
-`node` သည် **headless node host** ကို လည်ပတ်စေသည် သို့မဟုတ် နောက်ခံ service အဖြစ် စီမံခန့်ခွဲသည်။
-[`openclaw node`](/cli/node) ကို ကြည့်ပါ။
+`node` သည် **headless node host** ကို run လုပ်ခြင်း သို့မဟုတ် background service အဖြစ် စီမံခန့်ခွဲပါသည်။ [`openclaw node`](/cli/node) ကို ကြည့်ပါ။
 
 Subcommands—
 
@@ -926,7 +918,7 @@ Subcommands—
 
 ## Nodes
 
-`nodes` သည် Gateway နှင့် ဆက်သွယ်ပြီး pairing ပြုလုပ်ထားသော nodes များကို ဦးတည်သည်။ [/nodes](/nodes) ကို ကြည့်ပါ။
+`nodes` သည် Gateway နှင့် ဆက်သွယ်ပြီး paired node များကို target လုပ်ပါသည်။ [/nodes](/nodes) ကို ကြည့်ပါ။
 
 Common options—
 
@@ -968,7 +960,7 @@ Location—
 
 ## Browser
 
-Browser ထိန်းချုပ်ရေး CLI (သီးသန့် Chrome/Brave/Edge/Chromium)။ [`openclaw browser`](/cli/browser) နှင့် [Browser tool](/tools/browser) ကို ကြည့်ပါ။
+Browser control CLI (သီးသန့် Chrome/Brave/Edge/Chromium)။ [`openclaw browser`](/cli/browser) နှင့် [Browser tool](/tools/browser) ကို ကြည့်ပါ။
 
 Common options—
 

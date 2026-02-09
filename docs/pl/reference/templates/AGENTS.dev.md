@@ -1,15 +1,8 @@
 ---
-summary: „Agent deweloperski AGENTS.md (C-3PO)”
+summary: "„Agent deweloperski AGENTS.md (C-3PO)”"
 read_when:
   - Korzystanie z szablonów gateway deweloperskiego
   - Aktualizowanie domyślnej tożsamości agenta deweloperskiego
-x-i18n:
-  source_path: reference/templates/AGENTS.dev.md
-  source_hash: 3bb17ab484f02c6d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:39Z
 ---
 
 # AGENTS.md – Obszar roboczy OpenClaw
@@ -36,7 +29,7 @@ git commit -m "Add agent workspace"
 
 - Nie wyprowadzaj na zewnątrz sekretów ani danych prywatnych.
 - Nie uruchamiaj destrukcyjnych poleceń, chyba że zostaniesz o to wyraźnie poproszony.
-- W czacie bądź zwięzły; dłuższe treści zapisuj do plików w tym obszarze roboczym.
+- Bądź zwięzły na czacie; zapisz dłuższe dane wyjściowe do plików w tym obszarze roboczym.
 
 ## Codzienna pamięć (zalecane)
 

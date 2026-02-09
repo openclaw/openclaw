@@ -3,20 +3,12 @@ summary: "တိုက်ရိုက် `openclaw agent` CLI ကို လု�
 read_when:
   - အေးဂျင့် CLI entrypoint ကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း ပြုလုပ်နေချိန်
 title: "Agent Send"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:01Z
 ---
 
 # `openclaw agent` (တိုက်ရိုက် အေးဂျင့် လုပ်ဆောင်မှုများ)
 
-`openclaw agent` သည် ဝင်ရောက်လာသော ချတ်မက်ဆေ့ချ် မလိုအပ်ဘဲ အေးဂျင့် တစ်ကြိမ် လည်ပတ်စေသည်။
-ပုံမှန်အားဖြင့် **Gateway（ဂိတ်ဝေး） ကို ဖြတ်သန်း** သွားသည်; လက်ရှိ စက်ပေါ်ရှိ embedded
-runtime ကို အတင်းအကျပ် အသုံးပြုရန် `--local` ကို ထည့်ပါ။
+`openclaw agent` သည် inbound chat message မလိုအပ်ဘဲ agent turn တစ်ကြိမ်ကို အလုပ်လုပ်စေပါသည်။
+ပုံမှန်အားဖြင့် **Gateway မှတစ်ဆင့်** လုပ်ဆောင်သည်; လက်ရှိစက်ပေါ်ရှိ embedded runtime ကို အတင်းအသုံးပြုလိုပါက `--local` ကို ထည့်ပါ။
 
 ## Behavior
 

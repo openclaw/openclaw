@@ -4,13 +4,6 @@ read_when:
   - Du vill ha en snabb diagnos av kanalhälsa + senaste sessionsmottagare
   - Du vill ha en inklistringsbar ”all”-status för felsökning
 title: "status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:49Z
 ---
 
 # `openclaw status`

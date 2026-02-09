@@ -3,28 +3,21 @@ summary: "Livscykel för röstöverlägg när väckningsord och push-to-talk öv
 read_when:
   - Justerar beteendet för röstöverlägg
 title: "Röstöverlägg"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:07Z
 ---
 
 # Livscykel för röstöverlägg (macOS)
 
-Målgrupp: macOS-appbidragsgivare. Mål: hålla röstöverlägget förutsägbart när väckningsord och push-to-talk överlappar.
+Målgrupp: macOS app bidragsgivare. Mål: hålla rösten överlappande förutsägbar när vakna ord och push-to-talk överlappning.
 
 ## Nuvarande avsikt
 
-- Om överlägget redan är synligt från väckningsord och användaren trycker på snabbtangenten, _tar_ snabbtangent-sessionen över den befintliga texten i stället för att nollställa den. Överlägget förblir synligt medan snabbtangenten hålls nere. När användaren släpper: skicka om det finns trimmad text, annars stäng.
+- Om överlagret redan är synligt från wake-word och användaren trycker på snabbtangenten antar snabbtangenten _den befintliga texten istället för att återställa den. Överlagringen stannar upp medan snabbtangenten hålls. När användaren släpper: skicka om det finns klippt text, annars avfärdas inte.
 - Enbart väckningsord skickar fortfarande automatiskt vid tystnad; push-to-talk skickar omedelbart vid släpp.
 
 ## Implementerat (9 dec 2025)
 
-- Överläggssessioner bär nu en token per inspelning (väckningsord eller push-to-talk). Uppdateringar för partial/final/send/dismiss/level släpps när token inte matchar, vilket undviker inaktuella callbacks.
-- Push-to-talk tar över all synlig överläggstext som prefix (så att trycka på snabbtangenten medan väckningsöverlägget är uppe behåller texten och lägger till nytt tal). Den väntar upp till 1,5 s på ett slutligt transkript innan den faller tillbaka till aktuell text.
+- Overlay sessioner nu bära en token per fånga (wake-word eller push-to-talk). Partiell/final/skicka/avfärda/nivåuppdateringar tas bort när token inte stämmer överens med varandra och man undviker inaktuella uppringningar.
+- Push-to-talk antar alla synliga överlägg text som ett prefix (så att trycka på snabbtangenten medan vakna överlägg är uppe behåller texten och lägger till nytt tal). Den väntar upp till 1,5 s på en slutlig utskrift innan den faller tillbaka till den aktuella texten.
 - Loggning för chime/överlägg emitteras vid `info` i kategorierna `voicewake.overlay`, `voicewake.ptt` och `voicewake.chime` (sessionsstart, partial, final, send, dismiss, chime-anledning).
 
 ## Nästa steg
@@ -56,6 +49,7 @@ Målgrupp: macOS-appbidragsgivare. Mål: hålla röstöverlägget förutsägbart
   ```
 
 - Verifiera att endast en aktiv sessionstoken finns; inaktuella callbacks ska släppas av koordinatorn.
+
 - Säkerställ att släpp av push-to-talk alltid anropar `endCapture` med den aktiva token; om texten är tom, förvänta `dismiss` utan chime eller sändning.
 
 ## Migreringssteg (föreslaget)

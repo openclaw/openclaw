@@ -4,18 +4,11 @@ read_when:
   - بیرونی CLI انضمامات شامل یا تبدیل کرتے وقت
   - RPC اڈاپٹرز (signal-cli، imsg) کی خرابیوں کا ازالہ کرتے وقت
 title: "RPC اڈاپٹرز"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:37Z
 ---
 
 # RPC اڈاپٹرز
 
-OpenClaw بیرونی CLIز کو JSON-RPC کے ذریعے مربوط کرتا ہے۔ اس وقت دو پیٹرنز استعمال میں ہیں۔
+OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
 ## پیٹرن A: HTTP ڈیمَن (signal-cli)
 

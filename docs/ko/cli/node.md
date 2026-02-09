@@ -4,13 +4,6 @@ read_when:
   - 헤드리스 node 호스트 실행 시
   - system.run을 위해 macOS가 아닌 node를 페어링할 때
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:31Z
 ---
 
 # `openclaw node`
@@ -35,8 +28,7 @@ Gateway(게이트웨이) WebSocket에 연결하고 이 머신에서
 ## 브라우저 프록시(무설정)
 
 node에서 `browser.enabled`이 비활성화되지 않은 경우,
-node 호스트는 자동으로 브라우저 프록시를 광고합니다.
-이를 통해 추가 구성 없이 해당 node에서 브라우저 자동화를 사용할 수 있습니다.
+node 호스트는 자동으로 브라우저 프록시를 광고합니다. 이를 통해 추가 구성 없이 해당 node에서 브라우저 자동화를 사용할 수 있습니다.
 
 필요한 경우 node에서 비활성화합니다:
 

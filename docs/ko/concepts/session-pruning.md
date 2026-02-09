@@ -3,13 +3,6 @@ summary: "세션 프루닝: 컨텍스트 비대를 줄이기 위한 도구 결�
 read_when:
   - 도구 출력으로 인한 LLM 컨텍스트 증가를 줄이고자 할 때
   - agents.defaults.contextPruning 을 튜닝할 때
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:47Z
 ---
 
 # Session Pruning
@@ -79,7 +72,7 @@ Session pruning 은 각 LLM 호출 직전에 메모리 내 컨텍스트에서 **
 ## Interaction with other limits
 
 - 내장 도구는 이미 자체 출력 트렁케이션을 수행합니다. 세션 프루닝은 장시간 채팅에서 모델 컨텍스트에 과도한 도구 출력이 누적되는 것을 방지하는 추가 레이어입니다.
-- 컴팩션은 별도입니다. 컴팩션은 요약하여 영구 저장하고, 프루닝은 요청 단위의 일시적 처리입니다. [/concepts/compaction](/concepts/compaction) 을 참고하십시오.
+- 컴팩션은 별개입니다: 컴팩션은 요약하여 영구 저장하고, 프루닝은 요청 단위로 일시적입니다. [/concepts/compaction](/concepts/compaction) 을 참고하십시오.
 
 ## Defaults (when enabled)
 

@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Gia cố Cron Add"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:55Z
 ---
 
 # Gia cố Cron Add & Căn chỉnh Schema
 
 ## Bối cảnh
 
-Các log Gateway gần đây cho thấy lặp lại lỗi `cron.add` với tham số không hợp lệ (thiếu `sessionTarget`, `wakeMode`, `payload`, và `schedule` bị sai định dạng). Điều này cho thấy ít nhất một client (nhiều khả năng là đường gọi công cụ của tác tử) đang gửi payload job được bọc hoặc chỉ định không đầy đủ. Bên cạnh đó, có sự lệch pha giữa các enum nhà cung cấp cron trong TypeScript, schema của gateway, cờ CLI và kiểu biểu mẫu UI, cùng với sự không khớp UI cho `cron.status` (UI kỳ vọng `jobCount` trong khi gateway trả về `jobs`).
+Điều này cho thấy ít nhất một client (có khả năng là đường gọi công cụ agent) đang gửi payload job bị bọc hoặc được chỉ định một phần. Điều này cho thấy ít nhất một client (có thể là luồng gọi công cụ của agent) đang gửi payload job được bọc hoặc chỉ định không đầy đủ. Ngoài ra, còn có sự lệch pha giữa các enum của nhà cung cấp cron trong TypeScript, schema gateway, cờ CLI và kiểu form UI, cùng với sự không khớp UI cho `cron.status` (mong đợi `jobCount` trong khi gateway trả về `jobs`).
 
 ## Mục tiêu
 

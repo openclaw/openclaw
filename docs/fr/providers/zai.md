@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez des modeles Z.AI / GLM dans OpenClaw
   - Vous avez besoin d'une configuration simple de ZAI_API_KEY
 title: "Z.AI"
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:29Z
 ---
 
 # Z.AI

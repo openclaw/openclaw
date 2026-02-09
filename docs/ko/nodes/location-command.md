@@ -4,13 +4,6 @@ read_when:
   - 위치 노드 지원 또는 권한 UI 추가 시
   - 백그라운드 위치 + 푸시 흐름 설계 시
 title: "위치 명령"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:40Z
 ---
 
 # 위치 명령(노드)
@@ -53,7 +46,7 @@ UI 동작:
 
 `node.invoke` 를 통해 호출됩니다.
 
-파라미터(권장):
+12. 매개변수(권장):
 
 ```json
 {

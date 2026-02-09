@@ -3,18 +3,11 @@ summary: "Trạng thái hỗ trợ bot Zalo, khả năng và cấu hình"
 read_when:
   - Làm việc với các tính năng hoặc webhook của Zalo
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:19Z
 ---
 
 # Zalo (Bot API)
 
-Trạng thái: thử nghiệm. Chỉ hỗ trợ tin nhắn trực tiếp; nhóm sẽ có sớm theo tài liệu Zalo.
+Status: experimental. Direct messages only; groups coming soon per Zalo docs.
 
 ## Cần plugin
 
@@ -52,8 +45,8 @@ Cấu hình tối thiểu:
 
 ## Nó là gì
 
-Zalo là một ứng dụng nhắn tin tập trung vào Việt Nam; Bot API của nó cho phép Gateway chạy bot cho các cuộc trò chuyện 1:1.
-Phù hợp cho hỗ trợ hoặc thông báo khi bạn muốn định tuyến xác định quay lại Zalo.
+Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
+It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 
 - Một kênh Zalo Bot API do Gateway sở hữu.
 - Định tuyến xác định: phản hồi luôn quay lại Zalo; mô hình không chọn kênh.
@@ -62,7 +55,7 @@ Phù hợp cho hỗ trợ hoặc thông báo khi bạn muốn định tuyến x�
 
 ## Thiết lập (nhanh)
 
-### 1) Tạo bot token (Zalo Bot Platform)
+### 1. Tạo bot token (Zalo Bot Platform)
 
 1. Truy cập [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) và đăng nhập.
 2. Tạo bot mới và cấu hình các thiết lập.
@@ -88,8 +81,8 @@ Tùy chọn biến môi trường: `ZALO_BOT_TOKEN=...` (chỉ hoạt động ch
 
 Hỗ trợ nhiều tài khoản: dùng `channels.zalo.accounts` với token theo từng tài khoản và `name` tùy chọn.
 
-3. Khởi động lại gateway. Zalo sẽ khởi chạy khi token được xác định (qua biến môi trường hoặc cấu hình).
-4. Quyền truy cập DM mặc định là ghép cặp. Phê duyệt mã khi bot được liên hệ lần đầu.
+3. Khởi động lại gateway. Zalo starts when a token is resolved (env or config).
+4. DM access defaults to pairing. Approve the code when the bot is first contacted.
 
 ## Cách hoạt động (hành vi)
 
@@ -107,11 +100,11 @@ Hỗ trợ nhiều tài khoản: dùng `channels.zalo.accounts` với token theo
 
 ### Quyền truy cập DM
 
-- Mặc định: `channels.zalo.dmPolicy = "pairing"`. Người gửi chưa biết sẽ nhận mã ghép cặp; tin nhắn bị bỏ qua cho đến khi được phê duyệt (mã hết hạn sau 1 giờ).
+- Mặc định: `channels.zalo.dmPolicy = "pairing"`. Người gửi chưa biết sẽ nhận mã ghép cặp; tin nhắn bị bỏ qua cho đến khi được duyệt (mã hết hạn sau 1 giờ).
 - Phê duyệt qua:
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- Ghép cặp là cơ chế trao đổi token mặc định. Chi tiết: [Pairing](/channels/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` chấp nhận ID người dùng dạng số (không có tra cứu tên người dùng).
 
 ## Long-polling vs webhook
@@ -134,16 +127,16 @@ Hỗ trợ nhiều tài khoản: dùng `channels.zalo.accounts` với token theo
 
 ## Khả năng
 
-| Tính năng          | Trạng thái                         |
-| ------------------ | ---------------------------------- |
-| Tin nhắn trực tiếp | ✅ Được hỗ trợ                     |
-| Nhóm               | ❌ Sắp ra mắt (theo tài liệu Zalo) |
-| Media (hình ảnh)   | ✅ Được hỗ trợ                     |
-| Reaction           | ❌ Không hỗ trợ                    |
-| Threads            | ❌ Không hỗ trợ                    |
-| Polls              | ❌ Không hỗ trợ                    |
-| Lệnh gốc           | ❌ Không hỗ trợ                    |
-| Streaming          | ⚠️ Bị chặn (giới hạn 2000 ký tự)   |
+| Tính năng                           | Trạng thái                                           |
+| ----------------------------------- | ---------------------------------------------------- |
+| Tin nhắn trực tiếp                  | ✅ Được hỗ trợ                                        |
+| Nhóm                                | ❌ Sắp ra mắt (theo tài liệu Zalo) |
+| Media (hình ảnh) | ✅ Được hỗ trợ                                        |
+| Reaction                            | ❌ Không hỗ trợ                                       |
+| Threads                             | ❌ Không hỗ trợ                                       |
+| Polls                               | ❌ Không hỗ trợ                                       |
+| Lệnh gốc                            | ❌ Không hỗ trợ                                       |
+| Streaming                           | ⚠️ Bị chặn (giới hạn 2000 ký tự)  |
 
 ## Đích gửi (CLI/cron)
 
@@ -175,7 +168,7 @@ Tùy chọn nhà cung cấp:
 - `channels.zalo.botToken`: bot token từ Zalo Bot Platform.
 - `channels.zalo.tokenFile`: đọc token từ đường dẫn tệp.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (mặc định: ghép cặp).
-- `channels.zalo.allowFrom`: danh sách cho phép DM (ID người dùng). `open` yêu cầu `"*"`. Trình hướng dẫn sẽ yêu cầu ID dạng số.
+- `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
 - `channels.zalo.mediaMaxMb`: giới hạn media vào/ra (MB, mặc định 5).
 - `channels.zalo.webhookUrl`: bật chế độ webhook (yêu cầu HTTPS).
 - `channels.zalo.webhookSecret`: secret webhook (8–256 ký tự).
@@ -184,13 +177,13 @@ Tùy chọn nhà cung cấp:
 
 Tùy chọn nhiều tài khoản:
 
-- `channels.zalo.accounts.<id>.botToken`: token theo từng tài khoản.
-- `channels.zalo.accounts.<id>.tokenFile`: tệp token theo từng tài khoản.
-- `channels.zalo.accounts.<id>.name`: tên hiển thị.
-- `channels.zalo.accounts.<id>.enabled`: bật/tắt tài khoản.
-- `channels.zalo.accounts.<id>.dmPolicy`: chính sách DM theo từng tài khoản.
-- `channels.zalo.accounts.<id>.allowFrom`: danh sách cho phép theo từng tài khoản.
-- `channels.zalo.accounts.<id>.webhookUrl`: URL webhook theo từng tài khoản.
-- `channels.zalo.accounts.<id>.webhookSecret`: secret webhook theo từng tài khoản.
-- `channels.zalo.accounts.<id>.webhookPath`: đường dẫn webhook theo từng tài khoản.
-- `channels.zalo.accounts.<id>.proxy`: URL proxy theo từng tài khoản.
+- `channels.zalo.accounts.<id>.botToken`: per-account token.
+- `channels.zalo.accounts.<id>.tokenFile`: per-account token file.
+- `channels.zalo.accounts.<id>`.name\`: tên hiển thị.
+- `channels.zalo.accounts.<id>.enabled`: enable/disable account.
+- `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.
+- `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist.
+- `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL.
+- `channels.zalo.accounts.<id>``.webhookSecret`: webhook secret theo từng tài khoản.
+- `channels.zalo.accounts.<id>``.webhookPath`: đường dẫn webhook theo từng tài khoản.
+- `channels.zalo.accounts.<id>`.proxy\`: URL proxy theo từng tài khoản.

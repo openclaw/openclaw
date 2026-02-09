@@ -3,15 +3,8 @@ summary: "OpenProse: OpenClaw’da .prose iş akışları, slash komutları ve d
 read_when:
   - .prose iş akışlarını çalıştırmak veya yazmak istiyorsunuz
   - OpenProse eklentisini etkinleştirmek istiyorsunuz
-  - Durum depolamayı anlamanız gerekiyor
+  - Durum depolamayı anlamanız gerekir
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:37Z
 ---
 
 # OpenProse
@@ -103,7 +96,7 @@ Kullanıcı düzeyinde kalıcı ajanlar şurada bulunur:
 ~/.prose/agents/
 ```
 
-## Durum kipleri
+## Durum modları
 
 OpenProse birden fazla durum arka ucunu destekler:
 
@@ -115,7 +108,7 @@ OpenProse birden fazla durum arka ucunu destekler:
 Notlar:
 
 - sqlite/postgres isteğe bağlıdır ve deneysel durumdadır.
-- postgres kimlik bilgileri alt ajan günlüklerine akar; özel ve en az ayrıcalıklı bir veritabanı kullanın.
+- postgres kimlik bilgileri alt ajan günlüklerine akar; özel, en az ayrıcalıklı bir VT kullanın.
 
 ## Uzak programlar
 
@@ -126,11 +119,11 @@ Doğrudan URL’ler olduğu gibi getirilir. Bu, `web_fetch` aracını (POST içi
 
 OpenProse programları OpenClaw ilkel yapılarına eşlenir:
 
-| OpenProse kavramı              | OpenClaw aracı   |
-| ------------------------------ | ---------------- |
-| Oturum oluşturma / Görev aracı | `sessions_spawn` |
-| Dosya okuma/yazma              | `read` / `write` |
-| Web getirme                    | `web_fetch`      |
+| OpenProse kavramı             | OpenClaw aracı   |
+| ----------------------------- | ---------------- |
+| Oturum başlatma / Görev aracı | `sessions_spawn` |
+| Dosya okuma/yazma             | `read` / `write` |
+| Web'den getirme               | `web_fetch`      |
 
 Araç izin listeniz bu araçları engelliyorsa, OpenProse programları başarısız olur. [Skills config](/tools/skills-config) bölümüne bakın.
 

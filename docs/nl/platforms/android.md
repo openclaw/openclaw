@@ -5,13 +5,6 @@ read_when:
   - Het debuggen van Android Gateway-discovery of -authenticatie
   - Het verifiëren van chatgeschiedenis-pariteit tussen clients
 title: "Android-app"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # Android-app (Node)
@@ -43,7 +36,7 @@ Android verbindt direct met de Gateway WebSocket (standaard `ws://<host>:18789`)
   - Handmatige gateway host/poort (fallback)
 - Je kunt de CLI (`openclaw`) draaien op de gatewaymachine (of via SSH).
 
-### 1) Start de Gateway
+### 1. Start de Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Voor tailnet-only opstellingen (aanbevolen voor Wenen ⇄ Londen), bind de Gatew
 - Stel `gateway.bind: "tailnet"` in `~/.openclaw/openclaw.json` in op de Gateway-host.
 - Herstart de Gateway / macOS-menubalk-app.
 
-### 2) Discovery verifiëren (optioneel)
+### 2. Discovery verifiëren (optioneel)
 
 Vanaf de gatewaymachine:
 
@@ -77,7 +70,7 @@ Android NSD/mDNS-discovery gaat niet over netwerken heen. Als je Android-node en
 
 Details en voorbeeld CoreDNS-config: [Bonjour](/gateway/bonjour).
 
-### 3) Verbinden vanaf Android
+### 3. Verbinden vanaf Android
 
 In de Android-app:
 
@@ -91,7 +84,7 @@ Na de eerste succesvolle koppeling maakt Android bij het starten automatisch opn
 - Handmatig eindpunt (indien ingeschakeld), anders
 - De laatst ontdekte gateway (best effort).
 
-### 4) Koppeling goedkeuren (CLI)
+### 4. Koppeling goedkeuren (CLI)
 
 Op de gatewaymachine:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Koppelingsdetails: [Gateway-koppeling](/gateway/pairing).
 
-### 5) Controleren of de node verbonden is
+### 5. Controleren of de node verbonden is
 
 - Via nodes-status:
 
@@ -116,7 +109,7 @@ Koppelingsdetails: [Gateway-koppeling](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + geschiedenis
+### 6. Chat + geschiedenis
 
 Het Chat-blad van de Android-node gebruikt de **primaire sessiesleutel** van de gateway (`main`), waardoor geschiedenis en antwoorden worden gedeeld met WebChat en andere clients:
 
@@ -124,7 +117,7 @@ Het Chat-blad van de Android-node gebruikt de **primaire sessiesleutel** van de 
 - Verzenden: `chat.send`
 - Push-updates (best effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + camera
+### 7. Canvas + camera
 
 #### Gateway Canvas Host (aanbevolen voor webcontent)
 

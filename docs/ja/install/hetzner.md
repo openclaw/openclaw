@@ -6,13 +6,6 @@ read_when:
   - 永続化、バイナリ、再起動挙動を完全に制御したい場合
   - Hetzner もしくは同等プロバイダーで Docker 上に OpenClaw を実行している場合
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:25Z
 ---
 
 # Hetzner 上の OpenClaw（Docker、本番 VPS ガイド）
@@ -21,6 +14,7 @@ x-i18n:
 
 Docker を使用して Hetzner VPS 上で永続的な OpenClaw Gateway（ゲートウェイ）を実行し、耐久性のある状態、組み込み済みバイナリ、安全な再起動挙動を実現します。
 
+「OpenClaw 24/7 for ~$5」を使用する場合は、最も簡単な信頼性の高いセットアップです。
 「約 $5 で OpenClaw を 24/7 稼働」したい場合、これが最もシンプルで信頼性の高い構成です。  
 Hetzner の料金は変更されるため、最小の Debian/Ubuntu VPS を選び、OOM が発生したらスケールアップしてください。
 
@@ -37,8 +31,10 @@ Gateway（ゲートウェイ）へのアクセス方法:
 - ノート PC からの SSH ポートフォワーディング
 - ファイアウォールやトークン管理を自分で行う場合の直接ポート公開
 
-このガイドは Hetzner 上の Ubuntu または Debian を前提としています。  
-他の Linux VPS を使用している場合は、パッケージを適宜読み替えてください。  
+このガイドでは、Hetzner 上の Ubuntu または Debian を想定しています。  
+別の Linux VPSを使用している場合は、それに応じてパッケージをマップします。
+このガイドでは、GCP Compute Engine 上の Debian を使用します。  
+Ubuntu でも動作しますが、パッケージを適宜読み替えてください。  
 汎用的な Docker フローについては、[Docker](/install/docker) を参照してください。
 
 ---
@@ -71,7 +67,7 @@ Gateway（ゲートウェイ）へのアクセス方法:
 
 ---
 
-## 1) VPS をプロビジョニング
+## 1. VPS をプロビジョニング
 
 Hetzner で Ubuntu または Debian の VPS を作成します。
 
@@ -83,10 +79,11 @@ ssh root@YOUR_VPS_IP
 
 このガイドでは、VPS はステートフルであることを前提としています。  
 使い捨てのインフラとして扱わないでください。
+使い捨てのインフラとして扱わないでください。
 
 ---
 
-## 2) Docker をインストール（VPS 上）
+## 2. Docker をインストール（VPS 上）
 
 ```bash
 apt-get update
@@ -103,7 +100,7 @@ docker compose version
 
 ---
 
-## 3) OpenClaw リポジトリをクローン
+## 3. OpenClaw リポジトリをクローン
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +111,10 @@ cd openclaw
 
 ---
 
-## 4) 永続的なホストディレクトリを作成
+## 4. 永続的なホストディレクトリを作成
 
-Docker コンテナはエフェメラルです。  
-長期的に保持すべき状態はすべてホスト上に置く必要があります。
+Dockerコンテナは一時的です。
+すべての長生きの状態は、ホスト上で生きなければなりません。
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +127,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) 環境変数を設定
+## 5. 環境変数を設定
 
 リポジトリのルートに `.env` を作成します。
 
@@ -157,7 +154,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose 設定
+## 6. Docker Compose 設定
 
 `docker-compose.yml` を作成または更新します。
 
@@ -204,10 +201,10 @@ services:
 
 ---
 
-## 7) 必要なバイナリをイメージに組み込む（重要）
+## 7. 必要なバイナリをイメージに組み込む（重要）
 
-実行中のコンテナ内にバイナリをインストールするのは罠です。  
-実行時にインストールされたものは、再起動時にすべて失われます。
+実行中のコンテナ内にバイナリをインストールすることは罠です。
+実行時にインストールされたものは、再起動時に失われます。
 
 Skills に必要な外部バイナリは、すべてイメージのビルド時にインストールする必要があります。
 
@@ -217,8 +214,8 @@ Skills に必要な外部バイナリは、すべてイメージのビルド時�
 - Google Places 用の `goplaces`
 - WhatsApp 用の `wacli`
 
-これらは例であり、完全な一覧ではありません。  
-同じパターンを使って、必要なだけバイナリをインストールできます。
+これらは、完全なリストではない例です。
+同じパターンを使用して、必要に応じて多くのバイナリをインストールできます。
 
 後から追加のバイナリに依存する Skills を追加した場合は、次を行う必要があります:
 
@@ -267,7 +264,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) ビルドと起動
+## 8. ビルドと起動
 
 ```bash
 docker compose build
@@ -292,7 +289,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) Gateway（ゲートウェイ）を確認
+## 9. Gateway（ゲートウェイ）を確認
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -322,16 +319,17 @@ Gateway トークンを貼り付けてください。
 
 OpenClaw は Docker 上で動作しますが、Docker は正本ではありません。  
 すべての長期的な状態は、再起動、再ビルド、再起動（リブート）後も維持される必要があります。
+すべての長寿命の状態は、再起動、再構築、再起動、および再起動を生き残らなければなりません。
 
-| コンポーネント               | 保存場所                          | 永続化の仕組み                | 注記                            |
-| ---------------------------- | --------------------------------- | ----------------------------- | ------------------------------- |
-| Gateway 設定                 | `/home/node/.openclaw/`           | ホストのボリュームマウント    | `openclaw.json`、トークンを含む |
-| モデル認証プロファイル       | `/home/node/.openclaw/`           | ホストのボリュームマウント    | OAuth トークン、API キー        |
-| Skill 設定                   | `/home/node/.openclaw/skills/`    | ホストのボリュームマウント    | Skill レベルの状態              |
-| エージェントのワークスペース | `/home/node/.openclaw/workspace/` | ホストのボリュームマウント    | コードとエージェント成果物      |
-| WhatsApp セッション          | `/home/node/.openclaw/`           | ホストのボリュームマウント    | QR ログインを保持               |
-| Gmail キーリング             | `/home/node/.openclaw/`           | ホストボリューム + パスワード | `GOG_KEYRING_PASSWORD` が必要   |
-| 外部バイナリ                 | `/usr/local/bin/`                 | Docker イメージ               | ビルド時に組み込む必要あり      |
-| Node ランタイム              | コンテナのファイルシステム        | Docker イメージ               | イメージビルドごとに再構築      |
-| OS パッケージ                | コンテナのファイルシステム        | Docker イメージ               | 実行時にインストールしない      |
-| Docker コンテナ              | エフェメラル                      | 再起動可能                    | 破棄しても問題なし              |
+| コンポーネント        | 場所                                | 永続化の仕組み          | 注記                         |
+| -------------- | --------------------------------- | ---------------- | -------------------------- |
+| Gateway 設定     | `/home/node/.openclaw/`           | ホストのボリュームマウント    | `openclaw.json`、トークンを含む    |
+| モデル認証プロファイル    | `/home/node/.openclaw/`           | ホストのボリュームマウント    | OAuth トークン、API キー          |
+| Skill 設定       | `/home/node/.openclaw/skills/`    | ホストのボリュームマウント    | Skill レベルの状態               |
+| エージェントのワークスペース | `/home/node/.openclaw/workspace/` | ホストのボリュームマウント    | コードとエージェント成果物              |
+| WhatsApp セッション | `/home/node/.openclaw/`           | ホストのボリュームマウント    | QR ログインを保持                 |
+| Gmail キーリング    | `/home/node/.openclaw/`           | ホストボリューム + パスワード | `GOG_KEYRING_PASSWORD` が必要 |
+| 外部バイナリ         | `/usr/local/bin/`                 | Docker イメージ      | ビルド時に焼かれなければなりません          |
+| Node ランタイム     | コンテナのファイルシステム                     | Docker イメージ      | イメージビルドごとに再構築              |
+| OS パッケージ       | コンテナのファイルシステム                     | Docker イメージ      | 実行時にインストールしない              |
+| Docker コンテナ    | エフェメラル                            | 再起動可能            | 破棄しても安全                    |

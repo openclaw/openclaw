@@ -4,13 +4,6 @@ read_when:
   - Je wilt een chatkanaal voor OpenClaw kiezen
   - Je hebt een snel overzicht nodig van ondersteunde berichtplatforms
 title: "Chatkanalen"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:03Z
 ---
 
 # Chatkanalen

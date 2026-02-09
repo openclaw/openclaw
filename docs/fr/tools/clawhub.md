@@ -5,13 +5,6 @@ read_when:
   - Installation, recherche ou publication de Skills
   - Explication des options CLI ClawHub et du comportement de synchronisation
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:13Z
 ---
 
 # ClawHub
@@ -88,7 +81,8 @@ Un Skill typique comprend :
 - Des configurations, scripts ou fichiers de support optionnels utilises par le Skill.
 - Des metadonnees telles que les tags, le resume et les exigences d’installation.
 
-ClawHub utilise les metadonnees pour alimenter la decouverte et exposer en toute securite les capacites des Skills. Le registre suit egalement des signaux d’utilisation (tels que les etoiles et les telechargements) afin d’ameliorer le classement et la visibilite.
+ClawHub utilise les metadonnees pour alimenter la decouverte et exposer en toute securite les capacites des Skills.
+Le registre suit egalement des signaux d’utilisation (tels que les etoiles et les telechargements) afin d’ameliorer le classement et la visibilite.
 
 ## Ce que le service fournit (fonctionnalites)
 

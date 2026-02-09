@@ -3,13 +3,6 @@ summary: "Estados e animações do ícone da barra de menus do OpenClaw no macOS
 read_when:
   - Alterar o comportamento do ícone da barra de menus
 title: "Ícone da Barra de Menus"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:29Z
 ---
 
 # Estados do Ícone da Barra de Menus

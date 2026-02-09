@@ -5,13 +5,6 @@ read_when:
   - آپ تکرار کے دوران Gateway کو واچ موڈ میں چلانا چاہتے ہوں
   - آپ کو ایک قابلِ تکرار ڈیبگنگ ورک فلو درکار ہو
 title: "ڈیبگنگ"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # ڈیبگنگ
@@ -20,9 +13,9 @@ x-i18n:
 
 ## رن ٹائم ڈیبگ اووررائیڈز
 
-چیٹ میں **`/debug`** استعمال کریں تاکہ **صرف رن ٹائم** کنفیگ اووررائیڈز (میموری میں، ڈسک پر نہیں) سیٹ کیے جا سکیں۔
-**`/debug`** بطورِ طے شدہ غیرفعال ہے؛ اسے **`commands.debug: true`** کے ساتھ فعال کریں۔
-یہ اس وقت مفید ہوتا ہے جب آپ کو **`openclaw.json`** میں ترمیم کیے بغیر غیر معروف سیٹنگز کو ٹوگل کرنا ہو۔
+Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
+`/debug` is disabled by default; enable with `commands.debug: true`.
+This is handy when you need to toggle obscure settings without editing `openclaw.json`.
 
 مثالیں:
 
@@ -53,7 +46,8 @@ tsx watch src/entry.ts gateway --force
 
 ## ڈیو پروفائل + ڈیو گیٹ وے (--dev)
 
-ڈیبگنگ کے لیے اسٹیٹ کو الگ رکھنے اور ایک محفوظ، قابلِ تلف سیٹ اپ شروع کرنے کے لیے ڈیو پروفائل استعمال کریں۔ **دو** **`--dev`** فلیگز ہیں:
+Use the dev profile to isolate state and spin up a safe, disposable setup for
+debugging. There are **two** `--dev` flags:
 
 - **عالمی `--dev` (پروفائل):** اسٹیٹ کو **`~/.openclaw-dev`** کے تحت الگ کرتا ہے اور
   گیٹ وے پورٹ کو بطورِ طے شدہ **`19001`** پر سیٹ کرتا ہے (اس کے ساتھ اخذ شدہ پورٹس بھی تبدیل ہوتی ہیں)۔
@@ -92,8 +86,8 @@ OPENCLAW_PROFILE=dev openclaw tui
 pnpm gateway:dev:reset
 ```
 
-نوٹ: **`--dev`** ایک **عالمی** پروفائل فلیگ ہے اور کچھ رنرز اسے نگل لیتے ہیں۔
-اگر آپ کو اسے واضح طور پر لکھنا ہو تو env var فارم استعمال کریں:
+Note: `--dev` is a **global** profile flag and gets eaten by some runners.
+If you need to spell it out, use the env var form:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -110,9 +104,9 @@ openclaw gateway stop
 
 ## خام اسٹریم لاگنگ (OpenClaw)
 
-OpenClaw کسی بھی فلٹرنگ/فارمیٹنگ سے پہلے **خام اسسٹنٹ اسٹریم** کو لاگ کر سکتا ہے۔
-یہ دیکھنے کا بہترین طریقہ ہے کہ آیا استدلال سادہ متن ڈیلٹاز کے طور پر آ رہا ہے
-(یا الگ thinking بلاکس کی صورت میں)۔
+OpenClaw can log the **raw assistant stream** before any filtering/formatting.
+This is the best way to see whether reasoning is arriving as plain text deltas
+(or as separate thinking blocks).
 
 CLI کے ذریعے فعال کریں:
 

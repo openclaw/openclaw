@@ -5,13 +5,6 @@ read_when:
   - Bạn muốn cấu hình mức log hoặc định dạng
   - Bạn đang xử lý sự cố và cần tìm log nhanh
 title: "Logging"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:47Z
 ---
 
 # Logging
@@ -75,8 +68,8 @@ openclaw doctor
 
 ### Control UI (web)
 
-Tab **Logs** của Control UI tail cùng một tệp bằng `logs.tail`.
-Xem [/web/control-ui](/web/control-ui) để biết cách mở.
+The Control UI’s **Logs** tab tails the same file using `logs.tail`.
+See [/web/control-ui](/web/control-ui) for how to open it.
 
 ### Log chỉ theo kênh
 
@@ -90,8 +83,8 @@ openclaw channels logs --channel whatsapp
 
 ### Log tệp (JSONL)
 
-Mỗi dòng trong tệp log là một đối tượng JSON. CLI và Control UI phân tích các
-mục này để hiển thị đầu ra có cấu trúc (thời gian, mức, phân hệ, thông điệp).
+Each line in the log file is a JSON object. The CLI and Control UI parse these
+entries to render structured output (time, level, subsystem, message).
 
 ### Đầu ra console
 
@@ -146,9 +139,9 @@ Che dữ liệu chỉ ảnh hưởng đến **đầu ra console** và không tha
 
 ## Chẩn đoán + OpenTelemetry
 
-Chẩn đoán là các sự kiện có cấu trúc, có thể đọc bằng máy cho các lần chạy mô hình **và**
-telemetry luồng thông điệp (webhook, xếp hàng, trạng thái phiên). Chúng **không**
-thay thế log; chúng tồn tại để cung cấp metrics, traces và các exporter khác.
+Diagnostics are structured, machine-readable events for model runs **and**
+message-flow telemetry (webhooks, queueing, session state). They do **not**
+replace logs; they exist to feed metrics, traces, and other exporters.
 
 Sự kiện chẩn đoán được phát trong tiến trình, nhưng exporter chỉ gắn khi bật
 chẩn đoán + plugin exporter.
@@ -163,8 +156,8 @@ chẩn đoán + plugin exporter.
 
 - **Metrics**: counter + histogram (mức sử dụng token, luồng thông điệp, xếp hàng).
 - **Traces**: span cho việc dùng mô hình + xử lý webhook/thông điệp.
-- **Logs**: xuất qua OTLP khi bật `diagnostics.otel.logs`. Khối lượng log
-  có thể cao; hãy cân nhắc `logging.level` và bộ lọc của exporter.
+- **Logs**: exported over OTLP when `diagnostics.otel.logs` is enabled. Log
+  volume can be high; keep `logging.level` and exporter filters in mind.
 
 ### Danh mục sự kiện chẩn đoán
 
@@ -203,8 +196,8 @@ Dùng khi bạn muốn các sự kiện chẩn đoán sẵn sàng cho plugin ho�
 
 ### Cờ chẩn đoán (log theo mục tiêu)
 
-Dùng cờ để bật thêm log debug có mục tiêu mà không cần tăng `logging.level`.
-Cờ không phân biệt hoa thường và hỗ trợ wildcard (ví dụ: `telegram.*` hoặc `*`).
+Use flags to turn on extra, targeted debug logs without raising `logging.level`.
+Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
 
 ```json
 {
@@ -228,8 +221,8 @@ Ghi chú:
 
 ### Xuất sang OpenTelemetry
 
-Chẩn đoán có thể được xuất qua plugin `diagnostics-otel` (OTLP/HTTP). Điều này
-hoạt động với mọi OpenTelemetry collector/backend chấp nhận OTLP/HTTP.
+Diagnostics can be exported via the `diagnostics-otel` plugin (OTLP/HTTP). This
+works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 
 ```json
 {
@@ -261,11 +254,11 @@ hoạt động với mọi OpenTelemetry collector/backend chấp nhận OTLP/HT
 Ghi chú:
 
 - Bạn cũng có thể bật plugin bằng `openclaw plugins enable diagnostics-otel`.
-- `protocol` hiện chỉ hỗ trợ `http/protobuf`. `grpc` bị bỏ qua.
+- `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
 - Metrics bao gồm mức sử dụng token, chi phí, kích thước ngữ cảnh, thời lượng chạy, và
   các counter/histogram của luồng thông điệp (webhook, xếp hàng, trạng thái phiên, độ sâu/thời gian chờ hàng đợi).
-- Traces/metrics có thể bật/tắt bằng `traces` / `metrics` (mặc định: bật). Traces
-  bao gồm span sử dụng mô hình cùng span xử lý webhook/thông điệp khi bật.
+- Traces/metrics can be toggled with `traces` / `metrics` (default: on). Traces
+  include model usage spans plus webhook/message processing spans when enabled.
 - Đặt `headers` khi collector của bạn yêu cầu xác thực.
 - Biến môi trường được hỗ trợ: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
@@ -345,8 +338,8 @@ Hàng đợi + phiên:
 ### Hành vi xuất log
 
 - Log OTLP dùng cùng các bản ghi có cấu trúc được ghi vào `logging.file`.
-- Tôn trọng `logging.level` (mức log tệp). Che dữ liệu console **không** áp dụng
-  cho log OTLP.
+- Respect `logging.level` (file log level). Console redaction does **not** apply
+  to OTLP logs.
 - Các cài đặt lưu lượng cao nên ưu tiên lấy mẫu/lọc tại OTLP collector.
 
 ## Mẹo xử lý sự cố

@@ -3,17 +3,10 @@ summary: "Alt ajanlar: sonuçları istekte bulunan sohbet kanalına duyuran, izo
 read_when:
   - Ajan üzerinden arka plan/paralel çalışma istiyorsunuz
   - sessions_spawn veya alt ajan araç politikasını değiştiriyorsunuz
-title: "Alt Ajanlar"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:59Z
+title: "50. Alt Ajanlar"
 ---
 
-# Alt ajanlar
+# Sub-agents
 
 Alt ajanlar, mevcut bir ajan çalıştırmasından oluşturulan arka plan ajan çalıştırmalarıdır. Kendi oturumlarında (`agent:<agentId>:subagent:<uuid>`) çalışırlar ve tamamlandıklarında sonuçlarını istekte bulunan sohbet kanalına **duyururlar**.
 
@@ -34,7 +27,7 @@ Birincil hedefler:
 - Ana çalıştırmayı engellemeden “araştırma / uzun görev / yavaş araç” işlerini paralelleştirmek.
 - Alt ajanları varsayılan olarak izole tutmak (oturum ayrımı + isteğe bağlı sandboxing).
 - Araç yüzeyini yanlış kullanımı zorlaştıracak şekilde tutmak: alt ajanlar varsayılan olarak oturum araçlarını **almaz**.
-- İç içe fan-out’tan kaçınmak: alt ajanlar alt ajan oluşturamaz.
+- Avoid nested fan-out: sub-agents cannot spawn sub-agents.
 
 Maliyet notu: her alt ajanın **kendi** bağlamı ve token kullanımı vardır. Ağır veya tekrarlayan
 görevler için alt ajanlar adına daha ucuz bir model ayarlayın ve ana ajanınızı daha yüksek kaliteli bir modelde tutun.
@@ -89,7 +82,7 @@ Not: birleştirme ekleyicidir; bu nedenle ana profiller her zaman yedek olarak k
 
 Alt ajanlar bir duyuru adımıyla geri bildirim yapar:
 
-- Duyuru adımı alt ajan oturumu içinde çalışır (istekte bulunan oturumda değil).
+- The announce step runs inside the sub-agent session (not the requester session).
 - Alt ajan yanıtı tam olarak `ANNOUNCE_SKIP` ise, hiçbir şey gönderilmez.
 - Aksi halde duyuru yanıtı, bir takip `agent` çağrısı (`deliver=true`) aracılığıyla istekte bulunan sohbet kanalına gönderilir.
 - Duyuru yanıtları, mevcut olduğunda iş parçacığı/konu yönlendirmesini korur (Slack iş parçacıkları, Telegram konuları, Matrix iş parçacıkları).
@@ -146,7 +139,7 @@ Alt ajanlar, süreç içi özel bir kuyruk hattı kullanır:
 - Hat adı: `subagent`
 - Eşzamanlılık: `agents.defaults.subagents.maxConcurrent` (varsayılan `8`)
 
-## Durdurma
+## Stopping
 
 - İstekte bulunan sohbette `/stop` gönderilmesi, istekte bulunan oturumu iptal eder ve ondan oluşturulmuş tüm etkin alt ajan çalıştırmalarını durdurur.
 

@@ -4,13 +4,6 @@ read_when:
   - Je hebt een provider-voor-provider referentie voor modelinstallatie nodig
   - Je wilt voorbeeldconfiguraties of CLI-onboardingopdrachten voor modelproviders
 title: "Modelproviders"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:25Z
 ---
 
 # Modelproviders

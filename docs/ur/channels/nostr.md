@@ -4,20 +4,13 @@ read_when:
   - آپ چاہتے ہیں کہ OpenClaw کو Nostr کے ذریعے DMs موصول ہوں
   - آپ غیر مرکزی پیغام رسانی سیٹ اپ کر رہے ہیں
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # Nostr
 
 **اسٹیٹس:** اختیاری پلگ اِن (بطورِ طے شدہ غیرفعال)۔
 
-Nostr سماجی نیٹ ورکنگ کے لیے ایک غیر مرکزی پروٹوکول ہے۔ یہ چینل OpenClaw کو NIP-04 کے ذریعے خفیہ براہِ راست پیغامات (DMs) وصول کرنے اور جواب دینے کے قابل بناتا ہے۔
+Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted direct messages (DMs) via NIP-04.
 
 ## Install (on demand)
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Configuration reference
 
-| Key          | Type     | Default                                     | Description                       |
-| ------------ | -------- | ------------------------------------------- | --------------------------------- |
-| `privateKey` | string   | required                                    | نجی کلید `nsec` یا hex فارمیٹ میں |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | ریلے URLs (WebSocket)             |
-| `dmPolicy`   | string   | `pairing`                                   | DM رسائی پالیسی                   |
-| `allowFrom`  | string[] | `[]`                                        | مجاز ارسال کنندگان کے pubkeys     |
-| `enabled`    | boolean  | `true`                                      | چینل فعال/غیرفعال کریں            |
-| `name`       | string   | -                                           | ڈسپلے نام                         |
-| `profile`    | object   | -                                           | NIP-01 پروفائل میٹا ڈیٹا          |
+| Key          | Type                                                         | Default                                     | Description                              |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ---------------------------------------- |
+| `privateKey` | string                                                       | required                                    | نجی کلید `nsec` یا hex فارمیٹ میں        |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | ریلے URLs (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM رسائی پالیسی                          |
+| `allowFrom`  | string[] | `[]`                                        | مجاز ارسال کنندگان کے pubkeys            |
+| `enabled`    | boolean                                                      | `true`                                      | چینل فعال/غیرفعال کریں                   |
+| `name`       | string                                                       | -                                           | ڈسپلے نام                                |
+| `profile`    | object                                                       | -                                           | NIP-01 پروفائل میٹا ڈیٹا                 |
 
 ## Profile metadata
 
-پروفائل ڈیٹا NIP-01 `kind:0` ایونٹ کے طور پر شائع کیا جاتا ہے۔ آپ اسے Control UI (Channels -> Nostr -> Profile) سے منظم کر سکتے ہیں یا براہِ راست کنفیگ میں سیٹ کر سکتے ہیں۔
+Profile data is published as a NIP-01 `kind:0` event. You can manage it from the Control UI (Channels -> Nostr -> Profile) or set it directly in config.
 
 مثال:
 
@@ -176,7 +169,7 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 | NIP    | Status    | Description                             |
 | ------ | --------- | --------------------------------------- |
 | NIP-01 | Supported | بنیادی ایونٹ فارمیٹ + پروفائل میٹا ڈیٹا |
-| NIP-04 | Supported | خفیہ DMs (`kind:4`)                     |
+| NIP-04 | Supported | خفیہ DMs (`kind:4`)  |
 | NIP-17 | Planned   | گفٹ-ریپڈ DMs                            |
 | NIP-44 | Planned   | ورژن شدہ خفیہ کاری                      |
 

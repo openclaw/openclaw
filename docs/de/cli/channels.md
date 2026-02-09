@@ -4,13 +4,6 @@ read_when:
   - Sie möchten Kanal-Konten hinzufügen/entfernen (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (Plugin)/Signal/iMessage)
   - Sie möchten den Kanalstatus prüfen oder Kanal-Logs verfolgen
 title: "Kanäle"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:31Z
 ---
 
 # `openclaw channels`

@@ -1,17 +1,10 @@
 ---
-summary: 「疑難排解 cron 與 heartbeat 的排程與傳送問題」
+summary: "疑難排解 cron 與 heartbeat 的排程與傳送問題"
 read_when:
   - Cron 未執行
   - Cron 已執行但未傳送任何訊息
   - Heartbeat 似乎無聲或被略過
-title: 「自動化疑難排解」
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:46Z
+title: "自動化疑難排解"
 ---
 
 # 自動化疑難排解
@@ -51,7 +44,7 @@ openclaw logs --follow
 - 工作已啟用，且具有有效的排程／時區。
 - `cron runs` 顯示 `ok` 或明確的略過原因。
 
-常見特徵：
+Common signatures:
 
 - `cron: scheduler disabled; jobs will not run automatically` → cron 在設定／環境變數中被停用。
 - `cron: timer tick failed` → 排程器 tick 當掉；請檢查周邊的堆疊／日誌內容。
@@ -68,11 +61,11 @@ openclaw logs --follow
 
 良好的輸出看起來會是：
 
-- 執行狀態為 `ok`。
+- Run status is `ok`.
 - 隔離的工作已設定傳送模式／目標。
 - 頻道探測回報目標頻道已連線。
 
-常見特徵：
+Common signatures:
 
 - 執行成功但傳送模式為 `none` → 預期不會有對外訊息。
 - 傳送目標遺失／無效（`channel`/`to`）→ 內部執行可能成功，但會略過對外傳送。
@@ -92,7 +85,7 @@ openclaw channels status --probe
 - Heartbeat 已啟用，且間隔為非零。
 - 最近一次 heartbeat 結果為 `ran`（或略過原因已明確）。
 
-常見特徵：
+Common signatures:
 
 - `heartbeat skipped` 搭配 `reason=quiet-hours` → 超出 `activeHours`。
 - `requests-in-flight` → 主車道忙碌；heartbeat 被延後。
@@ -116,12 +109,12 @@ openclaw logs --follow
 - Heartbeat 的 `activeHours` 會使用已設定的時區解析（`user`、`local`，或明確的 IANA 時區）。
 - 未含時區的 ISO 時間戳，對於 cron 的 `at` 排程會視為 UTC。
 
-常見特徵：
+Common signatures:
 
-- 主機時區變更後，工作在錯誤的實際時間點執行。
+- Jobs run at the wrong wall-clock time after host timezone changes.
 - Heartbeat 在你的白天時段總是被略過，因為 `activeHours.timezone` 設定錯誤。
 
-相關：
+Related:
 
 - [/automation/cron-jobs](/automation/cron-jobs)
 - [/gateway/heartbeat](/gateway/heartbeat)

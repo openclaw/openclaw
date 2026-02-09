@@ -3,21 +3,15 @@ summary: "OpenClaw میں sandboxing کیسے کام کرتا ہے: موڈز، �
 title: Sandboxing
 read_when: "جب آپ کو sandboxing کی مخصوص وضاحت درکار ہو یا agents.defaults.sandbox کو ٹیون کرنا ہو۔"
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # Sandboxing
 
-OpenClaw **ٹولز کو Docker کنٹینرز کے اندر** چلا سکتا ہے تاکہ نقصان کے دائرہ کار کو کم کیا جا سکے۔
-یہ **اختیاری** ہے اور کنفیگریشن کے ذریعے کنٹرول ہوتا ہے (`agents.defaults.sandbox` یا
-`agents.list[].sandbox`)۔ اگر sandboxing بند ہو تو ٹولز ہوسٹ پر چلتے ہیں۔
-Gateway ہوسٹ پر ہی رہتا ہے؛ فعال ہونے پر ٹول کی عمل کاری ایک الگ تھلگ sandbox میں ہوتی ہے۔
+50. OpenClaw **Docker containers کے اندر tools** چلا سکتا ہے تاکہ blast radius کم کیا جا سکے۔
+    This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
+    `agents.list[].sandbox`). If sandboxing is off, tools run on the host.
+    The Gateway stays on the host; tool execution runs in an isolated sandbox
+    when enabled.
 
 یہ مکمل سکیورٹی حد نہیں ہے، مگر جب ماڈل کوئی ناسمجھی کرے تو فائل سسٹم
 اور پروسیس رسائی کو نمایاں طور پر محدود کرتی ہے۔
@@ -26,8 +20,8 @@ Gateway ہوسٹ پر ہی رہتا ہے؛ فعال ہونے پر ٹول کی ع
 
 - ٹول کی عمل کاری (`exec`, `read`, `write`, `edit`, `apply_patch`, `process`, وغیرہ)۔
 - اختیاری sandboxed براؤزر (`agents.defaults.sandbox.browser`)۔
-  - بطورِ طے شدہ، sandbox براؤزر خود بخود شروع ہو جاتا ہے (یقینی بناتا ہے کہ CDP قابلِ رسائی ہو) جب براؤزر ٹول کو اس کی ضرورت ہو۔
-    `agents.defaults.sandbox.browser.autoStart` اور `agents.defaults.sandbox.browser.autoStartTimeoutMs` کے ذریعے کنفیگر کریں۔
+  - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
+    Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
   - `agents.defaults.sandbox.browser.allowHostControl` sandboxed سیشنز کو ہوسٹ براؤزر کو صراحتاً ہدف بنانے دیتا ہے۔
   - اختیاری allowlists `target: "custom"` کو گیٹ کرتی ہیں: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`۔
 
@@ -36,7 +30,7 @@ Sandbox نہیں کیا جاتا:
 - Gateway پروسیس خود۔
 - کوئی بھی ٹول جسے صراحتاً ہوسٹ پر چلانے کی اجازت ہو (مثلاً `tools.elevated`)۔
   - **Elevated exec ہوسٹ پر چلتا ہے اور sandboxing کو بائی پاس کرتا ہے۔**
-  - اگر sandboxing بند ہو تو `tools.elevated` عمل کاری کو تبدیل نہیں کرتا (پہلے ہی ہوسٹ پر ہے)۔ دیکھیں [Elevated Mode](/tools/elevated)۔
+  - If sandboxing is off, `tools.elevated` does not change execution (already on host). دیکھیں [Elevated Mode](/tools/elevated)۔
 
 ## Modes
 
@@ -44,9 +38,9 @@ Sandbox نہیں کیا جاتا:
 
 - `"off"`: کوئی sandboxing نہیں۔
 - `"non-main"`: صرف **غیر-مرکزی** سیشنز sandbox ہوں (اگر آپ عام چیٹس کو ہوسٹ پر چاہتے ہیں تو یہ بطورِ طے شدہ ہے)۔
-- `"all"`: ہر سیشن sandbox میں چلتا ہے۔
-  نوٹ: `"non-main"` کی بنیاد `session.mainKey` پر ہے (بطورِ طے شدہ `"main"`)، ایجنٹ آئی ڈی پر نہیں۔
-  گروپ/چینل سیشنز اپنی الگ کلیدیں استعمال کرتے ہیں، اس لیے وہ غیر-مرکزی شمار ہوتے ہیں اور sandbox کیے جائیں گے۔
+- `"all"`: every session runs in a sandbox.
+  Note: `"non-main"` is based on `session.mainKey` (default `"main"`), not agent id.
+  Group/channel sessions use their own keys, so they count as non-main and will be sandboxed.
 
 ## Scope
 
@@ -64,18 +58,18 @@ Sandbox نہیں کیا جاتا:
 - `"ro"`: ایجنٹ ورک اسپیس کو read-only طور پر `/agent` پر ماؤنٹ کرتا ہے (`write`/`edit`/`apply_patch` کو غیر فعال کرتا ہے)۔
 - `"rw"`: ایجنٹ ورک اسپیس کو read/write کے ساتھ `/workspace` پر ماؤنٹ کرتا ہے۔
 
-آنے والا میڈیا فعال sandbox ورک اسپیس میں کاپی کیا جاتا ہے (`media/inbound/*`)۔
-Skills نوٹ: `read` ٹول sandbox-rooted ہے۔ `workspaceAccess: "none"` کے ساتھ،
-OpenClaw اہل skills کو sandbox ورک اسپیس (`.../skills`) میں mirror کرتا ہے تاکہ
-انہیں پڑھا جا سکے۔ `"rw"` کے ساتھ، ورک اسپیس skills
-`/workspace/skills` سے پڑھے جا سکتے ہیں۔
+Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Skills note: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`,
+OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so
+they can be read. With `"rw"`, workspace skills are readable from
+`/workspace/skills`.
 
 ## Custom bind mounts
 
-`agents.defaults.sandbox.docker.binds` اضافی ہوسٹ ڈائریکٹریز کو کنٹینر میں ماؤنٹ کرتا ہے۔
-فارمیٹ: `host:container:mode` (مثلاً `"/home/user/source:/source:rw"`)۔
+`agents.defaults.sandbox.docker.binds` mounts additional host directories into the container.
+Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
 
-گلوبل اور per-agent binds **مرج** ہوتے ہیں (بدلے نہیں جاتے)۔ `scope: "shared"` کے تحت، per-agent binds کو نظرانداز کیا جاتا ہے۔
+Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
 مثال (read-only سورس + docker ساکٹ):
 
@@ -120,10 +114,10 @@ OpenClaw اہل skills کو sandbox ورک اسپیس (`.../skills`) میں mirr
 scripts/sandbox-setup.sh
 ```
 
-نوٹ: بطورِ طے شدہ امیج میں **Node شامل نہیں**۔ اگر کسی skill کو Node (یا
-دیگر رَن ٹائمز) درکار ہوں تو یا تو ایک کسٹم امیج بنائیں یا
-`sandbox.docker.setupCommand` کے ذریعے انسٹال کریں (نیٹ ورک egress + writable root +
-root یوزر درکار)۔
+Note: the default image does **not** include Node. If a skill needs Node (or
+other runtimes), either bake a custom image or install via
+`sandbox.docker.setupCommand` (requires network egress + writable root +
+root user).
 
 Sandboxed براؤزر امیج:
 
@@ -131,16 +125,16 @@ Sandboxed براؤزر امیج:
 scripts/sandbox-browser-setup.sh
 ```
 
-بطورِ طے شدہ، sandbox کنٹینرز **بغیر نیٹ ورک** چلتے ہیں۔
-`agents.defaults.sandbox.docker.network` کے ذریعے اووررائیڈ کریں۔
+By default, sandbox containers run with **no network**.
+Override with `agents.defaults.sandbox.docker.network`.
 
 Docker کی تنصیبات اور کنٹینرائزڈ Gateway یہاں موجود ہیں:
 [Docker](/install/docker)
 
 ## setupCommand (کنٹینر کی ایک بارہ سیٹ اپ)
 
-`setupCommand` sandbox کنٹینر بننے کے بعد **ایک بار** چلتا ہے (ہر رن پر نہیں)۔
-یہ `sh -lc` کے ذریعے کنٹینر کے اندر عمل میں آتا ہے۔
+`setupCommand` runs **once** after the sandbox container is created (not on every run).
+It executes inside the container via `sh -lc`.
 
 راستے:
 
@@ -152,30 +146,29 @@ Docker کی تنصیبات اور کنٹینرائزڈ Gateway یہاں موجو
 - بطورِ طے شدہ `docker.network` `"none"` ہے (کوئی egress نہیں)، اس لیے پیکج انسٹالز ناکام ہوں گے۔
 - `readOnlyRoot: true` لکھائی کو روکتا ہے؛ `readOnlyRoot: false` سیٹ کریں یا کسٹم امیج بنائیں۔
 - پیکج انسٹالز کے لیے `user` کا root ہونا لازم ہے ( `user` کو حذف کریں یا `user: "0:0"` سیٹ کریں)۔
-- Sandbox exec ہوسٹ کے `process.env` کو وراثت میں نہیں لیتا۔ Skills کی API کلیدوں کے لیے
-  `agents.defaults.sandbox.docker.env` استعمال کریں (یا کسٹم امیج)۔
+- Sandbox exec does **not** inherit host `process.env`. Use
+  `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
 
 ## Tool policy + escape hatches
 
-Sandbox قواعد سے پہلے ٹول allow/deny پالیسیاں اب بھی لاگو ہوتی ہیں۔ اگر کوئی ٹول
-گلوبل یا per-agent سطح پر ممنوع ہو تو sandboxing اسے واپس فعال نہیں کرتی۔
+Tool allow/deny policies still apply before sandbox rules. If a tool is denied
+globally or per-agent, sandboxing doesn’t bring it back.
 
-`tools.elevated` ایک صریح escape hatch ہے جو `exec` کو ہوسٹ پر چلاتا ہے۔
-`/exec` ہدایات صرف مجاز ارسال کنندگان پر لاگو ہوتی ہیں اور فی سیشن برقرار رہتی ہیں؛
-`exec` کو مکمل طور پر غیر فعال کرنے کے لیے ٹول پالیسی deny استعمال کریں
-(دیکھیں [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated))۔
+`tools.elevated` is an explicit escape hatch that runs `exec` on the host.
+`/exec` directives only apply for authorized senders and persist per session; to hard-disable
+`exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
 Debugging:
 
 - مؤثر sandbox موڈ، ٹول پالیسی، اور fix-it کنفیگ کلیدیں دیکھنے کے لیے `openclaw sandbox explain` استعمال کریں۔
-- “یہ کیوں بلاک ہوا؟” کے ذہنی ماڈل کے لیے [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) دیکھیں۔
-  اسے مقفل رکھیں۔
+- See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the “why is this blocked?” mental model.
+  Keep it locked down.
 
 ## Multi-agent overrides
 
-ہر ایجنٹ sandbox + tools کو اووررائیڈ کر سکتا ہے:
-`agents.list[].sandbox` اور `agents.list[].tools` (مزید `agents.list[].tools.sandbox.tools` sandbox ٹول پالیسی کے لیے)۔
-ترجیحی ترتیب کے لیے دیکھیں [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)۔
+Each agent can override sandbox + tools:
+`agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 

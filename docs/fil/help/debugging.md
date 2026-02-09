@@ -5,13 +5,6 @@ read_when:
   - Gusto mong patakbuhin ang Gateway sa watch mode habang nag-i-iterate
   - Kailangan mo ng paulit-ulit na workflow sa pag-debug
 title: "Pag-debug"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Pag-debug
@@ -21,9 +14,9 @@ hinahalo ng provider ang reasoning sa normal na teksto.
 
 ## Mga runtime debug override
 
-Gamitin ang `/debug` sa chat para mag-set ng **runtime-only** na mga override ng config (memory, hindi disk).
+Gamitin ang `/debug` sa chat para magtakda ng **runtime-only** na config overrides (sa memorya, hindi sa disk).
 Naka-disable ang `/debug` bilang default; i-enable gamit ang `commands.debug: true`.
-Kapaki-pakinabang ito kapag kailangan mong i-toggle ang mga bihirang setting nang hindi ine-edit ang `openclaw.json`.
+Maginhawa ito kapag kailangan mong i-toggle ang mga bihirang setting nang hindi ine-edit ang `openclaw.json`.
 
 Mga halimbawa:
 
@@ -55,8 +48,8 @@ sa bawat restart.
 
 ## Dev profile + dev gateway (--dev)
 
-Gamitin ang dev profile para i-isolate ang state at magpaandar ng ligtas, disposable na setup para sa
-pag-debug. May **dalawang** `--dev` flags:
+Gamitin ang dev profile para ihiwalay ang estado at magpaikot ng ligtas, disposable na setup para sa
+debugging. May **dalawang** `--dev` flags:
 
 - **Global `--dev` (profile):** ini-isolate ang state sa ilalim ng `~/.openclaw-dev` at
   itinatakda bilang default ang gateway port sa `19001` (sumasabay ang mga derived port).
@@ -95,7 +88,7 @@ Daloy ng reset (fresh start):
 pnpm gateway:dev:reset
 ```
 
-Tandaan: ang `--dev` ay **global** na profile flag at kinakain ng ilang runner.
+Tandaan: ang `--dev` ay isang **global** na profile flag at kinakain ng ilang runners.
 Kung kailangan mong isulat ito nang buo, gamitin ang anyong env var:
 
 ```bash
@@ -113,7 +106,7 @@ openclaw gateway stop
 
 ## Raw stream logging (OpenClaw)
 
-Kayang mag-log ng OpenClaw ang **raw assistant stream** bago ang anumang filtering/formatting.
+Maaaring mag-log ang OpenClaw ng **raw assistant stream** bago ang anumang pag-filter/pag-format.
 Ito ang pinakamahusay na paraan para makita kung dumarating ang reasoning bilang plain text deltas
 (o bilang hiwalay na thinking blocks).
 

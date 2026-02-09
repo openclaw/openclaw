@@ -5,13 +5,6 @@ read_when:
   - Claude Code CLI 또는 기타 로컬 AI CLI 를 실행 중이며 이를 재사용하고자 합니다
   - 세션과 이미지를 지원하면서도 텍스트 전용, 도구 미사용 경로가 필요합니다
 title: "CLI 백엔드"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:08Z
 ---
 
 # CLI 백엔드 (폴백 런타임)

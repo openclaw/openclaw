@@ -5,13 +5,6 @@ read_when:
   - Debugging von Gateway-Authentifizierung, Bind-Modi und Konnektivität
   - Entdecken von Gateways via Bonjour (LAN + Tailnet)
 title: "Gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:46Z
 ---
 
 # Gateway CLI
@@ -71,7 +64,7 @@ Hinweise:
 
 Alle Abfragebefehle verwenden WebSocket-RPC.
 
-Ausgabemodi:
+Ausgabemodus:
 
 - Standard: menschenlesbar (in TTY farbig).
 - `--json`: maschinenlesbares JSON (ohne Styling/Spinner).

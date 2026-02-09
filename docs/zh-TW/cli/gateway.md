@@ -2,16 +2,9 @@
 summary: "OpenClaw Gateway CLI（`openclaw gateway`）— 執行、查詢與探索 Gateway 閘道器"
 read_when:
   - 從 CLI 執行 Gateway 閘道器（開發或伺服器）
-  - 偵錯 Gateway 閘道器的身分驗證、綁定模式與連線能力
+  - Debugging Gateway auth, bind modes, and connectivity
   - 透過 Bonjour 探索 Gateway 閘道器（LAN + tailnet）
 title: "Gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:34Z
 ---
 
 # Gateway CLI
@@ -20,7 +13,7 @@ Gateway 閘道器是 OpenClaw 的 WebSocket 伺服器（頻道、節點、工作
 
 本頁面的子命令位於 `openclaw gateway …` 之下。
 
-相關文件：
+Related docs:
 
 - [/gateway/bonjour](/gateway/bonjour)
 - [/gateway/discovery](/gateway/discovery)
@@ -42,10 +35,10 @@ openclaw gateway run
 
 注意事項：
 
-- 預設情況下，除非在 `~/.openclaw/openclaw.json` 中設定 `gateway.mode=local`，否則 Gateway 閘道器會拒絕啟動。臨時／開發用途請使用 `--allow-unconfigured`。
-- 未啟用身分驗證就綁定至 loopback 以外的位址會被封鎖（安全防護）。
+- 預設情況下，除非在 `~/.openclaw/openclaw.json` 中設定 `gateway.mode=local`，否則 Gateway 閘道器會拒絕啟動。臨時／開發用途請使用 `--allow-unconfigured`。 Use `--allow-unconfigured` for ad-hoc/dev runs.
+- Binding beyond loopback without auth is blocked (safety guardrail).
 - 當獲得授權時，`SIGUSR1` 會觸發程序內重新啟動（啟用 `commands.restart`，或使用 gateway tool/config apply/update）。
-- `SIGINT`/`SIGTERM` 處理器會停止 gateway 程序，但不會還原任何自訂的終端機狀態。若你以 TUI 或 raw-mode 輸入包裝 CLI，請在結束前還原終端機。
+- `SIGINT`/`SIGTERM` 處理器會停止 gateway 程序，但不會還原任何自訂的終端機狀態。若你以 TUI 或 raw-mode 輸入包裝 CLI，請在結束前還原終端機。 If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
 ### 選項
 
@@ -87,6 +80,7 @@ openclaw gateway run
 
 注意：當你設定 `--url` 時，CLI 不會回退到設定或環境中的憑證。
 請明確傳入 `--token` 或 `--password`。缺少明確憑證會視為錯誤。
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ### `gateway health`
 
@@ -114,12 +108,12 @@ openclaw gateway status --json
 
 ### `gateway probe`
 
-`gateway probe` 是「全面偵錯」命令。它一定會探測：
+`gateway probe` 是「全面偵錯」命令。它一定會探測： It always probes:
 
 - 你設定的遠端 gateway（若有設定），以及
 - localhost（loopback），**即使已設定遠端**。
 
-若可連線到多個 gateway，將全部列印。當你使用隔離的設定檔／連接埠（例如救援機器人）時，支援多個 gateway，但多數安裝仍只執行單一 gateway。
+If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 
 ```bash
 openclaw gateway probe

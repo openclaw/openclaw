@@ -4,13 +4,6 @@ read_when:
   - ソースのチェックアウトを安全に更新したい場合
   - 「--update」の省略指定の挙動を理解する必要がある場合
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:22Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,9 @@ Options:
 
 ## `update wizard`
 
-更新チャンネルを選択し、更新後に Gateway を再起動するかどうかを確認する対話型フローです
-（デフォルトは再起動）。git のチェックアウトがない状態で `dev` を選択すると、
-作成を提案します。
+更新チャンネルを選択し、アップデート後にゲートウェイ
+を再起動するかどうかを確認するための対話フローです(デフォルトは再起動します)。 git checkout なしで `dev` を選択した場合、
+で作成することができます。
 
 ## What it does
 

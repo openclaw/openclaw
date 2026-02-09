@@ -4,24 +4,17 @@ read_when:
   - Du vill lägga till ett nytt agentverktyg i ett plugin
   - Du behöver göra ett verktyg valfritt via tillåtelselistor
 title: "Plugin-agentverktyg"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:04Z
 ---
 
 # Plugin-agentverktyg
 
-OpenClaw‑pluginer kan registrera **agentverktyg** (JSON‑schemafunktioner) som exponeras
-för LLM:en under agentkörningar. Verktyg kan vara **obligatoriska** (alltid tillgängliga) eller
-**valfria** (opt‑in).
+OpenClaw-plugins kan registrera **agentverktyg** (JSON‐schema funktioner) som exponeras
+för LLM under agentkörningar. Verktyg kan **krävas** (alltid tillgängliga) eller
+**valbar** (opt‐in).
 
-Agentverktyg konfigureras under `tools` i huvudkonfigen, eller per agent under
-`agents.list[].tools`. Policyn för tillåtelselista/nekandelista styr vilka verktyg agenten
-kan anropa.
+Agentverktygen är konfigurerade under `tools` i huvudkonfigurationen eller per-agent under
+`agents.list[].tools`. Den allowlist/denylist policyn kontrollerar vilka verktyg agenten
+kan ringa.
 
 ## Grundläggande verktyg
 
@@ -44,8 +37,8 @@ export default function (api) {
 
 ## Valfritt verktyg (opt‑in)
 
-Valfria verktyg är **aldrig** automatiskt aktiverade. Användare måste lägga till dem i en agents
-tillåtelselista.
+Valfria verktyg är **aldrig** auto‐aktiverade. Användare måste lägga till dem till en agent
+tillåten lista.
 
 ```ts
 export default function (api) {

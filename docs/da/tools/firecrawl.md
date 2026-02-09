@@ -5,20 +5,13 @@ read_when:
   - Du har brug for en Firecrawl API-nøgle
   - Du vil have anti-bot-udtræk for web_fetch
 title: "Firecrawl"
-x-i18n:
-  source_path: tools/firecrawl.md
-  source_hash: 08a7ad45b41af412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:40Z
 ---
 
 # Firecrawl
 
-OpenClaw kan bruge **Firecrawl** som fallback-ekstraktor for `web_fetch`. Det er en hostet
-indholdsudtrækstjeneste, der understøtter bot-omgåelse og caching, hvilket hjælper
-med JS-tunge sites eller sider, der blokerer almindelige HTTP-forespørgsler.
+OpenClaw kan bruge **Firecrawl** som en fallback emhætte til `web_fetch`. Det er en hosted
+indhold udvinding service, der understøtter bot omgåelse og caching, som hjælper
+med JS-tunge websteder eller sider, der blokerer almindeligt HTTP henter.
 
 ## Få en API-nøgle
 
@@ -48,14 +41,14 @@ med JS-tunge sites eller sider, der blokerer almindelige HTTP-forespørgsler.
 Noter:
 
 - `firecrawl.enabled` er som standard true, når en API-nøgle er til stede.
-- `maxAgeMs` styrer, hvor gamle cachede resultater må være (ms). Standard er 2 dage.
+- `maxAgeMs` styrer hvor gamle cachede resultater kan være (ms). Standard er 2 dage.
 
 ## Stealth / bot-omgåelse
 
-Firecrawl eksponerer en **proxy mode**-parameter til bot-omgåelse (`basic`, `stealth` eller `auto`).
-OpenClaw bruger altid `proxy: "auto"` plus `storeInCache: true` til Firecrawl-forespørgsler.
-Hvis proxy udelades, bruger Firecrawl som standard `auto`. `auto` prøver igen med stealth-proxyer, hvis et grundlæggende forsøg fejler, hvilket kan bruge flere credits
-end scraping med kun basic.
+Firecrawl udsætter en **proxy-tilstand** parameter for bot omgåelse (`basic`, `stealth`, eller `auto`).
+OpenClaw bruger altid `proxy: "auto"` plus `storeInCache: true` for Firecrawl anmodninger.
+Hvis proxy udelades, er Firecrawl standard `auto`. `auto` retter sig med stealth fuldmagter, hvis et grundlæggende forsøg mislykkes, som kan bruge flere kreditter
+end grundlæggende skrabning.
 
 ## Sådan bruger `web_fetch` Firecrawl
 

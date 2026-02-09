@@ -4,19 +4,13 @@ read_when:
   - การตั้งค่าการตรวจสอบหรือการแจ้งเตือนวันหมดอายุของการยืนยันตัวตน
   - การทำอัตโนมัติสำหรับการตรวจสอบการรีเฟรช OAuth ของ Claude Code / Codex
 title: "การตรวจสอบการยืนยันตัวตน"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:43Z
 ---
 
 # การตรวจสอบการยืนยันตัวตน
 
 OpenClaw เปิดเผยสถานะสุขภาพของวันหมดอายุ OAuth ผ่าน `openclaw models status` ใช้สิ่งนี้สำหรับ
-การทำอัตโนมัติและการแจ้งเตือน; สคริปต์เป็นตัวเสริมเพิ่มเติมสำหรับเวิร์กโฟลว์บนโทรศัพท์
+การทำอัตโนมัติและการแจ้งเตือน; สคริปต์เป็นตัวเสริมเพิ่มเติมสำหรับเวิร์กโฟลว์บนโทรศัพท์ Use that for
+automation and alerting; scripts are optional extras for phone workflows.
 
 ## แนะนำ: ตรวจสอบผ่าน CLI (พกพาได้)
 
@@ -34,7 +28,7 @@ openclaw models status --check
 
 ## สคริปต์เสริม (งานปฏิบัติการ / เวิร์กโฟลว์บนโทรศัพท์)
 
-สคริปต์เหล่านี้อยู่ภายใต้ `scripts/` และเป็น **ตัวเลือก** โดยสมมติว่ามีการเข้าถึง SSH ไปยัง
+These live under `scripts/` and are **optional**. สคริปต์เหล่านี้อยู่ภายใต้ `scripts/` และเป็น **ตัวเลือก** โดยสมมติว่ามีการเข้าถึง SSH ไปยัง
 โฮสต์Gateway และถูกปรับแต่งสำหรับ systemd + Termux
 
 - `scripts/claude-auth-status.sh` ปัจจุบันใช้ `openclaw models status --json` เป็น

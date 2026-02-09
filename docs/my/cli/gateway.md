@@ -5,13 +5,6 @@ read_when:
   - Gateway အတည်ပြုချက်၊ bind မုဒ်များနှင့် ချိတ်ဆက်နိုင်မှုကို ဒီဘဂ်လုပ်နေစဉ်
   - Bonjour (LAN + tailnet) ဖြင့် Gateway များကို ရှာဖွေတွေ့ရှိရာတွင်
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:22Z
 ---
 
 # Gateway CLI
@@ -42,10 +35,10 @@ openclaw gateway run
 
 မှတ်ချက်များ:
 
-- မူလအနေဖြင့် `~/.openclaw/openclaw.json` တွင် `gateway.mode=local` ကို မသတ်မှတ်ထားပါက Gateway သည် စတင်လည်ပတ်ရန် ငြင်းပယ်ပါသည်။ ad-hoc/dev လည်ပတ်မှုများအတွက် `--allow-unconfigured` ကို အသုံးပြုပါ။
+- default အနေဖြင့် `~/.openclaw/openclaw.json` ထဲတွင် `gateway.mode=local` ကို သတ်မှတ်ထားခြင်း မရှိပါက Gateway သည် start မလုပ်ပါ။ ad-hoc/dev run များအတွက် `--allow-unconfigured` ကို အသုံးပြုပါ။
 - အတည်ပြုချက်မရှိဘဲ loopback အပြင်ဘက်သို့ bind လုပ်ခြင်းကို ပိတ်ထားသည် (လုံခြုံရေး ကာကွယ်တားဆီးချက်)။
 - `SIGUSR1` သည် အတည်ပြုထားပါက လုပ်ငန်းစဉ်အတွင်း ပြန်လည်စတင်မှုကို ဖြစ်စေသည် (`commands.restart` ကို ဖွင့်ပါ သို့မဟုတ် gateway tool/config apply/update ကို အသုံးပြုပါ)။
-- `SIGINT`/`SIGTERM` handler များသည် gateway လုပ်ငန်းစဉ်ကို ရပ်တန့်စေသော်လည်း စိတ်ကြိုက် terminal အခြေအနေများကို ပြန်လည်မတည်ဆောက်ပေးပါ။ CLI ကို TUI သို့မဟုတ် raw-mode input ဖြင့် ခြုံသုံးထားပါက ထွက်ခွာမီ terminal ကို ပြန်လည်ထားရှိပါ။
+- `SIGINT`/`SIGTERM` handler များသည် gateway process ကို ရပ်တန့်စေသော်လည်း custom terminal state ကို ပြန်လည်မထူထောင်ပါ။ CLI ကို TUI သို့မဟုတ် raw-mode input ဖြင့် wrap လုပ်ထားပါက exit မလုပ်မီ terminal ကို ပြန်လည် restore လုပ်ပါ။
 
 ### ရွေးချယ်စရာများ
 
@@ -85,8 +78,8 @@ openclaw gateway run
 - `--timeout <ms>`: timeout/budget (command အလိုက် ကွာခြားသည်)။
 - `--expect-final`: “final” တုံ့ပြန်မှုကို စောင့်ဆိုင်းခြင်း (agent ခေါ်ယူမှုများ)။
 
-မှတ်ချက်: `--url` ကို သတ်မှတ်ပါက CLI သည် config သို့မဟုတ် ပတ်ဝန်းကျင်မှ credentials များကို မပြန်လည်ယူပါ။
-`--token` သို့မဟုတ် `--password` ကို တိတိကျကျ ပေးပို့ပါ။ တိတိကျကျ credentials မရှိပါက အမှားအယွင်းဖြစ်ပါသည်။
+မှတ်ချက်: `--url` ကို သတ်မှတ်ထားပါက CLI သည် config သို့မဟုတ် environment credentials များကို fallback မလုပ်ပါ။
+`--token` သို့မဟုတ် `--password` ကို တိတိကျကျ ပေးပါ။ credential ကို တိတိကျကျ မပေးထားပါက error ဖြစ်ပါသည်။
 
 ### `gateway health`
 
@@ -114,12 +107,12 @@ openclaw gateway status --json
 
 ### `gateway probe`
 
-`gateway probe` သည် “အရာအားလုံးကို ဒီဘဂ်လုပ်” command ဖြစ်သည်။ အမြဲတမ်း probe လုပ်ပါသည်—
+`gateway probe` သည် “debug everything” command ဖြစ်ပါသည်။ အမြဲတမ်း probe လုပ်သည်မှာ:
 
 - သင့် config တွင် သတ်မှတ်ထားသော remote gateway (ရှိပါက) နှင့်
 - localhost (loopback) ကို **remote ကို သတ်မှတ်ထားသော်လည်း** probe လုပ်ပါသည်။
 
-Gateway များ အများအပြား ချိတ်ဆက်နိုင်ပါက အားလုံးကို ပြသပါသည်။ သီးခြား profile/port များ (ဥပမာ rescue bot) ကို အသုံးပြုသည့်အခါ Gateway အများအပြားကို ထောက်ပံ့ထားသော်လည်း ထည့်သွင်းတပ်ဆင်မှုအများစုမှာ Gateway တစ်ခုတည်းသာ လည်ပတ်နေဆဲဖြစ်ပါသည်။
+gateway အများအပြား ရောက်ရှိနိုင်ပါက အားလုံးကို print ထုတ်ပေးပါသည်။ isolated profiles/ports (ဥပမာ rescue bot) ကို အသုံးပြုပါက gateway အများအပြားကို ထောက်ပံ့ပေးသော်လည်း install အများစုတွင် gateway တစ်ခုတည်းသာ run လုပ်နေဆဲဖြစ်သည်။
 
 ```bash
 openclaw gateway probe

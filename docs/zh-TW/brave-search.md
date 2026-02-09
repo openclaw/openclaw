@@ -1,16 +1,9 @@
 ---
-summary: 「用於 web_search 的 Brave Search API 設定」
+summary: "用於 web_search 的 Brave Search API 設定"
 read_when:
-  - 「你想要使用 Brave Search 進行 web_search」
-  - 「你需要 BRAVE_API_KEY 或方案詳細資訊」
-title: 「Brave Search」
-x-i18n:
-  source_path: brave-search.md
-  source_hash: 81cd0a13239c13f4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:51Z
+  - 你想要使用 Brave Search 進行 web_search
+  - 你需要 BRAVE_API_KEY 或方案詳細資訊
+title: "Brave Search"
 ---
 
 # Brave Search API

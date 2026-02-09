@@ -4,13 +4,6 @@ read_when:
   - تريد تغيير النماذج الافتراضية أو عرض حالة مصادقة الموفّرين
   - تريد فحص النماذج/الموفّرين المتاحين وتصحيح أخطاء ملفات تعريف المصادقة
 title: "models"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:03Z
 ---
 
 # `openclaw models`
@@ -61,7 +54,7 @@ openclaw models scan
 - `--probe-max-tokens <n>`
 - `--agent <id>` (معرّف وكيل مُهيّأ؛ يتجاوز `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
 
-## الأسماء المستعارة + البدائل
+## الأسماء المستعارة + الرجوع
 
 ```bash
 openclaw models aliases list

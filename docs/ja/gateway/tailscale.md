@@ -4,13 +4,6 @@ read_when:
   - localhost 外で Gateway コントロール UI を公開する場合
   - tailnet または公開ダッシュボードのアクセスを自動化する場合
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:06Z
 ---
 
 # Tailscale（Gateway ダッシュボード）
@@ -18,12 +11,13 @@ x-i18n:
 OpenClaw は、Gateway ダッシュボードおよび WebSocket ポート向けに
 Tailscale **Serve**（tailnet）または **Funnel**（公開）を自動設定できます。
 これにより、Gateway は local loopback にバインドされたまま、
-Tailscale が HTTPS、ルーティング、（Serve の場合は）ID ヘッダーを提供します。
+Tailscale が HTTPS、ルーティング、（Serve の場合は）ID ヘッダーを提供します。 これにより、ゲートウェイはループバックにバインドされます。一方、
+TailscaleはHTTPS、ルーティング、および(サーブ用)IDヘッダを提供します。
 
 ## モード
 
-- `serve`: `tailscale serve` による tailnet 専用 Serve。ゲートウェイは `127.0.0.1` 上に留まります。
-- `funnel`: `tailscale funnel` による公開 HTTPS。OpenClaw では共有パスワードが必要です。
+- `serve`: `tailscale serve` による tailnet 専用 Serve。ゲートウェイは `127.0.0.1` 上に留まります。 ゲートウェイは `127.0.0.1` のままです。
+- `funnel`: `tailscale funnel` による公開 HTTPS。OpenClaw では共有パスワードが必要です。 OpenClawは共有パスワードが必要です。
 - `off`: デフォルト（Tailscale 自動化なし）。
 
 ## 認証
@@ -42,7 +36,14 @@ OpenClaw は、リクエストが loopback から到達し、
 Tailscale の `x-forwarded-for`、`x-forwarded-proto`、`x-forwarded-host`
 ヘッダーを含む場合にのみ、Serve として扱います。
 明示的な資格情報を必須にするには `gateway.auth.allowTailscale: false` を設定するか、
-`gateway.auth.mode: "password"` を強制してください。
+`gateway.auth.mode: "password"` を強制してください。 OpenClaw は、ローカルの Tailscale
+デーモン(`tailscale whois`)を介して `x-forwarded-for` アドレスを解決し、それを受け入れる前にヘッダにマッチさせることで、
+身元を検証します。
+OpenClawは、ループバックから
+Tailscaleの`x-forwarded-for`、`x-forward-proto`、および`x-forwarded-host`
+ヘッダでリクエストが到着したときにのみServeとして扱います。
+明示的な資格情報を必要とするには、`gateway.auth.allowTailscale: false` または
+で `gateway.auth.mode: "password"` を強制します。
 
 ## 設定例
 
@@ -108,7 +109,7 @@ openclaw gateway --tailscale funnel --auth password
   `tailscale funnel` の設定を元に戻すようにするには `gateway.tailscale.resetOnExit` を設定します。
 - `gateway.bind: "tailnet"` は Tailnet への直接バインドです（HTTPS なし、Serve/Funnel なし）。
 - `gateway.bind: "auto"` は loopback を優先します。Tailnet 専用にしたい場合は `tailnet` を使用してください。
-- Serve/Funnel が公開するのは **Gateway コントロール UI + WS** のみです。
+- サーブ/ファンネルは**ゲートウェイコントロール UI + WS** のみを公開します。 Serve/Funnel が公開するのは **Gateway コントロール UI + WS** のみです。
   ノードは同じ Gateway WS エンドポイント経由で接続するため、
   ノードアクセスにも Serve を利用できます。
 
@@ -118,6 +119,7 @@ Gateway を 1 台のマシンで実行し、別のマシンでブラウザーを
 ブラウザー側のマシンで **node host** を実行し、両方を同一の tailnet に維持します。
 Gateway はブラウザー操作をノードへプロキシします。
 個別のコントロールサーバーや Serve URL は不要です。
+ゲートウェイは、ノードに対してプロキシブラウザのアクションを実行します。個別のコントロールサーバーや Serve URL は必要ありません。
 
 ブラウザー制御には Funnel を避け、ノードのペアリングはオペレーターアクセスとして扱ってください。
 

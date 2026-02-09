@@ -5,22 +5,15 @@ read_when:
   - Pagpapatupad ng exec approval UX sa macOS app
   - Pagsusuri ng mga sandbox escape prompt at mga implikasyon
 title: "Exec Approvals"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:11Z
 ---
 
 # Exec approvals
 
-Ang exec approvals ay ang **companion app / node host guardrail** para payagan ang isang sandboxed agent na magpatakbo ng
-mga command sa isang totoong host (`gateway` o `node`). Isipin ito bilang isang safety interlock:
-pinapayagan lang ang mga command kapag nagkakasundo ang policy + allowlist + (opsyonal) pag-apruba ng user.
-Ang exec approvals ay **dagdag pa** sa tool policy at elevated gating (maliban kung ang elevated ay nakatakda sa `full`, na nilalaktawan ang approvals).
-Ang epektibong policy ay ang **mas mahigpit** sa pagitan ng `tools.exec.*` at mga default ng approvals; kung may approvals field na hindi isinama, gagamitin ang value ng `tools.exec`.
+Exec approvals are the **companion app / node host guardrail** for letting a sandboxed agent run
+commands on a real host (`gateway` or `node`). Think of it like a safety interlock:
+commands are allowed only when policy + allowlist + (optional) user approval all agree.
+48. Ang mga pag-apruba sa exec ay **dagdag pa** sa tool policy at elevated gating (maliban kung ang elevated ay nakatakda sa `full`, na nilalaktawan ang mga pag-apruba).
+Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
 
 Kung ang companion app UI ay **hindi available**, anumang request na nangangailangan ng prompt ay
 nireresolba ng **ask fallback** (default: deny).
@@ -102,10 +95,10 @@ Kung kailangan ang prompt pero walang UI na maaabot, ang fallback ang magpapasya
 
 ## Allowlist (per agent)
 
-Ang mga allowlist ay **per agent**. Kung may maraming agent, lumipat kung aling agent ang ine-edit sa macOS app.
-Ang mga pattern ay **case-insensitive na glob matches**.
-Dapat mag-resolve ang mga pattern sa **binary paths** (hindi pinapansin ang mga entry na basename-only).
-Ang mga legacy `agents.default` na entry ay mina-migrate patungo sa `agents.main` kapag naglo-load.
+49. Ang mga allowlist ay **per agent**. 50. Kung mayroong maraming agent, palitan kung aling agent ang iyong
+    ine-edit sa macOS app. 1. Ang mga pattern ay **case-insensitive glob matches**.
+50. Ang mga pattern ay dapat mag-resolve sa **binary paths** (binabalewala ang mga entry na basename-only).
+    Legacy `agents.default` entries are migrated to `agents.main` on load.
 
 Mga halimbawa:
 
@@ -122,32 +115,28 @@ Bawat allowlist entry ay nagta-track ng:
 
 ## Auto-allow skill CLIs
 
-Kapag naka-enable ang **Auto-allow skill CLIs**, ang mga executable na tinutukoy ng mga kilalang Skills
-ay itinuturing na nasa allowlist sa mga node (macOS node o headless node host). Ginagamit nito ang
-`skills.bins` sa Gateway RPC para kunin ang listahan ng skill bin. I-disable ito kung gusto mo ng mahigpit na manual allowlists.
+3. Kapag naka-enable ang **Auto-allow skill CLIs**, ang mga executable na tinutukoy ng mga kilalang skill ay itinuturing na nasa allowlist sa mga node (macOS node o headless node host). This uses
+   `skills.bins` over the Gateway RPC to fetch the skill bin list. 4. I-disable ito kung gusto mo ng mahigpit na manual allowlists.
 
 ## Safe bins (stdin-only)
 
-Ang `tools.exec.safeBins` ay naglalarawan ng isang maliit na listahan ng mga **stdin-only** na binary (halimbawa `jq`)
-na maaaring patakbuhin sa allowlist mode **nang walang** tahasang allowlist entries. Tinatanggihan ng mga safe bin ang
-positional file args at mga path-like token, kaya maaari lamang silang gumana sa papasok na stream.
-Ang shell chaining at mga redirection ay hindi awtomatikong pinapayagan sa allowlist mode.
+5. Tinutukoy ng `tools.exec.safeBins` ang isang maliit na listahan ng mga **stdin-only** na binary (halimbawa `jq`) na maaaring tumakbo sa allowlist mode **nang walang** tahasang allowlist entry. Safe bins reject
+   positional file args and path-like tokens, so they can only operate on the incoming stream.
+6. Ang shell chaining at mga redirection ay hindi awtomatikong pinapahintulutan sa allowlist mode.
 
-Ang shell chaining (`&&`, `||`, `;`) ay pinapayagan kapag ang bawat top-level segment ay tumutugon sa allowlist
-(kabilang ang mga safe bin o skill auto-allow). Ang mga redirection ay nananatiling hindi suportado sa allowlist mode.
-Ang command substitution (`$()` / backticks) ay tinatanggihan habang nagpa-parse ng allowlist, kabilang ang nasa loob ng
-double quotes; gumamit ng single quotes kung kailangan mo ng literal na `$()` na text.
+7. Pinapayagan ang shell chaining (`&&`, `||`, `;`) kapag ang bawat top-level na segment ay tumutupad sa allowlist (kabilang ang safe bins o skill auto-allow). Redirections remain unsupported in allowlist mode.
+   Ang command substitution (`$()` / backticks) ay tinatanggihan habang pinoproseso ang allowlist, kabilang ang nasa loob ng
+   double quotes; gumamit ng single quotes kung kailangan mo ng literal na `$()` na teksto.
 
 Mga default na safe bin: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 ## Control UI editing
 
-Gamitin ang **Control UI → Nodes → Exec approvals** na card para i-edit ang mga default, per‑agent
-na override, at mga allowlist. Pumili ng saklaw (Defaults o isang agent), ayusin ang policy,
-magdagdag/magtanggal ng mga allowlist pattern, pagkatapos ay **Save**. Ipinapakita ng UI ang **last used** na metadata
-bawat pattern para mapanatiling maayos ang listahan.
+Gamitin ang **Control UI → Nodes → Exec approvals** card para i-edit ang mga default, mga override per‑agent, at mga allowlist. Pumili ng scope (Defaults o isang agent), ayusin ang policy,
+dagdagan/alisin ang mga pattern sa allowlist, pagkatapos ay **Save**. Ipinapakita ng UI ang **last used** na metadata
+kada pattern para manatiling maayos ang listahan.
 
-Pinipili ng target selector ang **Gateway** (lokal na approvals) o isang **Node**. Ang mga node
+Pinipili ng target selector ang **Gateway** (local approvals) o isang **Node**. Ang mga node
 ay dapat mag-advertise ng `system.execApprovals.get/set` (macOS app o headless node host).
 Kung ang isang node ay hindi pa nag-a-advertise ng exec approvals, i-edit ang lokal nitong
 `~/.openclaw/exec-approvals.json` nang direkta.
@@ -156,13 +145,13 @@ CLI: Sinusuportahan ng `openclaw approvals` ang pag-edit sa gateway o node (ting
 
 ## Daloy ng approval
 
-Kapag kailangan ang prompt, ang gateway ay nagba-broadcast ng `exec.approval.requested` sa mga operator client.
-Nireresolba ito ng Control UI at macOS app sa pamamagitan ng `exec.approval.resolve`, pagkatapos ay ipinapasa ng gateway ang
+Kapag kailangan ng prompt, bino-broadcast ng gateway ang `exec.approval.requested` sa mga operator client.
+Nire-resolve ito ng Control UI at macOS app sa pamamagitan ng `exec.approval.resolve`, pagkatapos ay ipinapasa ng gateway ang
 naaprubahang request sa node host.
 
-Kapag kailangan ang approvals, agad na nagbabalik ang exec tool na may approval id. Gamitin ang id na iyon para
-i-correlate ang mga susunod na system event (`Exec finished` / `Exec denied`). Kung walang desisyong dumating bago ang
-timeout, ang request ay itinuturing na approval timeout at inilalabas bilang dahilan ng pagtanggi.
+Kapag kailangan ng approvals, agad na nagbabalik ang exec tool ng isang approval id. Gamitin ang id na iyon para
+maiugnay ang mga susunod na system event (`Exec finished` / `Exec denied`). Kung walang desisyon na dumating bago ang
+timeout, itinuturing ang request bilang approval timeout at ipinapakita bilang dahilan ng pagtanggi.
 
 Kasama sa confirmation dialog ang:
 
@@ -180,7 +169,7 @@ Mga aksyon:
 
 ## Pag-forward ng approval sa mga chat channel
 
-Maaari mong i-forward ang mga exec approval prompt sa anumang chat channel (kasama ang mga plugin channel) at aprubahan
+Maaari mong i-forward ang mga exec approval prompt sa anumang chat channel (kabilang ang mga plugin channel) at aprubahan
 ang mga ito gamit ang `/approve`. Ginagamit nito ang normal na outbound delivery pipeline.
 
 Config:
@@ -233,18 +222,18 @@ Ang exec lifecycle ay inilalantad bilang mga system message:
 - `Exec finished`
 - `Exec denied`
 
-Ang mga ito ay ipinopost sa session ng agent matapos i-report ng node ang event.
-Ang gateway-host exec approvals ay naglalabas ng parehong lifecycle event kapag natapos ang command (at opsyonal kapag mas tumagal kaysa sa threshold).
-Ang mga exec na may approval gate ay muling ginagamit ang approval id bilang `runId` sa mga mensaheng ito para sa madaling pag-correlation.
+Ipinopost ang mga ito sa session ng agent matapos i-report ng node ang event.
+Ang mga exec approval na naka-host sa gateway ay naglalabas ng parehong lifecycle events kapag natapos ang command (at opsyonal kapag tumatakbo nang mas matagal kaysa sa threshold).
+Ang mga exec na may approval gate ay muling ginagamit ang approval id bilang `runId` sa mga mensaheng ito para sa madaling pag-uugnay.
 
 ## Mga implikasyon
 
 - **full** ay makapangyarihan; mas mainam ang allowlists kung maaari.
 - **ask** ay pinananatili kang kasali habang pinapayagan pa rin ang mabilis na approvals.
 - Ang per-agent allowlists ay pumipigil na mag-leak ang approvals ng isang agent papunta sa iba.
-- Ang approvals ay nalalapat lamang sa mga host exec request mula sa **authorized senders**. Ang mga hindi awtorisadong sender ay hindi maaaring mag-isyu ng `/exec`.
-- Ang `/exec security=full` ay isang session-level na kaginhawaan para sa mga awtorisadong operator at sadyang nilalaktawan ang approvals.
-  Para mahigpit na harangin ang host exec, itakda ang approvals security sa `deny` o tanggihan ang `exec` na tool sa pamamagitan ng tool policy.
+- Ang mga approval ay nalalapat lamang sa mga host exec request mula sa **authorized senders**. Hindi maaaring mag-issue ng `/exec` ang mga hindi awtorisadong sender.
+- `/exec security=full` ay isang session-level na convenience para sa mga awtorisadong operator at sadyang nilalaktawan ang approvals.
+  Para tuluyang i-block ang host exec, itakda ang approvals security sa `deny` o tanggihan ang `exec` tool sa pamamagitan ng tool policy.
 
 Kaugnay:
 

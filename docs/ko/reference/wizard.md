@@ -6,13 +6,6 @@ read_when:
   - 마법사 동작을 디버깅할 때
 title: "온보딩 마법사 레퍼런스"
 sidebarTitle: "마법사 레퍼런스"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:34Z
 ---
 
 # 온보딩 마법사 레퍼런스
@@ -23,7 +16,7 @@ x-i18n:
 ## 흐름 상세 (로컬 모드)
 
 <Steps>
-  <Step title="기존 설정 감지">
+  <Step title="Existing config detection">
     - `~/.openclaw/openclaw.json` 이 존재하면 **유지 / 수정 / 초기화** 중에서 선택합니다.
     - 마법사를 다시 실행해도 명시적으로 **초기화**를 선택하지 않는 한
       (또는 `--reset` 을 전달하지 않는 한) 아무것도 삭제되지 않습니다.
@@ -32,9 +25,9 @@ x-i18n:
     - 초기화는 `trash` 를 사용하며(`rm` 는 절대 사용하지 않음) 다음 범위를 제공합니다:
       - 설정만
       - 설정 + 자격 증명 + 세션
-      - 전체 초기화(워크스페이스도 제거)
-  </Step>
-  <Step title="모델/인증">
+      - 전체 초기화(워크스페이스도 제거)  
+</Step>
+  <Step title="Model/Auth">
     - **Anthropic API 키(권장)**: 존재하면 `ANTHROPIC_API_KEY` 를 사용하거나 키 입력을 요청한 뒤, 데몬 사용을 위해 저장합니다.
     - **Anthropic OAuth (Claude Code CLI)**: macOS 에서는 Keychain 항목 'Claude Code-credentials' 를 확인합니다('Always Allow' 를 선택해야 launchd 시작이 차단되지 않음). Linux/Windows 에서는 존재할 경우 `~/.claude/.credentials.json` 을 재사용합니다.
     - **Anthropic 토큰(setup-token 붙여넣기)**: 어떤 머신에서든 `claude setup-token` 을 실행한 뒤 토큰을 붙여넣습니다(이름 지정 가능, 비워두면 기본값).
@@ -60,25 +53,25 @@ x-i18n:
     - 감지된 옵션에서 기본 모델을 선택합니다(또는 프로바이더/모델을 수동으로 입력).
     - 마법사는 모델 검사를 실행하고 구성된 모델을 알 수 없거나 인증이 누락된 경우 경고합니다.
     - OAuth 자격 증명은 `~/.openclaw/credentials/oauth.json` 에, 인증 프로필은 `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` 에 저장됩니다(API 키 + OAuth).
-    - 자세한 내용: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - 자세한 내용: [/concepts/oauth](/concepts/oauth)    
+<Note>
     헤드리스/서버 팁: 브라우저가 있는 머신에서 OAuth 를 완료한 뒤
     `~/.openclaw/credentials/oauth.json` (또는 `$OPENCLAW_STATE_DIR/credentials/oauth.json`) 를
     게이트웨이 호스트로 복사하십시오.
     </Note>
   </Step>
-  <Step title="워크스페이스">
+  <Step title="Workspace">
     - 기본값은 `~/.openclaw/workspace` (구성 가능).
     - 에이전트 부트스트랩 의식을 위해 필요한 워크스페이스 파일을 시드합니다.
-    - 전체 워크스페이스 레이아웃 + 백업 가이드: [Agent workspace](/concepts/agent-workspace)
-  </Step>
+    - 전체 워크스페이스 레이아웃 + 백업 가이드: [Agent workspace](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - 포트, 바인드, 인증 모드, Tailscale 노출.
     - 인증 권장 사항: 로컬 loopback 이더라도 **Token** 을 유지하여 로컬 WS 클라이언트가 반드시 인증하도록 하십시오.
     - 모든 로컬 프로세스를 완전히 신뢰하는 경우에만 인증을 비활성화하십시오.
     - non‑loopback 바인드는 여전히 인증이 필요합니다.
   </Step>
-  <Step title="채널">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): 선택적 QR 로그인.
     - [Telegram](/channels/telegram): 봇 토큰.
     - [Discord](/channels/discord): 봇 토큰.
@@ -87,7 +80,8 @@ x-i18n:
     - [Signal](/channels/signal): 선택적 `signal-cli` 설치 + 계정 구성.
     - [BlueBubbles](/channels/bluebubbles): **iMessage 권장**; 서버 URL + 비밀번호 + 웹훅.
     - [iMessage](/channels/imessage): 레거시 `imsg` CLI 경로 + DB 접근.
-    - 다이렉트 메시지 보안: 기본값은 페어링입니다. 첫 다이렉트 메시지는 코드를 전송하며, `openclaw pairing approve <channel> <code>` 를 통해 승인하거나 허용 목록을 사용하십시오.
+    - 다이렉트 메시지 보안: 기본값은 페어링입니다. 첫 다이렉트 메시지는 코드를 전송하며, `openclaw pairing approve <channel><code>` 를 통해 승인하거나 허용 목록을 사용하십시오.
+  </Step><code>` 를 통해 승인하거나 허용 목록을 사용하십시오.
   </Step>
   <Step title="데몬 설치">
     - macOS: LaunchAgent
@@ -139,7 +133,7 @@ openclaw onboard --non-interactive \
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Gemini 예제">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +143,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI 예제">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +153,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway 예제">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +163,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway 예제">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +175,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot 예제">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +185,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic 예제">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +195,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen 예제">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

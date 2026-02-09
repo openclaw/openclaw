@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการเพิ่ม/ลบบัญชีช่องทาง (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (ปลั๊กอิน)/Signal/iMessage)
   - คุณต้องการตรวจสอบสถานะช่องทางหรือดูบันทึกช่องทางแบบต่อเนื่อง
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:52Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - รัน `openclaw status --deep` เพื่อการตรวจสอบแบบครอบคลุม
 - ใช้ `openclaw doctor` สำหรับการแก้ไขแบบมีคำแนะนำ
-- `openclaw channels list` พิมพ์ `Claude: HTTP 403 ... user:profile` → สแนปช็อตการใช้งานต้องใช้ขอบเขต `user:profile` ใช้ `--no-usage` หรือระบุคีย์เซสชัน claude.ai (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) หรือยืนยันตัวตนใหม่ผ่าน Claude Code CLI
+- `openclaw channels list` พิมพ์ `Claude: HTTP 403 ... user:profile` → สแนปช็อตการใช้งานต้องใช้ขอบเขต `user:profile` user:profile`→ สแนปช็อตการใช้งานต้องใช้ขอบเขต`user:profile`ใช้`--no-usage` หรือระบุคีย์เซสชัน claude.ai (`CLAUDE_WEB_SESSION_KEY`/`CLAUDE_WEB_COOKIE\`) หรือยืนยันตัวตนใหม่ผ่าน Claude Code CLI
 
 ## การตรวจสอบความสามารถ
 
@@ -68,7 +61,7 @@ openclaw channels capabilities --channel discord --target channel:123
 
 - `--channel` เป็นตัวเลือก ไม่ระบุเพื่อแสดงทุกช่องทาง (รวมส่วนขยาย)
 - `--target` รองรับ `channel:<id>` หรือรหัสช่องทางแบบตัวเลขดิบ และใช้กับ Discord เท่านั้น
-- การตรวจสอบเป็นแบบเฉพาะผู้ให้บริการ: intents ของ Discord + สิทธิ์ช่องทางเสริมตามตัวเลือก; bot + user scopes ของ Slack; แฟล็กบอต + webhook ของ Telegram; เวอร์ชันเดมอนของ Signal; app token + บทบาท/สโคปของ Graph สำหรับ Microsoft Teams (มีคำอธิบายเมื่อทราบ) ช่องทางที่ไม่มีการตรวจสอบจะรายงาน `Probe: unavailable`
+- การตรวจสอบเป็นแบบเฉพาะผู้ให้บริการ: intents ของ Discord + สิทธิ์ช่องทางเสริมตามตัวเลือก; bot + user scopes ของ Slack; แฟล็กบอต + webhook ของ Telegram; เวอร์ชันเดมอนของ Signal; app token + บทบาท/สโคปของ Graph สำหรับ Microsoft Teams (มีคำอธิบายเมื่อทราบ) ช่องทางที่ไม่มีการตรวจสอบจะรายงาน `Probe: unavailable` ช่องทางที่ไม่มีโพรบจะแสดง `Probe: unavailable`
 
 ## แปลงชื่อเป็น ID
 
@@ -83,4 +76,4 @@ openclaw channels resolve --channel matrix "Project Room"
 หมายเหตุ:
 
 - ใช้ `--kind user|group|auto` เพื่อบังคับประเภทเป้าหมาย
-- การแปลงจะให้ความสำคัญกับรายการที่ใช้งานอยู่เมื่อมีหลายรายการใช้ชื่อเดียวกัน
+- การแก้ไขชื่อจะให้ความสำคัญกับรายการที่กำลังใช้งานเมื่อมีหลายรายการใช้ชื่อเดียวกัน

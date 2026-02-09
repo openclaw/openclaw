@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn gỡ dịch vụ gateway và/hoặc trạng thái cục bộ
   - Bạn muốn chạy thử trước (dry-run)
 title: "gỡ cài đặt"
-x-i18n:
-  source_path: cli/uninstall.md
-  source_hash: 8d6c3890923f18f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:22Z
 ---
 
 # `openclaw uninstall`

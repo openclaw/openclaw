@@ -3,13 +3,6 @@ summary: "Modo de execução elevado e diretivas /elevated"
 read_when:
   - Ao ajustar padrões do modo elevado, listas de permissões ou comportamento de comandos com barra
 title: "Modo Elevado"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:10Z
 ---
 
 # Modo Elevado (diretivas /elevated)

@@ -5,13 +5,6 @@ read_when:
   - क्रॉन चला लेकिन कोई संदेश वितरित नहीं हुआ
   - हार्टबीट शांत या छोड़ा हुआ प्रतीत होता है
 title: "ऑटोमेशन समस्या-निवारण"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:51Z
 ---
 
 # ऑटोमेशन समस्या-निवारण

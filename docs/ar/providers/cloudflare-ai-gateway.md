@@ -2,15 +2,8 @@
 title: "بوابة Cloudflare للذكاء الاصطناعي"
 summary: "إعداد بوابة Cloudflare للذكاء الاصطناعي (المصادقة + اختيار النموذج)"
 read_when:
-  - "تريد استخدام بوابة Cloudflare للذكاء الاصطناعي مع OpenClaw"
-  - "تحتاج إلى معرّف الحساب أو معرّف البوابة أو متغير بيئة مفتاح واجهة برمجة التطبيقات"
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:32Z
+  - تريد استخدام بوابة Cloudflare للذكاء الاصطناعي مع OpenClaw
+  - تحتاج إلى معرف الحساب، معرف البوابة، أو مفتاح API var
 ---
 
 # بوابة Cloudflare للذكاء الاصطناعي
@@ -26,7 +19,7 @@ x-i18n:
 
 ## البدء السريع
 
-1. عيّن مفتاح واجهة برمجة تطبيقات الموفّر وتفاصيل البوابة:
+1. تعيين مفتاح API الخاص بالمزود وتفاصيل البوابة:
 
 ```bash
 openclaw onboard --auth-choice cloudflare-ai-gateway-api-key
@@ -55,7 +48,7 @@ openclaw onboard --non-interactive \
   --cloudflare-ai-gateway-api-key "$CLOUDFLARE_AI_GATEWAY_API_KEY"
 ```
 
-## بوابات مع مصادقة
+## بوابات مصادقة
 
 إذا قمت بتمكين مصادقة البوابة في Cloudflare، فأضِف الترويسة `cf-aig-authorization` (وذلك بالإضافة إلى مفتاح واجهة برمجة تطبيقات الموفّر).
 

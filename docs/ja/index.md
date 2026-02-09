@@ -1,15 +1,8 @@
 ---
-summary: 「OpenClaw は、あらゆる OS で動作する AI エージェント向けのマルチチャンネル ゲートウェイです。」
+summary: "OpenClaw は、あらゆる OS で動作する AI エージェント向けのマルチチャンネル ゲートウェイです。"
 read_when:
   - OpenClaw を初めて知る人に紹介する場合
-title: 「OpenClaw」
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:15Z
+title: "OpenClaw"
 ---
 
 # OpenClaw 🦞
@@ -31,9 +24,10 @@ x-i18n:
 
 > _「EXFOLIATE! EXFOLIATE!」_ — たぶん宇宙ロブスター
 
-<p align="center">
-  <strong>WhatsApp、Telegram、Discord、iMessage などに対応した、AI エージェント向けの Any OS ゲートウェイ。</strong><br />
+<p align="center"><strong>WhatsApp、Telegram、Discord、iMessage などに対応した、AI エージェント向けの Any OS ゲートウェイ。</strong><br />
   メッセージを送信すると、ポケットからエージェントの応答が返ってきます。プラグインで Mattermost なども追加できます。
+<br />
+  メッセージを送信し、あなたのポケットからエージェントの応答を取得します。 プラグインはMattermostなどを追加します。
 </p>
 
 <Columns>
@@ -50,7 +44,7 @@ x-i18n:
 
 ## What is OpenClaw?
 
-OpenClaw は **セルフホスト型ゲートウェイ** で、WhatsApp、Telegram、Discord、iMessage などの好みのチャットアプリを、Pi のような AI コーディング エージェントに接続します。自身のマシン（またはサーバー）上で単一の Gateway プロセスを実行するだけで、メッセージング アプリと常時利用可能な AI アシスタントをつなぐ橋渡しになります。
+OpenClaw は **セルフホスト型ゲートウェイ** で、WhatsApp、Telegram、Discord、iMessage などの好みのチャットアプリを、Pi のような AI コーディング エージェントに接続します。自身のマシン（またはサーバー）上で単一の Gateway プロセスを実行するだけで、メッセージング アプリと常時利用可能な AI アシスタントをつなぐ橋渡しになります。 独自のマシン(またはサーバー)で単一のゲートウェイプロセスを実行します。 そして、メッセージングアプリと常に利用可能なAIアシスタントの間の橋渡しになります。
 
 **誰向けですか？**  
 どこからでもメッセージでやり取りできる個人用 AI アシスタントを求めつつ、データの管理権限を手放したり、ホステッド サービスに依存したりしたくない開発者やパワーユーザー向けです。
@@ -122,7 +116,7 @@ Gateway は、セッション、ルーティング、チャンネル接続にお
   </Step>
 </Steps>
 
-完全なインストール手順と開発者向けセットアップが必要ですか？ [クイックスタート](/start/quickstart) を参照してください。
+完全なインストール手順と開発者向けセットアップが必要ですか？ [クイックスタート](/start/quickstart) を参照してください。 [Quick start](/start/quickstart) を参照してください。
 
 ## ダッシュボード
 

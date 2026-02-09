@@ -3,13 +3,6 @@ summary: "Ondertekeningsstappen voor macOS-debugbuilds die door verpakkingsscrip
 read_when:
   - Bouwen of ondertekenen van macOS-debugbuilds
 title: "macOS-ondertekening"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # mac-ondertekening (debugbuilds)

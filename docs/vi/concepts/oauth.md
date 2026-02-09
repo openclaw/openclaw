@@ -6,24 +6,18 @@ read_when:
   - Bạn muốn các luồng xác thực setup-token hoặc OAuth
   - Bạn muốn nhiều tài khoản hoặc định tuyến theo hồ sơ
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:39Z
 ---
 
 # OAuth
 
-OpenClaw hỗ trợ “subscription auth” thông qua OAuth cho các nhà cung cấp có cung cấp hình thức này (đặc biệt là **OpenAI Codex (ChatGPT OAuth)**). Với các gói đăng ký Anthropic, hãy dùng luồng **setup-token**. Trang này giải thích:
+7. OpenClaw hỗ trợ “xác thực thuê bao” thông qua OAuth cho các nhà cung cấp có hỗ trợ (đáng chú ý là **OpenAI Codex (ChatGPT OAuth)**). Đối với các gói đăng ký Anthropic, hãy dùng luồng **setup-token**. Trang này giải thích:
 
 - cách hoạt động của **trao đổi token** OAuth (PKCE)
 - **token được lưu ở đâu** (và vì sao)
 - cách xử lý **nhiều tài khoản** (hồ sơ + ghi đè theo phiên)
 
-OpenClaw cũng hỗ trợ **provider plugins** đi kèm luồng OAuth hoặc khóa API riêng. Chạy chúng bằng:
+10. OpenClaw cũng hỗ trợ **plugin nhà cung cấp** đi kèm OAuth hoặc luồng khóa API riêng
+    flows. 11. Chạy chúng bằng:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -31,7 +25,7 @@ openclaw models auth login --provider <id>
 
 ## Token sink (vì sao nó tồn tại)
 
-Các nhà cung cấp OAuth thường phát hành **refresh token mới** trong quá trình đăng nhập/làm mới. Một số nhà cung cấp (hoặc client OAuth) có thể vô hiệu hóa các refresh token cũ khi một token mới được cấp cho cùng người dùng/ứng dụng.
+12. Các nhà cung cấp OAuth thường phát hành **refresh token mới** trong các luồng đăng nhập/làm mới. 13. Một số nhà cung cấp (hoặc client OAuth) có thể vô hiệu hóa các refresh token cũ khi một token mới được phát hành cho cùng người dùng/ứng dụng.
 
 Triệu chứng thực tế:
 
@@ -53,7 +47,7 @@ Tệp legacy chỉ dùng để import (vẫn được hỗ trợ, nhưng không 
 
 - `~/.openclaw/credentials/oauth.json` (được import vào `auth-profiles.json` khi dùng lần đầu)
 
-Tất cả các mục trên cũng tôn trọng `$OPENCLAW_STATE_DIR` (ghi đè thư mục trạng thái). Tham chiếu đầy đủ: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+14. Tất cả những điều trên cũng tuân theo `$OPENCLAW_STATE_DIR` (ghi đè thư mục trạng thái). 15. Tham chiếu đầy đủ: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token (subscription auth)
 
@@ -117,7 +111,7 @@ Luồng làm mới diễn ra tự động; bạn thường không cần quản l
 
 Hai mô hình:
 
-### 1) Ưu tiên: tác tử tách biệt
+### 1. Ưu tiên: tác tử tách biệt
 
 Nếu bạn muốn “cá nhân” và “công việc” không bao giờ tương tác, hãy dùng các tác tử cô lập (phiên + thông tin xác thực + workspace riêng):
 
@@ -128,7 +122,7 @@ openclaw agents add personal
 
 Sau đó cấu hình xác thực theo từng tác tử (wizard) và định tuyến chat đến đúng tác tử.
 
-### 2) Nâng cao: nhiều hồ sơ trong một tác tử
+### 2. Nâng cao: nhiều hồ sơ trong một tác tử
 
 `auth-profiles.json` hỗ trợ nhiều ID hồ sơ cho cùng một nhà cung cấp.
 

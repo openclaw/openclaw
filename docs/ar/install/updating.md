@@ -4,13 +4,6 @@ read_when:
   - تحديث OpenClaw
   - حدوث عطل بعد تحديث
 title: "التحديث"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:38Z
 ---
 
 # التحديث
@@ -29,6 +22,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 ملاحظات:
 
 - أضِف `--no-onboard` إذا كنت لا تريد تشغيل معالج الإعداد الأولي مرة أخرى.
+
 - بالنسبة إلى **تثبيتات المصدر**، استخدم:
 
   ```bash
@@ -38,9 +32,10 @@ curl -fsSL https://openclaw.ai/install.sh | bash
   سيقوم المُثبّت بـ `git pull --rebase` **فقط** إذا كان المستودع نظيفًا.
 
 - بالنسبة إلى **التثبيتات العامة**، يستخدم السكربت `npm install -g openclaw@latest` داخليًا.
+
 - ملاحظة قديمة: يظل `clawdbot` متاحًا كطبقة توافق.
 
-## قبل أن تحدّث
+## قبل التحديث
 
 - اعرف طريقة التثبيت: **عام** (npm/pnpm) مقابل **من المصدر** (git clone).
 - اعرف كيف يعمل Gateway لديك: **طرفية أمامية** مقابل **خدمة مُشرف عليها** (launchd/systemd).
@@ -120,7 +115,7 @@ openclaw update
 
 ## التحديث (من المصدر)
 
-من نسخة المستودع:
+من دفع المستعرض:
 
 المفضّل:
 
@@ -183,7 +178,7 @@ openclaw logs --follow
 
 دليل التشغيل + تسميات الخدمات الدقيقة: [دليل تشغيل Gateway](/gateway)
 
-## التراجع / التثبيت (عند حدوث عطل)
+## التراجع / التثبيت (عند توقف شيء)
 
 ### التثبيت (تثبيت عام)
 

@@ -4,13 +4,6 @@ read_when:
   - Planowanie ujednoliconego protokołu sieciowego dla węzłów + klientów operatora
   - Przebudowa zatwierdzeń, parowania, TLS i obecności między urządzeniami
 title: "Refaktoryzacja Clawnet"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:11Z
 ---
 
 # Refaktoryzacja Clawnet (ujednolicenie protokołu + uwierzytelniania)
@@ -39,7 +32,7 @@ Jeden, rygorystyczny dokument dla:
 - Minimalna duplikacja kodu.
 - Jedna maszyna powinna pojawiać się raz (brak duplikatów UI/węzła).
 
-## Poza zakresem (jawnie)
+## Niecele (bezpośrednie)
 
 - Usunięcie separacji możliwości (nadal potrzebna zasada najmniejszych uprawnień).
 - Ujawnienie pełnej płaszczyzny sterowania gateway bez kontroli zakresów.
@@ -51,7 +44,7 @@ Jeden, rygorystyczny dokument dla:
 
 ## Dwa protokoły
 
-### 1) Gateway WebSocket (płaszczyzna sterowania)
+### 1. Gateway WebSocket (płaszczyzna sterowania)
 
 - Pełna powierzchnia API: konfiguracja, kanały, modele, sesje, uruchomienia agentów, logi, węzły itd.
 - Domyślne wiązanie: loopback. Dostęp zdalny przez SSH/Tailscale.
@@ -62,7 +55,7 @@ Jeden, rygorystyczny dokument dla:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (transport węzłów)
+### 2. Bridge (transport węzłów)
 
 - Wąska powierzchnia z listą dozwolonych, tożsamość węzła + parowanie.
 - JSONL przez TCP; opcjonalnie TLS + pinning odcisku certyfikatu.
@@ -128,7 +121,7 @@ Jeden protokół WS z rolą + zakresem.
   - `operator.write` (uruchamianie agenta, wysyłanie)
   - `operator.admin` (konfiguracja, kanały, modele)
 
-### Zachowania ról
+### Zachowanie roli
 
 **Węzeł**
 
@@ -288,7 +281,7 @@ Preferowane:
 
 - Odcisk pary kluczy (hash klucza publicznego).
 
-## „Uroczy” slug (tematyka homarów)
+## Słodki lug (temat)
 
 Tylko etykieta dla ludzi.
 
@@ -327,7 +320,7 @@ Ten sam `deviceId` w różnych rolach → jeden wiersz „Instancja”:
 
 - Dodać zdarzenia żądania + rozstrzygnięcia zatwierdzeń w WS.
 - Zaktualizować UI aplikacji na macOS, aby wyświetlała monity + odpowiadała.
-- Środowisko węzła przestaje wyświetlać monity UI.
+- Node runtime zatrzymuje wywoływanie interfejsu użytkownika.
 
 ## Faza 4: Ujednolicenie TLS
 

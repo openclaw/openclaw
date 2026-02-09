@@ -4,21 +4,14 @@ read_when:
   - Konfigurera ACP-baserade IDE-integrationer
   - Felsökning av ACP-sessionsroutning till Gateway
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:34Z
 ---
 
 # acp
 
 Kör ACP-bryggan (Agent Client Protocol) som kommunicerar med en OpenClaw Gateway.
 
-Det här kommandot talar ACP över stdio för IDE:er och vidarebefordrar prompter till Gateway
-över WebSocket. Det håller ACP-sessioner mappade till Gateway-sessionsnycklar.
+Detta kommando talar AVS över stdio för IDEs och vidare uppmaningar till Gateway
+över WebSocket. Det håller AVS-sessioner mappade till Gateway-sessionsnycklar.
 
 ## Användning
 
@@ -40,8 +33,8 @@ openclaw acp --session agent:main:main --reset-session
 
 ## ACP-klient (debug)
 
-Använd den inbyggda ACP-klienten för att rimlighetskontrollera bryggan utan en IDE.
-Den startar ACP-bryggan och låter dig skriva prompter interaktivt.
+Använd den inbyggda AVS-klienten för att kontrollera bron utan IDE.
+Det ger upphov till AVS-bron och låter er skriva meddelanden interaktivt.
 
 ```bash
 openclaw acp client
@@ -77,7 +70,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Välja agenter
 
-ACP väljer inte agenter direkt. Den routar via Gateway-sessionsnyckeln.
+AVS väljer inte agenter direkt. Det rutter genom Gateway sessionsnyckel.
 
 Använd agentspecifika sessionsnycklar för att rikta in dig på en specifik agent:
 
@@ -87,8 +80,8 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-Varje ACP-session mappas till en enda Gateway-sessionsnyckel. En agent kan ha många
-sessioner; ACP använder som standard en isolerad `acp:<uuid>`-session om du inte åsidosätter
+Varje AVS-session kartor till en enda Gateway-sessionsnyckel. En agent kan ha många
+sessioner; AVS standard är en isolerad `acp:<uuid>` session om du inte åsidosätter
 nyckeln eller etiketten.
 
 ## Zed-redigerarens konfiguration
@@ -135,7 +128,7 @@ I Zed öppnar du Agent-panelen och väljer ”OpenClaw ACP” för att starta en
 
 ## Sessionsmappning
 
-Som standard får ACP-sessioner en isolerad Gateway-sessionsnyckel med ett `acp:`-prefix.
+Som standard får AVS-sessioner en isolerad Gateway sessionsnyckel med ett `acp:`-prefix.
 För att återanvända en känd session, skicka en sessionsnyckel eller etikett:
 
 - `--session <key>`: använd en specifik Gateway-sessionsnyckel.

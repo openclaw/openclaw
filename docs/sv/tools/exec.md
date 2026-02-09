@@ -4,20 +4,13 @@ read_when:
   - Använder eller ändrar exec-verktyget
   - Felsöker stdin- eller TTY-beteende
 title: "Exec-verktyg"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:51Z
 ---
 
 # Exec-verktyg
 
-Kör skalkommandon i arbetsytan. Stöder körning i förgrund + bakgrund via `process`.
-Om `process` inte tillåts kör `exec` synkront och ignorerar `yieldMs`/`background`.
-Bakgrundssessioner är avgränsade per agent; `process` ser bara sessioner från samma agent.
+Kör shell‑kommandon i arbetsytan. Stöder förgrund + bakgrunds körning via `process`.
+Om `process` inte är tillåtet körs `exec` synkront och ignorerar `yieldMs`/`background`.
+Bakgrundssessioner är omfattade per agent; `process` ser bara sessioner från samma agent.
 
 ## Parametrar
 
@@ -45,9 +38,9 @@ Noteringar:
   från `PATH` för att undvika fish-inkompatibla skript, och faller sedan tillbaka till `SHELL` om ingen finns.
 - Värdkörning (`gateway`/`node`) avvisar `env.PATH` och loader-åsidosättningar (`LD_*`/`DYLD_*`) för att
   förhindra binärkapning eller injicerad kod.
-- Viktigt: sandboxing är **av som standard**. Om sandboxing är av körs `host=sandbox` direkt på
-  gateway-värden (ingen container) och **kräver inga godkännanden**. För att kräva godkännanden, kör med
-  `host=gateway` och konfigurera exec-godkännanden (eller aktivera sandboxing).
+- Viktigt: sandlådan är **av som standard**. Om sandboxning är avstängd körs `host=sandbox` direkt på
+  gatewayvärden (ingen behållare) och **kräver inte godkännanden**. För att kräva godkännanden, kör med
+  `host=gateway` och konfigurera exec-godkännanden (eller aktivera sandboxning).
 
 ## Konfig
 
@@ -74,16 +67,16 @@ Exempel:
 
 ### PATH-hantering
 
-- `host=gateway`: sammanfogar din inloggningsskals `PATH` i exec-miljön. `env.PATH`-åsidosättningar
-  avvisas för värdkörning. Själva daemonen kör fortfarande med en minimal `PATH`:
+- `host=gateway`: sammanfogar ditt login-shell `PATH` till exec-miljön. `env.PATH` overrides are
+  rejected for host execution. Själva daemonen körs fortfarande med en minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
-- `host=sandbox`: kör `sh -lc` (inloggningsskal) i containern, så `/etc/profile` kan återställa `PATH`.
-  OpenClaw lägger till `env.PATH` efter profilsourcing via en intern env-var (ingen skalinterpolering);
-  `tools.exec.pathPrepend` gäller här också.
-- `host=node`: endast icke-blockerade env-åsidosättningar som du skickar vidarebefordras till noden. `env.PATH`-åsidosättningar
-  avvisas för värdkörning. Headless nodvärdar accepterar `PATH` endast när den läggs till före nodvärdens
-  PATH (ingen ersättning). macOS-noder släpper `PATH`-åsidosättningar helt.
+- `host=sandbox`: kör `sh -lc` (login shell) inuti behållaren, så `/etc/profile` kan återställa `PATH`.
+  OpenClaw låtsas som `env.PATH` efter profilinköp via en intern env var (ingen skalinterpolation);
+  `tools.exec.pathPrepend` gäller även här.
+- `host=node`: endast icke-blockerade env överskrider du skickar till noden. `env.PATH` overrides are
+  rejected for host execution. Huvudlösa nodvärdar accepterar `PATH` endast när det föregår noden värd
+  PATH (ingen ersättning). macOS noder släpper 'PATH' åsidosätter helt.
 
 Per-agent-nodbindning (använd agentlistans index i konfig):
 
@@ -96,7 +89,7 @@ Kontroll-UI: fliken Noder innehåller en liten panel ”Exec node binding” fö
 
 ## Sessionsåsidosättningar (`/exec`)
 
-Använd `/exec` för att sätta **per-session**-standarder för `host`, `security`, `ask` och `node`.
+Använd `/exec` för att sätta **per-session** standardvärden för `host`, `security`, `ask` och `node`.
 Skicka `/exec` utan argument för att visa aktuella värden.
 
 Exempel:
@@ -107,27 +100,27 @@ Exempel:
 
 ## Auktorisationsmodell
 
-`/exec` respekteras endast för **auktoriserade avsändare** (kanaltillåtelselistor/parning plus `commands.useAccessGroups`).
-Den uppdaterar **endast sessionsstatus** och skriver inte konfig. För att hårdinaktivera exec, neka det via verktygspolicy
-(`tools.deny: ["exec"]` eller per agent). Värdgodkännanden gäller fortfarande om du inte uttryckligen sätter
+`/exec` hedras endast för **auktoriserade avsändare** (kanaltillåtna listor/parkoppling plus `commands.useAccessGroups`).
+Den uppdaterar **sessionsstaten endast** och skriver inte konfiguration. För att hård-disable exec, neka det via verktyget
+policy (`tools.deny: ["exec"]` eller per-agent). Värdgodkännanden gäller fortfarande om du inte uttryckligen anger
 `security=full` och `ask=off`.
 
 ## Exec-godkännanden (companion-app / nodvärd)
 
-Sandboxade agenter kan kräva godkännande per begäran innan `exec` körs på gateway- eller nodvärden.
-Se [Exec approvals](/tools/exec-approvals) för policy, tillåtelselista och UI-flöde.
+Sandboxade agenter kan kräva godkännande per begäran innan `exec` körs på gateway eller nod värd.
+Se [Exec godkännanden](/tools/exec-approvals) för policy, allowlist och UI flöde.
 
 När godkännanden krävs returnerar exec-verktyget omedelbart med
-`status: "approval-pending"` och ett godkännande-id. När det har godkänts (eller nekats / tidsgräns nåtts),
-sänder Gateway systemhändelser (`Exec finished` / `Exec denied`). Om kommandot fortfarande
-kör efter `tools.exec.approvalRunningNoticeMs` sänds ett enda `Exec running`-meddelande.
+`status: "approval-pending"` och ett godkännande-id. En gång godkänd (eller nekad / tidsinställd ut),
+Gateway avger systemhändelser (`Exec avslutad` / `Exec nekad`). Om kommandot fortfarande körs
+efter `tools.exec.approvalRunningNoticeMs`, avges ett enda `Exec running`-meddelande.
 
 ## Tillåtelselista + säkra binärer
 
-Verkställighet av tillåtelselista matchar **endast upplösta binärsökvägar** (inga basnamnsträffar). När
-`security=allowlist` är aktivt tillåts skalkommandon automatiskt endast om varje segment i pipelinen är
-tillåtelselistan eller en säker binär. Kedjning (`;`, `&&`, `||`) och omdirigeringar avvisas i
-tillåtelseläge.
+Tillåtna verkställighet matchar **lösta binära sökvägar endast** (inget basnamn matchar). När
+`security=allowlist`, skalkommandon tillåts endast automatiskt om varje rörledningssegment är
+tillåten eller en säker behållare. Kedjning (`;`, `&&`, `<unk> `) och omdirigering avvisas i
+tillåten lista.
 
 ## Exempel
 
@@ -166,8 +159,8 @@ Klistra in (hakparenteser som standard):
 
 ## apply_patch (experimentell)
 
-`apply_patch` är ett underverktyg till `exec` för strukturerade flerfilsredigeringar.
-Aktivera det uttryckligen:
+`apply_patch` är ett underverktyg till `exec` för strukturerade multi-filredigeringar.
+Aktivera det uttryckligt:
 
 ```json5
 {

@@ -4,19 +4,12 @@ read_when:
   - OpenClaw အတွက် ချတ် ချန်နယ်တစ်ခု ရွေးချယ်လိုသောအခါ
   - ပံ့ပိုးထားသော မက်ဆေ့ချ်ပို့ဆောင်ရေး ပလက်ဖောင်းများကို အမြန်အကျဉ်းချုပ် သိလိုသောအခါ
 title: "Chat Channels"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # Chat Channels
 
-OpenClaw သည် သင်နေ့စဉ်အသုံးပြုနေသော မည်သည့် ချတ် အက်ပ်မဆိုမှတစ်ဆင့် သင့်နှင့် ဆက်သွယ်နိုင်ပါသည်။ ချန်နယ်တစ်ခုချင်းစီသည် Gateway မှတစ်ဆင့် ချိတ်ဆက်ပါသည်။
-စာသား (Text) ကို ချန်နယ်အားလုံးတွင် ပံ့ပိုးထားပြီး မီဒီယာနှင့် တုံ့ပြန်မှုများ (reactions) သည် ချန်နယ်အလိုက် ကွာခြားပါသည်။
+OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
+Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
 
@@ -44,7 +37,8 @@ OpenClaw သည် သင်နေ့စဉ်အသုံးပြုနေသ�
 ## Notes
 
 - ချန်နယ်များကို တစ်ပြိုင်နက်တည်း လည်ပတ်စေနိုင်ပါသည်; အများအပြားကို ပြင်ဆင်သတ်မှတ်ပြီး OpenClaw သည် ချတ်တစ်ခုချင်းစီအလိုက် လမ်းကြောင်းသတ်မှတ်ပေးပါမည်။
-- အမြန်ဆုံး တပ်ဆင်နိုင်သော နည်းလမ်းမှာ ပုံမှန်အားဖြင့် **Telegram** (ရိုးရှင်းသော bot token) ဖြစ်ပါသည်။ WhatsApp သည် QR pairing လိုအပ်ပြီး ဒစ်စ်ပေါ်တွင် အခြေအနေဒေတာ ပိုမို သိမ်းဆည်းပါသည်။
+- Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
+  stores more state on disk.
 - အုပ်စု လုပ်ဆောင်ပုံများသည် ချန်နယ်အလိုက် ကွာခြားပါသည်; [Groups](/channels/groups) ကို ကြည့်ပါ။
 - လုံခြုံရေးအတွက် DM pairing နှင့် allowlists ကို အတင်းအကျပ် အသုံးပြုထားပါသည်; [Security](/gateway/security) ကို ကြည့်ပါ။
 - Telegram အတွင်းပိုင်း အချက်အလက်များ: [grammY notes](/channels/grammy)။

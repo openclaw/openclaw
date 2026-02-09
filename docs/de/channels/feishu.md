@@ -1,16 +1,9 @@
 ---
-summary: „Überblick, Funktionen und Konfiguration des Feishu-Bots“
+summary: "„Überblick, Funktionen und Konfiguration des Feishu-Bots“"
 read_when:
   - Sie möchten einen Feishu-/Lark-Bot verbinden
   - Sie konfigurieren den Feishu-Kanal
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:26Z
 ---
 
 # Feishu-Bot
@@ -163,7 +156,7 @@ Unter **Event Subscription**:
 ### 7. App veröffentlichen
 
 1. Erstellen Sie eine Version unter **Version Management & Release**
-2. Reichen Sie sie zur Prüfung ein und veröffentlichen Sie sie
+2. Zur Prüfung absenden und veröffentlichen
 3. Warten Sie auf die Admin-Genehmigung (Enterprise-Apps werden meist automatisch genehmigt)
 
 ---
@@ -267,6 +260,7 @@ Nach der Genehmigung können Sie normal chatten.
 ### Direktnachrichten
 
 - **Standard**: `dmPolicy: "pairing"` (unbekannte Benutzer erhalten einen Kopplungscode)
+
 - **Kopplung genehmigen**:
 
   ```bash
@@ -534,34 +528,34 @@ Vollständige Konfiguration: [Gateway-Konfiguration](/gateway/configuration)
 
 Schlüsseloptionen:
 
-| Einstellung                                       | Beschreibung                       | Standard  |
-| ------------------------------------------------- | ---------------------------------- | --------- |
-| `channels.feishu.enabled`                         | Kanal aktivieren/deaktivieren      | `true`    |
-| `channels.feishu.domain`                          | API-Domain (`feishu` oder `lark`)  | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                             | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                         | -         |
-| `channels.feishu.accounts.<id>.domain`            | API-Domain-Override pro Konto      | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM-Richtlinie                      | `pairing` |
-| `channels.feishu.allowFrom`                       | DM-Allowlist (open_id-Liste)       | -         |
-| `channels.feishu.groupPolicy`                     | Gruppenrichtlinie                  | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Gruppen-Allowlist                  | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | @Erwähnung erforderlich            | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Gruppe aktivieren                  | `true`    |
-| `channels.feishu.textChunkLimit`                  | Nachrichtensegmentgröße            | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Mediengrößenlimit                  | `30`      |
-| `channels.feishu.streaming`                       | Streaming-Kartenausgabe aktivieren | `true`    |
-| `channels.feishu.blockStreaming`                  | Block-Streaming aktivieren         | `true`    |
+| Einstellung                                       | Beschreibung                                                         | Standard  |
+| ------------------------------------------------- | -------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | Kanal aktivieren/deaktivieren                                        | `true`    |
+| `channels.feishu.domain`                          | API-Domain (`feishu` oder `lark`)                 | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                               | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                           | -         |
+| `channels.feishu.accounts.<id>.domain`            | API-Domain-Override pro Konto                                        | `feishu`  |
+| `channels.feishu.dmPolicy`                        | DM-Richtlinie                                                        | `pairing` |
+| `channels.feishu.allowFrom`                       | DM-Allowlist (open_id-Liste) | -         |
+| `channels.feishu.groupPolicy`                     | Gruppenrichtlinie                                                    | `open`    |
+| `channels.feishu.groupAllowFrom`                  | Gruppen-Allowlist                                                    | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | @Erwähnung erforderlich                                 | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | Gruppe aktivieren                                                    | `true`    |
+| `channels.feishu.textChunkLimit`                  | Nachrichtensegmentgröße                                              | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | Mediengrößenlimit                                                    | `30`      |
+| `channels.feishu.streaming`                       | Streaming-Kartenausgabe aktivieren                                   | `true`    |
+| `channels.feishu.blockStreaming`                  | Block-Streaming aktivieren                                           | `true`    |
 
 ---
 
 ## dmPolicy-Referenz
 
-| Wert          | Verhalten                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------------ |
+| Wert          | Verhalten                                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
 | `"pairing"`   | **Standard.** Unbekannte Benutzer erhalten einen Kopplungscode und müssen genehmigt werden |
-| `"allowlist"` | Nur Benutzer in `allowFrom` können chatten                                                 |
-| `"open"`      | Alle Benutzer zulassen (erfordert `"*"` in allowFrom)                                      |
-| `"disabled"`  | Direktnachrichten deaktivieren                                                             |
+| `"allowlist"` | Nur Benutzer in `allowFrom` können chatten                                                                 |
+| `"open"`      | Alle Benutzer zulassen (erfordert `"*"` in allowFrom)                                   |
+| `"disabled"`  | DMs deaktivieren                                                                                           |
 
 ---
 

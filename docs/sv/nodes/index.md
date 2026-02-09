@@ -5,18 +5,11 @@ read_when:
   - Använda nodens canvas/kamera för agentkontext
   - Lägga till nya nodkommandon eller CLI-hjälpare
 title: "Noder"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:03Z
 ---
 
 # Noder
 
-En **nod** är en följeslagsenhet (macOS/iOS/Android/headless) som ansluter till Gateway **WebSocket** (samma port som operatörer) med `role: "node"` och exponerar en kommandoyta (t.ex. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Protokolldetaljer: [Gateway protocol](/gateway/protocol).
+En **node** är en kompanjonenhet (macOS/iOS/Android/headless) som ansluter till Gateway **WebSocket** (samma port som operatörer) med `roll: "node"` och exponerar en kommandoyta (e. . `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
 Äldre transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; utfasad/borttagen för nuvarande noder).
 
@@ -24,14 +17,14 @@ macOS kan också köras i **nodläge**: menyradsappen ansluter till Gatewayns WS
 
 Noteringar:
 
-- Noder är **periferienheter**, inte gateways. De kör inte gateway-tjänsten.
+- Noder är **kringutrustning**, inte gateways. De kör inte gateway service.
 - Telegram/WhatsApp/etc.-meddelanden hamnar på **gatewayen**, inte på noder.
 - Felsökningsrunbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Parning + status
 
-**WS-noder använder enhetsparning.** Noder presenterar en enhetsidentitet under `connect`; Gatewayn
-skapar en enhetsparningsbegäran för `role: node`. Godkänn via enhetens CLI (eller UI).
+**WS-noder använder enhets parkoppling.** Noder presenterar en enhetsidentitet under `connect`; Gateway
+skapar en enhets parkopplingsförfrågan för `roll: node`. Godkänn via enheterna CLI (eller UI).
 
 Snabb CLI:
 
@@ -51,9 +44,9 @@ Noteringar:
 
 ## Fjärr-nodvärd (system.run)
 
-Använd en **nodvärd** när din Gateway körs på en maskin och du vill att kommandon
-ska köras på en annan. Modellen pratar fortfarande med **gatewayen**; gatewayen
-vidarebefordrar `exec`-anrop till **nodvärden** när `host=node` är vald.
+Använd en **nod värd** när din Gateway körs på en maskin och du vill att kommandona
+ska köras på en annan. Modellen talar fortfarande till **gateway**; gateway
+framåt `exec` anrop till **nod värd** när `host=node` är vald.
 
 ### Vad körs var
 
@@ -71,9 +64,9 @@ openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 
 ### Fjärr-gateway via SSH-tunnel (loopback-bindning)
 
-Om Gatewayn binder till loopback (`gateway.bind=loopback`, standard i lokalt läge),
-kan fjärr-nodvärdar inte ansluta direkt. Skapa en SSH-tunnel och peka
-nodvärden mot tunnelns lokala ände.
+Om Gateway binder till loopback (`gateway.bind=loopback`, standard i lokalt läge), kan
+fjärrnodvärdar inte ansluta direkt. Skapa en SSH-tunnel och peka
+nod värd i den lokala änden av tunneln.
 
 Exempel (nodvärd -> gateway-värd):
 
@@ -115,7 +108,7 @@ Namngivningsalternativ:
 
 ### Tillåtelselista kommandona
 
-Exec-godkännanden är **per nodvärd**. Lägg till poster i tillåtelselistan från gatewayen:
+Exec godkännanden är **per nod värd**. Lägg till tillåtna poster från gateway:
 
 ```bash
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
@@ -270,8 +263,8 @@ Noteringar:
 
 ## Systemkommandon (nodvärd / mac-nod)
 
-macOS-noden exponerar `system.run`, `system.notify` och `system.execApprovals.get/set`.
-Den headless nodvärden exponerar `system.run`, `system.which` och `system.execApprovals.get/set`.
+macOS noden exponerar `system.run`, `system.notify`, och `system.execApprovals.get/set`.
+Den huvudlösa nodvärden exponerar `system.run`, `system.which`, och `system.execApprovals.get/set`.
 
 Exempel:
 
@@ -287,13 +280,13 @@ Noteringar:
 - `system.run` stöder `--cwd`, `--env KEY=VAL`, `--command-timeout` och `--needs-screen-recording`.
 - `system.notify` stöder `--priority <passive|active|timeSensitive>` och `--delivery <system|overlay|auto>`.
 - macOS-noder ignorerar `PATH`-overrides; headless nodvärdar accepterar endast `PATH` när den prefixar nodvärdens PATH.
-- I macOS nodläge är `system.run` spärrat av exec-godkännanden i macOS-appen (Inställningar → Exec approvals).
-  Ask/allowlist/full beter sig likadant som den headless nodvärden; nekade prompts returnerar `SYSTEM_RUN_DENIED`.
+- På macOS node-läge är `system.run` gated av exec godkännanden i macOS appen (inställningar → Exec godkännanden).
+  Från/allowlist/full beter sig som den huvudlösa noden värden; nekade uppmaningar tillbaka `SYSTEM_RUN_DENIED`.
 - På headless nodvärd är `system.run` spärrat av exec-godkännanden (`~/.openclaw/exec-approvals.json`).
 
 ## Exec-nodbinding
 
-När flera noder finns tillgängliga kan du binda exec till en specifik nod.
+När flera noder är tillgängliga kan du binda exec till en specifik nod.
 Detta sätter standardnoden för `exec host=node` (och kan åsidosättas per agent).
 
 Global standard:
@@ -318,13 +311,13 @@ openclaw config unset agents.list[0].tools.exec.node
 
 ## Behörighetskarta
 
-Noder kan inkludera en `permissions`-karta i `node.list` / `node.describe`, nycklad per behörighetsnamn (t.ex. `screenRecording`, `accessibility`) med booleska värden (`true` = beviljad).
+Noder kan inkludera en `permissions` karta i `node.list` / `node.describe`, tangentad med behörighetsnamn (t.ex. `screenRecording`, `accessibility`) med booleska värden (`true` = beviljad).
 
 ## Headless nodvärd (plattformsoavhängig)
 
-OpenClaw kan köra en **headless nodvärd** (utan UI) som ansluter till Gateway
+OpenClaw kan köra en **huvudlös nodvärd** (inget UI) som ansluter till Gateway
 WebSocket och exponerar `system.run` / `system.which`. Detta är användbart på Linux/Windows
-eller för att köra en minimal nod bredvid en server.
+eller för att köra en minimal nod tillsammans med en server.
 
 Starta den:
 
@@ -338,9 +331,9 @@ Noteringar:
 - Nodvärden lagrar sitt nod-id, token, visningsnamn och gateway-anslutningsinfo i `~/.openclaw/node.json`.
 - Exec-godkännanden tillämpas lokalt via `~/.openclaw/exec-approvals.json`
   (se [Exec approvals](/tools/exec-approvals)).
-- På macOS föredrar den headless nodvärden följeslagsappens exec-värd när den är nåbar och
-  faller tillbaka till lokal exekvering om appen inte är tillgänglig. Sätt `OPENCLAW_NODE_EXEC_HOST=app` för att kräva
-  appen, eller `OPENCLAW_NODE_EXEC_FALLBACK=0` för att inaktivera fallback.
+- På macOS, huvudlös nod värd föredrar följeslagare app exec värd när nås och faller
+  tillbaka till lokal körning om appen inte är tillgänglig. Ställ in `OPENCLAW_NODE_EXEC_HOST=app` för att kräva
+  appen, eller `OPENCLAW_NODE_EXEC_FALLBACK=0` för att inaktivera reserven.
 - Lägg till `--tls` / `--tls-fingerprint` när Gateway WS använder TLS.
 
 ## Mac nodläge

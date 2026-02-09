@@ -4,13 +4,6 @@ read_when:
   - မူလ သတ်မှတ်ထားသော မော်ဒယ်များကို ပြောင်းလဲလိုပါက သို့မဟုတ် provider auth အခြေအနေကို ကြည့်လိုပါက
   - ရရှိနိုင်သော မော်ဒယ်များ/ပံ့ပိုးသူများကို စကန်လုပ်၍ auth ပရိုဖိုင်များကို အမှားရှာဖွေလိုပါက
 title: "မော်ဒယ်များ"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:10Z
 ---
 
 # `openclaw models`
@@ -31,19 +24,16 @@ openclaw models set <model-or-alias>
 openclaw models scan
 ```
 
-`openclaw models status` သည် ဖြေရှင်းပြီးသား မူလ/ fallback များနှင့် auth အကျဉ်းချုပ်ကို ပြသသည်။
-Provider အသုံးပြုမှု snapshot များ ရရှိနိုင်ပါက OAuth/token အခြေအနေအပိုင်းတွင်
-provider အသုံးပြုမှု header များ ပါဝင်လာသည်။
-Provider ပရိုဖိုင်တစ်ခုချင်းစီအတွက် live auth probe များကို လုပ်ဆောင်ရန် `--probe` ကို ထည့်ပါ။
-Probe များသည် အမှန်တကယ် တောင်းဆိုမှုများ ဖြစ်ပြီး (token များ အသုံးချနိုင်သလို rate limit များကိုလည်း ထိနိုင်သည်)။
-ဖွဲ့စည်းပြီးသား agent တစ်ခု၏ မော်ဒယ်/auth အခြေအနေကို စစ်ဆေးရန် `--agent <id>` ကို အသုံးပြုပါ။ မထည့်ထားပါက
-အမိန့်သည် `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` ကို သတ်မှတ်ထားပါက အသုံးပြုပြီး မဟုတ်ပါက
-ဖွဲ့စည်းထားသော မူလ agent ကို အသုံးပြုသည်။
+`openclaw models status` သည် ဖြေရှင်းပြီးသော default/fallback များနှင့် auth အကျဉ်းချုပ်ကို ပြသပါသည်။
+Provider အသုံးပြုမှု snapshot များ ရရှိနိုင်သောအခါ OAuth/token status အပိုင်းတွင် provider usage headers များ ပါဝင်ပါသည်။
+Configure လုပ်ထားသော provider profile တစ်ခုချင်းစီအတွက် live auth probe များကို လည်ပတ်ရန် `--probe` ကို ထည့်ပါ။
+Probes များသည် အမှန်တကယ် request များဖြစ်ပြီး (token များကို သုံးစွဲနိုင်သလို rate limit များကိုလည်း ဖြစ်ပေါ်စေနိုင်ပါသည်)။
+Configure လုပ်ထားသော agent တစ်ခု၏ model/auth အခြေအနေကို စစ်ဆေးရန် `--agent <id>` ကို အသုံးပြုပါ။ မထည့်ထားပါက command သည် `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` ကို သတ်မှတ်ထားလျှင် အသုံးပြုပြီး မရှိပါက configure လုပ်ထားသော default agent ကို အသုံးပြုပါသည်။
 
 မှတ်ချက်များ—
 
 - `models set <model-or-alias>` သည် `provider/model` သို့မဟုတ် alias တစ်ခုကို လက်ခံသည်။
-- မော်ဒယ် ကိုးကားချက်များကို **ပထမဆုံး** `/` ပေါ်တွင် ခွဲခြမ်းစိတ်ဖြာသည်။ မော်ဒယ် ID တွင် `/` (OpenRouter စတိုင်) ပါဝင်ပါက provider prefix ကို ထည့်သွင်းပါ (ဥပမာ—`openrouter/moonshotai/kimi-k2`)။
+- Model ref များကို **ပထမဆုံး** `/` အပေါ် အခြေခံ၍ ခွဲခြားဖတ်ရှုပါသည်။ Model ID တွင် `/` ပါဝင်ပါက (OpenRouter-style) provider prefix ကို ထည့်ပါ (ဥပမာ: `openrouter/moonshotai/kimi-k2`)။
 - Provider ကို ချန်လှပ်ထားပါက OpenClaw သည် ထည့်သွင်းထားသည့် အချက်အလက်ကို alias သို့မဟုတ် **မူလ provider** အတွက် မော်ဒယ်အဖြစ် သတ်မှတ်သည် (မော်ဒယ် ID တွင် `/` မပါဝင်သည့်အခါသာ အလုပ်လုပ်သည်)။
 
 ### `models status`
@@ -77,8 +67,7 @@ openclaw models auth setup-token
 openclaw models auth paste-token
 ```
 
-`models auth login` သည် provider plugin ၏ auth လုပ်ငန်းစဉ် (OAuth/API key) ကို လည်ပတ်စေသည်။
-တပ်ဆင်ထားသော provider များကို ကြည့်ရန် `openclaw plugins list` ကို အသုံးပြုပါ။
+`models auth login` သည် provider plugin ၏ auth flow (OAuth/API key) ကို လည်ပတ်စေပါသည်။ ဘယ် provider များကို install လုပ်ထားသည်ကို ကြည့်ရန် `openclaw plugins list` ကို အသုံးပြုပါ။
 
 မှတ်ချက်များ—
 

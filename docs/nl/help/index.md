@@ -4,13 +4,6 @@ read_when:
   - Je bent nieuw en wilt de gids “wat moet ik aanklikken/uitvoeren”
   - Er is iets stukgegaan en je wilt de snelste weg naar een oplossing
 title: "Help"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:21Z
 ---
 
 # Help

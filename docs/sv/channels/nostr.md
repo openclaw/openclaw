@@ -4,20 +4,13 @@ read_when:
   - Du vill att OpenClaw ska ta emot DM via Nostr
   - Du konfigurerar decentraliserad meddelandehantering
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:29Z
 ---
 
 # Nostr
 
 **Status:** Valfri plugin (inaktiverad som standard).
 
-Nostr är ett decentraliserat protokoll för sociala nätverk. Den här kanalen gör det möjligt för OpenClaw att ta emot och svara på krypterade direktmeddelanden (DM) via NIP-04.
+Nostr är ett decentraliserat protokoll för socialt nätverk. Denna kanal gör det möjligt för OpenClaw att ta emot och svara på krypterade direktmeddelanden (DM) via NIP-04.
 
 ## Installera (vid behov)
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Konfigurationsreferens
 
-| Nyckel       | Typ      | Standard                                    | Beskrivning                              |
-| ------------ | -------- | ------------------------------------------- | ---------------------------------------- |
-| `privateKey` | string   | required                                    | Privat nyckel i `nsec`- eller hex-format |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay-URL:er (WebSocket)                 |
-| `dmPolicy`   | string   | `pairing`                                   | DM-åtkomstpolicy                         |
-| `allowFrom`  | string[] | `[]`                                        | Tillåtna avsändar-pubkeys                |
-| `enabled`    | boolean  | `true`                                      | Aktivera/inaktivera kanal                |
-| `name`       | string   | -                                           | Visningsnamn                             |
-| `profile`    | object   | -                                           | NIP-01-profilmetadata                    |
+| Nyckel       | Typ                                                          | Standard                                    | Beskrivning                                                 |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ----------------------------------------------------------- |
+| `privateKey` | string                                                       | required                                    | Privat nyckel i `nsec`- eller hex-format                    |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay-URL:er (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM-åtkomstpolicy                                            |
+| `allowFrom`  | string[] | `[]`                                        | Tillåtna avsändar-pubkeys                                   |
+| `enabled`    | boolean                                                      | `true`                                      | Aktivera/inaktivera kanal                                   |
+| `name`       | string                                                       | -                                           | Visningsnamn                                                |
+| `profile`    | object                                                       | -                                           | NIP-01-profilmetadata                                       |
 
 ## Profilmetadata
 
-Profildata publiceras som ett NIP-01-`kind:0`-event. Du kan hantera den från Control UI (Channels -> Nostr -> Profile) eller ange den direkt i konfig.
+Profildata publiceras som en NIP-01 `kind:0` händelse. Du kan hantera det från styrgränssnittet (kanaler -> Nostr -> Profil) eller ställa in det direkt i konfigurationen.
 
 Exempel:
 
@@ -173,12 +166,12 @@ Tips:
 
 ## Protokollstöd
 
-| NIP    | Status   | Beskrivning                                |
-| ------ | -------- | ------------------------------------------ |
-| NIP-01 | Stöds    | Grundläggande eventformat + profilmetadata |
-| NIP-04 | Stöds    | Krypterade DM (`kind:4`)                   |
-| NIP-17 | Planerad | Presentinslagna DM                         |
-| NIP-44 | Planerad | Versionshanterad kryptering                |
+| NIP    | Status   | Beskrivning                                 |
+| ------ | -------- | ------------------------------------------- |
+| NIP-01 | Stöds    | Grundläggande eventformat + profilmetadata  |
+| NIP-04 | Stöds    | Krypterade DM (`kind:4`) |
+| NIP-17 | Planerad | Presentinslagna DM                          |
+| NIP-44 | Planerad | Versionshanterad kryptering                 |
 
 ## Testning
 

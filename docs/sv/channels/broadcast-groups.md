@@ -5,13 +5,6 @@ read_when:
   - Felsöka svar från flera agenter i WhatsApp
 status: experimental
 title: "Broadcast-grupper"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:24Z
 ---
 
 # Broadcast-grupper
@@ -21,11 +14,11 @@ x-i18n:
 
 ## Översikt
 
-Broadcast-grupper gör det möjligt för flera agenter att bearbeta och svara på samma meddelande samtidigt. Detta låter dig skapa specialiserade agentteam som arbetar tillsammans i en och samma WhatsApp-grupp eller DM — allt med ett enda telefonnummer.
+Sändningsgrupper gör det möjligt för flera agenter att bearbeta och svara på samma meddelande samtidigt. Detta gör att du kan skapa specialiserade agentgrupper som arbetar tillsammans i en enda WhatsApp grupp eller DM — alla med ett telefonnummer.
 
 Nuvarande omfattning: **endast WhatsApp** (webbkanal).
 
-Broadcast-grupper utvärderas efter kanalens tillåtelselistor och regler för gruppaktivering. I WhatsApp-grupper innebär detta att utsändningar sker när OpenClaw normalt skulle svara (till exempel vid omnämnande, beroende på dina gruppinställningar).
+Sändningsgrupper utvärderas efter kanaltillåtna listor och gruppaktiveringsregler. I WhatsApp-grupper innebär detta att sändningar sker när OpenClaw normalt skulle svara (till exempel: omnämnande, beroende på dina gruppinställningar).
 
 ## Användningsfall
 
@@ -44,7 +37,7 @@ Agents:
 
 Varje agent bearbetar samma meddelande och bidrar med sitt specialiserade perspektiv.
 
-### 2. Flerspråksstöd
+### 2. Stöd för flera språk
 
 ```
 Group: "International Support"
@@ -63,7 +56,7 @@ Agents:
   - QAAgent (reviews quality, only responds if issues found)
 ```
 
-### 4. Uppgiftsautomatisering
+### 4. Automatiserad Uppgift
 
 ```
 Group: "Project Management"
@@ -77,10 +70,10 @@ Agents:
 
 ### Grundläggande konfigurering
 
-Lägg till en toppnivåsektion `broadcast` (bredvid `bindings`). Nycklar är WhatsApp peer-id:n:
+Lägg till en toppnivå `broadcast`-sektion (bredvid `bindings`). Nycklar är WhatsApp kamrat-ids:
 
-- gruppchattar: grupp-JID (t.ex. `120363403215116621@g.us`)
-- DM: E.164-telefonnummer (t.ex. `+15551234567`)
+- grupp chattar: grupp JID (t.ex. `120363403215116621@g.us`)
+- DMs: E.164 telefonnummer (t.ex. `+15551234567`)
 
 ```json
 {
@@ -170,7 +163,7 @@ Agenter bearbetar i ordning (en väntar tills föregående är klar):
 4. **Om inte i broadcast-listan**:
    - Normal routning gäller (första matchande bindning)
 
-Obs: broadcast-grupper kringgår inte kanalens tillåtelselistor eller regler för gruppaktivering (omnämnanden/kommandon/etc). De ändrar bara _vilka agenter som körs_ när ett meddelande är berättigat till bearbetning.
+Obs: sändningsgrupper förbigår inte kanaltillåtna listor eller gruppaktiveringsregler (omnämnande/kommandon/etc). De ändrar bara _vilka agenter som kör _ när ett meddelande är berättigat till behandling.
 
 ### Sessionsisolering
 
@@ -243,7 +236,7 @@ Gör det tydligt vad varje agent gör:
 }
 ```
 
-### 3. Konfigurera olika verktygsåtkomst
+### 3. Konfigurera olika verktyg tillgång
 
 Ge agenter bara de verktyg de behöver:
 
@@ -268,9 +261,9 @@ Med många agenter, överväg:
 - Att begränsa broadcast-grupper till 5–10 agenter
 - Att använda snabbare modeller för enklare agenter
 
-### 5. Hantera fel på ett robust sätt
+### 5. Hantera misslyckanden Gracfully
 
-Agenter fallerar oberoende. En agents fel blockerar inte andra:
+Agenter misslyckas självständigt. Ett agentfel blockerar inte andra:
 
 ```
 Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]
@@ -318,7 +311,7 @@ Broadcast-grupper fungerar sida vid sida med befintlig routning:
 **Kontrollera:**
 
 1. Agent-ID:n finns i `agents.list`
-2. Peer-ID-formatet är korrekt (t.ex. `120363403215116621@g.us`)
+2. Det andra ID-formatet är korrekt (t.ex., '120363403215116621@g.us')
 3. Agenterna finns inte i nekalistor
 
 **Debugga:**

@@ -4,13 +4,6 @@ read_when:
   - آپ Gmail Pub/Sub واقعات کو OpenClaw میں وائر کرنا چاہتے ہیں
   - آپ ویب ہُک معاون کمانڈز چاہتے ہیں
 title: "ویب ہُکس"
-x-i18n:
-  source_path: cli/webhooks.md
-  source_hash: 785ec62afe6631b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # `openclaw webhooks`

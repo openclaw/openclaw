@@ -4,13 +4,6 @@ read_when:
   - Chcesz podłączyć bota Feishu/Lark
   - Konfigurujesz kanał Feishu
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:06Z
 ---
 
 # Bot Feishu
@@ -47,7 +40,7 @@ Jeśli właśnie zainstalowałeś OpenClaw, uruchom kreator:
 openclaw onboard
 ```
 
-Kreator przeprowadzi Cię przez:
+Kreator przewodniczy Ci przez:
 
 1. Utworzenie aplikacji Feishu i zebranie poświadczeń
 2. Skonfigurowanie poświadczeń aplikacji w OpenClaw
@@ -267,6 +260,7 @@ Po zatwierdzeniu możesz normalnie prowadzić rozmowę.
 ### Wiadomości bezpośrednie
 
 - **Domyślnie**: `dmPolicy: "pairing"` (nieznani użytkownicy otrzymują kod parowania)
+
 - **Zatwierdzanie parowania**:
 
   ```bash
@@ -534,34 +528,34 @@ Pełna konfiguracja: [Konfiguracja Gateway](/gateway/configuration)
 
 Kluczowe opcje:
 
-| Ustawienie                                        | Opis                                 | Domyślne  |
-| ------------------------------------------------- | ------------------------------------ | --------- |
-| `channels.feishu.enabled`                         | Włącz/wyłącz kanał                   | `true`    |
-| `channels.feishu.domain`                          | Domena API (`feishu` lub `lark`)     | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                               | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                           | -         |
-| `channels.feishu.accounts.<id>.domain`            | Nadpisanie domeny API per konto      | `feishu`  |
-| `channels.feishu.dmPolicy`                        | Polityka DM                          | `pairing` |
+| Ustawienie                                        | Opis                                                                         | Domyślne  |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | Włącz/wyłącz kanał                                                           | `true`    |
+| `channels.feishu.domain`                          | Domena API (`feishu` lub `lark`)                          | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                       | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                   | -         |
+| `channels.feishu.accounts.<id>.domain`            | Nadpisanie domeny API per konto                                              | `feishu`  |
+| `channels.feishu.dmPolicy`                        | Polityka DM                                                                  | `pairing` |
 | `channels.feishu.allowFrom`                       | Lista dozwolonych DM (lista open_id) | -         |
-| `channels.feishu.groupPolicy`                     | Polityka grup                        | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Lista dozwolonych grup               | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Wymagaj @wzmianki                    | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Włącz grupy                          | `true`    |
-| `channels.feishu.textChunkLimit`                  | Rozmiar fragmentu wiadomości         | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Limit rozmiaru mediów                | `30`      |
-| `channels.feishu.streaming`                       | Włącz strumieniowe wyjście kart      | `true`    |
-| `channels.feishu.blockStreaming`                  | Włącz strumieniowanie blokowe        | `true`    |
+| `channels.feishu.groupPolicy`                     | Polityka grup                                                                | `open`    |
+| `channels.feishu.groupAllowFrom`                  | Lista dozwolonych grup                                                       | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | Wymagaj @wzmianki                                               | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | Włącz grupy                                                                  | `true`    |
+| `channels.feishu.textChunkLimit`                  | Rozmiar fragmentu wiadomości                                                 | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | Limit rozmiaru mediów                                                        | `30`      |
+| `channels.feishu.streaming`                       | Włącz strumieniowe wyjście kart                                              | `true`    |
+| `channels.feishu.blockStreaming`                  | Włącz strumieniowanie blokowe                                                | `true`    |
 
 ---
 
 ## Referencja dmPolicy
 
-| Wartość       | Zachowanie                                                                            |
-| ------------- | ------------------------------------------------------------------------------------- |
+| Wartość       | Zachowanie                                                                                            |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
 | `"pairing"`   | **Domyślne.** Nieznani użytkownicy otrzymują kod parowania; muszą zostać zatwierdzeni |
-| `"allowlist"` | Tylko użytkownicy z `allowFrom` mogą prowadzić rozmowę                                |
-| `"open"`      | Zezwól wszystkim użytkownikom (wymaga `"*"` w allowFrom)                              |
-| `"disabled"`  | Wyłącz DM-y                                                                           |
+| `"allowlist"` | Tylko użytkownicy z `allowFrom` mogą prowadzić rozmowę                                                |
+| `"open"`      | Zezwól wszystkim użytkownikom (wymaga `"*"` w allowFrom)                           |
+| `"disabled"`  | Wyłącz DM-y                                                                                           |
 
 ---
 

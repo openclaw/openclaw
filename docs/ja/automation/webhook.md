@@ -1,16 +1,9 @@
 ---
-summary: 「ウェブフックによる起動および分離されたエージェント実行のためのインバウンド」
+summary: "ウェブフックによる起動および分離されたエージェント実行のためのインバウンド"
 read_when:
-  - 「ウェブフックエンドポイントを追加または変更する場合」
-  - 「外部システムを OpenClaw に接続する場合」
-title: 「Webhooks」
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:55Z
+  - ウェブフックエンドポイントを追加または変更する場合
+  - 外部システムを OpenClaw に接続する場合
+title: "Webhooks"
 ---
 
 # Webhooks
@@ -36,7 +29,7 @@ Gateway（ゲートウェイ）は、外部トリガー用に小規模な HTTP �
 
 ## Auth
 
-すべてのリクエストにはフックトークンを含める必要があります。ヘッダーの使用を推奨します。
+すべてのリクエストにはフックトークンを含める必要があります。ヘッダーの使用を推奨します。 ヘッダーを優先:
 
 - `Authorization: Bearer <token>`（推奨）
 - `x-openclaw-token: <token>`
@@ -81,12 +74,12 @@ Gateway（ゲートウェイ）は、外部トリガー用に小規模な HTTP �
 
 - `message` **必須**（string）: エージェントが処理するプロンプトまたはメッセージ。
 - `name` 任意（string）: フックの人間可読な名前（例: 「GitHub」）。セッションサマリーのプレフィックスとして使用されます。
-- `sessionKey` 任意（string）: エージェントのセッションを識別するためのキー。デフォルトはランダムな `hook:<uuid>` です。一貫したキーを使用すると、フックコンテキスト内でのマルチターン会話が可能になります。
+- `sessionKey` 任意（string）: エージェントのセッションを識別するためのキー。デフォルトはランダムな `hook:<uuid>` です。一貫したキーを使用すると、フックコンテキスト内でのマルチターン会話が可能になります。 デフォルトはランダムな `フック:<uuid> ` です。 一貫性のあるキーを使用すると、フックコンテキスト内で複数回会話が可能になります。
 - `wakeMode` 任意（`now` | `next-heartbeat`）: 即時ハートビートをトリガーするか（デフォルトは `now`）、次回の定期チェックまで待機するか。
-- `deliver` 任意（boolean）: `true` の場合、エージェントの応答がメッセージングチャンネルに送信されます。デフォルトは `true` です。ハートビート確認のみの応答は自動的にスキップされます。
-- `channel` 任意（string）: 配信先のメッセージングチャンネル。次のいずれか: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost`（plugin）, `signal`, `imessage`, `msteams`。デフォルトは `last` です。
-- `to` 任意（string）: チャンネルの受信者識別子（例: WhatsApp/Signal の電話番号、Telegram の chat ID、Discord/Slack/Mattermost（plugin）の channel ID、MS Teams の conversation ID）。デフォルトは main セッションの最後の受信者です。
-- `model` 任意（string）: モデルのオーバーライド（例: `anthropic/claude-3-5-sonnet` またはエイリアス）。制限されている場合は、許可されたモデルリストに含まれている必要があります。
+- `deliver` 任意（boolean）: `true` の場合、エージェントの応答がメッセージングチャンネルに送信されます。デフォルトは `true` です。ハートビート確認のみの応答は自動的にスキップされます。 デフォルトは `true` です。 ハートビート認識のみのレスポンスは自動的にスキップされます。
+- `channel` optional (string): 配信のためのメッセージングチャネル。 `channel` 任意（string）: 配信先のメッセージングチャンネル。次のいずれか: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost`（plugin）, `signal`, `imessage`, `msteams`。デフォルトは `last` です。 デフォルトは `last` です。
+- `to` 任意（string）: チャンネルの受信者識別子（例: WhatsApp/Signal の電話番号、Telegram の chat ID、Discord/Slack/Mattermost（plugin）の channel ID、MS Teams の conversation ID）。デフォルトは main セッションの最後の受信者です。 デフォルトは、メインセッションの最後の受信者です。
+- `model` 任意（string）: モデルのオーバーライド（例: `anthropic/claude-3-5-sonnet` またはエイリアス）。制限されている場合は、許可されたモデルリストに含まれている必要があります。 制限されている場合は、許可されているモデルリスト内にある必要があります。
 - `thinking` 任意（string）: 思考レベルのオーバーライド（例: `low`, `medium`, `high`）。
 - `timeoutSeconds` 任意（number）: エージェント実行の最大時間（秒）。
 
@@ -98,7 +91,7 @@ Gateway（ゲートウェイ）は、外部トリガー用に小規模な HTTP �
 
 ### `POST /hooks/<name>`（mapped）
 
-カスタムフック名は `hooks.mappings`（設定を参照）によって解決されます。マッピングにより、
+カスタムフック名は `hooks.mappings` で解決されます (構成を参照)。 カスタムフック名は `hooks.mappings`（設定を参照）によって解決されます。マッピングにより、
 任意のペイロードを `wake` または `agent` アクションに変換できます。テンプレートや
 コード変換は任意です。
 
@@ -115,6 +108,7 @@ Gateway（ゲートウェイ）は、外部トリガー用に小規模な HTTP �
   （危険です。信頼された内部ソースのみに使用してください）。
 - `openclaw webhooks gmail setup` は、`openclaw webhooks gmail run` 用の `hooks.gmail` 設定を書き込みます。
   Gmail の完全なウォッチフローについては [Gmail Pub/Sub](/automation/gmail-pubsub) を参照してください。
+  Gmail のウォッチフローについては、[Gmail Pub/Sub](/automation/gmail-pubsub)を参照してください。
 
 ## Responses
 
@@ -165,6 +159,6 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - フックエンドポイントは、loopback、tailnet、または信頼されたリバースプロキシの背後に配置してください。
 - 専用のフックトークンを使用し、ゲートウェイ認証トークンを再利用しないでください。
 - ウェブフックログに機密性の高い生のペイロードを含めないようにしてください。
-- フックのペイロードは信頼されていないものとして扱われ、デフォルトで安全境界でラップされます。
-  特定のフックでこれを無効化する必要がある場合は、そのフックのマッピングで `allowUnsafeExternalContent: true` を設定してください
-  （危険です）。
+- フックペイロードは、デフォルトで信頼されていないものとして扱われ、安全境界でラップされます。
+  特定のフックに対してこれを無効にする必要がある場合は、そのフックのマッピングに `allowUnsafeExternalContent: true`
+  を設定してください(危険)。

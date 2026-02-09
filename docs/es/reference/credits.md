@@ -3,13 +3,6 @@ summary: "Origen del proyecto, colaboradores y licencia."
 read_when:
   - Quiere conocer la historia del proyecto o los créditos de los colaboradores
 title: "Créditos"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:23Z
 ---
 
 ## El nombre

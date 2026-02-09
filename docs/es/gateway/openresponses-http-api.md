@@ -4,13 +4,6 @@ read_when:
   - Integrar clientes que hablan la API de OpenResponses
   - Quiere entradas basadas en ítems, llamadas a herramientas del cliente o eventos SSE
 title: "API de OpenResponses"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:40Z
 ---
 
 # API de OpenResponses (HTTP)

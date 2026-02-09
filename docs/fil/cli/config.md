@@ -3,19 +3,12 @@ summary: "Sanggunian ng CLI para sa `openclaw config` (get/set/unset ng mga valu
 read_when:
   - Gusto mong basahin o i-edit ang config nang hindi interactive
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:15Z
 ---
 
 # `openclaw config`
 
-Mga helper ng config: kumuha/itakda/tanggalin ang mga value ayon sa path. Patakbuhin nang walang subcommand upang buksan
-ang configure wizard (kapareho ng `openclaw configure`).
+40. Mga config helper: kunin/itakda/i-unset ang mga value ayon sa path. 41. Patakbuhin nang walang subcommand upang buksan
+    ang configure wizard (pareho sa `openclaw configure`).
 
 ## Mga halimbawa
 
@@ -45,8 +38,8 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 
 ## Mga value
 
-Ang mga value ay pini-parse bilang JSON5 kapag posible; kung hindi, itinuturing silang mga string.
-Gamitin ang `--json` upang i-require ang JSON5 parsing.
+42. Ang mga value ay bina-parse bilang JSON5 kapag posible; kung hindi, itinuturing silang mga string.
+43. Gamitin ang `--json` upang i-require ang JSON5 parsing.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"

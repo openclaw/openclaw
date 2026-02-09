@@ -3,13 +3,6 @@ summary: "mac 앱이 Gateway(게이트웨이) WebChat 을 임베드하는 방식
 read_when:
   - mac WebChat 뷰 또는 loopback 포트를 디버깅할 때
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:47Z
 ---
 
 # WebChat (macOS 앱)
@@ -22,6 +15,7 @@ macOS 메뉴 막대 앱은 WebChat UI 를 네이티브 SwiftUI 뷰로 임베드�
 ## 실행 및 디버깅
 
 - 수동: Lobster 메뉴 → “Open Chat”.
+
 - 테스트용 자동 열기:
 
   ```bash
@@ -30,7 +24,7 @@ macOS 메뉴 막대 앱은 WebChat UI 를 네이티브 SwiftUI 뷰로 임베드�
 
 - 로그: `./scripts/clawlog.sh` (서브시스템 `bot.molt`, 카테고리 `WebChatSwiftUI`).
 
-## 연결 구조
+## 38. 연결 방식
 
 - 데이터 플레인: Gateway(게이트웨이) WS 메서드 `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` 및 이벤트 `chat`, `agent`, `presence`, `tick`, `health`.

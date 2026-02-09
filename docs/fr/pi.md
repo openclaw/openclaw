@@ -1,19 +1,12 @@
 ---
 title: "Architecture d’intégration de Pi"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:26Z
 ---
 
 # Architecture d’intégration de Pi
 
 Ce document décrit comment OpenClaw s’intègre avec [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) et ses packages frères (`pi-ai`, `pi-agent-core`, `pi-tui`) pour alimenter ses capacités d’agent IA.
 
-## Vue d’ensemble
+## Présentation
 
 OpenClaw utilise le SDK pi pour intégrer un agent de codage IA dans son architecture de Gateway (passerelle) de messagerie. Au lieu de lancer pi comme un sous-processus ou d’utiliser le mode RPC, OpenClaw importe et instancie directement `AgentSession` de pi via `createAgentSession()`. Cette approche intégrée offre :
 
@@ -35,12 +28,12 @@ OpenClaw utilise le SDK pi pour intégrer un agent de codage IA dans son archite
 }
 ```
 
-| Package           | Objectif                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| Package           | Objectif                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Abstractions LLM de base : `Model`, `streamSimple`, types de messages, API fournisseurs                      |
-| `pi-agent-core`   | Boucle d’agent, exécution d’outils, types `AgentMessage`                                                     |
+| `pi-agent-core`   | Boucle d’agent, exécution d’outils, types `AgentMessage`                                                                     |
 | `pi-coding-agent` | SDK de haut niveau : `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, outils intégrés |
-| `pi-tui`          | Composants d’interface terminal (utilisés dans le mode TUI local d’OpenClaw)                                 |
+| `pi-tui`          | Composants d’interface terminal (utilisés dans le mode TUI local d’OpenClaw)                              |
 
 ## Structure des fichiers
 
@@ -362,7 +355,7 @@ const { model, error, authStorage, modelRegistry } = resolveModel(
 authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
 ```
 
-### Basculement
+### Failover
 
 `FailoverError` déclenche le repli de modele lorsque configuré :
 
@@ -382,7 +375,7 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 
 OpenClaw charge des extensions pi personnalisées pour des comportements spécialisés :
 
-### Garde-fou de compaction
+### Sauvegarde de la compression
 
 `pi-extensions/compaction-safeguard.ts` ajoute des garde-fous à la compaction, incluant un budget de tokens adaptatif ainsi que des résumés des échecs d’outils et des opérations sur fichiers :
 
@@ -518,15 +511,15 @@ Cela fournit une expérience terminal interactive similaire au mode natif de pi.
 
 ## Principales différences avec la CLI Pi
 
-| Aspect                 | CLI Pi                      | OpenClaw intégré                                                                               |
-| ---------------------- | --------------------------- | ---------------------------------------------------------------------------------------------- |
-| Invocation             | Commande `pi` / RPC         | SDK via `createAgentSession()`                                                                 |
-| Outils                 | Outils de codage par défaut | Suite d’outils OpenClaw personnalisée                                                          |
-| Prompt système         | AGENTS.md + prompts         | Dynamique par canal/contexte                                                                   |
-| Stockage des sessions  | `~/.pi/agent/sessions/`     | `~/.openclaw/agents/<agentId>/sessions/` (ou `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Authentification       | Identifiant unique          | Multi-profils avec rotation                                                                    |
-| Extensions             | Chargées depuis le disque   | Programmatiques + chemins disque                                                               |
-| Gestion des événements | Rendu TUI                   | Basée sur des callbacks (onBlockReply, etc.)                                                   |
+| Aspect                 | CLI Pi                              | OpenClaw intégré                                                                                                  |
+| ---------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Invocation             | Commande `pi` / RPC                 | SDK via `createAgentSession()`                                                                                    |
+| Outils                 | Outils de codage par défaut         | Suite d’outils OpenClaw personnalisée                                                                             |
+| Prompt système         | AGENTS.md + prompts | Dynamique par canal/contexte                                                                                      |
+| Stockage des sessions  | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (ou `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Authentification       | Identifiant unique                  | Multi-profils avec rotation                                                                                       |
+| Extensions             | Chargées depuis le disque           | Programmatiques + chemins disque                                                                                  |
+| Gestion des événements | Rendu TUI                           | Basée sur des callbacks (onBlockReply, etc.)                                   |
 
 ## Considérations futures
 

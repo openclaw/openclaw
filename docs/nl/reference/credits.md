@@ -3,13 +3,6 @@ summary: "Oorsprong van het project, bijdragers en licentie."
 read_when:
   - Je wilt de achtergrond van het project of bijdragerscredits
 title: "Credits"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 ## De naam

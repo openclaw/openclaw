@@ -4,18 +4,11 @@ read_when:
   - Du använder voice-call-pluginen och vill ha CLI-ingångarna
   - Du vill ha snabba exempel för `voicecall call|continue|status|tail|expose`
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:49Z
 ---
 
 # `openclaw voicecall`
 
-`voicecall` är ett plugin-tillhandahållet kommando. Det visas endast om voice-call-pluginen är installerad och aktiverad.
+`voicecall` är ett plugin-angivet kommando. Det visas bara om röst-anrop plugin är installerad och aktiverad.
 
 Primär dokumentation:
 
@@ -38,4 +31,4 @@ openclaw voicecall expose --mode funnel
 openclaw voicecall unexpose
 ```
 
-Säkerhetsnotering: exponera endast webhook-slutpunkten för nätverk du litar på. Föredra Tailscale Serve framför Funnel när det är möjligt.
+Säkerhetsanteckning: exponera endast webhook slutpunkt för nätverk du litar på. Föredra Tailscale Servera över tratt när det är möjligt.

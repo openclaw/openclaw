@@ -5,18 +5,11 @@ read_when:
   - macOS gateway launchd ဝန်ဆောင်မှုကို အမှားရှာဖွေပြင်ဆင်နေစဉ်
   - macOS အတွက် gateway CLI ကို ထည့်သွင်းနေစဉ်
 title: "macOS ပေါ်ရှိ Gateway"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:38Z
 ---
 
 # macOS ပေါ်ရှိ Gateway (အပြင်ဘက် launchd)
 
-OpenClaw.app သည် Node/Bun သို့မဟုတ် Gateway runtime ကို မထုပ်ပိုးတော့ပါ။ macOS အက်ပ်သည် **အပြင်ဘက်** `openclaw` CLI ကို ထည့်သွင်းထားရန် မျှော်လင့်ထားပြီး Gateway ကို ကလေး process အဖြစ် မဖွင့်ပါ။ ထို့အပြင် Gateway ကို ဆက်လက်လည်ပတ်နေစေရန် per‑user launchd ဝန်ဆောင်မှုကို စီမံခန့်ခွဲပေးသည် (သို့မဟုတ် local Gateway တစ်ခု ရှိပြီးသားဖြစ်ပါက ထို Gateway သို့ ချိတ်ဆက်သည်)။
+17. OpenClaw.app သည် Node/Bun သို့မဟုတ် Gateway runtime ကို မပါဝင်တော့ပါ။ 18. macOS app သည် **external** `openclaw` CLI ထည့်သွင်းထားမှုကို မျှော်လင့်ထားပြီး Gateway ကို child process အဖြစ် မဖန်တီးပါ၊ ထို့အပြင် Gateway ကို ဆက်လက် လည်ပတ်စေရန် per‑user launchd service ကို စီမံခန့်ခွဲပေးသည် (သို့မဟုတ် local Gateway တစ်ခု ရှိပြီးသားဖြစ်ပါက ၎င်းသို့ ချိတ်ဆက်ပါသည်)။
 
 ## CLI ကို ထည့်သွင်းခြင်း (local mode အတွက် လိုအပ်သည်)
 
@@ -32,12 +25,12 @@ macOS အက်ပ်၏ **Install CLI** ခလုတ်သည် npm/pnpm ဖ�
 
 Label:
 
-- `bot.molt.gateway` (သို့မဟုတ် `bot.molt.<profile>`; legacy `com.openclaw.*` သည် ဆက်လက်ရှိနေနိုင်သည်)
+- 19. `bot.molt.gateway` (သို့မဟုတ် `bot.molt.<profile>``; legacy `com.openclaw.\*\` may remain)
 
 Plist တည်နေရာ (per‑user):
 
 - `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (သို့မဟုတ် `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
+  (or `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
 
 Manager:
 
@@ -56,7 +49,7 @@ Logging:
 
 ## ဗားရှင်း ကိုက်ညီမှု
 
-macOS အက်ပ်သည် gateway ဗားရှင်းကို ကိုယ်ပိုင်ဗားရှင်းနှင့် နှိုင်းယှဉ်စစ်ဆေးသည်။ မကိုက်ညီပါက အက်ပ်ဗားရှင်းနှင့် ကိုက်ညီအောင် global CLI ကို အပ်ဒိတ်လုပ်ပါ။
+23. macOS app သည် Gateway version ကို ကိုယ်ပိုင် version နှင့် နှိုင်းယှဉ်စစ်ဆေးပါသည်။ 24. မကိုက်ညီပါက global CLI ကို app version နှင့် ကိုက်ညီအောင် update လုပ်ပါ။
 
 ## Smoke check
 

@@ -4,22 +4,15 @@ read_when:
   - Du vil forstå auto-komprimering og /compact
   - Du fejlsøger lange sessioner, der rammer kontekstgrænser
 title: "Komprimering"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:08Z
 ---
 
 # Kontekstvindue & komprimering
 
-Hver model har et **kontekstvindue** (maks. antal tokens, den kan se). Langvarige chats ophober beskeder og værktøjsresultater; når vinduet bliver snævert, **komprimerer** OpenClaw ældre historik for at blive inden for grænserne.
+Hver model har et \*\* kontekstvindue \*\* (max tokens det kan se). Langvarige chats akkumulerer beskeder og værktøjseresultater; når vinduet er stramt, opsamler OpenClaw \*\* ældre historik for at holde sig inden for grænser.
 
 ## Hvad komprimering er
 
-Komprimering **opsummerer ældre samtale** i en kompakt opsummeringspost og bevarer de seneste beskeder intakte. Opsummeringen gemmes i sessionshistorikken, så fremtidige forespørgsler bruger:
+Komprimering **opsummerer ældre samtale** i en kompakt summarisk indgang og holder de seneste meddelelser intakte. Resuméet er gemt i sessionshistorien, så fremtidige anmodninger bruger:
 
 - Komprimeringsopsummeringen
 - Seneste beskeder efter komprimeringspunktet
@@ -39,8 +32,8 @@ Du vil se:
 - `🧹 Auto-compaction complete` i udførlig tilstand
 - `/status` som viser `🧹 Compactions: <count>`
 
-Før komprimering kan OpenClaw køre en **stille hukommelsesrydning** for at gemme
-holdbare noter på disk. Se [Memory](/concepts/memory) for detaljer og konfiguration.
+Før komprimering kan OpenClaw køre en \*\* tavs hukommelse flush\*\* slå til for at gemme
+holdbare noter til disk. Se [Memory](/concepts/memory) for detaljer og config.
 
 ## Manuel komprimering
 
@@ -52,7 +45,7 @@ Brug `/compact` (valgfrit med instruktioner) for at gennemtvinge en komprimering
 
 ## Kilde til kontekstvindue
 
-Kontekstvinduet er modelspecifikt. OpenClaw bruger modeldefinitionen fra den konfigurerede udbyderkatalog til at fastlægge grænser.
+Kontekstvindue er modelspecifikt. OpenClaw bruger modeldefinitionen fra det konfigurerede leverandørkatalog til at bestemme grænser.
 
 ## Komprimering vs. beskæring
 

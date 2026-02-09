@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez qu’OpenClaw reçoive des messages privés via Nostr
   - Vous configurez une messagerie décentralisée
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:43Z
 ---
 
 # Nostr
@@ -21,7 +14,7 @@ Nostr est un protocole décentralisé de réseau social. Ce canal permet à Open
 
 ## Installation (à la demande)
 
-### Prise en main (recommandé)
+### Intégration (recommandé)
 
 - L’assistant de prise en main (`openclaw onboard`) et `openclaw channels add` listent les plugins de canal optionnels.
 - La sélection de Nostr vous invite à installer le plugin à la demande.
@@ -31,7 +24,7 @@ Paramètres d’installation par défaut :
 - **Canal Dev + git checkout disponible :** utilise le chemin du plugin local.
 - **Stable/Beta :** télécharge depuis npm.
 
-Vous pouvez toujours remplacer ce choix dans l’invite.
+Vous pouvez toujours remplacer le choix dans l'invite de presse.
 
 ### Installation manuelle
 
@@ -78,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Référence de configuration
 
-| Clé          | Type     | Par défaut                                  | Description                        |
-| ------------ | -------- | ------------------------------------------- | ---------------------------------- |
-| `privateKey` | string   | required                                    | Clé privée au format `nsec` ou hex |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URL des relais (WebSocket)         |
-| `dmPolicy`   | string   | `pairing`                                   | Politique d’accès aux DM           |
-| `allowFrom`  | string[] | `[]`                                        | Pubkeys d’expéditeurs autorisés    |
-| `enabled`    | boolean  | `true`                                      | Activer/désactiver le canal        |
-| `name`       | string   | -                                           | Nom d’affichage                    |
-| `profile`    | object   | -                                           | Métadonnées de profil NIP-01       |
+| Clé          | Type                                                         | Par défaut                                  | Description                                   |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------- |
+| `privateKey` | string                                                       | required                                    | Clé privée au format `nsec` ou hex            |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URL des relais (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | Politique d’accès aux DM                      |
+| `allowFrom`  | string[] | `[]`                                        | Pubkeys d’expéditeurs autorisés               |
+| `enabled`    | boolean                                                      | `true`                                      | Activer/désactiver le canal                   |
+| `name`       | string                                                       | -                                           | Nom d’affichage                               |
+| `profile`    | object                                                       | -                                           | Métadonnées de profil NIP-01                  |
 
 ## Métadonnées de profil
 
@@ -173,12 +166,12 @@ Conseils :
 
 ## Support du protocole
 
-| NIP    | Statut         | Description                                        |
-| ------ | -------------- | -------------------------------------------------- |
-| NIP-01 | Pris en charge | Format d’événement de base + métadonnées de profil |
-| NIP-04 | Pris en charge | DM chiffrés (`kind:4`)                             |
-| NIP-17 | Planifié       | DM enveloppés (« gift-wrapped »)                   |
-| NIP-44 | Planifié       | Chiffrement versionné                              |
+| NIP    | Statut         | Description                                         |
+| ------ | -------------- | --------------------------------------------------- |
+| NIP-01 | Pris en charge | Format d’événement de base + métadonnées de profil  |
+| NIP-04 | Pris en charge | DM chiffrés (`kind:4`)           |
+| NIP-17 | Planifié       | DM enveloppés (« gift-wrapped ») |
+| NIP-44 | Planifié       | Chiffrement versionné                               |
 
 ## Tests
 
@@ -207,7 +200,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 3. Envoyez un DM à la pubkey du bot.
 4. Vérifiez la réponse.
 
-## Dépannage
+## Problemes courants
 
 ### Réception de messages impossible
 

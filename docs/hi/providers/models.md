@@ -4,19 +4,12 @@ read_when:
   - आप किसी मॉडल प्रदाता का चयन करना चाहते हैं
   - आप LLM प्रमाणीकरण + मॉडल चयन के लिए त्वरित सेटअप उदाहरण चाहते हैं
 title: "मॉडल प्रदाता त्वरित प्रारंभ"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:32Z
 ---
 
 # मॉडल प्रदाता
 
-OpenClaw कई LLM प्रदाताओं का उपयोग कर सकता है। एक चुनें, प्रमाणीकरण करें, फिर डिफ़ॉल्ट
-मॉडल को `provider/model` के रूप में सेट करें।
+OpenClaw can use many LLM providers. Pick one, authenticate, then set the default
+model as `provider/model`.
 
 ## हाइलाइट: Venice (Venice AI)
 
@@ -55,5 +48,5 @@ Venice हमारी अनुशंसित Venice AI सेटअप है
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-पूर्ण प्रदाता कैटलॉग (xAI, Groq, Mistral, आदि) और उन्नत विन्यास के लिए,
-देखें [Model providers](/concepts/model-providers)।
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

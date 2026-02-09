@@ -4,19 +4,12 @@ read_when:
   - Du ændrer, hvordan tidsstempler vises for modellen eller brugere
   - Du fejlsøger tidsformatering i beskeder eller output fra systemprompten
 title: "Dato og tid"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:12Z
 ---
 
 # Dato & tid
 
-OpenClaw bruger som standard **værtslokal tid til transporttidsstempler** og **kun brugerens tidszone i systemprompten**.
-Udbyderens tidsstempler bevares, så værktøjer beholder deres oprindelige semantik (aktuel tid er tilgængelig via `session_status`).
+OpenClaw bruger som standard **host-local time for transport tidsstempler** og **bruger tidszone kun i systemet prompt**.
+Leverandør tidsstempler bevares, så værktøjer holde deres oprindelige semantik (nuværende tid er tilgængelig via `session_status`).
 
 ## Beskedkonvolutter (lokal som standard)
 
@@ -45,7 +38,7 @@ Du kan tilsidesætte denne adfærd:
 - `envelopeTimezone: "utc"` bruger UTC.
 - `envelopeTimezone: "local"` bruger værtsens tidszone.
 - `envelopeTimezone: "user"` bruger `agents.defaults.userTimezone` (falder tilbage til værtsens tidszone).
-- Brug en eksplicit IANA-tidszone (f.eks. `"America/Chicago"`) for en fast zone.
+- Brug en eksplicit IANA tidszone (f.eks. `"America/Chicago"`) til en fast zone.
 - `envelopeTimestamp: "off"` fjerner absolutte tidsstempler fra konvoluthoveder.
 - `envelopeElapsed: "off"` fjerner suffikser for forløbet tid (stilen `+2m`).
 
@@ -105,13 +98,13 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` angiver **brugerens lokale tidszone** for promptkontekst.
-- `timeFormat` styrer **12t/24t-visning** i prompten. `auto` følger OS-præferencer.
+- `timeFormat` styrer **12h/24h display** i prompten. `auto` følger OS prefs.
 
 ## Registrering af tidsformat (automatisk)
 
-Når `timeFormat: "auto"`, inspicerer OpenClaw OS-præferencen (macOS/Windows)
-og falder tilbage til lokal formatering. Den registrerede værdi **cachelagres pr. proces**
-for at undgå gentagne systemkald.
+Når `timeFormat: "auto"`, OpenClaw inspicerer OS præference (macOS/Windows)
+og falder tilbage til landestandard formatering. Den fundne værdi er **cachet pr. proces**
+for at undgå gentagne systemopkald.
 
 ## Værktøjs-payloads + connectors (rå udbydertider + normaliserede felter)
 

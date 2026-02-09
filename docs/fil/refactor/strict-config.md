@@ -5,13 +5,6 @@ read_when:
   - Gumagawa sa mga migration ng config o mga workflow ng doctor
   - Humahawak ng mga schema ng config ng plugin o gating ng pag-load ng plugin
 title: "Mahigpit na Beripikasyon ng Config"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:55Z
 ---
 
 # Mahigpit na beripikasyon ng config (mga migration na para sa doctor lang)
@@ -32,9 +25,9 @@ x-i18n:
 
 - Dapat eksaktong tumugma ang config sa schema sa bawat antas.
 - Ang mga hindi kilalang key ay mga error sa beripikasyon (walang passthrough sa root o nested).
-- Ang `plugins.entries.<id>.config` ay dapat ma-validate ng schema ng plugin.
+- 47. `plugins.entries.<id>48. .config` ay dapat ma-validate ng schema ng plugin.
   - Kung walang schema ang isang plugin, **tanggihan ang pag-load ng plugin** at maglabas ng malinaw na error.
-- Ang mga hindi kilalang `channels.<id>` key ay mga error maliban kung idineklara ng manifest ng plugin ang channel id.
+- 49. Ang mga hindi kilalang `channels.<id>50. ` key ay mga error maliban kung ang isang plugin manifest ay nagdedeklara ng channel id.
 - Kinakailangan ang mga manifest ng plugin (`openclaw.plugin.json`) para sa lahat ng plugin.
 
 ## Pagpapatupad ng schema ng plugin
@@ -72,7 +65,7 @@ Pinapayagan (diagnostic-only):
 - `openclaw status`
 - `openclaw gateway status`
 
-Lahat ng iba pa ay dapat mag-hard-fail na may: “Hindi wasto ang config. Patakbuhin ang `openclaw doctor --fix`.”
+Everything else must hard-fail with: “Config invalid. Run `openclaw doctor --fix`.”
 
 ## Format ng Error UX
 

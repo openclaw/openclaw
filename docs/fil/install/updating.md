@@ -4,22 +4,17 @@ read_when:
   - Pag-update ng OpenClaw
   - May nasira pagkatapos ng update
 title: "Pag-update"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:47Z
 ---
 
 # Pag-update
 
-Mabilis ang galaw ng OpenClaw (pre “1.0”). Ituring ang mga update na parang shipping infra: update → magpatakbo ng mga check → restart (o gumamit ng `openclaw update`, na nagre-restart) → beripikahin.
+OpenClaw is moving fast (pre “1.0”). Treat updates like shipping infra: update → run checks → restart (or use `openclaw update`, which restarts) → verify.
 
 ## Inirerekomenda: patakbuhin muli ang website installer (upgrade in place)
 
-Ang **pinaka-preferred** na paraan ng update ay ang muling patakbuhin ang installer mula sa website. Awtomatiko nitong nade-detect ang mga umiiral na install, nag-u-upgrade in place, at nagpapatakbo ng `openclaw doctor` kapag kailangan.
+The **preferred** update path is to re-run the installer from the website. It
+detects existing installs, upgrades in place, and runs `openclaw doctor` when
+needed.
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -28,6 +23,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Mga tala:
 
 - Idagdag ang `--no-onboard` kung ayaw mong tumakbo muli ang onboarding wizard.
+
 - Para sa **source installs**, gamitin ang:
 
   ```bash
@@ -37,6 +33,7 @@ Mga tala:
   Ang installer ay `git pull --rebase` **lamang** kung malinis ang repo.
 
 - Para sa **global installs**, ginagamit ng script ang `npm install -g openclaw@latest` sa likod ng eksena.
+
 - Legacy note: nananatiling available ang `clawdbot` bilang compatibility shim.
 
 ## Bago ka mag-update
@@ -74,7 +71,7 @@ Gamitin ang `--tag <dist-tag|version>` para sa one-off install na tag/version.
 
 Tingnan ang [Development channels](/install/development-channels) para sa kahulugan ng mga channel at release notes.
 
-Tala: sa mga npm install, naglo-log ang gateway ng update hint sa startup (chine-check ang kasalukuyang channel tag). I-disable gamit ang `update.checkOnStart: false`.
+Note: on npm installs, the gateway logs an update hint on startup (checks the current channel tag). Disable via `update.checkOnStart: false`.
 
 Pagkatapos:
 
@@ -105,11 +102,11 @@ Nagpapatakbo ito ng medyo ligtas na update flow:
 - Nag-i-install ng deps, nagbi-build, nagbi-build ng Control UI, at nagpapatakbo ng `openclaw doctor`.
 - Nagre-restart ng gateway bilang default (gamitin ang `--no-restart` para laktawan).
 
-Kung nag-install ka via **npm/pnpm** (walang git metadata), susubukan ng `openclaw update` na mag-update gamit ang iyong package manager. Kung hindi nito ma-detect ang install, gamitin na lang ang “Update (global install)”.
+Kung nag-install ka sa pamamagitan ng **npm/pnpm** (walang git metadata), susubukan ng `openclaw update` na mag-update gamit ang iyong package manager. Kung hindi nito matukoy ang pag-install, gamitin na lang ang “Update (global install)”.
 
 ## Update (Control UI / RPC)
 
-May **Update & Restart** ang Control UI (RPC: `update.run`). Ginagawa nito ang:
+The Control UI has **Update & Restart** (RPC: `update.run`). It:
 
 1. Pinapatakbo ang parehong source-update flow gaya ng `openclaw update` (git checkout lamang).
 2. Nagsusulat ng restart sentinel na may structured report (stdout/stderr tail).
@@ -147,7 +144,7 @@ Mga tala:
 
 ## Palaging Patakbuhin: `openclaw doctor`
 
-Ang Doctor ang “safe update” na command. Sinadya itong gawing boring: repair + migrate + warn.
+Doctor is the “safe update” command. It’s intentionally boring: repair + migrate + warn.
 
 Tala: kung nasa **source install** ka (git checkout), mag-aalok ang `openclaw doctor` na patakbuhin muna ang `openclaw update`.
 
@@ -175,7 +172,7 @@ openclaw logs --follow
 
 Kung supervised ka:
 
-- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (gamitin ang `bot.molt.<profile>`; gumagana pa rin ang legacy `com.openclaw.*`)
+- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (use `bot.molt.<profile>`; legacy `com.openclaw.*` still works)
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - Gumagana lang ang `launchctl`/`systemctl` kung naka-install ang service; kung hindi, patakbuhin ang `openclaw gateway install`.

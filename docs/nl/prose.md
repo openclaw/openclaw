@@ -5,13 +5,6 @@ read_when:
   - Je wilt de OpenProse-plugin inschakelen
   - Je moet opslag van status begrijpen
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # OpenProse

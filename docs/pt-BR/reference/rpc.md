@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou alterar integrações de CLI externas
   - Ao depurar adaptadores RPC (signal-cli, imsg)
 title: "Adaptadores RPC"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:49Z
 ---
 
 # Adaptadores RPC

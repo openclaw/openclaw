@@ -5,23 +5,16 @@ read_when:
   - Thay đổi hành vi streaming theo block hoặc chunking theo kênh
   - Gỡ lỗi việc trả lời block bị trùng/lệch sớm hoặc streaming bản nháp
 title: "Streaming và Chunking"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:52Z
 ---
 
 # Streaming + chunking
 
 OpenClaw có hai lớp “streaming” riêng biệt:
 
-- **Block streaming (kênh):** phát ra các **block** đã hoàn thành khi trợ lý đang viết. Đây là các tin nhắn kênh thông thường (không phải token delta).
+- **Block streaming (channels):** emit completed **blocks** as the assistant writes. Đây là các tin nhắn kênh thông thường (không phải token delta).
 - **Streaming kiểu token (chỉ Telegram):** cập nhật một **bong bóng bản nháp** với văn bản từng phần trong khi tạo; tin nhắn cuối cùng được gửi ở cuối.
 
-Hiện nay **không có streaming token thực sự** tới các tin nhắn kênh bên ngoài. Streaming bản nháp của Telegram là bề mặt streaming từng phần duy nhất.
+Hiện tại **không có streaming token thực sự** tới các tin nhắn kênh bên ngoài. Telegram draft streaming is the only partial-stream surface.
 
 ## Block streaming (tin nhắn kênh)
 
@@ -48,8 +41,8 @@ Legend:
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (mặc định tắt).
 - Ghi đè theo kênh: `*.blockStreaming` (và các biến thể theo tài khoản) để buộc `"on"`/`"off"` theo từng kênh.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` hoặc `"message_end"`.
-- `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
-- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (gộp các block đã stream trước khi gửi).
+- `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference?` }\`.
+- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (gộp các khối stream trước khi gửi).
 - Giới hạn cứng theo kênh: `*.textChunkLimit` (ví dụ: `channels.whatsapp.textChunkLimit`).
 - Chế độ chunk theo kênh: `*.chunkMode` (`length` mặc định, `newline` tách theo dòng trống (ranh giới đoạn) trước khi chunk theo độ dài).
 - Giới hạn mềm của Discord: `channels.discord.maxLinesPerMessage` (mặc định 17) tách các trả lời cao để tránh UI bị cắt.
@@ -74,9 +67,8 @@ Chunking theo block được triển khai bởi `EmbeddedBlockChunker`:
 
 ## Coalescing (gộp các block đã stream)
 
-Khi bật block streaming, OpenClaw có thể **gộp các chunk block liên tiếp**
-trước khi gửi ra ngoài. Điều này giảm “spam từng dòng” trong khi vẫn cung cấp
-đầu ra tiến dần.
+Khi bật block streaming, OpenClaw có thể **gộp các block chunk liên tiếp** trước khi gửi đi. This reduces “single-line spam” while still providing
+progressive output.
 
 - Coalescing chờ **khoảng trống nhàn rỗi** (`idleMs`) trước khi flush.
 - Bộ đệm bị giới hạn bởi `maxChars` và sẽ flush nếu vượt quá.
@@ -89,9 +81,8 @@ trước khi gửi ra ngoài. Điều này giảm “spam từng dòng” trong 
 
 ## Nhịp điệu giống con người giữa các block
 
-Khi bật block streaming, bạn có thể thêm **khoảng dừng ngẫu nhiên**
-giữa các trả lời theo block (sau block đầu tiên). Điều này khiến các phản hồi
-nhiều bong bóng trông tự nhiên hơn.
+Khi bật block streaming, bạn có thể thêm **khoảng dừng ngẫu nhiên** giữa các phản hồi block (sau block đầu tiên). Điều này khiến các phản hồi nhiều bong bóng
+trông tự nhiên hơn.
 
 - Cấu hình: `agents.defaults.humanDelay` (ghi đè theo tác tử qua `agents.list[].humanDelay`).
 - Chế độ: `off` (mặc định), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
@@ -101,13 +92,13 @@ nhiều bong bóng trông tự nhiên hơn.
 
 Ánh xạ như sau:
 
-- **Stream từng chunk:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (phát khi đang tạo). Các kênh không phải Telegram cũng cần `*.blockStreaming: true`.
+- **Stream chunks:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (emit as you go). Các kênh không phải Telegram cũng cần `*.blockStreaming: true`.
 - **Stream tất cả ở cuối:** `blockStreamingBreak: "message_end"` (flush một lần, có thể nhiều chunk nếu rất dài).
 - **Không block streaming:** `blockStreamingDefault: "off"` (chỉ trả lời cuối).
 
-**Ghi chú theo kênh:** Với các kênh không phải Telegram, block streaming **tắt trừ khi**
-`*.blockStreaming` được đặt rõ ràng thành `true`. Telegram có thể stream bản nháp
-(`channels.telegram.streamMode`) mà không cần trả lời theo block.
+**Channel note:** For non-Telegram channels, block streaming is **off unless**
+`*.blockStreaming` is explicitly set to `true`. Telegram can stream drafts
+(`channels.telegram.streamMode`) without block replies.
 
 Nhắc vị trí cấu hình: các mặc định `blockStreaming*` nằm dưới
 `agents.defaults`, không phải cấu hình gốc.

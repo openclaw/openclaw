@@ -5,13 +5,6 @@ read_when:
   - Verwendung von Node-Canvas/Kamera für Agenten-Kontext
   - Hinzufügen neuer Node-Befehle oder CLI-Hilfsprogramme
 title: "Nodes"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:58Z
 ---
 
 # Nodes
@@ -124,7 +117,7 @@ openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 
 Genehmigungen liegen auf dem Node-Host unter `~/.openclaw/exec-approvals.json`.
 
-### Exec auf den Node verweisen
+### Punkt exec auf den Knoten
 
 Standard konfigurieren (Gateway-Konfiguration):
 

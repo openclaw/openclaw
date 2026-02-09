@@ -4,13 +4,6 @@ read_when:
   - คุณกำลังมองหาขั้นตอนการตั้งค่าที่เร็วที่สุด
   - คุณถูกส่งมาที่นี่จากลิงก์รุ่นเก่า
 title: "Quick start"
-x-i18n:
-  source_path: start/quickstart.md
-  source_hash: c03779abfcd92ec9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:35Z
 ---
 
 # Quick start

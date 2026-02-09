@@ -5,13 +5,6 @@ read_when:
   - Debugowanie wykrywania Gateway lub uwierzytelniania na Androidzie
   - Weryfikacja spójności historii czatu między klientami
 title: "Aplikacja Android"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:31Z
 ---
 
 # Aplikacja Android (Węzeł)
@@ -43,7 +36,7 @@ Android łączy się bezpośrednio z WebSocket Gateway (domyślnie `ws://<host>:
   - Ręczne ustawienie hosta/portu gateway (awaryjne)
 - Możesz uruchomić CLI (`openclaw`) na maszynie gateway (lub przez SSH).
 
-### 1) Uruchom Gateway
+### 1. Uruchom Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Dla konfiguracji tylko w tailnecie (zalecane dla Wiedeń ⇄ Londyn) zbindować 
 - Ustaw `gateway.bind: "tailnet"` w `~/.openclaw/openclaw.json` na hoście gateway.
 - Zrestartuj Gateway / aplikację paska menu macOS.
 
-### 2) Zweryfikuj wykrywanie (opcjonalne)
+### 2. Zweryfikuj wykrywanie (opcjonalne)
 
 Z maszyny gateway:
 
@@ -77,7 +70,7 @@ Wykrywanie NSD/mDNS na Androidzie nie przechodzi między sieciami. Jeśli węze�
 
 Szczegóły i przykładowa konfiguracja CoreDNS: [Bonjour](/gateway/bonjour).
 
-### 3) Połącz z Androida
+### 3. Połącz z Androida
 
 W aplikacji Android:
 
@@ -91,7 +84,7 @@ Po pierwszym udanym parowaniu Android automatycznie ponownie łączy się przy u
 - Ręczny endpoint (jeśli włączony), w przeciwnym razie
 - Ostatnio wykryty gateway (best-effort).
 
-### 4) Zatwierdź parowanie (CLI)
+### 4. Zatwierdź parowanie (CLI)
 
 Na maszynie gateway:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Szczegóły parowania: [Parowanie Gateway](/gateway/pairing).
 
-### 5) Sprawdź, czy węzeł jest połączony
+### 5. Sprawdź, czy węzeł jest połączony
 
 - Przez status węzłów:
 
@@ -116,7 +109,7 @@ Szczegóły parowania: [Parowanie Gateway](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Czat + historia
+### 6. Czat + historia
 
 Arkusz Czat w węźle Android używa **klucza sesji podstawowej** gateway (`main`), więc historia i odpowiedzi są współdzielone z WebChat i innymi klientami:
 
@@ -124,7 +117,7 @@ Arkusz Czat w węźle Android używa **klucza sesji podstawowej** gateway (`main
 - Wysyłanie: `chat.send`
 - Aktualizacje push (best-effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + kamera
+### 7. Canvas + kamera
 
 #### Host Canvas Gateway (zalecane dla treści webowych)
 

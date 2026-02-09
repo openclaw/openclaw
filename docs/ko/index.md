@@ -3,13 +3,6 @@ summary: "OpenClaw 는 모든 OS 에서 실행되는 AI 에이전트를 위한 �
 read_when:
   - OpenClaw 를 처음 접하는 사용자에게 소개할 때
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:24Z
 ---
 
 # OpenClaw 🦞
@@ -31,19 +24,18 @@ x-i18n:
 
 > _"EXFOLIATE! EXFOLIATE!"_ — 아마도 우주 랍스터의 외침
 
-<p align="center">
-  <strong>WhatsApp, Telegram, Discord, iMessage 등에서 AI 에이전트를 연결하는 모든 OS 용 Gateway(게이트웨이).</strong><br />
+<p align="center"><strong>WhatsApp, Telegram, Discord, iMessage 등에서 AI 에이전트를 연결하는 모든 OS 용 Gateway(게이트웨이).</strong><br />
   메시지를 보내면, 주머니 속에서 바로 에이전트의 응답을 받습니다. 플러그인을 통해 Mattermost 등도 추가할 수 있습니다.
 </p>
 
 <Columns>
-  <Card title="시작하기" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     OpenClaw 를 설치하고 몇 분 안에 Gateway 를 실행합니다.
   </Card>
-  <Card title="마법사 실행" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     `openclaw onboard` 및 페어링 흐름을 포함한 가이드형 설정입니다.
   </Card>
-  <Card title="Control UI 열기" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     채팅, 설정, 세션을 위한 브라우저 대시보드를 실행합니다.
   </Card>
 </Columns>
@@ -80,22 +72,22 @@ Gateway 는 세션, 라우팅, 채널 연결에 대한 단일 진실 공급원�
 ## 주요 기능
 
 <Columns>
-  <Card title="멀티 채널 Gateway" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     하나의 Gateway 프로세스로 WhatsApp, Telegram, Discord, iMessage 를 지원합니다.
   </Card>
-  <Card title="플러그인 채널" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     확장 패키지로 Mattermost 등 다양한 채널을 추가할 수 있습니다.
   </Card>
-  <Card title="멀티 에이전트 라우팅" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     에이전트, 워크스페이스, 또는 발신자별로 격리된 세션을 제공합니다.
   </Card>
-  <Card title="미디어 지원" icon="image">
+  <Card title="Media support" icon="image">
     이미지, 오디오, 문서를 송수신할 수 있습니다.
   </Card>
-  <Card title="웹 Control UI" icon="monitor">
+  <Card title="Web Control UI" icon="monitor">
     채팅, 설정, 세션, 노드를 위한 브라우저 대시보드입니다.
   </Card>
-  <Card title="모바일 노드" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Canvas 지원과 함께 iOS 및 Android 노드를 페어링합니다.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ Gateway 는 세션, 라우팅, 채널 연결에 대한 단일 진실 공급원�
 ## 빠른 시작
 
 <Steps>
-  <Step title="OpenClaw 설치">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="온보딩 및 서비스 설치">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="WhatsApp 페어링 및 Gateway 시작">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -158,22 +150,22 @@ Gateway 가 시작된 후 브라우저에서 Control UI 를 엽니다.
 ## 여기서 시작하세요
 
 <Columns>
-  <Card title="문서 허브" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     사용 사례별로 정리된 모든 문서와 가이드입니다.
   </Card>
-  <Card title="구성" href="/gateway/configuration" icon="settings">
+  <Card title="Configuration" href="/gateway/configuration" icon="settings">
     핵심 Gateway 설정, 토큰, 프로바이더 구성입니다.
   </Card>
-  <Card title="원격 액세스" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     SSH 및 tailnet 액세스 패턴입니다.
   </Card>
-  <Card title="채널" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     WhatsApp, Telegram, Discord 등 채널별 설정입니다.
   </Card>
-  <Card title="노드" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     페어링과 Canvas 를 지원하는 iOS 및 Android 노드입니다.
   </Card>
-  <Card title="도움말" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     일반적인 해결 방법과 문제 해결 진입점입니다.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Gateway 가 시작된 후 브라우저에서 Control UI 를 엽니다.
 ## 더 알아보기
 
 <Columns>
-  <Card title="전체 기능 목록" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     채널, 라우팅, 미디어 기능의 전체 목록입니다.
   </Card>
-  <Card title="멀티 에이전트 라우팅" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     워크스페이스 격리 및 에이전트별 세션입니다.
   </Card>
-  <Card title="보안" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     토큰, 허용 목록, 안전 제어입니다.
   </Card>
-  <Card title="문제 해결" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Gateway 진단 및 일반적인 오류입니다.
   </Card>
-  <Card title="소개 및 크레딧" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     프로젝트의 기원, 기여자, 라이선스입니다.
   </Card>
 </Columns>

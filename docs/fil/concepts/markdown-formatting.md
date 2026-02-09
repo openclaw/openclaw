@@ -5,19 +5,13 @@ read_when:
   - Nagdadagdag ka ng bagong channel formatter o style mapping
   - Nagde-debug ka ng mga formatting regression sa iba’t ibang channel
 title: "Pag-format ng Markdown"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:27Z
 ---
 
 # Pag-format ng Markdown
 
-Ine-format ng OpenClaw ang outbound Markdown sa pamamagitan ng pagko-convert nito sa isang shared intermediate
-representation (IR) bago i-render ang channel-specific na output. Pinananatiling buo ng IR ang source text habang may dalang mga style/link span para manatiling pare-pareho ang pag-chunk at pag-render sa iba’t ibang channel.
+Ine-format ng OpenClaw ang outbound Markdown sa pamamagitan ng pag-convert nito sa isang shared intermediate
+representation (IR) bago i-render ang channel-specific na output. Pinananatili ng IR ang
+source text na buo habang dinadala ang mga style/link span upang manatiling consistent ang chunking at rendering sa iba’t ibang channel.
 
 ## Mga layunin
 
@@ -66,8 +60,8 @@ IR (iskematiko):
 
 ## Paghawak ng table
 
-Hindi pare-pareho ang suporta ng Markdown table sa mga chat client. Gamitin ang
-`markdown.tables` para kontrolin ang conversion kada channel (at kada account).
+Ang mga Markdown table ay hindi pare-parehong sinusuportahan sa iba’t ibang chat client. Gamitin ang
+`markdown.tables` upang kontrolin ang conversion kada channel (at kada account).
 
 - `code`: i-render ang mga table bilang code block (default para sa karamihan ng channel).
 - `bullets`: i-convert ang bawat row bilang bullet points (default para sa Signal + WhatsApp).
@@ -99,14 +93,14 @@ Kung kailangan mo ng higit pang detalye tungkol sa behavior ng pag-chunk sa iba�
 
 ## Patakaran sa link
 
-- **Slack:** `[label](url)` -> `<url|label>`; nananatiling bare ang mga bare URL. Naka-disable ang autolink
-  habang nagpa-parse para maiwasan ang double-linking.
+- **Slack:** `[label](url)` -> `<url|label>`; nananatiling bare ang mga bare URL. Ang autolink
+  ay naka-disable habang nagpa-parse upang maiwasan ang double-linking.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
 - **Signal:** `[label](url)` -> `label (url)` maliban kung tumutugma ang label sa URL.
 
 ## Mga spoiler
 
-Ang mga spoiler marker (`||spoiler||`) ay pini-parse lamang para sa Signal, kung saan mina-map ang mga ito sa
+Ang mga spoiler marker (`||spoiler||`) ay pina-parse lamang para sa Signal, kung saan sila ay mina-map sa
 SPOILER style ranges. Tinatrato ng ibang channel ang mga ito bilang plain text.
 
 ## Paano magdagdag o mag-update ng channel formatter

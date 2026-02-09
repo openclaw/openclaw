@@ -4,20 +4,13 @@ read_when:
   - Pagse-setup ng Zalo Personal para sa OpenClaw
   - Pag-debug ng Zalo Personal login o daloy ng mensahe
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Zalo Personal (hindi opisyal)
 
-Status: experimental. Ina-automate ng integration na ito ang isang **personal na Zalo account** sa pamamagitan ng `zca-cli`.
+4. Status: eksperimental. 5. Ang integration na ito ay nag-a-automate ng isang **personal na Zalo account** gamit ang `zca-cli`.
 
-> **Babala:** Ito ay isang hindi opisyal na integration at maaaring magresulta sa suspensyon/ban ng account. Gamitin sa sarili mong panganib.
+> 6. **Babala:** Ito ay isang hindi opisyal na integration at maaaring magresulta sa suspensyon/pag-ban ng account. 7. Gamitin sa sarili mong panganib.
 
 ## Kailangan na plugin
 
@@ -64,7 +57,7 @@ Dapat mayroong `zca` binary ang Gateway machine na available sa `PATH`.
 
 ## Pagpapangalan
 
-Ang channel id ay `zalouser` upang malinaw na ipakita na ina-automate nito ang isang **personal na Zalo user account** (hindi opisyal). Inilalaan namin ang `zalo` para sa posibleng opisyal na Zalo API integration sa hinaharap.
+8. Ang Channel id ay `zalouser` upang malinaw na ipakita na ito ay nag-a-automate ng isang **personal na Zalo user account** (hindi opisyal). 9. Inilalaan namin ang `zalo` para sa isang posibleng opisyal na Zalo API integration sa hinaharap.
 
 ## Paghahanap ng mga ID (directory)
 
@@ -83,8 +76,8 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## Kontrol sa access (DMs)
 
-Sinusuportahan ng `channels.zalouser.dmPolicy` ang: `pairing | allowlist | open | disabled` (default: `pairing`).
-Tumatanggap ang `channels.zalouser.allowFrom` ng mga user ID o pangalan. Nireresolba ng wizard ang mga pangalan tungo sa mga ID sa pamamagitan ng `zca friend find` kapag available.
+10. Sinusuportahan ng `channels.zalouser.dmPolicy` ang: `pairing | allowlist | open | disabled` (default: `pairing`).
+11. Tumatanggap ang `channels.zalouser.allowFrom` ng mga user ID o pangalan. 12. Nireresolba ng wizard ang mga pangalan patungo sa mga ID sa pamamagitan ng `zca friend find` kapag available.
 
 Aprubahan sa pamamagitan ng:
 
@@ -93,7 +86,7 @@ Aprubahan sa pamamagitan ng:
 
 ## Access sa grupo (opsyonal)
 
-- Default: `channels.zalouser.groupPolicy = "open"` (pinapayagan ang mga grupo). Gamitin ang `channels.defaults.groupPolicy` upang i-override ang default kapag hindi naka-set.
+- 13. Default: `channels.zalouser.groupPolicy = "open"` (pinapayagan ang mga grupo). 14. Gamitin ang `channels.defaults.groupPolicy` upang i-override ang default kapag hindi naka-set.
 - I-restrict sa isang allowlist gamit ang:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups` (ang mga key ay mga group ID o pangalan)
@@ -119,7 +112,7 @@ Halimbawa:
 
 ## Maramihang account
 
-Ang mga account ay naka-map sa mga zca profile. Halimbawa:
+15. Ang mga account ay naka-map sa mga zca profile. Halimbawa:
 
 ```json5
 {

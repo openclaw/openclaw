@@ -4,25 +4,18 @@ read_when:
   - Bạn muốn tự động hóa theo sự kiện cho /new, /reset, /stop và các sự kiện vòng đời của tác tử
   - Bạn muốn xây dựng, cài đặt hoặc gỡ lỗi hooks
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:11Z
 ---
 
 # Hooks
 
-Hooks cung cấp một hệ thống mở rộng, dựa trên sự kiện để tự động hóa các hành động phản hồi lại lệnh và sự kiện của tác tử. Hooks được tự động phát hiện từ các thư mục và có thể được quản lý qua CLI, tương tự như cách Skills hoạt động trong OpenClaw.
+Hooks cung cấp một hệ thống hướng sự kiện có thể mở rộng để tự động hóa các hành động nhằm phản hồi các lệnh và sự kiện của agent. Hooks được tự động phát hiện từ các thư mục và có thể được quản lý thông qua các lệnh CLI, tương tự như cách skills hoạt động trong OpenClaw.
 
 ## Làm quen
 
-Hooks là các script nhỏ chạy khi có một sự kiện xảy ra. Có hai loại:
+Hooks là các script nhỏ chạy khi có điều gì đó xảy ra. Có hai loại:
 
 - **Hooks** (trang này): chạy bên trong Gateway khi các sự kiện của tác tử được kích hoạt, như `/new`, `/reset`, `/stop`, hoặc các sự kiện vòng đời.
-- **Webhooks**: webhook HTTP bên ngoài cho phép các hệ thống khác kích hoạt công việc trong OpenClaw. Xem [Webhook Hooks](/automation/webhook) hoặc dùng `openclaw webhooks` cho các lệnh trợ giúp Gmail.
+- **Webhooks**: các webhook HTTP bên ngoài cho phép các hệ thống khác kích hoạt công việc trong OpenClaw. Xem [Webhook Hooks](/automation/webhook) hoặc sử dụng `openclaw webhooks` cho các lệnh trợ giúp Gmail.
 
 Hooks cũng có thể được đóng gói bên trong plugin; xem [Plugins](/tools/plugin#plugin-hooks).
 
@@ -33,7 +26,7 @@ Các trường hợp sử dụng phổ biến:
 - Kích hoạt tự động hóa tiếp theo khi một phiên bắt đầu hoặc kết thúc
 - Ghi file vào workspace của tác tử hoặc gọi API bên ngoài khi sự kiện xảy ra
 
-Nếu bạn có thể viết một hàm TypeScript nhỏ, bạn có thể viết một hook. Hooks được tự động phát hiện, và bạn bật hoặc tắt chúng qua CLI.
+Nếu bạn có thể viết một hàm TypeScript nhỏ, bạn có thể viết một hook. Hooks được phát hiện tự động, và bạn bật hoặc tắt chúng thông qua CLI.
 
 ## Tổng quan
 
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Hướng dẫn ban đầu
 
-Trong quá trình onboarding (`openclaw onboard`), bạn sẽ được nhắc bật các hook được khuyến nghị. Trình hướng dẫn sẽ tự động phát hiện các hook đủ điều kiện và hiển thị để bạn lựa chọn.
+Trong quá trình onboarding (`openclaw onboard`), bạn sẽ được nhắc bật các hook được đề xuất. Trình hướng dẫn tự động phát hiện các hook đủ điều kiện và trình bày chúng để lựa chọn.
 
 ## Phát hiện Hook
 
@@ -103,8 +96,7 @@ my-hook/
 
 ## Hook Packs (npm/archives)
 
-Hook pack là các gói npm tiêu chuẩn xuất một hoặc nhiều hook thông qua `openclaw.hooks` trong
-`package.json`. Cài đặt chúng bằng:
+4. Hook pack là các gói npm tiêu chuẩn, xuất một hoặc nhiều hook thông qua `openclaw.hooks` trong `package.json`. 5. Cài đặt chúng bằng:
 
 ```bash
 openclaw hooks install <path-or-spec>
@@ -123,7 +115,7 @@ Ví dụ `package.json`:
 ```
 
 Mỗi mục trỏ tới một thư mục hook chứa `HOOK.md` và `handler.ts` (hoặc `index.ts`).
-Hook pack có thể kèm theo các dependency; chúng sẽ được cài đặt dưới `~/.openclaw/hooks/<id>`.
+6. Hook pack có thể kèm theo dependency; chúng sẽ được cài dưới `~/.openclaw/hooks/<id>`.
 
 ## Cấu trúc Hook
 
@@ -251,7 +243,7 @@ Mỗi sự kiện bao gồm:
 
 Các hook này không phải listener của event-stream; chúng cho phép plugin đồng bộ điều chỉnh kết quả tool trước khi OpenClaw lưu chúng.
 
-- **`tool_result_persist`**: Biến đổi kết quả tool trước khi được ghi vào transcript của phiên. Phải là đồng bộ; trả về payload kết quả tool đã cập nhật hoặc `undefined` để giữ nguyên. Xem [Agent Loop](/concepts/agent-loop).
+- **`tool_result_persist`**: chuyển đổi kết quả của tool trước khi chúng được ghi vào bản ghi phiên làm việc. 7. Phải là đồng bộ; trả về payload kết quả tool đã được cập nhật hoặc `undefined` để giữ nguyên. Xem [Agent Loop](/concepts/agent-loop).
 
 ### Sự kiện Tương lai
 
@@ -265,12 +257,12 @@ Các loại sự kiện dự kiến:
 
 ## Tạo Hook Tùy chỉnh
 
-### 1. Chọn Vị trí
+### 8. 1. Chọn vị trí
 
 - **Workspace hooks** (`<workspace>/hooks/`): Theo từng tác tử, ưu tiên cao nhất
 - **Managed hooks** (`~/.openclaw/hooks/`): Dùng chung giữa các workspace
 
-### 2. Tạo Cấu trúc Thư mục
+### 2. Tạo cấu trúc thư mục
 
 ```bash
 mkdir -p ~/.openclaw/hooks/my-hook
@@ -291,7 +283,7 @@ metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
 This hook does something useful when you issue `/new`.
 ```
 
-### 4. Tạo handler.ts
+### 9. 4. Tạo handler.ts
 
 ```typescript
 import type { HookHandler } from "../../src/hooks/hooks.js";
@@ -308,7 +300,7 @@ const handler: HookHandler = async (event) => {
 export default handler;
 ```
 
-### 5. Bật và Kiểm tra
+### 5. Bật và kiểm thử
 
 ```bash
 # Verify hook is discovered
@@ -401,7 +393,7 @@ Tải hooks từ các thư mục bổ sung:
 }
 ```
 
-**Di chuyển**: Sử dụng hệ thống dựa trên discovery mới cho các hook mới. Legacy handler được tải sau các hook dựa trên thư mục.
+10. **Migration**: Sử dụng hệ thống discovery-based mới cho các hook mới. Các legacy handler được tải sau các hook dựa trên thư mục.
 
 ## Lệnh CLI
 
@@ -573,7 +565,7 @@ openclaw hooks enable soul-evil
 ### boot-md
 
 Chạy `BOOT.md` khi gateway khởi động (sau khi các kênh khởi động).
-Cần bật internal hooks để hook này chạy.
+Các hook nội bộ phải được bật để điều này chạy.
 
 **Sự kiện**: `gateway:startup`
 
@@ -595,7 +587,7 @@ openclaw hooks enable boot-md
 
 ### Giữ Handler Nhanh
 
-Hooks chạy trong quá trình xử lý lệnh. Hãy giữ chúng gọn nhẹ:
+Hooks chạy trong quá trình xử lý lệnh. Giữ chúng nhẹ nhàng:
 
 ```typescript
 // ✓ Good - async work, returns immediately

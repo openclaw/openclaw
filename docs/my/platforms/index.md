@@ -4,23 +4,16 @@ read_when:
   - OS ပံ့ပိုးမှု သို့မဟုတ် ထည့်သွင်းတပ်ဆင်ရာ လမ်းကြောင်းများကို ရှာဖွေနေသောအခါ
   - Gateway ကို မည်သည့်နေရာတွင် လည်ပတ်စေမည်ကို ဆုံးဖြတ်နေသောအခါ
 title: "ပလက်ဖောင်းများ"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:36Z
 ---
 
 # ပလက်ဖောင်းများ
 
-OpenClaw core ကို TypeScript ဖြင့် ရေးသားထားသည်။ **Node ကို အကြံပြုထားသော runtime အဖြစ် အသုံးပြုပါသည်**။
-Gateway အတွက် Bun ကို မထောက်ခံပါ (WhatsApp/Telegram ပြဿနာများ ရှိပါသည်)။
+43. OpenClaw core ကို TypeScript ဖြင့် ရေးသားထားပါသည်။ 44. **Node ကို အကြံပြုထားသော runtime အဖြစ် အသုံးပြုရန် အကြံပြုပါသည်**။
+44. Gateway အတွက် Bun ကို မအကြံပြုပါ (WhatsApp/Telegram bugs များကြောင့်)။
 
-macOS (menu bar app) နှင့် မိုဘိုင်း နိုဒ်များ (iOS/Android) အတွက် companion apps များ ရှိပြီးသားဖြစ်သည်။ Windows နှင့်
-Linux အတွက် companion apps များကို စီမံကိန်းအဖြစ် စီစဉ်ထားပြီးသားဖြစ်သော်လည်း Gateway ကို ယနေ့တွင် ပြည့်စုံစွာ ပံ့ပိုးထားပါသည်။
-Windows အတွက် native companion apps များကိုလည်း စီစဉ်ထားပြီး Gateway ကို WSL2 မှတဆင့် အသုံးပြုရန် အကြံပြုပါသည်။
+46. Companion apps များကို macOS (menu bar app) နှင့် mobile nodes (iOS/Android) အတွက် ရရှိနိုင်ပါသည်။ Windows and
+    Linux companion apps are planned, but the Gateway is fully supported today.
+47. Windows အတွက် native companion apps များကိုလည်း စီစဉ်ထားပြီး Gateway ကို WSL2 မှတဆင့် အသုံးပြုရန် အကြံပြုပါသည်။
 
 ## သင့် OS ကို ရွေးချယ်ပါ
 
@@ -56,5 +49,5 @@ Windows အတွက် native companion apps များကိုလည်း 
 
 ဝန်ဆောင်မှု၏ ပစ်မှတ်သည် OS အပေါ် မူတည်ပါသည် —
 
-- macOS: LaunchAgent (`bot.molt.gateway` သို့မဟုတ် `bot.molt.<profile>`; အဟောင်း `com.openclaw.*`)
+- 49. macOS: LaunchAgent (`bot.molt.gateway` သို့မဟုတ် `bot.molt.<profile>`50. `; legacy `com.openclaw.\*\`)
 - Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)

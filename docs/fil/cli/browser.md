@@ -5,13 +5,6 @@ read_when:
   - Gusto mong kontrolin ang browser na tumatakbo sa ibang makina sa pamamagitan ng host ng node
   - Gusto mong gamitin ang relay ng Chrome extension (attach/detach sa pamamagitan ng toolbar button)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:15Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## Mga profile
 
-Ang mga profile ay pinangalanang browser routing config. Sa praktika:
+31. Ang mga profile ay pinangalanang browser routing config. 32. Sa praktika:
 
 - `openclaw`: nagla-launch/nag-a-attach sa isang dedikadong Chrome instance na pinamamahalaan ng OpenClaw (hiwalay na user data dir).
 - `chrome`: kinokontrol ang iyong umiiral na Chrome tab(s) sa pamamagitan ng relay ng Chrome extension.
@@ -107,7 +100,7 @@ Buong gabay: [Chrome extension](/tools/chrome-extension)
 
 ## Remote na kontrol ng browser (proxy ng host ng node)
 
-Kung ang Gateway ay tumatakbo sa ibang makina kaysa sa browser, magpatakbo ng isang **host ng node** sa makinang may Chrome/Brave/Edge/Chromium. Ipo-proxy ng Gateway ang mga aksyon sa browser papunta sa node na iyon (walang hiwalay na browser control server na kailangan).
+33. Kung ang Gateway ay tumatakbo sa ibang makina kaysa sa browser, magpatakbo ng isang **node host** sa makinang may Chrome/Brave/Edge/Chromium. 34. Ipo-proxy ng Gateway ang mga aksyon ng browser patungo sa node na iyon (walang hiwalay na browser control server na kailangan).
 
 Gamitin ang `gateway.nodes.browser.mode` para kontrolin ang auto-routing at ang `gateway.nodes.browser.node` para i-pin ang isang partikular na node kung marami ang nakakonekta.
 

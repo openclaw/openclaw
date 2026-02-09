@@ -3,22 +3,15 @@ summary: "Paano gumagana ang sandboxing ng OpenClaw: mga mode, saklaw, access sa
 title: Sandboxing
 read_when: "Gusto mo ng dedikadong paliwanag ng sandboxing o kailangan mong i-tune ang agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:45Z
 ---
 
 # Sandboxing
 
-Maaaring patakbuhin ng OpenClaw ang **mga tool sa loob ng Docker containers** para mabawasan ang blast radius.
-Ito ay **opsyonal** at kontrolado ng configuration (`agents.defaults.sandbox` o
-`agents.list[].sandbox`). Kapag naka-off ang sandboxing, tumatakbo ang mga tool sa host.
-Nanatili ang Gateway sa host; ang pagpapatakbo ng tool ay nagaganap sa isang isolated sandbox
-kapag naka-enable.
+OpenClaw can run **tools inside Docker containers** to reduce blast radius.
+This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
+`agents.list[].sandbox`). If sandboxing is off, tools run on the host.
+The Gateway stays on the host; tool execution runs in an isolated sandbox
+when enabled.
 
 Hindi ito perpektong security boundary, ngunit malaki ang nababawas nito sa access sa filesystem
 at mga process kapag may ginawang hindi tama ang model.
@@ -27,8 +20,8 @@ at mga process kapag may ginawang hindi tama ang model.
 
 - Pagpapatakbo ng tool (`exec`, `read`, `write`, `edit`, `apply_patch`, `process`, atbp.).
 - Opsyonal na sandboxed browser (`agents.defaults.sandbox.browser`).
-  - Bilang default, auto-start ang sandbox browser (tinitiyak na reachable ang CDP) kapag kailangan ito ng browser tool.
-    I-configure sa pamamagitan ng `agents.defaults.sandbox.browser.autoStart` at `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
+  - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
+    Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
   - Pinapahintulutan ng `agents.defaults.sandbox.browser.allowHostControl` ang mga sandboxed session na tahasang i-target ang host browser.
   - Mga opsyonal na allowlist ang nagga-gate sa `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
@@ -37,7 +30,7 @@ Hindi naka-sandbox:
 - Ang mismong Gateway process.
 - Anumang tool na tahasang pinayagang tumakbo sa host (hal., `tools.elevated`).
   - **Ang elevated exec ay tumatakbo sa host at nilalampasan ang sandboxing.**
-  - Kapag naka-off ang sandboxing, hindi binabago ng `tools.elevated` ang execution (nasa host na). Tingnan ang [Elevated Mode](/tools/elevated).
+  - If sandboxing is off, `tools.elevated` does not change execution (already on host). Tingnan ang [Elevated Mode](/tools/elevated).
 
 ## Mga mode
 
@@ -45,9 +38,9 @@ Kinokontrol ng `agents.defaults.sandbox.mode` **kung kailan** ginagamit ang sand
 
 - `"off"`: walang sandboxing.
 - `"non-main"`: sandbox lang ang mga **non-main** session (default kung gusto mo ng normal na chats sa host).
-- `"all"`: bawat session ay tumatakbo sa sandbox.
-  Tandaan: ang `"non-main"` ay batay sa `session.mainKey` (default `"main"`), hindi sa agent id.
-  Ang mga group/channel session ay gumagamit ng sarili nilang mga key, kaya itinuturing silang non-main at masasandbox.
+- `"all"`: every session runs in a sandbox.
+  Note: `"non-main"` is based on `session.mainKey` (default `"main"`), not agent id.
+  Group/channel sessions use their own keys, so they count as non-main and will be sandboxed.
 
 ## Saklaw
 
@@ -65,18 +58,18 @@ Kinokontrol ng `agents.defaults.sandbox.workspaceAccess` **kung ano ang nakikita
 - `"ro"`: mina-mount ang agent workspace bilang read-only sa `/agent` (dinidisable ang `write`/`edit`/`apply_patch`).
 - `"rw"`: mina-mount ang agent workspace bilang read/write sa `/workspace`.
 
-Kinokopya ang inbound media papunta sa aktibong sandbox workspace (`media/inbound/*`).
-Tala sa Skills: ang tool na `read` ay sandbox-rooted. Sa `workspaceAccess: "none"`,
-ini-mi-mirror ng OpenClaw ang mga eligible na skill sa sandbox workspace (`.../skills`) para
-mabasa ang mga ito. Sa `"rw"`, mababasa ang mga workspace skill mula sa
+Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Skills note: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`,
+OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so
+they can be read. With `"rw"`, workspace skills are readable from
 `/workspace/skills`.
 
 ## Mga custom bind mount
 
-Ang `agents.defaults.sandbox.docker.binds` ay nagma-mount ng karagdagang host directory sa loob ng container.
-Format: `host:container:mode` (hal., `"/home/user/source:/source:rw"`).
+`agents.defaults.sandbox.docker.binds` mounts additional host directories into the container.
+Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
 
-Ang global at per-agent binds ay **pinagsasama** (hindi pinapalitan). Sa ilalim ng `scope: "shared"`, hindi pinapansin ang per-agent binds.
+Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
 Halimbawa (read-only source + docker socket):
 
@@ -121,9 +114,9 @@ I-build ito nang isang beses:
 scripts/sandbox-setup.sh
 ```
 
-Tandaan: ang default na image ay **walang** Node. Kung kailangan ng isang skill ang Node (o
-ibang runtime), alinman sa mag-bake ng custom image o mag-install sa pamamagitan ng
-`sandbox.docker.setupCommand` (nangangailangan ng network egress + writable root +
+Note: the default image does **not** include Node. If a skill needs Node (or
+other runtimes), either bake a custom image or install via
+`sandbox.docker.setupCommand` (requires network egress + writable root +
 root user).
 
 Sandboxed browser image:
@@ -132,16 +125,16 @@ Sandboxed browser image:
 scripts/sandbox-browser-setup.sh
 ```
 
-Bilang default, tumatakbo ang mga sandbox container na **walang network**.
-I-override gamit ang `agents.defaults.sandbox.docker.network`.
+By default, sandbox containers run with **no network**.
+Override with `agents.defaults.sandbox.docker.network`.
 
 Narito ang mga Docker install at ang containerized gateway:
 [Docker](/install/docker)
 
 ## setupCommand (one-time na setup ng container)
 
-Ang `setupCommand` ay tumatakbo **isang beses** pagkatapos malikha ang sandbox container (hindi sa bawat run).
-Isinasagawa ito sa loob ng container sa pamamagitan ng `sh -lc`.
+`setupCommand` runs **once** after the sandbox container is created (not on every run).
+It executes inside the container via `sh -lc`.
 
 Mga path:
 
@@ -153,29 +146,29 @@ Karaniwang pitfalls:
 - Ang default na `docker.network` ay `"none"` (walang egress), kaya babagsak ang mga package install.
 - Pinipigilan ng `readOnlyRoot: true` ang mga write; itakda ang `readOnlyRoot: false` o mag-bake ng custom image.
 - Dapat root ang `user` para sa mga package install (alisin ang `user` o itakda ang `user: "0:0"`).
-- Ang sandbox exec ay **hindi** nagmamana ng host `process.env`. Gamitin ang
-  `agents.defaults.sandbox.docker.env` (o isang custom image) para sa mga skill API key.
+- Sandbox exec does **not** inherit host `process.env`. Use
+  `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
 
 ## Tool policy + mga escape hatch
 
-Nalalapat pa rin ang mga tool allow/deny policy bago ang mga sandbox rule. Kung ang isang tool ay denied
-global o per-agent, hindi ito ibinabalik ng sandboxing.
+Tool allow/deny policies still apply before sandbox rules. If a tool is denied
+globally or per-agent, sandboxing doesn’t bring it back.
 
-Ang `tools.elevated` ay isang tahasang escape hatch na nagpapatakbo ng `exec` sa host.
-Ang mga `/exec` directive ay nalalapat lang para sa mga awtorisadong sender at nananatili per session; para i-hard-disable
-ang `exec`, gumamit ng tool policy deny (tingnan ang [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
+`tools.elevated` is an explicit escape hatch that runs `exec` on the host.
+`/exec` directives only apply for authorized senders and persist per session; to hard-disable
+`exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
 Debugging:
 
 - Gamitin ang `openclaw sandbox explain` para siyasatin ang epektibong sandbox mode, tool policy, at mga fix-it config key.
-- Tingnan ang [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) para sa mental model ng “bakit ito naka-block?”
-  Panatilihin itong naka-lock down.
+- See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for the “why is this blocked?” mental model.
+  Keep it locked down.
 
 ## Mga override sa multi-agent
 
-Maaaring i-override ng bawat agent ang sandbox + mga tool:
-`agents.list[].sandbox` at `agents.list[].tools` (dagdag ang `agents.list[].tools.sandbox.tools` para sa sandbox tool policy).
-Tingnan ang [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) para sa precedence.
+Each agent can override sandbox + tools:
+`agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal na halimbawa ng pag-enable
 

@@ -4,14 +4,7 @@ read_when:
   - Oturum kimliklerini, transkript JSONL dosyalarını veya sessions.json alanlarını hata ayıklamanız gerektiğinde
   - Otomatik sıkıştırma davranışını değiştiriyor ya da “ön sıkıştırma” bakım işleri ekliyorsanız
   - Bellek boşaltmaları veya sessiz sistem turları uygulamak istiyorsanız
-title: "Oturum Yönetimine Derinlemesine Bakış"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:12Z
+title: "Session Management Deep Dive"
 ---
 
 # Oturum Yönetimi ve Sıkıştırma (Derinlemesine İnceleme)
@@ -76,7 +69,7 @@ OpenClaw bunları `src/config/sessions.ts` üzerinden çözümler.
 
 Bir `sessionKey`, _hangi konuşma kovasında_ olduğunuzu (yönlendirme + yalıtım) tanımlar.
 
-Yaygın desenler:
+Yaygın kalıplar:
 
 - Ana/doğrudan sohbet (ajan başına): `agent:<agentId>:<mainKey>` (varsayılan `main`)
 - Grup: `agent:<agentId>:<channel>:group:<id>`
@@ -165,7 +158,7 @@ Daha fazlası için bkz. [/token-use](/reference/token-use).
 
 ---
 
-## Sıkıştırma: nedir?
+## Compaction: what it is
 
 Sıkıştırma, daha eski konuşmayı transkriptte kalıcı bir `compaction` girdisi olarak özetler ve yakın mesajları olduğu gibi bırakır.
 
@@ -174,7 +167,7 @@ Sıkıştırmadan sonra, gelecek turlar şunları görür:
 - Sıkıştırma özeti
 - `firstKeptEntryId`’ten sonraki mesajlar
 
-Sıkıştırma **kalıcıdır** (oturum budamasının aksine). Bkz. [/concepts/session-pruning](/concepts/session-pruning).
+Compaction is **persistent** (unlike session pruning). [/concepts/session-pruning](/concepts/session-pruning).
 
 ---
 
@@ -239,7 +232,7 @@ Sıkıştırmayı ve oturum durumunu şuradan gözlemleyebilirsiniz:
 
 OpenClaw, kullanıcının ara çıktıları görmemesi gereken arka plan görevleri için “sessiz” turları destekler.
 
-Kural:
+Convention:
 
 - Asistan çıktısına “kullanıcıya yanıt teslim etme” anlamına gelen `NO_REPLY` ile başlar.
 - OpenClaw, teslim katmanında bunu ayıklar/bastırır.
@@ -254,7 +247,7 @@ Amaç: otomatik sıkıştırma gerçekleşmeden önce, kalıcı durumu diske yaz
 
 OpenClaw **eşik öncesi boşaltma** yaklaşımını kullanır:
 
-1. Oturum bağlam kullanımını izler.
+1. Monitor session context usage.
 2. “Yumuşak eşik” (Pi’nin sıkıştırma eşiğinin altında) aşıldığında, ajana sessiz bir
    “şimdi belleği yaz” yönergesi çalıştırır.
 3. Kullanıcının hiçbir şey görmemesi için `NO_REPLY` kullanılır.

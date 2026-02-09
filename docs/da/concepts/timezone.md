@@ -4,13 +4,6 @@ read_when:
   - Du skal forstå, hvordan tidsstempler normaliseres for modellen
   - Konfigurering af brugerens tidszone til systemprompts
 title: "Tidszoner"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:09Z
 ---
 
 # Tidszoner
@@ -43,7 +36,7 @@ Du kan tilsidesætte dette med:
 
 - `envelopeTimezone: "utc"` bruger UTC.
 - `envelopeTimezone: "user"` bruger `agents.defaults.userTimezone` (falder tilbage til værtens tidszone).
-- Brug en eksplicit IANA-tidszone (f.eks. `"Europe/Vienna"`) for en fast offset.
+- Brug en eksplicit IANA tidszone (f.eks. `"Europa/Wien"`) til en fast forskydning.
 - `envelopeTimestamp: "off"` fjerner absolutte tidsstempler fra envelope-headere.
 - `envelopeElapsed: "off"` fjerner suffikser for forløbet tid (stilen `+2m`).
 
@@ -69,7 +62,7 @@ Du kan tilsidesætte dette med:
 
 ## Tool-payloads (rå udbyderdata + normaliserede felter)
 
-Tool-kald (`channels.discord.readMessages`, `channels.slack.readMessages` osv.) returnerer **rå tidsstempler fra udbyderen**.
+Værktøj opkald (`channels.discord.readMessages`, `channels.slack.readMessages`, etc.) returnere **rå udbyderens tidsstempler**.
 Vi vedhæfter også normaliserede felter for konsistens:
 
 - `timestampMs` (UTC-epoch-millisekunder)
@@ -79,8 +72,8 @@ Rå felter fra udbyderen bevares.
 
 ## Brugerens tidszone i systemprompten
 
-Sæt `agents.defaults.userTimezone` for at fortælle modellen brugerens lokale tidszone. Hvis den ikke er
-sat, bestemmer OpenClaw **værtens tidszone ved runtime** (ingen konfigurationsskrivning).
+Sæt `agents.defaults.userTimezone` for at fortælle modellen brugerens lokale tidszone. Hvis det er
+deaktiveret, løser OpenClaw **værts-tidszonen på runtime** (ingen config skriv).
 
 ```json5
 {

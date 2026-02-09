@@ -3,13 +3,6 @@ summary: "Sintaxe de diretiva para /think + /verbose e como elas afetam o racioc
 read_when:
   - Ajustar a análise de diretivas de thinking ou verbose ou os padrões
 title: "Níveis de Thinking"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:20Z
 ---
 
 # Níveis de Thinking (diretivas /think)

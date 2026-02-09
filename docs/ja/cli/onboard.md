@@ -3,13 +3,6 @@ summary: "CLI 参照用ドキュメント：`openclaw onboard`（対話型オン
 read_when:
   - ゲートウェイ、ワークスペース、認証、チャンネル、Skills のガイド付きセットアップを行いたい場合
 title: "オンボード"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:11Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,7 @@ openclaw agents add <name>
 ```
 
 <Note>
+
 `--json` は非対話モードを意味しません。スクリプトでは `--non-interactive` を使用してください。
+ スクリプトには `--non-interactive` を使用します。
 </Note>

@@ -3,13 +3,6 @@ summary: "Chế độ exec nâng cao và các chỉ thị /elevated"
 read_when:
   - Điều chỉnh mặc định chế độ elevated, allowlist hoặc hành vi lệnh gạch chéo
 title: "Chế độ Elevated"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:29Z
 ---
 
 # Chế độ Elevated (chỉ thị /elevated)
@@ -26,10 +19,10 @@ x-i18n:
 
 ## Nó kiểm soát gì (và không kiểm soát gì)
 
-- **Cổng khả dụng**: `tools.elevated` là đường cơ sở toàn cục. `agents.list[].tools.elevated` có thể hạn chế elevated theo từng tác tử (cả hai đều phải cho phép).
+- **Cổng khả dụng**: `tools.elevated` là đường cơ sở toàn cục. 18. `agents.list[].tools.elevated` có thể hạn chế thêm quyền elevated theo từng agent (cả hai đều phải cho phép).
 - **Trạng thái theo phiên**: `/elevated on|off|ask|full` đặt mức elevated cho khóa phiên hiện tại.
 - **Chỉ thị nội tuyến**: `/elevated on|ask|full` bên trong một tin nhắn chỉ áp dụng cho tin nhắn đó.
-- **Nhóm**: Trong chat nhóm, chỉ thị elevated chỉ được tôn trọng khi tác tử được nhắc đến. Các tin nhắn chỉ chứa lệnh bỏ qua yêu cầu nhắc đến được coi là đã nhắc đến.
+- **Nhóm**: Trong các cuộc trò chuyện nhóm, các chỉ thị nâng cao chỉ được tôn trọng khi agent được nhắc đến. 20. Các thông điệp chỉ có lệnh và bỏ qua yêu cầu nhắc đến sẽ được coi như đã được nhắc đến.
 - **Thực thi trên host**: elevated buộc `exec` lên máy chủ gateway; `full` cũng đặt `security=full`.
 - **Phê duyệt**: `full` bỏ qua phê duyệt exec; `on`/`ask` vẫn tuân theo khi các quy tắc allowlist/hỏi yêu cầu.
 - **Tác tử không sandboxed**: không tác động đến vị trí; chỉ ảnh hưởng đến gating, logging và trạng thái.
@@ -55,7 +48,7 @@ x-i18n:
 - Allowlist người gửi: `tools.elevated.allowFrom` với allowlist theo từng nhà cung cấp (ví dụ: `discord`, `whatsapp`).
 - Cổng theo tác tử: `agents.list[].tools.elevated.enabled` (tùy chọn; chỉ có thể hạn chế thêm).
 - Allowlist theo tác tử: `agents.list[].tools.elevated.allowFrom` (tùy chọn; khi đặt, người gửi phải khớp **cả** allowlist toàn cục + theo tác tử).
-- Dự phòng cho Discord: nếu `tools.elevated.allowFrom.discord` bị bỏ qua, danh sách `channels.discord.dm.allowFrom` được dùng làm dự phòng. Đặt `tools.elevated.allowFrom.discord` (kể cả `[]`) để ghi đè. Allowlist theo tác tử **không** dùng cơ chế dự phòng.
+- 46. Dự phòng Discord: nếu `tools.elevated.allowFrom.discord` bị bỏ qua, danh sách `channels.discord.dm.allowFrom` sẽ được dùng làm phương án dự phòng. Đặt `tools.elevated.allowFrom.discord` (kể cả `[]`) để ghi đè. 47. Danh sách cho phép theo từng agent **không** dùng phương án dự phòng.
 - Tất cả các cổng phải vượt qua; nếu không elevated được coi là không khả dụng.
 
 ## Logging + trạng thái

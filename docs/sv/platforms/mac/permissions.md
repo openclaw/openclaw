@@ -5,20 +5,13 @@ read_when:
   - Paketering eller signering av macOS-appen
   - Ändring av bundle-ID eller appens installationssökvägar
 title: "macOS-behörigheter"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:58Z
 ---
 
 # macOS-behörigheter (TCC)
 
-macOS-behörighetsbeviljanden är sköra. TCC kopplar ett behörighetsbeviljande till
-appens kodsignatur, bundle-identifierare och sökväg på disk. Om någon av dessa ändras
-behandlar macOS appen som ny och kan ta bort eller dölja prompter.
+macOS tillståndsbidrag är bräckliga. TCC associerar ett behörighetsbidrag med
+appens kodsignatur, paketidentifierare och sökväg på disk. Om någon av dessa ändringar,
+macOS behandlar appen som ny och kan släppa eller dölja uppmaningar.
 
 ## Krav för stabila behörigheter
 
@@ -28,8 +21,8 @@ behandlar macOS appen som ny och kan ta bort eller dölja prompter.
 - Konsekvent signatur: använd ett riktigt Apple Development- eller Developer ID-certifikat
   så att signaturen förblir stabil mellan ombyggen.
 
-Ad-hoc-signaturer skapar en ny identitet vid varje bygge. macOS glömmer tidigare
-beviljanden, och prompter kan försvinna helt tills de inaktuella posterna rensas.
+Ad-hoc signaturer genererar en ny identitet varje bygge. macOS kommer att glömma tidigare
+bidrag, och uppmaningar kan försvinna helt tills inaktuella poster rensas.
 
 ## Återställningschecklista när prompter försvinner
 
@@ -49,9 +42,9 @@ sudo tccutil reset AppleEvents
 
 ## Behörigheter för filer och mappar (Skrivbord/Dokument/Hämtningar)
 
-macOS kan även begränsa Skrivbord, Dokument och Hämtningar för terminal- eller bakgrundsprocesser. Om filläsningar eller kataloglistningar hänger, bevilja åtkomst till samma processkontext som utför filoperationerna (till exempel Terminal/iTerm, en app som startas via LaunchAgent eller en SSH-process).
+macOS kan också grinda skrivbordet, dokument och nedladdningar för terminal/bakgrundsprocesser. Om filen läser eller kataloglistningar hänger, ge åtkomst till samma processsammanhang som utför filverksamhet (till exempel Terminal/iTerm, LaunchAgent-lanserad app eller SSH-process).
 
 Tillfällig lösning: flytta filer till OpenClaw-arbetsytan (`~/.openclaw/workspace`) om du vill undvika behörigheter per mapp.
 
-Om du testar behörigheter, signera alltid med ett riktigt certifikat. Ad-hoc-
-byggen är endast acceptabla för snabba lokala körningar där behörigheter inte spelar någon roll.
+Om du testar behörigheter, underteckna alltid med ett riktigt certifikat. Ad-hoc
+bygger är endast acceptabla för snabba lokala körningar där behörigheter inte spelar någon roll.

@@ -3,20 +3,13 @@ summary: "सीधे `openclaw agent` CLI रन (वैकल्पिक ड
 read_when:
   - एजेंट CLI एंट्रीपॉइंट जोड़ते या संशोधित करते समय
 title: "एजेंट भेजें"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:44Z
 ---
 
 # `openclaw agent` (प्रत्यक्ष एजेंट रन)
 
-`openclaw agent` किसी इनबाउंड चैट संदेश की आवश्यकता के बिना एकल एजेंट टर्न चलाता है।
-डिफ़ॉल्ट रूप से यह **Gateway के माध्यम से** जाता है; वर्तमान मशीन पर एम्बेडेड
-रनटाइम को बाध्य करने के लिए `--local` जोड़ें।
+`openclaw agent` runs a single agent turn without needing an inbound chat message.
+By default it goes **through the Gateway**; add `--local` to force the embedded
+runtime on the current machine.
 
 ## व्यवहार
 

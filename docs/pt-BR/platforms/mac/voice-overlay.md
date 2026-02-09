@@ -3,13 +3,6 @@ summary: "Ciclo de vida do overlay de voz quando palavra de ativação e push-to
 read_when:
   - Ajustando o comportamento do overlay de voz
 title: "Overlay de Voz"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:32Z
 ---
 
 # Ciclo de Vida do Overlay de Voz (macOS)
@@ -56,6 +49,7 @@ Público: contribuidores do app macOS. Objetivo: manter o overlay de voz previs�
   ```
 
 - Verifique se há apenas um token de sessão ativo; callbacks obsoletos devem ser descartados pelo coordinator.
+
 - Garanta que a liberação do push-to-talk sempre chame `endCapture` com o token ativo; se o texto estiver vazio, espere `dismiss` sem chime ou envio.
 
 ## Etapas de migração (sugeridas)

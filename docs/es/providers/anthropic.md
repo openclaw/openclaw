@@ -4,13 +4,6 @@ read_when:
   - Quiere usar modelos de Anthropic en OpenClaw
   - Quiere usar setup-token en lugar de claves de API
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:18Z
 ---
 
 # Anthropic (Claude)
@@ -50,11 +43,11 @@ OpenClaw admite la función de caché de prompts de Anthropic. Esto es **solo pa
 
 Use el parámetro `cacheRetention` en la configuración de su modelo:
 
-| Valor   | Duración de caché | Descripción                                     |
-| ------- | ----------------- | ----------------------------------------------- |
-| `none`  | Sin caché         | Desactivar la caché de prompts                  |
-| `short` | 5 minutos         | Valor predeterminado para auth con clave de API |
-| `long`  | 1 hora            | Caché extendida (requiere bandera beta)         |
+| Valor   | Duración de caché | Descripción                                                |
+| ------- | ----------------- | ---------------------------------------------------------- |
+| `none`  | Sin caché         | Desactivar la caché de prompts                             |
+| `short` | 5 minutos         | Valor predeterminado para auth con clave de API            |
+| `long`  | 1 hora            | Caché extendida (requiere bandera beta) |
 
 ```json5
 {

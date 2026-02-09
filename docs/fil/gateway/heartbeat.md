@@ -4,13 +4,6 @@ read_when:
   - Ina-adjust ang cadence o pagmemensahe ng heartbeat
   - Pagpapasya sa pagitan ng heartbeat at cron para sa mga naka-iskedyul na gawain
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Heartbeat (Gateway)
@@ -48,13 +41,13 @@ Halimbawang config:
 
 ## Mga default
 
-- Interval: `30m` (o `1h` kapag Anthropic OAuth/setup-token ang natukoy na auth mode). Itakda ang `agents.defaults.heartbeat.every` o per-agent `agents.list[].heartbeat.every`; gamitin ang `0m` para i-disable.
-- Prompt body (maiko-configure sa pamamagitan ng `agents.defaults.heartbeat.prompt`):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-- Ang heartbeat prompt ay ipinapadala **verbatim** bilang user message. Kasama sa system
-  prompt ang isang seksyong “Heartbeat” at ang run ay naka-flag nang internal.
-- Ang active hours (`heartbeat.activeHours`) ay sine-check sa naka-configure na timezone.
-  Sa labas ng window, nilalaktawan ang heartbeats hanggang sa susunod na tick sa loob ng window.
+- 1. Interval: `30m` (o `1h` kapag Anthropic OAuth/setup-token ang natukoy na auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
+- Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
+  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. 6. Kung walang kailangang asikasuhin, sumagot ng HEARTBEAT_OK.`
+- The heartbeat prompt is sent **verbatim** as the user message. The system
+  prompt includes a “Heartbeat” section and the run is flagged internally.
+- Active hours (`heartbeat.activeHours`) are checked in the configured timezone.
+  Outside the window, heartbeats are skipped until the next tick inside the window.
 
 ## Para saan ang heartbeat prompt
 
@@ -73,9 +66,9 @@ stats” o “verify gateway health”), itakda ang `agents.defaults.heartbeat.p
 ## Kontrata ng tugon
 
 - Kung walang nangangailangan ng atensyon, mag-reply ng **`HEARTBEAT_OK`**.
-- Sa mga heartbeat run, tinatrato ng OpenClaw ang `HEARTBEAT_OK` bilang isang ack kapag lumitaw ito
-  sa **simula o dulo** ng reply. Tinatanggal ang token at dini-drop ang reply kung ang natitirang
-  content ay **≤ `ackMaxChars`** (default: 300).
+- During heartbeat runs, OpenClaw treats `HEARTBEAT_OK` as an ack when it appears
+  at the **start or end** of the reply. The token is stripped and the reply is
+  dropped if the remaining content is **≤ `ackMaxChars`** (default: 300).
 - Kung lumitaw ang `HEARTBEAT_OK` sa **gitna** ng isang reply, hindi ito tinatrato nang espesyal.
 - Para sa mga alert, **huwag** isama ang `HEARTBEAT_OK`; ibalik lamang ang alert text.
 
@@ -108,14 +101,14 @@ at nilolog; ang isang mensaheng tanging `HEARTBEAT_OK` lamang ay dini-drop.
 - Itinatakda ng `agents.defaults.heartbeat` ang global na gawi ng heartbeat.
 - Ang `agents.list[].heartbeat` ay nagme-merge sa ibabaw; kung may anumang agent na may `heartbeat` block, **ang mga agent na iyon lang** ang nagpapatakbo ng heartbeats.
 - Itinatakda ng `channels.defaults.heartbeat` ang mga default ng visibility para sa lahat ng channel.
-- Ang `channels.<channel>.heartbeat` ay nag-o-override ng mga default ng channel.
-- Ang `channels.<channel>.accounts.<id>.heartbeat` (mga multi-account channel) ay nag-o-override ng per-channel na mga setting.
+- `channels.<channel>.heartbeat` overrides channel defaults.
+- `channels.<channel>.accounts.<id>.heartbeat` (multi-account channels) overrides per-channel settings.
 
 ### Per-agent na heartbeats
 
-Kung may anumang `agents.list[]` entry na may kasamang `heartbeat` block, **ang mga agent na iyon lang**
-ang nagpapatakbo ng heartbeats. Ang per-agent block ay nagme-merge sa ibabaw ng `agents.defaults.heartbeat`
-(kaya maaari kang magtakda ng mga shared default nang minsanan at mag-override per agent).
+If any `agents.list[]` entry includes a `heartbeat` block, **only those agents**
+run heartbeats. The per-agent block merges on top of `agents.defaults.heartbeat`
+(so you can set shared defaults once and override per agent).
 
 Halimbawa: dalawang agent, ang pangalawang agent lang ang nagpapatakbo ng heartbeats.
 
@@ -166,7 +159,7 @@ Limitahan ang heartbeats sa oras ng negosyo sa isang partikular na timezone:
 }
 ```
 
-Sa labas ng window na ito (bago mag-9am o pagkatapos ng 10pm Eastern), nilalaktawan ang heartbeats. Ang susunod na naka-iskedyul na tick sa loob ng window ay tatakbo nang normal.
+Outside this window (before 9am or after 10pm Eastern), heartbeats are skipped. The next scheduled tick inside the window will run normally.
 
 ### Halimbawa ng multi account
 
@@ -210,11 +203,11 @@ Gamitin ang `accountId` para i-target ang isang partikular na account sa mga mul
   - `last` (default): ihatid sa huling ginamit na external channel.
   - explicit na channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
   - `none`: patakbuhin ang heartbeat ngunit **huwag maghatid** nang external.
-- `to`: opsyonal na recipient override (channel-specific id, hal. E.164 para sa WhatsApp o isang Telegram chat id).
-- `accountId`: opsyonal na account id para sa mga multi-account channel. Kapag `target: "last"`, ang account id ay nalalapat sa naresolbang huling channel kung sinusuportahan nito ang accounts; kung hindi, ito ay binabalewala. Kung ang account id ay hindi tumutugma sa isang naka-configure na account para sa naresolbang channel, nilalaktawan ang paghahatid.
+- `to`: optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id).
+- 23. `accountId`: opsyonal na account id para sa mga multi-account channel. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
 - `prompt`: nag-o-override sa default na prompt body (hindi mina-merge).
 - `ackMaxChars`: max na mga char na pinapayagan pagkatapos ng `HEARTBEAT_OK` bago ang paghahatid.
-- `activeHours`: nililimitahan ang mga heartbeat run sa isang time window. Object na may `start` (HH:MM, inclusive), `end` (HH:MM exclusive; pinapayagan ang `24:00` para sa end-of-day), at opsyonal na `timezone`.
+- `activeHours`: restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
   - Omitted o `"user"`: ginagamit ang iyong `agents.defaults.userTimezone` kung naka-set, kung hindi ay babalik sa timezone ng host system.
   - `"local"`: palaging ginagamit ang timezone ng host system.
   - Anumang IANA identifier (hal. `America/New_York`): direktang ginagamit; kung invalid, babalik sa gawi ng `"user"` sa itaas.
@@ -222,12 +215,12 @@ Gamitin ang `accountId` para i-target ang isang partikular na account sa mga mul
 
 ## Gawi ng paghahatid
 
-- Ang heartbeats ay tumatakbo sa pangunahing session ng agent bilang default (`agent:<id>:<mainKey>`),
-  o `global` kapag `session.scope = "global"`. Itakda ang `session` para mag-override sa isang
-  partikular na channel session (Discord/WhatsApp/etc.).
+- Heartbeats run in the agent’s main session by default (`agent:<id>:<mainKey>`),
+  or `global` when `session.scope = "global"`. Set `session` to override to a
+  specific channel session (Discord/WhatsApp/etc.).
 - Ang `session` ay nakakaapekto lamang sa run context; ang paghahatid ay kinokontrol ng `target` at `to`.
-- Para maghatid sa isang partikular na channel/recipient, itakda ang `target` + `to`. Kapag may
-  `target: "last"`, ginagamit ng paghahatid ang huling external channel para sa session na iyon.
+- To deliver to a specific channel/recipient, set `target` + `to`. 31. Kapag may
+  `target: "last"`, ginagamit ng delivery ang huling external channel para sa session na iyon.
 - Kung abala ang pangunahing queue, nilalaktawan ang heartbeat at muling susubukan sa ibang pagkakataon.
 - Kung ang `target` ay nagre-resolve sa walang external na destinasyon, magaganap pa rin ang run ngunit walang
   outbound na mensaheng ipapadala.
@@ -236,8 +229,8 @@ Gamitin ang `accountId` para i-target ang isang partikular na account sa mga mul
 
 ## Mga kontrol sa visibility
 
-Bilang default, ang mga `HEARTBEAT_OK` acknowledgment ay sinasapawan habang ang alert content ay
-naipapadala. Maaari mo itong ayusin per channel o per account:
+32. Bilang default, ang mga pagkilala ng `HEARTBEAT_OK` ay pinipigilan habang ang alert content ay
+    inihahatid. 33. Maaari mo itong isaayos per channel o per account:
 
 ```yaml
 channels:
@@ -289,22 +282,22 @@ channels:
 
 ### Mga karaniwang pattern
 
-| Layunin                                             | Config                                                                                   |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Default na gawi (tahimik na OK, naka-on ang alerts) | _(walang kailangang config)_                                                             |
+| Layunin                                                                | Config                                                                                   |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Default na gawi (tahimik na OK, naka-on ang alerts) | _(walang kailangang config)_                                          |
 | Ganap na tahimik (walang mensahe, walang indicator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Indicator-only (walang mensahe)                     | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OK sa isang channel lang                            | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OK sa isang channel lang                                               | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (opsyonal)
 
-Kung may umiiral na `HEARTBEAT.md` file sa workspace, sinasabi ng default prompt sa
-agent na basahin ito. Isipin ito bilang iyong “heartbeat checklist”: maliit, stable, at
-ligtas na isama tuwing 30 minuto.
+If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
+agent to read it. 1. Isipin ito bilang iyong “heartbeat checklist”: maliit, matatag, at
+ligtas na isama tuwing bawat 30 minuto.
 
-Kung umiiral ang `HEARTBEAT.md` ngunit epektibong walang laman (tanging mga blangkong linya at mga markdown
-header tulad ng `# Heading`), nilalaktawan ng OpenClaw ang heartbeat run para makatipid sa API calls.
-Kung wala ang file, tatakbo pa rin ang heartbeat at ang model ang magpapasya kung ano ang gagawin.
+2. Kung umiiral ang `HEARTBEAT.md` ngunit epektibong walang laman (mga blangkong linya lamang at mga markdown
+   header tulad ng `# Heading`), nilalaktawan ng OpenClaw ang heartbeat run upang makatipid ng API calls.
+   Kung nawawala ang file, tatakbo pa rin ang heartbeat at ang model ang magpapasya kung ano ang gagawin.
 
 Panatilihin itong maliit (maikling checklist o mga paalala) para maiwasan ang prompt bloat.
 
@@ -356,14 +349,14 @@ Kung gusto mo ng transparency, i-enable ang:
 
 - `agents.defaults.heartbeat.includeReasoning: true`
 
-Kapag naka-enable, ang heartbeats ay maghahatid din ng hiwalay na mensaheng may prefix na
-`Reasoning:` (parehong hugis ng `/reasoning on`). Maaari itong maging kapaki-pakinabang kapag ang agent
-ay namamahala ng maraming session/codex at gusto mong makita kung bakit ito nagpasya na i-ping ka —
-ngunit maaari rin itong maglabas ng mas maraming internal na detalye kaysa sa gusto mo. Mas mainam
-na panatilihing naka-off ito sa mga group chat.
+37. Kapag naka-enable, ang mga heartbeat ay maghahatid din ng hiwalay na mensaheng may prefix na
+    `Reasoning:` (kaparehong hugis ng `/reasoning on`). 3. Maaari itong maging kapaki-pakinabang kapag ang agent
+    ay namamahala ng maraming session/codex at gusto mong makita kung bakit nito napiling i-ping
+    ka — ngunit maaari rin itong maglabas ng mas maraming panloob na detalye kaysa sa gusto mo. 39. Mas mainam na panatilihin itong
+    off sa mga group chat.
 
 ## Kamalayan sa gastos
 
-Ang heartbeats ay nagpapatakbo ng buong agent turn. Mas maiikling interval ang mas mabilis
-na kumokonsumo ng tokens. Panatilihing maliit ang `HEARTBEAT.md` at isaalang-alang ang mas murang
-`model` o `target: "none"` kung internal state updates lang ang gusto mo.
+40. Ang mga heartbeat ay nagpapatakbo ng buong agent turns. 41. Mas maiikling interval ang kumokonsumo ng mas maraming token. 4. Panatilihing maliit ang
+    `HEARTBEAT.md` at isaalang-alang ang mas murang `model` o `target: "none"` kung
+    panloob na state updates lamang ang gusto mo.

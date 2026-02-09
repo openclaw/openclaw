@@ -3,13 +3,6 @@ summary: "Statut du support Matrix, capacites et configuration"
 read_when:
   - Travail sur les fonctionnalites du canal Matrix
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 923ff717cf14d01c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:53Z
 ---
 
 # Matrix (plugin)
@@ -48,10 +41,13 @@ Details : [Plugins](/plugin)
 1. Installez le plugin Matrix :
    - Depuis npm : `openclaw plugins install @openclaw/matrix`
    - Depuis une verification locale : `openclaw plugins install ./extensions/matrix`
+
 2. Creez un compte Matrix sur un homeserver :
    - Parcourez les options d’hebergement sur [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Ou hebergez-le vous-meme.
+
 3. Obtenez un jeton d’acces pour le compte du bot :
+
    - Utilisez l’API de connexion Matrix avec `curl` sur votre homeserver :
 
    ```bash
@@ -79,7 +75,9 @@ Details : [Plugins](/plugin)
    - Si les deux sont definis, la configuration est prioritaire.
    - Avec un jeton d’acces : l’ID utilisateur est recupere automatiquement via `/whoami`.
    - Lorsqu’il est defini, `channels.matrix.userId` doit etre l’ID Matrix complet (exemple : `@bot:example.org`).
+
 5. Redemarrez la Gateway (passerelle) (ou terminez la prise en main).
+
 6. Lancez un Message prive avec le bot ou invitez-le dans un salon depuis n’importe quel client Matrix
    (Element, Beeper, etc. ; voir https://matrix.org/ecosystem/clients/). Beeper necessite l’E2EE ;
    definissez donc `channels.matrix.encryption: true` et verifiez l’appareil.
@@ -122,7 +120,7 @@ Le chiffrement de bout en bout est **pris en charge** via le SDK crypto Rust.
 Activez-le avec `channels.matrix.encryption: true` :
 
 - Si le module crypto se charge, les salons chiffres sont dechiffres automatiquement.
-- Les media sortants sont chiffres lors de l’envoi vers des salons chiffres.
+- Les médias sortants sont chiffrés lors de l'envoi vers des salles chiffrées.
 - Lors de la premiere connexion, OpenClaw demande la verification de l’appareil depuis vos autres sessions.
 - Verifiez l’appareil dans un autre client Matrix (Element, etc.) pour activer le partage de cles.
 - Si le module crypto ne peut pas etre charge, l’E2EE est desactive et les salons chiffres ne seront pas dechiffres ;
@@ -148,7 +146,7 @@ Une fois verifie, le bot peut dechiffrer les messages dans les salons chiffres.
 - Les reponses retournent toujours vers Matrix.
 - Les Messages prives partagent la session principale de l’agent ; les salons correspondent a des sessions de groupe.
 
-## Controle d’acces (Messages prives)
+## Contrôle d'accès (DMs)
 
 - Par defaut : `channels.matrix.dm.policy = "pairing"`. Les expediteurs inconnus recoivent un code d’appairage.
 - Approbation via :
@@ -187,7 +185,7 @@ Une fois verifie, le bot peut dechiffrer les messages dans les salons chiffres.
 - Pour n’autoriser **aucun salon**, definissez `channels.matrix.groupPolicy: "disabled"` (ou conservez une liste d’autorisation vide).
 - Cle heritee : `channels.matrix.rooms` (meme structure que `groups`).
 
-## Fils
+## Fil de discussion
 
 - Les reponses en fil sont prises en charge.
 - `channels.matrix.threadReplies` controle si les reponses restent dans les fils :
@@ -197,17 +195,40 @@ Une fois verifie, le bot peut dechiffrer les messages dans les salons chiffres.
 
 ## Capacites
 
-| Fonctionnalite    | Statut                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- |
-| Messages prives   | ✅ Pris en charge                                                                                             |
-| Salons            | ✅ Pris en charge                                                                                             |
-| Fils              | ✅ Pris en charge                                                                                             |
-| Media             | ✅ Pris en charge                                                                                             |
+| Fonctionnalite    | Statut                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Messages directs  | ✅ Pris en charge                                                                                                                |
+| Salons            | ✅ Pris en charge                                                                                                                |
+| Fil de discussion | ✅ Pris en charge                                                                                                                |
+| Media             | ✅ Pris en charge                                                                                                                |
 | E2EE              | ✅ Pris en charge (module crypto requis)                                                                      |
 | Reactions         | ✅ Pris en charge (envoi/lecture via des outils)                                                              |
 | Sondages          | ✅ Envoi pris en charge ; les demarrages de sondage entrants sont convertis en texte (reponses/fins ignorees) |
 | Localisation      | ✅ Pris en charge (URI geo ; altitude ignoree)                                                                |
-| Commandes natives | ✅ Pris en charge                                                                                             |
+| Commandes natives | ✅ Pris en charge                                                                                                                |
+
+## Problemes courants
+
+Exécutez d'abord cette échelle :
+
+```bash
+openclaw models auth paste-token --provider anthropic
+openclaw models status
+```
+
+Ensuite, confirmez l'état d'appairage du DM si nécessaire:
+
+```bash
+openclaw pairing list matrix
+```
+
+Échecs communs :
+
+- Connecté mais les messages de la salle ont été ignorés: espace bloqué par `groupPolicy` ou la liste d'autorisations de salle.
+- DMs ignorés: expéditeur en attente d'approbation lorsque `channels.matrix.dm.policy="appairage"`.
+- Les salles chiffrées échouent : le support du cryptage ou les paramètres de chiffrement ne correspondent pas.
+
+channels/matrix.md
 
 ## Reference de configuration (Matrix)
 

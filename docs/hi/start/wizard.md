@@ -5,29 +5,22 @@ read_when:
   - नई मशीन सेट अप करते समय
 title: "ऑनबोर्डिंग विज़ार्ड (CLI)"
 sidebarTitle: "ऑनबोर्डिंग: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:46Z
 ---
 
 # ऑनबोर्डिंग विज़ार्ड (CLI)
 
-ऑनबोर्डिंग विज़ार्ड macOS,
-Linux, या Windows (WSL2 के माध्यम से; दृढ़ता से अनुशंसित) पर OpenClaw सेट अप करने का **अनुशंसित** तरीका है।
-यह एक ही निर्देशित प्रवाह में स्थानीय Gateway या दूरस्थ Gateway कनेक्शन, साथ ही चैनल, Skills,
-और वर्कस्पेस डिफ़ॉल्ट्स को विन्यस्त करता है।
+The onboarding wizard is the **recommended** way to set up OpenClaw on macOS,
+Linux, or Windows (via WSL2; strongly recommended).
+It configures a local Gateway or a remote Gateway connection, plus channels, skills,
+and workspace defaults in one guided flow.
 
 ```bash
 openclaw onboard
 ```
 
 <Info>
-सबसे तेज़ पहला चैट: Control UI खोलें (चैनल सेटअप की आवश्यकता नहीं)। चलाएँ
-`openclaw dashboard` और ब्राउज़र में चैट करें। दस्तावेज़: [Dashboard](/web/dashboard).
+Fastest first chat: open the Control UI (no channel setup needed). चलाएँ
+`openclaw dashboard` और ब्राउज़र में चैट करें। Docs: [Dashboard](/web/dashboard).
 </Info>
 
 बाद में पुनः विन्यास करने के लिए:
@@ -38,13 +31,13 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` का अर्थ नॉन‑इंटरैक्टिव मोड नहीं है। स्क्रिप्ट्स के लिए, `--non-interactive` का उपयोग करें।
+`--json` का अर्थ नॉन-इंटरैक्टिव मोड नहीं होता। स्क्रिप्ट्स के लिए, `--non-interactive` का उपयोग करें।
 </Note>
 
 <Tip>
-अनुशंसित: Brave Search API कुंजी सेट अप करें ताकि एजेंट `web_search` का उपयोग कर सके
-(`web_fetch` बिना कुंजी के काम करता है)। सबसे आसान मार्ग: `openclaw configure --section web`
-जो `tools.web.search.apiKey` को सहेजता है। दस्तावेज़: [Web tools](/tools/web).
+Recommended: set up a Brave Search API key so the agent can use `web_search`
+(`web_fetch` works without a key). सबसे आसान तरीका: `openclaw configure --section web`
+जो `tools.web.search.apiKey` को सहेजता है। Docs: [Web tools](/tools/web).
 </Tip>
 
 ## त्वरित प्रारंभ बनाम उन्नत
@@ -69,8 +62,8 @@ openclaw agents add <name>
 
 **Local mode (default)** आपको इन चरणों से होकर ले जाता है:
 
-1. **Model/Auth** — Anthropic API कुंजी (अनुशंसित), OAuth, OpenAI, या अन्य प्रदाता। एक डिफ़ॉल्ट मॉडल चुनें।
-2. **Workspace** — एजेंट फ़ाइलों के लिए स्थान (डिफ़ॉल्ट `~/.openclaw/workspace`)। बूटस्ट्रैप फ़ाइलें सीड करता है।
+1. **Model/Auth** — Anthropic API key (recommended), OAuth, OpenAI, or other providers. Pick a default model.
+2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** — पोर्ट, बाइंड पता, प्रमाणीकरण मोड, Tailscale एक्सपोज़र।
 4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, या iMessage।
 5. **Daemon** — LaunchAgent (macOS) या systemd user unit (Linux/WSL2) स्थापित करता है।
@@ -78,17 +71,17 @@ openclaw agents add <name>
 7. **Skills** — अनुशंसित Skills और वैकल्पिक निर्भरताएँ स्थापित करता है।
 
 <Note>
-विज़ार्ड को पुनः चलाने से **कुछ भी** नहीं मिटता जब तक आप स्पष्ट रूप से **Reset** नहीं चुनते (या `--reset` पास नहीं करते)।
-यदि विन्यास अमान्य है या उसमें legacy कुंजियाँ हैं, तो विज़ार्ड पहले `openclaw doctor` चलाने के लिए कहता है।
+Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).
+If the config is invalid or contains legacy keys, the wizard asks you to run `openclaw doctor` first.
 </Note>
 
-**Remote mode** केवल स्थानीय क्लाइंट को कहीं और स्थित Gateway से कनेक्ट करने के लिए विन्यस्त करता है।
-यह दूरस्थ होस्ट पर कुछ भी स्थापित या परिवर्तित **नहीं** करता।
+**Remote mode** only configures the local client to connect to a Gateway elsewhere.
+It does **not** install or change anything on the remote host.
 
 ## एक और एजेंट जोड़ें
 
-`openclaw agents add <name>` का उपयोग करके अपना स्वयं का वर्कस्पेस,
-सत्र, और प्रमाणीकरण प्रोफ़ाइल के साथ एक अलग एजेंट बनाएँ। `--workspace` के बिना चलाने पर विज़ार्ड लॉन्च होता है।
+Use `openclaw agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 यह क्या सेट करता है:
 

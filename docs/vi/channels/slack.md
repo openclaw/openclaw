@@ -2,13 +2,6 @@
 summary: "Thiết lập Slack cho chế độ socket hoặc HTTP webhook"
 read_when: "Thiết lập Slack hoặc gỡ lỗi chế độ socket/HTTP của Slack"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:42Z
 ---
 
 # Slack
@@ -38,9 +31,9 @@ Cấu hình tối thiểu:
 ### Thiết lập
 
 1. Tạo một Slack app (From scratch) tại [https://api.slack.com/apps](https://api.slack.com/apps).
-2. **Socket Mode** → bật. Sau đó vào **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** với scope `connections:write`. Sao chép **App Token** (`xapp-...`).
-3. **OAuth & Permissions** → thêm bot token scopes (dùng manifest bên dưới). Nhấn **Install to Workspace**. Sao chép **Bot User OAuth Token** (`xoxb-...`).
-4. Tùy chọn: **OAuth & Permissions** → thêm **User Token Scopes** (xem danh sách chỉ đọc bên dưới). Cài đặt lại app và sao chép **User OAuth Token** (`xoxp-...`).
+2. **Socket Mode** → bật. Then go to **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** with scope `connections:write`. Sao chép **App Token** (`xapp-...`).
+3. 2. **OAuth & Permissions** → thêm các bot token scopes (sử dụng manifest bên dưới). 3. Nhấp **Install to Workspace**. 4. Sao chép **Bot User OAuth Token** (`xoxb-...`).
+4. 5. Tùy chọn: **OAuth & Permissions** → thêm **User Token Scopes** (xem danh sách chỉ đọc bên dưới). 6. Cài đặt lại ứng dụng và sao chép **User OAuth Token** (`xoxp-...`).
 5. **Event Subscriptions** → bật events và đăng ký:
    - `message.*` (bao gồm chỉnh sửa/xóa/phát sóng thread)
    - `app_mention`
@@ -49,12 +42,12 @@ Cấu hình tối thiểu:
    - `channel_rename`
    - `pin_added`, `pin_removed`
 6. Mời bot vào các kênh bạn muốn nó đọc.
-7. Slash Commands → tạo `/openclaw` nếu bạn dùng `channels.slack.slashCommand`. Nếu bật lệnh gốc, hãy thêm một slash command cho mỗi lệnh dựng sẵn (cùng tên với `/help`). Mặc định gốc là tắt cho Slack trừ khi bạn đặt `channels.slack.commands.native: true` (giá trị toàn cục `commands.native` là `"auto"` khiến Slack bị tắt).
+7. Slash Commands → tạo `/openclaw` nếu bạn dùng `channels.slack.slashCommand`. 8. Nếu bạn bật native commands, hãy thêm một slash command cho mỗi lệnh tích hợp sẵn (cùng tên như trong `/help`). Mặc định native bị tắt cho Slack trừ khi bạn đặt `channels.slack.commands.native: true` (thiết lập toàn cục `commands.native` là `"auto"` nên để Slack ở trạng thái tắt).
 8. App Home → bật **Messages Tab** để người dùng có thể DM bot.
 
 Dùng manifest bên dưới để scopes và events luôn đồng bộ.
 
-Hỗ trợ nhiều tài khoản: dùng `channels.slack.accounts` với token theo từng tài khoản và `name` (tùy chọn). Xem [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) để biết mẫu dùng chung.
+Hỗ trợ nhiều tài khoản: dùng `channels.slack.accounts` với token theo từng tài khoản và `name` tùy chọn. 10. Xem [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) để biết mẫu dùng chung.
 
 ### Cấu hình OpenClaw (Chế độ Socket)
 
@@ -79,14 +72,12 @@ Hoặc qua cấu hình:
 
 ### User token (tùy chọn)
 
-OpenClaw có thể dùng Slack user token (`xoxp-...`) cho các thao tác đọc (lịch sử,
-ghim, phản ứng, emoji, thông tin thành viên). Mặc định token này chỉ đọc: thao tác đọc
-ưu tiên user token khi có, và thao tác ghi vẫn dùng bot token trừ khi
-bạn chủ động bật. Ngay cả với `userTokenReadOnly: false`, bot token vẫn được
-ưu tiên cho thao tác ghi khi có sẵn.
+OpenClaw can use a Slack user token (`xoxp-...`) for read operations (history,
+pins, reactions, emoji, member info). By default this stays read-only: reads
+prefer the user token when present, and writes still use the bot token unless
+you explicitly opt in. 13. Ngay cả khi `userTokenReadOnly: false`, bot token vẫn được ưu tiên cho các thao tác ghi khi nó khả dụng.
 
-User token được cấu hình trong file cấu hình (không hỗ trợ biến môi trường). Với
-nhiều tài khoản, đặt `channels.slack.accounts.<id>.userToken`.
+User tokens are configured in the config file (no env var support). 15. Đối với multi-account, đặt `channels.slack.accounts.<id>`.userToken\`.
 
 Ví dụ với bot + app + user tokens:
 
@@ -123,19 +114,19 @@ Ví dụ với userTokenReadOnly được đặt rõ (cho phép user token ghi):
 
 - Thao tác đọc (lịch sử, danh sách phản ứng, danh sách ghim, danh sách emoji, thông tin thành viên,
   tìm kiếm) ưu tiên user token khi được cấu hình, nếu không thì dùng bot token.
-- Thao tác ghi (gửi/sửa/xóa tin nhắn, thêm/xóa phản ứng, ghim/bỏ ghim,
-  tải lên tệp) mặc định dùng bot token. Nếu `userTokenReadOnly: false` và
-  không có bot token, OpenClaw sẽ dùng user token.
+- Các thao tác ghi (gửi/sửa/xóa tin nhắn, thêm/xóa reaction, ghim/bỏ ghim,
+  tải tệp lên) mặc định sử dụng bot token. If `userTokenReadOnly: false` and
+  no bot token is available, OpenClaw falls back to the user token.
 
 ### Ngữ cảnh lịch sử
 
 - `channels.slack.historyLimit` (hoặc `channels.slack.accounts.*.historyLimit`) điều khiển số lượng tin nhắn gần đây của kênh/nhóm được gói vào prompt.
-- Dự phòng về `messages.groupChat.historyLimit`. Đặt `0` để tắt (mặc định 50).
+- Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Chế độ HTTP (Events API)
 
-Dùng chế độ webhook HTTP khi Gateway của bạn có thể được Slack truy cập qua HTTPS (phổ biến cho triển khai máy chủ).
-Chế độ HTTP dùng Events API + Interactivity + Slash Commands với một URL yêu cầu dùng chung.
+Use HTTP webhook mode when your Gateway is reachable by Slack over HTTPS (typical for server deployments).
+HTTP mode uses the Events API + Interactivity + Slash Commands with a shared request URL.
 
 ### Thiết lập (Chế độ HTTP)
 
@@ -165,13 +156,12 @@ Ví dụ Request URL:
 }
 ```
 
-Chế độ HTTP nhiều tài khoản: đặt `channels.slack.accounts.<id>.mode = "http"` và cung cấp
-`webhookPath` duy nhất cho mỗi tài khoản để mỗi Slack app trỏ tới URL riêng.
+23. Chế độ HTTP multi-account: đặt `channels.slack.accounts.<id>`.mode = "http"`and provide a unique`webhookPath\` per account so each Slack app can point to its own URL.
 
 ### Manifest (tùy chọn)
 
-Dùng manifest Slack app này để tạo app nhanh (điều chỉnh tên/lệnh nếu muốn). Bao gồm
-user scopes nếu bạn dự định cấu hình user token.
+25. Sử dụng Slack app manifest này để tạo ứng dụng nhanh chóng (điều chỉnh tên/lệnh nếu bạn muốn). Include the
+    user scopes if you plan to configure a user token.
 
 ```json
 {
@@ -261,13 +251,13 @@ user scopes nếu bạn dự định cấu hình user token.
 }
 ```
 
-Nếu bật lệnh gốc, hãy thêm một mục `slash_commands` cho mỗi lệnh bạn muốn công khai (khớp với danh sách `/help`). Ghi đè bằng `channels.slack.commands.native`.
+Nếu bạn bật native commands, hãy thêm một mục `slash_commands` cho mỗi lệnh bạn muốn công bố (khớp với danh sách `/help`). Ghi đè bằng `channels.slack.commands.native`.
 
 ## Scopes (hiện tại vs tùy chọn)
 
-Conversations API của Slack phân theo loại: bạn chỉ cần các scope cho
-những loại hội thoại bạn thực sự dùng (channels, groups, im, mpim). Xem
-[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) để có tổng quan.
+Slack's Conversations API is type-scoped: you only need the scopes for the
+conversation types you actually touch (channels, groups, im, mpim). See
+[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) for the overview.
 
 ### Bot token scopes (bắt buộc)
 
@@ -316,7 +306,7 @@ Thêm các scope này dưới **User Token Scopes** nếu bạn cấu hình `cha
 
 ## Cấu hình
 
-Slack chỉ dùng Chế độ Socket (không có máy chủ webhook HTTP). Cung cấp cả hai token:
+31. Slack chỉ sử dụng Socket Mode (không có HTTP webhook server). 32. Cung cấp cả hai token:
 
 ```json
 {
@@ -370,9 +360,7 @@ Token cũng có thể cung cấp qua biến môi trường:
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
-Phản ứng ack được điều khiển toàn cục qua `messages.ackReaction` +
-`messages.ackReactionScope`. Dùng `messages.removeAckAfterReply` để xóa
-phản ứng ack sau khi bot trả lời.
+33. Ack reactions được điều khiển toàn cục qua `messages.ackReaction` + `messages.ackReactionScope`. 34. Sử dụng `messages.removeAckAfterReply` để xóa phản ứng ack sau khi bot trả lời.
 
 ## Giới hạn
 
@@ -382,13 +370,13 @@ phản ứng ack sau khi bot trả lời.
 
 ## Luồng trả lời (thread)
 
-Mặc định, OpenClaw trả lời ở kênh chính. Dùng `channels.slack.replyToMode` để điều khiển threading tự động:
+By default, OpenClaw replies in the main channel. 36. Sử dụng `channels.slack.replyToMode` để điều khiển việc tự động tạo thread:
 
-| Mode    | Behavior                                                                                                                                    |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Mặc định.** Trả lời ở kênh chính. Chỉ vào thread nếu tin nhắn kích hoạt đã ở trong thread.                                                |
-| `first` | Phản hồi đầu tiên vào thread (dưới tin nhắn kích hoạt), các phản hồi sau vào kênh chính. Hữu ích để giữ ngữ cảnh mà tránh quá nhiều thread. |
-| `all`   | Mọi phản hồi đều vào thread. Giữ cuộc trò chuyện gọn nhưng có thể giảm khả năng hiển thị.                                                   |
+| Mode    | Behavior                                                                                                                                                                                                                                           |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | 37. **Mặc định.** Trả lời trong kênh chính. 38. Chỉ tạo thread nếu tin nhắn kích hoạt đã nằm trong một thread.                                              |
+| `first` | 39. Phản hồi đầu tiên vào thread (bên dưới tin nhắn kích hoạt), các phản hồi tiếp theo vào kênh chính. Useful for keeping context visible while avoiding thread clutter. |
+| `all`   | All replies go to thread. Keeps conversations contained but may reduce visibility.                                                                                                                                 |
 
 Chế độ áp dụng cho cả trả lời tự động và lời gọi công cụ của tác tử (`slack sendMessage`).
 
@@ -478,7 +466,7 @@ Cho kênh vào thread, giữ DM ở gốc:
 - Kênh ánh xạ tới phiên `agent:<agentId>:slack:channel:<channelId>`.
 - Slash commands dùng phiên `agent:<agentId>:slack:slash:<userId>` (tiền tố cấu hình qua `channels.slack.slashCommand.sessionPrefix`).
 - Nếu Slack không cung cấp `channel_type`, OpenClaw suy ra từ tiền tố ID kênh (`D`, `C`, `G`) và mặc định về `channel` để giữ khóa phiên ổn định.
-- Đăng ký lệnh gốc dùng `commands.native` (mặc định toàn cục `"auto"` → Slack tắt) và có thể ghi đè theo workspace bằng `channels.slack.commands.native`. Lệnh văn bản yêu cầu thông điệp `/...` độc lập và có thể tắt bằng `commands.text: false`. Slash commands của Slack được quản lý trong Slack app và không tự động bị xóa. Dùng `commands.useAccessGroups: false` để bỏ qua kiểm tra nhóm truy cập cho lệnh.
+- Native command registration uses `commands.native` (global default `"auto"` → Slack off) and can be overridden per-workspace with `channels.slack.commands.native`. Text commands require standalone `/...` messages and can be disabled with `commands.text: false`. 47. Slack slash commands được quản lý trong Slack app và không bị tự động xóa. 48. Sử dụng `commands.useAccessGroups: false` để bỏ qua kiểm tra access-group cho các lệnh.
 - Danh sách lệnh đầy đủ + cấu hình: [Slash commands](/tools/slash-commands)
 
 ## Bảo mật DM (ghép cặp)
@@ -486,22 +474,22 @@ Cho kênh vào thread, giữ DM ở gốc:
 - Mặc định: `channels.slack.dm.policy="pairing"` — người gửi DM chưa biết sẽ nhận mã ghép cặp (hết hạn sau 1 giờ).
 - Phê duyệt qua: `openclaw pairing approve slack <code>`.
 - Cho phép mọi người: đặt `channels.slack.dm.policy="open"` và `channels.slack.dm.allowFrom=["*"]`.
-- `channels.slack.dm.allowFrom` chấp nhận user ID, @handle hoặc email (được phân giải khi khởi động nếu token cho phép). Trình hướng dẫn chấp nhận username và phân giải sang id trong quá trình thiết lập khi token cho phép.
+- 49. `channels.slack.dm.allowFrom` chấp nhận user ID, @handle hoặc email (được resolve khi khởi động nếu token cho phép). 50. Wizard chấp nhận username và resolve chúng thành id trong quá trình thiết lập khi token cho phép.
 
 ## Chính sách nhóm
 
 - `channels.slack.groupPolicy` điều khiển xử lý kênh (`open|disabled|allowlist`).
 - `allowlist` yêu cầu kênh phải được liệt kê trong `channels.slack.channels`.
-- Nếu bạn chỉ đặt `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` và không bao giờ tạo mục `channels.slack`,
-  runtime mặc định `groupPolicy` thành `open`. Thêm `channels.slack.groupPolicy`,
-  `channels.defaults.groupPolicy` hoặc danh sách cho phép kênh để khóa chặt.
+- If you only set `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` and never create a `channels.slack` section,
+  the runtime defaults `groupPolicy` to `open`. Add `channels.slack.groupPolicy`,
+  `channels.defaults.groupPolicy`, or a channel allowlist to lock it down.
 - Trình cấu hình chấp nhận tên `#channel` và phân giải sang ID khi có thể
   (công khai + riêng tư); nếu có nhiều kết quả trùng, nó ưu tiên kênh đang hoạt động.
 - Khi khởi động, OpenClaw phân giải tên kênh/người dùng trong allowlist sang ID (khi token cho phép)
   và ghi log ánh xạ; các mục không phân giải được sẽ giữ nguyên như đã nhập.
 - Để **không cho phép kênh nào**, đặt `channels.slack.groupPolicy: "disabled"` (hoặc giữ allowlist rỗng).
 
-Tùy chọn kênh (`channels.slack.channels.<id>` hoặc `channels.slack.channels.<name>`):
+Channel options (`channels.slack.channels.<id>` or `channels.slack.channels.<name>`):
 
 - `allow`: cho phép/từ chối kênh khi `groupPolicy="allowlist"`.
 - `requireMention`: kiểm soát nhắc tên cho kênh.
@@ -536,10 +524,10 @@ Hành động công cụ Slack có thể bị giới hạn bằng `channels.slac
 
 - Thao tác ghi mặc định dùng bot token để các hành động thay đổi trạng thái
   được giới hạn trong quyền và danh tính của bot.
-- Đặt `userTokenReadOnly: false` cho phép dùng user token cho
-  thao tác ghi khi không có bot token, nghĩa là hành động chạy với
-  quyền của người cài đặt. Hãy coi user token là đặc quyền cao và giữ chặt
-  các cổng hành động và allowlist.
+- Setting `userTokenReadOnly: false` allows the user token to be used for write
+  operations when a bot token is unavailable, which means actions run with the
+  installing user's access. Treat the user token as highly privileged and keep
+  action gates and allowlists tight.
 - Nếu bật ghi bằng user token, hãy đảm bảo user token có các scope ghi
   tương ứng (`chat:write`, `reactions:write`, `pins:write`,
   `files:write`) nếu không các thao tác đó sẽ thất bại.
@@ -575,7 +563,7 @@ Luồng xử lý triage: [/channels/troubleshooting](/channels/troubleshooting).
 - Kiểm soát nhắc tên được điều khiển qua `channels.slack.channels` (đặt `requireMention` thành `true`); `agents.list[].groupChat.mentionPatterns` (hoặc `messages.groupChat.mentionPatterns`) cũng được tính là nhắc tên.
 - Ghi đè đa tác tử: đặt mẫu theo từng tác tử trong `agents.list[].groupChat.mentionPatterns`.
 - Thông báo phản ứng tuân theo `channels.slack.reactionNotifications` (dùng `reactionAllowlist` với chế độ `allowlist`).
-- Tin nhắn do bot tạo bị bỏ qua theo mặc định; bật qua `channels.slack.allowBots` hoặc `channels.slack.channels.<id>.allowBots`.
-- Cảnh báo: Nếu cho phép trả lời bot khác (`channels.slack.allowBots=true` hoặc `channels.slack.channels.<id>.allowBots=true`), hãy ngăn vòng lặp bot-to-bot bằng allowlist `requireMention`, `channels.slack.channels.<id>.users`, và/hoặc các guardrail rõ ràng trong `AGENTS.md` và `SOUL.md`.
+- Bot-authored messages are ignored by default; enable via `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
+- Warning: If you allow replies to other bots (`channels.slack.allowBots=true` or `channels.slack.channels.<id>.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.slack.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 - Với công cụ Slack, ngữ nghĩa xóa phản ứng nằm tại [/tools/reactions](/tools/reactions).
 - Tệp đính kèm được tải xuống kho media khi được phép và dưới giới hạn kích thước.

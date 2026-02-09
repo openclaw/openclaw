@@ -4,13 +4,6 @@ read_when:
   - Você quer o loop de desenvolvimento local mais rápido (bun + watch)
   - Você encontrou problemas de instalação/patch/scripts de ciclo de vida do Bun
 title: "Bun (Experimental)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:05Z
 ---
 
 # Bun (experimental)

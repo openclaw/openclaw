@@ -1,16 +1,9 @@
 ---
-summary: „OpenClaw mit Ollama (lokale LLM-Laufzeit) ausführen“
+summary: "„OpenClaw mit Ollama (lokale LLM-Laufzeit) ausführen“"
 read_when:
   - Sie möchten OpenClaw mit lokalen Modellen über Ollama ausführen
   - Sie benötigen Anleitungen zur Einrichtung und Konfiguration von Ollama
-title: „Ollama“
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:14Z
+title: "Ollama"
 ---
 
 # Ollama

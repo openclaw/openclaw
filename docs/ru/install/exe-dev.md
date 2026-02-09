@@ -4,13 +4,6 @@ read_when:
   - Вам нужен недорогой постоянно работающий хост Linux для Gateway
   - Вам нужен удалённый доступ к Control UI без развёртывания собственного VPS
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:39Z
 ---
 
 # exe.dev
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## Ручная установка
 
-## 1) Создание VM
+## 1. Создание VM
 
 С вашего устройства:
 
@@ -59,14 +52,14 @@ ssh <vm-name>.exe.xyz
 
 Совет: держите эту VM **stateful**. OpenClaw хранит состояние в `~/.openclaw/` и `~/.openclaw/workspace/`.
 
-## 2) Установка предварительных требований (на VM)
+## 2. Установка предварительных требований (на VM)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) Установка OpenClaw
+## 3. Установка OpenClaw
 
 Запустите скрипт установки OpenClaw:
 
@@ -74,7 +67,7 @@ sudo apt-get install -y git curl jq ca-certificates openssl
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) Настройка nginx для проксирования OpenClaw на порт 8000
+## 4. Настройка nginx для проксирования OpenClaw на порт 8000
 
 Отредактируйте `/etc/nginx/sites-enabled/default`, добавив
 
@@ -108,7 +101,7 @@ server {
 }
 ```
 
-## 5) Доступ к OpenClaw и выдача прав
+## 5. Доступ к OpenClaw и выдача прав
 
 Откройте `https://<vm-name>.exe.xyz/` (см. вывод Control UI при онбординге). Если будет запрошена аутентификация, вставьте
 токен из `gateway.auth.token` на VM (получить с помощью `openclaw config get gateway.auth.token` или сгенерировать

@@ -5,13 +5,6 @@ read_when:
   - Pag-aayos ng mga remote connection mode (direct vs SSH)
   - Pagdidisenyo ng node discovery + pairing para sa mga remote node
 title: "Discovery at mga Transport"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:43Z
 ---
 
 # Discovery & transports
@@ -25,7 +18,7 @@ Ang layunin ng disenyo ay panatilihin ang lahat ng network discovery/advertising
 
 ## Mga termino
 
-- **Gateway**: isang solong pangmatagalang gateway process na nagmamay-ari ng state (mga session, pairing, node registry) at nagpapatakbo ng mga channel. Karamihan ng setup ay gumagamit ng isa kada host; posible ang mga isolated na multi-gateway setup.
+- **Gateway**: a single long-running gateway process that owns state (sessions, pairing, node registry) and runs channels. Most setups use one per host; isolated multi-gateway setups are possible.
 - **Gateway WS (control plane)**: ang WebSocket endpoint sa `127.0.0.1:18789` bilang default; maaaring i-bind sa LAN/tailnet sa pamamagitan ng `gateway.bind`.
 - **Direct WS transport**: isang LAN/tailnet-facing na Gateway WS endpoint (walang SSH).
 - **SSH transport (fallback)**: remote control sa pamamagitan ng pag-forward ng `127.0.0.1:18789` sa SSH.
@@ -49,9 +42,9 @@ Mga detalye ng protocol:
 
 ## Discovery inputs (paano nalalaman ng mga client kung nasaan ang Gateway)
 
-### 1) Bonjour / mDNS (LAN lamang)
+### 1. Bonjour / mDNS (LAN lamang)
 
-Best-effort ang Bonjour at hindi tumatawid ng mga network. Ginagamit lamang ito para sa kaginhawaan kapag “parehong LAN”.
+Bonjour is best-effort and does not cross networks. Ginagamit lamang ito para sa kaginhawaan ng “parehong LAN.”
 
 Target na direksyon:
 
@@ -83,15 +76,15 @@ I-disable/i-override:
 - Nagpa-publish ang `OPENCLAW_TAILNET_DNS` ng isang `tailnetDns` hint (MagicDNS).
 - Ina-override ng `OPENCLAW_CLI_PATH` ang ina-advertise na CLI path.
 
-### 2) Tailnet (cross-network)
+### 2. Tailnet (cross-network)
 
-Para sa mga setup na parang London/Vienna, hindi makakatulong ang Bonjour. Ang inirerekomendang “direct” na target ay:
+For London/Vienna style setups, Bonjour won’t help. The recommended “direct” target is:
 
 - Tailscale MagicDNS name (mas gusto) o isang stable na tailnet IP.
 
 Kung matukoy ng Gateway na ito ay tumatakbo sa ilalim ng Tailscale, ipo-publish nito ang `tailnetDns` bilang isang opsyonal na hint para sa mga client (kabilang ang mga wide-area beacon).
 
-### 3) Manual / SSH target
+### 3. Manual / SSH target
 
 Kapag walang direct route (o naka-disable ang direct), palaging maaaring kumonekta ang mga client sa pamamagitan ng SSH sa pamamagitan ng pag-forward ng loopback gateway port.
 

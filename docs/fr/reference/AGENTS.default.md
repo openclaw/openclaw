@@ -3,13 +3,6 @@ summary: "Instructions par defaut de l’agent OpenClaw et repertoire des Skills
 read_when:
   - Demarrage d’une nouvelle session d’agent OpenClaw
   - Activation ou audit des Skills par defaut
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 20ec2b8d8fc03c16
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:45Z
 ---
 
 # AGENTS.md — Assistant personnel OpenClaw (par defaut)
@@ -46,9 +39,9 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 }
 ```
 
-## Parametres de securite par defaut
+## Sécurité par défaut
 
-- Ne deversez pas de repertoires ni de secrets dans le chat.
+- Ne pas copier les répertoires ou les secrets dans le chat.
 - N’executez pas de commandes destructrices sauf demande explicite.
 - N’envoyez pas de reponses partielles/en streaming vers des surfaces de messagerie externes (uniquement des reponses finales).
 
@@ -57,7 +50,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - Lisez `SOUL.md`, `USER.md`, `memory.md`, ainsi qu’aujourd’hui+hier dans `memory/`.
 - Faites-le avant de repondre.
 
-## Ame (obligatoire)
+## Âme (obligatoire)
 
 - `SOUL.md` definit l’identite, le ton et les limites. Maintenez-le a jour.
 - Si vous modifiez `SOUL.md`, informez l’utilisateur.
@@ -117,7 +110,6 @@ git commit -m "Add Clawd workspace"
 - **OpenHue CLI** — Controle de l’eclairage Philips Hue pour scenes et automatisations.
 - **OpenAI Whisper** — Reconnaissance vocale locale pour la dictee rapide et les transcriptions de messagerie vocale.
 - **Gemini CLI** — Modeles Google Gemini depuis le terminal pour des questions-reponses rapides.
-- **bird** — CLI X/Twitter pour tweeter, repondre, lire des fils et rechercher sans navigateur.
 - **agent-tools** — Boite a outils utilitaire pour les automatisations et scripts d’assistance.
 
 ## Notes d’utilisation

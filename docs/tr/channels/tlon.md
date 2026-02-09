@@ -3,13 +3,6 @@ summary: "Tlon/Urbit destek durumu, yetenekler ve yapılandırma"
 read_when:
   - Tlon/Urbit kanal özellikleri üzerinde çalışırken
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:55Z
 ---
 
 # Tlon (eklenti)

@@ -4,19 +4,12 @@ read_when:
   - chat command များကို အသုံးပြုခြင်း သို့မဟုတ် ဖွဲ့စည်းပြင်ဆင်ခြင်း
   - command routing သို့မဟုတ် permission များကို debug လုပ်နေစဉ်
 title: "Slash Commands"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:40Z
 ---
 
 # Slash commands
 
-Command များကို Gateway မှ ကိုင်တွယ်ဆောင်ရွက်သည်။ Command အများစုကို `/` ဖြင့် စတင်သော **သီးသန့်** မက်ဆေ့ချ်အဖြစ် ပို့ရပါသည်။
-host-only bash chat command သည် `! <cmd>` ကို အသုံးပြုသည် (`/bash <cmd>` ကို alias အဖြစ်ပါ အသုံးပြုနိုင်သည်)။
+Commands များကို Gateway မှ ကိုင်တွယ်ဆောင်ရွက်ပါသည်။ Commands အများစုကို `/` ဖြင့် စတင်သော **standalone** message အဖြစ် ပို့ရပါမည်။
+Host-only bash chat command သည် `!` ကို အသုံးပြုပါသည်။ `<cmd>` (`/bash <cmd>` ကို alias အဖြစ် အသုံးပြုနိုင်ပါသည်)။
 
 ဆက်စပ်သော စနစ် ၂ ခု ရှိပါသည်–
 
@@ -25,11 +18,11 @@ host-only bash chat command သည် `! <cmd>` ကို အသုံးပြ�
   - Directive များကို မော်ဒယ်က မမြင်မီ မက်ဆေ့ချ်မှ ဖယ်ရှားပစ်ပါသည်။
   - ပုံမှန် chat မက်ဆေ့ချ်များတွင် (directive-only မဟုတ်ပါက) ၎င်းတို့ကို “inline hints” အဖြစ် သတ်မှတ်ပြီး session setting များကို **မသိမ်းဆည်းပါ**။
   - directive-only မက်ဆေ့ချ်များတွင် (မက်ဆေ့ချ်ထဲတွင် directive များသာ ပါဝင်ပါက) session ထဲသို့ သိမ်းဆည်းပြီး acknowledgement ဖြင့် ပြန်လည်တုံ့ပြန်ပါသည်။
-  - Directive များကို **authorized senders** များအတွက်သာ အသုံးချပါသည် (channel allowlists/pairing နှင့် `commands.useAccessGroups`)။
-    Authorized မဟုတ်သော ပို့သူများအတွက် directive များကို ပုံမှန် စာသားအဖြစ်သာ ကိုင်တွယ်ပါသည်။
+  - Directives များကို **ခွင့်ပြုထားသော senders** များအတွက်သာ အသုံးချပါသည် (channel allowlists/pairing နှင့် `commands.useAccessGroups`)။
+    ခွင့်မပြုထားသော senders များအတွက် directives များကို plain text အဖြစ်သာ ဆက်ဆံပါသည်။
 
-ထို့အပြင် **inline shortcuts** အချို့လည်း ရှိပါသည် (allowlisted/authorized senders များအတွက်သာ)– `/help`, `/commands`, `/status`, `/whoami` (`/id`)။
-၎င်းတို့ကို ချက်ချင်း လုပ်ဆောင်ပြီး မော်ဒယ် မမြင်မီ ဖယ်ရှားပစ်ကာ ကျန်ရှိသော စာသားကို ပုံမှန် flow အတိုင်း ဆက်လက် လုပ်ဆောင်ပါသည်။
+ထို့အပြင် **inline shortcuts** အချို့လည်း ရှိပါသည် (allowlisted/authorized senders များအတွက်သာ): `/help`, `/commands`, `/status`, `/whoami` (`/id`)။
+၎င်းတို့သည် ချက်ချင်း chạy လုပ်ပြီး model မမြင်မီ message ထဲမှ ဖယ်ရှားခံရကာ ကျန်ရှိသော စာသားသည် ပုံမှန် flow အတိုင်း ဆက်လက်လုပ်ဆောင်ပါသည်။
 
 ## Config
 
@@ -54,11 +47,11 @@ host-only bash chat command သည် `! <cmd>` ကို အသုံးပြ�
 - `commands.native` (default `"auto"`) သည် native command များကို register လုပ်ပါသည်။
   - Auto: Discord/Telegram အတွက် ဖွင့်ထားသည်; Slack အတွက် ပိတ်ထားသည် (slash command များ ထည့်သွင်းမချင်း); native support မရှိသော provider များအတွက် လျစ်လျူရှုပါသည်။
   - Provider တစ်ခုချင်းစီအလိုက် override လုပ်ရန် `channels.discord.commands.native`, `channels.telegram.commands.native`, သို့မဟုတ် `channels.slack.commands.native` ကို သတ်မှတ်နိုင်သည် (bool သို့မဟုတ် `"auto"`)။
-  - `false` သည် startup အချိန်တွင် Discord/Telegram တွင် ယခင် register လုပ်ထားသော command များကို ရှင်းလင်းပါသည်။ Slack command များကို Slack app အတွင်း စီမံခန့်ခွဲရပြီး အလိုအလျောက် မဖယ်ရှားပါ။
+  - `false` သည် startup အချိန်တွင် Discord/Telegram တွင် ယခင် register လုပ်ထားသော commands များကို ဖျက်ရှင်းပါသည်။ Slack commands များကို Slack app ထဲတွင် စီမံခန့်ခွဲရပြီး အလိုအလျောက် ဖယ်ရှားမည် မဟုတ်ပါ။
 - `commands.nativeSkills` (default `"auto"`) သည် ပံ့ပိုးနိုင်သည့်အခါ **skill** command များကို native အဖြစ် register လုပ်ပါသည်။
   - Auto: Discord/Telegram အတွက် ဖွင့်ထားသည်; Slack အတွက် ပိတ်ထားသည် (Slack တွင် skill တစ်ခုချင်းစီအတွက် slash command တစ်ခုစီ ဖန်တီးရန် လိုအပ်သည်)။
   - Provider တစ်ခုချင်းစီအလိုက် override လုပ်ရန် `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, သို့မဟုတ် `channels.slack.commands.nativeSkills` ကို သတ်မှတ်နိုင်သည် (bool သို့မဟုတ် `"auto"`)။
-- `commands.bash` (default `false`) သည် host shell command များကို chạy လုပ်နိုင်ရန် `! <cmd>` ကို ဖွင့်ပါသည် (`/bash <cmd>` သည် alias ဖြစ်ပြီး `tools.elevated` allowlists လိုအပ်သည်)။
+- `commands.bash` (default `false`) သည် `!` ကို ဖွင့်ပေးပါသည်။ `<cmd>` ကို host shell commands chạy လုပ်ရန် အသုံးပြုနိုင်ပါသည် (`/bash <cmd>` သည် alias ဖြစ်ပြီး `tools.elevated` allowlists လိုအပ်ပါသည်)။
 - `commands.bashForegroundMs` (default `2000`) သည် bash ကို background mode သို့ ပြောင်းမီ မည်မျှကြာ စောင့်ရမည်ကို ထိန်းချုပ်ပါသည် (`0` သည် ချက်ချင်း background သို့ ပြောင်းပါသည်)။
 - `commands.config` (default `false`) သည် `/config` ကို ဖွင့်ပါသည် (`openclaw.json` ကို ဖတ်/ရေး လုပ်ပါသည်)။
 - `commands.debug` (default `false`) သည် `/debug` ကို ဖွင့်ပါသည် (runtime-only override များ)။
@@ -97,12 +90,12 @@ Text + native (ဖွင့်ထားသောအခါ):
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (`/exec` ကို ပို့၍ လက်ရှိ အခြေအနေ ပြရန်)
 - `/model <name>` (alias: `/models`; သို့မဟုတ် `agents.defaults.models.*.alias` မှ `/<alias>`)
 - `/queue <mode>` (`debounce:2s cap:25 drop:summarize` ကဲ့သို့ option များ ပါဝင်သည်; လက်ရှိ setting များကို ကြည့်ရန် `/queue` ကို ပို့ပါ)
-- `/bash <command>` (host-only; `! <command>` ၏ alias; `commands.bash: true` + `tools.elevated` allowlists လိုအပ်သည်)
+- `/bash <command>` (host-only; `!` ၏ alias ဖြစ်သည်။ `<command>`; `commands.bash: true` + `tools.elevated` allowlists လိုအပ်ပါသည်)။
 
 Text-only:
 
 - `/compact [instructions]` ([/concepts/compaction](/concepts/compaction) ကို ကြည့်ပါ)
-- `! <command>` (host-only; တစ်ကြိမ်လျှင် တစ်ခုသာ; ကြာရှည်လုပ်ဆောင်ရသော အလုပ်များအတွက် `!poll` + `!stop` ကို အသုံးပြုပါ)
+- `!` `<command>` (host-only; တစ်ကြိမ်လျှင် တစ်ခုသာ; အချိန်ကြာရှည် chạy လုပ်သော jobs များအတွက် `!poll` + `!stop` ကို အသုံးပြုပါ)။
 - `!poll` (output / status ကို စစ်ဆေးရန်; optional `sessionId` ကို လက်ခံပါသည်; `/bash poll` လည်း အလုပ်လုပ်ပါသည်)
 - `!stop` (လုပ်ဆောင်နေသော bash job ကို ရပ်တန့်ရန်; optional `sessionId` ကို လက်ခံပါသည်; `/bash stop` လည်း အလုပ်လုပ်ပါသည်)
 
@@ -115,19 +108,19 @@ Notes:
 - `/usage` သည် response တစ်ခုချင်းစီအတွက် usage footer ကို ထိန်းချုပ်ပါသည်; `/usage cost` သည် OpenClaw session log များမှ local cost summary ကို ပုံနှိပ်ပါသည်။
 - `/restart` ကို default အနေဖြင့် ပိတ်ထားပါသည်; ဖွင့်ရန် `commands.restart: true` ကို သတ်မှတ်ပါ။
 - `/verbose` သည် debugging နှင့် မြင်သာမှု တိုးမြှင့်ရန် ရည်ရွယ်ထားပါသည်; ပုံမှန် အသုံးပြုမှုတွင် **ပိတ်ထားပါ**။
-- `/reasoning` (နှင့် `/verbose`) သည် group setting များတွင် အန္တရာယ်ရှိနိုင်ပါသည်– သင် မဖော်ထုတ်လိုသည့် internal reasoning သို့မဟုတ် tool output များကို ထုတ်ဖော်ပြသနိုင်ပါသည်။ အထူးသဖြင့် group chat များတွင် ပိတ်ထားခြင်းကို ဦးစားပေးပါ။
+- `/reasoning` (နှင့် `/verbose`) သည် group settings များတွင် အန္တရာယ်ရှိနိုင်ပါသည် — သင် မဖော်ပြလိုသော internal reasoning သို့မဟုတ် tool output များကို ဖော်ထုတ်နိုင်ပါသည်။ အထူးသဖြင့် group chats များတွင် ၎င်းတို့ကို ပိတ်ထားခြင်းကို ဦးစားပေးပါ။
 - **Fast path:** allowlisted sender များမှ command-only မက်ဆေ့ချ်များကို ချက်ချင်း ကိုင်တွယ်ပါသည် (queue + model ကို ကျော်လွှားပါသည်)။
 - **Group mention gating:** allowlisted sender များမှ command-only မက်ဆေ့ချ်များသည် mention လိုအပ်ချက်များကို ကျော်လွှားပါသည်။
 - **Inline shortcuts (allowlisted sender များအတွက်သာ):** command အချို့ကို ပုံမှန် မက်ဆေ့ချ်အတွင်း ထည့်သွင်းအသုံးပြုနိုင်ပြီး မော်ဒယ် မမြင်မီ ဖယ်ရှားပစ်ကာ ကျန်ရှိသော စာသားကို ဆက်လက် လုပ်ဆောင်ပါသည်။
   - ဥပမာ– `hey /status` သည် status reply ကို ဖြစ်ပေါ်စေပြီး ကျန်ရှိသော စာသားကို ပုံမှန် flow အတိုင်း ဆက်လက် လုပ်ဆောင်ပါသည်။
 - လက်ရှိ– `/help`, `/commands`, `/status`, `/whoami` (`/id`)။
 - Authorized မဟုတ်သော command-only မက်ဆေ့ချ်များကို တိတ်တဆိတ် လျစ်လျူရှုပါသည်၊ inline `/...` token များကို ပုံမှန် စာသားအဖြစ်သာ ကိုင်တွယ်ပါသည်။
-- **Skill commands:** `user-invocable` skill များကို slash command များအဖြစ် ထုတ်ဖော်ပြသပါသည်။ အမည်များကို `a-z0-9_` အဖြစ် sanitize လုပ်ပါသည် (အများဆုံး 32 chars)၊ ထပ်တူညီမှုများရှိပါက နံပါတ် suffix များ ထည့်ပါသည် (ဥပမာ– `_2`)။
+- **Skill commands:** `user-invocable` skills များကို slash commands အဖြစ် ဖော်ပြပေးပါသည်။ အမည်များကို `a-z0-9_` သို့ sanitize လုပ်ပါသည် (အများဆုံး 32 chars); အမည်ထပ်တူ ဖြစ်ပါက numeric suffixes (ဥပမာ `_2`) ကို ထည့်ပါသည်။
   - `/skill <name> [input]` သည် အမည်ဖြင့် skill ကို chạy လုပ်ပါသည် (native command limit များကြောင့် skill တစ်ခုချင်းစီအတွက် command မဖန်တီးနိုင်သည့်အခါ အသုံးဝင်သည်)။
   - Default အနေဖြင့် skill command များကို ပုံမှန် request အဖြစ် မော်ဒယ်သို့ forward လုပ်ပါသည်။
   - Skill များသည် `command-dispatch: tool` ကို optional အဖြစ် ကြေညာနိုင်ပြီး command ကို tool သို့ တိုက်ရိုက် route လုပ်နိုင်ပါသည် (deterministic, model မလို)။
   - ဥပမာ– `/prose` (OpenProse plugin) — [OpenProse](/prose) ကို ကြည့်ပါ။
-- **Native command argument များ:** Discord သည် dynamic option များအတွက် autocomplete ကို အသုံးပြုပါသည် (လိုအပ်သော arg များ မထည့်ထားပါက button menu များကို ပြပါသည်)။ Telegram နှင့် Slack သည် command တွင် choice များ ပါဝင်ပြီး arg မထည့်ထားပါက button menu ကို ပြပါသည်။
+- **Native command arguments:** Discord သည် dynamic options များအတွက် autocomplete ကို အသုံးပြုပါသည် (လိုအပ်သော args များကို မထည့်ထားပါက button menus ကို ပြပါသည်)။ Telegram နှင့် Slack တို့သည် command တစ်ခုတွင် choices များကို ထောက်ပံ့ထားပြီး arg ကို မထည့်ထားပါက button menu ကို ပြပါသည်။
 
 ## Usage surfaces (ဘယ်နေရာမှာ ဘာပေါ်လာသလဲ)
 
@@ -158,7 +151,7 @@ Notes:
 
 ## Debug overrides
 
-`/debug` သည် **runtime-only** config override များ (memory အတွင်းသာ၊ disk မဟုတ်) ကို သတ်မှတ်ခွင့်ပေးပါသည်။ Owner-only ဖြစ်ပြီး default အနေဖြင့် ပိတ်ထားပါသည်; ဖွင့်ရန် `commands.debug: true` ကို အသုံးပြုပါ။
+`/debug` သည် **runtime-only** config overrides များကို သတ်မှတ်နိုင်စေပါသည် (memory ထဲတွင်သာ၊ disk မဟုတ်ပါ)။ Owner-only ဖြစ်ပါသည်။ Default အနေဖြင့် ပိတ်ထားပြီး `commands.debug: true` ဖြင့် ဖွင့်နိုင်ပါသည်။
 
 Examples:
 
@@ -177,7 +170,7 @@ Notes:
 
 ## Config updates
 
-`/config` သည် disk ပေါ်ရှိ config (`openclaw.json`) သို့ ရေးသားပါသည်။ Owner-only ဖြစ်ပြီး default အနေဖြင့် ပိတ်ထားပါသည်; ဖွင့်ရန် `commands.config: true` ကို အသုံးပြုပါ။
+`/config` သည် သင့် on-disk config (`openclaw.json`) ထဲသို့ ရေးသားပါသည်။ Owner-only ဖြစ်ပါသည်။ Default အနေဖြင့် ပိတ်ထားပြီး `commands.config: true` ဖြင့် ဖွင့်နိုင်ပါသည်။
 
 Examples:
 
@@ -202,4 +195,4 @@ Notes:
   - Slack: `agent:<agentId>:slack:slash:<userId>` (`channels.slack.slashCommand.sessionPrefix` ဖြင့် prefix ကို ဖွဲ့စည်းပြင်ဆင်နိုင်သည်)
   - Telegram: `telegram:slash:<userId>` (`CommandTargetSessionKey` ဖြင့် chat session ကို target လုပ်ပါသည်)
 - **`/stop`** သည် လက်ရှိ chạy လုပ်နေသော run ကို abort လုပ်နိုင်ရန် active chat session ကို target လုပ်ပါသည်။
-- **Slack:** `channels.slack.slashCommand` ကို `/openclaw`-style command တစ်ခုအတွက် ဆက်လက် ပံ့ပိုးထားပါသည်။ `commands.native` ကို ဖွင့်ပါက built-in command တစ်ခုချင်းစီအတွက် Slack slash command တစ်ခုစီ ဖန်တီးရပါမည် (`/help` နှင့် အမည်တူ)။ Slack အတွက် command argument menu များကို ephemeral Block Kit button များအဖြစ် ပို့ပေးပါသည်။
+- **Slack:** `channels.slack.slashCommand` သည် `/openclaw` ပုံစံ command တစ်ခုအတွက် ဆက်လက် ထောက်ပံ့ထားပါသည်။ `commands.native` ကို ဖွင့်ပါက built-in command တစ်ခုချင်းစီအတွက် Slack slash command တစ်ခုစီကို ဖန်တီးရပါမည် (`/help` နှင့် အမည်တူ)။ Slack အတွက် command argument menus များကို ephemeral Block Kit buttons အဖြစ် ပို့ပေးပါသည်။

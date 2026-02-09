@@ -4,18 +4,11 @@ read_when:
   - Thêm hoặc chỉnh sửa hành vi exec nền
   - Gỡ lỗi các tác vụ exec chạy lâu
 title: "Công cụ Exec Nền và Tiến trình"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:56Z
 ---
 
 # Công cụ Exec Nền + Tiến trình
 
-OpenClaw chạy các lệnh shell thông qua công cụ `exec` và giữ các tác vụ chạy lâu trong bộ nhớ. Công cụ `process` quản lý các phiên chạy nền đó.
+Công cụ `process` quản lý các session nền đó. Công cụ `process` quản lý các phiên chạy nền đó.
 
 ## công cụ exec
 
@@ -26,7 +19,7 @@ Tham số chính:
 - `background` (bool): chạy nền ngay lập tức
 - `timeout` (giây, mặc định 1800): kết thúc tiến trình sau thời gian chờ này
 - `elevated` (bool): chạy trên host nếu chế độ nâng quyền được bật/cho phép
-- Cần TTY thực? Đặt `pty: true`.
+- Đặt `pty: true`. Khi spawn các child process chạy dài bên ngoài các công cụ exec/process (ví dụ: CLI respawn hoặc helper gateway), hãy gắn helper bridge cho child-process để các tín hiệu kết thúc được chuyển tiếp và các listener được gỡ khi thoát/lỗi.
 - `workdir`, `env`
 
 Hành vi:
@@ -38,7 +31,7 @@ Hành vi:
 
 ## Cầu nối tiến trình con
 
-Khi tạo các tiến trình con chạy lâu bên ngoài các công cụ exec/process (ví dụ: CLI tự khởi chạy lại hoặc các helper của gateway), hãy gắn helper cầu nối tiến trình con để các tín hiệu kết thúc được chuyển tiếp và các listener được tháo khi thoát/lỗi. Điều này tránh các tiến trình mồ côi trên systemd và giữ hành vi tắt máy nhất quán trên các nền tảng.
+Khi sinh các tiến trình con chạy lâu bên ngoài các công cụ exec/process (ví dụ: CLI tự khởi chạy lại hoặc helper của gateway), hãy gắn helper cầu nối tiến trình con để các tín hiệu kết thúc được chuyển tiếp và các listener được tháo gỡ khi thoát/lỗi. Điều này tránh các tiến trình mồ côi trên systemd và giữ hành vi tắt máy nhất quán trên các nền tảng.
 
 Ghi đè biến môi trường:
 

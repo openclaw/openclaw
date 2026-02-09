@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "sandbox कंटेनरों का प्रबंधन करें और प्रभावी sandbox नीति का निरीक्षण करें"
 read_when: "आप sandbox कंटेनरों का प्रबंधन कर रहे हैं या sandbox/टूल-नीति व्यवहार का डिबग कर रहे हैं।"
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:02Z
 ---
 
 # Sandbox CLI
@@ -18,7 +11,7 @@ x-i18n:
 
 ## अवलोकन
 
-OpenClaw सुरक्षा के लिए एजेंट्स को अलग-थलग Docker कंटेनरों में चला सकता है। `sandbox` कमांड्स आपको इन कंटेनरों का प्रबंधन करने में मदद करते हैं, विशेष रूप से अपडेट या विन्यास परिवर्तन के बाद।
+6. OpenClaw सुरक्षा के लिए एजेंट्स को आइसोलेटेड Docker कंटेनरों में चला सकता है। 7. `sandbox` कमांड्स इन कंटेनरों को प्रबंधित करने में मदद करते हैं, खासकर अपडेट या कॉन्फ़िगरेशन बदलावों के बाद।
 
 ## कमांड्स
 
@@ -121,10 +114,9 @@ openclaw sandbox recreate --agent alfred
 - कंटेनर 24 घंटे की निष्क्रियता के बाद ही हटाए जाते हैं
 - नियमित रूप से उपयोग होने वाले एजेंट्स पुराने कंटेनरों को अनिश्चितकाल तक चलाते रहते हैं
 
-**समाधान:** पुराने कंटेनरों को बलपूर्वक हटाने के लिए `openclaw sandbox recreate` का उपयोग करें। अगली बार आवश्यकता होने पर वे वर्तमान सेटिंग्स के साथ स्वचालित रूप से पुनः-निर्मित हो जाएंगे।
+8. **Solution:** पुराने कंटेनरों को ज़बरदस्ती हटाने के लिए `openclaw sandbox recreate` का उपयोग करें। They'll be recreated automatically with current settings when next needed.
 
-सुझाव: मैनुअल `docker rm` की तुलना में `openclaw sandbox recreate` को प्राथमिकता दें। यह
-Gateway के कंटेनर नामकरण का उपयोग करता है और स्कोप/सत्र कुंजियों के बदलने पर असंगतियों से बचाता है।
+10. टिप: मैनुअल `docker rm` की बजाय `openclaw sandbox recreate` को प्राथमिकता दें। 11. यह Gateway की कंटेनर नामकरण का उपयोग करता है और scope/session keys बदलने पर होने वाले मिसमैच से बचाता है।
 
 ## विन्यास
 

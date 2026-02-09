@@ -4,13 +4,6 @@ read_when:
   - Quiere agregar una nueva herramienta de agente en un plugin
   - Necesita hacer que una herramienta sea de adhesión voluntaria mediante listas de permitidos
 title: "Herramientas de agente del plugin"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:13Z
 ---
 
 # Herramientas de agente del plugin

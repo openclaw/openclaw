@@ -3,13 +3,6 @@ summary: "Endurecimento da allowlist do Telegram: prefixo + normalização de es
 read_when:
   - Ao revisar mudanças históricas na allowlist do Telegram
 title: "Endurecimento da Allowlist do Telegram"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:44Z
 ---
 
 # Endurecimento da Allowlist do Telegram

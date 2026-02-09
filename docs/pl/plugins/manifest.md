@@ -4,13 +4,6 @@ read_when:
   - Tworzysz wtyczkę OpenClaw
   - Musisz dostarczyć schemat konfiguracji wtyczki lub debugować błędy walidacji wtyczek
 title: "Manifest wtyczki"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
 ---
 
 # Manifest wtyczki (openclaw.plugin.json)

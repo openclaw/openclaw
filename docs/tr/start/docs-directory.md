@@ -3,13 +3,6 @@ summary: "En çok kullanılan OpenClaw belgelerine seçilmiş bağlantılar."
 read_when:
   - Önemli belge sayfalarına hızlı erişim istediğinizde
 title: "Belgeler dizini"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 <Note>

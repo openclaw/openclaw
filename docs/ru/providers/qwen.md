@@ -4,13 +4,6 @@ read_when:
   - Вы хотите использовать Qwen с OpenClaw
   - Вам нужен доступ к Qwen Coder по OAuth на бесплатном уровне
 title: "Qwen"
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:51Z
 ---
 
 # Qwen
@@ -57,4 +50,4 @@ openclaw models set qwen-portal/coder-model
 - Токены обновляются автоматически; повторно выполните команду входа, если обновление не удалось или доступ был отозван.
 - Базовый URL по умолчанию: `https://portal.qwen.ai/v1` (переопределите с помощью
   `models.providers.qwen-portal.baseUrl`, если Qwen предоставит другой endpoint).
-- См. [Model providers](/concepts/model-providers) для правил, общих для провайдеров.
+- [Model providers](/concepts/model-providers) для правил, общих для провайдеров.

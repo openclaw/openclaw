@@ -4,13 +4,6 @@ read_when:
   - आप चाहते हैं कि OpenClaw Nostr के माध्यम से DM प्राप्त करे
   - आप विकेंद्रीकृत मैसेजिंग सेट कर रहे हैं
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:59Z
 ---
 
 # Nostr
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Configuration reference
 
-| Key          | Type     | Default                                     | Description                           |
-| ------------ | -------- | ------------------------------------------- | ------------------------------------- |
-| `privateKey` | string   | required                                    | `nsec` या hex फ़ॉर्मैट में निजी कुंजी |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | रिले URLs (वेब-सॉकेट)                 |
-| `dmPolicy`   | string   | `pairing`                                   | DM प्रवेश नीति                        |
-| `allowFrom`  | string[] | `[]`                                        | अनुमत प्रेषक pubkeys                  |
-| `enabled`    | boolean  | `true`                                      | चैनल सक्षम/अक्षम                      |
-| `name`       | string   | -                                           | प्रदर्शित नाम                         |
-| `profile`    | object   | -                                           | NIP-01 प्रोफ़ाइल मेटाडेटा             |
+| Key          | Type                                                         | Default                                     | Description                              |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ---------------------------------------- |
+| `privateKey` | string                                                       | required                                    | `nsec` या hex फ़ॉर्मैट में निजी कुंजी    |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | रिले URLs (वेब-सॉकेट) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM प्रवेश नीति                           |
+| `allowFrom`  | string[] | `[]`                                        | अनुमत प्रेषक pubkeys                     |
+| `enabled`    | boolean                                                      | `true`                                      | चैनल सक्षम/अक्षम                         |
+| `name`       | string                                                       | -                                           | प्रदर्शित नाम                            |
+| `profile`    | object                                                       | -                                           | NIP-01 प्रोफ़ाइल मेटाडेटा                |
 
 ## Profile metadata
 
-प्रोफ़ाइल डेटा NIP-01 `kind:0` इवेंट के रूप में प्रकाशित किया जाता है। आप इसे Control UI (Channels -> Nostr -> Profile) से प्रबंधित कर सकते हैं या सीधे विन्यास में सेट कर सकते हैं।
+प्रोफ़ाइल डेटा NIP-01 `kind:0` इवेंट के रूप में प्रकाशित किया जाता है। आप इसे Control UI (Channels -> Nostr -> Profile) से प्रबंधित कर सकते हैं या सीधे कॉन्फ़िग में सेट कर सकते हैं।
 
 उदाहरण:
 
@@ -173,12 +166,12 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Protocol support
 
-| NIP    | Status    | Description                                  |
-| ------ | --------- | -------------------------------------------- |
-| NIP-01 | Supported | बुनियादी इवेंट फ़ॉर्मैट + प्रोफ़ाइल मेटाडेटा |
-| NIP-04 | Supported | एन्क्रिप्टेड DMs (`kind:4`)                  |
-| NIP-17 | Planned   | गिफ़्ट-रैप्ड DMs                             |
-| NIP-44 | Planned   | संस्करणयुक्त एन्क्रिप्शन                     |
+| NIP    | Status    | Description                                    |
+| ------ | --------- | ---------------------------------------------- |
+| NIP-01 | Supported | बुनियादी इवेंट फ़ॉर्मैट + प्रोफ़ाइल मेटाडेटा   |
+| NIP-04 | Supported | एन्क्रिप्टेड DMs (`kind:4`) |
+| NIP-17 | Planned   | गिफ़्ट-रैप्ड DMs                               |
+| NIP-44 | Planned   | संस्करणयुक्त एन्क्रिप्शन                       |
 
 ## Testing
 

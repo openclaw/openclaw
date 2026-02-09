@@ -4,13 +4,6 @@ read_when:
   - إعداد دعم iMessage
   - استكشاف أخطاء إرسال/استقبال iMessage
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:19Z
 ---
 
 # iMessage (قديم: imsg)
@@ -54,7 +47,7 @@ x-i18n:
 
 افتراضيًا، يُسمح لـ iMessage بكتابة تحديثات التهيئة المُحفَّزة بواسطة `/config set|unset` (يتطلب `commands.config: true`).
 
-عطّل ذلك عبر:
+للتعطيل:
 
 ```json5
 {
@@ -224,7 +217,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 
 ## التحكم في الوصول (الرسائل الخاصة + المجموعات)
 
-الرسائل الخاصة (DMs):
+DMs:
 
 - الافتراضي: `channels.imessage.dmPolicy = "pairing"`.
 - يتلقى المرسلون غير المعروفين رمز اقتران؛ تُتجاهل الرسائل حتى تتم الموافقة (تنتهي صلاحية الرموز بعد ساعة واحدة).

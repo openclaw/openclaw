@@ -4,19 +4,11 @@ read_when:
   - آپ متعدد LLMs کے لیے ایک واحد API کلید چاہتے ہیں
   - آپ کو Baidu Qianfan کے سیٹ اپ کی رہنمائی درکار ہے
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # Qianfan فراہم کنندہ رہنما
 
-Qianfan، Baidu کا MaaS پلیٹ فارم ہے، جو ایک **متحدہ API** فراہم کرتا ہے جو ایک ہی
-endpoint اور API کلید کے ذریعے متعدد ماڈلز تک درخواستوں کو روٹ کرتا ہے۔ یہ OpenAI-مطابقت رکھتا ہے، اس لیے زیادہ تر OpenAI SDKs بیس URL تبدیل کر کے کام کرتے ہیں۔
+Qianfan Baidu کا MaaS پلیٹ فارم ہے، جو ایک **unified API** فراہم کرتا ہے جو ایک ہی endpoint اور API key کے پیچھے متعدد ماڈلز تک ریکویسٹ روٹ کرتا ہے۔ یہ OpenAI-compatible ہے، اس لیے زیادہ تر OpenAI SDKs بیس URL تبدیل کر کے کام کر لیتے ہیں۔
 
 ## پیشگی تقاضے
 

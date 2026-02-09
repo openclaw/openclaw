@@ -4,13 +4,6 @@ read_when:
   - Вы хотите редактировать подтверждения выполнения команд из CLI
   - Вам нужно управлять списками разрешённых на хостах шлюза Gateway или хостах узлов
 title: "approvals"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:11Z
 ---
 
 # `openclaw approvals`

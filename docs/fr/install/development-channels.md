@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez basculer entre stable/beta/dev
   - Vous balisez ou publiez des préversions
 title: "Canaux de développement"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:56Z
 ---
 
 # Canaux de développement
@@ -28,7 +21,7 @@ sans changer le numéro de version — les dist-tags constituent la source de v�
 
 ## Changer de canal
 
-Extraction Git :
+Commander Git :
 
 ```bash
 openclaw update --channel stable
@@ -65,9 +58,9 @@ Lorsque vous changez de canal avec `openclaw update`, OpenClaw synchronise aussi
 - `dev` privilégie les plugins fournis avec l’extraction git.
 - `stable` et `beta` rétablissent les paquets de plugins installés via npm.
 
-## Bonnes pratiques de balisage
+## Étiquetage des meilleures pratiques
 
-- Balis ez les versions sur lesquelles vous souhaitez que les extractions git se positionnent (`vYYYY.M.D` ou `vYYYY.M.D-<patch>`).
+- Les marques que vous voulez que git checkouts atterrissent sur (`vYYYY.M.D` ou `vYYYY.M.D-<patch>`).
 - Conservez des tags immuables : ne déplacez ni ne réutilisez jamais un tag.
 - Les dist-tags npm restent la source de vérité pour les installations npm :
   - `latest` → stable

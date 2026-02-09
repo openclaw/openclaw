@@ -2,13 +2,6 @@
 summary: "Uwagi dotyczące protokołu RPC dla kreatora onboardingu i schematu konfiguracji"
 read_when: "Zmiana kroków kreatora onboardingu lub punktów końcowych schematu konfiguracji"
 title: "Onboarding i protokół konfiguracji"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:05Z
 ---
 
 # Onboarding + protokół konfiguracji

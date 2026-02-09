@@ -5,13 +5,6 @@ read_when:
   - اینڈرائیڈ gateway کی دریافت یا تصدیق کی ڈیبگنگ
   - کلائنٹس کے درمیان چیٹ ہسٹری کی برابری کی توثیق
 title: "اینڈرائیڈ ایپ"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # اینڈرائیڈ ایپ (نوڈ)
@@ -26,7 +19,7 @@ x-i18n:
 
 ## سسٹم کنٹرول
 
-سسٹم کنٹرول (launchd/systemd) گیٹ وے ہوسٹ پر ہوتا ہے۔ [Gateway](/gateway) دیکھیں۔
+12. سسٹم کنٹرول (launchd/systemd) گیٹ وے ہوسٹ پر موجود ہوتا ہے۔ See [Gateway](/gateway).
 
 ## کنکشن رن بُک
 
@@ -43,7 +36,7 @@ x-i18n:
   - دستی gateway ہوسٹ/پورٹ (فال بیک)
 - آپ gateway مشین پر CLI (`openclaw`) چلا سکتے ہوں (یا SSH کے ذریعے)۔
 
-### 1) Gateway شروع کریں
+### 1. Gateway شروع کریں
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ openclaw gateway --port 18789 --verbose
 - گیٹ وے ہوسٹ پر `~/.openclaw/openclaw.json` میں `gateway.bind: "tailnet"` سیٹ کریں۔
 - Gateway / macOS مینو بار ایپ دوبارہ شروع کریں۔
 
-### 2) دریافت کی توثیق (اختیاری)
+### 2. دریافت کی توثیق (اختیاری)
 
 گیٹ وے مشین سے:
 
@@ -70,14 +63,14 @@ dns-sd -B _openclaw-gw._tcp local.
 
 #### unicast DNS-SD کے ذریعے Tailnet (Vienna ⇄ London) دریافت
 
-اینڈرائیڈ NSD/mDNS دریافت نیٹ ورکس کے پار نہیں جاتی۔ اگر آپ کا اینڈرائیڈ نوڈ اور gateway مختلف نیٹ ورکس پر ہیں لیکن Tailscale کے ذریعے جڑے ہیں، تو Wide-Area Bonjour / unicast DNS-SD استعمال کریں:
+Android NSD/mDNS discovery won’t cross networks. 15. اگر آپ کا Android نوڈ اور گیٹ وے مختلف نیٹ ورکس پر ہیں لیکن Tailscale کے ذریعے جڑے ہوئے ہیں، تو Wide-Area Bonjour / unicast DNS-SD استعمال کریں:
 
 1. گیٹ وے ہوسٹ پر DNS-SD زون (مثال `openclaw.internal.`) سیٹ اپ کریں اور `_openclaw-gw._tcp` ریکارڈز شائع کریں۔
 2. منتخب ڈومین کے لیے Tailscale split DNS کنفیگر کریں جو اس DNS سرور کی طرف اشارہ کرے۔
 
 تفصیلات اور مثال CoreDNS کنفیگ: [Bonjour](/gateway/bonjour)۔
 
-### 3) اینڈرائیڈ سے کنیکٹ کریں
+### 3. اینڈرائیڈ سے کنیکٹ کریں
 
 اینڈرائیڈ ایپ میں:
 
@@ -91,7 +84,7 @@ dns-sd -B _openclaw-gw._tcp local.
 - دستی اینڈ پوائنٹ (اگر فعال ہو)، بصورتِ دیگر
 - آخری دریافت شدہ gateway (بہترین کوشش)۔
 
-### 4) pairing کی منظوری دیں (CLI)
+### 4. pairing کی منظوری دیں (CLI)
 
 گیٹ وے مشین پر:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 pairing کی تفصیلات: [Gateway pairing](/gateway/pairing)۔
 
-### 5) نوڈ کے کنیکٹ ہونے کی توثیق کریں
+### 5. نوڈ کے کنیکٹ ہونے کی توثیق کریں
 
 - نوڈز اسٹیٹس کے ذریعے:
 
@@ -116,7 +109,7 @@ pairing کی تفصیلات: [Gateway pairing](/gateway/pairing)۔
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) چیٹ + ہسٹری
+### 6. چیٹ + ہسٹری
 
 اینڈرائیڈ نوڈ کی چیٹ شیٹ gateway کی **primary session key** (`main`) استعمال کرتی ہے، اس لیے ہسٹری اور جوابات WebChat اور دیگر کلائنٹس کے ساتھ مشترک ہوتے ہیں:
 
@@ -124,7 +117,7 @@ pairing کی تفصیلات: [Gateway pairing](/gateway/pairing)۔
 - ارسال: `chat.send`
 - پُش اپ ڈیٹس (بہترین کوشش): `chat.subscribe` → `event:"chat"`
 
-### 7) کینوس + کیمرہ
+### 7. کینوس + کیمرہ
 
 #### Gateway Canvas Host (ویب مواد کے لیے سفارش کردہ)
 
@@ -142,12 +135,12 @@ openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params
 
 Tailnet (اختیاری): اگر دونوں ڈیوائسز Tailscale پر ہیں، تو `.local` کے بجائے MagicDNS نام یا tailnet IP استعمال کریں، مثلاً `http://<gateway-magicdns>:18793/__openclaw__/canvas/`۔
 
-یہ سرور HTML میں live-reload کلائنٹ انجیکٹ کرتا ہے اور فائل تبدیلیوں پر ری لوڈ کرتا ہے۔
-A2UI ہوسٹ `http://<gateway-host>:18793/__openclaw__/a2ui/` پر موجود ہے۔
+16. یہ سرور HTML میں ایک live-reload کلائنٹ شامل کرتا ہے اور فائلوں میں تبدیلی پر دوبارہ لوڈ کرتا ہے۔
+17. A2UI ہوسٹ یہاں موجود ہے: `http://<gateway-host>:18793/__openclaw__/a2ui/`.
 
 کینوس کمانڈز (صرف foreground):
 
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (ڈیفالٹ اسکیفولڈ پر واپس آنے کے لیے `{"url":""}` یا `{"url":"/"}` استعمال کریں)۔ `canvas.snapshot` `{ format, base64 }` واپس کرتا ہے (ڈیفالٹ `format="jpeg"`)۔
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). `canvas.snapshot` returns `{ format, base64 }` (default `format="jpeg"`).
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` لیگیسی عرف)
 
 کیمرہ کمانڈز (صرف foreground؛ اجازت پر مبنی):

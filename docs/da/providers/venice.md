@@ -4,20 +4,13 @@ read_when:
   - Du vil have privatlivsfokuseret inferens i OpenClaw
   - Du vil have vejledning til opsætning af Venice AI
 title: "Venice AI"
-x-i18n:
-  source_path: providers/venice.md
-  source_hash: 2453a6ec3a715c24
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:46Z
 ---
 
 # Venice AI (Venice-højdepunkt)
 
 **Venice** er vores fremhævede Venice-opsætning til privacy-first inferens med valgfri anonymiseret adgang til proprietære modeller.
 
-Venice AI leverer privatlivsfokuseret AI-inferens med understøttelse af ucensurerede modeller og adgang til store proprietære modeller via deres anonymiserede proxy. Al inferens er privat som standard — ingen træning på dine data, ingen logning.
+Venice AI giver privatlivets fred fokuseret AI inferens med støtte til ucensurerede modeller og adgang til store proprietære modeller gennem deres anonymiserede proxy. Al inferens er som standard privat – ingen træning i dine data, ingen logning.
 
 ## Hvorfor Venice i OpenClaw
 
@@ -30,10 +23,10 @@ Venice AI leverer privatlivsfokuseret AI-inferens med understøttelse af ucensur
 
 Venice tilbyder to privatlivsniveauer — det er afgørende at forstå dem for at vælge den rette model:
 
-| Tilstand         | Beskrivelse                                                                                                            | Modeller                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| **Privat**       | Fuldt privat. Prompter/svar **gemmes eller logges aldrig**. Midlertidigt.                                              | Llama, Qwen, DeepSeek, Venice Uncensored m.fl. |
-| **Anonymiseret** | Proxy via Venice med fjernede metadata. Den underliggende udbyder (OpenAI, Anthropic) ser anonymiserede forespørgsler. | Claude, GPT, Gemini, Grok, Kimi, MiniMax       |
+| Tilstand         | Beskrivelse                                                                                                                                                                     | Modeller                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| **Privat**       | Fuldt privat. Forslag/svar er **aldrig gemt eller logget**. Flygtig.                                                            | Llama, Qwen, DeepSeek, Venice Uncensored m.fl. |
+| **Anonymiseret** | Tilpasset gennem Venedig med metadata strippet. Den underliggende udbyder (OpenAI, Anthropic) ser anonymiserede anmodninger. | Claude, GPT, Gemini, Grok, Kimi, MiniMax                                       |
 
 ## Funktioner
 
@@ -48,13 +41,13 @@ Venice tilbyder to privatlivsniveauer — det er afgørende at forstå dem for a
 
 ## Opsætning
 
-### 1. Få API-nøgle
+### 1. Get API Key
 
 1. Tilmeld dig på [venice.ai](https://venice.ai)
 2. Gå til **Settings → API Keys → Create new key**
 3. Kopiér din API-nøgle (format: `vapi_xxxxxxxxxxxx`)
 
-### 2. Konfigurer OpenClaw
+### 2) Konfigurér OpenClaw
 
 **Mulighed A: Miljøvariabel**
 
@@ -83,7 +76,7 @@ openclaw onboard --non-interactive \
   --venice-api-key "vapi_xxxxxxxxxxxx"
 ```
 
-### 3. Verificér opsætning
+### 3. Verificér Opsætning
 
 ```bash
 openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
@@ -91,7 +84,7 @@ openclaw chat --model venice/llama-3.3-70b "Hello, are you working?"
 
 ## Modelvalg
 
-Efter opsætning viser OpenClaw alle tilgængelige Venice-modeller. Vælg ud fra dine behov:
+Efter opsætning, OpenClaw viser alle tilgængelige Venedig modeller. Vælg baseret på dine behov:
 
 - **Standard (vores valg)**: `venice/llama-3.3-70b` for privat, afbalanceret ydeevne.
 - **Bedste samlede kvalitet**: `venice/claude-opus-45` til krævende opgaver (Opus er fortsat den stærkeste).
@@ -134,69 +127,69 @@ openclaw models list | grep venice
 
 ### Private modeller (15) — Fuldt private, ingen logning
 
-| Model-ID                         | Navn                    | Kontekst (tokens) | Funktioner               |
-| -------------------------------- | ----------------------- | ----------------- | ------------------------ |
-| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k              | Generel                  |
-| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k              | Hurtig, letvægts         |
-| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k              | Komplekse opgaver        |
-| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k              | Ræsonnering              |
-| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k              | Generel                  |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k              | Kode                     |
-| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k              | Generel                  |
-| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k              | Vision                   |
-| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k               | Hurtig, ræsonnering      |
-| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k              | Ræsonnering              |
-| `venice-uncensored`              | Venice Uncensored       | 32k               | Ucensureret              |
-| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k              | Vision                   |
-| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k              | Vision                   |
-| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k              | Generel                  |
-| `zai-org-glm-4.7`                | GLM 4.7                 | 202k              | Ræsonnering, flersproget |
+| Model-ID                         | Navn                                       | Kontekst (tokens) | Funktioner               |
+| -------------------------------- | ------------------------------------------ | ------------------------------------ | ------------------------ |
+| `llama-3.3-70b`                  | Llama 3.3 70B              | 131k                                 | Generel                  |
+| `llama-3.2-3b`                   | Llama 3.2 3B               | 131k                                 | Hurtig, letvægts         |
+| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B    | 131k                                 | Komplekse opgaver        |
+| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking                        | 131k                                 | Ræsonnering              |
+| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct                        | 131k                                 | Generel                  |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B                           | 262k                                 | Kode                     |
+| `qwen3-next-80b`                 | Qwen3 Next 80B                             | 262k                                 | Generel                  |
+| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B                              | 262k                                 | Vision                   |
+| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k                                  | Hurtig, ræsonnering      |
+| `deepseek-v3.2`                  | DeepSeek V3.2              | 163k                                 | Ræsonnering              |
+| `venice-uncensored`              | Venice Uncensored                          | 32k                                  | Ucensureret              |
+| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k                                 | Vision                   |
+| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct                       | 202k                                 | Vision                   |
+| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B                        | 131k                                 | Generel                  |
+| `zai-org-glm-4.7`                | GLM 4.7                    | 202k                                 | Ræsonnering, flersproget |
 
 ### Anonymiserede modeller (10) — Via Venice-proxy
 
-| Model-ID                 | Original          | Kontekst (tokens) | Funktioner          |
-| ------------------------ | ----------------- | ----------------- | ------------------- |
-| `claude-opus-45`         | Claude Opus 4.5   | 202k              | Ræsonnering, vision |
-| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k              | Ræsonnering, vision |
-| `openai-gpt-52`          | GPT-5.2           | 262k              | Ræsonnering         |
-| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k              | Ræsonnering, vision |
-| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k              | Ræsonnering, vision |
-| `gemini-3-flash-preview` | Gemini 3 Flash    | 262k              | Ræsonnering, vision |
-| `grok-41-fast`           | Grok 4.1 Fast     | 262k              | Ræsonnering, vision |
-| `grok-code-fast-1`       | Grok Code Fast 1  | 262k              | Ræsonnering, kode   |
-| `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k              | Ræsonnering         |
-| `minimax-m21`            | MiniMax M2.1      | 202k              | Ræsonnering         |
+| Model-ID                 | Original                          | Kontekst (tokens) | Funktioner          |
+| ------------------------ | --------------------------------- | ------------------------------------ | ------------------- |
+| `claude-opus-45`         | Claude Opus 4.5   | 202k                                 | Ræsonnering, vision |
+| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k                                 | Ræsonnering, vision |
+| `openai-gpt-52`          | GPT-5.2           | 262k                                 | Ræsonnering         |
+| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k                                 | Ræsonnering, vision |
+| `gemini-3-pro-preview`   | Gemini 3 Pro                      | 202k                                 | Ræsonnering, vision |
+| `gemini-3-flash-preview` | Gemini 3 Flash                    | 262k                                 | Ræsonnering, vision |
+| `grok-41-fast`           | Grok 4.1 Fast     | 262k                                 | Ræsonnering, vision |
+| `grok-code-fast-1`       | Grok Code Fast 1                  | 262k                                 | Ræsonnering, kode   |
+| `kimi-k2-thinking`       | Kimi K2 Thinking                  | 262k                                 | Ræsonnering         |
+| `minimax-m21`            | MiniMax M2.1      | 202k                                 | Ræsonnering         |
 
 ## Model Discovery
 
-OpenClaw opdager automatisk modeller fra Venice API’et, når `VENICE_API_KEY` er sat. Hvis API’et ikke kan nås, falder det tilbage til et statisk katalog.
+OpenClaw opdager automatisk modeller fra Venedig API, når `VENICE_API_KEY` er sat. Hvis API'en ikke er tilgængelig, falder den tilbage til et statisk katalog.
 
 `/models`-endpointet er offentligt (ingen auth kræves for listning), men inferens kræver en gyldig API-nøgle.
 
 ## Streaming & værktøjsunderstøttelse
 
-| Funktion             | Understøttelse                                               |
-| -------------------- | ------------------------------------------------------------ |
-| **Streaming**        | ✅ Alle modeller                                             |
+| Funktion             | Understøttelse                                                                 |
+| -------------------- | ------------------------------------------------------------------------------ |
+| **Streaming**        | ✅ Alle modeller                                                                |
 | **Function calling** | ✅ De fleste modeller (tjek `supportsFunctionCalling` i API) |
-| **Vision/Billeder**  | ✅ Modeller markeret med "Vision"-funktionen                 |
-| **JSON-tilstand**    | ✅ Understøttet via `response_format`                        |
+| **Vision/Billeder**  | ✅ Modeller markeret med "Vision"-funktionen                                    |
+| **JSON-tilstand**    | ✅ Understøttet via `response_format`                                           |
 
 ## Priser
 
-Venice bruger et kreditbaseret system. Se [venice.ai/pricing](https://venice.ai/pricing) for aktuelle priser:
+Venedig bruger et kreditbaseret system. Check [venice.ai/pricing](https://venice.ai/pricing) for aktuelle satser:
 
 - **Private modeller**: Generelt lavere pris
 - **Anonymiserede modeller**: Ligner direkte API-priser + et lille Venice-gebyr
 
 ## Sammenligning: Venice vs. direkte API
 
-| Aspekt          | Venice (anonymiseret)             | Direkte API          |
-| --------------- | --------------------------------- | -------------------- |
-| **Privatliv**   | Metadata fjernet, anonymiseret    | Din konto er knyttet |
-| **Latency**     | +10–50 ms (proxy)                 | Direkte              |
-| **Funktioner**  | De fleste funktioner understøttet | Alle funktioner      |
-| **Fakturering** | Venice-kreditter                  | Udbyderfakturering   |
+| Aspekt          | Venice (anonymiseret) | Direkte API          |
+| --------------- | ---------------------------------------- | -------------------- |
+| **Privatliv**   | Metadata fjernet, anonymiseret           | Din konto er knyttet |
+| **Latency**     | +10–50 ms (proxy)     | Direkte              |
+| **Funktioner**  | De fleste funktioner understøttet        | Alle funktioner      |
+| **Fakturering** | Venice-kreditter                         | Udbyderfakturering   |
 
 ## Brugseksempler
 
@@ -230,11 +223,11 @@ Sørg for, at nøglen starter med `vapi_`.
 
 ### Model ikke tilgængelig
 
-Venices modelkatalog opdateres dynamisk. Kør `openclaw models list` for at se aktuelt tilgængelige modeller. Nogle modeller kan være midlertidigt offline.
+Venedig model katalog opdateringer dynamisk. Kør 'openclaw modelliste' for at se aktuelt tilgængelige modeller. Nogle modeller kan være midlertidigt offline.
 
 ### Forbindelsesproblemer
 
-Venice API’et findes på `https://api.venice.ai/api/v1`. Sørg for, at dit netværk tillader HTTPS-forbindelser.
+Venice API er på `https://api.venice.ai/api/v1`. Sørg for, at dit netværk tillader HTTPS-forbindelser.
 
 ## Eksempel på konfigurationsfil
 

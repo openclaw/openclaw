@@ -3,20 +3,13 @@ summary: "Gateway（ゲートウェイ）から OpenAI 互換の /v1/chat/comple
 read_when:
   - OpenAI Chat Completions を想定するツールを統合する場合
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:52Z
 ---
 
 # OpenAI Chat Completions（HTTP）
 
 OpenClaw の Gateway（ゲートウェイ）は、小規模な OpenAI 互換の Chat Completions エンドポイントを提供できます。
 
-このエンドポイントは **デフォルトでは無効** です。まず設定で有効化してください。
+このエンドポイントは **デフォルトでは無効** です。まず設定で有効化してください。 最初に設定で有効にします。
 
 - `POST /v1/chat/completions`
 - Gateway（ゲートウェイ）と同一ポート（WS + HTTP の多重化）：`http://<gateway-host>:<port>/v1/chat/completions`
@@ -25,7 +18,7 @@ OpenClaw の Gateway（ゲートウェイ）は、小規模な OpenAI 互換の 
 
 ## 認証
 
-Gateway の認証設定を使用します。ベアラートークンを送信してください。
+ゲートウェイ認証設定を使用します。 ベアラートトークンを送信:
 
 - `Authorization: Bearer <token>`
 

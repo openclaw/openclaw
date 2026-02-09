@@ -3,13 +3,6 @@ summary: "Beveiligingsoverwegingen en dreigingsmodel voor het draaien van een AI
 read_when:
   - Bij het toevoegen van functies die de toegang of automatisering vergroten
 title: "Beveiliging"
-x-i18n:
-  source_path: gateway/security/index.md
-  source_hash: 5566bbbbbf7364ec
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:46Z
 ---
 
 # Beveiliging 🔒
@@ -315,7 +308,7 @@ Dit is social engineering 101. Zaai wantrouwen, moedig rondneuzen aan.
 
 ## Configuratie‑verharding (voorbeelden)
 
-### 0) Bestandsrechten
+### 0. Bestandsrechten
 
 Houd config + state privé op de gateway‑host:
 
@@ -442,7 +435,8 @@ Zie [Tailscale](/gateway/tailscale) en [Web‑overzicht](/web).
 
 ### 0.6.1) Browserbediening via node‑host (aanbevolen)
 
-Als je Gateway extern is maar de browser op een andere machine draait, draai dan een **node‑host** op de browsermachine en laat de Gateway browseracties proxyen (zie [Browser‑tool](/tools/browser)). Behandel node‑koppeling als admin‑toegang.
+Als je Gateway extern is maar de browser op een andere machine draait, draai dan een **node‑host** op de browsermachine en laat de Gateway browseracties proxyen (zie [Browser‑tool](/tools/browser)).
+Behandel node‑koppeling als admin‑toegang.
 
 Aanbevolen patroon:
 
@@ -487,7 +481,7 @@ Aanbevelingen:
 
 Details: [Logging](/gateway/logging)
 
-### 1) DM’s: standaard koppeling
+### 1. DM’s: standaard koppeling
 
 ```json5
 {
@@ -495,7 +489,7 @@ Details: [Logging](/gateway/logging)
 }
 ```
 
-### 2) Groepen: overal mentions vereisen
+### 2. Groepen: overal mentions vereisen
 
 ```json
 {
@@ -535,7 +529,7 @@ Je kunt nu al een alleen‑lezen profiel bouwen door te combineren:
 
 Mogelijk voegen we later één `readOnlyMode`‑flag toe om deze configuratie te vereenvoudigen.
 
-### 5) Veilige basis (kopiëren/plakken)
+### 5. Veilige basis (kopiëren/plakken)
 
 Eén “veilige standaard” config die de Gateway privé houdt, DM‑koppeling vereist en always‑on groepsbots vermijdt:
 
@@ -579,7 +573,8 @@ Belangrijk: `tools.elevated` is de globale ontsnappingsklep die exec op de host 
 
 ## Risico’s van browserbediening
 
-Het inschakelen van browserbediening geeft het model de mogelijkheid een echte browser aan te sturen. Als dat browserprofiel al ingelogde sessies bevat, kan het model toegang krijgen tot die accounts en data. Behandel browserprofielen als **gevoelige staat**:
+Het inschakelen van browserbediening geeft het model de mogelijkheid een echte browser aan te sturen.
+Als dat browserprofiel al ingelogde sessies bevat, kan het model toegang krijgen tot die accounts en data. Behandel browserprofielen als **gevoelige staat**:
 
 - Geef de voorkeur aan een apart profiel voor de agent (het standaard `openclaw`‑profiel).
 - Richt de agent niet op je persoonlijke dagelijkse profiel.
@@ -594,7 +589,8 @@ Het inschakelen van browserbediening geeft het model de mogelijkheid een echte b
 
 ## Per‑agent toegangsprofielen (multi‑agent)
 
-Met multi‑agent‑routing kan elke agent zijn eigen sandbox + toolbeleid hebben: gebruik dit om **volledige toegang**, **alleen‑lezen** of **geen toegang** per agent te geven. Zie [Multi‑Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) voor volledige details en voorrangsregels.
+Met multi‑agent‑routing kan elke agent zijn eigen sandbox + toolbeleid hebben: gebruik dit om **volledige toegang**, **alleen‑lezen** of **geen toegang** per agent te geven.
+Zie [Multi‑Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) voor volledige details en voorrangsregels.
 
 Veelvoorkomende use‑cases:
 
@@ -706,7 +702,7 @@ Neem beveiligingsrichtlijnen op in de systeemprompt van je agent:
 
 Als je AI iets slechts doet:
 
-### Beheersen
+### Bevat
 
 1. **Stop het:** stop de macOS‑app (als die de Gateway superviseert) of beëindig je `openclaw gateway`‑proces.
 2. **Sluit blootstelling:** stel `gateway.bind: "loopback"` in (of schakel Tailscale Funnel/Serve uit) tot je begrijpt wat er is gebeurd.
@@ -747,7 +743,9 @@ Als dit faalt, zijn er nieuwe kandidaten die nog niet in de baseline staan.
 2. Begrijp de tools:
    - `detect-secrets scan` vindt kandidaten en vergelijkt ze met de baseline.
    - `detect-secrets audit` opent een interactieve review om elk baseline‑item als echt of vals‑positief te markeren.
+
 3. Voor echte geheimen: roteer/verwijder ze en voer de scan opnieuw uit om de baseline bij te werken.
+
 4. Voor vals‑positieven: voer de interactieve audit uit en markeer ze als vals:
 
    ```bash

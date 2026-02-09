@@ -3,23 +3,16 @@ summary: "Gateway サービスの運用、ライフサイクル、およびオ�
 read_when:
   - ゲートウェイプロセスを実行またはデバッグする場合
 title: "Gateway ランブック"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:32Z
 ---
 
 # Gateway サービスランブック
 
 最終更新日: 2025-12-09
 
-## 概要
+## これは何か
 
 - 単一の Baileys/Telegram 接続と制御／イベントプレーンを所有する常駐プロセスです。
-- 旧来の `gateway` コマンドを置き換えます。CLI エントリーポイントは `openclaw gateway` です。
+- レガシーの `gateway` コマンドを置き換えます。 旧来の `gateway` コマンドを置き換えます。CLI エントリーポイントは `openclaw gateway` です。
 - 停止されるまで実行され続け、致命的なエラー時には非ゼロで終了してスーパーバイザーが再起動します。
 
 ## 実行方法（ローカル）
@@ -39,17 +32,17 @@ pnpm gateway:watch
   - ホットリロードは必要に応じて **SIGUSR1** によるプロセス内再起動を使用します。
   - `gateway.reload.mode="off"` で無効化できます。
 - WebSocket の制御プレーンを `127.0.0.1:<port>`（デフォルト 18789）にバインドします。
-- 同一ポートで HTTP（制御 UI、フック、A2UI）も提供します。単一ポートのマルチプレックスです。
+- 同一ポートで HTTP（制御 UI、フック、A2UI）も提供します。単一ポートのマルチプレックスです。 単一ポートマルチプレックス。
   - OpenAI Chat Completions（HTTP）: [`/v1/chat/completions`](/gateway/openai-http-api)。
   - OpenResponses（HTTP）: [`/v1/responses`](/gateway/openresponses-http-api)。
   - Tools Invoke（HTTP）: [`/tools/invoke`](/gateway/tools-invoke-http-api)。
-- デフォルトで `canvasHost.port`（デフォルト `18793`）に Canvas ファイルサーバーを起動し、`~/.openclaw/workspace/canvas` から `http://<gateway-host>:18793/__openclaw__/canvas/` を提供します。`canvasHost.enabled=false` または `OPENCLAW_SKIP_CANVAS_HOST=1` で無効化できます。
+- デフォルトで `canvasHost.port`（デフォルト `18793`）に Canvas ファイルサーバーを起動し、`~/.openclaw/workspace/canvas` から `http://<gateway-host>:18793/__openclaw__/canvas/` を提供します。`canvasHost.enabled=false` または `OPENCLAW_SKIP_CANVAS_HOST=1` で無効化できます。 `canvasHost.enabled=false` または `OPENCLAW_SKIP_CANVAS_HOST=1` で無効にします。
 - ログは stdout に出力されます。常駐とログローテーションには launchd/systemd を使用してください。
 - トラブルシューティング時に `--verbose` を渡すと、デバッグログ（ハンドシェイク、req/res、イベント）をログファイルから stdio にミラーします。
 - `--force` は `lsof` を使用して選択されたポートのリスナーを検出し、SIGTERM を送信して、終了させた内容をログに記録してから Gateway を起動します（`lsof` が欠落している場合は即座に失敗します）。
 - スーパーバイザー（launchd/systemd/mac アプリの子プロセスモード）配下で実行している場合、停止／再起動は通常 **SIGTERM** を送信します。古いビルドではこれが `pnpm` `ELIFECYCLE` 終了コード **143**（SIGTERM）として表示されることがありますが、これはクラッシュではなく正常終了です。
 - **SIGUSR1** は、認可されている場合（Gateway ツール／設定の適用／更新、または手動再起動用に `commands.restart` を有効化した場合）にプロセス内再起動をトリガーします。
-- Gateway の認証はデフォルトで必須です。`gateway.auth.token`（または `OPENCLAW_GATEWAY_TOKEN`）もしくは `gateway.auth.password` を設定してください。Tailscale Serve のアイデンティティを使用しない限り、クライアントは `connect.params.auth.token/password` を送信する必要があります。
+- Gateway の認証はデフォルトで必須です。`gateway.auth.token`（または `OPENCLAW_GATEWAY_TOKEN`）もしくは `gateway.auth.password` を設定してください。Tailscale Serve のアイデンティティを使用しない限り、クライアントは `connect.params.auth.token/password` を送信する必要があります。 クライアントは Tailscale Serve ID を使用しない限り、`connect.params.auth.token/password` を送信する必要があります。
 - ウィザードは、ループバックであってもデフォルトでトークンを生成するようになりました。
 - ポートの優先順位: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > デフォルト `18789`。
 
@@ -62,13 +55,14 @@ pnpm gateway:watch
   ```
 
 - クライアントはトンネル経由で `ws://127.0.0.1:18789` に接続します。
+
 - トークンが設定されている場合、トンネル経由であってもクライアントは `connect.params.auth.token` にトークンを含める必要があります。
 
 ## 複数 Gateway（同一ホスト）
 
-通常は不要です。1 つの Gateway で複数のメッセージングチャンネルとエージェントを提供できます。冗長化や厳密な分離（例: レスキューボット）のためにのみ、複数 Gateway を使用してください。
+通常は不要です。1 つの Gateway で複数のメッセージングチャンネルとエージェントを提供できます。冗長化や厳密な分離（例: レスキューボット）のためにのみ、複数 Gateway を使用してください。 冗長または厳密な単離(例:レスキューボット)にのみ複数のゲートウェイを使用します。
 
-状態と設定を分離し、ユニークなポートを使用すればサポートされます。完全なガイド: [Multiple gateways](/gateway/multiple-gateways)。
+状態と設定を分離し、ユニークなポートを使用すればサポートされます。完全なガイド: [Multiple gateways](/gateway/multiple-gateways)。 完全ガイド: [Multiple gateways](/gateway/multiple-gateways)。
 
 サービス名はプロファイルを認識します。
 
@@ -82,7 +76,7 @@ pnpm gateway:watch
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-レスキューボットパターン: 独自のプロファイル、状態ディレクトリ、ワークスペース、およびベースポート間隔を持つ 2 つ目の Gateway を分離して保持します。完全なガイド: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)。
+レスキューボットパターン: 独自のプロファイル、状態ディレクトリ、ワークスペース、およびベースポート間隔を持つ 2 つ目の Gateway を分離して保持します。完全なガイド: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)。 フルガイド: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)。
 
 ### Dev プロファイル（`--dev`）
 
@@ -165,7 +159,7 @@ presence の生成／重複排除の仕組みや、安定した `client.instance
 - `agent` — エージェント実行からのツール／出力イベントのストリーム（seq タグ付き）。
 - `presence` — presence 更新（stateVersion 付きの差分）が接続中のすべてのクライアントにプッシュされます。
 - `tick` — 生存確認のための定期的な keepalive／no-op。
-- `shutdown` — Gateway が終了中。ペイロードには `reason` と任意の `restartExpectedMs` が含まれます。クライアントは再接続してください。
+- `shutdown` — Gateway が終了中。ペイロードには `reason` と任意の `restartExpectedMs` が含まれます。クライアントは再接続してください。 クライアントは再接続する必要があります。
 
 ## WebChat 連携
 
@@ -202,7 +196,7 @@ presence の生成／重複排除の仕組みや、安定した `client.instance
 
 ## リプレイ／ギャップ
 
-- イベントはリプレイされません。クライアントは seq の欠落を検出したら、続行前に更新（`health` + `system-presence`）を行う必要があります。WebChat と macOS クライアントは現在、ギャップ時に自動更新します。
+- イベントは再生されません。 クライアントはseqギャップを検出し、続行する前にリフレッシュする必要があります (`health` + `system-presence`)。 WebChat および macOS クライアントがギャップ時に自動更新されるようになりました。
 
 ## スーパービジョン（macOS 例）
 
@@ -241,6 +235,7 @@ openclaw logs --follow
 - `logs` は RPC 経由で Gateway のファイルログを tail します（手動の `tail`/`grep` は不要）。
 - 他の gateway 類似サービスが検出された場合、OpenClaw プロファイルサービスでない限り CLI は警告します。
   ほとんどの構成では **1 マシンあたり 1 Gateway** を推奨します。冗長化やレスキューボットには分離したプロファイル／ポートを使用してください。[Multiple gateways](/gateway/multiple-gateways) を参照してください。
+  ほとんどのセットアップでは**1つのゲートウェイ**をお勧めします。冗長性またはレスキューボットを使用するには、隔離されたプロファイル/ポートを使用します。 [Multiple gateways](/gateway/multiple-gateways) を参照してください。
   - クリーンアップ: `openclaw gateway uninstall`（現行サービス）および `openclaw doctor`（レガシー移行）。
 - `gateway install` は既にインストールされている場合は no-op です。再インストールには `openclaw gateway install --force` を使用してください（プロファイル／環境／パスの変更）。
 
@@ -258,9 +253,11 @@ openclaw logs --follow
 
 OpenClaw は Linux/WSL2 でデフォルトで **systemd ユーザーサービス** をインストールします。単一ユーザーのマシンでは（環境が簡単で、ユーザーごとの設定になるため）ユーザーサービスを推奨します。
 複数ユーザーまたは常時稼働サーバーでは **system サービス** を使用してください（linger 不要、共有スーパービジョン）。
+は、シングルユーザマシンのユーザー・サービスをお勧めします (より簡単な env、ユーザ毎の設定)。
+マルチユーザーまたは常時稼働サーバーには **システムサービス** を使用してください（常駐は不要、共有監視）。
 
-`openclaw gateway install` はユーザーユニットを書き込みます。`openclaw doctor` は
-ユニットを監査し、現在推奨されるデフォルトに更新できます。
+`openclaw gateway install` はユーザーユニットを書き込みます。 `openclaw doctor`は
+ユニットを監査し、現在推奨されているデフォルトに合わせて更新できます。
 
 `~/.config/systemd/user/openclaw-gateway[-<profile>].service` を作成します。
 
@@ -289,11 +286,14 @@ sudo loginctl enable-linger youruser
 
 オンボーディングは Linux/WSL2 でこれを実行します（sudo を要求する場合があります。`/var/lib/systemd/linger` を書き込みます）。
 その後、サービスを有効化します。
+次に、サービスを有効にします:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
+**Alternative (system service)** - always-on or multi-user servers, you can
+a systemd **system** unit instead (no lingering need).
 **代替（system サービス）** — 常時稼働または複数ユーザーのサーバーでは、ユーザーユニットの代わりに systemd の **system** ユニットをインストールできます（linger 不要）。
 `/etc/systemd/system/openclaw-gateway[-<profile>].service` を作成し（上記ユニットをコピーし、
 `WantedBy=multi-user.target` を切り替え、`User=` + `WorkingDirectory=` を設定）、次を実行します。

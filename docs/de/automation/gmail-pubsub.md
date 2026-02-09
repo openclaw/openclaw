@@ -1,16 +1,9 @@
 ---
-summary: „Gmail Pub/Sub Push über gogcli in OpenClaw-Webhooks eingebunden“
+summary: "„Gmail Pub/Sub Push über gogcli in OpenClaw-Webhooks eingebunden“"
 read_when:
   - Gmail-Posteingangstrigger mit OpenClaw verdrahten
   - Pub/Sub Push für das Aufwecken von Agenten einrichten
-title: „Gmail PubSub“
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:08Z
+title: "„Gmail PubSub“"
 ---
 
 # Gmail Pub/Sub -> OpenClaw

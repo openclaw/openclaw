@@ -5,13 +5,6 @@ read_when:
   - Configuration des fournisseurs TTS ou des limites
   - Utilisation des commandes /tts
 title: "Synthèse vocale"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:25Z
 ---
 
 # Synthèse vocale (TTS)
@@ -32,8 +25,7 @@ Edge TTS utilise le service TTS neuronal en ligne de Microsoft Edge via la bibli
 et ne nécessite pas de clé API. `node-edge-tts` expose des options de configuration de la voix
 et des formats de sortie, mais toutes les options ne sont pas prises en charge par le service Edge. citeturn2search0
 
-Comme Edge TTS est un service web public sans SLA ni quota publiés, considérez‑le comme « best‑effort ».
-Si vous avez besoin de limites garanties et de support, utilisez OpenAI ou ElevenLabs.
+Comme Edge TTS est un service web public sans SLA ni quota publiés, considérez‑le comme « best‑effort ». Si vous avez besoin de limites garanties et de support, utilisez OpenAI ou ElevenLabs.
 L’API REST Microsoft Speech documente une limite de 10 minutes d’audio par requête ; Edge TTS
 ne publie pas de limites, supposez donc des limites similaires ou inférieures. citeturn0search3
 

@@ -4,13 +4,6 @@ read_when:
   - Captura de logs do macOS ou investigação de registro de dados privados
   - Depuração de problemas do ciclo de vida de ativação/sessão de voz
 title: "Registro no macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:30Z
 ---
 
 # Registro (macOS)

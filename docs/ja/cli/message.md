@@ -4,13 +4,6 @@ read_when:
   - メッセージの CLI 操作を追加または変更する場合
   - 送信先チャンネルの挙動を変更する場合
 title: "メッセージ"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:25Z
 ---
 
 # `openclaw message`

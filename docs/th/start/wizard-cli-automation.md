@@ -5,13 +5,6 @@ read_when:
   - คุณต้องการตัวอย่างแบบไม่โต้ตอบสำหรับผู้ให้บริการเฉพาะ
 title: "การทำงานอัตโนมัติของ CLI"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:41Z
 ---
 
 # การทำงานอัตโนมัติของ CLI
@@ -19,7 +12,9 @@ x-i18n:
 ใช้ `--non-interactive` เพื่อทำให้ `openclaw onboard` เป็นอัตโนมัติ
 
 <Note>
+
 `--json` ไม่ได้หมายความว่าเป็นโหมดไม่โต้ตอบ ใช้ `--non-interactive` (และ `--workspace`) สำหรับสคริปต์
+ ใช้ `--non-interactive` (และ `--workspace`) สำหรับสคริปต์
 </Note>
 
 ## ตัวอย่างพื้นฐานแบบไม่โต้ตอบ
@@ -41,7 +36,7 @@ openclaw onboard --non-interactive \
 ## ตัวอย่างเฉพาะผู้ให้บริการ
 
 <AccordionGroup>
-  <Accordion title="ตัวอย่าง Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +46,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +56,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +66,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +78,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +88,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +98,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,7 +112,7 @@ openclaw onboard --non-interactive \
 
 ## เพิ่มเอเจนต์อีกหนึ่งตัว
 
-ใช้ `openclaw agents add <name>` เพื่อสร้างเอเจนต์แยกต่างหากที่มีเวิร์กสเปซ เซสชัน และโปรไฟล์การยืนยันตัวตนของตนเอง การรันโดยไม่ใช้ `--workspace` จะเปิดวิซาร์ด
+ใช้ `openclaw agents add <name>` เพื่อสร้างเอเจนต์แยกต่างหากที่มีเวิร์กสเปซ เซสชัน และโปรไฟล์การยืนยันตัวตนของตนเอง การรันโดยไม่ใช้ `--workspace` จะเปิดวิซาร์ด การรันโดยไม่ใช้ `--workspace` จะเปิดวิซาร์ด
 
 ```bash
 openclaw agents add work \

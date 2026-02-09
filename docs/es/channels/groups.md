@@ -3,13 +3,6 @@ summary: "Comportamiento del chat grupal en distintas superficies (WhatsApp/Tele
 read_when:
   - Cambiar el comportamiento del chat grupal o el control por menciones
 title: "Grupos"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:43Z
 ---
 
 # Grupos
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Si usted quiere...
 
-| Objetivo                                                     | Qué configurar                                             |
-| ------------------------------------------------------------ | ---------------------------------------------------------- |
-| Permitir todos los grupos pero responder solo con @menciones | `groups: { "*": { requireMention: true } }`                |
-| Desactivar todas las respuestas en grupos                    | `groupPolicy: "disabled"`                                  |
-| Solo grupos específicos                                      | `groups: { "<group-id>": { ... } }` (sin la clave `"*"`)   |
-| Solo usted puede activar en grupos                           | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Objetivo                                                                  | Qué configurar                                                              |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Permitir todos los grupos pero responder solo con @menciones | `groups: { "*": { requireMention: true } }`                                 |
+| Desactivar todas las respuestas en grupos                                 | `groupPolicy: "disabled"`                                                   |
+| Solo grupos específicos                                                   | `groups: { "<group-id>": { ... } }` (sin la clave `"*"`) |
+| Solo usted puede activar en grupos                                        | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                  |
 
 ## Claves de sesión
 
@@ -181,8 +174,8 @@ Controle cómo se manejan los mensajes de grupos/salas por canal:
 }
 ```
 
-| Política      | Comportamiento                                                                        |
-| ------------- | ------------------------------------------------------------------------------------- |
+| Política      | Comportamiento                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
 | `"open"`      | Los grupos omiten las listas de permitidos; el control por menciones sigue aplicando. |
 | `"disabled"`  | Bloquea por completo todos los mensajes de grupo.                                     |
 | `"allowlist"` | Solo permite grupos/salas que coincidan con la lista de permitidos configurada.       |

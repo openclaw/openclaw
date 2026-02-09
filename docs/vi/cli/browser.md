@@ -5,13 +5,6 @@ read_when:
   - Bạn muốn điều khiển một trình duyệt chạy trên máy khác thông qua một node host
   - Bạn muốn dùng chuyển tiếp tiện ích mở rộng Chrome (gắn/tách qua nút trên thanh công cụ)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:16Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## Hồ sơ
 
-Hồ sơ là các cấu hình định tuyến trình duyệt được đặt tên. Trên thực tế:
+Profiles are named browser routing configs. Trong thực tế:
 
 - `openclaw`: khởi chạy/đính kèm một phiên bản Chrome do OpenClaw quản lý riêng (thư mục dữ liệu người dùng tách biệt).
 - `chrome`: điều khiển các tab Chrome hiện có của bạn thông qua chuyển tiếp tiện ích mở rộng Chrome.
@@ -107,7 +100,7 @@ Hướng dẫn đầy đủ: [Chrome extension](/tools/chrome-extension)
 
 ## Điều khiển trình duyệt từ xa (proxy node host)
 
-Nếu Gateway chạy trên một máy khác với trình duyệt, hãy chạy một **node host** trên máy có Chrome/Brave/Edge/Chromium. Gateway sẽ proxy các hành động trình duyệt tới node đó (không cần máy chủ điều khiển trình duyệt riêng).
+If the Gateway runs on a different machine than the browser, run a **node host** on the machine that has Chrome/Brave/Edge/Chromium. The Gateway will proxy browser actions to that node (no separate browser control server required).
 
 Dùng `gateway.nodes.browser.mode` để kiểm soát định tuyến tự động và `gateway.nodes.browser.node` để ghim một node cụ thể nếu có nhiều node được kết nối.
 

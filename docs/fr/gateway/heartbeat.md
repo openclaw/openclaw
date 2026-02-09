@@ -4,13 +4,6 @@ read_when:
   - Ajuster la cadence ou la messagerie du heartbeat
   - Choisir entre heartbeat et cron pour les tâches planifiées
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: 27db9803263a5f2d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:56Z
 ---
 
 # Heartbeat (Gateway)
@@ -19,6 +12,8 @@ x-i18n:
 
 Heartbeat exécute des **tours d’agent périodiques** dans la session principale afin que le modèle
 puisse faire remonter ce qui nécessite une attention sans vous spammer.
+
+Dépannage : [/automation/troubleshooting](/automation/troubleshooting)
 
 ## Démarrage rapide (débutant)
 
@@ -258,7 +253,7 @@ channels:
 
 Priorité : par compte → par canal → valeurs par défaut du canal → valeurs par défaut intégrées.
 
-### Rôle de chaque indicateur
+### Que fait chaque drapeau
 
 - `showOk` : envoie un accusé de réception `HEARTBEAT_OK` lorsque le modèle renvoie une réponse OK uniquement.
 - `showAlerts` : envoie le contenu d’alerte lorsque le modèle renvoie une réponse non-OK.
@@ -287,14 +282,14 @@ channels:
       showOk: true
 ```
 
-### Modèles courants
+### Modèles communs
 
-| Objectif                                                 | Configuration                                                                            |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Comportement par défaut (OK silencieux, alertes actives) | _(aucune configuration nécessaire)_                                                      |
+| Objectif                                                                    | Configuration                                                                            |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Comportement par défaut (OK silencieux, alertes actives) | _(aucune configuration nécessaire)_                                   |
 | Totalement silencieux (aucun message, aucun indicateur)  | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Indicateur uniquement (aucun message)                    | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OK dans un seul canal                                    | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OK dans un seul canal                                                       | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (facultatif)
 
@@ -325,7 +320,7 @@ Oui — si vous le lui demandez.
 `HEARTBEAT.md` est simplement un fichier normal dans l’espace de travail de l’agent ; vous pouvez donc dire à
 l’agent (dans une discussion normale) quelque chose comme :
 
-- « Met à jour `HEARTBEAT.md` pour ajouter une vérification quotidienne du calendrier. »
+- « Met à jour `HEARTBEAT.md` pour ajouter une vérification quotidienne du calendrier.
 - « Réécris `HEARTBEAT.md` pour qu’il soit plus court et axé sur les suivis de la boîte de réception. »
 
 Si vous voulez que cela se fasse de manière proactive, vous pouvez aussi inclure une ligne explicite dans
@@ -363,6 +358,5 @@ le laisser désactivé dans les discussions de groupe.
 
 ## Sensibilisation aux coûts
 
-Les heartbeats exécutent des tours d’agent complets. Des intervalles plus courts consomment plus de tokens.
-Gardez `HEARTBEAT.md` modéré et envisagez un `model` ou `target: "none"` moins coûteux si vous
+Les heartbeats exécutent des tours d’agent complets. Des intervalles plus courts consomment plus de tokens. Gardez `HEARTBEAT.md` modéré et envisagez un `model` ou `target: "none"` moins coûteux si vous
 ne souhaitez que des mises à jour d’état internes.

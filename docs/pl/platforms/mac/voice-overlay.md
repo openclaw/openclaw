@@ -1,15 +1,8 @@
 ---
-summary: „Cykl życia nakładki głosowej, gdy nakładają się słowo wybudzające i tryb push‑to‑talk”
+summary: "„Cykl życia nakładki głosowej, gdy nakładają się słowo wybudzające i tryb push‑to‑talk”"
 read_when:
   - Dostosowywanie zachowania nakładki głosowej
-title: „Nakładka głosowa”
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:33Z
+title: "„Nakładka głosowa”"
 ---
 
 # Cykl życia nakładki głosowej (macOS)
@@ -56,6 +49,7 @@ Odbiorcy: współtwórcy aplikacji na macOS. Cel: utrzymać przewidywalne zachow
   ```
 
 - Zweryfikuj, że istnieje tylko jeden aktywny token sesji; przestarzałe wywołania zwrotne powinny być odrzucane przez koordynatora.
+
 - Upewnij się, że zwolnienie push‑to‑talk zawsze wywołuje `endCapture` z aktywnym tokenem; jeśli tekst jest pusty, oczekuj `dismiss` bez dźwięku i bez wysyłania.
 
 ## Kroki migracji (sugerowane)

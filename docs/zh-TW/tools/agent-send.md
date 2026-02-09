@@ -3,37 +3,30 @@ summary: "直接執行 `openclaw agent` CLI（可選擇是否傳送）"
 read_when:
   - 新增或修改 agent CLI 進入點
 title: "Agent 傳送"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:23Z
 ---
 
 # `openclaw agent`（直接執行 agent）
 
-`openclaw agent` 可在不需要傳入聊天訊息的情況下，執行一次 agent 回合。
-預設會**透過 Gateway 閘道器**；加入 `--local` 可強制在目前機器上使用內嵌
-runtime。
+10. `openclaw agent` 可在不需要傳入聊天訊息的情況下執行單次代理回合。
+    By default it goes **through the Gateway**; add `--local` to force the embedded
+    runtime on the current machine.
 
 ## 行為
 
 - 必要項目：`--message <text>`
-- 工作階段選擇：
+- Session selection:
   - `--to <dest>` 會推導工作階段金鑰（群組／頻道目標會保留隔離；私聊會合併為 `main`），**或**
   - `--session-id <id>` 依 id 重用既有工作階段，**或**
   - `--agent <id>` 直接指定已設定的 agent（使用該 agent 的 `main` 工作階段金鑰）
 - 執行與一般入站回覆相同的內嵌 agent runtime。
-- Thinking／verbose 旗標會持續寫入工作階段儲存。
-- 輸出：
+- Thinking/verbose flags persist into the session store.
+- Output:
   - 預設：列印回覆文字（外加 `MEDIA:<url>` 行）
   - `--json`：列印結構化酬載與中繼資料
 - 可使用 `--deliver` + `--channel` 將結果回傳至頻道（目標格式與 `openclaw message --target` 相同）。
 - 使用 `--reply-channel`/`--reply-to`/`--reply-account` 可在不變更工作階段的情況下覆寫傳送設定。
 
-若 Gateway 閘道器 無法連線，CLI 會**回退**為內嵌的本機執行。
+If the Gateway is unreachable, the CLI **falls back** to the embedded local run.
 
 ## 範例
 

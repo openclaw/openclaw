@@ -3,13 +3,6 @@ summary: "用於檢查頻道連線狀態的健康檢查步驟"
 read_when:
   - 診斷 WhatsApp 頻道健康狀態
 title: "健康檢查"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:03Z
 ---
 
 # 健康檢查（CLI）
@@ -28,8 +21,8 @@ x-i18n:
 ## 深度診斷
 
 - 磁碟上的認證：`ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json`（mtime 應為近期）。
-- 工作階段儲存區：`ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json`（路徑可在設定中覆寫）。數量與近期收件者會透過 `status` 顯示。
-- 重新連結流程：當日誌中出現狀態碼 409–515 或 `loggedOut` 時，使用 `openclaw channels logout && openclaw channels login --verbose`。（注意：在配對後，狀態 515 的 QR 登入流程會自動重新啟動一次。）
+- 工作階段儲存區：`ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json`（路徑可在設定中覆寫）。數量與近期收件者會透過 `status` 顯示。 50. 透過 `status` 顯示計數與近期收件者。
+- 1. 重新連結流程：當日誌中出現狀態碼 409–515 或 `loggedOut` 時，執行 `openclaw channels logout && openclaw channels login --verbose`。 2.（注意：QR 登入流程在配對後，若遇到狀態 515 會自動重新啟動一次。）
 
 ## 發生失敗時
 
@@ -39,4 +32,4 @@ x-i18n:
 
 ## 專用「health」指令
 
-`openclaw health --json` 會向正在執行的 Gateway 閘道器 要求其健康快照（CLI 不會直接連線任何頻道 socket）。它會回報可用時的已連結認證／身分驗證年齡、各頻道探測摘要、工作階段儲存區摘要，以及探測耗時。若 Gateway 閘道器 無法連線或探測失敗／逾時，則以非零碼結束。使用 `--timeout <ms>` 可覆寫預設的 10 秒。
+`openclaw health --json` 會向正在執行的 Gateway 閘道器 要求其健康快照（CLI 不會直接連線任何頻道 socket）。它會回報可用時的已連結認證／身分驗證年齡、各頻道探測摘要、工作階段儲存區摘要，以及探測耗時。若 Gateway 閘道器 無法連線或探測失敗／逾時，則以非零碼結束。使用 `--timeout <ms>` 可覆寫預設的 10 秒。 3. 在可用時回報已連結的憑證/授權年齡、各通道探測摘要、工作階段儲存摘要，以及探測耗時。 4. 若 Gateway 無法連線或探測失敗/逾時，將以非零狀態碼結束。 5. 使用 `--timeout <ms>` 覆寫預設的 10 秒。

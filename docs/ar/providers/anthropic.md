@@ -1,16 +1,9 @@
 ---
 summary: "استخدام Anthropic Claude عبر مفاتيح API أو setup-token في OpenClaw"
 read_when:
-  - "تريد استخدام نماذج Anthropic في OpenClaw"
-  - "تريد استخدام setup-token بدلًا من مفاتيح API"
+  - تريد استخدام نماذج Anthropic في OpenClaw
+  - تريد استخدام setup-token بدلًا من مفاتيح API
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:36Z
 ---
 
 # Anthropic (Claude)
@@ -50,10 +43,10 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 استخدم المعامل `cacheRetention` في تهيئة النموذج:
 
-| القيمة  | مدة التخزين المؤقت | الوصف                            |
-| ------- | ------------------ | -------------------------------- |
-| `none`  | بدون تخزين مؤقت    | تعطيل تخزين المطالبات مؤقتًا     |
-| `short` | 5 دقائق            | الافتراضي لمصادقة مفتاح API      |
+| القيمة  | مدة التخزين المؤقت | الوصف                                               |
+| ------- | ------------------ | --------------------------------------------------- |
+| `none`  | لا يوجد مخبئ       | تعطيل تخزين المطالبات مؤقتًا                        |
+| `short` | 5 دقائق            | الافتراضي لمصادقة مفتاح API                         |
 | `long`  | ساعة واحدة         | تخزين ممتد (يتطلب علامة تجريبية) |
 
 ```json5
@@ -74,7 +67,7 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 عند استخدام مصادقة مفتاح Anthropic API، يطبّق OpenClaw تلقائيًا `cacheRetention: "short"` (تخزين لمدة 5 دقائق) على جميع نماذج Anthropic. يمكنك تجاوز ذلك بتعيين `cacheRetention` صراحةً في التهيئة.
 
-### معامل قديم
+### المعلمة القديمة
 
 لا يزال المعامل الأقدم `cacheControlTtl` مدعومًا للتوافق مع الإصدارات السابقة:
 

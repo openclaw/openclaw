@@ -3,13 +3,6 @@ summary: "Ondersteuningsstatus, mogelijkheden en configuratie voor Tlon/Urbit"
 read_when:
   - Werken aan Tlon/Urbit-kanaalfunctionaliteit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:04Z
 ---
 
 # Tlon (plugin)
@@ -62,7 +55,7 @@ Minimale config (één account):
 }
 ```
 
-## Groepskanalen
+## Groepeer kanalen
 
 Auto-discovery is standaard ingeschakeld. Je kunt kanalen ook handmatig vastpinnen:
 
@@ -88,7 +81,7 @@ Auto-discovery uitschakelen:
 }
 ```
 
-## Toegangsbeheer
+## Toegangs beheer
 
 DM-toegestane lijst (leeg = alles toestaan):
 

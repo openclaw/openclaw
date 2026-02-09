@@ -4,26 +4,18 @@ read_when:
   - لوکل ہوسٹ سے باہر Gateway کنٹرول UI کو ظاہر کرنا
   - tailnet یا عوامی ڈیش بورڈ رسائی کو خودکار بنانا
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:26Z
 ---
 
 # Tailscale (Gateway ڈیش بورڈ)
 
-OpenClaw خودکار طور پر Tailscale **Serve** (tailnet) یا **Funnel** (عوامی) کو
-Gateway (گیٹ وے) ڈیش بورڈ اور WebSocket پورٹ کے لیے کنفیگر کر سکتا ہے۔ اس سے Gateway
-local loopback پر بندھا رہتا ہے جبکہ Tailscale HTTPS، روٹنگ، اور (Serve کے لیے)
-شناختی ہیڈرز فراہم کرتا ہے۔
+OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the
+Gateway dashboard and WebSocket port. This keeps the Gateway bound to loopback while
+Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 
 ## Modes
 
-- `serve`: Tailnet-only Serve بذریعہ `tailscale serve`. gateway `127.0.0.1` پر ہی رہتا ہے۔
-- `funnel`: عوامی HTTPS بذریعہ `tailscale funnel`. OpenClaw کو مشترکہ پاس ورڈ درکار ہے۔
+- `serve`: Tailnet-only Serve via `tailscale serve`. The gateway stays on `127.0.0.1`.
+- `funnel`: Public HTTPS via `tailscale funnel`. OpenClaw requires a shared password.
 - `off`: ڈیفالٹ (کوئی Tailscale خودکاری نہیں)۔
 
 ## Auth
@@ -33,16 +25,16 @@ local loopback پر بندھا رہتا ہے جبکہ Tailscale HTTPS، روٹن
 - `token` (جب `OPENCLAW_GATEWAY_TOKEN` سیٹ ہو تو بطورِ طے شدہ)
 - `password` (مشترکہ خفیہ `OPENCLAW_GATEWAY_PASSWORD` یا کنفیگ کے ذریعے)
 
-جب `tailscale.mode = "serve"` اور `gateway.auth.allowTailscale`، `true` ہو،
-تو درست Serve پروکسی درخواستیں Tailscale شناختی ہیڈرز
-(`tailscale-user-login`) کے ذریعے بغیر ٹوکن/پاس ورڈ فراہم کیے تصدیق کر سکتی ہیں۔ OpenClaw
-شناخت کی توثیق اس طرح کرتا ہے کہ `x-forwarded-for` ایڈریس کو مقامی Tailscale
-ڈیمن (`tailscale whois`) کے ذریعے resolve کر کے ہیڈر سے ملاتا ہے، پھر اسے قبول کرتا ہے۔
-OpenClaw کسی درخواست کو صرف اسی صورت Serve سمجھتا ہے جب وہ loopback سے آئے اور
-Tailscale کے `x-forwarded-for`, `x-forwarded-proto`, اور `x-forwarded-host`
-ہیڈرز موجود ہوں۔
-واضح اسناد لازم کرنے کے لیے `gateway.auth.allowTailscale: false` سیٹ کریں یا
-`gateway.auth.mode: "password"` کو مجبور کریں۔
+When `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
+valid Serve proxy requests can authenticate via Tailscale identity headers
+(`tailscale-user-login`) without supplying a token/password. OpenClaw verifies
+the identity by resolving the `x-forwarded-for` address via the local Tailscale
+daemon (`tailscale whois`) and matching it to the header before accepting it.
+OpenClaw only treats a request as Serve when it arrives from loopback with
+Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
+headers.
+To require explicit credentials, set `gateway.auth.allowTailscale: false` or
+force `gateway.auth.mode: "password"`.
 
 ## Config examples
 
@@ -108,14 +100,14 @@ openclaw gateway --tailscale funnel --auth password
   یا `tailscale funnel` کنفیگریشن کو واپس لے، تو `gateway.tailscale.resetOnExit` سیٹ کریں۔
 - `gateway.bind: "tailnet"` براہِ راست Tailnet bind ہے (نہ HTTPS، نہ Serve/Funnel)۔
 - `gateway.bind: "auto"` loopback کو ترجیح دیتا ہے؛ اگر Tailnet-only چاہیے تو `tailnet` استعمال کریں۔
-- Serve/Funnel صرف **Gateway کنٹرول UI + WS** کو ایکسپوز کرتے ہیں۔ نوڈز
-  اسی Gateway WS اینڈپوائنٹ کے ذریعے کنیکٹ ہوتے ہیں، اس لیے Serve نوڈ رسائی کے لیے کام کر سکتا ہے۔
+- Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over
+  the same Gateway WS endpoint, so Serve can work for node access.
 
 ## Browser control (ریموٹ Gateway + لوکل براؤزر)
 
-اگر آپ Gateway ایک مشین پر چلا رہے ہیں لیکن کسی دوسری مشین پر براؤزر کنٹرول کرنا چاہتے ہیں،
-تو براؤزر والی مشین پر ایک **node host** چلائیں اور دونوں کو ایک ہی tailnet پر رکھیں۔
-Gateway براؤزر ایکشنز کو نوڈ تک پروکسی کرے گا؛ کسی علیحدہ کنٹرول سرور یا Serve URL کی ضرورت نہیں۔
+If you run the Gateway on one machine but want to drive a browser on another machine,
+run a **node host** on the browser machine and keep both on the same tailnet.
+The Gateway will proxy browser actions to the node; no separate control server or Serve URL needed.
 
 براؤزر کنٹرول کے لیے Funnel سے پرہیز کریں؛ نوڈ pairing کو آپریٹر رسائی کے طور پر سمجھیں۔
 

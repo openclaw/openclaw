@@ -1,29 +1,22 @@
 ---
-summary: 「Claude Max/Pro サブスクリプションを OpenAI 互換 API エンドポイントとして使用します」
+summary: "Claude Max/Pro サブスクリプションを OpenAI 互換 API エンドポイントとして使用します"
 read_when:
   - OpenAI 互換ツールで Claude Max サブスクリプションを使用したい場合
   - Claude Code CLI をラップするローカル API サーバーが必要な場合
   - API キーではなくサブスクリプションを使用してコストを節約したい場合
-title: 「Claude Max API プロキシ」
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:49Z
+title: "Claude Max API プロキシ"
 ---
 
 # Claude Max API プロキシ
 
-**claude-max-api-proxy** は、Claude Max/Pro サブスクリプションを OpenAI 互換の API エンドポイントとして公開するコミュニティツールです。これにより、OpenAI API 形式をサポートするあらゆるツールでサブスクリプションを使用できます。
+**claude-max-api-proxy** は、Claude Max/Pro サブスクリプションを OpenAI 互換の API エンドポイントとして公開するコミュニティツールです。これにより、OpenAI API 形式をサポートするあらゆるツールでサブスクリプションを使用できます。 これにより、OpenAI API形式をサポートする任意のツールでサブスクリプションを使用できます。
 
 ## なぜ使用するのですか？
 
-| アプローチ                    | コスト                                          | 最適な用途                   |
-| ----------------------------- | ----------------------------------------------- | ---------------------------- |
-| Anthropic API                 | トークン課金（Opus は入力 ~$15/M、出力 ~$75/M） | 本番アプリ、高ボリューム     |
-| Claude Max サブスクリプション | 月額 $200 の定額                                | 個人利用、開発、無制限の使用 |
+| アプローチ                | コスト                                                               | 最適な用途          |
+| -------------------- | ----------------------------------------------------------------- | -------------- |
+| Anthropic API        | トークン課金（Opus は入力 ~$15/M、出力 ~$75/M） | 本番アプリ、高ボリューム   |
+| Claude Max サブスクリプション | 月額 $200 の定額                                                       | 個人利用、開発、無制限の使用 |
 
 Claude Max サブスクリプションをお持ちで、OpenAI 互換ツールで使用したい場合、このプロキシにより大幅なコスト削減が可能です。
 
@@ -97,7 +90,7 @@ curl http://localhost:3456/v1/chat/completions \
 
 ## 利用可能なモデル
 
-| モデル ID         | 対応先          |
+| モデル ID            | 地図先             |
 | ----------------- | --------------- |
 | `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |
@@ -149,7 +142,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 - プロキシはローカルで実行され、第三者のサーバーにデータを送信しません。
 - ストリーミングレスポンスは完全にサポートされています。
 
-## 関連項目
+## See Also
 
 - [Anthropic プロバイダー](/providers/anthropic) - setup-token または API キーを用いた Claude のネイティブ OpenClaw 統合
 - [OpenAI プロバイダー](/providers/openai) - OpenAI/Codex サブスクリプション向け

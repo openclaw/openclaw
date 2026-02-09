@@ -5,13 +5,6 @@ read_when:
   - Justerar fjärranslutningslägen (direkt vs SSH)
   - Utformar nodupptäckt + parning för fjärrnoder
 title: "Discovery och transporter"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:22Z
 ---
 
 # Discovery & transporter
@@ -25,7 +18,7 @@ Designmålet är att hålla all nätverksupptäckt/annonsering i **Node Gateway*
 
 ## Termer
 
-- **Gateway**: en enda långlivad gateway-process som äger tillstånd (sessioner, parning, nodregister) och kör kanaler. De flesta installationer använder en per värd; isolerade konfigurationer med flera gateways är möjliga.
+- **Gateway**: en enda långvarig gateway-process som äger tillstånd (sessioner, parning, nodregistret) och kör kanaler. De flesta inställningar använder en per värd, isolerade multi-gateway-inställningar är möjliga.
 - **Gateway WS (kontrollplan)**: WebSocket-ändpunkten på `127.0.0.1:18789` som standard; kan bindas till LAN/tailnet via `gateway.bind`.
 - **Direkt WS-transport**: en LAN-/tailnet-exponerad Gateway WS-ändpunkt (ingen SSH).
 - **SSH-transport (fallback)**: fjärrstyrning genom att vidarebefordra `127.0.0.1:18789` över SSH.
@@ -49,9 +42,9 @@ Protokolldetaljer:
 
 ## Discovery-indata (hur klienter får veta var gatewayn finns)
 
-### 1) Bonjour / mDNS (endast LAN)
+### 1. Bonjour / mDNS (endast LAN)
 
-Bonjour är best-effort och korsar inte nätverk. Det används endast för bekvämlighet på ”samma LAN”.
+Bonjour är bäst och korsar inte nätverk. Det används bara för “samma LAN” bekvämlighet.
 
 Målriktning:
 
@@ -83,15 +76,15 @@ Inaktivera/åsidosätt:
 - `OPENCLAW_TAILNET_DNS` publicerar ett `tailnetDns`-tips (MagicDNS).
 - `OPENCLAW_CLI_PATH` åsidosätter den annonserade CLI-sökvägen.
 
-### 2) Tailnet (över nätverk)
+### 2. Tailnet (över nätverk)
 
-För upplägg av London/Wien-typ hjälper inte Bonjour. Det rekommenderade ”direkta” målet är:
+För London/Wien stil uppsättningar kommer Bonjour inte att hjälpa. Det rekommenderade ”direkt” målet är:
 
 - Tailscale MagicDNS-namn (föredras) eller en stabil tailnet-IP.
 
 Om gatewayn kan upptäcka att den körs under Tailscale publicerar den `tailnetDns` som ett valfritt tips för klienter (inklusive wide-area-beacons).
 
-### 3) Manuell / SSH-mål
+### 3. Manuell / SSH-mål
 
 När det inte finns någon direkt rutt (eller direkt är inaktiverat) kan klienter alltid ansluta via SSH genom att vidarebefordra loopback-gatewayporten.
 

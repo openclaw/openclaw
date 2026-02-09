@@ -4,13 +4,6 @@ read_when:
   - Ses ekleri için Deepgram konuşmadan metne istiyorsanız
   - Hızlı bir Deepgram yapılandırma örneğine ihtiyacınız varsa
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:33Z
 ---
 
 # Deepgram (Ses Transkripsiyonu)

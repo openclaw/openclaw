@@ -4,19 +4,12 @@ read_when:
   - Chạy các script từ kho lưu trữ
   - Thêm hoặc thay đổi script trong ./scripts
 title: "Scripts"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:06Z
 ---
 
 # Scripts
 
-Thư mục `scripts/` chứa các script hỗ trợ cho quy trình làm việc cục bộ và các tác vụ vận hành.
-Hãy dùng chúng khi một tác vụ gắn trực tiếp với một script; nếu không, hãy ưu tiên CLI.
+Thư mục `scripts/` chứa các script hỗ trợ cho workflow cục bộ và các tác vụ vận hành.
+Hãy dùng những script này khi một tác vụ gắn rõ ràng với một script; nếu không thì ưu tiên CLI.
 
 ## Quy ước
 

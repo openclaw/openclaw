@@ -4,13 +4,6 @@ read_when:
   - Mesaj CLI eylemleri eklerken veya değiştirirken
   - Giden kanal davranışını değiştirirken
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:14Z
 ---
 
 # `openclaw message`
@@ -42,7 +35,7 @@ Hedef biçimleri (`--target`):
 - iMessage: tanıtıcı, `chat_id:<id>`, `chat_guid:<guid>` veya `chat_identifier:<id>`
 - MS Teams: konuşma kimliği (`19:...@thread.tacv2`) veya `conversation:<id>` ya da `user:<aad-object-id>`
 
-Ad çözümleme:
+Name lookup:
 
 - Desteklenen sağlayıcılar için (Discord/Slack vb.), `Help` veya `#help` gibi kanal adları dizin önbelleği üzerinden çözülür.
 - Önbellek kaçırıldığında, sağlayıcı destekliyorsa OpenClaw canlı dizin araması dener.
@@ -120,7 +113,7 @@ Ad çözümleme:
   - Gerekli: `--guild-id`, `--query`
   - İsteğe bağlı: `--channel-id`, `--channel-ids` (tekrar), `--author-id`, `--author-ids` (tekrar), `--limit`
 
-### İş Parçacıkları
+### Konular
 
 - `thread create`
   - Kanallar: Discord
@@ -181,7 +174,7 @@ Ad çözümleme:
 - `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` ayrıca `--reason` destekler
 
-### Yayın
+### Broadcast
 
 - `broadcast`
   - Kanallar: yapılandırılmış herhangi bir kanal; tüm sağlayıcıları hedeflemek için `--channel all` kullanın

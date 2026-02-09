@@ -5,13 +5,6 @@ read_when:
   - การทำ node runner + UI IPC
   - การเพิ่มโหมดความปลอดภัยของexec hostและคำสั่งแบบ slash
 title: "การรีแฟกเตอร์Exec Host"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
 ---
 
 # แผนการรีแฟกเตอร์Exec host
@@ -236,7 +229,7 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 
 - เครื่องมือ `exec` บน Gateway จัดการวงจรชีวิตโดยตรง (เฉพาะ synchronous)
 
-## โฟลว์การ exec
+## โฟลว์การ Exec
 
 ### โฮสต์ Sandbox
 
@@ -251,11 +244,11 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 ### โฮสต์ Node
 
 - Gateway เรียก `node.invoke` พร้อม `system.run`
-- Runner บังคับใช้การอนุมัติภายในเครื่อง
+- Runner บังคับการอนุมัติในเครื่อง
 - Runner ส่งคืน stdout/stderr แบบรวม
 - อีเวนต์ Bridge สำหรับเริ่ม/จบ/ปฏิเสธ (ไม่บังคับ)
 
-## ขีดจำกัดเอาต์พุต
+## จำกัดผลลัพธ์
 
 - จำกัด stdout+stderr รวมที่ **200k**; เก็บ **tail 20k** สำหรับอีเวนต์
 - ตัดทอนพร้อม suffix ที่ชัดเจน (เช่น `"… (truncated)"`)

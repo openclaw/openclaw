@@ -3,13 +3,6 @@ summary: "WhatsApp (웹 채널) 통합: 로그인, 인박스, 답장, 미디어,
 read_when:
   - WhatsApp/웹 채널 동작 또는 인박스 라우팅 작업 시
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:48Z
 ---
 
 # WhatsApp (웹 채널)
@@ -104,8 +97,7 @@ OpenClaw 전용으로 **별도의 전화번호**를 사용하십시오. 최상�
 }
 ```
 
-자기 자신 채팅 답장은 설정 시 기본적으로 `[{identity.name}]`를 사용합니다(그렇지 않으면 `[openclaw]`).  
-`messages.responsePrefix`이 설정되지 않은 경우에 해당합니다. 접두어를 사용자 지정하거나 비활성화하려면 명시적으로 설정하십시오(제거하려면 `""` 사용).
+자기 자신 채팅 답장은 설정 시 기본적으로 `[{identity.name}]`를 사용합니다(그렇지 않으면 `[openclaw]`). `messages.responsePrefix`이 설정되지 않은 경우에 해당합니다. 접두어를 사용자 지정하거나 비활성화하려면 명시적으로 설정하십시오(제거하려면 `""` 사용).
 
 ### 번호 소싱 팁
 
@@ -157,9 +149,9 @@ OpenClaw 전용으로 **별도의 전화번호**를 사용하십시오. 최상�
 - 아웃바운드 다이렉트 메시지는 페어링 답장을 트리거하지 않습니다(연락처 스팸 방지).
 - 인바운드 알 수 없는 발신자는 여전히 `channels.whatsapp.dmPolicy`를 따릅니다.
 - 자기 자신 채팅 모드(allowFrom에 본인 번호 포함)는 자동 읽음 영수증을 피하고 멘션 JID를 무시합니다.
-- 자기 자신 채팅이 아닌 다이렉트 메시지에는 읽음 영수증이 전송됩니다.
+- 자기 자신과의 채팅이 아닌 DM에 대해 읽음 확인이 전송됩니다.
 
-## 읽음 영수증
+## 읽음 확인
 
 기본적으로 Gateway는 수신된 WhatsApp 메시지를 수락하면 읽음(파란 체크)으로 표시합니다.
 
@@ -210,6 +202,7 @@ OpenClaw 전용으로 **별도의 전화번호**를 사용하십시오. 최상�
 ## 메시지 정규화 (모델이 보는 내용)
 
 - `Body`는 봉투를 포함한 현재 메시지 본문입니다.
+
 - 인용된 답장 컨텍스트는 **항상 추가**됩니다:
 
   ```
@@ -222,6 +215,7 @@ OpenClaw 전용으로 **별도의 전화번호**를 사용하십시오. 최상�
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = 인용된 본문 또는 미디어 플레이스홀더
   - `ReplyToSender` = 알려진 경우 E.164
+
 - 미디어만 있는 인바운드 메시지는 플레이스홀더를 사용합니다:
   - `<media:image|video|audio|document|sticker>`
 
@@ -408,5 +402,5 @@ WhatsApp은 오디오를 **음성 노트**(PTT 버블)로 전송합니다.
 
 **Bun 런타임**
 
-- Bun은 **권장되지 않습니다**. WhatsApp(Baileys)과 Telegram은 Bun에서 신뢰성이 낮습니다.  
+- Bun은 **권장되지 않습니다**. WhatsApp(Baileys)과 Telegram은 Bun에서 신뢰성이 낮습니다.
   **Node**로 Gateway를 실행하십시오. (시작하기의 런타임 참고 사항 참조.)

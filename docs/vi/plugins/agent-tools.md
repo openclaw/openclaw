@@ -4,24 +4,17 @@ read_when:
   - Bạn muốn thêm một công cụ tác tử mới trong một plugin
   - Bạn cần biến một công cụ thành tùy chọn thông qua danh sách cho phép
 title: "Công cụ tác tử của Plugin"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:46Z
 ---
 
 # Công cụ tác tử của plugin
 
-Các plugin OpenClaw có thể đăng ký **công cụ tác tử** (hàm JSON‑schema) được phơi bày
-cho LLM trong quá trình chạy tác tử. Công cụ có thể là **bắt buộc** (luôn khả dụng) hoặc
-**tùy chọn** (cần chọn tham gia).
+OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed
+to the LLM during agent runs. Tools can be **required** (always available) or
+**optional** (opt‑in).
 
-Công cụ tác tử được cấu hình dưới `tools` trong cấu hình chính, hoặc theo từng tác tử dưới
-`agents.list[].tools`. Chính sách danh sách cho phép/danh sách chặn kiểm soát những công cụ mà tác tử
-có thể gọi.
+Agent tools are configured under `tools` in the main config, or per‑agent under
+`agents.list[].tools`. The allowlist/denylist policy controls which tools the agent
+can call.
 
 ## Công cụ cơ bản
 
@@ -44,8 +37,8 @@ export default function (api) {
 
 ## Công cụ tùy chọn (chọn tham gia)
 
-Các công cụ tùy chọn **không bao giờ** được bật tự động. Người dùng phải thêm chúng vào
-danh sách cho phép của tác tử.
+Optional tools are **never** auto‑enabled. Users must add them to an agent
+allowlist.
 
 ```ts
 export default function (api) {

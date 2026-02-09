@@ -4,13 +4,6 @@ read_when:
   - आपको अनुसूचित जॉब्स और वेकअप्स चाहिए
   - आप cron निष्पादन और लॉग्स का डिबग कर रहे हैं
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:00Z
 ---
 
 # `openclaw cron`
@@ -23,10 +16,10 @@ Gateway शेड्यूलर के लिए cron जॉब्स प्र
 
 सुझाव: पूर्ण कमांड सतह के लिए `openclaw cron --help` चलाएँ।
 
-टिप्पणी: पृथक `cron add` जॉब्स डिफ़ॉल्ट रूप से `--announce` डिलीवरी पर सेट होते हैं। आउटपुट को
-आंतरिक रखने के लिए `--no-deliver` का उपयोग करें। `--deliver` `--announce` के लिए एक अप्रचलित उपनाम के रूप में बना रहता है।
+Note: isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep
+output internal. `--deliver` remains as a deprecated alias for `--announce`.
 
-टिप्पणी: वन-शॉट (`--at`) जॉब्स सफलता के बाद डिफ़ॉल्ट रूप से हटा दिए जाते हैं। उन्हें बनाए रखने के लिए `--keep-after-run` का उपयोग करें।
+Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
 
 टिप्पणी: आवर्ती जॉब्स अब लगातार त्रुटियों के बाद घातीय पुनःप्रयास बैकऑफ का उपयोग करते हैं (30s → 1m → 5m → 15m → 60m), फिर अगली सफल रन के बाद सामान्य शेड्यूल पर लौट आते हैं।
 

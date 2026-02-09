@@ -4,13 +4,6 @@ read_when:
   - agent hooks များကို စီမံခန့်ခွဲလိုသောအခါ
   - hooks များကို ထည့်သွင်းခြင်း သို့မဟုတ် အပ်ဒိတ်လုပ်လိုသောအခါ
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:12Z
 ---
 
 # `openclaw hooks`
@@ -134,8 +127,8 @@ openclaw hooks enable <name>
 
 သင့် config (`~/.openclaw/config.json`) ထဲသို့ ထည့်သွင်းခြင်းဖြင့် သတ်မှတ်ထားသော hook ကို ဖွင့်ပါသည်။
 
-**မှတ်ချက်:** plugin များမှ စီမံခန့်ခွဲထားသော hooks များသည် `openclaw hooks list` ထဲတွင် `plugin:<id>` ဟုပြထားပြီး
-ဒီနေရာမှ ဖွင့်/ပိတ် မလုပ်နိုင်ပါ။ plugin ကိုပဲ ဖွင့်/ပိတ် လုပ်ပါ။
+**မှတ်ချက်:** plugin များဖြင့် စီမံခန့်ခွဲထားသော hooks များသည် `openclaw hooks list` တွင် `plugin:<id>` ဟုပေါ်လာပြီး
+ဒီနေရာမှ enable/disable မလုပ်နိုင်ပါ။ plugin ကို enable/disable လုပ်ပါ။
 
 **အငြင်းပွားချက်များ:**
 
@@ -156,7 +149,7 @@ openclaw hooks enable session-memory
 **လုပ်ဆောင်ပုံ:**
 
 - hook ရှိမရှိနှင့် အသုံးပြုနိုင်မှုကို စစ်ဆေးသည်
-- သင့် config ထဲရှိ `hooks.internal.entries.<name>.enabled = true` ကို အပ်ဒိတ်လုပ်သည်
+- သင့် config ထဲရှိ `hooks.internal.entries.<name>.enabled = true` ကို update လုပ်ပါ
 - config ကို disk သို့ သိမ်းဆည်းသည်
 
 **ဖွင့်ပြီးနောက်:**

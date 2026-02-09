@@ -3,13 +3,6 @@ summary: "CLI-Referenz für `openclaw health` (Gateway-Gesundheitsendpunkt über
 read_when:
   - Sie möchten die Gesundheit des laufenden Gateways schnell prüfen
 title: "Gesundheit"
-x-i18n:
-  source_path: cli/health.md
-  source_hash: 82a78a5a97123f7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:35Z
 ---
 
 # `openclaw health`

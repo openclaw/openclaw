@@ -3,13 +3,6 @@ summary: "Levenscyclus van de spraakoverlay wanneer wake-woord en push-to-talk o
 read_when:
   - Afstemmen van het gedrag van de spraakoverlay
 title: "Spraakoverlay"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # Levenscyclus van de spraakoverlay (macOS)
@@ -39,7 +32,7 @@ Doelgroep: macOS-appbijdragers. Doel: de spraakoverlay voorspelbaar houden wanne
    - `VoiceSessionPublisher` (`ObservableObject`) spiegelt de actieve sessie naar SwiftUI.
    - `VoiceWakeOverlayView` rendert uitsluitend via de publisher; het muteert nooit direct globale singletons.
    - Overlay-gebruikersacties (`sendNow`, `dismiss`, `edit`) roepen terug naar de coordinator met het sessietoken.
-4. **Geünificeerd verzendpad**
+4. **Eenvoudig verzendpad**
    - Bij `endCapture`: als getrimde tekst leeg is → sluiten; anders `performSend(session:)` (speelt het verzendgeluid één keer af, stuurt door, sluit).
    - Push-to-talk: geen vertraging; wake-woord: optionele vertraging voor automatisch verzenden.
    - Pas een korte cooldown toe op de wake-runtime nadat push-to-talk is beëindigd, zodat het wake-woord niet direct opnieuw triggert.
@@ -56,6 +49,7 @@ Doelgroep: macOS-appbijdragers. Doel: de spraakoverlay voorspelbaar houden wanne
   ```
 
 - Verifieer dat er slechts één actief sessietoken is; verouderde callbacks moeten door de coordinator worden genegeerd.
+
 - Zorg ervoor dat het loslaten van push-to-talk altijd `endCapture` aanroept met het actieve token; als de tekst leeg is, verwacht `dismiss` zonder chime of verzending.
 
 ## Migratiestappen (aanbevolen)

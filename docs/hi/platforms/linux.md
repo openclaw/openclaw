@@ -4,21 +4,14 @@ read_when:
   - Linux सहचर ऐप की स्थिति खोज रहे हों
   - प्लेटफ़ॉर्म कवरेज या योगदान की योजना बना रहे हों
 title: "Linux ऐप"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:26Z
 ---
 
 # Linux ऐप
 
-Gateway Linux पर पूर्ण रूप से समर्थित है। **Node अनुशंसित रनटाइम है**।
-Gateway के लिए Bun की अनुशंसा नहीं की जाती (WhatsApp/Telegram बग्स)।
+The Gateway is fully supported on Linux. **Node is the recommended runtime**.
+Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
-नेटिव Linux सहचर ऐप्स योजनाबद्ध हैं। यदि आप एक बनाने में सहायता करना चाहते हैं तो योगदान का स्वागत है।
+Native Linux companion apps are planned. अगर आप एक बनाने में मदद करना चाहते हैं, तो contributions का स्वागत है।
 
 ## शुरुआती त्वरित मार्ग (VPS)
 
@@ -71,7 +64,9 @@ openclaw doctor
 
 ## सिस्टम नियंत्रण (systemd उपयोगकर्ता यूनिट)
 
-OpenClaw डिफ़ॉल्ट रूप से एक systemd **उपयोगकर्ता** सेवा इंस्टॉल करता है। साझा या हमेशा-चालू सर्वरों के लिए **सिस्टम** सेवा का उपयोग करें। पूर्ण यूनिट उदाहरण और मार्गदर्शन [Gateway रनबुक](/gateway) में उपलब्ध हैं।
+OpenClaw installs a systemd **user** service by default. Use a **system**
+service for shared or always-on servers. The full unit example and guidance
+live in the [Gateway runbook](/gateway).
 
 न्यूनतम सेटअप:
 

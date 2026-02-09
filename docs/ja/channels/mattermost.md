@@ -4,20 +4,13 @@ read_when:
   - Mattermost のセットアップ
   - Mattermost ルーティングのデバッグ
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:46Z
 ---
 
 # Mattermost（プラグイン）
 
-ステータス: プラグイン経由でサポート（ボットトークン + WebSocket イベント）。チャンネル、グループ、ダイレクトメッセージがサポートされています。
-Mattermost は自己ホスト可能なチーム向けメッセージングプラットフォームです。製品の詳細やダウンロードについては、公式サイト
-[mattermost.com](https://mattermost.com) を参照してください。
+Status: supported via plugin (bot token + WebSocket events). チャンネル、グループ、DMに対応しています。
+Mattermostはセルフホスティング可能なチームメッセージングプラットフォームです。製品の詳細とダウンロードについては、
+[mattermost.com](https://mattermost.com)の公式サイトを参照してください。
 
 ## プラグインが必要
 
@@ -69,11 +62,11 @@ OpenClaw はローカルインストールパスを自動的に提示します�
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-環境変数は **デフォルト** アカウント（`default`）にのみ適用されます。その他のアカウントは設定値を使用する必要があります。
+環境変数は **デフォルト** アカウント（`default`）にのみ適用されます。その他のアカウントは設定値を使用する必要があります。 他のアカウントでは設定値を使用する必要があります。
 
 ## チャットモード
 
-Mattermost はダイレクトメッセージに自動で応答します。チャンネルの動作は `chatmode` により制御されます:
+最も重要なものはDMに自動的に反応します。 Mattermost はダイレクトメッセージに自動で応答します。チャンネルの動作は `chatmode` により制御されます:
 
 - `oncall`（デフォルト）: チャンネルでは @メンションされた場合のみ応答します。
 - `onmessage`: すべてのチャンネルメッセージに応答します。

@@ -4,13 +4,6 @@ read_when:
   - Skills-configuratie toevoegen of wijzigen
   - Gebundelde toegestane lijst of installatiegedrag aanpassen
 title: "Skills-configuratie"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:48Z
 ---
 
 # Skills-configuratie

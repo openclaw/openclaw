@@ -4,13 +4,6 @@ read_when:
   - OpenClaw کام نہیں کر رہا اور آپ کو حل تک تیز ترین راستہ درکار ہے
   - گہرے رن بکس میں جانے سے پہلے آپ ایک ٹرائیج فلو چاہتے ہیں
 title: "خرابیوں کا ازالہ"
-x-i18n:
-  source_path: help/troubleshooting.md
-  source_hash: 4a53e9f9d23dcf6b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:30Z
 ---
 
 # خرابیوں کا ازالہ
@@ -64,7 +57,7 @@ flowchart TD
 ```
 
 <AccordionGroup>
-  <Accordion title="کوئی جوابات نہیں">
+  <Accordion title="No replies">
     ```bash
     openclaw status
     openclaw gateway status
@@ -73,28 +66,30 @@ flowchart TD
     openclaw logs --follow
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - `Runtime: running`
     - `RPC probe: ok`
     - آپ کا چینل `channels status --probe` میں connected/ready دکھاتا ہے
     - ارسال کنندہ منظور شدہ نظر آتا ہے (یا DM پالیسی کھلی/allowlist ہے)
-
+    
     عام لاگ دستخط:
-
+    
     - `drop guild message (mention required` → Discord میں مینشن گیٹنگ نے پیغام کو بلاک کیا۔
     - `pairing request` → ارسال کنندہ غیر منظور شدہ ہے اور DM pairing منظوری کا منتظر ہے۔
     - چینل لاگز میں `blocked` / `allowlist` → ارسال کنندہ، کمرہ، یا گروپ فلٹر ہے۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#no-replies](/gateway/troubleshooting#no-replies)
     - [/channels/troubleshooting](/channels/troubleshooting)
     - [/channels/pairing](/channels/pairing)
+    ```
 
   </Accordion>
 
-  <Accordion title="ڈیش بورڈ یا کنٹرول UI کنیکٹ نہیں ہو رہا">
+  <Accordion title="Dashboard or Control UI will not connect">
     ```bash
     openclaw status
     openclaw gateway status
@@ -103,27 +98,29 @@ flowchart TD
     openclaw channels status --probe
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - `Dashboard: http://...`، `openclaw gateway status` میں دکھایا جاتا ہے
     - `RPC probe: ok`
     - لاگز میں کوئی auth لوپ نہیں
-
+    
     عام لاگ دستخط:
-
+    
     - `device identity required` → HTTP/غیر محفوظ سیاق میں ڈیوائس auth مکمل نہیں ہو سکتی۔
     - `unauthorized` / reconnect لوپ → غلط ٹوکن/پاس ورڈ یا auth موڈ میں عدم مطابقت۔
     - `gateway connect failed:` → UI غلط URL/پورٹ کو ہدف بنا رہا ہے یا گیٹ وے ناقابلِ رسائی ہے۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#dashboard-control-ui-connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity)
     - [/web/control-ui](/web/control-ui)
     - [/gateway/authentication](/gateway/authentication)
+    ```
 
   </Accordion>
 
-  <Accordion title="گیٹ وے شروع نہیں ہوتا یا سروس انسٹال ہے مگر چل نہیں رہی">
+  <Accordion title="Gateway will not start or service installed but not running">
     ```bash
     openclaw status
     openclaw gateway status
@@ -132,27 +129,29 @@ flowchart TD
     openclaw channels status --probe
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - `Service: ... (loaded)`
     - `Runtime: running`
     - `RPC probe: ok`
-
+    
     عام لاگ دستخط:
-
+    
     - `Gateway start blocked: set gateway.mode=local` → گیٹ وے موڈ غیر سیٹ/ریموٹ ہے۔
     - `refusing to bind gateway ... without auth` → ٹوکن/پاس ورڈ کے بغیر non-loopback بائنڈ۔
     - `another gateway instance is already listening` یا `EADDRINUSE` → پورٹ پہلے سے استعمال میں ہے۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#gateway-service-not-running](/gateway/troubleshooting#gateway-service-not-running)
     - [/gateway/background-process](/gateway/background-process)
     - [/gateway/configuration](/gateway/configuration)
+    ```
 
   </Accordion>
 
-  <Accordion title="چینل کنیکٹ ہوتا ہے مگر پیغامات کا بہاؤ نہیں">
+  <Accordion title="Channel connects but messages do not flow">
     ```bash
     openclaw status
     openclaw gateway status
@@ -161,26 +160,28 @@ flowchart TD
     openclaw channels status --probe
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - چینل ٹرانسپورٹ کنیکٹڈ ہے۔
     - Pairing/allowlist چیکس پاس ہوتے ہیں۔
     - جہاں لازم ہو وہاں مینشنز شناخت ہو رہے ہیں۔
-
+    
     عام لاگ دستخط:
-
+    
     - `mention required` → گروپ مینشن گیٹنگ نے پروسیسنگ کو بلاک کیا۔
     - `pairing` / `pending` → DM ارسال کنندہ ابھی منظور شدہ نہیں۔
     - `not_in_channel`, `missing_scope`, `Forbidden`, `401/403` → چینل اجازت ٹوکن کا مسئلہ۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#channel-connected-messages-not-flowing](/gateway/troubleshooting#channel-connected-messages-not-flowing)
     - [/channels/troubleshooting](/channels/troubleshooting)
+    ```
 
   </Accordion>
 
-  <Accordion title="کرون یا ہارٹ بیٹ فائر نہیں ہوا یا ڈیلیور نہیں ہوا">
+  <Accordion title="Cron or heartbeat did not fire or did not deliver">
     ```bash
     openclaw status
     openclaw gateway status
@@ -190,28 +191,30 @@ flowchart TD
     openclaw logs --follow
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - `cron.status` فعال دکھاتا ہے اور اگلا wake موجود ہے۔
     - `cron runs` میں حالیہ `ok` اندراجات دکھتے ہیں۔
     - ہارٹ بیٹ فعال ہے اور فعال اوقات سے باہر نہیں۔
-
+    
     عام لاگ دستخط:
-
+    
     - `cron: scheduler disabled; jobs will not run automatically` → کرون غیر فعال ہے۔
     - `heartbeat skipped` مع `reason=quiet-hours` → کنفیگر کیے گئے فعال اوقات سے باہر۔
     - `requests-in-flight` → مرکزی لین مصروف؛ ہارٹ بیٹ ویک مؤخر ہوا۔
     - `unknown accountId` → ہارٹ بیٹ ڈیلیوری کا ہدف اکاؤنٹ موجود نہیں۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
     - [/automation/troubleshooting](/automation/troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
+    ```
 
   </Accordion>
 
-  <Accordion title="نوڈ paired ہے مگر ٹول کیمرا/کینوس/اسکرین exec میں ناکام ہے">
+  <Accordion title="Node is paired but tool fails camera canvas screen exec">
     ```bash
     openclaw status
     openclaw gateway status
@@ -220,28 +223,30 @@ flowchart TD
     openclaw logs --follow
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - نوڈ کردار `node` کے لیے connected اور paired کے طور پر درج ہے۔
     - جس کمانڈ کو آپ چلا رہے ہیں اس کے لیے قابلیت موجود ہے۔
     - ٹول کے لیے اجازت کی حالت منظور شدہ ہے۔
-
+    
     عام لاگ دستخط:
-
+    
     - `NODE_BACKGROUND_UNAVAILABLE` → نوڈ ایپ کو foreground میں لائیں۔
     - `*_PERMISSION_REQUIRED` → OS اجازت مسترد/غائب تھی۔
     - `SYSTEM_RUN_DENIED: approval required` → exec منظوری زیرِ التوا ہے۔
     - `SYSTEM_RUN_DENIED: allowlist miss` → کمانڈ exec allowlist میں نہیں۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#node-paired-tool-fails](/gateway/troubleshooting#node-paired-tool-fails)
     - [/nodes/troubleshooting](/nodes/troubleshooting)
     - [/tools/exec-approvals](/tools/exec-approvals)
+    ```
 
   </Accordion>
 
-  <Accordion title="براؤزر ٹول ناکام ہے">
+  <Accordion title="Browser tool fails">
     ```bash
     openclaw status
     openclaw gateway status
@@ -250,23 +255,25 @@ flowchart TD
     openclaw doctor
     ```
 
+    ```
     اچھا آؤٹ پٹ اس طرح دکھتا ہے:
-
+    
     - براؤزر اسٹیٹس `running: true` اور منتخب براؤزر/پروفائل دکھاتا ہے۔
     - `openclaw` پروفائل شروع ہوتا ہے یا `chrome` ریلے کے پاس منسلک ٹیب ہوتا ہے۔
-
+    
     عام لاگ دستخط:
-
+    
     - `Failed to start Chrome CDP on port` → مقامی براؤزر لانچ ناکام۔
     - `browser.executablePath not found` → کنفیگر کیا گیا بائنری پاتھ غلط ہے۔
     - `Chrome extension relay is running, but no tab is connected` → ایکسٹینشن منسلک نہیں۔
     - `Browser attachOnly is enabled ... not reachable` → attach-only پروفائل کے پاس کوئی live CDP ہدف نہیں۔
-
+    
     گہرے صفحات:
-
+    
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
     - [/tools/chrome-extension](/tools/chrome-extension)
+    ```
 
   </Accordion>
 </AccordionGroup>

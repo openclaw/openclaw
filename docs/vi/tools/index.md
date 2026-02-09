@@ -4,25 +4,18 @@ read_when:
   - Thêm hoặc chỉnh sửa công cụ của tác tử
   - Ngừng sử dụng hoặc thay đổi các skills `openclaw-*`
 title: "Tools"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:41:08Z
 ---
 
 # Tools (OpenClaw)
 
-OpenClaw cung cấp **các công cụ tác tử hạng nhất** cho trình duyệt, canvas, nodes và cron.
-Chúng thay thế các skills `openclaw-*` cũ: công cụ có kiểu dữ liệu, không shelling,
-và tác tử nên sử dụng trực tiếp.
+OpenClaw exposes **first-class agent tools** for browser, canvas, nodes, and cron.
+These replace the old `openclaw-*` skills: the tools are typed, no shelling,
+and the agent should rely on them directly.
 
 ## Tắt công cụ
 
-Bạn có thể cho phép/từ chối công cụ trên toàn cục qua `tools.allow` / `tools.deny` trong `openclaw.json`
-(từ chối có ưu tiên). Điều này ngăn các công cụ không được phép được gửi tới nhà cung cấp mô hình.
+You can globally allow/deny tools via `tools.allow` / `tools.deny` in `openclaw.json`
+(deny wins). This prevents disallowed tools from being sent to model providers.
 
 ```json5
 {
@@ -38,8 +31,8 @@ Ghi chú:
 
 ## Hồ sơ công cụ (allowlist cơ sở)
 
-`tools.profile` đặt **allowlist công cụ cơ sở** trước `tools.allow`/`tools.deny`.
-Ghi đè theo từng tác tử: `agents.list[].tools.profile`.
+`tools.profile` sets a **base tool allowlist** before `tools.allow`/`tools.deny`.
+Per-agent override: `agents.list[].tools.profile`.
 
 Các hồ sơ:
 
@@ -88,14 +81,14 @@ Ví dụ (hồ sơ coding toàn cục, tác tử hỗ trợ chỉ nhắn tin):
 
 ## Chính sách công cụ theo nhà cung cấp
 
-Dùng `tools.byProvider` để **thu hẹp thêm** các công cụ cho từng nhà cung cấp cụ thể
-(hoặc một `provider/model` duy nhất) mà không thay đổi mặc định toàn cục.
-Ghi đè theo từng tác tử: `agents.list[].tools.byProvider`.
+Use `tools.byProvider` to **further restrict** tools for specific providers
+(or a single `provider/model`) without changing your global defaults.
+Per-agent override: `agents.list[].tools.byProvider`.
 
-Chính sách này được áp dụng **sau** hồ sơ công cụ cơ sở và **trước** các danh sách cho phép/từ chối,
-vì vậy nó chỉ có thể thu hẹp tập công cụ.
-Khóa nhà cung cấp chấp nhận `provider` (ví dụ: `google-antigravity`) hoặc
-`provider/model` (ví dụ: `openai/gpt-5.2`).
+This is applied **after** the base tool profile and **before** allow/deny lists,
+so it can only narrow the tool set.
+Provider keys accept either `provider` (e.g. `google-antigravity`) or
+`provider/model` (e.g. `openai/gpt-5.2`).
 
 Ví dụ (giữ hồ sơ coding toàn cục, nhưng công cụ tối thiểu cho Google Antigravity):
 
@@ -144,8 +137,8 @@ Ví dụ (ghi đè theo tác tử cho một nhà cung cấp duy nhất):
 
 ## Nhóm công cụ (viết tắt)
 
-Các chính sách công cụ (toàn cục, tác tử, sandbox) hỗ trợ các mục `group:*` mở rộng thành nhiều công cụ.
-Dùng chúng trong `tools.allow` / `tools.deny`.
+Chính sách tool (toàn cục, theo tác tử, sandbox) hỗ trợ các mục `group:*` mở rộng thành nhiều tool.
+Use these in `tools.allow` / `tools.deny`.
 
 Các nhóm có sẵn:
 
@@ -172,10 +165,10 @@ Ví dụ (chỉ cho phép công cụ file + trình duyệt):
 
 ## Plugin + công cụ
 
-Plugin có thể đăng ký **các công cụ bổ sung** (và lệnh CLI) ngoài tập lõi.
-Xem [Plugins](/tools/plugin) để cài đặt + cấu hình, và [Skills](/tools/skills) để biết cách
-hướng dẫn sử dụng công cụ được chèn vào prompt. Một số plugin đi kèm skills riêng
-song song với công cụ (ví dụ: plugin cuộc gọi thoại).
+Plugins can register **additional tools** (and CLI commands) beyond the core set.
+See [Plugins](/tools/plugin) for install + config, and [Skills](/tools/skills) for how
+tool usage guidance is injected into prompts. Some plugins ship their own skills
+alongside tools (for example, the voice-call plugin).
 
 Công cụ plugin tùy chọn:
 
@@ -186,8 +179,8 @@ Công cụ plugin tùy chọn:
 
 ### `apply_patch`
 
-Áp dụng các bản vá có cấu trúc trên một hoặc nhiều tệp. Dùng cho chỉnh sửa nhiều hunk.
-Thử nghiệm: bật qua `tools.exec.applyPatch.enabled` (chỉ mô hình OpenAI).
+Apply structured patches across one or more files. Use for multi-hunk edits.
+Experimental: enable via `tools.exec.applyPatch.enabled` (OpenAI models only).
 
 ### `exec`
 
@@ -204,7 +197,7 @@ Tham số cốt lõi:
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (id/tên node cho `host=node`)
-- Cần TTY thật? Đặt `pty: true`.
+- Need a real TTY? Set `pty: true`.
 
 Ghi chú:
 
@@ -472,8 +465,8 @@ Các công cụ dựa trên Gateway (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (nếu bật xác thực)
 - `timeoutMs`
 
-Lưu ý: khi đặt `gatewayUrl`, hãy bao gồm `gatewayToken` một cách tường minh. Công cụ không kế thừa cấu hình
-hoặc thông tin xác thực môi trường cho các ghi đè, và thiếu thông tin xác thực tường minh là lỗi.
+Note: when `gatewayUrl` is set, include `gatewayToken` explicitly. Tools do not inherit config
+or environment credentials for overrides, and missing explicit credentials is an error.
 
 Công cụ trình duyệt:
 
@@ -515,5 +508,5 @@ Công cụ được hiển thị qua hai kênh song song:
 1. **Văn bản system prompt**: danh sách dễ đọc + hướng dẫn.
 2. **Schema công cụ**: các định nghĩa hàm có cấu trúc được gửi tới API mô hình.
 
-Điều đó có nghĩa là tác tử thấy cả “có những công cụ nào” và “cách gọi chúng.” Nếu một công cụ
-không xuất hiện trong system prompt hoặc schema, mô hình không thể gọi nó.
+That means the agent sees both “what tools exist” and “how to call them.” If a tool
+doesn’t appear in the system prompt or the schema, the model cannot call it.

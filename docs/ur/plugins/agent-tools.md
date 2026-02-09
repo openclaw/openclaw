@@ -1,27 +1,20 @@
 ---
 summary: "ایک پلگ اِن میں ایجنٹ ٹولز لکھیں (اسکیماز، اختیاری ٹولز، اجازت فہرستیں)"
 read_when:
-  - "آپ کسی پلگ اِن میں نیا ایجنٹ ٹول شامل کرنا چاہتے ہیں"
-  - "آپ کو کسی ٹول کو اجازت فہرستوں کے ذریعے اختیاری (opt‑in) بنانا ہے"
+  - آپ کسی پلگ اِن میں نیا ایجنٹ ٹول شامل کرنا چاہتے ہیں
+  - آپ کو کسی ٹول کو اجازت فہرستوں کے ذریعے اختیاری (opt‑in) بنانا ہے
 title: "پلگ اِن ایجنٹ ٹولز"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # پلگ اِن ایجنٹ ٹولز
 
-OpenClaw پلگ اِنز **ایجنٹ ٹولز** (JSON‑schema فنکشنز) رجسٹر کر سکتے ہیں جو ایجنٹ رنز کے دوران
-LLM کو دستیاب ہوتے ہیں۔ ٹولز **لازمی** (ہمیشہ دستیاب) یا
-**اختیاری** (opt‑in) ہو سکتے ہیں۔
+OpenClaw plugins can register **agent tools** (JSON‑schema functions) that are exposed
+to the LLM during agent runs. Tools can be **required** (always available) or
+**optional** (opt‑in).
 
-ایجنٹ ٹولز مرکزی کنفیگ میں `tools` کے تحت، یا ہر ایجنٹ کے لیے
-`agents.list[].tools` کے تحت کنفیگر کیے جاتے ہیں۔ اجازت فہرست/انکار فہرست کی پالیسی اس بات کو کنٹرول کرتی ہے کہ ایجنٹ کون سے ٹولز
-کال کر سکتا ہے۔
+Agent tools are configured under `tools` in the main config, or per‑agent under
+`agents.list[].tools`. The allowlist/denylist policy controls which tools the agent
+can call.
 
 ## بنیادی ٹول
 
@@ -44,8 +37,8 @@ export default function (api) {
 
 ## اختیاری ٹول (opt‑in)
 
-اختیاری ٹولز **کبھی بھی** خودکار طور پر فعال نہیں ہوتے۔ صارفین کو انہیں ایجنٹ کی
-اجازت فہرست میں شامل کرنا ہوتا ہے۔
+Optional tools are **never** auto‑enabled. Users must add them to an agent
+allowlist.
 
 ```ts
 export default function (api) {

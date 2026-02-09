@@ -5,13 +5,6 @@ read_when:
   - Zmiana zachowania fallbacków modeli lub UX wyboru
   - Aktualizacja sond skanowania modeli (narzędzia/obrazy)
 title: "CLI modeli"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:16Z
 ---
 
 # CLI modeli

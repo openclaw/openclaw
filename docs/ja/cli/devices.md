@@ -4,13 +4,6 @@ read_when:
   - デバイスのペアリング要求を承認する場合
   - デバイストークンをローテーションまたは失効させる必要がある場合
 title: "デバイス"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:04Z
 ---
 
 # `openclaw devices`
@@ -70,8 +63,9 @@ openclaw devices revoke --device <deviceId> --role node
 
 注記: `--url` を設定すると、CLI は設定や環境変数の資格情報にフォールバックしません。
 `--token` または `--password` を明示的に指定してください。明示的な資格情報が欠落している場合はエラーになります。
+`--token` または `--password` を明示的に渡します。 明示的な資格情報が見つかりませんでした。
 
 ## Notes
 
-- トークンのローテーションでは新しいトークン（機密情報）が返されます。シークレットとして取り扱ってください。
+- トークンローテーションは新しいトークンを返します(敏感)。 秘密のように扱いなさい。
 - これらのコマンドには `operator.pairing`（または `operator.admin`）スコープが必要です。

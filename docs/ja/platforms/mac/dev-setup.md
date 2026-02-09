@@ -3,13 +3,6 @@ summary: "OpenClaw macOS アプリで作業する開発者向けのセットア�
 read_when:
   - macOS 開発環境のセットアップ
 title: "macOS 開発者セットアップ"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:35Z
 ---
 
 # macOS 開発者セットアップ
@@ -23,7 +16,7 @@ x-i18n:
 1. **Xcode 26.2+**: Swift 開発に必要です。
 2. **Node.js 22+ & pnpm**: ゲートウェイ、CLI、パッケージングスクリプトに必要です。
 
-## 1. 依存関係のインストール
+## 1) 依存関係のインストール
 
 プロジェクト全体の依存関係をインストールします。
 
@@ -44,7 +37,7 @@ Apple Developer ID 証明書をお持ちでない場合、スクリプトは自�
 開発用の実行モード、署名フラグ、Team ID のトラブルシューティングについては、macOS アプリの README を参照してください。  
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **注記**: アドホック署名されたアプリは、セキュリティの警告を表示する場合があります。アプリが「Abort trap 6」で直ちにクラッシュする場合は、[トラブルシューティング](#troubleshooting) セクションを参照してください。
+> **注記**: アドホック署名されたアプリは、セキュリティの警告を表示する場合があります。アプリが「Abort trap 6」で直ちにクラッシュする場合は、[トラブルシューティング](#troubleshooting) セクションを参照してください。 " [Troubleshooting](#troubleshooting) セクションを参照してください。
 
 ## 3. CLI のインストール
 
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-手動実行がポートを占有している場合は、そのプロセスを停止します（Ctrl+C）。最終手段として、上記で見つかった PID を kill してください。
+手動実行がポートを占有している場合は、そのプロセスを停止します（Ctrl+C）。最終手段として、上記で見つかった PID を kill してください。 最後の手段として、上で見つけたPIDを無効にします。

@@ -3,26 +3,19 @@ summary: "Voice wake- og push-to-talk-tilstande samt routingdetaljer i mac-appen
 read_when:
   - Arbejder med voice wake- eller PTT-stier
 title: "Voice Wake"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:33Z
 ---
 
 # Voice Wake & Push-to-Talk
 
 ## Tilstande
 
-- **Wake-word-tilstand** (standard): altid-aktiv talegenkender venter på trigger-tokens (`swabbleTriggerWords`). Ved match starter den optagelse, viser overlayet med delvis tekst og sender automatisk efter stilhed.
-- **Push-to-talk (hold højre Option)**: hold højre Option-tast nede for at optage med det samme—ingen trigger nødvendig. Overlayet vises, mens tasten holdes; når du slipper, færdiggøres og videresendes der efter en kort forsinkelse, så du kan justere teksten.
+- **Wake-word tilstand** (standard): altid-on Speech recognizer venter på trigger tokens (`swabbleTriggerWords`). På match starter det optagelse, viser overlejringen med delvis tekst, og auto-sender efter tavshed.
+- **Push-to-talk (Right Option hold)**: hold den rigtige Option-nøgle nede for at fange med det samme – ingen udløser nødvendig. Overlayet vises mens holdt; udgivelse af færdiggør og fremad efter en kort forsinkelse, så du kan justere teksten.
 
 ## Runtime-adfærd (wake-word)
 
 - Talegenkenderen kører i `VoiceWakeRuntime`.
-- Triggeren affyres kun, når der er en **meningsfuld pause** mellem wake-ordet og det næste ord (~0,55 s mellemrum). Overlay/klokketone kan starte på pausen, selv før kommandoen begynder.
+- Udløser kun brand, når der er en **meningsfuld pause** mellem det vågne ord og det næste ord (~ 0,55s mellemrum). Overlægget/kimen kan starte på pausen, selv før kommandoen begynder.
 - Stilhedsvinduer: 2,0 s når tale flyder, 5,0 s hvis kun triggeren blev hørt.
 - Hård stop: 120 s for at forhindre løbske sessioner.
 - Debounce mellem sessioner: 350 ms.
@@ -45,7 +38,7 @@ Hærdning:
 
 ## Push-to-talk-specifikke detaljer
 
-- Hotkey-detektion bruger en global `.flagsChanged`-monitor for **højre Option** (`keyCode 61` + `.option`). Vi observerer kun hændelser (ingen “swallowing”).
+- Hotkey detektion bruger en global `.flagsChanged` skærm for **right Option** (`keyCode 61` + `.option`). Vi observerer kun begivenheder (ingen synke).
 - Optagelsespipelinen kører i `VoicePushToTalk`: starter Speech med det samme, streamer delvise resultater til overlayet og kalder `VoiceWakeForwarder` ved slip.
 - Når push-to-talk starter, pauser vi wake-word-runtime for at undgå konkurrerende audio taps; den genstarter automatisk efter slip.
 - Tilladelser: kræver Mikrofon + Tale; visning af hændelser kræver Accessibility/Input Monitoring-godkendelse.
@@ -54,19 +47,19 @@ Hærdning:
 ## Brugerrettede indstillinger
 
 - **Voice Wake**-toggle: aktiverer wake-word-runtime.
-- **Hold Cmd+Fn for at tale**: aktiverer push-to-talk-monitoren. Deaktiveret på macOS < 26.
+- **Hold Cmd+Fn nede for at tale**: muliggør push-to-talk skærmen. Deaktiveret på macOS < 26.
 - Sprog- og mikrofonvælgere, live-niveaumåler, trigger-ordtabel, tester (kun lokal; videresender ikke).
 - Mikrofonvælgeren bevarer det seneste valg, hvis en enhed frakobles, viser et frakoblet-hint og falder midlertidigt tilbage til systemets standard, indtil den vender tilbage.
-- **Lyde**: klokketoner ved trigger-detektion og ved afsendelse; standard er macOS’ systemlyd “Glass”. Du kan vælge enhver `NSSound`-indlæselig fil (fx MP3/WAV/AIFF) for hver hændelse eller vælge **Ingen lyd**.
+- \*\*Lyde \*\*: chimes on trigger detect and on send; defaults to the macOS “Glass” system lyd. Du kan vælge en `NSSound`-belastbar fil (f.eks. MP3/WAV/AIFF) for hver begivenhed eller vælge \*\*Ingen Lyd \*\*.
 
 ## Videresendelsesadfærd
 
 - Når Voice Wake er aktiveret, videresendes transskriptioner til den aktive gateway/agent (samme lokale vs. remote-tilstand som resten af mac-appen).
-- Svar leveres til den **senest anvendte hovedudbyder** (WhatsApp/Telegram/Discord/WebChat). Hvis levering fejler, logges fejlen, og kørslen er stadig synlig via WebChat/session-logs.
+- Svar leveres til den **sidst brugte hovedudbyder** (WhatsApp/Telegram/Discord/WebChat). Hvis leveringen mislykkes, er fejlen logget og kørslen stadig synlig via WebChat / session logs.
 
 ## Videresendelses-payload
 
-- `VoiceWakeForwarder.prefixedTranscript(_:)` foranstiller maskin-hintet før afsendelse. Delt mellem wake-word- og push-to-talk-stier.
+- `VoiceWakeForwarder.prefixedTranscript(_:)` forbereder maskinen vink før du sender. Delt mellem wake-word og push-to-talk stier.
 
 ## Hurtig verifikation
 

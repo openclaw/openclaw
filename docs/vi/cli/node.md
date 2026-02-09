@@ -4,13 +4,6 @@ read_when:
   - Chạy máy chủ node không giao diện
   - Ghép cặp một node không phải macOS cho system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:24Z
 ---
 
 # `openclaw node`
@@ -33,9 +26,8 @@ Việc thực thi vẫn được bảo vệ bằng **phê duyệt exec** và dan
 
 ## Browser proxy (zero-config)
 
-Máy chủ node tự động quảng bá một browser proxy nếu `browser.enabled` không bị
-vô hiệu hóa trên node. Điều này cho phép tác tử dùng tự động hóa trình duyệt trên node đó
-mà không cần cấu hình bổ sung.
+Các node host tự động quảng bá proxy trình duyệt nếu `browser.enabled` không bị vô hiệu hóa trên node. Điều này cho phép agent sử dụng tự động hóa trình duyệt trên node đó
+mà không cần cấu hình thêm.
 
 Nếu cần, hãy tắt trên node:
 
@@ -99,7 +91,7 @@ Các lệnh dịch vụ chấp nhận `--json` cho đầu ra có thể đọc b�
 ## Ghép cặp
 
 Kết nối đầu tiên sẽ tạo một yêu cầu ghép cặp node đang chờ trên Gateway.
-Phê duyệt qua:
+Phê duyệt thông qua:
 
 ```bash
 openclaw nodes pending

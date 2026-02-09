@@ -5,23 +5,16 @@ read_when:
   - Felsökning av webhook-parning
   - Konfigurera iMessage på macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:32Z
 ---
 
 # BlueBubbles (macOS REST)
 
-Status: medföljande plugin som kommunicerar med BlueBubbles macOS-servern över HTTP. **Rekommenderas för iMessage‑integration** tack vare rikare API och enklare konfigurering jämfört med den äldre imsg-kanalen.
+Status: buntade plugin som talar till BlueBubbles macOS server över HTTP. **Rekommenderas för iMessage integration** på grund av dess rikare API och enklare installation jämfört med äldre imsg kanal.
 
 ## Översikt
 
 - Körs på macOS via BlueBubbles hjälpapplikation ([bluebubbles.app](https://bluebubbles.app)).
-- Rekommenderad/testad: macOS Sequoia (15). macOS Tahoe (26) fungerar; redigering är för närvarande trasig på Tahoe och uppdateringar av gruppikoner kan rapportera lyckat men inte synkroniseras.
+- Rekommenderad/testad: macOS Sequoia (15). macOS Tahoe (26) fungerar; redigering är för närvarande trasigt på Tahoe, och gruppikonuppdateringar kan rapportera framgång men inte synkronisera.
 - OpenClaw pratar med den via dess REST‑API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Inkommande meddelanden levereras via webhooks; utgående svar, skrivindikatorer, läskvitton och tapbacks är REST‑anrop.
 - Bilagor och stickers tas emot som inkommande media (och exponeras för agenten när möjligt).
@@ -32,7 +25,9 @@ Status: medföljande plugin som kommunicerar med BlueBubbles macOS-servern över
 ## Snabbstart
 
 1. Installera BlueBubbles‑servern på din Mac (följ instruktionerna på [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. I BlueBubbles‑konfigen, aktivera webb‑API:t och ange ett lösenord.
+
 3. Kör `openclaw onboard` och välj BlueBubbles, eller konfigurera manuellt:
 
    ```json5
@@ -49,13 +44,14 @@ Status: medföljande plugin som kommunicerar med BlueBubbles macOS-servern över
    ```
 
 4. Peka BlueBubbles webhooks till din gateway (exempel: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Starta gatewayen; den registrerar webhook‑hanteraren och påbörjar parning.
 
 ## Hålla Messages.app vid liv (VM / headless‑miljöer)
 
-Vissa macOS‑VM:er eller alltid‑på‑miljöer kan göra att Messages.app går i ”idle” (inkommande händelser stoppar tills appen öppnas/förgrunden). En enkel lösning är att **peta Messages var 5:e minut** med AppleScript + LaunchAgent.
+Vissa macOS VM / alltid-på-inställningar kan sluta med Messages.app som går “inaktiv” (inkommande händelser slutar tills appen är öppen/föregrundad). En enkel lösning är att **peta meddelanden var femte minuter** med hjälp av ett AppleScript + LaunchAgent.
 
-### 1) Spara AppleScriptet
+### 1. Spara AppleScriptet
 
 Spara detta som:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Installera en LaunchAgent
+### 2. Installera en LaunchAgent
 
 Spara detta som:
 
@@ -116,7 +112,7 @@ Spara detta som:
 Noteringar:
 
 - Detta körs **var 300:e sekund** och **vid inloggning**.
-- Första körningen kan trigga macOS‑promptar för **Automation** (`osascript` → Messages). Godkänn dem i samma användarsession som kör LaunchAgenten.
+- Den första körningen kan utlösa macOS **Automation** uppmaningar (`osascript` → Meddelanden). Godkänn dem i samma användarsession som driver LaunchAgent.
 
 Ladda den:
 
@@ -135,7 +131,7 @@ openclaw onboard
 
 Guiden frågar efter:
 
-- **Server‑URL** (krävs): adress till BlueBubbles‑servern (t.ex. `http://192.168.1.100:1234`)
+- **Server URL** (obligatoriskt): BlueBubbles serveradress (t.ex., `http://192.168.1.100:1234`)
 - **Lösenord** (krävs): API‑lösenord från BlueBubbles Server‑inställningar
 - **Webhook‑sökväg** (valfritt): Standard är `/bluebubbles-webhook`
 - **DM‑policy**: parning, tillåtelselista, öppen eller inaktiverad
@@ -156,7 +152,7 @@ DM:
 - Godkänn via:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Parning är standardutbytet av token. Detaljer: [Parning](/channels/pairing)
+- Parkoppling är standard token exchange. Detaljer: [Pairing](/channels/pairing)
 
 Grupper:
 
@@ -190,7 +186,7 @@ Konfiguration per grupp:
 
 ### Kommandogrind
 
-- Kontrollkommandon (t.ex. `/config`, `/model`) kräver behörighet.
+- Kontrollkommandon (t.ex., `/config`, `/model`) kräver auktorisering.
 - Använder `allowFrom` och `groupAllowFrom` för att avgöra kommandobehörighet.
 - Behöriga avsändare kan köra kontrollkommandon även utan att nämna i grupper.
 
@@ -249,11 +245,11 @@ Tillgängliga åtgärder:
 - **removeParticipant**: Ta bort någon från en grupp (`chatGuid`, `address`)
 - **leaveGroup**: Lämna en gruppchatt (`chatGuid`)
 - **sendAttachment**: Skicka media/filer (`to`, `buffer`, `filename`, `asVoice`)
-  - Röstmemon: sätt `asVoice: true` med **MP3** eller **CAF**‑ljud för att skicka som iMessage‑röstmeddelande. BlueBubbles konverterar MP3 → CAF vid sändning av röstmemon.
+  - Röstmemos: sätt `asVoice: true` med **MP3** eller **CAF** ljud att skicka som ett iMessage röstmeddelande. BlueBubbles konverterar MP3 → CAF när du skickar röstmemos.
 
 ### Meddelande‑ID:n (korta vs fullständiga)
 
-OpenClaw kan exponera _korta_ meddelande‑ID:n (t.ex. `1`, `2`) för att spara tokens.
+OpenClaw kan ytbehandla _short_ meddelande ID (t.ex., `1`, `2`) för att spara tokens.
 
 - `MessageSid` / `ReplyToId` kan vara korta ID:n.
 - `MessageSidFull` / `ReplyToIdFull` innehåller leverantörens fullständiga ID:n.
@@ -325,13 +321,13 @@ Föredra `chat_guid` för stabil routning:
 - `chat_id:123`
 - `chat_identifier:...`
 - Direkta handles: `+15555550123`, `user@example.com`
-  - Om en direkt handle inte har en befintlig DM‑chatt skapar OpenClaw en via `POST /api/v1/chat/new`. Detta kräver att BlueBubbles Private API är aktiverat.
+  - Om ett direkt handtag inte har en befintlig DM-chatt kommer OpenClaw att skapa en via `POST /api/v1/chat/new`. Detta kräver att BlueBubbles Private API aktiveras.
 
 ## Säkerhet
 
-- Webhook‑förfrågningar autentiseras genom att jämföra `guid`/`password` som query‑parametrar eller headers mot `channels.bluebubbles.password`. Förfrågningar från `localhost` accepteras också.
+- Webhook förfrågningar autentiseras genom att jämföra `guid`/`password` frågeparametrar eller rubriker mot `channels.bluebubbles.password`. Förfrågningar från `localhost` accepteras också.
 - Håll API‑lösenordet och webhook‑endpointen hemliga (behandla dem som inloggningsuppgifter).
-- Localhost‑tillit innebär att en omvänd proxy på samma värd oavsiktligt kan kringgå lösenordet. Om du proxar gatewayen, kräv autentisering i proxyn och konfigurera `gateway.trustedProxies`. Se [Gateway‑säkerhet](/gateway/security#reverse-proxy-configuration).
+- Localhost förtroende innebär att en omvänd proxy oavsiktligt kan kringgå lösenordet. Om du proxy gateway, behöver auth på proxy och konfigurera `gateway.trustedProxies`. Se [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Aktivera HTTPS + brandväggsregler på BlueBubbles‑servern om du exponerar den utanför ditt LAN.
 
 ## Felsökning
@@ -339,9 +335,9 @@ Föredra `chat_guid` för stabil routning:
 - Om skriv-/läs‑händelser slutar fungera, kontrollera BlueBubbles webhook‑loggar och verifiera att gateway‑sökvägen matchar `channels.bluebubbles.webhookPath`.
 - Parningskoder löper ut efter en timme; använd `openclaw pairing list bluebubbles` och `openclaw pairing approve bluebubbles <code>`.
 - Reaktioner kräver BlueBubbles Private API (`POST /api/v1/message/react`); säkerställ att serverversionen exponerar det.
-- Redigera/ångra sändning kräver macOS 13+ och en kompatibel BlueBubbles‑serverversion. På macOS 26 (Tahoe) är redigering för närvarande trasig på grund av ändringar i Private API.
+- Redigera/avsända kräver macOS 13+ och en kompatibel BlueBubbles serverversion. På macOS 26 (Tahoe) bryts redigeringen för närvarande på grund av privata API-ändringar.
 - Uppdateringar av gruppikoner kan vara opålitliga på macOS 26 (Tahoe): API:t kan rapportera lyckat men den nya ikonen synkroniseras inte.
-- OpenClaw döljer automatiskt kända trasiga åtgärder baserat på BlueBubbles‑serverns macOS‑version. Om redigering fortfarande visas på macOS 26 (Tahoe), inaktivera den manuellt med `channels.bluebubbles.actions.edit=false`.
+- OpenClaw auto-gömmer kända-trasiga åtgärder baserade på BlueBubbles serverns macOS version. Om redigering fortfarande visas på macOS 26 (Tahoe), inaktivera den manuellt med `channels.bluebubbles.actions.edit=false`.
 - För status-/hälsoinformation: `openclaw status --all` eller `openclaw status --deep`.
 
 För allmän referens om kanalflöden, se [Kanaler](/channels) och guiden [Plugins](/tools/plugin).

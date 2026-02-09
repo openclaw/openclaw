@@ -5,36 +5,29 @@ read_when:
   - 你想要啟用 OpenProse 外掛
   - 你需要了解狀態儲存
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:55Z
 ---
 
 # OpenProse
 
-OpenProse 是一種可攜、以 Markdown 為優先的工作流程格式，用於協調 AI 工作階段。在 OpenClaw 中，它以外掛形式提供，會安裝一個 OpenProse Skills 套件，以及一個 `/prose` 斜線指令。程式存放於 `.prose` 檔案中，並可在明確的控制流程下產生多個子代理程式。
+OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. 在 OpenClaw 中，它以外掛形式提供，會安裝一個 OpenProse 技能套件以及一個 `/prose` 斜線指令。 程式存在於 `.prose` 檔案中，並可透過明確的控制流程產生多個子代理。
 
 官方網站：[https://www.prose.md](https://www.prose.md)
 
 ## 它能做什麼
 
 - 具備明確平行化的多代理研究與綜合。
-- 可重複、核准安全的工作流程（程式碼審查、事件分流、內容管線）。
+- Repeatable approval-safe workflows (code review, incident triage, content pipelines).
 - 可重用的 `.prose` 程式，可在支援的代理執行環境間執行。
 
 ## 安裝與啟用
 
-隨附的外掛預設為停用。啟用 OpenProse：
+Bundled plugins are disabled by default. Enable OpenProse:
 
 ```bash
 openclaw plugins enable open-prose
 ```
 
-啟用外掛後請重新啟動 Gateway 閘道器。
+Restart the Gateway after enabling the plugin.
 
 開發／本機檢出：`openclaw plugins install ./extensions/open-prose`
 
@@ -42,7 +35,7 @@ openclaw plugins enable open-prose
 
 ## 斜線指令
 
-OpenProse 會註冊 `/prose` 作為可由使用者呼叫的 Skills 指令。它會路由至 OpenProse VM 指令，並在底層使用 OpenClaw 工具。
+OpenProse registers `/prose` as a user-invocable skill command. OpenProse 會註冊 `/prose` 作為可由使用者呼叫的 Skills 指令。它會路由至 OpenProse VM 指令，並在底層使用 OpenClaw 工具。
 
 常用指令：
 
@@ -121,21 +114,22 @@ OpenProse 支援多種狀態後端：
 
 `/prose run <handle/slug>` 會解析為 `https://p.prose.md/<handle>/<slug>`。
 直接 URL 會原樣擷取。這會使用 `web_fetch` 工具（或對於 POST 使用 `exec`）。
+Direct URLs are fetched as-is. This uses the `web_fetch` tool (or `exec` for POST).
 
 ## OpenClaw 執行環境對應
 
 OpenProse 程式會對應到 OpenClaw 的基元：
 
-| OpenProse 概念          | OpenClaw 工具    |
-| ----------------------- | ---------------- |
+| OpenProse 概念   | OpenClaw 工具      |
+| -------------- | ---------------- |
 | 產生工作階段／Task 工具 | `sessions_spawn` |
-| 檔案讀取／寫入          | `read` / `write` |
-| Web 擷取                | `web_fetch`      |
+| 檔案讀取／寫入        | `read` / `write` |
+| Web 擷取         | `web_fetch`      |
 
-若你的工具允許清單封鎖了這些工具，OpenProse 程式將會失敗。請參閱 [Skills 設定](/tools/skills-config)。
+若你的工具允許清單封鎖了這些工具，OpenProse 程式將會失敗。請參閱 [Skills 設定](/tools/skills-config)。 See [Skills config](/tools/skills-config).
 
 ## 安全性與核准
 
-請將 `.prose` 檔案視同程式碼。在執行前進行審查。使用 OpenClaw 的工具允許清單與核准閘門來控制副作用。
+Treat `.prose` files like code. Review before running. Use OpenClaw tool allowlists and approval gates to control side effects.
 
 若需具備決定性、以核准為閘的工作流程，請與 [Lobster](/tools/lobster) 比較。

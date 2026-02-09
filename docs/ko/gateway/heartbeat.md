@@ -4,13 +4,6 @@ read_when:
   - Heartbeat 주기 또는 메시지를 조정할 때
   - 예약 작업에 Heartbeat 와 cron 중 무엇을 사용할지 결정할 때
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:32Z
 ---
 
 # Heartbeat (Gateway(게이트웨이))
@@ -74,8 +67,7 @@ Heartbeat 가 매우 구체적인 작업을 수행하길 원한다면 (예: “G
 
 - 주의가 필요하지 않다면 **`HEARTBEAT_OK`** 로 응답합니다.
 - Heartbeat 실행 중에는, OpenClaw 가 `HEARTBEAT_OK` 를
-  응답의 **시작 또는 끝**에 표시될 경우 확인(ack)으로 처리합니다.
-  해당 토큰은 제거되며, 남은 내용이 **≤ `ackMaxChars`** (기본값: 300)인 경우 응답은 폐기됩니다.
+  응답의 **시작 또는 끝**에 표시될 경우 확인(ack)으로 처리합니다. 해당 토큰은 제거되며, 남은 내용이 **≤ `ackMaxChars`** (기본값: 300)인 경우 응답은 폐기됩니다.
 - `HEARTBEAT_OK` 가 응답의 **중간**에 나타나면 특별 취급되지 않습니다.
 - 알림의 경우 `HEARTBEAT_OK` 를 **포함하지 말고** 알림 텍스트만 반환하십시오.
 
@@ -114,8 +106,7 @@ Heartbeat 외의 경우, 메시지 시작/끝에 있는 `HEARTBEAT_OK` 는 제�
 ### 에이전트별 Heartbeat
 
 어떤 `agents.list[]` 항목이든 `heartbeat` 블록을 포함하면,
-**해당 에이전트만** Heartbeat 를 실행합니다.
-에이전트별 블록은 `agents.defaults.heartbeat` 위에 병합됩니다
+**해당 에이전트만** Heartbeat 를 실행합니다. 에이전트별 블록은 `agents.defaults.heartbeat` 위에 병합됩니다
 (공통 기본값을 한 번 설정하고 에이전트별로 재정의할 수 있습니다).
 
 예시: 두 개의 에이전트 중 두 번째 에이전트만 Heartbeat 를 실행합니다.
@@ -167,8 +158,7 @@ Heartbeat 외의 경우, 메시지 시작/끝에 있는 `HEARTBEAT_OK` 는 제�
 }
 ```
 
-이 창 (동부 시간 기준 오전 9시 이전 또는 오후 10시 이후) 밖에서는 Heartbeat 가 건너뛰어집니다.
-다음으로 활성 시간 내에 도달하는 예약 틱에서 정상적으로 실행됩니다.
+이 창 (동부 시간 기준 오전 9시 이전 또는 오후 10시 이후) 밖에서는 Heartbeat 가 건너뛰어집니다. 다음으로 활성 시간 내에 도달하는 예약 틱에서 정상적으로 실행됩니다.
 
 ### 다중 계정 예시
 
@@ -214,12 +204,10 @@ Telegram 과 같은 다중 계정 채널에서 특정 계정을 대상으로 하
   - `none`: Heartbeat 는 실행하지만 외부로 **전달하지 않습니다**.
 - `to`: 선택적 수신자 재정의 (채널별 id, 예: WhatsApp 의 E.164 또는 Telegram 채팅 id).
 - `accountId`: 다중 계정 채널을 위한 선택적 계정 id. `target: "last"` 인 경우,
-  계정 id 는 계정을 지원하는 경우에만 해석된 마지막 채널에 적용되며, 그렇지 않으면 무시됩니다.
-  계정 id 가 해석된 채널에 구성된 계정과 일치하지 않으면 전달은 건너뛰어집니다.
+  계정 id 는 계정을 지원하는 경우에만 해석된 마지막 채널에 적용되며, 그렇지 않으면 무시됩니다. 계정 id 가 해석된 채널에 구성된 계정과 일치하지 않으면 전달은 건너뛰어집니다.
 - `prompt`: 기본 프롬프트 본문을 재정의합니다 (병합되지 않음).
 - `ackMaxChars`: `HEARTBEAT_OK` 이후 전달 전까지 허용되는 최대 문자 수.
-- `activeHours`: Heartbeat 실행을 시간 창으로 제한합니다.
-  `start` (HH:MM, 포함), `end` (HH:MM, 제외; 일 종료를 위한 `24:00` 허용), 선택적 `timezone` 를 포함하는 객체입니다.
+- `activeHours`: Heartbeat 실행을 시간 창으로 제한합니다. `start` (HH:MM, 포함), `end` (HH:MM, 제외; 일 종료를 위한 `24:00` 허용), 선택적 `timezone` 를 포함하는 객체입니다.
   - 생략되거나 `"user"`: 설정된 `agents.defaults.userTimezone` 가 있으면 이를 사용하고, 없으면 호스트 시스템 타임존으로 대체합니다.
   - `"local"`: 항상 호스트 시스템 타임존을 사용합니다.
   - 임의의 IANA 식별자 (예: `America/New_York`): 직접 사용되며, 유효하지 않으면 위의 `"user"` 동작으로 대체됩니다.
@@ -228,21 +216,17 @@ Telegram 과 같은 다중 계정 채널에서 특정 계정을 대상으로 하
 ## 전달 동작
 
 - Heartbeat 는 기본적으로 에이전트의 메인 세션에서 실행됩니다 (`agent:<id>:<mainKey>`),
-  또는 `session.scope = "global"` 인 경우 `global` 에서 실행됩니다.
-  특정 채널 세션 (Discord/WhatsApp 등)으로 재정의하려면 `session` 를 설정하십시오.
+  또는 `session.scope = "global"` 인 경우 `global` 에서 실행됩니다. 특정 채널 세션 (Discord/WhatsApp 등)으로 재정의하려면 `session` 를 설정하십시오.
 - `session` 는 실행 컨텍스트에만 영향을 주며, 전달은 `target` 및 `to` 로 제어됩니다.
-- 특정 채널/수신자로 전달하려면 `target` + `to` 를 설정하십시오.
-  `target: "last"` 를 사용하면 해당 세션의 마지막 외부 채널을 사용하여 전달됩니다.
+- 특정 채널/수신자로 전달하려면 `target` + `to` 를 설정하십시오. `target: "last"` 를 사용하면 해당 세션의 마지막 외부 채널을 사용하여 전달됩니다.
 - 메인 큐가 바쁜 경우 Heartbeat 는 건너뛰어지며 나중에 재시도됩니다.
 - `target` 가 외부 대상이 없는 것으로 해석되면, 실행은 수행되지만
   외부로 전송되는 메시지는 없습니다.
-- Heartbeat 전용 응답은 세션을 유지하지 않습니다.
-  마지막 `updatedAt` 가 복원되어 유휴 만료가 정상적으로 동작합니다.
+- Heartbeat 전용 응답은 세션을 유지하지 않습니다. 마지막 `updatedAt` 가 복원되어 유휴 만료가 정상적으로 동작합니다.
 
 ## 가시성 제어
 
-기본적으로 `HEARTBEAT_OK` 확인(ack)은 억제되고 알림 콘텐츠만 전달됩니다.
-채널별 또는 계정별로 이를 조정할 수 있습니다.
+기본적으로 `HEARTBEAT_OK` 확인(ack)은 억제되고 알림 콘텐츠만 전달됩니다. 채널별 또는 계정별로 이를 조정할 수 있습니다.
 
 ```yaml
 channels:
@@ -294,18 +278,17 @@ channels:
 
 ### 일반적인 패턴
 
-| 목표                                     | 설정                                                                                     |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| 기본 동작 (OK 는 무음, 알림은 전달)      | _(설정 불필요)_                                                                          |
+| 목표                                          | 설정                                                                                       |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 기본 동작 (OK 는 무음, 알림은 전달)  | _(설정 불필요)_                                                            |
 | 완전 무음 (메시지 없음, 인디케이터 없음) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| 인디케이터 전용 (메시지 없음)            | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| 한 채널에서만 OK 전달                    | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| 인디케이터 전용 (메시지 없음)        | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| 한 채널에서만 OK 전달                               | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (선택 사항)
 
 워크스페이스에 `HEARTBEAT.md` 파일이 존재하면, 기본 프롬프트는
-에이전트에게 해당 파일을 읽도록 지시합니다.
-이를 “Heartbeat 체크리스트”로 생각하십시오. 작고, 안정적이며,
+에이전트에게 해당 파일을 읽도록 지시합니다. 이를 “Heartbeat 체크리스트”로 생각하십시오. 작고, 안정적이며,
 30 분마다 포함해도 안전해야 합니다.
 
 `HEARTBEAT.md` 가 존재하지만 사실상 비어 있는 경우
@@ -365,15 +348,11 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 
 활성화되면, Heartbeat 는
 `Reasoning:` 로 접두된 별도의 메시지도 전달합니다
-(`/reasoning on` 와 동일한 형태).
-에이전트가 여러 세션/코덱스를 관리하며
+(`/reasoning on` 와 동일한 형태). 에이전트가 여러 세션/코덱스를 관리하며
 왜 알림을 보냈는지 확인하고 싶을 때 유용하지만,
-원치 않는 내부 정보가 노출될 수 있습니다.
-그룹 채팅에서는 비활성화를 권장합니다.
+원치 않는 내부 정보가 노출될 수 있습니다. 그룹 채팅에서는 비활성화를 권장합니다.
 
 ## 비용 고려
 
-Heartbeat 는 전체 에이전트 턴을 실행합니다.
-짧은 간격일수록 토큰 소모가 증가합니다.
-`HEARTBEAT.md` 를 작게 유지하고,
+Heartbeat 는 전체 에이전트 턴을 실행합니다. 짧은 간격일수록 토큰 소모가 증가합니다. `HEARTBEAT.md` 를 작게 유지하고,
 내부 상태 업데이트만 필요하다면 더 저렴한 `model` 또는 `target: "none"` 를 고려하십시오.

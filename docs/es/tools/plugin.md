@@ -4,13 +4,6 @@ read_when:
   - Al agregar o modificar plugins/extensiones
   - Al documentar reglas de instalación o carga de plugins
 title: "Plugins"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:22Z
 ---
 
 # Plugins (Extensiones)

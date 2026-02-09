@@ -3,13 +3,6 @@ summary: "چینلز، روٹنگ، میڈیا، اور UX کے حوالے سے 
 read_when:
   - آپ OpenClaw کی مکمل معاون خصوصیات کی فہرست چاہتے ہیں
 title: "خصوصیات"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:04Z
 ---
 
 ## Highlights
@@ -56,5 +49,5 @@ x-i18n:
 
 <Note>
 Legacy Claude، Codex، Gemini، اور Opencode راستے ہٹا دیے گئے ہیں۔ Pi واحد
-کوڈنگ ایجنٹ راستہ ہے۔
+coding agent راستہ ہے۔
 </Note>

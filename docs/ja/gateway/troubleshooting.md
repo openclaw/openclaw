@@ -4,19 +4,12 @@ read_when:
   - トラブルシューティング ハブから、より深い診断のためにここを参照するよう案内された場合
   - 正確なコマンドを含む、症状ベースで安定したランブック セクションが必要な場合
 title: "トラブルシューティング"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:15Z
 ---
 
 # ゲートウェイのトラブルシューティング
 
-このページは詳細なランブックです。  
-まず迅速なトリアージ フローを行いたい場合は、[/help/troubleshooting](/help/troubleshooting) から開始してください。
+このページは深いランブックです。
+高速なトリアージフローを最初にしたい場合は、[/help/troubleshooting](/help/troubleshooting) から開始します。
 
 ## コマンド ラダー
 
@@ -48,9 +41,9 @@ openclaw config get channels
 openclaw logs --follow
 ```
 
-確認ポイント:
+検索対象:
 
-- ダイレクトメッセージ送信者のペアリングが保留中。
+- DM送信者のペア設定待ちです。
 - グループ メンションのゲーティング（`requireMention`、`mentionPatterns`）。
 - チャンネル／グループの許可リスト不一致。
 
@@ -78,7 +71,7 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-確認ポイント:
+検索対象:
 
 - 正しいプローブ URL とダッシュボード URL。
 - クライアントとゲートウェイ間の認証モード／トークンの不一致。
@@ -108,7 +101,7 @@ openclaw doctor
 openclaw gateway status --deep
 ```
 
-確認ポイント:
+検索対象:
 
 - 終了ヒント付きの `Runtime: stopped`。
 - サービス設定の不一致（`Config (cli)` と `Config (service)`）。
@@ -138,7 +131,7 @@ openclaw logs --follow
 openclaw config get channels
 ```
 
-確認ポイント:
+検索対象:
 
 - ダイレクトメッセージ ポリシー（`pairing`、`allowlist`、`open`、`disabled`）。
 - グループの許可リストおよびメンション要件。
@@ -169,7 +162,7 @@ openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-確認ポイント:
+検索対象:
 
 - cron が有効で、次回の起動が存在する。
 - ジョブ実行履歴のステータス（`ok`、`skipped`、`error`）。
@@ -200,7 +193,7 @@ openclaw logs --follow
 openclaw status
 ```
 
-確認ポイント:
+検索対象:
 
 - ノードがオンラインで、期待される機能を備えている。
 - カメラ／マイク／位置情報／画面に対する OS 権限の付与。
@@ -231,7 +224,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-確認ポイント:
+検索対象:
 
 - 有効なブラウザー実行ファイルのパス。
 - CDP プロファイルへの到達性。
@@ -254,7 +247,7 @@ openclaw doctor
 
 アップグレード後の問題の多くは、設定のドリフト、またはより厳格になったデフォルト設定が適用されたことによるものです。
 
-### 1) 認証と URL 上書きの挙動が変更された
+### 1. 認証と URL 上書きの挙動が変更された
 
 ```bash
 openclaw gateway status
@@ -263,7 +256,7 @@ openclaw config get gateway.remote.url
 openclaw config get gateway.auth.mode
 ```
 
-確認内容:
+確認する内容:
 
 - `gateway.mode=remote` の場合、CLI 呼び出しがリモートを指しており、ローカル サービス自体は正常な可能性があります。
 - 明示的な `--url` 呼び出しは、保存された認証情報にフォールバックしません。
@@ -273,7 +266,7 @@ openclaw config get gateway.auth.mode
 - `gateway connect failed:` → URL の指定誤り。
 - `unauthorized` → エンドポイントには到達できるが、認証が誤っている。
 
-### 2) バインドと認証のガードレールがより厳格になった
+### 2. バインドと認証のガードレールがより厳格になった
 
 ```bash
 openclaw config get gateway.bind
@@ -282,7 +275,7 @@ openclaw gateway status
 openclaw logs --follow
 ```
 
-確認内容:
+確認する内容:
 
 - 非 loopback バインド（`lan`、`tailnet`、`custom`）では、認証の設定が必要です。
 - `gateway.token` のような古いキーは、`gateway.auth.token` を置き換えません。
@@ -292,7 +285,7 @@ openclaw logs --follow
 - `refusing to bind gateway ... without auth` → バインドと認証の不一致。
 - ランタイムが稼働中にもかかわらず `RPC probe: failed` → ゲートウェイは生きているが、現在の認証／URL ではアクセスできない。
 
-### 3) ペアリングおよびデバイス ID の状態が変更された
+### 3. ペアリングおよびデバイス ID の状態が変更された
 
 ```bash
 openclaw devices list
@@ -301,7 +294,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-確認内容:
+確認する内容:
 
 - ダッシュボード／ノード向けのデバイス承認が保留中でないか。
 - ポリシーまたは ID 変更後に、ダイレクトメッセージのペアリング承認が保留中でないか。

@@ -4,13 +4,6 @@ read_when:
   - Dodawanie lub modyfikowanie poleceń lub opcji CLI
   - Dokumentowanie nowych powierzchni poleceń
 title: "Referencja CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:58Z
 ---
 
 # Referencja CLI
@@ -925,7 +918,7 @@ Podpolecenia:
 - `node stop`
 - `node restart`
 
-## Węzły
+## Nodes
 
 `nodes` komunikuje się z Gateway i celuje w sparowane węzły. Zobacz [/nodes](/nodes).
 

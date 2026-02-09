@@ -5,22 +5,17 @@ read_when:
   - Bạn cần thiết lập webhook + thông tin xác thực cho LINE
   - Bạn muốn các tùy chọn tin nhắn dành riêng cho LINE
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:59Z
 ---
 
 # LINE (plugin)
 
-LINE kết nối với OpenClaw thông qua LINE Messaging API. Plugin chạy như một bộ nhận webhook
-trên gateway và sử dụng channel access token + channel secret của bạn để xác thực.
+21. LINE kết nối với OpenClaw thông qua LINE Messaging API. 22. Plugin chạy như một webhook
+    receiver trên gateway và sử dụng access token + channel secret của bạn cho
+    xác thực.
 
-Trạng thái: được hỗ trợ qua plugin. Hỗ trợ tin nhắn trực tiếp, chat nhóm, media, vị trí, Flex
-messages, template messages và quick replies. Không hỗ trợ reactions và threads.
+23. Trạng thái: được hỗ trợ thông qua plugin. 24. Hỗ trợ tin nhắn trực tiếp, trò chuyện nhóm, media, vị trí, Flex
+    messages, template messages và quick replies. 25. Reactions và threads
+    không được hỗ trợ.
 
 ## Plugin required
 
@@ -49,9 +44,9 @@ openclaw plugins install ./extensions/line
 https://gateway-host/line/webhook
 ```
 
-Gateway phản hồi việc xác minh webhook của LINE (GET) và các sự kiện vào (POST).
-Nếu bạn cần đường dẫn tùy chỉnh, đặt `channels.line.webhookPath` hoặc
-`channels.line.accounts.<id>.webhookPath` và cập nhật URL tương ứng.
+26. Gateway phản hồi xác minh webhook của LINE (GET) và các sự kiện đến (POST).
+27. Nếu bạn cần một đường dẫn tùy chỉnh, hãy đặt `channels.line.webhookPath` hoặc
+    `channels.line.accounts.<id>`.webhookPath\` and update the URL accordingly.
 
 ## Configure
 
@@ -108,8 +103,8 @@ Nhiều tài khoản:
 
 ## Access control
 
-Tin nhắn trực tiếp mặc định là ghép cặp. Người gửi chưa xác định sẽ nhận mã ghép cặp và
-tin nhắn của họ sẽ bị bỏ qua cho đến khi được phê duyệt.
+28. Tin nhắn trực tiếp mặc định yêu cầu ghép cặp. 29. Người gửi không xác định sẽ nhận được mã ghép cặp và tin nhắn của họ sẽ bị
+    bỏ qua cho đến khi được chấp thuận.
 
 ```bash
 openclaw pairing list line
@@ -122,9 +117,9 @@ Danh sách cho phép và chính sách:
 - `channels.line.allowFrom`: các LINE user ID được cho phép cho DM
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: các LINE user ID được cho phép cho nhóm
-- Ghi đè theo từng nhóm: `channels.line.groups.<groupId>.allowFrom`
+- 30. Ghi đè theo nhóm: `channels.line.groups.<groupId>`.allowFrom\`
 
-LINE ID phân biệt chữ hoa/thường. ID hợp lệ có dạng:
+31. LINE ID phân biệt chữ hoa chữ thường. Valid IDs look like:
 
 - User: `U` + 32 ký tự hex
 - Group: `C` + 32 ký tự hex

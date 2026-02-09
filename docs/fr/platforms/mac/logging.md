@@ -4,13 +4,6 @@ read_when:
   - Capture des journaux macOS ou enquête sur la journalisation de données privées
   - Débogage des problèmes de cycle de vie de l’activation vocale/de session
 title: "Journalisation macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:18Z
 ---
 
 # Journalisation (macOS)

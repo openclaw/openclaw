@@ -1,23 +1,16 @@
 ---
-summary: « Utilisez les modèles Amazon Bedrock (API Converse) avec OpenClaw »
+summary: "Utilisez les modèles Amazon Bedrock (API Converse) avec OpenClaw"
 read_when:
   - Vous souhaitez utiliser des modèles Amazon Bedrock avec OpenClaw
   - Vous avez besoin de la configuration des identifiants/région AWS pour les appels de modèles
-title: « Amazon Bedrock »
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:40Z
+title: "Amazon Bedrock"
 ---
 
 # Amazon Bedrock
 
 OpenClaw peut utiliser les modèles **Amazon Bedrock** via le fournisseur de streaming **Bedrock Converse** de pi‑ai. L’authentification Bedrock utilise la **chaîne d’identifiants par défaut du SDK AWS**, et non une clé API.
 
-## Ce que pi‑ai prend en charge
+## Ce que Pi-ai prend en charge
 
 - Fournisseur : `amazon-bedrock`
 - API : `bedrock-converse-stream`
@@ -103,7 +96,8 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## Rôles d’instance EC2
 
-Lors de l’exécution d’OpenClaw sur une instance EC2 avec un rôle IAM attaché, le SDK AWS utilisera automatiquement le service de métadonnées d’instance (IMDS) pour l’authentification. Cependant, la détection des identifiants d’OpenClaw ne vérifie actuellement que les variables d’environnement, et non les identifiants IMDS.
+Lors de l’exécution d’OpenClaw sur une instance EC2 avec un rôle IAM attaché, le SDK AWS utilisera automatiquement le service de métadonnées d’instance (IMDS) pour l’authentification.
+Cependant, la détection des identifiants d’OpenClaw ne vérifie actuellement que les variables d’environnement, et non les identifiants IMDS.
 
 **Solution de contournement :** définissez `AWS_PROFILE=default` pour indiquer que des identifiants AWS sont disponibles. L’authentification réelle utilise toujours le rôle d’instance via IMDS.
 

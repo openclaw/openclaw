@@ -1,15 +1,8 @@
 ---
-summary: „Gateway-Lebenszyklus unter macOS (launchd)“
+summary: "„Gateway-Lebenszyklus unter macOS (launchd)“"
 read_when:
   - Integration der macOS-App in den Gateway-Lebenszyklus
-title: „Gateway-Lebenszyklus“
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:51Z
+title: "Gateway-Lebenszyklus"
 ---
 
 # Gateway-Lebenszyklus unter macOS
@@ -22,7 +15,8 @@ eingebettete Runtime). Dadurch erhalten Sie einen zuverlässigen automatischen
 Start bei der Anmeldung sowie einen Neustart nach Abstürzen.
 
 Der Child-Process-Modus (Gateway wird direkt von der App gestartet) ist derzeit
-**nicht in Verwendung**. Wenn Sie eine engere Kopplung an die UI benötigen,
+**nicht in Verwendung**.
+Wenn Sie eine engere Kopplung an die UI benötigen,
 starten Sie das Gateway manuell in einem Terminal.
 
 ## Standardverhalten (launchd)

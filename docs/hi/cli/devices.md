@@ -4,13 +4,6 @@ read_when:
   - आप डिवाइस पेयरिंग अनुरोधों को स्वीकृत कर रहे हों
   - आपको डिवाइस टोकन को रोटेट या रद्द करना हो
 title: "डिवाइस"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:59Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC टाइमआउट।
 - `--json`: JSON आउटपुट (स्क्रिप्टिंग के लिए अनुशंसित)।
 
-टिप्पणी: जब आप `--url` सेट करते हैं, तो CLI विन्यास या पर्यावरण चर से क्रेडेंशियल्स पर वापस नहीं जाता।
-`--token` या `--password` को स्पष्ट रूप से पास करें। स्पष्ट क्रेडेंशियल्स का अभाव एक त्रुटि है।
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ## Notes
 
-- टोकन रोटेशन एक नया टोकन (संवेदनशील) लौटाता है। इसे एक सीक्रेट की तरह संभालें।
+- Token rotation returns a new token (sensitive). Treat it like a secret.
 - इन कमांड्स के लिए `operator.pairing` (या `operator.admin`) स्कोप की आवश्यकता होती है।

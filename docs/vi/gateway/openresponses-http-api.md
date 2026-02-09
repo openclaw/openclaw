@@ -4,20 +4,13 @@ read_when:
   - Tích hợp các client sử dụng API OpenResponses
   - Bạn muốn đầu vào dạng item, client tool calls hoặc sự kiện SSE
 title: "API OpenResponses"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:09Z
 ---
 
 # API OpenResponses (HTTP)
 
 Gateway của OpenClaw có thể cung cấp một endpoint `POST /v1/responses` tương thích OpenResponses.
 
-Endpoint này **bị tắt theo mặc định**. Trước tiên hãy bật nó trong cấu hình.
+Endpoint này **bị tắt theo mặc định**. Hãy bật nó trong cấu hình trước.
 
 - `POST /v1/responses`
 - Cùng cổng với Gateway (ghép kênh WS + HTTP): `http://<gateway-host>:<port>/v1/responses`
@@ -92,7 +85,7 @@ từ đó, để các lần gọi lặp lại có thể dùng chung một phiên
 
 ## Hình dạng request (được hỗ trợ)
 
-Request tuân theo API OpenResponses với đầu vào dạng item. Hỗ trợ hiện tại:
+Yêu cầu tuân theo OpenResponses API với đầu vào dựa trên item. Hỗ trợ hiện tại:
 
 - `input`: chuỗi hoặc mảng các đối tượng item.
 - `instructions`: được gộp vào system prompt.
@@ -139,10 +132,10 @@ Gửi kết quả công cụ trở lại mô hình:
 
 ## Tools (function tools phía client)
 
-Cung cấp tools với `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
+Cung cấp công cụ với `tools: [{ type: "function", function: { name, description?, parameters?` } }]\`.
 
-Nếu tác tử quyết định gọi một tool, phản hồi sẽ trả về một item đầu ra `function_call`.
-Sau đó bạn gửi một request tiếp theo với `function_call_output` để tiếp tục lượt.
+Nếu agent quyết định gọi một công cụ, phản hồi sẽ trả về một item đầu ra `function_call`.
+Sau đó bạn gửi một yêu cầu tiếp theo với `function_call_output` để tiếp tục lượt.
 
 ## Hình ảnh (`input_image`)
 
@@ -155,7 +148,7 @@ Hỗ trợ nguồn base64 hoặc URL:
 }
 ```
 
-Các MIME type được phép (hiện tại): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Các loại MIME được phép (hiện tại): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
 Kích thước tối đa (hiện tại): 10MB.
 
 ## Tệp (`input_file`)
@@ -183,11 +176,11 @@ Hành vi hiện tại:
 
 - Nội dung tệp được giải mã và thêm vào **system prompt**, không phải thông điệp user,
   vì vậy nó mang tính tạm thời (không được lưu trong lịch sử phiên).
-- PDF được phân tích để trích xuất văn bản. Nếu tìm thấy ít văn bản, các trang đầu
-  sẽ được raster hóa thành hình ảnh và đưa vào cho mô hình.
+- PDF được phân tích để trích xuất văn bản. Nếu tìm thấy ít văn bản, các trang đầu tiên sẽ được raster hóa
+  thành hình ảnh và chuyển cho mô hình.
 
-Việc phân tích PDF sử dụng bản build legacy `pdfjs-dist` thân thiện với Node (không dùng worker). Bản build
-PDF.js hiện đại yêu cầu worker/DOM globals của trình duyệt, nên không được dùng trong Gateway.
+Việc phân tích PDF sử dụng bản build legacy `pdfjs-dist` thân thiện với Node (không có worker). Bản build PDF.js hiện đại
+mong đợi worker/DOM globals của trình duyệt, vì vậy không được dùng trong Gateway.
 
 Mặc định khi fetch URL:
 

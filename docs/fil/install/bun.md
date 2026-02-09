@@ -4,13 +4,6 @@ read_when:
   - Gusto mo ang pinakamabilis na local dev loop (bun + watch)
   - Nakaranas ka ng mga isyu sa Bun install/patch/lifecycle scripts
 title: "Bun (Eksperimental)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Bun (eksperimental)
@@ -18,7 +11,7 @@ x-i18n:
 Layunin: patakbuhin ang repo na ito gamit ang **Bun** (opsyonal, hindi inirerekomenda para sa WhatsApp/Telegram)
 nang hindi lumilihis mula sa mga workflow ng pnpm.
 
-⚠️ **Hindi inirerekomenda para sa Gateway runtime** (may mga bug sa WhatsApp/Telegram). Gumamit ng Node para sa production.
+Note: ang `bun.lock`/`bun.lockb` ay naka-gitignore, kaya walang repo churn alinmang paraan. 2. Gumamit ng Node para sa production.
 
 ## Status
 
@@ -34,7 +27,7 @@ Default:
 bun install
 ```
 
-Tandaan: ang `bun.lock`/`bun.lockb` ay naka-gitignore, kaya walang pagbabago sa repo alinmang paraan. Kung gusto mo ng _walang pagsusulat ng lockfile_:
+Kung gusto mo ng _walang pagsusulat ng lockfile_: Maaaring harangin ng Bun ang mga dependency lifecycle script maliban kung hayagang pinagkakatiwalaan (`bun pm untrusted` / `bun pm trust`).
 
 ```sh
 bun install --no-save
@@ -49,8 +42,8 @@ bun run vitest run
 
 ## Mga lifecycle script ng Bun (naka-block bilang default)
 
-Maaaring i-block ng Bun ang mga dependency lifecycle script maliban kung hayagang pinagkakatiwalaan (`bun pm untrusted` / `bun pm trust`).
-Para sa repo na ito, hindi kinakailangan ang mga karaniwang naibablock na script:
+Para sa repo na ito, hindi kinakailangan ang mga karaniwang nahaharang na script:
+May ilang script na naka-hardcode pa rin sa pnpm (hal. `docs:build`, `ui:*`, `protocol:check`).
 
 - `@whiskeysockets/baileys` `preinstall`: tinitingnan ang Node major >= 20 (tumatakbo kami sa Node 22+).
 - `protobufjs` `postinstall`: naglalabas ng mga babala tungkol sa hindi tugmang version schemes (walang build artifacts).
@@ -63,4 +56,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## Mga caveat
 
-- May ilang script na naka-hardcode pa rin sa pnpm (hal. `docs:build`, `ui:*`, `protocol:check`). Patakbuhin muna ang mga iyon gamit ang pnpm.
+- **dev**: gumagalaw na head ng `main` (git). 8. Patakbuhin muna ang mga iyon gamit ang pnpm sa ngayon.

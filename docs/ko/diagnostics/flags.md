@@ -4,13 +4,6 @@ read_when:
   - 전역 로깅 레벨을 올리지 않고 대상별 디버그 로그가 필요할 때
   - 지원을 위해 서브시스템별 로그를 캡처해야 할 때
 title: "진단 플래그"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:54Z
 ---
 
 # 진단 플래그

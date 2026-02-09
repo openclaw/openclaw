@@ -4,13 +4,6 @@ read_when:
   - OS 지원 또는 설치 경로를 찾고 있을 때
   - Gateway 를 어디에서 실행할지 결정할 때
 title: "플랫폼"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:36Z
 ---
 
 # 플랫폼

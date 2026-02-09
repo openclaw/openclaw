@@ -5,31 +5,24 @@ read_when:
   - Lägger till CLI‑flöden för att godkänna fjärrnoder
   - Utökar gateway‑protokollet med nodhantering
 title: "Gateway‑ägd parning"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:24Z
 ---
 
 # Gateway‑ägd parning (Alternativ B)
 
-I Gateway‑ägd parning är **Gateway** den källa som avgör vilka noder
-som tillåts ansluta. UI:n (macOS‑app, framtida klienter) är bara frontends som
-godkänner eller avslår väntande förfrågningar.
+I Gateway-ägda parning är **Gateway** källan till sanningen som noderna
+tillåts ansluta sig till. UI (macOS-app, framtida klienter) är bara frontends som
+godkänner eller avvisar väntande förfrågningar.
 
-**Viktigt:** WS‑noder använder **enhetsparning** (roll `node`) under `connect`.
-`node.pair.*` är ett separat parningslager och styr **inte** WS‑handshaken.
+**Viktigt:** WS noder använder **enhet parning** (roll `node`) under `connect`.
+`node.pair.*` är en separat parbutik och **inte** portar WS handskakning.
 Endast klienter som uttryckligen anropar `node.pair.*` använder detta flöde.
 
 ## Begrepp
 
 - **Väntande förfrågan**: en nod har begärt att få ansluta; kräver godkännande.
 - **Parad nod**: godkänd nod med utfärdad autentiseringstoken.
-- **Transport**: Gateway‑WS‑ändpunkten vidarebefordrar förfrågningar men avgör inte
-  medlemskap. (Stöd för äldre TCP‑brygga är föråldrat/borttaget.)
+- **Transport**: slutpunkten Gateway WS vidarebefordrar förfrågningar men bestämmer inte
+  medlemskap. (Legacy TCP-bryggstöd är föråldrat/borttaget.)
 
 ## Så fungerar parning
 

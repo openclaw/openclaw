@@ -4,13 +4,6 @@ read_when:
   - पोल समर्थन जोड़ते या संशोधित करते समय
   - CLI या Gateway से पोल भेजने का डिबग करते समय
 title: "पोल"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:54Z
 ---
 
 # पोल
@@ -64,13 +57,12 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 ## चैनल अंतर
 
 - WhatsApp: 2-12 विकल्प, `maxSelections` विकल्पों की संख्या के भीतर होना चाहिए, `durationHours` को अनदेखा करता है।
-- Discord: 2-10 विकल्प, `durationHours` को 1-768 घंटों के बीच सीमित किया जाता है (डिफ़ॉल्ट 24)। `maxSelections > 1` बहु-चयन सक्षम करता है; Discord सख्त चयन संख्या का समर्थन नहीं करता।
-- MS Teams: Adaptive Card पोल (OpenClaw-प्रबंधित)। कोई मूल पोल API नहीं; `durationHours` को अनदेखा किया जाता है।
+- Discord: 2-10 विकल्प, `durationHours` को 1-768 घंटे (डिफ़ॉल्ट 24) तक सीमित किया जाता है। `maxSelections > 1` मल्टी-सेलेक्ट सक्षम करता है; Discord सख्त चयन संख्या का समर्थन नहीं करता।
+- MS Teams: Adaptive Card पोल्स (OpenClaw-प्रबंधित)। कोई नेटिव पोल API नहीं; `durationHours` को अनदेखा किया जाता है।
 
 ## एजेंट टूल (संदेश)
 
 `message` टूल का उपयोग `poll` क्रिया के साथ करें (`to`, `pollQuestion`, `pollOption`, वैकल्पिक `pollMulti`, `pollDurationHours`, `channel`)।
 
-टिप्पणी: Discord में “ठीक N चुनें” मोड नहीं है; `pollMulti` बहु-चयन से मैप होता है।
-Teams पोल Adaptive Cards के रूप में रेंडर किए जाते हैं और वोट रिकॉर्ड करने के लिए Gateway का ऑनलाइन रहना आवश्यक है
-`~/.openclaw/msteams-polls.json` में।
+नोट: Discord में “ठीक N चुनें” मोड नहीं है; `pollMulti` मल्टी-सेलेक्ट से मैप होता है।
+Teams पोल्स Adaptive Cards के रूप में रेंडर किए जाते हैं और वोट्स रिकॉर्ड करने के लिए गेटवे का ऑनलाइन रहना आवश्यक है, जो `~/.openclaw/msteams-polls.json` में सहेजे जाते हैं।

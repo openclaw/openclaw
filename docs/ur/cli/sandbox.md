@@ -1,15 +1,8 @@
 ---
-title: سینڈباکس CLI
+title: Sandbox CLI
 summary: "سینڈباکس کنٹینرز کا انتظام کریں اور مؤثر سینڈباکس پالیسی کا معائنہ کریں"
 read_when: "جب آپ سینڈباکس کنٹینرز کا انتظام کر رہے ہوں یا سینڈباکس/ٹول پالیسی کے رویّے کی ڈیبگنگ کر رہے ہوں۔"
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:04Z
 ---
 
 # Sandbox CLI
@@ -18,7 +11,7 @@ x-i18n:
 
 ## Overview
 
-OpenClaw سکیورٹی کے لیے ایجنٹس کو الگ تھلگ Docker کنٹینرز میں چلا سکتا ہے۔ `sandbox` کمانڈز آپ کو ان کنٹینرز کے انتظام میں مدد دیتی ہیں، خاص طور پر اپڈیٹس یا کنفیگریشن تبدیلیوں کے بعد۔
+OpenClaw سیکیورٹی کے لیے ایجنٹس کو الگ تھلگ Docker کنٹینرز میں چلا سکتا ہے۔ 9. `sandbox` کمانڈز آپ کو ان کنٹینرز کو منظم کرنے میں مدد دیتی ہیں، خاص طور پر اپڈیٹس یا کنفیگریشن تبدیلیوں کے بعد۔
 
 ## Commands
 
@@ -121,10 +114,10 @@ openclaw sandbox recreate --agent alfred
 - کنٹینرز صرف 24 گھنٹے غیر فعالی کے بعد prune ہوتے ہیں
 - باقاعدہ استعمال ہونے والے ایجنٹس پرانے کنٹینرز کو غیر معینہ مدت تک چلاتے رہتے ہیں
 
-**Solution:** پرانے کنٹینرز کو زبردستی ہٹانے کے لیے `openclaw sandbox recreate` استعمال کریں۔ اگلی ضرورت پر وہ موجودہ ترتیبات کے ساتھ خودکار طور پر دوبارہ تخلیق ہو جائیں گے۔
+**Solution:** Use `openclaw sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
 
-Tip: دستی `docker rm` کے بجائے `openclaw sandbox recreate` کو ترجیح دیں۔ یہ
-Gateway کی کنٹینر نامگذاری استعمال کرتا ہے اور اسکوپ/سیشن کلیدیں تبدیل ہونے پر عدم مطابقت سے بچاتا ہے۔
+Tip: prefer `openclaw sandbox recreate` over manual `docker rm`. It uses the
+Gateway’s container naming and avoids mismatches when scope/session keys change.
 
 ## Configuration
 

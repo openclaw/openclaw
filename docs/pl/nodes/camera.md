@@ -1,16 +1,9 @@
 ---
-summary: „Przechwytywanie obrazu z kamery (węzeł iOS + aplikacja macOS) do użycia przez agenta: zdjęcia (jpg) i krótkie klipy wideo (mp4)”
+summary: "„Przechwytywanie obrazu z kamery (węzeł iOS + aplikacja macOS) do użycia przez agenta: zdjęcia (jpg) i krótkie klipy wideo (mp4)”"
 read_when:
   - Dodawanie lub modyfikowanie przechwytywania z kamery na węzłach iOS lub macOS
   - Rozszerzanie przepływów pracy tymczasowych plików MEDIA dostępnych dla agenta
-title: „Przechwytywanie z kamery”
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:30Z
+title: "„Przechwytywanie z kamery”"
 ---
 
 # Przechwytywanie z kamery (agent)
@@ -64,7 +57,7 @@ Cały dostęp do kamery jest chroniony **ustawieniami kontrolowanymi przez użyt
     - `durationMs`
     - `hasAudio`
 
-### Wymóg pierwszego planu
+### Wymóg pierwszoplanowy
 
 Podobnie jak `canvas.*`, węzeł iOS zezwala na polecenia `camera.*` wyłącznie na **pierwszym planie**. Wywołania w tle zwracają `NODE_BACKGROUND_UNAVAILABLE`.
 
@@ -94,7 +87,7 @@ Uwagi:
   - Domyślnie: **włączone** (brak klucza jest traktowany jako włączone).
   - Gdy wyłączone: polecenia `camera.*` zwracają `CAMERA_DISABLED`.
 
-### Uprawnienia
+### Permissions
 
 - Android wymaga uprawnień w czasie działania:
   - `CAMERA` dla `camera.snap` i `camera.clip`.

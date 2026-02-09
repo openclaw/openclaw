@@ -4,13 +4,6 @@ read_when:
   - စက်ပစ္စည်း မော်ဒယ် အိုင်ဒီဖိုင်ယာ မပ်ပင်များ သို့မဟုတ် NOTICE/လိုင်စင် ဖိုင်များကို အပ်ဒိတ်လုပ်သည့်အခါ
   - Instances UI တွင် စက်ပစ္စည်း အမည်များ ပြသပုံကို ပြောင်းလဲသည့်အခါ
 title: "Device Model Database"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # Device model database (friendly names)

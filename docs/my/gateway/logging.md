@@ -4,13 +4,6 @@ read_when:
   - Logging ထွက်ပေါ်မှု သို့မဟုတ် ဖော်မတ်များကို ပြောင်းလဲနေစဉ်
   - CLI သို့မဟုတ် gateway ထွက်ပေါ်မှုကို အမှားရှာဖွေနေစဉ်
 title: "Logging"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:32Z
 ---
 
 # Logging
@@ -32,8 +25,8 @@ OpenClaw တွင် log “surfaces” နှစ်မျိုးရှိသ
 
 ဖိုင်ဖော်မတ်မှာ လိုင်းတစ်လိုင်းလျှင် JSON object တစ်ခုဖြစ်သည်။
 
-Control UI ၏ Logs tab သည် gateway မှတစ်ဆင့် ဤဖိုင်ကို tail လုပ်ထားသည် (`logs.tail`)။
-CLI လည်း ထိုသို့ လုပ်နိုင်သည်—
+Control UI Logs tab သည် gateway မှတစ်ဆင့် ဤဖိုင်ကို tail လုပ်ပြသည် (`logs.tail`)။
+CLI ကလည်း ထိုအရာကို လုပ်နိုင်သည်:
 
 ```bash
 openclaw logs --follow
@@ -59,8 +52,7 @@ Console verbosity ကို သီးခြား ပြင်ဆင်နို
 
 ## Tool summary redaction
 
-Verbose tool summary များ (ဥပမာ `🛠️ Exec: ...`) သည် console stream သို့ မရောက်မီ
-အရေးကြီး token များကို ဖုံးကွယ်နိုင်သည်။ ၎င်းသည် **tools-only** ဖြစ်ပြီး file logs ကို မပြောင်းလဲပါ။
+အသေးစိတ် tool summary များ (ဥပမာ `🛠️ Exec: ...`) သည် console stream ထဲသို့ မရောက်မီ sensitive token များကို ဖုံးကွယ်နိုင်သည်။ ဤအရာသည် **tools-only** ဖြစ်ပြီး file log များကို မပြောင်းလဲပါ။
 
 - `logging.redactSensitive`: `off` | `tools` (မူလ: `tools`)
 - `logging.redactPatterns`: regex string များ၏ array (မူလတန်ဖိုးများကို override လုပ်သည်)
@@ -102,8 +94,8 @@ openclaw gateway --verbose --ws-log full
 
 ## Console formatting (subsystem logging)
 
-Console formatter သည် **TTY-aware** ဖြစ်ပြီး တူညီသော prefix ပါသည့် လိုင်းများကို ပုံနှိပ်ပေးသည်။
-Subsystem logger များက output ကို အုပ်စုလိုက်ထားပြီး စစ်ဆေးဖတ်ရှုရ လွယ်ကူစေသည်။
+Console formatter သည် **TTY-aware** ဖြစ်ပြီး အစီအစဉ်တကျ prefix ပါသော လိုင်းများကို ပုံမှန်တူညီစွာ ထုတ်ပေးသည်။
+Subsystem logger များသည် output ကို အုပ်စုလိုက်ထားပြီး ဖတ်ရှုရ လွယ်ကူစေသည်။
 
 အပြုအမူများ—
 

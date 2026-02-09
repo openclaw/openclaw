@@ -4,13 +4,6 @@ read_when:
   - Fouten opsporen bij modelauthenticatie of OAuth-verval
   - Authenticatie of opslag van inloggegevens documenteren
 title: "Authenticatie"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:22Z
 ---
 
 # Authenticatie
@@ -113,7 +106,7 @@ openclaw models status
 openclaw doctor
 ```
 
-## Bepalen welke inloggegevens worden gebruikt
+## Controleren welke referenties worden gebruikt
 
 ### Per sessie (chatopdracht)
 
@@ -154,7 +147,7 @@ openclaw models status
 Voer `openclaw models status` uit om te bevestigen welk profiel verloopt. Als het profiel
 ontbreekt, voer `claude setup-token` opnieuw uit en plak het token opnieuw.
 
-## Vereisten
+## Provideropties
 
 - Claude Max- of Pro-abonnement (voor `claude setup-token`)
 - Claude Code CLI geïnstalleerd (`claude`-opdracht beschikbaar)

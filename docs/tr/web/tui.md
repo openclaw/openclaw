@@ -4,13 +4,6 @@ read_when:
   - TUI için başlangıç dostu bir rehbere ihtiyacınız var
   - TUI özellikleri, komutları ve kısayollarının tam listesine ihtiyacınız var
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:58Z
 ---
 
 # TUI (Terminal UI)
@@ -50,7 +43,7 @@ Gateway’iniz parola doğrulaması kullanıyorsa `--password` kullanın.
 ## Zihinsel model: ajanlar + oturumlar
 
 - Ajanlar benzersiz slug’lardır (ör. `main`, `research`). Gateway listeyi sunar.
-- Oturumlar geçerli ajana aittir.
+- Sessions belong to the current agent.
 - Oturum anahtarları `agent:<agentId>:<sessionKey>` olarak saklanır.
   - `/session main` yazarsanız, TUI bunu `agent:<currentAgent>:main` olarak genişletir.
   - `/session agent:other:main` yazarsanız, o ajan oturumuna açıkça geçersiniz.
@@ -62,7 +55,7 @@ Gateway’iniz parola doğrulaması kullanıyorsa `--password` kullanın.
 ## Gönderme + teslim
 
 - Mesajlar Gateway’e gönderilir; sağlayıcılara teslim varsayılan olarak kapalıdır.
-- Teslimi açın:
+- Turn delivery on:
   - `/deliver on`
   - veya Ayarlar panelinden
   - ya da `openclaw tui --deliver` ile başlatın
@@ -113,7 +106,7 @@ Oturum yaşam döngüsü:
 - `/settings`
 - `/exit`
 
-Diğer Gateway slash komutları (örneğin `/context`) Gateway’e iletilir ve sistem çıktısı olarak gösterilir. Bkz. [Slash commands](/tools/slash-commands).
+Diğer Gateway slash komutları (örneğin `/context`) Gateway’e iletilir ve sistem çıktısı olarak gösterilir. [Slash commands](/tools/slash-commands).
 
 ## Yerel kabuk komutları
 

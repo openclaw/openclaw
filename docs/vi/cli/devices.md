@@ -4,13 +4,6 @@ read_when:
   - Bạn đang phê duyệt yêu cầu ghép cặp thiết bị
   - Bạn cần xoay vòng hoặc thu hồi token thiết bị
 title: "devices"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:18Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: Thời gian chờ RPC.
 - `--json`: Đầu ra JSON (khuyến nghị cho scripting).
 
-Lưu ý: khi bạn đặt `--url`, CLI sẽ không tự động dùng cấu hình hoặc thông tin xác thực từ biến môi trường.
-Hãy truyền `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh sẽ gây lỗi.
+Lưu ý: khi bạn đặt `--url`, CLI không tự động dùng thông tin xác thực từ cấu hình hoặc môi trường.
+Hãy truyền `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là một lỗi.
 
 ## Notes
 
-- Việc xoay vòng token trả về một token mới (nhạy cảm). Hãy xử lý như một bí mật.
+- Xoay vòng token trả về một token mới (nhạy cảm). Hãy coi nó như một bí mật.
 - Các lệnh này yêu cầu phạm vi `operator.pairing` (hoặc `operator.admin`).

@@ -5,20 +5,13 @@ read_when:
   - Ausführen der iOS-App aus dem Quellcode
   - Debugging der Gateway-Discovery oder von Canvas-Befehlen
 title: "iOS-App"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:50Z
 ---
 
 # iOS-App (Node)
 
 Verfügbarkeit: interne Vorschau. Die iOS-App wird derzeit noch nicht öffentlich verteilt.
 
-## Zweck
+## Was sie tut
 
 - Stellt eine Verbindung zu einem Gateway über WebSocket her (LAN oder Tailnet).
 - Stellt Node-Funktionen bereit: Canvas, Bildschirm-Snapshot, Kameraaufnahme, Standort, Talk-Modus, Sprachaktivierung.

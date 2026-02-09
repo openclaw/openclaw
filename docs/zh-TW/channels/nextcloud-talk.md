@@ -1,22 +1,15 @@
 ---
-summary: 「Nextcloud Talk 的支援狀態、功能與設定」
+summary: "Nextcloud Talk 的支援狀態、功能與設定"
 read_when:
   - 進行 Nextcloud Talk 頻道功能開發時
-title: 「Nextcloud Talk」
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:05Z
+title: "Nextcloud Talk"
 ---
 
 # Nextcloud Talk（外掛）
 
-狀態：透過外掛（Webhook 機器人）支援。支援私訊、房間、表情回應，以及 Markdown 訊息。
+19. 狀態：透過外掛支援（Webhook 機器人）。 20. 支援私訊、聊天室、反應以及 Markdown 訊息。
 
-## 需要外掛
+## 21. 需要外掛
 
 Nextcloud Talk 以外掛形式提供，未隨核心安裝一併包含。
 
@@ -40,17 +33,20 @@ OpenClaw 會自動提供本地安裝路徑。
 ## 快速設定（初學者）
 
 1. 安裝 Nextcloud Talk 外掛。
+
 2. 在你的 Nextcloud 伺服器上建立一個機器人：
 
    ```bash
    ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
 
-3. 在目標房間的設定中啟用該機器人。
+3. 22. 在目標聊天室設定中啟用機器人。
+
 4. 設定 OpenClaw：
    - 設定：`channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - 或 環境變數：`NEXTCLOUD_TALK_BOT_SECRET`（僅預設帳戶）
-5. 重新啟動 Gateway 閘道器（或完成入門引導）。
+
+5. 23. 重新啟動閘道（或完成上線流程）。
 
 最小設定：
 
@@ -69,15 +65,15 @@ OpenClaw 會自動提供本地安裝路徑。
 
 ## 注意事項
 
-- 機器人無法主動發起私訊。使用者必須先傳訊息給機器人。
+- 24. 機器人無法主動發起私訊。 25. 使用者必須先傳訊給機器人。
 - Webhook URL 必須可被 Gateway 閘道器存取；若在 Proxy 後方，請設定 `webhookPublicUrl`。
 - 機器人 API 不支援媒體上傳；媒體會以 URL 形式傳送。
-- Webhook payload 無法區分私訊與房間；請設定 `apiUser` + `apiPassword` 以啟用房間類型查詢（否則私訊會被視為房間）。
+- 26. Webhook 負載無法區分私訊與聊天室；請設定 `apiUser` + `apiPassword` 以啟用聊天室類型查詢（否則私訊會被視為聊天室）。
 
-## 存取控制（私訊）
+## 27. 存取控制（私訊）
 
-- 預設：`channels.nextcloud-talk.dmPolicy = "pairing"`。未知的寄件者會收到配對碼。
-- 核准方式：
+- 預設：`channels.nextcloud-talk.dmPolicy = "pairing"`。未知的寄件者會收到配對碼。 28. 未知的寄件者會收到配對碼。
+- 29. 核准方式：
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
 - 公開私訊：`channels.nextcloud-talk.dmPolicy="open"` 加上 `channels.nextcloud-talk.allowFrom=["*"]`。
@@ -104,14 +100,14 @@ OpenClaw 會自動提供本地安裝路徑。
 
 ## 功能
 
-| 功能     | 狀態   |
-| -------- | ------ |
-| 私訊     | 支援   |
-| 房間     | 支援   |
-| 討論串   | 不支援 |
-| 媒體     | 僅 URL |
-| 表情回應 | 支援   |
-| 原生命令 | 不支援 |
+| 功能                            | Status |
+| ----------------------------- | ------ |
+| 30. 私訊 | 支援     |
+| 房間                            | 支援     |
+| 討論串                           | 不支援    |
+| 媒體                            | 僅 URL  |
+| 反應                            | 支援     |
+| 原生命令                          | 不支援    |
 
 ## 設定參考（Nextcloud Talk）
 
@@ -131,7 +127,7 @@ OpenClaw 會自動提供本地安裝路徑。
 - `channels.nextcloud-talk.webhookPath`：Webhook 路徑（預設：/nextcloud-talk-webhook）。
 - `channels.nextcloud-talk.webhookPublicUrl`：對外可存取的 Webhook URL。
 - `channels.nextcloud-talk.dmPolicy`：`pairing | allowlist | open | disabled`。
-- `channels.nextcloud-talk.allowFrom`：私訊允許清單（使用者 ID）。`open` 需要 `"*"`。
+- `channels.nextcloud-talk.allowFrom`：私訊允許清單（使用者 ID）。`open` 需要 `"*"`。 31. `open` 需要使用 `"*"`。
 - `channels.nextcloud-talk.groupPolicy`：`allowlist | open | disabled`。
 - `channels.nextcloud-talk.groupAllowFrom`：群組允許清單（使用者 ID）。
 - `channels.nextcloud-talk.rooms`：每個房間的設定與允許清單。

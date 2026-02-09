@@ -1,16 +1,9 @@
 ---
-summary: „Agenten-Werkzeugoberfläche für OpenClaw (Browser, Canvas, Nodes, Nachrichten, Cron), die veraltete `openclaw-*` Skills ersetzt“
+summary: "„Agenten-Werkzeugoberfläche für OpenClaw (Browser, Canvas, Nodes, Nachrichten, Cron), die veraltete `openclaw-*` Skills ersetzt“"
 read_when:
   - Beim Hinzufügen oder Ändern von Agenten-Werkzeugen
   - Beim Außerbetriebnehmen oder Ändern von `openclaw-*` Skills
-title: „Werkzeuge“
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:16Z
+title: "„Werkzeuge“"
 ---
 
 # Werkzeuge (OpenClaw)
@@ -218,7 +211,7 @@ Hinweise:
 
 ### `process`
 
-Hintergrund-Exec-Sitzungen verwalten.
+Verwalten von Hintergrund-Exec Sitzungen.
 
 Kernaktionen:
 

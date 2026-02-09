@@ -6,32 +6,25 @@ read_when:
   - 你想使用 setup-token 或 OAuth 驗證流程
   - 你想要多個帳號或設定檔路由
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:43Z
 ---
 
 # OAuth
 
-OpenClaw 透過 OAuth 支援「訂閱驗證」（subscription auth），適用於提供此功能的提供者（尤其是 **OpenAI Codex（ChatGPT OAuth）**）。對於 Anthropic 訂閱，請使用 **setup-token** 流程。本頁說明：
+OpenClaw 透過 OAuth 支援「訂閱驗證」（subscription auth），適用於提供此功能的提供者（尤其是 **OpenAI Codex（ChatGPT OAuth）**）。對於 Anthropic 訂閱，請使用 **setup-token** 流程。本頁說明： 對於 Anthropic 訂閱，請使用 **setup-token** 流程。 本頁說明：
 
 - OAuth **權杖交換** 如何運作（PKCE）
-- 權杖 **儲存** 在哪裡（以及原因）
-- 如何處理 **多個帳號**（設定檔 + 依工作階段覆寫）
+- 權杖（token）**儲存**的位置（以及原因）
+- 如何處理**多個帳號**（設定檔 + 每個工作階段的覆寫）
 
-OpenClaw 也支援隨附其自有 OAuth 或 API 金鑰流程的 **provider plugins**。可透過以下方式執行：
+OpenClaw 也支援隨附其自有 OAuth 或 API 金鑰流程的 **provider plugins**。可透過以下方式執行： 透過以下方式執行：
 
 ```bash
 openclaw models auth login --provider <id>
 ```
 
-## 權杖匯集點（為什麼需要它）
+## 權杖接收端（為何存在）
 
-OAuth 提供者通常會在登入／重新整理流程中簽發 **新的重新整理權杖**。有些提供者（或 OAuth 用戶端）會在為同一使用者／應用程式簽發新權杖時，使舊的重新整理權杖失效。
+OAuth 提供者通常會在登入／重新整理流程中鑄造一個**新的重新整理權杖**。 某些提供者（或 OAuth 用戶端）在為相同使用者／應用程式發行新權杖時，可能會使較舊的重新整理權杖失效。
 
 實際症狀：
 
@@ -39,7 +32,7 @@ OAuth 提供者通常會在登入／重新整理流程中簽發 **新的重新�
 
 為了降低這種情況，OpenClaw 將 `auth-profiles.json` 視為 **權杖匯集點**：
 
-- 執行階段從 **單一位置** 讀取認證
+- 執行階段會從**單一位置**讀取憑證
 - 我們可以保留多個設定檔，並以確定性的方式進行路由
 
 ## 儲存（權杖存放位置）
@@ -53,7 +46,7 @@ OAuth 提供者通常會在登入／重新整理流程中簽發 **新的重新�
 
 - `~/.openclaw/credentials/oauth.json`（首次使用時會匯入到 `auth-profiles.json`）
 
-以上所有項目也都遵循 `$OPENCLAW_STATE_DIR`（狀態目錄覆寫）。完整參考：[/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+以上所有項目也都遵循 `$OPENCLAW_STATE_DIR`（狀態目錄覆寫）。 以上所有項目也都遵循 `$OPENCLAW_STATE_DIR`（狀態目錄覆寫）。完整參考：[/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token（訂閱驗證）
 
@@ -85,7 +78,7 @@ OpenClaw 的互動式登入流程實作於 `@mariozechner/pi-ai`，並整合至�
 
 1. 執行 `claude setup-token`
 2. 將權杖貼到 OpenClaw
-3. 儲存為權杖驗證設定檔（不需重新整理）
+3. 儲存為權杖驗證設定檔（不重新整理）
 
 精靈路徑為 `openclaw onboard` → 驗證選擇 `setup-token`（Anthropic）。
 
@@ -111,7 +104,7 @@ OpenClaw 的互動式登入流程實作於 `@mariozechner/pi-ai`，並整合至�
 - 若 `expires` 在未來 → 使用已儲存的存取權杖
 - 若已到期 → 在檔案鎖定下重新整理，並覆寫已儲存的認證
 
-重新整理流程是自動的；一般不需要手動管理權杖。
+重新整理流程是自動的；通常不需要手動管理權杖。
 
 ## 多帳號（設定檔）+ 路由
 
@@ -126,13 +119,13 @@ openclaw agents add work
 openclaw agents add personal
 ```
 
-接著為每個代理程式設定驗證（精靈），並將聊天路由到正確的代理程式。
+接著為每個 agent 設定驗證（精靈），並將對話路由到正確的 agent。
 
 ### 2）進階：單一代理程式中的多個設定檔
 
 `auth-profiles.json` 支援同一提供者的多個設定檔 ID。
 
-選擇使用哪個設定檔：
+選擇要使用的設定檔：
 
 - 透過設定排序進行全域指定（`auth.order`）
 - 透過 `/model ...@<profileId>` 進行每個工作階段的指定

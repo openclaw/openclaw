@@ -4,20 +4,13 @@ read_when:
   - Du vill ha en billig Linux-värd som alltid är igång för Gateway
   - Du vill ha fjärråtkomst till Control UI utan att köra din egen VPS
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:35Z
 ---
 
 # exe.dev
 
 Mål: OpenClaw Gateway körs på en exe.dev-VM och kan nås från din laptop via: `https://<vm-name>.exe.xyz`
 
-Den här sidan förutsätter exe.dev:s standardimage **exeuntu**. Om du valde en annan distro, mappa paketen därefter.
+Denna sida antar exe.devs standard **exeuntu** bild. Om du valde en annan distro, kartpaket därefter.
 
 ## Snabb väg för nybörjare
 
@@ -34,8 +27,8 @@ Den här sidan förutsätter exe.dev:s standardimage **exeuntu**. Om du valde en
 
 ## Automatiserad installation med Shelley
 
-Shelley, [exe.dev](https://exe.dev):s agent, kan installera OpenClaw direkt med vår
-prompt. Prompten som används är följande:
+Shelley, [exe.dev](https://exe.dev)'s agent, kan installera OpenClaw direkt med vår
+prompt. Den fråga som används är som nedan:
 
 ```
 Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw device approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## Manuell installation
 
-## 1) Skapa VM:n
+## 1. Skapa VM:n
 
 Från din enhet:
 
@@ -57,16 +50,16 @@ Anslut sedan:
 ssh <vm-name>.exe.xyz
 ```
 
-Tips: håll den här VM:n **stateful**. OpenClaw lagrar tillstånd under `~/.openclaw/` och `~/.openclaw/workspace/`.
+Tips: behåll denna VM **stateful**. OpenClaw lagrar tillstånd under `~/.openclaw/` och `~/.openclaw/workspace/`.
 
-## 2) Installera förutsättningar (på VM:n)
+## 2. Installera förutsättningar (på VM:n)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) Installera OpenClaw
+## 3. Installera OpenClaw
 
 Kör OpenClaws installationsskript:
 
@@ -74,7 +67,7 @@ Kör OpenClaws installationsskript:
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) Konfigurera nginx för att proxy OpenClaw till port 8000
+## 4. Konfigurera nginx för att proxy OpenClaw till port 8000
 
 Redigera `/etc/nginx/sites-enabled/default` med
 
@@ -108,18 +101,18 @@ server {
 }
 ```
 
-## 5) Få åtkomst till OpenClaw och bevilja behörigheter
+## 5. Få åtkomst till OpenClaw och bevilja behörigheter
 
-Öppna `https://<vm-name>.exe.xyz/` (se Control UI-utdata från introduktionen). Om den ber om autentisering, klistra in
-token från `gateway.auth.token` på VM:n (hämta med `openclaw config get gateway.auth.token`, eller generera en
-med `openclaw doctor --generate-gateway-token`). Godkänn enheter med `openclaw devices list` och
-`openclaw devices approve <requestId>`. Vid osäkerhet, använd Shelley från din webbläsare!
+Åtkomst till `https://<vm-name>.exe.xyz/` (se Control UI-utdata från onboarding). Om den uppmanar till auth, klistra in
+-token från `gateway.auth.token` på VM (hämta med `openclaw config get gateway. uth.token`, eller generera ett
+med `openclaw doctor --generate-gateway-token`). Godkänn enheter med `openclaw enheter list` och
+`openclaw enheter godkänner <requestId>`. När du är osäker, använd Shelley från din webbläsare!
 
 ## Fjärråtkomst
 
-Fjärråtkomst hanteras av [exe.dev](https://exe.dev):s autentisering. Som standard
-vidarebefordras HTTP-trafik från port 8000 till `https://<vm-name>.exe.xyz`
-med e-postautentisering.
+Fjärråtkomst hanteras av [exe.dev](https://exe.dev)'s autentisering. Som
+standard vidarebefordras HTTP-trafiken från port 8000 till `https://<vm-name>.exe.xyz`
+med e-postförfattare.
 
 ## Uppdatering
 

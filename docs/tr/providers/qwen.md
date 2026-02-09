@@ -4,13 +4,6 @@ read_when:
   - OpenClaw ile Qwen kullanmak istiyorsunuz
   - Qwen Coder için ücretsiz katman OAuth erişimi istiyorsunuz
 title: "Qwen"
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:35Z
 ---
 
 # Qwen
@@ -26,7 +19,7 @@ openclaw plugins enable qwen-portal-auth
 
 Etkinleştirdikten sonra Gateway’i yeniden başlatın.
 
-## Kimlik doğrulama
+## Kimlik Doğrulama
 
 ```bash
 openclaw models auth login --provider qwen-portal --set-default

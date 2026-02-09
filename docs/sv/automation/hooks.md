@@ -4,25 +4,18 @@ read_when:
   - Du vill ha händelsedriven automatisering för /new, /reset, /stop och agentens livscykelhändelser
   - Du vill bygga, installera eller felsöka hooks
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:33Z
 ---
 
 # Hooks
 
-Hooks tillhandahåller ett utbyggbart, händelsedrivet system för att automatisera åtgärder som svar på agentkommandon och händelser. Hooks upptäcks automatiskt från kataloger och kan hanteras via CLI-kommandon, på liknande sätt som hur Skills fungerar i OpenClaw.
+Hooks ger ett utbyggbart händelsestyrt system för att automatisera åtgärder som svar på agentkommandon och händelser. Hooks upptäcks automatiskt från kataloger och kan hanteras via kommandon CLI, liknande hur färdigheter fungerar i OpenClaw.
 
 ## Kom igång
 
-Hooks är små skript som körs när något händer. Det finns två typer:
+Krokar är små skript som körs när något händer. Det finns två typer:
 
 - **Hooks** (denna sida): körs inuti Gateway när agenthändelser inträffar, som `/new`, `/reset`, `/stop` eller livscykelhändelser.
-- **Webhooks**: externa HTTP-webhooks som låter andra system trigga arbete i OpenClaw. Se [Webhook Hooks](/automation/webhook) eller använd `openclaw webhooks` för Gmail-hjälparkommandon.
+- **Webhooks**: externa HTTP-webhooks som låter andra system utlösa fungera i OpenClaw. Se [Webhook krokar](/automation/webhook) eller använd `openclaw webhooks` för Gmail hjälparkommandon.
 
 Hooks kan också paketeras inuti plugins; se [Plugins](/tools/plugin#plugin-hooks).
 
@@ -33,7 +26,7 @@ Vanliga användningsområden:
 - Trigga uppföljande automatisering när en session startar eller slutar
 - Skriva filer till agentens arbetsyta eller anropa externa API:er när händelser inträffar
 
-Om du kan skriva en liten TypeScript-funktion kan du skriva en hook. Hooks upptäcks automatiskt och du aktiverar eller inaktiverar dem via CLI.
+Om du kan skriva en liten TypeScript funktion kan du skriva en krok. Krokar upptäcks automatiskt, och du aktiverar eller inaktiverar dem via CLI.
 
 ## Översikt
 
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Introduktion
 
-Under introduktionen (`openclaw onboard`) uppmanas du att aktivera rekommenderade hooks. Guiden upptäcker automatiskt berättigade hooks och presenterar dem för val.
+Under onboarding (`openclaw onboard`), kommer du bli ombedd att aktivera rekommenderade hooks. Guiden upptäcker automatiskt kvalificerade krokar och presenterar dem för urval.
 
 ## Hook-upptäckt
 
@@ -103,7 +96,7 @@ my-hook/
 
 ## Hook-paket (npm/arkiv)
 
-Hook-paket är standard npm-paket som exporterar en eller flera hooks via `openclaw.hooks` i
+Krokpaket är standard npm paket som exporterar en eller flera krokar via `openclaw.hooks` i
 `package.json`. Installera dem med:
 
 ```bash
@@ -122,8 +115,8 @@ Exempel på `package.json`:
 }
 ```
 
-Varje post pekar på en hook-katalog som innehåller `HOOK.md` och `handler.ts` (eller `index.ts`).
-Hook-paket kan leverera beroenden; de installeras under `~/.openclaw/hooks/<id>`.
+Varje post pekar på en krokkatalog som innehåller `HOOK.md` och `handler.ts` (eller `index.ts`).
+Krokpaket kan skicka beroenden, de kommer att installeras under `~/.openclaw/hooks/<id>`.
 
 ## Hook-struktur
 
@@ -163,16 +156,16 @@ No configuration needed.
 
 Objektet `metadata.openclaw` stöder:
 
-- **`emoji`**: Visnings-emoji för CLI (t.ex. `"💾"`)
-- **`events`**: Array med händelser att lyssna på (t.ex. `["command:new", "command:reset"]`)
+- **`emoji`**: Visa emoji för CLI (t.ex., `"💾"`)
+- **`händelser`**: En rad händelser att lyssna på (t.ex., `["kommand:new", "kommando: reset"]`)
 - **`export`**: Namngiven export att använda (standard `"default"`)
 - **`homepage`**: Dokumentations-URL
 - **`requires`**: Valfria krav
-  - **`bins`**: Krävs binärer på PATH (t.ex. `["git", "node"]`)
+  - **`bins`**: Obligatoriska binärer på PATH (t.ex., `["git", "node"]`)
   - **`anyBins`**: Minst en av dessa binärer måste finnas
   - **`env`**: Krävs miljövariabler
-  - **`config`**: Krävs konfigsökvägar (t.ex. `["workspace.dir"]`)
-  - **`os`**: Krävs plattformar (t.ex. `["darwin", "linux"]`)
+  - **`config`**: Obligatoriska konfigurationsvägar (t.ex., `["workspace.dir"]`)
+  - **`os`**: Obligatoriska plattformar (t.ex., `["darwin", "linux"]`)
 - **`always`**: Förbigå behörighetskontroller (boolean)
 - **`install`**: Installationsmetoder (för medföljande hooks: `[{"id":"bundled","kind":"bundled"}]`)
 
@@ -251,7 +244,7 @@ Triggas när gatewayen startar:
 
 Dessa hooks är inte händelseströmslyssnare; de låter plugins synkront justera verktygsresultat innan OpenClaw sparar dem.
 
-- **`tool_result_persist`**: transformera verktygsresultat innan de skrivs till sessionstranskriptet. Måste vara synkront; returnera den uppdaterade nyttolasten för verktygsresultatet eller `undefined` för att behålla det oförändrat. Se [Agent Loop](/concepts/agent-loop).
+- **`tool_result_persist`**: transformera verktygsresultat innan de skrivs till sessionsutskriften. Måste vara synkroniserad; returnera det uppdaterade verktygsresultatet nyttolast eller `odefinierad` för att behålla det som -is. Se [Agent Loop](/concepts/agent-loop).
 
 ### Framtida händelser
 
@@ -401,7 +394,7 @@ Det gamla konfigformatet fungerar fortfarande för bakåtkompatibilitet:
 }
 ```
 
-**Migrering**: Använd det nya upptäcktsbaserade systemet för nya hooks. Äldre handlers laddas efter katalogbaserade hooks.
+**Migration**: Använd det nya upptäcktsbaserade systemet för nya krokar. Äldre hanterare laddas efter katalogbaserade krokar.
 
 ## CLI-kommandon
 
@@ -572,8 +565,8 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-Kör `BOOT.md` när gatewayen startar (efter att kanaler startar).
-Interna hooks måste vara aktiverade för att detta ska köras.
+Kör `BOOT.md` när gateway (nätverksgateway) startar (efter att kanalerna startat).
+Interna krokar måste vara aktiverade för att detta ska kunna köras.
 
 **Händelser**: `gateway:startup`
 
@@ -595,7 +588,7 @@ openclaw hooks enable boot-md
 
 ### Håll handlers snabba
 
-Hooks körs under kommandobearbetning. Håll dem lättviktiga:
+Krokar körs under kommandobearbetning. Håll dem lätta:
 
 ```typescript
 // ✓ Good - async work, returns immediately

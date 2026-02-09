@@ -4,13 +4,6 @@ read_when:
   - ヘッドレス ノード ホストを実行する場合
   - system.run のために非 macOS ノードをペアリングする場合
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:13Z
 ---
 
 # `openclaw node`
@@ -32,7 +25,8 @@ Gateway WebSocket に接続し、このマシン上で
 
 ## ブラウザ プロキシ（ゼロ設定）
 
-ノード上で `browser.enabled` が無効化されていない場合、ノード ホストは自動的にブラウザ プロキシをアドバタイズします。これにより、追加の設定なしで、そのノード上のブラウザ自動化をエージェントから利用できます。
+ノード上で `browser.enabled` が無効化されていない場合、ノード ホストは自動的にブラウザ プロキシをアドバタイズします。これにより、追加の設定なしで、そのノード上のブラウザ自動化をエージェントから利用できます。 これにより、エージェントは追加設定なしでそのノード
+のブラウザーオートメーションを使用することができます。
 
 必要に応じてノード上で無効化してください:
 
@@ -93,10 +87,11 @@ openclaw node uninstall
 
 サービス コマンドは、機械可読な出力のために `--json` を受け付けます。
 
-## ペアリング
+## Pairing
 
 最初の接続時に、Gateway 上で保留中のノード ペア要求が作成されます。
 次の方法で承認してください:
+承認:
 
 ```bash
 openclaw nodes pending

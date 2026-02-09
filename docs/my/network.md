@@ -5,13 +5,6 @@ read_when:
   - local နှင့် tailnet ဝင်ရောက်မှု သို့မဟုတ် pairing ကို ပြဿနာရှာဖွေနေသောအခါ
   - Network ဆိုင်ရာ စာတမ်းများ၏ စံပြစာရင်းကို လိုချင်သောအခါ
 title: "Network"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:31Z
 ---
 
 # Network ဟပ်

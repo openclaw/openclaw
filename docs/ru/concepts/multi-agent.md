@@ -3,13 +3,6 @@ summary: "Маршрутизация с несколькими агентами:
 title: Маршрутизация с несколькими агентами
 read_when: "Когда вам нужно несколько изолированных агентов (рабочие пространства + аутентификация) в одном процессе шлюза."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:41Z
 ---
 
 # Маршрутизация с несколькими агентами
@@ -35,14 +28,13 @@ x-i18n:
 скопируйте `auth-profiles.json` в `agentDir` другого агента.
 
 Skills являются пер-агентными через папку `skills/` каждого рабочего пространства, при этом общие skills
-доступны из `~/.openclaw/skills`. См. [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+доступны из `~/.openclaw/skills`. [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 Gateway (шлюз) может размещать **один агент** (по умолчанию) или **несколько агентов** параллельно.
 
 **Примечание о рабочем пространстве:** рабочее пространство каждого агента является **cwd по умолчанию**, а не жёстким
 sandbox. Относительные пути разрешаются внутри рабочего пространства, но абсолютные пути могут
-достигать других расположений хоста, если sandboxing не включён. См.
-[Sandboxing](/gateway/sandboxing).
+достигать других расположений хоста, если sandboxing не включён. См. См. [Sandboxing](/gateway/sandboxing).
 
 ## Пути (быстрая карта)
 
@@ -138,7 +130,7 @@ openclaw agents list --bindings
 каждого входа. Каждый `accountId` может быть направлен к разному агенту, поэтому один сервер может
 обслуживать несколько номеров телефонов без смешения сеансов.
 
-## Понятия
+## Concepts
 
 - `agentId`: один «мозг» (рабочее пространство, аутентификация на агента, хранилище сеансов на агента).
 - `accountId`: один экземпляр аккаунта канала (например, аккаунт WhatsApp `"personal"` против `"biz"`).
@@ -380,4 +372,4 @@ openclaw agents list --bindings
 Если нужны границы на агента, используйте `agents.list[].tools`, чтобы запретить `exec`.
 Для таргетинга групп используйте `agents.list[].groupChat.mentionPatterns`, чтобы @упоминания корректно сопоставлялись с нужным агентом.
 
-См. [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) для подробных примеров.
+[Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) для подробных примеров.

@@ -6,13 +6,6 @@ read_when:
   - Depurar el comportamiento del asistente
 title: "Referencia del asistente de incorporación"
 sidebarTitle: "Wizard Reference"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:52Z
 ---
 
 # Referencia del asistente de incorporación
@@ -23,7 +16,7 @@ Para una visión general de alto nivel, consulte [Asistente de incorporación](/
 ## Detalles del flujo (modo local)
 
 <Steps>
-  <Step title="Detección de configuración existente">
+  <Step title="Existing config detection">
     - Si existe `~/.openclaw/openclaw.json`, elija **Conservar / Modificar / Restablecer**.
     - Volver a ejecutar el asistente **no** borra nada a menos que usted elija explícitamente **Restablecer**
       (o pase `--reset`).
@@ -32,9 +25,9 @@ Para una visión general de alto nivel, consulte [Asistente de incorporación](/
     - El restablecimiento usa `trash` (nunca `rm`) y ofrece alcances:
       - Solo configuración
       - Configuración + credenciales + sesiones
-      - Restablecimiento completo (también elimina el espacio de trabajo)
-  </Step>
-  <Step title="Modelo/Autenticación">
+      - Restablecimiento completo (también elimina el espacio de trabajo)  
+</Step>
+  <Step title="Model/Auth">
     - **Clave de API de Anthropic (recomendada)**: usa `ANTHROPIC_API_KEY` si está presente o solicita una clave, luego la guarda para uso del daemon.
     - **OAuth de Anthropic (Claude Code CLI)**: en macOS el asistente revisa el elemento del Llavero "Claude Code-credentials" (elija "Permitir siempre" para que los inicios de launchd no se bloqueen); en Linux/Windows reutiliza `~/.claude/.credentials.json` si está presente.
     - **Token de Anthropic (pegar setup-token)**: ejecute `claude setup-token` en cualquier máquina y luego pegue el token (puede nombrarlo; en blanco = predeterminado).
@@ -60,25 +53,25 @@ Para una visión general de alto nivel, consulte [Asistente de incorporación](/
     - Elija un modelo predeterminado entre las opciones detectadas (o ingrese proveedor/modelo manualmente).
     - El asistente ejecuta una verificación del modelo y advierte si el modelo configurado es desconocido o falta autenticación.
     - Las credenciales OAuth viven en `~/.openclaw/credentials/oauth.json`; los perfiles de autenticación viven en `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (claves de API + OAuth).
-    - Más detalles: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - Más detalles: [/concepts/oauth](/concepts/oauth)    
+<Note>
     Consejo para entornos sin interfaz gráfica/servidores: complete OAuth en una máquina con navegador y luego copie
     `~/.openclaw/credentials/oauth.json` (o `$OPENCLAW_STATE_DIR/credentials/oauth.json`) al
     host del Gateway.
     </Note>
   </Step>
-  <Step title="Espacio de trabajo">
+  <Step title="Workspace">
     - `~/.openclaw/workspace` predeterminado (configurable).
     - Inicializa los archivos del espacio de trabajo necesarios para el ritual de arranque del agente.
-    - Diseño completo del espacio de trabajo + guía de respaldo: [Espacio de trabajo del agente](/concepts/agent-workspace)
-  </Step>
+    - Diseño completo del espacio de trabajo + guía de respaldo: [Espacio de trabajo del agente](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - Puerto, enlace, modo de autenticación, exposición por Tailscale.
     - Recomendación de autenticación: mantenga **Token** incluso para loopback, de modo que los clientes WS locales deban autenticarse.
     - Desactive la autenticación solo si confía plenamente en cada proceso local.
     - Los enlaces que no son loopback aún requieren autenticación.
   </Step>
-  <Step title="Canales">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): inicio de sesión por QR opcional.
     - [Telegram](/channels/telegram): token del bot.
     - [Discord](/channels/discord): token del bot.
@@ -87,7 +80,8 @@ Para una visión general de alto nivel, consulte [Asistente de incorporación](/
     - [Signal](/channels/signal): instalación opcional de `signal-cli` + configuración de la cuenta.
     - [BlueBubbles](/channels/bluebubbles): **recomendado para iMessage**; URL del servidor + contraseña + webhook.
     - [iMessage](/channels/imessage): ruta heredada de la CLI `imsg` + acceso a la base de datos.
-    - Seguridad de mensajes directos: el valor predeterminado es el emparejamiento. El primer mensaje directo envía un código; apruébelo mediante `openclaw pairing approve <channel> <code>` o use listas de permitidos.
+    - Seguridad de mensajes directos: el valor predeterminado es el emparejamiento. El primer mensaje directo envía un código; apruébelo mediante `openclaw pairing approve <channel><code>` o use listas de permitidos.
+  </Step><code>` o use listas de permitidos.
   </Step>
   <Step title="Instalación del daemon">
     - macOS: LaunchAgent
@@ -139,7 +133,7 @@ Agregue `--json` para un resumen legible por máquinas.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Ejemplo de Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +143,7 @@ Agregue `--json` para un resumen legible por máquinas.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ejemplo de Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +153,7 @@ Agregue `--json` para un resumen legible por máquinas.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ejemplo de Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +163,7 @@ Agregue `--json` para un resumen legible por máquinas.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ejemplo de Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +175,7 @@ Agregue `--json` para un resumen legible por máquinas.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ejemplo de Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +185,7 @@ Agregue `--json` para un resumen legible por máquinas.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ejemplo de Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +195,7 @@ Agregue `--json` para un resumen legible por máquinas.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ejemplo de OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -233,7 +227,7 @@ Los clientes (app de macOS, Interfaz de Control) pueden renderizar los pasos sin
 
 El asistente puede instalar `signal-cli` desde las versiones de GitHub:
 
-- Descarga el recurso de la versión correspondiente.
+- Descarga el asset de la versión apropiada.
 - Lo almacena en `~/.openclaw/tools/signal-cli/<version>/`.
 - Escribe `channels.signal.cliPath` en su configuración.
 

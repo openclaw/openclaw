@@ -4,18 +4,11 @@ summary: "Konfigurering av Cloudflare AI Gateway (autentisering + modellval)"
 read_when:
   - Du vill använda Cloudflare AI Gateway med OpenClaw
   - Du behöver konto-ID, gateway-ID eller miljövariabeln för API-nyckel
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:07Z
 ---
 
 # Cloudflare AI Gateway
 
-Cloudflare AI Gateway ligger framför leverantörernas API:er och låter dig lägga till analys, cachelagring och kontroller. För Anthropic använder OpenClaw Anthropic Messages API via din Gateway-slutpunkt.
+Cloudflare AI Gateway sitter framför leverantör API:er och låter dig lägga till analys, caching och kontroller. För Anthropic, använder OpenClaw Anthropic Messages API genom din Gateway-slutpunkt.
 
 - Leverantör: `cloudflare-ai-gateway`
 - Bas-URL: `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/anthropic`

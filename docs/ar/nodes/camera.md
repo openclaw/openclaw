@@ -4,13 +4,6 @@ read_when:
   - عند إضافة أو تعديل التقاط الكاميرا على عُقد iOS أو macOS
   - عند توسيع سير عمل ملفات MEDIA المؤقتة المتاحة للوكيل
 title: "التقاط الكاميرا"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:35Z
 ---
 
 # التقاط الكاميرا (الوكيل)
@@ -38,7 +31,7 @@ x-i18n:
     - `devices`: مصفوفة من `{ id, name, position, deviceType }`
 
 - `camera.snap`
-  - المعاملات:
+  - Params:
     - `facing`: `front|back` (الافتراضي: `front`)
     - `maxWidth`: رقم (اختياري؛ الافتراضي `1600` على عُقدة iOS)
     - `quality`: `0..1` (اختياري؛ الافتراضي `0.9`)
@@ -52,7 +45,7 @@ x-i18n:
   - حارس الحمولة: تُعاد ضغط الصور للحفاظ على حمولة base64 دون 5 ميغابايت.
 
 - `camera.clip`
-  - المعاملات:
+  - Params:
     - `facing`: `front|back` (الافتراضي: `front`)
     - `durationMs`: رقم (الافتراضي `3000`، ومقيد بحد أقصى `60000`)
     - `includeAudio`: قيمة منطقية (الافتراضي `true`)

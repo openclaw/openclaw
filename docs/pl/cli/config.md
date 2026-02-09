@@ -3,13 +3,6 @@ summary: "Dokumentacja referencyjna CLI dla `openclaw config` (get/set/unset war
 read_when:
   - Chcesz odczytać lub edytować konfigurację w trybie nieinteraktywnym
 title: "Konfiguracja"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:55Z
 ---
 
 # `openclaw config`

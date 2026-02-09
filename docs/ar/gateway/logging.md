@@ -4,13 +4,6 @@ read_when:
   - تغيير مخرجات التسجيل أو تنسيقاتها
   - تصحيح مخرجات CLI أو Gateway
 title: "التسجيل"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:23Z
 ---
 
 # التسجيل
@@ -47,7 +40,7 @@ openclaw logs --follow
 - لالتقاط تفاصيل «التفصيل فقط» ضمن سجلات الملفات، اضبط `logging.level` على `debug` أو
   `trace`.
 
-## التقاط مخرجات وحدة التحكم
+## التقاط وحدة التحكم
 
 يلتقط CLI `console.log/info/warn/error/debug/trace` ويكتبها إلى سجلات الملفات،
 مع الاستمرار في الطباعة إلى stdout/stderr.

@@ -1,15 +1,8 @@
 ---
 summary: "Синтаксис директив для /think + /verbose и то, как они влияют на рассуждения модели"
 read_when:
-  - "Корректировка разбора директив thinking или verbose либо их значений по умолчанию"
+  - Корректировка разбора директив thinking или verbose либо их значений по умолчанию
 title: "Уровни размышлений"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:11Z
 ---
 
 # Уровни размышлений (/think директивы)

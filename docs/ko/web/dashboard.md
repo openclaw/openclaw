@@ -1,15 +1,8 @@
 ---
 summary: "Gateway(게이트웨이) 대시보드(Control UI) 접근 및 인증"
 read_when:
-  - "대시보드 인증 또는 노출 모드를 변경할 때"
+  - 대시보드 인증 또는 노출 모드를 변경할 때
 title: "대시보드"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:39Z
 ---
 
 # 대시보드(Control UI)
@@ -27,8 +20,7 @@ Gateway(게이트웨이) 대시보드는 기본적으로 `/` 에서 제공되는
 - Serve/Funnel 자동화는 [Tailscale](/gateway/tailscale) 를 참고하십시오.
 - 바인드 모드와 보안 유의 사항은 [Web surfaces](/web) 를 참고하십시오.
 
-인증은 WebSocket 핸드셰이크 단계에서 `connect.params.auth` (토큰 또는 비밀번호)로 강제됩니다.
-자세한 내용은 [Gateway 구성](/gateway/configuration)의 `gateway.auth` 를 참고하십시오.
+인증은 WebSocket 핸드셰이크 단계에서 `connect.params.auth` (토큰 또는 비밀번호)로 강제됩니다. 자세한 내용은 [Gateway 구성](/gateway/configuration)의 `gateway.auth` 를 참고하십시오.
 
 보안 참고: Control UI 는 **관리자 표면**(채팅, 구성, 실행 승인)입니다.
 공개적으로 노출하지 마십시오. UI 는 최초 로드 후 토큰을 `localStorage` 에 저장합니다.

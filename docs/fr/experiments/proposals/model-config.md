@@ -3,13 +3,6 @@ summary: "Exploration : configuration des modeles, profils d'authentification e
 read_when:
   - Exploration de futures idees de selection de modele + profils d'authentification
 title: "Exploration de la configuration des modeles"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:28Z
 ---
 
 # Configuration des modeles (Exploration)
@@ -39,4 +32,4 @@ Les operateurs souhaitent :
 
 - La rotation des profils doit-elle etre par fournisseur ou par modele ?
 - Comment l'interface utilisateur doit-elle exposer la selection de profil pour une session ?
-- Quel est le chemin de migration le plus sur depuis les cles de configuration historiques ?
+- Quel est le chemin de migration le plus sûr à partir des clés de configuration héritées?

@@ -2,16 +2,9 @@
 summary: "သုတေသန မှတ်စုများ — Clawd workspace များအတွက် offline memory စနစ် (Markdown ကို အမှန်တရားအရင်းအမြစ်အဖြစ်ထားပြီး index ကို ထုတ်လုပ်ခြင်း)"
 read_when:
   - နေ့စဉ် Markdown လော့ဂ်များကို ကျော်လွန်သည့် workspace memory (~/.openclaw/workspace) ကို ဒီဇိုင်းဆွဲနေချိန်
-  - standalone CLI နှင့် OpenClaw အတွင်းသို့ နက်ရှိုင်းစွာ ပေါင်းစည်းခြင်း အကြား ဆုံးဖြတ်နေချိန်
+  - Deciding: အချိန်ကန့်သတ်ချက်များ (“Nov 2025 အတွင်း ဘာတွေ မှန်ခဲ့သလဲ?”)
   - offline recall + reflection (retain/recall/reflect) ထည့်သွင်းနေချိန်
 title: "Workspace Memory သုတေသန"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:58Z
 ---
 
 # Workspace Memory v2 (offline): သုတေသန မှတ်စုများ
@@ -34,7 +27,7 @@ Target: Clawd ပုံစံ workspace (`agents.defaults.workspace`, default `~
 - အမြင့်မားသော recall ရယူမှု (“X အကြောင်း ဘာဆုံးဖြတ်ခဲ့လဲ?”, “Y ကို နောက်ဆုံး ဘယ်အချိန် စမ်းသပ်ခဲ့လဲ?”)
 - entity အလယ်ပြု အဖြေများ (“Alice / The Castle / warelay အကြောင်း ပြောပါ”) ကို ဖိုင်များစွာ မပြန်ဖတ်ဘဲ မရနိုင်ခြင်း
 - အမြင်/ဦးစားပေးချက် တည်ငြိမ်မှု (ပြောင်းလဲသည့်အခါ အထောက်အထား ပါရှိမှု)
-- အချိန်ကန့်သတ်ချက်များ (“2025 နိုဝင်ဘာအတွင်း ဘာတွေ အမှန်ဖြစ်ခဲ့လဲ?”) နှင့် အငြင်းပွားမှု ဖြေရှင်းခြင်း
+- နှင့် conflict resolution **Daily log သည် daily log အတိုင်းပဲ ဖြစ်ရမည်**။
 
 ## ဒီဇိုင်း ရည်မှန်းချက်များ
 
@@ -87,7 +80,7 @@ Target: Clawd ပုံစံ workspace (`agents.defaults.workspace`, default `~
 
 မှတ်ချက်များ —
 
-- **နေ့စဉ် လော့ဂ်သည် နေ့စဉ် လော့ဂ်အဖြစ်ပဲ ဆက်ထားပါ**။ JSON သို့ ပြောင်းရန် မလိုအပ်။
+- JSON အဖြစ် ပြောင်းရန် မလိုအပ်ပါ။ **အမြင်**: “Peter က ဘာကို ကြိုက်နှစ်သက်သလဲ?”
 - `bank/` ဖိုင်များသည် reflection job များမှ **curate** လုပ်ထားသော အရာများဖြစ်ပြီး လက်ဖြင့် ပြင်ဆင်ရေးသားနိုင်ပါသေးသည်။
 - `memory.md` သည် “သေးငယ် + core ဆန်” အဖြစ် ဆက်လက်ရှိရမည် — session တိုင်းတွင် Clawd က မြင်စေချင်သော အရာများ။
 
@@ -144,7 +137,7 @@ Recall သည် အောက်ပါအရာများကို ထော�
 - **lexical**: “တိတိကျကျ စကားလုံး/အမည်/command များ ရှာရန်” (FTS5)
 - **entity**: “X အကြောင်း ပြောပါ” (entity page များ + entity ချိတ်ဆက်ထားသော facts)
 - **temporal**: “နိုဝင်ဘာ ၂၇ အနီးအနား ဘာဖြစ်ခဲ့လဲ” / “ပြီးခဲ့သည့် အပတ်မှ စပြီး”
-- **opinion**: “Peter က ဘာကို ဦးစားပေးလဲ?” (ယုံကြည်မှု + အထောက်အထား ပါရှိ)
+- (ယုံကြည်မှု + အထောက်အထားဖြင့်) OpenClaw သည် model providers များအတွက် OAuth နှင့် API keys ကို ထောက်ပံ့ပါသည်။
 
 ပြန်ပေးမည့် ပုံစံသည် agent-friendly ဖြစ်ပြီး အရင်းအမြစ်များကို ကိုးကားသင့်သည် —
 

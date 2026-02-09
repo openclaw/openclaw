@@ -5,22 +5,15 @@ read_when:
   - LM Studio သို့မဟုတ် OpenAI-compatible proxy ကို ချိတ်ဆက်တပ်ဆင်နေသောအခါ
   - ဒေသတွင်း မော်ဒယ်များအတွက် အလုံခြုံဆုံး လမ်းညွှန်ချက်များ လိုအပ်သောအခါ
 title: "Local Models"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:26Z
 ---
 
 # Local models
 
-ဒေသတွင်း လည်ပတ်နိုင်ပါသည်၊ သို့သော် OpenClaw သည် **ကြီးမားသော context** နှင့် **prompt injection ကို ကာကွယ်နိုင်သော ခိုင်မာသည့် အကာအကွယ်များ** ကို မျှော်မှန်းထားပါသည်။ GPU ကဒ်အသေးများတွင် context ကို ဖြတ်တောက်ရပြီး လုံခြုံရေး ယို漏မှု ဖြစ်နိုင်ပါသည်။ အမြင့်ဆုံးကို ရည်မှန်းပါ — **အနည်းဆုံး Mac Studio အပြည့်အဝ သတ်မှတ်ထားသော စက် ၂ လုံး သို့မဟုတ် တူညီသော GPU rig (~$30k+)**။ **24 GB** GPU တစ်လုံးတည်းဖြင့် လုပ်ဆောင်နိုင်သော်လည်း prompt ပိုမိုပေါ့ပါးသော အလုပ်များတွင်သာ ဖြစ်ပြီး latency မြင့်မားပါမည်။ **သင် လည်ပတ်နိုင်သမျှ အကြီးဆုံး / full-size မော်ဒယ် variant ကို အသုံးပြုပါ**။ အလွန်အကျွံ quantize လုပ်ထားသော သို့မဟုတ် “small” checkpoint များသည် prompt-injection အန္တရာယ်ကို တိုးစေပါသည် ([Security](/gateway/security) ကို ကြည့်ပါ)။
+Local အနေဖြင့် လုပ်နိုင်သော်လည်း OpenClaw သည် context ကြီးမားမှုနှင့် prompt injection ကို တင်းကျပ်စွာ ကာကွယ်နိုင်မှုကို မျှော်လင့်ထားသည်။ ကတ်အသေးများသည် context ကို ဖြတ်တောက်ပြီး လုံခြုံရေးကို ယို漏စေနိုင်သည်။ ရည်မှန်းချက်ကို မြင့်မားစွာထားပါ: **≥2 အပြည့်အဝ အင်အားမြှင့်ထားသော Mac Studio များ သို့မဟုတ် တူညီသော GPU rig (~$30k+)**။ **24 GB** GPU တစ်ခုတည်းဖြင့်တော့ ပိုမိုပေါ့ပါးသော prompt များတွင်သာ အသုံးပြုနိုင်ပြီး latency ပိုများမည်။ သင် လည်ပတ်နိုင်သမျှ **အကြီးဆုံး / full-size model variant ကို အသုံးပြုပါ**; အလွန်အမင်း quantized လုပ်ထားသော သို့မဟုတ် “small” checkpoint များသည် prompt-injection အန္တရာယ်ကို တိုးစေသည် ([Security](/gateway/security) ကိုကြည့်ပါ)။
 
 ## အကြံပြုချက်: LM Studio + MiniMax M2.1 (Responses API, full-size)
 
-လက်ရှိ အကောင်းဆုံး ဒေသတွင်း stack ဖြစ်ပါသည်။ LM Studio တွင် MiniMax M2.1 ကို load လုပ်ပါ၊ local server ကို ဖွင့်ပါ (default `http://127.0.0.1:1234`)၊ reasoning နှင့် final text ကို ခွဲခြားထားနိုင်ရန် Responses API ကို အသုံးပြုပါ။
+လက်ရှိ အကောင်းဆုံး local stack။ LM Studio တွင် MiniMax M2.1 ကို load လုပ်ပြီး local server ကို ဖွင့်ပါ (မူလ `http://127.0.0.1:1234`)， reasoning ကို final text မှ ခွဲထားရန် Responses API ကို အသုံးပြုပါ။
 
 ```json5
 {
@@ -114,12 +107,12 @@ primary နှင့် fallback အစီအစဉ်ကို လဲလှယ�
 
 ### Regional hosting / data routing
 
-- Hosted MiniMax/Kimi/GLM variant များကို OpenRouter တွင် region-pinned endpoint များဖြင့်လည်း ရရှိနိုင်ပါသည် (ဥပမာ US-hosted)။ သင့်ရွေးချယ်ထားသော တရားရုံးပိုင်နက်အတွင်း traffic ကို ထိန်းထားရန် ထိုနေရာတွင် regional variant ကို ရွေးချယ်ပြီး Anthropic/OpenAI fallback များအတွက် `models.mode: "merge"` ကို ဆက်လက် အသုံးပြုပါ။
+- Hosted MiniMax/Kimi/GLM variant များကို OpenRouter ပေါ်တွင် region-pinned endpoint များ (ဥပမာ US-hosted) အဖြစ်လည်း ရရှိနိုင်သည်။ သင် ရွေးချယ်ထားသော ဥပဒေအာဏာပိုင်ဒေသအတွင်း traffic ကို ထိန်းထားရန် ထိုနေရာမှ regional variant ကို ရွေးပြီး Anthropic/OpenAI fallback များအတွက် `models.mode: "merge"` ကို ဆက်လက် အသုံးပြုပါ။
 - ဒေသတွင်းသာ အသုံးပြုခြင်းသည် privacy အတွက် အကောင်းဆုံး လမ်းကြောင်း ဖြစ်ပါသည်; provider အင်္ဂါရပ်များ လိုအပ်သော်လည်း data flow ကို ထိန်းချုပ်လိုပါက hosted regional routing သည် အလယ်အလတ် ဖြေရှင်းချက် ဖြစ်ပါသည်။
 
 ## အခြား OpenAI-compatible local proxy များ
 
-vLLM, LiteLLM, OAI-proxy သို့မဟုတ် custom gateway များသည် OpenAI-style `/v1` endpoint ကို ထုတ်ပေးနိုင်ပါက အသုံးပြုနိုင်ပါသည်။ အထက်ပါ provider block ကို သင့် endpoint နှင့် model ID ဖြင့် အစားထိုးပါ။
+vLLM, LiteLLM, OAI-proxy သို့မဟုတ် custom gateways များသည် OpenAI ပုံစံ `/v1` endpoint ကို ဖော်ထုတ်ပေးပါက အသုံးပြုနိုင်ပါသည်။ အပေါ်ရှိ provider block ကို သင့် endpoint နှင့် model ID ဖြင့် အစားထိုးပါ:
 
 ```json5
 {
@@ -151,7 +144,7 @@ hosted မော်ဒယ်များကို fallback အဖြစ် ဆ�
 
 ## Troubleshooting
 
-- Gateway က proxy ကို ချိတ်ဆက်နိုင်ပါသလား? `curl http://127.0.0.1:1234/v1/models` ကို စစ်ဆေးပါ။
-- LM Studio မော်ဒယ် unload ဖြစ်နေပါသလား? ပြန်လည် load လုပ်ပါ; cold start သည် “hanging” ဖြစ်စေသော အကြောင်းရင်းများထဲမှ တစ်ခု ဖြစ်ပါသည်။
-- Context error များ ဖြစ်ပါသလား? `contextWindow` ကို လျှော့ချပါ သို့မဟုတ် server limit ကို မြှင့်ပါ။
+- Gateway က proxy ကို ချိတ်ဆက်နိုင်ပါသလား? `curl http://127.0.0.1:1234/v1/models`
+- LM Studio model ကို unload လုပ်ထားပါသလား? ပြန်လည် load လုပ်ပါ; cold start သည် “hanging” ဖြစ်စေသော အကြောင်းရင်း အများဆုံးဖြစ်သည်။
+- Context အမှားများ ရှိပါသလား? `contextWindow` ကို လျှော့ချပါ သို့မဟုတ် server limit ကို မြှင့်ပါ။
 - Safety: ဒေသတွင်း မော်ဒယ်များတွင် provider-side filter များ မပါဝင်ပါ; prompt injection ၏ ထိခိုက်မှု အကျယ်အဝန်းကို ကန့်သတ်ရန် agents များကို ကျဉ်းမြောင်းစေပြီး compaction ကို ဖွင့်ထားပါ။

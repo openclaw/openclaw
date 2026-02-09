@@ -5,13 +5,6 @@ read_when:
   - Bạn đang thay đổi hành vi tự động nén hoặc thêm công việc dọn dẹp “trước khi nén”
   - Bạn muốn triển khai xả bộ nhớ hoặc các lượt hệ thống im lặng
 title: "Chuyên sâu quản lý phiên"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:27Z
 ---
 
 # Quản lý phiên & Nén (Chuyên sâu)
@@ -96,7 +89,7 @@ Quy tắc kinh nghiệm:
 
 - **Reset** (`/new`, `/reset`) tạo một `sessionId` mới cho `sessionKey` đó.
 - **Reset hằng ngày** (mặc định 4:00 sáng theo giờ địa phương trên máy chủ gateway) tạo một `sessionId` mới ở thông điệp kế tiếp sau mốc reset.
-- **Hết hạn do nhàn rỗi** (`session.reset.idleMinutes` hoặc legacy `session.idleMinutes`) tạo một `sessionId` mới khi có thông điệp đến sau cửa sổ nhàn rỗi. Khi cả hằng ngày + nhàn rỗi đều được cấu hình, mốc nào hết hạn trước sẽ áp dụng.
+- **Hết hạn khi nhàn rỗi** (`session.reset.idleMinutes` hoặc legacy `session.idleMinutes`) tạo một `sessionId` mới khi một tin nhắn đến sau cửa sổ nhàn rỗi. Khi cả daily + idle đều được cấu hình, cái nào hết hạn trước sẽ được ưu tiên.
 
 Chi tiết triển khai: quyết định diễn ra trong `initSessionState()` ở `src/auto-reply/reply/session.ts`.
 
@@ -174,7 +167,7 @@ Sau khi nén, các lượt sau sẽ thấy:
 - Tóm tắt nén
 - Các thông điệp sau `firstKeptEntryId`
 
-Nén là **bền vững** (khác với cắt tỉa phiên). Xem [/concepts/session-pruning](/concepts/session-pruning).
+32. Khóa phiên sai? 33. Bắt đầu với [/concepts/session](/concepts/session) và xác nhận `sessionKey` trong `/status`.
 
 ---
 
@@ -282,10 +275,10 @@ Pi cũng cung cấp hook `session_before_compact` trong extension API, nhưng lo
 
 ## Danh sách kiểm tra xử lý sự cố
 
-- Khóa phiên sai? Bắt đầu với [/concepts/session](/concepts/session) và xác nhận `sessionKey` trong `/status`.
-- Lệch giữa kho và bản ghi? Xác nhận máy chủ Gateway và đường dẫn kho từ `openclaw status`.
-- Nén quá nhiều? Kiểm tra:
+- Session key sai? Bắt đầu với [/concepts/session](/concepts/session) và xác nhận `sessionKey` trong `/status`.
+- Lệch giữa store và transcript? 37. Kiểm tra:
+- Spam nén? 39. Xác nhận phản hồi bắt đầu bằng `NO_REPLY` (token chính xác) và bạn đang dùng bản build có bao gồm bản sửa ức chế streaming.
   - cửa sổ ngữ cảnh mô hình (quá nhỏ)
   - thiết lập nén (`reserveTokens` quá cao so với cửa sổ mô hình có thể gây nén sớm)
   - phình to tool-result: bật/điều chỉnh cắt tỉa phiên
-- Lượt im lặng bị rò rỉ? Xác nhận phản hồi bắt đầu bằng `NO_REPLY` (token chính xác) và bạn đang dùng bản build có bản sửa ẩn streaming.
+- 40. "Xin chào, C-3PO! Xác nhận phản hồi bắt đầu bằng `NO_REPLY` (token chính xác) và bạn đang ở bản build bao gồm bản sửa lỗi chặn streaming.

@@ -2,15 +2,8 @@
 summary: "`openclaw voicecall` için CLI başvurusu (voice-call eklentisi komut yüzeyi)"
 read_when:
   - Voice-call eklentisini kullanıyorsunuz ve CLI giriş noktalarını istiyorsunuz
-  - `voicecall call|continue|status|tail|expose` için hızlı örnekler istiyorsunuz
+  - "`voicecall call|continue|status|tail|expose` için hızlı örnekler istiyorsunuz"
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:10Z
 ---
 
 # `openclaw voicecall`

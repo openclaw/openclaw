@@ -4,20 +4,13 @@ read_when:
   - Thiết lập Zalo Personal cho OpenClaw
   - Gỡ lỗi đăng nhập hoặc luồng tin nhắn Zalo Personal
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:12Z
 ---
 
 # Zalo Personal (không chính thức)
 
-Trạng thái: thử nghiệm. Tích hợp này tự động hóa **tài khoản Zalo cá nhân** thông qua `zca-cli`.
+Trạng thái: thử nghiệm. Tích hợp này tự động hóa một **tài khoản Zalo cá nhân** thông qua `zca-cli`.
 
-> **Cảnh báo:** Đây là tích hợp không chính thức và có thể dẫn đến việc tài khoản bị đình chỉ/cấm. Tự chịu rủi ro khi sử dụng.
+> **Warning:** This is an unofficial integration and may result in account suspension/ban. Tự chịu rủi ro khi sử dụng.
 
 ## Plugin bắt buộc
 
@@ -64,7 +57,7 @@ Máy Gateway phải có sẵn binary `zca` trong `PATH`.
 
 ## Đặt tên
 
-ID kênh là `zalouser` để làm rõ rằng đây là tự động hóa **tài khoản người dùng Zalo cá nhân** (không chính thức). Chúng tôi giữ `zalo` cho khả năng tích hợp API Zalo chính thức trong tương lai.
+Channel id là `zalouser` để làm rõ rằng đây là tự động hóa **tài khoản người dùng Zalo cá nhân** (không chính thức). Chúng tôi giữ `zalo` để dành cho khả năng tích hợp API Zalo chính thức trong tương lai.
 
 ## Tìm ID (danh bạ)
 
@@ -84,7 +77,7 @@ openclaw directory groups list --channel zalouser --query "work"
 ## Kiểm soát truy cập (DM)
 
 `channels.zalouser.dmPolicy` hỗ trợ: `pairing | allowlist | open | disabled` (mặc định: `pairing`).
-`channels.zalouser.allowFrom` chấp nhận ID người dùng hoặc tên. Trình hướng dẫn sẽ phân giải tên thành ID qua `zca friend find` khi khả dụng.
+`channels.zalouser.allowFrom` accepts user IDs or names. Trình hướng dẫn sẽ phân giải tên thành ID thông qua `zca friend find` khi khả dụng.
 
 Phê duyệt qua:
 
@@ -93,7 +86,7 @@ Phê duyệt qua:
 
 ## Truy cập nhóm (tùy chọn)
 
-- Mặc định: `channels.zalouser.groupPolicy = "open"` (cho phép nhóm). Dùng `channels.defaults.groupPolicy` để ghi đè mặc định khi chưa được đặt.
+- Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Giới hạn theo danh sách cho phép với:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups` (khóa là ID hoặc tên nhóm)
@@ -119,7 +112,7 @@ Ví dụ:
 
 ## Đa tài khoản
 
-Tài khoản ánh xạ tới các profile zca. Ví dụ:
+Các tài khoản ánh xạ tới các profile zca. Ví dụ:
 
 ```json5
 {

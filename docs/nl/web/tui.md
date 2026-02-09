@@ -4,13 +4,6 @@ read_when:
   - Je wilt een beginnersvriendelijke walkthrough van de TUI
   - Je hebt de volledige lijst met TUI-functies, -opdrachten en -sneltoetsen nodig
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:59Z
 ---
 
 # TUI (Terminal UI)
@@ -54,7 +47,7 @@ Gebruik `--password` als je Gateway wachtwoordauthenticatie gebruikt.
 - Sessiesleutels worden opgeslagen als `agent:<agentId>:<sessionKey>`.
   - Als je `/session main` typt, breidt de TUI dit uit naar `agent:<currentAgent>:main`.
   - Als je `/session agent:other:main` typt, schakel je expliciet naar die agentsessie.
-- Sessiebereik:
+- Sessie bereik:
   - `per-sender` (standaard): elke agent heeft meerdere sessies.
   - `global`: de TUI gebruikt altijd de `global`-sessie (de picker kan leeg zijn).
 - De huidige agent + sessie zijn altijd zichtbaar in de footer.

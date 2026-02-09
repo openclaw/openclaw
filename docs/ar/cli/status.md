@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI للأمر `openclaw status` (التشخيص، المجسّات، لقطات الاستخدام)"
 read_when:
-  - "تريد تشخيصًا سريعًا لصحة القنوات + مستلمي الجلسات الأخيرة"
-  - "تريد حالة «الكل» قابلة للنسخ واللصق لأغراض التصحيح"
+  - تريد تشخيصًا سريعًا لصحة القنوات + مستلمي الجلسات الأخيرة
+  - تريد وضع "جميع" قابل للصق لتصحيح الأخطاء
 title: "الحالة"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:02Z
 ---
 
 # `openclaw status`

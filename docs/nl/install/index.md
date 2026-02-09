@@ -5,13 +5,6 @@ read_when:
   - Je wilt implementeren op een cloudplatform
   - Je moet bijwerken, migreren of verwijderen
 title: "Installeren"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:33Z
 ---
 
 # Installeren
@@ -35,9 +28,10 @@ Het **installatiescript** is de aanbevolen manier om OpenClaw te installeren. He
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="Installatiescript" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     Downloadt de CLI, installeert deze globaal via npm en start de onboarding-wizard.
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ Het **installatiescript** is de aanbevolen manier om OpenClaw te installeren. He
         ```
       </Tab>
     </Tabs>
-
+    
     Dat is alles — het script regelt Node-detectie, installatie en onboarding.
-
+    
     Om onboarding over te slaan en alleen het binaire bestand te installeren:
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ Het **installatiescript** is de aanbevolen manier om OpenClaw te installeren. He
         ```
       </Tab>
     </Tabs>
-
+    
     Voor alle flags, omgevingsvariabelen en CI-/automatiseringsopties, zie [Installer internals](/install/installer).
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     Als je Node 22+ al hebt en de installatie zelf wilt beheren:
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp-buildfouten?">
           Als je libvips globaal hebt geïnstalleerd (gebruikelijk op macOS via Homebrew) en `sharp` faalt, forceer dan vooraf gebouwde binaries:
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           Als je `sharp: Please add node-gyp to your dependencies` ziet, installeer dan build-tooling (macOS: Xcode CLT + `npm install -g node-gyp`) of gebruik de bovenstaande omgevingsvariabele.
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ Het **installatiescript** is de aanbevolen manier om OpenClaw te installeren. He
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm vereist expliciete goedkeuring voor pakketten met build-scripts. Nadat de eerste installatie de waarschuwing "Ignored build scripts" toont, voer `pnpm approve-builds -g` uit en selecteer de vermelde pakketten.
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="Vanaf de bron" icon="github">
+  <Accordion title="From source" icon="github">
     Voor bijdragers of iedereen die vanuit een lokale checkout wil draaien.
 
+    ```
     <Steps>
       <Step title="Clonen en bouwen">
         Clone de [OpenClaw-repo](https://github.com/openclaw/openclaw) en bouw:
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ Het **installatiescript** is de aanbevolen manier om OpenClaw te installeren. He
       </Step>
       <Step title="De CLI koppelen">
         Maak het `openclaw`-commando globaal beschikbaar:
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         Je kunt ook het koppelen overslaan en opdrachten uitvoeren via `pnpm openclaw ...` vanuit de repo.
       </Step>
       <Step title="Onboarding uitvoeren">
@@ -137,8 +135,9 @@ Het **installatiescript** is de aanbevolen manier om OpenClaw te installeren. He
         ```
       </Step>
     </Steps>
-
+    
     Voor uitgebreidere ontwikkelworkflows, zie [Installatie](/start/setup).
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## Problemen oplossen: `openclaw` niet gevonden
 
-<Accordion title="PATH-diagnose en -oplossing">
+<Accordion title="PATH diagnosis and fix">
   Snelle diagnose:
 
 ```bash
@@ -192,19 +191,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Voeg op Windows de uitvoer van `npm prefix -g` toe aan je PATH.
 
-Open daarna een nieuwe terminal (of `rehash` in zsh / `hash -r` in bash).
-</Accordion>
+Open daarna een nieuwe terminal (of `rehash` in zsh / `hash -r` in bash). </Accordion>
 
 ## Bijwerken / verwijderen
 
 <CardGroup cols={3}>
-  <Card title="Bijwerken" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Houd OpenClaw up-to-date.
   </Card>
-  <Card title="Migreren" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     Verhuizen naar een nieuwe machine.
   </Card>
-  <Card title="Verwijderen" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     OpenClaw volledig verwijderen.
   </Card>
 </CardGroup>

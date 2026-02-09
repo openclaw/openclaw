@@ -4,13 +4,6 @@ read_when:
   - Diseñar o refactorizar la comprensión de medios
   - Ajustar el preprocesamiento entrante de audio/video/imagen
 title: "Comprensión de medios"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:14Z
 ---
 
 # Comprensión de medios (entrante) — 2026-01-17
@@ -181,11 +174,11 @@ Si omite `capabilities`, la entrada es elegible para la lista en la que aparece.
 
 ## Matriz de compatibilidad de proveedores (integraciones de OpenClaw)
 
-| Capacidad | Integración de proveedor                        | Notas                                                             |
-| --------- | ----------------------------------------------- | ----------------------------------------------------------------- |
-| Imagen    | OpenAI / Anthropic / Google / otros vía `pi-ai` | Cualquier modelo con capacidad de imagen en el registro funciona. |
-| Audio     | OpenAI, Groq, Deepgram, Google                  | Transcripción del proveedor (Whisper/Deepgram/Gemini).            |
-| Video     | Google (API de Gemini)                          | Comprensión de video del proveedor.                               |
+| Capacidad | Integración de proveedor                        | Notas                                                                                     |
+| --------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Imagen    | OpenAI / Anthropic / Google / otros vía `pi-ai` | Cualquier modelo con capacidad de imagen en el registro funciona.         |
+| Audio     | OpenAI, Groq, Deepgram, Google                  | Transcripción del proveedor (Whisper/Deepgram/Gemini). |
+| Video     | Google (API de Gemini)       | Comprensión de video del proveedor.                                       |
 
 ## Proveedores recomendados
 
@@ -217,7 +210,7 @@ Cuando `mode: "all"`, las salidas se etiquetan como `[Image 1/2]`, `[Audio 2/2]`
 
 ## Ejemplos de configuración
 
-### 1) Lista de modelos compartidos + anulaciones
+### 1. Lista de modelos compartidos + anulaciones
 
 ```json5
 {
@@ -254,7 +247,7 @@ Cuando `mode: "all"`, las salidas se etiquetan como `[Image 1/2]`, `[Audio 2/2]`
 }
 ```
 
-### 2) Solo audio + video (imagen desactivada)
+### 2. Solo audio + video (imagen desactivada)
 
 ```json5
 {
@@ -294,7 +287,7 @@ Cuando `mode: "all"`, las salidas se etiquetan como `[Image 1/2]`, `[Audio 2/2]`
 }
 ```
 
-### 3) Comprensión opcional de imágenes
+### 3. Comprensión opcional de imágenes
 
 ```json5
 {
@@ -325,7 +318,7 @@ Cuando `mode: "all"`, las salidas se etiquetan como `[Image 1/2]`, `[Audio 2/2]`
 }
 ```
 
-### 4) Entrada única multimodal (capacidades explícitas)
+### 4. Entrada única multimodal (capacidades explícitas)
 
 ```json5
 {

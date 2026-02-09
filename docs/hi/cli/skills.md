@@ -4,13 +4,6 @@ read_when:
   - आप देखना चाहते हैं कि कौन-से Skills उपलब्ध हैं और चलाने के लिए तैयार हैं
   - आप Skills के लिए गायब बाइनरी/पर्यावरण चर/विन्यास का डिबग करना चाहते हैं
 title: "Skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:01Z
 ---
 
 # `openclaw skills`

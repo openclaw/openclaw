@@ -6,13 +6,6 @@ read_when:
   - Je wilt volledige controle over persistentie, binaries en herstartgedrag
   - Je draait OpenClaw in Docker op Hetzner of een vergelijkbare provider
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # OpenClaw op Hetzner (Docker, productie-VPS-handleiding)
@@ -71,7 +64,7 @@ Voor de generieke Docker-flow, zie [Docker](/install/docker).
 
 ---
 
-## 1) Provisioneer de VPS
+## 1. Provisioneer de VPS
 
 Maak een Ubuntu- of Debian-VPS aan bij Hetzner.
 
@@ -86,7 +79,7 @@ Behandel deze niet als wegwerpinfrastructuur.
 
 ---
 
-## 2) Installeer Docker (op de VPS)
+## 2. Installeer Docker (op de VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Clone de OpenClaw-repository
+## 3. Clone de OpenClaw-repository
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,7 +107,7 @@ Deze handleiding gaat ervan uit dat je een aangepaste image bouwt om binaire per
 
 ---
 
-## 4) Maak persistente hostmappen aan
+## 4. Maak persistente hostmappen aan
 
 Docker-containers zijn efemeer.
 Alle langlevende status moet op de host staan.
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Configureer omgevingsvariabelen
+## 5. Configureer omgevingsvariabelen
 
 Maak `.env` aan in de root van de repository.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose-configuratie
+## 6. Docker Compose-configuratie
 
 Maak of werk `docker-compose.yml` bij.
 
@@ -204,7 +197,7 @@ services:
 
 ---
 
-## 7) Bak vereiste binaries in de image (kritisch)
+## 7. Bak vereiste binaries in de image (kritisch)
 
 Het installeren van binaries in een draaiende container is een valkuil.
 Alles wat tijdens runtime wordt geïnstalleerd, gaat verloren bij een herstart.
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Bouwen en starten
+## 8. Bouwen en starten
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Verwachte uitvoer:
 
 ---
 
-## 9) Verifieer de Gateway
+## 9. Verifieer de Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway

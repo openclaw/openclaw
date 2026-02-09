@@ -5,18 +5,11 @@ read_when:
   - Tích hợp Peekaboo qua Swift Package Manager
   - Thay đổi giao thức/đường dẫn PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:40Z
 ---
 
 # Peekaboo Bridge (tự động hóa UI trên macOS)
 
-OpenClaw có thể lưu trữ **PeekabooBridge** như một broker tự động hóa UI cục bộ, có nhận biết quyền. Điều này cho phép CLI `peekaboo` điều khiển tự động hóa UI trong khi tái sử dụng các quyền TCC của ứng dụng macOS.
+OpenClaw có thể host **PeekabooBridge** như một broker tự động hóa UI cục bộ, có nhận thức về quyền. Điều này cho phép CLI `peekaboo` điều khiển tự động hóa UI trong khi tái sử dụng các quyền TCC của ứng dụng macOS.
 
 ## Đây là gì (và không phải là gì)
 
@@ -30,7 +23,8 @@ Trong ứng dụng macOS:
 
 - Settings → **Enable Peekaboo Bridge**
 
-Khi được bật, OpenClaw khởi chạy một máy chủ socket UNIX cục bộ. Nếu bị tắt, host sẽ dừng và `peekaboo` sẽ chuyển sang các host khả dụng khác.
+When enabled, OpenClaw starts a local UNIX socket server. If disabled, the host
+is stopped and `peekaboo` will fall back to other available hosts.
 
 ## Thứ tự khám phá client
 
@@ -40,7 +34,8 @@ Các client Peekaboo thường thử các host theo thứ tự sau:
 2. Claude.app (nếu được cài đặt)
 3. OpenClaw.app (broker mỏng)
 
-Sử dụng `peekaboo bridge status --verbose` để xem host nào đang hoạt động và đường dẫn socket đang được dùng. Bạn có thể ghi đè bằng:
+Use `peekaboo bridge status --verbose` to see which host is active and which
+socket path is in use. You can override with:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -54,7 +49,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Hành vi snapshot (tự động hóa)
 
-Snapshot được lưu trong bộ nhớ và tự động hết hạn sau một khoảng ngắn. Nếu cần lưu lâu hơn, hãy chụp lại từ client.
+Snapshots are stored in memory and expire automatically after a short window.
+If you need longer retention, re‑capture from the client.
 
 ## Xử lý sự cố
 

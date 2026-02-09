@@ -3,13 +3,6 @@ summary: "เอกสารอ้างอิงCLIสำหรับ `openclaw
 read_when:
   - คุณต้องการการตั้งค่าแบบมีคำแนะนำสำหรับGateway, เวิร์กสเปซ, การยืนยันตัวตน, ช่องทาง และSkills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:59Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,7 @@ openclaw agents add <name>
 ```
 
 <Note>
+
 `--json` ไม่ได้หมายถึงโหมดไม่โต้ตอบ ใช้ `--non-interactive` สำหรับสคริปต์
+ ใช้ `--non-interactive` สำหรับสคริปต์
 </Note>

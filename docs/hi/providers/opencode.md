@@ -1,23 +1,16 @@
 ---
 summary: "OpenClaw के साथ OpenCode Zen (क्यूरेटेड मॉडल) का उपयोग करें"
 read_when:
-  - "आप मॉडल एक्सेस के लिए OpenCode Zen चाहते हैं"
-  - "आप कोडिंग-फ्रेंडली मॉडलों की एक क्यूरेटेड सूची चाहते हैं"
+  - आप मॉडल एक्सेस के लिए OpenCode Zen चाहते हैं
+  - आप कोडिंग-फ्रेंडली मॉडलों की एक क्यूरेटेड सूची चाहते हैं
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:32Z
 ---
 
 # OpenCode Zen
 
-OpenCode Zen, OpenCode टीम द्वारा कोडिंग एजेंट्स के लिए अनुशंसित **मॉडलों की एक क्यूरेटेड सूची** है।
-यह एक वैकल्पिक, होस्टेड मॉडल एक्सेस पथ है जो एपीआई कुंजी और `opencode` प्रदाता का उपयोग करता है।
-Zen वर्तमान में बीटा में है।
+OpenCode Zen is a **curated list of models** recommended by the OpenCode team for coding agents.
+It is an optional, hosted model access path that uses an API key and the `opencode` provider.
+Zen is currently in beta.
 
 ## CLI सेटअप
 

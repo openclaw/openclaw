@@ -5,13 +5,6 @@ read_when:
   - Oturumları, kuyruklama modlarını veya akış davranışını netleştirirken
   - Muhakeme görünürlüğünü ve kullanım etkilerini belgelendirirken
 title: "Mesajlar"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:21Z
 ---
 
 # Mesajlar
@@ -29,15 +22,15 @@ Inbound message
   -> outbound replies (channel limits + chunking)
 ```
 
-Temel ayarlar yapılandırmada yer alır:
+Key knobs live in configuration:
 
 - Önekler, kuyruklama ve grup davranışı için `messages.*`.
 - Blok halinde akış ve parçalama varsayılanları için `agents.defaults.*`.
-- Sınırlar ve akış anahtarları için kanal geçersiz kılmaları (`channels.whatsapp.*`, `channels.telegram.*` vb.).
+- Sınırlar ve akış anahtarları için kanal geçersiz kılmaları (`channels.whatsapp.*`, `channels.telegram.*` vb.). for caps and streaming toggles.
 
 Tam şema için [Yapılandırma](/gateway/configuration) bölümüne bakın.
 
-## Gelen tekilleştirme (dedupe)
+## Inbound dedupe
 
 Kanallar, yeniden bağlanmalardan sonra aynı mesajı yeniden teslim edebilir. OpenClaw,
 kanal/hesap/karşı taraf/oturum/mesaj kimliğine göre anahtarlanmış kısa ömürlü bir önbellek tutar;
@@ -77,7 +70,7 @@ Oturumlar istemcilere değil, gateway’e aittir.
 
 - Doğrudan sohbetler ajan ana oturum anahtarına daraltılır.
 - Gruplar/kanallar kendi oturum anahtarlarını alır.
-- Oturum deposu ve transkriptler gateway ana makinesinde bulunur.
+- The session store and transcripts live on the gateway host.
 
 Birden çok cihaz/kanal aynı oturuma eşlenebilir; ancak geçmiş her istemciye tam olarak
 geri senkronize edilmez. Öneri: bağlamın ayrışmasını önlemek için uzun konuşmalarda
@@ -86,7 +79,7 @@ oturum transkriptini gösterir; dolayısıyla doğruluk kaynağı onlardır.
 
 Ayrıntılar: [Oturum yönetimi](/concepts/session).
 
-## Gelen gövdeler ve geçmiş bağlamı
+## Inbound bodies and history context
 
 OpenClaw, **istem gövdesini** **komut gövdesinden** ayırır:
 
@@ -101,8 +94,7 @@ Bir kanal geçmiş sağladığında, paylaşılan bir sarmalayıcı kullanır:
 - `[Current message - respond to this]`
 
 **Doğrudan olmayan sohbetlerde** (gruplar/kanallar/odalar), **mevcut mesaj gövdesi**
-gönderen etiketiyle öneklenir (geçmiş girdilerinde kullanılan stilin aynısı).
-Bu, gerçek zamanlı ve kuyruklu/geçmiş mesajları ajan isteminde tutarlı kılar.
+gönderen etiketiyle öneklenir (geçmiş girdilerinde kullanılan stilin aynısı). Bu, gerçek zamanlı ve kuyruklu/geçmiş mesajları ajan isteminde tutarlı kılar.
 
 Geçmiş arabellekleri **yalnızca bekleyen** öğeleri içerir: bir çalıştırmayı
 _tetiklememiş_ grup mesajlarını (ör. mention-korumalı mesajlar) kapsar ve
@@ -111,7 +103,8 @@ oturum transkriptinde zaten bulunan mesajları **hariç tutar**.
 Yönerge ayıklama yalnızca **mevcut mesaj** bölümüne uygulanır; böylece geçmiş
 bozulmadan kalır. Geçmişi saran kanallar, `CommandBody` (veya
 `RawBody`) alanını özgün mesaj metnine ayarlamalı ve `Body`’i
-birleştirilmiş istem olarak korumalıdır. Geçmiş arabellekleri `messages.groupChat.historyLimit`
+birleştirilmiş istem olarak korumalıdır.
+Geçmiş arabellekleri `messages.groupChat.historyLimit`
 (küresel varsayılan) ve `channels.slack.historyLimit` veya
 `channels.telegram.accounts.<id>.historyLimit` gibi kanal başına geçersiz kılmalarla yapılandırılabilir
 (devre dışı bırakmak için `0`’u ayarlayın).

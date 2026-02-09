@@ -3,13 +3,6 @@ summary: "Подборка ссылок на наиболее используе
 read_when:
   - Вам нужен быстрый доступ к ключевым страницам документации
 title: "Каталог документации"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:57Z
 ---
 
 <Note>

@@ -4,13 +4,6 @@ read_when:
   - Вам нужно безопасно обновить checkout исходников
   - Вам нужно понять поведение сокращения `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:25Z
 ---
 
 # `openclaw update`
@@ -81,7 +74,7 @@ openclaw update status --timeout 10
 - `beta`: checkout последнего тега `-beta`, затем сборка + doctor.
 - `dev`: checkout `main`, затем fetch + rebase.
 
-Общая схема:
+Высокий уровень:
 
 1. Требуется чистое рабочее дерево (без незафиксированных изменений).
 2. Переключается на выбранный канал (тег или ветку).

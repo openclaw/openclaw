@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn quản lý hook tác tử
   - Bạn muốn cài đặt hoặc cập nhật hook
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:25Z
 ---
 
 # `openclaw hooks`
@@ -134,7 +127,7 @@ openclaw hooks enable <name>
 
 Bật một hook cụ thể bằng cách thêm nó vào cấu hình của bạn (`~/.openclaw/config.json`).
 
-**Lưu ý:** Các hook được quản lý bởi plugin sẽ hiển thị `plugin:<id>` trong `openclaw hooks list` và
+**Lưu ý:** Các hook do plugin quản lý sẽ hiển thị `plugin:<id>` trong `openclaw hooks list` và
 không thể bật/tắt tại đây. Thay vào đó, hãy bật/tắt plugin.
 
 **Đối số:**
@@ -156,7 +149,7 @@ openclaw hooks enable session-memory
 **Những gì lệnh thực hiện:**
 
 - Kiểm tra xem hook có tồn tại và đủ điều kiện hay không
-- Cập nhật `hooks.internal.entries.<name>.enabled = true` trong cấu hình của bạn
+- Cập nhật \`hooks.internal.entries.<name>Trang này mô tả hành vi CLI hiện tại.
 - Lưu cấu hình xuống đĩa
 
 **Sau khi bật:**

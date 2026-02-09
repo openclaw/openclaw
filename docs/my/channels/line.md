@@ -5,22 +5,17 @@ read_when:
   - LINE webhook နှင့် အထောက်အထား (credential) တပ်ဆင်မှု လိုအပ်ပါက
   - LINE အထူးသီးသန့် မက်ဆေ့ချ် ရွေးချယ်မှုများကို အသုံးပြုလိုပါက
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # LINE (plugin)
 
-LINE သည် LINE Messaging API ကို အသုံးပြုပြီး OpenClaw နှင့် ချိတ်ဆက်ပါသည်။ ပလပ်ဂင်သည် Gateway ပေါ်တွင် webhook
-လက်ခံသူအဖြစ် လည်ပတ်ပြီး အတည်ပြုရန်အတွက် သင့် channel access token နှင့် channel secret ကို အသုံးပြုပါသည်။
+LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
+receiver on the gateway and uses your channel access token + channel secret for
+authentication.
 
-အခြေအနေ: ပလပ်ဂင်မှတစ်ဆင့် ထောက်ပံ့ထားပါသည်။ တိုက်ရိုက် မက်ဆေ့ချ်များ၊ အုပ်စု ချတ်များ၊ မီဒီယာ၊ တည်နေရာများ၊ Flex
-မက်ဆေ့ချ်များ၊ template မက်ဆေ့ချ်များနှင့် quick replies များကို ထောက်ပံ့ထားပါသည်။ Reactions နှင့် threads များကို မထောက်ပံ့ပါ။
+Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+messages, template messages, and quick replies are supported. Reactions and threads
+are not supported.
 
 ## Plugin required
 
@@ -49,9 +44,9 @@ openclaw plugins install ./extensions/line
 https://gateway-host/line/webhook
 ```
 
-Gateway သည် LINE ၏ webhook verification (GET) နှင့် inbound events (POST) များကို တုံ့ပြန်ပါသည်။
-စိတ်ကြိုက် path လိုအပ်ပါက `channels.line.webhookPath` သို့မဟုတ်
-`channels.line.accounts.<id>.webhookPath` ကို သတ်မှတ်ပြီး URL ကို ထိုအတိုင်း ပြင်ဆင်ပါ။
+The gateway responds to LINE’s webhook verification (GET) and inbound events (POST).
+If you need a custom path, set `channels.line.webhookPath` or
+`channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
 ## Configure
 
@@ -108,8 +103,8 @@ Token/secret ဖိုင်များ:
 
 ## Access control
 
-တိုက်ရိုက် မက်ဆေ့ချ်များသည် ပုံမှန်အားဖြင့် pairing ကို အသုံးပြုပါသည်။ မသိသော ပို့သူများသည် pairing code ကို ရရှိပြီး
-အတည်ပြုမချင်း ၎င်းတို့၏ မက်ဆေ့ချ်များကို လျစ်လျူရှုပါသည်။
+Direct messages default to pairing. Unknown senders get a pairing code and their
+messages are ignored until approved.
 
 ```bash
 openclaw pairing list line
@@ -122,9 +117,9 @@ Allowlists နှင့် မူဝါဒများ:
 - `channels.line.allowFrom`: DM မက်ဆေ့ချ်များအတွက် allowlist ပြုလုပ်ထားသော LINE user ID များ
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: အုပ်စုများအတွက် allowlist ပြုလုပ်ထားသော LINE user ID များ
-- အုပ်စုတစ်ခုချင်းစီအလိုက် override များ: `channels.line.groups.<groupId>.allowFrom`
+- Per-group overrides: `channels.line.groups.<groupId>.allowFrom`
 
-LINE ID များသည် case-sensitive ဖြစ်ပါသည်။ မှန်ကန်သော ID များမှာ အောက်ပါပုံစံဖြစ်ပါသည်:
+LINE IDs are case-sensitive. Valid IDs look like:
 
 - User: `U` + 32 hex chars
 - Group: `C` + 32 hex chars

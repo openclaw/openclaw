@@ -3,13 +3,6 @@ summary: "에이전트 런타임 (임베디드 pi-mono), 워크스페이스 계�
 read_when:
   - 에이전트 런타임, 워크스페이스 부트스트랩, 또는 세션 동작을 변경할 때
 title: "에이전트 런타임"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:41Z
 ---
 
 # 에이전트 런타임 🤖
@@ -55,9 +48,7 @@ OpenClaw 는 도구와 컨텍스트를 위한 에이전트의 **유일한** 작�
 
 ## 내장 도구
 
-핵심 도구 (read/exec/edit/write 및 관련 시스템 도구) 는 도구 정책에 따라 항상 사용 가능합니다.
-`apply_patch` 는 선택 사항이며 `tools.exec.applyPatch` 에 의해 게이팅됩니다.
-`TOOLS.md` 는 어떤 도구가 존재하는지를 제어하지 않으며, 도구를 _어떻게_ 사용하길 원하는지에 대한 지침입니다.
+핵심 도구 (read/exec/edit/write 및 관련 시스템 도구) 는 도구 정책에 따라 항상 사용 가능합니다. `apply_patch` 는 선택 사항이며 `tools.exec.applyPatch` 에 의해 게이팅됩니다. `TOOLS.md` 는 어떤 도구가 존재하는지를 제어하지 않으며, 도구를 _어떻게_ 사용하길 원하는지에 대한 지침입니다.
 
 ## Skills
 
@@ -94,18 +85,15 @@ OpenClaw 는 pi-mono 코드베이스의 일부 (모델/도구) 를 재사용하�
 그런 다음 다음 어시스턴트 응답 전에 대기 중인 사용자 메시지가 주입됩니다.
 
 큐 모드가 `followup` 또는 `collect` 인 경우, 인바운드 메시지는
-현재 턴이 끝날 때까지 보류되며, 이후 대기 페이로드로 새로운 에이전트 턴이 시작됩니다.
-모드 + 디바운스/캡 동작은 [Queue](/concepts/queue) 를 참조하십시오.
+현재 턴이 끝날 때까지 보류되며, 이후 대기 페이로드로 새로운 에이전트 턴이 시작됩니다. 모드 + 디바운스/캡 동작은 [Queue](/concepts/queue) 를 참조하십시오.
 
 블록 스트리밍은 완료된 어시스턴트 블록을 완료 즉시 전송합니다. 기본값은 **비활성화**입니다 (`agents.defaults.blockStreamingDefault: "off"`).
 경계는 `agents.defaults.blockStreamingBreak` 로 조정하십시오 (`text_end` vs `message_end`; 기본값은 text_end).
 소프트 블록 청킹은 `agents.defaults.blockStreamingChunk` 로 제어합니다 (기본값
 800–1200 자; 단락 구분을 선호하고, 다음으로 줄바꿈, 문장은 마지막).
 스트리밍된 청크를 `agents.defaults.blockStreamingCoalesce` 로 병합하여
-단일 라인 스팸을 줄이십시오 (전송 전 유휴 기반 병합).
-Telegram 이 아닌 채널은 블록 응답을 활성화하려면 명시적인 `*.blockStreaming: true` 가 필요합니다.
-자세한 도구 요약은 도구 시작 시 방출됩니다 (디바운스 없음).
-Control UI 는 가능할 때 에이전트 이벤트를 통해 도구 출력을 스트리밍합니다.
+단일 라인 스팸을 줄이십시오 (전송 전 유휴 기반 병합). Telegram 이 아닌 채널은 블록 응답을 활성화하려면 명시적인 `*.blockStreaming: true` 가 필요합니다.
+자세한 도구 요약은 도구 시작 시 방출됩니다 (디바운스 없음). Control UI 는 가능할 때 에이전트 이벤트를 통해 도구 출력을 스트리밍합니다.
 자세한 내용: [Streaming + chunking](/concepts/streaming).
 
 ## 모델 참조

@@ -4,20 +4,13 @@ read_when:
   - Al cortar o validar un lanzamiento de OpenClaw para macOS
   - Al actualizar el appcast o los activos del feed de Sparkle
 title: "Lanzamiento de macOS"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:09Z
 ---
 
 # Lanzamiento de OpenClaw para macOS (Sparkle)
 
 Esta app ahora incluye actualizaciones automáticas con Sparkle. Las compilaciones de lanzamiento deben estar firmadas con Developer ID, comprimidas en zip y publicadas con una entrada de appcast firmada.
 
-## Prerrequisitos
+## Prereqs
 
 - Certificado Developer ID Application instalado (ejemplo: `Developer ID Application: <Developer Name> (<TEAMID>)`).
 - Ruta de la clave privada de Sparkle configurada en el entorno como `SPARKLE_PRIVATE_KEY_FILE` (ruta a su clave privada ed25519 de Sparkle; la clave pública está integrada en Info.plist). Si falta, verifique `~/.profile`.
@@ -84,7 +77,7 @@ Confirme el `appcast.xml` actualizado junto con los activos del lanzamiento (zip
 
 - Cargue `OpenClaw-2026.2.6.zip` (y `OpenClaw-2026.2.6.dSYM.zip`) en el lanzamiento de GitHub para la etiqueta `v2026.2.6`.
 - Asegúrese de que la URL raw del appcast coincida con el feed integrado: `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
-- Comprobaciones rápidas:
+- Comprobaciones de sanidad:
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` devuelve 200.
   - `curl -I <enclosure url>` devuelve 200 después de cargar los activos.
   - En una compilación pública anterior, ejecute “Buscar actualizaciones…” desde la pestaña Acerca de y verifique que Sparkle instale la nueva compilación correctamente.

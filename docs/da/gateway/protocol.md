@@ -5,21 +5,14 @@ read_when:
   - Fejlfinding af protokol-mismatch eller forbindelsesfejl
   - Gengenerering af protokolschemaer/modeller
 title: "Gateway-protokol"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:22Z
 ---
 
 # Gateway-protokol (WebSocket)
 
-Gateway WS-protokollen er **den eneste kontrolplan + node-transport** for
-OpenClaw. Alle klienter (CLI, web-UI, macOS-app, iOS/Android-noder, headless
-noder) forbinder via WebSocket og erklærer deres **rolle** + **scope** ved
-håndtrykstidspunktet.
+Gateway WS-protokollen er **single control plane + node transport** for
+OpenClaw. Alle klienter (CLI, web UI, macOS app, iOS/Android noder, headless
+nodes) connect over WebSocket og erklærer deres **rolle** + **scope** på
+handshake time.
 
 ## Transport
 
@@ -162,7 +155,7 @@ Noder erklærer capability-claims ved forbindelsen:
 
 - `caps`: overordnede capability-kategorier.
 - `commands`: kommando-tilladelsesliste for invoke.
-- `permissions`: granulære toggles (f.eks. `screen.record`, `camera.capture`).
+- `tilladelser`: omslag i granulatform (f.eks. `screen.record`, `camera.capture`).
 
 Gatewayen behandler disse som **claims** og håndhæver server-side tilladelseslister.
 
@@ -195,9 +188,9 @@ Gatewayen behandler disse som **claims** og håndhæver server-side tilladelsesl
 
 - Hvis `OPENCLAW_GATEWAY_TOKEN` (eller `--token`) er sat, skal `connect.params.auth.token`
   matche, ellers lukkes socketten.
-- Efter parring udsteder Gatewayen et **device token** scoped til forbindelsens
-  rolle + scopes. Det returneres i `hello-ok.auth.deviceToken` og bør
-  persisteres af klienten til fremtidige forbindelser.
+- Efter parring udsteder Gateway en **enheds token** scoped to the connection
+  role + scopes. Det returneres i `hello-ok.auth.deviceToken` og bør være
+  fortsatte af klienten for fremtidige forbindelser.
 - Device tokens kan roteres/tilbagekaldes via `device.token.rotate` og
   `device.token.revoke` (kræver `operator.pairing`-scope).
 
@@ -210,9 +203,9 @@ Gatewayen behandler disse som **claims** og håndhæver server-side tilladelsesl
   er aktiveret.
 - **Lokale** forbindelser inkluderer loopback og gateway-værtens egen tailnet-adresse
   (så same-host tailnet-binds stadig kan auto-godkendes).
-- Alle WS-klienter skal inkludere `device`-identitet under `connect` (operatør + node).
-  Kontrol-UI kan udelade den **kun** når `gateway.controlUi.allowInsecureAuth` er aktiveret
-  (eller `gateway.controlUi.dangerouslyDisableDeviceAuth` til break-glass-brug).
+- Alle WS-klienter skal indeholde 'enhed' identitet under 'connect' (operatør + indholdselement).
+  Control UI kan udelade det **kun**, når `gateway.controlUi.allowInsecureAuth` er aktiveret
+  (eller `gateway.controlUi.dangerouslyDisableDeviceAuth` til brug i glas brug).
 - Ikke-lokale forbindelser skal signere den serverleverede `connect.challenge`-nonce.
 
 ## TLS + pinning
@@ -223,6 +216,6 @@ Gatewayen behandler disse som **claims** og håndhæver server-side tilladelsesl
 
 ## Scope
 
-Denne protokol eksponerer **det fulde gateway-API** (status, kanaler, modeller, chat,
-agent, sessioner, noder, godkendelser osv.). Den præcise overflade er defineret af
-TypeBox-schemaerne i `src/gateway/protocol/schema.ts`.
+Denne protokol udsætter **fuld gateway API** (status, kanaler, modeller, chat,
+agent, sessioner, knudepunkter, godkendelser osv.). Den nøjagtige overflade defineres ved
+TypeBox skemaerne i 'src/gateway/protocol/schema.ts'.

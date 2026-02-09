@@ -1,17 +1,10 @@
 ---
 summary: "تثبيت OpenClaw بشكل تصريحي باستخدام Nix"
 read_when:
-  - "تريد عمليات تثبيت قابلة لإعادة الإنتاج وقابلة للتراجع"
-  - "أنت تستخدم بالفعل Nix/NixOS/Home Manager"
-  - "تريد تثبيت كل شيء مُثبّت الإصدارات ومُدارًا بشكل تصريحي"
+  - تريد عمليات تثبيت قابلة لإعادة الإنتاج وقابلة للتراجع
+  - أنت تستخدم بالفعل Nix/NixOS/Home Manager
+  - تريد تثبيت كل شيء مُثبّت الإصدارات ومُدارًا بشكل تصريحي
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:26Z
 ---
 
 # تثبيت Nix

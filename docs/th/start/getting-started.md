@@ -4,13 +4,6 @@ read_when:
   - ตั้งค่าใช้งานครั้งแรกจากศูนย์
   - คุณต้องการเส้นทางที่เร็วที่สุดไปสู่แชตที่ใช้งานได้
 title: "เริ่มต้นใช้งาน"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:44Z
 ---
 
 # เริ่มต้นใช้งาน
@@ -18,13 +11,15 @@ x-i18n:
 เป้าหมาย: จากศูนย์ไปสู่แชตแรกที่ใช้งานได้ด้วยการตั้งค่าขั้นต่ำ
 
 <Info>
+Fastest chat: open the Control UI (no channel setup needed). 
 แชตที่เร็วที่สุด: เปิด Control UI (ไม่ต้องตั้งค่าช่องทาง) รัน `openclaw dashboard`
 แล้วแชตในเบราว์เซอร์ หรือเปิด `http://127.0.0.1:18789/` บน
+
 <Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">โฮสต์Gateway</Tooltip>.
 เอกสาร: [Dashboard](/web/dashboard) และ [Control UI](/web/control-ui).
 </Info>
 
-## ข้อกำหนดก่อนเริ่มต้น
+## Prereqs
 
 - Node 22 หรือใหม่กว่า
 
@@ -35,7 +30,7 @@ x-i18n:
 ## ตั้งค่าอย่างรวดเร็ว(CLI)
 
 <Steps>
-  <Step title="ติดตั้ง OpenClaw (แนะนำ)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +44,35 @@ x-i18n:
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     วิธีติดตั้งอื่นๆและข้อกำหนด: [Install](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="รันวิซาร์ดเริ่มต้นใช้งาน">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     วิซาร์ดจะตั้งค่าการยืนยันตัวตน การตั้งค่าGateway และช่องทางเสริม
     ดูรายละเอียดที่ [Onboarding Wizard](/start/wizard)
-
-  </Step>
-  <Step title="ตรวจสอบGateway">
-    หากคุณติดตั้งบริการไว้แล้ว ควรกำลังทำงานอยู่:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="เปิด Control UI">
+  <Step title="Check the Gateway">
+    หากคุณติดตั้งบริการไว้แล้ว ควรกำลังทำงานอยู่:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,20 +86,24 @@ x-i18n:
 ## การตรวจสอบเพิ่มเติมและตัวเลือกเสริม
 
 <AccordionGroup>
-  <Accordion title="รันGatewayในโหมดเบื้องหน้า">
+  <Accordion title="Run the Gateway in the foreground">
     มีประโยชน์สำหรับการทดสอบอย่างรวดเร็วหรือการแก้ไขปัญหา
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="ส่งข้อความทดสอบ">
+  <Accordion title="Send a test message">
     ต้องมีการตั้งค่าช่องทางแล้ว
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -106,10 +111,10 @@ x-i18n:
 ## เจาะลึกเพิ่มเติม
 
 <Columns>
-  <Card title="Onboarding Wizard (รายละเอียด)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     เอกสารอ้างอิงวิซาร์ดCLIแบบครบถ้วนและตัวเลือกขั้นสูง
   </Card>
-  <Card title="การเริ่มต้นใช้งานแอปmacOS" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     โฟลว์การใช้งานครั้งแรกสำหรับแอปmacOS
   </Card>
 </Columns>

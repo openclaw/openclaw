@@ -5,23 +5,16 @@ read_when:
   - Ændring af blokstreaming eller kanal-chunking-adfærd
   - Fejlfinding af duplikerede/tidlige blokbesvarelser eller udkast-streaming
 title: "Streaming og Chunking"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Streaming + chunking
 
 OpenClaw har to separate “streaming”-lag:
 
-- **Blokstreaming (kanaler):** udsender færdige **blokke**, efterhånden som assistenten skriver. Det er normale kanalbeskeder (ikke token-deltaer).
+- **Blokér streaming (kanal):** Udleder **blokke** som assistenten skriver. Disse er normale kanalmeddelelser (ikke token deltas).
 - **Token-agtig streaming (kun Telegram):** opdaterer en **udkast-boble** med delvis tekst under generering; den endelige besked sendes til sidst.
 
-Der er **ingen reel token-streaming** til eksterne kanalbeskeder i dag. Telegram-udkast-streaming er den eneste delvise stream-overflade.
+Der er **ingen ægte token streaming** til eksterne kanalbeskeder i dag. Telegram udkast streaming er den eneste del-stream overflade.
 
 ## Blokstreaming (kanalbeskeder)
 
@@ -49,7 +42,7 @@ Forklaring:
 - Kanal-overskrivninger: `*.blockStreaming` (og per-konto-varianter) for at tvinge `"on"`/`"off"` pr. kanal.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` eller `"message_end"`.
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
-- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (flet streamede blokke før afsendelse).
+- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (flette streamede blokke før afsendelse).
 - Kanal-hård grænse: `*.textChunkLimit` (fx `channels.whatsapp.textChunkLimit`).
 - Kanal-chunk-tilstand: `*.chunkMode` (`length` standard, `newline` deler ved tomme linjer (afsnitsgrænser) før længde-chunking).
 - Discord blød grænse: `channels.discord.maxLinesPerMessage` (standard 17) deler høje svar for at undgå UI-klipning.
@@ -74,9 +67,9 @@ Blok-chunking er implementeret af `EmbeddedBlockChunker`:
 
 ## Sammenfletning (flet streamede blokke)
 
-Når blokstreaming er aktiveret, kan OpenClaw **flette efterfølgende blok-chunks**
-før de sendes ud. Det reducerer “single-line spam”, samtidig med at
-progressivt output bevares.
+Når blokstreaming er aktiveret, kan OpenClaw **flette sammenhængende blokchunks**
+før du sender dem ud. Dette reducerer “single-line spam”, mens du stadig leverer
+progressiv output.
 
 - Sammenfletning venter på **inaktive mellemrum** (`idleMs`) før flush.
 - Buffere er begrænset af `maxChars` og flushes, hvis de overskrides.
@@ -89,9 +82,9 @@ progressivt output bevares.
 
 ## Menneskelignende tempo mellem blokke
 
-Når blokstreaming er aktiveret, kan du tilføje en **tilfældig pause** mellem
-blokbesvarelser (efter den første blok). Det får svar med flere bobler til at føles
-mere naturlige.
+Når blok streaming er aktiveret, kan du tilføje en **randomiseret pause** mellem
+blok svar (efter den første blok). Dette gør multi-boble respons føles
+mere naturligt.
 
 - Konfiguration: `agents.defaults.humanDelay` (overskriv pr. agent via `agents.list[].humanDelay`).
 - Tilstande: `off` (standard), `natural` (800–2500 ms), `custom` (`minMs`/`maxMs`).
@@ -101,13 +94,13 @@ mere naturlige.
 
 Dette svarer til:
 
-- **Stream chunks:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (udsend løbende). Ikke-Telegram-kanaler kræver også `*.blockStreaming: true`.
+- **Stream chunks:** `blockStreamingStandard: "on"` + `blockStreamingBreak: "text_end"` (udsender som du går). Ikke-Telegram kanaler har også brug for `*.blockStreaming: true`.
 - **Stream det hele til sidst:** `blockStreamingBreak: "message_end"` (flush én gang, muligvis i flere chunks, hvis meget langt).
 - **Ingen blokstreaming:** `blockStreamingDefault: "off"` (kun endeligt svar).
 
-**Kanalnote:** For ikke-Telegram-kanaler er blokstreaming **slået fra, medmindre**
-`*.blockStreaming` eksplicit er sat til `true`. Telegram kan streame udkast
-(`channels.telegram.streamMode`) uden blokbesvarelser.
+**Kanal note:** For ikke-Telegram kanaler, blok streaming er **off unless**
+`*.blockStreaming` er udtrykkeligt indstillet til `true`. Telegram kan streame kladder
+(`channels.telegram.streamMode`) uden blok svar.
 
 Påmindelse om konfigurationsplacering: `blockStreaming*`-standarder ligger under
 `agents.defaults`, ikke i rod-konfigurationen.

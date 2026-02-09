@@ -4,18 +4,13 @@ read_when:
   - 您想在 OpenClaw 中使用 Z.AI / GLM 模型
   - 您需要簡單的 ZAI_API_KEY 設定
 title: "Z.AI"
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:59Z
 ---
 
 # Z.AI
 
-Z.AI 是 **GLM** 模型的 API 平台。它為 GLM 提供 REST API，並使用 API 金鑰進行身分驗證。請在 Z.AI 主控台中建立您的 API 金鑰。OpenClaw 使用 `zai` 提供者搭配 Z.AI API 金鑰。
+Z.AI 是 **GLM** 模型的 API 平台。它為 GLM 提供 REST API，並使用 API 金鑰進行身分驗證。請在 Z.AI 主控台中建立您的 API 金鑰。OpenClaw 使用 `zai` 提供者搭配 Z.AI API 金鑰。 It provides REST APIs for GLM and uses API keys
+for authentication. Create your API key in the Z.AI console. OpenClaw uses the `zai` provider
+with a Z.AI API key.
 
 ## CLI setup
 

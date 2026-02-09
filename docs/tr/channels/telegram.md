@@ -3,13 +3,6 @@ summary: "Telegram bot destek durumu, yetenekler ve yapılandırma"
 read_when:
   - Telegram özellikleri veya webhook’lar üzerinde çalışırken
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:26Z
 ---
 
 # Telegram (Bot API)
@@ -20,7 +13,7 @@ Durum: grammY üzerinden bot DM’leri + gruplar için production‑ready. Varsa
 
 1. **@BotFather** ile bir bot oluşturun ([doğrudan bağlantı](https://t.me/BotFather)). Kullanıcı adının tam olarak `@BotFather` olduğunu doğrulayın, ardından belirteci kopyalayın.
 2. Belirteci ayarlayın:
-   - Ortam değişkeni: `TELEGRAM_BOT_TOKEN=...`
+   - Env: `TELEGRAM_BOT_TOKEN=...`
    - Ya da yapılandırma: `channels.telegram.botToken: "..."`.
    - Her ikisi de ayarlıysa, yapılandırma önceliklidir (ortam değişkeni geri dönüş olarak yalnızca varsayılan hesap içindir).
 3. Gateway’i başlatın.
@@ -48,7 +41,7 @@ Minimal yapılandırma:
 
 ## Kurulum (hızlı yol)
 
-### 1) Bot belirteci oluşturma (BotFather)
+### 1. Bot belirteci oluşturma (BotFather)
 
 1. Telegram’ı açın ve **@BotFather** ile sohbet edin ([doğrudan bağlantı](https://t.me/BotFather)). Kullanıcı adının tam olarak `@BotFather` olduğunu doğrulayın.
 2. `/newbot` çalıştırın, ardından yönergeleri izleyin (ad + `bot` ile biten kullanıcı adı).
@@ -59,7 +52,7 @@ Minimal yapılandırma:
 - `/setjoingroups` — botun gruplara eklenmesine izin ver/engelle.
 - `/setprivacy` — botun tüm grup mesajlarını görüp görmeyeceğini denetle.
 
-### 2) Belirteci yapılandırma (ortam değişkeni veya config)
+### 2. Belirteci yapılandırma (ortam değişkeni veya config)
 
 Örnek:
 
@@ -90,7 +83,7 @@ Hem ortam değişkeni hem de yapılandırma ayarlıysa, yapılandırma öncelikl
 ### Belirteç oluşturma (BotFather)
 
 - `/newbot` botu oluşturur ve belirteci döndürür (gizli tutun).
-- Bir belirteç sızarsa, @BotFather üzerinden iptal/yeniden oluşturun ve yapılandırmanızı güncelleyin.
+- If a token leaks, revoke/regenerate it via @BotFather and update your config.
 
 ### Grup mesajı görünürlüğü (Gizlilik Modu)
 
@@ -250,7 +243,7 @@ Bu şu durumlarda olur:
 - Bir grup süper gruba yükseltilir ve Telegram `migrate_to_chat_id` yayar (sohbet kimliği değişir). OpenClaw, `channels.telegram.groups`’yi otomatik olarak taşıyabilir.
 - Bir Telegram sohbetinde `/config set` veya `/config unset` çalıştırırsınız (`commands.config: true` gerektirir).
 
-Devre dışı bırakmak için:
+Şununla devre dışı bırakın:
 
 ```json5
 {
@@ -422,7 +415,7 @@ Belirli bir grupta **herhangi bir grup üyesinin** konuşmasına izin vermek iç
   - Yerel dinleyici `0.0.0.0:8787`’e bağlanır ve varsayılan olarak `POST /telegram-webhook`’ü sunar.
   - Genel URL’niz farklıysa, bir ters vekil kullanın ve `channels.telegram.webhookUrl`’i genel uç noktaya yönlendirin.
 
-## Yanıt iş parçacıkları
+## Yanıt iş parçacığı (threading)
 
 Telegram, etiketler aracılığıyla isteğe bağlı iş parçacıklı yanıtları destekler:
 
@@ -461,7 +454,7 @@ Mesaj aracıyla gönderimler için, ses uyumlu bir `media` URL’si ile `asVoice
 
 OpenClaw, akıllı önbellekleme ile Telegram çıkartmalarını alma ve gönderme destekler.
 
-### Çıkartma alma
+### Receiving stickers
 
 Bir kullanıcı çıkartma gönderdiğinde, OpenClaw çıkartma türüne göre işlem yapar:
 
@@ -478,7 +471,7 @@ Bir kullanıcı çıkartma gönderdiğinde, OpenClaw çıkartma türüne göre i
   - `fileUniqueId` — önbellek araması için kararlı kimlik
   - `cachedDescription` — mevcutsa önbelleğe alınmış görsel açıklaması
 
-### Çıkartma önbelleği
+### Sticker cache
 
 Çıkartmalar, açıklamalar üretmek için yapay zekânın görsel yeteneklerinden geçirilir. Aynı çıkartmalar sık gönderildiğinden, OpenClaw yinelenen API çağrılarını önlemek için bu açıklamaları önbellekler.
 
@@ -511,7 +504,7 @@ Bir kullanıcı çıkartma gönderdiğinde, OpenClaw çıkartma türüne göre i
 
 Önbellek, çıkartmalar alındıkça otomatik olarak doldurulur. Elle önbellek yönetimi gerekmez.
 
-### Çıkartma gönderme
+### Sending stickers
 
 Ajan, `sticker` ve `sticker-search` eylemlerini kullanarak çıkartma gönderebilir ve arayabilir. Bunlar varsayılan olarak devre dışıdır ve yapılandırmada etkinleştirilmelidir:
 
@@ -620,7 +613,7 @@ Gerekçelendirme akışı (yalnızca Telegram):
 - `channels.telegram.streamMode` `off` ise gerekçelendirme akışı devre dışıdır.
   Daha fazla bağlam: [Akış + parçalama](/concepts/streaming).
 
-## Yeniden deneme ilkesi
+## Yeniden deneme politikası
 
 Giden Telegram API çağrıları, geçici ağ/429 hatalarında üstel geri çekilme ve jitter ile yeniden denenir. `channels.telegram.retry` üzerinden yapılandırın. [Yeniden deneme ilkesi](/concepts/retry) bölümüne bakın.
 

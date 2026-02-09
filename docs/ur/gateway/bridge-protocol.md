@@ -5,24 +5,17 @@ read_when:
   - pairing یا برج کی تصدیق کی ناکامیوں کی تفتیش کے دوران
   - گیٹ وے کے ذریعے ظاہر کیے گئے نوڈ سرفیس کا آڈٹ کرتے وقت
 title: "برج پروٹوکول"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:16Z
 ---
 
 # برج پروٹوکول (لیگیسی نوڈ ٹرانسپورٹ)
 
-برج پروٹوکول ایک **لیگیسی** نوڈ ٹرانسپورٹ ہے (TCP JSONL)۔ نئے نوڈ کلائنٹس کو اس کے بجائے متحدہ Gateway WebSocket پروٹوکول استعمال کرنا چاہیے۔
+Bridge پروٹوکول ایک **legacy** node transport ہے (TCP JSONL)۔ نئے node clients کو اس کے بجائے unified Gateway WebSocket پروٹوکول استعمال کرنا چاہیے۔
 
 اگر آپ آپریٹر یا نوڈ کلائنٹ بنا رہے ہیں تو
 [Gateway پروٹوکول](/gateway/protocol) استعمال کریں۔
 
-**نوٹ:** موجودہ OpenClaw بلڈز اب TCP برج لسٹنر فراہم نہیں کرتے؛ یہ دستاویز تاریخی حوالہ کے طور پر رکھی گئی ہے۔
-لیگیسی `bridge.*` کنفیگ کیز اب کنفیگ اسکیما کا حصہ نہیں رہیں۔
+**نوٹ:** موجودہ OpenClaw builds اب TCP bridge listener کے ساتھ شپ نہیں ہوتے؛ یہ دستاویز تاریخی حوالہ کے طور پر رکھی گئی ہے۔
+Legacy `bridge.*` کنفگ keys اب کنفگ schema کا حصہ نہیں ہیں۔
 
 ## کیوں ہمارے پاس دونوں ہیں
 
@@ -67,8 +60,8 @@ x-i18n:
 
 ## Exec لائف سائیکل ایونٹس
 
-نوڈز system.run سرگرمی کو ظاہر کرنے کے لیے `exec.finished` یا `exec.denied` ایونٹس خارج کر سکتے ہیں۔
-یہ گیٹ وے میں سسٹم ایونٹس سے میپ کیے جاتے ہیں۔ (لیگیسی نوڈز اب بھی `exec.started` خارج کر سکتے ہیں۔)
+Nodes can emit `exec.finished` or `exec.denied` events to surface system.run activity.
+These are mapped to system events in the gateway. (Legacy nodes may still emit `exec.started`.)
 
 پے لوڈ فیلڈز (جب تک نوٹ نہ ہو، سب اختیاری ہیں):
 
@@ -87,4 +80,4 @@ x-i18n:
 
 ## ورژننگ
 
-برج فی الحال **ضمنی v1** ہے (کم از کم/زیادہ سے زیادہ نیگوشی ایشن نہیں)۔ بیک ورڈ‑کمپیٹ متوقع ہے؛ کسی بھی بریکنگ تبدیلی سے پہلے برج پروٹوکول ورژن فیلڈ شامل کریں۔
+Bridge فی الحال **implicit v1** ہے (کوئی min/max negotiation نہیں)۔ Backward‑compat متوقع ہے؛ کسی بھی breaking change سے پہلے bridge پروٹوکول ورژن فیلڈ شامل کریں۔

@@ -4,18 +4,11 @@ read_when:
   - Köra mer än en Gateway på samma maskin
   - Du behöver isolerad konfig/tilstånd/portar per Gateway
 title: "Flera Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:18Z
 ---
 
 # Flera Gateways (samma värd)
 
-De flesta uppsättningar bör använda en Gateway eftersom en enda Gateway kan hantera flera meddelandeanslutningar och agenter. Om du behöver starkare isolering eller redundans (t.ex. en räddningsbot) kan du köra separata Gateways med isolerade profiler/portar.
+De flesta inställningar bör använda en Gateway eftersom en enda Gateway kan hantera flera meddelandeanslutningar och agenter. Om du behöver starkare isolering eller redundans (t.ex. en räddningsbot), kör separata Gateways med isolerade profiler/hamnar.
 
 ## Isoleringschecklista (krävs)
 
@@ -87,7 +80,7 @@ Basport = `gateway.port` (eller `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - port för browser control-tjänsten = bas + 2 (endast loopback)
 - `canvasHost.port = base + 4`
-- CDP-portar för browserprofiler allokeras automatiskt från `browser.controlPort + 9 .. + 108`
+- Webbläsarprofil CDP-portar automatiskt allokera från `browser.controlPort + 9 .. + 108`
 
 Om du åsidosätter någon av dessa i konfig eller miljövariabler måste du hålla dem unika per instans.
 
@@ -95,8 +88,8 @@ Om du åsidosätter någon av dessa i konfig eller miljövariabler måste du hå
 
 - **Fäst inte** `browser.cdpUrl` till samma värden på flera instanser.
 - Varje instans behöver egen browser control-port och CDP-intervall (härlett från dess gateway-port).
-- Om du behöver explicita CDP-portar, sätt `browser.profiles.<name>.cdpPort` per instans.
-- Fjärr-Chrome: använd `browser.profiles.<name>.cdpUrl` (per profil, per instans).
+- Om du behöver explicita CDP-portar, ange `browser.profiles.<name>.cdpPort` per instans.
+- FjärrChrome: använd `browser.profiles.<name>.cdpUrl` (per profil, per instans).
 
 ## Manuellt env-exempel
 

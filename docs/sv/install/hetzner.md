@@ -6,13 +6,6 @@ read_when:
   - Du vill ha full kontroll över persistens, binärer och omstartsbeteende
   - Du kör OpenClaw i Docker på Hetzner eller en liknande leverantör
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:45Z
 ---
 
 # OpenClaw på Hetzner (Docker, produktionsguide för VPS)
@@ -21,8 +14,8 @@ x-i18n:
 
 Kör en beständig OpenClaw Gateway på en Hetzner VPS med Docker, med hållbar state, inbakade binärer och säkert omstartsbeteende.
 
-Om du vill ha ”OpenClaw 24/7 för ~5 $”, är detta den enklaste tillförlitliga uppsättningen.  
-Hetzners prissättning ändras; välj den minsta Debian/Ubuntu‑VPS:en och skala upp om du stöter på OOM:er.
+Om du vill ha “OpenClaw 24/7 för ~$5”, är detta den enklaste tillförlitliga inställningen.
+Hetzner ändrar pris; välj de minsta Debian/Ubuntu VPS och skala upp om du träffar OOMs.
 
 ## Vad gör vi (enkelt förklarat)?
 
@@ -37,9 +30,9 @@ Gateway kan nås via:
 - SSH‑portvidarebefordran från din laptop
 - Direkt portexponering om du själv hanterar brandvägg och tokens
 
-Den här guiden förutsätter Ubuntu eller Debian på Hetzner.  
-Om du använder en annan Linux‑VPS, mappa paketen därefter.  
-För det generiska Docker‑flödet, se [Docker](/install/docker).
+Denna guide förutsätter Ubuntu eller Debian på Hetzner.  
+Om du är på en annan Linux VPS, kartpaket i enlighet därmed.
+För generiska Docker-flödet, se [Docker](/install/docker).
 
 ---
 
@@ -71,7 +64,7 @@ För det generiska Docker‑flödet, se [Docker](/install/docker).
 
 ---
 
-## 1) Provisionera VPS:en
+## 1. Provisionera VPS:en
 
 Skapa en Ubuntu‑ eller Debian‑VPS i Hetzner.
 
@@ -81,12 +74,12 @@ Anslut som root:
 ssh root@YOUR_VPS_IP
 ```
 
-Den här guiden förutsätter att VPS:en är stateful.  
-Behandla den inte som förbrukningsbar infrastruktur.
+Denna guide antar att VPS är stateful.
+Behandla det inte som engångsinfrastruktur.
 
 ---
 
-## 2) Installera Docker (på VPS:en)
+## 2. Installera Docker (på VPS:en)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Klona OpenClaw‑repo:t
+## 3. Klona OpenClaw‑repo:t
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +107,10 @@ Den här guiden förutsätter att du bygger en anpassad image för att garantera
 
 ---
 
-## 4) Skapa beständiga kataloger på värden
+## 4. Skapa beständiga kataloger på värden
 
-Docker‑containrar är flyktiga.  
-All långlivad state måste ligga på värden.
+Docker behållare är efhemeral.
+Alla långlivade stater måste leva på värden.
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Konfigurera miljövariabler
+## 5. Konfigurera miljövariabler
 
 Skapa `.env` i repo‑roten.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose‑konfiguration
+## 6. Docker Compose‑konfiguration
 
 Skapa eller uppdatera `docker-compose.yml`.
 
@@ -204,10 +197,10 @@ services:
 
 ---
 
-## 7) Baka in nödvändiga binärer i imagen (kritiskt)
+## 7. Baka in nödvändiga binärer i imagen (kritiskt)
 
-Att installera binärer i en körande container är en fälla.  
-Allt som installeras vid runtime försvinner vid omstart.
+Installera binärer i en fungerande behållare är en fälla.
+Allt som är installerat vid körtiden kommer att gå förlorat vid omstart.
 
 Alla externa binärer som krävs av skills måste installeras vid image‑build‑tid.
 
@@ -217,8 +210,8 @@ Exemplen nedan visar endast tre vanliga binärer:
 - `goplaces` för Google Places
 - `wacli` för WhatsApp
 
-Detta är exempel, inte en fullständig lista.  
-Du kan installera hur många binärer som helst med samma mönster.
+Detta är exempel, inte en fullständig lista.
+Du kan installera så många binärer som behövs med samma mönster.
 
 Om du senare lägger till nya skills som beror på ytterligare binärer måste du:
 
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Bygg och starta
+## 8. Bygg och starta
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Förväntad utdata:
 
 ---
 
-## 9) Verifiera Gateway
+## 9. Verifiera Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,8 +313,8 @@ Klistra in din gateway‑token.
 
 ## Vad persisterar var (källan till sanning)
 
-OpenClaw körs i Docker, men Docker är inte källan till sanning.  
-All långlivad state måste överleva omstarter, ombyggen och omstarter av systemet.
+OpenClaw körs i Docker, men Docker är inte sanningens källa.
+Alla långlivade tillstånd måste överleva omstarter, återuppbygga och starta om.
 
 | Komponent                           | Plats                             | Persistensmekanism   | Noteringar                         |
 | ----------------------------------- | --------------------------------- | -------------------- | ---------------------------------- |

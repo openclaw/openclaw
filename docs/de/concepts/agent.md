@@ -3,13 +3,6 @@ summary: "Agent-Laufzeit (eingebettetes pi-mono), Workspace-Vertrag und Sitzungs
 read_when:
   - Beim Ändern der Agent-Laufzeit, des Workspace-Bootstraps oder des Sitzungsverhaltens
 title: "Agent-Laufzeit"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:56Z
 ---
 
 # Agent-Laufzeit 🤖

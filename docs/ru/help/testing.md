@@ -5,13 +5,6 @@ read_when:
   - Добавление регрессий для багов моделей/провайдеров
   - Отладка поведения шлюза Gateway + агента
 title: "Тестирование"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:20Z
 ---
 
 # Тестирование
@@ -89,7 +82,7 @@ x-i18n:
   - Live‑запуски будут читать `~/.profile`, чтобы подобрать недостающие API‑ключи
   - Ротация ключей Anthropic: задайте `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (или `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) либо несколько переменных `ANTHROPIC_API_KEY*`; тесты будут повторять попытки при rate limit
 
-## Какой набор запускать?
+## Какой номер я должен работать?
 
 Используйте эту таблицу решений:
 
@@ -154,7 +147,7 @@ Live‑тесты разделены на два слоя, чтобы изоли
 - Probes инструментов и изображений всегда включены в этом live‑тесте:
   - probe `read` + probe `exec+read` (стресс инструментов)
   - image probe запускается, когда модель заявляет поддержку ввода изображений
-  - Поток (в общих чертах):
+  - Поток (высокий уровень):
     - Тест генерирует крошечный PNG с «CAT» + случайным кодом (`src/gateway/live-image-probe.ts`)
     - Отправляет его через `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`
     - Шлюз Gateway парсит вложения в `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
@@ -283,7 +276,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 
 ### Vision: отправка изображения (вложение → мультимодальное сообщение)
 
-Включите хотя бы одну модель с поддержкой изображений в `OPENCLAW_LIVE_GATEWAY_MODELS` (варианты Claude/Gemini/OpenAI с vision и т. п.), чтобы прогнать image probe.
+Включите хотя бы одну модель с поддержкой изображений в `OPENCLAW_LIVE_GATEWAY_MODELS` (варианты Claude/Gemini/OpenAI с vision и т. п.), чтобы прогнать image probe. для упражнения изображения профиля.
 
 ### Агрегаторы / альтернативные шлюзы
 
@@ -304,9 +297,11 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 Live‑тесты находят креды так же, как и CLI. Практические следствия:
 
 - Если CLI работает, live‑тесты должны найти те же ключи.
+
 - Если live‑тест говорит «нет кредов», отлаживайте так же, как `openclaw models list` / выбор модели.
 
 - Хранилище профилей: `~/.openclaw/credentials/` (предпочтительно; именно это имеется в виду под «profile keys» в тестах)
+
 - Конфиг: `~/.openclaw/openclaw.json` (или `OPENCLAW_CONFIG_PATH`)
 
 Если вы хотите полагаться на env‑ключи (например, экспортированные в вашем `~/.profile`), запускайте локальные тесты после `source ~/.profile` или используйте Docker‑раннеры ниже (они могут примонтировать `~/.profile` в контейнер).
@@ -326,7 +321,7 @@ Live‑тесты находят креды так же, как и CLI. Прак
 - Сетевое взаимодействие шлюза Gateway (два контейнера, WS‑аутентификация + health): `pnpm test:docker:gateway-network` (скрипт: `scripts/e2e/gateway-network-docker.sh`)
 - Плагины (загрузка кастомных расширений + smoke реестра): `pnpm test:docker:plugins` (скрипт: `scripts/e2e/plugins-docker.sh`)
 
-Полезные переменные окружения:
+Полезные env вар:
 
 - `OPENCLAW_CONFIG_DIR=...` (по умолчанию: `~/.openclaw`) монтируется в `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (по умолчанию: `~/.openclaw/workspace`) монтируется в `/home/node/.openclaw/workspace`
@@ -334,7 +329,7 @@ Live‑тесты находят креды так же, как и CLI. Прак
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` для сужения запуска
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` для гарантии, что креды берутся из хранилища профилей (а не из env)
 
-## Проверка документации
+## Снятие с документами
 
 После правок документации запускайте проверки: `pnpm docs:list`.
 

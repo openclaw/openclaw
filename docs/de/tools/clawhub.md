@@ -1,17 +1,10 @@
 ---
-summary: „ClawHub-Leitfaden: öffentliches Skills-Register + CLI-Workflows“
+summary: "„ClawHub-Leitfaden: öffentliches Skills-Register + CLI-Workflows“"
 read_when:
   - Einführung von ClawHub für neue Benutzer
   - Installieren, Suchen oder Veröffentlichen von Skills
   - Erläuterung von ClawHub-CLI-Flags und Synchronisationsverhalten
-title: „ClawHub“
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:44Z
+title: "ClawHub"
 ---
 
 # ClawHub

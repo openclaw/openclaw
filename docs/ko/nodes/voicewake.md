@@ -4,20 +4,13 @@ read_when:
   - 음성 웨이크 워드의 동작이나 기본값을 변경할 때
   - 웨이크 워드 동기화가 필요한 새로운 노드 플랫폼을 추가할 때
 title: "Voice Wake"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:35Z
 ---
 
 # Voice Wake (전역 웨이크 워드)
 
 OpenClaw 는 **웨이크 워드를 Gateway(게이트웨이)** 가 소유하는 **단일 전역 목록**으로 취급합니다.
 
-- **노드별 커스텀 웨이크 워드는 없습니다**.
+- 13. **노드별 사용자 정의 웨이크 워드는 없습니다**.
 - **어떤 노드/앱 UI 에서든 목록을 편집**할 수 있으며, 변경 사항은 Gateway(게이트웨이)에 의해 저장되고 모두에게 브로드캐스트됩니다.
 - 각 디바이스는 여전히 자체적인 **Voice Wake 활성화/비활성화** 토글을 유지합니다(로컬 UX 와 권한은 서로 다릅니다).
 
@@ -49,7 +42,7 @@ OpenClaw 는 **웨이크 워드를 Gateway(게이트웨이)** 가 소유하는 *
 
 - `voicewake.changed` 페이로드 `{ triggers: string[] }`
 
-수신 대상:
+14. 수신 대상:
 
 - 모든 WebSocket 클라이언트(macOS 앱, WebChat 등)
 - 연결된 모든 노드(iOS/Android), 또한 노드 연결 시 초기 '현재 상태' 푸시로도 전송됩니다.

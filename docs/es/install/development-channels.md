@@ -4,13 +4,6 @@ read_when:
   - Desea cambiar entre estable/beta/dev
   - Está etiquetando o publicando versiones preliminares
 title: "Canales de desarrollo"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:46Z
 ---
 
 # Canales de desarrollo

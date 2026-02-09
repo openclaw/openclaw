@@ -5,13 +5,6 @@ read_when:
   - WhatsApp میں کثیر ایجنٹ جوابات کی ڈیبگنگ
 status: experimental
 title: "براڈکاسٹ گروپس"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:08Z
 ---
 
 # براڈکاسٹ گروپس
@@ -21,15 +14,15 @@ x-i18n:
 
 ## جائزہ
 
-براڈکاسٹ گروپس متعدد ایجنٹس کو ایک ہی پیغام کو بیک وقت پروسیس کرنے اور جواب دینے کے قابل بناتے ہیں۔ اس سے آپ خصوصی ایجنٹ ٹیمیں تشکیل دے سکتے ہیں جو ایک ہی WhatsApp گروپ یا DM میں مل کر کام کریں — اور وہ بھی ایک ہی فون نمبر استعمال کرتے ہوئے۔
+Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
 
 موجودہ دائرہ کار: **صرف WhatsApp** (ویب چینل)۔
 
-براڈکاسٹ گروپس کا جائزہ چینل اجازت فہرستوں اور گروپ ایکٹیویشن قواعد کے بعد لیا جاتا ہے۔ WhatsApp گروپس میں اس کا مطلب یہ ہے کہ براڈکاسٹس اس وقت ہوتے ہیں جب OpenClaw عام طور پر جواب دیتا ہے (مثال کے طور پر: آپ کی گروپ سیٹنگز کے مطابق مینشن پر)۔
+Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
 
 ## استعمال کے معاملات
 
-### 1. خصوصی ایجنٹ ٹیمیں
+### 1. Specialized Agent Teams
 
 ایٹامک، مرکوز ذمہ داریوں کے ساتھ متعدد ایجنٹس تعینات کریں:
 
@@ -44,7 +37,7 @@ Agents:
 
 ہر ایجنٹ ایک ہی پیغام کو پروسیس کرتا ہے اور اپنی مخصوص نقطۂ نظر فراہم کرتا ہے۔
 
-### 2. کثیر لسانی معاونت
+### 2. Multi-Language Support
 
 ```
 Group: "International Support"
@@ -54,7 +47,7 @@ Agents:
   - Agent_ES (responds in Spanish)
 ```
 
-### 3. کوالٹی ایشورنس ورک فلو
+### 3. Quality Assurance Workflows
 
 ```
 Group: "Customer Support"
@@ -63,7 +56,7 @@ Agents:
   - QAAgent (reviews quality, only responds if issues found)
 ```
 
-### 4. ٹاسک آٹومیشن
+### 4. Task Automation
 
 ```
 Group: "Project Management"
@@ -77,7 +70,7 @@ Agents:
 
 ### بنیادی سیٹ اپ
 
-ایک ٹاپ لیول `broadcast` سیکشن شامل کریں (`bindings` کے ساتھ)۔ کلیدیں WhatsApp پیئر آئی ڈیز ہوتی ہیں:
+Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids:
 
 - گروپ چیٹس: گروپ JID (مثلاً `120363403215116621@g.us`)
 - DMs: E.164 فون نمبر (مثلاً `+15551234567`)
@@ -170,7 +163,7 @@ Agents:
 4. **اگر براڈکاسٹ فہرست میں نہ ہو**:
    - معمول کی روٹنگ لاگو ہوتی ہے (پہلا مماثل بائنڈنگ)
 
-نوٹ: براڈکاسٹ گروپس چینل اجازت فہرستوں یا گروپ ایکٹیویشن قواعد (مینشنز/کمانڈز وغیرہ) کو بائی پاس نہیں کرتے۔ یہ صرف اس بات کو بدلتے ہیں کہ پیغام پروسیسنگ کے لیے اہل ہونے پر _کون سے ایجنٹس چلتے ہیں_۔
+Note: broadcast groups do not bypass channel allowlists or group activation rules (mentions/commands/etc). They only change _which agents run_ when a message is eligible for processing.
 
 ### سیشن آئسولیشن
 
@@ -214,7 +207,7 @@ Tools: read only
 
 ## بہترین طریقۂ کار
 
-### 1. ایجنٹس کو مرکوز رکھیں
+### 1. Keep Agents Focused
 
 ہر ایجنٹ کو ایک واحد، واضح ذمہ داری کے ساتھ ڈیزائن کریں:
 
@@ -229,7 +222,7 @@ Tools: read only
 ✅ **اچھا:** ہر ایجنٹ کا ایک کام  
 ❌ **برا:** ایک عمومی "dev-helper" ایجنٹ
 
-### 2. وضاحتی نام استعمال کریں
+### 2. Use Descriptive Names
 
 یہ واضح کریں کہ ہر ایجنٹ کیا کرتا ہے:
 
@@ -243,7 +236,7 @@ Tools: read only
 }
 ```
 
-### 3. مختلف ٹول رسائی کنفیگر کریں
+### 3. Configure Different Tool Access
 
 ایجنٹس کو صرف وہی ٹولز دیں جن کی انہیں ضرورت ہے:
 
@@ -260,7 +253,7 @@ Tools: read only
 }
 ```
 
-### 4. کارکردگی کی نگرانی کریں
+### 4. Monitor Performance
 
 زیادہ ایجنٹس کے ساتھ، ان باتوں پر غور کریں:
 
@@ -268,9 +261,9 @@ Tools: read only
 - براڈکاسٹ گروپس کو 5–10 ایجنٹس تک محدود رکھیں
 - سادہ ایجنٹس کے لیے تیز ماڈلز استعمال کریں
 
-### 5. ناکامیوں کو خوش اسلوبی سے سنبھالیں
+### 5. Handle Failures Gracefully
 
-ایجنٹس آزادانہ طور پر ناکام ہو سکتے ہیں۔ ایک ایجنٹ کی غلطی دوسروں کو نہیں روکتی:
+Agents fail independently. One agent's error doesn't block others:
 
 ```
 Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]

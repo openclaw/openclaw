@@ -4,18 +4,11 @@ read_when:
   - Lägga till eller ändra skills
   - Ändra spärrning eller laddningsregler för skills
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:19:06Z
 ---
 
 # Skills (OpenClaw)
 
-OpenClaw använder **[AgentSkills](https://agentskills.io)-kompatibla** skill-mappar för att lära agenten hur verktyg används. Varje skill är en katalog som innehåller `SKILL.md` med YAML-frontmatter och instruktioner. OpenClaw laddar **bundlade skills** plus valfria lokala åsidosättningar och filtrerar dem vid laddning baserat på miljö, konfig och binärers närvaro.
+OpenClaw använder **[AgentSkills](https://agentskills.io)-kompatibel** kunskapsmappar för att lära agenten hur man använder verktyg. Varje färdighet är en katalog som innehåller en `SKILL.md` med YAML frontmatter och instruktioner. OpenClaw laddar **buntade färdigheter** plus valfria lokala åsidosättningar och filtrerar dem vid laddningstid baserat på miljö, konfigurering och binär närvaro.
 
 ## Platser och prioritet
 
@@ -34,7 +27,7 @@ Dessutom kan du konfigurera extra skill-mappar (lägsta prioritet) via
 
 ## Per-agent vs delade skills
 
-I **multi-agent**-uppsättningar har varje agent sin egen arbetsyta. Det innebär:
+I **multi-agent** setups, har varje agent sin egen arbetsyta. Det betyder:
 
 - **Per-agent-skills** finns i `<workspace>/skills` endast för den agenten.
 - **Delade skills** finns i `~/.openclaw/skills` (hanterade/lokala) och är synliga
@@ -47,17 +40,17 @@ workspace vinner, sedan hanterade/lokala, därefter bundlade.
 
 ## Plugins + skills
 
-Plugins kan leverera egna skills genom att lista `skills`-kataloger i
-`openclaw.plugin.json` (sökvägar relativa till plugin-roten). Plugin-skills laddas
-när pluginet är aktiverat och deltar i de normala prioriteringsreglerna för skills.
-Du kan spärra dem via `metadata.openclaw.requires.config` i pluginets konfigpost.
-Se [Plugins](/tools/plugin) för discovery/konfiguration och [Tools](/tools) för den
-verktygsyta som dessa skills lär ut.
+Plugins kan skicka sina egna färdigheter genom att ange `skills`-kataloger i
+`openclaw.plugin.json` (sökvägar i förhållande till plugin-root). Plugin färdigheter ladda
+när plugin är aktiverad och delta i den normala skicklighet företrädesregler.
+Du kan grinda dem via `metadata.openclaw.requires.config` på plugins config
+post. Se [Plugins](/tools/plugin) för upptäckt/config och [Tools](/tools) för
+verktygets yta dessa färdigheter lär.
 
 ## ClawHub (installera + synka)
 
-ClawHub är det publika skills-registret för OpenClaw. Bläddra på
-[https://clawhub.com](https://clawhub.com). Använd det för att upptäcka, installera, uppdatera och säkerhetskopiera skills.
+ClawHub är det offentliga kompetensregistret för OpenClaw. Bläddra på
+[https://clawhub.com](https://clawhub.com). Använd den för att upptäcka, installera, uppdatera och säkerhetskopiera färdigheter.
 Fullständig guide: [ClawHub](/tools/clawhub).
 
 Vanliga flöden:
@@ -69,16 +62,16 @@ Vanliga flöden:
 - Synka (skanna + publicera uppdateringar):
   - `clawhub sync --all`
 
-Som standard installerar `clawhub` i `./skills` under din aktuella
-arbetskatalog (eller faller tillbaka till den konfigurerade OpenClaw-workspace).
-OpenClaw plockar upp detta som `<workspace>/skills` vid nästa session.
+Som standard installerar `clawhub` i `./skills` under din nuvarande arbetskatalog
+(eller faller tillbaka till den konfigurerade arbetsytan för OpenClaw). OpenClaw plockar
+upp det som `<workspace>/skills` på nästa session.
 
 ## Säkerhetsnoteringar
 
-- Behandla tredjeparts-skills som **icke betrodd kod**. Läs dem innan aktivering.
-- Föredra sandboxade körningar för obetrodda indata och riskfyllda verktyg. Se [Sandboxing](/gateway/sandboxing).
-- `skills.entries.*.env` och `skills.entries.*.apiKey` injicerar hemligheter i **värdprocessen**
-  för den agentvändan (inte i sandboxen). Håll hemligheter borta från promptar och loggar.
+- Behandla tredjepartskunskaper som **opålitlig kod**. Läs dem innan du aktiverar.
+- Föredrar sandlåda körs för opålitliga ingångar och riskabla verktyg. Se [Sandboxing](/gateway/sandboxing).
+- `skills.entries.*.env` och `skills.entries.*.apiKey` injicera hemligheter i **värd** processen
+  för den agenten tur (inte sandlådan). Håll hemligheter utanför förfrågningar och loggar.
 - För en bredare hotmodell och checklistor, se [Security](/gateway/security).
 
 ## Format (AgentSkills + Pi-kompatibelt)
@@ -100,11 +93,11 @@ Noteringar:
 - Använd `{baseDir}` i instruktioner för att referera till skill-mappens sökväg.
 - Valfria frontmatter-nycklar:
   - `homepage` — URL som visas som ”Website” i macOS Skills-UI:t (stöds även via `metadata.openclaw.homepage`).
-  - `user-invocable` — `true|false` (standard: `true`). När `true` exponeras skillen som ett användar-snedstreckskommando.
-  - `disable-model-invocation` — `true|false` (standard: `false`). När `true` exkluderas skillen från modellprompten (fortfarande tillgänglig via användarinvokering).
-  - `command-dispatch` — `tool` (valfritt). När satt till `tool` kringgår snedstreckskommandot modellen och skickas direkt till ett verktyg.
+  - `user-invocable` — `true<unk> false` (standard: `true`). När `true`, är skickligheten exponeras som ett användarsnedstreck kommando.
+  - `disable-model-invocation` — `true<unk> false` (standard: `false`). När `true`, är skickligheten exkluderad från modellprompten (fortfarande tillgänglig via användaranrop).
+  - `command-dispatch` - `tool` (valfritt). När satt till `tool`, förbigår slash-kommandot modellen och skickar direkt till ett verktyg.
   - `command-tool` — verktygsnamn att anropa när `command-dispatch: tool` är satt.
-  - `command-arg-mode` — `raw` (standard). För verktygsdispatch vidarebefordras den råa args-strängen till verktyget (ingen kärnparsning).
+  - `command-arg-mode` — `raw` (standard). För verktygsavsändande vidarebefordrar råvarans sträng till verktyget (ingen kärnskärning).
 
     Verktyget anropas med parametrar:
     `{ command: "<raw args>", commandName: "<slash command>", skillName: "<skill name>" }`.
@@ -133,23 +126,23 @@ Fält under `metadata.openclaw`:
 - `always: true` — inkludera alltid skillen (hoppa över andra spärrar).
 - `emoji` — valfri emoji som används av macOS Skills-UI:t.
 - `homepage` — valfri URL som visas som ”Website” i macOS Skills-UI:t.
-- `os` — valfri lista med plattformar (`darwin`, `linux`, `win32`). Om satt är skillen endast giltig på dessa OS.
+- `os` - valfri lista över plattformar (`darwin`, `linux`, `win32`). Om angivet, är skickligheten endast berättigad till dessa OS.
 - `requires.bins` — lista; var och en måste finnas på `PATH`.
 - `requires.anyBins` — lista; minst en måste finnas på `PATH`.
 - `requires.env` — lista; env-var måste finnas **eller** tillhandahållas i konfig.
 - `requires.config` — lista med `openclaw.json`-sökvägar som måste vara truthy.
-- `primaryEnv` — env-varnamn associerat med `skills.entries.<name>.apiKey`.
+- `primaryEnv` — env var name associerat med `skills.entries.<name>.apiKey`.
 - `install` — valfri array av installerarspecifikationer som används av macOS Skills-UI:t (brew/node/go/uv/download).
 
 Not om sandboxing:
 
 - `requires.bins` kontrolleras på **värden** vid skill-laddning.
-- Om en agent är sandboxad måste binären även finnas **inne i containern**.
-  Installera den via `agents.defaults.sandbox.docker.setupCommand` (eller en anpassad image).
-  `setupCommand` körs en gång efter att containern skapats.
-  Paketinstallationer kräver också nätverksutgående trafik, skrivbart root-FS och root-användare i sandboxen.
-  Exempel: `summarize`-skillen (`skills/summarize/SKILL.md`) behöver `summarize` CLI
-  i sandbox-containern för att köras där.
+- Om en agent är sandlåda måste binären också finnas **inuti behållaren**.
+  Installera den via `agents.defaults.sandbox.docker.setupCommand` (eller en anpassad bild).
+  `setupCommand` körs en gång efter att behållaren skapats.
+  Paketinstallationer kräver även nätverksinställningar, en skrivbar root FS, och en root-användare i sandlådan.
+  Exempel: `summarize` -skicklighet (`skills/summarize/SKILL.md`) behöver `summarize` CLI
+  i sandlådan för att köras där.
 
 Exempel på installerare:
 
@@ -183,8 +176,8 @@ Noteringar:
 - Om flera installerare listas väljer gatewayen **ett** föredraget alternativ (brew när tillgängligt, annars node).
 - Om alla installerare är `download` listar OpenClaw varje post så att du kan se tillgängliga artefakter.
 - Installerarspecifikationer kan inkludera `os: ["darwin"|"linux"|"win32"]` för att filtrera alternativ per plattform.
-- Node-installationer följer `skills.install.nodeManager` i `openclaw.json` (standard: npm; alternativ: npm/pnpm/yarn/bun).
-  Detta påverkar endast **skill-installationer**; Gateway-körtiden ska fortfarande vara Node
+- Node installerar honor `skills.install.nodeManager` i `openclaw.json` (standard: npm; alternativ: npm/pnpm/yarn/bun).
+  Detta påverkar endast **färdighetsinstallationer**; Gateway runtime bör fortfarande vara Node
   (Bun rekommenderas inte för WhatsApp/Telegram).
 - Go-installationer: om `go` saknas och `brew` finns installerar gatewayen först Go via Homebrew och sätter `GOBIN` till Homebrews `bin` när möjligt.
 - Nedladdningsinstallationer: `url` (krävs), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (standard: auto när arkiv upptäcks), `stripComponents`, `targetDir` (standard: `~/.openclaw/tools/<skillKey>`).
@@ -220,7 +213,7 @@ Bundlade/hanterade skills kan slås på/av och förses med env-värden:
 
 Obs: om skill-namnet innehåller bindestreck, citera nyckeln (JSON5 tillåter citerade nycklar).
 
-Konfig-nycklar matchar **skill-namnet** som standard. Om en skill definierar
+Konfigurationsnycklar matchar **skicklighetsnamn** som standard. Om en färdighet definierar
 `metadata.openclaw.skillKey`, använd den nyckeln under `skills.entries`.
 
 Regler:
@@ -229,15 +222,15 @@ Regler:
 - `env`: injiceras **endast om** variabeln inte redan är satt i processen.
 - `apiKey`: bekvämlighet för skills som deklarerar `metadata.openclaw.primaryEnv`.
 - `config`: valfri påse för anpassade per-skill-fält; anpassade nycklar måste ligga här.
-- `allowBundled`: valfri tillåtelselista endast för **bundlade** skills. Om satt är endast
-  bundlade skills i listan giltiga (hanterade/workspace-skills påverkas inte).
+- `allowBundled`: valfri tillåten lista för **bundna** färdigheter endast. Om angivet, är endast
+  medföljande färdigheter i listan berättigade (hanterade / arbetsytor opåverkade).
 
 ## Miljöinjektion (per agentkörning)
 
 När en agentkörning startar gör OpenClaw:
 
 1. Läser skill-metadata.
-2. Tillämpar eventuella `skills.entries.<key>.env` eller `skills.entries.<key>.apiKey` på
+2. Tillämpar alla `skills.entries.<key>.env` eller `skills.entries.<key>.apiKey` till
    `process.env`.
 3. Bygger systemprompten med **giltiga** skills.
 4. Återställer den ursprungliga miljön efter att körningen avslutats.
@@ -246,19 +239,19 @@ Detta är **avgränsat till agentkörningen**, inte en global skalmiljö.
 
 ## Sessionssnapshot (prestanda)
 
-OpenClaw tar en snapshot av de giltiga skills **när en session startar** och återanvänder den listan för efterföljande vändor i samma session. Ändringar i skills eller konfig träder i kraft vid nästa nya session.
+OpenClaw ögonblicksbilder den kvalificerade kompetensen **när en session startar** och återanvänder den listan för efterföljande svängar i samma session. Förändringar i kompetens eller konfiguration träder i kraft på nästa nya session.
 
-Skills kan också uppdateras mitt i sessionen när skills-watchern är aktiverad eller när en ny giltig fjärrnod dyker upp (se nedan). Se detta som en **hot reload**: den uppdaterade listan används vid nästa agentvända.
+Färdigheter kan också uppdatera mitt i sessionen när kompetensbevakaren är aktiverad eller när en ny kvalificerad fjärrnod visas (se nedan). Tänk på detta som en **het reload**: den uppdaterade listan plockas upp på nästa agent turn.
 
 ## Fjärr-macOS-noder (Linux-gateway)
 
-Om Gateway körs på Linux men en **macOS-nod** är ansluten **med `system.run` tillåtet** (Exec approvals-säkerhet inte satt till `deny`), kan OpenClaw behandla macOS-specifika skills som giltiga när nödvändiga binärer finns på den noden. Agenten bör exekvera dessa skills via verktyget `nodes` (vanligen `nodes.run`).
+Om Gateway körs på Linux men en **macOS node** är ansluten **med `system. un` tillåtet** (Exec godkänner inte säkerhet satt till `deny`), OpenClaw kan behandla macOS-endast färdigheter som berättigade när de nödvändiga binärerna finns på den noden. Agenten bör utföra dessa färdigheter via `nodes`-verktyget (typiskt `nodes.run`).
 
-Detta förlitar sig på att noden rapporterar sitt kommandostöd och på en bin-probe via `system.run`. Om macOS-noden senare går offline förblir skills synliga; anrop kan misslyckas tills noden återansluter.
+Detta förlitar sig på noden som rapporterar sitt kommandoradsstöd och på en bin sond via `system.run`. Om macOS-noden går offline senare förblir färdigheterna synliga; anrop kan misslyckas tills noden återansluts.
 
 ## Skills watcher (automatisk uppdatering)
 
-Som standard bevakar OpenClaw skill-mappar och uppdaterar skills-snapshoten när `SKILL.md`-filer ändras. Konfigurera detta under `skills.load`:
+Som standard tittar OpenClaw på skicklighetsmappar och stöter på kompetensögonblicksbilden när `SKILL.md`-filer ändras. Konfigurera detta under `skills.load`:
 
 ```json5
 {
@@ -273,7 +266,7 @@ Som standard bevakar OpenClaw skill-mappar och uppdaterar skills-snapshoten när
 
 ## Tokenpåverkan (skills-lista)
 
-När skills är giltiga injicerar OpenClaw en kompakt XML-lista över tillgängliga skills i systemprompten (via `formatSkillsForPrompt` i `pi-coding-agent`). Kostnaden är deterministisk:
+När kompetens är berättigad injicerar OpenClaw en kompakt XML-lista över tillgängliga färdigheter i systemprompten (via `formatSkillsForPrompt` i `pi-coding-agent`). Kostnaden är deterministisk:
 
 - **Basöverhead (endast när ≥1 skill):** 195 tecken.
 - **Per skill:** 97 tecken + längden på de XML-escapade `<name>`, `<description>` och `<location>`-värdena.
@@ -287,14 +280,14 @@ total = 195 + Σ (97 + len(name_escaped) + len(description_escaped) + len(locati
 Noteringar:
 
 - XML-escaping expanderar `& < > " '` till entiteter (`&amp;`, `&lt;`, etc.), vilket ökar längden.
-- Tokental varierar per modelltokenizer. En grov OpenAI-liknande uppskattning är ~4 tecken/token, så **97 tecken ≈ 24 token** per skill plus dina faktiska fältlängder.
+- Token räknas varierar beroende på modell tokenizer. En grov OpenAI-stil uppskattning är ~4 chars/token, så **97 chars ▸ 24 tokens** per skicklighet plus dina faktiska fältlängder.
 
 ## Livscykel för hanterade skills
 
-OpenClaw levererar en basuppsättning skills som **bundlade skills** som del av
-installationen (npm-paket eller OpenClaw.app). `~/.openclaw/skills` finns för lokala
-åsidosättningar (till exempel att låsa/patcha en skill utan att ändra den bundlade
-kopian). Workspace-skills ägs av användaren och åsidosätter båda vid namnkonflikter.
+OpenClaw levererar en uppsättning färdigheter som **buntade färdigheter** som en del av installationen
+(npm package eller OpenClaw.app). `~/.openclaw/skills` finns för lokala
+åsidosättningar (till exempel fast/patchar en färdighet utan att ändra den medföljande
+kopian). Arbetsytans färdigheter är användarägda och åsidosätter båda namnkonflikter.
 
 ## Konfigreferens
 

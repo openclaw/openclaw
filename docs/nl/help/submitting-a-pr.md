@@ -1,13 +1,6 @@
 ---
 summary: "Hoe je een PR met hoge signaalwaarde indient"
 title: "Een PR indienen"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:26Z
 ---
 
 Goede PR’s zijn eenvoudig te reviewen: reviewers moeten snel de intentie begrijpen, het gedrag kunnen verifiëren en wijzigingen veilig kunnen landen. Deze gids behandelt beknopte inzendingen met hoge signaalwaarde voor menselijke en LLM-review.

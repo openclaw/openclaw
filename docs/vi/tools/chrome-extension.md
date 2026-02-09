@@ -5,13 +5,6 @@ read_when:
   - Bạn cần Gateway từ xa + tự động hóa trình duyệt cục bộ qua Tailscale
   - Bạn muốn hiểu các hệ quả bảo mật của việc chiếm quyền trình duyệt
 title: "Tiện ích Chrome"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:29Z
 ---
 
 # Tiện ích Chrome (browser relay)
@@ -53,7 +46,7 @@ openclaw browser extension path
 
 ## Cập nhật (không cần bước build)
 
-Tiện ích được phát hành kèm trong bản phát hành OpenClaw (gói npm) dưới dạng các tệp tĩnh. Không có bước “build” riêng.
+12. Extension được phát hành kèm trong bản phát hành OpenClaw (gói npm) dưới dạng các tệp tĩnh. 43. Không có bước “build” riêng biệt.
 
 Sau khi nâng cấp OpenClaw:
 
@@ -107,13 +100,13 @@ Nếu bạn thấy `!`:
 
 ### Gateway cục bộ (cùng máy với Chrome) — thường **không cần bước bổ sung**
 
-Nếu Gateway chạy trên cùng máy với Chrome, nó sẽ khởi động dịch vụ điều khiển trình duyệt trên loopback
-và tự động khởi động máy chủ relay. Tiện ích nói chuyện với relay cục bộ; các lệnh CLI/công cụ gửi tới Gateway.
+If the Gateway runs on the same machine as Chrome, it starts the browser control service on loopback
+and auto-starts the relay server. The extension talks to the local relay; the CLI/tool calls go to the Gateway.
 
 ### Gateway từ xa (Gateway chạy ở nơi khác) — **chạy node host**
 
-Nếu Gateway của bạn chạy trên một máy khác, hãy khởi động một node host trên máy chạy Chrome.
-Gateway sẽ proxy các thao tác trình duyệt tới node đó; tiện ích + relay vẫn nằm cục bộ trên máy trình duyệt.
+16. Nếu Gateway của bạn chạy trên một máy khác, hãy khởi động một node host trên máy chạy Chrome.
+17. Gateway sẽ proxy các hành động của trình duyệt tới node đó; extension + relay vẫn ở cục bộ trên máy trình duyệt.
 
 Nếu có nhiều node được kết nối, hãy ghim một node bằng `gateway.nodes.browser.node` hoặc đặt `gateway.nodes.browser.mode`.
 
@@ -156,15 +149,15 @@ Gỡ lỗi: `openclaw sandbox explain`
 
 `openclaw browser extension path` in ra thư mục **đã cài đặt** trên đĩa chứa các tệp của tiện ích.
 
-CLI cố ý **không** in ra đường dẫn `node_modules`. Luôn chạy `openclaw browser extension install` trước để sao chép tiện ích tới một vị trí ổn định dưới thư mục trạng thái OpenClaw của bạn.
+18. CLI cố ý **không** in ra đường dẫn `node_modules`. 19. Luôn chạy `openclaw browser extension install` trước để sao chép extension tới một vị trí ổn định dưới thư mục trạng thái OpenClaw của bạn.
 
 Nếu bạn di chuyển hoặc xóa thư mục cài đặt đó, Chrome sẽ đánh dấu tiện ích là bị hỏng cho đến khi bạn tải lại từ một đường dẫn hợp lệ.
 
 ## Hệ quả bảo mật (hãy đọc)
 
-Tính năng này rất mạnh và rủi ro. Hãy coi nó như việc trao cho mô hình “đôi tay trên trình duyệt của bạn”.
+20. Điều này rất mạnh mẽ và rủi ro. 21. Hãy coi nó như việc trao cho mô hình “đôi tay trên trình duyệt của bạn”.
 
-- Tiện ích sử dụng API gỡ lỗi của Chrome (`chrome.debugger`). Khi đã gắn, mô hình có thể:
+- The extension uses Chrome’s debugger API (`chrome.debugger`). 23. Khi được gắn (attached), mô hình có thể:
   - nhấp/gõ/điều hướng trong tab đó
   - đọc nội dung trang
   - truy cập bất cứ thứ gì mà phiên đăng nhập của tab đó có quyền truy cập

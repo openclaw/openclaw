@@ -1,17 +1,10 @@
 ---
-summary: «Настройка, конфигурация и использование плагина LINE Messaging API»
+summary: "Настройка, конфигурация и использование плагина LINE Messaging API"
 read_when:
-  - «Вы хотите подключить OpenClaw к LINE»
-  - «Вам нужна настройка вебхука и учётных данных LINE»
-  - «Вам нужны специфичные для LINE параметры сообщений»
+  - Вы хотите подключить OpenClaw к LINE
+  - Вам нужна настройка вебхука и учётных данных LINE
+  - Вам нужны специфичные для LINE параметры сообщений
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:13Z
 ---
 
 # LINE (плагин)

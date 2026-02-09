@@ -3,13 +3,6 @@ summary: "Enlaces seleccionados a los documentos de OpenClaw más utilizados."
 read_when:
   - Quiere acceso rápido a las páginas clave de la documentación
 title: "Directorio de documentos"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:35Z
 ---
 
 <Note>

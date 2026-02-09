@@ -4,13 +4,6 @@ read_when:
   - Добавление или изменение конечных точек вебхуков
   - Подключение внешних систем к OpenClaw
 title: "Вебхуки"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:16Z
 ---
 
 # Вебхуки
@@ -46,7 +39,7 @@ Gateway (шлюз) может предоставлять небольшую HTTP
 
 ### `POST /hooks/wake`
 
-Полезная нагрузка:
+Payload:
 
 ```json
 { "text": "System line", "mode": "now" }
@@ -62,7 +55,7 @@ Gateway (шлюз) может предоставлять небольшую HTTP
 
 ### `POST /hooks/agent`
 
-Полезная нагрузка:
+Payload:
 
 ```json
 {

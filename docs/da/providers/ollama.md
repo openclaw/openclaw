@@ -4,18 +4,11 @@ read_when:
   - Du vil køre OpenClaw med lokale modeller via Ollama
   - Du har brug for vejledning til opsætning og konfiguration af Ollama
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:41Z
 ---
 
 # Ollama
 
-Ollama er en lokal LLM-runtime, der gør det nemt at køre open source-modeller på din maskine. OpenClaw integrerer med Ollamas OpenAI-kompatible API og kan **automatisk finde værktøjskompatible modeller**, når du tilmelder dig med `OLLAMA_API_KEY` (eller en auth-profil) og ikke definerer en eksplicit `models.providers.ollama`-post.
+Ollama er en lokal LLM runtime, der gør det nemt at køre open-source modeller på din maskine. OpenClaw integrerer med Ollamas OpenAI-kompatible API og kan **auto-opdage værktøjskompatible modeller** når du vælger med 'OLLAMA_API_KEY' (eller en auth profil) og definerer ikke en eksplicit `modeller. roviders.ollama` indgang.
 
 ## Hurtig start
 
@@ -181,7 +174,7 @@ Ollama er gratis og kører lokalt, så alle modelomkostninger er sat til $0.
 
 ### Streaming-konfiguration
 
-På grund af et [kendt problem](https://github.com/badlogic/pi-mono/issues/1205) i det underliggende SDK med Ollamas responsformat er **streaming deaktiveret som standard** for Ollama-modeller. Dette forhindrer korrupte svar, når der bruges værktøjskompatible modeller.
+På grund af et [kendt problem](https://github.com/badlogic/pi-mono/issues/1205) i den underliggende SDK med Ollamas svarformat, \*\*streaming er som standard deaktiveret \*\* for Ollama modeller. Dette forhindrer beskadigede reaktioner, når du bruger værktøjskompatible modeller.
 
 Når streaming er deaktiveret, leveres svar samlet (ikke-streaming-tilstand), hvilket undgår problemet, hvor indflettede indholds-/reasoning-deltaer forårsager forvansket output.
 
@@ -223,7 +216,7 @@ Du kan også deaktivere streaming for enhver udbyder efter behov:
 
 ### Kontekstvinduer
 
-For auto-fundne modeller bruger OpenClaw det kontekstvindue, som Ollama rapporterer, når det er tilgængeligt; ellers bruges standarden `8192`. Du kan tilsidesætte `contextWindow` og `maxTokens` i eksplicit udbyderkonfiguration.
+For automatisk opdagede modeller, bruger OpenClaw kontekstvinduet rapporteret af Ollama, når det er tilgængeligt, ellers er det standard `8192`. Du kan tilsidesætte `contextWindow` og `maxTokens` i eksplicit leverandørkonfiguration.
 
 ## Fejlfinding
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### Ingen modeller tilgængelige
 
-OpenClaw finder automatisk kun modeller, der rapporterer værktøjsunderstøttelse. Hvis din model ikke er på listen, kan du enten:
+OpenClaw opdager kun automatisk modeller, der rapporterer værktøj støtte. Hvis din model ikke er angivet, enten:
 
 - Hente en værktøjskompatibel model, eller
 - Definere modellen eksplicit i `models.providers.ollama`.
@@ -270,7 +263,7 @@ ollama serve
 
 ### Korrupte svar eller værktøjsnavne i output
 
-Hvis du ser forvanskede svar med værktøjsnavne (som `sessions_send`, `memory_get`) eller fragmenteret tekst, når du bruger Ollama-modeller, skyldes det et opstrøms SDK-problem med streaming-svar. **Dette er løst som standard** i den nyeste OpenClaw-version ved at deaktivere streaming for Ollama-modeller.
+Hvis du ser forvanskede svar, der indeholder værktøjsnavne (som `sessions_send`, `memory_get`) eller fragmenteret tekst, når du bruger Ollama modeller, dette skyldes et opstrøms SDK problem med streaming svar. **Dette er som standard** i den seneste OpenClaw version ved at deaktivere streaming for Ollama modeller.
 
 Hvis du manuelt har aktiveret streaming og oplever dette problem:
 

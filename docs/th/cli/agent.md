@@ -3,17 +3,11 @@ summary: "เอกสารอ้างอิงCLIสำหรับ `openclaw
 read_when:
   - คุณต้องการรันหนึ่งรอบของเอเจนต์จากสคริปต์(เลือกได้ว่าจะส่งมอบการตอบกลับหรือไม่)
 title: "เอเจนต์"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:53Z
 ---
 
 # `openclaw agent`
 
+รันเทิร์นของเอเจนต์ผ่าน Gateway (ใช้ `--local` สำหรับแบบฝัง)
 รันหนึ่งรอบของเอเจนต์ผ่านGateway（เกตเวย์）(ใช้ `--local` สำหรับแบบฝังตัว)
 ใช้ `--agent <id>` เพื่อกำหนดเป้าหมายไปยังเอเจนต์ที่ตั้งค่าไว้โดยตรง
 

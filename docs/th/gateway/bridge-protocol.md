@@ -5,25 +5,20 @@ read_when:
   - ตรวจสอบปัญหาการจับคู่หรือความล้มเหลวของการยืนยันตัวตนBridge
   - ตรวจสอบพื้นผิวโหนดที่Gatewayเปิดให้ใช้งาน
 title: "โปรโตคอลBridge"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:16Z
 ---
 
 # โปรโตคอลBridge(ทรานสปอร์ตโหนดแบบดั้งเดิม)
 
 โปรโตคอลBridgeเป็นทรานสปอร์ตโหนดแบบ**ดั้งเดิม**(TCP JSONL) ไคลเอนต์โหนดรุ่นใหม่
-ควรใช้โปรโตคอลGateway WebSocketแบบรวมศูนย์แทน
+ควรใช้โปรโตคอลGateway WebSocketแบบรวมศูนย์แทน New node clients
+should use the unified Gateway WebSocket protocol instead.
 
 หากคุณกำลังสร้างโอเปอเรเตอร์หรือไคลเอนต์โหนด ให้ใช้
 [โปรโตคอลGateway](/gateway/protocol)
 
 **หมายเหตุ:** บิลด์ OpenClaw ปัจจุบันไม่ได้รวมตัวรับฟัง TCP bridge แล้ว เอกสารนี้เก็บไว้เพื่อการอ้างอิงทางประวัติศาสตร์
 คีย์คอนฟิกแบบดั้งเดิม `bridge.*` ไม่ได้เป็นส่วนหนึ่งของสคีมาคอนฟิกอีกต่อไป
+Legacy `bridge.*` config keys are no longer part of the config schema.
 
 ## ทำไมเราจึงมีทั้งสองแบบ
 
@@ -70,6 +65,7 @@ Gateway → ไคลเอนต์:
 
 โหนดสามารถส่งอีเวนต์ `exec.finished` หรือ `exec.denied` เพื่อแสดงกิจกรรม system.run
 อีเวนต์เหล่านี้จะถูกแมปเป็นอีเวนต์ของระบบในGateway (โหนดแบบดั้งเดิมอาจยังส่ง `exec.started`)
+These are mapped to system events in the gateway. (Legacy nodes may still emit `exec.started`.)
 
 ฟิลด์ของเพย์โหลด(ทั้งหมดเป็นตัวเลือกเว้นแต่ระบุไว้):
 
@@ -89,4 +85,5 @@ Gateway → ไคลเอนต์:
 ## การกำหนดเวอร์ชัน
 
 Bridgeปัจจุบันเป็น**v1โดยนัย**(ไม่มีการเจรจา min/max) คาดว่าจะคงความเข้ากันได้ย้อนหลัง
-ควรเพิ่มฟิลด์เวอร์ชันโปรโตคอลBridgeก่อนการเปลี่ยนแปลงที่ทำให้เข้ากันไม่ได้
+ควรเพิ่มฟิลด์เวอร์ชันโปรโตคอลBridgeก่อนการเปลี่ยนแปลงที่ทำให้เข้ากันไม่ได้ Backward‑compat
+is expected; add a bridge protocol version field before any breaking changes.

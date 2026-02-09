@@ -4,18 +4,11 @@ read_when:
   - Gusto mong kumonekta ng Feishu/Lark bot
   - Kino-configure mo ang Feishu channel
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:40Z
 ---
 
 # Feishu bot
 
-Ang Feishu (Lark) ay isang team chat platform na ginagamit ng mga kumpanya para sa pagmemensahe at kolaborasyon. Ikinokonekta ng plugin na ito ang OpenClaw sa isang Feishu/Lark bot gamit ang WebSocket event subscription ng platform para makatanggap ng mga mensahe nang hindi kailangang magbukas ng pampublikong webhook URL.
+Feishu (Lark) is a team chat platform used by companies for messaging and collaboration. This plugin connects OpenClaw to a Feishu/Lark bot using the platform’s WebSocket event subscription so messages can be received without exposing a public webhook URL.
 
 ---
 
@@ -78,13 +71,13 @@ Piliin ang **Feishu**, pagkatapos ay ilagay ang App ID at App Secret.
 
 ## Hakbang 1: Gumawa ng Feishu app
 
-### 1. Buksan ang Feishu Open Platform
+### 1. Open Feishu Open Platform
 
 Bisitahin ang [Feishu Open Platform](https://open.feishu.cn/app) at mag-sign in.
 
 Ang mga Lark (global) tenant ay dapat gumamit ng [https://open.larksuite.com/app](https://open.larksuite.com/app) at itakda ang `domain: "lark"` sa Feishu config.
 
-### 2. Gumawa ng app
+### 2. Create an app
 
 1. I-click ang **Create enterprise app**
 2. Ilagay ang pangalan at deskripsyon ng app
@@ -92,7 +85,7 @@ Ang mga Lark (global) tenant ay dapat gumamit ng [https://open.larksuite.com/app
 
 ![Create enterprise app](../images/feishu-step2-create-app.png)
 
-### 3. Kopyahin ang mga credential
+### 3. Copy credentials
 
 Mula sa **Credentials & Basic Info**, kopyahin ang:
 
@@ -103,7 +96,7 @@ Mula sa **Credentials & Basic Info**, kopyahin ang:
 
 ![Get credentials](../images/feishu-step3-credentials.png)
 
-### 4. I-configure ang mga permission
+### 4. Configure permissions
 
 Sa **Permissions**, i-click ang **Batch import** at i-paste ang:
 
@@ -144,7 +137,7 @@ Sa **App Capability** > **Bot**:
 
 ![Enable bot capability](../images/feishu-step5-bot-capability.png)
 
-### 6. I-configure ang event subscription
+### 6. Configure event subscription
 
 ⚠️ **Mahalaga:** bago mag-set ng event subscription, tiyakin na:
 
@@ -160,7 +153,7 @@ Sa **Event Subscription**:
 
 ![Configure event subscription](../images/feishu-step6-event-subscription.png)
 
-### 7. I-publish ang app
+### 7. Publish the app
 
 1. Gumawa ng version sa **Version Management & Release**
 2. I-submit para sa review at i-publish
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Lark (global) domain
 
-Kung nasa Lark (international) ang iyong tenant, itakda ang domain sa `lark` (o isang buong domain string). Maaari mo itong itakda sa `channels.feishu.domain` o per account (`channels.feishu.accounts.<id>.domain`).
+If your tenant is on Lark (international), set the domain to `lark` (or a full domain string). You can set it at `channels.feishu.domain` or per account (`channels.feishu.accounts.<id>.domain`).
 
 ```json5
 {
@@ -231,19 +224,19 @@ Kung nasa Lark (international) ang iyong tenant, itakda ang domain sa `lark` (o 
 
 ## Hakbang 3: Simulan + subukan
 
-### 1. Simulan ang gateway
+### 1. Simulan ang Gateway
 
 ```bash
 openclaw gateway
 ```
 
-### 2. Magpadala ng test message
+### 2. Send a test message
 
 Sa Feishu, hanapin ang iyong bot at magpadala ng mensahe.
 
-### 3. Aprubahan ang pairing
+### 3. Approve pairing
 
-Bilang default, sasagot ang bot ng pairing code. Aprubahan ito:
+By default, the bot replies with a pairing code. Approve it:
 
 ```bash
 openclaw pairing approve feishu <CODE>
@@ -267,6 +260,7 @@ Pagkatapos ng approval, maaari ka nang makipag-chat nang normal.
 ### Direct messages
 
 - **Default**: `dmPolicy: "pairing"` (ang mga hindi kilalang user ay nakakakuha ng pairing code)
+
 - **Aprubahan ang pairing**:
 
   ```bash
@@ -284,7 +278,7 @@ Pagkatapos ng approval, maaari ka nang makipag-chat nang normal.
 - `"allowlist"` = payagan lamang ang `groupAllowFrom`
 - `"disabled"` = i-disable ang mga group message
 
-**2. Pangangailangan ng mention** (`channels.feishu.groups.<chat_id>.requireMention`):
+**2. Mention requirement** (`channels.feishu.groups.<chat_id>.requireMention`):
 
 - `true` = kailangan ng @mention (default)
 - `false` = tumugon kahit walang mention
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### Streaming
 
-Sinusuportahan ng Feishu ang streaming replies via interactive cards. Kapag naka-enable, ina-update ng bot ang isang card habang bumubuo ng text.
+Feishu supports streaming replies via interactive cards. Kapag pinagana, ina-update ng bot ang isang card habang bumubuo ito ng teksto.
 
 ```json5
 {
@@ -534,34 +528,34 @@ Buong konpigurasyon: [Gateway configuration](/gateway/configuration)
 
 Mga pangunahing opsyon:
 
-| Setting                                           | Deskripsyon                        | Default   |
-| ------------------------------------------------- | ---------------------------------- | --------- |
-| `channels.feishu.enabled`                         | I-enable/i-disable ang channel     | `true`    |
-| `channels.feishu.domain`                          | API domain (`feishu` o `lark`)     | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                             | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                         | -         |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override    | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM policy                          | `pairing` |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)        | -         |
-| `channels.feishu.groupPolicy`                     | Group policy                       | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                    | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Kailangan ng @mention              | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | I-enable ang group                 | `true`    |
-| `channels.feishu.textChunkLimit`                  | Laki ng message chunk              | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Limit ng laki ng media             | `30`      |
-| `channels.feishu.streaming`                       | I-enable ang streaming card output | `true`    |
-| `channels.feishu.blockStreaming`                  | I-enable ang block streaming       | `true`    |
+| Setting                                                      | Deskripsyon                                                         | Default   |
+| ------------------------------------------------------------ | ------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                                    | I-enable/i-disable ang channel                                      | `true`    |
+| `channels.feishu.domain`                                     | API domain (`feishu` o `lark`)                   | `feishu`  |
+| `channels.feishu.accounts.<id>``.appId`                      | App ID                                                              | -         |
+| `channels.feishu.accounts.<id>``.appSecret`                  | App Secret                                                          | -         |
+| `channels.feishu.accounts.<id>``.domain`                     | Per-account API domain override                                     | `feishu`  |
+| `channels.feishu.dmPolicy`                                   | DM policy                                                           | `pairing` |
+| `channels.feishu.allowFrom`                                  | DM allowlist (open_id list) | -         |
+| `channels.feishu.groupPolicy`                                | Group policy                                                        | `open`    |
+| `channels.feishu.groupAllowFrom`                             | Group allowlist                                                     | -         |
+| `channels.feishu.groups.<chat_id>``.requireMention`          | Kailangan ng @mention                                  | `true`    |
+| `channels.feishu.groups.<chat_id>`.enabled\` | I-enable ang group                                                  | `true`    |
+| `channels.feishu.textChunkLimit`                             | Laki ng message chunk                                               | `2000`    |
+| `channels.feishu.mediaMaxMb`                                 | Limit ng laki ng media                                              | `30`      |
+| `channels.feishu.streaming`                                  | I-enable ang streaming card output                                  | `true`    |
+| `channels.feishu.blockStreaming`                             | I-enable ang block streaming                                        | `true`    |
 
 ---
 
 ## Sanggunian ng dmPolicy
 
-| Value         | Behavior                                                                                     |
-| ------------- | -------------------------------------------------------------------------------------------- |
+| Value         | Behavior                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
 | `"pairing"`   | **Default.** Ang mga hindi kilalang user ay nakakakuha ng pairing code; kailangang aprubahan |
-| `"allowlist"` | Tanging ang mga user sa `allowFrom` lang ang maaaring makipag-chat                           |
-| `"open"`      | Payagan ang lahat ng user (kailangan ang `"*"` sa allowFrom)                                 |
-| `"disabled"`  | I-disable ang mga DM                                                                         |
+| `"allowlist"` | Tanging ang mga user sa `allowFrom` lang ang maaaring makipag-chat                                           |
+| `"open"`      | Payagan ang lahat ng user (kailangan ang `"*"` sa allowFrom)                              |
+| `"disabled"`  | I-disable ang mga DM                                                                                         |
 
 ---
 

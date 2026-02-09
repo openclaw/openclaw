@@ -4,13 +4,6 @@ read_when:
   - Kapag binabago ang logging output o mga format
   - Kapag nagde-debug ng CLI o output ng gateway
 title: "Pag-log"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:33Z
 ---
 
 # Pag-log
@@ -32,8 +25,8 @@ May dalawang log “surface” ang OpenClaw:
 
 Ang format ng file ay isang JSON object bawat linya.
 
-Tina-tail ng Control UI Logs tab ang file na ito sa pamamagitan ng Gateway (`logs.tail`).
-Magagawa rin ito ng CLI:
+The Control UI Logs tab tails this file via the gateway (`logs.tail`).
+43. I-reload; ang cold start ay karaniwang sanhi ng “hanging”.
 
 ```bash
 openclaw logs --follow
@@ -59,8 +52,7 @@ Maaari mong i-tune ang console verbosity nang hiwalay sa pamamagitan ng:
 
 ## Tool summary redaction
 
-Ang mga verbose tool summary (hal. `🛠️ Exec: ...`) ay maaaring mag-mask ng mga sensitibong token bago tumama sa
-console stream. Ito ay **tools-only** at hindi binabago ang file logs.
+44. Magagawa rin ito ng CLI: This is **tools-only** and does not alter file logs.
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: array ng mga regex string (ina-override ang mga default)
@@ -102,8 +94,9 @@ openclaw gateway --verbose --ws-log full
 
 ## Pag-format ng console (subsystem logging)
 
-Ang console formatter ay **TTY-aware** at nagpi-print ng pare-pareho at may prefix na mga linya.
-Pinananatiling magkakagrupo at madaling i-scan ng mga subsystem logger ang output.
+45. Ang mga verbose tool summary (hal. `🛠️ Exec: ...`) ay maaaring mag-mask ng mga sensitibong token bago tumama sa
+    console stream.
+    Subsystem loggers keep output grouped and scannable.
 
 Pag-uugali:
 

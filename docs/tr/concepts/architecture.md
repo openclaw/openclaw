@@ -3,13 +3,6 @@ summary: "WebSocket gateway mimarisi, bileşenler ve istemci akışları"
 read_when:
   - Gateway protokolü, istemciler veya taşıma katmanları üzerinde çalışırken
 title: "Gateway Mimarisi"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:14Z
 ---
 
 # Gateway mimarisi
@@ -115,6 +108,7 @@ Ayrıntılar: [Gateway protokolü](/gateway/protocol), [Eşleştirme](/channels/
 ## Uzak erişim
 
 - Tercih edilen: Tailscale veya VPN.
+
 - Alternatif: SSH tüneli
 
   ```bash
@@ -122,6 +116,7 @@ Ayrıntılar: [Gateway protokolü](/gateway/protocol), [Eşleştirme](/channels/
   ```
 
 - Tünel üzerinden de aynı el sıkışma + kimlik doğrulama belirteci uygulanır.
+
 - Uzak kurulumlarda WS için TLS + isteğe bağlı pinning etkinleştirilebilir.
 
 ## Operasyonlar özeti
@@ -130,7 +125,7 @@ Ayrıntılar: [Gateway protokolü](/gateway/protocol), [Eşleştirme](/channels/
 - Sağlık: WS üzerinden `health` (ayrıca `hello-ok` içinde yer alır).
 - Gözetim: otomatik yeniden başlatma için launchd/systemd.
 
-## Değişmezler
+## Invariants
 
 - Her ana makinede tek bir Gateway, tek bir Baileys oturumunu kontrol eder.
 - El sıkışma zorunludur; JSON olmayan veya ilk çerçevesi connect olmayan her şey sert kapatma ile sonuçlanır.

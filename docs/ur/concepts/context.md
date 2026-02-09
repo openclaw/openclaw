@@ -5,18 +5,11 @@ read_when:
   - آپ یہ ڈیبگ کر رہے ہیں کہ ماڈل کسی چیز کو “کیوں جانتا” ہے (یا کیوں بھول گیا)
   - آپ context اوورہیڈ کم کرنا چاہتے ہیں (/context، /status، /compact)
 title: "Context"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:17Z
 ---
 
 # Context
 
-“Context” سے مراد **وہ سب کچھ ہے جو OpenClaw کسی رَن کے لیے ماڈل کو بھیجتا ہے**۔ یہ ماڈل کی **context window** (ٹوکن حد) کے اندر محدود ہوتا ہے۔
+18. “کانٹیکسٹ” وہ **سب کچھ ہے جو OpenClaw کسی رن کے لیے ماڈل کو بھیجتا ہے**۔ یہ ماڈل کی **context window** (ٹوکن حد) کے ذریعے محدود ہوتا ہے۔
 
 مبتدی کے لیے ذہنی ماڈل:
 
@@ -96,7 +89,7 @@ Top tools (schema size):
 
 ## OpenClaw system prompt کیسے بناتا ہے
 
-System prompt **OpenClaw کی ملکیت** ہے اور ہر رَن میں دوبارہ بنایا جاتا ہے۔ اس میں شامل ہیں:
+سسٹم پرامپٹ **OpenClaw کی ملکیت** ہے اور ہر رن میں دوبارہ بنایا جاتا ہے۔ اس میں شامل ہیں:
 
 - ٹولز کی فہرست + مختصر توضیحات۔
 - Skills کی فہرست (صرف metadata؛ نیچے دیکھیں)۔
@@ -119,26 +112,26 @@ System prompt **OpenClaw کی ملکیت** ہے اور ہر رَن میں دوب
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (صرف پہلی بار)
 
-بڑی فائلیں فی فائل `agents.defaults.bootstrapMaxChars` کے ذریعے truncate کی جاتی ہیں (بطورِ طے شدہ `20000` حروف)۔ `/context` **raw بمقابلہ injected** سائزز اور یہ کہ truncation ہوئی یا نہیں، دکھاتا ہے۔
+بڑی فائلیں ہر فائل کی بنیاد پر `agents.defaults.bootstrapMaxChars` (ڈیفالٹ `20000` حروف) استعمال کرتے ہوئے truncate کی جاتی ہیں۔ `/context` **raw بمقابلہ injected** سائزز دکھاتا ہے اور یہ بھی کہ truncation ہوئی یا نہیں۔
 
 ## Skills: کیا injected ہوتا ہے بمقابلہ کیا ضرورت پر لوڈ ہوتا ہے
 
-System prompt میں ایک مختصر **skills list** شامل ہوتی ہے (نام + تفصیل + مقام)۔ اس فہرست کا حقیقی اوورہیڈ ہوتا ہے۔
+سسٹم پرامپٹ میں ایک مختصر **skills list** شامل ہوتی ہے (نام + وضاحت + مقام)۔ اس فہرست کا حقیقی اوورہیڈ ہوتا ہے۔
 
-Skill ہدایات بطورِ طے شدہ شامل نہیں ہوتیں۔ ماڈل سے توقع کی جاتی ہے کہ وہ `read` کے ذریعے اسکل کی `SKILL.md` **صرف ضرورت پڑنے پر** حاصل کرے۔
+Skill ہدایات ڈیفالٹ طور پر شامل نہیں ہوتیں۔ ماڈل سے توقع کی جاتی ہے کہ وہ skill کی `SKILL.md` **صرف ضرورت پڑنے پر** `read` کرے۔
 
 ## Tools: دو طرح کے اخراجات ہوتے ہیں
 
 Tools دو طریقوں سے context کو متاثر کرتے ہیں:
 
 1. System prompt میں **Tool list متن** (جو آپ “Tooling” کے طور پر دیکھتے ہیں)۔
-2. **Tool schemas** (JSON)۔ یہ ماڈل کو بھیجے جاتے ہیں تاکہ وہ ٹولز کو کال کر سکے۔ یہ plain text کے طور پر نظر نہ آنے کے باوجود context میں شمار ہوتے ہیں۔
+2. **Tool schemas** (JSON)۔ یہ ماڈل کو بھیجے جاتے ہیں تاکہ وہ ٹولز کال کر سکے۔ یہ context میں شمار ہوتے ہیں اگرچہ آپ انہیں سادہ متن کے طور پر نہیں دیکھتے۔
 
 `/context detail` سب سے بڑے ٹول اسکیماز کی تقسیم دکھاتا ہے تاکہ آپ دیکھ سکیں کہ کیا غالب ہے۔
 
 ## Commands، directives، اور “inline shortcuts”
 
-Slash commands کو Gateway ہینڈل کرتا ہے۔ چند مختلف رویّے ہیں:
+Slash کمانڈز Gateway کے ذریعے ہینڈل کی جاتی ہیں۔ کچھ مختلف رویے ہیں:
 
 - **Standalone commands**: ایسا پیغام جو صرف `/...` ہو، کمانڈ کے طور پر چلتا ہے۔
 - **Directives**: `/think`، `/verbose`، `/reasoning`، `/elevated`، `/model`، `/queue` ماڈل کے پیغام دیکھنے سے پہلے ہٹا دیے جاتے ہیں۔

@@ -4,19 +4,11 @@ read_when:
   - Bạn muốn chọn một nhà cung cấp mô hình
   - Bạn muốn xem ví dụ thiết lập nhanh cho xác thực LLM + chọn mô hình
 title: "Khởi động nhanh nhà cung cấp mô hình"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:50Z
 ---
 
 # Nhà cung cấp mô hình
 
-OpenClaw có thể sử dụng nhiều nhà cung cấp LLM. Hãy chọn một, xác thực, rồi đặt
-mô hình mặc định thành `provider/model`.
+OpenClaw can use many LLM providers. 7. Chọn một, xác thực, sau đó đặt mô hình mặc định là `provider/model`.
 
 ## Điểm nổi bật: Venice (Venice AI)
 
@@ -55,5 +47,5 @@ Xem [Venice AI](/providers/venice).
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-Để xem danh mục nhà cung cấp đầy đủ (xAI, Groq, Mistral, v.v.) và cấu hình nâng cao,
-xem [Nhà cung cấp mô hình](/concepts/model-providers).
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

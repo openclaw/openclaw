@@ -4,18 +4,11 @@ read_when:
   - Thiết kế hoặc tái cấu trúc phần hiểu media
   - Tinh chỉnh tiền xử lý âm thanh/video/hình ảnh đầu vào
 title: "Hiểu Media"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:44Z
 ---
 
 # Hiểu Media (Đầu vào) — 2026-01-17
 
-OpenClaw có thể **tóm tắt media đầu vào** (hình ảnh/âm thanh/video) trước khi pipeline phản hồi chạy. Hệ thống tự động phát hiện khi có công cụ cục bộ hoặc khóa nhà cung cấp, và có thể tắt hoặc tùy biến. Nếu phần hiểu nội dung bị tắt, các mô hình vẫn nhận các tệp/URL gốc như bình thường.
+OpenClaw có thể **tóm tắt media đến** (hình ảnh/âm thanh/video) trước khi pipeline phản hồi chạy. Nó tự động phát hiện khi các công cụ cục bộ hoặc khóa nhà cung cấp khả dụng, và có thể bị vô hiệu hóa hoặc tùy chỉnh. Nếu tính năng hiểu bị tắt, các mô hình vẫn nhận các tệp/URL gốc như bình thường.
 
 ## Mục tiêu
 
@@ -137,8 +130,7 @@ Quy tắc:
 
 ### Tự động phát hiện hiểu media (mặc định)
 
-Nếu `tools.media.<capability>.enabled` **không** được đặt thành `false` và bạn chưa
-cấu hình mô hình, OpenClaw sẽ tự động phát hiện theo thứ tự sau và **dừng ở lựa chọn đầu tiên hoạt động**:
+Nếu `tools.media.<capability>``.enabled` **không** được đặt thành `false` và bạn chưa cấu hình mô hình, OpenClaw sẽ tự động phát hiện theo thứ tự này và **dừng ở tùy chọn hoạt động đầu tiên**:
 
 1. **CLI cục bộ** (chỉ âm thanh; nếu đã cài)
    - `sherpa-onnx-offline` (yêu cầu `SHERPA_ONNX_MODEL_DIR` với encoder/decoder/joiner/tokens)
@@ -168,24 +160,24 @@ Lưu ý: Việc phát hiện nhị phân là best‑effort trên macOS/Linux/Win
 
 ## Khả năng (tùy chọn)
 
-Nếu bạn đặt `capabilities`, mục đó chỉ chạy cho các loại media tương ứng. Với
-danh sách dùng chung, OpenClaw có thể suy ra mặc định:
+If you set `capabilities`, the entry only runs for those media types. For shared
+lists, OpenClaw can infer defaults:
 
 - `openai`, `anthropic`, `minimax`: **hình ảnh**
 - `google` (Gemini API): **hình ảnh + âm thanh + video**
 - `groq`: **âm thanh**
 - `deepgram`: **âm thanh**
 
-Với các mục CLI, **hãy đặt `capabilities` một cách tường minh** để tránh khớp ngoài ý muốn.
-Nếu bạn bỏ qua `capabilities`, mục đó đủ điều kiện cho danh sách mà nó xuất hiện.
+Đối với các mục CLI, **hãy đặt `capabilities` một cách rõ ràng** để tránh các khớp không mong muốn.
+If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Ma trận hỗ trợ nhà cung cấp (tích hợp OpenClaw)
 
-| Khả năng | Tích hợp nhà cung cấp                                  | Ghi chú                                                           |
-| -------- | ------------------------------------------------------ | ----------------------------------------------------------------- |
-| Hình ảnh | OpenAI / Anthropic / Google / các bên khác qua `pi-ai` | Bất kỳ mô hình có khả năng hình ảnh trong registry đều hoạt động. |
-| Âm thanh | OpenAI, Groq, Deepgram, Google                         | Chép lời từ nhà cung cấp (Whisper/Deepgram/Gemini).               |
-| Video    | Google (Gemini API)                                    | Hiểu video từ nhà cung cấp.                                       |
+| Khả năng | Tích hợp nhà cung cấp                                  | Ghi chú                                                                                |
+| -------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Hình ảnh | OpenAI / Anthropic / Google / các bên khác qua `pi-ai` | Bất kỳ mô hình có khả năng hình ảnh trong registry đều hoạt động.      |
+| Âm thanh | OpenAI, Groq, Deepgram, Google                         | Chép lời từ nhà cung cấp (Whisper/Deepgram/Gemini). |
+| Video    | Google (Gemini API)                 | Hiểu video từ nhà cung cấp.                                            |
 
 ## Nhà cung cấp khuyến nghị
 
@@ -217,7 +209,7 @@ Khi `mode: "all"`, các đầu ra được gắn nhãn `[Image 1/2]`, `[Audio 2/
 
 ## Ví dụ cấu hình
 
-### 1) Danh sách mô hình dùng chung + ghi đè
+### 1. Danh sách mô hình dùng chung + ghi đè
 
 ```json5
 {
@@ -254,7 +246,7 @@ Khi `mode: "all"`, các đầu ra được gắn nhãn `[Image 1/2]`, `[Audio 2/
 }
 ```
 
-### 2) Chỉ Âm thanh + Video (tắt hình ảnh)
+### 2. Chỉ Âm thanh + Video (tắt hình ảnh)
 
 ```json5
 {
@@ -294,7 +286,7 @@ Khi `mode: "all"`, các đầu ra được gắn nhãn `[Image 1/2]`, `[Audio 2/
 }
 ```
 
-### 3) Hiểu hình ảnh tùy chọn
+### 3. Hiểu hình ảnh tùy chọn
 
 ```json5
 {
@@ -325,7 +317,7 @@ Khi `mode: "all"`, các đầu ra được gắn nhãn `[Image 1/2]`, `[Audio 2/
 }
 ```
 
-### 4) Mục đơn đa phương thức (khả năng tường minh)
+### 4. Mục đơn đa phương thức (khả năng tường minh)
 
 ```json5
 {
@@ -375,7 +367,7 @@ Khi phần hiểu media chạy, `/status` bao gồm một dòng tóm tắt ngắ
 
 ## Ghi chú
 
-- Việc hiểu nội dung là **best‑effort**. Lỗi không chặn phản hồi.
+- Understanding is **best‑effort**. Lỗi không chặn phản hồi.
 - Tệp đính kèm vẫn được chuyển cho mô hình ngay cả khi phần hiểu bị tắt.
 - Dùng `scope` để giới hạn nơi việc hiểu được chạy (ví dụ: chỉ DM).
 

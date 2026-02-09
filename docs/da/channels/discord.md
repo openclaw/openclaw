@@ -3,13 +3,6 @@ summary: "Status for Discord-botunderstøttelse, funktioner og konfiguration"
 read_when:
   - Arbejder med Discord-kanalfunktioner
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:52Z
 ---
 
 # Discord (Bot API)
@@ -45,7 +38,7 @@ Minimal konfiguration:
 
 - Tal med OpenClaw via Discord-DM’er eller guild-kanaler.
 - Direkte chats samles i agentens hovedsession (standard `agent:main:main`); guild-kanaler forbliver isolerede som `agent:<agentId>:discord:channel:<channelId>` (visningsnavne bruger `discord:<guildSlug>#<channelSlug>`).
-- Gruppe-DM’er ignoreres som standard; aktivér via `channels.discord.dm.groupEnabled` og begræns evt. via `channels.discord.dm.groupChannels`.
+- GruppeDM'er ignoreres som standard; aktiveres via `channels.discord.dm.groupEnabled` og kan eventuelt begrænses af `channels.discord.dm.groupChannels`.
 - Hold routing deterministisk: svar sendes altid tilbage til den kanal, de kom fra.
 
 ## Sådan virker det
@@ -55,25 +48,25 @@ Minimal konfiguration:
 3. Konfigurér OpenClaw med `channels.discord.token` (eller `DISCORD_BOT_TOKEN` som fallback).
 4. Kør gateway’en; den starter automatisk Discord-kanalen, når et token er tilgængeligt (config først, env fallback), og `channels.discord.enabled` ikke er `false`.
    - Hvis du foretrækker miljøvariabler, så sæt `DISCORD_BOT_TOKEN` (en config-blok er valgfri).
-5. Direkte chats: brug `user:<id>` (eller en `<@id>`-mention) ved levering; alle ture lander i den delte `main`-session. Rene numeriske id’er er tvetydige og afvises.
-6. Guild-kanaler: brug `channel:<channelId>` til levering. Mentions er påkrævet som standard og kan indstilles pr. guild eller pr. kanal.
-7. Direkte chats: sikre som standard via `channels.discord.dm.policy` (standard: `"pairing"`). Ukendte afsendere får en parringskode (udløber efter 1 time); godkend via `openclaw pairing approve discord <code>`.
+5. Direkte chats: brug `bruger:<id>` (eller en `<@id>` omtale) ved levering; alle vender land i den delte `main` session. Bare numeriske id'er er tvetydige og afvist.
+6. Guild kanaler: brug `kanal:<channelId>` for levering. Nævner er påkrævet som standard og kan indstilles per guild eller per kanal.
+7. Direkte chats: sikker som standard via `channels.discord.dm.policy` (default: `"pairing"`). Ukendte afsendere får en parringskode (udløber efter 1 time). Godkend via `openclaw parring godkend discord <code>`.
    - For at bevare den gamle “åben for alle”-adfærd: sæt `channels.discord.dm.policy="open"` og `channels.discord.dm.allowFrom=["*"]`.
    - For hård tilladelsesliste: sæt `channels.discord.dm.policy="allowlist"` og list afsendere i `channels.discord.dm.allowFrom`.
    - For at ignorere alle DM’er: sæt `channels.discord.dm.enabled=false` eller `channels.discord.dm.policy="disabled"`.
-8. Gruppe-DM’er ignoreres som standard; aktivér via `channels.discord.dm.groupEnabled` og begræns evt. via `channels.discord.dm.groupChannels`.
+8. GruppeDM'er ignoreres som standard; aktiveres via `channels.discord.dm.groupEnabled` og kan eventuelt begrænses af `channels.discord.dm.groupChannels`.
 9. Valgfrie guild-regler: sæt `channels.discord.guilds` med nøgle efter guild-id (foretrukket) eller slug, med regler pr. kanal.
-10. Valgfrie native commands: `commands.native` er som standard `"auto"` (til for Discord/Telegram, fra for Slack). Tilsidesæt med `channels.discord.commands.native: true|false|"auto"`; `false` rydder tidligere registrerede kommandoer. Tekstkommandoer styres af `commands.text` og skal sendes som selvstændige `/...`-beskeder. Brug `commands.useAccessGroups: false` til at omgå adgangsgruppetjek for kommandoer.
+10. Valgfrie indfødte kommandoer: `commands.native` standard er `"auto"` (tændt for Discord/Telegram, slukket for Slack). Tilsidesæt med `channels.discord.commands.native: trueřfalseř"auto"`; `false` rydder tidligere registrerede kommandoer. Tekst kommandoer styres af `commands.text` og skal sendes som standalone `/...` beskeder. Brug `commands.useAccessGroups: false` for at omgå access-group tjek for kommandoer.
     - Fuld kommandoliste + konfiguration: [Slash commands](/tools/slash-commands)
-11. Valgfri guild-konteksthukommelse: sæt `channels.discord.historyLimit` (standard 20, falder tilbage til `messages.groupChat.historyLimit`) for at inkludere de seneste N guild-beskeder som kontekst, når der svares på en mention. Sæt `0` for at deaktivere.
+11. Valgfri guild konteksthistorik: sæt `channels.discord.historyLimit` (standard 20, falder tilbage til `beskeder. roupChat.historyLimit`) til at inkludere de sidste N guild beskeder som kontekst, når du besvarer en omtale. Sæt `0` til deaktiveret.
 12. Reaktioner: agenten kan udløse reaktioner via værktøjet `discord` (styret af `channels.discord.actions.*`).
     - Semantik for fjernelse af reaktioner: se [/tools/reactions](/tools/reactions).
     - Værktøjet `discord` eksponeres kun, når den aktuelle kanal er Discord.
 13. Native commands bruger isolerede sessionsnøgler (`agent:<agentId>:discord:slash:<userId>`) frem for den delte `main`-session.
 
-Bemærk: Navn → id-opslag bruger søgning i guild-medlemmer og kræver Server Members Intent; hvis botten ikke kan søge medlemmer, så brug id’er eller `<@id>`-mentions.  
-Bemærk: Slugs er små bogstaver med mellemrum erstattet af `-`. Kanalnavne slugges uden det indledende `#`.  
-Bemærk: Guild-kontekstlinjer `[from:]` inkluderer `author.tag` + `id` for at gøre ping-klare svar nemme.
+Bemærk: Navn → id opløsning bruger guild medlem søgning og kræver Server Members Intent; hvis bot ikke kan søge medlemmer, bruge id'er eller `<@id>` omtaler.
+Bemærk: Snegle er små bogstaver med mellemrum erstattet af `-`. Kanal navne er træg uden den førende `#`.
+Bemærk: Guild kontekst `[fra:]` linjer omfatter `author.tag` + `id` for at gøre ping-ready svar let.
 
 ## Config-skrivninger
 
@@ -91,7 +84,7 @@ Deaktivér med:
 
 Dette er opsætningen i “Discord Developer Portal” for at køre OpenClaw i en server- (guild-)kanal som `#help`.
 
-### 1) Opret Discord-app + botbruger
+### 1. Opret Discord-app + botbruger
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. I din app:
@@ -107,9 +100,9 @@ I **Bot** → **Privileged Gateway Intents**, aktivér:
 - **Message Content Intent** (påkrævet for at læse beskedtekst i de fleste guilds; uden den vil du se “Used disallowed intents”, eller botten vil forbinde men ikke reagere på beskeder)
 - **Server Members Intent** (anbefalet; kræves til visse medlem-/brugeropslag og tilladelsesliste-match i guilds)
 
-Du har som regel **ikke** brug for **Presence Intent**. At sætte bottens egen presence (`setPresence`-handling) bruger gateway OP3 og kræver ikke denne intent; den er kun nødvendig, hvis du vil modtage presence-opdateringer om andre guild-medlemmer.
+Du behøver normalt **ikke** **Tilstedeværelse**. Indstilling af bot's egen tilstedeværelse (`setPresence` handling) bruger gateway OP3 og kræver ikke denne hensigt det er kun nødvendigt, hvis du ønsker at modtage tilstedeværelse opdateringer om andre guild medlemmer.
 
-### 3) Generér en invite-URL (OAuth2 URL Generator)
+### 3. Generér en invite-URL (OAuth2 URL Generator)
 
 I din app: **OAuth2** → **URL Generator**
 
@@ -132,14 +125,14 @@ Undgå **Administrator**, medmindre du debugger og fuldt ud stoler på botten.
 
 Kopiér den genererede URL, åbn den, vælg din server, og installér botten.
 
-### 4) Hent id’erne (guild/bruger/kanal)
+### 4. Hent id’erne (guild/bruger/kanal)
 
 Discord bruger numeriske id’er overalt; OpenClaw-konfiguration foretrækker id’er.
 
 1. Discord (desktop/web) → **User Settings** → **Advanced** → aktivér **Developer Mode**
 2. Højreklik:
    - Servernavn → **Copy Server ID** (guild-id)
-   - Kanal (f.eks. `#help`) → **Copy Channel ID**
+   - Kanal (f.eks. `#help`) → **Kopier Kanal-ID**
    - Din bruger → **Copy User ID**
 
 ### 5) Konfigurér OpenClaw
@@ -163,7 +156,7 @@ Eller via config:
 }
 ```
 
-Multi-kontounderstøttelse: brug `channels.discord.accounts` med tokens pr. konto og valgfri `name`. Se [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for det fælles mønster.
+Understøttelse af flere konti: brug `channels.discord.accounts` med tokens pr. konto og valgfri `name`. Se [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for det delte mønster.
 
 #### Tilladelsesliste + kanal-routing
 
@@ -202,12 +195,12 @@ Noter:
 - Multi-agent-override: sæt mønstre pr. agent på `agents.list[].groupChat.mentionPatterns`.
 - Hvis `channels` er til stede, afvises enhver kanal, der ikke er listet, som standard.
 - Brug en `"*"`-kanalpost til at anvende standarder på tværs af alle kanaler; eksplicitte kanalposter tilsidesætter wildcardet.
-- Tråde arver forældrekonfigurationen (tilladelsesliste, `requireMention`, skills, prompts osv.), medmindre du tilføjer trådens kanal-id eksplicit.
-- Owner-hint: når en pr.-guild eller pr.-kanal `users`-tilladelsesliste matcher afsenderen, behandler OpenClaw denne afsender som ejeren i systemprompten. For en global ejer på tværs af kanaler, sæt `commands.ownerAllowFrom`.
+- Tråde arver forælder kanal config (allowlist, `requireMention`, færdigheder, prompter, etc.) medmindre du tilføjer tråden kanal-id eksplicit.
+- Ejer tip: når en per-guild eller per-channel `users` allowlist matcher afsenderen, OpenClaw behandler at afsender som ejer i systemet prompt. For en global ejer på tværs af kanaler, sæt `commands.ownerAllowFrom`.
 - Bot-forfattede beskeder ignoreres som standard; sæt `channels.discord.allowBots=true` for at tillade dem (egne beskeder filtreres fortsat).
-- Advarsel: Hvis du tillader svar til andre bots (`channels.discord.allowBots=true`), så forhindre bot-til-bot-svarsløkker med `requireMention`, `channels.discord.guilds.*.channels.<id>.users`-tilladelseslister og/eller rydde hegn i `AGENTS.md` og `SOUL.md`.
+- Advarsel: Hvis du tillader svar til andre bots (`channels.discord.allowBots=true`), forhindre bot-to-bot svar loops med `requireMention`, `channels.discord.guilds.*.channels.<id>.users` tilladte og/eller klare guardrails i »AGENTS.md« og »SOUL.md«.
 
-### 6) Verificér at det virker
+### 6. Verificér at det virker
 
 1. Start gateway’en.
 2. I din serverkanal, send: `@Krill hello` (eller hvad end dit botnavn er).
@@ -223,14 +216,14 @@ Noter:
   - Din konfiguration kræver mentions, og du nævnte den ikke, eller
   - Din guild-/kanal-tilladelsesliste afviser kanalen/brugeren.
 - **`requireMention: false` men stadig ingen svar**:
-- `channels.discord.groupPolicy` er som standard **allowlist**; sæt den til `"open"` eller tilføj en guild-post under `channels.discord.guilds` (list evt. kanaler under `channels.discord.guilds.<id>.channels` for at begrænse).
-  - Hvis du kun sætter `DISCORD_BOT_TOKEN` og aldrig opretter en `channels.discord`-sektion, vil runtime
-    som standard sætte `groupPolicy` til `open`. Tilføj `channels.discord.groupPolicy`,
-    `channels.defaults.groupPolicy` eller en guild-/kanal-tilladelsesliste for at låse det ned.
-- `requireMention` skal ligge under `channels.discord.guilds` (eller en specifik kanal). `channels.discord.requireMention` på topniveau ignoreres.
-- **Tilladelsesaudits** (`channels status --probe`) tjekker kun numeriske kanal-id’er. Hvis du bruger slugs/navne som `channels.discord.guilds.*.channels`-nøgler, kan auditten ikke verificere tilladelser.
+- `channels.discord.groupPolicy` defaults til **allowlist**; sæt den til `"open"` eller tilføj en guild post under `channels.discord.guilds` (valgfrit liste kanaler under `channels.discord.guilds.<id>.channels` at begrænse).
+  - Hvis du kun indstille `DISCORD_BOT_TOKEN` og aldrig oprette en `channels.discord` sektion, runtime
+    standard `groupPolicy` til `open`. Tilføj `channels.discord.groupPolicy`,
+    `channels.defaults.groupPolicy`, eller en guild/channel allowlist for at låse den ned.
+- `requireMention` skal leve under `channels.discord.guilds` (eller en bestemt kanal). `channels.discord.requireMention` på øverste niveau ignoreres.
+- **Tilladelse audits** (`kanal status --probe`) tjek kun numeriske kanal IDs. Hvis du bruger slugs/names som `channels.discord.guilds.*.channels` nøgler, revisionen kan ikke bekræfte tilladelser.
 - **DM’er virker ikke**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, eller du er endnu ikke godkendt (`channels.discord.dm.policy="pairing"`).
-- **Exec-godkendelser i Discord**: Discord understøtter et **knap-UI** for exec-godkendelser i DM’er (Tillad én gang / Tillad altid / Afvis). `/approve <id> ...` er kun til videresendte godkendelser og løser ikke Discords knap-prompter. Hvis du ser `❌ Failed to submit approval: Error: unknown approval id` eller UI’et aldrig vises, så tjek:
+- **Exec godkendelser i Discord**: Discord understøtter en **knap UI** for exec godkendelser i DMs (Tillad en gang / Altid tillade / Deny). `/Godkend <id> ...` er kun til videresendte godkendelser og vil ikke løse Discord's knap prompter. Hvis du ser `❌ Mislykkedes at indsende godkendelse: Fejl: ukendt godkendelse id` eller UI aldrig dukker op, tjek:
   - `channels.discord.execApprovals.enabled: true` i din config.
   - At dit Discord-bruger-id er listet i `channels.discord.execApprovals.approvers` (UI’et sendes kun til godkendere).
   - Brug knapperne i DM-prompten (**Allow once**, **Always allow**, **Deny**).
@@ -248,7 +241,7 @@ Noter:
 
 ## Retry-politik
 
-Udgående Discord API-kald genprøves ved rate limits (429) ved brug af Discord `retry_after`, når tilgængeligt, med eksponentiel backoff og jitter. Konfigurér via `channels.discord.retry`. Se [Retry policy](/concepts/retry).
+Outbound Discord API opkald prøve igen på hastighedsgrænser (429) ved hjælp af Discord `retry_after` når det er tilgængeligt, med eksponentiel backoff og jitter. Konfigurer via `channels.discord.retry`. Se [Prøv igen](/concepts/retry).
 
 ## Konfiguration
 
@@ -320,39 +313,39 @@ Udgående Discord API-kald genprøves ved rate limits (429) ved brug af Discord 
 }
 ```
 
-Ack-reaktioner styres globalt via `messages.ackReaction` +
-`messages.ackReactionScope`. Brug `messages.removeAckAfterReply` til at rydde
-ack-reaktionen, efter at botten har svaret.
+Ack reaktioner styres globalt via `messages.ackReaction` +
+`messages.ackReactionScope`. Brug `messages.removeAckAfterReply` for at rydde
+ack reaktion efter bot svar.
 
 - `dm.enabled`: sæt `false` for at ignorere alle DM’er (standard `true`).
-- `dm.policy`: DM-adgangskontrol (`pairing` anbefalet). `"open"` kræver `dm.allowFrom=["*"]`.
-- `dm.allowFrom`: DM-tilladelsesliste (bruger-id’er eller navne). Bruges af `dm.policy="allowlist"` og til `dm.policy="open"`-validering. Opsætningsguiden accepterer brugernavne og slår dem op til id’er, når botten kan søge medlemmer.
+- `dm.policy`: DM access control (`pairing` anbefalet). `"open"` kræver `dm.allowFrom=["*"]`.
+- `dm.allowFrom`: DM tilladt liste (brugernavne eller navne). Brugt af `dm.policy="allowlist"` og for `dm.policy="open"` validation. Guiden accepterer brugernavne og løser dem til id'er, når botten kan søge medlemmer.
 - `dm.groupEnabled`: aktivér gruppe-DM’er (standard `false`).
 - `dm.groupChannels`: valgfri tilladelsesliste for gruppe-DM-kanal-id’er eller slugs.
 - `groupPolicy`: styrer håndtering af guild-kanaler (`open|disabled|allowlist`); `allowlist` kræver kanal-tilladelseslister.
 - `guilds`: regler pr. guild med nøgle efter guild-id (foretrukket) eller slug.
 - `guilds."*"`: standardindstillinger pr. guild, anvendt når der ikke findes en eksplicit post.
-- `guilds.<id>.slug`: valgfri venlig slug brugt til visningsnavne.
-- `guilds.<id>.users`: valgfri pr.-guild bruger-tilladelsesliste (id’er eller navne).
-- `guilds.<id>.tools`: valgfri pr.-guild overrides for værktøjspolitik (`allow`/`deny`/`alsoAllow`), brugt når kanal-override mangler.
-- `guilds.<id>.toolsBySender`: valgfri pr.-afsender overrides for værktøjspolitik på guild-niveau (gælder når kanal-override mangler; `"*"` wildcard understøttes).
+- `guilds.<id>.slug`: valgfri venlig slug brugt til visning af navne.
+- `guilds.<id>.users`: valgfri per-guild bruger tilladt liste (ids eller navne).
+- `guilds.<id>.tools`: valgfri per-guild tool policy overrides (`allow`/`deny`/`alsoAllow`) bruges, når kanalen override mangler.
+- `guilds.<id>.toolsBySender`: valgfri per-sender værktøj politik tilsidesætter på guild niveau (gælder når kanalen tilsidesættelse mangler; `"*"` wildcard understøttet).
 - `guilds.<id>.channels.<channel>.allow`: tillad/afvis kanalen, når `groupPolicy="allowlist"`.
 - `guilds.<id>.channels.<channel>.requireMention`: mention-gating for kanalen.
-- `guilds.<id>.channels.<channel>.tools`: valgfri pr.-kanal overrides for værktøjspolitik (`allow`/`deny`/`alsoAllow`).
-- `guilds.<id>.channels.<channel>.toolsBySender`: valgfri pr.-afsender overrides for værktøjspolitik inden for kanalen (`"*"` wildcard understøttes).
+- `guilds.<id>.channels.<channel>.tools`: valgfrie pr.-kanal værktøjspolitik-overskrivninger (`allow`/`deny`/`alsoAllow`).
+- `guilds.<id>.channels.<channel>.toolsBySender`: valgfri per-sender værktøj politik tilsidesættelser i kanalen (`"*"` jokertegn understøttet).
 - `guilds.<id>.channels.<channel>.users`: valgfri pr.-kanal bruger-tilladelsesliste.
-- `guilds.<id>.channels.<channel>.skills`: skill-filter (udeladt = alle skills, tom = ingen).
-- `guilds.<id>.channels.<channel>.systemPrompt`: ekstra systemprompt for kanalen. Discord-kanalemner injiceres som **utroværdig** kontekst (ikke systemprompt).
+- `guilds.<id>.channels.<channel>.skills`: skill-filter (udeladt = alle Skills, tom = ingen).
+- `guilds.<id>.channels.<channel>.systemPrompt`: ekstra systemprompt for kanalen. Discord kanal emner injiceres som \*\*ikke-betroede \*\* kontekst (ikke system prompt).
 - `guilds.<id>.channels.<channel>.enabled`: sæt `false` for at deaktivere kanalen.
-- `guilds.<id>.channels`: kanalregler (nøgler er kanal-slugs eller id’er).
-- `guilds.<id>.requireMention`: pr.-guild mention-krav (kan tilsidesættes pr. kanal).
-- `guilds.<id>.reactionNotifications`: reaktionssystemets event-tilstand (`off`, `own`, `all`, `allowlist`).
-- `textChunkLimit`: udgående tekst-chunk-størrelse (tegn). Standard: 2000.
+- `guilds.<id>.channels`: kanal regler (nøgler er kanal snegle eller ids).
+- `guilds.<id>.requireMention`: per-guild nævne krav (overridable per kanal).
+- `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
+- `textChunkLimit`: udgående tekst chunk størrelse (tegn). Standard: 2000.
 - `chunkMode`: `length` (standard) splitter kun, når `textChunkLimit` overskrides; `newline` splitter ved tomme linjer (afsnitsgrænser) før længdeopdeling.
-- `maxLinesPerMessage`: blød maks. linjeantal pr. besked. Standard: 17.
+- `maxLinesPerMessage`: soft max linjeantal pr. besked. Standard: 17.
 - `mediaMaxMb`: begræns indgående medier gemt på disk.
 - `historyLimit`: antal seneste guild-beskeder, der inkluderes som kontekst ved svar på en mention (standard 20; falder tilbage til `messages.groupChat.historyLimit`; `0` deaktiverer).
-- `dmHistoryLimit`: DM-historikgrænse i bruger-ture. Pr.-bruger overrides: `dms["<user_id>"].historyLimit`.
+- `dmHistoryLimit`: DM historik grænse i bruger sving. Per-user tilsidesættelser: `dms["<user_id>"].historyLimit`.
 - `retry`: retry-politik for udgående Discord API-kald (forsøg, minDelayMs, maxDelayMs, jitter).
 - `pluralkit`: opløs PluralKit-proxyede beskeder, så systemmedlemmer fremstår som distinkte afsendere.
 - `actions`: pr.-handling værktøjs-gates; udelad for at tillade alle (sæt `false` for at deaktivere).
@@ -363,20 +356,20 @@ ack-reaktionen, efter at botten har svaret.
   - `roles` (rolle tilføj/fjern, standard `false`)
   - `moderation` (timeout/kick/ban, standard `false`)
   - `presence` (bot-status/aktivitet, standard `false`)
-- `execApprovals`: Discord-only exec-godkendelses-DM’er (knap-UI). Understøtter `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
+- `execApprovals`: Discord-only exec approval DMs (knap UI). Understøtter `aktiveret`, `approvers`, `agentFilter`, `sessionFilter`.
 
-Reaktionsnotifikationer bruger `guilds.<id>.reactionNotifications`:
+Reaktionsnotifikationer bruger 'guilds.<id>.reaktionMeddelelser«:
 
 - `off`: ingen reaktions-events.
 - `own`: reaktioner på bottens egne beskeder (standard).
 - `all`: alle reaktioner på alle beskeder.
-- `allowlist`: reaktioner fra `guilds.<id>.users` på alle beskeder (tom liste deaktiverer).
+- `allowlist`: reaktioner fra `guilds.<id>.users` på alle beskeder (tomme liste deaktiverer).
 
 ### PluralKit (PK)-understøttelse
 
-Aktivér PK-opslag, så proxyede beskeder opløses til det underliggende system + medlem.
-Når aktiveret bruger OpenClaw medlemsidentiteten til tilladelseslister og mærker
-afsenderen som `Member (PK:System)` for at undgå utilsigtede Discord-pings.
+Aktiver PK opslag så proxied beskeder løse til det underliggende system + medlem.
+Når aktiveret, bruger OpenClaw medlemsidentiteten til tilladte lister og etiketter
+afsenderen som `medlem (PK:System)` for at undgå tilfældige Discord pings.
 
 ```json5
 {
@@ -393,46 +386,46 @@ afsenderen som `Member (PK:System)` for at undgå utilsigtede Discord-pings.
 
 Tilladelsesliste-noter (PK-aktiveret):
 
-- Brug `pk:<memberId>` i `dm.allowFrom`, `guilds.<id>.users` eller pr.-kanal `users`.
+- Brug `pk:<memberId>` i `dm.allowFrom`, `guilds.<id>.users`, eller per-kanal `brugere`.
 - Medlemmers visningsnavne matches også efter navn/slug.
 - Opslag bruger **den originale** Discord-besked-id (før proxy), så
   PK-API’et opløser den kun inden for sit 30-minutters vindue.
-- Hvis PK-opslag fejler (f.eks. privat system uden token), behandles proxyede beskeder
-  som botbeskeder og droppes, medmindre `channels.discord.allowBots=true`.
+- Hvis PK opslag mislykkes (fx, privat system uden et token), proxied beskeder
+  behandles som bot beskeder og tabes medmindre `channels.discord.allowBots=true`.
 
 ### Standarder for værktøjshandlinger
 
-| Handlingsgruppe | Standard | Noter                              |
-| --------------- | -------- | ---------------------------------- |
-| reactions       | enabled  | React + list reactions + emojiList |
-| stickers        | enabled  | Send stickers                      |
-| emojiUploads    | enabled  | Upload emojis                      |
-| stickerUploads  | enabled  | Upload stickers                    |
-| polls           | enabled  | Opret afstemninger                 |
-| permissions     | enabled  | Kanal-tilladelsessnapshot          |
-| messages        | enabled  | Læs/send/redigér/slet              |
-| threads         | enabled  | Opret/list/svar                    |
-| pins            | enabled  | Fastgør/ophæv/list                 |
+| Handlingsgruppe | Standard | Noter                                                 |
+| --------------- | -------- | ----------------------------------------------------- |
+| reactions       | enabled  | React + list reactions + emojiList                    |
+| stickers        | enabled  | Send stickers                                         |
+| emojiUploads    | enabled  | Upload emojis                                         |
+| stickerUploads  | enabled  | Upload stickers                                       |
+| polls           | enabled  | Opret afstemninger                                    |
+| permissions     | enabled  | Kanal-tilladelsessnapshot                             |
+| messages        | enabled  | Læs/send/redigér/slet                                 |
+| threads         | enabled  | Opret/list/svar                                       |
+| pins            | enabled  | Fastgør/ophæv/list                                    |
 | search          | enabled  | Beskedsøgning (preview-funktion)   |
-| memberInfo      | enabled  | Medlemsinfo                        |
-| roleInfo        | enabled  | Rolleliste                         |
-| channelInfo     | enabled  | Kanalinfo + liste                  |
-| channels        | enabled  | Kanal-/kategoristyring             |
-| voiceStatus     | enabled  | Voice state-opslag                 |
-| events          | enabled  | List/opret planlagte events        |
-| roles           | disabled | Rolle tilføj/fjern                 |
-| moderation      | disabled | Timeout/kick/ban                   |
+| memberInfo      | enabled  | Medlemsinfo                                           |
+| roleInfo        | enabled  | Rolleliste                                            |
+| channelInfo     | enabled  | Kanalinfo + liste                                     |
+| channels        | enabled  | Kanal-/kategoristyring                                |
+| voiceStatus     | enabled  | Voice state-opslag                                    |
+| events          | enabled  | List/opret planlagte events                           |
+| roles           | disabled | Rolle tilføj/fjern                                    |
+| moderation      | disabled | Timeout/kick/ban                                      |
 | presence        | disabled | Bot-status/aktivitet (setPresence) |
 
-- `replyToMode`: `off` (standard), `first` eller `all`. Gælder kun, når modellen inkluderer et reply-tag.
+- `replyToMode`: `off` (standard), `first`, eller `all`. Gælder kun, når modellen indeholder et svarmærke.
 
 ## Reply-tags
 
 For at anmode om et trådet svar kan modellen inkludere ét tag i sit output:
 
 - `[[reply_to_current]]` — svar på den udløsende Discord-besked.
-- `[[reply_to:<id>]]` — svar på et specifikt besked-id fra kontekst/historik.
-  Aktuelle besked-id’er tilføjes prompts som `[message_id: …]`; historikposter inkluderer allerede id’er.
+- `[[reply_to:<id>]]` — svar på et specifikt meddelelses-id fra kontekst/historik.
+  Nuværende besked id tilføjes til at spørge som `[message_id: …]`; historik poster indeholder allerede ids.
 
 Adfærd styres af `channels.discord.replyToMode`:
 
@@ -445,8 +438,8 @@ Noter om tilladelsesliste-match:
 - `allowFrom`/`users`/`groupChannels` accepterer id’er, navne, tags eller mentions som `<@id>`.
 - Præfikser som `discord:`/`user:` (brugere) og `channel:` (gruppe-DM’er) understøttes.
 - Brug `*` for at tillade enhver afsender/kanal.
-- Når `guilds.<id>.channels` er til stede, afvises kanaler, der ikke er listet, som standard.
-- Når `guilds.<id>.channels` udelades, er alle kanaler i den tilladte guild tilladt.
+- Når `guilds.<id>.channels` er til stede, kanaler der ikke er listet nægtes som standard.
+- Når `guilds.<id>.channels` er udeladt, alle kanaler i den tilladte guild er tilladt.
 - For at tillade **ingen kanaler**, sæt `channels.discord.groupPolicy: "disabled"` (eller behold en tom tilladelsesliste).
 - Opsætningsguiden accepterer `Guild/Channel`-navne (offentlige + private) og opløser dem til id’er, når det er muligt.
 - Ved opstart opløser OpenClaw kanal-/brugernavne i tilladelseslister til id’er (når botten kan søge medlemmer)
@@ -473,8 +466,8 @@ Agenten kan kalde `discord` med handlinger som:
 - `timeout`, `kick`, `ban`
 - `setPresence` (bot-aktivitet og online-status)
 
-Discord-besked-id’er eksponeres i den injicerede kontekst (`[discord message id: …]` og historiklinjer), så agenten kan målrette dem.
-Emoji kan være unicode (f.eks. `✅`) eller custom emoji-syntaks som `<:party_blob:1234567890>`.
+Discord besked id'er er dukket op i den injicerede sammenhæng (`[discord besked id: …]` og historie linjer), så agenten kan målrette dem.
+Emoji kan være unicode (f.eks. `✅`) eller brugerdefineret emoji syntaks som `<:party_blob:1234567890>`.
 
 ## Sikkerhed & drift
 

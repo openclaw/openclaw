@@ -4,23 +4,16 @@ read_when:
   - 切版或驗證 OpenClaw macOS 發行版本時
   - 更新 Sparkle appcast 或 feed 資產時
 title: "macOS 發行"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:51Z
 ---
 
 # OpenClaw macOS 發行（Sparkle）
 
-此應用程式現已提供 Sparkle 自動更新。發行版建置必須以 Developer ID 簽署、壓縮，並以已簽署的 appcast 項目發佈。
+This app now ships Sparkle auto-updates. Release builds must be Developer ID–signed, zipped, and published with a signed appcast entry.
 
-## 先決條件
+## Prereqs
 
 - 已安裝 Developer ID Application 憑證（例如：`Developer ID Application: <Developer Name> (<TEAMID>)`）。
-- Sparkle 私鑰路徑已在環境中設定為 `SPARKLE_PRIVATE_KEY_FILE`（指向你的 Sparkle ed25519 私鑰；公鑰已內嵌於 Info.plist）。若缺少，請檢查 `~/.profile`。
+- Sparkle 私鑰路徑已在環境中設定為 `SPARKLE_PRIVATE_KEY_FILE`（指向你的 Sparkle ed25519 私鑰；公鑰已內嵌於 Info.plist）。若缺少，請檢查 `~/.profile`。 If it is missing, check `~/.profile`.
 - 若要進行 Gatekeeper 安全的 DMG／zip 發佈，需具備 `xcrun notarytool` 的公證（Notary）認證（鑰匙圈設定檔或 API 金鑰）。
   - 我們使用名為 `openclaw-notary` 的鑰匙圈設定檔，該設定檔由 App Store Connect API 金鑰的環境變數在你的 shell 設定檔中建立：
     - `APP_STORE_CONNECT_API_KEY_P8`、`APP_STORE_CONNECT_KEY_ID`、`APP_STORE_CONNECT_ISSUER_ID`
@@ -34,8 +27,8 @@ x-i18n:
 注意事項：
 
 - `APP_BUILD` 對應到 `CFBundleVersion`/`sparkle:version`；請維持數值且單調遞增（不要有 `-beta`），否則 Sparkle 會判定為相同版本。
-- 預設為目前架構（`$(uname -m)`）。若要發行／通用建置，請設定 `BUILD_ARCHS="arm64 x86_64"`（或 `BUILD_ARCHS=all`）。
-- 發行成品（zip + DMG + 公證）請使用 `scripts/package-mac-dist.sh`。本機／開發封裝請使用 `scripts/package-mac-app.sh`。
+- Defaults to the current architecture (`$(uname -m)`). 預設為目前架構（`$(uname -m)`）。若要發行／通用建置，請設定 `BUILD_ARCHS="arm64 x86_64"`（或 `BUILD_ARCHS=all`）。
+- 發行成品（zip + DMG + 公證）請使用 `scripts/package-mac-dist.sh`。本機／開發封裝請使用 `scripts/package-mac-app.sh`。 Use `scripts/package-mac-app.sh` for local/dev packaging.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -79,8 +72,9 @@ SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh di
 
 此流程會從 `CHANGELOG.md` 產生 HTML 發行說明（透過 [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)），並將其內嵌於 appcast 項目中。
 發佈時，請將更新後的 `appcast.xml` 與發行資產（zip + dSYM）一併提交。
+Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when publishing.
 
-## 發佈與驗證
+## Publish & verify
 
 - 將 `OpenClaw-2026.2.6.zip`（以及 `OpenClaw-2026.2.6.dSYM.zip`）上傳到標籤為 `v2026.2.6` 的 GitHub 發行頁。
 - 確認原始 appcast URL 與內嵌的 feed 相符：`https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`。

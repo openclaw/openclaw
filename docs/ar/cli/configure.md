@@ -3,13 +3,6 @@ summary: "مرجع CLI لأمر `openclaw configure` (مطالبات تهيئة 
 read_when:
   - عندما ترغب في ضبط بيانات الاعتماد أو الأجهزة أو القيم الافتراضية للوكيل بشكل تفاعلي
 title: "التهيئة"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # `openclaw configure`

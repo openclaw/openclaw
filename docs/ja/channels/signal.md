@@ -1,21 +1,14 @@
 ---
-summary: 「signal-cli（JSON-RPC + SSE）による Signal サポート、セットアップ、および番号モデル」
+summary: "signal-cli（JSON-RPC + SSE）による Signal サポート、セットアップ、および番号モデル"
 read_when:
   - Signal サポートのセットアップ時
   - Signal の送受信をデバッグする場合
-title: 「Signal」
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:00Z
+title: "Signal"
 ---
 
 # Signal（signal-cli）
 
-ステータス: 外部 CLI 連携。Gateway（ゲートウェイ）は HTTP JSON-RPC + SSE 経由で `signal-cli` と通信します。
+ステータス: 外部 CLI 統合。 ステータス: 外部 CLI 連携。Gateway（ゲートウェイ）は HTTP JSON-RPC + SSE 経由で `signal-cli` と通信します。
 
 ## クイックスタート（初心者向け）
 
@@ -41,7 +34,7 @@ x-i18n:
 }
 ```
 
-## 概要
+## これは何か
 
 - `signal-cli` を介した Signal チャンネル（libsignal の組み込みではありません）。
 - 決定論的ルーティング: 返信は常に Signal に戻ります。
@@ -88,7 +81,7 @@ x-i18n:
 }
 ```
 
-マルチアカウント対応: アカウントごとの設定と任意の `name` を使用して `channels.signal.accounts` を指定します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。
+マルチアカウントサポート: アカウントごとの設定とオプションの `name` で `channels.signal.accounts` を使用します。 マルチアカウント対応: アカウントごとの設定と任意の `name` を使用して `channels.signal.accounts` を指定します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。
 
 ## 外部デーモンモード（httpUrl）
 
@@ -105,7 +98,7 @@ x-i18n:
 }
 ```
 
-これにより、OpenClaw 内での自動起動と起動待ちがスキップされます。自動起動時の起動が遅い場合は、`channels.signal.startupTimeoutMs` を設定してください。
+これにより、OpenClaw 内での自動起動と起動待ちがスキップされます。自動起動時の起動が遅い場合は、`channels.signal.startupTimeoutMs` を設定してください。 自動スポーン時にゆっくり起動するには、 `channels.signal.startupTimeoutMs` を設定してください。
 
 ## アクセス制御（DM + グループ）
 
@@ -116,7 +109,7 @@ DM:
 - 承認方法:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- ペアリングは Signal の DM におけるデフォルトのトークン交換方式です。詳細: [Pairing](/channels/pairing)
+- ペアリングは Signal の DM におけるデフォルトのトークン交換方式です。詳細: [Pairing](/channels/pairing) 詳細: [Pairing](/channels/pairing)
 - `sourceUuid` からの UUID のみの送信者は、`channels.signal.allowFrom` 内で `uuid:<id>` として保存されます。
 
 グループ:
@@ -124,7 +117,7 @@ DM:
 - `channels.signal.groupPolicy = open | allowlist | disabled`。
 - `allowlist` が設定されている場合、`channels.signal.groupAllowFrom` がグループ内でトリガー可能なユーザーを制御します。
 
-## 仕組み（動作）
+## 動作の仕組み（挙動）
 
 - `signal-cli` はデーモンとして実行され、ゲートウェイは SSE 経由でイベントを読み取ります。
 - 受信メッセージは共通チャンネルエンベロープに正規化されます。
@@ -137,9 +130,9 @@ DM:
 - 添付ファイルをサポートします（`signal-cli` から取得した base64）。
 - デフォルトのメディア上限: `channels.signal.mediaMaxMb`（デフォルト 8）。
 - `channels.signal.ignoreAttachments` を使用するとメディアのダウンロードをスキップします。
-- グループ履歴コンテキストは `channels.signal.historyLimit`（または `channels.signal.accounts.*.historyLimit`）を使用し、`messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定してください（デフォルト 50）。
+- グループ履歴コンテキストは `channels.signal.historyLimit`（または `channels.signal.accounts.*.historyLimit`）を使用し、`messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定してください（デフォルト 50）。 `0`を無効にします（デフォルトは50）。
 
-## 入力中表示 + 既読通知
+## 入力+開封通知
 
 - **入力中インジケーター**: OpenClaw は `signal-cli sendTyping` を介して入力中シグナルを送信し、返信の実行中に更新します。
 - **既読通知**: `channels.signal.sendReadReceipts` が true の場合、OpenClaw は許可された DM の既読通知を転送します。
@@ -219,11 +212,11 @@ openclaw pairing list signal
 - `channels.signal.ignoreStories`: デーモンからのストーリーを無視。
 - `channels.signal.sendReadReceipts`: 既読通知を転送。
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled`（デフォルト: ペアリング）。
-- `channels.signal.allowFrom`: DM 許可リスト（E.164 または `uuid:<id>`）。`open` には `"*"` が必要です。Signal にはユーザー名がないため、電話番号/UUID ID を使用してください。
+- `channels.signal.allowFrom`: DM 許可リスト（E.164 または `uuid:<id>`）。`open` には `"*"` が必要です。Signal にはユーザー名がないため、電話番号/UUID ID を使用してください。 `open`には`"*"`が必要です。 シグナルにはユーザー名がありません。電話/UUID を使用してください。
 - `channels.signal.groupPolicy`: `open | allowlist | disabled`（デフォルト: 許可リスト）。
 - `channels.signal.groupAllowFrom`: グループ送信者の許可リスト。
 - `channels.signal.historyLimit`: コンテキストに含めるグループメッセージの最大数（0 で無効）。
-- `channels.signal.dmHistoryLimit`: DM 履歴のユーザーターン上限。ユーザーごとの上書き: `channels.signal.dms["<phone_or_uuid>"].historyLimit`。
+- `channels.signal.dmHistoryLimit`: ユーザターンのDM履歴制限。 `channels.signal.dmHistoryLimit`: DM 履歴のユーザーターン上限。ユーザーごとの上書き: `channels.signal.dms["<phone_or_uuid>"].historyLimit`。
 - `channels.signal.textChunkLimit`: 送信チャンクサイズ（文字数）。
 - `channels.signal.chunkMode`: `length`（デフォルト）または `newline` を使用して、長さ分割の前に空行（段落境界）で分割します。
 - `channels.signal.mediaMaxMb`: 受信/送信メディアの上限（MB）。

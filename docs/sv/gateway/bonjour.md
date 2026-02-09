@@ -4,26 +4,19 @@ read_when:
   - Felsökning av Bonjour-upptäcktsproblem på macOS/iOS
   - Ändra mDNS-tjänsttyper, TXT-poster eller upptäckts-UX
 title: "Bonjour-upptäckt"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:18Z
 ---
 
 # Bonjour / mDNS-upptäckt
 
-OpenClaw använder Bonjour (mDNS / DNS‑SD) som en **LAN‑endast bekvämlighet** för att upptäcka
-en aktiv Gateway (WebSocket‑endpoint). Det är best‑effort och ersätter **inte** SSH eller
-Tailnet‑baserad anslutning.
+OpenClaw använder Bonjour (mDNS / DNS‐SD) som en **LAN‐only bekvämlighet** för att upptäcka
+en aktiv Gateway (WebSocket slutpunkt). Den är bäst-ansträngning och ersätter **inte** SSH eller
+Skailnet-baserad anslutning.
 
 ## Wide‑area Bonjour (Unicast DNS‑SD) över Tailscale
 
-Om noden och gatewayen är på olika nätverk passerar inte multicast‑mDNS
-nätverksgränsen. Du kan behålla samma upptäckts‑UX genom att byta till **unicast DNS‑SD**
-(”Wide‑Area Bonjour”) över Tailscale.
+Om noden och gateway är på olika nätverk, multicast mDNS kommer inte att passera
+gränsen. Du kan behålla samma upptäckt UX genom att växla till **unicast DNS‐SD**
+("Wide‐Area Bonjour") över Tailscale.
 
 Övergripande steg:
 
@@ -33,8 +26,8 @@ nätverksgränsen. Du kan behålla samma upptäckts‑UX genom att byta till **u
 3. Konfigurera Tailscale **split DNS** så att din valda domän löses via den
    DNS‑servern för klienter (inklusive iOS).
 
-OpenClaw stöder vilken upptäcktsdomän som helst; `openclaw.internal.` är bara ett exempel.
-iOS/Android‑noder bläddrar både i `local.` och din konfigurerade wide‑area‑domän.
+OpenClaw stöder alla upptäcktsdomäner; `openclaw.internal.` är bara ett exempel.
+iOS/Android noder bläddra både `lokala` och din konfigurerade wide‐area domain.
 
 ### Gateway‑konfig (rekommenderas)
 
@@ -75,8 +68,8 @@ När klienter accepterar tailnet‑DNS kan iOS‑noder bläddra i
 
 ### Gateway‑lyssnarsäkerhet (rekommenderas)
 
-Gatewayns WS‑port (standard `18789`) binder till loopback som standard. För LAN/tailnet‑
-åtkomst, bind explicit och behåll autentisering aktiverad.
+Gateway WS-porten (standard `18789`) binder till loopback som standard. För LAN/tailnet
+åtkomst, bind explicit och håll auth aktiverad.
 
 För tailnet‑endast‑uppsättningar:
 
@@ -128,11 +121,11 @@ eller ett mDNS‑resolverproblem.
 
 ## Felsökning i Gateway‑loggar
 
-Gatewayn skriver en rullande loggfil (skrivs ut vid start som
-`gateway log file: ...`). Leta efter `bonjour:`‑rader, särskilt:
+Gateway skriver en rullande loggfil (tryckt vid start som
+`gateway loggfil: ...`). Leta efter `bonjour:` rader, särskilt:
 
 - `bonjour: advertise failed ...`
-- `bonjour: ... name conflict resolved` / `hostname conflict resolved`
+- `bonjour: ... namnkonflikt löst` / `hostname konflikt löst`
 - `bonjour: watchdog detected non-announced service ...`
 
 ## Felsökning på iOS‑nod
@@ -151,8 +144,8 @@ Loggen inkluderar tillståndsövergångar i webbläsaren och ändringar i result
 - **Bonjour passerar inte nätverk**: använd Tailnet eller SSH.
 - **Multicast blockeras**: vissa Wi‑Fi‑nätverk inaktiverar mDNS.
 - **Viloläge / gränssnittschurn**: macOS kan tillfälligt tappa mDNS‑resultat; försök igen.
-- **Bläddring fungerar men upplösning misslyckas**: håll maskinnamn enkla (undvik emojis eller
-  skiljetecken), och starta sedan om Gateway. Tjänstinstansnamnet härleds från
+- **Bläddra bland verk men lösa fel**: håll maskinnamnen enkla (undvik emojis eller
+  skiljeturering), starta sedan om Gateway. Tjänsten instans namn härstammar från
   värdnamnet, så alltför komplexa namn kan förvirra vissa resolvers.
 
 ## Escapade instansnamn (`\032`)

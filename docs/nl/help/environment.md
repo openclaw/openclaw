@@ -5,13 +5,6 @@ read_when:
   - Je bent bezig met het debuggen van ontbrekende API-sleutels in de Gateway
   - Je documenteert provider-authenticatie of deploymentomgevingen
 title: "Omgevingsvariabelen"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:25Z
 ---
 
 # Omgevingsvariabelen
@@ -58,7 +51,7 @@ Twee gelijkwaardige manieren om inline omgevingsvariabelen in te stellen (beide 
 }
 ```
 
-Equivalenten als omgevingsvariabele:
+Env var equivalenten:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`

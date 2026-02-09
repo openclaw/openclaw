@@ -4,21 +4,14 @@ read_when:
   - Linux companion app အခြေအနေကို ရှာဖွေနေချိန်
   - ပလက်ဖောင်း အကျုံးဝင်မှု သို့မဟုတ် ပါဝင်ကူညီမှုများကို စီစဉ်နေချိန်
 title: "Linux အက်ပ်"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:35Z
 ---
 
 # Linux အက်ပ်
 
-Gateway（ဂိတ်ဝေး） ကို Linux တွင် အပြည့်အဝ ပံ့ပိုးထားပါသည်။ **Node ကို အကြံပြုထားသော runtime** အဖြစ် သုံးရန် အကြံပြုပါသည်။
-Gateway အတွက် Bun ကို မအကြံပြုပါ (WhatsApp/Telegram အပြစ်အနာအဆာများကြောင့်)။
+9. Gateway ကို Linux ပေါ်တွင် အပြည့်အဝ ပံ့ပိုးထားပါသည်။ 10. **Node သည် အကြံပြုထားသော runtime ဖြစ်သည်**။
+10. Gateway အတွက် Bun ကို မအကြံပြုပါ (WhatsApp/Telegram bug များကြောင့်)။
 
-Native Linux companion apps များကို စီမံကိန်းအဖြစ် စီစဉ်ထားပါသည်။ တစ်ခုတည်ဆောက်ရန် ကူညီလိုပါက ပါဝင်ကူညီနိုင်ပါသည်။
+12. Native Linux companion app များကို စီစဉ်ထားပါသည်။ Contributions are welcome if you want to help build one.
 
 ## Beginner quick path (VPS)
 
@@ -71,7 +64,7 @@ openclaw doctor
 
 ## System control (systemd user unit)
 
-OpenClaw သည် ပုံမှန်အားဖြင့် systemd **user** service ကို ထည့်သွင်းတပ်ဆင်ပါသည်။ မျှဝေသုံးစွဲရန် သို့မဟုတ် အမြဲဖွင့်ထားရသော ဆာဗာများအတွက် **system** service ကို အသုံးပြုပါ။ unit အပြည့်အစုံ ဥပမာနှင့် လမ်းညွှန်ချက်များကို [Gateway runbook](/gateway) တွင် ရရှိနိုင်ပါသည်။
+14. OpenClaw သည် ပုံမှန်အားဖြင့် systemd **user** service ကို ထည့်သွင်းပေးပါသည်။ 15. မျှဝေသုံးစွဲသည့် သို့မဟုတ် အမြဲဖွင့်ထားသော server များအတွက် **system** service ကို အသုံးပြုပါ။ 16. unit အပြည့်အစုံ ဥပမာနှင့် လမ်းညွှန်ချက်များကို [Gateway runbook](/gateway) တွင် ကြည့်နိုင်ပါသည်။
 
 အနည်းဆုံး တပ်ဆင်ခြင်း:
 

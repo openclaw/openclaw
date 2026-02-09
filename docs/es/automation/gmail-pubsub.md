@@ -4,20 +4,13 @@ read_when:
   - Conectar disparadores de la bandeja de entrada de Gmail a OpenClaw
   - Configurar push de Pub/Sub para despertar al agente
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:29Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 Objetivo: vigilancia de Gmail -> push de Pub/Sub -> `gog gmail watch serve` -> webhook de OpenClaw.
 
-## Prerrequisitos
+## Prereqs
 
 - `gcloud` instalado e iniciado sesión ([guía de instalación](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) instalado y autorizado para la cuenta de Gmail ([gogcli.sh](https://gogcli.sh/)).

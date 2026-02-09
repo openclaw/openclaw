@@ -5,13 +5,6 @@ read_when:
   - Отладка ответов нескольких агентов в WhatsApp
 status: experimental
 title: "Группы рассылки"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:19Z
 ---
 
 # Группы рассылки
@@ -80,7 +73,7 @@ Agents:
 Добавьте верхнеуровневый раздел `broadcast` (рядом с `bindings`). Ключи — это peer id WhatsApp:
 
 - групповые чаты: JID группы (например, `120363403215116621@g.us`)
-- личные сообщения: номер телефона в формате E.164 (например, `+15551234567`)
+- DMs: E.164 номер телефона (например, `+15551234567`)
 
 ```json
 {

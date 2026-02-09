@@ -3,13 +3,6 @@ summary: "Конфигурация и настройка чат-бота Twitch"
 read_when:
   - Настройка интеграции чата Twitch для OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:23Z
 ---
 
 # Twitch (плагин)
@@ -269,7 +262,7 @@ openclaw channels status --probe
 
 **Проверьте, что бот находится в канале:** Бот должен присоединиться к каналу, указанному в `channel`.
 
-### Проблемы с токеном
+### Замечания по токенам
 
 **«Failed to connect» или ошибки аутентификации:**
 

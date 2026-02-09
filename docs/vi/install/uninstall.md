@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn gỡ OpenClaw khỏi một máy
   - Dịch vụ Gateway vẫn chạy sau khi gỡ cài đặt
 title: "Gỡ cài đặt"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:24Z
 ---
 
 # Gỡ cài đặt
@@ -88,14 +81,15 @@ Dùng cách này nếu dịch vụ Gateway vẫn chạy nhưng `openclaw` không
 
 ### macOS (launchd)
 
-Nhãn mặc định là `bot.molt.gateway` (hoặc `bot.molt.<profile>`; bản cũ `com.openclaw.*` có thể vẫn tồn tại):
+Default label is `bot.molt.gateway` (or `bot.molt.<profile>Nếu bạn đã dùng profile, hãy thay thế nhãn và tên plist bằng `bot.molt.<profile>
+\`.
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-Nếu bạn dùng profile, hãy thay nhãn và tên plist bằng `bot.molt.<profile>`. Xóa mọi plist `com.openclaw.*` cũ nếu có.
+If you used a profile, replace the label and plist name with `bot.molt.<profile>`. Remove any legacy `com.openclaw.*` plists if present.
 
 ### Linux (systemd user unit)
 
@@ -109,8 +103,8 @@ systemctl --user daemon-reload
 
 ### Windows (Scheduled Task)
 
-Tên tác vụ mặc định là `OpenClaw Gateway` (hoặc `OpenClaw Gateway (<profile>)`).
-Script của tác vụ nằm trong thư mục trạng thái của bạn.
+Default task name is `OpenClaw Gateway` (or `OpenClaw Gateway (<profile>)`).
+The task script lives under your state dir.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,8 +117,8 @@ Nếu bạn dùng profile, hãy xóa tên tác vụ tương ứng và `~\.opencl
 
 ### Cài đặt thông thường (install.sh / npm / pnpm / bun)
 
-Nếu bạn dùng `https://openclaw.ai/install.sh` hoặc `install.ps1`, CLI đã được cài bằng `npm install -g openclaw@latest`.
-Hãy gỡ bằng `npm rm -g openclaw` (hoặc `pnpm remove -g` / `bun remove -g` nếu bạn cài theo cách đó).
+If you used `https://openclaw.ai/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
+Remove it with `npm rm -g openclaw` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Checkout từ nguồn (git clone)
 

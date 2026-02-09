@@ -4,13 +4,6 @@ read_when:
   - 你想在保留 CLI 已安裝的情況下清除本機狀態
   - 你想進行乾跑（dry-run）以查看將會被移除的項目
 title: "重置"
-x-i18n:
-  source_path: cli/reset.md
-  source_hash: 08afed5830f892e0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:22Z
 ---
 
 # `openclaw reset`

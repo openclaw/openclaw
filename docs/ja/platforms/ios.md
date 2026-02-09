@@ -5,20 +5,13 @@ read_when:
   - ソースから iOS アプリを実行するとき
   - ゲートウェイ検出やキャンバスコマンドをデバッグするとき
 title: "iOS アプリ"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:30Z
 ---
 
 # iOS アプリ（ノード）
 
-提供状況：内部プレビュー。iOS アプリはまだ一般公開されていません。
+可用性: 内部プレビュー。 提供状況：内部プレビュー。iOS アプリはまだ一般公開されていません。
 
-## できること
+## 何を行うか
 
 - WebSocket（LAN または tailnet）経由で Gateway（ゲートウェイ）に接続します。
 - ノードの機能を公開します：Canvas、画面スナップショット、カメラキャプチャ、位置情報、トークモード、音声ウェイク。
@@ -60,12 +53,13 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour（LAN）
 
-Gateway は `_openclaw-gw._tcp` を `local.` でアドバタイズします。iOS アプリはこれらを自動的に一覧表示します。
+Gateway は `_openclaw-gw._tcp` を `local.` でアドバタイズします。iOS アプリはこれらを自動的に一覧表示します。 iOSアプリはこれらを自動的に一覧表示します。
 
 ### Tailnet（クロスネットワーク）
 
 mDNS がブロックされている場合は、ユニキャスト DNS-SD ゾーン（ドメインを選択。例：`openclaw.internal.`）と Tailscale の分割 DNS を使用します。
 CoreDNS の例については [Bonjour](/gateway/bonjour) を参照してください。
+CoreDNSの例については、 [Bonjour](/gateway/bonjour) を参照してください。
 
 ### 手動ホスト／ポート
 
@@ -73,7 +67,7 @@ CoreDNS の例については [Bonjour](/gateway/bonjour) を参照してくだ�
 
 ## Canvas ＋ A2UI
 
-iOS ノードは WKWebView キャンバスをレンダリングします。`node.invoke` を使用して操作します：
+iOS ノードは WKWebView キャンバスをレンダリングします。`node.invoke` を使用して操作します： `node.invoke` を使用してドライブします。
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

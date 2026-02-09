@@ -3,13 +3,6 @@ summary: "Twitch 채팅 봇 구성 및 설정"
 read_when:
   - OpenClaw 를 위한 Twitch 채팅 통합 설정 시
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:18Z
 ---
 
 # Twitch (플러그인)
@@ -67,7 +60,7 @@ openclaw plugins install ./extensions/twitch
 }
 ```
 
-## 개요
+## 무엇인가요
 
 - Gateway(게이트웨이) 가 소유하는 Twitch 채널입니다.
 - 결정적 라우팅: 응답은 항상 Twitch 로 돌아갑니다.
@@ -110,7 +103,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 }
 ```
 
-환경 변수와 설정이 모두 지정된 경우 설정이 우선합니다.
+환경 변수와 설정이 모두 있는 경우 설정이 우선합니다.
 
 ### 접근 제어 (권장)
 
@@ -134,7 +127,7 @@ Twitch 사용자 ID 찾기: [https://www.streamweasels.com/tools/convert-twitch-
 
 ## 토큰 갱신 (선택 사항)
 
-[Twitch Token Generator](https://twitchtokengenerator.com/) 의 토큰은 자동으로 갱신할 수 없습니다. 만료 시 재생성하십시오.
+[Twitch Token Generator](https://twitchtokengenerator.com/) 의 토큰은 자동으로 갱신할 수 없습니다.
 
 자동 토큰 갱신을 위해 [Twitch Developer Console](https://dev.twitch.tv/console) 에서 자체 Twitch 애플리케이션을 생성하고 설정에 추가하십시오:
 

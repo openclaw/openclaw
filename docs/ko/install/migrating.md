@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 를 새 노트북/서버로 이동하는 경우
   - 세션, 인증, 채널 로그인(WhatsApp 등)을 유지하려는 경우
 title: "마이그레이션 가이드"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:35Z
 ---
 
 # 새 머신으로 OpenClaw 마이그레이션
@@ -26,7 +19,7 @@ x-i18n:
 
 ## 시작하기 전에 (마이그레이션 대상 이해)
 
-### 1) 상태 디렉토리 식별
+### 1. 상태 디렉토리 식별
 
 대부분의 설치는 기본값을 사용합니다:
 
@@ -45,7 +38,7 @@ openclaw status
 
 출력에서 `OPENCLAW_STATE_DIR` / 프로필 언급을 확인하십시오. 여러 Gateway 를 실행 중이라면 각 프로필마다 반복하십시오.
 
-### 2) 워크스페이스 식별
+### 2. 워크스페이스 식별
 
 일반적인 기본값:
 
@@ -54,7 +47,7 @@ openclaw status
 
 워크스페이스에는 `MEMORY.md`, `USER.md`, `memory/*.md` 과 같은 파일이 있습니다.
 
-### 3) 무엇이 유지되는지 이해
+### 3. 무엇이 유지되는지 이해
 
 상태 디렉토리와 워크스페이스를 **모두** 복사하면 다음이 유지됩니다:
 
@@ -111,7 +104,7 @@ tar -czf openclaw-workspace.tgz .openclaw/workspace
 
 일반적인 방법:
 
-- `scp` 로 tarball 을 전송 후 압축 해제
+- `scp` the tarballs and extract
 - `rsync -a` 로 SSH 를 통해 복사
 - 외장 드라이브
 
@@ -137,7 +130,7 @@ openclaw gateway restart
 openclaw status
 ```
 
-## 일반적인 함정 (및 회피 방법)
+## Common footguns (and how to avoid them)
 
 ### 함정: 프로필 / 상태 디렉토리 불일치
 

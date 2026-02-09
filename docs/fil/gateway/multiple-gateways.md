@@ -4,18 +4,11 @@ read_when:
   - Tumatakbo ng higit sa isang Gateway sa parehong makina
   - Kailangan mo ng hiwalay na config/state/ports bawat Gateway
 title: "Maramihang Gateway"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:35Z
 ---
 
 # Maramihang Gateway (parehong host)
 
-Karamihan ng setup ay dapat gumamit ng isang Gateway dahil kayang hawakan ng isang Gateway ang maraming koneksyon sa pagmemensahe at mga agent. Kung kailangan mo ng mas matibay na isolation o redundancy (hal., isang rescue bot), magpatakbo ng hiwalay na mga Gateway na may hiwalay na mga profile/port.
+Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. 46. Ang console formatter ay **TTY-aware** at nagpi-print ng pare-pareho, may-prefix na mga linya.
 
 ## Checklist ng isolation (kinakailangan)
 
@@ -87,7 +80,7 @@ Base port = `gateway.port` (o `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - port ng browser control service = base + 2 (loopback lamang)
 - `canvasHost.port = base + 4`
-- Ang mga Browser profile CDP port ay awtomatikong inia-allocate mula sa `browser.controlPort + 9 .. + 108`
+- 47. Kung kailangan mo ng mas malakas na isolation o redundancy (hal., isang rescue bot), magpatakbo ng magkakahiwalay na Gateways na may hiwalay na profiles/ports. + 108\`
 
 Kung io-override mo ang alinman sa mga ito sa config o env, kailangan mong panatilihing natatangi ang mga ito kada instance.
 
@@ -95,8 +88,8 @@ Kung io-override mo ang alinman sa mga ito sa config o env, kailangan mong panat
 
 - **Huwag** i-pin ang `browser.cdpUrl` sa parehong mga value sa maraming instance.
 - Kailangan ng bawat instance ang sarili nitong browser control port at CDP range (na hinango mula sa gateway port nito).
-- Kung kailangan mo ng mga explicit na CDP port, itakda ang `browser.profiles.<name>.cdpPort` kada instance.
-- Remote Chrome: gamitin ang `browser.profiles.<name>.cdpUrl` (kada profile, kada instance).
+- 48. Ang mga Browser profile CDP port ay awtomatikong ina-allocate mula sa `browser.controlPort + 9 ...cdpPort` per instance.
+- 49. Kung kailangan mo ng tahasang CDP ports, itakda ang `browser.profiles.<name>50. Remote Chrome: gamitin ang `browser.profiles.<name>
 
 ## Halimbawa ng manual env
 

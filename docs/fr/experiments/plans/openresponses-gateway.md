@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "Plan de la Gateway OpenResponses"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:38Z
 ---
 
 # Plan d’intégration de la Gateway OpenResponses
@@ -30,13 +23,13 @@ définit `/v1/responses`, et non `/v1/chat/completions`.
 - Conserver Chat Completions comme couche de compatibilité, facile à désactiver et à supprimer à terme.
 - Standardiser la validation et l’analyse avec des schémas isolés et réutilisables.
 
-## Hors périmètre
+## Non‑objectifs
 
 - Parité complète des fonctionnalités OpenResponses lors du premier passage (images, fichiers, outils hébergés).
 - Remplacement de la logique interne d’exécution des agents ou de l’orchestration des outils.
 - Modification du comportement existant `/v1/chat/completions` durant la première phase.
 
-## Synthèse de recherche
+## Résumé de la recherche
 
 Sources : OpenAPI OpenResponses, site de la spécification OpenResponses et billet de blog Hugging Face.
 

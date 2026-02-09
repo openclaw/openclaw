@@ -5,18 +5,11 @@ read_when:
   - คุณกำลังดีบักว่าทำไมโมเดลถึง “รู้” บางอย่าง (หรือทำไมถึงลืม)
   - คุณต้องการลดโอเวอร์เฮดของ context (/context, /status, /compact)
 title: "Context"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:14Z
 ---
 
 # Context
 
-“Context” คือ **ทุกอย่างที่ OpenClaw ส่งให้โมเดลสำหรับการรันหนึ่งครั้ง** โดยถูกจำกัดด้วย **context window** ของโมเดล (ขีดจำกัดโทเคน)
+“Context” คือ **ทุกอย่างที่ OpenClaw ส่งให้โมเดลสำหรับการรันหนึ่งครั้ง** โดยถูกจำกัดด้วย **context window** ของโมเดล (ขีดจำกัดโทเคน) It is bounded by the model’s **context window** (token limit).
 
 แบบจำลองทางความคิดสำหรับผู้เริ่มต้น:
 
@@ -96,7 +89,7 @@ Top tools (schema size):
 
 ## OpenClaw สร้าง system prompt อย่างไร
 
-System prompt เป็น **ของ OpenClaw** และถูกสร้างใหม่ทุกครั้งที่รัน โดยประกอบด้วย:
+System prompt เป็น **ของ OpenClaw** และถูกสร้างใหม่ทุกครั้งที่รัน โดยประกอบด้วย: It includes:
 
 - รายการเครื่องมือ + คำอธิบายสั้นๆ
 - รายการSkills (เฉพาะเมทาดาทา; ดูด้านล่าง)
@@ -119,26 +112,26 @@ System prompt เป็น **ของ OpenClaw** และถูกสร้า
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (เฉพาะครั้งแรกที่รัน)
 
-ไฟล์ขนาดใหญ่จะถูกตัดทอนต่อไฟล์ด้วย `agents.defaults.bootstrapMaxChars` (ค่าเริ่มต้น `20000` ตัวอักษร) โดย `/context` จะแสดงขนาด **ดิบเทียบกับที่ถูกฉีด** และบอกว่ามีการตัดทอนหรือไม่
+ไฟล์ขนาดใหญ่จะถูกตัดทอนต่อไฟล์ด้วย `agents.defaults.bootstrapMaxChars` (ค่าเริ่มต้น `20000` ตัวอักษร) โดย `/context` จะแสดงขนาด **ดิบเทียบกับที่ถูกฉีด** และบอกว่ามีการตัดทอนหรือไม่ `/context` shows **raw vs injected** sizes and whether truncation happened.
 
 ## Skills: อะไรถูกฉีดเข้าไป vs โหลดตามต้องการ
 
-System prompt จะมี **skills list** แบบกะทัดรัด (ชื่อ + คำอธิบาย + ตำแหน่ง) ซึ่งมีโอเวอร์เฮดจริง
+System prompt จะมี **skills list** แบบกะทัดรัด (ชื่อ + คำอธิบาย + ตำแหน่ง) ซึ่งมีโอเวอร์เฮดจริง This list has real overhead.
 
-คำสั่งของSkill _จะไม่_ ถูกรวมมาโดยค่าเริ่มต้น โมเดลคาดว่าจะ `read` `SKILL.md` ของSkill **เฉพาะเมื่อจำเป็น**
+Skill instructions are _not_ included by default. คำสั่งของSkill _จะไม่_ ถูกรวมมาโดยค่าเริ่มต้น โมเดลคาดว่าจะ `read` `SKILL.md` ของSkill **เฉพาะเมื่อจำเป็น**
 
 ## Tools: มีต้นทุนสองส่วน
 
 เครื่องมือมีผลต่อ context สองทาง:
 
 1. **ข้อความรายการเครื่องมือ** ใน system prompt (สิ่งที่คุณเห็นเป็น “Tooling”)
-2. **สคีมาเครื่องมือ** (JSON) ซึ่งถูกส่งให้โมเดลเพื่อให้เรียกใช้เครื่องมือได้ แม้ว่าคุณจะไม่เห็นเป็นข้อความธรรมดา แต่ก็ยังนับรวมใน context
+2. **Tool schemas** (JSON). These are sent to the model so it can call tools. They count toward context even though you don’t see them as plain text.
 
 `/context detail` จะแจกแจงสคีมาเครื่องมือที่ใหญ่ที่สุดเพื่อให้คุณเห็นว่าอะไรเป็นตัวหลักที่กินพื้นที่
 
 ## Commands, directives และ “inline shortcuts”
 
-Slash commands ถูกจัดการโดย Gateway มีพฤติกรรมที่แตกต่างกันดังนี้:
+Slash commands ถูกจัดการโดย Gateway มีพฤติกรรมที่แตกต่างกันดังนี้: There are a few different behaviors:
 
 - **Standalone commands**: ข้อความที่เป็นเพียง `/...` จะรันเป็นคำสั่ง
 - **Directives**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` จะถูกตัดออกก่อนที่โมเดลจะเห็นข้อความ

@@ -4,13 +4,6 @@ read_when:
   - CLI-opdrachten of -opties toevoegen of wijzigen
   - Nieuwe opdrachtoppervlakken documenteren
 title: "CLI-referentie"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:06Z
 ---
 
 # CLI-referentie
@@ -577,11 +570,11 @@ Notities:
 
 - Het overzicht bevat de status van de Gateway + node-hostservice wanneer beschikbaar.
 
-### Gebruikstracking
+### Gebruik volgen
 
 OpenClaw kan gebruik/quota van providers tonen wanneer OAuth/API-referenties beschikbaar zijn.
 
-Weergaven:
+Vereist:
 
 - `/status` (voegt een korte regel met providergebruik toe wanneer beschikbaar)
 - `openclaw status --usage` (print een volledige provideruitsplitsing)

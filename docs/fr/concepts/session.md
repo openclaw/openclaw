@@ -3,13 +3,6 @@ summary: "Regles de gestion des sessions, cles et persistance pour les conversat
 read_when:
   - Modification de la gestion ou du stockage des sessions
 title: "Gestion des sessions"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: 1486759a5c2fdced
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:44Z
 ---
 
 # Gestion des sessions
@@ -24,14 +17,14 @@ Utilisez `session.dmScope` pour controler la facon dont les **messages prives** 
 - `per-account-channel-peer` : isolement par compte + canal + expediteur (recommande pour les boites de reception multi-comptes).
   Utilisez `session.identityLinks` pour mapper des identifiants de pairs prefixes par fournisseur vers une identite canonique afin que la meme personne partage une session de MP a travers les canaux lors de l’utilisation de `per-peer`, `per-channel-peer` ou `per-account-channel-peer`.
 
-### Mode MP securise (recommande pour les configurations multi-utilisateurs)
+## Mode MP securise (recommande pour les configurations multi-utilisateurs)
 
 > **Avertissement de securite :** si votre agent peut recevoir des MP de **plusieurs personnes**, vous devriez fortement envisager d’activer le mode MP securise. Sans cela, tous les utilisateurs partagent le meme contexte de conversation, ce qui peut entrainer des fuites d’informations privees entre utilisateurs.
 
 **Exemple du probleme avec les parametres par defaut :**
 
 - Alice (`<SENDER_A>`) envoie un message a votre agent au sujet d’un sujet prive (par exemple, un rendez-vous medical)
-- Bob (`<SENDER_B>`) envoie un message a votre agent en demandant « De quoi parlions-nous ? »
+- Bob (`<SENDER_B>`) envoie un message a votre agent en demandant « De quoi parlions-nous ? »
 - Comme les deux MP partagent la meme session, le modele peut repondre a Bob en utilisant le contexte precedent d’Alice.
 
 **La solution :** definissez `dmScope` pour isoler les sessions par utilisateur :
@@ -67,7 +60,7 @@ Tout l’etat des sessions est **detenu par la gateway** (le OpenClaw « maitr
 - En **mode distant**, le stockage des sessions qui vous concerne reside sur l’hote de la gateway distante, pas sur votre Mac.
 - Les comptes de tokens affiches dans les UI proviennent des champs de stockage de la gateway (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Les clients n’analysent pas les transcriptions JSONL pour « corriger » les totaux.
 
-## Ou reside l’etat
+## Où se trouve l'État
 
 - Sur l’**hote de la gateway** :
   - Fichier de stockage : `~/.openclaw/agents/<agentId>/sessions/sessions.json` (par agent).

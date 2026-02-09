@@ -4,13 +4,6 @@ read_when:
   - Chcesz automatyzacji sterowanej zdarzeniami dla /new, /reset, /stop oraz zdarzeń cyklu życia agenta
   - Chcesz tworzyć, instalować lub debugować hooki
 title: "Hooki"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:16Z
 ---
 
 # Hooki
@@ -610,7 +603,7 @@ const handler: HookHandler = async (event) => {
 };
 ```
 
-### Obsługuj błędy w sposób bezpieczny
+### Obsługa błędów gracyjnie
 
 Zawsze opakowuj ryzykowne operacje:
 
@@ -807,7 +800,7 @@ Sprawdź wymagania:
 openclaw hooks info my-hook
 ```
 
-Zwróć uwagę na brakujące:
+Szukaj brakujących:
 
 - Binaria (sprawdź PATH)
 - Zmienne środowiskowe
@@ -831,7 +824,7 @@ Zwróć uwagę na brakujące:
    ./scripts/clawlog.sh | grep hook
    ```
 
-### Błędy procedury obsługi
+### Błędy obsługi
 
 Sprawdź błędy TypeScript/importów:
 

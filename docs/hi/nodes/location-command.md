@@ -4,13 +4,6 @@ read_when:
   - Location नोड सपोर्ट या अनुमति UI जोड़ते समय
   - बैकग्राउंड Location + पुश फ्लो डिज़ाइन करते समय
 title: "Location कमांड"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:31Z
 ---
 
 # Location कमांड (नोड्स)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## सेलेक्टर क्यों (सिर्फ़ स्विच क्यों नहीं)
 
-OS अनुमतियाँ बहु-स्तरीय होती हैं। हम ऐप में सेलेक्टर दिखा सकते हैं, लेकिन वास्तविक अनुमति OS तय करता है।
+हम ऐप में एक selector एक्सपोज़ कर सकते हैं, लेकिन वास्तविक अनुमति OS ही तय करता है। iOS/macOS: उपयोगकर्ता सिस्टम प्रॉम्प्ट्स/Settings में **While Using** या **Always** चुन सकता है।
 
-- iOS/macOS: उपयोगकर्ता सिस्टम प्रॉम्प्ट/सेटिंग्स में **While Using** या **Always** चुन सकता है। ऐप अपग्रेड का अनुरोध कर सकता है, लेकिन OS को सेटिंग्स की आवश्यकता हो सकती है।
+- ऐप अपग्रेड का अनुरोध कर सकता है, लेकिन OS को Settings की आवश्यकता हो सकती है। वैकल्पिक।
 - Android: बैकग्राउंड Location एक अलग अनुमति है; Android 10+ पर अक्सर सेटिंग्स फ्लो आवश्यक होता है।
 - Precise Location एक अलग अनुमति है (iOS 14+ “Precise”, Android में “fine” बनाम “coarse”)।
 
@@ -47,7 +40,7 @@ UI व्यवहार:
 
 ## Permissions mapping (node.permissions)
 
-वैकल्पिक। macOS नोड permissions मैप के माध्यम से `location` रिपोर्ट करता है; iOS/Android इसे छोड़ सकते हैं।
+macOS node permissions मैप के माध्यम से `location` रिपोर्ट करता है; iOS/Android इसे छोड़ सकते हैं। iOS: Always अनुमति + background location मोड आवश्यक है।
 
 ## Command: `location.get`
 
@@ -103,7 +96,7 @@ Errors (स्थिर कोड):
 
 नोट्स:
 
-- iOS: Always अनुमति + बैकग्राउंड Location मोड आवश्यक। Silent push throttled हो सकता है; बीच-बीच में विफलताओं की अपेक्षा करें।
+- Silent push throttled हो सकता है; बीच‑बीच में विफलताओं की अपेक्षा करें। Always: “Allow background location.
 - Android: बैकग्राउंड Location के लिए foreground service आवश्यक हो सकती है; अन्यथा, अस्वीकृति की अपेक्षा करें।
 
 ## Model/tooling integration
@@ -116,5 +109,5 @@ Errors (स्थिर कोड):
 
 - Off: “Location sharing अक्षम है।”
 - While Using: “केवल तब जब OpenClaw खुला हो।”
-- Always: “बैकग्राउंड Location की अनुमति दें। सिस्टम अनुमति आवश्यक है।”
-- Precise: “सटीक GPS Location का उपयोग करें। अनुमानित Location साझा करने के लिए बंद करें।”
+- Requires system permission.” Precise: “Use precise GPS location.
+- Toggle off to share approximate location.” OpenClaw reply pipeline चलने से पहले **inbound media** (image/audio/video) का **सारांश** बना सकता है।

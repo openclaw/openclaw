@@ -3,13 +3,6 @@ summary: "Accès et authentification du tableau de bord de la Gateway (UI de con
 read_when:
   - Modification des modes d’authentification ou d’exposition du tableau de bord
 title: "Tableau de bord"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: 852e359885574fa3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:10Z
 ---
 
 # Tableau de bord (UI de contrôle)

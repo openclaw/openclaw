@@ -1,15 +1,8 @@
 ---
-summary: „Notizen zu Dev-Agent-Werkzeugen (C-3PO)“
+summary: "„Notizen zu Dev-Agent-Werkzeugen (C-3PO)“"
 read_when:
-  - Bei Verwendung der Dev-Gateway-Vorlagen
+  - Verwendung der Dev-Gateway-Vorlagen
   - Beim Aktualisieren der Standardidentität des Dev-Agenten
-x-i18n:
-  source_path: reference/templates/TOOLS.dev.md
-  source_hash: 3d41097967c98116
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:12Z
 ---
 
 # TOOLS.md – Hinweise zu Benutzerwerkzeugen (bearbeitbar)

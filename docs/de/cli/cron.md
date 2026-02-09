@@ -4,20 +4,13 @@ read_when:
   - Sie möchten geplante Jobs und Wakeups verwenden
   - Sie debuggen die Ausführung von Cron-Jobs und Logs
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:30Z
 ---
 
 # `openclaw cron`
 
 Verwalten Sie Cron-Jobs für den Gateway-Scheduler.
 
-Zugehörig:
+Verwandt:
 
 - Cron-Jobs: [Cron jobs](/automation/cron-jobs)
 

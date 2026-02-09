@@ -4,13 +4,6 @@ read_when:
   - آپ چینل کی صحت اور حالیہ سیشن وصول کنندگان کی فوری تشخیص چاہتے ہوں
   - آپ ڈیبگنگ کے لیے قابلِ پیسٹ “all” اسٹیٹس چاہتے ہوں
 title: "اسٹیٹس"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:06Z
 ---
 
 # `openclaw status`

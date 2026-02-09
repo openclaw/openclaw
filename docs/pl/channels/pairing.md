@@ -5,13 +5,6 @@ read_when:
   - Parowanie nowego węzła iOS/Android
   - Przegląd stanu bezpieczeństwa OpenClaw
 title: "Parowanie"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:51Z
 ---
 
 # Parowanie
@@ -24,7 +17,7 @@ Jest używane w dwóch miejscach:
 
 Kontekst bezpieczeństwa: [Security](/gateway/security)
 
-## 1) Parowanie DM-ów (dostęp do czatu przychodzącego)
+## 1. Parowanie DM-ów (dostęp do czatu przychodzącego)
 
 Gdy kanał jest skonfigurowany z polityką DM `pairing`, nieznani nadawcy otrzymują krótki kod, a ich wiadomość **nie jest przetwarzana** do momentu zatwierdzenia.
 
@@ -36,7 +29,7 @@ Kody parowania:
 - **Wygasają po 1 godzinie**. Bot wysyła wiadomość parowania tylko wtedy, gdy tworzony jest nowy wniosek (w przybliżeniu raz na godzinę na nadawcę).
 - Oczekujące wnioski parowania DM są domyślnie ograniczone do **3 na kanał**; dodatkowe wnioski są ignorowane, dopóki jeden nie wygaśnie lub nie zostanie zatwierdzony.
 
-### Zatwierdzanie nadawcy
+### Zatwierdź nadawcę
 
 ```bash
 openclaw pairing list telegram
@@ -54,7 +47,7 @@ Przechowywane w `~/.openclaw/credentials/`:
 
 Traktuj je jako wrażliwe (kontrolują dostęp do Twojego asystenta).
 
-## 2) Parowanie urządzeń węzłów (iOS/Android/macOS/węzły headless)
+## 2. Parowanie urządzeń węzłów (iOS/Android/macOS/węzły headless)
 
 Węzły łączą się z Gateway jako **urządzenia** z `role: node`. Gateway
 tworzy wniosek parowania urządzenia, który musi zostać zatwierdzony.

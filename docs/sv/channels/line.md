@@ -5,23 +5,17 @@ read_when:
   - Du behöver konfigurera LINE-webhook + autentiseringsuppgifter
   - Du vill använda LINE-specifika meddelandealternativ
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:22Z
 ---
 
 # LINE (plugin)
 
-LINE ansluter till OpenClaw via LINE Messaging API. Pluginen körs som en webhook‑
-mottagare på gatewayen och använder din channel access token + channel secret för
+LINE ansluter till OpenClaw via LINE Messaging API. Pluginen körs som en webhook
+mottagare på gateway och använder din kanal åtkomsttoken + kanal hemlighet för
 autentisering.
 
-Status: stöds via plugin. Direktmeddelanden, gruppchattar, media, platser, Flex‑
-meddelanden, mallmeddelanden och snabbsvar stöds. Reaktioner och trådar stöds inte.
+Status: stöds via plugin. Direktmeddelanden, gruppchattar, media, platser, Flex
+meddelanden, mallmeddelanden och snabba svar stöds. Reaktioner och trådar
+stöds inte.
 
 ## Plugin krävs
 
@@ -50,9 +44,9 @@ openclaw plugins install ./extensions/line
 https://gateway-host/line/webhook
 ```
 
-Gatewayen svarar på LINEs webhook‑verifiering (GET) och inkommande händelser (POST).
-Om du behöver en anpassad sökväg, ställ in `channels.line.webhookPath` eller
-`channels.line.accounts.<id>.webhookPath` och uppdatera URL:en därefter.
+Gateway svarar på LINE: s webhook verifiering (GET) och inkommande händelser (POST).
+Om du behöver en anpassad sökväg, ange `channels.line.webhookPath` eller
+`channels.line.accounts.<id>.webhookPath` och uppdatera URL därefter.
 
 ## Konfiguration
 
@@ -109,8 +103,8 @@ Flera konton:
 
 ## Åtkomstkontroll
 
-Direktmeddelanden använder parning som standard. Okända avsändare får en
-parningskod och deras meddelanden ignoreras tills de godkänns.
+Direktmeddelanden standard att para ihop. Okända avsändare får en parningskod och deras
+-meddelanden ignoreras tills de godkänts.
 
 ```bash
 openclaw pairing list line
@@ -123,9 +117,9 @@ Tillåtelselistor och policyer:
 - `channels.line.allowFrom`: tillåtelselista med LINE‑användar‑ID:n för DM
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: tillåtelselista med LINE‑användar‑ID:n för grupper
-- Per‑grupp‑överskrivningar: `channels.line.groups.<groupId>.allowFrom`
+- Åsidosätter per grupp: `channels.line.groups.<groupId>.allowFrom`
 
-LINE‑ID:n är skiftlägeskänsliga. Giltiga ID:n ser ut så här:
+LINE-ID är skiftlägeskänsliga. Giltiga ID ser ut som:
 
 - Användare: `U` + 32 hex‑tecken
 - Grupp: `C` + 32 hex‑tecken

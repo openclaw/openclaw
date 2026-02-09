@@ -3,13 +3,6 @@ summary: "Configuração e instalação do bot de chat do Twitch"
 read_when:
   - Configurando a integração de chat do Twitch para o OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:17Z
 ---
 
 # Twitch (plugin)
@@ -128,7 +121,7 @@ Prefira `allowFrom` para uma lista de permissões rígida. Use `allowedRoles` se
 
 **Papéis disponíveis:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
-**Por que IDs de usuário?** Nomes de usuário podem mudar, permitindo falsificação. IDs de usuário são permanentes.
+**Por que IDs de usuário?** Nomes de usuário podem mudar, permitindo falsificação. IDs de usuário são permanentes. IDs de usuário são permanentes.
 
 Encontre seu ID de usuário do Twitch: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Converta seu nome de usuário do Twitch em ID)
 

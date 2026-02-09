@@ -2,14 +2,7 @@
 summary: "使用 SSH 通道（Gateway WS）與 tailnet 的遠端存取"
 read_when:
   - 執行或疑難排解遠端 Gateway 設定時
-title: "遠端存取"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:16Z
+title: "13. 遠端存取"
 ---
 
 # 遠端存取（SSH、通道與 tailnet）
@@ -26,10 +19,10 @@ x-i18n:
 
 ## 常見的 VPN／tailnet 設定（代理程式所在位置）
 
-將 **閘道器主機** 視為「代理程式所在的位置」。它擁有工作階段、身分驗證設定檔、頻道與狀態。
-你的筆電／桌機（以及節點）會連線到該主機。
+Think of the **Gateway host** as “where the agent lives.” It owns sessions, auth profiles, channels, and state.
+Your laptop/desktop (and nodes) connect to that host.
 
-### 1) tailnet 中的常駐 Gateway（VPS 或家用伺服器）
+### 1. tailnet 中的常駐 Gateway（VPS 或家用伺服器）
 
 在持久運作的主機上執行 Gateway，並透過 **Tailscale** 或 SSH 存取。
 
@@ -39,16 +32,16 @@ x-i18n:
 
 當你的筆電經常休眠，但你希望代理程式全年無休時，這是理想方案。
 
-### 2) 家用桌機執行 Gateway，筆電作為遠端控制
+### 2. 家用桌機執行 Gateway，筆電作為遠端控制
 
-筆電 **不** 執行代理程式，而是遠端連線：
+筆電 **不** 執行代理程式，而是遠端連線： It connects remotely:
 
 - 使用 macOS App 的 **Remote over SSH** 模式（設定 → 一般 →「OpenClaw runs」）。
 - App 會開啟並管理通道，因此 WebChat 與健康檢查可「即刻可用」。
 
 操作手冊：[macOS 遠端存取](/platforms/mac/remote)。
 
-### 3) 筆電執行 Gateway，其他機器進行遠端存取
+### 3. 筆電執行 Gateway，其他機器進行遠端存取
 
 保留 Gateway 在本機，同時安全地對外提供：
 
@@ -59,7 +52,7 @@ x-i18n:
 
 ## 指令流程（各元件執行位置）
 
-單一 Gateway 服務擁有狀態與頻道；節點是周邊裝置。
+One gateway service owns state + channels. Nodes are peripherals.
 
 流程範例（Telegram → 節點）：
 
@@ -89,6 +82,8 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 注意：請將 `18789` 替換為你設定的 `gateway.port`（或 `--port`/`OPENCLAW_GATEWAY_PORT`）。
 注意：當你傳入 `--url` 時，CLI 不會回退使用設定或環境變數中的憑證。
 請明確包含 `--token` 或 `--password`。缺少明確憑證會視為錯誤。
+Note: when you pass `--url`, the CLI does not fall back to config or environment credentials.
+21. 請明確包含 `--token` 或 `--password`。 22. 缺少明確憑證會被視為錯誤。
 
 ## CLI 遠端預設值
 
@@ -110,7 +105,7 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 
 ## 透過 SSH 的聊天 UI
 
-WebChat 不再使用獨立的 HTTP 連接埠。SwiftUI 聊天 UI 會直接連線至 Gateway WebSocket。
+WebChat no longer uses a separate HTTP port. WebChat 不再使用獨立的 HTTP 連接埠。SwiftUI 聊天 UI 會直接連線至 Gateway WebSocket。
 
 - 透過 SSH 轉送 `18789`（見上文），然後讓用戶端連線至 `ws://127.0.0.1:18789`。
 - 在 macOS 上，優先使用 App 的「Remote over SSH」模式，它會自動管理通道。
@@ -131,6 +126,7 @@ macOS 選單列 App 可端到端地驅動相同設定（遠端狀態檢查、Web
 - 使用 `wss://` 時，`gateway.remote.tlsFingerprint` 會固定遠端 TLS 憑證。
 - 當 `gateway.auth.allowTailscale: true` 時，**Tailscale Serve** 可透過身分識別標頭進行驗證。
   若你改用權杖／密碼，請將其設為 `false`。
-- 將瀏覽器控制視為操作人員存取：僅限 tailnet + 審慎的節點配對。
+  Set it to `false` if you want tokens/passwords instead.
+- 25. 將瀏覽器控制視為操作員存取：僅限 tailnet + 審慎的節點配對。
 
 深入說明：[安全性](/gateway/security)。

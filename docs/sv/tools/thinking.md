@@ -3,13 +3,6 @@ summary: "Direktivsyntax för /think + /verbose och hur de påverkar modellens r
 read_when:
   - Justerar tolkning eller standardvärden för thinking- eller verbose-direktiv
 title: "Tänknivåer"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:53Z
 ---
 
 # Tänknivåer (/think-direktiv)
@@ -26,7 +19,7 @@ x-i18n:
   - `x-high`, `x_high`, `extra-high`, `extra high` och `extra_high` mappas till `xhigh`.
   - `highest`, `max` mappas till `high`.
 - Leverantörsnoteringar:
-  - Z.AI (`zai/*`) stöder endast binärt tänkande (`on`/`off`). Alla icke-`off`-nivåer behandlas som `on` (mappas till `low`).
+  - Z.AI (`zai/*`) stöder endast binärt tänkande (`on`/`off`). Varje icke-`off`-nivå behandlas som `on` (mappad till `low`).
 
 ## Upplösningsordning
 
@@ -37,9 +30,9 @@ x-i18n:
 
 ## Sätta en sessionsstandard
 
-- Skicka ett meddelande som **endast** är direktivet (blanksteg tillåts), t.ex. `/think:medium` eller `/t high`.
+- Skicka ett meddelande som är **bara** direktivet (blanktecken tillåtet), t.ex. `/think:medium` eller `/t high`.
 - Detta gäller för den aktuella sessionen (per avsändare som standard); rensas av `/think:off` eller genom återställning vid inaktiv session.
-- En bekräftelse skickas (`Thinking level set to high.` / `Thinking disabled.`). Om nivån är ogiltig (t.ex. `/thinking big`) avvisas kommandot med en ledtråd och sessionsläget lämnas oförändrat.
+- Bekräftelse svar skickas (`Thinking nivå inställd på hög.` / `Thinking inaktiverad.`). Om nivån är ogiltig (t.ex. `/thinking big`), avvisas kommandot med en ledtråd och sessionstillståndet lämnas oförändrat.
 - Skicka `/think` (eller `/think:`) utan argument för att se aktuell tänknivå.
 
 ## Tillämpning per agent
@@ -53,8 +46,8 @@ x-i18n:
 - `/verbose off` lagrar en explicit sessionsöverskrivning; rensa den via Sessions-UI genom att välja `inherit`.
 - Inbäddat direktiv påverkar endast det meddelandet; annars gäller sessions-/globala standarder.
 - Skicka `/verbose` (eller `/verbose:`) utan argument för att se aktuell verbose-nivå.
-- När verbose är på skickar agenter som emitterar strukturerade verktygsresultat (Pi, andra JSON-agenter) varje verktygsanrop tillbaka som ett eget meddelande med endast metadata, prefixat med `<emoji> <tool-name>: <arg>` när tillgängligt (sökväg/kommando). Dessa verktygssammanfattningar skickas så snart varje verktyg startar (separata bubblor), inte som strömmande deltas.
-- När verbose är `full` vidarebefordras även verktygsutdata efter slutförande (separat bubbla, trunkerad till säker längd). Om du växlar `/verbose on|full|off` medan en körning pågår, följer efterföljande verktygsbubblor den nya inställningen.
+- När verbose är på, agenter som avger strukturerade resultat verktyg (Pi, andra JSON agenter) skicka varje verktyg samtal tillbaka som sin egen metadata-endast-meddelande, prefixet med `<emoji> <tool-name>: <arg>` när tillgänglig (sökväg/kommandot). Dessa verktygssammanfattningar skickas så snart varje verktyg startar (separata bubblor), inte som strömmande deltas.
+- När verbose är "full" vidarebefordras även verktygsutmatningar efter slutförandet (separat bubbla, trunkerade till en säker längd). Om du växlar `/verbose on<unk> full<unk> off` medan en körning är under flygning, efterföljande verktygsbubblor hedrar den nya inställningen.
 
 ## Synlighet för resonemang (/reasoning)
 
@@ -71,8 +64,8 @@ x-i18n:
 
 ## Heartbeats
 
-- Heartbeat-probens innehåll är den konfigurerade heartbeat-prompten (standard: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inbäddade direktiv i ett heartbeat-meddelande gäller som vanligt (men undvik att ändra sessionsstandarder från heartbeats).
-- Leverans av heartbeats skickar som standard endast den slutliga payloaden. För att även skicka det separata `Reasoning:`-meddelandet (när tillgängligt), sätt `agents.defaults.heartbeat.includeReasoning: true` eller per agent `agents.list[].heartbeat.includeReasoning: true`.
+- Heartbeat sondkroppen är den konfigurerade hjärtslagsprompten (standard: `Read HEARTBEAT.md om den existerar (arbetsytans sammanhang). Följ den strikt. Sluta inte eller upprepa gamla uppgifter från tidigare chattar. Om inget behöver uppmärksamhet, svara HEARTBEAT_OK.`). Inline direktiv i ett hjärtslag meddelande gäller som vanligt (men undvik att ändra sessionsstandard från hjärtslag).
+- Heartbeat leveransstandard är endast den slutliga nyttolasten. För att också skicka det separata `Anledning:` meddelandet (när det finns), sätt `agents.defaults.heartbeat.includeAnledning: true` eller per-agent `agents.list[].heartbeat.includeAnledning: true`.
 
 ## Webbchatt-UI
 

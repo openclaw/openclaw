@@ -4,20 +4,13 @@ read_when:
   - /new, /reset, /stop ve ajan yaşam döngüsü olayları için olay güdümlü otomasyon istiyorsunuz
   - Hook’ları oluşturmak, yüklemek veya hata ayıklamak istiyorsunuz
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Hooks
 
 Hooks, ajan komutları ve olaylarına yanıt olarak eylemleri otomatikleştirmek için genişletilebilir, olay güdümlü bir sistem sağlar. Hooks dizinlerden otomatik olarak keşfedilir ve Skills’in OpenClaw’da çalışmasına benzer şekilde CLI komutlarıyla yönetilebilir.
 
-## Ortamı Tanıma
+## Yön Bulma
 
 Hooks, bir şey olduğunda çalışan küçük betiklerdir. İki tür vardır:
 
@@ -26,11 +19,11 @@ Hooks, bir şey olduğunda çalışan küçük betiklerdir. İki tür vardır:
 
 Hooks, eklentilerin (plugins) içine de paketlenebilir; bkz. [Plugins](/tools/plugin#plugin-hooks).
 
-Yaygın kullanım alanları:
+Yaygın kullanımlar:
 
 - Bir oturumu sıfırladığınızda bellek anlık görüntüsünü kaydetmek
 - Sorun giderme veya uyumluluk için komutların denetim kaydını tutmak
-- Bir oturum başladığında veya bittiğinde takip otomasyonlarını tetiklemek
+- Bir oturum başladığında veya bittiğinde takip otomasyonunu tetikleme
 - Olaylar tetiklendiğinde ajan çalışma alanına dosya yazmak veya harici API’leri çağırmak
 
 Küçük bir TypeScript fonksiyonu yazabiliyorsanız, bir hook yazabilirsiniz. Hooks otomatik olarak keşfedilir ve CLI üzerinden etkinleştirip devre dışı bırakabilirsiniz.
@@ -41,7 +34,7 @@ Hooks sistemi şunları yapmanıza olanak tanır:
 
 - `/new` verildiğinde oturum bağlamını belleğe kaydetmek
 - Denetim için tüm komutları kaydetmek
-- Ajan yaşam döngüsü olaylarında özel otomasyonları tetiklemek
+- Ajan yaşam döngüsü olaylarında özel otomasyonları tetikleme
 - Çekirdek kodu değiştirmeden OpenClaw davranışını genişletmek
 
 ## Başlarken
@@ -251,7 +244,7 @@ Gateway başladığında tetiklenir:
 
 Bu hook’lar olay akışı dinleyicileri değildir; eklentilerin, OpenClaw bunları kalıcı hale getirmeden önce araç sonuçlarını eşzamanlı olarak ayarlamasına olanak tanır.
 
-- **`tool_result_persist`**: Oturum dökümüne yazılmadan önce araç sonuçlarını dönüştürür. Eşzamanlı olmalıdır; güncellenmiş araç sonucu yükünü döndürün veya olduğu gibi bırakmak için `undefined` döndürün. Bkz. [Agent Loop](/concepts/agent-loop).
+- **`tool_result_persist`**: Oturum dökümüne yazılmadan önce araç sonuçlarını dönüştürür. Eşzamanlı olmalıdır; güncellenmiş araç sonucu yükünü döndürün veya olduğu gibi bırakmak için `undefined` döndürün. [Agent Loop](/concepts/agent-loop).
 
 ### Gelecek Olaylar
 
@@ -451,7 +444,7 @@ openclaw hooks enable session-memory
 openclaw hooks disable command-logger
 ```
 
-## Paketli hook başvurusu
+## Paketlenmiş kanca referansı
 
 ### session-memory
 
@@ -654,7 +647,7 @@ metadata: { "openclaw": { "events": ["command:new"] } } # Specific
 metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 ```
 
-## Hata Ayıklama
+## Hata ayıklama
 
 ### Hook Günlüğünü Etkinleştirin
 
@@ -666,7 +659,7 @@ Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup
 ```
 
-### Keşfi Kontrol Edin
+### Keşfi Kontrol Et
 
 Keşfedilen tüm hook’ları listeleyin:
 
@@ -676,7 +669,7 @@ openclaw hooks list --verbose
 
 ### Kayıt (Registration) Kontrolü
 
-İşleyicinizde çağrıldığında günlükleyin:
+İşleyicinizde, çağrıldığında günlüğe kaydedin:
 
 ```typescript
 const handler: HookHandler = async (event) => {
@@ -842,7 +835,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
 
 ## Geçiş Kılavuzu
 
-### Eski Yapılandırmadan Keşfe Geçiş
+### Eski Yapılandırmadan Keşfe
 
 **Önce**:
 

@@ -5,13 +5,6 @@ read_when:
   - Claude Code CLI veya diğer yerel AI CLI'lerini çalıştırıyor ve bunları yeniden kullanmak istediğinizde
   - Oturumları ve görüntüleri desteklemeye devam eden, yalnızca metinli ve araçsız bir yol gerektiğinde
 title: "CLI Arka Uçları"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:24Z
 ---
 
 # CLI arka uçları (yedek çalışma zamanı)
@@ -147,7 +140,7 @@ Sağlayıcı kimliği, model referansınızın sol tarafı olur:
 4. **Çıktıyı ayrıştırır** (JSON veya düz metin) ve nihai metni döndürür.
 5. **Oturum kimliklerini kalıcılaştırır**, böylece takip eden istekler aynı CLI oturumunu yeniden kullanır.
 
-## Oturumlar
+## Sessions
 
 - CLI oturumları destekliyorsa, `sessionArg` (örn. `--session-id`) veya
   kimliğin birden fazla bayrağa eklenmesi gerektiğinde `sessionArgs` (yer tutucu `{sessionId}`) ayarlayın.

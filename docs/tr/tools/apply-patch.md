@@ -4,13 +4,6 @@ read_when:
   - Birden fazla dosyada yapılandırılmış düzenlemelere ihtiyacınız olduğunda
   - Yama tabanlı düzenlemeleri belgelemek veya hata ayıklamak istediğinizde
 title: "apply_patch Aracı"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:44Z
 ---
 
 # apply_patch aracı

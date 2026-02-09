@@ -1,15 +1,8 @@
 ---
-summary: „Wie OpenClaw-Sandboxing funktioniert: Modi, Geltungsbereiche, Workspace-Zugriff und Images“
+summary: "„Wie OpenClaw-Sandboxing funktioniert: Modi, Geltungsbereiche, Workspace-Zugriff und Images“"
 title: Sandboxing
-read_when: „Sie möchten eine dedizierte Erklärung zu Sandboxing oder müssen agents.defaults.sandbox feinjustieren.“
+read_when: "„Sie möchten eine dedizierte Erklärung zu Sandboxing oder müssen agents.defaults.sandbox feinjustieren.“"
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:31Z
 ---
 
 # Sandboxing
@@ -141,7 +134,7 @@ Docker‑Installationen und das containerisierte Gateway finden Sie hier:
 `setupCommand` wird **einmal** nach der Erstellung des Sandbox‑Containers ausgeführt (nicht bei jedem Lauf).
 Die Ausführung erfolgt im Container über `sh -lc`.
 
-Pfade:
+Pfad:
 
 - Global: `agents.defaults.sandbox.docker.setupCommand`
 - Pro Agent: `agents.list[].sandbox.docker.setupCommand`
@@ -168,6 +161,7 @@ Debugging:
 - Verwenden Sie `openclaw sandbox explain`, um den effektiven Sandbox‑Modus, die Werkzeugrichtlinie und Fix‑it‑Konfigurationsschlüssel zu prüfen.
 - Siehe [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) für das mentale Modell „Warum ist das blockiert?“
   Halten Sie es strikt abgesichert.
+  Halten Sie es gesperrt.
 
 ## Multi‑Agent‑Overrides
 

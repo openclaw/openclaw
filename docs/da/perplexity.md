@@ -4,19 +4,12 @@ read_when:
   - Du vil bruge Perplexity Sonar til websøgning
   - Du har brug for PERPLEXITY_API_KEY eller OpenRouter-opsætning
 title: "Perplexity Sonar"
-x-i18n:
-  source_path: perplexity.md
-  source_hash: f6c9824ad9bebe38
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:22Z
 ---
 
 # Perplexity Sonar
 
-OpenClaw kan bruge Perplexity Sonar til værktøjet `web_search`. Du kan forbinde
-via Perplexitys direkte API eller via OpenRouter.
+OpenClaw kan bruge Perplexity Sonar til `web_search` værktøj. Du kan forbinde
+via Perplexity’s direkte API eller via OpenRouter.
 
 ## API-muligheder
 

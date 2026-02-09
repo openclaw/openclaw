@@ -3,13 +3,6 @@ summary: "Estados y animaciones del icono de la barra de menús para OpenClaw en
 read_when:
   - Cambiar el comportamiento del icono de la barra de menús
 title: "Icono de la barra de menús"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:08Z
 ---
 
 # Estados del icono de la barra de menús
@@ -30,7 +23,7 @@ Formas y tamaños
 
 - Icono base dibujado en `CritterIconRenderer.makeIcon(blink:legWiggle:earWiggle:earScale:earHoles:)`.
 - La escala de orejas tiene como valor predeterminado `1.0`; el refuerzo por voz establece `earScale=1.9` y alterna `earHoles=true` sin cambiar el marco general (imagen plantilla de 18×18 pt renderizada en un respaldo Retina de 36×36 px).
-- La carrera usa contoneo de patas hasta ~1.0 con un pequeño vaivén horizontal; es aditiva a cualquier contoneo inactivo existente.
+- Scurry usa peluca de pierna de hasta ~1.0 con un pequeño rompecabezas horizontal; es aditivo a cualquier peluca inactiva.
 
 Notas de comportamiento
 

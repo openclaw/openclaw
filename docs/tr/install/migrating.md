@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’ı yeni bir dizüstü bilgisayara/sunucuya taşıyorsunuz
   - Oturumları, kimlik doğrulamayı ve kanal girişlerini (WhatsApp vb.) korumak istiyorsunuz
 title: "Geçiş Kılavuzu"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # OpenClaw’ı yeni bir makineye taşıma
@@ -26,7 +19,7 @@ Ancak **profiller**, **izinler** ve **kısmi kopyalar** etrafında yaygın tuzak
 
 ## Başlamadan önce (neyi taşıyorsunuz)
 
-### 1) State dizininizi belirleyin
+### 1. State dizininizi belirleyin
 
 Çoğu kurulum varsayılanı kullanır:
 
@@ -45,7 +38,7 @@ openclaw status
 
 Çıktıda `OPENCLAW_STATE_DIR` / profile atıflarını arayın. Birden fazla gateway çalıştırıyorsanız, her profil için tekrarlayın.
 
-### 2) Çalışma alanınızı belirleyin
+### 2. Çalışma alanınızı belirleyin
 
 Yaygın varsayılanlar:
 
@@ -54,13 +47,13 @@ Yaygın varsayılanlar:
 
 Çalışma alanınız; `MEMORY.md`, `USER.md` ve `memory/*.md` gibi dosyaların bulunduğu yerdir.
 
-### 3) Neleri koruyacağınızı anlayın
+### 3. Neleri koruyacağınızı anlayın
 
 Hem state dizinini **hem de** çalışma alanını kopyalarsanız şunları korursunuz:
 
 - Gateway yapılandırması (`openclaw.json`)
 - Kimlik doğrulama profilleri / API anahtarları / OAuth belirteçleri
-- Oturum geçmişi + ajan durumu
+- Session history + agent state
 - Kanal durumu (ör. WhatsApp giriş/oturumu)
 - Çalışma alanı dosyalarınız (hafıza, skills notları vb.)
 
@@ -113,7 +106,7 @@ Yaygın yaklaşımlar:
 
 - tarball’ları `scp` ve çıkarmak
 - SSH üzerinden `rsync -a`
-- harici disk
+- external drive
 
 Kopyaladıktan sonra şunları doğrulayın:
 
@@ -137,7 +130,7 @@ openclaw gateway restart
 openclaw status
 ```
 
-## Yaygın tuzaklar (ve nasıl kaçınılır)
+## Common footguns (and how to avoid them)
 
 ### Tuzak: profil / state-dizin uyumsuzluğu
 

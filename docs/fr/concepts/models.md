@@ -5,13 +5,6 @@ read_when:
   - Changement du comportement de repli des modeles ou de l’UX de selection
   - Mise a jour des sondes de scan des modeles (outils/images)
 title: "CLI des modeles"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: c4eeb0236c645b55
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:29Z
 ---
 
 # CLI des modeles
@@ -29,7 +22,7 @@ OpenClaw selectionne les modeles dans cet ordre :
 3. **Basculement d’authentification du fournisseur** a lieu a l’interieur d’un fournisseur avant de passer au
    modele suivant.
 
-Connexe :
+Liens associés :
 
 - `agents.defaults.models` est la liste d’autorisation/catalogue des modeles qu’OpenClaw peut utiliser (plus les alias).
 - `agents.defaults.imageModel` est utilise **uniquement lorsque** le modele principal ne peut pas accepter d’images.
@@ -178,7 +171,7 @@ openclaw models status
 `openclaw models scan` inspecte le **catalogue de modeles gratuits** d’OpenRouter et peut
 eventuellement sonder les modeles pour la prise en charge des outils et des images.
 
-Indicateurs cles :
+Drapeaux clés:
 
 - `--no-probe` : ignorer les sondes en direct (metadonnees uniquement)
 - `--min-params <b>` : taille minimale des parametres (en milliards)

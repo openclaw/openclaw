@@ -3,13 +3,6 @@ summary: "Các trạng thái và hoạt ảnh của biểu tượng thanh menu c
 read_when:
   - Thay đổi hành vi biểu tượng thanh menu
 title: "Biểu tượng thanh menu"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:41Z
 ---
 
 # Các trạng thái biểu tượng thanh menu
@@ -18,13 +11,13 @@ Tác giả: steipete · Cập nhật: 2025-12-06 · Phạm vi: ứng dụng macO
 
 - **Nhàn rỗi:** Hoạt ảnh biểu tượng bình thường (chớp mắt, thỉnh thoảng lắc nhẹ).
 - **Tạm dừng:** Mục trạng thái sử dụng `appearsDisabled`; không chuyển động.
-- **Kích hoạt bằng giọng nói (tai lớn):** Trình phát hiện đánh thức bằng giọng nói gọi `AppState.triggerVoiceEars(ttl: nil)` khi nghe thấy từ đánh thức, giữ `earBoostActive=true` trong khi thu nhận phát ngôn. Tai phóng to (1,9x), có lỗ tai hình tròn để dễ đọc, sau đó hạ xuống qua `stopVoiceEars()` sau 1 giây im lặng. Chỉ được kích hoạt từ pipeline giọng nói trong ứng dụng.
-- **Đang làm việc (tác tử đang chạy):** `AppState.isWorking=true` điều khiển vi chuyển động “chạy lăng xăng đuôi/chân”: lắc chân nhanh hơn và lệch nhẹ khi công việc đang diễn ra. Hiện được bật/tắt quanh các lần chạy tác tử WebChat; hãy thêm cùng cơ chế bật/tắt này cho các tác vụ dài khác khi bạn kết nối chúng.
+- **Kích hoạt bằng giọng nói (tai lớn):** Bộ phát hiện từ đánh thức gọi `AppState.triggerVoiceEars(ttl: nil)` khi nghe thấy từ đánh thức, giữ `earBoostActive=true` trong khi thu thập lời nói. Ears scale up (1.9x), get circular ear holes for readability, then drop via `stopVoiceEars()` after 1s of silence. Chỉ được kích hoạt từ pipeline giọng nói trong ứng dụng.
+- **Đang làm việc (agent đang chạy):** `AppState.isWorking=true` điều khiển một vi chuyển động “đuôi/chân chạy”: chân lắc nhanh hơn và lệch nhẹ trong khi công việc đang diễn ra. Currently toggled around WebChat agent runs; add the same toggle around other long tasks when you wire them.
 
 Các điểm kết nối
 
 - Đánh thức bằng giọng nói: runtime/tester gọi `AppState.triggerVoiceEars(ttl: nil)` khi kích hoạt và `stopVoiceEars()` sau 1 giây im lặng để khớp với cửa sổ thu nhận.
-- Hoạt động của tác tử: đặt `AppStateStore.shared.setWorking(true/false)` quanh các khoảng công việc (đã làm trong lệnh gọi tác tử WebChat). Giữ các khoảng này ngắn và đặt lại trong các khối `defer` để tránh hoạt ảnh bị kẹt.
+- Hoạt động của agent: đặt `AppStateStore.shared.setWorking(true/false)` bao quanh các khoảng làm việc (đã thực hiện trong lời gọi agent WebChat). Giữ các khoảng ngắn và reset trong các khối `defer` để tránh animation bị kẹt.
 
 Hình dạng & kích thước
 

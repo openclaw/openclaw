@@ -3,13 +3,6 @@ summary: "CLI-referentie voor `openclaw agent` (verzend één agentbeurt via de 
 read_when:
   - Je wilt vanuit scripts één agentbeurt uitvoeren (optioneel het antwoord afleveren)
 title: "agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:07Z
 ---
 
 # `openclaw agent`

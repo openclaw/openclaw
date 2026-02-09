@@ -3,13 +3,6 @@ summary: "Справка по CLI для `openclaw config` (получение/�
 read_when:
   - Вы хотите читать или редактировать конфиг в неинтерактивном режиме
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:09Z
 ---
 
 # `openclaw config`

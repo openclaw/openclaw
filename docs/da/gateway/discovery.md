@@ -5,13 +5,6 @@ read_when:
   - Justering af fjernforbindelsestilstande (direkte vs. SSH)
   - Design af node-discovery + parring for fjernnoder
 title: "Discovery og transporter"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:23Z
 ---
 
 # Discovery & transporter
@@ -25,7 +18,7 @@ Designmålet er at samle al netværks-discovery/annoncering i **Node Gateway** (
 
 ## Termer
 
-- **Gateway**: en enkelt, langvarig gateway-proces, der ejer tilstand (sessioner, parring, noderegister) og kører kanaler. De fleste opsætninger bruger én pr. vært; isolerede multi-gateway-opsætninger er mulige.
+- **Gateway**: En enkelt langtløbende gatewayproces, der ejer tilstand (sessioner, parring, node registreringsdatabase) og kører kanaler. De fleste opsætninger bruger en pr. vært; isolerede multi-gateway opsætninger er mulige.
 - **Gateway WS (kontrolplan)**: WebSocket-endpointet på `127.0.0.1:18789` som standard; kan bindes til LAN/tailnet via `gateway.bind`.
 - **Direkte WS-transport**: et LAN-/tailnet-vendt Gateway WS-endpoint (ingen SSH).
 - **SSH-transport (fallback)**: fjernstyring ved at videresende `127.0.0.1:18789` over SSH.
@@ -49,9 +42,9 @@ Protokoldetaljer:
 
 ## Discovery-inputs (hvordan klienter lærer, hvor gatewayen er)
 
-### 1) Bonjour / mDNS (kun LAN)
+### 1. Bonjour / mDNS (kun LAN)
 
-Bonjour er best-effort og krydser ikke netværk. Det bruges kun til bekvemmelighed på “samme LAN”.
+Bonjour er den bedste indsats og krydser ikke netværk. Det bruges kun til “samme LAN” bekvemmelighed.
 
 Målretning:
 
@@ -83,15 +76,15 @@ Deaktiver/overstyr:
 - `OPENCLAW_TAILNET_DNS` publicerer et `tailnetDns`-hint (MagicDNS).
 - `OPENCLAW_CLI_PATH` overstyrer den annoncerede CLI-sti.
 
-### 2) Tailnet (på tværs af netværk)
+### 2. Tailnet (på tværs af netværk)
 
-Til opsætninger i London/Wien-stil hjælper Bonjour ikke. Det anbefalede “direkte” mål er:
+For opsætninger i London/Wien, vil Bonjour ikke hjælpe. Det anbefalede “direkte” mål er:
 
 - Tailscale MagicDNS-navn (foretrukket) eller en stabil tailnet-IP.
 
 Hvis gatewayen kan registrere, at den kører under Tailscale, publicerer den `tailnetDns` som et valgfrit hint til klienter (inklusive wide-area beacons).
 
-### 3) Manuel / SSH-mål
+### 3. Manuel / SSH-mål
 
 Når der ikke er en direkte rute (eller direkte er deaktiveret), kan klienter altid forbinde via SSH ved at videresende loopback-gateway-porten.
 

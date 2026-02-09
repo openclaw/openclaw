@@ -3,13 +3,6 @@ summary: "Lógica de status da barra de menu e o que é exibido aos usuários"
 read_when:
   - Ajustando a UI do menu do mac ou a lógica de status
 title: "Barra de Menu"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:33Z
 ---
 
 # Lógica de Status da Barra de Menu

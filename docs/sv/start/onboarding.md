@@ -5,36 +5,31 @@ read_when:
   - Implementering av autentisering eller identitetskonfiguration
 title: "Introduktion (macOS-app)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:30Z
 ---
 
 # Introduktion (macOS-app)
 
-Detta dokument beskriver det **nuvarande** introduktionsflödet vid första start. Målet är en smidig ”dag 0”-upplevelse: välj var Gateway körs, anslut autentisering, kör guiden och låt agenten starta upp sig själv.
+Denna doc beskriver det **aktuella** första körda onboardingflödet. Målet är en
+smidig ”dag 0” upplevelse: välj var Gateway går, anslut auth, kör
+-guiden och låt agenten bootstrap själv.
 
 <Steps>
-<Step title="Godkänn macOS-varning">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Godkänn hitta lokala nätverk">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Välkomst- och säkerhetsmeddelande">
+<Step title="Welcome and security notice">
 <Frame caption="Läs säkerhetsmeddelandet som visas och fatta beslut därefter">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Lokal vs fjärr">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -46,13 +41,13 @@ Var körs **Gateway**?
 - **Konfigurera senare:** hoppa över konfigureringen och lämna appen okonfigurerad.
 
 <Tip>
-**Tips om Gateway-autentisering:**
-- Guiden genererar nu en **token** även för local loopback, så lokala WS-klienter måste autentisera sig.
-- Om du inaktiverar autentisering kan vilken lokal process som helst ansluta; använd det endast på fullt betrodda maskiner.
-- Använd en **token** för åtkomst från flera maskiner eller bindningar som inte är loopback.
+**Gateway auth tip:**
+- Guiden genererar nu en **token** även för loopback, så lokala WS-klienter måste autentisera.
+- Om du inaktiverar auth, någon lokal process kan ansluta; Använd det endast på fullt betrodda maskiner.
+- Använd en **token** för åtkomst till flera maskiner eller icke-loopback bindningar.
 </Tip>
 </Step>
-<Step title="Behörigheter">
+<Step title="Permissions">
 <Frame caption="Välj vilka behörigheter du vill ge OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -74,10 +69,10 @@ Introduktionen begär TCC-behörigheter som behövs för:
   Appen kan installera den globala `openclaw` CLI via npm/pnpm så att
   terminalarbetsflöden och launchd-uppgifter fungerar direkt.
 </Step>
-<Step title="Introduktionschatt (dedikerad session)">
-  Efter konfigureringen öppnar appen en dedikerad introduktionschatt-session så att agenten kan
-  presentera sig och guida nästa steg. Detta håller vägledningen vid första start åtskild
-  från dina vanliga konversationer. Se [Bootstrapping](/start/bootstrapping) för
-  vad som händer på gateway-värden under den första agentkörningen.
+<Step title="Onboarding Chat (dedicated session)">
+  Efter installationen, öppnar appen en dedikerad onboarding chattsession så att agenten kan
+  presentera sig själv och vägleda nästa steg. Detta håller första körningen vägledning separera
+  från din normala konversation. Se [Bootstrapping](/start/bootstrapping) för
+  vad som händer på gatewayvärden under den första agentkörningen.
 </Step>
 </Steps>

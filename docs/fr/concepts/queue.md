@@ -3,13 +3,6 @@ summary: "Conception d’une file de commandes qui sérialise les exécutions d�
 read_when:
   - Modification de l’exécution ou de la concurrence des auto-réponses
 title: "File de commandes"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:21Z
 ---
 
 # File de commandes (2026-01-16)
@@ -65,7 +58,7 @@ Configurez globalement ou par canal via `messages.queue` :
 }
 ```
 
-## Options de file
+## Options de la file d'attente
 
 Les options s’appliquent à `followup`, `collect` et `steer-backlog` (ainsi qu’à `steer` lorsqu’il revient au suivi) :
 
@@ -90,7 +83,7 @@ Valeurs par défaut : `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 - Les lanes par session garantissent qu’une seule exécution d’agent touche une session donnée à la fois.
 - Aucune dépendance externe ni threads de workers en arrière-plan ; TypeScript pur + promesses.
 
-## Dépannage
+## Problemes courants
 
 - Si des commandes semblent bloquées, activez les journaux verbeux et recherchez les lignes « queued for …ms » pour confirmer que la file se vide.
 - Si vous avez besoin de la profondeur de file, activez les journaux verbeux et surveillez les lignes de temporisation de la file.

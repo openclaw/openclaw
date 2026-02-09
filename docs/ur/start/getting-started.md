@@ -4,13 +4,6 @@ read_when:
   - پہلی بار صفر سے سیٹ اپ
   - آپ ایک کام کرنے والی چیٹ تک تیز ترین راستہ چاہتے ہیں
 title: "ابتدائی رہنمائی"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:41Z
 ---
 
 # ابتدائی رہنمائی
@@ -18,11 +11,10 @@ x-i18n:
 مقصد: کم سے کم سیٹ اپ کے ساتھ صفر سے ایک پہلی کام کرنے والی چیٹ تک پہنچنا۔
 
 <Info>
-تیز ترین چیٹ: Control UI کھولیں (کسی چینل سیٹ اپ کی ضرورت نہیں)۔ `openclaw dashboard` چلائیں
-اور براؤزر میں چیٹ کریں، یا
-<Tooltip headline="Gateway host" tip="وہ مشین جس پر OpenClaw گیٹ وے سروس چل رہی ہو۔">گیٹ وے ہوسٹ</Tooltip>
-پر `http://127.0.0.1:18789/` کھولیں۔
-دستاویزات: [Dashboard](/web/dashboard) اور [Control UI](/web/control-ui)۔
+Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`
+and chat in the browser, or open `http://127.0.0.1:18789/` on the
+<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">گیٹ وے ہوسٹ</Tooltip>.
+Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 </Info>
 
 ## پیشگی تقاضے
@@ -36,7 +28,7 @@ x-i18n:
 ## فوری سیٹ اپ (CLI)
 
 <Steps>
-  <Step title="OpenClaw انسٹال کریں (سفارش کردہ)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -50,29 +42,35 @@ x-i18n:
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     دیگر انسٹال طریقے اور تقاضے: [Install](/install)۔
     </Note>
+    ```
 
   </Step>
-  <Step title="آن بورڈنگ وِزارڈ چلائیں">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     وِزارڈ تصدیق، گیٹ وے کی ترتیبات، اور اختیاری چینلز کنفیگر کرتا ہے۔
     تفصیلات کے لیے [Onboarding Wizard](/start/wizard) دیکھیں۔
-
-  </Step>
-  <Step title="Gateway چیک کریں">
-    اگر آپ نے سروس انسٹال کی ہے تو یہ پہلے ہی چل رہی ہونی چاہیے:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Control UI کھولیں">
+  <Step title="Check the Gateway">
+    اگر آپ نے سروس انسٹال کی ہے تو یہ پہلے ہی چل رہی ہونی چاہیے:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -86,20 +84,24 @@ x-i18n:
 ## اختیاری جانچ اور اضافی چیزیں
 
 <AccordionGroup>
-  <Accordion title="Gateway کو foreground میں چلائیں">
+  <Accordion title="Run the Gateway in the foreground">
     فوری ٹیسٹس یا خرابیوں کے ازالہ کے لیے مفید۔
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="ایک ٹیسٹ پیغام بھیجیں">
+  <Accordion title="Send a test message">
     کنفیگر شدہ چینل درکار ہے۔
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -107,10 +109,10 @@ x-i18n:
 ## مزید گہرائی میں جائیں
 
 <Columns>
-  <Card title="Onboarding Wizard (تفصیلات)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     مکمل CLI وِزارڈ حوالہ اور جدید اختیارات۔
   </Card>
-  <Card title="macOS ایپ آن بورڈنگ" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     macOS ایپ کے لیے پہلی بار چلانے کا عمل۔
   </Card>
 </Columns>

@@ -5,13 +5,6 @@ read_when:
   - Brave Search API key ကို တပ်ဆင်သတ်မှတ်ရန် လိုအပ်သောအခါ
   - ဝဘ်ရှာဖွေရန် Perplexity Sonar ကို အသုံးပြုလိုသောအခါ
 title: "Web Tools"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:23Z
 ---
 
 # Web tools
@@ -21,8 +14,8 @@ OpenClaw တွင် ပေါ့ပါးသည့် ဝဘ်ကိရိယ
 - `web_search` — Brave Search API (ပုံမှန်) သို့မဟုတ် Perplexity Sonar (တိုက်ရိုက် သို့မဟုတ် OpenRouter မှတစ်ဆင့်) ကို အသုံးပြုပြီး ဝဘ်ကို ရှာဖွေပါသည်။
 - `web_fetch` — HTTP fetch + ဖတ်ရှုရန် အဆင်ပြေသော ထုတ်ယူမှု (HTML → markdown/text)။
 
-ဤကိရိယာများသည် **browser automation မဟုတ်ပါ**။ JS အလေးထားသော ဆိုက်များ သို့မဟုတ် login လိုအပ်သည့် အခြေအနေများအတွက်
-[Browser tool](/tools/browser) ကို အသုံးပြုပါ။
+These are **not** browser automation. For JS-heavy sites or logins, use the
+[Browser tool](/tools/browser).
 
 ## How it works
 
@@ -30,16 +23,16 @@ OpenClaw တွင် ပေါ့ပါးသည့် ဝဘ်ကိရိယ
   - **Brave** (ပုံမှန်): ဖွဲ့စည်းထားသော ရလဒ်များ (ခေါင်းစဉ်၊ URL၊ အကျဉ်းချုပ်) ကို ပြန်ပို့ပါသည်။
   - **Perplexity**: အချိန်နှင့်တပြေးညီ ဝဘ်ရှာဖွေမှုမှ အညွှန်းကိုးကားများ ပါဝင်သည့် AI စုပေါင်းထားသော အဖြေများကို ပြန်ပို့ပါသည်။
 - ရလဒ်များကို query အလိုက် မိနစ် ၁၅ ခန့် cache လုပ်ထားပါသည် (ပြင်ဆင်နိုင်ပါသည်)။
-- `web_fetch` သည် သာမန် HTTP GET ကို လုပ်ဆောင်ပြီး ဖတ်ရှုနိုင်သော အကြောင်းအရာကို ထုတ်ယူပါသည်
-  (HTML → markdown/text)။ JavaScript ကို **မလုပ်ဆောင်ပါ**။
+- `web_fetch` does a plain HTTP GET and extracts readable content
+  (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` ကို ပုံမှန်အားဖြင့် ဖွင့်ထားပါသည် (အထူးသဖြင့် ပိတ်မထားလျှင်)။
 
 ## Choosing a search provider
 
-| Provider            | အားသာချက်များ                                   | အားနည်းချက်များ                                      | API Key                                             |
-| ------------------- | ----------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------- |
+| Provider                               | အားသာချက်များ                                   | အားနည်းချက်များ                                      | API Key                                             |
+| -------------------------------------- | ----------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------- |
 | **Brave** (ပုံမှန်) | မြန်ဆန်၊ ဖွဲ့စည်းထားသော ရလဒ်များ၊ free tier     | ရိုးရာ search ရလဒ်များသာ                             | `BRAVE_API_KEY`                                     |
-| **Perplexity**      | AI စုပေါင်းအဖြေများ၊ ကိုးကားချက်များ၊ real-time | Perplexity သို့မဟုတ် OpenRouter အသုံးပြုခွင့် လိုအပ် | `OPENROUTER_API_KEY` သို့မဟုတ် `PERPLEXITY_API_KEY` |
+| **Perplexity**                         | AI စုပေါင်းအဖြေများ၊ ကိုးကားချက်များ၊ real-time | Perplexity သို့မဟုတ် OpenRouter အသုံးပြုခွင့် လိုအပ် | `OPENROUTER_API_KEY` သို့မဟုတ် `PERPLEXITY_API_KEY` |
 
 Provider အလိုက် အသေးစိတ်အချက်အလက်များအတွက် [Brave Search setup](/brave-search) နှင့် [Perplexity Sonar](/perplexity) ကို ကြည့်ပါ။
 
@@ -86,17 +79,18 @@ Brave သည် free tier နှင့် အခကြေးငွေဖြင�
 
 ### Where to set the key (recommended)
 
-**အကြံပြုထားသည်:** `openclaw configure --section web` ကို run လုပ်ပါ။ ၎င်းသည် key ကို
-`~/.openclaw/openclaw.json` အောက်ရှိ `tools.web.search.apiKey` တွင် သိမ်းဆည်းပါသည်။
+**Recommended:** run `openclaw configure --section web`. It stores the key in
+`~/.openclaw/openclaw.json` under `tools.web.search.apiKey`.
 
-**Environment အခြားနည်း:** Gateway process environment တွင် `BRAVE_API_KEY` ကို သတ်မှတ်ပါ။
-Gateway install အတွက် `~/.openclaw/.env` (သို့မဟုတ် သင့် service environment) တွင် ထည့်ပါ။
-[Env vars](/help/faq#how-does-openclaw-load-environment-variables) ကို ကြည့်ပါ။
+**Environment alternative:** set `BRAVE_API_KEY` in the Gateway process
+environment. For a gateway install, put it in `~/.openclaw/.env` (or your
+service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Using Perplexity (direct or via OpenRouter)
 
-Perplexity Sonar မော်ဒယ်များတွင် ဝဘ်ရှာဖွေရေး စွမ်းရည် ပါဝင်ပြီး ကိုးကားချက်များပါဝင်သည့် AI စုပေါင်းအဖြေများကို ပြန်ပို့ပါသည်။
-OpenRouter မှတစ်ဆင့်လည်း အသုံးပြုနိုင်ပါသည် (credit card မလိုအပ်ပါ—crypto/prepaid ကို ထောက်ပံ့ပါသည်)။
+Perplexity Sonar models have built-in web search capabilities and return AI-synthesized
+answers with citations. You can use them via OpenRouter (no credit card required - supports
+crypto/prepaid).
 
 ### Getting an OpenRouter API key
 
@@ -127,8 +121,8 @@ OpenRouter မှတစ်ဆင့်လည်း အသုံးပြုန�
 }
 ```
 
-**Environment အခြားနည်း:** Gateway environment တွင် `OPENROUTER_API_KEY` သို့မဟုတ် `PERPLEXITY_API_KEY` ကို သတ်မှတ်ပါ။
-Gateway install အတွက် `~/.openclaw/.env` တွင် ထည့်ပါ။
+**Environment alternative:** set `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` in the Gateway
+environment. For a gateway install, put it in `~/.openclaw/.env`.
 
 Base URL ကို မသတ်မှတ်ထားပါက API key အရင်းအမြစ်အပေါ် မူတည်ပြီး OpenClaw က ပုံမှန်တန်ဖိုးကို ရွေးချယ်ပါသည်—
 
@@ -138,11 +132,11 @@ Base URL ကို မသတ်မှတ်ထားပါက API key အရင�
 
 ### Available Perplexity models
 
-| Model                            | ဖော်ပြချက်                                     | အကောင်းဆုံးအသုံးပြုရန်    |
-| -------------------------------- | ---------------------------------------------- | ------------------------- |
-| `perplexity/sonar`               | ဝဘ်ရှာဖွေမှုပါဝင်သော မြန်ဆန် Q&A               | အမြန်ရှာဖွေမှုများ        |
-| `perplexity/sonar-pro` (ပုံမှန်) | ဝဘ်ရှာဖွေမှုပါဝင်သော အဆင့်များစွာ ဆင်ခြင်ခြင်း | ရှုပ်ထွေးသော မေးခွန်းများ |
-| `perplexity/sonar-reasoning-pro` | Chain-of-thought ခွဲခြမ်းစိတ်ဖြာခြင်း          | အနက်ရှိုင်း သုတေသန        |
+| Model                                               | ဖော်ပြချက်                                           | အကောင်းဆုံးအသုံးပြုရန်    |
+| --------------------------------------------------- | ---------------------------------------------------- | ------------------------- |
+| `perplexity/sonar`                                  | ဝဘ်ရှာဖွေမှုပါဝင်သော မြန်ဆန် Q&A | အမြန်ရှာဖွေမှုများ        |
+| `perplexity/sonar-pro` (ပုံမှန်) | ဝဘ်ရှာဖွေမှုပါဝင်သော အဆင့်များစွာ ဆင်ခြင်ခြင်း       | ရှုပ်ထွေးသော မေးခွန်းများ |
+| `perplexity/sonar-reasoning-pro`                    | Chain-of-thought ခွဲခြမ်းစိတ်ဖြာခြင်း                | အနက်ရှိုင်း သုတေသန        |
 
 ## web_search
 
@@ -177,7 +171,7 @@ Base URL ကို မသတ်မှတ်ထားပါက API key အရင�
 
 - `query` (လိုအပ်)
 - `count` (1–10; config မှ ပုံမှန်တန်ဖိုး)
-- `country` (optional): ဒေသအလိုက် ရလဒ်များအတွက် နိုင်ငံကုဒ် ၂ လုံး (ဥပမာ "DE", "US", "ALL")။ မသတ်မှတ်ပါက Brave က ပုံမှန် ဒေသကို ရွေးချယ်ပါသည်။
+- `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
 - `search_lang` (optional): ရှာဖွေရလဒ်များအတွက် ISO ဘာသာစကားကုဒ် (ဥပမာ "de", "en", "fr")
 - `ui_lang` (optional): UI အစိတ်အပိုင်းများအတွက် ISO ဘာသာစကားကုဒ်
 - `freshness` (optional, Brave only): discovery time အလိုက် စစ်ထုတ်ခြင်း (`pd`, `pw`, `pm`, `py`, သို့မဟုတ် `YYYY-MM-DDtoYYYY-MM-DD`)
@@ -254,7 +248,7 @@ URL တစ်ခုကို ဖတ်ယူပြီး ဖတ်ရှုန�
 
 Notes:
 
-- `web_fetch` သည် Readability (အဓိကအကြောင်းအရာ ထုတ်ယူခြင်း) ကို ဦးစွာ အသုံးပြုပြီး ထို့နောက် Firecrawl (configure လုပ်ထားပါက) ကို အသုံးပြုပါသည်။ နှစ်ခုလုံး မအောင်မြင်ပါက tool သည် error ကို ပြန်ပို့ပါသည်။
+- `web_fetch` uses Readability (main-content extraction) first, then Firecrawl (if configured). If both fail, the tool returns an error.
 - Firecrawl request များသည် bot-circumvention mode ကို အသုံးပြုပြီး ပုံမှန်အားဖြင့် ရလဒ်များကို cache လုပ်ပါသည်။
 - `web_fetch` သည် Chrome တူသော User-Agent နှင့် `Accept-Language` ကို ပုံမှန်အားဖြင့် ပို့ပါသည်။ လိုအပ်ပါက `userAgent` ဖြင့် override လုပ်နိုင်ပါသည်။
 - `web_fetch` သည် private/internal hostnames များကို ပိတ်ဆို့ပြီး redirect များကို ပြန်လည်စစ်ဆေးပါသည် (`maxRedirects` ဖြင့် ကန့်သတ်နိုင်သည်)။

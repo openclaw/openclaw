@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการคู่มือแบบเป็นมิตรกับผู้เริ่มต้นสำหรับTUI
   - คุณต้องการรายการฟีเจอร์ คำสั่ง และคีย์ลัดของTUIทั้งหมด
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:03Z
 ---
 
 # TUI (Terminal UI)
@@ -49,7 +42,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 ## โมเดลความคิด: เอเจนต์ + เซสชัน
 
-- เอเจนต์เป็นสลักที่ไม่ซ้ำ (เช่น `main`, `research`) Gatewayจะเปิดเผยรายการ
+- เอเจนต์เป็นสลักที่ไม่ซ้ำ (เช่น `main`, `research`) Gatewayจะเปิดเผยรายการ Gateway เปิดเผยรายการดังกล่าว
 - เซสชันเป็นของเอเจนต์ปัจจุบัน
 - คีย์เซสชันถูกเก็บเป็น `agent:<agentId>:<sessionKey>`
   - หากคุณพิมพ์ `/session main` TUIจะขยายเป็น `agent:<currentAgent>:main`
@@ -67,7 +60,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
   - หรือผ่านแผงการตั้งค่า
   - หรือเริ่มด้วย `openclaw tui --deliver`
 
-## ตัวเลือกและโอเวอร์เลย์
+## ตัวเลือกเลือก (pickers) + โอเวอร์เลย์
 
 - ตัวเลือกโมเดล: แสดงรายการโมเดลที่พร้อมใช้งานและตั้งค่า override ของเซสชัน
 - ตัวเลือกเอเจนต์: เลือกเอเจนต์อื่น
@@ -113,7 +106,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 - `/settings`
 - `/exit`
 
-คำสั่งสแลชอื่นของGateway (เช่น `/context`) จะถูกส่งต่อไปยังGatewayและแสดงเป็นเอาต์พุตระบบ ดู [Slash commands](/tools/slash-commands)
+คำสั่งสแลชอื่นของGateway (เช่น `/context`) จะถูกส่งต่อไปยังGatewayและแสดงเป็นเอาต์พุตระบบ ดู [Slash commands](/tools/slash-commands) ดู [Slash commands](/tools/slash-commands)
 
 ## คำสั่งเชลล์ภายในเครื่อง
 
@@ -151,6 +144,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 หมายเหตุ: เมื่อคุณตั้งค่า `--url` แล้ว TUIจะไม่ถอยกลับไปใช้คอนฟิกหรือข้อมูลรับรองจากตัวแปรสภาพแวดล้อม
 ให้ส่ง `--token` หรือ `--password` อย่างชัดเจน การขาดข้อมูลรับรองที่ระบุอย่างชัดเจนถือเป็นข้อผิดพลาด
+ส่ง `--token` หรือ `--password` อย่างชัดเจน การไม่มีข้อมูลรับรองที่ระบุชัดเจนถือเป็นข้อผิดพลาด
 
 ## การแก้ไขปัญหา
 

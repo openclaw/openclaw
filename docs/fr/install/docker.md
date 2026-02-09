@@ -4,13 +4,6 @@ read_when:
   - Vous voulez une passerelle conteneurisée plutôt que des installations locales
   - Vous validez le flux Docker
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: 021ec5aa78e1a6eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:21Z
 ---
 
 # Docker (facultatif)
@@ -48,12 +41,12 @@ Depuis la racine du dépôt :
 Ce script :
 
 - construit l’image de la passerelle
-- exécute l’assistant de prise en main
+- exécute l'assistant d'intégration
 - affiche des conseils facultatifs de configuration des fournisseurs
 - démarre la passerelle via Docker Compose
 - génère un jeton de passerelle et l’écrit dans `.env`
 
-Variables d’environnement facultatives :
+Variables de l'env optionnelles :
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — installer des paquets apt supplémentaires lors du build
 - `OPENCLAW_EXTRA_MOUNTS` — ajouter des montages bind hôte supplémentaires
@@ -126,8 +119,7 @@ Notes :
 
 Si vous voulez que `/home/node` persiste lors de la recréation des conteneurs, définissez un
 volume nommé via `OPENCLAW_HOME_VOLUME`. Cela crée un volume Docker et le monte sur
-`/home/node`, tout en conservant les montages bind standards de config/espace de travail.
-Utilisez ici un volume nommé (pas un chemin bind) ; pour les montages bind, utilisez
+`/home/node`, tout en conservant les montages bind standards de config/espace de travail. Utilisez ici un volume nommé (pas un chemin bind) ; pour les montages bind, utilisez
 `OPENCLAW_EXTRA_MOUNTS`.
 
 Exemple :
@@ -232,7 +224,8 @@ sécurité.
 ### Rebuilds plus rapides (recommandé)
 
 Pour accélérer les rebuilds, ordonnez votre Dockerfile de sorte que les couches de dépendances
-soient mises en cache. Cela évite de relancer `pnpm install` tant que les lockfiles ne changent
+soient mises en cache.
+Cela évite de relancer `pnpm install` tant que les lockfiles ne changent
 pas :
 
 ```dockerfile
@@ -295,7 +288,7 @@ de capturer un callback sur `http://127.0.0.1:1455/auth/callback`. Dans Docker o
 callback peut afficher une erreur de navigateur. Copiez l’URL de redirection complète sur
 laquelle vous arrivez et collez-la dans l’assistant pour terminer l’authentification.
 
-### Vérification d’état
+### Bilan de santé
 
 ```bash
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
@@ -584,7 +577,7 @@ Exemple :
 - Autoriser `browser` dans le sandbox **brise l’isolation** (le navigateur s’exécute sur
   l’hôte).
 
-## Dépannage
+## Problemes courants
 
 - Image manquante : construisez-la avec [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh) ou définissez `agents.defaults.sandbox.docker.image`.
 - Conteneur non démarré : il sera créé automatiquement par session à la demande.

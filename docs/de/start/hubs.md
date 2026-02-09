@@ -1,15 +1,8 @@
 ---
-summary: „Hubs, die auf jede OpenClaw-Dokumentation verlinken“
+summary: "„Hubs, die auf jede OpenClaw-Dokumentation verlinken“"
 read_when:
   - Sie möchten eine vollständige Übersicht der Dokumentation
-title: „Docs-Hubs“
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:28Z
+title: "„Docs-Hubs“"
 ---
 
 # Docs-Hubs

@@ -1,17 +1,10 @@
 ---
-summary: „Zintegrowana usługa sterowania przeglądarką + polecenia akcji”
+summary: "„Zintegrowana usługa sterowania przeglądarką + polecenia akcji”"
 read_when:
   - Dodawanie automatyzacji przeglądarki sterowanej przez agenta
   - Diagnozowanie, dlaczego OpenClaw ingeruje w Twoją własną przeglądarkę Chrome
   - Implementacja ustawień przeglądarki i cyklu życia w aplikacji na macOS
-title: „Przeglądarka (zarządzana przez OpenClaw)”
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:31Z
+title: "„Przeglądarka (zarządzana przez OpenClaw)”"
 ---
 
 # Przeglądarka (zarządzana przez openclaw)
@@ -360,12 +353,12 @@ Przepływ wysokiego poziomu:
 Ten projekt zapewnia agentowi stabilny, deterministyczny interfejs, jednocześnie
 umożliwiając wymianę lokalnych/zdalnych przeglądarek i profili.
 
-## Szybka ściąga CLI
+## Szybkie odwołanie do CLI
 
 Wszystkie polecenia akceptują `--browser-profile <name>` do wskazania konkretnego profilu.
 Wszystkie polecenia akceptują także `--json` dla wyjścia czytelnego maszynowo (stabilne payloady).
 
-Podstawy:
+Podstawa:
 
 - `openclaw browser status`
 - `openclaw browser start`
@@ -458,7 +451,7 @@ Uwagi:
 - `click`/`type`/itd. wymagają `ref` z `snapshot` (numerycznego `12` lub referencji roli `e12`).
   Selektory CSS są celowo nieobsługiwane dla akcji.
 
-## Migawki i referencje
+## Zrzuty stanu i referencje
 
 OpenClaw obsługuje dwa style „migawek”:
 
@@ -473,7 +466,7 @@ OpenClaw obsługuje dwa style „migawek”:
   - Wewnętrznie referencja jest rozwiązywana przez `getByRole(...)` (plus `nth()` dla duplikatów).
   - Dodaj `--labels`, aby dołączyć zrzut obszaru widoku z nałożonymi etykietami `e12`.
 
-Zachowanie referencji:
+Ref zachowanie:
 
 - Referencje **nie są stabilne między nawigacjami**; jeśli coś się nie powiedzie, ponownie uruchom `snapshot` i użyj świeżej referencji.
 - Jeśli migawka ról została wykonana z `--frame`, referencje ról są ograniczone do tego iframe do następnej migawki ról.
@@ -552,8 +545,7 @@ Przydatne w przepływach „spraw, aby strona zachowywała się jak X”:
 
 - Profil przeglądarki openclaw może zawierać zalogowane sesje; traktuj go jako wrażliwy.
 - `browser act kind=evaluate` / `openclaw browser evaluate` oraz `wait --fn`
-  wykonują dowolny JavaScript w kontekście strony. Prompt injection może tym sterować.
-  Wyłącz to przez `browser.evaluateEnabled=false`, jeśli nie jest potrzebne.
+  wykonują dowolny JavaScript w kontekście strony. Prompt injection może tym sterować. Wyłącz to przez `browser.evaluateEnabled=false`, jeśli nie jest potrzebne.
 - W sprawie logowań i uwag antybotowych (X/Twitter itp.) zobacz [Logowanie do przeglądarki + publikowanie na X/Twitter](/tools/browser-login).
 - Utrzymuj Gateway/host węzła jako prywatne (loopback lub tylko tailnet).
 - Endpointy zdalnego CDP są potężne; tuneluj je i zabezpieczaj.

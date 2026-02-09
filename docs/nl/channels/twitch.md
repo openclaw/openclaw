@@ -3,13 +3,6 @@ summary: "Configuratie en installatie van een Twitch-chatbot"
 read_when:
   - Twitch-chatintegratie instellen voor OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:17Z
 ---
 
 # Twitch (plugin)
@@ -76,7 +69,7 @@ Minimale config:
 
 ## Installatie (gedetailleerd)
 
-### Inloggegevens genereren
+### Aanmeldgegevens genereren
 
 Gebruik [Twitch Token Generator](https://twitchtokengenerator.com/):
 
@@ -182,7 +175,7 @@ Voorbeeld (één botaccount in twee kanalen):
 
 **Let op:** Elk account heeft zijn eigen token nodig (één token per kanaal).
 
-## Toegangsbeheer
+## Toegangs beheer
 
 ### Rolgebaseerde beperkingen
 
@@ -379,7 +372,7 @@ Voorbeeld:
 - **Beperk scopes minimaal** — vraag alleen `chat:read` en `chat:write` aan
 - **Als je vastloopt**: Herstart de Gateway nadat je hebt bevestigd dat geen ander proces de sessie bezit
 
-## Limieten
+## Beperkingen
 
 - **500 tekens** per bericht (automatisch opgeknipt op woordgrenzen)
 - Markdown wordt verwijderd vóór het opknippen

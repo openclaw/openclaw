@@ -4,13 +4,6 @@ read_when:
   - Skills 추가 또는 수정
   - Skills 게이팅 또는 로드 규칙 변경
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:01Z
 ---
 
 # Skills (OpenClaw)
@@ -43,11 +36,13 @@ Skill 이름이 충돌하는 경우 우선순위는 다음과 같습니다:
 
 ## 플러그인 + skills
 
-플러그인은 플러그인 루트를 기준으로 한 경로를 `openclaw.plugin.json` 에 나열하여 자체 skills 를 제공할 수 있습니다(`skills` 디렉토리). 플러그인 skills 는 플러그인이 활성화될 때 로드되며 일반적인 skill 우선순위 규칙에 참여합니다. 플러그인 설정 항목에서 `metadata.openclaw.requires.config` 를 통해 게이팅할 수 있습니다. 검색/구성은 [Plugins](/tools/plugin), 해당 skills 가 가르치는 도구 표면은 [Tools](/tools) 를 참고하십시오.
+플러그인은 플러그인 루트를 기준으로 한 경로를 `openclaw.plugin.json` 에 나열하여 자체 skills 를 제공할 수 있습니다(`skills` 디렉토리). 플러그인 skills 는 플러그인이 활성화될 때 로드되며 일반적인 skill 우선순위 규칙에 참여합니다.
+플러그인 설정 항목에서 `metadata.openclaw.requires.config` 를 통해 게이팅할 수 있습니다. 검색/구성은 [Plugins](/tools/plugin), 해당 skills 가 가르치는 도구 표면은 [Tools](/tools) 를 참고하십시오.
 
 ## ClawHub (설치 + 동기화)
 
-ClawHub 는 OpenClaw 를 위한 공개 skills 레지스트리입니다. [https://clawhub.com](https://clawhub.com) 에서 둘러볼 수 있습니다. Skills 를 발견, 설치, 업데이트, 백업하는 데 사용합니다. 전체 가이드는 [ClawHub](/tools/clawhub) 를 참고하십시오.
+ClawHub 는 OpenClaw 를 위한 공개 skills 레지스트리입니다. [https://clawhub.com](https://clawhub.com) 에서 둘러볼 수 있습니다. Skills 를 발견, 설치, 업데이트, 백업하는 데 사용합니다.
+전체 가이드는 [ClawHub](/tools/clawhub) 를 참고하십시오.
 
 일반적인 흐름:
 

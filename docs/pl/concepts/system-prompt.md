@@ -4,13 +4,6 @@ read_when:
   - Edytowanie tekstu systemowego promptu, listy narzędzi lub sekcji czasu/heartbeat
   - Zmienianie zachowania bootstrapu obszaru roboczego lub wstrzykiwania Skills
 title: "Systemowy prompt"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:17Z
 ---
 
 # Systemowy prompt

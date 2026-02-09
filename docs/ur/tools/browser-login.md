@@ -4,13 +4,6 @@ read_when:
   - آپ کو براؤزر آٹومیشن کے لیے سائٹس میں لاگ اِن کرنے کی ضرورت ہو
   - آپ X/Twitter پر اپڈیٹس پوسٹ کرنا چاہتے ہوں
 title: "Browser Login"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:41Z
 ---
 
 # براؤزر لاگ اِن + X/Twitter پوسٹنگ
@@ -19,13 +12,13 @@ x-i18n:
 
 جب کسی سائٹ پر لاگ اِن درکار ہو تو **ہوسٹ** براؤزر پروفائل (openclaw براؤزر) میں **خود دستی طور پر سائن اِن کریں**۔
 
-ماڈل کو اپنی اسناد (credentials) **ہرگز** نہ دیں۔ خودکار لاگ اِن اکثر اینٹی بوٹ دفاعی نظام کو متحرک کر دیتے ہیں اور اکاؤنٹ لاک ہو سکتا ہے۔
+Do **not** give the model your credentials. Automated logins often trigger anti‑bot defenses and can lock the account.
 
 مرکزی براؤزر دستاویزات پر واپس جائیں: [Browser](/tools/browser)۔
 
 ## کون سا Chrome پروفائل استعمال ہوتا ہے؟
 
-OpenClaw ایک **مخصوص Chrome پروفائل** کو کنٹرول کرتا ہے (نام `openclaw`، نارنجی رنگت والا UI)۔ یہ آپ کے روزمرہ براؤزر پروفائل سے الگ ہوتا ہے۔
+OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
 
 اس تک رسائی کے دو آسان طریقے:
 
@@ -46,9 +39,9 @@ openclaw browser open https://x.com
 
 ## Sandboxing + ہوسٹ براؤزر رسائی
 
-Sandboxed براؤزر سیشنز میں بوٹ کی شناخت (bot detection) کے متحرک ہونے کا امکان **زیادہ** ہوتا ہے۔ X/Twitter (اور دیگر سخت پابندی والی سائٹس) کے لیے **ہوسٹ** براؤزر کو ترجیح دیں۔
+Sandboxed browser sessions are **more likely** to trigger bot detection. For X/Twitter (and other strict sites), prefer the **host** browser.
 
-اگر ایجنٹ sandboxed ہو تو براؤزر ٹول بطورِ طے شدہ sandbox استعمال کرتا ہے۔ ہوسٹ کنٹرول کی اجازت دینے کے لیے:
+If the agent is sandboxed, the browser tool defaults to the sandbox. To allow host control:
 
 ```json5
 {

@@ -2,16 +2,9 @@
 summary: "Сетевой хаб: поверхности Gateway (шлюза), сопряжение, обнаружение и безопасность"
 read_when:
   - Вам нужен обзор сетевой архитектуры и безопасности
-  - Вы отлаживаете доступ: локальный vs tailnet, или сопряжение
+  - "Вы отлаживаете доступ: локальный vs tailnet, или сопряжение"
   - Вам нужен канонический список сетевой документации
-title: "Сеть"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:41Z
+title: "network.md"
 ---
 
 # Сетевой хаб

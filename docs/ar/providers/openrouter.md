@@ -1,16 +1,9 @@
 ---
 summary: "استخدم واجهة برمجة التطبيقات الموحّدة من OpenRouter للوصول إلى العديد من النماذج في OpenClaw"
 read_when:
-  - "تريد مفتاح API واحدًا للعديد من نماذج LLM"
-  - "تريد تشغيل النماذج عبر OpenRouter داخل OpenClaw"
+  - تريد مفتاح API واحدًا للعديد من نماذج LLM
+  - تريد تشغيل النماذج عبر OpenRouter داخل OpenClaw
 title: "OpenRouter"
-x-i18n:
-  source_path: providers/openrouter.md
-  source_hash: b7e29fc9c456c64d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:30Z
 ---
 
 # OpenRouter

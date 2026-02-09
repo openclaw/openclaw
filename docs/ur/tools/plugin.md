@@ -4,13 +4,6 @@ read_when:
   - پلگ اِنز/ایکسٹینشنز شامل یا تبدیل کرتے وقت
   - پلگ اِن کی انسٹال یا لوڈ قواعد کی دستاویز سازی
 title: "پلگ اِنز"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:24Z
 ---
 
 # پلگ اِنز (ایکسٹینشنز)
@@ -37,7 +30,7 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-3. Gateway کو ری اسٹارٹ کریں، پھر `plugins.entries.<id>.config` کے تحت کنفیگر کریں۔
+3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 ایک ٹھوس مثال پلگ اِن کے لیے [Voice Call](/plugins/voice-call) دیکھیں۔
 
@@ -57,7 +50,9 @@ openclaw plugins install @openclaw/voice-call
 - Qwen OAuth (provider auth) — بطورِ `qwen-portal-auth` بنڈلڈ (بطورِ طے شدہ غیرفعال)
 - Copilot Proxy (provider auth) — مقامی VS Code Copilot Proxy برج؛ بلٹ اِن `github-copilot` ڈیوائس لاگ اِن سے مختلف (بنڈلڈ، بطورِ طے شدہ غیرفعال)
 
-OpenClaw پلگ اِنز **TypeScript ماڈیولز** ہوتے ہیں جو jiti کے ذریعے رن ٹائم پر لوڈ ہوتے ہیں۔ **کنفیگ کی توثیق پلگ اِن کوڈ کو اجرا نہیں کرتی**؛ اس کے بجائے پلگ اِن مینِفیسٹ اور JSON Schema استعمال کرتی ہے۔ دیکھیں [Plugin manifest](/plugins/manifest)۔
+OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti. **Config
+validation does not execute plugin code**; it uses the plugin manifest and JSON
+Schema instead. See [Plugin manifest](/plugins/manifest).
 
 پلگ اِنز درج ذیل رجسٹر کر سکتے ہیں:
 
@@ -70,12 +65,12 @@ OpenClaw پلگ اِنز **TypeScript ماڈیولز** ہوتے ہیں جو jiti
 - **Skills** (پلگ اِن مینِفیسٹ میں `skills` ڈائریکٹریز درج کر کے)
 - **خودکار جواب کمانڈز** (AI ایجنٹ کو بلاۓ بغیر اجرا)
 
-پلگ اِنز Gateway کے ساتھ **in‑process** چلتے ہیں، اس لیے انہیں قابلِ اعتماد کوڈ سمجھیں۔
-اوزار بنانے کی رہنمائی: [Plugin agent tools](/plugins/agent-tools)۔
+Plugins run **in‑process** with the Gateway, so treat them as trusted code.
+Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
 
 ## رن ٹائم مددگار
 
-پلگ اِنز منتخب کور ہیلپرز تک `api.runtime` کے ذریعے رسائی حاصل کر سکتے ہیں۔ ٹیلی فونی TTS کے لیے:
+Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
@@ -87,7 +82,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 نوٹس:
 
 - کور `messages.tts` کنفیگریشن استعمال ہوتی ہے (OpenAI یا ElevenLabs)۔
-- PCM آڈیو بفر + سیمپل ریٹ واپس آتا ہے۔ فراہم کنندگان کے لیے پلگ اِنز کو ری سیمپل/اینکوڈ کرنا ہوگا۔
+- Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - Edge TTS ٹیلی فونی کے لیے معاونت یافتہ نہیں ہے۔
 
 ## ڈسکوری اور ترجیح
@@ -112,12 +107,13 @@ OpenClaw درج ذیل ترتیب میں اسکین کرتا ہے:
 
 - `<openclaw>/extensions/*`
 
-بنڈلڈ پلگ اِنز کو `plugins.entries.<id>.enabled`
-یا `openclaw plugins enable <id>` کے ذریعے صراحتاً فعال کرنا ضروری ہے۔ انسٹال شدہ پلگ اِنز بطورِ طے شدہ فعال ہوتے ہیں،
-لیکن اسی طریقے سے غیرفعال کیے جا سکتے ہیں۔
+Bundled plugins must be enabled explicitly via `plugins.entries.<id>.enabled`
+or `openclaw plugins enable <id>`. Installed plugins are enabled by default,
+but can be disabled the same way.
 
-ہر پلگ اِن کے روٹ میں ایک `openclaw.plugin.json` فائل شامل ہونا لازم ہے۔ اگر کوئی راستہ
-کسی فائل کی طرف اشارہ کرتا ہے تو پلگ اِن روٹ اس فائل کی ڈائریکٹری ہوگی اور اس میں مینِفیسٹ موجود ہونا چاہیے۔
+Each plugin must include a `openclaw.plugin.json` file in its root. If a path
+points at a file, the plugin root is the file's directory and must contain the
+manifest.
 
 اگر متعدد پلگ اِنز ایک ہی id پر حل ہوں، تو اوپر دی گئی ترتیب میں پہلا میچ جیتتا ہے اور کم ترجیح والی نقول نظرانداز کر دی جاتی ہیں۔
 
@@ -134,16 +130,16 @@ OpenClaw درج ذیل ترتیب میں اسکین کرتا ہے:
 }
 ```
 
-ہر اندراج ایک پلگ اِن بن جاتا ہے۔ اگر پیک میں متعدد ایکسٹینشنز درج ہوں تو پلگ اِن id
-`name/<fileBase>` بن جاتا ہے۔
+Each entry becomes a plugin. If the pack lists multiple extensions, the plugin id
+becomes `name/<fileBase>`.
 
 اگر آپ کا پلگ اِن npm انحصارات امپورٹ کرتا ہے تو انہیں اسی ڈائریکٹری میں انسٹال کریں تاکہ
 `node_modules` دستیاب ہو (`npm install` / `pnpm install`)۔
 
 ### چینل کیٹلاگ میٹاڈیٹا
 
-چینل پلگ اِنز `openclaw.channel` کے ذریعے آن بورڈنگ میٹاڈیٹا اور
-`openclaw.install` کے ذریعے انسٹال اشارے فراہم کر سکتے ہیں۔ اس سے کور کیٹلاگ ڈیٹا سے پاک رہتا ہے۔
+Channel plugins can advertise onboarding metadata via `openclaw.channel` and
+install hints via `openclaw.install`. This keeps the core catalog data-free.
 
 مثال:
 
@@ -171,15 +167,16 @@ OpenClaw درج ذیل ترتیب میں اسکین کرتا ہے:
 }
 ```
 
-OpenClaw **بیرونی چینل کیٹلاگز** کو بھی ضم کر سکتا ہے (مثال کے طور پر، MPM رجسٹری ایکسپورٹ)۔ ایک JSON فائل درج ذیل میں سے کسی ایک جگہ رکھیں:
+OpenClaw can also merge **external channel catalogs** (for example, an MPM
+registry export). Drop a JSON file at one of:
 
 - `~/.openclaw/mpm/plugins.json`
 - `~/.openclaw/mpm/catalog.json`
 - `~/.openclaw/plugins/catalog.json`
 
-یا `OPENCLAW_PLUGIN_CATALOG_PATHS` (یا `OPENCLAW_MPM_CATALOG_PATHS`) کو
-ایک یا زیادہ JSON فائلوں کی طرف اشارہ کریں (کاما/سیمی کولن/`PATH`-سے جدا شدہ)۔ ہر فائل میں
-`{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }` شامل ہونا چاہیے۔
+Or point `OPENCLAW_PLUGIN_CATALOG_PATHS` (or `OPENCLAW_MPM_CATALOG_PATHS`) at
+one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
+contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
 
 ## پلگ اِن IDs
 
@@ -213,21 +210,22 @@ OpenClaw **بیرونی چینل کیٹلاگز** کو بھی ضم کر سکتا
 - `allow`: اجازت فہرست (اختیاری)
 - `deny`: منع فہرست (اختیاری؛ منع کو فوقیت)
 - `load.paths`: اضافی پلگ اِن فائلیں/ڈائریکٹریز
-- `entries.<id>`: فی‑پلگ اِن ٹوگلز + کنفیگ
+- `entries.<id>`: per‑plugin toggles + config
 
 کنفیگ میں تبدیلیوں کے لیے **gateway ری اسٹارٹ لازم** ہے۔
 
 توثیقی قواعد (سخت):
 
 - `entries`, `allow`, `deny`, یا `slots` میں نامعلوم پلگ اِن ids **غلطیاں** ہیں۔
-- نامعلوم `channels.<id>` کیز **غلطیاں** ہیں، جب تک کہ پلگ اِن مینِفیسٹ چینل id کا اعلان نہ کرے۔
+- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
+  the channel id.
 - پلگ اِن کنفیگ کی توثیق `openclaw.plugin.json` میں شامل JSON Schema کے ذریعے کی جاتی ہے (`configSchema`)۔
 - اگر کوئی پلگ اِن غیرفعال ہو تو اس کی کنفیگ محفوظ رہتی ہے اور **وارننگ** جاری ہوتی ہے۔
 
 ## پلگ اِن سلاٹس (خصوصی زمرہ جات)
 
-کچھ پلگ اِن زمرہ جات **خصوصی** ہوتے ہیں (ایک وقت میں صرف ایک فعال)۔ سلاٹ کا مالک منتخب کرنے کے لیے
-`plugins.slots` استعمال کریں:
+Some plugin categories are **exclusive** (only one active at a time). Use
+`plugins.slots` to select which plugin owns the slot:
 
 ```json5
 {
@@ -239,8 +237,8 @@ OpenClaw **بیرونی چینل کیٹلاگز** کو بھی ضم کر سکتا
 }
 ```
 
-اگر متعدد پلگ اِنز `kind: "memory"` کا اعلان کریں، تو صرف منتخب شدہ لوڈ ہوگا۔ باقی
-تشخیصی پیغامات کے ساتھ غیرفعال کر دیے جائیں گے۔
+If multiple plugins declare `kind: "memory"`, only the selected one loads. Others
+are disabled with diagnostics.
 
 ## کنٹرول UI (اسکیما + لیبلز)
 
@@ -248,8 +246,8 @@ OpenClaw **بیرونی چینل کیٹلاگز** کو بھی ضم کر سکتا
 
 OpenClaw دریافت شدہ پلگ اِنز کی بنیاد پر رن ٹائم پر `uiHints` کو وسعت دیتا ہے:
 
-- `plugins.entries.<id>` / `.enabled` / `.config` کے لیے فی‑پلگ اِن لیبلز شامل کرتا ہے
-- درج ذیل کے تحت پلگ اِن کی جانب سے فراہم کردہ اختیاری کنفیگ فیلڈ اشارے ضم کرتا ہے:
+- Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
+- Merges optional plugin-provided config field hints under:
   `plugins.entries.<id>.config.<field>`
 
 اگر آپ چاہتے ہیں کہ آپ کے پلگ اِن کنفیگ فیلڈز اچھے لیبلز/پلیس ہولڈرز دکھائیں (اور رازدارانہ قدروں کو حساس کے طور پر نشان زد کریں)،
@@ -302,12 +300,12 @@ openclaw plugins doctor
 پلگ اِنز درج ذیل میں سے ایک ایکسپورٹ کرتے ہیں:
 
 - ایک فنکشن: `(api) => { ... }`
-- ایک آبجیکٹ: `{ id, name, configSchema, register(api) { ... } }`
+- An object: `{ id, name, configSchema, register(api) { ... } }`
 
 ## پلگ اِن ہکس
 
-پلگ اِنز ہکس کے ساتھ آ سکتے ہیں اور انہیں رن ٹائم پر رجسٹر کر سکتے ہیں۔ اس سے پلگ اِن کو
-الگ ہک پیک انسٹال کیے بغیر ایونٹ پر مبنی آٹومیشن بنڈل کرنے کی سہولت ملتی ہے۔
+پلگ اِنز ہُکس فراہم کر سکتے ہیں اور انہیں رن ٹائم پر رجسٹر کر سکتے ہیں۔ یہ ایک پلگ اِن بنڈل کو اجازت دیتا ہے کہ وہ
+ایونٹ ڈرِوَن آٹومیشن کو بغیر علیحدہ ہُک پیک انسٹال کیے فراہم کرے۔
 
 ### مثال
 
@@ -331,8 +329,8 @@ export default function register(api) {
 پلگ اِنز **ماڈل فراہم کنندہ auth** فلو رجسٹر کر سکتے ہیں تاکہ صارفین OpenClaw کے اندر ہی OAuth یا
 API‑کلید سیٹ اپ چلا سکیں (بیرونی اسکرپٹس کی ضرورت نہیں)۔
 
-`api.registerProvider(...)` کے ذریعے ایک فراہم کنندہ رجسٹر کریں۔ ہر فراہم کنندہ ایک
-یا زیادہ auth طریقے ظاہر کرتا ہے (OAuth، API کلید، ڈیوائس کوڈ، وغیرہ)۔ یہ طریقے درج ذیل کو طاقت دیتے ہیں:
+`api.registerProvider(...)` کے ذریعے ایک پرووائیڈر رجسٹر کریں۔ ہر پرووائیڈر ایک
+یا ایک سے زیادہ تصدیقی طریقے فراہم کرتا ہے (OAuth، API key، device code، وغیرہ)۔ یہ طریقے درج ذیل کو طاقت دیتے ہیں:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
 
@@ -379,9 +377,9 @@ api.registerProvider({
 
 ### میسجنگ چینل رجسٹر کریں
 
-پلگ اِنز **چینل پلگ اِنز** رجسٹر کر سکتے ہیں جو بلٹ‑اِن چینلز
-(WhatsApp، Telegram، وغیرہ) کی طرح برتاؤ کرتے ہیں۔ چینل کنفیگ `channels.<id>` کے تحت رہتی ہے اور
-آپ کے چینل پلگ اِن کوڈ کے ذریعے ویلیڈیٹ ہوتی ہے۔
+پلگ اِنز **چینل پلگ اِنز** رجسٹر کر سکتے ہیں جو بلٹ اِن چینلز کی طرح برتاؤ کرتے ہیں
+(WhatsApp، Telegram، وغیرہ)۔ چینل کنفیگ `channels.<id>` کے تحت رہتی ہے\` اور آپ کے چینل پلگ اِن کوڈ کے ذریعے
+ویلیڈیٹ کی جاتی ہے۔
 
 ```ts
 const myChannel = {
@@ -415,7 +413,7 @@ export default function (api) {
 
 نوٹس:
 
-- کنفیگ کو `channels.<id>` کے تحت رکھیں (نہ کہ `plugins.entries`)۔
+- Put config under `channels.<id>` (not `plugins.entries`).
 - `meta.label` CLI/UI فہرستوں میں لیبلز کے لیے استعمال ہوتا ہے۔
 - `meta.aliases` نارملائزیشن اور CLI ان پٹس کے لیے متبادل ids شامل کرتا ہے۔
 - `meta.preferOver` ان چینل ids کی فہرست دیتا ہے جنہیں دونوں کنفیگر ہونے پر خودکار فعال ہونے سے بچانا ہو۔
@@ -423,13 +421,13 @@ export default function (api) {
 
 ### نیا میسجنگ چینل لکھیں (مرحلہ وار)
 
-اس وقت استعمال کریں جب آپ کو **نئی چیٹ سطح** (ایک “میسجنگ چینل”) درکار ہو، نہ کہ ماڈل فراہم کنندہ۔
-ماڈل فراہم کنندہ کی دستاویزات `/providers/*` کے تحت ہیں۔
+اسے اس وقت استعمال کریں جب آپ ایک **نئی چیٹ سطح** (ایک “میسجنگ چینل”) چاہتے ہوں، نہ کہ ماڈل پرووائیڈر۔
+ماڈل پرووائیڈر کی دستاویزات `/providers/*` کے تحت موجود ہیں۔
 
 1. id + کنفیگ شکل منتخب کریں
 
-- تمام چینل کنفیگ `channels.<id>` کے تحت رہتی ہے۔
-- متعدد اکاؤنٹس کے سیٹ اپ کے لیے `channels.<id>.accounts.<accountId>` کو ترجیح دیں۔
+- تمام چینل کنفیگ `channels.<id>` کے تحت رہتی ہے\`۔
+- ملٹی اکاؤنٹ سیٹ اپس کے لیے `channels.<id>` کو ترجیح دیں\`.accounts.<accountId>\`\`۔
 
 2. چینل میٹاڈیٹا متعین کریں
 
@@ -503,8 +501,8 @@ export default function (api) {
 }
 ```
 
-پلگ اِن لوڈ کریں (ایکسٹینشنز ڈائریکٹری یا `plugins.load.paths`)، gateway ری اسٹارٹ کریں،
-پھر اپنی کنفیگ میں `channels.<id>` کنفیگر کریں۔
+پلگ اِن لوڈ کریں (extensions ڈائریکٹری یا `plugins.load.paths`)، گیٹ وے ری اسٹارٹ کریں،
+پھر اپنی کنفیگ میں \`channels.<id>\`\` کو کنفیگر کریں۔
 
 ### ایجنٹ اوزار
 
@@ -537,8 +535,8 @@ export default function (api) {
 
 ### خودکار جواب کمانڈز رجسٹر کریں
 
-پلگ اِنز حسبِ ضرورت سلیش کمانڈز رجسٹر کر سکتے ہیں جو **AI ایجنٹ کو بلاۓ بغیر** اجرا ہوتی ہیں۔
-یہ ٹوگل کمانڈز، اسٹیٹس چیکس، یا فوری ایکشنز کے لیے مفید ہے جنہیں LLM پروسیسنگ کی ضرورت نہیں ہوتی۔
+پلگ اِنز کسٹم سلیش کمانڈز رجسٹر کر سکتے ہیں جو **AI ایجنٹ کو چلائے بغیر** ایکزیکیوٹ ہوتی ہیں۔ This is useful for toggle commands, status checks, or quick actions
+that don't need LLM processing.
 
 ```ts
 export default function (api) {
@@ -565,7 +563,7 @@ export default function (api) {
 
 - `name`: کمانڈ نام (ابتدائی `/` کے بغیر)
 - `description`: کمانڈ فہرستوں میں دکھایا جانے والا مددگار متن
-- `acceptsArgs`: آیا کمانڈ آرگیومنٹس قبول کرتی ہے (ڈیفالٹ: false)۔ اگر false ہو اور آرگیومنٹس دیے جائیں تو کمانڈ میچ نہیں ہوگی اور پیغام دیگر ہینڈلرز کو پاس ہو جائے گا
+- `acceptsArgs`: آیا کمانڈ آرگیومنٹس قبول کرتی ہے یا نہیں (ڈیفالٹ: false)۔ اگر false ہو اور آرگیومنٹس فراہم کیے جائیں، تو کمانڈ میچ نہیں کرے گی اور پیغام دوسرے ہینڈلرز کو پاس ہو جائے گا۔
 - `requireAuth`: آیا مجاز بھیجنے والا درکار ہے (ڈیفالٹ: true)
 - `handler`: وہ فنکشن جو `{ text: string }` واپس کرتا ہے (async ہو سکتا ہے)
 
@@ -591,7 +589,7 @@ api.registerCommand({
 - کمانڈز عالمی طور پر رجسٹر ہوتی ہیں اور تمام چینلز میں کام کرتی ہیں
 - کمانڈ نام کیس‑انسینسیٹو ہوتے ہیں (`/MyStatus`، `/mystatus` سے میچ کرتا ہے)
 - کمانڈ نام کسی حرف سے شروع ہونا چاہیے اور صرف حروف، اعداد، ہائفن، اور انڈر اسکور پر مشتمل ہو سکتا ہے
-- محفوظ کمانڈ نام (جیسے `help`, `status`, `reset`، وغیرہ) پلگ اِنز کے ذریعے اووررائیڈ نہیں کیے جا سکتے
+- محفوظ کمانڈ نام (جیسے `help`، `status`، `reset`، وغیرہ) پلگ اِنز کے ذریعے اووررائیڈ نہیں کیے جا سکتے۔
 - پلگ اِنز کے درمیان کمانڈ کی دوہری رجسٹریشن تشخیصی غلطی کے ساتھ ناکام ہو جائے گی
 
 ### بیک گراؤنڈ سروسز رجسٹر کریں
@@ -614,9 +612,9 @@ export default function (api) {
 
 ## Skills
 
-پلگ اِنز ریپو میں ایک skill شامل کر سکتے ہیں (`skills/<name>/SKILL.md`)۔
-اسے `plugins.entries.<id>.enabled` (یا دیگر کنفیگ گیٹس) کے ذریعے فعال کریں اور یقینی بنائیں
-کہ یہ آپ کے ورک اسپیس/منیجڈ skills مقامات میں موجود ہو۔
+پلگ اِنز ریپو میں ایک اسکل فراہم کر سکتے ہیں (`skills/<name>/SKILL.md`)۔
+Enable it with `plugins.entries.<id>.enabled` (or other config gates) and ensure
+it’s present in your workspace/managed skills locations.
 
 ## تقسیم (npm)
 
@@ -648,7 +646,7 @@ export default function (api) {
 
 ## حفاظتی نوٹس
 
-پلگ اِنز Gateway کے ساتھ in‑process چلتے ہیں۔ انہیں قابلِ اعتماد کوڈ سمجھیں:
+پلگ اِنز گیٹ وے کے ساتھ اِن-پروسیس چلتے ہیں۔ انہیں قابلِ اعتماد کوڈ سمجھیں:
 
 - صرف وہی پلگ اِنز انسٹال کریں جن پر آپ کو اعتماد ہو۔
 - `plugins.allow` اجازت فہرستوں کو ترجیح دیں۔

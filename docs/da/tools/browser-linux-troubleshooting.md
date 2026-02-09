@@ -2,13 +2,6 @@
 summary: "Ret Chrome/Brave/Edge/Chromium CDP-opstartsproblemer for OpenClaw browserkontrol på Linux"
 read_when: "Browserkontrol fejler på Linux, især med snap Chromium"
 title: "Browser-fejlfinding"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:43Z
 ---
 
 # Browser-fejlfinding (Linux)
@@ -23,7 +16,7 @@ OpenClaws browserkontrolserver kan ikke starte Chrome/Brave/Edge/Chromium med fe
 
 ### Rodårsag
 
-På Ubuntu (og mange Linux-distributioner) er standardinstallationen af Chromium en **snap-pakke**. Snaps AppArmor-indeslutning forstyrrer, hvordan OpenClaw starter og overvåger browserprocessen.
+På Ubuntu (og mange Linux-distros), er standard Chromium-installationen en **snap-pakke**. Snap's AppArmor indespærring forstyrrer hvordan OpenClaw spawns og overvåger browser processen.
 
 Kommandoen `apt install chromium` installerer en stub-pakke, der omdirigerer til snap:
 
@@ -119,19 +112,19 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Konfigurationsreference
 
-| Option                   | Beskrivelse                                                            | Standard                                                                     |
-| ------------------------ | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `browser.enabled`        | Aktivér browserkontrol                                                 | `true`                                                                       |
+| Option                   | Beskrivelse                                                                               | Standard                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Aktivér browserkontrol                                                                    | `true`                                                                                          |
 | `browser.executablePath` | Sti til en Chromium-baseret browser-binær (Chrome/Brave/Edge/Chromium) | auto-detekteret (foretrækker standardbrowseren, når den er Chromium-baseret) |
-| `browser.headless`       | Kør uden GUI                                                           | `false`                                                                      |
-| `browser.noSandbox`      | Tilføj `--no-sandbox`-flag (nødvendigt for nogle Linux-opsætninger)    | `false`                                                                      |
-| `browser.attachOnly`     | Start ikke browseren, tilknyt kun til eksisterende                     | `false`                                                                      |
-| `browser.cdpPort`        | Chrome DevTools Protocol-port                                          | `18800`                                                                      |
+| `browser.headless`       | Kør uden GUI                                                                              | `false`                                                                                         |
+| `browser.noSandbox`      | Tilføj `--no-sandbox`-flag (nødvendigt for nogle Linux-opsætninger)    | `false`                                                                                         |
+| `browser.attachOnly`     | Start ikke browseren, tilknyt kun til eksisterende                                        | `false`                                                                                         |
+| `browser.cdpPort`        | Chrome DevTools Protocol-port                                                             | `18800`                                                                                         |
 
 ### Problem: "Chrome extension relay is running, but no tab is connected"
 
-Du bruger profilen `chrome` (extension relay). Den forventer, at OpenClaw
-browserudvidelsen er tilknyttet til en aktiv fane.
+Du bruger 'chrome'-profilen (forlængelsesrelæ). Det forventer, at OpenClaw
+browserudvidelsen skal være knyttet til en levende fane.
 
 Løsningsmuligheder:
 

@@ -4,19 +4,12 @@ read_when:
   - आप यह बदल रहे हैं कि मॉडल या उपयोगकर्ताओं को टाइमस्टैम्प कैसे दिखाए जाते हैं
   - आप संदेशों या सिस्टम प्रॉम्प्ट आउटपुट में समय-स्वरूपण का डिबग कर रहे हैं
 title: "दिनांक और समय"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:13Z
 ---
 
 # Date & Time
 
-OpenClaw डिफ़ॉल्ट रूप से **परिवहन टाइमस्टैम्प के लिए होस्ट-लोकल समय** और **सिस्टम प्रॉम्प्ट में केवल उपयोगकर्ता टाइमज़ोन** का उपयोग करता है।
-प्रदाता टाइमस्टैम्प संरक्षित रहते हैं ताकि टूल्स अपनी मूल अर्थवत्ता बनाए रखें (वर्तमान समय `session_status` के माध्यम से उपलब्ध है)।
+6. OpenClaw transport timestamps के लिए डिफ़ॉल्ट रूप से **host‑local time** और **system prompt में केवल user timezone** का उपयोग करता है।
+7. Provider timestamps को संरक्षित रखा जाता है ताकि tools अपनी native semantics बनाए रखें (current time `session_status` के माध्यम से उपलब्ध है)।
 
 ## Message envelopes (local by default)
 
@@ -105,13 +98,13 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` प्रॉम्प्ट संदर्भ के लिए **उपयोगकर्ता-लोकल टाइमज़ोन** सेट करता है।
-- `timeFormat` प्रॉम्प्ट में **12h/24h डिस्प्ले** को नियंत्रित करता है। `auto` OS प्राथमिकताओं का पालन करता है।
+- 8. `timeFormat` prompt में **12h/24h display** को नियंत्रित करता है। 9. `auto` OS preferences का पालन करता है।
 
 ## Time format detection (auto)
 
-जब `timeFormat: "auto"` सक्षम हो, OpenClaw OS प्राथमिकता (macOS/Windows) का निरीक्षण करता है
-और लोकैल स्वरूपण पर फ़ॉलबैक करता है। पहचाना गया मान **प्रति प्रक्रिया कैश** किया जाता है
-ताकि बार-बार सिस्टम कॉल से बचा जा सके।
+10. जब `timeFormat: "auto"` होता है, OpenClaw OS preference (macOS/Windows) का निरीक्षण करता है
+    और locale formatting पर fallback करता है। 11. Detect किया गया मान **per process cached** किया जाता है
+    taaki repeated system calls से बचा जा सके।
 
 ## Tool payloads + connectors (raw provider time + normalized fields)
 

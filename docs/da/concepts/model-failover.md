@@ -4,13 +4,6 @@ read_when:
   - Diagnosticering af rotation af auth-profiler, cooldowns eller model‑fallback‑adfærd
   - Opdatering af failover‑regler for auth-profiler eller modeller
 title: "Model‑failover"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Model‑failover
@@ -35,7 +28,7 @@ Mere detaljer: [/concepts/oauth](/concepts/oauth)
 Credential‑typer:
 
 - `type: "api_key"` → `{ provider, key }`
-- `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` for nogle udbydere)
+- `type: "oauth"` → `{ provider, adgang, opdatering, udløber e-mail? }` (+ `projectId`/`enterpriseUrl` for nogle udbydere)
 
 ## Profil‑ID’er
 
@@ -62,8 +55,8 @@ Hvis der ikke er konfigureret en eksplicit rækkefølge, bruger OpenClaw en roun
 
 ### Session‑klæbrighed (cache‑venlig)
 
-OpenClaw **fastlåser den valgte auth‑profil pr. session** for at holde udbyder‑caches varme.
-Den **roterer ikke ved hver anmodning**. Den fastlåste profil genbruges, indtil:
+OpenClaw **stifter den valgte auth profil per session** for at holde udbyder caches varm.
+Det gør **ikke** rotere på hver anmodning. Den fastgjorte profil genbruges indtil:
 
 - sessionen nulstilles (`/new` / `/reset`)
 - en komprimering fuldføres (komprimeringstælleren øges)
@@ -72,24 +65,24 @@ Den **roterer ikke ved hver anmodning**. Den fastlåste profil genbruges, indtil
 Manuelt valg via `/model …@<profileId>` sætter en **bruger‑override** for den session
 og auto‑roteres ikke, før en ny session starter.
 
-Auto‑fastlåste profiler (valgt af sessions‑routeren) behandles som en **præference**:
-de prøves først, men OpenClaw kan rotere til en anden profil ved rate limits/timeouts.
-Bruger‑fastlåste profiler forbliver låst til den profil; hvis den fejler og model‑fallbacks
-er konfigureret, går OpenClaw videre til den næste model i stedet for at skifte profiler.
+Autofastgjorte profiler (udvalgt af sessionsrouteren) behandles som **præferencer**:
+de prøves først men OpenClaw kan rotere til en anden profil på takstgrænser/timeouts.
+Brugerfastgjorte profiler forbliver låst på denne profil; hvis det mislykkes, og model fallbacks
+er konfigureret, OpenClaw flytter til den næste model i stedet for at skifte profiler.
 
 ### Hvorfor OAuth kan “se ud til at være væk”
 
-Hvis du både har en OAuth‑profil og en API‑nøgle‑profil for den samme udbyder, kan round‑robin skifte mellem dem på tværs af beskeder, medmindre de er fastlåst. For at tvinge én profil:
+Hvis du både har en OAuth profil og en API-nøgleprofil for den samme udbyder, kan rund-robin skifte mellem dem på tværs af meddelelser, medmindre de er fastgjort. For at tvinge en enkelt profil:
 
 - Fastlås med `auth.order[provider] = ["provider:profileId"]`, eller
 - Brug en pr.‑session‑override via `/model …` med en profil‑override (når understøttet af dit UI/chat‑miljø).
 
 ## Cooldowns
 
-Når en profil fejler på grund af auth-/rate‑limit‑fejl (eller en timeout, der ligner
-rate limiting), markerer OpenClaw den i cooldown og går videre til den næste profil.
-Format-/ugyldig‑anmodning‑fejl (for eksempel Cloud Code Assist tool‑call‑ID‑valideringsfejl)
-behandles som failover‑værdige og bruger de samme cooldowns.
+Hvis en profil fejler på grund af auth/rate-limit fejl (eller en tidsfrist, der ser ud til
+som hastighedsbegrænsning) OpenClaw markerer det i nedkøling og flytter til den næste profil.
+Format/ugyldig anmodning fejl (f.eks. Cloud Code Assist tool call ID
+validering fejl) behandles som fejlværdig og bruger de samme nedkølinger.
 
 Cooldowns bruger eksponentiel backoff:
 
@@ -112,9 +105,9 @@ Tilstand gemmes i `auth-profiles.json` under `usageStats`:
 }
 ```
 
-## Deaktiveringer pga. fakturering
+## Fakturering deaktiverer
 
-Fakturering-/kreditfejl (for eksempel “insufficient credits” / “credit balance too low”) behandles som failover‑værdige, men de er typisk ikke forbigående. I stedet for en kort cooldown markerer OpenClaw profilen som **deaktiveret** (med en længere backoff) og roterer til den næste profil/udbyder.
+Fakturering/kreditfejl (for eksempel “utilstrækkelige kreditter” / “kreditsaldo for lavt”) behandles som failover-worthy, men de er normalt ikke forbigående. I stedet for en kort nedkøling markerer OpenClaw profilen som **deaktiveret** (med en længere tilbage-off) og roterer til den næste profil/udbyder.
 
 Tilstand gemmes i `auth-profiles.json`:
 
@@ -136,9 +129,9 @@ Standarder:
 
 ## Model‑fallback
 
-Hvis alle profiler for en udbyder fejler, går OpenClaw videre til den næste model i
-`agents.defaults.model.fallbacks`. Dette gælder for auth‑fejl, rate limits og
-timeouts, der har udtømt profil‑rotationen (andre fejl fremrykker ikke fallback).
+Hvis alle profiler for en udbyder mislykkes, OpenClaw flytter til den næste model i
+`agents.defaults.model.fallbacks`. Dette gælder for auth fiaskoer, hastighedsgrænser og
+timeouts som udmattet profilrotation (andre fejl går ikke forud for tilbagefald).
 
 Når et run starter med en model‑override (hooks eller CLI), ender fallbacks stadig ved
 `agents.defaults.model.primary` efter at have prøvet eventuelle konfigurerede fallbacks.

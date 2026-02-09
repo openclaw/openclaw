@@ -4,13 +4,6 @@ read_when:
   - Konfigurowanie obsługi Signal
   - Debugowanie wysyłania/odbierania w Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:06Z
 ---
 
 # Signal (signal-cli)
@@ -139,7 +132,7 @@ Grupy:
 - Użyj `channels.signal.ignoreAttachments`, aby pominąć pobieranie mediów.
 - Kontekst historii grup używa `channels.signal.historyLimit` (lub `channels.signal.accounts.*.historyLimit`), z przejściem awaryjnym do `messages.groupChat.historyLimit`. Ustaw `0`, aby wyłączyć (domyślnie 50).
 
-## Pisanie i potwierdzenia odczytu
+## Pisanie + potwierdzenia odczytu
 
 - **Wskaźniki pisania**: OpenClaw wysyła sygnały pisania przez `signal-cli sendTyping` i odświeża je podczas generowania odpowiedzi.
 - **Potwierdzenia odczytu**: gdy `channels.signal.sendReadReceipts` jest true, OpenClaw przekazuje potwierdzenia odczytu dla dozwolonych DM-ów.
@@ -193,7 +186,7 @@ Następnie, w razie potrzeby, potwierdź stan parowania DM-ów:
 openclaw pairing list signal
 ```
 
-Częste problemy:
+Częste awarie:
 
 - Demon osiągalny, ale brak odpowiedzi: zweryfikuj ustawienia konta/demona (`httpUrl`, `account`) oraz tryb odbioru.
 - DM-y ignorowane: nadawca oczekuje na zatwierdzenie parowania.

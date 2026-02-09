@@ -4,18 +4,11 @@ read_when:
   - مکمل ایجنٹ ٹرن چلائے بغیر ٹولز کو کال کرنا
   - ایسی آٹومیشنز بنانا جنہیں ٹول پالیسی کے نفاذ کی ضرورت ہو
 title: "Tools Invoke API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:17Z
 ---
 
 # Tools Invoke (HTTP)
 
-OpenClaw کا Gateway ایک سادہ HTTP اینڈپوائنٹ فراہم کرتا ہے جس کے ذریعے ایک واحد ٹول کو براہِ راست چلایا جا سکتا ہے۔ یہ ہمیشہ فعال ہوتا ہے، مگر Gateway کی تصدیق اور ٹول پالیسی کے تحت محدود ہوتا ہے۔
+OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled, but gated by Gateway auth and tool policy.
 
 - `POST /tools/invoke`
 - Gateway کے ساتھ وہی پورٹ (WS + HTTP ملٹی پلیک্স): `http://<gateway-host>:<port>/tools/invoke`
@@ -24,7 +17,7 @@ OpenClaw کا Gateway ایک سادہ HTTP اینڈپوائنٹ فراہم کر�
 
 ## Authentication
 
-Gateway کی تصدیقی کنفیگریشن استعمال ہوتی ہے۔ ایک bearer ٹوکن بھیجیں:
+Uses the Gateway auth configuration. Send a bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -50,7 +43,7 @@ Fields:
 - `tool` (string، لازم): چلانے کے لیے ٹول کا نام۔
 - `action` (string، اختیاری): اگر ٹول اسکیما `action` کی حمایت کرتا ہو اور args پے لوڈ میں اسے چھوڑ دیا گیا ہو تو اسے args میں میپ کیا جاتا ہے۔
 - `args` (object، اختیاری): ٹول سے مخصوص آرگیومنٹس۔
-- `sessionKey` (string، اختیاری): ہدف سیشن کلید۔ اگر چھوڑ دی جائے یا `"main"` ہو، تو Gateway کنفیگر کی گئی مرکزی سیشن کلید استعمال کرتا ہے ( `session.mainKey` اور ڈیفالٹ ایجنٹ کا احترام کرتا ہے، یا عالمی دائرہ کار میں `global`)۔
+- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and default agent, or `global` in global scope).
 - `dryRun` (boolean، اختیاری): مستقبل کے استعمال کے لیے محفوظ؛ فی الحال نظرانداز کیا جاتا ہے۔
 
 ## Policy + routing behavior

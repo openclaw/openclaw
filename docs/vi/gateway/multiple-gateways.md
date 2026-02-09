@@ -4,18 +4,11 @@ read_when:
   - Chạy nhiều hơn một Gateway trên cùng một máy
   - Bạn cần cấu hình/trạng thái/cổng được cách ly cho từng Gateway
 title: "Nhiều Gateway"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:59Z
 ---
 
 # Nhiều Gateway (cùng máy chủ)
 
-Hầu hết các thiết lập chỉ nên dùng một Gateway vì một Gateway có thể xử lý nhiều kết nối nhắn tin và nhiều tác tử. Nếu bạn cần mức cách ly hoặc dự phòng cao hơn (ví dụ: một bot cứu hộ), hãy chạy các Gateway riêng biệt với hồ sơ/cổng được cách ly.
+Hầu hết các thiết lập nên dùng một Gateway vì một Gateway có thể xử lý nhiều kết nối nhắn tin và agent. Nếu bạn cần cách ly hoặc dự phòng mạnh hơn (ví dụ: bot cứu hộ), hãy chạy các Gateway riêng với hồ sơ/cổng tách biệt.
 
 ## Danh sách kiểm tra cách ly (bắt buộc)
 
@@ -87,7 +80,7 @@ Cổng cơ sở = `gateway.port` (hoặc `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - cổng dịch vụ điều khiển trình duyệt = cổng cơ sở + 2 (chỉ local loopback)
 - `canvasHost.port = base + 4`
-- Các cổng CDP của hồ sơ trình duyệt tự động cấp phát từ `browser.controlPort + 9 .. + 108`
+- Các cổng CDP hồ sơ trình duyệt tự động cấp phát từ `browser.controlPort + 9 ..` + 108\`
 
 Nếu bạn ghi đè bất kỳ mục nào trong cấu hình hoặc biến môi trường, bạn phải giữ chúng là duy nhất cho từng instance.
 
@@ -95,8 +88,8 @@ Nếu bạn ghi đè bất kỳ mục nào trong cấu hình hoặc biến môi 
 
 - **Không** cố định `browser.cdpUrl` cùng một giá trị trên nhiều instance.
 - Mỗi instance cần cổng điều khiển trình duyệt và dải CDP riêng (dẫn xuất từ cổng gateway của nó).
-- Nếu cần cổng CDP tường minh, hãy đặt `browser.profiles.<name>.cdpPort` cho từng instance.
-- Chrome từ xa: dùng `browser.profiles.<name>.cdpUrl` (theo profile, theo instance).
+- Nếu cần cổng CDP cố định, đặt `browser.profiles.<name>`.cdpPort\` cho mỗi instance.
+- Chrome từ xa: dùng `browser.profiles.<name>``.cdpUrl` (theo hồ sơ, theo instance).
 
 ## Ví dụ env thủ công
 

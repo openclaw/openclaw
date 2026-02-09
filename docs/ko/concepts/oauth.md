@@ -6,13 +6,6 @@ read_when:
   - setup-token 또는 OAuth 인증 플로우가 필요할 때
   - 다중 계정 또는 프로필 라우팅이 필요할 때
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:47Z
 ---
 
 # OAuth
@@ -117,7 +110,7 @@ OpenClaw 의 대화형 로그인 플로우는 `@mariozechner/pi-ai` 에 구현�
 
 두 가지 패턴이 있습니다.
 
-### 1) 권장: 분리된 에이전트
+### 1. 권장: 분리된 에이전트
 
 '개인'과 '업무'가 절대 상호작용하지 않게 하려면, 격리된 에이전트(분리된 세션 + 자격 증명 + 워크스페이스)를 사용하십시오.
 
@@ -128,7 +121,7 @@ openclaw agents add personal
 
 그런 다음 에이전트별로 인증을 구성(마법사)하고, 채팅을 올바른 에이전트로 라우팅하십시오.
 
-### 2) 고급: 하나의 에이전트에 여러 프로필
+### 2. 고급: 하나의 에이전트에 여러 프로필
 
 `auth-profiles.json` 는 동일한 프로바이더에 대해 여러 프로필 ID 를 지원합니다.
 

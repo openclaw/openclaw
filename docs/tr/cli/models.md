@@ -4,13 +4,6 @@ read_when:
   - Varsayılan modelleri değiştirmek veya sağlayıcı kimlik doğrulama durumunu görüntülemek istediğinizde
   - Mevcut modelleri/sağlayıcıları taramak ve kimlik doğrulama profillerini hata ayıklamak istediğinizde
 title: "modeller"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:03Z
 ---
 
 # `openclaw models`

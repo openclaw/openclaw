@@ -4,13 +4,6 @@ read_when:
   - Sie benötigen eine anbieterweise Referenz zur Modelleinstellung
   - Sie möchten Beispielkonfigurationen oder CLI-Onboarding-Befehle für Modellanbieter
 title: "Modellanbieter"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:58Z
 ---
 
 # Modellanbieter

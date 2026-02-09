@@ -5,13 +5,6 @@ read_when:
   - Necesita auditar claves, costos y visibilidad de uso
   - Está explicando el reporte de costos de /status o /usage
 title: "Uso y costos de la API"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 908bfc17811b8f4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:33Z
 ---
 
 # Uso y costos de la API
@@ -50,14 +43,14 @@ OpenClaw puede recoger credenciales desde:
 
 ## Funciones que pueden gastar claves
 
-### 1) Respuestas del modelo principal (chat + herramientas)
+### 1. Respuestas del modelo principal (chat + herramientas)
 
 Cada respuesta o llamada a herramienta usa el **proveedor del modelo actual** (OpenAI, Anthropic, etc.). Esta es la
 principal fuente de uso y costo.
 
 Vea [Modelos](/providers/models) para la configuración de precios y [Uso de tokens y costos](/reference/token-use) para la visualización.
 
-### 2) Comprensión de medios (audio/imagen/video)
+### 2. Comprensión de medios (audio/imagen/video)
 
 Los medios entrantes pueden resumirse/transcribirse antes de que se ejecute la respuesta. Esto usa APIs de modelos/proveedores.
 
@@ -67,7 +60,7 @@ Los medios entrantes pueden resumirse/transcribirse antes de que se ejecute la r
 
 Vea [Comprensión de medios](/nodes/media-understanding).
 
-### 3) Embeddings de memoria + búsqueda semántica
+### 3. Embeddings de memoria + búsqueda semántica
 
 La búsqueda semántica de memoria usa **APIs de embeddings** cuando se configura para proveedores remotos:
 
@@ -80,7 +73,7 @@ Puede mantenerlo local con `memorySearch.provider = "local"` (sin uso de API).
 
 Vea [Memoria](/concepts/memory).
 
-### 4) Herramienta de búsqueda web (Brave / Perplexity vía OpenRouter)
+### 4. Herramienta de búsqueda web (Brave / Perplexity vía OpenRouter)
 
 `web_search` usa claves de API y puede incurrir en cargos de uso:
 
@@ -95,7 +88,7 @@ Vea [Memoria](/concepts/memory).
 
 Vea [Herramientas web](/tools/web).
 
-### 5) Herramienta de obtención web (Firecrawl)
+### 5. Herramienta de obtención web (Firecrawl)
 
 `web_fetch` puede llamar a **Firecrawl** cuando hay una clave de API presente:
 
@@ -105,7 +98,7 @@ Si Firecrawl no está configurado, la herramienta vuelve a obtención directa + 
 
 Vea [Herramientas web](/tools/web).
 
-### 6) Instantáneas de uso del proveedor (estado/salud)
+### 6. Instantáneas de uso del proveedor (estado/salud)
 
 Algunos comandos de estado llaman a **endpoints de uso del proveedor** para mostrar ventanas de cuota o salud de autenticación.
 Suelen ser llamadas de bajo volumen, pero aun así alcanzan las APIs del proveedor:
@@ -115,21 +108,21 @@ Suelen ser llamadas de bajo volumen, pero aun así alcanzan las APIs del proveed
 
 Vea [CLI de Modelos](/cli/models).
 
-### 7) Resumen de salvaguarda de compactación
+### 7. Resumen de salvaguarda de compactación
 
 La salvaguarda de compactación puede resumir el historial de la sesión usando el **modelo actual**, lo que
 invoca APIs del proveedor cuando se ejecuta.
 
 Vea [Gestión de sesiones + compactación](/reference/session-management-compaction).
 
-### 8) Escaneo/sondeo de modelos
+### 8. Escaneo/sondeo de modelos
 
 `openclaw models scan` puede sondear modelos de OpenRouter y usa `OPENROUTER_API_KEY` cuando
 el sondeo está habilitado.
 
 Vea [CLI de Modelos](/cli/models).
 
-### 9) Talk (voz)
+### 9. Talk (voz)
 
 El modo Talk puede invocar **ElevenLabs** cuando está configurado:
 
@@ -137,7 +130,7 @@ El modo Talk puede invocar **ElevenLabs** cuando está configurado:
 
 Vea [Modo Talk](/nodes/talk).
 
-### 10) Skills (APIs de terceros)
+### 10. Skills (APIs de terceros)
 
 Los Skills pueden almacenar `apiKey` en `skills.entries.<name>.apiKey`. Si un skill usa esa clave para
 APIs externas, puede incurrir en costos según el proveedor del skill.

@@ -4,18 +4,11 @@ read_when:
   - Konfigurering av Signal-stöd
   - Felsökning av Signal sändning/mottagning
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:35Z
 ---
 
 # Signal (signal-cli)
 
-Status: extern CLI-integration. Gateway kommunicerar med `signal-cli` via HTTP JSON-RPC + SSE.
+Status: extern CLI-integration. Gateway talar med `signal-cli` över HTTP JSON-RPC + SSE.
 
 ## Snabb konfiguration (nybörjare)
 
@@ -88,7 +81,7 @@ Exempel:
 }
 ```
 
-Stöd för flera konton: använd `channels.signal.accounts` med konfig per konto och valfri `name`. Se [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) för det gemensamma mönstret.
+Stöd för flera konton: använd `channels.signal.accounts` med konfiguration per konto och valfri `name`. Se [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) för det delade mönstret.
 
 ## Externt daemon-läge (httpUrl)
 
@@ -105,7 +98,7 @@ Om du vill hantera `signal-cli` själv (långsamma JVM-kallstarter, container-in
 }
 ```
 
-Detta hoppar över auto-start och startväntan inuti OpenClaw. För långsamma starter vid auto-start, sätt `channels.signal.startupTimeoutMs`.
+Detta hoppar över auto-spawn och start vänta inuti OpenClaw. För långsam startar vid auto-spawning, ange `channels.signal.startupTimeoutMs`.
 
 ## Åtkomstkontroll (DMs + grupper)
 
@@ -116,7 +109,7 @@ Direktmeddelanden:
 - Godkänn via:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- Parning är standard token-utbyte för Signal-DMs. Detaljer: [Parning](/channels/pairing)
+- Parkoppling är standard token utbyte för Signal DMs. Detaljer: [Pairing](/channels/pairing)
 - Endast-UUID-avsändare (från `sourceUuid`) lagras som `uuid:<id>` i `channels.signal.allowFrom`.
 
 Grupper:
@@ -137,7 +130,7 @@ Grupper:
 - Bilagor stöds (base64 hämtas från `signal-cli`).
 - Standardgräns för media: `channels.signal.mediaMaxMb` (standard 8).
 - Använd `channels.signal.ignoreAttachments` för att hoppa över nedladdning av media.
-- Grupphistorik-kontekst använder `channels.signal.historyLimit` (eller `channels.signal.accounts.*.historyLimit`), med fallback till `messages.groupChat.historyLimit`. Sätt `0` för att inaktivera (standard 50).
+- Grupphistorik sammanhang använder `channels.signal.historyLimit` (eller `channels.signal.accounts.*.historyLimit`), faller tillbaka till `messages.groupChat.historyLimit`. Sätt `0` till att inaktivera (standard 50).
 
 ## Skrivindikatorer + läskvitton
 
@@ -166,7 +159,7 @@ Konfig:
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive`.
   - `off`/`ack` inaktiverar agentreaktioner (meddelandeverktyget `react` ger fel).
   - `minimal`/`extensive` aktiverar agentreaktioner och sätter vägledningsnivån.
-- Överskrivningar per konto: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
+- Ersätter varje konto: `channels.signal.accounts.<id>.actions.reactions`, \`channels.signal.accounts.<id>.reaktionNivå.
 
 ## Leveransmål (CLI/cron)
 
@@ -219,11 +212,11 @@ Leverantörsalternativ:
 - `channels.signal.ignoreStories`: ignorera stories från daemonen.
 - `channels.signal.sendReadReceipts`: vidarebefordra läskvitton.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (standard: parning).
-- `channels.signal.allowFrom`: DM-tillåtelselista (E.164 eller `uuid:<id>`). `open` kräver `"*"`. Signal har inga användarnamn; använd telefon/UUID-id:n.
+- `channels.signal.allowFrom`: DM allowlist (E.164 eller `uuid:<id>`). `open` kräver `"*"`. Signalen har inga användarnamn; använd telefon/UUID-ID.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (standard: tillåtelselista).
 - `channels.signal.groupAllowFrom`: tillåtelselista för gruppavsändare.
 - `channels.signal.historyLimit`: max antal gruppmeddelanden att inkludera som kontext (0 inaktiverar).
-- `channels.signal.dmHistoryLimit`: DM-historikgräns i användarvändor. Överskrivningar per användare: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
+- `channels.signal.dmHistorikLimit`: DM historikgräns i användarens varv. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: storlek på utgående uppdelning (tecken).
 - `channels.signal.chunkMode`: `length` (standard) eller `newline` för att dela på tomma rader (styckegränser) före längduppdelning.
 - `channels.signal.mediaMaxMb`: gräns för inkommande/utgående media (MB).

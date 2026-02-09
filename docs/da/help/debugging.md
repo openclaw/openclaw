@@ -5,13 +5,6 @@ read_when:
   - Du vil køre Gateway i watch-tilstand under iteration
   - Du har brug for en gentagelig fejlsøgningsworkflow
 title: "Fejlsøgning"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:22Z
 ---
 
 # Fejlsøgning
@@ -21,9 +14,9 @@ udbyder blander ræsonnement ind i normal tekst.
 
 ## Runtime debug overrides
 
-Brug `/debug` i chatten til at sætte **kun runtime** konfigurations-overrides (hukommelse, ikke disk).
-`/debug` er deaktiveret som standard; aktivér med `commands.debug: true`.
-Dette er praktisk, når du skal slå obskure indstillinger til/fra uden at redigere `openclaw.json`.
+Brug `/debug` i chat for at angive **runtime-only** config overrides (hukommelse, ikke disk).
+`/debug` er deaktiveret som standard; aktiver med `commands.debug: true`.
+Dette er praktisk, når du skal skifte obskure indstillinger uden at redigere `openclaw.json`.
 
 Eksempler:
 
@@ -55,8 +48,8 @@ ved hver genstart.
 
 ## Dev-profil + dev gateway (--dev)
 
-Brug dev-profilen til at isolere tilstand og spinne en sikker, midlertidig opsætning op til
-fejlsøgning. Der er **to** `--dev`-flag:
+Brug dev profil til at isolere tilstand og spin op en sikker, engangs opsætning for
+fejlretning. Der er **to** `--dev` flag:
 
 - **Global `--dev` (profil):** isolerer tilstand under `~/.openclaw-dev` og
   sætter som standard gateway-porten til `19001` (afledte porte flytter sig med den).
@@ -95,8 +88,8 @@ Reset-flow (frisk start):
 pnpm gateway:dev:reset
 ```
 
-Bemærk: `--dev` er et **globalt** profil-flag og bliver slugt af nogle runners.
-Hvis du skal stave det eksplicit, så brug env-var-varianten:
+Bemærk: `--dev` er et **global** profilflag og bliver spist af nogle løbere.
+Hvis du har brug for at stave det ud, skal du bruge env var formularen:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -113,9 +106,9 @@ openclaw gateway stop
 
 ## Rå stream-logning (OpenClaw)
 
-OpenClaw kan logge **den rå assistent-stream** før nogen filtrering/formatering.
-Dette er den bedste måde at se, om ræsonnement ankommer som almindelige tekst-deltaer
-(eller som separate thinking-blokke).
+OpenClaw kan logge **rå assistent stream** før nogen filtrering/formatering.
+Dette er den bedste måde at se, om ræsonnement ankommer som almindelig tekst deltas
+(eller som separate tænkning blokke).
 
 Aktivér via CLI:
 

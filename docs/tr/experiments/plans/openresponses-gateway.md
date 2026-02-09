@@ -4,18 +4,11 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "OpenResponses Gateway Planı"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:24Z
 ---
 
 # OpenResponses Gateway Entegrasyon Planı
 
-## Bağlam
+## Context
 
 OpenClaw Gateway şu anda
 `/v1/chat/completions` adresinde minimal, OpenAI uyumlu bir Chat Completions uç noktası sunmaktadır

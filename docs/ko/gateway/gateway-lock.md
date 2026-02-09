@@ -4,13 +4,6 @@ read_when:
   - Gateway(게이트웨이) 프로세스를 실행하거나 디버깅할 때
   - 단일 인스턴스 강제를 조사할 때
 title: "Gateway(게이트웨이) 잠금"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:02Z
 ---
 
 # Gateway(게이트웨이) 잠금
@@ -20,7 +13,7 @@ x-i18n:
 ## 이유
 
 - 동일한 호스트에서 기본 포트당 하나의 Gateway(게이트웨이) 인스턴스만 실행되도록 보장합니다. 추가 Gateway(게이트웨이)는 격리된 프로필과 고유한 포트를 사용해야 합니다.
-- 크래시 또는 SIGKILL 이후에도 오래된 잠금 파일을 남기지 않고 정상적으로 복구됩니다.
+- Survive crashes/SIGKILL without leaving stale lock files.
 - 제어 포트가 이미 점유된 경우 명확한 오류와 함께 빠르게 실패합니다.
 
 ## 메커니즘

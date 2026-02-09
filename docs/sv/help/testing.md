@@ -5,13 +5,6 @@ read_when:
   - När du lägger till regressioner för modell-/leverantörsbuggar
   - Vid felsökning av gateway- och agentbeteende
 title: "Testning"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:03Z
 ---
 
 # Testning
@@ -277,13 +270,13 @@ Välj minst en per leverantörsfamilj:
 Valfri extra täckning (trevligt att ha):
 
 - xAI: `xai/grok-4` (eller senaste tillgängliga)
-- Mistral: `mistral/`… (välj en ”tools”‑kapabel modell du har aktiverad)
-- Cerebras: `cerebras/`… (om du har åtkomst)
-- LM Studio: `lmstudio/`… (lokalt; verktygsanrop beror på API‑läge)
+- Mistral: `mistral/`… (välj en “verktyg” kapabel modell som du har aktiverat)
+- Cerebras: `cerebra/`… (om du har tillgång)
+- LM Studio: `lmstudio/`… (lokalt; verktygssamtal beror på API-läge)
 
 ### Vision: skicka bild (bilaga → multimodalt meddelande)
 
-Inkludera minst en bildkapabel modell i `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI‑varianter med visionstöd m.fl.) för att köra bild‑proben.
+Inkludera minst en bildkapabel modell i `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI visionkapabla varianter, etc.) att utöva bilden sonden.
 
 ### Aggregatorer / alternativa gateways
 
@@ -297,16 +290,18 @@ Fler leverantörer du kan inkludera i live‑matrisen (om du har uppgifter/konfi
 - Inbyggda: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (anpassade endpoints): `minimax` (moln/API), plus valfri OpenAI-/Anthropic‑kompatibel proxy (LM Studio, vLLM, LiteLLM, m.fl.)
 
-Tips: försök inte hårdkoda ”alla modeller” i dokumentation. Den auktoritativa listan är vad `discoverModels(...)` returnerar på din maskin + vilka nycklar som finns tillgängliga.
+Tips: Försök inte att hardcode “alla modeller” i dokument. Den auktoritativa listan är vad `discoverModels(...)` returnerar på din maskin + vad som helst nycklar är tillgängliga.
 
 ## Autentiseringsuppgifter (committa aldrig)
 
-Live‑tester upptäcker uppgifter på samma sätt som CLI:t gör. Praktiska konsekvenser:
+Livetester upptäcker referenser på samma sätt som CLI gör. Praktiska konsekvenser:
 
 - Om CLI:t fungerar bör live‑tester hitta samma nycklar.
+
 - Om ett live‑test säger ”inga uppgifter”, felsök på samma sätt som du skulle felsöka `openclaw models list` / modellval.
 
 - Profil‑store: `~/.openclaw/credentials/` (föredras; det som ”profilnycklar” betyder i testerna)
+
 - Konfig: `~/.openclaw/openclaw.json` (eller `OPENCLAW_CONFIG_PATH`)
 
 Om du vill förlita dig på env‑nycklar (t.ex. exporterade i din `~/.profile`), kör lokala tester efter `source ~/.profile`, eller använd Docker‑runners nedan (de kan montera `~/.profile` i containern).

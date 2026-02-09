@@ -4,13 +4,6 @@ read_when:
   - Konfigurera OpenClaw på DigitalOcean
   - Letar efter billig VPS-hosting för OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:58Z
 ---
 
 # OpenClaw på DigitalOcean
@@ -23,13 +16,13 @@ Om du vill ha ett alternativ för 0 USD/månad och inte har något emot ARM + le
 
 ## Kostnadsjämförelse (2026)
 
-| Leverantör   | Plan            | Specifikationer           | Pris/mån    | Noteringar                                         |
-| ------------ | --------------- | ------------------------- | ----------- | -------------------------------------------------- |
-| Oracle Cloud | Always Free ARM | upp till 4 OCPU, 24GB RAM | $0          | ARM, begränsad kapacitet / quirks vid registrering |
+| Leverantör   | Plan            | Specifikationer           | Pris/mån                                       | Noteringar                                         |
+| ------------ | --------------- | ------------------------- | ---------------------------------------------- | -------------------------------------------------- |
+| Oracle Cloud | Always Free ARM | upp till 4 OCPU, 24GB RAM | $0                                             | ARM, begränsad kapacitet / quirks vid registrering |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM           | €3,79 (~$4) | Billigaste betalda alternativet                    |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6          | Enkelt UI, bra dokumentation                       |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6          | Många platser                                      |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5          | Numera del av Akamai                               |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6                                             | Enkelt UI, bra dokumentation                       |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6                                             | Många platser                                      |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5                                             | Numera del av Akamai                               |
 
 **Välja leverantör:**
 
@@ -45,7 +38,7 @@ Om du vill ha ett alternativ för 0 USD/månad och inte har något emot ARM + le
 - SSH-nyckelpar (eller vilja att använda lösenordsautentisering)
 - ~20 minuter
 
-## 1) Skapa en Droplet
+## 1. Skapa en Droplet
 
 1. Logga in på [DigitalOcean](https://cloud.digitalocean.com/)
 2. Klicka på **Create → Droplets**
@@ -63,7 +56,7 @@ Om du vill ha ett alternativ för 0 USD/månad och inte har något emot ARM + le
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Installera OpenClaw
+## 3. Installera OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Kör introduktionen
+## 4. Kör introduktionen
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ Guiden tar dig igenom:
 - Gateway-token (autogenererad)
 - Daemon-installation (systemd)
 
-## 5) Verifiera Gateway
+## 5. Verifiera Gateway
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Få åtkomst till Dashboard
+## 6. Få åtkomst till Dashboard
 
-Gateway binder till loopback som standard. För att komma åt Control UI:
+Gateway binder till loopback som standard. För att komma åt kontrollgränssnittet:
 
 **Alternativ A: SSH-tunnel (rekommenderas)**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Öppna: `http://<tailscale-ip>:18789` (token krävs).
 
-## 7) Anslut dina kanaler
+## 7. Anslut dina kanaler
 
 ### Telegram
 
@@ -169,7 +162,7 @@ Se [Kanaler](/channels) för andra leverantörer.
 
 ## Optimeringar för 1GB RAM
 
-Dropleten för $6 har endast 1GB RAM. För att hålla allt stabilt:
+$6 droppe har bara 1GB RAM. För att få saker att fungera smidigt:
 
 ### Lägg till swap (rekommenderas)
 
@@ -216,19 +209,19 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud erbjuder **Always Free** ARM-instanser som är betydligt kraftfullare än alla betalda alternativ här — för 0 USD/månad.
 
-| Vad du får            | Specifikationer              |
-| --------------------- | ---------------------------- |
-| **4 OCPU:er**         | ARM Ampere A1                |
-| **24GB RAM**          | Mer än tillräckligt          |
-| **200GB lagring**     | Blockvolym                   |
-| **För alltid gratis** | Inga kreditkortsdebiteringar |
+| Vad du får                    | Specifikationer              |
+| ----------------------------- | ---------------------------- |
+| **4 OCPU:er** | ARM Ampere A1                |
+| **24GB RAM**                  | Mer än tillräckligt          |
+| **200GB lagring**             | Blockvolym                   |
+| **För alltid gratis**         | Inga kreditkortsdebiteringar |
 
 **Begränsningar:**
 
 - Registreringen kan vara pillig (försök igen om det misslyckas)
 - ARM-arkitektur — det mesta fungerar, men vissa binärer kräver ARM-byggen
 
-För den fullständiga installationsguiden, se [Oracle Cloud](/platforms/oracle). För registreringstips och felsökning av anslutningsprocessen, se denna [community-guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
+För hela installationsguiden, se [Oracle Cloud](/platforms/oracle). För anmälningstips och felsökning av inskrivningsprocessen, se denna [communityguide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
 
 ---
 

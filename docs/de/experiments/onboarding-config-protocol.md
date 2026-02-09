@@ -2,13 +2,6 @@
 summary: "RPC-Protokollhinweise für Onboarding-Assistent und Konfigurationsschema"
 read_when: "Ändern der Schritte des Onboarding-Assistenten oder der Endpunkte des Konfigurationsschemas"
 title: "Onboarding- und Konfigurationsprotokoll"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:08Z
 ---
 
 # Onboarding- und Konfigurationsprotokoll

@@ -4,13 +4,6 @@ read_when:
   - Вам нужна быстрая диагностика состояния каналов и недавних получателей сеансов
   - Вам нужен вставляемый «all»‑статус для отладки
 title: "status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:21Z
 ---
 
 # `openclaw status`

@@ -4,13 +4,6 @@ read_when:
   - Gusto mong mag-update ng source checkout nang ligtas
   - Kailangan mong maunawaan ang behavior ng shorthand na `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:23Z
 ---
 
 # `openclaw update`
@@ -61,8 +54,8 @@ Mga opsyon:
 ## `update wizard`
 
 Interactive na daloy para pumili ng update channel at kumpirmahin kung ire-restart ang Gateway
-pagkatapos mag-update (default ay mag-restart). Kung pipiliin mo ang `dev` nang walang git checkout, ito ay
-mag-aalok na gumawa ng isa.
+pagkatapos mag-update (ang default ay mag-restart). Kung pipiliin mo ang `dev` nang walang git checkout,
+mag-aalok itong gumawa ng isa.
 
 ## Ano ang ginagawa nito
 

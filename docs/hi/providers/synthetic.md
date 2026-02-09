@@ -4,19 +4,12 @@ read_when:
   - आप Synthetic को मॉडल प्रदाता के रूप में उपयोग करना चाहते हैं
   - आपको Synthetic API कुंजी या बेस URL सेटअप की आवश्यकता है
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:39Z
 ---
 
 # Synthetic
 
-Synthetic Anthropic-संगत एंडपॉइंट्स प्रदान करता है। OpenClaw इसे
-`synthetic` प्रदाता के रूप में पंजीकृत करता है और Anthropic Messages API का उपयोग करता है।
+Synthetic exposes Anthropic-compatible endpoints. OpenClaw registers it as the
+`synthetic` provider and uses the Anthropic Messages API.
 
 ## त्वरित सेटअप
 
@@ -68,9 +61,9 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-टिप्पणी: OpenClaw का Anthropic क्लाइंट बेस URL में `/v1` जोड़ता है, इसलिए
-`https://api.synthetic.new/anthropic` का उपयोग करें (`/anthropic/v1` नहीं)। यदि Synthetic अपना
-बेस URL बदलता है, तो `models.providers.synthetic.baseUrl` ओवरराइड करें।
+Note: OpenClaw's Anthropic client appends `/v1` to the base URL, so use
+`https://api.synthetic.new/anthropic` (not `/anthropic/v1`). If Synthetic changes
+its base URL, override `models.providers.synthetic.baseUrl`.
 
 ## मॉडल कैटलॉग
 

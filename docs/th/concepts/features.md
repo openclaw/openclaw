@@ -3,34 +3,27 @@ summary: "ความสามารถของOpenClawครอบคลุ�
 read_when:
   - คุณต้องการดูรายการทั้งหมดของสิ่งที่OpenClawรองรับ
 title: "คุณสมบัติ"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:01Z
 ---
 
 ## ไฮไลต์
 
 <Columns>
-  <Card title="ช่องทาง" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp,Telegram,DiscordและiMessageด้วยGatewayเดียว
   </Card>
-  <Card title="ปลั๊กอิน" icon="plug">
+  <Card title="Plugins" icon="plug">
     เพิ่มMattermostและอื่นๆด้วยส่วนขยาย
   </Card>
-  <Card title="การกำหนดเส้นทาง" icon="route">
+  <Card title="Routing" icon="route">
     การกำหนดเส้นทางแบบหลายเอเจนต์พร้อมเซสชันที่แยกจากกัน
   </Card>
-  <Card title="สื่อ" icon="image">
+  <Card title="Media" icon="image">
     รองรับรูปภาพ เสียง และเอกสารทั้งขาเข้าและขาออก
   </Card>
-  <Card title="แอปและUI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web Control UIและแอปคู่หูmacOS
   </Card>
-  <Card title="โหนดมือถือ" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     โหนดiOSและAndroidพร้อมรองรับCanvas
   </Card>
 </Columns>
@@ -55,5 +48,7 @@ x-i18n:
 - โหนดAndroidพร้อมการจับคู่ Canvas แชต และกล้อง
 
 <Note>
+Legacy Claude, Codex, Gemini, and Opencode paths have been removed. 
 เส้นทางLegacyของClaude,Codex,GeminiและOpencodeถูกนำออกแล้ว Piเป็นเส้นทางเอเจนต์สำหรับการเขียนโค้ดเพียงตัวเดียว
+
 </Note>

@@ -4,13 +4,6 @@ read_when:
   - OpenClaw fungerar inte och du behöver den snabbaste vägen till en lösning
   - Du vill ha ett triageflöde innan du dyker ner i djupa runbooks
 title: "Felsökning"
-x-i18n:
-  source_path: help/troubleshooting.md
-  source_hash: 4a53e9f9d23dcf6b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:38Z
 ---
 
 # Felsökning
@@ -64,7 +57,7 @@ flowchart TD
 ```
 
 <AccordionGroup>
-  <Accordion title="Inga svar">
+  <Accordion title="No replies">
     ```bash
     openclaw status
     openclaw gateway status
@@ -73,28 +66,30 @@ flowchart TD
     openclaw logs --follow
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - `Runtime: running`
     - `RPC probe: ok`
     - Din kanal visar ansluten/redo i `channels status --probe`
     - Avsändaren verkar godkänd (eller DM-policy är öppen/tillåtelselista)
-
+    
     Vanliga loggsignaturer:
-
+    
     - `drop guild message (mention required` → nämningsgating blockerade meddelandet i Discord.
     - `pairing request` → avsändaren är inte godkänd och väntar på godkännande för DM-parkoppling.
     - `blocked` / `allowlist` i kanalloggar → avsändare, rum eller grupp är filtrerad.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#no-replies](/gateway/troubleshooting#no-replies)
     - [/channels/troubleshooting](/channels/troubleshooting)
     - [/channels/pairing](/channels/pairing)
+    ```
 
   </Accordion>
 
-  <Accordion title="Instrumentpanel eller Control UI kan inte ansluta">
+  <Accordion title="Dashboard or Control UI will not connect">
     ```bash
     openclaw status
     openclaw gateway status
@@ -103,27 +98,29 @@ flowchart TD
     openclaw channels status --probe
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - `Dashboard: http://...` visas i `openclaw gateway status`
     - `RPC probe: ok`
     - Ingen autentiseringsloop i loggarna
-
+    
     Vanliga loggsignaturer:
-
+    
     - `device identity required` → HTTP/icke-säker kontext kan inte slutföra enhetsautentisering.
     - `unauthorized` / återanslutningsloop → fel token/lösenord eller mismatch i autentiseringsläge.
     - `gateway connect failed:` → UI pekar mot fel URL/port eller en onåbar gateway.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#dashboard-control-ui-connectivity](/gateway/troubleshooting#dashboard-control-ui-connectivity)
     - [/web/control-ui](/web/control-ui)
     - [/gateway/authentication](/gateway/authentication)
+    ```
 
   </Accordion>
 
-  <Accordion title="Gateway startar inte eller tjänsten är installerad men körs inte">
+  <Accordion title="Gateway will not start or service installed but not running">
     ```bash
     openclaw status
     openclaw gateway status
@@ -132,27 +129,29 @@ flowchart TD
     openclaw channels status --probe
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - `Service: ... (loaded)`
     - `Runtime: running`
     - `RPC probe: ok`
-
+    
     Vanliga loggsignaturer:
-
+    
     - `Gateway start blocked: set gateway.mode=local` → gateway-läget är inte satt/fjärr.
     - `refusing to bind gateway ... without auth` → bindning utan loopback utan token/lösenord.
     - `another gateway instance is already listening` eller `EADDRINUSE` → porten är redan upptagen.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#gateway-service-not-running](/gateway/troubleshooting#gateway-service-not-running)
     - [/gateway/background-process](/gateway/background-process)
     - [/gateway/configuration](/gateway/configuration)
+    ```
 
   </Accordion>
 
-  <Accordion title="Kanal ansluter men meddelanden flödar inte">
+  <Accordion title="Channel connects but messages do not flow">
     ```bash
     openclaw status
     openclaw gateway status
@@ -161,26 +160,28 @@ flowchart TD
     openclaw channels status --probe
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - Kanaltransporten är ansluten.
     - Kontroller för parkoppling/tillåtelselista passerar.
     - Nämningar detekteras där det krävs.
-
+    
     Vanliga loggsignaturer:
-
+    
     - `mention required` → gating för gruppnämningar blockerade bearbetning.
     - `pairing` / `pending` → DM-avsändaren är ännu inte godkänd.
     - `not_in_channel`, `missing_scope`, `Forbidden`, `401/403` → problem med kanalens behörighetstoken.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#channel-connected-messages-not-flowing](/gateway/troubleshooting#channel-connected-messages-not-flowing)
     - [/channels/troubleshooting](/channels/troubleshooting)
+    ```
 
   </Accordion>
 
-  <Accordion title="Cron eller heartbeat utlöstes inte eller levererades inte">
+  <Accordion title="Cron or heartbeat did not fire or did not deliver">
     ```bash
     openclaw status
     openclaw gateway status
@@ -190,28 +191,30 @@ flowchart TD
     openclaw logs --follow
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - `cron.status` visar aktiverad med nästa väckning.
     - `cron runs` visar nyliga `ok`-poster.
     - Heartbeat är aktiverad och inte utanför aktiva tider.
-
+    
     Vanliga loggsignaturer:
-
+    
     - `cron: scheduler disabled; jobs will not run automatically` → cron är inaktiverad.
     - `heartbeat skipped` med `reason=quiet-hours` → utanför konfigurerade aktiva tider.
     - `requests-in-flight` → huvudfilen är upptagen; heartbeat-väckning sköts upp.
     - `unknown accountId` → målkontot för heartbeat-leverans finns inte.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
     - [/automation/troubleshooting](/automation/troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
+    ```
 
   </Accordion>
 
-  <Accordion title="Nod är parkopplad men verktyget misslyckas med kamera/canvas/skärm/exec">
+  <Accordion title="Node is paired but tool fails camera canvas screen exec">
     ```bash
     openclaw status
     openclaw gateway status
@@ -220,28 +223,30 @@ flowchart TD
     openclaw logs --follow
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - Noden listas som ansluten och parkopplad för rollen `node`.
     - Kapacitet finns för kommandot du anropar.
     - Behörighetsstatus är beviljad för verktyget.
-
+    
     Vanliga loggsignaturer:
-
+    
     - `NODE_BACKGROUND_UNAVAILABLE` → ta fram nodappen i förgrunden.
     - `*_PERMISSION_REQUIRED` → OS-behörighet nekades/saknas.
     - `SYSTEM_RUN_DENIED: approval required` → exec-godkännande väntar.
     - `SYSTEM_RUN_DENIED: allowlist miss` → kommandot finns inte på exec-tillåtelselistan.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#node-paired-tool-fails](/gateway/troubleshooting#node-paired-tool-fails)
     - [/nodes/troubleshooting](/nodes/troubleshooting)
     - [/tools/exec-approvals](/tools/exec-approvals)
+    ```
 
   </Accordion>
 
-  <Accordion title="Webbläsarverktyget misslyckas">
+  <Accordion title="Browser tool fails">
     ```bash
     openclaw status
     openclaw gateway status
@@ -250,23 +255,25 @@ flowchart TD
     openclaw doctor
     ```
 
+    ```
     Bra utdata ser ut så här:
-
+    
     - Webbläsarstatus visar `running: true` och en vald webbläsare/profil.
     - `openclaw`-profilen startar eller `chrome`-reläet har en ansluten flik.
-
+    
     Vanliga loggsignaturer:
-
+    
     - `Failed to start Chrome CDP on port` → lokal webbläsarstart misslyckades.
     - `browser.executablePath not found` → konfigurerad binär sökväg är fel.
     - `Chrome extension relay is running, but no tab is connected` → tillägget är inte anslutet.
     - `Browser attachOnly is enabled ... not reachable` → profil med endast anslutning saknar ett aktivt CDP-mål.
-
+    
     Fördjupningssidor:
-
+    
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
     - [/tools/chrome-extension](/tools/chrome-extension)
+    ```
 
   </Accordion>
 </AccordionGroup>

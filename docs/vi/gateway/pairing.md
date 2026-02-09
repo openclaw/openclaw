@@ -5,28 +5,24 @@ read_when:
   - Thêm luồng CLI để phê duyệt các nút từ xa
   - Mở rộng giao thức gateway với quản lý nút
 title: "Ghép cặp do Gateway sở hữu"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:04Z
 ---
 
 # Ghép cặp do Gateway sở hữu (Tùy chọn B)
 
-Trong mô hình ghép cặp do Gateway sở hữu, **Gateway** là nguồn dữ liệu chuẩn xác để xác định nút nào được phép tham gia. Các UI (ứng dụng macOS, các client trong tương lai) chỉ là lớp giao diện để phê duyệt hoặc từ chối các yêu cầu đang chờ.
+Trong cơ chế ghép cặp do Gateway sở hữu, **Gateway** là nguồn sự thật cho việc node nào
+được phép tham gia. Các UI (ứng dụng macOS, các client tương lai) chỉ là frontend
+phê duyệt hoặc từ chối các yêu cầu đang chờ.
 
-**Quan trọng:** Các nút WS sử dụng **ghép cặp thiết bị** (vai trò `node`) trong quá trình `connect`. `node.pair.*` là một kho ghép cặp riêng và **không** kiểm soát bắt tay WS.
-Chỉ những client gọi tường minh `node.pair.*` mới sử dụng luồng này.
+**Quan trọng:** Các node WS sử dụng **ghép cặp thiết bị** (vai trò `node`) trong quá trình `connect`.
+`node.pair.*` là một kho ghép cặp riêng và **không** kiểm soát bắt tay WS.
+Chỉ các client gọi rõ ràng `node.pair.*` mới sử dụng luồng này.
 
 ## Khái niệm
 
 - **Yêu cầu đang chờ**: một nút yêu cầu tham gia; cần được phê duyệt.
 - **Nút đã ghép cặp**: nút đã được phê duyệt và được cấp token xác thực.
-- **Vận chuyển**: endpoint WS của Gateway chuyển tiếp yêu cầu nhưng không quyết định
-  tư cách thành viên. (Hỗ trợ cầu nối TCP cũ đã bị ngừng/loại bỏ.)
+- **Vận chuyển**: endpoint Gateway WS chuyển tiếp các yêu cầu nhưng không quyết định
+  tư cách thành viên. (Hỗ trợ cầu TCP cũ đã bị ngừng/loại bỏ.)
 
 ## Cách hoạt động của ghép cặp
 

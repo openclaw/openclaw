@@ -3,18 +3,11 @@ summary: "WhatsApp (ဝဘ်ချန်နယ်) ပေါင်းစည်�
 read_when:
   - WhatsApp/ဝဘ် ချန်နယ်၏ အပြုအမူ သို့မဟုတ် inbox လမ်းကြောင်းခွဲခြားမှုအပေါ် အလုပ်လုပ်နေချိန်
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:53Z
 ---
 
 # WhatsApp (ဝဘ် ချန်နယ်)
 
-အခြေအနေ: Baileys ကို အသုံးပြုသော WhatsApp Web သာလျှင် ပံ့ပိုးထားသည်။ Gateway သည် session(များ) ကို ပိုင်ဆိုင်ထားသည်။
+Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
 ## Quick setup (အစပြုသူများအတွက်)
 
@@ -62,13 +55,13 @@ x-i18n:
 
 ## ဖုန်းနံပါတ် ရယူခြင်း (နည်းလမ်း ၂ မျိုး)
 
-WhatsApp သည် အတည်ပြုရန် အမှန်တကယ် မိုဘိုင်းနံပါတ်တစ်ခု လိုအပ်ပါသည်။ VoIP နှင့် virtual နံပါတ်များကို ပုံမှန်အားဖြင့် ပိတ်ပင်ထားသည်။ OpenClaw ကို WhatsApp တွင် လည်ပတ်ရန် ပံ့ပိုးထားသော နည်းလမ်း ၂ မျိုးရှိသည်။
+WhatsApp requires a real mobile number for verification. VoIP and virtual numbers are usually blocked. There are two supported ways to run OpenClaw on WhatsApp:
 
 ### Dedicated number (အကြံပြုသည်)
 
-OpenClaw အတွက် **သီးခြား ဖုန်းနံပါတ်** တစ်ခုကို အသုံးပြုပါ။ UX ကောင်းမွန်ပြီး လမ်းကြောင်းသန့်ရှင်းကာ self-chat ဆိုင်ရာ ပြဿနာများ မရှိပါ။ အကောင်းဆုံး setup သည် **အသုံးမများတော့သော Android ဖုန်း + eSIM** ဖြစ်သည်။ Wi‑Fi နှင့် လျှပ်စစ်အား ချိတ်ထားပြီး QR ဖြင့် link လုပ်ပါ။
+1. OpenClaw အတွက် **ဖုန်းနံပါတ် သီးသန့်တစ်ခု** ကို အသုံးပြုပါ။ 2. UX အကောင်းဆုံး၊ လမ်းကြောင်းရှင်းလင်းပြီး ကိုယ်တိုင်ကိုယ်တိုင် ချတ်လုပ်ရသည့် အဆင်မပြေမှုများ မရှိပါ။ 3. အကောင်းဆုံး ပြင်ဆင်မှု: **အပို/ဟောင်း Android ဖုန်း + eSIM**။ 4. Wi‑Fi နှင့် လျှပ်စစ်အား ချိတ်ထားပြီး QR ဖြင့် လင့်ခ်လုပ်ပါ။
 
-**WhatsApp Business:** တစ်စက်တည်းပေါ်တွင် နံပါတ်ကွဲပြားစွာ WhatsApp Business ကို အသုံးပြုနိုင်ပါသည်။ ကိုယ်ရေးကိုယ်တာ WhatsApp ကို သီးခြားထားရန် အထူးကောင်းမွန်ပါသည် — WhatsApp Business ကို ထည့်သွင်းပြီး OpenClaw နံပါတ်ကို အဲဒီမှာ မှတ်ပုံတင်ပါ။
+5. **WhatsApp Business:** တူညီသော စက်ပေါ်တွင် နံပါတ်ကွဲကွဲဖြင့် WhatsApp Business ကို အသုံးပြုနိုင်ပါသည်။ 6. ကိုယ်ရေးကိုယ်တာ WhatsApp ကို ခွဲထားရန် အလွန်ကောင်းသည် — WhatsApp Business ကို တပ်ဆင်ပြီး OpenClaw နံပါတ်ကို အဲဒီထဲတွင် စာရင်းသွင်းပါ။
 
 **Sample config (dedicated number, single-user allowlist):**
 
@@ -83,14 +76,14 @@ OpenClaw အတွက် **သီးခြား ဖုန်းနံပါတ�
 }
 ```
 
-**Pairing mode (optional):**
-allowlist အစား pairing ကို အသုံးပြုလိုပါက `channels.whatsapp.dmPolicy` ကို `pairing` အဖြစ် သတ်မှတ်ပါ။ မသိသော ပို့သူများသည် pairing code ကို ရရှိမည်ဖြစ်ပြီး အောက်ပါအမိန့်ဖြင့် အတည်ပြုနိုင်သည် —
-`openclaw pairing approve whatsapp <code>`
+7. **Pairing mode (ရွေးချယ်နိုင်):**
+   allowlist အစား pairing ကို အသုံးချလိုပါက `channels.whatsapp.dmPolicy` ကို `pairing` သို့ သတ်မှတ်ပါ။ 8. မသိသော ပို့သူများသည် pairing code ကို ရရှိမည်ဖြစ်ပြီး အောက်ပါအတိုင်း အတည်ပြုပါ:
+   `openclaw pairing approve whatsapp <code>`
 
 ### Personal number (fallback)
 
-အမြန် fallback အဖြစ် **ကိုယ်ပိုင်နံပါတ်** ပေါ်တွင် OpenClaw ကို လည်ပတ်နိုင်ပါသည်။ စမ်းသပ်ရန်အတွက် ကိုယ့်ကိုယ်ကို (WhatsApp “Message yourself”) မက်ဆေ့ချ်ပို့ပါ၊ အဆက်အသွယ်များကို spam မဖြစ်စေရန်ဖြစ်သည်။ setup နှင့် စမ်းသပ်မှုများအတွင်း အတည်ပြုကုဒ်များကို ကိုယ်ပိုင်ဖုန်းပေါ်တွင် ဖတ်ရမည်ကို မျှော်လင့်ထားပါ။ **Self-chat mode ကို ဖွင့်ထားရပါမည်။**
-wizard က ကိုယ်ပိုင် WhatsApp နံပါတ်ကို မေးသောအခါ assistant နံပါတ်မဟုတ်ဘဲ သင် မက်ဆေ့ချ်ပို့မည့် ဖုန်း (owner/sender) ကို ထည့်ပါ။
+9. အမြန်အစားထိုးနည်း: **သင့်ကိုယ်ပိုင် နံပါတ်** ပေါ်တွင် OpenClaw ကို chạy ပါ။ 10. စမ်းသပ်ရန်အတွက် ကိုယ်တိုင်ကို စာပို့ပါ (WhatsApp “Message yourself”) — အဆက်အသွယ်များကို မစပမ်ဖြစ်အောင်။ 11. ပြင်ဆင်ခြင်းနှင့် စမ်းသပ်မှုများအတွင်း သင့်အဓိကဖုန်းတွင် အတည်ပြုကုဒ်များကို ဖတ်ရမည်ဟု မျှော်လင့်ထားပါ။ 12. **Self-chat mode ကို မဖြစ်မနေ ဖွင့်ရပါမည်။**
+   Wizard က သင့်ကိုယ်ရေး WhatsApp နံပါတ်ကို မေးသောအခါ၊ assistant နံပါတ်မဟုတ်ဘဲ သင်စာပို့မည့် ဖုန်း (ပိုင်ရှင်/ပို့သူ) ကို ထည့်ပါ။
 
 **Sample config (personal number, self-chat):**
 
@@ -104,9 +97,8 @@ wizard က ကိုယ်ပိုင် WhatsApp နံပါတ်ကို �
 }
 ```
 
-Self-chat ပြန်ကြားချက်များသည် သတ်မှတ်ထားပါက ပုံမှန်အားဖြင့် `[{identity.name}]` ကို အသုံးပြုမည်ဖြစ်ပြီး (မဟုတ်ပါက `[openclaw]`)
-`messages.responsePrefix` ကို မသတ်မှတ်ထားပါက ဖြစ်သည်။ prefix ကို ပြင်ဆင်ရန် သို့မဟုတ် ပိတ်ရန် အတိအကျ သတ်မှတ်ပါ
-(ဖယ်ရှားရန် `""` ကို အသုံးပြုပါ)။
+13. Self-chat အဖြေများသည် `messages.responsePrefix` ကို မသတ်မှတ်ထားပါက သတ်မှတ်ထားသောအခါ `[{identity.name}]` (မသတ်မှတ်ထားပါက `[openclaw]`) ကို ပုံမှန်အသုံးပြုပါသည်။ 14. Prefix ကို ပြင်ဆင်လိုပါက သို့မဟုတ် ပိတ်လိုပါက တိတိကျကျ သတ်မှတ်ပါ
+    (ဖယ်ရှားရန် `""` ကို အသုံးပြုပါ)။
 
 ### နံပါတ် ရယူခြင်း အကြံပြုချက်များ
 
@@ -117,7 +109,7 @@ Self-chat ပြန်ကြားချက်များသည် သတ်မ
 
 **ရှောင်ရန်:** TextNow, Google Voice၊ “free SMS” ဝန်ဆောင်မှုအများစု — WhatsApp သည် အလွန်တင်းကြပ်စွာ ပိတ်ပင်ပါသည်။
 
-**အကြံပြုချက်:** နံပါတ်သည် အတည်ပြု SMS တစ်စောင်သာ လက်ခံနိုင်ရင် လုံလောက်ပါသည်။ ထို့နောက် WhatsApp Web session များသည် `creds.json` ဖြင့် ဆက်လက် တည်ရှိနေပါသည်။
+15. **အကြံပြုချက်:** နံပါတ်သည် အတည်ပြု SMS တစ်ကြိမ်သာ လက်ခံရရှိရန် လိုအပ်ပါသည်။ 16. ထို့နောက် WhatsApp Web sessions များသည် `creds.json` မှတဆင့် ဆက်လက်တည်ရှိနေပါသည်။
 
 ## Twilio ကို ဘာကြောင့် မသုံးသလဲ?
 
@@ -192,8 +184,8 @@ Account တစ်ခုချင်းစီအလိုက် ပိတ်ရ�
 
 ## WhatsApp FAQ: မက်ဆေ့ချ်ပို့ခြင်း + pairing
 
-**WhatsApp ကို link လုပ်တဲ့အခါ OpenClaw က ကျပန်း အဆက်အသွယ်တွေကို မက်ဆေ့ချ်ပို့မလား?**  
-မပို့ပါ။ ပုံမှန် DM policy သည် **pairing** ဖြစ်သောကြောင့် မသိသော ပို့သူများသည် pairing code ကိုသာ ရရှိပြီး သူတို့၏ မက်ဆေ့ချ်ကို **မလုပ်ဆောင်ပါ**။ OpenClaw သည် လက်ခံရရှိသော chats များ သို့မဟုတ် သင်က agent/CLI ဖြင့် ထုတ်လုပ်စေသော sends များကိုသာ ပြန်ကြားပါသည်။
+17. **WhatsApp ကို လင့်ခ်လုပ်သောအခါ OpenClaw က မသက်ဆိုင်သော အဆက်အသွယ်များကို စာပို့မလား?**  
+    မပို့ပါ။ 18. ပုံမှန် DM policy သည် **pairing** ဖြစ်သောကြောင့် မသိသော ပို့သူများသည် pairing code တစ်ခုသာ ရရှိပြီး ၎င်းတို့၏ မက်ဆေ့ချ်ကို **မလုပ်ဆောင်ပါ**။ 19. OpenClaw သည် ရရှိသော ချတ်များကိုသာ သို့မဟုတ် သင်က ပြတ်သားစွာ လှုံ့ဆော်ပို့ရန် (agent/CLI) ပြုလုပ်သော စာများကိုသာ ပြန်ကြားပါသည်။
 
 **WhatsApp မှာ pairing ဘယ်လို အလုပ်လုပ်သလဲ?**  
 Pairing သည် မသိသော ပို့သူများအတွက် DM gate ဖြစ်သည် —
@@ -202,15 +194,16 @@ Pairing သည် မသိသော ပို့သူများအတွက�
 - `openclaw pairing approve whatsapp <code>` ဖြင့် အတည်ပြုနိုင်သည် (`openclaw pairing list whatsapp` ဖြင့် စာရင်းကြည့်နိုင်သည်)။
 - ကုဒ်များသည် ၁ နာရီအကြာတွင် သက်တမ်းကုန်ပြီး pending request များကို ချန်နယ်တစ်ခုလျှင် ၃ ခုအထိသာ ခွင့်ပြုထားသည်။
 
-**WhatsApp နံပါတ်တစ်ခုတည်းပေါ်မှာ လူအများက OpenClaw instance မတူဘဲ အသုံးပြုနိုင်မလား?**  
-ရပါသည်၊ `bindings` ဖြင့် ပို့သူတစ်ဦးချင်းစီကို agent မတူဘဲ လမ်းကြောင်းခွဲနိုင်ပါသည် (peer `kind: "dm"`, sender E.164 ဥပမာ `+15551234567`)။ ပြန်ကြားချက်များသည် **WhatsApp အကောင့်တစ်ခုတည်း** မှသာ လာမည်ဖြစ်ပြီး direct chats များသည် agent တစ်ဦးချင်း၏ main session သို့ စုပေါင်းသွားသောကြောင့် **လူတစ်ဦးလျှင် agent တစ်ခု** ကို အသုံးပြုပါ။ DM access control (`dmPolicy`/`allowFrom`) သည် WhatsApp အကောင့်တစ်ခုလျှင် global ဖြစ်သည်။ [Multi-Agent Routing](/concepts/multi-agent) ကို ကြည့်ပါ။
+20. **WhatsApp နံပါတ်တစ်ခုတည်းပေါ်တွင် လူများစွာက OpenClaw instance မတူညီဘဲ အသုံးပြုနိုင်ပါသလား?**  
+    ရနိုင်ပါသည် — `bindings` မှတဆင့် ပို့သူတစ်ဦးစီကို agent မတူညီစွာ လမ်းကြောင်းချခြင်းဖြင့် (peer `kind: "dm"`, sender E.164 ကဲ့သို့ `+15551234567`)။ 21. အဖြေများသည် **WhatsApp account တစ်ခုတည်း** မှပဲ ထွက်လာပြီး direct chats များသည် agent တစ်ခုစီ၏ အဓိက session သို့ ပေါင်းစည်းသွားသောကြောင့် **လူတစ်ဦးလျှင် agent တစ်ခု** ကို အသုံးပြုပါ။ 22. DM ဝင်ရောက်ခွင့် ထိန်းချုပ်မှု (`dmPolicy`/`allowFrom`) သည် WhatsApp account တစ်ခုလုံးအတွက် global ဖြစ်ပါသည်။ 23. [Multi-Agent Routing](/concepts/multi-agent) ကို ကြည့်ပါ။
 
-**wizard မှာ ကိုယ်ပိုင်ဖုန်းနံပါတ်ကို ဘာကြောင့် မေးတာလဲ?**  
-wizard သည် သင့်ကိုယ်ပိုင် DM များကို ခွင့်ပြုရန် **allowlist/owner** ကို သတ်မှတ်ရန် အသုံးပြုပါသည်။ auto-sending အတွက် မသုံးပါ။ ကိုယ်ပိုင် WhatsApp နံပါတ်ပေါ်တွင် လည်ပတ်ပါက ထိုနံပါတ်တူတူကို အသုံးပြုပြီး `channels.whatsapp.selfChatMode` ကို ဖွင့်ပါ။
+24. **Wizard မှာ ဖုန်းနံပါတ်ကို ဘာကြောင့် မေးတာလဲ?**  
+    Wizard သည် သင့်ကိုယ်ပိုင် DM များကို ခွင့်ပြုနိုင်ရန် **allowlist/owner** ကို သတ်မှတ်ရန် အသုံးပြုပါသည်။ 25. အလိုအလျောက် စာပို့ရန်အတွက် မသုံးပါ။ 26. သင့်ကိုယ်ရေး WhatsApp နံပါတ်ပေါ်တွင် chạy ပါက ထိုနံပါတ်တစ်ခုတည်းကို အသုံးပြုပြီး `channels.whatsapp.selfChatMode` ကို ဖွင့်ပါ။
 
 ## Message normalization (မော်ဒယ်မြင်သော အကြောင်းအရာ)
 
 - `Body` သည် envelope ပါဝင်သော လက်ရှိ မက်ဆေ့ချ် body ဖြစ်သည်။
+
 - Quoted reply context ကို **အမြဲ ထည့်သွင်း** ပါသည် —
 
   ```
@@ -223,6 +216,7 @@ wizard သည် သင့်ကိုယ်ပိုင် DM များက�
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = quoted body သို့မဟုတ် media placeholder
   - `ReplyToSender` = သိရှိပါက E.164
+
 - Media-only inbound မက်ဆေ့ချ်များသည် placeholder များကို အသုံးပြုသည် —
   - `<media:image|video|audio|document|sticker>`
 
@@ -251,7 +245,7 @@ wizard သည် သင့်ကိုယ်ပိုင် DM များက�
 
 ## Acknowledgment reactions (လက်ခံချိန် auto-react)
 
-WhatsApp သည် မက်ဆေ့ချ်ကို လက်ခံရရှိသည်နှင့် bot ပြန်ကြားချက် မထုတ်လုပ်မီ အချိန်မှာပင် emoji reaction များကို အလိုအလျောက် ပို့နိုင်ပါသည်။ ယင်းသည် အသုံးပြုသူများအတွက် မက်ဆေ့ချ် လက်ခံရရှိကြောင်း ချက်ချင်း သိစေရန် ဖြစ်သည်။
+27. WhatsApp သည် မက်ဆေ့ချ်ကို လက်ခံရရှိသည့်အခါ ချက်ချင်း emoji reaction များကို အလိုအလျောက် ပို့နိုင်ပြီး bot အဖြေ ထုတ်မလာခင် ဖြစ်နိုင်ပါသည်။ 28. ၎င်းသည် အသုံးပြုသူများအား သူတို့၏ မက်ဆေ့ချ်ကို လက်ခံရရှိပြီးဖြစ်ကြောင်း ချက်ချင်း သိစေပါသည်။
 
 **Configuration:**
 
@@ -269,7 +263,7 @@ WhatsApp သည် မက်ဆေ့ချ်ကို လက်ခံရရှ
 
 **Options:**
 
-- `emoji` (string): acknowledgment အတွက် အသုံးပြုမည့် Emoji (ဥပမာ "👀", "✅", "📨")။ ဗလာ သို့မဟုတ် မထည့်ပါက feature ပိတ်ထားသည်။
+- 29. `emoji` (string): အသိအမှတ်ပြုရန် အသုံးပြုမည့် Emoji (ဥပမာ — "👀", "✅", "📨")။ 30. အလွတ်ထားပါက သို့မဟုတ် မထည့်ပါက = feature ပိတ်ထားသည်။
 - `direct` (boolean, ပုံမှန်: `true`): direct/DM chats တွင် reaction ပို့မည်။
 - `group` (string, ပုံမှန်: `"mentions"`): Group chat အပြုအမူ —
   - `"always"`: group မက်ဆေ့ချ်အားလုံးကို react (@mention မပါဘဲတောင်)
@@ -333,7 +327,7 @@ WhatsApp သည် မက်ဆေ့ချ်ကို လက်ခံရရှ
 
 WhatsApp သည် audio ကို **voice notes** (PTT bubble) အဖြစ် ပို့သည်။
 
-- အကောင်းဆုံးရလဒ်များအတွက်: OGG/Opus။ OpenClaw သည် `audio/ogg` ကို `audio/ogg; codecs=opus` အဖြစ် ပြန်ရေးသည်။
+- 31. အကောင်းဆုံးရလဒ်များ: OGG/Opus။ 32. OpenClaw သည် `audio/ogg` ကို `audio/ogg; codecs=opus` သို့ ပြန်ရေးပါသည်။
 - `[[audio_as_voice]]` သည် WhatsApp အတွက် လျစ်လျူရှုထားသည် (audio ကို voice note အဖြစ်ပင် ပို့ပြီးသားဖြစ်သည်)။
 
 ## Media limits + optimization
@@ -348,7 +342,7 @@ WhatsApp သည် audio ကို **voice notes** (PTT bubble) အဖြစ် 
 - **Gateway heartbeat** သည် ချိတ်ဆက်မှု အခြေအနေကို log လုပ်သည် (`web.heartbeatSeconds`, ပုံမှန် 60s)။
 - **Agent heartbeat** ကို agent တစ်ခုချင်းစီအလိုက် (`agents.list[].heartbeat`) သို့မဟုတ် global အနေဖြင့်
   `agents.defaults.heartbeat` ဖြင့် ဖွဲ့စည်းနိုင်သည် (per-agent entry မရှိပါက fallback)။
-  - Configured heartbeat prompt (ပုံမှန်: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK` skip behavior ကို အသုံးပြုသည်။
+  - 33. သတ်မှတ်ထားသော heartbeat prompt ကို အသုံးပြုပါသည် (ပုံမှန်: `Read HEARTBEAT.md if it exists (workspace context). 34. အဲဒါကို တိတိကျကျ လိုက်နာပါ။ 35. ယခင် ချတ်များမှ အလုပ်များကို မခန့်မှန်းပါနှင့် မပြန်လုပ်ပါနှင့်။ 36. အာရုံစိုက်ရန် မရှိပါက HEARTBEAT_OK ဖြင့် ပြန်ကြားပါ။`) + `HEARTBEAT_OK` skip behavior.
   - Delivery သည် နောက်ဆုံး အသုံးပြုခဲ့သော ချန်နယ် (သို့မဟုတ် သတ်မှတ်ထားသော target) သို့ ပို့သည်။
 
 ## Reconnect behavior
@@ -362,21 +356,21 @@ WhatsApp သည် audio ကို **voice notes** (PTT bubble) အဖြစ် 
 
 - `channels.whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled)။
 - `channels.whatsapp.selfChatMode` (same-phone setup; bot သည် ကိုယ်ပိုင် WhatsApp နံပါတ်ကို အသုံးပြုသည်)။
-- `channels.whatsapp.allowFrom` (DM allowlist)။ WhatsApp သည် E.164 ဖုန်းနံပါတ်များကို အသုံးပြုသည် (username မရှိ)။
+- 37. `channels.whatsapp.allowFrom` (DM allowlist)။ 38. WhatsApp သည် E.164 ဖုန်းနံပါတ်များကို အသုံးပြုပါသည် (username မရှိပါ)။
 - `channels.whatsapp.mediaMaxMb` (inbound media save cap)။
 - `channels.whatsapp.ackReaction` (မက်ဆေ့ချ် လက်ခံချိန် auto-reaction: `{emoji, direct, group}`)။
-- `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`)။
-- `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap)။
-- `channels.whatsapp.accounts.<accountId>.ackReaction` (per-account ack reaction override)။
+- 39. `channels.whatsapp.accounts.<accountId>`40. `.*` (account တစ်ခုစီအတွက် settings + ရွေးချယ်နိုင်သော `authDir`)။
+- 41. `channels.whatsapp.accounts.<accountId>`42. `.mediaMaxMb` (account တစ်ခုစီအတွက် ဝင်လာသော media အများဆုံး အရွယ်အစား)။
+- 43. `channels.whatsapp.accounts.<accountId>`44. `.ackReaction` (account တစ်ခုစီအတွက် ack reaction override)။
 - `channels.whatsapp.groupAllowFrom` (group sender allowlist)။
 - `channels.whatsapp.groupPolicy` (group policy)။
-- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables)။
-- `channels.whatsapp.dmHistoryLimit` (DM history limit in user turns)။ Per-user overrides: `channels.whatsapp.dms["<phone>"].historyLimit`။
+- 45. `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>`46. `.historyLimit` (group history context; `0` ဖြင့် ပိတ်နိုင်သည်)။
+- 47. `channels.whatsapp.dmHistoryLimit` (DM history limit — user turns အရေအတွက်)။ 48. User တစ်ဦးချင်း override များ: `channels.whatsapp.dms["<phone>"].historyLimit`။
 - `channels.whatsapp.groups` (group allowlist + mention gating defaults; `"*"` ဖြင့် အားလုံးကို ခွင့်ပြု)
 - `channels.whatsapp.actions.reactions` (WhatsApp tool reactions ကို gate လုပ်ခြင်း)။
 - `agents.list[].groupChat.mentionPatterns` (သို့မဟုတ် `messages.groupChat.mentionPatterns`)
 - `messages.groupChat.historyLimit`
-- `channels.whatsapp.messagePrefix` (inbound prefix; per-account: `channels.whatsapp.accounts.<accountId>.messagePrefix`; deprecated: `messages.messagePrefix`)
+- 49. `channels.whatsapp.messagePrefix` (inbound prefix; account အလိုက်: `channels.whatsapp.accounts.<accountId>`50. `.messagePrefix`; deprecated: `messages.messagePrefix`)
 - `messages.responsePrefix` (outbound prefix)
 - `agents.defaults.mediaMaxMb`
 - `agents.defaults.heartbeat.every`
@@ -406,9 +400,9 @@ WhatsApp သည် audio ကို **voice notes** (PTT bubble) အဖြစ် 
 **Linked ဖြစ်သော်လည်း ချိတ်ဆက်မရ / reconnect loop**
 
 - လက္ခဏာ: `channels status` တွင် `running, disconnected` ပြသခြင်း သို့မဟုတ် “Linked but disconnected” သတိပေးချက်။
-- ဖြေရှင်းနည်း: `openclaw doctor` (သို့မဟုတ် gateway ကို restart လုပ်ပါ)။ မပြေလည်သေးပါက `channels login` ဖြင့် ပြန်လည် link လုပ်ပြီး `openclaw logs --follow` ကို စစ်ဆေးပါ။
+- Fix: `openclaw doctor` (or restart the gateway). If it persists, relink via `channels login` and inspect `openclaw logs --follow`.
 
 **Bun runtime**
 
-- Bun ကို **မအကြံပြုပါ**။ WhatsApp (Baileys) နှင့် Telegram သည် Bun ပေါ်တွင် မယုံကြည်ရပါ။
-  Gateway ကို **Node** ဖြင့် လည်ပတ်ပါ။ (Getting Started runtime note ကို ကြည့်ပါ။)
+- Bun is **not recommended**. WhatsApp (Baileys) and Telegram are unreliable on Bun.
+  Run the gateway with **Node**. (See Getting Started runtime note.)

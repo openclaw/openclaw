@@ -4,18 +4,11 @@ read_when:
   - Tilføjelse eller ændring af adfærd for baggrunds-exec
   - Fejlfinding af langvarige exec-opgaver
 title: "Background Exec og procesværktøj"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:15Z
 ---
 
 # Background Exec + procesværktøj
 
-OpenClaw kører shell-kommandoer via værktøjet `exec` og holder langvarige opgaver i hukommelsen. Værktøjet `process` administrerer disse baggrunds-sessioner.
+OpenClaw kører shell kommandoer gennem `exec` værktøj og holder langvarige opgaver i hukommelsen. Værktøjet `process` styrer disse baggrundssessioner.
 
 ## exec-værktøj
 
@@ -38,7 +31,7 @@ Adfærd:
 
 ## Brokobling af underprocesser
 
-Når du starter langvarige underprocesser uden for exec-/process-værktøjerne (for eksempel CLI-genstarter eller gateway-hjælpere), skal du tilknytte hjælperen til brokobling af underprocesser, så termineringssignaler videresendes, og lyttere frakobles ved exit/fejl. Dette undgår forældreløse processer på systemd og holder nedlukningsadfærd konsistent på tværs af platforme.
+Ved spawning af langvarige børneprocesser uden for eksekveren/procesværktøjer (f.eks. CLI respawns eller gateway-hjælpere) vedhæfte børneproces-bro-hjælperen, så opsigelsessignaler videresendes og lyttere frigøres på afslutning/fejl. Dette undgår forældreløse processer på systemd og holder shutdown adfærd konsekvent på tværs af platforme.
 
 Miljøoverstyringer:
 

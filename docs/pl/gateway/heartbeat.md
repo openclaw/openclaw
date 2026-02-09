@@ -4,13 +4,6 @@ read_when:
   - Dostosowywanie częstotliwości heartbeat lub komunikatów
   - Wybór między heartbeat a cronem dla zadań zaplanowanych
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:40Z
 ---
 
 # Heartbeat (Gateway)
@@ -171,8 +164,7 @@ Ogranicz heartbeat do godzin pracy w konkretnej strefie czasowej:
 }
 ```
 
-Poza tym oknem (przed 9:00 lub po 22:00 czasu wschodniego) heartbeat jest pomijany.
-Następne zaplanowane tyknięcie w obrębie okna wykona się normalnie.
+Poza tym oknem (przed 9:00 lub po 22:00 czasu wschodniego) heartbeat jest pomijany. Następne zaplanowane tyknięcie w obrębie okna wykona się normalnie.
 
 ### Przykład wielu kont
 
@@ -219,8 +211,7 @@ Użyj `accountId`, aby wskazać konkretne konto w kanałach wielokontowych, taki
   - `none`: uruchom heartbeat, ale **nie dostarczaj** na zewnątrz.
 - `to`: opcjonalne nadpisanie odbiorcy (identyfikator specyficzny dla kanału, np. E.164 dla WhatsApp lub identyfikator czatu Telegram).
 - `accountId`: opcjonalny identyfikator konta dla kanałów wielokontowych. Gdy `target: "last"`,
-  identyfikator konta dotyczy rozwiązanego ostatniego kanału, jeśli obsługuje konta; w przeciwnym razie jest ignorowany.
-  Jeśli identyfikator konta nie pasuje do skonfigurowanego konta dla rozwiązanego kanału, dostarczenie jest pomijane.
+  identyfikator konta dotyczy rozwiązanego ostatniego kanału, jeśli obsługuje konta; w przeciwnym razie jest ignorowany. Jeśli identyfikator konta nie pasuje do skonfigurowanego konta dla rozwiązanego kanału, dostarczenie jest pomijane.
 - `prompt`: nadpisuje domyślną treść promptu (nie jest scalane).
 - `ackMaxChars`: maks. liczba znaków dozwolona po `HEARTBEAT_OK` przed dostarczeniem.
 - `activeHours`: ogranicza uruchomienia heartbeat do okna czasowego. Obiekt z `start` (HH:MM, włącznie),
@@ -230,14 +221,13 @@ Użyj `accountId`, aby wskazać konkretne konto w kanałach wielokontowych, taki
   - Dowolny identyfikator IANA (np. `America/New_York`): używany bezpośrednio; jeśli nieprawidłowy, wraca do zachowania `"user"` powyżej.
   - Poza aktywnym oknem heartbeat jest pomijany do następnego tyknięcia w obrębie okna.
 
-## Zachowanie dostarczania
+## Zachowanie dostawy
 
 - Heartbeat domyślnie uruchamia się w głównej sesji agenta (`agent:<id>:<mainKey>`),
   lub `global`, gdy `session.scope = "global"`. Ustaw `session`, aby nadpisać
   na konkretną sesję kanału (Discord/WhatsApp/etc.).
 - `session` wpływa tylko na kontekst uruchomienia; dostarczanie kontrolują `target` i `to`.
-- Aby dostarczyć do konkretnego kanału/odbiorcy, ustaw `target` + `to`.
-  Z `target: "last"` dostarczanie używa ostatniego kanału zewnętrznego dla tej sesji.
+- Aby dostarczyć do konkretnego kanału/odbiorcy, ustaw `target` + `to`. Z `target: "last"` dostarczanie używa ostatniego kanału zewnętrznego dla tej sesji.
 - Jeśli główna kolejka jest zajęta, heartbeat jest pomijany i ponawiany później.
 - Jeśli `target` rozwiąże się do braku celu zewnętrznego, uruchomienie nadal następuje,
   ale nie jest wysyłana żadna wiadomość wychodząca.
@@ -246,8 +236,7 @@ Użyj `accountId`, aby wskazać konkretne konto w kanałach wielokontowych, taki
 
 ## Kontrole widoczności
 
-Domyślnie potwierdzenia `HEARTBEAT_OK` są tłumione, a treści alertów dostarczane.
-Możesz to dostosować per kanał lub per konto:
+Domyślnie potwierdzenia `HEARTBEAT_OK` są tłumione, a treści alertów dostarczane. Możesz to dostosować per kanał lub per konto:
 
 ```yaml
 channels:
@@ -300,12 +289,12 @@ channels:
 
 ### Typowe wzorce
 
-| Cel                                             | Konfiguracja                                                                             |
-| ----------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Zachowanie domyślne (ciche OK, alerty)          | _(brak konfiguracji)_                                                                    |
+| Cel                                                                | Konfiguracja                                                                             |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Zachowanie domyślne (ciche OK, alerty)          | _(brak konfiguracji)_                                                 |
 | W pełni ciche (brak wiadomości, brak wskaźnika) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Tylko wskaźnik (brak wiadomości)                | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OK tylko w jednym kanale                        | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OK tylko w jednym kanale                                           | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (opcjonalne)
 
@@ -375,6 +364,5 @@ pozostawienie tej opcji wyłączonej w czatach grupowych.
 
 ## Świadomość kosztów
 
-Heartbeat uruchamia pełne tury agenta. Krótsze interwały spalają więcej tokenów.
-Utrzymuj `HEARTBEAT.md` na niskim poziomie i rozważ tańszy `model` lub `target: "none"`,
+Heartbeat uruchamia pełne tury agenta. Krótsze interwały spalają więcej tokenów. Utrzymuj `HEARTBEAT.md` na niskim poziomie i rozważ tańszy `model` lub `target: "none"`,
 jeśli chcesz wyłącznie wewnętrzne aktualizacje stanu.

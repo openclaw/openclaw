@@ -5,19 +5,13 @@ read_when:
   - Swift Package Manager を介して Peekaboo を統合する場合
   - PeekabooBridge のプロトコルやパスを変更する場合
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:37Z
 ---
 
 # Peekaboo Bridge（macOS UI 自動化）
 
 OpenClaw は、**PeekabooBridge** をローカルで権限を認識する UI 自動化ブローカーとしてホストできます。
-これにより、`peekaboo` CLI が、macOS アプリの TCC 権限を再利用しながら UI 自動化を実行できます。
+これにより、`peekaboo` CLI が、macOS アプリの TCC 権限を再利用しながら UI 自動化を実行できます。 これにより、
+macOSアプリのTCCパーミッションを再利用しながら、`peekaboo` CLI がUIオートメーションを駆動できます。
 
 ## これは何か（そして何ではないか）
 
@@ -31,7 +25,8 @@ macOS アプリで次を実行します。
 
 - 設定 → **Enable Peekaboo Bridge**
 
-有効にすると、OpenClaw はローカルの UNIX ソケットサーバーを起動します。無効の場合、ホストは停止し、`peekaboo` は他の利用可能なホストにフォールバックします。
+有効にすると、OpenClaw はローカルの UNIX ソケットサーバーを起動します。無効の場合、ホストは停止し、`peekaboo` は他の利用可能なホストにフォールバックします。 無効にすると、ホスト
+が停止し、`peekaboo` は他の利用可能なホストに戻ります。
 
 ## クライアントの検出順
 
@@ -41,7 +36,7 @@ Peekaboo クライアントは通常、次の順序でホストを試行しま�
 2. Claude.app（インストールされている場合）
 3. OpenClaw.app（薄いブローカー）
 
-`peekaboo bridge status --verbose` を使用すると、どのホストがアクティブか、どのソケットパスが使用されているかを確認できます。次で上書きすることもできます。
+`peekaboo bridge status --verbose` を使用すると、どのホストがアクティブか、どのソケットパスが使用されているかを確認できます。次で上書きすることもできます。 上書きすることができます:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -55,7 +50,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## スナップショットの挙動（自動化）
 
-スナップショットはメモリ内に保存され、短時間で自動的に期限切れになります。より長い保持が必要な場合は、クライアントから再キャプチャしてください。
+スナップショットはメモリに保存され、短いウィンドウの後に自動的に期限切れになります。
+長時間のリテンションが必要な場合は、クライアントから再キャプチャします。
 
 ## トラブルシューティング
 

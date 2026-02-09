@@ -5,19 +5,12 @@ read_when:
   - TTS فراہم کنندگان یا حدود کی کنفیگریشن
   - /tts کمانڈز کا استعمال
 title: "متن سے آواز"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:11Z
 ---
 
 # متن سے آواز (TTS)
 
-OpenClaw بیرونی جوابات کو ElevenLabs، OpenAI، یا Edge TTS کے ذریعے آڈیو میں تبدیل کر سکتا ہے۔
-یہ وہاں کام کرتا ہے جہاں OpenClaw آڈیو بھیج سکتا ہے؛ Telegram میں گول وائس نوٹ ببل نظر آتا ہے۔
+OpenClaw آؤٹ باؤنڈ جوابات کو ElevenLabs، OpenAI، یا Edge TTS کے ذریعے آڈیو میں تبدیل کر سکتا ہے۔
+یہ ہر اس جگہ کام کرتا ہے جہاں OpenClaw آڈیو بھیج سکتا ہے؛ Telegram میں ایک گول وائس-نوٹ ببل ملتا ہے۔
 
 ## معاون خدمات
 
@@ -27,15 +20,10 @@ OpenClaw بیرونی جوابات کو ElevenLabs، OpenAI، یا Edge TTS کے
 
 ### Edge TTS نوٹس
 
-Edge TTS مائیکروسافٹ ایج کی آن لائن نیورل TTS سروس کو `node-edge-tts`
-لائبریری کے ذریعے استعمال کرتا ہے۔ یہ ایک ہوسٹڈ سروس ہے (لوکل نہیں)، مائیکروسافٹ کے اینڈ پوائنٹس استعمال کرتی ہے، اور
-API کلید درکار نہیں۔ `node-edge-tts` تقریر کی کنفیگریشن کے اختیارات اور
-آؤٹ پٹ فارمیٹس فراہم کرتا ہے، مگر Edge سروس تمام اختیارات کی حمایت نہیں کرتی۔ citeturn2search0
+Edge TTS، `node-edge-tts` لائبریری کے ذریعے Microsoft Edge کی آن لائن نیورل TTS سروس استعمال کرتا ہے۔ یہ ایک ہوسٹڈ سروس ہے (لوکل نہیں)، Microsoft کے endpoints استعمال کرتی ہے، اور API key کی ضرورت نہیں ہوتی۔ `node-edge-tts` اسپیچ کنفیگریشن آپشنز اور آؤٹ پٹ فارمیٹس فراہم کرتا ہے، لیکن تمام آپشنز Edge سروس کے ذریعے سپورٹڈ نہیں ہوتے۔ citeturn2search0
 
-چونکہ Edge TTS ایک عوامی ویب سروس ہے جس کی کوئی شائع شدہ SLA یا کوٹہ نہیں، اسے
-best‑effort سمجھیں۔ اگر آپ کو یقینی حدود اور سپورٹ درکار ہو تو OpenAI یا ElevenLabs استعمال کریں۔
-Microsoft کی Speech REST API فی درخواست 10 منٹ کی آڈیو حد بیان کرتی ہے؛ Edge TTS
-حدود شائع نہیں کرتا، اس لیے ملتی جلتی یا کم حدود فرض کریں۔ citeturn0search3
+چونکہ Edge TTS ایک عوامی ویب سروس ہے جس کی کوئی شائع شدہ SLA یا quota نہیں، اس لیے اسے best-effort سمجھیں۔ اگر آپ کو ضمانت شدہ حدود اور سپورٹ درکار ہو تو OpenAI یا ElevenLabs استعمال کریں۔
+Microsoft کی Speech REST API فی درخواست 10‑منٹ آڈیو کی حد دستاویز کرتی ہے؛ Edge TTS حدود شائع نہیں کرتا، اس لیے ملتی جلتی یا اس سے کم حدود فرض کریں۔ citeturn0search3
 
 ## اختیاری کلیدیں
 
@@ -44,12 +32,12 @@ Microsoft کی Speech REST API فی درخواست 10 منٹ کی آڈیو حد 
 - `ELEVENLABS_API_KEY` (یا `XI_API_KEY`)
 - `OPENAI_API_KEY`
 
-Edge TTS کے لیے API کلید **درکار نہیں**۔ اگر کوئی API کلید نہ ملے تو OpenClaw بطورِ طے شدہ
-Edge TTS استعمال کرتا ہے (جب تک `messages.tts.edge.enabled=false` کے ذریعے غیر فعال نہ کیا جائے)۔
+Edge TTS کو **API key** کی ضرورت نہیں ہوتی۔ اگر کوئی API keys نہ ملیں تو OpenClaw ڈیفالٹ طور پر Edge TTS استعمال کرتا ہے
+(جب تک `messages.tts.edge.enabled=false` کے ذریعے غیر فعال نہ کیا گیا ہو)۔
 
-اگر متعدد فراہم کنندگان کنفیگر ہوں تو منتخب فراہم کنندہ پہلے استعمال ہوتا ہے اور باقی فال بیک ہوتے ہیں۔
-خودکار خلاصہ کنفیگر شدہ `summaryModel` (یا `agents.defaults.model.primary`) استعمال کرتا ہے،
-لہٰذا اگر آپ خلاصے فعال کریں تو اس فراہم کنندہ کی تصدیق بھی ضروری ہے۔
+اگر متعدد فراہم کنندگان کنفیگر کیے گئے ہوں تو منتخب کردہ فراہم کنندہ پہلے استعمال ہوتا ہے اور باقی بیک اپ کے طور پر کام کرتے ہیں۔
+آٹو خلاصہ کنفیگر کیے گئے `summaryModel` (یا `agents.defaults.model.primary`) کو استعمال کرتا ہے،
+اس لیے اگر آپ خلاصے فعال کریں تو اس فراہم کنندہ کی توثیق بھی ضروری ہے۔
 
 ## سروس لنکس
 
@@ -62,15 +50,15 @@ Edge TTS استعمال کرتا ہے (جب تک `messages.tts.edge.enabled=fals
 
 ## کیا یہ بطورِ طے شدہ فعال ہے؟
 
-نہیں۔ خودکار‑TTS بطورِ طے شدہ **بند** ہے۔ اسے کنفیگ میں
-`messages.tts.auto` کے ذریعے یا فی سیشن `/tts always` کے ساتھ فعال کریں (عرف: `/tts on`)۔
+نہیں. آٹو‑TTS بطورِ ڈیفالٹ **بند** ہوتا ہے۔ اسے کنفیگ میں
+`messages.tts.auto` کے ذریعے یا فی سیشن `/tts always` (عرف: `/tts on`) سے فعال کریں۔
 
 جب TTS آن ہو تو Edge TTS **بطورِ طے شدہ فعال** ہوتا ہے، اور
 جب OpenAI یا ElevenLabs کی API کلیدیں دستیاب نہ ہوں تو خودکار طور پر استعمال ہوتا ہے۔
 
 ## کنفیگ
 
-TTS کنفیگ `openclaw.json` میں `messages.tts` کے تحت ہوتی ہے۔
+TTS config lives under `messages.tts` in `openclaw.json`.
 مکمل اسکیما [Gateway configuration](/gateway/configuration) میں موجود ہے۔
 
 ### کم از کم کنفیگ (فعال + فراہم کنندہ)
@@ -217,7 +205,7 @@ TTS کنفیگ `openclaw.json` میں `messages.tts` کے تحت ہوتی ہے۔
 - `summaryModel`: خودکار خلاصے کے لیے اختیاری کم خرچ ماڈل؛ بطورِ طے شدہ `agents.defaults.model.primary`۔
   - `provider/model` یا کنفیگر شدہ ماڈل عرف قبول کرتا ہے۔
 - `modelOverrides`: ماڈل کو TTS ہدایات اخراج کرنے کی اجازت (بطورِ طے شدہ آن)۔
-- `maxTextLength`: TTS ان پٹ کی سخت حد (حروف)۔ حد سے تجاوز پر `/tts audio` ناکام ہوتا ہے۔
+- `maxTextLength`: TTS ان پٹ کے لیے سخت حد (حروف کی تعداد)۔ حد سے تجاوز ہونے پر `/tts audio` ناکام ہو جاتا ہے۔
 - `timeoutMs`: درخواست کا ٹائم آؤٹ (ملی سیکنڈ)۔
 - `prefsPath`: لوکل prefs JSON راستہ اووررائیڈ کریں (فراہم کنندہ/حد/خلاصہ)۔
 - `apiKey` کی قدریں env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`) پر فال بیک کرتی ہیں۔
@@ -241,8 +229,8 @@ TTS کنفیگ `openclaw.json` میں `messages.tts` کے تحت ہوتی ہے۔
 
 ## ماڈل‑ڈرائیون اووررائیڈز (بطورِ طے شدہ آن)
 
-بطورِ طے شدہ، ماڈل ایک واحد جواب کے لیے TTS ہدایات اخراج **کر سکتا ہے**۔
-جب `messages.tts.auto`، `tagged` ہو، تو آڈیو ٹرگر کرنے کے لیے یہ ہدایات لازمی ہوتی ہیں۔
+بطورِ ڈیفالٹ، ماڈل ایک ہی جواب کے لیے TTS ہدایات جاری **کر سکتا ہے**۔
+جب `messages.tts.auto` کی قدر `tagged` ہو تو آڈیو کو متحرک کرنے کے لیے یہ ہدایات لازمی ہیں۔
 
 فعال ہونے پر، ماڈل ایک جواب کے لیے آواز اووررائیڈ کرنے کی خاطر `[[tts:...]]` ہدایات اخراج کر سکتا ہے،
 اور ساتھ ایک اختیاری `[[tts:text]]...[[/tts:text]]` بلاک بھی دے سکتا ہے تاکہ
@@ -319,11 +307,9 @@ Here you go.
 - **دیگر چینلز**: MP3 (`mp3_44100_128` ElevenLabs سے، `mp3` OpenAI سے)۔
   - 44.1kHz / 128kbps تقریر کی وضاحت کے لیے طے شدہ توازن ہے۔
 - **Edge TTS**: `edge.outputFormat` استعمال کرتا ہے (بطورِ طے شدہ `audio-24khz-48kbitrate-mono-mp3`)۔
-  - `node-edge-tts` ایک `outputFormat` قبول کرتا ہے، مگر Edge سروس سے تمام فارمیٹس دستیاب نہیں
-    ہوتے۔ citeturn2search0
-  - آؤٹ پٹ فارمیٹ کی قدریں Microsoft Speech output formats کے مطابق ہیں (بشمول Ogg/WebM Opus)۔ citeturn1search0
-  - Telegram `sendVoice` OGG/MP3/M4A قبول کرتا ہے؛ اگر آپ کو یقینی Opus وائس نوٹس درکار ہوں تو
-    OpenAI/ElevenLabs استعمال کریں۔ citeturn1search1
+  - `node-edge-tts` ایک `outputFormat` قبول کرتا ہے، لیکن Edge سروس سے تمام فارمیٹس دستیاب نہیں ہوتے۔ citeturn2search0
+  - آؤٹ پٹ فارمیٹ کی قدریں Microsoft Speech کے آؤٹ پٹ فارمیٹس کی پیروی کرتی ہیں (بشمول Ogg/WebM Opus)۔ citeturn1search0
+  - Telegram کا `sendVoice` OGG/MP3/M4A قبول کرتا ہے؛ اگر آپ کو یقینی Opus وائس نوٹس درکار ہوں تو OpenAI/ElevenLabs استعمال کریں۔ citeturn1search1
   - اگر کنفیگر شدہ Edge آؤٹ پٹ فارمیٹ ناکام ہو جائے تو OpenClaw MP3 کے ساتھ دوبارہ کوشش کرتا ہے۔
 
 OpenAI/ElevenLabs کے فارمیٹس مقرر ہیں؛ Telegram وائس نوٹ UX کے لیے Opus متوقع رکھتا ہے۔
@@ -358,11 +344,11 @@ Reply -> TTS enabled?
 
 ## سلیش کمانڈ کا استعمال
 
-ایک ہی کمانڈ ہے: `/tts`۔
+صرف ایک کمانڈ ہے: `/tts`۔
 فعال کرنے کی تفصیلات کے لیے [Slash commands](/tools/slash-commands) دیکھیں۔
 
-Discord نوٹ: `/tts` ایک بلٹ‑ان Discord کمانڈ ہے، اس لیے OpenClaw وہاں
-`/voice` کو نیٹو کمانڈ کے طور پر رجسٹر کرتا ہے۔ متنی `/tts ...` پھر بھی کام کرتا ہے۔
+Discord نوٹ: `/tts` ایک بلٹ اِن Discord کمانڈ ہے، اس لیے OpenClaw وہاں مقامی کمانڈ کے طور پر
+`/voice` رجسٹر کرتا ہے۔ متن `/tts ...` پھر بھی کام کرتا ہے۔
 
 ```
 /tts off
@@ -386,9 +372,8 @@ Discord نوٹ: `/tts` ایک بلٹ‑ان Discord کمانڈ ہے، اس لی�
 
 ## ایجنٹ ٹول
 
-`tts` ٹول متن کو آواز میں تبدیل کرتا ہے اور ایک `MEDIA:` راستہ واپس کرتا ہے۔ جب
-نتیجہ Telegram کے ساتھ مطابقت رکھتا ہو تو ٹول `[[audio_as_voice]]` شامل کرتا ہے تاکہ
-Telegram وائس ببل بھیجے۔
+`tts` ٹول متن کو آواز میں تبدیل کرتا ہے اور ایک `MEDIA:` پاتھ واپس کرتا ہے۔ جب نتیجہ Telegram کے ساتھ مطابقت رکھتا ہو تو ٹول `[[audio_as_voice]]` شامل کرتا ہے تاکہ
+Telegram ایک وائس ببل بھیجے۔
 
 ## Gateway RPC
 

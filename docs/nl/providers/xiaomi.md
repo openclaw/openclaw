@@ -4,13 +4,6 @@ read_when:
   - Je wilt Xiaomi MiMo-modellen in OpenClaw
   - Je hebt XIAOMI_API_KEY-instelling nodig
 title: "Xiaomi MiMo"
-x-i18n:
-  source_path: providers/xiaomi.md
-  source_hash: 366fd2297b2caf8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:36Z
 ---
 
 # Xiaomi MiMo

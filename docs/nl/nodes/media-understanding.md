@@ -3,14 +3,7 @@ summary: "Inkomende beeld-/audio-/videoverwerking (optioneel) met provider- en C
 read_when:
   - Ontwerpen of refactoren van mediaverwerking
   - Afstemmen van inkomende audio-/video-/beeldvoorverwerking
-title: "Mediaverwerking"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
+title: "Media begrijpen"
 ---
 
 # Mediaverwerking (inkomend) — 2026-01-17
@@ -180,11 +173,11 @@ Als je `capabilities` weglaat, komt de vermelding in aanmerking voor de lijst wa
 
 ## Provider-ondersteuningsmatrix (OpenClaw-integraties)
 
-| Capability | Providerintegratie                                | Notities                                        |
-| ---------- | ------------------------------------------------- | ----------------------------------------------- |
-| Beeld      | OpenAI / Anthropic / Google / anderen via `pi-ai` | Elk beeldgeschikt model in het register werkt.  |
+| Capability | Providerintegratie                                | Notities                                                                           |
+| ---------- | ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Beeld      | OpenAI / Anthropic / Google / anderen via `pi-ai` | Elk beeldgeschikt model in het register werkt.                     |
 | Audio      | OpenAI, Groq, Deepgram, Google                    | Providertranscriptie (Whisper/Deepgram/Gemini). |
-| Video      | Google (Gemini API)                               | Provider videoverwerking.                       |
+| Video      | Google (Gemini API)            | Provider videoverwerking.                                          |
 
 ## Aanbevolen providers
 
@@ -216,7 +209,7 @@ Wanneer `mode: "all"`, worden outputs gelabeld als `[Image 1/2]`, `[Audio 2/2]`,
 
 ## Config-voorbeelden
 
-### 1) Gedeelde modellijst + overrides
+### 1. Gedeelde modellijst + overrides
 
 ```json5
 {
@@ -253,7 +246,7 @@ Wanneer `mode: "all"`, worden outputs gelabeld als `[Image 1/2]`, `[Audio 2/2]`,
 }
 ```
 
-### 2) Alleen audio + video (beeld uit)
+### 2. Alleen audio + video (beeld uit)
 
 ```json5
 {
@@ -293,7 +286,7 @@ Wanneer `mode: "all"`, worden outputs gelabeld als `[Image 1/2]`, `[Audio 2/2]`,
 }
 ```
 
-### 3) Optionele beeldverwerking
+### 3. Optionele beeldverwerking
 
 ```json5
 {
@@ -324,7 +317,7 @@ Wanneer `mode: "all"`, worden outputs gelabeld als `[Image 1/2]`, `[Audio 2/2]`,
 }
 ```
 
-### 4) Multimodale enkele vermelding (expliciete capabilities)
+### 4. Multimodale enkele vermelding (expliciete capabilities)
 
 ```json5
 {

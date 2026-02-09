@@ -4,13 +4,6 @@ read_when:
   - Conception ou refactorisation de la compréhension des médias
   - Réglage du prétraitement entrant audio/vidéo/image
 title: "Compréhension des médias"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:19Z
 ---
 
 # Compréhension des médias (entrant) — 2026-01-17
@@ -181,11 +174,11 @@ Si vous omettez `capabilities`, l’entrée est éligible pour la liste dans laq
 
 ## Matrice de prise en charge des fournisseurs (intégrations OpenClaw)
 
-| Capacité | Intégration fournisseur                          | Notes                                                     |
-| -------- | ------------------------------------------------ | --------------------------------------------------------- |
-| Image    | OpenAI / Anthropic / Google / autres via `pi-ai` | Tout modèle capable d’images dans le registre fonctionne. |
-| Audio    | OpenAI, Groq, Deepgram, Google                   | Transcription fournisseur (Whisper/Deepgram/Gemini).      |
-| Vidéo    | Google (API Gemini)                              | Compréhension vidéo du fournisseur.                       |
+| Capacité | Intégration du fournisseur                       | Notes                                                                                   |
+| -------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| Image    | OpenAI / Anthropic / Google / autres via `pi-ai` | Tout modèle capable d’images dans le registre fonctionne.               |
+| Audio    | OpenAI, Groq, Deepgram, Google                   | Transcription fournisseur (Whisper/Deepgram/Gemini). |
+| Vidéo    | Google (API Gemini)           | Compréhension vidéo du fournisseur.                                     |
 
 ## Fournisseurs recommandés
 
@@ -217,7 +210,7 @@ Lorsque `mode: "all"`, les sorties sont étiquetées `[Image 1/2]`, `[Audio 2/2]
 
 ## Exemples de configuration
 
-### 1) Liste de modèles partagés + remplacements
+### 1. Liste de modèles partagés + remplacements
 
 ```json5
 {
@@ -254,7 +247,7 @@ Lorsque `mode: "all"`, les sorties sont étiquetées `[Image 1/2]`, `[Audio 2/2]
 }
 ```
 
-### 2) Audio + Vidéo uniquement (image désactivée)
+### 2. Audio + Vidéo uniquement (image désactivée)
 
 ```json5
 {
@@ -294,7 +287,7 @@ Lorsque `mode: "all"`, les sorties sont étiquetées `[Image 1/2]`, `[Audio 2/2]
 }
 ```
 
-### 3) Compréhension d’image optionnelle
+### 3. Compréhension d’image optionnelle
 
 ```json5
 {
@@ -325,7 +318,7 @@ Lorsque `mode: "all"`, les sorties sont étiquetées `[Image 1/2]`, `[Audio 2/2]
 }
 ```
 
-### 4) Entrée unique multimodale (capacités explicites)
+### 4. Entrée unique multimodale (capacités explicites)
 
 ```json5
 {
@@ -363,7 +356,7 @@ Lorsque `mode: "all"`, les sorties sont étiquetées `[Image 1/2]`, `[Audio 2/2]
 }
 ```
 
-## Sortie d’état
+## Sortie de statut
 
 Lorsque la compréhension des médias s’exécute, `/status` inclut une courte ligne de résumé :
 
@@ -377,7 +370,7 @@ Cela affiche les résultats par capacité et le fournisseur/modèle choisi le ca
 
 - La compréhension est **au mieux‑effort**. Les erreurs ne bloquent pas les réponses.
 - Les pièces jointes sont toujours transmises aux modèles même lorsque la compréhension est désactivée.
-- Utilisez `scope` pour limiter les contextes d’exécution de la compréhension (par ex. uniquement les Messages prives).
+- Utilisez `scope` pour limiter où la compréhension s'exécute (par exemple uniquement les DM).
 
 ## Documentation associée
 

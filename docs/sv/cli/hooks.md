@@ -4,13 +4,6 @@ read_when:
   - Du vill hantera agent-hooks
   - Du vill installera eller uppdatera hooks
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:47Z
 ---
 
 # `openclaw hooks`
@@ -74,7 +67,7 @@ Visa detaljerad information om en specifik hook.
 
 **Argument:**
 
-- `<name>`: Hook-namn (t.ex. `session-memory`)
+- `<name>`: Kroknamn (t.ex., `session-memory`)
 
 **Alternativ:**
 
@@ -134,12 +127,12 @@ openclaw hooks enable <name>
 
 Aktivera en specifik hook genom att lägga till den i din konfig (`~/.openclaw/config.json`).
 
-**Obs:** Hooks som hanteras av plugins visar `plugin:<id>` i `openclaw hooks list` och
-kan inte aktiveras/inaktiveras här. Aktivera/inaktivera pluginet i stället.
+**Observera:** Krokar som hanteras av plugins visar `plugin:<id>` i `openclaw hooks list` och
+kan inte aktiveras/inaktiveras här. Aktivera/inaktivera plugin istället.
 
 **Argument:**
 
-- `<name>`: Hook-namn (t.ex. `session-memory`)
+- `<name>`: Kroknamn (t.ex., `session-memory`)
 
 **Exempel:**
 
@@ -156,7 +149,7 @@ openclaw hooks enable session-memory
 **Vad den gör:**
 
 - Kontrollerar om hooken finns och är behörig
-- Uppdaterar `hooks.internal.entries.<name>.enabled = true` i din konfig
+- Uppdaterar `hooks.internal.entries.<name>.enabled = true` i din konfiguration
 - Sparar konfig till disk
 
 **Efter aktivering:**
@@ -173,7 +166,7 @@ Inaktivera en specifik hook genom att uppdatera din konfig.
 
 **Argument:**
 
-- `<name>`: Hook-namn (t.ex. `command-logger`)
+- `<name>`: Kroknamn (t.ex., `command-logger`)
 
 **Exempel:**
 

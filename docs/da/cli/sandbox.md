@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "Administrér sandbox-containere og inspicér den effektive sandbox-politik"
 read_when: "Du administrerer sandbox-containere eller fejlsøger sandbox-/tool-policy-adfærd."
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:05Z
 ---
 
 # Sandbox CLI
@@ -18,7 +11,7 @@ Administrér Docker-baserede sandbox-containere til isoleret agentkørsel.
 
 ## Overblik
 
-OpenClaw kan køre agenter i isolerede Docker-containere af hensyn til sikkerhed. Kommandoerne `sandbox` hjælper dig med at administrere disse containere, især efter opdateringer eller ændringer i konfigurationen.
+OpenClaw kan køre agenter i isolerede Docker containere for sikkerhed. Kommandoerne `sandbox` hjælper dig med at håndtere disse containere, især efter opdateringer eller konfigurationsændringer.
 
 ## Kommandoer
 
@@ -121,9 +114,10 @@ openclaw sandbox recreate --agent alfred
 - Containere ryddes først efter 24 timers inaktivitet
 - Agenter, der bruges regelmæssigt, holder gamle containere kørende på ubestemt tid
 
-**Løsning:** Brug `openclaw sandbox recreate` til at gennemtvinge fjernelse af gamle containere. De genskabes automatisk med aktuelle indstillinger, når de næste gang er nødvendige.
+**Løsning:** Brug `openclaw sandkasse genskabelse` for at tvinge fjernelse af gamle containere. De genskabes automatisk med aktuelle indstillinger, når det næste er nødvendigt.
 
-Tip: Foretræk `openclaw sandbox recreate` frem for manuel `docker rm`. Den bruger Gateway’s container-navngivning og undgår uoverensstemmelser, når scope-/sessionsnøgler ændres.
+Tip: foretrækker `openclaw sandbox genskabelse` over manuel `docker rm`. Det bruger
+Gateway ‘ s container navngivning og undgår mismatch når omfang / session nøgler ændres.
 
 ## Konfiguration
 

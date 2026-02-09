@@ -4,13 +4,6 @@ read_when:
   - Yerel kurulumlar yerine kapsayıcılı bir gateway istiyorsunuz
   - Docker akışını doğruluyorsunuz
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # Docker (isteğe bağlı)
@@ -21,7 +14,7 @@ Docker **isteğe bağlıdır**. Yalnızca kapsayıcılı bir gateway istiyorsan�
 
 - **Evet**: izole, atılabilir bir gateway ortamı istiyorsunuz ya da OpenClaw’ı yerel kurulumlar olmadan bir ana makinede çalıştırmak istiyorsunuz.
 - **Hayır**: kendi makinenizde çalışıyorsunuz ve yalnızca en hızlı geliştirme döngüsünü istiyorsunuz. Bunun yerine normal kurulum akışını kullanın.
-- **Sandboxing notu**: ajan sandboxing de Docker kullanır, ancak tam gateway’in Docker’da çalışmasını **gerektirmez**. Bkz. [Sandboxing](/gateway/sandboxing).
+- **Sandboxing notu**: ajan sandboxing de Docker kullanır, ancak tam gateway’in Docker’da çalışmasını **gerektirmez**. [Sandboxing](/gateway/sandboxing).
 
 Bu kılavuz şunları kapsar:
 
@@ -53,7 +46,7 @@ Bu betik:
 - Docker Compose üzerinden gateway’i başlatır
 - bir gateway belirteci üretir ve bunu `.env` dosyasına yazar
 
-İsteğe bağlı ortam değişkenleri:
+Tüm kapsayıcı ana dizinini kalıcı hale getir (isteğe bağlı)
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — derleme sırasında ek apt paketleri yükler
 - `OPENCLAW_EXTRA_MOUNTS` — ek ana makine bağlama (bind mount) ekler
@@ -70,7 +63,7 @@ Ana makinede yapılandırma/çalışma alanı yazar:
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-Bir VPS üzerinde mi çalışıyorsunuz? Bkz. [Hetzner (Docker VPS)](/install/hetzner).
+Bir VPS üzerinde mi çalışıyorsunuz? [Hetzner (Docker VPS)](/install/hetzner).
 
 ### Manuel akış (compose)
 
@@ -122,7 +115,7 @@ Notlar:
   `docker-setup.sh`’yi yeniden çalıştırın.
 - `docker-compose.extra.yml` oluşturulmuştur. Elle düzenlemeyin.
 
-### Tüm kapsayıcı ana dizinini kalıcı hale getirme (isteğe bağlı)
+### Salt okunur araçlar + salt okunur çalışma alanı (aile/iş ajanı)
 
 `/home/node`’un kapsayıcı yeniden oluşturma boyunca kalıcı olmasını istiyorsanız,
 `OPENCLAW_HOME_VOLUME` üzerinden adlandırılmış bir birim ayarlayın. Bu, bir Docker birimi
@@ -230,7 +223,8 @@ Kolaylık için root olarak çalıştırmayı seçerseniz, güvenlik ödününü
 ### Daha hızlı yeniden derlemeler (önerilen)
 
 Yeniden derlemeleri hızlandırmak için Dockerfile’ınızı bağımlılık katmanları
-önbelleğe alınacak şekilde sıralayın. Bu, kilit dosyaları değişmedikçe
+önbelleğe alınacak şekilde sıralayın.
+Bu, kilit dosyaları değişmedikçe
 `pnpm install`’ün yeniden çalıştırılmasını önler:
 
 ```dockerfile
@@ -342,11 +336,10 @@ tek bir kapsayıcıyı ve tek bir çalışma alanını paylaşır.
 ### Ajan başına sandbox profilleri (çoklu ajan)
 
 Çoklu ajan yönlendirmesi kullanıyorsanız, her ajan sandbox + araç ayarlarını
-`agents.list[].sandbox` ve `agents.list[].tools` (artı `agents.list[].tools.sandbox.tools`) ile geçersiz kılabilir.
-Bu, tek bir gateway’de karışık erişim seviyeleri çalıştırmanıza olanak tanır:
+`agents.list[].sandbox` ve `agents.list[].tools` (artı `agents.list[].tools.sandbox.tools`) ile geçersiz kılabilir. Bu, tek bir gateway’de karışık erişim seviyeleri çalıştırmanıza olanak tanır:
 
 - Tam erişim (kişisel ajan)
-- Salt-okunur araçlar + salt-okunur çalışma alanı (aile/iş ajanı)
+- Ajan başına bir kapsayıcı
 - Dosya sistemi/kabuk araçları yok (genel ajan)
 
 Örnekler, öncelik ve sorun giderme için
@@ -355,7 +348,7 @@ Bu, tek bir gateway’de karışık erişim seviyeleri çalıştırmanıza olana
 ### Varsayılan davranış
 
 - İmaj: `openclaw-sandbox:bookworm-slim`
-- Ajan başına bir kapsayıcı
+- Özel tarayıcı imajı:
 - Ajan çalışma alanı erişimi: `workspaceAccess: "none"` (varsayılan) `~/.openclaw/sandboxes` kullanır
   - `"ro"`, sandbox çalışma alanını `/workspace`’te tutar ve ajan
     çalışma alanını `/agent`’ya salt-okunur bağlar
@@ -507,7 +500,7 @@ Yapılandırmayı kullanın:
 }
 ```
 
-Özel tarayıcı imajı:
+Etkinleştirildiğinde, ajan şunları alır:
 
 ```json5
 {
@@ -519,7 +512,7 @@ Yapılandırmayı kullanın:
 }
 ```
 
-Etkinleştirildiğinde, ajan şunları alır:
+Durumu hacimde kalıcı hale getirir
 
 - sandbox tarayıcı kontrol URL’si ( `browser` aracı için)
 - noVNC URL’si (etkinse ve headless=false)
@@ -580,7 +573,6 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 - Sandbox’ta izin hataları: `docker.user`’u, bağladığınız çalışma alanının
   sahipliğiyle eşleşen bir UID:GID’ye ayarlayın (veya çalışma alanı klasörünü chown edin).
 - Özel araçlar bulunamıyor: OpenClaw komutları `sh -lc` (login shell) ile
-  çalıştırır; bu, `/etc/profile`’yi kaynak alır ve PATH’i sıfırlayabilir.
-  Özel araç yollarınızı başa eklemek için `docker.env.PATH`’yi ayarlayın
+  çalıştırır; bu, `/etc/profile`’yi kaynak alır ve PATH’i sıfırlayabilir. Özel araç yollarınızı başa eklemek için `docker.env.PATH`’yi ayarlayın
   (örn., `/custom/bin:/usr/local/share/npm-global/bin`), ya da Dockerfile’ınızda `/etc/profile.d/` altında
   bir betik ekleyin.

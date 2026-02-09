@@ -5,13 +5,6 @@ read_when:
   - Vous connectez LM Studio ou un proxy compatible OpenAI
   - Vous avez besoin des recommandations les plus sures pour les modeles locaux
 title: "Modeles locaux"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 63a7cc8b114355c6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:42Z
 ---
 
 # Modeles locaux
@@ -149,7 +142,7 @@ vLLM, LiteLLM, OAI-proxy ou des passerelles personnalisees fonctionnent s’ils 
 
 Conservez `models.mode: "merge"` afin que les modeles heberges restent disponibles comme solutions de repli.
 
-## Depannage
+## Problemes courants
 
 - La Gateway (passerelle) peut atteindre le proxy ? `curl http://127.0.0.1:1234/v1/models`.
 - Modele LM Studio decharge ? Rechargez-le ; le demarrage a froid est une cause frequente de « blocage ».

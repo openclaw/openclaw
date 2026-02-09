@@ -1,17 +1,10 @@
 ---
 summary: "Nix ဖြင့် OpenClaw ကို ကြေညာပုံစံ (declarative) အတိုင်း ထည့်သွင်းတပ်ဆင်ခြင်း"
 read_when:
-  - "ပြန်လည်ထုတ်ပြန်နိုင်ပြီး rollback လုပ်နိုင်သော ထည့်သွင်းတပ်ဆင်မှုများ လိုအပ်သောအခါ"
-  - "Nix/NixOS/Home Manager ကို အစရှိနေပြီး အသုံးပြုနေသူများအတွက်"
-  - "အရာအားလုံးကို pin လုပ်ပြီး declarative အနေဖြင့် စီမံခန့်ခွဲလိုသောအခါ"
+  - ပြန်လည်ထုတ်ပြန်နိုင်ပြီး rollback လုပ်နိုင်သော ထည့်သွင်းတပ်ဆင်မှုများ လိုအပ်သောအခါ
+  - Nix/NixOS/Home Manager ကို အစရှိနေပြီး အသုံးပြုနေသူများအတွက်
+  - အရာအားလုံးကို pin လုပ်ပြီး declarative အနေဖြင့် စီမံခန့်ခွဲလိုသောအခါ
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:33Z
 ---
 
 # Nix ထည့်သွင်းတပ်ဆင်ခြင်း
@@ -39,7 +32,7 @@ Reference the nix-openclaw README for module options.
 
 > **📦 လမ်းညွှန်အပြည့်အစုံ: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> nix-openclaw repo သည် Nix ထည့်သွင်းတပ်ဆင်မှုအတွက် အမှန်တကယ် ယုံကြည်စိတ်ချရသော အရင်းအမြစ်ဖြစ်သည်။ ဤစာမျက်နှာသည် အကျဉ်းချုပ် အမြင်သာပေးရန်သာ ဖြစ်သည်။
+> The nix-openclaw repo is the source of truth for Nix installation. This page is just a quick overview.
 
 ## သင်ရရှိမည့်အရာများ
 
@@ -54,15 +47,15 @@ Reference the nix-openclaw README for module options.
 
 `OPENCLAW_NIX_MODE=1` ကို သတ်မှတ်ထားသောအခါ (nix-openclaw ဖြင့် အလိုအလျောက် သတ်မှတ်သည်):
 
-OpenClaw သည် **Nix mode** ကို ပံ့ပိုးပြီး configuration ကို တိကျသေချာစေကာ auto-install flow များကို ပိတ်ထားသည်။
-အောက်ပါအတိုင်း export လုပ်၍ ဖွင့်နိုင်သည်—
+OpenClaw supports a **Nix mode** that makes configuration deterministic and disables auto-install flows.
+Enable it by exporting:
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
-macOS တွင် GUI app သည် shell env vars များကို အလိုအလျောက် မယူဆောင်ပါ။ ထို့ကြောင့်
-defaults ဖြင့် Nix mode ကိုလည်း ဖွင့်နိုင်သည်—
+On macOS, the GUI app does not automatically inherit shell env vars. You can
+also enable Nix mode via defaults:
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
@@ -92,9 +85,8 @@ macOS packaging flow သည် တည်ငြိမ်သော Info.plist temp
 apps/macos/Sources/OpenClaw/Resources/Info.plist
 ```
 
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) သည် ဤ template ကို app bundle ထဲသို့ ကူးထည့်ပြီး dynamic fields များ
-(bundle ID, version/build, Git SHA, Sparkle keys) ကို patch လုပ်သည်။ ထို့ကြောင့် SwiftPM
-packaging နှင့် Nix builds (Xcode toolchain အပြည့်အစုံကို မမှီခိုသော) အတွက် plist ကို deterministic အနေဖြင့် ထိန်းသိမ်းထားနိုင်သည်။
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) က ဒီ template ကို app bundle ထဲ ကူးထည့်ပြီး dynamic fields တွေ (bundle ID, version/build, Git SHA, Sparkle keys) ကို patch လုပ်ပါတယ်။ This keeps the plist deterministic for SwiftPM
+packaging and Nix builds (which do not rely on a full Xcode toolchain).
 
 ## ဆက်စပ်အရာများ
 

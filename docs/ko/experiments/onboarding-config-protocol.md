@@ -2,13 +2,6 @@
 summary: "온보딩 마법사 및 구성 스키마를 위한 RPC 프로토콜 노트"
 read_when: "온보딩 마법사 단계 또는 구성 스키마 엔드포인트를 변경할 때"
 title: "온보딩 및 구성 프로토콜"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:51Z
 ---
 
 # 온보딩 + 구성 프로토콜

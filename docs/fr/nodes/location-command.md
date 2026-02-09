@@ -4,13 +4,6 @@ read_when:
   - Ajout de la prise en charge du nœud de localisation ou de l’interface des autorisations
   - Conception des flux de localisation en arrière-plan + push
 title: "Commande de localisation"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:09Z
 ---
 
 # Commande de localisation (nœuds)
@@ -114,7 +107,7 @@ Notes :
 
 ## Texte UX (suggestions)
 
-- Désactivé : « Le partage de localisation est désactivé. »
-- Lors de l’utilisation : « Uniquement lorsque OpenClaw est ouvert. »
-- Toujours : « Autoriser la localisation en arrière-plan. Nécessite une autorisation système. »
-- Précise : « Utiliser la localisation GPS précise. Désactivez pour partager une localisation approximative. »
+- Désactivé : « Le partage de localisation est désactivé. »
+- Lors de l’utilisation : « Uniquement lorsque OpenClaw est ouvert. »
+- Toujours : « Autoriser la localisation en arrière-plan. Nécessite une autorisation système.
+- Précise : « Utiliser la localisation GPS précise. Désactivez pour partager une localisation approximative.

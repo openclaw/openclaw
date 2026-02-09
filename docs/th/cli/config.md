@@ -3,18 +3,11 @@ summary: "เอกสารอ้างอิงCLIสำหรับ `openclaw
 read_when:
   - คุณต้องการอ่านหรือแก้ไขคอนฟิกแบบไม่โต้ตอบ
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:49Z
 ---
 
 # `openclaw config`
 
-ตัวช่วยคอนฟิก: get/set/unset ค่าโดยอ้างอิงตามพาธ รันโดยไม่ระบุคำสั่งย่อยเพื่อเปิดวิซาร์ดการตั้งค่า
+ตัวช่วยคอนฟิก: get/set/unset ค่าโดยอ้างอิงตามพาธ ตัวช่วยคอนฟิก: get/set/unset ค่าโดยอ้างอิงตามพาธ รันโดยไม่ระบุคำสั่งย่อยเพื่อเปิดวิซาร์ดการตั้งค่า
 (เหมือนกับ `openclaw configure`).
 
 ## Examples
@@ -47,6 +40,7 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 
 ค่าจะถูกแยกวิเคราะห์เป็นJSON5เมื่อเป็นไปได้ มิฉะนั้นจะถูกจัดการเป็นสตริง
 ใช้ `--json` เพื่อบังคับให้แยกวิเคราะห์เป็นJSON5
+ใช้ `--json` เพื่อบังคับการพาร์สแบบ JSON5
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"

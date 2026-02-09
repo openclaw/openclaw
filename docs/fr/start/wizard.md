@@ -5,13 +5,6 @@ read_when:
   - Mise en place d’une nouvelle machine
 title: "Assistant de prise en main (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:57Z
 ---
 
 # Assistant de prise en main (CLI)
@@ -52,7 +45,7 @@ qui stocke `tools.web.search.apiKey`. Docs : [Web tools](/tools/web).
 L’assistant demarre avec **Démarrage rapide** (parametres par defaut) ou **Avancé** (controle total).
 
 <Tabs>
-  <Tab title="Démarrage rapide (par défaut)">
+  <Tab title="QuickStart (defaults)">
     - Gateway (passerelle) locale (loopback)
     - Espace de travail par defaut (ou espace de travail existant)
     - Port de la Gateway **18789**
@@ -60,7 +53,7 @@ L’assistant demarre avec **Démarrage rapide** (parametres par defaut) ou **Av
     - Exposition Tailscale **Desactivee**
     - Les Messages prives Telegram + WhatsApp sont par defaut en **allowlist** (vous serez invite a saisir votre numero de telephone)
   </Tab>
-  <Tab title="Avancé (contrôle total)">
+  <Tab title="Advanced (full control)">
     - Expose chaque etape (mode, espace de travail, Gateway, canaux, daemon, Skills).
   </Tab>
 </Tabs>

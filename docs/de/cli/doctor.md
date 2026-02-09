@@ -4,20 +4,13 @@ read_when:
   - Sie haben Konnektivitäts-/Authentifizierungsprobleme und möchten geführte Lösungen
   - Sie haben aktualisiert und möchten einen Plausibilitätscheck
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:31Z
 ---
 
 # `openclaw doctor`
 
 Gesundheitsprüfungen + schnelle Korrekturen für Gateway und Kanäle.
 
-Zugehörig:
+Verwandt:
 
 - Fehlerbehebung: [Troubleshooting](/gateway/troubleshooting)
 - Sicherheitsprüfung: [Security](/gateway/security)

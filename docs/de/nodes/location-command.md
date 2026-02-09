@@ -1,16 +1,9 @@
 ---
-summary: „Standortbefehl für Nodes (location.get), Berechtigungsmodi und Hintergrundverhalten“
+summary: "„Standortbefehl für Nodes (location.get), Berechtigungsmodi und Hintergrundverhalten“"
 read_when:
   - Hinzufügen von Standort-Node-Unterstützung oder einer Berechtigungs-UI
   - Entwerfen von Hintergrund-Standort- und Push-Flows
-title: „Standortbefehl“
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:43Z
+title: "„Standortbefehl“"
 ---
 
 # Standortbefehl (Nodes)
@@ -53,7 +46,7 @@ Optional. Der macOS-Node meldet `location` über die Berechtigungszuordnung; iOS
 
 Aufgerufen über `node.invoke`.
 
-Parameter (vorgeschlagen):
+Parameter (empfohlen):
 
 ```json
 {

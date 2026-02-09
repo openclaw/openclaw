@@ -3,13 +3,6 @@ summary: "परियोजना की उत्पत्ति, योगद
 read_when:
   - आप परियोजना की पृष्ठभूमि या योगदानकर्ता श्रेय जानना चाहते हों
 title: "श्रेय"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:36Z
 ---
 
 ## नाम
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS, क्योंकि हर स्पेस लॉब
 
 MIT - समुद्र में लॉब्स्टर जितना स्वतंत्र।
 
-> "हम सभी बस अपने-अपने प्रॉम्प्ट्स के साथ खेल रहे हैं।" (एक एआई, शायद टोकन्स के नशे में)
+> macOS कंपैनियन ऐप **Instances** UI में Apple डिवाइस के फ्रेंडली मॉडल नाम दिखाता है, इसके लिए Apple मॉडल identifiers (जैसे `iPad16,6`, `Mac16,6`) को human-readable नामों से मैप किया जाता है। OpenClaw JSON-RPC के माध्यम से बाहरी CLIs को इंटीग्रेट करता है।

@@ -4,19 +4,11 @@ read_when:
   - Gusto mong maglagay ng outbound na voice call mula sa OpenClaw
   - Kino-configure o dine-develop mo ang voice-call plugin
 title: "Voice Call Plugin"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:50Z
 ---
 
 # Voice Call (plugin)
 
-Mga voice call para sa OpenClaw sa pamamagitan ng isang plugin. Sinusuportahan ang outbound notifications at
-multi-turn na mga pag-uusap na may inbound policies.
+Mga voice call para sa OpenClaw sa pamamagitan ng isang plugin. Sumusuporta sa outbound notifications at mga multi-turn na pag-uusap na may inbound policies.
 
 Mga kasalukuyang provider:
 
@@ -121,14 +113,13 @@ Mga tala:
 - Ang `mock` ay isang local dev provider (walang network calls).
 - Ang `skipSignatureVerification` ay para sa local testing lamang.
 - Kung gumagamit ka ng ngrok free tier, i-set ang `publicUrl` sa eksaktong ngrok URL; palaging ipinapatupad ang signature verification.
-- Ang `tunnel.allowNgrokFreeTierLoopbackBypass: true` ay nagpapahintulot ng Twilio webhooks na may invalid na signatures **lamang** kapag ang `tunnel.provider="ngrok"` at `serve.bind` ay loopback (ngrok local agent). Gamitin para sa local dev lamang.
-- Ang mga URL ng ngrok free tier ay maaaring magbago o magdagdag ng interstitial behavior; kung mag-drift ang `publicUrl`, babagsak ang Twilio signatures. Para sa production, mas mainam ang stable na domain o Tailscale funnel.
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` ay nagpapahintulot sa mga Twilio webhook na may invalid na mga signature **lamang** kapag `tunnel.provider="ngrok"` at ang `serve.bind` ay loopback (ngrok local agent). Gamitin lamang para sa lokal na development.
+- Maaaring magbago o magdagdag ng interstitial behavior ang mga URL ng Ngrok free tier; kung mag-drift ang `publicUrl`, mabibigo ang mga Twilio signature. Para sa production, mas mainam ang isang stable na domain o Tailscale funnel.
 
 ## Webhook Security
 
-Kapag may proxy o tunnel na nasa harap ng Gateway, nirereconstruct ng plugin ang
-public URL para sa signature verification. Kinokontrol ng mga opsyong ito kung aling forwarded
-headers ang pinagkakatiwalaan.
+When a proxy or tunnel sits in front of the Gateway, the plugin reconstructs the
+public URL for signature verification. Kinokontrol ng mga opsyong ito kung aling mga forwarded header ang pinagkakatiwalaan.
 
 Ang `webhookSecurity.allowedHosts` ay nag-a-allowlist ng mga host mula sa forwarding headers.
 
@@ -158,9 +149,7 @@ Halimbawa gamit ang isang stable na public host:
 
 ## TTS para sa mga tawag
 
-Gumagamit ang Voice Call ng core `messages.tts` configuration (OpenAI o ElevenLabs) para sa
-streaming speech sa mga tawag. Maaari mo itong i-override sa ilalim ng plugin config gamit ang
-**parehong hugis** — ito ay nagde-deep‑merge sa `messages.tts`.
+Gumagamit ang Voice Call ng core na `messages.tts` configuration (OpenAI o ElevenLabs) para sa streaming na pananalita sa mga tawag. Maaari mo itong i-override sa ilalim ng plugin config na may **parehong hugis** — ito ay nagde-deep‑merge sa `messages.tts`.
 
 ```json5
 {
@@ -240,7 +229,7 @@ I-override lamang ang OpenAI model para sa mga tawag (halimbawa ng deep‑merge)
 
 ## Inbound calls
 
-Ang inbound policy ay default sa `disabled`. Para i-enable ang inbound calls, i-set ang:
+Ang inbound policy ay default na `disabled`. Upang paganahin ang inbound calls, itakda:
 
 ```json5
 {
@@ -250,7 +239,7 @@ Ang inbound policy ay default sa `disabled`. Para i-enable ang inbound calls, i-
 }
 ```
 
-Gumagamit ang auto-responses ng agent system. I-tune gamit ang:
+Auto-responses use the agent system. Tune with:
 
 - `responseModel`
 - `responseSystemPrompt`

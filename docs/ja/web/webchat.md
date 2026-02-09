@@ -3,20 +3,13 @@ summary: "Loopback WebChat の静的ホストおよびチャット UI 向けの 
 read_when:
   - WebChat アクセスのデバッグまたは設定時
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:39Z
 ---
 
 # WebChat（Gateway WebSocket UI）
 
 ステータス：macOS/iOS の SwiftUI チャット UI は、Gateway WebSocket と直接通信します。
 
-## 概要
+## これは何か
 
 - ゲートウェイ向けのネイティブなチャット UI です（埋め込みブラウザーやローカルの静的サーバーは不要）。
 - 他のチャンネルと同じセッションおよびルーティングルールを使用します。
@@ -28,7 +21,7 @@ x-i18n:
 2. WebChat UI（macOS/iOS アプリ）または Control UI のチャットタブを開きます。
 3. ゲートウェイの認証が設定されていることを確認します（loopback であっても、既定では必須です）。
 
-## 仕組み（挙動）
+## 動作の仕組み（挙動）
 
 - UI は Gateway WebSocket に接続し、`chat.history`、`chat.send`、`chat.inject` を使用します。
 - `chat.inject` は、アシスタントの注記をトランスクリプトに直接追加し、UI にブロードキャストします（エージェント実行は行いません）。
@@ -46,7 +39,7 @@ x-i18n:
 
 チャンネルオプション：
 
-- 専用の `webchat.*` ブロックはありません。WebChat は、以下のゲートウェイエンドポイントおよび認証設定を使用します。
+- 専用の `webchat.*` ブロックはありません。WebChat は、以下のゲートウェイエンドポイントおよび認証設定を使用します。 WebChatは以下のゲートウェイエンドポイント+認証設定を使用します。
 
 関連するグローバルオプション：
 

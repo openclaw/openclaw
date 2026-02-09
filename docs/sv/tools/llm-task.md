@@ -4,13 +4,6 @@ read_when:
   - Du vill ha ett LLM-steg som endast returnerar JSON i arbetsflöden
   - Du behöver schemavaliderad LLM-utdata för automatisering
 title: "LLM Task"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:46Z
 ---
 
 # LLM Task
@@ -72,8 +65,8 @@ utan att skriva anpassad OpenClaw-kod för varje arbetsflöde.
 }
 ```
 
-`allowedModels` är en tillåtelselista med `provider/model`-strängar. Om den är angiven avvisas
-alla förfrågningar utanför listan.
+`allowedModels` är en tillåten lista med `provider/model`-strängar. Om angivet så avvisas en begäran
+utanför listan.
 
 ## Verktygsparametrar
 

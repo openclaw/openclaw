@@ -3,19 +3,13 @@ summary: "Quy tắc định tuyến theo từng kênh (WhatsApp, Telegram, Disco
 read_when:
   - Thay đổi định tuyến kênh hoặc hành vi hộp thư
 title: "Định tuyến kênh"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:56Z
 ---
 
 # Kênh & định tuyến
 
-OpenClaw định tuyến phản hồi **trở lại đúng kênh nơi thông điệp xuất phát**. Mô hình
-không chọn kênh; việc định tuyến là xác định trước và do cấu hình của host kiểm soát.
+44. OpenClaw định tuyến phản hồi **trở lại kênh nơi thông điệp xuất phát**. The
+    model does not choose a channel; routing is deterministic and controlled by the
+    host configuration.
 
 ## Thuật ngữ chính
 
@@ -106,8 +100,8 @@ Bạn có thể ghi đè đường dẫn kho qua `session.store` và mẫu hóa 
 
 ## Hành vi WebChat
 
-WebChat gắn vào **tác tử được chọn** và mặc định dùng phiên chính của tác tử.
-Vì vậy, WebChat cho phép bạn xem ngữ cảnh xuyên kênh của tác tử đó ở một nơi.
+WebChat attaches to the **selected agent** and defaults to the agent’s main
+session. Các nguyên nhân phổ biến:
 
 ## Ngữ cảnh phản hồi
 

@@ -4,18 +4,11 @@ read_when:
   - Design eller refaktorering af medieforståelse
   - Finjustering af indgående lyd-/video-/billedforbehandling
 title: "Medieforståelse"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:36Z
 ---
 
 # Medieforståelse (Indgående) — 2026-01-17
 
-OpenClaw kan **opsummere indgående medier** (billede/lyd/video), før svar-pipelinen kører. Den registrerer automatisk, når lokale værktøjer eller udbydernøgler er tilgængelige, og kan deaktiveres eller tilpasses. Hvis forståelse er slået fra, modtager modellerne stadig de originale filer/URL’er som normalt.
+OpenClaw kan **opsummere indgående medier** (billede/audio/video) før svarrørledningen kører. Den autodetekterer når lokale værktøjer eller leverandørnøgler er tilgængelige, og kan deaktiveres eller tilpasses. Hvis forståelse er slået fra, modeller stadig modtage de originale filer/URL'er som sædvanligt.
 
 ## Mål
 
@@ -50,7 +43,7 @@ Hvis forståelse fejler eller er deaktiveret, **fortsætter svarflowet** med den
   - valgfri **pr.-kapabilitet `models`-liste** (foretrækkes før delte modeller)
   - `attachments`-politik (`mode`, `maxAttachments`, `prefer`)
   - `scope` (valgfri gating efter kanal/chatType/session-nøgle)
-- `tools.media.concurrency`: maks. samtidige kapabilitetskørsler (standard **2**).
+- `tools.media.concurrency`: max samtidige funktioner kører (standard **2**).
 
 ```json5
 {
@@ -137,8 +130,9 @@ Regler:
 
 ### Automatisk registrering af medieforståelse (standard)
 
-Hvis `tools.media.<capability>.enabled` **ikke** er sat til `false`, og du ikke har
-konfigureret modeller, registrerer OpenClaw automatisk i denne rækkefølge og **stopper ved den første fungerende mulighed**:
+Hvis `tools.media.<capability>.enabled` er **ikke** sat til \`false', og du har ikke
+konfigurerede modeller, OpenClaw auto-registrerer i denne rækkefølge og **stopper ved den første
+arbejdstilvalg**:
 
 1. **Lokale CLI’er** (kun lyd; hvis installeret)
    - `sherpa-onnx-offline` (kræver `SHERPA_ONNX_MODEL_DIR` med encoder/decoder/joiner/tokens)
@@ -168,24 +162,24 @@ Bemærk: Binær registrering er best-effort på tværs af macOS/Linux/Windows; s
 
 ## Kapabiliteter (valgfrit)
 
-Hvis du sætter `capabilities`, kører posten kun for disse medietyper. For delte
-lister kan OpenClaw udlede standarder:
+Hvis du sætter `capabilities `, posten kører kun for disse medietyper. For delte
+-lister kan OpenClaw udlede standard:
 
 - `openai`, `anthropic`, `minimax`: **billede**
 - `google` (Gemini API): **billede + lyd + video**
 - `groq`: **lyd**
 - `deepgram`: **lyd**
 
-For CLI-poster skal **`capabilities` angives eksplicit** for at undgå overraskende matches.
-Hvis du udelader `capabilities`, er posten berettiget til den liste, den optræder i.
+For CLI poster, **sæt `kapaciteter` eksplicly** for at undgå overraskende kampe.
+Hvis du udelader 'kapaciteter', er posten berettiget til den liste, den vises i.
 
 ## Understøttelsesmatrix for udbydere (OpenClaw-integrationer)
 
-| Kapabilitet | Udbyderintegration                              | Noter                                                |
-| ----------- | ----------------------------------------------- | ---------------------------------------------------- |
-| Billede     | OpenAI / Anthropic / Google / andre via `pi-ai` | Enhver billed-kompatibel model i registreret virker. |
-| Lyd         | OpenAI, Groq, Deepgram, Google                  | Udbydertransskription (Whisper/Deepgram/Gemini).     |
-| Video       | Google (Gemini API)                             | Udbyderbaseret videoforståelse.                      |
+| Kapabilitet | Udbyderintegration                              | Noter                                                                               |
+| ----------- | ----------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Billede     | OpenAI / Anthropic / Google / andre via `pi-ai` | Enhver billed-kompatibel model i registreret virker.                |
+| Lyd         | OpenAI, Groq, Deepgram, Google                  | Udbydertransskription (Whisper/Deepgram/Gemini). |
+| Video       | Google (Gemini API)          | Udbyderbaseret videoforståelse.                                     |
 
 ## Anbefalede udbydere
 
@@ -217,7 +211,7 @@ Når `mode: "all"`, mærkes output som `[Image 1/2]`, `[Audio 2/2]` osv.
 
 ## Konfigurationseksempler
 
-### 1) Delt modelliste + tilsidesættelser
+### 1. Delt modelliste + tilsidesættelser
 
 ```json5
 {
@@ -254,7 +248,7 @@ Når `mode: "all"`, mærkes output som `[Image 1/2]`, `[Audio 2/2]` osv.
 }
 ```
 
-### 2) Kun lyd + video (billede slået fra)
+### 2. Kun lyd + video (billede slået fra)
 
 ```json5
 {
@@ -294,7 +288,7 @@ Når `mode: "all"`, mærkes output som `[Image 1/2]`, `[Audio 2/2]` osv.
 }
 ```
 
-### 3) Valgfri billedforståelse
+### 3. Valgfri billedforståelse
 
 ```json5
 {
@@ -325,7 +319,7 @@ Når `mode: "all"`, mærkes output som `[Image 1/2]`, `[Audio 2/2]` osv.
 }
 ```
 
-### 4) Multimodal enkeltpost (eksplicitte kapabiliteter)
+### 4. Multimodal enkeltpost (eksplicitte kapabiliteter)
 
 ```json5
 {
@@ -375,7 +369,7 @@ Dette viser udfald pr. kapabilitet og den valgte udbyder/model, når relevant.
 
 ## Noter
 
-- Forståelse er **best-effort**. Fejl blokerer ikke svar.
+- Forståelse er **best effort**. Fejl blokerer ikke svar.
 - Vedhæftninger sendes stadig til modeller, selv når forståelse er deaktiveret.
 - Brug `scope` til at begrænse, hvor forståelse kører (fx kun DM’er).
 

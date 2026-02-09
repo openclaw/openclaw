@@ -4,19 +4,12 @@ read_when:
   - Fejlfindingshubben har henvist dig hertil for dybere diagnose
   - Du har brug for stabile, symptombaserede runbook-sektioner med præcise kommandoer
 title: "Fejlfinding"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:32Z
 ---
 
 # Gateway-fejlfinding
 
-Denne side er den dybdegående runbook.
-Start på [/help/troubleshooting](/help/troubleshooting), hvis du først vil have det hurtige triage-flow.
+Denne side er den dybe runbook.
+Start ved [/help/troubleshooting](/help/troubleshooting) hvis du ønsker det hurtige triage flow først.
 
 ## Kommandotrin
 
@@ -117,7 +110,7 @@ Se efter:
 Almindelige signaturer:
 
 - `Gateway start blocked: set gateway.mode=local` → lokal gateway-tilstand er ikke aktiveret.
-- `refusing to bind gateway ... without auth` → ikke-loopback bind uden token/adgangskode.
+- `nægter at binde gateway... uden auth` → ikke-loopback bind uden token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → portkonflikt.
 
 Relateret:
@@ -242,7 +235,7 @@ Almindelige signaturer:
 - `Failed to start Chrome CDP on port` → browserprocessen kunne ikke starte.
 - `browser.executablePath not found` → den konfigurerede sti er ugyldig.
 - `Chrome extension relay is running, but no tab is connected` → extension relay er ikke tilkoblet.
-- `Browser attachOnly is enabled ... not reachable` → attach-only-profil har intet tilgængeligt mål.
+- `Browser vedhæftet fil er kun aktiveret... ikke tilgængelig` → attach-only profil har intet nås mål.
 
 Relateret:
 
@@ -254,7 +247,7 @@ Relateret:
 
 De fleste fejl efter opgradering skyldes konfigurationsdrift eller strengere standarder, som nu håndhæves.
 
-### 1) Autentificering og URL-override-adfærd ændret
+### 1. Autentificering og URL-override-adfærd ændret
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Almindelige signaturer:
 - `gateway connect failed:` → forkert URL-mål.
 - `unauthorized` → endpoint er tilgængeligt, men forkert auth.
 
-### 2) Bind- og auth-guardrails er strengere
+### 2. Bind- og auth-guardrails er strengere
 
 ```bash
 openclaw config get gateway.bind
@@ -289,10 +282,10 @@ Hvad du skal tjekke:
 
 Almindelige signaturer:
 
-- `refusing to bind gateway ... without auth` → uoverensstemmelse mellem bind og auth.
+- `nægter at binde gateway... uden auth` → bind+auth mismatch.
 - `RPC probe: failed` mens runtime kører → gateway er i live, men utilgængelig med nuværende auth/URL.
 
-### 3) Paring og enhedsidentitetstilstand ændret
+### 3. Paring og enhedsidentitetstilstand ændret
 
 ```bash
 openclaw devices list

@@ -4,13 +4,6 @@ read_when:
   - OpenClaw で Qwen を使用したい場合
   - Qwen Coder への無料枠 OAuth アクセスを利用したい場合
 title: "Qwen"
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:53Z
 ---
 
 # Qwen
@@ -51,10 +44,11 @@ openclaw models set qwen-portal/coder-model
 すでに Qwen Code CLI でログインしている場合、OpenClaw は認証ストアの読み込み時に
 `~/.qwen/oauth_creds.json` から認証情報を同期します。それでも
 `models.providers.qwen-portal` エントリーは必要です（上記のログインコマンドを使用して作成してください）。
+`models.providers.qwen-portal` エントリが必要です（上記のログインコマンドを使用して作成します）。
 
 ## 注記
 
-- トークンは自動更新されます。更新に失敗した場合やアクセスが取り消された場合は、ログインコマンドを再実行してください。
+- トークンが自動的に更新されます。リフレッシュに失敗するか、アクセスが取り消された場合はログインコマンドを再実行します。
 - デフォルトのベース URL：`https://portal.qwen.ai/v1`（Qwen が別のエンドポイントを提供する場合は
   `models.providers.qwen-portal.baseUrl` で上書きしてください）。
 - プロバイダー共通のルールについては、[Model providers](/concepts/model-providers) を参照してください。

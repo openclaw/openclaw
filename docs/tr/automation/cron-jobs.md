@@ -5,13 +5,6 @@ read_when:
   - Kalp atışlarıyla birlikte ya da onların yanında çalışması gereken otomasyon bağlanırken
   - Zamanlanmış görevler için heartbeat ile cron arasında karar verilirken
 title: "Cron İşleri"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:24Z
 ---
 
 # Cron işleri (Gateway zamanlayıcısı)
@@ -136,7 +129,7 @@ Ana işler bir sistem olayını kuyruğa alır ve isteğe bağlı olarak heartbe
 - `wakeMode: "next-heartbeat"`: olay bir sonraki planlı heartbeat’i bekler.
 
 Normal heartbeat istemi + ana oturum bağlamını istediğinizde en uygun seçenektir.
-Bkz. [Heartbeat](/gateway/heartbeat).
+[Heartbeat](/gateway/heartbeat).
 
 #### İzole işler (adanmış cron oturumları)
 
@@ -212,7 +205,7 @@ yalnızca izole işler için öneririz.
 
 1. İş yükü geçersiz kılması (en yüksek)
 2. Kancaya özgü varsayılanlar (örn. `hooks.gmail.model`)
-3. Ajan yapılandırma varsayılanı
+3. Ajan yapılandırması varsayılanı
 
 ### İletim (kanal + hedef)
 

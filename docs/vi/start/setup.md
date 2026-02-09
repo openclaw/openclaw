@@ -4,20 +4,13 @@ read_when:
   - Thiết lập một máy mới
   - Bạn muốn “mới nhất + tốt nhất” mà không làm hỏng thiết lập cá nhân
 title: "Thiết lập"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:19Z
 ---
 
 # Thiết lập
 
 <Note>
-Nếu bạn thiết lập lần đầu, hãy bắt đầu với [Bắt đầu](/start/getting-started).
-Để biết chi tiết về trình hướng dẫn, xem [Onboarding Wizard](/start/wizard).
+If you are setting up for the first time, start with [Getting Started](/start/getting-started).
+For wizard details, see [Onboarding Wizard](/start/wizard).
 </Note>
 
 Cập nhật lần cuối: 2026-01-01
@@ -88,7 +81,7 @@ Nếu onboarding không có trong bản build của bạn:
 
 Mục tiêu: làm việc trên Gateway TypeScript, có hot reload, và vẫn giữ UI app macOS được kết nối.
 
-### 0) (Tùy chọn) Chạy app macOS từ source
+### 0. (Tùy chọn) Chạy app macOS từ source
 
 Nếu bạn cũng muốn app macOS ở bleeding edge:
 
@@ -96,7 +89,7 @@ Nếu bạn cũng muốn app macOS ở bleeding edge:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Khởi động Gateway dev
+### 1. Khởi động Gateway dev
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` chạy gateway ở chế độ watch và reload khi TypeScript thay đổi.
 
-### 2) Trỏ app macOS tới Gateway đang chạy
+### 2. Trỏ app macOS tới Gateway đang chạy
 
 Trong **OpenClaw.app**:
 
 - Connection Mode: **Local**
   App sẽ kết nối tới gateway đang chạy trên cổng đã cấu hình.
 
-### 3) Xác minh
+### 3. Xác minh
 
 - Trạng thái Gateway trong app sẽ hiển thị **“Using existing gateway …”**
 - Hoặc qua CLI:
@@ -149,16 +142,14 @@ Dùng khi debug xác thực hoặc quyết định sao lưu:
 
 ## Linux (systemd user service)
 
-Các bản cài Linux dùng systemd **user** service. Mặc định, systemd dừng các user
-service khi đăng xuất/nhàn rỗi, điều này sẽ dừng Gateway. Onboarding sẽ cố gắng bật
-lingering cho bạn (có thể yêu cầu sudo). Nếu vẫn tắt, hãy chạy:
+Onboarding sẽ cố gắng bật lingering cho bạn (có thể yêu cầu sudo). By default, systemd stops user
+services on logout/idle, which kills the Gateway. Đối với các máy chủ luôn bật hoặc đa người dùng, hãy cân nhắc dùng dịch vụ **system** thay vì dịch vụ user (không cần lingering). If it’s still off, run:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-Với máy chủ luôn bật hoặc đa người dùng, hãy cân nhắc dùng **system** service thay vì
-user service (không cần lingering). Xem [Gateway runbook](/gateway) để biết ghi chú systemd.
+Xem [Gateway runbook](/gateway) để biết các ghi chú về systemd. Các dự án thực tế từ cộng đồng.
 
 ## Tài liệu liên quan
 

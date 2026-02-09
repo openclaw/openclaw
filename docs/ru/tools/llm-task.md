@@ -1,16 +1,9 @@
 ---
-summary: «Задачи LLM только с JSON для рабочих процессов (необязательный плагин-инструмент)»
+summary: "Задачи LLM только с JSON для рабочих процессов (необязательный плагин-инструмент)"
 read_when:
   - Вам нужен шаг LLM только с JSON внутри рабочих процессов
   - Вам требуется вывод LLM, валидируемый по схеме, для автоматизации
-title: «Задача LLM»
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:59Z
+title: "Задача LLM"
 ---
 
 # Задача LLM

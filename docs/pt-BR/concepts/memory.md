@@ -3,13 +3,6 @@ summary: "Como funciona a memória do OpenClaw (arquivos do workspace + limpeza 
 read_when:
   - Você quer o layout e o fluxo de trabalho dos arquivos de memória
   - Você quer ajustar a limpeza automática de memória antes da compactação
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:11Z
 ---
 
 # Memória
@@ -127,8 +120,7 @@ chama o QMD para recuperação. Pontos-chave:
 - O gateway executa o QMD em um home XDG autocontido sob
   `~/.openclaw/agents/<agentId>/qmd/` definindo `XDG_CONFIG_HOME` e
   `XDG_CACHE_HOME`.
-- Suporte a SO: macOS e Linux funcionam imediatamente após instalar Bun + SQLite.
-  Windows é melhor suportado via WSL2.
+- Suporte a SO: macOS e Linux funcionam imediatamente após instalar Bun + SQLite. Windows é melhor suportado via WSL2.
 
 **Como o sidecar roda**
 

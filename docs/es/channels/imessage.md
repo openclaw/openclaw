@@ -4,13 +4,6 @@ read_when:
   - Configurar compatibilidad con iMessage
   - Depurar envío/recepción de iMessage
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:49Z
 ---
 
 # iMessage (legado: imsg)
@@ -224,7 +217,7 @@ Compatibilidad con múltiples cuentas: use `channels.imessage.accounts` con conf
 
 ## Control de acceso (mensajes directos + grupos)
 
-Mensajes directos:
+DMs:
 
 - Predeterminado: `channels.imessage.dmPolicy = "pairing"`.
 - Los remitentes desconocidos reciben un código de emparejamiento; los mensajes se ignoran hasta su aprobación (los códigos expiran después de 1 hora).

@@ -2,13 +2,6 @@
 summary: "Konfiguracja tunelu SSH dla OpenClaw.app łączącego się ze zdalnym gateway"
 read_when: "Łączenie aplikacji na macOS ze zdalnym gateway przez SSH"
 title: "Konfiguracja zdalnego Gateway"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:11Z
 ---
 
 # Uruchamianie OpenClaw.app ze zdalnym Gateway
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Jak to działa
 
-| Komponent                            | Co robi                                                            |
-| ------------------------------------ | ------------------------------------------------------------------ |
-| `LocalForward 18789 127.0.0.1:18789` | Przekierowuje lokalny port 18789 na zdalny port 18789              |
+| Komponent                            | Co robi                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Przekierowuje lokalny port 18789 na zdalny port 18789                                 |
 | `ssh -N`                             | SSH bez wykonywania zdalnych poleceń (tylko przekierowanie portów) |
-| `KeepAlive`                          | Automatycznie restartuje tunel w razie awarii                      |
-| `RunAtLoad`                          | Uruchamia tunel podczas ładowania agenta                           |
+| `KeepAlive`                          | Automatycznie restartuje tunel w razie awarii                                         |
+| `RunAtLoad`                          | Uruchamia tunel podczas ładowania agenta                                              |
 
 OpenClaw.app łączy się z `ws://127.0.0.1:18789` na Twojej maszynie klienckiej. Tunel SSH przekazuje to połączenie do portu 18789 na zdalnej maszynie, na której działa Gateway.

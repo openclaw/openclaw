@@ -5,13 +5,6 @@ read_when:
   - Отладка причин, по которым openclaw вмешивается в работу вашего Chrome
   - Реализация настроек браузера и жизненного цикла в приложении для macOS
 title: "Браузер (под управлением OpenClaw)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:45Z
 ---
 
 # Браузер (под управлением openclaw)
@@ -133,7 +126,7 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 }
 ```
 
-## Локальное и удалённое управление
+## Локальное и удаленное управление
 
 - **Локальное управление (по умолчанию):** Gateway (шлюз) запускает службу управления на loopback и может запускать локальный браузер.
 - **Удалённое управление (хост узла):** запустите хост узла на машине с браузером; Gateway проксирует к нему действия браузера.
@@ -325,8 +318,7 @@ openclaw browser create-profile \
 ### Требование Playwright
 
 Некоторые возможности (navigate/act/AI snapshot/role snapshot, скриншоты элементов, PDF) требуют
-Playwright. Если Playwright не установлен, эти эндпоинты возвращают понятную ошибку 501.
-ARIA-снимки и базовые скриншоты продолжают работать для openclaw-managed Chrome.
+Playwright. Если Playwright не установлен, эти эндпоинты возвращают понятную ошибку 501. ARIA-снимки и базовые скриншоты продолжают работать для openclaw-managed Chrome.
 Для драйвера релея расширения Chrome ARIA-снимки и скриншоты требуют Playwright.
 
 Если вы видите `Playwright is not available in this gateway build`, установите полный пакет
@@ -457,7 +449,7 @@ docker compose run --rm openclaw-cli \
 - `click`/`type`/и т. д. требуют `ref` из `snapshot` (числовой `12` или role ref `e12`).
   CSS-селекторы намеренно не поддерживаются для действий.
 
-## Снимки и ссылки
+## Снимки и рефералы
 
 OpenClaw поддерживает два стиля «снимков»:
 
@@ -472,12 +464,12 @@ OpenClaw поддерживает два стиля «снимков»:
   - Внутренне ссылка разрешается через `getByRole(...)` (плюс `nth()` для дубликатов).
   - Добавьте `--labels`, чтобы включить скриншот области видимости с наложенными метками `e12`.
 
-Поведение ссылок:
+Базовое поведение:
 
 - Ссылки **не стабильны между навигациями**; если что-то не сработало, повторно выполните `snapshot` и используйте свежую ссылку.
 - Если role snapshot был сделан с `--frame`, role refs ограничены этим iframe до следующего role snapshot.
 
-## Усиления ожидания
+## Подождите
 
 Можно ждать не только по времени/тексту:
 
@@ -500,7 +492,7 @@ openclaw browser wait "#main" \
   --timeout-ms 15000
 ```
 
-## Отладочные сценарии
+## Отладка рабочих процессов
 
 Когда действие не удаётся (например, «not visible», «strict mode violation», «covered»):
 
@@ -550,16 +542,14 @@ Role snapshot в JSON включает `refs` плюс небольшой бло
 
 - Профиль браузера openclaw может содержать авторизованные сессии; рассматривайте его как чувствительный.
 - `browser act kind=evaluate` / `openclaw browser evaluate` и `wait --fn`
-  выполняют произвольный JavaScript в контексте страницы. Prompt injection может этим управлять.
-  Отключите это с помощью `browser.evaluateEnabled=false`, если вам это не нужно.
+  выполняют произвольный JavaScript в контексте страницы. Prompt injection может этим управлять. Отключите это с помощью `browser.evaluateEnabled=false`, если вам это не нужно.
 - Для входа и анти-бот примечаний (X/Twitter и т. д.) см. [Browser login + X/Twitter posting](/tools/browser-login).
 - Держите Gateway/хост узла приватными (loopback или только tailnet).
 - Эндпоинты удалённого CDP обладают большой мощью; туннелируйте и защищайте их.
 
 ## Устранение неполадок
 
-Для проблем, специфичных для Linux (особенно snap Chromium), см.
-[Browser troubleshooting](/tools/browser-linux-troubleshooting).
+Для проблем, специфичных для Linux (особенно snap Chromium), см. [Browser troubleshooting](/tools/browser-linux-troubleshooting).
 
 ## Инструменты агента и принцип управления
 

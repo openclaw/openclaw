@@ -3,13 +3,6 @@ summary: "Runtime ng agent (embedded pi-mono), kontrata ng workspace, at bootstr
 read_when:
   - Pagbabago sa runtime ng agent, bootstrap ng workspace, o pag-uugali ng session
 title: "Runtime ng Agent"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:27Z
 ---
 
 # Runtime ng Agent 🤖
@@ -41,11 +34,12 @@ Sa loob ng `agents.defaults.workspace`, inaasahan ng OpenClaw ang mga sumusunod 
 
 Sa unang turn ng bagong session, ini-inject ng OpenClaw ang laman ng mga file na ito direkta sa agent context.
 
-Nilalaktawan ang mga blangkong file. Ang malalaking file ay tina-trim at tina-truncate na may marker para manatiling lean ang mga prompt (basahin ang file para sa buong nilalaman).
+Tingnan ang
+[Channel routing](/channels/channel-routing) para sa routing configuration. Nilalaktawan ang mga blankong file.
 
 Kung may nawawalang file, mag-i-inject ang OpenClaw ng isang linyang marker na “missing file” (at ang `openclaw setup` ay lilikha ng ligtas na default template).
 
-Ang `BOOTSTRAP.md` ay nililikha lamang para sa **bagong-bagong workspace** (walang ibang bootstrap file na naroroon). Kung buburahin mo ito matapos makumpleto ang ritual, hindi na ito dapat muling malikha sa mga susunod na restart.
+Ang malalaking file ay tine-trim at pinuputol na may marker upang manatiling maigsi ang mga prompt (basahin ang file para sa buong nilalaman). Ang `BOOTSTRAP.md` ay ginagawa lamang para sa isang **bagong-bagong workspace** (walang ibang bootstrap file na naroroon).
 
 Para ganap na i-disable ang paglikha ng mga bootstrap file (para sa mga pre-seeded na workspace), itakda ang:
 
@@ -55,9 +49,9 @@ Para ganap na i-disable ang paglikha ng mga bootstrap file (para sa mga pre-seed
 
 ## Mga built-in na tool
 
-Ang mga core tool (read/exec/edit/write at mga kaugnay na system tool) ay laging available,
-napapailalim sa patakaran ng tool. Opsyonal ang `apply_patch` at naka-gate ng
-`tools.exec.applyPatch`. Ang `TOOLS.md` ay **hindi** kumokontrol kung aling mga tool ang umiiral; gabay ito kung paano _mo_ gustong gamitin ang mga iyon.
+Kung buburahin mo ito matapos makumpleto ang ritwal, hindi na ito dapat muling malikha sa mga susunod na restart. Ang mga core tool (read/exec/edit/write at kaugnay na mga system tool) ay palaging available,
+napapailalim sa tool policy. Ang `apply_patch` ay opsyonal at kinokontrol ng
+`tools.exec.applyPatch`.
 
 ## Skills
 
@@ -89,25 +83,25 @@ Ang mga legacy na Pi/Tau session folder ay **hindi** binabasa.
 
 Kapag ang queue mode ay `steer`, ang mga inbound na mensahe ay ini-inject sa kasalukuyang run.
 Sinusuri ang queue **pagkatapos ng bawat tool call**; kung may naka-queue na mensahe,
-nilalaktawan ang natitirang mga tool call mula sa kasalukuyang assistant message (error tool
-results na may "Skipped due to queued user message."), pagkatapos ay ini-inject ang naka-queue na user
+ilalaktawan ang natitirang mga tool call mula sa kasalukuyang assistant message (mga error tool
+result na may "Skipped due to queued user message."), pagkatapos ay ini-inject ang naka-queue na user
 message bago ang susunod na assistant response.
 
-Kapag ang queue mode ay `followup` o `collect`, hinahawakan ang mga inbound na mensahe hanggang
-matapos ang kasalukuyang turn, saka magsisimula ang bagong agent turn na may naka-queue na payloads. Tingnan ang
-[Queue](/concepts/queue) para sa mga mode + pag-uugali ng debounce/cap.
+Kapag ang queue mode ay `followup` o `collect`, ang mga inbound na mensahe ay hinahawakan hanggang matapos ang
+kasalukuyang turn, pagkatapos ay magsisimula ang isang bagong agent turn gamit ang mga naka-queue na payload. Tingnan ang
+[Queue](/concepts/queue) para sa mode + debounce/cap behavior.
 
-Ang block streaming ay nagpapadala ng mga nakumpletong assistant block sa sandaling matapos ang mga ito; ito ay
-**naka-off bilang default** (`agents.defaults.blockStreamingDefault: "off"`).
-I-tune ang boundary sa pamamagitan ng `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; default ay text_end).
-Kontrolin ang soft block chunking gamit ang `agents.defaults.blockStreamingChunk` (default:
-800–1200 chars; mas pinipili ang paragraph breaks, saka newlines; huli ang mga pangungusap).
-I-coalesce ang mga streamed chunk gamit ang `agents.defaults.blockStreamingCoalesce` para mabawasan ang
+Ang block streaming ay nagpapadala ng mga natapos na assistant block sa sandaling matapos ang mga ito; ito ay
+**off bilang default** (`agents.defaults.blockStreamingDefault: "off"`).
+I-tune ang boundary gamit ang `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; default ay text_end).
+Kontrolin ang soft block chunking gamit ang `agents.defaults.blockStreamingChunk` (default ay
+800–1200 chars; mas pinipili ang paragraph breaks, pagkatapos ang mga newline; huli ang mga pangungusap).
+Pagsamahin ang mga streamed chunk gamit ang `agents.defaults.blockStreamingCoalesce` upang mabawasan ang
 single-line spam (idle-based na pagsasanib bago ipadala). Ang mga non-Telegram channel ay nangangailangan ng
-tahasang `*.blockStreaming: true` para i-enable ang block replies.
-Ang mga verbose na buod ng tool ay inilalabas sa simula ng tool (walang debounce); ang Control UI ay
+explicit na `*.blockStreaming: true` upang paganahin ang block replies.
+Ang mga verbose na tool summary ay inilalabas sa simula ng tool (walang debounce); ang Control UI ay
 nag-i-stream ng tool output sa pamamagitan ng agent events kapag available.
-Mas maraming detalye: [Streaming + chunking](/concepts/streaming).
+Higit pang detalye: [Streaming + chunking](/concepts/streaming).
 
 ## Mga model ref
 

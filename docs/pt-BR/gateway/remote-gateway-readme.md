@@ -2,13 +2,6 @@
 summary: "Configuração de túnel SSH para o OpenClaw.app conectando a um gateway remoto"
 read_when: "Conectando o aplicativo macOS a um gateway remoto via SSH"
 title: "Configuração de Gateway Remoto"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:54Z
 ---
 
 # Executando o OpenClaw.app com um Gateway Remoto
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Como funciona
 
-| Componente                           | O que faz                                                           |
-| ------------------------------------ | ------------------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Encaminha a porta local 18789 para a porta remota 18789             |
+| Componente                           | O que faz                                                                              |
+| ------------------------------------ | -------------------------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Encaminha a porta local 18789 para a porta remota 18789                                |
 | `ssh -N`                             | SSH sem executar comandos remotos (apenas encaminhamento de portas) |
-| `KeepAlive`                          | Reinicia automaticamente o túnel se ele travar                      |
-| `RunAtLoad`                          | Inicia o túnel quando o agente é carregado                          |
+| `KeepAlive`                          | Reinicia automaticamente o túnel se ele travar                                         |
+| `RunAtLoad`                          | Inicia o túnel quando o agente é carregado                                             |
 
 O OpenClaw.app se conecta a `ws://127.0.0.1:18789` na sua máquina cliente. O túnel SSH encaminha essa conexão para a porta 18789 na máquina remota onde o Gateway está em execução.

@@ -2,15 +2,8 @@
 summary: "Eski `openclaw-*` skills’lerin yerini alan OpenClaw için ajan araç yüzeyi (tarayıcı, canvas, düğümler, mesaj, cron)"
 read_when:
   - Ajan araçlarını eklerken veya değiştirirken
-  - `openclaw-*` skills’leri emekliye ayırırken veya değiştirirken
+  - "`openclaw-*` skills’leri emekliye ayırırken veya değiştirirken"
 title: "Araçlar"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:35Z
 ---
 
 # Araçlar (OpenClaw)
@@ -32,7 +25,7 @@ Araçları `openclaw.json` içinde `tools.allow` / `tools.deny` üzerinden küre
 
 Notlar:
 
-- Eşleşme büyük/küçük harfe duyarsızdır.
+- 27. Eşleştirme büyük/küçük harfe duyarsızdır.
 - `*` joker karakterleri desteklenir (`"*"` tüm araçlar anlamına gelir).
 - `tools.allow` yalnızca bilinmeyen veya yüklenmemiş eklenti araç adlarına atıfta bulunuyorsa, OpenClaw bir uyarı kaydeder ve çekirdek araçlar kullanılabilir kalsın diye izin listesini yok sayar.
 
@@ -174,8 +167,7 @@ Mevcut gruplar:
 
 Eklentiler, çekirdek kümenin ötesinde **ek araçlar** (ve CLI komutları) kaydedebilir.
 Kurulum + yapılandırma için [Plugins](/tools/plugin), araç kullanım rehberliğinin
-istemlere nasıl enjekte edildiği için [Skills](/tools/skills) bölümüne bakın.
-Bazı eklentiler, araçların yanında kendi skills’lerini de sunar
+istemlere nasıl enjekte edildiği için [Skills](/tools/skills) bölümüne bakın. Bazı eklentiler, araçların yanında kendi skills’lerini de sunar
 (örneğin sesli arama eklentisi).
 
 İsteğe bağlı eklenti araçları:
@@ -183,7 +175,7 @@ Bazı eklentiler, araçların yanında kendi skills’lerini de sunar
 - [Lobster](/tools/lobster): devam ettirilebilir onaylara sahip tipli iş akışı çalışma zamanı (gateway ana makinesinde Lobster CLI gerektirir).
 - [LLM Task](/tools/llm-task): yapılandırılmış iş akışı çıktısı için yalnızca JSON LLM adımı (isteğe bağlı şema doğrulama).
 
-## Araç envanteri
+## 28. Araç envanteri
 
 ### `apply_patch`
 
@@ -229,7 +221,7 @@ Notlar:
 
 - `poll`, tamamlandığında yeni çıktı ve çıkış durumunu döndürür.
 - `log`, satır bazlı `offset`/`limit`’u destekler (`offset`’i atlayarak son N satırı alın).
-- `process`, ajan başına kapsamlıdır; diğer ajanların oturumları görünmez.
+- 29. `process` ajan başına kapsamlıdır; diğer ajanlardan gelen oturumlar görünmez.
 
 ### `web_search`
 
@@ -509,12 +501,11 @@ Düğüm hedefleme:
 - Kamera/ekran yakalama için kullanıcı onayına uyun.
 - Medya komutlarını çağırmadan önce izinleri sağlamak için `status/describe` kullanın.
 
-## Araçların ajana nasıl sunulduğu
+## 30. Araçların ajana nasıl sunulduğu
 
 Araçlar iki paralel kanalda sunulur:
 
 1. **Sistem istemi metni**: insan tarafından okunabilir bir liste + rehberlik.
 2. **Araç şeması**: model API’sine gönderilen yapılandırılmış işlev tanımları.
 
-Bu, ajanın hem “hangi araçlar var”ı hem de “nasıl çağrılacaklarını” görmesi anlamına gelir.
-Bir araç sistem isteminde veya şemada görünmüyorsa, model onu çağıramaz.
+Bu, ajanın hem “hangi araçlar var”ı hem de “nasıl çağrılacaklarını” görmesi anlamına gelir. Bir araç sistem isteminde veya şemada görünmüyorsa, model onu çağıramaz.

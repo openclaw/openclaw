@@ -5,13 +5,6 @@ read_when:
   - 에이전트 컨텍스트를 위해 노드 캔버스/카메라를 사용할 때
   - 새로운 노드 명령 또는 CLI 헬퍼를 추가할 때
 title: "노드"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:49Z
 ---
 
 # 노드
@@ -280,7 +273,8 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 - `system.run` 는 `--cwd`, `--env KEY=VAL`, `--command-timeout`, `--needs-screen-recording` 를 지원합니다.
 - `system.notify` 는 `--priority <passive|active|timeSensitive>` 및 `--delivery <system|overlay|auto>` 를 지원합니다.
 - macOS 노드는 `PATH` 오버라이드를 무시합니다. 헤드리스 노드 호스트는 노드 호스트 PATH 를 앞에 붙일 때에만 `PATH` 를 허용합니다.
-- macOS 노드 모드에서 `system.run` 는 macOS 앱의 exec 승인(Settings → Exec approvals)에 의해 제어됩니다. Ask/allowlist/full 은 헤드리스 노드 호스트와 동일하게 동작하며, 거부된 프롬프트는 `SYSTEM_RUN_DENIED` 를 반환합니다.
+- macOS 노드 모드에서 `system.run` 는 macOS 앱의 exec 승인(Settings → Exec approvals)에 의해 제어됩니다.
+  Ask/allowlist/full 은 헤드리스 노드 호스트와 동일하게 동작하며, 거부된 프롬프트는 `SYSTEM_RUN_DENIED` 를 반환합니다.
 - 헤드리스 노드 호스트에서 `system.run` 는 exec 승인(`~/.openclaw/exec-approvals.json`)에 의해 제어됩니다.
 
 ## Exec 노드 바인딩

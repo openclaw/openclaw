@@ -2,13 +2,6 @@
 summary: "Werkruimtesjabloon voor TOOLS.md"
 read_when:
   - Een werkruimte handmatig opstarten
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:39Z
 ---
 
 # TOOLS.md - Lokale notities

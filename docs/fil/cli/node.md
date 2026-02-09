@@ -4,13 +4,6 @@ read_when:
   - Pinapatakbo ang headless na host ng node
   - Pag-pair ng non-macOS na node para sa system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:18Z
 ---
 
 # `openclaw node`
@@ -34,9 +27,8 @@ host ng node, kaya nananatiling naka-scope at explicit ang access sa mga command
 
 ## Browser proxy (zero-config)
 
-Awtomatikong ina-advertise ng mga host ng node ang isang browser proxy kung ang `browser.enabled` ay hindi
-naka-disable sa node. Pinapayagan nitong gumamit ang agent ng browser automation sa node na iyon
-nang walang dagdag na konpigurasyon.
+Awtomatikong ina-advertise ng mga node host ang isang browser proxy kung ang `browser.enabled` ay hindi naka-disable sa node. Pinapahintulutan nito ang agent na gumamit ng browser automation sa node na iyon
+nang walang karagdagang configuration.
 
 I-disable ito sa node kung kinakailangan:
 
@@ -99,7 +91,7 @@ Tumatanggap ang mga service command ng `--json` para sa machine-readable na outp
 
 ## Pag-pair
 
-Ang unang koneksyon ay lumilikha ng isang pending na kahilingan sa pag-pair ng node sa Gateway.
+Ang unang koneksyon ay lumilikha ng pending node pair request sa Gateway.
 Aprubahan ito sa pamamagitan ng:
 
 ```bash

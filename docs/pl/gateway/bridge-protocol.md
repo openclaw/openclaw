@@ -5,13 +5,6 @@ read_when:
   - Badanie problemów z parowaniem lub uwierzytelnianiem mostu
   - Audytowanie powierzchni węzła udostępnionej przez gateway
 title: "Protokół Bridge"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
 ---
 
 # Protokół Bridge (transport węzłów legacy)

@@ -5,18 +5,13 @@ read_when:
   - 別々のエンドポイント、キー、モデル参照を理解する必要がある場合
   - いずれかのプロバイダー向けにコピー＆ペースト可能な設定が欲しい場合
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:51Z
 ---
 
 # Moonshot AI（Kimi）
 
 Moonshot は、OpenAI 互換のエンドポイントを備えた Kimi API を提供します。プロバイダーを設定し、デフォルトモデルを `moonshot/kimi-k2.5` に設定するか、`kimi-coding/k2p5` を使用して Kimi Coding を利用してください。
+プロバイダを設定し、デフォルトのモデルを`moonshot/kimi-k2.5`に設定するか、または`kimi-coding/k2p5`を使用して
+キミコーディングを使用します。
 
 現在の Kimi K2 モデル ID は次のとおりです。
 
@@ -39,7 +34,7 @@ Kimi Coding：
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-注記：Moonshot と Kimi Coding は別々のプロバイダーです。キーは相互に使用できず、エンドポイントも異なり、モデル参照も異なります（Moonshot は `moonshot/...` を使用し、Kimi Coding は `kimi-coding/...` を使用します）。
+注:MoonshotとKimiコーディングは別々のプロバイダです。 注記：Moonshot と Kimi Coding は別々のプロバイダーです。キーは相互に使用できず、エンドポイントも異なり、モデル参照も異なります（Moonshot は `moonshot/...` を使用し、Kimi Coding は `kimi-coding/...` を使用します）。
 
 ## 設定スニペット（Moonshot API）
 
@@ -140,7 +135,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## 注記
 
-- Moonshot のモデル参照は `moonshot/<modelId>` を使用します。Kimi Coding のモデル参照は `kimi-coding/<modelId>` を使用します。
+- Moonshot のモデル参照は `moonshot/<modelId>` を使用します。Kimi Coding のモデル参照は `kimi-coding/<modelId>` を使用します。 Kimi Coding model refs use `kimi-coding/<modelId>`.
 - 必要に応じて、`models.providers` で価格設定とコンテキストのメタデータを上書きしてください。
 - Moonshot がモデルごとに異なるコンテキスト制限を公開している場合は、`contextWindow` を適宜調整してください。
 - 国際向けエンドポイントには `https://api.moonshot.ai/v1` を使用し、中国向けエンドポイントには `https://api.moonshot.cn/v1` を使用してください。

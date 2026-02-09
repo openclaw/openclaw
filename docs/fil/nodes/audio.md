@@ -3,13 +3,6 @@ summary: "Paano dina-download, tina-transcribe, at ini-inject sa mga sagot ang p
 read_when:
   - Binabago ang audio transcription o paghawak ng media
 title: "Audio at Voice Notes"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:40Z
 ---
 
 # Audio / Voice Notes — 2026-01-17
@@ -37,9 +30,9 @@ ina-auto-detect ng OpenClaw sa ganitong pagkakasunod at humihinto sa unang gumag
 2. **Gemini CLI** (`gemini`) gamit ang `read_many_files`
 3. **Mga provider key** (OpenAI → Groq → Deepgram → Google)
 
-Para i-disable ang auto-detection, itakda ang `tools.media.audio.enabled: false`.
-Para i-customize, itakda ang `tools.media.audio.models`.
-Tandaan: Best-effort ang binary detection sa macOS/Linux/Windows; tiyaking nasa `PATH` ang CLI (ina-expand namin ang `~`), o magtakda ng explicit na CLI model na may buong command path.
+Upang i-disable ang auto-detection, itakda ang `tools.media.audio.enabled: false`.
+To customize, set `tools.media.audio.models`.
+Tala: Best‑effort ang binary detection sa macOS/Linux/Windows; tiyaking nasa `PATH` ang CLI (ini‑expand namin ang `~`), o mag‑set ng explicit na CLI model na may buong command path.
 
 ## Mga halimbawa ng config
 
@@ -107,8 +100,8 @@ Tandaan: Best-effort ang binary detection sa macOS/Linux/Windows; tiyaking nasa 
 - Kinukuha ng Deepgram ang `DEEPGRAM_API_KEY` kapag ginamit ang `provider: "deepgram"`.
 - Mga detalye ng setup ng Deepgram: [Deepgram (audio transcription)](/providers/deepgram).
 - Maaaring i-override ng mga audio provider ang `baseUrl`, `headers`, at `providerOptions` sa pamamagitan ng `tools.media.audio`.
-- Ang default na size cap ay 20MB (`tools.media.audio.maxBytes`). Ang sobrang laki na audio ay na-skip para sa model na iyon at sinusubukan ang susunod na entry.
-- Ang default na `maxChars` para sa audio ay **unset** (buong transcript). Itakda ang `tools.media.audio.maxChars` o per-entry na `maxChars` para putulin ang output.
+- Default size cap is 20MB (`tools.media.audio.maxBytes`). Ang sobrang laki ng audio ay nilalaktawan para sa modelong iyon at susubukan ang susunod na entry.
+- Default `maxChars` for audio is **unset** (full transcript). Itakda ang `tools.media.audio.maxChars` o ang per-entry na `maxChars` upang bawasan ang output.
 - Ang OpenAI auto default ay `gpt-4o-mini-transcribe`; itakda ang `model: "gpt-4o-transcribe"` para sa mas mataas na accuracy.
 - Gamitin ang `tools.media.audio.attachments` para iproseso ang maraming voice note (`mode: "all"` + `maxAttachments`).
 - Available ang transcript sa mga template bilang `{{Transcript}}`.
@@ -116,6 +109,6 @@ Tandaan: Best-effort ang binary detection sa macOS/Linux/Windows; tiyaking nasa 
 
 ## Mga dapat bantayan
 
-- Gumagamit ang mga scope rule ng first-match wins. Ang `chatType` ay ni-no-normalize sa `direct`, `group`, o `room`.
+- Scope rules use first-match wins. `chatType` is normalized to `direct`, `group`, or `room`.
 - Tiyaking nag-e-exit ang iyong CLI na may 0 at nagpi-print ng plain text; ang JSON ay kailangang ayusin sa pamamagitan ng `jq -r .text`.
 - Panatilihing makatwiran ang mga timeout (`timeoutSeconds`, default 60s) para maiwasang ma-block ang reply queue.

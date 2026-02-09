@@ -3,13 +3,6 @@ summary: "Kanal bağlantısı için sağlık denetimi adımları"
 read_when:
   - WhatsApp kanal sağlığını teşhis ederken
 title: "Sağlık Denetimleri"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:17Z
 ---
 
 # Sağlık Denetimleri (CLI)

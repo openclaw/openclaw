@@ -5,13 +5,6 @@ read_when:
   - Вы отлаживаете результаты онбординга или интегрируете клиенты онбординга
 title: "Справочник по онбордингу CLI"
 sidebarTitle: "CLI reference"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:19Z
 ---
 
 # Справочник по онбордингу CLI
@@ -28,7 +21,7 @@ x-i18n:
 - Параметры Gateway (шлюз) (порт, привязка, аутентификация, Tailscale)
 - Каналы и провайдеры (Telegram, WhatsApp, Discord, Google Chat, плагин Mattermost, Signal)
 - Установку демона (LaunchAgent или пользовательский unit systemd)
-- Проверку работоспособности
+- Проверка здоровья
 - Настройку Skills
 
 Удалённый режим настраивает эту машину для подключения к Gateway (шлюз), расположенному в другом месте.
@@ -37,19 +30,19 @@ x-i18n:
 ## Детали локального потока
 
 <Steps>
-  <Step title="Обнаружение существующей конфигурации">
+  <Step title="Existing config detection">
     - Если существует `~/.openclaw/openclaw.json`, выберите «Сохранить», «Изменить» или «Сбросить».
     - Повторный запуск мастера ничего не удаляет, если вы явно не выберете «Сбросить» (или не передадите `--reset`).
     - Если конфигурация недействительна или содержит устаревшие ключи, мастер останавливается и просит запустить `openclaw doctor` перед продолжением.
     - Сброс использует `trash` и предлагает области:
       - Только конфигурация
       - Конфигурация + учётные данные + сеансы
-      - Полный сброс (также удаляет рабочее пространство)
-  </Step>
-  <Step title="Модель и аутентификация">
+      - Полный сброс (также удаляет рабочее пространство)  
+</Step>
+  <Step title="Model and auth">
     - Полная матрица вариантов приведена в разделе [Параметры аутентификации и моделей](#auth-and-model-options).
   </Step>
-  <Step title="Рабочее пространство">
+  <Step title="Workspace">
     - По умолчанию `~/.openclaw/workspace` (настраивается).
     - Заполняет рабочее пространство файлами, необходимыми для первичного bootstrap-ритуала.
     - Структура рабочего пространства: [Agent workspace](/concepts/agent-workspace).
@@ -60,7 +53,7 @@ x-i18n:
     - Отключайте аутентификацию только если вы полностью доверяете каждому локальному процессу.
     - Привязки не к loopback по‑прежнему требуют аутентификации.
   </Step>
-  <Step title="Каналы">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): необязательный вход по QR
     - [Telegram](/channels/telegram): токен бота
     - [Discord](/channels/discord): токен бота
@@ -70,7 +63,8 @@ x-i18n:
     - [BlueBubbles](/channels/bluebubbles): рекомендуется для iMessage; URL сервера + пароль + webhook
     - [iMessage](/channels/imessage): устаревший путь CLI `imsg` + доступ к БД
     - Безопасность личных сообщений: по умолчанию — сопряжение. Первое личное сообщение отправляет код; подтвердите через
-      `openclaw pairing approve <channel> <code>` или используйте списки разрешённых.
+      `openclaw pairing approve <channel><code>` или используйте списки разрешённых.
+  </Step><code>` или используйте списки разрешённых.
   </Step>
   <Step title="Установка демона">
     - macOS: LaunchAgent
@@ -122,44 +116,50 @@ x-i18n:
 ## Параметры аутентификации и моделей
 
 <AccordionGroup>
-  <Accordion title="Ключ API Anthropic (рекомендуется)">
+  <Accordion title="Anthropic API key (recommended)">
     Использует `ANTHROPIC_API_KEY`, если он присутствует, или запрашивает ключ, затем сохраняет его для использования демоном.
   </Accordion>
-  <Accordion title="OAuth Anthropic (Claude Code CLI)">
+  <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: проверяет элемент Keychain «Claude Code-credentials»
     - Linux и Windows: повторно использует `~/.claude/.credentials.json`, если он присутствует
 
+    ```
     На macOS выберите «Always Allow», чтобы запуски через launchd не блокировались.
+    ```
 
   </Accordion>
-  <Accordion title="Токен Anthropic (вставка setup-token)">
+  <Accordion title="Anthropic token (setup-token paste)">
     Запустите `claude setup-token` на любой машине, затем вставьте токен.
     Его можно назвать; пустое имя использует значение по умолчанию.
   </Accordion>
-  <Accordion title="Подписка OpenAI Code (повторное использование Codex CLI)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     Если существует `~/.codex/auth.json`, мастер может повторно использовать его.
   </Accordion>
-  <Accordion title="Подписка OpenAI Code (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     Поток через браузер; вставьте `code#state`.
 
+    ```
     Устанавливает `agents.defaults.model` в `openai-codex/gpt-5.3-codex`, когда модель не задана или `openai/*`.
+    ```
 
   </Accordion>
-  <Accordion title="Ключ API OpenAI">
+  <Accordion title="OpenAI API key">
     Использует `OPENAI_API_KEY`, если он присутствует, или запрашивает ключ, затем сохраняет его в
     `~/.openclaw/.env`, чтобы launchd мог его читать.
 
+    ```
     Устанавливает `agents.defaults.model` в `openai/gpt-5.1-codex`, когда модель не задана, `openai/*` или `openai-codex/*`.
+    ```
 
   </Accordion>
-  <Accordion title="Ключ API xAI (Grok)">
+  <Accordion title="xAI (Grok) API key">
     Запрашивает `XAI_API_KEY` и настраивает xAI как провайдера моделей.
   </Accordion>
   <Accordion title="OpenCode Zen">
     Запрашивает `OPENCODE_API_KEY` (или `OPENCODE_ZEN_API_KEY`).
     URL настройки: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="Ключ API (универсальный)">
+  <Accordion title="API key (generic)">
     Сохраняет ключ за вас.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
@@ -174,15 +174,15 @@ x-i18n:
     Конфигурация записывается автоматически.
     Подробнее: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (совместимый с Anthropic)">
+  <Accordion title="Synthetic (Anthropic-compatible)">
     Запрашивает `SYNTHETIC_API_KEY`.
     Подробнее: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot и Kimi Coding">
+  <Accordion title="Moonshot and Kimi Coding">
     Конфигурации Moonshot (Kimi K2) и Kimi Coding записываются автоматически.
     Подробнее: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="Пропустить">
+  <Accordion title="Skip">
     Оставляет аутентификацию ненастроенной.
   </Accordion>
 </AccordionGroup>

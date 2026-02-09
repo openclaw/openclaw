@@ -4,13 +4,6 @@ read_when:
   - Necesita iniciar sesión en sitios para automatización del navegador
   - Quiere publicar actualizaciones en X/Twitter
 title: "Inicio de sesión del navegador"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:41Z
 ---
 
 # Inicio de sesión del navegador + publicación en X/Twitter

@@ -1,15 +1,8 @@
 ---
 summary: "Direktivsyntax für /think + /verbose und wie sie die Modellbegründung beeinflussen"
 read_when:
-  - Anpassen der Analyse- oder Verbose-Direktivverarbeitung oder der Standardwerte
+  - Anpassen von Denk- oder Ausführlichkeitsrichtlinien
 title: "Denkstufen"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:44Z
 ---
 
 # Denkstufen (/think-Direktiven)

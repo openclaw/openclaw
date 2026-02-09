@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI لأمر `openclaw update` (تحديث آمن نسبيًا للمصدر + إعادة تشغيل تلقائية لـ Gateway)"
 read_when:
-  - "تريد تحديث نسخة مصدرية بأمان"
-  - "تحتاج إلى فهم سلوك الاختصار `--update`"
+  - تريد تحديث نسخة مصدرية بأمان
+  - تحتاج إلى فهم سلوك الاختصار `--update`
 title: "تحديث"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:10Z
 ---
 
 # `openclaw update`

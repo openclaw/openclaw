@@ -4,13 +4,6 @@ read_when:
   - 의미론적 메모리를 인덱싱하거나 검색하려는 경우
   - 메모리 가용성 또는 인덱싱을 디버깅하는 경우
 title: "메모리"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:22Z
 ---
 
 # `openclaw memory`

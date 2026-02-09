@@ -4,18 +4,11 @@ read_when:
   - Gọi công cụ mà không chạy toàn bộ một lượt tác tử
   - Xây dựng các tự động hóa cần thực thi chính sách công cụ
 title: "API Gọi Công Cụ"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:08Z
 ---
 
 # Gọi Công Cụ (HTTP)
 
-Gateway của OpenClaw cung cấp một endpoint HTTP đơn giản để gọi trực tiếp một công cụ. Endpoint này luôn được bật, nhưng được kiểm soát bởi xác thực của Gateway và chính sách công cụ.
+OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled, but gated by Gateway auth and tool policy.
 
 - `POST /tools/invoke`
 - Cùng cổng với Gateway (ghép kênh WS + HTTP): `http://<gateway-host>:<port>/tools/invoke`
@@ -24,7 +17,7 @@ Kích thước payload tối đa mặc định là 2 MB.
 
 ## Xác thực
 
-Sử dụng cấu hình xác thực của Gateway. Gửi bearer token:
+Uses the Gateway auth configuration. Send a bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -50,7 +43,7 @@ Các trường:
 - `tool` (string, bắt buộc): tên công cụ cần gọi.
 - `action` (string, tùy chọn): được ánh xạ vào args nếu schema của công cụ hỗ trợ `action` và payload args không bao gồm trường này.
 - `args` (object, tùy chọn): các tham số dành riêng cho công cụ.
-- `sessionKey` (string, tùy chọn): khóa phiên đích. Nếu bỏ qua hoặc `"main"`, Gateway sử dụng khóa phiên chính đã cấu hình (tuân theo `session.mainKey` và tác tử mặc định, hoặc `global` ở phạm vi toàn cục).
+- `sessionKey` (string, optional): target session key. If omitted or `"main"`, the Gateway uses the configured main session key (honors `session.mainKey` and default agent, or `global` in global scope).
 - `dryRun` (boolean, tùy chọn): dành cho sử dụng trong tương lai; hiện tại bị bỏ qua.
 
 ## Hành vi chính sách + định tuyến

@@ -5,13 +5,6 @@ read_when:
   - Gateway の認証、バインドモード、接続性をデバッグする場合
   - Bonjour（LAN + tailnet）経由でゲートウェイを検出する場合
 title: "ゲートウェイ"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:22Z
 ---
 
 # Gateway CLI
@@ -34,7 +27,7 @@ Gateway は OpenClaw の WebSocket サーバーです（チャンネル、ノー
 openclaw gateway
 ```
 
-フォアグラウンドのエイリアス:
+フォアグラウンドエイリアス:
 
 ```bash
 openclaw gateway run
@@ -42,10 +35,10 @@ openclaw gateway run
 
 注記:
 
-- 既定では、`gateway.mode=local` が `~/.openclaw/openclaw.json` に設定されていない限り、Gateway は起動を拒否します。アドホック／開発用途の実行には `--allow-unconfigured` を使用してください。
+- 既定では、`gateway.mode=local` が `~/.openclaw/openclaw.json` に設定されていない限り、Gateway は起動を拒否します。アドホック／開発用途の実行には `--allow-unconfigured` を使用してください。 ad-hoc/dev runs には `--allow-unconfigured` を使用してください。
 - 認証なしで loopback を超えてバインドすることはブロックされます（安全ガードレール）。
 - `SIGUSR1` は、認可されている場合にインプロセスの再起動をトリガーします（`commands.restart` を有効にするか、gateway ツール／config の apply/update を使用してください）。
-- `SIGINT`/`SIGTERM` ハンドラーはゲートウェイプロセスを停止しますが、カスタムのターミナル状態は復元しません。TUI や raw モード入力で CLI をラップしている場合は、終了前にターミナルを復元してください。
+- `SIGINT`/`SIGTERM` ハンドラーはゲートウェイプロセスを停止しますが、カスタムのターミナル状態は復元しません。TUI や raw モード入力で CLI をラップしている場合は、終了前にターミナルを復元してください。 CLI を TUI または raw-mode 入力でラップする場合は、ターミナルを終了する前に復元します。
 
 ### オプション
 
@@ -87,6 +80,7 @@ openclaw gateway run
 
 注記: `--url` を設定すると、CLI は config や環境の資格情報へフォールバックしません。
 `--token` または `--password` を明示的に渡してください。明示的な資格情報が欠落している場合はエラーになります。
+`--token` または `--password` を明示的に渡します。 明示的な資格情報が見つかりませんでした。
 
 ### `gateway health`
 
@@ -114,12 +108,12 @@ openclaw gateway status --json
 
 ### `gateway probe`
 
-`gateway probe` は「すべてをデバッグ」するコマンドです。常に次をプローブします:
+`gateway probe` は「すべてをデバッグ」するコマンドです。常に次をプローブします: それは常にプローブ:
 
 - 設定されているリモートゲートウェイ（設定されている場合）、および
 - localhost（loopback）。**リモートが設定されていても実行されます**。
 
-到達可能なゲートウェイが複数ある場合は、すべてを表示します。分離されたプロファイル／ポート（例: レスキューボット）を使用すると複数ゲートウェイをサポートできますが、ほとんどのインストールでは単一のゲートウェイが稼働します。
+複数のゲートウェイに到達可能な場合、それらのすべてを出力します。 到達可能なゲートウェイが複数ある場合は、すべてを表示します。分離されたプロファイル／ポート（例: レスキューボット）を使用すると複数ゲートウェイをサポートできますが、ほとんどのインストールでは単一のゲートウェイが稼働します。
 
 ```bash
 openclaw gateway probe

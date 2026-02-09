@@ -5,13 +5,6 @@ read_when:
   - Bạn cần bật hoặc tắt heartbeat
   - Bạn muốn kiểm tra các mục presence của hệ thống
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:25Z
 ---
 
 # `openclaw system`
@@ -30,9 +23,10 @@ openclaw system presence
 
 ## `system event`
 
-Đưa một sự kiện hệ thống vào hàng đợi trên phiên **main**. Heartbeat tiếp theo sẽ chèn
+Nhịp heartbeat tiếp theo sẽ chèn
 nó như một dòng `System:` trong prompt. Dùng `--mode now` để kích hoạt heartbeat
-ngay lập tức; `next-heartbeat` sẽ đợi đến nhịp theo lịch tiếp theo.
+ngay lập tức; `next-heartbeat` sẽ chờ đến nhịp đã được lên lịch tiếp theo. Luồng tương tác để chọn kênh cập nhật và xác nhận có khởi động lại Gateway hay không
+sau khi cập nhật (mặc định là khởi động lại).
 
 Flags:
 

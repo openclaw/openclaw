@@ -5,13 +5,6 @@ read_when:
   - Når du tilføjer regressioner for model-/udbyderfejl
   - Når du debugger gateway- og agentadfærd
 title: "Test"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:02Z
 ---
 
 # Test
@@ -277,13 +270,13 @@ Vælg mindst én pr. udbyderfamilie:
 Valgfri ekstra dækning (nice to have):
 
 - xAI: `xai/grok-4` (eller seneste tilgængelige)
-- Mistral: `mistral/`… (vælg én “tools”-kapabel model, du har aktiveret)
-- Cerebras: `cerebras/`… (hvis du har adgang)
-- LM Studio: `lmstudio/`… (lokal; tool calling afhænger af API-tilstand)
+- Mistral: `mistral/`… (Vælg et “værktøjer” i stand model, du har aktiveret)
+- Korn: »cerebras/«… (hvis du har adgang)
+- LM Studio: `lmstudio/`… (lokal; værktøjskalering afhænger af API-tilstand)
 
 ### Vision: billedsend (vedhæftning → multimodal besked)
 
-Medtag mindst én billedkapabel model i `OPENCLAW_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-kapable varianter osv.) for at øve image-proben.
+Inkludér mindst én model i 'OPENCLAW_LIVE_GATEWAY_MODELS' (Claude/Gemini/OpenAI varianter, der kan vision-capable etc.) at udøve billedsonden.
 
 ### Aggregatorer / alternative gateways
 
@@ -297,16 +290,18 @@ Flere udbydere, du kan inkludere i live-matrixen (hvis du har creds/konfiguratio
 - Indbyggede: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API) samt enhver OpenAI-/Anthropic-kompatibel proxy (LM Studio, vLLM, LiteLLM osv.)
 
-Tip: forsøg ikke at hardcode “alle modeller” i docs. Den autoritative liste er, hvad `discoverModels(...)` returnerer på din maskine + hvilke nøgler der er tilgængelige.
+Tip: prøv ikke at hardcode “alle modeller” i docs. Den autoritative liste er hvad `opdagelsesmodeller (...)` returnerer på din maskine + uanset nøgler er tilgængelige.
 
 ## Credentials (commit aldrig)
 
-Live-tests finder credentials på samme måde som CLI’en gør. Praktiske implikationer:
+Live tests opdage legitimationsoplysninger på samme måde CLI gør. Praktiske konsekvenser:
 
 - Hvis CLI’en virker, bør live-tests finde de samme nøgler.
+
 - Hvis en live-test siger “ingen creds”, så debug på samme måde, som du ville debugge `openclaw models list` / modelvalg.
 
 - Profil-store: `~/.openclaw/credentials/` (foretrukken; hvad “profilnøgler” betyder i tests)
+
 - Konfiguration: `~/.openclaw/openclaw.json` (eller `OPENCLAW_CONFIG_PATH`)
 
 Hvis du vil stole på env-nøgler (fx eksporteret i din `~/.profile`), så kør lokale tests efter `source ~/.profile`, eller brug Docker-runners nedenfor (de kan mounte `~/.profile` ind i containeren).

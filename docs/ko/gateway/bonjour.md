@@ -4,13 +4,6 @@ read_when:
   - macOS/iOS 에서 Bonjour 디바이스 검색 문제를 디버깅할 때
   - mDNS 서비스 유형, TXT 레코드 또는 디바이스 검색 UX 를 변경할 때
 title: "Bonjour 디바이스 검색"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:07Z
 ---
 
 # Bonjour / mDNS 디바이스 검색

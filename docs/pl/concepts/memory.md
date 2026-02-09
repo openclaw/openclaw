@@ -3,13 +3,6 @@ summary: "Jak działa pamięć OpenClaw (pliki robocze + automatyczne opróżnia
 read_when:
   - Chcesz poznać układ plików pamięci i przepływ pracy
   - Chcesz dostroić automatyczne opróżnianie pamięci przed kompakcją
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:59Z
 ---
 
 # Pamięć
@@ -127,8 +120,7 @@ QMD do pobierania wyników. Kluczowe punkty:
 - Gateway uruchamia QMD w samodzielnym katalogu XDG pod
   `~/.openclaw/agents/<agentId>/qmd/`, ustawiając `XDG_CONFIG_HOME` oraz
   `XDG_CACHE_HOME`.
-- Wsparcie OS: macOS i Linux działają od razu po zainstalowaniu Bun + SQLite.
-  Windows najlepiej wspierany przez WSL2.
+- Wsparcie OS: macOS i Linux działają od razu po zainstalowaniu Bun + SQLite. Windows najlepiej wspierany przez WSL2.
 
 **Jak działa sidecar**
 

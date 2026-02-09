@@ -4,13 +4,6 @@ read_when:
   - Sie möchten Brave Search für web_search verwenden
   - Sie benötigen einen BRAVE_API_KEY oder Plandetails
 title: "Brave Search"
-x-i18n:
-  source_path: brave-search.md
-  source_hash: 81cd0a13239c13f4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:04Z
 ---
 
 # Brave Search API

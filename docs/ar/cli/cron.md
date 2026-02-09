@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI للأمر `openclaw cron` (جدولة وتشغيل المهام في الخلفية)"
 read_when:
-  - "تريد مهام مجدولة وإيقاظات"
-  - "تقوم بتصحيح تنفيذ cron والسجلات"
+  - تريد مهام مجدولة وإيقاظات
+  - تقوم بتصحيح تنفيذ cron والسجلات
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # `openclaw cron`

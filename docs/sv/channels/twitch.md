@@ -3,18 +3,11 @@ summary: "Konfiguration och konfigurering av Twitch-chattbot"
 read_when:
   - Konfigurering av Twitch-chattintegration för OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:39Z
 ---
 
 # Twitch (plugin)
 
-Stöd för Twitch-chatt via IRC-anslutning. OpenClaw ansluter som en Twitch-användare (botkonto) för att ta emot och skicka meddelanden i kanaler.
+Stöd för Twitch chatt via IRC-anslutning. OpenClaw ansluter som en Twitch-användare (bot account) för att ta emot och skicka meddelanden i kanaler.
 
 ## Plugin krävs
 
@@ -48,7 +41,7 @@ Detaljer: [Plugins](/tools/plugin)
    - Om båda är satta har konfig företräde (env-reserv gäller endast standardkontot).
 5. Starta gatewayen.
 
-**⚠️ Viktigt:** Lägg till åtkomstkontroll (`allowFrom` eller `allowedRoles`) för att förhindra att obehöriga användare triggar boten. `requireMention` är som standard `true`.
+**⚠️ Viktigt:** Lägg till åtkomstkontroll (`allowFrom` eller `allowedRoles`) för att förhindra obehöriga användare från att utlösa boten. `requireMention` defaults to `true`.
 
 Minimal konfig:
 
@@ -84,7 +77,7 @@ Använd [Twitch Token Generator](https://twitchtokengenerator.com/):
 - Verifiera att scopes `chat:read` och `chat:write` är valda
 - Kopiera **Client ID** och **Access Token**
 
-Ingen manuell app-registrering behövs. Tokens upphör att gälla efter flera timmar.
+Ingen manuell appregistrering behövs. Tokens löper ut efter flera timmar.
 
 ### Konfigurera boten
 
@@ -124,11 +117,11 @@ Om både env och konfig är satta har konfig företräde.
 }
 ```
 
-Föredra `allowFrom` för en hård tillåtelselista. Använd `allowedRoles` i stället om du vill ha rollbaserad åtkomst.
+Föredrar `allowFrom` för en hård allowlista. Använd `allowedRoles` istället om du vill ha rollbaserad åtkomst.
 
 **Tillgängliga roller:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
-**Varför användar-ID:n?** Användarnamn kan ändras, vilket möjliggör identitetskapning. Användar-ID:n är permanenta.
+**Varför användar-ID:n?** Användarnamn kan ändras, vilket tillåter personifiering. Användar-ID är permanent.
 
 Hitta ditt Twitch-användar-ID: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Konvertera ditt Twitch-användarnamn till ID)
 
@@ -153,7 +146,7 @@ Boten uppdaterar automatiskt tokens före utgång och loggar uppdateringshändel
 
 ## Stöd för flera konton
 
-Använd `channels.twitch.accounts` med tokens per konto. Se [`gateway/configuration`](/gateway/configuration) för det delade mönstret.
+Använd `channels.twitch.accounts` med per-account tokens. Se [`gateway/configuration`](/gateway/configuration) för det delade mönstret.
 
 Exempel (ett botkonto i två kanaler):
 
@@ -218,8 +211,8 @@ Exempel (ett botkonto i två kanaler):
 
 ### Rollbaserad åtkomst (alternativ)
 
-`allowFrom` är en hård tillåtelselista. När den är satt tillåts endast dessa användar-ID:n.
-Om du vill ha rollbaserad åtkomst, lämna `allowFrom` osatt och konfigurera `allowedRoles` i stället:
+`allowFrom` är en hård allowlista. När den är inställd, är endast dessa användar-ID tillåtna.
+Om du vill ha rollbaserad åtkomst, lämna `allowFrom` unset och konfigurera `allowedRoles` istället:
 
 ```json5
 {
@@ -237,7 +230,7 @@ Om du vill ha rollbaserad åtkomst, lämna `allowFrom` osatt och konfigurera `al
 
 ### Inaktivera krav på @-omnämnande
 
-Som standard är `requireMention` `true`. För att inaktivera och svara på alla meddelanden:
+Som standard är `requireMention` `true`. Inaktivera och svara på alla meddelanden:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Om du ser ”token refresh disabled (no refresh token)”:
 - `channels.twitch.accessToken` – OAuth-åtkomsttoken (förenklad en-kontokonfig)
 - `channels.twitch.clientId` – Twitch Client ID (förenklad en-kontokonfig)
 - `channels.twitch.channel` – Kanal att ansluta till (förenklad en-kontokonfig)
-- `channels.twitch.accounts.<accountName>` – Flerkontokonfig (alla kontofält ovan)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (alla kontofält ovan)
 
 Fullständigt exempel:
 

@@ -4,25 +4,18 @@ read_when:
   - Gusto mo ng event-driven na automation para sa /new, /reset, /stop, at mga lifecycle event ng agent
   - Gusto mong bumuo, mag-install, o mag-debug ng mga hook
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:47Z
 ---
 
 # Hooks
 
-Nagbibigay ang Hooks ng isang extensible na event-driven system para i-automate ang mga aksyon bilang tugon sa mga command at event ng agent. Awtomatikong nadidiskubre ang mga hook mula sa mga directory at maaaring pamahalaan sa pamamagitan ng mga CLI command, katulad ng kung paano gumagana ang Skills sa OpenClaw.
+Hooks provide an extensible event-driven system for automating actions in response to agent commands and events. Hooks are automatically discovered from directories and can be managed via CLI commands, similar to how skills work in OpenClaw.
 
 ## Getting Oriented
 
-Ang Hooks ay maliliit na script na tumatakbo kapag may nangyari. May dalawang uri:
+Hooks are small scripts that run when something happens. There are two kinds:
 
 - **Hooks** (pahinang ito): tumatakbo sa loob ng Gateway kapag may nag-trigger na agent event, gaya ng `/new`, `/reset`, `/stop`, o mga lifecycle event.
-- **Webhooks**: mga external HTTP webhook na nagbibigay-daan sa ibang system na mag-trigger ng trabaho sa OpenClaw. Tingnan ang [Webhook Hooks](/automation/webhook) o gamitin ang `openclaw webhooks` para sa mga Gmail helper command.
+- **Webhooks**: mga external HTTP webhook na nagbibigay-daan sa ibang mga sistema na mag-trigger ng trabaho sa OpenClaw. See [Webhook Hooks](/automation/webhook) or use `openclaw webhooks` for Gmail helper commands.
 
 Maaari ring isama ang Hooks sa loob ng mga plugin; tingnan ang [Plugins](/tools/plugin#plugin-hooks).
 
@@ -33,7 +26,7 @@ Karaniwang gamit:
 - Mag-trigger ng follow-up na automation kapag nagsimula o nagtapos ang isang session
 - Magsulat ng mga file sa agent workspace o tumawag ng mga external API kapag may nag-trigger na event
 
-Kung marunong kang magsulat ng maliit na TypeScript function, kaya mong magsulat ng hook. Awtomatikong nadidiskubre ang Hooks, at maaari mo silang i-enable o i-disable sa pamamagitan ng CLI.
+Kung kaya mong magsulat ng isang maliit na TypeScript function, kaya mo ring magsulat ng hook. Hooks are discovered automatically, and you enable or disable them via the CLI.
 
 ## Overview
 
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Onboarding
 
-Sa panahon ng onboarding (`openclaw onboard`), ipo-prompt ka na i-enable ang mga inirerekomendang hook. Awtomatikong nadidiskubre ng wizard ang mga kwalipikadong hook at ipinapakita ang mga ito para sa pagpili.
+During onboarding (`openclaw onboard`), you'll be prompted to enable recommended hooks. The wizard automatically discovers eligible hooks and presents them for selection.
 
 ## Hook Discovery
 
@@ -103,8 +96,8 @@ my-hook/
 
 ## Hook Packs (npm/archives)
 
-Ang mga hook pack ay mga standard na npm package na nag-e-export ng isa o higit pang hook sa pamamagitan ng `openclaw.hooks` sa
-`package.json`. I-install ang mga ito gamit ang:
+Hook packs are standard npm packages that export one or more hooks via `openclaw.hooks` in
+`package.json`. Install them with:
 
 ```bash
 openclaw hooks install <path-or-spec>
@@ -122,8 +115,8 @@ Halimbawang `package.json`:
 }
 ```
 
-Ang bawat entry ay tumuturo sa isang hook directory na naglalaman ng `HOOK.md` at `handler.ts` (o `index.ts`).
-Maaaring magsama ng mga dependency ang hook pack; mai-install ang mga ito sa ilalim ng `~/.openclaw/hooks/<id>`.
+Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
+Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
 
 ## Hook Structure
 
@@ -251,7 +244,7 @@ Na-ti-trigger kapag nagsimula ang gateway:
 
 Ang mga hook na ito ay hindi event-stream listener; pinapayagan nilang i-adjust ng mga plugin nang synchronous ang mga tool result bago i-persist ng OpenClaw ang mga ito.
 
-- **`tool_result_persist`**: I-transform ang mga tool result bago isulat sa session transcript. Dapat synchronous; ibalik ang na-update na tool result payload o `undefined` para panatilihin ito nang walang pagbabago. Tingnan ang [Agent Loop](/concepts/agent-loop).
+- **`tool_result_persist`**: transform tool results before they are written to the session transcript. Dapat ay synchronous; ibalik ang na-update na tool result payload o `undefined` upang panatilihin ito kung ano ito. See [Agent Loop](/concepts/agent-loop).
 
 ### Future Events
 
@@ -277,7 +270,7 @@ mkdir -p ~/.openclaw/hooks/my-hook
 cd ~/.openclaw/hooks/my-hook
 ```
 
-### 3. Create HOOK.md
+### 3. Gumawa ng HOOK.md
 
 ```markdown
 ---
@@ -401,7 +394,7 @@ Gumagana pa rin ang lumang config format para sa backwards compatibility:
 }
 ```
 
-**Migration**: Gamitin ang bagong discovery-based system para sa mga bagong hook. Ang mga legacy handler ay nilo-load pagkatapos ng mga directory-based hook.
+**Migration**: Use the new discovery-based system for new hooks. Legacy handlers are loaded after directory-based hooks.
 
 ## CLI Commands
 
@@ -572,8 +565,8 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-Pinapatakbo ang `BOOT.md` kapag nagsimula ang gateway (pagkatapos magsimula ang mga channel).
-Dapat naka-enable ang internal hooks para tumakbo ito.
+Pinapatakbo ang `BOOT.md` kapag nagsimula ang Gateway (pagkatapos magsimula ang mga channel).
+Internal hooks must be enabled for this to run.
 
 **Events**: `gateway:startup`
 
@@ -595,7 +588,7 @@ openclaw hooks enable boot-md
 
 ### Keep Handlers Fast
 
-Tumatakbo ang Hooks habang pinoproseso ang command. Panatilihin silang magaan:
+Hooks run during command processing. Keep them lightweight:
 
 ```typescript
 // ✓ Good - async work, returns immediately

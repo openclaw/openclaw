@@ -2,22 +2,14 @@
 summary: "Eklenti manifesti + JSON Schema gereksinimleri (katı yapılandırma doğrulaması)"
 read_when:
   - Bir OpenClaw eklentisi geliştiriyorsunuz
-  - Bir eklenti yapılandırma şeması yayınlamanız veya eklenti doğrulama hatalarını ayıklamanız gerekiyor
+  - Bir eklenti yapılandırma şeması göndermeniz veya eklenti doğrulama hatalarını hata ayıklamanız gerekir
 title: "Eklenti Manifesti"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:35Z
 ---
 
 # Eklenti manifesti (openclaw.plugin.json)
 
 Her eklenti **zorunlu olarak** **eklenti kökünde** bir `openclaw.plugin.json` dosyası sağlamalıdır.
-OpenClaw, bu manifesti eklenti kodunu **çalıştırmadan** yapılandırmayı doğrulamak için kullanır.
-Eksik veya geçersiz manifestler eklenti hatası olarak değerlendirilir ve yapılandırma doğrulamasını engeller.
+OpenClaw, bu manifesti eklenti kodunu **çalıştırmadan** yapılandırmayı doğrulamak için kullanır. Eksik veya geçersiz manifestler eklenti hatası olarak değerlendirilir ve yapılandırma doğrulamasını engeller.
 
 Eklenti sisteminin tamamı için bkz.: [Plugins](/tools/plugin).
 

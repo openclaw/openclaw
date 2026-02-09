@@ -5,13 +5,6 @@ read_when:
   - Undersökning av duplicerade eller inaktuella instansrader
   - Ändring av gatewayns WS-anslutning eller systemhändelse-beacons
 title: "Närvaro"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:00Z
 ---
 
 # Närvaro
@@ -42,27 +35,27 @@ Närvaroposter är strukturerade objekt med fält som:
 
 Närvaroposter produceras av flera källor och **slås samman**.
 
-### 1) Gatewayns egen post
+### 1. Gatewayns egen post
 
 Gateway skapar alltid en ”egen”-post vid uppstart så att UI:er visar gateway-värden
 redan innan några klienter ansluter.
 
-### 2) WebSocket-anslutning
+### 2. WebSocket-anslutning
 
-Varje WS-klient börjar med en `connect`-begäran. Vid lyckad handskakning
-uppdaterar Gateway (upsert) en närvaropost för den anslutningen.
+Varje WS-klient börjar med en `connect`-begäran. Vid lyckad handskakning höjer
+Gateway en närvaropost för den anslutningen.
 
 #### Varför engångskommandon i CLI inte syns
 
-CLI:n ansluter ofta för korta, engångskommandon. För att undvika att skräpa ner
-Instances-listan omvandlas `client.mode === "cli"` **inte** till en närvaropost.
+CLI ansluter ofta för korta, one‐off kommandon. För att undvika spamming av listan
+instanser, `client.mode === "cli"` är **inte** förvandlas till en närvaropost.
 
-### 3) `system-event`-beacons
+### 3. `system-event`-beacons
 
-Klienter kan skicka rikare periodiska beacons via metoden `system-event`. Mac-appen
+Klienter kan skicka rikare periodiska fyrar via `system-event`-metoden. Appen mac
 använder detta för att rapportera värdnamn, IP och `lastInputSeconds`.
 
-### 4) Nodanslutningar (roll: node)
+### 4. Nodanslutningar (roll: node)
 
 När en nod ansluter via Gateway-WebSocket med `role: node` uppdaterar Gateway
 (en upsert) en närvaropost för den noden (samma flöde som för andra WS-klienter).
@@ -89,9 +82,9 @@ Detta håller listan aktuell och undviker obegränsad minnestillväxt.
 
 ## Fjärr-/tunnel-varning (loopback-IP:n)
 
-När en klient ansluter via en SSH-tunnel / lokal portvidarebefordran kan Gateway
-se fjärradressen som `127.0.0.1`. För att undvika att skriva över en korrekt
-klientrapporterad IP ignoreras loopback-fjärradresser.
+När en klient ansluter över en SSH-tunnel / lokal port framåt kan Gateway
+se fjärradressen som `127.0.0.1`. För att undvika att skriva över en bra klientrapporterad
+IP-adresser ignoreras.
 
 ## Konsumenter
 

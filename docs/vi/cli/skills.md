@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn xem những skill nào đang có sẵn và sẵn sàng chạy
   - Bạn muốn gỡ lỗi các binary/biến môi trường/cấu hình còn thiếu cho skill
 title: "Skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:29Z
 ---
 
 # `openclaw skills`

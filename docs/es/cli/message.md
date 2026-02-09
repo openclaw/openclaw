@@ -4,13 +4,6 @@ read_when:
   - Al agregar o modificar acciones de la CLI de mensajes
   - Al cambiar el comportamiento de salida de los canales
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:08Z
 ---
 
 # `openclaw message`
@@ -181,7 +174,7 @@ Búsqueda por nombre:
 - `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` también admite `--reason`
 
-### Difusión
+### Broadcast
 
 - `broadcast`
   - Canales: cualquier canal configurado; use `--channel all` para apuntar a todos los proveedores

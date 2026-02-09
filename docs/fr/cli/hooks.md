@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez gerer les hooks d’agent
   - Vous souhaitez installer ou mettre a jour des hooks
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: e2032e61ff4b9135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:07Z
 ---
 
 # `openclaw hooks`
@@ -269,7 +262,7 @@ openclaw hooks enable command-logger
 
 **Sortie :** `~/.openclaw/logs/commands.log`
 
-**Afficher les journaux :**
+**Voir les logs :**
 
 ```bash
 # Recent commands

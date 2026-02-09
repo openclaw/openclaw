@@ -3,20 +3,13 @@ summary: "Gateway 서비스의 런북, 수명 주기 및 운영 가이드"
 read_when:
   - Gateway 프로세스를 실행하거나 디버깅할 때
 title: "Gateway 런북"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:43Z
 ---
 
 # Gateway 서비스 런북
 
 마지막 업데이트: 2025-12-09
 
-## 개요
+## 무엇인가요
 
 - 단일 Baileys/Telegram 연결과 제어/이벤트 플레인을 소유하는 항상 실행되는 프로세스입니다.
 - 레거시 `gateway` 명령을 대체합니다. CLI 진입점: `openclaw gateway`.
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - 이후 클라이언트는 터널을 통해 `ws://127.0.0.1:18789`에 연결합니다.
+
 - 토큰이 구성된 경우, 터널을 통해서도 클라이언트는 `connect.params.auth.token`에 이를 포함해야 합니다.
 
 ## 다중 Gateway (동일 호스트)
@@ -255,8 +249,7 @@ openclaw logs --follow
 
 ## 감독 (systemd 사용자 유닛)
 
-OpenClaw는 Linux/WSL2에서 기본적으로 **systemd 사용자 서비스**를 설치합니다.
-단일 사용자 머신에는 사용자 서비스를 권장합니다(환경 단순, 사용자별 구성).
+OpenClaw는 Linux/WSL2에서 기본적으로 **systemd 사용자 서비스**를 설치합니다. 단일 사용자 머신에는 사용자 서비스를 권장합니다(환경 단순, 사용자별 구성).
 다중 사용자 또는 항상 실행되는 서버에는 **system 서비스**를 사용하십시오(linger 불필요, 공유 감독).
 
 `openclaw gateway install`는 사용자 유닛을 작성합니다. `openclaw doctor`는 유닛을 감사하고

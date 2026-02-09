@@ -5,22 +5,15 @@ read_when:
   - คุณต้องการตั้งค่า webhook และข้อมูลรับรองของ LINE
   - คุณต้องการตัวเลือกข้อความเฉพาะของ LINE
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:51Z
 ---
 
 # LINE (ปลั๊กอิน)
 
-LINE เชื่อมต่อกับ OpenClaw ผ่าน LINE Messaging API ปลั๊กอินทำงานเป็นตัวรับ webhook
+LINE เชื่อมต่อกับ OpenClaw ผ่าน LINE Messaging API LINE เชื่อมต่อกับ OpenClaw ผ่าน LINE Messaging API ปลั๊กอินทำงานเป็นตัวรับ webhook
 บน Gateway และใช้ channel access token และ channel secret ของคุณเพื่อการยืนยันตัวตน
 
-สถานะ: รองรับผ่านปลั๊กอิน รองรับข้อความส่วนตัว แชทกลุ่ม สื่อ ตำแหน่ง Flex
-messages, template messages และ quick replies ไม่รองรับ reactions และ threads
+สถานะ: รองรับผ่านปลั๊กอิน สถานะ: รองรับผ่านปลั๊กอิน รองรับข้อความส่วนตัว แชทกลุ่ม สื่อ ตำแหน่ง Flex
+messages, template messages และ quick replies ไม่รองรับ reactions และ threads ไม่รองรับรีแอ็กชันและเธรด
 
 ## ต้องใช้ปลั๊กอิน
 
@@ -51,7 +44,8 @@ https://gateway-host/line/webhook
 
 Gateway จะตอบสนองการตรวจสอบ webhook ของ LINE (GET) และอีเวนต์ขาเข้า (POST)
 หากต้องการพาธแบบกำหนดเอง ให้ตั้งค่า `channels.line.webhookPath` หรือ
-`channels.line.accounts.<id>.webhookPath` และอัปเดต URL ให้สอดคล้องกัน
+`channels.line.accounts.<id>
+หากต้องการพาธแบบกำหนดเอง ให้ตั้งค่า `channels.line.webhookPath`หรือ`channels.line.accounts.<id>`.webhookPath` และอัปเดต URL ให้สอดคล้องกัน
 
 ## การกำหนดค่า
 
@@ -108,7 +102,7 @@ Gateway จะตอบสนองการตรวจสอบ webhook ขอ
 
 ## การควบคุมการเข้าถึง
 
-ข้อความส่วนตัวจะตั้งค่าเป็นการจับคู่โดยค่าเริ่มต้น ผู้ส่งที่ไม่รู้จักจะได้รับโค้ดจับคู่
+ข้อความโดยตรงจะจับคู่เป็นค่าเริ่มต้น ข้อความส่วนตัวจะตั้งค่าเป็นการจับคู่โดยค่าเริ่มต้น ผู้ส่งที่ไม่รู้จักจะได้รับโค้ดจับคู่
 และข้อความของพวกเขาจะถูกละเว้นจนกว่าจะได้รับการอนุมัติ
 
 ```bash
@@ -124,7 +118,7 @@ openclaw pairing approve line <CODE>
 - `channels.line.groupAllowFrom`: รายการ LINE user ID ที่อนุญาตสำหรับกลุ่ม
 - การกำหนดค่าแทนรายกลุ่ม: `channels.line.groups.<groupId>.allowFrom`
 
-LINE ID แยกแยะตัวพิมพ์เล็ก-ใหญ่ รูปแบบ ID ที่ถูกต้องเช่น:
+LINE ID แยกแยะตัวพิมพ์เล็ก-ใหญ่ รูปแบบ ID ที่ถูกต้องเช่น: ID ที่ถูกต้องมีลักษณะดังนี้:
 
 - ผู้ใช้: `U` + อักขระฐานสิบหก 32 ตัว
 - กลุ่ม: `C` + อักขระฐานสิบหก 32 ตัว

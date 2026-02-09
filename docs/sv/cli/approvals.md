@@ -4,19 +4,12 @@ read_when:
   - Du vill redigera exec-godkännanden från CLI
   - Du behöver hantera tillåtelselistor på Gateway- eller nodvärdar
 title: "godkännanden"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:33Z
 ---
 
 # `openclaw approvals`
 
-Hantera exec-godkännanden för den **lokala värden**, **Gateway-värden** eller en **nodvärd**.
-Som standard riktar kommandon in sig på den lokala godkännandefilen på disk. Använd `--gateway` för att rikta mot Gateway (nätverksgateway), eller `--node` för att rikta mot en specifik nod.
+Hantera exec godkännanden för **lokal värd**, **gateway värd**, eller en **nod värd**.
+Som standard riktar kommandon den lokala godkännandefilen på disken. Använd `--gateway` för att rikta gateway, eller `--node` för att rikta en specifik nod.
 
 Relaterat:
 

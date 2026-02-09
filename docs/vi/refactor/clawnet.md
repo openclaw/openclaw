@@ -4,13 +4,6 @@ read_when:
   - Lập kế hoạch một giao thức mạng thống nhất cho các node + client của operator
   - Làm lại phê duyệt, ghép cặp, TLS và hiện diện trên các thiết bị
 title: "Tái cấu trúc Clawnet"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:30Z
 ---
 
 # Tái cấu trúc Clawnet (hợp nhất giao thức + xác thực)
@@ -51,10 +44,10 @@ Một tài liệu chặt chẽ, duy nhất cho:
 
 ## Hai giao thức
 
-### 1) Gateway WebSocket (control plane)
+### 1. Gateway WebSocket (control plane)
 
 - Bề mặt API đầy đủ: cấu hình, kênh, mô hình, phiên, chạy agent, log, node, v.v.
-- Bind mặc định: loopback. Truy cập từ xa qua SSH/Tailscale.
+- 48. Liên kết mặc định: loopback. 49. Truy cập từ xa qua SSH/Tailscale.
 - Xác thực: token/mật khẩu qua `connect`.
 - Không có ghim TLS (phụ thuộc loopback/đường hầm).
 - Mã:
@@ -62,7 +55,7 @@ Một tài liệu chặt chẽ, duy nhất cho:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (vận chuyển node)
+### 2. Bridge (vận chuyển node)
 
 - Bề mặt allowlist hẹp, định danh node + ghép cặp.
 - JSONL qua TCP; TLS tùy chọn + ghim dấu vân tay chứng chỉ.
@@ -145,7 +138,7 @@ Một giao thức WS duy nhất với vai trò + phạm vi.
 
 ### Quy tắc then chốt
 
-Vai trò là theo từng kết nối, không theo thiết bị. Một thiết bị có thể mở cả hai vai trò, tách biệt.
+50. Vai trò áp dụng theo từng kết nối, không theo từng thiết bị. Một thiết bị có thể mở cả hai vai trò, một cách tách biệt.
 
 ---
 
@@ -187,7 +180,7 @@ Phương án khác:
 
 ## Phê duyệt im lặng (heuristic SSH)
 
-Định nghĩa chính xác để tránh mắt xích yếu. Ưu tiên một trong:
+Define it precisely to avoid a weak link. Ưu tiên một lựa chọn:
 
 - **Chỉ cục bộ**: tự ghép cặp khi client kết nối qua loopback/Unix socket.
 - **Thử thách qua SSH**: gateway phát nonce; client chứng minh SSH bằng cách lấy nó.
@@ -224,7 +217,7 @@ Dùng runtime TLS hiện tại + ghim dấu vân tay:
 
 ## Hiện tại
 
-Phê duyệt diễn ra trên máy chủ node (runtime node của app mac). Prompt xuất hiện nơi node chạy.
+Approval happens on node host (mac app node runtime). Lời nhắc xuất hiện tại nơi node đang chạy.
 
 ## Đề xuất
 

@@ -4,13 +4,6 @@ read_when:
   - Implementatie van macOS-appfuncties
   - Wijzigingen aan de levenscyclus van de Gateway of node-bridging op macOS
 title: "macOS-app"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:46Z
 ---
 
 # OpenClaw macOS Companion (menubalk + gateway-broker)

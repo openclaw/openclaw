@@ -4,13 +4,6 @@ read_when:
   - Du behöver förstå hur tidsstämplar normaliseras för modellen
   - Konfigurering av användarens tidszon för systemprompter
 title: "Tidszoner"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:02Z
 ---
 
 # Tidszoner
@@ -43,7 +36,7 @@ Du kan åsidosätta detta med:
 
 - `envelopeTimezone: "utc"` använder UTC.
 - `envelopeTimezone: "user"` använder `agents.defaults.userTimezone` (faller tillbaka till värdens tidszon).
-- Använd en explicit IANA-tidszon (t.ex. `"Europe/Vienna"`) för en fast offset.
+- Använd en explicit IANA tidszon (t.ex., `"Europa/Wien"`) för en fast offset.
 - `envelopeTimestamp: "off"` tar bort absoluta tidsstämplar från kuverthuvuden.
 - `envelopeElapsed: "off"` tar bort suffix för förfluten tid (stilen `+2m`).
 
@@ -69,8 +62,8 @@ Du kan åsidosätta detta med:
 
 ## Verktygspayloads (rå leverantörsdata + normaliserade fält)
 
-Verktygsanrop (`channels.discord.readMessages`, `channels.slack.readMessages`, osv.) returnerar **råa leverantörstidsstämplar**.
-Vi bifogar även normaliserade fält för konsekvens:
+Verktygsanrop (`channels.discord.readMessages`, `channels.slack.readMessages`, etc.) returnera **rå leverantörens tidsstämplar**.
+Vi bifogar också normaliserade fält för konsekvens:
 
 - `timestampMs` (UTC-epok i millisekunder)
 - `timestampUtc` (ISO 8601 UTC-sträng)
@@ -79,8 +72,8 @@ Råa leverantörsfält bevaras.
 
 ## Användarens tidszon för systemprompten
 
-Ställ in `agents.defaults.userTimezone` för att tala om för modellen användarens lokala tidszon. Om den är
-oinställd fastställer OpenClaw **värdens tidszon vid körning** (ingen konfigskrivning).
+Ange `agents.defaults.userTimezone` för att berätta för modellen användarens lokala tidszon. Om det är
+unset, löser OpenClaw **värdtidszonen vid körning** (ingen config write).
 
 ```json5
 {

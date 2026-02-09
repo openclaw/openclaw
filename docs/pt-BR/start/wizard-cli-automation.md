@@ -5,13 +5,6 @@ read_when:
   - Você precisa de exemplos não interativos para provedores específicos
 title: "Automação da CLI"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:59Z
 ---
 
 # Automação da CLI
@@ -41,7 +34,7 @@ Adicione `--json` para um resumo legível por máquina.
 ## Exemplos específicos por provedor
 
 <AccordionGroup>
-  <Accordion title="Exemplo Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Adicione `--json` para um resumo legível por máquina.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemplo Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Adicione `--json` para um resumo legível por máquina.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemplo Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Adicione `--json` para um resumo legível por máquina.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemplo Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Adicione `--json` para um resumo legível por máquina.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemplo Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Adicione `--json` para um resumo legível por máquina.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemplo Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Adicione `--json` para um resumo legível por máquina.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Exemplo OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

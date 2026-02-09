@@ -5,18 +5,11 @@ read_when:
   - Pag-debug ng macOS gateway launchd service
   - Pag-install ng gateway CLI para sa macOS
 title: "Gateway sa macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # Gateway sa macOS (panlabas na launchd)
 
-Hindi na bina-bundle ng OpenClaw.app ang Node/Bun o ang Gateway runtime. Inaasahan ng macOS app ang **panlabas** na `openclaw` na pag-install ng CLI, hindi nito ini-spawn ang Gateway bilang child process, at namamahala ito ng per‑user na launchd service para panatilihing tumatakbo ang Gateway (o kumokonekta sa umiiral na lokal na Gateway kung mayroon nang tumatakbo).
+Hindi na bina-bundle ng OpenClaw.app ang Node/Bun o ang Gateway runtime. Inaasahan ng macOS app ang isang **external** na `openclaw` CLI install, hindi nito sini-spawn ang Gateway bilang child process, at pinamamahalaan nito ang isang per‑user launchd service upang panatilihing tumatakbo ang Gateway (o kumokonekta sa isang umiiral nang lokal na Gateway kung mayroon nang tumatakbo).
 
 ## I-install ang CLI (kinakailangan para sa local mode)
 
@@ -32,12 +25,12 @@ Ang **Install CLI** na button ng macOS app ay nagpapatakbo ng parehong daloy gam
 
 Label:
 
-- `bot.molt.gateway` (o `bot.molt.<profile>`; maaaring manatili ang legacy na `com.openclaw.*`)
+- `bot.molt.gateway` (o `bot.molt.<profile>``; legacy `com.openclaw.\*\` ay maaaring manatili)
 
 Lokasyon ng plist (per‑user):
 
 - `~/Library/LaunchAgents/bot.molt.gateway.plist`
-  (o `~/Library/LaunchAgents/bot.molt.<profile>.plist`)
+  (o `~/Library/LaunchAgents/bot.molt.<profile>`.plist\`)
 
 Manager:
 
@@ -56,7 +49,7 @@ Pag-log:
 
 ## Pagiging tugma ng bersyon
 
-Tinitingnan ng macOS app ang bersyon ng gateway laban sa sarili nitong bersyon. Kung hindi tugma, i-update ang global CLI upang tumugma sa bersyon ng app.
+Sinusuri ng macOS app ang bersyon ng gateway laban sa sarili nitong bersyon. Kung hindi sila magkatugma, i-update ang global CLI upang tumugma sa bersyon ng app.
 
 ## Smoke check
 

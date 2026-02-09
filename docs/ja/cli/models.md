@@ -4,13 +4,6 @@ read_when:
   - 既定のモデルを変更する、またはプロバイダーの認証ステータスを確認したいとき
   - 利用可能なモデル／プロバイダーをスキャンし、認証プロファイルをデバッグしたいとき
 title: "モデル"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:16Z
 ---
 
 # `openclaw models`
@@ -31,19 +24,19 @@ openclaw models set <model-or-alias>
 openclaw models scan
 ```
 
-`openclaw models status` は、解決済みの既定／フォールバックと認証の概要を表示します。
-プロバイダーの使用状況スナップショットが利用可能な場合、OAuth／トークンのステータス欄には
-プロバイダーの使用状況ヘッダーが含まれます。
-`--probe` を追加すると、設定済みの各プロバイダープロファイルに対してライブの認証プローブを実行します。
-プローブは実際のリクエストであり（トークンを消費したり、レート制限を引き起こす可能性があります）。
-`--agent <id>` を使用すると、設定済みエージェントのモデル／認証の状態を確認できます。省略した場合、
-設定されていれば `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` を使用し、そうでなければ
-設定済みの既定エージェントを使用します。
+`openclaw models status` は解決されたデフォルト/フォールバックと認証概要を表示します。
+プロバイダの使用状況スナップショットが利用可能な場合、OAuth/tokenステータスセクションには
+プロバイダの使用状況ヘッダーが含まれます。
+設定された各プロバイダプロファイルに対してライブ認証プローブを実行するには、 `--probe` を追加します。
+プローブは実際の要求です(トークンとトリガレート制限を消費する可能性があります)。
+設定されたエージェントのモデル/認証状態を検査するには、 `--agent <id>` を使用します。 省略されたとき、
+コマンドは`OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`を使用します。それ以外の場合は、
+デフォルトエージェントを設定します。
 
 注記:
 
 - `models set <model-or-alias>` は `provider/model` またはエイリアスを受け付けます。
-- モデル参照は **最初の** `/` で分割して解析されます。モデル ID に `/`（OpenRouter 形式）が含まれる場合は、プロバイダープレフィックスを含めてください（例: `openrouter/moonshotai/kimi-k2`）。
+- モデル参照は**first** `/`で分割することによって解析されます。 モデル参照は **最初の** `/` で分割して解析されます。モデル ID に `/`（OpenRouter 形式）が含まれる場合は、プロバイダープレフィックスを含めてください（例: `openrouter/moonshotai/kimi-k2`）。
 - プロバイダーを省略した場合、OpenClaw は入力をエイリアス、または **既定プロバイダー** のモデルとして扱います（モデル ID に `/` が含まれない場合のみ機能します）。
 
 ### `models status`
@@ -78,7 +71,8 @@ openclaw models auth paste-token
 ```
 
 `models auth login` は、プロバイダープラグインの認証フロー（OAuth／API キー）を実行します。
-`openclaw plugins list` を使用して、インストールされているプロバイダーを確認してください。
+`openclaw plugins list` を使用して、インストールされているプロバイダーを確認してください。 どのプロバイダがインストールされているかを確認するには、
+`openclawプラグインリスト` を使用してください。
 
 注記:
 

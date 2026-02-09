@@ -3,13 +3,6 @@ title: サンドボックス vs ツールポリシー vs 昇格
 summary: "ツールがブロックされる理由：サンドボックスのランタイム、ツールの許可／拒否ポリシー、昇格実行ゲート"
 read_when: "「サンドボックスの牢屋」に入った、またはツール／昇格の拒否を見て、変更すべき正確な設定キーを知りたいとき。"
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:09Z
 ---
 
 # サンドボックス vs ツールポリシー vs 昇格
@@ -31,7 +24,7 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-次が出力されます。
+印刷します。
 
 - 有効なサンドボックスのモード／スコープ／ワークスペースアクセス
 - セッションが現在サンドボックス化されているか（メイン vs 非メイン）
@@ -58,7 +51,7 @@ openclaw sandbox explain --json
 
 ## ツールポリシー：どのツールが存在／呼び出し可能か
 
-重要なのは 2 つのレイヤーです。
+二つの層が重要です:
 
 - **ツールプロファイル**：`tools.profile` と `agents.list[].tools.profile`（ベースの許可リスト）
 - **プロバイダーツールプロファイル**：`tools.byProvider[provider].profile` と `agents.list[].tools.byProvider[provider].profile`
@@ -66,13 +59,14 @@ openclaw sandbox explain --json
 - **プロバイダーツールポリシー**：`tools.byProvider[provider].allow/deny` と `agents.list[].tools.byProvider[provider].allow/deny`
 - **サンドボックスのツールポリシー**（サンドボックス化時のみ適用）：`tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` と `agents.list[].tools.sandbox.tools.*`
 
-経験則：
+親指のルール:
 
 - `deny` が常に優先されます。
 - `allow` が空でない場合、他はすべてブロックとして扱われます。
 - ツールポリシーはハードストップです。`/exec` は、拒否された `exec` のツールを上書きできません。
 - `/exec` は、許可された送信者のセッション既定値を変更するだけで、ツールアクセスを付与しません。  
   プロバイダーツールのキーは、`provider`（例：`google-antigravity`）または `provider/model`（例：`openai/gpt-5.2`）のいずれかを受け付けます。
+  プロバイダのツールキーは、`provider`（例：`google-antigubity`）または`provider/model`（例：`openai/gpt-5.2`）のいずれかを受け付けます。
 
 ### ツールグループ（省略表記）
 
@@ -109,8 +103,8 @@ openclaw sandbox explain --json
 - サンドボックス化されている場合、`/elevated on`（または `exec` と `elevated: true`）はホストで実行されます（承認が必要な場合があります）。
 - セッションの exec 承認をスキップするには `/elevated full` を使用します。
 - すでに直接実行している場合、昇格は実質的にノーオペレーションです（引き続きゲートされます）。
-- 昇格は **Skills 単位ではなく**、ツールの許可／拒否を**上書きしません**。
-- `/exec` は昇格とは別です。許可された送信者に対して、セッションごとの exec 既定値を調整するだけです。
+- 昇格は **スキルスコープ** ではなく、ツールの allow/deny を **上書きしません** 。
+- `/exec`は上昇したものとは別です。 これは、承認された送信者のセッションごとの執行のデフォルトのみを調整します。
 
 ゲート：
 
@@ -132,4 +126,4 @@ openclaw sandbox explain --json
 
 ### 「これはメインだと思っていたのに、なぜサンドボックス化されている？」
 
-`"non-main"` モードでは、グループ／チャンネルのキーはメインではありません。`sandbox explain` で表示されるメインセッションのキーを使用するか、モードを `"off"` に切り替えてください。
+`"non-main"` モードでは、グループ／チャンネルのキーはメインではありません。`sandbox explain` で表示されるメインセッションのキーを使用するか、モードを `"off"` に切り替えてください。 メインセッションキー（`sandbox explan` で表示）を使用するか、モードを`"off"`に切り替えます。

@@ -4,18 +4,11 @@ read_when:
   - बाहरी CLI एकीकरण जोड़ते या बदलते समय
   - RPC एडेप्टर (signal-cli, imsg) का डिबग करते समय
 title: "RPC एडेप्टर"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:37Z
 ---
 
 # RPC एडेप्टर
 
-OpenClaw JSON-RPC के माध्यम से बाहरी CLI को एकीकृत करता है। वर्तमान में दो पैटर्न उपयोग में हैं।
+**Silent housekeeping** (जैसे memory writes जो user-visible आउटपुट नहीं बनाने चाहिए) **Idle expiry** (`session.reset.idleMinutes` या legacy `session.idleMinutes`) idle window के बाद जब कोई मैसेज आता है तो एक नया `sessionId` बनाता है।
 
 ## पैटर्न A: HTTP डेमन (signal-cli)
 

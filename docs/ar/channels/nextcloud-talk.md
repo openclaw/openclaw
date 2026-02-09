@@ -3,13 +3,6 @@ summary: "حالة دعم Nextcloud Talk، والإمكانات، والتهيئ
 read_when:
   - العمل على ميزات قناة Nextcloud Talk
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # Nextcloud Talk (ملحق)
@@ -40,6 +33,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 ## الإعداد السريع (للمبتدئين)
 
 1. ثبّت ملحق Nextcloud Talk.
+
 2. على خادم Nextcloud لديك، أنشئ بوتًا:
 
    ```bash
@@ -47,9 +41,11 @@ openclaw plugins install ./extensions/nextcloud-talk
    ```
 
 3. فعِّل البوت في إعدادات الغرفة المستهدفة.
+
 4. هيِّئ OpenClaw:
    - التهيئة: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - أو متغيرات البيئة: `NEXTCLOUD_TALK_BOT_SECRET` (للحساب الافتراضي فقط)
+
 5. أعد تشغيل Gateway (البوابة) (أو أنهِ التهيئة الأولية).
 
 التهيئة الدنيا:
@@ -108,7 +104,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 | ---------------- | -------------- |
 | الرسائل المباشرة | مدعومة         |
 | الغرف            | مدعومة         |
-| السلاسل          | غير مدعومة     |
+| Threads          | غير مدعومة     |
 | الوسائط          | عناوين URL فقط |
 | التفاعلات        | مدعومة         |
 | الأوامر الأصلية  | غير مدعومة     |

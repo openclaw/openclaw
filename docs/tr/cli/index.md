@@ -4,13 +4,6 @@ read_when:
   - CLI komutları veya seçenekleri eklerken ya da değiştirirken
   - Yeni komut yüzeylerini belgelendirirken
 title: "CLI Başvurusu"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:03Z
 ---
 
 # CLI başvurusu
@@ -262,7 +255,7 @@ Uzantıları ve yapılandırmalarını yönetin:
 - `openclaw plugins enable <id>` / `disable <id>` — `plugins.entries.<id>.enabled`’yi aç/kapatır.
 - `openclaw plugins doctor` — eklenti yükleme hatalarını raporlar.
 
-Çoğu eklenti değişikliği bir gateway yeniden başlatması gerektirir. Bkz. [/plugin](/tools/plugin).
+Çoğu eklenti değişikliği bir gateway yeniden başlatması gerektirir. [/plugin](/tools/plugin).
 
 ## Bellek
 
@@ -274,7 +267,7 @@ Uzantıları ve yapılandırmalarını yönetin:
 
 ## Sohbet slash komutları
 
-Sohbet mesajları `/...` komutlarını (metin ve yerel) destekler. Bkz. [/tools/slash-commands](/tools/slash-commands).
+Sohbet mesajları `/...` komutlarını (metin ve yerel) destekler. [/tools/slash-commands](/tools/slash-commands).
 
 Öne çıkanlar:
 
@@ -286,7 +279,7 @@ Sohbet mesajları `/...` komutlarını (metin ve yerel) destekler. Bkz. [/tools/
 
 ### `setup`
 
-Yapılandırmayı ve çalışma alanını başlatır.
+Initialize config + workspace.
 
 Seçenekler:
 
@@ -465,7 +458,7 @@ Alt komutlar:
 
 ### `dns setup`
 
-Geniş alan keşfi DNS yardımcısı (CoreDNS + Tailscale). Bkz. [/gateway/discovery](/gateway/discovery).
+Geniş alan keşfi DNS yardımcısı (CoreDNS + Tailscale). [/gateway/discovery](/gateway/discovery).
 
 Seçenekler:
 
@@ -895,7 +888,7 @@ Seçenekler:
 
 ## Cron
 
-Zamanlanmış işleri yönetin (Gateway RPC). Bkz. [/automation/cron-jobs](/automation/cron-jobs).
+Zamanlanmış işleri yönetin (Gateway RPC). [/automation/cron-jobs](/automation/cron-jobs).
 
 Alt komutlar:
 
@@ -911,10 +904,9 @@ Alt komutlar:
 
 Tüm `cron` komutları `--url`, `--token`, `--timeout`, `--expect-final` kabul eder.
 
-## Node ana makinesi
+## Node host
 
-`node`, **headless node ana makinesi** çalıştırır veya arka plan hizmeti olarak yönetir. Bkz.
-[`openclaw node`](/cli/node).
+`node`, **headless node ana makinesi** çalıştırır veya arka plan hizmeti olarak yönetir. [`openclaw node`](/cli/node).
 
 Alt komutlar:
 
@@ -927,7 +919,7 @@ Alt komutlar:
 
 ## Node’lar
 
-`nodes`, Gateway ile konuşur ve eşleştirilmiş node’ları hedefler. Bkz. [/nodes](/nodes).
+`nodes`, Gateway ile konuşur ve eşleştirilmiş node’ları hedefler. [/nodes](/nodes).
 
 Yaygın seçenekler:
 
@@ -1013,11 +1005,11 @@ Eylemler:
 - `browser console [--level <error|warn|info>] [--target-id <id>]`
 - `browser pdf [--target-id <id>]`
 
-## Doküman araması
+## Docs search
 
 ### `docs [query...]`
 
-Canlı doküman dizininde arama yapar.
+Canlı doküman dizininde arama yapın.
 
 ## TUI
 

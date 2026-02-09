@@ -4,18 +4,11 @@ read_when:
   - คุณต้องการใช้Syntheticเป็นผู้ให้บริการโมเดล
   - คุณต้องการตั้งค่าคีย์APIหรือbase URLของSynthetic
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:42Z
 ---
 
 # Synthetic
 
-Syntheticเปิดให้ใช้งานเอ็นด์พอยต์ที่เข้ากันได้กับAnthropic OpenClawลงทะเบียนให้เป็นผู้ให้บริการ `synthetic` และใช้งานAnthropic Messages API
+Synthetic เปิดเผยเอ็นด์พอยต์ที่เข้ากันได้กับ Anthropic Syntheticเปิดให้ใช้งานเอ็นด์พอยต์ที่เข้ากันได้กับAnthropic OpenClawลงทะเบียนให้เป็นผู้ให้บริการ `synthetic` และใช้งานAnthropic Messages API
 
 ## Quick setup
 
@@ -69,7 +62,7 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 
 หมายเหตุ: ไคลเอนต์AnthropicของOpenClawจะต่อ `/v1` ต่อท้ายbase URL ดังนั้นให้ใช้
 `https://api.synthetic.new/anthropic` (ไม่ใช่ `/anthropic/v1`) หากSyntheticเปลี่ยน
-base URL ให้กำหนดทับ `models.providers.synthetic.baseUrl`
+base URL ให้กำหนดทับ `models.providers.synthetic.baseUrl` หาก Synthetic เปลี่ยน base URL ให้แทนที่ค่า `models.providers.synthetic.baseUrl`
 
 ## Model catalog
 

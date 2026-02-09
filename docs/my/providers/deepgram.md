@@ -4,24 +4,13 @@ read_when:
   - သင်သည် အသံဖိုင်တွဲများအတွက် Deepgram speech-to-text ကို အသုံးပြုလိုသောအခါ
   - အမြန် Deepgram ဖွဲ့စည်းပြင်ဆင်မှု ဥပမာတစ်ခု လိုအပ်သောအခါ
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:43Z
 ---
 
 # Deepgram (အသံမှ စာသားပြောင်းလဲခြင်း)
 
-Deepgram သည် speech-to-text API တစ်ခုဖြစ်သည်။ OpenClaw တွင် **အဝင် အသံ/voice note များကို စာသားပြောင်းလဲရန်**
-`tools.media.audio` မှတဆင့် အသုံးပြုသည်။
+Deepgram သည် speech-to-text API တစ်ခုဖြစ်သည်။ OpenClaw တွင် ၎င်းကို `tools.media.audio` မှတဆင့် **inbound audio/voice note transcription** အတွက် အသုံးပြုပါသည်။
 
-ဖွင့်ထားသောအခါ OpenClaw သည် အသံဖိုင်ကို Deepgram သို့ တင်ပို့ပြီး
-ပြန်ကြားချက် pipeline ထဲသို့ transcript ကို ထည့်သွင်းပေးသည်
-(`{{Transcript}}` + `[Audio]` block)။ ဤအရာသည် **streaming မဟုတ်ပါ**;
-ကြိုတင်မှတ်တမ်းတင်ထားသော transcription endpoint ကို အသုံးပြုသည်။
+Enable လုပ်ထားသောအခါ OpenClaw သည် audio file ကို Deepgram သို့ upload လုပ်ပြီး transcript ကို reply pipeline ထဲသို့ (`{{Transcript}}` + `[Audio]` block) ထည့်သွင်းပါသည်။ ဤအရာသည် **streaming မဟုတ်ပါ**; pre-recorded transcription endpoint ကို အသုံးပြုပါသည်။
 
 Website: [https://deepgram.com](https://deepgram.com)  
 Docs: [https://developers.deepgram.com](https://developers.deepgram.com)

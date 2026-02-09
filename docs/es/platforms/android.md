@@ -5,18 +5,11 @@ read_when:
   - Depuración del descubrimiento o la autenticación del Gateway en Android
   - Verificación de la paridad del historial de chat entre clientes
 title: "Aplicación Android"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:05Z
 ---
 
 # Aplicación Android (Nodo)
 
-## Panorama de soporte
+## Snapshot de soporte
 
 - Rol: aplicación de nodo complementario (Android no aloja el Gateway).
 - Gateway requerido: sí (ejecútelo en macOS, Linux o Windows vía WSL2).
@@ -43,7 +36,7 @@ Android se conecta directamente al WebSocket del Gateway (predeterminado `ws://<
   - Host/puerto del Gateway manual (alternativa)
 - Puede ejecutar la CLI (`openclaw`) en la máquina del Gateway (o vía SSH).
 
-### 1) Iniciar el Gateway
+### 1. Iniciar el Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Para configuraciones solo de tailnet (recomendado para Viena ⇄ Londres), vincu
 - Establezca `gateway.bind: "tailnet"` en `~/.openclaw/openclaw.json` en el host del Gateway.
 - Reinicie el Gateway / la app de barra de menús de macOS.
 
-### 2) Verificar el descubrimiento (opcional)
+### 2. Verificar el descubrimiento (opcional)
 
 Desde la máquina del Gateway:
 
@@ -77,7 +70,7 @@ El descubrimiento NSD/mDNS de Android no cruza redes. Si su nodo Android y el Ga
 
 Detalles y ejemplo de configuración de CoreDNS: [Bonjour](/gateway/bonjour).
 
-### 3) Conectar desde Android
+### 3. Conectar desde Android
 
 En la app de Android:
 
@@ -91,7 +84,7 @@ Después del primer emparejamiento exitoso, Android se reconecta automáticament
 - Al endpoint manual (si está habilitado); de lo contrario,
 - Al último Gateway descubierto (mejor esfuerzo).
 
-### 4) Aprobar el emparejamiento (CLI)
+### 4. Aprobar el emparejamiento (CLI)
 
 En la máquina del Gateway:
 
@@ -102,9 +95,9 @@ openclaw nodes approve <requestId>
 
 Detalles del emparejamiento: [Emparejamiento del Gateway](/gateway/pairing).
 
-### 5) Verificar que el nodo esté conectado
+### 5. Verificar que el nodo esté conectado
 
-- Vía estado de nodos:
+- Estado de los nodos:
 
   ```bash
   openclaw nodes status
@@ -116,7 +109,7 @@ Detalles del emparejamiento: [Emparejamiento del Gateway](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + historial
+### 6. Chat + historial
 
 La hoja de Chat del nodo Android usa la **clave de sesión primaria** del Gateway (`main`), por lo que el historial y las respuestas se comparten con WebChat y otros clientes:
 
@@ -124,7 +117,7 @@ La hoja de Chat del nodo Android usa la **clave de sesión primaria** del Gatewa
 - Enviar: `chat.send`
 - Actualizaciones push (mejor esfuerzo): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + cámara
+### 7. Canvas + cámara
 
 #### Host de Canvas del Gateway (recomendado para contenido web)
 

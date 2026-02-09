@@ -1,26 +1,19 @@
 ---
-summary: "用於傳送、Gateway 閘道器 與代理程式回覆的圖片與媒體處理規則"
+summary: "send、gateway 與 agent 回覆的影像與媒體處理規則"
 read_when:
   - 修改媒體管線或附件
 title: "圖片與媒體支援"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:38Z
 ---
 
 # 圖片與媒體支援 — 2025-12-05
 
-WhatsApp 頻道透過 **Baileys Web** 運作。本文件說明目前用於傳送、Gateway 閘道器 與代理程式回覆的媒體處理規則。
+WhatsApp 頻道透過 **Baileys Web** 運作。本文件說明目前用於傳送、Gateway 閘道器 與代理程式回覆的媒體處理規則。 本文件記錄了 send、gateway 與 agent 回覆目前的媒體處理規則。
 
 ## 目標
 
 - 透過 `openclaw message send --media` 傳送媒體，並可選擇性附加說明文字。
 - 允許來自網頁收件匣的自動回覆在文字之外包含媒體。
-- 維持各媒體類型的限制合理且可預期。
+- Keep per-type limits sane and predictable.
 
 ## CLI 介面
 
@@ -38,7 +31,7 @@ WhatsApp 頻道透過 **Baileys Web** 運作。本文件說明目前用於傳送
 - WhatsApp GIF 風格播放：傳送帶有 `gifPlayback: true` 的 MP4（CLI：`--gif-playback`），讓行動裝置客戶端可內嵌循環播放。
 - MIME 偵測優先順序為 magic bytes，其次為標頭，最後為副檔名。
 - 說明文字來源為 `--message` 或 `reply.text`；允許空白說明文字。
-- 記錄：非詳細模式顯示 `↩️`/`✅`；詳細模式包含大小與來源路徑／URL。
+- 記錄：非詳細模式顯示 `↩️`/`✅`；詳細模式包含大小與來源路徑/URL。
 
 ## 自動回覆管線
 
@@ -48,7 +41,7 @@ WhatsApp 頻道透過 **Baileys Web** 運作。本文件說明目前用於傳送
 
 ## 指令的入站媒體（Pi）
 
-- 當入站網頁訊息包含媒體時，OpenClaw 會下載至暫存檔，並提供樣板變數：
+- 當傳入的 Web 訊息包含媒體時，OpenClaw 會下載到暫存檔並提供樣板變數：
   - `{{MediaUrl}}`：指向入站媒體的偽 URL。
   - `{{MediaPath}}`：在執行指令前寫入的本機暫存路徑。
 - 當啟用每個工作階段的 Docker 沙箱時，入站媒體會被複製到沙箱工作區，且 `MediaPath`/`MediaUrl` 會被重寫為類似 `media/inbound/<filename>` 的相對路徑。
@@ -70,10 +63,10 @@ WhatsApp 頻道透過 **Baileys Web** 運作。本文件說明目前用於傳送
 - 圖片預設：10 MB（`tools.media.image.maxBytes`）。
 - 音訊預設：20 MB（`tools.media.audio.maxBytes`）。
 - 影片預設：50 MB（`tools.media.video.maxBytes`）。
-- 超出大小的媒體會略過理解步驟，但回覆仍會以原始內容送出。
+- Oversize media skips understanding, but replies still go through with the original body.
 
 ## 測試注意事項
 
-- 覆蓋圖片／音訊／文件案例的傳送與回覆流程。
+- Cover send + reply flows for image/audio/document cases.
 - 驗證圖片重新壓縮（大小限制）與音訊的語音備忘錄旗標。
 - 確保多媒體回覆會以序列方式分批傳送。

@@ -3,18 +3,11 @@ summary: "Session pruning: context ဖောင်းပွမှုကို �
 read_when:
   - tool output များကြောင့် LLM context ကြီးထွားမှုကို လျှော့ချချင်ပါက
   - agents.defaults.contextPruning ကို ချိန်ညှိနေပါက
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:25Z
 ---
 
 # Session Pruning
 
-Session pruning သည် LLM ကို ခေါ်မီ တစ်ကြိမ်ချင်းစီတွင် in-memory context ထဲရှိ **အဟောင်း tool ရလဒ်များ** ကို ဖြတ်တောက်ပေးသည်။ ၎င်းသည် on-disk session history ကို ပြန်ရေးခြင်း **မလုပ်ပါ** (`*.jsonl`)။
+Session pruning trims **old tool results** from the in-memory context right before each LLM call. It does **not** rewrite the on-disk session history (`*.jsonl`).
 
 ## မည်သည့်အချိန်တွင် လုပ်ဆောင်သနည်း
 
@@ -32,7 +25,7 @@ Session pruning သည် LLM ကို ခေါ်မီ တစ်ကြိမ
 
 ## ဘာတွေကောင်းမွန်လာသလဲ (ကုန်ကျစရိတ် + cache အပြုအမူ)
 
-- **ဘာကြောင့် prune လုပ်ရသလဲ:** Anthropic prompt caching သည် TTL အတွင်းသာ သက်ရောက်သည်။ Session တစ်ခုသည် TTL ကျော်လွန်ပြီး အလုပ်မလုပ်နေလျှင် နောက်တစ်ကြိမ် တောင်းဆိုမှုတွင် trim မလုပ်ထားပါက prompt အပြည့်အစုံကို ပြန်လည် cache လုပ်ရသည်။
+- **Why prune:** Anthropic prompt caching only applies within the TTL. If a session goes idle past the TTL, the next request re-caches the full prompt unless you trim it first.
 - **ဘာတွေ စျေးချိုလာသလဲ:** pruning သည် TTL ကုန်ဆုံးပြီးနောက် ပထမဆုံး တောင်းဆိုမှုအတွက် **cacheWrite** အရွယ်အစားကို လျှော့ချပေးသည်။
 - **TTL reset အရေးပါမှု:** pruning လုပ်ပြီးနောက် cache ဝင်းဒိုးသည် ပြန်လည် reset ဖြစ်သဖြင့် နောက်လိုက် တောင်းဆိုမှုများသည် အပြည့်အစုံကို ထပ်မံ cache မလုပ်ဘဲ အသစ် cache လုပ်ထားသည့် prompt ကို ပြန်အသုံးပြုနိုင်သည်။
 - **မလုပ်ပေးသည့်အရာ:** pruning သည် token များကို မထည့်ပါ၊ ကုန်ကျစရိတ်ကိုလည်း “နှစ်ဆ” မလုပ်ပါ။ TTL ပြီးနောက် ပထမဆုံး တောင်းဆိုမှုတွင် ဘာကို cache လုပ်မလဲ ဆိုတာကိုသာ ပြောင်းလဲပေးသည်။
@@ -47,7 +40,7 @@ Session pruning သည် LLM ကို ခေါ်မီ တစ်ကြိမ
 
 ## Context window ခန့်မှန်းခြင်း
 
-Pruning သည် ခန့်မှန်း context window (chars ≈ tokens × 4) ကို အသုံးပြုသည်။ အခြေခံ window ကို အောက်ပါ အစဉ်အတိုင်း ဖြေရှင်းသည်—
+Pruning uses an estimated context window (chars ≈ tokens × 4). The base window is resolved in this order:
 
 1. `models.providers.*.models[].contextWindow` override။
 2. မော်ဒယ် သတ်မှတ်ချက် `contextWindow` (model registry မှ)။
@@ -79,7 +72,7 @@ Pruning သည် ခန့်မှန်း context window (chars ≈ tokens �
 ## အခြား အကန့်အသတ်များနှင့် အပြန်အလှန်သက်ရောက်မှု
 
 - Built-in tool များသည် ကိုယ်တိုင် output ကို truncate လုပ်ပြီးသားဖြစ်သည်။ Session pruning သည် အပိုအလွှာတစ်ခုအဖြစ် အလုပ်လုပ်ပြီး အချိန်ကြာရှည် ဆွေးနွေးမှုများတွင် မော်ဒယ် context အတွင်း tool output များ များလွန်းစွာ စုပုံမသွားစေရန် ကာကွယ်ပေးသည်။
-- Compaction သည် သီးခြားဖြစ်သည်—compaction သည် အကျဉ်းချုပ်ရေးပြီး သိမ်းဆည်းသည်၊ pruning သည် တောင်းဆိုမှုတစ်ကြိမ်ချင်းစီအတွက် ယာယီသာ ဖြစ်သည်။ [/concepts/compaction](/concepts/compaction) ကို ကြည့်ပါ။
+- Compaction is separate: compaction summarizes and persists, pruning is transient per request. See [/concepts/compaction](/concepts/compaction).
 
 ## Defaults (ဖွင့်ထားသောအခါ)
 

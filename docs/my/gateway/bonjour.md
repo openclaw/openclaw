@@ -4,27 +4,15 @@ read_when:
   - macOS/iOS တွင် Bonjour ရှာဖွေတွေ့ရှိမှု ပြဿနာများကို ဒီဘဂ်လုပ်နေချိန်
   - mDNS service types, TXT records သို့မဟုတ် discovery UX ကို ပြောင်းလဲနေချိန်
 title: "Bonjour ရှာဖွေတွေ့ရှိမှု"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:33Z
 ---
 
 # Bonjour / mDNS ရှာဖွေတွေ့ရှိမှု
 
-OpenClaw သည် Bonjour (mDNS / DNS‑SD) ကို **LAN အတွင်းသာ အသုံးပြုရန် အဆင်ပြေမှုအတွက်** အသုံးပြုပြီး
-လုပ်ဆောင်နေသော Gateway (WebSocket endpoint) ကို ရှာဖွေတွေ့ရှိပါသည်။ ၎င်းသည် best‑effort ဖြစ်ပြီး
-SSH သို့မဟုတ် Tailnet အခြေပြု ချိတ်ဆက်မှုကို **အစားထိုးမပေးနိုင်ပါ**။
+၎င်းသည် best‑effort ဖြစ်ပြီး SSH သို့မဟုတ် Tailnet-based connectivity ကို **အစားထိုး မလုပ်ပါ**။ Node နှင့် gateway တို့သည် မတူညီသော networks များပေါ်တွင် ရှိပါက multicast mDNS သည် boundary ကို မကျော်နိုင်ပါ။
 
 ## Tailscale ပေါ်တွင် Wide‑area Bonjour (Unicast DNS‑SD)
 
-node နှင့် gateway တို့သည် မတူညီသော ကွန်ယက်များပေါ်တွင် ရှိပါက multicast mDNS သည်
-နယ်နိမိတ်ကို မဖြတ်ကျော်နိုင်ပါ။ **unicast DNS‑SD**
-("Wide‑Area Bonjour") ကို Tailscale ပေါ်တွင် အသုံးပြုရန် ပြောင်းလဲခြင်းဖြင့်
-တူညီသော discovery UX ကို ဆက်လက်အသုံးပြုနိုင်ပါသည်။
+Tailscale ပေါ်မှ **unicast DNS‑SD** (“Wide‑Area Bonjour”) ကို အသုံးပြု၍ တူညီသော discovery UX ကို ထိန်းထားနိုင်ပါသည်။ OpenClaw သည် မည်သည့် discovery domain မဆို ထောက်ပံ့ပါသည်။ `openclaw.internal.` သည် ဥပမာတစ်ခုသာ ဖြစ်ပါသည်။
 
 အဆင့်မြင့် လုပ်ဆောင်ရမည့် အချက်များ:
 
@@ -34,7 +22,7 @@ node နှင့် gateway တို့သည် မတူညီသော က�
 3. သင်ရွေးချယ်ထားသော domain ကို clients များ (iOS အပါအဝင်) မှ ထို DNS server ဖြင့် resolve လုပ်စေရန်
    Tailscale **split DNS** ကို configure လုပ်ပါ။
 
-OpenClaw သည် မည်သည့် discovery domain ကိုမဆို ပံ့ပိုးပါသည်; `openclaw.internal.` သည် ဥပမာတစ်ခုသာ ဖြစ်ပါသည်။
+OpenClaw supports any discovery domain; `openclaw.internal.` is just an example.
 iOS/Android nodes များသည် `local.` နှင့် သင် configure လုပ်ထားသော wide‑area domain နှစ်ခုလုံးကို browse လုပ်ပါသည်။
 
 ### Gateway config (အကြံပြု)
@@ -76,8 +64,8 @@ clients များသည် tailnet DNS ကို လက်ခံပြီး�
 
 ### Gateway listener လုံခြုံရေး (အကြံပြု)
 
-Gateway WS port (မူလ `18789`) သည် ပုံမှန်အားဖြင့် loopback သို့ bind လုပ်ထားပါသည်။ LAN/tailnet
-အသုံးပြုရန်အတွက် bind ကို ထင်ရှားစွာ သတ်မှတ်ပြီး auth ကို ဆက်လက် ဖွင့်ထားပါ။
+The Gateway WS port (default `18789`) binds to loopback by default. For LAN/tailnet
+access, bind explicitly and keep auth enabled.
 
 tailnet‑only setup များအတွက်:
 
@@ -129,8 +117,8 @@ mDNS resolver ပြဿနာတစ်ခုကို ကြုံတွေ့�
 
 ## Gateway logs တွင် ဒီဘဂ်လုပ်ခြင်း
 
-Gateway သည် rolling log file တစ်ခုကို ရေးသားပါသည် (startup အချိန်တွင်
-`gateway log file: ...` အဖြစ် ပုံနှိပ်ပြပါသည်)။ အထူးသဖြင့် အောက်ပါ `bonjour:` လိုင်းများကို ရှာဖွေကြည့်ပါ:
+The Gateway writes a rolling log file (printed on startup as
+`gateway log file: ...`). Look for `bonjour:` lines, especially:
 
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
@@ -152,9 +140,8 @@ log အတွင်းတွင် browser state ပြောင်းလဲမ�
 - **Bonjour သည် ကွန်ယက်များကို မဖြတ်ကျော်နိုင်ပါ**: Tailnet သို့မဟုတ် SSH ကို အသုံးပြုပါ။
 - **Multicast ကို ပိတ်ထားခြင်း**: Wi‑Fi ကွန်ယက်အချို့တွင် mDNS ကို ပိတ်ထားပါသည်။
 - **Sleep / interface churn**: macOS သည် အချိန်အနည်းငယ်အတွင်း mDNS ရလဒ်များကို ကျသွားစေနိုင်ပါသည်; ပြန်လည်ကြိုးစားပါ။
-- **Browse အလုပ်လုပ်ပေမယ့် resolve မလုပ်နိုင်ခြင်း**: စက်အမည်များကို ရိုးရှင်းစွာထားပါ (emoji သို့မဟုတ်
-  punctuation များကို ရှောင်ပါ) ထို့နောက် Gateway ကို restart လုပ်ပါ။ service instance name သည်
-  host name မှ ဆင်းသက်လာသောကြောင့် အလွန်ရှုပ်ထွေးသော အမည်များသည် resolver အချို့ကို ရှုပ်ထွေးစေနိုင်ပါသည်။
+- **Browse works but resolve fails**: keep machine names simple (avoid emojis or
+  punctuation), then restart the Gateway. Service instance name သည် host name မှ ဆင်းသက်လာသောကြောင့် အလွန်ရှုပ်ထွေးသော နာမည်များသည် resolver အချို့ကို ရှုပ်ထွေးစေနိုင်ပါသည်။
 
 ## Escaped instance names (`\032`)
 

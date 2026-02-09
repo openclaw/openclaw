@@ -5,13 +5,6 @@ read_when:
   - Vous ajoutez un nouveau formateur de canal ou un mappage de styles
   - Vous corrigez des régressions de mise en forme entre les canaux
 title: "Mise en forme Markdown"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:18Z
 ---
 
 # Mise en forme Markdown
@@ -126,7 +119,7 @@ des plages de style SPOILER. Les autres canaux les traitent comme du texte brut.
 5. **Tester :** ajouter ou mettre à jour les tests de mise en forme et un test de livraison sortante si le
    canal utilise le découpage.
 
-## Pièges courants
+## Gouchettes communes
 
 - Les jetons à chevrons Slack (`<@U123>`, `<#C123>`, `<https://...>`) doivent être
   préservés ; échapper le HTML brut en toute sécurité.

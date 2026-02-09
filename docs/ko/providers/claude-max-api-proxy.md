@@ -5,13 +5,6 @@ read_when:
   - Claude Code CLI 를 감싸는 로컬 API 서버가 필요할 때
   - API 키 대신 구독을 사용해 비용을 절감하고 싶을 때
 title: "Claude Max API Proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:53Z
 ---
 
 # Claude Max API Proxy
@@ -20,10 +13,10 @@ x-i18n:
 
 ## 왜 사용하나요?
 
-| 접근 방식       | 비용                                             | 적합한 용도                  |
-| --------------- | ------------------------------------------------ | ---------------------------- |
-| Anthropic API   | 토큰당 과금 (~$15/M 입력, $75/M 출력, Opus 기준) | 프로덕션 앱, 대량 사용       |
-| Claude Max 구독 | 월 $200 정액                                     | 개인 사용, 개발, 무제한 사용 |
+| 접근 방식         | 비용                                                                       | 최적 대상             |
+| ------------- | ------------------------------------------------------------------------ | ----------------- |
+| Anthropic API | 토큰당 과금 (~$15/M 입력, $75/M 출력, Opus 기준) | 프로덕션 앱, 대량 사용     |
+| Claude Max 구독 | 월 $200 정액                                                                | 개인 사용, 개발, 무제한 사용 |
 
 Claude Max 구독이 있고 OpenAI 호환 도구와 함께 사용하고 싶다면, 이 프록시는 상당한 비용을 절감해 줄 수 있습니다.
 
@@ -97,7 +90,7 @@ OpenClaw 를 사용자 지정 OpenAI 호환 엔드포인트로 프록시에 연�
 
 ## 사용 가능한 모델
 
-| 모델 ID           | 매핑 대상       |
+| 모델 ID             | 매핑 대상           |
 | ----------------- | --------------- |
 | `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |
@@ -149,7 +142,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 - 프록시는 로컬에서 실행되며, 제3자 서버로 데이터를 전송하지 않습니다
 - 스트리밍 응답이 완전히 지원됩니다
 
-## 함께 보기
+## 참고
 
 - [Anthropic provider](/providers/anthropic) - setup-token 또는 API 키를 사용한 Claude 용 네이티브 OpenClaw 통합
 - [OpenAI provider](/providers/openai) - OpenAI/Codex 구독용

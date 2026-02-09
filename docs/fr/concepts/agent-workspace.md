@@ -4,13 +4,6 @@ read_when:
   - Vous devez expliquer l’espace de travail de l’agent ou son organisation de fichiers
   - Vous souhaitez sauvegarder ou migrer un espace de travail d’agent
 title: "Espace de travail de l’agent"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: 84c550fd89b5f247
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:24Z
 ---
 
 # Espace de travail de l’agent
@@ -31,7 +24,7 @@ Lorsque le sandboxing est active et que `workspaceAccess` n’est pas `"rw"`, le
 fonctionnent a l’interieur d’un espace de travail en sandbox sous `~/.openclaw/sandboxes`, et non
 dans votre espace de travail hote.
 
-## Emplacement par defaut
+## Emplacement par défaut
 
 - Par defaut : `~/.openclaw/workspace`
 - Si `OPENCLAW_PROFILE` est defini et n’est pas `"default"`, la valeur par defaut devient
@@ -64,7 +57,8 @@ deroutante, car un seul espace de travail est actif a la fois.
 
 **Recommandation :** conservez un seul espace de travail actif. Si vous n’utilisez plus les
 dossiers supplementaires, archivez‑les ou deplacez‑les a la Corbeille (par exemple
-`trash ~/openclaw`). Si vous conservez intentionnellement plusieurs espaces de travail,
+`trash ~/openclaw`).
+Si vous conservez intentionnellement plusieurs espaces de travail,
 assurez‑vous que `agents.defaults.workspace` pointe vers celui qui est actif.
 
 `openclaw doctor` avertit lorsqu’il detecte des repertoires d’espace de travail supplementaires.
@@ -151,7 +145,7 @@ afin qu’il soit sauvegarde et recuperable.
 Executez ces etapes sur la machine ou s’execute la Gateway (passerelle) (c’est la que se trouve
 l’espace de travail).
 
-### 1) Initialiser le depot
+### 1. Initialiser le depot
 
 Si git est installe, les espaces de travail tout neufs sont initialises automatiquement. Si
 cet espace de travail n’est pas deja un depot, executez :
@@ -163,7 +157,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Ajouter un remote prive (options conviviales pour debutants)
+### 2. Ajouter un remote prive (options conviviales pour debutants)
 
 Option A : interface web GitHub
 
@@ -198,7 +192,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Mises a jour continues
+### 3. Mises a jour continues
 
 ```bash
 git status

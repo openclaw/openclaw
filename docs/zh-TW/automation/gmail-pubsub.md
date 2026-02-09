@@ -4,13 +4,6 @@ read_when:
   - 將 Gmail 收件匣觸發器接線至 OpenClaw
   - 設定用於代理程式喚醒的 Pub/Sub 推送
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:53Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -22,8 +15,8 @@ x-i18n:
 - 已安裝並登入 `gcloud`（[安裝指南](https://docs.cloud.google.com/sdk/docs/install-sdk)）。
 - 已安裝並授權 Gmail 帳戶使用的 `gog`（gogcli）（[gogcli.sh](https://gogcli.sh/)）。
 - 已啟用 OpenClaw hooks（請參閱 [Webhooks](/automation/webhook)）。
-- 已登入 `tailscale`（[tailscale.com](https://tailscale.com/)）。支援的設定使用 Tailscale Funnel 作為公開的 HTTPS 端點。
-  其他通道服務也可運作，但需自行設定／不受支援，且需要手動接線。
+- `tailscale` 已登入（[tailscale.com](https://tailscale.com/)）。 支援的設定使用 Tailscale Funnel 作為公開的 HTTPS 端點。
+  其他通道服務也可行，但屬於 DIY／未支援，且需要手動設定。
   目前我們支援的是 Tailscale。
 
 範例 hook 設定（啟用 Gmail 預設對應）：
@@ -66,11 +59,11 @@ x-i18n:
 }
 ```
 
-若要固定頻道，請設定 `channel` + `to`。否則 `channel: "last"`
+如果你想要固定的頻道，請設定 `channel` + `to`。 若要固定頻道，請設定 `channel` + `to`。否則 `channel: "last"`
 會使用最後一次的傳送路由（回退至 WhatsApp）。
 
 若要在 Gmail 執行時強制使用較便宜的模型，請在對應中設定 `model`
-（`provider/model` 或別名）。如果你強制 `agents.defaults.models`，也請在此加入。
+（`provider/model` 或別名）。如果你強制 `agents.defaults.models`，也請在此加入。 如果你強制使用 `agents.defaults.models`，請在那裡包含它。
 
 若要專門為 Gmail hooks 設定預設模型與思考層級，請在設定中加入
 `hooks.gmail.model` / `hooks.gmail.thinking`：
@@ -88,11 +81,11 @@ x-i18n:
 
 注意事項：
 
-- 對應中的每個 hook `model`/`thinking` 仍會覆寫這些預設值。
+- 對應表中每個 hook 的 `model`／`thinking` 仍會覆寫這些預設值。
 - 回退順序：`hooks.gmail.model` → `agents.defaults.model.fallbacks` → 主要（驗證／速率限制／逾時）。
 - 若已設定 `agents.defaults.models`，Gmail 模型必須在允許清單中。
-- Gmail hook 內容預設會以外部內容安全邊界包裝。
-  若要停用（危險），請設定 `hooks.gmail.allowUnsafeExternalContent: true`。
+- Gmail hook 的內容預設會以外部內容安全邊界包裹。
+  若要停用（有風險），請設定 `hooks.gmail.allowUnsafeExternalContent: true`。
 
 若要進一步自訂 payload 處理，請加入 `hooks.mappings` 或在
 `hooks.transformsDir` 下放置 JS/TS 轉換模組（請參閱 [Webhooks](/automation/webhook)）。
@@ -119,8 +112,11 @@ openclaw webhooks gmail setup \
 如果你需要後端接收帶有前綴的路徑，請將
 `hooks.gmail.tailscale.target`（或 `--tailscale-target`）設定為完整 URL，例如
 `http://127.0.0.1:8788/gmail-pubsub`，並對應 `hooks.gmail.serve.path`。
+如果你需要後端接收帶前綴的路徑，請將
+`hooks.gmail.tailscale.target`（或 `--tailscale-target`）設定為完整的 URL，例如
+`http://127.0.0.1:8788/gmail-pubsub`，並與 `hooks.gmail.serve.path` 相符。
 
-想要自訂端點？請使用 `--push-endpoint <url>` 或 `--tailscale off`。
+想要自訂端點嗎？ 想要自訂端點？請使用 `--push-endpoint <url>` 或 `--tailscale off`。
 
 平台說明：在 macOS 上，精靈會透過 Homebrew 安裝 `gcloud`、`gogcli` 與 `tailscale`；
 在 Linux 上請先手動安裝。
@@ -183,7 +179,7 @@ gog gmail watch start \
 
 ## 執行推送處理器
 
-本機範例（共用權杖驗證）：
+本地範例（共用權杖驗證）：
 
 ```bash
 gog gmail watch serve \

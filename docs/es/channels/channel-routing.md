@@ -3,13 +3,6 @@ summary: "Reglas de enrutamiento por canal (WhatsApp, Telegram, Discord, Slack) 
 read_when:
   - Al cambiar el enrutamiento de canales o el comportamiento de la bandeja de entrada
 title: "Enrutamiento de canales"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:28Z
 ---
 
 # Canales y enrutamiento

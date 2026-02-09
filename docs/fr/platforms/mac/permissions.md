@@ -5,13 +5,6 @@ read_when:
   - Packaging ou signature de l'application macOS
   - Changement des identifiants de bundle ou des chemins d'installation de l'application
 title: "Autorisations macOS"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: d012589c0583dd0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:18Z
 ---
 
 # Autorisations macOS (TCC)
@@ -46,6 +39,12 @@ sudo tccutil reset Accessibility bot.molt.mac
 sudo tccutil reset ScreenCapture bot.molt.mac
 sudo tccutil reset AppleEvents
 ```
+
+## Permissions de fichiers et de dossiers (Bureau/Documents/Téléchargements)
+
+macOS peut également ouvrir des portes, des documents et des téléchargements pour les processus terminaux/arrière-plan. Si des listes de fichiers ou de répertoires sont suspendues, accordez l'accès au même contexte de processus que celui qui effectue des opérations de fichiers (par exemple Terminal/iTerm, Lancement de l'application LaunchAgent, ou processus SSH).
+
+Solution de contournement : déplacez les fichiers dans l'espace de travail OpenClaw (`~/.openclaw/workspace`) si vous voulez éviter les subventions par dossier.
 
 Si vous testez des autorisations, signez toujours avec un veritable certificat. Les builds ad-hoc
 ne sont acceptables que pour des executions locales rapides ou les autorisations n'ont pas d'importance.

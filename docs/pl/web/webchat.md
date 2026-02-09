@@ -3,13 +3,6 @@ summary: "Statyczny host WebChat w pętli zwrotnej oraz użycie Gateway WS dla i
 read_when:
   - Debugowanie lub konfigurowanie dostępu do WebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:48Z
 ---
 
 # WebChat (interfejs WebSocket Gateway)

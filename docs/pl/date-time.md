@@ -4,13 +4,6 @@ read_when:
   - Zmieniasz sposób prezentacji znaczników czasu dla modelu lub użytkowników
   - Debugujesz formatowanie czasu w wiadomościach lub w wyjściu promptu systemowego
 title: "Data i czas"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:10Z
 ---
 
 # Data i czas

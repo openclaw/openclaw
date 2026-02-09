@@ -4,20 +4,13 @@ read_when:
   - 接続性や認証の問題があり、ガイド付きの修正を行いたい場合
   - 更新後に健全性チェックを行いたい場合
 title: "ドクター"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:10Z
 ---
 
 # `openclaw doctor`
 
 ゲートウェイとチャンネル向けのヘルスチェックとクイック修復です。
 
-関連情報：
+関連項目:
 
 - トラブルシューティング： [Troubleshooting](/gateway/troubleshooting)
 - セキュリティ監査： [Security](/gateway/security)
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 注記：
 
-- 対話型プロンプト（キーチェーンや OAuth の修復など）は、stdin が TTY の場合かつ `--non-interactive` が **設定されていない** 場合にのみ実行されます。ヘッドレス実行（cron、Telegram、ターミナルなし）ではプロンプトはスキップされます。
+- 対話型プロンプト（キーチェーンや OAuth の修復など）は、stdin が TTY の場合かつ `--non-interactive` が **設定されていない** 場合にのみ実行されます。ヘッドレス実行（cron、Telegram、ターミナルなし）ではプロンプトはスキップされます。 ヘッドレスラン(cron、Telegram、端末なし)はプロンプトをスキップします。
 - `--fix`（`--repair` のエイリアス）は、`~/.openclaw/openclaw.json.bak` にバックアップを書き込み、不明な設定キーを削除し、各削除内容を一覧表示します。
 
 ## macOS： `launchctl` 環境変数の上書き

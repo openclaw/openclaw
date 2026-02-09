@@ -1,16 +1,9 @@
 ---
-summary: „Ausführung im Hintergrund und Prozessverwaltung“
+summary: "„Ausführung im Hintergrund und Prozessverwaltung“"
 read_when:
   - Hinzufügen oder Ändern des Verhaltens der Hintergrundausführung
   - Debuggen von lang laufenden Exec-Aufgaben
-title: „Background Exec und Process Tool“
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:10Z
+title: "„Background Exec und Process Tool“"
 ---
 
 # Background Exec + Process Tool

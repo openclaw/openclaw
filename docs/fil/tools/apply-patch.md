@@ -4,19 +4,11 @@ read_when:
   - Kailangan mo ng structured na pag-edit ng file sa maraming file
   - Gusto mong idokumento o i-debug ang mga edit na nakabatay sa patch
 title: "apply_patch Tool"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:52Z
 ---
 
 # apply_patch tool
 
-Mag-apply ng mga pagbabago sa file gamit ang isang structured na patch format. Mainam ito para sa mga multi-file
-o multi-hunk na edit kung saan magiging marupok ang isang solong `edit` na tawag.
+15. Ilapat ang mga pagbabago sa file gamit ang isang structured patch format. 16. Ito ay mainam para sa mga multi-file o multi-hunk na pag-edit kung saan marupok ang isang solong `edit` call.
 
 Tumatanggap ang tool ng isang `input` na string na bumabalot sa isa o higit pang operasyon sa file:
 
@@ -42,9 +34,9 @@ Tumatanggap ang tool ng isang `input` na string na bumabalot sa isa o higit pang
 - Ang mga path ay nireresolba nang relative sa workspace root.
 - Gamitin ang `*** Move to:` sa loob ng isang `*** Update File:` hunk para mag-rename ng mga file.
 - Minamarkahan ng `*** End of File` ang isang EOF-only insert kapag kinakailangan.
-- Experimental at naka-disable bilang default. I-enable gamit ang `tools.exec.applyPatch.enabled`.
-- Para sa OpenAI lamang (kabilang ang OpenAI Codex). Opsyonal na i-gate ayon sa model sa pamamagitan ng
-  `tools.exec.applyPatch.allowModels`.
+- 17. Eksperimental at naka-disable bilang default. 18. I-enable gamit ang `tools.exec.applyPatch.enabled`.
+- 19. OpenAI-only (kasama ang OpenAI Codex). 16. Opsyonal na i-gate ayon sa modelo gamit ang
+      `tools.exec.applyPatch.allowModels`.
 - Ang config ay nasa ilalim lamang ng `tools.exec`.
 
 ## Example

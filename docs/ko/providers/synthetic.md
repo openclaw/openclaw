@@ -4,13 +4,6 @@ read_when:
   - Synthetic 를 모델 프로바이더로 사용하려는 경우
   - Synthetic API 키 또는 기본 URL 설정이 필요한 경우
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:02Z
 ---
 
 # Synthetic

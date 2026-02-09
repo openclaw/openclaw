@@ -3,15 +3,8 @@ summary: "Katı yapılandırma doğrulaması + yalnızca doctor tarafından yap�
 read_when:
   - Yapılandırma doğrulama davranışını tasarlarken veya uygularken
   - Yapılandırma geçişleri ya da doctor iş akışları üzerinde çalışırken
-  - Eklenti yapılandırma şemalarını veya eklenti yükleme kapılamasını ele alırken
+  - Handling plugin config schemas or plugin load gating
 title: "Katı Yapılandırma Doğrulaması"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:44Z
 ---
 
 # Katı yapılandırma doğrulaması (yalnızca doctor geçişleri)
@@ -19,7 +12,7 @@ x-i18n:
 ## Hedefler
 
 - **Bilinmeyen yapılandırma anahtarlarını her yerde reddetmek** (kök + iç içe).
-- **Şeması olmayan eklenti yapılandırmasını reddetmek**; o eklentiyi yüklememek.
+- **Reject plugin config without a schema**; don’t load that plugin.
 - **Yükleme sırasında eski otomatik geçişleri kaldırmak**; geçişler yalnızca doctor üzerinden çalışır.
 - **Başlangıçta doctor’ı (dry-run) otomatik çalıştırmak**; geçersizse tanılama dışı komutları engellemek.
 
@@ -37,12 +30,12 @@ x-i18n:
 - Bilinmeyen `channels.<id>` anahtarları, bir eklenti manifestosu kanal kimliğini beyan etmedikçe hatadır.
 - Eklenti manifestoları (`openclaw.plugin.json`) tüm eklentiler için zorunludur.
 
-## Eklenti şeması zorunluluğu
+## Plugin schema enforcement
 
 - Her eklenti, yapılandırması için katı bir JSON Şeması sağlar (manifesto içinde satır içi).
 - Eklenti yükleme akışı:
   1. Eklenti manifestosunu + şemayı çözümle (`openclaw.plugin.json`).
-  2. Yapılandırmayı şemaya göre doğrula.
+  2. Validate config against the schema.
   3. Şema yoksa veya yapılandırma geçersizse: eklenti yüklemesini engelle, hatayı kaydet.
 - Hata iletisi şunları içerir:
   - Eklenti kimliği
@@ -57,11 +50,11 @@ x-i18n:
   - Bir özet + eyleme geçirilebilir hatalar yazdırır.
   - Talimat verir: `openclaw doctor --fix`.
 - `openclaw doctor --fix`:
-  - Geçişleri uygular.
+  - Applies migrations.
   - Bilinmeyen anahtarları kaldırır.
   - Güncellenmiş yapılandırmayı yazar.
 
-## Komut kapılama (yapılandırma geçersizken)
+## Command gating (when config is invalid)
 
 İzin verilenler (yalnızca tanılama):
 

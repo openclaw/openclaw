@@ -4,13 +4,6 @@ read_when:
   - Chẩn đoán hành vi xoay vòng hồ sơ xác thực, thời gian cooldown hoặc dự phòng mô hình
   - Cập nhật quy tắc failover cho hồ sơ xác thực hoặc mô hình
 title: "Failover mô hình"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:43Z
 ---
 
 # Failover mô hình
@@ -35,7 +28,7 @@ Xem thêm chi tiết: [/concepts/oauth](/concepts/oauth)
 Các loại thông tin xác thực:
 
 - `type: "api_key"` → `{ provider, key }`
-- `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` cho một số nhà cung cấp)
+- Nó **không** xoay vòng sau mỗi yêu cầu. }`(+`projectId`/`enterpriseUrl\` cho một số nhà cung cấp)
 
 ## ID hồ sơ
 
@@ -62,8 +55,8 @@ Nếu không cấu hình thứ tự tường minh, OpenClaw dùng thứ tự rou
 
 ### Gắn chặt theo phiên (thân thiện với cache)
 
-OpenClaw **gắn cố định hồ sơ xác thực đã chọn theo từng phiên** để giữ cache của nhà cung cấp luôn ấm.
-Nó **không** xoay vòng ở mỗi yêu cầu. Hồ sơ được gắn sẽ được tái sử dụng cho đến khi:
+OpenClaw **ghim hồ sơ xác thực đã chọn theo từng phiên** để giữ bộ nhớ đệm của nhà cung cấp luôn ấm.
+Điều này hữu ích cho: Hồ sơ được ghim sẽ được tái sử dụng cho đến khi:
 
 - phiên được reset (`/new` / `/reset`)
 - một lần compaction hoàn tất (số đếm compaction tăng)
@@ -72,22 +65,22 @@ Nó **không** xoay vòng ở mỗi yêu cầu. Hồ sơ được gắn sẽ đ�
 Việc chọn thủ công qua `/model …@<profileId>` đặt **ghi đè của người dùng** cho phiên đó
 và sẽ không tự động xoay vòng cho đến khi bắt đầu phiên mới.
 
-Các hồ sơ được auto‑pin (do bộ định tuyến phiên chọn) được coi là một **ưu tiên**:
-chúng được thử trước, nhưng OpenClaw có thể xoay sang hồ sơ khác khi gặp rate limit/timeout.
-Các hồ sơ do người dùng pin sẽ bị khóa vào hồ sơ đó; nếu thất bại và có cấu hình
-dự phòng mô hình, OpenClaw sẽ chuyển sang mô hình tiếp theo thay vì đổi hồ sơ.
+Auto‑pinned profiles (selected by the session router) are treated as a **preference**:
+they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts.
+Các hồ sơ do người dùng ghim sẽ bị khóa vào hồ sơ đó; nếu hồ sơ thất bại và đã cấu hình fallback cho model, OpenClaw sẽ chuyển sang model tiếp theo thay vì đổi hồ sơ.
 
 ### Vì sao OAuth có thể “trông như bị mất”
 
-Nếu bạn có cả hồ sơ OAuth và hồ sơ khóa API cho cùng một nhà cung cấp, round‑robin có thể chuyển qua lại giữa chúng qua các tin nhắn nếu không được pin. Để buộc dùng một hồ sơ duy nhất:
+Nếu bạn có cả hồ sơ OAuth và hồ sơ API key cho cùng một nhà cung cấp, round‑robin có thể chuyển giữa chúng qua các tin nhắn trừ khi được ghim. To force a single profile:
 
 - Pin bằng `auth.order[provider] = ["provider:profileId"]`, hoặc
 - Dùng ghi đè theo phiên qua `/model …` với ghi đè hồ sơ (khi UI/bề mặt chat của bạn hỗ trợ).
 
 ## Cooldown
 
-Khi một hồ sơ thất bại do lỗi xác thực/rate‑limit (hoặc timeout trông giống rate limiting), OpenClaw đánh dấu nó vào trạng thái cooldown và chuyển sang hồ sơ tiếp theo.
-Các lỗi định dạng/yêu cầu không hợp lệ (ví dụ lỗi xác thực ID lời gọi công cụ Cloud Code Assist) cũng được coi là đủ điều kiện failover và dùng cùng cơ chế cooldown.
+When a profile fails due to auth/rate‑limit errors (or a timeout that looks
+like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
+Các lỗi định dạng/yêu cầu không hợp lệ (ví dụ lỗi xác thực ID của tool call Cloud Code Assist) được coi là đủ điều kiện failover và dùng cùng thời gian cooldown.
 
 Cooldown dùng backoff theo cấp số nhân:
 
@@ -112,7 +105,7 @@ Trạng thái được lưu trong `auth-profiles.json` dưới `usageStats`:
 
 ## Vô hiệu hóa do thanh toán
 
-Các lỗi thanh toán/tín dụng (ví dụ “insufficient credits” / “credit balance too low”) được coi là đủ điều kiện failover, nhưng thường không mang tính tạm thời. Thay vì cooldown ngắn, OpenClaw đánh dấu hồ sơ là **bị vô hiệu hóa** (với backoff dài hơn) và xoay sang hồ sơ/nhà cung cấp tiếp theo.
+Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Thay vì cooldown ngắn, OpenClaw đánh dấu hồ sơ là **disabled** (với thời gian backoff dài hơn) và xoay sang hồ sơ/nhà cung cấp tiếp theo.
 
 Trạng thái được lưu trong `auth-profiles.json`:
 
@@ -134,9 +127,7 @@ Mặc định:
 
 ## Dự phòng mô hình
 
-Nếu tất cả hồ sơ của một nhà cung cấp đều thất bại, OpenClaw chuyển sang mô hình tiếp theo trong
-`agents.defaults.model.fallbacks`. Điều này áp dụng cho lỗi xác thực, rate limit và
-timeout khi đã dùng hết xoay vòng hồ sơ (các lỗi khác không làm tiến tới dự phòng).
+Nếu tất cả hồ sơ của một nhà cung cấp đều thất bại, OpenClaw chuyển sang model tiếp theo trong `agents.defaults.model.fallbacks`. Điều này áp dụng cho lỗi xác thực, giới hạn tốc độ, và timeout đã làm cạn kiệt việc xoay vòng hồ sơ (các lỗi khác không làm tiến fallback).
 
 Khi một lần chạy bắt đầu với ghi đè mô hình (hooks hoặc CLI), các dự phòng vẫn kết thúc tại
 `agents.defaults.model.primary` sau khi thử mọi dự phòng đã cấu hình.

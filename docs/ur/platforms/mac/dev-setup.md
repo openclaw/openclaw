@@ -3,13 +3,6 @@ summary: "OpenClaw macOS ایپ پر کام کرنے والے ڈویلپرز ک�
 read_when:
   - macOS ڈویلپمنٹ ماحول سیٹ اپ کرنا
 title: "macOS ڈیو سیٹ اپ"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:29Z
 ---
 
 # macOS ڈویلپر سیٹ اپ
@@ -23,7 +16,7 @@ x-i18n:
 1. **Xcode 26.2+**: Swift ڈویلپمنٹ کے لیے درکار۔
 2. **Node.js 22+ اور pnpm**: gateway، CLI، اور پیکیجنگ اسکرپٹس کے لیے درکار۔
 
-## 1. انحصارات انسٹال کریں
+## 1) Dependencies انسٹال کریں
 
 پراجیکٹ سطح کے انحصارات انسٹال کریں:
 
@@ -31,7 +24,7 @@ x-i18n:
 pnpm install
 ```
 
-## 2. ایپ بنائیں اور پیکیج کریں
+## 2. ایپ کو بلڈ اور پیکیج کریں
 
 macOS ایپ بنانے اور اسے `dist/OpenClaw.app` میں پیکیج کرنے کے لیے، یہ چلائیں:
 
@@ -44,7 +37,7 @@ macOS ایپ بنانے اور اسے `dist/OpenClaw.app` میں پیکیج کر
 ڈیولپمنٹ رن موڈز، سائننگ فلیگز، اور Team ID سے متعلق خرابیوں کے ازالے کے لیے macOS ایپ README دیکھیں:
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **نوٹ**: ad-hoc سائن کی گئی ایپس سکیورٹی پرامپٹس ظاہر کر سکتی ہیں۔ اگر ایپ فوراً "Abort trap 6" کے ساتھ کریش ہو جائے، تو [خرابیوں کا ازالہ](#troubleshooting) سیکشن دیکھیں۔
+> **نوٹ**: Ad-hoc سائن کی گئی ایپس سیکیورٹی پرامپٹس دکھا سکتی ہیں۔ اگر ایپ فوراً "Abort trap 6" کے ساتھ کریش ہو جائے تو [Troubleshooting](#troubleshooting) سیکشن دیکھیں۔
 
 ## 3. CLI انسٹال کریں
 
@@ -96,9 +89,9 @@ xcrun swift --version
 
 2. اگر یہ ناکام ہو جائے، تو macOS سے "clean slate" نافذ کرنے کے لیے [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) میں `BUNDLE_ID` کو عارضی طور پر تبدیل کریں۔
 
-### Gateway "Starting..." پر غیر معینہ مدت تک
+### Gateway "Starting..." پر لامتناہی طور پر رکا ہوا
 
-اگر gateway کی حالت "Starting..." پر ہی رہتی ہے، تو چیک کریں کہ کہیں کوئی zombie پروسیس پورٹ کو روکے ہوئے تو نہیں:
+اگر gateway کی اسٹیٹس "Starting..." پر ہی رہے تو چیک کریں کہ کہیں کوئی zombie پروسیس پورٹ کو تھامے ہوئے تو نہیں:
 
 ```bash
 openclaw gateway status
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-اگر دستی رن پورٹ کو روکے ہوئے ہے، تو اس پروسیس کو روک دیں (Ctrl+C)۔ آخری حل کے طور پر، اوپر ملنے والے PID کو ختم کریں۔
+اگر کوئی دستی رن پورٹ کو تھامے ہوئے ہے تو اس پروسیس کو روک دیں (Ctrl+C)۔ آخری حل کے طور پر، اوپر ملنے والا PID ختم کر دیں۔

@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez ajouter/supprimer des comptes de canal (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - Vous souhaitez verifier le statut d'un canal ou suivre les journaux d'un canal
 title: "canaux"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:48Z
 ---
 
 # `openclaw channels`
@@ -49,7 +42,7 @@ openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp
 ```
 
-## Depannage
+## Problemes courants
 
 - Executez `openclaw status --deep` pour un diagnostic general.
 - Utilisez `openclaw doctor` pour des corrections guidees.
@@ -57,7 +50,7 @@ openclaw channels logout --channel whatsapp
 
 ## Sondage des capacites
 
-Recupere des indications de capacite du fournisseur (intentions/portees lorsque disponibles) ainsi que la prise en charge statique des fonctionnalites :
+Récupérer les astuces de capacité du fournisseur (intentions/portées si disponible) ainsi que la prise en charge des fonctionnalités statiques :
 
 ```bash
 openclaw channels capabilities

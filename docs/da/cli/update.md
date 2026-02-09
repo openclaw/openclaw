@@ -4,13 +4,6 @@ read_when:
   - Du vil opdatere et kilde-checkout sikkert
   - Du har brug for at forstå forkortelsesadfærden for `--update`
 title: "opdatering"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:10Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,9 @@ Options:
 
 ## `update wizard`
 
-Interaktivt flow til at vælge en opdateringskanal og bekræfte, om Gateway skal genstartes
-efter opdatering (standard er at genstarte). Hvis du vælger `dev` uden et git-checkout,
-tilbyder den at oprette et.
+Interaktiv flow for at vælge en opdateringskanal og bekræfte, om Gateway
+skal genstartes efter opdatering (standard er at genstarte). Hvis du vælger `dev` uden en git checkout, det
+tilbyder at oprette en.
 
 ## What it does
 

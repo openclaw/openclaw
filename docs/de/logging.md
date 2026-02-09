@@ -4,17 +4,10 @@ read_when:
   - Sie benötigen einen einsteigerfreundlichen Überblick zur Protokollierung
   - Sie möchten Protokollierungsstufen oder -formate konfigurieren
   - Sie beheben Fehler und müssen Protokolle schnell finden
-title: "Protokollierung"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:55Z
+title: "Logging"
 ---
 
-# Protokollierung
+# Logging
 
 OpenClaw protokolliert an zwei Stellen:
 
@@ -24,7 +17,7 @@ OpenClaw protokolliert an zwei Stellen:
 Diese Seite erläutert, wo Protokolle liegen, wie man sie liest und wie man
 Protokollierungsstufen und -formate konfiguriert.
 
-## Wo Protokolle liegen
+## Wo Logs leben
 
 Standardmäßig schreibt das Gateway eine rotierende Protokolldatei unter:
 
@@ -52,7 +45,7 @@ Verwenden Sie die CLI, um die Gateway-Protokolldatei per RPC zu verfolgen:
 openclaw logs --follow
 ```
 
-Ausgabemodi:
+Ausgabemodus:
 
 - **TTY-Sitzungen**: ansprechend, farbig, strukturierte Protokollzeilen.
 - **Nicht-TTY-Sitzungen**: Klartext.
@@ -121,7 +114,7 @@ Die gesamte Protokollierungskonfiguration befindet sich unter `logging` in `~/.o
 }
 ```
 
-### Protokollstufen
+### Log-Level
 
 - `logging.level`: Stufe der **Dateiprotokolle** (JSONL).
 - `logging.consoleLevel`: **Konsolen**-Ausführlichkeitsstufe.
@@ -136,7 +129,7 @@ Die gesamte Protokollierungskonfiguration befindet sich unter `logging` in `~/.o
 - `compact`: kompaktere Ausgabe (ideal für lange Sitzungen).
 - `json`: JSON pro Zeile (für Log-Prozessoren).
 
-### Schwärzung
+### Redaction
 
 Werkzeugzusammenfassungen können sensible Tokens schwärzen, bevor sie die Konsole erreichen:
 

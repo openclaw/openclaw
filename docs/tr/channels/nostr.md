@@ -4,13 +4,6 @@ read_when:
   - OpenClaw’ın Nostr üzerinden DM almasını istiyorsunuz
   - Merkeziyetsiz mesajlaşma kuruyorsunuz
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
 ---
 
 # Nostr
@@ -78,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Yapılandırma referansı
 
-| Anahtar      | Tür      | Varsayılan                                  | Açıklama                                |
-| ------------ | -------- | ------------------------------------------- | --------------------------------------- |
-| `privateKey` | string   | gerekli                                     | `nsec` veya hex formatında özel anahtar |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URL’leri (WebSocket)              |
-| `dmPolicy`   | string   | `pairing`                                   | DM erişim politikası                    |
-| `allowFrom`  | string[] | `[]`                                        | İzin verilen gönderen pubkey’leri       |
-| `enabled`    | boolean  | `true`                                      | Kanalı etkinleştir/devre dışı bırak     |
-| `name`       | string   | -                                           | Görünen ad                              |
-| `profile`    | object   | -                                           | NIP-01 profil meta verileri             |
+| Anahtar      | Type                                                         | Varsayılan                                  | Açıklama                                      |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------- |
+| `privateKey` | string                                                       | gerekli                                     | `nsec` veya hex formatında özel anahtar       |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URL’leri (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM erişim politikası                          |
+| `allowFrom`  | string[] | `[]`                                        | İzin verilen gönderen pubkey’leri             |
+| `enabled`    | boolean                                                      | `true`                                      | Kanalı etkinleştir/devre dışı bırak           |
+| `name`       | string                                                       | -                                           | Display name                                  |
+| `profile`    | object                                                       | -                                           | NIP-01 profil meta verileri                   |
 
 ## Profil meta verileri
 
@@ -173,12 +166,12 @@ Varsayılanlar: `relay.damus.io` ve `nos.lol`.
 
 ## Protokol desteği
 
-| NIP    | Durum       | Açıklama                                  |
-| ------ | ----------- | ----------------------------------------- |
-| NIP-01 | Desteklenir | Temel olay formatı + profil meta verileri |
-| NIP-04 | Desteklenir | Şifreli DM’ler (`kind:4`)                 |
-| NIP-17 | Planlanıyor | Hediye sarmalı DM’ler                     |
-| NIP-44 | Planlanıyor | Sürümlemeli şifreleme                     |
+| NIP    | Status        | Açıklama                                     |
+| ------ | ------------- | -------------------------------------------- |
+| NIP-01 | Destekleniyor | Temel olay formatı + profil meta verileri    |
+| NIP-04 | Destekleniyor | Şifreli DM’ler (`kind:4`) |
+| NIP-17 | Planlanıyor   | Hediye sarmalı DM’ler                        |
+| NIP-44 | Planlanıyor   | Versioned encryption                         |
 
 ## Test
 
@@ -205,7 +198,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 1. Günlüklerden bot pubkey’ini (npub) not edin.
 2. Bir Nostr istemcisi açın (Damus, Amethyst vb.).
 3. Bot pubkey’ine DM gönderin.
-4. Yanıtı doğrulayın.
+4. Verify the response.
 
 ## Sorun Giderme
 

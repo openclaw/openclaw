@@ -1,16 +1,9 @@
 ---
-summary: „Verwenden Sie Amazon-Bedrock-Modelle (Converse API) mit OpenClaw“
+summary: "„Verwenden Sie Amazon-Bedrock-Modelle (Converse API) mit OpenClaw“"
 read_when:
   - Sie möchten Amazon-Bedrock-Modelle mit OpenClaw verwenden
   - Sie benötigen die Einrichtung von AWS-Anmeldeinformationen/Regionen für Modellaufrufe
-title: „Amazon Bedrock“
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:02Z
+title: "Amazon Bedrock"
 ---
 
 # Amazon Bedrock
@@ -54,7 +47,7 @@ Hinweise:
 - `defaultContextWindow` (Standard: `32000`) und `defaultMaxTokens` (Standard: `4096`)
   werden für erkannte Modelle verwendet (überschreiben Sie diese, wenn Sie Ihre Modellgrenzen kennen).
 
-## Einrichtung (manuell)
+## Setup (manuell)
 
 1. Stellen Sie sicher, dass AWS-Anmeldeinformationen auf dem **Gateway-Host** verfügbar sind:
 
@@ -103,7 +96,8 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2-Instanzrollen
 
-Wenn OpenClaw auf einer EC2-Instanz mit angehängter IAM-Rolle ausgeführt wird, verwendet das AWS SDK automatisch den Instance Metadata Service (IMDS) zur Authentifizierung. Die Anmeldeinformations-Erkennung von OpenClaw prüft derzeit jedoch nur Umgebungsvariablen und nicht IMDS-Anmeldeinformationen.
+Wenn OpenClaw auf einer EC2-Instanz mit angehängter IAM-Rolle ausgeführt wird, verwendet das AWS SDK automatisch den Instance Metadata Service (IMDS) zur Authentifizierung.
+Die Anmeldeinformations-Erkennung von OpenClaw prüft derzeit jedoch nur Umgebungsvariablen und nicht IMDS-Anmeldeinformationen.
 
 **Workaround:** Setzen Sie `AWS_PROFILE=default`, um zu signalisieren, dass AWS-Anmeldeinformationen verfügbar sind. Die tatsächliche Authentifizierung verwendet weiterhin die Instanzrolle über IMDS.
 

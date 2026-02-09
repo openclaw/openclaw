@@ -4,20 +4,13 @@ read_when:
   - При создании или валидации выпуска OpenClaw для macOS
   - При обновлении appcast Sparkle или связанных ресурсов фида
 title: "Выпуск macOS"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:48Z
 ---
 
 # Выпуск OpenClaw для macOS (Sparkle)
 
 Это приложение теперь поставляется с автообновлениями Sparkle. Релизные сборки должны быть подписаны Developer ID, упакованы в zip и опубликованы с подписанной записью appcast.
 
-## Предварительные требования
+## Предварительные запросы
 
 - Установлен сертификат Developer ID Application (пример: `Developer ID Application: <Developer Name> (<TEAMID>)`).
 - Путь к приватному ключу Sparkle задан в переменных окружения как `SPARKLE_PRIVATE_KEY_FILE` (путь к вашему приватному ключу Sparkle ed25519; публичный ключ вшит в Info.plist). Если он отсутствует, проверьте `~/.profile`.

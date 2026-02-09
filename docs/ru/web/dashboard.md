@@ -3,13 +3,6 @@ summary: "Доступ и аутентификация к панели Gateway (
 read_when:
   - Изменение аутентификации панели или режимов её публикации
 title: "Панель"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:02Z
 ---
 
 # Панель (Control UI)
@@ -27,7 +20,7 @@ x-i18n:
 - [Tailscale](/gateway/tailscale) — автоматизация Serve/Funnel.
 - [Web surfaces](/web) — режимы привязки и примечания по безопасности.
 
-Аутентификация применяется на этапе рукопожатия WebSocket через `connect.params.auth`
+Аутентификация выполняется при рукопожатии WebSocket через `connect.params.auth`
 (токен или пароль). См. `gateway.auth` в [Конфигурации Gateway](/gateway/configuration).
 
 Примечание по безопасности: Control UI — это **административная поверхность** (чат, конфигурация, подтверждения выполнения команд).

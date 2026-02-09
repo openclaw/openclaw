@@ -4,13 +4,6 @@ read_when:
   - 브라우저에서 Gateway(게이트웨이)를 운영하려는 경우
   - SSH 터널 없이 Tailnet 접근이 필요한 경우
 title: "Control UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:52Z
 ---
 
 # Control UI (브라우저)
@@ -40,8 +33,7 @@ Gateway(게이트웨이)가 동일한 컴퓨터에서 실행 중이라면 다음
 ## 디바이스 페어링 (첫 연결)
 
 새 브라우저나 디바이스에서 Control UI 에 연결하면, Gateway(게이트웨이)는
-동일한 Tailnet 에서 `gateway.auth.allowTailscale: true` 을 사용 중이더라도 **일회성 페어링 승인**을 요구합니다.
-이는 무단 접근을 방지하기 위한 보안 조치입니다.
+동일한 Tailnet 에서 `gateway.auth.allowTailscale: true` 을 사용 중이더라도 **일회성 페어링 승인**을 요구합니다. 이는 무단 접근을 방지하기 위한 보안 조치입니다.
 
 **표시되는 내용:** "disconnected (1008): pairing required"
 
@@ -62,7 +54,7 @@ openclaw devices approve <requestId>
 **참고 사항:**
 
 - 로컬 연결 (`127.0.0.1`) 은 자동 승인됩니다.
-- 원격 연결 (LAN, Tailnet 등) 은 명시적 승인이 필요합니다.
+- 원격 연결 (LAN, Tailnet 등) 은 명시적 승인이 필요합니다. 명시적인 승인이 필요합니다.
 - 각 브라우저 프로필은 고유한 디바이스 ID 를 생성하므로, 브라우저를 변경하거나
   브라우저 데이터를 삭제하면 재페어링이 필요합니다.
 
@@ -70,7 +62,7 @@ openclaw devices approve <requestId>
 
 - Gateway WS 를 통한 모델과의 채팅 (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - 채팅에서 도구 호출 스트리밍 + 실시간 도구 출력 카드 (에이전트 이벤트)
-- 채널: WhatsApp/Telegram/Discord/Slack + 플러그인 채널 (Mattermost 등) 상태 + QR 로그인 + 채널별 설정 (`channels.status`, `web.login.*`, `config.patch`)
+- 채널: WhatsApp/Telegram/Discord/Slack + 플러그인 채널(Mattermost 등) 채널: WhatsApp/Telegram/Discord/Slack + 플러그인 채널 (Mattermost 등) 상태 + QR 로그인 + 채널별 설정 (`channels.status`, `web.login.*`, `config.patch`)
 - 인스턴스: 상태 목록 + 새로 고침 (`system-presence`)
 - 세션: 목록 + 세션별 thinking/verbose 재정의 (`sessions.list`, `sessions.patch`)
 - Cron 작업: 목록/추가/실행/활성화/비활성화 + 실행 기록 (`cron.*`)
@@ -117,8 +109,7 @@ openclaw gateway --tailscale serve
 기본적으로 Serve 요청은 `gateway.auth.allowTailscale` 이 `true` 인 경우
 Tailscale ID 헤더 (`tailscale-user-login`) 를 통해 인증할 수 있습니다. OpenClaw 는
 `tailscale whois` 를 사용해 `x-forwarded-for` 주소를 확인하여 헤더와 일치하는지 검증하며,
-요청이 Tailscale 의 `x-forwarded-*` 헤더와 함께 loopback 으로 들어오는 경우에만 이를 허용합니다.
-Serve 트래픽에 대해서도 토큰/비밀번호를 요구하려면
+요청이 Tailscale 의 `x-forwarded-*` 헤더와 함께 loopback 으로 들어오는 경우에만 이를 허용합니다. Serve 트래픽에 대해서도 토큰/비밀번호를 요구하려면
 `gateway.auth.allowTailscale: false` 을 설정하거나 `gateway.auth.mode: "password"` 을 강제하십시오.
 
 ### Tailnet 바인드 + 토큰
@@ -156,8 +147,7 @@ OpenClaw 는 디바이스 ID 가 없는 Control UI 연결을 **차단**합니다
 }
 ```
 
-이는 Control UI 에 대해 디바이스 ID + 페어링을 비활성화합니다 (HTTPS 에서도 동일).
-네트워크를 신뢰하는 경우에만 사용하십시오.
+이는 Control UI 에 대해 디바이스 ID + 페어링을 비활성화합니다 (HTTPS 에서도 동일). 네트워크를 신뢰하는 경우에만 사용하십시오.
 
 HTTPS 설정 가이드는 [Tailscale](/gateway/tailscale)을 참고하십시오.
 
@@ -185,8 +175,7 @@ pnpm ui:dev # auto-installs UI deps on first run
 
 ## 디버깅/테스트: 개발 서버 + 원격 Gateway
 
-Control UI 는 정적 파일이며, WebSocket 대상은 구성 가능하고 HTTP origin 과 달라도 됩니다.
-이는 Vite 개발 서버는 로컬에서 실행하고 Gateway(게이트웨이)는 다른 곳에서 실행할 때 유용합니다.
+Control UI 는 정적 파일이며, WebSocket 대상은 구성 가능하고 HTTP origin 과 달라도 됩니다. 이는 Vite 개발 서버는 로컬에서 실행하고 Gateway(게이트웨이)는 다른 곳에서 실행할 때 유용합니다.
 
 1. UI 개발 서버 시작: `pnpm ui:dev`
 2. 다음과 같은 URL 열기:

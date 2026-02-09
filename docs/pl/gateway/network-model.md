@@ -3,13 +3,6 @@ summary: "Jak łączą się Gateway, węzły i host canvas."
 read_when:
   - Chcesz uzyskać zwięzły obraz modelu sieciowego Gateway
 title: "Model sieciowy"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:11Z
 ---
 
 Większość operacji przechodzi przez Gateway (`openclaw gateway`), pojedynczy, długotrwale działający

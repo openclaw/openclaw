@@ -4,13 +4,6 @@ read_when:
   - Ændring af adfærd eller standarder for vækkeord for stemmeaktivering
   - Tilføjelse af nye nodeplatforme, der har brug for synkronisering af vækkeord
 title: "Stemmeaktivering"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:26Z
 ---
 
 # Stemmeaktivering (Globale vækkeord)
@@ -42,7 +35,7 @@ Struktur:
 
 Noter:
 
-- Triggere normaliseres (trimmes, tomme værdier fjernes). Tomme lister falder tilbage til standarder.
+- Udløsere er normaliserede (trimmet, tomme droppet). Tomme lister falder tilbage til standardværdier.
 - Grænser håndhæves af hensyn til sikkerhed (maks. antal/længde).
 
 ### Hændelser

@@ -3,13 +3,6 @@ summary: "Agent-runtime (embedded pi-mono), werkruimtecontract en sessie-bootstr
 read_when:
   - Wijzigen van agent-runtime, werkruimte-bootstrap of sessiegedrag
 title: "Agent-runtime"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:23Z
 ---
 
 # Agent-runtime 🤖

@@ -5,18 +5,16 @@ read_when:
   - Transcript သန့်စင်ခြင်း သို့မဟုတ် tool-call ပြုပြင်ရေး လိုဂျစ်ကို ပြောင်းလဲနေစဉ်
   - ပံ့ပိုးသူများအကြား tool-call id မကိုက်ညီမှုများကို စုံစမ်းနေစဉ်
 title: "Transcript Hygiene"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:09Z
 ---
 
 # Transcript Hygiene (Provider Fixups)
 
-ဤစာရွက်စာတမ်းသည် run မတိုင်မီ (model context တည်ဆောက်ခြင်းအတွက်) transcript များအပေါ် **ပံ့ပိုးသူအလိုက် ပြုပြင်ချက်များ** ကို ဖော်ပြထားသည်။ ဤအရာများသည် ပံ့ပိုးသူ၏ တင်းကျပ်သော လိုအပ်ချက်များကို ဖြည့်ဆည်းရန် အသုံးပြုသော **မှတ်ဉာဏ်အတွင်း (in-memory)** ပြင်ဆင်ချက်များဖြစ်သည်။ ဤ hygiene အဆင့်များသည် disk ပေါ်ရှိ သိမ်းဆည်းထားသော JSONL transcript ကို **ပြန်ရေးမည်မဟုတ်ပါ**။ သို့သော် session ကို load မလုပ်မီ သီးခြား session-file ပြုပြင်ရေး အဆင့်တစ်ခုတွင် မမှန်ကန်သော JSONL ဖိုင်များကို မမှန်သော လိုင်းများကို ဖယ်ရှားခြင်းဖြင့် ပြန်ရေးနိုင်သည်။ ပြုပြင်မှု ဖြစ်ပေါ်ပါက မူရင်းဖိုင်ကို session ဖိုင်နှင့်အတူ အရန်အဖြစ် သိမ်းဆည်းထားသည်။
+This document describes **provider-specific fixes** applied to transcripts before a run
+(building model context). These are **in-memory** adjustments used to satisfy strict
+provider requirements. These hygiene steps do **not** rewrite the stored JSONL transcript
+on disk; however, a separate session-file repair pass may rewrite malformed JSONL files
+by dropping invalid lines before the session is loaded. When a repair occurs, the original
+file is backed up alongside the session file.
 
 အကျယ်အဝန်းတွင် ပါဝင်သည့်အရာများမှာ—
 
@@ -31,45 +29,46 @@ Transcript သိမ်းဆည်းမှု အသေးစိတ်မျ�
 
 - [/reference/session-management-compaction](/reference/session-management-compaction)
 
-ကို ကြည့်ရှုပါ။
-
 ---
 
 ## Where this runs
 
-Transcript hygiene အားလုံးကို embedded runner အတွင်း ဗဟိုပြုထားသည်—
+All transcript hygiene is centralized in the embedded runner:
 
-- Policy ရွေးချယ်ခြင်း: `src/agents/transcript-policy.ts`
-- သန့်စင်ခြင်း/ပြုပြင်ခြင်း လုပ်ဆောင်ခြင်း: `sanitizeSessionHistory` ကို `src/agents/pi-embedded-runner/google.ts` အတွင်း
+- Policy selection: `src/agents/transcript-policy.ts`
+- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+
+The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
 Policy သည် ဘာတွေကို အသုံးချမလဲ ဆုံးဖြတ်ရန် `provider`, `modelApi`, နှင့် `modelId` ကို အသုံးပြုသည်။
 
-Transcript hygiene နှင့် သီးခြားအနေဖြင့် session ဖိုင်များကို load မလုပ်မီ (လိုအပ်ပါက) ပြုပြင်သည်—
-
-- `repairSessionFileIfNeeded` ကို `src/agents/session-file-repair.ts` အတွင်း
-- `run/attempt.ts` နှင့် `compact.ts` (embedded runner) မှ ခေါ်သုံးသည်
+- `repairSessionFileIfNeeded` in `src/agents/session-file-repair.ts`
+- Called from `run/attempt.ts` and `compact.ts` (embedded runner)
 
 ---
 
 ## Global rule: image sanitization
 
-Image payload များကို အရွယ်အစား ကန့်သတ်ချက်များကြောင့် ပံ့ပိုးသူဘက်မှ ငြင်းပယ်ခြင်း မဖြစ်စေရန် အမြဲ သန့်စင်ထားသည် (အလွန်ကြီးမားသော base64 image များကို downscale/recompress ပြုလုပ်သည်)။
+Image payloads are always sanitized to prevent provider-side rejection due to size
+limits (downscale/recompress oversized base64 images).
 
 Implementation:
 
-- `sanitizeSessionMessagesImages` ကို `src/agents/pi-embedded-helpers/images.ts` အတွင်း
-- `sanitizeContentBlocksImages` ကို `src/agents/tool-images.ts` အတွင်း
+- `sanitizeSessionMessagesImages` in `src/agents/pi-embedded-helpers/images.ts`
+- `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 
 ---
 
 ## Global rule: malformed tool calls
 
-`input` နှင့် `arguments` နှစ်ခုလုံး မပါရှိသော Assistant tool-call block များကို model context တည်ဆောက်မတိုင်မီ ဖယ်ရှားသည်။ ၎င်းသည် အပိုင်းပိုင်းသာ သိမ်းဆည်းထားသော tool call များ (ဥပမာ rate limit ပျက်ကွက်ပြီးနောက်) ကြောင့် ပံ့ပိုးသူ ငြင်းပယ်မှုများ မဖြစ်စေရန် ကာကွယ်ပေးသည်။
+Assistant tool-call blocks that are missing both `input` and `arguments` are dropped
+before model context is built. This prevents provider rejections from partially
+persisted tool calls (for example, after a rate limit failure).
 
 Implementation:
 
-- `sanitizeToolCallInputs` ကို `src/agents/session-transcript-repair.ts` အတွင်း
-- `sanitizeSessionHistory` ကို `src/agents/pi-embedded-runner/google.ts` အတွင်း အသုံးချသည်
+- `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
 
 ---
 
@@ -77,53 +76,53 @@ Implementation:
 
 **OpenAI / OpenAI Codex**
 
-- Image သန့်စင်ခြင်းသာ။
-- OpenAI Responses/Codex သို့ model ပြောင်းသည့်အခါ၊ နောက်ဆက်တွဲ content block မပါရှိသော orphaned reasoning signature များ (သီးခြား reasoning item များ) ကို ဖယ်ရှားသည်။
-- Tool call id သန့်စင်ခြင်း မရှိ။
-- Tool result ချိတ်ဆက်မှု ပြုပြင်ခြင်း မရှိ။
-- Turn အတည်ပြုခြင်း သို့မဟုတ် အစဉ်လိုက်စီစဉ်ခြင်း မရှိ။
-- Synthetic tool result မရှိ။
-- Thought signature ဖြုတ်ထုတ်ခြင်း မရှိ။
+- Image sanitization only.
+- On model switch into OpenAI Responses/Codex, drop orphaned reasoning signatures (standalone reasoning items without a following content block).
+- No tool call id sanitization.
+- No tool result pairing repair.
+- No turn validation or reordering.
+- No synthetic tool results.
+- No thought signature stripping.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
 
-- Tool call id သန့်စင်ခြင်း: အက္ခရာ-ကိန်းဂဏန်း သီးသန့် (strict alphanumeric)။
-- Tool result ချိတ်ဆက်မှု ပြုပြင်ခြင်းနှင့် synthetic tool result များ။
-- Turn အတည်ပြုခြင်း (Gemini စတိုင် turn အလှည့်အပြောင်း)။
-- Google turn ordering ပြုပြင်ချက် (history ကို assistant ဖြင့် စတင်ပါက အသုံးပြုသူ bootstrap သေးငယ်တစ်ခုကို ရှေ့တွင် ထည့်သွင်းသည်)။
-- Antigravity Claude: thinking signature များကို normalize ပြုလုပ်ပြီး လက်မှတ်မပါသော thinking block များကို ဖယ်ရှားသည်။
+- Tool call id sanitization: strict alphanumeric.
+- Tool result pairing repair and synthetic tool results.
+- Turn validation (Gemini-style turn alternation).
+- Google turn ordering fixup (prepend a tiny user bootstrap if history starts with assistant).
+- Antigravity Claude: normalize thinking signatures; drop unsigned thinking blocks.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
-- Tool result ချိတ်ဆက်မှု ပြုပြင်ခြင်းနှင့် synthetic tool result များ။
-- Turn အတည်ပြုခြင်း (တင်းကျပ်သော အလှည့်အပြောင်းကို ဖြည့်ဆည်းရန် ဆက်တိုက် user turn များကို ပေါင်းစည်းသည်)။
+- Tool result pairing repair and synthetic tool results.
+- Turn validation (merge consecutive user turns to satisfy strict alternation).
 
-**Mistral (model-id အခြေပြု ရှာဖွေတွေ့ရှိမှု အပါအဝင်)**
+**Mistral (including model-id based detection)**
 
-- Tool call id သန့်စင်ခြင်း: strict9 (အက္ခရာ-ကိန်းဂဏန်း အရှည် 9)။
+- Tool call id sanitization: strict9 (alphanumeric length 9).
 
 **OpenRouter Gemini**
 
-- Thought signature သန့်ရှင်းရေး: base64 မဟုတ်သော `thought_signature` တန်ဖိုးများကို ဖယ်ရှားပြီး base64 ကိုသာ ထားရှိသည်။
+- Thought signature cleanup: strip non-base64 `thought_signature` values (keep base64).
 
 **Everything else**
 
-- Image သန့်စင်ခြင်းသာ။
+- Image sanitization only.
 
 ---
 
 ## Historical behavior (pre-2026.1.22)
 
-2026.1.22 ထုတ်ဝေမှု မတိုင်မီ OpenClaw သည် transcript hygiene အလွှာများစွာကို အသုံးချခဲ့သည်—
+Before the 2026.1.22 release, OpenClaw applied multiple layers of transcript hygiene:
 
-- **transcript-sanitize extension** တစ်ခုသည် context တည်ဆောက်မှုတိုင်းတွင် chạy လုပ်ပြီး အောက်ပါအရာများကို လုပ်ဆောင်နိုင်ခဲ့သည်—
-  - Tool use/result ချိတ်ဆက်မှုကို ပြုပြင်ခြင်း။
-  - Tool call id များကို သန့်စင်ခြင်း ( `_`/`-` ကို ထိန်းသိမ်းထားသော non-strict မုဒ် အပါအဝင်)။
-- Runner သည်လည်း ပံ့ပိုးသူအလိုက် သန့်စင်မှုများကို လုပ်ဆောင်ပြီး အလုပ်ထပ်နေမှုများ ဖြစ်ပေါ်ခဲ့သည်။
-- Provider policy အပြင်ဘက်တွင် ထပ်မံ ပြောင်းလဲမှုများ ဖြစ်ပေါ်ခဲ့ပြီး—
-  - သိမ်းဆည်းမည့်အခါ assistant စာသားမှ `<final>` tag များကို ဖြုတ်ထုတ်ခြင်း။
-  - အလွတ် assistant error turn များကို ဖယ်ရှားခြင်း။
-  - Tool call ပြီးနောက် assistant content ကို ဖြတ်တောက်ခြင်း။
+- A **transcript-sanitize extension** ran on every context build and could:
+  - Repair tool use/result pairing.
+  - Sanitize tool call ids (including a non-strict mode that preserved `_`/`-`).
+- The runner also performed provider-specific sanitization, which duplicated work.
+- Additional mutations occurred outside the provider policy, including:
+  - Stripping `<final>` tags from assistant text before persistence.
+  - Dropping empty assistant error turns.
+  - Trimming assistant content after tool calls.
 
-ဤရှုပ်ထွေးမှုကြောင့် ပံ့ပိုးသူအကြား regression များ ဖြစ်ပေါ်ခဲ့သည် (အထူးသဖြင့် `openai-responses`
-`call_id|fc_id` ချိတ်ဆက်မှု)။ 2026.1.22 သန့်ရှင်းရေးတွင် extension ကို ဖယ်ရှားပြီး လိုဂျစ်ကို runner အတွင်း ဗဟိုပြုခဲ့ကာ OpenAI ကို image သန့်စင်ခြင်းအပြင် **no-touch** အဖြစ် သတ်မှတ်하였다။
+This complexity caused cross-provider regressions (notably `openai-responses`
+`call_id|fc_id` pairing). 2026.1.22 cleanup တွင် extension ကို ဖယ်ရှားပြီး logic ကို runner တွင် စုစည်းကာ OpenAI ကို image sanitization အပြင် **no-touch** ဖြစ်စေခဲ့သည်။

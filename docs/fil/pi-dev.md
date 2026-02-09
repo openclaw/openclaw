@@ -1,12 +1,5 @@
 ---
 title: "Workflow ng Pag-develop para sa Pi"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:36Z
 ---
 
 # Workflow ng Pag-develop para sa Pi
@@ -58,7 +51,7 @@ Para sa behavior ng tool call, mag-prompt para sa isang `read` o `exec` na aksyo
 
 ## Clean Slate Reset
 
-Nananatili ang state sa ilalim ng OpenClaw state directory. Ang default ay `~/.openclaw`. Kung naka-set ang `OPENCLAW_STATE_DIR`, gamitin ang directory na iyon sa halip.
+Nakatira ang state sa ilalim ng OpenClaw state directory. Ang default ay `~/.openclaw`. Kung nakatakda ang `OPENCLAW_STATE_DIR`, gamitin ang direktoryong iyon sa halip.
 
 Upang i-reset ang lahat:
 
@@ -69,7 +62,7 @@ Upang i-reset ang lahat:
 - `sessions/` kung may umiiral na legacy path
 - `workspace/` kung gusto mo ng blangkong workspace
 
-Kung gusto mo lang i-reset ang mga session, burahin ang `agents/<agentId>/sessions/` at `agents/<agentId>/sessions.json` para sa agent na iyon. Panatilihin ang `credentials/` kung ayaw mong mag-reauthenticate.
+Kung ang gusto mo lang ay i‑reset ang mga session, burahin ang `agents/<agentId>/sessions/` at `agents/<agentId>/sessions.json` para sa agent na iyon. Keep `credentials/` if you do not want to reauthenticate.
 
 ## Mga Sanggunian
 

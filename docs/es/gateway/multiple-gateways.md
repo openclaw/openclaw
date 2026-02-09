@@ -4,13 +4,6 @@ read_when:
   - Ejecutar más de un Gateway en la misma máquina
   - Necesita configuración/estado/puertos aislados por Gateway
 title: "Múltiples Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:29Z
 ---
 
 # Múltiples Gateways (mismo host)
@@ -98,7 +91,7 @@ Si sobrescribe cualquiera de estos en la configuración o en variables de entorn
 - Si necesita puertos CDP explícitos, configure `browser.profiles.<name>.cdpPort` por instancia.
 - Chrome remoto: use `browser.profiles.<name>.cdpUrl` (por perfil, por instancia).
 
-## Ejemplo manual de variables de entorno
+## Ejemplo manual de env
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/main.json \

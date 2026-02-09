@@ -4,13 +4,6 @@ read_when:
   - Projektowanie lub refaktoryzacja rozumienia mediów
   - Strojenie przetwarzania wstępnego przychodzących nagrań audio/wideo/obrazów
 title: "Rozumienie mediów"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:36Z
 ---
 
 # Rozumienie mediów (przychodzących) — 2026-01-17
@@ -24,7 +17,7 @@ OpenClaw może **podsumowywać przychodzące media** (obraz/dźwięk/wideo) zani
 - Obsługa **API dostawców** oraz **mechanizmów awaryjnych CLI**.
 - Umożliwienie wielu modeli z uporządkowanym fallbackiem (błąd/rozmiar/limit czasu).
 
-## Zachowanie wysokopoziomowe
+## Zachowanie wysokiego poziomu
 
 1. Zbieranie przychodzących załączników (`MediaPaths`, `MediaUrls`, `MediaTypes`).
 2. Dla każdej włączonej możliwości (obraz/dźwięk/wideo) wybór załączników zgodnie z polityką (domyślnie: **pierwszy**).
@@ -182,11 +175,11 @@ Jeśli pominiesz `capabilities`, wpis kwalifikuje się do listy, w której się 
 
 ## Macierz obsługi dostawców (integracje OpenClaw)
 
-| Możliwość | Integracja dostawcy                              | Uwagi                                              |
-| --------- | ------------------------------------------------ | -------------------------------------------------- |
-| Obraz     | OpenAI / Anthropic / Google / inne przez `pi-ai` | Każdy model obsługujący obrazy w rejestrze działa. |
-| Audio     | OpenAI, Groq, Deepgram, Google                   | Transkrypcja dostawcy (Whisper/Deepgram/Gemini).   |
-| Wideo     | Google (Gemini API)                              | Rozumienie wideo przez dostawcę.                   |
+| Możliwość | Integracja dostawcy                              | Uwagi                                                                               |
+| --------- | ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Obraz     | OpenAI / Anthropic / Google / inne przez `pi-ai` | Każdy model obsługujący obrazy w rejestrze działa.                  |
+| Audio     | OpenAI, Groq, Deepgram, Google                   | Transkrypcja dostawcy (Whisper/Deepgram/Gemini). |
+| Wideo     | Google (Gemini API)           | Rozumienie wideo przez dostawcę.                                    |
 
 ## Zalecani dostawcy
 
@@ -218,7 +211,7 @@ Gdy `mode: "all"`, wyniki są oznaczane jako `[Image 1/2]`, `[Audio 2/2]` itd.
 
 ## Przykłady konfiguracji
 
-### 1) Lista modeli współdzielonych + nadpisania
+### 1. Lista modeli współdzielonych + nadpisania
 
 ```json5
 {
@@ -255,7 +248,7 @@ Gdy `mode: "all"`, wyniki są oznaczane jako `[Image 1/2]`, `[Audio 2/2]` itd.
 }
 ```
 
-### 2) Tylko audio + wideo (obraz wyłączony)
+### 2. Tylko audio + wideo (obraz wyłączony)
 
 ```json5
 {
@@ -295,7 +288,7 @@ Gdy `mode: "all"`, wyniki są oznaczane jako `[Image 1/2]`, `[Audio 2/2]` itd.
 }
 ```
 
-### 3) Opcjonalne rozumienie obrazu
+### 3. Opcjonalne rozumienie obrazu
 
 ```json5
 {
@@ -326,7 +319,7 @@ Gdy `mode: "all"`, wyniki są oznaczane jako `[Image 1/2]`, `[Audio 2/2]` itd.
 }
 ```
 
-### 4) Pojedynczy wpis multimodalny (jawne możliwości)
+### 4. Pojedynczy wpis multimodalny (jawne możliwości)
 
 ```json5
 {

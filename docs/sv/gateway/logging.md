@@ -4,13 +4,6 @@ read_when:
   - Ändrar loggningsutdata eller format
   - Felsöker CLI- eller gateway-utdata
 title: "Loggning"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:22Z
 ---
 
 # Loggning
@@ -32,8 +25,8 @@ OpenClaw har två logg-”ytor”:
 
 Filformatet är ett JSON-objekt per rad.
 
-Control UI:s flik Logs följer denna fil via gateway (`logs.tail`).
-CLI kan göra samma sak:
+Fliken Control UI Logs svansar den här filen via gateway (`logs.tail`).
+CLI kan göra detsamma:
 
 ```bash
 openclaw logs --follow
@@ -59,8 +52,8 @@ Du kan justera konsolens utförlighet oberoende via:
 
 ## Maskning av verktygssammanfattningar
 
-Utförliga verktygssammanfattningar (t.ex. `🛠️ Exec: ...`) kan maskera känsliga token innan de når
-konsolströmmen. Detta gäller **endast verktyg** och ändrar inte filloggar.
+Verkta verktygssammanfattningar (t.ex. `🛠️ Exec: ...`) kan maskera känsliga polletter innan de träffar
+konsolströmmen. Detta är **verktyg** och ändrar inte filloggar.
 
 - `logging.redactSensitive`: `off` | `tools` (standard: `tools`)
 - `logging.redactPatterns`: array av regex-strängar (åsidosätter standardvärden)
@@ -102,18 +95,18 @@ openclaw gateway --verbose --ws-log full
 
 ## Konsolformatering (delsystemloggning)
 
-Konsolformateraren är **TTY-medveten** och skriver konsekventa rader med prefix.
-Delsystemloggare håller utdata grupperad och lätt att skanna.
+Konsolformatteraren är **TTY-aware** och skriver ut konsekventa, prefixa linjer.
+Undersystemsloggar håller utdata grupperade och skannbara.
 
 Beteende:
 
-- **Delsystemprefix** på varje rad (t.ex. `[gateway]`, `[canvas]`, `[tailscale]`)
+- **Prefix** för delsystemet\*\* på varje rad (t.ex. `[gateway]`, `[canvas]`, `[tailscale]`)
 - **Delsystemfärger** (stabila per delsystem) plus nivåfärgning
 - **Färg när utdata är en TTY eller miljön ser ut som en rik terminal** (`TERM`/`COLORTERM`/`TERM_PROGRAM`), respekterar `NO_COLOR`
-- **Förkortade delsystemprefix**: tar bort inledande `gateway/` + `channels/`, behåller de sista 2 segmenten (t.ex. `whatsapp/outbound`)
+- **Förkortade delsystemprefix**: droppar ledande `gateway/` + `kanaler/`, håller de sista 2 segmenten (t.ex. `whatsapp/outbound`)
 - **Underloggare per delsystem** (auto-prefix + strukturerat fält `{ subsystem }`)
 - **`logRaw()`** för QR/UX-utdata (inget prefix, ingen formatering)
-- **Konsolstilar** (t.ex. `pretty | compact | json`)
+- **Konsolstilar** (t.ex. `pretty <unk> compact <unk> json`)
 - **Konsollognivå** separat från fillognivå (filen behåller full detalj när `logging.level` är satt till `debug`/`trace`)
 - **WhatsApp-meddelandekroppar** loggas på `debug` (använd `--verbose` för att se dem)
 

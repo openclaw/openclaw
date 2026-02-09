@@ -4,20 +4,14 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Pagpapatibay ng Cron Add"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:33Z
 ---
 
 # Pagpapatibay ng Cron Add at Pag-align ng Schema
 
 ## Konteksto
 
-Ipinapakita ng mga kamakailang gateway log ang paulit-ulit na mga pagkabigo ng `cron.add` na may mga hindi valid na parameter (nawawala ang `sessionTarget`, `wakeMode`, `payload`, at may maling anyo ang `schedule`). Ipinahihiwatig nito na may kahit isang client (malamang ang agent tool call path) na nagpapadala ng nakabalot o bahagyang tinukoy na mga job payload. Hiwalay dito, may paglihis sa pagitan ng cron provider enums sa TypeScript, gateway schema, mga flag ng CLI, at mga uri ng UI form, pati na rin ang UI mismatch para sa `cron.status` (umaasa ng `jobCount` habang ang gateway ay nagbabalik ng `jobs`).
+Ipinahihiwatig nito na may hindi bababa sa isang client (malamang ang agent tool call path) na nagpapadala ng nakabalot o bahagyang tinukoy na mga job payload. This indicates that at least one client (likely the agent tool call path) is sending wrapped or partially specified job payloads. Ang mga Telegram allowlist ay tumatanggap na ngayon ng `telegram:` at `tg:` prefixes nang hindi sensitibo sa case, at tinatanggap ang
+aksidenteng whitespace.
 
 ## Mga Layunin
 

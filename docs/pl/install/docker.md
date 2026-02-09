@@ -4,13 +4,6 @@ read_when:
   - Chcesz użyć konteneryzowanej bramy zamiast instalacji lokalnych
   - Weryfikujesz przepływ pracy z Dockerem
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:55Z
 ---
 
 # Docker (opcjonalnie)
@@ -39,7 +32,7 @@ Szczegóły sandboxingu: [Sandboxing](/gateway/sandboxing)
 
 ### Szybki start (zalecane)
 
-Z katalogu głównego repozytorium:
+Z repozytorium:
 
 ```bash
 ./docker-setup.sh
@@ -174,8 +167,7 @@ Uwagi:
 
 ### Tryb zaawansowany / pełnofunkcyjny kontener (opt-in)
 
-Domyślny obraz Dockera jest **nastawiony na bezpieczeństwo** i działa jako nie-rootowy użytkownik `node`.
-Zmniejsza to powierzchnię ataku, ale oznacza:
+Domyślny obraz Dockera jest **nastawiony na bezpieczeństwo** i działa jako nie-rootowy użytkownik `node`. Zmniejsza to powierzchnię ataku, ale oznacza:
 
 - brak instalacji pakietów systemowych w czasie działania
 - brak Homebrew domyślnie

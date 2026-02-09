@@ -1,15 +1,8 @@
 ---
 summary: "Exploration: Modellkonfiguration, Auth-Profile und Fallback-Verhalten"
 read_when:
-  - "Erkundung zukünftiger Ideen zur Modellauswahl und zu Auth-Profilen"
+  - Erkundung zukünftiger Ideen zur Modellauswahl und zu Auth-Profilen
 title: "Erkundung der Modellkonfiguration"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:03Z
 ---
 
 # Modellkonfiguration (Exploration)

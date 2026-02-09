@@ -3,13 +3,6 @@ summary: "Hoe de Gateway, nodes en canvas-host verbinding maken."
 read_when:
   - Je wilt een beknopt overzicht van het netwerkmodel van de Gateway
 title: "Netwerkmodel"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:19Z
 ---
 
 De meeste bewerkingen verlopen via de Gateway (`openclaw gateway`), een enkel langlopend

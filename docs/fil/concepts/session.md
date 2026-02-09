@@ -3,30 +3,23 @@ summary: "Mga patakaran sa pamamahala ng session, mga key, at persistence para s
 read_when:
   - Pagbabago ng paghawak o pag-iimbak ng session
 title: "Pamamahala ng Session"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:44Z
 ---
 
 # Pamamahala ng Session
 
-Itinuturing ng OpenClaw ang **isang direct-chat session bawat agent** bilang pangunahing default. Ang mga direct chat ay nagsasama-sama sa `agent:<agentId>:<mainKey>` (default `main`), habang ang mga group/channel chat ay nakakakuha ng sarili nilang mga key. Iginagalang ang `session.mainKey`.
+OpenClaw treats **one direct-chat session per agent** as primary. Direct chats collapse to `agent:<agentId>:<mainKey>` (default `main`), while group/channel chats get their own keys. `session.mainKey` is honored.
 
 Gamitin ang `session.dmScope` upang kontrolin kung paano pinapangkat ang **mga direct message**:
 
 - `main` (default): lahat ng DM ay nagbabahagi ng pangunahing session para sa continuity.
 - `per-peer`: ihiwalay ayon sa sender id sa iba’t ibang channel.
 - `per-channel-peer`: ihiwalay ayon sa channel + sender (inirerekomenda para sa mga multi-user inbox).
-- `per-account-channel-peer`: ihiwalay ayon sa account + channel + sender (inirerekomenda para sa mga multi-account inbox).
-  Gamitin ang `session.identityLinks` upang i-map ang mga provider‑prefixed peer id sa isang canonical na identidad para ang iisang tao ay magbahagi ng iisang DM session sa iba’t ibang channel kapag gumagamit ng `per-peer`, `per-channel-peer`, o `per-account-channel-peer`.
+- `per-account-channel-peer`: isolate by account + channel + sender (recommended for multi-account inboxes).
+  Use `session.identityLinks` to map provider-prefixed peer ids to a canonical identity so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
 
 ## Secure DM mode (inirerekomenda para sa mga multi-user setup)
 
-> **Babala sa Seguridad:** Kung ang iyong agent ay maaaring makatanggap ng DM mula sa **maraming tao**, mariing inirerekomenda na i-enable ang secure DM mode. Kung wala ito, lahat ng user ay magbabahagi ng iisang conversation context, na maaaring mag-leak ng pribadong impormasyon sa pagitan ng mga user.
+> **Security Warning:** If your agent can receive DMs from **multiple people**, you should strongly consider enabling secure DM mode. Without it, all users share the same conversation context, which can leak private information between users.
 
 **Halimbawa ng problema sa default na settings:**
 
@@ -55,38 +48,38 @@ Gamitin ang `session.dmScope` upang kontrolin kung paano pinapangkat ang **mga d
 
 Mga tala:
 
-- Default ay `dmScope: "main"` para sa continuity (lahat ng DM ay nagbabahagi ng pangunahing session). Ayos ito para sa single-user setup.
+- Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
 - Para sa mga multi-account inbox sa iisang channel, mas mainam ang `per-account-channel-peer`.
 - Kung ang parehong tao ay kumokontak sa iyo sa maraming channel, gamitin ang `session.identityLinks` upang pagsamahin ang kanilang mga DM session sa isang canonical na identidad.
 - Maaari mong i-verify ang iyong DM settings gamit ang `openclaw security audit` (tingnan ang [security](/cli/security)).
 
 ## Gateway ang source of truth
 
-Ang lahat ng session state ay **pagmamay-ari ng gateway** (ang “master” OpenClaw). Ang mga UI client (macOS app, WebChat, atbp.) ay dapat mag-query sa gateway para sa mga listahan ng session at bilang ng token sa halip na magbasa ng mga lokal na file.
+All session state is **owned by the gateway** (the “master” OpenClaw). UI clients (macOS app, WebChat, etc.) ay dapat mag-query sa gateway para sa mga listahan ng session at mga bilang ng token sa halip na magbasa ng mga lokal na file.
 
 - Sa **remote mode**, ang session store na mahalaga ay nasa remote na host ng Gateway, hindi sa iyong Mac.
-- Ang mga bilang ng token na ipinapakita sa mga UI ay nagmumula sa mga store field ng gateway (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Hindi nagpa-parse ang mga client ng JSONL transcript para “itama” ang mga total.
+- Token counts shown in UIs come from the gateway’s store fields (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Hindi pinaparse ng mga client ang mga JSONL transcript para “ayusin” ang mga kabuuan.
 
 ## Saan naninirahan ang state
 
 - Sa **host ng Gateway**:
   - Store file: `~/.openclaw/agents/<agentId>/sessions/sessions.json` (bawat agent).
 - Mga transcript: `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl` (ang mga Telegram topic session ay gumagamit ng `.../<SessionId>-topic-<threadId>.jsonl`).
-- Ang store ay isang map `sessionKey -> { sessionId, updatedAt, ... }`. Ligtas na burahin ang mga entry; muling nililikha ang mga ito kapag kailangan.
+- Ang store ay isang map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
 - Ang mga group entry ay maaaring magsama ng `displayName`, `channel`, `subject`, `room`, at `space` upang lagyan ng label ang mga session sa mga UI.
 - Ang mga session entry ay may `origin` metadata (label + routing hints) upang maipaliwanag ng mga UI kung saan nagmula ang isang session.
 - Ang OpenClaw ay **hindi** nagbabasa ng mga legacy na Pi/Tau session folder.
 
 ## Session pruning
 
-Pinaiikli ng OpenClaw ang **mga lumang tool result** mula sa in-memory context bago mismo ang mga LLM call bilang default.
-Hindi nito nire-rewrite ang JSONL history. Tingnan ang [/concepts/session-pruning](/concepts/session-pruning).
+OpenClaw trims **old tool results** from the in-memory context right before LLM calls by default.
+This does **not** rewrite JSONL history. Tingnan ang [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Pre-compaction memory flush
 
-Kapag ang isang session ay malapit na sa auto-compaction, maaaring magpatakbo ang OpenClaw ng isang **silent memory flush**
-turn na nagpapaalala sa model na magsulat ng mga durable na tala sa disk. Tumatakbo lamang ito kapag
-writable ang workspace. Tingnan ang [Memory](/concepts/memory) at
+When a session nears auto-compaction, OpenClaw can run a **silent memory flush**
+turn that reminds the model to write durable notes to disk. This only runs when
+the workspace is writable. See [Memory](/concepts/memory) and
 [Compaction](/concepts/compaction).
 
 ## Pagmamapa ng mga transport → session key
@@ -110,12 +103,12 @@ writable ang workspace. Tingnan ang [Memory](/concepts/memory) at
 ## Lifecycle
 
 - Reset policy: muling ginagamit ang mga session hanggang sa mag-expire ang mga ito, at sinusuri ang expiry sa susunod na inbound message.
-- Daily reset: default sa **4:00 AM lokal na oras sa host ng Gateway**. Itinuturing na stale ang isang session kapag ang huling update nito ay mas maaga kaysa sa pinakahuling daily reset time.
-- Idle reset (opsyonal): nagdadagdag ang `idleMinutes` ng sliding idle window. Kapag parehong naka-configure ang daily at idle reset, **kung alin ang unang mag-expire** ang magpupuwersa ng bagong session.
+- Daily reset: defaults to **4:00 AM local time on the gateway host**. A session is stale once its last update is earlier than the most recent daily reset time.
+- Idle reset (optional): `idleMinutes` adds a sliding idle window. When both daily and idle resets are configured, **whichever expires first** forces a new session.
 - Legacy idle-only: kung itatakda mo ang `session.idleMinutes` nang walang anumang `session.reset`/`resetByType` config, mananatili ang OpenClaw sa idle-only mode para sa backward compatibility.
 - Per-type override (opsyonal): hinahayaan ka ng `resetByType` na i-override ang policy para sa mga `dm`, `group`, at `thread` na session (thread = mga Slack/Discord thread, mga Telegram topic, Matrix thread kapag ibinigay ng connector).
 - Per-channel override (opsyonal): ini-override ng `resetByChannel` ang reset policy para sa isang channel (naaangkop sa lahat ng uri ng session para sa channel na iyon at may mas mataas na prioridad kaysa sa `reset`/`resetByType`).
-- Mga reset trigger: ang eksaktong `/new` o `/reset` (kasama ang anumang dagdag sa `resetTriggers`) ay nagsisimula ng bagong session id at ipinapasa ang natitirang bahagi ng mensahe. Tumatanggap ang `/new <model>` ng model alias, `provider/model`, o pangalan ng provider (fuzzy match) upang itakda ang bagong model ng session. Kung ang `/new` o `/reset` ay ipinadala nang mag-isa, nagpapatakbo ang OpenClaw ng isang maikling “hello” greeting turn upang kumpirmahin ang reset.
+- Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. `/new <model>` accepts a model alias, `provider/model`, or provider name (fuzzy match) to set the new session model. If `/new` or `/reset` is sent alone, OpenClaw runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: burahin ang mga partikular na key mula sa store o alisin ang JSONL transcript; muling lilikhain ng susunod na mensahe ang mga ito.
 - Ang mga isolated na cron job ay palaging lumilikha ng bagong `sessionId` sa bawat run (walang idle reuse).
 
@@ -185,7 +178,7 @@ Runtime override (owner lamang):
 - Ipadala ang `/status` bilang standalone na mensahe sa chat upang makita kung reachable ang agent, gaano karami sa session context ang nagagamit, ang kasalukuyang thinking/verbose toggle, at kung kailan huling na-refresh ang iyong WhatsApp web creds (nakakatulong para makita ang pangangailangang mag-relink).
 - Ipadala ang `/context list` o `/context detail` upang makita kung ano ang nasa system prompt at mga injected na workspace file (at ang pinakamalalaking contributor sa context).
 - Ipadala ang `/stop` bilang standalone na mensahe upang ihinto ang kasalukuyang run, linisin ang mga naka-queue na followup para sa session na iyon, at itigil ang anumang sub-agent run na nilikha mula rito (kasama sa reply ang bilang na nahinto).
-- Ipadala ang `/compact` (opsyonal na mga instruksyon) bilang standalone na mensahe upang ibuod ang mas lumang context at magpalaya ng espasyo sa window. Tingnan ang [/concepts/compaction](/concepts/compaction).
+- Magpadala ng `/compact` (opsyonal na mga tagubilin) bilang hiwalay na mensahe upang ibuod ang mas lumang context at magpalaya ng espasyo sa window. See [/concepts/compaction](/concepts/compaction).
 - Maaaring buksan nang direkta ang mga JSONL transcript upang suriin ang buong mga turn.
 
 ## Mga tip
@@ -201,11 +194,11 @@ Ang bawat session entry ay nagtatala kung saan ito nagmula (best‑effort) sa `o
 - `provider`: normalized na channel id (kasama ang mga extension)
 - `from`/`to`: mga raw routing id mula sa inbound envelope
 - `accountId`: provider account id (kapag multi-account)
-- `threadId`: thread/topic id kapag sinusuportahan ng channel
-  Ang mga origin field ay pinupunan para sa mga direct message, channel, at group. Kung ang isang
-  connector ay nag-a-update lamang ng delivery routing (halimbawa, upang panatilihing sariwa ang isang DM main session),
-  dapat pa rin itong magbigay ng inbound context upang mapanatili ng session ang
-  explainer metadata nito. Magagawa ito ng mga extension sa pamamagitan ng pagpapadala ng `ConversationLabel`,
-  `GroupSubject`, `GroupChannel`, `GroupSpace`, at `SenderName` sa inbound
-  context at pagtawag sa `recordSessionMetaFromInbound` (o pagpasa ng parehong context
-  sa `updateLastRoute`).
+- `threadId`: thread/topic id kapag sinusuportahan ito ng channel
+  Ang mga origin field ay napupunan para sa mga direct message, channel, at grupo. If a
+  connector only updates delivery routing (for example, to keep a DM main session
+  fresh), it should still provide inbound context so the session keeps its
+  explainer metadata. Extensions can do this by sending `ConversationLabel`,
+  `GroupSubject`, `GroupChannel`, `GroupSpace`, and `SenderName` in the inbound
+  context and calling `recordSessionMetaFromInbound` (or passing the same context
+  to `updateLastRoute`).

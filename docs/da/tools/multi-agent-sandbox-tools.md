@@ -3,13 +3,6 @@ summary: "Sandbox pr. agent + værktøjsbegrænsninger, præcedens og eksempler"
 title: Multi-Agent Sandbox & Tools
 read_when: "Du vil have sandboxing pr. agent eller tillad/afvis-politikker for værktøjer pr. agent i en multi-agent gateway."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:53Z
 ---
 
 # Konfiguration af Multi-Agent Sandbox & Tools
@@ -36,11 +29,11 @@ Autentificering er pr. agent: hver agent læser fra sin egen `agentDir` auth-sto
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Legitimationsoplysninger deles **ikke** mellem agenter. Genbrug aldrig `agentDir` på tværs af agenter.
-Hvis du vil dele creds, skal du kopiere `auth-profiles.json` ind i den anden agents `agentDir`.
+Legitimationsoplysninger deles **ikke** mellem agenter. Genbrug aldrig 'agentDir' på tværs af midler.
+Hvis du ønsker at dele creds, kopiere `auth-profiles.json` til den anden agent's `agentDir`.
 
-For hvordan sandboxing opfører sig under kørsel, se [Sandboxing](/gateway/sandboxing).
-For fejlsøgning af “hvorfor er dette blokeret?”, se [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) og `openclaw sandbox explain`.
+For hvordan sandboxing opfører sig på runtime, se [Sandboxing](/gateway/sandboxing).
+For fejlfinding “hvorfor er denne blokeret?”, se [Sandbox vs Tool Politik vs forhøjet](/gateway/sandbox-vs-tool-policy-vs-elevated) og `openclaw sandbox explain`.
 
 ---
 
@@ -224,10 +217,10 @@ Filtreringsrækkefølgen er:
 7. **Sandbox-værktøjspolitik** (`tools.sandbox.tools` eller `agents.list[].tools.sandbox.tools`)
 8. **Subagent-værktøjspolitik** (`tools.subagents.tools`, hvis relevant)
 
-Hvert niveau kan yderligere begrænse værktøjer, men kan ikke give værktøjer tilbage, der er nægtet på tidligere niveauer.
-Hvis `agents.list[].tools.sandbox.tools` er sat, erstatter den `tools.sandbox.tools` for den agent.
+Hvert niveau kan yderligere begrænse værktøjer, men kan ikke give tilbage nægtede værktøjer fra tidligere niveauer.
+Hvis `agents.list[].tools.sandbox.tools` er indstillet, erstatter den `tools.sandbox.tools` for det agent.
 Hvis `agents.list[].tools.profile` er sat, tilsidesætter den `tools.profile` for den agent.
-Udbyder-værktøjsnøgler accepterer enten `provider` (f.eks. `google-antigravity`) eller `provider/model` (f.eks. `openai/gpt-5.2`).
+Udbyderværktøjstaster accepterer enten `provider` (f.eks. `google-antigravity`) eller `provider/model` (f.eks. `openai/gpt-5.2`).
 
 ### Værktøjsgrupper (genveje)
 
@@ -245,7 +238,7 @@ Værktøjspolitikker (globale, agent, sandbox) understøtter `group:*`-poster, d
 
 ### Elevated-tilstand
 
-`tools.elevated` er den globale basislinje (afsenderbaseret tilladelsesliste). `agents.list[].tools.elevated` kan yderligere begrænse elevated for specifikke agenter (begge skal tillade).
+`tools.elevated` er den globale baseline (afsenderbaseret tilladelsesliste). `agents.list[].tools.elevated` kan yderligere begrænse forhøjet for specifikke agenser (begge skal tillade).
 
 Afhjælpningsmønstre:
 
@@ -342,9 +335,9 @@ Afhjælpningsmønstre:
 ## Almindelig faldgrube: "non-main"
 
 `agents.defaults.sandbox.mode: "non-main"` er baseret på `session.mainKey` (standard `"main"`),
-ikke agent-id’et. Gruppe-/kanalsessioner får altid deres egne nøgler, så de
-behandles som non-main og bliver sandboxet. Hvis du vil have, at en agent aldrig
-skal sandboxes, skal du sætte `agents.list[].sandbox.mode: "off"`.
+ikke agenten id. Gruppe/kanal sessioner altid få deres egne nøgler, så de
+behandles som ikke-main og vil blive sandboxed. Hvis du vil have en agent til aldrig
+sandkasse, sæt `agents.list[].sandbox.mode: "off"`.
 
 ---
 

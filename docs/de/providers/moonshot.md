@@ -5,13 +5,6 @@ read_when:
   - Sie müssen separate Endpunkte, Schlüssel und Modellreferenzen verstehen
   - Sie möchten Copy/Paste‑Konfigurationen für einen der beiden Anbieter
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:05Z
 ---
 
 # Moonshot AI (Kimi)

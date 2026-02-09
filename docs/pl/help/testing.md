@@ -5,13 +5,6 @@ read_when:
   - Dodawanie regresji dla błędów modeli/dostawców
   - Debugowanie zachowania gateway + agenta
 title: "Testowanie"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:04Z
 ---
 
 # Testowanie
@@ -20,7 +13,7 @@ OpenClaw ma trzy pakiety Vitest (unit/integration, e2e, live) oraz niewielki zes
 
 Ten dokument to przewodnik „jak testujemy”:
 
-- Co obejmuje każdy pakiet (i czego celowo _nie_ obejmuje)
+- Co obejmuje każdy pakiet (i co celowo _nie_ obejmuje)
 - Jakie polecenia uruchamiać w typowych workflowach (lokalnie, przed push, debugowanie)
 - Jak testy live wykrywają poświadczenia oraz wybierają modele/dostawców
 - Jak dodawać regresje dla rzeczywistych problemów modeli/dostawców
@@ -89,7 +82,7 @@ Myśl o pakietach jako o „rosnącym realizmie” (i rosnącej niestabilności/
   - Uruchomienia live pobiorą `~/.profile` w celu uzupełnienia brakujących kluczy API
   - Rotacja kluczy Anthropic: ustaw `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (lub `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) albo wiele zmiennych `ANTHROPIC_API_KEY*`; testy będą ponawiać próby przy limitach
 
-## Który pakiet powinienem uruchomić?
+## Który pakiet powinienem biegnąć?
 
 Skorzystaj z tej tabeli decyzyjnej:
 
@@ -283,7 +276,7 @@ Opcjonalne dodatkowe pokrycie (mile widziane):
 
 ### Wizja: wysyłanie obrazu (załącznik → wiadomość multimodalna)
 
-Uwzględnij co najmniej jeden model z obsługą obrazów w `OPENCLAW_LIVE_GATEWAY_MODELS` (warianty Claude/Gemini/OpenAI z wizją itd.), aby uruchomić sondę obrazu.
+Uwzględnij co najmniej jeden model z obsługą obrazów w `OPENCLAW_LIVE_GATEWAY_MODELS` (warianty Claude/Gemini/OpenAI z wizją itd.), aby uruchomić sondę obrazu. ćwiczenie sondy obrazu.
 
 ### Agregatory / alternatywne gateway
 
@@ -304,9 +297,11 @@ Wskazówka: nie próbuj na sztywno kodować „wszystkich modeli” w dokumentac
 Testy live wykrywają poświadczenia tak samo jak CLI. Praktyczne konsekwencje:
 
 - Jeśli CLI działa, testy live powinny znaleźć te same klucze.
+
 - Jeśli test live zgłasza „brak poświadczeń”, debuguj tak samo jak `openclaw models list` / wybór modelu.
 
 - Magazyn profili: `~/.openclaw/credentials/` (preferowane; to oznacza „klucze profili” w testach)
+
 - Konfiguracja: `~/.openclaw/openclaw.json` (lub `OPENCLAW_CONFIG_PATH`)
 
 Jeśli chcesz polegać na kluczach z env (np. wyeksportowanych w Twoim `~/.profile`), uruchom testy lokalne po `source ~/.profile`, albo użyj runnerów Docker poniżej (mogą montować `~/.profile` do kontenera).
@@ -334,7 +329,7 @@ Przydatne zmienne środowiskowe:
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...` do zawężania uruchomienia
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` aby zapewnić, że poświadczenia pochodzą z magazynu profili (a nie z env)
 
-## Spójność dokumentacji
+## Dokumentacja sanitarna
 
 Uruchom sprawdzanie dokumentów po edycjach: `pnpm docs:list`.
 

@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:11Z
 ---
 
 # Déploiement Fly.io
@@ -44,7 +37,7 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **Astuce :** Choisissez une région proche de vous. Options courantes : `lhr` (Londres), `iad` (Virginie), `sjc` (San Jose).
 
-## 2) Configurer fly.toml
+## 2. Configurer fly.toml
 
 Modifiez `fly.toml` pour correspondre au nom de votre application et à vos exigences.
 
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Paramètres clés :**
 
-| Paramètre                      | Pourquoi                                                                           |
-| ------------------------------ | ---------------------------------------------------------------------------------- |
-| `--bind lan`                   | Se lie à `0.0.0.0` afin que le proxy Fly puisse atteindre la passerelle            |
+| Paramètre                      | Pourquoi                                                                                              |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Se lie à `0.0.0.0` afin que le proxy Fly puisse atteindre la passerelle                               |
 | `--allow-unconfigured`         | Démarre sans fichier de configuration (vous en créerez un ensuite)                 |
 | `internal_port = 3000`         | Doit correspondre à `--port 3000` (ou `OPENCLAW_GATEWAY_PORT`) pour les checks Fly |
-| `memory = "2048mb"`            | 512 Mo est trop faible ; 2 Go recommandés                                          |
-| `OPENCLAW_STATE_DIR = "/data"` | Persiste l’état sur le volume                                                      |
+| `memory = "2048mb"`            | 512 Mo est trop faible ; 2 Go recommandés                                                             |
+| `OPENCLAW_STATE_DIR = "/data"` | Persiste l’état sur le volume                                                                         |
 
-## 3) Définir les secrets
+## 3. Définir les secrets
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -116,7 +109,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 - Traitez ces jetons comme des mots de passe.
 - **Privilégiez les variables d’environnement plutôt que le fichier de configuration** pour toutes les clés API et les jetons. Cela évite d’exposer ou de journaliser accidentellement des secrets dans `openclaw.json`.
 
-## 4) Déployer
+## 4. Déployer
 
 ```bash
 fly deploy
@@ -138,7 +131,7 @@ Vous devriez voir :
 [discord] logged in to discord as xxx
 ```
 
-## 5) Créer le fichier de configuration
+## 5. Créer le fichier de configuration
 
 Connectez-vous en SSH à la machine pour créer une configuration appropriée :
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Accéder à la passerelle
+## 6. Accéder à la passerelle
 
 ### Interface de contrôle
 
@@ -245,7 +238,7 @@ fly logs --no-tail    # Recent logs
 fly ssh console
 ```
 
-## Dépannage
+## Problemes courants
 
 ### « App is not listening on expected address »
 
@@ -470,7 +463,7 @@ Le tunnel ngrok s’exécute dans le conteneur et fournit une URL de webhook pub
 
 | Aspect                   | Public      | Privé      |
 | ------------------------ | ----------- | ---------- |
-| Scanners Internet        | Découvrable | Caché      |
+| Scanners Internet        | Découvrable | Hidden     |
 | Attaques directes        | Possibles   | Bloquées   |
 | Accès à l’UI de contrôle | Navigateur  | Proxy/VPN  |
 | Livraison des webhooks   | Directe     | Via tunnel |

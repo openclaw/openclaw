@@ -5,20 +5,13 @@ read_when:
   - 소스에서 iOS 앱 실행
   - Gateway 디바이스 검색 또는 캔버스 명령 디버깅
 title: "iOS 앱"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:44Z
 ---
 
 # iOS 앱 (Node)
 
 가용성: 내부 프리뷰. iOS 앱은 아직 공개 배포되지 않았습니다.
 
-## 기능 개요
+## What it does
 
 - WebSocket 을 통해 Gateway(게이트웨이)에 연결합니다 (LAN 또는 tailnet).
 - 노드 기능을 노출합니다: Canvas, 화면 스냅샷, 카메라 캡처, 위치, 대화 모드, 음성 깨우기.

@@ -4,13 +4,6 @@ read_when:
   - Een nieuwe machine instellen
   - Je wilt “latest + greatest” zonder je persoonlijke setup te breken
 title: "Installatie"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:51Z
 ---
 
 # Installatie
@@ -74,7 +67,7 @@ node openclaw.mjs gateway --port 18789 --verbose
 openclaw channels login
 ```
 
-5. Snelle controle:
+5. Sanity controle:
 
 ```bash
 openclaw health
@@ -88,7 +81,7 @@ Als onboarding niet beschikbaar is in jouw build:
 
 Doel: werken aan de TypeScript-Gateway, hot reload krijgen en de macOS-app-UI gekoppeld houden.
 
-### 0) (Optioneel) Draai ook de macOS-app vanuit bron
+### 0. (Optioneel) Draai ook de macOS-app vanuit bron
 
 Als je ook de macOS-app op bleeding edge wilt:
 
@@ -96,7 +89,7 @@ Als je ook de macOS-app op bleeding edge wilt:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Start de dev Gateway
+### 1. Start de dev Gateway
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` draait de gateway in watch-modus en herlaadt bij TypeScript-wijzigingen.
 
-### 2) Richt de macOS-app op je draaiende Gateway
+### 2. Richt de macOS-app op je draaiende Gateway
 
 In **OpenClaw.app**:
 
 - Verbindingsmodus: **Local**
   De app koppelt aan de draaiende gateway op de geconfigureerde poort.
 
-### 3) Verifiëren
+### 3. Verifiëren
 
 - De Gateway-status in de app moet **“Using existing gateway …”** tonen
 - Of via CLI:
@@ -121,7 +114,7 @@ In **OpenClaw.app**:
 openclaw health
 ```
 
-### Veelvoorkomende valkuilen
+### Gemeenschappelijke voetgeweers
 
 - **Verkeerde poort:** Gateway WS staat standaard op `ws://127.0.0.1:18789`; houd app + CLI op dezelfde poort.
 - **Waar staat de status:**
@@ -129,7 +122,7 @@ openclaw health
   - Sessies: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
 
-## Overzicht opslag van referenties
+## Opslagkaart voor referenties
 
 Gebruik dit bij het debuggen van authenticatie of om te bepalen wat je moet back-uppen:
 

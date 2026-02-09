@@ -4,14 +4,7 @@ read_when:
   - Implementowanie zatwierdzania parowania węzłów bez interfejsu macOS
   - Dodawanie przepływów CLI do zatwierdzania węzłów zdalnych
   - Rozszerzanie protokołu gateway o zarządzanie węzłami
-title: "Parowanie należące do Gateway"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
+title: "Parowanie bramy"
 ---
 
 # Parowanie należące do Gateway (Opcja B)

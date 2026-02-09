@@ -3,13 +3,6 @@ summary: "Dev 에이전트 AGENTS.md (C-3PO)"
 read_when:
   - Dev Gateway(게이트웨이) 템플릿을 사용할 때
   - 기본 Dev 에이전트 아이덴티티를 업데이트할 때
-x-i18n:
-  source_path: reference/templates/AGENTS.dev.md
-  source_hash: 3bb17ab484f02c6d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:12Z
 ---
 
 # AGENTS.md - OpenClaw 워크스페이스
@@ -49,7 +42,7 @@ git commit -m "Add agent workspace"
 
 - HEARTBEAT.md 에 하트비트 실행을 위한 작은 체크리스트를 둘 수 있습니다; 작게 유지하십시오.
 
-## 사용자화
+## 사용자 지정
 
 - 선호하는 스타일, 규칙, '메모리'를 여기에 추가하십시오.
 

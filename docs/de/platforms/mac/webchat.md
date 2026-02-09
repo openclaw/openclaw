@@ -1,15 +1,8 @@
 ---
-summary: „Wie die mac‑App das Gateway‑WebChat einbettet und wie Sie es debuggen“
+summary: "„Wie die mac‑App das Gateway‑WebChat einbettet und wie Sie es debuggen“"
 read_when:
   - Debugging der mac‑WebChat‑Ansicht oder des Loopback‑Ports
-title: „WebChat“
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:55Z
+title: "„WebChat“"
 ---
 
 # WebChat (macOS‑App)
@@ -25,6 +18,7 @@ für den ausgewählten Agenten (mit einem Sitzungsumschalter für weitere Sitzun
 ## Start & Debugging
 
 - Manuell: Lobster‑Menü → „Chat öffnen“.
+
 - Automatisches Öffnen für Tests:
 
   ```bash
@@ -33,7 +27,7 @@ für den ausgewählten Agenten (mit einem Sitzungsumschalter für weitere Sitzun
 
 - Logs: `./scripts/clawlog.sh` (Subsystem `bot.molt`, Kategorie `WebChatSwiftUI`).
 
-## Verdrahtung
+## Wie ist es verkabelt
 
 - Datenebene: Gateway‑WS‑Methoden `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` sowie Ereignisse `chat`, `agent`, `presence`, `tick`, `health`.

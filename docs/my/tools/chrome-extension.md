@@ -5,13 +5,6 @@ read_when:
   - Remote Gateway + local browser automation ကို Tailscale ဖြင့် လိုအပ်သောအခါ
   - browser takeover ၏ လုံခြုံရေးဆိုင်ရာ သက်ရောက်မှုများကို နားလည်လိုသောအခါ
 title: "Chrome Extension"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:16Z
 ---
 
 # Chrome extension (browser relay)
@@ -53,7 +46,7 @@ openclaw browser extension path
 
 ## Updates (no build step)
 
-Extension သည် OpenClaw release (npm package) အတွင်း static files အဖြစ် ပါဝင်လာပါသည်။ သီးခြား “build” အဆင့် မလိုအပ်ပါ။
+The extension ships inside the OpenClaw release (npm package) as static files. 10. သီးခြား “build” အဆင့် မရှိပါ။
 
 OpenClaw ကို အဆင့်မြှင့်ပြီးနောက်-
 
@@ -107,12 +100,12 @@ openclaw browser create-profile \
 
 ### Local Gateway (Chrome နှင့် တူညီသော စက်) — ပုံမှန်အားဖြင့် **အပိုအဆင့် မလို**
 
-Gateway သည် Chrome နှင့် တူညီသော စက်ပေါ်တွင် လုပ်ဆောင်နေပါက loopback ပေါ်တွင် browser control service ကို စတင်ပြီး relay server ကို အလိုအလျောက် စတင်ပါသည်။ Extension သည် local relay နှင့် ဆက်သွယ်ပြီး CLI/tool ခေါ်ဆိုမှုများသည် Gateway သို့ သွားပါသည်။
+11. Gateway သည် Chrome နှင့် တူညီသော စက်ပေါ်တွင် လည်ပတ်နေပါက loopback ပေါ်တွင် browser control service ကို စတင်ပြီး relay server ကို အလိုအလျောက် စတင်ပါသည်။ 12. extension သည် local relay နှင့် ဆက်သွယ်ပြီး CLI/tool ခေါ်ဆိုမှုများသည် Gateway သို့ သွားပါသည်။
 
 ### Remote Gateway (Gateway ကို အခြားစက်တွင် chạy) — **node host ကို chạy ပါ**
 
-Gateway ကို အခြားစက်တွင် chạy လုပ်နေပါက Chrome chạy သည့် စက်ပေါ်တွင် node host ကို စတင်ပါ။
-Gateway သည် browser action များကို ထို node သို့ proxy လုပ်ပေးပြီး extension + relay သည် browser စက်ပေါ်တွင်သာ ရှိနေပါမည်။
+13. သင့် Gateway သည် အခြားစက်ပေါ်တွင် လည်ပတ်နေပါက Chrome လည်ပတ်နေသော စက်ပေါ်တွင် node host တစ်ခုကို စတင်ပါ။
+    The Gateway will proxy browser actions to that node; the extension + relay stay local to the browser machine.
 
 Node များ အများအပြား ချိတ်ဆက်ထားပါက `gateway.nodes.browser.node` ဖြင့် တစ်ခုကို pin လုပ်ပါ သို့မဟုတ် `gateway.nodes.browser.mode` ကို သတ်မှတ်ပါ။
 
@@ -155,15 +148,15 @@ Debugging: `openclaw sandbox explain`
 
 `openclaw browser extension path` သည် extension ဖိုင်များ ပါဝင်သော **ထည့်သွင်းပြီးသား** disk ပေါ်ရှိ directory ကို ထုတ်ပြပါသည်။
 
-CLI သည် `node_modules` path ကို **ရည်ရွယ်ချက်ရှိစွာ မထုတ်ပြပါ**။ OpenClaw state directory အောက်ရှိ တည်ငြိမ်သော တည်နေရာသို့ extension ကို ကူးယူရန် အမြဲ `openclaw browser extension install` ကို အရင် chạy ပါ။
+15. CLI သည် ရည်ရွယ်ချက်ရှိရှိ `node_modules` လမ်းကြောင်းကို မပုံနှိပ်ပါ။ 16. OpenClaw state directory အောက်ရှိ တည်ငြိမ်သော တည်နေရာသို့ extension ကို မိတ္တူကူးရန် `openclaw browser extension install` ကို အရင်ဆုံး အမြဲတမ်း လည်ပတ်ပါ။
 
 ထို install directory ကို ရွှေ့ သို့မဟုတ် ဖျက်လိုက်ပါက Chrome သည် extension ကို broken အဖြစ် အမှတ်အသားပြုမည်ဖြစ်ပြီး မှန်ကန်သော path မှ ပြန်လည် load မလုပ်မချင်း အသုံးမပြုနိုင်ပါ။
 
 ## Security implications (read this)
 
-ဤလုပ်ဆောင်ချက်သည် အလွန် အစွမ်းထက်ပြီး အန္တရာယ်ရှိနိုင်ပါသည်။ မော်ဒယ်အား “သင့် browser ကို ကိုယ်တိုင် ကိုင်တွယ်ခိုင်းစေခြင်း” ဟု သဘောထားပါ။
+17. ဤအရာသည် အင်အားကြီးပြီး အန္တရာယ်ရှိပါသည်။ 18. မော်ဒယ်အား “သင့် browser ပေါ်တွင် လက်များ ပေးထားခြင်း” လို သဘောထားဖြင့် ဆက်ဆံပါ။
 
-- Extension သည် Chrome ၏ debugger API (`chrome.debugger`) ကို အသုံးပြုပါသည်။ ချိတ်ဆက်ပြီးပါက မော်ဒယ်သည်-
+- 19. extension သည် Chrome ၏ debugger API (`chrome.debugger`) ကို အသုံးပြုပါသည်။ 20. ချိတ်ဆက်ထားချိန်တွင် မော်ဒယ်သည် လုပ်ဆောင်နိုင်သည်မှာ:
   - ထို tab အတွင်း click/type/navigate လုပ်နိုင်သည်
   - စာမျက်နှာအကြောင်းအရာကို ဖတ်နိုင်သည်
   - ထို tab တွင် လော့ဂ်အင်လုပ်ထားသော session က ရနိုင်သမျှကို ဝင်ရောက်နိုင်သည်

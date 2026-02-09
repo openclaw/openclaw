@@ -3,20 +3,13 @@ summary: "Mga default na tagubilin ng OpenClaw agent at talaan ng Skills para sa
 read_when:
   - Pagsisimula ng bagong OpenClaw agent session
   - Pag-enable o pag-audit ng mga default na Skills
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:58Z
 ---
 
 # AGENTS.md — OpenClaw Personal Assistant (default)
 
 ## Unang run (inirerekomenda)
 
-Gumagamit ang OpenClaw ng isang dedikadong workspace directory para sa agent. Default: `~/.openclaw/workspace` (maaaring i-configure sa pamamagitan ng `agents.defaults.workspace`).
+OpenClaw uses a dedicated workspace directory for the agent. Default: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
 
 1. Gumawa ng workspace (kung wala pa):
 
@@ -59,7 +52,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Kaluluwa (kinakailangan)
 
-- Ang `SOUL.md` ang nagtatakda ng identidad, tono, at mga hangganan. Panatilihin itong updated.
+- `SOUL.md` defines identity, tone, and boundaries. Keep it current.
 - Kung babaguhin mo ang `SOUL.md`, ipaalam sa user.
 - Bawat session ay isang sariwang instance; ang continuity ay nasa mga file na ito.
 
@@ -108,7 +101,7 @@ git commit -m "Add Clawd workspace"
 - **eightctl** — Kontrolin ang iyong tulog, mula sa terminal.
 - **imsg** — Magpadala, magbasa, at mag-stream ng iMessage at SMS.
 - **wacli** — WhatsApp CLI: sync, search, send.
-- **discord** — Mga aksyon sa Discord: react, stickers, polls. Gamitin ang `user:<id>` o `channel:<id>` na mga target (ang mga hubad na numeric id ay malabo).
+- **discord** — Discord actions: react, stickers, polls. Use `user:<id>` or `channel:<id>` targets (bare numeric ids are ambiguous).
 - **gog** — Google Suite CLI: Gmail, Calendar, Drive, Contacts.
 - **spotify-player** — Terminal Spotify client para maghanap/mag-queue/kontrolin ang playback.
 - **sag** — ElevenLabs speech na may mac-style say UX; default na nag-i-stream sa mga speaker.
@@ -124,7 +117,7 @@ git commit -m "Add Clawd workspace"
 - Mas piliin ang `openclaw` CLI para sa scripting; ang mac app ang humahawak ng mga permiso.
 - Patakbuhin ang mga install mula sa tab na Skills; itinatago nito ang button kung mayroon nang binary.
 - Panatilihing naka-enable ang mga heartbeat para makapag-iskedyul ang assistant ng mga paalala, mag-monitor ng mga inbox, at mag-trigger ng mga camera capture.
-- Ang Canvas UI ay tumatakbo nang full-screen na may native overlays. Iwasang ilagay ang mga kritikal na kontrol sa top-left/top-right/bottom edges; magdagdag ng malinaw na mga gutter sa layout at huwag umasa sa safe-area insets.
+- Canvas UI runs full-screen with native overlays. Avoid placing critical controls in the top-left/top-right/bottom edges; add explicit gutters in the layout and don’t rely on safe-area insets.
 - Para sa browser-driven na verification, gamitin ang `openclaw browser` (tabs/status/screenshot) gamit ang OpenClaw-managed Chrome profile.
 - Para sa DOM inspection, gamitin ang `openclaw browser eval|query|dom|snapshot` (at `--json`/`--out` kapag kailangan mo ng machine output).
 - Para sa mga interaction, gamitin ang `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (ang click/type ay nangangailangan ng snapshot refs; gamitin ang `evaluate` para sa mga CSS selector).

@@ -5,13 +5,6 @@ read_when:
   - आप लॉग स्तरों या फ़ॉर्मैट्स को कॉन्फ़िगर करना चाहते हैं
   - आप समस्या-निवारण कर रहे हैं और लॉग्स जल्दी ढूँढने की ज़रूरत है
 title: "लॉगिंग"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:53Z
 ---
 
 # लॉगिंग
@@ -75,8 +68,8 @@ openclaw doctor
 
 ### Control UI (वेब)
 
-Control UI का **Logs** टैब `logs.tail` का उपयोग करके उसी फ़ाइल को टेल करता है।
-इसे खोलने के लिए [/web/control-ui](/web/control-ui) देखें।
+कंट्रोल UI का **Logs** टैब `logs.tail` का उपयोग करके उसी फ़ाइल को tail करता है।
+इसे कैसे खोलें, इसके लिए [/web/control-ui](/web/control-ui) देखें।
 
 ### केवल‑चैनल लॉग्स
 
@@ -90,14 +83,13 @@ openclaw channels logs --channel whatsapp
 
 ### फ़ाइल लॉग्स (JSONL)
 
-लॉग फ़ाइल की प्रत्येक पंक्ति एक JSON ऑब्जेक्ट होती है। CLI और Control UI इन
-एंट्रियों को पार्स करके संरचित आउटपुट (समय, स्तर, सबसिस्टम, संदेश) रेंडर करते हैं।
+लॉग फ़ाइल की प्रत्येक पंक्ति एक JSON ऑब्जेक्ट होती है। CLI और कंट्रोल UI इन प्रविष्टियों को पार्स करके संरचित आउटपुट (time, level, subsystem, message) रेंडर करते हैं।
 
 ### कंसोल आउटपुट
 
 कंसोल लॉग्स **TTY‑aware** होते हैं और पठनीयता के लिए फ़ॉर्मैट किए जाते हैं:
 
-- सबसिस्टम प्रीफ़िक्स (उदा. `gateway/channels/whatsapp`)
+- Subsystem prefixes (उदा. `gateway/channels/whatsapp`)
 - स्तर रंगांकन (info/warn/error)
 - वैकल्पिक कॉम्पैक्ट या JSON मोड
 
@@ -146,8 +138,7 @@ openclaw channels logs --channel whatsapp
 
 ## डायग्नोस्टिक्स + OpenTelemetry
 
-डायग्नोस्टिक्स संरचित, मशीन‑पठनीय इवेंट्स हैं जो मॉडल रन **और**
-मैसेज‑फ़्लो टेलीमेट्री (वेबहुक्स, क्यूइंग, सत्र स्थिति) के लिए होते हैं। वे लॉग्स को **प्रतिस्थापित नहीं** करते; वे मेट्रिक्स, ट्रेसेज़ और अन्य एक्सपोर्टर्स को फ़ीड करने के लिए मौजूद हैं।
+Diagnostics मॉडल रन **और** message-flow telemetry (webhooks, queueing, session state) के लिए संरचित, machine-readable events होते हैं। ये **logs** को प्रतिस्थापित नहीं करते; ये metrics, traces और अन्य exporters को फ़ीड करने के लिए मौजूद होते हैं।
 
 डायग्नोस्टिक्स इवेंट्स इन‑प्रोसेस उत्सर्जित होते हैं, लेकिन एक्सपोर्टर्स तभी अटैच होते हैं जब
 डायग्नोस्टिक्स + एक्सपोर्टर प्लगइन सक्षम हों।
@@ -162,8 +153,7 @@ openclaw channels logs --channel whatsapp
 
 - **मेट्रिक्स**: काउंटर + हिस्टोग्राम (टोकन उपयोग, मैसेज फ़्लो, क्यूइंग)।
 - **ट्रेसेज़**: मॉडल उपयोग + वेबहुक/मैसेज प्रोसेसिंग के लिए स्पैन।
-- **लॉग्स**: `diagnostics.otel.logs` सक्षम होने पर OTLP के माध्यम से एक्सपोर्ट किए जाते हैं। लॉग
-  वॉल्यूम अधिक हो सकता है; `logging.level` और एक्सपोर्टर फ़िल्टर्स को ध्यान में रखें।
+- **Logs**: जब `diagnostics.otel.logs` सक्षम होता है, तब OTLP के माध्यम से export किए जाते हैं। लॉग वॉल्यूम अधिक हो सकता है; `logging.level` और exporter filters को ध्यान में रखें।
 
 ### डायग्नोस्टिक इवेंट कैटलॉग
 
@@ -202,8 +192,8 @@ openclaw channels logs --channel whatsapp
 
 ### डायग्नोस्टिक्स फ़्लैग्स (लक्षित लॉग्स)
 
-`logging.level` बढ़ाए बिना अतिरिक्त, लक्षित डिबग लॉग्स चालू करने के लिए फ़्लैग्स का उपयोग करें।
-फ़्लैग्स केस‑इन्सेंसिटिव होते हैं और वाइल्डकार्ड्स का समर्थन करते हैं (उदा. `telegram.*` या `*`)।
+`logging.level` बढ़ाए बिना अतिरिक्त, लक्षित debug logs चालू करने के लिए flags का उपयोग करें।
+Flags case-insensitive होते हैं और wildcards को सपोर्ट करते हैं (उदा. `telegram.*` या `*`)।
 
 ```json
 {
@@ -227,8 +217,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 ### OpenTelemetry में एक्सपोर्ट करें
 
-डायग्नोस्टिक्स को `diagnostics-otel` प्लगइन (OTLP/HTTP) के माध्यम से एक्सपोर्ट किया जा सकता है। यह
-किसी भी OpenTelemetry कलेक्टर/बैकएंड के साथ काम करता है जो OTLP/HTTP स्वीकार करता है।
+Diagnostics को `diagnostics-otel` प्लगइन (OTLP/HTTP) के माध्यम से export किया जा सकता है। यह किसी भी ऐसे OpenTelemetry collector/backend के साथ काम करता है जो OTLP/HTTP स्वीकार करता हो।
 
 ```json
 {
@@ -260,11 +249,10 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 नोट्स:
 
 - आप प्लगइन को `openclaw plugins enable diagnostics-otel` के साथ भी सक्षम कर सकते हैं।
-- `protocol` वर्तमान में केवल `http/protobuf` का समर्थन करता है। `grpc` अनदेखा किया जाता है।
+- `protocol` वर्तमान में केवल `http/protobuf` को सपोर्ट करता है। `grpc` को अनदेखा किया जाता है।
 - मेट्रिक्स में टोकन उपयोग, लागत, कॉन्टेक्स्ट आकार, रन अवधि, और मैसेज‑फ़्लो
   काउंटर/हिस्टोग्राम (वेबहुक्स, क्यूइंग, सत्र स्थिति, क्यू गहराई/प्रतीक्षा) शामिल हैं।
-- ट्रेसेज़/मेट्रिक्स को `traces` / `metrics` (डिफ़ॉल्ट: ऑन) से टॉगल किया जा सकता है। ट्रेसेज़
-  में मॉडल उपयोग स्पैन के साथ वेबहुक/मैसेज प्रोसेसिंग स्पैन भी शामिल होते हैं।
+- Traces/metrics को `traces` / `metrics` के साथ toggle किया जा सकता है (default: on)। Traces में सक्षम होने पर model usage spans के साथ webhook/message processing spans शामिल होते हैं।
 - जब आपके कलेक्टर को प्रमाणीकरण चाहिए हो तो `headers` सेट करें।
 - समर्थित पर्यावरण चर: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`।
@@ -344,7 +332,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 ### लॉग एक्सपोर्ट व्यवहार
 
 - OTLP लॉग्स वही संरचित रिकॉर्ड्स उपयोग करते हैं जो `logging.file` में लिखे जाते हैं।
-- `logging.level` (फ़ाइल लॉग स्तर) का सम्मान करें। कंसोल रेडैक्शन OTLP लॉग्स पर **लागू नहीं** होता।
+- `logging.level` (file log level) का सम्मान करें। Console redaction OTLP logs पर **लागू नहीं** होती।
 - उच्च‑वॉल्यूम इंस्टॉलेशन्स को OTLP कलेक्टर सैंपलिंग/फ़िल्टरिंग को प्राथमिकता देनी चाहिए।
 
 ## समस्या‑निवारण सुझाव

@@ -4,13 +4,6 @@ read_when:
   - Ililipat mo ang OpenClaw sa bagong laptop/server
   - Gusto mong mapanatili ang mga session, auth, at mga login ng channel (WhatsApp, atbp.)
 title: "Gabay sa Migration"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:45Z
 ---
 
 # Pag-migrate ng OpenClaw sa bagong makina
@@ -26,7 +19,7 @@ Ngunit may mga karaniwang footgun kaugnay ng **profiles**, **permissions**, at *
 
 ## Bago ka magsimula (kung ano ang imi-migrate mo)
 
-### 1) Tukuyin ang iyong state directory
+### 1. Tukuyin ang iyong state directory
 
 Karamihan ng install ay gumagamit ng default:
 
@@ -43,9 +36,9 @@ Kung hindi ka sigurado, patakbuhin sa **lumang** makina:
 openclaw status
 ```
 
-Hanapin ang mga banggit ng `OPENCLAW_STATE_DIR` / profile sa output. Kung nagpapatakbo ka ng maraming gateway, ulitin ito para sa bawat profile.
+Maghanap ng mga banggit ng `OPENCLAW_STATE_DIR` / profile sa output. Kung nagpapatakbo ka ng maraming gateway, ulitin ito para sa bawat profile.
 
-### 2) Tukuyin ang iyong workspace
+### 2. Tukuyin ang iyong workspace
 
 Mga karaniwang default:
 
@@ -54,7 +47,7 @@ Mga karaniwang default:
 
 Ang iyong workspace ang kinalalagyan ng mga file tulad ng `MEMORY.md`, `USER.md`, at `memory/*.md`.
 
-### 3) Unawain kung ano ang mapapanatili mo
+### 3. Unawain kung ano ang mapapanatili mo
 
 Kung kokopyahin mo **pareho** ang state dir at workspace, mapapanatili mo ang:
 
@@ -128,7 +121,7 @@ Sa **bagong** makina:
 openclaw doctor
 ```
 
-Ang Doctor ang “ligtas at boring” na command. Inaayos nito ang mga service, ina-apply ang mga migration ng config, at nagbababala tungkol sa mga mismatch.
+Ang Doctor ang “ligtas at boring” na command. Inaayos nito ang mga serbisyo, ina-apply ang mga config migration, at nagbababala tungkol sa mga mismatch.
 
 Pagkatapos:
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### Footgun: pagkopya lang ng `openclaw.json`
 
-Hindi sapat ang `openclaw.json`. Maraming provider ang nag-iimbak ng estado sa ilalim ng:
+Hindi sapat ang `openclaw.json`. Maraming provider ang nag-iimbak ng state sa ilalim ng:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -177,7 +170,7 @@ Kung nasa remote mode ka, i-migrate ang **host ng Gateway**.
 
 ### Footgun: mga secret sa mga backup
 
-Ang `$OPENCLAW_STATE_DIR` ay naglalaman ng mga secret (API key, OAuth token, kredensyal ng WhatsApp). Tratuhin ang mga backup na parang production secrets:
+Ang `$OPENCLAW_STATE_DIR` ay naglalaman ng mga lihim (API keys, OAuth tokens, WhatsApp creds). Tratuhin ang mga backup na parang production secrets:
 
 - itago nang naka-encrypt
 - iwasang ibahagi sa mga hindi secure na channel

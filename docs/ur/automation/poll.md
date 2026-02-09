@@ -4,13 +4,6 @@ read_when:
   - پول سپورٹ شامل یا ترمیم کرتے وقت
   - CLI یا گیٹ وے سے پول بھیجنے کی خرابیوں کا ازالہ کرتے وقت
 title: "پولز"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:49Z
 ---
 
 # پولز
@@ -64,12 +57,12 @@ Params:
 ## چینل کے فرق
 
 - WhatsApp: 2-12 اختیارات، `maxSelections` کو اختیارات کی تعداد کے اندر ہونا لازم ہے، `durationHours` کو نظر انداز کرتا ہے۔
-- Discord: 2-10 اختیارات، `durationHours` کو 1-768 گھنٹوں تک محدود کیا جاتا ہے (default 24)۔ `maxSelections > 1` ملٹی سلیکٹ کو فعال کرتا ہے؛ Discord سخت انتخابی تعداد کی حمایت نہیں کرتا۔
-- MS Teams: Adaptive Card پولز (OpenClaw کے زیرِ انتظام)۔ کوئی مقامی پول API نہیں؛ `durationHours` کو نظر انداز کیا جاتا ہے۔
+- 34. Discord: 2-10 اختیارات، `durationHours` کو 1-768 گھنٹوں کے درمیان محدود کیا جاتا ہے (ڈیفالٹ 24)۔ 35. `maxSelections > 1` ملٹی سلیکٹ کو فعال کرتا ہے؛ Discord سخت انتخابی تعداد کی حمایت نہیں کرتا۔
+- 36. MS Teams: Adaptive Card پولز (OpenClaw کے زیرِ انتظام)۔ No native poll API; `durationHours` is ignored.
 
 ## Agent tool (Message)
 
 `message` ٹول کو `poll` ایکشن کے ساتھ استعمال کریں (`to`، `pollQuestion`، `pollOption`، اختیاری `pollMulti`، `pollDurationHours`، `channel`)۔
 
-Note: Discord میں “بالکل N منتخب کریں” موڈ موجود نہیں؛ `pollMulti` ملٹی سلیکٹ سے میپ ہوتا ہے۔
-Teams کے پولز Adaptive Cards کے طور پر رینڈر ہوتے ہیں اور ووٹس کو `~/.openclaw/msteams-polls.json` میں ریکارڈ کرنے کے لیے گیٹ وے کا آن لائن رہنا ضروری ہے۔
+38. نوٹ: Discord میں "بالکل N منتخب کریں" موڈ موجود نہیں؛ `pollMulti` ملٹی سلیکٹ سے میپ ہوتا ہے۔
+39. Teams پولز Adaptive Cards کے طور پر رینڈر ہوتے ہیں اور ووٹس ریکارڈ کرنے کے لیے گیٹ وے کا آن لائن رہنا ضروری ہے `~/.openclaw/msteams-polls.json` میں۔

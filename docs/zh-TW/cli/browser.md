@@ -5,20 +5,13 @@ read_when:
   - 當你想要透過節點主機控制在另一台機器上執行的瀏覽器時
   - 當你想要使用 Chrome 擴充功能轉接（透過工具列按鈕附加／分離）時
 title: "瀏覽器"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:16Z
 ---
 
 # `openclaw browser`
 
-管理 OpenClaw 的瀏覽器控制伺服器，並執行瀏覽器動作（分頁、快照、螢幕截圖、導覽、點擊、輸入）。
+Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
 
-相關：
+Related:
 
 - 瀏覽器工具 + API：[Browser tool](/tools/browser)
 - Chrome 擴充功能轉接：[Chrome extension](/tools/chrome-extension)
@@ -40,9 +33,9 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
-## 設定檔
+## Profiles
 
-設定檔是具名的瀏覽器路由設定。實務上：
+Profiles are named browser routing configs. In practice:
 
 - `openclaw`：啟動／附加到由 OpenClaw 管理的專用 Chrome 執行個體（隔離的使用者資料目錄）。
 - `chrome`：透過 Chrome 擴充功能轉接控制你現有的 Chrome 分頁。
@@ -107,7 +100,7 @@ openclaw browser extension path
 
 ## 遠端瀏覽器控制（節點主機代理）
 
-若 Gateway 與瀏覽器不在同一台機器上，請在具備 Chrome／Brave／Edge／Chromium 的機器上執行 **節點主機**。Gateway 會將瀏覽器動作代理到該節點（不需要獨立的瀏覽器控制伺服器）。
+若 Gateway 與瀏覽器不在同一台機器上，請在具備 Chrome／Brave／Edge／Chromium 的機器上執行 **節點主機**。Gateway 會將瀏覽器動作代理到該節點（不需要獨立的瀏覽器控制伺服器）。 The Gateway will proxy browser actions to that node (no separate browser control server required).
 
 使用 `gateway.nodes.browser.mode` 來控制自動路由，並在多個節點連線時使用 `gateway.nodes.browser.node` 來固定特定節點。
 

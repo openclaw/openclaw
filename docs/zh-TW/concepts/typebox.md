@@ -1,15 +1,8 @@
 ---
-summary: 「將 TypeBox 結構描述作為 Gateway 通訊協定的單一事實來源」
+summary: "將 TypeBox 結構描述作為 Gateway 通訊協定的單一事實來源"
 read_when:
   - 更新通訊協定結構描述或程式碼產生
-title: 「TypeBox」
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:00Z
+title: "TypeBox"
 ---
 
 # TypeBox 作為通訊協定的事實來源
@@ -17,7 +10,7 @@ x-i18n:
 最後更新：2026-01-10
 
 TypeBox 是一個以 TypeScript 為優先的結構描述函式庫。我們使用它來定義 **Gateway
-WebSocket 通訊協定**（交握、請求／回應、伺服器事件）。這些結構描述驅動 **執行期驗證**、**JSON Schema 匯出**，以及 macOS 應用程式的 **Swift 程式碼產生**。單一事實來源；其他一切皆由此產生。
+WebSocket 通訊協定**（交握、請求／回應、伺服器事件）。這些結構描述驅動 **執行期驗證**、**JSON Schema 匯出**，以及 macOS 應用程式的 **Swift 程式碼產生**。單一事實來源；其他一切皆由此產生。 35. 我們使用它來定義 **Gateway WebSocket 通訊協定**（交握、請求／回應、伺服器事件）。 36. 這些結構描述驅動**執行階段驗證**、**JSON Schema 匯出**，以及 macOS App 的 **Swift 程式碼產生**。 37. 單一事實來源；其餘一切皆由此產生。
 
 如果你想了解較高層級的通訊協定背景，請從
 [Gateway architecture](/concepts/architecture) 開始。
@@ -30,9 +23,7 @@ WebSocket 通訊協定**（交握、請求／回應、伺服器事件）。這�
 - **Response**：`{ type: "res", id, ok, payload | error }`
 - **Event**：`{ type: "event", event, payload, seq?, stateVersion? }`
 
-第一個框架 **必須** 是一個 `connect` 請求。之後，用戶端可以呼叫
-方法（例如 `health`、`send`、`chat.send`），並訂閱事件（例如
-`presence`、`tick`、`agent`）。
+38. 第一個影格**必須**是 `connect` 請求。 39. 之後，客戶端可以呼叫方法（例如 `health`、`send`、`chat.send`），並訂閱事件（例如 `presence`、`tick`、`agent`）。
 
 連線流程（最小）：
 
@@ -47,18 +38,18 @@ Client                    Gateway
 
 常見方法與事件：
 
-| 類別      | 範例                                                      | 備註                                |
-| --------- | --------------------------------------------------------- | ----------------------------------- |
-| Core      | `connect`、`health`、`status`                             | `connect` 必須是第一個              |
-| Messaging | `send`、`poll`、`agent`、`agent.wait`                     | 有副作用的操作需要 `idempotencyKey` |
-| Chat      | `chat.history`、`chat.send`、`chat.abort`、`chat.inject`  | WebChat 使用這些                    |
-| Sessions  | `sessions.list`、`sessions.patch`、`sessions.delete`      | 工作階段管理                        |
-| Nodes     | `node.list`、`node.invoke`、`node.pair.*`                 | Gateway WS + 節點動作               |
-| Events    | `tick`、`presence`、`agent`、`chat`、`health`、`shutdown` | 伺服器推送                          |
+| 40. 類別 | 範例                                                    | 注意事項                       |
+| ----------------------------- | ----------------------------------------------------- | -------------------------- |
+| Core                          | `connect`、`health`、`status`                           | `connect` 必須是第一個           |
+| Messaging                     | `send`、`poll`、`agent`、`agent.wait`                    | 有副作用的操作需要 `idempotencyKey` |
+| Chat                          | `chat.history`、`chat.send`、`chat.abort`、`chat.inject` | WebChat 使用這些               |
+| Sessions                      | `sessions.list`、`sessions.patch`、`sessions.delete`    | session admin              |
+| Nodes                         | `node.list`、`node.invoke`、`node.pair.*`               | Gateway WS + 節點動作          |
+| Events                        | `tick`、`presence`、`agent`、`chat`、`health`、`shutdown`  | 伺服器推送                      |
 
 權威清單位於 `src/gateway/server.ts`（`METHODS`、`EVENTS`）。
 
-## 結構描述的位置
+## Where the schemas live
 
 - 來源：`src/gateway/protocol/schema.ts`
 - 執行期驗證器（AJV）：`src/gateway/protocol/index.ts`
@@ -74,12 +65,13 @@ Client                    Gateway
 - `pnpm protocol:gen:swift`
   - 產生 Swift Gateway 模型
 - `pnpm protocol:check`
-  - 執行兩個產生器並驗證輸出已提交
+  - runs both generators and verifies the output is committed
 
 ## 結構描述在執行期的使用方式
 
 - **伺服器端**：每個傳入的框架都會以 AJV 驗證。交握僅接受
-  其參數符合 `ConnectParams` 的 `connect` 請求。
+  其參數符合 `ConnectParams` 的 `connect` 請求。 The handshake only
+  accepts a `connect` request whose params match `ConnectParams`.
 - **用戶端**：JS 用戶端在使用事件與回應框架之前會先進行驗證。
 - **方法介面**：Gateway 會在 `hello-ok` 中公告支援的 `methods` 與
   `events`。
@@ -265,13 +257,13 @@ Swift 產生器會輸出：
 
 未知的框架型別會以原始 payload 保留，以利向前相容。
 
-## 版本控管與相容性
+## Versioning + compatibility
 
 - `PROTOCOL_VERSION` 位於 `src/gateway/protocol/schema.ts`。
 - 用戶端會送出 `minProtocol` + `maxProtocol`；伺服器會拒絕不相符者。
 - Swift 模型會保留未知的框架型別，以避免破壞較舊的用戶端。
 
-## 結構描述樣式與慣例
+## Schema patterns and conventions
 
 - 多數物件使用 `additionalProperties: false` 以確保 payload 嚴格。
 - `NonEmptyString` 是 ID 與方法／事件名稱的預設型別。
@@ -281,11 +273,12 @@ Swift 產生器會輸出：
 
 ## 即時結構描述 JSON
 
-產生的 JSON Schema 位於儲存庫中的 `dist/protocol.schema.json`。已發布的原始檔案通常可在以下位置取得：
+產生的 JSON Schema 位於儲存庫中的 `dist/protocol.schema.json`。已發布的原始檔案通常可在以下位置取得： The
+published raw file is typically available at:
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 
-## 當你變更結構描述時
+## When you change schemas
 
 1. 更新 TypeBox 結構描述。
 2. 執行 `pnpm protocol:check`。

@@ -2,16 +2,9 @@
 summary: "Forschungsnotizen: Offline-Memory-System für Clawd-Workspaces (Markdown als Source of Truth + abgeleiteter Index)"
 read_when:
   - Entwurf von Workspace-Memory (~/.openclaw/workspace) über tägliche Markdown-Logs hinaus
-  - Entscheidung: eigenständige CLI vs. tiefe OpenClaw-Integration
+  - Deciding: "Entscheidung: eigenständige CLI vs. tiefe OpenClaw-Integration"
   - Hinzufügen von Offline-Recall + Reflexion (retain/recall/reflect)
 title: "Workspace-Memory-Forschung"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:26Z
 ---
 
 # Workspace Memory v2 (offline): Forschungsnotizen
@@ -27,14 +20,14 @@ Das aktuelle Setup (eine Datei pro Tag) ist hervorragend für:
 - „append-only“-Journaling
 - menschliche Bearbeitung
 - git-gestützte Dauerhaftigkeit + Auditierbarkeit
-- reibungsarme Erfassung („einfach aufschreiben“)
+- geringe Reibungsaufnahmen („einfach aufschreiben“)
 
 Es ist schwach bei:
 
 - Retrieval mit hoher Trefferquote („Was haben wir zu X entschieden?“, „Wann haben wir Y zuletzt ausprobiert?“)
 - entitätszentrierten Antworten („Erzähl mir etwas über Alice / The Castle / warelay“) ohne viele Dateien erneut zu lesen
 - Stabilität von Meinungen/Präferenzen (und Nachweise bei Änderungen)
-- Zeitbezug („Was galt im Nov 2025?“) und Konfliktauflösung
+- Zeitbezug („Was galt im Nov 2025?“) und Konfliktauflösung und Konfliktlösung
 
 ## Designziele
 
@@ -46,7 +39,7 @@ Es ist schwach bei:
 
 ## Nordstern-Modell (Hindsight × Letta)
 
-Zwei Bausteine, die zu verbinden sind:
+Zwei zu mischende Stücke:
 
 1. **Letta/MemGPT-ähnliche Kontrollschleife**
 
@@ -117,7 +110,7 @@ Praktische Regel für `memory/YYYY-MM-DD.md`:
 
 - fügen Sie am Tagesende (oder währenddessen) einen Abschnitt `## Retain` mit 2–5 Stichpunkten hinzu, die:
   - narrativ sind (kontextübergreifend)
-  - in sich geschlossen sind (später eigenständig verständlich)
+  - eigenständig (Standalone macht später Sinn)
   - mit Typ + Entitätsnennungen getaggt sind
 
 Beispiel:
@@ -144,7 +137,7 @@ Recall sollte unterstützen:
 - **lexikalisch**: „exakte Begriffe / Namen / Commands finden“ (FTS5)
 - **entitätsbezogen**: „Erzähl mir etwas über X“ (Entitätsseiten + entitätsverknüpfte Fakten)
 - **zeitlich**: „Was geschah um den 27. Nov“ / „seit letzter Woche“
-- **meinungsbezogen**: „Was bevorzugt Peter?“ (mit Konfidenz + Evidenz)
+- **meinungsbezogen**: „Was bevorzugt Peter?“ (mit Konfidenz + Evidenz) (mit Vertrauen + Beweis)
 
 Das Rückgabeformat sollte agentenfreundlich sein und Quellen zitieren:
 
@@ -201,7 +194,7 @@ Wenn sich „S-Collide“ auf **SuCo (Subspace Collision)** bezieht: Es handelt 
 
 Pragmatische Einschätzung für `~/.openclaw/workspace`:
 
-- **nicht damit anfangen**.
+- **nicht starten** mit SuCo.
 - mit SQLite FTS + (optional) einfachen Embeddings starten; damit erzielen Sie sofort die meisten UX-Gewinne.
 - SuCo/HNSW/ScaNN-ähnliche Lösungen erst erwägen, wenn:
   - der Korpus groß ist (Zehntausende/Hunderttausende Chunks)

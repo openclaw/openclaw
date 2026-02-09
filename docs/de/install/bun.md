@@ -1,16 +1,9 @@
 ---
-summary: „Bun-Workflow (experimentell): Installation und Fallstricke im Vergleich zu pnpm“
+summary: "„Bun-Workflow (experimentell): Installation und Fallstricke im Vergleich zu pnpm“"
 read_when:
   - Sie möchten den schnellsten lokalen Entwicklungszyklus (bun + watch)
   - Sie stoßen auf Probleme bei Bun-Installation/Patching/Lifecycle-Skripten
-title: „Bun (Experimentell)“
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:28Z
+title: "„Bun (Experimentell)“"
 ---
 
 # Bun (experimentell)
@@ -61,6 +54,6 @@ Wenn Sie auf ein echtes Laufzeitproblem stoßen, das diese Skripte erfordert, ve
 bun pm trust @whiskeysockets/baileys protobufjs
 ```
 
-## Einschränkungen
+## Vorsichtsmaßnahmen
 
 - Einige Skripte sind weiterhin fest auf pnpm verdrahtet (z. B. `docs:build`, `ui:*`, `protocol:check`). Führen Sie diese vorerst über pnpm aus.

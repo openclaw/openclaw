@@ -5,13 +5,6 @@ read_when:
   - WhatsApp’ta çoklu ajan yanıtlarını hata ayıklama
 status: experimental
 title: "Yayın Grupları"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:04Z
 ---
 
 # Yayın Grupları
@@ -98,7 +91,7 @@ Ajanların mesajları nasıl işleyeceğini kontrol edin:
 
 #### Paralel (Varsayılan)
 
-Tüm ajanlar eşzamanlı olarak işlem yapar:
+Tüm ajanlar eşzamanlı olarak işler:
 
 ```json
 {
@@ -166,7 +159,7 @@ Ajanlar sırayla işlem yapar (öncekinin bitmesini bekler):
 3. **Yayın listesinde ise**:
    - Listelenen tüm ajanlar mesajı işler
    - Her ajanın kendi oturum anahtarı ve yalıtılmış bağlamı vardır
-   - Ajanlar paralel (varsayılan) veya ardışık olarak işlem yapar
+   - Ajanlar paralel (varsayılan) veya sıralı olarak işler
 4. **Yayın listesinde değilse**:
    - Normal yönlendirme uygulanır (ilk eşleşen bağlama)
 
@@ -262,7 +255,7 @@ Ajanlara yalnızca ihtiyaç duydukları araçları verin:
 
 ### 4. Performansı İzleyin
 
-Çok sayıda ajanla çalışırken şunları göz önünde bulundurun:
+Çok sayıda ajanla şunları göz önünde bulundurun:
 
 - Hız için `"strategy": "parallel"` (varsayılan) kullanımı
 - Yayın gruplarını 5–10 ajanla sınırlama
@@ -319,7 +312,7 @@ Yayın grupları mevcut yönlendirme ile birlikte çalışır:
 
 1. Ajan kimliklerinin `agents.list` içinde mevcut olması
 2. Eş kimliği biçiminin doğru olması (örn. `120363403215116621@g.us`)
-3. Ajanların reddetme listelerinde olmaması
+3. Ajanlar engelleme listelerinde değil
 
 **Hata Ayıklama:**
 
@@ -327,7 +320,7 @@ Yayın grupları mevcut yönlendirme ile birlikte çalışır:
 tail -f ~/.openclaw/logs/gateway.log | grep broadcast
 ```
 
-### Yalnızca Bir Ajan Yanıtlıyor
+### Yalnızca Bir Ajan Yanıt Veriyor
 
 **Neden:** Eş kimliği `bindings` içinde olabilir ancak `broadcast` içinde olmayabilir.
 
@@ -428,7 +421,7 @@ interface OpenClawConfig {
 
 ## Sınırlamalar
 
-1. **Maks. ajan:** Kesin bir sınır yoktur, ancak 10+ ajan yavaş olabilir
+1. **Maks. ajanlar:** Kesin bir sınır yok, ancak 10+ ajan yavaş olabilir
 2. **Paylaşılan bağlam:** Ajanlar birbirlerinin yanıtlarını görmez (tasarım gereği)
 3. **Mesaj sıralaması:** Paralel yanıtlar herhangi bir sırayla gelebilir
 4. **Hız sınırları:** Tüm ajanlar WhatsApp hız sınırlarına dahil edilir
@@ -439,7 +432,7 @@ Planlanan özellikler:
 
 - [ ] Paylaşılan bağlam modu (ajanlar birbirlerinin yanıtlarını görür)
 - [ ] Ajan koordinasyonu (ajanlar birbirlerine sinyal gönderebilir)
-- [ ] Dinamik ajan seçimi (mesaj içeriğine göre ajan seçimi)
+- [ ] Dinamik ajan seçimi (mesaj içeriğine göre ajan seçme)
 - [ ] Ajan öncelikleri (bazı ajanlar diğerlerinden önce yanıtlar)
 
 ## Ayrıca Bakınız

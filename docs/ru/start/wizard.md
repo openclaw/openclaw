@@ -5,13 +5,6 @@ read_when:
   - При настройке новой машины
 title: "Мастер онбординга (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:04Z
 ---
 
 # Мастер онбординга (CLI)
@@ -52,7 +45,7 @@ openclaw agents add <name>
 Мастер начинается с выбора **QuickStart** (по умолчанию) или **Advanced** (полный контроль).
 
 <Tabs>
-  <Tab title="QuickStart (по умолчанию)">
+  <Tab title="QuickStart (defaults)">
     - Локальный Gateway (шлюз) (loopback)
     - Рабочее пространство по умолчанию (или существующее рабочее пространство)
     - Порт Gateway (шлюза) **18789**
@@ -60,7 +53,7 @@ openclaw agents add <name>
     - Экспозиция через Tailscale: **Off**
     - Личные сообщения Telegram + WhatsApp по умолчанию используют **allowlist** (вас попросят указать номер телефона)
   </Tab>
-  <Tab title="Advanced (полный контроль)">
+  <Tab title="Advanced (full control)">
     - Открывает каждый шаг (режим, рабочее пространство, Gateway (шлюз), каналы, демон, Skills).
   </Tab>
 </Tabs>
@@ -106,8 +99,7 @@ openclaw agents add <name>
 ## Полный справочник
 
 Для подробных пошаговых разборов, неинтерактивного скриптинга, настройки Signal,
-RPC API и полного списка полей конфига, которые записывает мастер, см.
-[Wizard Reference](/reference/wizard).
+RPC API и полного списка полей конфига, которые записывает мастер, см. [Wizard Reference](/reference/wizard).
 
 ## Связанная документация
 

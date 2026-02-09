@@ -4,13 +4,6 @@ read_when:
   - تعريض واجهة تحكّم Gateway خارج localhost
   - أتمتة الوصول إلى لوحة التحكّم عبر tailnet أو بشكل عام
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:26Z
 ---
 
 # Tailscale (لوحة تحكّم Gateway)
@@ -19,7 +12,7 @@ x-i18n:
 للوحة تحكّم Gateway ومنفذ WebSocket. يحافظ ذلك على ربط Gateway بـ loopback بينما
 توفّر Tailscale بروتوكول HTTPS والتوجيه، و(في Serve) رؤوس الهوية.
 
-## الأوضاع
+## أوضاع
 
 - `serve`: Serve ضمن tailnet فقط عبر `tailscale serve`. تبقى البوابة على `127.0.0.1`.
 - `funnel`: HTTPS عام عبر `tailscale funnel`. يتطلّب OpenClaw كلمة مرور مشتركة.
@@ -109,13 +102,13 @@ openclaw gateway --tailscale funnel --auth password
 - يعرّض Serve/Funnel فقط **واجهة تحكّم Gateway + WS**. تتصل العُقد عبر
   نقطة نهاية Gateway WS نفسها، لذا يمكن أن يعمل Serve للوصول إلى العُقد.
 
-## التحكّم عبر المتصفّح (Gateway بعيد + متصفّح محلي)
+## التحكم في المتصفح (البوابة البعيدة + المتصفح المحلي)
 
 إذا شغّلت Gateway على جهاز وتريد قيادة متصفّح على جهاز آخر،
 فشغّل **مضيف عُقدة** على جهاز المتصفّح وأبقِ الجهازين ضمن tailnet نفسه.
 سيقوم Gateway بتمرير إجراءات المتصفّح إلى العُقدة؛ لا حاجة إلى خادم تحكّم منفصل أو عنوان Serve.
 
-تجنّب Funnel للتحكّم بالمتصفّح؛ وتعامل مع إقران العُقدة بوصفه وصول مُشغِّل.
+تجنب Funnel للتحكم في المتصفح؛ معالجة اقتران العقدة مثل وصول المشغل.
 
 ## متطلبات Tailscale والقيود
 

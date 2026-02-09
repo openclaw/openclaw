@@ -3,23 +3,17 @@ summary: "สถานะการรองรับ ความสามาร
 read_when:
   - กำลังทำงานเกี่ยวกับฟีเจอร์ช่องทาง Tlon/Urbit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:51Z
 ---
 
 # Tlon (ปลั๊กอิน)
 
-Tlon เป็นแอปส่งข้อความแบบกระจายศูนย์ที่สร้างบน Urbit OpenClaw เชื่อมต่อกับ Urbit ship ของคุณและสามารถ
+Tlon is a decentralized messenger built on Urbit. Tlon เป็นแอปส่งข้อความแบบกระจายศูนย์ที่สร้างบน Urbit OpenClaw เชื่อมต่อกับ Urbit ship ของคุณและสามารถ
 ตอบกลับข้อความส่วนตัว(DMs)และข้อความแชทกลุ่มได้ การตอบกลับในกลุ่มต้องมีการ @ mention ตามค่าเริ่มต้น และสามารถ
-จำกัดเพิ่มเติมได้ด้วย allowlists
+จำกัดเพิ่มเติมได้ด้วย allowlists Group replies require an @ mention by default and can
+be further restricted via allowlists.
 
-สถานะ: รองรับผ่านปลั๊กอิน รองรับ DMs, การกล่าวถึงในกลุ่ม, การตอบกลับในเธรด และการสำรองสื่อเป็นข้อความเท่านั้น
-(แนบ URL ต่อท้ายคำบรรยาย) ไม่รองรับรีแอ็กชัน โพล และการอัปโหลดสื่อแบบเนทีฟ
+Status: supported via plugin. สถานะ: รองรับผ่านปลั๊กอิน รองรับ DMs, การกล่าวถึงในกลุ่ม, การตอบกลับในเธรด และการสำรองสื่อเป็นข้อความเท่านั้น
+(แนบ URL ต่อท้ายคำบรรยาย) ไม่รองรับรีแอ็กชัน โพล และการอัปโหลดสื่อแบบเนทีฟ Reactions, polls, and native media uploads are not supported.
 
 ## ต้องใช้ปลั๊กอิน
 
@@ -64,7 +58,7 @@ openclaw plugins install ./extensions/tlon
 
 ## ช่องทางกลุ่ม
 
-เปิดใช้งานการค้นหาอัตโนมัติเป็นค่าเริ่มต้น คุณยังสามารถปักหมุดช่องทางด้วยตนเองได้:
+Auto-discovery is enabled by default. เปิดใช้งานการค้นหาอัตโนมัติเป็นค่าเริ่มต้น คุณยังสามารถปักหมุดช่องทางด้วยตนเองได้:
 
 ```json5
 {

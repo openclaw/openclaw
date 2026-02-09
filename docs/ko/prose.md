@@ -1,17 +1,10 @@
 ---
 summary: "OpenProse: OpenClaw 에서의 .prose 워크플로, 슬래시 명령, 상태 관리"
 read_when:
-  - ".prose 워크플로를 실행하거나 작성하려는 경우"
-  - "OpenProse 플러그인을 활성화하려는 경우"
-  - "상태 저장 방식을 이해해야 하는 경우"
+  - .prose 워크플로를 실행하거나 작성하려는 경우
+  - OpenProse 플러그인을 활성화하려는 경우
+  - 상태 저장 방식을 이해해야 하는 경우
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:53Z
 ---
 
 # OpenProse
@@ -126,11 +119,11 @@ OpenProse 는 여러 상태 백엔드를 지원합니다:
 
 OpenProse 프로그램은 OpenClaw 기본 요소로 매핑됩니다:
 
-| OpenProse 개념        | OpenClaw 도구    |
-| --------------------- | ---------------- |
+| OpenProse 개념  | OpenClaw 도구      |
+| ------------- | ---------------- |
 | 세션 생성 / 작업 도구 | `sessions_spawn` |
-| 파일 읽기/쓰기        | `read` / `write` |
-| 웹 가져오기           | `web_fetch`      |
+| 파일 읽기/쓰기      | `read` / `write` |
+| 웹 가져오기        | `web_fetch`      |
 
 도구 허용 목록이 이러한 도구를 차단하는 경우 OpenProse 프로그램은 실패합니다. [Skills 설정](/tools/skills-config)을 참고하십시오.
 

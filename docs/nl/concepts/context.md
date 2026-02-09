@@ -5,13 +5,6 @@ read_when:
   - Je bent aan het debuggen waarom het model iets “weet” (of is vergeten)
   - Je wilt context-overhead verminderen (/context, /status, /compact)
 title: "Context"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:25Z
 ---
 
 # Context

@@ -3,13 +3,6 @@ summary: "Ondersteuningsstatus, mogelijkheden en configuratie van de Zalo-bot"
 read_when:
   - Werken aan Zalo-functies of webhooks
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:16Z
 ---
 
 # Zalo (Bot API)
@@ -62,7 +55,7 @@ Het is geschikt voor support of notificaties waarbij je deterministische routeri
 
 ## Installatie (snelle route)
 
-### 1) Maak een bot-token aan (Zalo Bot Platform)
+### 1. Maak een bot-token aan (Zalo Bot Platform)
 
 1. Ga naar [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) en meld je aan.
 2. Maak een nieuwe bot aan en configureer de instellingen.
@@ -97,7 +90,7 @@ Ondersteuning voor meerdere accounts: gebruik `channels.zalo.accounts` met per-a
 - Antwoorden worden altijd teruggestuurd naar dezelfde Zalo-chat.
 - Standaard long-polling; webhookmodus beschikbaar met `channels.zalo.webhookUrl`.
 
-## Limieten
+## Beperkingen
 
 - Uitgaande tekst wordt opgeknipt in stukken van 2000 tekens (Zalo API-limiet).
 - Media-downloads/-uploads zijn begrensd door `channels.zalo.mediaMaxMb` (standaard 5).
@@ -134,16 +127,16 @@ Ondersteuning voor meerdere accounts: gebruik `channels.zalo.accounts` met per-a
 
 ## Mogelijkheden
 
-| Functie              | Status                              |
-| -------------------- | ----------------------------------- |
-| Directe berichten    | ✅ Ondersteund                      |
-| Groepen              | ❌ Binnenkort (volgens Zalo-docs)   |
-| Media (afbeeldingen) | ✅ Ondersteund                      |
-| Reacties             | ❌ Niet ondersteund                 |
-| Threads              | ❌ Niet ondersteund                 |
-| Polls                | ❌ Niet ondersteund                 |
-| Native opdrachten    | ❌ Niet ondersteund                 |
-| Streaming            | ⚠️ Geblokkeerd (limiet 2000 tekens) |
+| Functie                                 | Status                                                 |
+| --------------------------------------- | ------------------------------------------------------ |
+| Directe berichten                       | ✅ Ondersteund                                          |
+| Groepen                                 | ❌ Binnenkort (volgens Zalo-docs)    |
+| Media (afbeeldingen) | ✅ Ondersteund                                          |
+| Reacties                                | ❌ Niet ondersteund                                     |
+| Threads                                 | ❌ Niet ondersteund                                     |
+| Polls                                   | ❌ Niet ondersteund                                     |
+| Native opdrachten                       | ❌ Niet ondersteund                                     |
+| Streaming                               | ⚠️ Geblokkeerd (limiet 2000 tekens) |
 
 ## Afleverdoelen (CLI/cron)
 

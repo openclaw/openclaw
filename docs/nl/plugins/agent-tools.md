@@ -4,13 +4,6 @@ read_when:
   - Je wilt een nieuwe agent-tool toevoegen in een plugin
   - Je moet een tool opt-in maken via toegestane lijsten
 title: "Plugin Agent Tools"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # Plugin agent-tools

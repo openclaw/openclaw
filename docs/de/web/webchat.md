@@ -1,15 +1,8 @@
 ---
-summary: „Loopback-WebChat-Static-Host und Gateway-WS-Nutzung für die Chat-UI“
+summary: "„Loopback-WebChat-Static-Host und Gateway-WS-Nutzung für die Chat-UI“"
 read_when:
   - Beim Debuggen oder Konfigurieren des WebChat-Zugriffs
-title: „WebChat“
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:43Z
+title: "„WebChat“"
 ---
 
 # WebChat (Gateway-WebSocket-UI)

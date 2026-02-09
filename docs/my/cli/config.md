@@ -3,19 +3,11 @@ summary: "`openclaw config` အတွက် CLI ကိုးကားလမ်�
 read_when:
   - config ကို အပြန်အလှန်မပါဘဲ ဖတ်ရှုရန် သို့မဟုတ် တည်းဖြတ်ရန် လိုအပ်သောအခါ
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:59Z
 ---
 
 # `openclaw config`
 
-Config အထောက်အကူများ — လမ်းကြောင်းအလိုက် တန်ဖိုးများကို get/set/unset ပြုလုပ်နိုင်သည်။ Subcommand မပါဘဲ အမိန့်ကို chạy လုပ်ပါက
-configure wizard ကို ဖွင့်ပေးမည် ( `openclaw configure` နှင့် တူညီသည်)။
+Config helpers: path အလိုက် values များကို get/set/unset လုပ်နိုင်သည်။ subcommand မပါဘဲ chạy ပါက configure wizard ကို ဖွင့်ပေးမည် (`openclaw configure` နှင့် အတူတူဖြစ်သည်)။
 
 ## Examples
 
@@ -45,8 +37,8 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 
 ## Values
 
-တန်ဖိုးများကို ဖြစ်နိုင်သမျှ JSON5 အဖြစ် parse လုပ်မည်ဖြစ်ပြီး မဖြစ်ပါက string အဖြစ် ဆက်ဆံပါမည်။
-JSON5 parse လုပ်ရန် မဖြစ်မနေလိုအပ်ပါက `--json` ကို အသုံးပြုပါ။
+values များကို ဖြစ်နိုင်ပါက JSON5 အဖြစ် parse လုပ်သည်၊ မဖြစ်ပါက strings အဖြစ် ဆက်ဆံသည်။
+JSON5 parsing ကို မဖြစ်မနေ လိုအပ်စေရန် `--json` ကို အသုံးပြုပါ။
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"

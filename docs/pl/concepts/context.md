@@ -5,13 +5,6 @@ read_when:
   - Debugujesz, dlaczego model „wie” coś (albo o tym zapomniał)
   - Chcesz zmniejszyć narzut kontekstu (/context, /status, /compact)
 title: "Kontekst"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
 ---
 
 # Kontekst

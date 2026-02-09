@@ -4,25 +4,19 @@ read_when:
   - การเปิดเผยGateway Control UI นอก localhost
   - การทำให้อัตโนมัติการเข้าถึงแดชบอร์ดของ tailnet หรือสาธารณะ
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:20Z
 ---
 
 # Tailscale (แดชบอร์ดGateway)
 
 OpenClaw สามารถตั้งค่า Tailscale **Serve** (tailnet) หรือ **Funnel** (สาธารณะ) ให้โดยอัตโนมัติสำหรับ
 แดชบอร์ดGatewayและพอร์ตWebSocket วิธีนี้ช่วยให้Gatewayผูกกับ loopback ไว้ ขณะที่
-Tailscale ให้บริการ HTTPS การกำหนดเส้นทาง และ (สำหรับ Serve) ส่วนหัวเอกลักษณ์ตัวตน
+Tailscale ให้บริการ HTTPS การกำหนดเส้นทาง และ (สำหรับ Serve) ส่วนหัวเอกลักษณ์ตัวตน สิ่งนี้ทำให้เกตเวย์ผูกกับ loopback ขณะที่
+Tailscale จัดหา HTTPS การกำหนดเส้นทาง และ (สำหรับ Serve) เฮดเดอร์ระบุตัวตน
 
 ## โหมด
 
-- `serve`: Serve เฉพาะ tailnet ผ่าน `tailscale serve` โดยGatewayยังคงอยู่บน `127.0.0.1`.
-- `funnel`: HTTPS สาธารณะผ่าน `tailscale funnel` OpenClawต้องใช้รหัสผ่านที่ใช้ร่วมกัน
+- `serve`: Serve เฉพาะ tailnet ผ่าน `tailscale serve` โดยGatewayยังคงอยู่บน `127.0.0.1`. เกตเวย์ยังคงอยู่ที่ `127.0.0.1`
+- `funnel`: HTTPS สาธารณะผ่าน `tailscale funnel` OpenClawต้องใช้รหัสผ่านที่ใช้ร่วมกัน OpenClaw ต้องใช้รหัสผ่านที่ใช้ร่วมกัน
 - `off`: ค่าเริ่มต้น (ไม่ทำงานอัตโนมัติด้วย Tailscale)
 
 ## การยืนยันตัวตน
@@ -40,7 +34,14 @@ Tailscale ให้บริการ HTTPS การกำหนดเส้น
 OpenClawจะถือว่าคำขอเป็น Serve เฉพาะเมื่อมาจาก loopback พร้อมส่วนหัวของ Tailscale
 `x-forwarded-for`, `x-forwarded-proto`, และ `x-forwarded-host` เท่านั้น
 หากต้องการบังคับให้ใช้ข้อมูลรับรองอย่างชัดเจน ให้ตั้งค่า `gateway.auth.allowTailscale: false` หรือ
-บังคับใช้ `gateway.auth.mode: "password"`.
+บังคับใช้ `gateway.auth.mode: "password"`. OpenClaw ตรวจสอบ
+ตัวตนโดยแก้ไขที่อยู่ `x-forwarded-for` ผ่าน Tailscale
+เดมอนภายในเครื่อง (`tailscale whois`) และจับคู่กับเฮดเดอร์ก่อนยอมรับ
+OpenClaw จะถือว่าคำขอเป็น Serve ก็ต่อเมื่อมาจาก loopback พร้อม
+เฮดเดอร์ `x-forwarded-for`, `x-forwarded-proto`, และ `x-forwarded-host`
+ของ Tailscale
+เพื่อบังคับใช้ข้อมูลรับรองแบบชัดเจน ให้ตั้งค่า `gateway.auth.allowTailscale: false` หรือ
+บังคับ `gateway.auth.mode: "password"`
 
 ## ตัวอย่างคอนฟิก
 
@@ -106,7 +107,7 @@ openclaw gateway --tailscale funnel --auth password
   หรือ `tailscale funnel` เมื่อปิดการทำงาน
 - `gateway.bind: "tailnet"` คือการผูกกับ Tailnet โดยตรง (ไม่มี HTTPS ไม่มี Serve/Funnel)
 - `gateway.bind: "auto"` ให้ความสำคัญกับ loopback; ใช้ `tailnet` หากต้องการเฉพาะ tailnet
-- Serve/Funnel จะเปิดเผยเฉพาะ **Gateway control UI + WS** เท่านั้น โหนดจะเชื่อมต่อผ่าน
+- Serve/Funnel เปิดเผยเฉพาะ **Gateway control UI + WS** Serve/Funnel จะเปิดเผยเฉพาะ **Gateway control UI + WS** เท่านั้น โหนดจะเชื่อมต่อผ่าน
   Gateway WS endpoint เดียวกัน ดังนั้น Serve จึงใช้สำหรับการเข้าถึงโหนดได้
 
 ## การควบคุมเบราว์เซอร์ (Gateway ระยะไกล + เบราว์เซอร์ภายในเครื่อง)
@@ -114,6 +115,7 @@ openclaw gateway --tailscale funnel --auth password
 หากคุณรันGatewayบนเครื่องหนึ่งแต่ต้องการควบคุมเบราว์เซอร์บนอีกเครื่องหนึ่ง
 ให้รัน **โฮสต์โหนด** บนเครื่องที่มีเบราว์เซอร์ และให้ทั้งสองอยู่ใน tailnet เดียวกัน
 Gatewayจะพร็อกซีการทำงานของเบราว์เซอร์ไปยังโหนด โดยไม่ต้องมีเซิร์ฟเวอร์ควบคุมแยกหรือ URL ของ Serve
+เกตเวย์จะพร็อกซีการกระทำของเบราว์เซอร์ไปยังโหนด; ไม่ต้องมีเซิร์ฟเวอร์ควบคุมแยกหรือ URL ของ Serve
 
 หลีกเลี่ยงการใช้ Funnel สำหรับการควบคุมเบราว์เซอร์ และให้ปฏิบัติกับการจับคู่โหนดเหมือนการเข้าถึงของผู้ปฏิบัติการ
 

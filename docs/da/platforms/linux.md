@@ -4,21 +4,14 @@ read_when:
   - Leder efter status for Linux companion-app
   - Planlægger platformsdækning eller bidrag
 title: "Linux-app"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:23Z
 ---
 
 # Linux-app
 
 Gateway er fuldt understøttet på Linux. **Node er den anbefalede runtime**.
-Bun anbefales ikke til Gateway (WhatsApp/Telegram-fejl).
+Bun anbefales ikke til Gateway (WhatsApp/Telegram bugs).
 
-Native Linux companion-apps er planlagt. Bidrag er velkomne, hvis du vil hjælpe med at bygge en.
+Indfødte Linux følgesvend apps er planlagt. Bidrag er velkomne, hvis du ønsker at hjælpe med at opbygge en.
 
 ## Hurtig vej for begyndere (VPS)
 
@@ -71,7 +64,9 @@ openclaw doctor
 
 ## Systemstyring (systemd bruger-enhed)
 
-OpenClaw installerer som standard en systemd **bruger**-tjeneste. Brug en **system**-tjeneste til delte eller altid-tændte servere. Det fulde enhedseksempel og vejledning findes i [Gateway runbook](/gateway).
+OpenClaw installerer en systemd **user** service som standard. Brug en **system**
+-tjeneste til delte eller altid-på servere. The full unit example and guidance
+live in the [Gateway runbook](/gateway).
 
 Minimal opsætning:
 

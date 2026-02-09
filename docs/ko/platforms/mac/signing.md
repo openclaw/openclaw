@@ -3,13 +3,6 @@ summary: "패키징 스크립트로 생성된 macOS 디버그 빌드의 서명 �
 read_when:
   - mac 디버그 빌드를 빌드하거나 서명할 때
 title: "macOS 서명"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:51Z
 ---
 
 # mac 서명 (디버그 빌드)

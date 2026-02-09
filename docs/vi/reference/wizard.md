@@ -6,114 +6,106 @@ read_when:
   - Gỡ lỗi hành vi của trình hướng dẫn
 title: "Tài liệu tham chiếu Trình hướng dẫn Onboarding"
 sidebarTitle: "Wizard Reference"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:26Z
 ---
 
 # Tài liệu tham chiếu Trình hướng dẫn Onboarding
 
-Đây là tài liệu tham chiếu đầy đủ cho trình hướng dẫn CLI `openclaw onboard`.
-Để xem tổng quan cấp cao, hãy xem [Onboarding Wizard](/start/wizard).
+14. Đây là tài liệu tham chiếu đầy đủ cho trình hướng dẫn CLI `openclaw onboard`.
+    Để có cái nhìn tổng quan cấp cao, xem [Onboarding Wizard](/start/wizard).
 
 ## Chi tiết luồng (chế độ local)
 
 <Steps>
-  <Step title="Phát hiện cấu hình hiện có">
-    - Nếu `~/.openclaw/openclaw.json` tồn tại, chọn **Giữ / Sửa đổi / Đặt lại**.
-    - Chạy lại trình hướng dẫn **không** xóa bất cứ thứ gì trừ khi bạn chủ động chọn **Đặt lại**
-      (hoặc truyền `--reset`).
-    - Nếu cấu hình không hợp lệ hoặc chứa các khóa cũ, trình hướng dẫn sẽ dừng lại và yêu cầu
-      bạn chạy `openclaw doctor` trước khi tiếp tục.
-    - Đặt lại sử dụng `trash` (không bao giờ dùng `rm`) và cung cấp các phạm vi:
-      - Chỉ cấu hình
-      - Cấu hình + thông tin xác thực + phiên
-      - Đặt lại toàn bộ (cũng xóa workspace)
-  </Step>
+  <Step title="Existing config detection">
+    - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
+    - Chạy lại trình hướng dẫn **không** xóa bất cứ thứ gì trừ khi bạn chủ động chọn **Đặt lại** (hoặc truyền `--reset`).
+    - Nếu cấu hình không hợp lệ hoặc chứa khóa cũ, trình hướng dẫn sẽ dừng và yêu cầu bạn chạy `openclaw doctor` trước khi tiếp tục.
+    - Reset uses `trash` (never `rm`) and offers scopes:
+      - Config only
+      - Config + credentials + sessions
+      - Full reset (also removes workspace)  
+</Step>
   <Step title="Model/Auth">
-    - **Anthropic API key (khuyến nghị)**: dùng `ANTHROPIC_API_KEY` nếu có hoặc nhắc nhập khóa, sau đó lưu để daemon sử dụng.
-    - **Anthropic OAuth (Claude Code CLI)**: trên macOS, trình hướng dẫn kiểm tra mục Keychain "Claude Code-credentials" (chọn "Always Allow" để các lần khởi động launchd không bị chặn); trên Linux/Windows, nó tái sử dụng `~/.claude/.credentials.json` nếu có.
-    - **Anthropic token (dán setup-token)**: chạy `claude setup-token` trên bất kỳ máy nào, rồi dán token (bạn có thể đặt tên; để trống = mặc định).
-    - **OpenAI Code (Codex) subscription (Codex CLI)**: nếu `~/.codex/auth.json` tồn tại, trình hướng dẫn có thể tái sử dụng.
-    - **OpenAI Code (Codex) subscription (OAuth)**: luồng trình duyệt; dán `code#state`.
+    - **Anthropic API key (recommended)**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
+    15. - **Anthropic OAuth (Claude Code CLI)**: trên macOS, trình hướng dẫn kiểm tra mục Keychain "Claude Code-credentials" (chọn "Always Allow" để các lần khởi động qua launchd không bị chặn); trên Linux/Windows, nó tái sử dụng `~/.claude/.credentials.json` nếu có.
+    - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
+    16. - **OpenAI Code (Codex) subscription (Codex CLI)**: nếu `~/.codex/auth.json` tồn tại, trình hướng dẫn có thể tái sử dụng.
+    17. - **OpenAI Code (Codex) subscription (OAuth)**: luồng qua trình duyệt; dán `code#state`.
       - Đặt `agents.defaults.model` thành `openai-codex/gpt-5.2` khi model chưa được đặt hoặc là `openai/*`.
-    - **OpenAI API key**: dùng `OPENAI_API_KEY` nếu có hoặc nhắc nhập khóa, sau đó lưu vào `~/.openclaw/.env` để launchd có thể đọc.
-    - **xAI (Grok) API key**: nhắc nhập `XAI_API_KEY` và cấu hình xAI làm nhà cung cấp mô hình.
-    - **OpenCode Zen (proxy đa mô hình)**: nhắc nhập `OPENCODE_API_KEY` (hoặc `OPENCODE_ZEN_API_KEY`, lấy tại https://opencode.ai/auth).
-    - **API key**: lưu khóa cho bạn.
+    - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.openclaw/.env` so launchd can read it.
+    - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
+    18. - **OpenCode Zen (multi-model proxy)**: yêu cầu `OPENCODE_API_KEY` (hoặc `OPENCODE_ZEN_API_KEY`, lấy tại https://opencode.ai/auth).
+    - **Khóa API**: lưu khóa cho bạn.
     - **Vercel AI Gateway (proxy đa mô hình)**: nhắc nhập `AI_GATEWAY_API_KEY`.
     - Chi tiết thêm: [Vercel AI Gateway](/providers/vercel-ai-gateway)
-    - **Cloudflare AI Gateway**: nhắc nhập Account ID, Gateway ID và `CLOUDFLARE_AI_GATEWAY_API_KEY`.
+  - **Cloudflare AI Gateway**: nhắc nhập Account ID, Gateway ID và `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     - Chi tiết thêm: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-    - **MiniMax M2.1**: cấu hình được ghi tự động.
-    - Chi tiết thêm: [MiniMax](/providers/minimax)
-    - **Synthetic (tương thích Anthropic)**: nhắc nhập `SYNTHETIC_API_KEY`.
+  - **MiniMax M2.1**: cấu hình được ghi tự động.
+    - More detail: [MiniMax](/providers/minimax)
+    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
     - Chi tiết thêm: [Synthetic](/providers/synthetic)
-    - **Moonshot (Kimi K2)**: cấu hình được ghi tự động.
-    - **Kimi Coding**: cấu hình được ghi tự động.
-    - Chi tiết thêm: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-    - **Bỏ qua**: chưa cấu hình xác thực.
-    - Chọn một model mặc định từ các tùy chọn được phát hiện (hoặc nhập nhà cung cấp/model thủ công).
-    - Trình hướng dẫn chạy kiểm tra model và cảnh báo nếu model đã cấu hình không xác định hoặc thiếu xác thực.
-    - Thông tin OAuth nằm trong `~/.openclaw/credentials/oauth.json`; hồ sơ xác thực nằm trong `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
-    - Chi tiết thêm: [/concepts/oauth](/concepts/oauth)
-    <Note>
+  - **Moonshot (Kimi K2)**: cấu hình được ghi tự động.
+    19. - **Kimi Coding**: cấu hình được ghi tự động.
+    20. - Thông tin chi tiết hơn: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+    - **Skip**: chưa cấu hình xác thực.
+    - Pick a default model from detected options (or enter provider/model manually).
+    - Wizard chạy kiểm tra mô hình và cảnh báo nếu mô hình đã cấu hình không xác định hoặc thiếu xác thực.
+    - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>21. /agent/auth-profiles.json` (API keys + OAuth).
+    - Xem thêm chi tiết: [/concepts/oauth](/concepts/oauth)    
+<Note>
     Mẹo cho headless/server: hoàn tất OAuth trên một máy có trình duyệt, sau đó sao chép
     `~/.openclaw/credentials/oauth.json` (hoặc `$OPENCLAW_STATE_DIR/credentials/oauth.json`) sang
     máy chủ gateway.
     </Note>
   </Step>
   <Step title="Workspace">
-    - Mặc định `~/.openclaw/workspace` (có thể cấu hình).
-    - Khởi tạo các tệp workspace cần thiết cho nghi thức bootstrap của tác tử.
-    - Bố cục workspace đầy đủ + hướng dẫn sao lưu: [Agent workspace](/concepts/agent-workspace)
-  </Step>
+    - Khởi tạo các tệp workspace cần thiết cho nghi thức bootstrap của agent.
+    - Cổng, bind, chế độ xác thực, phơi bày qua tailscale.
+    - Bố cục workspace đầy đủ + hướng dẫn sao lưu: [Agent workspace](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
-    - Cổng, bind, chế độ xác thực, mức phơi bày Tailscale.
-    - Khuyến nghị xác thực: giữ **Token** ngay cả với loopback để các client WS cục bộ phải xác thực.
-    - Chỉ tắt xác thực nếu bạn hoàn toàn tin tưởng mọi tiến trình cục bộ.
-    - Các bind không phải loopback vẫn yêu cầu xác thực.
+    - Port, bind, auth mode, tailscale exposure.
+    22. - Khuyến nghị xác thực: giữ **Token** ngay cả cho loopback để các client WS cục bộ vẫn phải xác thực.
+    - Disable auth only if you fully trust every local process.
+    23. - Các bind không phải loopback vẫn yêu cầu xác thực.
   </Step>
   <Step title="Channels">
-    - [WhatsApp](/channels/whatsapp): đăng nhập QR tùy chọn.
+    - [WhatsApp](/channels/whatsapp): optional QR login.
     - [Telegram](/channels/telegram): bot token.
-    - [Discord](/channels/discord): bot token.
     - [Google Chat](/channels/googlechat): JSON tài khoản dịch vụ + webhook audience.
-    - [Mattermost](/channels/mattermost) (plugin): bot token + URL cơ sở.
+    24. - [Google Chat](/channels/googlechat): JSON tài khoản dịch vụ + audience webhook.
     - [Signal](/channels/signal): cài đặt `signal-cli` tùy chọn + cấu hình tài khoản.
-    - [BlueBubbles](/channels/bluebubbles): **khuyến nghị cho iMessage**; URL máy chủ + mật khẩu + webhook.
-    - [iMessage](/channels/imessage): đường dẫn CLI `imsg` cũ + truy cập DB.
-    - Bảo mật DM: mặc định là ghép cặp. DM đầu tiên gửi một mã; phê duyệt qua `openclaw pairing approve <channel> <code>` hoặc dùng allowlists.
-  </Step>
-  <Step title="Cài đặt daemon">
+    - [Signal](/channels/signal): optional `signal-cli` install + account config.
+    - [BlueBubbles](/channels/bluebubbles): **recommended for iMessage**; server URL + password + webhook.
+    25. - [iMessage](/channels/imessage): đường dẫn CLI `imsg` legacy + quyền truy cập DB.
+    26. - Bảo mật DM: mặc định là ghép cặp. DM đầu tiên gửi một mã; phê duyệt qua `openclaw pairing approve <channel><code>` hoặc dùng allowlists.
+  </Step><code>` hoặc dùng allowlist.
+  27. </Step>
+  <Step title="Daemon install">
     - macOS: LaunchAgent
-      - Yêu cầu phiên người dùng đã đăng nhập; với headless, dùng LaunchDaemon tùy chỉnh (không được phát hành).
-    - Linux (và Windows qua WSL2): systemd user unit
-      - Trình hướng dẫn cố gắng bật lingering qua `loginctl enable-linger <user>` để Gateway vẫn hoạt động sau khi đăng xuất.
-      - Có thể yêu cầu sudo (ghi `/var/lib/systemd/linger`); nó sẽ thử không dùng sudo trước.
-    - **Chọn runtime:** Node (khuyến nghị; bắt buộc cho WhatsApp/Telegram). Bun **không được khuyến nghị**.
+      - Yêu cầu có phiên người dùng đang đăng nhập; với môi trường headless, dùng LaunchDaemon tùy chỉnh (không kèm theo).
+    28. - Linux (và Windows qua WSL2): systemd user unit
+      - Trình hướng dẫn cố gắng bật lingering bằng `loginctl enable-linger <user>` để Gateway tiếp tục chạy sau khi đăng xuất.
+      29. - Có thể yêu cầu sudo (ghi vào `/var/lib/systemd/linger`); nó sẽ thử không dùng sudo trước.
+    30. - **Lựa chọn runtime:** Node (khuyến nghị; bắt buộc cho WhatsApp/Telegram). Bun is **not recommended**.
   </Step>
-  <Step title="Kiểm tra sức khỏe">
-    - Khởi động Gateway (nếu cần) và chạy `openclaw health`.
-    - Mẹo: `openclaw status --deep` thêm các probe sức khỏe gateway vào đầu ra trạng thái (yêu cầu gateway có thể truy cập).
+  <Step title="Health check">
+    - Starts the Gateway (if needed) and runs `openclaw health`.
+    - Tip: `openclaw status --deep` adds gateway health probes to status output (requires a reachable gateway).
   </Step>
-  <Step title="Skills (khuyến nghị)">
-    - Đọc các skills có sẵn và kiểm tra yêu cầu.
+  <Step title="Skills (recommended)">
+    - Reads the available skills and checks requirements.
     - Cho phép bạn chọn trình quản lý node: **npm / pnpm** (bun không được khuyến nghị).
-    - Cài đặt các phụ thuộc tùy chọn (một số dùng Homebrew trên macOS).
+    - Installs optional dependencies (some use Homebrew on macOS).
   </Step>
-  <Step title="Hoàn tất">
-    - Tóm tắt + các bước tiếp theo, bao gồm ứng dụng iOS/Android/macOS cho các tính năng bổ sung.
+  <Step title="Finish">
+    - Summary + next steps, including iOS/Android/macOS apps for extra features.
   </Step>
 </Steps>
 
 <Note>
-Nếu không phát hiện GUI, trình hướng dẫn sẽ in hướng dẫn SSH port-forward cho Control UI thay vì mở trình duyệt.
-Nếu thiếu tài sản Control UI, trình hướng dẫn sẽ cố gắng build chúng; phương án dự phòng là `pnpm ui:build` (tự động cài đặt phụ thuộc UI).
+Nếu không phát hiện GUI, trình hướng dẫn sẽ in hướng dẫn chuyển tiếp cổng SSH cho Control UI thay vì mở trình duyệt.
+If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 </Note>
 
 ## Chế độ không tương tác
@@ -135,11 +127,11 @@ openclaw onboard --non-interactive \
 Thêm `--json` để có bản tóm tắt dạng máy đọc được.
 
 <Note>
-`--json` **không** đồng nghĩa với chế độ không tương tác. Hãy dùng `--non-interactive` (và `--workspace`) cho script.
+`--json` does **not** imply non-interactive mode. Dùng `--non-interactive` (và `--workspace`) cho các script.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Ví dụ Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +141,7 @@ Thêm `--json` để có bản tóm tắt dạng máy đọc được.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +151,7 @@ Thêm `--json` để có bản tóm tắt dạng máy đọc được.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +161,7 @@ Thêm `--json` để có bản tóm tắt dạng máy đọc được.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +173,7 @@ Thêm `--json` để có bản tóm tắt dạng máy đọc được.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +183,7 @@ Thêm `--json` để có bản tóm tắt dạng máy đọc được.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +193,7 @@ Thêm `--json` để có bản tóm tắt dạng máy đọc được.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Ví dụ OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -226,8 +218,8 @@ openclaw agents add work \
 
 ## Gateway wizard RPC
 
-Gateway cung cấp luồng trình hướng dẫn qua RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
-Các client (ứng dụng macOS, Control UI) có thể hiển thị các bước mà không cần triển khai lại logic onboarding.
+The Gateway exposes the wizard flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
+Các client (ứng dụng macOS, Control UI) có thể render các bước mà không cần tái triển khai logic onboarding.
 
 ## Thiết lập Signal (signal-cli)
 
@@ -261,11 +253,11 @@ Các trường điển hình trong `~/.openclaw/openclaw.json`:
 
 `openclaw agents add` ghi `agents.list[]` và `bindings` tùy chọn.
 
-Thông tin xác thực WhatsApp nằm dưới `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Các phiên được lưu dưới `~/.openclaw/agents/<agentId>/sessions/`.
+WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
+Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
-Một số kênh được cung cấp dưới dạng plugin. Khi bạn chọn một kênh trong quá trình onboarding, trình hướng dẫn
-sẽ nhắc cài đặt nó (npm hoặc đường dẫn cục bộ) trước khi có thể cấu hình.
+Some channels are delivered as plugins. When you pick one during onboarding, the wizard
+will prompt to install it (npm or a local path) before it can be configured.
 
 ## Tài liệu liên quan
 

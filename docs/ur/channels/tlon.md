@@ -3,22 +3,16 @@ summary: "Tlon/Urbit کی معاونت کی حیثیت، صلاحیتیں، او
 read_when:
   - Tlon/Urbit چینل کی خصوصیات پر کام کرتے وقت
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:57Z
 ---
 
 # Tlon (plugin)
 
-Tlon ایک غیرمرکزی میسنجر ہے جو Urbit پر مبنی ہے۔ OpenClaw آپ کے Urbit ship سے جڑتا ہے اور
-DMs اور گروپ چیٹ پیغامات کا جواب دے سکتا ہے۔ گروپس میں جوابات بطورِ طے شدہ @ mention کے ساتھ درکار ہوتے ہیں اور اجازت فہرستوں کے ذریعے مزید محدود کیے جا سکتے ہیں۔
+Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
+respond to DMs and group chat messages. Group replies require an @ mention by default and can
+be further restricted via allowlists.
 
-حیثیت: پلگ ان کے ذریعے معاونت یافتہ۔ DMs، گروپ mentions، تھریڈ جوابات، اور صرف متن پر مبنی میڈیا فال بیک
-(کیپشن کے ساتھ URL شامل) دستیاب ہیں۔ Reactions، polls، اور native میڈیا اپلوڈز معاونت یافتہ نہیں ہیں۔
+Status: supported via plugin. DMs, group mentions, thread replies, and text-only media fallback
+(URL appended to caption). Reactions, polls, and native media uploads are not supported.
 
 ## Plugin required
 
@@ -63,7 +57,7 @@ openclaw plugins install ./extensions/tlon
 
 ## Group channels
 
-خودکار ڈسکوری بطورِ طے شدہ فعال ہے۔ آپ چینلز کو دستی طور پر بھی پن کر سکتے ہیں:
+Auto-discovery is enabled by default. You can also pin channels manually:
 
 ```json5
 {

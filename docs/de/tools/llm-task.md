@@ -4,13 +4,6 @@ read_when:
   - Sie möchten einen ausschließlich-JSON-LLM-Schritt innerhalb von Workflows
   - Sie benötigen schema-validierte LLM-Ausgaben für Automatisierung
 title: "LLM-Aufgabe"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:33Z
 ---
 
 # LLM-Aufgabe

@@ -4,20 +4,13 @@ read_when:
   - Подключение триггеров входящих писем Gmail к OpenClaw
   - Настройка Pub/Sub push для пробуждения агента
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:13Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 Цель: наблюдение Gmail -> Pub/Sub push -> `gog gmail watch serve` -> вебхук OpenClaw.
 
-## Предварительные требования
+## Предварительные запросы
 
 - `gcloud` установлен и выполнен вход ([руководство по установке](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) установлен и авторизован для аккаунта Gmail ([gogcli.sh](https://gogcli.sh/)).

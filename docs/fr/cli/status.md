@@ -2,15 +2,8 @@
 summary: "Reference CLI pour `openclaw status` (diagnostics, sondes, instantanes d'utilisation)"
 read_when:
   - Vous voulez un diagnostic rapide de l'etat des canaux et des destinataires de sessions recentes
-  - Vous voulez un etat « tout-en-un » copiable pour le debogage
+  - Vous voulez un statut "tout" pour le débogage
 title: "statut"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:02Z
 ---
 
 # `openclaw status`

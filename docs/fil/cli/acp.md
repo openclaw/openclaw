@@ -4,21 +4,14 @@ read_when:
   - Pagse-setup ng mga ACP-based na IDE integration
   - Pag-debug ng ACP session routing papunta sa Gateway
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:22Z
 ---
 
 # acp
 
 Patakbuhin ang ACP (Agent Client Protocol) bridge na nakikipag-usap sa isang OpenClaw Gateway.
 
-Nakikipag-usap ang command na ito gamit ang ACP sa ibabaw ng stdio para sa mga IDE at ipinapasa ang mga prompt papunta sa Gateway
-sa pamamagitan ng WebSocket. Pinapanatili nitong naka-map ang mga ACP session sa mga Gateway session key.
+16. Ang command na ito ay nagsasalita ng ACP sa stdio para sa mga IDE at ipinapasa ang mga prompt sa Gateway
+    sa pamamagitan ng WebSocket. 17. Pinananatili nitong naka-map ang mga ACP session sa mga Gateway session key.
 
 ## Usage
 
@@ -40,8 +33,8 @@ openclaw acp --session agent:main:main --reset-session
 
 ## ACP client (debug)
 
-Gamitin ang built-in na ACP client para mag-sanity-check ng bridge nang walang IDE.
-Ini-spawn nito ang ACP bridge at hinahayaan kang mag-type ng mga prompt nang interactive.
+18. Gamitin ang built-in na ACP client upang magsagawa ng sanity-check sa bridge nang walang IDE.
+19. Ipinapanganak nito ang ACP bridge at hinahayaan kang mag-type ng mga prompt nang interactive.
 
 ```bash
 openclaw acp client
@@ -77,7 +70,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Pagpili ng mga agent
 
-Hindi direktang pumipili ng mga agent ang ACP. Nagru-route ito gamit ang Gateway session key.
+20. Hindi direktang pumipili ng mga agent ang ACP. 21. Niruruta ito ayon sa Gateway session key.
 
 Gumamit ng mga session key na saklaw ng agent para i-target ang isang partikular na agent:
 
@@ -87,9 +80,9 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-Bawat ACP session ay naka-map sa iisang Gateway session key. Maaaring magkaroon ang isang agent ng maraming
-session; default ng ACP ang isang isolated na `acp:<uuid>` session maliban kung i-override mo
-ang key o label.
+22. Ang bawat ACP session ay naka-map sa iisang Gateway session key. 23. Ang isang agent ay maaaring magkaroon ng maraming
+    session; default ng ACP ang isang isolated na `acp:<uuid>` session maliban kung i-override mo
+    ang key o label.
 
 ## Setup ng Zed editor
 
@@ -135,8 +128,8 @@ Sa Zed, buksan ang Agent panel at piliin ang “OpenClaw ACP” para magsimula n
 
 ## Session mapping
 
-Bilang default, nakakakuha ang mga ACP session ng isang isolated na Gateway session key na may prefix na `acp:`.
-Para muling gamitin ang isang kilalang session, magpasa ng session key o label:
+24. Bilang default, ang mga ACP session ay nakakakuha ng isang isolated na Gateway session key na may `acp:` prefix.
+25. Upang muling gamitin ang isang kilalang session, magpasa ng session key o label:
 
 - `--session <key>`: gumamit ng isang partikular na Gateway session key.
 - `--session-label <label>`: i-resolve ang isang umiiral na session ayon sa label.

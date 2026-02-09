@@ -4,13 +4,6 @@ summary: "Cloudflare AI Gateway 설정 (인증 + 모델 선택)"
 read_when:
   - OpenClaw 와 함께 Cloudflare AI Gateway 를 사용하려는 경우
   - 계정 ID, Gateway ID 또는 API 키 환경 변수가 필요한 경우
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:51Z
 ---
 
 # Cloudflare AI Gateway

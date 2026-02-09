@@ -3,13 +3,6 @@ summary: "Starannie dobrane linki do najczęściej używanych dokumentów OpenCl
 read_when:
   - Chcesz mieć szybki dostęp do kluczowych stron dokumentacji
 title: "Katalog dokumentacji"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:45Z
 ---
 
 <Note>

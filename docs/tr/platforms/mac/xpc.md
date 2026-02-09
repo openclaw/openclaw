@@ -3,13 +3,6 @@ summary: "OpenClaw uygulaması, gateway düğüm taşıması ve PeekabooBridge i
 read_when:
   - IPC sözleşmelerini veya menü çubuğu uygulaması IPC'sini düzenlerken
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:32Z
 ---
 
 # OpenClaw macOS IPC mimarisi

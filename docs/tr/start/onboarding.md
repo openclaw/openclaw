@@ -5,13 +5,6 @@ read_when:
   - Kimlik doğrulama veya kimlik kurulumunu uygularken
 title: "Onboarding (macOS Uygulaması)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:46Z
 ---
 
 # Onboarding (macOS Uygulaması)
@@ -22,22 +15,22 @@ kimlik doğrulamayı bağlamak, sihirbazı çalıştırmak ve ajanın kendi kend
 bootstrap etmesine izin vermek.
 
 <Steps>
-<Step title="macOS uyarısını onaylayın">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Yerel ağları bulmayı onaylayın">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Hoş geldiniz ve güvenlik bildirimi">
+<Step title="Welcome and security notice">
 <Frame caption="Görüntülenen güvenlik bildirimini okuyun ve buna göre karar verin">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Yerel vs Uzak">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -61,7 +54,7 @@ bootstrap etmesine izin vermek.
   kullanın.
 </Tip>
 </Step>
-<Step title="İzinler">
+<Step title="Permissions">
 <Frame caption="OpenClaw’a hangi izinleri vermek istediğinizi seçin">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -83,11 +76,10 @@ Onboarding, aşağıdakiler için gerekli TCC izinlerini ister:
   Uygulama, terminal iş akışlarının ve launchd görevlerinin kutudan çıktığı gibi
   çalışması için npm/pnpm üzerinden global `openclaw` CLI’yı kurabilir.
 </Step>
-<Step title="Onboarding Sohbeti (özel oturum)">
+<Step title="Onboarding Chat (dedicated session)">
   Kurulumdan sonra uygulama, ajanın kendini tanıtabilmesi ve sonraki adımları
   yönlendirebilmesi için özel bir onboarding sohbet oturumu açar. Bu, ilk
-  çalıştırma rehberliğini normal konuşmanızdan ayrı tutar.
-  İlk ajan çalıştırması sırasında gateway ana makinesinde neler olduğunu görmek
+  çalıştırma rehberliğini normal konuşmanızdan ayrı tutar. İlk ajan çalıştırması sırasında gateway ana makinesinde neler olduğunu görmek
   için [Bootstrapping](/start/bootstrapping) bölümüne bakın.
 </Step>
 </Steps>

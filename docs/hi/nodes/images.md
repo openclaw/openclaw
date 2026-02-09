@@ -3,18 +3,11 @@ summary: "भेजने, Gateway, और एजेंट उत्तरों
 read_when:
   - मीडिया पाइपलाइन या अटैचमेंट में संशोधन करते समय
 title: "इमेज और मीडिया समर्थन"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:31Z
 ---
 
 # इमेज और मीडिया समर्थन — 2025-12-05
 
-WhatsApp चैनल **Baileys Web** के माध्यम से चलता है। यह दस्तावेज़ भेजने, Gateway, और एजेंट उत्तरों के लिए वर्तमान मीडिया हैंडलिंग नियमों को संकलित करता है।
+WhatsApp channel **Baileys Web** के माध्यम से चलता है। यह दस्तावेज़ send, gateway, और agent replies के लिए वर्तमान media handling नियमों को कैप्चर करता है।
 
 ## लक्ष्य
 
@@ -42,7 +35,8 @@ WhatsApp चैनल **Baileys Web** के माध्यम से चलत
 
 ## ऑटो-रिप्लाई पाइपलाइन
 
-- `getReplyFromConfig` `{ text?, mediaUrl?, mediaUrls? }` लौटाता है।
+- `getReplyFromConfig` `{ text?, mediaUrl?, mediaUrls?
+  }` लौटाता है। डिफ़ॉल्ट रूप से केवल पहली matching image/audio/video attachment को प्रोसेस किया जाता है; कई attachments प्रोसेस करने के लिए `tools.media.<cap>.attachments` सेट करें।
 - जब मीडिया मौजूद होता है, वेब सेंडर `openclaw message send` के समान पाइपलाइन का उपयोग करके स्थानीय पथों या URL को रिज़ॉल्व करता है।
 - यदि एकाधिक मीडिया प्रविष्टियाँ प्रदान की जाती हैं, तो उन्हें क्रमिक रूप से भेजा जाता है।
 
@@ -55,7 +49,7 @@ WhatsApp चैनल **Baileys Web** के माध्यम से चलत
 - मीडिया समझ (यदि `tools.media.*` या साझा `tools.media.models` के माध्यम से कॉन्फ़िगर की गई हो) टेम्पलेटिंग से पहले चलती है और `Body` में `[Image]`, `[Audio]`, और `[Video]` ब्लॉक्स सम्मिलित कर सकती है।
   - ऑडियो `{{Transcript}}` सेट करता है और कमांड पार्सिंग के लिए ट्रांसक्रिप्ट का उपयोग करता है ताकि स्लैश कमांड्स कार्य करते रहें।
   - वीडियो और इमेज विवरण कमांड पार्सिंग के लिए किसी भी कैप्शन पाठ को संरक्षित रखते हैं।
-- डिफ़ॉल्ट रूप से केवल पहला मेल खाने वाला इमेज/ऑडियो/वीडियो अटैचमेंट प्रोसेस किया जाता है; अनेक अटैचमेंट प्रोसेस करने के लिए `tools.media.<cap>.attachments` सेट करें।
+- एक **node** एक companion device (macOS/iOS/Android/headless) होता है जो Gateway **WebSocket** (operators के समान पोर्ट) से `role: "node"` के साथ कनेक्ट होता है और `node.invoke` के माध्यम से एक command surface (उदा. `canvas.*`, `camera.*`, `system.*`) एक्सपोज़ करता है।Protocol विवरण: [Gateway protocol](/gateway/protocol)।
 
 ## सीमाएँ और त्रुटियाँ
 

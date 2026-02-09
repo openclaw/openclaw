@@ -5,13 +5,6 @@ read_when:
   - Implementerar nodrunner + UI IPC
   - Lägger till säkerhetslägen för exec-värd och slash-kommandon
 title: "Refaktorering av exec-värd"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:38Z
 ---
 
 # Plan för refaktorering av exec-värd
@@ -258,7 +251,7 @@ Alternativ B:
 ## Utdata-tak
 
 - Begränsa kombinerad stdout+stderr till **200k**; behåll **tail 20k** för händelser.
-- Trunkera med ett tydligt suffix (t.ex. `"… (truncated)"`).
+- Trunkera med ett tydligt suffix (t.ex., `"… (förkortad)"`).
 
 ## Slash-kommandon
 

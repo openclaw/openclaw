@@ -1,15 +1,8 @@
 ---
 title: サンドボックス CLI
-summary: 「サンドボックスコンテナを管理し、有効なサンドボックスポリシーを検査します」
-read_when: 「サンドボックスコンテナを管理している場合、またはサンドボックス／ツールポリシーの挙動をデバッグしている場合。」
+summary: "サンドボックスコンテナを管理し、有効なサンドボックスポリシーを検査します"
+read_when: "サンドボックスコンテナを管理している場合、またはサンドボックス／ツールポリシーの挙動をデバッグしている場合。"
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:16Z
 ---
 
 # サンドボックス CLI
@@ -18,7 +11,7 @@ x-i18n:
 
 ## 概要
 
-OpenClaw は、セキュリティのためにエージェントを隔離された Docker コンテナ内で実行できます。`sandbox` コマンドは、特にアップデートや設定変更後に、これらのコンテナを管理するのに役立ちます。
+OpenClaw は、セキュリティのためにエージェントを隔離された Docker コンテナ内で実行できます。`sandbox` コマンドは、特にアップデートや設定変更後に、これらのコンテナを管理するのに役立ちます。 `sandbox` コマンドは、これらのコンテナを管理するのに役立ちます。
 
 ## コマンド
 
@@ -121,9 +114,10 @@ openclaw sandbox recreate --agent alfred
 - コンテナは、24 時間の非アクティブ状態の後にのみ削除されます
 - 定期的に使用されるエージェントは、古いコンテナを無期限に実行し続けます
 
-**解決策:** `openclaw sandbox recreate` を使用して、古いコンテナを強制的に削除します。次に必要になったとき、現在の設定で自動的に再作成されます。
+**解決策:** `openclaw sandbox recreate` を使用して、古いコンテナを強制的に削除します。次に必要になったとき、現在の設定で自動的に再作成されます。 次に必要に応じて、現在の設定で自動的に再作成されます。
 
 ヒント: 手動の `docker rm` よりも `openclaw sandbox recreate` を優先してください。これは Gateway のコンテナ命名規則を使用し、スコープ／セッションキーが変更された際の不一致を回避します。
+Gatewayのコンテナ名を使用し、スコープ/セッションキーが変更されたときに不一致を回避します。
 
 ## 設定
 
@@ -151,7 +145,7 @@ openclaw sandbox recreate --agent alfred
 }
 ```
 
-## 参照
+## See Also
 
 - [サンドボックスドキュメント](/gateway/sandboxing)
 - [エージェント設定](/concepts/agent-workspace)

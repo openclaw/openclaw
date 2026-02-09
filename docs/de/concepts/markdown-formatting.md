@@ -5,13 +5,6 @@ read_when:
   - Sie fügen einen neuen Kanal-Formatter oder eine Stilzuordnung hinzu
   - Sie debuggen Formatierungsregressionen über Kanäle hinweg
 title: "Markdown-Formatierung"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:57Z
 ---
 
 # Markdown-Formatierung

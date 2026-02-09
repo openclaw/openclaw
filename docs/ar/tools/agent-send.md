@@ -3,13 +3,6 @@ summary: "تشغيلات مباشرة لأمر `openclaw agent` عبر CLI (مع
 read_when:
   - إضافة أو تعديل نقطة دخول CLI للوكيل
 title: "إرسال الوكيل"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:45Z
 ---
 
 # `openclaw agent` (تشغيلات مباشرة للوكيل)

@@ -3,13 +3,6 @@ summary: "Configuración y puesta en marcha del bot de chat de Twitch"
 read_when:
   - Configurar la integración de chat de Twitch para OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:56Z
 ---
 
 # Twitch (plugin)

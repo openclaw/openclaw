@@ -4,14 +4,7 @@ read_when:
   - Exec ana makinesi yönlendirmesi veya exec onayları tasarlanırken
   - Düğüm çalıştırıcısı + UI IPC uygulanırken
   - Exec ana makinesi güvenlik modları ve slash komutları eklenirken
-title: "Exec Ana Makinesi Refaktörü"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
+title: "Exec Host Refactor"
 ---
 
 # Exec ana makinesi refaktör planı
@@ -31,7 +24,7 @@ x-i18n:
 - Düğüm exec için PTY/akış yok (yalnızca toplu çıktı).
 - Mevcut Bridge + Gateway dışında yeni ağ katmanı yok.
 
-## Kararlar (kilitli)
+## Decisions (locked)
 
 - **Yapılandırma anahtarları:** `exec.host` + `exec.security` (ajan başına geçersiz kılma izinli).
 - **Yükseltme:** `/elevated`’yı gateway tam erişimi için takma ad olarak tut.
@@ -46,7 +39,7 @@ x-i18n:
 
 ## Temel kavramlar
 
-### Ana makine
+### Host
 
 - `sandbox`: Docker exec (mevcut davranış).
 - `gateway`: gateway ana makinesinde exec.
@@ -58,7 +51,7 @@ x-i18n:
 - `allowlist`: yalnızca eşleşenlere izin ver.
 - `full`: her şeye izin ver (yükseltilmiş ile eşdeğer).
 
-### Sorma modu
+### Ask mode
 
 - `off`: asla sorma.
 - `on-miss`: izin listesi eşleşmediğinde sor.
@@ -103,12 +96,12 @@ Sorma, izin listesinden **bağımsızdır**; izin listesi `always` veya `on-miss
 - `agents.list[].tools.exec.ask`
 - `agents.list[].tools.exec.node`
 
-### Takma ad
+### Alias
 
 - `/elevated on` = ajan oturumu için `tools.exec.host=gateway`, `tools.exec.security=full` ayarla.
 - `/elevated off` = ajan oturumu için önceki exec ayarlarını geri yükle.
 
-## Onaylar deposu (JSON)
+## Approvals store (JSON)
 
 Yol: `~/.openclaw/exec-approvals.json`
 
@@ -166,7 +159,7 @@ Notlar:
 ### Hizmet yaşam döngüsü
 
 - macOS’ta launchd/daemon; Linux/Windows’ta sistem hizmeti.
-- Onaylar JSON’u yürütme ana makinesine özeldir.
+- Approvals JSON is local to the execution host.
 - UI yerel bir Unix soketi barındırır; çalıştırıcılar gerektiğinde bağlanır.
 
 ## UI entegrasyonu (macOS uygulaması)
@@ -248,14 +241,14 @@ Seçenek B:
 - Gateway süreci kendi makinesinde yürütür.
 - Yerel `exec-approvals.json`’ü (güvenlik/sorma/izin listesi) uygular.
 
-### Düğüm ana makinesi
+### Node host
 
 - Gateway, `system.run` ile `node.invoke` çağrısı yapar.
 - Çalıştırıcı yerel onayları uygular.
 - Çalıştırıcı toplu stdout/stderr döndürür.
 - Başlangıç/bitiş/red için isteğe bağlı Bridge olayları.
 
-## Çıktı sınırları
+## Output caps
 
 - Birleşik stdout+stderr’i **200k** ile sınırla; olaylar için **20k kuyruk** tut.
 - Açık bir sonek ile kırp (örn. `"… (truncated)"`).
@@ -284,7 +277,7 @@ Seçenek B:
 
 - `exec-approvals.json` okuyucu/yazıcıyı uygula.
 - `gateway` ana makinesi için izin listesi + sorma modlarını uygula.
-- Çıktı sınırlarını ekle.
+- Add output caps.
 
 ### Aşama 3: düğüm çalıştırıcı zorlaması
 

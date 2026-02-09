@@ -5,38 +5,30 @@ read_when:
   - प्रमाणीकरण या पहचान सेटअप लागू करते समय
 title: "ऑनबोर्डिंग (macOS ऐप)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:46Z
 ---
 
 # ऑनबोर्डिंग (macOS ऐप)
 
-यह दस्तावेज़ **वर्तमान** पहली‑बार ऑनबोर्डिंग प्रवाह का वर्णन करता है। लक्ष्य एक
-सुचारु “दिन 0” अनुभव है: Gateway कहाँ चलेगा यह चुनें, प्रमाणीकरण से कनेक्ट करें,
-विज़ार्ड चलाएँ, और एजेंट को स्वयं बूटस्ट्रैप करने दें।
+45. यह डॉक **वर्तमान** पहली‑बार रन होने वाले ऑनबोर्डिंग फ़्लो का वर्णन करता है। 46. लक्ष्य एक
+    स्मूद “day 0” अनुभव है: जहाँ Gateway चलता है वह चुनें, auth कनेक्ट करें, विज़ार्ड चलाएँ, और एजेंट को खुद को बूटस्ट्रैप करने दें।
 
 <Steps>
-<Step title="macOS चेतावनी स्वीकृत करें">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="स्थानीय नेटवर्क खोज की अनुमति दें">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="स्वागत और सुरक्षा सूचना">
+<Step title="Welcome and security notice">
 <Frame caption="प्रदर्शित सुरक्षा सूचना पढ़ें और उसके अनुसार निर्णय लें">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="स्थानीय बनाम दूरस्थ">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -50,13 +42,13 @@ x-i18n:
 - **बाद में विन्यास करें:** सेटअप छोड़ें और ऐप को बिना विन्यास के छोड़ दें।
 
 <Tip>
-**Gateway प्रमाणीकरण सुझाव:**
-- विज़ार्ड अब loopback के लिए भी एक **टोकन** बनाता है, इसलिए स्थानीय WS क्लाइंट्स को प्रमाणीकरण करना होगा।
-- यदि आप प्रमाणीकरण अक्षम करते हैं, तो कोई भी स्थानीय प्रक्रिया कनेक्ट हो सकती है; इसका उपयोग केवल पूरी तरह विश्वसनीय मशीनों पर करें।
-- बहु‑मशीन पहुँच या non‑loopback बाइंड्स के लिए **टोकन** का उपयोग करें।
+47. **Gateway auth tip:**
+- अब विज़ार्ड लूपबैक के लिए भी एक **token** जनरेट करता है, इसलिए लोकल WS क्लाइंट्स को ऑथेंटिकेट करना होगा।
+48. - अगर आप auth डिसेबल करते हैं, तो कोई भी लोकल प्रोसेस कनेक्ट कर सकता है; इसे सिर्फ़ पूरी तरह भरोसेमंद मशीनों पर ही इस्तेमाल करें।
+49. - मल्टी‑मशीन एक्सेस या नॉन‑लूपबैक बाइंड्स के लिए **token** का उपयोग करें।
 </Tip>
 </Step>
-<Step title="अनुमतियाँ">
+<Step title="Permissions">
 <Frame caption="चुनें कि आप OpenClaw को कौन‑सी अनुमतियाँ देना चाहते हैं">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -78,10 +70,9 @@ x-i18n:
   ऐप npm/pnpm के माध्यम से वैश्विक `openclaw` CLI स्थापित कर सकता है ताकि टर्मिनल
   वर्कफ़्लो और launchd कार्य तुरंत काम करें।
 </Step>
-<Step title="ऑनबोर्डिंग चैट (समर्पित सत्र)">
-  सेटअप के बाद, ऐप एक समर्पित ऑनबोर्डिंग चैट सत्र खोलता है ताकि एजेंट स्वयं का परिचय
-  दे सके और अगले चरणों का मार्गदर्शन कर सके। यह पहली‑बार के मार्गदर्शन को आपकी सामान्य
-  बातचीत से अलग रखता है। पहली एजेंट रन के दौरान Gateway होस्ट पर क्या होता है, इसके लिए
-  [Bootstrapping](/start/bootstrapping) देखें।
+<Step title="Onboarding Chat (dedicated session)">
+  50. सेटअप के बाद, ऐप एक समर्पित ऑनबोर्डिंग चैट सेशन खोलता है ताकि एजेंट अपना परिचय दे सके और अगले चरणों का मार्गदर्शन कर सके। This keeps first‑run guidance separate
+  from your normal conversation. See [Bootstrapping](/start/bootstrapping) for
+  what happens on the gateway host during the first agent run.
 </Step>
 </Steps>

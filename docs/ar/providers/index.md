@@ -4,13 +4,6 @@ read_when:
   - تريد اختيار موفّر نموذج
   - تحتاج إلى نظرة عامة سريعة على واجهات LLM الخلفية المدعومة
 title: "موفّرو النماذج"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:30Z
 ---
 
 # موفّرو النماذج
@@ -18,7 +11,7 @@ x-i18n:
 يمكن لـ OpenClaw استخدام العديد من موفّري LLM. اختر موفّرًا، ثم قم بالمصادقة، وبعدها اضبط
 النموذج الافتراضي على `provider/model`.
 
-هل تبحث عن توثيق قنوات الدردشة (WhatsApp/Telegram/Discord/Slack/Mattermost (إضافة)/إلخ)؟ راجع [القنوات](/channels).
+هل تبحث عن توثيق قنوات الدردشة (WhatsApp/Telegram/Discord/Slack/Mattermost (إضافة)/إلخ)؟ راجع [القنوات](/channels). انظر [Channels](/channels).
 
 ## تسليط الضوء: Venice (Venice AI)
 
@@ -59,7 +52,7 @@ x-i18n:
 - [Ollama (نماذج محلية)](/providers/ollama)
 - [Qianfan](/providers/qianfan)
 
-## موفّرو النسخ الصوتي
+## موفري خدمات الترجمة
 
 - [Deepgram (نسخ الصوت)](/providers/deepgram)
 
@@ -68,4 +61,5 @@ x-i18n:
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - استخدم اشتراك Claude Max/Pro كنقطة نهاية API متوافقة مع OpenAI
 
 للاطلاع على كتالوج الموفّرين الكامل (xAI، Groq، Mistral، إلخ) والتهيئة المتقدمة،
-راجع [موفّري النماذج](/concepts/model-providers).
+راجع [موفّري النماذج](/concepts/model-providers). للاطلاع على كتالوج الموفّرين الكامل (xAI وGroq وMistral وغيرها) والإعدادات المتقدمة،
+انظر [موفّرو النماذج](/concepts/model-providers).

@@ -3,13 +3,6 @@ summary: "OpenClaw macOS အက်ပ်ပေါ်တွင် လုပ်က
 read_when:
   - macOS ဖွံ့ဖြိုးရေး ပတ်ဝန်းကျင်ကို တပ်ဆင်နေစဉ်
 title: "macOS Dev Setup"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:40Z
 ---
 
 # macOS Developer Setup
@@ -23,7 +16,7 @@ x-i18n:
 1. **Xcode 26.2+**: Swift ဖွံ့ဖြိုးရေးအတွက် လိုအပ်သည်။
 2. **Node.js 22+ & pnpm**: Gateway၊ CLI နှင့် packaging script များအတွက် လိုအပ်သည်။
 
-## 1. Install Dependencies
+## 49) 1) 50) Dependency များ ထည့်သွင်းခြင်း
 
 ပရောဂျက်အနှံ့ အသုံးပြုသော dependency များကို ထည့်သွင်းပါ။
 
@@ -31,7 +24,7 @@ x-i18n:
 pnpm install
 ```
 
-## 2. Build and Package the App
+## 1. 2. 2. အက်ပ်ကို Build လုပ်ပြီး Package ပြုလုပ်ပါ
 
 macOS အက်ပ်ကို build လုပ်ပြီး `dist/OpenClaw.app` အဖြစ် package ပြုလုပ်ရန် အောက်ပါအမိန့်ကို 실행ပါ။
 
@@ -44,9 +37,9 @@ Apple Developer ID certificate မရှိပါက script သည် **ad-hoc s
 dev run mode များ၊ signing flag များ နှင့် Team ID ဆိုင်ရာ ပြဿနာဖြေရှင်းနည်းများအတွက် macOS app README ကို ကြည့်ပါ။
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **Note**: Ad-hoc signing ပြုလုပ်ထားသော အက်ပ်များတွင် လုံခြုံရေး သတိပေးချက်များ ပေါ်လာနိုင်ပါသည်။ အက်ပ်သည် ချက်ချင်းပဲ "Abort trap 6" ဖြင့် ပိတ်သွားပါက [Troubleshooting](#troubleshooting) အပိုင်းကို ကြည့်ပါ။
+> 3. **မှတ်ချက်**: Ad-hoc signed အက်ပ်များသည် လုံခြုံရေး သတိပေးချက်များ ပေါ်လာစေနိုင်ပါသည်။ 4. အက်ပ်သည် "Abort trap 6" ဖြင့် ချက်ချင်း crash ဖြစ်ပါက [Troubleshooting](#troubleshooting) အပိုင်းကို ကြည့်ပါ။
 
-## 3. Install the CLI
+## 5. 3. CLI ကို ထည့်သွင်းခြင်း
 
 macOS အက်ပ်သည် နောက်ခံ လုပ်ငန်းများကို စီမံခန့်ခွဲရန် global `openclaw` CLI ကို ထည့်သွင်းထားရန် မျှော်မှန်းထားပါသည်။
 
@@ -98,7 +91,7 @@ xcrun swift --version
 
 ### Gateway "Starting..." indefinitely
 
-Gateway အခြေအနေသည် "Starting..." အဖြစ် ဆက်လက်နေပါက zombie process တစ်ခုက port ကို ကိုင်ထားခြင်း ရှိမရှိ စစ်ဆေးပါ။
+6. Gateway status သည် "Starting..." မှာပဲ ရပ်နေပါက zombie process တစ်ခုက port ကို ထိန်းထားနေခြင်း ရှိ/မရှိ စစ်ဆေးပါ။
 
 ```bash
 openclaw gateway status
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-လက်ဖြင့် 실행ထားသော process တစ်ခုက port ကို ကိုင်ထားပါက (Ctrl+C) ဖြင့် ရပ်တန့်ပါ။ နောက်ဆုံးအနေနှင့် အထက်တွင် တွေ့ရှိသော PID ကို kill လုပ်နိုင်ပါသည်။
+7. Manual run တစ်ခုက port ကို ထိန်းထားနေပါက ထို process ကို ရပ်တန့်ပါ (Ctrl+C)။ 8. နောက်ဆုံးနည်းလမ်းအဖြစ် အထက်တွင် တွေ့ထားသော PID ကို kill လုပ်ပါ။

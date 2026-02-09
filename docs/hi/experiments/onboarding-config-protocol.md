@@ -2,13 +2,6 @@
 summary: "ऑनबोर्डिंग विज़ार्ड और कॉन्फ़िग स्कीमा के लिए RPC प्रोटोकॉल नोट्स"
 read_when: "ऑनबोर्डिंग विज़ार्ड के चरणों या कॉन्फ़िग स्कीमा एंडपॉइंट्स में परिवर्तन करते समय"
 title: "ऑनबोर्डिंग और कॉन्फ़िग प्रोटोकॉल"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:09Z
 ---
 
 # ऑनबोर्डिंग + कॉन्फ़िग प्रोटोकॉल
@@ -26,14 +19,14 @@ x-i18n:
 ## Gateway RPC
 
 - `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`
-- `wizard.next` params: `{ sessionId, answer?: { stepId, value? } }`
+- 25. `wizard.next` params: `{ sessionId, answer?: { stepId, value?` 26. `} }`
 - `wizard.cancel` params: `{ sessionId }`
 - `wizard.status` params: `{ sessionId }`
 - `config.schema` params: `{}`
 
 प्रतिक्रियाएँ (आकृति)
 
-- विज़ार्ड: `{ sessionId, done, step?, status?, error? }`
+- 27. Wizard: `{ sessionId, done, step?, status?, error?` 28. `}`
 - कॉन्फ़िग स्कीमा: `{ schema, uiHints, version, generatedAt }`
 
 ## UI संकेत

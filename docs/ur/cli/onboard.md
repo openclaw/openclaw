@@ -3,13 +3,6 @@ summary: "CLI کے لیے `openclaw onboard` کا حوالہ (انٹرایکٹو
 read_when:
   - آپ گیٹ وے، ورک اسپیس، تصدیق، چینلز اور Skills کے لیے رہنمائی شدہ سیٹ اپ چاہتے ہیں
 title: "آن بورڈ"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:02Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,5 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` غیر تعاملی موڈ کی دلالت نہیں کرتا۔ اسکرپٹس کے لیے `--non-interactive` استعمال کریں۔
+`--json` نان اِنٹریکٹو موڈ کا مطلب نہیں ہوتا۔ 8. اسکرپٹس کے لیے `--non-interactive` استعمال کریں۔
 </Note>

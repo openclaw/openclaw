@@ -5,13 +5,6 @@ read_when:
   - Belirli sağlayıcılar için etkileşimsiz örneklere ihtiyacınız varsa
 title: "CLI Otomasyonu"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:42Z
 ---
 
 # CLI Otomasyonu
@@ -41,7 +34,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
 ## Sağlayıcıya özgü örnekler
 
 <AccordionGroup>
-  <Accordion title="Gemini örneği">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI örneği">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway örneği">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway örneği">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot örneği">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Sentetik örnek">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen örneği">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -115,7 +108,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
   </Accordion>
 </AccordionGroup>
 
-## Başka bir ajan ekleme
+## 5. Başka bir ajan ekle
 
 Kendi çalışma alanı, oturumları ve kimlik doğrulama profilleri olan ayrı bir ajan oluşturmak için `openclaw agents add <name>` kullanın. `--workspace` olmadan çalıştırmak sihirbazı başlatır.
 
@@ -128,7 +121,7 @@ openclaw agents add work \
   --json
 ```
 
-Ayarladıkları:
+6. Ayarladıkları:
 
 - `agents.list[].name`
 - `agents.list[].workspace`

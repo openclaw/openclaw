@@ -1,17 +1,10 @@
 ---
-summary: „OpenClaw auf Oracle Cloud (Always Free ARM)“
+summary: "„OpenClaw auf Oracle Cloud (Always Free ARM)“"
 read_when:
   - Einrichten von OpenClaw auf Oracle Cloud
   - Suche nach kostengünstigem VPS-Hosting für OpenClaw
   - Wunsch nach 24/7-OpenClaw auf einem kleinen Server
-title: „Oracle Cloud“
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:10Z
+title: "Oracle Cloud"
 ---
 
 # OpenClaw auf Oracle Cloud (OCI)
@@ -27,13 +20,13 @@ Die kostenlose Stufe von Oracle kann sehr gut zu OpenClaw passen (insbesondere, 
 
 ## Kostenvergleich (2026)
 
-| Anbieter     | Plan            | Spezifikationen          | Preis/Monat | Hinweise                           |
-| ------------ | --------------- | ------------------------ | ----------- | ---------------------------------- |
-| Oracle Cloud | Always Free ARM | bis zu 4 OCPU, 24 GB RAM | $0          | ARM, begrenzte Kapazität           |
-| Hetzner      | CX22            | 2 vCPU, 4 GB RAM         | ~ $4        | Günstigste kostenpflichtige Option |
-| DigitalOcean | Basic           | 1 vCPU, 1 GB RAM         | $6          | Einfache UI, gute Doku             |
-| Vultr        | Cloud Compute   | 1 vCPU, 1 GB RAM         | $6          | Viele Standorte                    |
-| Linode       | Nanode          | 1 vCPU, 1 GB RAM         | $5          | Jetzt Teil von Akamai              |
+| Anbieter     | Plan            | Spezifikationen          | Preis/Monat          | Hinweise                           |
+| ------------ | --------------- | ------------------------ | -------------------- | ---------------------------------- |
+| Oracle Cloud | Always Free ARM | bis zu 4 OCPU, 24 GB RAM | $0                   | ARM, begrenzte Kapazität           |
+| Hetzner      | CX22            | 2 vCPU, 4 GB RAM         | ~ $4 | Günstigste kostenpflichtige Option |
+| DigitalOcean | Basic           | 1 vCPU, 1 GB RAM         | $6                   | Einfache UI, gute Doku             |
+| Vultr        | Cloud Compute   | 1 vCPU, 1 GB RAM         | $6                   | Viele Standorte                    |
+| Linode       | Nanode          | 1 vCPU, 1 GB RAM         | $5                   | Jetzt Teil von Akamai              |
 
 ---
 
@@ -43,7 +36,7 @@ Die kostenlose Stufe von Oracle kann sehr gut zu OpenClaw passen (insbesondere, 
 - Tailscale-Konto (kostenlos unter [tailscale.com](https://tailscale.com))
 - ~30 Minuten
 
-## 1) OCI-Instanz erstellen
+## 1. OCI-Instanz erstellen
 
 1. Melden Sie sich bei der [Oracle Cloud Console](https://cloud.oracle.com/) an
 2. Navigieren Sie zu **Compute → Instances → Create Instance**
@@ -60,7 +53,7 @@ Die kostenlose Stufe von Oracle kann sehr gut zu OpenClaw passen (insbesondere, 
 
 **Tipp:** Wenn die Erstellung der Instanz mit „Out of capacity“ fehlschlägt, versuchen Sie eine andere Availability Domain oder versuchen Sie es später erneut. Die Kapazität der kostenlosen Stufe ist begrenzt.
 
-## 2) Verbinden und aktualisieren
+## 2. Verbinden und aktualisieren
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Hinweis:** `build-essential` ist für die ARM-Kompilierung einiger Abhängigkeiten erforderlich.
 
-## 3) Benutzer und Hostname konfigurieren
+## 3. Benutzer und Hostname konfigurieren
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Tailscale installieren
+## 4. Tailscale installieren
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **Ab jetzt verbinden Sie sich über Tailscale:** `ssh ubuntu@openclaw` (oder verwenden Sie die Tailscale-IP).
 
-## 5) OpenClaw installieren
+## 5. OpenClaw installieren
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,7 +107,7 @@ Wenn die Frage „How do you want to hatch your bot?“ erscheint, wählen Sie *
 
 > Hinweis: Wenn Sie auf ARM-native Build-Probleme stoßen, beginnen Sie mit Systempaketen (z. B. `sudo apt install -y build-essential`), bevor Sie zu Homebrew greifen.
 
-## 6) Gateway konfigurieren (loopback + Token-Auth) und Tailscale Serve aktivieren
+## 6. Gateway konfigurieren (loopback + Token-Auth) und Tailscale Serve aktivieren
 
 Verwenden Sie Token-Auth als Standard. Es ist vorhersehbar und vermeidet die Notwendigkeit von „insecure auth“-Flags in der Control-UI.
 
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Überprüfen
+## 7. Überprüfen
 
 ```bash
 # Check version
@@ -149,7 +142,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) VCN-Sicherheit absichern
+## 8. VCN-Sicherheit absichern
 
 Nachdem alles funktioniert, sichern Sie das VCN ab, um sämtlichen Traffic außer Tailscale zu blockieren. Das Virtual Cloud Network von OCI fungiert als Firewall am Netzwerkrand — der Traffic wird blockiert, bevor er Ihre Instanz erreicht.
 
@@ -286,14 +279,14 @@ Die meisten npm-Pakete funktionieren problemlos. Bei Binärdateien suchen Sie na
 
 ---
 
-## Persistenz
+## Dauerhaftigkeit
 
 Der gesamte Zustand liegt in:
 
 - `~/.openclaw/` — Konfiguration, Zugangsdaten, Sitzungsdaten
 - `~/.openclaw/workspace/` — Workspace (SOUL.md, Speicher, Artefakte)
 
-Regelmäßig sichern:
+periodisch sichern:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace

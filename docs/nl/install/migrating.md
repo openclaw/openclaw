@@ -4,13 +4,6 @@ read_when:
   - Je verplaatst OpenClaw naar een nieuwe laptop/server
   - Je wilt sessies, authenticatie en kanaalaanmeldingen (WhatsApp, enz.) behouden
 title: "Migratiegids"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:36Z
 ---
 
 # OpenClaw migreren naar een nieuwe machine
@@ -26,7 +19,7 @@ Maar er zijn veelvoorkomende valkuilen rond **profielen**, **rechten** en **gede
 
 ## Voordat je begint (wat je migreert)
 
-### 1) Identificeer je state directory
+### 1. Identificeer je state directory
 
 De meeste installaties gebruiken de standaard:
 
@@ -45,7 +38,7 @@ openclaw status
 
 Zoek in de uitvoer naar vermeldingen van `OPENCLAW_STATE_DIR` / profiel. Als je meerdere gateways draait, herhaal dit voor elk profiel.
 
-### 2) Identificeer je werkruimte
+### 2. Identificeer je werkruimte
 
 Veelgebruikte standaarden:
 
@@ -54,7 +47,7 @@ Veelgebruikte standaarden:
 
 Je werkruimte is waar bestanden zoals `MEMORY.md`, `USER.md` en `memory/*.md` staan.
 
-### 3) Begrijp wat je behoudt
+### 3. Begrijp wat je behoudt
 
 Als je **zowel** de state dir als de werkruimte kopieert, behoud je:
 
@@ -67,7 +60,7 @@ Als je **zowel** de state dir als de werkruimte kopieert, behoud je:
 Als je **alleen** de werkruimte kopieert (bijv. via Git), behoud je **niet**:
 
 - sessies
-- referenties
+- inloggegevens
 - kanaalaanmeldingen
 
 Die staan onder `$OPENCLAW_STATE_DIR`.
@@ -109,7 +102,7 @@ Kopieer **beide**:
 - `$OPENCLAW_STATE_DIR` (standaard `~/.openclaw/`)
 - je werkruimte (standaard `~/.openclaw/workspace/`)
 
-Gebruikelijke aanpakken:
+Gemeenschappelijke benaderingen:
 
 - `scp` de tarballs en uitpakken
 - `rsync -a` via SSH

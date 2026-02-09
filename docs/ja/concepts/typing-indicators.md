@@ -3,18 +3,11 @@ summary: "OpenClaw がタイピングインジケーターを表示するタイ�
 read_when:
   - タイピングインジケーターの挙動やデフォルトを変更する場合
 title: "タイピングインジケーター"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:36Z
 ---
 
 # タイピングインジケーター
 
-タイピングインジケーターは、実行がアクティブな間にチャットチャンネルへ送信されます。`agents.defaults.typingMode` を使用してタイピングが **いつ** 開始されるかを制御し、`typingIntervalSeconds` を使用して **どの頻度** で更新されるかを制御します。
+入力インジケータは、ランがアクティブな間、チャットチャンネルに送信されます。 タイピングインジケーターは、実行がアクティブな間にチャットチャンネルへ送信されます。`agents.defaults.typingMode` を使用してタイピングが **いつ** 開始されるかを制御し、`typingIntervalSeconds` を使用して **どの頻度** で更新されるかを制御します。
 
 ## デフォルト
 
@@ -63,5 +56,7 @@ x-i18n:
 
 - `message` モードでは、サイレントのみの返信（例: 出力を抑制するために使用される `NO_REPLY` トークン）に対してタイピングは表示されません。
 - `thinking` は、実行が reasoning をストリーミングする場合（`reasoningLevel: "stream"`）にのみ発火します。モデルが reasoning デルタを出力しない場合、タイピングは開始されません。
+  モデルが推論デルタを出力しない場合、入力は開始されません。
 - ハートビートでは、モードに関係なくタイピングは表示されません。
 - `typingIntervalSeconds` は **更新間隔** を制御するものであり、開始時刻ではありません。デフォルトは 6 秒です。
+  デフォルトは 6 秒です。

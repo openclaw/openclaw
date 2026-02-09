@@ -3,13 +3,6 @@ summary: "Cycle de vie de la boucle d’agent, flux et semantique d’attente"
 read_when:
   - Vous avez besoin d’un parcours exact de la boucle d’agent ou des evenements de cycle de vie
 title: "Boucle d’agent"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: 0775b96eb3451e13
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:20Z
 ---
 
 # Boucle d’agent (OpenClaw)
@@ -27,7 +20,7 @@ cablee de bout en bout.
 - RPC de la Gateway (passerelle) : `agent` et `agent.wait`.
 - CLI : commande `agent`.
 
-## Fonctionnement (vue d’ensemble)
+## Comment ça marche (haut niveau)
 
 1. Le RPC `agent` valide les parametres, resout la session (sessionKey/sessionId), persiste les metadonnees de session et renvoie immediatement `{ runId, acceptedAt }`.
 2. `agentCommand` execute l’agent :
@@ -49,7 +42,7 @@ cablee de bout en bout.
    - attend la **fin/erreur de cycle de vie** pour `runId`
    - renvoie `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
-## Mise en file + concurrence
+## File d'attente + simultanée
 
 - Les executions sont serialisees par cle de session (voie de session) et, en option, via une voie globale.
 - Cela evite les conflits d’outils/session et maintient la coherence de l’historique de session.
@@ -145,7 +138,7 @@ Voir [Plugins](/plugin#plugin-hooks) pour l’API des accroches et les details d
 - Valeur par defaut `agent.wait` : 30 s (attente uniquement). Le parametre `timeoutMs` surcharge.
 - Runtime de l’agent : valeur par defaut `agents.defaults.timeoutSeconds` de 600 s ; appliquee dans le minuteur d’abandon `runEmbeddedPiAgent`.
 
-## Cas de fin anticipee
+## Là où les choses peuvent se terminer tôt
 
 - Delai d’expiration de l’agent (abandon)
 - AbortSignal (annulation)

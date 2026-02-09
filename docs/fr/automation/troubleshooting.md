@@ -5,13 +5,6 @@ read_when:
   - Cron s’est exécuté mais aucun message n’a été livré
   - Le heartbeat semble silencieux ou ignoré
 title: "Dépannage de l’automatisation"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:35Z
 ---
 
 # Dépannage de l’automatisation

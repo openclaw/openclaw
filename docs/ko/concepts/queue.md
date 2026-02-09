@@ -3,13 +3,6 @@ summary: "인바운드 자동 응답 실행을 직렬화하는 명령 큐 설계
 read_when:
   - 자동 응답 실행 또는 동시성을 변경할 때
 title: "명령 큐"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:46Z
 ---
 
 # 명령 큐 (2026-01-16)

@@ -3,13 +3,6 @@ summary: "Sandbox par agent + restrictions d’outils, précédence et exemples"
 title: Sandbox multi-agents et outils
 read_when: "Vous souhaitez un sandboxing par agent ou des politiques d’autorisation/refus d’outils par agent dans une Gateway (passerelle) multi-agents."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:57Z
 ---
 
 # Configuration du sandbox et des outils multi-agents
@@ -40,7 +33,7 @@ Les identifiants **ne sont pas** partagés entre agents. Ne réutilisez jamais `
 Si vous souhaitez partager des identifiants, copiez `auth-profiles.json` dans le `agentDir` de l’autre agent.
 
 Pour le comportement du sandbox à l’exécution, voir [Sandboxing](/gateway/sandboxing).
-Pour déboguer « pourquoi est-ce bloqué ? », voir [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) et `openclaw sandbox explain`.
+Pour déboguer « pourquoi est-ce bloqué ? », voir [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) et `openclaw sandbox explain`.
 
 ---
 
@@ -368,7 +361,7 @@ Après avoir configuré le sandbox et les outils multi-agents :
    - Envoyer un message nécessitant des outils restreints
    - Vérifier que l’agent ne peut pas utiliser les outils refusés
 
-4. **Surveiller les journaux :**
+4. **Journaux du moniteur :**
 
    ```exec
    tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.log" | grep -E "routing|sandbox|tools"
@@ -376,7 +369,7 @@ Après avoir configuré le sandbox et les outils multi-agents :
 
 ---
 
-## Dépannage
+## Problemes courants
 
 ### Agent non sandboxé malgré `mode: "all"`
 

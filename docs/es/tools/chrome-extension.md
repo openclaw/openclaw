@@ -5,13 +5,6 @@ read_when:
   - Necesita un Gateway remoto + automatización del navegador local vía Tailscale
   - Desea comprender las implicaciones de seguridad de la toma de control del navegador
 title: "Extensión de Chrome"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:52Z
 ---
 
 # Extensión de Chrome (retransmisión del navegador)
@@ -64,7 +57,7 @@ Después de actualizar OpenClaw:
 
 OpenClaw incluye un perfil de navegador integrado llamado `chrome` que apunta a la retransmisión de la extensión en el puerto predeterminado.
 
-Úselo:
+Utilícelo:
 
 - CLI: `openclaw browser --browser-profile chrome tabs`
 - Herramienta del agente: `browser` con `profile="chrome"`

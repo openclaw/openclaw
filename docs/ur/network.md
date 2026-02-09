@@ -5,13 +5,6 @@ read_when:
   - آپ local بمقابلہ tailnet رسائی یا pairing کی خرابیوں کا ازالہ کر رہے ہوں
   - آپ نیٹ ورکنگ دستاویزات کی مستند فہرست چاہتے ہوں
 title: "نیٹ ورک"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:22Z
 ---
 
 # نیٹ ورک ہب

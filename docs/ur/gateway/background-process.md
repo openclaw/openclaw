@@ -4,18 +4,11 @@ read_when:
   - بیک گراؤنڈ exec کے رویّے کو شامل یا تبدیل کرتے وقت
   - طویل المدت exec ٹاسکس کی ڈیبگنگ کے دوران
 title: "بیک گراؤنڈ Exec اور پروسیس ٹول"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:17Z
 ---
 
 # بیک گراؤنڈ Exec + پروسیس ٹول
 
-OpenClaw شیل کمانڈز کو `exec` ٹول کے ذریعے چلاتا ہے اور طویل عرصے تک چلنے والے ٹاسکس کو میموری میں رکھتا ہے۔ `process` ٹول ان بیک گراؤنڈ سیشنز کا نظم کرتا ہے۔
+OpenClaw شیل کمانڈز کو `exec` ٹول کے ذریعے چلاتا ہے اور طویل مدتی ٹاسکس کو میموری میں رکھتا ہے۔ 48. `process` ٹول ان بیک گراؤنڈ سیشنز کو منظم کرتا ہے۔
 
 ## exec ٹول
 
@@ -26,7 +19,7 @@ OpenClaw شیل کمانڈز کو `exec` ٹول کے ذریعے چلاتا ہے 
 - `background` (bool): فوراً بیک گراؤنڈ کریں
 - `timeout` (سیکنڈز، بطورِ طے شدہ 1800): اس ٹائم آؤٹ کے بعد پروسیس ختم کریں
 - `elevated` (bool): اگر ایلیویٹڈ موڈ فعال/اجازت یافتہ ہو تو ہوسٹ پر چلائیں
-- حقیقی TTY درکار ہے؟ `pty: true` سیٹ کریں۔
+- 49. حقیقی TTY کی ضرورت ہے؟ 50. `pty: true` سیٹ کریں۔
 - `workdir`, `env`
 
 رویّہ:
@@ -38,7 +31,7 @@ OpenClaw شیل کمانڈز کو `exec` ٹول کے ذریعے چلاتا ہے 
 
 ## چائلڈ پروسیس برجنگ
 
-جب exec/proces ٹولز کے باہر طویل المدت چائلڈ پروسیسز اسپاون کیے جائیں (مثلاً CLI ری اسپانز یا gateway ہیلپرز)، تو چائلڈ-پروسیس برج ہیلپر منسلک کریں تاکہ ٹرمینیشن سگنلز فارورڈ ہوں اور ایگزٹ/غلطی پر لسٹنرز الگ ہو جائیں۔ اس سے systemd پر یتیم پروسیسز سے بچاؤ ہوتا ہے اور مختلف پلیٹ فارمز پر شٹ ڈاؤن کا رویّہ یکساں رہتا ہے۔
+When spawning long-running child processes outside the exec/process tools (for example, CLI respawns or gateway helpers), attach the child-process bridge helper so termination signals are forwarded and listeners are detached on exit/error. اس سے systemd پر orphaned processes سے بچاؤ ہوتا ہے اور shutdown رویہ تمام پلیٹ فارمز پر یکساں رہتا ہے۔
 
 ماحولیاتی اووررائیڈز:
 

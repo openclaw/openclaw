@@ -5,13 +5,6 @@ read_when:
   - Cron kördes men inget meddelande levererades
   - Heartbeat verkar tyst eller hoppades över
 title: "Felsökning av automatisering"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:13Z
 ---
 
 # Felsökning av automatisering

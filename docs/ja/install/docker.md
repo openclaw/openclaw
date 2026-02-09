@@ -4,24 +4,17 @@ read_when:
   - ローカルインストールではなくコンテナ化された ゲートウェイ を使いたい場合
   - Docker フローを検証している場合
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:47Z
 ---
 
 # Docker（オプション）
 
-Docker は **オプション** です。コンテナ化された ゲートウェイ を使いたい場合、または Docker フローを検証したい場合にのみ使用してください。
+Docker は **任意** です。 Docker は **オプション** です。コンテナ化された ゲートウェイ を使いたい場合、または Docker フローを検証したい場合にのみ使用してください。
 
 ## Docker は自分に向いていますか？
 
 - **はい**：分離された使い捨ての ゲートウェイ 環境が必要、またはローカルインストールなしで OpenClaw をホスト上で実行したい場合。
-- **いいえ**：自分のマシンで実行し、最速の開発ループが欲しいだけの場合。通常のインストール フローを使用してください。
-- **サンドボックス化に関する注記**：エージェントのサンドボックス化でも Docker を使用しますが、完全な ゲートウェイ を Docker で実行する必要は **ありません**。[Sandboxing](/gateway/sandboxing) を参照してください。
+- **いいえ**：自分のマシンで実行し、最速の開発ループが欲しいだけの場合。通常のインストール フローを使用してください。 代わりに通常のインストール フローを使用します。
+- **サンドボックス化に関する注記**：エージェントのサンドボックス化でも Docker を使用しますが、完全な ゲートウェイ を Docker で実行する必要は **ありません**。[Sandboxing](/gateway/sandboxing) を参照してください。 [Sandboxing](/gateway/sandboxing) を参照してください。
 
 このガイドの内容：
 
@@ -49,11 +42,11 @@ Docker は **オプション** です。コンテナ化された ゲートウェ
 
 - ゲートウェイ イメージをビルド
 - オンボーディング ウィザードを実行
-- オプションの プロバイダー 設定ヒントを表示
+- オプションのプロバイダ設定ヒントを印刷
 - Docker Compose 経由で ゲートウェイ を起動
 - ゲートウェイ トークンを生成し、`.env` に書き込み
 
-オプションの 環境変数：
+オプションのenv vars:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — ビルド中に追加の apt パッケージをインストール
 - `OPENCLAW_EXTRA_MOUNTS` — 追加のホスト バインド マウントを追加
@@ -63,14 +56,14 @@ Docker は **オプション** です。コンテナ化された ゲートウェ
 
 - ブラウザーで `http://127.0.0.1:18789/` を開きます。
 - Control UI（Settings → token）にトークンを貼り付けます。
-- URL が再度必要ですか？`docker compose run --rm openclaw-cli dashboard --no-open` を実行してください。
+- もう一度URLを入力しますか？ URL が再度必要ですか？`docker compose run --rm openclaw-cli dashboard --no-open` を実行してください。
 
 ホスト上に 設定 / ワークスペース を書き込みます：
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-VPS で実行していますか？[Hetzner（Docker VPS）](/install/hetzner) を参照してください。
+VPSで実行していますか？ VPS で実行していますか？[Hetzner（Docker VPS）](/install/hetzner) を参照してください。
 
 ### 手動フロー（compose）
 
@@ -80,7 +73,7 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
-注記：リポジトリ ルートから `docker compose ...` を実行してください。  
+Note: repoルートから`docker compose ...`を実行します。 注記：リポジトリ ルートから `docker compose ...` を実行してください。  
 `OPENCLAW_EXTRA_MOUNTS` または `OPENCLAW_HOME_VOLUME` を有効にした場合、セットアップ スクリプトは
 `docker-compose.extra.yml` を書き込みます。別の場所で Compose を実行する際は、これを含めてください：
 
@@ -106,7 +99,9 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 追加のホスト ディレクトリをコンテナにマウントしたい場合は、
 `docker-setup.sh` を実行する前に `OPENCLAW_EXTRA_MOUNTS` を設定してください。これは
 Docker のバインド マウントのカンマ区切りリストを受け取り、`openclaw-gateway` と
-`openclaw-cli` の両方に適用するため、`docker-compose.extra.yml` を生成します。
+`openclaw-cli` の両方に適用するため、`docker-compose.extra.yml` を生成します。 これは
+コンマで区切られた Docker バインドマウントのリストを受け取り、`docker-compose.extra.yml` を生成することで
+`openclaw-gateway` と `openclaw-cli` の両方に適用されます。
 
 例：
 
@@ -120,7 +115,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 - macOS / Windows では、パスを Docker Desktop と共有する必要があります。
 - `OPENCLAW_EXTRA_MOUNTS` を編集した場合、`docker-setup.sh` を再実行して
   追加の compose ファイルを再生成してください。
-- `docker-compose.extra.yml` は生成物です。手動で編集しないでください。
+- `docker-compose.extra.yml` は生成物です。手動で編集しないでください。 手作業で編集しないでください。
 
 ### コンテナの home 全体を永続化（オプション）
 
@@ -128,7 +123,8 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 `OPENCLAW_HOME_VOLUME` で名前付きボリュームを設定してください。これにより Docker ボリュームが作成され、
 `/home/node` にマウントされます。標準の 設定 / ワークスペース のバインド マウントは維持されます。
 ここでは名前付きボリュームを使用してください（バインド パスではありません）。
-バインド マウントを使用する場合は、`OPENCLAW_EXTRA_MOUNTS` を使用してください。
+バインド マウントを使用する場合は、`OPENCLAW_EXTRA_MOUNTS` を使用してください。 これにより、Docker ボリュームが作成され、
+`/home/node` にマウントされ、標準の config/workspace バインドマウントが維持されます。 32. ここでは名前付きボリュームを使用してください（バインドパスではありません）。バインドマウントの場合は `OPENCLAW_EXTRA_MOUNTS` を使用します。
 
 例：
 
@@ -156,6 +152,8 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 イメージ内にシステム パッケージ（例：ビルド ツールやメディア ライブラリ）が必要な場合は、
 `docker-setup.sh` を実行する前に `OPENCLAW_DOCKER_APT_PACKAGES` を設定してください。
 これはイメージ ビルド中にパッケージをインストールするため、コンテナを削除しても保持されます。
+これにより、イメージビルド中にパッケージがインストールされるため、
+コンテナが削除されても継続します。
 
 例：
 
@@ -173,7 +171,7 @@ export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg build-essential"
 ### パワーユーザー / フル機能コンテナ（オプトイン）
 
 既定の Docker イメージは **セキュリティ重視** で、非 root の `node`
-ユーザーとして実行されます。これにより攻撃面は小さくなりますが、次の制限があります：
+ユーザーとして実行されます。これにより攻撃面は小さくなりますが、次の制限があります： これにより、攻撃面が小さくなりますが、それは以下のことを意味します。
 
 - 実行時のシステム パッケージ インストール不可
 - 既定では Homebrew なし
@@ -214,7 +212,7 @@ Playwright にシステム依存関係のインストールが必要な場合は
 
 ### 権限 + EACCES
 
-イメージは `node`（uid 1000）として実行されます。`/home/node/.openclaw` に対する
+イメージは `node` (uid 1000) として実行されます。 イメージは `node`（uid 1000）として実行されます。`/home/node/.openclaw` に対する
 権限エラーが表示される場合は、ホストのバインド マウントが uid 1000 の所有になっていることを確認してください。
 
 例（Linux ホスト）：
@@ -229,6 +227,7 @@ sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 
 再ビルドを高速化するには、Dockerfile 内で依存関係レイヤーがキャッシュされるように順序を調整してください。
 これにより、ロックファイルが変更されない限り `pnpm install` の再実行を回避できます：
+ロックファイルが変更されない限り、 `pnpm install` の再実行を回避します。
 
 ```dockerfile
 FROM node:22-bookworm
@@ -287,7 +286,9 @@ docker compose run --rm openclaw-cli channels add --channel discord --token "<to
 ウィザードで OpenAI Codex OAuth を選択すると、ブラウザー URL が開かれ、
 `http://127.0.0.1:1455/auth/callback` でのコールバック取得を試みます。Docker や
 ヘッドレス環境では、このコールバックでブラウザー エラーが表示される場合があります。
-最終的に到達した完全なリダイレクト URL をコピーし、ウィザードに貼り付けて認証を完了してください。
+最終的に到達した完全なリダイレクト URL をコピーし、ウィザードに貼り付けて認証を完了してください。 Docker または
+では、コールバックにブラウザエラーが表示されるヘッドレス設定があります。 完全なリダイレクト
+URLをコピーし、ウィザードに貼り付けて認証を完了します。
 
 ### ヘルスチェック
 
@@ -311,7 +312,7 @@ pnpm test:docker:qr
 
 - Gateway のバインドは、コンテナ用途では既定で `lan` です。
 - Dockerfile の CMD は `--allow-unconfigured` を使用します。`local` ではなく
-  `gateway.mode` を用いてマウントされた設定でも起動します。ガードを強制するには CMD を上書きしてください。
+  `gateway.mode` を用いてマウントされた設定でも起動します。ガードを強制するには CMD を上書きしてください。 ガードを強制するためにCMDを上書きします。
 - ゲートウェイ コンテナは、セッション（`~/.openclaw/agents/<agentId>/sessions/`）の信頼できる情報源です。
 
 ## エージェント サンドボックス（ホスト ゲートウェイ + Docker ツール）
@@ -321,7 +322,7 @@ pnpm test:docker:qr
 ### 何をするか
 
 `agents.defaults.sandbox` を有効にすると、**メイン以外のセッション** は Docker
-コンテナ内でツールを実行します。ゲートウェイ はホストに残り、ツール実行のみが分離されます：
+コンテナ内でツールを実行します。ゲートウェイ はホストに残り、ツール実行のみが分離されます： ゲートウェイはホスト上にとどまりますが、ツールの実行は分離されています:
 
 - スコープ：既定で `"agent"`（エージェントごとに 1 コンテナ + ワークスペース）
 - スコープ：セッションごとの分離には `"session"`
@@ -332,13 +333,15 @@ pnpm test:docker:qr
   ツールが読み取れるようになります（`workspaceAccess: "rw"` を使用すると、エージェント ワークスペースに配置されます）
 
 警告：`scope: "shared"` はセッション間の分離を無効化します。すべてのセッションが
-1 つのコンテナと 1 つのワークスペースを共有します。
+1 つのコンテナと 1 つのワークスペースを共有します。 すべてのセッションは
+コンテナ1つとワークスペース1つを共有します。
 
 ### エージェントごとのサンドボックス プロファイル（マルチエージェント）
 
 マルチエージェント ルーティングを使用する場合、各エージェントは
 `agents.list[].sandbox` および `agents.list[].tools`（および `agents.list[].tools.sandbox.tools`）を上書きできます。
-これにより、1 つの ゲートウェイ で異なるアクセス レベルを混在させられます：
+これにより、1 つの ゲートウェイ で異なるアクセス レベルを混在させられます： これにより、1 つのゲートウェイで
+混合アクセスレベルを実行できます。
 
 - フル アクセス（個人用エージェント）
 - 読み取り専用ツール + 読み取り専用ワークスペース（家族 / 業務用エージェント）
@@ -367,11 +370,10 @@ pnpm test:docker:qr
 
 - 既定の `docker.network` は `"none"`（外向き通信なし）です。
 - `readOnlyRoot: true` はパッケージ インストールをブロックします。
-- `apt-get` には `user` が root である必要があります
-  （`user` を省略するか、`user: "0:0"` を設定）。
-  OpenClaw は、`setupCommand`（または docker 設定）が変更されると、
-  コンテナが **最近使用されていない** 場合（約 5 分以内）に自動再作成します。
-  使用中のコンテナは、正確な `openclaw sandbox recreate ...` コマンドを含む警告をログに出力します。
+- `apt-get` の場合は`user` をルートにする必要があります(`user` を省略するか、`user: "0:0"`を設定します)。
+  `setupCommand` (またはdocker config) が
+  に変更されたときに、コンテナが**最近使用された** (約 5 分以内) でない限り、OpenClaw はコンテナを自動的に再作成します。 ホットコンテナ
+  は `openclawサンドボックスを再作成する...`コマンドで警告をログに記録します。
 
 ```json5
 {
@@ -458,7 +460,7 @@ scripts/sandbox-setup.sh
 scripts/sandbox-common-setup.sh
 ```
 
-これは `openclaw-sandbox-common:bookworm-slim` をビルドします。使用するには：
+これは `openclaw-sandbox-common:bookworm-slim` をビルドします。使用するには： 使用するには:
 
 ```json5
 {
@@ -478,9 +480,9 @@ scripts/sandbox-common-setup.sh
 scripts/sandbox-browser-setup.sh
 ```
 
-これは `Dockerfile.sandbox-browser` を使用して `openclaw-sandbox-browser:bookworm-slim` をビルドします。
-コンテナは CDP を有効にした Chromium と、
-オプションの noVNC オブザーバー（Xvfb によるヘッドフル）を実行します。
+これは
+`Dockerfile.sandbox-browser` を使用して `openclaw-sandbox-browser:bookworm-slim` をビルドします。 このコンテナは、CDPが有効な状態でChromiumを実行し、オプションのnoVNCオブザーバー(Xvfbを介してヘッドフル)を
+します。
 
 注記：
 
@@ -519,9 +521,9 @@ scripts/sandbox-browser-setup.sh
 - サンドボックス ブラウザー制御 URL（`browser` ツール用）
 - noVNC URL（有効化され、headless=false の場合）
 
-注意：ツールの 許可リスト を使用している場合は、
-`browser` を追加（および拒否から削除）しないと、ツールは引き続きブロックされます。
-プルーン ルール（`agents.defaults.sandbox.prune`）は、ブラウザー コンテナにも適用されます。
+ツールに許可リストを使用している場合は、`browser` を追加（そして
+拒否から削除）するか、ツールがブロックされたままになります。
+prune rules (`agents.defaults.sandbox.prune`) はブラウザコンテナにも適用されます。
 
 ### カスタム サンドボックス イメージ
 
@@ -573,7 +575,8 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 - コンテナが実行されない：必要に応じて、セッションごとに自動作成されます。
 - サンドボックス内の権限エラー：`docker.user` を、マウントされたワークスペースの所有者に一致する UID:GID に設定してください
   （またはワークスペース フォルダーを chown してください）。
-- カスタム ツールが見つからない：OpenClaw は `sh -lc`（ログイン シェル）でコマンドを実行し、
+- カスタムツールが見つかりません: OpenClawは`sh -lc` (ログインシェル) を使用してコマンドを実行します。
+  `/etc/profile` をソースにしてPATHをリセットすることができます。 カスタム ツールが見つからない：OpenClaw は `sh -lc`（ログイン シェル）でコマンドを実行し、
   `/etc/profile` を読み込むため PATH がリセットされる場合があります。`docker.env.PATH` を設定して
   カスタム ツールのパス（例：`/custom/bin:/usr/local/share/npm-global/bin`）を先頭に追加するか、
   Dockerfile 内で `/etc/profile.d/` 配下にスクリプトを追加してください。

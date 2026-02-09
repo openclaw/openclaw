@@ -4,21 +4,15 @@ read_when:
   - 您想要建立索引或搜尋語意記憶
   - 您正在除錯記憶可用性或索引建立
 title: "memory"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:20Z
 ---
 
 # `openclaw memory`
 
+Manage semantic memory indexing and search.
 管理語意記憶的索引與搜尋。
 由目前啟用的記憶體外掛提供（預設：`memory-core`；可設定 `plugins.slots.memory = "none"` 以停用）。
 
-相關內容：
+Related:
 
 - 記憶概念：[Memory](/concepts/memory)
 - 外掛：[Plugins](/tools/plugin)

@@ -4,13 +4,6 @@ read_when:
   - Quiere que OpenClaw reciba mensajes directos mediante Nostr
   - Está configurando mensajería descentralizada
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:42Z
 ---
 
 # Nostr
@@ -78,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Referencia de configuración
 
-| Clave        | Tipo     | Predeterminado                              | Descripción                           |
-| ------------ | -------- | ------------------------------------------- | ------------------------------------- |
-| `privateKey` | string   | required                                    | Clave privada en formato `nsec` o hex |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URLs de relé (WebSocket)              |
-| `dmPolicy`   | string   | `pairing`                                   | Política de acceso a DMs              |
-| `allowFrom`  | string[] | `[]`                                        | Pubkeys de remitentes permitidos      |
-| `enabled`    | boolean  | `true`                                      | Habilitar/deshabilitar el canal       |
-| `name`       | string   | -                                           | Nombre para mostrar                   |
-| `profile`    | object   | -                                           | Metadatos de perfil NIP-01            |
+| Clave        | Tipo                                                         | Predeterminado                              | Descripción                                 |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------- |
+| `privateKey` | string                                                       | required                                    | Clave privada en formato `nsec` o hex       |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URLs de relé (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | Política de acceso a DMs                    |
+| `allowFrom`  | string[] | `[]`                                        | Pubkeys de remitentes permitidos            |
+| `enabled`    | boolean                                                      | `true`                                      | Habilitar/deshabilitar el canal             |
+| `name`       | string                                                       | -                                           | Nombre para mostrar                         |
+| `profile`    | object                                                       | -                                           | Metadatos de perfil NIP-01                  |
 
 ## Metadatos de perfil
 
@@ -176,9 +169,9 @@ Consejos:
 | NIP    | Estado      | Descripción                                     |
 | ------ | ----------- | ----------------------------------------------- |
 | NIP-01 | Compatible  | Formato básico de eventos + metadatos de perfil |
-| NIP-04 | Compatible  | DMs cifrados (`kind:4`)                         |
+| NIP-04 | Compatible  | DMs cifrados (`kind:4`)      |
 | NIP-17 | Planificado | DMs con envoltura de regalo                     |
-| NIP-44 | Planificado | Cifrado versionado                              |
+| NIP-44 | Planificado | Cifrado Versionado                              |
 
 ## Pruebas
 

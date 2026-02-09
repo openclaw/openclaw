@@ -3,13 +3,6 @@ summary: "Arkitektura ng WebSocket gateway, mga component, at mga daloy ng clien
 read_when:
   - Nagtatrabaho sa gateway protocol, mga client, o mga transport
 title: "Arkitektura ng Gateway"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:24Z
 ---
 
 # Arkitektura ng Gateway
@@ -116,6 +109,7 @@ Mga detalye: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing)
 ## Remote access
 
 - Inirerekomenda: Tailscale o VPN.
+
 - Alternatibo: SSH tunnel
 
   ```bash
@@ -123,6 +117,7 @@ Mga detalye: [Gateway protocol](/gateway/protocol), [Pairing](/channels/pairing)
   ```
 
 - Ang parehong handshake + auth token ay naaangkop sa ibabaw ng tunnel.
+
 - Maaaring paganahin ang TLS + opsyonal na pinning para sa WS sa mga remote setup.
 
 ## Snapshot ng operasyon

@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:42Z
 ---
 
 # Fly.io پر ڈپلائمنٹ
@@ -42,13 +35,13 @@ fly apps create my-openclaw
 fly volumes create openclaw_data --size 1 --region iad
 ```
 
-**مشورہ:** اپنے قریب خطہ منتخب کریں۔ عام اختیارات: `lhr` (لندن)، `iad` (ورجینیا)، `sjc` (سان ہوزے)۔
+**ٹِپ:** اپنے قریب کا region منتخب کریں۔ عام اختیارات: `lhr` (London)، `iad` (Virginia)، `sjc` (San Jose)۔
 
-## 2) fly.toml کنفیگر کریں
+## 2. fly.toml کنفیگر کریں
 
 `fly.toml` میں ترمیم کریں تاکہ آپ کے ایپ نام اور ضروریات سے مطابقت ہو۔
 
-**سکیورٹی نوٹ:** ڈیفالٹ کنفیگ ایک عوامی URL ظاہر کرتا ہے۔ بغیر عوامی IP کے مضبوط ڈپلائمنٹ کے لیے [Private Deployment](#private-deployment-hardened) دیکھیں یا `fly.private.toml` استعمال کریں۔
+**سیکیورٹی نوٹ:** ڈیفالٹ کنفیگ ایک پبلک URL کو ظاہر کرتا ہے۔ 48. بغیر عوامی IP کے ایک hardened ڈیپلائمنٹ کے لیے [Private Deployment](#private-deployment-hardened) دیکھیں یا `fly.private.toml` استعمال کریں۔
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **اہم سیٹنگز:**
 
-| سیٹنگ                          | وجہ                                                                                    |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| `--bind lan`                   | `0.0.0.0` سے بائنڈ کرتا ہے تاکہ Fly کا پراکسی گیٹ وے تک پہنچ سکے                       |
+| سیٹنگ                          | وجہ                                                                                                       |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | `0.0.0.0` سے بائنڈ کرتا ہے تاکہ Fly کا پراکسی گیٹ وے تک پہنچ سکے                                          |
 | `--allow-unconfigured`         | کنفیگ فائل کے بغیر شروع کرتا ہے (بعد میں آپ ایک بنائیں گے)                             |
 | `internal_port = 3000`         | Fly ہیلتھ چیکس کے لیے `--port 3000` (یا `OPENCLAW_GATEWAY_PORT`) سے مماثل ہونا لازم ہے |
-| `memory = "2048mb"`            | 512MB بہت کم ہے؛ 2GB تجویز کردہ                                                        |
-| `OPENCLAW_STATE_DIR = "/data"` | والیوم پر اسٹیٹ کو برقرار رکھتا ہے                                                     |
+| `memory = "2048mb"`            | 512MB بہت کم ہے؛ 2GB تجویز کردہ                                                                           |
+| `OPENCLAW_STATE_DIR = "/data"` | والیوم پر اسٹیٹ کو برقرار رکھتا ہے                                                                        |
 
-## 3) سیکریٹس سیٹ کریں
+## 3. سیکریٹس سیٹ کریں
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,15 +107,15 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - نان لوپ بیک بائنڈز (`--bind lan`) سکیورٹی کے لیے `OPENCLAW_GATEWAY_TOKEN` کا تقاضا کرتے ہیں۔
 - ان ٹوکنز کو پاس ورڈز کی طرح محفوظ رکھیں۔
-- **تمام API کلیدوں اور ٹوکنز کے لیے کنفیگ فائل کے بجائے env vars کو ترجیح دیں۔** اس سے سیکریٹس `openclaw.json` سے باہر رہتے ہیں جہاں وہ حادثاتی طور پر ظاہر یا لاگ ہو سکتے ہیں۔
+- 49. تمام API keys اور tokens کے لیے **config فائل کے بجائے env vars کو ترجیح دیں**۔ اس سے secrets کو `openclaw.json` سے باہر رکھا جاتا ہے جہاں وہ غلطی سے ظاہر یا لاگ ہو سکتے ہیں۔
 
-## 4) ڈپلائ کریں
+## 4. ڈپلائ کریں
 
 ```bash
 fly deploy
 ```
 
-پہلی ڈپلائمنٹ Docker امیج بناتی ہے (~2–3 منٹ)۔ بعد کی ڈپلائمنٹس تیز ہوتی ہیں۔
+پہلی deploy پر Docker امیج بنتی ہے (~2-3 منٹ)۔ بعد کی deploys تیز ہوتی ہیں۔
 
 ڈپلائمنٹ کے بعد، تصدیق کریں:
 
@@ -138,7 +131,7 @@ fly logs
 [discord] logged in to discord as xxx
 ```
 
-## 5) کنفیگ فائل بنائیں
+## 5. کنفیگ فائل بنائیں
 
 مناسب کنفیگ بنانے کے لیے مشین میں SSH کریں:
 
@@ -209,7 +202,7 @@ EOF
 - ماحولیاتی متغیر: `DISCORD_BOT_TOKEN` (سیکریٹس کے لیے تجویز کردہ)
 - کنفیگ فائل: `channels.discord.token`
 
-اگر env var استعمال کر رہے ہیں تو کنفیگ میں ٹوکن شامل کرنے کی ضرورت نہیں۔ گیٹ وے `DISCORD_BOT_TOKEN` خود بخود پڑھ لیتا ہے۔
+اگر env var استعمال کر رہے ہیں تو کنفیگ میں ٹوکن شامل کرنے کی ضرورت نہیں۔ 50. گیٹ وے `DISCORD_BOT_TOKEN` کو خود بخود پڑھ لیتا ہے۔
 
 لاگو کرنے کے لیے ری اسٹارٹ کریں:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) Gateway تک رسائی
+## 6. Gateway تک رسائی
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Fly کنفیگرڈ پورٹ پر گیٹ وے تک نہیں پہنچ پا رہا�
 
 ### OOM / میموری مسائل
 
-کنٹینر بار بار ری اسٹارٹ ہو رہا ہے یا کِل ہو رہا ہے۔ نشانیاں: `SIGABRT`، `v8::internal::Runtime_AllocateInYoungGeneration`، یا خاموش ری اسٹارٹس۔
+Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, or silent restarts.
 
 **حل:** `fly.toml` میں میموری بڑھائیں:
 
@@ -276,7 +269,7 @@ Fly کنفیگرڈ پورٹ پر گیٹ وے تک نہیں پہنچ پا رہا�
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**نوٹ:** 512MB بہت کم ہے۔ 1GB چل سکتا ہے مگر لوڈ یا زیادہ لاگنگ میں OOM ہو سکتا ہے۔ **2GB تجویز کردہ ہے۔**
+**Note:** 512MB is too small. 1GB کام کر سکتا ہے لیکن لوڈ کے تحت یا verbose لاگنگ کے ساتھ OOM ہو سکتا ہے۔ **2GB تجویز کیا جاتا ہے۔**
 
 ### Gateway لاک مسائل
 
@@ -295,7 +288,7 @@ fly machine restart <machine-id>
 
 ### کنفیگ پڑھا نہیں جا رہا
 
-اگر `--allow-unconfigured` استعمال کر رہے ہیں تو گیٹ وے ایک کم از کم کنفیگ بناتا ہے۔ ری اسٹارٹ پر `/data/openclaw.json` پر آپ کی حسبِ ضرورت کنفیگ پڑھی جانی چاہیے۔
+اگر `--allow-unconfigured` استعمال کریں تو گیٹ وے ایک minimal کنفیگ بناتا ہے۔ آپ کی کسٹم کنفیگ `/data/openclaw.json` ری اسٹارٹ پر پڑھی جانی چاہیے۔
 
 تصدیق کریں کہ کنفیگ موجود ہے:
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### SSH کے ذریعے کنفیگ لکھنا
 
-`fly ssh console -C` کمانڈ شیل ری ڈائریکشن سپورٹ نہیں کرتی۔ کنفیگ فائل لکھنے کے لیے:
+`fly ssh console -C` کمانڈ shell redirection کو سپورٹ نہیں کرتی۔ کنفیگ فائل لکھنے کے لیے:
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -316,7 +309,7 @@ fly sftp shell
 > put /local/path/config.json /data/openclaw.json
 ```
 
-**نوٹ:** اگر فائل پہلے سے موجود ہو تو `fly sftp` ناکام ہو سکتا ہے۔ پہلے حذف کریں:
+**Note:** `fly sftp` may fail if the file already exists. پہلے ڈیلیٹ کریں:
 
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
@@ -357,11 +350,11 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**نوٹ:** `fly deploy` کے بعد، مشین کمانڈ ممکن ہے کہ `fly.toml` میں موجود قدر پر ری سیٹ ہو جائے۔ اگر آپ نے دستی تبدیلیاں کی ہیں تو ڈپلائ کے بعد دوبارہ لاگو کریں۔
+**نوٹ:** `fly deploy` کے بعد مشین کمانڈ `fly.toml` میں موجود ویلیوز پر ری سیٹ ہو سکتی ہے۔ اگر آپ نے دستی تبدیلیاں کی ہیں تو deploy کے بعد دوبارہ لاگو کریں۔
 
 ## نجی ڈپلائمنٹ (مضبوط)
 
-ڈیفالٹ طور پر، Fly عوامی IPs مختص کرتا ہے، جس سے آپ کا گیٹ وے `https://your-app.fly.dev` پر قابلِ رسائی ہوتا ہے۔ یہ سہولت بخش ہے مگر اس کا مطلب ہے کہ آپ کی ڈپلائمنٹ انٹرنیٹ اسکینرز (Shodan، Censys، وغیرہ) کے لیے قابلِ دریافت ہے۔
+ڈیفالٹ طور پر، Fly پبلک IPs الاٹ کرتا ہے، جس سے آپ کا گیٹ وے `https://your-app.fly.dev` پر قابلِ رسائی ہوتا ہے۔ یہ سہولت بخش ہے لیکن اس کا مطلب ہے کہ آپ کی تعیناتی انٹرنیٹ اسکینرز (Shodan، Censys وغیرہ) کے لیے قابلِ دریافت ہے۔
 
 **بغیر عوامی نمائش** کے مضبوط ڈپلائمنٹ کے لیے نجی ٹیمپلیٹ استعمال کریں۔
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### نجی ڈپلائمنٹ کے ساتھ ویب ہوکس
 
-اگر آپ کو عوامی نمائش کے بغیر ویب ہوک کال بیکس (Twilio، Telnyx، وغیرہ) درکار ہوں:
+اگر آپ کو webhook callbacks درکار ہیں (Twilio، Telnyx وغیرہ) بغیر پبلک ایکسپوژر کے:
 
 1. **ngrok سرنگ** — ngrok کو کنٹینر کے اندر یا سائیڈ کار کے طور پر چلائیں
 2. **Tailscale Funnel** — Tailscale کے ذریعے مخصوص راستے ایکسپوز کریں
@@ -464,7 +457,7 @@ ngrok کے ساتھ مثال وائس کال کنفیگ:
 }
 ```
 
-ngrok سرنگ کنٹینر کے اندر چلتی ہے اور Fly ایپ کو ظاہر کیے بغیر ایک عوامی ویب ہوک URL فراہم کرتی ہے۔ فارورڈڈ ہوسٹ ہیڈرز قبول کرنے کے لیے `webhookSecurity.allowedHosts` کو عوامی سرنگ ہوسٹ نیم پر سیٹ کریں۔
+ngrok ٹنل کنٹینر کے اندر چلتی ہے اور Fly ایپ کو ظاہر کیے بغیر ایک پبلک webhook URL فراہم کرتی ہے۔ forwarded host headers کو قبول کرنے کے لیے `webhookSecurity.allowedHosts` کو پبلک ٹنل hostname پر سیٹ کریں۔
 
 ### سکیورٹی فوائد
 

@@ -4,13 +4,6 @@ read_when:
   - macOS/iOS/Android 에서 Talk 모드를 구현할 때
   - 음성/TTS/인터럽트 동작을 변경할 때
 title: "Talk 모드"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:39Z
 ---
 
 # Talk 모드

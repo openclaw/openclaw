@@ -5,18 +5,11 @@ read_when:
   - Bạn đang gỡ lỗi các khóa API bị thiếu trong Gateway
   - Bạn đang lập tài liệu xác thực nhà cung cấp hoặc môi trường triển khai
 title: "Biến môi trường"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:08Z
 ---
 
 # Biến môi trường
 
-OpenClaw lấy các biến môi trường từ nhiều nguồn. Quy tắc là **không bao giờ ghi đè các giá trị hiện có**.
+43. OpenClaw lấy các biến môi trường từ nhiều nguồn. 44. Quy tắc là **không bao giờ ghi đè các giá trị hiện có**.
 
 ## Thứ tự ưu tiên (cao nhất → thấp nhất)
 

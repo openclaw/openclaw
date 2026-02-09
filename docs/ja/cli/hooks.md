@@ -4,13 +4,6 @@ read_when:
   - エージェント フックを管理したい場合
   - フックをインストールまたは更新したい場合
 title: "フック"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:14Z
 ---
 
 # `openclaw hooks`
@@ -135,7 +128,7 @@ openclaw hooks enable <name>
 特定のフックを設定（`~/.openclaw/config.json`）に追加して有効化します。
 
 **注記:** プラグインによって管理されるフックは、`openclaw hooks list` 内に `plugin:<id>` と表示され、
-ここでは有効化／無効化できません。代わりにプラグインを有効化／無効化してください。
+ここでは有効化／無効化できません。代わりにプラグインを有効化／無効化してください。 代わりにプラグインを有効/無効にします。
 
 **引数:**
 

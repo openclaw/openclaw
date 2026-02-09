@@ -4,22 +4,15 @@ read_when:
   - Bạn muốn hiểu về tự động nén và /compact
   - Bạn đang gỡ lỗi các phiên dài chạm giới hạn ngữ cảnh
 title: "Nén"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:31Z
 ---
 
 # Cửa sổ ngữ cảnh & Nén
 
-Mỗi mô hình đều có **cửa sổ ngữ cảnh** (số token tối đa mà nó có thể thấy). Các cuộc trò chuyện chạy lâu sẽ tích lũy tin nhắn và kết quả công cụ; khi cửa sổ trở nên chật chội, OpenClaw sẽ **nén** lịch sử cũ để giữ trong giới hạn.
+Các cuộc trò chuyện dài tích lũy thông điệp và kết quả công cụ; khi cửa sổ trở nên chật, OpenClaw **nén (compacts)** lịch sử cũ để nằm trong giới hạn. Long-running chats accumulate messages and tool results; once the window is tight, OpenClaw **compacts** older history to stay within limits.
 
 ## Nén là gì
 
-Nén **tóm tắt các đoạn hội thoại cũ hơn** thành một mục tóm tắt gọn và giữ nguyên các tin nhắn gần đây. Bản tóm tắt được lưu trong lịch sử phiên, vì vậy các yêu cầu tiếp theo sẽ sử dụng:
+Compaction **summarizes older conversation** into a compact summary entry and keeps recent messages intact. The summary is stored in the session history, so future requests use:
 
 - Bản tóm tắt nén
 - Các tin nhắn gần đây sau điểm nén
@@ -39,8 +32,7 @@ Bạn sẽ thấy:
 - `🧹 Auto-compaction complete` ở chế độ verbose
 - `/status` hiển thị `🧹 Compactions: <count>`
 
-Trước khi nén, OpenClaw có thể chạy một lượt **xả bộ nhớ im lặng** để lưu
-các ghi chú bền vững xuống đĩa. Xem [Memory](/concepts/memory) để biết chi tiết và cấu hình.
+Xem [Memory](/concepts/memory) để biết chi tiết và cấu hình. See [Memory](/concepts/memory) for details and config.
 
 ## Nén thủ công
 
@@ -52,7 +44,7 @@ Dùng `/compact` (tùy chọn kèm hướng dẫn) để buộc chạy một lư
 
 ## Nguồn cửa sổ ngữ cảnh
 
-Cửa sổ ngữ cảnh phụ thuộc vào từng mô hình. OpenClaw sử dụng định nghĩa mô hình từ danh mục nhà cung cấp đã cấu hình để xác định các giới hạn.
+Context window is model-specific. OpenClaw uses the model definition from the configured provider catalog to determine limits.
 
 ## Nén vs cắt tỉa
 

@@ -3,20 +3,15 @@ summary: "OpenClaw メモリの仕組み（ワークスペース ファイル＋
 read_when:
   - メモリ ファイルのレイアウトとワークフローを知りたいとき
   - 自動プレコンパクション メモリ フラッシュを調整したいとき
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:17Z
 ---
 
 # メモリ
 
-OpenClaw メモリは **エージェント ワークスペース内のプレーンな Markdown** です。ファイルが信頼できる唯一の情報源であり、モデルはディスクに書き込まれた内容だけを「記憶」します。
+OpenClaw メモリは **エージェント ワークスペース内のプレーンな Markdown** です。ファイルが信頼できる唯一の情報源であり、モデルはディスクに書き込まれた内容だけを「記憶」します。 ファイルは真実の
+ソースです。モデルはディスクに書き込まれたものだけを「記憶」します。
 
-メモリ検索ツールは、アクティブなメモリ プラグイン（デフォルト: `memory-core`）によって提供されます。メモリ プラグインは `plugins.slots.memory = "none"` で無効化できます。
+メモリ検索ツールは、アクティブなメモリプラグインによって提供されます (デフォルト:
+`memory-core` )。 メモリ検索ツールは、アクティブなメモリ プラグイン（デフォルト: `memory-core`）によって提供されます。メモリ プラグインは `plugins.slots.memory = "none"` で無効化できます。
 
 ## メモリ ファイル（Markdown）
 
@@ -29,19 +24,20 @@ OpenClaw メモリは **エージェント ワークスペース内のプレー�
   - 厳選された長期メモリ。
   - **メインのプライベート セッションでのみ読み込み**（グループ コンテキストでは決して読み込みません）。
 
-これらのファイルはワークスペース（`agents.defaults.workspace`、デフォルト `~/.openclaw/workspace`）配下にあります。完全なレイアウトについては [Agent workspace](/concepts/agent-workspace) を参照してください。
+これらのファイルはワークスペース（`agents.defaults.workspace`、デフォルト `~/.openclaw/workspace`）配下にあります。完全なレイアウトについては [Agent workspace](/concepts/agent-workspace) を参照してください。 完全なレイアウトについては、[Agent workspace](/concepts/agent-workspace)を参照してください。
 
 ## メモリを書き込むタイミング
 
 - 判断、好み、永続的な事実は `MEMORY.md` に書き込みます。
 - 日々のメモや実行中のコンテキストは `memory/YYYY-MM-DD.md` に書き込みます。
 - 誰かが「これを覚えて」と言ったら、書き込みます（RAM に保持しません）。
-- この領域は現在も進化中です。モデルにメモリ保存を促すと役立ちます。モデルは何をすべきか理解しています。
+- この領域はまだ進化しています。 この領域は現在も進化中です。モデルにメモリ保存を促すと役立ちます。モデルは何をすべきか理解しています。
 - 何かを確実に残したい場合は、**ボットにメモリへ書き込むよう依頼**してください。
 
 ## 自動メモリ フラッシュ（プレコンパクション ping）
 
-セッションが **自動コンパクションに近づく** と、OpenClaw は **サイレントなエージェント ターン** をトリガーし、コンテキストが圧縮される **前** に永続メモリを書き込むようモデルに促します。デフォルトのプロンプトではモデルが _返信してもよい_ と明示されていますが、通常は `NO_REPLY` が正しい応答となり、ユーザーにこのターンが表示されることはありません。
+セッションが **自動コンパクションに近づく** と、OpenClaw は **サイレントなエージェント ターン** をトリガーし、コンテキストが圧縮される **前** に永続メモリを書き込むようモデルに促します。デフォルトのプロンプトではモデルが _返信してもよい_ と明示されていますが、通常は `NO_REPLY` が正しい応答となり、ユーザーにこのターンが表示されることはありません。 デフォルトのプロンプトでは、モデル _may reply_、
+と明示的に表示されますが、通常 `NO_REPLY` は正しい応答であるため、ユーザーはこのターンを見ることはありません。
 
 これは `agents.defaults.compaction.memoryFlush` によって制御されます。
 
@@ -82,7 +78,7 @@ OpenClaw は `MEMORY.md` と `memory/*.md` 上に小さなベクター インデ
 
 - デフォルトで有効。
 - メモリ ファイルの変更を監視（デバウンス）。
-- デフォルトではリモート埋め込みを使用。 `memorySearch.provider` が設定されていない場合、OpenClaw は自動選択します:
+- デフォルトでリモート埋め込みを使用します。 デフォルトではリモート埋め込みを使用。 `memorySearch.provider` が設定されていない場合、OpenClaw は自動選択します:
   1. `memorySearch.local.modelPath` が設定され、ファイルが存在する場合は `local`。
   2. OpenAI のキーを解決できる場合は `openai`。
   3. Gemini のキーを解決できる場合は `gemini`。
@@ -91,32 +87,43 @@ OpenClaw は `MEMORY.md` と `memory/*.md` 上に小さなベクター インデ
 - ローカル モードは node-llama-cpp を使用し、`pnpm approve-builds` が必要になる場合があります。
 - 利用可能な場合、sqlite-vec を使用して SQLite 内のベクター検索を高速化します。
 
-リモート埋め込みには、埋め込みプロバイダーの API キーが **必須** です。OpenClaw は、認証プロファイル、`models.providers.*.apiKey`、または環境変数からキーを解決します。Codex OAuth はチャット／補完のみを対象としており、メモリ検索用の埋め込み要件は **満たしません**。Gemini では `GEMINI_API_KEY` または `models.providers.google.apiKey` を使用してください。Voyage では `VOYAGE_API_KEY` または `models.providers.voyage.apiKey` を使用してください。カスタムの OpenAI 互換エンドポイントを使用する場合は、`memorySearch.remote.apiKey`（および任意で `memorySearch.remote.headers`）を設定します。
+リモート埋め込み機能 埋め込みプロバイダにAPIキーが必要です。 OpenClaw
+は、認証プロファイル、`models.providers.*.apiKey`、または環境
+変数からキーを解決します。 Codex OAuthはチャット/補完のみをカバーしており、
+メモリ検索の埋め込みを**満たしていません**。 Geminiの場合は、`GEMINI_API_KEY` または
+`models.providers.google.apiKey` を使用します。 Voyage では、`VOYAGE_API_KEY` または
+`models.providers.voyage.apiKey` を使用してください。 カスタム OpenAI 互換のエンドポイントを使用する場合、
+`memorySearch.remote.apiKey` (および `memorySearch.remote.headers` ) を設定します。
 
 ### QMD バックエンド（実験的）
 
-組み込みの SQLite インデクサーを [QMD](https://github.com/tobi/qmd) に置き換えるには `memory.backend = "qmd"` を設定します。QMD は、BM25＋ベクター＋再ランキングを組み合わせたローカル ファーストの検索サイドカーです。Markdown は信頼できる唯一の情報源のままで、OpenClaw は取得のために QMD を呼び出します。要点は次のとおりです。
+組み込みの SQLite インデクサーを [QMD](https://github.com/tobi/qmd) に置き換えるには `memory.backend = "qmd"` を設定します。QMD は、BM25＋ベクター＋再ランキングを組み合わせたローカル ファーストの検索サイドカーです。Markdown は信頼できる唯一の情報源のままで、OpenClaw は取得のために QMD を呼び出します。要点は次のとおりです。 Markdownは真実の源泉であり続けます。オープンクローの貝殻
+検索のためにQMDに移動します。 キーポイント:
 
 **前提条件**
 
-- デフォルトでは無効。設定ごとにオプトイン（`memory.backend = "qmd"`）。
+- デフォルトで無効になっています。 デフォルトでは無効。設定ごとにオプトイン（`memory.backend = "qmd"`）。
 - QMD CLI を別途インストール（`bun install -g https://github.com/tobi/qmd` またはリリースを取得）し、`qmd` バイナリがゲートウェイの `PATH` にあることを確認します。
 - QMD には拡張を許可する SQLite ビルドが必要です（macOS では `brew install sqlite`）。
 - QMD は Bun＋`node-llama-cpp` により完全にローカルで動作し、初回使用時に HuggingFace から GGUF モデルを自動ダウンロードします（別途 Ollama デーモンは不要）。
 - ゲートウェイは、`XDG_CONFIG_HOME` と `XDG_CACHE_HOME` を設定することで、`~/.openclaw/agents/<agentId>/qmd/` 配下の自己完結型 XDG ホームで QMD を実行します。
-- OS 対応: macOS と Linux は、Bun＋SQLite をインストールすればそのまま動作します。Windows は WSL2 経由での利用が最適です。
+- OSサポート：Bun + SQLiteが
+  インストールされるとmacOSとLinuxはボックスから動作します。 WindowsはWSL2経由でサポートされています。
 
 **サイドカーの実行方法**
 
 - ゲートウェイは、`~/.openclaw/agents/<agentId>/qmd/` 配下に自己完結型の QMD ホーム（設定＋キャッシュ＋sqlite DB）を書き込みます。
 - コレクションは `memory.qmd.paths`（およびデフォルトのワークスペース メモリ ファイル）から `qmd collection add` で作成され、その後 `qmd update`＋`qmd embed` が起動時および設定可能な間隔（`memory.qmd.update.interval`、デフォルト 5 分）で実行されます。
 - 起動時のリフレッシュは、チャット起動をブロックしないようデフォルトでバックグラウンド実行になりました。従来のブロッキング動作を維持するには `memory.qmd.update.waitForBootSync = true` を設定します。
-- 検索は `qmd query --json` 経由で実行されます。QMD が失敗するかバイナリが見つからない場合、OpenClaw は自動的に組み込みの SQLite マネージャーへフォールバックし、メモリ ツールは引き続き動作します。
+- 検索は `qmd query --json` 経由で実行されます。QMD が失敗するかバイナリが見つからない場合、OpenClaw は自動的に組み込みの SQLite マネージャーへフォールバックし、メモリ ツールは引き続き動作します。 QMD に失敗した場合やバイナリが欠落している場合、
+  OpenClawは自動的に組み込みSQLiteマネージャに落ちるため、メモリツール
+  が動作し続けます。
 - OpenClaw は現時点で QMD の埋め込みバッチ サイズ調整を公開していません。バッチ挙動は QMD 自身が制御します。
 - **初回検索は遅い場合があります**: 初回の `qmd query` 実行時に、QMD がローカル GGUF モデル（再ランキング／クエリ拡張）をダウンロードすることがあります。
   - OpenClaw は QMD 実行時に `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` を自動設定します。
   - 手動でモデルを事前ダウンロード（同じインデックスをウォームアップ）したい場合は、エージェントの XDG ディレクトリを使ってワンオフ クエリを実行してください。
 
+    OpenClawのQMD状態は**state dir** (デフォルトは `~/.openclaw`)の下にあります。
     OpenClaw の QMD 状態は **state ディレクトリ**（デフォルト `~/.openclaw`）配下にあります。同一の XDG 変数をエクスポートすることで、`qmd` を同じインデックスに向けられます。
 
     ```bash
@@ -147,6 +154,8 @@ OpenClaw は `MEMORY.md` と `memory/*.md` 上に小さなベクター インデ
 - `update`: リフレッシュ頻度とメンテナンス実行を制御（`interval`、`debounceMs`、`onBoot`、`waitForBootSync`、`embedInterval`、`commandTimeoutMs`、`updateTimeoutMs`、`embedTimeoutMs`）。
 - `limits`: リコール ペイロードをクランプ（`maxResults`、`maxSnippetChars`、`maxInjectedChars`、`timeoutMs`）。
 - `scope`: [`session.sendPolicy`](/gateway/configuration#session) と同一のスキーマ。デフォルトは DM のみ（`deny` はすべて、`allow` はダイレクト チャット）。グループ／チャンネルで QMD ヒットを表示するには緩和します。
+  デフォルトは DMのみ (`deny` all, `allow` directチャット) です。グループ/チャンネルで QMD
+  がヒットするように緩めます。
 - ワークスペース外から取得したスニペットは、`memory_search` の結果で `qmd/<collection>/<relative-path>` として表示されます。`memory_get` はそのプレフィックスを理解し、設定された QMD コレクション ルートから読み取ります。
 - `memory.qmd.sessions.enabled = true` の場合、OpenClaw はサニタイズ済みのセッション トランスクリプト（ユーザー／アシスタントのターン）を `~/.openclaw/agents/<id>/qmd/sessions/` 配下の専用 QMD コレクションにエクスポートし、組み込み SQLite インデックスに触れずに `memory_search` が最近の会話を想起できるようにします。
 - `memory_search` スニペットには、`memory.citations` が `auto`/`on` の場合、`Source: <path#line>` フッターが含まれます。`memory.citations = "off"` を設定するとパス メタデータを内部扱いにできます（エージェントは `memory_get` のためにパスを受け取りますが、スニペット本文からはフッターが省かれ、システム プロンプトで引用しないよう警告されます）。
@@ -175,7 +184,7 @@ memory: {
 **引用とフォールバック**
 
 - `memory.citations` は、バックエンド（`auto`/`on`/`off`）に関わらず適用されます。
-- `qmd` が実行されると、診断でどのエンジンが結果を提供したか分かるように `status().backend = "qmd"` をタグ付けします。QMD サブプロセスが終了するか JSON 出力を解析できない場合、検索マネージャーは警告をログに記録し、QMD が回復するまで組み込みプロバイダー（既存の Markdown 埋め込み）を返します。
+- `qmd` が実行されると、診断でどのエンジンが結果を提供したか分かるように `status().backend = "qmd"` をタグ付けします。QMD サブプロセスが終了するか JSON 出力を解析できない場合、検索マネージャーは警告をログに記録し、QMD が回復するまで組み込みプロバイダー（既存の Markdown 埋め込み）を返します。 17. QMD サブプロセスが終了した場合、または JSON 出力を解析できない場合、検索マネージャーは警告をログに記録し、QMD が復旧するまで組み込みプロバイダー（既存の Markdown 埋め込み）を返します。
 
 ### 追加のメモリ パス
 
@@ -249,7 +258,7 @@ API キーを設定したくない場合は `memorySearch.provider = "local"` �
 
 バッチ インデックス（OpenAI＋Gemini）:
 
-- OpenAI と Gemini の埋め込みではデフォルトで有効。無効にするには `agents.defaults.memorySearch.remote.batch.enabled = false` を設定します。
+- OpenAIとGeminiの埋め込みでデフォルトで有効になります。 OpenAI と Gemini の埋め込みではデフォルトで有効。無効にするには `agents.defaults.memorySearch.remote.batch.enabled = false` を設定します。
 - デフォルトではバッチ完了を待機します。必要に応じて `remote.batch.wait`、`remote.batch.pollIntervalMs`、`remote.batch.timeoutMinutes` を調整してください。
 - 並列で送信するバッチ ジョブ数は `remote.batch.concurrency` で制御します（デフォルト: 2）。
 - バッチ モードは `memorySearch.provider = "openai"` または `"gemini"` の場合に適用され、対応する API キーを使用します。
@@ -294,16 +303,16 @@ agents: {
 
 ### メモリ ツールの仕組み
 
-- `memory_search` は、`MEMORY.md`＋`memory/**/*.md` から Markdown チャンク（目標 ~400 トークン、80 トークン重なり）を意味検索します。スニペット本文（約 700 文字上限）、ファイル パス、行範囲、スコア、プロバイダー／モデル、ローカル→リモート埋め込みへのフォールバック有無を返します。ファイル全体のペイロードは返しません。
-- `memory_get` は、特定のメモリ Markdown ファイル（ワークスペース相対）を、開始行と N 行の指定付きで読み取ります。`MEMORY.md`／`memory/` 外のパスは拒否されます。
+- `memory_search` は、`MEMORY.md`＋`memory/**/*.md` から Markdown チャンク（目標 ~400 トークン、80 トークン重なり）を意味検索します。スニペット本文（約 700 文字上限）、ファイル パス、行範囲、スコア、プロバイダー／モデル、ローカル→リモート埋め込みへのフォールバック有無を返します。ファイル全体のペイロードは返しません。 スニペットテキスト (最大 700 文字)、ファイルパス、行範囲、スコア、プロバイダー/モデル、およびローカル → リモート埋め込みから戻ったかどうかを返します。 完全なファイルペイロードは返されません。
+- `memory_get` は、特定のメモリ Markdown ファイル（ワークスペース相対）を、開始行と N 行の指定付きで読み取ります。`MEMORY.md`／`memory/` 外のパスは拒否されます。 `MEMORY.md` / `memory/`以外のパスは拒否されます。
 - 両ツールは、エージェントに対して `memorySearch.enabled` が true に解決された場合にのみ有効です。
 
 ### 何がインデックスされるか（およびタイミング）
 
 - ファイル種別: Markdown のみ（`MEMORY.md`、`memory/**/*.md`）。
 - インデックス保存先: エージェントごとの SQLite（`~/.openclaw/memory/<agentId>.sqlite`、`agents.defaults.memorySearch.store.path` で設定可能、`{agentId}` トークンをサポート）。
-- 新鮮度: `MEMORY.md`＋`memory/` のウォッチャーがインデックスをダーティにします（デバウンス 1.5 秒）。同期はセッション開始時、検索時、または一定間隔でスケジュールされ、非同期に実行されます。セッション トランスクリプトはデルタしきい値でバックグラウンド同期をトリガーします。
-- 再インデックス トリガー: インデックスは **プロバイダー／モデル＋エンドポイント フィンガープリント＋チャンク化パラメータ** を保存します。いずれかが変更されると、OpenClaw は自動的に全体をリセットして再インデックスします。
+- Freshness: watcher on `MEMORY.md` + `memory/` はインデックスを汚します(デバウンス1.5)。 同期は、セッション開始時、検索時、または間隔でスケジュールされ、非同期で実行されます。 セッショントランスクリプトは、バックグラウンド同期をトリガーするためにデルタ閾値を使用します。
+- 再インデックス トリガー: インデックスは **プロバイダー／モデル＋エンドポイント フィンガープリント＋チャンク化パラメータ** を保存します。いずれかが変更されると、OpenClaw は自動的に全体をリセットして再インデックスします。 これらの変更があった場合、OpenClawは自動的にストア全体をリセットして再インデックスを作成します。
 
 ### ハイブリッド検索（BM25＋ベクター）
 
@@ -321,13 +330,15 @@ agents: {
 - 「Mac Studio gateway host」 vs 「ゲートウェイを実行しているマシン」
 - 「ファイル更新をデバウンス」 vs 「毎回の書き込みでインデックスしない」
 
-一方、正確で高シグナルなトークンには弱いことがあります。
+しかし、正確で高信号のトークンでは弱い場合があります。
 
 - ID（`a828e60`、`b3b9895a…`）
 - コード シンボル（`memorySearch.query.hybrid`）
 - エラー文字列（「sqlite-vec unavailable」）
 
-BM25（全文検索）はその逆で、完全一致に強く、言い換えには弱いです。ハイブリッド検索は実用的な中間解です。**両方の取得シグナルを使う**ことで、「自然言語」クエリと「針の山探し」クエリの双方で良い結果が得られます。
+BM25(フルテキスト)は正確なトークンで強く、言い換えで弱くなります。
+ハイブリッド検索は実用的な中間地点です：**両方の検索信号を使用**すると、「自然言語」クエリと「干し草の中の針」クエリの両方に対して
+良い結果が得られます。
 
 #### 結果のマージ方法（現在の設計）
 
@@ -353,6 +364,8 @@ BM25（全文検索）はその逆で、完全一致に強く、言い換えに�
 - FTS5 を作成できない場合、ベクターのみ検索を維持します（致命的エラーにはしません）。
 
 これは「IR 理論的に完璧」ではありませんが、シンプルで高速で、実ノートに対する再現率／適合率を改善する傾向があります。将来的に高度化するなら、Reciprocal Rank Fusion（RRF）や、混合前のスコア正規化（min/max や z-score）が一般的な次の一手です。
+我々は後で空想を得たい場合は、一般的な次のステップは、混合する前に相互ランクフュージョン(RRF)またはスコア正規化
+(最小/最大またはz-スコア)です。
 
 設定:
 
@@ -396,6 +409,7 @@ agents: {
 
 任意で **セッション トランスクリプト** をインデックスし、`memory_search` 経由で表示できます。
 この機能は実験フラグの背後にあります。
+これは実験的な旗の後ろにゲートされている。
 
 ```json5
 agents: {
@@ -415,7 +429,7 @@ agents: {
 - `memory_search` はインデックス待ちでブロックしません。バックグラウンド同期が完了するまで結果は多少古い可能性があります。
 - 結果は引き続きスニペットのみを含みます。`memory_get` はメモリ ファイルに限定されたままです。
 - セッション インデックスはエージェントごとに分離されます（そのエージェントのセッション ログのみが対象）。
-- セッション ログはディスク上（`~/.openclaw/agents/<agentId>/sessions/*.jsonl`）に保存されます。ファイルシステムにアクセスできるプロセス／ユーザーは読み取れるため、ディスク アクセスを信頼境界として扱ってください。より厳密な分離が必要な場合は、エージェントを別の OS ユーザーやホストで実行してください。
+- セッション ログはディスク上（`~/.openclaw/agents/<agentId>/sessions/*.jsonl`）に保存されます。ファイルシステムにアクセスできるプロセス／ユーザーは読み取れるため、ディスク アクセスを信頼境界として扱ってください。より厳密な分離が必要な場合は、エージェントを別の OS ユーザーやホストで実行してください。 ファイルシステムへのアクセスを持つプロセス/ユーザは、それらを読み取ることができるので、ディスクアクセスを信頼の境界として扱います。 より厳格な分離を行うには、別々の OS ユーザーまたはホストでエージェントを実行します。
 
 デルタしきい値（デフォルト表示）:
 
@@ -436,7 +450,7 @@ agents: {
 
 ### SQLite ベクター高速化（sqlite-vec）
 
-sqlite-vec 拡張が利用可能な場合、OpenClaw は埋め込みを SQLite 仮想テーブル（`vec0`）に保存し、データベース内でベクター距離クエリを実行します。これにより、すべての埋め込みを JS に読み込まずに高速検索が可能になります。
+sqlite-vec 拡張が利用可能な場合、OpenClaw は埋め込みを SQLite 仮想テーブル（`vec0`）に保存し、データベース内でベクター距離クエリを実行します。これにより、すべての埋め込みを JS に読み込まずに高速検索が可能になります。 これにより、JSにすべての埋め込みをロードすることなく、検索が高速になります。
 
 設定（任意）:
 
@@ -464,7 +478,7 @@ agents: {
 ### ローカル 埋め込みの自動ダウンロード
 
 - デフォルトのローカル 埋め込みモデル: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`（約 0.6 GB）。
-- `memorySearch.provider = "local"` の場合、`node-llama-cpp` は `modelPath` を解決します。GGUF が見つからない場合、キャッシュ（または設定時は `local.modelCacheDir`）に **自動ダウンロード** してから読み込みます。ダウンロードは再試行時に再開されます。
+- `memorySearch.provider = "local"` の場合、`node-llama-cpp` は `modelPath` を解決します。GGUF が見つからない場合、キャッシュ（または設定時は `local.modelCacheDir`）に **自動ダウンロード** してから読み込みます。ダウンロードは再試行時に再開されます。 ダウンロードは再試行時に再開されます。
 - ネイティブ ビルド要件: `pnpm approve-builds` を実行し、`node-llama-cpp` を選択してから `pnpm rebuild node-llama-cpp`。
 - フォールバック: ローカル セットアップに失敗し、`memorySearch.fallback = "openai"` の場合、リモート 埋め込み（上書きがなければ `openai/text-embedding-3-small`）に自動切替し、その理由を記録します。
 
@@ -492,4 +506,4 @@ agents: {
 注記:
 
 - `remote.*` は `models.providers.openai.*` より優先されます。
-- `remote.headers` は OpenAI ヘッダーとマージされ、キー競合時はリモートが優先されます。OpenAI のデフォルトを使用するには `remote.headers` を省略してください。
+- `remote.headers` は OpenAI ヘッダーとマージされ、キー競合時はリモートが優先されます。OpenAI のデフォルトを使用するには `remote.headers` を省略してください。 `remote.headers` を省略して、OpenAI のデフォルトを使用します。

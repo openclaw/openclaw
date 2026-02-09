@@ -2,14 +2,7 @@
 summary: "خطوات فحص السلامة لاتصال القنوات"
 read_when:
   - تشخيص سلامة قناة WhatsApp
-title: "فحوصات السلامة"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:14Z
+title: "الفحص الصحي"
 ---
 
 # فحوصات السلامة (CLI)

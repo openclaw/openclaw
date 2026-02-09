@@ -4,13 +4,6 @@ read_when:
   - Gmail inbox trigger များကို OpenClaw နှင့် ချိတ်ဆက်ခြင်း
   - agent wake အတွက် Pub/Sub push ကို တပ်ဆင်ခြင်း
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:06Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -22,9 +15,9 @@ x-i18n:
 - `gcloud` ကို ထည့်သွင်းပြီး login ပြုလုပ်ထားရပါမည် ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk))။
 - `gog` (gogcli) ကို ထည့်သွင်းပြီး Gmail account အတွက် authorization ပြုလုပ်ထားရပါမည် ([gogcli.sh](https://gogcli.sh/))။
 - OpenClaw hooks ကို ဖွင့်ထားရပါမည် ([Webhooks](/automation/webhook) ကိုကြည့်ပါ)။
-- `tailscale` ကို login ပြုလုပ်ထားရပါမည် ([tailscale.com](https://tailscale.com/))။ ထောက်ပံ့ထားသော setup သည် public HTTPS endpoint အတွက် Tailscale Funnel ကို အသုံးပြုပါသည်။
-  အခြား tunnel service များကို အသုံးပြုနိုင်သော်လည်း DIY/unsupported ဖြစ်ပြီး manual wiring လိုအပ်ပါသည်။
-  လက်ရှိအချိန်တွင် Tailscale ကိုသာ ထောက်ပံ့ထားပါသည်။
+- 39. `tailscale` သို့ login ဝင်ထားသည် ([tailscale.com](https://tailscale.com/))။ 40. Support ပြုလုပ်ထားသော setup သည် public HTTPS endpoint အတွက် Tailscale Funnel ကို အသုံးပြုသည်။
+  40. အခြား tunnel service များလည်း အလုပ်လုပ်နိုင်သော်လည်း DIY/unsupported ဖြစ်ပြီး လက်ဖြင့် ချိတ်ဆက်ရမည် ဖြစ်သည်။
+  41. လက်ရှိအချိန်တွင် Tailscale သာ ကျွန်ုပ်တို့ ထောက်ပံ့ထားသည်။
 
 ဥပမာ hook config (Gmail preset mapping ကို enable ပြုလုပ်ထားသည်):
 
@@ -66,11 +59,9 @@ Gmail summary ကို chat surface တစ်ခုသို့ ပို့ရ
 }
 ```
 
-အမြဲတမ်း channel တစ်ခုကို အသုံးပြုလိုပါက `channel` နှင့် `to` ကို သတ်မှတ်ပါ။ မဟုတ်ပါက `channel: "last"`
-သည် နောက်ဆုံး ပို့ခဲ့သော route ကို အသုံးပြုပါသည် (fallback အဖြစ် WhatsApp ကို အသုံးပြုသည်)။
+43. Fixed channel တစ်ခု လိုပါက `channel` + `to` ကို သတ်မှတ်ပါ။ 44. မဟုတ်ပါက `channel: "last"` သည် နောက်ဆုံး အသုံးပြုခဲ့သော delivery route ကို အသုံးပြုမည် (WhatsApp သို့ fallback ဖြစ်သည်)။
 
-Gmail run များအတွက် စျေးသက်သာသော model ကို အတင်းသုံးလိုပါက mapping ထဲတွင်
-`model` ကို သတ်မှတ်ပါ (`provider/model` သို့မဟုတ် alias)။ `agents.defaults.models` ကို enforce လုပ်ထားပါက အဲဒီနေရာတွင် ထည့်သွင်းပါ။
+45. Gmail run များအတွက် စျေးသက်သာသော model ကို အတင်းအသုံးပြုလိုပါက mapping ထဲတွင် `model` ကို သတ်မှတ်ပါ (`provider/model` သို့မဟုတ် alias)။ 46. `agents.defaults.models` ကို enforce လုပ်ထားပါက အဲဒီထဲတွင်လည်း ထည့်သွင်းပါ။
 
 Gmail hooks အတွက်သာ default model နှင့် thinking level ကို သတ်မှတ်လိုပါက
 config ထဲတွင် `hooks.gmail.model` / `hooks.gmail.thinking` ကို ထည့်ပါ:
@@ -91,8 +82,8 @@ config ထဲတွင် `hooks.gmail.model` / `hooks.gmail.thinking` ကို
 - Mapping ထဲရှိ per-hook `model`/`thinking` သည် ဒီ default များကို override လုပ်ပါသည်။
 - Fallback အစဉ်: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primary (auth/rate-limit/timeouts)။
 - `agents.defaults.models` ကို သတ်မှတ်ထားပါက Gmail model သည် allowlist ထဲတွင် ပါဝင်ရပါမည်။
-- Gmail hook content ကို default အနေဖြင့် external-content safety boundaries ဖြင့် wrap လုပ်ထားပါသည်။
-  ပိတ်လိုပါက (အန္တရာယ်ရှိ) `hooks.gmail.allowUnsafeExternalContent: true` ကို သတ်မှတ်ပါ။
+- 47. Gmail hook content ကို ပုံမှန်အားဖြင့် external-content safety boundary များဖြင့် wrap လုပ်ထားသည်။
+  48. Disable လုပ်လိုပါက (အန္တရာယ်ရှိ) `hooks.gmail.allowUnsafeExternalContent: true` ကို သတ်မှတ်ပါ။
 
 Payload ကို ထပ်မံ စိတ်ကြိုက်ပြင်ဆင်လိုပါက `hooks.mappings` သို့မဟုတ် JS/TS transform module ကို
 `hooks.transformsDir` အောက်တွင် ထည့်ပါ ([Webhooks](/automation/webhook) ကိုကြည့်ပါ)။
@@ -112,15 +103,10 @@ Defaults:
 - `openclaw webhooks gmail run` အတွက် `hooks.gmail` config ကို ရေးထည့်ပါသည်။
 - Gmail hook preset (`hooks.presets: ["gmail"]`) ကို enable ပြုလုပ်ပါသည်။
 
-Path မှတ်ချက်: `tailscale.mode` ကို enable လုပ်ထားပါက OpenClaw သည် အလိုအလျောက်
-`hooks.gmail.serve.path` ကို `/` သို့ သတ်မှတ်ပြီး public path ကို
-`hooks.gmail.tailscale.path` (default `/gmail-pubsub`) အဖြစ် ထားရှိပါသည်၊ အကြောင်းမှာ Tailscale သည်
-proxy လုပ်မီ set-path prefix ကို ဖြတ်ပစ်သောကြောင့် ဖြစ်ပါသည်။
-Backend မှ prefix ပါသော path ကို လက်ခံစေလိုပါက
-`hooks.gmail.tailscale.target` (သို့မဟုတ် `--tailscale-target`) ကို
-`http://127.0.0.1:8788/gmail-pubsub` ကဲ့သို့သော full URL အဖြစ် သတ်မှတ်ပြီး `hooks.gmail.serve.path` ကို ကိုက်ညီအောင် ပြုလုပ်ပါ။
+49. Path မှတ်ချက်: `tailscale.mode` ကို enable လုပ်ထားသောအခါ OpenClaw သည် `hooks.gmail.serve.path` ကို `/` အဖြစ် အလိုအလျောက် သတ်မှတ်ပြီး Tailscale သည် proxy လုပ်ရာတွင် set-path prefix ကို ဖယ်ရှားသည့်အတွက် public path ကို `hooks.gmail.tailscale.path` (default `/gmail-pubsub`) တွင် ဆက်လက် ထားရှိသည်။
+50. Backend သို့ prefixed path ကို လက်ခံစေချင်ပါက `hooks.gmail.tailscale.target` (သို့မဟုတ် `--tailscale-target`) ကို `http://127.0.0.1:8788/gmail-pubsub` ကဲ့သို့ full URL အဖြစ် သတ်မှတ်ပြီး `hooks.gmail.serve.path` နှင့် ကိုက်ညီအောင် ချိန်ညှိပါ။
 
-Custom endpoint လိုအပ်ပါသလား? `--push-endpoint <url>` သို့မဟုတ် `--tailscale off` ကို အသုံးပြုပါ။
+စိတ်ကြိုက် endpoint လိုချင်ပါသလား? `--push-endpoint <url>` သို့မဟုတ် `--tailscale off` ကို အသုံးပြုပါ။
 
 Platform မှတ်ချက်: macOS တွင် wizard သည် `gcloud`, `gogcli`, နှင့် `tailscale`
 တို့ကို Homebrew ဖြင့် ထည့်သွင်းပေးပါသည်။ Linux တွင်မူ အရင်ဆုံး manual ထည့်သွင်းရပါမည်။

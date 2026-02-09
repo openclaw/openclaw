@@ -3,13 +3,6 @@ summary: "Acesso remoto usando túneis SSH (Gateway WS) e tailnets"
 read_when:
   - Ao executar ou solucionar problemas de configurações remotas do gateway
 title: "Acesso remoto"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:03Z
 ---
 
 # Acesso remoto (SSH, túneis e tailnets)
@@ -29,7 +22,7 @@ Este repositório oferece suporte a “remoto via SSH” mantendo um único Gate
 Pense no **host do Gateway** como “onde o agente vive”. Ele é dono de sessões, perfis de autenticação, canais e estado.
 Seu laptop/desktop (e nós) se conectam a esse host.
 
-### 1) Gateway sempre ligado na sua tailnet (VPS ou servidor doméstico)
+### 1. Gateway sempre ligado na sua tailnet (VPS ou servidor doméstico)
 
 Execute o Gateway em um host persistente e acesse-o via **Tailscale** ou SSH.
 
@@ -39,7 +32,7 @@ Execute o Gateway em um host persistente e acesse-o via **Tailscale** ou SSH.
 
 Isso é ideal quando seu laptop entra em repouso com frequência, mas você quer o agente sempre ativo.
 
-### 2) Desktop de casa executa o Gateway, laptop é controle remoto
+### 2. Desktop de casa executa o Gateway, laptop é controle remoto
 
 O laptop **não** executa o agente. Ele se conecta remotamente:
 
@@ -48,7 +41,7 @@ O laptop **não** executa o agente. Ele se conecta remotamente:
 
 Runbook: [acesso remoto no macOS](/platforms/mac/remote).
 
-### 3) Laptop executa o Gateway, acesso remoto a partir de outras máquinas
+### 3. Laptop executa o Gateway, acesso remoto a partir de outras máquinas
 
 Mantenha o Gateway local, mas exponha-o com segurança:
 

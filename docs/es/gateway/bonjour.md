@@ -4,13 +4,6 @@ read_when:
   - Depuración de problemas de descubrimiento Bonjour en macOS/iOS
   - Cambio de tipos de servicio mDNS, registros TXT o UX de descubrimiento
 title: "Descubrimiento Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:31Z
 ---
 
 # Descubrimiento Bonjour / mDNS

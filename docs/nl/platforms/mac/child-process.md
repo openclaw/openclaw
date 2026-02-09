@@ -3,13 +3,6 @@ summary: "Gateway-levenscyclus op macOS (launchd)"
 read_when:
   - Integratie van de mac-app met de Gateway-levenscyclus
 title: "Gateway-levenscyclus"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:32Z
 ---
 
 # Gateway-levenscyclus op macOS

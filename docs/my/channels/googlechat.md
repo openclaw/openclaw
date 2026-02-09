@@ -3,13 +3,6 @@ summary: "Google Chat အက်ပ်၏ ပံ့ပိုးမှုအခြ
 read_when:
   - Google Chat ချန်နယ် အင်္ဂါရပ်များကို လုပ်ဆောင်နေချိန်
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:16Z
 ---
 
 # Google Chat (Chat API)
@@ -54,7 +47,7 @@ x-i18n:
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - သို့မဟုတ် config: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`။
 8. webhook audience အမျိုးအစား + တန်ဖိုးကို သတ်မှတ်ပါ (သင့် Chat app config နှင့် ကိုက်ညီရပါမည်)။
-9. Gateway ကို စတင်ပါ။ Google Chat သည် သင့် webhook path သို့ POST ပို့ပါလိမ့်မည်။
+9. gateway ကို စတင်ပါ။ Google Chat will POST to your webhook path.
 
 ## Google Chat တွင် ထည့်သွင်းခြင်း
 
@@ -63,18 +56,18 @@ Gateway ကို စတင်ထားပြီး သင့် အီးမေ
 1. [Google Chat](https://chat.google.com/) သို့ သွားပါ။
 2. **Direct Messages** ဘေးရှိ **+** (plus) အိုင်ကွန်ကို နှိပ်ပါ။
 3. ရှာဖွေရေးဘားတွင် (လူများကို ထည့်လေ့ရှိသည့် နေရာ) Google Cloud Console တွင် သင် သတ်မှတ်ထားသော **App name** ကို ရိုက်ထည့်ပါ။
-   - **မှတ်ချက်**: ဤ bot သည် private app ဖြစ်သောကြောင့် "Marketplace" browse စာရင်းတွင် မပေါ်ပါ။ အမည်ဖြင့်သာ ရှာရပါမည်။
+   - **Note**: The bot will _not_ appear in the "Marketplace" browse list because it is a private app. You must search for it by name.
 4. ရလဒ်များထဲမှ သင့် bot ကို ရွေးပါ။
 5. **Add** သို့မဟုတ် **Chat** ကို နှိပ်ပြီး 1:1 စကားပြောကို စတင်ပါ။
 6. အကူအညီပေးသူကို စတင်အလုပ်လုပ်စေရန် "Hello" ကို ပို့ပါ။
 
 ## Public URL (Webhook-only)
 
-Google Chat webhooks များသည် public HTTPS endpoint တစ်ခု လိုအပ်ပါသည်။ လုံခြုံရေးအတွက် **`/googlechat` path ကိုသာ အင်တာနက်သို့ ဖော်ပြပါ**။ OpenClaw dashboard နှင့် အခြား အရေးကြီး endpoint များကို သင့် private network အတွင်းတွင်သာ ထားပါ။
+Google Chat webhooks require a public HTTPS endpoint. For security, **only expose the `/googlechat` path** to the internet. Keep the OpenClaw dashboard and other sensitive endpoints on your private network.
 
 ### Option A: Tailscale Funnel (အကြံပြု)
 
-Private dashboard အတွက် Tailscale Serve ကို အသုံးပြုပြီး public webhook path အတွက် Funnel ကို အသုံးပြုပါ။ ဤနည်းလမ်းဖြင့် `/` ကို private အဖြစ် ထိန်းထားနိုင်ပြီး `/googlechat` ကိုသာ ဖော်ပြနိုင်ပါသည်။
+Use Tailscale Serve for the private dashboard and Funnel for the public webhook path. This keeps `/` private while exposing only `/googlechat`.
 
 1. **သင့် Gateway သည် မည်သည့်လိပ်စာတွင် bind လုပ်ထားသည်ကို စစ်ဆေးပါ:**
 
@@ -114,15 +107,15 @@ Private dashboard အတွက် Tailscale Serve ကို အသုံးပ�
    tailscale funnel status
    ```
 
-သင့် public webhook URL သည်:
+Your public webhook URL will be:
 `https://<node-name>.<tailnet>.ts.net/googlechat`
 
-သင့် private dashboard သည် tailnet-only အဖြစ် ဆက်လက်ရှိပါမည်:
+Your private dashboard stays tailnet-only:
 `https://<node-name>.<tailnet>.ts.net:8443/`
 
 Google Chat app config တွင် `:8443` မပါဘဲ public URL ကို အသုံးပြုပါ။
 
-> မှတ်ချက်: ဤဖွဲ့စည်းမှုသည် reboot ပြုလုပ်ပြီးနောက်တွင်လည်း ဆက်လက်တည်ရှိနေပါသည်။ နောက်မှ ဖယ်ရှားလိုပါက `tailscale funnel reset` နှင့် `tailscale serve reset` ကို ပြေးပါ။
+> Note: This configuration persists across reboots. To remove it later, run `tailscale funnel reset` and `tailscale serve reset`.
 
 ### Option B: Reverse Proxy (Caddy)
 
@@ -145,16 +138,16 @@ Tunnel ၏ ingress rules များကို webhook path ကိုသာ လ�
 
 ## အလုပ်လုပ်ပုံ
 
-1. Google Chat သည် Gateway သို့ webhook POST များ ပို့ပါသည်။ Request တစ်ခုစီတွင် `Authorization: Bearer <token>` header ပါဝင်ပါသည်။
+1. Google Chat sends webhook POSTs to the gateway. Each request includes an `Authorization: Bearer <token>` header.
 2. OpenClaw သည် သတ်မှတ်ထားသော `audienceType` + `audience` ကို အသုံးပြု၍ token ကို စစ်ဆေးပါသည်:
    - `audienceType: "app-url"` → audience သည် သင့် HTTPS webhook URL ဖြစ်ပါသည်။
    - `audienceType: "project-number"` → audience သည် Cloud project number ဖြစ်ပါသည်။
 3. မက်ဆေ့ချ်များကို space အလိုက် လမ်းကြောင်းခွဲပါသည်:
    - DMs များသည် session key `agent:<agentId>:googlechat:dm:<spaceId>` ကို အသုံးပြုပါသည်။
    - Spaces များသည် session key `agent:<agentId>:googlechat:group:<spaceId>` ကို အသုံးပြုပါသည်။
-4. DM ဝင်ရောက်ခွင့်သည် ပုံမှန်အားဖြင့် pairing လိုအပ်ပါသည်။ မသိသော ပို့သူများသည် pairing code ရရှိပြီး အောက်ပါအမိန့်ဖြင့် အတည်ပြုရပါသည်:
+4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
-5. Group spaces များတွင် ပုံမှန်အားဖြင့် @-mention လိုအပ်ပါသည်။ mention detection တွင် အက်ပ်၏ user name လိုအပ်ပါက `botUser` ကို အသုံးပြုပါ။
+5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app’s user name.
 
 ## Targets
 
@@ -214,9 +207,9 @@ Google Cloud Logs Explorer တွင် အောက်ပါကဲ့သို�
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-ဤအရာသည် webhook handler ကို မမှတ်ပုံတင်ထားခြင်းကို ဆိုလိုပါသည်။ အများဆုံး ဖြစ်တတ်သော အကြောင်းရင်းများမှာ:
+This means the webhook handler isn't registered. Common causes:
 
-1. **ချန်နယ် မဖွဲ့စည်းထားခြင်း**: သင့် config ထဲတွင် `channels.googlechat` အပိုင်း မရှိပါ။ အောက်ပါအမိန့်ဖြင့် စစ်ဆေးပါ:
+1. **Channel not configured**: The `channels.googlechat` section is missing from your config. အတည်ပြုရန်–
 
    ```bash
    openclaw config get channels.googlechat

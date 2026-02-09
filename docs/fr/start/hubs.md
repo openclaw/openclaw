@@ -3,13 +3,6 @@ summary: "Des hubs qui renvoient vers toute la documentation OpenClaw"
 read_when:
   - Vous voulez une cartographie complete de la documentation
 title: "Hubs de documentation"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: a2e3aa07d6c8c2dc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:59Z
 ---
 
 # Hubs de documentation

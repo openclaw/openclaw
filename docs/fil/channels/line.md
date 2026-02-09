@@ -5,23 +5,17 @@ read_when:
   - Kailangan mo ng setup ng LINE webhook + mga kredensyal
   - Gusto mo ng mga opsyon ng mensahe na partikular sa LINE
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:20Z
 ---
 
 # LINE (plugin)
 
-Kumokonekta ang LINE sa OpenClaw sa pamamagitan ng LINE Messaging API. Tumatakbo ang plugin bilang webhook
-receiver sa Gateway at ginagamit ang iyong channel access token + channel secret para sa
+Kumokonekta ang LINE sa OpenClaw sa pamamagitan ng LINE Messaging API. The plugin runs as a webhook
+receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: suportado sa pamamagitan ng plugin. Sinusuportahan ang direct messages, group chats, media, mga lokasyon, Flex
-messages, template messages, at quick replies. Hindi sinusuportahan ang reactions at threads.
+Status: supported via plugin. Sinusuportahan ang direct messages, group chats, media, locations, Flex
+messages, template messages, at quick replies. Ang reactions at threads
+ay hindi sinusuportahan.
 
 ## Kailangan na plugin
 
@@ -50,9 +44,9 @@ openclaw plugins install ./extensions/line
 https://gateway-host/line/webhook
 ```
 
-Sumasagot ang Gateway sa webhook verification ng LINE (GET) at mga inbound event (POST).
-Kung kailangan mo ng custom path, itakda ang `channels.line.webhookPath` o
-`channels.line.accounts.<id>.webhookPath` at i-update ang URL nang naaayon.
+Tumugon ang gateway sa webhook verification (GET) ng LINE at sa mga inbound event (POST).
+Kung kailangan mo ng custom na path, itakda ang `channels.line.webhookPath` o
+`channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
 ## I-configure
 
@@ -109,7 +103,7 @@ Maramihang account:
 
 ## Kontrol sa access
 
-Ang direct messages ay default sa pairing. Ang mga hindi kilalang sender ay nakakakuha ng pairing code at ang kanilang
+Direct messages default to pairing. Ang mga hindi kilalang sender ay nakakakuha ng pairing code at ang kanilang
 mga mensahe ay binabalewala hanggang maaprubahan.
 
 ```bash
@@ -125,7 +119,7 @@ Mga allowlist at polisiya:
 - `channels.line.groupAllowFrom`: mga allowlisted LINE user ID para sa mga grupo
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom`
 
-Case-sensitive ang mga LINE ID. Ganito ang itsura ng mga valid ID:
+LINE IDs are case-sensitive. Ang mga valid na ID ay ganito ang hitsura:
 
 - User: `U` + 32 hex chars
 - Group: `C` + 32 hex chars

@@ -1,16 +1,9 @@
 ---
-summary: „Plan: ein sauberes Plugin-SDK + Runtime für alle Messaging-Connectoren“
+summary: "„Plan: ein sauberes Plugin-SDK + Runtime für alle Messaging-Connectoren“"
 read_when:
   - Definieren oder Refaktorieren der Plugin-Architektur
   - Migrieren von Kanal-Connectoren zum Plugin-SDK/Runtime
-title: „Plugin-SDK-Refaktor“
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:15Z
+title: "„Plugin-SDK-Refaktor“"
 ---
 
 # Plugin-SDK + Runtime Refaktor-Plan
@@ -25,7 +18,7 @@ Kein Plugin importiert `src/**` direkt. Alle Abhängigkeiten laufen über das SD
 
 ## Zielarchitektur (zwei Ebenen)
 
-### 1) Plugin-SDK (Compile-Time, stabil, veröffentlichbar)
+### 1. Plugin-SDK (Compile-Time, stabil, veröffentlichbar)
 
 Umfang: Typen, Helper und Konfigurations-Utilities. Kein Runtime-Zustand, keine Seiteneffekte.
 
@@ -44,7 +37,7 @@ Auslieferung:
 - Veröffentlichung als `openclaw/plugin-sdk` (oder Export aus dem Core unter `openclaw/plugin-sdk`).
 - Semver mit expliziten Stabilitätsgarantien.
 
-### 2) Plugin-Runtime (Ausführungsoberfläche, injiziert)
+### 2. Plugin-Runtime (Ausführungsoberfläche, injiziert)
 
 Umfang: Alles, was das Core-Runtime-Verhalten berührt.
 Zugriff über `OpenClawPluginApi.runtime`, sodass Plugins niemals `src/**` importieren.

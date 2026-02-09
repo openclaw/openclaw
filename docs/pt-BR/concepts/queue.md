@@ -3,13 +3,6 @@ summary: "Design da fila de comandos que serializa execuções de resposta autom
 read_when:
   - Alterar a execução ou a concorrência de respostas automáticas
 title: "Fila de Comandos"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:40Z
 ---
 
 # Fila de Comandos (2026-01-16)

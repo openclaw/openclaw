@@ -1,16 +1,9 @@
 ---
 summary: "Comando de localização para nós (location.get), modos de permissão e comportamento em segundo plano"
 read_when:
-  - "Adicionar suporte ao nó de localização ou UI de permissões"
-  - "Projetar fluxos de localização em segundo plano + push"
+  - Adicionar suporte ao nó de localização ou UI de permissões
+  - Projetar fluxos de localização em segundo plano + push
 title: "Comando de Localização"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:20Z
 ---
 
 # Comando de localização (nós)
@@ -92,7 +85,7 @@ Erros (códigos estáveis):
 Objetivo: o modelo pode solicitar localização mesmo quando o nó está em segundo plano, mas apenas quando:
 
 - O usuário selecionou **Sempre**.
-- O SO concede localização em segundo plano.
+- O sistema concede localização em segundo plano.
 - O app tem permissão para rodar em segundo plano para localização (modo de segundo plano do iOS / serviço em primeiro plano do Android ou permissão especial).
 
 Fluxo acionado por push (futuro):
@@ -112,7 +105,7 @@ Notas:
 - CLI: `openclaw nodes location get --node <id>`.
 - Diretrizes do agente: chame apenas quando o usuário tiver habilitado a localização e entender o escopo.
 
-## Texto de UX (sugerido)
+## Cópia de UX (sugerida)
 
 - Desativado: “O compartilhamento de localização está desativado.”
 - Enquanto em uso: “Somente quando o OpenClaw estiver aberto.”

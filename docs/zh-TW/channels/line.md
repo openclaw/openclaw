@@ -5,25 +5,21 @@ read_when:
   - 你需要設定 LINE webhook 與憑證
   - 你想要使用 LINE 專屬的訊息選項
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:55Z
 ---
 
 # LINE（外掛程式）
 
 LINE 透過 LINE Messaging API 連接至 OpenClaw。此外掛程式在 Gateway 閘道器 上以 webhook
 接收器的形式執行，並使用你的 channel access token 與 channel secret 進行
-身分驗證。
+身分驗證。 The plugin runs as a webhook
+receiver on the gateway and uses your channel access token + channel secret for
+authentication.
 
-狀態：透過外掛程式支援。支援私訊、群組聊天、媒體、位置、Flex
-訊息、範本訊息與快速回覆。不支援表情回應與討論串。
+Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+messages, template messages, and quick replies are supported. Reactions and threads
+are not supported.
 
-## 需要外掛程式
+## Plugin required
 
 安裝 LINE 外掛程式：
 
@@ -31,7 +27,7 @@ LINE 透過 LINE Messaging API 連接至 OpenClaw。此外掛程式在 Gateway �
 openclaw plugins install @openclaw/line
 ```
 
-本機檢出（從 git 儲存庫執行時）：
+本地檢出（從 git 儲存庫執行時）：
 
 ```bash
 openclaw plugins install ./extensions/line
@@ -52,7 +48,8 @@ https://gateway-host/line/webhook
 
 Gateway 閘道器 會回應 LINE 的 webhook 驗證（GET）與傳入事件（POST）。
 如果你需要自訂路徑，請設定 `channels.line.webhookPath` 或
-`channels.line.accounts.<id>.webhookPath`，並相應更新 URL。
+`channels.line.accounts.<id>
+If you need a custom path, set `channels.line.webhookPath`or`channels.line.accounts.<id>.webhookPath\`，並相應更新 URL。
 
 ## 設定
 
@@ -71,7 +68,7 @@ Gateway 閘道器 會回應 LINE 的 webhook 驗證（GET）與傳入事件（PO
 }
 ```
 
-環境變數（僅限預設帳號）：
+Env vars (default account only):
 
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_CHANNEL_SECRET`
@@ -109,7 +106,7 @@ Gateway 閘道器 會回應 LINE 的 webhook 驗證（GET）與傳入事件（PO
 
 ## 存取控制
 
-私訊預設需要配對。未知的寄件者會收到配對碼，其訊息在核准前將被忽略。
+Direct messages default to pairing. 私訊預設需要配對。未知的寄件者會收到配對碼，其訊息在核准前將被忽略。
 
 ```bash
 openclaw pairing list line
@@ -124,13 +121,13 @@ openclaw pairing approve line <CODE>
 - `channels.line.groupAllowFrom`：用於群組的允許清單 LINE 使用者 ID
 - 每個群組的覆寫設定：`channels.line.groups.<groupId>.allowFrom`
 
-LINE ID 區分大小寫。有效的 ID 範例如下：
+LINE IDs are case-sensitive. Valid IDs look like:
 
 - 使用者：`U` + 32 個十六進位字元
 - 群組：`C` + 32 個十六進位字元
 - Room：`R` + 32 個十六進位字元
 
-## 訊息行為
+## Message behavior
 
 - 文字會在 5000 個字元處分段。
 - Markdown 格式會被移除；程式碼區塊與表格在可能的情況下會轉換為 Flex
@@ -181,7 +178,7 @@ LINE 外掛程式也提供一個用於 Flex 訊息預設的 `/card` 指令：
 /card info "Welcome" "Thanks for joining!"
 ```
 
-## 疑難排解
+## Troubleshooting
 
 - **Webhook 驗證失敗：** 確保 webhook URL 為 HTTPS，且
   `channelSecret` 與 LINE Console 中的設定一致。

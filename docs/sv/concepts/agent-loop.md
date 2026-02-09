@@ -3,24 +3,17 @@ summary: "Agentloopens livscykel, strömmar och väntesemantik"
 read_when:
   - Du behöver en exakt genomgång av agentloopen eller livscykelhändelser
 title: "Agentloop"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:03Z
 ---
 
 # Agentloop (OpenClaw)
 
-En agentisk loop är den fullständiga ”verkliga” körningen av en agent: intag → kontextsammanställning → modellinferens →
-verktygskörning → strömmande svar → persistens. Det är den auktoritativa vägen som omvandlar ett meddelande
-till åtgärder och ett slutligt svar, samtidigt som sessionstillståndet hålls konsekvent.
+En agentic loop är den fullständiga “riktiga” körningen av en agent: intag → sammanhang montering → modell slutning →
+verktyg utförande → strömmande svar → ihärdighet. Det är den auktoritativa vägen som förvandlar ett meddelande
+till handlingar och ett slutligt svar, samtidigt som sessionen tillstånd är konsekvent.
 
-I OpenClaw är en loop en enda, serialiserad körning per session som emitterar livscykel- och strömhändelser
-när modellen tänker, anropar verktyg och strömmar utdata. Detta dokument förklarar hur den autentiska loopen
-är kopplad från ände till ände.
+I OpenClaw, en loop är en enda, serialiserad körning per session som avger livscykel och ström händelser
+som modellen tror, anrop verktyg och strömmar utgång. Denna doc förklarar hur den autentiska loopen är
+trådbunden end-to-end.
 
 ## Ingångspunkter
 
@@ -47,14 +40,14 @@ när modellen tänker, anropar verktyg och strömmar utdata. Detta dokument för
    - livscykelhändelser ⇒ `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
 5. `agent.wait` använder `waitForAgentJob`:
    - väntar på **lifecycle end/error** för `runId`
-   - returnerar `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+   - returnerar `{ status: ok<unk> error<unk> timeout, startedAt, endedAt, fel? }`
 
 ## Köhantering + samtidighet
 
 - Körningar serialiseras per sessionsnyckel (sessionsfil) och valfritt via en global fil.
 - Detta förhindrar verktygs-/sessionsrace och håller sessionshistoriken konsekvent.
-- Meddelandekanaler kan välja kölägen (collect/steer/followup) som matar detta filsystem.
-  Se [Command Queue](/concepts/queue).
+- Meddelandekanaler kan välja kölägen (samla/styre/uppföljning) som matar detta filsystem.
+  Se [Kommandokör](/concepts/queue).
 
 ## Förberedelse av session + arbetsyta
 
@@ -78,8 +71,8 @@ OpenClaw har två hook-system:
 
 ### Interna hooks (Gateway-hooks)
 
-- **`agent:bootstrap`**: körs medan bootstrap-filer byggs innan systemprompten slutförs.
-  Använd detta för att lägga till/ta bort bootstrap-kontextfiler.
+- **`agent:bootstrap`**: kör medan bootstrap-filer byggs innan systemprompten är klar.
+  Använd detta för att lägga till/ta bort snabbfiler
 - **Command hooks**: `/new`, `/reset`, `/stop` och andra kommandohändelser (se Hooks-dokumentet).
 
 Se [Hooks](/automation/hooks) för konfigurering och exempel.
@@ -142,7 +135,7 @@ Se [Plugins](/tools/plugin#plugin-hooks) för hook-API:t och registreringsdetalj
 
 ## Timeouts
 
-- `agent.wait` standard: 30 s (endast väntan). Parametern `timeoutMs` åsidosätter.
+- `agent.wait` default: 30s (bara vänta). `timeoutMs` param overrides.
 - Agentkörning: `agents.defaults.timeoutSeconds` standard 600 s; upprätthålls i `runEmbeddedPiAgent`-avbrottstimern.
 
 ## Var saker kan avslutas i förtid

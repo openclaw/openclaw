@@ -4,13 +4,6 @@ read_when:
   - Sie genehmigen Geräte-Pairing-Anfragen
   - Sie müssen Geräte-Tokens rotieren oder widerrufen
 title: "Geräte"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:37Z
 ---
 
 # `openclaw devices`

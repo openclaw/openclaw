@@ -5,34 +5,29 @@ read_when:
   - Fejlfinding af webhook-parring
   - Konfiguration af iMessage på macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:13Z
 ---
 
 # BlueBubbles (macOS REST)
 
-Status: medfølgende plugin, der taler med BlueBubbles macOS-serveren over HTTP. **Anbefalet til iMessage-integration** på grund af dens rigere API og nemmere opsætning sammenlignet med den ældre imsg-kanal.
+Status: bundtet plugin, der taler med BlueBubbles macOS-serveren over HTTP. **Anbefales til iMessage integration** på grund af dens rigere API og lettere opsætning i forhold til den ældre imsg kanal.
 
 ## Overblik
 
 - Kører på macOS via BlueBubbles-hjælpeappen ([bluebubbles.app](https://bluebubbles.app)).
-- Anbefalet/testet: macOS Sequoia (15). macOS Tahoe (26) virker; redigering er i øjeblikket i stykker på Tahoe, og opdateringer af gruppeikoner kan rapportere succes uden at synkronisere.
+- Anbefalet/testet: macOS Sequoia (15). macOS Tahoe (26) virker; redigering er i øjeblikket brudt på Tahoe, og gruppeikonopdateringer kan rapportere succes, men ikke synkronisering.
 - OpenClaw kommunikerer med den via dens REST-API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
 - Indgående beskeder ankommer via webhooks; udgående svar, skriveindikatorer, læsekvitteringer og tapbacks er REST-kald.
 - Vedhæftninger og stickers indtages som indgående medier (og vises til agenten, når det er muligt).
-- Parring/tilladelsesliste fungerer på samme måde som andre kanaler (`/channels/pairing` osv.) med `channels.bluebubbles.allowFrom` + parringskoder.
+- Parring/tillalist virker på samme måde som andre kanaler (`/channels/pairing` etc) med `channels.bluebubbles.allowFra` + parringskoder.
 - Reaktioner vises som systemhændelser ligesom Slack/Telegram, så agenter kan “nævne” dem før svar.
 - Avancerede funktioner: redigér, fortryd afsendelse, svartråde, beskedeffekter, gruppeadministration.
 
 ## Hurtig start
 
 1. Installér BlueBubbles-serveren på din Mac (følg instruktionerne på [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. Aktivér web-API’et i BlueBubbles-konfigurationen, og sæt en adgangskode.
+
 3. Kør `openclaw onboard` og vælg BlueBubbles, eller konfigurér manuelt:
 
    ```json5
@@ -49,13 +44,14 @@ Status: medfølgende plugin, der taler med BlueBubbles macOS-serveren over HTTP.
    ```
 
 4. Peg BlueBubbles-webhooks til din gateway (eksempel: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Start gatewayen; den registrerer webhook-handleren og starter parring.
 
 ## Hold Messages.app i live (VM / headless-opsætninger)
 
-Nogle macOS VM-/always-on-opsætninger kan ende med, at Messages.app går i “idle” (indgående hændelser stopper, indtil appen åbnes/bringes i forgrunden). En enkel workaround er at **poke Messages hvert 5. minut** ved hjælp af et AppleScript + LaunchAgent.
+Nogle macOS VM / altid-på opsætninger kan ende med Messages.app går “idle” (indkommende begivenheder stopper, indtil app'en er åbnet/foregrounded). En simpel løsning er at \*\* poke beskeder hvert 5. minut \*\* ved hjælp af en AppleScript + LaunchAgent.
 
-### 1) Gem AppleScriptet
+### 1. Gem AppleScriptet
 
 Gem dette som:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Installér en LaunchAgent
+### 2. Installér en LaunchAgent
 
 Gem dette som:
 
@@ -115,8 +111,8 @@ Gem dette som:
 
 Noter:
 
-- Dette kører **hver 300. sekund** og **ved login**.
-- Første kørsel kan udløse macOS **Automatisering**-prompter (`osascript` → Messages). Godkend dem i den samme brugersession, som kører LaunchAgent.
+- Dette kører **hver 300 sekunder** og **ved login**.
+- Det første løb kan udløse macOS **Automation** prompts (`osascript` → Beskeder). Godkend dem i den samme brugersession, der kører LaunchAgent.
 
 Indlæs den:
 
@@ -135,7 +131,7 @@ openclaw onboard
 
 Guiden spørger om:
 
-- **Server-URL** (påkrævet): BlueBubbles-serveradresse (f.eks. `http://192.168.1.100:1234`)
+- **Server URL** (påkrævet): BlueBubbles server adresse (f.eks. `http://192.168.1.100:1234`)
 - **Adgangskode** (påkrævet): API-adgangskode fra BlueBubbles Server-indstillinger
 - **Webhook-sti** (valgfri): Standard er `/bluebubbles-webhook`
 - **DM-politik**: parring, tilladelsesliste, åben eller deaktiveret
@@ -156,7 +152,7 @@ DM’er:
 - Godkend via:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
-- Parring er den standard token-udveksling. Detaljer: [Parring](/channels/pairing)
+- Parring er standard token udveksling. Detaljer: [Pairing](/channels/pairing)
 
 Grupper:
 
@@ -190,7 +186,7 @@ Konfiguration pr. gruppe:
 
 ### Kommando-gating
 
-- Kontrolkommandoer (f.eks. `/config`, `/model`) kræver autorisation.
+- Kontrolkommandoer (fx, `/config`, `/model`) kræver tilladelse.
 - Bruger `allowFrom` og `groupAllowFrom` til at afgøre kommandoautorisation.
 - Autoriserede afsendere kan køre kontrolkommandoer selv uden nævning i grupper.
 
@@ -249,11 +245,11 @@ Tilgængelige handlinger:
 - **removeParticipant**: Fjern en person fra en gruppe (`chatGuid`, `address`)
 - **leaveGroup**: Forlad en gruppechat (`chatGuid`)
 - **sendAttachment**: Send medier/filer (`to`, `buffer`, `filename`, `asVoice`)
-  - Talebeskeder: Sæt `asVoice: true` med **MP3** eller **CAF**-lyd for at sende som en iMessage-talebesked. BlueBubbles konverterer MP3 → CAF ved afsendelse af talebeskeder.
+  - Stemme memos: sæt `asVoice: true` med **MP3** eller **CAF** lyd til at sende som en iMessage stemmebesked. BlueBubbles konverterer MP3 → CAF når du sender stemme memos.
 
 ### Besked-ID’er (korte vs. fulde)
 
-OpenClaw kan vise _korte_ besked-ID’er (f.eks. `1`, `2`) for at spare tokens.
+OpenClaw kan overflade _short_ besked IDs (fx, `1`, `2`) for at gemme tokens.
 
 - `MessageSid` / `ReplyToId` kan være korte ID’er.
 - `MessageSidFull` / `ReplyToIdFull` indeholder udbyderens fulde ID’er.
@@ -307,7 +303,7 @@ Udbyderindstillinger:
 - `channels.bluebubbles.textChunkLimit`: Udgående chunk-størrelse i tegn (standard: 4000).
 - `channels.bluebubbles.chunkMode`: `length` (standard) opdeler kun ved overskridelse af `textChunkLimit`; `newline` opdeler ved tomme linjer (afsnitsgrænser) før længdeopdeling.
 - `channels.bluebubbles.mediaMaxMb`: Indgående mediegrænse i MB (standard: 8).
-- `channels.bluebubbles.historyLimit`: Maks. gruppebeskeder til kontekst (0 deaktiverer).
+- `channels.bluebubbles.historyLimit`: Max gruppe beskeder for kontekst (0 disables).
 - `channels.bluebubbles.dmHistoryLimit`: DM-historikgrænse.
 - `channels.bluebubbles.actions`: Aktivér/deaktivér specifikke handlinger.
 - `channels.bluebubbles.accounts`: Konfiguration af flere konti.
@@ -325,13 +321,13 @@ Foretræk `chat_guid` for stabil routing:
 - `chat_id:123`
 - `chat_identifier:...`
 - Direkte handles: `+15555550123`, `user@example.com`
-  - Hvis et direkte handle ikke har en eksisterende DM-chat, opretter OpenClaw en via `POST /api/v1/chat/new`. Dette kræver, at BlueBubbles Private API er aktiveret.
+  - Hvis en direkte håndtag ikke har en eksisterende DM chat, vil OpenClaw oprette en via `POST /api/v1/chat/new`. Dette kræver, at BlueBubbles Privat API er aktiveret.
 
 ## Sikkerhed
 
-- Webhook-anmodninger autentificeres ved at sammenligne `guid`/`password`-queryparametre eller -headers med `channels.bluebubbles.password`. Anmodninger fra `localhost` accepteres også.
+- Webhook anmodninger er godkendt ved at sammenligne `guid`/`password` forespørgsel params eller headers mod `channels.bluebubbles.password`. Anmodninger fra `localhost` er også accepteret.
 - Hold API-adgangskoden og webhook-endepunktet hemmelige (behandl dem som legitimationsoplysninger).
-- Localhost-tillid betyder, at en reverse proxy på samme vært utilsigtet kan omgå adgangskoden. Hvis du proxyer gatewayen, kræv autentificering i proxyen og konfigurér `gateway.trustedProxies`. Se [Gateway-sikkerhed](/gateway/security#reverse-proxy-configuration).
+- Localhost tillid betyder en samme vært reverse proxy kan utilsigtet omgå adgangskoden. Hvis du proxy gateway, kræver auth ved proxy og konfigurere `gateway.trustedProxies`. Se [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Aktivér HTTPS + firewall-regler på BlueBubbles-serveren, hvis du eksponerer den uden for dit LAN.
 
 ## Fejlfinding
@@ -339,9 +335,9 @@ Foretræk `chat_guid` for stabil routing:
 - Hvis skrive-/læsehændelser holder op med at virke, så tjek BlueBubbles webhook-logs og verificér, at gateway-stien matcher `channels.bluebubbles.webhookPath`.
 - Parringskoder udløber efter en time; brug `openclaw pairing list bluebubbles` og `openclaw pairing approve bluebubbles <code>`.
 - Reaktioner kræver BlueBubbles private API (`POST /api/v1/message/react`); sørg for, at serverversionen eksponerer den.
-- Redigér/fortryd afsendelse kræver macOS 13+ og en kompatibel BlueBubbles-serverversion. På macOS 26 (Tahoe) er redigering i øjeblikket i stykker på grund af ændringer i private API’er.
+- Rediger/afsend kræver macOS 13+ og en kompatibel BlueBubbles-serverversion. På macOS 26 (Tahoe), redigering er i øjeblikket brudt på grund af private API ændringer.
 - Opdateringer af gruppeikoner kan være ustabile på macOS 26 (Tahoe): API’et kan returnere succes, men det nye ikon synkroniserer ikke.
-- OpenClaw skjuler automatisk kendt-defekte handlinger baseret på BlueBubbles-serverens macOS-version. Hvis redigering stadig vises på macOS 26 (Tahoe), så deaktivér den manuelt med `channels.bluebubbles.actions.edit=false`.
+- OpenClaw skjuler kendte, brudte handlinger baseret på BlueBubbles-serverens macOS-version. Hvis redigering stadig vises på macOS 26 (Tahoe), deaktivere det manuelt med `channels.bluebubbles.actions.edit=false`.
 - For status-/helbredsinfo: `openclaw status --all` eller `openclaw status --deep`.
 
 For generel reference til kanalworkflow, se [Kanaler](/channels) og guiden [Plugins](/tools/plugin).

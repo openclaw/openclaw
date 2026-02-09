@@ -4,13 +4,6 @@ read_when:
   - Você está aprovando solicitações de emparelhamento de dispositivos
   - Você precisa rotacionar ou revogar tokens de dispositivos
 title: "dispositivos"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:15Z
 ---
 
 # `openclaw devices`

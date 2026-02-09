@@ -4,13 +4,6 @@ read_when:
   - Bạn đang chuyển OpenClaw sang laptop/server mới
   - Bạn muốn giữ nguyên phiên, xác thực và đăng nhập kênh (WhatsApp, v.v.)
 title: "Hướng dẫn Migration"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:30Z
 ---
 
 # Migrating OpenClaw sang máy mới
@@ -26,7 +19,7 @@ Tuy nhiên, có những “bẫy” phổ biến liên quan đến **profile**, 
 
 ## Trước khi bắt đầu (bạn đang migrate những gì)
 
-### 1) Xác định thư mục trạng thái
+### 1. Xác định thư mục trạng thái
 
 Hầu hết các cài đặt dùng mặc định:
 
@@ -43,9 +36,9 @@ Nếu không chắc, hãy chạy trên máy **cũ**:
 openclaw status
 ```
 
-Tìm các đề cập đến `OPENCLAW_STATE_DIR` / profile trong đầu ra. Nếu bạn chạy nhiều gateway, lặp lại cho từng profile.
+Tìm các đề cập đến `OPENCLAW_STATE_DIR` / profile trong output. Nếu bạn chạy nhiều gateway, hãy lặp lại cho từng profile.
 
-### 2) Xác định workspace
+### 2. Xác định workspace
 
 Các mặc định phổ biến:
 
@@ -54,7 +47,7 @@ Các mặc định phổ biến:
 
 Workspace là nơi chứa các tệp như `MEMORY.md`, `USER.md`, và `memory/*.md`.
 
-### 3) Hiểu những gì sẽ được giữ lại
+### 3. Hiểu những gì sẽ được giữ lại
 
 Nếu bạn sao chép **cả** state dir và workspace, bạn sẽ giữ:
 
@@ -128,7 +121,7 @@ Trên máy **mới**:
 openclaw doctor
 ```
 
-Doctor là lệnh “an toàn và nhàm chán”. Nó sửa dịch vụ, áp dụng migration cấu hình và cảnh báo về các điểm không khớp.
+Doctor là lệnh “an toàn và nhàm chán”. It repairs services, applies config migrations, and warns about mismatches.
 
 Sau đó:
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### Bẫy: chỉ sao chép `openclaw.json`
 
-`openclaw.json` là không đủ. Nhiều nhà cung cấp lưu trạng thái dưới:
+`openclaw.json` is not enough. Nhiều nhà cung cấp lưu state tại:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -177,7 +170,7 @@ Nếu bạn đang ở chế độ remote, hãy migrate **máy chủ gateway**.
 
 ### Bẫy: bí mật trong bản sao lưu
 
-`$OPENCLAW_STATE_DIR` chứa bí mật (khóa API, token OAuth, thông tin WhatsApp). Hãy coi bản sao lưu như bí mật production:
+`$OPENCLAW_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Hãy đối xử với bản sao lưu như các bí mật production:
 
 - lưu trữ có mã hóa
 - tránh chia sẻ qua kênh không an toàn

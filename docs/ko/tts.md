@@ -5,13 +5,6 @@ read_when:
   - TTS 프로바이더 또는 제한 구성
   - /tts 명령 사용
 title: "텍스트 음성 변환"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:56Z
 ---
 
 # 텍스트 음성 변환 (TTS)
@@ -27,11 +20,9 @@ OpenClaw 가 오디오를 전송할 수 있는 모든 곳에서 작동하며, Te
 
 ### Edge TTS 참고 사항
 
-Edge TTS 는 `node-edge-tts` 라이브러리를 통해 Microsoft Edge 의 온라인 신경망 TTS 서비스를 사용합니다.
-로컬이 아닌 호스팅 서비스이며, Microsoft 엔드포인트를 사용하고 API 키가 필요하지 않습니다. `node-edge-tts` 는 음성 구성 옵션과 출력 형식을 노출하지만, 모든 옵션이 Edge 서비스에서 지원되지는 않습니다. citeturn2search0
+Edge TTS 는 `node-edge-tts` 라이브러리를 통해 Microsoft Edge 의 온라인 신경망 TTS 서비스를 사용합니다. 로컬이 아닌 호스팅 서비스이며, Microsoft 엔드포인트를 사용하고 API 키가 필요하지 않습니다. `node-edge-tts` 는 음성 구성 옵션과 출력 형식을 노출하지만, 모든 옵션이 Edge 서비스에서 지원되지는 않습니다. citeturn2search0
 
-Edge TTS 는 게시된 SLA 나 할당량이 없는 공개 웹 서비스이므로, 최선 노력(best-effort)으로 취급해야 합니다.
-보장된 제한과 지원이 필요하다면 OpenAI 또는 ElevenLabs 를 사용하십시오.
+Edge TTS 는 게시된 SLA 나 할당량이 없는 공개 웹 서비스이므로, 최선 노력(best-effort)으로 취급해야 합니다. 보장된 제한과 지원이 필요하다면 OpenAI 또는 ElevenLabs 를 사용하십시오.
 Microsoft 의 Speech REST API 문서에는 요청당 10분 오디오 제한이 명시되어 있으며, Edge TTS 는 제한을 공개하지 않으므로 유사하거나 더 낮은 제한을 가정해야 합니다. citeturn0search3
 
 ## 선택적 키
@@ -358,8 +349,7 @@ Reply -> TTS enabled?
 활성화 세부 사항은 [슬래시 명령](/tools/slash-commands)을 참조하십시오.
 
 Discord 참고 사항: `/tts` 는 Discord 기본 명령이므로, OpenClaw 는
-해당 환경에서 네이티브 명령으로 `/voice` 를 등록합니다.
-텍스트 `/tts ...` 는 여전히 작동합니다.
+해당 환경에서 네이티브 명령으로 `/voice` 를 등록합니다. 텍스트 `/tts ...` 는 여전히 작동합니다.
 
 ```
 /tts off
@@ -383,8 +373,7 @@ Discord 참고 사항: `/tts` 는 Discord 기본 명령이므로, OpenClaw 는
 
 ## 에이전트 도구
 
-`tts` 도구는 텍스트를 음성으로 변환하고 `MEDIA:` 경로를 반환합니다.
-결과가 Telegram 과 호환되는 경우, Telegram 이 음성 버블을 전송하도록
+`tts` 도구는 텍스트를 음성으로 변환하고 `MEDIA:` 경로를 반환합니다. 결과가 Telegram 과 호환되는 경우, Telegram 이 음성 버블을 전송하도록
 `[[audio_as_voice]]` 를 포함합니다.
 
 ## Gateway RPC

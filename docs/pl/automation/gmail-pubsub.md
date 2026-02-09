@@ -4,20 +4,13 @@ read_when:
   - Podłączanie wyzwalaczy skrzynki Gmail do OpenClaw
   - Konfiguracja push Pub/Sub do wybudzania agenta
 title: "Gmail Pub/Sub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:55Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 Cel: obserwacja Gmail → push Pub/Sub → `gog gmail watch serve` → webhook OpenClaw.
 
-## Wymagania wstępne
+## Prereqs
 
 - Zainstalowane i zalogowane `gcloud` ([instrukcja instalacji](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - Zainstalowane i autoryzowane `gog` (gogcli) dla konta Gmail ([gogcli.sh](https://gogcli.sh/)).
@@ -117,8 +110,7 @@ Uwaga dotycząca ścieżki: gdy włączone jest `tailscale.mode`, OpenClaw autom
 `hooks.gmail.tailscale.path` (domyślnie `/gmail-pubsub`), ponieważ Tailscale
 usuwa prefiks set-path przed proxy.
 Jeśli backend ma otrzymywać ścieżkę z prefiksem, ustaw
-`hooks.gmail.tailscale.target` (lub `--tailscale-target`) na pełny URL, np.
-`http://127.0.0.1:8788/gmail-pubsub`, i dopasuj `hooks.gmail.serve.path`.
+`hooks.gmail.tailscale.target` (lub `--tailscale-target`) na pełny URL, np. `http://127.0.0.1:8788/gmail-pubsub`, i dopasuj `hooks.gmail.serve.path`.
 
 Chcesz niestandardowy punkt końcowy? Użyj `--push-endpoint <url>` lub `--tailscale off`.
 

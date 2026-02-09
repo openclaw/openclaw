@@ -4,18 +4,11 @@ read_when:
   - Lägga till eller ändra externa CLI-integrationer
   - Felsöka RPC-adaptrar (signal-cli, imsg)
 title: "RPC-adaptrar"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:18Z
 ---
 
 # RPC-adaptrar
 
-OpenClaw integrerar externa CLI:er via JSON-RPC. Två mönster används i dag.
+OpenClaw integrerar externa CLIs via JSON-RPC. Två mönster används idag.
 
 ## Mönster A: HTTP-daemon (signal-cli)
 
@@ -47,4 +40,4 @@ Se [iMessage](/channels/imessage) för legacy-konfigurering och adressering (`ch
 
 - Gateway äger processen (start/stopp knutet till leverantörens livscykel).
 - Håll RPC-klienter robusta: tidsgränser, starta om vid avslut.
-- Föredra stabila ID:n (t.ex. `chat_id`) framför visningssträngar.
+- Föredrar stabila ID (t.ex., `chat_id`) över visningssträngar.

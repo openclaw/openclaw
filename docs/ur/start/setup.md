@@ -4,20 +4,13 @@ read_when:
   - نئی مشین سیٹ اپ کرتے وقت
   - آپ اپنی ذاتی سیٹ اپ کو متاثر کیے بغیر “تازہ ترین + بہترین” چاہتے ہوں
 title: "سیٹ اپ"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:51Z
 ---
 
 # سیٹ اپ
 
 <Note>
-اگر آپ پہلی بار سیٹ اپ کر رہے ہیں تو [ابتدائی رہنمائی](/start/getting-started) سے آغاز کریں۔
-ویزرد کی تفصیلات کے لیے [Onboarding Wizard](/start/wizard) دیکھیں۔
+9. ایجنٹ کی طرف سے بھیجی جانے والی آؤٹ باؤنڈ اٹیچمنٹس: اپنی الگ لائن میں `MEDIA:<path-or-url>` شامل کریں (بغیر اسپیس کے)۔
+10. اگر آپ پہلی بار سیٹ اپ کر رہے ہیں تو [Getting Started](/start/getting-started) سے آغاز کریں۔
 </Note>
 
 آخری تازہ کاری: 2026-01-01
@@ -88,7 +81,7 @@ openclaw health
 
 مقصد: TypeScript Gateway پر کام کرنا، ہاٹ ری لوڈ حاصل کرنا، اور macOS ایپ UI کو منسلک رکھنا۔
 
-### 0) (اختیاری) macOS ایپ بھی سورس سے چلائیں
+### 0. (اختیاری) macOS ایپ بھی سورس سے چلائیں
 
 اگر آپ macOS ایپ کو بھی جدید ترین رکھنا چاہتے ہیں:
 
@@ -96,7 +89,7 @@ openclaw health
 ./scripts/restart-mac.sh
 ```
 
-### 1) ڈیو Gateway شروع کریں
+### 1. ڈیو Gateway شروع کریں
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` واچ موڈ میں gateway چلاتا ہے اور TypeScript تبدیلیوں پر ری لوڈ کرتا ہے۔
 
-### 2) macOS ایپ کو اپنے چلتے ہوئے Gateway کی طرف پوائنٹ کریں
+### 2. macOS ایپ کو اپنے چلتے ہوئے Gateway کی طرف پوائنٹ کریں
 
 **OpenClaw.app** میں:
 
 - کنکشن موڈ: **Local**
   ایپ کنفیگر شدہ پورٹ پر چلتے ہوئے gateway سے اٹیچ ہو جائے گی۔
 
-### 3) تصدیق کریں
+### 3. تصدیق کریں
 
 - ایپ کے اندر Gateway اسٹیٹس **“Using existing gateway …”** دکھانا چاہیے
 - یا CLI کے ذریعے:
@@ -149,16 +142,13 @@ openclaw health
 
 ## Linux (systemd یوزر سروس)
 
-Linux انسٹالز systemd **user** سروس استعمال کرتے ہیں۔ بطورِ طے شدہ، systemd لاگ آؤٹ/آئیڈل پر یوزر
-سروسز بند کر دیتا ہے، جس سے Gateway رک جاتا ہے۔ آن بورڈنگ آپ کے لیے lingering فعال کرنے کی کوشش کرتی ہے
-(ممکن ہے sudo مانگے)۔ اگر پھر بھی بند ہو تو چلائیں:
+11. وزرڈ کی تفصیلات کے لیے [Onboarding Wizard](/start/wizard) دیکھیں۔ 12. لینکس انسٹالز systemd **user** سروس استعمال کرتے ہیں۔ 13. ڈیفالٹ طور پر، systemd لاگ آؤٹ/آئیڈل پر یوزر سروسز بند کر دیتا ہے، جس سے گیٹ وے ختم ہو جاتا ہے۔ 14. آن بورڈنگ آپ کے لیے lingering کو فعال کرنے کی کوشش کرتا ہے (sudo کا مطالبہ ہو سکتا ہے)۔
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-ہمیشہ آن یا ملٹی یوزر سرورز کے لیے، یوزر سروس کے بجائے **system** سروس پر غور کریں
-(lingering کی ضرورت نہیں)۔ systemd نوٹس کے لیے [Gateway runbook](/gateway) دیکھیں۔
+15. اگر یہ اب بھی بند ہو تو چلائیں: See [Gateway runbook](/gateway) for the systemd notes.
 
 ## متعلقہ دستاویزات
 

@@ -1,14 +1,7 @@
 ---
 summary: "Modelo de workspace para AGENTS.md"
 read_when:
-  - "Inicializando um workspace manualmente"
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:04Z
+  - Inicializando um workspace manualmente
 ---
 
 # AGENTS.md - Seu Workspace
@@ -99,7 +92,7 @@ Em chats em grupo onde voce recebe todas as mensagens, seja **inteligente sobre 
 
 - For apenas conversa casual entre humanos
 - Alguém já respondeu à pergunta
-- Sua resposta seria apenas "é" ou "legal"
+- Sua resposta seria apenas "yeah" ou "nice"
 - A conversa está fluindo bem sem voce
 - Adicionar uma mensagem interromperia o clima
 

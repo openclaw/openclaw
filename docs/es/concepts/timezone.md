@@ -4,13 +4,6 @@ read_when:
   - Necesita comprender cómo se normalizan las marcas de tiempo para el modelo
   - Configurar la zona horaria del usuario para los prompts del sistema
 title: "Zonas horarias"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:16Z
 ---
 
 # Zonas horarias

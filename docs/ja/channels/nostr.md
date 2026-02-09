@@ -2,22 +2,15 @@
 summary: "NIP-04 で暗号化されたメッセージによる Nostr の DM チャンネル"
 read_when:
   - Nostr 経由で OpenClaw が DM を受信できるようにしたい場合
-  - 分散型メッセージングをセットアップしている場合
+  - 分散型メッセージングを設定しています
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:52Z
 ---
 
 # Nostr
 
 **ステータス:** オプションのプラグイン（デフォルトでは無効）。
 
-Nostr は、ソーシャルネットワーキング向けの分散型プロトコルです。このチャンネルを有効にすると、OpenClaw は NIP-04 を介して暗号化されたダイレクトメッセージ（DM）を受信し、応答できるようになります。
+Nostrはソーシャルネットワーキングのための分散プロトコルです。 Nostr は、ソーシャルネットワーキング向けの分散型プロトコルです。このチャンネルを有効にすると、OpenClaw は NIP-04 を介して暗号化されたダイレクトメッセージ（DM）を受信し、応答できるようになります。
 
 ## Install（オンデマンド）
 
@@ -45,7 +38,7 @@ openclaw plugins install @openclaw/nostr
 openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 ```
 
-プラグインのインストールまたは有効化後は、Gateway（ゲートウェイ）を再起動してください。
+プラグインをインストールまたは有効にした後、ゲートウェイを再起動します。
 
 ## クイックスタート
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## 設定リファレンス
 
-| キー         | 型       | デフォルト                                  | 説明                             |
-| ------------ | -------- | ------------------------------------------- | -------------------------------- |
-| `privateKey` | string   | required                                    | `nsec` または hex 形式の秘密鍵   |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | リレー URL（WebSocket）          |
-| `dmPolicy`   | string   | `pairing`                                   | DM アクセス ポリシー             |
-| `allowFrom`  | string[] | `[]`                                        | 許可された送信者の pubkey        |
-| `enabled`    | boolean  | `true`                                      | チャンネルの有効／無効           |
-| `name`       | string   | -                                           | 表示名                           |
-| `profile`    | object   | -                                           | NIP-01 のプロフィール メタデータ |
+| キー           | 型                                                            | デフォルト                                       | 説明                    |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | --------------------- |
+| `privateKey` | string                                                       | required                                    | `nsec` または hex 形式の秘密鍵 |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | リレー URL（WebSocket）    |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM アクセス ポリシー          |
+| `allowFrom`  | string[] | `[]`                                        | 許可された送信者の pubkey      |
+| `enabled`    | boolean                                                      | `true`                                      | チャンネルの有効／無効           |
+| `name`       | string                                                       | -                                           | 表示名                   |
+| `profile`    | object                                                       | -                                           | NIP-01 のプロフィール メタデータ  |
 
 ## プロフィール メタデータ
 
-プロフィール データは、NIP-01 の `kind:0` イベントとして公開されます。Control UI（Channels -> Nostr -> Profile）から管理するか、設定で直接指定できます。
+プロフィール データは、NIP-01 の `kind:0` イベントとして公開されます。Control UI（Channels -> Nostr -> Profile）から管理するか、設定で直接指定できます。 コントロールUI(Channels -> Nostr -> Profile)から管理することも、configで直接設定することもできます。
 
 例:
 
@@ -173,12 +166,12 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## プロトコル対応
 
-| NIP    | ステータス | 説明                                       |
-| ------ | ---------- | ------------------------------------------ |
-| NIP-01 | 対応済み   | 基本イベント形式 + プロフィール メタデータ |
-| NIP-04 | 対応済み   | 暗号化 DM（`kind:4`）                      |
-| NIP-17 | 予定       | ギフトラップ DM                            |
-| NIP-44 | 予定       | バージョン付き暗号化                       |
+| NIP    | ステータス | 説明                      |
+| ------ | ----- | ----------------------- |
+| NIP-01 | 対応済み  | 基本イベント形式 + プロフィール メタデータ |
+| NIP-04 | 対応済み  | 暗号化 DM（`kind:4`）        |
+| NIP-17 | 予定    | ギフトラップ DM               |
+| NIP-44 | 予定    | バージョン付き暗号化              |
 
 ## テスト
 
@@ -219,7 +212,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 ### 応答を送信できない場合
 
 - リレーが書き込みを受け付けていることを確認してください。
-- 送信方向の接続性を確認してください。
+- 出力接続を確認します。
 - リレーのレート制限に注意してください。
 
 ### 応答が重複する場合

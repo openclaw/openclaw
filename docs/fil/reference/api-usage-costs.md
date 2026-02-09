@@ -5,19 +5,12 @@ read_when:
   - Kailangan mong i-audit ang mga key, gastos, at visibility ng usage
   - Ipinapaliwanag mo ang /status o /usage na pag-uulat ng gastos
 title: "API Usage at Mga Gastos"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 908bfc17811b8f4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # API usage at mga gastos
 
-Inililista ng doc na ito ang **mga feature na maaaring mag-invoke ng API keys** at kung saan lumalabas ang kanilang mga gastos. Nakatuon ito sa
-mga feature ng OpenClaw na maaaring lumikha ng provider usage o mga bayad na API call.
+This doc lists **features that can invoke API keys** and where their costs show up. It focuses on
+OpenClaw features that can generate provider usage or paid API calls.
 
 ## Saan lumalabas ang mga gastos (chat + CLI)
 
@@ -46,20 +39,20 @@ Maaaring makuha ng OpenClaw ang mga credential mula sa:
 - **Mga environment variable** (hal. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
 - **Config** (`models.providers.*.apiKey`, `tools.web.search.*`, `tools.web.fetch.firecrawl.*`,
   `memorySearch.*`, `talk.apiKey`).
-- **Skills** (`skills.entries.<name>.apiKey`) na maaaring mag-export ng mga key sa skill process env.
+- **Skills** (`skills.entries.<name>.apiKey`) which may export keys to the skill process env.
 
 ## Mga feature na maaaring gumastos ng mga key
 
-### 1) Mga core model response (chat + tools)
+### 1. Mga core model response (chat + tools)
 
-Bawat reply o tool call ay gumagamit ng **kasalukuyang model provider** (OpenAI, Anthropic, atbp.). Ito ang
-pangunahing pinagmumulan ng usage at gastos.
+Every reply or tool call uses the **current model provider** (OpenAI, Anthropic, etc). This is the
+primary source of usage and cost.
 
 Tingnan ang [Models](/providers/models) para sa pricing config at [Token use & costs](/reference/token-use) para sa display.
 
-### 2) Media understanding (audio/image/video)
+### 2. Media understanding (audio/image/video)
 
-Maaaring i-summarize o i-transcribe ang inbound media bago tumakbo ang reply. Gumagamit ito ng mga model/provider API.
+Inbound media can be summarized/transcribed before the reply runs. This uses model/provider APIs.
 
 - Audio: OpenAI / Groq / Deepgram (ngayon ay **auto-enabled** kapag may mga key).
 - Image: OpenAI / Anthropic / Google.
@@ -67,7 +60,7 @@ Maaaring i-summarize o i-transcribe ang inbound media bago tumakbo ang reply. Gu
 
 Tingnan ang [Media understanding](/nodes/media-understanding).
 
-### 3) Memory embeddings + semantic search
+### 3. Memory embeddings + semantic search
 
 Gumagamit ang semantic memory search ng **embedding API** kapag naka-configure para sa mga remote provider:
 
@@ -80,7 +73,7 @@ Maaari mo itong panatilihing local gamit ang `memorySearch.provider = "local"` (
 
 Tingnan ang [Memory](/concepts/memory).
 
-### 4) Web search tool (Brave / Perplexity via OpenRouter)
+### 4. Web search tool (Brave / Perplexity via OpenRouter)
 
 Gumagamit ang `web_search` ng mga API key at maaaring magkaroon ng usage charges:
 
@@ -95,7 +88,7 @@ Gumagamit ang `web_search` ng mga API key at maaaring magkaroon ng usage charges
 
 Tingnan ang [Web tools](/tools/web).
 
-### 5) Web fetch tool (Firecrawl)
+### 5. Web fetch tool (Firecrawl)
 
 Maaaring tawagin ng `web_fetch` ang **Firecrawl** kapag may API key:
 
@@ -105,31 +98,31 @@ Kung hindi naka-configure ang Firecrawl, babalik ang tool sa direct fetch + read
 
 Tingnan ang [Web tools](/tools/web).
 
-### 6) Provider usage snapshots (status/health)
+### 6. Provider usage snapshots (status/health)
 
-May ilang status command na tumatawag sa **provider usage endpoints** para ipakita ang mga quota window o kalusugan ng auth.
-Karaniwan ay mababa ang volume ng mga tawag na ito ngunit tumatama pa rin sa mga provider API:
+Some status commands call **provider usage endpoints** to display quota windows or auth health.
+These are typically low-volume calls but still hit provider APIs:
 
 - `openclaw status --usage`
 - `openclaw models status --json`
 
 Tingnan ang [Models CLI](/cli/models).
 
-### 7) Compaction safeguard summarization
+### 7. Compaction safeguard summarization
 
 Maaaring i-summarize ng compaction safeguard ang session history gamit ang **kasalukuyang model**, na
 nag-iinvoke ng mga provider API kapag tumatakbo ito.
 
 Tingnan ang [Session management + compaction](/reference/session-management-compaction).
 
-### 8) Model scan / probe
+### 8. Model scan / probe
 
 Maaaring i-probe ng `openclaw models scan` ang mga OpenRouter model at gumagamit ng `OPENROUTER_API_KEY` kapag
 naka-enable ang probing.
 
 Tingnan ang [Models CLI](/cli/models).
 
-### 9) Talk (speech)
+### 9. Talk (speech)
 
 Maaaring i-invoke ng Talk mode ang **ElevenLabs** kapag naka-configure:
 
@@ -137,9 +130,9 @@ Maaaring i-invoke ng Talk mode ang **ElevenLabs** kapag naka-configure:
 
 Tingnan ang [Talk mode](/nodes/talk).
 
-### 10) Skills (third-party APIs)
+### 10. Skills (third-party APIs)
 
-Maaaring mag-store ang Skills ng `apiKey` sa `skills.entries.<name>.apiKey`. Kung ginagamit ng isang skill ang key na iyon para sa mga external
-API, maaari itong magdulot ng mga gastos ayon sa provider ng skill.
+Skills can store `apiKey` in `skills.entries.<name>.apiKey`. If a skill uses that key for external
+APIs, it can incur costs according to the skill’s provider.
 
 Tingnan ang [Skills](/tools/skills).

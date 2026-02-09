@@ -3,20 +3,13 @@ summary: "Standard OpenClaw-agentinstruktioner og Skills-oversigt til opsætning
 read_when:
   - Start af en ny OpenClaw-agent-session
   - Aktivering eller revision af standard-Skills
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:46Z
 ---
 
 # AGENTS.md — OpenClaw Personlig Assistent (standard)
 
 ## Første kørsel (anbefalet)
 
-OpenClaw bruger et dedikeret arbejdsområdemappe for agenten. Standard: `~/.openclaw/workspace` (kan konfigureres via `agents.defaults.workspace`).
+OpenClaw bruger en dedikeret arbejdsområde mappe til agent. Standard: `~/.openclaw/workspace` (konfigurerbar via `agents.defaults.workspace`).
 
 1. Opret arbejdsområdet (hvis det ikke allerede findes):
 
@@ -59,7 +52,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## Sjæl (påkrævet)
 
-- `SOUL.md` definerer identitet, tone og grænser. Hold den opdateret.
+- `SOUL.md` definerer identitet, tone og grænser. Behold den nuværende.
 - Hvis du ændrer `SOUL.md`, så informer brugeren.
 - Du er en frisk instans i hver session; kontinuitet ligger i disse filer.
 
@@ -108,7 +101,7 @@ git commit -m "Add Clawd workspace"
 - **eightctl** — Styr din søvn fra terminalen.
 - **imsg** — Send, læs og stream iMessage & SMS.
 - **wacli** — WhatsApp CLI: synkronisér, søg, send.
-- **discord** — Discord-handlinger: reagér, stickers, afstemninger. Brug `user:<id>` eller `channel:<id>`-mål (rene numeriske id’er er tvetydige).
+- **discord** — Discord handlinger: reagerer, klistermærker, afstemninger. Brug `user:<id>` eller `kanal:<id>` mål (bare numeriske id'er er tvetydige).
 - **gog** — Google Suite CLI: Gmail, Kalender, Drive, Kontakter.
 - **spotify-player** — Terminalbaseret Spotify-klient til søgning/kø/afspilningskontrol.
 - **sag** — ElevenLabs-tale med mac-lignende say-UX; streamer som standard til højttalere.
@@ -124,7 +117,7 @@ git commit -m "Add Clawd workspace"
 - Foretræk `openclaw` CLI til scripting; mac-appen håndterer tilladelser.
 - Kør installationer fra fanen Skills; den skjuler knappen, hvis en binær allerede er til stede.
 - Hold heartbeats aktiveret, så assistenten kan planlægge påmindelser, overvåge indbakker og udløse kamerafangster.
-- Canvas-UI kører i fuld skærm med native overlays. Undgå at placere kritiske kontroller i øverste venstre/øverste højre/nederste kanter; tilføj eksplicitte margener i layoutet og stol ikke på safe-area insets.
+- Lærred UI kører i fuld skærm med indfødte overlejringer. Undgå at placere kritiske kontroller i top-venstre/top-højre/nederste kanter; tilføj eksplicitte tagrender i layoutet og ikke stole på et sikkert område-indsæt.
 - Til browserbaseret verifikation: brug `openclaw browser` (faner/status/skærmbillede) med den OpenClaw-administrerede Chrome-profil.
 - Til DOM-inspektion: brug `openclaw browser eval|query|dom|snapshot` (og `--json`/`--out` når du har brug for maskinoutput).
 - Til interaktioner: brug `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (klik/indtastning kræver snapshot-referencer; brug `evaluate` til CSS-selektorer).

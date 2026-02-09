@@ -4,19 +4,12 @@ read_when:
   - Du vill välja en chattkanal för OpenClaw
   - Du behöver en snabb översikt över stödda meddelandeplattformar
 title: "Chattkanaler"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:21Z
 ---
 
 # Chattkanaler
 
-OpenClaw kan prata med dig i vilken chattapp du redan använder. Varje kanal ansluter via Gateway (nätverksgateway).
-Text stöds överallt; media och reaktioner varierar per kanal.
+OpenClaw kan prata med dig på vilken chatt som helst som du redan använder. Varje kanal ansluter via Gateway.
+Texten stöds överallt; media och reaktioner varierar beroende på kanal.
 
 ## Stödda kanaler
 
@@ -44,8 +37,8 @@ Text stöds överallt; media och reaktioner varierar per kanal.
 ## Noteringar
 
 - Kanaler kan köras samtidigt; konfigurera flera så dirigerar OpenClaw per chatt.
-- Snabbast att komma igång är oftast **Telegram** (enkel bottoken). WhatsApp kräver QR‑parning och
-  lagrar mer tillstånd på disk.
+- Snabbaste konfigurationen är vanligtvis **Telegram** (enkel bot token). WhatsApp kräver QR-parning och
+  lagrar mer tillstånd på disken.
 - Gruppbeteende varierar per kanal; se [Grupper](/channels/groups).
 - DM‑parning och tillåtelselistor tillämpas av säkerhetsskäl; se [Säkerhet](/gateway/security).
 - Telegram‑internals: [grammY‑noteringar](/channels/grammy).

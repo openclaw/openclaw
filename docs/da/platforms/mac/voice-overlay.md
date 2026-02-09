@@ -3,28 +3,21 @@ summary: "Livscyklus for voice overlay, når wake-word og push-to-talk overlappe
 read_when:
   - Justering af voice overlay-adfærd
 title: "Voice Overlay"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:36Z
 ---
 
 # Voice Overlay-livscyklus (macOS)
 
-Målgruppe: bidragydere til macOS-appen. Mål: holde voice overlay forudsigelig, når wake-word og push-to-talk overlapper.
+Publikum: macOS app-bidragsydere. Målsætning: Hold stemmen overlejret forudsigeligt, når du vågner ord og push-to-talk overlapper hinanden.
 
 ## Nuværende hensigt
 
-- Hvis overlayet allerede er synligt fra wake-word, og brugeren trykker på genvejstasten, _overtager_ hotkey-sessionen den eksisterende tekst i stedet for at nulstille den. Overlayet forbliver synligt, mens hotkeyen holdes nede. Når brugeren slipper: send, hvis der er trimmet tekst, ellers luk.
+- Hvis overlejringen allerede er synlig fra wake-word og brugeren trykker på genvejstasten, genvejstasten session _adopts_ den eksisterende tekst i stedet for at nulstille den. Overlayet forbliver op, mens genvejstasten holdes. Når brugeren udgiver: Send hvis der er beskåret tekst, ellers afvise.
 - Wake-word alene sender stadig automatisk ved stilhed; push-to-talk sender straks ved slip.
 
-## Implementeret (9. dec. 2025)
+## Gennemført (9. Dec., 2025)
 
-- Overlay-sessioner bærer nu et token pr. optagelse (wake-word eller push-to-talk). Partial/final/send/dismiss/level-opdateringer droppes, når token ikke matcher, hvilket undgår forældede callbacks.
-- Push-to-talk overtager enhver synlig overlay-tekst som et præfiks (så tryk på hotkeyen, mens wake-overlayet er oppe, bevarer teksten og tilføjer ny tale). Den venter op til 1,5 s på et endeligt transkript, før den falder tilbage til den aktuelle tekst.
+- Overlay sessioner nu bære en token per capture (wake-word eller push-to-talk). Dele/endelig/send/afvis/niveau opdateringer tabes, når token ikke matcher, undgå forsinke tilbagekald.
+- Push-to-talk vedtager enhver synlig overlay tekst som et præfiks (så tryk på genvejstasten, mens den vågne overlay er oppe holder teksten og tilføjer ny tale). Den venter op til 1.5s for en endelig udskrift, før den falder tilbage til den aktuelle tekst.
 - Klokke-/overlay-logging udsendes ved `info` i kategorierne `voicewake.overlay`, `voicewake.ptt` og `voicewake.chime` (sessionsstart, partial, final, send, dismiss, klokkeårsag).
 
 ## Næste trin
@@ -56,6 +49,7 @@ Målgruppe: bidragydere til macOS-appen. Mål: holde voice overlay forudsigelig,
   ```
 
 - Bekræft, at der kun er ét aktivt session-token; forældede callbacks bør droppes af koordinatoren.
+
 - Sørg for, at slip af push-to-talk altid kalder `endCapture` med det aktive token; hvis teksten er tom, forvent `dismiss` uden klokke eller send.
 
 ## Migreringstrin (foreslået)

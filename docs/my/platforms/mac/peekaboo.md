@@ -5,19 +5,11 @@ read_when:
   - Swift Package Manager ဖြင့် Peekaboo ကို ပေါင်းစည်းခြင်း
   - PeekabooBridge ပရိုတိုကော/လမ်းကြောင်းများ ပြောင်းလဲခြင်း
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # Peekaboo Bridge (macOS UI အလိုအလျောက်လုပ်ဆောင်မှု)
 
-OpenClaw သည် **PeekabooBridge** ကို ဒေသခံ၊ ခွင့်ပြုချက်ကို သိရှိနားလည်ထားသော UI အလိုအလျောက်လုပ်ဆောင်မှု
-broker အဖြစ် ဟို့စ်တင်နိုင်ပါသည်။ ၎င်းဖြင့် `peekaboo` CLI သည် macOS အက်ပ်၏ TCC ခွင့်ပြုချက်များကို ပြန်လည်အသုံးချပြီး UI အလိုအလျောက်လုပ်ဆောင်မှုကို ထိန်းချုပ်နိုင်စေပါသည်။
+30. OpenClaw သည် **PeekabooBridge** ကို local၊ permission‑aware UI automation broker အဖြစ် host လုပ်နိုင်ပါသည်။ 31. ၎င်းကြောင့် `peekaboo` CLI သည် macOS app ၏ TCC permissions ကို ပြန်လည်အသုံးချပြီး UI automation ကို မောင်းနှင်နိုင်ပါသည်။
 
 ## ဒီအရာက ဘာလဲ (မဟုတ်တာက ဘာလဲ)
 
@@ -31,7 +23,7 @@ macOS အက်ပ်အတွင်း—
 
 - Settings → **Enable Peekaboo Bridge**
 
-ဖွင့်ထားသောအခါ OpenClaw သည် ဒေသခံ UNIX socket ဆာဗာကို စတင်ပါသည်။ ပိတ်ထားပါက ဟို့စ်ကို ရပ်တန့်ပြီး `peekaboo` သည် ရရှိနိုင်သည့် အခြား ဟို့စ်များသို့ ပြန်လည်အလိုအလျောက် ပြောင်းလဲသွားပါမည်။
+32. Enable လုပ်ထားပါက OpenClaw သည် local UNIX socket server တစ်ခုကို စတင်ပါသည်။ 33. Disable လုပ်ထားပါက host ကို ရပ်တန့်ပြီး `peekaboo` သည် ရရှိနိုင်သော အခြား host များကို fallback အဖြစ် အသုံးပြုပါသည်။
 
 ## Client ရှာဖွေတွေ့ရှိမှု အစီအစဉ်
 
@@ -41,7 +33,7 @@ Peekaboo client များသည် ပုံမှန်အားဖြင့
 2. Claude.app (တပ်ဆင်ထားပါက)
 3. OpenClaw.app (ပါးလွှာသော broker)
 
-ဘယ်ဟို့စ်ကို လက်ရှိအသုံးပြုနေသည်နှင့် မည်သည့် socket လမ်းကြောင်းကို အသုံးပြုနေသည်ကို ကြည့်ရန် `peekaboo bridge status --verbose` ကို အသုံးပြုပါ။ အောက်ပါအတိုင်း override လုပ်နိုင်ပါသည်—
+34) မည်သည့် host သည် active ဖြစ်နေသည်နှင့် မည်သည့် socket path ကို အသုံးပြုနေသည်ကို ကြည့်ရန် `peekaboo bridge status --verbose` ကို အသုံးပြုပါ။ 35. အောက်ပါအတိုင်း override လုပ်နိုင်ပါသည်:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -55,7 +47,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Snapshot အပြုအမူ (အလိုအလျောက်လုပ်ဆောင်မှု)
 
-Snapshot များကို မှတ်ဉာဏ်အတွင်း သိမ်းဆည်းထားပြီး အချိန်တိုအတွင်း အလိုအလျောက် သက်တမ်းကုန်ဆုံးပါသည်။ ပိုမိုကြာရှည်စွာ ထိန်းသိမ်းလိုပါက client မှ ပြန်လည် capture လုပ်ပါ။
+36. Snapshots များကို memory ထဲတွင် သိမ်းထားပြီး အချိန်တိုတောင်းအပြီး အလိုအလျောက် expire ဖြစ်ပါသည်။
+37. ပိုကြာရှည်စွာ သိမ်းထားလိုပါက client မှ ပြန်လည် capture လုပ်ပါ။
 
 ## Troubleshooting
 

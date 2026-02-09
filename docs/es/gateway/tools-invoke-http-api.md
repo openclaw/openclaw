@@ -4,13 +4,6 @@ read_when:
   - Llamar herramientas sin ejecutar un turno completo del agente
   - Crear automatizaciones que necesiten la aplicación de políticas de herramientas
 title: "API de Invocación de Herramientas"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:37Z
 ---
 
 # Invocación de Herramientas (HTTP)

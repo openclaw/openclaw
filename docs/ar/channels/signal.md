@@ -4,13 +4,6 @@ read_when:
   - إعداد دعم Signal
   - استكشاف أخطاء الإرسال/الاستقبال في Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:10Z
 ---
 
 # Signal (signal-cli)
@@ -51,7 +44,7 @@ x-i18n:
 
 افتراضيًا، يُسمح لـ Signal بكتابة تحديثات التهيئة المُحفَّزة بواسطة `/config set|unset` (يتطلب `commands.config: true`).
 
-عطّل ذلك باستخدام:
+للتعطيل:
 
 ```json5
 {
@@ -63,7 +56,7 @@ x-i18n:
 
 - يتصل Gateway **بجهاز Signal** (حساب `signal-cli`).
 - إذا شغّلت البوت على **حساب Signal الشخصي**، فسيتجاهل رسائلك أنت (حماية من الحلقة).
-- لسيناريو «أراسل البوت فيردّ»، استخدم **رقم بوت منفصل**.
+- من أجل "أنا أقوم بنص البوت و يجيب عليه"، استخدم **رقم بوت منفصل**.
 
 ## الإعداد (المسار السريع)
 
@@ -109,7 +102,7 @@ x-i18n:
 
 ## التحكم في الوصول (الرسائل الخاصة + المجموعات)
 
-الرسائل الخاصة (DMs):
+DMs:
 
 - الافتراضي: `channels.signal.dmPolicy = "pairing"`.
 - يتلقى المُرسِلون غير المعروفين رمز إقران؛ وتُتجاهل الرسائل حتى الموافقة (تنتهي الرموز بعد ساعة).
@@ -187,7 +180,7 @@ openclaw doctor
 openclaw channels status --probe
 ```
 
-ثم أكّد حالة إقران الرسائل الخاصة عند الحاجة:
+ثم قم بتأكيد حالة إقران DM إذا لزم الأمر:
 
 ```bash
 openclaw pairing list signal

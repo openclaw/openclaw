@@ -1,16 +1,9 @@
 ---
 summary: "Настройка бота Mattermost и конфигурация OpenClaw"
 read_when:
-  - "Настройка Mattermost"
-  - "Отладка маршрутизации Mattermost"
+  - Настройка Mattermost
+  - Отладка маршрутизации Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:11Z
 ---
 
 # Mattermost (плагин)
@@ -40,7 +33,7 @@ OpenClaw автоматически предложит путь локально
 
 Подробности: [Plugins](/tools/plugin)
 
-## Быстрый старт
+## Quick setup
 
 1. Установите плагин Mattermost.
 2. Создайте учётную запись бота Mattermost и скопируйте **токен бота**.

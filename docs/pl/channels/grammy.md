@@ -3,13 +3,6 @@ summary: "Integracja z Telegram Bot API za pośrednictwem grammY wraz z uwagami 
 read_when:
   - Praca nad ścieżkami Telegram lub grammY
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:50Z
 ---
 
 # Integracja grammY (Telegram Bot API)

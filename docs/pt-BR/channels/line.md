@@ -5,13 +5,6 @@ read_when:
   - Você precisa configurar webhook e credenciais do LINE
   - Você quer opções de mensagens específicas do LINE
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:58Z
 ---
 
 # LINE (plugin)

@@ -4,20 +4,13 @@ read_when:
   - Pag-debug ng model auth o pag-expire ng OAuth
   - Pagdodokumento ng authentication o pag-iimbak ng credential
 title: "Authentication"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Authentication
 
-Sinusuportahan ng OpenClaw ang OAuth at mga API key para sa mga provider ng modelo. Para sa mga Anthropic
-account, inirerekomenda naming gumamit ng **API key**. Para sa access sa Claude subscription,
-gamitin ang long‑lived token na nilikha ng `claude setup-token`.
+OpenClaw supports OAuth and API keys for model providers. For Anthropic
+accounts, we recommend using an **API key**. For Claude subscription access,
+use the long‑lived token created by `claude setup-token`.
 
 Tingnan ang [/concepts/oauth](/concepts/oauth) para sa kumpletong OAuth flow at layout ng storage.
 
@@ -57,8 +50,8 @@ Tingnan ang [Help](/help) para sa mga detalye tungkol sa env inheritance (`env.s
 
 ## Anthropic: setup-token (subscription auth)
 
-Para sa Anthropic, ang inirerekomendang ruta ay **API key**. Kung gumagamit ka ng Claude
-subscription, sinusuportahan din ang setup-token flow. Patakbuhin ito sa **gateway host**:
+For Anthropic, the recommended path is an **API key**. If you’re using a Claude
+subscription, the setup-token flow is also supported. Patakbuhin ang `openclaw models status` upang kumpirmahin kung aling profile ang mag-e-expire.
 
 ```bash
 claude setup-token
@@ -142,8 +135,7 @@ openclaw models status
 
 ### Token expiring/expired
 
-Patakbuhin ang `openclaw models status` upang kumpirmahin kung aling profile ang mag-e-expire. Kung nawawala ang profile,
-patakbuhin muli ang `claude setup-token` at i-paste muli ang token.
+Run `openclaw models status` to confirm which profile is expiring. Pinapatakbo ng OpenClaw ang mga shell command sa pamamagitan ng `exec` tool at pinananatili sa memorya ang mga long‑running task.
 
 ## Mga kinakailangan
 

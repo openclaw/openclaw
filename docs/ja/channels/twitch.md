@@ -3,18 +3,11 @@ summary: "Twitch チャットボットの設定とセットアップ"
 read_when:
   - OpenClaw 向けに Twitch チャット統合を設定する場合
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:07Z
 ---
 
 # Twitch（プラグイン）
 
-IRC 接続を介した Twitch チャットのサポートです。OpenClaw は Twitch ユーザー（ボットアカウント）として接続し、チャンネル内のメッセージを受信・送信します。
+IRC接続を介したTwitchチャットサポート。 IRC 接続を介した Twitch チャットのサポートです。OpenClaw は Twitch ユーザー（ボットアカウント）として接続し、チャンネル内のメッセージを受信・送信します。
 
 ## 必要なプラグイン
 
@@ -48,7 +41,7 @@ openclaw plugins install ./extensions/twitch
    - 両方が設定されている場合は、config が優先されます（env のフォールバックはデフォルトアカウントのみ）。
 5. ゲートウェイを起動します。
 
-**⚠️ 重要：** 不正なユーザーがボットをトリガーするのを防ぐため、アクセス制御（`allowFrom` または `allowedRoles`）を追加してください。 `requireMention` のデフォルトは `true` です。
+**⚠️ 重要：** 不正なユーザーがボットをトリガーするのを防ぐため、アクセス制御（`allowFrom` または `allowedRoles`）を追加してください。 `requireMention` のデフォルトは `true` です。 `requireMention` のデフォルトは `true` です。
 
 最小構成：
 
@@ -84,7 +77,7 @@ openclaw plugins install ./extensions/twitch
 - スコープ `chat:read` と `chat:write` が選択されていることを確認します
 - **Client ID** と **Access Token** をコピーします
 
-手動でのアプリ登録は不要です。トークンは数時間後に期限切れになります。
+手動アプリの登録は必要ありません。 トークンは数時間後に失効します。
 
 ### ボットの設定
 
@@ -124,11 +117,11 @@ env と config の両方が設定されている場合、config が優先され�
 }
 ```
 
-厳格な許可リストには `allowFrom` を推奨します。ロールベースのアクセスにしたい場合は、代わりに `allowedRoles` を使用します。
+ハード許容リストに `allowFrom` を設定します。 厳格な許可リストには `allowFrom` を推奨します。ロールベースのアクセスにしたい場合は、代わりに `allowedRoles` を使用します。
 
 **利用可能なロール：** `"moderator"`、`"owner"`、`"vip"`、`"subscriber"`、`"all"`。
 
-**なぜユーザー ID なのか？** ユーザー名は変更可能で、なりすましが発生する可能性があります。ユーザー ID は恒久的です。
+**なぜユーザー ID なのか？** ユーザー名は変更可能で、なりすましが発生する可能性があります。ユーザー ID は恒久的です。 ユーザー ID は永久です。
 
 Twitch のユーザー ID を確認します： [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/)（Twitch のユーザー名を ID に変換）
 
@@ -153,7 +146,7 @@ Twitch のユーザー ID を確認します： [https://www.streamweasels.com/t
 
 ## マルチアカウント対応
 
-アカウントごとのトークンで `channels.twitch.accounts` を使用します。共有パターンについては [`gateway/configuration`](/gateway/configuration) を参照してください。
+アカウントごとのトークンで `channels.twitch.accounts` を使用します。 共有パターンについては [`gateway/configuration`](/gateway/configuration) を参照してください。
 
 例（1 つのボットアカウントを 2 つのチャンネルで使用）：
 
@@ -218,6 +211,7 @@ Twitch のユーザー ID を確認します： [https://www.streamweasels.com/t
 
 ### ロールベースのアクセス（代替）
 
+`allowFrom` はハード許容リストです。 設定されている場合、それらのユーザー ID のみが許可されます。
 `allowFrom` は厳格な許可リストです。設定されている場合、指定されたユーザー ID のみが許可されます。
 ロールベースのアクセスを使用する場合は、`allowFrom` を未設定のままにし、代わりに `allowedRoles` を設定してください：
 
@@ -237,7 +231,7 @@ Twitch のユーザー ID を確認します： [https://www.streamweasels.com/t
 
 ### @mention 要件を無効化
 
-デフォルトでは、`requireMention` は `true` です。無効化してすべてのメッセージに応答する場合：
+デフォルトでは、`requireMention` は `true` です。無効化してすべてのメッセージに応答する場合： すべてのメッセージを無効にして返信するには:
 
 ```json5
 {

@@ -4,13 +4,6 @@ read_when:
   - Anket desteği eklerken veya değiştirirken
   - CLI veya gateway üzerinden anket gönderimlerini hata ayıklarken
 title: "Anketler"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:48Z
 ---
 
 # Anketler

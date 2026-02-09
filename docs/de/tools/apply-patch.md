@@ -1,16 +1,9 @@
 ---
-summary: „Mehrdatei-Patches mit dem Werkzeug apply_patch anwenden“
+summary: "„Mehrdatei-Patches mit dem Werkzeug apply_patch anwenden“"
 read_when:
   - Sie benötigen strukturierte Dateibearbeitungen über mehrere Dateien hinweg
   - Sie möchten patchbasierte Bearbeitungen dokumentieren oder debuggen
-title: „apply_patch-Werkzeug“
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:26Z
+title: "„apply_patch-Werkzeug“"
 ---
 
 # apply_patch-Werkzeug

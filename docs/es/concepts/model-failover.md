@@ -4,13 +4,6 @@ read_when:
   - Diagnosticar la rotación de perfiles de autenticación, los cooldowns o el comportamiento de fallback de modelos
   - Actualizar reglas de failover para perfiles de autenticación o modelos
 title: "Failover de modelos"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:12Z
 ---
 
 # Failover de modelos

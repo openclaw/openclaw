@@ -1,16 +1,9 @@
 ---
-summary: „Modellauthentifizierung: OAuth, API-Schlüssel und Setup-Token“
+summary: "„Modellauthentifizierung: OAuth, API-Schlüssel und Setup-Token“"
 read_when:
   - Debugging der Modellauthentifizierung oder des OAuth-Ablaufs
   - Dokumentation der Authentifizierung oder der Speicherung von Anmeldedaten
-title: „Authentifizierung“
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:10Z
+title: "„Authentifizierung“"
 ---
 
 # Authentifizierung
@@ -103,7 +96,7 @@ openclaw models status
 openclaw doctor
 ```
 
-## Steuern, welche Anmeldedaten verwendet werden
+## Legt fest, welche Anmeldeinformationen verwendet werden
 
 ### Pro Sitzung (Chat‑Befehl)
 

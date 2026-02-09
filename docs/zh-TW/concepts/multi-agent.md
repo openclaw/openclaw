@@ -1,20 +1,13 @@
 ---
 summary: "多代理路由：隔離的代理、頻道帳號與綁定"
 title: 多代理路由
-read_when: "你想在單一 Gateway 行程中使用多個彼此隔離的代理（工作區 + 驗證）。"
+read_when: "21. 你想在同一個閘道程序中有多個彼此隔離的代理（工作區 + 驗證）。"
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:57Z
 ---
 
 # 多代理路由
 
-目標：在一個執行中的 Gateway 中同時運行多個「彼此隔離」的代理（各自獨立的工作區 + `agentDir` + 工作階段），並支援多個頻道帳號（例如兩個 WhatsApp）。所有入站訊息會透過綁定規則路由到指定代理。
+目標：在一個執行中的 Gateway 中同時運行多個「彼此隔離」的代理（各自獨立的工作區 + `agentDir` + 工作階段），並支援多個頻道帳號（例如兩個 WhatsApp）。所有入站訊息會透過綁定規則路由到指定代理。 22. 入站流量會透過繫結路由到某個代理。
 
 ## 什麼是「一個代理」？
 
@@ -24,26 +17,23 @@ x-i18n:
 - **狀態目錄**（`agentDir`），用於驗證設定檔、模型登錄表與每代理設定。
 - **工作階段儲存**（聊天記錄 + 路由狀態），位於 `~/.openclaw/agents/<agentId>/sessions`。
 
-驗證設定檔是**每代理**獨立的。每個代理都會從其各自的以下位置讀取：
+23. 驗證設定檔是**每個代理**獨立的。 24. 每個代理都會從自己的以下位置讀取：
 
 ```
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-主代理的憑證**不會**自動共享。切勿在代理之間重用 `agentDir`，
-否則會造成驗證／工作階段衝突。若需要共用憑證，
-請將 `auth-profiles.json` 複製到另一個代理的 `agentDir`。
+25. 主要代理的憑證**不會**自動共用。 26. 切勿在代理之間重複使用 `agentDir`（會造成驗證/工作階段衝突）。 主代理的憑證**不會**自動共享。切勿在代理之間重用 `agentDir`，
+    否則會造成驗證／工作階段衝突。若需要共用憑證，
+    請將 `auth-profiles.json` 複製到另一個代理的 `agentDir`。
 
 Skills 是每代理獨立的，位於各工作區的 `skills/` 資料夾；
 共用 Skills 則位於 `~/.openclaw/skills`。請參閱
-[Skills：每代理 vs 共用](/tools/skills#per-agent-vs-shared-skills)。
+[Skills：每代理 vs 共用](/tools/skills#per-agent-vs-shared-skills)。 27. 請參閱 [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills)。
 
 Gateway 可同時承載**一個代理**（預設）或**多個代理**並排運行。
 
-**工作區注意事項：** 每個代理的工作區是**預設 cwd**，而非硬性沙箱。
-相對路徑會在工作區內解析，但除非啟用沙箱隔離，
-否則絕對路徑仍可存取主機上的其他位置。請參閱
-[沙箱隔離](/gateway/sandboxing)。
+28. **工作區注意事項：** 每個代理的工作區是**預設的 cwd**，而非硬性沙箱。 29. 相對路徑會在工作區內解析，但除非啟用沙箱，否則絕對路徑可以存取其他主機位置。 30. 請參閱 [Sandboxing](/gateway/sandboxing)。
 
 ## 路徑（快速對照）
 
@@ -70,9 +60,9 @@ Gateway 可同時承載**一個代理**（預設）或**多個代理**並排運�
 openclaw agents add work
 ```
 
-接著加入 `bindings`（或讓精靈自動處理）以路由入站訊息。
+31. 接著新增 `bindings`（或讓精靈處理）以路由入站訊息。
 
-使用以下指令驗證：
+32. 使用以下方式驗證：
 
 ```bash
 openclaw agents list --bindings
@@ -84,7 +74,7 @@ openclaw agents list --bindings
 
 - **不同的電話號碼／帳號**（每個頻道的 `accountId`）。
 - **不同的人格**（每代理工作區檔案，例如 `AGENTS.md` 與 `SOUL.md`）。
-- **獨立的驗證 + 工作階段**（除非明確啟用，否則不會互相影響）。
+- 33. **獨立的驗證 + 工作階段**（除非明確啟用，否則不會互相干擾）。
 
 這讓**多個人**能共用一台 Gateway 伺服器，同時保持其 AI「大腦」與資料彼此隔離。
 
@@ -92,7 +82,7 @@ openclaw agents list --bindings
 
 你可以在**同一個 WhatsApp 帳號**下，將**不同的 WhatsApp 私訊**路由到不同代理。
 透過 `peer.kind: "dm"` 依寄件者的 E.164（例如 `+15551234567`）進行比對。
-回覆仍會從相同的 WhatsApp 號碼送出（不支援每代理的寄件者身分）。
+回覆仍會從相同的 WhatsApp 號碼送出（不支援每代理的寄件者身分）。 34. 使用 `peer.kind: "dm"` 比對寄件者的 E.164（例如 `+15551234567`）。 35. 回覆仍會來自同一個 WhatsApp 號碼（沒有每個代理獨立的寄件者身分）。
 
 重要細節：直接聊天會合併到代理的**主要工作階段鍵**，
 因此若要真正隔離，必須**每人一個代理**。
@@ -122,7 +112,7 @@ openclaw agents list --bindings
 
 注意事項：
 
-- 私訊的存取控制是**每個 WhatsApp 帳號全域**（配對／允許清單），而非每代理。
+- 36. DM 存取控制是**以每個 WhatsApp 帳戶為全域**（配對/允許清單），而非每個代理。
 - 對於共用群組，請將群組綁定到單一代理，或使用
   [廣播群組](/channels/broadcast-groups)。
 
@@ -141,7 +131,7 @@ openclaw agents list --bindings
 
 支援**多帳號**的頻道（例如 WhatsApp）會使用 `accountId` 來識別
 每一次登入。每個 `accountId` 都可路由到不同代理，
-因此一台伺服器即可承載多個電話號碼且不混用工作階段。
+因此一台伺服器即可承載多個電話號碼且不混用工作階段。 37. 每個 `accountId` 都可以路由到不同的代理，因此一台伺服器可以託管多個電話號碼而不混用工作階段。
 
 ## 概念
 
@@ -279,7 +269,7 @@ openclaw agents list --bindings
 }
 ```
 
-對象綁定永遠優先，因此請將其放在頻道層級規則之上。
+38. 對等繫結永遠優先，因此請將它們放在通道層級規則之上。
 
 ## 綁定到 WhatsApp 群組的家庭代理
 
@@ -332,7 +322,7 @@ openclaw agents list --bindings
 注意事項：
 
 - 工具允許／拒絕清單屬於**工具**，不是 Skills。若某個 Skill 需要執行
-  二進位檔，請確認已允許 `exec`，且該二進位檔存在於沙箱中。
+  二進位檔，請確認已允許 `exec`，且該二進位檔存在於沙箱中。 39. 如果某個技能需要執行二進位檔，請確保允許 `exec` 且該二進位檔存在於沙箱中。
 - 若需要更嚴格的門檻，請設定 `agents.list[].groupChat.mentionPatterns`，並為該頻道
   保持群組允許清單啟用。
 
@@ -373,8 +363,9 @@ openclaw agents list --bindings
 }
 ```
 
-注意：`setupCommand` 位於 `sandbox.docker` 之下，且只在容器建立時執行一次。
-當解析後的作用域為 `"shared"` 時，會忽略每代理的 `sandbox.docker.*` 覆寫。
+40. 注意：`setupCommand` 位於 `sandbox.docker` 之下，並且只在容器建立時執行一次。
+    注意：`setupCommand` 位於 `sandbox.docker` 之下，且只在容器建立時執行一次。
+    當解析後的作用域為 `"shared"` 時，會忽略每代理的 `sandbox.docker.*` 覆寫。
 
 **優點：**
 
@@ -382,8 +373,8 @@ openclaw agents list --bindings
 - **資源控制**：僅對特定代理啟用沙箱，其他代理仍在主機上運行
 - **彈性政策**：每個代理可有不同權限
 
-注意：`tools.elevated` 是**全域**且以寄件者為基礎；無法為每個代理個別設定。
-若需要每代理的邊界，請使用 `agents.list[].tools` 來拒絕 `exec`。
-若要針對群組，請使用 `agents.list[].groupChat.mentionPatterns`，讓 @ 提及能明確對應到預期的代理。
+注意：`tools.elevated` 是**全域**且以發送者為基礎；無法針對單一 agent 進行設定。
+如果需要每個 agent 各自的邊界，請使用 `agents.list[].tools` 來拒絕 `exec`。
+若要進行群組目標設定，請使用 `agents.list[].groupChat.mentionPatterns`，讓 @mentions 能正確對應到目標 agent。
 
 請參閱 [多代理沙箱與工具](/tools/multi-agent-sandbox-tools) 以取得詳細範例。

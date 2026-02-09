@@ -4,19 +4,12 @@ read_when:
   - Du vill använda Synthetic som modellleverantör
   - Du behöver en Synthetic API-nyckel eller bas-URL-konfiguration
 title: "Synthetic"
-x-i18n:
-  source_path: providers/synthetic.md
-  source_hash: f3f6e3eb86466175
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:16Z
 ---
 
 # Synthetic
 
-Synthetic exponerar Anthropic-kompatibla slutpunkter. OpenClaw registrerar det som
-`synthetic`-leverantören och använder Anthropic Messages API.
+Syntetiska exponerar Anthropic-kompatibla slutpunkter. OpenClaw registrerar det som
+`synthetic`-leverantören och använder API:et för antropiska meddelanden.
 
 ## Snabbstart
 
@@ -68,8 +61,8 @@ synthetic/hf:MiniMaxAI/MiniMax-M2.1
 }
 ```
 
-Obs: OpenClaws Anthropic-klient lägger till `/v1` till bas-URL:en, så använd
-`https://api.synthetic.new/anthropic` (inte `/anthropic/v1`). Om Synthetic ändrar
+Obs: OpenClaws Antropiska klient lägger till `/v1` till bas-URL, så använd
+`https://api.synthetic.new/anthropic` (inte `/anthropic/v1`). Om Syntetiska ändrar
 sin bas-URL, åsidosätt `models.providers.synthetic.baseUrl`.
 
 ## Modellkatalog

@@ -3,13 +3,6 @@ summary: "OpenClaw သည် မည်သည့် OS မဆိုတွင် �
 read_when:
   - OpenClaw ကို အသစ်စတင်သူများအား မိတ်ဆက်သည့်အခါ
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:43Z
 ---
 
 # OpenClaw 🦞
@@ -29,11 +22,10 @@ x-i18n:
     />
 </p>
 
-> _"EXFOLIATE! EXFOLIATE!"_ — အာကာသ လော့ဘစတာ တစ်ကောင်က ပြောခဲ့သလိုပဲ ဖြစ်နိုင်ပါတယ်
+> _"EXFOLIATE! EXFOLIATE!"_ — အာကာသ လော့ဘ်စတာ တစ်ကောင် ဖြစ်နိုင်ပါတယ်
 
-<p align="center">
-  <strong>WhatsApp၊ Telegram၊ Discord၊ iMessage စသည်တို့အတွက် AI အေးဂျင့်များကို ချိတ်ဆက်ပေးသော မည်သည့် OS မဆို Gateway ဖြစ်သည်။</strong><br />
-  မက်ဆေ့ချ်တစ်စောင် ပို့လိုက်ရုံဖြင့် သင့်အိတ်ထဲကနေ AI အေးဂျင့်တုံ့ပြန်မှုကို ချက်ချင်း ရယူနိုင်ပါတယ်။ Plugins များဖြင့် Mattermost နှင့် အခြားအရာများကို ထပ်မံထည့်သွင်းနိုင်ပါသည်။
+<p align="center"><strong>WhatsApp, Telegram, Discord, iMessage နှင့် အခြားများအတွက် AI agents များကို ချိတ်ဆက်ပေးသော Any OS gateway.</strong><br />
+  စာတိုတစ်စောင် ပို့လိုက်ပါ၊ သင့်အိတ်ထဲမှ agent တုံ့ပြန်ချက်ကို ရယူပါ။ Plugins များသည် Mattermost နှင့် အခြားများကို ထပ်မံထည့်သွင်းပေးပါသည်။
 </p>
 
 <Columns>
@@ -50,7 +42,7 @@ x-i18n:
 
 ## OpenClaw ဆိုတာဘာလဲ?
 
-OpenClaw သည် **self-hosted gateway** တစ်ခုဖြစ်ပြီး သင်ကြိုက်နှစ်သက်သော ချတ်အက်ပ်များ — WhatsApp၊ Telegram၊ Discord၊ iMessage စသည်တို့ကို Pi ကဲ့သို့သော AI coding agents များနှင့် ချိတ်ဆက်ပေးပါသည်။ သင်၏ ကိုယ်ပိုင်စက် (သို့မဟုတ် server) ပေါ်တွင် Gateway process တစ်ခုတည်းကို လည်ပတ်စေခြင်းဖြင့် မက်ဆေ့ချ်အက်ပ်များနှင့် အမြဲအသင့်ရှိသော AI အကူအညီပေးသူကြားတွင် တံတားတစ်ခုအဖြစ် လုပ်ဆောင်ပေးပါသည်။
+OpenClaw သည် **self-hosted gateway** တစ်ခုဖြစ်ပြီး သင်ကြိုက်နှစ်သက်သော chat app များ — WhatsApp, Telegram, Discord, iMessage နှင့် အခြားများ — ကို Pi ကဲ့သို့သော AI coding agents များနှင့် ချိတ်ဆက်ပေးပါသည်။ သင်၏ ကိုယ်ပိုင်စက် (သို့မဟုတ် server) ပေါ်တွင် Gateway process တစ်ခုတည်းကို chạy လုပ်ရုံဖြင့်၊ သင့် messaging apps များနှင့် အမြဲအသင့်ရှိသော AI assistant အကြား တံတားအဖြစ် လုပ်ဆောင်ပေးပါသည်။
 
 **ဘယ်သူတွေအတွက်လဲ?** မည်သည့်နေရာမှမဆို မက်ဆေ့ချ်ပို့၍ အသုံးပြုနိုင်သော ကိုယ်ပိုင် AI အကူအညီပေးသူကို လိုလားပြီး၊ ကိုယ်ပိုင်ဒေတာကို ထိန်းချုပ်ထားလိုသူများ၊ hosted service များကို မမှီခိုလိုသူများဖြစ်သော developer များနှင့် power user များအတွက် ဖြစ်ပါသည်။
 
@@ -121,7 +113,7 @@ Gateway သည် ဆက်ရှင်များ၊ routing နှင့် �
   </Step>
 </Steps>
 
-အပြည့်အစုံ install နှင့် dev setup ကို လိုအပ်ပါသလား? [Quick start](/start/quickstart) ကို ကြည့်ပါ။
+အပြည့်အစုံ install နှင့် dev setup လိုအပ်ပါသလား? [Quick start](/start/quickstart) ကို ကြည့်ပါ။
 
 ## Dashboard
 

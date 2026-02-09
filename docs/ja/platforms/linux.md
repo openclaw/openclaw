@@ -2,23 +2,16 @@
 summary: "Linux のサポートおよびコンパニオンアプリの状況"
 read_when:
   - Linux のコンパニオンアプリの状況を確認したい場合
-  - プラットフォームの対応範囲やコントリビューションを計画している場合
+  - Planning platform coverage or contribution
 title: "Linux アプリ"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:29Z
 ---
 
 # Linux アプリ
 
-Gateway（ゲートウェイ）は Linux で完全にサポートされています。**Node が推奨ランタイム**です。  
-Bun は Gateway では推奨されません（WhatsApp / Telegram の不具合があります）。
+ゲートウェイは Linux で完全にサポートされています。 **Node は推奨されるランタイムです**
+Bun はゲートウェイ(WhatsApp/Telegramのバグ)には推奨されません。
 
-ネイティブの Linux 向けコンパニオンアプリは計画中です。構築を手伝っていただける場合は、コントリビューションを歓迎します。
+ネイティブの Linux 向けコンパニオンアプリは計画中です。構築を手伝っていただける場合は、コントリビューションを歓迎します。 あなたが1を構築するのを助けたい場合は、貢献を歓迎します。
 
 ## 初心者向けクイックパス（VPS）
 
@@ -71,7 +64,9 @@ openclaw doctor
 
 ## システム制御（systemd ユーザーユニット）
 
-OpenClaw は、デフォルトで systemd の **ユーザー** サービスをインストールします。共有または常時稼働のサーバーでは **システム** サービスを使用してください。完全なユニット例とガイダンスは [Gateway ランブック](/gateway) にあります。
+OpenClaw は、デフォルトで systemd の **ユーザー** サービスをインストールします。共有または常時稼働のサーバーでは **システム** サービスを使用してください。完全なユニット例とガイダンスは [Gateway ランブック](/gateway) にあります。 **system**
+サービスを共有または常時オンサーバーに使用します。 完全なユニットの例とガイダンス
+は[Gateway runbook](/gateway)にあります。
 
 最小構成:
 

@@ -4,20 +4,16 @@ read_when:
   - 新しいマシンをセットアップするとき
   - 個人のセットアップを壊さずに「最新 + 最良」を使いたいとき
 title: "セットアップ"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:22Z
 ---
 
 # セットアップ
 
 <Note>
+12. 初めてセットアップする場合は、[Getting Started](/start/getting-started) から始めてください。
+
 初めてセットアップする場合は、[Getting Started](/start/getting-started) から始めてください。
 ウィザードの詳細は、[Onboarding Wizard](/start/wizard) を参照してください。
+
 </Note>
 
 最終更新日: 2026-01-01
@@ -41,7 +37,7 @@ x-i18n:
 - **設定:** `~/.openclaw/openclaw.json`（JSON/JSON5 風）
 - **ワークスペース:** `~/.openclaw/workspace`（Skills、プロンプト、メモリ。プライベートな git リポジトリにします）
 
-一度だけブートストラップします。
+ブートストラップ:
 
 ```bash
 openclaw setup
@@ -96,7 +92,7 @@ macOS アプリも最先端にしたい場合:
 ./scripts/restart-mac.sh
 ```
 
-### 1) 開発用 Gateway を起動
+### 1. 開発用 Gateway を起動
 
 ```bash
 pnpm install
@@ -105,14 +101,14 @@ pnpm gateway:watch
 
 `gateway:watch` は、Gateway をウォッチモードで実行し、TypeScript の変更時に再読み込みします。
 
-### 2) macOS アプリを実行中の Gateway に向ける
+### 2. macOS アプリを実行中の Gateway に向ける
 
 **OpenClaw.app** で:
 
 - 接続モード: **Local**
   アプリは、設定されたポートで実行中の Gateway に接続します。
 
-### 3) 確認
+### 3. 確認
 
 - アプリ内の Gateway ステータスが **「Using existing gateway …」** と表示されること。
 - もしくは CLI で確認します。
@@ -121,7 +117,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### よくある落とし穴
+### 一般的なフットガン
 
 - **ポート違い:** Gateway の WS のデフォルトは `ws://127.0.0.1:18789` です。アプリと CLI を同じポートに揃えてください。
 - **状態の保存先:**
@@ -149,13 +145,15 @@ openclaw health
 
 ## Linux（systemd ユーザーサービス）
 
-Linux のインストールでは systemd の **ユーザー** サービスを使用します。既定では、systemd はログアウト／アイドル時にユーザーサービスを停止するため、Gateway が終了します。オンボーディングは、あなたのために lingering を有効化しようとします（sudo を求められる場合があります）。それでも無効な場合は、次を実行してください。
+Linux installsはsystemd **user** サービスを使用します。 デフォルトでは、systemd はログアウト/アイドル時にユーザー
+サービスを停止し、ゲートウェイを停止します。
+を長引かせるためのオンボーディングを試みます (sudoのプロンプトが表示される場合があります)。 それがまだオフの場合は、次を実行してください。
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-常時稼働やマルチユーザーのサーバーでは、ユーザーサービスではなく **システム** サービスの使用を検討してください（lingering は不要）。systemd に関する注意点は、[Gateway runbook](/gateway) を参照してください。
+常時稼働やマルチユーザーのサーバーでは、ユーザーサービスではなく **システム** サービスの使用を検討してください（lingering は不要）。systemd に関する注意点は、[Gateway runbook](/gateway) を参照してください。 13. systemd に関する注意事項については、[Gateway runbook](/gateway) を参照してください。
 
 ## 関連ドキュメント
 

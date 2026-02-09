@@ -3,30 +3,23 @@ summary: "Quy tắc quản lý phiên, khóa và tính bền vững cho các cu�
 read_when:
   - Sửa đổi cách xử lý hoặc lưu trữ phiên
 title: "Quản lý phiên"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:02Z
 ---
 
 # Quản lý phiên
 
-OpenClaw coi **một phiên chat trực tiếp cho mỗi tác tử** là chính. Chat trực tiếp được gộp về `agent:<agentId>:<mainKey>` (mặc định `main`), trong khi chat nhóm/kênh có các khóa riêng. `session.mainKey` được tuân thủ.
+47. OpenClaw coi **một phiên chat trực tiếp cho mỗi agent** là chính. 48. Chat trực tiếp được gộp thành `agent:<agentId>:<mainKey>` (mặc định `main`), trong khi chat nhóm/kênh có khóa riêng. 49. `session.mainKey` được tôn trọng.
 
 Dùng `session.dmScope` để kiểm soát cách **tin nhắn trực tiếp (DM)** được nhóm lại:
 
 - `main` (mặc định): tất cả DM chia sẻ phiên chính để đảm bảo tính liên tục.
 - `per-peer`: tách theo id người gửi trên các kênh.
 - `per-channel-peer`: tách theo kênh + người gửi (khuyến nghị cho hộp thư nhiều người dùng).
-- `per-account-channel-peer`: tách theo tài khoản + kênh + người gửi (khuyến nghị cho hộp thư nhiều tài khoản).
-  Dùng `session.identityLinks` để ánh xạ peer id có tiền tố nhà cung cấp sang một danh tính chuẩn, để cùng một người dùng chung một phiên DM trên nhiều kênh khi dùng `per-peer`, `per-channel-peer` hoặc `per-account-channel-peer`.
+- 50. `per-account-channel-peer`: cô lập theo tài khoản + kênh + người gửi (khuyến nghị cho hộp thư đến đa tài khoản).
+      Use `session.identityLinks` to map provider-prefixed peer ids to a canonical identity so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
 
 ## Chế độ DM an toàn (khuyến nghị cho thiết lập nhiều người dùng)
 
-> **Cảnh báo bảo mật:** Nếu tác tử của bạn có thể nhận DM từ **nhiều người**, bạn nên cân nhắc mạnh mẽ việc bật chế độ DM an toàn. Nếu không, tất cả người dùng sẽ chia sẻ cùng một ngữ cảnh hội thoại, có thể làm lộ thông tin riêng tư giữa các người dùng.
+> **Security Warning:** If your agent can receive DMs from **multiple people**, you should strongly consider enabling secure DM mode. Without it, all users share the same conversation context, which can leak private information between users.
 
 **Ví dụ về vấn đề với thiết lập mặc định:**
 
@@ -55,38 +48,38 @@ Dùng `session.dmScope` để kiểm soát cách **tin nhắn trực tiếp (DM)
 
 Ghi chú:
 
-- Mặc định là `dmScope: "main"` để đảm bảo tính liên tục (tất cả DM chia sẻ phiên chính). Điều này phù hợp cho thiết lập một người dùng.
+- Mặc định là `dmScope: "main"` để đảm bảo tính liên tục (tất cả DM dùng chung phiên chính). This is fine for single-user setups.
 - Với hộp thư nhiều tài khoản trên cùng một kênh, ưu tiên `per-account-channel-peer`.
 - Nếu cùng một người liên hệ bạn trên nhiều kênh, dùng `session.identityLinks` để gộp các phiên DM của họ thành một danh tính chuẩn.
 - Bạn có thể kiểm tra thiết lập DM bằng `openclaw security audit` (xem [security](/cli/security)).
 
 ## Gateway là nguồn sự thật
 
-Toàn bộ trạng thái phiên được **sở hữu bởi gateway** (OpenClaw “chủ”). Các UI client (ứng dụng macOS, WebChat, v.v.) phải truy vấn gateway để lấy danh sách phiên và số token thay vì đọc tệp cục bộ.
+All session state is **owned by the gateway** (the “master” OpenClaw). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
 
 - Ở **chế độ từ xa**, kho phiên mà bạn quan tâm nằm trên máy chủ gateway từ xa, không phải trên máy Mac của bạn.
-- Số token hiển thị trong UI đến từ các trường lưu trữ của gateway (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Client không phân tích transcript JSONL để “sửa” tổng số.
+- Token counts shown in UIs come from the gateway’s store fields (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). Clients do not parse JSONL transcripts to “fix up” totals.
 
 ## Trạng thái được lưu ở đâu
 
 - Trên **máy chủ gateway**:
   - Tệp lưu trữ: `~/.openclaw/agents/<agentId>/sessions/sessions.json` (theo từng tác tử).
 - Transcript: `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl` (phiên chủ đề Telegram dùng `.../<SessionId>-topic-<threadId>.jsonl`).
-- Kho là một ánh xạ `sessionKey -> { sessionId, updatedAt, ... }`. Xóa các mục là an toàn; chúng sẽ được tạo lại khi cần.
+- Store là một map `sessionKey -> { sessionId, updatedAt, ...` }\`. Xóa các mục là an toàn; chúng sẽ được tạo lại khi cần.
 - Các mục nhóm có thể bao gồm `displayName`, `channel`, `subject`, `room` và `space` để gắn nhãn phiên trong UI.
 - Mục phiên bao gồm metadata `origin` (nhãn + gợi ý định tuyến) để UI có thể giải thích nguồn gốc phiên.
 - OpenClaw **không** đọc các thư mục phiên Pi/Tau cũ.
 
 ## Cắt tỉa phiên
 
-Theo mặc định, OpenClaw cắt bỏ **kết quả công cụ cũ** khỏi ngữ cảnh trong bộ nhớ ngay trước khi gọi LLM.
-Việc này **không** ghi lại lịch sử JSONL. Xem [/concepts/session-pruning](/concepts/session-pruning).
+OpenClaw trims **old tool results** from the in-memory context right before LLM calls by default.
+This does **not** rewrite JSONL history. Xem [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Xả bộ nhớ trước khi nén
 
-Khi một phiên sắp đến ngưỡng tự động nén, OpenClaw có thể chạy một **lần xả bộ nhớ im lặng**
-để nhắc mô hình ghi các ghi chú bền vững ra đĩa. Điều này chỉ chạy khi
-workspace có thể ghi. Xem [Memory](/concepts/memory) và
+When a session nears auto-compaction, OpenClaw can run a **silent memory flush**
+turn that reminds the model to write durable notes to disk. This only runs when
+the workspace is writable. See [Memory](/concepts/memory) and
 [Compaction](/concepts/compaction).
 
 ## Ánh xạ transport → khóa phiên
@@ -110,12 +103,12 @@ workspace có thể ghi. Xem [Memory](/concepts/memory) và
 ## Vòng đời
 
 - Chính sách đặt lại: phiên được tái sử dụng cho đến khi hết hạn, và việc hết hạn được đánh giá ở tin nhắn vào tiếp theo.
-- Đặt lại hằng ngày: mặc định **4:00 sáng theo giờ địa phương trên máy chủ gateway**. Một phiên được coi là cũ nếu lần cập nhật cuối sớm hơn thời điểm đặt lại hằng ngày gần nhất.
-- Đặt lại khi nhàn rỗi (tùy chọn): `idleMinutes` thêm một cửa sổ nhàn rỗi trượt. Khi cả đặt lại hằng ngày và nhàn rỗi đều được cấu hình, **điều kiện hết hạn trước** sẽ buộc tạo phiên mới.
+- Daily reset: defaults to **4:00 AM local time on the gateway host**. A session is stale once its last update is earlier than the most recent daily reset time.
+- Đặt lại khi nhàn rỗi (tùy chọn): `idleMinutes` thêm một cửa sổ nhàn rỗi trượt. Khi cả đặt lại theo ngày và theo nhàn rỗi đều được cấu hình, **cái nào hết hạn trước** sẽ buộc tạo phiên mới.
 - Chỉ nhàn rỗi (cũ): nếu bạn đặt `session.idleMinutes` mà không có bất kỳ cấu hình `session.reset`/`resetByType` nào, OpenClaw sẽ ở chế độ chỉ nhàn rỗi để tương thích ngược.
 - Ghi đè theo loại (tùy chọn): `resetByType` cho phép ghi đè chính sách cho các phiên `dm`, `group` và `thread` (thread = thread Slack/Discord, chủ đề Telegram, thread Matrix khi connector cung cấp).
 - Ghi đè theo kênh (tùy chọn): `resetByChannel` ghi đè chính sách đặt lại cho một kênh (áp dụng cho mọi loại phiên của kênh đó và ưu tiên hơn `reset`/`resetByType`).
-- Trình kích hoạt đặt lại: chính xác `/new` hoặc `/reset` (cộng với bất kỳ phần bổ sung nào trong `resetTriggers`) sẽ bắt đầu một id phiên mới và chuyển phần còn lại của thông điệp đi tiếp. `/new <model>` chấp nhận bí danh mô hình, `provider/model` hoặc tên nhà cung cấp (khớp mờ) để đặt mô hình cho phiên mới. Nếu `/new` hoặc `/reset` được gửi riêng lẻ, OpenClaw sẽ chạy một lượt chào “hello” ngắn để xác nhận việc đặt lại.
+- Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. `/new <model>` accepts a model alias, `provider/model`, or provider name (fuzzy match) to set the new session model. Nếu gửi `/new` hoặc `/reset` riêng lẻ, OpenClaw sẽ chạy một lượt chào ngắn “hello” để xác nhận việc đặt lại.
 - Đặt lại thủ công: xóa các khóa cụ thể khỏi kho hoặc xóa transcript JSONL; tin nhắn tiếp theo sẽ tạo lại chúng.
 - Cron job cô lập luôn tạo một `sessionId` mới cho mỗi lần chạy (không tái sử dụng khi nhàn rỗi).
 
@@ -185,7 +178,7 @@ Ghi đè lúc chạy (chỉ chủ sở hữu):
 - Gửi `/status` như một thông điệp độc lập trong chat để xem tác tử có thể truy cập hay không, bao nhiêu ngữ cảnh phiên đang được dùng, các bật/tắt suy nghĩ/verbose hiện tại, và thời điểm thông tin xác thực WhatsApp web của bạn được làm mới lần cuối (giúp phát hiện nhu cầu liên kết lại).
 - Gửi `/context list` hoặc `/context detail` để xem nội dung trong system prompt và các tệp workspace được chèn (và các nguồn đóng góp ngữ cảnh lớn nhất).
 - Gửi `/stop` như một thông điệp độc lập để hủy lần chạy hiện tại, xóa các followup đang xếp hàng cho phiên đó, và dừng mọi lần chạy tác tử con được tạo từ đó (phản hồi bao gồm số lượng đã dừng).
-- Gửi `/compact` (hướng dẫn tùy chọn) như một thông điệp độc lập để tóm tắt ngữ cảnh cũ hơn và giải phóng không gian cửa sổ. Xem [/concepts/compaction](/concepts/compaction).
+- Send `/compact` (optional instructions) as a standalone message to summarize older context and free up window space. Xem [/concepts/compaction](/concepts/compaction).
 - Transcript JSONL có thể được mở trực tiếp để xem toàn bộ lượt.
 
 ## Mẹo
@@ -201,11 +194,11 @@ Mỗi mục phiên ghi lại nơi nó đến từ đâu (theo mức tốt nhất
 - `provider`: id kênh đã chuẩn hóa (bao gồm các phần mở rộng)
 - `from`/`to`: id định tuyến thô từ phong bì vào
 - `accountId`: id tài khoản nhà cung cấp (khi nhiều tài khoản)
-- `threadId`: id thread/chủ đề khi kênh hỗ trợ
-  Các trường nguồn gốc được điền cho tin nhắn trực tiếp, kênh và nhóm. Nếu một
-  connector chỉ cập nhật định tuyến gửi (ví dụ, để giữ phiên chính DM luôn mới),
-  nó vẫn nên cung cấp ngữ cảnh vào để phiên giữ được metadata giải thích của nó.
-  Các extension có thể làm điều này bằng cách gửi `ConversationLabel`,
-  `GroupSubject`, `GroupChannel`, `GroupSpace` và `SenderName` trong ngữ cảnh vào
-  và gọi `recordSessionMetaFromInbound` (hoặc truyền cùng ngữ cảnh
+- `threadId`: id của luồng/chủ đề khi kênh hỗ trợ
+  Các trường origin được điền cho tin nhắn trực tiếp, kênh và nhóm. If a
+  connector only updates delivery routing (for example, to keep a DM main session
+  fresh), it should still provide inbound context so the session keeps its
+  explainer metadata. Các extension có thể làm điều này bằng cách gửi `ConversationLabel`,
+  `GroupSubject`, `GroupChannel`, `GroupSpace` và `SenderName` trong ngữ cảnh
+  inbound và gọi `recordSessionMetaFromInbound` (hoặc truyền cùng ngữ cảnh đó
   cho `updateLastRoute`).

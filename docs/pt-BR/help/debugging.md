@@ -5,13 +5,6 @@ read_when:
   - Voce quer executar o Gateway em modo de observação enquanto itera
   - Voce precisa de um fluxo de trabalho de depuração reproduzível
 title: "Depuração"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:06Z
 ---
 
 # Depuração
@@ -19,7 +12,7 @@ x-i18n:
 Esta página cobre auxiliares de depuração para saída em streaming, especialmente quando um
 provedor mistura raciocínio no texto normal.
 
-## Substituições de depuração em tempo de execução
+## Runtime de depuração substitui
 
 Use `/debug` no chat para definir substituições de configuração **apenas em tempo de execução** (memória, não disco).
 `/debug` vem desativado por padrão; habilite com `commands.debug: true`.
@@ -129,7 +122,7 @@ Substituição opcional de caminho:
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Variáveis de ambiente equivalentes:
+Env equivalente variares:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

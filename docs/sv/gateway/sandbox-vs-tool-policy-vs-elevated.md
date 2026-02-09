@@ -3,13 +3,6 @@ title: Sandbox vs verktygspolicy vs förhöjd
 summary: "Varför ett verktyg blockeras: sandbox‑runtime, verktygstillåt/nek‑policy och grindar för förhöjd exec"
 read_when: "Du hamnar i ”sandbox jail” eller ser ett verktygs-/förhöjningsavslag och vill veta exakt vilken konfigurationsnyckel som ska ändras."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:32Z
 ---
 
 # Sandbox vs verktygspolicy vs förhöjd
@@ -71,8 +64,8 @@ Tumregler:
 - `deny` vinner alltid.
 - Om `allow` inte är tom behandlas allt annat som blockerat.
 - Verktygspolicyn är den hårda stoppunkten: `/exec` kan inte åsidosätta ett nekat `exec`‑verktyg.
-- `/exec` ändrar bara sessionsstandarder för behöriga avsändare; den ger inte verktygsåtkomst.
-  Leverantörsnycklar för verktyg accepterar antingen `provider` (t.ex. `google-antigravity`) eller `provider/model` (t.ex. `openai/gpt-5.2`).
+- `/exec` ändrar bara sessionsstandard för auktoriserade avsändare; det ger inte verktygsåtkomst.
+  Verktygsnycklar för leverantörer accepterar antingen `provider` (t.ex. `google-antigravity`) eller `provider/model` (t.ex. `openai/gpt-5.2`).
 
 ### Verktygsgrupper (förkortningar)
 
@@ -110,12 +103,12 @@ Förhöjd ger **inte** extra verktyg; den påverkar endast `exec`.
 - Använd `/elevated full` för att hoppa över exec‑godkännanden för sessionen.
 - Om du redan kör direkt är förhöjd i praktiken en no‑op (fortfarande grindstyrd).
 - Förhöjd är **inte** skill‑omfattad och åsidosätter **inte** tillåt/nek för verktyg.
-- `/exec` är separat från förhöjd. Den justerar endast exec‑standarder per session för behöriga avsändare.
+- `/exec` är separat från förhöjd. Det justerar bara per-session exec standardvärden för auktoriserade avsändare.
 
 Grindar:
 
 - Aktivering: `tools.elevated.enabled` (och valfritt `agents.list[].tools.elevated.enabled`)
-- Tillåtelselistor för avsändare: `tools.elevated.allowFrom.<provider>` (och valfritt `agents.list[].tools.elevated.allowFrom.<provider>`)
+- Avsändare tillåter: `tools.elevated.allowFrom.<provider>` (och valfritt `agents.list[].tools.elevated.allowFrom.<provider>`)
 
 Se [Elevated Mode](/tools/elevated).
 
@@ -132,4 +125,4 @@ Se [Elevated Mode](/tools/elevated).
 
 ### ”Jag trodde detta var main, varför är det sandboxat?”
 
-I läget `"non-main"` är grupp-/kanalnycklar _inte_ main. Använd main‑sessionsnyckeln (visas av `sandbox explain`) eller byt läge till `"off"`.
+I `"non-main"` läge, grupp/kanal nycklar är _inte_ huvud. Använd huvudsessionsnyckeln (visas av `sandbox förklaring`) eller växla läge till `"off"`.

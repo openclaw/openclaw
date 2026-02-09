@@ -1,16 +1,9 @@
 ---
-summary: „Clawnet-Refactor: Vereinheitlichung von Netzwerkprotokoll, Rollen, Authentifizierung, Genehmigungen und Identität“
+summary: "„Clawnet-Refactor: Vereinheitlichung von Netzwerkprotokoll, Rollen, Authentifizierung, Genehmigungen und Identität“"
 read_when:
   - Planung eines einheitlichen Netzwerkprotokolls für Nodes und Operator-Clients
   - Überarbeitung von Genehmigungen, Pairing, TLS und Presence über Geräte hinweg
-title: „Clawnet-Refactor“
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:36Z
+title: "„Clawnet-Refactor“"
 ---
 
 # Clawnet-Refactor (Vereinheitlichung von Protokoll + Authentifizierung)
@@ -39,7 +32,7 @@ Ein einzelnes, stringentes Dokument für:
 - Minimale Code-Duplizierung.
 - Eine einzelne Maschine soll nur einmal erscheinen (keine UI/Node-Doppeleinträge).
 
-## Nicht-Ziele (explizit)
+## Keine Ziele (explizit)
 
 - Trennung von Fähigkeiten entfernen (Least-Privilege bleibt erforderlich).
 - Die vollständige Gateway-Control-Plane ohne Scope-Prüfungen exponieren.
@@ -51,7 +44,7 @@ Ein einzelnes, stringentes Dokument für:
 
 ## Zwei Protokolle
 
-### 1) Gateway WebSocket (Control Plane)
+### 1. Gateway WebSocket (Control Plane)
 
 - Vollständige API-Oberfläche: Konfiguration, Kanäle, Modelle, Sitzungen, Agent-Runs, Logs, Nodes usw.
 - Standard-Bind: Loopback. Remote-Zugriff via SSH/Tailscale.
@@ -62,7 +55,7 @@ Ein einzelnes, stringentes Dokument für:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (Node-Transport)
+### 2. Bridge (Node-Transport)
 
 - Enge Allowlist-Oberfläche, Node-Identität + Pairing.
 - JSONL über TCP; optional TLS + Zertifikats-Fingerprint-Pinning.
@@ -115,7 +108,7 @@ Ein einzelnes, stringentes Dokument für:
 
 ---
 
-# Vorgeschlagener Zielzustand (Clawnet)
+# Neuer Zustand (Clawnet)
 
 ## Ein Protokoll, zwei Rollen
 
@@ -226,7 +219,7 @@ Aktuelle TLS-Runtime + Fingerprint-Pinning nutzen:
 
 Genehmigung erfolgt auf dem Node-Host (Mac-App-Node-Runtime). Der Prompt erscheint dort, wo der Node läuft.
 
-## Vorgeschlagen
+## Geplant
 
 Genehmigung ist **Gateway-gehostet**, UI wird an Operator-Clients ausgeliefert.
 
@@ -354,7 +347,7 @@ Gleiche `deviceId` über Rollen hinweg → eine einzelne „Instanz“-Zeile:
 - TLS + Pinning reduziert MITM-Risiken für Mobilgeräte.
 - Stille Genehmigung via SSH ist Komfort; weiterhin protokolliert + widerrufbar.
 - Discovery ist niemals ein Trust Anchor.
-- Fähigkeits-Claims werden serverseitig gegen plattformspezifische Allowlists verifiziert.
+- Leistungsansprüche werden mit Serverzulisten nach Plattform/Typ verifiziert.
 
 # Streaming + große Payloads (Node-Medien)
 
@@ -374,8 +367,8 @@ Vor der Implementierung eine Option wählen, um Drift zu vermeiden.
 
 # Fähigkeits- + Befehlsrichtlinie
 
-- Von Nodes gemeldete Fähigkeiten/Befehle gelten als **Claims**.
-- Das Gateway erzwingt plattformspezifische Allowlists.
+- Knoten - gemeldete Caps/Commands werden als **claims** behandelt.
+- Gateway erzwingt die erlaubten Listen auf Plattformen.
 - Jeder neue Befehl erfordert Operator-Genehmigung oder eine explizite Allowlist-Änderung.
 - Änderungen mit Zeitstempeln auditieren.
 

@@ -5,18 +5,11 @@ read_when:
   - การเพิ่มการควบคุมเอเจนต์สำหรับเวิร์กสเปซแบบภาพ
   - การดีบักการโหลดCanvasด้วย WKWebView
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:26Z
 ---
 
 # Canvas (แอปmacOS)
 
-แอปmacOS ฝัง **แผงCanvas** ที่ควบคุมโดยเอเจนต์โดยใช้ `WKWebView` โดยเป็นเวิร์กสเปซแบบภาพน้ำหนักเบาสำหรับ HTML/CSS/JS, A2UI และพื้นผิว UI แบบโต้ตอบขนาดเล็ก
+แอปmacOS ฝัง **แผงCanvas** ที่ควบคุมโดยเอเจนต์โดยใช้ `WKWebView` โดยเป็นเวิร์กสเปซแบบภาพน้ำหนักเบาสำหรับ HTML/CSS/JS, A2UI และพื้นผิว UI แบบโต้ตอบขนาดเล็ก มันเป็นพื้นที่ทำงานเชิงภาพน้ำหนักเบาสำหรับ HTML/CSS/JS, A2UI และพื้นผิว UI แบบโต้ตอบขนาดเล็ก
 
 ## Canvas อยู่ที่ไหน
 
@@ -43,7 +36,7 @@ x-i18n:
 - รีโหลดอัตโนมัติเมื่อไฟล์Canvasในเครื่องมีการเปลี่ยนแปลง
 - แสดงแผงCanvasได้เพียงหนึ่งแผงในเวลาเดียว (สลับเซสชันตามความจำเป็น)
 
-สามารถปิดCanvasได้จาก การตั้งค่า → **Allow Canvas** เมื่อปิดใช้งาน คำสั่งโหนดของCanvas จะส่งกลับ `CANVAS_DISABLED`.
+สามารถปิดCanvasได้จาก การตั้งค่า → **Allow Canvas** เมื่อปิดใช้งาน คำสั่งโหนดของCanvas จะส่งกลับ `CANVAS_DISABLED`. เมื่อปิดใช้งาน คำสั่งโหนดของ canvas จะคืนค่า `CANVAS_DISABLED`
 
 ## พื้นผิว API ของเอเจนต์
 
@@ -70,6 +63,7 @@ openclaw nodes canvas snapshot --node <id>
 
 ## A2UI ใน Canvas
 
+A2UI ถูกโฮสต์โดยโฮสต์ canvas ของ Gateway และเรนเดอร์ภายในแผง Canvas
 A2UI ถูกโฮสต์โดยโฮสต์CanvasของGateway และเรนเดอร์ภายในแผงCanvas เมื่อGateway โฆษณาโฮสต์Canvas แอปmacOS จะนำทางไปยังหน้าโฮสต์ A2UI โดยอัตโนมัติเมื่อเปิดครั้งแรก
 
 URL โฮสต์ A2UI ค่าเริ่มต้น:
@@ -100,7 +94,7 @@ EOFA2
 openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
-ทดสอบอย่างรวดเร็ว:
+การตรวจสอบด่วน:
 
 ```bash
 openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"

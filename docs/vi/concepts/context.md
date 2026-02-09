@@ -5,18 +5,11 @@ read_when:
   - Bạn đang gỡ lỗi vì sao mô hình “biết” điều gì đó (hoặc quên nó)
   - Bạn muốn giảm chi phí ngữ cảnh (/context, /status, /compact)
 title: "Ngữ cảnh"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:42Z
 ---
 
 # Ngữ cảnh
 
-“Context” là **mọi thứ OpenClaw gửi cho mô hình trong một lần chạy**. Nó bị giới hạn bởi **cửa sổ ngữ cảnh** (giới hạn token) của mô hình.
+Nó bị ràng buộc bởi **cửa sổ ngữ cảnh** của mô hình (giới hạn token). `/status` → xem nhanh “cửa sổ của tôi đang đầy tới mức nào?” + cài đặt phiên.
 
 Mô hình tư duy cho người mới bắt đầu:
 
@@ -28,7 +21,7 @@ Ngữ cảnh _không giống_ “bộ nhớ”: bộ nhớ có thể được l�
 
 ## Khởi động nhanh (kiểm tra ngữ cảnh)
 
-- `/status` → xem nhanh “cửa sổ của tôi đầy đến mức nào?” + cài đặt phiên.
+- `/status` → quick “how full is my window?” view + session settings.
 - `/context list` → những gì được chèn + kích thước ước tính (theo từng tệp + tổng).
 - `/context detail` → phân tích sâu hơn: kích thước theo từng tệp, theo từng schema công cụ, theo từng mục skill, và kích thước system prompt.
 - `/usage tokens` → thêm chân trang mức sử dụng theo từng phản hồi vào các câu trả lời bình thường.
@@ -96,7 +89,7 @@ Mọi thứ mà mô hình nhận được đều được tính, bao gồm:
 
 ## Cách OpenClaw xây dựng system prompt
 
-System prompt **thuộc sở hữu của OpenClaw** và được xây dựng lại mỗi lần chạy. Nó bao gồm:
+Nó bao gồm: It includes:
 
 - Danh sách công cụ + mô tả ngắn.
 - Danh sách Skills (chỉ metadata; xem bên dưới).
@@ -119,26 +112,26 @@ Theo mặc định, OpenClaw chèn một tập tệp workspace cố định (n�
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (chỉ lần chạy đầu tiên)
 
-Các tệp lớn được cắt bớt theo từng tệp bằng `agents.defaults.bootstrapMaxChars` (mặc định `20000` ký tự). `/context` hiển thị kích thước **thô so với được chèn** và liệu có xảy ra cắt bớt hay không.
+Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). 1. `/context` hiển thị kích thước **raw vs injected** và liệu có xảy ra cắt bớt hay không.
 
 ## Skills: những gì được chèn vs tải theo nhu cầu
 
-System prompt bao gồm một **danh sách skills** gọn (tên + mô tả + vị trí). Danh sách này có chi phí thực sự.
+2. System prompt bao gồm một **danh sách kỹ năng** gọn nhẹ (tên + mô tả + vị trí). 3. Danh sách này có chi phí overhead thực sự.
 
-Hướng dẫn của skill _không_ được bao gồm theo mặc định. Mô hình được kỳ vọng sẽ `read` `SKILL.md` của skill **chỉ khi cần**.
+4. Hướng dẫn kỹ năng _không_ được bao gồm theo mặc định. 5. Mô hình được kỳ vọng sẽ `đọc` `SKILL.md` của kỹ năng **chỉ khi cần**.
 
 ## Công cụ: có hai loại chi phí
 
 Công cụ ảnh hưởng đến ngữ cảnh theo hai cách:
 
 1. **Văn bản danh sách công cụ** trong system prompt (những gì bạn thấy là “Tooling”).
-2. **Schema công cụ** (JSON). Chúng được gửi cho mô hình để có thể gọi công cụ. Chúng được tính vào ngữ cảnh ngay cả khi bạn không thấy chúng dưới dạng văn bản thuần.
+2. **Tool schemas** (JSON). 6. Những thứ này được gửi tới mô hình để nó có thể gọi công cụ. 7. Chúng được tính vào context ngay cả khi bạn không thấy chúng dưới dạng văn bản thuần.
 
 `/context detail` phân tích các schema công cụ lớn nhất để bạn thấy yếu tố nào chiếm ưu thế.
 
 ## Lệnh, chỉ thị và “phím tắt nội tuyến”
 
-Slash commands được xử lý bởi Gateway. Có một vài hành vi khác nhau:
+Slash commands are handled by the Gateway. 8. Có một vài hành vi khác nhau:
 
 - **Lệnh độc lập**: một tin nhắn chỉ chứa `/...` sẽ chạy như một lệnh.
 - **Chỉ thị**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` được loại bỏ trước khi mô hình nhìn thấy tin nhắn.

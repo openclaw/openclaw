@@ -3,13 +3,6 @@ summary: "Runbook for Gateway-tjenesten, livscyklus og drift"
 read_when:
   - Når du kører eller fejlsøger gateway-processen
 title: "Gateway Runbook"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:50Z
 ---
 
 # Gateway service runbook
@@ -19,7 +12,7 @@ Sidst opdateret: 2025-12-09
 ## Hvad det er
 
 - Den altid-kørende proces, der ejer den enkelte Baileys/Telegram-forbindelse samt kontrol-/event-planen.
-- Erstatter den gamle `gateway`-kommando. CLI-indgangspunkt: `openclaw gateway`.
+- Erstatter arven `gateway` kommando. CLI indgangspunkt: »openclaw gateway«.
 - Kører indtil den stoppes; afslutter med ikke-nul ved fatale fejl, så supervisoren genstarter den.
 
 ## Sådan køres den (lokalt)
@@ -39,17 +32,17 @@ pnpm gateway:watch
   - Hot reload bruger in-process genstart via **SIGUSR1** når nødvendigt.
   - Deaktiver med `gateway.reload.mode="off"`.
 - Binder WebSocket-kontrolplanet til `127.0.0.1:<port>` (standard 18789).
-- Samme port serverer også HTTP (kontrol-UI, hooks, A2UI). Enkeltports-multiplex.
+- Den samme port serverer også HTTP (kontrol UI, hooks, A2UI). Enkeltport multiplex.
   - OpenAI Chat Completions (HTTP): [`/v1/chat/completions`](/gateway/openai-http-api).
   - OpenResponses (HTTP): [`/v1/responses`](/gateway/openresponses-http-api).
   - Tools Invoke (HTTP): [`/tools/invoke`](/gateway/tools-invoke-http-api).
-- Starter som standard en Canvas-filserver på `canvasHost.port` (standard `18793`), som serverer `http://<gateway-host>:18793/__openclaw__/canvas/` fra `~/.openclaw/workspace/canvas`. Deaktiver med `canvasHost.enabled=false` eller `OPENCLAW_SKIP_CANVAS_HOST=1`.
+- Starter en lærred filserver som standard på `canvasHost.port` (standard `18793`), betjener `http://<gateway-host>:18793/__openclaw__/canvas/` fra `~/.openclaw/workspace/canvas`. Deaktivér med `canvasHost.enabled=false` eller `OPENCLAW_SKIP_CANVAS_HOST=1`.
 - Logger til stdout; brug launchd/systemd til at holde den kørende og rotere logs.
 - Giv `--verbose` for at spejle debug-logging (handshakes, req/res, events) fra logfilen til stdio ved fejlsøgning.
 - `--force` bruger `lsof` til at finde lyttere på den valgte port, sender SIGTERM, logger hvad der blev dræbt, og starter derefter gatewayen (fejler hurtigt hvis `lsof` mangler).
 - Hvis du kører under en supervisor (launchd/systemd/mac app child-process-tilstand), sender et stop/genstart typisk **SIGTERM**; ældre builds kan vise dette som `pnpm` `ELIFECYCLE` exitkode **143** (SIGTERM), hvilket er en normal nedlukning, ikke et crash.
 - **SIGUSR1** udløser en in-process genstart, når autoriseret (gateway-værktøj/konfig anvend/opdater, eller aktiver `commands.restart` for manuelle genstarter).
-- Gateway-autentificering er som standard påkrævet: sæt `gateway.auth.token` (eller `OPENCLAW_GATEWAY_TOKEN`) eller `gateway.auth.password`. Klienter skal sende `connect.params.auth.token/password`, medmindre de bruger Tailscale Serve-identitet.
+- Gateway auth kræves som standard: sæt `gateway.auth.token` (eller `OPENCLAW_GATEWAY_TOKEN`) eller `gateway.auth.password`. Kunderne skal sende `connect.params.auth.token/password` medmindre du bruger Tailscale Serve identitet.
 - Opsætningsguiden genererer nu som standard et token, selv på loopback.
 - Port-prioritet: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > standard `18789`.
 
@@ -62,17 +55,18 @@ pnpm gateway:watch
   ```
 
 - Klienter forbinder derefter til `ws://127.0.0.1:18789` gennem tunnelen.
+
 - Hvis et token er konfigureret, skal klienter inkludere det i `connect.params.auth.token`, selv over tunnelen.
 
 ## Flere gateways (samme vært)
 
-Som regel unødvendigt: én Gateway kan betjene flere beskedkanaler og agenter. Brug kun flere Gateways for redundans eller streng isolation (fx redningsbot).
+Normalt unødvendigt: en Gateway kan tjene flere messaging kanaler og agenter. Brug flere Gateways kun for redundans eller streng isolation (ex: rescue bot).
 
-Understøttes, hvis du isolerer state + konfiguration og bruger unikke porte. Fuld guide: [Multiple gateways](/gateway/multiple-gateways).
+Understøttet hvis du isolere stat + config og bruge unikke porte. Fuld guide: [Flere gateways](/gateway/multiple-gateways).
 
 Tjenestenavne er profilbevidste:
 
-- macOS: `bot.molt.<profile>` (legacy `com.openclaw.*` kan stadig eksistere)
+- macOS: `bot.molt.<profile>` (arv `com.openclaw.*` kan stadig eksistere)
 - Linux: `openclaw-gateway-<profile>.service`
 - Windows: `OpenClaw Gateway (<profile>)`
 
@@ -82,7 +76,7 @@ Installationsmetadata er indlejret i servicekonfigurationen:
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-Rescue-Bot-mønster: behold en anden Gateway isoleret med sin egen profil, state-dir, workspace og base-portafstand. Fuld guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
+Rescue-Bot Mønster: holde en anden Gateway isoleret med sin egen profil, state dir, arbejdsområde og base port afstand. Fuld guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### Dev-profil (`--dev`)
 
@@ -110,7 +104,7 @@ Afledte porte (tommelfingerregler):
 - Base-port = `gateway.port` (eller `OPENCLAW_GATEWAY_PORT` / `--port`)
 - browser control service port = base + 2 (kun loopback)
 - `canvasHost.port = base + 4` (eller `OPENCLAW_CANVAS_HOST_PORT` / konfig-override)
-- Browser-profil CDP-porte allokeres automatisk fra `browser.controlPort + 9 .. + 108` (persistens pr. profil).
+- Browser profil CDP porte auto-allokere fra `browser.controlPort + 9 .. + 108` (persisted per profil).
 
 Tjekliste pr. instans:
 
@@ -137,12 +131,12 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 ## Protokol (operatørvisning)
 
 - Fuld dokumentation: [Gateway protocol](/gateway/protocol) og [Bridge protocol (legacy)](/gateway/bridge-protocol).
-- Obligatorisk første frame fra klienten: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
+- Obligatorisk første ramme fra klient: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
 - Gateway svarer med `res {type:"res", id, ok:true, payload:hello-ok }` (eller `ok:false` med en fejl, hvorefter den lukker).
 - Efter handshake:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
-- Strukturerede presence-poster: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (for WS-klienter kommer `instanceId` fra `connect.client.instanceId`).
+- Strukturerede tilstedeværelse indgange: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, årsag?, tags?[], instanceId? }` (for WS klienter, `instanceId` kommer fra `connect.client.instanceId`).
 - `agent`-svar er to-trins: først `res` ack `{runId,status:"accepted"}`, derefter et endeligt `res` `{runId,status:"ok"|"error",summary}`, når kørslen er færdig; streamet output ankommer som `event:"agent"`.
 
 ## Metoder (initialt sæt)
@@ -165,7 +159,7 @@ Se også: [Presence](/concepts/presence) for hvordan presence produceres/af-dubl
 - `agent` — streamede tool-/output-events fra agentkørslen (sekvens-tagget).
 - `presence` — presence-opdateringer (deltaer med stateVersion) skubbet til alle forbundne klienter.
 - `tick` — periodisk keepalive/no-op for at bekræfte livstegn.
-- `shutdown` — Gateway er ved at lukke; payload inkluderer `reason` og valgfri `restartExpectedMs`. Klienter bør genforbinde.
+- `nedlukning` — Gateway afslutter; nyttelasten omfatter `årsag` og valgfri `restartExpectedMs`. Klienter skal oprette forbindelse igen.
 
 ## WebChat-integration
 
@@ -188,7 +182,7 @@ Se også: [Presence](/concepts/presence) for hvordan presence produceres/af-dubl
 
 ## Fejlkoder (res.error-form)
 
-- Fejl bruger `{ code, message, details?, retryable?, retryAfterMs? }`.
+- Fejl bruger `{ kode, besked, detaljer?, prøver igen?, gentryAfterMs? }`.
 - Standardkoder:
   - `NOT_LINKED` — WhatsApp er ikke autentificeret.
   - `AGENT_TIMEOUT` — agenten svarede ikke inden for den konfigurerede deadline.
@@ -202,7 +196,7 @@ Se også: [Presence](/concepts/presence) for hvordan presence produceres/af-dubl
 
 ## Replay / huller
 
-- Events genafspilles ikke. Klienter detekterer sekvenshuller og bør opdatere (`health` + `system-presence`) før de fortsætter. WebChat- og macOS-klienter auto-opdaterer nu ved hul.
+- Begivenheder afspilles ikke igen. Kunderne opdager seq huller og bør opdatere (`sundhed` + `system-tilstedeværelse`), før du fortsætter. WebChat og macOS klienter opdaterer nu automatisk på mellemrum.
 
 ## Supervision (macOS-eksempel)
 
@@ -214,7 +208,7 @@ Se også: [Presence](/concepts/presence) for hvordan presence produceres/af-dubl
 - Ved fejl genstarter launchd; fatal fejlkonfiguration bør fortsætte med at afslutte, så operatøren opdager det.
 - LaunchAgents er pr. bruger og kræver en logget-ind session; for headless-opsætninger brug en brugerdefineret LaunchDaemon (medfølger ikke).
   - `openclaw gateway install` skriver `~/Library/LaunchAgents/bot.molt.gateway.plist`
-    (eller `bot.molt.<profile>.plist`; legacy `com.openclaw.*` ryddes op).
+    (eller `bot.molt.<profile>.plist`; arven `com.openclaw.*` bliver renset).
   - `openclaw doctor` auditerer LaunchAgent-konfigurationen og kan opdatere den til de aktuelle standarder.
 
 ## Gateway service management (CLI)
@@ -239,29 +233,29 @@ Noter:
 - `gateway status` udskriver konfigsti + sondemål for at undgå “localhost vs LAN bind”-forvirring og profil-mismatch.
 - `gateway status` inkluderer den sidste gateway-fejllinje, når tjenesten ser kørende ud, men porten er lukket.
 - `logs` tailer Gateway-fil-loggen via RPC (ingen manuel `tail`/`grep` nødvendig).
-- Hvis andre gateway-lignende tjenester registreres, advarer CLI’en, medmindre de er OpenClaw-profil-tjenester.
-  Vi anbefaler stadig **én gateway pr. maskine** for de fleste opsætninger; brug isolerede profiler/porte for redundans eller en redningsbot. Se [Multiple gateways](/gateway/multiple-gateways).
+- Hvis andre gateway-lignende tjenester er opdaget, CLI advarer medmindre de er OpenClaw profil tjenester.
+  Vi anbefaler stadig **one gateway per machine** for de fleste opsætninger; bruge isolerede profiler/porte til redundans eller en redningsbåd. Se [Flere gateways](/gateway/multiple-gateways).
   - Oprydning: `openclaw gateway uninstall` (aktuel tjeneste) og `openclaw doctor` (legacy-migreringer).
 - `gateway install` er en no-op, når den allerede er installeret; brug `openclaw gateway install --force` til at geninstallere (profil/env/sti-ændringer).
 
 Bundlet mac-app:
 
-- OpenClaw.app kan bundle en Node-baseret gateway-relay og installere en per-bruger LaunchAgent mærket
-  `bot.molt.gateway` (eller `bot.molt.<profile>`; legacy `com.openclaw.*`-labels aflæsses stadig korrekt).
+- OpenClaw.app kan samle et node-baseret gateway relæ og installere en per-bruger LaunchAgent mærket
+  `bot.molt.gateway` (eller `bot.molt. molt.<profile>`; arv `com.openclaw.*` etiketter stadig losses ren).
 - For at stoppe den rent, brug `openclaw gateway stop` (eller `launchctl bootout gui/$UID/bot.molt.gateway`).
 - For at genstarte, brug `openclaw gateway restart` (eller `launchctl kickstart -k gui/$UID/bot.molt.gateway`).
   - `launchctl` virker kun, hvis LaunchAgent er installeret; ellers brug `openclaw gateway install` først.
-  - Erstat labelen med `bot.molt.<profile>`, når du kører en navngivet profil.
+  - Erstat etiketten med bot.molt.<profile>\` når du kører en navngiven profil.
 
 ## Supervision (systemd bruger-enhed)
 
-OpenClaw installerer som standard en **systemd bruger-tjeneste** på Linux/WSL2. Vi
-anbefaler brugertjenester til single-user-maskiner (simplere env, per-bruger konfig).
-Brug en **systemtjeneste** til multi-user eller always-on servere (ingen lingering
-påkrævet, delt supervision).
+OpenClaw installerer som standard en **systemd brugerservice** på Linux/WSL2. Vi
+anbefaler brugertjenester til enkeltbrugermaskiner (enklere env, per-user config).
+Brug en **systemservice** til flerbruger- eller altid-on-servere (ingen dingende
+kræves, delt overvågning).
 
-`openclaw gateway install` skriver bruger-enheden. `openclaw doctor` auditerer
-enheden og kan opdatere den til at matche de aktuelt anbefalede standarder.
+`openclaw gateway install` skriver brugerenheden. `openclaw doctor` reviderer
+enheden og kan opdatere den til at matche de aktuelle anbefalede standardværdier.
 
 Opret `~/.config/systemd/user/openclaw-gateway[-<profile>].service`:
 
@@ -288,17 +282,17 @@ Aktivér lingering (påkrævet, så brugertjenesten overlever logout/idle):
 sudo loginctl enable-linger youruser
 ```
 
-Introduktion kører dette på Linux/WSL2 (kan bede om sudo; skriver `/var/lib/systemd/linger`).
-Aktivér derefter tjenesten:
+Onboarding kører dette på Linux/WSL2 (kan bede om sudo; skriver `/var/lib/systemd/linger`).
+Aktiver derefter tjenesten:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
-**Alternativ (systemtjeneste)** – til always-on eller multi-user servere kan du
-installere en systemd **system**-enhed i stedet for en bruger-enhed (ingen lingering).
-Opret `/etc/systemd/system/openclaw-gateway[-<profile>].service` (kopiér enheden ovenfor,
-skift `WantedBy=multi-user.target`, sæt `User=` + `WorkingDirectory=`), og kør derefter:
+**Alternativ (systemservice)** - for altid-on eller multi-user servere, kan du
+installere en systemd **system** enhed i stedet for en brugerenhed (ingen dvale behov).
+Opret `/etc/systemd/system/openclaw-gateway[-<profile>].service` (kopier enheden ovenfor,
+skift `WantedBy=multi-user.target`, sæt `User=` + `WorkingDirectory=`), så:
 
 ```
 sudo systemctl daemon-reload

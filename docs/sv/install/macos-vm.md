@@ -6,22 +6,15 @@ read_when:
   - Du vill ha en återställningsbar macOS-miljö som du kan klona
   - Du vill jämföra lokala kontra hostade macOS-VM-alternativ
 title: "macOS-VM:er"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:47Z
 ---
 
 # OpenClaw på macOS-VM:er (Sandboxing)
 
 ## Rekommenderad standard (de flesta användare)
 
-- **Liten Linux-VPS** för en alltid-på Gateway och låg kostnad. Se [VPS hosting](/vps).
-- **Dedikerad hårdvara** (Mac mini eller Linux-dator) om du vill ha full kontroll och en **residential IP** för webbläsarautomation. Många webbplatser blockerar datacenter-IP:n, så lokal surfning fungerar ofta bättre.
-- **Hybrid:** ha Gateway på en billig VPS och anslut din Mac som en **nod** när du behöver webbläsar-/UI-automation. Se [Nodes](/nodes) och [Gateway remote](/gateway/remote).
+- **Liten Linux VPS** för en alltid-på Gateway och låg kostnad. Se [VPS hosting](/vps).
+- \*\*Dedikerad hårdvara \*\* (Mac mini eller Linux box) om du vill ha full kontroll och ett **bostads-IP** för webbläsarautomatisering. Många webbplatser blockera datacenter IPs, så lokal surfning fungerar ofta bättre.
+- **Hybrid:** behåll Gateway på en billig VPS, och anslut din Mac som en **nod** när du behöver webbläsar/UI automation. Se [Nodes](/nodes) och [Gateway remote](/gateway/remote).
 
 Använd en macOS-VM när du specifikt behöver macOS-exklusiva funktioner (iMessage/BlueBubbles) eller vill ha strikt isolering från din dagliga Mac.
 
@@ -69,7 +62,7 @@ När du har SSH-åtkomst till en macOS-VM, fortsätt vid steg 6 nedan.
 
 ---
 
-## 1) Installera Lume
+## 1. Installera Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ Dokumentation: [Lume Installation](https://cua.ai/docs/lume/guide/getting-starte
 
 ---
 
-## 2) Skapa macOS-VM:n
+## 2. Skapa macOS-VM:n
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-Detta laddar ner macOS och skapar VM:n. Ett VNC-fönster öppnas automatiskt.
+Detta laddar ner macOS och skapar VM. Ett VNC-fönster öppnas automatiskt.
 
 Obs: Nedladdningen kan ta en stund beroende på din anslutning.
 
 ---
 
-## 3) Slutför Setup Assistant
+## 3. Slutför Setup Assistant
 
 I VNC-fönstret:
 
@@ -119,7 +112,7 @@ När installationen är klar, aktivera SSH:
 
 ---
 
-## 4) Hämta VM:ns IP-adress
+## 4. Hämta VM:ns IP-adress
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Leta efter IP-adressen (vanligtvis `192.168.64.x`).
 
 ---
 
-## 5) SSH:a in i VM:n
+## 5. SSH:a in i VM:n
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Ersätt `youruser` med kontot du skapade och IP-adressen med din VM:s IP.
 
 ---
 
-## 6) Installera OpenClaw
+## 6. Installera OpenClaw
 
 Inuti VM:n:
 
@@ -152,7 +145,7 @@ Följ introduktionsanvisningarna för att konfigurera din modellleverantör (Ant
 
 ---
 
-## 7) Konfigurera kanaler
+## 7. Konfigurera kanaler
 
 Redigera konfigfilen:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Kör VM:n utan visning (headless)
+## 8. Kör VM:n utan visning (headless)
 
 Stoppa VM:n och starta om utan visning:
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-VM:n körs i bakgrunden. OpenClaws daemon håller gatewayen igång.
+Den virtuella maskinen körs i bakgrunden. OpenClaws daemon håller gatewayen igång.
 
 För att kontrollera status:
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## Bonus: iMessage-integration
 
-Detta är den avgörande funktionen med att köra på macOS. Använd [BlueBubbles](https://bluebubbles.app) för att lägga till iMessage i OpenClaw.
+Detta är mördarfunktionen för att köra på macOS. Använd [BlueBubbles](https://bluebubbles.app) för att lägga till iMessage till OpenClaw.
 
 Inuti VM:n:
 
@@ -228,7 +221,7 @@ Lägg till i din OpenClaw-konfig:
 }
 ```
 
-Starta om gatewayen. Nu kan din agent skicka och ta emot iMessages.
+Starta om gatewayn. Nu kan er agent skicka och ta emot iMessages.
 
 Fullständiga installationsdetaljer: [BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,18 +254,18 @@ Håll VM:n igång genom att:
 - Inaktivera viloläge i Systeminställningar → Energibesparing
 - Använd `caffeinate` vid behov
 
-För verklig alltid-på-drift, överväg en dedikerad Mac mini eller en liten VPS. Se [VPS hosting](/vps).
+För sant alltid-på, överväga en dedikerad Mac mini eller en liten VPS. Se [VPS hosting](/vps).
 
 ---
 
 ## Felsökning
 
-| Problem                  | Lösning                                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| Kan inte SSH:a in i VM:n | Kontrollera att ”Remote Login” är aktiverat i VM:ns Systeminställningar                 |
-| VM-IP visas inte         | Vänta tills VM:n har startat helt, kör `lume get openclaw` igen                         |
-| Lume-kommando hittas ej  | Lägg till `~/.local/bin` i din PATH                                                     |
-| WhatsApp-QR skannas ej   | Säkerställ att du är inloggad i VM:n (inte värden) när du kör `openclaw channels login` |
+| Problem                                                  | Lösning                                                                                                                    |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Kan inte SSH:a in i VM:n | Kontrollera att ”Remote Login” är aktiverat i VM:ns Systeminställningar                                    |
+| VM-IP visas inte                                         | Vänta tills VM:n har startat helt, kör `lume get openclaw` igen                                            |
+| Lume-kommando hittas ej                                  | Lägg till `~/.local/bin` i din PATH                                                                                        |
+| WhatsApp-QR skannas ej                                   | Säkerställ att du är inloggad i VM:n (inte värden) när du kör `openclaw channels login` |
 
 ---
 

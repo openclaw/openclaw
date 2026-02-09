@@ -3,18 +3,11 @@ summary: "Zalo ဘော့ ထောက်ပံ့မှုအခြေအန�
 read_when:
   - Zalo အင်္ဂါရပ်များ သို့မဟုတ် webhook များအပေါ် အလုပ်လုပ်နေစဉ်
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:14Z
 ---
 
 # Zalo (Bot API)
 
-အခြေအနေ: စမ်းသပ်အဆင့်။ Direct messages သာ ပံ့ပိုးထားပြီး အုပ်စုများကို Zalo docs အရ မကြာမီ ထည့်သွင်းပံ့ပိုးမည်။
+Status: experimental. Direct messages only; groups coming soon per Zalo docs.
 
 ## Plugin လိုအပ်သည်
 
@@ -52,8 +45,8 @@ Zalo ကို plugin အဖြစ် ပို့ဆောင်ပေးပြ
 
 ## What it is
 
-Zalo သည် ဗီယက်နမ်ကို အဓိကထားသော မက်ဆေ့ချ်အက်ပ်ဖြစ်ပြီး ၎င်း၏ Bot API သည် Gateway ကို 1:1 စကားဝိုင်းများအတွက် ဘော့ကို လည်ပတ်စေပါသည်။
-Zalo သို့ ပြန်လည်လမ်းကြောင်းချထားမှုကို သေချာတိကျစေလိုသည့် support သို့မဟုတ် အကြောင်းကြားချက်များအတွက် သင့်တော်ပါသည်။
+Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
+It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 
 - Gateway ပိုင် Zalo Bot API ချန်နယ်။
 - သေချာတိကျသော routing: အဖြေများသည် Zalo သို့သာ ပြန်သွားပြီး model သည် ချန်နယ်ကို မရွေးချယ်ပါ။
@@ -62,7 +55,7 @@ Zalo သို့ ပြန်လည်လမ်းကြောင်းချ�
 
 ## Setup (fast path)
 
-### 1) Bot token တစ်ခု ဖန်တီးပါ (Zalo Bot Platform)
+### 1. Bot token တစ်ခု ဖန်တီးပါ (Zalo Bot Platform)
 
 1. [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) သို့ သွားပြီး sign in ဝင်ပါ။
 2. Bot အသစ်တစ်ခု ဖန်တီးပြီး setting များကို ပြင်ဆင်ပါ။
@@ -88,8 +81,8 @@ Env ရွေးချယ်မှု: `ZALO_BOT_TOKEN=...` (default account အ
 
 Multi-account ပံ့ပိုးမှု: per-account token များနှင့် optional `name` ကို အသုံးပြု၍ `channels.zalo.accounts` ကို အသုံးပြုပါ။
 
-3. Gateway ကို ပြန်လည်စတင်ပါ။ Token (env သို့မဟုတ် config) ကို ဖြေရှင်းနိုင်ပါက Zalo စတင်လည်ပတ်ပါသည်။
-4. DM ဝင်ရောက်ခွင့်သည် ပုံမှန်အားဖြင့် pairing ဖြစ်ပါသည်။ Bot ကို ပထမဆုံး ဆက်သွယ်သည့်အခါ code ကို အတည်ပြုပါ။
+3. Gateway（ဂိတ်ဝေး） ကို ပြန်လည်စတင်ပါ။ Zalo starts when a token is resolved (env or config).
+4. DM access defaults to pairing. Approve the code when the bot is first contacted.
 
 ## How it works (behavior)
 
@@ -107,11 +100,11 @@ Multi-account ပံ့ပိုးမှု: per-account token များန�
 
 ### DM access
 
-- Default: `channels.zalo.dmPolicy = "pairing"`။ မသိရသော ပို့သူများသည် pairing code ကို ရရှိပြီး အတည်ပြုမချင်း မက်ဆေ့ချ်များကို လျစ်လျူရှုပါသည် (code များသည် ၁ နာရီအတွင်း သက်တမ်းကုန်ဆုံးပါသည်)။
+- မူလ: `channels.zalo.dmPolicy = "pairing"`။ မသိသော ပို့သူများသည် pairing code ကို လက်ခံရရှိပြီး အတည်ပြုမပြုလုပ်မချင်း မက်ဆေ့ချ်များကို လျစ်လျူရှုမည် (code များသည် ၁ နာရီအတွင်း သက်တမ်းကုန်ဆုံးသည်)။
 - အတည်ပြုရန်:
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- Pairing သည် ပုံမှန် token exchange ဖြစ်ပါသည်။ အသေးစိတ်: [Pairing](/channels/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` သည် numeric user ID များကို လက်ခံပါသည် (username lookup မရနိုင်ပါ)။
 
 ## Long-polling vs webhook
@@ -134,16 +127,16 @@ Multi-account ပံ့ပိုးမှု: per-account token များန�
 
 ## Capabilities
 
-| Feature         | Status                          |
-| --------------- | ------------------------------- |
-| Direct messages | ✅ ပံ့ပိုးထားသည်                |
-| Groups          | ❌ မကြာမီ (Zalo docs အရ)        |
-| Media (images)  | ✅ ပံ့ပိုးထားသည်                |
-| Reactions       | ❌ မပံ့ပိုးပါ                   |
-| Threads         | ❌ မပံ့ပိုးပါ                   |
-| Polls           | ❌ မပံ့ပိုးပါ                   |
-| Native commands | ❌ မပံ့ပိုးပါ                   |
-| Streaming       | ⚠️ ပိတ်ထားသည် (2000 char limit) |
+| Feature                           | Status                                             |
+| --------------------------------- | -------------------------------------------------- |
+| Direct messages                   | ✅ ပံ့ပိုးထားသည်                                    |
+| Groups                            | ❌ မကြာမီ (Zalo docs အရ)         |
+| Media (images) | ✅ ပံ့ပိုးထားသည်                                    |
+| Reactions                         | ❌ မပံ့ပိုးပါ                                       |
+| Threads                           | ❌ မပံ့ပိုးပါ                                       |
+| Polls                             | ❌ မပံ့ပိုးပါ                                       |
+| Native commands                   | ❌ မပံ့ပိုးပါ                                       |
+| Streaming                         | ⚠️ ပိတ်ထားသည် (2000 char limit) |
 
 ## Delivery targets (CLI/cron)
 
@@ -175,7 +168,7 @@ Provider options:
 - `channels.zalo.botToken`: Zalo Bot Platform မှ bot token။
 - `channels.zalo.tokenFile`: ဖိုင်လမ်းကြောင်းမှ token ကို ဖတ်ရန်။
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)။
-- `channels.zalo.allowFrom`: DM allowlist (user ID များ)။ `open` သည် `"*"` ကို လိုအပ်ပါသည်။ Wizard သည် numeric ID များကို မေးမြန်းပါမည်။
+- `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
 - `channels.zalo.mediaMaxMb`: ဝင်/ထွက် media ကန့်သတ်ချက် (MB, default 5)။
 - `channels.zalo.webhookUrl`: webhook mode ကို ဖွင့်ရန် (HTTPS လိုအပ်)။
 - `channels.zalo.webhookSecret`: webhook secret (အက္ခရာ 8-256)။
@@ -184,13 +177,13 @@ Provider options:
 
 Multi-account options:
 
-- `channels.zalo.accounts.<id>.botToken`: per-account token။
-- `channels.zalo.accounts.<id>.tokenFile`: per-account token ဖိုင်။
-- `channels.zalo.accounts.<id>.name`: ပြသအမည်။
-- `channels.zalo.accounts.<id>.enabled`: account ကို ဖွင့်/ပိတ်။
-- `channels.zalo.accounts.<id>.dmPolicy`: per-account DM မူဝါဒ။
-- `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist။
-- `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL။
-- `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret။
-- `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path။
-- `channels.zalo.accounts.<id>.proxy`: per-account proxy URL။
+- `channels.zalo.accounts.<id>.botToken`: per-account token.
+- `channels.zalo.accounts.<id>.tokenFile`: per-account token file.
+- `channels.zalo.accounts.<id>.name`: display name.
+- `channels.zalo.accounts.<id>.enabled`: enable/disable account.
+- `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.
+- `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist.
+- `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL.
+- `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
+- `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.
+- `channels.zalo.accounts.<id>.proxy`: per-account proxy URL.

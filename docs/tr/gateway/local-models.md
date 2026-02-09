@@ -5,13 +5,6 @@ read_when:
   - LM Studio veya OpenAI uyumlu bir proxy bağlıyorsunuz
   - En güvenli yerel model rehberliğine ihtiyacınız var
 title: "Yerel Modeller"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Yerel modeller

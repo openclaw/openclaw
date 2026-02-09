@@ -3,13 +3,6 @@ summary: "Statut du support du bot Telegram, capacites et configuration"
 read_when:
   - Travail sur les fonctionnalites Telegram ou les webhooks
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 5f75bd20da52c8f0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:50Z
 ---
 
 # Telegram (Bot API)
@@ -24,7 +17,7 @@ Statut : prêt pour la production pour les Messages prives des bots + les group
    - Ou config : `channels.telegram.botToken: "..."`.
    - Si les deux sont definis, la config est prioritaire (le repli env est uniquement pour le compte par defaut).
 3. Demarrez la Gateway (passerelle).
-4. L’acces en Message prive est en appairage par defaut ; approuvez le code d’appairage lors du premier contact.
+4. L'accès DM est appairage par défaut; approuve le code d'appairage au premier contact.
 
 Configuration minimale :
 
@@ -48,7 +41,7 @@ Configuration minimale :
 
 ## Configuration (chemin rapide)
 
-### 1) Creer un token de bot (BotFather)
+### 1. Creer un token de bot (BotFather)
 
 1. Ouvrez Telegram et discutez avec **@BotFather** ([lien direct](https://t.me/BotFather)). Confirmez que le handle est exactement `@BotFather`.
 2. Executez `/newbot`, puis suivez les invites (nom + nom d’utilisateur se terminant par `bot`).
@@ -59,7 +52,7 @@ Parametres BotFather optionnels :
 - `/setjoingroups` — autoriser/interdire l’ajout du bot aux groupes.
 - `/setprivacy` — controler si le bot voit tous les messages de groupe.
 
-### 2) Configurer le token (env ou config)
+### 2. Configurer le token (env ou config)
 
 Exemple :
 
@@ -108,7 +101,7 @@ dans chaque groupe pour que le changement prenne effet.
 Le statut admin se definit dans le groupe (UI Telegram). Les bots admins recoivent toujours tous
 les messages de groupe ; utilisez admin si vous avez besoin d’une visibilite complete.
 
-## Fonctionnement (comportement)
+## Comment ça marche (comportement)
 
 - Les messages entrants sont normalises dans l’enveloppe de canal partagee avec contexte de reponse et emplacements media.
 - Les reponses en groupe exigent une mention par defaut (mention @ native ou `agents.list[].groupChat.mentionPatterns` / `messages.groupChat.mentionPatterns`).
@@ -154,7 +147,7 @@ Vous pouvez ajouter des commandes personnalisees au menu via la config :
 }
 ```
 
-## Depannage
+## Configuration des dépannages (commandes)
 
 - `setMyCommands failed` dans les journaux signifie generalement que la sortie HTTPS/DNS est bloquee vers `api.telegram.org`.
 - Si vous voyez des echecs `sendMessage` ou `sendChatAction`, verifiez le routage IPv6 et le DNS.
@@ -352,7 +345,7 @@ Utilisez le parametre global lorsque tous les bots/comptes Telegram doivent se c
 
 ## Controle d’acces (Messages prives + groupes)
 
-### Acces en Message prive
+### Accès DM
 
 - Par defaut : `channels.telegram.dmPolicy = "pairing"`. Les expéditeurs inconnus recoivent un code d’appairage ; les messages sont ignores jusqu’a approbation (les codes expirent apres 1 heure).
 - Approuver via :
@@ -372,6 +365,7 @@ Alternative (API Bot officielle) :
 
 1. Envoyez un Message prive a votre bot.
 2. Recuperez les mises a jour avec le token du bot et lisez `message.from.id` :
+
    ```bash
    curl "https://api.telegram.org/bot<bot_token>/getUpdates"
    ```
@@ -686,7 +680,7 @@ L’agent voit les reactions comme des **notifications systeme** dans l’histor
 - Utilisez un ID de chat (`123456789`) ou un nom d’utilisateur (`@name`) comme cible.
 - Exemple : `openclaw message send --channel telegram --target 123456789 --message "hi"`.
 
-## Depannage
+## Problemes courants
 
 **Le bot ne repond pas aux messages sans mention dans un groupe :**
 

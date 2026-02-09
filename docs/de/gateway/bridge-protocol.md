@@ -5,13 +5,6 @@ read_when:
   - Untersuchung von Pairing- oder Bridge-Authentifizierungsfehlern
   - Audit der vom Gateway exponierten Node-Oberfläche
 title: "Bridge-Protokoll"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:13Z
 ---
 
 # Bridge-Protokoll (Legacy-Node-Transport)

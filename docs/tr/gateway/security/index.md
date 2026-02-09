@@ -3,13 +3,6 @@ summary: "Kabuk erişimi olan bir AI gateway çalıştırırken güvenlik hususl
 read_when:
   - Erişimi veya otomasyonu genişleten özellikler eklerken
 title: "Güvenlik"
-x-i18n:
-  source_path: gateway/security/index.md
-  source_hash: 5566bbbbbf7364ec
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:10Z
 ---
 
 # Güvenlik 🔒
@@ -106,7 +99,8 @@ gateway:
 
 ## Yerel oturum günlükleri diskte yaşar
 
-OpenClaw, oturum dökümlerini `~/.openclaw/agents/<agentId>/sessions/*.jsonl` altında diskte saklar. Bu, oturum sürekliliği ve (isteğe bağlı olarak) oturum belleği indekslemesi için gereklidir; ancak aynı zamanda **dosya sistemi erişimi olan herhangi bir süreç/kullanıcı bu günlükleri okuyabilir** anlamına gelir. Disk erişimini güven sınırı olarak değerlendirin ve `~/.openclaw` üzerindeki izinleri kilitleyin (aşağıdaki denetim bölümüne bakın). Ajanlar arasında daha güçlü yalıtım gerekiyorsa, bunları ayrı OS kullanıcıları veya ayrı ana makineler altında çalıştırın.
+OpenClaw, oturum dökümlerini `~/.openclaw/agents/<agentId>/sessions/*.jsonl` altında diskte saklar.
+Bu, oturum sürekliliği ve (isteğe bağlı olarak) oturum belleği indekslemesi için gereklidir; ancak aynı zamanda **dosya sistemi erişimi olan herhangi bir süreç/kullanıcı bu günlükleri okuyabilir** anlamına gelir. Disk erişimini güven sınırı olarak değerlendirin ve `~/.openclaw` üzerindeki izinleri kilitleyin (aşağıdaki denetim bölümüne bakın). Ajanlar arasında daha güçlü yalıtım gerekiyorsa, bunları ayrı OS kullanıcıları veya ayrı ana makineler altında çalıştırın.
 
 ## Düğüm yürütme (system.run)
 
@@ -125,7 +119,7 @@ OpenClaw, oturum ortasında Skills listesini yenileyebilir:
 
 Skill klasörlerini **güvenilir kod** olarak değerlendirin ve kimlerin değiştirebileceğini kısıtlayın.
 
-## Tehdit Modeli
+## The Threat Model
 
 AI asistanınız şunları yapabilir:
 
@@ -303,7 +297,7 @@ Rehberlik:
 
 ### `find ~` Olayı 🦞
 
-1. günde, dostça bir testçi Clawd’dan `find ~` çalıştırmasını ve çıktıyı paylaşmasını istedi. Clawd da ev dizininin tamamını bir grup sohbetine döktü.
+günde, dostça bir testçi Clawd’dan `find ~` çalıştırmasını ve çıktıyı paylaşmasını istedi. Clawd da ev dizininin tamamını bir grup sohbetine döktü.
 
 **Ders:** “Masum” istekler bile hassas bilgileri sızdırabilir. Dizin yapıları proje adlarını, araç yapılandırmalarını ve sistem yerleşimini açığa çıkarır.
 
@@ -317,7 +311,7 @@ Bu sosyal mühendisliğin 101’idir. Güvensizlik yarat, kurcalamayı teşvik e
 
 ## Yapılandırma Sertleştirme (örnekler)
 
-### 0) Dosya izinleri
+### 0. Dosya izinleri
 
 Gateway ana makinesinde yapılandırma + durumu gizli tutun:
 
@@ -417,7 +411,8 @@ Yerel cihaz eşleştirme:
 
 - Aynı ana makinedeki istemcilerin sorunsuz olması için **yerel** bağlantılar (loopback veya
   gateway ana makinesinin kendi tailnet adresi) otomatik onaylanır.
-- Diğer tailnet eşleri **yerel** sayılmaz; yine de eşleştirme onayı gerekir.
+- Other tailnet peers are **not** treated as local; they still need pairing
+  approval.
 
 Kimlik doğrulama modları:
 
@@ -446,7 +441,7 @@ Güvenilir proxy’ler:
 - OpenClaw, yerel eşleştirme kontrolleri ve HTTP kimlik doğrulama/yerel kontroller için istemci IP’sini belirlemek üzere bu IP’lerden gelen `x-forwarded-for` (veya `x-real-ip`)’e güvenir.
 - Proxy’nizin `x-forwarded-for`’yı **üzerine yazdığından** ve Gateway portuna doğrudan erişimi engellediğinden emin olun.
 
-Bkz. [Tailscale](/gateway/tailscale) ve [Web overview](/web).
+[Tailscale](/gateway/tailscale) ve [Web overview](/web).
 
 ### 0.6.1) Düğüm ana makinesi üzerinden tarayıcı kontrolü (önerilir)
 
@@ -492,12 +487,12 @@ Erişim denetimleri doğru olsa bile günlükler ve dökümler hassas bilgi sız
 
 - Araç özeti maskelemesini açık tutun (`logging.redactSensitive: "tools"`; varsayılan).
 - Ortamınıza özgü desenleri `logging.redactPatterns` ile ekleyin (belirteçler, ana makine adları, dahili URL’ler).
-- Tanılama paylaşırken ham günlükler yerine `openclaw status --all`’ü tercih edin (yapıştırılabilir, sırlar maskelenmiş).
+- Tanılama bilgilerini paylaşırken ham günlükler yerine `openclaw status --all` (yapıştırılabilir, sırlar gizlenmiş) kullanmayı tercih edin.
 - Uzun süreli saklamaya ihtiyacınız yoksa eski oturum dökümlerini ve günlük dosyalarını budayın.
 
 Ayrıntılar: [Logging](/gateway/logging)
 
-### 1) DM’ler: varsayılan olarak eşleştirme
+### 1. DM’ler: varsayılan olarak eşleştirme
 
 ```json5
 {
@@ -505,7 +500,7 @@ Ayrıntılar: [Logging](/gateway/logging)
 }
 ```
 
-### 2) Gruplar: her yerde mention zorunlu
+### 2. Gruplar: her yerde mention zorunlu
 
 ```json
 {
@@ -545,7 +540,7 @@ AI’ınızı kişisel numaranızdan ayrı bir telefon numarası üzerinde çal�
 
 Bunu basitleştirmek için ileride tek bir `readOnlyMode` bayrağı ekleyebiliriz.
 
-### 5) Güvenli temel (kopyala/yapıştır)
+### 5. Güvenli temel (kopyala/yapıştır)
 
 Gateway’i özel tutan, DM eşleştirmesi gerektiren ve her zaman açık grup botlarından kaçınan bir “güvenli varsayılan” yapılandırma:
 
@@ -587,7 +582,7 @@ Sandbox içindeki ajan çalışma alanı erişimini de değerlendirin:
 - `agents.defaults.sandbox.workspaceAccess: "ro"` ajan çalışma alanını `/agent`’da salt-okunur bağlar (`write`/`edit`/`apply_patch`’ü devre dışı bırakır)
 - `agents.defaults.sandbox.workspaceAccess: "rw"` ajan çalışma alanını `/workspace`’da okuma/yazma bağlar
 
-Önemli: `tools.elevated`, exec’i ana makinede çalıştıran küresel kaçış kapağıdır. `tools.elevated.allowFrom`’yi sıkı tutun ve yabancılar için etkinleştirmeyin. Yükseltilmiş erişimi ajan bazında `agents.list[].tools.elevated` ile daha da kısıtlayabilirsiniz. Bkz. [Elevated Mode](/tools/elevated).
+Önemli: `tools.elevated`, exec’i ana makinede çalıştıran küresel kaçış kapağıdır. `tools.elevated.allowFrom`’yi sıkı tutun ve yabancılar için etkinleştirmeyin. Yükseltilmiş erişimi ajan bazında `agents.list[].tools.elevated` ile daha da kısıtlayabilirsiniz. [Elevated Mode](/tools/elevated).
 
 ## Tarayıcı kontrolü riskleri
 
@@ -605,7 +600,7 @@ Bu tarayıcı profili zaten oturum açılmış hesaplar içeriyorsa, model bu he
 - İhtiyacınız olmadığında tarayıcı proxy yönlendirmesini devre dışı bırakın (`gateway.nodes.browser.mode="off"`).
 - Chrome uzantısı relay modu “daha güvenli” değildir; mevcut Chrome sekmelerinizi ele geçirebilir. O sekmenin/profilin erişebildiği her yerde sizin yerinize hareket edebileceğini varsayın.
 
-## Ajan başına erişim profilleri (çok ajanlı)
+## Ajan başına erişim profilleri (çoklu ajan)
 
 Çok ajanlı yönlendirme ile her ajanın kendi sandbox + araç politikası olabilir:
 bunu ajan başına **tam erişim**, **salt-okunur** veya **erişimsiz** vermek için kullanın.
@@ -721,19 +716,19 @@ Ajanınızın sistem istemine güvenlik yönergeleri ekleyin:
 
 AI’ınız kötü bir şey yaparsa:
 
-### Sınırlama
+### İzole edin
 
 1. **Durdurun:** macOS uygulamasını durdurun (Gateway’i denetliyorsa) veya `openclaw gateway` sürecinizi sonlandırın.
 2. **Maruziyeti kapatın:** ne olduğunu anlayana kadar `gateway.bind: "loopback"`’yi ayarlayın (veya Tailscale Funnel/Serve’i devre dışı bırakın).
 3. **Erişimi dondurun:** riskli DM’leri/grupları `dmPolicy: "disabled"`’e alın / mention zorunlu kılın ve varsa `"*"` herkese-izin girdilerini kaldırın.
 
-### Döndürme (sırlar sızdıysa ihlâl varsayın)
+### Döndürün (sırlar sızdıysa ihlal varsayın)
 
 1. Gateway kimlik doğrulamasını döndürün (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) ve yeniden başlatın.
 2. Gateway’i çağırabilen makinelerde uzak istemci sırlarını döndürün (`gateway.remote.token` / `.password`).
 3. Sağlayıcı/API kimlik bilgilerini döndürün (WhatsApp kimlik bilgileri, Slack/Discord belirteçleri, `auth-profiles.json` içindeki model/API anahtarları).
 
-### Denetim
+### Denetleyin
 
 1. Gateway günlüklerini kontrol edin: `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (veya `logging.file`).
 2. İlgili döküm(ler)i inceleyin: `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
@@ -742,7 +737,7 @@ AI’ınız kötü bir şey yaparsa:
 ### Rapor için toplayın
 
 - Zaman damgası, gateway ana makinesi OS + OpenClaw sürümü
-- Oturum dökümleri + kısa bir günlük kuyruğu (maskeledikten sonra)
+- Oturum dökümü/dökümleri + kısa bir günlük sonu (gizledikten sonra)
 - Saldırganın gönderdiği + ajanın yaptığı
 - Gateway’in loopback dışında açığa çıkıp çıkmadığı (LAN/Tailscale Funnel/Serve)
 
@@ -762,7 +757,9 @@ Başarısız olursa, temel çizgide henüz olmayan yeni adaylar vardır.
 2. Araçları anlayın:
    - `detect-secrets scan` adayları bulur ve temel çizgiyle karşılaştırır.
    - `detect-secrets audit` her temel çizgi öğesini gerçek veya yanlış pozitif olarak işaretlemek için etkileşimli bir inceleme açar.
+
 3. Gerçek sırlar için: döndürün/kaldırın, sonra temel çizgiyi güncellemek için taramayı yeniden çalıştırın.
+
 4. Yanlış pozitifler için: etkileşimli denetimi çalıştırın ve yanlış olarak işaretleyin:
 
    ```bash
@@ -798,7 +795,7 @@ OpenClaw’da bir güvenlik açığı mı buldunuz? Lütfen sorumlu şekilde bil
 
 1. E-posta: [security@openclaw.ai](mailto:security@openclaw.ai)
 2. Düzeltilene kadar herkese açık paylaşmayın
-3. Sizi kredilendireceğiz (anonimliği tercih etmezseniz)
+3. Size atıf yapacağız (anonimliği tercih etmediğiniz sürece)
 
 ---
 

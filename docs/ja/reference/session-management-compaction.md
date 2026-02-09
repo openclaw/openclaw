@@ -5,13 +5,6 @@ read_when:
   - 自動コンパクションの挙動を変更している、または「コンパクション前」のハウスキーピングを追加する場合
   - メモリフラッシュやサイレントなシステムターンを実装したい場合
 title: "セッション管理の詳細解説"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:30Z
 ---
 
 # セッション管理 & コンパクション（詳細解説）
@@ -92,11 +85,11 @@ OpenClaw は、`src/config/sessions.ts` を介してこれらを解決します�
 
 各 `sessionKey` は、現在の `sessionId`（会話を継続するトランスクリプトファイル）を指します。
 
-経験則:
+親指のルール:
 
 - **リセット**（`/new`、`/reset`）は、その `sessionKey` に対して新しい `sessionId` を作成します。
 - **日次リセット**（デフォルトは Gateway ホストのローカル時間で午前 4:00）は、リセット境界後の次のメッセージで新しい `sessionId` を作成します。
-- **アイドル期限切れ**（`session.reset.idleMinutes` またはレガシーの `session.idleMinutes`）は、アイドルウィンドウ後にメッセージが到着した際に新しい `sessionId` を作成します。日次とアイドルの両方が設定されている場合、先に期限切れした方が優先されます。
+- **アイドル期限切れ**（`session.reset.idleMinutes` またはレガシーの `session.idleMinutes`）は、アイドルウィンドウ後にメッセージが到着した際に新しい `sessionId` を作成します。日次とアイドルの両方が設定されている場合、先に期限切れした方が優先されます。 毎日+アイドルが設定されている場合、いずれかの方が最初の勝利に失効します。
 
 実装詳細: 判定は `src/auto-reply/reply/session.ts` 内の `initSessionState()` で行われます。
 
@@ -113,7 +106,7 @@ OpenClaw は、`src/config/sessions.ts` を介してこれらを解決します�
 - `sessionFile`: 任意の明示的なトランスクリプトパス上書き
 - `chatType`: `direct | group | room`（UI や送信ポリシーに有用）
 - `provider`, `subject`, `room`, `space`, `displayName`: グループ/チャンネルのラベリング用メタデータ
-- トグル:
+- Toggles:
   - `thinkingLevel`, `verboseLevel`, `reasoningLevel`, `elevatedLevel`
   - `sendPolicy`（セッション単位の上書き）
 - モデル選択:
@@ -151,7 +144,7 @@ OpenClaw は、意図的にトランスクリプトを「修正」しません�
 
 ## コンテキストウィンドウ vs 追跡トークン
 
-重要な概念は 2 つあります。
+2つの異なる概念が重要です:
 
 1. **モデルのコンテキストウィンドウ**: モデルごとのハード上限（モデルに見えるトークン数）
 2. **セッションストアのカウンター**: `sessions.json` に書き込まれるローリング統計（/status やダッシュボードで使用）
@@ -165,16 +158,16 @@ OpenClaw は、意図的にトランスクリプトを「修正」しません�
 
 ---
 
-## コンパクションとは何か
+## Compaction: What is it
 
 コンパクションは、古い会話をトランスクリプト内の永続化された `compaction` エントリに要約し、最近のメッセージを保持します。
 
-コンパクション後、将来のターンでは次が参照されます。
+圧縮後、今後のターン表示:
 
 - コンパクション要約
 - `firstKeptEntryId` 以降のメッセージ
 
-コンパクションは **永続的** です（セッションプルーニングとは異なります）。[/concepts/session-pruning](/concepts/session-pruning) を参照してください。
+Compaction is **persistent** (unlike session pruning). [/concepts/session-pruning](/concepts/session-pruning) を参照してください。
 
 ---
 
@@ -239,10 +232,10 @@ OpenClaw は、組み込み実行に対して安全下限も適用します。
 
 OpenClaw は、ユーザーに中間出力を見せるべきでないバックグラウンドタスク向けに「サイレント」ターンをサポートします。
 
-慣例:
+コンベンション:
 
 - アシスタントは、出力の先頭に `NO_REPLY` を付けて「ユーザーに返信を配信しない」ことを示します。
-- OpenClaw は配信レイヤーでこれを除去/抑制します。
+- OpenClawストリップ/配信レイヤーでこれを抑制します。
 
 `2026.1.10` 以降では、部分チャンクが `NO_REPLY` で始まる場合、**下書き/タイピングのストリーミング** も抑制されます。これにより、サイレント操作がターン途中で部分出力を漏らしません。
 
@@ -279,10 +272,10 @@ Pi は拡張 API に `session_before_compact` フックも公開しています�
 
 ## トラブルシューティング チェックリスト
 
-- セッションキーが誤っている？ [/concepts/session](/concepts/session) から始め、`/status` 内の `sessionKey` を確認してください。
-- ストアとトランスクリプトの不整合？ Gateway ホストと、`openclaw status` から取得したストアパスを確認してください。
-- コンパクションが頻発する？ 次を確認してください。
+- セッションキーが間違っていますか？ セッションキーが誤っている？ [/concepts/session](/concepts/session) から始め、`/status` 内の `sessionKey` を確認してください。
+- ストアとトランスクリプトが一致しませんか？ ストアとトランスクリプトの不整合？ Gateway ホストと、`openclaw status` から取得したストアパスを確認してください。
+- 圧縮スパム? 確認:
   - モデルのコンテキストウィンドウ（小さすぎないか）
   - コンパクション設定（モデルウィンドウに対して `reserveTokens` が高すぎると、早期にコンパクションが発生する可能性があります）
   - tool-result の肥大化: セッションプルーニングを有効化/調整してください
-- サイレントターンが漏れる？ 返信が `NO_REPLY`（正確なトークン）で始まっていること、かつストリーミング抑制修正を含むビルドであることを確認してください。
+- 漏れるサイレントターン? サイレントターンが漏れる？ 返信が `NO_REPLY`（正確なトークン）で始まっていること、かつストリーミング抑制修正を含むビルドであることを確認してください。

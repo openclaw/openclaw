@@ -4,13 +4,6 @@ read_when:
   - Quiere soporte de Zalo Personal (no oficial) en OpenClaw
   - Está configurando o desarrollando el plugin zalouser
 title: "Plugin de Zalo Personal"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:17Z
 ---
 
 # Zalo Personal (plugin)

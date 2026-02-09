@@ -4,19 +4,12 @@ read_when:
   - Bạn muốn một khóa API duy nhất cho nhiều LLM
   - Bạn muốn chạy các mô hình qua OpenRouter trong OpenClaw
 title: "OpenRouter"
-x-i18n:
-  source_path: providers/openrouter.md
-  source_hash: b7e29fc9c456c64d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:54Z
 ---
 
 # OpenRouter
 
-OpenRouter cung cấp một **API hợp nhất** định tuyến các yêu cầu tới nhiều mô hình phía sau một
-endpoint và khóa API duy nhất. API này tương thích OpenAI, nên hầu hết các SDK OpenAI hoạt động chỉ bằng cách đổi base URL.
+OpenRouter provides a **unified API** that routes requests to many models behind a single
+endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
 ## Thiết lập CLI
 

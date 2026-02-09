@@ -4,13 +4,6 @@ read_when:
   - آپ جوڑے گئے نوڈز (کیمرے، اسکرین، کینوس) کا انتظام کر رہے ہوں
   - آپ کو درخواستوں کی منظوری دینی ہو یا نوڈ کمانڈز چلانی ہوں
 title: "نوڈز"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:05Z
 ---
 
 # `openclaw nodes`
@@ -40,9 +33,8 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` زیرِ التواء/جوڑے گئے ٹیبلز پرنٹ کرتا ہے۔ جوڑے گئے قطاروں میں تازہ ترین کنیکٹ کی مدت (Last Connect) شامل ہوتی ہے۔
-صرف اس وقت منسلک نوڈز دکھانے کے لیے `--connected` استعمال کریں۔ `--last-connected <duration>` استعمال کریں تاکہ
-ایک مدت کے اندر کنیکٹ ہونے والے نوڈز تک فلٹر کیا جا سکے (مثلاً `24h`, `7d`)۔
+`nodes list` زیر التواء/جوڑے گئے ٹیبلز پرنٹ کرتا ہے۔ جوڑے گئے قطاروں میں تازہ ترین کنکشن کی عمر شامل ہوتی ہے (Last Connect)۔
+صرف اس وقت جڑے ہوئے نوڈز دکھانے کے لیے `--connected` استعمال کریں۔ مدت کے اندر کنیکٹ ہونے والے نوڈز تک فلٹر کرنے کے لیے `--last-connected <duration>` استعمال کریں (مثلاً `24h`, `7d`)۔
 
 ## Invoke / run
 

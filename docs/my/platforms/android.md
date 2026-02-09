@@ -5,13 +5,6 @@ read_when:
   - Android Gateway ရှာဖွေတွေ့ရှိမှု သို့မဟုတ် auth ကို Debugging လုပ်ခြင်း
   - ကလိုင်ယင့်များအကြား Chat history တူညီမှုကို အတည်ပြုခြင်း
 title: "Android အက်ပ်"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # Android အက်ပ် (Node)
@@ -26,7 +19,7 @@ x-i18n:
 
 ## System control
 
-System control (launchd/systemd) ကို Gateway ဟို့စ်ပေါ်တွင်သာ အသုံးပြုသည်။ [Gateway](/gateway) ကိုကြည့်ပါ။
+27. System control (launchd/systemd) ကို Gateway host ပေါ်တွင် ထားရှိထားပါသည်။ 28. [Gateway](/gateway) ကို ကြည့်ပါ။
 
 ## Connection Runbook
 
@@ -43,7 +36,7 @@ Android သည် Gateway WebSocket (default `ws://<host>:18789`) သို့ �
   - Manual gateway host/port (fallback)
 - Gateway စက်ပေါ်တွင် CLI (`openclaw`) ကို run လုပ်နိုင်ရပါမည် (သို့မဟုတ် SSH ဖြင့်)။
 
-### 1) Gateway ကို စတင်ပါ
+### 1. Gateway ကို စတင်ပါ
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Tailnet-only setup များအတွက် (Vienna ⇄ London အတွက�
 - Gateway ဟို့စ်ပေါ်ရှိ `~/.openclaw/openclaw.json` တွင် `gateway.bind: "tailnet"` ကို သတ်မှတ်ပါ။
 - Gateway / macOS menubar app ကို ပြန်လည်စတင်ပါ။
 
-### 2) Discovery ကို စစ်ဆေးပါ (optional)
+### 2. Discovery ကို စစ်ဆေးပါ (optional)
 
 Gateway စက်မှ —
 
@@ -70,14 +63,14 @@ Debugging ဆိုင်ရာ မှတ်စုများ: [Bonjour](/gatew
 
 #### unicast DNS-SD ဖြင့် Tailnet (Vienna ⇄ London) discovery
 
-Android ၏ NSD/mDNS discovery သည် network များကို ဖြတ်ကျော်မသွားနိုင်ပါ။ Android node နှင့် gateway တို့သည် network မတူညီသော်လည်း Tailscale ဖြင့် ချိတ်ဆက်ထားပါက Wide-Area Bonjour / unicast DNS-SD ကို အသုံးပြုပါ —
+29. Android NSD/mDNS discovery သည် network များကို မဖြတ်ကျော်နိုင်ပါ။ 30. သင့် Android node နှင့် gateway သည် မတူညီသော network များပေါ်တွင် ရှိသော်လည်း Tailscale ဖြင့် ချိတ်ဆက်ထားပါက Wide-Area Bonjour / unicast DNS-SD ကို အသုံးပြုပါ:
 
 1. Gateway ဟို့စ်ပေါ်တွင် DNS-SD zone (ဥပမာ `openclaw.internal.`) ကို တည်ဆောက်ပြီး `_openclaw-gw._tcp` records များကို publish လုပ်ပါ။
 2. သင်ရွေးချယ်ထားသော domain ကို ညွှန်ပြသည့် DNS server သို့ Tailscale split DNS ကို configure လုပ်ပါ။
 
 အသေးစိတ်နှင့် CoreDNS config ဥပမာ: [Bonjour](/gateway/bonjour)။
 
-### 3) Android မှ ချိတ်ဆက်ပါ
+### 3. Android မှ ချိတ်ဆက်ပါ
 
 Android အက်ပ်အတွင်း —
 
@@ -91,7 +84,7 @@ Android အက်ပ်အတွင်း —
 - Manual endpoint (enable လုပ်ထားပါက)၊ မဟုတ်ပါက
 - နောက်ဆုံးတွေ့ရှိထားသော gateway (best-effort)။
 
-### 4) Pairing ကို အတည်ပြုပါ (CLI)
+### 4. Pairing ကို အတည်ပြုပါ (CLI)
 
 Gateway စက်ပေါ်တွင် —
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Pairing အသေးစိတ်: [Gateway pairing](/gateway/pairing)။
 
-### 5) Node ချိတ်ဆက်ထားကြောင်း စစ်ဆေးပါ
+### 5. Node ချိတ်ဆက်ထားကြောင်း စစ်ဆေးပါ
 
 - Nodes status မှ —
 
@@ -116,7 +109,7 @@ Pairing အသေးစိတ်: [Gateway pairing](/gateway/pairing)။
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + history
+### 6. Chat + history
 
 Android node ၏ Chat sheet သည် gateway ၏ **primary session key** (`main`) ကို အသုံးပြုသဖြင့် WebChat နှင့် အခြား client များနှင့် history နှင့် replies များကို မျှဝေပါသည် —
 
@@ -124,7 +117,7 @@ Android node ၏ Chat sheet သည် gateway ၏ **primary session key** (`main
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + camera
+### 7. Canvas + camera
 
 #### Gateway Canvas Host (web content အတွက် အကြံပြုထားသည်)
 
@@ -142,12 +135,12 @@ openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params
 
 Tailnet (optional): စက်နှစ်ခုလုံး Tailscale ပေါ်တွင်ရှိပါက `.local` အစား MagicDNS name သို့မဟုတ် tailnet IP ကို အသုံးပြုပါ၊ ဥပမာ `http://<gateway-magicdns>:18793/__openclaw__/canvas/`။
 
-ဤ server သည် HTML ထဲသို့ live-reload client ကို inject လုပ်ပြီး ဖိုင်ပြောင်းလဲမှုများရှိပါက reload ပြုလုပ်ပါသည်။
-A2UI host သည် `http://<gateway-host>:18793/__openclaw__/a2ui/` တွင်ရှိပါသည်။
+31. ဤ server သည် HTML ထဲသို့ live-reload client ကို inject လုပ်ပြီး ဖိုင်ပြောင်းလဲမှုများရှိပါက reload လုပ်ပါသည်။
+32. A2UI host ကို `http://<gateway-host>:18793/__openclaw__/a2ui/` တွင် ရရှိနိုင်ပါသည်။
 
 Canvas commands (foreground only):
 
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (`{"url":""}` သို့မဟုတ် `{"url":"/"}` ကို အသုံးပြုပြီး default scaffold သို့ ပြန်သွားနိုင်သည်)။ `canvas.snapshot` သည် `{ format, base64 }` (default `format="jpeg"`) ကို ပြန်ပေးပါသည်။
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). 34. `canvas.snapshot` သည် `{ format, base64 }` ကို ပြန်ပေးပါသည် (`format="jpeg"` သည် default ဖြစ်ပါသည်)။
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias)
 
 Camera commands (foreground only; permission ဖြင့်ကန့်သတ်ထားသည်):

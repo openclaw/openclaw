@@ -4,19 +4,11 @@ read_when:
   - Windows တွင် OpenClaw ကို ထည့်သွင်းတပ်ဆင်နေချိန်
   - Windows companion app အခြေအနေကို ရှာဖွေနေချိန်
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:46Z
 ---
 
 # Windows (WSL2)
 
-Windows တွင် OpenClaw ကို **WSL2 မှတစ်ဆင့်** အသုံးပြုရန် အကြံပြုပါသည် (Ubuntu ကို အကြံပြုသည်)။  
-CLI + Gateway ကို Linux အတွင်းတွင် လည်ပတ်စေခြင်းဖြင့် runtime ကို တစ်သမတ်တည်း ထိန်းထားနိုင်ပြီး tooling များကို ပိုမိုကိုက်ညီစေသည် (Node/Bun/pnpm, Linux binaries, Skills)။ Native Windows သည် ပိုမိုခက်ခဲနိုင်ပါသည်။ WSL2 သည် Linux အတွေ့အကြုံကို အပြည့်အဝ ပေးစွမ်းပြီး — ထည့်သွင်းရန် အမိန့်တစ်ခုတည်းသာ လိုအပ်သည်: `wsl --install`။
+Windows ပေါ်တွင် OpenClaw ကို **WSL2 မှတစ်ဆင့်** (Ubuntu ကို အကြံပြုပါသည်) အသုံးပြုရန် အကြံပြုပါသည်။ CLI + Gateway သည် Linux အတွင်းတွင် run လုပ်သဖြင့် runtime ကို တူညီစေပြီး tooling ကို ပိုမို ကိုက်ညီစေပါသည် (Node/Bun/pnpm, Linux binaries, skills)။ Native Windows တွင် အသုံးပြုရာတွင် ပိုမို ခက်ခဲနိုင်ပါသည်။ WSL2 သည် Linux အပြည့်အစုံကို ပေးစွမ်းပြီး — install လုပ်ရန် command တစ်ကြိမ်သာ လိုအပ်ပါသည်: `wsl --install`။
 
 Native Windows companion app များကို စီစဉ်ရေးဆွဲထားပြီးဖြစ်ပါသည်။
 
@@ -61,7 +53,7 @@ openclaw doctor
 
 ## Advanced: WSL services ကို LAN ပေါ်သို့ ဖော်ပြခြင်း (portproxy)
 
-WSL တွင် ကိုယ်ပိုင် virtual network တစ်ခုရှိပါသည်။ အခြားစက်တစ်လုံးမှ **WSL အတွင်း** လည်ပတ်နေသော service တစ်ခု (SSH၊ local TTS server၊ သို့မဟုတ် Gateway) ကို ချိတ်ဆက်ရမည်ဆိုပါက Windows port တစ်ခုကို လက်ရှိ WSL IP သို့ forward လုပ်ရပါမည်။ WSL IP သည် restart ပြီးတိုင်း ပြောင်းလဲနိုင်သောကြောင့် forwarding rule ကို ပြန်လည်သတ်မှတ်ရနိုင်ပါသည်။
+WSL တွင် ကိုယ်ပိုင် virtual network ရှိပါသည်။ အခြား machine တစ်လုံးမှ **WSL အတွင်း** run လုပ်နေသော service တစ်ခု (SSH, local TTS server, သို့မဟုတ် Gateway) ကို ချိတ်ဆက်လိုပါက Windows port တစ်ခုကို လက်ရှိ WSL IP သို့ forward လုပ်ရပါမည်။ WSL IP သည် restart ပြုလုပ်ပြီးနောက် ပြောင်းလဲသွားသဖြင့် forwarding rule ကို ပြန်လည် update လုပ်ရန် လိုအပ်နိုင်ပါသည်။
 
 ဥပမာ (PowerShell **Administrator အဖြစ်**):
 
@@ -101,7 +93,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 
 ## WSL2 ထည့်သွင်းခြင်း အဆင့်လိုက်
 
-### 1) WSL2 + Ubuntu ကို ထည့်သွင်းပါ
+### 1. WSL2 + Ubuntu ကို ထည့်သွင်းပါ
 
 PowerShell (Admin) ကို ဖွင့်ပါ:
 
@@ -114,7 +106,7 @@ wsl --install -d Ubuntu-24.04
 
 Windows မှ reboot လုပ်ရန် တောင်းဆိုပါက ပြန်လည်စတင်ပါ။
 
-### 2) systemd ကို ဖွင့်ပါ (gateway install အတွက် မဖြစ်မနေ လိုအပ်)
+### 2. systemd ကို ဖွင့်ပါ (gateway install အတွက် မဖြစ်မနေ လိုအပ်)
 
 WSL terminal အတွင်းတွင်:
 
@@ -137,7 +129,7 @@ Ubuntu ကို ပြန်ဖွင့်ပြီး အတည်ပြု�
 systemctl --user status
 ```
 
-### 3) OpenClaw ကို ထည့်သွင်းပါ (WSL အတွင်း)
+### 3. OpenClaw ကို ထည့်သွင်းပါ (WSL အတွင်း)
 
 WSL အတွင်းမှ Linux Getting Started လမ်းကြောင်းကို လိုက်နာပါ:
 
@@ -154,4 +146,4 @@ openclaw onboard
 
 ## Windows companion app
 
-ယခုအချိန်တွင် Windows companion app မရှိသေးပါ။ ဖြစ်လာစေရန် ပူးပေါင်းပါဝင်လိုပါက contributions များကို ကြိုဆိုပါသည်။
+ယခုအချိန်တွင် Windows companion app မရှိသေးပါ။ ၎င်းကို အကောင်အထည်ဖော်ရန် ပါဝင်ကူညီလိုပါက contributions များကို ကြိုဆိုပါသည်။

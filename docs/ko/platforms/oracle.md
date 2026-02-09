@@ -5,13 +5,6 @@ read_when:
   - OpenClaw 용 저비용 VPS 호스팅을 찾고 있을 때
   - 소형 서버에서 24/7 OpenClaw 를 원할 때
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:06Z
 ---
 
 # Oracle Cloud (OCI)에서 OpenClaw
@@ -27,13 +20,13 @@ Oracle 의 무료 티어는 OpenClaw 에 매우 적합할 수 있습니다(특�
 
 ## 비용 비교 (2026)
 
-| 제공업체     | 플랜            | 사양                  | 월 요금 | 비고                  |
-| ------------ | --------------- | --------------------- | ------- | --------------------- |
-| Oracle Cloud | Always Free ARM | 최대 4 OCPU, 24GB RAM | $0      | ARM, 제한된 수용량    |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM       | ~ $4    | 가장 저렴한 유료 옵션 |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM       | $6      | 쉬운 UI, 좋은 문서    |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM       | $6      | 많은 지역             |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM       | $5      | 현재 Akamai 소속      |
+| 제공업체         | 플랜              | 사양                  | 40. 월별 가격 | 참고 자료        |
+| ------------ | --------------- | ------------------- | -------------------------------- | ------------ |
+| Oracle Cloud | Always Free ARM | 최대 4 OCPU, 24GB RAM | $0                               | ARM, 제한된 수용량 |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM     | ~ $4             | 가장 저렴한 유료 옵션 |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM     | $6                               | 쉬운 UI, 좋은 문서 |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM     | $6                               | 많은 지역        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM     | $5                               | 현재 Akamai 소속 |
 
 ---
 
@@ -43,7 +36,7 @@ Oracle 의 무료 티어는 OpenClaw 에 매우 적합할 수 있습니다(특�
 - Tailscale 계정([tailscale.com](https://tailscale.com)에서 무료)
 - 약 30분
 
-## 1) OCI 인스턴스 생성
+## 1. OCI 인스턴스 생성
 
 1. [Oracle Cloud Console](https://cloud.oracle.com/)에 로그인합니다
 2. **Compute → Instances → Create Instance**로 이동합니다
@@ -60,7 +53,7 @@ Oracle 의 무료 티어는 OpenClaw 에 매우 적합할 수 있습니다(특�
 
 **팁:** 인스턴스 생성 시 "Out of capacity" 오류가 발생하면 다른 가용 도메인을 선택하거나 나중에 다시 시도하십시오. 무료 티어의 수용량은 제한적입니다.
 
-## 2) 연결 및 업데이트
+## 2. 연결 및 업데이트
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **참고:** 일부 의존성의 ARM 컴파일을 위해 `build-essential` 이(가) 필요합니다.
 
-## 3) 사용자 및 호스트 이름 구성
+## 3. 사용자 및 호스트 이름 구성
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Tailscale 설치
+## 4. Tailscale 설치
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,18 +96,18 @@ tailscale status
 
 **이후에는 Tailscale 로 연결하십시오:** `ssh ubuntu@openclaw` (또는 Tailscale IP 사용).
 
-## 5) OpenClaw 설치
+## 5. OpenClaw 설치
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
 source ~/.bashrc
 ```
 
-"How do you want to hatch your bot?"라는 질문이 나오면 **"Do this later"**를 선택하십시오.
+"How do you want to hatch your bot?"라는 질문이 나오면 \*\*"Do this later"\*\*를 선택하십시오.
 
 > 참고: ARM 네이티브 빌드 문제를 겪는 경우, Homebrew 를 사용하기 전에 시스템 패키지(예: `sudo apt install -y build-essential`)부터 시도하십시오.
 
-## 6) Gateway(게이트웨이) 구성(loopback + 토큰 인증) 및 Tailscale Serve 활성화
+## 6. Gateway(게이트웨이) 구성(loopback + 토큰 인증) 및 Tailscale Serve 활성화
 
 기본값으로 토큰 인증을 사용하십시오. 이는 예측 가능하며 “insecure auth” Control UI 플래그를 사용할 필요를 피할 수 있습니다.
 
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) 확인
+## 7. 확인
 
 ```bash
 # Check version
@@ -149,7 +142,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) VCN 보안 잠금
+## 8. VCN 보안 잠금
 
 모든 것이 정상 동작하는 것을 확인한 후, Tailscale 를 제외한 모든 트래픽을 차단하도록 VCN 을 잠그십시오. OCI 의 Virtual Cloud Network 는 네트워크 엣지에서 방화벽 역할을 하며, 트래픽은 인스턴스에 도달하기 전에 차단됩니다.
 
@@ -185,18 +178,18 @@ SSH 터널은 필요하지 않습니다. Tailscale 이 다음을 제공합니다
 
 VCN 을 잠그고(UDP 41641 만 허용) Gateway(게이트웨이)를 loopback 에 바인딩하면 강력한 다층 방어가 구성됩니다. 공용 트래픽은 네트워크 엣지에서 차단되고, 관리 접근은 tailnet 을 통해 이루어집니다.
 
-이 구성은 인터넷 전반의 SSH 무차별 대입 공격을 막기 위한 추가적인 호스트 기반 방화벽 규칙의 *필요성*을 줄여주는 경우가 많습니다. 다만 OS 를 최신 상태로 유지하고, `openclaw security audit` 를 실행하며, 공용 인터페이스에서 실수로 리스닝하고 있지 않은지 확인해야 합니다.
+이 구성은 인터넷 전반의 SSH 무차별 대입 공격을 막기 위한 추가적인 호스트 기반 방화벽 규칙의 _필요성_을 줄여주는 경우가 많습니다. 다만 OS 를 최신 상태로 유지하고, `openclaw security audit` 를 실행하며, 공용 인터페이스에서 실수로 리스닝하고 있지 않은지 확인해야 합니다.
 
 ### 이미 보호되는 항목
 
-| 기존 단계            | 필요 여부   | 이유                                                               |
-| -------------------- | ----------- | ------------------------------------------------------------------ |
-| UFW 방화벽           | 아니요      | VCN 이 트래픽이 인스턴스에 도달하기 전에 차단함                    |
-| fail2ban             | 아니요      | VCN 에서 포트 22 가 차단되면 무차별 대입 공격이 발생하지 않음      |
-| sshd 하드닝          | 아니요      | Tailscale SSH 는 sshd 를 사용하지 않음                             |
-| 루트 로그인 비활성화 | 아니요      | Tailscale 은 시스템 사용자가 아닌 Tailscale 아이덴티티를 사용함    |
-| SSH 키 전용 인증     | 아니요      | Tailscale 이 tailnet 을 통해 인증함                                |
-| IPv6 하드닝          | 보통 불필요 | VCN/서브넷 설정에 따라 다름; 실제로 할당/노출된 항목을 확인해야 함 |
+| 전통적인 단계     | 필요 여부  | 이유                                           |
+| ----------- | ------ | -------------------------------------------- |
+| UFW 방화벽     | 아니요    | VCN 이 트래픽이 인스턴스에 도달하기 전에 차단함                 |
+| fail2ban    | 아니요    | VCN 에서 포트 22 가 차단되면 무차별 대입 공격이 발생하지 않음       |
+| sshd 하드닝    | 아니요    | Tailscale SSH 는 sshd 를 사용하지 않음               |
+| 루트 로그인 비활성화 | 아니요    | Tailscale 은 시스템 사용자가 아닌 Tailscale 아이덴티티를 사용함 |
+| SSH 키 전용 인증 | 아니요    | Tailscale 이 tailnet 을 통해 인증함                 |
+| IPv6 하드닝    | 보통 불필요 | VCN/서브넷 설정에 따라 다름; 실제로 할당/노출된 항목을 확인해야 함     |
 
 ### 여전히 권장 사항
 
@@ -288,7 +281,7 @@ uname -m  # Should show aarch64
 
 ## 영속성
 
-모든 상태 데이터는 다음 위치에 저장됩니다:
+모든 상태는 여기에 저장됨:
 
 - `~/.openclaw/` — 구성, 자격 증명, 세션 데이터
 - `~/.openclaw/workspace/` — 작업 공간(SOUL.md, 메모리, 아티팩트)
@@ -301,7 +294,7 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 ---
 
-## 참고 자료
+## 참고
 
 - [Gateway 원격 접근](/gateway/remote) — 다른 원격 접근 패턴
 - [Tailscale 통합](/gateway/tailscale) — 전체 Tailscale 문서

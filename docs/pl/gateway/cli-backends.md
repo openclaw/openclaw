@@ -1,17 +1,10 @@
 ---
-summary: „Backendy CLI: tekstowy tryb awaryjny przez lokalne CLI AI”
+summary: "„Backendy CLI: tekstowy tryb awaryjny przez lokalne CLI AI”"
 read_when:
   - Gdy potrzebujesz niezawodnego trybu awaryjnego, gdy dostawcy API zawodzą
   - Gdy uruchamiasz Claude Code CLI lub inne lokalne CLI AI i chcesz je ponownie wykorzystać
   - Gdy potrzebujesz wyłącznie tekstowej, pozbawionej narzędzi ścieżki, która nadal obsługuje sesje i obrazy
-title: „Backendy CLI”
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:18Z
+title: "„Backendy CLI”"
 ---
 
 # Backendy CLI (środowisko wykonawcze awaryjne)
@@ -147,7 +140,7 @@ Identyfikator dostawcy staje się lewą stroną odwołania do modelu:
 4. **Parsuje wyjście** (JSON lub zwykły tekst) i zwraca końcowy tekst.
 5. **Utrwala identyfikatory sesji** per backend, aby kolejne wywołania używały tej samej sesji CLI.
 
-## Sesje
+## Sessions
 
 - Jeśli CLI obsługuje sesje, ustaw `sessionArg` (np. `--session-id`) lub
   `sessionArgs` (placeholder `{sessionId}`), gdy identyfikator musi być wstawiony

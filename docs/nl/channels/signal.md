@@ -4,13 +4,6 @@ read_when:
   - Signal-ondersteuning instellen
   - Signal verzenden/ontvangen debuggen
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:17Z
 ---
 
 # Signal (signal-cli)

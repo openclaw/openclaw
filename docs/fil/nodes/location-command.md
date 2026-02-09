@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag ng suporta sa location node o UI ng mga pahintulot
   - Pagdidisenyo ng mga daloy para sa background location + push
 title: "Command ng Lokasyon"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Command ng lokasyon (mga node)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## Bakit selector (hindi lang switch)
 
-Multi-level ang mga pahintulot ng OS. Maaari tayong mag-expose ng selector sa app, pero ang OS pa rin ang nagdedesisyon sa aktwal na grant.
+iOS/macOS: maaaring piliin ng user ang **While Using** o **Always** sa mga system prompt/Settings. Maaaring humiling ang app ng pag-upgrade, ngunit maaaring mangailangan ang OS ng Settings.
 
-- iOS/macOS: maaaring piliin ng user ang **While Using** o **Always** sa mga system prompt/Settings. Maaaring humiling ang app ng upgrade, pero maaaring kailanganin ng OS ang Settings.
+- Opsyonal. Iniuulat ng macOS node ang `location` sa pamamagitan ng permissions map; maaaring hindi ito isama ng iOS/Android.
 - Android: hiwalay na pahintulot ang background location; sa Android 10+ madalas kailangan ng daloy papunta sa Settings.
 - Ang precise location ay hiwalay na grant (iOS 14+ “Precise”, Android “fine” vs “coarse”).
 
@@ -47,7 +40,7 @@ Pag-uugali ng UI:
 
 ## Pagmamapa ng pahintulot (node.permissions)
 
-Opsyonal. Ang macOS node ay nag-uulat ng `location` sa pamamagitan ng permissions map; maaaring wala nito ang iOS/Android.
+Opsyonal. Maaaring ma-throttle ang silent push; asahan ang paminsan-minsang mga pagkabigo.
 
 ## Command: `location.get`
 
@@ -103,7 +96,7 @@ Push-triggered na daloy (hinaharap):
 
 Mga tala:
 
-- iOS: kailangan ang Always permission + background location mode. Maaaring ma-throttle ang silent push; asahan ang paminsan-minsang pagkabigo.
+- iOS: Palaging kailangan ang pahintulot + background location mode. Maaaring ma-throttle ang silent push; asahan ang mga paminsan-minsang pagkabigo.
 - Android: maaaring kailanganin ng background location ang foreground service; kung hindi, asahan ang pagtanggi.
 
 ## Integrasyon ng model/tooling
@@ -116,5 +109,5 @@ Mga tala:
 
 - Off: “Naka-disable ang pagbabahagi ng lokasyon.”
 - While Using: “Kapag bukas lang ang OpenClaw.”
-- Always: “Payagan ang background location. Nangangailangan ng pahintulot ng system.”
-- Precise: “Gumamit ng tumpak na GPS location. I-toggle off para magbahagi ng tinatayang lokasyon.”
+- Palagi: “Payagan ang background location.” Nangangailangan ng system permission.”
+- Eksakto: “Gumamit ng eksaktong lokasyon ng GPS. I-off upang magbahagi ng tinatayang lokasyon.”

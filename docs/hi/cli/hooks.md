@@ -4,13 +4,6 @@ read_when:
   - आप एजेंट हुक्स का प्रबंधन करना चाहते हैं
   - आप हुक्स को इंस्टॉल या अपडेट करना चाहते हैं
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:07Z
 ---
 
 # `openclaw hooks`
@@ -134,8 +127,8 @@ openclaw hooks enable <name>
 
 अपने विन्यास (`~/.openclaw/config.json`) में जोड़कर किसी विशिष्ट हुक को सक्षम करें।
 
-**टिप्पणी:** प्लगइन्स द्वारा प्रबंधित हुक्स `openclaw hooks list` में `plugin:<id>` दिखाते हैं और
-यहाँ सक्षम/अक्षम नहीं किए जा सकते। इसके बजाय प्लगइन को सक्षम/अक्षम करें।
+**Note:** Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and
+can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **आर्ग्युमेंट्स:**
 
@@ -156,7 +149,7 @@ openclaw hooks enable session-memory
 **यह क्या करता है:**
 
 - जाँचता है कि हुक मौजूद है और योग्य है
-- आपके विन्यास में `hooks.internal.entries.<name>.enabled = true` को अपडेट करता है
+- Updates `hooks.internal.entries.<name>.enabled = true` in your config
 - विन्यास को डिस्क पर सहेजता है
 
 **सक्षम करने के बाद:**

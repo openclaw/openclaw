@@ -4,13 +4,6 @@ read_when:
   - ချန်နယ် တည်နေရာ ခွဲခြမ်းစိတ်ဖြာမှုကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း ပြုလုပ်သည့်အခါ
   - agent prompt များ သို့မဟုတ် tool များတွင် တည်နေရာ context အကွက်များကို အသုံးပြုသည့်အခါ
 title: "ချန်နယ် တည်နေရာ ခွဲခြမ်းစိတ်ဖြာခြင်း"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:55Z
 ---
 
 # ချန်နယ် တည်နေရာ ခွဲခြမ်းစိတ်ဖြာခြင်း

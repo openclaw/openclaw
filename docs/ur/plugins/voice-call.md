@@ -4,18 +4,12 @@ read_when:
   - آپ OpenClaw سے آؤٹ باؤنڈ وائس کال کرنا چاہتے ہیں
   - آپ voice-call پلگ اِن کو کنفیگر یا ڈیولپ کر رہے ہیں
 title: "وائس کال پلگ اِن"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:38Z
 ---
 
 # وائس کال (پلگ اِن)
 
-OpenClaw کے لیے پلگ اِن کے ذریعے وائس کالز۔ آؤٹ باؤنڈ نوٹیفکیشنز اور اِن باؤنڈ پالیسیز کے ساتھ ملٹی ٹرن گفتگو کی سپورٹ فراہم کرتا ہے۔
+Voice calls for OpenClaw via a plugin. Supports outbound notifications and
+multi-turn conversations with inbound policies.
 
 موجودہ فراہم کنندگان:
 
@@ -120,12 +114,14 @@ cd ./extensions/voice-call && pnpm install
 - `mock` ایک لوکل ڈیولپمنٹ فراہم کنندہ ہے (کوئی نیٹ ورک کالز نہیں)۔
 - `skipSignatureVerification` صرف لوکل ٹیسٹنگ کے لیے ہے۔
 - اگر آپ ngrok فری ٹیر استعمال کرتے ہیں تو `publicUrl` کو عین ngrok URL پر سیٹ کریں؛ دستخط کی توثیق ہمیشہ نافذ رہتی ہے۔
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` Twilio ویب ہوکس کو **صرف** اس صورت میں غلط دستخط کے ساتھ اجازت دیتا ہے جب `tunnel.provider="ngrok"` اور `serve.bind` لوپ بیک ہو (ngrok لوکل ایجنٹ)۔ صرف لوکل ڈیولپمنٹ کے لیے استعمال کریں۔
-- Ngrok فری ٹیر URLs تبدیل ہو سکتے ہیں یا انٹر اسٹی شیئل رویہ شامل کر سکتے ہیں؛ اگر `publicUrl` میں فرق آ جائے تو Twilio کے دستخط ناکام ہو جائیں گے۔ پروڈکشن کے لیے مستحکم ڈومین یا Tailscale funnel کو ترجیح دیں۔
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
+- Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
 
 ## ویب ہوک سکیورٹی
 
-جب Gateway کے سامنے کوئی پراکسی یا سرنگ ہو تو پلگ اِن دستخط کی توثیق کے لیے عوامی URL کو دوبارہ تشکیل دیتا ہے۔ یہ اختیارات اس بات کو کنٹرول کرتے ہیں کہ کون سے فارورڈڈ ہیڈرز پر بھروسا کیا جائے۔
+When a proxy or tunnel sits in front of the Gateway, the plugin reconstructs the
+public URL for signature verification. These options control which forwarded
+headers are trusted.
 
 `webhookSecurity.allowedHosts` فارورڈنگ ہیڈرز سے ہوسٹس کی اجازت فہرست بناتا ہے۔
 
@@ -154,7 +150,9 @@ cd ./extensions/voice-call && pnpm install
 
 ## کالز کے لیے TTS
 
-وائس کال، کالز پر اسٹریمنگ اسپیچ کے لیے بنیادی `messages.tts` کنفیگریشن (OpenAI یا ElevenLabs) استعمال کرتا ہے۔ آپ پلگ اِن کنفیگ کے تحت **اسی ساخت** کے ساتھ اسے اووررائیڈ کر سکتے ہیں — یہ `messages.tts` کے ساتھ ڈیپ‑مرج ہو جاتا ہے۔
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+**same shape** — it deep‑merges with `messages.tts`.
 
 ```json5
 {
@@ -234,7 +232,7 @@ cd ./extensions/voice-call && pnpm install
 
 ## اِن باؤنڈ کالز
 
-اِن باؤنڈ پالیسی بطورِ طے شدہ `disabled` ہے۔ اِن باؤنڈ کالز فعال کرنے کے لیے سیٹ کریں:
+Inbound policy defaults to `disabled`. To enable inbound calls, set:
 
 ```json5
 {
@@ -244,7 +242,7 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-خودکار جوابات ایجنٹ سسٹم استعمال کرتے ہیں۔ درج ذیل کے ذریعے ٹیون کریں:
+Auto-responses use the agent system. Tune with:
 
 - `responseModel`
 - `responseSystemPrompt`

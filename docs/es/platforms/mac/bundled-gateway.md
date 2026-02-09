@@ -5,13 +5,6 @@ read_when:
   - Depurar el servicio launchd del Gateway en macOS
   - Instalar la CLI del Gateway para macOS
 title: "Gateway en macOS"
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:02Z
 ---
 
 # Gateway en macOS (launchd externo)
@@ -63,7 +56,7 @@ Registro:
 La app de macOS verifica la versión del gateway frente a su propia versión. Si son
 incompatibles, actualice la CLI global para que coincida con la versión de la app.
 
-## Comprobación rápida
+## Comprobación de humo
 
 ```bash
 openclaw --version

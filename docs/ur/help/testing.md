@@ -5,13 +5,6 @@ read_when:
   - ماڈل/فراہم کنندہ کے بگز کے لیے ریگریشنز شامل کرنا
   - گیٹ وے + ایجنٹ کے رویّے کی ڈیبگنگ
 title: "ٹیسٹنگ"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:09Z
 ---
 
 # ٹیسٹنگ
@@ -277,13 +270,13 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 اختیاری اضافی کوریج (اچھا ہے مگر لازمی نہیں):
 
 - xAI: `xai/grok-4` (یا تازہ ترین دستیاب)
-- Mistral: `mistral/`… (کوئی ایک “tools” قابل ماڈل منتخب کریں جو فعال ہو)
-- Cerebras: `cerebras/`… (اگر رسائی ہو)
+- Mistral: `mistral/`… 31. (وہ ایک “tools” قابل ماڈل منتخب کریں جو آپ نے فعال کیا ہوا ہو)
+- 32. Cerebras: `cerebras/`… (اگر آپ کو رسائی حاصل ہو)
 - LM Studio: `lmstudio/`… (لوکل؛ ٹول کالنگ API موڈ پر منحصر ہے)
 
 ### وژن: امیج بھیجنا (اٹیچمنٹ → ملٹی موڈل پیغام)
 
-امیج پروب چلانے کے لیے `OPENCLAW_LIVE_GATEWAY_MODELS` میں کم از کم ایک امیج-قابل ماڈل شامل کریں (Claude/Gemini/OpenAI وژن قابل ورژنز وغیرہ)۔
+33. `OPENCLAW_LIVE_GATEWAY_MODELS` میں کم از کم ایک image-capable ماڈل شامل کریں (Claude/Gemini/OpenAI vision-capable variants وغیرہ)۔ تاکہ امیج پروب کو آزمایا جا سکے۔
 
 ### ایگریگیٹرز / متبادل گیٹ ویز
 
@@ -297,16 +290,18 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - Built-in: `openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - بذریعہ `models.providers` (کسٹم اینڈ پوائنٹس): `minimax` (کلاؤڈ/API)، نیز کوئی بھی OpenAI/Anthropic-مطابقت رکھنے والا پراکسی (LM Studio، vLLM، LiteLLM وغیرہ)
 
-مشورہ: دستاویزات میں “تمام ماڈلز” ہارڈ کوڈ کرنے کی کوشش نہ کریں۔ مستند فہرست وہی ہے جو `discoverModels(...)` آپ کی مشین پر واپس کرے + جو بھی کلیدیں دستیاب ہوں۔
+ٹِپ: ڈاکس میں “تمام ماڈلز” کو ہارڈکوڈ کرنے کی کوشش نہ کریں۔ مستند فہرست وہی ہے جو `discoverModels(...)` آپ کی مشین پر واپس کرتا ہے + جو بھی keys دستیاب ہوں۔
 
 ## اسناد (کبھی کمٹ نہ کریں)
 
-لائیو ٹیسٹس اسناد اسی طرح دریافت کرتے ہیں جیسے CLI کرتا ہے۔ عملی مضمرات:
+34. لائیو ٹیسٹس اسی طرح اسناد (credentials) دریافت کرتے ہیں جیسے CLI کرتا ہے۔ عملی مضمرات:
 
 - اگر CLI کام کرتا ہے تو لائیو ٹیسٹس کو وہی کلیدیں ملنی چاہئیں۔
+
 - اگر لائیو ٹیسٹ “no creds” کہے تو اسی طرح ڈیبگ کریں جیسے `openclaw models list` / ماڈل سلیکشن کو کرتے ہیں۔
 
 - پروفائل اسٹور: `~/.openclaw/credentials/` (ترجیحی؛ ٹیسٹس میں “profile keys” سے مراد یہی ہے)
+
 - کنفیگ: `~/.openclaw/openclaw.json` (یا `OPENCLAW_CONFIG_PATH`)
 
 اگر آپ env کلیدوں پر انحصار کرنا چاہتے ہیں (مثلاً آپ کے `~/.profile` میں ایکسپورٹ ہوں)، تو `source ~/.profile` کے بعد لوکل ٹیسٹس چلائیں، یا نیچے دیے گئے Docker رَنرز استعمال کریں (وہ `~/.profile` کو کنٹینر میں ماؤنٹ کر سکتے ہیں)۔
@@ -314,7 +309,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 ## Deepgram لائیو (آڈیو ٹرانسکرپشن)
 
 - ٹیسٹ: `src/media-understanding/providers/deepgram/audio.live.test.ts`
-- فعال کریں: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
+- Enable: `DEEPGRAM_API_KEY=... DEEPGRAM_LIVE_TEST=1 pnpm test:live src/media-understanding/providers/deepgram/audio.live.test.ts`
 
 ## Docker رَنرز (اختیاری “Linux میں کام کرتا ہے” چیکس)
 

@@ -3,13 +3,6 @@ summary: "Инструкции и перечень навыков агента O
 read_when:
   - При запуске нового сеанса агента OpenClaw
   - При включении или аудите навыков по умолчанию
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:03Z
 ---
 
 # AGENTS.md — персональный ассистент OpenClaw (по умолчанию)

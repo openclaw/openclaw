@@ -1,17 +1,10 @@
 ---
 title: Lobster
-summary: „Typowany runtime przepływów pracy dla OpenClaw z wznawialnymi bramkami zatwierdzeń.”
+summary: "„Typowany runtime przepływów pracy dla OpenClaw z wznawialnymi bramkami zatwierdzeń.”"
 description: Typed workflow runtime for OpenClaw — composable pipelines with approval gates.
 read_when:
   - Chcesz deterministycznych, wieloetapowych przepływów pracy z jawnymi zatwierdzeniami
   - Musisz wznowić przepływ pracy bez ponownego uruchamiania wcześniejszych kroków
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:04Z
 ---
 
 # Lobster

@@ -1,12 +1,5 @@
 ---
 title: "Pi Entegrasyon Mimarisi"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:50Z
 ---
 
 # Pi Entegrasyon Mimarisi
@@ -35,12 +28,12 @@ OpenClaw, bir yapay zekâ kodlama ajanını mesajlaşma gateway (ağ geçidi) mi
 }
 ```
 
-| Paket             | Amaç                                                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| Paket             | Amaç                                                                                                                          |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Temel LLM soyutlamaları: `Model`, `streamSimple`, mesaj türleri, sağlayıcı API’leri                           |
-| `pi-agent-core`   | Ajan döngüsü, araç çalıştırma, `AgentMessage` türleri                                                         |
+| `pi-agent-core`   | Ajan döngüsü, araç çalıştırma, `AgentMessage` türleri                                                                         |
 | `pi-coding-agent` | Yüksek seviyeli SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, yerleşik araçlar |
-| `pi-tui`          | Terminal UI bileşenleri (OpenClaw’un yerel TUI modunda kullanılır)                                            |
+| `pi-tui`          | Terminal UI bileşenleri (OpenClaw’un yerel TUI modunda kullanılır)                                         |
 
 ## Dosya Yapısı
 
@@ -237,7 +230,7 @@ SDK, tam ajan döngüsünü yönetir: LLM’e gönderme, araç çağrılarını 
 
 ## Araç Mimarisi
 
-### Araç Hattı
+### Tool Pipeline
 
 1. **Temel Araçlar**: pi’nin `codingTools` (read, bash, edit, write)
 2. **Özel Değiştirmeler**: OpenClaw, bash’i `exec`/`process` ile değiştirir, read/edit/write’ı sandbox için özelleştirir
@@ -266,7 +259,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 }
 ```
 
-### Araç Bölme Stratejisi
+### Tool Split Strategy
 
 `splitSdkTools()`, tüm araçları `customTools` üzerinden geçirir:
 
@@ -294,7 +287,7 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ## Oturum Yönetimi
 
-### Oturum Dosyaları
+### Session Files
 
 Oturumlar, ağaç yapısına sahip (id/parentId bağlantılı) JSONL dosyalarıdır. Kalıcılığı pi’nin `SessionManager` bileşeni yönetir:
 
@@ -304,7 +297,7 @@ const sessionManager = SessionManager.open(params.sessionFile);
 
 OpenClaw bunu, araç sonucu güvenliği için `guardSessionManager()` ile sarar.
 
-### Oturum Önbellekleme
+### Session Caching
 
 `session-manager-cache.ts`, tekrarlanan dosya ayrıştırmalarını önlemek için SessionManager örneklerini önbelleğe alır:
 
@@ -362,7 +355,7 @@ const { model, error, authStorage, modelRegistry } = resolveModel(
 authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
 ```
 
-### Yedekleme (Failover)
+### Failover
 
 Yapılandırıldığında, `FailoverError` model geri dönüşünü tetikler:
 
@@ -393,7 +386,7 @@ if (resolveCompactionMode(params.cfg) === "safeguard") {
 }
 ```
 
-### Bağlam Budama
+### Context Pruning
 
 `pi-extensions/context-pruning.ts`, önbellek TTL tabanlı bağlam budamayı uygular:
 
@@ -438,7 +431,7 @@ const stripBlockTags = (text: string, state: { thinking: boolean; final: boolean
 const { text: cleanedText, mediaUrls, audioAsVoice, replyToId } = consumeReplyDirectives(chunk);
 ```
 
-## Hata Yönetimi
+## Error Handling
 
 ### Hata Sınıflandırma
 
@@ -518,15 +511,15 @@ Bu, pi’nin yerel moduna benzer etkileşimli terminal deneyimini sağlar.
 
 ## Pi CLI’den Temel Farklar
 
-| Boyut            | Pi CLI                      | OpenClaw Gömülü                                                                                  |
-| ---------------- | --------------------------- | ------------------------------------------------------------------------------------------------ |
-| Çağırma          | `pi` komutu / RPC           | `createAgentSession()` üzerinden SDK                                                             |
-| Araçlar          | Varsayılan kodlama araçları | Özel OpenClaw araç seti                                                                          |
-| Sistem prompt’u  | AGENTS.md + prompt’lar      | Kanal/bağlama göre dinamik                                                                       |
-| Oturum depolama  | `~/.pi/agent/sessions/`     | `~/.openclaw/agents/<agentId>/sessions/` (veya `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Kimlik doğrulama | Tek kimlik bilgisi          | Rotasyonlu çoklu profil                                                                          |
-| Uzantılar        | Diskten yüklenir            | Programatik + disk yolları                                                                       |
-| Olay işleme      | TUI çizimi                  | Geri çağrı tabanlı (onBlockReply vb.)                                                            |
+| Aspect           | Pi CLI                                 | OpenClaw Gömülü                                                                                                     |
+| ---------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Uzantılar        | `pi` komutu / RPC                      | `createAgentSession()` üzerinden SDK                                                                                |
+| Araçlar          | Varsayılan kodlama araçları            | Özel OpenClaw araç seti                                                                                             |
+| Sistem prompt’u  | AGENTS.md + prompt’lar | Kanal/bağlama göre dinamik                                                                                          |
+| Oturum depolama  | `~/.pi/agent/sessions/`                | `~/.openclaw/agents/<agentId>/sessions/` (veya `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Kimlik doğrulama | Tek kimlik bilgisi                     | Rotasyonlu çoklu profil                                                                                             |
+| Extensions       | Diskten yüklenir                       | Programatik + disk yolları                                                                                          |
+| Olay işleme      | TUI çizimi                             | Geri çağrı tabanlı (onBlockReply vb.)                                            |
 
 ## Gelecek Değerlendirmeleri
 

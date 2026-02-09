@@ -1,16 +1,9 @@
 ---
-summary: „OpenClaw auf DigitalOcean (einfache kostenpflichtige VPS-Option)“
+summary: "„OpenClaw auf DigitalOcean (einfache kostenpflichtige VPS-Option)“"
 read_when:
   - OpenClaw auf DigitalOcean einrichten
   - Günstiges VPS-Hosting für OpenClaw suchen
-title: „DigitalOcean“
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:51Z
+title: "DigitalOcean"
 ---
 
 # OpenClaw auf DigitalOcean
@@ -23,13 +16,13 @@ Wenn Sie eine Option für 0 $/Monat möchten und ARM + anbieterspezifische Einr
 
 ## Kostenvergleich (2026)
 
-| Anbieter     | Tarif           | Spezifikationen          | Preis/Monat   | Hinweise                                       |
-| ------------ | --------------- | ------------------------ | ------------- | ---------------------------------------------- |
-| Oracle Cloud | Always Free ARM | bis zu 4 OCPU, 24 GB RAM | 0 $           | ARM, begrenzte Kapazität / Anmelde-Eigenheiten |
+| Anbieter     | Plan            | Spezifikationen          | Preis/Monat                                      | Hinweise                                       |
+| ------------ | --------------- | ------------------------ | ------------------------------------------------ | ---------------------------------------------- |
+| Oracle Cloud | Always Free ARM | bis zu 4 OCPU, 24 GB RAM | 0 $                                              | ARM, begrenzte Kapazität / Anmelde-Eigenheiten |
 | Hetzner      | CX22            | 2 vCPU, 4 GB RAM         | 3,79 € (~4 $) | Günstigste kostenpflichtige Option             |
-| DigitalOcean | Basic           | 1 vCPU, 1 GB RAM         | 6 $           | Einfache UI, gute Doku                         |
-| Vultr        | Cloud Compute   | 1 vCPU, 1 GB RAM         | 6 $           | Viele Standorte                                |
-| Linode       | Nanode          | 1 vCPU, 1 GB RAM         | 5 $           | Jetzt Teil von Akamai                          |
+| DigitalOcean | Basic           | 1 vCPU, 1 GB RAM         | 6 $                                              | Einfache UI, gute Doku                         |
+| Vultr        | Cloud Compute   | 1 vCPU, 1 GB RAM         | 6 $                                              | Viele Standorte                                |
+| Linode       | Nanode          | 1 vCPU, 1 GB RAM         | 5 $                                              | Jetzt Teil von Akamai                          |
 
 **Anbieterauswahl:**
 
@@ -45,7 +38,7 @@ Wenn Sie eine Option für 0 $/Monat möchten und ARM + anbieterspezifische Einr
 - SSH-Schlüsselpaar (oder Bereitschaft, Passwortauthentifizierung zu nutzen)
 - ~20 Minuten
 
-## 1) Droplet erstellen
+## 1. Droplet erstellen
 
 1. Melden Sie sich bei [DigitalOcean](https://cloud.digitalocean.com/) an
 2. Klicken Sie auf **Create → Droplets**
@@ -63,7 +56,7 @@ Wenn Sie eine Option für 0 $/Monat möchten und ARM + anbieterspezifische Einr
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) OpenClaw installieren
+## 3. OpenClaw installieren
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Onboarding ausführen
+## 4. Onboarding ausführen
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ Der Assistent führt Sie durch:
 - Gateway-Token (automatisch generiert)
 - Daemon-Installation (systemd)
 
-## 5) Gateway überprüfen
+## 5. Gateway überprüfen
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Zugriff auf das Dashboard
+## 6. Zugriff auf das Dashboard
 
 Der Gateway bindet standardmäßig an den loopback. Um auf die Control UI zuzugreifen:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Öffnen: `http://<tailscale-ip>:18789` (Token erforderlich).
 
-## 7) Ihre Kanäle verbinden
+## 7. Ihre Kanäle verbinden
 
 ### Telegram
 
@@ -197,7 +190,7 @@ htop
 
 ---
 
-## Persistenz
+## Dauerhaftigkeit
 
 Der gesamte Zustand befindet sich in:
 

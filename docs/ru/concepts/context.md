@@ -5,13 +5,6 @@ read_when:
   - Вы отлаживаете, почему модель «знает» что‑то (или забыла это)
   - Вы хотите сократить накладные расходы контекста (/context, /status, /compact)
 title: "Контекст"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:31Z
 ---
 
 # Контекст

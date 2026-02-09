@@ -4,18 +4,11 @@ read_when:
   - Du behöver riktade felsökningsloggar utan att höja globala loggnivåer
   - Du behöver samla in undersystems­specifika loggar för support
 title: "Diagnostikflaggor"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:07Z
 ---
 
 # Diagnostikflaggor
 
-Diagnostikflaggor låter dig aktivera riktade felsökningsloggar utan att slå på utförlig loggning överallt. Flaggor är valfria och har ingen effekt om inte ett undersystem kontrollerar dem.
+Diagnostikflaggor låter dig aktivera riktade debug loggar utan att slå på verbose loggning överallt. Flaggor är opt-in och har ingen effekt om inte ett delsystem kontrollerar dem.
 
 ## Hur det fungerar
 
@@ -61,13 +54,13 @@ OPENCLAW_DIAGNOSTICS=0
 
 ## Var loggar hamnar
 
-Flaggor skriver loggar till standardfilen för diagnostikloggar. Som standard:
+Flaggor avger loggar in i standard diagnostik loggfil. Som standard:
 
 ```
 /tmp/openclaw/openclaw-YYYY-MM-DD.log
 ```
 
-Om du sätter `logging.file`, används den sökvägen i stället. Loggarna är JSONL (ett JSON-objekt per rad). Maskning tillämpas fortfarande baserat på `logging.redactSensitive`.
+Om du anger `logging.file`, använd den sökvägen istället. Loggar är JSONL (en JSON-objekt per rad). Redaction gäller fortfarande baserat på `logging.redactSensitive`.
 
 ## Extrahera loggar
 
@@ -93,6 +86,6 @@ För fjärr-gateways kan du även använda `openclaw logs --follow` (se [/cli/lo
 
 ## Noteringar
 
-- Om `logging.level` är satt högre än `warn` kan dessa loggar undertryckas. Standardvärdet `info` är tillräckligt.
+- Om `logging.level` är satt högre än `warn`, kan dessa loggar undertryckas. Standard `info` är bra.
 - Flaggor är säkra att lämna aktiverade; de påverkar endast loggvolymen för det specifika undersystemet.
 - Använd [/logging](/logging) för att ändra loggdestinationer, nivåer och maskning.

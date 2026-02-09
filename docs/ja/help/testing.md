@@ -5,13 +5,6 @@ read_when:
   - モデル／プロバイダーのバグに対するリグレッションを追加する場合
   - ゲートウェイ + エージェントの挙動をデバッグする場合
 title: "テスト"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:53Z
 ---
 
 # テスト
@@ -123,7 +116,7 @@ live テストは、失敗の切り分けができるよう 2 層に分かれて
 - キーの取得元：
   - デフォルト：プロファイルストアおよび環境変数フォールバック
   - **プロファイルストアのみ**を強制するには `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` を設定
-- このレイヤーの目的：
+- これが存在する理由:
   - 「プロバイダー API が壊れている／キーが無効」と「ゲートウェイのエージェントパイプラインが壊れている」を分離する
   - 小さく独立したリグレッションを含める（例：OpenAI Responses/Codex Responses の推論リプレイ + ツール呼び出しフロー）
 
@@ -277,13 +270,13 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 追加の任意カバレッジ（あると良い）：
 
 - xAI：`xai/grok-4`（または利用可能な最新）
-- Mistral：`mistral/`…（ツール対応モデルを 1 つ選択）
-- Cerebras：`cerebras/`…（アクセスがある場合）
-- LM Studio：`lmstudio/`…（ローカル；ツール呼び出しは API モードに依存）
+- ミストラル: `mistral/`… Mistral：`mistral/`…（ツール対応モデルを 1 つ選択）
+- Cerebras：`cerebras/`…（アクセスがある場合） (アクセス権がある場合)
+- LMスタジオ: `lmstudio/`… LM Studio：`lmstudio/`…（ローカル；ツール呼び出しは API モードに依存）
 
 ### Vision：image 送信（添付 → マルチモーダルメッセージ）
 
-image プローブを実行するため、`OPENCLAW_LIVE_GATEWAY_MODELS` には少なくとも 1 つの image 対応モデル（Claude／Gemini／OpenAI の vision 対応バリアントなど）を含めてください。
+image プローブを実行するため、`OPENCLAW_LIVE_GATEWAY_MODELS` には少なくとも 1 つの image 対応モデル（Claude／Gemini／OpenAI の vision 対応バリアントなど）を含めてください。 画像プローブを行使することです
 
 ### アグリゲーター／代替ゲートウェイ
 
@@ -297,16 +290,18 @@ live マトリクスに含められる他のプロバイダー（認証情報／
 - 組み込み：`openai`, `openai-codex`, `anthropic`, `google`, `google-vertex`, `google-antigravity`, `google-gemini-cli`, `zai`, `openrouter`, `opencode`, `xai`, `groq`, `cerebras`, `mistral`, `github-copilot`
 - `models.providers` 経由（カスタムエンドポイント）：`minimax`（クラウド／API）、および OpenAI／Anthropic 互換プロキシ（LM Studio、vLLM、LiteLLM など）
 
-ヒント：ドキュメントに「すべてのモデル」をハードコードしないでください。権威あるリストは、あなたのマシンで `discoverModels(...)` が返す内容と、利用可能なキーです。
+ヒント：「すべてのモデル」をドキュメントでハードコードしようとしないでください。 ヒント：ドキュメントに「すべてのモデル」をハードコードしないでください。権威あるリストは、あなたのマシンで `discoverModels(...)` が返す内容と、利用可能なキーです。
 
 ## 認証情報（絶対にコミットしない）
 
-live テストは、CLI と同じ方法で認証情報を検出します。実務上の意味は次のとおりです。
+live テストは、CLI と同じ方法で認証情報を検出します。実務上の意味は次のとおりです。 実際の意味:
 
 - CLI が動作するなら、live テストも同じキーを見つけるはずです。
+
 - live テストで「no creds」と出る場合は、`openclaw models list` やモデル選択をデバッグするのと同じ手順で調査してください。
 
 - プロファイルストア：`~/.openclaw/credentials/`（推奨。テスト内で言う「プロファイルキー」とはこれを指します）
+
 - 設定：`~/.openclaw/openclaw.json`（または `OPENCLAW_CONFIG_PATH`）
 
 環境変数キー（例：`~/.profile` でエクスポート）に依存したい場合は、`source ~/.profile` 後にローカルテストを実行するか、以下の Docker ランナーを使用してください（コンテナ内に `~/.profile` をマウントできます）。
@@ -326,7 +321,7 @@ live テストは、CLI と同じ方法で認証情報を検出します。実�
 - ゲートウェイネットワーク（2 コンテナ、WS 認証 + ヘルス）：`pnpm test:docker:gateway-network`（スクリプト：`scripts/e2e/gateway-network-docker.sh`）
 - プラグイン（カスタム拡張のロード + レジストリスモーク）：`pnpm test:docker:plugins`（スクリプト：`scripts/e2e/plugins-docker.sh`）
 
-有用な環境変数：
+有用なenvvvar:
 
 - `OPENCLAW_CONFIG_DIR=...`（デフォルト：`~/.openclaw`）を `/home/node/.openclaw` にマウント
 - `OPENCLAW_WORKSPACE_DIR=...`（デフォルト：`~/.openclaw/workspace`）を `/home/node/.openclaw/workspace` にマウント
@@ -334,13 +329,13 @@ live テストは、CLI と同じ方法で認証情報を検出します。実�
 - 実行を絞り込むための `OPENCLAW_LIVE_GATEWAY_MODELS=...` / `OPENCLAW_LIVE_MODELS=...`
 - 認証情報を環境変数ではなくプロファイルストアから取得することを保証する `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1`
 
-## ドキュメントの健全性チェック
+## ドキュメントの健全性
 
 ドキュメント編集後は、次を実行してください：`pnpm docs:list`。
 
 ## オフラインリグレッション（CI セーフ）
 
-実プロバイダーを使わない「実パイプライン」リグレッションです。
+これらは実際のプロバイダを持たない「本物のパイプライン」回帰です。
 
 - ゲートウェイのツール呼び出し（OpenAI をモック、実ゲートウェイ + エージェントループ）：`src/gateway/gateway.tool-calling.mock-openai.test.ts`
 - ゲートウェイウィザード（WS `wizard.start`/`wizard.next`、設定書き込み + 認証強制）：`src/gateway/gateway.wizard.e2e.test.ts`
@@ -358,7 +353,7 @@ Skills に関してまだ不足している点（[Skills](/tools/skills) 参照�
 - **コンプライアンス**：使用前に `SKILL.md` を読み、必要な手順／引数に従っているか。
 - **ワークフロー契約**：ツール順序、セッション履歴の引き継ぎ、サンドボックス境界を検証するマルチターンシナリオ。
 
-将来の eval は、まず決定的であるべきです。
+将来の回避は、最初に決定的なものを維持する必要があります:
 
 - モックプロバイダーを使用し、ツール呼び出し + 順序、Skill ファイルの読み取り、セッション配線を検証するシナリオランナー。
 - Skill に焦点を当てた小規模シナリオ群（使用／回避、ゲーティング、プロンプトインジェクション）。

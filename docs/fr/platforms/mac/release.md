@@ -1,16 +1,9 @@
 ---
-summary: « Liste de controle de version macOS d’OpenClaw (flux Sparkle, packaging, signature) »
+summary: "Liste de controle de version macOS d’OpenClaw (flux Sparkle, packaging, signature)"
 read_when:
   - Publication ou validation d’une version macOS d’OpenClaw
   - Mise a jour de l’appcast Sparkle ou des assets du flux
-title: « Version macOS »
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: ded637bef8ee3dc4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:20Z
+title: "Version macOS"
 ---
 
 # Version macOS d’OpenClaw (Sparkle)
@@ -87,6 +80,6 @@ Committez le `appcast.xml` mis a jour en meme temps que les assets de version (z
 - Verifications de bon sens :
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` renvoie 200.
   - `curl -I <enclosure url>` renvoie 200 apres le televersement des assets.
-  - Sur une version publique precedente, lancez « Rechercher des mises a jour… » depuis l’onglet A propos et verifiez que Sparkle installe correctement la nouvelle version.
+  - Sur une version publique precedente, lancez « Rechercher des mises a jour… » depuis l’onglet A propos et verifiez que Sparkle installe correctement la nouvelle version.
 
 Definition de termine : l’application signee et l’appcast sont publies, le flux de mise a jour fonctionne depuis une version plus ancienne installee, et les assets de version sont attaches a la version GitHub.

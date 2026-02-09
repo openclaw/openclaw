@@ -6,22 +6,15 @@ read_when:
   - คุณต้องการสภาพแวดล้อมmacOSที่รีเซ็ตได้และสามารถโคลนได้
   - คุณต้องการเปรียบเทียบตัวเลือกmacOS VMแบบภายในเครื่องกับแบบโฮสต์
 title: "macOS VMs"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:30Z
 ---
 
 # OpenClawบนmacOS VMs(Sandboxing)
 
 ## ค่าเริ่มต้นที่แนะนำ(ผู้ใช้ส่วนใหญ่)
 
-- **Linux VPSขนาดเล็ก** สำหรับGatewayที่ทำงานตลอดเวลาและต้นทุนต่ำ ดูที่ [VPS hosting](/vps)
-- **ฮาร์ดแวร์เฉพาะ** (Mac miniหรือกล่องLinux) หากคุณต้องการการควบคุมเต็มรูปแบบและ **IPที่อยู่อาศัย** สำหรับการทำงานอัตโนมัติผ่านเบราว์เซอร์ หลายเว็บไซต์บล็อกIPของดาต้าเซ็นเตอร์ ดังนั้นการท่องเว็บจากเครื่องในพื้นที่มักได้ผลดีกว่า
-- **ไฮบริด:** เก็บGatewayไว้บนVPSราคาถูก และเชื่อมต่อMacของคุณเป็น **โหนด** เมื่อคุณต้องการการทำงานอัตโนมัติของเบราว์เซอร์/UI ดู [Nodes](/nodes) และ [Gateway remote](/gateway/remote)
+- **Linux VPSขนาดเล็ก** สำหรับGatewayที่ทำงานตลอดเวลาและต้นทุนต่ำ ดูที่ [VPS hosting](/vps) ดู [VPS hosting](/vps)
+- **ฮาร์ดแวร์เฉพาะ** (Mac miniหรือกล่องLinux) หากคุณต้องการการควบคุมเต็มรูปแบบและ **IPที่อยู่อาศัย** สำหรับการทำงานอัตโนมัติผ่านเบราว์เซอร์ หลายเว็บไซต์บล็อกIPของดาต้าเซ็นเตอร์ ดังนั้นการท่องเว็บจากเครื่องในพื้นที่มักได้ผลดีกว่า หลายเว็บไซต์บล็อก IP ของดาต้าเซ็นเตอร์ ดังนั้นการท่องเว็บจากเครื่องโลคัลมักจะได้ผลดีกว่า
+- **ไฮบริด:** เก็บGatewayไว้บนVPSราคาถูก และเชื่อมต่อMacของคุณเป็น **โหนด** เมื่อคุณต้องการการทำงานอัตโนมัติของเบราว์เซอร์/UI ดู [Nodes](/nodes) และ [Gateway remote](/gateway/remote) ดู [Nodes](/nodes) และ [Gateway remote](/gateway/remote)
 
 ใช้macOS VMเมื่อคุณต้องการความสามารถเฉพาะของmacOS(iMessage/BlueBubbles)หรืออยากได้การแยกสภาพแวดล้อมอย่างเข้มงวดจากMacที่ใช้ประจำวันของคุณ
 
@@ -69,7 +62,7 @@ x-i18n:
 
 ---
 
-## 1) ติดตั้งLume
+## 1. ติดตั้งLume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,19 +84,19 @@ lume --version
 
 ---
 
-## 2) สร้างmacOS VM
+## 2. สร้างmacOS VM
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-ขั้นตอนนี้จะดาวน์โหลดmacOSและสร้างVM หน้าต่างVNCจะเปิดขึ้นโดยอัตโนมัติ
+ขั้นตอนนี้จะดาวน์โหลดmacOSและสร้างVM หน้าต่างVNCจะเปิดขึ้นโดยอัตโนมัติ หน้าต่าง VNC จะเปิดขึ้นโดยอัตโนมัติ
 
 หมายเหตุ: การดาวน์โหลดอาจใช้เวลาสักครู่ขึ้นอยู่กับการเชื่อมต่อของคุณ
 
 ---
 
-## 3) ทำSetup Assistantให้เสร็จ
+## 3. ทำSetup Assistantให้เสร็จ
 
 ในหน้าต่างVNC:
 
@@ -119,7 +112,7 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 4) รับที่อยู่IPของVM
+## 4. รับที่อยู่IPของVM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ lume get openclaw
 
 ---
 
-## 5) SSHเข้าไปยังVM
+## 5. SSHเข้าไปยังVM
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ ssh youruser@192.168.64.X
 
 ---
 
-## 6) ติดตั้งOpenClaw
+## 6. ติดตั้งOpenClaw
 
 ภายในVM:
 
@@ -152,7 +145,7 @@ openclaw onboard --install-daemon
 
 ---
 
-## 7) ตั้งค่าช่องทาง
+## 7. ตั้งค่าช่องทาง
 
 แก้ไขไฟล์คอนฟิก:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) รันVMแบบไม่แสดงผล
+## 8. รันVMแบบไม่แสดงผล
 
 หยุดVMแล้วเริ่มใหม่โดยไม่แสดงหน้าจอ:
 
@@ -193,7 +186,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-VMจะทำงานอยู่เบื้องหลัง เดมอนของOpenClawจะทำให้Gatewayทำงานต่อเนื่อง
+VM ทำงานอยู่เบื้องหลัง VMจะทำงานอยู่เบื้องหลัง เดมอนของOpenClawจะทำให้Gatewayทำงานต่อเนื่อง
 
 ตรวจสอบสถานะ:
 
@@ -205,7 +198,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## โบนัส: การเชื่อมต่อiMessage
 
-นี่คือฟีเจอร์เด่นของการรันบนmacOS ใช้ [BlueBubbles](https://bluebubbles.app) เพื่อเพิ่มiMessageให้กับOpenClaw
+นี่คือฟีเจอร์เด็ดของการรันบน macOS นี่คือฟีเจอร์เด่นของการรันบนmacOS ใช้ [BlueBubbles](https://bluebubbles.app) เพื่อเพิ่มiMessageให้กับOpenClaw
 
 ภายในVM:
 
@@ -228,7 +221,7 @@ ssh youruser@192.168.64.X "openclaw status"
 }
 ```
 
-รีสตาร์ทGateway ตอนนี้เอเจนต์ของคุณสามารถส่งและรับiMessagesได้แล้ว
+รีสตาร์ทGateway（เกตเวย์） รีสตาร์ทGateway ตอนนี้เอเจนต์ของคุณสามารถส่งและรับiMessagesได้แล้ว
 
 รายละเอียดการตั้งค่าแบบเต็ม: [BlueBubbles channel](/channels/bluebubbles)
 
@@ -261,17 +254,17 @@ lume run openclaw --no-display
 - ปิดโหมดสลีปในSystem Settings → Energy Saver
 - ใช้ `caffeinate` หากจำเป็น
 
-สำหรับการทำงานตลอดเวลาจริงๆ พิจารณาใช้Mac miniเฉพาะหรือVPSขนาดเล็ก ดู [VPS hosting](/vps)
+สำหรับการทำงานตลอดเวลาจริงๆ พิจารณาใช้Mac miniเฉพาะหรือVPSขนาดเล็ก ดู [VPS hosting](/vps) ดู [VPS hosting](/vps)
 
 ---
 
 ## การแก้ไขปัญหา
 
-| ปัญหา                   | วิธีแก้ไข                                                                           |
-| ----------------------- | ----------------------------------------------------------------------------------- |
-| ไม่สามารถSSHเข้าVMได้   | ตรวจสอบว่าเปิดใช้งาน "Remote Login" ในSystem SettingsของVMแล้ว                      |
-| ไม่แสดงIPของVM          | รอให้VMบูตเสร็จสมบูรณ์ แล้วรัน `lume get openclaw` อีกครั้ง                         |
-| ไม่พบคำสั่งLume         | เพิ่ม `~/.local/bin` ลงในPATHของคุณ                                                 |
+| ปัญหา                   | วิธีแก้ไข                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ |
+| ไม่สามารถSSHเข้าVMได้   | ตรวจสอบว่าเปิดใช้งาน "Remote Login" ในSystem SettingsของVMแล้ว                                         |
+| ไม่แสดงIPของVM          | รอให้VMบูตเสร็จสมบูรณ์ แล้วรัน `lume get openclaw` อีกครั้ง                                            |
+| ไม่พบคำสั่งLume         | เพิ่ม `~/.local/bin` ลงในPATHของคุณ                                                                    |
 | สแกนQRของWhatsAppไม่ได้ | ตรวจสอบให้แน่ใจว่าคุณเข้าสู่ระบบในVM(ไม่ใช่โฮสต์)เมื่อรัน `openclaw channels login` |
 
 ---

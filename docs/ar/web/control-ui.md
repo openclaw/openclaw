@@ -1,16 +1,9 @@
 ---
 summary: "واجهة تحكّم قائمة على المتصفح لـ Gateway (الدردشة، العُقد، التهيئة)"
 read_when:
-  - "تريد تشغيل Gateway من المتصفح"
-  - "تريد وصول Tailnet دون أنفاق SSH"
+  - تريد تشغيل Gateway من المتصفح
+  - تريد وصول Tailnet دون أنفاق SSH
 title: "واجهة التحكّم"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:04Z
 ---
 
 # واجهة التحكّم (المتصفح)
@@ -63,7 +56,7 @@ openclaw devices approve <requestId>
 **ملاحظات:**
 
 - الاتصالات المحلية (`127.0.0.1`) تتم الموافقة عليها تلقائيًا.
-- الاتصالات البعيدة (LAN، Tailnet، إلخ) تتطلّب موافقة صريحة.
+- الاتصالات عن بعد (الشبكة المحلية، تايلنيت، إلخ) يتطلب موافقة صريحة.
 - يقوم كل ملف تعريف متصفح بإنشاء معرّف جهاز فريد، لذا فإن تبديل المتصفحات أو
   مسح بيانات المتصفح سيتطلّب إعادة الإقران.
 
@@ -71,7 +64,7 @@ openclaw devices approve <requestId>
 
 - الدردشة مع النموذج عبر Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - بثّ استدعاءات الأدوات + بطاقات إخراج الأدوات الحية في الدردشة (أحداث الوكيل)
-- القنوات: حالة قنوات WhatsApp/Telegram/Discord/Slack + قنوات الإضافات (Mattermost، إلخ) + تسجيل الدخول عبر QR + تهيئة لكل قناة (`channels.status`, `web.login.*`, `config.patch`)
+- القنوات: حالة قنوات WhatsApp/Telegram/Discord/Slack + قنوات الإضافات (Mattermost، إلخ) + تسجيل الدخول عبر QR + تهيئة لكل قناة (`channels.status`, `web.login.*`, `config.patch`) حالة + تسجيل الدخول QR + لكل قناة تهيئة (`channels.status`, `web.login.*`, `config.patch`)
 - المثيلات: قائمة الحضور + تحديث (`system-presence`)
 - الجلسات: قائمة + تجاوزات التفكير/الوضع المطوّل لكل جلسة (`sessions.list`, `sessions.patch`)
 - مهام Cron: سرد/إضافة/تشغيل/تمكين/تعطيل + سجل التشغيل (`cron.*`)

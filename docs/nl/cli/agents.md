@@ -3,13 +3,6 @@ summary: "CLI-referentie voor `openclaw agents` (lijst, toevoegen, verwijderen, 
 read_when:
   - Je wilt meerdere geïsoleerde agents (werkruimtes + routing + authenticatie)
 title: "agents"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # `openclaw agents`
@@ -55,7 +48,7 @@ Laden vanuit `IDENTITY.md`:
 openclaw agents set-identity --workspace ~/.openclaw/workspace --from-identity
 ```
 
-Velden expliciet overschrijven:
+Overschrijf velden expliciet:
 
 ```bash
 openclaw agents set-identity --agent main --name "OpenClaw" --emoji "🦞" --avatar avatars/openclaw.png

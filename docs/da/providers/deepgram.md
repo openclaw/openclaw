@@ -4,23 +4,16 @@ read_when:
   - Du vil bruge Deepgram tale-til-tekst til lydvedhæftninger
   - Du har brug for et hurtigt Deepgram-konfigurationseksempel
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:29Z
 ---
 
 # Deepgram (Lydtransskription)
 
-Deepgram er et tale-til-tekst-API. I OpenClaw bruges det til **transskription af indgående lyd/talebeskeder**
-via `tools.media.audio`.
+Deepgram er en tale-til-tekst API. I OpenClaw bruges det til **indgående audio/voice note
+transkription** via `tools.media.audio`.
 
-Når det er aktiveret, uploader OpenClaw lydfilen til Deepgram og indsætter transskriptionen
-i svar-pipelinen (`{{Transcript}}` + `[Audio]`-blok). Dette er **ikke streaming**;
-det bruger endpointet til transskription af forudindspillet lyd.
+Når aktiveret, OpenClaw uploader lydfilen til Deepgram og injicerer afskriften
+i svarrørledningen (`{{Transcript}}` + `[Audio]` blok). Dette er **ikke streaming**;
+det bruger det præregistrerede transskriptionsendepunkt.
 
 Website: [https://deepgram.com](https://deepgram.com)  
 Docs: [https://developers.deepgram.com](https://developers.deepgram.com)

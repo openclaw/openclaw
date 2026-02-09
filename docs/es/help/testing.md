@@ -5,13 +5,6 @@ read_when:
   - Agregar regresiones para errores de modelos/proveedores
   - Depurar el comportamiento del Gateway + agente
 title: "Pruebas"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:16Z
 ---
 
 # Pruebas
@@ -304,9 +297,11 @@ Consejo: no intente codificar “todos los modelos” en los docs. La lista auto
 Las pruebas live descubren credenciales de la misma forma que la CLI. Implicaciones prácticas:
 
 - Si la CLI funciona, las pruebas live deberían encontrar las mismas claves.
+
 - Si una prueba live dice “no creds”, depure igual que depuraría `openclaw models list` / selección de modelo.
 
 - Almacén de perfiles: `~/.openclaw/credentials/` (preferido; a esto se refiere “claves de perfil” en las pruebas)
+
 - Configuración: `~/.openclaw/openclaw.json` (o `OPENCLAW_CONFIG_PATH`)
 
 Si quiere depender de claves de env (por ejemplo, exportadas en su `~/.profile`), ejecute pruebas locales después de `source ~/.profile`, o use los runners de Docker de abajo (pueden montar `~/.profile` dentro del contenedor).
@@ -326,7 +321,7 @@ Estos ejecutan `pnpm test:live` dentro de la imagen Docker del repo, montando su
 - Redes del gateway (dos contenedores, auth WS + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (carga de extensiones personalizadas + humo del registro): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
-Variables de entorno útiles:
+Variables de env útiles:
 
 - `OPENCLAW_CONFIG_DIR=...` (predeterminado: `~/.openclaw`) montado en `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (predeterminado: `~/.openclaw/workspace`) montado en `/home/node/.openclaw/workspace`

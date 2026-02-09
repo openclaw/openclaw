@@ -3,13 +3,6 @@ summary: "Tryb podwyższonego wykonania i dyrektywy /elevated"
 read_when:
   - Dostosowywanie domyślnych ustawień trybu podwyższonego, list dozwolonych lub zachowania poleceń ukośnych
 title: "Tryb podwyższony"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:50Z
 ---
 
 # Tryb podwyższony (/elevated directives)

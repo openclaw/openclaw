@@ -3,26 +3,19 @@ summary: "mac အက်ပ်တွင် အသံဖြင့် နိုး�
 read_when:
   - အသံဖြင့် နိုးထစေခြင်း သို့မဟုတ် PTT လမ်းကြောင်းများကို လုပ်ဆောင်နေချိန်
 title: "အသံဖြင့် နိုးထစေခြင်း"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:55Z
 ---
 
 # Voice Wake & Push-to-Talk
 
 ## မုဒ်များ
 
-- **Wake-word မုဒ်** (မူလအနေဖြင့်): အမြဲဖွင့်ထားသော Speech recognizer သည် trigger token များ (`swabbleTriggerWords`) ကို စောင့်ကြည့်နေပါသည်။ ကိုက်ညီပါက အသံဖမ်းခြင်းကို စတင်ပြီး overlay ကို တစ်စိတ်တစ်ပိုင်း စာသားများနှင့်အတူ ပြသကာ တိတ်ဆိတ်သွားသည့်အချိန်တွင် အလိုအလျောက် ပို့ပေးပါသည်။
-- **Push-to-talk (Right Option ကို ဖိထားခြင်း)**: Right Option ခလုတ်ကို ဖိထားသရွေ့ ချက်ချင်း အသံဖမ်းခြင်းကို စတင်ပြီး trigger မလိုအပ်ပါ။ ဖိထားစဉ် overlay ပေါ်လာပြီး လွှတ်လိုက်သည်နှင့် စာသားကို အနည်းငယ် ပြင်ဆင်နိုင်ရန် အချိန်တိုတစ်ခုနောက်မှ အပြီးသတ်၍ ပို့ပေးပါသည်။
+- **Wake‑word mode** (default): အမြဲဖွင့်ထားသော Speech recognizer သည် trigger tokens (`swabbleTriggerWords`) ကို စောင့်ဆိုင်းသည်။ ကိုက်ညီသည်နှင့် capture ကို စတင်ပြီး partial စာသားပါသော overlay ကို ပြသကာ အသံမရှိတော့လျှင် အလိုအလျောက် ပို့သည်။
+- **Push‑to‑talk (Right Option ကို ဖိထားခြင်း)**: Right Option key ကို ဖိထားရုံဖြင့် ချက်ချင်း capture လုပ်သည်—trigger မလိုအပ်ပါ။ ဖိထားစဉ် overlay ပေါ်လာပြီး လွှတ်ချလိုက်သည့်အခါ အနည်းငယ် နှောင့်နှေးပြီး finalize လုပ်ကာ ပို့သည် (စာသားကို အနည်းငယ် ပြင်ဆင်နိုင်ရန်)။
 
 ## Runtime အပြုအမူ (wake-word)
 
 - Speech recognizer သည် `VoiceWakeRuntime` ထဲတွင် ရှိပါသည်။
-- Trigger သည် wake word နှင့် နောက်လာမည့် စကားလုံးအကြား **အဓိပ္ပါယ်ရှိသော ခဏရပ်တန့်မှု** (~0.55 စက္ကန့် ခန့်) ရှိမှသာ အလုပ်လုပ်ပါသည်။ အမိန့် မစတင်မီပင် ခဏရပ်တန့်မှု ဖြစ်လာသည်နှင့် overlay/chime ကို စတင်နိုင်ပါသည်။
+- Wake word နှင့် နောက်ထပ် စကားလုံးကြား **အဓိပ္ပါယ်ရှိသော အနားယူမှု** (~0.55s gap) ရှိမှသာ trigger အလုပ်လုပ်သည်။ Command မစတင်ခင်ပင် အနားယူမှုအချိန်တွင် overlay/chime စတင်နိုင်သည်။
 - တိတ်ဆိတ်ချိန် သတ်မှတ်ချက်များ: စကားပြောနေစဉ် 2.0 စက္ကန့်၊ trigger သာ ကြားရပါက 5.0 စက္ကန့်။
 - Hard stop: runaway ဆက်ရှင်များကို ကာကွယ်ရန် 120 စက္ကန့်။
 - ဆက်ရှင်များအကြား Debounce: 350ms။
@@ -45,7 +38,7 @@ x-i18n:
 
 ## Push-to-talk အထူးအချက်များ
 
-- Hotkey ရှာဖွေမှုသည် **right Option** (`keyCode 61` + `.option`) အတွက် global `.flagsChanged` monitor ကို အသုံးပြုပါသည်။ ဖြစ်ရပ်များကို ကြည့်ရှုခြင်းသာ ပြုလုပ်ပြီး (swallow မလုပ်ပါ)။
+- Hotkey detection သည် **right Option** (`keyCode 61` + `.option`) အတွက် global `.flagsChanged` monitor ကို အသုံးပြုသည်။ Event များကို စောင့်ကြည့်သာ လုပ်ပြီး (swallow မလုပ်ပါ)။
 - Capture pipeline သည် `VoicePushToTalk` ထဲတွင် ရှိပြီး Speech ကို ချက်ချင်း စတင်ကာ တစ်စိတ်တစ်ပိုင်းများကို overlay သို့ စီးဆင်းပို့ပြီး လွှတ်လိုက်သည့်အချိန်တွင် `VoiceWakeForwarder` ကို ခေါ်ပါသည်။
 - Push-to-talk စတင်သောအခါ အသံ tap များ တိုက်ခိုက်မှု မဖြစ်စေရန် wake-word runtime ကို ခဏရပ်ထားပြီး လွှတ်ပြီးနောက် အလိုအလျောက် ပြန်လည်စတင်ပါသည်။
 - ခွင့်ပြုချက်များ: Microphone + Speech လိုအပ်ပြီး ဖြစ်ရပ်များကို မြင်ရန် Accessibility/Input Monitoring ခွင့်ပြုချက် လိုအပ်ပါသည်။
@@ -54,19 +47,19 @@ x-i18n:
 ## အသုံးပြုသူမြင်ရသော ဆက်တင်များ
 
 - **Voice Wake** toggle: wake-word runtime ကို ဖွင့်ပေးပါသည်။
-- **Hold Cmd+Fn to talk**: push-to-talk monitor ကို ဖွင့်ပေးပါသည်။ macOS < 26 တွင် ပိတ်ထားပါသည်။
+- **Cmd+Fn ကို ဖိထား၍ ပြောရန်**: push‑to‑talk monitor ကို ဖွင့်ပေးသည်။ macOS < 26 တွင် ပိတ်ထားသည်။
 - ဘာသာစကားနှင့် မိုက်ရွေးချယ်ကိရိယာများ၊ live level meter၊ trigger-word ဇယား၊ tester (local-only; မပို့ပါ)။
 - Mic picker သည် ကိရိယာ ချိတ်ဆက်မှု ပြတ်တောက်သွားပါက နောက်ဆုံး ရွေးချယ်ထားသည့်အရာကို ထိန်းသိမ်းထားပြီး disconnected အချက်ပြကို ပြသကာ ပြန်လည်ချိတ်ဆက်လာသည်အထိ စနစ်မူလ default သို့ ခဏတာ ပြန်လည်အသုံးပြုပါသည်။
-- **Sounds**: trigger တွေ့ရှိချိန်နှင့် ပို့ချိန်တွင် chime အသံများ; မူလအားဖြင့် macOS “Glass” စနစ်အသံကို အသုံးပြုပါသည်။ ဖြစ်ရပ်တစ်ခုချင်းစီအတွက် `NSSound` ဖြင့် load လုပ်နိုင်သော ဖိုင် (ဥပမာ MP3/WAV/AIFF) ကို ရွေးနိုင်ပြီး **No Sound** ကိုလည်း ရွေးနိုင်ပါသည်။
+- **Sounds**: trigger တွေ့ရှိသည့်အခါနှင့် ပို့သည့်အခါ chime များ အသုံးပြုသည်; ပုံမှန်အားဖြင့် macOS “Glass” system sound ဖြစ်သည်။ Event တစ်ခုချင်းစီအတွက် `NSSound` ဖြင့် load လုပ်နိုင်သော ဖိုင် (ဥပမာ MP3/WAV/AIFF) ကို ရွေးချယ်နိုင်သလို **No Sound** ကိုလည်း ရွေးနိုင်သည်။
 
 ## Forwarding အပြုအမူ
 
 - Voice Wake ကို ဖွင့်ထားပါက transcript များကို လက်ရှိ active gateway/agent သို့ ပို့ပေးပါသည် (mac အက်ပ်၏ အခြား အစိတ်အပိုင်းများတွင် အသုံးပြုသည့် local vs remote မုဒ်နှင့် အတူတူဖြစ်သည်)။
-- အဖြေများကို **နောက်ဆုံး အသုံးပြုခဲ့သော main provider** (WhatsApp/Telegram/Discord/WebChat) သို့ ပို့ပေးပါသည်။ ပို့မရပါက အမှားကို မှတ်တမ်းတင်ပြီး run ကို WebChat/session logs မှတဆင့် ဆက်လက် မြင်နိုင်ပါသည်။
+- Replies များကို **နောက်ဆုံး အသုံးပြုထားသော main provider** (WhatsApp/Telegram/Discord/WebChat) သို့ ပို့သည်။ ပို့ခြင်း မအောင်မြင်ပါက error ကို log ထဲသို့ ရေးသွင်းပြီး run ကို WebChat/session logs မှတစ်ဆင့် ဆက်လက် မြင်နိုင်ပါသည်။
 
 ## Forwarding payload
 
-- `VoiceWakeForwarder.prefixedTranscript(_:)` သည် ပို့မီ machine hint ကို ရှေ့တွင် ထည့်သွင်းပါသည်။ wake-word နှင့် push-to-talk လမ်းကြောင်းများအကြား မျှဝေထားပါသည်။
+- `VoiceWakeForwarder.prefixedTranscript(_:)` သည် ပို့မီ machine hint ကို ရှေ့တွင် ထည့်ပေးသည်။ Wake‑word နှင့် push‑to‑talk လမ်းကြောင်း နှစ်ခုလုံးအတွက် မျှဝေထားသည်။
 
 ## Quick verification
 

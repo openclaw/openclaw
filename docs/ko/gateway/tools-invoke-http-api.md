@@ -4,13 +4,6 @@ read_when:
   - 전체 에이전트 턴을 실행하지 않고 도구를 호출할 때
   - 도구 정책 적용이 필요한 자동화를 구축할 때
 title: "도구 호출 API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:10Z
 ---
 
 # 도구 호출 (HTTP)

@@ -4,13 +4,6 @@ read_when:
   - Sie führen die Ersteinrichtung ohne den vollständigen Onboarding-Assistenten durch
   - Sie möchten den Standardpfad für den Arbeitsbereich festlegen
 title: "setup"
-x-i18n:
-  source_path: cli/setup.md
-  source_hash: 7f3fc8b246924edf
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:43Z
 ---
 
 # `openclaw setup`

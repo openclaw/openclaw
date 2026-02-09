@@ -3,13 +3,6 @@ summary: "Как приложение для macOS встраивает WebChat 
 read_when:
   - Отладка представления WebChat для macOS или порта local loopback
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:45Z
 ---
 
 # WebChat (приложение для macOS)
@@ -25,6 +18,7 @@ x-i18n:
 ## Запуск и отладка
 
 - Вручную: меню Lobster → «Open Chat».
+
 - Авто‑открытие для тестирования:
 
   ```bash

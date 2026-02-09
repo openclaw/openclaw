@@ -4,13 +4,6 @@ read_when:
   - Musisz wyjaśnić przestrzeń roboczą agenta lub jej układ plików
   - Chcesz wykonać kopię zapasową lub zmigrować przestrzeń roboczą agenta
 title: "Przestrzeń robocza agenta"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Przestrzeń robocza agenta
@@ -22,8 +15,7 @@ jako prywatną i uważać za pamięć.
 Jest to oddzielne od `~/.openclaw/`, które przechowuje konfigurację,
 poświadczenia i sesje.
 
-**Ważne:** przestrzeń robocza jest **domyślnym cwd**, a nie twardym sandboxem.
-Narzędzia rozwiązują ścieżki względne względem przestrzeni roboczej, ale ścieżki
+**Ważne:** przestrzeń robocza jest **domyślnym cwd**, a nie twardym sandboxem. Narzędzia rozwiązują ścieżki względne względem przestrzeni roboczej, ale ścieżki
 bezwzględne nadal mogą sięgać poza nią na hoście, chyba że włączone jest
 sandboxing. Jeśli potrzebujesz izolacji, użyj
 [`agents.defaults.sandbox`](/gateway/sandboxing) (i/lub konfiguracji sandbox na agenta).
@@ -64,7 +56,8 @@ stanu, ponieważ w danym momencie aktywna jest tylko jedna przestrzeń robocza.
 
 **Zalecenie:** utrzymuj jedną aktywną przestrzeń roboczą. Jeśli nie używasz już
 dodatkowych folderów, zarchiwizuj je lub przenieś do Kosza (na przykład
-`trash ~/openclaw`). Jeśli celowo utrzymujesz wiele przestrzeni roboczych, upewnij
+`trash ~/openclaw`).
+Jeśli celowo utrzymujesz wiele przestrzeni roboczych, upewnij
 się, że `agents.defaults.workspace` wskazuje na aktywną.
 
 `openclaw doctor` ostrzega, gdy wykryje dodatkowe katalogi przestrzeni roboczej.
@@ -129,7 +122,8 @@ czyszczenie pamięci.
 Jeśli brakuje jakiegokolwiek pliku bootstrap, OpenClaw wstrzykuje do sesji znacznik
 „missing file” i kontynuuje. Duże pliki bootstrap są obcinane podczas
 wstrzykiwania; limit można dostosować za pomocą `agents.defaults.bootstrapMaxChars`
-(domyślnie: 20000). `openclaw setup` może odtworzyć brakujące domyślne pliki bez
+(domyślnie: 20000).
+`openclaw setup` może odtworzyć brakujące domyślne pliki bez
 nadpisywania istniejących.
 
 ## Czego NIE ma w przestrzeni roboczej
@@ -153,7 +147,7 @@ repozytorium git, aby była archiwizowana i możliwa do odzyskania.
 Wykonaj te kroki na maszynie, na której działa Gateway (tam znajduje się
 przestrzeń robocza).
 
-### 1) Inicjalizacja repozytorium
+### 1. Inicjalizacja repozytorium
 
 Jeśli git jest zainstalowany, zupełnie nowe przestrzenie robocze są inicjalizowane
 automatycznie. Jeśli ta przestrzeń robocza nie jest jeszcze repozytorium, uruchom:
@@ -165,14 +159,14 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Dodanie prywatnego zdalnego repozytorium (opcje przyjazne dla początkujących)
+### 2. Dodanie prywatnego zdalnego repozytorium (opcje przyjazne dla początkujących)
 
 Opcja A: interfejs webowy GitHub
 
 1. Utwórz nowe **prywatne** repozytorium na GitHubie.
 2. Nie inicjalizuj go plikiem README (pozwala uniknąć konfliktów scalania).
 3. Skopiuj adres URL zdalnego repozytorium HTTPS.
-4. Dodaj zdalne repozytorium i wypchnij zmiany:
+4. Dodaj zdalny i naciśnięcie:
 
 ```bash
 git branch -M main
@@ -192,7 +186,7 @@ Opcja C: interfejs webowy GitLab
 1. Utwórz nowe **prywatne** repozytorium na GitLabie.
 2. Nie inicjalizuj go plikiem README (pozwala uniknąć konfliktów scalania).
 3. Skopiuj adres URL zdalnego repozytorium HTTPS.
-4. Dodaj zdalne repozytorium i wypchnij zmiany:
+4. Dodaj zdalny i naciśnięcie:
 
 ```bash
 git branch -M main
@@ -200,7 +194,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Bieżące aktualizacje
+### 3. Bieżące aktualizacje
 
 ```bash
 git status

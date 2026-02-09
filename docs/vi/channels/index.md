@@ -4,19 +4,12 @@ read_when:
   - Bạn muốn chọn một kênh trò chuyện cho OpenClaw
   - Bạn cần tổng quan nhanh về các nền tảng nhắn tin được hỗ trợ
 title: "Kênh trò chuyện"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:57Z
 ---
 
 # Kênh trò chuyện
 
-OpenClaw có thể trò chuyện với bạn trên bất kỳ ứng dụng chat nào bạn đang dùng. Mỗi kênh kết nối thông qua Gateway.
-Văn bản được hỗ trợ ở mọi nơi; media và phản ứng khác nhau tùy kênh.
+17. OpenClaw có thể trò chuyện với bạn trên bất kỳ ứng dụng chat nào bạn đang dùng. Each channel connects via the Gateway.
+18. Văn bản được hỗ trợ ở mọi nơi; media và reaction khác nhau tùy kênh.
 
 ## Các kênh được hỗ trợ
 
@@ -44,8 +37,8 @@ Văn bản được hỗ trợ ở mọi nơi; media và phản ứng khác nhau
 ## Ghi chú
 
 - Các kênh có thể chạy đồng thời; cấu hình nhiều kênh và OpenClaw sẽ định tuyến theo từng cuộc chat.
-- Thiết lập nhanh nhất thường là **Telegram** (token bot đơn giản). WhatsApp yêu cầu ghép cặp QR và
-  lưu nhiều trạng thái hơn trên đĩa.
+- 19. Thiết lập nhanh nhất thường là **Telegram** (token bot đơn giản). 20. WhatsApp yêu cầu ghép cặp bằng QR và
+      lưu nhiều trạng thái hơn trên đĩa.
 - Hành vi trong nhóm khác nhau tùy kênh; xem [Groups](/channels/groups).
 - Ghép cặp DM và danh sách cho phép được áp dụng để đảm bảo an toàn; xem [Security](/gateway/security).
 - Nội bộ Telegram: [ghi chú grammY](/channels/grammy).

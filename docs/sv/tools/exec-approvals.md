@@ -5,22 +5,15 @@ read_when:
   - Implementering av UX för exec-godkännanden i macOS-appen
   - Granskning av sandbox‑escape‑prompter och deras konsekvenser
 title: "Exec-godkännanden"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:56Z
 ---
 
 # Exec-godkännanden
 
-Exec-godkännanden är **companion‑appens / node‑värdens skyddsräcke** för att låta en sandboxad agent köra
-kommandon på en verklig värd (`gateway` eller `node`). Se det som ett säkerhetslås:
-kommandon tillåts endast när policy + tillåtelselista + (valfritt) användargodkännande alla är överens.
-Exec-godkännanden är **utöver** verktygspolicy och förhöjd spärr (såvida inte elevated är satt till `full`, vilket hoppar över godkännanden).
-Effektiv policy är den **striktare** av `tools.exec.*` och standardvärden för godkännanden; om ett godkännandefält utelämnas används värdet `tools.exec`.
+Exec godkännanden är **följeslagare app / nod värd skyddsdrail** för att låta en sandlåda agent köra
+kommandon på en riktig värd (`gateway` eller `node`). Tänk på det som ett säkerhetsinterlock:
+-kommandon tillåts endast när policyn + tillåten lista + (frivillig) användargodkännande alla är överens.
+Exec godkännanden är \*\*dessutom \*\* till verktygspolicyn och förhöjd gating (om inte förhöjt är satt till `full`, vilket hoppar över godkännanden).
+Effektiv policy är **striktare** av `tools.exec.*` och godkännanden standard; om ett godkännandefält utelämnas används `tools.exec`-värdet.
 
 Om companion‑appens UI **inte är tillgängligt**, löses varje begäran som kräver en prompt
 av **ask fallback** (standard: neka).
@@ -102,9 +95,10 @@ Om en prompt krävs men inget UI kan nås avgör fallback:
 
 ## Tillåtelselista (per agent)
 
-Tillåtelselistor är **per agent**. Om flera agenter finns, växla vilken agent du redigerar i macOS‑appen. Mönster är **skiftlägesokänsliga glob‑matchningar**.
-Mönster ska lösas till **binärsökvägar** (poster med endast basnamn ignoreras).
-Äldre `agents.default`‑poster migreras till `agents.main` vid inläsning.
+Allowlists är **per agent**. Om flera agenter finns, byt vilken agent du är
+redigering i macOS-appen. Mönster är **skiftlägesokänsliga glob matchningar**.
+Mönster ska lösa **binära sökvägar** (endast basnamn ignoreras).
+Äldre `agents.default` poster migreras till `agents.main` vid laddning.
 
 Exempel:
 
@@ -121,47 +115,47 @@ Varje tillåtelselistepost spårar:
 
 ## Auto‑tillåt skill‑CLI:er
 
-När **Auto‑allow skill CLIs** är aktiverat behandlas körbara filer som refereras av kända Skills
-som tillåtna på noder (macOS‑node eller headless node‑värd). Detta använder
-`skills.bins` över Gateway‑RPC för att hämta listan över skill‑binärer. Inaktivera detta om du vill ha strikta manuella tillåtelselistor.
+När **Auto-allow skill CLI:er** är aktiverad, körs som refereras av kända färdigheter
+behandlas som tillåtna på noder (macOS nod eller huvudlös nod värd). Detta använder
+`skills.bins` över Gateway RPC för att hämta listan över skicklighetsbrickor. Inaktivera detta om du vill ha strikt manuell tillåtna listor.
 
 ## Säkra binärer (endast stdin)
 
-`tools.exec.safeBins` definierar en liten lista med **endast‑stdin**‑binärer (till exempel `jq`)
-som kan köras i allowlist‑läge **utan** explicita tillåtelselisteposter. Säkra binärer avvisar
-positionella filargument och sökvägsliknande token, så de kan endast arbeta på inkommande ström.
-Shell‑kedjning och omdirigeringar auto‑tillåts inte i allowlist‑läge.
+`tools.exec.safeBins` definierar en liten lista med **stdin-only** binärer (till exempel `jq`)
+som kan köras i allowlist-läge \*\*utan explicita tillåtna listposter. Safe bins avvisa
+positionsfil args och sökvägs-liknande tokens, så att de bara kan fungera på den inkommande strömmen.
+Shell kedja och omdirigering är inte automatiskt tillåtna i tillåten lista.
 
-Shell‑kedjning (`&&`, `||`, `;`) är tillåten när varje toppnivåsegment uppfyller tillåtelselistan
-(inklusive säkra binärer eller auto‑tillåtna skills). Omdirigeringar förblir inte stödda i allowlist‑läge.
-Kommandosubstitution (`$()` / backticks) avvisas under allowlist‑parsning, även inuti
-dubbla citattecken; använd enkla citattecken om du behöver bokstavlig `$()`‑text.
+Shell chaining (`&&`, `<unk> `, `;`) är tillåten när varje toppsegment uppfyller den tillåtna listan
+(inklusive säkra papperskorgar eller automatisk skicklighet). Omdirigeringar stöds inte i allowliste-läge.
+Kommandosubstitution (`$()` / backticks) avvisas under allowlist parsing, inklusive inuti
+dubbelcitattecken; använd enstaka citat om du behöver bokstavlig `$()` text.
 
 Standard säkra binärer: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
 ## Redigering i Control UI
 
-Använd kortet **Control UI → Nodes → Exec approvals** för att redigera standardvärden,
-per‑agent‑överskrivningar och tillåtelselistor. Välj ett omfång (Standard eller en agent), justera policyn,
-lägg till/ta bort tillåtelselistemönster och klicka sedan **Save**. UI:t visar metadata för **senast använd**
+Använd **Control UI → Noder → Exec godkännanden** kort för att redigera standardinställningar, per-agent
+åsidosättningar och tillåta listor. Välj ett omfång (standard eller agent), justera policyn,
+lägga till/ta bort tillåtna mönster, sedan **Spara**. UI visar **senast användda** metadata
 per mönster så att du kan hålla listan prydlig.
 
 Målväljaren väljer **Gateway** (lokala godkännanden) eller en **Node**. Noder
-måste annonsera `system.execApprovals.get/set` (macOS‑app eller headless node‑värd).
-Om en node ännu inte annonserar exec‑godkännanden, redigera dess lokala
+måste annonsera `system.execApprovals.get/set` (macOS app eller headless nod host).
+Om en nod inte annonserar exec godkännanden ännu, redigera dess lokala
 `~/.openclaw/exec-approvals.json` direkt.
 
 CLI: `openclaw approvals` stöder redigering av gateway eller node (se [Approvals CLI](/cli/approvals)).
 
 ## Godkännandeflöde
 
-När en prompt krävs sänder gatewayen `exec.approval.requested` till operatörsklienter.
-Control UI och macOS‑appen löser den via `exec.approval.resolve`, därefter vidarebefordrar gatewayen den
-godkända begäran till node‑värden.
+När en fråga krävs sänder gatewayen `exec.approval.requested` till operatörsklienter.
+Appen Control UI och macOS löser det via `exec.approval.resolve`, och sedan vidarebefordrar gateway
+godkänd begäran till noden värd.
 
-När godkännanden krävs returnerar exec‑verktyget omedelbart med ett godkännandets id. Använd detta id för att
-korrelera senare systemhändelser (`Exec finished` / `Exec denied`). Om inget beslut anländer före
-timeout behandlas begäran som en timeout för godkännande och visas som ett avslagskäl.
+När godkännanden krävs returnerar exec verktyget omedelbart med ett godkännande-id. Använd det id till
+korrelerar senare systemhändelser (`Exec finished` / `Exec denied`). Om inget beslut kommer före
+-timeout, behandlas begäran som en tidsgräns för godkännande och uppkommer som ett förnekande skäl.
 
 Bekräftelsedialogen innehåller:
 
@@ -179,8 +173,8 @@ Bekräftelsedialogen innehåller:
 
 ## Vidarebefordran av godkännanden till chattkanaler
 
-Du kan vidarebefordra exec‑godkännandepromptar till valfri chattkanal (inklusive plugin‑kanaler) och godkänna
-dem med `/approve`. Detta använder den normala utgående leveranspipelinen.
+Du kan vidarebefordra uppmaningar om godkännande av exec till alla chattkanaler (inklusive instickskanaler) och godkänna
+dem med `/approve`. Detta använder den normala utgående leveransrörledningen.
 
 Konfig:
 
@@ -232,18 +226,18 @@ Exec‑livscykeln exponeras som systemmeddelanden:
 - `Exec finished`
 - `Exec denied`
 
-Dessa publiceras till agentens session efter att noden rapporterat händelsen.
-Gateway‑värd‑exec‑godkännanden emitterar samma livscykelhändelser när kommandot avslutas (och valfritt när det kör längre än tröskeln).
-Exec som är spärrade av godkännande återanvänder godkännandets id som `runId` i dessa meddelanden för enkel korrelation.
+Dessa postas till agentens session efter noden rapporterar händelsen.
+Gateway-host exec godkänner avger samma livscykelhändelser när kommandot avslutas (och eventuellt när det körs längre än tröskeln).
+Godkännande-gated execs återanvänder godkännande-id som `runId` i dessa meddelanden för enkel korrelation.
 
 ## Konsekvenser
 
 - **full** är kraftfullt; föredra tillåtelselistor när det är möjligt.
 - **ask** håller dig informerad samtidigt som snabba godkännanden tillåts.
 - Tillåtelselistor per agent förhindrar att en agents godkännanden läcker till andra.
-- Godkännanden gäller endast host‑exec‑begäranden från **auktoriserade avsändare**. Obehöriga avsändare kan inte utfärda `/exec`.
-- `/exec security=full` är en sessionsnivå‑bekvämlighet för auktoriserade operatörer och hoppar över godkännanden avsiktligt.
-  För att hårdblockera host‑exec, sätt godkännandenas säkerhet till `deny` eller neka verktyget `exec` via verktygspolicy.
+- Godkännanden gäller endast värdförfrågningar från **auktoriserade avsändare**. Obehöriga avsändare kan inte utfärda `/exec`.
+- `/exec security=full` är en sessionsnivå bekvämlighet för auktoriserade operatörer och hoppar över godkännanden av design.
+  För att hårt blockera värdkörning, ange godkännanden av säkerhet till `deny` eller neka `exec`-verktyget via verktygspolicyn.
 
 Relaterat:
 

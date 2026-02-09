@@ -4,13 +4,6 @@ read_when:
   - TUI 에 대한 초보자 친화적인 안내가 필요할 때
   - TUI 기능, 명령, 단축키의 전체 목록이 필요할 때
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:47Z
 ---
 
 # TUI (Terminal UI)
@@ -39,7 +32,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 Gateway(게이트웨이)가 비밀번호 인증을 사용하는 경우 `--password` 를 사용하십시오.
 
-## 화면 구성
+## 보이는 것
 
 - 헤더: 연결 URL, 현재 에이전트, 현재 세션.
 - 채팅 로그: 사용자 메시지, 어시스턴트 응답, 시스템 알림, 도구 카드.

@@ -3,13 +3,6 @@ summary: "Gateway hizmeti, yaşam döngüsü ve operasyonları için çalıştı
 read_when:
   - Gateway sürecini çalıştırırken veya hata ayıklarken
 title: "Gateway Çalıştırma Kılavuzu"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:57Z
 ---
 
 # Gateway hizmeti çalıştırma kılavuzu
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - İstemciler daha sonra tünel üzerinden `ws://127.0.0.1:18789`’e bağlanır.
+
 - Bir belirteç yapılandırılmışsa, istemciler tünel üzerinden bile `connect.params.auth.token` içinde bunu eklemelidir.
 
 ## Birden fazla gateway (aynı ana makine)
@@ -208,7 +202,7 @@ Ayrıca bkz: presence’in nasıl üretildiği/tekilleştirildiği ve neden kara
 
 - Hizmeti canlı tutmak için launchd kullanın:
   - Program: `openclaw` yolu
-  - Argümanlar: `gateway`
+  - Arguments: `gateway`
   - KeepAlive: true
   - StandardOut/Err: dosya yolları veya `syslog`
 - Hata durumunda launchd yeniden başlatır; ölümcül yanlış yapılandırma, operatörün fark etmesi için çıkmaya devam etmelidir.
@@ -240,7 +234,7 @@ Notlar:
 - `gateway status`, hizmet çalışıyor görünürken port kapalıysa son gateway hata satırını içerir.
 - `logs`, Gateway dosya günlüğünü RPC üzerinden kuyruklar (manuel `tail`/`grep` gerekmez).
 - Başka gateway benzeri hizmetler algılanırsa, OpenClaw profili hizmetleri değilse CLI uyarır.
-  Çoğu kurulum için hâlâ **makine başına bir gateway** öneriyoruz; yedeklilik veya kurtarma botu için yalıtılmış profiller/portlar kullanın. Bkz. [Birden fazla gateway](/gateway/multiple-gateways).
+  Çoğu kurulum için hâlâ **makine başına bir gateway** öneriyoruz; yedeklilik veya kurtarma botu için yalıtılmış profiller/portlar kullanın. [Birden fazla gateway](/gateway/multiple-gateways).
   - Temizlik: `openclaw gateway uninstall` (mevcut hizmet) ve `openclaw doctor` (eski geçişler).
 - `gateway install`, zaten kuruluysa no-op’tur; yeniden kurmak için `openclaw gateway install --force` kullanın (profil/env/yol değişiklikleri).
 
@@ -329,7 +323,7 @@ Windows kurulumları **WSL2** kullanmalı ve yukarıdaki Linux systemd bölümü
 - `openclaw gateway stop|restart` — denetlenen gateway hizmetini durdur/yeniden başlat (launchd/systemd).
 - Gateway yardımcı alt komutları, `--url` üzerinde çalışan bir gateway varsayar; artık otomatik olarak bir tane başlatmazlar.
 
-## Geçiş rehberi
+## Migration guidance
 
 - `openclaw gateway` ve eski TCP kontrol portu kullanımını bırakın.
 - İstemcileri, zorunlu bağlanma ve yapılandırılmış presence ile WS protokolünü konuşacak şekilde güncelleyin.

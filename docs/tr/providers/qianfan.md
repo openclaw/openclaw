@@ -4,13 +4,6 @@ read_when:
   - Birçok LLM için tek bir API anahtarı istiyorsunuz
   - Baidu Qianfan kurulum rehberine ihtiyacınız var
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:36Z
 ---
 
 # Qianfan Sağlayıcı Kılavuzu

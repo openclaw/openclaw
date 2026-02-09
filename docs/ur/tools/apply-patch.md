@@ -4,19 +4,12 @@ read_when:
   - آپ کو متعدد فائلوں میں منظم ترامیم درکار ہوں
   - آپ پیچ پر مبنی ترامیم کو دستاویزی شکل دینا یا ڈیبگ کرنا چاہتے ہوں
 title: "apply_patch ٹول"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:40Z
 ---
 
 # apply_patch ٹول
 
-منظم پیچ فارمیٹ کے ذریعے فائل میں تبدیلیاں لاگو کریں۔ یہ متعدد فائلوں
-یا متعدد ہنک ترامیم کے لیے موزوں ہے جہاں ایک ہی `edit` کال غیر مضبوط ثابت ہو سکتی ہے۔
+Apply file changes using a structured patch format. This is ideal for multi-file
+or multi-hunk edits where a single `edit` call would be brittle.
 
 یہ ٹول ایک واحد `input` اسٹرنگ قبول کرتا ہے جو ایک یا زیادہ فائل آپریشنز کو لپیٹتی ہے:
 
@@ -42,9 +35,9 @@ x-i18n:
 - راستے ورک اسپیس روٹ کے نسبت حل کیے جاتے ہیں۔
 - فائلوں کا نام تبدیل کرنے کے لیے `*** Update File:` ہنک کے اندر `*** Move to:` استعمال کریں۔
 - ضرورت پڑنے پر `*** End of File` صرف EOF پر اندراج کو نشان زد کرتا ہے۔
-- تجرباتی ہے اور بطورِ طے شدہ غیرفعال ہے۔ `tools.exec.applyPatch.enabled` کے ذریعے فعال کریں۔
-- صرف OpenAI کے لیے (بشمول OpenAI Codex)۔ ماڈل کے ذریعے اختیاری طور پر گیٹ کریں:
-  `tools.exec.applyPatch.allowModels`۔
+- Experimental and disabled by default. Enable with `tools.exec.applyPatch.enabled`.
+- OpenAI-only (including OpenAI Codex). Optionally gate by model via
+  `tools.exec.applyPatch.allowModels`.
 - کنفیگ صرف `tools.exec` کے تحت ہے۔
 
 ## Example

@@ -1,17 +1,10 @@
 ---
 summary: "تثبيت OpenClaw مؤتمت ومُحصَّن باستخدام Ansible وVPN ‏Tailscale وعزل الجدار الناري"
 read_when:
-  - "تريد نشر خوادم مؤتمتًا مع تعزيز الأمان"
-  - "تحتاج إلى إعداد معزول بجدار ناري مع وصول عبر VPN"
-  - "تقوم بالنشر على خوادم Debian/Ubuntu بعيدة"
+  - تريد نشر خوادم مؤتمتًا مع تعزيز الأمان
+  - تحتاج إلى إعداد معزول بجدار ناري مع وصول عبر VPN
+  - تقوم بالنشر على خوادم Debian/Ubuntu بعيدة
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:29Z
 ---
 
 # تثبيت Ansible
@@ -153,7 +146,7 @@ cd openclaw-ansible
 
 ## استكشاف الأخطاء وإصلاحها
 
-### الجدار الناري يحجب الاتصال
+### جدار الحماية يمنع اتصالي
 
 إذا تم قفلك خارج النظام:
 

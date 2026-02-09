@@ -5,24 +5,13 @@ read_when:
   - macOS အက်ပ်တွင် exec approval UX ကို အကောင်အထည်ဖော်နေစဉ်
   - sandbox မှ လွတ်မြောက်ရန် အတည်ပြုမေးခွန်းများနှင့် ၎င်းတို့၏ သက်ရောက်မှုများကို ပြန်လည်သုံးသပ်နေစဉ်
 title: "Exec Approvals"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:24Z
 ---
 
 # Exec approvals
 
-Exec approvals သည် sandbox အတွင်းရှိ agent ကို အမှန်တကယ်သော host ပေါ်တွင် command များကို လုပ်ဆောင်ခွင့်ပေးရန် အသုံးပြုသော **companion app / node host guardrail** ဖြစ်သည်
-(`gateway` သို့မဟုတ် `node`)။ လုံခြုံရေး အပြန်အလှန်တားဆီးကိရိယာတစ်ခုလို စဉ်းစားနိုင်ပါသည်—
-policy + allowlist + (လိုအပ်ပါက) အသုံးပြုသူအတည်ပြုချက် အားလုံး သဘောတူမှသာ command များကို ခွင့်ပြုပါသည်။
-Exec approvals သည် tool policy နှင့် elevated gating အပေါ် **ထပ်ဆောင်း** ဖြစ်ပါသည်
-(elevated ကို `full` ဟု သတ်မှတ်ထားပါက approvals ကို ကျော်သွားမည်)။
-အကျိုးသက်ရောက်သော policy သည် `tools.exec.*` နှင့် approvals defaults တို့အနက် **ပိုမိုတင်းကျပ်သော** ဘက်ကို ယူပါသည်။
-approvals field တစ်ခုခု မပါရှိပါက `tools.exec` တန်ဖိုးကို အသုံးပြုပါသည်။
+21. Exec approvals သည် sandboxed agent တစ်ခုအား အမှန်တကယ် host (`gateway` သို့မဟုတ် `node`) ပေါ်တွင် command များ chạy ခွင့်ပြုရန် အသုံးပြုသော **companion app / node host guardrail** ဖြစ်ပါသည်။ 22. ၎င်းကို လုံခြုံရေး interlock တစ်ခုလို ထင်မြင်နိုင်ပါသည် — policy + allowlist + (ရွေးချယ်နိုင်သော) user approval အားလုံး သဘောတူမှသာ command များကို ခွင့်ပြုပါသည်။
+22. Exec approvals များသည် tool policy နှင့် elevated gating အပေါ် **ထပ်ဆောင်း** ဖြစ်ပါသည် (`elevated` ကို `full` အဖြစ် သတ်မှတ်ထားပါက approvals ကို ကျော်ဖြတ်ပါသည်)။
+23. Effective policy သည် `tools.exec.*` နှင့် approvals defaults တို့အနက် **ပိုမိုတင်းကြပ်သော** တန်ဖိုးဖြစ်ပါသည်; approvals field တစ်ခုကို မထည့်ထားပါက `tools.exec` တန်ဖိုးကို အသုံးပြုပါသည်။
 
 companion app UI ကို **မရရှိနိုင်ပါက** prompt လိုအပ်သော request မည်သည့်အရာမဆို
 **ask fallback** (ပုံမှန်အားဖြင့်: deny) ဖြင့် ဖြေရှင်းပါသည်။
@@ -104,11 +93,9 @@ prompt လိုအပ်သော်လည်း UI ကို မရောက�
 
 ## Allowlist (per agent)
 
-Allowlists များသည် **အေးဂျင့်တစ်ခုချင်းစီအလိုက်** ဖြစ်ပါသည်။ အေးဂျင့်များ အများအပြား ရှိပါက
-macOS app ထဲတွင် ပြင်ဆင်လိုသည့် အေးဂျင့်ကို ပြောင်းရွေးပါ။
-pattern များသည် **case မခွဲသော glob match** များဖြစ်ပါသည်။
-pattern များသည် **binary path များ** အဖြစ် ဖြေရှင်းရပါမည် (basename သာပါသော entry များကို လျစ်လျူရှုပါသည်)။
-Legacy `agents.default` entry များကို load လုပ်ချိန်တွင် `agents.main` သို့ ပြောင်းရွှေ့ပါသည်။
+25. Allowlists များသည် **agent တစ်ခုချင်းစီအလိုက်** ဖြစ်ပါသည်။ 26. Agent များ အများအပြား ရှိပါက macOS app တွင် သင်ပြင်ဆင်နေသော agent ကို ပြောင်းလဲပါ။ 27. Patterns များသည် **case-insensitive glob matches** ဖြစ်ပါသည်။
+26. Patterns များသည် **binary paths** သို့ resolve ဖြစ်ရပါမည် (basename-only entries များကို လျစ်လျူရှုပါသည်)။
+27. Legacy `agents.default` entries များကို load လုပ်စဉ် `agents.main` သို့ ပြောင်းရွှေ့ပါသည်။
 
 ဥပမာများ—
 
@@ -125,57 +112,34 @@ allowlist entry တစ်ခုချင်းစီတွင် အောက်
 
 ## Auto-allow skill CLIs
 
-**Auto-allow skill CLIs** ကို ဖွင့်ထားပါက သိပြီးသား Skills များမှ ကိုးကားထားသော executable များကို
-node များပေါ်တွင် (macOS node သို့မဟုတ် headless node host) allowlisted အဖြစ် သတ်မှတ်ပါသည်။
-၎င်းသည် Gateway RPC မှတဆင့် `skills.bins` ကို အသုံးပြုပြီး skill bin စာရင်းကို ရယူပါသည်။
-manual allowlist များကို တင်းကျပ်စွာ အသုံးပြုလိုပါက ဤအရာကို ပိတ်ထားပါ။
+30. **Auto-allow skill CLIs** ကို ဖွင့်ထားသောအခါ သိရှိထားသော skills များမှ reference လုပ်ထားသော executables များကို nodes (macOS node သို့မဟုတ် headless node host) တွင် allowlisted အဖြစ် သတ်မှတ်ပါသည်။ 31. ၎င်းသည် Gateway RPC မှတဆင့် skill bin စာရင်းကို ရယူရန် `skills.bins` ကို အသုံးပြုပါသည်။ 32. တင်းကျပ်သော manual allowlists ကို လိုလားပါက ဤအရာကို ပိတ်ထားပါ။
 
 ## Safe bins (stdin-only)
 
-`tools.exec.safeBins` သည် **stdin-only** binary များ၏ စာရင်းအသေးတစ်ခုကို သတ်မှတ်ထားပါသည်
-(ဥပမာ `jq`)။
-Safe bins များသည် positional file args နှင့် path ပုံစံ token များကို ငြင်းပယ်သောကြောင့်
-ဝင်လာသော stream ပေါ်တွင်သာ လုပ်ဆောင်နိုင်ပါသည်။
-Shell chaining နှင့် redirection များကို allowlist mode တွင် auto-allow မပြုလုပ်ပါ။
+33. `tools.exec.safeBins` သည် **stdin-only** binaries များ (ဥပမာ `jq`) ကို အနည်းငယ် သတ်မှတ်ထားပြီး explicit allowlist entries မလိုအပ်ဘဲ allowlist mode ဖြင့် chạy နိုင်ပါသည်။ 34. Safe bins များသည် positional file args နှင့် path-like tokens များကို ငြင်းပယ်သဖြင့် incoming stream ပေါ်တွင်သာ လုပ်ဆောင်နိုင်ပါသည်။
+34. Shell chaining နှင့် redirections များကို allowlist mode တွင် auto-allow မလုပ်ပါ။
 
-Shell chaining (`&&`, `||`, `;`) ကို
-top-level segment တစ်ခုချင်းစီက allowlist ကို ဖြည့်ဆည်းပါက
-(safe bins သို့မဟုတ် skill auto-allow ပါဝင်အောင်) ခွင့်ပြုပါသည်။
-Redirection များကို allowlist mode တွင် ဆက်လက် မထောက်ပံ့ပါ။
-Command substitution (`$()` / backticks) ကို allowlist parsing အတွင်း
-double quotes အတွင်းပါဝင်နေပါကပါ ငြင်းပယ်ပါသည်။
-literal `$()` စာသားလိုအပ်ပါက single quotes ကို အသုံးပြုပါ။
+36. Shell chaining (`&&`, `||`, `;`) ကို top-level segment တစ်ခုချင်းစီက allowlist (safe bins သို့မဟုတ် skill auto-allow အပါအဝင်) ကို ပြည့်မီပါက ခွင့်ပြုပါသည်။ 37. Redirections များကို allowlist mode တွင် မထောက်ပံ့သေးပါ။
+37. Command substitution (`$()` / backticks) ကို allowlist parsing အတွင်း ငြင်းပယ်ပါသည်၊ double quotes အတွင်းပါ ပါဝင်သော်လည်း ဖြစ်ပါသည်; literal `$()` စာသား လိုအပ်ပါက single quotes ကို အသုံးပြုပါ။
 
 Default safe bins— `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`။
 
 ## Control UI editing
 
-defaults၊ အေးဂျင့်အလိုက် override များနှင့် allowlist များကို ပြင်ဆင်ရန်
-**Control UI → Nodes → Exec approvals** ကဒ်ကို အသုံးပြုပါ။
-scope (Defaults သို့မဟုတ် အေးဂျင့်တစ်ခု) ကို ရွေးချယ်ပြီး policy ကို ချိန်ညှိကာ
-allowlist pattern များကို ထည့်/ဖယ် ပြီးနောက် **Save** ကို နှိပ်ပါ။
-UI တွင် pattern တစ်ခုချင်းစီအတွက် **last used** metadata ကို ပြသပေးသဖြင့်
-စာရင်းကို သန့်ရှင်းစွာ ထိန်းသိမ်းနိုင်ပါသည်။
+39. Defaults၊ agent တစ်ခုချင်းစီအလိုက် overrides နှင့် allowlists များကို ပြင်ဆင်ရန် **Control UI → Nodes → Exec approvals** ကတ်ကို အသုံးပြုပါ။ 40. Scope (Defaults သို့မဟုတ် agent တစ်ခု) ကို ရွေးချယ်ပြီး policy ကို ပြင်ဆင်ပါ၊ allowlist patterns များကို ထည့်/ဖယ် လုပ်ပြီးနောက် **Save** ကို နှိပ်ပါ။ 41. စာရင်းကို စနစ်တကျ ထိန်းသိမ်းနိုင်ရန် UI တွင် pattern တစ်ခုချင်းစီအတွက် **last used** metadata ကို ပြသပါသည်။
 
-target selector သည် **Gateway** (local approvals) သို့မဟုတ် **Node** ကို ရွေးချယ်ပါသည်။
-Node များသည် `system.execApprovals.get/set` ကို ကြော်ငြာထားရပါမည်
-(macOS app သို့မဟုတ် headless node host)။
-Node တစ်ခုက exec approvals ကို မကြော်ငြာသေးပါက
-၎င်း၏ local `~/.openclaw/exec-approvals.json` ကို တိုက်ရိုက် ပြင်ဆင်ပါ။
+42. Target selector သည် **Gateway** (local approvals) သို့မဟုတ် **Node** ကို ရွေးချယ်ပေးပါသည်။ 43. Nodes များသည် `system.execApprovals.get/set` ကို advertise လုပ်ထားရပါမည် (macOS app သို့မဟုတ် headless node host)။
+43. Node တစ်ခုက exec approvals ကို မ advertise လုပ်သေးပါက ၎င်း၏ local `~/.openclaw/exec-approvals.json` ကို တိုက်ရိုက် ပြင်ဆင်ပါ။
 
 CLI— `openclaw approvals` သည် gateway သို့မဟုတ် node ကို ပြင်ဆင်နိုင်ပါသည်
 ([Approvals CLI](/cli/approvals) ကို ကြည့်ပါ)။
 
 ## Approval flow
 
-prompt လိုအပ်သည့်အခါ gateway သည် operator client များသို့ `exec.approval.requested` ကို broadcast လုပ်ပါသည်။
-Control UI နှင့် macOS app သည် `exec.approval.resolve` ဖြင့် ဖြေရှင်းပြီးနောက်
-gateway သည် အတည်ပြုထားသော request ကို node host သို့ ပို့ဆောင်ပါသည်။
+45. Prompt လိုအပ်သောအခါ gateway သည် operator clients များသို့ `exec.approval.requested` ကို broadcast လုပ်ပါသည်။
+46. Control UI နှင့် macOS app တို့သည် `exec.approval.resolve` ဖြင့် ဖြေရှင်းပြီး gateway သည် ခွင့်ပြုထားသော request ကို node host သို့ ပို့ပေးပါသည်။
 
-approvals လိုအပ်ပါက exec tool သည် ချက်ချင်း approval id တစ်ခုနှင့် ပြန်လည်ပေးပို့ပါသည်။
-နောက်ပိုင်း system events (`Exec finished` / `Exec denied`) နှင့် ဆက်စပ်ရန် ထို id ကို အသုံးပြုပါ။
-timeout မတိုင်မီ ဆုံးဖြတ်ချက် မရောက်ရှိပါက
-၎င်း request ကို approval timeout အဖြစ် သတ်မှတ်ပြီး deny အကြောင်းပြချက်အဖြစ် ပြသပါသည်။
+47. Approvals လိုအပ်သောအခါ exec tool သည် approval id နှင့်အတူ ချက်ချင်း ပြန်လည်အဖြေ ပေးပါသည်။ 48. နောက်ပိုင်း system events (`Exec finished` / `Exec denied`) များနှင့် ဆက်စပ်ရန် ထို id ကို အသုံးပြုပါ။ 49. Timeout မတိုင်မီ ဆုံးဖြတ်ချက် မရောက်ရှိပါက ထို request ကို approval timeout အဖြစ် သတ်မှတ်ပြီး denial reason အဖြစ် ပြသပါသည်။
 
 confirmation dialog တွင် အောက်ပါအချက်များ ပါဝင်ပါသည်—
 
@@ -193,9 +157,7 @@ confirmation dialog တွင် အောက်ပါအချက်မျာ�
 
 ## Approval forwarding to chat channels
 
-exec approval prompt များကို မည်သည့် chat channel မဆို (plugin channel များအပါအဝင်) သို့ ပို့နိုင်ပြီး
-`/approve` ဖြင့် အတည်ပြုနိုင်ပါသည်။
-ဤအရာသည် ပုံမှန် outbound delivery pipeline ကို အသုံးပြုပါသည်။
+50. Exec approval prompts များကို မည်သည့် chat channel (plugin channels အပါအဝင်) သို့မဆို ပို့နိုင်ပြီး `/approve` ဖြင့် ခွင့်ပြုနိုင်ပါသည်။ ဤအရာသည် ပုံမှန် outbound delivery pipeline ကို အသုံးပြုသည်။
 
 Config—
 
@@ -247,23 +209,18 @@ Exec lifecycle ကို system message များအဖြစ် ဖော်
 - `Exec finished`
 - `Exec denied`
 
-ဤ message များကို node က event ကို အစီရင်ခံပြီးနောက် အေးဂျင့်၏ session သို့ ပို့ပါသည်။
-Gateway-host exec approvals များသည် command ပြီးဆုံးချိန်တွင်
-(နှင့် threshold ကို ကျော်လွန်လျှင် running အနေဖြင့်) တူညီသော lifecycle event များကို ထုတ်ပေးပါသည်။
-Approval ဖြင့် တားဆီးထားသော exec များတွင်
-ဤ message များ၏ `runId` အဖြစ် approval id ကို ပြန်လည်အသုံးပြုပါသည်။
+node မှ event ကို report လုပ်ပြီးနောက် ဤအရာများကို agent ၏ session သို့ post လုပ်သည်။
+Gateway-host exec approvals များသည် command ပြီးဆုံးသည့်အခါ (နှင့် threshold ထက်ပိုကြာပါက ရွေးချယ်စရာအဖြစ်) lifecycle events တူညီစွာ ထုတ်လွှတ်သည်။
+Approval-gated exec များသည် လွယ်ကူစွာ ချိတ်ဆက်နိုင်ရန် ဤ message များတွင် approval id ကို `runId` အဖြစ် ပြန်လည်အသုံးပြုသည်။
 
 ## Implications
 
 - **full** သည် အလွန်အစွမ်းထက်သောကြောင့် ဖြစ်နိုင်လျှင် allowlist များကို ဦးစားပေးပါ။
 - **ask** သည် လုပ်ငန်းစဉ်ကို မြန်ဆန်စေပြီး အတည်ပြုမှုတွင် သင်ပါဝင်နေစေရန် ကူညီပါသည်။
 - အေးဂျင့်အလိုက် allowlist များသည် အေးဂျင့်တစ်ခု၏ အတည်ပြုချက်များကို အခြားအေးဂျင့်များသို့ မပေါက်ကြားစေရန် ကာကွယ်ပါသည်။
-- Approvals များသည် **authorized senders** မှ လာသော host exec request များအတွက်သာ သက်ရောက်ပါသည်။
-  ခွင့်မပြုထားသော sender များသည် `/exec` ကို ထုတ်ပေးနိုင်ခြင်း မရှိပါ။
-- `/exec security=full` သည် authorized operator များအတွက် session-level အဆင်ပြေမှုတစ်ခုဖြစ်ပြီး
-  design အရ approvals ကို ကျော်သွားပါသည်။
-  host exec ကို တင်းကျပ်စွာ ပိတ်ပင်လိုပါက approvals security ကို `deny` ဟု သတ်မှတ်ပါ
-  သို့မဟုတ် tool policy ဖြင့် `exec` tool ကို deny ပြုလုပ်ပါ။
+- Approvals များသည် **authorized senders** ထံမှ host exec request များအတွက်သာ သက်ဆိုင်သည်။ Unauthorized senders များသည် `/exec` ကို အသုံးပြု၍ မရပါ။
+- `/exec security=full` သည် authorized operators များအတွက် session-level အဆင်ပြေမှုတစ်ခုဖြစ်ပြီး design အရ approvals များကို ကျော်လွှားထားသည်။
+  Host exec ကို အပြည့်အဝပိတ်ရန် approvals security ကို `deny` သို့မဟုတ် tool policy မှတဆင့် `exec` tool ကို deny လုပ်ပါ။
 
 Related—
 

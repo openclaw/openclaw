@@ -3,18 +3,11 @@ summary: "Gelen ses/sesli notların nasıl indirildiği, yazıya döküldüğü 
 read_when:
   - Ses yazıya dökümü veya medya işleme değiştirildiğinde
 title: "Ses ve Sesli Notlar"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Ses / Sesli Notlar — 2026-01-17
 
-## Çalışanlar
+## What works
 
 - **Medya anlama (ses)**: Ses anlama etkinse (veya otomatik algılanıyorsa), OpenClaw:
   1. İlk ses ekini (yerel yol veya URL) bulur ve gerekirse indirir.
@@ -30,15 +23,15 @@ x-i18n:
 **Modelleri yapılandırmazsanız** ve `tools.media.audio.enabled` **`false` olarak ayarlı değilse**,  
 OpenClaw aşağıdaki sırayla otomatik algılar ve çalışan ilk seçenekte durur:
 
-1. **Yerel CLI'ler** (kuruluysa)
+1. **Local CLIs** (if installed)
    - `sherpa-onnx-offline` (kodlayıcı/kod çözücü/birleştirici/tokenlar ile `SHERPA_ONNX_MODEL_DIR` gerektirir)
    - `whisper-cli` (`whisper-cpp` kaynağından; `WHISPER_CPP_MODEL` veya paketlenmiş tiny modeli kullanır)
    - `whisper` (Python CLI; modelleri otomatik indirir)
 2. **Gemini CLI** (`gemini`) kullanılarak `read_many_files`
 3. **Sağlayıcı anahtarları** (OpenAI → Groq → Deepgram → Google)
 
-Otomatik algılamayı devre dışı bırakmak için `tools.media.audio.enabled: false` ayarlayın.  
-Özelleştirmek için `tools.media.audio.models` ayarlayın.  
+Otomatik algılamayı devre dışı bırakmak için `tools.media.audio.enabled: false` ayarlayın.
+Özelleştirmek için `tools.media.audio.models` ayarlayın.
 Not: İkili dosya algılama macOS/Linux/Windows genelinde en iyi çaba ile yapılır; CLI'nin `PATH` üzerinde olduğundan emin olun (`~` genişletilir) veya tam komut yoluyla açık bir CLI modeli ayarlayın.
 
 ## Yapılandırma örnekleri
@@ -114,7 +107,7 @@ Not: İkili dosya algılama macOS/Linux/Windows genelinde en iyi çaba ile yapı
 - Transkript, şablonlara `{{Transcript}}` olarak sunulur.
 - CLI stdout çıktısı sınırlandırılmıştır (5MB); CLI çıktısını kısa tutun.
 
-## Dikkat edilmesi gerekenler
+## Gotchas
 
 - Kapsam kuralları ilk eşleşme kazanır. `chatType`, `direct`, `group` veya `room` olarak normalize edilir.
 - CLI'nizin 0 koduyla çıkmasını ve düz metin yazdırmasını sağlayın; JSON çıktısı `jq -r .text` ile uyarlanmalıdır.

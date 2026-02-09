@@ -4,19 +4,11 @@ read_when:
   - आप OpenClaw से आउटबाउंड वॉइस कॉल करना चाहते हैं
   - आप voice-call प्लगइन को विन्यस्त या विकसित कर रहे हैं
 title: "वॉइस कॉल प्लगइन"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:38Z
 ---
 
 # वॉइस कॉल (प्लगइन)
 
-OpenClaw के लिए प्लगइन के माध्यम से वॉइस कॉल। आउटबाउंड सूचनाएँ और इनबाउंड नीतियों के साथ
-मल्टी-टर्न बातचीत का समर्थन करता है।
+प्लगइन के माध्यम से OpenClaw के लिए वॉयस कॉल्स। आउटबाउंड नोटिफ़िकेशन्स और इनबाउंड नीतियों के साथ मल्टी‑टर्न बातचीत का समर्थन करता है।
 
 वर्तमान प्रदाता:
 
@@ -121,14 +113,13 @@ cd ./extensions/voice-call && pnpm install
 - `mock` एक स्थानीय dev प्रदाता है (कोई नेटवर्क कॉल नहीं)।
 - `skipSignatureVerification` केवल स्थानीय परीक्षण के लिए है।
 - यदि आप ngrok फ्री टियर का उपयोग करते हैं, तो `publicUrl` को सटीक ngrok URL पर सेट करें; सिग्नेचर सत्यापन हमेशा लागू रहता है।
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` केवल तब Twilio webhooks को अमान्य सिग्नेचर के साथ अनुमति देता है जब `tunnel.provider="ngrok"` और `serve.bind` loopback (ngrok स्थानीय एजेंट) हों। केवल स्थानीय dev के लिए उपयोग करें।
-- Ngrok फ्री टियर URL बदल सकते हैं या इंटरस्टिशियल व्यवहार जोड़ सकते हैं; यदि `publicUrl` में विचलन होता है, तो Twilio सिग्नेचर विफल हो जाएँगे। उत्पादन के लिए, स्थिर डोमेन या Tailscale फ़नल को प्राथमिकता दें।
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` Twilio वेबहुक्स को अमान्य सिग्नेचर्स के साथ **केवल** तब अनुमति देता है जब `tunnel.provider="ngrok"` हो और `serve.bind` लूपबैक हो (ngrok लोकल एजेंट)। केवल लोकल डेवलपमेंट के लिए उपयोग करें।
+- Ngrok फ्री टियर URLs बदल सकते हैं या इंटरस्टिशियल व्यवहार जोड़ सकते हैं; यदि `publicUrl` बदल जाता है, तो Twilio सिग्नेचर विफल हो जाएँगे। प्रोडक्शन के लिए, एक स्थिर डोमेन या Tailscale funnel को प्राथमिकता दें।
 
 ## Webhook सुरक्षा
 
-जब Gateway के सामने कोई प्रॉक्सी या टनल होती है, तो प्लगइन
-सिग्नेचर सत्यापन के लिए सार्वजनिक URL का पुनर्निर्माण करता है। ये विकल्प नियंत्रित करते हैं कि
-कौन से फ़ॉरवर्डेड हेडर भरोसेमंद हैं।
+जब Gateway के सामने कोई प्रॉक्सी या टनल होती है, तो प्लगइन सिग्नेचर सत्यापन के लिए सार्वजनिक URL को पुनर्निर्मित करता है। These options control which forwarded
+headers are trusted.
 
 `webhookSecurity.allowedHosts` फ़ॉरवर्डिंग हेडर्स से होस्ट्स को allowlist करता है।
 
@@ -158,7 +149,9 @@ cd ./extensions/voice-call && pnpm install
 
 ## कॉल के लिए TTS
 
-वॉइस कॉल कॉल्स पर स्ट्रीमिंग स्पीच के लिए कोर `messages.tts` विन्यास (OpenAI या ElevenLabs) का उपयोग करता है। आप इसे प्लगइन विन्यास के अंतर्गत **उसी संरचना** के साथ ओवरराइड कर सकते हैं — यह `messages.tts` के साथ डीप‑मर्ज होता है।
+Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+streaming speech on calls. You can override it under the plugin config with the
+**same shape** — it deep‑merges with `messages.tts`.
 
 ```json5
 {
@@ -238,7 +231,7 @@ cd ./extensions/voice-call && pnpm install
 
 ## इनबाउंड कॉल्स
 
-इनबाउंड नीति डिफ़ॉल्ट रूप से `disabled` है। इनबाउंड कॉल्स सक्षम करने के लिए, सेट करें:
+Inbound policy defaults to `disabled`. To enable inbound calls, set:
 
 ```json5
 {
@@ -248,7 +241,7 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-ऑटो‑रिस्पॉन्स एजेंट सिस्टम का उपयोग करते हैं। इन्हें ट्यून करें:
+Auto-responses use the agent system. Tune with:
 
 - `responseModel`
 - `responseSystemPrompt`

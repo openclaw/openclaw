@@ -4,13 +4,6 @@ read_when:
   - تريد إدارة خطافات الوكيل
   - تريد تثبيت الخطافات أو تحديثها
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:02Z
 ---
 
 # `openclaw hooks`
@@ -22,7 +15,7 @@ x-i18n:
 - الخطافات: [Hooks](/automation/hooks)
 - خطافات الإضافات: [Plugins](/tools/plugin#plugin-hooks)
 
-## عرض جميع الخطافات
+## قائمة جميع الروابط
 
 ```bash
 openclaw hooks list

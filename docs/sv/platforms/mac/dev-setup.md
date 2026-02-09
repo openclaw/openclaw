@@ -3,13 +3,6 @@ summary: "Konfigureringsguide för utvecklare som arbetar med OpenClaw macOS-app
 read_when:
   - Konfigurera macOS-utvecklingsmiljön
 title: "macOS-utvecklarsetup"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:59Z
 ---
 
 # macOS-utvecklarsetup
@@ -23,7 +16,7 @@ Innan du bygger appen, säkerställ att du har följande installerat:
 1. **Xcode 26.2+**: Krävs för Swift-utveckling.
 2. **Node.js 22+ & pnpm**: Krävs för gateway (nätverksgateway), CLI och paketeringsskript.
 
-## 1. Installera beroenden
+## 1) Installera beroenden
 
 Installera projektets gemensamma beroenden:
 
@@ -44,7 +37,7 @@ Om du inte har ett Apple Developer ID-certifikat kommer skriptet automatiskt att
 För utvecklingskörlägen, signeringsflaggor och felsökning av Team ID, se macOS-appens README:
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **Obs:** Appar som är ad-hoc-signerade kan trigga säkerhetsuppmaningar. Om appen kraschar direkt med ”Abort trap 6”, se avsnittet [Felsökning](#troubleshooting).
+> **Observera**: Ad-hoc signerade appar kan utlösa säkerhetsmeddelanden. Om appen kraschar omedelbart med "Avbryt fällan 6", se avsnittet [Troubleshooting](#troubleshooting) .
 
 ## 3. Installera CLI
 
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-Om en manuell körning håller porten, stoppa den processen (Ctrl+C). Som en sista utväg, döda PID:t som du hittade ovan.
+Om en manuell körning håller i hamnen, stoppa den processen (Ctrl+C). Som en sista utväg, döda PID du hittat ovan.

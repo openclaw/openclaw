@@ -3,21 +3,16 @@ summary: "模型身分驗證：OAuth、API 金鑰與 setup-token"
 read_when:
   - 偵錯模型身分驗證或 OAuth 到期問題
   - 撰寫身分驗證或憑證儲存文件
-title: "身分驗證"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:58Z
+title: "Authentication"
 ---
 
-# 身分驗證
+# Authentication
 
 OpenClaw 支援模型提供者的 OAuth 與 API 金鑰。對於 Anthropic
 帳戶，我們建議使用 **API 金鑰**。若要存取 Claude 訂閱，
-請使用由 `claude setup-token` 建立的長效權杖。
+請使用由 `claude setup-token` 建立的長效權杖。 For Anthropic
+accounts, we recommend using an **API key**. For Claude subscription access,
+use the long‑lived token created by `claude setup-token`.
 
 完整的 OAuth 流程與儲存配置，請參閱 [/concepts/oauth](/concepts/oauth)。
 
@@ -49,15 +44,15 @@ openclaw models status
 openclaw doctor
 ```
 
-如果您不想自行管理環境變數，入門引導精靈可為常駐程式用途儲存
-API 金鑰：`openclaw onboard`。
+If you’d rather not manage env vars yourself, the onboarding wizard can store
+API keys for daemon use: `openclaw onboard`.
 
 關於環境變數繼承（`env.shellEnv`、`~/.openclaw/.env`、systemd／launchd）的詳細資訊，請參閱 [Help](/help)。
 
 ## Anthropic：setup-token（訂閱身分驗證）
 
-對於 Anthropic，建議的途徑是 **API 金鑰**。若您使用 Claude 訂閱，
-也支援 setup-token 流程。請在 **Gateway 閘道器主機** 上執行：
+For Anthropic, the recommended path is an **API key**. If you’re using a Claude
+subscription, the setup-token flow is also supported. Run it on the **gateway host**:
 
 ```bash
 claude setup-token
@@ -128,7 +123,7 @@ openclaw models auth order clear --provider anthropic
 
 使用 `--agent <id>` 指定特定代理程式；省略則使用已設定的預設代理程式。
 
-## 疑難排解
+## Troubleshooting
 
 ### 「找不到任何憑證」
 
@@ -139,10 +134,10 @@ openclaw models auth order clear --provider anthropic
 openclaw models status
 ```
 
-### 權杖即將到期／已到期
+### Token expiring/expired
 
-執行 `openclaw models status` 以確認是哪個設定檔即將到期。若該設定檔
-缺失，請重新執行 `claude setup-token` 並再次貼上權杖。
+Run `openclaw models status` to confirm which profile is expiring. If the profile
+is missing, rerun `claude setup-token` and paste the token again.
 
 ## 需求
 

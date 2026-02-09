@@ -5,13 +5,6 @@ read_when:
   - Je LM Studio of een OpenAI-compatibele proxy aansluit
   - Je de veiligste richtlijnen voor lokale modellen nodig hebt
 title: "Lokale modellen"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:24Z
 ---
 
 # Lokale modellen

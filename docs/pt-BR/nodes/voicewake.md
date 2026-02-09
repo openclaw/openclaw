@@ -4,13 +4,6 @@ read_when:
   - Alterar o comportamento ou os padrões das palavras de ativação por voz
   - Adicionar novas plataformas de nós que precisam de sincronização de palavras de ativação
 title: "Ativação por Voz"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:20Z
 ---
 
 # Ativação por Voz (Palavras de Ativação Globais)

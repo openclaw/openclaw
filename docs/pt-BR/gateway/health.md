@@ -3,13 +3,6 @@ summary: "Etapas de verificação de saúde para conectividade de canais"
 read_when:
   - Diagnosticando a saúde do canal WhatsApp
 title: "Verificações de Saúde"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:53Z
 ---
 
 # Verificações de Saúde (CLI)

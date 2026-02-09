@@ -5,20 +5,13 @@ read_when:
   - Ændring af model-fallback-adfærd eller valg-UX
   - Opdatering af model-scan-prober (værktøjer/billeder)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Models CLI
 
-Se [/concepts/model-failover](/concepts/model-failover) for rotation af auth-profiler,
-cooldowns og hvordan det interagerer med fallbacks.
-Hurtigt overblik over udbydere + eksempler: [/concepts/model-providers](/concepts/model-providers).
+Se [/concepts/model-failover](/concepts/model-failover) for auth profile
+rotation, cooldowns, og hvordan det interagerer med fallbacks.
+Hurtigtjenesteoversigt + eksempler: [/concepts/model-providers](/concepts/model-providers).
 
 ## Sådan fungerer modelvalg
 
@@ -48,7 +41,7 @@ Hvis du ikke vil håndredigere konfiguration, så kør introduktionsguiden:
 openclaw onboard
 ```
 
-Den kan opsætte model + auth for almindelige udbydere, inkl. **OpenAI Code (Codex)
+Det kan oprette model + auth for almindelige udbydere, herunder **OpenAI Code (Codex)
 abonnement** (OAuth) og **Anthropic** (API-nøgle anbefales; `claude
 setup-token` understøttes også).
 
@@ -59,7 +52,7 @@ setup-token` understøttes også).
 - `agents.defaults.models` (tilladelsesliste + aliaser + udbyderparametre)
 - `models.providers` (brugerdefinerede udbydere skrevet ind i `models.json`)
 
-Modelreferencer normaliseres til små bogstaver. Udbyder-aliaser som `z.ai/*` normaliseres
+Model refs er normaliseret til små bogstaver. Udbyder aliaser som `z.ai/*` normalisere
 til `zai/*`.
 
 Eksempler på udbyderkonfiguration (inkl. OpenCode Zen) findes i
@@ -67,16 +60,16 @@ Eksempler på udbyderkonfiguration (inkl. OpenCode Zen) findes i
 
 ## “Model er ikke tilladt” (og hvorfor svar stopper)
 
-Hvis `agents.defaults.models` er sat, bliver den **tilladelseslisten** for `/model` og for
-session-overskrivninger. Når en bruger vælger en model, der ikke er i den tilladelsesliste,
-returnerer OpenClaw:
+Hvis `agents.defaults.models` er indstillet, bliver det **tilladt** for `/model` og for
+session overrides. Når en bruger vælger en model, der ikke er i den tilladte liste,
+OpenClaw returnerer:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-Dette sker **før** et normalt svar genereres, så beskeden kan føles som om
-den “ikke svarede”. Løsningen er enten at:
+Dette sker **før** et normalt svar er genereret, så beskeden kan føle
+som om det “svarede ikke.” Rettelsen er til enten:
 
 - Tilføje modellen til `agents.defaults.models`, eller
 - Rydde tilladelseslisten (fjern `agents.defaults.models`), eller
@@ -113,7 +106,7 @@ Noter:
 - `/model` (og `/model list`) er en kompakt, nummereret vælger (modelfamilie + tilgængelige udbydere).
 - `/model <#>` vælger fra den vælger.
 - `/model status` er den detaljerede visning (auth-kandidater og, når konfigureret, udbyder-endpoint `baseUrl` + `api`-tilstand).
-- Modelreferencer parses ved at splitte på den **første** `/`. Brug `provider/model`, når du indtaster `/model <ref>`.
+- Model refs parses ved at opdele på **først** `/`. Brug `provider/model` ved indtastning `/model <ref>`.
 - Hvis selve model-ID’et indeholder `/` (OpenRouter-stil), skal du inkludere udbyder-præfikset (eksempel: `/model openrouter/moonshotai/kimi-k2`).
 - Hvis du udelader udbyderen, behandler OpenClaw inputtet som et alias eller en model for **standardudbyderen** (virker kun, når der ikke er `/` i model-ID’et).
 
@@ -156,15 +149,15 @@ Viser konfigurerede modeller som standard. Nyttige flag:
 
 ### `models status`
 
-Viser den løste primære model, fallbacks, billedmodel og et auth-overblik
-over konfigurerede udbydere. Den viser også OAuth-udløbsstatus for profiler fundet
-i auth-lageret (advarer som standard inden for 24 timer). `--plain` udskriver kun den
+Viser den løste primære model, fallbacks, billedmodel og en auth oversigt
+af konfigurerede udbydere. Det er også overflader OAuth udløbsstatus for profiler fundet
+i auth store (advarer inden for 24 timer som standard). `--plain` udskrifter kun den
 løste primære model.
-OAuth-status vises altid (og inkluderes i `--json`-output). Hvis en konfigureret
-udbyder ikke har legitimationsoplysninger, udskriver `models status` en **Manglende auth**-sektion.
-JSON inkluderer `auth.oauth` (advarselsvindue + profiler) og `auth.providers`
-(effektiv auth pr. udbyder).
-Brug `--check` til automatisering (exit `1` ved manglende/udløbet, `2` ved udløber snart).
+OAuth status vises altid (og inkluderet i `--json` output). Hvis en konfigureret
+udbyder ikke har nogen legitimationsoplysninger, udskriver `modelstatus` en \*\* Manglende auth\*\* sektion.
+JSON indeholder `auth.oauth` (advar vindue + profiler) og `auth.providers`
+(effektiv auth per provider).
+Brug `--check` til automatisering (exit `1` når det mangler/er udløbet, `2` når det udløb).
 
 Foretrukken Anthropic-auth er Claude Code CLI setup-token (kør hvor som helst; indsæt på gateway-værten om nødvendigt):
 
@@ -188,8 +181,8 @@ Vigtige flag:
 - `--set-default`: sæt `agents.defaults.model.primary` til det første valg
 - `--set-image`: sæt `agents.defaults.imageModel.primary` til det første billedvalg
 
-Probing kræver en OpenRouter API-nøgle (fra auth-profiler eller
-`OPENROUTER_API_KEY`). Uden en nøgle kan du bruge `--no-probe` til kun at liste kandidater.
+Probing kræver en OpenRouter API-nøgle (fra godkendelsesprofiler eller
+`OPENROUTER_API_KEY`). Uden en nøgle, brug `--no-probe` at liste kandidater kun.
 
 Scanresultater rangeres efter:
 
@@ -205,11 +198,11 @@ Input
 - Valgfrie filtre: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probe-kontroller: `--timeout`, `--concurrency`
 
-Når den køres i en TTY, kan du vælge fallbacks interaktivt. I ikke‑interaktiv
-tilstand kan du angive `--yes` for at acceptere standarder.
+Når du kører i en TTY, kan du vælge fallbacks interaktivt. I ikke-interaktiv
+tilstand, pass `--yes` til at acceptere misligholdelser.
 
 ## Models registry (`models.json`)
 
-Brugerdefinerede udbydere i `models.providers` skrives ind i `models.json` under
-agent-mappen (standard `~/.openclaw/agents/<agentId>/models.json`). Denne fil
-flettes som standard, medmindre `models.mode` er sat til `replace`.
+Brugerdefinerede udbydere i `models.providers` er skrevet ind i `models.json` under
+agent bibliotek (standard `~/.openclaw/agents/<agentId>/models.json`). Denne fil
+er som standard flettet med mindre `models.mode` er sat til `erstatt`.

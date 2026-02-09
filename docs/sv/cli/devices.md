@@ -4,13 +4,6 @@ read_when:
   - Du godkänner begäranden om enhetsparning
   - Du behöver rotera eller återkalla enhetstoken
 title: "enheter"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:39Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC-timeout.
 - `--json`: JSON-utdata (rekommenderas för skriptning).
 
-Obs: när du anger `--url` faller CLI inte tillbaka till konfigurations- eller miljöautentiseringsuppgifter.
-Skicka `--token` eller `--password` explicit. Avsaknad av explicita autentiseringsuppgifter är ett fel.
+Notera: När du anger `--url`, faller CLI inte tillbaka till config eller miljöuppgifter.
+Passera `--token` eller` --lösenord` explicit. Saknar explicita referenser är ett fel.
 
 ## Noteringar
 
-- Tokenrotation returnerar en ny token (känslig). Behandla den som en hemlighet.
+- Token rotation returnerar en ny token (känslig). Behandla det som en hemlighet.
 - Dessa kommandon kräver `operator.pairing`-scope (eller `operator.admin`).

@@ -1,17 +1,10 @@
 ---
-summary: „OpenClaw Gateway 24/7 auf einer GCP-Compute-Engine-VM (Docker) mit dauerhaftem Zustand betreiben“
+summary: "„OpenClaw Gateway 24/7 auf einer GCP-Compute-Engine-VM (Docker) mit dauerhaftem Zustand betreiben“"
 read_when:
   - Sie möchten OpenClaw 24/7 auf GCP betreiben
   - Sie möchten ein produktionsreifes, dauerhaft laufendes Gateway auf Ihrer eigenen VM
   - Sie möchten volle Kontrolle über Persistenz, Binärdateien und Neustartverhalten
-title: „GCP“
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:45Z
+title: "„GCP“"
 ---
 
 # OpenClaw auf GCP Compute Engine (Docker, Produktions‑VPS‑Leitfaden)
@@ -52,11 +45,11 @@ Für den generischen Docker‑Ablauf siehe [Docker](/install/docker).
 5. OpenClaw-Repository klonen
 6. Persistente Host-Verzeichnisse erstellen
 7. `.env` und `docker-compose.yml` konfigurieren
-8. Erforderliche Binärdateien einbacken, bauen und starten
+8. Benötigte Binärdateien, Build und Start backen
 
 ---
 
-## Voraussetzungen
+## Was Sie benötigen
 
 - GCP-Konto (Free Tier für e2-micro verfügbar)
 - gcloud CLI installiert (oder Cloud Console verwenden)
@@ -72,7 +65,7 @@ Für den generischen Docker‑Ablauf siehe [Docker](/install/docker).
 
 ---
 
-## 1) gcloud CLI installieren (oder Console verwenden)
+## 1. gcloud CLI installieren (oder Console verwenden)
 
 **Option A: gcloud CLI** (empfohlen für Automatisierung)
 
@@ -91,7 +84,7 @@ Alle Schritte können über die Web-UI unter [https://console.cloud.google.com](
 
 ---
 
-## 2) GCP-Projekt erstellen
+## 2. GCP-Projekt erstellen
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) VM erstellen
+## 3. VM erstellen
 
 **Maschinentypen:**
 
-| Typ      | Spezifikationen            | Kosten          | Hinweise                        |
-| -------- | -------------------------- | --------------- | ------------------------------- |
-| e2-small | 2 vCPU, 2 GB RAM           | ~12 $/Monat     | Empfohlen                       |
-| e2-micro | 2 vCPU (geteilt), 1 GB RAM | Free-Tier-fähig | Kann unter Last OOM verursachen |
+| Typ      | Spezifikationen                               | Kosten                      | Hinweise                        |
+| -------- | --------------------------------------------- | --------------------------- | ------------------------------- |
+| e2-small | 2 vCPU, 2 GB RAM                              | ~12 $/Monat | Empfohlen                       |
+| e2-micro | 2 vCPU (geteilt), 1 GB RAM | Free-Tier-fähig             | Kann unter Last OOM verursachen |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) Per SSH auf die VM verbinden
+## 4. Per SSH auf die VM verbinden
 
 **CLI:**
 
@@ -164,7 +157,7 @@ Hinweis: Die SSH-Schlüsselübertragung kann nach der VM-Erstellung 1–2 Minute
 
 ---
 
-## 5) Docker installieren (auf der VM)
+## 5. Docker installieren (auf der VM)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) OpenClaw-Repository klonen
+## 6. OpenClaw-Repository klonen
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,7 +198,7 @@ Dieser Leitfaden geht davon aus, dass Sie ein benutzerdefiniertes Image bauen, u
 
 ---
 
-## 7) Persistente Host-Verzeichnisse erstellen
+## 7. Persistente Host-Verzeichnisse erstellen
 
 Docker-Container sind flüchtig.
 Alle langlebigen Zustände müssen auf dem Host liegen.
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) Umgebungsvariablen konfigurieren
+## 8. Umgebungsvariablen konfigurieren
 
 Erstellen Sie `.env` im Repository-Stammverzeichnis.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker-Compose-Konfiguration
+## 9. Docker-Compose-Konfiguration
 
 Erstellen oder aktualisieren Sie `docker-compose.yml`.
 
@@ -291,7 +284,7 @@ services:
 
 ---
 
-## 10) Erforderliche Binärdateien in das Image einbacken (kritisch)
+## 10. Erforderliche Binärdateien in das Image einbacken (kritisch)
 
 Das Installieren von Binärdateien in einem laufenden Container ist eine Falle.
 Alles, was zur Laufzeit installiert wird, geht beim Neustart verloren.
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Bauen und starten
+## 11. Bauen und starten
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ Erwartete Ausgabe:
 
 ---
 
-## 12) Gateway verifizieren
+## 12. Gateway verifizieren
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Erfolg:
 
 ---
 
-## 13) Zugriff von Ihrem Laptop
+## 13. Zugriff von Ihrem Laptop
 
 Erstellen Sie einen SSH-Tunnel zur Weiterleitung des Gateway-Ports:
 
@@ -425,7 +418,7 @@ Alle langlebigen Zustände müssen Neustarts, Neubauten und Reboots überleben.
 | Externe Binärdateien  | `/usr/local/bin/`                 | Docker-Image           | Müssen zur Build-Zeit eingebettet werden |
 | Node-Laufzeit         | Container-Dateisystem             | Docker-Image           | Bei jedem Image-Build neu erstellt       |
 | OS-Pakete             | Container-Dateisystem             | Docker-Image           | Nicht zur Laufzeit installieren          |
-| Docker-Container      | Flüchtig                          | Neustartbar            | Kann gefahrlos gelöscht werden           |
+| Docker-Container      | Ephemer                           | Neustartbar            | Kann gefahrlos gelöscht werden           |
 
 ---
 

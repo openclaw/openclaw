@@ -1,15 +1,8 @@
 ---
-summary: ”OpenClaw-funktioner över kanaler, routing, media och UX.”
+summary: "”OpenClaw-funktioner över kanaler, routing, media och UX.”"
 read_when:
   - Du vill ha en fullständig lista över vad OpenClaw stöder
-title: ”Funktioner”
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:56Z
+title: "”Funktioner”"
 ---
 
 ## Höjdpunkter
@@ -55,6 +48,6 @@ x-i18n:
 - Android-nod med parkoppling, Canvas, chatt och kamera
 
 <Note>
-Äldre Claude-, Codex-, Gemini- och Opencode-sökvägar har tagits bort. Pi är den enda
-sökvägen för kodningsagent.
+Legacy Claude, Codex, Gemini och Opencode sökvägar har tagits bort. Pi är den enda sökvägen för
+kodningsagenten.
 </Note>

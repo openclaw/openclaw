@@ -3,13 +3,6 @@ summary: "Ondersteuningsstatus, mogelijkheden en configuratie van Telegram-bots"
 read_when:
   - Werken aan Telegram-functies of webhooks
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:11Z
 ---
 
 # Telegram (Bot API)
@@ -48,7 +41,7 @@ Minimale config:
 
 ## Installatie (snelle route)
 
-### 1) Maak een bot-token aan (BotFather)
+### 1. Maak een bot-token aan (BotFather)
 
 1. Open Telegram en chat met **@BotFather** ([directe link](https://t.me/BotFather)). Bevestig dat de handle exact `@BotFather` is.
 2. Voer `/newbot` uit en volg de prompts (naam + gebruikersnaam eindigend op `bot`).
@@ -59,7 +52,7 @@ Optionele BotFather-instellingen:
 - `/setjoingroups` — toevoegen van de bot aan groepen toestaan/weigeren.
 - `/setprivacy` — bepalen of de bot alle groepsberichten ziet.
 
-### 2) Configureer de token (env of config)
+### 2. Configureer de token (env of config)
 
 Voorbeeld:
 
@@ -117,11 +110,11 @@ groepsberichten, gebruik admin dus als je volledige zichtbaarheid nodig hebt.
 - Long-polling gebruikt de grammY-runner met per-chat-sequencing; de totale gelijktijdigheid wordt begrensd door `agents.defaults.maxConcurrent`.
 - De Telegram Bot API ondersteunt geen leesbevestigingen; er is geen `sendReadReceipts`-optie.
 
-## Conceptstreaming
+## Concept streaming
 
 OpenClaw kan gedeeltelijke antwoorden streamen in Telegram-DM’s met `sendMessageDraft`.
 
-Vereisten:
+Provideropties:
 
 - Threaded Mode ingeschakeld voor de bot in @BotFather (forum topic-modus).
 - Alleen privéchat-threads (Telegram bevat `message_thread_id` in inkomende berichten).
@@ -168,7 +161,7 @@ Notities:
 - Aangepaste opdrachten **kunnen native opdrachten niet overschrijven**. Conflicten worden genegeerd en gelogd.
 - Als `commands.native` is uitgeschakeld, worden alleen aangepaste opdrachten geregistreerd (of gewist als er geen zijn).
 
-## Limieten
+## Beperkingen
 
 - Uitgaande tekst wordt gechunked tot `channels.telegram.textChunkLimit` (standaard 4000).
 - Optionele nieuwe-regel-chunking: stel `channels.telegram.chunkMode="newline"` in om te splitsen op lege regels (paragraafgrenzen) vóór lengte-chunking.
@@ -177,7 +170,7 @@ Notities:
 - Groepsgeschiedeniscontext gebruikt `channels.telegram.historyLimit` (of `channels.telegram.accounts.*.historyLimit`), met terugval naar `messages.groupChat.historyLimit`. Stel `0` in om uit te schakelen (standaard 50).
 - DM-geschiedenis kan worden beperkt met `channels.telegram.dmHistoryLimit` (gebruikersbeurten). Per-gebruiker overrides: `channels.telegram.dms["<user_id>"].historyLimit`.
 
-## Groepsactivatiemodi
+## Groepsactivering modi
 
 Standaard reageert de bot in groepen alleen op mentions (`@botname` of patronen in `agents.list[].groupChat.mentionPatterns`). Om dit gedrag te wijzigen:
 
@@ -729,7 +722,7 @@ De agent ziet reacties als **systeemmeldingen** in de conversatiegeschiedenis, n
 
 Volledige configuratie: [Configuratie](/gateway/configuration)
 
-Provideropties:
+Provider-opties:
 
 - `channels.telegram.enabled`: kanaalstart in-/uitschakelen.
 - `channels.telegram.botToken`: bot-token (BotFather).

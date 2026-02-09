@@ -3,13 +3,6 @@ title: Sandbox CLI
 summary: "sandbox ကွန်တိန်နာများကို စီမံခန့်ခွဲခြင်းနှင့် အကျိုးသက်ရောက်နေသော sandbox မူဝါဒကို စစ်ဆေးခြင်း"
 read_when: "သင်သည် sandbox ကွန်တိန်နာများကို စီမံခန့်ခွဲနေစဉ် သို့မဟုတ် sandbox/tool-policy အပြုအမူကို အမှားရှာဖွေနေစဉ်"
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:11Z
 ---
 
 # Sandbox CLI
@@ -18,7 +11,7 @@ x-i18n:
 
 ## Overview
 
-OpenClaw သည် လုံခြုံရေးအတွက် agent များကို ခွဲခြားထားသော Docker ကွန်တိန်နာများအတွင်း လည်ပတ်စေနိုင်သည်။ `sandbox` အမိန့်များသည် အထူးသဖြင့် အပ်ဒိတ်များ သို့မဟုတ် ဖွဲ့စည်းပြင်ဆင်မှု ပြောင်းလဲမှုများ ပြီးနောက်တွင် ဤကွန်တိန်နာများကို စီမံခန့်ခွဲရန် ကူညီပေးသည်။
+OpenClaw သည် လုံခြုံရေးအတွက် agent များကို isolated Docker container များအတွင်း လည်ပတ်နိုင်ပါသည်။ `sandbox` command များသည် update သို့မဟုတ် configuration ပြောင်းလဲမှုများပြီးနောက် အထူးသဖြင့် container များကို စီမံခန့်ခွဲရန် ကူညီပါသည်။
 
 ## Commands
 
@@ -121,9 +114,9 @@ openclaw sandbox recreate --agent alfred
 - ကွန်တိန်နာများကို မလှုပ်ရှားမှု ၂၄ နာရီအကြာတွင်သာ prune လုပ်သည်
 - ပုံမှန်အသုံးပြုနေသော agent များသည် အဟောင်းကွန်တိန်နာများကို အကန့်အသတ်မရှိ ဆက်လက် လည်ပတ်စေထားသည်
 
-**ဖြေရှင်းချက်:** အဟောင်းကွန်တိန်နာများကို အတင်းအကျပ် ဖယ်ရှားရန် `openclaw sandbox recreate` ကို အသုံးပြုပါ။ နောက်တစ်ကြိမ် လိုအပ်လာသည့်အခါ လက်ရှိ ဆက်တင်များဖြင့် အလိုအလျောက် ပြန်လည်ဖန်တီးပေးမည်ဖြစ်သည်။
+**Solution:** အဟောင်း container များကို အတင်းအကျပ် ဖယ်ရှားရန် `openclaw sandbox recreate` ကို အသုံးပြုပါ။ နောက်တစ်ကြိမ် လိုအပ်လာသောအခါ လက်ရှိ setting များဖြင့် အလိုအလျောက် ပြန်လည် ဖန်တီးပေးပါမည်။
 
-အကြံပြုချက်: လက်ဖြင့် `docker rm` လုပ်ခြင်းထက် `openclaw sandbox recreate` ကို ဦးစားပေး အသုံးပြုပါ။ ၎င်းသည် Gateway ၏ ကွန်တိန်နာ အမည်ပေးစနစ်ကို အသုံးပြုပြီး scope/session key များ ပြောင်းလဲသည့်အခါ မကိုက်ညီမှုများကို ရှောင်ရှားနိုင်ပါသည်။
+Tip: manual `docker rm` ထက် `openclaw sandbox recreate` ကို ဦးစားပေးပါ။ ၎င်းသည် Gateway ၏ container naming ကို အသုံးပြုပြီး scope/session key များ ပြောင်းလဲသည့်အခါ mismatch ဖြစ်ခြင်းကို ရှောင်ရှားပေးပါသည်။
 
 ## Configuration
 

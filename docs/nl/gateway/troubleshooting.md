@@ -4,13 +4,6 @@ read_when:
   - De troubleshooting-hub heeft je hierheen verwezen voor diepere diagnose
   - Je hebt stabiele, symptoomgebaseerde runbook-secties nodig met exacte opdrachten
 title: "Problemen oplossen"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:38Z
 ---
 
 # Gateway-problemen oplossen
@@ -54,7 +47,7 @@ Let op:
 - Groepsvermelding-gating (`requireMention`, `mentionPatterns`).
 - Mismatches in kanaal-/groeps-toegestane lijst.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `drop guild message (mention required` → groepsbericht genegeerd tot vermelding.
 - `pairing request` → afzender heeft goedkeuring nodig.
@@ -84,7 +77,7 @@ Let op:
 - Mismatch in auth-modus/token tussen client en gateway.
 - Gebruik van HTTP waar apparaatidentiteit vereist is.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `device identity required` → niet-veilige context of ontbrekende apparaatauthenticatie.
 - `unauthorized` / reconnect-lus → token-/wachtwoordmismatch.
@@ -114,7 +107,7 @@ Let op:
 - Serviceconfig-mismatch (`Config (cli)` vs `Config (service)`).
 - Poort-/listenerconflicten.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `Gateway start blocked: set gateway.mode=local` → lokale gateway-modus is niet ingeschakeld.
 - `refusing to bind gateway ... without auth` → niet-loopback binding zonder token/wachtwoord.
@@ -144,7 +137,7 @@ Let op:
 - Groeps-toegestane lijst en vereisten voor vermeldingen.
 - Ontbrekende kanaal-API-rechten/scopes.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `mention required` → bericht genegeerd door groepsvermeldingsbeleid.
 - `pairing` / sporen van goedkeuring in afwachting → afzender is niet goedgekeurd.
@@ -175,7 +168,7 @@ Let op:
 - Status van job-uitvoergeschiedenis (`ok`, `skipped`, `error`).
 - Redenen voor het overslaan van heartbeats (`quiet-hours`, `requests-in-flight`, `alerts-disabled`).
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `cron: scheduler disabled; jobs will not run automatically` → cron uitgeschakeld.
 - `cron: timer tick failed` → scheduler-tick mislukt; controleer bestand-/log-/runtimefouten.
@@ -206,7 +199,7 @@ Let op:
 - OS-rechten voor camera/microfoon/locatie/scherm.
 - Uitvoeringsgoedkeuringen en status van de toegestane lijst.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `NODE_BACKGROUND_UNAVAILABLE` → node-app moet op de voorgrond staan.
 - `*_PERMISSION_REQUIRED` / `LOCATION_PERMISSION_REQUIRED` → ontbrekende OS-rechten.
@@ -237,7 +230,7 @@ Let op:
 - Bereikbaarheid van het CDP-profiel.
 - Bijlage van het extensierelay-tabblad voor `profile="chrome"`.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `Failed to start Chrome CDP on port` → browserproces kon niet worden gestart.
 - `browser.executablePath not found` → geconfigureerd pad is ongeldig.
@@ -254,7 +247,7 @@ Gerelateerd:
 
 De meeste problemen na een upgrade zijn config-drift of strengere standaardwaarden die nu worden afgedwongen.
 
-### 1) Auth- en URL-overridegedrag is gewijzigd
+### 1. Auth- en URL-overridegedrag is gewijzigd
 
 ```bash
 openclaw gateway status
@@ -268,12 +261,12 @@ Wat te controleren:
 - Als `gateway.mode=remote`, kunnen CLI-aanroepen op remote gericht zijn terwijl je lokale service in orde is.
 - Expliciete `--url`-aanroepen vallen niet terug op opgeslagen referenties.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `gateway connect failed:` → verkeerd URL-doel.
 - `unauthorized` → endpoint bereikbaar maar verkeerde auth.
 
-### 2) Bind- en auth-guardrails zijn strenger
+### 2. Bind- en auth-guardrails zijn strenger
 
 ```bash
 openclaw config get gateway.bind
@@ -287,12 +280,12 @@ Wat te controleren:
 - Niet-loopback bindings (`lan`, `tailnet`, `custom`) vereisen geconfigureerde auth.
 - Oude sleutels zoals `gateway.token` vervangen `gateway.auth.token` niet.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `refusing to bind gateway ... without auth` → bind+auth-mismatch.
 - `RPC probe: failed` terwijl de runtime draait → gateway leeft maar is ontoegankelijk met de huidige auth/URL.
 
-### 3) Koppeling en apparaatidentiteitsstatus zijn gewijzigd
+### 3. Koppeling en apparaatidentiteitsstatus zijn gewijzigd
 
 ```bash
 openclaw devices list
@@ -306,7 +299,7 @@ Wat te controleren:
 - Apparaatgoedkeuringen in afwachting voor dashboard/nodes.
 - DM-koppelingsgoedkeuringen in afwachting na beleids- of identiteitswijzigingen.
 
-Veelvoorkomende patronen:
+Veelvoorkomende signalen:
 
 - `device identity required` → apparaatauthenticatie niet voldaan.
 - `pairing required` → afzender/apparaat moet worden goedgekeurd.

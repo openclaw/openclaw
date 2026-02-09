@@ -3,13 +3,6 @@ summary: "Status der Matrix-Unterstützung, Funktionen und Konfiguration"
 read_when:
   - Arbeiten an Matrix-Kanalfunktionen
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:34Z
 ---
 
 # Matrix (Plugin)
@@ -48,10 +41,13 @@ Details: [Plugins](/tools/plugin)
 1. Installieren Sie das Matrix-Plugin:
    - Aus npm: `openclaw plugins install @openclaw/matrix`
    - Aus einem lokalen Checkout: `openclaw plugins install ./extensions/matrix`
+
 2. Erstellen Sie ein Matrix-Konto auf einem Homeserver:
    - Hosting-Optionen finden Sie unter [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Oder hosten Sie es selbst.
+
 3. Besorgen Sie sich ein Zugriffstoken für das Bot-Konto:
+
    - Verwenden Sie die Matrix-Login-API mit `curl` auf Ihrem Homeserver:
 
    ```bash
@@ -79,7 +75,9 @@ Details: [Plugins](/tools/plugin)
    - Wenn beides gesetzt ist, hat die Konfiguration Vorrang.
    - Mit Zugriffstoken: Die Benutzer-ID wird automatisch über `/whoami` abgerufen.
    - Wenn gesetzt, sollte `channels.matrix.userId` die vollständige Matrix-ID sein (Beispiel: `@bot:example.org`).
+
 5. Starten Sie das Gateway neu (oder schließen Sie das Onboarding ab).
+
 6. Starten Sie eine Direktnachricht mit dem Bot oder laden Sie ihn aus einem beliebigen Matrix-Client
    (Element, Beeper usw.; siehe [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)) in einen Raum ein. Beeper erfordert E2EE,
    setzen Sie daher `channels.matrix.encryption: true` und verifizieren Sie das Gerät.
@@ -124,7 +122,7 @@ Aktivieren Sie sie mit `channels.matrix.encryption: true`:
 - Wenn das Krypto-Modul geladen wird, werden verschlüsselte Räume automatisch entschlüsselt.
 - Ausgehende Medien werden beim Senden an verschlüsselte Räume verschlüsselt.
 - Bei der ersten Verbindung fordert OpenClaw die Geräteverifizierung von Ihren anderen Sitzungen an.
-- Verifizieren Sie das Gerät in einem anderen Matrix-Client (Element usw.), um die Schlüsselweitergabe zu aktivieren.
+- Verifizieren Sie das Gerät in einem anderen Matrix-Client (Element usw.), um die Schlüsselweitergabe zu aktivieren. um Schlüsselfreigabe zu aktivieren.
 - Wenn das Krypto-Modul nicht geladen werden kann, ist E2EE deaktiviert und verschlüsselte Räume werden nicht entschlüsselt;
   OpenClaw protokolliert eine Warnung.
 - Wenn Fehler wegen eines fehlenden Krypto-Moduls auftreten (zum Beispiel `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -151,7 +149,7 @@ Nach der Verifizierung kann der Bot Nachrichten in verschlüsselten Räumen ents
 ## Zugriffskontrolle (Direktnachrichten)
 
 - Standard: `channels.matrix.dm.policy = "pairing"`. Unbekannte Absender erhalten einen Pairing-Code.
-- Genehmigen über:
+- Freigabe über:
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - Öffentliche Direktnachrichten: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
@@ -197,17 +195,17 @@ Nach der Verifizierung kann der Bot Nachrichten in verschlüsselten Räumen ents
 
 ## Funktionen
 
-| Feature           | Status                                                                                               |
-| ----------------- | ---------------------------------------------------------------------------------------------------- |
-| Direktnachrichten | ✅ Unterstützt                                                                                       |
-| Räume             | ✅ Unterstützt                                                                                       |
-| Threads           | ✅ Unterstützt                                                                                       |
-| Medien            | ✅ Unterstützt                                                                                       |
+| Feature           | Status                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Direktnachrichten | ✅ Unterstützt                                                                                                          |
+| Räume             | ✅ Unterstützt                                                                                                          |
+| Threads           | ✅ Unterstützt                                                                                                          |
+| Medien            | ✅ Unterstützt                                                                                                          |
 | E2EE              | ✅ Unterstützt (Krypto-Modul erforderlich)                                                           |
 | Reaktionen        | ✅ Unterstützt (Senden/Lesen über Werkzeuge)                                                         |
 | Umfragen          | ✅ Senden unterstützt; eingehende Poll-Starts werden in Text umgewandelt (Antworten/Enden ignoriert) |
 | Standort          | ✅ Unterstützt (Geo-URI; Höhe ignoriert)                                                             |
-| Native Befehle    | ✅ Unterstützt                                                                                       |
+| Native Befehle    | ✅ Unterstützt                                                                                                          |
 
 ## Fehlerbehebung
 

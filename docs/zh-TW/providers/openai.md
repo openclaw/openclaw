@@ -4,21 +4,16 @@ read_when:
   - 您想在 OpenClaw 中使用 OpenAI 模型
   - 您想使用 Codex 訂閱驗證而非 API 金鑰
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:57Z
 ---
 
 # OpenAI
 
-OpenAI 提供適用於 GPT 模型的開發者 API。Codex 支援以 **ChatGPT 登入** 進行訂閱制存取，或以 **API 金鑰** 登入進行按用量計費的存取。Codex 雲端需要 ChatGPT 登入。
+OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
+access or **API key** sign-in for usage-based access. 47. Codex cloud 需要 ChatGPT 登入。
 
 ## 選項 A：OpenAI API 金鑰（OpenAI Platform）
 
+**Best for:** direct API access and usage-based billing.
 **最適合：** 直接 API 存取與按用量計費。
 請從 OpenAI 控制台取得您的 API 金鑰。
 
@@ -43,6 +38,7 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 **最適合：** 使用 ChatGPT／Codex 訂閱存取而非 API 金鑰。
 Codex 雲端需要 ChatGPT 登入，而 Codex CLI 支援 ChatGPT 或 API 金鑰登入。
+49. Codex cloud 需要 ChatGPT 登入，而 Codex CLI 支援 ChatGPT 或 API 金鑰登入。
 
 ### CLI 設定（Codex OAuth）
 

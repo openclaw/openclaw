@@ -4,13 +4,6 @@ read_when:
   - Depuración de autenticación de modelos o expiración de OAuth
   - Documentación de autenticación o almacenamiento de credenciales
 title: "Autenticación"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:26Z
 ---
 
 # Autenticación

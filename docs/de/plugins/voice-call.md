@@ -1,16 +1,9 @@
 ---
-summary: „Voice-Call-Plugin: ausgehende + eingehende Anrufe über Twilio/Telnyx/Plivo (Plugin-Installation + Konfiguration + CLI)“
+summary: "„Voice-Call-Plugin: ausgehende + eingehende Anrufe über Twilio/Telnyx/Plivo (Plugin-Installation + Konfiguration + CLI)“"
 read_when:
   - Sie möchten einen ausgehenden Sprachanruf aus OpenClaw tätigen
   - Sie konfigurieren oder entwickeln das Voice-Call-Plugin
-title: „Voice-Call-Plugin“
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:06Z
+title: "„Voice-Call-Plugin“"
 ---
 
 # Voice Call (Plugin)

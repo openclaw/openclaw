@@ -4,13 +4,6 @@ read_when:
   - Onboarden van een nieuwe assistent-instantie
   - Beoordelen van veiligheids- en toestemmingsimplicaties
 title: "Installatie van persoonlijke assistent"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:53Z
 ---
 
 # Een persoonlijke assistent bouwen met OpenClaw

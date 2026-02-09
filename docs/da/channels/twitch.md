@@ -3,18 +3,11 @@ summary: "Konfiguration og opsætning af Twitch-chatbot"
 read_when:
   - Opsætning af Twitch-chatintegration for OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:07Z
 ---
 
 # Twitch (plugin)
 
-Twitch-chat understøttes via en IRC-forbindelse. OpenClaw forbinder som en Twitch-bruger (botkonto) for at modtage og sende beskeder i kanaler.
+Twitch chat support via IRC forbindelse. OpenClaw forbinder som en Twitch-bruger (bot-konto) til at modtage og sende beskeder i kanaler.
 
 ## Plugin påkrævet
 
@@ -48,7 +41,7 @@ Detaljer: [Plugins](/tools/plugin)
    - Hvis begge er sat, har config forrang (env-fallback gælder kun standardkontoen).
 5. Start gatewayen.
 
-**⚠️ Vigtigt:** Tilføj adgangskontrol (`allowFrom` eller `allowedRoles`) for at forhindre uautoriserede brugere i at trigge botten. `requireMention` er som standard `true`.
+**⚠️ Vigtigt:** Tilføj adgangskontrol (`allowFrom` eller `allowedRoles`) for at forhindre uautoriserede brugere i at udløse boten. `requireMention` standard er `true`.
 
 Minimal konfiguration:
 
@@ -84,7 +77,7 @@ Brug [Twitch Token Generator](https://twitchtokengenerator.com/):
 - Bekræft, at scopes `chat:read` og `chat:write` er valgt
 - Kopiér **Client ID** og **Access Token**
 
-Ingen manuel app-registrering er nødvendig. Tokens udløber efter flere timer.
+Ingen manuel app registrering nødvendig. Tokens udløber efter flere timer.
 
 ### Konfigurér botten
 
@@ -128,7 +121,7 @@ Foretræk `allowFrom` for en hård tilladelsesliste. Brug `allowedRoles` i stede
 
 **Tilgængelige roller:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
-**Hvorfor bruger-ID’er?** Brugernavne kan ændres og muliggør impersonation. Bruger-ID’er er permanente.
+**Hvorfor bruger ID'er?** Brugernavne kan ændre sig, så impersonation. Bruger-ID'er er permanente.
 
 Find dit Twitch-bruger-ID: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (Konvertér dit Twitch-brugernavn til ID)
 
@@ -153,7 +146,7 @@ Botten opdaterer automatisk tokens før udløb og logger opdateringshændelser.
 
 ## Understøttelse af flere konti
 
-Brug `channels.twitch.accounts` med tokens pr. konto. Se [`gateway/configuration`](/gateway/configuration) for det fælles mønster.
+Brug `channels.twitch.accounts` med per-konto tokens. Se [`gateway/configuration`](/gateway/configuration) for det delte mønster.
 
 Eksempel (én botkonto i to kanaler):
 
@@ -218,8 +211,8 @@ Eksempel (én botkonto i to kanaler):
 
 ### Rollebaseret adgang (alternativ)
 
-`allowFrom` er en hård tilladelsesliste. Når den er sat, er kun disse bruger-ID’er tilladt.
-Hvis du ønsker rollebaseret adgang, så lad `allowFrom` være usat og konfigurér `allowedRoles` i stedet:
+`allowFrom` er en hård tilladsliste. Når angivet, er det kun disse bruger-id'er tilladt.
+Hvis du vil have rollebaseret adgang, så lad `allowFrom` være frakoblet og konfigurer `allowedRoles` i stedet for:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Hvis du ser "token refresh disabled (no refresh token)":
 - `channels.twitch.accessToken` - OAuth access token (forenklet enkeltkontokonfiguration)
 - `channels.twitch.clientId` - Twitch Client ID (forenklet enkeltkontokonfiguration)
 - `channels.twitch.channel` - Kanal der tilsluttes (forenklet enkeltkontokonfiguration)
-- `channels.twitch.accounts.<accountName>` - Konfiguration for flere konti (alle kontofelter ovenfor)
+- `channels.twitch.accounts.<accountName>` - Multi-konto config (alle kontofelter ovenfor)
 
 Fuldt eksempel:
 

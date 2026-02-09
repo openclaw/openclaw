@@ -4,20 +4,16 @@ read_when:
   - Gusto mo ng Deepgram speech-to-text para sa mga audio attachment
   - Kailangan mo ng mabilis na halimbawa ng Deepgram config
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:43Z
 ---
 
 # Deepgram (Audio Transcription)
 
-Ang Deepgram ay isang speech-to-text API. Sa OpenClaw, ginagamit ito para sa **transcription ng papasok na audio/voice note** sa pamamagitan ng `tools.media.audio`.
+Deepgram is a speech-to-text API. In OpenClaw it is used for **inbound audio/voice note
+transcription** via `tools.media.audio`.
 
-Kapag naka-enable, ina-upload ng OpenClaw ang audio file sa Deepgram at ini-inject ang transcript sa reply pipeline (`{{Transcript}}` + `[Audio]` block). **Hindi ito streaming**; ginagamit nito ang pre-recorded transcription endpoint.
+When enabled, OpenClaw uploads the audio file to Deepgram and injects the transcript
+into the reply pipeline (`{{Transcript}}` + `[Audio]` block). This is **not streaming**;
+it uses the pre-recorded transcription endpoint.
 
 Website: [https://deepgram.com](https://deepgram.com)  
 Docs: [https://developers.deepgram.com](https://developers.deepgram.com)

@@ -4,13 +4,6 @@ read_when:
   - O Node está conectado, mas as ferramentas de câmera/canvas/tela/exec falham
   - Você precisa do modelo mental de pareamento de nós versus aprovações
 title: "Solução de problemas do Node"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:22Z
 ---
 
 # Solução de problemas do Node
@@ -35,7 +28,7 @@ openclaw nodes describe --node <idOrNameOrIp>
 openclaw approvals get --node <idOrNameOrIp>
 ```
 
-Sinais de funcionamento correto:
+Sinais saudáveis:
 
 - O Node está conectado e pareado para a função `node`.
 - `nodes describe` inclui a capacidade que você está chamando.
@@ -57,12 +50,12 @@ Se você vir `NODE_BACKGROUND_UNAVAILABLE`, traga o app do node para o primeiro 
 
 ## Matriz de permissões
 
-| Capacidade                   | iOS                                       | Android                                                      | App de node no macOS                     | Código de falha típico         |
-| ---------------------------- | ----------------------------------------- | ------------------------------------------------------------ | ---------------------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Câmera (+ microfone para áudio do clipe)  | Câmera (+ microfone para áudio do clipe)                     | Câmera (+ microfone para áudio do clipe) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Gravação de Tela (+ microfone opcional)   | Prompt de captura de tela (+ microfone opcional)             | Gravação de Tela                         | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Durante o uso ou Sempre (depende do modo) | Localização em primeiro plano/segundo plano com base no modo | Permissão de localização                 | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (caminho do host do node)             | n/a (caminho do host do node)                                | Aprovações de exec obrigatórias          | `SYSTEM_RUN_DENIED`            |
+| Capacidade                   | iOS                                                          | Android                                                             | App de node no macOS                                        | Código de falha típico         |
+| ---------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Câmera (+ microfone para áudio do clipe)  | Câmera (+ microfone para áudio do clipe)         | Câmera (+ microfone para áudio do clipe) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Gravação de Tela (+ microfone opcional)   | Prompt de captura de tela (+ microfone opcional) | Gravação de Tela                                            | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Durante o uso ou Sempre (depende do modo) | Localização em primeiro plano/segundo plano com base no modo        | Permissão de localização                                    | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (caminho do host do node)             | n/a (caminho do host do node)                    | Aprovações de exec obrigatórias                             | `SYSTEM_RUN_DENIED`            |
 
 ## Pareamento versus aprovações
 
@@ -107,7 +100,7 @@ Se ainda estiver com problemas:
 
 - Reaprovar o pareamento do dispositivo.
 - Reabrir o app do node (primeiro plano).
-- Re conceder as permissões do SO.
+- Conceder permissões de SO novamente.
 - Recriar/ajustar a política de aprovação de exec.
 
 Relacionado:

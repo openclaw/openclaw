@@ -5,13 +5,6 @@ read_when:
   - Musisz przeprowadzić audyt kluczy, kosztów i widoczności użycia
   - Wyjaśniasz raportowanie kosztów w /status lub /usage
 title: "Użycie API i koszty"
-x-i18n:
-  source_path: reference/api-usage-costs.md
-  source_hash: 908bfc17811b8f4b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:41Z
 ---
 
 # Użycie API i koszty
@@ -50,14 +43,14 @@ OpenClaw może pobierać poświadczenia z:
 
 ## Funkcje, które mogą generować koszty kluczy
 
-### 1) Odpowiedzi rdzeniowego modelu (chat + narzędzia)
+### 1. Odpowiedzi rdzeniowego modelu (chat + narzędzia)
 
 Każda odpowiedź lub wywołanie narzędzia używa **bieżącego dostawcy modelu** (OpenAI, Anthropic itd.). Jest to
 główne źródło użycia i kosztów.
 
 Zobacz [Modele](/providers/models) w zakresie konfiguracji cen oraz [Użycie tokenów i koszty](/reference/token-use) w zakresie prezentacji.
 
-### 2) Rozumienie multimediów (audio/obraz/wideo)
+### 2. Rozumienie multimediów (audio/obraz/wideo)
 
 Media wejściowe mogą zostać podsumowane lub przetranskrybowane przed wygenerowaniem odpowiedzi. Wykorzystuje to API modeli/dostawców.
 
@@ -67,7 +60,7 @@ Media wejściowe mogą zostać podsumowane lub przetranskrybowane przed wygenero
 
 Zobacz [Rozumienie multimediów](/nodes/media-understanding).
 
-### 3) Osadzania pamięci + wyszukiwanie semantyczne
+### 3. Osadzania pamięci + wyszukiwanie semantyczne
 
 Semantyczne wyszukiwanie pamięci używa **API osadzeń**, gdy jest skonfigurowane dla zdalnych dostawców:
 
@@ -80,14 +73,14 @@ Możesz pozostać lokalnie, używając `memorySearch.provider = "local"` (brak u
 
 Zobacz [Pamięć](/concepts/memory).
 
-### 4) Narzędzie wyszukiwania w sieci (Brave / Perplexity przez OpenRouter)
+### 4. Narzędzie wyszukiwania w sieci (Brave / Perplexity przez OpenRouter)
 
 `web_search` używa kluczy API i może generować opłaty za użycie:
 
 - **Brave Search API**: `BRAVE_API_KEY` lub `tools.web.search.apiKey`
 - **Perplexity** (przez OpenRouter): `PERPLEXITY_API_KEY` lub `OPENROUTER_API_KEY`
 
-**Darmowy pakiet Brave (hojny):**
+**Odzyskaj wolny poziom (hojny):**
 
 - **2 000 zapytań/miesiąc**
 - **1 zapytanie/sekundę**
@@ -95,7 +88,7 @@ Zobacz [Pamięć](/concepts/memory).
 
 Zobacz [Narzędzia webowe](/tools/web).
 
-### 5) Narzędzie pobierania stron (Firecrawl)
+### 5. Narzędzie pobierania stron (Firecrawl)
 
 `web_fetch` może wywoływać **Firecrawl**, gdy obecny jest klucz API:
 
@@ -105,7 +98,7 @@ Jeśli Firecrawl nie jest skonfigurowany, narzędzie przełącza się na bezpoś
 
 Zobacz [Narzędzia webowe](/tools/web).
 
-### 6) Migawki użycia dostawców (status/zdrowie)
+### 6. Migawki użycia dostawców (status/zdrowie)
 
 Niektóre polecenia statusu wywołują **endpointy użycia dostawców**, aby wyświetlić okna limitów lub stan uwierzytelniania.
 Zazwyczaj są to wywołania o niskim wolumenie, ale nadal trafiają w API dostawców:
@@ -115,21 +108,21 @@ Zazwyczaj są to wywołania o niskim wolumenie, ale nadal trafiają w API dostaw
 
 Zobacz [CLI modeli](/cli/models).
 
-### 7) Zabezpieczenie kompakcji — podsumowanie
+### 7. Zabezpieczenie kompakcji — podsumowanie
 
 Zabezpieczenie kompakcji może podsumowywać historię sesji przy użyciu **bieżącego modelu**, co
 powoduje wywołania API dostawcy, gdy mechanizm się uruchomi.
 
 Zobacz [Zarządzanie sesją + kompakcja](/reference/session-management-compaction).
 
-### 8) Skanowanie / sondowanie modeli
+### 8. Skanowanie / sondowanie modeli
 
 `openclaw models scan` może sondować modele OpenRouter i używa `OPENROUTER_API_KEY`, gdy
 sondowanie jest włączone.
 
 Zobacz [CLI modeli](/cli/models).
 
-### 9) Talk (mowa)
+### 9. Talk (mowa)
 
 Tryb Talk może wywoływać **ElevenLabs**, gdy jest skonfigurowany:
 
@@ -137,7 +130,7 @@ Tryb Talk może wywoływać **ElevenLabs**, gdy jest skonfigurowany:
 
 Zobacz [Tryb Talk](/nodes/talk).
 
-### 10) Skills (API firm trzecich)
+### 10. Skills (API firm trzecich)
 
 Skills mogą przechowywać `apiKey` w `skills.entries.<name>.apiKey`. Jeśli skill używa tego klucza do zewnętrznych
 API, może generować koszty zgodnie z zasadami dostawcy danego skill.

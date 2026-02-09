@@ -4,13 +4,6 @@ read_when:
   - Atualizando o comportamento ou os padrões de retry do provedor
   - Depurando erros de envio do provedor ou limites de taxa
 title: "Política de Retry"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:33Z
 ---
 
 # Política de retry

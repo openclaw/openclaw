@@ -4,13 +4,6 @@ read_when:
   - Quiere elegir un canal de chat para OpenClaw
   - Necesita una vista rápida de las plataformas de mensajería compatibles
 title: "Canales de chat"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:31Z
 ---
 
 # Canales de chat

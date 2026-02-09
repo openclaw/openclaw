@@ -3,13 +3,6 @@ summary: "Kiến trúc gateway WebSocket, các thành phần và luồng phía c
 read_when:
   - Làm việc với giao thức gateway, client hoặc transport
 title: "Kiến trúc Gateway"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:38Z
 ---
 
 # Kiến trúc Gateway
@@ -116,6 +109,7 @@ Chi tiết: [Giao thức Gateway](/gateway/protocol), [Ghép cặp](/channels/pa
 ## Truy cập từ xa
 
 - Ưu tiên: Tailscale hoặc VPN.
+
 - Thay thế: đường hầm SSH
 
   ```bash
@@ -123,6 +117,7 @@ Chi tiết: [Giao thức Gateway](/gateway/protocol), [Ghép cặp](/channels/pa
   ```
 
 - Cùng một quy trình bắt tay + token xác thực áp dụng qua đường hầm.
+
 - Có thể bật TLS + tùy chọn pinning cho WS trong các thiết lập từ xa.
 
 ## Ảnh chụp vận hành

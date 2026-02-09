@@ -5,18 +5,11 @@ read_when:
   - cloud platform တစ်ခုပေါ်သို့ deploy လုပ်လိုပါက
   - အပ်ဒိတ်လုပ်ရန်၊ မိုင်ဂရိတ်လုပ်ရန် သို့မဟုတ် ဖယ်ရှားရန် လိုအပ်ပါက
 title: "ထည့်သွင်းတပ်ဆင်ခြင်း"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:38Z
 ---
 
 # ထည့်သွင်းတပ်ဆင်ခြင်း
 
-[Getting Started](/start/getting-started) ကို အပြီးလိုက်နာပြီးသားလား? အားလုံးအဆင်သင့်ပါပြီ — ဒီစာမျက်နှာက အခြား ထည့်သွင်းနည်းလမ်းများ၊ ပလက်ဖောင်းအလိုက် လမ်းညွှန်ချက်များ၊ နှင့် ပြုပြင်ထိန်းသိမ်းရေး အတွက် ဖြစ်ပါတယ်။
+[Getting Started](/start/getting-started) ကို အရင်က လိုက်နာပြီးပါပြီလား။ အားလုံး အဆင်သင့်ပါပြီ — ဤစာမျက်နှာသည် alternative install methods, platform-specific လမ်းညွှန်ချက်များနှင့် maintenance အတွက် ဖြစ်ပါသည်။
 
 ## စနစ်လိုအပ်ချက်များ
 
@@ -31,13 +24,14 @@ Windows တွင် OpenClaw ကို [WSL2](https://learn.microsoft.com/en-us
 ## ထည့်သွင်းနည်းလမ်းများ
 
 <Tip>
-**installer script** သည် OpenClaw ကို ထည့်သွင်းရန် အကြံပြုထားသော နည်းလမ်းဖြစ်ပါသည်။ Node ကို ရှာဖွေခြင်း၊ ထည့်သွင်းခြင်းနှင့် onboarding ကို အဆင့်တစ်ဆင့်တည်းဖြင့် ကိုင်တွယ်ပေးပါသည်။
+**installer script** က OpenClaw ကို ထည့်သွင်းရန် အကြံပြုထားတဲ့ နည်းလမ်း ဖြစ်ပါတယ်။ Node ကို ရှာဖွေခြင်း၊ install လုပ်ခြင်းနှင့် onboarding ကို အဆင့်တစ်ဆင့်တည်းဖြင့် ကိုင်တွယ်ပါသည်။
 </Tip>
 
 <AccordionGroup>
   <Accordion title="Installer script" icon="rocket" defaultOpen>
     CLI ကို ဒေါင်းလုဒ်လုပ်ပြီး npm ဖြင့် global အဖြစ် ထည့်သွင်းကာ onboarding wizard ကို စတင်ပါသည်။
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ Windows တွင် OpenClaw ကို [WSL2](https://learn.microsoft.com/en-us
         ```
       </Tab>
     </Tabs>
-
+    
     ဒါပါပဲ — script က Node ကို ရှာဖွေခြင်း၊ ထည့်သွင်းခြင်းနှင့် onboarding ကို ကိုင်တွယ်ပေးပါသည်။
-
+    
     onboarding ကို ကျော်ပြီး binary ကိုသာ ထည့်သွင်းလိုပါက —
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ Windows တွင် OpenClaw ကို [WSL2](https://learn.microsoft.com/en-us
         ```
       </Tab>
     </Tabs>
-
+    
     flag များ၊ env vars များနှင့် CI/automation ရွေးချယ်စရာများအားလုံးအတွက် [Installer internals](/install/installer) ကို ကြည့်ပါ။
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     Node 22+ ရှိပြီးသားဖြစ်ကာ ထည့်သွင်းခြင်းကို ကိုယ်တိုင် စီမံချင်ပါက —
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp build errors?">
           libvips ကို global အဖြစ် ထည့်သွင်းထားပါက (macOS တွင် Homebrew မှတစ်ဆင့် သာမန်အားဖြင့် ဖြစ်တတ်သည်) နှင့် `sharp` မအောင်မြင်ပါက prebuilt binaries ကို အတင်းအသုံးပြုပါ —
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           `sharp: Please add node-gyp to your dependencies` ကို တွေ့ရပါက build tooling ကို ထည့်သွင်းပါ (macOS: Xcode CLT + `npm install -g node-gyp`) သို့မဟုတ် အထက်ပါ env var ကို အသုံးပြုပါ။
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ Windows တွင် OpenClaw ကို [WSL2](https://learn.microsoft.com/en-us
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm သည် build scripts ပါသော packages များအတွက် အတည်ပြုချက်ကို ထင်ရှားစွာ လိုအပ်ပါသည်။ ပထမဆုံး install အပြီး “Ignored build scripts” သတိပေးချက် ပြပါက `pnpm approve-builds -g` ကို လည်ပတ်ပြီး ဖော်ပြထားသော packages များကို ရွေးချယ်ပါ။
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
   <Accordion title="From source" icon="github">
     ပါဝင်ကူညီသူများ သို့မဟုတ် local checkout မှ လည်ပတ်လိုသူများအတွက် ဖြစ်ပါသည်။
 
+    ```
     <Steps>
       <Step title="Clone and build">
         [OpenClaw repo](https://github.com/openclaw/openclaw) ကို clone လုပ်ပြီး build လုပ်ပါ —
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ Windows တွင် OpenClaw ကို [WSL2](https://learn.microsoft.com/en-us
       </Step>
       <Step title="Link the CLI">
         `openclaw` အမိန့်ကို global အဖြစ် အသုံးပြုနိုင်စေရန် —
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         သို့မဟုတ် link မလုပ်ဘဲ repo အတွင်းမှ `pnpm openclaw ...` ဖြင့် အမိန့်များကို လည်ပတ်နိုင်ပါသည်။
       </Step>
       <Step title="Run onboarding">
@@ -137,8 +135,9 @@ Windows တွင် OpenClaw ကို [WSL2](https://learn.microsoft.com/en-us
         ```
       </Step>
     </Steps>
-
+    
     ပိုမိုနက်ရှိုင်းသော development workflow များအတွက် [Setup](/start/setup) ကို ကြည့်ပါ။
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## ပြဿနာဖြေရှင်းခြင်း: `openclaw` မတွေ့ပါ
 
-<Accordion title="PATH စစ်ဆေးခြင်းနှင့် ပြင်ဆင်ခြင်း">
+<Accordion title="PATH diagnosis and fix">
   အမြန်စစ်ဆေးခြင်း —
 
 ```bash
@@ -192,8 +191,7 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Windows တွင် `npm prefix -g` ၏ output ကို PATH ထဲသို့ ထည့်ပါ။
 
-ထို့နောက် terminal အသစ်တစ်ခု ဖွင့်ပါ (သို့မဟုတ် zsh တွင် `rehash` / bash တွင် `hash -r`)။
-</Accordion>
+ထို့နောက် terminal အသစ်တစ်ခုကို ဖွင့်ပါ (သို့မဟုတ် zsh တွင် `rehash` / bash တွင် `hash -r`)။ </Accordion>
 
 ## အပ်ဒိတ် / ဖယ်ရှားခြင်း
 

@@ -1,24 +1,17 @@
 ---
-summary: 「用於 web_fetch 的 Firecrawl 備援（反機器人＋快取擷取）」
+summary: "用於 web_fetch 的 Firecrawl 備援（反機器人＋快取擷取）"
 read_when:
-  - 「你想要以 Firecrawl 為後端的網頁擷取」
-  - 「你需要一把 Firecrawl API 金鑰」
-  - 「你想要為 web_fetch 進行反機器人擷取」
-title: 「Firecrawl」
-x-i18n:
-  source_path: tools/firecrawl.md
-  source_hash: 08a7ad45b41af412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:30Z
+  - 你想要以 Firecrawl 為後端的網頁擷取
+  - 你需要一把 Firecrawl API 金鑰
+  - 你想要為 web_fetch 進行反機器人擷取
+title: "Firecrawl"
 ---
 
 # Firecrawl
 
 OpenClaw 可將 **Firecrawl** 作為 `web_fetch` 的備援擷取器。它是一項代管的
 內容擷取服務，支援機器人規避與快取，對於 JS 密集型網站或
-會阻擋純 HTTP 擷取的頁面特別有幫助。
+會阻擋純 HTTP 擷取的頁面特別有幫助。 33. 這是一項託管的內容擷取服務，支援機器人規避與快取，有助於處理 JS 密集的網站或封鎖純 HTTP 擷取的頁面。
 
 ## 取得 API 金鑰
 
@@ -48,13 +41,16 @@ OpenClaw 可將 **Firecrawl** 作為 `web_fetch` 的備援擷取器。它是一�
 注意事項：
 
 - 當存在 API 金鑰時，`firecrawl.enabled` 會預設為 true。
-- `maxAgeMs` 控制可接受的快取結果最久時間（毫秒）。預設為 2 天。
+- `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
 
-## 隱匿 / 機器人規避
+## 34. 隱匿／機器人規避
 
-Firecrawl 提供用於機器人規避的 **proxy mode** 參數（`basic`、`stealth` 或 `auto`）。
-OpenClaw 對 Firecrawl 請求一律使用 `proxy: "auto"` 加上 `storeInCache: true`。
-若省略 proxy，Firecrawl 會預設為 `auto`。若基本嘗試失敗，`auto` 會以隱匿代理重試，這可能比僅使用基本擷取消耗更多點數。
+35. Firecrawl 提供用於機器人規避的 **proxy mode** 參數（`basic`、`stealth` 或 `auto`）。
+    Firecrawl 提供用於機器人規避的 **proxy mode** 參數（`basic`、`stealth` 或 `auto`）。
+    OpenClaw 對 Firecrawl 請求一律使用 `proxy: "auto"` 加上 `storeInCache: true`。
+    若省略 proxy，Firecrawl 會預設為 `auto`。若基本嘗試失敗，`auto` 會以隱匿代理重試，這可能比僅使用基本擷取消耗更多點數。
+    If proxy is omitted, Firecrawl defaults to `auto`. `auto` retries with stealth proxies if a basic attempt fails, which may use more credits
+    than basic-only scraping.
 
 ## `web_fetch` 如何使用 Firecrawl
 

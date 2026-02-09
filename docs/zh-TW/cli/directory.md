@@ -4,13 +4,6 @@ read_when:
   - 當你想查詢某個頻道的聯絡人／群組／self ID
   - 當你正在開發頻道目錄配接器
 title: "directory"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:20Z
 ---
 
 # `openclaw directory`
@@ -26,7 +19,7 @@ x-i18n:
 ## Notes
 
 - `directory` 旨在協助你找到可貼到其他指令中的 ID（特別是 `openclaw message send --target ...`）。
-- 對於許多頻道，結果是以設定為基礎（允許清單／已設定的群組），而非即時的提供者目錄。
+- For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
 - 預設輸出為以定位字元分隔的 `id`（有時還包含 `name`）；進行腳本處理時請使用 `--json`。
 
 ## Using results with `message send`

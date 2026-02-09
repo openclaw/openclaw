@@ -4,13 +4,6 @@ read_when:
   - Przenosisz OpenClaw na nowy laptop/serwer
   - Chcesz zachować sesje, uwierzytelnianie i logowania do kanałów (WhatsApp itp.)
 title: "Przewodnik migracji"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:30Z
 ---
 
 # Migracja OpenClaw na nową maszynę
@@ -26,7 +19,7 @@ Istnieją jednak typowe pułapki związane z **profilami**, **uprawnieniami** or
 
 ## Zanim zaczniesz (co migrujesz)
 
-### 1) Zidentyfikuj katalog stanu
+### 1. Zidentyfikuj katalog stanu
 
 Większość instalacji używa ustawienia domyślnego:
 
@@ -45,7 +38,7 @@ openclaw status
 
 W wyjściu poszukaj wzmianek o `OPENCLAW_STATE_DIR` / profilu. Jeśli uruchamiasz wiele gatewayów, powtórz to dla każdego profilu.
 
-### 2) Zidentyfikuj swój obszar roboczy
+### 2. Zidentyfikuj swój obszar roboczy
 
 Typowe wartości domyślne:
 
@@ -54,7 +47,7 @@ Typowe wartości domyślne:
 
 Obszar roboczy to miejsce, w którym znajdują się pliki takie jak `MEMORY.md`, `USER.md` i `memory/*.md`.
 
-### 3) Zrozum, co zostanie zachowane
+### 3. Zrozum, co zostanie zachowane
 
 Jeśli skopiujesz **zarówno** katalog stanu, jak i obszar roboczy, zachowasz:
 
@@ -66,7 +59,7 @@ Jeśli skopiujesz **zarówno** katalog stanu, jak i obszar roboczy, zachowasz:
 
 Jeśli skopiujesz **tylko** obszar roboczy (np. przez Git), **nie** zachowasz:
 
-- sesji
+- sessions
 - poświadczeń
 - logowań do kanałów
 

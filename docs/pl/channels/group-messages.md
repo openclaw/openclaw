@@ -3,13 +3,6 @@ summary: "Zachowanie i konfiguracja obsługi wiadomości grupowych WhatsApp (men
 read_when:
   - Zmiana reguł wiadomości grupowych lub wzmianek
 title: "Wiadomości grupowe"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:59Z
 ---
 
 # Wiadomości grupowe (kanał WhatsApp Web)
@@ -25,7 +18,7 @@ Uwaga: `agents.list[].groupChat.mentionPatterns` jest teraz używane także prze
 - Sesje per grupa: klucze sesji mają postać `agent:<agentId>:whatsapp:group:<jid>`, więc polecenia takie jak `/verbose on` lub `/think high` (wysyłane jako samodzielne wiadomości) są ograniczone do danej grupy; osobisty stan DM pozostaje nienaruszony. Sygnały heartbeat są pomijane dla wątków grupowych.
 - Wstrzykiwanie kontekstu: **tylko oczekujące** wiadomości grupowe (domyślnie 50), które _nie_ uruchomiły wykonania, są poprzedzane pod `[Chat messages since your last reply - for context]`, a linia wyzwalająca znajduje się pod `[Current message - respond to this]`. Wiadomości już obecne w sesji nie są wstrzykiwane ponownie.
 - Ujawnianie nadawcy: każda partia grupowa kończy się teraz `[from: Sender Name (+E164)]`, aby Pi wiedział, kto mówi.
-- Wiadomości efemeryczne/view-once: są rozwijane przed wyodrębnieniem tekstu/wzmianek, więc pingnięcia w ich treści nadal wyzwalają.
+- Efemeral/view-jeden: odpakowujemy je przed ekstrakcją tekstu/wzmianek, więc pingi w nich nadal wyzwalają.
 - Systemowy prompt grupy: przy pierwszej turze sesji grupowej (oraz zawsze, gdy `/activation` zmienia tryb) wstrzykujemy krótki opis do promptu systemowego, np. `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.`. Jeśli metadane nie są dostępne, nadal informujemy agenta, że to czat grupowy.
 
 ## Przykład konfiguracji (WhatsApp)

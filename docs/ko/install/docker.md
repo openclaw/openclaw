@@ -4,13 +4,6 @@ read_when:
   - 로컬 설치 대신 컨테이너화된 게이트웨이를 원할 때
   - Docker 플로우를 검증하고 있을 때
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:56Z
 ---
 
 # Docker (선택 사항)
@@ -49,11 +42,11 @@ Docker 는 **선택 사항**입니다. 컨테이너화된 게이트웨이가 필
 
 - 게이트웨이 이미지 빌드
 - 온보딩 마법사 실행
-- 선택적 프로바이더 설정 힌트 출력
+- prints optional provider setup hints
 - Docker Compose 를 통해 게이트웨이 시작
 - 게이트웨이 토큰을 생성하고 `.env` 에 기록
 
-선택적 환경 변수:
+Optional env vars:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — 빌드 중 추가 apt 패키지 설치
 - `OPENCLAW_EXTRA_MOUNTS` — 추가 호스트 바인드 마운트 추가
@@ -127,8 +120,7 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 컨테이너 재생성 시에도 `/home/node` 를 유지하려면,
 `OPENCLAW_HOME_VOLUME` 을 통해 이름 있는 볼륨을 설정하십시오. 이는 Docker 볼륨을 생성하여
-`/home/node` 에 마운트하면서 표준 config/workspace 바인드 마운트는 유지합니다.
-여기서는 바인드 경로가 아닌 이름 있는 볼륨을 사용하십시오. 바인드 마운트는
+`/home/node` 에 마운트하면서 표준 config/workspace 바인드 마운트는 유지합니다. 여기서는 바인드 경로가 아닌 이름 있는 볼륨을 사용하십시오. 바인드 마운트는
 `OPENCLAW_EXTRA_MOUNTS` 를 사용하십시오.
 
 예시:
@@ -286,8 +278,7 @@ docker compose run --rm openclaw-cli channels add --channel discord --token "<to
 
 마법사에서 OpenAI Codex OAuth 를 선택하면, 브라우저 URL 을 열고
 `http://127.0.0.1:1455/auth/callback` 에서 콜백을 캡처하려고 시도합니다. Docker 또는
-헤드리스 환경에서는 이 콜백이 브라우저 오류로 표시될 수 있습니다.
-도착한 전체 리디렉션 URL 을 복사하여 마법사에 다시 붙여넣어 인증을 완료하십시오.
+헤드리스 환경에서는 이 콜백이 브라우저 오류로 표시될 수 있습니다. 도착한 전체 리디렉션 URL 을 복사하여 마법사에 다시 붙여넣어 인증을 완료하십시오.
 
 ### 헬스 체크
 
@@ -311,14 +302,14 @@ pnpm test:docker:qr
 
 - 게이트웨이 바인드는 컨테이너 사용을 위해 기본적으로 `lan` 에 바인드됩니다.
 - Dockerfile CMD 는 `--allow-unconfigured` 을 사용합니다. `gateway.mode` 이 아닌
-  `local` 로 마운트된 설정도 여전히 시작됩니다. 가드를 강제하려면 CMD 를 오버라이드하십시오.
+  `local` 로 마운트된 설정도 여전히 시작됩니다. Override CMD to enforce the guard.
 - 게이트웨이 컨테이너는 세션에 대한 단일 소스 오브 트루스입니다 (`~/.openclaw/agents/<agentId>/sessions/`).
 
 ## 에이전트 샌드박스 (호스트 게이트웨이 + Docker 도구)
 
 심화 내용: [Sandboxing](/gateway/sandboxing)
 
-### 동작 방식
+### What it does
 
 `agents.defaults.sandbox` 이 활성화되면, **메인 세션이 아닌 세션**은 Docker
 컨테이너 내부에서 도구를 실행합니다. 게이트웨이는 호스트에 유지되지만,
@@ -338,8 +329,7 @@ pnpm test:docker:qr
 ### 에이전트별 샌드박스 프로파일 (멀티 에이전트)
 
 멀티 에이전트 라우팅을 사용하는 경우, 각 에이전트는 샌드박스 + 도구 설정을
-`agents.list[].sandbox` 및 `agents.list[].tools` (그리고 `agents.list[].tools.sandbox.tools`) 로 오버라이드할 수 있습니다.
-이를 통해 하나의 게이트웨이에서 혼합된 접근 수준을 실행할 수 있습니다:
+`agents.list[].sandbox` 및 `agents.list[].tools` (그리고 `agents.list[].tools.sandbox.tools`) 로 오버라이드할 수 있습니다. 이를 통해 하나의 게이트웨이에서 혼합된 접근 수준을 실행할 수 있습니다:
 
 - 전체 접근 (개인 에이전트)
 - 읽기 전용 도구 + 읽기 전용 워크스페이스 (가족/업무 에이전트)
@@ -371,8 +361,7 @@ pnpm test:docker:qr
 - `apt-get` 를 위해 `user` 는 root 여야 합니다
   (`user` 를 생략하거나 `user: "0:0"` 로 설정).
   OpenClaw 는 `setupCommand` (또는 docker 설정)가 변경되면 컨테이너를 자동으로 재생성하지만,
-  컨테이너가 **최근에 사용된 경우**(약 5분 이내)에는 제외됩니다.
-  활성 컨테이너는 정확한 `openclaw sandbox recreate ...` 명령과 함께 경고를 로그로 남깁니다.
+  컨테이너가 **최근에 사용된 경우**(약 5분 이내)에는 제외됩니다. 활성 컨테이너는 정확한 `openclaw sandbox recreate ...` 명령과 함께 경고를 로그로 남깁니다.
 
 ```json5
 {
@@ -479,8 +468,7 @@ scripts/sandbox-common-setup.sh
 scripts/sandbox-browser-setup.sh
 ```
 
-이는 `Dockerfile.sandbox-browser` 를 사용하여 `openclaw-sandbox-browser:bookworm-slim` 을 빌드합니다.
-컨테이너는 CDP 가 활성화된 Chromium 과
+이는 `Dockerfile.sandbox-browser` 를 사용하여 `openclaw-sandbox-browser:bookworm-slim` 을 빌드합니다. 컨테이너는 CDP 가 활성화된 Chromium 과
 선택적 noVNC 옵저버 (Xvfb 를 통한 headful)로 실행됩니다.
 
 참고 사항:
@@ -575,6 +563,5 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 - 샌드박스 권한 오류: `docker.user` 를 마운트된 워크스페이스 소유권과 일치하는 UID:GID 로 설정하십시오
   (또는 워크스페이스 폴더의 소유권을 변경).
 - 커스텀 도구를 찾을 수 없음: OpenClaw 는 `sh -lc` (로그인 셸)로 명령을 실행하며,
-  이는 `/etc/profile` 을 소스하고 PATH 를 재설정할 수 있습니다.
-  `docker.env.PATH` 를 설정하여 커스텀 도구 경로(예: `/custom/bin:/usr/local/share/npm-global/bin`)를
+  이는 `/etc/profile` 을 소스하고 PATH 를 재설정할 수 있습니다. `docker.env.PATH` 를 설정하여 커스텀 도구 경로(예: `/custom/bin:/usr/local/share/npm-global/bin`)를
   앞에 추가하거나, Dockerfile 에서 `/etc/profile.d/` 아래에 스크립트를 추가하십시오.

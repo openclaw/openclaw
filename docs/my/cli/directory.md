@@ -4,13 +4,6 @@ read_when:
   - ချန်နယ်တစ်ခုအတွက် ဆက်သွယ်ရန်/အုပ်စု/ကိုယ်တိုင်၏ ID များကို ရှာဖွေရန်လိုအပ်သည့်အခါ
   - ချန်နယ် directory adapter တစ်ခုကို ဖွံ့ဖြိုးတည်ဆောက်နေသည့်အခါ
 title: "directory"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:00Z
 ---
 
 # `openclaw directory`

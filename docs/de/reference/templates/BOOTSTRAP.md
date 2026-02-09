@@ -1,14 +1,7 @@
 ---
-summary: „Ritual für den ersten Start neuer Agenten“
+summary: "„Ritual für den ersten Start neuer Agenten“"
 read_when:
   - Manuelles Bootstrapping eines Workspaces
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:16Z
 ---
 
 # BOOTSTRAP.md – Hallo, Welt

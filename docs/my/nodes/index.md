@@ -5,18 +5,11 @@ read_when:
   - agent context အတွက် node canvas/camera ကို အသုံးပြုသောအခါ
   - node command အသစ်များ သို့မဟုတ် CLI helper များ ထည့်သွင်းသောအခါ
 title: "Nodes"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:58Z
 ---
 
 # Nodes
 
-**node** ဆိုသည်မှာ Gateway **WebSocket** (operators နှင့် တူညီသော port) သို့ `role: "node"` ဖြင့် ချိတ်ဆက်ပြီး `node.invoke` မှတစ်ဆင့် command surface (ဥပမာ `canvas.*`, `camera.*`, `system.*`) ကို ဖော်ပြပေးသော companion device (macOS/iOS/Android/headless) ဖြစ်သည်။ Protocol အသေးစိတ်များ: [Gateway protocol](/gateway/protocol)။
+**node** ဆိုသည်မှာ Gateway **WebSocket** (operators များနှင့် တူညီသော port) သို့ `role: "node"` ဖြင့် ချိတ်ဆက်ပြီး `node.invoke` မှတစ်ဆင့် command surface (ဥပမာ `canvas.*`, `camera.*`, `system.*`) ကို ဖော်ပြပေးသော companion device (macOS/iOS/Android/headless) တစ်ခု ဖြစ်ပါသည်။ Protocol အသေးစိတ်များ: [Gateway protocol](/gateway/protocol).
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; မသုံးတော့/လက်ရှိ node များအတွက် ဖယ်ရှားပြီး)။
 
@@ -24,13 +17,13 @@ macOS သည် **node mode** ဖြင့်လည်း လည်ပတ်န�
 
 မှတ်ချက်များ:
 
-- Nodes များသည် **peripherals** ဖြစ်ပြီး gateways မဟုတ်ပါ။ gateway service ကို မလုပ်ဆောင်ပါ။
+- 2. ၎င်းတို့သည် gateway service ကို မလုပ်ဆောင်ပါ။ 3. **WS nodes များသည် device pairing ကို အသုံးပြုသည်။** Nodes များသည် `connect` အချိန်တွင် device identity ကို တင်ပြပြီး Gateway သည် `role: node` အတွက် device pairing request ကို ဖန်တီးပေးသည်။
 - Telegram/WhatsApp စသည့် မက်ဆေ့ချ်များသည် node များမဟုတ်ဘဲ **gateway** ပေါ်သို့သာ ရောက်ရှိပါသည်။
 - Troubleshooting runbook: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
-**WS nodes များသည် device pairing ကို အသုံးပြုပါသည်။** Nodes များသည် `connect` အတွင်း device identity ကို တင်ပြပြီး Gateway သည် `role: node` အတွက် device pairing request တစ်ခုကို ဖန်တီးပါသည်။ devices CLI (သို့မဟုတ် UI) မှတစ်ဆင့် အတည်ပြုပါ။
+4. devices CLI (သို့မဟုတ် UI) မှတဆင့် approve လုပ်ပါ။ 5. Gateway ကို စက်တစ်လုံးပေါ်တွင် run လုပ်ထားပြီး အခြားစက်တစ်လုံးပေါ်တွင် command များကို execute လုပ်လိုပါက **node host** ကို အသုံးပြုပါ။
 
 Quick CLI:
 
@@ -49,7 +42,7 @@ openclaw nodes describe --node <idOrNameOrIp>
 
 ## Remote node host (system.run)
 
-Gateway သည် စက်တစ်လုံးပေါ်တွင် လည်ပတ်နေပြီး command များကို အခြားစက်ပေါ်တွင် အလုပ်လုပ်စေလိုပါက **node host** ကို အသုံးပြုပါ။ model သည် **gateway** နှင့်သာ ဆက်သွယ်နေပြီး `host=node` ကို ရွေးချယ်ထားသည့်အခါ gateway သည် `exec` calls များကို **node host** သို့ လွှဲပြောင်းပေးပါသည်။
+Gateway ကို စက်တစ်လုံးပေါ်မှာ chạy ထားပြီး command တွေကို တခြားစက်တစ်လုံးပေါ်မှာ execute လုပ်ချင်ရင် **node host** ကို သုံးပါ။ 7. Gateway သည် loopback (`gateway.bind=loopback`, local mode တွင် default) သို့ bind လုပ်ထားပါက remote node hosts များသည် တိုက်ရိုက် connect မလုပ်နိုင်ပါ။
 
 ### ဘယ်အရာ ဘယ်နေရာမှာ လည်ပတ်သလဲ
 
@@ -67,7 +60,7 @@ openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 
 ### SSH tunnel ဖြင့် Remote gateway (loopback bind)
 
-Gateway သည် loopback (`gateway.bind=loopback`, local mode တွင် မူလအတိုင်း) သို့ bind လုပ်ထားပါက remote node host များသည် တိုက်ရိုက် မချိတ်ဆက်နိုင်ပါ။ SSH tunnel တစ်ခု ဖန်တီးပြီး node host ကို tunnel ၏ local end သို့ ညွှန်ပြပါ။
+8. SSH tunnel တစ်ခု ဖန်တီးပြီး node host ကို tunnel ၏ local end သို့ ချိတ်ဆက်ပါ။ SSH tunnel တစ်ခု ဖန်တီးပြီး node host ကို tunnel ရဲ့ local end ဆီ ညွှန်ပါ။
 
 ဥပမာ (node host -> gateway host):
 
@@ -109,7 +102,7 @@ Naming options:
 
 ### Command များကို allowlist ထည့်ခြင်း
 
-Exec approvals သည် **node host တစ်ခုချင်းစီအလိုက်** ဖြစ်ပါသည်။ Gateway မှ allowlist entry များကို ထည့်ပါ:
+Exec approvals တွေက **node host တစ်ခုချင်းစီအလိုက်** ဖြစ်ပါတယ်။ Add allowlist entries from the gateway:
 
 ```bash
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
@@ -214,7 +207,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 
 ## Screen recordings (nodes)
 
-Nodes များသည် `screen.record` (mp4) ကို ဖော်ပြပေးပါသည်။ ဥပမာ:
+Nodes expose `screen.record` (mp4). ဥပမာ —
 
 ```bash
 openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
@@ -263,8 +256,8 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 
 ## System commands (node host / mac node)
 
-macOS node သည် `system.run`, `system.notify`, နှင့် `system.execApprovals.get/set` ကို ဖော်ပြပါသည်။
-Headless node host သည် `system.run`, `system.which`, နှင့် `system.execApprovals.get/set` ကို ဖော်ပြပါသည်။
+13. headless node host သည် `system.run`, `system.which`, နှင့် `system.execApprovals.get/set` ကို expose လုပ်ပေးသည်။
+14. macOS node mode တွင် `system.run` သည် macOS app (Settings → Exec approvals) ထဲရှိ exec approvals များဖြင့် gated လုပ်ထားသည်။
 
 ဥပမာများ:
 
@@ -280,13 +273,14 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 - `system.run` သည် `--cwd`, `--env KEY=VAL`, `--command-timeout`, နှင့် `--needs-screen-recording` ကို ပံ့ပိုးပါသည်။
 - `system.notify` သည် `--priority <passive|active|timeSensitive>` နှင့် `--delivery <system|overlay|auto>` ကို ပံ့ပိုးပါသည်။
 - macOS node များသည် `PATH` override များကို ပယ်ချပါသည်; headless node host များသည် node host PATH ကို prepend လုပ်ထားသည့်အခါမှသာ `PATH` ကို လက်ခံပါသည်။
-- macOS node mode တွင် `system.run` သည် macOS app (Settings → Exec approvals) ထဲရှိ exec approvals ဖြင့် ထိန်းချုပ်ထားပါသည်။ Ask/allowlist/full များသည် headless node host နှင့် တူညီစွာ အလုပ်လုပ်ပြီး ငြင်းပယ်ထားသော prompt များသည် `SYSTEM_RUN_DENIED` ကို ပြန်ပေးပါသည်။
+- On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
+  Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - Headless node host တွင် `system.run` သည် exec approvals (`~/.openclaw/exec-approvals.json`) ဖြင့် ထိန်းချုပ်ထားပါသည်။
 
 ## Exec node binding
 
-Node များ အများအပြား ရှိနေသည့်အခါ exec ကို သီးသန့် node တစ်ခုသို့ bind လုပ်နိုင်ပါသည်။
-ဤသည်မှာ `exec host=node` အတွက် default node ကို သတ်မှတ်ပေးပြီး (agent တစ်ခုချင်းစီအလိုက် override လုပ်နိုင်ပါသည်)။
+17. ၎င်းသည် `exec host=node` အတွက် default node ကို သတ်မှတ်ပေးပြီး (agent တစ်ခုချင်းစီအလိုက် override လုပ်နိုင်သည်)။
+    This sets the default node for `exec host=node` (and can be overridden per agent).
 
 Global default:
 
@@ -314,7 +308,8 @@ Nodes များသည် `node.list` / `node.describe` ထဲတွင် per
 
 ## Headless node host (cross-platform)
 
-OpenClaw သည် UI မပါသော **headless node host** ကို လည်ပတ်နိုင်ပြီး Gateway WebSocket သို့ ချိတ်ဆက်ကာ `system.run` / `system.which` ကို ဖော်ပြပေးပါသည်။ Linux/Windows ပေါ်တွင် သို့မဟုတ် server တစ်ခုဘေးတွင် minimal node တစ်ခု လည်ပတ်စေရန် အသုံးဝင်ပါသည်။
+19. ၎င်းသည် Linux/Windows ပေါ်တွင် သို့မဟုတ် server တစ်ခု၏ ဘေးတွင် minimal node တစ်ခု run လုပ်ရန် အသုံးဝင်သည်။ This is useful on Linux/Windows
+    or for running a minimal node alongside a server.
 
 စတင်ရန်:
 
@@ -328,7 +323,8 @@ openclaw node run --host <gateway-host> --port 18789
 - Node host သည် ၎င်း၏ node id, token, display name နှင့် gateway connection info များကို `~/.openclaw/node.json` တွင် သိမ်းဆည်းထားပါသည်။
 - Exec approvals များကို `~/.openclaw/exec-approvals.json` မှတစ်ဆင့် local အဖြစ် ထိန်းချုပ်ထားပါသည်
   ([Exec approvals](/tools/exec-approvals) ကို ကြည့်ပါ)။
-- macOS တွင် headless node host သည် ချိတ်ဆက်နိုင်ပါက companion app exec host ကို ဦးစားပေးပြီး app မရရှိနိုင်ပါက local execution သို့ ပြန်လည်လှည့်ပါသည်။ App ကို မဖြစ်မနေ လိုအပ်စေရန် `OPENCLAW_NODE_EXEC_HOST=app` ကို သတ်မှတ်နိုင်ပြီး fallback ကို ပိတ်ရန် `OPENCLAW_NODE_EXEC_FALLBACK=0` ကို သတ်မှတ်နိုင်ပါသည်။
+- On macOS, the headless node host prefers the companion app exec host when reachable and falls
+  back to local execution if the app is unavailable. 22. OS permissions များသည် multi-level ဖြစ်သည်။
 - Gateway WS သည် TLS ကို အသုံးပြုပါက `--tls` / `--tls-fingerprint` ကို ထည့်ပါ။
 
 ## Mac node mode

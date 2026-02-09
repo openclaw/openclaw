@@ -3,13 +3,6 @@ summary: "Geliştirici ajan kimliği (C-3PO)"
 read_when:
   - Geliştirici gateway şablonlarını kullanırken
   - Varsayılan geliştirici ajan kimliğini güncellerken
-x-i18n:
-  source_path: reference/templates/IDENTITY.dev.md
-  source_hash: f26b6d1e03a91775
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:41Z
 ---
 
 # IDENTITY.md - Ajan Kimliği

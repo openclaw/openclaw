@@ -4,13 +4,6 @@ read_when:
   - Węzeł jest połączony, ale narzędzia kamery/płótna/ekranu/exec nie działają
   - Potrzebny jest model mentalny parowania węzła w porównaniu z zatwierdzeniami
 title: "Rozwiązywanie problemów węzła"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:24Z
 ---
 
 # Rozwiązywanie problemów węzła
@@ -35,7 +28,7 @@ openclaw nodes describe --node <idOrNameOrIp>
 openclaw approvals get --node <idOrNameOrIp>
 ```
 
-Sygnały prawidłowego działania:
+Zdrowe sygnały:
 
 - Węzeł jest połączony i sparowany dla roli `node`.
 - `nodes describe` obejmuje wywoływaną możliwość.
@@ -57,12 +50,12 @@ Jeśli zobaczysz `NODE_BACKGROUND_UNAVAILABLE`, przenieś aplikację węzła na 
 
 ## Macierz uprawnień
 
-| Możliwość                    | iOS                                           | Android                                                     | Aplikacja węzła macOS                 | Typowy kod błędu               |
-| ---------------------------- | --------------------------------------------- | ----------------------------------------------------------- | ------------------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Aparat (+ mikrofon dla dźwięku klipu)         | Aparat (+ mikrofon dla dźwięku klipu)                       | Aparat (+ mikrofon dla dźwięku klipu) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Nagrywanie ekranu (+ mikrofon opcjonalnie)    | Monit o przechwytywanie ekranu (+ mikrofon opcjonalnie)     | Nagrywanie ekranu                     | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Podczas użycia lub Zawsze (zależnie od trybu) | Lokalizacja na pierwszym planie/w tle w zależności od trybu | Uprawnienie lokalizacji               | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/d (ścieżka hosta węzła)                     | n/d (ścieżka hosta węzła)                                   | Wymagane zatwierdzenia exec           | `SYSTEM_RUN_DENIED`            |
+| Możliwość                    | iOS                                                              | Android                                                                    | Aplikacja węzła macOS                                    | Typowy kod błędu               |
+| ---------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Aparat (+ mikrofon dla dźwięku klipu)         | Aparat (+ mikrofon dla dźwięku klipu)                   | Aparat (+ mikrofon dla dźwięku klipu) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Nagrywanie ekranu (+ mikrofon opcjonalnie)    | Monit o przechwytywanie ekranu (+ mikrofon opcjonalnie) | Nagrywanie ekranu                                        | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Podczas użycia lub Zawsze (zależnie od trybu) | Lokalizacja na pierwszym planie/w tle w zależności od trybu                | Uprawnienie lokalizacji                                  | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/d (ścieżka hosta węzła)                     | n/d (ścieżka hosta węzła)                               | Wymagane zatwierdzenia exec                              | `SYSTEM_RUN_DENIED`            |
 
 ## Parowanie a zatwierdzenia
 

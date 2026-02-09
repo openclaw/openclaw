@@ -4,13 +4,6 @@ read_when:
   - Ændring af logningsoutput eller -formater
   - Fejlfinding af CLI- eller gateway-output
 title: "Logning"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:21Z
 ---
 
 # Logning
@@ -32,7 +25,7 @@ OpenClaw har to log-“flader”:
 
 Filformatet er ét JSON-objekt pr. linje.
 
-Control UI’s faneblad Logs følger denne fil via gatewayen (`logs.tail`).
+Kontrol-UI logger fanen haler denne fil via gateway (`logs.tail`).
 CLI kan gøre det samme:
 
 ```bash
@@ -59,8 +52,8 @@ Du kan justere konsolens verbositet uafhængigt via:
 
 ## Redigering af værktøjsresumeer
 
-Verbose værktøjsresumeer (f.eks. `🛠️ Exec: ...`) kan maskere følsomme tokens, før de rammer
-konsolstrømmen. Dette gælder **kun værktøjer** og ændrer ikke fillogs.
+Verbose værktøj resuméer (f.eks. `🛠️ Exec: ...`) kan maskere følsomme tokens før de rammer
+konsollen stream. Dette er **tools-only** og ændrer ikke fillogs.
 
 - `logging.redactSensitive`: `off` | `tools` (standard: `tools`)
 - `logging.redactPatterns`: array af regex-strenge (tilsidesætter standarder)
@@ -102,18 +95,18 @@ openclaw gateway --verbose --ws-log full
 
 ## Konsolformatering (undersystem-logning)
 
-Konsolformateringen er **TTY-bevidst** og udskriver konsistente linjer med præfikser.
-Undersystem-loggere holder output grupperet og let at skimme.
+Konsolformatteren er **TTY-aware** og udskriver konsistente, præfikserede linjer.
+Delsystemloggere holder output grupperet og scannbar.
 
 Adfærd:
 
-- **Undersystem-præfikser** på hver linje (f.eks. `[gateway]`, `[canvas]`, `[tailscale]`)
+- **Præfikser** på hver linje (f.eks. `[gateway]`, `[canvas]`, `[tailscale]`)
 - **Undersystemfarver** (stabile pr. undersystem) plus niveaufarver
 - **Farver når output er en TTY, eller miljøet ligner en rig terminal** (`TERM`/`COLORTERM`/`TERM_PROGRAM`), respekterer `NO_COLOR`
-- **Forkortede undersystem-præfikser**: fjerner indledende `gateway/` + `channels/`, bevarer de sidste 2 segmenter (f.eks. `whatsapp/outbound`)
+- **Forkortede præfikser for delsystemer**: dråber ledende `gateway/` + `kanaler/`, holder de sidste 2 segmenter (f.eks. `whatsapp/outbound`)
 - **Underloggere pr. undersystem** (automatisk præfiks + struktureret felt `{ subsystem }`)
 - **`logRaw()`** til QR/UX-output (ingen præfiks, ingen formatering)
-- **Konsolstile** (f.eks. `pretty | compact | json`)
+- **Konsolstil** (f.eks.`smuk autentisk kompakt autentisk json`)
 - **Konsollogniveau** adskilt fra fillogniveau (filen bevarer fuld detalje, når `logging.level` er sat til `debug`/`trace`)
 - **WhatsApp-meddelelsesindhold** logges ved `debug` (brug `--verbose` for at se dem)
 

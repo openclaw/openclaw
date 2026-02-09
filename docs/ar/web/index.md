@@ -1,16 +1,9 @@
 ---
 summary: "واجهات الويب الخاصة بـ Gateway: واجهة التحكم، أوضاع الربط، والأمان"
 read_when:
-  - "تريد الوصول إلى Gateway عبر Tailscale"
-  - "تريد واجهة التحكم في المتصفح وتحرير التهيئة"
+  - تريد الوصول إلى Gateway عبر Tailscale
+  - تريد واجهة التحكم في المتصفح وتحرير التهيئة
 title: "الويب"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:50Z
 ---
 
 # الويب (Gateway)

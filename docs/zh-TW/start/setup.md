@@ -4,31 +4,24 @@ read_when:
   - 設定新機器時
   - 想要「最新 + 最強」但不破壞你的個人設定
 title: "設定"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:29Z
 ---
 
 # 設定
 
 <Note>
-如果你是第一次設定，請從 [入門指南](/start/getting-started) 開始。
-精靈的詳細說明請參見 [Onboarding Wizard](/start/wizard)。
+如果你是第一次設定，請從 [Getting Started](/start/getting-started) 開始。
+如需精靈的詳細資訊，請參閱 [Onboarding Wizard](/start/wizard)。
 </Note>
 
 最後更新：2026-01-01
 
-## 重點摘要
+## TL;DR
 
 - **客製化放在儲存庫之外：** `~/.openclaw/workspace`（workspace）+ `~/.openclaw/openclaw.json`（config）。
 - **穩定工作流程：** 安裝 macOS 應用程式；讓它執行內建的 Gateway 閘道器。
 - **前沿工作流程：** 透過 `pnpm gateway:watch` 自行執行 Gateway 閘道器，然後讓 macOS 應用程式以 Local 模式附加。
 
-## 先決條件（從原始碼）
+## 先決條件（來自原始碼）
 
 - Node `>=22`
 - `pnpm`
@@ -41,7 +34,7 @@ x-i18n:
 - **Config：** `~/.openclaw/openclaw.json`（JSON／類 JSON5）
 - **Workspace：** `~/.openclaw/workspace`（skills、prompts、memories；建議做成私有 git 儲存庫）
 
-一次性啟動：
+只需 bootstrap 一次：
 
 ```bash
 openclaw setup
@@ -55,7 +48,7 @@ openclaw setup
 
 如果你尚未有全域安裝，請透過 `pnpm openclaw setup` 執行。
 
-## 從此儲存庫執行 Gateway 閘道器
+## 39. 從此 repo 執行 Gateway
 
 在 `pnpm build` 之後，你可以直接執行封裝好的 CLI：
 
@@ -96,7 +89,7 @@ openclaw health
 ./scripts/restart-mac.sh
 ```
 
-### 1) 啟動開發用 Gateway
+### 1. 啟動開發用 Gateway
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` 會以 watch 模式執行 gateway，並在 TypeScript 變更時重新載入。
 
-### 2) 讓 macOS 應用程式指向你正在執行的 Gateway
+### 2. 讓 macOS 應用程式指向你正在執行的 Gateway
 
 在 **OpenClaw.app** 中：
 
 - 連線模式：**Local**
   應用程式會附加到設定連接埠上的執行中 gateway。
 
-### 3) 驗證
+### 3. 驗證
 
 - 應用程式內的 Gateway 狀態應顯示 **「Using existing gateway …」**
 - 或透過 CLI：
@@ -121,7 +114,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### 常見踩雷點
+### 常見陷阱
 
 - **錯誤的連接埠：** Gateway WS 預設為 `ws://127.0.0.1:18789`；請確保應用程式與 CLI 使用相同的連接埠。
 - **狀態儲存位置：**
@@ -131,11 +124,11 @@ openclaw health
 
 ## 憑證儲存對照表
 
-在除錯身分驗證或決定要備份什麼時使用：
+在除錯驗證或決定要備份哪些項目時使用：
 
 - **WhatsApp**：`~/.openclaw/credentials/whatsapp/<accountId>/creds.json`
 - **Telegram 機器人權杖**：config／env 或 `channels.telegram.tokenFile`
-- **Discord 機器人權杖**：config／env（尚未支援權杖檔案）
+- **Discord 機器人 token**：config/env（尚未支援 token 檔案）
 - **Slack 權杖**：config／env（`channels.slack.*`）
 - **配對允許清單**：`~/.openclaw/credentials/<channel>-allowFrom.json`
 - **模型身分驗證設定檔**：`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
@@ -149,17 +142,18 @@ openclaw health
 
 ## Linux（systemd 使用者服務）
 
-Linux 安裝使用 systemd **使用者**服務。預設情況下，systemd 會在登出／閒置時停止使用者
-服務，這會終止 Gateway。入門引導會嘗試為你啟用 lingering（可能會要求 sudo）。如果仍然未啟用，請執行：
+Linux installs use a systemd **user** service. 預設情況下，systemd 會在登出/閒置時停止使用者
+服務，這會終止 Gateway。 新手引導會嘗試為你啟用
+lingering（可能會要求 sudo）。 47. 如果仍然未啟用，請執行：
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
 對於需要常駐或多使用者的伺服器，請考慮使用 **系統**服務而非
-使用者服務（不需要 lingering）。請參閱 [Gateway runbook](/gateway) 的 systemd 說明。
+使用者服務（不需要 lingering）。請參閱 [Gateway runbook](/gateway) 的 systemd 說明。 48. 有關 systemd 的說明，請參閱 [Gateway runbook](/gateway)。
 
-## 相關文件
+## 49. 相關文件
 
 - [Gateway runbook](/gateway)（旗標、監管、連接埠）
 - [Gateway configuration](/gateway/configuration)（設定結構描述 + 範例）

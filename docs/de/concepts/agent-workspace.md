@@ -4,13 +4,6 @@ read_when:
   - Sie müssen den Agent-Workspace oder dessen Dateistruktur erklären
   - Sie möchten einen Agent-Workspace sichern oder migrieren
 title: "Agent-Workspace"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:58Z
 ---
 
 # Agent-Workspace
@@ -24,8 +17,7 @@ Sitzungen speichert.
 
 **Wichtig:** Der Workspace ist das **Standard-cwd**, keine harte Sandbox. Werkzeuge
 lösen relative Pfade gegen den Workspace auf, aber absolute Pfade können weiterhin
-andere Bereiche auf dem Host erreichen, sofern Sandboxing nicht aktiviert ist.
-Wenn Sie Isolation benötigen, verwenden Sie
+andere Bereiche auf dem Host erreichen, sofern Sandboxing nicht aktiviert ist. Wenn Sie Isolation benötigen, verwenden Sie
 [`agents.defaults.sandbox`](/gateway/sandboxing) (und/oder eine agentenspezifische
 Sandbox-Konfiguration).
 Wenn Sandboxing aktiviert ist und `workspaceAccess` nicht `"rw"` ist,
@@ -155,10 +147,9 @@ Behandeln Sie den Workspace als privates Gedächtnis. Legen Sie ihn in einem
 Führen Sie diese Schritte auf der Maschine aus, auf der das Gateway läuft
 (dort befindet sich der Workspace).
 
-### 1) Repository initialisieren
+### 1. Repository initialisieren
 
-Wenn Git installiert ist, werden brandneue Workspaces automatisch initialisiert.
-Wenn dieser Workspace noch kein Repository ist, führen Sie aus:
+Wenn Git installiert ist, werden brandneue Workspaces automatisch initialisiert. Wenn dieser Workspace noch kein Repository ist, führen Sie aus:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -167,7 +158,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Privates Remote hinzufügen (einsteigerfreundliche Optionen)
+### 2. Privates Remote hinzufügen (einsteigerfreundliche Optionen)
 
 Option A: GitHub-Web-UI
 
@@ -202,7 +193,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Laufende Updates
+### 3. Laufende Updates
 
 ```bash
 git status
@@ -243,7 +234,6 @@ Vorgeschlagener `.gitignore`-Starter:
 
 ## Erweiterte Hinweise
 
-- Multi-Agent-Routing kann unterschiedliche Workspaces pro Agent verwenden.
-  Siehe [Channel routing](/channels/channel-routing) für die Routing-Konfiguration.
+- Multi-Agent-Routing kann unterschiedliche Workspaces pro Agent verwenden. Siehe [Channel routing](/channels/channel-routing) für die Routing-Konfiguration.
 - Wenn `agents.defaults.sandbox` aktiviert ist, können Nicht-Hauptsitzungen
   sitzungsbezogene Sandbox-Workspaces unter `agents.defaults.sandbox.workspaceRoot` verwenden.

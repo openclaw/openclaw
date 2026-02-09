@@ -1,17 +1,10 @@
 ---
-summary: „Einrichtung, Konfiguration und Nutzung des LINE Messaging API Plugins“
+summary: "„Einrichtung, Konfiguration und Nutzung des LINE Messaging API Plugins“"
 read_when:
   - Sie möchten OpenClaw mit LINE verbinden
   - Sie benötigen die Einrichtung von LINE-Webhooks und Zugangsdaten
   - Sie möchten LINE-spezifische Nachrichtenoptionen nutzen
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:14Z
 ---
 
 # LINE (Plugin)
@@ -21,8 +14,7 @@ Webhook-Empfänger auf dem Gateway und verwendet Ihr Channel Access Token und da
 Channel Secret zur Authentifizierung.
 
 Status: Über Plugin unterstützt. Direktnachrichten, Gruppenchats, Medien, Standorte,
-Flex-Nachrichten, Vorlagen-Nachrichten und Schnellantworten werden unterstützt.
-Reaktionen und Threads werden nicht unterstützt.
+Flex-Nachrichten, Vorlagen-Nachrichten und Schnellantworten werden unterstützt. Reaktionen und Threads werden nicht unterstützt.
 
 ## Erforderliches Plugin
 
@@ -54,7 +46,8 @@ https://gateway-host/line/webhook
 ```
 
 Das Gateway antwortet auf die Webhook-Verifizierung von LINE (GET) und eingehende
-Ereignisse (POST). Wenn Sie einen benutzerdefinierten Pfad benötigen, setzen Sie
+Ereignisse (POST).
+Wenn Sie einen benutzerdefinierten Pfad benötigen, setzen Sie
 `channels.line.webhookPath` oder `channels.line.accounts.<id>.webhookPath` und passen Sie die URL entsprechend an.
 
 ## Konfiguration
@@ -74,7 +67,7 @@ Minimale Konfiguration:
 }
 ```
 
-Umgebungsvariablen (nur Standardkonto):
+Env-vars (nur Standardkonto):
 
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_CHANNEL_SECRET`

@@ -3,18 +3,11 @@ summary: "Quy tắc xử lý hình ảnh và media cho gửi, gateway và phản
 read_when:
   - Sửa đổi pipeline media hoặc tệp đính kèm
 title: "Hỗ trợ Hình ảnh và Media"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:32Z
 ---
 
 # Hỗ trợ Hình ảnh & Media — 2025-12-05
 
-Kênh WhatsApp chạy qua **Baileys Web**. Tài liệu này ghi lại các quy tắc xử lý media hiện tại cho gửi, gateway và phản hồi của tác tử.
+The WhatsApp channel runs via **Baileys Web**. This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Mục tiêu
 
@@ -42,7 +35,7 @@ Kênh WhatsApp chạy qua **Baileys Web**. Tài liệu này ghi lại các quy t
 
 ## Pipeline Phản hồi Tự động
 
-- `getReplyFromConfig` trả về `{ text?, mediaUrl?, mediaUrls? }`.
+- `getReplyFromConfig` returns `{ text?, mediaUrl?, mediaUrls? }`.
 - Khi có media, web sender resolve đường dẫn cục bộ hoặc URL bằng cùng pipeline như `openclaw message send`.
 - Nếu cung cấp nhiều media, chúng sẽ được gửi tuần tự.
 
@@ -55,7 +48,7 @@ Kênh WhatsApp chạy qua **Baileys Web**. Tài liệu này ghi lại các quy t
 - Khả năng hiểu media (nếu được cấu hình qua `tools.media.*` hoặc dùng chung `tools.media.models`) chạy trước templating và có thể chèn các khối `[Image]`, `[Audio]` và `[Video]` vào `Body`.
   - Âm thanh thiết lập `{{Transcript}}` và dùng bản chép lời để phân tích lệnh, để lệnh slash vẫn hoạt động.
   - Mô tả video và hình ảnh giữ lại mọi chú thích để phân tích lệnh.
-- Mặc định chỉ xử lý tệp đính kèm hình ảnh/âm thanh/video khớp đầu tiên; đặt `tools.media.<cap>.attachments` để xử lý nhiều tệp đính kèm.
+- Theo mặc định, chỉ tệp đính kèm hình ảnh/âm thanh/video khớp đầu tiên được xử lý; đặt `tools.media.<cap>``.attachments` để xử lý nhiều tệp đính kèm.
 
 ## Giới hạn & Lỗi
 

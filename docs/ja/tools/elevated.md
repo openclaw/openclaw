@@ -3,13 +3,6 @@ summary: "昇格 exec モードおよび /elevated ディレクティブ"
 read_when:
   - 昇格モードの既定値、許可リスト、またはスラッシュコマンドの挙動を調整する場合
 title: "昇格モード"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:30Z
 ---
 
 # 昇格モード（/elevated ディレクティブ）
@@ -26,10 +19,10 @@ x-i18n:
 
 ## 制御するもの（およびしないもの）
 
-- **利用可否ゲート**: `tools.elevated` がグローバルな基準です。`agents.list[].tools.elevated` はエージェントごとに昇格をさらに制限できます（両方が許可する必要があります）。
+- **アベイラビリティゲート**: `tools.elevated` はグローバルベースラインです。 **利用可否ゲート**: `tools.elevated` がグローバルな基準です。`agents.list[].tools.elevated` はエージェントごとに昇格をさらに制限できます（両方が許可する必要があります）。
 - **セッション単位の状態**: `/elevated on|off|ask|full` は現在のセッションキーに対して昇格レベルを設定します。
 - **インラインディレクティブ**: メッセージ内の `/elevated on|ask|full` は、そのメッセージのみに適用されます。
-- **グループ**: グループチャットでは、エージェントがメンションされた場合にのみ昇格ディレクティブが尊重されます。メンション要件を回避するコマンド専用メッセージは、メンションされたものとして扱われます。
+- **グループ**: グループチャットでは、エージェントがメンションされた場合にのみ昇格ディレクティブが尊重されます。メンション要件を回避するコマンド専用メッセージは、メンションされたものとして扱われます。 メンション要件をバイパスするコマンドのみのメッセージは、メンションとして扱われます。
 - **ホスト実行**: 昇格は `exec` を Gateway ホストへ強制します。`full` は `security=full` も設定します。
 - **承認**: `full` は exec 承認をスキップします。`on`/`ask` は、許可リスト/確認ルールが要求する場合に承認を尊重します。
 - **非サンドボックス化エージェント**: 実行場所に関しては no-op です。ゲーティング、ログ、ステータスのみに影響します。
@@ -55,7 +48,7 @@ x-i18n:
 - 送信者許可リスト: `tools.elevated.allowFrom`。プロバイダーごとの許可リスト（例: `discord`、`whatsapp`）。
 - エージェント単位のゲート: `agents.list[].tools.elevated.enabled`（任意。さらに制限することのみ可能）。
 - エージェント単位の許可リスト: `agents.list[].tools.elevated.allowFrom`（任意。設定時は、送信者が **グローバル + エージェント単位** の両方の許可リストに一致する必要があります）。
-- Discord のフォールバック: `tools.elevated.allowFrom.discord` が省略された場合、`channels.discord.dm.allowFrom` のリストがフォールバックとして使用されます。`tools.elevated.allowFrom.discord`（`[]` であっても）を設定して上書きできます。エージェント単位の許可リストではフォールバックは使用されません。
+- Discord のフォールバック: `tools.elevated.allowFrom.discord` が省略された場合、`channels.discord.dm.allowFrom` のリストがフォールバックとして使用されます。`tools.elevated.allowFrom.discord`（`[]` であっても）を設定して上書きできます。エージェント単位の許可リストではフォールバックは使用されません。 `tools.elevated.allowFrom.discord` （`[]`）をオーバーライドするように設定します。 エージェントごとの許可リストはフォールバックを使用しない \*\*。
 - すべてのゲートを通過する必要があります。そうでない場合、昇格は利用不可として扱われます。
 
 ## ログ + ステータス

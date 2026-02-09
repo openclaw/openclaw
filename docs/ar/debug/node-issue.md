@@ -3,14 +3,7 @@ summary: ملاحظات وتعويضات لتعطّل Node + tsx برسالة «
 read_when:
   - تصحيح أخطاء سكربتات التطوير الخاصة بـ Node فقط أو أعطال وضع المراقبة
   - التحقيق في أعطال مُحمِّل tsx/esbuild في OpenClaw
-title: «تعطّل Node + tsx»
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:12Z
+title: "تعطّل Node + tsx"
 ---
 
 # تعطّل Node + tsx «\_\_name is not a function»
@@ -42,7 +35,7 @@ pnpm install
 node --import tsx src/entry.ts status
 ```
 
-## إعادة إنتاج مصغّرة في المستودع
+## الحد الأدنى لإعادة الحرف في المستودع
 
 ```bash
 node --import tsx scripts/repro/tsx-name-repro.ts
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## الحلول الالتفافية
 
 - استخدام Bun لسكربتات التطوير (تراجع مؤقت حالي).
+
 - استخدام Node + tsc في وضع المراقبة، ثم تشغيل المخرجات المُترجمة:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - تم التأكيد محليًا: يعمل `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` على Node 25.
+
 - تعطيل خيار esbuild keepNames في مُحمِّل TS إن أمكن (يمنع إدراج مُساعد `__name`)؛ لا يوفّر tsx هذا حاليًا.
+
 - اختبار Node LTS (22/24) مع `tsx` لمعرفة ما إذا كانت المشكلة خاصة بـ Node 25.
 
 ## المراجع

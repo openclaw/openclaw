@@ -5,21 +5,14 @@ read_when:
   - Sammenkobling af automatisering, der skal køre med eller sideløbende med heartbeats
   - Valg mellem heartbeat og cron til planlagte opgaver
 title: "Cron-jobs"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:21Z
 ---
 
 # Cron-jobs (Gateway scheduler)
 
 > **Cron vs Heartbeat?** Se [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for vejledning i, hvornår du skal bruge hver.
 
-Cron er Gateways indbyggede planlægger. Den persisterer jobs, vækker agenten på
-det rigtige tidspunkt og kan valgfrit levere output tilbage til en chat.
+Cron er Gatewayens indbyggede scheduler. Det fortsætter job, vækker agenten på
+det rigtige tidspunkt, og kan eventuelt levere output tilbage til en chat.
 
 Hvis du vil _“kør dette hver morgen”_ eller _“prik agenten om 20 minutter”_,
 er cron mekanismen.
@@ -73,10 +66,10 @@ For de kanoniske JSON-former og eksempler, se [JSON-skema for tool calls](/autom
 
 ## Hvor cron-jobs gemmes
 
-Cron-jobs persisteres på gateway-værten på `~/.openclaw/cron/jobs.json` som standard.
-Gateway indlæser filen i hukommelsen og skriver den tilbage ved ændringer, så manuelle redigeringer
+Cron jobs are persisted on the Gateway host at `~/.openclaw/cron/jobs.json` as default.
+Gateway indlæser filen i hukommelsen og skriver den tilbage på ændringer, så manuelle redigeringer
 er kun sikre, når Gateway er stoppet. Foretræk `openclaw cron add/edit` eller cron
-tool call-API’et til ændringer.
+værktøjet kalder API for ændringer.
 
 ## Begyndervenligt overblik
 
@@ -95,8 +88,8 @@ Tænk på et cron-job som: **hvornår** det skal køre + **hvad** det skal gøre
    - Hovedsession → `payload.kind = "systemEvent"`
    - Isoleret session → `payload.kind = "agentTurn"`
 
-Valgfrit: engangsjobs (`schedule.kind = "at"`) slettes efter succes som standard. Sæt
-`deleteAfterRun: false` for at beholde dem (de deaktiveres efter succes).
+Valgfri: one-shot jobs (`schedule.kind = "at"`) delete after success as default. Sæt
+`deleteAfterRun: false` for at beholde dem (de vil deaktivere efter succes).
 
 ## Begreber
 
@@ -110,9 +103,9 @@ Et cron-job er en gemt post med:
 - valgfri **agentbinding** (`agentId`): kør jobbet under en specifik agent; hvis
   den mangler eller er ukendt, falder gateway tilbage til standardagenten.
 
-Jobs identificeres af en stabil `jobId` (brugt af CLI/Gateway-API’er).
-I agent tool calls er `jobId` kanonisk; legacy `id` accepteres af hensyn til kompatibilitet.
-Engangsjobs slettes automatisk efter succes som standard; sæt `deleteAfterRun: false` for at beholde dem.
+Jobs identificeres ved en stabil `jobId` (bruges af CLI/Gateway API'er).
+I agent værktøj opkald, `jobId` er kanonisk; arv `id` er accepteret for kompatibilitet.
+One-shot jobs auto-delete after success as default; set `deleteAfterRun: false` for at holde dem.
 
 ### Planer
 
@@ -122,20 +115,20 @@ Cron understøtter tre plan-typer:
 - `every`: fast interval (ms).
 - `cron`: 5-felts cron-udtryk med valgfri IANA-tidszone.
 
-Cron-udtryk bruger `croner`. Hvis en tidszone udelades, bruges gateway-værtens
-lokale tidszone.
+Cron udtryk bruge `croner`. Hvis en tidszone er udeladt, Gateway værts
+lokale tidszone anvendes.
 
 ### Hoved- vs isoleret udførelse
 
 #### Jobs i hovedsession (systemhændelser)
 
-Hovedjobs sætter en systemhændelse i kø og kan valgfrit vække heartbeat-runneren.
+Vigtigste job kø en systembegivenhed og eventuelt vække hjerteslag løberen.
 De skal bruge `payload.kind = "systemEvent"`.
 
 - `wakeMode: "now"` (standard): hændelsen udløser et øjeblikkeligt heartbeat-kørsel.
 - `wakeMode: "next-heartbeat"`: hændelsen venter på næste planlagte heartbeat.
 
-Dette passer bedst, når du vil have den normale heartbeat-prompt + hovedsessionens kontekst.
+Dette er den bedste pasform, når du vil have den normale hjerteslag prompt + main-session kontekst.
 Se [Heartbeat](/gateway/heartbeat).
 
 #### Isolerede jobs (dedikerede cron-sessioner)
@@ -177,15 +170,15 @@ Leveringskonfiguration (kun isolerede jobs):
 - `delivery.to`: kanalspecifikt mål (telefon/chat/kanal-id).
 - `delivery.bestEffort`: undgå at fejle jobbet, hvis annoncelevering fejler.
 
-Annoncelevering undertrykker sends via messaging tools for kørslen; brug `delivery.channel`/`delivery.to`
-til at målrette chatten i stedet. Når `delivery.mode = "none"`, postes der intet resumé til hovedsessionen.
+Annoncere levering undertrykker besked værktøj sender til kørsel; brug `delivery.channel`/`delivery.to`
+til at målrette chatten i stedet. Når `delivery.mode = "none"`, ingen resumé er bogført til hovedsessionen.
 
 Hvis `delivery` udelades for isolerede jobs, sætter OpenClaw som standard `announce`.
 
 #### Flow for annoncelevering
 
-Når `delivery.mode = "announce"`, leverer cron direkte via de udgående kanaladaptere.
-Hovedagenten startes ikke for at udforme eller videresende beskeden.
+Når `delivery.mode = "announce"`, cron leverer direkte via de udgående kanaladaptere.
+Hovedagenten er ikke spundet op til at fremstille eller videresende budskabet.
 
 Adfærdsdetaljer:
 
@@ -203,11 +196,11 @@ Adfærdsdetaljer:
 
 Isolerede jobs (`agentTurn`) kan override model og thinking-niveau:
 
-- `model`: Udbyder/model-streng (f.eks. `anthropic/claude-sonnet-4-20250514`) eller alias (f.eks. `opus`)
+- `model`: Provider/model string (f.eks. `anthropic/claude-sonnet-4-20250514`) eller alias (f.eks. `opus`)
 - `thinking`: Thinking-niveau (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; kun GPT-5.2 + Codex-modeller)
 
-Bemærk: Du kan også sætte `model` på hovedsessions-jobs, men det ændrer den delte
-hovedsessionsmodel. Vi anbefaler model-overrides kun for isolerede jobs for at undgå
+Bemærk: Du kan også indstille `model` på main-session job, men det ændrer den delte primære
+session model. Vi anbefaler model tilsidesætter kun for isolerede job for at undgå
 uventede kontekstskift.
 
 Opløsningsprioritet:
@@ -231,13 +224,13 @@ Hvis `delivery.channel` eller `delivery.to` udelades, kan cron falde tilbage til
 
 Påmindelser om målformat:
 
-- Slack/Discord/Mattermost (plugin)-mål bør bruge eksplicitte præfikser (f.eks. `channel:<id>`, `user:<id>`) for at undgå tvetydighed.
+- Slack/Discord/Mattermost (plugin) mål bør bruge eksplicitte præfikser (f.eks. `kanal:<id>`, `user:<id>`) for at undgå tvetydighed.
 - Telegram-emner bør bruge `:topic:`-formen (se nedenfor).
 
 #### Telegram-leveringsmål (emner / forumtråde)
 
-Telegram understøtter forumemner via `message_thread_id`. Til cron-levering kan du indkode
-emnet/tråden i `to`-feltet:
+Telegram understøtter forumemner via `message_thread_id`. For cron levering, kan du indkode
+emnet/tråden i 'to'-felt:
 
 - `-1001234567890` (kun chat-id)
 - `-1001234567890:topic:123` (foretrukken: eksplicit emnemarkør)
@@ -249,8 +242,8 @@ Præfiksede mål som `telegram:...` / `telegram:group:...` accepteres også:
 
 ## JSON-skema for tool calls
 
-Brug disse former, når du kalder Gateway `cron.*` tools direkte (agent tool calls eller RPC).
-CLI-flags accepterer menneskelige varigheder som `20m`, men tool calls bør bruge en ISO 8601-streng
+Brug disse former, når du ringer til Gateway `cron.*` værktøjer direkte (agent værktøj opkald eller RPC).
+CLI flag accepterer menneskelige varigheder som `20m`, men værktøj opkald skal bruge en ISO 8601 streng
 for `schedule.at` og millisekunder for `schedule.everyMs`.
 
 ### cron.add params

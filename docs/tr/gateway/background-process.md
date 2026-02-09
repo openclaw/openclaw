@@ -4,13 +4,6 @@ read_when:
   - Arka plan exec davranışı eklerken veya değiştirirken
   - Uzun süre çalışan exec görevlerini hata ayıklarken
 title: "Arka Plan Exec ve Process Aracı"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Arka Plan Exec + Process Aracı
@@ -36,11 +29,11 @@ Davranış:
 - Çıktı, oturum yoklanana veya temizlenene kadar bellekte tutulur.
 - `process` aracı izinli değilse, `exec` eşzamanlı çalışır ve `yieldMs`/`background` yok sayılır.
 
-## Alt süreç köprüleme
+## Child process bridging
 
 exec/process araçları dışında uzun süre çalışan alt süreçler oluşturulurken (örneğin CLI yeniden başlatmaları veya gateway yardımcıları), sonlandırma sinyallerinin iletilmesi ve çıkış/hata durumunda dinleyicilerin ayrılması için alt süreç köprü yardımcısını ekleyin. Bu, systemd üzerinde yetim süreçleri önler ve platformlar arasında kapatma davranışını tutarlı kılar.
 
-Ortam geçersiz kılmaları:
+Environment overrides:
 
 - `PI_BASH_YIELD_MS`: varsayılan yield (ms)
 - `PI_BASH_MAX_OUTPUT_CHARS`: bellek içi çıktı üst sınırı (karakter)

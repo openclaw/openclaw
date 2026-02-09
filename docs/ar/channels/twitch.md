@@ -3,13 +3,6 @@ summary: "تهيئة وإعداد روبوت دردشة Twitch"
 read_when:
   - إعداد تكامل دردشة Twitch لـ OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:07Z
 ---
 
 # Twitch (إضافة)
@@ -42,7 +35,7 @@ openclaw plugins install ./extensions/twitch
    - تأكّد من تحديد النطاقين `chat:read` و `chat:write`
    - انسخ **Client ID** و **Access Token**
 3. اعثر على معرّف مستخدم Twitch الخاص بك: [https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
-4. هيّئ الرمز:
+4. تكوين الرمز المميز:
    - متغير بيئة: `OPENCLAW_TWITCH_ACCESS_TOKEN=...` (للحساب الافتراضي فقط)
    - أو عبر التهيئة: `channels.twitch.accessToken`
    - إذا تم تعيين الاثنين، تكون الأولوية للتهيئة (ويكون الرجوع لمتغير البيئة للحساب الافتراضي فقط).
@@ -184,7 +177,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 ## ضبط الوصول
 
-### قيود قائمة على الأدوار
+### القيود القائمة على الأدوار
 
 ```json5
 {
@@ -277,7 +270,7 @@ openclaw channels status --probe
 - تحقّق من أن الرمز يحتوي على النطاقين `chat:read` و `chat:write`
 - إذا كنت تستخدم تحديث الرمز، تحقّق من تعيين `clientSecret` و `refreshToken`
 
-### تحديث الرمز لا يعمل
+### تحديث الرمز المميز لا يعمل
 
 **تحقّق من السجلات لأحداث التحديث:**
 

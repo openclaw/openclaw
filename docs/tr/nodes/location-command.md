@@ -3,14 +3,7 @@ summary: "Düğümler için konum komutu (location.get), izin modları ve arka p
 read_when:
   - Konum düğümü desteği veya izinler UI'si eklerken
   - Arka plan konumu + push akışları tasarlarken
-title: "Konum Komutu"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:29Z
+title: "Location Command"
 ---
 
 # Konum komutu (düğümler)
@@ -41,7 +34,7 @@ Düğüm cihazı başına:
 
 UI davranışı:
 
-- `whileUsing` seçildiğinde ön plan izni istenir.
+- Selecting `whileUsing` requests foreground permission.
 - `always` seçildiğinde önce `whileUsing` sağlanır, ardından arka plan izni istenir (gerekirse kullanıcı Ayarlar’a yönlendirilir).
 - OS istenen seviyeyi reddederse, verilen en yüksek seviyeye geri dönülür ve durum gösterilir.
 
@@ -112,7 +105,7 @@ Notlar:
 - CLI: `openclaw nodes location get --node <id>`.
 - Ajan yönergeleri: yalnızca kullanıcı konumu etkinleştirdiğinde ve kapsamı anladığında çağırın.
 
-## UX metni (önerilen)
+## UX copy (suggested)
 
 - Kapalı: “Konum paylaşımı devre dışı.”
 - Kullanım Sırasında: “Yalnızca OpenClaw açıkken.”

@@ -5,20 +5,13 @@ read_when:
   - Dépannage de l’appairage des webhooks
   - Configuration d’iMessage sur macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: 1414cf657d347ee7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:49Z
 ---
 
 # BlueBubbles (REST macOS)
 
 Statut : plugin intégré qui communique avec le serveur macOS BlueBubbles via HTTP. **Recommandé pour l’intégration iMessage** grâce à son API plus riche et à une configuration plus simple que le canal imsg historique.
 
-## Vue d’ensemble
+## Présentation
 
 - Fonctionne sur macOS via l’application d’assistance BlueBubbles ([bluebubbles.app](https://bluebubbles.app)).
 - Recommandé/testé : macOS Sequoia (15). macOS Tahoe (26) fonctionne ; l’édition est actuellement défaillante sur Tahoe, et les mises à jour d’icône de groupe peuvent signaler un succès sans se synchroniser.
@@ -32,8 +25,11 @@ Statut : plugin intégré qui communique avec le serveur macOS BlueBubbles via 
 ## Demarrage rapide
 
 1. Installez le serveur BlueBubbles sur votre Mac (suivez les instructions sur [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. Dans la configuration BlueBubbles, activez l’API web et définissez un mot de passe.
+
 3. Exécutez `openclaw onboard` et sélectionnez BlueBubbles, ou configurez manuellement :
+
    ```json5
    {
      channels: {
@@ -46,14 +42,16 @@ Statut : plugin intégré qui communique avec le serveur macOS BlueBubbles via 
      },
    }
    ```
+
 4. Pointez les webhooks BlueBubbles vers votre gateway (passerelle) (exemple : `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Démarrez la gateway ; elle enregistrera le gestionnaire de webhook et lancera l’appairage.
 
 ## Maintenir Messages.app actif (VM / configurations sans interface)
 
 Certaines configurations macOS en VM / toujours actives peuvent voir Messages.app passer en mode « idle » (les événements entrants cessent jusqu’à ce que l’application soit ouverte/au premier plan). Une solution simple consiste à **stimuler Messages toutes les 5 minutes** à l’aide d’un AppleScript + LaunchAgent.
 
-### 1) Enregistrer l’AppleScript
+### 1. Enregistrer l’AppleScript
 
 Enregistrez ceci sous :
 
@@ -76,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Installer un LaunchAgent
+### 2. Installer un LaunchAgent
 
 Enregistrez ceci sous :
 
@@ -123,7 +121,7 @@ launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null
 launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 ```
 
-## Prise en main
+## Dépannage
 
 BlueBubbles est disponible dans l’assistant de configuration interactif :
 
@@ -131,7 +129,7 @@ BlueBubbles est disponible dans l’assistant de configuration interactif :
 openclaw onboard
 ```
 
-L’assistant demande :
+L'assistant demande :
 
 - **URL du serveur** (obligatoire) : adresse du serveur BlueBubbles (p. ex., `http://192.168.1.100:1234`)
 - **Mot de passe** (obligatoire) : mot de passe de l’API depuis les paramètres du serveur BlueBubbles
@@ -147,7 +145,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 
 ## Contrôle d’accès (Messages prives + groupes)
 
-Messages prives :
+DMs:
 
 - Par défaut : `channels.bluebubbles.dmPolicy = "pairing"`.
 - Les expéditeurs inconnus reçoivent un code d’appairage ; les messages sont ignorés jusqu’à approbation (les codes expirent après 1 heure).
@@ -186,13 +184,13 @@ Configuration par groupe :
 }
 ```
 
-### Filtrage des commandes
+### Porte de commandement
 
 - Les commandes de contrôle (p. ex., `/config`, `/model`) nécessitent une autorisation.
 - Utilise `allowFrom` et `groupAllowFrom` pour déterminer l’autorisation des commandes.
 - Les expéditeurs autorisés peuvent exécuter des commandes de contrôle même sans mentionner dans les groupes.
 
-## Saisie + accusés de lecture
+## Indicateurs de saisie + accusés de lecture
 
 - **Indicateurs de saisie** : envoyés automatiquement avant et pendant la génération de la réponse.
 - **Accusés de lecture** : contrôlés par `channels.bluebubbles.sendReadReceipts` (par défaut : `true`).
@@ -332,7 +330,7 @@ Préférez `chat_guid` pour un routage stable :
 - La confiance localhost signifie qu’un proxy inverse sur le même hôte peut contourner involontairement le mot de passe. Si vous proxifiez la gateway (passerelle), exigez une authentification au niveau du proxy et configurez `gateway.trustedProxies`. Voir [Sécurité de la gateway](/gateway/security#reverse-proxy-configuration).
 - Activez HTTPS + des règles de pare-feu sur le serveur BlueBubbles si vous l’exposez en dehors de votre LAN.
 
-## Dépannage
+## Problemes courants
 
 - Si les événements de saisie/lecture cessent de fonctionner, vérifiez les journaux de webhook BlueBubbles et assurez-vous que le chemin de la gateway correspond à `channels.bluebubbles.webhookPath`.
 - Les codes d’appairage expirent après une heure ; utilisez `openclaw pairing list bluebubbles` et `openclaw pairing approve bluebubbles <code>`.

@@ -3,22 +3,15 @@ summary: "Regras de roteamento por canal (WhatsApp, Telegram, Discord, Slack) e 
 read_when:
   - Ao alterar o roteamento de canais ou o comportamento da caixa de entrada
 title: "Roteamento de canais"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:49Z
 ---
 
-# Canais e roteamento
+# channels/channel-routing.md
 
 O OpenClaw roteia as respostas **de volta para o canal de onde a mensagem veio**. O
 modelo não escolhe um canal; o roteamento é determinístico e controlado pela
 configuração do host.
 
-## Termos‑chave
+## Termos chave
 
 - **Canal**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`.
 - **AccountId**: instância de conta por canal (quando suportado).
@@ -107,8 +100,7 @@ Você pode substituir o caminho do armazenamento via `session.store` e template 
 
 ## Comportamento do WebChat
 
-O WebChat se conecta ao **agente selecionado** e, por padrão, à sessão principal do agente.
-Por causa disso, o WebChat permite ver o contexto entre canais desse agente em um só lugar.
+O WebChat se conecta ao **agente selecionado** e, por padrão, à sessão principal do agente. Por causa disso, o WebChat permite ver o contexto entre canais desse agente em um só lugar.
 
 ## Contexto de resposta
 

@@ -1,15 +1,8 @@
 ---
-summary: „Remote-Zugriff über SSH-Tunnel (Gateway WS) und Tailnets“
+summary: "„Remote-Zugriff über SSH-Tunnel (Gateway WS) und Tailnets“"
 read_when:
   - Beim Betrieb oder bei der Fehlerbehebung von Remote-Gateway-Setups
-title: „Remote-Zugriff“
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:25Z
+title: "„Remote-Zugriff“"
 ---
 
 # Remote-Zugriff (SSH, Tunnel und Tailnets)
@@ -29,7 +22,7 @@ Dieses Repo unterstützt „Remote über SSH“, indem ein einzelnes Gateway (de
 Betrachten Sie den **Gateway-Host** als „den Ort, an dem der Agent lebt“. Er besitzt Sitzungen, Authentifizierungsprofile, Kanäle und Zustand.
 Ihr Laptop/Desktop (und die Nodes) verbinden sich mit diesem Host.
 
-### 1) Always-on-Gateway in Ihrem Tailnet (VPS oder Heimserver)
+### 1. Always-on-Gateway in Ihrem Tailnet (VPS oder Heimserver)
 
 Betreiben Sie das Gateway auf einem persistenten Host und greifen Sie über **Tailscale** oder SSH darauf zu.
 
@@ -39,7 +32,7 @@ Betreiben Sie das Gateway auf einem persistenten Host und greifen Sie über **Ta
 
 Ideal, wenn Ihr Laptop häufig schläft, Sie den Agenten aber dauerhaft aktiv haben möchten.
 
-### 2) Heim-Desktop betreibt das Gateway, Laptop ist Fernbedienung
+### 2. Heim-Desktop betreibt das Gateway, Laptop ist Fernbedienung
 
 Der Laptop führt den Agenten **nicht** aus. Er verbindet sich remote:
 
@@ -48,7 +41,7 @@ Der Laptop führt den Agenten **nicht** aus. Er verbindet sich remote:
 
 Runbook: [macOS remote access](/platforms/mac/remote).
 
-### 3) Laptop betreibt das Gateway, Remote-Zugriff von anderen Maschinen
+### 3. Laptop betreibt das Gateway, Remote-Zugriff von anderen Maschinen
 
 Behalten Sie das Gateway lokal, exponieren Sie es aber sicher:
 

@@ -4,13 +4,6 @@ read_when:
   - Toevoegen of wijzigen van poll-ondersteuning
   - Debuggen van pollverzendingen vanuit de CLI of gateway
 title: "Polls"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:00Z
 ---
 
 # Polls

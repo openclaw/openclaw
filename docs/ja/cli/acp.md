@@ -4,20 +4,13 @@ read_when:
   - ACP ベースの IDE 統合をセットアップする場合
   - ACP セッションの Gateway へのルーティングをデバッグする場合
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:00Z
 ---
 
 # acp
 
 OpenClaw Gateway（ゲートウェイ）と通信する ACP（Agent Client Protocol）ブリッジを実行します。
 
-このコマンドは IDE 向けに stdio 経由で ACP を話し、プロンプトを WebSocket 経由で Gateway に転送します。ACP セッションは Gateway のセッションキーにマッピングされます。
+このコマンドは IDE 向けに stdio 経由で ACP を話し、プロンプトを WebSocket 経由で Gateway に転送します。ACP セッションは Gateway のセッションキーにマッピングされます。 ACP セッションは Gateway セッション キーにマップされます。
 
 ## Usage
 
@@ -41,6 +34,7 @@ openclaw acp --session agent:main:main --reset-session
 
 組み込みの ACP クライアントを使用すると、IDE なしでブリッジの健全性を確認できます。
 ACP ブリッジを起動し、対話的にプロンプトを入力できます。
+ACP ブリッジを生成し、プロンプトをインタラクティブに入力できます。
 
 ```bash
 openclaw acp client
@@ -75,7 +69,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Selecting agents
 
-ACP はエージェントを直接選択しません。Gateway のセッションキーでルーティングします。
+ACP はエージェントを直接選択しません。Gateway のセッションキーでルーティングします。 ゲートウェイセッションキーによってルーティングされます。
 
 特定のエージェントを対象にするには、エージェントスコープのセッションキーを使用します。
 
@@ -85,7 +79,7 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-各 ACP セッションは単一の Gateway セッションキーにマッピングされます。1 つのエージェントは多数のセッションを持てます。キーやラベルを上書きしない限り、ACP は分離された `acp:<uuid>` セッションをデフォルトで使用します。
+各 ACP セッションは、1 つの Gateway セッション キーにマップします。 各 ACP セッションは単一の Gateway セッションキーにマッピングされます。1 つのエージェントは多数のセッションを持てます。キーやラベルを上書きしない限り、ACP は分離された `acp:<uuid>` セッションをデフォルトで使用します。
 
 ## Zed editor setup
 
@@ -133,6 +127,7 @@ Zed で Agent パネルを開き、「OpenClaw ACP」を選択してスレッド
 
 デフォルトでは、ACP セッションには `acp:` プレフィックスを持つ分離された Gateway セッションキーが割り当てられます。
 既知のセッションを再利用するには、セッションキーまたはラベルを指定します。
+既知のセッションを再利用するには、セッションキーまたはラベルを渡します。
 
 - `--session <key>`: 特定の Gateway セッションキーを使用します。
 - `--session-label <label>`: ラベルで既存のセッションを解決します。

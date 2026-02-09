@@ -2,13 +2,6 @@
 summary: "Socket veya HTTP webhook modu için Slack kurulumu"
 read_when: "Slack kurulurken veya Slack socket/HTTP modu hata ayıklanırken"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:41Z
 ---
 
 # Slack
@@ -58,7 +51,7 @@ Kapsamlar ve olaylar senkronize kalsın diye aşağıdaki manifesti kullanın.
 
 ### OpenClaw yapılandırması (Socket modu)
 
-Belirteçleri ortam değişkenleriyle ayarlayın (önerilir):
+Set tokens via env vars (recommended):
 
 - `SLACK_APP_TOKEN=xapp-...`
 - `SLACK_BOT_TOKEN=xoxb-...`
@@ -123,7 +116,7 @@ userTokenReadOnly açıkça ayarlanmış örnek (kullanıcı belirteci yazmalar�
   dosya yüklemeleri) varsayılan olarak bot belirtecini kullanır. `userTokenReadOnly: false` ise ve
   bot belirteci yoksa, OpenClaw kullanıcı belirtecine geri döner.
 
-### Geçmiş bağlamı
+### History context
 
 - `channels.slack.historyLimit` (veya `channels.slack.accounts.*.historyLimit`) prompt içine sarılan son kanal/grup mesajı sayısını kontrol eder.
 - `messages.groupChat.historyLimit`’e geri düşer. Devre dışı bırakmak için `0` ayarlayın (varsayılan 50).
@@ -358,7 +351,7 @@ Slack yalnızca Socket Mode kullanır (HTTP webhook sunucusu yoktur). Her iki be
 }
 ```
 
-Belirteçler ortam değişkenleriyle de sağlanabilir:
+Tokens can also be supplied via env vars:
 
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
@@ -377,11 +370,11 @@ ack tepkisini temizlemek için `messages.removeAckAfterReply` kullanın.
 
 Varsayılan olarak OpenClaw ana kanalda yanıtlar. Otomatik threading’i kontrol etmek için `channels.slack.replyToMode` kullanın:
 
-| Mod     | Davranış                                                                                                                                                        |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Varsayılan.** Ana kanalda yanıtla. Yalnızca tetikleyen mesaj zaten bir thread içindeyse thread’e gir.                                                         |
+| Mod     | Davranış                                                                                                                                                                                                           |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`   | **Varsayılan.** Ana kanalda yanıtla. Yalnızca tetikleyen mesaj zaten bir thread içindeyse thread’e gir.                                                            |
 | `first` | İlk yanıt thread’e gider (tetikleyen mesajın altında), sonraki yanıtlar ana kanala gider. Bağlamı görünür tutarken thread karmaşasını azaltmak için yararlıdır. |
-| `all`   | Tüm yanıtlar thread’e gider. Konuşmaları sınırlı tutar ancak görünürlüğü azaltabilir.                                                                           |
+| `all`   | Tüm yanıtlar thread’e gider. Konuşmaları sınırlı tutar ancak görünürlüğü azaltabilir.                                                                                              |
 
 Bu mod hem otomatik yanıtlar hem de ajan araç çağrıları (`slack sendMessage`) için geçerlidir.
 
@@ -465,7 +458,7 @@ Kanalları thread’e al, DM’leri kökte bırak:
 - `[[reply_to_current]]` — tetikleyen mesaja yanıtla (thread başlat/devam et).
 - `[[reply_to:<id>]]` — belirli bir mesaj kimliğine yanıtla.
 
-## Oturumlar + yönlendirme
+## Sessions + routing
 
 - DM’ler `main` oturumunu paylaşır (WhatsApp/Telegram gibi).
 - Kanallar `agent:<agentId>:slack:channel:<channelId>` oturumlarına eşlenir.

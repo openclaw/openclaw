@@ -5,13 +5,6 @@ read_when:
   - Auto-compaction အပြုအမူကို ပြောင်းလဲနေစဉ် သို့မဟုတ် “pre-compaction” housekeeping ကို ထည့်သွင်းနေစဉ်
   - Memory flush များ သို့မဟုတ် silent system turns များကို အကောင်အထည်ဖော်လိုသည့်အခါ
 title: "Session Management နက်ရှိုင်းစွာရှင်းလင်းချက်"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:29Z
 ---
 
 # Session Management & Compaction (နက်ရှိုင်းစွာရှင်းလင်းချက်)
@@ -96,7 +89,7 @@ Canonical စည်းမျဉ်းများကို [/concepts/session](/
 
 - **Reset** (`/new`, `/reset`) လုပ်ပါက ထို `sessionKey` အတွက် `sessionId` အသစ်တစ်ခု ဖန်တီးသည်။
 - **Daily reset** (Gateway ဟို့စ်၏ local time အရ မနက် 4:00 AM မူလသတ်မှတ်ချက်) သည် reset boundary ကျော်ပြီးနောက် ပထမဆုံး မက်ဆေ့ချ်တွင် `sessionId` အသစ်တစ်ခု ဖန်တီးသည်။
-- **Idle expiry** (`session.reset.idleMinutes` သို့မဟုတ် legacy `session.idleMinutes`) သည် idle window ကျော်ပြီးနောက် မက်ဆေ့ချ် ဝင်လာသည့်အခါ `sessionId` အသစ်တစ်ခု ဖန်တီးသည်။ Daily + idle နှစ်ခုလုံး သတ်မှတ်ထားပါက ပထမဆုံး သက်တမ်းကုန်သည့် အချက်က အနိုင်ရသည်။
+- **Idle expiry** (`session.reset.idleMinutes` သို့မဟုတ် legacy `session.idleMinutes`) သည် idle window ကျော်လွန်ပြီးနောက် message တစ်ခု ရောက်လာသောအခါ `sessionId` အသစ်ကို ဖန်တီးပါသည်။ daily + idle နှစ်ခုစလုံးကို configure လုပ်ထားပါက အရင်ဆုံး expire ဖြစ်သည့် အရာက အနိုင်ရပါသည်။
 
 Implementation အသေးစိတ် — ဆုံးဖြတ်ချက်သည် `src/auto-reply/reply/session.ts` ထဲရှိ `initSessionState()` တွင် ဖြစ်ပေါ်သည်။
 
@@ -174,33 +167,31 @@ Compaction ပြီးနောက် နောက်လာမည့် turn �
 - Compaction summary
 - `firstKeptEntryId` နောက်ပိုင်း မက်ဆေ့ချ်များ
 
-ကို မြင်ရမည် ဖြစ်သည်။
-
-Compaction သည် **persistent** ဖြစ်သည် (session pruning ကဲ့သို့ မဟုတ်ပါ)။ [/concepts/session-pruning](/concepts/session-pruning) ကို ကြည့်ပါ။
+Compaction သည် **persistent** ဖြစ်ပါသည် (session pruning နှင့် မတူပါ)။ [/concepts/session-pruning](/concepts/session-pruning) ကို ကြည့်ပါ။
 
 ---
 
-## Auto-compaction ဖြစ်ပေါ်သည့်အချိန် (Pi runtime)
+## auto-compaction ဖြစ်ပေါ်လာသည့်အခါ (Pi runtime)
 
-Embedded Pi agent တွင် auto-compaction သည် အခြေအနေ နှစ်ခုတွင် ဖြစ်ပေါ်သည် —
+embedded Pi agent တွင် auto-compaction သည် အခြေအနေ နှစ်ခုတွင် trigger ဖြစ်ပါသည် —
 
-1. **Overflow recovery**: model မှ context overflow error ပြန်လာပါက → compact → ပြန်ကြိုးစား။
-2. **Threshold maintenance**: အောင်မြင်သော turn တစ်ခုပြီးနောက်၊ အောက်ပါအခါ —
+1. **Overflow recovery**: model သည် context overflow error ကို ပြန်ပေးပါက → compact → retry။
+2. **Threshold maintenance**: အောင်မြင်သော turn တစ်ခုအပြီးတွင် —
 
 `contextTokens > contextWindow - reserveTokens`
 
-အဓိပ္ပါယ် —
+Where:
 
-- `contextWindow` သည် model ၏ context window
-- `reserveTokens` သည် prompts + နောက်တစ်ကြိမ် model output အတွက် သီးသန့်ထားသော headroom
+- `contextWindow` သည် model ၏ context window ဖြစ်ပါသည်။
+- `reserveTokens` သည် prompts နှင့် နောက်တစ်ကြိမ် model output အတွက် သိုလှောင်ထားသော headroom ဖြစ်ပါသည်။
 
-ဤအရာများသည် Pi runtime semantics ဖြစ်ပြီး (OpenClaw သည် event များကို သုံးစွဲသော်လည်း compact မလုပ်ချိန်ကို ဆုံးဖြတ်တာ Pi ဖြစ်သည်)။
+These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
 
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
 
-Pi ၏ compaction settings များသည် Pi settings ထဲတွင် ရှိသည် —
+Pi’s compaction settings live in Pi settings:
 
 ```json5
 {
@@ -212,25 +203,24 @@ Pi ၏ compaction settings များသည် Pi settings ထဲတွင် 
 }
 ```
 
-OpenClaw သည် embedded runs အတွက် safety floor တစ်ခုကိုလည်း ချမှတ်ထားသည် —
+OpenClaw also enforces a safety floor for embedded runs:
 
-- `compaction.reserveTokens < reserveTokensFloor` ဖြစ်ပါက OpenClaw က မြှင့်တင်ပေးသည်။
-- မူလ floor သည် `20000` tokens ဖြစ်သည်။
-- Floor ကို ပိတ်ရန် `agents.defaults.compaction.reserveTokensFloor: 0` ကို သတ်မှတ်ပါ။
-- အကယ်၍ အရင်ကတည်းက မြင့်မားနေပါက OpenClaw သည် မပြောင်းလဲပါ။
+- If `compaction.reserveTokens < reserveTokensFloor`, OpenClaw bumps it.
+- Default floor is `20000` tokens.
+- Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
+- If it’s already higher, OpenClaw leaves it alone.
+
+Why: leave enough headroom for multi-turn “housekeeping” (like memory writes) before compaction becomes unavoidable.
 
 အကြောင်းရင်း — compaction မဖြစ်မနေရောက်မီ multi-turn “housekeeping” (memory write များကဲ့သို့) အတွက် headroom လုံလောက်စွာ ချန်ထားရန်။
 
-Implementation — `src/agents/pi-settings.ts` ထဲရှိ `ensurePiCompactionReserveTokens()`
-(`src/agents/pi-embedded-runner.ts` မှ ခေါ်ယူသည်)။
-
 ---
 
-## အသုံးပြုသူမြင်နိုင်သော အပြင်အဆင်များ
+## User-visible surfaces
 
-Compaction နှင့် session state ကို အောက်ပါနေရာများတွင် ကြည့်ရှုနိုင်သည် —
+You can observe compaction and session state via:
 
-- `/status` (မည်သည့် chat session မဆို)
+- `/status` (in any chat session)
 - `openclaw status` (CLI)
 - `openclaw sessions` / `sessions --json`
 - Verbose mode: `🧹 Auto-compaction complete` + compaction count
@@ -239,54 +229,56 @@ Compaction နှင့် session state ကို အောက်ပါနေ�
 
 ## Silent housekeeping (`NO_REPLY`)
 
+OpenClaw supports “silent” turns for background tasks where the user should not see intermediate output.
+
 OpenClaw သည် အသုံးပြုသူ မမြင်သင့်သော အလယ်အလတ် output များရှိသည့် နောက်ခံလုပ်ငန်းများအတွက် “silent” turns များကို ပံ့ပိုးသည်။
 
-သဘောတူညီချက် —
+- The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
+- OpenClaw strips/suppresses this in the delivery layer.
 
-- Assistant သည် “အသုံးပြုသူထံ ပြန်မပို့ပါ” ကို ပြရန် `NO_REPLY` ဖြင့် output ကို စတင်ရမည်။
-- OpenClaw သည် delivery layer တွင် ၎င်းကို ဖယ်ရှား/တားဆီးသည်။
-
-`2026.1.10` အချိန်မှစ၍ OpenClaw သည် partial chunk တစ်ခုက `NO_REPLY` ဖြင့် စတင်ပါက **draft/typing streaming** ကိုလည်း တားဆီးထားသည်၊ ထို့ကြောင့် silent operation များအတွင်း အလယ်လမ်း output မပေါက်ကြားပါ။
+As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
 
 ---
 
-## Pre-compaction “memory flush” (အကောင်အထည်ဖော်ပြီး)
+## Pre-compaction “memory flush” (implemented)
+
+Goal: before auto-compaction happens, run a silent agentic turn that writes durable
+state to disk (e.g. `memory/YYYY-MM-DD.md` in the agent workspace) so compaction can’t
+erase critical context.
 
 ရည်ရွယ်ချက် — auto-compaction မဖြစ်မီ disk သို့ durable state (ဥပမာ—agent workspace ထဲရှိ `memory/YYYY-MM-DD.md`) ကို ရေးသွင်းပေးသော silent agentic turn တစ်ခုကို လုပ်ဆောင်ရန်၊ ထို့ကြောင့် compaction က အရေးကြီးသော context ကို မဖျက်နိုင်ပါ။
 
-OpenClaw သည် **pre-threshold flush** နည်းလမ်းကို အသုံးပြုသည် —
+1. Monitor session context usage.
+2. When it crosses a “soft threshold” (below Pi’s compaction threshold), run a silent
+   “write memory now” directive to the agent.
+3. Use `NO_REPLY` so the user sees nothing.
 
-1. Session context အသုံးပြုမှုကို စောင့်ကြည့်သည်။
-2. “Soft threshold” (Pi ၏ compaction threshold ထက် နိမ့်) ကို ကျော်သွားသောအခါ silent
-   “memory ကို ယခုရေးပါ” ညွှန်ကြားချက်ကို agent ထံ ပို့သည်။
-3. အသုံးပြုသူ မမြင်စေရန် `NO_REPLY` ကို အသုံးပြုသည်။
+Config (`agents.defaults.compaction.memoryFlush`):
 
-Config (`agents.defaults.compaction.memoryFlush`) —
+- `enabled` (default: `true`)
+- `softThresholdTokens` (default: `4000`)
+- `prompt` (user message for the flush turn)
+- `systemPrompt` (extra system prompt appended for the flush turn)
 
-- `enabled` (မူလ: `true`)
-- `softThresholdTokens` (မူလ: `4000`)
-- `prompt` (flush turn အတွက် user message)
-- `systemPrompt` (flush turn အတွက် ထပ်တိုး system prompt)
+မှတ်ချက်များ-
 
-မှတ်ချက်များ —
+- The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
+- The flush runs once per compaction cycle (tracked in `sessions.json`).
+- The flush runs only for embedded Pi sessions (CLI backends skip it).
+- The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
+- See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-- မူလ prompt/system prompt တွင် delivery ကို တားဆီးရန် `NO_REPLY` အညွှန်း ပါဝင်သည်။
-- Flush ကို compaction cycle တစ်ခုချင်းစီအလိုက် တစ်ကြိမ်သာ လုပ်ဆောင်သည် (`sessions.json` တွင် ခြေရာခံထားသည်)။
-- Embedded Pi sessions များတွင်သာ flush လုပ်ဆောင်သည် (CLI backends များတွင် မလုပ်ပါ)။
-- Session workspace သည် read-only ဖြစ်ပါက (`workspaceAccess: "ro"` သို့မဟုတ် `"none"`) flush ကို ကျော်လွှားသည်။
-- Workspace ဖိုင် ဖွဲ့စည်းပုံနှင့် write patterns များအတွက် [Memory](/concepts/memory) ကို ကြည့်ပါ။
-
-Pi သည် extension API ထဲတွင် `session_before_compact` hook ကိုလည်း ပံ့ပိုးထားသော်လည်း OpenClaw ၏
-flush logic သည် လက်ရှိတွင် Gateway ဘက်၌သာ ရှိနေသည်။
+Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw’s
+flush logic lives on the Gateway side today.
 
 ---
 
 ## Troubleshooting checklist
 
-- Session key မှားနေပါသလား? [/concepts/session](/concepts/session) မှ စတင်ပြီး `/status` ထဲရှိ `sessionKey` ကို အတည်ပြုပါ။
-- Store နှင့် transcript မကိုက်ညီပါသလား? Gateway ဟို့စ်နှင့် `openclaw status` မှ store path ကို အတည်ပြုပါ။
-- Compaction များလွန်းနေပါသလား? အောက်ပါတို့ကို စစ်ဆေးပါ —
-  - model context window (သေးလွန်းခြင်း)
-  - compaction settings ( `reserveTokens` သည် model window အတွက် မြင့်လွန်းပါက စောစီးစွာ compaction ဖြစ်နိုင်သည်)
-  - tool-result အလွန်များခြင်း: session pruning ကို ဖွင့်/ချိန်ညှိပါ
-- Silent turns မှ output ပေါက်ကြားနေပါသလား? ပြန်ကြားချက်သည် `NO_REPLY` (တိကျသော token) ဖြင့် စတင်ထားကြောင်းနှင့် streaming suppression fix ပါဝင်သည့် build ကို အသုံးပြုနေကြောင်း အတည်ပြုပါ။
+- Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
+- Store vs transcript mismatch? Confirm the Gateway host and the store path from `openclaw status`.
+- Compaction spam? Check:
+  - model context window (too small)
+  - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
+  - tool-result bloat: enable/tune session pruning
+- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (exact token) and you’re on a build that includes the streaming suppression fix.

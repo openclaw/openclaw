@@ -3,20 +3,13 @@ summary: "Hoe de macOS-app de Gateway/Baileys-gezondheidsstatussen rapporteert"
 read_when:
   - Debuggen van gezondheidsindicatoren van de macOS-app
 title: "Gezondheidscontroles"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:32Z
 ---
 
 # Gezondheidscontroles op macOS
 
 Hoe je vanuit de menubalk-app kunt zien of het gekoppelde kanaal gezond is.
 
-## Menubalk
+## Menu balk
 
 - De statusstip weerspiegelt nu de Baileys-gezondheid:
   - Groen: gekoppeld + socket recent geopend.

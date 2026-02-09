@@ -1,16 +1,9 @@
 ---
 summary: "سير عمل Bun (تجريبي): التثبيت والمطبات مقارنةً بـ pnpm"
 read_when:
-  - "تريد أسرع دورة تطوير محلية (bun + watch)"
-  - "واجهت مشكلات في التثبيت/التصحيح/نصوص دورة الحياة في Bun"
+  - تريد أسرع دورة تطوير محلية (bun + watch)
+  - واجهت مشكلات في التثبيت/التصحيح/نصوص دورة الحياة في Bun
 title: "Bun (تجريبي)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:21Z
 ---
 
 # Bun (experimental)
@@ -61,6 +54,6 @@ bun run vitest run
 bun pm trust @whiskeysockets/baileys protobufjs
 ```
 
-## محاذير
+## التنبيهات
 
 - لا تزال بعض النصوص تُضمّن pnpm بشكل ثابت (مثل `docs:build`، `ui:*`، `protocol:check`). شغّل هذه عبر pnpm في الوقت الحالي.

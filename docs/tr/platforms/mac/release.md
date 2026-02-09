@@ -4,13 +4,6 @@ read_when:
   - Bir OpenClaw macOS sürümünü keserken veya doğrularken
   - Sparkle appcast’ini veya feed varlıklarını güncellerken
 title: "macOS Sürümü"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:33Z
 ---
 
 # OpenClaw macOS sürümü (Sparkle)

@@ -5,19 +5,13 @@ read_when:
   - မော်ဒယ် fallback အပြုအမူ သို့မဟုတ် ရွေးချယ်မှု UX ကို ပြောင်းလဲခြင်း
   - မော်ဒယ် စကန် probe များ (tools/images) ကို အပ်ဒိတ်လုပ်ခြင်း
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:32Z
 ---
 
 # Models CLI
 
-auth profile လှည့်လည်ပြောင်းလဲခြင်း၊ cooldown များနှင့် fallback များနှင့် ဘယ်လို အပြန်အလှန် သက်ရောက်မှုရှိသည်ကို သိရန် [/concepts/model-failover](/concepts/model-failover) ကို ကြည့်ပါ။
-provider အကျဉ်းချုပ် + ဥပမာများ: [/concepts/model-providers](/concepts/model-providers)။
+See [/concepts/model-failover](/concepts/model-failover) for auth profile
+rotation, cooldowns, and how that interacts with fallbacks.
+Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 ## မော်ဒယ် ရွေးချယ်မှု အလုပ်လုပ်ပုံ
 
@@ -56,20 +50,24 @@ setup-token` ကိုလည်း ထောက်ပံ့သည်) ကို 
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (`models.json` ထဲသို့ custom provider များရေးထည့်သည်)
 
-Model refs များကို lowercase သို့ normalize လုပ်သည်။ `z.ai/*` ကဲ့သို့ provider alias များကို `zai/*` သို့ normalize လုပ်သည်။
+Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
+to `zai/*`.
 
 Provider configuration ဥပမာများ (OpenCode Zen အပါအဝင်) ကို
 [/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy) တွင် တွေ့နိုင်သည်။
 
 ## “Model is not allowed” (နှင့် အဖြေများ ရပ်သွားရသည့် အကြောင်းရင်း)
 
-`agents.defaults.models` ကို သတ်မှတ်ထားပါက ၎င်းသည် `/model` နှင့် session override များအတွက် **allowlist** ဖြစ်လာသည်။ အသုံးပြုသူက အဆိုပါ allowlist ထဲမပါသော မော်ဒယ်ကို ရွေးချယ်ပါက OpenClaw သည် အောက်ပါအတိုင်း ပြန်လည်ပေးပို့သည်-
+If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
+session overrides. When a user selects a model that isn’t in that allowlist,
+OpenClaw returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-ဤအရာသည် ပုံမှန် အဖြေ မထုတ်မီ **မတိုင်မီ** ဖြစ်ပေါ်သောကြောင့် မက်ဆေ့ချ်က “မတုံ့ပြန်ခဲ့သလို” ခံစားရနိုင်သည်။ ဖြေရှင်းရန် အောက်ပါအရာများထဲမှ တစ်ခုကို လုပ်ပါ-
+This happens **before** a normal reply is generated, so the message can feel
+like it “didn’t respond.” The fix is to either:
 
 - မော်ဒယ်ကို `agents.defaults.models` ထဲ ထည့်ပါ၊ သို့မဟုတ်
 - allowlist ကို ရှင်းလင်းပါ (`agents.defaults.models` ကို ဖယ်ရှားပါ)၊ သို့မဟုတ်
@@ -106,7 +104,7 @@ Example allowlist config-
 - `/model` (နှင့် `/model list`) သည် ကျစ်လစ်သော နံပါတ်ပေးထားသည့် picker (model family + ရရှိနိုင်သော providers) ဖြစ်သည်။
 - `/model <#>` သည် ထို picker ထဲမှ ရွေးချယ်သည်။
 - `/model status` သည် အသေးစိတ် မြင်ကွင်း (auth candidates နှင့် သတ်မှတ်ထားပါက provider endpoint `baseUrl` + `api` mode) ဖြစ်သည်။
-- Model refs များကို **ပထမဆုံး** `/` တွင် ခွဲထုတ်ပြီး parse လုပ်သည်။ `/model <ref>` ကို ရိုက်ထည့်ရာတွင် `provider/model` ကို အသုံးပြုပါ။
+- Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - မော်ဒယ် ID ကိုယ်တိုင်တွင် `/` (OpenRouter-style) ပါဝင်ပါက provider prefix ကို ထည့်ရပါမည် (ဥပမာ- `/model openrouter/moonshotai/kimi-k2`)။
 - Provider ကို မထည့်ပါက OpenClaw သည် ထို input ကို alias သို့မဟုတ် **default provider** အတွက် မော်ဒယ်အဖြစ် ကိုင်တွယ်မည်ဖြစ်ပြီး (model ID ထဲတွင် `/` မရှိသည့်အခါတွင်သာ အလုပ်လုပ်သည်)။
 
@@ -139,7 +137,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-ပုံမှန်အားဖြင့် သတ်မှတ်ထားသော မော်ဒယ်များကို ပြသသည်။ အသုံးဝင်သော flags-
+Shows configured models by default. Useful flags:
 
 - `--all`: catalog အပြည့်အစုံ
 - `--local`: local provider များသာ
@@ -149,11 +147,15 @@ openclaw models image-fallbacks clear
 
 ### `models status`
 
-Resolved primary model၊ fallbacks၊ image model နှင့် သတ်မှတ်ထားသော provider များ၏ auth အကျဉ်းချုပ်ကို ပြသသည်။ auth store ထဲတွင် တွေ့ရှိသော profile များအတွက် OAuth သက်တမ်းကုန်ဆုံးမှု အခြေအနေကိုလည်း ပြသသည် (ပုံမှန်အားဖြင့် 24 နာရီအတွင်း သတိပေးသည်)။ `--plain` သည် resolved primary model ကိုသာ ပုံနှိပ်ထုတ်ပေးသည်။
-OAuth အခြေအနေကို အမြဲ ပြသပြီး (`--json` output ထဲတွင်လည်း ပါဝင်သည်)။ သတ်မှတ်ထားသော provider တစ်ခုတွင် credential မရှိပါက `models status` သည် **Missing auth** အပိုင်းကို ပုံနှိပ်ပြသသည်။
-JSON တွင် `auth.oauth` (warn window + profiles) နှင့် `auth.providers`
-(provider အလိုက် effective auth) ပါဝင်သည်။
-Automation အတွက် `--check` ကို အသုံးပြုပါ (မရှိ/သက်တမ်းကုန်လျှင် exit `1`၊ သက်တမ်းကုန်တော့မည်ဆိုပါက `2`)။
+Shows the resolved primary model, fallbacks, image model, and an auth overview
+of configured providers. It also surfaces OAuth expiry status for profiles found
+in the auth store (warns within 24h by default). `--plain` prints only the
+resolved primary model.
+OAuth status is always shown (and included in `--json` output). If a configured
+provider has no credentials, `models status` prints a **Missing auth** section.
+JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
+(effective auth per provider).
+Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
 Anthropic အတွက် အကြံပြု auth သည် Claude Code CLI setup-token ဖြစ်သည် (ဘယ်နေရာမှာမဆို chạy နိုင်ပြီး လိုအပ်ပါက Gateway ဟို့စ် တွင် paste လုပ်ပါ)-
 
@@ -177,8 +179,8 @@ Key flags-
 - `--set-default`: ပထမဆုံး ရွေးချယ်မှုကို `agents.defaults.model.primary` သို့ သတ်မှတ်ရန်
 - `--set-image`: ပထမဆုံး image ရွေးချယ်မှုကို `agents.defaults.imageModel.primary` သို့ သတ်မှတ်ရန်
 
-Probing အတွက် OpenRouter API key လိုအပ်သည် (auth profiles သို့မဟုတ်
-`OPENROUTER_API_KEY` မှ)။ key မရှိပါက `--no-probe` ကို အသုံးပြုပြီး candidate များကိုသာ စာရင်းပြုစုပါ။
+Probing requires an OpenRouter API key (from auth profiles or
+`OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
 
 Scan ရလဒ်များကို အောက်ပါ အစဉ်အတိုင်း အဆင့်သတ်မှတ်သည်-
 
@@ -194,11 +196,11 @@ Input
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probe controls: `--timeout`, `--concurrency`
 
-TTY တွင် chạy လုပ်ပါက fallbacks များကို interactive အနေနှင့် ရွေးချယ်နိုင်သည်။ non‑interactive
-mode တွင် default များကို လက်ခံရန် `--yes` ကို ပေးပါ။
+When run in a TTY, you can select fallbacks interactively. In non‑interactive
+mode, pass `--yes` to accept defaults.
 
 ## Models registry (`models.json`)
 
-`models.providers` ထဲရှိ custom provider များကို agent directory အောက်ရှိ
-`models.json` ထဲသို့ ရေးထည့်သည် (ပုံမှန် `~/.openclaw/agents/<agentId>/models.json`)။ ဤဖိုင်ကို
-`models.mode` ကို `replace` သို့ မသတ်မှတ်ထားပါက ပုံမှန်အားဖြင့် merge လုပ်ပါသည်။
+Custom providers in `models.providers` are written into `models.json` under the
+agent directory (default `~/.openclaw/agents/<agentId>/models.json`). This file
+is merged by default unless `models.mode` is set to `replace`.

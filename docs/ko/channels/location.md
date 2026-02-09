@@ -4,13 +4,6 @@ read_when:
   - 채널 위치 파싱을 추가하거나 수정할 때
   - 에이전트 프롬프트 또는 도구에서 위치 컨텍스트 필드를 사용할 때
 title: "채널 위치 파싱"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:53Z
 ---
 
 # 채널 위치 파싱

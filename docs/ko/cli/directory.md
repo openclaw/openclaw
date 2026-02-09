@@ -4,13 +4,6 @@ read_when:
   - 채널에 사용할 연락처 / 그룹 / self ID 를 조회하려는 경우
   - 채널 디렉토리 어댑터를 개발하는 경우
 title: "디렉터리"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:19Z
 ---
 
 # `openclaw directory`

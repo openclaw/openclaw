@@ -5,13 +5,6 @@ read_when:
   - Sie benötigen ein Remote-Gateway + lokale Browser-Automatisierung über Tailscale
   - Sie möchten die Sicherheitsimplikationen einer Browser-Übernahme verstehen
 title: "Chrome-Erweiterung"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:38Z
 ---
 
 # Chrome-Erweiterung (Browser-Relay)

@@ -4,20 +4,16 @@ read_when:
   - การตั้งค่าเครื่องใหม่
   - คุณต้องการ “ล่าสุดและดีที่สุด” โดยไม่กระทบการตั้งค่าส่วนตัว
 title: "การตั้งค่า"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:48Z
 ---
 
 # การตั้งค่า
 
 <Note>
+หากคุณกำลังตั้งค่าเป็นครั้งแรก ให้เริ่มที่ [Getting Started](/start/getting-started)
+
 หากเป็นการตั้งค่าครั้งแรก ให้เริ่มจาก [เริ่มต้นใช้งาน](/start/getting-started)
 สำหรับรายละเอียดของวิซาร์ด ดูที่ [Onboarding Wizard](/start/wizard)
+
 </Note>
 
 อัปเดตล่าสุด: 2026-01-01
@@ -88,7 +84,7 @@ openclaw health
 
 เป้าหมาย: ทำงานกับ Gateway แบบ TypeScript ได้ hot reload และยังคงเชื่อม UI ของแอปmacOS
 
-### 0) (ไม่บังคับ) รันแอปmacOS จากซอร์สด้วย
+### 0. (ไม่บังคับ) รันแอปmacOS จากซอร์สด้วย
 
 หากต้องการให้แอปmacOS อยู่สายล้ำเช่นกัน:
 
@@ -96,7 +92,7 @@ openclaw health
 ./scripts/restart-mac.sh
 ```
 
-### 1) เริ่ม Gateway สำหรับพัฒนา
+### 1. เริ่ม Gateway สำหรับพัฒนา
 
 ```bash
 pnpm install
@@ -105,14 +101,14 @@ pnpm gateway:watch
 
 `gateway:watch` จะรัน gateway ในโหมด watch และรีโหลดเมื่อมีการเปลี่ยนแปลง TypeScript
 
-### 2) ชี้แอปmacOS ไปยัง Gateway ที่กำลังรันอยู่
+### 2. ชี้แอปmacOS ไปยัง Gateway ที่กำลังรันอยู่
 
 ใน **OpenClaw.app**:
 
 - Connection Mode: **Local**
   แอปจะเชื่อมต่อกับ gateway ที่กำลังรันบนพอร์ตที่ตั้งค่าไว้
 
-### 3) ตรวจสอบ
+### 3. ตรวจสอบ
 
 - สถานะ Gateway ในแอปควรแสดง **“Using existing gateway …”**
 - หรือผ่าน CLI:
@@ -121,7 +117,7 @@ pnpm gateway:watch
 openclaw health
 ```
 
-### จุดพลาดที่พบบ่อย
+### ข้อผิดพลาดที่พบบ่อย
 
 - **พอร์ตผิด:** WS ของ Gateway ค่าเริ่มต้นคือ `ws://127.0.0.1:18789`; ตรวจให้แอปและ CLI ใช้พอร์ตเดียวกัน
 - **ตำแหน่งที่เก็บสถานะ:**
@@ -149,16 +145,17 @@ openclaw health
 
 ## Linux (systemd user service)
 
-การติดตั้งบน Linux ใช้ systemd แบบ **user** service โดยค่าเริ่มต้น systemd จะหยุด user
+การติดตั้งบน Linux ใช้บริการ systemd แบบ **user** การติดตั้งบน Linux ใช้ systemd แบบ **user** service โดยค่าเริ่มต้น systemd จะหยุด user
 services เมื่อออกจากระบบ/ว่าง ซึ่งจะทำให้ Gateway หยุด Onboarding จะพยายามเปิด
-lingering ให้คุณ (อาจขอ sudo) หากยังปิดอยู่ ให้รัน:
+lingering ให้คุณ (อาจขอ sudo) หากยังปิดอยู่ ให้รัน: ขั้นตอน onboarding จะพยายามเปิดใช้งาน
+lingering ให้คุณ (อาจมีการขอ sudo) หากยังปิดอยู่ ให้รัน:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
 สำหรับเซิร์ฟเวอร์ที่ต้องเปิดตลอดหรือหลายผู้ใช้ พิจารณาใช้ **system** service แทน
-user service (ไม่ต้องใช้ lingering) ดูหมายเหตุ systemd ใน [Gateway runbook](/gateway).
+user service (ไม่ต้องใช้ lingering) ดูหมายเหตุ systemd ใน [Gateway runbook](/gateway). ดู [Gateway runbook](/gateway) สำหรับหมายเหตุเกี่ยวกับ systemd
 
 ## เอกสารที่เกี่ยวข้อง
 

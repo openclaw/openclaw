@@ -3,13 +3,6 @@ summary: "CLI-referentie voor `openclaw configure` (interactieve configuratiepro
 read_when:
   - Je wilt referenties, apparaten of agent-standaardwaarden interactief aanpassen
 title: "configure"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:02Z
 ---
 
 # `openclaw configure`

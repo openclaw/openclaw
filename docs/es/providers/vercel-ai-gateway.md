@@ -4,13 +4,6 @@ summary: "Configuración de Vercel AI Gateway (autenticación + selección de mo
 read_when:
   - Quiere usar Vercel AI Gateway con OpenClaw
   - Necesita la variable de entorno de la clave de API o la opción de autenticación de la CLI
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:21Z
 ---
 
 # Vercel AI Gateway

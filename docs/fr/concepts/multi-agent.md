@@ -3,13 +3,6 @@ summary: "Routage multi-agent : agents isolés, comptes de canal et liaisons"
 title: Routage multi-agent
 read_when: "Vous souhaitez plusieurs agents isolés (espaces de travail + authentification) dans un seul processus de Gateway."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: 49b3ba55d8a7f0b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:24Z
 ---
 
 # Routage multi-agent

@@ -1,16 +1,9 @@
 ---
-summary: "imsg کے ذریعے لیگیسی iMessage سپورٹ (stdio پر JSON-RPC)۔ نئی سیٹ اپس کے لیے BlueBubbles استعمال کریں۔"
+summary: "Legacy iMessage support via imsg (JSON-RPC over stdio). New setups should use BlueBubbles."
 read_when:
   - iMessage سپورٹ سیٹ اپ کرنا
   - iMessage بھیجنے/وصول کرنے کی ڈیبگنگ
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:22Z
 ---
 
 # iMessage (لیگیسی: imsg)
@@ -19,7 +12,7 @@ x-i18n:
 >
 > `imsg` چینل ایک لیگیسی بیرونی CLI انٹیگریشن ہے اور آئندہ ریلیز میں ہٹایا جا سکتا ہے۔
 
-حیثیت: لیگیسی بیرونی CLI انٹیگریشن۔ Gateway `imsg rpc` (stdio پر JSON-RPC) کو اسپان کرتا ہے۔
+Status: legacy external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 
 ## فوری سیٹ اپ (مبتدی)
 
@@ -73,15 +66,15 @@ x-i18n:
 
 اگر بھیجنا/وصول کرنا ناکام ہو (مثلاً `imsg rpc` نان زیرو کے ساتھ ختم ہو جائے، ٹائم آؤٹ ہو، یا گیٹ وے ہینگ ہوتا نظر آئے)، تو ایک عام وجہ macOS کی اجازت کا پرامپٹ ہوتا ہے جسے کبھی منظور نہیں کیا گیا۔
 
-macOS TCC اجازتیں ہر ایپ/پروسیس کنٹیکسٹ کے مطابق دیتا ہے۔ اسی کنٹیکسٹ میں پرامپٹس منظور کریں جو `imsg` چلاتا ہے (مثلاً Terminal/iTerm، LaunchAgent سیشن، یا SSH سے لانچ کیا گیا پروسیس)۔
+macOS grants TCC permissions per app/process context. Approve prompts in the same context that runs `imsg` (for example, Terminal/iTerm, a LaunchAgent session, or an SSH-launched process).
 
 چیک لسٹ:
 
-- **Full Disk Access**: اس پروسیس کے لیے اجازت دیں جو OpenClaw چلا رہا ہے (اور کوئی بھی shell/SSH ریپر جو `imsg` ایکزیکیوٹ کرتا ہے)۔ یہ Messages ڈیٹابیس (`chat.db`) پڑھنے کے لیے ضروری ہے۔
+- **Full Disk Access**: allow access for the process running OpenClaw (and any shell/SSH wrapper that executes `imsg`). This is required to read the Messages database (`chat.db`).
 - **Automation → Messages**: آؤٹ باؤنڈ بھیجنے کے لیے OpenClaw چلانے والے پروسیس (اور/یا آپ کے ٹرمینل) کو **Messages.app** کنٹرول کرنے کی اجازت دیں۔
 - **`imsg` CLI صحت**: تصدیق کریں کہ `imsg` انسٹال ہے اور RPC (`imsg rpc --help`) کو سپورٹ کرتا ہے۔
 
-مشورہ: اگر OpenClaw ہیڈ لیس (LaunchAgent/systemd/SSH) چل رہا ہو تو macOS پرامپٹ آسانی سے نظر سے اوجھل ہو سکتا ہے۔ GUI ٹرمینل میں ایک بار انٹرایکٹو کمانڈ چلائیں تاکہ پرامپٹ ظاہر ہو جائے، پھر دوبارہ کوشش کریں:
+Tip: If OpenClaw is running headless (LaunchAgent/systemd/SSH) the macOS prompt can be easy to miss. Run a one-time interactive command in a GUI terminal to force the prompt, then retry:
 
 ```bash
 imsg chats --limit 1
@@ -110,9 +103,9 @@ imsg send <handle> "test"
 6. SSH اس طرح سیٹ اپ کریں کہ `ssh <bot-macos-user>@localhost true` بغیر پاس ورڈ کے کام کرے۔
 7. `channels.imessage.accounts.bot.cliPath` کو ایسے SSH ریپر کی طرف پوائنٹ کریں جو بوٹ صارف کے طور پر `imsg` چلائے۔
 
-پہلی بار نوٹ: بھیجنے/وصول کرنے کے لیے _بوٹ macOS صارف_ میں GUI منظوریوں (Automation + Full Disk Access) کی ضرورت ہو سکتی ہے۔ اگر `imsg rpc` رکا ہوا لگے یا باہر نکل جائے، تو اس صارف میں لاگ اِن کریں (Screen Sharing مددگار ہے)، ایک بار `imsg chats --limit 1` / `imsg send ...` چلائیں، پرامپٹس منظور کریں، پھر دوبارہ کوشش کریں۔ [Troubleshooting macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc) دیکھیں۔
+First-run note: sending/receiving may require GUI approvals (Automation + Full Disk Access) in the _bot macOS user_. If `imsg rpc` looks stuck or exits, log into that user (Screen Sharing helps), run a one-time `imsg chats --limit 1` / `imsg send ...`, approve prompts, then retry. See [Troubleshooting macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
 
-مثالی ریپر (`chmod +x`)۔ `<bot-macos-user>` کو اپنے اصل macOS صارف نام سے بدلیں:
+Example wrapper (`chmod +x`). Replace `<bot-macos-user>` with your actual macOS username:
 
 ```bash
 #!/usr/bin/env bash
@@ -148,7 +141,7 @@ exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@local
 
 ### ریموٹ/SSH ویریئنٹ (اختیاری)
 
-اگر آپ کسی دوسرے Mac پر iMessage چاہتے ہیں، تو `channels.imessage.cliPath` کو ایسے ریپر پر سیٹ کریں جو SSH کے ذریعے ریموٹ macOS ہوسٹ پر `imsg` چلائے۔ OpenClaw کو صرف stdio کی ضرورت ہوتی ہے۔
+If you want iMessage on another Mac, set `channels.imessage.cliPath` to a wrapper that runs `imsg` on the remote macOS host over SSH. OpenClaw only needs stdio.
 
 مثالی ریپر:
 
@@ -157,7 +150,7 @@ exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@local
 exec ssh -T gateway-host imsg "$@"
 ```
 
-**ریموٹ اٹیچمنٹس:** جب `cliPath` SSH کے ذریعے ریموٹ ہوسٹ کی طرف اشارہ کرتا ہے، تو Messages ڈیٹابیس میں اٹیچمنٹ پاتھ ریموٹ مشین کی فائلوں کا حوالہ دیتے ہیں۔ OpenClaw انہیں SCP کے ذریعے خودکار طور پر حاصل کر سکتا ہے، اگر `channels.imessage.remoteHost` سیٹ کیا جائے:
+**Remote attachments:** When `cliPath` points to a remote host via SSH, attachment paths in the Messages database reference files on the remote machine. OpenClaw can automatically fetch these over SCP by setting `channels.imessage.remoteHost`:
 
 ```json5
 {
@@ -171,7 +164,7 @@ exec ssh -T gateway-host imsg "$@"
 }
 ```
 
-اگر `remoteHost` سیٹ نہ ہو تو OpenClaw آپ کے ریپر اسکرپٹ میں SSH کمانڈ کو پارس کر کے خودکار طور پر شناخت کرنے کی کوشش کرتا ہے۔ زیادہ بھروسے کے لیے واضح کنفیگریشن سفارش کی جاتی ہے۔
+If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH command in your wrapper script. Explicit configuration is recommended for reliability.
 
 #### Tailscale کے ذریعے ریموٹ Mac (مثال)
 
@@ -220,7 +213,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 - SSH کیز استعمال کریں تاکہ `ssh bot@mac-mini.tailnet-1234.ts.net` بغیر پرامپٹس کے کام کرے۔
 - `remoteHost` کو SSH ٹارگٹ سے میل کھانا چاہیے تاکہ SCP اٹیچمنٹس حاصل کر سکے۔
 
-ملٹی اکاؤنٹ سپورٹ: `channels.imessage.accounts` کو فی اکاؤنٹ کنفیگ اور اختیاری `name` کے ساتھ استعمال کریں۔ مشترکہ پیٹرن کے لیے [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) دیکھیں۔ `~/.openclaw/openclaw.json` کو کمٹ نہ کریں (اس میں اکثر ٹوکنز ہوتے ہیں)۔
+Multi-account support: use `channels.imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don't commit `~/.openclaw/openclaw.json` (it often contains tokens).
 
 ## رسائی کا کنٹرول (DMs + گروپس)
 
@@ -231,7 +224,7 @@ DMs:
 - منظوری دیں بذریعہ:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- iMessage DMs کے لیے جوڑی بنانا ڈیفالٹ ٹوکن ایکسچینج ہے۔ تفصیل: [Pairing](/channels/pairing)
+- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/channels/pairing)
 
 گروپس:
 
@@ -270,7 +263,7 @@ DMs:
 }
 ```
 
-یہ اس وقت مفید ہے جب آپ کسی مخصوص تھریڈ کے لیے الگ شخصیت/ماڈل چاہتے ہوں (دیکھیں [Multi-agent routing](/concepts/multi-agent))۔ فائل سسٹم آئسولیشن کے لیے [Sandboxing](/gateway/sandboxing) دیکھیں۔
+This is useful when you want an isolated personality/model for a specific thread (see [Multi-agent routing](/concepts/multi-agent)). For filesystem isolation, see [Sandboxing](/gateway/sandboxing).
 
 ## میڈیا + حدود
 
@@ -307,15 +300,15 @@ imsg chats --limit 20
 - `channels.imessage.enabled`: چینل اسٹارٹ اپ کو فعال/غیرفعال کریں۔
 - `channels.imessage.cliPath`: `imsg` کا پاتھ۔
 - `channels.imessage.dbPath`: Messages DB کا پاتھ۔
-- `channels.imessage.remoteHost`: SCP اٹیچمنٹ ٹرانسفر کے لیے SSH ہوسٹ، جب `cliPath` ریموٹ Mac کی طرف اشارہ کرے (مثلاً `user@gateway-host`)۔ اگر سیٹ نہ ہو تو SSH ریپر سے خودکار شناخت۔
+- `channels.imessage.remoteHost`: SSH host for SCP attachment transfer when `cliPath` points to a remote Mac (e.g., `user@gateway-host`). Auto-detected from SSH wrapper if not set.
 - `channels.imessage.service`: `imessage | sms | auto`۔
 - `channels.imessage.region`: SMS ریجن۔
 - `channels.imessage.dmPolicy`: `pairing | allowlist | open | disabled` (ڈیفالٹ: pairing)۔
-- `channels.imessage.allowFrom`: DM اجازت فہرست (ہینڈلز، ای میلز، E.164 نمبرز، یا `chat_id:*`)۔ `open` کے لیے `"*"` درکار ہے۔ iMessage میں یوزرنیمز نہیں ہوتے؛ ہینڈلز یا چیٹ ٹارگٹس استعمال کریں۔
+- `channels.imessage.allowFrom`: DM allowlist (handles, emails, E.164 numbers, or `chat_id:*`). `open` requires `"*"`. iMessage has no usernames; use handles or chat targets.
 - `channels.imessage.groupPolicy`: `open | allowlist | disabled` (ڈیفالٹ: allowlist)۔
 - `channels.imessage.groupAllowFrom`: گروپ بھیجنے والوں کی اجازت فہرست۔
 - `channels.imessage.historyLimit` / `channels.imessage.accounts.*.historyLimit`: سیاق میں شامل کرنے کے لیے زیادہ سے زیادہ گروپ پیغامات (0 غیرفعال کرتا ہے)۔
-- `channels.imessage.dmHistoryLimit`: صارف کے موڑوں میں DM ہسٹری حد۔ فی صارف اووررائیڈز: `channels.imessage.dms["<handle>"].historyLimit`۔
+- `channels.imessage.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.imessage.dms["<handle>"].historyLimit`.
 - `channels.imessage.groups`: فی گروپ ڈیفالٹس + اجازت فہرست (عالمی ڈیفالٹس کے لیے `"*"` استعمال کریں)۔
 - `channels.imessage.includeAttachments`: اٹیچمنٹس کو سیاق میں شامل کریں۔
 - `channels.imessage.mediaMaxMb`: اِن باؤنڈ/آؤٹ باؤنڈ میڈیا حد (MB)۔

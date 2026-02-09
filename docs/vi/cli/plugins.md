@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn cài đặt hoặc quản lý các plugin Gateway chạy trong tiến trình
   - Bạn muốn gỡ lỗi các lỗi tải plugin
 title: "plugin"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:26Z
 ---
 
 # `openclaw plugins`
@@ -35,12 +28,12 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-Các plugin đi kèm được phân phối cùng OpenClaw nhưng mặc định bị tắt. Dùng `plugins enable` để
+Các plugin đi kèm được phát hành cùng OpenClaw nhưng ban đầu bị tắt. Dùng `plugins enable` để
 kích hoạt chúng.
 
-Tất cả plugin phải cung cấp một tệp `openclaw.plugin.json` với JSON Schema nội tuyến
-(`configSchema`, kể cả khi rỗng). Manifest hoặc schema thiếu/không hợp lệ sẽ
-ngăn plugin tải và làm thất bại việc xác thực cấu hình.
+Tất cả plugin phải kèm theo một tệp `openclaw.plugin.json` với JSON Schema nội tuyến
+(`configSchema`, kể cả khi rỗng). Thiếu/không hợp lệ manifest hoặc schema sẽ ngăn plugin được tải
+và làm thất bại việc xác thực cấu hình.
 
 ### Cài đặt
 

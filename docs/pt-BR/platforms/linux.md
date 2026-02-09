@@ -4,13 +4,6 @@ read_when:
   - Procurando o status do aplicativo complementar para Linux
   - Planejando cobertura de plataformas ou contribuições
 title: "Aplicativo Linux"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:22Z
 ---
 
 # Aplicativo Linux

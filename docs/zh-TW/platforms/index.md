@@ -4,23 +4,16 @@ read_when:
   - 尋找作業系統支援或安裝路徑
   - 決定在哪裡執行 Gateway 閘道器
 title: "平台"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:37Z
 ---
 
 # 平台
 
-OpenClaw 核心以 TypeScript 撰寫。**Node 是建議的執行階段**。
-Gateway 閘道器不建議使用 Bun（WhatsApp／Telegram 的問題）。
+OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
+Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
-配套應用程式提供 macOS（選單列應用程式）與行動節點（iOS／Android）。Windows 與
-Linux 的配套應用程式已在規劃中，但 Gateway 閘道器目前已完整支援。
-Windows 的原生配套應用程式亦在規劃中；建議透過 WSL2 執行 Gateway 閘道器。
+Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
+Linux companion apps are planned, but the Gateway is fully supported today.
+Native companion apps for Windows are also planned; the Gateway is recommended via WSL2.
 
 ## 選擇你的作業系統
 

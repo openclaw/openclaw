@@ -5,13 +5,6 @@ description: Getypte workflowruntime voor OpenClaw — composeerbare pijplijnen 
 read_when:
   - Je wilt deterministische meerstapsworkflows met expliciete goedkeuringen
   - Je moet een workflow kunnen hervatten zonder eerdere stappen opnieuw uit te voeren
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:02Z
 ---
 
 # Lobster

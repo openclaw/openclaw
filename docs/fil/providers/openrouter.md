@@ -4,19 +4,12 @@ read_when:
   - Gusto mo ng iisang API key para sa maraming LLM
   - Gusto mong patakbuhin ang mga model sa pamamagitan ng OpenRouter sa OpenClaw
 title: "OpenRouter"
-x-i18n:
-  source_path: providers/openrouter.md
-  source_hash: b7e29fc9c456c64d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:43Z
 ---
 
 # OpenRouter
 
-Nagbibigay ang OpenRouter ng **pinag-isang API** na niruruta ang mga request sa maraming model sa likod ng iisang
-endpoint at API key. Compatible ito sa OpenAI, kaya gumagana ang karamihan ng OpenAI SDK sa pamamagitan ng pagpapalit ng base URL.
+OpenRouter provides a **unified API** that routes requests to many models behind a single
+endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
 ## CLI setup
 

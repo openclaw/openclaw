@@ -3,13 +3,6 @@ summary: "Gateway ဝန်ဆောင်မှု၊ အသက်တာလည�
 read_when:
   - Gateway လုပ်ငန်းစဉ်ကို လည်ပတ်နေစဉ် သို့မဟုတ် ပြဿနာရှာဖွေနေစဉ်
 title: "Gateway Runbook"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:11Z
 ---
 
 # Gateway ဝန်ဆောင်မှု Runbook
@@ -19,7 +12,7 @@ x-i18n:
 ## အရာသည် ဘာလဲ
 
 - တစ်ချိန်လုံး လည်ပတ်နေပြီး Baileys/Telegram ချိတ်ဆက်မှု တစ်ခုတည်းနှင့် control/event plane ကို ကိုင်တွယ်ထားသော လုပ်ငန်းစဉ်။
-- အဟောင်း `gateway` command ကို အစားထိုးထားသည်။ CLI entry point: `openclaw gateway`။
+- Replaces the legacy `gateway` command. CLI entry point: `openclaw gateway`.
 - ရပ်တန့်သည့်အချိန်အထိ လည်ပတ်နေပြီး အရေးကြီးသော အမှားများ ဖြစ်ပါက non-zero ဖြင့် ထွက်သွားကာ supervisor က ပြန်လည်စတင်စေသည်။
 
 ## ဘယ်လို လည်ပတ်မလဲ (local)
@@ -39,17 +32,17 @@ pnpm gateway:watch
   - Hot reload သည် လိုအပ်သည့်အခါ **SIGUSR1** ဖြင့် in-process restart ကို အသုံးပြုသည်။
   - `gateway.reload.mode="off"` ဖြင့် ပိတ်နိုင်သည်။
 - WebSocket control plane ကို `127.0.0.1:<port>` (မူလ 18789) တွင် bind လုပ်သည်။
-- တူညီသော port ကို HTTP (control UI, hooks, A2UI) အတွက်လည်း အသုံးပြုသည်။ Single-port multiplex ဖြစ်သည်။
+- The same port also serves HTTP (control UI, hooks, A2UI). Single-port multiplex။
   - OpenAI Chat Completions (HTTP): [`/v1/chat/completions`](/gateway/openai-http-api)။
   - OpenResponses (HTTP): [`/v1/responses`](/gateway/openresponses-http-api)။
   - Tools Invoke (HTTP): [`/tools/invoke`](/gateway/tools-invoke-http-api)။
-- မူလအားဖြင့် Canvas file server ကို `canvasHost.port` (မူလ `18793`) တွင် စတင်ပြီး `~/.openclaw/workspace/canvas` မှ `http://<gateway-host>:18793/__openclaw__/canvas/` ကို ဝန်ဆောင်မှုပေးသည်။ `canvasHost.enabled=false` သို့မဟုတ် `OPENCLAW_SKIP_CANVAS_HOST=1` ဖြင့် ပိတ်နိုင်သည်။
+- Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__openclaw__/canvas/` from `~/.openclaw/workspace/canvas`. `canvasHost.enabled=false` သို့မဟုတ် `OPENCLAW_SKIP_CANVAS_HOST=1` ဖြင့် ပိတ်နိုင်သည်။
 - stdout သို့ logs ထုတ်သည်။ launchd/systemd ကို အသုံးပြု၍ အသက်ရှင်စေပြီး log များကို လှည့်ပတ်သိမ်းဆည်းပါ။
 - ပြဿနာရှာဖွေနေစဉ် `--verbose` ကို အသုံးပြု၍ log ဖိုင်မှ debug logging (handshakes, req/res, events) ကို stdio သို့ ပြန်လည်ထုတ်ပြနိုင်သည်။
 - `--force` သည် ရွေးချယ်ထားသော port ပေါ်ရှိ listener များကို `lsof` ဖြင့် ရှာဖွေပြီး SIGTERM ပို့ကာ သတ်ခဲ့သည့်အရာများကို log လုပ်ပြီးနောက် gateway ကို စတင်သည် (`lsof` မရှိပါက ချက်ချင်း မအောင်မြင်ပါ)။
 - supervisor (launchd/systemd/mac app child-process mode) အောက်တွင် လည်ပတ်ပါက ရပ်တန့်/ပြန်စတင်ခြင်းသည် ပုံမှန်အားဖြင့် **SIGTERM** ပို့သည်။ အဟောင်း build များတွင် `pnpm` `ELIFECYCLE` exit code **143** (SIGTERM) အဖြစ် ပြသနိုင်ပြီး ၎င်းသည် ပုံမှန် shutdown ဖြစ်သည်၊ crash မဟုတ်ပါ။
 - **SIGUSR1** သည် ခွင့်ပြုထားသည့်အခါ in-process restart ကို လှုံ့ဆော်သည် (gateway tool/config apply/update သို့မဟုတ် လက်ဖြင့် restart အတွက် `commands.restart` ကို ဖွင့်ပါ)။
-- Gateway auth ကို မူလအားဖြင့် လိုအပ်သည်။ `gateway.auth.token` (သို့မဟုတ် `OPENCLAW_GATEWAY_TOKEN`) သို့မဟုတ် `gateway.auth.password` ကို သတ်မှတ်ပါ။ Tailscale Serve identity ကို အသုံးမပြုပါက clients များသည် `connect.params.auth.token/password` ကို ပို့ရမည်။
+- Gateway auth is required by default: set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) or `gateway.auth.password`. Clients must send `connect.params.auth.token/password` unless using Tailscale Serve identity.
 - wizard သည် loopback ပေါ်တွင်ပင် token ကို မူလအားဖြင့် ထုတ်ပေးပါသည်။
 - Port ဦးစားပေးမှု: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > မူလ `18789`။
 
@@ -62,17 +55,18 @@ pnpm gateway:watch
   ```
 
 - ထို့နောက် clients များသည် tunnel မှတစ်ဆင့် `ws://127.0.0.1:18789` သို့ ချိတ်ဆက်သည်။
+
 - token ကို သတ်မှတ်ထားပါက tunnel ဖြင့်ပင် `connect.params.auth.token` တွင် ထည့်သွင်းရမည်။
 
 ## Gateway အများအပြား (တူညီသော host)
 
-ပုံမှန်အားဖြင့် မလိုအပ်ပါ။ Gateway တစ်ခုတည်းဖြင့် messaging channels နှင့် agents များစွာကို ဝန်ဆောင်မှုပေးနိုင်သည်။ redundancy သို့မဟုတ် အလွန်တင်းကျပ်သော isolation (ဥပမာ rescue bot) အတွက်သာ Gateway အများအပြားကို အသုံးပြုပါ။
+ပုံမှန်အားဖြင့် မလိုအပ်ပါ: Gateway တစ်ခုတည်းဖြင့် messaging channel များနှင့် agent များကို များစွာ ဝန်ဆောင်မှုပေးနိုင်ပါသည်။ Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
 
-state + config ကို ခွဲခြားပြီး unique ports များကို အသုံးပြုပါက ထောက်ပံ့ထားသည်။ လမ်းညွှန်အပြည့်အစုံ: [Multiple gateways](/gateway/multiple-gateways)။
+State + config ကို ခွဲထုတ်ပြီး unique ports များ အသုံးပြုပါက ထောက်ပံ့ထားပါသည်။ Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 Service အမည်များသည် profile ကို သိရှိထားသည်။
 
-- macOS: `bot.molt.<profile>` (legacy `com.openclaw.*` ရှိနိုင်သေးသည်)
+- macOS: `bot.molt.<profile>` (legacy `com.openclaw.*` may still exist)
 - Linux: `openclaw-gateway-<profile>.service`
 - Windows: `OpenClaw Gateway (<profile>)`
 
@@ -82,7 +76,7 @@ Install metadata ကို service config အတွင်းတွင် ထည�
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-Rescue-Bot Pattern: profile၊ state dir၊ workspace နှင့် base port spacing ကို ကိုယ်ပိုင်ထားသော ဒုတိယ Gateway တစ်ခုကို ခွဲခြားထားပါ။ လမ်းညွှန်အပြည့်အစုံ: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)။
+Rescue-Bot Pattern: keep a second Gateway isolated with its own profile, state dir, workspace, and base port spacing. လမ်းညွှန်အပြည့်အစုံ: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide)။
 
 ### Dev profile (`--dev`)
 
@@ -110,7 +104,7 @@ Derived ports (အတွေ့အကြုံအခြေခံ စည်းမ�
 - Base port = `gateway.port` (သို့မဟုတ် `OPENCLAW_GATEWAY_PORT` / `--port`)
 - browser control service port = base + 2 (loopback only)
 - `canvasHost.port = base + 4` (သို့မဟုတ် `OPENCLAW_CANVAS_HOST_PORT` / config override)
-- Browser profile CDP ports များကို `browser.controlPort + 9 .. + 108` မှ အလိုအလျောက် ခွဲဝေပြီး profile တစ်ခုချင်းစီအလိုက် သိမ်းဆည်းထားသည်။
+- Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108` (persisted per profile).
 
 Instance တစ်ခုစီအတွက် စစ်ဆေးစာရင်း။
 
@@ -137,12 +131,12 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 ## Protocol (operator မြင်ကွင်း)
 
 - စာရွက်စာတမ်း အပြည့်အစုံ: [Gateway protocol](/gateway/protocol) နှင့် [Bridge protocol (legacy)](/gateway/bridge-protocol)။
-- client မှ မဖြစ်မနေ ပထမဆုံး frame: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`။
+- Mandatory first frame from client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
 - Gateway သည် `res {type:"res", id, ok:true, payload:hello-ok }` ဖြင့် ပြန်ကြားသည် (သို့မဟုတ် အမှားဖြစ်ပါက `ok:false` ပြန်ပြီး ပိတ်သည်)။
 - handshake ပြီးနောက်:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
-- Structured presence entries: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (WS clients အတွက် `instanceId` သည် `connect.client.instanceId` မှ လာသည်)။
+- Structured presence entries: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (for WS clients, `instanceId` comes from `connect.client.instanceId`).
 - `agent` responses များသည် အဆင့်နှစ်ဆင့်ရှိသည်။ ပထမအဆင့် `res` ack `{runId,status:"accepted"}`၊ ထို့နောက် run ပြီးဆုံးသည့်အခါ နောက်ဆုံး `res` `{runId,status:"ok"|"error",summary}` ပေးပို့သည်။ streamed output ကို `event:"agent"` အဖြစ် လက်ခံရရှိသည်။
 
 ## Methods (အစပိုင်း အစု)
@@ -165,7 +159,7 @@ Presence ကို ဘယ်လို ထုတ်လုပ်/ထပ်မတ�
 - `agent` — agent run မှ streamed tool/output events (seq-tagged)။
 - `presence` — presence updates (stateVersion ပါသော deltas) ကို ချိတ်ဆက်ထားသော clients အားလုံးသို့ ပို့သည်။
 - `tick` — liveness ကို အတည်ပြုရန် periodic keepalive/no-op။
-- `shutdown` — Gateway ထွက်ခွာနေသည်။ payload တွင် `reason` နှင့် optional `restartExpectedMs` ပါဝင်သည်။ Clients များသည် ပြန်လည်ချိတ်ဆက်ရမည်။
+- `shutdown` — Gateway is exiting; payload includes `reason` and optional `restartExpectedMs`. Clients should reconnect.
 
 ## WebChat ပေါင်းစည်းခြင်း
 
@@ -188,7 +182,7 @@ Presence ကို ဘယ်လို ထုတ်လုပ်/ထပ်မတ�
 
 ## Error codes (res.error ပုံစံ)
 
-- Errors များသည် `{ code, message, details?, retryable?, retryAfterMs? }` ကို အသုံးပြုသည်။
+- Errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 - စံ error codes:
   - `NOT_LINKED` — WhatsApp authentication မလုပ်ရသေးပါ။
   - `AGENT_TIMEOUT` — agent သည် သတ်မှတ်ထားသော အချိန်အကန့်အသတ်အတွင်း မတုံ့ပြန်ပါ။
@@ -202,7 +196,7 @@ Presence ကို ဘယ်လို ထုတ်လုပ်/ထပ်မတ�
 
 ## Replay / gaps
 
-- Events များကို replay မလုပ်ပါ။ Clients များသည် seq gaps များကို တွေ့ရှိပါက ဆက်လက်လုပ်ဆောင်မီ (`health` + `system-presence`) ဖြင့် refresh လုပ်သင့်သည်။ WebChat နှင့် macOS clients များသည် gap တွေ့ပါက အလိုအလျောက် refresh လုပ်ပါသည်။
+- Events are not replayed. Clients detect seq gaps and should refresh (`health` + `system-presence`) before continuing. WebChat and macOS clients now auto-refresh on gap.
 
 ## Supervision (macOS ဥပမာ)
 
@@ -213,8 +207,8 @@ Presence ကို ဘယ်လို ထုတ်လုပ်/ထပ်မတ�
   - StandardOut/Err: ဖိုင်လမ်းကြောင်းများ သို့မဟုတ် `syslog`
 - မအောင်မြင်ပါက launchd သည် ပြန်လည်စတင်မည်။ အရေးကြီးသော misconfig ဖြစ်ပါက ဆက်လက် ထွက်သွားနေစေ၍ operator သတိပြုနိုင်စေပါ။
 - LaunchAgents များသည် user တစ်ဦးချင်းစီအလိုက် ဖြစ်ပြီး login session လိုအပ်သည်။ headless setup များအတွက် custom LaunchDaemon ကို အသုံးပြုပါ (မပါဝင်ပို့ဆောင်ထားပါ)။
-  - `openclaw gateway install` သည် `~/Library/LaunchAgents/bot.molt.gateway.plist` ကို ရေးထည့်သည်
-    (သို့မဟုတ် `bot.molt.<profile>.plist`; legacy `com.openclaw.*` ကို ရှင်းလင်းဖယ်ရှားသည်)။
+  - `openclaw gateway install` writes `~/Library/LaunchAgents/bot.molt.gateway.plist`
+    (or `bot.molt.<profile>.plist`; legacy `com.openclaw.*` is cleaned up).
   - `openclaw doctor` သည် LaunchAgent config ကို audit လုပ်ပြီး လက်ရှိ မူလအကြံပြုတန်ဖိုးများသို့ update လုပ်နိုင်သည်။
 
 ## Gateway ဝန်ဆောင်မှု စီမံခန့်ခွဲမှု (CLI)
@@ -239,27 +233,27 @@ openclaw logs --follow
 - `gateway status` သည် “localhost vs LAN bind” ရောယှက်မှုနှင့် profile မကိုက်ညီမှုများကို ရှောင်ရှားရန် config path + probe target ကို ပုံနှိပ်ပြသည်။
 - `gateway status` သည် service လည်ပတ်နေသလို တွေ့ရသော်လည်း port ပိတ်ထားပါက နောက်ဆုံး gateway error line ကို ထည့်သွင်းပြသသည်။
 - `logs` သည် RPC မှတစ်ဆင့် Gateway file log ကို tail လုပ်ပေးသည် (လက်ဖြင့် `tail`/`grep` မလိုအပ်ပါ)။
-- အခြား gateway မျိုးဆန်သည့် services များကို တွေ့ရှိပါက OpenClaw profile services မဟုတ်သရွေ့ CLI က သတိပေးမည်။
-  အများစုသော setup များအတွက် **စက်တစ်လုံးလျှင် Gateway တစ်ခု** ကို အကြံပြုပါသည်။ redundancy သို့မဟုတ် rescue bot အတွက် isolated profiles/ports ကို အသုံးပြုပါ။ [Multiple gateways](/gateway/multiple-gateways) ကို ကြည့်ပါ။
+- If other gateway-like services are detected, the CLI warns unless they are OpenClaw profile services.
+  We still recommend **one gateway per machine** for most setups; use isolated profiles/ports for redundancy or a rescue bot. See [Multiple gateways](/gateway/multiple-gateways).
   - Cleanup: `openclaw gateway uninstall` (လက်ရှိ service) နှင့် `openclaw doctor` (legacy migrations)။
 - `gateway install` သည် ထည့်သွင်းပြီးသားဖြစ်ပါက no-op ဖြစ်သည်။ ပြန်လည်ထည့်သွင်းရန် `openclaw gateway install --force` ကို အသုံးပြုပါ (profile/env/path ပြောင်းလဲမှုများ)။
 
 Bundled mac app။
 
-- OpenClaw.app သည် Node-based gateway relay ကို bundle လုပ်နိုင်ပြီး per-user LaunchAgent ကို
-  `bot.molt.gateway` (သို့မဟုတ် `bot.molt.<profile>`; legacy `com.openclaw.*` labels များကိုလည်း သန့်ရှင်းစွာ unload လုပ်နိုင်သည်) ဟု label လုပ်၍ install လုပ်နိုင်သည်။
+- OpenClaw.app သည် Node-based gateway relay ကို bundle လုပ်နိုင်ပြီး per-user LaunchAgent ကို `bot.molt.gateway` (သို့မဟုတ် `bot.molt.<profile>` အမည်ဖြင့်) တပ်ဆင်နိုင်ပါသည်။`; legacy `com.openclaw.\*\` labels still unload cleanly).
 - သန့်ရှင်းစွာ ရပ်တန့်ရန် `openclaw gateway stop` (သို့မဟုတ် `launchctl bootout gui/$UID/bot.molt.gateway`) ကို အသုံးပြုပါ။
 - ပြန်လည်စတင်ရန် `openclaw gateway restart` (သို့မဟုတ် `launchctl kickstart -k gui/$UID/bot.molt.gateway`) ကို အသုံးပြုပါ။
   - `launchctl` သည် LaunchAgent ထည့်သွင်းထားပါကသာ အလုပ်လုပ်သည်။ မရှိပါက ပထမဦးစွာ `openclaw gateway install` ကို အသုံးပြုပါ။
-  - named profile ကို လည်ပတ်ပါက label ကို `bot.molt.<profile>` ဖြင့် အစားထိုးပါ။
+  - Replace the label with `bot.molt.<profile>` when running a named profile.
 
 ## Supervision (systemd user unit)
 
-OpenClaw သည် Linux/WSL2 တွင် မူလအားဖြင့် **systemd user service** ကို ထည့်သွင်းပေးသည်။ အသုံးပြုသူ တစ်ဦးတည်းသုံး စက်များအတွက် (env ရိုးရှင်း၊ per-user config) user services ကို အကြံပြုပါသည်။
-multi-user သို့မဟုတ် always-on servers များအတွက် **system service** ကို အသုံးပြုပါ (lingering မလိုအပ်၊ shared supervision)။
+OpenClaw installs a **systemd user service** by default on Linux/WSL2. We
+recommend user services for single-user machines (simpler env, per-user config).
+Use a **system service** for multi-user or always-on servers (no lingering
+required, shared supervision).
 
-`openclaw gateway install` သည် user unit ကို ရေးထည့်သည်။ `openclaw doctor` သည်
-unit ကို audit လုပ်ပြီး လက်ရှိ အကြံပြုထားသော မူလတန်ဖိုးများနှင့် ကိုက်ညီအောင် update လုပ်နိုင်သည်။
+`openclaw gateway install` writes the user unit. `openclaw doctor` သည် ယူနစ်ကို စစ်ဆေးပြီး လက်ရှိအကြံပြုထားသော မူလသတ်မှတ်ချက်များနှင့် ကိုက်ညီအောင် အပ်ဒိတ်လုပ်နိုင်သည်။
 
 `~/.config/systemd/user/openclaw-gateway[-<profile>].service` ကို ဖန်တီးပါ။
 
@@ -286,16 +280,15 @@ Logout/idle ဖြစ်ပါက user service ဆက်လက်လည်ပတ
 sudo loginctl enable-linger youruser
 ```
 
-Onboarding သည် Linux/WSL2 တွင် ၎င်းကို လည်ပတ်စေပါသည် (sudo မေးနိုင်ပြီး `/var/lib/systemd/linger` ကို ရေးထည့်သည်)။
-ထို့နောက် service ကို ဖွင့်ပါ။
+Onboarding သည် Linux/WSL2 ပေါ်တွင် ဤအရာကို လည်ပတ်စေသည် (sudo ကို မေးနိုင်ပြီး `/var/lib/systemd/linger` ကို ရေးသားမည်)။
+ထို့နောက် ဝန်ဆောင်မှုကို ဖွင့်ပါ:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
-**အခြားရွေးချယ်မှု (system service)** — always-on သို့မဟုတ် multi-user servers များအတွက် user unit အစား systemd **system** unit ကို ထည့်သွင်းနိုင်သည် (lingering မလိုအပ်)။
-`/etc/systemd/system/openclaw-gateway[-<profile>].service` ကို ဖန်တီးပါ (အထက်ပါ unit ကို ကူးယူပြီး
-`WantedBy=multi-user.target` ကို ပြောင်းလဲကာ `User=` + `WorkingDirectory=` ကို သတ်မှတ်ပါ)၊ ထို့နောက်:
+**အခြားရွေးချယ်စရာ (system service)** - အမြဲဖွင့်ထားရသော သို့မဟုတ် multi-user ဆာဗာများအတွက် user unit အစား systemd **system** unit ကို တပ်ဆင်နိုင်သည် (lingering မလိုအပ်)။
+`/etc/systemd/system/openclaw-gateway[-<profile>].service` ကို ဖန်တီးပါ (အပေါ်ရှိ unit ကို မိတ္တူကူး၍ `WantedBy=multi-user.target` သို့ ပြောင်းပြီး `User=` နှင့် `WorkingDirectory=` ကို သတ်မှတ်ပါ)၊ ထို့နောက်:
 
 ```
 sudo systemctl daemon-reload

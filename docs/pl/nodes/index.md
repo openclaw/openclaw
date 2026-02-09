@@ -4,17 +4,10 @@ read_when:
   - Parowanie węzłów iOS/Android z gatewayem
   - Używanie canvas/kamery węzła jako kontekstu agenta
   - Dodawanie nowych poleceń węzła lub pomocników CLI
-title: "Węzły"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:41Z
+title: "Nodes"
 ---
 
-# Węzły
+# Nodes
 
 **Węzeł** to urządzenie towarzyszące (macOS/iOS/Android/headless), które łączy się z **WebSocket** Gateway (ten sam port co operatorzy) z użyciem `role: "node"` i udostępnia powierzchnię poleceń (np. `canvas.*`, `camera.*`, `system.*`) przez `node.invoke`. Szczegóły protokołu: [Gateway protocol](/gateway/protocol).
 

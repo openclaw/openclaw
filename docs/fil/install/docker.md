@@ -4,24 +4,17 @@ read_when:
   - Gusto mo ng isang containerized na gateway sa halip na local installs
   - Vina-validate mo ang Docker flow
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:02Z
 ---
 
 # Docker (opsyonal)
 
-Ang Docker ay **opsyonal**. Gamitin lamang ito kung gusto mo ng isang containerized na gateway o para i-validate ang Docker flow.
+13. **Opsyonal** ang Docker. 14. Gamitin lang ito kung gusto mo ng containerized gateway o para i-validate ang Docker flow.
 
 ## Tama ba sa akin ang Docker?
 
 - **Oo**: gusto mo ng isang isolated, pansamantalang gateway environment o patakbuhin ang OpenClaw sa isang host na walang local installs.
-- **Hindi**: tumatakbo ka sa sarili mong machine at gusto mo lang ang pinakamabilis na dev loop. Gamitin na lang ang normal na install flow.
-- **Tala sa sandboxing**: ang agent sandboxing ay gumagamit din ng Docker, pero **hindi** nito kailangan na tumakbo ang buong gateway sa Docker. Tingnan ang [Sandboxing](/gateway/sandboxing).
+- 15. **Hindi**: tumatakbo ka sa sarili mong makina at gusto mo lang ang pinakamabilis na dev loop. 16. Gamitin na lang ang normal na install flow.
+- 17. **Paalala sa sandboxing**: gumagamit din ng Docker ang agent sandboxing, pero **hindi** nito kinakailangang tumakbo ang buong gateway sa Docker. Tingnan ang [Hetzner (Docker VPS)](/install/hetzner).
 
 Saklaw ng gabay na ito ang:
 
@@ -63,14 +56,15 @@ Pagkatapos nitong matapos:
 
 - Buksan ang `http://127.0.0.1:18789/` sa iyong browser.
 - I-paste ang token sa Control UI (Settings → token).
-- Kailangan ulit ang URL? Patakbuhin ang `docker compose run --rm openclaw-cli dashboard --no-open`.
+- 19. Kailangan ulit ang URL? 20. Patakbuhin ang `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 Isinusulat nito ang config/workspace sa host:
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-Tumatakbo sa isang VPS? Tingnan ang [Hetzner (Docker VPS)](/install/hetzner).
+21. Tumatakbo sa isang VPS? Kung gusto mong mag-persist ang `/home/node` sa mga muling paglikha ng container, magtakda ng isang named
+    volume sa pamamagitan ng `OPENCLAW_HOME_VOLUME`.
 
 ### Manual na daloy (compose)
 
@@ -80,9 +74,9 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
-Tala: patakbuhin ang `docker compose ...` mula sa repo root. Kung pinagana mo ang
-`OPENCLAW_EXTRA_MOUNTS` o `OPENCLAW_HOME_VOLUME`, isinusulat ng setup script ang
-`docker-compose.extra.yml`; isama ito kapag nagpapatakbo ng Compose sa ibang lugar:
+23. Paalala: patakbuhin ang `docker compose ...` mula sa repo root. 24. Kung pinagana mo ang
+    `OPENCLAW_EXTRA_MOUNTS` o `OPENCLAW_HOME_VOLUME`, isinusulat ng setup script ang
+    `docker-compose.extra.yml`; isama ito kapag nagpapatakbo ng Compose sa ibang lugar:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
@@ -103,10 +97,10 @@ Mas detalyado: [Dashboard](/web/dashboard), [Devices](/cli/devices).
 
 ### Mga dagdag na mount (opsyonal)
 
-Kung gusto mong mag-mount ng karagdagang host directories sa mga container, itakda ang
-`OPENCLAW_EXTRA_MOUNTS` bago patakbuhin ang `docker-setup.sh`. Tumatanggap ito ng
-comma-separated na listahan ng Docker bind mounts at ina-apply ang mga ito sa parehong
-`openclaw-gateway` at `openclaw-cli` sa pamamagitan ng pag-generate ng `docker-compose.extra.yml`.
+25. Kung gusto mong mag-mount ng karagdagang host directories papunta sa mga container, itakda ang
+    `OPENCLAW_EXTRA_MOUNTS` bago patakbuhin ang `docker-setup.sh`. 26. Tumatanggap ito ng
+    comma-separated na listahan ng Docker bind mounts at ina-apply ang mga ito sa parehong
+    `openclaw-gateway` at `openclaw-cli` sa pamamagitan ng pagbuo ng `docker-compose.extra.yml`.
 
 Halimbawa:
 
@@ -120,15 +114,15 @@ Mga tala:
 - Kailangang naka-share ang mga path sa Docker Desktop sa macOS/Windows.
 - Kung i-e-edit mo ang `OPENCLAW_EXTRA_MOUNTS`, patakbuhin ulit ang `docker-setup.sh` para i-regenerate ang
   extra compose file.
-- Ang `docker-compose.extra.yml` ay generated. Huwag itong i-edit nang mano-mano.
+- 27. Nabubuo ang `docker-compose.extra.yml`. 28. Huwag itong mano-manong i-edit.
 
 ### I-persist ang buong container home (opsyonal)
 
-Kung gusto mong mag-persist ang `/home/node` kahit ma-recreate ang container, magtakda ng named
-volume gamit ang `OPENCLAW_HOME_VOLUME`. Gumagawa ito ng Docker volume at mino-mount ito sa
-`/home/node`, habang pinananatili ang standard na config/workspace bind mounts. Gumamit ng
-named volume dito (hindi bind path); para sa bind mounts, gamitin ang
-`OPENCLAW_EXTRA_MOUNTS`.
+Gumamit ng
+named volume dito (hindi isang bind path); para sa bind mounts, gamitin ang
+`OPENCLAW_EXTRA_MOUNTS`. 30. Gumagawa ito ng Docker volume at mina-mount ito sa
+`/home/node`, habang pinananatili ang mga standard config/workspace bind mounts. Ini-install nito ang mga package sa panahon ng image build, kaya nagpe-persist ang mga ito kahit matanggal ang
+container.
 
 Halimbawa:
 
@@ -153,10 +147,9 @@ Mga tala:
 
 ### Mag-install ng karagdagang apt packages (opsyonal)
 
-Kung kailangan mo ng mga system package sa loob ng image (halimbawa, build tools o media
-libraries), itakda ang `OPENCLAW_DOCKER_APT_PACKAGES` bago patakbuhin ang `docker-setup.sh`.
-Ini-install nito ang mga package habang bina-build ang image, kaya nananatili ang mga ito kahit
-ma-delete ang container.
+32. Kung kailangan mo ng mga system package sa loob ng image (halimbawa, build tools o media
+    libraries), itakda ang `OPENCLAW_DOCKER_APT_PACKAGES` bago patakbuhin ang `docker-setup.sh`.
+    Pinananatili nitong maliit ang attack surface, ngunit nangangahulugan ito na:
 
 Halimbawa:
 
@@ -173,8 +166,8 @@ Mga tala:
 
 ### Power-user / full-featured na container (opt-in)
 
-Ang default Docker image ay **security-first** at tumatakbo bilang non-root na user na `node`.
-Pinapaliit nito ang attack surface, pero nangangahulugan ito ng:
+34. Ang default Docker image ay **security-first** at tumatakbo bilang non-root na `node`
+    user. Tumatakbo ang image bilang `node` (uid 1000).
 
 - walang system package installs sa runtime
 - walang Homebrew bilang default
@@ -215,8 +208,9 @@ Kung kailangan mong i-install ng Playwright ang system deps, i-rebuild ang image
 
 ### Mga permiso + EACCES
 
-Ang image ay tumatakbo bilang `node` (uid 1000). Kung makakita ka ng mga error sa permiso sa
-`/home/node/.openclaw`, siguraduhing ang iyong host bind mounts ay pagmamay-ari ng uid 1000.
+Kung makakita ka ng mga error sa pahintulot sa
+`/home/node/.openclaw`, tiyaking ang iyong host bind mounts ay pag-aari ng uid 1000. Kung pipiliin mo ang OpenAI Codex OAuth sa wizard, magbubukas ito ng browser URL at susubukang
+mahuli ang isang callback sa `http://127.0.0.1:1455/auth/callback`.
 
 Halimbawa (Linux host):
 
@@ -228,8 +222,8 @@ Kung pipiliin mong tumakbo bilang root para sa convenience, tinatanggap mo ang k
 
 ### Mas mabilis na rebuilds (inirerekomenda)
 
-Para pabilisin ang rebuilds, ayusin ang Dockerfile upang ma-cache ang mga dependency layer.
-Iniiwasan nitong patakbuhin muli ang `pnpm install` maliban kung magbago ang mga lockfile:
+38. Para pabilisin ang mga rebuild, ayusin ang iyong Dockerfile upang ma-cache ang mga dependency layer.
+39. Iniiwasan nito ang muling pagpapatakbo ng `pnpm install` maliban kung magbago ang mga lockfile:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -285,10 +279,9 @@ Docs: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](
 
 ### OpenAI Codex OAuth (headless Docker)
 
-Kung pipiliin mo ang OpenAI Codex OAuth sa wizard, magbubukas ito ng isang browser URL at susubukang
-hulihin ang callback sa `http://127.0.0.1:1455/auth/callback`. Sa Docker o mga
-headless na setup, maaaring magpakita ang callback na iyon ng browser error. Kopyahin ang buong redirect
-URL na iyong narating at i-paste ito pabalik sa wizard para tapusin ang auth.
+Kopyahin ang buong redirect
+URL na napuntahan mo at i-paste pabalik sa wizard upang tapusin ang auth. 41. Sa Docker o
+headless na mga setup, maaaring magpakita ang callback na iyon ng browser error. I-override ang CMD upang ipatupad ang guard.
 
 ### Health check
 
@@ -311,7 +304,7 @@ pnpm test:docker:qr
 ### Mga tala
 
 - Ang Gateway bind ay default sa `lan` para sa paggamit sa container.
-- Ang Dockerfile CMD ay gumagamit ng `--allow-unconfigured`; ang mounted config na may `gateway.mode` at hindi `local` ay magsisimula pa rin. I-override ang CMD para ipatupad ang guard.
+- 43. Gumagamit ang Dockerfile CMD ng `--allow-unconfigured`; ang naka-mount na config na may `gateway.mode` na hindi `local` ay magsisimula pa rin. Override CMD to enforce the guard.
 - Ang gateway container ang source of truth para sa mga session (`~/.openclaw/agents/<agentId>/sessions/`).
 
 ## Agent Sandbox (host gateway + Docker tools)
@@ -320,8 +313,8 @@ Mas malalim na talakay: [Sandboxing](/gateway/sandboxing)
 
 ### Ano ang ginagawa nito
 
-Kapag pinagana ang `agents.defaults.sandbox`, ang **non-main sessions** ay nagpapatakbo ng mga tool sa loob ng isang Docker
-container. Nanatili ang gateway sa iyong host, pero ang execution ng tool ay isolated:
+45. Kapag naka-enable ang `agents.defaults.sandbox`, ang **mga non-main session** ay nagpapatakbo ng mga tool sa loob ng isang Docker
+    container. Nanatili ang gateway sa iyong host, ngunit hiwalay ang pagpapatupad ng tool:
 
 - saklaw: `"agent"` bilang default (isang container + workspace bawat agent)
 - saklaw: `"session"` para sa per-session isolation
@@ -330,13 +323,13 @@ container. Nanatili ang gateway sa iyong host, pero ang execution ng tool ay iso
 - allow/deny na polisiya ng tool (ang deny ang nananalo)
 - ang inbound media ay kinokopya sa aktibong sandbox workspace (`media/inbound/*`) para mabasa ng mga tool (kapag may `workspaceAccess: "rw"`, napupunta ito sa agent workspace)
 
-Babala: ang `scope: "shared"` ay nagdi-disable ng cross-session isolation. Lahat ng session ay nagbabahagi ng
-isang container at isang workspace.
+Babala: ang `scope: "shared"` ay hindi pinapagana ang cross-session isolation. Lahat ng session ay nagbabahagi
+ng isang container at isang workspace.
 
 ### Per-agent na sandbox profile (multi-agent)
 
-Kung gumagamit ka ng multi-agent routing, maaaring i-override ng bawat agent ang sandbox + tool settings:
-`agents.list[].sandbox` at `agents.list[].tools` (kasama ang `agents.list[].tools.sandbox.tools`). Pinapayagan ka nitong magpatakbo ng
+Kung gagamit ka ng multi-agent routing, maaaring i-override ng bawat agent ang mga setting ng sandbox + tool:
+`agents.list[].sandbox` at `agents.list[].tools` (pati `agents.list[].tools.sandbox.tools`). Pinapayagan ka nitong magpatakbo ng
 halo-halong antas ng access sa iisang gateway:
 
 - Buong access (personal agent)
@@ -364,10 +357,10 @@ Kung plano mong mag-install ng mga package sa `setupCommand`, tandaan:
 
 - Ang default na `docker.network` ay `"none"` (walang egress).
 - Hinaharangan ng `readOnlyRoot: true` ang pag-install ng mga package.
-- Kailangang root ang `user` para sa `apt-get` (alisin ang `user` o itakda ang `user: "0:0"`).
+- Ang `user` ay dapat na root para sa `apt-get` (alisin ang `user` o itakda ang `user: "0:0"`).
   Awtomatikong nire-recreate ng OpenClaw ang mga container kapag nagbago ang `setupCommand` (o docker config)
-  maliban kung ang container ay **kamakailang ginamit** (sa loob ng ~5 minuto). Ang mga “hot” na container ay
-  nagla-log ng babala kasama ang eksaktong `openclaw sandbox recreate ...` command.
+  maliban kung ang container ay **kamakailan lang ginamit** (sa loob ng ~5 minuto). Ang mga hot container
+  ay nagla-log ng babala kasama ang eksaktong `openclaw sandbox recreate ...` na command.
 
 ```json5
 {
@@ -453,7 +446,7 @@ Kung gusto mo ng sandbox image na may karaniwang build tooling (Node, Go, Rust, 
 scripts/sandbox-common-setup.sh
 ```
 
-Bina-build nito ang `openclaw-sandbox-common:bookworm-slim`. Para gamitin ito:
+Binubuo nito ang `openclaw-sandbox-common:bookworm-slim`. Para gamitin ito:
 
 ```json5
 {
@@ -473,8 +466,8 @@ Para patakbuhin ang browser tool sa loob ng sandbox, i-build ang browser image:
 scripts/sandbox-browser-setup.sh
 ```
 
-Bina-build nito ang `openclaw-sandbox-browser:bookworm-slim` gamit ang
-`Dockerfile.sandbox-browser`. Pinapatakbo ng container ang Chromium na may CDP na pinagana at
+Binubuo nito ang `openclaw-sandbox-browser:bookworm-slim` gamit ang
+`Dockerfile.sandbox-browser`. Pinapatakbo ng container ang Chromium na may CDP na naka-enable at
 isang opsyonal na noVNC observer (headful sa pamamagitan ng Xvfb).
 
 Mga tala:
@@ -514,9 +507,9 @@ Kapag pinagana, natatanggap ng agent ang:
 - isang sandbox browser control URL (para sa `browser` tool)
 - isang noVNC URL (kung pinagana at headless=false)
 
-Tandaan: kung gumagamit ka ng allowlist para sa mga tool, idagdag ang `browser` (at alisin ito sa
-deny) o mananatiling naka-block ang tool.
-Ang mga prune rule (`agents.defaults.sandbox.prune`) ay naa-apply din sa mga browser container.
+Tandaan: kung gagamit ka ng allowlist para sa mga tool, idagdag ang `browser` (at alisin ito sa
+deny) kung hindi ay mananatiling naka-block ang tool.
+Ang mga prune rule (`agents.defaults.sandbox.prune`) ay nalalapat din sa mga browser container.
 
 ### Custom na sandbox image
 
@@ -568,7 +561,7 @@ Halimbawa:
 - Hindi tumatakbong container: awtomatiko itong gagawin bawat session kapag kailangan.
 - Mga error sa permiso sa sandbox: itakda ang `docker.user` sa isang UID:GID na tumutugma sa
   pagmamay-ari ng iyong naka-mount na workspace (o i-chown ang workspace folder).
-- Hindi makita ang custom tools: pinapatakbo ng OpenClaw ang mga command gamit ang `sh -lc` (login shell), na
-  nagso-source ng `/etc/profile` at maaaring mag-reset ng PATH. Itakda ang `docker.env.PATH` para i-prepend ang iyong
-  custom tool paths (hal., `/custom/bin:/usr/local/share/npm-global/bin`), o magdagdag ng
-  isang script sa ilalim ng `/etc/profile.d/` sa iyong Dockerfile.
+- Hindi makita ang mga custom tool: Pinapatakbo ng OpenClaw ang mga command gamit ang `sh -lc` (login shell), na
+  nagsa-source ng `/etc/profile` at maaaring i-reset ang PATH. Itakda ang `docker.env.PATH` upang i-prepend ang iyong
+  mga custom na path ng tool (hal., `/custom/bin:/usr/local/share/npm-global/bin`), o magdagdag
+  ng script sa ilalim ng `/etc/profile.d/` sa iyong Dockerfile.

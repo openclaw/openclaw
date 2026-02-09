@@ -4,13 +4,6 @@ read_when:
   - Implementering af Talk-tilstand på macOS/iOS/Android
   - Ændring af stemme/TTS/afbrydelsesadfærd
 title: "Talk-tilstand"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:27Z
 ---
 
 # Talk-tilstand

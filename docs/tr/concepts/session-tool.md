@@ -3,13 +3,6 @@ summary: "Oturumları listeleme, geçmişi alma ve oturumlar arası mesaj gönde
 read_when:
   - Oturum araçları eklerken veya değiştirirken
 title: "Oturum Araçları"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:30Z
 ---
 
 # Oturum Araçları
@@ -100,9 +93,9 @@ Davranış:
 - Çalışma başarısız olursa: `{ runId, status: "error", error }`.
 - Duyuru teslimi, birincil çalışma tamamlandıktan sonra çalışır ve en iyi çaba esaslıdır; `status: "ok"`, duyurunun teslim edildiğini garanti etmez.
 - Bekleme, gateway `agent.wait` (sunucu tarafı) üzerinden yapılır; böylece yeniden bağlanmalar beklemeyi düşürmez.
-- Birincil çalışma için ajanlar arası mesaj bağlamı enjekte edilir.
+- Agent-to-agent message context is injected for the primary run.
 - Birincil çalışma tamamlandıktan sonra OpenClaw bir **yanıt-geri döngüsü** çalıştırır:
-  - 2. tur ve sonrası, istekte bulunan ve hedef ajanlar arasında dönüşümlüdür.
+  - Round 2+ alternates between requester and target agents.
   - Ping‑pong’u durdurmak için tam olarak `REPLY_SKIP` yanıtlayın.
   - Azami tur sayısı `session.agentToAgent.maxPingPongTurns`’dir (0–5, varsayılan 5).
 - Döngü sona erdiğinde OpenClaw **ajan‑ajan duyuru adımı**nı çalıştırır (yalnızca hedef ajan):
@@ -149,7 +142,7 @@ Uygulama noktaları:
 
 ## sessions_spawn
 
-Yalıtılmış bir oturumda bir alt‑ajan çalışması başlatır ve sonucu istekte bulunan sohbet kanalına duyurur.
+Spawn a sub-agent run in an isolated session and announce the result back to the requester chat channel.
 
 Parametreler:
 

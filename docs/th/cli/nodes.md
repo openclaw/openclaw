@@ -4,13 +4,6 @@ read_when:
   - คุณกำลังจัดการโหนดที่จับคู่แล้ว(กล้อง, หน้าจอ, แคนวาส)
   - คุณต้องอนุมัติคำขอหรือเรียกใช้คำสั่งของโหนด
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:02Z
 ---
 
 # `openclaw nodes`
@@ -40,7 +33,8 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` แสดงตารางโหนดที่รอการอนุมัติ/ที่จับคู่แล้ว แถวที่จับคู่แล้วจะแสดงอายุการเชื่อมต่อล่าสุด(Last Connect)
+`nodes list` จะแสดงตารางที่รอการจับคู่/จับคู่แล้ว แถวที่จับคู่แล้วจะรวมอายุการเชื่อมต่อล่าสุด (Last Connect)
+ใช้ `--connected` เพื่อแสดงเฉพาะโหนดที่เชื่อมต่ออยู่ในปัจจุบัน `nodes list` แสดงตารางโหนดที่รอการอนุมัติ/ที่จับคู่แล้ว แถวที่จับคู่แล้วจะแสดงอายุการเชื่อมต่อล่าสุด(Last Connect)
 ใช้ `--connected` เพื่อแสดงเฉพาะโหนดที่เชื่อมต่ออยู่ในขณะนี้ ใช้ `--last-connected <duration>` เพื่อ
 กรองเฉพาะโหนดที่เชื่อมต่อภายในช่วงเวลา(เช่น `24h`, `7d`)
 

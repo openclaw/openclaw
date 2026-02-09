@@ -3,13 +3,6 @@ summary: "یہ وضاحت کرتا ہے کہ آنے والی آڈیو/وائس �
 read_when:
   - آڈیو ٹرانسکرپشن یا میڈیا ہینڈلنگ میں تبدیلی کرتے وقت
 title: "آڈیو اور وائس نوٹس"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # آڈیو / وائس نوٹس — 2026-01-17
@@ -37,9 +30,9 @@ x-i18n:
 2. **Gemini CLI** (`gemini`) بذریعہ `read_many_files`
 3. **Provider keys** (OpenAI → Groq → Deepgram → Google)
 
-خودکار تشخیص کو غیر فعال کرنے کے لیے `tools.media.audio.enabled: false` سیٹ کریں۔
-حسبِ ضرورت بنانے کے لیے `tools.media.audio.models` سیٹ کریں۔
-نوٹ: بائنری کی تشخیص macOS/Linux/Windows میں best‑effort ہے؛ یقینی بنائیں کہ CLI `PATH` پر موجود ہو (ہم `~` کو expand کرتے ہیں)، یا مکمل کمانڈ پاتھ کے ساتھ ایک واضح CLI ماڈل سیٹ کریں۔
+To disable auto-detection, set `tools.media.audio.enabled: false`.
+To customize, set `tools.media.audio.models`.
+نوٹ: بائنری کی شناخت macOS/Linux/Windows پر بہترین کوشش کی بنیاد پر ہوتی ہے؛ یقینی بنائیں کہ CLI `PATH` پر موجود ہو (ہم `~` کو توسیع دیتے ہیں)، یا مکمل کمانڈ پاتھ کے ساتھ ایک واضح CLI ماڈل سیٹ کریں۔
 
 ## کنفیگ مثالیں
 
@@ -107,8 +100,8 @@ x-i18n:
 - Deepgram، `provider: "deepgram"` استعمال ہونے پر `DEEPGRAM_API_KEY` اٹھا لیتا ہے۔
 - Deepgram سیٹ اپ کی تفصیلات: [Deepgram (audio transcription)](/providers/deepgram)۔
 - آڈیو providers، `tools.media.audio` کے ذریعے `baseUrl`، `headers`، اور `providerOptions` کو اووررائیڈ کر سکتے ہیں۔
-- بطورِ طے شدہ سائز حد 20MB ہے (`tools.media.audio.maxBytes`)۔ حد سے بڑی آڈیو اس ماڈل کے لیے چھوڑ دی جاتی ہے اور اگلا اندراج آزمایا جاتا ہے۔
-- آڈیو کے لیے بطورِ طے شدہ `maxChars` **غیر سیٹ** ہے (مکمل ٹرانسکرپٹ)۔ آؤٹ پٹ کم کرنے کے لیے `tools.media.audio.maxChars` یا ہر اندراج کے لیے `maxChars` سیٹ کریں۔
+- Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
+- Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
 - OpenAI کا خودکار ڈیفالٹ `gpt-4o-mini-transcribe` ہے؛ زیادہ درستگی کے لیے `model: "gpt-4o-transcribe"` سیٹ کریں۔
 - متعدد وائس نوٹس پراسیس کرنے کے لیے `tools.media.audio.attachments` استعمال کریں (`mode: "all"` + `maxAttachments`)۔
 - ٹرانسکرپٹ ٹیمپلیٹس میں `{{Transcript}}` کے طور پر دستیاب ہے۔
@@ -116,6 +109,6 @@ x-i18n:
 
 ## Gotchas
 
-- اسکوپ کے قواعد میں پہلے میچ کی جیت ہوتی ہے۔ `chatType` کو `direct`، `group`، یا `room` میں نارملائز کیا جاتا ہے۔
+- Scope rules use first-match wins. `chatType` is normalized to `direct`, `group`, or `room`.
 - یقینی بنائیں کہ آپ کا CLI 0 کے ساتھ ایگزٹ کرے اور سادہ متن پرنٹ کرے؛ JSON کو `jq -r .text` کے ذریعے درست کرنا ہوگا۔
 - جوابی قطار کو بلاک ہونے سے بچانے کے لیے ٹائم آؤٹس مناسب رکھیں (`timeoutSeconds`، بطورِ طے شدہ 60s)۔

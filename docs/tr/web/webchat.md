@@ -3,13 +3,6 @@ summary: "Loopback WebChat statik barındırma ve sohbet UI için Gateway WS kul
 read_when:
   - WebChat erişimini hata ayıklarken veya yapılandırırken
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:46Z
 ---
 
 # WebChat (Gateway WebSocket UI)

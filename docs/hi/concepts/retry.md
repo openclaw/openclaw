@@ -4,13 +4,6 @@ read_when:
   - प्रदाता रिट्राई व्यवहार या डिफ़ॉल्ट्स को अपडेट करते समय
   - प्रदाता भेजने की त्रुटियों या रेट लिमिट्स का डिबग करते समय
 title: "रिट्राई नीति"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:05Z
 ---
 
 # रिट्राई नीति

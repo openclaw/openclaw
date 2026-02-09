@@ -4,13 +4,6 @@ read_when:
   - نوڈ منسلک ہے لیکن camera/canvas/screen/exec ٹولز ناکام ہو رہے ہیں
   - آپ کو نوڈ پیئرنگ بمقابلہ منظوریوں کے ذہنی ماڈل کی ضرورت ہے
 title: "نوڈ خرابیوں کا ازالہ"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:28Z
 ---
 
 # نوڈ خرابیوں کا ازالہ
@@ -57,12 +50,12 @@ openclaw logs --follow
 
 ## اجازتوں کی میٹرکس
 
-| صلاحیت                       | iOS                                  | Android                                   | macOS نوڈ ایپ                   | عام ناکامی کوڈ                 |
-| ---------------------------- | ------------------------------------ | ----------------------------------------- | ------------------------------- | ------------------------------ |
-| `camera.snap`، `camera.clip` | کیمرا (+ کلپ آڈیو کے لیے مائیک)      | کیمرا (+ کلپ آڈیو کے لیے مائیک)           | کیمرا (+ کلپ آڈیو کے لیے مائیک) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | اسکرین ریکارڈنگ (+ مائیک اختیاری)    | اسکرین کیپچر پرامپٹ (+ مائیک اختیاری)     | اسکرین ریکارڈنگ                 | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | While Using یا Always (موڈ پر منحصر) | موڈ کے مطابق Foreground/Background لوکیشن | لوکیشن اجازت                    | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (نوڈ ہوسٹ پاتھ)                  | n/a (نوڈ ہوسٹ پاتھ)                       | Exec منظوریات درکار             | `SYSTEM_RUN_DENIED`            |
+| صلاحیت                       | iOS                                                     | Android                                                  | macOS نوڈ ایپ                                      | عام ناکامی کوڈ                 |
+| ---------------------------- | ------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- | ------------------------------ |
+| `camera.snap`، `camera.clip` | کیمرا (+ کلپ آڈیو کے لیے مائیک)      | کیمرا (+ کلپ آڈیو کے لیے مائیک)       | کیمرا (+ کلپ آڈیو کے لیے مائیک) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | اسکرین ریکارڈنگ (+ مائیک اختیاری)    | اسکرین کیپچر پرامپٹ (+ مائیک اختیاری) | اسکرین ریکارڈنگ                                    | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | While Using یا Always (موڈ پر منحصر) | موڈ کے مطابق Foreground/Background لوکیشن                | لوکیشن اجازت                                       | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (نوڈ ہوسٹ پاتھ)                  | n/a (نوڈ ہوسٹ پاتھ)                   | Exec منظوریات درکار                                | `SYSTEM_RUN_DENIED`            |
 
 ## پیئرنگ بمقابلہ منظوریات
 
@@ -80,8 +73,8 @@ openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-اگر پیئرنگ موجود نہیں، تو پہلے نوڈ ڈیوائس کی منظوری دیں۔
-اگر پیئرنگ درست ہے لیکن `system.run` ناکام ہو رہا ہے، تو exec منظوریات/اجازت فہرست درست کریں۔
+If pairing is missing, approve the node device first.
+If pairing is fine but `system.run` fails, fix exec approvals/allowlist.
 
 ## عام نوڈ ایرر کوڈز
 

@@ -4,24 +4,17 @@ read_when:
   - Du vill använda Anthropic-modeller i OpenClaw
   - Du vill använda setup-token i stället för API-nycklar
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:10Z
 ---
 
 # Anthropic (Claude)
 
-Anthropic bygger modellfamiljen **Claude** och tillhandahåller åtkomst via ett API.
+Antropisk bygger **Claude** modellfamilj och ger åtkomst via ett API.
 I OpenClaw kan du autentisera med en API-nyckel eller en **setup-token**.
 
 ## Alternativ A: Anthropic API-nyckel
 
-**Bäst för:** standard-API-åtkomst och användningsbaserad debitering.
-Skapa din API-nyckel i Anthropic Console.
+**Bäst för:** standard API-åtkomst och användningsbaserad fakturering.
+Skapa din API-nyckel i Antropiska konsolen.
 
 ### CLI-konfigurering
 
@@ -44,17 +37,17 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt-caching (Anthropic API)
 
-OpenClaw stöder Anthropics funktion för prompt-caching. Detta är **endast för API**; prenumerationsautentisering respekterar inte cache-inställningar.
+OpenClaw stöder Anthropic's prompt caching funktion. Detta är **API-bara**; prenumeration auth hedrar inte cacheinställningar.
 
 ### Konfiguration
 
 Använd parametern `cacheRetention` i din modellkonfig:
 
-| Värde   | Cache-varaktighet | Beskrivning                          |
-| ------- | ----------------- | ------------------------------------ |
-| `none`  | Ingen caching     | Inaktivera prompt-caching            |
-| `short` | 5 minuter         | Standard för API-nyckelautentisering |
-| `long`  | 1 timme           | Utökad cache (kräver beta-flagga)    |
+| Värde   | Cache-varaktighet | Beskrivning                                          |
+| ------- | ----------------- | ---------------------------------------------------- |
+| `none`  | Ingen caching     | Inaktivera prompt-caching                            |
+| `short` | 5 minuter         | Standard för API-nyckelautentisering                 |
+| `long`  | 1 timme           | Utökad cache (kräver beta-flagga) |
 
 ```json5
 {
@@ -72,7 +65,7 @@ Använd parametern `cacheRetention` i din modellkonfig:
 
 ### Standardvärden
 
-När du använder Anthropic API-nyckelautentisering tillämpar OpenClaw automatiskt `cacheRetention: "short"` (5-minuters cache) för alla Anthropic-modeller. Du kan åsidosätta detta genom att uttryckligen ange `cacheRetention` i din konfig.
+Vid användning av Anthropic API-nyckel autentisering tillämpar OpenClaw automatiskt `cacheRetention: "short"` (5-minuters cache) för alla antropiska modeller. Du kan åsidosätta detta genom att uttryckligen sätta `cacheRetention` i din konfiguration.
 
 ### Äldre parameter
 
@@ -91,7 +84,7 @@ OpenClaw inkluderar beta-flaggan `extended-cache-ttl-2025-04-11` för Anthropic 
 
 ### Var får man en setup-token
 
-Setup-tokens skapas av **Claude Code CLI**, inte av Anthropic Console. Du kan köra detta på **vilken maskin som helst**:
+Setup-tokens är skapade av **Claude Code CLI**, inte Anthropic Console. Du kan köra detta på **alla maskiner**:
 
 ```bash
 claude setup-token
@@ -127,21 +120,21 @@ openclaw onboard --auth-choice setup-token
 ## Noteringar
 
 - Generera setup-token med `claude setup-token` och klistra in den, eller kör `openclaw models auth setup-token` på gateway-värden.
-- Om du ser ”OAuth token refresh failed …” för en Claude-prenumeration, autentisera på nytt med en setup-token. Se [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
+- Om du ser “OAuth token update failed …” på en Claude prenumeration, re-auth med en setup-token. Se [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - Autentiseringsdetaljer + regler för återanvändning finns i [/concepts/oauth](/concepts/oauth).
 
 ## Felsökning
 
 **401-fel / token plötsligt ogiltig**
 
-- Autentisering för Claude-prenumeration kan löpa ut eller återkallas. Kör `claude setup-token` igen
-  och klistra in den på **gateway-värden**.
+- Claude prenumeration auth kan upphöra eller återkallas. Återkörd `claude setup-token`
+  och klistra in den i **gateway host**.
 - Om inloggningen för Claude CLI finns på en annan maskin, använd
   `openclaw models auth paste-token --provider anthropic` på gateway-värden.
 
 **Ingen API-nyckel hittades för leverantören ”anthropic”**
 
-- Autentisering är **per agent**. Nya agenter ärver inte huvudagentens nycklar.
+- Auth är **per agent**. Nya agenter ärver inte huvudagentens nycklar.
 - Kör introduktionen igen för den agenten, eller klistra in en setup-token / API-nyckel på
   gateway-värden och verifiera sedan med `openclaw models status`.
 

@@ -1,17 +1,10 @@
 ---
 summary: "Decouverte des nœuds et transports (Bonjour, Tailscale, SSH) pour trouver la passerelle"
 read_when:
-  - "Implementation ou modification de la decouverte/publicite Bonjour"
-  - "Ajustement des modes de connexion distante (direct vs SSH)"
-  - "Conception de la decouverte des nœuds et de l'appairage pour les nœuds distants"
+  - Implementation ou modification de la decouverte/publicite Bonjour
+  - Ajustement des modes de connexion distante (direct vs SSH)
+  - Conception de la decouverte des nœuds et de l'appairage pour les nœuds distants
 title: "Decouverte et transports"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:46Z
 ---
 
 # Decouverte & transports
@@ -49,7 +42,7 @@ Details de protocole :
 
 ## Entrees de decouverte (comment les clients apprennent ou se trouve la passerelle)
 
-### 1) Bonjour / mDNS (LAN uniquement)
+### 1. Bonjour / mDNS (LAN uniquement)
 
 Bonjour est « best‑effort » et ne traverse pas les reseaux. Il est utilise uniquement pour la commodite « meme LAN ».
 
@@ -83,7 +76,7 @@ Desactiver/remplacer :
 - `OPENCLAW_TAILNET_DNS` publie un indice `tailnetDns` (MagicDNS).
 - `OPENCLAW_CLI_PATH` remplace le chemin CLI annonce.
 
-### 2) Tailnet (inter‑reseaux)
+### 2. Tailnet (inter‑reseaux)
 
 Pour des configurations de type Londres/Vienne, Bonjour ne sera d’aucune aide. La cible « directe » recommandee est :
 
@@ -91,7 +84,7 @@ Pour des configurations de type Londres/Vienne, Bonjour ne sera d’aucune aide.
 
 Si la passerelle peut detecter qu’elle s’execute sous Tailscale, elle publie `tailnetDns` comme indice optionnel pour les clients (y compris les balises a grande echelle).
 
-### 3) Cible manuelle / SSH
+### 3. Cible manuelle / SSH
 
 Lorsqu’il n’existe aucune route directe (ou que le direct est desactive), les clients peuvent toujours se connecter via SSH en transferant le port de passerelle en loopback.
 

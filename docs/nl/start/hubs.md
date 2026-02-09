@@ -3,13 +3,6 @@ summary: "Hubs die linken naar elke OpenClaw-documentatie"
 read_when:
   - Je wilt een volledig overzicht van de documentatie
 title: "Docs-hubs"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:52Z
 ---
 
 # Docs-hubs

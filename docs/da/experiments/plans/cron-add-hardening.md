@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Hærdning af Cron Add"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:14Z
 ---
 
 # Hærdning af Cron Add & Skema-tilpasning
 
 ## Kontekst
 
-Nylige gateway-logs viser gentagne `cron.add`-fejl med ugyldige parametre (manglende `sessionTarget`, `wakeMode`, `payload` og forkert formateret `schedule`). Dette indikerer, at mindst én klient (sandsynligvis agentens værktøjskalds-sti) sender indpakkede eller delvist specificerede job-payloads. Derudover er der afvigelser mellem cron-udbyder-enums i TypeScript, gateway-skema, CLI-flag og UI-formtyper, samt et UI-mismatch for `cron.status` (forventer `jobCount`, mens gateway returnerer `jobs`).
+Seneste gateway logs viser gentagne `cron.add` fejl med ugyldige parametre (manglende `sessionTarget`, `wakeMode`, `nyttelast`, og misdannet `tidsplan`). Dette indikerer, at mindst en klient (sandsynligvis agenten værktøj call sti) sender indpakket eller delvist angivne job nyttelast. Separat er der drift mellem cron udbyder optællinger i TypeScript, gateway skema, CLI flag og UI form typer, plus en UI mismatch for `cron. tatus` (forventer `jobCount` mens gateway returnerer `jobs`).
 
 ## Mål
 

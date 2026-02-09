@@ -3,13 +3,6 @@ summary: "Status, Funktionen und Konfiguration der Telegram-Bot-Unterstützung"
 read_when:
   - Arbeiten an Telegram-Funktionen oder Webhooks
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:22Z
 ---
 
 # Telegram (Bot API)
@@ -48,7 +41,7 @@ Minimale Konfiguration:
 
 ## Einrichtung (Schnellpfad)
 
-### 1) Bot-Token erstellen (BotFather)
+### 1. Bot-Token erstellen (BotFather)
 
 1. Öffnen Sie Telegram und chatten Sie mit **@BotFather** ([Direktlink](https://t.me/BotFather)). Bestätigen Sie, dass der Handle exakt `@BotFather` ist.
 2. Führen Sie `/newbot` aus und folgen Sie den Anweisungen (Name + Benutzername mit Endung `bot`).
@@ -59,7 +52,7 @@ Optionale BotFather-Einstellungen:
 - `/setjoingroups` — Hinzufügen des Bots zu Gruppen erlauben/verbieten.
 - `/setprivacy` — Steuern, ob der Bot alle Gruppennachrichten sieht.
 
-### 2) Token konfigurieren (Env oder Konfiguration)
+### 2. Token konfigurieren (Env oder Konfiguration)
 
 Beispiel:
 
@@ -307,7 +300,7 @@ Für konto­spezifische Konfiguration:
 }
 ```
 
-Geltungsbereiche:
+Genehmigen über:
 
 - `off` — Inline-Buttons deaktiviert
 - `dm` — nur DMs (Gruppen-Ziele blockiert)
@@ -355,7 +348,7 @@ Verwenden Sie die globale Einstellung, wenn sich alle Telegram-Bots/Konten gleic
 ### DM-Zugriff
 
 - Standard: `channels.telegram.dmPolicy = "pairing"`. Unbekannte Absender erhalten einen Pairing-Code; Nachrichten werden ignoriert, bis sie genehmigt sind (Codes verfallen nach 1 Stunde).
-- Genehmigen über:
+- Genehmigung über:
   - `openclaw pairing list telegram`
   - `openclaw pairing approve telegram <CODE>`
 - Pairing ist der Standard-Tokenaustausch für Telegram-DMs. Details: [Pairing](/channels/pairing)
@@ -624,7 +617,7 @@ Reasoning-Stream (nur Telegram):
 - Wenn `channels.telegram.streamMode` auf `off` gesetzt ist, ist der Reasoning-Stream deaktiviert.
   Weitere Informationen: [Streaming + Chunking](/concepts/streaming).
 
-## Wiederholungsrichtlinie
+## Retry-Richtlinie
 
 Ausgehende Telegram-API-Aufrufe werden bei transienten Netzwerk-/429-Fehlern mit exponentiellem Backoff und Jitter wiederholt. Konfigurieren Sie dies über `channels.telegram.retry`. Siehe [Retry policy](/concepts/retry).
 
@@ -643,7 +636,7 @@ Telegram-Reaktionen treffen als **separate `message_reaction`-Ereignisse** ein, 
 
 1. Empfang des `message_reaction`-Updates von der Telegram API
 2. Umwandlung in ein **Systemereignis** mit Format: `"Telegram reaction added: {emoji} by {user} on msg {id}"`
-3. Einreihen des Systemereignisses mit demselben **Sitzungs­schlüssel** wie reguläre Nachrichten
+3. Ruft das Systemereignis mit dem **gleichen Sitzungsschlüssel** als reguläre Nachrichten ein
 4. Wenn die nächste Nachricht in dieser Konversation eintrifft, werden Systemereignisse abgearbeitet und dem Kontext des Agenten vorangestellt
 
 Der Agent sieht Reaktionen als **Systembenachrichtigungen** im Konversationsverlauf, nicht als Nachrichten-Metadaten.

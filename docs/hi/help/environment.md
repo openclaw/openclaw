@@ -5,18 +5,11 @@ read_when:
   - आप Gateway में गायब API कुंजियों का डीबग कर रहे हों
   - आप प्रदाता प्रमाणीकरण या परिनियोजन परिवेशों का दस्तावेज़ीकरण कर रहे हों
 title: "पर्यावरण चर"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:17Z
 ---
 
 # पर्यावरण चर
 
-OpenClaw कई स्रोतों से पर्यावरण चर लोड करता है। नियम है **मौजूदा मानों को कभी भी ओवरराइड न करें**।
+OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
 
 ## प्राथमिकता (उच्चतम → न्यूनतम)
 

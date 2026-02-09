@@ -4,20 +4,13 @@ read_when:
   - Du vil have MiniMax-modeller i OpenClaw
   - Du har brug for vejledning til opsætning af MiniMax
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:37Z
 ---
 
 # MiniMax
 
-MiniMax er en AI-virksomhed, der bygger **M2/M2.1**-modelfamilien. Den aktuelle
-kodningsfokuserede udgivelse er **MiniMax M2.1** (23. december 2025), bygget til
-komplekse opgaver i den virkelige verden.
+MiniMax er en AI virksomhed, der bygger **M2/M2.1** modelfamilien. Den nuværende
+kodningfokuserede udgivelse er **MiniMax M2.1** (23. december 2025), bygget til
+virkelige verden komplekse opgaver.
 
 Kilde: [MiniMax M2.1 release note](https://www.minimax.io/news/minimax-m21)
 
@@ -38,9 +31,9 @@ MiniMax fremhæver disse forbedringer i M2.1:
 
 - **Hastighed:** Lightning er den “hurtige” variant i MiniMax’ prisdokumentation.
 - **Omkostning:** Priserne viser samme input-omkostning, men Lightning har højere output-omkostning.
-- **Routing af coding plan:** Lightning-backenden er ikke direkte tilgængelig på MiniMax’
-  coding plan. MiniMax auto-router de fleste forespørgsler til Lightning, men falder tilbage til
-  den almindelige M2.1-backend under trafikspidser.
+- **Kodningsplan routing:** The Lightning back-end er ikke direkte tilgængelig på MiniMax
+  kodningsplanen. MiniMax auto-ruter de fleste anmodninger til Lightning, men falder tilbage til
+  almindelige M2.1 back-end under trafik pigge.
 
 ## Vælg en opsætning
 
@@ -126,8 +119,8 @@ Konfigurér via CLI:
 ### Valgfrit: Lokal via LM Studio (manuel)
 
 **Bedst til:** lokal inferens med LM Studio.
-Vi har set stærke resultater med MiniMax M2.1 på kraftigt hardware (f.eks. en
-desktop/server) ved brug af LM Studios lokale server.
+Vi har set stærke resultater med MiniMax M2.1 på kraftfuld hardware (f.eks. en
+desktop/server) ved hjælp af LM Studios lokale server.
 
 Konfigurér manuelt via `openclaw.json`:
 
@@ -194,9 +187,9 @@ Brug den interaktive konfigurationsguide til at sætte MiniMax op uden at redige
 
 ### “Unknown model: minimax/MiniMax-M2.1”
 
-Dette betyder typisk, at **MiniMax-udbyderen ikke er konfigureret** (ingen udbyderpost
-og ingen MiniMax auth-profil/miljønøgle fundet). En rettelse for denne detektion er i
-**2026.1.12** (ikke udgivet på tidspunktet for skrivning). Ret ved at:
+Dette betyder normalt, at **MiniMax udbyder ikke er konfigureret** (ingen udbyder post
+og ingen MiniMax auth profil/env nøgle fundet). En rettelse til denne detektion er i
+**2026.1.12** (ikke frigivet på skrivetidspunktet). Ret af:
 
 - Opgradere til **2026.1.12** (eller kør fra kilde `main`), og genstart derefter gateway.
 - Køre `openclaw configure` og vælge **MiniMax M2.1**, eller

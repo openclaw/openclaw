@@ -3,18 +3,11 @@ summary: "Katayuan ng suporta ng Zalo bot, mga kakayahan, at konpigurasyon"
 read_when:
   - Gumagawa sa mga feature o webhook ng Zalo
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Zalo (Bot API)
 
-Katayuan: experimental. Direct messages lamang; paparating ang groups ayon sa Zalo docs.
+Status: experimental. Direct messages only; groups coming soon per Zalo docs.
 
 ## Kailangan na plugin
 
@@ -52,8 +45,8 @@ Minimal na config:
 
 ## Ano ito
 
-Ang Zalo ay isang messaging app na nakatuon sa Vietnam; pinapahintulutan ng Bot API nito ang Gateway na magpatakbo ng bot para sa 1:1 na pag-uusap.
-Angkop ito para sa support o notifications kung saan gusto mo ng deterministic na routing pabalik sa Zalo.
+Zalo is a Vietnam-focused messaging app; its Bot API lets the Gateway run a bot for 1:1 conversations.
+It is a good fit for support or notifications where you want deterministic routing back to Zalo.
 
 - Isang Zalo Bot API channel na pagmamay-ari ng Gateway.
 - Deterministic routing: bumabalik ang mga reply sa Zalo; hindi pumipili ng channel ang model.
@@ -62,7 +55,7 @@ Angkop ito para sa support o notifications kung saan gusto mo ng deterministic n
 
 ## Setup (mabilis na ruta)
 
-### 1) Gumawa ng bot token (Zalo Bot Platform)
+### 1. Gumawa ng bot token (Zalo Bot Platform)
 
 1. Pumunta sa [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) at mag-sign in.
 2. Gumawa ng bagong bot at i-configure ang mga setting nito.
@@ -88,8 +81,8 @@ Opsyon sa env: `ZALO_BOT_TOKEN=...` (gumagana lamang para sa default account).
 
 Suporta sa multi-account: gamitin ang `channels.zalo.accounts` na may per-account na mga token at opsyonal na `name`.
 
-3. I-restart ang Gateway. Nagsisimula ang Zalo kapag naresolba ang token (env o config).
-4. Ang DM access ay pairing bilang default. Aprubahan ang code kapag unang nakontak ang bot.
+3. I-restart ang Gateway. Zalo starts when a token is resolved (env or config).
+4. DM access defaults to pairing. Approve the code when the bot is first contacted.
 
 ## Paano ito gumagana (behavior)
 
@@ -107,11 +100,11 @@ Suporta sa multi-account: gamitin ang `channels.zalo.accounts` na may per-accoun
 
 ### DM access
 
-- Default: `channels.zalo.dmPolicy = "pairing"`. Ang mga hindi kilalang sender ay tumatanggap ng pairing code; binabalewala ang mga mensahe hanggang maaprubahan (nag-e-expire ang mga code pagkalipas ng 1 oras).
+- Default: `channels.zalo.dmPolicy = "pairing"`. Ang mga hindi kilalang sender ay tumatanggap ng pairing code; ini-ignore ang mga mensahe hanggang maaprubahan (mag-e-expire ang mga code pagkalipas ng 1 oras).
 - Aprubahan sa pamamagitan ng:
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- Ang pairing ang default na token exchange. Mga detalye: [Pairing](/channels/pairing)
+- Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - Tumatanggap ang `channels.zalo.allowFrom` ng numeric user IDs (walang available na username lookup).
 
 ## Long-polling vs webhook
@@ -134,16 +127,16 @@ Suporta sa multi-account: gamitin ang `channels.zalo.accounts` na may per-accoun
 
 ## Mga kakayahan
 
-| Feature         | Katayuan                          |
-| --------------- | --------------------------------- |
-| Direct messages | ✅ Suportado                      |
-| Groups          | ❌ Paparating (ayon sa Zalo docs) |
-| Media (images)  | ✅ Suportado                      |
-| Reactions       | ❌ Hindi suportado                |
-| Threads         | ❌ Hindi suportado                |
-| Polls           | ❌ Hindi suportado                |
-| Native commands | ❌ Hindi suportado                |
-| Streaming       | ⚠️ Naka-block (2000 char limit)   |
+| Feature                           | Katayuan                                            |
+| --------------------------------- | --------------------------------------------------- |
+| Direct messages                   | ✅ Suportado                                         |
+| Groups                            | ❌ Paparating (ayon sa Zalo docs) |
+| Media (images) | ✅ Suportado                                         |
+| Reactions                         | ❌ Hindi suportado                                   |
+| Threads                           | ❌ Hindi suportado                                   |
+| Polls                             | ❌ Hindi suportado                                   |
+| Native commands                   | ❌ Hindi suportado                                   |
+| Streaming                         | ⚠️ Naka-block (2000 char limit)  |
 
 ## Mga target ng delivery (CLI/cron)
 
@@ -175,7 +168,7 @@ Mga opsyon ng provider:
 - `channels.zalo.botToken`: bot token mula sa Zalo Bot Platform.
 - `channels.zalo.tokenFile`: basahin ang token mula sa file path.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.zalo.allowFrom`: DM allowlist (user IDs). Kinakailangan ng `open` ang `"*"`. Hihingi ang wizard ng mga numeric ID.
+- `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
 - `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 5).
 - `channels.zalo.webhookUrl`: i-enable ang webhook mode (kailangan ang HTTPS).
 - `channels.zalo.webhookSecret`: webhook secret (8–256 chars).
@@ -187,10 +180,10 @@ Mga opsyon sa multi-account:
 - `channels.zalo.accounts.<id>.botToken`: per-account token.
 - `channels.zalo.accounts.<id>.tokenFile`: per-account token file.
 - `channels.zalo.accounts.<id>.name`: display name.
-- `channels.zalo.accounts.<id>.enabled`: i-enable/i-disable ang account.
+- `channels.zalo.accounts.<id>.enabled`: enable/disable account.
 - `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.
 - `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist.
 - `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL.
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
-- `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.
-- `channels.zalo.accounts.<id>.proxy`: per-account proxy URL.
+- `channels.zalo.accounts.<id>1. `.webhookPath\`: webhook path kada account.
+- 2. `channels.zalo.accounts.<id>`3. `.proxy`: proxy URL kada account.

@@ -4,13 +4,6 @@ read_when:
   - Thêm hỗ trợ node vị trí hoặc UI quyền
   - Thiết kế luồng vị trí nền + push
 title: "Lệnh vị trí"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:31Z
 ---
 
 # Lệnh vị trí (nodes)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## Vì sao dùng bộ chọn (không chỉ là công tắc)
 
-Quyền của hệ điều hành có nhiều mức. Ta có thể hiển thị bộ chọn trong ứng dụng, nhưng hệ điều hành vẫn quyết định cấp quyền thực tế.
+Quyền hệ điều hành có nhiều cấp độ. Chúng tôi có thể hiển thị bộ chọn trong ứng dụng, nhưng hệ điều hành vẫn quyết định cấp quyền thực tế.
 
-- iOS/macOS: người dùng có thể chọn **Khi đang dùng** hoặc **Luôn luôn** trong các hộp thoại/cài đặt hệ thống. Ứng dụng có thể yêu cầu nâng cấp, nhưng hệ điều hành có thể yêu cầu vào Cài đặt.
+- iOS/macOS: người dùng có thể chọn **While Using** hoặc **Always** trong các lời nhắc/Settings của hệ thống. Ứng dụng có thể yêu cầu nâng cấp, nhưng hệ điều hành có thể yêu cầu vào Settings.
 - Android: vị trí nền là một quyền riêng; trên Android 10+ thường cần một luồng qua Cài đặt.
 - Vị trí chính xác là một quyền riêng (iOS 14+ “Precise”, Android “fine” vs “coarse”).
 
@@ -47,7 +40,7 @@ Hành vi UI:
 
 ## Ánh xạ quyền (node.permissions)
 
-Không bắt buộc. Node macOS báo cáo `location` qua bản đồ quyền; iOS/Android có thể không có.
+Tùy chọn. macOS node reports `location` via the permissions map; iOS/Android may omit it.
 
 ## Lệnh: `location.get`
 
@@ -103,7 +96,7 @@ Luồng kích hoạt bằng push (tương lai):
 
 Ghi chú:
 
-- iOS: cần quyền Luôn luôn + chế độ vị trí nền. Silent push có thể bị giới hạn; dự kiến lỗi không thường xuyên.
+- iOS: Always permission + background location mode required. Silent push may be throttled; expect intermittent failures.
 - Android: vị trí nền có thể yêu cầu dịch vụ tiền cảnh; nếu không, dự kiến sẽ bị từ chối.
 
 ## Tích hợp mô hình/công cụ
@@ -116,5 +109,5 @@ Ghi chú:
 
 - Tắt: “Chia sẻ vị trí đang bị tắt.”
 - Khi đang dùng: “Chỉ khi OpenClaw đang mở.”
-- Luôn luôn: “Cho phép vị trí nền. Yêu cầu quyền hệ thống.”
-- Chính xác: “Dùng vị trí GPS chính xác. Tắt để chia sẻ vị trí xấp xỉ.”
+- Always: “Cho phép vị trí nền. Yêu cầu quyền hệ thống.”
+- Precise: “Sử dụng vị trí GPS chính xác. Tắt để chia sẻ vị trí xấp xỉ.”

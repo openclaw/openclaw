@@ -4,13 +4,6 @@ read_when:
   - Você quer entender a compactação automática e /compact
   - Você está depurando sessões longas que atingem limites de contexto
 title: "Compactação"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:29Z
 ---
 
 # Janela de Contexto & Compactação

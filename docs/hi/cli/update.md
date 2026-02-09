@@ -4,13 +4,6 @@ read_when:
   - आप किसी source checkout को सुरक्षित रूप से अपडेट करना चाहते हैं
   - आपको `--update` संक्षिप्त व्यवहार को समझने की आवश्यकता है
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:08Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,7 @@ Options:
 
 ## `update wizard`
 
-इंटरैक्टिव फ़्लो, जिसमें अपडेट चैनल चुनना और अपडेट के बाद Gateway को पुनःआरंभ करना है या नहीं, इसकी पुष्टि शामिल है
-(डिफ़ॉल्ट पुनःआरंभ है)। यदि आप git checkout के बिना `dev` चुनते हैं, तो
-यह एक बनाने की पेशकश करता है।
+17. अपडेट चैनल चुनने और अपडेट के बाद Gateway को रीस्टार्ट करना है या नहीं इसकी पुष्टि करने के लिए इंटरैक्टिव फ़्लो (डिफ़ॉल्ट रीस्टार्ट है)। 18. यदि आप git checkout के बिना `dev` चुनते हैं, तो यह एक बनाने की पेशकश करता है।
 
 ## What it does
 

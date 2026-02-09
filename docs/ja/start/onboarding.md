@@ -5,36 +5,29 @@ read_when:
   - 認証または ID セットアップの実装時
 title: "オンボーディング（macOS アプリ）"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:15Z
 ---
 
 # オンボーディング（macOS アプリ）
 
-本ドキュメントでは、**現在**の初回オンボーディングフローについて説明します。目標は、スムーズな「day 0」体験です。Gateway（ゲートウェイ）の実行場所を選択し、認証を接続し、ウィザードを実行して、エージェントが自己ブートストラップできるようにします。
+このドキュメントでは、最初に実行するオンボーディングフローについて説明します。 本ドキュメントでは、**現在**の初回オンボーディングフローについて説明します。目標は、スムーズな「day 0」体験です。Gateway（ゲートウェイ）の実行場所を選択し、認証を接続し、ウィザードを実行して、エージェントが自己ブートストラップできるようにします。
 
 <Steps>
-<Step title="macOS の警告を承認">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="ローカルネットワークの検出を承認">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="ようこそとセキュリティに関する注意">
+<Step title="Welcome and security notice">
 <Frame caption="表示されるセキュリティに関する注意を読み、内容に応じて判断してください">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="ローカル vs リモート">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -46,13 +39,17 @@ x-i18n:
 - **Configure later:** セットアップをスキップし、アプリを未設定のままにします。
 
 <Tip>
+
 **Gateway 認証のヒント:**
 - ウィザードは、local loopback の場合でも **トークン** を生成するようになりました。そのため、ローカルの WS クライアントは認証が必要です。
 - 認証を無効化すると、任意のローカルプロセスが接続できてしまいます。完全に信頼できるマシンでのみ使用してください。
 - 複数マシンからのアクセスや non‑loopback バインドには **トークン** を使用してください。
+
+- authを無効にすると、どのローカルプロセスでも接続できます。完全に信頼されたマシンでのみ使用できます。
+- 複数のマシンにアクセスするには、**トークン** を使用します。
 </Tip>
 </Step>
-<Step title="権限">
+<Step title="Permissions">
 <Frame caption="OpenClaw に付与する権限を選択します">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -73,7 +70,11 @@ x-i18n:
   <Info>このステップは任意です</Info>
   アプリは、npm/pnpm を通じてグローバルな `openclaw` CLI をインストールできます。これにより、ターミナルのワークフローや launchd タスクがすぐに利用可能になります。
 </Step>
-<Step title="オンボーディングチャット（専用セッション）">
+<Step title="Onboarding Chat (dedicated session)">
+  
   セットアップ後、アプリは専用のオンボーディングチャットセッションを開き、エージェントが自己紹介を行い、次のステップを案内します。これにより、初回実行時のガイダンスを通常の会話から分離できます。初回のエージェント実行時にゲートウェイ ホストで何が起こるかについては、[Bootstrapping](/start/bootstrapping) を参照してください。
+ これにより、通常の会話とは別の
+  ガイダンスが維持されます。 11. 初回エージェント実行時にゲートウェイホストで何が起こるかについては、
+[Bootstrapping](/start/bootstrapping) を参照してください。
 </Step>
 </Steps>

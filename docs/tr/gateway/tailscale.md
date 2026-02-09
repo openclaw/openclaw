@@ -4,13 +4,6 @@ read_when:
   - Gateway Kontrol UI’sini localhost dışına açma
   - Tailnet veya herkese açık pano erişimini otomatikleştirme
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:25Z
 ---
 
 # Tailscale (Gateway panosu)
@@ -23,7 +16,7 @@ OpenClaw, Gateway panosu ve WebSocket portu için Tailscale **Serve** (tailnet) 
 - `funnel`: `tailscale funnel` üzerinden herkese açık HTTPS. OpenClaw paylaşılan bir parola gerektirir.
 - `off`: Varsayılan (Tailscale otomasyonu yok).
 
-## Kimlik Doğrulama
+## Kimlik doğrulama
 
 El sıkışmayı denetlemek için `gateway.auth.mode` değerini ayarlayın:
 

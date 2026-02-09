@@ -3,13 +3,6 @@ summary: "Quando o OpenClaw mostra indicadores de digitação e como ajustá-los
 read_when:
   - Alterando o comportamento ou os padrões do indicador de digitação
 title: "Indicadores de digitação"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:39Z
 ---
 
 # Indicadores de digitação

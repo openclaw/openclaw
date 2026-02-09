@@ -2,13 +2,6 @@
 summary: "Linux’te OpenClaw tarayıcı denetimi için Chrome/Brave/Edge/Chromium CDP başlatma sorunlarını giderin"
 read_when: "Linux’te tarayıcı denetimi başarısız olduğunda, özellikle snap Chromium ile"
 title: "Tarayıcı Sorun Giderme"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:46Z
 ---
 
 # Tarayıcı Sorun Giderme (Linux)
@@ -102,7 +95,7 @@ WantedBy=default.target
 
 Şununla etkinleştirin: `systemctl --user enable --now openclaw-browser.service`
 
-### Tarayıcının Çalıştığını Doğrulama
+### 12. Tarayıcının Çalıştığını Doğrulama
 
 Durumu kontrol edin:
 
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Yapılandırma Referansı
 
-| Seçenek                  | Açıklama                                                                         | Varsayılan                                                                 |
-| ------------------------ | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `browser.enabled`        | Tarayıcı denetimini etkinleştir                                                  | `true`                                                                     |
+| Seçenek                  | Açıklama                                                                                            | Varsayılan                                                                                    |
+| ------------------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Tarayıcı denetimini etkinleştir                                                                     | `true`                                                                                        |
 | `browser.executablePath` | Chromium tabanlı bir tarayıcı ikili dosyasının yolu (Chrome/Brave/Edge/Chromium) | otomatik algılanır (Chromium tabanlıysa varsayılan tarayıcıyı tercih eder) |
-| `browser.headless`       | GUI olmadan çalıştır                                                             | `false`                                                                    |
-| `browser.noSandbox`      | `--no-sandbox` bayrağını ekle (bazı Linux kurulumları için gereklidir)           | `false`                                                                    |
-| `browser.attachOnly`     | Tarayıcıyı başlatma, yalnızca mevcut olana bağlan                                | `false`                                                                    |
-| `browser.cdpPort`        | Chrome DevTools Protocol portu                                                   | `18800`                                                                    |
+| `browser.headless`       | GUI olmadan çalıştır                                                                                | `false`                                                                                       |
+| `browser.noSandbox`      | `--no-sandbox` bayrağını ekle (bazı Linux kurulumları için gereklidir)           | `false`                                                                                       |
+| `browser.attachOnly`     | Tarayıcıyı başlatma, yalnızca mevcut olana bağlan                                                   | `false`                                                                                       |
+| `browser.cdpPort`        | Chrome DevTools Protocol portu                                                                      | `18800`                                                                                       |
 
 ### Sorun: "Chrome uzantı aktarımı çalışıyor, ancak hiçbir sekme bağlı değil"
 

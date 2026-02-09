@@ -3,13 +3,6 @@ summary: "Поведение и конфигурация обработки гр
 read_when:
   - Изменение правил групповых сообщений или упоминаний
 title: "Групповые сообщения"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:17Z
 ---
 
 # Групповые сообщения (веб-канал WhatsApp)

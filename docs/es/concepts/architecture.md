@@ -3,13 +3,6 @@ summary: "Arquitectura del Gateway WebSocket, componentes y flujos de clientes"
 read_when:
   - Al trabajar en el protocolo del Gateway, clientes o transportes
 title: "Arquitectura del Gateway"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:11Z
 ---
 
 # Arquitectura del Gateway
@@ -116,6 +109,7 @@ Detalles: [Protocolo del Gateway](/gateway/protocol), [Emparejamiento](/channels
 ## Acceso remoto
 
 - Preferido: Tailscale o VPN.
+
 - Alternativa: túnel SSH
 
   ```bash
@@ -123,6 +117,7 @@ Detalles: [Protocolo del Gateway](/gateway/protocol), [Emparejamiento](/channels
   ```
 
 - El mismo handshake + token de autenticación aplican sobre el túnel.
+
 - TLS + fijación opcional pueden habilitarse para WS en configuraciones remotas.
 
 ## Instantánea de operaciones

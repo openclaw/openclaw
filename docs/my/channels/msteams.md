@@ -3,13 +3,6 @@ summary: "Microsoft Teams ဘော့တ် ပံ့ပိုးမှုအ�
 read_when:
   - MS Teams ချန်နယ် အင်္ဂါရပ်များအပေါ် အလုပ်လုပ်နေစဉ်
 title: "Microsoft Teams"
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:24Z
 ---
 
 # Microsoft Teams (plugin)
@@ -18,13 +11,13 @@ x-i18n:
 
 Updated: 2026-01-21
 
-Status: စာသား + DM တွင် attachment များကို ပံ့ပိုးထားသည်; ချန်နယ်/အုပ်စုတွင် ဖိုင်ပို့ခြင်းအတွက် `sharePointSiteId` + Graph ခွင့်ပြုချက်များ လိုအပ်သည် ( [Sending files in group chats](#sending-files-in-group-chats) ကိုကြည့်ပါ )။ Poll များကို Adaptive Cards ဖြင့် ပို့သည်။
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
 
 ## Plugin လိုအပ်သည်
 
 Microsoft Teams သည် plugin အဖြစ် ပို့ဆောင်ပေးထားပြီး core install တွင် မပါဝင်ပါ။
 
-**Breaking change (2026.1.15):** MS Teams ကို core မှ ခွဲထုတ်ထားပါသည်။ အသုံးပြုမည်ဆိုပါက plugin ကို ထည့်သွင်းရပါမည်။
+**Breaking change (2026.1.15):** MS Teams moved out of core. If you use it, you must install the plugin.
 
 အကြောင်းပြချက်: core install ကို ပိုမို ပေါ့ပါးစေပြီး MS Teams အပေါ် မူတည်သော dependency များကို သီးခြားအလိုက် အပ်ဒိတ်လုပ်နိုင်ရန် ဖြစ်သည်။
 
@@ -69,7 +62,7 @@ Minimal config:
 }
 ```
 
-မှတ်ချက်: group chats များကို မူလအနေဖြင့် ပိတ်ထားပါသည် (`channels.msteams.groupPolicy: "allowlist"`)။ group reply ခွင့်ပြုလိုပါက `channels.msteams.groupAllowFrom` ကို သတ်မှတ်ပါ (သို့မဟုတ် အဖွဲ့ဝင်အားလုံးကို ခွင့်ပြုရန် `groupPolicy: "open"` ကို အသုံးပြုပါ၊ mention-gated ဖြစ်သည်)။
+Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
 
 ## Goals
 
@@ -93,12 +86,12 @@ Minimal config:
 
 **DM access**
 
-- မူလ: `channels.msteams.dmPolicy = "pairing"`။ မသိသော ပို့သူများကို အတည်ပြုမချင်း လျစ်လျူရှုပါသည်။
-- `channels.msteams.allowFrom` သည် AAD object ID များ၊ UPN များ သို့မဟုတ် display name များကို လက်ခံပါသည်။ wizard သည် credential ခွင့်ပြုပါက Microsoft Graph မှတဆင့် name များကို ID များသို့ ဖြေရှင်းပါသည်။
+- မူလ: `channels.msteams.dmPolicy = "pairing"`။ Unknown senders are ignored until approved.
+- `channels.msteams.allowFrom` accepts AAD object IDs, UPNs, or display names. The wizard resolves names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
-- မူလ: `channels.msteams.groupPolicy = "allowlist"` (`groupAllowFrom` ထည့်မထားပါက ပိတ်ထားသည်)။ မသတ်မှတ်ထားပါက မူလကို အစားထိုးရန် `channels.defaults.groupPolicy` ကို အသုံးပြုပါ။
+- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
 - `channels.msteams.groupAllowFrom` သည် group chats/channels တွင် trigger လုပ်နိုင်သော ပို့သူများကို ထိန်းချုပ်ပါသည် (`channels.msteams.allowFrom` သို့ fallback လုပ်သည်)။
 - အဖွဲ့ဝင်အားလုံးကို ခွင့်ပြုရန် `groupPolicy: "open"` ကို သတ်မှတ်ပါ (မူလအားဖြင့် mention-gated ဖြစ်နေဆဲ)။
 - **မည်သည့် channel မဆို မခွင့်ပြုရန်** `channels.msteams.groupPolicy: "disabled"` ကို သတ်မှတ်ပါ။
@@ -162,16 +155,16 @@ OpenClaw ကို ဖွဲ့စည်းမပြင်ဆင်မီ Azure 
 1. [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot) သို့ သွားပါ။
 2. **Basics** tab ကို ဖြည့်ပါ:
 
-   | Field              | Value                                                        |
-   | ------------------ | ------------------------------------------------------------ |
+   | Field              | Value                                                                           |
+   | ------------------ | ------------------------------------------------------------------------------- |
    | **Bot handle**     | သင့် bot အမည်၊ ဥပမာ `openclaw-msteams` (ထူးခြားရမည်)         |
-   | **Subscription**   | သင့် Azure subscription ကို ရွေးပါ                           |
-   | **Resource group** | အသစ်ဖန်တီးရန် သို့မဟုတ် ရှိပြီးသားကို အသုံးပြုပါ             |
-   | **Pricing tier**   | dev/testing အတွက် **Free**                                   |
+   | **Subscription**   | သင့် Azure subscription ကို ရွေးပါ                                              |
+   | **Resource group** | အသစ်ဖန်တီးရန် သို့မဟုတ် ရှိပြီးသားကို အသုံးပြုပါ                                |
+   | **Pricing tier**   | dev/testing အတွက် **Free**                                                      |
    | **Type of App**    | **Single Tenant** (အကြံပြုသည် - အောက်ပါ မှတ်ချက်ကို ကြည့်ပါ) |
-   | **Creation type**  | **Create new Microsoft App ID**                              |
+   | **Creation type**  | **Create new Microsoft App ID**                                                 |
 
-> **Deprecation notice:** multi-tenant bot အသစ်များ ဖန်တီးခြင်းကို 2025-07-31 နောက်ပိုင်းတွင် ရပ်ဆိုင်းထားပါသည်။ bot အသစ်များအတွက် **Single Tenant** ကို အသုံးပြုပါ။
+> **Deprecation notice:** Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single Tenant** for new bots.
 
 3. **Review + create** → **Create** ကို နှိပ်ပါ (၁–၂ မိနစ်ခန့် စောင့်ပါ)
 
@@ -198,7 +191,7 @@ OpenClaw ကို ဖွဲ့စည်းမပြင်ဆင်မီ Azure 
 
 ## Local Development (Tunneling)
 
-Teams သည် `localhost` ကို မရောက်နိုင်ပါ။ local development အတွက် tunnel ကို အသုံးပြုပါ:
+Teams can't reach `localhost`. Use a tunnel for local development:
 
 **Option A: ngrok**
 
@@ -278,6 +271,7 @@ JSON manifest ကို လက်ဖြင့် ပြင်ဆင်ခြင�
    ```
 
    config key များအစား environment variables ကိုလည်း အသုံးပြုနိုင်ပါသည်:
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -292,12 +286,12 @@ JSON manifest ကို လက်ဖြင့် ပြင်ဆင်ခြင�
 ## History context
 
 - `channels.msteams.historyLimit` သည် မကြာသေးမီ ချန်နယ်/အုပ်စု မက်ဆေ့ခ်ျ မည်မျှကို prompt ထဲသို့ ထည့်သွင်းမည်ကို ထိန်းချုပ်ပါသည်။
-- `messages.groupChat.historyLimit` သို့ fallback လုပ်ပါသည်။ ပိတ်ရန် `0` ကို သတ်မှတ်ပါ (မူလ 50)။
-- DM history ကို `channels.msteams.dmHistoryLimit` (user turns) ဖြင့် ကန့်သတ်နိုင်ပါသည်။ per-user override များ: `channels.msteams.dms["<user_id>"].historyLimit`။
+- Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
+- DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Current Teams RSC Permissions (Manifest)
 
-ဤသည်တို့သည် Teams app manifest ထဲရှိ **resourceSpecific permissions** များဖြစ်ပါသည်။ app ထည့်သွင်းထားသော team/chat အတွင်းသာ သက်ရောက်ပါသည်။
+These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team/chat where the app is installed.
 
 **Channels (team scope) အတွက်:**
 
@@ -315,7 +309,7 @@ JSON manifest ကို လက်ဖြင့် ပြင်ဆင်ခြင�
 
 ## Example Teams Manifest (redacted)
 
-လိုအပ်သော field များ ပါဝင်သည့် အနည်းဆုံး တရားဝင် ဥပမာ။ ID နှင့် URL များကို အစားထိုးပါ။
+Minimal, valid example with the required fields. Replace IDs and URLs.
 
 ```json
 {
@@ -410,14 +404,14 @@ Teams app တစ်ခုကို အပ်ဒိတ်လုပ်ရန် (�
 
 ### RSC နှင့် Graph API နှိုင်းယှဉ်မှု
 
-| Capability              | RSC Permissions     | Graph API                         |
-| ----------------------- | ------------------- | --------------------------------- |
-| **Real-time messages**  | Yes (webhook ဖြင့်) | No (polling သာ)                   |
-| **Historical messages** | No                  | Yes (history query လုပ်နိုင်)     |
-| **Setup complexity**    | App manifest သာ     | Admin consent + token flow လိုအပ် |
-| **Works offline**       | No (လည်ပတ်နေရမည်)   | Yes (မည်သည့်အချိန်မဆို query)     |
+| Capability              | RSC Permissions                        | Graph API                                        |
+| ----------------------- | -------------------------------------- | ------------------------------------------------ |
+| **Real-time messages**  | Yes (webhook ဖြင့်) | No (polling သာ)               |
+| **Historical messages** | No                                     | Yes (history query လုပ်နိုင်) |
+| **Setup complexity**    | App manifest သာ                        | Admin consent + token flow လိုအပ်                |
+| **Works offline**       | No (လည်ပတ်နေရမည်)   | Yes (မည်သည့်အချိန်မဆို query) |
 
-**အကျဉ်းချုပ်:** RSC သည် real-time နားထောင်ရန်အတွက်၊ Graph API သည် history access အတွက် ဖြစ်သည်။ offline အချိန်တွင် လွတ်သွားသော မက်ဆေ့ခ်ျများကို ပြန်ရယူလိုပါက Graph API နှင့် `ChannelMessage.Read.All` (admin consent လိုအပ်) ကို အသုံးပြုရပါမည်။
+**Bottom line:** RSC is for real-time listening; Graph API is for historical access. For catching up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
 
 ## Graph-enabled media + history (channels အတွက် လိုအပ်)
 
@@ -434,7 +428,7 @@ Teams app တစ်ခုကို အပ်ဒိတ်လုပ်ရန် (�
 
 ### Webhook timeouts
 
-Teams သည် HTTP webhook ဖြင့် မက်ဆေ့ခ်ျများကို ပို့ပါသည်။ processing အချိန်ကြာလွန်းပါက (ဥပမာ LLM response နှေးကွေးမှု):
+Teams delivers messages via HTTP webhook. If processing takes too long (e.g., slow LLM responses), you may see:
 
 - Gateway timeout များ
 - Teams မှ မက်ဆေ့ခ်ျကို ပြန်လည်ကြိုးစားပို့ခြင်း (duplicate ဖြစ်နိုင်)
@@ -459,21 +453,21 @@ Key setting များ (`/gateway/configuration` တွင် shared channel p
 - `channels.msteams.webhook.port` (မူလ `3978`)
 - `channels.msteams.webhook.path` (မူလ `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (မူလ: pairing)
-- `channels.msteams.allowFrom`: DM များအတွက် allowlist (AAD object ID, UPN, သို့မဟုတ် display name)။
+- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.textChunkLimit`: outbound text chunk အရွယ်အစား။
 - `channels.msteams.chunkMode`: `length` (မူလ) သို့မဟုတ် `newline` ကို အသုံးပြု၍ အလျားအလိုက် ခွဲမပြုမီ blank line များဖြင့် ခွဲပါ။
 - `channels.msteams.mediaAllowHosts`: inbound attachment host များအတွက် allowlist (မူလ Microsoft/Teams domain များ)။
 - `channels.msteams.mediaAuthAllowHosts`: media retry များတွင် Authorization header တွဲပို့ရန် allowlist (မူလ Graph + Bot Framework host များ)။
 - `channels.msteams.requireMention`: channels/groups တွင် @mention လိုအပ်စေခြင်း (မူလ true)။
 - `channels.msteams.replyStyle`: `thread | top-level` ( [Reply Style](#reply-style-threads-vs-posts) ကိုကြည့်ပါ)။
-- `channels.msteams.teams.<teamId>.replyStyle`: per-team override။
-- `channels.msteams.teams.<teamId>.requireMention`: per-team override။
-- `channels.msteams.teams.<teamId>.tools`: per-team tool policy override မူလများ (`allow`/`deny`/`alsoAllow`)။
-- `channels.msteams.teams.<teamId>.toolsBySender`: per-team per-sender tool policy override မူလများ (`"*"` wildcard ပံ့ပိုး)။
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override။
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override။
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy override များ (`allow`/`deny`/`alsoAllow`)။
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy override များ (`"*"` wildcard ပံ့ပိုး)။
+- `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
+- `channels.msteams.teams.<teamId>.requireMention`: per-team override.
+- `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
+- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: ချန်နယ်တစ်ခုချင်းစီအလိုက် override ပြုလုပ်နိုင်သည်။
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: ချန်နယ်တစ်ခုချင်းစီအလိုက် override ပြုလုပ်နိုင်သည်။
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: ချန်နယ်တစ်ခုချင်းစီအလိုက် tool policy override များ (`allow`/`deny`/`alsoAllow`)။
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: ချန်နယ်တစ်ခုချင်းစီအလိုက် ပို့သူတစ်ဦးချင်းစီအတွက် tool policy override များ (`"*"` wildcard ကိုထောက်ပံ့သည်)။
 - `channels.msteams.sharePointSiteId`: group chats/channels တွင် ဖိုင် upload အတွက် SharePoint site ID ( [Sending files in group chats](#sending-files-in-group-chats) ကိုကြည့်ပါ )။
 
 ## Routing & Sessions
@@ -488,12 +482,12 @@ Key setting များ (`/gateway/configuration` တွင် shared channel p
 
 Teams သည် underlying data model တူညီသော်လည်း channel UI style နှစ်မျိုးကို မကြာသေးမီက မိတ်ဆက်ခဲ့ပါသည်:
 
-| Style                    | ဖော်ပြချက်                                                     | အကြံပြုထားသော `replyStyle` |
-| ------------------------ | -------------------------------------------------------------- | -------------------------- |
-| **Posts** (classic)      | မက်ဆေ့ခ်ျများကို card အဖြစ် ပြပြီး အောက်တွင် reply thread များ | `thread` (မူလ)             |
-| **Threads** (Slack-like) | Slack ကဲ့သို့ မက်ဆေ့ခ်ျများ တန်းတန်းစီစီ စီးဆင်းပြသ            | `top-level`                |
+| Style                                       | ဖော်ပြချက်                                                     | အကြံပြုထားသော `replyStyle`        |
+| ------------------------------------------- | -------------------------------------------------------------- | --------------------------------- |
+| **Posts** (classic)      | မက်ဆေ့ခ်ျများကို card အဖြစ် ပြပြီး အောက်တွင် reply thread များ | `thread` (မူလ) |
+| **Threads** (Slack-like) | Slack ကဲ့သို့ မက်ဆေ့ခ်ျများ တန်းတန်းစီစီ စီးဆင်းပြသ            | `top-level`                       |
 
-**ပြဿနာ:** Teams API သည် channel တစ်ခုက မည်သည့် UI style ကို သုံးထားသည်ကို မဖော်ပြပေးပါ။ `replyStyle` ကို မှားသုံးပါက:
+**ပြဿနာ:** Teams API သည် ချန်နယ်တစ်ခုက ဘယ် UI style ကို သုံးထားသည်ကို မဖော်ပြပေးပါ။ `replyStyle` ကို မမှန်ကန်စွာ အသုံးပြုပါက:
 
 - Threads-style channel တွင် `thread` → reply များ ထူးဆန်းစွာ nested ဖြစ်
 - Posts-style channel တွင် `top-level` → reply များသည် thread အစား top-level post အဖြစ် ထွက်လာ
@@ -522,25 +516,25 @@ Teams သည် underlying data model တူညီသော်လည်း chann
 **လက်ရှိ ကန့်သတ်ချက်များ:**
 
 - **DMs:** Teams bot file API များဖြင့် ပုံနှင့် ဖိုင် attachment များ အလုပ်လုပ်သည်။
-- **Channels/groups:** attachment များကို M365 storage (SharePoint/OneDrive) တွင် သိမ်းထားသည်။ webhook payload တွင် HTML stub သာ ပါဝင်ပြီး ဖိုင် byte များ မပါဝင်ပါ။ **channel attachment များကို ဒေါင်းလုပ်လုပ်ရန် Graph API permissions လိုအပ်သည်**။
+- **Channels/groups:** Attachment များကို M365 storage (SharePoint/OneDrive) တွင် သိမ်းဆည်းထားသည်။ Webhook payload တွင် HTML stub သာ ပါဝင်ပြီး အမှန်တကယ် file bytes မပါဝင်ပါ။ ချန်နယ် attachment များကို download လုပ်ရန် **Graph API permission များ လိုအပ်သည်**။
 
-Graph permissions မရှိပါက ပုံပါသော channel မက်ဆေ့ခ်ျများကို စာသားသာ လက်ခံရရှိမည် (ပုံအကြောင်းအရာကို bot မှ မရနိုင်ပါ)။
-မူလအားဖြင့် OpenClaw သည် Microsoft/Teams host name များမှ media ကိုသာ ဒေါင်းလုပ်လုပ်ပါသည်။ `channels.msteams.mediaAllowHosts` ဖြင့် override လုပ်နိုင်ပါသည် (`["*"]` ကို အသုံးပြု၍ host မည်သည့်နေရာမဆို ခွင့်ပြုနိုင်)။
-Authorization header များကို `channels.msteams.mediaAuthAllowHosts` ထဲရှိ host များအတွက်သာ တွဲပို့ပါသည် (မူလ Graph + Bot Framework host များ)။ ဤစာရင်းကို တင်းကျပ်စွာ ထားရှိပါ (multi-tenant suffix များကို ရှောင်ပါ)။
+Graph permission မရှိပါက၊ ပုံပါဝင်သော ချန်နယ် message များကို text-only အဖြစ်သာ လက်ခံရရှိမည် (bot သည် image content ကို မရယူနိုင်ပါ)။
+ပုံမှန်အားဖြင့် OpenClaw သည် Microsoft/Teams hostname များမှသာ media ကို download လုပ်ပါသည်။ `channels.msteams.mediaAllowHosts` ဖြင့် override ပြုလုပ်နိုင်သည် (`["*"]` ကို အသုံးပြုပါက မည်သည့် host မဆို ခွင့်ပြုသည်)။
+Authorization header များကို `channels.msteams.mediaAuthAllowHosts` တွင် ပါဝင်သော host များအတွက်သာ ပူးတွဲပေးသည် (မူလတန်ဖိုးမှာ Graph + Bot Framework host များ)။ ဤစာရင်းကို တင်းကျပ်စွာ ထိန်းထားပါ (multi-tenant suffix များကို ရှောင်ကြဉ်ပါ)။
 
 ## Sending files in group chats
 
-Bot များသည် FileConsentCard flow (built-in) ဖြင့် DMs တွင် ဖိုင်များ ပို့နိုင်ပါသည်။ သို့သော် **group chats/channels တွင် ဖိုင်ပို့ခြင်း** အတွက် ထပ်မံ setup လိုအပ်ပါသည်:
+Bot များသည် DM များတွင် FileConsentCard flow (built-in) ကို အသုံးပြုပြီး ဖိုင်များ ပို့နိုင်သည်။ သို့သော် **group chat/channel များတွင် ဖိုင်ပို့ရန်** အပို setup လိုအပ်ပါသည်:
 
-| Context                           | ဖိုင်ပို့ပုံ                                    | လိုအပ်သော setup                               |
-| --------------------------------- | ----------------------------------------------- | --------------------------------------------- |
-| **DMs**                           | FileConsentCard → အသုံးပြုသူ လက်ခံ → bot upload | မည်သည့် setup မလိုအပ်                         |
-| **Group chats/channels**          | SharePoint သို့ upload → share link ပို့        | `sharePointSiteId` + Graph permissions လိုအပ် |
+| Context                                              | ဖိုင်ပို့ပုံ                                    | လိုအပ်သော setup                               |
+| ---------------------------------------------------- | ----------------------------------------------- | --------------------------------------------- |
+| **DMs**                                              | FileConsentCard → အသုံးပြုသူ လက်ခံ → bot upload | မည်သည့် setup မလိုအပ်                         |
+| **Group chats/channels**                             | SharePoint သို့ upload → share link ပို့        | `sharePointSiteId` + Graph permissions လိုအပ် |
 | **Images (မည်သည့် context မဆို)** | Base64-encoded inline                           | မည်သည့် setup မလိုအပ်                         |
 
 ### Group chats အတွက် SharePoint လိုအပ်ရသည့် အကြောင်းရင်း
 
-Bot များတွင် personal OneDrive drive မရှိပါ (`/me/drive` Graph API endpoint သည် application identity များအတွက် မအလုပ်လုပ်ပါ)။ group chats/channels တွင် ဖိုင်ပို့ရန် bot သည် **SharePoint site** တစ်ခုသို့ upload လုပ်ပြီး sharing link ဖန်တီးရပါသည်။
+Bot များတွင် ကိုယ်ပိုင် OneDrive drive မရှိပါ (`/me/drive` Graph API endpoint သည် application identity များအတွက် အလုပ်မလုပ်ပါ)။ Group chat/channel များတွင် ဖိုင်ပို့ရန်အတွက် bot သည် **SharePoint site** သို့ upload လုပ်ပြီး sharing link တစ်ခု ဖန်တီးပါသည်။
 
 ### Setup
 
@@ -579,18 +573,18 @@ Bot များတွင် personal OneDrive drive မရှိပါ (`/me/dr
 
 ### Sharing behavior
 
-| Permission                              | Sharing behavior                                     |
-| --------------------------------------- | ---------------------------------------------------- |
-| `Sites.ReadWrite.All` only              | အဖွဲ့အစည်းတစ်ခုလုံး အသုံးပြုနိုင်သော sharing link    |
+| Permission                              | Sharing behavior                                                        |
+| --------------------------------------- | ----------------------------------------------------------------------- |
+| `Sites.ReadWrite.All` only              | အဖွဲ့အစည်းတစ်ခုလုံး အသုံးပြုနိုင်သော sharing link                       |
 | `Sites.ReadWrite.All` + `Chat.Read.All` | per-user sharing link (chat အဖွဲ့ဝင်များသာ ဝင်နိုင်) |
 
-Per-user sharing သည် chat ပါဝင်သူများသာ ဖိုင်ကို ဝင်ရောက်နိုင်သဖြင့် ပိုမို လုံခြုံပါသည်။ `Chat.Read.All` permission မရှိပါက bot သည် organization-wide sharing သို့ fallback လုပ်ပါသည်။
+User တစ်ဦးချင်းစီအလိုက် sharing ပြုလုပ်ခြင်းသည် ပိုမိုလုံခြုံပြီး chat ပါဝင်သူများသာ ဖိုင်ကို ဝင်ရောက်ကြည့်ရှုနိုင်ပါသည်။ `Chat.Read.All` permission မရှိပါက bot သည် organization အနှံ့ sharing သို့ fallback လုပ်ပါသည်။
 
 ### Fallback behavior
 
-| Scenario                                          | Result                                                   |
-| ------------------------------------------------- | -------------------------------------------------------- |
-| Group chat + file + `sharePointSiteId` configured | SharePoint သို့ upload လုပ်ပြီး sharing link ပို့        |
+| Scenario                                          | Result                                                                      |
+| ------------------------------------------------- | --------------------------------------------------------------------------- |
+| Group chat + file + `sharePointSiteId` configured | SharePoint သို့ upload လုပ်ပြီး sharing link ပို့                           |
 | Group chat + file + no `sharePointSiteId`         | OneDrive upload ကြိုးစား (မအောင်မြင်နိုင်), စာသားသာ ပို့ |
 | Personal chat + file                              | FileConsentCard flow (SharePoint မလို)                   |
 | Any context + image                               | Base64-encoded inline (SharePoint မလို)                  |
@@ -612,7 +606,7 @@ OpenClaw သည် Teams poll များကို Adaptive Cards အဖြစ�
 
 `message` tool သို့မဟုတ် CLI ကို အသုံးပြု၍ Teams အသုံးပြုသူများ သို့မဟုတ် conversation များသို့ Adaptive Card JSON မည်သည့်အရာမဆို ပို့နိုင်ပါသည်။
 
-`card` parameter သည် Adaptive Card JSON object ကို လက်ခံပါသည်။ `card` ကို ပေးထားပါက မက်ဆေ့ခ်ျစာသားသည် မဖြစ်မနေ မလိုအပ်ပါ။
+`card` parameter သည် Adaptive Card JSON object ကို လက်ခံပါသည်။ `card` ကို ပေးထားပါက message text သည် မဖြစ်မနေ မလိုအပ်ပါ။
 
 **Agent tool:**
 
@@ -637,17 +631,17 @@ openclaw message send --channel msteams \
   --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Hello!"}]}'
 ```
 
-card schema နှင့် ဥပမာများအတွက် [Adaptive Cards documentation](https://adaptivecards.io/) ကို ကြည့်ပါ။ target format အသေးစိတ်များအတွက် အောက်ပါ [Target formats](#target-formats) ကို ကြည့်ပါ။
+Card schema နှင့် ဥပမာများအတွက် [Adaptive Cards documentation](https://adaptivecards.io/) ကို ကြည့်ရှုပါ။ Target format အသေးစိတ်အချက်အလက်များအတွက် အောက်ပါ [Target formats](#target-formats) ကို ကြည့်ရှုပါ။
 
 ## Target formats
 
 MSTeams target များသည် user နှင့် conversation ကို ခွဲခြားရန် prefix များကို အသုံးပြုပါသည်:
 
-| Target type         | Format                           | Example                                          |
-| ------------------- | -------------------------------- | ------------------------------------------------ |
-| User (ID ဖြင့်)     | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`      |
+| Target type                            | Format                           | Example                                                             |
+| -------------------------------------- | -------------------------------- | ------------------------------------------------------------------- |
+| User (ID ဖြင့်)     | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                         |
 | User (name ဖြင့်)   | `user:<display-name>`            | `user:John Smith` (Graph API လိုအပ်)             |
-| Group/channel       | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`         |
+| Group/channel                          | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                            |
 | Group/channel (raw) | `<conversation-id>`              | `19:abc123...@thread.tacv2` (`@thread` ပါရှိပါက) |
 
 **CLI ဥပမာများ:**
@@ -691,7 +685,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-မှတ်ချက်: `user:` prefix မပါပါက name များကို group/team resolution အဖြစ် သတ်မှတ်ပါသည်။ လူများကို display name ဖြင့် target လုပ်ရာတွင် `user:` ကို အမြဲအသုံးပြုပါ။
+မှတ်ချက်: `user:` prefix မပါပါက အမည်များကို group/team resolution အဖြစ် default သတ်မှတ်ပါသည်။ Display name ဖြင့် လူများကို target လုပ်သောအခါ `user:` ကို အမြဲအသုံးပြုပါ။
 
 ## Proactive messaging
 
@@ -700,7 +694,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 
 ## Team နှင့် Channel ID များ (အများအားဖြင့် လွဲမှားတတ်သော အချက်)
 
-Teams URL များထဲရှိ `groupId` query parameter သည် configuration တွင် အသုံးပြုသည့် team ID **မဟုတ်ပါ**။ ID များကို URL path မှ ထုတ်ယူပါ:
+Teams URL များရှိ `groupId` query parameter သည် configuration အတွက် အသုံးပြုသော team ID **မဟုတ်ပါ**။ URL path မှ ID များကို ထုတ်ယူပါ:
 
 **Team URL:**
 
@@ -728,13 +722,13 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 Private channel များတွင် bot ပံ့ပိုးမှုမှာ ကန့်သတ်ချက်များ ရှိပါသည်:
 
-| Feature                      | Standard Channels | Private Channels          |
-| ---------------------------- | ----------------- | ------------------------- |
-| Bot installation             | Yes               | ကန့်သတ်                   |
-| Real-time messages (webhook) | Yes               | အလုပ်မလုပ်နိုင်ပါ         |
-| RSC permissions              | Yes               | ကွဲပြားစွာ အလုပ်လုပ်နိုင် |
-| @mentions                    | Yes               | bot ဝင်ရောက်နိုင်ပါက      |
-| Graph API history            | Yes               | Yes (permission ရှိပါက)   |
+| Feature                                         | Standard Channels | Private Channels                           |
+| ----------------------------------------------- | ----------------- | ------------------------------------------ |
+| Bot installation                                | Yes               | ကန့်သတ်                                    |
+| Real-time messages (webhook) | Yes               | အလုပ်မလုပ်နိုင်ပါ                          |
+| RSC permissions                                 | Yes               | ကွဲပြားစွာ အလုပ်လုပ်နိုင်                  |
+| @mentions                          | Yes               | bot ဝင်ရောက်နိုင်ပါက                       |
+| Graph API history                               | Yes               | Yes (permission ရှိပါက) |
 
 **Private channel များ မအလုပ်လုပ်ပါက အစားထိုးနည်းလမ်းများ:**
 
@@ -746,15 +740,15 @@ Private channel များတွင် bot ပံ့ပိုးမှုမ�
 
 ### အများဆုံး တွေ့ရသော ပြဿနာများ
 
-- **Channels တွင် ပုံမပေါ်ခြင်း:** Graph permissions သို့မဟုတ် admin consent မရှိပါ။ Teams app ကို ပြန်ထည့်ပြီး Teams ကို အပြည့်အဝ ပိတ်/ဖွင့်ပါ။
+- **ချန်နယ်များတွင် ပုံမပေါ်ခြင်း:** Graph permission သို့မဟုတ် admin consent မရှိခြင်းကြောင့် ဖြစ်နိုင်သည်။ Teams app ကို ပြန်လည် install လုပ်ပြီး Teams ကို လုံးဝပိတ်ကာ ပြန်ဖွင့်ပါ။
 - **Channel တွင် reply မရှိခြင်း:** မူလအားဖြင့် mention လိုအပ်ပါသည်; `channels.msteams.requireMention=false` ကို သတ်မှတ်ပါ သို့မဟုတ် team/channel အလိုက် configure လုပ်ပါ။
 - **Version မကိုက်ညီခြင်း (Teams တွင် manifest အဟောင်း ပြနေဆဲ):** app ကို ဖယ်ရှားပြီး ပြန်ထည့်ပါ၊ Teams ကို အပြည့်အဝ ပိတ်ပါ။
-- **Webhook မှ 401 Unauthorized:** Azure JWT မပါဘဲ manual test လုပ်သောအခါ မျှော်လင့်ထားသော အခြေအနေဖြစ်ပြီး endpoint ရောက်နိုင်ကြောင်း ပြသပါသည်။ Azure Web Chat ဖြင့် စမ်းသပ်ပါ။
+- **Webhook မှ 401 Unauthorized:** Azure JWT မပါဘဲ manual စမ်းသပ်သည့်အခါ မျှော်လင့်ထားသည့် အခြေအနေဖြစ်သည် — endpoint ကို ရောက်နိုင်ကြောင်း ပြသသော်လည်း auth မအောင်မြင်ပါ။ မှန်ကန်စွာ စမ်းသပ်ရန် Azure Web Chat ကို အသုံးပြုပါ။
 
 ### Manifest upload error များ
 
-- **"Icon file cannot be empty":** manifest သည် 0 byte icon ဖိုင်များကို ရည်ညွှန်းထားပါသည်။ တရားဝင် PNG icon များ ဖန်တီးပါ ( `outline.png` အတွက် 32x32၊ `color.png` အတွက် 192x192)။
-- **"webApplicationInfo.Id already in use":** app ကို အခြား team/chat တွင် ထည့်ထားဆဲ ဖြစ်နိုင်ပါသည်။ အရင် ဖယ်ရှားပါ သို့မဟုတ် propagation အတွက် 5–10 မိနစ် စောင့်ပါ။
+- **"Icon file cannot be empty":** Manifest တွင် ကိုးကားထားသော icon ဖိုင်များ၏ အရွယ်အစားသည် 0 bytes ဖြစ်နေသည်။ အကျုံးဝင်သော PNG icon များကို ဖန်တီးပါ (`outline.png` အတွက် 32x32၊ `color.png` အတွက် 192x192)။
+- **"webApplicationInfo.Id already in use":** App သည် အခြား team/chat တစ်ခုတွင် ထည့်သွင်းထားဆဲ ဖြစ်ပါသည်။ အရင်ဆုံး ရှာဖွေ၍ uninstall လုပ်ပါ၊ သို့မဟုတ် propagation အတွက် 5-10 မိနစ်ခန့် စောင့်ပါ။
 - **Upload တွင် "Something went wrong":** [https://admin.teams.microsoft.com](https://admin.teams.microsoft.com) မှတဆင့် upload လုပ်ပြီး browser DevTools (F12) → Network tab တွင် response body ကို စစ်ဆေးပါ။
 - **Sideload မအောင်မြင်ခြင်း:** "Upload a custom app" အစား "Upload an app to your org's app catalog" ကို စမ်းကြည့်ပါ — sideload ကန့်သတ်ချက်များကို ရှောင်ရှားနိုင်တတ်ပါသည်။
 

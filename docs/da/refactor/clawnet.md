@@ -4,13 +4,6 @@ read_when:
   - Planlægning af en samlet netværksprotokol for noder + operatørklienter
   - Omstrukturering af godkendelser, parring, TLS og presence på tværs af enheder
 title: "Clawnet-refaktor"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:04Z
 ---
 
 # Clawnet-refaktor (protokol + auth-samling)
@@ -51,10 +44,10 @@ Hej Peter — rigtig god retning; det åbner for enklere UX + stærkere sikkerhe
 
 ## To protokoller
 
-### 1) Gateway WebSocket (control plane)
+### 1. Gateway WebSocket (control plane)
 
 - Fuldt API-areal: konfiguration, kanaler, modeller, sessioner, agentkørsler, logs, noder osv.
-- Standard binding: loopback. Fjernadgang via SSH/Tailscale.
+- Default bind: loopback. Fjernadgang via SSH/Tailscale.
 - Auth: token/adgangskode via `connect`.
 - Ingen TLS-pinning (afhænger af loopback/tunnel).
 - Kode:
@@ -62,7 +55,7 @@ Hej Peter — rigtig god retning; det åbner for enklere UX + stærkere sikkerhe
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (node-transport)
+### 2. Bridge (node-transport)
 
 - Smal tilladelsesliste-overflade, node-identitet + parring.
 - JSONL over TCP; valgfri TLS + certifikat-fingerprint-pinning.
@@ -145,7 +138,7 @@ Hej Peter — rigtig god retning; det åbner for enklere UX + stærkere sikkerhe
 
 ### Nøgleregel
 
-Rolle er pr. forbindelse, ikke pr. enhed. En enhed kan åbne begge roller separat.
+Rolle er per-connect, ikke pr. enhed. En enhed kan åbne begge roller separat.
 
 ---
 
@@ -187,7 +180,7 @@ Alternativer:
 
 ## Stille godkendelse (SSH-heuristik)
 
-Definér det præcist for at undgå et svagt led. Foretræk én:
+Definér det præcist for at undgå et svagt link. Foretræk et:
 
 - **Kun lokalt**: auto-parring når klient forbinder via loopback/Unix-socket.
 - **Challenge via SSH**: gateway udsteder nonce; klient beviser SSH ved at hente den.
@@ -224,7 +217,7 @@ Brug nuværende TLS-runtime + fingerprint-pinning:
 
 ## Nuværende
 
-Godkendelse sker på node-værten (mac-app node-runtime). Prompt vises dér, hvor noden kører.
+Godkendelse sker på node vært (mac app node runtime). Spørg vises, hvor indholdselementet kører.
 
 ## Foreslået
 
@@ -283,7 +276,7 @@ Godkendelse er **gateway-hostet**, UI leveres til operatørklienter.
 
 ## Stabilt ID
 
-Krævet for auth; ændres aldrig.
+Kræves til auth; ændrer sig aldrig.
 Foretrukket:
 
 - Nøglepar-fingerprint (offentlig nøgle-hash).

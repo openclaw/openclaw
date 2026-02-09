@@ -5,13 +5,6 @@ read_when:
   - Вы используете Claude Code CLI или другие локальные AI CLI и хотите переиспользовать их
   - Вам нужен текстовый, безинструментальный путь, который всё же поддерживает сеансы и изображения
 title: "CLI-бэкенды"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:39Z
 ---
 
 # CLI-бэкенды (резервная среда выполнения)

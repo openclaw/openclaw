@@ -4,13 +4,6 @@ read_when:
   - Al ejecutar scripts del repositorio
   - Al agregar o cambiar scripts bajo ./scripts
 title: "Scripts"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:36Z
 ---
 
 # Scripts

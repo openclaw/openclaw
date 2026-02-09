@@ -1,15 +1,8 @@
 ---
-summary: 「為從事 OpenClaw macOS 應用程式開發的開發者提供的設定指南」
+summary: "為從事 OpenClaw macOS 應用程式開發的開發者提供的設定指南"
 read_when:
   - 設定 macOS 開發環境時
-title: 「macOS 開發者設定」
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:44Z
+title: "macOS 開發者設定"
 ---
 
 # macOS 開發者設定
@@ -23,9 +16,9 @@ x-i18n:
 1. **Xcode 26.2+**：Swift 開發所需。
 2. **Node.js 22+ 與 pnpm**：Gateway 閘道器、CLI 以及封裝指令碼所需。
 
-## 1. 安裝相依套件
+## 1) 安裝相依套件
 
-安裝專案層級的相依套件：
+Install the project-wide dependencies:
 
 ```bash
 pnpm install
@@ -44,7 +37,7 @@ pnpm install
 如需瞭解開發執行模式、簽署旗標以及 Team ID 疑難排解，請參閱 macOS 應用程式 README：
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **注意事項**：使用 ad-hoc 簽署的應用程式可能會觸發安全性提示。若應用程式立即因「Abort trap 6」而當機，請參閱 [疑難排解](#troubleshooting) 章節。
+> **Note**: Ad-hoc signed apps may trigger security prompts. If the app crashes immediately with "Abort trap 6", see the [Troubleshooting](#troubleshooting) section.
 
 ## 3. 安裝 CLI
 
@@ -62,7 +55,7 @@ macOS 應用程式需要全域安裝的 `openclaw` CLI 來管理背景工作。
 npm install -g openclaw@<version>
 ```
 
-## 疑難排解
+## Troubleshooting
 
 ### 建置失敗：工具鏈或 SDK 不相容
 
@@ -82,7 +75,7 @@ xcrun swift --version
 
 若版本不相符，請更新 macOS／Xcode，然後重新執行建置。
 
-### 授予權限時應用程式當機
+### App Crashes on Permission Grant
 
 如果在嘗試允許 **語音辨識** 或 **麥克風** 存取時應用程式發生當機，可能是因為 TCC 快取損毀或簽章不相符。
 
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-如果是手動執行的程序佔用了連接埠，請停止該程序（Ctrl+C）。最後手段則是終止您在上方找到的 PID。
+If a manual run is holding the port, stop that process (Ctrl+C). As a last resort, kill the PID you found above.

@@ -4,13 +4,6 @@ read_when:
   - Bạn đang kết nối các bề mặt mức sử dụng/hạn ngạch của nhà cung cấp
   - Bạn cần giải thích hành vi theo dõi mức sử dụng hoặc yêu cầu xác thực
 title: "Theo dõi mức sử dụng"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:50Z
 ---
 
 # Theo dõi mức sử dụng
@@ -22,7 +15,7 @@ x-i18n:
 
 ## Nó hiển thị ở đâu
 
-- `/status` trong chat: thẻ trạng thái giàu emoji với token của phiên + chi phí ước tính (chỉ API key). Mức sử dụng của nhà cung cấp hiển thị cho **nhà cung cấp mô hình hiện tại** khi có.
+- `/status` trong chat: thẻ trạng thái giàu emoji với token phiên + chi phí ước tính (chỉ API key). OpenClaw mặc định dùng **giờ cục bộ của máy chủ cho dấu thời gian truyền tải** và **múi giờ người dùng chỉ trong system prompt**.
 - `/usage off|tokens|full` trong chat: chân trang mức sử dụng theo từng phản hồi (OAuth chỉ hiển thị token).
 - `/usage cost` trong chat: tóm tắt chi phí cục bộ được tổng hợp từ nhật ký phiên OpenClaw.
 - CLI: `openclaw status --usage` in ra phân tích đầy đủ theo từng nhà cung cấp.

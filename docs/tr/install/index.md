@@ -5,13 +5,6 @@ read_when:
   - Bir bulut platformuna dağıtım yapmak istiyorsunuz
   - Güncelleme, taşıma veya kaldırma yapmanız gerekiyor
 title: "Kurulum"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:29Z
 ---
 
 # Kurulum
@@ -22,7 +15,9 @@ x-i18n:
 
 - **[Node 22+](/install/node)** (eksikse [yükleyici betiği](#install-methods) kurar)
 - macOS, Linux veya Windows
-- Kaynaktan derlerseniz `pnpm` gereklidir
+- ```
+  CLI’yi indirir, npm ile global olarak kurar ve tanıtım sihirbazını başlatır.
+  ```
 
 <Note>
 Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) altında çalıştırmanızı önemle öneririz.
@@ -35,9 +30,9 @@ Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/inst
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="Yükleyici betiği" icon="rocket" defaultOpen>
-    CLI'yi indirir, npm üzerinden küresel olarak kurar ve ilk katılım sihirbazını başlatır.
+  <Accordion title="Installer script" icon="rocket" defaultOpen>Betik
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +45,11 @@ Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/inst
         ```
       </Tab>
     </Tabs>
-
+    
     Hepsi bu — betik Node algılama, kurulum ve ilk katılımı yönetir.
-
+    
     İlk katılımı atlayıp yalnızca ikiliyi kurmak için:
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +62,30 @@ Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/inst
         ```
       </Tab>
     </Tabs>
-
+    
     Tüm bayraklar, ortam değişkenleri ve CI/otomasyon seçenekleri için [Yükleyici iç detayları](/install/installer) sayfasına bakın.
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     Zaten Node 22+ yüklüyse ve kurulumu kendiniz yönetmek istiyorsanız:
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp derleme hataları mı?">
           libvips'i küresel olarak kuruluysa (macOS'ta Homebrew ile yaygındır) ve `sharp` başarısız oluyorsa, önceden derlenmiş ikilileri zorlayın:
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           `sharp: Please add node-gyp to your dependencies` görürseniz, ya derleme araçlarını kurun (macOS: Xcode CLT + `npm install -g node-gyp`) ya da yukarıdaki ortam değişkenini kullanın.
         </Accordion>
       </Tab>
@@ -98,22 +95,24 @@ Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/inst
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm, derleme betikleri olan paketler için açık onay gerektirir. İlk kurulumda "Ignored build scripts" uyarısı göründükten sonra `pnpm approve-builds -g` komutunu çalıştırın ve listelenen paketleri seçin.
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="Kaynaktan" icon="github">
+  <Accordion title="From source" icon="github">
     Katkıda bulunanlar veya yerel bir kopyadan çalıştırmak isteyen herkes için.
 
+    ```
     <Steps>
       <Step title="Klonla ve derle">
         [OpenClaw deposunu](https://github.com/openclaw/openclaw) klonlayın ve derleyin:
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +123,11 @@ Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/inst
       </Step>
       <Step title="CLI'yi bağla">
         `openclaw` komutunu küresel olarak kullanılabilir yapın:
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         Alternatif olarak, bağlantıyı atlayıp komutları depo içinden `pnpm openclaw ...` ile çalıştırabilirsiniz.
       </Step>
       <Step title="İlk katılımı çalıştır">
@@ -137,8 +136,9 @@ Windows'ta OpenClaw'ı [WSL2](https://learn.microsoft.com/en-us/windows/wsl/inst
         ```
       </Step>
     </Steps>
-
+    
     Daha derin geliştirme iş akışları için [Kurulum](/start/setup) sayfasına bakın.
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +172,7 @@ openclaw dashboard      # open the browser UI
 
 ## Sorun Giderme: `openclaw` bulunamadı
 
-<Accordion title="PATH tanısı ve düzeltme">
+<Accordion title="PATH diagnosis and fix">
   Hızlı tanı:
 
 ```bash
@@ -192,19 +192,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Windows'ta, `npm prefix -g` çıktısını PATH'inize ekleyin.
 
-Ardından yeni bir terminal açın (veya zsh'te `rehash` / bash'te `hash -r`).
-</Accordion>
+Ardından yeni bir terminal açın (veya zsh'te `rehash` / bash'te `hash -r`). </Accordion>
 
 ## Güncelleme / kaldırma
 
 <CardGroup cols={3}>
-  <Card title="Güncelleme" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     OpenClaw'ı güncel tutun.
   </Card>
-  <Card title="Taşıma" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     Yeni bir makineye geçin.
   </Card>
-  <Card title="Kaldırma" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     OpenClaw'ı tamamen kaldırın.
   </Card>
 </CardGroup>

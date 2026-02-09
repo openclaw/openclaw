@@ -1,22 +1,15 @@
 ---
 summary: "Происхождение проекта, участники и лицензия."
 read_when:
-  - Вы хотите узнать предысторию проекта или сведения об участниках
-title: "Благодарности"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:51Z
+  - Вы хотите, чтобы история проекта или кредиты участника
+title: "Кредиты"
 ---
 
 ## Название
 
 OpenClaw = CLAW + TARDIS, потому что каждому космическому лобстеру нужна машина времени и пространства.
 
-## Благодарности
+## Кредиты
 
 - **Peter Steinberger** ([@steipete](https://x.com/steipete)) — создатель, «шептун лобстеров»
 - **Mario Zechner** ([@badlogicc](https://x.com/badlogicgames)) — создатель Pi, пентестер по безопасности

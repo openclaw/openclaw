@@ -4,13 +4,6 @@ read_when:
   - Je wilt een gecontaineriseerde gateway in plaats van lokale installaties
   - Je valideert de Docker-flow
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:55Z
 ---
 
 # Docker (optioneel)
@@ -30,7 +23,7 @@ Deze gids behandelt:
 
 Sandboxing-details: [Sandboxing](/gateway/sandboxing)
 
-## Vereisten
+## Provideropties
 
 - Docker Desktop (of Docker Engine) + Docker Compose v2
 - Voldoende schijfruimte voor images + logs
@@ -126,8 +119,7 @@ Notities:
 
 Als je wilt dat `/home/node` behouden blijft bij het opnieuw aanmaken van containers,
 stel dan een benoemd volume in via `OPENCLAW_HOME_VOLUME`. Dit maakt een Docker-volume aan en mount
-het op `/home/node`, terwijl de standaard config/werkruimte bind mounts behouden blijven.
-Gebruik hier een benoemd volume (geen bind-pad); voor bind mounts gebruik je
+het op `/home/node`, terwijl de standaard config/werkruimte bind mounts behouden blijven. Gebruik hier een benoemd volume (geen bind-pad); voor bind mounts gebruik je
 `OPENCLAW_EXTRA_MOUNTS`.
 
 Voorbeeld:
@@ -230,7 +222,8 @@ beveiligingscompromis.
 ### Snellere rebuilds (aanbevolen)
 
 Om rebuilds te versnellen, orden je Dockerfile zo dat afhankelijkheidslagen
-gecached worden. Dit voorkomt het opnieuw uitvoeren van `pnpm install` tenzij
+gecached worden.
+Dit voorkomt het opnieuw uitvoeren van `pnpm install` tenzij
 lockfiles veranderen:
 
 ```dockerfile

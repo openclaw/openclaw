@@ -3,13 +3,6 @@ summary: "Status de suporte do bot Zalo, capacidades e configuração"
 read_when:
   - Trabalhando em recursos ou webhooks do Zalo
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:18Z
 ---
 
 # Zalo (Bot API)
@@ -62,7 +55,7 @@ Zalo é um aplicativo de mensagens focado no Vietnã; sua Bot API permite que o 
 
 ## Configuração (caminho rápido)
 
-### 1) Criar um token de bot (Zalo Bot Platform)
+### 1. Criar um token de bot (Zalo Bot Platform)
 
 1. Acesse [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) e faça login.
 2. Crie um novo bot e configure suas opções.
@@ -134,16 +127,16 @@ Suporte a múltiplas contas: use `channels.zalo.accounts` com tokens por conta e
 
 ## Capacidades
 
-| Recurso           | Status                                   |
-| ----------------- | ---------------------------------------- |
-| Mensagens diretas | ✅ Suportado                             |
-| Grupos            | ❌ Em breve (conforme docs do Zalo)      |
-| Mídia (imagens)   | ✅ Suportado                             |
-| Reações           | ❌ Não suportado                         |
-| Tópicos           | ❌ Não suportado                         |
-| Enquetes          | ❌ Não suportado                         |
-| Comandos nativos  | ❌ Não suportado                         |
-| Streaming         | ⚠️ Bloqueado (limite de 2000 caracteres) |
+| Funcionalidade                     | Status                                                      |
+| ---------------------------------- | ----------------------------------------------------------- |
+| Mensagens diretas                  | ✅ Suportado                                                 |
+| Grupos                             | ❌ Em breve (conforme docs do Zalo)       |
+| Mídia (imagens) | ✅ Suportado                                                 |
+| Reações                            | ❌ Não suportado                                             |
+| Tópicos                            | ❌ Não suportado                                             |
+| Enquetes                           | ❌ Não suportado                                             |
+| Comandos nativos                   | ❌ Não suportado                                             |
+| Streaming                          | ⚠️ Bloqueado (limite de 2000 caracteres) |
 
 ## Destinos de entrega (CLI/cron)
 

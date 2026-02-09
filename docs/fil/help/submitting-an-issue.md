@@ -1,18 +1,11 @@
 ---
 summary: "Pagsusumite ng mga isyung may mataas na signal at bug report"
 title: "Pagsusumite ng Isyu"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:29Z
 ---
 
 ## Pagsusumite ng Isyu
 
-Ang malinaw at maigsi na mga isyu ay nagpapabilis ng diagnosis at pag-aayos. Isama ang mga sumusunod para sa mga bug, regression, o kakulangan sa feature:
+Clear, concise issues speed up diagnosis and fixes. Include the following for bugs, regressions, or feature gaps:
 
 ### Ano ang isasama
 
@@ -28,7 +21,7 @@ Ang malinaw at maigsi na mga isyu ay nagpapabilis ng diagnosis at pag-aayos. Isa
 - [ ] Nakumpirmang hindi pa kamakailan naayos/natugunan (lalo na seguridad)
 - [ ] Mga pahayag na suportado ng ebidensya o repro
 
-Maging maikli. Mas mahalaga ang pagiging terse kaysa perpektong grammar.
+Be brief. Terseness > perfect grammar.
 
 Validation (patakbuhin/ayusin bago PR):
 
@@ -84,7 +77,7 @@ Validation (patakbuhin/ayusin bago PR):
 ### Evidence (redacted)
 ```
 
-_Iwasan ang mga lihim/detalye ng exploit sa publiko. Para sa sensitibong mga isyu, bawasan ang detalye at humiling ng pribadong disclosure._
+Para sa mga sensitibong isyu, bawasan ang detalye at humiling ng pribadong pagsisiwalat._ Opsyonal ang issue bago ang PR.
 
 #### Regression report
 
@@ -156,4 +149,4 @@ _Iwasan ang mga lihim/detalye ng exploit sa publiko. Para sa sensitibong mga isy
 
 ### Pagsusumite ng fix PR
 
-Opsyonal ang isyu bago PR. Isama ang mga detalye sa PR kung lalaktawan. Panatilihing nakatuon ang PR, banggitin ang issue number, magdagdag ng mga test o ipaliwanag ang kawalan nito, idokumento ang mga pagbabago/panganib sa behavior, isama ang redacted na logs/screenshots bilang patunay, at patakbuhin ang tamang validation bago magsumite.
+Mistral: `mistral/`… Include details in PR if skipping. Keep the PR focused, note issue number, add tests or explain absence, document behavior changes/risks, include redacted logs/screenshots as proof, and run proper validation before submitting.

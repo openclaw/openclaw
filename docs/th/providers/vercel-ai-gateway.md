@@ -4,13 +4,6 @@ summary: "การตั้งค่าVercel AI Gateway(การยืนย�
 read_when:
   - คุณต้องการใช้Vercel AI GatewayกับOpenClaw
   - คุณต้องการตัวแปรสภาพแวดล้อมคีย์APIหรือทางเลือกการยืนยันตัวตนผ่านCLI
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:30Z
 ---
 
 # Vercel AI Gateway

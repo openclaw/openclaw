@@ -3,13 +3,6 @@ summary: "Loopback WebChat static host နှင့် ချတ် UI အတွ
 read_when:
   - WebChat ဝင်ရောက်အသုံးပြုမှုကို အမှားရှာဖွေခြင်း သို့မဟုတ် ဖွဲ့စည်းပြင်ဆင်ခြင်း ပြုလုပ်နေချိန်
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:03Z
 ---
 
 # WebChat (Gateway WebSocket UI)
@@ -46,7 +39,7 @@ x-i18n:
 
 ချန်နယ် ရွေးချယ်စရာများ:
 
-- သီးသန့် `webchat.*` block မရှိပါ။ WebChat သည် gateway endpoint နှင့် အောက်ပါ auth ဆက်တင်များကို အသုံးပြုသည်။
+- 40. သီးသန့် `webchat.*` block မရှိပါ။ 41. WebChat သည် အောက်တွင် ဖော်ပြထားသော gateway endpoint + auth settings များကို အသုံးပြုပါသည်။
 
 ဆက်စပ်သော အထွေထွေ ရွေးချယ်စရာများ:
 

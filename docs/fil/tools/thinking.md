@@ -3,13 +3,6 @@ summary: "Sintaks ng directive para sa /think + /verbose at kung paano nila naaa
 read_when:
   - Ina-adjust ang pag-parse o mga default ng thinking o verbose directive
 title: "Mga Antas ng Pag-iisip"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:04Z
 ---
 
 # Mga Antas ng Pag-iisip (/think directives)
@@ -26,7 +19,7 @@ x-i18n:
   - Ang `x-high`, `x_high`, `extra-high`, `extra high`, at `extra_high` ay naka-map sa `xhigh`.
   - Ang `highest`, `max` ay naka-map sa `high`.
 - Mga tala ng provider:
-  - Z.AI (`zai/*`) ay sumusuporta lang sa binary thinking (`on`/`off`). Anumang non-`off` na antas ay itinuturing na `on` (naka-map sa `low`).
+  - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
 
 ## Ayos ng resolusyon
 
@@ -37,9 +30,9 @@ x-i18n:
 
 ## Pagtatakda ng session default
 
-- Magpadala ng mensaheng **directive lang** (puwedeng may whitespace), hal. `/think:medium` o `/t high`.
+- Send a message that is **only** the directive (whitespace allowed), e.g. `/think:medium` or `/t high`.
 - Mananatili ito para sa kasalukuyang session (per-sender bilang default); na-clear ng `/think:off` o ng session idle reset.
-- May ipapadalang kumpirmasyon na reply (`Thinking level set to high.` / `Thinking disabled.`). Kung invalid ang antas (hal. `/thinking big`), tatanggihan ang command na may hint at mananatiling hindi nagbabago ang estado ng session.
+- Kung hindi wasto ang antas (hal. `/thinking big`), tinatanggihan ang command na may pahiwatig at nananatiling hindi nababago ang estado ng session. If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 - Ipadala ang `/think` (o `/think:`) nang walang argument para makita ang kasalukuyang antas ng pag-iisip.
 
 ## Paglalapat ayon sa agent
@@ -53,8 +46,8 @@ x-i18n:
 - Ang `/verbose off` ay nag-iimbak ng tahasang session override; i-clear ito sa pamamagitan ng Sessions UI sa pagpili ng `inherit`.
 - Ang inline directive ay nakaaapekto lang sa mensaheng iyon; nalalapat ang session/global defaults kung hindi.
 - Ipadala ang `/verbose` (o `/verbose:`) nang walang argument para makita ang kasalukuyang verbose level.
-- Kapag naka-on ang verbose, ang mga agent na naglalabas ng structured tool results (Pi, iba pang JSON agents) ay nagpapadala ng bawat tool call pabalik bilang sarili nitong metadata-only na mensahe, na may prefix na `<emoji> <tool-name>: <arg>` kapag available (path/command). Ipinapadala ang mga buod ng tool na ito sa sandaling magsimula ang bawat tool (hiwalay na bubbles), hindi bilang streaming deltas.
-- Kapag ang verbose ay `full`, ipinapasa rin ang mga output ng tool pagkatapos ng completion (hiwalay na bubble, pinaikli sa ligtas na haba). Kung i-toggle mo ang `/verbose on|full|off` habang may tumatakbong run, igagalang ng mga susunod na tool bubble ang bagong setting.
+- When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). Kapag ang verbose ay `full`, ang mga output ng tool ay ipinapasa rin pagkatapos makumpleto (hiwa-hiwalay na bubble, pinaikli sa ligtas na haba).
+- Kung i-toggle mo ang `/verbose on|full|off` habang may tumatakbong run, igagalang ng mga susunod na tool bubble ang bagong setting. Ang body ng heartbeat probe ay ang naka-configure na heartbeat prompt (default: \`Read HEARTBEAT.md if it exists (workspace context).
 
 ## Visibility ng pangangatwiran (/reasoning)
 
@@ -71,8 +64,8 @@ x-i18n:
 
 ## Mga Heartbeat
 
-- Ang heartbeat probe body ay ang naka-configure na heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Nalalapat ang mga inline directive sa isang heartbeat message gaya ng karaniwan (ngunit iwasang baguhin ang session defaults mula sa mga heartbeat).
-- Ang delivery ng heartbeat ay default sa final payload lang. Para ipadala rin ang hiwalay na mensaheng `Reasoning:` (kapag available), itakda ang `agents.defaults.heartbeat.includeReasoning: true` o per-agent na `agents.list[].heartbeat.includeReasoning: true`.
+- Sundin ito nang mahigpit. Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.\`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat delivery defaults to the final payload only. To also send the separate `Reasoning:` message (when available), set `agents.defaults.heartbeat.includeReasoning: true` or per-agent `agents.list[].heartbeat.includeReasoning: true`.
 
 ## Web chat UI
 

@@ -4,13 +4,6 @@ read_when:
   - آپ کسی مشین سے OpenClaw کو ہٹانا چاہتے ہیں
   - ان انسٹال کے بعد بھی گیٹ وے سروس چل رہی ہے
 title: "ان انسٹال"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:25Z
 ---
 
 # ان انسٹال
@@ -88,14 +81,14 @@ rm -rf /Applications/OpenClaw.app
 
 ### macOS (launchd)
 
-ڈیفالٹ لیبل `bot.molt.gateway` ہے (یا `bot.molt.<profile>`؛ پرانا `com.openclaw.*` اب بھی موجود ہو سکتا ہے):
+ڈیفالٹ لیبل `bot.molt.gateway` ہے (یا `bot.molt.<profile>``; legacy `com.openclaw.\*\` may still exist):
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-اگر آپ نے کوئی پروفائل استعمال کیا تھا تو لیبل اور plist نام کو `bot.molt.<profile>` سے بدلیں۔ اگر موجود ہوں تو کسی بھی پرانے `com.openclaw.*` plist کو ہٹا دیں۔
+اگر آپ نے پروفائل استعمال کیا تھا تو لیبل اور plist نام کو `bot.molt.<profile>` سے بدل دیں`.  اگر موجود ہوں تو کسی بھی پرانے `com.openclaw.\*\` plists کو ہٹا دیں۔
 
 ### Linux (systemd user unit)
 
@@ -110,7 +103,7 @@ systemctl --user daemon-reload
 ### Windows (Scheduled Task)
 
 ڈیفالٹ ٹاسک نام `OpenClaw Gateway` ہے (یا `OpenClaw Gateway (<profile>)`)۔
-ٹاسک اسکرپٹ آپ کی اسٹیٹ ڈائریکٹری کے تحت ہوتا ہے۔
+ٹاسک اسکرپٹ آپ کی اسٹیٹ ڈائریکٹری کے اندر موجود ہوتا ہے۔
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,8 +116,8 @@ Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 
 ### عام انسٹال (install.sh / npm / pnpm / bun)
 
-اگر آپ نے `https://openclaw.ai/install.sh` یا `install.ps1` استعمال کیا تھا تو CLI، `npm install -g openclaw@latest` کے ذریعے انسٹال ہوا تھا۔
-اسے `npm rm -g openclaw` سے ہٹائیں (یا `pnpm remove -g` / `bun remove -g` اگر آپ نے اسی طریقے سے انسٹال کیا تھا)۔
+اگر آپ نے `https://openclaw.ai/install.sh` یا `install.ps1` استعمال کیا، تو CLI کو `npm install -g openclaw@latest` کے ذریعے انسٹال کیا گیا تھا۔
+`npm rm -g openclaw` کے ذریعے اسے ہٹا دیں (یا اگر اسی طرح انسٹال کیا ہو تو `pnpm remove -g` / `bun remove -g`)۔
 
 ### سورس چیک آؤٹ (git clone)
 

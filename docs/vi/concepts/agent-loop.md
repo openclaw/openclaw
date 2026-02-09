@@ -3,24 +3,16 @@ summary: "Vòng đời agent loop, các luồng, và ngữ nghĩa chờ"
 read_when:
   - Bạn cần bản hướng dẫn chi tiết từng bước về agent loop hoặc các sự kiện vòng đời
 title: "Agent Loop"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:45Z
 ---
 
 # Agent Loop (OpenClaw)
 
-Agent loop là toàn bộ lần chạy “thực” của một tác tử: tiếp nhận → lắp ráp ngữ cảnh → suy luận mô hình →
-thực thi công cụ → stream phản hồi → lưu trữ. Đây là luồng chuẩn biến một thông điệp
-thành hành động và phản hồi cuối cùng, đồng thời giữ trạng thái phiên nhất quán.
+Trong OpenClaw, một vòng lặp là một lần chạy đơn lẻ, được tuần tự hóa cho mỗi phiên, phát ra các sự kiện vòng đời và stream
+khi mô hình suy nghĩ, gọi công cụ và stream đầu ra. It’s the authoritative path that turns a message
+into actions and a final reply, while keeping session state consistent.
 
-Trong OpenClaw, một loop là một lần chạy đơn, được tuần tự hóa theo từng phiên, phát ra các sự kiện vòng đời và sự kiện stream
-khi mô hình suy nghĩ, gọi công cụ và stream đầu ra. Tài liệu này giải thích cách loop chuẩn đó
-được nối dây end-to-end.
+Tài liệu này giải thích cách vòng lặp xác thực đó
+được nối dây đầu-cuối. trả về `{ status: ok|error|timeout, startedAt, endedAt, error?`
 
 ## Điểm vào
 
@@ -47,14 +39,14 @@ khi mô hình suy nghĩ, gọi công cụ và stream đầu ra. Tài liệu này
    - sự kiện vòng đời => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
 5. `agent.wait` dùng `waitForAgentJob`:
    - chờ **lifecycle end/error** cho `runId`
-   - trả về `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+   - }\` Các kênh nhắn tin có thể chọn các chế độ hàng đợi (collect/steer/followup) để cấp dữ liệu cho hệ thống lane này.
 
 ## Xếp hàng + đồng thời
 
 - Các lần chạy được tuần tự hóa theo từng khóa phiên (làn phiên) và tùy chọn qua một làn toàn cục.
 - Điều này ngăn đua công cụ/phiên và giữ lịch sử phiên nhất quán.
-- Các kênh nhắn tin có thể chọn chế độ hàng đợi (collect/steer/followup) để đưa vào hệ làn này.
-  Xem [Command Queue](/concepts/queue).
+- Xem [Command Queue](/concepts/queue).
+  **`agent:bootstrap`**: chạy trong khi xây dựng các tệp bootstrap trước khi system prompt được hoàn tất.
 
 ## Chuẩn bị phiên + workspace
 
@@ -78,8 +70,8 @@ OpenClaw có hai hệ hook:
 
 ### Hook nội bộ (hook của Gateway)
 
-- **`agent:bootstrap`**: chạy trong lúc xây dựng các tệp bootstrap trước khi system prompt được chốt.
-  Dùng để thêm/bớt các tệp ngữ cảnh bootstrap.
+- Mặc định `agent.wait`: 30s (chỉ thời gian chờ).
+  Use this to add/remove bootstrap context files.
 - **Hook lệnh**: `/new`, `/reset`, `/stop`, và các sự kiện lệnh khác (xem tài liệu Hooks).
 
 Xem [Hooks](/automation/hooks) để biết thiết lập và ví dụ.
@@ -142,7 +134,7 @@ Xem [Plugins](/tools/plugin#plugin-hooks) để biết API hook và chi tiết �
 
 ## Timeout
 
-- Mặc định `agent.wait`: 30s (chỉ thời gian chờ). Tham số `timeoutMs` ghi đè.
+- Tham số `timeoutMs` ghi đè. Workspace là ngôi nhà của agent.
 - Runtime của agent: mặc định `agents.defaults.timeoutSeconds` 600s; được áp dụng trong bộ hẹn giờ hủy `runEmbeddedPiAgent`.
 
 ## Những nơi có thể kết thúc sớm

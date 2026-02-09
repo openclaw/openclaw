@@ -4,13 +4,6 @@ read_when:
   - DigitalOcean で OpenClaw をセットアップする場合
   - OpenClaw 用の安価な VPS ホスティングを探している場合
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:38Z
 ---
 
 # DigitalOcean 上の OpenClaw
@@ -23,13 +16,13 @@ $0/月のオプションを希望し、ARM + プロバイダー固有のセッ�
 
 ## コスト比較（2026 年）
 
-| プロバイダー | プラン          | スペック              | 価格/月        | 注記                           |
-| ------------ | --------------- | --------------------- | -------------- | ------------------------------ |
-| Oracle Cloud | Always Free ARM | 最大 4 OCPU、24GB RAM | $0             | ARM、容量制限 / 登録時の癖あり |
-| Hetzner      | CX22            | 2 vCPU、4GB RAM       | €3.79（約 $4） | 最安の有料オプション           |
-| DigitalOcean | Basic           | 1 vCPU、1GB RAM       | $6             | 簡単な UI、良質なドキュメント  |
-| Vultr        | Cloud Compute   | 1 vCPU、1GB RAM       | $6             | ロケーションが多数             |
-| Linode       | Nanode          | 1 vCPU、1GB RAM       | $5             | 現在は Akamai の一部           |
+| プロバイダー       | プラン             | スペック               | 価格/月                        | 注記                 |
+| ------------ | --------------- | ------------------ | --------------------------- | ------------------ |
+| Oracle Cloud | Always Free ARM | 最大 4 OCPU、24GB RAM | $0                          | ARM、容量制限 / 登録時の癖あり |
+| Hetzner      | CX22            | 2 vCPU、4GB RAM     | €3.79（約 $4） | 最安の有料オプション         |
+| DigitalOcean | Basic           | 1 vCPU、1GB RAM     | $6                          | 簡単な UI、良質なドキュメント   |
+| Vultr        | Cloud Compute   | 1 vCPU、1GB RAM     | $6                          | ロケーションが多数          |
+| Linode       | Nanode          | 1 vCPU、1GB RAM     | $5                          | 現在は Akamai の一部     |
 
 **プロバイダーの選び方：**
 
@@ -45,7 +38,7 @@ $0/月のオプションを希望し、ARM + プロバイダー固有のセッ�
 - SSH キーペア（またはパスワード認証を使用する意思）
 - 約 20 分
 
-## 1) Droplet を作成する
+## 1. Droplet を作成する
 
 1. [DigitalOcean](https://cloud.digitalocean.com/) にログインします
 2. **Create → Droplets** をクリックします
@@ -63,7 +56,7 @@ $0/月のオプションを希望し、ARM + プロバイダー固有のセッ�
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) OpenClaw をインストールする
+## 3. OpenClaw をインストールする
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) オンボーディングを実行する
+## 4. オンボーディングを実行する
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ openclaw onboard --install-daemon
 - Gateway トークン（自動生成）
 - デーモンのインストール（systemd）
 
-## 5) Gateway を確認する
+## 5. Gateway を確認する
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) ダッシュボードにアクセスする
+## 6. ダッシュボードにアクセスする
 
-Gateway はデフォルトで loopback にバインドされます。Control UI にアクセスするには：
+ゲートウェイはデフォルトでループバックにバインドされます。 Control UI にアクセスするには:
 
 **オプション A：SSH トンネル（推奨）**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 開く：`http://<tailscale-ip>:18789`（トークンが必要）。
 
-## 7) チャンネルを接続する
+## 7. チャンネルを接続する
 
 ### Telegram
 
@@ -169,7 +162,7 @@ openclaw channels login whatsapp
 
 ## 1GB RAM 向けの最適化
 
-$6 の Droplet は 1GB RAM しかありません。安定して動作させるために：
+$6 の Droplet は 1GB RAM しかありません。安定して動作させるために： スムーズに動作させるには:
 
 ### swap を追加する（推奨）
 
@@ -204,7 +197,7 @@ htop
 - `~/.openclaw/` — 設定、認証情報、セッションデータ
 - `~/.openclaw/workspace/` — ワークスペース（SOUL.md、メモリなど）
 
-これらは再起動後も保持されます。定期的にバックアップしてください：
+これらの生き残るリブート。 これらは再起動後も保持されます。定期的にバックアップしてください：
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -216,19 +209,19 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud は **Always Free** の ARM インスタンスを提供しており、ここに挙げたどの有料オプションよりも大幅に高性能です — $0/月。
 
-| 提供内容             | スペック                 |
-| -------------------- | ------------------------ |
-| **4 OCPU**           | ARM Ampere A1            |
-| **24GB RAM**         | 十分すぎる容量           |
-| **200GB ストレージ** | ブロックボリューム       |
-| **永久無料**         | クレジットカード請求なし |
+| あなたが得るもの        | スペック          |
+| --------------- | ------------- |
+| **4 OCPU**      | ARM Ampere A1 |
+| **24GB RAM**    | 十分すぎる容量       |
+| **200GB ストレージ** | ブロックボリューム     |
+| **永久無料**        | クレジットカード請求なし  |
 
 **注意点：**
 
 - 登録が不安定な場合があります（失敗したら再試行してください）
 - ARM アーキテクチャ — 多くは動作しますが、一部のバイナリは ARM ビルドが必要です
 
-完全なセットアップガイドについては [Oracle Cloud](/platforms/oracle) を参照してください。登録のコツや登録プロセスのトラブルシューティングについては、この [コミュニティガイド](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) を参照してください。
+完全なセットアップガイドについては [Oracle Cloud](/platforms/oracle) を参照してください。登録のコツや登録プロセスのトラブルシューティングについては、この [コミュニティガイド](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) を参照してください。 37. サインアップのヒントや登録プロセスのトラブルシューティングについては、この [コミュニティガイド](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) を参照してください。
 
 ---
 
@@ -261,7 +254,7 @@ free -h
 
 ---
 
-## 関連項目
+## See Also
 
 - [Hetzner ガイド](/install/hetzner) — より安価で高性能
 - [Docker インストール](/install/docker) — コンテナ化されたセットアップ

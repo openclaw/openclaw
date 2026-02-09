@@ -5,13 +5,6 @@ read_when:
   - Cron çalıştı ancak mesaj teslim edilmedi
   - Heartbeat sessiz görünüyor veya atlandı
 title: "Otomasyon Sorun Giderme"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:52Z
 ---
 
 # Otomasyon sorun giderme
@@ -51,7 +44,7 @@ openclaw logs --follow
 - İş etkin ve geçerli bir zamanlama/saat dilimine sahiptir.
 - `cron runs`, `ok` veya açık bir atlama nedeni gösterir.
 
-Yaygın belirtiler:
+Yaygın imzalar:
 
 - `cron: scheduler disabled; jobs will not run automatically` → cron yapılandırma/ortamda devre dışı.
 - `cron: timer tick failed` → zamanlayıcı tick’i çöktü; çevredeki stack/log bağlamını inceleyin.
@@ -72,7 +65,7 @@ openclaw logs --follow
 - İzole işler için teslimat modu/hedefi ayarlanmıştır.
 - Kanal yoklaması hedef kanalın bağlı olduğunu bildirir.
 
-Yaygın belirtiler:
+Yaygın imzalar:
 
 - Çalıştırma başarılı ancak teslimat modu `none` → harici bir mesaj beklenmez.
 - Teslimat hedefi eksik/geçersiz (`channel`/`to`) → çalıştırma dahili olarak başarılı olabilir ancak dışa gönderim atlanır.
@@ -92,7 +85,7 @@ openclaw channels status --probe
 - Heartbeat, sıfırdan büyük bir aralıkla etkin.
 - Son heartbeat sonucu `ran` (veya atlama nedeni anlaşılmıştır).
 
-Yaygın belirtiler:
+Yaygın imzalar:
 
 - `heartbeat skipped` ile `reason=quiet-hours` → `activeHours` dışında.
 - `requests-in-flight` → ana hat meşgul; heartbeat ertelendi.
@@ -116,7 +109,7 @@ Hızlı kurallar:
 - Heartbeat `activeHours`, yapılandırılmış saat dilimi çözümlemesini kullanır (`user`, `local` veya açık IANA tz).
 - Saat dilimi içermeyen ISO zaman damgaları, cron `at` zamanlamaları için UTC olarak ele alınır.
 
-Yaygın belirtiler:
+Yaygın imzalar:
 
 - Ana makine saat dilimi değişikliklerinden sonra işler yanlış duvar saati zamanında çalışır.
 - `activeHours.timezone` yanlış olduğu için heartbeat gündüz saatleriniz boyunca her zaman atlanır.

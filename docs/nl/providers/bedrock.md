@@ -4,13 +4,6 @@ read_when:
   - Je wilt Amazon Bedrock-modellen gebruiken met OpenClaw
   - Je hebt AWS-referenties/regio-instellingen nodig voor modelaanroepen
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:39Z
 ---
 
 # Amazon Bedrock
@@ -112,8 +105,7 @@ automatisch de instance metadata service (IMDS) voor authenticatie.
 De detectie van referenties in OpenClaw controleert momenteel echter alleen omgevingsvariabelen,
 niet IMDS-referenties.
 
-**Workaround:** Stel `AWS_PROFILE=default` in om aan te geven dat AWS-referenties beschikbaar zijn.
-De daadwerkelijke authenticatie gebruikt nog steeds de instance role via IMDS.
+**Workaround:** Stel `AWS_PROFILE=default` in om aan te geven dat AWS-referenties beschikbaar zijn. De daadwerkelijke authenticatie gebruikt nog steeds de instance role via IMDS.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

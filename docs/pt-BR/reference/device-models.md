@@ -4,13 +4,6 @@ read_when:
   - Atualizando mapeamentos de identificadores de modelo de dispositivos ou arquivos NOTICE/licença
   - Alterando como a UI de Instâncias exibe nomes de dispositivos
 title: "Banco de dados de modelos de dispositivos"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:45Z
 ---
 
 # Banco de dados de modelos de dispositivos (nomes amigáveis)

@@ -4,13 +4,6 @@ read_when:
   - เพิ่มหรือแก้ไขคอนฟิกSkills
   - ปรับรายการอนุญาตแบบรวมมาหรือพฤติกรรมการติดตั้ง
 title: "คอนฟิกSkills"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:47Z
 ---
 
 # คอนฟิกSkills
@@ -47,12 +40,13 @@ x-i18n:
 
 ## ฟิลด์
 
-- `allowBundled`: รายการอนุญาตแบบไม่บังคับสำหรับSkillsที่ **รวมมา** เท่านั้น เมื่อกำหนดแล้ว จะมีสิทธิ์เฉพาะSkillsที่รวมมาและอยู่ในรายการ (ไม่กระทบSkillsแบบ managed/workspace)
+- `allowBundled`: allowlist แบบไม่บังคับสำหรับสกิลแบบ **bundled** เท่านั้น `allowBundled`: รายการอนุญาตแบบไม่บังคับสำหรับSkillsที่ **รวมมา** เท่านั้น เมื่อกำหนดแล้ว จะมีสิทธิ์เฉพาะSkillsที่รวมมาและอยู่ในรายการ (ไม่กระทบSkillsแบบ managed/workspace)
 - `load.extraDirs`: ไดเรกทอรีSkillsเพิ่มเติมที่จะสแกน (ลำดับความสำคัญต่ำสุด)
 - `load.watch`: เฝ้าดูโฟลเดอร์Skillsและรีเฟรชสแน็ปช็อตSkills (ค่าเริ่มต้น: true)
 - `load.watchDebounceMs`: ค่า debounce สำหรับอีเวนต์ของตัวเฝ้าดูSkillsเป็นมิลลิวินาที (ค่าเริ่มต้น: 250)
 - `install.preferBrew`: เลือกใช้ตัวติดตั้งผ่าน brew เมื่อมีให้ใช้ (ค่าเริ่มต้น: true)
-- `install.nodeManager`: ค่าความชอบของตัวติดตั้งโหนด (`npm` | `pnpm` | `yarn` | `bun`, ค่าเริ่มต้น: npm)
+- `install.nodeManager`: ค่ากำหนดตัวติดตั้ง node (`npm` | `pnpm` | `yarn` | `bun`, ค่าเริ่มต้น: npm)
+  `install.nodeManager`: ค่าความชอบของตัวติดตั้งโหนด (`npm` | `pnpm` | `yarn` | `bun`, ค่าเริ่มต้น: npm)
   สิ่งนี้มีผลเฉพาะกับ **การติดตั้งSkills** เท่านั้น; รันไทม์ของ Gateway ควรยังเป็น Node
   (ไม่แนะนำ Bun สำหรับ WhatsApp/Telegram)
 - `entries.<skillKey>`: การ override รายSkill
@@ -65,14 +59,14 @@ x-i18n:
 
 ## หมายเหตุ
 
-- คีย์ภายใต้ `entries` จะแมปกับชื่อSkillโดยค่าเริ่มต้น หากSkillกำหนด
+- คีย์ภายใต้ `entries` จะถูกแมปกับชื่อสกิลโดยค่าเริ่มต้น คีย์ภายใต้ `entries` จะแมปกับชื่อSkillโดยค่าเริ่มต้น หากSkillกำหนด
   `metadata.openclaw.skillKey` ให้ใช้คีย์นั้นแทน
 - การเปลี่ยนแปลงSkillsจะถูกรับรู้ในเทิร์นถัดไปของเอเจนต์เมื่อเปิดใช้งานตัวเฝ้าดู
 
 ### SkillsแบบSandboxed+ตัวแปรสภาพแวดล้อม
 
 เมื่อเซสชันเป็น **sandboxed**, โพรเซสของSkillจะรันภายใน Docker โดย sandbox
-จะ **ไม่** สืบทอด `process.env` ของโฮสต์
+จะ **ไม่** สืบทอด `process.env` ของโฮสต์ sandbox **ไม่** สืบทอดค่า `process.env` ของโฮสต์
 
 ใช้วิธีใดวิธีหนึ่ง:
 

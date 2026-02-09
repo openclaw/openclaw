@@ -4,13 +4,6 @@ read_when:
   - 백그라운드 exec 동작을 추가하거나 수정할 때
   - 장시간 실행되는 exec 작업을 디버깅할 때
 title: "백그라운드 Exec 및 프로세스 도구"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:00Z
 ---
 
 # 백그라운드 Exec + 프로세스 도구
@@ -26,7 +19,7 @@ OpenClaw 는 `exec` 도구를 통해 셸 명령을 실행하고, 장시간 실�
 - `background` (bool): 즉시 백그라운드로 실행
 - `timeout` (초, 기본값 1800): 이 타임아웃 이후 프로세스 종료
 - `elevated` (bool): 권한 상승 모드가 활성화/허용된 경우 호스트에서 실행
-- 실제 TTY 가 필요한 경우 `pty: true` 을 설정하십시오.
+- 실제 TTY 가 필요한가요? 실제 TTY 가 필요한 경우 `pty: true` 을 설정하십시오.
 - `workdir`, `env`
 
 동작:

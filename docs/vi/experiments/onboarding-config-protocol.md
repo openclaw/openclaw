@@ -2,13 +2,6 @@
 summary: "Ghi chú giao thức RPC cho trình hướng dẫn onboarding và lược đồ cấu hình"
 read_when: "Khi thay đổi các bước của trình hướng dẫn onboarding hoặc các endpoint lược đồ cấu hình"
 title: "Giao thức Onboarding và Cấu hình"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:47Z
 ---
 
 # Giao thức Onboarding + Cấu hình
@@ -26,14 +19,14 @@ Mục đích: các bề mặt onboarding + cấu hình dùng chung trên CLI, �
 ## RPC của Gateway
 
 - `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`
-- `wizard.next` params: `{ sessionId, answer?: { stepId, value? } }`
+- Tham số `wizard.next`: `{ sessionId, answer?: { stepId, value?` }\` }
 - `wizard.cancel` params: `{ sessionId }`
 - `wizard.status` params: `{ sessionId }`
 - `config.schema` params: `{}`
 
 Phản hồi (hình dạng)
 
-- Wizard: `{ sessionId, done, step?, status?, error? }`
+- Wizard: `{ sessionId, done, step?, status?, error?` Các log gateway gần đây cho thấy lỗi `cron.add` lặp lại với tham số không hợp lệ (thiếu `sessionTarget`, `wakeMode`, `payload`, và `schedule` bị sai định dạng).
 - Lược đồ cấu hình: `{ schema, uiHints, version, generatedAt }`
 
 ## Gợi ý UI

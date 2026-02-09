@@ -5,13 +5,6 @@ description: Typed na workflow runtime para sa OpenClaw — composable na mga pi
 read_when:
   - Gusto mo ng deterministic na multi-step workflows na may malinaw na mga approval
   - Kailangan mong i-resume ang isang workflow nang hindi muling pinapatakbo ang mga naunang hakbang
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:16Z
 ---
 
 # Lobster
@@ -20,11 +13,11 @@ Ang Lobster ay isang workflow shell na nagbibigay-daan sa OpenClaw na magpatakbo
 
 ## Hook
 
-Kayang bumuo ng iyong assistant ng mga tool na nagma-manage sa sarili nito. Humingi ng workflow, at pagkalipas ng 30 minuto may CLI ka na plus mga pipeline na tumatakbo bilang isang tawag. Ang Lobster ang nawawalang piraso: deterministic na mga pipeline, malinaw na mga approval, at resumable na state.
+42. Ang iyong assistant ay maaaring bumuo ng mga tool na namamahala sa sarili nito. Ask for a workflow, and 30 minutes later you have a CLI plus pipelines that run as one call. Lobster is the missing piece: deterministic pipelines, explicit approvals, and resumable state.
 
 ## Why
 
-Sa kasalukuyan, ang mga kumplikadong workflow ay nangangailangan ng maraming pabalik-balik na tool call. Bawat tawag ay may token cost, at kailangang i-orchestrate ng LLM ang bawat hakbang. Inililipat ng Lobster ang orchestration na iyon sa isang typed runtime:
+43. Sa kasalukuyan, ang mga kumplikadong workflow ay nangangailangan ng maraming pabalik-balik na tool call. 44. Bawat tawag ay may gastos sa token, at kailangang i-orchestrate ng LLM ang bawat hakbang. Lobster moves that orchestration into a typed runtime:
 
 - **Isang tawag imbes na marami**: Nagpapatakbo ang OpenClaw ng isang Lobster tool call at nakakakuha ng structured na resulta.
 - **May built-in na approvals**: Ang mga side effect (magpadala ng email, mag-post ng komento) ay humihinto sa workflow hanggang sa malinaw na maaprubahan.
@@ -32,22 +25,22 @@ Sa kasalukuyan, ang mga kumplikadong workflow ay nangangailangan ng maraming pab
 
 ## Bakit DSL imbes na plain programs?
 
-Sadyang maliit ang Lobster. Ang layunin ay hindi “isang bagong wika,” kundi isang predictable, AI-friendly na pipeline spec na may first-class approvals at resume tokens.
+Lobster is intentionally small. The goal is not "a new language," it's a predictable, AI-friendly pipeline spec with first-class approvals and resume tokens.
 
 - **Built-in ang approve/resume**: Kayang mag-prompt ng tao ang isang normal na program, pero hindi ito makaka-_pause at resume_ gamit ang isang durable token nang hindi ka gumagawa ng sarili mong runtime.
 - **Determinism + auditability**: Data ang mga pipeline, kaya madaling i-log, i-diff, i-replay, at i-review.
 - **Constrained surface para sa AI**: Maliit na grammar + JSON piping ang nagbabawas ng mga “creative” code path at ginagawang realistic ang validation.
 - **May baked-in na safety policy**: Ang mga timeout, output cap, sandbox check, at allowlist ay ipinapatupad ng runtime, hindi ng bawat script.
-- **Programmable pa rin**: Bawat hakbang ay puwedeng tumawag ng anumang CLI o script. Kung gusto mo ng JS/TS, mag-generate ng mga `.lobster` file mula sa code.
+- **Still programmable**: Each step can call any CLI or script. 45. Kung gusto mo ng JS/TS, bumuo ng mga `.lobster` file mula sa code.
 
 ## Paano ito gumagana
 
-Ini-launch ng OpenClaw ang lokal na `lobster` CLI sa **tool mode** at nagpa-parse ng JSON envelope mula sa stdout.
-Kung mag-pause ang pipeline para sa approval, ibinabalik ng tool ang isang `resumeToken` para maipagpatuloy mo ito sa ibang pagkakataon.
+OpenClaw launches the local `lobster` CLI in **tool mode** and parses a JSON envelope from stdout.
+If the pipeline pauses for approval, the tool returns a `resumeToken` so you can continue later.
 
 ## Pattern: maliit na CLI + JSON pipes + approvals
 
-Bumuo ng maliliit na command na nagsasalita ng JSON, pagkatapos ay i-chain ang mga ito sa isang solong Lobster call. (Mga halimbawa lang ang pangalan ng command sa ibaba — palitan ng sa iyo.)
+46. Bumuo ng maliliit na command na nagsasalita ng JSON, pagkatapos ay i-chain ang mga ito sa isang solong Lobster call. (Example command names below — swap in your own.)
 
 ```bash
 inbox list --json
@@ -73,7 +66,7 @@ Kung humiling ng approval ang pipeline, i-resume gamit ang token:
 }
 ```
 
-Ini-trigger ng AI ang workflow; isinasagawa ng Lobster ang mga hakbang. Pinananatiling malinaw at auditable ng mga approval gate ang mga side effect.
+AI triggers the workflow; Lobster executes the steps. 47. Pinananatiling malinaw at naa-audit ang mga side effect ng mga approval gate.
 
 Halimbawa: i-map ang mga input item papunta sa mga tool call:
 
@@ -84,8 +77,9 @@ gog.gmail.search --query 'newer_than:1d' \
 
 ## JSON-only na LLM steps (llm-task)
 
-Para sa mga workflow na nangangailangan ng **structured na LLM step**, i-enable ang optional na
-`llm-task` plugin tool at tawagin ito mula sa Lobster. Pinapanatili nitong deterministic ang workflow habang pinapayagan ka pa ring mag-classify/mag-summarize/mag-draft gamit ang isang model.
+48. Para sa mga workflow na nangangailangan ng **structured LLM step**, i-enable ang opsyonal na
+    `llm-task` plugin tool at tawagin ito mula sa Lobster. This keeps the workflow
+    deterministic while still letting you classify/summarize/draft with a model.
 
 I-enable ang tool:
 
@@ -129,7 +123,7 @@ Tingnan ang [LLM Task](/tools/llm-task) para sa mga detalye at opsyon sa configu
 
 ## Workflow files (.lobster)
 
-Kayang magpatakbo ng Lobster ng YAML/JSON workflow files na may mga field na `name`, `args`, `steps`, `env`, `condition`, at `approval`. Sa mga OpenClaw tool call, itakda ang `pipeline` sa file path.
+Lobster can run YAML/JSON workflow files with `name`, `args`, `steps`, `env`, `condition`, and `approval` fields. 49. Sa mga OpenClaw tool call, itakda ang `pipeline` sa file path.
 
 ```yaml
 name: inbox-triage
@@ -159,8 +153,8 @@ Mga tala:
 
 ## I-install ang Lobster
 
-I-install ang Lobster CLI sa **parehong host** na nagpapatakbo ng OpenClaw Gateway (tingnan ang [Lobster repo](https://github.com/openclaw/lobster)), at tiyaking nasa `PATH` ang `lobster`.
-Kung gusto mong gumamit ng custom na lokasyon ng binary, magpasa ng **absolute** na `lobsterPath` sa tool call.
+50. I-install ang Lobster CLI sa **parehong host** na nagpapatakbo ng OpenClaw Gateway (tingnan ang [Lobster repo](https://github.com/openclaw/lobster)), at tiyaking ang `lobster` ay nasa `PATH`.
+51. Kung gusto mong gumamit ng custom na lokasyon ng binary, magpasa ng **absolute** na `lobsterPath` sa tool call.
 
 ## I-enable ang tool
 
@@ -195,9 +189,7 @@ O per-agent:
 
 Iwasang gamitin ang `tools.allow: ["lobster"]` maliban kung balak mong tumakbo sa restrictive allowlist mode.
 
-Tandaan: ang mga allowlist ay opt-in para sa mga optional plugin. Kung ang iyong allowlist ay naglalaman lang ng
-mga plugin tool (tulad ng `lobster`), pinananatiling naka-enable ng OpenClaw ang mga core tool. Para i-restrict ang mga core
-tool, isama rin sa allowlist ang mga core tool o group na gusto mo.
+Note: allowlists are opt-in for optional plugins. 2. Kung ang iyong allowlist ay nagbabanggit lamang ng mga plugin tool (tulad ng `lobster`), pinananatiling naka-enable ng OpenClaw ang mga core tool. 3. Upang higpitan ang mga core tool, isama rin sa allowlist ang mga core tool o grupong gusto mo.
 
 ## Halimbawa: Email triage
 
@@ -250,7 +242,7 @@ Inaprubahan ng user → i-resume:
 }
 ```
 
-Isang workflow. Deterministic. Ligtas.
+4. Isang workflow. Deterministic. 5. Ligtas.
 
 ## Mga parameter ng tool
 
@@ -315,11 +307,11 @@ Kung naroroon ang `requiresApproval`, suriin ang prompt at magpasya:
 - `approve: true` → i-resume at ipagpatuloy ang mga side effect
 - `approve: false` → kanselahin at tapusin ang workflow
 
-Gamitin ang `approve --preview-from-stdin --limit N` para mag-attach ng JSON preview sa mga approval request nang walang custom jq/heredoc glue. Compact na ngayon ang mga resume token: iniimbak ng Lobster ang workflow resume state sa ilalim ng state dir nito at nagbabalik ng maliit na token key.
+6. Gamitin ang `approve --preview-from-stdin --limit N` upang mag-attach ng JSON preview sa mga request ng approval nang walang custom jq/heredoc glue. Resume tokens are now compact: Lobster stores workflow resume state under its state dir and hands back a small token key.
 
 ## OpenProse
 
-Magandang kapareha ng Lobster ang OpenProse: gamitin ang `/prose` para i-orchestrate ang multi-agent prep, pagkatapos ay magpatakbo ng Lobster pipeline para sa deterministic na mga approval. Kung kailangan ng isang Prose program ang Lobster, payagan ang `lobster` tool para sa mga sub-agent sa pamamagitan ng `tools.subagents.tools`. Tingnan ang [OpenProse](/prose).
+7. Mahusay na magkapareha ang OpenProse at Lobster: gamitin ang `/prose` upang i-orchestrate ang multi-agent prep, pagkatapos ay magpatakbo ng Lobster pipeline para sa deterministikong approvals. 8. Kung kailangan ng isang Prose program ang Lobster, payagan ang `lobster` tool para sa mga sub-agent sa pamamagitan ng `tools.subagents.tools`. 9. Tingnan ang [OpenProse](/prose).
 
 ## Safety
 
@@ -342,7 +334,7 @@ Magandang kapareha ng Lobster ang OpenProse: gamitin ang `/prose` para i-orchest
 
 ## Case study: mga workflow ng komunidad
 
-Isang pampublikong halimbawa: isang “second brain” CLI + Lobster pipelines na nagma-manage ng tatlong Markdown vault (personal, partner, shared). Ang CLI ay naglalabas ng JSON para sa stats, inbox listing, at stale scan; ini-chain ng Lobster ang mga command na iyon sa mga workflow tulad ng `weekly-review`, `inbox-triage`, `memory-consolidation`, at `shared-task-sync`, bawat isa ay may approval gate. Hinahawakan ng AI ang judgment (categorization) kapag available at bumabagsak sa deterministic na mga rule kapag wala.
+10. Isang pampublikong halimbawa: isang “second brain” CLI + Lobster pipelines na namamahala ng tatlong Markdown vault (personal, partner, shared). The CLI emits JSON for stats, inbox listings, and stale scans; Lobster chains those commands into workflows like `weekly-review`, `inbox-triage`, `memory-consolidation`, and `shared-task-sync`, each with approval gates. 11. Hinahawakan ng AI ang paghatol (categorization) kapag available at bumabalik sa mga deterministikong patakaran kapag hindi.
 
 - Thread: [https://x.com/plattenschieber/status/2014508656335770033](https://x.com/plattenschieber/status/2014508656335770033)
 - Repo: [https://github.com/bloomedai/brain-cli](https://github.com/bloomedai/brain-cli)

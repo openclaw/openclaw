@@ -4,13 +4,6 @@ read_when:
   - تريد دعم Zalo Personal (غير رسمي) في OpenClaw
   - تقوم بتهيئة أو تطوير إضافة zalouser
 title: "إضافة Zalo Personal"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:29Z
 ---
 
 # Zalo Personal (إضافة)
@@ -23,7 +16,7 @@ x-i18n:
 
 معرّف القناة هو `zalouser` لجعل الأمر واضحًا بأن هذا يُؤتمت **حساب مستخدم Zalo شخصي** (غير رسمي). نُبقي `zalo` محجوزًا لتكامل محتمل مستقبلاً مع واجهة Zalo API الرسمية.
 
-## مكان التشغيل
+## أين يتم التشغيل
 
 تعمل هذه الإضافة **داخل عملية Gateway**.
 

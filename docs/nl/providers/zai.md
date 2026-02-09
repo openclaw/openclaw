@@ -4,13 +4,6 @@ read_when:
   - Je wilt Z.AI / GLM-modellen in OpenClaw
   - Je hebt een eenvoudige ZAI_API_KEY-installatie nodig
 title: "Z.AI"
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:39Z
 ---
 
 # Z.AI

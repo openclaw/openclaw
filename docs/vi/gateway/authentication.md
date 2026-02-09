@@ -4,20 +4,13 @@ read_when:
   - Gỡ lỗi xác thực mô hình hoặc hết hạn OAuth
   - Tài liệu hóa xác thực hoặc lưu trữ thông tin xác thực
 title: "Xác thực"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:53Z
 ---
 
 # Xác thực
 
-OpenClaw hỗ trợ OAuth và khóa API cho các nhà cung cấp mô hình. Với tài khoản
-Anthropic, chúng tôi khuyến nghị dùng **khóa API**. Với quyền truy cập gói thuê
-bao Claude, hãy dùng token dài hạn được tạo bởi `claude setup-token`.
+Đối với tài khoản Anthropic, chúng tôi khuyến nghị sử dụng **API key**. Đối với các tài khoản Anthropic,
+chúng tôi khuyến nghị sử dụng **API key**. Đối với quyền truy cập thuê bao Claude,
+hãy dùng token tồn tại lâu được tạo bởi `claude setup-token`.
 
 Xem [/concepts/oauth](/concepts/oauth) để biết đầy đủ luồng OAuth và cách bố trí
 lưu trữ.
@@ -59,8 +52,8 @@ Xem [Help](/help) để biết chi tiết về kế thừa env (`env.shellEnv`,
 
 ## Anthropic: setup-token (xác thực thuê bao)
 
-Với Anthropic, lộ trình được khuyến nghị là **khóa API**. Nếu bạn dùng gói thuê
-bao Claude, luồng setup-token cũng được hỗ trợ. Chạy nó trên **máy chủ gateway**:
+Đối với Anthropic, đường dẫn được khuyến nghị là **API key**. Nếu bạn đang dùng thuê bao Claude,
+luồng setup-token cũng được hỗ trợ. Chạy nó trên **gateway host**:
 
 ```bash
 claude setup-token
@@ -150,8 +143,8 @@ openclaw models status
 
 ### Token sắp hết hạn/đã hết hạn
 
-Chạy `openclaw models status` để xác nhận hồ sơ nào đang hết hạn. Nếu hồ sơ bị thiếu, hãy
-chạy lại `claude setup-token` và dán token lần nữa.
+Nếu profile bị thiếu, hãy chạy lại `claude setup-token` và dán lại token. Nếu hồ sơ
+bị thiếu, hãy chạy lại `claude setup-token` và dán token lần nữa.
 
 ## Yêu cầu
 

@@ -4,13 +4,6 @@ read_when:
   - Je wilt een bron-checkout veilig bijwerken
   - Je moet het verkorte gedrag van `--update` begrijpen
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:19Z
 ---
 
 # `openclaw update`
@@ -80,7 +73,7 @@ Kanalen:
 - `beta`: checkout de nieuwste `-beta` tag, daarna build + doctor.
 - `dev`: checkout `main`, daarna fetch + rebase.
 
-Op hoofdlijnen:
+Hoog-niveau:
 
 1. Vereist een schone worktree (geen niet-gecommitte wijzigingen).
 2. Schakelt naar het geselecteerde kanaal (tag of branch).

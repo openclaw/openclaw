@@ -1,15 +1,8 @@
 ---
-title: Sandbox vs værktøjspolitik vs Elevated
+title: Sandbox vs Tool Policy vs Elevated
 summary: "Hvorfor et værktøj er blokeret: sandbox-runtime, værktøjs tillad/afvis-politik og elevated exec-gates"
 read_when: "Du rammer 'sandbox jail' eller ser et værktøjs-/elevated-afslag og vil have den præcise konfigurationsnøgle, der skal ændres."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:25Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -71,8 +64,8 @@ Tommelfingerregler:
 - `deny` vinder altid.
 - Hvis `allow` er ikke-tom, behandles alt andet som blokeret.
 - Værktøjspolitik er den hårde stopklods: `/exec` kan ikke tilsidesætte et afvist `exec`-værktøj.
-- `/exec` ændrer kun sessionsstandarder for autoriserede afsendere; den giver ikke værktøjsadgang.
-  Udbyder-værktøjsnøgler accepterer enten `provider` (f.eks. `google-antigravity`) eller `provider/model` (f.eks. `openai/gpt-5.2`).
+- `/exec` kun ændringer session standarder for autoriserede afsendere; det giver ikke værktøj adgang.
+  Udbyderværktøjstaster accepterer enten `provider` (f.eks. `google-antigravity`) eller `provider/model` (f.eks. `openai/gpt-5.2`).
 
 ### Værktøjsgrupper (genveje)
 
@@ -110,12 +103,12 @@ Elevated giver **ikke** ekstra værktøjer; det påvirker kun `exec`.
 - Brug `/elevated full` for at springe exec-godkendelser over for sessionen.
 - Hvis du allerede kører direkte, er elevated reelt en no-op (stadig gated).
 - Elevated er **ikke** skill-afgrænset og tilsidesætter **ikke** værktøjs tillad/afvis.
-- `/exec` er adskilt fra elevated. Den justerer kun per-session exec-standarder for autoriserede afsendere.
+- `/exec` er adskilt fra forhøjet. Det justerer kun per-session exec standarder for autoriserede afsendere.
 
 Gates:
 
-- Aktivering: `tools.elevated.enabled` (og evt. `agents.list[].tools.elevated.enabled`)
-- Afsender-tilladelseslister: `tools.elevated.allowFrom.<provider>` (og evt. `agents.list[].tools.elevated.allowFrom.<provider>`)
+- Enablement: `tools.elevated.enabled` (og valgfrit `agents.list[].tools.elevated.enabled`)
+- Afsenderen tillader: `tools.elevated.allowFrom.<provider>` (og valgfrit `agents.list[].tools.elevated.allowFrom.<provider>`)
 
 Se [Elevated Mode](/tools/elevated).
 
@@ -132,4 +125,4 @@ Fix-it-nøgler (vælg én):
 
 ### “Jeg troede, dette var main, hvorfor er det sandboxed?”
 
-I `"non-main"`-tilstand er gruppe-/kanalnøgler _ikke_ main. Brug main-sessionnøglen (vist af `sandbox explain`) eller skift tilstand til `"off"`.
+I `"ikke-main"` tilstand, gruppe / kanal nøgler er _not_ main. Brug hovedsessionsnøglen (vist ved `sandbox explain`) eller skift tilstand til `"off"`.

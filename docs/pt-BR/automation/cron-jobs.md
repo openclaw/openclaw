@@ -5,13 +5,6 @@ read_when:
   - Conectar automações que devem rodar com ou junto aos heartbeats
   - Decidir entre heartbeat e cron para tarefas agendadas
 title: "Cron Jobs"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:08Z
 ---
 
 # Cron jobs (scheduler do Gateway)

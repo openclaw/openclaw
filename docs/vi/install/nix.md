@@ -5,13 +5,6 @@ read_when:
   - Bạn đã sử dụng Nix/NixOS/Home Manager
   - Bạn muốn mọi thứ được ghim phiên bản và quản lý theo cách khai báo
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:22Z
 ---
 
 # Cài đặt Nix
@@ -39,7 +32,7 @@ Reference the nix-openclaw README for module options.
 
 > **📦 Hướng dẫn đầy đủ: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> Repo nix-openclaw là nguồn tham chiếu chính cho việc cài đặt Nix. Trang này chỉ là bản tổng quan nhanh.
+> Repo nix-openclaw là nguồn chân lý cho cài đặt Nix. This page is just a quick overview.
 
 ## Những gì bạn nhận được
 
@@ -54,15 +47,15 @@ Reference the nix-openclaw README for module options.
 
 Khi `OPENCLAW_NIX_MODE=1` được thiết lập (tự động với nix-openclaw):
 
-OpenClaw hỗ trợ **chế độ Nix** giúp cấu hình mang tính quyết định và vô hiệu hóa các luồng tự cài đặt.
-Bật bằng cách export:
+OpenClaw supports a **Nix mode** that makes configuration deterministic and disables auto-install flows.
+Enable it by exporting:
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
-Trên macOS, ứng dụng GUI không tự động kế thừa biến môi trường của shell. Bạn cũng có thể
-bật chế độ Nix thông qua defaults:
+On macOS, the GUI app does not automatically inherit shell env vars. You can
+also enable Nix mode via defaults:
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
@@ -92,9 +85,9 @@ Quy trình đóng gói macOS yêu cầu một template Info.plist ổn định t
 apps/macos/Sources/OpenClaw/Resources/Info.plist
 ```
 
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) sao chép template này vào bundle của ứng dụng và vá các trường động
-(bundle ID, version/build, Git SHA, khóa Sparkle). Điều này giúp plist mang tính quyết định cho
-đóng gói SwiftPM và các bản dựng Nix (không dựa vào bộ công cụ Xcode đầy đủ).
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) copies this template into the app bundle and patches dynamic fields
+(bundle ID, version/build, Git SHA, Sparkle keys). Điều này giữ cho plist có tính xác định cho việc đóng gói SwiftPM
+và các bản build Nix (không phụ thuộc vào đầy đủ toolchain Xcode).
 
 ## Liên quan
 

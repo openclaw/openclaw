@@ -5,13 +5,6 @@ read_when:
   - Model yedekleme davranışını veya seçim UX’ini değiştirirken
   - Model tarama yoklamalarını güncellerken (araçlar/görseller)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:25Z
 ---
 
 # Models CLI
@@ -157,8 +150,7 @@ Varsayılan olarak yapılandırılmış modelleri gösterir. Kullanışlı bayra
 
 Çözümlenmiş birincil modeli, yedekleri, görsel modelini ve yapılandırılmış
 sağlayıcıların kimlik doğrulama genel görünümünü gösterir. Ayrıca kimlik doğrulama deposunda
-bulunan profiller için OAuth sona erme durumunu yüzeye çıkarır (varsayılan olarak 24 saat içinde uyarır).
-`--plain` yalnızca çözümlenmiş birincil modeli yazdırır.
+bulunan profiller için OAuth sona erme durumunu yüzeye çıkarır (varsayılan olarak 24 saat içinde uyarır). `--plain` yalnızca çözümlenmiş birincil modeli yazdırır.
 OAuth durumu her zaman gösterilir (ve `--json` çıktısına dahildir). Yapılandırılmış bir
 sağlayıcının kimlik bilgileri yoksa, `models status` **Missing auth** bölümünü yazdırır.
 JSON, `auth.oauth` (uyarı penceresi + profiller) ve `auth.providers`
@@ -193,11 +185,11 @@ Yoklama için bir OpenRouter API anahtarı gerekir (kimlik doğrulama profilleri
 Tarama sonuçları şu ölçütlere göre sıralanır:
 
 1. Görsel desteği
-2. Araç gecikmesi
+2. Tool latency
 3. Bağlam boyutu
 4. Parametre sayısı
 
-Girdi
+Input
 
 - OpenRouter `/models` listesi ( `:free` filtresi)
 - Kimlik doğrulama profillerinden veya `OPENROUTER_API_KEY`’den OpenRouter API anahtarı gerektirir (bkz. [/environment](/help/environment))

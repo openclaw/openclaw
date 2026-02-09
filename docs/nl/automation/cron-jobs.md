@@ -5,13 +5,6 @@ read_when:
   - Automatisering koppelen die met of naast heartbeats moet draaien
   - Beslissen tussen heartbeat en cron voor geplande taken
 title: "Cronjobs"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:27Z
 ---
 
 # Cronjobs (Gateway-scheduler)
@@ -182,7 +175,7 @@ om direct de chat te targeten. Wanneer `delivery.mode = "none"`, wordt er geen s
 
 Als `delivery` ontbreekt voor geïsoleerde jobs, gebruikt OpenClaw standaard `announce`.
 
-#### Aankondigingsleveringsstroom
+#### Kondig levering stroom aan
 
 Wanneer `delivery.mode = "announce"`, levert cron direct via de outbound-kanaaladapters.
 De hoofdagent wordt niet gestart om het bericht te formuleren of door te sturen.

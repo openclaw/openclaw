@@ -3,13 +3,6 @@ summary: "Versteviging van de Telegram-toegestane lijst: prefix- en witruimtenor
 read_when:
   - Beoordelen van historische wijzigingen in de Telegram-toegestane lijst
 title: "Versteviging van de Telegram-toegestane lijst"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:19Z
 ---
 
 # Versteviging van de Telegram-toegestane lijst

@@ -4,19 +4,12 @@ read_when:
   - آپ کو فراہم کنندہ بہ فراہم کنندہ ماڈل سیٹ اپ کا حوالہ درکار ہو
   - آپ ماڈل فراہم کنندگان کے لیے مثال کنفیگز یا CLI آن بورڈنگ کمانڈز چاہتے ہوں
 title: "ماڈل فراہم کنندگان"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:18Z
 ---
 
 # ماڈل فراہم کنندگان
 
-یہ صفحہ **LLM/ماڈل فراہم کنندگان** کا احاطہ کرتا ہے (WhatsApp/Telegram جیسے چیٹ چینلز نہیں)۔
-ماڈل انتخاب کے قواعد کے لیے دیکھیں [/concepts/models](/concepts/models)۔
+This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
+For model selection rules, see [/concepts/models](/concepts/models).
 
 ## فوری قواعد
 
@@ -26,8 +19,8 @@ x-i18n:
 
 ## بلٹ اِن فراہم کنندگان (pi-ai کیٹلاگ)
 
-OpenClaw کے ساتھ pi‑ai کیٹلاگ شامل ہے۔ ان فراہم کنندگان کے لیے **کسی**
-`models.providers` کنفیگ کی ضرورت نہیں؛ بس تصدیق سیٹ کریں اور ماڈل منتخب کریں۔
+OpenClaw ships with the pi‑ai catalog. These providers require **no**
+`models.providers` config; just set auth + pick a model.
 
 ### OpenAI
 
@@ -98,8 +91,8 @@ OpenClaw کے ساتھ pi‑ai کیٹلاگ شامل ہے۔ ان فراہم کن
 - Gemini CLI OAuth بطور بنڈلڈ پلگ اِن فراہم کیا جاتا ہے (`google-gemini-cli-auth`، بطورِ طے شدہ غیرفعال)۔
   - فعال کریں: `openclaw plugins enable google-gemini-cli-auth`
   - لاگ اِن: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - نوٹ: آپ `openclaw.json` میں **کلائنٹ آئی ڈی یا سیکرٹ** پیسٹ نہیں کرتے۔ CLI لاگ اِن فلو
-    گیٹ وے ہوسٹ پر auth پروفائلز میں ٹوکنز محفوظ کرتا ہے۔
+  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
+    tokens in auth profiles on the gateway host.
 
 ### Z.AI (GLM)
 
@@ -190,8 +183,8 @@ Kimi Coding، Moonshot AI کے Anthropic‑مطابقت رکھنے والے ای
 
 ### Qwen OAuth (فری ٹائر)
 
-Qwen، ڈیوائس‑کوڈ فلو کے ذریعے Qwen Coder + Vision تک OAuth رسائی فراہم کرتا ہے۔
-بنڈلڈ پلگ اِن فعال کریں، پھر لاگ اِن کریں:
+Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
+Enable the bundled plugin, then log in:
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +257,7 @@ ollama pull llama3.3
 }
 ```
 
-Ollama، `http://127.0.0.1:11434/v1` پر مقامی طور پر چلنے کی صورت میں خودکار طور پر شناخت ہو جاتا ہے۔ ماڈل سفارشات اور حسبِ ضرورت کنفیگریشن کے لیے دیکھیں [/providers/ollama](/providers/ollama)۔
+Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
 ### مقامی پراکسیز (LM Studio، vLLM، LiteLLM، وغیرہ)
 
@@ -303,8 +296,8 @@ Ollama، `http://127.0.0.1:11434/v1` پر مقامی طور پر چلنے کی �
 
 نوٹس:
 
-- حسبِ ضرورت فراہم کنندگان کے لیے، `reasoning`, `input`, `cost`, `contextWindow`, اور `maxTokens` اختیاری ہیں۔
-  جب انہیں چھوڑ دیا جائے تو OpenClaw بطورِ طے شدہ یہ قدریں استعمال کرتا ہے:
+- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
+  When omitted, OpenClaw defaults to:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

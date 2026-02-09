@@ -3,13 +3,6 @@ summary: "Estado de compatibilidad, capacidades y configuración de la app de Go
 read_when:
   - Al trabajar en funciones del canal de Google Chat
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:41Z
 ---
 
 # Google Chat (Chat API)

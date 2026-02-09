@@ -3,13 +3,6 @@ summary: "Google Chat アプリのサポート状況、機能、および設定"
 read_when:
   - Google Chat チャンネル機能の作業時
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:01Z
 ---
 
 # Google Chat（Chat API）
@@ -54,7 +47,7 @@ x-i18n:
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - または config: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`。
 8. Webhook audience のタイプと値を設定します（Chat アプリの設定と一致させます）。
-9. ゲートウェイを起動します。Google Chat は Webhook パスに POST を送信します。
+9. ゲートウェイを起動します。 GoogleチャットはWebhookのパスにPOSTします。
 
 ## Google Chat に追加
 
@@ -63,18 +56,18 @@ x-i18n:
 1. [Google Chat](https://chat.google.com/) に移動します。
 2. **Direct Messages** の横にある **+**（プラス）アイコンをクリックします。
 3. 検索バー（通常人を追加する場所）に、Google Cloud Console で設定した **App name** を入力します。
-   - **注記**: このボットはプライベートアプリのため、「Marketplace」の一覧には表示されません。名前で検索する必要があります。
+   - **注記**: このボットはプライベートアプリのため、「Marketplace」の一覧には表示されません。名前で検索する必要があります。 名前で検索する必要があります。
 4. 検索結果からボットを選択します。
 5. **Add** または **Chat** をクリックして 1:1 の会話を開始します。
 6. 「Hello」を送信してアシスタントを起動します。
 
 ## 公開 URL（Webhook のみ）
 
-Google Chat の Webhook には公開 HTTPS エンドポイントが必要です。セキュリティのため、**インターネットに公開するのは `/googlechat` パスのみ**にしてください。OpenClaw ダッシュボードやその他の機密エンドポイントは、プライベートネットワーク上に保持します。
+Google Chat の Webhook には公開 HTTPS エンドポイントが必要です。セキュリティのため、**インターネットに公開するのは `/googlechat` パスのみ**にしてください。OpenClaw ダッシュボードやその他の機密エンドポイントは、プライベートネットワーク上に保持します。 セキュリティのため、**`/googlechat`のパス**だけをインターネットに公開します。 OpenClawダッシュボードやその他の機密性の高いエンドポイントをプライベートネットワーク上に保持します。
 
 ### オプション A: Tailscale Funnel（推奨）
 
-プライベートなダッシュボードには Tailscale Serve、公開 Webhook パスには Funnel を使用します。これにより `/` を非公開のまま、`/googlechat` のみを公開できます。
+プライベートなダッシュボードには Tailscale Serve、公開 Webhook パスには Funnel を使用します。これにより `/` を非公開のまま、`/googlechat` のみを公開できます。 `/`は`/googlechat`のみを公開しています。
 
 1. **ゲートウェイがどのアドレスにバインドされているか確認します。**
 
@@ -122,7 +115,7 @@ Google Chat の Webhook には公開 HTTPS エンドポイントが必要です�
 
 Google Chat アプリの設定では、公開 URL（`:8443` を除く）を使用します。
 
-> 注記: この設定は再起動後も保持されます。後で削除するには、`tailscale funnel reset` と `tailscale serve reset` を実行します。
+> 注:この設定はリブート間で持続します。 注記: この設定は再起動後も保持されます。後で削除するには、`tailscale funnel reset` と `tailscale serve reset` を実行します。
 
 ### オプション B: リバースプロキシ（Caddy）
 
@@ -143,18 +136,18 @@ your-domain.com {
 - **Path**: `/googlechat` -> `http://localhost:18789/googlechat`
 - **Default Rule**: HTTP 404（Not Found）
 
-## 仕組み
+## How it works
 
-1. Google Chat は Webhook の POST をゲートウェイに送信します。各リクエストには `Authorization: Bearer <token>` ヘッダーが含まれます。
+1. ゲートウェイを起動します。Google Chat は Webhook パスに POST を送信します。 各リクエストには `Authorization: Bearer <token>` ヘッダーが含まれています。
 2. OpenClaw は、設定された `audienceType` と `audience` に対してトークンを検証します。
    - `audienceType: "app-url"` → audience は HTTPS の Webhook URL です。
    - `audienceType: "project-number"` → audience は Cloud プロジェクト番号です。
 3. メッセージはスペースごとにルーティングされます。
    - DM はセッションキー `agent:<agentId>:googlechat:dm:<spaceId>` を使用します。
    - スペースはセッションキー `agent:<agentId>:googlechat:group:<spaceId>` を使用します。
-4. DM のアクセスはデフォルトでペアリングです。不明な送信者にはペアリングコードが送られ、次で承認します。
+4. DMアクセスはデフォルトでペアリングされています。 不明な送信者はペアリングコードを受け取ります。以下を承認してください：
    - `openclaw pairing approve googlechat <code>`
-5. グループスペースでは、デフォルトで @ メンションが必要です。メンション検出にアプリのユーザー名が必要な場合は `botUser` を使用します。
+5. グループスペースにはデフォルトで@-メンションが必要です。 グループスペースでは、デフォルトで @ メンションが必要です。メンション検出にアプリのユーザー名が必要な場合は `botUser` を使用します。
 
 ## 対象
 
@@ -214,9 +207,9 @@ Google Cloud Logs Explorer に次のようなエラーが表示される場合:
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-これは Webhook ハンドラーが登録されていないことを意味します。一般的な原因は次のとおりです。
+これは Webhook ハンドラーが登録されていないことを意味します。一般的な原因は次のとおりです。 よくある原因:
 
-1. **チャンネルが未設定**: 設定に `channels.googlechat` セクションがありません。次で確認します。
+1. **チャンネルが未設定**: 設定に `channels.googlechat` セクションがありません。次で確認します。 以下の認証を行います。
 
    ```bash
    openclaw config get channels.googlechat

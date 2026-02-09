@@ -4,19 +4,12 @@ read_when:
   - Du har brug for strukturerede filredigeringer på tværs af flere filer
   - Du vil dokumentere eller fejlfinde patch-baserede redigeringer
 title: "apply_patch-værktøj"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:40Z
 ---
 
 # apply_patch-værktøj
 
-Anvend filændringer ved hjælp af et struktureret patch-format. Dette er ideelt til redigeringer på tværs af flere filer
-eller flere hunks, hvor et enkelt `edit`-kald ville være skrøbeligt.
+Anvend filændringer ved hjælp af en struktureret patch format. Dette er ideelt til multi-file
+eller multi-hunk redigeringer, hvor en enkelt `edit` opkald ville være skørt.
 
 Værktøjet accepterer en enkelt `input`-streng, der indkapsler én eller flere filoperationer:
 
@@ -42,8 +35,8 @@ Værktøjet accepterer en enkelt `input`-streng, der indkapsler én eller flere 
 - Stier opløses relativt til workspace-roden.
 - Brug `*** Move to:` inden for en `*** Update File:`-hunk til at omdøbe filer.
 - `*** End of File` markerer en indsættelse kun ved EOF, når det er nødvendigt.
-- Eksperimentel og deaktiveret som standard. Aktivér med `tools.exec.applyPatch.enabled`.
-- Kun OpenAI (inklusive OpenAI Codex). Kan valgfrit afgrænses efter model via
+- Eksperimentel og deaktiveret som standard. Aktiver med `tools.exec.applyPatch.enabled`.
+- Udelukkende OpenAI- (inkl. OpenAI Codex). Valgfrit gate efter model via
   `tools.exec.applyPatch.allowModels`.
 - Konfiguration findes kun under `tools.exec`.
 

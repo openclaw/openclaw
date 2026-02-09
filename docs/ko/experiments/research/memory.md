@@ -2,16 +2,9 @@
 summary: "연구 노트: Clawd 워크스페이스를 위한 오프라인 메모리 시스템 (Markdown 단일 소스 오브 트루스 + 파생 인덱스)"
 read_when:
   - 일일 Markdown 로그를 넘어서는 워크스페이스 메모리 (~/.openclaw/workspace) 설계 시
-  - 독립형 CLI vs OpenClaw 심층 통합 결정 시
+  - Deciding: 독립형 CLI vs OpenClaw 심층 통합 결정 시
   - 오프라인 회상 + 성찰 (retain/recall/reflect) 추가 시
 title: "워크스페이스 메모리 연구"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:16Z
 ---
 
 # Workspace Memory v2 (offline): 연구 노트
@@ -29,7 +22,7 @@ x-i18n:
 - git 기반 내구성 + 감사 가능성
 - 낮은 마찰의 기록 (“그냥 적기”)
 
-하지만 다음에는 취약합니다:
+약한 부분:
 
 - 높은 회상률의 검색 (“X 에 대해 무엇을 결정했지?”, “마지막으로 Y 를 시도한 게 언제였지?”)
 - 여러 파일을 다시 읽지 않고는 어려운 엔티티 중심 답변 (“Alice / The Castle / warelay 에 대해 알려줘”)
@@ -99,7 +92,7 @@ x-i18n:
 ~/.openclaw/workspace/.memory/index.sqlite
 ```
 
-구성 요소:
+다음으로 보완하세요:
 
 - 사실 + 엔티티 링크 + 의견 메타데이터를 위한 SQLite 스키마
 - 어휘 기반 회상을 위한 SQLite **FTS5** (빠르고, 작고, 오프라인)
@@ -204,14 +197,14 @@ Reflection 은 스케줄된 작업 (일일 또는 하트비트 `ultrathink`)으�
 - SuCo 로 **시작하지 말 것**.
 - SQLite FTS + (선택적) 단순 임베딩으로 시작하면 대부분의 UX 이득을 즉시 얻을 수 있음.
 - 다음 조건이 충족될 때만 SuCo/HNSW/ScaNN 계열 솔루션을 고려:
-  - 코퍼스가 큼 (수만/수십만 청크)
+  - 코퍼스가 큼(수만~수십만 개의 청크)
   - 브루트포스 임베딩 검색이 너무 느려짐
   - 회상 품질이 어휘 검색에 의해 의미 있게 병목됨
 
 오프라인 친화적 대안 (복잡도 증가 순):
 
 - SQLite FTS5 + 메타데이터 필터 (ML 없음)
-- 임베딩 + 브루트포스 (청크 수가 적으면 놀라울 정도로 잘 동작)
+- 임베딩 + 무차별 대입(청크 수가 적으면 놀랄 만큼 잘 작동함)
 - HNSW 인덱스 (일반적이고 견고함; 라이브러리 바인딩 필요)
 - SuCo (연구 등급; 임베드 가능한 견고한 구현이 있다면 매력적)
 

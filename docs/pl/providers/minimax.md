@@ -4,13 +4,6 @@ read_when:
   - Chcesz korzystać z modeli MiniMax w OpenClaw
   - Potrzebujesz wskazówek dotyczących konfiguracji MiniMax
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:38Z
 ---
 
 # MiniMax
@@ -191,9 +184,7 @@ Użyj interaktywnego kreatora konfiguracji, aby ustawić MiniMax bez edycji JSON
 ### „Unknown model: minimax/MiniMax-M2.1”
 
 Zwykle oznacza to, że **dostawca MiniMax nie jest skonfigurowany** (brak wpisu dostawcy
-oraz brak profilu uwierzytelniania MiniMax/klucza w zmiennych środowiskowych).
-Poprawka dla tego wykrywania jest w **2026.1.12** (niewydana w momencie pisania).
-Rozwiąż problem, wykonując jedną z poniższych czynności:
+oraz brak profilu uwierzytelniania MiniMax/klucza w zmiennych środowiskowych). Poprawka dla tego wykrywania jest w **2026.1.12** (niewydana w momencie pisania). Rozwiąż problem, wykonując jedną z poniższych czynności:
 
 - Zaktualizuj do **2026.1.12** (lub uruchom ze źródeł `main`), a następnie zrestartuj gateway.
 - Uruchom `openclaw configure` i wybierz **MiniMax M2.1**, lub

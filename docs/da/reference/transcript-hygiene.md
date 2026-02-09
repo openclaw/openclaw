@@ -5,23 +5,16 @@ read_when:
   - Du ændrer sanitering af transskripter eller logik for reparation af tool-calls
   - Du undersøger mismatches af tool-call-id’er på tværs af udbydere
 title: "Transskript-hygiejne"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:44Z
 ---
 
 # Transskript-hygiejne (Udbyderrettelser)
 
-Dette dokument beskriver **udbyderspecifikke rettelser**, der anvendes på transskripter før et run
-(opbygning af modelkontekst). Det er **in-memory**-justeringer, der bruges til at opfylde strenge
-udbyderkrav. Disse hygiejnetrin omskriver **ikke** det gemte JSONL-transskript på disk; dog kan et
-separat reparationspas for sessionsfiler omskrive fejldannede JSONL-filer ved at droppe ugyldige
-linjer, før sessionen indlæses. Når en reparation sker, sikkerhedskopieres den oprindelige fil
-sammen med sessionsfilen.
+Dette dokument beskriver **udbyderspecifikke rettelser** anvendt på transkripter før en køre
+(bygningsmodel kontekst). Disse er **in-memory** justeringer bruges til at opfylde strenge
+udbyder krav. Disse hygiejnetrin gør **ikke** omskriv den gemte JSONL afskrift
+på disk; Men en separat session-fil reparation pass kan omskrive misdannede JSONL filer
+ved at droppe ugyldige linjer, før sessionen indlæses. Når en reparation sker, er den oprindelige
+fil sikkerhedskopieret sammen med sessionsfilen.
 
 Omfanget omfatter:
 
@@ -56,8 +49,8 @@ Adskilt fra transskript-hygiejne repareres sessionsfiler (om nødvendigt) før i
 
 ## Global regel: sanitering af billeder
 
-Billedpayloads saniteres altid for at forhindre udbyderafvisning pga. størrelsesgrænser
-(nedskalering/genkomprimering af overdimensionerede base64-billeder).
+Billednyttelast er altid desinficeret for at forhindre udbyder-side afvisning på grund af størrelse
+grænser (downscale/genkomprimere overdimensionerede base64 billeder).
 
 Implementering:
 
@@ -68,9 +61,9 @@ Implementering:
 
 ## Global regel: fejldannede tool-calls
 
-Assistant tool-call-blokke, der mangler både `input` og `arguments`, droppes
-før modelkontekst opbygges. Dette forhindrer udbyderafvisninger fra delvist
-persistede tool-calls (for eksempel efter en rate limit-fejl).
+Assistent tool-call blokke, der mangler både `input` og `argumenter` er droppet
+før model kontekst er bygget. Dette forhindrer udbyderafvisninger fra delvist
+fortsatte værktøj opkald (for eksempel efter en sats grænse fejl).
 
 Implementering:
 
@@ -132,5 +125,5 @@ Før udgivelsen 2026.1.22 anvendte OpenClaw flere lag af transskript-hygiejne:
   - Trimning af assistant-indhold efter tool-calls.
 
 Denne kompleksitet forårsagede regressioner på tværs af udbydere (især `openai-responses`
-`call_id|fc_id`-parring). Oprydningen i 2026.1.22 fjernede udvidelsen, centraliserede
-logik i runneren og gjorde OpenAI **no-touch** ud over billedsanitering.
+`call_idřfc_id` parring). Oprydningen af 2026.1.22 fjernede udvidelsen, centraliseret
+logik i løberen, og gjorde OpenAI **no-touch** ud over billeddesinficering.

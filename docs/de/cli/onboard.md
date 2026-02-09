@@ -3,13 +3,6 @@ summary: "CLI-Referenz für `openclaw onboard` (interaktiver Onboarding-Assisten
 read_when:
   - Sie möchten eine geführte Einrichtung für Gateway, Workspace, Authentifizierung, Kanäle und Skills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:37Z
 ---
 
 # `openclaw onboard`
@@ -32,7 +25,7 @@ openclaw onboard --flow manual
 openclaw onboard --mode remote --remote-url ws://gateway-host:18789
 ```
 
-Ablaufhinweise:
+Flow Notizen:
 
 - `quickstart`: minimale Abfragen, generiert automatisch ein Gateway-Token.
 - `manual`: vollständige Abfragen für Port/Bind/Auth (Alias von `advanced`).

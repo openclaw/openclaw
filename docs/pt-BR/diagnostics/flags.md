@@ -4,13 +4,6 @@ read_when:
   - Você precisa de logs de depuração direcionados sem aumentar os níveis globais de logging
   - Você precisa capturar logs específicos de subsistemas para suporte
 title: "Flags de Diagnóstico"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:45Z
 ---
 
 # Flags de Diagnóstico
@@ -47,7 +40,7 @@ Múltiplas flags:
 
 Reinicie o gateway após alterar as flags.
 
-## Override por variável de ambiente (pontual)
+## Sobrescrita por env (pontual)
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

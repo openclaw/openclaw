@@ -1,16 +1,9 @@
 ---
 summary: "CLI کے لیے `openclaw channels` کا حوالہ (اکاؤنٹس، اسٹیٹس، لاگ اِن/لاگ آؤٹ، لاگز)"
 read_when:
-  - "آپ چینل اکاؤنٹس شامل/حذف کرنا چاہتے ہیں (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)"
-  - "آپ چینل اسٹیٹس چیک کرنا یا چینل لاگز ٹیل کرنا چاہتے ہیں"
+  - آپ چینل اکاؤنٹس شامل/حذف کرنا چاہتے ہیں (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
+  - آپ چینل اسٹیٹس چیک کرنا یا چینل لاگز ٹیل کرنا چاہتے ہیں
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - وسیع جانچ کے لیے `openclaw status --deep` چلائیں۔
 - رہنمائی شدہ حل کے لیے `openclaw doctor` استعمال کریں۔
-- `openclaw channels list`، `Claude: HTTP 403 ... user:profile` پرنٹ کرتا ہے → استعمال کا اسنیپ شاٹ `user:profile` اسکوپ درکار کرتا ہے۔ `--no-usage` استعمال کریں، یا claude.ai سیشن کی (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) فراہم کریں، یا Claude Code CLI کے ذریعے دوبارہ تصدیق کریں۔
+- `openclaw channels list` پرنٹ کرتا ہے `Claude: HTTP 403 ... `user:profile`→ استعمال کا اسنیپ شاٹ کے لیے`user:profile`اسکوپ درکار ہے۔`--no-usage` استعمال کریں، یا claude.ai سیشن کی (`CLAUDE_WEB_SESSION_KEY`/`CLAUDE_WEB_COOKIE\`) فراہم کریں، یا Claude Code CLI کے ذریعے دوبارہ توثیق کریں۔
 
 ## Capabilities probe
 
@@ -68,7 +61,7 @@ Notes:
 
 - `--channel` اختیاری ہے؛ اسے چھوڑنے پر تمام چینلز (بشمول ایکسٹینشنز) کی فہرست دکھائی جائے گی۔
 - `--target`، `channel:<id>` یا خام عددی چینل ID قبول کرتا ہے اور صرف Discord پر لاگو ہوتا ہے۔
-- پروبز فراہم کنندہ کے لحاظ سے مخصوص ہوتے ہیں: Discord intents + اختیاری چینل اجازتیں؛ Slack بوٹ + یوزر اسکوپس؛ Telegram بوٹ فلیگز + webhook؛ Signal ڈیمن ورژن؛ MS Teams ایپ ٹوکن + Graph رولز/اسکوپس (جہاں معلوم ہوں وہاں تشریح کے ساتھ)۔ جن چینلز میں پروب نہیں ہوتے وہ `Probe: unavailable` رپورٹ کرتے ہیں۔
+- پروبز فراہم کنندہ کے لحاظ سے مخصوص ہوتے ہیں: Discord intents + اختیاری چینل اجازتیں؛ Slack بوٹ + صارف اسکوپس؛ Telegram بوٹ فلیگز + ویب ہُک؛ Signal ڈیمَن ورژن؛ MS Teams ایپ ٹوکن + Graph کردار/اسکوپس (جہاں معلوم ہو تشریح شدہ)۔ Channels without probes report `Probe: unavailable`.
 
 ## Resolve names to IDs
 

@@ -5,13 +5,6 @@ read_when:
   - Sie möchten einen Browser steuern, der auf einer anderen Maschine über einen Node-Host läuft
   - Sie möchten das Chrome-Extension-Relay verwenden (Anhängen/Trennen über die Toolbar-Schaltfläche)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:28Z
 ---
 
 # `openclaw browser`

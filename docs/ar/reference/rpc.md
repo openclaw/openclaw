@@ -4,13 +4,6 @@ read_when:
   - إضافة أو تغيير تكاملات CLI الخارجية
   - تصحيح أخطاء مهايئات RPC (signal-cli، imsg)
 title: "مهايئات RPC"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:40Z
 ---
 
 # مهايئات RPC

@@ -4,13 +4,6 @@ read_when:
   - config/state အပေါ် လုံခြုံရေးကို အမြန် စစ်ဆေးလိုသောအခါ
   - ဘေးကင်းသော “fix” အကြံပြုချက်များ (chmod၊ မူလသတ်မှတ်ချက်များကို တင်းကျပ်စေခြင်း) ကို အသုံးချလိုသောအခါ
 title: "security"
-x-i18n:
-  source_path: cli/security.md
-  source_hash: 96542b4784e53933
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:03Z
 ---
 
 # `openclaw security`
@@ -29,5 +22,5 @@ openclaw security audit --deep
 openclaw security audit --fix
 ```
 
-Audit သည် DM ပို့သူများ အများအပြားက အဓိက ဆက်ရှင်ကို မျှဝေနေသောအခါ သတိပေးပြီး မျှဝေထားသော inbox များအတွက် **secure DM mode** ကို အသုံးပြုရန် အကြံပြုသည် — `session.dmScope="per-channel-peer"` (သို့မဟုတ် multi-account ချန်နယ်များအတွက် `per-account-channel-peer`)။
-ထို့အပြင် sandboxing မပါဘဲ web/browser ကိရိယာများကို ဖွင့်ထားသောအခြေအနေတွင် အသုံးပြုနေသော သေးငယ်သော မော်ဒယ်များ (`<=300B`) ကိုလည်း သတိပေးသည်။
+Audit သည် DM ပေးပို့သူများ အများအပြားက main session ကို မျှဝေနေသည့်အခါ သတိပေးပြီး **secure DM mode** ကို အကြံပြုပါသည်: `session.dmScope="per-channel-peer"` (shared inbox များအတွက် multi-account channel များတွင် `per-account-channel-peer`)။
+ထို့အပြင် sandbox မလုပ်ထားဘဲ web/browser tool များ ဖွင့်ထားသည့်အခြေအနေတွင် model သေးငယ်များ (`<=300B`) ကို အသုံးပြုပါက သတိပေးပါသည်။

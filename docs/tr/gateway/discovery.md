@@ -5,13 +5,6 @@ read_when:
   - Uzak bağlantı modlarını ayarlarken (doğrudan vs SSH)
   - Uzak düğümler için düğüm keşfi + eşleştirme tasarlarken
 title: "Keşif ve Taşıma Yöntemleri"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:26Z
 ---
 
 # Keşif ve taşıma yöntemleri
@@ -23,7 +16,7 @@ OpenClaw yüzeyde benzer görünen iki ayrı probleme sahiptir:
 
 Tasarım hedefi, tüm ağ keşfi/yayınını **Node Gateway**’de (`openclaw gateway`) tutmak ve istemcileri (mac uygulaması, iOS) yalnızca tüketici olarak konumlandırmaktır.
 
-## Terimler
+## Terms
 
 - **Gateway**: durumu (oturumlar, eşleştirme, düğüm kaydı) yöneten ve kanalları çalıştıran, uzun süre çalışan tek bir gateway süreci. Çoğu kurulumda ana makine başına bir tane kullanılır; yalıtılmış çoklu gateway kurulumları mümkündür.
 - **Gateway WS (kontrol düzlemi)**: varsayılan olarak `127.0.0.1:18789` üzerindeki WebSocket uç noktası; `gateway.bind` aracılığıyla LAN/tailnet’e bağlanabilir.
@@ -49,7 +42,7 @@ Protokol ayrıntıları:
 
 ## Keşif girdileri (istemciler gateway’in nerede olduğunu nasıl öğrenir)
 
-### 1) Bonjour / mDNS (yalnızca LAN)
+### 1. Bonjour / mDNS (yalnızca LAN)
 
 Bonjour en iyi çaba esaslıdır ve ağlar arasında çalışmaz. Yalnızca “aynı LAN” kolaylığı için kullanılır.
 
@@ -83,7 +76,7 @@ Devre dışı bırakma/geçersiz kılma:
 - `OPENCLAW_TAILNET_DNS`, bir `tailnetDns` ipucu (MagicDNS) yayımlar.
 - `OPENCLAW_CLI_PATH`, duyurulan CLI yolunu geçersiz kılar.
 
-### 2) Tailnet (ağlar arası)
+### 2. Tailnet (ağlar arası)
 
 Londra/Viyana tarzı kurulumlarda Bonjour yardımcı olmaz. Önerilen “doğrudan” hedef:
 
@@ -91,11 +84,11 @@ Londra/Viyana tarzı kurulumlarda Bonjour yardımcı olmaz. Önerilen “doğrud
 
 Gateway, Tailscale altında çalıştığını algılayabilirse, istemciler için (geniş alan beacon’ları dâhil) isteğe bağlı bir ipucu olarak `tailnetDns`’ü yayımlar.
 
-### 3) Manuel / SSH hedefi
+### 3. Manuel / SSH hedefi
 
 Doğrudan bir rota yoksa (veya doğrudan devre dışıysa), istemciler her zaman loopback gateway portunu ileterek SSH üzerinden bağlanabilir.
 
-Bkz. [Uzak erişim](/gateway/remote).
+[Uzak erişim](/gateway/remote).
 
 ## Taşıma seçimi (istemci politikası)
 

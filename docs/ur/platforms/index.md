@@ -4,23 +4,16 @@ read_when:
   - OS سپورٹ یا انسٹال کے راستے تلاش کر رہے ہوں
   - Gateway کہاں چلانا ہے اس کا فیصلہ کر رہے ہوں
 title: "پلیٹ فارمز"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:26Z
 ---
 
 # پلیٹ فارمز
 
-OpenClaw کور TypeScript میں لکھا گیا ہے۔ **Node تجویز کردہ رن ٹائم ہے**۔
-Gateway کے لیے Bun تجویز نہیں کیا جاتا (WhatsApp/Telegram بگز)۔
+28. OpenClaw کور TypeScript میں لکھا گیا ہے۔ 29. **Node تجویز کردہ رَن ٹائم ہے**۔
+29. گیٹ وے کے لیے Bun تجویز نہیں کیا جاتا (WhatsApp/Telegram بگز)۔
 
-macOS (مینو بار ایپ) اور موبائل نوڈز (iOS/Android) کے لیے معاون ایپس موجود ہیں۔ Windows اور
-Linux کے لیے معاون ایپس منصوبہ بندی میں ہیں، لیکن Gateway آج مکمل طور پر سپورٹڈ ہے۔
-Windows کے لیے نیٹو معاون ایپس بھی منصوبہ بندی میں ہیں؛ Gateway کے لیے WSL2 کے ذریعے چلانا تجویز کیا جاتا ہے۔
+31. macOS (مینو بار ایپ) اور موبائل نوڈز (iOS/Android) کے لیے ساتھی ایپس موجود ہیں۔ 32. Windows اور
+    Linux کے ساتھی ایپس منصوبہ بندی میں ہیں، لیکن گیٹ وے آج مکمل طور پر سپورٹڈ ہے۔
+32. Windows کے لیے مقامی ساتھی ایپس بھی منصوبہ بندی میں ہیں؛ گیٹ وے کو WSL2 کے ذریعے تجویز کیا جاتا ہے۔
 
 ## اپنا OS منتخب کریں
 
@@ -56,5 +49,5 @@ Windows کے لیے نیٹو معاون ایپس بھی منصوبہ بندی م
 
 سروس ٹارگٹ OS پر منحصر ہے:
 
-- macOS: LaunchAgent (`bot.molt.gateway` یا `bot.molt.<profile>`; لیگیسی `com.openclaw.*`)
+- 34. macOS: LaunchAgent (`bot.molt.gateway` یا `bot.molt.<profile>35. `; legacy `com.openclaw.*`)
 - Linux/WSL2: systemd یوزر سروس (`openclaw-gateway[-<profile>].service`)

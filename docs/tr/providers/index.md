@@ -4,13 +4,6 @@ read_when:
   - Bir model sağlayıcı seçmek istiyorsunuz
   - Desteklenen LLM arka uçlarına hızlı bir genel bakışa ihtiyacınız var
 title: "Model Sağlayıcıları"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Model Sağlayıcıları

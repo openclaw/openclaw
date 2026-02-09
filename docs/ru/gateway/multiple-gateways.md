@@ -4,13 +4,6 @@ read_when:
   - Запуск более одного Gateway на одной машине
   - Требуется изоляция конфигурации/состояния/портов для каждого Gateway
 title: "Несколько Gateway"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:34Z
 ---
 
 # Несколько Gateway (один и тот же хост)
@@ -53,7 +46,7 @@ openclaw --profile rescue gateway install
 Запустите второй Gateway на том же хосте со своими собственными:
 
 - профилем/конфигом
-- каталогом состояния
+- каталог штата
 - рабочим пространством
 - базовым портом (плюс производные порты)
 

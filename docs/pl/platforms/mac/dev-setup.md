@@ -3,13 +3,6 @@ summary: "Przewodnik konfiguracji dla deweloperów pracujących nad aplikacją O
 read_when:
   - Konfigurowanie środowiska deweloperskiego macOS
 title: "Konfiguracja deweloperska macOS"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
 ---
 
 # Konfiguracja deweloperska macOS
@@ -23,7 +16,7 @@ Przed rozpoczęciem budowania aplikacji upewnij się, że masz zainstalowane:
 1. **Xcode 26.2+**: Wymagany do tworzenia w Swift.
 2. **Node.js 22+ i pnpm**: Wymagane dla Gateway, CLI oraz skryptów pakowania.
 
-## 1. Instalacja zależności
+## 1) Instalacja zależności
 
 Zainstaluj zależności dla całego projektu:
 

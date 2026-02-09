@@ -4,20 +4,13 @@ read_when:
   - Sie möchten Agent-Hooks verwalten
   - Sie möchten Hooks installieren oder aktualisieren
 title: "Hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:41Z
 ---
 
 # `openclaw hooks`
 
 Verwalten Sie Agent-Hooks (ereignisgesteuerte Automatisierungen für Befehle wie `/new`, `/reset` und den Gateway-Start).
 
-Zugehörig:
+Verwandt:
 
 - Hooks: [Hooks](/automation/hooks)
 - Plugin-Hooks: [Plugins](/tools/plugin#plugin-hooks)

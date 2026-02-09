@@ -3,13 +3,6 @@ summary: "Menubalkpictogramtoestanden en animaties voor OpenClaw op macOS"
 read_when:
   - Wijzigen van het gedrag van het menubalkpictogram
 title: "Menubalkpictogram"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:35Z
 ---
 
 # Menubalkpictogramtoestanden
@@ -30,7 +23,7 @@ Vormen & afmetingen
 
 - Basispictogram getekend in `CritterIconRenderer.makeIcon(blink:legWiggle:earWiggle:earScale:earHoles:)`.
 - Oorschaal staat standaard op `1.0`; spraakboost zet `earScale=1.9` en schakelt `earHoles=true` zonder het totale frame te wijzigen (18×18 pt sjabloonafbeelding gerenderd in een 36×36 px Retina-achterliggende buffer).
-- Scharrelen gebruikt pootjeswiebels tot ~1,0 met een kleine horizontale schudbeweging; dit is additief bovenop eventuele bestaande inactieve wiebel.
+- Scurry gebruikt beenwiggle tot ~1.0 met een kleine horizontale leg; het is additief aan een bestaande inactieve muziek.
 
 Gedragsnotities
 

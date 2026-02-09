@@ -5,20 +5,11 @@ read_when:
   - Đóng gói hoặc ký ứng dụng macOS
   - Thay đổi bundle ID hoặc đường dẫn cài đặt ứng dụng
 title: "Quyền trên macOS"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:42Z
 ---
 
 # Quyền trên macOS (TCC)
 
-Việc cấp quyền trên macOS khá mong manh. TCC liên kết một lần cấp quyền với
-chữ ký mã của ứng dụng, bundle identifier và đường dẫn trên đĩa. Nếu bất kỳ yếu tố nào thay đổi,
-macOS sẽ coi ứng dụng là mới và có thể bỏ hoặc ẩn các lời nhắc.
+macOS permission grants are fragile. TCC liên kết việc cấp quyền với chữ ký mã, bundle identifier và đường dẫn trên đĩa của ứng dụng. Nếu bất kỳ yếu tố nào trong số đó thay đổi, macOS coi ứng dụng là mới và có thể bỏ hoặc ẩn các lời nhắc.
 
 ## Yêu cầu để quyền ổn định
 
@@ -28,8 +19,7 @@ macOS sẽ coi ứng dụng là mới và có thể bỏ hoặc ẩn các lời 
 - Chữ ký nhất quán: dùng chứng chỉ Apple Development hoặc Developer ID thật
   để chữ ký ổn định qua các lần build lại.
 
-Chữ ký ad-hoc tạo ra một danh tính mới cho mỗi lần build. macOS sẽ quên các quyền đã cấp trước đó,
-và các lời nhắc thậm chí có thể biến mất hoàn toàn cho đến khi các mục cũ được xóa.
+Chữ ký ad‑hoc tạo ra một danh tính mới cho mỗi bản build. macOS sẽ quên các quyền đã cấp trước đó, và các lời nhắc có thể biến mất hoàn toàn cho đến khi các mục cũ bị xóa.
 
 ## Danh sách khôi phục khi lời nhắc biến mất
 
@@ -49,9 +39,9 @@ sudo tccutil reset AppleEvents
 
 ## Quyền Files and folders (Desktop/Documents/Downloads)
 
-macOS cũng có thể kiểm soát Desktop, Documents và Downloads đối với các tiến trình terminal/nền. Nếu việc đọc tệp hoặc liệt kê thư mục bị treo, hãy cấp quyền cho cùng ngữ cảnh tiến trình thực hiện thao tác tệp (ví dụ Terminal/iTerm, ứng dụng được khởi chạy bởi LaunchAgent, hoặc tiến trình SSH).
+macOS may also gate Desktop, Documents, and Downloads for terminal/background processes. Nếu việc đọc file hoặc liệt kê thư mục bị treo, hãy cấp quyền cho cùng ngữ cảnh tiến trình thực hiện thao tác file (ví dụ Terminal/iTerm, ứng dụng khởi chạy bằng LaunchAgent, hoặc tiến trình SSH).
 
 Cách khắc phục: chuyển tệp vào workspace của OpenClaw (`~/.openclaw/workspace`) nếu bạn muốn tránh việc cấp quyền theo từng thư mục.
 
-Nếu bạn đang kiểm thử quyền, luôn ký bằng chứng chỉ thật. Các bản build ad-hoc
-chỉ phù hợp cho các lần chạy cục bộ nhanh nơi quyền không quan trọng.
+Nếu bạn đang kiểm thử quyền, luôn ký bằng một chứng chỉ thật. Ad-hoc
+builds are only acceptable for quick local runs where permissions do not matter.

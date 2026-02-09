@@ -3,13 +3,6 @@ summary: "Tlon/Urbit 지원 상태, 기능 및 구성"
 read_when:
   - Tlon/Urbit 채널 기능을 작업할 때
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:05Z
 ---
 
 # Tlon (플러그인)
@@ -42,7 +35,7 @@ openclaw plugins install ./extensions/tlon
 2. ship URL 과 로그인 코드를 준비합니다.
 3. `channels.tlon` 을(를) 구성합니다.
 4. Gateway(게이트웨이) 를 재시작합니다.
-5. 봇에게 다이렉트 메시지를 보내거나 그룹 채널에서 멘션합니다.
+5. 봇에게 DM을 보내거나 그룹 채널에서 멘션하세요.
 
 최소 구성 (단일 계정):
 

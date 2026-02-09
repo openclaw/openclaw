@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการค้นหาIDของผู้ติดต่อ/กลุ่ม/ตัวเองสำหรับช่องทางหนึ่ง
   - คุณกำลังพัฒนาอะแดปเตอร์ไดเรกทอรีของช่องทาง
 title: "ไดเรกทอรี"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:55Z
 ---
 
 # `openclaw directory`

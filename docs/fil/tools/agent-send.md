@@ -3,20 +3,12 @@ summary: "Direktang pagpapatakbo ng `openclaw agent` CLI (may opsyonal na delive
 read_when:
   - Pagdaragdag o pagbabago ng agent CLI entrypoint
 title: "Agent Send"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:56Z
 ---
 
 # `openclaw agent` (direktang pagpapatakbo ng agent)
 
-Ang `openclaw agent` ay nagpapatakbo ng isang agent turn nang hindi nangangailangan ng papasok na chat message.
-Bilang default, dumadaan ito **sa Gateway**; idagdag ang `--local` para pilitin ang embedded
-runtime sa kasalukuyang machine.
+13. Ang `openclaw agent` ay nagpapatakbo ng isang solong agent turn nang hindi nangangailangan ng papasok na chat message.
+14. Bilang default, dumadaan ito **sa Gateway**; idagdag ang `--local` para pilitin ang embedded runtime sa kasalukuyang makina.
 
 ## Behavior
 

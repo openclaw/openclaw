@@ -3,13 +3,6 @@ summary: "Estado de compatibilidad del bot de Discord, capacidades y configuraci
 read_when:
   - Al trabajar en funciones del canal de Discord
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:16Z
 ---
 
 # Discord (API de Bot)
@@ -91,7 +84,7 @@ Desactivar con:
 
 Esta es la configuración del “Discord Developer Portal” para ejecutar OpenClaw en un canal de servidor (guild) como `#help`.
 
-### 1) Crear la app de Discord + usuario bot
+### 1. Crear la app de Discord + usuario bot
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. En su app:
@@ -109,7 +102,7 @@ En **Bot** → **Privileged Gateway Intents**, habilite:
 
 Normalmente **no** necesita **Presence Intent**. Establecer la presencia del propio bot (acción `setPresence`) usa gateway OP3 y no requiere este intent; solo es necesario si quiere recibir actualizaciones de presencia de otros miembros del guild.
 
-### 3) Generar una URL de invitación (OAuth2 URL Generator)
+### 3. Generar una URL de invitación (OAuth2 URL Generator)
 
 En su app: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Evite **Administrator** a menos que esté depurando y confíe plenamente en el b
 
 Copie la URL generada, ábrala, elija su servidor e instale el bot.
 
-### 4) Obtener los ids (guild/usuario/canal)
+### 4. Obtener los ids (guild/usuario/canal)
 
 Discord usa ids numéricos en todas partes; la configuración de OpenClaw prefiere ids.
 
@@ -207,7 +200,7 @@ Notas:
 - Los mensajes escritos por el bot se ignoran por defecto; configure `channels.discord.allowBots=true` para permitirlos (los mensajes propios siguen filtrados).
 - Advertencia: si permite respuestas a otros bots (`channels.discord.allowBots=true`), evite bucles bot‑a‑bot con `requireMention`, listas de permitidos `channels.discord.guilds.*.channels.<id>.users` y/o barreras claras en `AGENTS.md` y `SOUL.md`.
 
-### 6) Verificar que funciona
+### 6. Verificar que funciona
 
 1. Inicie el Gateway.
 2. En el canal de su servidor, envíe: `@Krill hello` (o el nombre de su bot).
@@ -402,27 +395,27 @@ Notas de lista de permitidos (PK habilitado):
 
 ### Valores predeterminados de acciones de herramientas
 
-| Grupo de acciones | Predeterminado | Notas                                      |
-| ----------------- | -------------- | ------------------------------------------ |
-| reactions         | enabled        | Reaccionar + listar reacciones + emojiList |
-| stickers          | enabled        | Enviar stickers                            |
-| emojiUploads      | enabled        | Subir emojis                               |
-| stickerUploads    | enabled        | Subir stickers                             |
-| polls             | enabled        | Crear encuestas                            |
-| permissions       | enabled        | Instantánea de permisos del canal          |
-| messages          | enabled        | Leer/enviar/editar/eliminar                |
-| threads           | enabled        | Crear/listar/responder                     |
-| pins              | enabled        | Fijar/desfijar/listar                      |
-| search            | enabled        | Búsqueda de mensajes (función preliminar)  |
-| memberInfo        | enabled        | Información de miembros                    |
-| roleInfo          | enabled        | Lista de roles                             |
-| channelInfo       | enabled        | Información + listado de canales           |
-| channels          | enabled        | Gestión de canales/categorías              |
-| voiceStatus       | enabled        | Consulta de estado de voz                  |
-| events            | enabled        | Listar/crear eventos programados           |
-| roles             | disabled       | Agregar/quitar roles                       |
-| moderation        | disabled       | Timeout/expulsar/prohibir                  |
-| presence          | disabled       | Estado/actividad del bot (setPresence)     |
+| Grupo de acciones | Predeterminado | Notas                                                        |
+| ----------------- | -------------- | ------------------------------------------------------------ |
+| reactions         | enabled        | Reaccionar + listar reacciones + emojiList                   |
+| stickers          | enabled        | Enviar stickers                                              |
+| emojiUploads      | enabled        | Subir emojis                                                 |
+| stickerUploads    | enabled        | Subir stickers                                               |
+| polls             | enabled        | Crear encuestas                                              |
+| permissions       | enabled        | Instantánea de permisos del canal                            |
+| messages          | enabled        | Leer/enviar/editar/eliminar                                  |
+| threads           | enabled        | Crear/listar/responder                                       |
+| pins              | enabled        | Fijar/desfijar/listar                                        |
+| search            | enabled        | Búsqueda de mensajes (función preliminar) |
+| memberInfo        | enabled        | Información de miembros                                      |
+| roleInfo          | enabled        | Lista de roles                                               |
+| channelInfo       | enabled        | Información + listado de canales                             |
+| channels          | enabled        | Gestión de canales/categorías                                |
+| voiceStatus       | enabled        | Consulta de estado de voz                                    |
+| events            | enabled        | Listar/crear eventos programados                             |
+| roles             | disabled       | Agregar/quitar roles                                         |
+| moderation        | disabled       | Timeout/expulsar/prohibir                                    |
+| presence          | disabled       | Estado/actividad del bot (setPresence)    |
 
 - `replyToMode`: `off` (predeterminado), `first` o `all`. Aplica solo cuando el modelo incluye una etiqueta de respuesta.
 

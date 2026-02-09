@@ -4,13 +4,6 @@ read_when:
   - Du vill ha ett terminal-UI för Gateway (fjärrvänligt)
   - Du vill skicka url/token/session från skript
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: aa6f37b960926997
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:46Z
 ---
 
 # `openclaw tui`

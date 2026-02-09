@@ -5,18 +5,11 @@ read_when:
   - မြင်ကွင်းအလုပ်လုပ်ရာနေရာအတွက် agent ထိန်းချုပ်မှုများ ထည့်သွင်းနေချိန်
   - WKWebView canvas load ပြဿနာများကို Debug လုပ်နေချိန်
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:41Z
 ---
 
 # Canvas (macOS app)
 
-macOS app သည် agent ထိန်းချုပ်ထားသော **Canvas panel** ကို `WKWebView` အသုံးပြု၍ ထည့်သွင်းထားသည်။ ၎င်းသည် HTML/CSS/JS၊ A2UI နှင့် သေးငယ်သော အပြန်အလှန်လုပ်ဆောင်နိုင်သည့် UI မျက်နှာပြင်များအတွက် ပေါ့ပါးသည့် မြင်ကွင်းအလုပ်လုပ်ရာနေရာတစ်ခုဖြစ်သည်။
+25. macOS app သည် agent ထိန်းချုပ်သော **Canvas panel** ကို `WKWebView` ဖြင့် ထည့်သွင်းထားပါသည်။ 26. ၎င်းသည် HTML/CSS/JS, A2UI နှင့် အသေးစား interactive UI surface များအတွက် ပေါ့ပါးသော visual workspace ဖြစ်သည်။
 
 ## Canvas တည်ရှိရာနေရာ
 
@@ -43,7 +36,7 @@ root တွင် `index.html` မရှိပါက app သည် **built‑in 
 - local canvas ဖိုင်များ ပြောင်းလဲသည့်အခါ အလိုအလျောက် reload လုပ်သည်။
 - Canvas panel ကို တစ်ကြိမ်တွင် တစ်ခုတည်းသာ မြင်ရပြီး (လိုအပ်ပါက session ကို ပြောင်းလဲသည်)။
 
-Settings → **Allow Canvas** မှ Canvas ကို ပိတ်နိုင်သည်။ ပိတ်ထားသောအခါ canvas node commands များသည် `CANVAS_DISABLED` ကို ပြန်ပေးမည်ဖြစ်သည်။
+27. Canvas ကို Settings → **Allow Canvas** မှ ပိတ်နိုင်ပါသည်။ 28. ပိတ်ထားပါက canvas node command များသည် `CANVAS_DISABLED` ကို ပြန်ပေးပါသည်။
 
 ## Agent API surface
 
@@ -70,7 +63,8 @@ openclaw nodes canvas snapshot --node <id>
 
 ## Canvas အတွင်းရှိ A2UI
 
-A2UI ကို Gateway canvas host မှ ဝန်ဆောင်မှုပေးပြီး Canvas panel အတွင်းတွင် render လုပ်ထားသည်။ Gateway သည် Canvas host ကို ကြေညာသောအခါ macOS app သည် ပထမဆုံးဖွင့်စဉ် A2UI host စာမျက်နှာသို့ အလိုအလျောက် သွားရောက်မည်ဖြစ်သည်။
+A2UI is hosted by the Gateway canvas host and rendered inside the Canvas panel.
+30. Gateway သည် Canvas host ကို ကြော်ငြာပေးသောအခါ macOS app သည် ပထမဆုံး ဖွင့်ချိန်တွင် A2UI host စာမျက်နှာသို့ အလိုအလျောက် သွားရောက်ပါသည်။
 
 မူလ A2UI host URL —
 

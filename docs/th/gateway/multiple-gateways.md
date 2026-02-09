@@ -4,18 +4,11 @@ read_when:
   - รัน Gateway（เกตเวย์）มากกว่าหนึ่งตัวบนเครื่องเดียวกัน
   - ต้องการคอนฟิก/สถานะ/พอร์ตที่แยกจากกันต่อ Gateway（เกตเวย์）
 title: "หลาย Gateway（เกตเวย์）"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:13Z
 ---
 
 # หลาย Gateway（เกตเวย์）(โฮสต์เดียวกัน)
 
-การตั้งค่าส่วนใหญ่ควรใช้ Gateway（เกตเวย์）เพียงตัวเดียว เนื่องจาก Gateway（เกตเวย์）ตัวเดียวสามารถจัดการการเชื่อมต่อระบบข้อความหลายช่องทางและเอเจนต์หลายตัวได้ หากต้องการการแยกส่วนที่เข้มแข็งขึ้นหรือความซ้ำซ้อน(เช่น บอตกู้ภัย) ให้รัน Gateway（เกตเวย์）แยกกันโดยใช้โปรไฟล์/พอร์ตที่แยกจากกัน
+การตั้งค่าส่วนใหญ่ควรใช้ Gateway（เกตเวย์）เพียงตัวเดียว เนื่องจาก Gateway（เกตเวย์）ตัวเดียวสามารถจัดการการเชื่อมต่อระบบข้อความหลายช่องทางและเอเจนต์หลายตัวได้ หากต้องการการแยกส่วนที่เข้มแข็งขึ้นหรือความซ้ำซ้อน(เช่น บอตกู้ภัย) ให้รัน Gateway（เกตเวย์）แยกกันโดยใช้โปรไฟล์/พอร์ตที่แยกจากกัน If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
 
 ## เช็กลิสต์การแยกส่วน(จำเป็น)
 
@@ -53,7 +46,7 @@ openclaw --profile rescue gateway install
 รัน Gateway（เกตเวย์）ตัวที่สองบนโฮสต์เดียวกัน โดยมีของตนเอง:
 
 - โปรไฟล์/คอนฟิก
-- ไดเรกทอรีสถานะ
+- state dir
 - เวิร์กสเปซ
 - พอร์ตฐาน(รวมพอร์ตที่ได้มาภายหลัง)
 
@@ -98,7 +91,7 @@ openclaw --profile rescue gateway install
 - หากต้องการกำหนดพอร์ต CDP แบบระบุชัด ให้ตั้งค่า `browser.profiles.<name>.cdpPort` ต่ออินสแตนซ์
 - Chrome ระยะไกล: ใช้ `browser.profiles.<name>.cdpUrl` (ต่อโปรไฟล์ ต่ออินสแตนซ์)
 
-## ตัวอย่าง env แบบกำหนดเอง
+## Manual env example
 
 ```bash
 OPENCLAW_CONFIG_PATH=~/.openclaw/main.json \

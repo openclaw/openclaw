@@ -4,13 +4,6 @@ read_when:
   - تحتاج إلى تسجيل الدخول إلى المواقع لأتمتة المتصفح
   - تريد نشر تحديثات على X/Twitter
 title: "تسجيل دخول المتصفح"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:41Z
 ---
 
 # تسجيل دخول المتصفح + النشر على X/Twitter

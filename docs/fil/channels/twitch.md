@@ -3,18 +3,11 @@ summary: "Konpigurasyon at setup ng Twitch chat bot"
 read_when:
   - Pagse-set up ng Twitch chat integration para sa OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:32Z
 ---
 
 # Twitch (plugin)
 
-Suporta sa Twitch chat sa pamamagitan ng IRC connection. Kumokonekta ang OpenClaw bilang isang Twitch user (bot account) upang tumanggap at magpadala ng mga mensahe sa mga channel.
+Suporta sa Twitch chat sa pamamagitan ng koneksyong IRC. Kumokonekta ang OpenClaw bilang isang Twitch user (bot account) upang tumanggap at magpadala ng mga mensahe sa mga channel.
 
 ## Plugin required
 
@@ -48,7 +41,7 @@ Mga detalye: [Plugins](/tools/plugin)
    - Kapag parehong naka-set, uunahin ang config (ang env fallback ay para lamang sa default account).
 5. Simulan ang gateway.
 
-**⚠️ Mahalaga:** Magdagdag ng kontrol sa access (`allowFrom` o `allowedRoles`) upang maiwasan ang mga hindi awtorisadong user na mag-trigger ng bot. Ang `requireMention` ay default na `true`.
+**⚠️ Mahalaga:** Magdagdag ng access control (`allowFrom` o `allowedRoles`) upang maiwasan ang mga hindi awtorisadong user na mag-trigger ng bot. `requireMention` defaults to `true`.
 
 Minimal na config:
 
@@ -84,7 +77,7 @@ Gamitin ang [Twitch Token Generator](https://twitchtokengenerator.com/):
 - Tiyaking napili ang mga scope na `chat:read` at `chat:write`
 - Kopyahin ang **Client ID** at **Access Token**
 
-Hindi kailangan ng manual app registration. Nag-e-expire ang mga token makalipas ang ilang oras.
+Walang kinakailangang manu-manong app registration. Nag-e-expire ang mga token pagkalipas ng ilang oras.
 
 ### I-configure ang bot
 
@@ -124,11 +117,11 @@ Kung parehong naka-set ang env at config, uunahin ang config.
 }
 ```
 
-Mas mainam ang `allowFrom` para sa isang hard allowlist. Gamitin ang `allowedRoles` kung gusto mo ng role-based access.
+Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
 
 **Mga available na role:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
 
-**Bakit user IDs?** Maaaring magbago ang mga username, na nagbibigay-daan sa impersonation. Permanente ang mga user ID.
+**Bakit user IDs?** Maaaring magbago ang mga username, na nagbibigay-daan sa panggagaya. User IDs are permanent.
 
 Hanapin ang iyong Twitch user ID: [https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/](https://www.streamweasels.com/tools/convert-twitch-username-%20to-user-id/) (I-convert ang iyong Twitch username sa ID)
 
@@ -153,7 +146,7 @@ Awtomatikong nire-refresh ng bot ang mga token bago mag-expire at nagla-log ng m
 
 ## Suporta sa maraming account
 
-Gamitin ang `channels.twitch.accounts` na may per-account tokens. Tingnan ang [`gateway/configuration`](/gateway/configuration) para sa shared pattern.
+Use `channels.twitch.accounts` with per-account tokens. See [`gateway/configuration`](/gateway/configuration) for the shared pattern.
 
 Halimbawa (isang bot account sa dalawang channel):
 
@@ -218,8 +211,8 @@ Halimbawa (isang bot account sa dalawang channel):
 
 ### Role-based access (alternatibo)
 
-Ang `allowFrom` ay isang hard allowlist. Kapag naka-set, ang mga user ID na iyon lamang ang pinapayagan.
-Kung gusto mo ng role-based access, iwanang hindi naka-set ang `allowFrom` at i-configure ang `allowedRoles` sa halip:
+`allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+If you want role-based access, leave `allowFrom` unset and configure `allowedRoles` instead:
 
 ```json5
 {
@@ -237,7 +230,7 @@ Kung gusto mo ng role-based access, iwanang hindi naka-set ang `allowFrom` at i-
 
 ### I-disable ang @mention requirement
 
-Bilang default, ang `requireMention` ay `true`. Para i-disable at tumugon sa lahat ng mensahe:
+By default, `requireMention` is `true`. To disable and respond to all messages:
 
 ```json5
 {
@@ -315,7 +308,7 @@ Kung makita mo ang "token refresh disabled (no refresh token)":
 - `channels.twitch.accessToken` - OAuth access token (pinadaling single-account config)
 - `channels.twitch.clientId` - Twitch Client ID (pinadaling single-account config)
 - `channels.twitch.channel` - Channel na sasalihan (pinadaling single-account config)
-- `channels.twitch.accounts.<accountName>` - Multi-account config (lahat ng account field sa itaas)
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
 
 Buong halimbawa:
 

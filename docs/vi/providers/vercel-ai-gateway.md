@@ -4,13 +4,6 @@ summary: "Thiết lập Vercel AI Gateway (xác thực + chọn mô hình)"
 read_when:
   - Bạn muốn dùng Vercel AI Gateway với OpenClaw
   - Bạn cần biến môi trường khóa API hoặc lựa chọn xác thực bằng CLI
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:55Z
 ---
 
 # Vercel AI Gateway

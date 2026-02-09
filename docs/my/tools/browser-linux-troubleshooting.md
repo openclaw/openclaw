@@ -2,13 +2,6 @@
 summary: "Linux ပေါ်တွင် OpenClaw browser control အတွက် Chrome/Brave/Edge/Chromium CDP စတင်မှု ပြဿနာများကို ဖြေရှင်းခြင်း"
 read_when: "Linux ပေါ်တွင် browser control မအောင်မြင်သောအခါ၊ အထူးသဖြင့် snap Chromium အသုံးပြုနေသည့်အခါ"
 title: "Browser ပြဿနာဖြေရှင်းခြင်း"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:01Z
 ---
 
 # Browser ပြဿနာဖြေရှင်းခြင်း (Linux)
@@ -23,7 +16,7 @@ OpenClaw ၏ browser control server သည် Chrome/Brave/Edge/Chromium ကိ�
 
 ### အကြောင်းရင်း (Root Cause)
 
-Ubuntu (နှင့် Linux distro များစွာ) တွင် ပုံမှန် Chromium ထည့်သွင်းမှုသည် **snap package** ဖြစ်ပါသည်။ Snap ၏ AppArmor confinement သည် OpenClaw က browser process ကို spawn လုပ်ခြင်းနှင့် စောင့်ကြည့်ခြင်းလုပ်ပုံကို အနှောင့်အယှက် ဖြစ်စေပါသည်။
+Ubuntu (နှင့် Linux distro များစွာ) တွင် ပုံမှန် Chromium installation သည် **snap package** ဖြစ်ပါသည်။ Snap ၏ AppArmor confinement သည် OpenClaw က browser process ကို spawn လုပ်ပြီး monitor လုပ်သည့် နည်းလမ်းကို အနှောင့်အယှက်ဖြစ်စေပါသည်။
 
 `apt install chromium` အမိန့်သည် snap သို့ redirect လုပ်ပေးသည့် stub package ကို ထည့်သွင်းပေးပါသည် —
 
@@ -119,19 +112,18 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Config ကိုးကားချက်
 
-| Option                   | ဖော်ပြချက်                                                                | Default                                                              |
-| ------------------------ | ------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `browser.enabled`        | Browser control ကို ဖွင့်ရန်                                              | `true`                                                               |
+| Option                   | ဖော်ပြချက်                                                                                   | Default                                                                                 |
+| ------------------------ | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Browser control ကို ဖွင့်ရန်                                                                 | `true`                                                                                  |
 | `browser.executablePath` | Chromium အခြေခံ browser binary (Chrome/Brave/Edge/Chromium) ၏ လမ်းကြောင်း | auto-detected (Chromium အခြေခံ ဖြစ်ပါက ပုံမှန် browser ကို ဦးစားပေး) |
-| `browser.headless`       | GUI မပါဘဲ လည်ပတ်ရန်                                                       | `false`                                                              |
-| `browser.noSandbox`      | `--no-sandbox` flag ကို ထည့်ရန် (Linux setup အချို့တွင် လိုအပ်)           | `false`                                                              |
-| `browser.attachOnly`     | Browser ကို မစတင်ဘဲ ရှိပြီးသားကိုသာ attach လုပ်ရန်                        | `false`                                                              |
-| `browser.cdpPort`        | Chrome DevTools Protocol port                                             | `18800`                                                              |
+| `browser.headless`       | GUI မပါဘဲ လည်ပတ်ရန်                                                                          | `false`                                                                                 |
+| `browser.noSandbox`      | `--no-sandbox` flag ကို ထည့်ရန် (Linux setup အချို့တွင် လိုအပ်)           | `false`                                                                                 |
+| `browser.attachOnly`     | Browser ကို မစတင်ဘဲ ရှိပြီးသားကိုသာ attach လုပ်ရန်                                           | `false`                                                                                 |
+| `browser.cdpPort`        | Chrome DevTools Protocol port                                                                | `18800`                                                                                 |
 
 ### ပြဿနာ: "Chrome extension relay is running, but no tab is connected"
 
-သင်သည် `chrome` profile (extension relay) ကို အသုံးပြုနေပါသည်။ ၎င်းသည် OpenClaw
-browser extension ကို အသက်ဝင်နေသော tab တစ်ခုနှင့် ချိတ်ဆက်ထားရန် မျှော်မှန်းပါသည်။
+သင်သည် `chrome` profile (extension relay) ကို အသုံးပြုနေပါသည်။ ၎င်းသည် OpenClaw browser extension ကို live tab တစ်ခုနှင့် ချိတ်ဆက်ထားရမည်ဟု မျှော်လင့်ပါသည်။
 
 ဖြေရှင်းရန် နည်းလမ်းများ —
 

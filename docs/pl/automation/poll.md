@@ -4,13 +4,6 @@ read_when:
   - Dodawanie lub modyfikowanie obsługi ankiet
   - Debugowanie wysyłania ankiet z CLI lub gateway
 title: "Ankiety"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:45Z
 ---
 
 # Ankiety

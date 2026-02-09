@@ -4,13 +4,6 @@ read_when:
   - Du har anslutnings-/autentiseringsproblem och vill ha guidade lösningar
   - Du har uppdaterat och vill göra en rimlighetskontroll
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:43Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 Noteringar:
 
-- Interaktiva uppmaningar (som åtgärder för nyckelring/OAuth) körs bara när stdin är en TTY och `--non-interactive` **inte** är satt. Körningar utan terminal (cron, Telegram, ingen terminal) hoppar över uppmaningar.
+- Interaktiva uppmaningar (som keychain/OAuth fixar) körs bara när stdin är en TTY och `--non-interactive` är **inte** satt. Huvudlösa körningar (cron, Telegram, ingen terminal) kommer att hoppa över uppmaningar.
 - `--fix` (alias för `--repair`) skriver en säkerhetskopia till `~/.openclaw/openclaw.json.bak` och tar bort okända konfig-nycklar, med listning av varje borttagning.
 
 ## macOS: `launchctl` miljövariabel-överskrivningar

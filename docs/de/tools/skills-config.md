@@ -4,13 +4,6 @@ read_when:
   - Hinzufügen oder Ändern der Skills-Konfiguration
   - Anpassen der gebündelten Allowlist oder des Installationsverhaltens
 title: "Skills-Konfiguration"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:37Z
 ---
 
 # Skills-Konfiguration

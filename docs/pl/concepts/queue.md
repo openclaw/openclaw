@@ -1,15 +1,8 @@
 ---
-summary: „Projekt kolejki poleceń, który serializuje przychodzące uruchomienia automatycznych odpowiedzi”
+summary: "„Projekt kolejki poleceń, który serializuje przychodzące uruchomienia automatycznych odpowiedzi”"
 read_when:
   - Zmiana wykonywania automatycznych odpowiedzi lub współbieżności
-title: „Kolejka poleceń”
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:13Z
+title: "Kolejka poleceń"
 ---
 
 # Kolejka poleceń (2026-01-16)

@@ -4,18 +4,11 @@ summary: "Cloudflare AI Gateway のセットアップ（認証 + モデル選択
 read_when:
   - OpenClaw で Cloudflare AI Gateway を使用したい場合
   - アカウント ID、ゲートウェイ ID、または API キーの環境変数が必要な場合
-x-i18n:
-  source_path: providers/cloudflare-ai-gateway.md
-  source_hash: db77652c37652ca2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:55Z
 ---
 
 # Cloudflare AI Gateway
 
-Cloudflare AI Gateway はプロバイダー API の前段に配置され、分析、キャッシュ、制御を追加できます。Anthropic の場合、OpenClaw はゲートウェイ エンドポイントを介して Anthropic Messages API を使用します。
+Cloudflare AI Gateway はプロバイダー API の前段に配置され、分析、キャッシュ、制御を追加できます。Anthropic の場合、OpenClaw はゲートウェイ エンドポイントを介して Anthropic Messages API を使用します。 Anthropicの場合、OpenClawはゲートウェイエンドポイントを介してAnthropic Messages APIを使用します。
 
 - プロバイダー: `cloudflare-ai-gateway`
 - ベース URL: `https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_id>/anthropic`

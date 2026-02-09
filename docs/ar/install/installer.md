@@ -1,27 +1,20 @@
 ---
 summary: "كيفية عمل سكربتات المُثبّت (install.sh وinstall-cli.sh وinstall.ps1)، والرايات، والأتمتة"
 read_when:
-  - "تريد فهم `openclaw.ai/install.sh`"
-  - "تريد أتمتة عمليات التثبيت (CI / بدون واجهة تفاعلية)"
-  - "تريد التثبيت من نسخة مستنسخة من GitHub"
-title: "الهيكل الداخلي للمُثبّت"
-x-i18n:
-  source_path: install/installer.md
-  source_hash: 8517f9cf8e237b62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:51Z
+  - تريد فهم `openclaw.ai/install.sh`
+  - تريد أتمتة عمليات التثبيت (CI / بدون واجهة تفاعلية)
+  - تريد التثبيت من نسخة مستنسخة من GitHub
+title: "متدرب المثبت"
 ---
 
-# الهيكل الداخلي للمُثبّت
+# المثبت الداخلي
 
 توفّر OpenClaw ثلاثة سكربتات تثبيت، تُقدَّم من `openclaw.ai`.
 
-| السكربت                            | المنصّة              | ما الذي يفعله                                                                                    |
-| ---------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------ |
-| [`install.sh`](#installsh)         | macOS / Linux / WSL  | يثبّت Node عند الحاجة، ويثبّت OpenClaw عبر npm (افتراضيًا) أو git، ويمكنه تشغيل التهيئة الأولية. |
-| [`install-cli.sh`](#install-clish) | macOS / Linux / WSL  | يثبّت Node وOpenClaw ضمن بادئة محلية (`~/.openclaw`). لا يتطلّب صلاحيات root.                    |
+| النص                               | المنصة                                  | ما الذي يفعله                                                                                                                       |
+| ---------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| [`install.sh`](#installsh)         | macOS / Linux / WSL                     | يثبّت Node عند الحاجة، ويثبّت OpenClaw عبر npm (افتراضيًا) أو git، ويمكنه تشغيل التهيئة الأولية. |
+| [`install-cli.sh`](#install-clish) | macOS / Linux / WSL                     | يثبّت Node وOpenClaw ضمن بادئة محلية (`~/.openclaw`). لا يتطلّب صلاحيات root.    |
 | [`install.ps1`](#installps1)       | Windows (PowerShell) | يثبّت Node عند الحاجة، ويثبّت OpenClaw عبر npm (افتراضيًا) أو git، ويمكنه تشغيل التهيئة الأولية. |
 
 ## أوامر سريعة
@@ -32,9 +25,11 @@ x-i18n:
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
     ```
 
+    ````
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --help
     ```
+    ````
 
   </Tab>
   <Tab title="install-cli.sh">
@@ -42,9 +37,11 @@ x-i18n:
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash
     ```
 
+    ````
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --help
     ```
+    ````
 
   </Tab>
   <Tab title="install.ps1">
@@ -52,9 +49,11 @@ x-i18n:
     iwr -useb https://openclaw.ai/install.ps1 | iex
     ```
 
+    ````
     ```powershell
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -Tag beta -NoOnboard -DryRun
     ```
+    ````
 
   </Tab>
 </Tabs>
@@ -74,20 +73,20 @@ x-i18n:
 ### التدفق (install.sh)
 
 <Steps>
-  <Step title="اكتشاف نظام التشغيل">
+  <Step title="Detect OS">
     يدعم macOS وLinux (بما في ذلك WSL). عند اكتشاف macOS، يثبّت Homebrew إذا كان مفقودًا.
   </Step>
-  <Step title="ضمان Node.js 22+">
+  <Step title="Ensure Node.js 22+">
     يتحقّق من إصدار Node ويثبّت Node 22 عند الحاجة (Homebrew على macOS، وسكربتات إعداد NodeSource على Linux عبر apt/dnf/yum).
   </Step>
-  <Step title="ضمان Git">
+  <Step title="Ensure Git">
     يثبّت Git إذا كان مفقودًا.
   </Step>
-  <Step title="تثبيت OpenClaw">
+  <Step title="Install OpenClaw">
     - طريقة `npm` (الافتراضية): تثبيت npm عالمي
     - طريقة `git`: استنساخ/تحديث المستودع، تثبيت الاعتمادات عبر pnpm، البناء، ثم تثبيت الغلاف في `~/.local/bin/openclaw`
   </Step>
-  <Step title="مهام ما بعد التثبيت">
+  <Step title="Post-install tasks">
     - تشغيل `openclaw doctor --non-interactive` عند الترقيات وتثبيتات git (بأفضل جهد)
     - محاولة التهيئة الأولية عند الاقتضاء (توفر TTY، وعدم تعطيل التهيئة الأولية، واجتياز فحوصات bootstrap/التهيئة)
     - الضبط الافتراضي `SHARP_IGNORE_GLOBAL_LIBVIPS=1`
@@ -108,22 +107,22 @@ x-i18n:
 ### أمثلة (install.sh)
 
 <Tabs>
-  <Tab title="الافتراضي">
+  <Tab title="Default">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
     ```
   </Tab>
-  <Tab title="تخطي التهيئة الأولية">
+  <Tab title="Skip onboarding">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-onboard
     ```
   </Tab>
-  <Tab title="تثبيت عبر git">
+  <Tab title="Git install">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
     ```
   </Tab>
-  <Tab title="تشغيل تجريبي">
+  <Tab title="Dry run">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --dry-run
     ```
@@ -131,41 +130,41 @@ x-i18n:
 </Tabs>
 
 <AccordionGroup>
-  <Accordion title="مرجع الرايات">
+  <Accordion title="Flags reference">
 
-| الراية                          | الوصف                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------- |
-| `--install-method npm\|git`     | اختيار طريقة التثبيت (الافتراضي: `npm`). الاسم البديل: `--method`      |
-| `--npm`                         | اختصار لطريقة npm                                                      |
-| `--git`                         | اختصار لطريقة git. الاسم البديل: `--github`                            |
-| `--version <version\|dist-tag>` | إصدار npm أو dist-tag (الافتراضي: `latest`)                            |
-| `--beta`                        | استخدام dist-tag التجريبي إذا كان متاحًا، وإلا فالرجوع إلى `latest`    |
-| `--git-dir <path>`              | دليل النسخة المستنسخة (الافتراضي: `~/openclaw`). الاسم البديل: `--dir` |
-| `--no-git-update`               | تخطي `git pull` لنسخة موجودة                                           |
-| `--no-prompt`                   | تعطيل المطالبات                                                        |
-| `--no-onboard`                  | تخطي التهيئة الأولية                                                   |
-| `--onboard`                     | تمكين التهيئة الأولية                                                  |
-| `--dry-run`                     | طباعة الإجراءات دون تطبيق التغييرات                                    |
-| `--verbose`                     | تمكين مخرجات التصحيح (`set -x`، سجلات npm بمستوى الإشعار)              |
-| `--help`                        | عرض الاستخدام (`-h`)                                                   |
+| العلم                             | الوصف                                                                                                                                     |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--install-method npm\\|git`     | اختيار طريقة التثبيت (الافتراضي: `npm`). الاسم البديل: `--method`      |
+| `--npm`                           | اختصار لطريقة npm                                                                                                                         |
+| `--git`                           | اختصار لطريقة git. الاسم البديل: `--github`                                                               |
+| `--version <version\\|dist-tag>` | إصدار npm أو dist-tag (الافتراضي: `latest`)                                                            |
+| `--beta`                          | استخدام dist-tag التجريبي إذا كان متاحًا، وإلا فالرجوع إلى `latest`                                                                       |
+| `--git-dir <path>`                | دليل النسخة المستنسخة (الافتراضي: `~/openclaw`). الاسم البديل: `--dir` |
+| `--no-git-update`                 | تخطي `git pull` لنسخة موجودة                                                                                                              |
+| `--no-prompt`                     | تعطيل المطالبات                                                                                                                           |
+| `--no-onboard`                    | تخطي أونبواردينج                                                                                                                          |
+| `--onboard`                       | تمكين أونبواردينج                                                                                                                         |
+| `--dry-run`                       | طباعة الإجراءات دون تطبيق التغييرات                                                                                                       |
+| `--verbose`                       | تمكين مخرجات التصحيح (`set -x`، سجلات npm بمستوى الإشعار)                                                              |
+| `--help`                          | عرض الاستخدام (`-h`)                                                                                                   |
 
   </Accordion>
 
-  <Accordion title="مرجع متغيرات البيئة">
+  <Accordion title="Environment variables reference">
 
-| المتغير                                     | الوصف                                         |
-| ------------------------------------------- | --------------------------------------------- |
-| `OPENCLAW_INSTALL_METHOD=git\|npm`          | طريقة التثبيت                                 |
-| `OPENCLAW_VERSION=latest\|next\|<semver>`   | إصدار npm أو dist-tag                         |
-| `OPENCLAW_BETA=0\|1`                        | استخدام النسخة التجريبية إذا كانت متاحة       |
-| `OPENCLAW_GIT_DIR=<path>`                   | دليل النسخة المستنسخة                         |
-| `OPENCLAW_GIT_UPDATE=0\|1`                  | تبديل تحديثات git                             |
-| `OPENCLAW_NO_PROMPT=1`                      | تعطيل المطالبات                               |
-| `OPENCLAW_NO_ONBOARD=1`                     | تخطي التهيئة الأولية                          |
-| `OPENCLAW_DRY_RUN=1`                        | وضع التشغيل التجريبي                          |
-| `OPENCLAW_VERBOSE=1`                        | وضع التصحيح                                   |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | مستوى سجلات npm                               |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | التحكم في سلوك sharp/libvips (الافتراضي: `1`) |
+| المتغير                                         | الوصف                                                                            |
+| ----------------------------------------------- | -------------------------------------------------------------------------------- |
+| `OPENCLAW_INSTALL_METHOD=git\\|npm`            | طريقة التثبيت                                                                    |
+| `OPENCLAW_VERSION=latest\\|next\\|<semver>`   | إصدار npm أو dist-tag                                                            |
+| `OPENCLAW_BETA=0\\|1`                          | استخدام النسخة التجريبية إذا كانت متاحة                                          |
+| `OPENCLAW_GIT_DIR=<path>`                       | دليل الدفع                                                                       |
+| `OPENCLAW_GIT_UPDATE=0\\|1`                    | تبديل تحديثات git                                                                |
+| `OPENCLAW_NO_PROMPT=1`                          | تعطيل المطالبات                                                                  |
+| `OPENCLAW_NO_ONBOARD=1`                         | تخطي أونبواردينج                                                                 |
+| `OPENCLAW_DRY_RUN=1`                            | وضع التشغيل الجاف                                                                |
+| `OPENCLAW_VERBOSE=1`                            | وضع التصحيح                                                                      |
+| `OPENCLAW_NPM_LOGLEVEL=error\\|warn\\|notice` | مستوى سجلات npm                                                                  |
+| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\\|1`            | التحكم في سلوك sharp/libvips (الافتراضي: `1`) |
 
   </Accordion>
 </AccordionGroup>
@@ -181,13 +180,13 @@ x-i18n:
 ### التدفق (install-cli.sh)
 
 <Steps>
-  <Step title="تثبيت بيئة Node محلية">
+  <Step title="Install local Node runtime">
     تنزيل حزمة Node (الافتراضي `22.22.0`) إلى `<prefix>/tools/node-v<version>` والتحقق من SHA-256.
   </Step>
-  <Step title="ضمان Git">
+  <Step title="Ensure Git">
     إذا كان Git مفقودًا، يحاول التثبيت عبر apt/dnf/yum على Linux أو Homebrew على macOS.
   </Step>
-  <Step title="تثبيت OpenClaw تحت البادئة">
+  <Step title="Install OpenClaw under prefix">
     يثبّت باستخدام npm مع `--prefix <prefix>`، ثم يكتب الغلاف إلى `<prefix>/bin/openclaw`.
   </Step>
 </Steps>
@@ -195,22 +194,22 @@ x-i18n:
 ### أمثلة (install-cli.sh)
 
 <Tabs>
-  <Tab title="الافتراضي">
+  <Tab title="Default">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash
     ```
   </Tab>
-  <Tab title="بادئة مخصّصة + إصدار">
+  <Tab title="Custom prefix + version">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --prefix /opt/openclaw --version latest
     ```
   </Tab>
-  <Tab title="مخرجات JSON للأتمتة">
+  <Tab title="Automation JSON output">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --json --prefix /opt/openclaw
     ```
   </Tab>
-  <Tab title="تشغيل التهيئة الأولية">
+  <Tab title="Run onboarding">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --onboard
     ```
@@ -218,32 +217,32 @@ x-i18n:
 </Tabs>
 
 <AccordionGroup>
-  <Accordion title="مرجع الرايات">
+  <Accordion title="Flags reference">
 
-| الراية                 | الوصف                                                                                   |
+| العلم                  | الوصف                                                                                   |
 | ---------------------- | --------------------------------------------------------------------------------------- |
-| `--prefix <path>`      | بادئة التثبيت (الافتراضي: `~/.openclaw`)                                                |
-| `--version <ver>`      | إصدار OpenClaw أو dist-tag (الافتراضي: `latest`)                                        |
-| `--node-version <ver>` | إصدار Node (الافتراضي: `22.22.0`)                                                       |
+| `--prefix <path>`      | بادئة التثبيت (الافتراضي: `~/.openclaw`)             |
+| `--version <ver>`      | إصدار OpenClaw أو dist-tag (الافتراضي: `latest`)     |
+| `--node-version <ver>` | إصدار Node (الافتراضي: `22.22.0`)                    |
 | `--json`               | إخراج أحداث NDJSON                                                                      |
 | `--onboard`            | تشغيل `openclaw onboard` بعد التثبيت                                                    |
-| `--no-onboard`         | تخطي التهيئة الأولية (افتراضي)                                                          |
+| `--no-onboard`         | تخطي التهيئة الأولية (افتراضي)                                       |
 | `--set-npm-prefix`     | على Linux، فرض بادئة npm إلى `~/.npm-global` إذا كانت البادئة الحالية غير قابلة للكتابة |
-| `--help`               | عرض الاستخدام (`-h`)                                                                    |
+| `--help`               | عرض الاستخدام (`-h`)                                                 |
 
   </Accordion>
 
-  <Accordion title="مرجع متغيرات البيئة">
+  <Accordion title="Environment variables reference">
 
-| المتغير                                     | الوصف                                                                        |
-| ------------------------------------------- | ---------------------------------------------------------------------------- |
-| `OPENCLAW_PREFIX=<path>`                    | بادئة التثبيت                                                                |
-| `OPENCLAW_VERSION=<ver>`                    | إصدار OpenClaw أو dist-tag                                                   |
-| `OPENCLAW_NODE_VERSION=<ver>`               | إصدار Node                                                                   |
-| `OPENCLAW_NO_ONBOARD=1`                     | تخطي التهيئة الأولية                                                         |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice` | مستوى سجلات npm                                                              |
-| `OPENCLAW_GIT_DIR=<path>`                   | مسار بحث تنظيف قديم (يُستخدم عند إزالة نسخة قديمة من `Peekaboo` كنسخة فرعية) |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`          | التحكم في سلوك sharp/libvips (الافتراضي: `1`)                                |
+| المتغير                                         | الوصف                                                                                           |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `OPENCLAW_PREFIX=<path>`                        | بادئة التثبيت                                                                                   |
+| `OPENCLAW_VERSION=<ver>`                        | إصدار OpenClaw أو dist-tag                                                                      |
+| `OPENCLAW_NODE_VERSION=<ver>`                   | إصدار Node                                                                                      |
+| `OPENCLAW_NO_ONBOARD=1`                         | تخطي أونبواردينج                                                                                |
+| `OPENCLAW_NPM_LOGLEVEL=error\\|warn\\|notice` | مستوى سجلات npm                                                                                 |
+| `OPENCLAW_GIT_DIR=<path>`                       | مسار بحث تنظيف قديم (يُستخدم عند إزالة نسخة قديمة من `Peekaboo` كنسخة فرعية) |
+| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\\|1`            | التحكم في سلوك sharp/libvips (الافتراضي: `1`)                |
 
   </Accordion>
 </AccordionGroup>
@@ -255,17 +254,17 @@ x-i18n:
 ### التدفق (install.ps1)
 
 <Steps>
-  <Step title="ضمان بيئة PowerShell وWindows">
+  <Step title="Ensure PowerShell + Windows environment">
     يتطلّب PowerShell 5+.
   </Step>
-  <Step title="ضمان Node.js 22+">
+  <Step title="Ensure Node.js 22+">
     إذا كان مفقودًا، يحاول التثبيت عبر winget، ثم Chocolatey، ثم Scoop.
   </Step>
-  <Step title="تثبيت OpenClaw">
+  <Step title="Install OpenClaw">
     - طريقة `npm` (الافتراضية): تثبيت npm عالمي باستخدام `-Tag` المحدد
     - طريقة `git`: استنساخ/تحديث المستودع، التثبيت/البناء عبر pnpm، وتثبيت الغلاف في `%USERPROFILE%\.local\bin\openclaw.cmd`
   </Step>
-  <Step title="مهام ما بعد التثبيت">
+  <Step title="Post-install tasks">
     يضيف دليل bin المطلوب إلى PATH للمستخدم عند الإمكان، ثم يشغّل `openclaw doctor --non-interactive` عند الترقيات وتثبيتات git (بأفضل جهد).
   </Step>
 </Steps>
@@ -273,22 +272,22 @@ x-i18n:
 ### أمثلة (install.ps1)
 
 <Tabs>
-  <Tab title="الافتراضي">
+  <Tab title="Default">
     ```powershell
     iwr -useb https://openclaw.ai/install.ps1 | iex
     ```
   </Tab>
-  <Tab title="تثبيت عبر git">
+  <Tab title="Git install">
     ```powershell
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod git
     ```
   </Tab>
-  <Tab title="دليل git مخصّص">
+  <Tab title="Custom git directory">
     ```powershell
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod git -GitDir "C:\openclaw"
     ```
   </Tab>
-  <Tab title="تشغيل تجريبي">
+  <Tab title="Dry run">
     ```powershell
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -DryRun
     ```
@@ -296,28 +295,28 @@ x-i18n:
 </Tabs>
 
 <AccordionGroup>
-  <Accordion title="مرجع الرايات">
+  <Accordion title="Flags reference">
 
-| الراية                    | الوصف                                                       |
-| ------------------------- | ----------------------------------------------------------- |
-| `-InstallMethod npm\|git` | طريقة التثبيت (الافتراضي: `npm`)                            |
-| `-Tag <tag>`              | dist-tag لـ npm (الافتراضي: `latest`)                       |
-| `-GitDir <path>`          | دليل النسخة المستنسخة (الافتراضي: `%USERPROFILE%\openclaw`) |
-| `-NoOnboard`              | تخطي التهيئة الأولية                                        |
-| `-NoGitUpdate`            | تخطي `git pull`                                             |
-| `-DryRun`                 | طباعة الإجراءات فقط                                         |
+| العلم                       | الوصف                                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `-InstallMethod npm\\|git` | طريقة التثبيت (الافتراضي: `npm`)                             |
+| `-Tag <tag>`                | dist-tag لـ npm (الافتراضي: `latest`)                        |
+| `-GitDir <path>`            | دليل النسخة المستنسخة (الافتراضي: `%USERPROFILE%\openclaw`) |
+| `-NoOnboard`                | تخطي أونبواردينج                                                                                |
+| `-NoGitUpdate`              | تخطي `git pull`                                                                                 |
+| `-DryRun`                   | طباعة الإجراءات فقط                                                                             |
 
   </Accordion>
 
-  <Accordion title="مرجع متغيرات البيئة">
+  <Accordion title="Environment variables reference">
 
-| المتغير                            | الوصف                 |
-| ---------------------------------- | --------------------- |
-| `OPENCLAW_INSTALL_METHOD=git\|npm` | طريقة التثبيت         |
-| `OPENCLAW_GIT_DIR=<path>`          | دليل النسخة المستنسخة |
-| `OPENCLAW_NO_ONBOARD=1`            | تخطي التهيئة الأولية  |
-| `OPENCLAW_GIT_UPDATE=0`            | تعطيل git pull        |
-| `OPENCLAW_DRY_RUN=1`               | وضع التشغيل التجريبي  |
+| المتغير                              | الوصف             |
+| ------------------------------------ | ----------------- |
+| `OPENCLAW_INSTALL_METHOD=git\\|npm` | طريقة التثبيت     |
+| `OPENCLAW_GIT_DIR=<path>`            | دليل الدفع        |
+| `OPENCLAW_NO_ONBOARD=1`              | تخطي أونبواردينج  |
+| `OPENCLAW_GIT_UPDATE=0`              | تعطيل git pull    |
+| `OPENCLAW_DRY_RUN=1`                 | وضع التشغيل الجاف |
 
   </Accordion>
 </AccordionGroup>
@@ -333,12 +332,12 @@ x-i18n:
 استخدم الرايات/متغيرات البيئة غير التفاعلية للحصول على تشغيلات متوقعة.
 
 <Tabs>
-  <Tab title="install.sh (npm غير تفاعلي)">
+  <Tab title="install.sh (non-interactive npm)">
     ```bash
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --no-prompt --no-onboard
     ```
   </Tab>
-  <Tab title="install.sh (git غير تفاعلي)">
+  <Tab title="install.sh (non-interactive git)">
     ```bash
     OPENCLAW_INSTALL_METHOD=git OPENCLAW_NO_PROMPT=1 \
       curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
@@ -349,7 +348,7 @@ x-i18n:
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install-cli.sh | bash -s -- --json --prefix /opt/openclaw
     ```
   </Tab>
-  <Tab title="install.ps1 (تخطي التهيئة الأولية)">
+  <Tab title="install.ps1 (skip onboarding)">
     ```powershell
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -NoOnboard
     ```
@@ -361,20 +360,22 @@ x-i18n:
 ## استكشاف الأخطاء وإصلاحها
 
 <AccordionGroup>
-  <Accordion title="لماذا Git مطلوب؟">
+  <Accordion title="Why is Git required?">
     Git مطلوب لطريقة التثبيت `git`. بالنسبة لتثبيتات `npm`، لا يزال يتم التحقق من Git/تثبيته لتجنّب إخفاقات `spawn git ENOENT` عندما تستخدم الاعتمادات عناوين URL عبر git.
   </Accordion>
 
-  <Accordion title="لماذا يواجه npm خطأ EACCES على Linux؟">
+  <Accordion title="Why does npm hit EACCES on Linux?">
     تشير بعض إعدادات Linux إلى أن بادئة npm العالمية موجّهة إلى مسارات مملوكة لـ root. يمكن لـ `install.sh` تبديل البادئة إلى `~/.npm-global` وإلحاق صادرات PATH بملفات rc الخاصة بالصدفة (عندما تكون تلك الملفات موجودة).
   </Accordion>
 
-  <Accordion title="مشكلات sharp/libvips">
+  <Accordion title="sharp/libvips issues">
     تضبط السكربتات افتراضيًا `SHARP_IGNORE_GLOBAL_LIBVIPS=1` لتجنّب قيام sharp بالبناء مقابل libvips النظام. للتجاوز:
 
+    ````
     ```bash
     SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash
     ```
+    ````
 
   </Accordion>
 
@@ -386,7 +387,7 @@ x-i18n:
     شغّل `npm config get prefix`، وألحق `\bin`، وأضِف ذلك الدليل إلى PATH للمستخدم، ثم أعد فتح PowerShell.
   </Accordion>
 
-  <Accordion title="openclaw غير موجود بعد التثبيت">
+  <Accordion title="openclaw not found after install">
     غالبًا ما تكون مشكلة PATH. راجع [استكشاف أخطاء Node.js وإصلاحها](/install/node#troubleshooting).
   </Accordion>
 </AccordionGroup>

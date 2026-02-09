@@ -4,18 +4,11 @@ read_when:
   - Bạn dùng plugin voice-call và muốn các điểm vào CLI
   - Bạn muốn các ví dụ nhanh cho `voicecall call|continue|status|tail|expose`
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:30Z
 ---
 
 # `openclaw voicecall`
 
-`voicecall` là một lệnh do plugin cung cấp. Lệnh này chỉ xuất hiện khi plugin voice-call được cài đặt và bật.
+Lưu ý bảo mật: chỉ mở endpoint webhook cho các mạng bạn tin cậy. It only appears if the voice-call plugin is installed and enabled.
 
 Tài liệu chính:
 
@@ -38,4 +31,5 @@ openclaw voicecall expose --mode funnel
 openclaw voicecall unexpose
 ```
 
-Lưu ý bảo mật: chỉ mở endpoint webhook cho các mạng bạn tin cậy. Ưu tiên Tailscale Serve thay vì Funnel khi có thể.
+Ưu tiên Tailscale Serve hơn Funnel khi có thể. Vòng lặp agentic là lần chạy “thực” đầy đủ của một agent: tiếp nhận → lắp ráp ngữ cảnh → suy luận mô hình →
+thực thi công cụ → phản hồi dạng stream → lưu trữ.

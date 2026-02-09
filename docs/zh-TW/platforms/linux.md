@@ -1,24 +1,17 @@
 ---
-summary: "Linux 支援與配套應用程式狀態"
+summary: "Linux support + companion app status"
 read_when:
-  - 尋找 Linux 配套應用程式狀態
+  - 尋找 Linux 夥伴應用程式狀態
   - 規劃平台涵蓋或貢獻
 title: "Linux 應用程式"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:38Z
 ---
 
 # Linux 應用程式
 
-Gateway 閘道器在 Linux 上提供完整支援。**Node 是建議的執行環境**。
-不建議在 Gateway 閘道器上使用 Bun（WhatsApp／Telegram 的錯誤）。
+閘道在 Linux 上已完全支援。 **Node 是建議的執行環境**。
+不建議在閘道使用 Bun（WhatsApp/Telegram 有錯誤）。
 
-原生 Linux 配套應用程式已在規劃中。若您願意協助建置，歡迎貢獻。
+原生的 Linux 夥伴應用程式正在規劃中。 Contributions are welcome if you want to help build one.
 
 ## 初學者快速路徑（VPS）
 
@@ -71,7 +64,9 @@ openclaw doctor
 
 ## 系統控制（systemd 使用者單位）
 
-OpenClaw 預設會安裝 systemd **使用者** 服務。對於共用或永遠開啟的伺服器，請使用 **系統** 服務。完整的單位範例與指引位於 [Gateway 閘道器操作手冊](/gateway)。
+OpenClaw 預設會安裝 systemd **使用者** 服務。對於共用或永遠開啟的伺服器，請使用 **系統** 服務。完整的單位範例與指引位於 [Gateway 閘道器操作手冊](/gateway)。 對於共用或永遠在線的伺服器，請使用 **system**
+服務。 The full unit example and guidance
+live in the [Gateway runbook](/gateway).
 
 最小設定：
 

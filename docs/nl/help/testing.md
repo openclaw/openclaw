@@ -5,13 +5,6 @@ read_when:
   - Regressies toevoegen voor model/provider-bugs
   - Gateway- en agentgedrag debuggen
 title: "Testen"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:02Z
 ---
 
 # Testen
@@ -85,7 +78,7 @@ Zie de suites als “toenemende realiteit” (en toenemende instabiliteit/kosten
 - Verwachtingen:
   - Niet CI-stabiel per ontwerp (echte netwerken, echte providerpolicies, quota’s, storingen)
   - Kost geld / gebruikt rate-limits
-  - Voorkeur voor het draaien van beperkte subsets in plaats van “alles”
+  - Bij voorkeur uitvoeren beperkt subsets in plaats van "alles"
   - Live-runs halen `~/.profile` op om ontbrekende API-sleutels te vinden
   - Anthropic key-rotatie: stel `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (of `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) in of meerdere `ANTHROPIC_API_KEY*`-variabelen; tests proberen opnieuw bij rate-limits
 
@@ -304,9 +297,11 @@ Tip: probeer niet “alle modellen” hard te coderen in docs. De gezaghebbende 
 Live-tests ontdekken credentials op dezelfde manier als de CLI. Praktische implicaties:
 
 - Als de CLI werkt, zouden live-tests dezelfde sleutels moeten vinden.
+
 - Als een live-test “geen creds” meldt, debug op dezelfde manier als `openclaw models list` / modelselectie.
 
 - Profielstore: `~/.openclaw/credentials/` (voorkeur; dit is wat “profielsleutels” betekent in de tests)
+
 - Config: `~/.openclaw/openclaw.json` (of `OPENCLAW_CONFIG_PATH`)
 
 Als je op env-sleutels wilt vertrouwen (bijv. geëxporteerd in je `~/.profile`), draai lokale tests na `source ~/.profile`, of gebruik de Docker-runners hieronder (die kunnen `~/.profile` in de container mounten).
@@ -326,7 +321,7 @@ Deze draaien `pnpm test:live` binnen de repo-Docker-image, met je lokale configm
 - Gateway-netwerken (twee containers, WS-auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (custom extensie laden + registry-smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
-Handige env-variabelen:
+Nuttige env-vars:
 
 - `OPENCLAW_CONFIG_DIR=...` (standaard: `~/.openclaw`) gemount naar `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (standaard: `~/.openclaw/workspace`) gemount naar `/home/node/.openclaw/workspace`

@@ -3,13 +3,6 @@ summary: "Ang OpenClaw ay isang multi-channel gateway para sa mga AI agent na tu
 read_when:
   - Pagpapakilala ng OpenClaw sa mga baguhan
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # OpenClaw 🦞
@@ -29,11 +22,10 @@ x-i18n:
     />
 </p>
 
-> _"EXFOLIATE! EXFOLIATE!"_ — Isang space lobster, marahil
+> _"EXFOLIATE! <strong>Anumang OS gateway para sa mga AI agent sa WhatsApp, Telegram, Discord, iMessage, at higit pa.</strong>
 
-<p align="center">
-  <strong>Gateway para sa anumang OS para sa mga AI agent sa WhatsApp, Telegram, Discord, iMessage, at iba pa.</strong><br />
-  Magpadala ng mensahe, makakuha ng tugon ng agent mula sa iyong bulsa. Nagdadagdag ang mga plugin ng Mattermost at higit pa.
+<p align="center"><br />
+  Magpadala ng mensahe, makakuha ng tugon ng agent mula sa iyong bulsa.Nagdaragdag ang mga plugin ng Mattermost at iba pa. Kailangan mo ba ang kumpletong install at dev setup?
 </p>
 
 <Columns>
@@ -50,7 +42,7 @@ x-i18n:
 
 ## Ano ang OpenClaw?
 
-Ang OpenClaw ay isang **self-hosted gateway** na nag-uugnay sa iyong mga paboritong chat app — WhatsApp, Telegram, Discord, iMessage, at iba pa — sa mga AI coding agent tulad ng Pi. Nagpapatakbo ka ng iisang proseso ng Gateway sa sarili mong machine (o server), at ito ang nagiging tulay sa pagitan ng iyong mga messaging app at isang laging-available na AI assistant.
+OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — WhatsApp, Telegram, Discord, iMessage, and more — to AI coding agents like Pi. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
 
 **Para kanino ito?** Mga developer at power user na gustong magkaroon ng personal na AI assistant na maaari nilang i-message mula kahit saan — nang hindi isinusuko ang kontrol sa kanilang data o umaasa sa isang hosted service.
 
@@ -108,12 +100,12 @@ Ang Gateway ang iisang source of truth para sa mga session, routing, at mga kone
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Onboard at i-install ang serbisyo">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="I-pair ang WhatsApp at simulan ang Gateway">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -121,7 +113,7 @@ Ang Gateway ang iisang source of truth para sa mga session, routing, at mga kone
   </Step>
 </Steps>
 
-Kailangan mo ba ng buong install at dev setup? Tingnan ang [Quick start](/start/quickstart).
+Dapat **port 22 lamang** (SSH) ang bukas. See [Quick start](/start/quickstart).
 
 ## Dashboard
 

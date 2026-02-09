@@ -2,15 +2,8 @@
 summary: "เอกสารอ้างอิงCLIสำหรับ `openclaw doctor` (การตรวจสุขภาพ + การซ่อมแซมแบบแนะนำ)"
 read_when:
   - คุณมีปัญหาการเชื่อมต่อ/การยืนยันตัวตนและต้องการแนวทางแก้ไขแบบแนะนำ
-  - คุณเพิ่งอัปเดตและต้องการตรวจสอบความถูกต้องโดยรวม
+  - คุณได้อัปเดตแล้วและต้องการตรวจสอบความถูกต้องเบื้องต้น
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:51Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 หมายเหตุ:
 
-- พรอมต์แบบโต้ตอบ (เช่น การแก้ไข keychain/OAuth) จะทำงานเฉพาะเมื่อ stdin เป็น TTY และไม่ได้ตั้งค่า `--non-interactive` ไว้ การรันแบบไม่มีหัว (cron, Telegram, ไม่มีเทอร์มินัล) จะข้ามพรอมต์
+- พรอมต์แบบโต้ตอบ (เช่น การแก้ไข keychain/OAuth) จะทำงานเฉพาะเมื่อ stdin เป็น TTY และไม่ได้ตั้งค่า `--non-interactive` ไว้ การรันแบบไม่มีหัว (cron, Telegram, ไม่มีเทอร์มินัล) จะข้ามพรอมต์ การรันแบบไม่มีส่วนโต้ตอบ (cron, Telegram, ไม่มีเทอร์มินัล) จะข้ามพรอมต์
 - `--fix` (นามแฝงของ `--repair`) จะเขียนไฟล์สำรองไปที่ `~/.openclaw/openclaw.json.bak` และลบคีย์คอนฟิกที่ไม่รู้จัก โดยจะแสดงรายการการลบแต่ละรายการ
 
 ## macOS: การ override env ของ `launchctl`

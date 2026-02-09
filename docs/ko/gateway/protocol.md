@@ -5,22 +5,12 @@ read_when:
   - 프로토콜 불일치 또는 연결 실패 디버깅 시
   - 프로토콜 스키마/모델 재생성 시
 title: "Gateway 프로토콜"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:12Z
 ---
 
 # Gateway 프로토콜 (WebSocket)
 
-Gateway WS 프로토콜은 OpenClaw 를 위한 **단일 제어 플레인 + 노드 전송**입니다.
-모든 클라이언트 (CLI, 웹 UI, macOS 앱, iOS/Android 노드, 헤드리스
+Gateway WS 프로토콜은 OpenClaw 를 위한 **단일 제어 플레인 + 노드 전송**입니다. 모든 클라이언트 (CLI, 웹 UI, macOS 앱, iOS/Android 노드, 헤드리스
 노드)는 WebSocket 으로 연결되며 핸드셰이크 시점에 자신의 **역할**
-
-- **범위**를 선언합니다.
 
 ## Transport
 
@@ -195,8 +185,7 @@ Gateway 는 이를 **클레임**으로 취급하고 서버 측 허용 목록을 
 
 - `OPENCLAW_GATEWAY_TOKEN` (또는 `--token`) 가 설정된 경우, `connect.params.auth.token` 가 일치해야 하며
   그렇지 않으면 소켓이 닫힙니다.
-- 페어링 후, Gateway(게이트웨이) 는 연결의 역할 + 범위에 스코프된 **디바이스 토큰**을 발급합니다.
-  이는 `hello-ok.auth.deviceToken` 에 반환되며 이후 연결을 위해 클라이언트가
+- 페어링 후, Gateway(게이트웨이) 는 연결의 역할 + 범위에 스코프된 **디바이스 토큰**을 발급합니다. 이는 `hello-ok.auth.deviceToken` 에 반환되며 이후 연결을 위해 클라이언트가
   영구 저장해야 합니다.
 - 디바이스 토큰은 `device.token.rotate` 및
   `device.token.revoke` 를 통해 회전/폐기할 수 있습니다 (`operator.pairing` 범위 필요).

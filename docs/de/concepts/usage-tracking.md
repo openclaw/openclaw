@@ -1,16 +1,9 @@
 ---
-summary: „Oberflächen zur Nutzungsverfolgung und Anforderungen an Anmeldeinformationen“
+summary: "„Oberflächen zur Nutzungsverfolgung und Anforderungen an Anmeldeinformationen“"
 read_when:
   - Sie verdrahten Oberflächen für Anbieter-Nutzung/Quoten
   - Sie müssen das Verhalten der Nutzungsverfolgung oder Authentifizierungsanforderungen erklären
-title: „Nutzungsverfolgung“
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:00Z
+title: "„Nutzungsverfolgung“"
 ---
 
 # Nutzungsverfolgung

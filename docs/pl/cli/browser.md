@@ -5,13 +5,6 @@ read_when:
   - Chcesz sterować przeglądarką uruchomioną na innej maszynie za pośrednictwem hosta węzła
   - Chcesz używać przekaźnika rozszerzenia Chrome (podłączanie/odłączanie przyciskiem na pasku narzędzi)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:53Z
 ---
 
 # `openclaw browser`
@@ -70,7 +63,7 @@ openclaw browser close <targetId>
 
 ## Snapshot / screenshot / actions
 
-Migawka:
+Snapshot:
 
 ```bash
 openclaw browser snapshot

@@ -4,20 +4,13 @@ read_when:
   - Gusto mong gumamit ng mga model ng Amazon Bedrock kasama ang OpenClaw
   - Kailangan mo ng setup ng AWS credential/region para sa mga tawag ng model
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:49Z
 ---
 
 # Amazon Bedrock
 
-Maaaring gumamit ang OpenClaw ng mga **Amazon Bedrock** model sa pamamagitan ng **Bedrock Converse**
-streaming provider ng pi‑ai. Gumagamit ang Bedrock auth ng **AWS SDK default credential chain**,
-hindi ng API key.
+OpenClaw can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
+streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
+not an API key.
 
 ## Ano ang sinusuportahan ng pi‑ai
 
@@ -28,9 +21,9 @@ hindi ng API key.
 
 ## Awtomatikong discovery ng model
 
-Kung may na-detect na AWS credentials, awtomatikong matutuklasan ng OpenClaw ang mga Bedrock
-model na sumusuporta sa **streaming** at **text output**. Gumagamit ang discovery ng
-`bedrock:ListFoundationModels` at naka-cache ito (default: 1 oras).
+If AWS credentials are detected, OpenClaw can automatically discover Bedrock
+models that support **streaming** and **text output**. Discovery uses
+`bedrock:ListFoundationModels` and is cached (default: 1 hour).
 
 Matatagpuan ang mga opsyon ng config sa ilalim ng `models.bedrockDiscovery`:
 
@@ -107,13 +100,13 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2 Instance Roles
 
-Kapag pinapatakbo ang OpenClaw sa isang EC2 instance na may nakakabit na IAM role, awtomatikong
-gagamitin ng AWS SDK ang instance metadata service (IMDS) para sa authentication.
-Gayunpaman, ang credential detection ng OpenClaw sa kasalukuyan ay tinitingnan lamang ang mga
-environment variable, hindi ang IMDS credentials.
+When running OpenClaw on an EC2 instance with an IAM role attached, the AWS SDK
+will automatically use the instance metadata service (IMDS) for authentication.
+However, OpenClaw's credential detection currently only checks for environment
+variables, not IMDS credentials.
 
-**Workaround:** Itakda ang `AWS_PROFILE=default` upang ipahiwatig na available ang AWS credentials.
-Ang aktuwal na authentication ay gagamit pa rin ng instance role sa pamamagitan ng IMDS.
+**Workaround:** Set `AWS_PROFILE=default` to signal that AWS credentials are
+available. The actual authentication still uses the instance role via IMDS.
 
 ```bash
 # Add to ~/.bashrc or your shell profile

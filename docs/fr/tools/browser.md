@@ -5,13 +5,6 @@ read_when:
   - Débogage des interférences d’openclaw avec votre propre Chrome
   - Implémentation des paramètres et du cycle de vie du navigateur dans l’application macOS
 title: "Navigateur (géré par OpenClaw)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:39Z
 ---
 
 # Navigateur (géré par openclaw)
@@ -455,7 +448,7 @@ Remarques :
 - `click`/`type`/etc nécessitent une `ref` provenant de `snapshot` (soit une référence numérique `12` soit une référence de rôle `e12`).
   Les sélecteurs CSS ne sont intentionnellement pas pris en charge pour les actions.
 
-## Instantanés et références
+## Instantanés et refs
 
 OpenClaw prend en charge deux styles d’« instantané » :
 
@@ -498,7 +491,7 @@ openclaw browser wait "#main" \
   --timeout-ms 15000
 ```
 
-## Flux de débogage
+## Déboguer les workflows
 
 Lorsqu’une action échoue (par ex. « not visible », « strict mode violation », « covered ») :
 
@@ -554,7 +547,7 @@ Utiles pour les flux « faire se comporter le site comme X » :
 - Conservez la Gateway (passerelle)/l’hôte de nœud privé (loopback ou tailnet uniquement).
 - Les points de terminaison CDP distants sont puissants ; tunnelisez-les et protégez-les.
 
-## Dépannage
+## Problemes courants
 
 Pour les problèmes spécifiques à Linux (en particulier Chromium snap), voir
 [Dépannage du navigateur](/tools/browser-linux-troubleshooting).
@@ -565,7 +558,7 @@ L’agent dispose d’**un seul outil** pour l’automatisation du navigateur :
 
 - `browser` — statut/démarrer/arrêter/onglets/ouvrir/focaliser/fermer/instantané/capture d’écran/navigation/action
 
-Correspondance :
+Comment elle mappe:
 
 - `browser snapshot` renvoie une arborescence UI stable (IA ou ARIA).
 - `browser act` utilise les identifiants d’instantané `ref` pour cliquer/saisir/glisser/sélectionner.

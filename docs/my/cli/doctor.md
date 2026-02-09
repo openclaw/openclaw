@@ -4,13 +4,6 @@ read_when:
   - ချိတ်ဆက်မှု/အတည်ပြုခြင်း ပြဿနာများရှိပြီး လမ်းညွှန်ပြုပြင်မှုများလိုချင်သောအခါ
   - အပ်ဒိတ်လုပ်ပြီးနောက် စနစ်မှန်ကန်မှုကို စစ်ဆေးချင်သောအခါ
 title: "ဒေါက်တာ"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:03Z
 ---
 
 # `openclaw doctor`
@@ -32,7 +25,7 @@ openclaw doctor --deep
 
 မှတ်ချက်များ—
 
-- stdin သည် TTY ဖြစ်ပြီး `--non-interactive` ကို သတ်မှတ်မထားသောအခါမှသာ အပြန်အလှန် မေးမြန်းမှုများ (ဥပမာ keychain/OAuth ပြုပြင်မှုများ) ကို လုပ်ဆောင်ပါသည်။ Headless အလုပ်လုပ်ခြင်းများ (cron, Telegram, တာမီနယ်မရှိခြင်း) တွင် မေးမြန်းမှုများကို ကျော်သွားပါလိမ့်မည်။
+- Interactive prompts များ (keychain/OAuth fixes ကဲ့သို့) သည် stdin သည် TTY ဖြစ်ပြီး `--non-interactive` ကို မသတ်မှတ်ထားသောအခါသာ chạy မည်။ Headless runs များ (cron, Telegram, terminal မရှိခြင်း) သည် prompts များကို ကျော်သွားမည်။
 - `--fix` (`--repair` အတွက် alias) သည် `~/.openclaw/openclaw.json.bak` သို့ backup တစ်ခုရေးသားပြီး မသိရှိသော config ကီးများကို ဖယ်ရှားကာ ဖယ်ရှားမှုတစ်ခုချင်းစီကို စာရင်းပြုစုပါသည်။
 
 ## macOS: `launchctl` env overrides

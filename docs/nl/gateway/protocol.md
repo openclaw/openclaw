@@ -5,13 +5,6 @@ read_when:
   - Debuggen van protocol-mismatches of verbindingsfouten
   - Opnieuw genereren van protocolschema’s/modellen
 title: "Gateway-protocol"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Gateway-protocol (WebSocket)
@@ -182,7 +175,7 @@ De Gateway behandelt deze als **claims** en handhaaft server-side allowlists.
 - Wanneer een exec-aanvraag goedkeuring vereist, broadcast de gateway `exec.approval.requested`.
 - Operator-clients lossen dit op door `exec.approval.resolve` aan te roepen (vereist `operator.approvals`-scope).
 
-## Versiebeheer
+## Versionering
 
 - `PROTOCOL_VERSION` leeft in `src/gateway/protocol/schema.ts`.
 - Clients sturen `minProtocol` + `maxProtocol`; de server weigert mismatches.

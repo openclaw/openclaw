@@ -3,13 +3,6 @@ summary: "Yüzeyler arasında grup sohbeti davranışı (WhatsApp/Telegram/Disco
 read_when:
   - Grup sohbeti davranışını veya mention gating’i değiştirirken
 title: "Gruplar"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:12Z
 ---
 
 # Gruplar
@@ -47,12 +40,12 @@ otherwise -> reply
 
 İsterseniz...
 
-| Amaç                                                    | Ayarlanacaklar                                             |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| Tüm gruplara izin ver ama yalnızca @mention ile yanıtla | `groups: { "*": { requireMention: true } }`                |
-| Tüm grup yanıtlarını devre dışı bırak                   | `groupPolicy: "disabled"`                                  |
-| Yalnızca belirli gruplar                                | `groups: { "<group-id>": { ... } }` (`"*"` anahtarı yok)   |
-| Gruplarda yalnızca siz tetikleyebilirsiniz              | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Amaç                                                                 | What to set                                                                 |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Tüm gruplara izin ver ama yalnızca @mention ile yanıtla | `groups: { "*": { requireMention: true } }`                                 |
+| Tüm grup yanıtlarını devre dışı bırak                                | `groupPolicy: "disabled"`                                                   |
+| Yalnızca belirli gruplar                                             | `groups: { "<group-id>": { ... } }` (`"*"` anahtarı yok) |
+| Gruplarda yalnızca siz tetikleyebilirsiniz                           | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                  |
 
 ## Oturum anahtarları
 
@@ -99,7 +92,7 @@ Bu size tek bir ajan “beyni” (paylaşılan çalışma alanı + bellek) fakat
 }
 ```
 
-“Ana makine erişimi yok” yerine “gruplar yalnızca X klasörünü görebilir” istiyorsanız, `workspaceAccess: "none"`’u koruyun ve sandbox’a yalnızca izin listesine alınmış yolları bağlayın:
+Want “groups can only see folder X” instead of “no host access”? “Ana makine erişimi yok” yerine “gruplar yalnızca X klasörünü görebilir” istiyorsanız, `workspaceAccess: "none"`’u koruyun ve sandbox’a yalnızca izin listesine alınmış yolları bağlayın:
 
 ```json5
 {
@@ -181,8 +174,8 @@ Kanal başına grup/oda mesajlarının nasıl ele alınacağını kontrol edin:
 }
 ```
 
-| Politika      | Davranış                                                                      |
-| ------------- | ----------------------------------------------------------------------------- |
+| Politika      | Davranış                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------- |
 | `"open"`      | Gruplar izin listelerini atlar; mention gating yine de geçerlidir.            |
 | `"disabled"`  | Tüm grup mesajlarını tamamen engeller.                                        |
 | `"allowlist"` | Yalnızca yapılandırılmış izin listesiyle eşleşen gruplara/odalara izin verir. |
@@ -249,7 +242,7 @@ Bir bot mesajına yanıt vermek, kanal yanıt meta verilerini desteklediğinde �
 Notlar:
 
 - `mentionPatterns` büyük/küçük harfe duyarsız regex’lerdir.
-- Açık mention sağlayan yüzeyler yine geçer; desenler geri dönüş olarak kullanılır.
+- Surfaces that provide explicit mentions still pass; patterns are a fallback.
 - Ajan başına geçersiz kılma: `agents.list[].groupChat.mentionPatterns` (birden fazla ajanın aynı grubu paylaştığı durumlarda yararlıdır).
 - Mention gating yalnızca mention tespiti mümkün olduğunda uygulanır (yerel mention’lar veya `mentionPatterns` yapılandırıldığında).
 - Discord varsayılanları `channels.discord.guilds."*"`’te yer alır (guild/kanal başına geçersiz kılınabilir).

@@ -5,13 +5,6 @@ read_when:
   - Ajout de flux CLI pour approuver des nœuds distants
   - Extension du protocole de la Gateway avec la gestion des nœuds
 title: "Appariement détenu par la Gateway"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:45Z
 ---
 
 # Appariement détenu par la Gateway (Option B)
@@ -28,7 +21,7 @@ Seuls les clients qui appellent explicitement `node.pair.*` utilisent ce flux.
 - **Nœud apparié** : nœud approuvé avec un jeton d’authentification émis.
 - **Transport** : le point de terminaison WS de la Gateway relaie les requêtes mais ne décide pas de l’appartenance. (La prise en charge héritée du pont TCP est obsolète/supprimée.)
 
-## Fonctionnement de l’appariement
+## Comment fonctionne le jumelage
 
 1. Un nœud se connecte au WS de la Gateway et demande l’appariement.
 2. La Gateway enregistre une **demande en attente** et émet `node.pair.requested`.

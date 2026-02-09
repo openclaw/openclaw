@@ -3,13 +3,6 @@ summary: "Katayuan ng suporta, mga kakayahan, at konpigurasyon ng Microsoft Team
 read_when:
   - Gumagawa sa mga feature ng MS Teams channel
 title: "Microsoft Teams"
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:26Z
 ---
 
 # Microsoft Teams (plugin)
@@ -18,13 +11,13 @@ x-i18n:
 
 Na-update: 2026-01-21
 
-Katayuan: sinusuportahan ang text + DM attachments; ang pagpapadala ng file sa channel/group ay nangangailangan ng `sharePointSiteId` + mga pahintulot ng Graph (tingnan ang [Sending files in group chats](#sending-files-in-group-chats)). Ang mga poll ay ipinapadala sa pamamagitan ng Adaptive Cards.
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards.
 
 ## Kinakailangang plugin
 
 Ang Microsoft Teams ay dumarating bilang plugin at hindi kasama sa core install.
 
-**Breaking change (2026.1.15):** Inalis ang MS Teams mula sa core. Kung ginagamit mo ito, kailangan mong i-install ang plugin.
+**Breaking change (2026.1.15):** MS Teams moved out of core. If you use it, you must install the plugin.
 
 Maipapaliwanag: pinananatiling magaan ang mga core install at hinahayaang mag-update nang hiwalay ang mga dependency ng MS Teams.
 
@@ -69,7 +62,7 @@ Minimal na config:
 }
 ```
 
-Tala: naka-block ang group chats bilang default (`channels.msteams.groupPolicy: "allowlist"`). Para payagan ang group replies, itakda ang `channels.msteams.groupAllowFrom` (o gamitin ang `groupPolicy: "open"` para payagan ang sinumang miyembro, may mention-gating).
+Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
 
 ## Mga layunin
 
@@ -93,12 +86,12 @@ I-disable gamit ang:
 
 **DM access**
 
-- Default: `channels.msteams.dmPolicy = "pairing"`. Binabalewala ang mga hindi kilalang sender hanggang maaprubahan.
-- `channels.msteams.allowFrom` ay tumatanggap ng mga AAD object ID, UPN, o display name. Nireresolba ng wizard ang mga pangalan patungo sa mga ID sa pamamagitan ng Microsoft Graph kapag pinapayagan ng mga kredensyal.
+- Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
+- `channels.msteams.allowFrom` accepts AAD object IDs, UPNs, or display names. The wizard resolves names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
-- Default: `channels.msteams.groupPolicy = "allowlist"` (naka-block maliban kung magdagdag ka ng `groupAllowFrom`). Gamitin ang `channels.defaults.groupPolicy` para i-override ang default kapag hindi nakatakda.
+- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Kinokontrol ng `channels.msteams.groupAllowFrom` kung aling mga sender ang maaaring mag-trigger sa group chats/channels (bumabagsak sa `channels.msteams.allowFrom`).
 - Itakda ang `groupPolicy: "open"` para payagan ang sinumang miyembro (may mention‑gating pa rin bilang default).
 - Para payagan ang **walang channels**, itakda ang `channels.msteams.groupPolicy: "disabled"`.
@@ -162,16 +155,16 @@ Bago i-configure ang OpenClaw, kailangan mong gumawa ng Azure Bot resource.
 1. Pumunta sa [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot)
 2. Punan ang tab na **Basics**:
 
-   | Field              | Value                                                          |
-   | ------------------ | -------------------------------------------------------------- |
+   | Field              | Value                                                                                             |
+   | ------------------ | ------------------------------------------------------------------------------------------------- |
    | **Bot handle**     | Pangalan ng iyong bot, hal., `openclaw-msteams` (dapat unique) |
-   | **Subscription**   | Piliin ang iyong Azure subscription                            |
-   | **Resource group** | Gumawa ng bago o gumamit ng umiiral                            |
-   | **Pricing tier**   | **Free** para sa dev/testing                                   |
-   | **Type of App**    | **Single Tenant** (inirerekomenda - tingnan ang tala sa ibaba) |
-   | **Creation type**  | **Create new Microsoft App ID**                                |
+   | **Subscription**   | Piliin ang iyong Azure subscription                                                               |
+   | **Resource group** | Gumawa ng bago o gumamit ng umiiral                                                               |
+   | **Pricing tier**   | **Free** para sa dev/testing                                                                      |
+   | **Type of App**    | **Single Tenant** (inirerekomenda - tingnan ang tala sa ibaba)                 |
+   | **Creation type**  | **Create new Microsoft App ID**                                                                   |
 
-> **Abiso sa deprecation:** Ang paggawa ng mga bagong multi-tenant bot ay dineprecate pagkatapos ng 2025-07-31. Gamitin ang **Single Tenant** para sa mga bagong bot.
+> **Abiso ng pagkaluma:** Ang paglikha ng mga bagong multi-tenant bot ay dineprecate pagkatapos ng 2025-07-31. Gamitin ang **Single Tenant** para sa mga bagong bot.
 
 3. I-click ang **Review + create** → **Create** (maghintay ~1-2 minuto)
 
@@ -198,7 +191,7 @@ Bago i-configure ang OpenClaw, kailangan mong gumawa ng Azure Bot resource.
 
 ## Local Development (Tunneling)
 
-Hindi maaabot ng Teams ang `localhost`. Gumamit ng tunnel para sa local development:
+Teams can't reach `localhost`. Use a tunnel for local development:
 
 **Opsyon A: ngrok**
 
@@ -278,6 +271,7 @@ Madalas itong mas madali kaysa mano-manong pag-edit ng JSON manifests.
    ```
 
    Maaari ka ring gumamit ng mga environment variable sa halip na mga config key:
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -292,12 +286,12 @@ Madalas itong mas madali kaysa mano-manong pag-edit ng JSON manifests.
 ## Konteksto ng history
 
 - Kinokontrol ng `channels.msteams.historyLimit` kung ilang kamakailang mensahe ng channel/group ang ibinabalot sa prompt.
-- Bumabagsak sa `messages.groupChat.historyLimit`. Itakda ang `0` para i-disable (default 50).
-- Maaaring limitahan ang DM history gamit ang `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
+- Falls back to `messages.groupChat.historyLimit`. Itakda sa `0` para i-disable (default 50).
+- Maaaring limitahan ang kasaysayan ng DM gamit ang `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Kasalukuyang Teams RSC Permissions (Manifest)
 
-Ito ang **umiiral na resourceSpecific permissions** sa aming Teams app manifest. Nalalapat lamang ang mga ito sa loob ng team/chat kung saan naka-install ang app.
+These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team/chat where the app is installed.
 
 **Para sa channels (team scope):**
 
@@ -315,7 +309,7 @@ Ito ang **umiiral na resourceSpecific permissions** sa aming Teams app manifest.
 
 ## Halimbawa ng Teams Manifest (tinanggal ang sensitibo)
 
-Minimal, valid na halimbawa na may mga kinakailangang field. Palitan ang mga ID at URL.
+Minimal, valid example with the required fields. Replace IDs and URLs.
 
 ```json
 {
@@ -410,14 +404,14 @@ Dagdag:
 
 ### RSC vs Graph API
 
-| Kakayahan               | RSC Permissions         | Graph API                                     |
-| ----------------------- | ----------------------- | --------------------------------------------- |
-| **Real-time messages**  | Oo (via webhook)        | Hindi (polling lang)                          |
-| **Historical messages** | Hindi                   | Oo (maaaring mag-query ng history)            |
-| **Setup complexity**    | App manifest lang       | Nangangailangan ng admin consent + token flow |
-| **Works offline**       | Hindi (dapat tumatakbo) | Oo (maaaring mag-query anumang oras)          |
+| Kakayahan               | RSC Permissions                            | Graph API                                               |
+| ----------------------- | ------------------------------------------ | ------------------------------------------------------- |
+| **Real-time messages**  | Oo (via webhook)        | Hindi (polling lang)                 |
+| **Historical messages** | Hindi                                      | Oo (maaaring mag-query ng history)   |
+| **Setup complexity**    | App manifest lang                          | Nangangailangan ng admin consent + token flow           |
+| **Works offline**       | Hindi (dapat tumatakbo) | Oo (maaaring mag-query anumang oras) |
 
-**Bottom line:** Ang RSC ay para sa real-time listening; ang Graph API ay para sa historical access. Para makahabol sa mga napalampas na mensahe habang offline, kailangan mo ng Graph API na may `ChannelMessage.Read.All` (nangangailangan ng admin consent).
+**Bottom line:** RSC is for real-time listening; Graph API is for historical access. For catching up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
 
 ## Media + history na may Graph (kinakailangan para sa channels)
 
@@ -434,7 +428,7 @@ Kung kailangan mo ng mga larawan/file sa **channels** o gusto mong kunin ang **m
 
 ### Mga timeout ng webhook
 
-Nagde-deliver ang Teams ng mga mensahe sa pamamagitan ng HTTP webhook. Kapag masyadong matagal ang pagproseso (hal., mabagal na LLM responses), maaari mong makita ang:
+Teams delivers messages via HTTP webhook. If processing takes too long (e.g., slow LLM responses), you may see:
 
 - Mga timeout ng gateway
 - Pagre-retry ng Teams sa mensahe (nagiging sanhi ng mga duplicate)
@@ -459,7 +453,7 @@ Mga key setting (tingnan ang `/gateway/configuration` para sa shared channel pat
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
-- `channels.msteams.allowFrom`: allowlist para sa DMs (AAD object ID, UPN, o display name). Nireresolba ng wizard ang mga pangalan patungo sa mga ID sa panahon ng setup kapag available ang Graph access.
+- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
 - `channels.msteams.chunkMode`: `length` (default) o `newline` para hatiin sa mga blank line (mga hangganan ng talata) bago ang length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist para sa inbound attachment hosts (default sa mga domain ng Microsoft/Teams).
@@ -468,12 +462,12 @@ Mga key setting (tingnan ang `/gateway/configuration` para sa shared channel pat
 - `channels.msteams.replyStyle`: `thread | top-level` (tingnan ang [Reply Style](#reply-style-threads-vs-posts)).
 - `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
 - `channels.msteams.teams.<teamId>.requireMention`: per-team override.
-- `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) na ginagamit kapag nawawala ang channel override.
-- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (sinusuportahan ang `"*"` wildcard).
+- `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
+- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: override kada channel.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (sinusuportahan ang `"*"` wildcard).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `channels.msteams.sharePointSiteId`: SharePoint site ID para sa file uploads sa group chats/channels (tingnan ang [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions
@@ -488,12 +482,12 @@ Mga key setting (tingnan ang `/gateway/configuration` para sa shared channel pat
 
 Kamakailan ay nagpakilala ang Teams ng dalawang channel UI style sa parehong underlying data model:
 
-| Style                      | Paglalarawan                                                                | Inirerekomendang `replyStyle` |
-| -------------------------- | --------------------------------------------------------------------------- | ----------------------------- |
-| **Posts** (classic)        | Lumalabas ang mga mensahe bilang mga card na may threaded replies sa ilalim | `thread` (default)            |
-| **Threads** (parang Slack) | Dumadaloy ang mga mensahe nang linear, mas katulad ng Slack                 | `top-level`                   |
+| Style                                         | Paglalarawan                                                                | Inirerekomendang `replyStyle`         |
+| --------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------- |
+| **Posts** (classic)        | Lumalabas ang mga mensahe bilang mga card na may threaded replies sa ilalim | `thread` (default) |
+| **Threads** (parang Slack) | Dumadaloy ang mga mensahe nang linear, mas katulad ng Slack                 | `top-level`                           |
 
-**Ang problema:** Hindi inilalantad ng Teams API kung aling UI style ang ginagamit ng isang channel. Kapag ginamit mo ang maling `replyStyle`:
+**The problem:** The Teams API does not expose which UI style a channel uses. If you use the wrong `replyStyle`:
 
 - `thread` sa isang Threads-style channel → lumalabas ang mga reply na awkward na nested
 - `top-level` sa isang Posts-style channel → lumalabas ang mga reply bilang hiwalay na top-level post sa halip na in-thread
@@ -522,25 +516,25 @@ Kamakailan ay nagpakilala ang Teams ng dalawang channel UI style sa parehong und
 **Kasalukuyang mga limitasyon:**
 
 - **DMs:** Gumagana ang mga larawan at file attachment sa pamamagitan ng Teams bot file APIs.
-- **Channels/groups:** Nakatira ang mga attachment sa M365 storage (SharePoint/OneDrive). Ang webhook payload ay naglalaman lamang ng HTML stub, hindi ang aktuwal na file bytes. **Kinakailangan ang mga pahintulot ng Graph API** para ma-download ang mga channel attachment.
+- **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Kailangan ang mga pahintulot ng Graph API** upang ma-download ang mga attachment ng channel.
 
-Kung walang mga pahintulot ng Graph, ang mga channel message na may mga larawan ay matatanggap bilang text-only (hindi maa-access ng bot ang nilalaman ng larawan).
-Bilang default, nagda-download lang ang OpenClaw ng media mula sa mga hostname ng Microsoft/Teams. I-override gamit ang `channels.msteams.mediaAllowHosts` (gamitin ang `["*"]` para payagan ang anumang host).
-Ang mga Authorization header ay ikinakabit lamang para sa mga host sa `channels.msteams.mediaAuthAllowHosts` (default sa mga host ng Graph + Bot Framework). Panatilihing mahigpit ang listahang ito (iwasan ang mga multi-tenant suffix).
+Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
+Bilang default, nagda-download lamang ang OpenClaw ng media mula sa mga hostname ng Microsoft/Teams. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
+Authorization headers are only attached for hosts in `channels.msteams.mediaAuthAllowHosts` (defaults to Graph + Bot Framework hosts). Keep this list strict (avoid multi-tenant suffixes).
 
 ## Pagpapadala ng mga file sa group chats
 
-Maaaring magpadala ang mga bot ng mga file sa DMs gamit ang FileConsentCard flow (built-in). Gayunpaman, ang **pagpapadala ng mga file sa group chats/channels** ay nangangailangan ng karagdagang setup:
+Bots can send files in DMs using the FileConsentCard flow (built-in). Gayunpaman, **ang pagpapadala ng mga file sa mga group chat/channel** ay nangangailangan ng karagdagang setup:
 
-| Konteksto                           | Paano ipinapadala ang mga file                              | Kinakailangang setup                                            |
-| ----------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------- |
-| **DMs**                             | FileConsentCard → tatanggap ang user → mag-a-upload ang bot | Gumagana kaagad                                                 |
-| **Group chats/channels**            | Upload sa SharePoint → share link                           | Nangangailangan ng `sharePointSiteId` + mga pahintulot ng Graph |
+| Konteksto                                              | Paano ipinapadala ang mga file                              | Kinakailangang setup                                            |
+| ------------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------- |
+| **DMs**                                                | FileConsentCard → tatanggap ang user → mag-a-upload ang bot | Gumagana kaagad                                                 |
+| **Group chats/channels**                               | Upload sa SharePoint → share link                           | Nangangailangan ng `sharePointSiteId` + mga pahintulot ng Graph |
 | **Mga larawan (anumang konteksto)** | Base64-encoded inline                                       | Gumagana kaagad                                                 |
 
 ### Bakit kailangan ng SharePoint ang group chats
 
-Walang personal OneDrive drive ang mga bot (hindi gumagana ang `/me/drive` Graph API endpoint para sa mga application identity). Para magpadala ng mga file sa group chats/channels, nag-a-upload ang bot sa isang **SharePoint site** at gumagawa ng sharing link.
+Bots don't have a personal OneDrive drive (the `/me/drive` Graph API endpoint doesn't work for application identities). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
 
 ### Setup
 
@@ -579,18 +573,18 @@ Walang personal OneDrive drive ang mga bot (hindi gumagana ang `/me/drive` Graph
 
 ### Pag-uugali ng sharing
 
-| Pahintulot                              | Pag-uugali ng sharing                                                 |
-| --------------------------------------- | --------------------------------------------------------------------- |
+| Pahintulot                              | Pag-uugali ng sharing                                                                    |
+| --------------------------------------- | ---------------------------------------------------------------------------------------- |
 | `Sites.ReadWrite.All` lamang            | Organization-wide sharing link (maaaring ma-access ng sinuman sa org) |
 | `Sites.ReadWrite.All` + `Chat.Read.All` | Per-user sharing link (tanging mga miyembro ng chat ang may access)   |
 
-Mas secure ang per-user sharing dahil tanging ang mga kalahok sa chat ang may access sa file. Kung nawawala ang pahintulot na `Chat.Read.All`, babagsak ang bot sa organization-wide sharing.
+Per-user sharing is more secure as only the chat participants can access the file. If `Chat.Read.All` permission is missing, the bot falls back to organization-wide sharing.
 
 ### Fallback na pag-uugali
 
-| Senaryo                                                   | Resulta                                                                    |
-| --------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Group chat + file + naka-configure ang `sharePointSiteId` | Upload sa SharePoint, magpadala ng sharing link                            |
+| Senaryo                                                   | Resulta                                                                                       |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Group chat + file + naka-configure ang `sharePointSiteId` | Upload sa SharePoint, magpadala ng sharing link                                               |
 | Group chat + file + walang `sharePointSiteId`             | Subukang mag-upload sa OneDrive (maaaring pumalya), magpadala ng text lang |
 | Personal chat + file                                      | FileConsentCard flow (gumagana nang walang SharePoint)                     |
 | Anumang konteksto + larawan                               | Base64-encoded inline (gumagana nang walang SharePoint)                    |
@@ -612,7 +606,7 @@ Ipinapadala ng OpenClaw ang mga Teams poll bilang Adaptive Cards (walang native 
 
 Magpadala ng anumang Adaptive Card JSON sa mga Teams user o conversation gamit ang tool o CLI na `message`.
 
-Tumatanggap ang parameter na `card` ng isang Adaptive Card JSON object. Kapag ibinigay ang `card`, opsyonal ang text ng mensahe.
+The `card` parameter accepts an Adaptive Card JSON object. When `card` is provided, the message text is optional.
 
 **Agent tool:**
 
@@ -637,17 +631,17 @@ openclaw message send --channel msteams \
   --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Hello!"}]}'
 ```
 
-Tingnan ang [Adaptive Cards documentation](https://adaptivecards.io/) para sa schema at mga halimbawa. Para sa mga detalye ng target format, tingnan ang [Target formats](#target-formats) sa ibaba.
+See [Adaptive Cards documentation](https://adaptivecards.io/) for card schema and examples. For target format details, see [Target formats](#target-formats) below.
 
 ## Target formats
 
 Gumagamit ang mga target ng MSTeams ng mga prefix para makilala ang pagitan ng mga user at conversation:
 
-| Uri ng target       | Format                           | Halimbawa                                                  |
-| ------------------- | -------------------------------- | ---------------------------------------------------------- |
-| User (by ID)        | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                |
+| Uri ng target                          | Format                           | Halimbawa                                                                     |
+| -------------------------------------- | -------------------------------- | ----------------------------------------------------------------------------- |
+| User (by ID)        | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                                   |
 | User (by name)      | `user:<display-name>`            | `user:John Smith` (nangangailangan ng Graph API)           |
-| Group/channel       | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                   |
+| Group/channel                          | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                                      |
 | Group/channel (raw) | `<conversation-id>`              | `19:abc123...@thread.tacv2` (kung naglalaman ng `@thread`) |
 
 **Mga halimbawa ng CLI:**
@@ -691,7 +685,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-Tala: Kung walang prefix na `user:`, nagde-default ang mga pangalan sa group/team resolution. Laging gamitin ang `user:` kapag tina-target ang mga tao ayon sa display name.
+Note: Without the `user:` prefix, names default to group/team resolution. Always use `user:` when targeting people by display name.
 
 ## Proactive messaging
 
@@ -700,7 +694,7 @@ Tala: Kung walang prefix na `user:`, nagde-default ang mga pangalan sa group/tea
 
 ## Mga Team at Channel ID (Karaniwang Pagkakamali)
 
-Ang query parameter na `groupId` sa mga Teams URL ay **HINDI** ang team ID na ginagamit para sa konpigurasyon. Kunin ang mga ID mula sa URL path sa halip:
+The `groupId` query parameter in Teams URLs is **NOT** the team ID used for configuration. 1. Kunin ang mga ID mula sa URL path sa halip:
 
 **Team URL:**
 
@@ -724,17 +718,17 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 - Channel ID = path segment pagkatapos ng `/channel/` (URL-decoded)
 - **Balewalain** ang query parameter na `groupId`
 
-## Mga Private Channel
+## Private Channels
 
 May limitadong suporta ang mga bot sa private channels:
 
-| Feature                      | Standard Channels | Private Channels        |
-| ---------------------------- | ----------------- | ----------------------- |
-| Pag-install ng bot           | Oo                | Limitado                |
-| Real-time messages (webhook) | Oo                | Maaaring hindi gumana   |
-| RSC permissions              | Oo                | Maaaring iba ang asal   |
-| @mentions                    | Oo                | Kung naa-access ang bot |
-| Graph API history            | Oo                | Oo (may pahintulot)     |
+| Feature                                         | Standard Channels | Private Channels                       |
+| ----------------------------------------------- | ----------------- | -------------------------------------- |
+| Pag-install ng bot                              | Oo                | Limitado                               |
+| Real-time messages (webhook) | Oo                | Maaaring hindi gumana                  |
+| RSC permissions                                 | Oo                | Maaaring iba ang asal                  |
+| @mentions                          | Oo                | Kung naa-access ang bot                |
+| Graph API history                               | Oo                | Oo (may pahintulot) |
 
 **Mga workaround kung hindi gumana ang private channels:**
 
@@ -746,15 +740,15 @@ May limitadong suporta ang mga bot sa private channels:
 
 ### Mga karaniwang isyu
 
-- **Hindi lumalabas ang mga larawan sa channels:** Kulang ang mga pahintulot ng Graph o admin consent. I-reinstall ang Teams app at ganap na isara/buksan muli ang Teams.
+- 2. **Hindi lumalabas ang mga larawan sa mga channel:** Kulang ang Graph permissions o wala ang admin consent. 3. I-reinstall ang Teams app at tuluyang isara/buksan muli ang Teams.
 - **Walang tugon sa channel:** kinakailangan ang mga mention bilang default; itakda ang `channels.msteams.requireMention=false` o i-configure per team/channel.
 - **Hindi tugma ang bersyon (ipinapakita pa rin ng Teams ang lumang manifest):** alisin + idagdag muli ang app at ganap na isara ang Teams para mag-refresh.
-- **401 Unauthorized mula sa webhook:** Inaasahan kapag manu-manong sinusubok nang walang Azure JWT - ibig sabihin naaabot ang endpoint ngunit pumalya ang auth. Gamitin ang Azure Web Chat para sa tamang pagsubok.
+- 4. **401 Unauthorized mula sa webhook:** Inaasahan ito kapag manu-manong nagte-test nang walang Azure JWT — ibig sabihin ay naaabot ang endpoint pero nabigo ang authentication. 5. Gamitin ang Azure Web Chat para maayos na mag-test.
 
 ### Mga error sa pag-upload ng manifest
 
-- **"Icon file cannot be empty":** Tinutukoy ng manifest ang mga icon file na 0 bytes. Gumawa ng mga valid PNG icon (32x32 para sa `outline.png`, 192x192 para sa `color.png`).
-- **"webApplicationInfo.Id already in use":** Naka-install pa rin ang app sa ibang team/chat. Hanapin at i-uninstall muna ito, o maghintay ng 5-10 minuto para sa propagation.
+- 6. **"Icon file cannot be empty":** Ang manifest ay tumutukoy sa mga icon file na 0 bytes ang laki. 7. Gumawa ng wastong PNG icons (32x32 para sa `outline.png`, 192x192 para sa `color.png`).
+- 8. **"webApplicationInfo.Id already in use":** Naka-install pa rin ang app sa ibang team/chat. 9. Hanapin at i-uninstall muna ito, o maghintay ng 5–10 minuto para sa propagation.
 - **"Something went wrong" sa pag-upload:** Mag-upload sa [https://admin.teams.microsoft.com](https://admin.teams.microsoft.com) sa halip, buksan ang browser DevTools (F12) → Network tab, at suriin ang response body para sa aktuwal na error.
 - **Pumapalya ang sideload:** Subukan ang "Upload an app to your org's app catalog" sa halip na "Upload a custom app" - madalas nitong nalalampasan ang mga restriksyon sa sideload.
 

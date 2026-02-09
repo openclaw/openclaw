@@ -4,18 +4,11 @@ read_when:
   - Вы хотите удалить OpenClaw с машины
   - Сервис Gateway (шлюз) продолжает работать после удаления
 title: "Удаление"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:42Z
 ---
 
 # Удаление
 
-Два варианта:
+Два пути:
 
 - **Простой путь**, если `openclaw` всё ещё установлен.
 - **Ручное удаление сервиса**, если CLI отсутствует, но сервис продолжает работать.

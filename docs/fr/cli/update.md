@@ -4,13 +4,6 @@ read_when:
   - Vous voulez mettre a jour un checkout source en toute securite
   - Vous devez comprendre le comportement du raccourci `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:08Z
 ---
 
 # `openclaw update`
@@ -79,7 +72,7 @@ Canaux :
 - `beta` : checkout du dernier tag `-beta`, puis build + doctor.
 - `dev` : checkout de `main`, puis fetch + rebase.
 
-Vue d’ensemble :
+Niveau supérieur:
 
 1. Necessite un worktree propre (aucune modification non committee).
 2. Bascule vers le canal selectionne (tag ou branche).

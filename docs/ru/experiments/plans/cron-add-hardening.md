@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Усиление cron add"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:31Z
 ---
 
 # Усиление Cron Add и выравнивание схем
@@ -33,7 +26,7 @@ x-i18n:
 - Добавлять новые типы расписаний или разбор cron-выражений.
 - Перерабатывать UI/UX для cron сверх необходимых исправлений полей.
 
-## Выявленные проблемы (текущие разрывы)
+## Выводы (текущие пробелы)
 
 - `CronPayloadSchema` в шлюзе исключает `signal` + `imessage`, тогда как типы TS их включают.
 - CronStatus в Control UI ожидает `jobCount`, но шлюз возвращает `jobs`.
@@ -60,7 +53,7 @@ x-i18n:
 - Отслеживайте логи шлюза на предмет снижения количества ошибок `cron.add` INVALID_REQUEST.
 - Убедитесь, что в Control UI после обновления отображается количество заданий статуса cron.
 
-## Необязательные дальнейшие шаги
+## Необязательные последующие меры
 
 - Ручной smoke‑тест Control UI: добавить по одному заданию cron для каждого провайдера и проверить количество заданий статуса.
 

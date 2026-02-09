@@ -4,13 +4,6 @@ read_when:
   - Bei der Nutzung oder Änderung des Exec-Werkzeugs
   - Beim Debuggen von stdin- oder TTY-Verhalten
 title: "Exec-Werkzeug"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:45Z
 ---
 
 # Exec-Werkzeug

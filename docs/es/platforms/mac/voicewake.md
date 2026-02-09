@@ -3,13 +3,6 @@ summary: "Modos de activación por voz y pulsar para hablar, además de detalles
 read_when:
   - Al trabajar en rutas de activación por voz o PTT
 title: "Activación por voz"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:20Z
 ---
 
 # Activación por voz y pulsar para hablar

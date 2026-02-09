@@ -4,27 +4,20 @@ read_when:
   - Gmail の受信トリガーを OpenClaw に接続する
   - エージェント起動のために Pub/Sub プッシュを設定する
 title: "Gmail Pub/Sub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:59Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 目標: Gmail watch -> Pub/Sub プッシュ -> `gog gmail watch serve` -> OpenClaw Webhook。
 
-## 前提条件
+## Prereq
 
 - `gcloud` がインストールされ、ログイン済みであること（[インストールガイド](https://docs.cloud.google.com/sdk/docs/install-sdk)）。
 - `gog`（gogcli）がインストールされ、Gmail アカウントに対して認可済みであること（[gogcli.sh](https://gogcli.sh/)）。
 - OpenClaw のフックが有効になっていること（[Webhooks](/automation/webhook) を参照）。
-- `tailscale` にログイン済みであること（[tailscale.com](https://tailscale.com/)）。サポートされるセットアップでは、公開 HTTPS エンドポイントに Tailscale Funnel を使用します。
-  他のトンネルサービスも動作する可能性はありますが、DIY／非サポートであり、手動配線が必要です。
-  現在、サポート対象は Tailscale のみです。
+- `tailscale` logged in ([tailscale.com](https://tailscale.com/)). サポートされているセットアップでは、パブリック HTTPS エンドポイントの Tailscale Funnel が使用されます。
+  他のトンネルサービスは機能しますが、DIY/サポートされておらず、手動配線が必要です。
+  現在、私たちが支援しているのは、大規模なものです。
 
 フック設定の例（Gmail プリセットマッピングを有効化）:
 
@@ -65,9 +58,9 @@ Gmail のサマリーをチャットサーフェスに配信するには、`deli
 }
 ```
 
-固定チャンネルにしたい場合は、`channel` と `to` を設定します。そうでない場合、`channel: "last"` は直近の配信ルートを使用します（WhatsApp にフォールバックします）。
+固定されたチャンネルが欲しい場合は、 `channel` + `to` を設定します。 固定チャンネルにしたい場合は、`channel` と `to` を設定します。そうでない場合、`channel: "last"` は直近の配信ルートを使用します（WhatsApp にフォールバックします）。
 
-Gmail 実行時により安価なモデルを強制するには、マッピング内で `model` を設定します（`provider/model` またはエイリアス）。`agents.defaults.models` を強制する場合は、そこに含めてください。
+Gmail 実行時により安価なモデルを強制するには、マッピング内で `model` を設定します（`provider/model` またはエイリアス）。`agents.defaults.models` を強制する場合は、そこに含めてください。 `agents.defaults.models` を強制する場合は、そこに含めます。
 
 Gmail フック専用のデフォルトモデルと思考レベルを設定するには、設定に `hooks.gmail.model` / `hooks.gmail.thinking` を追加します。
 
@@ -89,6 +82,7 @@ Gmail フック専用のデフォルトモデルと思考レベルを設定す�
 - `agents.defaults.models` が設定されている場合、Gmail モデルは許可リストに含まれている必要があります。
 - Gmail フックのコンテンツは、デフォルトで外部コンテンツの安全境界でラップされます。
   無効化するには（危険）、`hooks.gmail.allowUnsafeExternalContent: true` を設定してください。
+  無効にするには、 `hooks.gmail.allowUnsafeExternalContent: true` を設定します。
 
 ペイロード処理をさらにカスタマイズするには、`hooks.mappings` を追加するか、`hooks.transformsDir` 配下に JS/TS の変換モジュールを追加します（[Webhooks](/automation/webhook) を参照）。
 
@@ -114,8 +108,11 @@ openclaw webhooks gmail setup \
 バックエンドでプレフィックス付きパスを受信する必要がある場合は、
 `hooks.gmail.tailscale.target`（または `--tailscale-target`）を
 `http://127.0.0.1:8788/gmail-pubsub` のような完全な URL に設定し、`hooks.gmail.serve.path` を一致させてください。
+接頭辞付きパスを受け取るためにバックエンドが必要な場合は、
+`hooks.gmail.tailscale.target` (または `--tailscale-target` ) に
+`http://127.0.0.1:8788/gmail-pubsub` のような完全な URL を設定し、`hooks.gmail.serve.path` と一致します。
 
-カスタムエンドポイントを使用したい場合は、`--push-endpoint <url>` または `--tailscale off` を使用してください。
+カスタムエンドポイントをご希望ですか？ カスタムエンドポイントを使用したい場合は、`--push-endpoint <url>` または `--tailscale off` を使用してください。
 
 プラットフォームに関する注意: macOS では、ウィザードが Homebrew 経由で `gcloud`、`gogcli`、`tailscale` をインストールします。
 Linux では、事前に手動でインストールしてください。
@@ -224,7 +221,7 @@ gog gmail watch serve --verify-oidc --oidc-email <svc@...>
 
 ## テスト
 
-監視対象の受信トレイにメッセージを送信します。
+ウォッチした受信トレイにメッセージを送信:
 
 ```bash
 gog gmail send \

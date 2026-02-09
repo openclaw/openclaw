@@ -1,12 +1,5 @@
 ---
 title: "Creación de Skills"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:43Z
 ---
 
 # Creación de Skills personalizados 🛠

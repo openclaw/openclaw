@@ -1,16 +1,9 @@
 ---
 summary: "`openclaw cron` 에 대한 CLI 참조 (백그라운드 작업을 예약하고 실행)"
 read_when:
-  - 예약된 작업과 웨이크업이 필요할 때
+  - 예약된 작업과 깨우기(wakeups)가 필요함
   - cron 실행 및 로그를 디버깅할 때
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:16Z
 ---
 
 # `openclaw cron`

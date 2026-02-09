@@ -5,13 +5,6 @@ read_when:
   - Brave Search API anahtarı kurulumuna ihtiyacınız var
   - Web araması için Perplexity Sonar kullanmak istiyorsunuz
 title: "Web Araçları"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:00Z
 ---
 
 # Web araçları
@@ -36,10 +29,10 @@ Bunlar tarayıcı otomasyonu **değildir**. JS ağırlıklı siteler veya giriş
 
 ## Bir arama sağlayıcısı seçme
 
-| Sağlayıcı              | Artılar                                          | Eksiler                                    | API Anahtarı                                   |
-| ---------------------- | ------------------------------------------------ | ------------------------------------------ | ---------------------------------------------- |
+| Sağlayıcı                                 | Pros                                             | Cons                                       | API Anahtarı                                   |
+| ----------------------------------------- | ------------------------------------------------ | ------------------------------------------ | ---------------------------------------------- |
 | **Brave** (varsayılan) | Hızlı, yapılandırılmış sonuçlar, ücretsiz katman | Geleneksel arama sonuçları                 | `BRAVE_API_KEY`                                |
-| **Perplexity**         | AI-sentezli yanıtlar, alıntılar, gerçek zamanlı  | Perplexity veya OpenRouter erişimi gerekir | `OPENROUTER_API_KEY` veya `PERPLEXITY_API_KEY` |
+| **Perplexity**                            | AI-sentezli yanıtlar, alıntılar, gerçek zamanlı  | Perplexity veya OpenRouter erişimi gerekir | `OPENROUTER_API_KEY` veya `PERPLEXITY_API_KEY` |
 
 Sağlayıcıya özgü ayrıntılar için [Brave Search kurulumu](/brave-search) ve [Perplexity Sonar](/perplexity) sayfalarına bakın.
 
@@ -90,9 +83,7 @@ Brave API portalını kontrol edin.
 **Önerilen:** `openclaw configure --section web` komutunu çalıştırın. Bu, anahtarı
 `~/.openclaw/openclaw.json` içinde `tools.web.search.apiKey` altında saklar.
 
-**Ortam alternatifi:** Gateway süreci ortamında `BRAVE_API_KEY` ayarlayın.
-Bir gateway kurulumu için bunu `~/.openclaw/.env` dosyasına (veya servis ortamınıza) ekleyin.
-Bkz. [Ortam değişkenleri](/help/faq#how-does-openclaw-load-environment-variables).
+**Ortam alternatifi:** Gateway süreci ortamında `BRAVE_API_KEY` ayarlayın. Bir gateway kurulumu için bunu `~/.openclaw/.env` dosyasına (veya servis ortamınıza) ekleyin. Bkz. [Ortam değişkenleri](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Perplexity kullanma (doğrudan veya OpenRouter üzerinden)
 
@@ -129,8 +120,7 @@ kullanabilirsiniz (kredi kartı gerekmez — kripto/ön ödemeli destekler).
 }
 ```
 
-**Ortam alternatifi:** Gateway ortamında `OPENROUTER_API_KEY` veya `PERPLEXITY_API_KEY` ayarlayın.
-Bir gateway kurulumu için bunu `~/.openclaw/.env` içine koyun.
+**Ortam alternatifi:** Gateway ortamında `OPENROUTER_API_KEY` veya `PERPLEXITY_API_KEY` ayarlayın. Bir gateway kurulumu için bunu `~/.openclaw/.env` içine koyun.
 
 Bir temel URL ayarlanmazsa, OpenClaw API anahtarı kaynağına göre bir varsayılan seçer:
 
@@ -140,11 +130,11 @@ Bir temel URL ayarlanmazsa, OpenClaw API anahtarı kaynağına göre bir varsay�
 
 ### Kullanılabilir Perplexity modelleri
 
-| Model                               | Açıklama                               | En uygun kullanım |
-| ----------------------------------- | -------------------------------------- | ----------------- |
-| `perplexity/sonar`                  | Web aramasıyla hızlı Soru-Cevap        | Hızlı bakışlar    |
+| Model                                                  | Açıklama                               | En uygun kullanım |
+| ------------------------------------------------------ | -------------------------------------- | ----------------- |
+| `perplexity/sonar`                                     | Web aramasıyla hızlı Soru-Cevap        | Hızlı bakışlar    |
 | `perplexity/sonar-pro` (varsayılan) | Web aramasıyla çok adımlı akıl yürütme | Karmaşık sorular  |
-| `perplexity/sonar-reasoning-pro`    | Zincirleme düşünce analizi             | Derin araştırma   |
+| `perplexity/sonar-reasoning-pro`                       | Zincirleme düşünce analizi             | Derin araştırma   |
 
 ## web_search
 

@@ -4,19 +4,13 @@ read_when:
   - CLI から実行承認を編集したい場合
   - ゲートウェイまたはノード ホスト上の許可リストを管理する必要がある場合
 title: "approvals"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:55Z
 ---
 
 # `openclaw approvals`
 
 **ローカル ホスト**、**ゲートウェイ ホスト**、または **ノード ホスト** の実行承認を管理します。  
 既定では、コマンドはディスク上のローカル承認ファイルを対象にします。ゲートウェイを対象にするには `--gateway` を、特定のノードを対象にするには `--node` を使用します。
+デフォルトでは、コマンドはディスク上のローカル承認ファイルをターゲットにします。 ゲートウェイをターゲットにするには `--gateway` を使用し、特定のノードをターゲットにするには `--node` を使用します。
 
 関連項目：
 

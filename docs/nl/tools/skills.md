@@ -4,13 +4,6 @@ read_when:
   - Skills toevoegen of wijzigen
   - Skill-afscherming of laadregels wijzigen
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:12Z
 ---
 
 # Skills (OpenClaw)
@@ -50,8 +43,7 @@ prioriteit: werkruimte wint, daarna beheerd/lokaal, daarna gebundeld.
 Plugins kunnen hun eigen skills meeleveren door `skills`-mappen te vermelden in
 `openclaw.plugin.json` (paden relatief aan de plugin-root). Plugin-skills laden
 wanneer de plugin is ingeschakeld en doen mee aan de normale prioriteitsregels.
-Je kunt ze afschermen via `metadata.openclaw.requires.config` op de config-invoer van de plugin.
-Zie [Plugins](/tools/plugin) voor discovery/config en [Tools](/tools) voor het
+Je kunt ze afschermen via `metadata.openclaw.requires.config` op de config-invoer van de plugin. Zie [Plugins](/tools/plugin) voor discovery/config en [Tools](/tools) voor het
 tool-oppervlak dat deze skills aanleren.
 
 ## ClawHub (installeren + synchroniseren)

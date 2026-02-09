@@ -4,13 +4,6 @@ read_when:
   - ہارٹ بیٹ کی رفتار یا پیغام رسانی میں ایڈجسٹمنٹ کرتے وقت
   - شیڈیول شدہ کاموں کے لیے ہارٹ بیٹ اور کرون کے درمیان فیصلہ کرتے وقت
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:43Z
 ---
 
 # Heartbeat (Gateway)
@@ -49,13 +42,12 @@ Heartbeat مرکزی سیشن میں **دوریاتی ایجنٹ ٹرنز** چل
 
 ## طے شدہ اقدار
 
-- وقفہ: `30m` (یا `1h` جب Anthropic OAuth/setup-token مستند موڈ کے طور پر شناخت ہو)۔ `agents.defaults.heartbeat.every` یا ہر ایجنٹ کے لیے `agents.list[].heartbeat.every` سیٹ کریں؛ غیر فعال کرنے کے لیے `0m` استعمال کریں۔
-- پرامپٹ باڈی (`agents.defaults.heartbeat.prompt` کے ذریعے قابلِ کنفیگریشن):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-- ہارٹ بیٹ پرامپٹ **بعینہٖ** صارف پیغام کے طور پر بھیجا جاتا ہے۔ سسٹم
-  پرامپٹ میں “Heartbeat” کا سیکشن شامل ہوتا ہے اور رن کو اندرونی طور پر نشان زد کیا جاتا ہے۔
+- وقفہ: `30m` (یا `1h` جب Anthropic OAuth/setup-token معلوم شدہ auth موڈ ہو)۔ `agents.defaults.heartbeat.every` یا فی ایجنٹ `agents.list[].heartbeat.every` سیٹ کریں؛ غیر فعال کرنے کے لیے `0m` استعمال کریں۔
+- پرامپٹ باڈی (جسے `agents.defaults.heartbeat.prompt` کے ذریعے کنفیگر کیا جا سکتا ہے):
+  `Read HEARTBEAT.md if it exists (workspace context). اس پر سختی سے عمل کریں۔ پچھلی چیٹس کے پرانے کاموں کا اندازہ نہ لگائیں اور نہ دہرائیں۔ اگر کسی توجہ کی ضرورت نہ ہو تو HEARTBEAT_OK کے ساتھ جواب دیں۔`
+- ہارٹ بیٹ پرامپٹ صارف کے پیغام کے طور پر **لفظ بہ لفظ** بھیجا جاتا ہے۔ سسٹم پرامپٹ میں “Heartbeat” سیکشن شامل ہوتا ہے اور رَن کو اندرونی طور پر فلیگ کیا جاتا ہے۔
 - فعال اوقات (`heartbeat.activeHours`) کنفیگر شدہ ٹائم زون میں چیک کیے جاتے ہیں۔
-  ونڈو سے باہر ہارٹ بیٹس اگلے ٹِک تک چھوڑ دیے جاتے ہیں جو ونڈو کے اندر ہو۔
+  ونڈو سے باہر، ہارٹ بیٹس اگلے ٹِک تک چھوڑ دیے جاتے ہیں جو ونڈو کے اندر ہو۔
 
 ## ہارٹ بیٹ پرامپٹ کا مقصد
 
@@ -72,7 +64,7 @@ stats” یا “verify gateway health”) تو `agents.defaults.heartbeat.promp
 ## ردِعمل کا معاہدہ
 
 - اگر توجہ کی کوئی ضرورت نہ ہو تو **`HEARTBEAT_OK`** کے ساتھ جواب دیں۔
-- ہارٹ بیٹ رنز کے دوران، OpenClaw `HEARTBEAT_OK` کو ack سمجھتا ہے جب یہ جواب کے **آغاز یا اختتام** میں ظاہر ہو۔ ٹوکن ہٹا دیا جاتا ہے اور اگر باقی مواد **≤ `ackMaxChars`** (بطورِ طے شدہ: 300) ہو تو جواب چھوڑ دیا جاتا ہے۔
+- ہارٹ بیٹ رنز کے دوران، OpenClaw `HEARTBEAT_OK` کو ایک ack سمجھتا ہے جب یہ جواب کے **آغاز یا اختتام** پر ظاہر ہو۔ ٹوکن ہٹا دیا جاتا ہے اور جواب ڈراپ کر دیا جاتا ہے اگر باقی مواد **≤ `ackMaxChars`** (ڈیفالٹ: 300) ہو۔
 - اگر `HEARTBEAT_OK` جواب کے **درمیان** آئے تو اسے خاص طور پر نہیں سمجھا جاتا۔
 - الرٹس کے لیے، **`HEARTBEAT_OK` شامل نہ کریں**؛ صرف الرٹ متن واپس کریں۔
 
@@ -104,14 +96,12 @@ stats” یا “verify gateway health”) تو `agents.defaults.heartbeat.promp
 - `agents.defaults.heartbeat` عالمی ہارٹ بیٹ رویّہ سیٹ کرتا ہے۔
 - `agents.list[].heartbeat` اوپر سے مرج ہوتا ہے؛ اگر کسی ایجنٹ میں `heartbeat` بلاک ہو تو **صرف وہی ایجنٹس** ہارٹ بیٹس چلاتے ہیں۔
 - `channels.defaults.heartbeat` تمام چینلز کے لیے مرئیّت کی طے شدہ اقدار سیٹ کرتا ہے۔
-- `channels.<channel>.heartbeat` چینل کی طے شدہ اقدار کو اووررائیڈ کرتا ہے۔
-- `channels.<channel>.accounts.<id>.heartbeat` (ملٹی اکاؤنٹ چینلز) ہر چینل کی سیٹنگز کو اووررائیڈ کرتا ہے۔
+- `channels.<channel>.heartbeat` چینل ڈیفالٹس کو اوور رائیڈ کرتا ہے۔
+- `channels.<channel>.accounts.<id>.heartbeat` (ملٹی اکاؤنٹ چینلز) فی چینل سیٹنگز کو اوور رائیڈ کرتا ہے۔
 
 ### ہر ایجنٹ کے لیے ہارٹ بیٹس
 
-اگر کسی `agents.list[]` اندراج میں `heartbeat` بلاک شامل ہو تو **صرف وہی ایجنٹس**
-ہارٹ بیٹس چلاتے ہیں۔ ہر ایجنٹ کا بلاک `agents.defaults.heartbeat` کے اوپر مرج ہوتا ہے
-(یوں آپ مشترکہ ڈیفالٹس ایک بار سیٹ کر کے فی ایجنٹ اووررائیڈ کر سکتے ہیں)۔
+اگر کسی `agents.list[]` انٹری میں `heartbeat` بلاک شامل ہو تو **صرف وہی ایجنٹس** ہارٹ بیٹس چلاتے ہیں۔ فی ایجنٹ بلاک `agents.defaults.heartbeat` کے اوپر مرج ہوتا ہے (تاکہ آپ مشترکہ ڈیفالٹس ایک بار سیٹ کریں اور فی ایجنٹ اوور رائیڈ کریں)۔
 
 مثال: دو ایجنٹس، صرف دوسرا ایجنٹ ہارٹ بیٹس چلاتا ہے۔
 
@@ -162,7 +152,7 @@ stats” یا “verify gateway health”) تو `agents.defaults.heartbeat.promp
 }
 ```
 
-اس ونڈو کے باہر (صبح 9 بجے سے پہلے یا مشرقی وقت کے مطابق رات 10 بجے کے بعد) ہارٹ بیٹس چھوڑ دیے جاتے ہیں۔ ونڈو کے اندر اگلا شیڈیول شدہ ٹِک معمول کے مطابق چلے گا۔
+اس ونڈو سے باہر (صبح 9 بجے سے پہلے یا رات 10 بجے کے بعد مشرقی وقت)، ہارٹ بیٹس چھوڑ دیے جاتے ہیں۔ ونڈو کے اندر اگلا شیڈولڈ ٹِک معمول کے مطابق چلے گا۔
 
 ### ملٹی اکاؤنٹ مثال
 
@@ -207,10 +197,10 @@ Telegram جیسے ملٹی اکاؤنٹ چینلز پر کسی مخصوص اکا
   - صراحتی چینل: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`۔
   - `none`: ہارٹ بیٹ چلائیں مگر بیرونی طور پر **ڈیلیور نہ کریں**۔
 - `to`: اختیاری وصول کنندہ اووررائیڈ (چینل مخصوص آئی ڈی، مثلاً WhatsApp کے لیے E.164 یا Telegram چیٹ آئی ڈی)۔
-- `accountId`: ملٹی اکاؤنٹ چینلز کے لیے اختیاری اکاؤنٹ آئی ڈی۔ جب `target: "last"` ہو تو اکاؤنٹ آئی ڈی حل شدہ آخری چینل پر لاگو ہوتی ہے اگر وہ اکاؤنٹس سپورٹ کرتا ہو؛ بصورتِ دیگر نظر انداز کر دی جاتی ہے۔ اگر اکاؤنٹ آئی ڈی حل شدہ چینل کے لیے کنفیگر کردہ اکاؤنٹ سے میل نہ کھائے تو ڈیلیوری چھوڑ دی جاتی ہے۔
+- `accountId`: ملٹی اکاؤنٹ چینلز کے لیے اختیاری اکاؤنٹ آئی ڈی۔ جب `target: "last"` ہو تو اکاؤنٹ آئی ڈی حل شدہ آخری چینل پر لاگو ہوتی ہے اگر وہ اکاؤنٹس کو سپورٹ کرتا ہو؛ بصورت دیگر اسے نظر انداز کر دیا جاتا ہے۔ اگر اکاؤنٹ آئی ڈی حل شدہ چینل کے لیے کنفیگر شدہ اکاؤنٹ سے میل نہ کھائے تو ترسیل چھوڑ دی جاتی ہے۔
 - `prompt`: طے شدہ پرامپٹ باڈی کو اووررائیڈ کرتا ہے (مرج نہیں ہوتا)۔
 - `ackMaxChars`: `HEARTBEAT_OK` کے بعد ڈیلیوری سے پہلے زیادہ سے زیادہ اجازت یافتہ کریکٹرز۔
-- `activeHours`: ہارٹ بیٹ رنز کو ایک ٹائم ونڈو تک محدود کرتا ہے۔ آبجیکٹ جس میں `start` (HH:MM، شامل)، `end` (HH:MM خارج؛ دن کے اختتام کے لیے `24:00` قابلِ قبول)، اور اختیاری `timezone`۔
+- `activeHours`: ہارٹ بیٹ رنز کو ایک وقت کی ونڈو تک محدود کرتا ہے۔ ایک آبجیکٹ جس میں `start` (HH:MM، شامل)، `end` (HH:MM، خارج؛ دن کے اختتام کے لیے `24:00` کی اجازت)، اور اختیاری `timezone` شامل ہوں۔
   - چھوڑ دیا جائے یا `"user"`: اگر سیٹ ہو تو آپ کا `agents.defaults.userTimezone` استعمال کرتا ہے، ورنہ ہوسٹ سسٹم ٹائم زون پر واپس جاتا ہے۔
   - `"local"`: ہمیشہ ہوسٹ سسٹم ٹائم زون استعمال کرتا ہے۔
   - کوئی بھی IANA شناخت کنندہ (مثلاً `America/New_York`): براہِ راست استعمال کیا جاتا ہے؛ اگر غلط ہو تو اوپر بیان کردہ `"user"` رویّے پر واپس جاتا ہے۔
@@ -218,10 +208,12 @@ Telegram جیسے ملٹی اکاؤنٹ چینلز پر کسی مخصوص اکا
 
 ## ڈیلیوری رویّہ
 
-- ہارٹ بیٹس بطورِ طے شدہ ایجنٹ کے مرکزی سیشن میں چلتے ہیں (`agent:<id>:<mainKey>`)،
-  یا `global` جب `session.scope = "global"` ہو۔ کسی مخصوص چینل سیشن (Discord/WhatsApp وغیرہ) کے لیے اووررائیڈ کرنے کو `session` سیٹ کریں۔
+- Heartbeats run in the agent’s main session by default (`agent:<id>:<mainKey>`),
+  or `global` when `session.scope = "global"`. Set `session` to override to a
+  specific channel session (Discord/WhatsApp/etc.).
 - `session` صرف رن کانٹیکسٹ کو متاثر کرتا ہے؛ ڈیلیوری `target` اور `to` کے ذریعے کنٹرول ہوتی ہے۔
-- کسی مخصوص چینل/وصول کنندہ کو ڈیلیور کرنے کے لیے `target` + `to` سیٹ کریں۔ `target: "last"` کے ساتھ، ڈیلیوری اس سیشن کے آخری بیرونی چینل کو استعمال کرتی ہے۔
+- To deliver to a specific channel/recipient, set `target` + `to`. کے ساتھ
+  `target: "last"`، ڈیلیوری اس سیشن کے لیے آخری بیرونی چینل استعمال کرتی ہے۔
 - اگر مرکزی قطار مصروف ہو تو ہارٹ بیٹ چھوڑ دیا جاتا ہے اور بعد میں دوبارہ کوشش کی جاتی ہے۔
 - اگر `target` کسی بیرونی منزل پر حل نہ ہو تو رن پھر بھی ہوتا ہے مگر کوئی بیرونی پیغام نہیں بھیجا جاتا۔
 - صرف ہارٹ بیٹ والے جوابات سیشن کو زندہ **نہیں** رکھتے؛ آخری `updatedAt`
@@ -229,8 +221,8 @@ Telegram جیسے ملٹی اکاؤنٹ چینلز پر کسی مخصوص اکا
 
 ## مرئیّت کنٹرولز
 
-بطورِ طے شدہ، `HEARTBEAT_OK` acknowledgments دبا دیے جاتے ہیں جبکہ الرٹ مواد
-ڈیلیور کیا جاتا ہے۔ آپ اسے فی چینل یا فی اکاؤنٹ ایڈجسٹ کر سکتے ہیں:
+By default, `HEARTBEAT_OK` acknowledgments are suppressed while alert content is
+delivered. You can adjust this per channel or per account:
 
 ```yaml
 channels:
@@ -282,19 +274,22 @@ channels:
 
 ### عام پیٹرنز
 
-| مقصد                                             | کنفیگ                                                                                    |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| طے شدہ رویّہ (خاموش OKs، الرٹس آن)               | _(کنفیگ درکار نہیں)_                                                                     |
+| مقصد                                                                | کنفیگ                                                                                    |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| طے شدہ رویّہ (خاموش OKs، الرٹس آن)               | _(کنفیگ درکار نہیں)_                                                  |
 | مکمل خاموش (کوئی پیغام نہیں، کوئی انڈیکیٹر نہیں) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | صرف انڈیکیٹر (کوئی پیغامات نہیں)                 | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| صرف ایک چینل میں OKs                             | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| صرف ایک چینل میں OKs                                                | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (اختیاری)
 
-اگر ورک اسپیس میں `HEARTBEAT.md` فائل موجود ہو تو طے شدہ پرامپٹ ایجنٹ کو اسے پڑھنے کی ہدایت دیتا ہے۔ اسے اپنی “ہارٹ بیٹ چیک لسٹ” سمجھیں: مختصر، مستحکم، اور ہر 30 منٹ میں شامل کرنے کے لیے محفوظ۔
+If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
+agent to read it. Think of it as your “heartbeat checklist”: small, stable, and
+safe to include every 30 minutes.
 
-اگر `HEARTBEAT.md` موجود ہو مگر عملی طور پر خالی ہو (صرف خالی لائنیں اور مارک ڈاؤن ہیڈرز جیسے `# Heading`) تو OpenClaw API کالز بچانے کے لیے ہارٹ بیٹ رن چھوڑ دیتا ہے۔
-اگر فائل موجود نہ ہو تو ہارٹ بیٹ پھر بھی چلتا ہے اور ماڈل فیصلہ کرتا ہے کہ کیا کرنا ہے۔
+If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
+headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+اگر فائل غائب ہو تو ہارٹ بیٹ پھر بھی چلتا ہے اور ماڈل فیصلہ کرتا ہے کہ کیا کرنا ہے۔
 
 اسے مختصر رکھیں (چھوٹی چیک لسٹ یا یاد دہانیاں) تاکہ پرامپٹ پھولنے سے بچا جا سکے۔
 
@@ -344,12 +339,14 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 
 - `agents.defaults.heartbeat.includeReasoning: true`
 
-فعال ہونے پر، ہارٹ بیٹس ایک علیحدہ پیغام بھی ڈیلیور کریں گے جس کے آغاز میں
-`Reasoning:` ہوگا (وہی ساخت جیسی `/reasoning on`)۔ یہ اس وقت مفید ہو سکتا ہے جب ایجنٹ
-متعدد سیشنز/کوڈیکسز منظم کر رہا ہو اور آپ دیکھنا چاہتے ہوں کہ اس نے آپ کو پنگ کرنے کا فیصلہ کیوں کیا —
-مگر یہ آپ کی خواہش سے زیادہ اندرونی تفصیل بھی ظاہر کر سکتا ہے۔ گروپ چیٹس میں اسے بند رکھنا بہتر ہے۔
+جب فعال ہو، ہارٹ بیٹس ایک علیحدہ پیغام بھی ڈیلیور کریں گے جس کے آغاز میں
+`Reasoning:` ہوگا (وہی ساخت جیسی `/reasoning on`)۔ This can be useful when the agent
+is managing multiple sessions/codexes and you want to see why it decided to ping
+you — but it can also leak more internal detail than you want. Prefer keeping it
+off in group chats.
 
 ## لاگت سے آگاہی
 
-ہارٹ بیٹس مکمل ایجنٹ ٹرنز چلاتے ہیں۔ کم وقفے زیادہ ٹوکن خرچ کرتے ہیں۔ `HEARTBEAT.md`
-کو مختصر رکھیں اور اگر آپ کو صرف اندرونی اسٹیٹ اپ ڈیٹس چاہییں تو کم قیمت `model` یا `target: "none"` پر غور کریں۔
+ہارٹ بیٹس مکمل ایجنٹ ٹرنز چلاتے ہیں۔ Shorter intervals burn more tokens. Keep
+`HEARTBEAT.md` small and consider a cheaper `model` or `target: "none"` if you
+only want internal state updates.

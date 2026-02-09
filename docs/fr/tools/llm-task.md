@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez une étape LLM uniquement JSON dans les workflows
   - Vous avez besoin d’une sortie LLM validée par schéma pour l’automatisation
 title: "Tâche LLM"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:59Z
 ---
 
 # Tâche LLM
@@ -75,7 +68,7 @@ sans écrire de code OpenClaw personnalisé pour chaque workflow.
 `allowedModels` est une liste d’autorisation de chaînes `provider/model`. Si elle est définie, toute requête
 en dehors de la liste est rejetée.
 
-## Paramètres de l’outil
+## Paramètres de l'outil
 
 - `prompt` (string, requis)
 - `input` (any, optionnel)

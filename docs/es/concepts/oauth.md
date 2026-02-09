@@ -6,13 +6,6 @@ read_when:
   - Quiere flujos de autenticación con setup-token u OAuth
   - Quiere múltiples cuentas o enrutamiento por perfiles
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:12Z
 ---
 
 # OAuth
@@ -23,8 +16,7 @@ OpenClaw admite “autenticación por suscripción” mediante OAuth para provee
 - dónde se **almacenan** los tokens (y por qué)
 - cómo manejar **múltiples cuentas** (perfiles + anulaciones por sesión)
 
-OpenClaw también admite **plugins de proveedor** que incluyen sus propios flujos de OAuth o de clave de API.
-Ejecútelos mediante:
+OpenClaw también admite **plugins de proveedor** que incluyen sus propios flujos de OAuth o de clave de API. Ejecútelos mediante:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -118,7 +110,7 @@ El flujo de actualización es automático; por lo general no necesita gestionar 
 
 Dos patrones:
 
-### 1) Preferido: agentes separados
+### 1. Preferido: agentes separados
 
 Si quiere que “personal” y “trabajo” nunca interactúen, use agentes aislados (sesiones + credenciales + espacio de trabajo separados):
 
@@ -129,7 +121,7 @@ openclaw agents add personal
 
 Luego configure la autenticación por agente (asistente) y enrute los chats al agente correcto.
 
-### 2) Avanzado: múltiples perfiles en un solo agente
+### 2. Avanzado: múltiples perfiles en un solo agente
 
 `auth-profiles.json` admite múltiples ID de perfil para el mismo proveedor.
 

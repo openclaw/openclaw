@@ -3,13 +3,6 @@ summary: "Loopback WebChat statisk host og Gateway WS-brug til chat-UI"
 read_when:
   - Fejlfinding eller konfiguration af WebChat-adgang
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:44Z
 ---
 
 # WebChat (Gateway WebSocket UI)
@@ -46,7 +39,7 @@ Fuld konfiguration: [Konfiguration](/gateway/configuration)
 
 Kanalindstillinger:
 
-- Ingen dedikeret `webchat.*`-blok. WebChat bruger gateway-endpointet + autentificeringsindstillingerne nedenfor.
+- Ingen dedikeret `webchat.*` blok. WebChat bruger gateway endpoint + auth indstillinger nedenfor.
 
 Relaterede globale indstillinger:
 

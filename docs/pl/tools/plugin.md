@@ -1,16 +1,9 @@
 ---
-summary: „Wtyczki/rozszerzenia OpenClaw: wykrywanie, konfiguracja i bezpieczeństwo”
+summary: "„Wtyczki/rozszerzenia OpenClaw: wykrywanie, konfiguracja i bezpieczeństwo”"
 read_when:
   - Dodawanie lub modyfikowanie wtyczek/rozszerzeń
   - Dokumentowanie zasad instalacji lub ładowania wtyczek
-title: „Wtyczki”
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:22Z
+title: "„Wtyczki”"
 ---
 
 # Wtyczki (Rozszerzenia)
@@ -75,7 +68,7 @@ Wtyczki działają **w tym samym procesie** co Gateway, dlatego należy traktowa
 jako zaufany kod.
 Przewodnik tworzenia narzędzi: [Narzędzia agenta wtyczek](/plugins/agent-tools).
 
-## Pomocniki środowiska uruchomieniowego
+## Pomocnicy Runtime
 
 Wtyczki mogą uzyskiwać dostęp do wybranych pomocników rdzenia poprzez `api.runtime`. Dla TTS w telefonii:
 
@@ -187,7 +180,7 @@ Lub wskaż w `OPENCLAW_PLUGIN_CATALOG_PATHS` (lub `OPENCLAW_MPM_CATALOG_PATHS`) 
 lub więcej plików JSON (rozdzielonych przecinkami/średnikami/`PATH`). Każdy
 plik powinien zawierać `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
 
-## Identyfikatory wtyczek
+## ID wtyczek
 
 Domyślne identyfikatory wtyczek:
 
@@ -438,7 +431,8 @@ Uwagi:
 ### Pisanie nowego kanału komunikacyjnego (krok po kroku)
 
 Użyj tego, gdy chcesz stworzyć **nową powierzchnię czatu** („kanał komunikacyjny”),
-a nie dostawcę modeli. Dokumentacja dostawców modeli znajduje się pod
+a nie dostawcę modeli.
+Dokumentacja dostawców modeli znajduje się pod
 `/providers/*`.
 
 1. Wybierz identyfikator i kształt konfiguracji

@@ -1,15 +1,8 @@
 ---
 title: Sandbox-CLI
-summary: „Sandbox-Container verwalten und die effektive Sandbox-Richtlinie prüfen“
-read_when: „Sie verwalten Sandbox-Container oder debuggen das Verhalten von Sandbox-/Tool-Richtlinien.“
+summary: "„Sandbox-Container verwalten und die effektive Sandbox-Richtlinie prüfen“"
+read_when: "„Sie verwalten Sandbox-Container oder debuggen das Verhalten von Sandbox-/Tool-Richtlinien.“"
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:42Z
 ---
 
 # Sandbox-CLI
@@ -73,7 +66,7 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 
 **Wichtig:** Container werden automatisch neu erstellt, wenn der Agent das nächste Mal verwendet wird.
 
-## Anwendungsfälle
+## Verwende Fälle
 
 ### Nach dem Aktualisieren von Docker-Images
 

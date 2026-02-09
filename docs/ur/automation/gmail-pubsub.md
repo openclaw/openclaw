@@ -4,13 +4,6 @@ read_when:
   - OpenClaw کے ساتھ Gmail اِن باکس ٹرگرز کو جوڑنا
   - ایجنٹ ویک کے لیے Pub/Sub پُش سیٹ اپ کرنا
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:03Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -22,9 +15,9 @@ x-i18n:
 - `gcloud` انسٹال اور لاگ اِن ہو ([انسٹال گائیڈ](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) انسٹال ہو اور Gmail اکاؤنٹ کے لیے مجاز ہو ([gogcli.sh](https://gogcli.sh/)).
 - OpenClaw ہُکس فعال ہوں (دیکھیں [Webhooks](/automation/webhook)).
-- `tailscale` لاگ اِن ہو ([tailscale.com](https://tailscale.com/)). معاون سیٹ اپ عوامی HTTPS اینڈپوائنٹ کے لیے Tailscale Funnel استعمال کرتا ہے۔
-  دیگر ٹنل سروسز کام کر سکتی ہیں، مگر وہ DIY/غیر معاون ہیں اور دستی وائرنگ درکار ہوتی ہے۔
-  فی الحال، ہم Tailscale کی معاونت کرتے ہیں۔
+- `tailscale` لاگ اِن ہے ([tailscale.com](https://tailscale.com/))۔ سپورٹڈ سیٹ اپ عوامی HTTPS اینڈ پوائنٹ کے لیے Tailscale Funnel استعمال کرتا ہے۔
+  دیگر ٹنل سروسز کام کر سکتی ہیں، لیکن وہ DIY/غیر سپورٹڈ ہیں اور دستی وائرنگ کی ضرورت ہوتی ہے۔
+  اس وقت، ہم Tailscale کو ہی سپورٹ کرتے ہیں۔
 
 مثالی ہُک کنفیگ (Gmail پری سیٹ میپنگ فعال کریں):
 
@@ -66,11 +59,9 @@ Gmail خلاصہ کو کسی چیٹ سرفیس پر پہنچانے کے لیے،
 }
 ```
 
-اگر آپ ایک مقررہ چینل چاہتے ہیں تو `channel` + `to` سیٹ کریں۔ بصورتِ دیگر `channel: "last"`
-آخری ڈیلیوری روٹ استعمال کرتا ہے (ڈیفالٹ WhatsApp پر فالبیک کرتا ہے)۔
+اگر آپ ایک فکسڈ چینل چاہتے ہیں تو `channel` + `to` سیٹ کریں۔ ورنہ `channel: "last"` آخری ڈیلیوری روٹ استعمال کرتا ہے (واٹس ایپ پر فال بیک ہوتا ہے)۔
 
-Gmail رنز کے لیے کم لاگت ماڈل زبردستی استعمال کرنے کے لیے، میپنگ میں `model` سیٹ کریں
-(`provider/model` یا عرف)۔ اگر آپ `agents.defaults.models` نافذ کرتے ہیں تو اسے وہیں شامل کریں۔
+Gmail رنز کے لیے سستا ماڈل مجبور کرنے کو میپنگ میں `model` سیٹ کریں (`provider/model` یا عرف)۔ اگر آپ `agents.defaults.models` نافذ کرتے ہیں تو اسے وہاں شامل کریں۔
 
 خاص طور پر Gmail ہُکس کے لیے ڈیفالٹ ماڈل اور تھنکنگ لیول سیٹ کرنے کے لیے،
 اپنی کنفیگ میں `hooks.gmail.model` / `hooks.gmail.thinking` شامل کریں:
@@ -91,7 +82,7 @@ Gmail رنز کے لیے کم لاگت ماڈل زبردستی استعمال ک
 - میپنگ میں فی ہُک `model`/`thinking` پھر بھی ان ڈیفالٹس کو اووررائیڈ کرتا ہے۔
 - فالبیک ترتیب: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → پرائمری (auth/rate-limit/timeouts)۔
 - اگر `agents.defaults.models` سیٹ ہو تو Gmail ماڈل اجازت فہرست میں ہونا چاہیے۔
-- Gmail ہُک مواد بطورِ طے شدہ بیرونی مواد کی سکیورٹی حدود کے ساتھ لپٹا ہوتا ہے۔
+- Gmail ہُک مواد بطورِ ڈیفالٹ بیرونی مواد کی حفاظت کی حدود کے ساتھ لپٹا ہوتا ہے۔
   غیر فعال کرنے کے لیے (خطرناک)، `hooks.gmail.allowUnsafeExternalContent: true` سیٹ کریں۔
 
 پے لوڈ ہینڈلنگ کو مزید حسبِ ضرورت بنانے کے لیے، `hooks.mappings` شامل کریں یا JS/TS ٹرانسفارم ماڈیول
@@ -112,15 +103,10 @@ openclaw webhooks gmail setup \
 - `openclaw webhooks gmail run` کے لیے `hooks.gmail` کنفیگ لکھتا ہے۔
 - Gmail ہُک پری سیٹ (`hooks.presets: ["gmail"]`) فعال کرتا ہے۔
 
-پاتھ نوٹ: جب `tailscale.mode` فعال ہو، OpenClaw خودکار طور پر
-`hooks.gmail.serve.path` کو `/` پر سیٹ کرتا ہے اور عوامی پاتھ
-`hooks.gmail.tailscale.path` (ڈیفالٹ `/gmail-pubsub`) پر برقرار رکھتا ہے کیونکہ Tailscale
-پراکسی کرنے سے پہلے set-path پری فکس ہٹا دیتا ہے۔
-اگر آپ کو بیک اینڈ پر پری فکسڈ پاتھ وصول کرنا ہو تو
-`hooks.gmail.tailscale.target` (یا `--tailscale-target`) کو مکمل URL جیسے
-`http://127.0.0.1:8788/gmail-pubsub` پر سیٹ کریں اور `hooks.gmail.serve.path` میچ کریں۔
+پاتھ نوٹ: جب `tailscale.mode` فعال ہو تو OpenClaw خودکار طور پر `hooks.gmail.serve.path` کو `/` پر سیٹ کرتا ہے اور عوامی پاتھ کو `hooks.gmail.tailscale.path` (بطورِ ڈیفالٹ `/gmail-pubsub`) پر رکھتا ہے کیونکہ Tailscale پروکسی کرنے سے پہلے set-path پری فکس کو ہٹا دیتا ہے۔
+اگر آپ کو بیک اینڈ کو پری فکسڈ پاتھ وصول کرنے کی ضرورت ہو تو `hooks.gmail.tailscale.target` (یا `--tailscale-target`) کو مکمل URL جیسے `http://127.0.0.1:8788/gmail-pubsub` پر سیٹ کریں اور `hooks.gmail.serve.path` کو میچ کریں۔
 
-کسٹم اینڈپوائنٹ چاہیے؟ `--push-endpoint <url>` یا `--tailscale off` استعمال کریں۔
+1. کیا آپ کو ایک حسبِ ضرورت endpoint چاہیے؟ 2. `--push-endpoint <url>` یا `--tailscale off` استعمال کریں۔
 
 پلیٹ فارم نوٹ: macOS پر وزارڈ `gcloud`، `gogcli`، اور `tailscale`
 Homebrew کے ذریعے انسٹال کرتا ہے؛ Linux پر پہلے انہیں دستی طور پر انسٹال کریں۔

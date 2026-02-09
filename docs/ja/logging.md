@@ -5,13 +5,6 @@ read_when:
   - ログレベルやフォーマットを設定したいとき
   - トラブルシューティングでログをすばやく見つけたいとき
 title: "ログ"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:45Z
 ---
 
 # ログ
@@ -76,6 +69,7 @@ openclaw doctor
 
 Control UI の **Logs** タブは、`logs.tail` を使用して同じファイルをテールします。
 開き方については [/web/control-ui](/web/control-ui) を参照してください。
+開く方法は [/web/control-ui](/web/control-ui) をご覧ください。
 
 ### チャンネル専用ログ
 
@@ -89,7 +83,8 @@ openclaw channels logs --channel whatsapp
 
 ### ファイルログ（JSONL）
 
-ログファイルの各行は JSON オブジェクトです。CLI と Control UI は、これらのエントリを解析して、構造化された出力（時刻、レベル、サブシステム、メッセージ）を描画します。
+ログファイルの各行は JSON オブジェクトです。CLI と Control UI は、これらのエントリを解析して、構造化された出力（時刻、レベル、サブシステム、メッセージ）を描画します。 CLI と Control UI は、これらの
+エントリを解析して、構造化された出力 (時間、レベル、サブシステム、メッセージ) をレンダリングします。
 
 ### コンソール出力
 
@@ -133,7 +128,7 @@ openclaw channels logs --channel whatsapp
 - `compact`：より簡潔な出力（長時間セッションに最適）。
 - `json`：1 行 1 JSON（ログ処理向け）。
 
-### マスキング（Redaction）
+### Redaction
 
 ツールのサマリーは、コンソールに出力される前に機密トークンをマスキングできます。
 
@@ -144,7 +139,8 @@ openclaw channels logs --channel whatsapp
 
 ## 診断 + OpenTelemetry
 
-診断は、モデル実行 **および** メッセージフローのテレメトリ（Webhook、キューイング、セッション状態）向けの、構造化された機械可読イベントです。ログを **置き換えるものではありません**。メトリクス、トレース、その他のエクスポーターに供給するために存在します。
+診断は、モデル実行 **および** メッセージフローのテレメトリ（Webhook、キューイング、セッション状態）向けの、構造化された機械可読イベントです。ログを **置き換えるものではありません**。メトリクス、トレース、その他のエクスポーターに供給するために存在します。 これらは \*\*
+ログを置き換えません。メトリック、トレース、およびその他のエクスポーターにフィードするために存在します。
 
 診断イベントはプロセス内で発行されますが、エクスポーターは、診断とエクスポータープラグインの両方が有効な場合にのみ接続されます。
 
@@ -158,7 +154,8 @@ openclaw channels logs --channel whatsapp
 
 - **メトリクス**：カウンターとヒストグラム（トークン使用量、メッセージフロー、キューイング）。
 - **トレース**：モデル使用と Webhook／メッセージ処理のスパン。
-- **ログ**：`diagnostics.otel.logs` が有効な場合に OTLP 経由でエクスポート。ログ量が多くなる可能性があるため、`logging.level` とエクスポーターのフィルターを考慮してください。
+- **ログ**：`diagnostics.otel.logs` が有効な場合に OTLP 経由でエクスポート。ログ量が多くなる可能性があるため、`logging.level` とエクスポーターのフィルターを考慮してください。 ログ
+  のボリュームは高くなります。`logging.level`とエクスポーターフィルターに留意してください。
 
 ### 診断イベントのカタログ
 
@@ -199,6 +196,7 @@ openclaw channels logs --channel whatsapp
 
 `logging.level` を引き上げずに、追加のターゲット指定デバッグログを有効化するにはフラグを使用します。
 フラグは大文字小文字を区別せず、ワイルドカードをサポートします（例：`telegram.*` または `*`）。
+フラグは大文字と小文字を区別せず、ワイルドカードをサポートします(例: `telegram.*` や `*` )。
 
 ```json
 {
@@ -208,7 +206,7 @@ openclaw channels logs --channel whatsapp
 }
 ```
 
-環境変数による上書き（単発）：
+Env オーバーライド(one-off):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -223,7 +221,8 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 ### OpenTelemetry へのエクスポート
 
 診断は、`diagnostics-otel` プラグイン（OTLP/HTTP）を介してエクスポートできます。
-OTLP/HTTP を受け付ける任意の OpenTelemetry コレクター／バックエンドで動作します。
+OTLP/HTTP を受け付ける任意の OpenTelemetry コレクター／バックエンドで動作します。 この
+は、OTLP/HTTP を受け入れる任意の OpenTelemetry コレクタ/バックエンドで動作します。
 
 ```json
 {
@@ -255,9 +254,9 @@ OTLP/HTTP を受け付ける任意の OpenTelemetry コレクター／バック�
 注記：
 
 - `openclaw plugins enable diagnostics-otel` を使用してプラグインを有効化することもできます。
-- `protocol` は現在 `http/protobuf` のみをサポートします。`grpc` は無視されます。
+- `protocol` は現在 `http/protobuf` のみをサポートします。`grpc` は無視されます。 `grpc` は無視されます。
 - メトリクスには、トークン使用量、コスト、コンテキストサイズ、実行時間、およびメッセージフローのカウンター／ヒストグラム（Webhook、キューイング、セッション状態、キュー深度／待ち時間）が含まれます。
-- トレース／メトリクスは `traces`／`metrics` で切り替え可能（デフォルト：有効）。トレースには、モデル使用のスパンに加え、有効時は Webhook／メッセージ処理のスパンが含まれます。
+- トレース/メトリックは `traces` / `metrics` で切り替えることができます(デフォルト: on)。 トレース／メトリクスは `traces`／`metrics` で切り替え可能（デフォルト：有効）。トレースには、モデル使用のスパンに加え、有効時は Webhook／メッセージ処理のスパンが含まれます。
 - コレクターで認証が必要な場合は `headers` を設定してください。
 - 対応する環境変数：`OTEL_EXPORTER_OTLP_ENDPOINT`、`OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_PROTOCOL`。
 
@@ -336,7 +335,7 @@ OTLP/HTTP を受け付ける任意の OpenTelemetry コレクター／バック�
 ### ログのエクスポート動作
 
 - OTLP ログは、`logging.file` に書き込まれるのと同じ構造化レコードを使用します。
-- `logging.level`（ファイルログレベル）を尊重します。コンソールのマスキングは OTLP ログには **適用されません**。
+- `logging.level` (ファイルログレベル) を尊重します。 `logging.level`（ファイルログレベル）を尊重します。コンソールのマスキングは OTLP ログには **適用されません**。
 - 高ボリュームの環境では、OTLP コレクター側のサンプリング／フィルタリングを推奨します。
 
 ## トラブルシューティングのヒント

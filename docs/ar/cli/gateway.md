@@ -5,13 +5,6 @@ read_when:
   - استكشاف أخطاء مصادقة Gateway وأوضاع الربط والاتصال وإصلاحها
   - اكتشاف البوابات عبر Bonjour (شبكة محلية + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:15Z
 ---
 
 # Gateway CLI
@@ -34,7 +27,7 @@ x-i18n:
 openclaw gateway
 ```
 
-اسم بديل للتشغيل في الواجهة الأمامية:
+الاسم المستعار للقدمية:
 
 ```bash
 openclaw gateway run

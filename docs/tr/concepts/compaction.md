@@ -2,18 +2,11 @@
 summary: "Bağlam penceresi + sıkıştırma: OpenClaw oturumları model sınırları içinde nasıl tutar"
 read_when:
   - Otomatik sıkıştırmayı ve /compact komutunu anlamak istiyorsunuz
-  - Bağlam sınırlarına takılan uzun oturumları hata ayıklıyorsunuz
+  - You are debugging long sessions hitting context limits
 title: "Sıkıştırma"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:10Z
 ---
 
-# Bağlam Penceresi ve Sıkıştırma
+# Context Window & Compaction
 
 Her modelin bir **bağlam penceresi** vardır (görebileceği en fazla token sayısı). Uzun süreli sohbetlerde mesajlar ve araç sonuçları birikir; pencere daraldığında OpenClaw, sınırlar içinde kalmak için eski geçmişi **sıkıştırır**.
 
@@ -53,7 +46,7 @@ Bir sıkıştırma geçişini zorlamak için (isteğe bağlı talimatlarla) `/co
 
 Bağlam penceresi modele özeldir. OpenClaw, sınırları belirlemek için yapılandırılmış sağlayıcı kataloğundaki model tanımını kullanır.
 
-## Sıkıştırma ve budama karşılaştırması
+## Compaction vs pruning
 
 - **Sıkıştırma**: özetler ve JSONL’de **kalıcı** olarak saklar.
 - **Oturum budaması**: yalnızca eski **araç sonuçlarını** keser, **bellek içi**, istek başına.

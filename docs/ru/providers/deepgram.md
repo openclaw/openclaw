@@ -4,13 +4,6 @@ read_when:
   - Вам нужен speech-to-text Deepgram для аудиовложений
   - Вам нужен быстрый пример конфигурации Deepgram
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:48Z
 ---
 
 # Deepgram (Транскрипция аудио)

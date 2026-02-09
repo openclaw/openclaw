@@ -4,20 +4,13 @@ read_when:
   - Konfigurera Zalo Personal för OpenClaw
   - Felsöka inloggning eller meddelandeflöde för Zalo Personal
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:32Z
 ---
 
 # Zalo Personal (inofficiell)
 
-Status: experimentell. Denna integration automatiserar ett **personligt Zalo-konto** via `zca-cli`.
+Status: experimentell. Denna integration automatiserar ett **personligt Zalo konto** via `zca-cli`.
 
-> **Varning:** Detta är en inofficiell integration och kan leda till kontosuspension/avstängning. Använd på egen risk.
+> **Varning:** Detta är en inofficiell integration och kan resultera i kontoavstängning/avstängning. Använd på egen risk.
 
 ## Plugin krävs
 
@@ -64,7 +57,7 @@ Gateway-maskinen måste ha binären `zca` tillgänglig i `PATH`.
 
 ## Namngivning
 
-Kanal-id är `zalouser` för att tydliggöra att detta automatiserar ett **personligt Zalo-användarkonto** (inofficiellt). Vi reserverar `zalo` för en eventuell framtida officiell Zalo API-integration.
+Kanalid är `zalouser` för att göra det explicit detta automatiserar ett **personligt Zalo användarkonto** (inofficiellt). Vi håller `zalo` reserverad för en potentiell framtida officiell Zalo API-integration.
 
 ## Hitta ID:n (katalog)
 
@@ -83,8 +76,8 @@ openclaw directory groups list --channel zalouser --query "work"
 
 ## Åtkomstkontroll (DM)
 
-`channels.zalouser.dmPolicy` stöder: `pairing | allowlist | open | disabled` (standard: `pairing`).
-`channels.zalouser.allowFrom` accepterar användar-ID:n eller namn. Guiden löser namn till ID:n via `zca friend find` när tillgängligt.
+`channels.zalouser.dmPolicy` stöder: `parning <unk> allowlist <unk> open <unk> inaktiverad` (standard: `parning`).
+`channels.zalouser.allowFrom` accepterar användar-ID eller namn. Guiden löser namn på ID via `zca vän hittar` när den är tillgänglig.
 
 Godkänn via:
 
@@ -93,7 +86,7 @@ Godkänn via:
 
 ## Gruppåtkomst (valfritt)
 
-- Standard: `channels.zalouser.groupPolicy = "open"` (grupper tillåtna). Använd `channels.defaults.groupPolicy` för att åsidosätta standarden när den inte är satt.
+- Standard: `channels.zalouser.groupPolicy = "open"` (grupper tillåtna). Använd `channels.defaults.groupPolicy` för att åsidosätta standard när du inaktiverar.
 - Begränsa till en tillåtelselista med:
   - `channels.zalouser.groupPolicy = "allowlist"`
   - `channels.zalouser.groups` (nycklar är grupp-ID:n eller namn)
@@ -119,7 +112,7 @@ Exempel:
 
 ## Flera konton
 
-Konton mappas till zca-profiler. Exempel:
+Konton karta till zca profiler. Exempel:
 
 ```json5
 {

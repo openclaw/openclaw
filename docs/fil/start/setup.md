@@ -4,20 +4,13 @@ read_when:
   - Nagse-setup ng bagong machine
   - Gusto mo ng “latest + greatest” nang hindi nasisira ang personal mong setup
 title: "Setup"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:01Z
 ---
 
 # Setup
 
 <Note>
-Kung unang beses kang magse-setup, magsimula sa [Getting Started](/start/getting-started).
-Para sa detalye ng wizard, tingnan ang [Onboarding Wizard](/start/wizard).
+Kung unang beses kang magse‑setup, magsimula sa [Getting Started](/start/getting-started).
+Para sa mga detalye ng wizard, tingnan ang [Onboarding Wizard](/start/wizard).
 </Note>
 
 Huling na-update: 2026-01-01
@@ -88,7 +81,7 @@ Kung hindi available ang onboarding sa build mo:
 
 Layunin: magtrabaho sa TypeScript Gateway, makakuha ng hot reload, at panatilihing nakakabit ang macOS app UI.
 
-### 0) (Opsyonal) Patakbuhin din ang macOS app mula sa source
+### 0. (Opsyonal) Patakbuhin din ang macOS app mula sa source
 
 Kung gusto mo ring nasa bleeding edge ang macOS app:
 
@@ -96,7 +89,7 @@ Kung gusto mo ring nasa bleeding edge ang macOS app:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Simulan ang dev Gateway
+### 1. Simulan ang dev Gateway
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 Pinapatakbo ng `gateway:watch` ang gateway sa watch mode at nagre-reload sa mga pagbabago sa TypeScript.
 
-### 2) Ituro ang macOS app sa tumatakbong Gateway mo
+### 2. Ituro ang macOS app sa tumatakbong Gateway mo
 
 Sa **OpenClaw.app**:
 
 - Connection Mode: **Local**
   Kakabit ang app sa tumatakbong gateway sa naka-configure na port.
 
-### 3) I-verify
+### 3. I-verify
 
 - Dapat magpakita ang in-app Gateway status ng **“Using existing gateway …”**
 - O via CLI:
@@ -149,16 +142,13 @@ Gamitin ito kapag nagde-debug ng auth o nagpapasya kung ano ang iba-back up:
 
 ## Linux (systemd user service)
 
-Gumagamit ang mga Linux install ng systemd **user** service. Bilang default, pinipigilan ng systemd ang mga user
-service kapag nag-logout/idle, na pumapatay sa Gateway. Sinusubukan ng onboarding na i-enable ang
-lingering para sa iyo (maaaring mag-prompt para sa sudo). Kung naka-off pa rin, patakbuhin:
+Gumagamit ang mga Linux install ng systemd **user** service. Bilang default, pinipigilan ng systemd ang mga user service sa logout/idle, na pumapatay sa Gateway. Sinusubukan ng onboarding na i‑enable ang lingering para sa iyo (maaaring humingi ng sudo). Kung naka‑off pa rin, patakbuhin:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-Para sa always-on o multi-user servers, isaalang-alang ang **system** service sa halip na
-user service (hindi na kailangan ang lingering). Tingnan ang [Gateway runbook](/gateway) para sa mga tala sa systemd.
+Para sa always‑on o multi‑user server, isaalang‑alang ang **system** service sa halip na user service (hindi kailangan ng lingering). Tingnan ang [Gateway runbook](/gateway) para sa mga tala sa systemd.
 
 ## Kaugnay na docs
 

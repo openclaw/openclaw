@@ -4,20 +4,13 @@ read_when:
   - 你想要新增／移除頻道帳號（WhatsApp／Telegram／Discord／Google Chat／Slack／Mattermost（外掛）／Signal／iMessage）
   - 你想要檢查頻道狀態或即時查看頻道日誌
 title: "頻道"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:15Z
 ---
 
 # `openclaw channels`
 
 在 Gateway 閘道器上管理聊天頻道帳號及其執行期狀態。
 
-相關文件：
+Related docs:
 
 - 頻道指南：[Channels](/channels/index)
 - Gateway 閘道器設定：[Configuration](/gateway/configuration)
@@ -49,11 +42,11 @@ openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp
 ```
 
-## 疑難排解
+## Troubleshooting
 
 - 執行 `openclaw status --deep` 進行全面檢測。
 - 使用 `openclaw doctor` 取得引導式修復。
-- `openclaw channels list` 會列印 `Claude: HTTP 403 ... user:profile` → 使用快照需要 `user:profile` 範圍。請使用 `--no-usage`，或提供 claude.ai 工作階段金鑰（`CLAUDE_WEB_SESSION_KEY`／`CLAUDE_WEB_COOKIE`），或透過 Claude Code CLI 重新驗證。
+- `openclaw channels list` 會列印 `Claude: HTTP 403 ... user:profile` → usage snapshot needs the `user:profile` scope. user:profile`→ 使用快照需要`user:profile`範圍。請使用`--no-usage`，或提供 claude.ai 工作階段金鑰（`CLAUDE_WEB_SESSION_KEY`／`CLAUDE_WEB_COOKIE\`），或透過 Claude Code CLI 重新驗證。
 
 ## 能力探測
 
@@ -68,7 +61,7 @@ openclaw channels capabilities --channel discord --target channel:123
 
 - `--channel` 為選用；省略即可列出所有頻道（包含擴充）。
 - `--target` 接受 `channel:<id>` 或原始的數字頻道 ID，且僅適用於 Discord。
-- 探測為提供者特定：Discord 的 intents 與選用頻道權限；Slack 的機器人與使用者 scopes；Telegram 的機器人旗標與 webhook；Signal 的常駐程式版本；Microsoft Teams 的應用程式權杖與 Graph 角色／scopes（在已知處加註）。未提供探測的頻道會回報 `Probe: unavailable`。
+- Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 
 ## 將名稱解析為 ID
 
@@ -83,4 +76,4 @@ openclaw channels resolve --channel matrix "Project Room"
 注意事項：
 
 - 使用 `--kind user|group|auto` 強制指定目標類型。
-- 當多個項目共用相同名稱時，解析會優先選擇作用中的相符項目。
+- Resolution prefers active matches when multiple entries share the same name.

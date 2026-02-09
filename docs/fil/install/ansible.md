@@ -5,13 +5,6 @@ read_when:
   - Kailangan mo ng setup na may firewall isolation at VPN access
   - Nagde-deploy ka sa mga remote na Debian/Ubuntu server
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:38Z
 ---
 
 # Pag-install ng Ansible
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 Buong gabay: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> Ang openclaw-ansible repo ang source of truth para sa Ansible deployment. Ang pahinang ito ay isang mabilis na overview lamang.
+> The openclaw-ansible repo is the source of truth for Ansible deployment. This page is a quick overview.
 
 ## Ano ang Makukuha Mo
 
@@ -57,7 +50,7 @@ Ini-install at kino-configure ng Ansible playbook ang:
 5. **OpenClaw** (host-based, hindi containerized)
 6. **Systemd service** (auto-start na may security hardening)
 
-Tandaan: Ang Gateway ay tumatakbo **direkta sa host** (hindi sa Docker), ngunit ang mga agent sandbox ay gumagamit ng Docker para sa isolation. Tingnan ang [Sandboxing](/gateway/sandboxing) para sa mga detalye.
+Note: The gateway runs **directly on the host** (not in Docker), but agent sandboxes use Docker for isolation. See [Sandboxing](/gateway/sandboxing) for details.
 
 ## Post-Install Setup
 
@@ -108,11 +101,11 @@ Subukan ang external attack surface:
 nmap -p- YOUR_SERVER_IP
 ```
 
-Dapat **port 22 lang** (SSH) ang makitang bukas. Ang lahat ng ibang serbisyo (Gateway, Docker) ay naka-lock down.
+Itinatakda ng Ansible installer ang OpenClaw para sa manual na mga update. All other services (gateway, Docker) are locked down.
 
 ### Availability ng Docker
 
-Ang Docker ay ini-install para sa **agent sandboxes** (isolated na tool execution), hindi para patakbuhin ang Gateway mismo. Ang Gateway ay nagba-bind lamang sa localhost at naa-access sa pamamagitan ng Tailscale VPN.
+Docker is installed for **agent sandboxes** (isolated tool execution), not for running the gateway itself. The gateway binds to localhost only and is accessible via Tailscale VPN.
 
 Tingnan ang [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) para sa konpigurasyon ng sandbox.
 
@@ -140,7 +133,7 @@ ansible-galaxy collection install -r requirements.yml
 
 ## Pag-update ng OpenClaw
 
-Sine-set up ng Ansible installer ang OpenClaw para sa manual na pag-update. Tingnan ang [Updating](/install/updating) para sa standard na update flow.
+Tingnan ang [Updating](/install/updating) para sa standard na daloy ng update. ⚠️ **Hindi inirerekomenda para sa Gateway runtime** (mga bug sa WhatsApp/Telegram).
 
 Para muling patakbuhin ang Ansible playbook (hal., para sa mga pagbabago sa configuration):
 

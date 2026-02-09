@@ -5,13 +5,6 @@ read_when:
   - VPN erişimi olan, güvenlik duvarıyla yalıtılmış bir kurulum gerekiyorsa
   - Uzak Debian/Ubuntu sunucularına dağıtım yapıyorsanız
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:27Z
 ---
 
 # Ansible Kurulumu
@@ -46,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 - **Ağ**: Paket kurulumu için internet bağlantısı
 - **Ansible**: 2.14+ (hızlı başlangıç betiği tarafından otomatik kurulur)
 
-## Neler Kurulur
+## Kurulum sonrası betik sizi şu konularda yönlendirecek:
 
 Ansible playbook’u şunları kurar ve yapılandırır:
 
@@ -67,7 +60,7 @@ Kurulum tamamlandıktan sonra openclaw kullanıcısına geçin:
 sudo -i -u openclaw
 ```
 
-Kurulum sonrası betik sizi şu adımlardan geçirecektir:
+Bun yaşam döngüsü betikleri (varsayılan olarak engellenmiştir)
 
 1. **Onboarding sihirbazı**: OpenClaw ayarlarını yapılandırma
 2. **Sağlayıcı girişi**: WhatsApp/Telegram/Discord/Signal bağlama

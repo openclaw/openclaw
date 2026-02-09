@@ -4,13 +4,6 @@ read_when:
   - Het toevoegen of wijzigen van doctor-migraties
   - Het introduceren van ingrijpende configwijzigingen
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:45Z
 ---
 
 # Doctor
@@ -91,18 +84,18 @@ cat ~/.openclaw/openclaw.json
 
 ## Gedetailleerd gedrag en onderbouwing
 
-### 0) Optionele update (git-installaties)
+### 0. Optionele update (git-installaties)
 
 Als dit een git-checkout is en doctor interactief draait, biedt het aan om
 te updaten (fetch/rebase/build) voordat doctor wordt uitgevoerd.
 
-### 1) Config-normalisatie
+### 1. Config-normalisatie
 
 Als de config legacy waardevormen bevat (bijvoorbeeld `messages.ackReaction`
 zonder een kanaalspecifieke override), normaliseert doctor deze naar het huidige
 schema.
 
-### 2) Migraties van legacy config-sleutels
+### 2. Migraties van legacy config-sleutels
 
 Wanneer de config verouderde sleutels bevat, weigeren andere opdrachten te draaien en vragen
 je om `openclaw doctor` uit te voeren.
@@ -140,7 +133,7 @@ de ingebouwde OpenCode Zen-catalogus uit `@mariozechner/pi-ai`. Dat kan
 elk model dwingen naar één enkele API of kosten op nul zetten. Doctor waarschuwt zodat je
 de override kunt verwijderen en per-model API-routering + kosten kunt herstellen.
 
-### 3) Legacy statusmigraties (schijfindeling)
+### 3. Legacy statusmigraties (schijfindeling)
 
 Doctor kan oudere on-disk indelingen migreren naar de huidige structuur:
 
@@ -158,7 +151,7 @@ de legacy sessies + agentmap bij het opstarten zodat geschiedenis/auth/modellen 
 per-agentpad terechtkomen zonder een handmatige doctor-run. WhatsApp-auth wordt
 opzettelijk alleen gemigreerd via `openclaw doctor`.
 
-### 4) Controles op statusintegriteit (sessiepersistentie, routering en veiligheid)
+### 4. Controles op statusintegriteit (sessiepersistentie, routering en veiligheid)
 
 De statusmap is het operationele zenuwcentrum. Als deze verdwijnt, verlies je
 sessies, referenties, logs en config (tenzij je elders back-ups hebt).
@@ -183,7 +176,7 @@ Doctor controleert:
 - **Configbestandspermissies**: waarschuwt als `~/.openclaw/openclaw.json`
   leesbaar is voor groep/wereld en biedt aan dit te verscherpen naar `600`.
 
-### 5) Model-auth gezondheid (OAuth-verval)
+### 5. Model-auth gezondheid (OAuth-verval)
 
 Doctor inspecteert OAuth-profielen in de auth-opslag, waarschuwt wanneer tokens
 bijna verlopen/verlopen zijn en kan ze vernieuwen wanneer veilig. Als het Anthropic Claude Code-
@@ -196,17 +189,17 @@ Doctor rapporteert ook auth-profielen die tijdelijk onbruikbaar zijn door:
 - korte cooldowns (rate limits/time-outs/auth-fouten)
 - langere uitschakelingen (facturatie-/kredietfouten)
 
-### 6) Hooks-modelvalidatie
+### 6. Hooks-modelvalidatie
 
 Als `hooks.gmail.model` is ingesteld, valideert doctor de modelverwijzing tegen de
 catalogus en toegestane lijst en waarschuwt wanneer deze niet kan worden opgelost of is uitgesloten.
 
-### 7) Sandbox-imageherstel
+### 7. Sandbox-imageherstel
 
 Wanneer sandboxing is ingeschakeld, controleert doctor Docker-images en biedt aan
 te bouwen of over te schakelen naar legacy namen als het huidige image ontbreekt.
 
-### 8) Gateway-servicemigraties en opschoontips
+### 8. Gateway-servicemigraties en opschoontips
 
 Doctor detecteert legacy gateway-services (launchd/systemd/schtasks) en
 biedt aan deze te verwijderen en de OpenClaw-service te installeren met de huidige gateway-
@@ -214,38 +207,38 @@ poort. Het kan ook scannen op extra gateway-achtige services en opschoontips afd
 Profiel-genaamde OpenClaw gateway-services worden als eersteklas beschouwd en
 niet gemarkeerd als "extra".
 
-### 9) Beveiligingswaarschuwingen
+### 9. Beveiligingswaarschuwingen
 
 Doctor geeft waarschuwingen wanneer een provider openstaat voor DM's zonder
 toegestane lijst, of wanneer een beleid gevaarlijk is geconfigureerd.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 Bij draaien als systemd user service zorgt doctor ervoor dat lingering is ingeschakeld
 zodat de gateway actief blijft na uitloggen.
 
-### 11) Skills-status
+### 11. Skills-status
 
 Doctor print een snel overzicht van geschikte/ontbrekende/geblokkeerde skills voor de huidige
 werkruimte.
 
-### 12) Gateway-authcontroles (lokaal token)
+### 12. Gateway-authcontroles (lokaal token)
 
 Doctor waarschuwt wanneer `gateway.auth` ontbreekt op een lokale gateway en
 biedt aan een token te genereren. Gebruik `openclaw doctor --generate-gateway-token` om
 tokencreatie in automatisering af te dwingen.
 
-### 13) Gateway-gezondheidscontrole + herstart
+### 13. Gateway-gezondheidscontrole + herstart
 
 Doctor voert een gezondheidscontrole uit en biedt aan de gateway te herstarten wanneer
 deze er ongezond uitziet.
 
-### 14) Kanaalstatuswaarschuwingen
+### 14. Kanaalstatuswaarschuwingen
 
 Als de gateway gezond is, voert doctor een kanaalstatusprobe uit en rapporteert
 waarschuwingen met voorgestelde oplossingen.
 
-### 15) Supervisor-configaudit + reparatie
+### 15. Supervisor-configaudit + reparatie
 
 Doctor controleert de geïnstalleerde supervisor-config (launchd/systemd/schtasks) op
 ontbrekende of verouderde standaardwaarden (bijv. systemd network-online afhankelijkheden en
@@ -260,27 +253,26 @@ Notities:
 - `openclaw doctor --repair --force` overschrijft aangepaste supervisor-configs.
 - Je kunt altijd een volledige herschrijving afdwingen via `openclaw gateway install --force`.
 
-### 16) Gateway-runtime- en poortdiagnostiek
+### 16. Gateway-runtime- en poortdiagnostiek
 
 Doctor inspecteert de service-runtime (PID, laatste exitstatus) en waarschuwt wanneer de
 service is geïnstalleerd maar niet daadwerkelijk draait. Het controleert ook op poortconflicten
 op de gateway-poort (standaard `18789`) en rapporteert waarschijnlijke oorzaken (gateway draait al,
 SSH-tunnel).
 
-### 17) Gateway-runtime best practices
+### 17. Gateway-runtime best practices
 
 Doctor waarschuwt wanneer de gateway-service draait op Bun of een version-managed Node-pad
 (`nvm`, `fnm`, `volta`, `asdf`, enz.). WhatsApp- en Telegram-kanalen vereisen Node,
-en version-managerpaden kunnen breken na upgrades omdat de service je shell-init niet laadt.
-Doctor biedt aan te migreren naar een systeem-Node-installatie wanneer beschikbaar
+en version-managerpaden kunnen breken na upgrades omdat de service je shell-init niet laadt. Doctor biedt aan te migreren naar een systeem-Node-installatie wanneer beschikbaar
 (Homebrew/apt/choco).
 
-### 18) Config-wegschrijven + wizard-metadata
+### 18. Config-wegschrijven + wizard-metadata
 
 Doctor slaat eventuele configwijzigingen op en stempelt wizard-metadata om de
 doctor-run vast te leggen.
 
-### 19) Werkruimtetips (back-up + geheugensysteem)
+### 19. Werkruimtetips (back-up + geheugensysteem)
 
 Doctor stelt een werkruimte-geheugensysteem voor wanneer dit ontbreekt en print een back-uptip
 als de werkruimte nog niet onder git staat.

@@ -4,13 +4,6 @@ read_when:
   - Tilføjelse eller ændring af plugins/udvidelser
   - Dokumentation af plugin-installation eller indlæsningsregler
 title: "Plugins"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Plugins (Udvidelser)
@@ -38,7 +31,7 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-3. Genstart Gateway, og konfigurér derefter under `plugins.entries.<id>.config`.
+3. Genstart Gateway, og konfigurer derefter under `plugins.entries.<id>.config`.
 
 Se [Voice Call](/plugins/voice-call) for et konkret eksempel på et plugin.
 
@@ -58,7 +51,9 @@ Se [Voice Call](/plugins/voice-call) for et konkret eksempel på et plugin.
 - Qwen OAuth (udbyder‑autentificering) — medfølger som `qwen-portal-auth` (deaktiveret som standard)
 - Copilot Proxy (udbyder‑autentificering) — lokal VS Code Copilot Proxy‑bro; adskilt fra indbygget `github-copilot` enhedslogin (medfølger, deaktiveret som standard)
 
-OpenClaw-plugins er **TypeScript-moduler**, der indlæses ved runtime via jiti. **Konfigurationsvalidering eksekverer ikke plugin‑kode**; den bruger plugin‑manifestet og JSON Schema i stedet. Se [Plugin manifest](/plugins/manifest).
+OpenClaw plugins er **TypeScript moduler** indlæst på runtime via jiti. **Config
+validering eksekverer ikke plugin kode**; den bruger plugin manifest og JSON
+Schema i stedet. Se [Plugin manifest](/plugins/manifest).
 
 Plugins kan registrere:
 
@@ -71,12 +66,12 @@ Plugins kan registrere:
 - **Skills** (ved at angive `skills` mapper i plugin‑manifestet)
 - **Auto‑reply‑kommandoer** (eksekveres uden at aktivere AI‑agenten)
 
-Plugins kører **in‑process** sammen med Gateway, så behandl dem som betroet kode.
-Vejledning i værktøjsudvikling: [Plugin agent tools](/plugins/agent-tools).
+Plugins kører **inproces** med Gateway, så behandl dem som betroet kode.
+Værktøjs authoring guide: [Plugin agent værktøjer](/plugins/agent-tools).
 
 ## Runtime‑hjælpere
 
-Plugins kan få adgang til udvalgte kerne‑hjælpere via `api.runtime`. For telefoni‑TTS:
+Plugins kan få adgang til udvalgte kernehjælpere via `api.runtime`. Til telefoni TTS:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
@@ -88,7 +83,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 Noter:
 
 - Bruger kerne‑konfigurationen `messages.tts` (OpenAI eller ElevenLabs).
-- Returnerer PCM‑lydbuffer + sample rate. Plugins skal selv resample/enkode til udbydere.
+- Returnerer PCM audio buffer + sample rate. Plugins skal resample/encode for udbydere.
 - Edge TTS understøttes ikke til telefoni.
 
 ## Discovery & prioritet
@@ -113,12 +108,13 @@ OpenClaw scanner i rækkefølge:
 
 - `<openclaw>/extensions/*`
 
-Medfølgende plugins skal aktiveres eksplicit via `plugins.entries.<id>.enabled`
-eller `openclaw plugins enable <id>`. Installerede plugins er aktiveret som standard,
+Medfølgende plugins skal udtrykkeligt aktiveres via `plugins.entries.<id>.enabled`
+eller `openclaw plugins aktiverer <id>`. Installerede plugins er aktiveret som standard,
 men kan deaktiveres på samme måde.
 
-Hvert plugin skal indeholde en `openclaw.plugin.json`‑fil i sin rod. Hvis en sti
-peger på en fil, er plugin‑roden filens mappe og skal indeholde manifestet.
+Hvert plugin skal indeholde en `openclaw.plugin.json` fil i sin rod. Hvis en sti
+peger på en fil, er plugin-roden filens mappe og skal indeholde
+-manifestet.
 
 Hvis flere plugins resolver til samme id, vinder det første match i rækkefølgen
 ovenfor, og kopier med lavere prioritet ignoreres.
@@ -136,16 +132,16 @@ En plugin‑mappe kan indeholde en `package.json` med `openclaw.extensions`:
 }
 ```
 
-Hver post bliver til et plugin. Hvis pakken lister flere udvidelser, bliver
-plugin‑id’et `name/<fileBase>`.
+Hver indgang bliver et plugin. Hvis pakken viser flere udvidelser, bliver plugin id
+`navn/<fileBase>`.
 
 Hvis dit plugin importerer npm‑afhængigheder, skal du installere dem i den mappe,
 så `node_modules` er tilgængelig (`npm install` / `pnpm install`).
 
 ### Kanal‑katalog‑metadata
 
-Kanal‑plugins kan annoncere introduktions‑metadata via `openclaw.channel` og
-installationshint via `openclaw.install`. Det holder kernens katalog fri for data.
+Kanal plugins kan annoncere onboarding metadata via `openclaw.channel` og
+installere hints via `openclaw.install`. Dette holder kernen katalog data-fri.
 
 Eksempel:
 
@@ -173,15 +169,16 @@ Eksempel:
 }
 ```
 
-OpenClaw kan også flette **eksterne kanal‑kataloger** (for eksempel et MPM‑registry‑export). Læg en JSON‑fil et af disse steder:
+OpenClaw kan også flette **eksterne kanalkataloger** (for eksempel en MPM
+registereksport). Drop en JSON-fil på en af:
 
 - `~/.openclaw/mpm/plugins.json`
 - `~/.openclaw/mpm/catalog.json`
 - `~/.openclaw/plugins/catalog.json`
 
-Eller peg `OPENCLAW_PLUGIN_CATALOG_PATHS` (eller `OPENCLAW_MPM_CATALOG_PATHS`) på
-én eller flere JSON‑filer (komma/semikolon/`PATH`‑adskilt). Hver fil skal
-indeholde `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
+Eller punkt `OPENCLAW_PLUGIN_CATALOG_PATHS` (eller `OPENCLAW_MPM_CATALOG_PATHS`) i
+en eller flere JSON-filer (comma/semicolon/`PATH`-delimited). Hver fil skal
+indeholde `{ "entries": [ { "navn": "@scope/pkg", "openclaw": { "kanal": {...}, "install": {...} } } ] }`.
 
 ## Plugin‑id’er
 
@@ -215,23 +212,23 @@ Felter:
 - `allow`: tilladelsesliste (valgfri)
 - `deny`: denylist (valgfri; deny vinder)
 - `load.paths`: ekstra plugin‑filer/-mapper
-- `entries.<id>`: per‑plugin toggles + konfiguration
+- `poster.<id>`: per- plugin skifter + config
 
 Konfigurationsændringer **kræver genstart af gateway**.
 
 Valideringsregler (strenge):
 
 - Ukendte plugin‑id’er i `entries`, `allow`, `deny` eller `slots` er **fejl**.
-- Ukendte `channels.<id>`‑nøgler er **fejl**, medmindre et plugin‑manifest erklærer
-  kanal‑id’et.
+- Ukendt `kanaler.<id>` nøgler er **errors** medmindre et plugin manifest erklærer
+  kanal-id.
 - Plugin‑konfiguration valideres ved hjælp af JSON Schema indlejret i
   `openclaw.plugin.json` (`configSchema`).
 - Hvis et plugin er deaktiveret, bevares dets konfiguration, og der udsendes en **advarsel**.
 
 ## Plugin‑slots (eksklusive kategorier)
 
-Nogle plugin‑kategorier er **eksklusive** (kun én aktiv ad gangen). Brug
-`plugins.slots` til at vælge, hvilket plugin der ejer slottet:
+Nogle plugin-kategorier er **eksklusive** (kun én aktiv ad gangen). Brug
+`plugins.slots` til at vælge hvilket plugin ejer slot:
 
 ```json5
 {
@@ -243,8 +240,8 @@ Nogle plugin‑kategorier er **eksklusive** (kun én aktiv ad gangen). Brug
 }
 ```
 
-Hvis flere plugins erklærer `kind: "memory"`, indlæses kun det valgte. De øvrige
-deaktiveres med diagnostik.
+Hvis flere plugins erklærer `art: "hukommelse"`, kun den valgte én belastning. Andre
+er deaktiveret med diagnostik.
 
 ## Control UI (schema + labels)
 
@@ -252,8 +249,8 @@ Control UI bruger `config.schema` (JSON Schema + `uiHints`) til at rendere bedre
 
 OpenClaw udvider `uiHints` ved runtime baseret på fundne plugins:
 
-- Tilføjer per‑plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
-- Fletter valgfrie plugin‑leverede konfigurationsfelthints under:
+- Tilføjer per-plugin etiketter til `plugins.entries.<id>` / `.enabled` / `.config`
+- Fletter valgfri plugin-forudsat config felt hints under:
   `plugins.entries.<id>.config.<field>`
 
 Hvis du vil have, at dine plugin‑konfigurationsfelter viser gode labels/placeholders (og markerer hemmeligheder som følsomme),
@@ -306,12 +303,12 @@ Plugins kan også registrere deres egne top‑level kommandoer (eksempel: `openc
 Plugins eksporterer enten:
 
 - En funktion: `(api) => { ... }`
-- Et objekt: `{ id, name, configSchema, register(api) { ... } }`
+- Et objekt: `{ id, navn, configSchema, register(api) { ... } }`
 
 ## Plugin‑hooks
 
-Plugins kan levere hooks og registrere dem ved runtime. Det gør det muligt for et plugin at samle
-event‑drevet automatisering uden en separat hook‑pakkeinstallation.
+Plugins kan sende kroge og registrere dem på runtime. Dette lader en plugin pakke
+event-drevet automatisering uden en separat krog pack installation.
 
 ### Eksempel
 
@@ -335,8 +332,8 @@ Noter:
 Plugins kan registrere **modeludbyder‑autentificeringsflows**, så brugere kan køre OAuth eller
 API‑nøgle‑opsætning inde i OpenClaw (ingen eksterne scripts nødvendige).
 
-Registrér en udbyder via `api.registerProvider(...)`. Hver udbyder eksponerer én
-eller flere autentificeringsmetoder (OAuth, API‑nøgle, device code osv.). Disse metoder driver:
+Registrer en udbyder via `api.registerProvider(...)`. Hver udbyder udsætter en
+eller flere auth metoder (OAuth, API-nøgle, enhedskode osv.). Disse metoder virker:
 
 - `openclaw models auth login --provider <id> [--method <id>]`
 
@@ -383,9 +380,9 @@ Noter:
 
 ### Registrér en messaging‑kanal
 
-Plugins kan registrere **kanal‑plugins**, der opfører sig som indbyggede kanaler
-(WhatsApp, Telegram osv.). Kanal‑konfiguration ligger under `channels.<id>` og
-valideres af din kanal‑plugin‑kode.
+Plugins kan registrere **kanalplugins**, der opfører sig som indbyggede kanaler
+(WhatsApp, Telegram, etc.). Kanal config lever under `kanaler.<id>` og er
+valideret af din kanal plugin kode.
 
 ```ts
 const myChannel = {
@@ -419,7 +416,7 @@ export default function (api) {
 
 Noter:
 
-- Læg konfiguration under `channels.<id>` (ikke `plugins.entries`).
+- Sæt config under `kanaler.<id>` (ikke `plugins.entries`).
 - `meta.label` bruges til labels i CLI/UI‑lister.
 - `meta.aliases` tilføjer alternative id’er til normalisering og CLI‑input.
 - `meta.preferOver` lister kanal‑id’er, der skal springes over ved auto‑enable, når begge er konfigureret.
@@ -427,13 +424,13 @@ Noter:
 
 ### Skriv en ny messaging‑kanal (trin‑for‑trin)
 
-Brug dette, når du vil have en **ny chat‑overflade** (en “messaging‑kanal”), ikke en modeludbyder.
-Dokumentation for modeludbydere findes under `/providers/*`.
+Brug dette, når du vil have en **ny chatoverflade** (en “messaging channel”), ikke en model udbyder.
+Model provider docs live under `/providers/*`.
 
 1. Vælg et id + konfigurationsform
 
-- Al kanal‑konfiguration ligger under `channels.<id>`.
-- Foretræk `channels.<id>.accounts.<accountId>` til multi‑account‑opsætninger.
+- Alle kanal config lever under `kanaler.<id>`.
+- Foretræk `kanaler.<id>.accounts.<accountId>` for opstillinger på flere konti.
 
 2. Definér kanal‑metadata
 
@@ -507,8 +504,8 @@ export default function (api) {
 }
 ```
 
-Indlæs plugin’et (extensions‑mappe eller `plugins.load.paths`), genstart gateway,
-og konfigurér derefter `channels.<id>` i din konfiguration.
+Indlæs plugin (udvidelser dir eller `plugins.load.paths`), genstart gateway,
+og derefter konfigurere `kanaler.<id>` i din konfiguration.
 
 ### Agent‑værktøjer
 
@@ -541,9 +538,9 @@ export default function (api) {
 
 ### Registrér auto‑reply‑kommandoer
 
-Plugins kan registrere brugerdefinerede slash‑kommandoer, der eksekveres **uden at aktivere
-AI‑agenten**. Det er nyttigt til toggle‑kommandoer, statuschecks eller hurtige handlinger,
-der ikke kræver LLM‑behandling.
+Plugins kan registrere brugerdefinerede skråstregkommandoer, der udfører **uden at påberåbe sig
+AI-agenten**. Dette er nyttigt til at skifte kommandoer, statuskontroller eller hurtige handlinger
+som ikke behøver LLM behandling.
 
 ```ts
 export default function (api) {
@@ -570,7 +567,7 @@ Kommandoindstillinger:
 
 - `name`: Kommandonavn (uden det indledende `/`)
 - `description`: Hjælpetekst vist i kommandolister
-- `acceptsArgs`: Om kommandoen accepterer argumenter (standard: false). Hvis false og argumenter leveres, matcher kommandoen ikke, og beskeden falder igennem til andre handlere
+- `acceptsArgs`: Om kommandoen accepterer argumenter (standard: falsk). Hvis falske og argumenter er angivet, vil kommandoen ikke matche og beskeden falder igennem til andre handlere
 - `requireAuth`: Om autoriseret afsender kræves (standard: true)
 - `handler`: Funktion der returnerer `{ text: string }` (kan være async)
 
@@ -596,7 +593,7 @@ Noter:
 - Kommandoer registreres globalt og virker på tværs af alle kanaler
 - Kommandonavne er ikke case‑sensitive (`/MyStatus` matcher `/mystatus`)
 - Kommandonavne skal starte med et bogstav og må kun indeholde bogstaver, tal, bindestreger og underscores
-- Reserverede kommandonavne (som `help`, `status`, `reset` osv.) kan ikke overstyres af plugins
+- Reserverede kommandonavne (såsom `help`, `status`, `reset`, etc.) kan ikke tilsidesættes af plugins
 - Dobbelt registrering af kommandoer på tværs af plugins vil fejle med en diagnostisk fejl
 
 ### Registrér baggrundstjenester
@@ -619,9 +616,9 @@ export default function (api) {
 
 ## Skills
 
-Plugins kan levere en skill i repo’et (`skills/<name>/SKILL.md`).
-Aktivér den med `plugins.entries.<id>.enabled` (eller andre konfigurations‑gates) og sørg for,
-at den er til stede i dine workspace/managed skills‑placeringer.
+Plugins kan sende en færdighed i repo (`færdigheder/<name>/SKILL.md`).
+Aktiver det med `plugins.entries.<id>.enabled` (eller andre config gates) og sikre
+det er til stede i dit arbejdsområde / administrerede færdigheder steder.
 
 ## Distribution (npm)
 
@@ -653,7 +650,7 @@ Se [Voice Call](/plugins/voice-call) og `extensions/voice-call/README.md` for op
 
 ## Sikkerhedsnoter
 
-Plugins kører in‑process med Gateway. Behandl dem som betroet kode:
+Plugins kører i gang med Gateway. Behandl dem som betroet kode:
 
 - Installér kun plugins, du har tillid til.
 - Foretræk `plugins.allow` tilladelseslister.

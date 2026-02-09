@@ -4,13 +4,6 @@ read_when:
   - Thu thập log macOS hoặc điều tra việc ghi log dữ liệu riêng tư
   - Gỡ lỗi các vấn đề về vòng đời đánh thức/phiên giọng nói
 title: "Ghi log macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:39Z
 ---
 
 # Logging (macOS)
@@ -26,12 +19,12 @@ OpenClaw định tuyến log của ứng dụng macOS qua swift-log (mặc đị
 
 Ghi chú:
 
-- Tính năng này **tắt theo mặc định**. Chỉ bật khi đang gỡ lỗi.
+- Tính năng này **tắt theo mặc định**. Chỉ bật khi đang debug tích cực.
 - Coi tệp là dữ liệu nhạy cảm; không chia sẻ nếu chưa xem xét.
 
 ## Dữ liệu riêng tư trong unified logging trên macOS
 
-Unified logging che (redact) hầu hết payload trừ khi một subsystem chọn tham gia `privacy -off`. Theo bài viết của Peter về macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025), việc này được điều khiển bởi một plist trong `/Library/Preferences/Logging/Subsystems/` được khóa theo tên subsystem. Chỉ các mục log mới áp dụng cờ này, vì vậy hãy bật trước khi tái hiện sự cố.
+Unified logging sẽ ẩn hầu hết payload trừ khi một subsystem chọn `privacy -off`. Per Peter's write-up on macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) this is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Chỉ các mục log mới nhận cờ này, vì vậy hãy bật nó trước khi tái hiện sự cố.
 
 ## Bật cho OpenClaw (`bot.molt`)
 

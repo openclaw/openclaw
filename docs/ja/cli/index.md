@@ -4,18 +4,11 @@ read_when:
   - CLI コマンドやオプションを追加または変更する場合
   - 新しいコマンド サーフェスを文書化する場合
 title: "CLI リファレンス"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:10Z
 ---
 
 # CLI リファレンス
 
-このページでは、現在の CLI の挙動について説明します。コマンドが変更された場合は、このドキュメントを更新してください。
+このページでは、現在の CLI の挙動について説明します。コマンドが変更された場合は、このドキュメントを更新してください。 コマンドが変更された場合は、このドキュメントを更新してください。
 
 ## コマンド ページ
 
@@ -262,7 +255,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw plugins enable <id>` / `disable <id>` — `plugins.entries.<id>.enabled` を切り替えます。
 - `openclaw plugins doctor` — プラグインのロード エラーを報告します。
 
-ほとんどのプラグイン変更には、ゲートウェイの再起動が必要です。[/plugin](/tools/plugin) を参照してください。
+ほとんどのプラグイン変更には、ゲートウェイの再起動が必要です。[/plugin](/tools/plugin) を参照してください。 [/plugin](/tools/plugin) を参照してください。
 
 ## メモリ
 
@@ -274,7 +267,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ## チャット スラッシュ コマンド
 
-チャット メッセージは、テキストおよびネイティブの `/...` コマンドをサポートします。[/tools/slash-commands](/tools/slash-commands) を参照してください。
+チャット メッセージは、テキストおよびネイティブの `/...` コマンドをサポートします。[/tools/slash-commands](/tools/slash-commands) を参照してください。 [/tools/slash-commands](/tools/slash-commands) を参照してください。
 
 ハイライト:
 
@@ -350,7 +343,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `config`
 
-非対話型の設定ヘルパー（get/set/unset）。サブコマンドなしで `openclaw config` を実行すると、ウィザードが起動します。
+非対話的な設定ヘルパー (get/set/unset)。 非対話型の設定ヘルパー（get/set/unset）。サブコマンドなしで `openclaw config` を実行すると、ウィザードが起動します。
 
 サブコマンド:
 
@@ -455,7 +448,7 @@ openclaw status --deep
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub フックのセットアップとランナーです。[/automation/gmail-pubsub](/automation/gmail-pubsub) を参照してください。
+Gmail Pub/Sub フックのセットアップとランナーです。[/automation/gmail-pubsub](/automation/gmail-pubsub) を参照してください。 [/automation/gmail-pubsub](/automation/gmail-pubsub) を参照してください。
 
 サブコマンド:
 
@@ -464,7 +457,7 @@ Gmail Pub/Sub フックのセットアップとランナーです。[/automation
 
 ### `dns setup`
 
-広域探索用 DNS ヘルパー（CoreDNS + Tailscale）。[/gateway/discovery](/gateway/discovery) を参照してください。
+広域探索用 DNS ヘルパー（CoreDNS + Tailscale）。[/gateway/discovery](/gateway/discovery) を参照してください。 [/gateway/discovery](/gateway/discovery) を参照してください。
 
 オプション:
 
@@ -530,7 +523,7 @@ Gateway（または埋め込みの `--local`）経由で、エージェントの
 
 #### `agents add [name]`
 
-新しい分離エージェントを追加します。フラグ（または `--non-interactive`）が指定されていない場合は、ガイド付きウィザードを実行します。非対話型モードでは `--workspace` が必須です。
+新しいエージェントを追加します。 新しい分離エージェントを追加します。フラグ（または `--non-interactive`）が指定されていない場合は、ガイド付きウィザードを実行します。非対話型モードでは `--workspace` が必須です。
 
 オプション:
 
@@ -541,7 +534,7 @@ Gateway（または埋め込みの `--local`）経由で、エージェントの
 - `--non-interactive`
 - `--json`
 
-バインディング仕様には `channel[:accountId]` を使用します。WhatsApp で `accountId` が省略された場合、デフォルトのアカウント ID が使用されます。
+バインド仕様は `channel[:accountId]` を使用します。 バインディング仕様には `channel[:accountId]` を使用します。WhatsApp で `accountId` が省略された場合、デフォルトのアカウント ID が使用されます。
 
 #### `agents delete <id>`
 
@@ -580,7 +573,7 @@ IDE を Gateway に接続する ACP ブリッジを実行します。
 
 OpenClaw は、OAuth/API 資格情報が利用可能な場合に、プロバイダーの使用量／クォータを表示できます。
 
-表示箇所:
+サーフェス:
 
 - `/status`（利用可能な場合、短い使用量行を追加）
 - `openclaw status --usage`（プロバイダー別の詳細内訳を表示）
@@ -595,7 +588,7 @@ OpenClaw は、OAuth/API 資格情報が利用可能な場合に、プロバイ�
 
 ### `health`
 
-実行中の Gateway からヘルス情報を取得します。
+ランニングゲートウェイからヘルスを取得します。
 
 オプション:
 
@@ -693,7 +686,7 @@ Gateway サービスを管理します（launchd/systemd/schtasks）。
 
 - `gateway status` は、サービスで解決されたポート／設定を使用して、デフォルトで Gateway RPC をプローブします（`--url/--token/--password` で上書き可能）。
 - `gateway status` は、スクリプト用に `--no-probe`, `--deep`, `--json` をサポートします。
-- `gateway status` は、検出可能な場合にレガシーまたは追加のゲートウェイ サービスも表示します（`--deep` はシステム レベルのスキャンを追加）。プロファイル名付きの OpenClaw サービスは、第一級として扱われ、「extra」としてはフラグ付けされません。
+- `gateway status` は、検出可能な場合にレガシーまたは追加のゲートウェイ サービスも表示します（`--deep` はシステム レベルのスキャンを追加）。プロファイル名付きの OpenClaw サービスは、第一級として扱われ、「extra」としてはフラグ付けされません。 プロファイル名の OpenClawサービスはファーストクラスとして扱われ、"extra"としてフラグは立てられません。
 - `gateway status` は、CLI が使用する設定パスと、サービスが使用している可能性の高い設定（サービス環境）、および解決されたプローブ対象 URL を表示します。
 - `gateway install|uninstall|start|stop|restart` は、スクリプト用に `--json` をサポートします（デフォルト出力は人間に優しい形式のままです）。
 - `gateway install` は Node ランタイムがデフォルトです。bun は **非推奨** です（WhatsApp/Telegram の不具合）。
@@ -723,6 +716,8 @@ openclaw logs --no-color
 Gateway CLI ヘルパー（RPC サブコマンドには `--url`, `--token`, `--password`, `--timeout`, `--expect-final` を使用）。
 `--url` を指定した場合、CLI は設定や環境資格情報を自動適用しません。
 `--token` または `--password` を明示的に含めてください。明示的な資格情報がない場合はエラーとなります。
+`--url` を渡すと、CLI は設定や環境の資格情報を自動的に適用しません。
+明示的に `--token` または `--password` を含めます。 明示的な資格情報が見つかりませんでした。
 
 サブコマンド:
 
@@ -788,8 +783,8 @@ openclaw models status
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-常に、認証ストア内プロファイルの認証概要と OAuth の有効期限ステータスが含まれます。
-`--probe` はライブ リクエストを実行します（トークン消費やレート制限を引き起こす可能性があります）。
+常に、認証ストアのプロファイルの認証概要とOAuth有効期限ステータスが含まれます。
+`--probe` はライブリクエストを実行します（トークンとトリガーレート制限を消費する可能性があります）。
 
 ### `models set <model>`
 
@@ -894,7 +889,7 @@ openclaw models status
 
 ## Cron
 
-スケジュール ジョブを管理します（Gateway RPC）。[/automation/cron-jobs](/automation/cron-jobs) を参照してください。
+スケジュール ジョブを管理します（Gateway RPC）。[/automation/cron-jobs](/automation/cron-jobs) を参照してください。 [/automation/cron-jobs](/automation/cron-jobs) を参照してください。
 
 サブコマンド:
 
@@ -914,6 +909,7 @@ openclaw models status
 
 `node` は **ヘッドレス ノード ホスト** を実行するか、バックグラウンド サービスとして管理します。
 [`openclaw node`](/cli/node) を参照してください。
+[`openclawノード`](/cli/node)を参照してください。
 
 サブコマンド:
 
@@ -926,7 +922,7 @@ openclaw models status
 
 ## ノード
 
-`nodes` は Gateway と通信し、ペアリングされたノードを対象とします。[/nodes](/nodes) を参照してください。
+`nodes` は Gateway と通信し、ペアリングされたノードを対象とします。[/nodes](/nodes) を参照してください。 [/nodes](/nodes) を参照してください。
 
 共通オプション:
 
@@ -968,7 +964,7 @@ openclaw models status
 
 ## ブラウザ
 
-ブラウザ制御 CLI（専用の Chrome/Brave/Edge/Chromium）。[`openclaw browser`](/cli/browser) および [Browser ツール](/tools/browser) を参照してください。
+ブラウザ制御 CLI（専用の Chrome/Brave/Edge/Chromium）。[`openclaw browser`](/cli/browser) および [Browser ツール](/tools/browser) を参照してください。 [`openclaw browser`](/cli/browser) と [Browser tool](/tools/browser) を参照してください。
 
 共通オプション:
 

@@ -5,13 +5,6 @@ read_when:
   - Onderzoeken van dubbele of verouderde instancerijen
   - Wijzigen van gateway WS-connectie of systeemgebeurtenis-beacons
 title: "Presence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:21Z
 ---
 
 # Presence
@@ -41,11 +34,11 @@ Presencevermeldingen zijn gestructureerde objecten met velden zoals:
 
 Presencevermeldingen worden door meerdere bronnen geproduceerd en **samengevoegd**.
 
-### 1) Gateway-eigen vermelding
+### 1. Gateway-eigen vermelding
 
 De Gateway initialiseert bij het opstarten altijd een “self”-vermelding, zodat UI’s de gateway-host tonen, zelfs voordat clients verbinding maken.
 
-### 2) WebSocket-connectie
+### 2. WebSocket-connectie
 
 Elke WS-client begint met een `connect`-verzoek. Bij een succesvolle handshake voegt de Gateway een presencevermelding toe of werkt deze bij voor die verbinding.
 
@@ -53,11 +46,11 @@ Elke WS-client begint met een `connect`-verzoek. Bij een succesvolle handshake v
 
 De CLI maakt vaak verbinding voor korte, eenmalige opdrachten. Om te voorkomen dat de Instances-lijst wordt gespamd, wordt `client.mode === "cli"` **niet** omgezet in een presencevermelding.
 
-### 3) `system-event`-beacons
+### 3. `system-event`-beacons
 
 Clients kunnen rijkere periodieke beacons sturen via de methode `system-event`. De mac-app gebruikt dit om hostnaam, IP en `lastInputSeconds` te rapporteren.
 
-### 4) Node-verbindingen (rol: node)
+### 4. Node-verbindingen (rol: node)
 
 Wanneer een node verbinding maakt via de Gateway WebSocket met `role: node`, voegt de Gateway een presencevermelding toe of werkt deze bij voor die node (zelfde stroom als andere WS-clients).
 

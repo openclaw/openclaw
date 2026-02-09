@@ -5,13 +5,6 @@ read_when:
   - WhatsApp 에서 멀티 에이전트 응답 디버깅
 status: experimental
 title: "브로드캐스트 그룹"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:02Z
 ---
 
 # 브로드캐스트 그룹
@@ -170,7 +163,7 @@ Agents:
 4. **브로드캐스트 목록에 없는 경우**:
    - 일반 라우팅 적용(첫 번째로 일치하는 바인딩)
 
-참고: 브로드캐스트 그룹은 채널 허용 목록이나 그룹 활성화 규칙(멘션/명령 등)을 우회하지 않습니다. 메시지가 처리 대상이 될 때 *어떤 에이전트가 실행되는지*만 변경합니다.
+참고: 브로드캐스트 그룹은 채널 허용 목록이나 그룹 활성화 규칙(멘션/명령 등)을 우회하지 않습니다. 메시지가 처리 대상이 될 때 _어떤 에이전트가 실행되는지_만 변경합니다.
 
 ### 세션 격리
 
@@ -442,7 +435,7 @@ interface OpenClawConfig {
 - [ ] 동적 에이전트 선택(메시지 내용에 따라 에이전트 선택)
 - [ ] 에이전트 우선순위(일부 에이전트가 먼저 응답)
 
-## 함께 보기
+## See Also
 
 - [멀티 에이전트 구성](/tools/multi-agent-sandbox-tools)
 - [라우팅 구성](/channels/channel-routing)

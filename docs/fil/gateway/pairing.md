@@ -5,31 +5,24 @@ read_when:
   - Pagdaragdag ng mga CLI flow para sa pag-apruba ng mga remote na node
   - Pagpapalawak ng gateway protocol gamit ang node management
 title: "Gateway-Owned Pairing"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # Gateway-owned pairing (Option B)
 
-Sa Gateway-owned pairing, ang **Gateway** ang pinagmumulan ng katotohanan kung aling mga node
-ang pinapayagang sumali. Ang mga UI (macOS app, mga client sa hinaharap) ay mga frontend lang na
-nag-aapruba o tumatanggi sa mga nakabinbing request.
+In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
+are allowed to join. UIs (macOS app, future clients) are just frontends that
+approve or reject pending requests.
 
-**Mahalaga:** Gumagamit ang mga WS node ng **device pairing** (role `node`) sa panahon ng `connect`.
-Ang `node.pair.*` ay isang hiwalay na pairing store at **hindi** nito ginagate ang WS handshake.
-Tanging ang mga client na tahasang tumatawag sa `node.pair.*` ang gumagamit ng flow na ito.
+**Important:** WS nodes use **device pairing** (role `node`) during `connect`.
+`node.pair.*` is a separate pairing store and does **not** gate the WS handshake.
+Only clients that explicitly call `node.pair.*` use this flow.
 
 ## Concepts
 
 - **Pending request**: isang node ang humiling na sumali; nangangailangan ng pag-apruba.
 - **Paired node**: naaprubahang node na may inilabas na auth token.
-- **Transport**: ipinapasa ng Gateway WS endpoint ang mga request ngunit hindi ito nagdedesisyon
-  ng membership. (Ang legacy TCP bridge support ay deprecated/inalis na.)
+- **Transport**: the Gateway WS endpoint forwards requests but does not decide
+  membership. (Legacy TCP bridge support is deprecated/removed.)
 
 ## Paano gumagana ang pairing
 

@@ -3,13 +3,6 @@ summary: "Stappen voor gezondheidscontroles voor kanaalconnectiviteit"
 read_when:
   - Diagnose van de gezondheid van het WhatsApp-kanaal
 title: "Gezondheidscontroles"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:23Z
 ---
 
 # Gezondheidscontroles (CLI)

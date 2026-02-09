@@ -4,23 +4,16 @@ read_when:
   - คุณต้องการให้บริการโมเดลจากเครื่อง GPU ของคุณเอง
   - คุณกำลังเชื่อมต่อ LM Studio หรือพร็อกซีที่เข้ากันได้กับ OpenAI
   - คุณต้องการคำแนะนำโมเดลภายในเครื่องที่ปลอดภัยที่สุด
-title: "โมเดลภายในเครื่อง"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:15Z
+title: "Local Models"
 ---
 
-# โมเดลภายในเครื่อง
+# Local models
 
-ทำได้ แต่ OpenClaw คาดหวังบริบทขนาดใหญ่และการป้องกัน prompt injection ที่แข็งแกร่ง การ์ดขนาดเล็กจะตัดบริบทและทำให้ความปลอดภัยรั่วไหล ตั้งเป้าให้สูง: **≥2 Mac Studio ที่อัดเต็มหรือชุด GPU เทียบเท่า(~$30k+)** GPU เดียว **24 GB** ใช้ได้เฉพาะพรอมต์ที่เบากว่าและมีความหน่วงสูงขึ้น ใช้ **เวอร์ชันโมเดลที่ใหญ่/ขนาดเต็มที่สุดที่คุณรันได้**; เช็กพอยต์ที่ถูกควอนไทซ์หนักหรือ “ขนาดเล็ก” จะเพิ่มความเสี่ยงต่อ prompt injection(ดู [Security](/gateway/security)).
+Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 
 ## แนะนำ: LM Studio + MiniMax M2.1 (Responses API, ขนาดเต็ม)
 
-สแตกภายในเครื่องที่ดีที่สุดในปัจจุบัน โหลด MiniMax M2.1 ใน LM Studio เปิดเซิร์ฟเวอร์ภายในเครื่อง(ค่าเริ่มต้น `http://127.0.0.1:1234`) และใช้ Responses API เพื่อแยกการให้เหตุผลออกจากข้อความสุดท้าย
+Best current local stack. สแตกภายในเครื่องที่ดีที่สุดในปัจจุบัน โหลด MiniMax M2.1 ใน LM Studio เปิดเซิร์ฟเวอร์ภายในเครื่อง(ค่าเริ่มต้น `http://127.0.0.1:1234`) และใช้ Responses API เพื่อแยกการให้เหตุผลออกจากข้อความสุดท้าย
 
 ```json5
 {
@@ -114,12 +107,12 @@ x-i18n:
 
 ### การโฮสต์ตามภูมิภาค/การกำหนดเส้นทางข้อมูล
 
-- MiniMax/Kimi/GLM แบบโฮสต์ก็มีบน OpenRouter พร้อมเอ็นด์พอยต์ที่ปักหมุดภูมิภาค(เช่น โฮสต์ในสหรัฐฯ) เลือกเวอร์ชันตามภูมิภาคที่นั่นเพื่อคงทราฟฟิกไว้ในเขตอำนาจที่คุณเลือก ขณะเดียวกันยังใช้ `models.mode: "merge"` สำหรับฟอลแบ็ก Anthropic/OpenAI
+- Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned endpoints (e.g., US-hosted). MiniMax/Kimi/GLM แบบโฮสต์ก็มีบน OpenRouter พร้อมเอ็นด์พอยต์ที่ปักหมุดภูมิภาค(เช่น โฮสต์ในสหรัฐฯ) เลือกเวอร์ชันตามภูมิภาคที่นั่นเพื่อคงทราฟฟิกไว้ในเขตอำนาจที่คุณเลือก ขณะเดียวกันยังใช้ `models.mode: "merge"` สำหรับฟอลแบ็ก Anthropic/OpenAI
 - โลคัลล้วนยังเป็นเส้นทางความเป็นส่วนตัวที่แข็งแกร่งที่สุด; การกำหนดเส้นทางแบบโฮสต์ตามภูมิภาคคือทางสายกลางเมื่อคุณต้องการฟีเจอร์ผู้ให้บริการแต่ต้องการควบคุมการไหลของข้อมูล
 
 ## พร็อกซีภายในเครื่องที่เข้ากันได้กับ OpenAI อื่นๆ
 
-vLLM, LiteLLM, OAI-proxy หรือเกตเวย์แบบกำหนดเองใช้ได้ หากเปิดเอ็นด์พอยต์สไตล์ OpenAI แบบ `/v1` แทนที่บล็อกผู้ให้บริการด้านบนด้วยเอ็นด์พอยต์และโมเดล ID ของคุณ:
+vLLM, LiteLLM, OAI-proxy หรือเกตเวย์แบบกำหนดเองใช้ได้ หากเปิดเอ็นด์พอยต์สไตล์ OpenAI แบบ `/v1` แทนที่บล็อกผู้ให้บริการด้านบนด้วยเอ็นด์พอยต์และโมเดล ID ของคุณ: Replace the provider block above with your endpoint and model ID:
 
 ```json5
 {

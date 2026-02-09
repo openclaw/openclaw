@@ -5,18 +5,13 @@ read_when:
   - 視覚的ワークスペース向けのエージェント制御を追加する場合
   - WKWebView の Canvas 読み込みをデバッグする場合
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:37Z
 ---
 
 # Canvas（macOS アプリ）
 
-macOS アプリは、`WKWebView` を使用して、エージェント制御の **Canvas パネル** を埋め込みます。これは、HTML/CSS/JS、A2UI、および小規模なインタラクティブ UI サーフェス向けの軽量な視覚的ワークスペースです。
+macOS アプリは、`WKWebView` を使用して、エージェント制御の **Canvas パネル** を埋め込みます。これは、HTML/CSS/JS、A2UI、および小規模なインタラクティブ UI サーフェス向けの軽量な視覚的ワークスペースです。 It
+は、HTML/CSS/JS、A2UI、小型対話型
+UI サーフェス用の軽量なビジュアルワークスペースです。
 
 ## Canvas の保存場所
 
@@ -43,7 +38,7 @@ Canvas パネルは、**カスタム URL スキーム** を介してこれらの
 - ローカルの Canvas ファイルが変更されると自動的に再読み込みします。
 - 同時に表示される Canvas パネルは 1 つのみです（必要に応じてセッションが切り替わります）。
 
-Canvas は、設定 → **Allow Canvas** から無効化できます。無効化すると、canvas ノードのコマンドは `CANVAS_DISABLED` を返します。
+キャンバスは設定 → **キャンバスを許可**から無効にできます。 Canvas は、設定 → **Allow Canvas** から無効化できます。無効化すると、canvas ノードのコマンドは `CANVAS_DISABLED` を返します。
 
 ## エージェント API の提供範囲
 
@@ -70,6 +65,7 @@ openclaw nodes canvas snapshot --node <id>
 
 ## Canvas における A2UI
 
+A2UI はゲートウェイの canvas ホストによってホストされ、Canvas パネル内でレンダリングされます。
 A2UI は Gateway の canvas host によってホストされ、Canvas パネル内にレンダリングされます。Gateway が Canvas host をアドバタイズすると、macOS アプリは初回オープン時に A2UI host ページへ自動的にナビゲートします。
 
 デフォルトの A2UI host URL:
@@ -100,7 +96,7 @@ EOFA2
 openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
-簡易スモークテスト:
+クイックスモーク:
 
 ```bash
 openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"

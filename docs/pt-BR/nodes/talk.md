@@ -4,13 +4,6 @@ read_when:
   - Implementando o modo Talk no macOS/iOS/Android
   - Alterando comportamento de voz/TTS/interrupção
 title: "Modo Talk"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:21Z
 ---
 
 # Modo Talk

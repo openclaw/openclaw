@@ -1,16 +1,9 @@
 ---
-summary: "게이트웨이와 채널을 위한 상태 점검 및 안내식 복구를 제공하는 `openclaw doctor` CLI 참조"
+summary: "`openclaw doctor`에 대한 CLI 참조 (상태 확인 + 안내식 복구)"
 read_when:
   - 연결/인증 문제가 있으며 안내식 해결을 원할 때
-  - 업데이트 후 정상 동작 여부를 점검하고 싶을 때
+  - 업데이트를 완료했고 정상 여부를 확인하고 싶음
 title: "doctor"
-x-i18n:
-  source_path: cli/doctor.md
-  source_hash: 92310aa3f3d111e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:22Z
 ---
 
 # `openclaw doctor`

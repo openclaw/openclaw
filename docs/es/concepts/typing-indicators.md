@@ -3,13 +3,6 @@ summary: "Cuándo OpenClaw muestra indicadores de escritura y cómo ajustarlos"
 read_when:
   - Cambiar el comportamiento o los valores predeterminados de los indicadores de escritura
 title: "Indicadores de escritura"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:17Z
 ---
 
 # Indicadores de escritura

@@ -5,18 +5,11 @@ read_when:
   - Nagde-debug ka kung bakit may “alam” ang model tungkol sa isang bagay (o nakalimutan ito)
   - Gusto mong bawasan ang context overhead (/context, /status, /compact)
 title: "Context"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:29Z
 ---
 
 # Context
 
-Ang “Context” ay **lahat ng ipinapadala ng OpenClaw sa model para sa isang run**. Nililimitahan ito ng **context window** ng model (token limit).
+Ang “Context” ay **lahat ng ipinapadala ng OpenClaw sa modelo para sa isang run**. Ito ay nalilimitahan ng **context window** ng modelo (token limit).
 
 Pang-baguhan na mental model:
 
@@ -28,7 +21,7 @@ Ang context ay _hindi kapareho_ ng “memory”: ang memory ay maaaring i-store 
 
 ## Mabilis na pagsisimula (suriin ang context)
 
-- `/status` → mabilis na view ng “gaano kapuno ang aking window?” + mga setting ng session.
+- `/status` → mabilis na “gaano kapuno ang aking window?” na view + mga setting ng session.
 - `/context list` → kung ano ang na-inject + tinatayang laki (bawat file + kabuuan).
 - `/context detail` → mas detalyadong breakdown: laki bawat file, laki ng schema bawat tool, laki ng entry bawat skill, at laki ng system prompt.
 - `/usage tokens` → magdagdag ng per-reply usage footer sa mga normal na sagot.
@@ -96,7 +89,7 @@ Lahat ng natatanggap ng model ay binibilang, kabilang ang:
 
 ## Paano binubuo ng OpenClaw ang system prompt
 
-Ang system prompt ay **pagmamay-ari ng OpenClaw** at muling binubuo sa bawat run. Kabilang dito ang:
+Ang system prompt ay **pagmamay-ari ng OpenClaw** at muling binubuo sa bawat run. Kasama rito ang:
 
 - Listahan ng tool + maiikling paglalarawan.
 - Listahan ng Skills (metadata lang; tingnan sa ibaba).
@@ -119,26 +112,26 @@ Bilang default, nag-i-inject ang OpenClaw ng isang nakapirming set ng workspace 
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (unang run lang)
 
-Ang malalaking file ay tine-truncate bawat file gamit ang `agents.defaults.bootstrapMaxChars` (default na `20000` chars). Ipinapakita ng `/context` ang **raw vs injected** na mga laki at kung may naganap na truncation.
+Ang malalaking file ay tina-truncate kada file gamit ang `agents.defaults.bootstrapMaxChars` (default na `20000` chars). `/context` ay nagpapakita ng **raw vs injected** na laki at kung may nangyaring truncation.
 
 ## Skills: ano ang na-inject vs nilo-load kapag kailangan
 
-Kasama sa system prompt ang isang compact na **skills list** (pangalan + paglalarawan + lokasyon). May tunay itong overhead.
+Kasama sa system prompt ang isang compact na **skills list** (pangalan + paglalarawan + lokasyon). May tunay na overhead ang listahang ito.
 
-Ang mga instruksyon ng Skill ay _hindi_ kasama bilang default. Inaasahan ang model na `read` ang `SKILL.md` ng Skill **kapag kailangan lang**.
+Ang mga instruction ng skill ay _hindi_ kasama bilang default. Inaasahang `babasa` ang modelo ng `SKILL.md` ng skill **kung kinakailangan lamang**.
 
 ## Tools: may dalawang gastos
 
 Nakaaapekto ang mga tool sa context sa dalawang paraan:
 
 1. **Teksto ng listahan ng tool** sa system prompt (ang nakikita mo bilang “Tooling”).
-2. **Mga schema ng tool** (JSON). Ipinapadala ang mga ito sa model para makatawag ito ng mga tool. Binibilang ang mga ito sa context kahit hindi mo nakikita bilang plain text.
+2. **Mga tool schema** (JSON). Ipinapadala ang mga ito sa modelo upang makatawag ito ng mga tool. Bilang sila sa context kahit hindi mo sila nakikita bilang plain text.
 
 Ibinibigay ng `/context detail` ang breakdown ng pinakamalalaking schema ng tool para makita mo kung alin ang nangingibabaw.
 
 ## Mga command, direktiba, at “inline shortcuts”
 
-Pinoproseso ng Gateway ang mga slash command. May ilang magkakaibang pag-uugali:
+Ang mga slash command ay hinahawakan ng Gateway. May ilang magkakaibang behavior:
 
 - **Standalone commands**: isang mensahe na `/...` lang ay tatakbo bilang command.
 - **Mga direktiba**: `/think`, `/verbose`, `/reasoning`, `/elevated`, `/model`, `/queue` ay inaalis bago makita ng model ang mensahe.

@@ -3,13 +3,6 @@ summary: "Sandbox pro Agent + Werkzeugeinschränkungen, Priorität und Beispiele
 title: Multi-Agent-Sandbox & Werkzeuge
 read_when: "Sie möchten Sandboxing pro Agent oder pro Agent Tool-Allow-/Deny-Richtlinien in einem Multi-Agent-Gateway."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:44Z
 ---
 
 # Multi-Agent-Sandbox- & Werkzeugkonfiguration
@@ -247,7 +240,7 @@ Werkzeugrichtlinien (global, Agent, Sandbox) unterstützen `group:*`-Einträge, 
 
 `tools.elevated` ist die globale Basislinie (senderbasierte Allowlist). `agents.list[].tools.elevated` kann Elevated für bestimmte Agenten weiter einschränken (beide müssen erlauben).
 
-Minderungsstrategien:
+Klimaschutzmuster:
 
 - Verweigern Sie `exec` für nicht vertrauenswürdige Agenten (`agents.list[].tools.deny: ["exec"]`)
 - Vermeiden Sie das Allowlisting von Absendern, die zu eingeschränkten Agenten routen

@@ -5,13 +5,6 @@ read_when:
   - すでに Nix / NixOS / Home Manager を使用している場合
   - すべてをピン留めし、宣言的に管理したい場合
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:16Z
 ---
 
 # Nix インストール
@@ -39,9 +32,9 @@ Reference the nix-openclaw README for module options.
 
 > **📦 完全ガイド: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> nix-openclaw リポジトリは、Nix インストールに関する単一の正確な情報源です。このページは簡単な概要にすぎません。
+> nix-openclaw リポジトリは、Nix インストールに関する単一の正確な情報源です。このページは簡単な概要にすぎません。 このページは簡単な概要です。
 
-## 利用できるもの
+## あなたが得るもの
 
 - Gateway + macOS アプリ + ツール（whisper、spotify、cameras）— すべてピン留め済み
 - 再起動後も維持される Launchd サービス
@@ -56,13 +49,14 @@ Reference the nix-openclaw README for module options.
 
 OpenClaw は、設定を決定論的にし、自動インストールフローを無効化する **Nix モード** をサポートします。
 以下をエクスポートすることで有効化できます。
+エクスポートして有効にします:
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
 macOS では、GUI アプリはシェルの環境変数を自動的に継承しません。そのため、
-defaults 経由で Nix モードを有効化することもできます。
+defaults 経由で Nix モードを有効化することもできます。 34. デフォルト設定から Nix モードを有効にすることもできます:
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
@@ -95,7 +89,8 @@ apps/macos/Sources/OpenClaw/Resources/Info.plist
 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) は、このテンプレートをアプリバンドルにコピーし、
 動的フィールド（バンドル ID、バージョン / ビルド、Git SHA、Sparkle キー）をパッチします。
 これにより、SwiftPM パッケージングおよび Nix ビルド（完全な Xcode ツールチェーンに依存しない）において、
-plist の決定論性が維持されます。
+plist の決定論性が維持されます。 これにより、SwiftPM
+パッケージングとNixビルド(完全なXcodeツールチェーンに依存しない)のリスト決定性が維持されます。
 
 ## 関連
 

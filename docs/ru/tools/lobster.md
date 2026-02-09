@@ -5,13 +5,6 @@ description: Typed workflow runtime for OpenClaw — composable pipelines with a
 read_when:
   - Вам нужны детерминированные многошаговые рабочие процессы с явными подтверждениями
   - Вам нужно возобновлять рабочий процесс без повторного выполнения предыдущих шагов
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:20Z
 ---
 
 # Lobster

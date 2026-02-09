@@ -4,13 +4,6 @@ read_when:
   - Du vill ha den snabbaste lokala utvecklingsloopen (bun + watch)
   - Du stöter på problem med Bun install/patch/livscykelskript
 title: "Bun (experimentellt)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:37Z
 ---
 
 # Bun (experimentellt)
@@ -18,7 +11,7 @@ x-i18n:
 Mål: köra detta repo med **Bun** (valfritt, rekommenderas inte för WhatsApp/Telegram)
 utan att avvika från pnpm-arbetsflöden.
 
-⚠️ **Rekommenderas inte för Gateway-körtid** (buggar i WhatsApp/Telegram). Använd Node i produktion.
+⚠️ **Rekommenderas inte för Gateway runtime** (WhatsApp/Telegram buggar). Använd nod för produktion.
 
 ## Status
 
@@ -34,7 +27,7 @@ Standard:
 bun install
 ```
 
-Obs: `bun.lock`/`bun.lockb` är gitignorerade, så det blir ingen repo-churn oavsett. Om du vill ha _inga skrivningar till lockfiler_:
+Notera: `bun.lock`/`bun.lockb` är gitignorerade, så det finns ingen repo churn i alla fall. Om du vill ha _inga låsfilsskrivningar_:
 
 ```sh
 bun install --no-save
@@ -49,8 +42,8 @@ bun run vitest run
 
 ## Bun-livscykelskript (blockerade som standard)
 
-Bun kan blockera beroendenas livscykelskript om de inte uttryckligen betros (`bun pm untrusted` / `bun pm trust`).
-För detta repo krävs de vanligast blockerade skripten inte:
+Bun kan blockera beroenden livscykelskript om inte uttryckligen betrodda (`bun pm untrusted` / `bun pm trust`).
+För detta repo, är de ofta blockerade skript inte nödvändiga:
 
 - `@whiskeysockets/baileys` `preinstall`: kontrollerar Node major >= 20 (vi kör Node 22+).
 - `protobufjs` `postinstall`: skickar varningar om inkompatibla versionsscheman (inga byggartefakter).
@@ -63,4 +56,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## Förbehåll
 
-- Vissa skript hårdkodar fortfarande pnpm (t.ex. `docs:build`, `ui:*`, `protocol:check`). Kör dem via pnpm tills vidare.
+- Vissa skript fortfarande hårdkod pnpm (t.ex. `docs:build`, `ui:*`, `protocol:check`). Kör dem via pnpm för tillfället.

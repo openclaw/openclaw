@@ -3,13 +3,6 @@ summary: "Projektets oprindelse, bidragydere og licens."
 read_when:
   - Du vil kende projektets baggrund eller bidragyder-kreditter
 title: "Credits"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:32Z
 ---
 
 ## Navnet
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS, fordi enhver rummet-hummer har brug for en tids- og ru
 
 MIT - Fri som en hummer i havet.
 
-> "Vi leger alle bare med vores egne prompts." (En AI, sandsynligvis høj på tokens)
+> "Vi er alle bare leger med vores egne prompter." (En AI, sandsynligvis højt på tokens)

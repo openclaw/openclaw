@@ -4,13 +4,6 @@ read_when:
   - Centrum rozwiązywania problemów skierowało Cię tutaj w celu pogłębionej diagnozy
   - Potrzebujesz stabilnych sekcji runbooka opartych na objawach z dokładnymi poleceniami
 title: "Rozwiązywanie problemów"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:31Z
 ---
 
 # Rozwiązywanie problemów z Gateway
@@ -48,7 +41,7 @@ openclaw config get channels
 openclaw logs --follow
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - Oczekujące parowanie dla nadawców DM-ów.
 - Bramy wzmiankowania w grupach (`requireMention`, `mentionPatterns`).
@@ -78,7 +71,7 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - Prawidłowy adres URL sondy i adres URL dashboardu.
 - Niezgodność trybu/tokena uwierzytelniania między klientem a gateway.
@@ -108,7 +101,7 @@ openclaw doctor
 openclaw gateway status --deep
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - `Runtime: stopped` ze wskazówkami wyjścia.
 - Niezgodność konfiguracji usługi (`Config (cli)` vs `Config (service)`).
@@ -138,7 +131,7 @@ openclaw logs --follow
 openclaw config get channels
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - Politykę DM-ów (`pairing`, `allowlist`, `open`, `disabled`).
 - Listę dozwolonych grup oraz wymagania dotyczące wzmianek.
@@ -169,7 +162,7 @@ openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - Włączony cron i obecność następnego wybudzenia.
 - Stan historii uruchomień zadań (`ok`, `skipped`, `error`).
@@ -200,7 +193,7 @@ openclaw logs --follow
 openclaw status
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - Węzeł online z oczekiwanymi możliwościami.
 - Nadania uprawnień systemu operacyjnego dla kamery/mikrofonu/lokalizacji/ekranu.
@@ -231,7 +224,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-Zwróć uwagę na:
+Szukaj:
 
 - Prawidłową ścieżkę do pliku wykonywalnego przeglądarki.
 - Osiągalność profilu CDP.
@@ -254,7 +247,7 @@ Powiązane:
 
 Większość problemów po aktualizacji to dryf konfiguracji lub egzekwowanie teraz bardziej rygorystycznych ustawień domyślnych.
 
-### 1) Zmieniło się zachowanie uwierzytelniania i nadpisywania URL
+### 1. Zmieniło się zachowanie uwierzytelniania i nadpisywania URL
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Typowe sygnatury:
 - `gateway connect failed:` → błędny docelowy URL.
 - `unauthorized` → punkt końcowy osiągalny, ale niewłaściwe uwierzytelnianie.
 
-### 2) Bardziej rygorystyczne ograniczenia bindowania i uwierzytelniania
+### 2. Bardziej rygorystyczne ograniczenia bindowania i uwierzytelniania
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ Typowe sygnatury:
 - `refusing to bind gateway ... without auth` → niezgodność bindowania i uwierzytelniania.
 - `RPC probe: failed` przy działającym runtime → gateway żyje, ale jest niedostępny z bieżącym uwierzytelnianiem/URL.
 
-### 3) Zmienił się stan parowania i tożsamości urządzeń
+### 3. Zmienił się stan parowania i tożsamości urządzeń
 
 ```bash
 openclaw devices list

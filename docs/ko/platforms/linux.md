@@ -4,13 +4,6 @@ read_when:
   - Linux 컴패니언 앱 상태를 찾는 경우
   - 플랫폼 범위 또는 기여를 계획하는 경우
 title: "Linux 앱"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:38Z
 ---
 
 # Linux 앱

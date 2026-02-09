@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou modificar o comportamento de exec em segundo plano
   - Ao depurar tarefas de exec de longa duração
 title: "Exec em Segundo Plano e Ferramenta de Processo"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:51Z
 ---
 
 # Exec em Segundo Plano + Ferramenta de Processo

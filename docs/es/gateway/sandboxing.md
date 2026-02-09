@@ -3,13 +3,6 @@ summary: "Cómo funciona el sandboxing de OpenClaw: modos, alcances, acceso al w
 title: Sandboxing
 read_when: "Quiere una explicación dedicada del sandboxing o necesita ajustar agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:43Z
 ---
 
 # Sandboxing

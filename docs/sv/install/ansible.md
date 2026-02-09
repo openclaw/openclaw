@@ -5,13 +5,6 @@ read_when:
   - Du behöver en brandväggsisolerad installation med VPN-åtkomst
   - Du distribuerar till fjärrservrar med Debian/Ubuntu
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:40Z
 ---
 
 # Ansible-installation
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 Fullständig guide: [github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> Repositoriet openclaw-ansible är den primära källan för Ansible-distribution. Den här sidan är en snabb översikt.
+> Den öppen-ansible repo är källan till sanningen för Ansible utplacering. Denna sida är en snabb översikt.
 
 ## Vad du får
 
@@ -57,7 +50,7 @@ Ansible-playbooken installerar och konfigurerar:
 5. **OpenClaw** (värdbaserad, inte containeriserad)
 6. **Systemd-tjänst** (autostart med säkerhetshärdning)
 
-Obs: Gateway körs **direkt på värden** (inte i Docker), men agent-sandboxar använder Docker för isolering. Se [Sandboxing](/gateway/sandboxing) för detaljer.
+Obs: Gateway körs **direkt på värden** (inte i Docker), men agent sandlådor använder Docker för isolering. Se [Sandboxing](/gateway/sandboxing) för detaljer.
 
 ## Konfiguration efter installation
 
@@ -108,11 +101,11 @@ Testa extern attackyta:
 nmap -p- YOUR_SERVER_IP
 ```
 
-Bör visa att **endast port 22** (SSH) är öppen. Alla andra tjänster (gateway, Docker) är nedlåsta.
+Bör visa **endast port 22** (SSH) öppen. Alla andra tjänster (gateway, Docker) är låsta.
 
 ### Docker-tillgänglighet
 
-Docker installeras för **agent-sandboxar** (isolerad verktygskörning), inte för att köra gatewayn i sig. Gatewayn binder endast till localhost och är åtkomlig via Tailscale VPN.
+Docker är installerat för **agent sandlådor** (isolerat verktygsutförande), inte för att köra själva gatewayen. Gateway binder endast till localhost och är tillgänglig via Tailscale VPN.
 
 Se [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) för sandbox-konfiguration.
 
@@ -140,7 +133,7 @@ ansible-galaxy collection install -r requirements.yml
 
 ## Uppdatera OpenClaw
 
-Ansible-installationsprogrammet konfigurerar OpenClaw för manuella uppdateringar. Se [Uppdatering](/install/updating) för standardflödet.
+Den Ansible installeraren ställer in OpenClaw för manuella uppdateringar. Se [Updating](/install/updating) för standarduppdateringsflödet.
 
 För att köra Ansible-playbooken igen (t.ex. vid konfigurationsändringar):
 

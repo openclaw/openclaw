@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการขั้นตอน LLM แบบเฉพาะ JSON ภายในเวิร์กโฟลว์
   - คุณต้องการเอาต์พุต LLM ที่ตรวจสอบด้วยสคีมาสำหรับงานอัตโนมัติ
 title: "งาน LLM"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:43Z
 ---
 
 # งาน LLM
@@ -72,7 +65,7 @@ x-i18n:
 }
 ```
 
-`allowedModels` เป็น allowlist ของสตริง `provider/model` หากตั้งค่าไว้ คำขอใดๆ
+`allowedModels` is an allowlist of `provider/model` strings. `allowedModels` เป็น allowlist ของสตริง `provider/model` หากตั้งค่าไว้ คำขอใดๆ
 ที่อยู่นอกเหนือรายการจะถูกปฏิเสธ
 
 ## พารามิเตอร์ของเครื่องมือ

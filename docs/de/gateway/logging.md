@@ -4,13 +4,6 @@ read_when:
   - Ändern der Logging-Ausgabe oder -Formate
   - Debugging der CLI- oder Gateway-Ausgabe
 title: "Logging"
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:19Z
 ---
 
 # Logging

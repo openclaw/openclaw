@@ -1,20 +1,13 @@
 ---
-summary: 「用於尋找 Gateway 閘道器的節點探索與傳輸（Bonjour、Tailscale、SSH）」
+summary: "用於尋找 Gateway 閘道器的節點探索與傳輸（Bonjour、Tailscale、SSH）"
 read_when:
   - 實作或變更 Bonjour 探索／廣播
   - 調整遠端連線模式（直接 vs SSH）
   - 為遠端節點設計節點探索與配對
-title: 「探索與傳輸」
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:09Z
+title: "探索與傳輸"
 ---
 
-# 探索與傳輸
+# Discovery & transports
 
 OpenClaw 有兩個在表面上看起來相似、但實際上不同的問題：
 
@@ -23,9 +16,9 @@ OpenClaw 有兩個在表面上看起來相似、但實際上不同的問題：
 
 設計目標是將所有網路探索／廣播集中在 **Node Gateway**（`openclaw gateway`）中，並讓用戶端（mac 應用程式、iOS）作為消費者。
 
-## 術語
+## Terms
 
-- **Gateway**：單一、長時間執行的 Gateway 閘道器程序，負責擁有狀態（工作階段、配對、節點登錄）並執行頻道。多數設定在每台主機上使用一個；也可以建立隔離的多 Gateway 架構。
+- **Gateway**：單一、長時間執行的 Gateway 閘道器程序，負責擁有狀態（工作階段、配對、節點登錄）並執行頻道。多數設定在每台主機上使用一個；也可以建立隔離的多 Gateway 架構。 Most setups use one per host; isolated multi-gateway setups are possible.
 - **Gateway WS（控制平面）**：預設在 `127.0.0.1:18789` 的 WebSocket 端點；可透過 `gateway.bind` 綁定至 LAN／tailnet。
 - **Direct WS 傳輸**：面向 LAN／tailnet 的 Gateway WS 端點（不使用 SSH）。
 - **SSH 傳輸（後備）**：透過 SSH 轉送 `127.0.0.1:18789` 以進行遠端控制。
@@ -49,14 +42,14 @@ OpenClaw 有兩個在表面上看起來相似、但實際上不同的問題：
 
 ## 探索輸入（用戶端如何得知 Gateway 閘道器的位置）
 
-### 1) Bonjour／mDNS（僅限 LAN）
+### 1. Bonjour／mDNS（僅限 LAN）
 
-Bonjour 為盡力而為機制，且不會跨網路。僅用於「同一個 LAN」的便利性。
+Bonjour 為盡力而為，且不會跨網路。 僅用於「同一個 LAN」的便利性。
 
 目標方向：
 
-- **Gateway 閘道器** 透過 Bonjour 廣播其 WS 端點。
-- 用戶端瀏覽並顯示「選擇一個 Gateway 閘道器」清單，然後儲存所選的端點。
+- **Gateway** 會透過 Bonjour 廣播其 WS 端點。
+- 用戶端會瀏覽並顯示「選擇一個 Gateway」清單，然後儲存所選端點。
 
 疑難排解與信標細節：[Bonjour](/gateway/bonjour)。
 
@@ -75,44 +68,44 @@ Bonjour 為盡力而為機制，且不會跨網路。僅用於「同一個 LAN�
   - `cliPath=<path>`（選用；可執行的 `openclaw` 進入點或二進位檔的絕對路徑）
   - `tailnetDns=<magicdns>`（選用提示；當 Tailscale 可用時自動偵測）
 
-停用／覆寫：
+Disable/override:
 
 - `OPENCLAW_DISABLE_BONJOUR=1` 會停用廣播。
 - `gateway.bind` 於 `~/.openclaw/openclaw.json` 中控制 Gateway 的綁定模式。
 - `OPENCLAW_SSH_PORT` 會覆寫在 TXT 中廣播的 SSH 連接埠（預設為 22）。
 - `OPENCLAW_TAILNET_DNS` 會發布 `tailnetDns` 提示（MagicDNS）。
-- `OPENCLAW_CLI_PATH` 會覆寫所廣播的 CLI 路徑。
+- `OPENCLAW_CLI_PATH` overrides the advertised CLI path.
 
-### 2) Tailnet（跨網路）
+### 2. Tailnet（跨網路）
 
-對於倫敦／維也納這類的設定，Bonjour 無法提供協助。建議的「直接」目標為：
+對於倫敦/維也納這類設定，Bonjour 無法提供協助。 The recommended “direct” target is:
 
 - Tailscale MagicDNS 名稱（優先）或穩定的 tailnet IP。
 
 如果 Gateway 閘道器能偵測到其在 Tailscale 環境下執行，會將 `tailnetDns` 作為選用提示發布給用戶端（包含廣域信標）。
 
-### 3) 手動／SSH 目標
+### 3. 手動／SSH 目標
 
 當沒有直接路由（或已停用直接連線）時，用戶端仍可透過 SSH 轉送 local loopback 的 Gateway 連接埠來連線。
 
 請參見 [Remote access](/gateway/remote)。
 
-## 傳輸選擇（用戶端策略）
+## Transport selection (client policy)
 
 建議的用戶端行為：
 
 1. 若已設定且可連線的已配對直接端點存在，則使用它。
 2. 否則，若 Bonjour 在 LAN 上找到 Gateway 閘道器，提供一鍵「使用此 Gateway」的選項，並將其儲存為直接端點。
-3. 否則，若已設定 tailnet DNS／IP，嘗試直接連線。
+3. 1. 否則，若已設定 tailnet DNS/IP，則嘗試直接連線。
 4. 否則，退回使用 SSH。
 
-## 配對與身分驗證（直接傳輸）
+## 配對與驗證（直接傳輸）
 
-Gateway 閘道器是節點／用戶端准入的事實來源。
+Gateway 是節點/用戶端准入的唯一真實來源。
 
-- 配對請求在 Gateway 閘道器中建立／核准／拒絕（參見 [Gateway pairing](/gateway/pairing)）。
+- 配對請求會在 Gateway 中建立/核准/拒絕（請參閱 [Gateway pairing](/gateway/pairing)）。
 - Gateway 閘道器會強制：
-  - 身分驗證（權杖／金鑰對）
+  - 驗證（權杖 / 金鑰對）
   - 範圍／ACL（Gateway 閘道器不是對所有方法的原始代理）
   - 速率限制
 

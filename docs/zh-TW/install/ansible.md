@@ -5,13 +5,6 @@ read_when:
   - 你需要透過 VPN 存取、並具備防火牆隔離的設定
   - 你要部署到遠端的 Debian／Ubuntu 伺服器
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: b1e1e1ea13bff37b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:24Z
 ---
 
 # Ansible 安裝
@@ -28,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 
 > **📦 完整指南：[github.com/openclaw/openclaw-ansible](https://github.com/openclaw/openclaw-ansible)**
 >
-> openclaw-ansible 儲存庫是 Ansible 部署的唯一事實來源。本頁僅提供快速概覽。
+> The openclaw-ansible repo is the source of truth for Ansible deployment. 安裝內容
 
 ## 你會得到什麼
 
@@ -46,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/openclaw/openclaw-ansible/main/inst
 - **網路**：可連線至網際網路以安裝套件
 - **Ansible**：2.14+（由快速開始腳本自動安裝）
 
-## 安裝內容
+## 詳情請參閱 [Sandboxing](/gateway/sandboxing)。
 
 Ansible playbook 會安裝並設定以下項目：
 
@@ -57,7 +50,7 @@ Ansible playbook 會安裝並設定以下項目：
 5. **OpenClaw**（直接安裝於主機，不使用容器）
 6. **Systemd 服務**（自動啟動並套用安全性強化）
 
-注意：Gateway 會 **直接在主機上執行**（不在 Docker 中），但代理程式沙箱會使用 Docker 進行隔離。詳細說明請參考 [Sandboxing](/gateway/sandboxing)。
+注意：Gateway 會 **直接在主機上執行**（不在 Docker 中），但代理程式沙箱會使用 Docker 進行隔離。詳細說明請參考 [Sandboxing](/gateway/sandboxing)。 安裝後腳本將引導你完成：
 
 ## 安裝後設定
 
@@ -67,7 +60,7 @@ Ansible playbook 會安裝並設定以下項目：
 sudo -i -u openclaw
 ```
 
-安裝後腳本將引導你完成：
+應該 **只開放 22 埠**（SSH）。
 
 1. **入門引導精靈**：設定 OpenClaw
 2. **提供者登入**：連接 WhatsApp／Telegram／Discord／Signal
@@ -108,11 +101,11 @@ openclaw channels login
 nmap -p- YOUR_SERVER_IP
 ```
 
-結果應該 **僅顯示連接埠 22**（SSH）為開放狀態。所有其他服務（Gateway、Docker）皆已鎖定。
+所有其他服務（gateway、Docker）都已鎖定。 Docker 是為了 **agent sandboxes**（隔離的工具執行）而安裝的，並非用來執行 gateway 本身。
 
 ### Docker 可用性
 
-Docker 僅用於 **代理程式沙箱**（隔離的工具執行），並非用來執行 Gateway 本身。Gateway 僅繫結至 localhost，並透過 Tailscale VPN 存取。
+gateway 只綁定在 localhost，並可透過 Tailscale VPN 存取。 標準更新流程請參閱 [Updating](/install/updating)。
 
 請參考 [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) 以了解沙箱設定。
 
@@ -140,7 +133,7 @@ ansible-galaxy collection install -r requirements.yml
 
 ## 更新 OpenClaw
 
-Ansible 安裝器會將 OpenClaw 設定為手動更新。標準更新流程請參考 [Updating](/install/updating)。
+Ansible 安裝器會將 OpenClaw 設定為手動更新。標準更新流程請參考 [Updating](/install/updating)。 疑難排解
 
 若要重新執行 Ansible playbook（例如套用設定變更）：
 
@@ -151,7 +144,7 @@ cd openclaw-ansible
 
 注意：此操作具備冪等性，可安全地重複執行多次。
 
-## 疑難排解
+## 相關
 
 ### 防火牆阻擋了我的連線
 
@@ -207,7 +200,7 @@ openclaw channels login
 - [Technical Details](https://github.com/openclaw/openclaw-ansible/blob/main/docs/architecture.md)
 - [Troubleshooting Guide](https://github.com/openclaw/openclaw-ansible/blob/main/docs/troubleshooting.md)
 
-## 相關資源
+## 你遇到了 Bun 安裝／修補／生命週期腳本的問題
 
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) — 完整部署指南
 - [Docker](/install/docker) — 容器化 Gateway 設定

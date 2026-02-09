@@ -4,13 +4,6 @@ read_when:
   - Ikaw ay nagwi-wire ng mga surface ng paggamit/quota ng provider
   - Kailangan mong ipaliwanag ang gawi ng usage tracking o mga kinakailangan sa auth
 title: "Pagsubaybay sa Paggamit"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:21Z
 ---
 
 # Pagsubaybay sa paggamit
@@ -22,7 +15,7 @@ x-i18n:
 
 ## Saan ito lumalabas
 
-- `/status` sa mga chat: status card na mayaman sa emoji na may session tokens + tinatayang gastos (API key lamang). Ipinapakita ang paggamit ng provider para sa **kasalukuyang model provider** kapag available.
+- `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available.
 - `/usage off|tokens|full` sa mga chat: per-response na footer ng paggamit (OAuth ay nagpapakita ng tokens lamang).
 - `/usage cost` sa mga chat: lokal na buod ng gastos na pinagsama-sama mula sa mga log ng session ng OpenClaw.
 - CLI: `openclaw status --usage` nagpi-print ng kumpletong breakdown bawat provider.

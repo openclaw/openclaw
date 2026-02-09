@@ -1,15 +1,8 @@
 ---
-summary: „Agenten‑Sitzungswerkzeuge zum Auflisten von Sitzungen, Abrufen der Historie und Senden sitzungsübergreifender Nachrichten“
+summary: "„Agenten‑Sitzungswerkzeuge zum Auflisten von Sitzungen, Abrufen der Historie und Senden sitzungsübergreifender Nachrichten“"
 read_when:
   - Hinzufügen oder Ändern von Sitzungswerkzeugen
-title: „Sitzungswerkzeuge“
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:08Z
+title: "Sitzungswerkzeuge"
 ---
 
 # Sitzungswerkzeuge
@@ -68,7 +61,7 @@ Zeilenform (JSON):
 
 ## sessions_history
 
-Ruft das Transkript für eine Sitzung ab.
+Abrufen des Transkripts für eine Sitzung.
 
 Parameter:
 

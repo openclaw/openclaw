@@ -4,20 +4,13 @@ read_when:
   - Gusto mong tumanggap ang OpenClaw ng mga DM sa pamamagitan ng Nostr
   - Nagsi-setup ka ng desentralisadong pagmemensahe
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Nostr
 
 **Status:** Opsyonal na plugin (naka-disable bilang default).
 
-Ang Nostr ay isang desentralisadong protocol para sa social networking. Pinapagana ng channel na ito ang OpenClaw na tumanggap at sumagot sa mga naka-encrypt na direct message (DM) sa pamamagitan ng NIP-04.
+17. Ang Nostr ay isang desentralisadong protocol para sa social networking. 18. Pinapagana ng channel na ito ang OpenClaw na tumanggap at tumugon sa mga naka-encrypt na direct messages (DMs) sa pamamagitan ng NIP-04.
 
 ## I-install (on demand)
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Sanggunian sa konpigurasyon
 
-| Key          | Type     | Default                                     | Paglalarawan                       |
-| ------------ | -------- | ------------------------------------------- | ---------------------------------- |
-| `privateKey` | string   | required                                    | Private key sa `nsec` o hex format |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Mga URL ng relay (WebSocket)       |
-| `dmPolicy`   | string   | `pairing`                                   | Patakaran sa access ng DM          |
-| `allowFrom`  | string[] | `[]`                                        | Mga pinapayagang pubkey ng sender  |
-| `enabled`    | boolean  | `true`                                      | I-enable/i-disable ang channel     |
-| `name`       | string   | -                                           | Display name                       |
-| `profile`    | object   | -                                           | Metadata ng profile (NIP-01)       |
+| Key          | Type                                                         | Default                                     | Paglalarawan                                    |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ----------------------------------------------- |
+| `privateKey` | string                                                       | required                                    | Private key sa `nsec` o hex format              |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Mga URL ng relay (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | Patakaran sa access ng DM                       |
+| `allowFrom`  | string[] | `[]`                                        | Mga pinapayagang pubkey ng sender               |
+| `enabled`    | boolean                                                      | `true`                                      | I-enable/i-disable ang channel                  |
+| `name`       | string                                                       | -                                           | Display name                                    |
+| `profile`    | object                                                       | -                                           | Metadata ng profile (NIP-01) |
 
 ## Metadata ng profile
 
-Ang data ng profile ay ipinapublish bilang isang NIP-01 `kind:0` event. Maaari mo itong pamahalaan mula sa Control UI (Channels -> Nostr -> Profile) o itakda direkta sa config.
+19. Ang profile data ay inilalathala bilang isang NIP-01 `kind:0` event. 20. Maaari mo itong pamahalaan mula sa Control UI (Channels -> Nostr -> Profile) o direktang itakda sa config.
 
 Halimbawa:
 
@@ -176,7 +169,7 @@ Mga tip:
 | NIP    | Status    | Paglalarawan                                      |
 | ------ | --------- | ------------------------------------------------- |
 | NIP-01 | Supported | Pangunahing format ng event + metadata ng profile |
-| NIP-04 | Supported | Naka-encrypt na DM (`kind:4`)                     |
+| NIP-04 | Supported | Naka-encrypt na DM (`kind:4`)  |
 | NIP-17 | Planned   | Gift-wrapped na DM                                |
 | NIP-44 | Planned   | Versioned encryption                              |
 

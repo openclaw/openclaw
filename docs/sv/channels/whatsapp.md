@@ -3,18 +3,11 @@ summary: "WhatsApp‑integration (webbkanal): inloggning, inkorg, svar, media oc
 read_when:
   - Arbetar med WhatsApp/webbkanalens beteende eller inkorgsroutning
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:03Z
 ---
 
 # WhatsApp (webbkanal)
 
-Status: Endast WhatsApp Web via Baileys. Gateway äger sessionen/s.
+Status: WhatsApp Web via Baileys bara. Gateway äger session(erna).
 
 ## Snabbstart (nybörjare)
 
@@ -62,13 +55,13 @@ Inaktivera med:
 
 ## Skaffa ett telefonnummer (två lägen)
 
-WhatsApp kräver ett riktigt mobilnummer för verifiering. VoIP‑ och virtuella nummer blockeras oftast. Det finns två stödda sätt att köra OpenClaw på WhatsApp:
+WhatsApp kräver ett riktigt mobilnummer för verifiering. VoIP och virtuella nummer är oftast blockerade. Det finns två sätt att köra OpenClaw på WhatsApp:
 
 ### Dedikerat nummer (rekommenderas)
 
-Använd ett **separat telefonnummer** för OpenClaw. Bästa UX, ren routning, inga egen‑chatt‑egenheter. Idealisk setup: **reserv/gammal Android‑telefon + eSIM**. Låt den vara på Wi‑Fi och ström, och länka via QR.
+Använd ett **separat telefonnummer** för OpenClaw. Bästa UX, ren routing, inga självchatt egendomar. Idealisk inställning: **reserv/gammal Android-telefon + eSIM**. Lämna den på Wi‐Fi och makt, och länka den via QR.
 
-**WhatsApp Business:** Du kan använda WhatsApp Business på samma enhet med ett annat nummer. Perfekt för att hålla din personliga WhatsApp separat — installera WhatsApp Business och registrera OpenClaw‑numret där.
+**WhatsApp Business:** Du kan använda WhatsApp Business på samma enhet med ett annat nummer. Bra för att hålla din personliga WhatsApp separat — installera WhatsApp Business och registrera OpenClaw nummer där.
 
 **Exempelkonfig (dedikerat nummer, allowlist för en användare):**
 
@@ -83,14 +76,14 @@ Använd ett **separat telefonnummer** för OpenClaw. Bästa UX, ren routning, in
 }
 ```
 
-**Parningsläge (valfritt):**  
-Om du vill använda parning i stället för allowlist, sätt `channels.whatsapp.dmPolicy` till `pairing`. Okända avsändare får en parningskod; godkänn med:
-`openclaw pairing approve whatsapp <code>`
+**Parkopplingsläge (valfritt):**
+Om du vill para ihop istället för tillåten lista, ange `channels.whatsapp.dmPolicy` till `parkoppling`. Okända avsändare får en parningskod; godkänn med:
+`openclaw parkoppling godkänna whatsapp <code>`
 
 ### Personligt nummer (reserv)
 
-Snabb reserv: kör OpenClaw på **ditt eget nummer**. Skicka meddelanden till dig själv (WhatsApp ”Meddelande till dig själv”) för testning så att du inte spammar kontakter. Räkna med att läsa verifieringskoder på din huvudtelefon under installation och experiment. **Måste aktivera egen‑chatt‑läge.**  
-När guiden frågar efter ditt personliga WhatsApp‑nummer, ange telefonen du kommer att skicka från (ägaren/avsändaren), inte assistentens nummer.
+Snabb reserv: kör OpenClaw på **ditt eget nummer**. Meddelande själv (WhatsApp “Meddelande själv”) för att testa så att du inte spam kontakter. Räkna med att läsa verifieringskoder på din huvudtelefon under installation och experiment. \*\*Måste aktivera självchatt läge. \*
+När guiden frågar efter ditt personliga WhatsApp-nummer, ange telefonen kommer du att meddelande från (ägaren/avsändaren), inte assistentnumret.
 
 **Exempelkonfig (personligt nummer, egen‑chatt):**
 
@@ -104,8 +97,8 @@ När guiden frågar efter ditt personliga WhatsApp‑nummer, ange telefonen du k
 }
 ```
 
-Svar i egen‑chatt använder som standard `[{identity.name}]` när det är satt (annars `[openclaw]`)
-om `messages.responsePrefix` inte är satt. Sätt det explicit för att anpassa eller inaktivera
+Självchatt svarar standard på `[{identity.name}]` när satt (annars `[openclaw]`)
+om `messages.responsePrefix` är unset. Ange uttryckligen att anpassa eller inaktivera
 prefixet (använd `""` för att ta bort det).
 
 ### Tips för nummeranskaffning
@@ -117,7 +110,7 @@ prefixet (använd `""` för att ta bort det).
 
 **Undvik:** TextNow, Google Voice, de flesta ”gratis SMS”‑tjänster — WhatsApp blockerar dessa aggressivt.
 
-**Tips:** Numret behöver bara ta emot ett verifierings‑SMS. Därefter består WhatsApp Web‑sessioner via `creds.json`.
+**Tips:** Numret behöver endast ta emot ett verifierings-SMS. Efter det, WhatsApp Web sessioner kvarstår via `creds.json`.
 
 ## Varför inte Twilio?
 
@@ -192,8 +185,8 @@ Noteringar:
 
 ## WhatsApp‑FAQ: skicka meddelanden + parning
 
-**Kommer OpenClaw att meddela slumpmässiga kontakter när jag länkar WhatsApp?**  
-Nej. Standard‑DM‑policy är **parning**, så okända avsändare får bara en parningskod och deras meddelande **behandlas inte**. OpenClaw svarar bara på chattar den tar emot, eller på sändningar du explicit triggar (agent/CLI).
+**Kommer OpenClaw meddelanden slumpmässiga kontakter när jag länkar WhatsApp?**  
+Nej. Standardpolicy för DM är **ihopkoppling**, så okända avsändare får bara en parningskod och deras meddelande **behandlas inte**. OpenClaw svarar bara på chattar som den tar emot, eller för att skicka dig explicit trigger (agent/CLI).
 
 **Hur fungerar parning på WhatsApp?**  
 Parning är en DM‑grind för okända avsändare:
@@ -202,15 +195,16 @@ Parning är en DM‑grind för okända avsändare:
 - Godkänn med: `openclaw pairing approve whatsapp <code>` (lista med `openclaw pairing list whatsapp`).
 - Koder upphör efter 1 timme; väntande förfrågningar är begränsade till 3 per kanal.
 
-**Kan flera personer använda olika OpenClaw‑instanser på ett WhatsApp‑nummer?**  
-Ja, genom att routa varje avsändare till en annan agent via `bindings` (peer `kind: "dm"`, avsändar‑E.164 som `+15551234567`). Svar kommer fortfarande från **samma WhatsApp‑konto**, och direktchattar kollapsar till varje agents huvudsession, så använd **en agent per person**. DM‑åtkomstkontroll (`dmPolicy`/`allowFrom`) är global per WhatsApp‑konto. Se [Multi‑Agent Routing](/concepts/multi-agent).
+\*\*Kan flera personer använda olika OpenClaw-instanser på en WhatsApp-nummer? \*  
+Ja, genom att dirigera varje avsändare till en annan agent via `bindings` (peer `kind: "dm"`, avsändare E. 64 som `+15551234567`). Svaren kommer fortfarande från **samma WhatsApp-konto**, och direkta chattar kollapsar till varje agents huvudsession, så använd **en agent per person**. DM åtkomstkontroll (`dmPolicy`/`allowFrom`) är global per WhatsApp-konto. Se [Multi-Agent Routing](/concepts/multi-agent).
 
-**Varför frågar guiden efter mitt telefonnummer?**  
-Guiden använder det för att sätta din **allowlist/ägare** så att dina egna DM tillåts. Det används inte för automatisk sändning. Om du kör på ditt personliga WhatsApp‑nummer, använd samma nummer och aktivera `channels.whatsapp.selfChatMode`.
+\*\*Varför ber du om mitt telefonnummer i guiden? \*  
+Guiden använder den för att ställa in din **allowlist/owner** så att dina egna DMs är tillåtna. Det används inte för automatisk sändning. Om du kör på ditt personliga WhatsApp-nummer, använd samma nummer och aktivera `channels.whatsapp.selfChatMode`.
 
 ## Meddelandenormalisering (vad modellen ser)
 
 - `Body` är aktuell meddelandetext med kuvert.
+
 - Kontext för citerade svar **läggs alltid till**:
 
   ```
@@ -223,6 +217,7 @@ Guiden använder det för att sätta din **allowlist/ägare** så att dina egna 
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = citerad text eller mediaplatshållare
   - `ReplyToSender` = E.164 när känt
+
 - Inkommande meddelanden med enbart media använder platshållare:
   - `<media:image|video|audio|document|sticker>`
 
@@ -250,7 +245,7 @@ Guiden använder det för att sätta din **allowlist/ägare** så att dina egna 
 
 ## Bekräftelsereaktioner (auto‑reaktion vid mottagning)
 
-WhatsApp kan automatiskt skicka emoji‑reaktioner till inkommande meddelanden omedelbart vid mottagning, innan boten genererar ett svar. Detta ger användare direkt feedback att deras meddelande mottogs.
+WhatsApp kan automatiskt skicka emoji-reaktioner till inkommande meddelanden omedelbart vid mottagandet, innan boten genererar ett svar. Detta ger omedelbar feedback till användare som deras meddelande mottogs.
 
 **Konfiguration:**
 
@@ -268,7 +263,7 @@ WhatsApp kan automatiskt skicka emoji‑reaktioner till inkommande meddelanden o
 
 **Alternativ:**
 
-- `emoji` (sträng): Emoji som används för bekräftelse (t.ex. "👀", "✅", "📨"). Tom eller utelämnad = funktionen inaktiverad.
+- `emoji` (sträng): Emoji att använda för bekräftelse (t.ex., "👀", "✅", "📨"). Tom eller utelämnad = funktion inaktiverad.
 - `direct` (boolesk, standard: `true`): Skicka reaktioner i direkt-/DM‑chattar.
 - `group` (sträng, standard: `"mentions"`): Beteende i gruppchattar:
   - `"always"`: Reagera på alla gruppmeddelanden (även utan @omnämnande)
@@ -332,7 +327,7 @@ WhatsApp kan automatiskt skicka emoji‑reaktioner till inkommande meddelanden o
 
 WhatsApp skickar ljud som **röstmeddelanden** (PTT‑bubbla).
 
-- Bäst resultat: OGG/Opus. OpenClaw skriver om `audio/ogg` till `audio/ogg; codecs=opus`.
+- Bästa resultat: OGG/Opus. OpenClaw skriver om `audio/ogg` till `audio/ogg; codecs=opus`.
 - `[[audio_as_voice]]` ignoreras för WhatsApp (ljud skickas redan som röstmeddelande).
 
 ## Mediebegränsningar + optimering
@@ -347,7 +342,7 @@ WhatsApp skickar ljud som **röstmeddelanden** (PTT‑bubbla).
 - **Gateway‑heartbeat** loggar anslutningshälsa (`web.heartbeatSeconds`, standard 60 s).
 - **Agent‑heartbeat** kan konfigureras per agent (`agents.list[].heartbeat`) eller globalt
   via `agents.defaults.heartbeat` (reserv när inga per‑agent‑poster är satta).
-  - Använder den konfigurerade heartbeat‑prompten (standard: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK`‑skip‑beteende.
+  - Använder den konfigurerade hjärtslagsprompten (standard: `Read HEARTBEAT.md om den existerar (arbetsytans sammanhang). Följ den strikt. Sluta inte eller upprepa gamla uppgifter från tidigare chattar. Om inget behöver uppmärksamhet, svara HEARTBEAT_OK.`) + `HEARTBEAT_OK` hoppa över beteende.
   - Leverans går som standard till senast använda kanal (eller konfigurerat mål).
 
 ## Återanslutningsbeteende
@@ -361,21 +356,21 @@ WhatsApp skickar ljud som **röstmeddelanden** (PTT‑bubbla).
 
 - `channels.whatsapp.dmPolicy` (DM‑policy: parning/allowlist/öppen/inaktiverad).
 - `channels.whatsapp.selfChatMode` (samma‑telefon‑setup; boten använder ditt personliga WhatsApp‑nummer).
-- `channels.whatsapp.allowFrom` (DM‑allowlist). WhatsApp använder E.164‑telefonnummer (inga användarnamn).
+- `channels.whatsapp.allowFrom` (DM allowlist). WhatsApp använder E.164 telefonnummer (inga användarnamn).
 - `channels.whatsapp.mediaMaxMb` (tak för sparad inkommande media).
 - `channels.whatsapp.ackReaction` (auto‑reaktion vid mottagning: `{emoji, direct, group}`).
-- `channels.whatsapp.accounts.<accountId>.*` (per‑konto‑inställningar + valfri `authDir`).
-- `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (per‑konto‑tak för inkommande media).
-- `channels.whatsapp.accounts.<accountId>.ackReaction` (åsidosättning av bekräftelsereaktion per konto).
+- `channels.whatsapp.accounts.<accountId>.*` (inställningar per konto + valfria `authDir`).
+- `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (per konto inkommande media cap).
+- `channels.whatsapp.accounts.<accountId>.ackReaction` (reaktionsförflyttning per konto)
 - `channels.whatsapp.groupAllowFrom` (allowlist för gruppavsändare).
 - `channels.whatsapp.groupPolicy` (gruppolicy).
-- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (grupphistorik‑kontext; `0` inaktiverar).
-- `channels.whatsapp.dmHistoryLimit` (DM‑historikgräns i användarturer). Åsidosättningar per användare: `channels.whatsapp.dms["<phone>"].historyLimit`.
+- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (grupp historia sammanhang; `0` inaktiveras).
+- `channels.whatsapp.dmHistoryLimit` (DM historikgräns i användarvänder). Åsidosättningar per användare: `channels.whatsapp.dms["<phone>"].historyLimit`.
 - `channels.whatsapp.groups` (grupp‑allowlist + standard för mention‑gating; använd `"*"` för att tillåta alla)
 - `channels.whatsapp.actions.reactions` (grind för WhatsApp‑verktygsreaktioner).
 - `agents.list[].groupChat.mentionPatterns` (eller `messages.groupChat.mentionPatterns`)
 - `messages.groupChat.historyLimit`
-- `channels.whatsapp.messagePrefix` (inkommande prefix; per konto: `channels.whatsapp.accounts.<accountId>.messagePrefix`; föråldrat: `messages.messagePrefix`)
+- `channels.whatsapp.messagePrefix` (inkommande prefix; per-account: `channels.whatsapp.accounts.<accountId>.messagePrefix`; föråldrat: `messages.messagePrefix`)
 - `messages.responsePrefix` (utgående prefix)
 - `agents.defaults.mediaMaxMb`
 - `agents.defaults.heartbeat.every`
@@ -405,9 +400,9 @@ WhatsApp skickar ljud som **röstmeddelanden** (PTT‑bubbla).
 **Länkad men frånkopplad / återanslutningsloop**
 
 - Symptom: `channels status` visar `running, disconnected` eller varnar ”Linked but disconnected”.
-- Åtgärd: `openclaw doctor` (eller starta om gatewayen). Om det kvarstår, länka om via `channels login` och inspektera `openclaw logs --follow`.
+- Fix: `openclaw doctor` (eller starta om gateway). Om det kvarstår, länka tillbaka via `kanalers inloggning` och inspektera `openclaw loggar --follow`.
 
 **Bun‑runtime**
 
-- Bun **rekommenderas inte**. WhatsApp (Baileys) och Telegram är opålitliga på Bun.
-  Kör gatewayen med **Node**. (Se runtime‑notis i Kom igång.)
+- Bun är **inte rekommenderas**. WhatsApp (Baileys) och Telegram är opålitliga på Bun.
+  Kör gateway med **Node**. (Se Kom igång runtime note.)

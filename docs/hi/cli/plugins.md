@@ -4,13 +4,6 @@ read_when:
   - आप इन-प्रोसेस Gateway प्लगइन्स को इंस्टॉल या प्रबंधित करना चाहते हैं
   - आप प्लगइन लोड विफलताओं का डिबग करना चाहते हैं
 title: "प्लगइन्स"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:04Z
 ---
 
 # `openclaw plugins`
@@ -35,9 +28,9 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-बंडल किए गए प्लगइन्स OpenClaw के साथ आते हैं, लेकिन प्रारंभ में अक्षम रहते हैं। उन्हें सक्रिय करने के लिए `plugins enable` का उपयोग करें।
+Bundled plugins ship with OpenClaw but start disabled. 1. उन्हें सक्रिय करने के लिए `plugins enable` का उपयोग करें।
 
-सभी प्लगइन्स के साथ एक `openclaw.plugin.json` फ़ाइल होनी चाहिए, जिसमें एक इनलाइन JSON Schema (`configSchema`, भले ही खाली हो) शामिल हो। गायब/अमान्य मैनिफ़ेस्ट या स्कीमा के कारण प्लगइन लोड नहीं होगा और विन्यास मान्यकरण विफल हो जाएगा।
+2. सभी प्लगइन्स के साथ एक `openclaw.plugin.json` फ़ाइल होनी चाहिए, जिसमें एक इनलाइन JSON Schema (`configSchema`, भले ही खाली हो) शामिल हो। 3. गायब/अमान्य मैनिफ़ेस्ट या स्कीमा प्लगइन को लोड होने से रोकते हैं और कॉन्फ़िग वैलिडेशन विफल कर देते हैं।
 
 ### इंस्टॉल
 
@@ -45,7 +38,7 @@ openclaw plugins update --all
 openclaw plugins install <path-or-spec>
 ```
 
-सुरक्षा टिप्पणी: प्लगइन इंस्टॉल को कोड चलाने जैसा मानें। पिन की गई संस्करणों को प्राथमिकता दें।
+4. सुरक्षा नोट: प्लगइन इंस्टॉल को कोड चलाने जैसा मानें। 5. पिन किए गए संस्करणों को प्राथमिकता दें।
 
 समर्थित आर्काइव्स: `.zip`, `.tgz`, `.tar.gz`, `.tar`।
 

@@ -3,13 +3,6 @@ summary: "Integração do WhatsApp (canal web): login, inbox, respostas, mídia 
 read_when:
   - Trabalhando no comportamento do canal WhatsApp/web ou no roteamento do inbox
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:39Z
 ---
 
 # WhatsApp (canal web)
@@ -211,6 +204,7 @@ O assistente o usa para definir sua **allowlist/proprietário** para que suas pr
 ## Normalização de mensagens (o que o modelo vê)
 
 - `Body` é o corpo da mensagem atual com envelope.
+
 - O contexto de resposta citada é **sempre anexado**:
 
   ```
@@ -223,6 +217,7 @@ O assistente o usa para definir sua **allowlist/proprietário** para que suas pr
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = corpo citado ou placeholder de mídia
   - `ReplyToSender` = E.164 quando conhecido
+
 - Mensagens recebidas apenas com mídia usam placeholders:
   - `<media:image|video|audio|document|sticker>`
 

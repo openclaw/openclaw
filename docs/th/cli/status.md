@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการการวินิจฉัยอย่างรวดเร็วของสุขภาพช่องทาง+ผู้รับเซสชันล่าสุด
   - คุณต้องการสถานะ“all”ที่สามารถคัดลอกไปวางเพื่อการดีบัก
 title: "สถานะ"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:58Z
 ---
 
 # `openclaw status`

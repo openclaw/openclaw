@@ -5,13 +5,6 @@ read_when:
   - Fejlfinding af Gateway-autentificering, bind-tilstande og forbindelser
   - Opdagelse af gateways via Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:11Z
 ---
 
 # Gateway CLI
@@ -42,10 +35,10 @@ openclaw gateway run
 
 Noter:
 
-- Som standard nægter Gateway at starte, medmindre `gateway.mode=local` er sat i `~/.openclaw/openclaw.json`. Brug `--allow-unconfigured` til ad-hoc/dev-kørsler.
+- Som standard nægter Gateway at starte medmindre `gateway.mode=local` er sat i `~/.openclaw/openclaw.json`. Brug `-- allow-unconfigured` til ad-hoc/dev kører.
 - Binding ud over loopback uden auth er blokeret (sikkerheds-guardrail).
 - `SIGUSR1` udløser en genstart i processen, når autoriseret (aktivér `commands.restart` eller brug gateway-værktøjet/config apply/update).
-- `SIGINT`/`SIGTERM`-handlere stopper gateway-processen, men gendanner ikke eventuel tilpasset terminaltilstand. Hvis du wrapper CLI’en med en TUI eller raw-mode input, så gendan terminalen før exit.
+- `SIGINT`/`SIGTERM` handlere stoppe gateway proces, men de gendanner ikke nogen brugerdefineret terminaltilstand. Hvis du ombryder CLI med en TUI eller rå tilstand input, gendan terminalen før du afslutter.
 
 ### Indstillinger
 
@@ -85,8 +78,8 @@ Delte indstillinger (hvor understøttet):
 - `--timeout <ms>`: timeout/budget (varierer pr. kommando).
 - `--expect-final`: vent på et “final”-svar (agentkald).
 
-Bemærk: når du sætter `--url`, falder CLI’en ikke tilbage til config- eller miljølegitimationsoplysninger.
-Angiv `--token` eller `--password` eksplicit. Manglende eksplicitte legitimationsoplysninger er en fejl.
+Bemærk: Når du angiver `--url`, falder CLI ikke tilbage til config eller miljø legitimationsoplysninger.
+Pass `--token` eller `--password` eksplicitt. Manglende eksplicitte legitimationsoplysninger er en fejl.
 
 ### `gateway health`
 
@@ -114,12 +107,12 @@ Indstillinger:
 
 ### `gateway probe`
 
-`gateway probe` er “debug alt”-kommandoen. Den prober altid:
+`gateway sonde` er kommandoen “debug everything”. Det altid sonder:
 
 - din konfigurerede remote gateway (hvis sat), og
 - localhost (loopback) **selv hvis remote er konfigureret**.
 
-Hvis flere gateways er tilgængelige, udskrives de alle. Flere gateways understøttes, når du bruger isolerede profiler/porte (fx en rescue-bot), men de fleste installationer kører stadig en enkelt gateway.
+Hvis flere gateways er tilgængelige, udskriver det dem alle. Flere gateways understøttes, når du bruger isolerede profiler/porte (f.eks. en rescue bot), men de fleste installerer stadig en enkelt gateway.
 
 ```bash
 openclaw gateway probe

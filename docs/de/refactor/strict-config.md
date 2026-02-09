@@ -1,17 +1,10 @@
 ---
-summary: „Strikte Konfigurationsvalidierung + ausschließlich Doctor-Migrationen“
+summary: "„Strikte Konfigurationsvalidierung + ausschließlich Doctor-Migrationen“"
 read_when:
   - Entwurf oder Implementierung von Verhalten zur Konfigurationsvalidierung
   - Arbeit an Konfigurationsmigrationen oder Doctor-Workflows
   - Umgang mit Plugin-Konfigurationsschemata oder dem Gating beim Plugin-Laden
-title: „Strikte Konfigurationsvalidierung“
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:13Z
+title: "„Strikte Konfigurationsvalidierung“"
 ---
 
 # Strikte Konfigurationsvalidierung (Doctor-only-Migrationen)

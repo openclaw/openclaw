@@ -3,22 +3,15 @@ summary: "Mga kakayahan ng OpenClaw sa iba’t ibang channel, routing, media, at
 read_when:
   - Gusto mo ng kumpletong listahan ng sinusuportahan ng OpenClaw
 title: "Mga tampok"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:18Z
 ---
 
 ## Mga highlight
 
 <Columns>
-  <Card title="Mga channel" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord, at iMessage gamit ang iisang Gateway.
   </Card>
-  <Card title="Mga plugin" icon="plug">
+  <Card title="Plugins" icon="plug">
     Magdagdag ng Mattermost at iba pa gamit ang mga extension.
   </Card>
   <Card title="Routing" icon="route">
@@ -27,10 +20,10 @@ x-i18n:
   <Card title="Media" icon="image">
     Mga larawan, audio, at dokumento papasok at palabas.
   </Card>
-  <Card title="Apps at UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web Control UI at macOS companion app.
   </Card>
-  <Card title="Mga mobile node" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Mga iOS at Android node na may suporta sa Canvas.
   </Card>
 </Columns>
@@ -55,6 +48,6 @@ x-i18n:
 - Android node na may pairing, Canvas, chat, at camera
 
 <Note>
-Inalis na ang mga legacy path ng Claude, Codex, Gemini, at Opencode. Ang Pi na lang ang
+Inalis na ang mga legacy na Claude, Codex, Gemini, at Opencode path. Ang Pi lamang ang
 coding agent path.
 </Note>

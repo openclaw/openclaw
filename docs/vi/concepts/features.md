@@ -3,34 +3,27 @@ summary: "Các khả năng của OpenClaw trên các kênh, định tuyến, med
 read_when:
   - Bạn muốn danh sách đầy đủ những gì OpenClaw hỗ trợ
 title: "Tính năng"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:31Z
 ---
 
 ## Điểm nổi bật
 
 <Columns>
-  <Card title="Kênh" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord và iMessage với một Gateway duy nhất.
   </Card>
-  <Card title="Plugin" icon="plug">
+  <Card title="Plugins" icon="plug">
     Thêm Mattermost và nhiều nền tảng khác bằng các extension.
   </Card>
-  <Card title="Định tuyến" icon="route">
+  <Card title="Routing" icon="route">
     Định tuyến đa tác tử với các phiên được cô lập.
   </Card>
   <Card title="Media" icon="image">
     Hình ảnh, âm thanh và tài liệu hai chiều.
   </Card>
-  <Card title="Ứng dụng và UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web Control UI và ứng dụng đồng hành macOS.
   </Card>
-  <Card title="Nút di động" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Các nút iOS và Android với hỗ trợ Canvas.
   </Card>
 </Columns>
@@ -55,6 +48,5 @@ x-i18n:
 - Nút Android với ghép cặp, Canvas, chat và camera
 
 <Note>
-Các đường dẫn Legacy Claude, Codex, Gemini và Opencode đã bị loại bỏ. Pi là
-đường dẫn tác tử lập trình duy nhất.
+Legacy Claude, Codex, Gemini, and Opencode paths have been removed. 9. Pi là đường dẫn tác nhân lập trình duy nhất.
 </Note>

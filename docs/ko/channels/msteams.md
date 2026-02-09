@@ -3,13 +3,6 @@ summary: "Microsoft Teams 봇 지원 상태, 기능 및 구성"
 read_when:
   - MS Teams 채널 기능 작업 중
 title: "Microsoft Teams"
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:01Z
 ---
 
 # Microsoft Teams (플러그인)
@@ -123,7 +116,7 @@ OpenClaw 가 로컬 설치 경로를 자동으로 제안합니다.
 - `groupPolicy="allowlist"` 이고 팀 허용 목록이 존재하면, 나열된 팀/채널만 허용됩니다(멘션 게이트).
 - 구성 마법사는 `Team/Channel` 항목을 받아 저장합니다.
 - 시작 시 OpenClaw 는 팀/채널 및 사용자 허용 목록 이름을 ID 로 해석하고( Graph 권한이 허용될 때)
-  매핑을 로그로 기록합니다. 해석되지 않은 항목은 입력된 그대로 유지됩니다.
+  매핑을 로그로 기록합니다.
 
 예시:
 
@@ -162,14 +155,14 @@ OpenClaw 를 구성하기 전에 Azure Bot 리소스를 생성해야 합니다.
 1. [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot) 로 이동합니다.
 2. **Basics** 탭을 채웁니다:
 
-   | 필드               | 값                                            |
-   | ------------------ | --------------------------------------------- |
-   | **Bot handle**     | 봇 이름, 예: `openclaw-msteams` (고유해야 함) |
-   | **Subscription**   | Azure 구독 선택                               |
-   | **Resource group** | 새로 생성 또는 기존 사용                      |
-   | **Pricing tier**   | 개발/테스트용 **Free**                        |
-   | **Type of App**    | **Single Tenant** (권장 - 아래 참고)          |
-   | **Creation type**  | **Create new Microsoft App ID**               |
+   | 필드                 | 값                                                                                                           |
+   | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+   | **Bot handle**     | Your bot name, e.g., `openclaw-msteams` (must be unique) |
+   | **Subscription**   | Azure 구독 선택                                                                                                 |
+   | **Resource group** | 새로 생성 또는 기존 사용                                                                                              |
+   | **Pricing tier**   | 개발/테스트용 **Free**                                                                                            |
+   | **Type of App**    | **Single Tenant** (권장 - 아래 참고)                                                           |
+   | **Creation type**  | **Create new Microsoft App ID**                                                                             |
 
 > **사용 중단 공지:** 새 멀티 테넌트 봇 생성은 2025-07-31 이후로 중단되었습니다. 신규 봇은 **Single Tenant** 를 사용하십시오.
 
@@ -278,6 +271,7 @@ tailscale funnel 3978
    ```
 
    구성 키 대신 환경 변수를 사용할 수도 있습니다:
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -410,12 +404,12 @@ tailscale funnel 3978
 
 ### RSC vs Graph API
 
-| 기능              | RSC 권한          | Graph API                      |
-| ----------------- | ----------------- | ------------------------------ |
-| **실시간 메시지** | 예(웹훅)          | 아니오(폴링만)                 |
-| **과거 메시지**   | 아니오            | 예(히스토리 쿼리 가능)         |
-| **설정 복잡도**   | 앱 매니페스트만   | 관리자 동의 + 토큰 플로우 필요 |
-| **오프라인 동작** | 아니오(실행 필요) | 예(언제든 쿼리)                |
+| 기능          | RSC 권한                        | Graph API                                  |
+| ----------- | ----------------------------- | ------------------------------------------ |
+| **실시간 메시지** | 예(웹훅)      | 아니오(폴링만)                |
+| **과거 메시지**  | 아니오                           | Yes (can query history) |
+| **설정 복잡도**  | App manifest only             | 관리자 동의 + 토큰 플로우 필요                         |
+| **오프라인 동작** | 아니오(실행 필요) | 예(언제든 쿼리)               |
 
 **결론:** RSC 는 실시간 수신용이며, Graph API 는 과거 접근용입니다. 오프라인 중 누락된 메시지를 따라잡으려면 Graph API 와 `ChannelMessage.Read.All` 가 필요합니다(관리자 동의 필요).
 
@@ -442,7 +436,7 @@ Teams 는 HTTP 웹훅으로 메시지를 전달합니다. 처리 시간이 너�
 
 OpenClaw 는 빠르게 반환하고 선제적으로 응답을 보내지만, 매우 느린 응답은 여전히 문제를 일으킬 수 있습니다.
 
-### 포맷팅
+### Formatting
 
 Teams 마크다운은 Slack 이나 Discord 보다 제한적입니다:
 
@@ -488,10 +482,10 @@ Teams 마크다운은 Slack 이나 Discord 보다 제한적입니다:
 
 Teams 는 동일한 기본 데이터 모델 위에 두 가지 채널 UI 스타일을 최근 도입했습니다:
 
-| 스타일                  | 설명                                           | 권장 `replyStyle` |
-| ----------------------- | ---------------------------------------------- | ----------------- |
-| **게시물** (클래식)     | 메시지가 카드로 표시되고 그 아래에 스레드 응답 | `thread` (기본)   |
-| **스레드** (Slack 유사) | 메시지가 Slack 처럼 선형으로 흐름              | `top-level`       |
+| 스타일                                   | 설명                         | 권장 `replyStyle`                  |
+| ------------------------------------- | -------------------------- | -------------------------------- |
+| **게시물** (클래식)      | 메시지가 카드로 표시되고 그 아래에 스레드 응답 | `thread` (기본) |
+| **스레드** (Slack 유사) | 메시지가 Slack 처럼 선형으로 흐름      | `top-level`                      |
 
 **문제:** Teams API 는 채널이 어떤 UI 스타일을 사용하는지 노출하지 않습니다. 잘못된 `replyStyle` 를 사용하면:
 
@@ -532,11 +526,11 @@ Authorization 헤더는 `channels.msteams.mediaAuthAllowHosts` 에 있는 호스
 
 봇은 FileConsentCard 플로우를 사용하여 다이렉트 메시지에서 파일을 보낼 수 있습니다(기본 제공). 그러나 **그룹 채팅/채널에서 파일을 보내려면** 추가 설정이 필요합니다:
 
-| 컨텍스트                  | 파일 전송 방식                            | 필요한 설정                          |
-| ------------------------- | ----------------------------------------- | ------------------------------------ |
-| **다이렉트 메시지**       | FileConsentCard → 사용자 승인 → 봇 업로드 | 즉시 사용 가능                       |
-| **그룹 채팅/채널**        | SharePoint 업로드 → 링크 공유             | `sharePointSiteId` + Graph 권한 필요 |
-| **이미지(모든 컨텍스트)** | Base64 인라인 인코딩                      | 즉시 사용 가능                       |
+| 컨텍스트                                | 파일 전송 방식                         | 필요한 설정                           |
+| ----------------------------------- | -------------------------------- | -------------------------------- |
+| **다이렉트 메시지**                        | FileConsentCard → 사용자 승인 → 봇 업로드 | Works out of the box             |
+| **그룹 채팅/채널**                        | SharePoint 업로드 → 링크 공유           | `sharePointSiteId` + Graph 권한 필요 |
+| **이미지(모든 컨텍스트)** | Base64 인라인 인코딩                   | Works out of the box             |
 
 ### 그룹 채팅에 SharePoint 가 필요한 이유
 
@@ -579,21 +573,21 @@ Authorization 헤더는 `channels.msteams.mediaAuthAllowHosts` 에 있는 호스
 
 ### 공유 동작
 
-| 권한                                    | 공유 동작                                     |
-| --------------------------------------- | --------------------------------------------- |
-| `Sites.ReadWrite.All` 만                | 조직 전체 공유 링크(조직 내 누구나 접근 가능) |
-| `Sites.ReadWrite.All` + `Chat.Read.All` | 사용자별 공유 링크(채팅 멤버만 접근 가능)     |
+| 권한                                      | 공유 동작                                          |
+| --------------------------------------- | ---------------------------------------------- |
+| `Sites.ReadWrite.All` 만                 | 조직 전체 공유 링크(조직 내 누구나 접근 가능) |
+| `Sites.ReadWrite.All` + `Chat.Read.All` | 사용자별 공유 링크(채팅 멤버만 접근 가능)    |
 
 사용자별 공유가 더 안전합니다. `Chat.Read.All` 권한이 없으면 봇은 조직 전체 공유로 폴백합니다.
 
 ### 폴백 동작
 
-| 시나리오                                     | 결과                                           |
-| -------------------------------------------- | ---------------------------------------------- |
-| 그룹 채팅 + 파일 + `sharePointSiteId` 구성됨 | SharePoint 업로드 후 공유 링크 전송            |
-| 그룹 채팅 + 파일 + `sharePointSiteId` 없음   | OneDrive 업로드 시도(실패 가능), 텍스트만 전송 |
-| 개인 채팅 + 파일                             | FileConsentCard 플로우(SharePoint 없이 작동)   |
-| 모든 컨텍스트 + 이미지                       | Base64 인라인 인코딩(SharePoint 없이 작동)     |
+| 시나리오                                | 결과                                                       |
+| ----------------------------------- | -------------------------------------------------------- |
+| 그룹 채팅 + 파일 + `sharePointSiteId` 구성됨 | SharePoint 업로드 후 공유 링크 전송                                |
+| 그룹 채팅 + 파일 + `sharePointSiteId` 없음  | OneDrive 업로드 시도(실패 가능), 텍스트만 전송       |
+| 개인 채팅 + 파일                          | FileConsentCard 플로우(SharePoint 없이 작동) |
+| 모든 컨텍스트 + 이미지                       | Base64 인라인 인코딩(SharePoint 없이 작동)      |
 
 ### 파일 저장 위치
 
@@ -643,12 +637,12 @@ openclaw message send --channel msteams \
 
 MSTeams 대상은 사용자와 대화를 구분하기 위해 접두사를 사용합니다:
 
-| 대상 유형         | 형식                             | 예시                                            |
-| ----------------- | -------------------------------- | ----------------------------------------------- |
-| 사용자(ID 기준)   | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`     |
-| 사용자(이름 기준) | `user:<display-name>`            | `user:John Smith` (Graph API 필요)              |
-| 그룹/채널         | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`        |
-| 그룹/채널(원시)   | `<conversation-id>`              | `19:abc123...@thread.tacv2` (`@thread` 포함 시) |
+| 대상 유형                         | 형식                               | 예시                                                              |
+| ----------------------------- | -------------------------------- | --------------------------------------------------------------- |
+| 사용자(ID 기준) | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                     |
+| 사용자(이름 기준) | `user:<display-name>`            | `user:John Smith` (Graph API 필요)             |
+| 그룹/채널                         | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                        |
+| 그룹/채널(원시)  | `<conversation-id>`              | `19:abc123...@thread.tacv2` (`@thread` 포함 시) |
 
 **CLI 예시:**
 
@@ -728,13 +722,13 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 봇은 프라이빗 채널에서 제한적으로 지원됩니다:
 
-| 기능                | 표준 채널 | 프라이빗 채널         |
-| ------------------- | --------- | --------------------- |
-| 봇 설치             | 예        | 제한적                |
-| 실시간 메시지(웹훅) | 예        | 작동하지 않을 수 있음 |
-| RSC 권한            | 예        | 다르게 동작할 수 있음 |
-| @멘션               | 예        | 봇 접근 가능 시       |
-| Graph API 히스토리  | 예        | 예(권한 필요)         |
+| 기능                             | 표준 채널 | 프라이빗 채널                     |
+| ------------------------------ | ----- | --------------------------- |
+| 봇 설치                           | 예     | 제한적                         |
+| 실시간 메시지(웹훅) | 예     | 작동하지 않을 수 있음                |
+| RSC 권한                         | 예     | 다르게 동작할 수 있음                |
+| @멘션               | 예     | If bot is accessible        |
+| Graph API 히스토리                 | 예     | 예(권한 필요) |
 
 **프라이빗 채널이 작동하지 않을 때의 우회 방법:**
 

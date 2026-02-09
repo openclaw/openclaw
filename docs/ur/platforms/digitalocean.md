@@ -4,13 +4,6 @@ read_when:
   - DigitalOcean پر OpenClaw سیٹ اپ کرنا
   - OpenClaw کے لیے سستی VPS ہوسٹنگ تلاش کرنا
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # DigitalOcean پر OpenClaw
@@ -23,13 +16,13 @@ DigitalOcean پر ایک مستقل OpenClaw Gateway چلانا **$6/ماہ** م
 
 ## لاگت کا موازنہ (2026)
 
-| فراہم کنندہ  | پلان            | خصوصیات             | قیمت/ماہ    | نوٹس                                    |
-| ------------ | --------------- | ------------------- | ----------- | --------------------------------------- |
-| Oracle Cloud | Always Free ARM | 4 OCPU تک، 24GB RAM | $0          | ARM، محدود گنجائش / سائن اپ کی باریکیاں |
+| فراہم کنندہ  | پلان            | خصوصیات             | قیمت/ماہ                                                       | نوٹس                                    |
+| ------------ | --------------- | ------------------- | -------------------------------------------------------------- | --------------------------------------- |
+| Oracle Cloud | Always Free ARM | 4 OCPU تک، 24GB RAM | $0                                                             | ARM، محدود گنجائش / سائن اپ کی باریکیاں |
 | Hetzner      | CX22            | 2 vCPU، 4GB RAM     | €3.79 (~$4) | سب سے سستا بامعاوضہ آپشن                |
-| DigitalOcean | Basic           | 1 vCPU، 1GB RAM     | $6          | آسان UI، اچھی دستاویزات                 |
-| Vultr        | Cloud Compute   | 1 vCPU، 1GB RAM     | $6          | کئی مقامات                              |
-| Linode       | Nanode          | 1 vCPU، 1GB RAM     | $5          | اب Akamai کا حصہ                        |
+| DigitalOcean | Basic           | 1 vCPU، 1GB RAM     | $6                                                             | آسان UI، اچھی دستاویزات                 |
+| Vultr        | Cloud Compute   | 1 vCPU، 1GB RAM     | $6                                                             | کئی مقامات                              |
+| Linode       | Nanode          | 1 vCPU، 1GB RAM     | $5                                                             | اب Akamai کا حصہ                        |
 
 **فراہم کنندہ کا انتخاب:**
 
@@ -45,7 +38,7 @@ DigitalOcean پر ایک مستقل OpenClaw Gateway چلانا **$6/ماہ** م
 - SSH کلید جوڑا (یا پاس ورڈ تصدیق استعمال کرنے کی آمادگی)
 - تقریباً 20 منٹ
 
-## 1) Droplet بنائیں
+## 1. Droplet بنائیں
 
 1. [DigitalOcean](https://cloud.digitalocean.com/) میں لاگ اِن کریں
 2. **Create → Droplets** پر کلک کریں
@@ -63,7 +56,7 @@ DigitalOcean پر ایک مستقل OpenClaw Gateway چلانا **$6/ماہ** م
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) OpenClaw انسٹال کریں
+## 3. OpenClaw انسٹال کریں
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) آن بورڈنگ چلائیں
+## 4. آن بورڈنگ چلائیں
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ openclaw onboard --install-daemon
 - Gateway ٹوکن (خودکار طور پر تیار)
 - ڈیمَن انسٹالیشن (systemd)
 
-## 5) Gateway کی تصدیق کریں
+## 5. Gateway کی تصدیق کریں
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) ڈیش بورڈ تک رسائی
+## 6. ڈیش بورڈ تک رسائی
 
-Gateway بطورِ طے شدہ loopback سے منسلک ہوتا ہے۔ Control UI تک رسائی کے لیے:
+20. گیٹ وے ڈیفالٹ طور پر لوپ بیک پر بائنڈ ہوتا ہے۔ 21. کنٹرول UI تک رسائی کے لیے:
 
 **آپشن A: SSH Tunnel (سفارش کردہ)**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 کھولیں: `http://<tailscale-ip>:18789` (ٹوکن درکار)۔
 
-## 7) اپنے چینلز کنیکٹ کریں
+## 7. اپنے چینلز کنیکٹ کریں
 
 ### Telegram
 
@@ -169,7 +162,7 @@ openclaw channels login whatsapp
 
 ## 1GB RAM کے لیے بہتر بنانا
 
-$6 والے droplet میں صرف 1GB RAM ہے۔ ہموار کارکردگی کے لیے:
+The $6 droplet only has 1GB RAM. 23. چیزوں کو ہموار طریقے سے چلانے کے لیے:
 
 ### Swap شامل کریں (سفارش کردہ)
 
@@ -204,7 +197,7 @@ htop
 - `~/.openclaw/` — کنفیگ، اسناد، سیشن ڈیٹا
 - `~/.openclaw/workspace/` — ورک اسپیس (SOUL.md، میموری وغیرہ)
 
-یہ ریبوٹس کے بعد بھی برقرار رہتی ہیں۔ وقتاً فوقتاً بیک اپ بنائیں:
+24. یہ ریبوٹس کے بعد بھی برقرار رہتے ہیں۔ 25. انہیں باقاعدگی سے بیک اپ کریں:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -228,7 +221,7 @@ Oracle Cloud **Always Free** ARM انسٹینسز فراہم کرتا ہے جو 
 - سائن اپ نازک ہو سکتا ہے (ناکام ہو تو دوبارہ کوشش کریں)
 - ARM آرکیٹیکچر — زیادہ تر چیزیں کام کرتی ہیں، مگر کچھ بائنریز کے لیے ARM بلڈ درکار ہوتے ہیں
 
-مکمل سیٹ اپ گائیڈ کے لیے [Oracle Cloud](/platforms/oracle) دیکھیں۔ سائن اپ کی تجاویز اور اندراج کے عمل میں خرابیوں کے ازالے کے لیے یہ [کمیونٹی گائیڈ](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) ملاحظہ کریں۔
+For the full setup guide, see [Oracle Cloud](/platforms/oracle). 27. سائن اپ کی تجاویز اور اندراج کے عمل میں مسائل کے حل کے لیے یہ [community guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) دیکھیں۔
 
 ---
 

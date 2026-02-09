@@ -5,13 +5,6 @@ read_when:
   - Adicionando controles de agente para espaço de trabalho visual
   - Depurando carregamentos do canvas no WKWebView
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:29Z
 ---
 
 # Canvas (app macOS)
@@ -105,7 +98,7 @@ EOFA2
 openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
-Teste rápido:
+Fumaça rápida:
 
 ```bash
 openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"

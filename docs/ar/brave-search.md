@@ -1,16 +1,9 @@
 ---
 summary: "إعداد واجهة برمجة تطبيقات Brave Search لاستخدام web_search"
 read_when:
-  - "تريد استخدام Brave Search لأداة web_search"
-  - "تحتاج إلى BRAVE_API_KEY أو تفاصيل الخطة"
+  - تريد استخدام Brave Search لأداة web_search
+  - تحتاج إلى BRAVE_API_KEY أو تفاصيل الخطة
 title: "Brave Search"
-x-i18n:
-  source_path: brave-search.md
-  source_hash: 81cd0a13239c13f4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:45Z
 ---
 
 # واجهة برمجة تطبيقات Brave Search

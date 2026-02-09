@@ -3,13 +3,6 @@ summary: "Steg för hälsokontroll av kanalanslutning"
 read_when:
   - Diagnostiserar WhatsApp-kanalens hälsa
 title: "Hälsokontroller"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:17Z
 ---
 
 # Hälsokontroller (CLI)
@@ -28,8 +21,8 @@ Kort guide för att verifiera kanalanslutning utan gissningar.
 ## Djupdiagnostik
 
 - Inloggningsuppgifter på disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime bör vara nylig).
-- Sessionslagring: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (sökvägen kan åsidosättas i konfig). Antal och senaste mottagare exponeras via `status`.
-- Omlänkningsflöde: `openclaw channels logout && openclaw channels login --verbose` när statuskoderna 409–515 eller `loggedOut` visas i loggar. (Obs: QR-inloggningsflödet startar automatiskt om en gång för status 515 efter parkoppling.)
+- Sessionsbutik: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (sökvägen kan åsidosättas i config). Räkna och de senaste mottagarna dyker upp via `status`.
+- Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Observera: QR-inloggningsflödet startar automatiskt om en gång för status 515 efter parning.)
 
 ## När något misslyckas
 
@@ -39,4 +32,4 @@ Kort guide för att verifiera kanalanslutning utan gissningar.
 
 ## Dedikerat ”health”-kommando
 
-`openclaw health --json` frågar den körande Gateway efter dess hälsobild (inga direkta kanalsockets från CLI). Det rapporterar länkade inloggningsuppgifter/auth-ålder när tillgängligt, sammanfattningar av per-kanal-prober, sammanfattning av sessionslagring samt en probduration. Det avslutas med icke-noll om Gateway inte kan nås eller om proben misslyckas/tidsgränsar. Använd `--timeout <ms>` för att åsidosätta standarden på 10 s.
+`openclaw hälsa --json` frågar den körande Gateway för dess hälsa ögonblicksbild (inga direkta kanaluttag från CLI). Den rapporterar länkade krediter/auth ålder när tillgänglig, per kanal sond sammanfattningar, session-store sammanfattning och en sond varaktighet. Den avslutas utan noll om Gateway inte kan nås eller sonden misslyckas/timeouts. Använd `--timeout <ms>` för att åsidosätta 10s standard.

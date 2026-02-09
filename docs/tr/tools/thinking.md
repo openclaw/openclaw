@@ -3,13 +3,6 @@ summary: "/think + /verbose için direktif söz dizimi ve bunların model akıl 
 read_when:
   - Thinking veya verbose direktif ayrıştırmasını ya da varsayılanlarını ayarlarken
 title: "Thinking Düzeyleri"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:57Z
 ---
 
 # Thinking Düzeyleri (/think direktifleri)
@@ -42,7 +35,7 @@ x-i18n:
 - Bir onay yanıtı gönderilir (`Thinking level set to high.` / `Thinking disabled.`). Düzey geçersizse (örn. `/thinking big`), komut bir ipucuyla reddedilir ve oturum durumu değiştirilmez.
 - Mevcut thinking düzeyini görmek için `/think` (veya `/think:`)’yi argümansız gönderin.
 
-## Ajan tarafından uygulanması
+## Application by agent
 
 - **Gömülü Pi**: çözümlenen düzey, süreç içi Pi ajan çalışma zamanına iletilir.
 

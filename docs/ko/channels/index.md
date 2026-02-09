@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 에 사용할 채팅 채널을 선택하려는 경우
   - 지원되는 메시징 플랫폼의 빠른 개요가 필요한 경우
 title: "채팅 채널"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:55Z
 ---
 
 # 채팅 채널

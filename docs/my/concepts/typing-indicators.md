@@ -3,18 +3,11 @@ summary: "OpenClaw က typing indicator များကို ပြသသည့
 read_when:
   - typing indicator အပြုအမူ သို့မဟုတ် မူလသတ်မှတ်ချက်များကို ပြောင်းလဲနေချိန်
 title: "Typing Indicators"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:13Z
 ---
 
 # Typing indicators
 
-Typing indicator များကို run တစ်ခု လည်ပတ်နေစဉ်အတွင်း chat ချန်နယ်သို့ ပို့သည်။ Typing စတင်မည့် **အချိန်** ကို ထိန်းချုပ်ရန် `agents.defaults.typingMode` ကို အသုံးပြုပါ၊ **ဘယ်လောက်ကြာကြာ refresh လုပ်မလဲ** ကို ထိန်းချုပ်ရန် `typingIntervalSeconds` ကို အသုံးပြုပါ။
+Typing indicators များကို run တစ်ခု လည်ပတ်နေစဉ် chat channel သို့ ပို့ပေးပါသည်။ **ဘယ်အချိန်** typing စတင်မည်ကို ထိန်းချုပ်ရန် `agents.defaults.typingMode` ကို အသုံးပြုပြီး **ဘယ်လောက် မကြာခဏ** refresh လုပ်မည်ကို ထိန်းချုပ်ရန် `typingIntervalSeconds` ကို အသုံးပြုပါ။
 
 ## Defaults
 
@@ -62,6 +55,8 @@ Session တစ်ခုချင်းစီအလိုက် mode သို့
 ## Notes
 
 - `message` mode သည် silent-only replies (ဥပမာ အထွက်ကို ဖိနှိပ်ရန် အသုံးပြုသည့် `NO_REPLY` token) အတွက် typing ကို မပြပါ။
-- `thinking` သည် run က reasoning ကို streaming လုပ်သောအခါ (`reasoningLevel: "stream"`) မှသာ အလုပ်လုပ်သည်။ Model က reasoning deltas မထုတ်ပေးပါက typing မစတင်ပါ။
+- `thinking` သည် run က reasoning ကို stream လုပ်သောအခါ (`reasoningLevel: "stream"`) မှသာ ဖြစ်ပေါ်ပါသည်။
+  မော်ဒယ်က reasoning deltas မထုတ်ပေးပါက typing မစတင်ပါ။
 - Heartbeat များတွင် mode မည်သို့ပင်ဖြစ်စေ typing ကို မည်သည့်အခါမျှ မပြပါ။
-- `typingIntervalSeconds` သည် **refresh cadence** ကို ထိန်းချုပ်ခြင်းဖြစ်ပြီး စတင်ချိန်ကို မထိန်းချုပ်ပါ။ မူလသတ်မှတ်ချက်မှာ 6 စက္ကန့် ဖြစ်သည်။
+- `typingIntervalSeconds` သည် **refresh cadence** ကိုသာ ထိန်းချုပ်ပြီး စတင်ချိန်ကို မထိန်းချုပ်ပါ။
+  ပုံမှန်တန်ဖိုးမှာ 6 စက္ကန့် ဖြစ်ပါသည်။

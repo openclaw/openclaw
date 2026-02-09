@@ -4,13 +4,6 @@ read_when:
   - SSH မသုံးဘဲ အဝေးမှ Gateway（ဂိတ်ဝေး） လော့ဂ်များကို tail လုပ်ရန်လိုအပ်သည့်အချိန်
   - ကိရိယာများအတွက် JSON လော့ဂ်လိုင်းများကို လိုအပ်သည့်အချိန်
 title: "လော့ဂ်များ"
-x-i18n:
-  source_path: cli/logs.md
-  source_hash: 911a57f0f3b78412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # `openclaw logs`

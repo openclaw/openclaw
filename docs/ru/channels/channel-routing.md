@@ -1,15 +1,8 @@
 ---
 summary: "Правила маршрутизации по каналам (WhatsApp, Telegram, Discord, Slack) и общий контекст"
 read_when:
-  - "Изменение маршрутизации каналов или поведения входящих сообщений"
+  - Изменение маршрутизации каналов или поведения входящих сообщений
 title: "Маршрутизация каналов"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:09Z
 ---
 
 # Каналы и маршрутизация
@@ -34,7 +27,7 @@ OpenClaw направляет ответы **обратно в тот канал
 - Группы: `agent:<agentId>:<channel>:group:<id>`
 - Каналы/комнаты: `agent:<agentId>:<channel>:channel:<id>`
 
-Треды:
+Потоки:
 
 - Треды Slack/Discord добавляют `:thread:<threadId>` к базовому ключу.
 - Темы форумов Telegram встраивают `:topic:<topicId>` в ключ группы.

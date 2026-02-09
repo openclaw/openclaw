@@ -5,13 +5,6 @@ read_when:
   - Implementierung von Node-Runner + UI-IPC
   - Hinzufügen von Exec-Host-Sicherheitsmodi und Slash-Befehlen
 title: "Exec-Host-Refactor"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:29Z
 ---
 
 # Exec-Host-Refactor-Plan
@@ -255,12 +248,12 @@ Option B:
 - Runner gibt aggregiertes stdout/stderr zurück.
 - Optionale Bridge-Ereignisse für Start/Ende/Ablehnung.
 
-## Ausgabebegrenzungen
+## Ausgabe-Caps
 
 - Kombiniertes stdout+stderr auf **200k** begrenzen; **Tail 20k** für Ereignisse behalten.
-- Mit eindeutigem Suffix kürzen (z. B. `"… (truncated)"`).
+- Abbrechen mit einem klaren Suffix (z.B. `"… (truncated)"`).
 
-## Slash-Befehle
+## tools/slash-commands.md
 
 - `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>`
 - Pro Agent, pro Sitzung Überschreibungen; nicht persistent, sofern nicht per Konfiguration gespeichert.

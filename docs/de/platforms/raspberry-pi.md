@@ -1,17 +1,10 @@
 ---
-summary: „OpenClaw auf Raspberry Pi (günstiges selbstgehostetes Setup)“
+summary: "„OpenClaw auf Raspberry Pi (günstiges selbstgehostetes Setup)“"
 read_when:
   - OpenClaw auf einem Raspberry Pi einrichten
   - OpenClaw auf ARM-Geräten betreiben
   - Eine günstige, dauerhaft aktive persönliche KI bauen
-title: „Raspberry Pi“
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:08Z
+title: "„Raspberry Pi“"
 ---
 
 # OpenClaw auf Raspberry Pi
@@ -30,12 +23,12 @@ Perfekt für:
 
 | Pi-Modell       | RAM     | Läuft?     | Hinweise                          |
 | --------------- | ------- | ---------- | --------------------------------- |
-| **Pi 5**        | 4GB/8GB | ✅ Best    | Am schnellsten, empfohlen         |
-| **Pi 4**        | 4GB     | ✅ Gut     | Sweet Spot für die meisten Nutzer |
-| **Pi 4**        | 2GB     | ✅ OK      | Läuft, Swap hinzufügen            |
+| **Pi 5**        | 4GB/8GB | ✅ Best     | Am schnellsten, empfohlen         |
+| **Pi 4**        | 4GB     | ✅ Gut      | Sweet Spot für die meisten Nutzer |
+| **Pi 4**        | 2GB     | ✅ OK       | Läuft, Swap hinzufügen            |
 | **Pi 4**        | 1GB     | ⚠️ Knapp   | Mit Swap möglich, Minimal-Config  |
 | **Pi 3B+**      | 1GB     | ⚠️ Langsam | Läuft, aber träge                 |
-| **Pi Zero 2 W** | 512MB   | ❌         | Nicht empfohlen                   |
+| **Pi Zero 2 W** | 512MB   | ❌          | Nicht empfohlen                   |
 
 **Mindestanforderungen:** 1GB RAM, 1 Core, 500MB Speicher  
 **Empfohlen:** 2GB+ RAM, 64-Bit-OS, 16GB+ SD-Karte (oder USB-SSD)
@@ -48,7 +41,7 @@ Perfekt für:
 - Netzwerkverbindung (Ethernet oder WLAN)
 - ~30 Minuten
 
-## 1) OS flashen
+## 1. OS flashen
 
 Verwenden Sie **Raspberry Pi OS Lite (64-bit)** — kein Desktop für einen Headless-Server nötig.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) System einrichten
+## 3. System einrichten
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Node.js 22 installieren (ARM64)
+## 4. Node.js 22 installieren (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Swap hinzufügen (wichtig bei 2GB oder weniger)
+## 5. Swap hinzufügen (wichtig bei 2GB oder weniger)
 
 Swap verhindert Out-of-Memory-Abstürze:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) OpenClaw installieren
+## 6. OpenClaw installieren
 
 ### Option A: Standardinstallation (empfohlen)
 
@@ -134,7 +127,7 @@ npm link
 
 Die hackbare Installation gibt Ihnen direkten Zugriff auf Logs und Code — nützlich für das Debugging ARM-spezifischer Probleme.
 
-## 7) Onboarding ausführen
+## 7. Onboarding ausführen
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Zugriff auf das Dashboard
+## 9. Zugriff auf das Dashboard
 
 Da der Pi headless ist, verwenden Sie einen SSH-Tunnel:
 
@@ -230,13 +223,13 @@ htop
 
 Die meisten OpenClaw-Funktionen laufen auf ARM64, aber einige externe Binaries benötigen ARM-Builds:
 
-| Werkzeug           | ARM64-Status | Hinweise                            |
-| ------------------ | ------------ | ----------------------------------- |
-| Node.js            | ✅           | Läuft hervorragend                  |
-| WhatsApp (Baileys) | ✅           | Reines JS, keine Probleme           |
-| Telegram           | ✅           | Reines JS, keine Probleme           |
+| Werkzeug                              | ARM64-Status | Hinweise                            |
+| ------------------------------------- | ------------ | ----------------------------------- |
+| Node.js               | ✅            | Läuft hervorragend                  |
+| WhatsApp (Baileys) | ✅            | Reines JS, keine Probleme           |
+| Telegram                              | ✅            | Reines JS, keine Probleme           |
 | gog (Gmail CLI)    | ⚠️           | Auf ARM-Release prüfen              |
-| Chromium (Browser) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (Browser) | ✅            | `sudo apt install chromium-browser` |
 
 Wenn ein Skill fehlschlägt, prüfen Sie, ob dessen Binary einen ARM-Build hat. Viele Go-/Rust-Tools haben einen; manche nicht.
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Kostenvergleich
 
-| Setup          | Einmalige Kosten | Monatliche Kosten | Hinweise                      |
-| -------------- | ---------------- | ----------------- | ----------------------------- |
-| **Pi 4 (2GB)** | ~$45             | $0                | + Strom (~$5/Jahr)            |
-| **Pi 4 (4GB)** | ~$55             | $0                | Empfohlen                     |
-| **Pi 5 (4GB)** | ~$60             | $0                | Beste Performance             |
-| **Pi 5 (8GB)** | ~$80             | $0                | Overkill, aber zukunftssicher |
-| DigitalOcean   | $0               | $6/Monat          | $72/Jahr                      |
-| Hetzner        | $0               | €3,79/Monat       | ~$50/Jahr                     |
+| Setup                             | Einmalige Kosten     | Monatliche Kosten | Hinweise                                              |
+| --------------------------------- | -------------------- | ----------------- | ----------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                | + Strom (~$5/Jahr) |
+| **Pi 4 (4GB)** | ~$55 | $0                | Empfohlen                                             |
+| **Pi 5 (4GB)** | ~$60 | $0                | Beste Performance                                     |
+| **Pi 5 (8GB)** | ~$80 | $0                | Overkill, aber zukunftssicher                         |
+| DigitalOcean                      | $0                   | $6/Monat          | $72/Jahr                                              |
+| Hetzner                           | $0                   | €3,79/Monat       | ~$50/Jahr                             |
 
 **Break-even:** Ein Pi amortisiert sich nach ~6–12 Monaten gegenüber einer Cloud-VPS.
 

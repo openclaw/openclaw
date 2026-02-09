@@ -4,18 +4,11 @@ read_when:
   - နောက်ခံ exec အပြုအမူကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း
   - အချိန်ရှည်လျားစွာ လည်ပတ်နေသော exec လုပ်ငန်းများကို Debugging ပြုလုပ်နေစဉ်
 title: "နောက်ခံ Exec နှင့် Process ကိရိယာ"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:28Z
 ---
 
 # နောက်ခံ Exec + Process ကိရိယာ
 
-OpenClaw သည် shell အမိန့်များကို `exec` ကိရိယာမှတဆင့် လည်ပတ်စေပြီး အချိန်ရှည်လျားစွာ လည်ပတ်နေသော လုပ်ငန်းများကို မှတ်ဉာဏ်အတွင်း ထိန်းသိမ်းထားသည်။ `process` ကိရိယာသည် ထိုနောက်ခံ ဆက်ရှင်များကို စီမံခန့်ခွဲပေးသည်။
+`process` tool သည် ထို background sessions များကို စီမံခန့်ခွဲပါသည်။ အမှန်တကယ် TTY လိုအပ်ပါသလား?
 
 ## exec tool
 
@@ -26,7 +19,7 @@ OpenClaw သည် shell အမိန့်များကို `exec` ကိ�
 - `background` (bool): ချက်ချင်း နောက်ခံတွင် လည်ပတ်စေသည်
 - `timeout` (စက္ကန့်များ၊ မူလတန်ဖိုး 1800): ဤအချိန်ကန့်သတ်ပြီးပါက ပရိုဆက်ကို ပိတ်သတ်မည်
 - `elevated` (bool): elevated mode ကို ဖွင့်ထား/ခွင့်ပြုထားပါက ဟို့စ်ပေါ်တွင် လည်ပတ်စေသည်
-- အမှန်တကယ် TTY လိုအပ်ပါသလား? `pty: true` ကို သတ်မှတ်ပါ။
+- `pty: true` ကို သတ်မှတ်ပါ။ `exec`/`process` tools များအပြင်ဘက်တွင် ကြာရှည်အလုပ်လုပ်သော child processes များကို spawn လုပ်ပါက (ဥပမာ CLI respawns သို့မဟုတ် gateway helpers) termination signals များကို forward လုပ်နိုင်ရန်နှင့် exit/error ဖြစ်သည့်အခါ listeners များကို ဖြုတ်ချနိုင်ရန် child-process bridge helper ကို attach လုပ်ပါ။
 - `workdir`, `env`
 
 အပြုအမူ:
@@ -38,7 +31,7 @@ OpenClaw သည် shell အမိန့်များကို `exec` ကိ�
 
 ## Child process bridging
 
-exec/process ကိရိယာများအပြင်ဘက်တွင် အချိန်ရှည်လျားစွာ လည်ပတ်နေသော child processes များကို ဖန်တီးသောအခါ (ဥပမာ၊ CLI ပြန်လည်ဖန်တီးမှုများ သို့မဟုတ် gateway helper များ) ပိတ်သိမ်းရန် signal များကို ပို့ဆောင်နိုင်ပြီး exit/error ဖြစ်သည့်အခါ listener များကို ဖြုတ်ပေးနိုင်ရန် child-process bridge helper ကို ချိတ်ဆက်ပါ။ ဤနည်းလမ်းသည် systemd ပေါ်တွင် orphaned processes မဖြစ်စေရန် ကာကွယ်ပေးပြီး ပလက်ဖောင်းအားလုံးတွင် ပိတ်သိမ်းမှု အပြုအမူကို တူညီစေသည်။
+ဤအရာသည် systemd ပေါ်တွင် orphaned processes များကို ရှောင်ရှားစေပြီး platform များအကြား shutdown အပြုအမူကို တစ်ပြေးညီ ဖြစ်စေပါသည်။ OpenClaw သည် LAN အတွင်းသာ အသုံးပြုရန် အဆင်ပြေစေရန် Bonjour (mDNS / DNS‑SD) ကို အသုံးပြုပြီး active Gateway (WebSocket endpoint) ကို ရှာဖွေပါသည်။
 
 Environment overrides:
 

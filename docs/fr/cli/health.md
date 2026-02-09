@@ -3,13 +3,6 @@ summary: "Reference CLI pour `openclaw health` (point de terminaison de sante de
 read_when:
   - Vous souhaitez verifier rapidement l'etat de sante de la Gateway (passerelle) en cours d'execution
 title: "sante"
-x-i18n:
-  source_path: cli/health.md
-  source_hash: 82a78a5a97123f7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:54Z
 ---
 
 # `openclaw health`

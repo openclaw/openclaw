@@ -5,20 +5,14 @@ read_when:
   - Koppla automation som ska köras med eller parallellt med heartbeats
   - Välja mellan heartbeat och cron för schemalagda uppgifter
 title: "Cron-jobb"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:36Z
 ---
 
 # Cron-jobb (Gateway-schemaläggare)
 
 > **Cron vs Heartbeat?** Se [Cron vs Heartbeat](/automation/cron-vs-heartbeat) för vägledning om när du ska använda respektive.
 
-Cron är Gateways inbyggda schemaläggare. Den lagrar jobb, väcker agenten vid rätt tidpunkt och kan valfritt leverera utdata tillbaka till en chatt.
+Cron är Gateways inbyggda schemaläggare. Det kvarstår jobb, väcker agenten vid
+rätt tid, och kan eventuellt leverera utdata tillbaka till en chatt.
 
 Om du vill _”kör detta varje morgon”_ eller _”peta agenten om 20 minuter”_ är cron mekanismen.
 
@@ -71,10 +65,10 @@ För de kanoniska JSON-formerna och exempel, se [JSON-schema för tool calls](/a
 
 ## Var cron-jobb lagras
 
-Cron-jobb lagras på Gateway-värden i `~/.openclaw/cron/jobs.json` som standard.
-Gateway laddar filen i minnet och skriver tillbaka vid ändringar, så manuella redigeringar
-är bara säkra när Gateway är stoppad. Föredra `openclaw cron add/edit` eller cron-verktygets
-tool-call-API för ändringar.
+Cron jobb kvarstår på Gateway-värden på `~/.openclaw/cron/jobs.json` som standard.
+Gateway laddar filen till minne och skriver den tillbaka vid ändringar, så manuella redigeringar
+är bara säkra när Gateway stoppas. Föredrar `openclaw cron add/edit` eller cron
+tool call API för ändringar.
 
 ## Nybörjarvänlig översikt
 
@@ -93,8 +87,8 @@ Tänk på ett cron-jobb som: **när** det ska köras + **vad** det ska göra.
    - Huvudsession → `payload.kind = "systemEvent"`
    - Isolerad session → `payload.kind = "agentTurn"`
 
-Valfritt: engångsjobb (`schedule.kind = "at"`) tas bort efter lyckad körning som standard. Sätt
-`deleteAfterRun: false` för att behålla dem (de inaktiveras efter lyckad körning).
+Valfritt: one-shot jobb (`schedule.kind = "at"`) ta bort efter framgång som standard. Ställ in
+`deleteAfterRun: false` för att behålla dem (de kommer att inaktivera efter framgång).
 
 ## Begrepp
 
@@ -108,9 +102,9 @@ Ett cron-jobb är en lagrad post med:
 - valfri **agentbindning** (`agentId`): kör jobbet under en specifik agent; om den
   saknas eller är okänd faller gateway tillbaka till standardagenten.
 
-Jobb identifieras av ett stabilt `jobId` (används av CLI/Gateway-API:er).
-I agent-tool-calls är `jobId` kanoniskt; äldre `id` accepteras för kompatibilitet.
-Engångsjobb tas bort automatiskt efter lyckad körning som standard; sätt `deleteAfterRun: false` för att behålla dem.
+Jobb identifieras av en stabil `jobId` (används av CLI/Gateway API).
+I agent verktygssamtal är `jobId` kanoniskt; äldre `id` accepteras för kompatibilitet.
+Ett skott jobb auto-ta bort efter framgång som standard; sätt `deleteAfterRun: false` för att behålla dem.
 
 ### Scheman
 
@@ -120,20 +114,20 @@ Cron stöder tre schematyper:
 - `every`: fast intervall (ms).
 - `cron`: 5-fälts cron-uttryck med valfri IANA-tidszon.
 
-Cron-uttryck använder `croner`. Om en tidszon utelämnas används Gateway-värdens
+Cron uttryck använder `croner`. Om en tidszon utelämnas används Gateway-värdens
 lokala tidszon.
 
 ### Huvud- vs isolerad körning
 
 #### Huvudsession-jobb (systemhändelser)
 
-Huvudjobb köar en systemhändelse och kan valfritt väcka heartbeat-köraren.
+Huvudjobben skapar en systemhändelse och väcker valfritt hjärtslag löparen.
 De måste använda `payload.kind = "systemEvent"`.
 
 - `wakeMode: "now"` (standard): händelsen triggar en omedelbar heartbeat-körning.
 - `wakeMode: "next-heartbeat"`: händelsen väntar till nästa schemalagda heartbeat.
 
-Detta passar bäst när du vill ha den normala heartbeat-prompten + huvudsessionens kontext.
+Detta är den bästa passformen när du vill ha den normala hjärtslag prompt + main-session sammanhang.
 Se [Heartbeat](/gateway/heartbeat).
 
 #### Isolerade jobb (dedikerade cron-sessioner)
@@ -175,15 +169,15 @@ Leveranskonfig (endast isolerade jobb):
 - `delivery.to`: kanalspecifikt mål (telefon/chatt/kanal-id).
 - `delivery.bestEffort`: undvik att misslyckas jobbet om annonseringsleverans misslyckas.
 
-Annonseringsleverans undertrycker meddelandeverktygets sändningar för körningen; använd `delivery.channel`/`delivery.to`
-för att rikta chatten i stället. När `delivery.mode = "none"` postas ingen sammanfattning till huvudsessionen.
+Meddela leverans undertrycker meddelandeverktyget skickar för körningen; använd `delivery.channel`/`delivery.to`
+för att rikta chatten istället. När `delivery.mode = "none"`, ingen sammanfattning publiceras på huvudsessionen.
 
 Om `delivery` utelämnas för isolerade jobb, använder OpenClaw som standard `announce`.
 
 #### Flöde för annonseringsleverans
 
-När `delivery.mode = "announce"` levererar cron direkt via utgående kanaladaptrar.
-Huvudagenten startas inte för att skapa eller vidarebefordra meddelandet.
+När `delivery.mode = "announce"` levererar cron direkt via de utgående kanaladaptrarna.
+Huvudagenten snurras inte upp för att tillverka eller vidarebefordra budskapet.
 
 Beteendedetaljer:
 
@@ -201,17 +195,17 @@ Beteendedetaljer:
 
 Isolerade jobb (`agentTurn`) kan åsidosätta modell och tänkenivå:
 
-- `model`: Leverantör/modell-sträng (t.ex. `anthropic/claude-sonnet-4-20250514`) eller alias (t.ex. `opus`)
+- `model`: Leverantör/modellsträng (t.ex., `anthropic/claude-sonnet-4-20250514`) eller alias (t.ex., `opus`)
 - `thinking`: Tänkenivå (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; endast GPT-5.2 + Codex-modeller)
 
-Obs: Du kan sätta `model` även på huvudsessionsjobb, men det ändrar den delade huvudsessionens
-modell. Vi rekommenderar modellåsidosättningar endast för isolerade jobb för att undvika
-oväntade kontextskiften.
+Obs: Du kan ställa in `model` på huvudjobben också, men det ändrar den delade huvudmodellen
+session. Vi rekommenderar modellersättningar endast för isolerade jobb för att undvika
+oväntade sammanhangsskift.
 
 Prioritetsordning för upplösning:
 
 1. Jobb-payload-åsidosättning (högst)
-2. Hook-specifika standarder (t.ex. `hooks.gmail.model`)
+2. Krokspecifika standardvärden (t.ex., `hooks.gmail.model`)
 3. Agentkonfig-standard
 
 ### Leverans (kanal + mål)
@@ -229,7 +223,7 @@ Om `delivery.channel` eller `delivery.to` utelämnas kan cron falla tillbaka til
 
 Påminnelser om målformat:
 
-- Slack/Discord/Mattermost (plugin)-mål bör använda explicita prefix (t.ex. `channel:<id>`, `user:<id>`) för att undvika tvetydighet.
+- Slack/Discord/Mattermost (plugin) mål bör använda explicita prefix (t.ex. `kanal:<id>`, `användare:<id>`) för att undvika tvetydighet.
 - Telegram-ämnen bör använda `:topic:`-formen (se nedan).
 
 #### Telegram-leveransmål (ämnen / forumtrådar)
@@ -247,9 +241,9 @@ Prefixade mål som `telegram:...` / `telegram:group:...` accepteras också:
 
 ## JSON-schema för tool calls
 
-Använd dessa former när du anropar Gateway `cron.*`-verktyg direkt (agent tool calls eller RPC).
-CLI-flaggor accepterar mänskliga tidslängder som `20m`, men tool calls bör använda en ISO 8601-sträng
-för `schedule.at` och millisekunder för `schedule.everyMs`.
+Använd dessa former när du anropar Gateway `cron.*` verktyg direkt (agentsamtal eller RPC).
+CLI-flaggor accepterar mänskliga varaktigheter som "20m", men verktygssamtal bör använda en ISO 8601 sträng
+för "schedule.at" och millisekunder för "schedule.everyM".
 
 ### cron.add params
 

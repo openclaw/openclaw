@@ -2,18 +2,11 @@
 summary: "Opsætning af SSH-tunnel for OpenClaw.app, der forbinder til en fjern gateway"
 read_when: "Tilslutning af macOS-appen til en fjern gateway via SSH"
 title: "Opsætning af fjern Gateway"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:15Z
 ---
 
 # Kørsel af OpenClaw.app med en fjern Gateway
 
-OpenClaw.app bruger SSH-tunneling til at oprette forbindelse til en fjern gateway. Denne guide viser dig, hvordan du sætter det op.
+OpenClaw.app bruger SSH-tunneling til at oprette forbindelse til en ekstern gateway. Denne guide viser dig, hvordan du opsætter den.
 
 ## Overblik
 
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Sådan virker det
 
-| Komponent                            | Hvad den gør                                             |
-| ------------------------------------ | -------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Videresender lokal port 18789 til fjern port 18789       |
+| Komponent                            | Hvad den gør                                                                |
+| ------------------------------------ | --------------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Videresender lokal port 18789 til fjern port 18789                          |
 | `ssh -N`                             | SSH uden at udføre fjernkommandoer (kun port forwarding) |
-| `KeepAlive`                          | Genstarter automatisk tunnelen, hvis den crasher         |
-| `RunAtLoad`                          | Starter tunnelen, når agenten indlæses                   |
+| `KeepAlive`                          | Genstarter automatisk tunnelen, hvis den crasher                            |
+| `RunAtLoad`                          | Starter tunnelen, når agenten indlæses                                      |
 
-OpenClaw.app opretter forbindelse til `ws://127.0.0.1:18789` på din klientmaskine. SSH-tunnelen videresender den forbindelse til port 18789 på den fjerne maskine, hvor Gateway kører.
+OpenClaw.app forbinder til `ws://127.0.0.1:18789` på din klientmaskine. SSH-tunnelen videresender denne forbindelse til port 18789 på fjernmaskinen, hvor Gateway kører.

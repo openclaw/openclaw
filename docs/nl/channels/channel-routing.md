@@ -3,13 +3,6 @@ summary: "Routeringsregels per kanaal (WhatsApp, Telegram, Discord, Slack) en ge
 read_when:
   - Bij het wijzigen van kanaalroutering of inboxgedrag
 title: "Kanaalroutering"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:02Z
 ---
 
 # Kanalen & routering
@@ -18,7 +11,7 @@ OpenClaw routeert antwoorden **terug naar het kanaal waar een bericht vandaan kw
 model kiest geen kanaal; routering is deterministisch en wordt beheerd door de
 hostconfiguratie.
 
-## Kernbegrippen
+## Belangrijke termen
 
 - **Kanaal**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`.
 - **AccountId**: per‑kanaal accountinstantie (indien ondersteund).

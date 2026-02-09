@@ -4,18 +4,11 @@ read_when:
   - آپ voice-call پلگ اِن استعمال کرتے ہیں اور CLI کے اندراجی پوائنٹس چاہتے ہیں
   - آپ `voicecall call|continue|status|tail|expose` کے لیے فوری مثالیں چاہتے ہیں
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:05Z
 ---
 
 # `openclaw voicecall`
 
-`voicecall` ایک پلگ اِن کی فراہم کردہ کمانڈ ہے۔ یہ صرف اسی صورت میں ظاہر ہوتی ہے جب voice-call پلگ اِن انسٹال اور فعال ہو۔
+`voicecall` is a plugin-provided command. It only appears if the voice-call plugin is installed and enabled.
 
 بنیادی دستاویز:
 
@@ -38,4 +31,4 @@ openclaw voicecall expose --mode funnel
 openclaw voicecall unexpose
 ```
 
-سکیورٹی نوٹ: ویب ہک اینڈپوائنٹ کو صرف اُن نیٹ ورکس تک ایکسپوز کریں جن پر آپ اعتماد کرتے ہیں۔ جہاں ممکن ہو Funnel کے بجائے Tailscale Serve کو ترجیح دیں۔
+Security note: only expose the webhook endpoint to networks you trust. Prefer Tailscale Serve over Funnel when possible.

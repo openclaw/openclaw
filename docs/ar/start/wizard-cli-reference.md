@@ -5,13 +5,6 @@ read_when:
   - تقوم بتصحيح نتائج التهيئة الأولية أو دمج عملاء التهيئة
 title: "مرجع التهيئة الأولية عبر CLI"
 sidebarTitle: "CLI reference"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:04Z
 ---
 
 # مرجع التهيئة الأولية عبر CLI
@@ -28,7 +21,7 @@ x-i18n:
 - إعدادات Gateway (المنفذ، الربط، المصادقة، Tailscale)
 - القنوات والموفّرين (Telegram وWhatsApp وDiscord وGoogle Chat وإضافة Mattermost وSignal)
 - تثبيت الخدمة الخلفية (LaunchAgent أو وحدة systemd للمستخدم)
-- فحص السلامة
+- فحص الصحة
 - إعداد Skills
 
 الوضع البعيد يهيّئ هذا الجهاز للاتصال بـ Gateway في مكان آخر.
@@ -37,19 +30,19 @@ x-i18n:
 ## تفاصيل التدفق المحلي
 
 <Steps>
-  <Step title="اكتشاف التهيئة الموجودة">
+  <Step title="Existing config detection">
     - إذا كان `~/.openclaw/openclaw.json` موجودًا، اختر الاحتفاظ أو التعديل أو إعادة الضبط.
     - إعادة تشغيل المعالج لا تمحو أي شيء إلا إذا اخترت صراحةً إعادة الضبط (أو مرّرت `--reset`).
     - إذا كانت التهيئة غير صالحة أو تحتوي على مفاتيح قديمة، يتوقف المعالج ويطلب منك تشغيل `openclaw doctor` قبل المتابعة.
     - تستخدم إعادة الضبط `trash` وتعرض نطاقات:
       - التهيئة فقط
       - التهيئة + بيانات الاعتماد + الجلسات
-      - إعادة ضبط كاملة (تزيل مساحة العمل أيضًا)
-  </Step>
-  <Step title="النموذج والمصادقة">
+      - إعادة ضبط كاملة (تزيل مساحة العمل أيضًا)  
+</Step>
+  <Step title="Model and auth">
     - مصفوفة الخيارات الكاملة موجودة في [خيارات المصادقة والنموذج](#auth-and-model-options).
   </Step>
-  <Step title="مساحة العمل">
+  <Step title="Workspace">
     - الافتراضي `~/.openclaw/workspace` (قابل للتهيئة).
     - يزرع ملفات مساحة العمل اللازمة لطقس التمهيد في التشغيل الأول.
     - تخطيط مساحة العمل: [مساحة عمل الوكيل](/concepts/agent-workspace).
@@ -60,7 +53,7 @@ x-i18n:
     - عطّل المصادقة فقط إذا كنت تثق تمامًا بكل عملية محلية.
     - الربط غير المعتمد على loopback لا يزال يتطلب المصادقة.
   </Step>
-  <Step title="القنوات">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): تسجيل دخول اختياري عبر QR
     - [Telegram](/channels/telegram): رمز البوت
     - [Discord](/channels/discord): رمز البوت
@@ -70,7 +63,8 @@ x-i18n:
     - [BlueBubbles](/channels/bluebubbles): مُوصى به لـ iMessage؛ عنوان خادم + كلمة مرور + webhook
     - [iMessage](/channels/imessage): مسار CLI قديم لـ `imsg` + وصول إلى قاعدة البيانات
     - أمان الرسائل الخاصة: الافتراضي هو الإقران. أول رسالة خاصة ترسل رمزًا؛ وافق عبر
-      `openclaw pairing approve <channel> <code>` أو استخدم قوائم السماح.
+      `openclaw pairing approve <channel><code>` أو استخدم قوائم السماح.
+  </Step><code>` أو استخدم قوائم السماح.
   </Step>
   <Step title="تثبيت الخدمة الخلفية">
     - macOS: LaunchAgent
@@ -104,7 +98,7 @@ x-i18n:
 الوضع البعيد يهيّئ هذا الجهاز للاتصال بـ Gateway في مكان آخر.
 
 <Info>
-الوضع البعيد لا يثبّت ولا يعدّل أي شيء على المضيف البعيد.
+الوضع البعيد لا يقوم بتثبيت أو تعديل أي شيء على المضيف البعيد.
 </Info>
 
 ما الذي تقوم بإعداده:
@@ -122,44 +116,50 @@ x-i18n:
 ## خيارات المصادقة والنموذج
 
 <AccordionGroup>
-  <Accordion title="مفتاح Anthropic API (مُوصى به)">
+  <Accordion title="Anthropic API key (recommended)">
     يستخدم `ANTHROPIC_API_KEY` إن وُجد أو يطالب بمفتاح، ثم يحفظه لاستخدام الخدمة الخلفية.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: يتحقق من عنصر Keychain باسم "Claude Code-credentials"
     - Linux وWindows: يعيد استخدام `~/.claude/.credentials.json` إن وُجد
 
+    ```
     على macOS، اختر «Always Allow» حتى لا تمنع عمليات بدء launchd.
+    ```
 
   </Accordion>
-  <Accordion title="رمز Anthropic (لصق رمز الإعداد)">
+  <Accordion title="Anthropic token (setup-token paste)">
     شغّل `claude setup-token` على أي جهاز، ثم الصق الرمز.
     يمكنك تسميته؛ تركه فارغًا يستخدم الافتراضي.
   </Accordion>
-  <Accordion title="اشتراك OpenAI Code (إعادة استخدام Codex CLI)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     إذا كان `~/.codex/auth.json` موجودًا، يمكن للمعالج إعادة استخدامه.
   </Accordion>
-  <Accordion title="اشتراك OpenAI Code (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     تدفّق عبر المتصفح؛ الصق `code#state`.
 
+    ```
     يضبط `agents.defaults.model` على `openai-codex/gpt-5.3-codex` عندما يكون النموذج غير مضبوط أو `openai/*`.
+    ```
 
   </Accordion>
-  <Accordion title="مفتاح OpenAI API">
+  <Accordion title="OpenAI API key">
     يستخدم `OPENAI_API_KEY` إن وُجد أو يطالب بمفتاح، ثم يحفظه في
     `~/.openclaw/.env` حتى يتمكن launchd من قراءته.
 
+    ```
     يضبط `agents.defaults.model` على `openai/gpt-5.1-codex` عندما يكون النموذج غير مضبوط، `openai/*`، أو `openai-codex/*`.
+    ```
 
   </Accordion>
-  <Accordion title="مفتاح xAI (Grok) API">
+  <Accordion title="xAI (Grok) API key">
     يطالب بـ `XAI_API_KEY` ويهيّئ xAI كمزوّد نماذج.
   </Accordion>
   <Accordion title="OpenCode Zen">
     يطالب بـ `OPENCODE_API_KEY` (أو `OPENCODE_ZEN_API_KEY`).
     عنوان الإعداد: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="مفتاح API (عام)">
+  <Accordion title="API key (generic)">
     يخزّن المفتاح لك.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
@@ -174,16 +174,16 @@ x-i18n:
     تُكتب التهيئة تلقائيًا.
     مزيد من التفاصيل: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (متوافق مع Anthropic)">
+  <Accordion title="Synthetic (Anthropic-compatible)">
     يطالب بـ `SYNTHETIC_API_KEY`.
     مزيد من التفاصيل: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot وKimi Coding">
+  <Accordion title="Moonshot and Kimi Coding">
     تُكتب تهيئات Moonshot (Kimi K2) وKimi Coding تلقائيًا.
     مزيد من التفاصيل: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="تخطي">
-    يترك المصادقة غير مهيّأة.
+  <Accordion title="Skip">
+    يترك المصادقة غير معدّلة.
   </Accordion>
 </AccordionGroup>
 

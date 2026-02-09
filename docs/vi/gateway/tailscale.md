@@ -4,25 +4,18 @@ read_when:
   - Mở bảng điều khiển Gateway Control UI ra ngoài localhost
   - Tự động hóa quyền truy cập bảng điều khiển qua tailnet hoặc công khai
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:11Z
 ---
 
 # Tailscale (bảng điều khiển Gateway)
 
-OpenClaw có thể tự động cấu hình Tailscale **Serve** (tailnet) hoặc **Funnel** (công khai) cho
-bảng điều khiển Gateway và cổng WebSocket. Cách này giữ Gateway chỉ gắn với loopback trong khi
-Tailscale cung cấp HTTPS, định tuyến và (đối với Serve) các header định danh.
+OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the
+Gateway dashboard and WebSocket port. This keeps the Gateway bound to loopback while
+Tailscale provides HTTPS, routing, and (for Serve) identity headers.
 
 ## Chế độ
 
-- `serve`: Serve chỉ trong tailnet qua `tailscale serve`. Gateway vẫn ở `127.0.0.1`.
-- `funnel`: HTTPS công khai qua `tailscale funnel`. OpenClaw yêu cầu mật khẩu dùng chung.
+- `serve`: Tailnet-only Serve via `tailscale serve`. The gateway stays on `127.0.0.1`.
+- `funnel`: Public HTTPS via `tailscale funnel`. OpenClaw requires a shared password.
 - `off`: Mặc định (không tự động hóa Tailscale).
 
 ## Xác thực
@@ -32,15 +25,16 @@ Tailscale cung cấp HTTPS, định tuyến và (đối với Serve) các header
 - `token` (mặc định khi `OPENCLAW_GATEWAY_TOKEN` được đặt)
 - `password` (bí mật dùng chung qua `OPENCLAW_GATEWAY_PASSWORD` hoặc cấu hình)
 
-Khi `tailscale.mode = "serve"` và `gateway.auth.allowTailscale` là `true`,
-các yêu cầu proxy Serve hợp lệ có thể xác thực qua header định danh của Tailscale
-(`tailscale-user-login`) mà không cần cung cấp token/mật khẩu. OpenClaw xác minh
-định danh bằng cách phân giải địa chỉ `x-forwarded-for` qua daemon Tailscale cục bộ
-(`tailscale whois`) và đối chiếu với header trước khi chấp nhận.
-OpenClaw chỉ coi một yêu cầu là Serve khi nó đến từ loopback với các header
-`x-forwarded-for`, `x-forwarded-proto` và `x-forwarded-host` của Tailscale.
-Để yêu cầu thông tin xác thực tường minh, hãy đặt `gateway.auth.allowTailscale: false` hoặc
-ép buộc `gateway.auth.mode: "password"`.
+When `tailscale.mode = "serve"` and `gateway.auth.allowTailscale` is `true`,
+valid Serve proxy requests can authenticate via Tailscale identity headers
+(`tailscale-user-login`) without supplying a token/password. OpenClaw verifies
+the identity by resolving the `x-forwarded-for` address via the local Tailscale
+daemon (`tailscale whois`) and matching it to the header before accepting it.
+OpenClaw only treats a request as Serve when it arrives from loopback with
+Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
+headers.
+To require explicit credentials, set `gateway.auth.allowTailscale: false` or
+force `gateway.auth.mode: "password"`.
 
 ## Ví dụ cấu hình
 
@@ -106,13 +100,14 @@ openclaw gateway --tailscale funnel --auth password
   hoặc `tailscale funnel` khi tắt.
 - `gateway.bind: "tailnet"` là gắn Tailnet trực tiếp (không HTTPS, không Serve/Funnel).
 - `gateway.bind: "auto"` ưu tiên loopback; dùng `tailnet` nếu bạn chỉ muốn Tailnet.
-- Serve/Funnel chỉ mở **UI điều khiển Gateway + WS**. Các node kết nối qua cùng endpoint WS của Gateway, vì vậy Serve có thể hoạt động cho truy cập node.
+- Serve/Funnel only expose the **Gateway control UI + WS**. Nodes connect over
+  the same Gateway WS endpoint, so Serve can work for node access.
 
 ## Điều khiển trình duyệt (Gateway từ xa + trình duyệt cục bộ)
 
-Nếu bạn chạy Gateway trên một máy nhưng muốn điều khiển trình duyệt trên máy khác,
-hãy chạy một **node host** trên máy có trình duyệt và giữ cả hai trong cùng tailnet.
-Gateway sẽ proxy các thao tác trình duyệt tới node; không cần máy chủ điều khiển riêng hay URL Serve riêng.
+If you run the Gateway on one machine but want to drive a browser on another machine,
+run a **node host** on the browser machine and keep both on the same tailnet.
+The Gateway will proxy browser actions to the node; no separate control server or Serve URL needed.
 
 Tránh dùng Funnel cho điều khiển trình duyệt; hãy coi việc ghép cặp node giống như quyền truy cập của người vận hành.
 

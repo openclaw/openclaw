@@ -3,26 +3,19 @@ summary: "Mga mode ng voice wake at push-to-talk pati mga detalye ng routing sa 
 read_when:
   - Nagtatrabaho sa mga pathway ng voice wake o PTT
 title: "Voice Wake"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:46Z
 ---
 
 # Voice Wake & Push-to-Talk
 
 ## Mga Mode
 
-- **Wake-word mode** (default): laging naka-on na Speech recognizer na naghihintay ng mga trigger token (`swabbleTriggerWords`). Kapag may tugma, magsisimula itong mag-capture, ipapakita ang overlay na may bahagyang teksto, at awtomatikong magpapadala pagkatapos ng katahimikan.
-- **Push-to-talk (hawak ang Right Option)**: hawakan ang right Option key para agad mag-capture—walang kailangang trigger. Lalabas ang overlay habang hawak; kapag binitawan, ito ay magfi-finalize at ipapasa pagkatapos ng maikling delay para ma-adjust mo ang teksto.
+- 31. **Wake-word mode** (default): palaging naka-on na Speech recognizer ang naghihintay ng mga trigger token (`swabbleTriggerWords`). 32. Sa pagtugma, nagsisimula ito ng capture, ipinapakita ang overlay na may partial text, at awtomatikong nagse-send matapos ang katahimikan.
+- 33. **Push-to-talk (Right Option hold)**: hawakan ang kanang Option key para agad na mag-capture—walang trigger na kailangan. 34. Lumalabas ang overlay habang nakahawak; ang pagbitaw ay nagfi-finalize at nagpapasa matapos ang maikling delay upang makapag-tweak ka ng text.
 
 ## Runtime behavior (wake-word)
 
 - Ang Speech recognizer ay nasa `VoiceWakeRuntime`.
-- Ang trigger ay tutunog lang kapag may **makabuluhang paghinto** sa pagitan ng wake word at ng susunod na salita (~0.55s na pagitan). Maaaring magsimula ang overlay/chime sa paghinto kahit bago pa magsimula ang command.
+- 35. Nagfi-fire lang ang trigger kapag may **makabuluhang pause** sa pagitan ng wake word at ng susunod na salita (~0.55s na gap). 36. Maaaring magsimula ang overlay/chime sa pause kahit bago pa magsimula ang command.
 - Mga window ng katahimikan: 2.0s kapag tuloy-tuloy ang pagsasalita, 5.0s kung trigger lang ang narinig.
 - Hard stop: 120s para maiwasan ang runaway na mga session.
 - Debounce sa pagitan ng mga session: 350ms.
@@ -45,7 +38,7 @@ Pagpapatibay:
 
 ## Mga detalye ng push-to-talk
 
-- Ang hotkey detection ay gumagamit ng global `.flagsChanged` monitor para sa **right Option** (`keyCode 61` + `.option`). Nag-o-observe lang kami ng mga event (walang pag-swallow).
+- 37. Gumagamit ang hotkey detection ng global `.flagsChanged` monitor para sa **right Option** (`keyCode 61` + `.option`). Nag-oobserba lang kami ng mga event (walang pagharang).
 - Ang capture pipeline ay nasa `VoicePushToTalk`: agad nitong sinisimulan ang Speech, nag-i-stream ng mga partial sa overlay, at tinatawag ang `VoiceWakeForwarder` kapag binitawan.
 - Kapag nagsimula ang push-to-talk, pini-pause namin ang wake-word runtime para maiwasan ang sabayang audio taps; awtomatiko itong nagre-restart pagkatapos bitawan.
 - Mga pahintulot: kailangan ng Microphone + Speech; para makita ang mga event kailangan ng Accessibility/Input Monitoring approval.
@@ -54,19 +47,19 @@ Pagpapatibay:
 ## Mga setting na nakikita ng user
 
 - **Voice Wake** toggle: ina-enable ang wake-word runtime.
-- **Hold Cmd+Fn to talk**: ina-enable ang push-to-talk monitor. Naka-disable sa macOS < 26.
+- 38. **Hawakan ang Cmd+Fn para magsalita**: pinapagana ang push-to-talk monitor. 39. Naka-disable sa macOS < 26.
 - Language at mic pickers, live level meter, trigger-word table, tester (local-only; hindi nagfo-forward).
 - Pinananatili ng mic picker ang huling pinili kung mag-disconnect ang isang device, nagpapakita ng disconnected hint, at pansamantalang bumabalik sa system default hanggang sa bumalik ito.
-- **Sounds**: mga chime kapag na-detect ang trigger at kapag nag-send; default sa macOS na “Glass” system sound. Maaari kang pumili ng anumang `NSSound`-loadable na file (hal. MP3/WAV/AIFF) para sa bawat event o pumili ng **No Sound**.
+- 40. **Mga Tunog**: may chime sa trigger detect at sa send; default ang macOS “Glass” system sound. 41. Maaari kang pumili ng anumang `NSSound`-loadable na file (hal. MP3/WAV/AIFF) para sa bawat event o piliin ang **No Sound**.
 
 ## Forwarding behavior
 
 - Kapag naka-enable ang Voice Wake, ang mga transcript ay ipinapasa sa aktibong gateway/agent (parehong local vs remote mode na ginagamit ng natitirang bahagi ng mac app).
-- Ang mga reply ay inihahatid sa **huling ginamit na pangunahing provider** (WhatsApp/Telegram/Discord/WebChat). Kung pumalya ang delivery, nilo-log ang error at nananatiling makikita ang run sa pamamagitan ng WebChat/session logs.
+- 42. Ang mga sagot ay inihahatid sa **huling ginamit na main provider** (WhatsApp/Telegram/Discord/WebChat). 43. Kapag nabigo ang delivery, nilolog ang error at nananatiling nakikita ang run sa pamamagitan ng WebChat/session logs.
 
 ## Forwarding payload
 
-- Ang `VoiceWakeForwarder.prefixedTranscript(_:)` ay naglalagay ng machine hint sa unahan bago magpadala. Ibinabahagi ito sa parehong wake-word at push-to-talk na mga path.
+- 44. Ang `VoiceWakeForwarder.prefixedTranscript(_:)` ay nagpe-prepend ng machine hint bago magpadala. Ibinabahagi sa pagitan ng wake-word at push-to-talk na mga path.
 
 ## Mabilis na beripikasyon
 

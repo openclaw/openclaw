@@ -4,19 +4,12 @@ read_when:
   - Kailangan mo ng sanggunian sa setup ng model ayon sa provider
   - Gusto mo ng mga halimbawa ng config o mga CLI onboarding command para sa mga model provider
 title: "Mga Model Provider"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:24Z
 ---
 
 # Mga model provider
 
-Sinasaklaw ng pahinang ito ang **LLM/model providers** (hindi mga chat channel tulad ng WhatsApp/Telegram).
-Para sa mga patakaran sa pagpili ng model, tingnan ang [/concepts/models](/concepts/models).
+Sinasaklaw ng pahinang ito ang mga **LLM/model provider** (hindi mga chat channel gaya ng WhatsApp/Telegram).
+Para sa mga patakaran sa pagpili ng modelo, tingnan ang [/concepts/models](/concepts/models).
 
 ## Mga mabilis na patakaran
 
@@ -26,8 +19,8 @@ Para sa mga patakaran sa pagpili ng model, tingnan ang [/concepts/models](/conce
 
 ## Mga built-in na provider (pi-ai catalog)
 
-Kasama sa OpenClaw ang pi‑ai catalog. Ang mga provider na ito ay **hindi**
-nangangailangan ng `models.providers` config; magtakda lang ng auth + pumili ng model.
+Kasama sa OpenClaw ang pi‑ai catalog. Ang mga provider na ito ay **hindi nangangailangan ng**
+`models.providers` config; mag-set lang ng auth at pumili ng modelo.
 
 ### OpenAI
 
@@ -98,8 +91,8 @@ nangangailangan ng `models.providers` config; magtakda lang ng auth + pumili ng 
 - Ang Gemini CLI OAuth ay kasama bilang bundled plugin (`google-gemini-cli-auth`, naka-disable bilang default).
   - Paganahin: `openclaw plugins enable google-gemini-cli-auth`
   - Mag-login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Tala: **hindi** ka nagpa-paste ng client id o secret sa `openclaw.json`. Ang CLI login flow ay
-    nag-iimbak ng mga token sa mga auth profile sa host ng Gateway.
+  - Tandaan: **hindi** mo ipi-paste ang client id o secret sa `openclaw.json`. The CLI login flow stores
+    tokens in auth profiles on the gateway host.
 
 ### Z.AI (GLM)
 
@@ -190,8 +183,8 @@ Gumagamit ang Kimi Coding ng Anthropic-compatible endpoint ng Moonshot AI:
 
 ### Qwen OAuth (free tier)
 
-Nagbibigay ang Qwen ng OAuth access sa Qwen Coder + Vision sa pamamagitan ng device-code flow.
-Paganahin ang bundled plugin, pagkatapos ay mag-login:
+Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
+Enable the bundled plugin, then log in:
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +257,7 @@ ollama pull llama3.3
 }
 ```
 
-Awtomatikong nade-detect ang Ollama kapag tumatakbo nang lokal sa `http://127.0.0.1:11434/v1`. Tingnan ang [/providers/ollama](/providers/ollama) para sa mga rekomendasyon ng model at custom na konpigurasyon.
+Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
 ### Mga lokal na proxy (LM Studio, vLLM, LiteLLM, atbp.)
 
@@ -303,8 +296,8 @@ Halimbawa (OpenAI‑compatible):
 
 Mga tala:
 
-- Para sa mga custom provider, ang `reasoning`, `input`, `cost`, `contextWindow`, at `maxTokens` ay opsyonal.
-  Kapag hindi isinama, ang default ng OpenClaw ay:
+- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
+  When omitted, OpenClaw defaults to:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

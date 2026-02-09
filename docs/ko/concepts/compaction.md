@@ -4,20 +4,13 @@ read_when:
   - auto-compaction 및 /compact 를 이해하고 싶을 때
   - 컨텍스트 한계에 도달하는 긴 세션을 디버깅할 때
 title: "컴팩션"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:34Z
 ---
 
 # 컨텍스트 윈도우 & 컴팩션
 
 모든 모델에는 **컨텍스트 윈도우**(확인할 수 있는 최대 토큰 수)가 있습니다. 장시간 실행되는 채팅은 메시지와 도구 결과가 누적되며, 윈도우가 빡빡해지면 OpenClaw 는 한계 내에 머물기 위해 이전 기록을 **컴팩션**합니다.
 
-## 컴팩션이란
+## 컴팩션이란 무엇인가
 
 컴팩션은 **이전 대화를 요약**하여 간결한 요약 항목으로 만들고, 최근 메시지는 그대로 유지합니다. 요약은 세션 기록에 저장되므로, 이후 요청에서는 다음을 사용합니다.
 
@@ -34,7 +27,7 @@ x-i18n:
 
 세션이 모델의 컨텍스트 윈도우에 근접하거나 초과하면 OpenClaw 가 자동 컴팩션을 트리거하고, 컴팩트된 컨텍스트를 사용해 원래 요청을 재시도할 수 있습니다.
 
-다음과 같은 표시를 확인할 수 있습니다.
+다음이 표시됩니다:
 
 - 자세한 모드에서 `🧹 Auto-compaction complete`
 - `🧹 Compactions: <count>`를 표시하는 `/status`

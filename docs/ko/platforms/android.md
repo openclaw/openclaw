@@ -5,13 +5,6 @@ read_when:
   - Android Gateway(게이트웨이) 디바이스 검색 또는 인증 디버깅 시
   - 클라이언트 간 채팅 기록 일치 여부 검증 시
 title: "Android 앱"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:43Z
 ---
 
 # Android 앱 (노드)
@@ -43,7 +36,7 @@ Android 는 Gateway WebSocket (기본값 `ws://<host>:18789`) 에 직접 연결�
   - 수동 gateway 호스트/포트 (대체 수단)
 - gateway 머신에서 (또는 SSH 를 통해) CLI (`openclaw`) 를 실행할 수 있어야 합니다.
 
-### 1) Gateway 시작
+### 1. Gateway 시작
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ tailnet 전용 구성 (Vienna ⇄ London 에 권장) 의 경우, gateway 를 tai
 - gateway 호스트의 `~/.openclaw/openclaw.json` 에서 `gateway.bind: "tailnet"` 를 설정하십시오.
 - Gateway / macOS 메뉴바 앱을 재시작하십시오.
 
-### 2) 디바이스 검색 확인 (선택 사항)
+### 2. 디바이스 검색 확인 (선택 사항)
 
 gateway 머신에서:
 
@@ -77,7 +70,7 @@ Android NSD/mDNS 디바이스 검색은 네트워크를 넘지 않습니다. And
 
 자세한 내용과 CoreDNS 구성 예시는 [Bonjour](/gateway/bonjour)를 참조하십시오.
 
-### 3) Android 에서 연결
+### 3. Android 에서 연결
 
 Android 앱에서:
 
@@ -91,7 +84,7 @@ Android 앱에서:
 - 수동 엔드포인트 (활성화된 경우), 또는
 - 마지막으로 검색된 gateway (최선의 노력 방식).
 
-### 4) 페어링 승인 (CLI)
+### 4. 페어링 승인 (CLI)
 
 gateway 머신에서:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 페어링 세부 사항: [Gateway 페어링](/gateway/pairing).
 
-### 5) 노드 연결 확인
+### 5. 노드 연결 확인
 
 - 노드 상태를 통해:
 
@@ -116,7 +109,7 @@ openclaw nodes approve <requestId>
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) 채팅 + 기록
+### 6. 채팅 + 기록
 
 Android 노드의 Chat 시트는 gateway 의 **기본 세션 키** (`main`) 를 사용하므로, WebChat 및 기타 클라이언트와 기록과 응답이 공유됩니다:
 
@@ -124,7 +117,7 @@ Android 노드의 Chat 시트는 gateway 의 **기본 세션 키** (`main`) 를 
 - 전송: `chat.send`
 - 푸시 업데이트 (최선의 노력): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + 카메라
+### 7. Canvas + 카메라
 
 #### Gateway Canvas Host (웹 콘텐츠용 권장)
 

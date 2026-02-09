@@ -3,13 +3,6 @@ summary: "Instrucoes padrao do agente OpenClaw e lista de Skills para a configur
 read_when:
   - Iniciando uma nova sessao de agente OpenClaw
   - Ativando ou auditando Skills padrao
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:56Z
 ---
 
 # AGENTS.md — Assistente Pessoal OpenClaw (padrao)

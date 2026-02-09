@@ -1,17 +1,10 @@
 ---
-summary: « Outils de recherche et de récupération web (API Brave Search, Perplexity direct/OpenRouter) »
+summary: "Outils de recherche et de récupération web (API Brave Search, Perplexity direct/OpenRouter)"
 read_when:
   - Vous souhaitez activer web_search ou web_fetch
   - Vous avez besoin de configurer une clé API Brave Search
   - Vous souhaitez utiliser Perplexity Sonar pour la recherche web
-title: « Outils Web »
-x-i18n:
-  source_path: tools/web.md
-  source_hash: f5f25d2b40ccf1e5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:15Z
+title: "Outils Web"
 ---
 
 # Outils web
@@ -35,10 +28,10 @@ Il ne s’agit **pas** d’une automatisation de navigateur. Pour les sites rich
 
 ## Choisir un fournisseur de recherche
 
-| Fournisseur            | Avantages                                       | Inconvénients                              | Clé API                                      |
-| ---------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------- |
+| Fournisseur                               | Avantages                                       | Cons                                       | Clé API                                      |
+| ----------------------------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------- |
 | **Brave** (par défaut) | Rapide, résultats structurés, offre gratuite    | Résultats de recherche traditionnels       | `BRAVE_API_KEY`                              |
-| **Perplexity**         | Réponses IA synthétisées, citations, temps réel | Nécessite l’accès Perplexity ou OpenRouter | `OPENROUTER_API_KEY` ou `PERPLEXITY_API_KEY` |
+| **Perplexity**                            | Réponses IA synthétisées, citations, temps réel | Nécessite l’accès Perplexity ou OpenRouter | `OPENROUTER_API_KEY` ou `PERPLEXITY_API_KEY` |
 
 Voir [Configuration de Brave Search](/brave-search) et [Perplexity Sonar](/perplexity) pour des détails spécifiques à chaque fournisseur.
 
@@ -133,11 +126,11 @@ Si aucune URL de base n’est définie, OpenClaw choisit une valeur par défaut 
 
 ### Modèles Perplexity disponibles
 
-| Modèle                              | Description                                   | Idéal pour            |
-| ----------------------------------- | --------------------------------------------- | --------------------- |
-| `perplexity/sonar`                  | Questions-réponses rapides avec recherche web | Consultations rapides |
+| Modèle                                                 | Description                                   | Idéal pour            |
+| ------------------------------------------------------ | --------------------------------------------- | --------------------- |
+| `perplexity/sonar`                                     | Questions-réponses rapides avec recherche web | Consultations rapides |
 | `perplexity/sonar-pro` (par défaut) | Raisonnement multi-étapes avec recherche web  | Questions complexes   |
-| `perplexity/sonar-reasoning-pro`    | Analyse de type « chain-of-thought »          | Recherche approfondie |
+| `perplexity/sonar-reasoning-pro`                       | Analyse de type « chain-of-thought »          | Recherche approfondie |
 
 ## web_search
 
@@ -168,7 +161,7 @@ Recherche sur le web à l’aide du fournisseur configuré.
 }
 ```
 
-### Paramètres de l’outil
+### Paramètres de l'outil
 
 - `query` (requis)
 - `count` (1–10 ; valeur par défaut issue de la configuration)
@@ -207,12 +200,12 @@ await web_search({
 
 Récupère une URL et extrait le contenu lisible.
 
-### Prérequis
+### exigences web_fetch
 
 - `tools.web.fetch.enabled` ne doit pas être `false` (par défaut : activé)
 - Solution de repli Firecrawl optionnelle : définir `tools.web.fetch.firecrawl.apiKey` ou `FIRECRAWL_API_KEY`.
 
-### Configuration
+### config web_fetch
 
 ```json5
 {
@@ -241,7 +234,7 @@ Récupère une URL et extrait le contenu lisible.
 }
 ```
 
-### Paramètres de l’outil
+### Paramètres de l'outil web_fetch
 
 - `url` (requis, http/https uniquement)
 - `extractMode` (`markdown` | `text`)

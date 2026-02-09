@@ -5,13 +5,6 @@ read_when:
   - Débogage des incompatibilités de protocole ou des échecs de connexion
   - Régénération du schéma/des modèles du protocole
 title: "Protocole de la Gateway (passerelle)"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:49Z
 ---
 
 # Protocole de la Gateway (passerelle) (WebSocket)
@@ -131,7 +124,7 @@ Lorsqu’un jeton d’appareil est émis, `hello-ok` inclut également :
 }
 ```
 
-## Encadrement des trames (framing)
+## Encadrement
 
 - **Requête** : `{type:"req", id, method, params}`
 - **Réponse** : `{type:"res", id, ok, payload|error}`
@@ -148,7 +141,7 @@ Les méthodes ayant des effets de bord nécessitent des **clés d’idempotence*
 
 ### Périmètres (opérateur)
 
-Périmètres courants :
+Portées communes:
 
 - `operator.read`
 - `operator.write`
@@ -177,7 +170,7 @@ La Gateway (passerelle) traite celles-ci comme des **revendications** et appliqu
 - Les nœuds peuvent appeler `skills.bins` pour récupérer la liste actuelle des exécutables de Skills
   afin d’effectuer des vérifications d’auto‑autorisation.
 
-## Approbations d’exécution (exec)
+## Approbations d’exécution
 
 - Lorsqu’une requête d’exécution nécessite une approbation, la gateway diffuse `exec.approval.requested`.
 - Les clients opérateurs résolvent en appelant `exec.approval.resolve` (nécessite le périmètre `operator.approvals`).
@@ -218,7 +211,7 @@ La Gateway (passerelle) traite celles-ci comme des **revendications** et appliqu
 - Les clients peuvent optionnellement épingler l’empreinte du certificat de la gateway (voir la configuration `gateway.tls`
   ainsi que `gateway.remote.tlsFingerprint` ou le CLI `--tls-fingerprint`).
 
-## Portée
+## Périmètre d'application
 
 Ce protocole expose **l’intégralité de l’API de la gateway** (statut, canaux, modèles, chat,
 agent, sessions, nœuds, approbations, etc.). La surface exacte est définie par les schémas TypeBox dans `src/gateway/protocol/schema.ts`.

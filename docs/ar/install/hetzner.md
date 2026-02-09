@@ -1,18 +1,11 @@
 ---
 summary: "تشغيل OpenClaw Gateway على مدار الساعة 24/7 على VPS منخفض التكلفة من Hetzner (Docker) مع حالة دائمة وثنائيات مضمّنة"
 read_when:
-  - "تريد تشغيل OpenClaw على مدار الساعة 24/7 على VPS سحابي (وليس على حاسوبك المحمول)"
-  - "تريد Gateway جاهزًا للإنتاج يعمل دائمًا على VPS خاص بك"
-  - "تريد تحكمًا كاملًا في الاستمرارية والثنائيات وسلوك إعادة التشغيل"
-  - "تشغّل OpenClaw داخل Docker على Hetzner أو مزوّد مشابه"
+  - تريد تشغيل OpenClaw على مدار الساعة 24/7 على VPS سحابي (وليس على حاسوبك المحمول)
+  - تريد Gateway جاهزًا للإنتاج يعمل دائمًا على VPS خاص بك
+  - تريد تحكمًا كاملًا في الاستمرارية والثنائيات وسلوك إعادة التشغيل
+  - تشغّل OpenClaw داخل Docker على Hetzner أو مزوّد مشابه
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:29Z
 ---
 
 # OpenClaw على Hetzner (Docker، دليل VPS للإنتاج)
@@ -71,7 +64,7 @@ x-i18n:
 
 ---
 
-## 1) تجهيز الـ VPS
+## 1. تجهيز الـ VPS
 
 أنشئ VPS بنظام Ubuntu أو Debian في Hetzner.
 
@@ -86,7 +79,7 @@ ssh root@YOUR_VPS_IP
 
 ---
 
-## 2) تثبيت Docker (على الـ VPS)
+## 2. تثبيت Docker (على الـ VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) استنساخ مستودع OpenClaw
+## 3. استنساخ مستودع OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,7 +107,7 @@ cd openclaw
 
 ---
 
-## 4) إنشاء أدلة مضيف دائمة
+## 4. إنشاء أدلة مضيف دائمة
 
 حاويات Docker مؤقتة.
 يجب أن تعيش كل الحالة طويلة الأمد على المضيف.
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) تهيئة متغيرات البيئة
+## 5. تهيئة متغيرات البيئة
 
 أنشئ `.env` في جذر المستودع.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) تهيئة Docker Compose
+## 6. تهيئة Docker Compose
 
 أنشئ أو حدّث `docker-compose.yml`.
 
@@ -204,7 +197,7 @@ services:
 
 ---
 
-## 7) تضمين الثنائيات المطلوبة داخل الصورة (أمر حاسم)
+## 7. تضمين الثنائيات المطلوبة داخل الصورة (أمر حاسم)
 
 تثبيت الثنائيات داخل حاوية قيد التشغيل فخّ.
 أي شيء يُثبَّت وقت التشغيل سيُفقد عند إعادة التشغيل.
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) البناء والتشغيل
+## 8. البناء والتشغيل
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) التحقق من Gateway
+## 9. التحقق من Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -323,15 +316,15 @@ ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
 يعمل OpenClaw داخل Docker، لكن Docker ليس مصدر الحقيقة.
 يجب أن تبقى كل الحالة طويلة الأمد عبر إعادة التشغيل وإعادة البناء وإعادة الإقلاع.
 
-| المكوّن              | الموقع                            | آلية الاستمرارية              | ملاحظات                        |
+| المكون               | الموقع                            | آلية الاستمرارية              | ملاحظات                        |
 | -------------------- | --------------------------------- | ----------------------------- | ------------------------------ |
-| تهيئة Gateway        | `/home/node/.openclaw/`           | ربط وحدة تخزين للمضيف         | تتضمن `openclaw.json`، والرموز |
-| ملفات مصادقة النموذج | `/home/node/.openclaw/`           | ربط وحدة تخزين للمضيف         | رموز OAuth، مفاتيح API         |
-| تهيئات Skills        | `/home/node/.openclaw/skills/`    | ربط وحدة تخزين للمضيف         | حالة على مستوى Skill           |
-| مساحة عمل الوكيل     | `/home/node/.openclaw/workspace/` | ربط وحدة تخزين للمضيف         | الشيفرة ومواد الوكيل           |
-| جلسة WhatsApp        | `/home/node/.openclaw/`           | ربط وحدة تخزين للمضيف         | يحفظ تسجيل الدخول عبر QR       |
+| تهيئة Gateway        | `/home/node/.openclaw/`           | تحميل حجم صوت المضيف          | تتضمن `openclaw.json`، والرموز |
+| ملفات مصادقة النموذج | `/home/node/.openclaw/`           | تحميل حجم صوت المضيف          | رموز OAuth، مفاتيح API         |
+| تهيئات Skills        | `/home/node/.openclaw/skills/`    | تحميل حجم صوت المضيف          | حالة على مستوى Skill           |
+| مساحة عمل الوكيل     | `/home/node/.openclaw/workspace/` | تحميل حجم صوت المضيف          | الشيفرة ومواد الوكيل           |
+| جلسة WhatsApp        | `/home/node/.openclaw/`           | تحميل حجم صوت المضيف          | يحفظ تسجيل الدخول عبر QR       |
 | حلقة مفاتيح Gmail    | `/home/node/.openclaw/`           | وحدة تخزين للمضيف + كلمة مرور | يتطلب `GOG_KEYRING_PASSWORD`   |
 | الثنائيات الخارجية   | `/usr/local/bin/`                 | صورة Docker                   | يجب تضمينها وقت البناء         |
 | بيئة تشغيل Node      | نظام ملفات الحاوية                | صورة Docker                   | تُعاد بناؤها مع كل بناء للصورة |
 | حزم نظام التشغيل     | نظام ملفات الحاوية                | صورة Docker                   | لا تُثبَّت وقت التشغيل         |
-| حاوية Docker         | مؤقتة                             | قابلة لإعادة التشغيل          | آمنة للإزالة                   |
+| حاوية Docker         | مؤقّت                             | قابلة لإعادة التشغيل          | آمنة للإزالة                   |

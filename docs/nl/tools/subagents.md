@@ -3,14 +3,7 @@ summary: "Sub-agents: het starten van geïsoleerde agentruns die resultaten teru
 read_when:
   - Je wilt achtergrond-/parallel werk via de agent
   - Je wijzigt sessions_spawn of het toolbeleid voor sub-agents
-title: "Sub-agents"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
+title: "Sub-agenten"
 ---
 
 # Sub-agents

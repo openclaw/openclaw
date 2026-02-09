@@ -4,13 +4,6 @@ read_when:
   - OpenClaw içinde Anthropic modellerini kullanmak istiyorsanız
   - API anahtarları yerine setup-token kullanmak istiyorsanız
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:38Z
 ---
 
 # Anthropic (Claude)
@@ -33,7 +26,7 @@ openclaw onboard
 openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
-### Yapılandırma parçası
+### Yapılandırma parçacığı
 
 ```json5
 {
@@ -50,10 +43,10 @@ OpenClaw, Anthropic’in prompt caching özelliğini destekler. Bu özellik **ya
 
 Model yapılandırmanızda `cacheRetention` parametresini kullanın:
 
-| Değer   | Önbellek Süresi  | Açıklama                                         |
-| ------- | ---------------- | ------------------------------------------------ |
-| `none`  | Önbellekleme yok | Prompt caching’i devre dışı bırakır              |
-| `short` | 5 dakika         | API Anahtarı kimlik doğrulaması için varsayılan  |
+| Değer   | Önbellek Süresi  | Açıklama                                                            |
+| ------- | ---------------- | ------------------------------------------------------------------- |
+| `none`  | Önbellekleme yok | Prompt caching’i devre dışı bırakır                                 |
+| `short` | 5 dakika         | API Anahtarı kimlik doğrulaması için varsayılan                     |
 | `long`  | 1 saat           | Genişletilmiş önbellek (beta bayrağı gerektirir) |
 
 ```json5

@@ -4,13 +4,6 @@ read_when:
   - Model kimlik doğrulaması veya OAuth süresinin dolmasını hata ayıklarken
   - Kimlik doğrulama veya kimlik bilgisi depolamayı belgelendirirken
 title: "Kimlik Doğrulama"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:18Z
 ---
 
 # Kimlik Doğrulama
@@ -110,7 +103,7 @@ openclaw models status
 openclaw doctor
 ```
 
-## Hangi kimlik bilgisinin kullanılacağını denetleme
+## Controlling which credential is used
 
 ### Oturum başına (sohbet komutu)
 
@@ -121,7 +114,7 @@ Kompakt bir seçici için `/model` (veya `/model list`) kullanın; tam görünü
 (işaret adayları + sonraki kimlik doğrulama profili, ayrıca yapılandırıldığında
 sağlayıcı uç nokta ayrıntıları) için `/model status` kullanın.
 
-### Ajan başına (CLI geçersiz kılma)
+### Per-agent (CLI override)
 
 Bir ajan için açık bir kimlik doğrulama profili sırası geçersiz kılması ayarlayın
 (ajanın `auth-profiles.json` dosyasında saklanır):
@@ -148,8 +141,7 @@ openclaw models status
 
 ### Belirtecin süresi doluyor/doldu
 
-Hangi profilin süresinin dolduğunu doğrulamak için `openclaw models status` çalıştırın.
-Profil eksikse, `claude setup-token` komutunu yeniden çalıştırın ve belirteci tekrar yapıştırın.
+Hangi profilin süresinin dolduğunu doğrulamak için `openclaw models status` çalıştırın. Profil eksikse, `claude setup-token` komutunu yeniden çalıştırın ve belirteci tekrar yapıştırın.
 
 ## Gereksinimler
 

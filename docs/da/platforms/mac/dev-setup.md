@@ -3,13 +3,6 @@ summary: "Opsætningsguide for udviklere, der arbejder på OpenClaw macOS-appen"
 read_when:
   - Opsætning af macOS-udviklingsmiljøet
 title: "macOS Udvikleropsætning"
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:26Z
 ---
 
 # macOS Udvikleropsætning
@@ -23,7 +16,7 @@ Før du bygger appen, skal du sikre dig, at du har følgende installeret:
 1. **Xcode 26.2+**: Påkrævet til Swift-udvikling.
 2. **Node.js 22+ & pnpm**: Påkrævet til gateway, CLI og pakkescripts.
 
-## 1. Installér afhængigheder
+## 1) Installér Afhængigheder
 
 Installér projektets fælles afhængigheder:
 
@@ -31,7 +24,7 @@ Installér projektets fælles afhængigheder:
 pnpm install
 ```
 
-## 2. Byg og pak appen
+## 2. Byg og Pak appen
 
 For at bygge macOS-appen og pakke den i `dist/OpenClaw.app`, kør:
 
@@ -44,9 +37,9 @@ Hvis du ikke har et Apple Developer ID-certifikat, vil scriptet automatisk bruge
 For dev-kørselstilstande, signeringsflag og fejlfinding af Team ID, se macOS-appens README:
 [https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md)
 
-> **Note**: Apps, der er ad-hoc-signerede, kan udløse sikkerhedsprompter. Hvis appen crasher med det samme med "Abort trap 6", se afsnittet [Fejlfinding](#troubleshooting).
+> **Bemærk**: Ad-hoc-underskrevne apps kan udløse sikkerhedsprompter. Hvis appen går ned med det samme med "Afbryd fælde 6", se afsnittet [Troubleshooting](#troubleshooting).
 
-## 3. Installér CLI
+## 3. Installér CLI’en
 
 macOS-appen forventer en global `openclaw` CLI-installation til at håndtere baggrundsopgaver.
 
@@ -108,4 +101,4 @@ openclaw gateway stop
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
 
-Hvis en manuel kørsel holder porten, så stop den proces (Ctrl+C). Som en sidste udvej kan du dræbe den PID, du fandt ovenfor.
+Hvis en manuel kørsel holder porten, skal du stoppe denne proces (Ctrl+C). Som en sidste udvej, dræbe den PID du fandt ovenfor.

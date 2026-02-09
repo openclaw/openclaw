@@ -5,13 +5,6 @@ read_when:
   - Du vil have en produktionsklar, altid-aktiv Gateway på din egen VM
   - Du vil have fuld kontrol over persistens, binære filer og genstartsadfærd
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:37Z
 ---
 
 # OpenClaw på GCP Compute Engine (Docker, produktions-VPS-guide)
@@ -20,8 +13,8 @@ x-i18n:
 
 Kør en vedvarende OpenClaw Gateway på en GCP Compute Engine VM ved hjælp af Docker, med holdbar tilstand, indbyggede binære filer og sikker genstartsadfærd.
 
-Hvis du vil have "OpenClaw 24/7 for ~$5-12/md.", er dette en pålidelig opsætning på Google Cloud.
-Prisen varierer efter maskintype og region; vælg den mindste VM, der passer til din arbejdsbelastning, og skaler op, hvis du rammer OOM.
+Hvis du ønsker "OpenClaw 24/7 for ~$5-12/mo", dette er en pålidelig opsætning på Google Cloud.
+Priserne varierer efter maskintype og region; vælge den mindste VM, der passer til din arbejdsbyrde og skalere op, hvis du rammer OOMs.
 
 ## Hvad gør vi (enkelt forklaret)?
 
@@ -38,8 +31,8 @@ Gatewayen kan tilgås via:
 - Direkte port-eksponering, hvis du selv håndterer firewall og tokens
 
 Denne guide bruger Debian på GCP Compute Engine.
-Ubuntu fungerer også; tilpas pakkerne tilsvarende.
-For det generiske Docker-flow, se [Docker](/install/docker).
+Ubuntu virker også; kort pakker i overensstemmelse hermed.
+For det generiske Dockerflow, se [Docker](/install/docker)
 
 ---
 
@@ -72,7 +65,7 @@ For det generiske Docker-flow, se [Docker](/install/docker).
 
 ---
 
-## 1) Installér gcloud CLI (eller brug Console)
+## 1. Installér gcloud CLI (eller brug Console)
 
 **Mulighed A: gcloud CLI** (anbefalet til automatisering)
 
@@ -91,7 +84,7 @@ Alle trin kan udføres via web-UI’et på [https://console.cloud.google.com](ht
 
 ---
 
-## 2) Opret et GCP-projekt
+## 2. Opret et GCP-projekt
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) Opret VM’en
+## 3. Opret VM’en
 
 **Maskintyper:**
 
-| Type     | Specifikationer        | Pris                 | Noter                       |
-| -------- | ---------------------- | -------------------- | --------------------------- |
-| e2-small | 2 vCPU, 2GB RAM        | ~$12/md.             | Anbefalet                   |
-| e2-micro | 2 vCPU (delt), 1GB RAM | Free tier-berettiget | Kan få OOM under belastning |
+| Type     | Specifikationer                           | Pris                                     | Noter                       |
+| -------- | ----------------------------------------- | ---------------------------------------- | --------------------------- |
+| e2-small | 2 vCPU, 2GB RAM                           | ~$12/md. | Anbefalet                   |
+| e2-micro | 2 vCPU (delt), 1GB RAM | Free tier-berettiget                     | Kan få OOM under belastning |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) SSH ind på VM’en
+## 4. SSH ind på VM’en
 
 **CLI:**
 
@@ -160,11 +153,11 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a
 
 Klik på "SSH"-knappen ved siden af din VM i Compute Engine-dashboardet.
 
-Bemærk: Udbredelse af SSH-nøgler kan tage 1-2 minutter efter oprettelse af VM’en. Hvis forbindelsen afvises, vent og prøv igen.
+Bemærk: SSH nøgleformering kan tage 1-2 minutter efter VM oprettelse. Hvis forbindelse nægtes, så vent og prøv igen.
 
 ---
 
-## 5) Installér Docker (på VM’en)
+## 5. Installér Docker (på VM’en)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) Klon OpenClaw-repositoriet
+## 6. Klon OpenClaw-repositoriet
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,10 +198,10 @@ Denne guide antager, at du bygger et brugerdefineret image for at garantere pers
 
 ---
 
-## 7) Opret vedvarende værtsmapper
+## 7. Opret vedvarende værtsmapper
 
-Docker-containere er flygtige.
-Al langlivet tilstand skal ligge på værten.
+Docker containere er flydende.
+Alle langvarige stater skal leve på værten.
 
 ```bash
 mkdir -p ~/.openclaw
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) Konfigurér miljøvariabler
+## 8. Konfigurér miljøvariabler
 
 Opret `.env` i roden af repositoriet.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose-konfiguration
+## 9. Docker Compose-konfiguration
 
 Opret eller opdatér `docker-compose.yml`.
 
@@ -291,10 +284,10 @@ services:
 
 ---
 
-## 10) Indbyg nødvendige binære filer i imaget (kritisk)
+## 10. Indbyg nødvendige binære filer i imaget (kritisk)
 
-At installere binære filer inde i en kørende container er en fælde.
-Alt, der installeres ved runtime, går tabt ved genstart.
+Installation af binære filer i en kørende beholder er en fælde.
+Alt installeret på runtime vil gå tabt ved genstart.
 
 Alle eksterne binære filer, som Skills kræver, skal installeres ved image-build-tid.
 
@@ -305,7 +298,7 @@ Eksemplerne nedenfor viser kun tre almindelige binære filer:
 - `wacli` til WhatsApp
 
 Dette er eksempler, ikke en komplet liste.
-Du kan installere så mange binære filer som nødvendigt ved at bruge samme mønster.
+Du kan installere så mange binære filer efter behov ved hjælp af det samme mønster.
 
 Hvis du senere tilføjer nye Skills, der afhænger af yderligere binære filer, skal du:
 
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Byg og start
+## 11. Byg og start
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ Forventet output:
 
 ---
 
-## 12) Verificér Gateway
+## 12. Verificér Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Succes:
 
 ---
 
-## 13) Få adgang fra din laptop
+## 13. Få adgang fra din laptop
 
 Opret en SSH-tunnel for at videresende Gateway-porten:
 
@@ -411,8 +404,8 @@ Indsæt dit gateway-token.
 
 ## Hvad gemmes hvor (sandhedskilde)
 
-OpenClaw kører i Docker, men Docker er ikke sandhedskilden.
-Al langlivet tilstand skal overleve genstarter, genopbygninger og genstart af maskinen.
+OpenClaw kører i Docker, men Docker er ikke kilden til sandhed.
+Alle langlivede stater skal overleve genstarter, genopbygger og genstarter.
 
 | Komponent             | Placering                         | Persistensmekanisme        | Noter                              |
 | --------------------- | --------------------------------- | -------------------------- | ---------------------------------- |
@@ -446,7 +439,7 @@ docker compose up -d
 
 **SSH-forbindelse afvist**
 
-Udbredelse af SSH-nøgler kan tage 1-2 minutter efter oprettelse af VM’en. Vent og prøv igen.
+SSH nøgleformering kan tage 1-2 minutter efter VM oprettelse. Vent og prøv igen.
 
 **OS Login-problemer**
 
@@ -498,7 +491,7 @@ Til automatisering eller CI/CD-pipelines skal du oprette en dedikeret servicekon
      --role="roles/compute.instanceAdmin.v1"
    ```
 
-Undgå at bruge Owner-rollen til automatisering. Brug princippet om mindst mulige rettigheder.
+Undgå at bruge ejeren rolle for automatisering. Brug princippet om mindst privilegium.
 
 Se [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google.com/iam/docs/understanding-roles) for detaljer om IAM-roller.
 

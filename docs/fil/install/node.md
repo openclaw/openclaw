@@ -5,18 +5,11 @@ read_when:
   - "Kailangan mong i-install ang Node.js bago i-install ang OpenClaw"
   - "Na-install mo ang OpenClaw pero `openclaw` is command not found"
   - "Nabibigo ang npm install -g dahil sa mga isyu sa permission o PATH"
-x-i18n:
-  source_path: install/node.md
-  source_hash: f848d6473a183090
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:38Z
 ---
 
 # Node.js
 
-Kinakailangan ng OpenClaw ang **Node 22 o mas bago**. Awtomatikong madi-detect at mai-install ng [installer script](/install#install-methods) ang Node — ang pahinang ito ay para sa mga sitwasyong gusto mong i-setup ang Node nang manu-mano at tiyaking maayos ang lahat (mga bersyon, PATH, mga global install).
+Kinakailangan ng OpenClaw ang **Node 22 o mas bago**. Awtomatikong idi-detect at i-i-install ng [installer script](/install#install-methods) ang Node — ang pahinang ito ay para sa mga pagkakataong gusto mong i-set up ang Node nang manu-mano at tiyaking maayos ang lahat (mga bersyon, PATH, global installs).
 
 ## Suriin ang iyong bersyon
 
@@ -24,7 +17,7 @@ Kinakailangan ng OpenClaw ang **Node 22 o mas bago**. Awtomatikong madi-detect a
 node -v
 ```
 
-Kung magpi-print ito ng `v22.x.x` o mas mataas, ayos ka na. Kung hindi naka-install ang Node o masyadong luma ang bersyon, pumili ng paraan ng pag-install sa ibaba.
+Kung magpi-print ito ng `v22.x.x` o mas mataas, ayos ka na. Kung hindi naka-install ang Node o masyadong luma ang bersyon, pumili ng isang paraan ng pag-install sa ibaba.
 
 ## I-install ang Node
 
@@ -32,50 +25,56 @@ Kung magpi-print ito ng `v22.x.x` o mas mataas, ayos ka na. Kung hindi naka-inst
   <Tab title="macOS">
     **Homebrew** (inirerekomenda):
 
+    ````
     ```bash
     brew install node
     ```
-
+    
     O i-download ang macOS installer mula sa [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
   <Tab title="Linux">
     **Ubuntu / Debian:**
 
+    ````
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
     ```
-
+    
     **Fedora / RHEL:**
-
+    
     ```bash
     sudo dnf install nodejs
     ```
-
+    
     O gumamit ng version manager (tingnan sa ibaba).
+    ````
 
   </Tab>
   <Tab title="Windows">
     **winget** (inirerekomenda):
 
+    ````
     ```powershell
     winget install OpenJS.NodeJS.LTS
     ```
-
+    
     **Chocolatey:**
-
+    
     ```powershell
     choco install nodejs-lts
     ```
-
+    
     O i-download ang Windows installer mula sa [nodejs.org](https://nodejs.org/).
+    ````
 
   </Tab>
 </Tabs>
 
-<Accordion title="Paggamit ng version manager (nvm, fnm, mise, asdf)">
-  Pinapadali ng mga version manager ang paglipat-lipat sa pagitan ng mga bersyon ng Node. Mga sikat na opsyon:
+<Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
+  Pinapahintulutan ka ng mga version manager na madaling magpalit-palit sa pagitan ng mga bersyon ng Node. Mga sikat na opsyon:
 
 - [**fnm**](https://github.com/Schniz/fnm) — mabilis, cross-platform
 - [**nvm**](https://github.com/nvm-sh/nvm) — malawakang ginagamit sa macOS/Linux
@@ -89,7 +88,7 @@ fnm use 22
 ```
 
   <Warning>
-  Tiyaking naka-initialize ang iyong version manager sa shell startup file (`~/.zshrc` o `~/.bashrc`). Kung hindi, maaaring hindi makita ang `openclaw` sa mga bagong terminal session dahil hindi isasama ng PATH ang bin directory ng Node.
+  Tiyaking naka-initialize ang iyong version manager sa shell startup file (`~/.zshrc` o `~/.bashrc`). Kung hindi, maaaring hindi matagpuan ang `openclaw` sa mga bagong terminal session dahil hindi isasama ng PATH ang bin directory ng Node.
   </Warning>
 </Accordion>
 
@@ -100,34 +99,38 @@ fnm use 22
 Halos palagi itong nangangahulugang wala sa iyong PATH ang global bin directory ng npm.
 
 <Steps>
-  <Step title="Hanapin ang iyong global npm prefix">
+  <Step title="Find your global npm prefix">
     ```bash
     npm prefix -g
     ```
   </Step>
-  <Step title="Suriin kung nasa iyong PATH ito">
+  <Step title="Check if it's on your PATH">
     ```bash
     echo "$PATH"
     ```
 
+    ```
     Hanapin ang `<npm-prefix>/bin` (macOS/Linux) o `<npm-prefix>` (Windows) sa output.
+    ```
 
   </Step>
-  <Step title="Idagdag ito sa iyong shell startup file">
+  <Step title="Add it to your shell startup file">
     <Tabs>
       <Tab title="macOS / Linux">
         Idagdag sa `~/.zshrc` o `~/.bashrc`:
 
-        ```bash
-        export PATH="$(npm prefix -g)/bin:$PATH"
         ```
-
-        Pagkatapos ay magbukas ng bagong terminal (o patakbuhin ang `rehash` sa zsh / `hash -r` sa bash).
-      </Tab>
-      <Tab title="Windows">
-        Idagdag ang output ng `npm prefix -g` sa iyong system PATH sa pamamagitan ng Settings → System → Environment Variables.
-      </Tab>
-    </Tabs>
+            ```bash
+            export PATH="$(npm prefix -g)/bin:$PATH"
+            ```
+        
+            Pagkatapos ay magbukas ng bagong terminal (o patakbuhin ang `rehash` sa zsh / `hash -r` sa bash).
+          </Tab>
+          <Tab title="Windows">
+            Idagdag ang output ng `npm prefix -g` sa iyong system PATH sa pamamagitan ng Settings → System → Environment Variables.
+          </Tab>
+        </Tabs>
+        ```
 
   </Step>
 </Steps>

@@ -4,13 +4,6 @@ read_when:
   - Gusto mo ng JSON-only na LLM step sa loob ng workflows
   - Kailangan mo ng schema-validated na LLM output para sa automation
 title: "LLM Task"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:56Z
 ---
 
 # LLM Task
@@ -72,8 +65,8 @@ nang hindi nagsusulat ng custom na OpenClaw code para sa bawat workflow.
 }
 ```
 
-Ang `allowedModels` ay isang allowlist ng mga `provider/model` string. Kapag naka-set, anumang request
-na nasa labas ng listahan ay tinatanggihan.
+40. Ang `allowedModels` ay isang allowlist ng mga string na `provider/model`. 41. Kapag itinakda, anumang request
+    sa labas ng listahan ay tinatanggihan.
 
 ## Mga parameter ng tool
 

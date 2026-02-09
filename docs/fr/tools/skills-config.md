@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de la configuration des Skills
   - Ajustement de la liste d’autorisation fournie ou du comportement d’installation
 title: "Configuration des Skills"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:04Z
 ---
 
 # Configuration des Skills

@@ -5,18 +5,11 @@ read_when:
   - ပရိုတိုကောလ် မကိုက်ညီမှုများ သို့မဟုတ် ချိတ်ဆက်မှု မအောင်မြင်မှုများကို ဒီဘတ်လုပ်နေစဉ်
   - ပရိုတိုကောလ် စကီးမာ/မော်ဒယ်များကို ပြန်လည်ထုတ်လုပ်နေစဉ်
 title: "Gateway ပရိုတိုကောလ်"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:34Z
 ---
 
 # Gateway ပရိုတိုကောလ် (WebSocket)
 
-Gateway WS ပရိုတိုကောလ်သည် OpenClaw အတွက် **တစ်ခုတည်းသော control plane + node transport** ဖြစ်သည်။ ကလိုင်ယင့်အားလုံး (CLI, web UI, macOS app, iOS/Android nodes, headless nodes) သည် WebSocket မှတစ်ဆင့် ချိတ်ဆက်ပြီး handshake အချိန်တွင် မိမိတို့၏ **role** + **scope** ကို ကြေညာရသည်။
+(Legacy TCP bridge support ကို deprecated လုပ်ပြီး ဖယ်ရှားထားပါတယ်။) Gateway WS protocol က OpenClaw အတွက် **single control plane + node transport** ဖြစ်ပါတယ်။
 
 ## Transport
 
@@ -191,8 +184,7 @@ Gateway သည် ယင်းတို့ကို **claims** အဖြစ် �
 
 - `OPENCLAW_GATEWAY_TOKEN` (သို့မဟုတ် `--token`) ကို သတ်မှတ်ထားပါက `connect.params.auth.token`
   မကိုက်ညီလျှင် socket ကို ပိတ်သိမ်းမည်။
-- Pairing ပြီးနောက် Gateway သည် connection role + scopes အလိုက် ခွဲထားသော **device token** ကို ထုတ်ပေးသည်။ ယင်းကို `hello-ok.auth.deviceToken` ထဲတွင် ပြန်ပေးပြီး
-  နောင်တစ်ကြိမ် ချိတ်ဆက်ရာတွင် အသုံးပြုရန် ကလိုင်ယင့်က သိမ်းဆည်းထားသင့်သည်။
+- clients အားလုံး (CLI, web UI, macOS app, iOS/Android nodes, headless nodes) က WebSocket နဲ့ ချိတ်ဆက်ပြီး handshake အချိန်မှာ သူတို့ရဲ့ **role** + **scope** ကို ကြေညာရပါတယ်။ pairing ပြီးသွားရင် Gateway က connection role + scopes အပေါ်မူတည်တဲ့ **device token** တစ်ခု ထုတ်ပေးပါတယ်။
 - Device token များကို `device.token.rotate` နှင့်
   `device.token.revoke` ဖြင့် လှည့်ပြောင်း/ရုပ်သိမ်းနိုင်သည် (`operator.pairing` scope လိုအပ်သည်)။
 
@@ -203,9 +195,8 @@ Gateway သည် ယင်းတို့ကို **claims** အဖြစ် �
 - Device ID အသစ်များအတွက် pairing အတည်ပြုချက် လိုအပ်ပြီး local auto-approval ကို ဖွင့်ထားပါက ချန်လှပ်နိုင်သည်။
 - **Local** ချိတ်ဆက်မှုများတွင် loopback နှင့် gateway ဟို့စ်၏ ကိုယ်ပိုင် tailnet လိပ်စာ ပါဝင်သည်
   (ထို့ကြောင့် same‑host tailnet bind များကိုလည်း auto‑approve လုပ်နိုင်သည်)။
-- WS ကလိုင်ယင့်အားလုံးသည် `connect` အတွင်း (`device` identity ကို) ထည့်သွင်းရမည် (operator + node)။
-  Control UI သည် `gateway.controlUi.allowInsecureAuth` ကို ဖွင့်ထားသောအခါ **သာလျှင်**
-  (သို့မဟုတ် break‑glass အသုံးအတွက် `gateway.controlUi.dangerouslyDisableDeviceAuth`) ယင်းကို ချန်လှပ်နိုင်သည်။
+- အဲဒီ token ကို `hello-ok.auth.deviceToken` ထဲမှာ ပြန်ပေးပြီး နောက်တစ်ကြိမ် ချိတ်ဆက်ရာမှာ အသုံးပြုဖို့ client က သိမ်းထားရပါမယ်။
+  WS clients အားလုံးက `connect` အချိန်မှာ `device` identity (operator + node) ကို ထည့်ရပါမယ်။
 - Local မဟုတ်သော ချိတ်ဆက်မှုများသည် server မှ ပေးထားသော `connect.challenge` nonce ကို လက်မှတ်ရေးထိုးရမည်။
 
 ## TLS + pinning
@@ -216,6 +207,4 @@ Gateway သည် ယင်းတို့ကို **claims** အဖြစ် �
 
 ## Scope
 
-ဤပရိုတိုကောလ်သည် **Gateway API အပြည့်အစုံ** (status, channels, models, chat,
-agent, sessions, nodes, approvals စသည်တို့) ကို ဖော်ထုတ်ပေးသည်။ တိကျသော API မျက်နှာပြင်ကို
-`src/gateway/protocol/schema.ts` ထဲရှိ TypeBox schema များဖြင့် သတ်မှတ်ထားသည်။
+Control UI က `gateway.controlUi.allowInsecureAuth` ကို enable လုပ်ထားတဲ့အခါမှာပဲ `device` ကို ချန်လှပ်နိုင်ပါတယ် (သို့မဟုတ် break-glass အသုံးပြုရန် `gateway.controlUi.dangerouslyDisableDeviceAuth`)။ ဒီ protocol က **gateway API အပြည့်အစုံ** (status, channels, models, chat, agent, sessions, nodes, approvals စတဲ့အရာများ) ကို ဖော်ထုတ်ပေးပါတယ်။

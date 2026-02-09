@@ -4,18 +4,11 @@ read_when:
   - Redigering af systemprompt-tekst, værktøjsliste eller tids-/heartbeat-sektioner
   - Ændring af workspace-bootstrap eller adfærd for Skills-injektion
 title: "Systemprompt"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:20Z
 ---
 
 # Systemprompt
 
-OpenClaw bygger en brugerdefineret systemprompt for hver agentkørsel. Prompten er **OpenClaw-ejet** og bruger ikke p-coding-agentens standardprompt.
+OpenClaw opbygger en brugerdefineret systemprompt for hver agent kører. Opfordringen er **OpenClaw-owned** og bruger ikke p-coding-agent standardprompten.
 
 Prompten sammensættes af OpenClaw og injiceres i hver agentkørsel.
 
@@ -37,19 +30,19 @@ Prompten er bevidst kompakt og bruger faste sektioner:
 - **Runtime**: vært, OS, node, model, repo-rod (når detekteret), tænkeniveau (én linje).
 - **Reasoning**: aktuelt synlighedsniveau + /reasoning-toggle-hint.
 
-Safety-værn i systemprompten er vejledende. De guider modellens adfærd, men håndhæver ikke politik. Brug værktøjspolitik, exec-godkendelser, sandboxing og kanal-tilladelseslister til hård håndhævelse; operatører kan deaktivere disse efter design.
+Sikkerhed guardrails i systemet prompt er rådgivende. De styrer model adfærd, men ikke håndhæve politik. Brug værktøjspolitik, exec godkendelser, sandboxing, og kanal tillader lister for hård håndhævelse; operatører kan deaktivere disse ved design.
 
 ## Prompt-tilstande
 
-OpenClaw kan gengive mindre systemprompter til subagenter. Runtime sætter en
-`promptMode` for hver kørsel (ikke en brugerrettet konfiguration):
+OpenClaw kan gøre mindre system prompter for underagenter. Runtime sætter en
+`promptMode` for hvert løb (ikke en brugervendende config):
 
 - `full` (standard): inkluderer alle ovenstående sektioner.
-- `minimal`: bruges til subagenter; udelader **Skills**, **Memory Recall**, **OpenClaw
-  Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
-  **Messaging**, **Silent Replies** og **Heartbeats**. Tooling, **Safety**,
-  Workspace, Sandbox, Current Date & Time (når kendt), Runtime og injiceret
-  kontekst forbliver tilgængelige.
+- `minimal`: bruges til underagenter; udelader **Færdigheder**, **Hukommelsestilbagekaldelse**, **OpenClaw
+  Selvopdatering**, **Model Aliases**, **Bruger Identitet**, **Svar Tags**,
+  **Besked**, **Tavse gentagelser**, og **Heartbeats**. Værktøj, **Safety**,
+  Workspace, Sandbox, aktuelle dato og tid (når det vide), Runtime, og injiceret
+  kontekst forbliver tilgængelig.
 - `none`: returnerer kun basis-identitetslinjen.
 
 Når `promptMode=minimal`, mærkes ekstra injicerede prompts som **Subagent
@@ -67,20 +60,20 @@ Bootstrap-filer trimmes og tilføjes under **Project Context**, så modellen ser
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (kun på helt nye workspaces)
 
-Store filer afkortes med en markør. Maks. størrelse pr. fil styres af
+Store filer afkortes med en markør. Den maksimale per fil størrelse styres af
 `agents.defaults.bootstrapMaxChars` (standard: 20000). Manglende filer injicerer en
-kort markør for manglende fil.
+kort mangler filmarkør.
 
 Interne hooks kan afbryde dette trin via `agent:bootstrap` for at mutere eller erstatte
 de injicerede bootstrap-filer (for eksempel ved at bytte `SOUL.md` ud med en alternativ persona).
 
-For at inspicere, hvor meget hver injiceret fil bidrager (rå vs. injiceret, afkortning samt overhead fra værktøjsskema), brug `/context list` eller `/context detail`. Se [Context](/concepts/context).
+For at inspicere hvor meget hver enkelt fil bidrager (rå vs injiceret, trunkering, plus tool schema over head), brug `/context list` eller `/context detail`. Se [Context](/concepts/context).
 
 ## Tids-håndtering
 
-Systemprompten inkluderer en dedikeret **Current Date & Time**-sektion, når
-brugerens tidszone er kendt. For at holde prompt-cachen stabil inkluderer den nu kun
-**tidszonen** (ingen dynamisk klokke eller tidsformat).
+Systemprompten inkluderer en dedikeret **Nuværende dato og tid** sektion når
+brugertidszone er kendt. For at holde den prompte cache-stabil, omfatter den nu kun
+\*\*tidszonen \*\* (intet dynamisk ur eller tidsformat).
 
 Brug `session_status`, når agenten har brug for den aktuelle tid; statuskortet
 indeholder en tidsstempellinje.
@@ -94,10 +87,11 @@ Se [Date & Time](/date-time) for fulde adfærdsdetaljer.
 
 ## Skills
 
-Når der findes egnede Skills, injicerer OpenClaw en kompakt **liste over tilgængelige skills**
-(`formatSkillsForPrompt`), som inkluderer **filstien** for hver skill. Prompten instruerer modellen i at bruge `read` til at indlæse SKILL.md på den angivne
-placering (workspace, administreret eller bundlet). Hvis ingen Skills er egnede, udelades
-Skills-sektionen.
+Når der findes kvalificerede færdigheder, tilfører OpenClaw en kompakt **tilgængelig færdighedsliste**
+(`formatSkillsForPrompt`), der omfatter **filstien** for hver færdighed.
+-prompten instruerer modellen i at bruge `read` til at indlæse SKILL.md på det angivne
+-sted (arbejdsområde, håndteres eller bundtet). Hvis ingen færdigheder er kvalificeret, udelades sektionen
+Færdigheder.
 
 ```
 <available_skills>
@@ -113,9 +107,9 @@ Dette holder basisprompten lille, samtidig med at målrettet brug af skills muli
 
 ## Dokumentation
 
-Når tilgængelig, inkluderer systemprompten en **Documentation**-sektion, der peger på den
-lokale OpenClaw-dokumentationsmappe (enten `docs/` i repo-workspace eller den bundtede npm-
-pakkedokumentation) og bemærker også det offentlige spejl, kilde-repoet, community Discord og
-ClawHub ([https://clawhub.com](https://clawhub.com)) til discovery af skills. Prompten instruerer modellen i først at konsultere lokale dokumenter
-for OpenClaw-adfærd, kommandoer, konfiguration eller arkitektur, og selv at køre
-`openclaw status` når det er muligt (kun at spørge brugeren, når den mangler adgang).
+Hvis tilgængelig, systemprompten indeholder en \*\* Dokumentation\*\* sektion, der peger på den
+lokale OpenClaw docs mappe (enten `docs/` i repo arbejdsområdet eller den medfølgende npm
+pakkedokument) og også noterer det offentlige filspejl, source repo, community Discord, og
+ClawHub ([https://clawhub.com](https://clawhub. om)) for færdigheder opdagelse. Opfordringen instruerer modellen til at konsultere lokale docs første
+for OpenClaw adfærd, kommandoer, konfiguration, eller arkitektur, og at køre
+'openclaw status' selv, når det er muligt (spørger kun brugeren når det mangler adgang).

@@ -5,19 +5,12 @@ read_when:
   - Tilføjelse af agentkontroller til visuelt arbejdsområde
   - Fejlfinding af indlæsning af WKWebView Canvas
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:30Z
 ---
 
 # Canvas (macOS-app)
 
-macOS-appen indlejrer et agentstyret **Canvas-panel** ved hjælp af `WKWebView`. Det
-er et letvægts visuelt arbejdsområde til HTML/CSS/JS, A2UI og små interaktive
+macOS app'en integrerer en agentkontrolleret **Canvas panel** ved hjælp af `WKWebView`. Det
+er et letvægts visuelt arbejdsområde for HTML/CSS/JS, A2UI og små interaktive
 UI-overflader.
 
 ## Hvor Canvas ligger
@@ -45,7 +38,8 @@ Hvis der ikke findes en `index.html` i roden, viser appen en **indbygget scaffol
 - Genindlæses automatisk, når lokale Canvas-filer ændres.
 - Kun ét Canvas-panel er synligt ad gangen (sessionen skiftes efter behov).
 
-Canvas kan deaktiveres fra Indstillinger → **Allow Canvas**. Når det er deaktiveret, returnerer canvas-nodekommandoer `CANVAS_DISABLED`.
+Lærred kan deaktiveres fra Indstillinger → **Tillad Lærer**. Når deaktiveret, returnerer canvas
+node kommandoer `CANVAS_DISABLED`.
 
 ## Agent API-overflade
 
@@ -72,9 +66,9 @@ Noter:
 
 ## A2UI i Canvas
 
-A2UI hostes af Gateway canvas host og gengives inde i Canvas-panelet.
-Når Gateway annoncerer en Canvas host, navigerer macOS-appen automatisk til
-A2UI-hostsiden ved første åbning.
+A2UI er vært for Gateway lærred værten og gengives inde i lærred panelet.
+Når Gateway reklamerer for en lærreds-vært, vil macOS-appen automatisk navigere til
+A2UI-værtssiden på første åbne.
 
 Standard A2UI-host-URL:
 

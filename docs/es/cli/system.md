@@ -5,13 +5,6 @@ read_when:
   - Necesita habilitar o deshabilitar latidos
   - Quiere inspeccionar las entradas de presencia del sistema
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:01Z
 ---
 
 # `openclaw system`

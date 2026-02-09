@@ -1,17 +1,10 @@
 ---
-summary: „Panel Canvas sterowany przez agenta, osadzony przez WKWebView + niestandardowy schemat URL”
+summary: "„Panel Canvas sterowany przez agenta, osadzony przez WKWebView + niestandardowy schemat URL”"
 read_when:
   - Implementacja panelu Canvas w macOS
   - Dodawanie sterowania agenta dla wizualnego obszaru roboczego
   - Debugowanie ładowań Canvas w WKWebView
-title: „Canvas”
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
+title: "„Canvas”"
 ---
 
 # Canvas (aplikacja macOS)
@@ -70,7 +63,8 @@ Uwagi:
 
 ## A2UI w Canvas
 
-A2UI jest hostowane przez host Canvas Gateway i renderowane wewnątrz panelu Canvas. Gdy Gateway ogłasza host Canvas, aplikacja macOS automatycznie nawiguję do strony hosta A2UI przy pierwszym otwarciu.
+A2UI jest hostowane przez host Canvas Gateway i renderowane wewnątrz panelu Canvas.
+Gdy Gateway ogłasza host Canvas, aplikacja macOS automatycznie nawiguję do strony hosta A2UI przy pierwszym otwarciu.
 
 Domyślny URL hosta A2UI:
 
@@ -100,7 +94,7 @@ EOFA2
 openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
-Szybki test dymny:
+Szybki dym:
 
 ```bash
 openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"

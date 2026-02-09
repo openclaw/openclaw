@@ -2,22 +2,15 @@
 summary: "TOOLS.md için çalışma alanı şablonu"
 read_when:
   - Bir çalışma alanını manuel olarak başlatırken
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:39Z
 ---
 
 # TOOLS.md - Yerel Notlar
 
 Skills, araçların _nasıl_ çalıştığını tanımlar. Bu dosya _size_ özgü ayrıntılar içindir — kurulumunuza özgü olanlar.
 
-## Buraya Neler Girer
+## Buraya Ne Gelir
 
-Örneğin:
+Şu tür şeyler:
 
 - Kamera adları ve konumları
 - SSH ana makineleri ve takma adları

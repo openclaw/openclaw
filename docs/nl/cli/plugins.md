@@ -4,13 +4,6 @@ read_when:
   - Je wilt in-process Gateway-plugins installeren of beheren
   - Je wilt fouten bij het laden van plugins debuggen
 title: "plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:11Z
 ---
 
 # `openclaw plugins`
@@ -23,7 +16,7 @@ Gerelateerd:
 - Pluginmanifest + schema: [Plugin manifest](/plugins/manifest)
 - Beveiligingsverharding: [Security](/gateway/security)
 
-## Opdrachten
+## Commands
 
 ```bash
 openclaw plugins list

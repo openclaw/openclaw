@@ -4,13 +4,6 @@ read_when:
   - Sie möchten eine schnelle Diagnose der Kanal-Gesundheit und der jüngsten Sitzungs-Empfänger
   - Sie möchten einen einfügbaren „all“-Status für das Debugging
 title: "Status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:46Z
 ---
 
 # `openclaw status`

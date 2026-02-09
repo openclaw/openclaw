@@ -3,13 +3,6 @@ summary: "macOS uygulamasının gateway/Baileys sağlık durumlarını nasıl ra
 read_when:
   - Mac uygulaması sağlık göstergelerinde hata ayıklama
 title: "Sağlık Kontrolleri"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:29Z
 ---
 
 # macOS’te Sağlık Kontrolleri

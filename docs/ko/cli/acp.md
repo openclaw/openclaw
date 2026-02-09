@@ -4,13 +4,6 @@ read_when:
   - ACP 기반 IDE 통합을 설정할 때
   - Gateway(게이트웨이)로의 ACP 세션 라우팅을 디버깅할 때
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:14Z
 ---
 
 # acp

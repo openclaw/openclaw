@@ -3,18 +3,11 @@ summary: "Nextcloud Talk のサポート状況、機能、および設定"
 read_when:
   - Nextcloud Talk チャンネル機能の作業中
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:20:48Z
 ---
 
 # Nextcloud Talk（プラグイン）
 
-ステータス: プラグイン（Webhook ボット）経由でサポートされています。ダイレクトメッセージ、ルーム、リアクション、Markdown メッセージがサポートされています。
+ステータス: プラグイン（Webhook ボット）経由でサポートされています。ダイレクトメッセージ、ルーム、リアクション、Markdown メッセージがサポートされています。 ダイレクトメッセージ、ルーム、リアクション、マークダウンメッセージに対応しています。
 
 ## プラグインが必要
 
@@ -40,6 +33,7 @@ OpenClaw はローカルインストールパスを自動的に提示します�
 ## クイックセットアップ（初心者向け）
 
 1. Nextcloud Talk プラグインをインストールします。
+
 2. Nextcloud サーバーでボットを作成します。
 
    ```bash
@@ -47,9 +41,11 @@ OpenClaw はローカルインストールパスを自動的に提示します�
    ```
 
 3. 対象ルームの設定でボットを有効化します。
+
 4. OpenClaw を設定します:
    - 設定: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - または 環境変数: `NEXTCLOUD_TALK_BOT_SECRET`（デフォルトアカウントのみ）
+
 5. ゲートウェイを再起動します（またはオンボーディングを完了します）。
 
 最小構成:
@@ -69,14 +65,14 @@ OpenClaw はローカルインストールパスを自動的に提示します�
 
 ## 注記
 
-- ボットはダイレクトメッセージを開始できません。ユーザーが先にボットへメッセージを送信する必要があります。
+- ボットはDMを開始できません。 ボットはダイレクトメッセージを開始できません。ユーザーが先にボットへメッセージを送信する必要があります。
 - Webhook URL は Gateway（ゲートウェイ）から到達可能である必要があります。プロキシ配下の場合は `webhookPublicUrl` を設定してください。
 - ボット API ではメディアのアップロードはサポートされていません。メディアは URL として送信されます。
 - Webhook ペイロードでは DM とルームを区別できません。ルームタイプの判定を有効にするには `apiUser` + `apiPassword` を設定してください（設定しない場合、DM はルームとして扱われます）。
 
 ## アクセス制御（DM）
 
-- デフォルト: `channels.nextcloud-talk.dmPolicy = "pairing"`。不明な送信者にはペアリングコードが発行されます。
+- デフォルト: `channels.nextcloud-talk.dmPolicy = "pairing"`。不明な送信者にはペアリングコードが発行されます。 不明な送信者はペアリングコードを取得します。
 - 承認方法:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -104,14 +100,14 @@ OpenClaw はローカルインストールパスを自動的に提示します�
 
 ## 機能
 
-| 機能                 | ステータス |
-| -------------------- | ---------- |
+| 機能         | ステータス  |
+| ---------- | ------ |
 | ダイレクトメッセージ | サポート   |
-| ルーム               | サポート   |
-| スレッド             | 非サポート |
-| メディア             | URL のみ   |
-| リアクション         | サポート   |
-| ネイティブコマンド   | 非サポート |
+| ルーム        | サポート   |
+| スレッド       | 非サポート  |
+| メディア       | URL のみ |
+| Reactions  | サポート   |
+| ネイティブコマンド  | 非サポート  |
 
 ## 設定リファレンス（Nextcloud Talk）
 
@@ -131,7 +127,7 @@ OpenClaw はローカルインストールパスを自動的に提示します�
 - `channels.nextcloud-talk.webhookPath`: Webhook パス（デフォルト: /nextcloud-talk-webhook）。
 - `channels.nextcloud-talk.webhookPublicUrl`: 外部から到達可能な Webhook URL。
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`。
-- `channels.nextcloud-talk.allowFrom`: DM の許可リスト（ユーザー ID）。`open` には `"*"` が必要です。
+- `channels.nextcloud-talk.allowFrom`: DM の許可リスト（ユーザー ID）。`open` には `"*"` が必要です。 `open`には`"*"`が必要です。
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`。
 - `channels.nextcloud-talk.groupAllowFrom`: グループの許可リスト（ユーザー ID）。
 - `channels.nextcloud-talk.rooms`: ルームごとの設定および許可リスト。

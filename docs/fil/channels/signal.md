@@ -4,18 +4,11 @@ read_when:
   - Pagse-set up ng suporta sa Signal
   - Pag-debug ng pagpapadala/pagtanggap sa Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:34Z
 ---
 
 # Signal (signal-cli)
 
-Status: external CLI integration. Nakikipag-usap ang Gateway sa `signal-cli` sa pamamagitan ng HTTP JSON-RPC + SSE.
+29. Status: external na integrasyon ng CLI. 30. Nakikipag-usap ang Gateway sa `signal-cli` sa pamamagitan ng HTTP JSON-RPC + SSE.
 
 ## Mabilis na setup (baguhan)
 
@@ -88,7 +81,7 @@ Halimbawa:
 }
 ```
 
-Suporta sa multi-account: gamitin ang `channels.signal.accounts` na may per-account config at opsyonal na `name`. Tingnan ang [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) para sa shared na pattern.
+31. Suporta sa maraming account: gamitin ang `channels.signal.accounts` na may per-account config at opsyonal na `name`. 32. Tingnan ang [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) para sa shared na pattern.
 
 ## External daemon mode (httpUrl)
 
@@ -105,7 +98,7 @@ Kung gusto mong ikaw ang mag-manage ng `signal-cli` (mabagal na JVM cold starts,
 }
 ```
 
-Nilalaktawan nito ang auto-spawn at ang startup wait sa loob ng OpenClaw. Para sa mabagal na pagsisimula kapag auto-spawning, itakda ang `channels.signal.startupTimeoutMs`.
+33. Nilalampasan nito ang auto-spawn at ang startup wait sa loob ng OpenClaw. Para sa mabagal na pagsisimula kapag auto-spawning, itakda ang `channels.signal.startupTimeoutMs`.
 
 ## Kontrol sa access (DMs + groups)
 
@@ -116,7 +109,7 @@ DMs:
 - Aprubahan sa pamamagitan ng:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- Ang pairing ang default na token exchange para sa Signal DMs. Mga detalye: [Pairing](/channels/pairing)
+- Ang pairing ang default na palitan ng token para sa mga Signal DM. Mga detalye: [Pairing](/channels/pairing)
 - Ang mga UUID-only sender (mula sa `sourceUuid`) ay ini-store bilang `uuid:<id>` sa `channels.signal.allowFrom`.
 
 Groups:
@@ -137,7 +130,7 @@ Groups:
 - Suportado ang mga attachment (base64 na kinukuha mula sa `signal-cli`).
 - Default na media cap: `channels.signal.mediaMaxMb` (default 8).
 - Gamitin ang `channels.signal.ignoreAttachments` para laktawan ang pag-download ng media.
-- Ang context ng group history ay gumagamit ng `channels.signal.historyLimit` (o `channels.signal.accounts.*.historyLimit`), na may fallback sa `messages.groupChat.historyLimit`. Itakda ang `0` para i-disable (default 50).
+- 37. Ang konteksto ng group history ay gumagamit ng `channels.signal.historyLimit` (o `channels.signal.accounts.*.historyLimit`), at babalik sa `messages.groupChat.historyLimit`. Itakda sa `0` para i-disable (default 50).
 
 ## Typing + read receipts
 
@@ -166,7 +159,7 @@ Config:
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive`.
   - Ang `off`/`ack` ay nagdi-disable ng agent reactions (mag-e-error ang message tool na `react`).
   - Ang `minimal`/`extensive` ay nag-e-enable ng agent reactions at nagse-set ng guidance level.
-- Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
+- Mga override kada account: `channels.signal.accounts.<id>40. .actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
 ## Mga delivery target (CLI/cron)
 
@@ -219,11 +212,11 @@ Mga opsyon ng provider:
 - `channels.signal.ignoreStories`: i-ignore ang stories mula sa daemon.
 - `channels.signal.sendReadReceipts`: ipasa ang read receipts.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.signal.allowFrom`: DM allowlist (E.164 o `uuid:<id>`). Ang `open` ay nangangailangan ng `"*"`. Walang usernames ang Signal; gumamit ng phone/UUID ids.
+- 42. `channels.signal.allowFrom`: DM allowlist (E.164 o `uuid:<id>`). `open` ay nangangailangan ng `"*"`. 44. Walang username ang Signal; gumamit ng phone/UUID ids.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.signal.groupAllowFrom`: group sender allowlist.
 - `channels.signal.historyLimit`: max na bilang ng group messages na isasama bilang context (0 ay nagdi-disable).
-- `channels.signal.dmHistoryLimit`: DM history limit sa user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
+- 45. `channels.signal.dmHistoryLimit`: DM history limit sa bilang ng user turns. Mga override kada user: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
 - `channels.signal.chunkMode`: `length` (default) o `newline` para hatiin sa mga blank line (mga hangganan ng talata) bago ang length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap (MB).

@@ -5,13 +5,6 @@ read_when:
   - OpenClaw için düşük maliyetli VPS barındırma ararken
   - Küçük bir sunucuda 7/24 OpenClaw istemek
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:46Z
 ---
 
 # Oracle Cloud (OCI) üzerinde OpenClaw
@@ -27,13 +20,13 @@ Oracle’ın ücretsiz katmanı OpenClaw için iyi bir uyum olabilir (özellikle
 
 ## Maliyet Karşılaştırması (2026)
 
-| Sağlayıcı    | Plan            | Özellikler                | Aylık fiyat | Notlar                          |
-| ------------ | --------------- | ------------------------- | ----------- | ------------------------------- |
-| Oracle Cloud | Always Free ARM | 4 OCPU’ya kadar, 24GB RAM | $0          | ARM, sınırlı kapasite           |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM           | ~ $4        | En ucuz ücretli seçenek         |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6          | Kolay arayüz, iyi dokümantasyon |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6          | Birçok konum                    |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5          | Artık Akamai’nin parçası        |
+| Sağlayıcı    | Plan            | Özellikler                | Aylık fiyat          | Notlar                          |
+| ------------ | --------------- | ------------------------- | -------------------- | ------------------------------- |
+| Oracle Cloud | Always Free ARM | 4 OCPU’ya kadar, 24GB RAM | $0                   | ARM, sınırlı kapasite           |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM           | ~ $4 | En ucuz ücretli seçenek         |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6                   | Kolay arayüz, iyi dokümantasyon |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6                   | Birçok konum                    |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5                   | Artık Akamai’nin parçası        |
 
 ---
 
@@ -43,7 +36,7 @@ Oracle’ın ücretsiz katmanı OpenClaw için iyi bir uyum olabilir (özellikle
 - Tailscale hesabı ([tailscale.com](https://tailscale.com) üzerinden ücretsiz)
 - ~30 dakika
 
-## 1) Bir OCI Instance Oluşturun
+## 1. Bir OCI Instance Oluşturun
 
 1. [Oracle Cloud Console](https://cloud.oracle.com/)’a giriş yapın
 2. **Compute → Instances → Create Instance** yolunu izleyin
@@ -60,7 +53,7 @@ Oracle’ın ücretsiz katmanı OpenClaw için iyi bir uyum olabilir (özellikle
 
 **İpucu:** Instance oluşturma “Out of capacity” hatasıyla başarısız olursa, farklı bir availability domain deneyin veya daha sonra tekrar deneyin. Ücretsiz katman kapasitesi sınırlıdır.
 
-## 2) Bağlanın ve Güncelleyin
+## 2. Bağlanın ve Güncelleyin
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Not:** Bazı bağımlılıkların ARM derlemesi için `build-essential` gereklidir.
 
-## 3) Kullanıcı ve Hostname Yapılandırın
+## 3. Kullanıcı ve Hostname Yapılandırın
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Tailscale Kurulumu
+## 4. Tailscale Kurulumu
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **Bundan sonra Tailscale üzerinden bağlanın:** `ssh ubuntu@openclaw` (veya Tailscale IP’sini kullanın).
 
-## 5) OpenClaw Kurulumu
+## 5. OpenClaw Kurulumu
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,7 +107,7 @@ source ~/.bashrc
 
 > Not: ARM-yerel derleme sorunlarıyla karşılaşırsanız, Homebrew’e yönelmeden önce sistem paketleriyle (ör. `sudo apt install -y build-essential`) başlayın.
 
-## 6) Gateway Yapılandırması (loopback + token auth) ve Tailscale Serve’i Etkinleştirin
+## 6. Gateway Yapılandırması (loopback + token auth) ve Tailscale Serve’i Etkinleştirin
 
 Varsayılan olarak token auth kullanın. Bu, öngörülebilirdir ve “insecure auth” Control UI bayraklarına ihtiyaç duymayı önler.
 
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Doğrulama
+## 7. Doğrulama
 
 ```bash
 # Check version
@@ -149,7 +142,7 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) VCN Güvenliğini Sıkılaştırın
+## 8. VCN Güvenliğini Sıkılaştırın
 
 Artık her şey çalıştığına göre, Tailscale dışındaki tüm trafiği engellemek için VCN’i kilitleyin. OCI’nin Virtual Cloud Network’ü ağ kenarında bir güvenlik duvarı gibi davranır — trafik instance’ınıza ulaşmadan önce engellenir.
 
@@ -187,7 +180,7 @@ VCN kilitliyken (yalnızca UDP 41641 açık) ve Gateway loopback’e bağlanmı�
 
 Bu kurulum, İnternet genelindeki SSH brute force saldırılarını durdurmak için ekstra ana makine tabanlı güvenlik duvarı kurallarına olan _ihtiyacı_ çoğu zaman ortadan kaldırır — ancak yine de işletim sistemini güncel tutmalı, `openclaw security audit` çalıştırmalı ve yanlışlıkla genel arayüzlerde dinlemediğinizi doğrulamalısınız.
 
-### Halihazırda Korunanlar
+### Zaten Korunanlar
 
 | Geleneksel Adım       | Gerekli mi?      | Neden                                                                                |
 | --------------------- | ---------------- | ------------------------------------------------------------------------------------ |

@@ -3,13 +3,6 @@ summary: "Telegram اجازت فہرست کی سختی: سابقہ + خالی ج
 read_when:
   - Telegram اجازت فہرست میں تاریخی تبدیلیوں کا جائزہ لیتے وقت
 title: "Telegram اجازت فہرست کی سختی"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:07Z
 ---
 
 # Telegram اجازت فہرست کی سختی
@@ -20,8 +13,8 @@ x-i18n:
 
 ## خلاصہ
 
-Telegram اجازت فہرستیں اب `telegram:` اور `tg:` سابقات کو حروفِ تہجی کی تمیز کے بغیر قبول کرتی ہیں، اور
-غیر ارادی خالی جگہوں کو برداشت کرتی ہیں۔ یہ آنے والی اجازت فہرست کی جانچ کو باہر بھیجنے کی نارملائزیشن کے ساتھ ہم آہنگ کرتا ہے۔
+Telegram allowlists اب `telegram:` اور `tg:` prefixes کو case-insensitive طور پر قبول کرتے ہیں، اور
+غیر ارادی whitespace کو بھی برداشت کرتے ہیں۔ یہ inbound allowlist چیکس کو outbound send normalization کے ساتھ ہم آہنگ کرتا ہے۔
 
 ## کیا بدلا
 
@@ -38,8 +31,8 @@ Telegram اجازت فہرستیں اب `telegram:` اور `tg:` سابقات ک
 
 ## یہ کیوں اہم ہے
 
-لاگز یا چیٹ IDs سے کاپی/پیسٹ کرنے میں اکثر سابقات اور خالی جگہیں شامل ہوتی ہیں۔ نارملائزیشن
-DMs یا گروپس میں جواب دینے کا فیصلہ کرتے وقت غلط منفی نتائج سے بچاتی ہے۔
+لاگز یا چیٹ IDs سے کاپی/پیسٹ میں اکثر prefixes اور whitespace شامل ہوتا ہے۔ Normalization اس بات کا تعین کرتے وقت
+false negatives سے بچاتا ہے کہ DMs یا گروپس میں جواب دینا ہے یا نہیں۔
 
 ## متعلقہ دستاویزات
 

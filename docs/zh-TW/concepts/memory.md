@@ -1,23 +1,17 @@
 ---
-summary: 「OpenClaw 記憶體的運作方式（工作區檔案＋自動記憶體清空）」
+summary: "OpenClaw 記憶體的運作方式（工作區檔案＋自動記憶體清空）"
 read_when:
-  - 「你想了解記憶體檔案配置與工作流程」
-  - 「你想調校自動預先壓縮的記憶體清空」
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:27Z
+  - 你想了解記憶體檔案配置與工作流程
+  - 你想調校自動預先壓縮的記憶體清空
 ---
 
 # Memory
 
-OpenClaw 記憶體是 **代理程式工作區中的純 Markdown**。這些檔案是
-唯一可信來源；模型只會「記住」寫入磁碟的內容。
+OpenClaw memory is **plain Markdown in the agent workspace**. The files are the
+source of truth; the model only "remembers" what gets written to disk.
 
-記憶體搜尋工具由目前啟用的記憶體外掛提供（預設：
+Memory search tools are provided by the active memory plugin (default:
+`memory-core`). 記憶體搜尋工具由目前啟用的記憶體外掛提供（預設：
 `memory-core`）。可使用 `plugins.slots.memory = "none"` 停用記憶體外掛。
 
 ## Memory files（Markdown）
@@ -26,28 +20,25 @@ OpenClaw 記憶體是 **代理程式工作區中的純 Markdown**。這些檔案
 
 - `memory/YYYY-MM-DD.md`
   - 每日紀錄（僅追加）。
-  - 工作階段開始時讀取今天＋昨天。
+  - Read today + yesterday at session start.
 - `MEMORY.md`（選用）
   - 精選的長期記憶。
-  - **僅在主要、私人工作階段載入**（絕不在群組情境中）。
+  - **Only load in the main, private session** (never in group contexts).
 
 這些檔案位於工作區之下（`agents.defaults.workspace`，預設為
-`~/.openclaw/workspace`）。完整配置請參見 [Agent workspace](/concepts/agent-workspace)。
+`~/.openclaw/workspace`）。完整配置請參見 [Agent workspace](/concepts/agent-workspace)。 1. 請參閱 [Agent workspace](/concepts/agent-workspace) 以了解完整版面配置。
 
 ## 何時寫入記憶體
 
 - 決策、偏好與可長期保存的事實寫入 `MEMORY.md`。
 - 日常筆記與進行中的脈絡寫入 `memory/YYYY-MM-DD.md`。
 - 若有人說「記住這個」，就把它寫下來（不要只放在 RAM）。
-- 這個區域仍在演進中。提醒模型儲存記憶會有幫助；它知道該怎麼做。
-- 若你希望某件事能留下來，**請要求機器人把它寫入** 記憶體。
+- 2. 此區域仍在持續演進中。 3. 這有助於提醒模型儲存記憶；它會知道該怎麼做。
+- 4. 如果你希望某件事能被保留下來，**請要求機器人把它寫入**記憶中。
 
 ## 自動記憶體清空（預先壓縮 ping）
 
-當工作階段 **接近自動壓縮** 時，OpenClaw 會觸發一個 **無聲、
-具代理性的回合**，在內容被壓縮 **之前** 提醒模型寫入可長期保存的記憶。
-預設提示明確表示模型 _可以回覆_，但通常 `NO_REPLY` 才是正確回應，
-因此使用者不會看到這個回合。
+5. 當一個工作階段**接近自動壓縮**時，OpenClaw 會觸發一個**靜默的、具代理性的回合**，提醒模型在內容被壓縮**之前**寫入持久記憶。 6. 預設提示明確指出模型 _可以回覆_，但通常 `NO_REPLY` 才是正確的回應，這樣使用者永遠不會看到這個回合。
 
 此行為由 `agents.defaults.compaction.memoryFlush` 控制：
 
@@ -87,11 +78,11 @@ OpenClaw 記憶體是 **代理程式工作區中的純 Markdown**。這些檔案
 OpenClaw 可以在 `MEMORY.md` 與 `memory/*.md` 上建立小型向量索引，
 使語意查詢即使措辭不同也能找到相關筆記。
 
-預設值：
+7. 預設值：
 
-- 預設啟用。
-- 監看記憶體檔案變更（去抖動）。
-- 預設使用遠端嵌入。若未設定 `memorySearch.provider`，OpenClaw 會自動選擇：
+- 8. 預設啟用。
+- 9. 監看記憶檔案的變更（去抖動）。
+- 10. 預設使用遠端嵌入（embeddings）。 預設使用遠端嵌入。若未設定 `memorySearch.provider`，OpenClaw 會自動選擇：
   1. 若設定了 `memorySearch.local.modelPath` 且檔案存在，使用 `local`。
   2. 若可解析 OpenAI 金鑰，使用 `openai`。
   3. 若可解析 Gemini 金鑰，使用 `gemini`。
@@ -100,23 +91,18 @@ OpenClaw 可以在 `MEMORY.md` 與 `memory/*.md` 上建立小型向量索引，
 - 本地模式使用 node-llama-cpp，且可能需要 `pnpm approve-builds`。
 - 可用時使用 sqlite-vec 以加速 SQLite 內的向量搜尋。
 
-遠端嵌入 **需要** 嵌入提供者的 API 金鑰。OpenClaw 會從驗證設定檔、
-`models.providers.*.apiKey` 或環境變數解析金鑰。Codex OAuth 僅涵蓋聊天／完成，
-**不** 能滿足記憶搜尋的嵌入需求。Gemini 請使用 `GEMINI_API_KEY` 或
-`models.providers.google.apiKey`；Voyage 請使用 `VOYAGE_API_KEY` 或
-`models.providers.voyage.apiKey`。使用自訂的 OpenAI 相容端點時，請設定
-`memorySearch.remote.apiKey`（以及選用的 `memorySearch.remote.headers`）。
+11. 遠端嵌入**需要**嵌入提供者的 API 金鑰。 12. OpenClaw 會從驗證設定檔、`models.providers.*.apiKey`，或環境變數中解析金鑰。 13. Codex OAuth 僅涵蓋聊天/補全，**無法**滿足用於記憶搜尋的嵌入需求。 14. 對於 Gemini，請使用 `GEMINI_API_KEY` 或 `models.providers.google.apiKey`。 15. 對於 Voyage，請使用 `VOYAGE_API_KEY` 或 `models.providers.voyage.apiKey`。 16. 使用自訂的 OpenAI 相容端點時，請設定 `memorySearch.remote.apiKey`（以及選用的 `memorySearch.remote.headers`）。
 
 ### QMD 後端（實驗性）
 
 設定 `memory.backend = "qmd"` 以將內建的 SQLite 索引器替換為
 [QMD](https://github.com/tobi/qmd)：一個以本地為優先的搜尋側車，結合
 BM25＋向量＋重新排序。Markdown 仍是唯一可信來源；OpenClaw 透過殼層呼叫
-QMD 進行擷取。重點如下：
+QMD 進行擷取。重點如下： 17. Markdown 仍是唯一可信來源；OpenClaw 會呼叫 QMD 進行檢索。 18. 重點：
 
 **先決條件**
 
-- 預設停用。需於每個設定中選擇加入（`memory.backend = "qmd"`）。
+- 19. 預設停用。 預設停用。需於每個設定中選擇加入（`memory.backend = "qmd"`）。
 - 需另行安裝 QMD CLI（`bun install -g https://github.com/tobi/qmd` 或下載
   發行版），並確保 `qmd` 二進位檔位於 Gateway 閘道器的
   `PATH`。
@@ -127,7 +113,7 @@ QMD 進行擷取。重點如下：
   `~/.openclaw/agents/<agentId>/qmd/` 下設定 `XDG_CONFIG_HOME` 與
   `XDG_CACHE_HOME`，於自成一體的 XDG home 中執行 QMD。
 - 作業系統支援：安裝好 Bun＋SQLite 後，macOS 與 Linux 可即用。
-  Windows 最佳方式為 WSL2。
+  Windows 最佳方式為 WSL2。 20. Windows 最佳支援方式為 WSL2。
 
 **側車的執行方式**
 
@@ -139,7 +125,7 @@ QMD 進行擷取。重點如下：
 - 開機時的重新整理現在預設在背景執行，避免阻塞聊天啟動；設定
   `memory.qmd.update.waitForBootSync = true` 可保留先前的阻塞行為。
 - 搜尋透過 `qmd query --json` 執行。若 QMD 失敗或缺少二進位檔，
-  OpenClaw 會自動回退至內建的 SQLite 管理器，確保記憶工具可繼續運作。
+  OpenClaw 會自動回退至內建的 SQLite 管理器，確保記憶工具可繼續運作。 21. 若 QMD 失敗或缺少二進位檔，OpenClaw 會自動回退至內建的 SQLite 管理器，確保記憶工具持續運作。
 - OpenClaw 目前未提供 QMD 的嵌入批次大小調校；批次行為由 QMD 本身控制。
 - **首次搜尋可能較慢**：QMD 可能在第一次 `qmd query` 執行時
   下載本地 GGUF 模型（重新排序／查詢擴展）。
@@ -147,8 +133,9 @@ QMD 進行擷取。重點如下：
   - 若要手動預先下載模型（並暖身與 OpenClaw 相同的索引），
     請使用代理程式的 XDG 目錄執行一次性查詢。
 
-    OpenClaw 的 QMD 狀態位於你的 **狀態目錄**（預設為 `~/.openclaw`）。
-    你可以匯出 OpenClaw 使用的相同 XDG 變數，將 `qmd` 指向完全相同的索引：
+    22. OpenClaw 的 QMD 狀態位於你的**狀態目錄**下（預設為 `~/.openclaw`）。
+        OpenClaw 的 QMD 狀態位於你的 **狀態目錄**（預設為 `~/.openclaw`）。
+        你可以匯出 OpenClaw 使用的相同 XDG 變數，將 `qmd` 指向完全相同的索引：
 
     ```bash
     # Pick the same state dir OpenClaw uses
@@ -184,6 +171,7 @@ QMD 進行擷取。重點如下：
   `maxInjectedChars`、`timeoutMs`）。
 - `scope`：與 [`session.sendPolicy`](/gateway/configuration#session) 相同的結構描述。
   預設僅限私訊（`deny` 全部、`allow` 直接聊天）；放寬後可在群組／頻道中顯示 QMD 命中。
+  23. 預設為僅 DM（全部 `deny`，僅 `allow` 直接聊天）；放寬設定即可在群組/頻道中顯示 QMD 命中結果。
 - 來自工作區外的片段會以
   `qmd/<collection>/<relative-path>` 顯示於 `memory_search` 結果中；`memory_get`
   會理解該前綴並從設定的 QMD 集合根目錄讀取。
@@ -222,7 +210,7 @@ memory: {
 - `memory.citations` 不論後端為何皆適用（`auto`/`on`/`off`）。
 - 當 `qmd` 執行時，我們會標記 `status().backend = "qmd"`，
   讓診斷顯示是哪個引擎提供結果。若 QMD 子行程結束或 JSON 輸出無法解析，
-  搜尋管理器會記錄警告並回傳內建提供者（既有的 Markdown 嵌入），直到 QMD 恢復。
+  搜尋管理器會記錄警告並回傳內建提供者（既有的 Markdown 嵌入），直到 QMD 恢復。 24. 如果 QMD 子程序退出或 JSON 輸出無法解析，搜尋管理器會記錄警告並回傳內建提供者（既有的 Markdown 嵌入），直到 QMD 恢復為止。
 
 ### 其他記憶體路徑
 
@@ -240,8 +228,8 @@ agents: {
 
 注意事項：
 
-- 路徑可為絕對路徑或相對於工作區。
-- 目錄會遞迴掃描 `.md` 檔案。
+- 25. 路徑可以是絕對路徑或相對於工作區的路徑。
+- 26. 目錄會被遞迴掃描以尋找 `.md` 檔案。
 - 僅索引 Markdown 檔案。
 - 忽略符號連結（檔案或目錄）。
 
@@ -298,7 +286,7 @@ agents: {
 
 批次索引（OpenAI＋Gemini）：
 
-- OpenAI 與 Gemini 嵌入預設啟用。設定 `agents.defaults.memorySearch.remote.batch.enabled = false` 可停用。
+- 27. 對 OpenAI 與 Gemini 嵌入預設啟用。 OpenAI 與 Gemini 嵌入預設啟用。設定 `agents.defaults.memorySearch.remote.batch.enabled = false` 可停用。
 - 預設行為會等待批次完成；必要時可調整 `remote.batch.wait`、`remote.batch.pollIntervalMs` 與 `remote.batch.timeoutMinutes`。
 - 設定 `remote.batch.concurrency` 以控制並行提交的批次工作數量（預設：2）。
 - 當 `memorySearch.provider = "openai"` 或 `"gemini"` 時會套用批次模式，並使用對應的 API 金鑰。
@@ -346,9 +334,9 @@ agents: {
 - `memory_search` 會對來自 `MEMORY.md`＋`memory/**/*.md` 的 Markdown 區塊
   進行語意搜尋（目標約 400 權杖、80 權杖重疊）。它會回傳片段文字（上限約 700 字元）、
   檔案路徑、行範圍、分數、提供者／模型，以及是否從本地→遠端嵌入回退。
-  不會回傳完整檔案內容。
+  不會回傳完整檔案內容。 28. 回傳的內容包含片段文字（上限約 700 字元）、檔案路徑、行號範圍、分數、提供者/模型，以及是否從本地 → 遠端嵌入回退。 29. 不會回傳完整檔案內容。
 - `memory_get` 會讀取特定的記憶體 Markdown 檔案（相對於工作區），
-  可選擇指定起始行與行數。位於 `MEMORY.md`／`memory/` 之外的路徑會被拒絕。
+  可選擇指定起始行與行數。位於 `MEMORY.md`／`memory/` 之外的路徑會被拒絕。 30. 位於 `MEMORY.md` / `memory/` 之外的路徑會被拒絕。
 - 兩個工具僅在代理程式的 `memorySearch.enabled` 解析為 true 時啟用。
 
 ### 會被索引的內容（以及時機）
@@ -356,11 +344,9 @@ agents: {
 - 檔案類型：僅 Markdown（`MEMORY.md`、`memory/**/*.md`）。
 - 索引儲存：每個代理程式一個 SQLite，位於 `~/.openclaw/memory/<agentId>.sqlite`
   （可透過 `agents.defaults.memorySearch.store.path` 設定，支援 `{agentId}` 權杖）。
-- 新鮮度：監看 `MEMORY.md`＋`memory/`，將索引標記為髒（去抖 1.5 秒）。
-  同步會在工作階段開始、搜尋時或定期排程並以非同步方式執行。
-  工作階段逐字稿使用差量門檻來觸發背景同步。
+- 31. 新鮮度：對 `MEMORY.md` + `memory/` 的監看器會將索引標記為需要更新（去抖動 1.5 秒）。 32. 同步會在工作階段開始、搜尋時或依間隔排程，並以非同步方式執行。 33. 工作階段逐字稿使用增量閾值來觸發背景同步。
 - 重新索引觸發：索引會儲存嵌入 **提供者／模型＋端點指紋＋分塊參數**。
-  只要其中任一變更，OpenClaw 會自動重設並重新索引整個儲存區。
+  只要其中任一變更，OpenClaw 會自動重設並重新索引整個儲存區。 34. 若其中任何一項變更，OpenClaw 會自動重置並重新索引整個儲存庫。
 
 ### 混合搜尋（BM25＋向量）
 
@@ -384,13 +370,12 @@ agents: {
 - 程式碼符號（`memorySearch.query.hybrid`）
 - 錯誤字串（「sqlite-vec unavailable」）
 
-BM25（全文）則相反：精確權杖很強，轉述較弱。
-混合搜尋是務實的折衷：**同時使用兩種擷取訊號**，
-兼顧「自然語言」與「大海撈針」的查詢。
+35. BM25（全文檢索）則相反：對精確詞元很強，對同義改寫較弱。
+36. 混合搜尋是務實的折衷方案：**同時使用兩種檢索訊號**，以便在「自然語言」查詢與「大海撈針」式查詢中都能獲得良好結果。
 
 #### 我們如何合併結果（目前設計）
 
-實作草圖：
+37. 實作草圖：
 
 1. 從兩側各自擷取候選池：
 
@@ -401,7 +386,7 @@ BM25（全文）則相反：精確權杖很強，轉述較弱。
 
 - `textScore = 1 / (1 + max(0, bm25Rank))`
 
-3. 以區塊 ID 合併候選並計算加權分數：
+3. 38. 依 chunk id 合併候選項並計算加權分數：
 
 - `finalScore = vectorWeight * vectorScore + textWeight * textScore`
 
@@ -412,9 +397,8 @@ BM25（全文）則相反：精確權杖很強，轉述較弱。
 - 若嵌入不可用（或提供者回傳零向量），仍會執行 BM25 並回傳關鍵字匹配。
 - 若無法建立 FTS5，則保留僅向量搜尋（不會硬性失敗）。
 
-這不是「IR 理論上的完美」，但簡單、快速，且在實際筆記上通常能提升召回率／精準度。
-未來若要更進階，常見的下一步是 Reciprocal Rank Fusion（RRF）或
-在混合前進行分數正規化（最小／最大或 z-score）。
+39. 這並非「IR 理論上完美」，但它簡單、快速，且在真實筆記上往往能提升召回率/精確率。
+40. 若之後想做得更進階，常見的下一步是 Reciprocal Rank Fusion（RRF）或在混合前進行分數正規化（min/max 或 z-score）。
 
 設定：
 
@@ -435,7 +419,7 @@ agents: {
 }
 ```
 
-### 嵌入快取
+### Embedding cache
 
 OpenClaw 可在 SQLite 中快取 **區塊嵌入**，讓重新索引與頻繁更新
 （尤其是工作階段逐字稿）不必為未變更的文字重新嵌入。
@@ -457,8 +441,8 @@ agents: {
 
 ### 工作階段記憶搜尋（實驗性）
 
-你可以選擇索引 **工作階段逐字稿**，並透過 `memory_search` 顯示。
-此功能受實驗旗標控管。
+You can optionally index **session transcripts** and surface them via `memory_search`.
+This is gated behind an experimental flag.
 
 ```json5
 agents: {
@@ -473,15 +457,15 @@ agents: {
 
 注意事項：
 
-- 工作階段索引為 **選擇加入**（預設關閉）。
+- Session indexing is **opt-in** (off by default).
 - 工作階段更新會去抖，並在跨過差量門檻後 **非同步索引**（盡力而為）。
 - `memory_search` 從不等待索引完成；在背景同步完成前，結果可能略為過時。
 - 結果仍僅包含片段；`memory_get` 仍僅限記憶體檔案。
-- 工作階段索引為每個代理程式隔離（只索引該代理程式的工作階段紀錄）。
+- Session indexing is isolated per agent (only that agent’s session logs are indexed).
 - 工作階段紀錄會存於磁碟（`~/.openclaw/agents/<agentId>/sessions/*.jsonl`）。任何具有檔案系統存取權的程序／使用者都可讀取，
-  因此請將磁碟存取視為信任邊界。若需更嚴格隔離，請以不同 OS 使用者或主機執行代理程式。
+  因此請將磁碟存取視為信任邊界。若需更嚴格隔離，請以不同 OS 使用者或主機執行代理程式。 Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
 
-差量門檻（顯示預設值）：
+Delta thresholds (defaults shown):
 
 ```json5
 agents: {
@@ -502,7 +486,7 @@ agents: {
 
 當 sqlite-vec 擴充可用時，OpenClaw 會將嵌入儲存在
 SQLite 虛擬表（`vec0`）中，並在資料庫內執行向量距離查詢。
-這能在不將每個嵌入載入到 JS 的情況下保持搜尋效能。
+這能在不將每個嵌入載入到 JS 的情況下保持搜尋效能。 This keeps search fast without loading every embedding into JS.
 
 設定（選用）：
 
@@ -535,7 +519,7 @@ agents: {
 - 預設本地嵌入模型：`hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`（約 0.6 GB）。
 - 當 `memorySearch.provider = "local"` 時，`node-llama-cpp` 會解析 `modelPath`；
   若缺少 GGUF，會 **自動下載** 至快取（或設定的 `local.modelCacheDir`），
-  然後載入。下載可在重試時續傳。
+  然後載入。下載可在重試時續傳。 Downloads resume on retry.
 - 原生建置需求：執行 `pnpm approve-builds`，選擇 `node-llama-cpp`，
   接著 `pnpm rebuild node-llama-cpp`。
 - 回退：若本地設定失敗且 `memorySearch.fallback = "openai"`，我們會自動切換至遠端嵌入
@@ -566,4 +550,4 @@ agents: {
 
 - `remote.*` 的優先順序高於 `models.providers.openai.*`。
 - `remote.headers` 會與 OpenAI 標頭合併；發生金鑰衝突時以遠端為準。
-  省略 `remote.headers` 可使用 OpenAI 的預設值。
+  省略 `remote.headers` 可使用 OpenAI 的預設值。 Omit `remote.headers` to use the OpenAI defaults.

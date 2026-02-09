@@ -1,15 +1,8 @@
 ---
-summary: „Support-Status, Funktionen und Konfiguration des Zalo-Bots“
+summary: "„Support-Status, Funktionen und Konfiguration des Zalo-Bots“"
 read_when:
   - Arbeit an Zalo-Funktionen oder Webhooks
-title: „Zalo“
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:36Z
+title: "„Zalo“"
 ---
 
 # Zalo (Bot API)
@@ -62,7 +55,7 @@ Es eignet sich gut für Support oder Benachrichtigungen, wenn eine deterministis
 
 ## Setup (Schnellpfad)
 
-### 1) Bot-Token erstellen (Zalo Bot Platform)
+### 1. Bot-Token erstellen (Zalo Bot Platform)
 
 1. Rufen Sie [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) auf und melden Sie sich an.
 2. Erstellen Sie einen neuen Bot und konfigurieren Sie die Einstellungen.
@@ -134,16 +127,16 @@ Mehrkonten-Unterstützung: Verwenden Sie `channels.zalo.accounts` mit kontospezi
 
 ## Funktionen
 
-| Funktion          | Status                            |
-| ----------------- | --------------------------------- |
-| Direktnachrichten | ✅ Unterstützt                    |
-| Gruppen           | ❌ Coming soon (laut Zalo‑Doku)   |
-| Medien (Bilder)   | ✅ Unterstützt                    |
-| Reaktionen        | ❌ Nicht unterstützt              |
-| Threads           | ❌ Nicht unterstützt              |
-| Umfragen          | ❌ Nicht unterstützt              |
-| Native Befehle    | ❌ Nicht unterstützt              |
-| Streaming         | ⚠️ Blockiert (2000‑Zeichen‑Limit) |
+| Funktion                           | Status                                               |
+| ---------------------------------- | ---------------------------------------------------- |
+| Direktnachrichten                  | ✅ Unterstützt                                        |
+| Gruppen                            | ❌ Coming soon (laut Zalo‑Doku)    |
+| Medien (Bilder) | ✅ Unterstützt                                        |
+| Reaktionen                         | ❌ Nicht unterstützt                                  |
+| Threads                            | ❌ Nicht unterstützt                                  |
+| Umfragen                           | ❌ Nicht unterstützt                                  |
+| Native Befehle                     | ❌ Nicht unterstützt                                  |
+| Streaming                          | ⚠️ Blockiert (2000‑Zeichen‑Limit) |
 
 ## Zieladressen für Zustellung (CLI/Cron)
 

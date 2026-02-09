@@ -1,32 +1,25 @@
 ---
-summary: ”Beteende och konfig för hantering av WhatsApp-gruppmeddelanden (mentionPatterns delas över ytor)”
+summary: "”Beteende och konfig för hantering av WhatsApp-gruppmeddelanden (mentionPatterns delas över ytor)”"
 read_when:
   - Ändrar regler för gruppmeddelanden eller omnämnanden
-title: ”Gruppmeddelanden”
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:19Z
+title: "”Gruppmeddelanden”"
 ---
 
 # Gruppmeddelanden (WhatsApp web channel)
 
 Mål: låta Clawd sitta i WhatsApp-grupper, vakna bara när den pingas och hålla den tråden separat från den personliga DM-sessionen.
 
-Obs: `agents.list[].groupChat.mentionPatterns` används nu även av Telegram/Discord/Slack/iMessage; detta dokument fokuserar på WhatsApp-specifikt beteende. För multi-agent-uppsättningar, sätt `agents.list[].groupChat.mentionPatterns` per agent (eller använd `messages.groupChat.mentionPatterns` som global reserv).
+Obs: `agents.list[].groupChat.mentionPatterns` används nu av Telegram/Discord/Slack/iMessage också; detta dokument fokuserar på WhatsApp-specifikt beteende. För multi-agent inställningar, sätt `agents.list[].groupChat.mentionPatterns` per agent (eller använd `messages.groupChat.mentionPatterns` som en global reserv).
 
 ## Vad som är implementerat (2025-12-03)
 
-- Aktiveringslägen: `mention` (standard) eller `always`. `mention` kräver en ping (riktiga WhatsApp-@-omnämnanden via `mentionedJids`, regexmönster eller botens E.164 var som helst i texten). `always` väcker agenten på varje meddelande men den ska bara svara när den kan tillföra meningsfullt värde; annars returnerar den den tysta token `NO_REPLY`. Standarder kan sättas i konfig (`channels.whatsapp.groups`) och åsidosättas per grupp via `/activation`. När `channels.whatsapp.groups` är satt fungerar den också som en grupp‑tillåtelselista (inkludera `"*"` för att tillåta alla).
-- Gruppolicy: `channels.whatsapp.groupPolicy` styr om gruppmeddelanden accepteras (`open|disabled|allowlist`). `allowlist` använder `channels.whatsapp.groupAllowFrom` (reserv: explicit `channels.whatsapp.allowFrom`). Standard är `allowlist` (blockerat tills du lägger till avsändare).
-- Sessioner per grupp: sessionsnycklar ser ut som `agent:<agentId>:whatsapp:group:<jid>` så kommandon som `/verbose on` eller `/think high` (skickade som fristående meddelanden) är avgränsade till den gruppen; personlig DM‑status berörs inte. Heartbeats hoppas över för grupptrådar.
-- Kontextinjektion: **endast väntande** gruppmeddelanden (standard 50) som _inte_ triggade en körning prefixas under `[Chat messages since your last reply - for context]`, med den utlösande raden under `[Current message - respond to this]`. Meddelanden som redan finns i sessionen injiceras inte igen.
+- Aktiveringslägen: `mention` (standard) eller `alltid`. `nämna` kräver en ping (riktig WhatsApp @-nämner via `nämnedJids`, regex mönster, eller botens E.164 var som helst i texten). `alltid` väcker agenten på varje meddelande men det bör bara svara när det kan addera meningsfullt värde; annars returnerar det tysta token `NO_REPLY`. Standardvärden kan ställas in i konfigurationen (`channels.whatsapp.groups`) och åsidosättas per grupp via `/activation`. När `channels.whatsapp.groups` är satt, fungerar det också som en grupptillåten lista (inkludera `"*"` för att tillåta alla).
+- Grupppolicy: `channels.whatsapp.groupPolicy` kontrollerar om gruppmeddelanden accepteras (`open<unk> disabled<unk> allowlist`). `allowlist` använder `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Standard är `allowlist` (blockerad tills du lägger till avsändare).
+- Sessioner per grupp: sessionsnycklar ser ut som `agent:<agentId>:whatsapp:group:<jid>` så kommandon som `/verbose on` eller `/think high` (skickas som fristående meddelanden) är begränsade till den gruppen; Personligt DM-tillstånd är orört. Hjärtslag hoppas över för grupptrådar.
+- Kontextinjektion: **väntandebara** gruppmeddelanden (standard 50) som _inte aktiverade en körning är prefixade under `[Chattmeddelanden sedan ditt senaste svar - för sammanhang]`, med den utlösande raden under `[Aktuellt meddelande - svara på detta]`. Meddelanden som redan finns i sessionen återinjiceras.
 - Avsändarsynlighet: varje gruppbatch avslutas nu med `[from: Sender Name (+E164)]` så att Pi vet vem som talar.
 - Försvinnande/view-once: dessa packas upp innan text/omnämnanden extraheras, så pingar i dem triggar fortfarande.
-- Gruppsystemprompt: vid första turen i en gruppsession (och när `/activation` ändrar läget) injicerar vi en kort text i systemprompten som `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.`. Om metadata inte är tillgänglig talar vi ändå om för agenten att det är en gruppchatt.
+- Gruppsystemprompt: vid första vändningen av en gruppsession (och när `/activation` ändrar läget) injicerar vi en kort blurb i systemprompten som `Du svarar inuti WhatsApp-gruppen "<subject>". Gruppmedlemmar: Alice (+44...), Bob (+43...), … Aktivering: Endast trigger- … Adress till den specifika avsändare som noteras i meddelandekontexten.` Om metadata inte är tillgängligt berättar vi fortfarande för agenten att det är en gruppchatt.
 
 ## Konfigexempel (WhatsApp)
 
@@ -67,14 +60,14 @@ Använd gruppchattkommandot:
 - `/activation mention`
 - `/activation always`
 
-Endast ägarnumret (från `channels.whatsapp.allowFrom`, eller botens egen E.164 när den är osatt) kan ändra detta. Skicka `/status` som ett fristående meddelande i gruppen för att se aktuellt aktiveringsläge.
+Endast ägarnumret (från `channels.whatsapp.allowFrom`, eller botens egna E.164 vid uppackning) kan ändra detta. Skicka `/status` som ett fristående meddelande i gruppen för att se aktuellt aktiveringsläge.
 
 ## Hur man använder
 
 1. Lägg till ditt WhatsApp‑konto (det som kör OpenClaw) i gruppen.
-2. Säg `@openclaw …` (eller inkludera numret). Endast tillåtelseliste‑avsändare kan trigga den om du inte sätter `groupPolicy: "open"`.
+2. Säg `@openclaw …` (eller inkludera nummer). Endast tillåtna avsändare kan utlösa det såvida du inte anger `groupPolicy: "open"`.
 3. Agentprompten kommer att inkludera nylig gruppkontext plus den avslutande `[from: …]`‑markören så att den kan adressera rätt person.
-4. Direktiven på sessionsnivå (`/verbose on`, `/think high`, `/new` eller `/reset`, `/compact`) gäller endast den gruppens session; skicka dem som fristående meddelanden så att de registreras. Din personliga DM‑session förblir oberoende.
+4. Sessionsnivådirektiv (`/verbose on`, `/think high`, `/new` eller `/reset`, `/compact`) gäller endast den gruppens session; skicka dem som fristående meddelanden så att de registrerar. Din personliga DM-session förblir oberoende.
 
 ## Testning / verifiering
 

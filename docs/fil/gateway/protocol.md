@@ -5,21 +5,14 @@ read_when:
   - Pag-debug ng mga protocol mismatch o pagkabigo sa pagkonekta
   - Muling pagbuo ng mga schema/model ng protocol
 title: "Gateway Protocol"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Gateway protocol (WebSocket)
 
-Ang Gateway WS protocol ang **nag-iisang control plane + node transport** para sa
-OpenClaw. Lahat ng client (CLI, web UI, macOS app, iOS/Android nodes, headless
-nodes) ay kumokonekta sa WebSocket at nagdedeklara ng kanilang **role** +
-**scope** sa oras ng handshake.
+The Gateway WS protocol is the **single control plane + node transport** for
+OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
+nodes) connect over WebSocket and declare their **role** + **scope** at
+handshake time.
 
 ## Transport
 
@@ -195,9 +188,9 @@ Itinuturing ng Gateway ang mga ito bilang **claims** at ipinapatupad ang mga ser
 
 - Kung ang `OPENCLAW_GATEWAY_TOKEN` (o `--token`) ay naka-set, ang `connect.params.auth.token`
   ay dapat tumugma o isasara ang socket.
-- Pagkatapos ng pairing, ang Gateway ay naglalabas ng **device token** na naka-scope sa connection
-  role + scopes. Ibinabalik ito sa `hello-ok.auth.deviceToken` at dapat
-  i-persist ng client para sa mga susunod na connect.
+- After pairing, the Gateway issues a **device token** scoped to the connection
+  role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
+  persisted by the client for future connects.
 - Ang mga device token ay maaaring i-rotate/i-revoke sa pamamagitan ng `device.token.rotate` at
   `device.token.revoke` (nangangailangan ng `operator.pairing` scope).
 
@@ -209,9 +202,9 @@ Itinuturing ng Gateway ang mga ito bilang **claims** at ipinapatupad ang mga ser
 - Kinakailangan ang mga pairing approval para sa mga bagong device ID maliban kung naka-enable ang local auto-approval.
 - Ang mga **Local** na connect ay kinabibilangan ng loopback at ng sariling tailnet address ng host ng gateway
   (kaya ang same-host tailnet bind ay maaari pa ring ma-auto-approve).
-- Lahat ng WS client ay dapat magsama ng `device` identity sa panahon ng `connect` (operator + node).
-  Maaaring laktawan ito ng Control UI **lamang** kapag naka-enable ang `gateway.controlUi.allowInsecureAuth`
-  (o `gateway.controlUi.dangerouslyDisableDeviceAuth` para sa break-glass na paggamit).
+- All WS clients must include `device` identity during `connect` (operator + node).
+  Control UI can omit it **only** when `gateway.controlUi.allowInsecureAuth` is enabled
+  (or `gateway.controlUi.dangerouslyDisableDeviceAuth` for break-glass use).
 - Ang mga non-local na koneksyon ay dapat pumirma sa server-provided na `connect.challenge` nonce.
 
 ## TLS + pinning
@@ -222,6 +215,6 @@ Itinuturing ng Gateway ang mga ito bilang **claims** at ipinapatupad ang mga ser
 
 ## Scope
 
-Inilalantad ng protocol na ito ang **buong gateway API** (status, channels, models, chat,
-agent, sessions, nodes, approvals, atbp.). Ang eksaktong surface ay tinutukoy ng mga
-TypeBox schema sa `src/gateway/protocol/schema.ts`.
+This protocol exposes the **full gateway API** (status, channels, models, chat,
+agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
+TypeBox schemas in `src/gateway/protocol/schema.ts`.

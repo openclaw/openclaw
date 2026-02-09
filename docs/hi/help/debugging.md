@@ -5,13 +5,6 @@ read_when:
   - आप दोहराव के दौरान Gateway को वॉच मोड में चलाना चाहते हों
   - आपको एक दोहराने योग्य डिबगिंग वर्कफ़्लो चाहिए
 title: "डिबगिंग"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:28Z
 ---
 
 # डिबगिंग
@@ -21,9 +14,9 @@ x-i18n:
 
 ## रनटाइम डिबग ओवरराइड्स
 
-चैट में **`/debug`** का उपयोग करके **केवल रनटाइम** कॉन्फ़िग ओवरराइड्स सेट करें (मेमोरी में, डिस्क पर नहीं)।
-**`/debug`** डिफ़ॉल्ट रूप से अक्षम है; **`commands.debug: true`** के साथ सक्षम करें।
-यह तब उपयोगी है जब आपको **`openclaw.json`** संपादित किए बिना दुर्लभ सेटिंग्स टॉगल करनी हों।
+Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
+`/debug` is disabled by default; enable with `commands.debug: true`.
+This is handy when you need to toggle obscure settings without editing `openclaw.json`.
 
 उदाहरण:
 
@@ -55,7 +48,8 @@ tsx watch src/entry.ts gateway --force
 
 ## डेव प्रोफ़ाइल + डेव Gateway (--dev)
 
-डिबगिंग के लिए स्थिति को अलग करने और सुरक्षित, डिस्पोज़ेबल सेटअप शुरू करने हेतु डेव प्रोफ़ाइल का उपयोग करें। **दो** **`--dev`** फ़्लैग हैं:
+Use the dev profile to isolate state and spin up a safe, disposable setup for
+debugging. There are **two** `--dev` flags:
 
 - **ग्लोबल `--dev` (प्रोफ़ाइल):** स्थिति को **`~/.openclaw-dev`** के अंतर्गत अलग करता है और
   Gateway पोर्ट को डिफ़ॉल्ट रूप से **`19001`** पर सेट करता है (व्युत्पन्न पोर्ट्स उसी के साथ शिफ्ट होते हैं)।
@@ -94,8 +88,8 @@ OPENCLAW_PROFILE=dev openclaw tui
 pnpm gateway:dev:reset
 ```
 
-टिप्पणी: **`--dev`** एक **ग्लोबल** प्रोफ़ाइल फ़्लैग है और कुछ रनर्स द्वारा निगल लिया जाता है।
-यदि आपको इसे स्पष्ट रूप से लिखना हो, तो env var फ़ॉर्म का उपयोग करें:
+Note: `--dev` is a **global** profile flag and gets eaten by some runners.
+If you need to spell it out, use the env var form:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -112,9 +106,9 @@ openclaw gateway stop
 
 ## रॉ स्ट्रीम लॉगिंग (OpenClaw)
 
-OpenClaw **कच्चे असिस्टेंट स्ट्रीम** को किसी भी फ़िल्टरिंग/फ़ॉर्मैटिंग से पहले लॉग कर सकता है।
-यह देखने का सबसे अच्छा तरीका है कि तर्क साधारण टेक्स्ट डेल्टाज़ के रूप में आ रहा है
-(या अलग thinking ब्लॉक्स के रूप में)।
+OpenClaw can log the **raw assistant stream** before any filtering/formatting.
+This is the best way to see whether reasoning is arriving as plain text deltas
+(or as separate thinking blocks).
 
 CLI के माध्यम से सक्षम करें:
 

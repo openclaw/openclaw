@@ -5,13 +5,6 @@ read_when:
   - 시각적 작업공간을 위한 에이전트 컨트롤 추가
   - WKWebView Canvas 로드 디버깅
 title: "Canvas"
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:42Z
 ---
 
 # Canvas (macOS 앱)
@@ -52,7 +45,7 @@ Canvas 는 **Gateway WebSocket** 을 통해 노출되므로, 에이전트는 다
 - 패널 표시/숨김
 - 경로 또는 URL 로 이동
 - JavaScript 평가
-- 스냅샷 이미지 캡처
+- 25. 스냅샷 이미지 캡처
 
 CLI 예시:
 
@@ -70,7 +63,8 @@ openclaw nodes canvas snapshot --node <id>
 
 ## Canvas 의 A2UI
 
-A2UI 는 Gateway Canvas 호스트에서 제공되며 Canvas 패널 내부에 렌더링됩니다. Gateway 가 Canvas 호스트를 광고하면, macOS 앱은 첫 실행 시 A2UI 호스트 페이지로 자동 이동합니다.
+A2UI 는 Gateway Canvas 호스트에서 제공되며 Canvas 패널 내부에 렌더링됩니다.
+Gateway 가 Canvas 호스트를 광고하면, macOS 앱은 첫 실행 시 A2UI 호스트 페이지로 자동 이동합니다.
 
 기본 A2UI 호스트 URL:
 
@@ -100,7 +94,7 @@ EOFA2
 openclaw nodes canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
-빠른 스모크 테스트:
+26. 빠른 스모크 테스트:
 
 ```bash
 openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"

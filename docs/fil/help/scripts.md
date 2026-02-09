@@ -4,19 +4,12 @@ read_when:
   - Pagpapatakbo ng mga script mula sa repo
   - Pagdaragdag o pagbabago ng mga script sa ilalim ng ./scripts
 title: "Mga Script"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:30Z
 ---
 
 # Mga Script
 
-Ang `scripts/` na direktoryo ay naglalaman ng mga helper script para sa mga lokal na workflow at ops na gawain.
-Gamitin ang mga ito kapag ang isang gawain ay malinaw na nakatali sa isang script; kung hindi, mas piliin ang CLI.
+45. Ang `scripts/` na direktoryo ay naglalaman ng mga helper script para sa mga lokal na workflow at ops task.
+46. Gamitin ang mga ito kapag ang isang gawain ay malinaw na may kaugnayan sa isang script; kung hindi, mas piliin ang CLI.
 
 ## Mga Kombensyon
 

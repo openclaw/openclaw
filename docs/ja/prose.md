@@ -5,18 +5,11 @@ read_when:
   - OpenProse プラグインを有効化したい場合
   - 状態ストレージを理解する必要がある場合
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:50Z
 ---
 
 # OpenProse
 
-OpenProse は、AI セッションをオーケストレーションするための、ポータブルで Markdown ファーストなワークフローフォーマットです。OpenClaw では、OpenProse の Skill パックと `/prose` スラッシュコマンドをインストールするプラグインとして提供されます。プログラムは `.prose` ファイルに配置され、明示的な制御フローにより複数のサブエージェントを生成できます。
+OpenProse は、AI セッションをオーケストレーションするための、ポータブルで Markdown ファーストなワークフローフォーマットです。OpenClaw では、OpenProse の Skill パックと `/prose` スラッシュコマンドをインストールするプラグインとして提供されます。プログラムは `.prose` ファイルに配置され、明示的な制御フローにより複数のサブエージェントを生成できます。 OpenClawでは、OpenProseのスキルパックにスラッシュコマンドを加えたプラグインとして出荷されます。 プログラムは `.prose` ファイルに含まれており、明示的な制御フローを持つ複数のサブエージェントを生成できます。
 
 公式サイト: [https://www.prose.md](https://www.prose.md)
 
@@ -28,7 +21,7 @@ OpenProse は、AI セッションをオーケストレーションするため�
 
 ## インストールと有効化
 
-同梱プラグインはデフォルトで無効化されています。OpenProse を有効化してください。
+バンドルされたプラグインはデフォルトで無効になっています。 OpenProseを有効にする
 
 ```bash
 openclaw plugins enable open-prose
@@ -42,7 +35,7 @@ openclaw plugins enable open-prose
 
 ## スラッシュコマンド
 
-OpenProse は、ユーザーが呼び出せる Skill コマンドとして `/prose` を登録します。これは OpenProse VM の命令にルーティングされ、内部で OpenClaw のツールを使用します。
+OpenProse は `/prose` をユーザーが呼び出すことのできるskill コマンドとして登録します。 OpenProse は、ユーザーが呼び出せる Skill コマンドとして `/prose` を登録します。これは OpenProse VM の命令にルーティングされ、内部で OpenClaw のツールを使用します。
 
 一般的なコマンド:
 
@@ -121,21 +114,22 @@ OpenProse は複数の状態バックエンドをサポートします。
 
 `/prose run <handle/slug>` は `https://p.prose.md/<handle>/<slug>` に解決されます。
 直接 URL はそのまま取得されます。これは `web_fetch` ツール（POST の場合は `exec`）を使用します。
+直接 URL はそのまま取得されます。 これは `web_fetch` ツール (POST は `exec` ) を使用します。
 
 ## OpenClaw ランタイムの対応関係
 
 OpenProse プログラムは OpenClaw のプリミティブにマッピングされます。
 
-| OpenProse の概念             | OpenClaw のツール |
-| ---------------------------- | ----------------- |
-| セッション生成／タスクツール | `sessions_spawn`  |
-| ファイルの読み書き           | `read` / `write`  |
-| Web 取得                     | `web_fetch`       |
+| OpenProse の概念  | OpenClaw のツール    |
+| -------------- | ---------------- |
+| セッション生成／タスクツール | `sessions_spawn` |
+| ファイルの読み書き      | `read` / `write` |
+| Web 取得         | `web_fetch`      |
 
-ツールの許可リストがこれらのツールをブロックしている場合、OpenProse プログラムは失敗します。[Skills config](/tools/skills-config) を参照してください。
+ツールの許可リストがこれらのツールをブロックしている場合、OpenProse プログラムは失敗します。[Skills config](/tools/skills-config) を参照してください。 [スキル設定](/tools/skills-config)を参照してください。
 
 ## セキュリティと承認
 
-`.prose` ファイルはコードとして扱ってください。実行前にレビューしてください。OpenClaw のツール許可リストと承認ゲートを使用して、副作用を制御します。
+`.prose`ファイルをコードのように扱います。 実行する前にレビューしてください。 OpenClawツールを使用すると副作用を制御するために許可リストと承認ゲートを使用します。
 
 決定的で承認ゲート付きのワークフローについては、[Lobster](/tools/lobster) と比較してください。

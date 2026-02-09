@@ -1,15 +1,8 @@
 ---
-summary: „Status wsparcia bota Discord, możliwości i konfiguracja”
+summary: "„Status wsparcia bota Discord, możliwości i konfiguracja”"
 read_when:
   - Prace nad funkcjami kanału Discord
-title: „Discord”
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:59Z
+title: "Discord"
 ---
 
 # Discord (Bot API)
@@ -91,7 +84,7 @@ Wyłącz przez:
 
 To jest konfiguracja „Discord Developer Portal” do uruchamiania OpenClaw w kanale serwera (gildii), takim jak `#help`.
 
-### 1) Utwórz aplikację Discord + użytkownika bota
+### 1. Utwórz aplikację Discord + użytkownika bota
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. W aplikacji:
@@ -109,7 +102,7 @@ W **Bot** → **Privileged Gateway Intents** włącz:
 
 Zazwyczaj **nie** potrzebujesz **Presence Intent**. Ustawianie własnej obecności bota (akcja `setPresence`) używa OP3 bramy i nie wymaga tego intentu; jest on potrzebny tylko, jeśli chcesz otrzymywać aktualizacje obecności innych członków gildii.
 
-### 3) Wygeneruj URL zaproszenia (OAuth2 URL Generator)
+### 3. Wygeneruj URL zaproszenia (OAuth2 URL Generator)
 
 W aplikacji: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Unikaj **Administrator**, chyba że debugujesz i w pełni ufasz botowi.
 
 Skopiuj wygenerowany URL, otwórz go, wybierz serwer i zainstaluj bota.
 
-### 4) Pobierz identyfikatory (gildia/użytkownik/kanał)
+### 4. Pobierz identyfikatory (gildia/użytkownik/kanał)
 
 Discord używa wszędzie identyfikatorów numerycznych; konfiguracja OpenClaw preferuje id.
 
@@ -202,12 +195,12 @@ Uwagi:
 - Nadpisanie wieloagentowe: ustaw wzorce per agent w `agents.list[].groupChat.mentionPatterns`.
 - Jeśli obecne jest `channels`, każdy niewymieniony kanał jest domyślnie odrzucany.
 - Użyj wpisu kanału `"*"`, aby zastosować domyślne ustawienia dla wszystkich kanałów; jawne wpisy kanałów nadpisują wildcard.
-- Wątki dziedziczą konfigurację kanału nadrzędnego (lista dozwolonych, `requireMention`, skills, prompty itd.), chyba że jawnie dodasz id kanału wątku.
+- Wątki dziedziczą konfigurację kanału nadrzędnego (lista dozwolonych, `requireMention`, skills, prompty itd.), chyba że jawnie dodasz id kanału wątku. chyba że dodasz wyraźnie identyfikator kanału wątków.
 - Wskazówka właściciela: gdy per-gildia lub per-kanał lista dozwolonych `users` dopasuje nadawcę, OpenClaw traktuje go jako właściciela w systemowym promptcie. Dla globalnego właściciela między kanałami ustaw `commands.ownerAllowFrom`.
 - Wiadomości autorstwa bota są domyślnie ignorowane; ustaw `channels.discord.allowBots=true`, aby je dopuścić (własne wiadomości pozostają filtrowane).
 - Ostrzeżenie: jeśli zezwolisz na odpowiedzi do innych botów (`channels.discord.allowBots=true`), zapobiegaj pętlom bot–bot za pomocą list dozwolonych `requireMention`, `channels.discord.guilds.*.channels.<id>.users` i/lub wyczyść zabezpieczenia w `AGENTS.md` i `SOUL.md`.
 
-### 6) Sprawdź, czy działa
+### 6. Sprawdź, czy działa
 
 1. Uruchom gateway.
 2. Na kanale serwera wyślij: `@Krill hello` (lub nazwę swojego bota).
@@ -402,26 +395,26 @@ Uwagi dotyczące list dozwolonych (z włączonym PK):
 
 ### Domyślne akcje narzędzi
 
-| Grupa akcji    | Domyślne | Uwagi                               |
-| -------------- | -------- | ----------------------------------- |
-| reactions      | enabled  | Reakcje + lista reakcji + emojiList |
-| stickers       | enabled  | Wysyłanie naklejek                  |
-| emojiUploads   | enabled  | Wgrywanie emoji                     |
-| stickerUploads | enabled  | Wgrywanie naklejek                  |
-| polls          | enabled  | Tworzenie ankiet                    |
-| permissions    | enabled  | Migawka uprawnień kanału            |
-| messages       | enabled  | Odczyt/wysyłanie/edycja/usuwanie    |
-| threads        | enabled  | Tworzenie/listowanie/odpowiedzi     |
-| pins           | enabled  | Przypinanie/odpinanie/lista         |
+| Grupa akcji    | Domyślne | Uwagi                                                  |
+| -------------- | -------- | ------------------------------------------------------ |
+| reactions      | enabled  | Reakcje + lista reakcji + emojiList                    |
+| stickers       | enabled  | Wysyłanie naklejek                                     |
+| emojiUploads   | enabled  | Wgrywanie emoji                                        |
+| stickerUploads | enabled  | Wgrywanie naklejek                                     |
+| polls          | enabled  | Tworzenie ankiet                                       |
+| permissions    | enabled  | Migawka uprawnień kanału                               |
+| messages       | enabled  | Odczyt/wysyłanie/edycja/usuwanie                       |
+| threads        | enabled  | Tworzenie/listowanie/odpowiedzi                        |
+| pins           | enabled  | Przypinanie/odpinanie/lista                            |
 | search         | enabled  | Wyszukiwanie wiadomości (preview)   |
-| memberInfo     | enabled  | Informacje o członku                |
-| roleInfo       | enabled  | Lista ról                           |
-| channelInfo    | enabled  | Informacje o kanale + lista         |
-| channels       | enabled  | Zarządzanie kanałami/kategoriami    |
-| voiceStatus    | enabled  | Podgląd stanu głosu                 |
-| events         | enabled  | Lista/tworzenie wydarzeń            |
-| roles          | disabled | Dodawanie/usuwanie ról              |
-| moderation     | disabled | Timeout/kick/ban                    |
+| memberInfo     | enabled  | Informacje o członku                                   |
+| roleInfo       | enabled  | Lista ról                                              |
+| channelInfo    | enabled  | Informacje o kanale + lista                            |
+| channels       | enabled  | Zarządzanie kanałami/kategoriami                       |
+| voiceStatus    | enabled  | Podgląd stanu głosu                                    |
+| events         | enabled  | Lista/tworzenie wydarzeń                               |
+| roles          | disabled | Dodawanie/usuwanie ról                                 |
+| moderation     | disabled | Timeout/kick/ban                                       |
 | presence       | disabled | Status/aktywność bota (setPresence) |
 
 - `replyToMode`: `off` (domyślnie), `first` lub `all`. Stosowane tylko, gdy model zawiera tag odpowiedzi.
@@ -452,7 +445,7 @@ Uwagi dotyczące dopasowań list dozwolonych:
 - Przy starcie OpenClaw rozwiązuje nazwy kanałów/użytkowników w listach dozwolonych do ID (gdy bot może wyszukiwać członków)
   i loguje mapowanie; nierozwiązane wpisy są zachowywane w oryginalnej postaci.
 
-Uwagi dotyczące komend natywnych:
+Natywne uwagi komendy:
 
 - Zarejestrowane komendy odzwierciedlają komendy czatu OpenClaw.
 - Komendy natywne respektują te same listy dozwolonych co DM-y/wiadomości gildii (`channels.discord.dm.allowFrom`, `channels.discord.guilds`, reguły per kanał).

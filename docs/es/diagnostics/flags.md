@@ -4,13 +4,6 @@ read_when:
   - Necesita registros de depuración dirigidos sin aumentar los niveles de registro globales
   - Necesita capturar registros específicos de subsistemas para soporte
 title: "Indicadores de diagnóstico"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:18Z
 ---
 
 # Indicadores de diagnóstico
@@ -21,7 +14,7 @@ Los indicadores de diagnóstico le permiten habilitar registros de depuración d
 
 - Los indicadores son cadenas (no distinguen entre mayúsculas y minúsculas).
 - Puede habilitar indicadores en la configuración o mediante una anulación por variable de entorno.
-- Se admiten comodines:
+- Comodos soportados:
   - `telegram.*` coincide con `telegram.http`
   - `*` habilita todos los indicadores
 
@@ -47,7 +40,7 @@ Varios indicadores:
 
 Reinicie el Gateway después de cambiar los indicadores.
 
-## Anulación por variable de entorno (puntual)
+## Anulación de Env (une-off)
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload

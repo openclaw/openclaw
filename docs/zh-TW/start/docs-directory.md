@@ -1,20 +1,13 @@
 ---
 summary: "精選連結，指向最常使用的 OpenClaw 文件。"
 read_when:
-  - 當你需要快速存取關鍵文件頁面時
+  - You want quick access to key docs pages
 title: "文件目錄"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:23Z
 ---
 
 <Note>
-此頁面為精選索引。若你是新手，請從 [入門指南](/start/getting-started) 開始。
-如需完整的文件地圖，請參閱 [Docs hubs](/start/hubs)。
+This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
+For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 
 ## 從這裡開始
@@ -26,7 +19,7 @@ x-i18n:
 - [斜線指令](/tools/slash-commands)
 - [多代理路由](/concepts/multi-agent)
 - [更新與回復](/install/updating)
-- [配對（私訊與節點）](/channels/pairing)
+- [Pairing (DM and nodes)](/channels/pairing)
 - [Nix 模式](/install/nix)
 - [OpenClaw 助手設定](/start/openclaw)
 - [Skills](/tools/skills)
@@ -53,7 +46,7 @@ x-i18n:
 - [媒體影像](/nodes/images)
 - [媒體音訊](/nodes/audio)
 
-## 配套應用程式
+## 12. 伴生應用程式
 
 - [macOS 應用程式](/platforms/macos)
 - [iOS 應用程式](/platforms/ios)

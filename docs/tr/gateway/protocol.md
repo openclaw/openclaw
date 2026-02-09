@@ -5,19 +5,11 @@ read_when:
   - Protokol uyuşmazlıklarını veya bağlantı hatalarını ayıklarken
   - Protokol şemasını/modellerini yeniden üretirken
 title: "Gateway Protokolü"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:28Z
 ---
 
 # Gateway protokolü (WebSocket)
 
-Gateway (Ağ Geçidi) WS protokolü, OpenClaw için **tek kontrol düzlemi + düğüm taşımasıdır**.
-Tüm istemciler (CLI, web UI, macOS uygulaması, iOS/Android düğümleri, başsız
+Gateway (Ağ Geçidi) WS protokolü, OpenClaw için **tek kontrol düzlemi + düğüm taşımasıdır**. Tüm istemciler (CLI, web UI, macOS uygulaması, iOS/Android düğümleri, başsız
 düğümler) WebSocket üzerinden bağlanır ve el sıkışma sırasında **rol** +
 **kapsam** bildirir.
 
@@ -166,7 +158,7 @@ Düğümler, bağlantı sırasında yetenek taleplerini bildirir:
 
 Gateway (Ağ Geçidi) bunları **talepler** olarak ele alır ve sunucu tarafı izin listelerini uygular.
 
-## Varlık
+## Presence
 
 - `system-presence`, cihaz kimliğine göre anahtarlanmış girdiler döndürür.
 - Varlık girdileri `deviceId`, `roles` ve `scopes` içerir; böylece UI'lar,
@@ -177,12 +169,12 @@ Gateway (Ağ Geçidi) bunları **talepler** olarak ele alır ve sunucu tarafı i
 - Düğümler, otomatik izin kontrolleri için mevcut skill yürütülebilirlerinin
   listesini almak üzere `skills.bins` çağrısını yapabilir.
 
-## Çalıştırma onayları
+## Exec onayları
 
 - Bir çalıştırma isteği onay gerektirdiğinde, gateway `exec.approval.requested` yayınlar.
 - Operatör istemciler, `operator.approvals` kapsamını gerektiren `exec.approval.resolve` çağrısı ile çözer.
 
-## Sürümleme
+## Versioning
 
 - `PROTOCOL_VERSION`, `src/gateway/protocol/schema.ts` içinde bulunur.
 - İstemciler `minProtocol` + `maxProtocol` gönderir; sunucu uyuşmazlıkları reddeder.
@@ -212,7 +204,8 @@ Gateway (Ağ Geçidi) bunları **talepler** olarak ele alır ve sunucu tarafı i
   adresini içerir (böylece aynı ana makinedeki tailnet bağları yine de
   otomatik onaylanabilir).
 - Tüm WS istemcileri, `connect` sırasında `device` kimliğini
-  (operatör + düğüm) içermelidir. Kontrol UI'ı, **yalnızca**
+  (operatör + düğüm) içermelidir.
+  Kontrol UI'ı, **yalnızca**
   `gateway.controlUi.allowInsecureAuth` etkin olduğunda (veya acil durum kullanımı için `gateway.controlUi.dangerouslyDisableDeviceAuth`)
   bunu atlayabilir.
 - Yerel olmayan bağlantılar, sunucu tarafından sağlanan `connect.challenge` nonce'unu

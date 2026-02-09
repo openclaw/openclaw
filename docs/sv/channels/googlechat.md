@@ -3,13 +3,6 @@ summary: "Status, funktioner och konfiguration för Google Chat-appen"
 read_when:
   - Arbetar med funktioner för Google Chat-kanalen
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:26Z
 ---
 
 # Google Chat (Chat API)
@@ -23,7 +16,7 @@ Status: redo för DM:er + Spaces via Google Chat API-webhooks (endast HTTP).
    - Aktivera API:t om det inte redan är aktiverat.
 2. Skapa ett **Service Account**:
    - Klicka på **Create Credentials** > **Service Account**.
-   - Namnge det som du vill (t.ex. `openclaw-chat`).
+   - Namnge det vad du vill (t.ex., `openclaw-chat`).
    - Lämna behörigheter tomma (klicka **Continue**).
    - Lämna principer med åtkomst tomma (klicka **Done**).
 3. Skapa och ladda ner **JSON-nyckeln**:
@@ -31,12 +24,12 @@ Status: redo för DM:er + Spaces via Google Chat API-webhooks (endast HTTP).
    - Gå till fliken **Keys**.
    - Klicka **Add Key** > **Create new key**.
    - Välj **JSON** och klicka **Create**.
-4. Spara den nedladdade JSON-filen på din gateway-värd (t.ex. `~/.openclaw/googlechat-service-account.json`).
+4. Lagra den nedladdade JSON-filen på din gateway-värd (t.ex. `~/.openclaw/googlechat-service-accountt.json`).
 5. Skapa en Google Chat-app i [Google Cloud Console Chat Configuration](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat):
    - Fyll i **Application info**:
-     - **App name**: (t.ex. `OpenClaw`)
+     - **Appnamn**: (t.ex. `OpenClaw`)
      - **Avatar URL**: (t.ex. `https://openclaw.ai/logo.png`)
-     - **Description**: (t.ex. `Personal AI Assistant`)
+     - **Beskrivning**: (t.ex. `Personal AI Assistant`)
    - Aktivera **Interactive features**.
    - Under **Functionality**, markera **Join spaces and group conversations**.
    - Under **Connection settings**, välj **HTTP endpoint URL**.
@@ -54,7 +47,7 @@ Status: redo för DM:er + Spaces via Google Chat API-webhooks (endast HTTP).
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - Eller konfig: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`.
 8. Ställ in webhook-audience-typ + värde (matchar din Chat-appkonfiguration).
-9. Starta gatewayn. Google Chat kommer att POST:a till din webhook-sökväg.
+9. Starta gatewayn. Google Chat kommer att POST till din webhook-sökväg.
 
 ## Lägg till i Google Chat
 
@@ -63,18 +56,18 @@ När gatewayn kör och din e-postadress är tillagd i synlighetslistan:
 1. Gå till [Google Chat](https://chat.google.com/).
 2. Klicka på **+** (plus)-ikonen bredvid **Direct Messages**.
 3. I sökfältet (där du vanligtvis lägger till personer), skriv **App name** som du konfigurerade i Google Cloud Console.
-   - **Obs**: Botten kommer _inte_ att visas i listan ”Marketplace” eftersom det är en privat app. Du måste söka efter den med namn.
+   - **Observera**: Botten kommer _inte_ att visas i browse list "Marketplace" eftersom det är en privat app. Du måste söka efter det med namn.
 4. Välj din bot i resultaten.
 5. Klicka **Add** eller **Chat** för att starta en 1:1-konversation.
 6. Skicka ”Hello” för att trigga assistenten!
 
 ## Publik URL (endast webhook)
 
-Google Chat-webhooks kräver en publik HTTPS-endpoint. Av säkerhetsskäl ska **endast sökvägen `/googlechat` exponeras** mot internet. Behåll OpenClaw-dashboarden och andra känsliga endpoints i ditt privata nätverk.
+Google Chat webhooks kräver en offentlig HTTPS-slutpunkt. För säkerhets skull exponerar \*\*bara `/googlechat`-sökvägen \*\* till internet. Håll OpenClaw-instrumentpanelen och andra känsliga ändpunkter på ditt privata nätverk.
 
 ### Alternativ A: Tailscale Funnel (rekommenderat)
 
-Använd Tailscale Serve för den privata dashboarden och Funnel för den publika webhook-sökvägen. Detta håller `/` privat samtidigt som endast `/googlechat` exponeras.
+Använd Tailscale Serve för den privata instrumentpanelen och Funnel för den offentliga webhook-sökvägen. Detta håller `/` privat medan du endast exponerar `/googlechat`.
 
 1. **Kontrollera vilken adress din gateway är bunden till:**
 
@@ -82,7 +75,7 @@ Använd Tailscale Serve för den privata dashboarden och Funnel för den publika
    ss -tlnp | grep 18789
    ```
 
-   Notera IP-adressen (t.ex. `127.0.0.1`, `0.0.0.0` eller din Tailscale-IP som `100.x.x.x`).
+   Notera IP-adressen (t.ex., `127.0.0.1`, `0.0.0.0`, eller din Tailscale IP som `100.x.x.x`).
 
 2. **Exponera dashboarden endast för tailnet (port 8443):**
 
@@ -114,15 +107,15 @@ Använd Tailscale Serve för den privata dashboarden och Funnel för den publika
    tailscale funnel status
    ```
 
-Din publika webhook-URL blir:
+Din publika webhook-URL kommer att vara:
 `https://<node-name>.<tailnet>.ts.net/googlechat`
 
-Din privata dashboard förblir endast tillgänglig i tailnet:
+Din privata instrumentpanel förblir endast tailnet:
 `https://<node-name>.<tailnet>.ts.net:8443/`
 
 Använd den publika URL:en (utan `:8443`) i Google Chat-appens konfiguration.
 
-> Obs: Denna konfiguration består över omstarter. För att ta bort den senare, kör `tailscale funnel reset` och `tailscale serve reset`.
+> Obs: Denna konfiguration kvarstår över omstarter. För att ta bort det senare, kör `tailscale tratt återställ` och` tailscale serve reset`.
 
 ### Alternativ B: Reverse Proxy (Caddy)
 
@@ -145,16 +138,16 @@ Konfigurera tunnelns ingress-regler för att endast routa webhook-sökvägen:
 
 ## Hur det fungerar
 
-1. Google Chat skickar webhook-POST:ar till gatewayn. Varje begäran innehåller en `Authorization: Bearer <token>`-header.
+1. Google Chat skickar webhook POST till gateway. Varje begäran innehåller en `Authorization: Bearer <token>` header.
 2. OpenClaw verifierar token mot den konfigurerade `audienceType` + `audience`:
    - `audienceType: "app-url"` → audience är din HTTPS-webhook-URL.
    - `audienceType: "project-number"` → audience är Cloud-projektnumret.
 3. Meddelanden routas per space:
    - DM:er använder sessionsnyckeln `agent:<agentId>:googlechat:dm:<spaceId>`.
    - Spaces använder sessionsnyckeln `agent:<agentId>:googlechat:group:<spaceId>`.
-4. DM-åtkomst är parning som standard. Okända avsändare får en parningskod; godkänn med:
+4. DM-åtkomst paras ihop som standard. Okända avsändare får en parningskod; godkänn med:
    - `openclaw pairing approve googlechat <code>`
-5. Grupp-spaces kräver @-omnämnande som standard. Använd `botUser` om omnämnanddetektering behöver appens användarnamn.
+5. Grupputrymmen kräver @-mention som standard. Använd `botUser` om omnämnande behöver appens användarnamn.
 
 ## Mål
 
@@ -214,9 +207,9 @@ Om Google Cloud Logs Explorer visar fel som:
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-Detta betyder att webhook-hanteraren inte är registrerad. Vanliga orsaker:
+Detta innebär att webhook-hanteraren inte är registrerad. Vanliga orsaker:
 
-1. **Kanalen är inte konfigurerad**: Avsnittet `channels.googlechat` saknas i din konfig. Verifiera med:
+1. **Kanalen är inte konfigurerad**: sektionen `channels.googlechat` saknas i din konfiguration. Verifiera med:
 
    ```bash
    openclaw config get channels.googlechat

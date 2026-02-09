@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 에서 Anthropic 모델을 사용하려는 경우
   - API 키 대신 setup-token 을 사용하려는 경우
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:55Z
 ---
 
 # Anthropic (Claude)
@@ -50,11 +43,11 @@ OpenClaw 는 Anthropic 의 프롬프트 캐싱 기능을 지원합니다. 이는
 
 모델 설정에서 `cacheRetention` 파라미터를 사용합니다:
 
-| 값      | 캐시 지속 시간 | 설명                         |
-| ------- | -------------- | ---------------------------- |
-| `none`  | 캐싱 없음      | 프롬프트 캐싱 비활성화       |
-| `short` | 5분            | API 키 인증의 기본값         |
-| `long`  | 1시간          | 확장 캐시 (베타 플래그 필요) |
+| 값       | 캐시 지속 시간 | 설명                                   |
+| ------- | -------- | ------------------------------------ |
+| `none`  | 캐싱 없음    | 프롬프트 캐싱 비활성화                         |
+| `short` | 5분       | API 키 인증의 기본값                        |
+| `long`  | 1시간      | 확장 캐시 (베타 플래그 필요) |
 
 ```json5
 {
@@ -83,8 +76,7 @@ Anthropic API 키 인증을 사용하는 경우, OpenClaw 는 모든 Anthropic �
 
 새로운 `cacheRetention` 파라미터로 마이그레이션하는 것을 권장합니다.
 
-OpenClaw 는 Anthropic API 요청에 대해 `extended-cache-ttl-2025-04-11` 베타 플래그를 포함합니다.
-프로바이더 헤더를 재정의하는 경우 이를 유지하십시오 (자세한 내용은 [/gateway/configuration](/gateway/configuration) 를 참고하십시오).
+OpenClaw 는 Anthropic API 요청에 대해 `extended-cache-ttl-2025-04-11` 베타 플래그를 포함합니다. 프로바이더 헤더를 재정의하는 경우 이를 유지하십시오 (자세한 내용은 [/gateway/configuration](/gateway/configuration) 를 참고하십시오).
 
 ## 옵션 B: Claude setup-token
 

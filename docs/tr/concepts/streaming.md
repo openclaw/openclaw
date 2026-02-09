@@ -5,13 +5,6 @@ read_when:
   - Blok streaming veya kanal parçalama davranışını değiştirirken
   - Yinelenen/erken blok yanıtları ya da taslak streaming’i hata ayıklarken
 title: "Streaming ve Parçalama"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:25Z
 ---
 
 # Streaming + parçalama
@@ -74,8 +67,7 @@ Blok parçalama `EmbeddedBlockChunker` tarafından uygulanır:
 
 ## Birleştirme (stream edilen blokları birleştir)
 
-Blok streaming etkin olduğunda OpenClaw, göndermeden önce **ardışık blok parçalarını birleştirebilir**.
-Bu, ilerlemeli çıktı sağlarken “tek satırlık spam”i azaltır.
+Blok streaming etkin olduğunda OpenClaw, göndermeden önce **ardışık blok parçalarını birleştirebilir**. Bu, ilerlemeli çıktı sağlarken “tek satırlık spam”i azaltır.
 
 - Birleştirme, flush etmeden önce **boşta kalma aralıklarını** (`idleMs`) bekler.
 - Arabellekler `maxChars` ile sınırlandırılır ve aşılırsa gönderilir.
@@ -88,8 +80,7 @@ Bu, ilerlemeli çıktı sağlarken “tek satırlık spam”i azaltır.
 
 ## Bloklar arasında insan benzeri tempo
 
-Blok streaming etkin olduğunda, blok yanıtları arasında (**ilk bloktan sonra**) **rastgele bir duraklama** ekleyebilirsiniz.
-Bu, çok baloncuklu yanıtların daha doğal hissetmesini sağlar.
+Blok streaming etkin olduğunda, blok yanıtları arasında (**ilk bloktan sonra**) **rastgele bir duraklama** ekleyebilirsiniz. Bu, çok baloncuklu yanıtların daha doğal hissetmesini sağlar.
 
 - Yapılandırma: `agents.defaults.humanDelay` (ajan başına `agents.list[].humanDelay` ile geçersiz kılınabilir).
 - Modlar: `off` (varsayılan), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
@@ -97,7 +88,7 @@ Bu, çok baloncuklu yanıtların daha doğal hissetmesini sağlar.
 
 ## “Parçaları stream et veya her şeyi gönder”
 
-Bu şu şekilde eşlenir:
+This maps to:
 
 - **Parçaları stream et:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (ilerledikçe gönder). Telegram dışı kanallar ayrıca `*.blockStreaming: true` gerektirir.
 - **Her şeyi sonda stream et:** `blockStreamingBreak: "message_end"` (bir kez flush et; çok uzunsa birden fazla parça olabilir).

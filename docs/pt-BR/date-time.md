@@ -4,13 +4,6 @@ read_when:
   - Você está alterando como os timestamps são mostrados ao modelo ou aos usuários
   - Você está depurando a formatação de horário em mensagens ou na saída do prompt do sistema
 title: "Data e Hora"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:45Z
 ---
 
 # Data & Hora

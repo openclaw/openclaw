@@ -4,18 +4,13 @@ read_when:
   - การดีบักการยืนยันตัวตนของโมเดลหรือการหมดอายุ OAuth
   - การจัดทำเอกสารเกี่ยวกับการยืนยันตัวตนหรือการจัดเก็บข้อมูลรับรอง
 title: "การยืนยันตัวตน"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:11Z
 ---
 
 # การยืนยันตัวตน
 
-OpenClaw รองรับ OAuth และคีย์API สำหรับผู้ให้บริการโมเดล สำหรับบัญชี Anthropic เราแนะนำให้ใช้ **คีย์API** สำหรับการเข้าถึงการสมัครสมาชิก Claude ให้ใช้โทเคนแบบอายุยาวที่สร้างโดย `claude setup-token`.
+OpenClaw รองรับ OAuth และคีย์API สำหรับผู้ให้บริการโมเดล สำหรับบัญชี Anthropic เราแนะนำให้ใช้ **คีย์API** สำหรับการเข้าถึงการสมัครสมาชิก Claude ให้ใช้โทเคนแบบอายุยาวที่สร้างโดย `claude setup-token`. For Anthropic
+accounts, we recommend using an **API key**. For Claude subscription access,
+use the long‑lived token created by `claude setup-token`.
 
 ดู [/concepts/oauth](/concepts/oauth) สำหรับโฟลว์ OAuth แบบเต็มและผังการจัดเก็บข้อมูล
 
@@ -54,7 +49,8 @@ openclaw doctor
 
 ## Anthropic: setup-token (การยืนยันตัวตนแบบสมัครสมาชิก)
 
-สำหรับ Anthropic แนวทางที่แนะนำคือ **คีย์API** หากคุณใช้การสมัครสมาชิก Claude ก็รองรับโฟลว์ setup-token ด้วย ให้รันบน **Gateway（เกตเวย์） host**:
+For Anthropic, the recommended path is an **API key**. If you’re using a Claude
+subscription, the setup-token flow is also supported. Run it on the **gateway host**:
 
 ```bash
 claude setup-token
@@ -136,9 +132,10 @@ openclaw models auth order clear --provider anthropic
 openclaw models status
 ```
 
-### โทเคนใกล้หมดอายุ/หมดอายุแล้ว
+### Token expiring/expired
 
-รัน `openclaw models status` เพื่อยืนยันว่าโปรไฟล์ใดกำลังหมดอายุ หากโปรไฟล์หายไป ให้รัน `claude setup-token` อีกครั้งและวางโทเคนใหม่
+รัน `openclaw models status` เพื่อยืนยันว่าโปรไฟล์ใดกำลังหมดอายุ หากโปรไฟล์หายไป ให้รัน `claude setup-token` อีกครั้งและวางโทเคนใหม่ If the profile
+is missing, rerun `claude setup-token` and paste the token again.
 
 ## ข้อกำหนด
 

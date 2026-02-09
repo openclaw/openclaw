@@ -2,18 +2,11 @@
 title: "प्रदर्शनी"
 description: "Real-world OpenClaw projects from the community"
 summary: "OpenClaw द्वारा संचालित समुदाय-निर्मित प्रोजेक्ट और एकीकरण"
-x-i18n:
-  source_path: start/showcase.md
-  source_hash: b3460f6a7b994879
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # प्रदर्शनी
 
-समुदाय के वास्तविक प्रोजेक्ट। देखें कि लोग OpenClaw के साथ क्या बना रहे हैं।
+Real projects from the community. See what people are building with OpenClaw.
 
 <Info>
 **फीचर होना चाहते हैं?** अपना प्रोजेक्ट [Discord पर #showcase](https://discord.gg/clawd) में साझा करें या [X पर @openclaw को टैग करें](https://x.com/openclaw)।
@@ -41,7 +34,7 @@ VelvetShark द्वारा पूर्ण सेटअप वॉकथ्�
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
   />
-</div>
+</div></div>
 
 [YouTube पर देखें](https://www.youtube.com/watch?v=SaWSPZoPX34)
 
@@ -63,7 +56,7 @@ VelvetShark द्वारा पूर्ण सेटअप वॉकथ्�
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
   />
-</div>
+</div></div>
 
 [YouTube पर देखें](https://www.youtube.com/watch?v=mMSKQvlmFuQ)
 
@@ -85,7 +78,7 @@ VelvetShark द्वारा पूर्ण सेटअप वॉकथ्�
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
   />
-</div>
+</div></div>
 
 [YouTube पर देखें](https://www.youtube.com/watch?v=5kkIJNUGFho)
 
@@ -104,7 +97,7 @@ OpenCode परिवर्तन पूरा करता है → PR खो
 <Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
   **@prades_maxime** • `skills` `local` `csv`
 
-“Robby” (@openclaw) से स्थानीय वाइन सेलर Skill के लिए पूछा। यह एक नमूना CSV निर्यात और उसे कहाँ संग्रहीत करना है पूछता है, फिर तेज़ी से Skill बनाता/परीक्षण करता है (उदाहरण में 962 बोतलें)।
+Asked “Robby” (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
 
   <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw building a local wine cellar skill from CSV" />
 </Card>
@@ -112,7 +105,7 @@ OpenCode परिवर्तन पूरा करता है → PR खो
 <Card title="Tesco Shop Autopilot" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
   **@marchattonhere** • `automation` `browser` `shopping`
 
-साप्ताहिक भोजन योजना → नियमित वस्तुएँ → डिलीवरी स्लॉट बुक → ऑर्डर की पुष्टि। कोई API नहीं, केवल ब्राउज़र नियंत्रण।
+Weekly meal plan → regulars → book delivery slot → confirm order. No APIs, just browser control.
 
   <img src="/assets/showcase/tesco-shop.jpg" alt="Tesco shop automation via chat" />
 </Card>
@@ -168,14 +161,12 @@ BambuLab प्रिंटर नियंत्रित और समस्�
 <Card title="ParentPay School Meals" icon="utensils" href="#">
   **@George5562** • `automation` `browser` `parenting`
 
-ParentPay के माध्यम से यूके स्कूल भोजन की स्वचालित बुकिंग। विश्वसनीय टेबल सेल क्लिकिंग के लिए माउस निर्देशांकों का उपयोग।
-</Card>
+Automated UK school meal booking via ParentPay. Uses mouse coordinates for reliable table cell clicking. </Card>
 
 <Card title="R2 Upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawhub.com/skills/r2-upload">
   **@julianengel** • `files` `r2` `presigned-urls`
 
-Cloudflare R2/S3 पर अपलोड करें और सुरक्षित presigned डाउनलोड लिंक बनाएं। दूरस्थ OpenClaw इंस्टेंस के लिए उपयुक्त।
-</Card>
+Upload to Cloudflare R2/S3 and generate secure presigned download links. Perfect for remote OpenClaw instances. </Card>
 
 <Card title="iOS App via Telegram" icon="mobile" href="#">
   **@coard** • `ios` `xcode` `testflight`
@@ -195,20 +186,17 @@ Oura रिंग डेटा को कैलेंडर, अपॉइंट�
 <Card title="Kev's Dream Team (14+ Agents)" icon="robot" href="https://github.com/adam91holt/orchestrated-ai-articles">
   **@adam91holt** • `multi-agent` `orchestration` `architecture` `manifesto`
 
-एक Gateway के अंतर्गत 14+ एजेंट, जहाँ Opus 4.5 orchestrator Codex workers को कार्य सौंपता है। विस्तृत [तकनीकी लेख](https://github.com/adam91holt/orchestrated-ai-articles) जिसमें Dream Team रोस्टर, मॉडल चयन, sandboxing, वेबहुक्स, हार्टबीट्स और delegation फ्लो शामिल हैं। एजेंट sandboxing के लिए [Clawdspace](https://github.com/adam91holt/clawdspace)। [ब्लॉग पोस्ट](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/)।
-</Card>
+14+ agents under one gateway with Opus 4.5 orchestrator delegating to Codex workers. Comprehensive [technical write-up](https://github.com/adam91holt/orchestrated-ai-articles) covering the Dream Team roster, model selection, sandboxing, webhooks, heartbeats, and delegation flows. [Clawdspace](https://github.com/adam91holt/clawdspace) for agent sandboxing. [Blog post](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/). </Card>
 
 <Card title="Linear CLI" icon="terminal" href="https://github.com/Finesssee/linear-cli">
   **@NessZerra** • `devtools` `linear` `cli` `issues`
 
-Linear के लिए CLI जो एजेंटिक वर्कफ़्लो (Claude Code, OpenClaw) के साथ एकीकृत होता है। टर्मिनल से issues, projects और workflows प्रबंधित करें। पहला बाहरी PR मर्ज हुआ!
-</Card>
+CLI for Linear that integrates with agentic workflows (Claude Code, OpenClaw). Manage issues, projects, and workflows from the terminal. First external PR merged! </Card>
 
 <Card title="Beeper CLI" icon="message" href="https://github.com/blqke/beepcli">
   **@jules** • `messaging` `beeper` `cli` `automation`
 
-Beeper Desktop के माध्यम से संदेश पढ़ें, भेजें और संग्रहित करें। Beeper local MCP API का उपयोग करता है ताकि एजेंट आपके सभी चैट्स (iMessage, WhatsApp, आदि) एक जगह प्रबंधित कर सकें।
-</Card>
+Beeper Desktop के माध्यम से संदेश पढ़ें, भेजें और संग्रहित करें। Beeper local MCP API का उपयोग करता है ताकि एजेंट आपकी सभी चैट्स (iMessage, WhatsApp, आदि) प्रबंधित कर सकें। एक ही जगह पर। </Card>
 
 </CardGroup>
 
@@ -235,58 +223,50 @@ Claude Code ने प्यूरीफ़ायर नियंत्रण �
 <Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
   **@buddyhadry** • `automation` `briefing` `images` `telegram`
 
-एक शेड्यूल्ड प्रॉम्प्ट हर सुबह OpenClaw persona के माध्यम से एक एकल “सीन” इमेज बनाता है (मौसम, कार्य, तिथि, पसंदीदा पोस्ट/उद्धरण)।
-</Card>
+एक निर्धारित प्रॉम्प्ट हर सुबह OpenClaw persona के माध्यम से एक एकल "scene" इमेज (मौसम, कार्य, तारीख, पसंदीदा पोस्ट/उद्धरण) जनरेट करता है। </Card>
 
 <Card title="Padel Court Booking" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
   **@joshp123** • `automation` `booking` `cli`
-  
-  Playtomic उपलब्धता चेकर + बुकिंग CLI। फिर कभी खुला कोर्ट मिस न करें।
-  
+
+Playtomic उपलब्धता चेकर + बुकिंग CLI। फिर कभी खुला कोर्ट मिस न करें।
+
   <img src="/assets/showcase/padel-screenshot.jpg" alt="padel-cli screenshot" />
 </Card>
 
 <Card title="Accounting Intake" icon="file-invoice-dollar">
   **Community** • `automation` `email` `pdf`
-  
-  ईमेल से PDFs एकत्र करता है, कर सलाहकार के लिए दस्तावेज़ तैयार करता है। मासिक अकाउंटिंग ऑटोपायलट पर।
-</Card>
+
+ईमेल से PDFs एकत्र करता है, टैक्स कंसल्टेंट के लिए दस्तावेज़ तैयार करता है। मासिक अकाउंटिंग ऑटोपायलट पर। </Card>
 
 <Card title="Couch Potato Dev Mode" icon="couch" href="https://davekiss.com">
   **@davekiss** • `telegram` `website` `migration` `astro`
 
-Netflix देखते हुए Telegram के माध्यम से पूरी व्यक्तिगत साइट फिर से बनाई — Notion → Astro, 18 पोस्ट माइग्रेट, DNS से Cloudflare। लैपटॉप कभी नहीं खोला।
-</Card>
+Netflix देखते हुए Telegram के ज़रिए पूरी पर्सनल साइट दोबारा बनाई — Notion → Astro, 18 पोस्ट माइग्रेट कीं, DNS को Cloudflare पर सेट किया। कभी लैपटॉप नहीं खोला। </Card>
 
 <Card title="Job Search Agent" icon="briefcase">
   **@attol8** • `automation` `api` `skill`
 
-जॉब लिस्टिंग खोजता है, CV कीवर्ड से मिलान करता है, और लिंक सहित प्रासंगिक अवसर लौटाता है। JSearch API का उपयोग कर 30 मिनट में बनाया गया।
-</Card>
+जॉब लिस्टिंग खोजता है, CV कीवर्ड्स से मिलान करता है, और लिंक के साथ प्रासंगिक अवसर लौटाता है। JSearch API का उपयोग करके 30 मिनट में बनाया गया। </Card>
 
 <Card title="Jira Skill Builder" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
   **@jdrhyne** • `automation` `jira` `skill` `devtools`
 
-OpenClaw को Jira से जोड़ा गया, फिर तुरंत एक नई Skill उत्पन्न की गई (ClawHub पर मौजूद होने से पहले)।
-</Card>
+OpenClaw को Jira से जोड़ा, फिर तुरंत एक नया skill जनरेट किया (ClawHub पर मौजूद होने से पहले)। </Card>
 
 <Card title="Todoist Skill via Telegram" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
   **@iamsubhrajyoti** • `automation` `todoist` `skill` `telegram`
 
-Todoist कार्यों को स्वचालित किया और OpenClaw से सीधे Telegram चैट में Skill जनरेट करवाई।
-</Card>
+Todoist टास्क्स को ऑटोमेट किया और OpenClaw से सीधे Telegram चैट में skill जनरेट करवाया। </Card>
 
 <Card title="TradingView Analysis" icon="chart-line">
   **@bheem1798** • `finance` `browser` `automation`
 
-ब्राउज़र ऑटोमेशन के माध्यम से TradingView में लॉगिन करता है, चार्ट के स्क्रीनशॉट लेता है, और मांग पर तकनीकी विश्लेषण करता है। कोई API आवश्यक नहीं—केवल ब्राउज़र नियंत्रण।
-</Card>
+ब्राउज़र ऑटोमेशन के ज़रिए TradingView में लॉगिन करता है, चार्ट्स के स्क्रीनशॉट लेता है, और मांग पर तकनीकी विश्लेषण करता है। कोई API ज़रूरी नहीं—सिर्फ़ ब्राउज़र कंट्रोल। </Card>
 
 <Card title="Slack Auto-Support" icon="slack">
   **@henrymascot** • `slack` `automation` `support`
 
-कंपनी Slack चैनल पर नज़र रखता है, सहायक उत्तर देता है, और सूचनाएँ Telegram पर अग्रेषित करता है। बिना पूछे डिप्लॉय किए गए ऐप में एक प्रोडक्शन बग को स्वायत्त रूप से ठीक किया।
-</Card>
+कंपनी के Slack चैनल पर नज़र रखता है, मददगार जवाब देता है, और नोटिफ़िकेशन Telegram पर फ़ॉरवर्ड करता है। बिना पूछे डिप्लॉय की गई ऐप में एक प्रोडक्शन बग को स्वायत्त रूप से ठीक किया। </Card>
 
 </CardGroup>
 
@@ -296,29 +276,26 @@ Todoist कार्यों को स्वचालित किया औ�
 
 <Card title="xuezh Chinese Learning" icon="language" href="https://github.com/joshp123/xuezh">
   **@joshp123** • `learning` `voice` `skill`
-  
-  OpenClaw के माध्यम से उच्चारण फीडबैक और अध्ययन प्रवाह के साथ चीनी सीखने का इंजन।
-  
+
+OpenClaw के माध्यम से उच्चारण फीडबैक और अध्ययन प्रवाह के साथ चीनी सीखने का इंजन।
+
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
 </Card>
 
 <Card title="WhatsApp Memory Vault" icon="vault">
   **Community** • `memory` `transcription` `indexing`
-  
-  पूर्ण WhatsApp एक्सपोर्ट्स इन्जेस्ट करता है, 1k+ वॉइस नोट्स का ट्रांसक्रिप्शन करता है, git लॉग्स से क्रॉस-चेक करता है, और लिंक्ड Markdown रिपोर्ट्स आउटपुट करता है।
-</Card>
+
+पूरे WhatsApp एक्सपोर्ट्स ingest करता है, 1k+ वॉइस नोट्स ट्रांसक्राइब करता है, git लॉग्स से क्रॉस-चेक करता है, और लिंक्ड markdown रिपोर्ट्स आउटपुट करता है। </Card>
 
 <Card title="Karakeep Semantic Search" icon="magnifying-glass" href="https://github.com/jamesbrooksco/karakeep-semantic-search">
   **@jamesbrooksco** • `search` `vector` `bookmarks`
-  
-  Qdrant + OpenAI/Ollama embeddings का उपयोग करके Karakeep बुकमार्क्स में वेक्टर सर्च जोड़ता है।
-</Card>
+
+Qdrant + OpenAI/Ollama embeddings का उपयोग करके Karakeep बुकमार्क्स में वेक्टर सर्च जोड़ता है। </Card>
 
 <Card title="Inside-Out-2 Memory" icon="brain">
   **Community** • `memory` `beliefs` `self-model`
-  
-  अलग मेमोरी मैनेजर जो सत्र फ़ाइलों को memories → beliefs → विकसित होते self model में बदलता है।
-</Card>
+
+अलग मेमोरी मैनेजर जो सेशन फ़ाइल्स को memories → beliefs → विकसित होते self model में बदलता है। </Card>
 
 </CardGroup>
 
@@ -328,15 +305,13 @@ Todoist कार्यों को स्वचालित किया औ�
 
 <Card title="Clawdia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
-  
-  Vapi वॉइस असिस्टेंट ↔ OpenClaw HTTP ब्रिज। आपके एजेंट के साथ लगभग रियल-टाइम फ़ोन कॉल।
-</Card>
+
+Vapi वॉइस असिस्टेंट ↔ OpenClaw HTTP ब्रिज। आपके एजेंट के साथ लगभग रियल-टाइम फ़ोन कॉल्स। </Card>
 
 <Card title="OpenRouter Transcription" icon="microphone" href="https://clawhub.com/obviyus/openrouter-transcribe">
   **@obviyus** • `transcription` `multilingual` `skill`
 
-OpenRouter (Gemini आदि) के माध्यम से बहुभाषी ऑडियो ट्रांसक्रिप्शन। ClawHub पर उपलब्ध।
-</Card>
+OpenRouter (Gemini, आदि) के माध्यम से मल्टी-लिंगुअल ऑडियो ट्रांसक्रिप्शन। ClawHub पर उपलब्ध। </Card>
 
 </CardGroup>
 
@@ -346,27 +321,23 @@ OpenRouter (Gemini आदि) के माध्यम से बहुभा�
 
 <Card title="Home Assistant Add-on" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
-  
-  Home Assistant OS पर चलने वाला OpenClaw Gateway, SSH टनल समर्थन और स्थायी स्टेट के साथ।
-</Card>
+
+Home Assistant OS पर चल रहा OpenClaw gateway, SSH टनल सपोर्ट और persistent state के साथ। </Card>
 
 <Card title="Home Assistant Skill" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
   **ClawHub** • `homeassistant` `skill` `automation`
-  
-  प्राकृतिक भाषा के माध्यम से Home Assistant डिवाइसों को नियंत्रित और स्वचालित करें।
-</Card>
+
+नेचुरल लैंग्वेज के ज़रिए Home Assistant डिवाइसेज़ को नियंत्रित और ऑटोमेट करें। </Card>
 
 <Card title="Nix Packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
-  
-  पुनरुत्पादक डिप्लॉयमेंट के लिए बैटरियाँ-शामिल nixified OpenClaw विन्यास।
-</Card>
+
+रीप्रोड्यूसिबल डिप्लॉयमेंट्स के लिए batteries-included nixified OpenClaw कॉन्फ़िगरेशन। </Card>
 
 <Card title="CalDAV Calendar" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
   **ClawHub** • `calendar` `caldav` `skill`
-  
-  khal/vdirsyncer का उपयोग करने वाली कैलेंडर Skill। सेल्फ-होस्टेड कैलेंडर एकीकरण।
-</Card>
+
+khal/vdirsyncer का उपयोग करने वाला कैलेंडर skill। Self-hosted कैलेंडर इंटीग्रेशन। </Card>
 
 </CardGroup>
 
@@ -376,17 +347,17 @@ OpenRouter (Gemini आदि) के माध्यम से बहुभा�
 
 <Card title="GoHome Automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
-  
-  OpenClaw को इंटरफ़ेस के रूप में उपयोग करने वाला Nix-नेटिव होम ऑटोमेशन, साथ ही सुंदर Grafana डैशबोर्ड।
-  
+
+OpenClaw को इंटरफ़ेस के रूप में उपयोग करने वाला Nix-नेटिव होम ऑटोमेशन, साथ ही सुंदर Grafana डैशबोर्ड।
+
   <img src="/assets/showcase/gohome-grafana.png" alt="GoHome Grafana dashboard" />
 </Card>
 
 <Card title="Roborock Vacuum" icon="robot" href="https://github.com/joshp123/gohome/tree/main/plugins/roborock">
   **@joshp123** • `vacuum` `iot` `plugin`
-  
-  प्राकृतिक बातचीत के माध्यम से अपने Roborock रोबोट वैक्यूम को नियंत्रित करें।
-  
+
+प्राकृतिक बातचीत के माध्यम से अपने Roborock रोबोट वैक्यूम को नियंत्रित करें।
+
   <img src="/assets/showcase/roborock-screenshot.jpg" alt="Roborock status" />
 </Card>
 
@@ -398,9 +369,8 @@ OpenRouter (Gemini आदि) के माध्यम से बहुभा�
 
 <Card title="StarSwap Marketplace" icon="star" href="https://star-swap.com/">
   **Community** • `marketplace` `astronomy` `webapp`
-  
-  पूर्ण खगोल विज्ञान उपकरण मार्केटप्लेस। OpenClaw इकोसिस्टम के साथ/आसपास निर्मित।
-</Card>
+
+पूर्ण एस्ट्रोनॉमी गियर मार्केटप्लेस। OpenClaw इकोसिस्टम के साथ/आसपास बनाया गया। </Card>
 
 </CardGroup>
 
@@ -408,16 +378,16 @@ OpenRouter (Gemini आदि) के माध्यम से बहुभा�
 
 ## अपना प्रोजेक्ट सबमिट करें
 
-कुछ साझा करना चाहते हैं? हमें इसे फीचर करने में खुशी होगी!
+कुछ साझा करना चाहते हैं? हमें इसे फ़ीचर करना अच्छा लगेगा!
 
 <Steps>
-  <Step title="इसे साझा करें">
+  <Step title="Share It">
     [Discord पर #showcase](https://discord.gg/clawd) में पोस्ट करें या [@openclaw को ट्वीट करें](https://x.com/openclaw)
   </Step>
-  <Step title="विवरण शामिल करें">
+  <Step title="Include Details">
     बताएं यह क्या करता है, repo/demo का लिंक दें, और यदि हो तो स्क्रीनशॉट साझा करें
   </Step>
-  <Step title="फीचर पाएं">
+  <Step title="Get Featured">
     हम उत्कृष्ट प्रोजेक्ट्स को इस पेज में जोड़ेंगे
   </Step>
 </Steps>

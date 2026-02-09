@@ -4,13 +4,6 @@ read_when:
   - Du flyttar OpenClaw till en ny laptop/server
   - Du vill bevara sessioner, autentisering och kanalinloggningar (WhatsApp m.fl.)
 title: "Migreringsguide"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:47Z
 ---
 
 # Migrera OpenClaw till en ny maskin
@@ -26,7 +19,7 @@ Men det finns vanliga fallgropar kring **profiler**, **behörigheter** och **ofu
 
 ## Innan du börjar (vad du migrerar)
 
-### 1) Identifiera din tillståndskatalog
+### 1. Identifiera din tillståndskatalog
 
 De flesta installationer använder standarden:
 
@@ -43,9 +36,9 @@ Om du är osäker, kör på den **gamla** maskinen:
 openclaw status
 ```
 
-Leta efter omnämnanden av `OPENCLAW_STATE_DIR` / profil i utdata. Om du kör flera gateways, upprepa för varje profil.
+Leta efter omnämnanden av `OPENCLAW_STATE_DIR` / profil i utgången. Om du kör flera gateways, upprepa för varje profil.
 
-### 2) Identifiera din workspace
+### 2. Identifiera din workspace
 
 Vanliga standarder:
 
@@ -54,7 +47,7 @@ Vanliga standarder:
 
 Din workspace är där filer som `MEMORY.md`, `USER.md` och `memory/*.md` finns.
 
-### 3) Förstå vad du bevarar
+### 3. Förstå vad du bevarar
 
 Om du kopierar **både** tillståndskatalogen och workspace behåller du:
 
@@ -92,7 +85,7 @@ tar -czf openclaw-state.tgz .openclaw
 tar -czf openclaw-workspace.tgz .openclaw/workspace
 ```
 
-Om du har flera profiler/tillståndskataloger (t.ex. `~/.openclaw-main`, `~/.openclaw-work`), arkivera var och en.
+Om du har flera profiler/status dirs (t.ex. `~/.openclaw-main`, `~/.openclaw-work`), arkivera varje.
 
 ### Steg 1 — Installera OpenClaw på den nya maskinen
 
@@ -117,7 +110,7 @@ Vanliga tillvägagångssätt:
 
 Efter kopieringen, säkerställ att:
 
-- Dolda kataloger följde med (t.ex. `.openclaw/`)
+- Dolda kataloger inkluderades (t.ex. `.openclaw/`)
 - Filägarskap är korrekt för användaren som kör gatewayn
 
 ### Steg 3 — Kör Doctor (migreringar + service-reparation)
@@ -128,7 +121,7 @@ På den **nya** maskinen:
 openclaw doctor
 ```
 
-Doctor är det ”säkra, tråkiga” kommandot. Det reparerar tjänster, tillämpar konfigmigreringar och varnar för avvikelser.
+Doktor är det “säkra tråkiga” kommandot. Det reparerar tjänster, tillämpar konfigurationsmigrationer, och varnar för missförhållanden.
 
 Sedan:
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### Fallgrop: att bara kopiera `openclaw.json`
 
-`openclaw.json` räcker inte. Många leverantörer lagrar tillstånd under:
+`openclaw.json` är inte tillräckligt. Många leverantörer lagrar staten under:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -177,7 +170,7 @@ Om du är i fjärrläge, migrera **gateway-värden**.
 
 ### Fallgrop: hemligheter i backuper
 
-`$OPENCLAW_STATE_DIR` innehåller hemligheter (API-nycklar, OAuth-token, WhatsApp-uppgifter). Behandla backuper som produktionshemligheter:
+`$OPENCLAW_STATE_DIR` innehåller hemligheter (API-nycklar, OAuth tokens, WhatsApp creds). Behandla säkerhetskopior som produktionshemligheter:
 
 - lagra krypterat
 - undvik att dela via osäkra kanaler
@@ -188,7 +181,7 @@ Om du är i fjärrläge, migrera **gateway-värden**.
 På den nya maskinen, bekräfta:
 
 - `openclaw status` visar att gatewayn kör
-- Dina kanaler är fortfarande anslutna (t.ex. WhatsApp kräver ingen omparning)
+- Dina kanaler är fortfarande anslutna (t.ex. WhatsApp kräver inte återkoppling)
 - Instrumentpanelen öppnas och visar befintliga sessioner
 - Dina workspace-filer (minne, konfiger) finns på plats
 

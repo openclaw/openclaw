@@ -4,20 +4,13 @@ read_when:
   - Mattermost سیٹ اپ کرنا
   - Mattermost روٹنگ کی خرابیوں کا ازالہ
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:57Z
 ---
 
 # Mattermost (پلگ اِن)
 
-حیثیت: پلگ اِن کے ذریعے معاونت یافتہ (بوٹ ٹوکن + WebSocket ایونٹس)۔ چینلز، گروپس، اور DMs معاونت یافتہ ہیں۔
-Mattermost ایک خود میزبانی کے قابل ٹیم میسجنگ پلیٹ فارم ہے؛ مصنوعات کی تفصیلات اور ڈاؤن لوڈز کے لیے سرکاری سائٹ دیکھیں:
-[mattermost.com](https://mattermost.com)
+اسٹیٹس: پلگ اِن کے ذریعے سپورٹ شدہ (بوٹ ٹوکن + WebSocket ایونٹس)۔ چینلز، گروپس، اور DMs سپورٹڈ ہیں۔
+Mattermost ایک خود ہوسٹ ہونے والا ٹیم میسجنگ پلیٹ فارم ہے؛ پروڈکٹ کی تفصیلات اور ڈاؤن لوڈز کے لیے آفیشل سائٹ دیکھیں:
+[mattermost.com](https://mattermost.com)۔
 
 ## پلگ اِن درکار ہے
 
@@ -69,11 +62,11 @@ openclaw plugins install ./extensions/mattermost
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-Env vars صرف **ڈیفالٹ** اکاؤنٹ (`default`) پر لاگو ہوتے ہیں۔ دیگر اکاؤنٹس کے لیے کنفیگ اقدار استعمال کرنا لازم ہے۔
+Env ویری ایبلز صرف **ڈیفالٹ** اکاؤنٹ (`default`) پر لاگو ہوتے ہیں۔ دیگر اکاؤنٹس کو کنفیگ ویلیوز استعمال کرنا ہوں گی۔
 
 ## چیٹ موڈز
 
-Mattermost DMs پر خودکار طور پر جواب دیتا ہے۔ چینل کا رویہ `chatmode` کے ذریعے کنٹرول ہوتا ہے:
+Mattermost خودکار طور پر DMs کا جواب دیتا ہے۔ چینل کا رویہ `chatmode` کے ذریعے کنٹرول ہوتا ہے:
 
 - `oncall` (بطورِ طے شدہ): چینلز میں صرف @ذکر کیے جانے پر جواب دیں۔
 - `onmessage`: ہر چینل پیغام پر جواب دیں۔

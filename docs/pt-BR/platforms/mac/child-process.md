@@ -3,13 +3,6 @@ summary: "Ciclo de vida do Gateway no macOS (launchd)"
 read_when:
   - Integrando o app do mac com o ciclo de vida do gateway
 title: "Ciclo de vida do Gateway"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:32Z
 ---
 
 # Ciclo de vida do Gateway no macOS
@@ -22,7 +15,8 @@ ele habilita o serviço do launchd por meio da CLI externa `openclaw`
 no login e reinício em caso de falhas.
 
 O modo de processo filho (Gateway iniciado diretamente pelo app) **não é usado**
-hoje. Se você precisar de um acoplamento mais estreito com a UI, execute
+hoje.
+Se você precisar de um acoplamento mais estreito com a UI, execute
 o Gateway manualmente em um terminal.
 
 ## Comportamento padrão (launchd)

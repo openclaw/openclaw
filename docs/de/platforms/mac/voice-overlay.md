@@ -1,15 +1,8 @@
 ---
-summary: „Lebenszyklus des Voice-Overlays, wenn Wake-Word und Push-to-Talk überlappen“
+summary: "„Lebenszyklus des Voice-Overlays, wenn Wake-Word und Push-to-Talk überlappen“"
 read_when:
   - Anpassen des Voice-Overlay-Verhaltens
-title: „Voice Overlay“
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:01Z
+title: "„Voice Overlay“"
 ---
 
 # Voice-Overlay-Lebenszyklus (macOS)
@@ -56,6 +49,7 @@ Zielgruppe: Mitwirkende an der macOS-App. Ziel: Das Voice-Overlay vorhersehbar h
   ```
 
 - Verifizieren Sie, dass nur ein aktives Sitzungs-Token existiert; veraltete Callbacks sollten vom Coordinator verworfen werden.
+
 - Stellen Sie sicher, dass das Loslassen von Push-to-Talk immer `endCapture` mit dem aktiven Token aufruft; wenn der Text leer ist, erwarten Sie `dismiss` ohne Chime oder Senden.
 
 ## Migrationsschritte (empfohlen)

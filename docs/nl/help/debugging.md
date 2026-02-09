@@ -5,13 +5,6 @@ read_when:
   - Je wilt de Gateway in watch-modus draaien tijdens iteraties
   - Je hebt een herhaalbare debugworkflow nodig
 title: "Debugging"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:31Z
 ---
 
 # Debugging
@@ -44,7 +37,7 @@ Voor snelle iteratie, draai de Gateway onder de bestandswatcher:
 pnpm gateway:watch --force
 ```
 
-Dit komt overeen met:
+Deze kaarten naar:
 
 ```bash
 tsx watch src/entry.ts gateway --force

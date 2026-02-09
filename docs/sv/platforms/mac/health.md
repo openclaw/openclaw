@@ -1,15 +1,8 @@
 ---
-summary: ”Hur macOS-appen rapporterar hälsotillstånd för gateway/Baileys”
+summary: "”Hur macOS-appen rapporterar hälsotillstånd för gateway/Baileys”"
 read_when:
   - Felsökning av hälsindikatorer i macOS-appen
-title: ”Hälsokontroller”
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:58Z
+title: "”Hälsokontroller”"
 ---
 
 # Hälsokontroller på macOS
@@ -33,7 +26,7 @@ Så ser du om den länkade kanalen är frisk från menyfältsappen.
 
 ## Hur kontrollen fungerar
 
-- Appen kör `openclaw health --json` via `ShellExecutor` ungefär var 60:e sekund och på begäran. Kontrollen laddar autentiseringsuppgifter och rapporterar status utan att skicka meddelanden.
+- Appen kör `openclaw health --json` via `ShellExecutor` varje ~60s och på begäran. Sonden laddar in creds och rapporterar status utan att skicka meddelanden.
 - Cacha den senaste fungerande ögonblicksbilden och det senaste felet separat för att undvika flimmer; visa tidsstämpeln för vardera.
 
 ## Vid tveksamhet

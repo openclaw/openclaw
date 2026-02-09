@@ -3,13 +3,6 @@ summary: "Gateway protokolü için tek doğruluk kaynağı olarak TypeBox şemal
 read_when:
   - Protokol şemaları veya codegen güncellenirken
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:20Z
 ---
 
 # Protokol için doğruluk kaynağı olarak TypeBox
@@ -58,7 +51,7 @@ Yaygın metotlar + olaylar:
 
 Yetkili liste `src/gateway/server.ts`’te bulunur (`METHODS`, `EVENTS`).
 
-## Şemaların bulunduğu yerler
+## Where the schemas live
 
 - Kaynak: `src/gateway/protocol/schema.ts`
 - Çalışma zamanı doğrulayıcıları (AJV): `src/gateway/protocol/index.ts`
@@ -76,7 +69,7 @@ Yetkili liste `src/gateway/server.ts`’te bulunur (`METHODS`, `EVENTS`).
 - `pnpm protocol:check`
   - her iki üreticiyi de çalıştırır ve çıktının commit edildiğini doğrular
 
-## Şemaların çalışma zamanında kullanımı
+## How the schemas are used at runtime
 
 - **Sunucu tarafı**: gelen her çerçeve AJV ile doğrulanır. El sıkışma yalnızca
   parametreleri `ConnectParams` ile eşleşen bir `connect` isteğini kabul eder.
@@ -189,7 +182,7 @@ ws.on("message", (data) => {
 });
 ```
 
-## Uçtan uca örnek: bir metot ekleme
+## Worked example: add a method end‑to‑end
 
 Örnek: `{ ok: true, text }` döndüren yeni bir `system.echo` isteği ekleyin.
 
@@ -271,7 +264,7 @@ Bilinmeyen çerçeve türleri, ileriye dönük uyumluluk için ham payload’lar
 - İstemciler `minProtocol` + `maxProtocol` gönderir; sunucu uyumsuzlukları reddeder.
 - Swift modelleri, eski istemcilerin bozulmasını önlemek için bilinmeyen çerçeve türlerini saklar.
 
-## Şema kalıpları ve konvansiyonlar
+## Schema patterns and conventions
 
 - Çoğu nesne, katı payload’lar için `additionalProperties: false` kullanır.
 - Kimlikler ve metot/olay adları için varsayılan `NonEmptyString`’dır.
@@ -285,7 +278,7 @@ Bilinmeyen çerçeve türleri, ileriye dönük uyumluluk için ham payload’lar
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 
-## Şemaları değiştirdiğinizde
+## When you change schemas
 
 1. TypeBox şemalarını güncelleyin.
 2. `pnpm protocol:check` çalıştırın.

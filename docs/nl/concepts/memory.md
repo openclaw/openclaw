@@ -3,13 +3,6 @@ summary: "Hoe OpenClaw-geheugen werkt (werkruimtebestanden + automatische geheug
 read_when:
   - Je wilt de geheugenbestandsindeling en workflow
   - Je wilt de automatische pre-compactie geheugenflush afstellen
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:03Z
 ---
 
 # Geheugen

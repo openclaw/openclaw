@@ -5,30 +5,24 @@ read_when:
   - ریموٹ نوڈز کی منظوری کے لیے CLI فلو شامل کرتے وقت
   - نوڈ مینجمنٹ کے ساتھ gateway پروٹوکول کو وسعت دیتے وقت
 title: "Gateway کی ملکیت والی جوڑی"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:20Z
 ---
 
 # Gateway کی ملکیت والی جوڑی (آپشن B)
 
-Gateway کی ملکیت والی جوڑی میں، **Gateway** اس بات کا واحد ماخذِ حقیقت ہوتا ہے کہ کون سے نوڈز کو شامل ہونے کی اجازت ہے۔
-UIs (macOS ایپ، مستقبل کے کلائنٹس) محض فرنٹ اینڈز ہیں جو زیرِ التواء درخواستوں کو منظور یا مسترد کرتے ہیں۔
+In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
+are allowed to join. UIs (macOS app, future clients) are just frontends that
+approve or reject pending requests.
 
-**اہم:** WS نوڈز `connect` کے دوران **device pairing** (کردار `node`) استعمال کرتے ہیں۔
-`node.pair.*` ایک علیحدہ pairing اسٹور ہے اور WS ہینڈ شیک کو **کنٹرول نہیں کرتا**۔
-صرف وہی کلائنٹس جو واضح طور پر `node.pair.*` کو کال کرتے ہیں، اس فلو کو استعمال کرتے ہیں۔
+**Important:** WS nodes use **device pairing** (role `node`) during `connect`.
+`node.pair.*` is a separate pairing store and does **not** gate the WS handshake.
+Only clients that explicitly call `node.pair.*` use this flow.
 
 ## تصورات
 
 - **Pending request**: شامل ہونے کی درخواست کرنے والا نوڈ؛ منظوری درکار ہوتی ہے۔
 - **Paired node**: منظور شدہ نوڈ جسے تصدیقی ٹوکن جاری کیا گیا ہو۔
-- **Transport**: Gateway WS اینڈپوائنٹ درخواستیں آگے بھیجتا ہے لیکن رکنیت کا فیصلہ نہیں کرتا۔
-  (لیگیسی TCP برج سپورٹ متروک/ہٹا دی گئی ہے۔)
+- **Transport**: the Gateway WS endpoint forwards requests but does not decide
+  membership. (Legacy TCP bridge support is deprecated/removed.)
 
 ## جوڑی کیسے کام کرتی ہے
 

@@ -3,24 +3,17 @@ summary: "Agent-loopens livscyklus, streams og vent-semantik"
 read_when:
   - Du har brug for en præcis gennemgang af agent-loopet eller livscyklusbegivenheder
 title: "Agent Loop"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:20Z
 ---
 
 # Agent Loop (OpenClaw)
 
-Et agentisk loop er den fulde “rigtige” kørsel af en agent: indtag → kontekstsamling → modelinferens →
-værktøjseksekvering → streaming af svar → persistens. Det er den autoritative sti, der omsætter en besked
-til handlinger og et endeligt svar, samtidig med at sessionstilstanden holdes konsistent.
+En agentisk løkke er den fulde “rigtige” kørsel af en agent: indtagelse → kontekst samling → model inferens →
+værktøj udførelse → streaming svar → vedholdenhed. Det er den autoritative sti, der forvandler en besked
+til handlinger og et endeligt svar, samtidig med at sessionstilstanden er konsekvent.
 
-I OpenClaw er et loop en enkelt, serialiseret kørsel pr. session, som udsender livscyklus- og stream-hændelser,
-mens modellen tænker, kalder værktøjer og streamer output. Dette dokument forklarer, hvordan dette autentiske
-loop er forbundet end-to-end.
+I OpenClaw, en løkke er en enkelt, serialiseret løb per session, der udsender livscyklus og stream begivenheder
+som modellen mener, kalder værktøjer og streams output. Denne doc forklarer, hvordan autentiske løkke er
+kablet end-to-end.
 
 ## Indgangspunkter
 
@@ -47,14 +40,14 @@ loop er forbundet end-to-end.
    - livscyklus-events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
 5. `agent.wait` bruger `waitForAgentJob`:
    - venter på **lifecycle end/error** for `runId`
-   - returnerer `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+   - returnerer `{ status: okřišijjjjjjjjjjjjjjjju timeout, startedAt, endedAt, fejl? }`
 
 ## Køer + samtidighed
 
 - Kørsler serialiseres pr. sessionsnøgle (sessionsbane) og eventuelt gennem en global bane.
 - Dette forhindrer værktøjs-/sessionsræs og holder sessionshistorik konsistent.
-- Messaging-kanaler kan vælge køtilstande (collect/steer/followup), der føder dette banesystem.
-  Se [Command Queue](/concepts/queue).
+- Messaging-kanaler kan vælge køtilstande (collect/steer/followup), der fodrer denne vognbane-system.
+  Se [Kommandokø](/concepts/queue).
 
 ## Session- + workspace-forberedelse
 
@@ -78,8 +71,8 @@ OpenClaw har to hook-systemer:
 
 ### Interne hooks (Gateway-hooks)
 
-- **`agent:bootstrap`**: kører under opbygning af bootstrap-filer, før systemprompten færdiggøres.
-  Brug dette til at tilføje/fjerne bootstrap-kontekstfiler.
+- **`agent:bootstrap`**: kører, mens du bygger bootstrap filer, før systemprompten er afsluttet.
+  Brug denne til at tilføje / fjerne bootstrap kontekstfiler.
 - **Command hooks**: `/new`, `/reset`, `/stop` og andre kommandohændelser (se Hooks-dokumentet).
 
 Se [Hooks](/automation/hooks) for opsætning og eksempler.
@@ -142,7 +135,7 @@ Se [Plugins](/tools/plugin#plugin-hooks) for hook-API’et og registreringsdetal
 
 ## Timeouts
 
-- `agent.wait` standard: 30s (kun ventetiden). `timeoutMs`-parameter overstyrer.
+- `agent.wait` standard: 30s (kun ventet). `timeoutMs` param overrides.
 - Agent-runtime: `agents.defaults.timeoutSeconds` standard 600s; håndhæves i `runEmbeddedPiAgent`-aborttimeren.
 
 ## Hvor ting kan slutte tidligt

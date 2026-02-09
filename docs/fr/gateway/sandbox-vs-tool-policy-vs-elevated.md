@@ -1,15 +1,8 @@
 ---
 title: Sandbox vs politique d’outil vs Élevé
-summary: « Pourquoi un outil est bloqué : runtime de sandbox, politique d’autorisation/refus des outils, et verrous d’exécution élevée »
-read_when: « Vous tombez sur la “prison de sandbox” ou voyez un refus d’outil/élevé et voulez la clé de configuration exacte à modifier. »
+summary: "Pourquoi un outil est bloqué : runtime de sandbox, politique d’autorisation/refus des outils, et verrous d’exécution élevée"
+read_when: "Vous tombez sur la “prison de sandbox” ou voyez un refus d’outil/élevé et voulez la clé de configuration exacte à modifier."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:50Z
 ---
 
 # Sandbox vs politique d’outil vs Élevé
@@ -22,7 +15,7 @@ OpenClaw dispose de trois contrôles liés (mais différents) :
 
 ## Débogage rapide
 
-Utilisez l’inspecteur pour voir ce qu’OpenClaw fait *réellement* :
+Utilisez l’inspecteur pour voir ce qu’OpenClaw fait _réellement_ :
 
 ```bash
 openclaw sandbox explain
@@ -112,7 +105,7 @@ Groupes disponibles :
 - Élevé n’est **pas** limité aux Skills et **ne** remplace **pas** l’autorisation/refus des outils.
 - `/exec` est distinct d’Élevé. Il n’ajuste que les valeurs par défaut d’exécution par session pour les expéditeurs autorisés.
 
-Verrous :
+Portes :
 
 - Activation : `tools.elevated.enabled` (et éventuellement `agents.list[].tools.elevated.enabled`)
 - Listes d’autorisation d’expéditeurs : `tools.elevated.allowFrom.<provider>` (et éventuellement `agents.list[].tools.elevated.allowFrom.<provider>`)
@@ -130,6 +123,6 @@ Clés de correction (choisissez-en une) :
   - le retirer de `tools.sandbox.tools.deny` (ou par agent `agents.list[].tools.sandbox.tools.deny`)
   - ou l’ajouter à `tools.sandbox.tools.allow` (ou autorisation par agent)
 
-### « Je pensais que c’était la session principale, pourquoi est-elle en sandbox ? »
+### « Je pensais que c’était la session principale, pourquoi est-elle en sandbox ? »
 
 En mode `"non-main"`, les clés de groupe/canal ne sont _pas_ principales. Utilisez la clé de session principale (affichée par `sandbox explain`) ou passez au mode `"off"`.

@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 에서 OpenAI 모델을 사용하려는 경우
   - API 키 대신 Codex 구독 인증을 사용하려는 경우
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:56Z
 ---
 
 # OpenAI

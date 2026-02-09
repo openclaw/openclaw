@@ -3,21 +3,14 @@ summary: "Cách sandboxing của OpenClaw hoạt động: chế độ, phạm vi
 title: Sandboxing
 read_when: "Bạn muốn một giải thích chuyên biệt về sandboxing hoặc cần tinh chỉnh agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:18Z
 ---
 
 # Sandboxing
 
-OpenClaw có thể chạy **các tool bên trong container Docker** để giảm phạm vi ảnh hưởng khi xảy ra sự cố.
-Tính năng này **không bắt buộc** và được kiểm soát bằng cấu hình (`agents.defaults.sandbox` hoặc
-`agents.list[].sandbox`). Nếu sandboxing tắt, các tool sẽ chạy trên host.
-Gateway vẫn chạy trên host; việc thực thi tool sẽ diễn ra trong sandbox cô lập
+OpenClaw có thể chạy **các công cụ bên trong container Docker** để giảm phạm vi ảnh hưởng.
+Điều này là **tùy chọn** và được kiểm soát bởi cấu hình (`agents.defaults.sandbox` hoặc
+`agents.list[].sandbox`). 10. Nếu sandboxing bị tắt, các công cụ sẽ chạy trên máy chủ.
+Gateway vẫn chạy trên host; việc thực thi công cụ chạy trong một sandbox cô lập
 khi được bật.
 
 Đây không phải là ranh giới bảo mật hoàn hảo, nhưng nó hạn chế đáng kể quyền truy cập
@@ -27,7 +20,7 @@ hệ thống tệp và tiến trình khi mô hình làm điều gì đó không 
 
 - Thực thi tool (`exec`, `read`, `write`, `edit`, `apply_patch`, `process`, v.v.).
 - Trình duyệt sandbox tùy chọn (`agents.defaults.sandbox.browser`).
-  - Theo mặc định, trình duyệt sandbox tự khởi động (đảm bảo CDP có thể truy cập) khi tool trình duyệt cần dùng.
+  - Theo mặc định, trình duyệt sandbox tự động khởi động (đảm bảo CDP có thể truy cập) khi công cụ trình duyệt cần.
     Cấu hình qua `agents.defaults.sandbox.browser.autoStart` và `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
   - `agents.defaults.sandbox.browser.allowHostControl` cho phép các phiên sandbox nhắm trực tiếp tới trình duyệt trên host.
   - Các allowlist tùy chọn kiểm soát `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
@@ -37,7 +30,7 @@ Không sandbox:
 - Chính tiến trình Gateway.
 - Bất kỳ tool nào được cho phép chạy trên host một cách rõ ràng (ví dụ: `tools.elevated`).
   - **Thực thi nâng quyền chạy trên host và bỏ qua sandboxing.**
-  - Nếu sandboxing tắt, `tools.elevated` không thay đổi cách thực thi (đã chạy trên host). Xem [Elevated Mode](/tools/elevated).
+  - Nếu tắt sandboxing, `tools.elevated` không thay đổi việc thực thi (đã chạy trên máy chủ). Xem [Elevated Mode](/tools/elevated).
 
 ## Chế độ
 
@@ -46,8 +39,8 @@ Không sandbox:
 - `"off"`: không sandboxing.
 - `"non-main"`: chỉ sandbox các phiên **không phải main** (mặc định nếu bạn muốn các cuộc chat bình thường chạy trên host).
 - `"all"`: mọi phiên đều chạy trong sandbox.
-  Lưu ý: `"non-main"` dựa trên `session.mainKey` (mặc định `"main"`), không dựa trên id của agent.
-  Các phiên nhóm/kênh dùng khóa riêng, vì vậy được tính là không phải main và sẽ bị sandbox.
+  Lưu ý: `"non-main"` dựa trên `session.mainKey` (mặc định `"main"`), không phải id agent.
+  Các phiên nhóm/kênh dùng khóa riêng của chúng, nên được tính là non-main và sẽ được sandbox.
 
 ## Phạm vi
 
@@ -66,17 +59,17 @@ Không sandbox:
 - `"rw"`: gắn workspace của agent ở chế độ đọc/ghi tại `/workspace`.
 
 Media đầu vào được sao chép vào workspace sandbox đang hoạt động (`media/inbound/*`).
-Lưu ý về Skills: tool `read` được neo gốc theo sandbox. Với `workspaceAccess: "none"`,
+Ghi chú về skills: công cụ `read` được neo theo gốc sandbox. Với `workspaceAccess: "none"`,
 OpenClaw phản chiếu các skill đủ điều kiện vào workspace sandbox (`.../skills`) để
-có thể đọc. Với `"rw"`, các skill trong workspace có thể đọc từ
+có thể đọc. Với `"rw"`, các workspace skills có thể đọc từ
 `/workspace/skills`.
 
 ## Gắn bind tùy chỉnh
 
-`agents.defaults.sandbox.docker.binds` gắn thêm các thư mục trên host vào container.
+`agents.defaults.sandbox.docker.binds` gắn thêm các thư mục host vào container.
 Định dạng: `host:container:mode` (ví dụ: `"/home/user/source:/source:rw"`).
 
-Các bind toàn cục và theo agent được **gộp** (không bị thay thế). Dưới `scope: "shared"`, các bind theo agent sẽ bị bỏ qua.
+Các bind toàn cục và theo agent được **gộp** (không bị thay thế). Trong `scope: "shared"`, các binds theo từng agent sẽ bị bỏ qua.
 
 Ví dụ (nguồn chỉ đọc + socket Docker):
 
@@ -122,9 +115,8 @@ scripts/sandbox-setup.sh
 ```
 
 Lưu ý: image mặc định **không** bao gồm Node. Nếu một skill cần Node (hoặc
-các runtime khác), hãy bake một image tùy chỉnh hoặc cài qua
-`sandbox.docker.setupCommand` (yêu cầu egress mạng + root có thể ghi +
-người dùng root).
+các runtime khác), hãy tạo image tùy chỉnh hoặc cài đặt qua
+`sandbox.docker.setupCommand` (yêu cầu egress mạng + root có thể ghi + người dùng root).
 
 Image trình duyệt sandbox:
 
@@ -132,7 +124,7 @@ Image trình duyệt sandbox:
 scripts/sandbox-browser-setup.sh
 ```
 
-Theo mặc định, các container sandbox chạy với **không có mạng**.
+Theo mặc định, các container sandbox chạy **không có mạng**.
 Ghi đè bằng `agents.defaults.sandbox.docker.network`.
 
 Cài đặt Docker và gateway chạy trong container nằm tại đây:
@@ -153,28 +145,28 @@ Các lỗi thường gặp:
 - `docker.network` mặc định là `"none"` (không egress), nên cài gói sẽ thất bại.
 - `readOnlyRoot: true` chặn ghi; đặt `readOnlyRoot: false` hoặc bake image tùy chỉnh.
 - `user` phải là root để cài gói (bỏ `user` hoặc đặt `user: "0:0"`).
-- Thực thi sandbox **không** kế thừa `process.env` của host. Hãy dùng
-  `agents.defaults.sandbox.docker.env` (hoặc image tùy chỉnh) cho khóa API của skill.
+- Sandbox exec **không** kế thừa `process.env` của máy chủ. Sử dụng
+  `agents.defaults.sandbox.docker.env` (hoặc một image tùy chỉnh) cho các khóa API của skill.
 
 ## Chính sách tool + lối thoát
 
-Chính sách cho phép/từ chối tool vẫn được áp dụng trước các quy tắc sandbox. Nếu một tool bị từ chối
-toàn cục hoặc theo agent, sandboxing không khôi phục lại nó.
+Các chính sách cho phép/từ chối công cụ vẫn được áp dụng trước các quy tắc sandbox. Nếu một công cụ bị từ chối
+toàn cục hoặc theo agent, sandboxing sẽ không khôi phục nó.
 
-`tools.elevated` là một lối thoát rõ ràng để chạy `exec` trên host.
-Các chỉ thị `/exec` chỉ áp dụng cho người gửi được ủy quyền và được lưu theo phiên; để vô hiệu hóa cứng
-`exec`, hãy dùng chính sách tool deny (xem [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
+`tools.elevated` là một lối thoát tường minh chạy `exec` trên host.
+Các chỉ thị `/exec` chỉ áp dụng cho các bên gửi được ủy quyền và được lưu theo từng phiên; để vô hiệu hóa cứng
+`exec`, hãy dùng chính sách công cụ deny (xem [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
 Gỡ lỗi:
 
 - Dùng `openclaw sandbox explain` để kiểm tra chế độ sandbox hiệu lực, chính sách tool và các khóa cấu hình gợi ý sửa.
-- Xem [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) để hiểu mô hình tư duy “vì sao bị chặn?”.
-  Hãy giữ cấu hình chặt chẽ.
+- Xem [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) để có mô hình tư duy “vì sao cái này bị chặn?”.
+  Hãy khóa chặt.
 
 ## Ghi đè đa agent
 
-Mỗi agent có thể ghi đè sandbox + tool:
-`agents.list[].sandbox` và `agents.list[].tools` (cộng thêm `agents.list[].tools.sandbox.tools` cho chính sách tool của sandbox).
+Mỗi agent có thể ghi đè sandbox + công cụ:
+`agents.list[].sandbox` và `agents.list[].tools` (cộng thêm `agents.list[].tools.sandbox.tools` cho chính sách công cụ của sandbox).
 Xem [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) để biết thứ tự ưu tiên.
 
 ## Ví dụ bật tối thiểu

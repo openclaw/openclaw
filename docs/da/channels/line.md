@@ -5,23 +5,16 @@ read_when:
   - Du har brug for opsætning af LINE webhook og legitimationsoplysninger
   - Du vil bruge LINE-specifikke beskedindstillinger
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:54Z
 ---
 
 # LINE (plugin)
 
-LINE forbinder til OpenClaw via LINE Messaging API. Plugin’et kører som en webhook‑modtager
-på gatewayen og bruger dit channel access token + channel secret til
-autentificering.
+LINE forbinder til OpenClaw via LINE Messaging API. Plugin kører som en webhook
+modtager på gatewayen og bruger din kanal adgangstoken + kanal hemmelighed til
+godkendelse.
 
-Status: understøttet via plugin. Direkte beskeder, gruppechats, medier, lokationer, Flex‑
-beskeder, skabelonbeskeder og hurtige svar er understøttet. Reaktioner og tråde
+Status: understøttet via plugin. Direkte beskeder, gruppechats, medier, placeringer, Flex
+beskeder, skabelonbeskeder og hurtige svar understøttes. Reaktioner og tråde
 understøttes ikke.
 
 ## Plugin påkrævet
@@ -51,9 +44,9 @@ openclaw plugins install ./extensions/line
 https://gateway-host/line/webhook
 ```
 
-Gatewayen svarer på LINEs webhook‑verifikation (GET) og indgående hændelser (POST).
-Hvis du har brug for en brugerdefineret sti, skal du sætte `channels.line.webhookPath` eller
-`channels.line.accounts.<id>.webhookPath` og opdatere URL’en tilsvarende.
+Gatewayen reagerer på LINE’s webhook verifikation (GET) og indgående begivenheder (POST).
+Hvis du har brug for en brugerdefineret sti, sæt `channels.line.webhookPath` eller
+`channels.line.accounts.<id>.webhookPath` og opdatere URL'en i overensstemmelse hermed.
 
 ## Konfiguration
 
@@ -110,8 +103,8 @@ Flere konti:
 
 ## Adgangskontrol
 
-Direkte beskeder bruger som standard parring. Ukendte afsendere får en parringskode,
-og deres beskeder ignoreres, indtil de er godkendt.
+Direkte beskeder standard til parring. Ukendte afsendere får en parringskode, og deres
+beskeder ignoreres indtil de er godkendt.
 
 ```bash
 openclaw pairing list line
@@ -124,9 +117,9 @@ Tilladelseslister og politikker:
 - `channels.line.allowFrom`: tilladelseslistede LINE‑bruger‑ID’er for DMs
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: tilladelseslistede LINE‑bruger‑ID’er for grupper
-- Overstyringer pr. gruppe: `channels.line.groups.<groupId>.allowFrom`
+- Per-gruppe tilsidesættelser: `channels.line.groups.<groupId>.allowFrom`
 
-LINE‑ID’er er versalfølsomme. Gyldige ID’er ser således ud:
+LINE-ID'er er versalfølsomme. Gyldige ID'er ser ud:
 
 - Bruger: `U` + 32 hex‑tegn
 - Gruppe: `C` + 32 hex‑tegn

@@ -4,20 +4,13 @@ read_when:
   - Exec ٹول کا استعمال یا ترمیم کرتے وقت
   - stdin یا TTY کے رویّے کی ڈیبگنگ کرتے وقت
 title: "Exec ٹول"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # Exec ٹول
 
-ورک اسپیس میں شیل کمانڈز چلائیں۔ `process` کے ذریعے foreground اور background دونوں میں اجرا کی حمایت کرتا ہے۔
-اگر `process` کی اجازت نہ ہو، تو `exec` ہم وقتی طور پر چلتا ہے اور `yieldMs`/`background` کو نظر انداز کرتا ہے۔
-بیک گراؤنڈ سیشنز ہر ایجنٹ کے دائرے میں ہوتے ہیں؛ `process` صرف اسی ایجنٹ کے سیشنز دیکھتا ہے۔
+ورک اسپیس میں شیل کمانڈز چلائیں۔ Supports foreground + background execution via `process`.
+اگر `process` غیر مجاز ہو، تو `exec` ہم وقت چلتا ہے اور `yieldMs`/`background` کو نظرانداز کرتا ہے۔
+Background sessions are scoped per agent; `process` only sees sessions from the same agent.
 
 ## Parameters
 
@@ -43,7 +36,9 @@ Notes:
 - اگر متعدد نوڈز دستیاب ہوں، تو ایک منتخب کرنے کے لیے `exec.node` یا `tools.exec.node` سیٹ کریں۔
 - نان-ونڈوز ہوسٹس پر، exec سیٹ ہونے پر `SHELL` استعمال کرتا ہے؛ اگر `SHELL` `fish` ہو، تو fish سے غیر مطابقت رکھنے والی اسکرپٹس سے بچنے کے لیے `PATH` میں سے `bash` (یا `sh`) کو ترجیح دیتا ہے، پھر اگر دونوں موجود نہ ہوں تو `SHELL` پر واپس آتا ہے۔
 - ہوسٹ اجرا (`gateway`/`node`) بائنری ہائی جیکنگ یا انجیکٹڈ کوڈ سے بچاؤ کے لیے `env.PATH` اور لوڈر اوور رائیڈز (`LD_*`/`DYLD_*`) کو مسترد کرتا ہے۔
-- اہم: sandboxing **بطورِ طے شدہ بند** ہے۔ اگر sandboxing بند ہو، تو `host=sandbox` براہِ راست گیٹ وے ہوسٹ پر (بغیر کنٹینر) چلتا ہے اور **منظوریات درکار نہیں ہوتیں**۔ منظوریات لازم کرنے کے لیے `host=gateway` کے ساتھ چلائیں اور exec منظوریات کنفیگر کریں (یا sandboxing فعال کریں)۔
+- Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
+  the gateway host (no container) and **does not require approvals**. To require approvals, run with
+  `host=gateway` and configure exec approvals (or enable sandboxing).
 
 ## Config
 
@@ -70,11 +65,16 @@ Example:
 
 ### PATH handling
 
-- `host=gateway`: آپ کے لاگ اِن شیل کے `PATH` کو exec ماحول میں ضم کرتا ہے۔ ہوسٹ اجرا کے لیے `env.PATH` اوور رائیڈز مسترد کی جاتی ہیں۔ خود ڈیمَن پھر بھی کم سے کم `PATH` کے ساتھ چلتا ہے:
+- `host=gateway`: merges your login-shell `PATH` into the exec environment. `env.PATH` overrides are
+  rejected for host execution. The daemon itself still runs with a minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
-- `host=sandbox`: کنٹینر کے اندر `sh -lc` (لاگ اِن شیل) چلاتا ہے، اس لیے `/etc/profile` ممکن ہے `PATH` ری سیٹ کرے۔ OpenClaw پروفائل سورسنگ کے بعد ایک اندرونی env var کے ذریعے `env.PATH` prepend کرتا ہے (بغیر شیل انٹرپولیشن)؛ `tools.exec.pathPrepend` یہاں بھی لاگو ہوتا ہے۔
-- `host=node`: صرف وہی غیر بلاک شدہ env اوور رائیڈز جو آپ بھیجتے ہیں نوڈ کو بھیجے جاتے ہیں۔ ہوسٹ اجرا کے لیے `env.PATH` اوور رائیڈز مسترد کی جاتی ہیں۔ ہیڈ لیس نوڈ ہوسٹس `PATH` کو صرف تب قبول کرتے ہیں جب یہ نوڈ ہوسٹ PATH کو prepend کرے (متبادل نہیں)۔ macOS نوڈز `PATH` اوور رائیڈز کو مکمل طور پر خارج کر دیتے ہیں۔
+- `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
+  OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
+  `tools.exec.pathPrepend` applies here too.
+- `host=node`: only non-blocked env overrides you pass are sent to the node. `env.PATH` overrides are
+  rejected for host execution. Headless node hosts accept `PATH` only when it prepends the node host
+  PATH (no replacement). macOS nodes drop `PATH` overrides entirely.
 
 ہر ایجنٹ کے لیے نوڈ بائنڈنگ (کنفیگ میں ایجنٹ لسٹ انڈیکس استعمال کریں):
 
@@ -87,8 +87,8 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 
 ## Session overrides (`/exec`)
 
-`/exec` استعمال کریں تاکہ **فی سیشن** `host`, `security`, `ask`, اور `node` کے ڈیفالٹس سیٹ کیے جا سکیں۔
-موجودہ قدروں کو دکھانے کے لیے بغیر آرگیومنٹس کے `/exec` بھیجیں۔
+Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `node`.
+Send `/exec` with no arguments to show the current values.
 
 Example:
 
@@ -98,26 +98,27 @@ Example:
 
 ## Authorization model
 
-`/exec` صرف **مجاز ارسال کنندگان** کے لیے معتبر ہے (چینل allowlists/جوڑی بنانا اور `commands.useAccessGroups`)۔
-یہ **صرف سیشن اسٹیٹ** کو اپڈیٹ کرتا ہے اور کنفیگ نہیں لکھتا۔ exec کو سختی سے غیر فعال کرنے کے لیے، ٹول پالیسی کے ذریعے انکار کریں
-(`tools.deny: ["exec"]` یا فی ایجنٹ)۔ ہوسٹ منظوریات بدستور لاگو رہتی ہیں جب تک کہ آپ صراحتاً
-`security=full` اور `ask=off` سیٹ نہ کریں۔
+`/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
+policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
+`security=full` and `ask=off`.
 
 ## Exec approvals (companion app / node host)
 
-Sandboxed ایجنٹس گیٹ وے یا نوڈ ہوسٹ پر `exec` کے چلنے سے پہلے فی درخواست منظوری لازم کر سکتے ہیں۔
-پالیسی، allowlist، اور UI فلو کے لیے [Exec approvals](/tools/exec-approvals) دیکھیں۔
+Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
+See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
 
-جب منظوریات درکار ہوں، تو exec ٹول فوراً `status: "approval-pending"` اور ایک منظوری آئی ڈی کے ساتھ واپس آتا ہے۔
-منظور (یا مسترد / وقت ختم) ہونے پر، Gateway سسٹم ایونٹس (`Exec finished` / `Exec denied`) جاری کرتا ہے۔
-اگر کمانڈ `tools.exec.approvalRunningNoticeMs` کے بعد بھی چل رہی ہو، تو ایک واحد `Exec running` نوٹس جاری کیا جاتا ہے۔
+When approvals are required, the exec tool returns immediately with
+`status: "approval-pending"` and an approval id. Once approved (or denied / timed out),
+the Gateway emits system events (`Exec finished` / `Exec denied`). If the command is still
+running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` notice is emitted.
 
 ## Allowlist + safe bins
 
-Allowlist نفاذ **صرف حل شدہ بائنری راستوں** سے میل کھاتا ہے (basename میچ نہیں)۔ جب
-`security=allowlist` ہو، تو شیل کمانڈز خودکار طور پر صرف اسی صورت اجازت پاتی ہیں جب ہر پائپ لائن حصہ
-allowlisted ہو یا safe bin ہو۔ چیننگ (`;`, `&&`, `||`) اور ری ڈائریکشنز
-allowlist موڈ میں مسترد کر دی جاتی ہیں۔
+Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
+`security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
+allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
+allowlist mode.
 
 ## Examples
 
@@ -156,8 +157,8 @@ Paste (بطورِ طے شدہ bracketed):
 
 ## apply_patch (تجرباتی)
 
-`apply_patch`، `exec` کا ایک ذیلی ٹول ہے جو منظم کثیر-فائل ترامیم کے لیے ہے۔
-اسے صراحتاً فعال کریں:
+`apply_patch` is a subtool of `exec` for structured multi-file edits.
+Enable it explicitly:
 
 ```json5
 {

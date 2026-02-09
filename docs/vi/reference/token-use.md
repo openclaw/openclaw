@@ -4,28 +4,21 @@ read_when:
   - Giải thích về mức sử dụng token, chi phí hoặc cửa sổ ngữ cảnh
   - Gỡ lỗi sự tăng trưởng ngữ cảnh hoặc hành vi nén gọn
 title: "Sử dụng Token và Chi phí"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:21Z
 ---
 
 # Sử dụng token & chi phí
 
-OpenClaw theo dõi **token**, không phải ký tự. Token phụ thuộc vào từng mô hình, nhưng
-hầu hết các mô hình kiểu OpenAI trung bình khoảng ~4 ký tự cho mỗi token đối với văn bản tiếng Anh.
+OpenClaw tracks **tokens**, not characters. Tokens are model-specific, but most
+OpenAI-style models average ~4 characters per token for English text.
 
 ## Cách system prompt được xây dựng
 
-OpenClaw tự lắp ráp system prompt của riêng mình ở mỗi lần chạy. Nó bao gồm:
+OpenClaw assembles its own system prompt on every run. It includes:
 
 - Danh sách công cụ + mô tả ngắn
 - Danh sách Skills (chỉ metadata; hướng dẫn được tải theo yêu cầu với `read`)
 - Hướng dẫn tự cập nhật
-- Workspace + các tệp bootstrap (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` khi có tệp mới). Các tệp lớn được cắt bớt bởi `agents.defaults.bootstrapMaxChars` (mặc định: 20000).
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new). 6. Các tệp lớn bị cắt bớt bởi `agents.defaults.bootstrapMaxChars` (mặc định: 20000).
 - Thời gian (UTC + múi giờ người dùng)
 - Thẻ trả lời + hành vi heartbeat
 - Metadata runtime (máy chủ/OS/mô hình/tư duy)
@@ -43,7 +36,7 @@ Mọi thứ mà mô hình nhận được đều được tính vào giới hạ
 - Các bản tóm tắt nén gọn và tạo tác cắt tỉa
 - Lớp bao của nhà cung cấp hoặc tiêu đề an toàn (không hiển thị, nhưng vẫn được tính)
 
-Để xem phân tích thực tế (theo từng tệp được chèn, công cụ, Skills và kích thước system prompt), hãy dùng `/context list` hoặc `/context detail`. Xem thêm tại [Context](/concepts/context).
+7. Để xem phân tích thực tế (theo từng tệp được chèn, công cụ, kỹ năng và kích thước system prompt), hãy dùng `/context list` hoặc `/context detail`. 8. Xem [Context](/concepts/context).
 
 ## Cách xem mức sử dụng token hiện tại
 
@@ -70,27 +63,26 @@ Chi phí được ước tính dựa trên cấu hình giá mô hình của bạ
 models.providers.<provider>.models[].cost
 ```
 
-Đây là **USD cho mỗi 1M token** đối với `input`, `output`, `cacheRead` và
-`cacheWrite`. Nếu thiếu thông tin giá, OpenClaw chỉ hiển thị token. Token OAuth
-không bao giờ hiển thị chi phí bằng đô la.
+9. Đây là **USD trên mỗi 1M token** cho `input`, `output`, `cacheRead` và
+   `cacheWrite`. 10. Nếu thiếu thông tin giá, OpenClaw chỉ hiển thị số token. OAuth tokens
+   never show dollar cost.
 
 ## Ảnh hưởng của cache TTL và cắt tỉa
 
-Cơ chế cache prompt của nhà cung cấp chỉ áp dụng trong phạm vi thời gian TTL của cache. OpenClaw có thể
-tùy chọn chạy **cắt tỉa cache-ttl**: nó cắt tỉa phiên khi TTL của cache
-đã hết hạn, sau đó đặt lại cửa sổ cache để các yêu cầu tiếp theo có thể tái sử dụng
-ngữ cảnh vừa được cache thay vì phải cache lại toàn bộ lịch sử. Điều này giúp
-giảm chi phí ghi cache khi một phiên bị nhàn rỗi vượt quá TTL.
+11. Bộ nhớ đệm prompt của provider chỉ áp dụng trong phạm vi TTL của cache. OpenClaw can
+    optionally run **cache-ttl pruning**: it prunes the session once the cache TTL
+    has expired, then resets the cache window so subsequent requests can re-use the
+    freshly cached context instead of re-caching the full history. This keeps cache
+    write costs lower when a session goes idle past the TTL.
 
 Cấu hình tại [Gateway configuration](/gateway/configuration) và xem chi tiết hành vi tại [Session pruning](/concepts/session-pruning).
 
-Heartbeat có thể giữ cache ở trạng thái **warm** trong các khoảng trống nhàn rỗi. Nếu TTL cache của mô hình của bạn
-là `1h`, việc đặt khoảng heartbeat thấp hơn một chút (ví dụ: `55m`) có thể tránh
-việc phải cache lại toàn bộ prompt, từ đó giảm chi phí ghi cache.
+Heartbeat can keep the cache **warm** across idle gaps. If your model cache TTL
+is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can avoid
+re-caching the full prompt, reducing cache write costs.
 
-Đối với giá API của Anthropic, việc đọc cache rẻ hơn đáng kể so với token đầu vào,
-trong khi ghi cache được tính phí với hệ số cao hơn. Xem bảng giá cache prompt mới nhất
-và các hệ số TTL của Anthropic tại:
+For Anthropic API pricing, cache reads are significantly cheaper than input
+tokens, while cache writes are billed at a higher multiplier. 12. Xem bảng giá prompt caching của Anthropic để biết mức giá và hệ số TTL mới nhất:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 
 ### Ví dụ: giữ cache 1h ở trạng thái warm với heartbeat

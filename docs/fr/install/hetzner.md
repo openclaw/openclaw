@@ -6,13 +6,6 @@ read_when:
   - Vous voulez un contrôle total sur la persistance, les binaires et le comportement au redémarrage
   - Vous exécutez OpenClaw dans Docker sur Hetzner ou un fournisseur similaire
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:04Z
 ---
 
 # OpenClaw sur Hetzner (Docker, guide VPS de production)
@@ -71,7 +64,7 @@ Pour le flux Docker générique, voir [Docker](/install/docker).
 
 ---
 
-## 1) Approvisionner le VPS
+## 1. Approvisionner le VPS
 
 Créez un VPS Ubuntu ou Debian sur Hetzner.
 
@@ -86,7 +79,7 @@ Ne le traitez pas comme une infrastructure jetable.
 
 ---
 
-## 2) Installer Docker (sur le VPS)
+## 2. Installer Docker (sur le VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Cloner le dépôt OpenClaw
+## 3. Cloner le dépôt OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,7 +107,7 @@ Ce guide suppose que vous allez construire une image personnalisée pour garanti
 
 ---
 
-## 4) Créer des répertoires hôte persistants
+## 4. Créer des répertoires hôte persistants
 
 Les conteneurs Docker sont éphémères.
 Tout l’état de longue durée doit résider sur l’hôte.
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Configurer les variables d'environnement
+## 5. Configurer les variables d'environnement
 
 Créez `.env` à la racine du dépôt.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Configuration Docker Compose
+## 6. Configuration Docker Compose
 
 Créez ou mettez à jour `docker-compose.yml`.
 
@@ -204,7 +197,7 @@ services:
 
 ---
 
-## 7) Intégrer les binaires requis dans l’image (critique)
+## 7. Intégrer les binaires requis dans l’image (critique)
 
 Installer des binaires dans un conteneur en cours d’exécution est un piège.
 Tout ce qui est installé à l’exécution sera perdu au redémarrage.
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Construire et lancer
+## 8. Construire et lancer
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Sortie attendue :
 
 ---
 
-## 9) Vérifier la Gateway (passerelle)
+## 9. Vérifier la Gateway (passerelle)
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -323,15 +316,15 @@ Collez votre jeton de Gateway (passerelle).
 OpenClaw s’exécute dans Docker, mais Docker n’est pas la source de vérité.
 Tout l’état de longue durée doit survivre aux redémarrages, reconstructions et redémarrages système.
 
-| Composant                            | Emplacement                       | Mécanisme de persistance   | Notes                                   |
-| ------------------------------------ | --------------------------------- | -------------------------- | --------------------------------------- |
-| Configuration Gateway                | `/home/node/.openclaw/`           | Montage de volume hôte     | Inclut `openclaw.json`, jetons          |
-| Profils d’authentification du modèle | `/home/node/.openclaw/`           | Montage de volume hôte     | Jetons OAuth, clés API                  |
-| Configurations des Skills            | `/home/node/.openclaw/skills/`    | Montage de volume hôte     | État au niveau des Skills               |
-| Espace de travail de l’agent         | `/home/node/.openclaw/workspace/` | Montage de volume hôte     | Code et artefacts de l’agent            |
-| Session WhatsApp                     | `/home/node/.openclaw/`           | Montage de volume hôte     | Préserve la connexion par QR            |
-| Trousseau Gmail                      | `/home/node/.openclaw/`           | Volume hôte + mot de passe | Nécessite `GOG_KEYRING_PASSWORD`        |
-| Binaires externes                    | `/usr/local/bin/`                 | Image Docker               | Doivent être intégrés à la construction |
-| Runtime Node                         | Système de fichiers du conteneur  | Image Docker               | Reconstruit à chaque build d’image      |
-| Paquets OS                           | Système de fichiers du conteneur  | Image Docker               | Ne pas installer à l’exécution          |
-| Conteneur Docker                     | Éphémère                          | Redémarrable               | Sûr à détruire                          |
+| Composant                            | Emplacement                       | Mécanisme de persistance   | Notes                                               |
+| ------------------------------------ | --------------------------------- | -------------------------- | --------------------------------------------------- |
+| Configuration Gateway                | `/home/node/.openclaw/`           | Montage de volume hôte     | Inclut `openclaw.json`, jetons                      |
+| Profils d’authentification du modèle | `/home/node/.openclaw/`           | Montage de volume hôte     | Jetons OAuth, clés API                              |
+| Configurations des Skills            | `/home/node/.openclaw/skills/`    | Montage de volume hôte     | État au niveau des Skills                           |
+| Espace de travail de l’agent         | `/home/node/.openclaw/workspace/` | Montage de volume hôte     | Code et artefacts de l’agent                        |
+| Session WhatsApp                     | `/home/node/.openclaw/`           | Montage de volume hôte     | Préserve la connexion par QR                        |
+| Trousseau Gmail                      | `/home/node/.openclaw/`           | Volume hôte + mot de passe | Nécessite `GOG_KEYRING_PASSWORD`                    |
+| Binaires externes                    | `/usr/local/bin/`                 | Image Docker               | Doit être cuit au four au moment de la construction |
+| Runtime Node                         | Système de fichiers du conteneur  | Image Docker               | Reconstruit à chaque build d’image                  |
+| Paquets OS                           | Système de fichiers du conteneur  | Image Docker               | Ne pas installer à l’exécution                      |
+| Conteneur Docker                     | Éphémère                          | Redémarrage                | Sûr à détruire                                      |

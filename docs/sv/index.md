@@ -3,13 +3,6 @@ summary: "OpenClaw är en flerkanalig gateway för AI-agenter som körs på alla
 read_when:
   - Introducerar OpenClaw för nybörjare
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:36Z
 ---
 
 # OpenClaw 🦞
@@ -29,28 +22,27 @@ x-i18n:
     />
 </p>
 
-> _”EXFOLIATE! EXFOLIATE!”_ — En rymdhummer, förmodligen
+> _"EXFOLIATE! EXFOLIATE!"_ - En rymdhummer, förmodligen
 
-<p align="center">
-  <strong>Gateway för AI-agenter på alla operativsystem över WhatsApp, Telegram, Discord, iMessage och mer.</strong><br />
-  Skicka ett meddelande, få ett agentsvar direkt i fickan. Plugins lägger till Mattermost och mer.
+<p align="center"><strong>Alla OS-gateway för AI-agenter över WhatsApp, Telegram, Discord, iMessage, och mer.</strong><br />
+  Skicka ett meddelande, få ett agentsvar från din ficka. Plugins lägga Mattermost och mer.
 </p>
 
 <Columns>
-  <Card title="Kom igång" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Installera OpenClaw och starta Gateway på några minuter.
   </Card>
-  <Card title="Kör guiden" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     Guidad konfigurering med `openclaw onboard` och parningsflöden.
   </Card>
-  <Card title="Öppna Control UI" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Starta webbdashboarden för chatt, konfig och sessioner.
   </Card>
 </Columns>
 
 ## Vad är OpenClaw?
 
-OpenClaw är en **självhostad gateway** som kopplar dina favoritappar för chatt — WhatsApp, Telegram, Discord, iMessage och fler — till AI-kodningsagenter som Pi. Du kör en enda Gateway-process på din egen dator (eller en server), och den blir bryggan mellan dina meddelandeappar och en AI-assistent som alltid är tillgänglig.
+OpenClaw är en **själv-värd gateway** som ansluter dina favoritchatt-appar — WhatsApp, Telegram, Discord, iMessage, och mer — till AI kodningsagenter som Pi. Du kör en enda Gateway process på din egen maskin (eller en server), och det blir bron mellan dina meddelandeappar och en alltid tillgänglig AI-assistent.
 
 **Vem är det för?** Utvecklare och avancerade användare som vill ha en personlig AI-assistent som de kan skriva till var som helst — utan att ge upp kontrollen över sina data eller förlita sig på en hostad tjänst.
 
@@ -80,22 +72,22 @@ Gateway är den enda sanningskällan för sessioner, routing och kanalkopplingar
 ## Viktiga funktioner
 
 <Columns>
-  <Card title="Flerkanalig gateway" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     WhatsApp, Telegram, Discord och iMessage med en enda Gateway-process.
   </Card>
-  <Card title="Plugin-kanaler" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     Lägg till Mattermost och mer med tilläggspaket.
   </Card>
-  <Card title="Routing för flera agenter" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     Isolerade sessioner per agent, arbetsyta eller avsändare.
   </Card>
-  <Card title="Mediastöd" icon="image">
+  <Card title="Media support" icon="image">
     Skicka och ta emot bilder, ljud och dokument.
   </Card>
-  <Card title="Webb-Control UI" icon="monitor">
+  <Card title="Web Control UI" icon="monitor">
     Webbdashboard för chatt, konfig, sessioner och noder.
   </Card>
-  <Card title="Mobila noder" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Para ihop iOS- och Android-noder med Canvas-stöd.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ Gateway är den enda sanningskällan för sessioner, routing och kanalkopplingar
 ## Snabbstart
 
 <Steps>
-  <Step title="Installera OpenClaw">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Introduktion och installation av tjänsten">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Para WhatsApp och starta Gateway">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -121,7 +113,7 @@ Gateway är den enda sanningskällan för sessioner, routing och kanalkopplingar
   </Step>
 </Steps>
 
-Behöver du fullständig installation och dev-setup? Se [Snabbstart](/start/quickstart).
+Behöver du den fullständiga installationen och utvecklarkonfigurationen? Se [Snabb start](/start/quickstart).
 
 ## Dashboard
 
@@ -158,22 +150,22 @@ Exempel:
 ## Börja här
 
 <Columns>
-  <Card title="Dokumentationshubbar" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     All dokumentation och guider, organiserade efter användningsfall.
   </Card>
-  <Card title="Konfiguration" href="/gateway/configuration" icon="settings">
+  <Card title="Configuration" href="/gateway/configuration" icon="settings">
     Centrala Gateway-inställningar, token och leverantörskonfig.
   </Card>
-  <Card title="Fjärråtkomst" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     Åtkomstmönster via SSH och tailnet.
   </Card>
-  <Card title="Kanaler" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     Kanalspecifik konfigurering för WhatsApp, Telegram, Discord och mer.
   </Card>
-  <Card title="Noder" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     iOS- och Android-noder med parning och Canvas.
   </Card>
-  <Card title="Hjälp" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     Vanliga lösningar och ingång till felsökning.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Exempel:
 ## Läs mer
 
 <Columns>
-  <Card title="Fullständig funktionslista" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     Kompletta kanal-, routing- och mediakapaciteter.
   </Card>
-  <Card title="Routing för flera agenter" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     Isolering av arbetsytor och sessioner per agent.
   </Card>
-  <Card title="Säkerhet" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     Token, tillåtelselistor och säkerhetskontroller.
   </Card>
-  <Card title="Felsökning" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Gateway-diagnostik och vanliga fel.
   </Card>
-  <Card title="Om projektet och tack" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     Projektets ursprung, bidragsgivare och licens.
   </Card>
 </Columns>

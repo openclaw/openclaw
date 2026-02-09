@@ -4,13 +4,6 @@ read_when:
   - macOS uygulama özelliklerini uygularken
   - macOS’te gateway yaşam döngüsünü veya düğüm köprülemesini değiştirirken
 title: "macOS Uygulaması"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:45Z
 ---
 
 # OpenClaw macOS Yardımcı Uygulaması (menü çubuğu + gateway broker)

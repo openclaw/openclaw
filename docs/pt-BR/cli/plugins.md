@@ -4,13 +4,6 @@ read_when:
   - Voce quer instalar ou gerenciar plugins do Gateway em processo
   - Voce quer depurar falhas de carregamento de plugins
 title: "plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:21Z
 ---
 
 # `openclaw plugins`

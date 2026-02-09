@@ -5,13 +5,6 @@ read_when:
   - Instalar, buscar o publicar skills
   - Explicar las banderas de la CLI de ClawHub y el comportamiento de sincronización
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:00Z
 ---
 
 # ClawHub
@@ -88,7 +81,8 @@ Una skill típica incluye:
 - Configuraciones opcionales, scripts o archivos de apoyo usados por la skill.
 - Metadatos como etiquetas, resumen y requisitos de instalación.
 
-ClawHub usa metadatos para impulsar el descubrimiento y exponer de forma segura las capacidades de las skills. El registro también rastrea señales de uso (como estrellas y descargas) para mejorar el ranking y la visibilidad.
+ClawHub usa metadatos para impulsar el descubrimiento y exponer de forma segura las capacidades de las skills.
+El registro también rastrea señales de uso (como estrellas y descargas) para mejorar el ranking y la visibilidad.
 
 ## Qué ofrece el servicio (funcionalidades)
 

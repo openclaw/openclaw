@@ -5,18 +5,11 @@ read_when:
   - Bạn muốn triển khai lên nền tảng đám mây
   - Bạn cần cập nhật, di chuyển hoặc gỡ cài đặt
 title: "Cài đặt"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:24Z
 ---
 
 # Cài đặt
 
-Đã làm theo [Bắt đầu](/start/getting-started)? Vậy là xong — trang này dành cho các phương thức cài đặt thay thế, hướng dẫn theo nền tảng, và bảo trì.
+Already followed [Getting Started](/start/getting-started)? You're all set — this page is for alternative install methods, platform-specific instructions, and maintenance.
 
 ## Yêu cầu hệ thống
 
@@ -31,13 +24,14 @@ Trên Windows, chúng tôi đặc biệt khuyến nghị chạy OpenClaw dưới
 ## Phương thức cài đặt
 
 <Tip>
-**Script cài đặt** là cách được khuyến nghị để cài OpenClaw. Nó xử lý việc phát hiện Node, cài đặt và hướng dẫn ban đầu trong một bước.
+The **installer script** is the recommended way to install OpenClaw. It handles Node detection, installation, and onboarding in one step.
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="Script cài đặt" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     Tải CLI, cài đặt toàn cục qua npm và khởi chạy trình hướng dẫn onboarding.
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +44,11 @@ Trên Windows, chúng tôi đặc biệt khuyến nghị chạy OpenClaw dưới
         ```
       </Tab>
     </Tabs>
-
+    
     Vậy là xong — script sẽ xử lý việc phát hiện Node, cài đặt và onboarding.
-
+    
     Để bỏ qua onboarding và chỉ cài binary:
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +61,30 @@ Trên Windows, chúng tôi đặc biệt khuyến nghị chạy OpenClaw dưới
         ```
       </Tab>
     </Tabs>
-
+    
     Để xem tất cả cờ, biến môi trường và tùy chọn CI/tự động hóa, xem [Installer internals](/install/installer).
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     Nếu bạn đã có Node 22+ và muốn tự quản lý việc cài đặt:
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="lỗi build sharp?">
           Nếu bạn đã cài libvips toàn cục (thường gặp trên macOS qua Homebrew) và `sharp` thất bại, hãy buộc dùng binary dựng sẵn:
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           Nếu bạn thấy `sharp: Please add node-gyp to your dependencies`, hãy cài công cụ build (macOS: Xcode CLT + `npm install -g node-gyp`) hoặc dùng biến môi trường ở trên.
         </Accordion>
       </Tab>
@@ -98,22 +94,24 @@ Trên Windows, chúng tôi đặc biệt khuyến nghị chạy OpenClaw dưới
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm yêu cầu phê duyệt rõ ràng cho các gói có script build. Sau khi lần cài đầu tiên hiển thị cảnh báo "Ignored build scripts", hãy chạy `pnpm approve-builds -g` và chọn các gói được liệt kê.
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="Từ mã nguồn" icon="github">
+  <Accordion title="From source" icon="github">
     Dành cho người đóng góp hoặc bất kỳ ai muốn chạy từ bản checkout cục bộ.
 
+    ```
     <Steps>
       <Step title="Clone và build">
         Clone [repo OpenClaw](https://github.com/openclaw/openclaw) và build:
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +122,11 @@ Trên Windows, chúng tôi đặc biệt khuyến nghị chạy OpenClaw dưới
       </Step>
       <Step title="Liên kết CLI">
         Làm cho lệnh `openclaw` khả dụng toàn cục:
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         Hoặc bỏ qua bước liên kết và chạy lệnh qua `pnpm openclaw ...` từ bên trong repo.
       </Step>
       <Step title="Chạy onboarding">
@@ -137,8 +135,9 @@ Trên Windows, chúng tôi đặc biệt khuyến nghị chạy OpenClaw dưới
         ```
       </Step>
     </Steps>
-
+    
     Để xem các quy trình phát triển chuyên sâu hơn, xem [Thiết lập](/start/setup).
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +171,7 @@ openclaw dashboard      # open the browser UI
 
 ## Xử lý sự cố: không tìm thấy `openclaw`
 
-<Accordion title="Chẩn đoán và khắc phục PATH">
+<Accordion title="PATH diagnosis and fix">
   Chẩn đoán nhanh:
 
 ```bash
@@ -192,19 +191,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Trên Windows, thêm đầu ra của `npm prefix -g` vào PATH của bạn.
 
-Sau đó mở một terminal mới (hoặc `rehash` trong zsh / `hash -r` trong bash).
-</Accordion>
+Then open a new terminal (or `rehash` in zsh / `hash -r` in bash). </Accordion>
 
 ## Cập nhật / gỡ cài đặt
 
 <CardGroup cols={3}>
-  <Card title="Cập nhật" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     Giữ OpenClaw luôn được cập nhật.
   </Card>
-  <Card title="Di chuyển" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     Chuyển sang máy mới.
   </Card>
-  <Card title="Gỡ cài đặt" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     Gỡ OpenClaw hoàn toàn.
   </Card>
 </CardGroup>

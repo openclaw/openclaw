@@ -4,13 +4,6 @@ read_when:
   - دمج العملاء الذين يتحدثون واجهة OpenResponses API
   - عندما تريد مدخلات قائمة على العناصر، أو استدعاءات أدوات من العميل، أو أحداث SSE
 title: "واجهة OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:26Z
 ---
 
 # واجهة OpenResponses API (HTTP)
@@ -278,7 +271,7 @@ x-i18n:
 
 ## الاستخدام
 
-يُملأ `usage` عندما يُبلّغ الموفّر الأساسي بعدّادات الرموز.
+"الاستخدام" يكون مأهولاً عندما يبلغ مقدم الخدمة الأساسي عن عدد الرموز.
 
 ## الأخطاء
 
@@ -309,7 +302,7 @@ curl -sS http://127.0.0.1:18789/v1/responses \
   }'
 ```
 
-مع البث:
+متدفق:
 
 ```bash
 curl -N http://127.0.0.1:18789/v1/responses \

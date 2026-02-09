@@ -1,16 +1,9 @@
 ---
 summary: "안정판, 베타, 개발 채널: 의미, 전환, 태깅"
 read_when:
-  - 안정판/베타/개발 채널 간 전환하려는 경우
+  - You want to switch between stable/beta/dev
   - 사전 릴리스를 태깅하거나 게시하는 경우
 title: "개발 채널"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:19Z
 ---
 
 # 개발 채널
@@ -21,7 +14,7 @@ OpenClaw 는 세 가지 업데이트 채널을 제공합니다:
 
 - **stable**: npm dist-tag `latest`.
 - **beta**: npm dist-tag `beta` (테스트 중인 빌드).
-- **dev**: `main` (git) 의 최신 헤드. npm dist-tag: `dev` (게시된 경우).
+- **dev**: moving head of `main` (git). **dev**: `main` (git) 의 최신 헤드. npm dist-tag: `dev` (게시된 경우).
 
 우리는 빌드를 **beta** 에 배포하고 테스트한 뒤, **검증된 빌드를 버전 번호를 변경하지 않고 `latest` 로 승격**합니다 — npm 설치의 단일 기준은 dist-tag 입니다.
 
@@ -54,7 +47,7 @@ openclaw update --channel dev
   이를 업데이트한 뒤 해당 체크아웃에서 전역 CLI 를 설치합니다.
 - `stable`/`beta` 는 일치하는 dist-tag 를 사용하여 npm 에서 설치합니다.
 
-팁: 안정판 + 개발 채널을 병행해서 사용하려면 두 개의 클론을 유지하고 Gateway(게이트웨이) 를 안정판 쪽으로 지정하십시오.
+Tip: if you want stable + dev in parallel, keep two clones and point your gateway at the stable one.
 
 ## 플러그인과 채널
 
@@ -63,7 +56,7 @@ openclaw update --channel dev
 - `dev` 는 git 체크아웃에 포함된 번들 플러그인을 우선합니다.
 - `stable` 및 `beta` 는 npm 으로 설치된 플러그인 패키지를 복원합니다.
 
-## 태깅 모범 사례
+## Tagging best practices
 
 - git 체크아웃이 도달하길 원하는 릴리스를 태깅하십시오 (`vYYYY.M.D` 또는 `vYYYY.M.D-<patch>`).
 - 태그는 불변으로 유지하십시오: 태그를 이동하거나 재사용하지 마십시오.

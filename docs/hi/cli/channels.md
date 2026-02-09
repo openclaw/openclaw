@@ -4,13 +4,6 @@ read_when:
   - आप चैनल खातों को जोड़ना/हटाना चाहते हैं (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - आप चैनल की स्थिति जाँचना या चैनल लॉग्स को टेल करना चाहते हैं
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:57Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - व्यापक जाँच के लिए `openclaw status --deep` चलाएँ।
 - निर्देशित सुधारों के लिए `openclaw doctor` का उपयोग करें।
-- `openclaw channels list` `Claude: HTTP 403 ... user:profile` प्रिंट करता है → उपयोग स्नैपशॉट के लिए `user:profile` स्कोप आवश्यक है। `--no-usage` का उपयोग करें, या claude.ai सत्र कुंजी (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) प्रदान करें, या Claude Code CLI के माध्यम से पुनः-प्रमाणीकरण करें।
+- `openclaw channels list` `Claude: HTTP 403 ...` प्रिंट करता है `user:profile` → उपयोग स्नैपशॉट के लिए `user:profile` स्कोप आवश्यक है। `--no-usage` का उपयोग करें, या claude.ai सत्र कुंजी (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) प्रदान करें, या Claude Code CLI के माध्यम से पुनः-प्रमाणीकरण करें।
 
 ## क्षमताओं की जाँच
 
@@ -68,7 +61,7 @@ openclaw channels capabilities --channel discord --target channel:123
 
 - `--channel` वैकल्पिक है; इसे छोड़ने पर सभी चैनल (एक्सटेंशन्स सहित) सूचीबद्ध होंगे।
 - `--target` `channel:<id>` या एक कच्चा संख्यात्मक चैनल आईडी स्वीकार करता है और केवल Discord पर लागू होता है।
-- जाँच प्रदाता-विशिष्ट होती हैं: Discord intents + वैकल्पिक चैनल अनुमतियाँ; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon संस्करण; Microsoft Teams ऐप टोकन + Graph roles/scopes (जहाँ ज्ञात हो, वहाँ एनोटेटेड)। जिन चैनलों में जाँच उपलब्ध नहीं है, वे `Probe: unavailable` रिपोर्ट करते हैं।
+- Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 
 ## नामों को आईडी में बदलें
 

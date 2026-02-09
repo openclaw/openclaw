@@ -5,18 +5,11 @@ read_when:
   - OpenProse plugin ကို ဖွင့်လိုသည့်အခါ
   - state သိမ်းဆည်းပုံကို နားလည်ရန် လိုအပ်သည့်အခါ
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:52Z
 ---
 
 # OpenProse
 
-OpenProse သည် AI ဆက်ရှင်များကို စီမံညွှန်းရန် အသုံးပြုသည့် သယ်ဆောင်အသုံးပြုနိုင်သော၊ markdown ကို အခြေခံသည့် workflow ဖော်မတ်တစ်ခုဖြစ်သည်။ OpenClaw တွင် ၎င်းကို plugin အဖြစ် ထည့်သွင်းပေးထားပြီး OpenProse skill pack တစ်ခုနှင့် `/prose` slash command တစ်ခုကို တပ်ဆင်ပေးသည်။ Program များသည် `.prose` ဖိုင်များအဖြစ် ရှိနေပြီး ထိန်းချုပ်ထားသော control flow ဖြင့် sub-agent အများအပြားကို ဖန်တီးနိုင်သည်။
+OpenProse သည် AI sessions များကို orchestration လုပ်ရန် portable ဖြစ်ပြီး markdown-first workflow format တစ်ခုဖြစ်ပါသည်။ OpenClaw တွင် ၎င်းကို OpenProse skill pack တစ်ခုနှင့် `/prose` slash command ကို install လုပ်ပေးသော plugin အဖြစ် ပါဝင်လာပါသည်။ Programs များသည် `.prose` files များတွင် ရှိပြီး explicit control flow ဖြင့် sub‑agents အများအပြားကို spawn လုပ်နိုင်ပါသည်။
 
 တရားဝင်ဝဘ်ဆိုက်: [https://www.prose.md](https://www.prose.md)
 
@@ -28,7 +21,7 @@ OpenProse သည် AI ဆက်ရှင်များကို စီမံ�
 
 ## ထည့်သွင်းခြင်းနှင့် ဖွင့်ခြင်း
 
-Bundled plugin များကို မူလအနေဖြင့် ပိတ်ထားသည်။ OpenProse ကို ဖွင့်ရန်:
+Bundled plugins များကို default အနေဖြင့် disabled လုပ်ထားပါသည်။ OpenProse ကို Enable လုပ်ရန်:
 
 ```bash
 openclaw plugins enable open-prose
@@ -42,7 +35,7 @@ Dev/local checkout: `openclaw plugins install ./extensions/open-prose`
 
 ## Slash command
 
-OpenProse သည် အသုံးပြုသူက ခေါ်ယူနိုင်သော skill command အဖြစ် `/prose` ကို မှတ်ပုံတင်ပေးသည်။ ၎င်းသည် OpenProse VM ညွှန်ကြားချက်များသို့ လမ်းကြောင်းချပြီး အတွင်းပိုင်းတွင် OpenClaw ကိရိယာများကို အသုံးပြုသည်။
+OpenProse သည် `/prose` ကို user-invocable skill command အဖြစ် register လုပ်ပါသည်။ ၎င်းသည် OpenProse VM instructions သို့ route လုပ်ပြီး အောက်ခြေတွင် OpenClaw tools များကို အသုံးပြုပါသည်။
 
 အများဆုံးအသုံးပြုသော command များ:
 
@@ -119,8 +112,8 @@ OpenProse သည် state backend များစွာကို ပံ့ပိ
 
 ## အဝေးမှ program များ
 
-`/prose run <handle/slug>` သည် `https://p.prose.md/<handle>/<slug>` သို့ ဖြေရှင်းသတ်မှတ်သည်။
-တိုက်ရိုက် URL များကို အတိုင်းအတာမပြောင်းဘဲ fetch လုပ်သည်။ ၎င်းသည် `web_fetch` ကိရိယာကို အသုံးပြုသည် (POST အတွက် `exec`)။
+`/prose run <handle/slug>` သည် `https://p.prose.md/<handle>/<slug>` သို့ resolve လုပ်ပါသည်။
+Direct URLs များကို as-is အနေဖြင့် fetch လုပ်ပါသည်။ ဤအရာသည် `web_fetch` tool (သို့မဟုတ် POST အတွက် `exec`) ကို အသုံးပြုပါသည်။
 
 ## OpenClaw runtime ချိတ်ဆက်မှု
 
@@ -132,10 +125,10 @@ OpenProse program များကို OpenClaw primitive များနှင
 | ဖိုင် ဖတ်/ရေး                   | `read` / `write` |
 | Web fetch                       | `web_fetch`      |
 
-သင့် tool allowlist တွင် အဆိုပါကိရိယာများကို ပိတ်ထားပါက OpenProse program များ မအောင်မြင်ပါ။ [Skills config](/tools/skills-config) ကို ကြည့်ပါ။
+သင့် tool allowlist မှ ဤ tools များကို block လုပ်ထားပါက OpenProse programs များ အလုပ်မလုပ်ပါ။ [Skills config](/tools/skills-config) ကို ကြည့်ပါ။
 
 ## လုံခြုံရေးနှင့် အတည်ပြုချက်များ
 
-`.prose` ဖိုင်များကို code ကဲ့သို့ ဆက်ဆံပါ။ လည်ပတ်မည်မီ ပြန်လည်သုံးသပ်ပါ။ ဘေးထွက်သက်ရောက်မှုများကို ထိန်းချုပ်ရန် OpenClaw tool allowlist များနှင့် approval gate များကို အသုံးပြုပါ။
+`.prose` files များကို code ကဲ့သို့ ဆက်ဆံပါ။ Run မလုပ်မီ review လုပ်ပါ။ Side effects များကို ထိန်းချုပ်ရန် OpenClaw tool allowlists နှင့် approval gates များကို အသုံးပြုပါ။
 
 သတ်မှတ်ချက်တိကျပြီး အတည်ပြုချက်ဖြင့် ထိန်းချုပ်ထားသော workflow များအတွက် [Lobster](/tools/lobster) နှင့် နှိုင်းယှဉ်ကြည့်ပါ။

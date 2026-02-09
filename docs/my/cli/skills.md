@@ -4,13 +4,6 @@ read_when:
   - အသုံးပြုနိုင်ပြီး လည်ပတ်ရန် အဆင်သင့်ဖြစ်သော Skills များကို ကြည့်လိုသောအခါ
   - Skills များအတွက် မရှိနေသော binaries/env/config များကို ပြဿနာရှာဖွေလိုသောအခါ
 title: "Skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:06Z
 ---
 
 # `openclaw skills`

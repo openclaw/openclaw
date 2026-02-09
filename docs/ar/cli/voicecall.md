@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI للأمر `openclaw voicecall` (سطح أوامر إضافة المكالمات الصوتية)"
 read_when:
-  - "تستخدم إضافة المكالمات الصوتية وتريد نقاط الدخول في CLI"
-  - "تريد أمثلة سريعة لأوامر `voicecall call|continue|status|tail|expose`"
+  - تستخدم إضافة المكالمات الصوتية وتريد نقاط الدخول في CLI
+  - تريد أمثلة سريعة لأوامر `voicecall call|continue|status|tail|expose`
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:00Z
 ---
 
 # `openclaw voicecall`

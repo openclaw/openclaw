@@ -4,19 +4,12 @@ read_when:
   - Repo မှ scripts များကို အလုပ်လုပ်စေမည့်အခါ
   - ./scripts အောက်တွင် scripts များ ထည့်သွင်းခြင်း သို့မဟုတ် ပြောင်းလဲခြင်း ပြုလုပ်သောအခါ
 title: "Scripts"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:25Z
 ---
 
 # Scripts
 
-`scripts/` ဒိုင်ရက်ထရီတွင် ဒေသတွင်း လုပ်ငန်းစဉ်များနှင့် ops လုပ်ငန်းတာဝန်များအတွက် အကူအညီပေးသော scripts များ ပါဝင်သည်။
-လုပ်ငန်းတာဝန်တစ်ခုကို script တစ်ခုနှင့် တိုက်ရိုက်ချိတ်ဆက်ထားသည်မှာ သေချာသည့်အခါတွင်သာ ၎င်းတို့ကို အသုံးပြုပါ။ အခြားအခြေအနေများတွင် CLI ကို ဦးစားပေး အသုံးပြုပါ။
+၃၅။ `scripts/` directory တွင် local workflows နှင့် ops tasks အတွက် အထောက်အကူ script များ ပါဝင်ပါသည်။
+၃၆။ Task တစ်ခုသည် script နှင့် တိုက်ရိုက် ဆက်စပ်နေပါက ဤအရာများကို သုံးပါ၊ မဟုတ်ပါက CLI ကို ဦးစားပေးပါ။
 
 ## Conventions
 

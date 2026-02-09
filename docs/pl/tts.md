@@ -4,17 +4,10 @@ read_when:
   - Włączanie syntezy mowy dla odpowiedzi
   - Konfigurowanie dostawców TTS lub limitów
   - Używanie poleceń /tts
-title: "Synteza mowy"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:07Z
+title: "Tekst na mowę"
 ---
 
-# Synteza mowy (TTS)
+# Tekst na mowę (TTS)
 
 OpenClaw może konwertować odpowiedzi wychodzące na dźwięk przy użyciu ElevenLabs, OpenAI lub Edge TTS.
 Działa wszędzie tam, gdzie OpenClaw może wysyłać audio; w Telegramie pojawia się okrągły dymek notatki głosowej.

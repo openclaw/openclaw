@@ -5,18 +5,13 @@ read_when:
   - プロトコルの不一致や接続失敗をデバッグする場合
   - プロトコルのスキーマ／モデルを再生成する場合
 title: "Gateway プロトコル"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:02Z
 ---
 
 # Gateway プロトコル（WebSocket）
 
-Gateway WS プロトコルは、OpenClaw の **単一のコントロールプレーン + ノード転送** です。すべてのクライアント（CLI、Web UI、macOS アプリ、iOS/Android ノード、ヘッドレス ノード）は WebSocket 経由で接続し、ハンドシェイク時に **role** と **scope** を宣言します。
+Gateway WS プロトコルは、OpenClaw の **単一のコントロールプレーン + ノード転送** です。すべてのクライアント（CLI、Web UI、macOS アプリ、iOS/Android ノード、ヘッドレス ノード）は WebSocket 経由で接続し、ハンドシェイク時に **role** と **scope** を宣言します。 すべてのクライアント（CLI、web UI、macOSアプリ、iOS/Androidノード、ヘッドレス
+ノード）はWebSocket経由で接続し、
+ハンドシェイク時間に**role** + **scope** を宣言します。
 
 ## トランスポート
 
@@ -163,7 +158,7 @@ Gateway → クライアント：
 
 Gateway はこれらを **クレーム** として扱い、サーバー側の許可リストを適用します。
 
-## プレゼンス
+## Presence
 
 - `system-presence` は、デバイス アイデンティティをキーとするエントリを返します。
 - プレゼンス エントリには `deviceId`、`roles`、`scopes` が含まれるため、**operator** と **node** の両方として接続している場合でも、UI はデバイスごとに 1 行で表示できます。
@@ -177,7 +172,7 @@ Gateway はこれらを **クレーム** として扱い、サーバー側の許
 - 実行リクエストに承認が必要な場合、Gateway は `exec.approval.requested` をブロードキャストします。
 - オペレーター クライアントは `exec.approval.resolve` を呼び出して解決します（`operator.approvals` スコープが必要）。
 
-## バージョニング
+## Versioning
 
 - `PROTOCOL_VERSION` は `src/gateway/protocol/schema.ts` にあります。
 - クライアントは `minProtocol` と `maxProtocol` を送信し、サーバーは不一致を拒否します。
@@ -189,7 +184,9 @@ Gateway はこれらを **クレーム** として扱い、サーバー側の許
 ## 認証
 
 - `OPENCLAW_GATEWAY_TOKEN`（または `--token`）が設定されている場合、`connect.params.auth.token` が一致しなければソケットはクローズされます。
-- ペアリング後、Gateway は接続のロール + スコープにスコープされた **デバイス トークン** を発行します。これは `hello-ok.auth.deviceToken` で返され、将来の接続のためにクライアントが永続化する必要があります。
+- ペアリング後、ゲートウェイは接続
+  ロール + スコープにスコープ付きの **デバイストークン** を発行します。 これは`hello-ok.auth.deviceToken` に返され、今後の接続のためにクライアントによって継続される
+  である必要があります。
 - デバイス トークンは `device.token.rotate` および `device.token.revoke` からローテーション／失効できます（`operator.pairing` スコープが必要）。
 
 ## デバイス アイデンティティ + ペアリング
@@ -198,7 +195,8 @@ Gateway はこれらを **クレーム** として扱い、サーバー側の許
 - Gateway はデバイス + ロールごとにトークンを発行します。
 - 新しいデバイス ID には、ローカル自動承認が有効でない限り、ペアリング承認が必要です。
 - **ローカル** 接続には、ループバックおよび Gateway ホスト自身の tailnet アドレスが含まれます（同一ホストの tailnet バインドでも自動承認できるようにするため）。
-- すべての WS クライアントは、`connect`（operator + node）中に `device` のアイデンティティを含める必要があります。
+- すべてのWSクライアントは、`connect` (演算子+ノード)中に`device` identityを含める必要があります。
+  すべての WS クライアントは、`connect`（operator + node）中に `device` のアイデンティティを含める必要があります。
   コントロール UI は、`gateway.controlUi.allowInsecureAuth` が有効な場合に **のみ** 省略できます
   （またはブレークグラス用途として `gateway.controlUi.dangerouslyDisableDeviceAuth`）。
 - 非ローカル接続は、サーバーが提供する `connect.challenge` の nonce に署名する必要があります。
@@ -210,4 +208,5 @@ Gateway はこれらを **クレーム** として扱い、サーバー側の許
 
 ## スコープ
 
-このプロトコルは **完全な Gateway API**（ステータス、チャンネル、モデル、チャット、エージェント、セッション、ノード、承認など）を公開します。正確な API サーフェスは、`src/gateway/protocol/schema.ts` にある TypeBox スキーマによって定義されています。
+このプロトコルは **完全な Gateway API**（ステータス、チャンネル、モデル、チャット、エージェント、セッション、ノード、承認など）を公開します。正確な API サーフェスは、`src/gateway/protocol/schema.ts` にある TypeBox スキーマによって定義されています。 正確なサーフェスは `src/gateway/protocol/schema.ts` の
+TypeBox スキーマによって定義されます。

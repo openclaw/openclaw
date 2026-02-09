@@ -1,15 +1,8 @@
 ---
 summary: "كيفية اتصال Gateway والعُقد ومضيف اللوحة."
 read_when:
-  - "تريد عرضًا موجزًا لنموذج شبكات Gateway"
+  - تريد عرضًا موجزًا لنموذج شبكات Gateway
 title: "نموذج الشبكة"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:11Z
 ---
 
 تتدفق معظم العمليات عبر Gateway (`openclaw gateway`)، وهي عملية واحدة طويلة التشغيل تمتلك اتصالات القنوات ومستوى التحكّم عبر WebSocket.

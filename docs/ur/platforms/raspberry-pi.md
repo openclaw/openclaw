@@ -5,13 +5,6 @@ read_when:
   - ARM ڈیوائسز پر OpenClaw چلانا
   - کم لاگت، ہمہ وقت دستیاب ذاتی AI بنانا
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:42Z
 ---
 
 # Raspberry Pi پر OpenClaw
@@ -28,13 +21,13 @@ Raspberry Pi پر ایک مستقل، ہمہ وقت آن OpenClaw Gateway چلا
 
 ## ہارڈویئر ضروریات
 
-| Pi ماڈل         | RAM     | کام کرتا ہے؟  | نوٹس                              |
-| --------------- | ------- | ------------- | --------------------------------- |
+| Pi ماڈل         | RAM     | کام کرتا ہے؟ | نوٹس                              |
+| --------------- | ------- | ------------ | --------------------------------- |
 | **Pi 5**        | 4GB/8GB | ✅ بہترین     | سب سے تیز، سفارش کردہ             |
 | **Pi 4**        | 4GB     | ✅ اچھا       | زیادہ تر صارفین کے لیے موزوں      |
 | **Pi 4**        | 2GB     | ✅ قابلِ قبول | کام کرتا ہے، swap شامل کریں       |
-| **Pi 4**        | 1GB     | ⚠️ تنگ        | swap کے ساتھ ممکن، کم از کم کنفیگ |
-| **Pi 3B+**      | 1GB     | ⚠️ سست        | کام کرتا ہے مگر سست               |
+| **Pi 4**        | 1GB     | ⚠️ تنگ       | swap کے ساتھ ممکن، کم از کم کنفیگ |
+| **Pi 3B+**      | 1GB     | ⚠️ سست       | کام کرتا ہے مگر سست               |
 | **Pi Zero 2 W** | 512MB   | ❌            | سفارش نہیں کی جاتی                |
 
 **کم از کم خصوصیات:** 1GB RAM، 1 کور، 500MB ڈسک  
@@ -48,7 +41,7 @@ Raspberry Pi پر ایک مستقل، ہمہ وقت آن OpenClaw Gateway چلا
 - نیٹ ورک کنکشن (Ethernet یا WiFi)
 - تقریباً 30 منٹ
 
-## 1) OS فلیش کریں
+## 1. OS فلیش کریں
 
 ہیڈ لیس سرور کے لیے **Raspberry Pi OS Lite (64-bit)** استعمال کریں — ڈیسک ٹاپ کی ضرورت نہیں۔
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) سسٹم سیٹ اپ
+## 3. سسٹم سیٹ اپ
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Node.js 22 (ARM64) انسٹال کریں
+## 4. Node.js 22 (ARM64) انسٹال کریں
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Swap شامل کریں (2GB یا کم کے لیے اہم)
+## 5. Swap شامل کریں (2GB یا کم کے لیے اہم)
 
 Swap آؤٹ آف میموری کریشز سے بچاتا ہے:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) OpenClaw انسٹال کریں
+## 6. OpenClaw انسٹال کریں
 
 ### آپشن A: معیاری انسٹال (سفارش کردہ)
 
@@ -134,7 +127,7 @@ npm link
 
 Hackable انسٹال آپ کو لاگز اور کوڈ تک براہِ راست رسائی دیتا ہے — ARM مخصوص مسائل کی ڈیبگنگ کے لیے مفید۔
 
-## 7) آن بورڈنگ چلائیں
+## 7. آن بورڈنگ چلائیں
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) ڈیش بورڈ تک رسائی
+## 9. ڈیش بورڈ تک رسائی
 
 چونکہ Pi ہیڈ لیس ہے، SSH سرنگ استعمال کریں:
 
@@ -190,7 +183,7 @@ sudo systemctl restart openclaw
 
 ### USB SSD استعمال کریں (بڑی بہتری)
 
-SD کارڈ سست ہوتے ہیں اور جلد گھس جاتے ہیں۔ USB SSD کارکردگی کو نمایاں طور پر بہتر کرتا ہے:
+SD cards are slow and wear out. A USB SSD dramatically improves performance:
 
 ```bash
 # Check if booting from USB
@@ -230,19 +223,19 @@ htop
 
 OpenClaw کی زیادہ تر خصوصیات ARM64 پر کام کرتی ہیں، مگر کچھ بیرونی بائنریز کو ARM بلڈ درکار ہو سکتی ہے:
 
-| اوزار              | ARM64 اسٹیٹس | نوٹس                                |
-| ------------------ | ------------ | ----------------------------------- |
-| Node.js            | ✅           | بہترین طور پر کام کرتا ہے           |
-| WhatsApp (Baileys) | ✅           | خالص JS، کوئی مسئلہ نہیں            |
-| Telegram           | ✅           | خالص JS، کوئی مسئلہ نہیں            |
+| اوزار                                 | ARM64 اسٹیٹس | نوٹس                                |
+| ------------------------------------- | ------------ | ----------------------------------- |
+| Node.js               | ✅            | بہترین طور پر کام کرتا ہے           |
+| WhatsApp (Baileys) | ✅            | خالص JS، کوئی مسئلہ نہیں            |
+| Telegram                              | ✅            | خالص JS، کوئی مسئلہ نہیں            |
 | gog (Gmail CLI)    | ⚠️           | ARM ریلیز چیک کریں                  |
-| Chromium (browser) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (browser) | ✅            | `sudo apt install chromium-browser` |
 
-اگر کوئی skill ناکام ہو، تو چیک کریں کہ اس کی بائنری کا ARM بلڈ موجود ہے یا نہیں۔ بہت سے Go/Rust اوزاروں میں ہوتا ہے؛ کچھ میں نہیں۔
+If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
 
 ### 32-بٹ بمقابلہ 64-بٹ
 
-**ہمیشہ 64-بٹ OS استعمال کریں۔** Node.js اور کئی جدید اوزار اس کا تقاضا کرتے ہیں۔ چیک کرنے کے لیے:
+**Always use 64-bit OS.** Node.js and many modern tools require it. Check with:
 
 ```bash
 uname -m
@@ -268,7 +261,7 @@ uname -m
 }
 ```
 
-**Pi پر لوکل LLMs چلانے کی کوشش نہ کریں** — حتیٰ کہ چھوٹے ماڈلز بھی بہت سست ہوتے ہیں۔ بھاری کام Claude/GPT کو کرنے دیں۔
+**Don't try to run local LLMs on a Pi** — even small models are too slow. Let Claude/GPT do the heavy lifting.
 
 ---
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## لاگت کا موازنہ
 
-| سیٹ اپ         | ایک وقتی لاگت | ماہانہ لاگت | نوٹس                            |
-| -------------- | ------------- | ----------- | ------------------------------- |
-| **Pi 4 (2GB)** | ~$45          | $0          | + بجلی (~$5/سال)                |
-| **Pi 4 (4GB)** | ~$55          | $0          | سفارش کردہ                      |
-| **Pi 5 (4GB)** | ~$60          | $0          | بہترین کارکردگی                 |
-| **Pi 5 (8GB)** | ~$80          | $0          | ضرورت سے زیادہ مگر مستقبل محفوظ |
-| DigitalOcean   | $0            | $6/ماہ      | $72/سال                         |
-| Hetzner        | $0            | €3.79/ماہ   | ~$50/سال                        |
+| سیٹ اپ                            | ایک وقتی لاگت        | ماہانہ لاگت               | نوٹس                                                |
+| --------------------------------- | -------------------- | ------------------------- | --------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                        | + بجلی (~$5/سال) |
+| **Pi 4 (4GB)** | ~$55 | $0                        | سفارش کردہ                                          |
+| **Pi 5 (4GB)** | ~$60 | $0                        | بہترین کارکردگی                                     |
+| **Pi 5 (8GB)** | ~$80 | $0                        | ضرورت سے زیادہ مگر مستقبل محفوظ                     |
+| DigitalOcean                      | $0                   | $6/ماہ                    | $72/سال                                             |
+| Hetzner                           | $0                   | €3.79/ماہ | ~$50/سال                            |
 
 **بریک ایون:** کلاؤڈ VPS کے مقابلے میں Pi تقریباً 6–12 ماہ میں اپنی لاگت پوری کر لیتا ہے۔
 

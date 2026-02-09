@@ -4,13 +4,6 @@ read_when:
   - Kanal hesaplarını eklemek/kaldırmak istediğinizde (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (eklenti)/Signal/iMessage)
   - Kanal durumunu kontrol etmek veya kanal günlüklerini izlemek istediğinizde
 title: "kanallar"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
 ---
 
 # `openclaw channels`
@@ -55,7 +48,7 @@ openclaw channels logout --channel whatsapp
 - Yönlendirmeli düzeltmeler için `openclaw doctor` kullanın.
 - `openclaw channels list`, `Claude: HTTP 403 ... user:profile` yazdırır → kullanım anlık görüntüsü için `user:profile` kapsamı gerekir. `--no-usage` kullanın veya bir claude.ai oturum anahtarı sağlayın (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), ya da Claude Code CLI üzerinden yeniden kimlik doğrulaması yapın.
 
-## Yetenekler yoklaması
+## Capabilities probe
 
 Sağlayıcı yetenek ipuçlarını (mevcut olduğunda intent'ler/kapsamlar) ve statik özellik desteğini alın:
 

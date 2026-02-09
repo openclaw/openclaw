@@ -5,13 +5,6 @@ read_when:
   - Travail sur les migrations de configuration ou les workflows doctor
   - Gestion des schémas de configuration des plugins ou du blocage du chargement des plugins
 title: "Validation stricte de la configuration"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:38Z
 ---
 
 # Validation stricte de la configuration (migrations uniquement via doctor)
@@ -72,7 +65,7 @@ Autorisé (diagnostic uniquement) :
 - `openclaw status`
 - `openclaw gateway status`
 
-Tout le reste doit échouer immédiatement avec : « Configuration invalide. Exécutez `openclaw doctor --fix`. »
+Tout le reste doit échouer immédiatement avec : « Configuration invalide. Exécutez `openclaw doctor --fix`.
 
 ## Format UX des erreurs
 

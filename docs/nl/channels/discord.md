@@ -3,13 +3,6 @@ summary: "Status van Discord-botondersteuning, mogelijkheden en configuratie"
 read_when:
   - Werken aan functies voor het Discord-kanaal
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # Discord (Bot API)
@@ -71,8 +64,8 @@ Minimale config:
     - De `discord`-tool wordt alleen beschikbaar gesteld wanneer het huidige kanaal Discord is.
 13. Native opdrachten gebruiken geïsoleerde sessiesleutels (`agent:<agentId>:discord:slash:<userId>`) in plaats van de gedeelde `main`-sessie.
 
-Let op: Naam → id-resolutie gebruikt zoeken naar serverleden en vereist Server Members Intent; als de bot geen leden kan doorzoeken, gebruik id’s of `<@id>`-vermeldingen.  
-Let op: Slugs zijn lowercase met spaties vervangen door `-`. Kanaalnamen worden geslugged zonder de leidende `#`.  
+Let op: Naam → id-resolutie gebruikt zoeken naar serverleden en vereist Server Members Intent; als de bot geen leden kan doorzoeken, gebruik id’s of `<@id>`-vermeldingen.
+Let op: Slugs zijn lowercase met spaties vervangen door `-`. Kanaalnamen worden geslugged zonder de leidende `#`.
 Let op: Servercontext-`[from:]`-regels bevatten `author.tag` + `id` om ping-klare antwoorden te vergemakkelijken.
 
 ## Config-wegschrijvingen
@@ -91,7 +84,7 @@ Uitschakelen met:
 
 Dit is de installatie in het “Discord Developer Portal” voor het draaien van OpenClaw in een serverkanaal zoals `#help`.
 
-### 1) Maak de Discord-app + botgebruiker
+### 1. Maak de Discord-app + botgebruiker
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. In je app:
@@ -109,7 +102,7 @@ In **Bot** → **Privileged Gateway Intents**, schakel in:
 
 Je hebt **Presence Intent** meestal **niet** nodig. Het instellen van de eigen aanwezigheid van de bot (actie `setPresence`) gebruikt gateway OP3 en vereist deze intent niet; deze is alleen nodig als je aanwezigheidupdates van andere serverleden wilt ontvangen.
 
-### 3) Genereer een uitnodigings-URL (OAuth2 URL Generator)
+### 3. Genereer een uitnodigings-URL (OAuth2 URL Generator)
 
 In je app: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Vermijd **Administrator** tenzij je aan het debuggen bent en de bot volledig ver
 
 Kopieer de gegenereerde URL, open deze, kies je server en installeer de bot.
 
-### 4) Verkrijg de id’s (server/gebruiker/kanaal)
+### 4. Verkrijg de id’s (server/gebruiker/kanaal)
 
 Discord gebruikt overal numerieke id’s; OpenClaw-config verkiest id’s.
 
@@ -207,7 +200,7 @@ Notities:
 - Door de bot geschreven berichten worden standaard genegeerd; stel `channels.discord.allowBots=true` in om ze toe te staan (eigen berichten blijven gefilterd).
 - Waarschuwing: als je antwoorden op andere bots toestaat (`channels.discord.allowBots=true`), voorkom bot-tot-bot-antwoordlussen met `requireMention`, `channels.discord.guilds.*.channels.<id>.users`-toegestane lijsten en/of door guardrails te wissen in `AGENTS.md` en `SOUL.md`.
 
-### 6) Verifieer dat het werkt
+### 6. Verifieer dat het werkt
 
 1. Start de Gateway.
 2. Stuur in je serverkanaal: `@Krill hello` (of wat je botnaam ook is).
@@ -402,27 +395,27 @@ Notities bij toegestane lijsten (PK ingeschakeld):
 
 ### Standaarden voor toolacties
 
-| Actiegroep     | Standaard     | Notities                              |
-| -------------- | ------------- | ------------------------------------- |
-| reactions      | ingeschakeld  | Reageren + reacties tonen + emojiList |
-| stickers       | ingeschakeld  | Stickers verzenden                    |
-| emojiUploads   | ingeschakeld  | Emoji’s uploaden                      |
-| stickerUploads | ingeschakeld  | Stickers uploaden                     |
-| polls          | ingeschakeld  | Polls maken                           |
-| permissions    | ingeschakeld  | Snapshot van kanaalrechten            |
-| messages       | ingeschakeld  | Lezen/verzenden/bewerken/verwijderen  |
-| threads        | ingeschakeld  | Maken/lijsten/antwoorden              |
-| pins           | ingeschakeld  | Vastzetten/losmaken/lijsten           |
-| search         | ingeschakeld  | Berichten zoeken (previewfunctie)     |
-| memberInfo     | ingeschakeld  | Lidgegevens                           |
-| roleInfo       | ingeschakeld  | Rollenlijst                           |
-| channelInfo    | ingeschakeld  | Kanaalinformatie + lijst              |
-| channels       | ingeschakeld  | Kanaal-/categoriebeheer               |
-| voiceStatus    | ingeschakeld  | Voice-status opzoeken                 |
-| events         | ingeschakeld  | Geplande events tonen/maken           |
-| roles          | uitgeschakeld | Rollen toevoegen/verwijderen          |
-| moderation     | uitgeschakeld | Timeout/kick/ban                      |
-| presence       | uitgeschakeld | Botstatus/-activiteit (setPresence)   |
+| Actiegroep     | Standaard     | Notities                                               |
+| -------------- | ------------- | ------------------------------------------------------ |
+| reactions      | ingeschakeld  | Reageren + reacties tonen + emojiList                  |
+| stickers       | ingeschakeld  | Stickers verzenden                                     |
+| emojiUploads   | ingeschakeld  | Emoji’s uploaden                                       |
+| stickerUploads | ingeschakeld  | Stickers uploaden                                      |
+| polls          | ingeschakeld  | Polls maken                                            |
+| permissions    | ingeschakeld  | Snapshot van kanaalrechten                             |
+| messages       | ingeschakeld  | Lezen/verzenden/bewerken/verwijderen                   |
+| threads        | ingeschakeld  | Maken/lijsten/antwoorden                               |
+| pins           | ingeschakeld  | Vastzetten/losmaken/lijsten                            |
+| search         | ingeschakeld  | Berichten zoeken (previewfunctie)   |
+| memberInfo     | ingeschakeld  | Lid informatie                                         |
+| roleInfo       | ingeschakeld  | Rollenlijst                                            |
+| channelInfo    | ingeschakeld  | Kanaalinformatie + lijst                               |
+| channels       | ingeschakeld  | Kanaal-/categoriebeheer                                |
+| voiceStatus    | ingeschakeld  | Voice-status opzoeken                                  |
+| events         | ingeschakeld  | Geplande events tonen/maken                            |
+| roles          | uitgeschakeld | Rollen toevoegen/verwijderen                           |
+| moderation     | uitgeschakeld | Timeout/kick/ban                                       |
+| presence       | uitgeschakeld | Botstatus/-activiteit (setPresence) |
 
 - `replyToMode`: `off` (standaard), `first` of `all`. Geldt alleen wanneer het model een reply-tag bevat.
 

@@ -4,18 +4,11 @@ read_when:
   - မော်ဒယ် ပံ့ပိုးသူကို ရွေးချယ်လိုသောအခါ
   - LLM အတည်ပြုခြင်းနှင့် မော်ဒယ် ရွေးချယ်ခြင်းအတွက် အမြန်တပ်ဆင်နမူနာများ လိုအပ်သောအခါ
 title: "Model Provider အမြန်စတင်လမ်းညွှန်"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:47Z
 ---
 
 # Model Providers
 
-OpenClaw သည် LLM ပံ့ပိုးသူများ အများအပြားကို အသုံးပြုနိုင်ပါသည်။ တစ်ခုကို ရွေးချယ်ပြီး အတည်ပြုခြင်းကို လုပ်ဆောင်ပါ၊ ထို့နောက် မူလ မော်ဒယ်ကို `provider/model` အဖြစ် သတ်မှတ်ပါ။
+OpenClaw သည် LLM providers များစွာကို အသုံးပြုနိုင်ပါသည်။ တစ်ခုကို ရွေးချယ်၍ authenticate လုပ်ပြီး default model ကို `provider/model` အဖြစ် သတ်မှတ်ပါ။
 
 ## အထူးအကြံပြုချက်: Venice (Venice AI)
 
@@ -54,4 +47,4 @@ Venice သည် ကိုယ်ရေးအချက်အလက်ကို �
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-ပံ့ပိုးသူ စာရင်းအပြည့်အစုံ (xAI, Groq, Mistral စသည်) နှင့် အဆင့်မြင့် ဖွဲ့စည်းပြင်ဆင်မှုများအတွက် [Model providers](/concepts/model-providers) ကို ကြည့်ရှုပါ။
+Provider catalog အပြည့်အစုံ (xAI, Groq, Mistral, etc.) အတွက် နှင့် advanced configuration များအတွက် [Model providers](/concepts/model-providers) ကို ကြည့်ပါ။

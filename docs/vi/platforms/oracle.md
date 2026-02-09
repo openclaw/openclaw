@@ -5,13 +5,6 @@ read_when:
   - Tìm VPS chi phí thấp để chạy OpenClaw
   - Muốn chạy OpenClaw 24/7 trên một máy chủ nhỏ
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:59Z
 ---
 
 # OpenClaw trên Oracle Cloud (OCI)
@@ -27,13 +20,13 @@ Gói miễn phí của Oracle có thể rất phù hợp cho OpenClaw (đặc bi
 
 ## So sánh chi phí (2026)
 
-| Nhà cung cấp | Gói             | Cấu hình                | Giá/tháng | Ghi chú                  |
-| ------------ | --------------- | ----------------------- | --------- | ------------------------ |
-| Oracle Cloud | Always Free ARM | tối đa 4 OCPU, 24GB RAM | $0        | ARM, dung lượng hạn chế  |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM         | ~ $4      | Lựa chọn trả phí rẻ nhất |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6        | UI dễ dùng, tài liệu tốt |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6        | Nhiều khu vực            |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5        | Hiện thuộc Akamai        |
+| Nhà cung cấp | Gói             | Cấu hình                | Giá/tháng            | Ghi chú                  |
+| ------------ | --------------- | ----------------------- | -------------------- | ------------------------ |
+| Oracle Cloud | Always Free ARM | tối đa 4 OCPU, 24GB RAM | $0                   | ARM, dung lượng hạn chế  |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM         | ~ $4 | Lựa chọn trả phí rẻ nhất |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6                   | UI dễ dùng, tài liệu tốt |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6                   | Nhiều khu vực            |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5                   | Hiện thuộc Akamai        |
 
 ---
 
@@ -43,7 +36,7 @@ Gói miễn phí của Oracle có thể rất phù hợp cho OpenClaw (đặc bi
 - Tài khoản Tailscale (miễn phí tại [tailscale.com](https://tailscale.com))
 - Khoảng ~30 phút
 
-## 1) Tạo một OCI Instance
+## 1. Tạo một OCI Instance
 
 1. Đăng nhập vào [Oracle Cloud Console](https://cloud.oracle.com/)
 2. Điều hướng đến **Compute → Instances → Create Instance**
@@ -58,9 +51,9 @@ Gói miễn phí của Oracle có thể rất phù hợp cho OpenClaw (đặc bi
 4. Nhấn **Create**
 5. Ghi lại địa chỉ IP công khai
 
-**Mẹo:** Nếu việc tạo instance thất bại với lỗi "Out of capacity", hãy thử availability domain khác hoặc thử lại sau. Dung lượng free tier là có hạn.
+**Tip:** If instance creation fails with "Out of capacity", try a different availability domain or retry later. Free tier capacity is limited.
 
-## 2) Kết nối và cập nhật
+## 2. Kết nối và cập nhật
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Lưu ý:** `build-essential` là cần thiết để biên dịch ARM cho một số dependency.
 
-## 3) Cấu hình người dùng và hostname
+## 3. Cấu hình người dùng và hostname
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Cài đặt Tailscale
+## 4. Cài đặt Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **Từ bây giờ, hãy kết nối qua Tailscale:** `ssh ubuntu@openclaw` (hoặc dùng IP Tailscale).
 
-## 5) Cài đặt OpenClaw
+## 5. Cài đặt OpenClaw
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -114,9 +107,9 @@ Khi được hỏi "How do you want to hatch your bot?", hãy chọn **"Do this 
 
 > Lưu ý: Nếu gặp vấn đề build native trên ARM, hãy bắt đầu với các gói hệ thống (ví dụ: `sudo apt install -y build-essential`) trước khi dùng đến Homebrew.
 
-## 6) Cấu hình Gateway (loopback + xác thực bằng token) và bật Tailscale Serve
+## 6. Cấu hình Gateway (loopback + xác thực bằng token) và bật Tailscale Serve
 
-Dùng xác thực bằng token làm mặc định. Cách này dễ dự đoán và tránh phải bật các cờ “insecure auth” trong Control UI.
+Use token auth as the default. It’s predictable and avoids needing any “insecure auth” Control UI flags.
 
 ```bash
 # Keep the Gateway private on the VM
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Xác minh
+## 7. Xác minh
 
 ```bash
 # Check version
@@ -149,9 +142,9 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) Siết chặt bảo mật VCN
+## 8. Siết chặt bảo mật VCN
 
-Khi mọi thứ đã hoạt động, hãy siết chặt VCN để chặn toàn bộ lưu lượng ngoại trừ Tailscale. Virtual Cloud Network của OCI hoạt động như một firewall ở rìa mạng — lưu lượng bị chặn trước khi tới instance.
+Now that everything is working, lock down the VCN to block all traffic except Tailscale. OCI's Virtual Cloud Network acts as a firewall at the network edge — traffic is blocked before it reaches your instance.
 
 1. Vào **Networking → Virtual Cloud Networks** trong OCI Console
 2. Chọn VCN của bạn → **Security Lists** → Default Security List
@@ -159,7 +152,7 @@ Khi mọi thứ đã hoạt động, hãy siết chặt VCN để chặn toàn b
    - `0.0.0.0/0 UDP 41641` (Tailscale)
 4. Giữ nguyên rule egress mặc định (cho phép outbound)
 
-Việc này sẽ chặn SSH cổng 22, HTTP, HTTPS và mọi thứ khác ở rìa mạng. Từ nay, bạn chỉ có thể kết nối qua Tailscale.
+This blocks SSH on port 22, HTTP, HTTPS, and everything else at the network edge. From now on, you can only connect via Tailscale.
 
 ---
 
@@ -173,7 +166,7 @@ https://openclaw.<tailnet-name>.ts.net/
 
 Thay `<tailnet-name>` bằng tên tailnet của bạn (hiển thị trong `tailscale status`).
 
-Không cần SSH tunnel. Tailscale cung cấp:
+No SSH tunnel needed. Tailscale provides:
 
 - Mã hóa HTTPS (chứng chỉ tự động)
 - Xác thực qua danh tính Tailscale
@@ -237,7 +230,7 @@ Sau đó mở `http://localhost:18789`.
 
 ### Tạo instance thất bại ("Out of capacity")
 
-Instance ARM free tier rất được ưa chuộng. Hãy thử:
+Free tier ARM instances are popular. Try:
 
 - Availability domain khác
 - Thử lại vào giờ thấp điểm (sáng sớm)
@@ -276,13 +269,13 @@ systemctl --user restart openclaw-gateway
 
 ### Vấn đề binary ARM
 
-Một số công cụ có thể chưa có bản ARM. Kiểm tra:
+Some tools may not have ARM builds. Check:
 
 ```bash
 uname -m  # Should show aarch64
 ```
 
-Phần lớn gói npm hoạt động tốt. Với binary, hãy tìm các bản phát hành `linux-arm64` hoặc `aarch64`.
+Most npm packages work fine. For binaries, look for `linux-arm64` or `aarch64` releases.
 
 ---
 

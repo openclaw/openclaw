@@ -5,26 +5,19 @@ read_when:
   - نئے iOS/Android نوڈ کو جوڑنا
   - OpenClaw کی سکیورٹی پوزیشن کا جائزہ لینا
 title: "جوڑی بنانا"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:59Z
 ---
 
 # جوڑی بنانا
 
-“جوڑی بنانا” OpenClaw میں **مالک کی واضح منظوری** کا مرحلہ ہے۔
-یہ دو جگہوں پر استعمال ہوتا ہے:
+“Pairing” is OpenClaw’s explicit **owner approval** step.
+It is used in two places:
 
 1. **DM جوڑی بنانا** (کون بوٹ سے بات کر سکتا ہے)
 2. **نوڈ جوڑی بنانا** (کون سے ڈیوائسز/نوڈز گیٹ وے نیٹ ورک میں شامل ہو سکتے ہیں)
 
 سکیورٹی سیاق: [Security](/gateway/security)
 
-## 1) DM جوڑی بنانا (ان باؤنڈ چیٹ رسائی)
+## 1. DM جوڑی بنانا (ان باؤنڈ چیٹ رسائی)
 
 جب کسی چینل کو DM پالیسی `pairing` کے ساتھ کنفیگر کیا جاتا ہے، تو نامعلوم ارسال کنندگان کو ایک مختصر کوڈ ملتا ہے اور آپ کی منظوری تک ان کا پیغام **پروسیس نہیں** کیا جاتا۔
 
@@ -33,7 +26,7 @@ x-i18n:
 جوڑی بنانے کے کوڈز:
 
 - 8 حروف، بڑے حروف میں، بغیر مبہم حروف (`0O1I`)۔
-- **1 گھنٹے بعد میعاد ختم**۔ بوٹ جوڑی بنانے کا پیغام صرف اسی وقت بھیجتا ہے جب نئی درخواست بنے (تقریباً فی ارسال کنندہ فی گھنٹہ ایک بار)۔
+- **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
 - زیرِ التوا DM جوڑی بنانے کی درخواستیں بطورِ طے شدہ **ہر چینل پر 3** تک محدود ہیں؛ اضافی درخواستیں اس وقت تک نظرانداز کی جاتی ہیں جب تک کوئی ایک میعاد ختم نہ ہو یا منظور نہ ہو جائے۔
 
 ### کسی ارسال کنندہ کی منظوری
@@ -54,10 +47,10 @@ openclaw pairing approve telegram <CODE>
 
 انہیں حساس سمجھیں (یہ آپ کے اسسٹنٹ تک رسائی کو کنٹرول کرتے ہیں)۔
 
-## 2) نوڈ ڈیوائس جوڑی بنانا (iOS/Android/macOS/ہیڈلیس نوڈز)
+## 2. نوڈ ڈیوائس جوڑی بنانا (iOS/Android/macOS/ہیڈلیس نوڈز)
 
-نوڈز گیٹ وے سے **ڈیوائسز** کے طور پر `role: node` کے ساتھ جڑتے ہیں۔ گیٹ وے
-ایک ڈیوائس جوڑی بنانے کی درخواست بناتا ہے جسے منظور کرنا لازم ہے۔
+Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
+creates a device pairing request that must be approved.
 
 ### نوڈ ڈیوائس کی منظوری
 
@@ -76,8 +69,8 @@ openclaw devices reject <requestId>
 
 ### نوٹس
 
-- لیگیسی `node.pair.*` API (CLI: `openclaw nodes pending/approve`) ایک
-  علیحدہ گیٹ وے-ملکیت والا جوڑی بنانے کا اسٹور ہے۔ WS نوڈز کو اب بھی ڈیوائس جوڑی بنانے کی ضرورت ہوتی ہے۔
+- The legacy `node.pair.*` API (CLI: `openclaw nodes pending/approve`) is a
+  separate gateway-owned pairing store. WS nodes still require device pairing.
 
 ## متعلقہ دستاویزات
 

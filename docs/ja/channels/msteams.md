@@ -1,15 +1,8 @@
 ---
-summary: 「Microsoft Teams ボットのサポート状況、機能、設定」
+summary: "Microsoft Teams ボットのサポート状況、機能、設定"
 read_when:
   - MS Teams チャンネル機能に取り組んでいるとき
-title: 「Microsoft Teams」
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:52Z
+title: "Microsoft Teams"
 ---
 
 # Microsoft Teams（プラグイン）
@@ -18,13 +11,13 @@ x-i18n:
 
 更新日: 2026-01-21
 
-ステータス: テキスト + DM 添付ファイルはサポートされています。チャンネル／グループでのファイル送信には `sharePointSiteId` + Graph 権限が必要です（[グループチャットでのファイル送信](#sending-files-in-group-chats) を参照）。投票は Adaptive Cards 経由で送信されます。
+ステータス: テキスト + DM 添付ファイルはサポートされています。チャンネル／グループでのファイル送信には `sharePointSiteId` + Graph 権限が必要です（[グループチャットでのファイル送信](#sending-files-in-group-chats) を参照）。投票は Adaptive Cards 経由で送信されます。 アンケートはアダプティブカードで送信されます。
 
 ## プラグインが必要
 
 Microsoft Teams はプラグインとして提供され、コアインストールには含まれません。
 
-**破壊的変更（2026.1.15）:** MS Teams はコアから分離されました。使用する場合は、プラグインをインストールする必要があります。
+**破壊的変更（2026.1.15）:** MS Teams はコアから分離されました。使用する場合は、プラグインをインストールする必要があります。 それを使用する場合は、プラグインをインストールする必要があります。
 
 理由: コアインストールを軽量に保ち、MS Teams 依存関係を独立して更新できるようにするためです。
 
@@ -68,7 +61,7 @@ openclaw plugins install ./extensions/msteams
 }
 ```
 
-注記: グループチャットはデフォルトでブロックされています（`channels.msteams.groupPolicy: "allowlist"`）。グループ返信を許可するには `channels.msteams.groupAllowFrom` を設定してください（または、メンション必須で任意メンバーを許可する `groupPolicy: "open"` を使用します）。
+注記: グループチャットはデフォルトでブロックされています（`channels.msteams.groupPolicy: "allowlist"`）。グループ返信を許可するには `channels.msteams.groupAllowFrom` を設定してください（または、メンション必須で任意メンバーを許可する `groupPolicy: "open"` を使用します）。 グループの返信を許可するには、 `channels.msteams.groupAllowFrom` を設定します。（またはメンションされたメンバーを許可するには、 `groupPolicy: "open"` を使用します）
 
 ## 目標
 
@@ -92,12 +85,12 @@ openclaw plugins install ./extensions/msteams
 
 **DM アクセス**
 
-- デフォルト: `channels.msteams.dmPolicy = "pairing"`。不明な送信者は承認されるまで無視されます。
-- `channels.msteams.allowFrom` は AAD オブジェクト ID、UPN、または表示名を受け付けます。ウィザードは、資格情報が許可する場合に Microsoft Graph を介して名前を ID に解決します。
+- デフォルト: `channels.msteams.dmPolicy = "pairing"`。不明な送信者は承認されるまで無視されます。 承認されるまで不明な送信者は無視されます。
+- `channels.msteams.allowFrom` は AAD オブジェクト ID、UPN、または表示名を受け付けます。ウィザードは、資格情報が許可する場合に Microsoft Graph を介して名前を ID に解決します。 資格情報が許可されている場合、ウィザードは名前をMicrosoft Graph経由でIDに解決します。
 
 **グループアクセス**
 
-- デフォルト: `channels.msteams.groupPolicy = "allowlist"`（`groupAllowFrom` を追加しない限りブロック）。未設定時のデフォルトを上書きするには `channels.defaults.groupPolicy` を使用します。
+- `channels.msteams.teams.<teamId> .tools`: チャンネル上書きがない場合に使用される、チームごとのデフォルトツールポリシー上書き（`allow`/`deny`/`alsoAllow`）。
 - `channels.msteams.groupAllowFrom` は、グループチャット／チャンネルでトリガーできる送信者を制御します（`channels.msteams.allowFrom` にフォールバック）。
 - 任意メンバーを許可するには `groupPolicy: "open"` を設定します（デフォルトでは引き続きメンション必須）。
 - **チャンネルを一切許可しない** 場合は `channels.msteams.groupPolicy: "disabled"` を設定します。
@@ -142,7 +135,7 @@ openclaw plugins install ./extensions/msteams
 }
 ```
 
-## 仕組み
+## How it works
 
 1. Microsoft Teams プラグインをインストールします。
 2. **Azure Bot**（App ID + シークレット + テナント ID）を作成します。
@@ -160,16 +153,16 @@ OpenClaw を設定する前に、Azure Bot リソースを作成する必要が�
 1. [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot) にアクセスします。
 2. **Basics** タブを入力します。
 
-   | フィールド         | 値                                                     |
-   | ------------------ | ------------------------------------------------------ |
+   | フィールド              | 値                                                     |
+   | ------------------ | ----------------------------------------------------- |
    | **Bot handle**     | ボット名（例: `openclaw-msteams`、一意である必要あり） |
-   | **Subscription**   | Azure サブスクリプションを選択                         |
-   | **Resource group** | 新規作成または既存を使用                               |
-   | **Pricing tier**   | 開発／テスト用に **Free**                              |
-   | **Type of App**    | **Single Tenant**（推奨、下記注記参照）                |
-   | **Creation type**  | **Create new Microsoft App ID**                        |
+   | **Subscription**   | Azure サブスクリプションを選択                                    |
+   | **Resource group** | 新規作成または既存を使用                                          |
+   | **Pricing tier**   | 開発／テスト用に **Free**                                     |
+   | **Type of App**    | **Single Tenant**（推奨、下記注記参照）                          |
+   | **Creation type**  | **Create new Microsoft App ID**                       |
 
-> **非推奨のお知らせ:** 新規のマルチテナントボットの作成は 2025-07-31 以降非推奨です。新規ボットには **Single Tenant** を使用してください。
+> **廃止通知:** マルチテナントボットの作成は2025-07-31以降推奨されませんでした。 **非推奨のお知らせ:** 新規のマルチテナントボットの作成は 2025-07-31 以降非推奨です。新規ボットには **Single Tenant** を使用してください。
 
 3. **Review + create** → **Create** をクリックします（約 1～2 分待機）。
 
@@ -192,11 +185,11 @@ OpenClaw を設定する前に、Azure Bot リソースを作成する必要が�
 
 1. Azure Bot → **Channels**
 2. **Microsoft Teams** → Configure → Save
-3. 利用規約に同意します。
+3. 利用規約に同意する
 
 ## ローカル開発（トンネリング）
 
-Teams は `localhost` に到達できません。ローカル開発にはトンネルを使用します。
+Teams は `localhost` に到達できません。ローカル開発にはトンネルを使用します。 地域開発のためにトンネルを使用してください:
 
 **オプション A: ngrok**
 
@@ -276,6 +269,7 @@ JSON マニフェストを手編集するより簡単な場合が多いです。
    ```
 
    設定キーの代わりに環境変数を使用することもできます。
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -290,12 +284,12 @@ JSON マニフェストを手編集するより簡単な場合が多いです。
 ## 履歴コンテキスト
 
 - `channels.msteams.historyLimit` は、最近のチャンネル／グループメッセージをプロンプトに含める数を制御します。
-- `messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定します（デフォルト 50）。
-- DM 履歴は `channels.msteams.dmHistoryLimit`（ユーザーターン）で制限できます。ユーザーごとの上書き: `channels.msteams.dms["<user_id>"].historyLimit`。
+- `messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定します（デフォルト 50）。 `0`を無効にします（デフォルトは50）。
+- DM 履歴は `channels.msteams.dmHistoryLimit`（ユーザーターン）で制限できます。ユーザーごとの上書き: `channels.msteams.dms["<user_id>"].historyLimit`。 `channels.imessage.dmHistoryLimit`: ユーザー ターン数での DM 履歴上限。ユーザーごとの上書き: `channels.msteams.dms["<user_id>"].historyLimit`。
 
 ## 現在の Teams RSC 権限（マニフェスト）
 
-これらは Teams アプリマニフェスト内の **既存の resourceSpecific 権限** です。アプリがインストールされているチーム／チャット内でのみ適用されます。
+これらは Teams アプリマニフェスト内の **既存の resourceSpecific 権限** です。アプリがインストールされているチーム／チャット内でのみ適用されます。 アプリがインストールされているチーム/チャット内でのみ適用されます。
 
 **チャンネル（チームスコープ）:**
 
@@ -313,7 +307,7 @@ JSON マニフェストを手編集するより簡単な場合が多いです。
 
 ## Teams マニフェスト例（要約）
 
-必須フィールドを含む最小で有効な例です。ID と URL を置き換えてください。
+必須フィールドを含む最小で有効な例です。ID と URL を置き換えてください。 IDとURLを置き換えます。
 
 ```json
 {
@@ -408,14 +402,14 @@ JSON マニフェストを手編集するより簡単な場合が多いです。
 
 ### RSC と Graph API の比較
 
-| 機能                       | RSC 権限                 | Graph API                         |
-| -------------------------- | ------------------------ | --------------------------------- |
-| **リアルタイムメッセージ** | はい（Webhook）          | いいえ（ポーリングのみ）          |
-| **履歴メッセージ**         | いいえ                   | はい（履歴をクエリ可能）          |
-| **セットアップの複雑さ**   | アプリマニフェストのみ   | 管理者同意 + トークンフローが必要 |
-| **オフライン動作**         | いいえ（常時実行が必要） | はい（いつでもクエリ可能）        |
+| Capability      | RSC 権限       | Graph API          |
+| --------------- | ------------ | ------------------ |
+| **リアルタイムメッセージ** | はい（Webhook）  | いいえ（ポーリングのみ）       |
+| **履歴メッセージ**     | いいえ          | はい（履歴をクエリ可能）       |
+| **セットアップの複雑さ**  | アプリマニフェストのみ  | 管理者同意 + トークンフローが必要 |
+| **オフライン動作**     | いいえ（常時実行が必要） | はい（いつでもクエリ可能）      |
 
-**結論:** RSC はリアルタイムリスニング向け、Graph API は履歴アクセス向けです。オフライン中に取りこぼしたメッセージを補完するには、管理者同意が必要な `ChannelMessage.Read.All` を含む Graph API が必要です。
+**結論:** RSC はリアルタイムリスニング向け、Graph API は履歴アクセス向けです。オフライン中に取りこぼしたメッセージを補完するには、管理者同意が必要な `ChannelMessage.Read.All` を含む Graph API が必要です。 オフラインで失敗したメッセージに追加するには、Graph APIに`ChannelMessage.Read.All`が必要です(管理者の同意が必要です)。
 
 ## Graph 有効のメディア + 履歴（チャンネルに必須）
 
@@ -432,7 +426,7 @@ JSON マニフェストを手編集するより簡単な場合が多いです。
 
 ### Webhook タイムアウト
 
-Teams は HTTP Webhook 経由でメッセージを配信します。処理に時間がかかりすぎる場合（例: LLM 応答が遅い場合）、以下が発生する可能性があります。
+Teams は HTTP Webhook 経由でメッセージを配信します。処理に時間がかかりすぎる場合（例: LLM 応答が遅い場合）、以下が発生する可能性があります。 処理に時間がかかりすぎる場合(例:遅いLLM応答)、次のようになります。
 
 - ゲートウェイのタイムアウト
 - Teams によるメッセージの再試行（重複の原因）
@@ -457,7 +451,7 @@ Teams の Markdown は Slack や Discord より制限があります。
 - `channels.msteams.webhook.port`（デフォルト `3978`）
 - `channels.msteams.webhook.path`（デフォルト `/api/messages`）
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled`（デフォルト: pairing）
-- `channels.msteams.allowFrom`: DM の許可リスト（AAD オブジェクト ID、UPN、表示名）。Graph アクセスがある場合、ウィザードがセットアップ中に名前を ID に解決します。
+- `channels.msteams.allowFrom`: allowlist for DM (AAD object ID, UPN, or display names). グラフへのアクセスが可能な場合、セットアップ時に名前をIDに変更します。
 - `channels.msteams.textChunkLimit`: 送信テキストのチャンクサイズ。
 - `channels.msteams.chunkMode`: `length`（デフォルト）または `newline` を使用して、長さ分割前に空行（段落境界）で分割します。
 - `channels.msteams.mediaAllowHosts`: 受信添付のホスト許可リスト（デフォルトは Microsoft／Teams ドメイン）。
@@ -466,8 +460,8 @@ Teams の Markdown は Slack や Discord より制限があります。
 - `channels.msteams.replyStyle`: `thread | top-level`（[返信スタイル](#reply-style-threads-vs-posts) を参照）。
 - `channels.msteams.teams.<teamId>.replyStyle`: チームごとの上書き。
 - `channels.msteams.teams.<teamId>.requireMention`: チームごとの上書き。
-- `channels.msteams.teams.<teamId>.tools`: チャンネル上書きがない場合に使用される、チームごとのデフォルトツールポリシー上書き（`allow`/`deny`/`alsoAllow`）。
 - `channels.msteams.teams.<teamId>.toolsBySender`: チームごとの送信者別ツールポリシー上書き（`"*"` ワイルドカード対応）。
+- `channels.msteams.teams.<teamId>.toolsBySender`: デフォルトでチームごとに送信者ごとのツールポリシーが上書きされます (`"*"`ワイルドカードがサポートされています)。
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: チャンネルごとの上書き。
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: チャンネルごとの上書き。
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: チャンネルごとのツールポリシー上書き（`allow`/`deny`/`alsoAllow`）。
@@ -486,12 +480,12 @@ Teams の Markdown は Slack や Discord より制限があります。
 
 Teams では、同一の基盤データモデル上で 2 種類のチャンネル UI スタイルが導入されています。
 
-| スタイル                | 説明                                                     | 推奨 `replyStyle`      |
-| ----------------------- | -------------------------------------------------------- | ---------------------- |
-| **Posts**（クラシック） | メッセージがカードとして表示され、下にスレッド返信が付く | `thread`（デフォルト） |
-| **Threads**（Slack 風） | メッセージが直線的に流れ、Slack に近い表示               | `top-level`            |
+| スタイル                 | 説明                           | 推奨 `replyStyle` |
+| -------------------- | ---------------------------- | --------------- |
+| **Posts**（クラシック）     | メッセージがカードとして表示され、下にスレッド返信が付く | `thread`（デフォルト） |
+| **Threads**（Slack 風） | メッセージが直線的に流れ、Slack に近い表示     | `top-level`     |
 
-**問題点:** Teams API は、チャンネルがどの UI スタイルを使用しているかを公開していません。誤った `replyStyle` を使用すると:
+**問題点:** Teams API は、チャンネルがどの UI スタイルを使用しているかを公開していません。誤った `replyStyle` を使用すると: `replyStyle` が間違っている場合:
 
 - Threads スタイルのチャンネルで `thread` → 返信が不自然にネストされます。
 - Posts スタイルのチャンネルで `top-level` → 返信がスレッドではなくトップレベル投稿として表示されます。
@@ -520,25 +514,25 @@ Teams では、同一の基盤データモデル上で 2 種類のチャンネ�
 **現在の制限:**
 
 - **DM:** Teams ボットのファイル API を介して画像およびファイル添付が動作します。
-- **チャンネル／グループ:** 添付は M365 ストレージ（SharePoint／OneDrive）に保存されます。Webhook ペイロードには HTML スタブのみが含まれ、実際のファイルバイトは含まれません。**Graph API 権限が必要** です。
+- **チャンネル／グループ:** 添付は M365 ストレージ（SharePoint／OneDrive）に保存されます。Webhook ペイロードには HTML スタブのみが含まれ、実際のファイルバイトは含まれません。**Graph API 権限が必要** です。 Webhookペイロードは実際のファイルバイトではなく、HTMLスタブのみを含んでいます。 チャンネル添付ファイルをダウンロードするには**Graph APIの権限が必要です**。
 
-Graph 権限がない場合、画像を含むチャンネルメッセージはテキストのみとして受信されます（画像内容はボットからアクセスできません）。
-デフォルトでは、OpenClaw は Microsoft／Teams のホスト名からのみメディアをダウンロードします。`channels.msteams.mediaAllowHosts` で上書きできます（任意のホストを許可するには `["*"]`）。
-Authorization ヘッダーは `channels.msteams.mediaAuthAllowHosts` に含まれるホストにのみ付与されます（デフォルトは Graph + Bot Framework ホスト）。このリストは厳密に保ってください（マルチテナントのサフィックスは避けてください）。
+グラフの権限がない場合、画像を含むチャネルメッセージはテキストのみとして受信されます (画像コンテンツはボットからアクセスできません)。
+デフォルトでは、OpenClawはMicrosoft/Teamsホスト名からメディアをダウンロードするだけです。 `channels.msteams.mediaAllowHosts` で上書きします（`["*"]`を使用してホストを許可します）。
+認証ヘッダは `channels.msteams.mediaAuthAllowHosts` のホストに対してのみ付与されます（デフォルトはGraph+Botフレームワークホストです）。 このリストを厳密に保つ（マルチテナントのサフィックスは避ける）。
 
 ## グループチャットでのファイル送信
 
-ボットは FileConsentCard フロー（組み込み）を使用して DM でファイルを送信できます。ただし、**グループチャット／チャンネルでのファイル送信** には追加設定が必要です。
+ボットは FileConsentCard フロー（組み込み）を使用して DM でファイルを送信できます。ただし、**グループチャット／チャンネルでのファイル送信** には追加設定が必要です。 しかし、**グループチャット/チャンネルにファイルを送信する**には追加の設定が必要です。
 
-| コンテキスト                     | ファイル送信方法                                      | 必要な設定                            |
-| -------------------------------- | ----------------------------------------------------- | ------------------------------------- |
-| **DM**                           | FileConsentCard → ユーザー承認 → ボットがアップロード | 追加設定なし                          |
-| **グループチャット／チャンネル** | SharePoint にアップロード → 共有リンク送信            | `sharePointSiteId` + Graph 権限が必要 |
-| **画像（任意のコンテキスト）**   | Base64 エンコードでインライン                         | 追加設定なし                          |
+| コンテキスト             | ファイル送信方法                              | 必要な設定                            |
+| ------------------ | ------------------------------------- | -------------------------------- |
+| **DM**             | FileConsentCard → ユーザー承認 → ボットがアップロード | 箱の外側の作品                          |
+| **グループチャット／チャンネル** | SharePoint にアップロード → 共有リンク送信          | `sharePointSiteId` + Graph 権限が必要 |
+| **画像（任意のコンテキスト）**  | Base64 エンコードでインライン                    | 箱の外側の作品                          |
 
 ### グループチャットで SharePoint が必要な理由
 
-ボットには個人用 OneDrive ドライブがありません（`/me/drive` Graph API エンドポイントはアプリケーション ID では動作しません）。グループチャット／チャンネルでファイルを送信するには、ボットが **SharePoint サイト** にアップロードし、共有リンクを作成します。
+ボットには個人用 OneDrive ドライブがありません（`/me/drive` Graph API エンドポイントはアプリケーション ID では動作しません）。グループチャット／チャンネルでファイルを送信するには、ボットが **SharePoint サイト** にアップロードし、共有リンクを作成します。 グループチャット/チャンネルのファイルを送信するには、ボットが **SharePoint サイト** にアップロードし、共有リンクを作成します。
 
 ### セットアップ
 
@@ -577,21 +571,21 @@ Authorization ヘッダーは `channels.msteams.mediaAuthAllowHosts` に含ま�
 
 ### 共有動作
 
-| 権限                                    | 共有動作                                                 |
-| --------------------------------------- | -------------------------------------------------------- |
-| `Sites.ReadWrite.All` のみ              | 組織全体共有リンク（組織内の誰でもアクセス可能）         |
+| 権限                                      | 共有動作                         |
+| --------------------------------------- | ---------------------------- |
+| `Sites.ReadWrite.All` のみ                | 組織全体共有リンク（組織内の誰でもアクセス可能）     |
 | `Sites.ReadWrite.All` + `Chat.Read.All` | ユーザー単位共有リンク（チャット参加者のみアクセス可能） |
 
-ユーザー単位共有の方が、チャット参加者のみがファイルにアクセスできるため安全です。`Chat.Read.All` 権限がない場合、ボットは組織全体共有にフォールバックします。
+ユーザー単位共有の方が、チャット参加者のみがファイルにアクセスできるため安全です。`Chat.Read.All` 権限がない場合、ボットは組織全体共有にフォールバックします。 `Chat.Read.All` 権限がない場合、ボットは組織全体の共有に戻ります。
 
 ### フォールバック動作
 
-| シナリオ                                                  | 結果                                                              |
-| --------------------------------------------------------- | ----------------------------------------------------------------- |
-| グループチャット + ファイル + `sharePointSiteId` 設定済み | SharePoint にアップロードし、共有リンク送信                       |
-| グループチャット + ファイル + `sharePointSiteId` なし     | OneDrive アップロードを試行（失敗する場合あり）、テキストのみ送信 |
-| 個人チャット + ファイル                                   | FileConsentCard フロー（SharePoint 不要）                         |
-| 任意のコンテキスト + 画像                                 | Base64 エンコードでインライン（SharePoint 不要）                  |
+| シナリオ                                      | 結果                                    |
+| ----------------------------------------- | ------------------------------------- |
+| グループチャット + ファイル + `sharePointSiteId` 設定済み | SharePoint にアップロードし、共有リンク送信           |
+| グループチャット + ファイル + `sharePointSiteId` なし   | OneDrive アップロードを試行（失敗する場合あり）、テキストのみ送信 |
+| 個人チャット + ファイル                             | FileConsentCard フロー（SharePoint 不要）    |
+| 任意のコンテキスト + 画像                            | Base64 エンコードでインライン（SharePoint 不要）     |
 
 ### ファイルの保存場所
 
@@ -610,7 +604,7 @@ OpenClaw は Teams の投票を Adaptive Cards として送信します（ネイ
 
 `message` ツールまたは CLI を使用して、任意の Adaptive Card JSON を Teams ユーザーまたは会話に送信できます。
 
-`card` パラメータは Adaptive Card の JSON オブジェクトを受け取ります。`card` が指定されている場合、メッセージテキストは省略可能です。
+`card` パラメータは Adaptive Card の JSON オブジェクトを受け取ります。`card` が指定されている場合、メッセージテキストは省略可能です。 `card`を指定すると、メッセージテキストはオプションです。
 
 **エージェントツール:**
 
@@ -635,17 +629,17 @@ openclaw message send --channel msteams \
   --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Hello!"}]}'
 ```
 
-カードスキーマと例については [Adaptive Cards ドキュメント](https://adaptivecards.io/) を参照してください。ターゲット形式の詳細は下記 [Target formats](#target-formats) を参照してください。
+カードスキーマと例については [Adaptive Cards ドキュメント](https://adaptivecards.io/) を参照してください。ターゲット形式の詳細は下記 [Target formats](#target-formats) を参照してください。 3. ターゲット形式の詳細については、以下の [Target formats](#target-formats) を参照してください。
 
 ## ターゲット形式
 
 MSTeams のターゲットは、ユーザーと会話を区別するためにプレフィックスを使用します。
 
-| ターゲット種別              | 形式                             | 例                                                  |
-| --------------------------- | -------------------------------- | --------------------------------------------------- |
-| ユーザー（ID 指定）         | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`         |
-| ユーザー（名前指定）        | `user:<display-name>`            | `user:John Smith`（Graph API が必要）               |
-| グループ／チャンネル        | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`            |
+| ターゲット種別         | 形式                               | 例                                            |
+| --------------- | -------------------------------- | -------------------------------------------- |
+| ユーザー（ID 指定）     | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`  |
+| ユーザー（名前指定）      | `user:<display-name>`            | `user:John Smith`（Graph API が必要）             |
+| グループ／チャンネル      | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`     |
 | グループ／チャンネル（raw） | `<conversation-id>`              | `19:abc123...@thread.tacv2`（`@thread` を含む場合） |
 
 **CLI 例:**
@@ -689,7 +683,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-注記: `user:` プレフィックスがない場合、名前はグループ／チーム解決がデフォルトになります。表示名で人を指定する場合は、常に `user:` を使用してください。
+注記: `user:` プレフィックスがない場合、名前はグループ／チーム解決がデフォルトになります。表示名で人を指定する場合は、常に `user:` を使用してください。 表示名で人をターゲットにするときは常に`user`を使います。
 
 ## プロアクティブメッセージング
 
@@ -698,7 +692,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 
 ## チーム ID とチャンネル ID（よくある落とし穴）
 
-Teams URL の `groupId` クエリパラメータは、設定で使用するチーム ID **ではありません**。URL パスから ID を抽出してください。
+Teams URL の `groupId` クエリパラメータは、設定で使用するチーム ID **ではありません**。URL パスから ID を抽出してください。 代わりにURLパスからIDを抽出:
 
 **チーム URL:**
 
@@ -726,13 +720,13 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 ボットのプライベートチャンネル対応には制限があります。
 
-| 機能                              | 標準チャンネル | プライベートチャンネル     |
-| --------------------------------- | -------------- | -------------------------- |
-| ボットのインストール              | 可             | 制限あり                   |
-| リアルタイムメッセージ（Webhook） | 可             | 動作しない場合あり         |
-| RSC 権限                          | 可             | 挙動が異なる場合あり       |
-| @mentions                         | 可             | ボットがアクセス可能な場合 |
-| Graph API 履歴                    | 可             | 可（権限が必要）           |
+| 機能                     | 標準チャンネル | プライベートチャンネル   |
+| ---------------------- | ------- | ------------- |
+| ボットのインストール             | はい      | 制限あり          |
+| リアルタイムメッセージ（Webhook）   | はい      | 動作しない場合あり     |
+| RSC 権限                 | はい      | 挙動が異なる場合あり    |
+| @mentions | はい      | ボットがアクセス可能な場合 |
+| Graph API 履歴           | はい      | 可（権限が必要）      |
 
 **プライベートチャンネルで動作しない場合の回避策:**
 
@@ -744,15 +738,15 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 ### よくある問題
 
-- **チャンネルで画像が表示されない:** Graph 権限または管理者同意が不足しています。Teams アプリを再インストールし、Teams を完全に終了／再起動してください。
+- **チャンネルで画像が表示されない:** Graph 権限または管理者同意が不足しています。Teams アプリを再インストールし、Teams を完全に終了／再起動してください。 Teamsアプリを再インストールし、チームを完全に終了/再開します。
 - **チャンネルで応答がない:** デフォルトではメンションが必須です。`channels.msteams.requireMention=false` を設定するか、チーム／チャンネルごとに設定してください。
 - **バージョン不一致（Teams が古いマニフェストを表示）:** アプリを削除して再追加し、Teams を完全に終了して更新してください。
-- **Webhook から 401 Unauthorized:** Azure JWT なしで手動テストした場合に想定される挙動です。エンドポイント到達は確認できていますが、認証に失敗しています。Azure Web Chat を使用して正しくテストしてください。
+- **Webhook から 401 Unauthorized:** Azure JWT なしで手動テストした場合に想定される挙動です。エンドポイント到達は確認できていますが、認証に失敗しています。Azure Web Chat を使用して正しくテストしてください。 Azure Web Chat を使用して適切なテストを行います。
 
 ### マニフェストアップロードエラー
 
-- **「Icon file cannot be empty」:** マニフェストが 0 バイトのアイコンファイルを参照しています。有効な PNG アイコンを作成してください（`outline.png` 用 32x32、`color.png` 用 192x192）。
-- **「webApplicationInfo.Id already in use」:** アプリが別のチーム／チャットにまだインストールされています。先にアンインストールするか、反映まで 5～10 分待ってください。
+- **「Icon file cannot be empty」:** マニフェストが 0 バイトのアイコンファイルを参照しています。有効な PNG アイコンを作成してください（`outline.png` 用 32x32、`color.png` 用 192x192）。 有効な PNG アイコン (`outline.png` は 32x32 、`color.png` は 192x192 です) を作成します。
+- **「webApplicationInfo.Id already in use」:** アプリが別のチーム／チャットにまだインストールされています。先にアンインストールするか、反映まで 5～10 分待ってください。 最初にそれを見つけてアンインストールするか、伝播のために5-10分待ってください。
 - **アップロード時に「Something went wrong」:** 代わりに [https://admin.teams.microsoft.com](https://admin.teams.microsoft.com) からアップロードし、ブラウザの DevTools（F12）→ Network タブでレスポンス本文の実際のエラーを確認してください。
 - **サイドロード失敗:** 「Upload a custom app」ではなく「Upload an app to your org's app catalog」を試してください。制限を回避できることがあります。
 

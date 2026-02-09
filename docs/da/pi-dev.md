@@ -1,12 +1,5 @@
 ---
 title: "Pi-udviklingsworkflow"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:22Z
 ---
 
 # Pi-udviklingsworkflow
@@ -58,7 +51,7 @@ For tool call-adfærd kan du prompte efter en `read`- eller `exec`-handling, så
 
 ## Nulstilling til ren start
 
-Tilstand ligger under OpenClaws state-mappe. Standard er `~/.openclaw`. Hvis `OPENCLAW_STATE_DIR` er sat, bruges den mappe i stedet.
+Staten lever under den såkaldte OpenClaw statsmappe. Standard er `~/.openclaw`. Hvis `OPENCLAW_STATE_DIR` er angivet, så brug den mappe i stedet.
 
 For at nulstille alt:
 
@@ -69,7 +62,7 @@ For at nulstille alt:
 - `sessions/` hvis ældre stier findes
 - `workspace/` hvis du vil have et tomt workspace
 
-Hvis du kun vil nulstille sessioner, så slet `agents/<agentId>/sessions/` og `agents/<agentId>/sessions.json` for den agent. Behold `credentials/`, hvis du ikke vil genautentificere.
+Hvis du kun ønsker at nulstille sessioner, skal du slette `agenter/<agentId>/sessions/` og `agents/<agentId>/sessions.json` for den agent. Behold `legitimationsoplysninger/` hvis du ikke ønsker at gengodkende.
 
 ## Referencer
 

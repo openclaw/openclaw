@@ -4,13 +4,6 @@ read_when:
   - iOS نوڈز یا macOS پر کیمرہ کیپچر شامل یا تبدیل کرتے وقت
   - ایجنٹ کی رسائی والے MEDIA عارضی فائل ورک فلو کو توسیع دیتے وقت
 title: "Camera Capture"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # کیمرہ کیپچر (ایجنٹ)
@@ -66,7 +59,7 @@ OpenClaw ایجنٹ ورک فلو کے لیے **کیمرہ کیپچر** کی س�
 
 ### فارگراؤنڈ کی شرط
 
-`canvas.*` کی طرح، iOS نوڈ صرف **فارگراؤنڈ** میں `camera.*` کمانڈز کی اجازت دیتا ہے۔ بیک گراؤنڈ سے کی گئی کالز `NODE_BACKGROUND_UNAVAILABLE` واپس کرتی ہیں۔
+Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI معاون (عارضی فائلیں + MEDIA)
 
@@ -105,7 +98,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ### Android فارگراؤنڈ کی شرط
 
-`canvas.*` کی طرح، Android نوڈ صرف **فارگراؤنڈ** میں `camera.*` کمانڈز کی اجازت دیتا ہے۔ بیک گراؤنڈ سے کی گئی کالز `NODE_BACKGROUND_UNAVAILABLE` واپس کرتی ہیں۔
+Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### Payload guard
 

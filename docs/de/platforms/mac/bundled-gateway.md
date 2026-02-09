@@ -1,17 +1,10 @@
 ---
-summary: „Gateway-Laufzeitumgebung unter macOS (externer launchd‑Dienst)“
+summary: "„Gateway-Laufzeitumgebung unter macOS (externer launchd‑Dienst)“"
 read_when:
   - „OpenClaw.app paketieren“
   - „Den macOS‑Gateway‑launchd‑Dienst debuggen“
   - „Die Gateway‑CLI für macOS installieren“
-title: „Gateway unter macOS“
-x-i18n:
-  source_path: platforms/mac/bundled-gateway.md
-  source_hash: 4a3e963d13060b12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:48Z
+title: "„Gateway unter macOS“"
 ---
 
 # Gateway unter macOS (externer launchd)

@@ -5,13 +5,6 @@ read_when:
   - विन्यास माइग्रेशन या Doctor वर्कफ़्लो पर काम करते समय
   - प्लगइन विन्यास स्कीमा या प्लगइन लोड गेटिंग को संभालते समय
 title: "कठोर विन्यास सत्यापन"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:48Z
 ---
 
 # कठोर विन्यास सत्यापन (केवल Doctor माइग्रेशन)
@@ -32,9 +25,9 @@ x-i18n:
 
 - विन्यास को हर स्तर पर स्कीमा से बिल्कुल मेल खाना चाहिए।
 - अज्ञात कुंजियाँ सत्यापन त्रुटियाँ हैं (रूट या नेस्टेड में कोई पासथ्रू नहीं)।
-- `plugins.entries.<id>.config` को प्लगइन के स्कीमा द्वारा सत्यापित किया जाना चाहिए।
+- `plugins.entries.<id>.config` must be validated by the plugin’s schema.
   - यदि किसी प्लगइन में स्कीमा नहीं है, तो **प्लगइन लोड को अस्वीकार करें** और स्पष्ट त्रुटि दिखाएँ।
-- अज्ञात `channels.<id>` कुंजियाँ त्रुटियाँ हैं, जब तक कि कोई प्लगइन मैनिफ़ेस्ट चैनल आईडी घोषित न करे।
+- Unknown `channels.<id>` keys are errors unless a plugin manifest declares the channel id.
 - प्लगइन मैनिफ़ेस्ट (`openclaw.plugin.json`) सभी प्लगइनों के लिए आवश्यक हैं।
 
 ## प्लगइन स्कीमा प्रवर्तन
@@ -72,7 +65,7 @@ x-i18n:
 - `openclaw status`
 - `openclaw gateway status`
 
-बाकी सब कुछ हार्ड-फ़ेल होना चाहिए, संदेश के साथ: “Config invalid. Run `openclaw doctor --fix`.”
+Everything else must hard-fail with: “Config invalid. Run `openclaw doctor --fix`.”
 
 ## त्रुटि UX प्रारूप
 

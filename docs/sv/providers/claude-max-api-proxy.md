@@ -5,25 +5,18 @@ read_when:
   - Du vill ha en lokal API-server som omsluter Claude Code CLI
   - Du vill spara pengar genom att använda en prenumeration i stället för API-nycklar
 title: "Claude Max API-proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:08Z
 ---
 
 # Claude Max API-proxy
 
-**claude-max-api-proxy** är ett communityverktyg som exponerar din Claude Max/Pro-prenumeration som en OpenAI-kompatibel API-ändpunkt. Detta gör att du kan använda din prenumeration med vilket verktyg som helst som stöder OpenAI:s API-format.
+**claude-max-api-proxy** är ett gemenskapsverktyg som exponerar din Claude Max/Pro-prenumeration som en OpenAI-kompatibel API-slutpunkt. Detta gör att du kan använda din prenumeration med alla verktyg som stöder OpenAI API-format.
 
 ## Varför använda detta?
 
-| Tillvägagångssätt        | Kostnad                                                 | Bäst för                                           |
-| ------------------------ | ------------------------------------------------------- | -------------------------------------------------- |
+| Tillvägagångssätt        | Kostnad                                                                                    | Bäst för                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------- |
 | Anthropic API            | Betala per token (~$15/M indata, $75/M utdata för Opus) | Produktionsappar, hög volym                        |
-| Claude Max-prenumeration | $200/månad fast                                         | Personligt bruk, utveckling, obegränsad användning |
+| Claude Max-prenumeration | $200/månad fast                                                                            | Personligt bruk, utveckling, obegränsad användning |
 
 Om du har en Claude Max-prenumeration och vill använda den med OpenAI-kompatibla verktyg kan denna proxy spara dig betydande kostnader.
 

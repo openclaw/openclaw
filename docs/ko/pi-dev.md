@@ -1,12 +1,5 @@
 ---
 title: "Pi 개발 워크플로"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:35Z
 ---
 
 # Pi 개발 워크플로
@@ -56,7 +49,7 @@ scripts/pi/run-tests.sh --live
 
 도구 호출 동작을 확인하려면 `read` 또는 `exec` 동작을 프롬프트하여 도구 스트리밍과 페이로드 처리를 확인하십시오.
 
-## 초기화 리셋
+## 15. 초기화 리셋
 
 상태는 OpenClaw 상태 디렉토리 아래에 저장됩니다. 기본값은 `~/.openclaw` 입니다. `OPENCLAW_STATE_DIR` 이 설정된 경우 해당 디렉토리를 대신 사용합니다.
 

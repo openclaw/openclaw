@@ -4,13 +4,6 @@ read_when:
   - မော်ဒယ်အတွက် အချိန်တံဆိပ်များကို မည်သို့ စံညွှန်းတကျ ပြောင်းလဲထားသည်ကို နားလည်ရန် လိုအပ်သည့်အခါ
   - စနစ်ပရောမ့်များအတွက် အသုံးပြုသူ၏ အချိန်ဇုန်ကို ဖွဲ့စည်းပြင်ဆင်ရန်
 title: "အချိန်ဇုန်များ"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:16Z
 ---
 
 # အချိန်ဇုန်များ
@@ -69,8 +62,8 @@ OpenClaw သည် မော်ဒယ်က **ကိုးကားအချိ�
 
 ## ကိရိယာ payload များ (ပံ့ပိုးသူ၏ raw ဒေတာ + စံညွှန်းတကျ ပြောင်းထားသော အကွက်များ)
 
-Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages` စသည်) သည် **ပံ့ပိုးသူ၏ raw အချိန်တံဆိပ်များ** ကို ပြန်လည်ပေးပို့ပါသည်။
-ထို့အပြင် ကိုက်ညီမှုရှိစေရန် စံညွှန်းတကျ ပြောင်းထားသော အကွက်များကိုလည်း ထည့်သွင်းပေးပါသည်–
+Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages`, စသည်) **raw provider timestamps** ကို ပြန်ပေးပါသည်။
+တူညီမှုအတွက် normalized fields များကိုလည်း တွဲဖက်ပေးပါသည်။
 
 - `timestampMs` (UTC epoch milliseconds)
 - `timestampUtc` (ISO 8601 UTC စာကြောင်း)
@@ -79,8 +72,7 @@ Tool calls (`channels.discord.readMessages`, `channels.slack.readMessages` စ�
 
 ## စနစ်ပရောမ့်အတွက် အသုံးပြုသူ အချိန်ဇုန်
 
-အသုံးပြုသူ၏ local အချိန်ဇုန်ကို မော်ဒယ်အား သိစေရန် `agents.defaults.userTimezone` ကို သတ်မှတ်ပါ။
-မသတ်မှတ်ထားပါက OpenClaw သည် **runtime အတွင်း ဟို့စ် အချိန်ဇုန်** ကို ဖြေရှင်းအသုံးပြုပါသည် (config ကို မရေးသားပါ)။
+မော်ဒယ်အား အသုံးပြုသူ၏ ဒေသခံ time zone ကို သိစေရန် `agents.defaults.userTimezone` ကို သတ်မှတ်ပါ။ မသတ်မှတ်ထားပါက OpenClaw သည် **host timezone ကို runtime အတွင်း ဖြေရှင်းသတ်မှတ်** ပါသည် (config ကို မရေးပါ)။
 
 ```json5
 {

@@ -4,16 +4,9 @@ read_when:
   - Le nœud est connecté mais les outils caméra/canvas/écran/exec échouent
   - Vous avez besoin du modèle mental appairage des nœuds versus approbations
 title: "Dépannage des nœuds"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:40Z
 ---
 
-# Dépannage des nœuds
+# nodes/troubleshooting.md
 
 Utilisez cette page lorsqu’un nœud est visible dans l’état mais que les outils du nœud échouent.
 
@@ -35,7 +28,7 @@ openclaw nodes describe --node <idOrNameOrIp>
 openclaw approvals get --node <idOrNameOrIp>
 ```
 
-Signaux de bon fonctionnement :
+Signaux sains :
 
 - Le nœud est connecté et appairé pour le rôle `node`.
 - `nodes describe` inclut la capacité que vous appelez.
@@ -57,12 +50,12 @@ Si vous voyez `NODE_BACKGROUND_UNAVAILABLE`, ramenez l’app du nœud au premier
 
 ## Matrice des autorisations
 
-| Capacité                     | iOS                                               | Android                                                    | App de nœud macOS                       | Code d’échec typique           |
-| ---------------------------- | ------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------- | ------------------------------ |
-| `camera.snap`, `camera.clip` | Caméra (+ micro pour l’audio des clips)           | Caméra (+ micro pour l’audio des clips)                    | Caméra (+ micro pour l’audio des clips) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Enregistrement de l’écran (+ micro facultatif)    | Invite de capture d’écran (+ micro facultatif)             | Enregistrement de l’écran               | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Lors de l’utilisation ou Toujours (selon le mode) | Localisation au premier plan/en arrière-plan selon le mode | Autorisation de localisation            | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (chemin de l’hôte du nœud)                    | n/a (chemin de l’hôte du nœud)                             | Approbations exec requises              | `SYSTEM_RUN_DENIED`            |
+| Capacité                     | iOS                                                                  | Android                                                           | App de nœud macOS                                          | Code d’échec typique           |
+| ---------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Caméra (+ micro pour l’audio des clips)           | Caméra (+ micro pour l’audio des clips)        | Caméra (+ micro pour l’audio des clips) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Enregistrement de l’écran (+ micro facultatif)    | Invite de capture d’écran (+ micro facultatif) | Enregistrement de l’écran                                  | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Lors de l’utilisation ou Toujours (selon le mode) | Localisation au premier plan/en arrière-plan selon le mode        | Autorisation de localisation                               | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (chemin de l’hôte du nœud)                    | n/a (chemin de l’hôte du nœud)                 | Approbations exec requises                                 | `SYSTEM_RUN_DENIED`            |
 
 ## Appairage versus approbations
 
@@ -106,7 +99,7 @@ openclaw logs --follow
 Si le problème persiste :
 
 - Réapprouvez l’appairage de l’appareil.
-- Rouvrez l’app du nœud (au premier plan).
+- Ré-ouvrir l'application du nœud (au premier plan).
 - Réaccordez les autorisations du système d’exploitation.
 - Recréez/ajustez la politique d’approbation exec.
 

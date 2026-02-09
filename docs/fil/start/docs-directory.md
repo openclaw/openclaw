@@ -3,18 +3,11 @@ summary: "Piniling mga link patungo sa mga pinaka-ginagamit na OpenClaw docs."
 read_when:
   - Gusto mo ng mabilis na access sa mga pangunahing pahina ng docs
 title: "Direktoryo ng docs"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:54Z
 ---
 
 <Note>
-Ang pahinang ito ay isang piniling index. Kung bago ka, magsimula sa [Getting Started](/start/getting-started).
-Para sa kumpletong mapa ng mga docs, tingnan ang [Docs hubs](/start/hubs).
+This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
+For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 
 ## Magsimula dito

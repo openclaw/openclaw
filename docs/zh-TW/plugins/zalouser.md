@@ -4,30 +4,23 @@ read_when:
   - 你想在 OpenClaw 中使用 Zalo Personal（非官方）支援
   - 你正在設定或開發 zalouser 外掛
 title: "Zalo Personal 外掛"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:52Z
 ---
 
 # Zalo Personal（外掛）
 
 透過外掛為 OpenClaw 提供 Zalo Personal 支援，使用 `zca-cli` 自動化一般的 Zalo 使用者帳號。
 
-> **警告：** 非官方自動化可能導致帳號被停權或封禁。請自行承擔風險。
+> **警告：** 非官方自動化可能導致帳號停權/封鎖。 使用風險請自行承擔。
 
 ## 命名
 
-頻道 id 為 `zalouser`，以明確表示這是自動化 **個人 Zalo 使用者帳號**（非官方）。我們保留 `zalo`，以供未來可能的官方 Zalo API 整合使用。
+頻道 id 為 `zalouser`，以明確表示這是自動化 **個人 Zalo 使用者帳號**（非官方）。我們保留 `zalo`，以供未來可能的官方 Zalo API 整合使用。 We keep `zalo` reserved for a potential future official Zalo API integration.
 
-## 執行位置
+## Where it runs
 
-此外掛在 **Gateway 閘道器 程序內** 執行。
+This plugin runs **inside the Gateway process**.
 
-如果你使用遠端 Gateway 閘道器，請在 **執行 Gateway 閘道器 的機器** 上安裝與設定，然後重新啟動 Gateway 閘道器。
+If you use a remote Gateway, install/configure it on the **machine running the Gateway**, then restart the Gateway.
 
 ## 安裝
 

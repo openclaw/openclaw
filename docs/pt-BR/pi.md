@@ -1,12 +1,5 @@
 ---
 title: "Arquitetura de Integração do Pi"
-x-i18n:
-  source_path: pi.md
-  source_hash: 98b12f1211f70b1a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:43Z
 ---
 
 # Arquitetura de Integração do Pi
@@ -35,12 +28,12 @@ O OpenClaw usa o SDK do pi para incorporar um agente de codificação de IA em s
 }
 ```
 
-| Pacote            | Propósito                                                                                                         |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Pacote            | Propósito                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `pi-ai`           | Abstrações centrais de LLM: `Model`, `streamSimple`, tipos de mensagem, APIs de provedores                        |
-| `pi-agent-core`   | Loop do agente, execução de ferramentas, tipos `AgentMessage`                                                     |
+| `pi-agent-core`   | Loop do agente, execução de ferramentas, tipos `AgentMessage`                                                                     |
 | `pi-coding-agent` | SDK de alto nível: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, ferramentas integradas |
-| `pi-tui`          | Componentes de UI de terminal (usados no modo TUI local do OpenClaw)                                              |
+| `pi-tui`          | Componentes de UI de terminal (usados no modo TUI local do OpenClaw)                                           |
 
 ## Estrutura de Arquivos
 
@@ -518,15 +511,15 @@ Isso fornece a experiência interativa de terminal semelhante ao modo nativo do 
 
 ## Principais Diferenças em Relação à Pi CLI
 
-| Aspecto                 | Pi CLI                            | OpenClaw Incorporado                                                                           |
-| ----------------------- | --------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Invocação               | Comando `pi` / RPC                | SDK via `createAgentSession()`                                                                 |
-| Ferramentas             | Ferramentas padrão de codificação | Conjunto personalizado de ferramentas do OpenClaw                                              |
-| Prompt do sistema       | AGENTS.md + prompts               | Dinâmico por canal/contexto                                                                    |
-| Armazenamento de sessão | `~/.pi/agent/sessions/`           | `~/.openclaw/agents/<agentId>/sessions/` (ou `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Autenticação            | Credencial única                  | Múltiplos perfis com rotação                                                                   |
-| Extensões               | Carregadas do disco               | Programáticas + caminhos de disco                                                              |
-| Tratamento de eventos   | Renderização TUI                  | Baseado em callbacks (onBlockReply, etc.)                                                      |
+| Aspecto                 | Pi CLI                              | OpenClaw Incorporado                                                                                              |
+| ----------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Invocação               | Comando `pi` / RPC                  | SDK via `createAgentSession()`                                                                                    |
+| Ferramentas             | Ferramentas padrão de codificação   | Conjunto personalizado de ferramentas do OpenClaw                                                                 |
+| Prompt do sistema       | AGENTS.md + prompts | Dinâmico por canal/contexto                                                                                       |
+| Armazenamento de sessão | `~/.pi/agent/sessions/`             | `~/.openclaw/agents/<agentId>/sessions/` (ou `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
+| Autenticação            | Credencial única                    | Múltiplos perfis com rotação                                                                                      |
+| Extensões               | Carregadas do disco                 | Programáticas + caminhos de disco                                                                                 |
+| Tratamento de eventos   | Renderização TUI                    | Baseado em callbacks (onBlockReply, etc.)                                      |
 
 ## Considerações Futuras
 

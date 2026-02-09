@@ -3,13 +3,6 @@ summary: "Référence CLI pour `openclaw config` (obtenir/définir/supprimer des
 read_when:
   - Vous souhaitez lire ou modifier la configuration de manière non interactive
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:47Z
 ---
 
 # `openclaw config`

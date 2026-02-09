@@ -3,13 +3,6 @@ summary: "Logique de statut de la barre de menus et ce qui est présenté aux ut
 read_when:
   - Ajustement de l’interface de menu mac ou de la logique de statut
 title: "Barre de menus"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:21Z
 ---
 
 # Logique de statut de la barre de menus
@@ -70,7 +63,7 @@ x-i18n:
   - `edit` : chemin plus type de modification déduit de `meta`/comptes de diff.
   - repli : nom de l’outil.
 
-## Remplacement de débogage
+## Debug override
 
 - Réglages ▸ Debug ▸ sélecteur « Icon override » :
   - `System (auto)` (par défaut)

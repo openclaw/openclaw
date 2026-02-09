@@ -5,13 +5,6 @@ read_when:
   - Investigation de lignes d’instance en double ou obsolètes
   - Modification de la connexion WS de la Gateway ou des balises d’événements système
 title: "Présence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:20Z
 ---
 
 # Présence
@@ -42,12 +35,12 @@ Les entrées de présence sont des objets structurés avec des champs tels que�
 
 Les entrées de présence sont produites par plusieurs sources et **fusionnées**.
 
-### 1) Entrée propre à la Gateway
+### 1. Entrée propre à la Gateway
 
 La Gateway initialise toujours une entrée « self » au démarrage afin que les
 interfaces affichent l’hôte de la gateway même avant la connexion de clients.
 
-### 2) Connexion WebSocket
+### 2. Connexion WebSocket
 
 Chaque client WS commence par une requête `connect`. Lors d’une poignée de
 main réussie, la Gateway effectue un upsert d’une entrée de présence pour cette
@@ -59,13 +52,13 @@ La CLI se connecte souvent pour des commandes courtes et ponctuelles. Afin
 d’éviter de polluer la liste Instances, `client.mode === "cli"` **n’est pas** transformé
 en entrée de présence.
 
-### 3) Balises `system-event`
+### 3. Balises `system-event`
 
 Les clients peuvent envoyer des balises périodiques plus riches via la méthode
 `system-event`. L’application mac l’utilise pour signaler le nom d’hôte, l’IP et
 `lastInputSeconds`.
 
-### 4) Connexions de nœud (rôle : node)
+### 4. Connexions de nœud (rôle : node)
 
 Lorsqu’un nœud se connecte via le WebSocket de la Gateway avec `role: node`, la
 Gateway effectue un upsert d’une entrée de présence pour ce nœud (même flux que

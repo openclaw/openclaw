@@ -2,18 +2,11 @@
 summary: "用於 OpenClaw.app 連線至遠端 Gateway 閘道器的 SSH 通道設定"
 read_when: "透過 SSH 將 macOS 應用程式連線至遠端 Gateway 閘道器"
 title: "遠端 Gateway 閘道器設定"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:06Z
 ---
 
 # 使用遠端 Gateway 閘道器執行 OpenClaw.app
 
-OpenClaw.app 會使用 SSH 通道連線至遠端 Gateway 閘道器。本指南將說明如何完成設定。
+OpenClaw.app 會在你的用戶端機器上連線至 `ws://127.0.0.1:18789`。SSH 通道會將該連線轉送至遠端機器上執行中之 Gateway 閘道器的 18789 連接埠。 42. 本指南將示範如何設定。
 
 ## 概覽
 
@@ -122,14 +115,14 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
 通道現在將會：
 
 - 在你登入時自動啟動
-- 若發生當機會自動重新啟動
+- 43. 當它當機時重新啟動
 - 在背景持續執行
 
 舊版注意事項：若存在，請移除任何殘留的 `com.openclaw.ssh-tunnel` LaunchAgent。
 
 ---
 
-## 疑難排解
+## 44. 疑難排解
 
 **檢查通道是否正在執行：**
 
@@ -152,13 +145,13 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ---
 
-## 運作方式
+## 7. 運作方式
 
-| 元件                                 | 功能說明                                  |
-| ------------------------------------ | ----------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | 將本機連接埠 18789 轉送至遠端連接埠 18789 |
-| `ssh -N`                             | SSH 不執行遠端指令（僅進行連接埠轉送）    |
-| `KeepAlive`                          | 若通道當機會自動重新啟動                  |
-| `RunAtLoad`                          | 在代理程式載入時啟動通道                  |
+| 元件                                   | 46. 功能說明             |
+| ------------------------------------ | ------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | 將本機連接埠 18789 轉送至遠端連接埠 18789                 |
+| `ssh -N`                             | SSH 不執行遠端指令（僅進行連接埠轉送）                       |
+| `KeepAlive`                          | Automatically restarts tunnel if it crashes |
+| `RunAtLoad`                          | 10. 代理載入時啟動隧道        |
 
-OpenClaw.app 會在你的用戶端機器上連線至 `ws://127.0.0.1:18789`。SSH 通道會將該連線轉送至遠端機器上執行中之 Gateway 閘道器的 18789 連接埠。
+49. OpenClaw.app 會在你的用戶端機器上連線至 `ws://127.0.0.1:18789`。 50. SSH 通道會將該連線轉送到執行 Gateway 的遠端機器之 18789 連接埠。

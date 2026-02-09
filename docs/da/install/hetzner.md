@@ -6,13 +6,6 @@ read_when:
   - Du vil have fuld kontrol over persistens, binære filer og genstartsadfærd
   - Du kører OpenClaw i Docker på Hetzner eller en tilsvarende udbyder
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:28Z
 ---
 
 # OpenClaw på Hetzner (Docker, produktions-VPS-guide)
@@ -21,8 +14,8 @@ x-i18n:
 
 Kør en vedvarende OpenClaw Gateway på en Hetzner VPS ved hjælp af Docker, med holdbar tilstand, indbyggede binære filer og sikker genstartsadfærd.
 
-Hvis du vil have “OpenClaw 24/7 for ~$5”, er dette den enkleste pålidelige opsætning.
-Hetzners priser ændrer sig; vælg den mindste Debian/Ubuntu VPS og skalér op, hvis du rammer OOMs.
+Hvis du ønsker “OpenClaw 24/7 for ~$5”, dette er den enkleste pålidelige opsætning.
+Hetzner-prisændringer; vælg den mindste Debian/Ubuntu VPS og skalér op, hvis du rammer OOM'er.
 
 ## Hvad gør vi (enkelt forklaret)?
 
@@ -37,9 +30,9 @@ Gatewayen kan tilgås via:
 - SSH-portforwarding fra din laptop
 - Direkte port-eksponering, hvis du selv håndterer firewall og tokens
 
-Denne guide forudsætter Ubuntu eller Debian på Hetzner.  
-Hvis du bruger en anden Linux VPS, så tilpas pakkerne tilsvarende.
-For det generiske Docker-flow, se [Docker](/install/docker).
+Denne guide antager Ubuntu eller Debian på Hetzner.  
+Hvis du er på en anden Linux VPS, kort pakker i overensstemmelse hermed.
+For det generiske Dockerflow, se [Docker](/install/docker)
 
 ---
 
@@ -71,7 +64,7 @@ For det generiske Docker-flow, se [Docker](/install/docker).
 
 ---
 
-## 1) Provisionér VPS’en
+## 1. Provisionér VPS’en
 
 Opret en Ubuntu- eller Debian-VPS hos Hetzner.
 
@@ -81,12 +74,12 @@ Forbind som root:
 ssh root@YOUR_VPS_IP
 ```
 
-Denne guide antager, at VPS’en er stateful.
-Behandl den ikke som forbrugelig infrastruktur.
+Denne vejledning forudsætter, at VPS er statfuld.
+Må ikke behandle det som engangs infrastruktur.
 
 ---
 
-## 2) Installér Docker (på VPS’en)
+## 2. Installér Docker (på VPS’en)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Klon OpenClaw-repositoriet
+## 3. Klon OpenClaw-repositoriet
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +107,10 @@ Denne guide antager, at du vil bygge et tilpasset image for at garantere persist
 
 ---
 
-## 4) Opret vedvarende værtsmapper
+## 4. Opret vedvarende værtsmapper
 
-Docker-containere er flygtige.
-Al langtidsholdbar tilstand skal ligge på værten.
+Docker containere er flydende.
+Alle langvarige stater skal leve på værten.
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Konfigurér miljøvariabler
+## 5. Konfigurér miljøvariabler
 
 Opret `.env` i roden af repositoriet.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose-konfiguration
+## 6. Docker Compose-konfiguration
 
 Opret eller opdatér `docker-compose.yml`.
 
@@ -204,10 +197,10 @@ services:
 
 ---
 
-## 7) Indbyg påkrævede binære filer i imaget (kritisk)
+## 7. Indbyg påkrævede binære filer i imaget (kritisk)
 
-At installere binære filer inde i en kørende container er en fælde.
-Alt, hvad der installeres ved runtime, går tabt ved genstart.
+Installation af binære filer i en kørende beholder er en fælde.
+Alt installeret på runtime vil gå tabt ved genstart.
 
 Alle eksterne binære filer, som Skills kræver, skal installeres ved image-build.
 
@@ -218,7 +211,7 @@ Eksemplerne nedenfor viser kun tre almindelige binære filer:
 - `wacli` til WhatsApp
 
 Dette er eksempler, ikke en komplet liste.
-Du kan installere så mange binære filer som nødvendigt ved at bruge samme mønster.
+Du kan installere så mange binære filer efter behov ved hjælp af det samme mønster.
 
 Hvis du senere tilføjer nye Skills, der afhænger af yderligere binære filer, skal du:
 
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Byg og start
+## 8. Byg og start
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Forventet output:
 
 ---
 
-## 9) Verificér Gateway
+## 9. Verificér Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,8 +313,8 @@ Indsæt dit gateway-token.
 
 ## Hvad persisterer hvor (sandhedskilde)
 
-OpenClaw kører i Docker, men Docker er ikke sandhedskilden.
-Al langtidsholdbar tilstand skal overleve genstarter, genopbygninger og reboots.
+OpenClaw kører i Docker, men Docker er ikke kilden til sandhed.
+Alle langlivede stater skal overleve genstarter, genopbygger og genstarter.
 
 | Komponent                      | Placering                         | Persistensmekanisme        | Noter                              |
 | ------------------------------ | --------------------------------- | -------------------------- | ---------------------------------- |

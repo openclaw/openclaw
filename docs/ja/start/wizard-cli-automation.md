@@ -5,13 +5,6 @@ read_when:
   - 特定のプロバイダー向けに非対話型の例が必要な場合
 title: "CLI 自動化"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:14Z
 ---
 
 # CLI 自動化
@@ -19,7 +12,9 @@ x-i18n:
 `--non-interactive` を使用して `openclaw onboard` を自動化します。
 
 <Note>
+
 `--json` は非対話型モードを意味するものではありません。スクリプトでは `--non-interactive`（および `--workspace`）を使用してください。
+ スクリプトには `--非対話型` (と `--workspace` )を使用します。
 </Note>
 
 ## ベースラインの非対話型例
@@ -41,7 +36,7 @@ openclaw onboard --non-interactive \
 ## プロバイダー別の例
 
 <AccordionGroup>
-  <Accordion title="Gemini の例">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +46,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI の例">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +56,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway の例">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +66,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway の例">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +78,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot の例">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +88,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic の例">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +98,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen の例">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,7 +112,7 @@ openclaw onboard --non-interactive \
 
 ## 別のエージェントを追加する
 
-`openclaw agents add <name>` を使用すると、独自のワークスペース、セッション、認証プロファイルを持つ別のエージェントを作成できます。`--workspace` を指定せずに実行すると、ウィザードが起動します。
+`openclaw agents add <name>` を使用すると、独自のワークスペース、セッション、認証プロファイルを持つ別のエージェントを作成できます。`--workspace` を指定せずに実行すると、ウィザードが起動します。 `--workspace` なしで実行すると、ウィザードが起動します。
 
 ```bash
 openclaw agents add work \

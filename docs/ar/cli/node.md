@@ -3,14 +3,7 @@ summary: "مرجع CLI للأمر `openclaw node` (مضيف عُقدة بدون 
 read_when:
   - تشغيل مضيف العُقدة بدون واجهة
   - إقران عُقدة غير macOS لاستخدام system.run
-title: "عُقدة"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:05Z
+title: "عقدة"
 ---
 
 # `openclaw node`
@@ -37,7 +30,7 @@ x-i18n:
 تعلن مضيفات العُقد تلقائيًا عن وكيل متصفح إذا لم يكن `browser.enabled` معطّلًا
 على العُقدة. يتيح ذلك للوكيل استخدام أتمتة المتصفح على تلك العُقدة دون تهيئة إضافية.
 
-عطّله على العُقدة إذا لزم الأمر:
+قم بتعطيله على العقدة إذا لزم الأمر:
 
 ```json5
 {
@@ -66,7 +59,7 @@ openclaw node run --host <gateway-host> --port 18789
 
 ## الخدمة (في الخلفية)
 
-ثبّت مضيف عُقدة بدون واجهة كخدمة مستخدم.
+تثبيت مضيف عقدة بلا رأس كخدمة مستخدم.
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789

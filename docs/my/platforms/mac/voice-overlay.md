@@ -3,28 +3,21 @@ summary: "wake-word နှင့် push-to-talk တိုက်ဆိုင်�
 read_when:
   - Voice overlay အပြုအမူကို ချိန်ညှိနေစဉ်
 title: "Voice Overlay"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # Voice Overlay Lifecycle (macOS)
 
-Audience: macOS အက်ပ်တွင် ပါဝင်ရေးသားသူများ။ ရည်ရွယ်ချက်: wake-word နှင့် push-to-talk တိုက်ဆိုင်လာသည့်အခါ voice overlay ကို ခန့်မှန်းနိုင်စွမ်းရှိအောင် ထိန်းသိမ်းထားရန်။
+Audience: macOS app contributors. Goal: wake‑word နှင့် push‑to‑talk တိုက်ဆိုင်နေချိန်တွင် voice overlay ကို ခန့်မှန်းနိုင်အောင် ထိန်းထားရန်။
 
 ## လက်ရှိ ရည်ရွယ်ချက်
 
-- overlay သည် wake-word ကြောင့် ပြထားပြီးသားဖြစ်နေစဉ် အသုံးပြုသူက hotkey ကို နှိပ်ပါက hotkey session သည် ရှိပြီးသား စာသားကို reset မလုပ်ဘဲ _လက်ခံယူ (adopt)_ သွားမည်ဖြစ်သည်။ hotkey ကို ဖိထားစဉ် overlay သည် ဆက်လက် ပြထားမည်။ အသုံးပြုသူ လွှတ်လိုက်သောအခါ: trim လုပ်ပြီးနောက် စာသားရှိပါက ပို့မည်၊ မရှိပါက ပယ်ဖျက်မည်။
+- Wake‑word ကြောင့် overlay မြင်နေပြီးသားဖြစ်သောအချိန် အသုံးပြုသူက hotkey ကို နှိပ်ပါက hotkey session သည် ရှိပြီးသားစာသားကို _လက်ခံယူ_ သုံးစွဲပြီး reset မလုပ်ပါ။ Hotkey ကို ဖိထားသည့်အချိန်အတွင်း overlay သည် ဆက်လက် ပြနေပါသည်။ အသုံးပြုသူ လွှတ်ချလိုက်သည့်အခါ: trim လုပ်ပြီးသား စာသားရှိပါက ပို့ပြီး မရှိပါက ပယ်ဖျက်သည်။
 - wake-word တစ်ခုတည်းသာ အသုံးပြုပါက အသံမရှိတော့သည့်အချိန်တွင် အလိုအလျောက် ပို့မည်၊ push-to-talk သည် လွှတ်ချင်းချင်း ပို့မည်။
 
 ## အကောင်အထည်ဖော်ပြီးသား (Dec 9, 2025)
 
-- Overlay session များသည် capture တစ်ခုချင်းစီ (wake-word သို့မဟုတ် push-to-talk) အတွက် token တစ်ခုစီ ပါဝင်လာပါသည်။ token မကိုက်ညီသော partial/final/send/dismiss/level update များကို ပယ်ချခြင်းဖြင့် stale callback များကို တားဆီးထားပါသည်။
-- Push-to-talk သည် မြင်ရသော overlay စာသားကို prefix အဖြစ် လက်ခံယူပါသည် (wake overlay ပေါ်နေစဉ် hotkey ကို နှိပ်ပါက စာသားကို ထိန်းထားပြီး အသစ်ပြောသော အသံကို ဆက်လက် ပေါင်းထည့်နိုင်ရန်)။ final transcript ကို အများဆုံး 1.5s စောင့်ပြီး မရပါက လက်ရှိ စာသားကို fallback အဖြစ် အသုံးပြုပါသည်။
+- Overlay session များတွင် capture တစ်ကြိမ်စီအတွက် token (wake‑word သို့မဟုတ် push‑to‑talk) ကို ထည့်သွင်းထားသည်။ Token မကိုက်ညီပါက partial/final/send/dismiss/level update များကို ပယ်ချပြီး stale callback များကို ရှောင်ရှားသည်။
+- Push‑to‑talk သည် မြင်နေရသော overlay စာသားကို prefix အဖြစ် လက်ခံယူသည် (wake overlay ပြနေစဉ် hotkey ကို နှိပ်လျှင် စာသားကို ထိန်းထားပြီး အသစ်ပြောသော အသံကို ဆက်လက်ပေါင်းထည့်သည်)။ Final transcript ကို အများဆုံး 1.5 စက္ကန့် စောင့်ပြီး မရပါက လက်ရှိစာသားကို အသုံးပြုသည်။
 - Chime/overlay logging ကို `info` တွင် categories `voicewake.overlay`, `voicewake.ptt`, နှင့် `voicewake.chime` (session start, partial, final, send, dismiss, chime reason) အဖြစ် ထုတ်လွှင့်ထားပါသည်။
 
 ## နောက်တစ်ဆင့်များ
@@ -56,6 +49,7 @@ Audience: macOS အက်ပ်တွင် ပါဝင်ရေးသားသ
   ```
 
 - active session token တစ်ခုတည်းသာ ရှိကြောင်း စစ်ဆေးပါ; stale callback များကို coordinator က ပယ်ချထားရပါမည်။
+
 - push-to-talk လွှတ်သည့်အချိန်တိုင်း active token နှင့်အတူ `endCapture` ကို ခေါ်ကြောင်း သေချာစေပါ; စာသားမရှိပါက chime သို့မဟုတ် send မပါဘဲ `dismiss` ဖြစ်လာမည်ဟု မျှော်လင့်ရပါသည်။
 
 ## Migration steps (အကြံပြုထားသည်)

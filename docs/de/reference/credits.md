@@ -3,13 +3,6 @@ summary: "Projektursprung, Mitwirkende und Lizenz."
 read_when:
   - Sie möchten die Hintergrundgeschichte des Projekts oder die Mitwirkenden kennenlernen
 title: "Credits"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:08Z
 ---
 
 ## Der Name
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS, denn jeder Weltraumhummer braucht eine Zeit- und Raumm
 
 MIT – Frei wie ein Hummer im Ozean.
 
-> „Wir spielen alle nur mit unseren eigenen Prompts.“ (Eine KI, wahrscheinlich tokenhigh)
+> „Wir spielen alle nur mit unseren eigenen Prompts.“ (Eine KI, wahrscheinlich tokenhigh) (Eine KI, wahrscheinlich hoch bei Tokens)

@@ -1,15 +1,8 @@
 ---
-summary: «تقسية قائمة السماح في Telegram: تطبيع البادئة والمسافات البيضاء»
+summary: "تقسية قائمة السماح في Telegram: تطبيع البادئة والمسافات البيضاء"
 read_when:
-  - «عند مراجعة التغييرات التاريخية على قائمة السماح في Telegram»
-title: «تقسية قائمة السماح في Telegram»
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:10Z
+  - عند مراجعة التغييرات التاريخية على قائمة السماح في Telegram
+title: "تقسية قائمة السماح في Telegram"
 ---
 
 # تقسية قائمة السماح في Telegram

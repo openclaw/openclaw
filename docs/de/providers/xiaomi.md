@@ -1,16 +1,9 @@
 ---
-summary: „Xiaomi MiMo (mimo-v2-flash) mit OpenClaw verwenden“
+summary: "„Xiaomi MiMo (mimo-v2-flash) mit OpenClaw verwenden“"
 read_when:
   - Sie möchten Xiaomi‑MiMo‑Modelle in OpenClaw nutzen
   - Sie benötigen die Einrichtung von XIAOMI_API_KEY
-title: „Xiaomi MiMo“
-x-i18n:
-  source_path: providers/xiaomi.md
-  source_hash: 366fd2297b2caf8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:09Z
+title: "Xiaomi MiMo"
 ---
 
 # Xiaomi MiMo

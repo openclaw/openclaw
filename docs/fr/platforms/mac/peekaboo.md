@@ -5,19 +5,11 @@ read_when:
   - Intégration de Peekaboo via Swift Package Manager
   - Modification du protocole/des chemins de PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:16Z
 ---
 
 # Peekaboo Bridge (automatisation de l’UI macOS)
 
-OpenClaw peut héberger **PeekabooBridge** en tant que courtier local d’automatisation de l’UI, conscient des autorisations.
-Cela permet à la CLI `peekaboo` de piloter l’automatisation de l’UI tout en réutilisant les autorisations TCC de l’app macOS.
+OpenClaw peut héberger **PeekabooBridge** en tant que courtier local d’automatisation de l’UI, conscient des autorisations. Cela permet à la CLI `peekaboo` de piloter l’automatisation de l’UI tout en réutilisant les autorisations TCC de l’app macOS.
 
 ## Ce que c’est (et ce que ce n’est pas)
 
@@ -62,7 +54,7 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 Les instantanés sont stockés en mémoire et expirent automatiquement après une courte durée.
 Si vous avez besoin d’une conservation plus longue, recapturez depuis le client.
 
-## Dépannage
+## Problemes courants
 
 - Si `peekaboo` indique « bridge client is not authorized », assurez‑vous que le client est
   correctement signé ou exécutez l’hôte avec `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1`

@@ -4,13 +4,6 @@ read_when:
   - Du vil have et LLM-trin kun med JSON inde i workflows
   - Du har brug for skemavalideret LLM-output til automatisering
 title: "LLM-opgave"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:40Z
 ---
 
 # LLM-opgave
@@ -72,8 +65,8 @@ uden at skrive brugerdefineret OpenClaw-kode for hvert workflow.
 }
 ```
 
-`allowedModels` er en tilladelsesliste med `provider/model`-strenge. Hvis den er angivet,
-afvises enhver anmodning uden for listen.
+`allowedModels` er en tilladt liste over `provider/model` strenge. Hvis angivet, en anmodning
+uden for listen afvises.
 
 ## Værktøjsparametre
 

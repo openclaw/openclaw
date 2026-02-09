@@ -4,23 +4,16 @@ read_when:
   - OS の対応状況やインストール方法を確認したい場合
   - Gateway（ゲートウェイ）をどこで実行するか検討している場合
 title: "プラットフォーム"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:27Z
 ---
 
 # プラットフォーム
 
-OpenClaw のコアは TypeScript で記述されています。**Node が推奨ランタイムです**。
-Bun は Gateway（ゲートウェイ）では推奨されていません（WhatsApp / Telegram の不具合があります）。
+OpenClawコアはTypeScriptで書かれています。 **Node は推奨されるランタイムです**
+Bun はゲートウェイ(WhatsApp/Telegramのバグ)には推奨されません。
 
-コンパニオンアプリは macOS（メニューバーアプリ）およびモバイルノード（iOS / Android）向けに提供されています。Windows および
-Linux 向けのコンパニオンアプリは計画中ですが、Gateway（ゲートウェイ）は現在すでに完全にサポートされています。
-Windows 向けのネイティブコンパニオンアプリも計画中であり、Gateway（ゲートウェイ）は WSL2 経由での利用を推奨します。
+コンパニオンアプリはmacOS(メニューバーアプリ)とモバイルノード(iOS/Android)に存在します。 Windows と
+Linux のコンパニオンアプリが計画されていますが、今日ではゲートウェイは完全にサポートされています。
+Windows用のネイティブコンパニオンアプリも計画されています。ゲートウェイはWSL2を介して推奨されます。
 
 ## OS を選択
 

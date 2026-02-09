@@ -1,12 +1,5 @@
 ---
 title: "Pi-utvecklingsarbetsflöde"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:55Z
 ---
 
 # Pi-utvecklingsarbetsflöde
@@ -58,7 +51,7 @@ För verktygsanropsbeteende, prompta för en `read`- eller `exec`-åtgärd så a
 
 ## Återställning till tomt läge
 
-Tillstånd lagras under OpenClaws tillståndskatalog. Standard är `~/.openclaw`. Om `OPENCLAW_STATE_DIR` är satt används den katalogen i stället.
+Staten lever under OpenClaw statskatalog. Standard är `~/.openclaw`. Om `OPENCLAW_STATE_DIR` är satt, använd den katalogen istället.
 
 För att återställa allt:
 
@@ -69,7 +62,7 @@ För att återställa allt:
 - `sessions/` om äldre sökvägar finns
 - `workspace/` om du vill ha en tom arbetsyta
 
-Om du bara vill återställa sessioner, ta bort `agents/<agentId>/sessions/` och `agents/<agentId>/sessions.json` för den agenten. Behåll `credentials/` om du inte vill autentisera igen.
+Om du bara vill återställa sessioner, ta bort `agents/<agentId>/sessions/` och `agents/<agentId>/sessions.json` för den agenten. Behåll `referenser/` om du inte vill återautentisera.
 
 ## Referenser
 

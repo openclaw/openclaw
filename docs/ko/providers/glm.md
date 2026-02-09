@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 에서 GLM 모델을 사용하려는 경우
   - 모델 명명 규칙과 설정이 필요한 경우
 title: "GLM 모델"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:53Z
 ---
 
 # GLM 모델

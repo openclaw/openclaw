@@ -1,15 +1,8 @@
 ---
-summary: „Integracja WhatsApp (kanał webowy): logowanie, skrzynka odbiorcza, odpowiedzi, media i operacje”
+summary: "„Integracja WhatsApp (kanał webowy): logowanie, skrzynka odbiorcza, odpowiedzi, media i operacje”"
 read_when:
   - Praca nad zachowaniem kanału WhatsApp/web lub routowaniem skrzynki odbiorczej
-title: „WhatsApp”
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:37Z
+title: "„WhatsApp”"
 ---
 
 # WhatsApp (kanał webowy)
@@ -211,6 +204,7 @@ Kreator używa go do ustawienia **listy dozwolonych/właściciela**, aby Twoje w
 ## Normalizacja wiadomości (co widzi model)
 
 - `Body` to bieżąca treść wiadomości z kopertą.
+
 - Kontekst cytowanej odpowiedzi jest **zawsze dołączany**:
 
   ```
@@ -223,6 +217,7 @@ Kreator używa go do ustawienia **listy dozwolonych/właściciela**, aby Twoje w
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = cytowana treść lub placeholder medium
   - `ReplyToSender` = E.164, gdy znany
+
 - Wiadomości przychodzące zawierające wyłącznie media używają placeholderów:
   - `<media:image|video|audio|document|sticker>`
 

@@ -5,13 +5,6 @@ read_when:
   - Sie ändern die Bereinigung von Transkripten oder die Reparaturlogik für Tool-Aufrufe
   - Sie untersuchen Inkonsistenzen von Tool-Call-IDs über Anbieter hinweg
 title: "Transkript-Hygiene"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:27Z
 ---
 
 # Transkript-Hygiene (Anbieter-Fixups)

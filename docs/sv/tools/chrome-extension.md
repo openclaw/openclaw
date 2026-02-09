@@ -5,13 +5,6 @@ read_when:
   - Du behöver fjärr-Gateway + lokal webbläsarautomatisering via Tailscale
   - Du vill förstå säkerhetsimplikationerna av webbläsarövertagande
 title: "Chrome-tillägg"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:47Z
 ---
 
 # Chrome-tillägg (webbläsarrelä)
@@ -53,7 +46,7 @@ openclaw browser extension path
 
 ## Uppdateringar (inget byggsteg)
 
-Tillägget levereras inuti OpenClaw-releasen (npm-paketet) som statiska filer. Det finns inget separat ”build”-steg.
+Tillägget fartyg inuti OpenClaw release (npm paket) som statiska filer. Det finns inget separat “bygga” steg.
 
 Efter uppgradering av OpenClaw:
 
@@ -107,13 +100,13 @@ Om du ser `!`:
 
 ### Lokal Gateway (samma maskin som Chrome) — vanligtvis **inga extra steg**
 
-Om Gateway körs på samma maskin som Chrome startar den webbläsarkontrolltjänsten på loopback
-och startar reläservern automatiskt. Tillägget pratar med det lokala reläet; CLI-/verktygsanrop går till Gateway.
+Om Gateway körs på samma maskin som Chrome startar den webbläsarens kontrolltjänst på loopback
+och startar reläservern automatiskt. Förlängningen samtal till det lokala reläet; CLI/tool samtal gå till Gateway.
 
 ### Fjärr-Gateway (Gateway körs någon annanstans) — **kör en nodvärd**
 
-Om din Gateway körs på en annan maskin, starta en nodvärd på maskinen som kör Chrome.
-Gateway proxar webbläsaråtgärder till den noden; tillägget + reläet förblir lokala till webbläsarmaskinen.
+Om din Gateway körs på en annan maskin, starta en nod värd på maskinen som kör Chrome.
+Gateway kommer proxy webbläsare åtgärder till den noden, förlängning + relä stanna lokal till webbläsarmaskinen.
 
 Om flera noder är anslutna, fäst en med `gateway.nodes.browser.node` eller sätt `gateway.nodes.browser.mode`.
 
@@ -156,15 +149,15 @@ Felsökning: `openclaw sandbox explain`
 
 `openclaw browser extension path` skriver ut den **installerade** katalogen på disk som innehåller tilläggsfilerna.
 
-CLI skriver avsiktligt **inte** ut en `node_modules`-sökväg. Kör alltid `openclaw browser extension install` först för att kopiera tillägget till en stabil plats under din OpenClaw-tillståndskatalog.
+CLI skriver medvetet **inte** ut en `node_modules`-sökväg. Kör alltid `openclaw browser extension install` först att kopiera tillägget till en stabil plats under din OpenClaw state katalog.
 
 Om du flyttar eller tar bort den installationskatalogen kommer Chrome att markera tillägget som trasigt tills du laddar om det från en giltig sökväg.
 
 ## Säkerhetsimplikationer (läs detta)
 
-Detta är kraftfullt och riskfyllt. Behandla det som att ge modellen ”händer på din webbläsare”.
+Detta är kraftfullt och riskabelt. Behandla det som att ge modellen “händerna på din webbläsare”.
 
-- Tillägget använder Chromes debugger-API (`chrome.debugger`). När det är anslutet kan modellen:
+- Tillägget använder Chromes debugger API (`chrome.debugger`). När den bifogas kan modellen:
   - klicka/skriva/navigera i den fliken
   - läsa sidinnehåll
   - komma åt allt som flikens inloggade session har åtkomst till

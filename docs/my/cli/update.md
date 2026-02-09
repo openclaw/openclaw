@@ -2,15 +2,8 @@
 summary: "`openclaw update` အတွက် CLI ကိုးကားချက် (အရင်းအမြစ်ကို လုံခြုံစွာ အပ်ဒိတ်လုပ်ခြင်း + Gateway ကို အလိုအလျောက် ပြန်စတင်ခြင်း)"
 read_when:
   - အရင်းအမြစ် checkout ကို လုံခြုံစွာ အပ်ဒိတ်လုပ်ချင်သောအခါ
-  - `--update` shorthand ၏ အပြုအမူကို နားလည်ရန် လိုအပ်သောအခါ
+  - "`--update` shorthand ၏ အပြုအမူကို နားလည်ရန် လိုအပ်သောအခါ"
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:17Z
 ---
 
 # `openclaw update`
@@ -60,7 +53,7 @@ Options:
 
 ## `update wizard`
 
-အပ်ဒိတ် ချန်နယ်ကို ရွေးချယ်ရန်နှင့် အပ်ဒိတ်ပြီးနောက် Gateway ကို ပြန်စတင်မည်/မည်မဟုတ် အတည်ပြုရန် အပြန်အလှန် လုပ်ငန်းစဉ် (မူလအားဖြင့် ပြန်စတင်သည်)။ git checkout မရှိဘဲ `dev` ကို ရွေးချယ်ပါက၊ တစ်ခု ဖန်တီးပေးရန် အကြံပြုပါသည်။
+Update channel တစ်ခုကို ရွေးချယ်ပြီး update ပြီးနောက် Gateway ကို restart လုပ်မလုပ် အတည်ပြုရန် interactive flow (default သည် restart လုပ်ခြင်း)။ `dev` ကို ရွေးချယ်ပြီး git checkout မရှိပါက ၎င်းကို ဖန်တီးရန် ကမ်းလှမ်းပါသည်။
 
 ## What it does
 

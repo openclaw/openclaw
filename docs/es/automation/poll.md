@@ -4,13 +4,6 @@ read_when:
   - Agregar o modificar el soporte de encuestas
   - Depurar envíos de encuestas desde la CLI o el Gateway
 title: "Encuestas"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:21Z
 ---
 
 # Encuestas

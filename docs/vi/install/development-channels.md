@@ -1,16 +1,9 @@
 ---
 summary: "Các kênh stable, beta và dev: ngữ nghĩa, chuyển đổi và gắn thẻ"
 read_when:
-  - "Bạn muốn chuyển giữa stable/beta/dev"
-  - "Bạn đang gắn thẻ hoặc phát hành prerelease"
+  - Bạn muốn chuyển giữa stable/beta/dev
+  - Bạn đang gắn thẻ hoặc phát hành prerelease
 title: "Các kênh phát triển"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:16Z
 ---
 
 # Các kênh phát triển
@@ -21,7 +14,9 @@ OpenClaw cung cấp ba kênh cập nhật:
 
 - **stable**: npm dist-tag `latest`.
 - **beta**: npm dist-tag `beta` (các bản build đang được thử nghiệm).
-- **dev**: đầu nhánh luôn thay đổi của `main` (git). npm dist-tag: `dev` (khi được phát hành).
+- Tùy chọn này chấp nhận một
+  dan sách phân tách bằng dấu phẩy các Docker bind mount và áp dụng chúng cho cả
+  `openclaw-gateway` và `openclaw-cli` bằng cách tạo `docker-compose.extra.yml`. npm dist-tag: `dev` (khi phát hành).
 
 Chúng tôi phát hành các bản build lên **beta**, kiểm thử chúng, sau đó **thăng cấp một bản build đã được thẩm định lên `latest`**
 mà không thay đổi số phiên bản — dist-tag là nguồn chân lý cho các cài đặt npm.
@@ -76,7 +71,7 @@ Khi bạn chuyển kênh bằng `openclaw update`, OpenClaw cũng đồng bộ n
 
 ## Khả dụng của ứng dụng macOS
 
-Các bản build beta và dev có thể **không** bao gồm bản phát hành ứng dụng macOS. Điều đó là bình thường:
+Beta and dev builds may **not** include a macOS app release. That’s OK:
 
 - Git tag và npm dist-tag vẫn có thể được phát hành.
 - Nêu rõ “không có bản build macOS cho bản beta này” trong ghi chú phát hành hoặc changelog.

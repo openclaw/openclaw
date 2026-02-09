@@ -1,18 +1,11 @@
 ---
 summary: "OpenClaw 샌드박스화가 작동하는 방식: 모드, 범위, 워크스페이스 접근, 이미지"
-title: 샌드박스화
+title: Sandboxing
 read_when: "샌드박스화에 대한 전용 설명이 필요하거나 agents.defaults.sandbox 를 튜닝해야 할 때."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:21Z
 ---
 
-# 샌드박스화
+# Sandboxing
 
 OpenClaw 는 **Docker 컨테이너 내부에서 도구를 실행**하여 피해 범위를 줄일 수 있습니다.
 이는 **선택 사항**이며 구성(`agents.defaults.sandbox` 또는
@@ -65,8 +58,7 @@ Gateway(게이트웨이)는 호스트에 유지되며, 활성화 시 도구 실�
 
 수신 미디어는 활성 샌드박스 워크스페이스(`media/inbound/*`)로 복사됩니다.
 Skills 참고: `read` 도구는 샌드박스 루트 기준입니다. `workspaceAccess: "none"`를 사용하면,
-OpenClaw 는 읽을 수 있도록 적격한 Skills 를 샌드박스 워크스페이스(`.../skills`)로 미러링합니다.
-`"rw"`를 사용하면 워크스페이스 Skills 를 `/workspace/skills`에서 읽을 수 있습니다.
+OpenClaw 는 읽을 수 있도록 적격한 Skills 를 샌드박스 워크스페이스(`.../skills`)로 미러링합니다. `"rw"`를 사용하면 워크스페이스 Skills 를 `/workspace/skills`에서 읽을 수 있습니다.
 
 ## 사용자 지정 바인드 마운트
 

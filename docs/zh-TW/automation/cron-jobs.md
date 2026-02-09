@@ -1,24 +1,18 @@
 ---
-summary: 「Gateway 排程器的 Cron 工作 + 喚醒」
+summary: "Gateway 排程器的 Cron 工作 + 喚醒"
 read_when:
   - 排程背景工作或喚醒
   - 串接應與心跳一起或並行執行的自動化
   - 在排程任務中決定使用心跳或 Cron
-title: 「Cron 工作」
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:20Z
+title: "Cron 工作"
 ---
 
 # Cron 工作（Gateway 排程器）
 
 > **Cron vs Heartbeat？** 請參考 [Cron vs Heartbeat](/automation/cron-vs-heartbeat)，了解各自的使用時機。
 
-Cron 是 Gateway 內建的排程器。它會保存工作、在正確時間喚醒代理程式，並可選擇將輸出回傳到聊天。
+Cron 是 Gateway 內建的排程器。它會保存工作、在正確時間喚醒代理程式，並可選擇將輸出回傳到聊天。 It persists jobs, wakes the agent at
+the right time, and can optionally deliver output back to a chat.
 
 如果你想要「每天早上執行一次」或「20 分鐘後戳一下代理程式」，Cron 就是這個機制。
 
@@ -73,6 +67,9 @@ openclaw cron add \
 
 Cron 工作預設會儲存在 Gateway 閘道器主機的 `~/.openclaw/cron/jobs.json`。
 Gateway 會將檔案載入記憶體，並在變更時寫回，因此只有在 Gateway 停止時手動編輯才安全。請優先使用 `openclaw cron add/edit` 或 cron 工具呼叫 API 進行變更。
+The Gateway loads the file into memory and writes it back on changes, so manual edits
+are only safe when the Gateway is stopped. Prefer `openclaw cron add/edit` or the cron
+tool call API for changes.
 
 ## 新手友善概覽
 
@@ -91,7 +88,8 @@ Gateway 會將檔案載入記憶體，並在變更時寫回，因此只有在 Ga
    - 主工作階段 → `payload.kind = "systemEvent"`
    - 隔離工作階段 → `payload.kind = "agentTurn"`
 
-可選項：一次性工作（`schedule.kind = "at"`）預設在成功後刪除。設定 `deleteAfterRun: false` 可保留它們（成功後會停用）。
+可選項：一次性工作（`schedule.kind = "at"`）預設在成功後刪除。設定 `deleteAfterRun: false` 可保留它們（成功後會停用）。 Set
+`deleteAfterRun: false` to keep them (they will disable after success).
 
 ## 概念
 
@@ -100,13 +98,14 @@ Gateway 會將檔案載入記憶體，並在變更時寫回，因此只有在 Ga
 一個 Cron 工作是包含下列項目的儲存紀錄：
 
 - **排程**（何時執行），
-- **負載**（要做什麼），
+- a **payload** (what it should do),
 - 可選的 **傳遞模式**（公告或無）。
-- 可選的 **代理程式綁定**（`agentId`）：在特定代理程式下執行；若缺失或未知，Gateway 會回退至預設代理程式。
+- optional **agent binding** (`agentId`): run the job under a specific agent; if
+  missing or unknown, the gateway falls back to the default agent.
 
-工作以穩定的 `jobId` 識別（供 CLI / Gateway API 使用）。
-在代理程式工具呼叫中，`jobId` 為標準；為相容性也接受舊的 `id`。
-一次性工作預設在成功後自動刪除；設定 `deleteAfterRun: false` 可保留。
+Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
+In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
+One-shot jobs auto-delete after success by default; set `deleteAfterRun: false` to keep them.
 
 ### 排程
 
@@ -116,20 +115,22 @@ Cron 支援三種排程類型：
 - `every`：固定間隔（毫秒）。
 - `cron`：5 欄位 Cron 表達式，可選 IANA 時區。
 
-Cron 表達式使用 `croner`。若未指定時區，將使用 Gateway 閘道器主機的本地時區。
+Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
+local timezone is used.
 
 ### 主工作階段 vs 隔離執行
 
 #### 主工作階段工作（系統事件）
 
+Main jobs enqueue a system event and optionally wake the heartbeat runner.
 主工作會排入一個系統事件，並可選擇喚醒心跳執行器。
 它們必須使用 `payload.kind = "systemEvent"`。
 
 - `wakeMode: "now"`（預設）：事件會觸發立即的心跳執行。
 - `wakeMode: "next-heartbeat"`：事件會等待下一次排定的心跳。
 
-當你需要正常的心跳提示詞 + 主工作階段上下文時，這是最佳選擇。
-請參閱 [Heartbeat](/gateway/heartbeat)。
+This is the best fit when you want the normal heartbeat prompt + main-session context.
+See [Heartbeat](/gateway/heartbeat).
 
 #### 隔離工作（專用 Cron 工作階段）
 
@@ -142,14 +143,14 @@ Cron 表達式使用 `croner`。若未指定時區，將使用 Gateway 閘道器
 - 預設行為：若省略 `delivery`，隔離工作會公告一則摘要（`delivery.mode = "announce"`）。
 - `delivery.mode`（僅限隔離）決定行為：
   - `announce`：將摘要傳遞至目標頻道，並在主工作階段發佈簡短摘要。
-  - `none`：僅內部（不傳遞，也不發佈主工作階段摘要）。
+  - `none`: internal only (no delivery, no main-session summary).
 - `wakeMode` 控制主工作階段摘要的發佈時機：
   - `now`：立即心跳。
   - `next-heartbeat`：等待下一次排定的心跳。
 
 將隔離工作用於嘈雜、頻繁或「背景雜務」，避免汙染主聊天紀錄。
 
-### 負載形狀（執行內容）
+### Payload shapes (what runs)
 
 支援兩種負載類型：
 
@@ -169,19 +170,20 @@ Cron 表達式使用 `croner`。若未指定時區，將使用 Gateway 閘道器
 - `delivery.to`：頻道專屬的目標（電話 / 聊天 / 頻道 ID）。
 - `delivery.bestEffort`：若公告傳遞失敗，避免使工作失敗。
 
-公告傳遞會抑制該次執行中的訊息工具發送；請使用 `delivery.channel` / `delivery.to` 直接指向聊天。當 `delivery.mode = "none"` 時，不會向主工作階段發佈摘要。
+公告傳遞會抑制該次執行中的訊息工具發送；請使用 `delivery.channel` / `delivery.to` 直接指向聊天。當 `delivery.mode = "none"` 時，不會向主工作階段發佈摘要。 When `delivery.mode = "none"`, no summary is posted to the main session.
 
 若隔離工作省略 `delivery`，OpenClaw 會預設為 `announce`。
 
-#### 公告傳遞流程
+#### Announce delivery flow
 
 當 `delivery.mode = "announce"` 時，Cron 會透過對外頻道轉接器直接傳遞。
 主代理程式不會被啟動來撰寫或轉送訊息。
+The main agent is not spun up to craft or forward the message.
 
 行為細節：
 
 - 內容：傳遞會使用隔離執行的對外負載（文字 / 媒體），並套用正常的分塊與頻道格式。
-- 僅心跳回應（`HEARTBEAT_OK` 且無實際內容）不會被傳遞。
+- Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
 - 若隔離執行已透過訊息工具向相同目標發送訊息，為避免重複，將跳過傳遞。
 - 缺失或無效的傳遞目標會使工作失敗，除非設定 `delivery.bestEffort = true`。
 - 只有在 `delivery.mode = "announce"` 時，才會向主工作階段發佈簡短摘要。
@@ -194,11 +196,13 @@ Cron 表達式使用 `croner`。若未指定時區，將使用 Gateway 閘道器
 - `model`：提供者 / 模型字串（例如 `anthropic/claude-sonnet-4-20250514`）或別名（例如 `opus`）
 - `thinking`：思考層級（`off`、`minimal`、`low`、`medium`、`high`、`xhigh`；僅 GPT-5.2 + Codex 模型）
 
-注意：你也可以在主工作階段工作上設定 `model`，但這會變更共享的主工作階段模型。為避免意外的上下文變化，建議僅在隔離工作上使用模型覆寫。
+Note: You can set `model` on main-session jobs too, but it changes the shared main
+session model. We recommend model overrides only for isolated jobs to avoid
+unexpected context shifts.
 
 解析優先順序：
 
-1. 工作負載覆寫（最高）
+1. Job payload override (highest)
 2. Hook 專屬預設（例如 `hooks.gmail.model`）
 3. 代理程式設定預設
 
@@ -221,7 +225,8 @@ Cron 表達式使用 `croner`。若未指定時區，將使用 Gateway 閘道器
 
 #### Telegram 傳遞目標（主題 / 討論串）
 
-Telegram 透過 `message_thread_id` 支援論壇主題。對於 Cron 傳遞，你可以將主題 / 討論串編碼到 `to` 欄位：
+Telegram 透過 `message_thread_id` 支援論壇主題。對於 Cron 傳遞，你可以將主題 / 討論串編碼到 `to` 欄位： For cron delivery, you can encode
+the topic/thread into the `to` field:
 
 - `-1001234567890`（僅聊天 ID）
 - `-1001234567890:topic:123`（建議：明確的主題標記）
@@ -233,6 +238,7 @@ Telegram 透過 `message_thread_id` 支援論壇主題。對於 Cron 傳遞，�
 
 ## 工具呼叫的 JSON schema
 
+Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).
 直接呼叫 Gateway `cron.*` 工具（代理程式工具呼叫或 RPC）時，請使用以下結構。
 CLI 旗標可接受如 `20m` 的人類可讀時間，但工具呼叫應對 `schedule.at` 使用 ISO 8601 字串，並對 `schedule.everyMs` 使用毫秒。
 
@@ -445,7 +451,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - `cron.run`（force 或 due）、`cron.runs`
   若需不建立工作的立即系統事件，請使用 [`openclaw system event`](/cli/system)。
 
-## 疑難排解
+## Troubleshooting
 
 ### 「什麼都沒有執行」
 
@@ -455,8 +461,8 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ### 循環工作在失敗後持續延遲
 
-- OpenClaw 對連續錯誤的循環工作套用指數退避重試：
-  重試間隔依序為 30 秒、1 分鐘、5 分鐘、15 分鐘，接著為 60 分鐘。
+- OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
+  30s, 1m, 5m, 15m, then 60m between retries.
 - 在下一次成功執行後，退避會自動重置。
 - 一次性（`at`）工作在終止性執行後（`ok`、`error` 或 `skipped`）會停用，且不會重試。
 

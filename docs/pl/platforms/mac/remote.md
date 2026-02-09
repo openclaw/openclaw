@@ -1,22 +1,15 @@
 ---
-summary: „Przepływ aplikacji macOS do sterowania zdalną bramą OpenClaw przez SSH”
+summary: "„Przepływ aplikacji macOS do sterowania zdalną bramą OpenClaw przez SSH”"
 read_when:
   - Konfiguracja lub debugowanie zdalnego sterowania macOS
-title: „Zdalne sterowanie”
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:34Z
+title: "„Zdalne sterowanie”"
 ---
 
 # Zdalny OpenClaw (macOS ⇄ host zdalny)
 
 Ten przepływ pozwala aplikacji macOS działać jako pełnoprawny pilot zdalnego sterowania dla bramy OpenClaw uruchomionej na innym hoście (komputer stacjonarny/serwer). Jest to funkcja aplikacji **Remote over SSH** (uruchomienie zdalne). Wszystkie funkcje — kontrole stanu, przekazywanie Voice Wake oraz Web Chat — wykorzystują tę samą zdalną konfigurację SSH z _Ustawienia → Ogólne_.
 
-## Tryby
+## Mody
 
 - **Lokalnie (ten Mac)**: Wszystko działa na laptopie. Bez użycia SSH.
 - **Remote over SSH (domyślne)**: Polecenia OpenClaw są wykonywane na hoście zdalnym. Aplikacja mac otwiera połączenie SSH z `-o BatchMode` oraz wybraną tożsamością/kluczem i lokalnym przekierowaniem portów.
@@ -29,7 +22,7 @@ Tryb zdalny obsługuje dwa transporty:
 - **Tunel SSH** (domyślny): Używa `ssh -N -L ...` do przekierowania portu Gateway na localhost. Gateway będzie widział adres IP węzła jako `127.0.0.1`, ponieważ tunel jest pętlą zwrotną.
 - **Bezpośrednio (ws/wss)**: Łączy się bezpośrednio z adresem URL Gateway. Gateway widzi rzeczywisty adres IP klienta.
 
-## Wymagania wstępne na hoście zdalnym
+## Prereqs na zdalnym hoście
 
 1. Zainstaluj Node + pnpm oraz zbuduj/zainstaluj CLI OpenClaw (`pnpm install && pnpm build && pnpm link --global`).
 2. Upewnij się, że `openclaw` jest na PATH dla powłok nieinteraktywnych (w razie potrzeby utwórz dowiązanie do `/usr/local/bin` lub `/opt/homebrew/bin`).
@@ -55,7 +48,7 @@ Tryb zdalny obsługuje dwa transporty:
 - **Bezpośrednio (ws/wss)**: Web Chat łączy się bezpośrednio z skonfigurowanym adresem URL Gateway.
 - Nie ma już osobnego serwera HTTP WebChat.
 
-## Uprawnienia
+## Permissions
 
 - Host zdalny wymaga tych samych zgód TCC co lokalny (Automatyzacja, Dostępność, Nagrywanie ekranu, Mikrofon, Rozpoznawanie mowy, Powiadomienia). Uruchom onboarding na tej maszynie, aby przyznać je jednorazowo.
 - Węzły ogłaszają swój stan uprawnień przez `node.list` / `node.describe`, aby agenci wiedzieli, co jest dostępne.

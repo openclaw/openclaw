@@ -3,13 +3,6 @@ summary: "Access at auth ng Gateway dashboard (Control UI)"
 read_when:
   - Pagbabago ng authentication o exposure modes ng dashboard
 title: "Dashboard"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:56Z
 ---
 
 # Dashboard (Control UI)
@@ -27,12 +20,12 @@ Mga pangunahing sanggunian:
 - [Tailscale](/gateway/tailscale) para sa Serve/Funnel automation.
 - [Web surfaces](/web) para sa mga bind mode at mga tala sa seguridad.
 
-Ipinapatupad ang authentication sa WebSocket handshake gamit ang `connect.params.auth`
+Ipinapatupad ang authentication sa WebSocket handshake sa pamamagitan ng `connect.params.auth`
 (token o password). Tingnan ang `gateway.auth` sa [Gateway configuration](/gateway/configuration).
 
-Tala sa seguridad: ang Control UI ay isang **admin surface** (chat, config, exec approvals).
-Huwag itong ilantad sa publiko. Iniimbak ng UI ang token sa `localStorage` pagkatapos ng unang load.
-Mas piliin ang localhost, Tailscale Serve, o SSH tunnel.
+Paalaala sa seguridad: ang Control UI ay isang **admin surface** (chat, config, exec approvals).
+Huwag itong ilantad sa publiko. Ini-store ng UI ang token sa `localStorage` pagkatapos ng unang load.
+Mas mainam ang localhost, Tailscale Serve, o isang SSH tunnel.
 
 ## Mabilis na ruta (inirerekomenda)
 

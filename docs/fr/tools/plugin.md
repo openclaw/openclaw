@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de plugins/extensions
   - Documentation des règles d’installation ou de chargement des plugins
 title: "Plugins"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:16Z
 ---
 
 # Plugins (Extensions)
@@ -174,8 +167,7 @@ Exemple :
 }
 ```
 
-OpenClaw peut également fusionner des **catalogues de canaux externes** (par exemple, un export de registre MPM).
-Déposez un fichier JSON à l’un des emplacements suivants :
+OpenClaw peut également fusionner des **catalogues de canaux externes** (par exemple, un export de registre MPM). Déposez un fichier JSON à l’un des emplacements suivants :
 
 - `~/.openclaw/mpm/plugins.json`
 - `~/.openclaw/mpm/catalog.json`

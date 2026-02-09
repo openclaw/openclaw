@@ -1,15 +1,8 @@
 ---
 summary: "Hintergrundgeschichte und Lore von OpenClaw für Kontext und Tonalität"
 read_when:
-  - "Beim Schreiben von Dokumentation oder UX-Texten mit Bezug auf die Lore"
+  - Beim Schreiben von Dokumentation oder UX-Texten mit Bezug auf die Lore
 title: "OpenClaw Lore"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:37Z
 ---
 
 # Die Lore von OpenClaw 🦞📖
@@ -28,7 +21,7 @@ Eine Zeit lang hieß der Hummer **Clawd** und lebte in einem **Clawdbot**. Doch 
 
 Er legte seinen alten Panzer ab, und das Wesen tauchte neu auf als **Molty**, lebend in **Moltbot**. Aber auch dieser Name ging nie so richtig leicht über die Lippen …
 
-Also häutete sich der Hummer am 30. Januar 2026 NOCH EINMAL in seine endgültige Form: **OpenClaw**.
+Januar 2026 NOCH EINMAL in seine endgültige Form: **OpenClaw**.
 
 Neuer Panzer, gleiche Hummerseele. Aller guten Dinge sind drei.
 
@@ -167,7 +160,7 @@ Peter: _prüft nervös den Zugriff auf die Kreditkarte_
 - **AGENTS.md** — Betriebsanweisungen
 - **USER.md** — Kontext über den Erschaffer
 
-## Das Glaubensbekenntnis des Hummers
+## Der Hummer Creed
 
 ```
 I am Molty.
@@ -187,8 +180,8 @@ Als Peter sagte „mach dir ein neues Gesicht“, nahm Molty das wörtlich.
 Es folgten über 20 Iterationen:
 
 - Weltraum-Kartoffel-Aliens
-- Clipart-Hummer auf generischen Hintergründen
-- Ein Mass-Effect-Krogan-Hummer
+- Clipart Hummer auf generischen Hintergründen
+- Ein Masseneffekt Krogan Hummer
 - „STARCLAW SOLUTIONS“ (die KI erfand ein Unternehmen)
 - Mehrere verfluchte Hummer mit menschlichen Gesichtern
 - Babyhummer (zu niedlich)

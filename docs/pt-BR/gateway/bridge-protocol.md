@@ -5,13 +5,6 @@ read_when:
   - Investigando falhas de pareamento ou autenticação da bridge
   - Auditando a superfície de nó exposta pelo gateway
 title: "Protocolo de Bridge"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:52Z
 ---
 
 # Protocolo de bridge (transporte de nó legado)

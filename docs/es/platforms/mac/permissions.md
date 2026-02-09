@@ -5,13 +5,6 @@ read_when:
   - Empaquetado o firma de la app de macOS
   - Cambio de IDs de paquete o rutas de instalación de la app
 title: "Permisos de macOS"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:10Z
 ---
 
 # permisos de macOS (TCC)

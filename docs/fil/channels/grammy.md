@@ -3,13 +3,6 @@ summary: "Integrasyon ng Telegram Bot API sa pamamagitan ng grammY na may mga ta
 read_when:
   - Kapag nagtatrabaho sa mga pathway ng Telegram o grammY
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:19Z
 ---
 
 # Integrasyon ng grammY (Telegram Bot API)
@@ -23,12 +16,12 @@ x-i18n:
 # Ano ang naihatid namin
 
 - **Iisang client path:** tinanggal ang fetch-based na implementasyon; ang grammY na ngayon ang tanging Telegram client (send + gateway) na may grammY throttler na naka-enable bilang default.
-- **Gateway:** `monitorTelegramProvider` bumubuo ng isang grammY `Bot`, ikinakabit ang mention/allowlist gating, media download sa pamamagitan ng `getFile`/`download`, at naghahatid ng mga reply gamit ang `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument`. Sinusuportahan ang long-poll o webhook sa pamamagitan ng `webhookCallback`.
+- Mga karaniwang sanhi: **Hindi naka-configure ang channel**: Nawawala ang seksyong `channels.googlechat` sa iyong config.
 - **Proxy:** opsyonal na `channels.telegram.proxy` gumagamit ng `undici.ProxyAgent` sa pamamagitan ng `client.baseFetch` ng grammY.
-- **Suporta sa webhook:** `webhook-set.ts` nagbabalot ng `setWebhook/deleteWebhook`; `webhook.ts` nagho-host ng callback na may health + graceful shutdown. Ini-enable ng Gateway ang webhook mode kapag naka-set ang `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` (kung hindi, magla-long-poll ito).
+- **Gateway:** Ang `monitorTelegramProvider` ay bumubuo ng isang grammY `Bot`, ikinakabit ang mention/allowlist gating, pag-download ng media sa pamamagitan ng `getFile`/`download`, at naghahatid ng mga sagot gamit ang `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument`. Gateway enables webhook mode when `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` are set (otherwise it long-polls).
 - **Mga session:** ang mga direct chat ay pinagsasama sa pangunahing session ng agent (`agent:<agentId>:<mainKey>`); ang mga group ay gumagamit ng `agent:<agentId>:telegram:group:<chatId>`; ang mga reply ay niruruta pabalik sa parehong channel.
 - **Mga config knob:** `channels.telegram.botToken`, `channels.telegram.dmPolicy`, `channels.telegram.groups` (mga default ng allowlist + mention), `channels.telegram.allowFrom`, `channels.telegram.groupAllowFrom`, `channels.telegram.groupPolicy`, `channels.telegram.mediaMaxMb`, `channels.telegram.linkPreview`, `channels.telegram.proxy`, `channels.telegram.webhookSecret`, `channels.telegram.webhookUrl`.
-- **Draft streaming:** opsyonal na `channels.telegram.streamMode` gumagamit ng `sendMessageDraft` sa mga private topic chat (Bot API 9.3+). Hiwalay ito mula sa channel block streaming.
+- **Suporta sa webhook:** Ang `webhook-set.ts` ay nagbabalot ng `setWebhook/deleteWebhook`; ang `webhook.ts` ay nagho-host ng callback na may health + maayos na shutdown. Pinapagana ng gateway ang webhook mode kapag naka-set ang `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` (kung hindi, long-poll ang gamit).
 - **Mga test:** sinasaklaw ng grammY mocks ang DM + group mention gating at outbound send; mas marami pang media/webhook fixtures ang malugod na tinatanggap.
 
 Mga bukas na tanong

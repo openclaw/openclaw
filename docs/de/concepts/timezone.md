@@ -4,13 +4,6 @@ read_when:
   - Sie müssen verstehen, wie Zeitstempel für das Modell normalisiert werden
   - Konfiguration der Benutzerzeitzone für System-Prompts
 title: "Zeitzonen"
-x-i18n:
-  source_path: concepts/timezone.md
-  source_hash: 9ee809c96897db11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:58Z
 ---
 
 # Zeitzonen

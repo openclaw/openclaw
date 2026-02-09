@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn một hướng dẫn thân thiện cho người mới về TUI
   - Bạn cần danh sách đầy đủ các tính năng, lệnh và phím tắt của TUI
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:44Z
 ---
 
 # TUI (Terminal UI)
@@ -49,7 +42,7 @@ Dùng `--password` nếu Gateway của bạn dùng xác thực bằng mật kh�
 
 ## Mô hình tư duy: tác tử + phiên
 
-- Tác tử là các slug duy nhất (ví dụ: `main`, `research`). Gateway cung cấp danh sách này.
+- Agents are unique slugs (e.g. `main`, `research`). Gateway phơi bày danh sách này.
 - Phiên thuộc về tác tử hiện tại.
 - Khóa phiên được lưu dưới dạng `agent:<agentId>:<sessionKey>`.
   - Nếu bạn gõ `/session main`, TUI sẽ mở rộng thành `agent:<currentAgent>:main`.
@@ -113,7 +106,7 @@ Vòng đời phiên:
 - `/settings`
 - `/exit`
 
-Các lệnh slash khác của Gateway (ví dụ, `/context`) được chuyển tiếp tới Gateway và hiển thị như đầu ra hệ thống. Xem [Slash commands](/tools/slash-commands).
+Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. 37. Xem [Slash commands](/tools/slash-commands).
 
 ## Lệnh shell cục bộ
 
@@ -149,8 +142,8 @@ Các lệnh slash khác của Gateway (ví dụ, `/context`) được chuyển t
 - `--thinking <level>`: ghi đè mức độ suy nghĩ cho các lần gửi
 - `--timeout-ms <ms>`: thời gian chờ của tác tử tính bằng ms (mặc định `agents.defaults.timeoutSeconds`)
 
-Lưu ý: khi bạn đặt `--url`, TUI sẽ không dùng dự phòng từ cấu hình hoặc thông tin xác thực trong môi trường.
-Hãy truyền `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là lỗi.
+Lưu ý: khi bạn đặt `--url`, TUI không fallback về thông tin xác thực từ config hoặc môi trường.
+Truyền `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là một lỗi.
 
 ## Xử lý sự cố
 

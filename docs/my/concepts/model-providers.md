@@ -4,19 +4,12 @@ read_when:
   - ပံ့ပိုးသူအလိုက် မော်ဒယ် တပ်ဆင်မှု အညွှန်းကို လိုအပ်သည့်အခါ
   - မော်ဒယ် ပံ့ပိုးသူများအတွက် ဥပမာ config များ သို့မဟုတ် CLI onboarding အမိန့်များကို ကြည့်လိုသည့်အခါ
 title: "Model Providers"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:23Z
 ---
 
 # Model providers
 
-ဤစာမျက်နှာသည် **LLM/မော်ဒယ် ပံ့ပိုးသူများ** ကို ဖော်ပြထားပြီး (WhatsApp/Telegram ကဲ့သို့သော ချတ် ချန်နယ်များ မပါဝင်ပါ)။
-မော်ဒယ် ရွေးချယ်မှု စည်းမျဉ်းများအတွက် [/concepts/models](/concepts/models) ကို ကြည့်ပါ။
+This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
+For model selection rules, see [/concepts/models](/concepts/models).
 
 ## Quick rules
 
@@ -26,8 +19,8 @@ x-i18n:
 
 ## Built-in providers (pi-ai catalog)
 
-OpenClaw သည် pi‑ai catalog ကို တစ်ခါတည်း ပါဝင်ပေးထားသည်။ ဤပံ့ပိုးသူများအတွက်
-`models.providers` config **မလိုအပ်**ပါ; auth ကို သတ်မှတ်ပြီး မော်ဒယ်တစ်ခုကို ရွေးချယ်ရုံသာ လိုအပ်သည်။
+OpenClaw ships with the pi‑ai catalog. These providers require **no**
+`models.providers` config; just set auth + pick a model.
 
 ### OpenAI
 
@@ -98,8 +91,8 @@ OpenClaw သည် pi‑ai catalog ကို တစ်ခါတည်း ပါ�
 - Gemini CLI OAuth ကို bundled plugin အဖြစ် ပို့ဆောင်ထားပြီး (`google-gemini-cli-auth`, မူလအနေဖြင့် ပိတ်ထားသည်)။
   - Enable: `openclaw plugins enable google-gemini-cli-auth`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-  - Note: `openclaw.json` ထဲသို့ client id သို့မဟုတ် secret ကို **မကူးထည့်ရပါ**။ CLI login လုပ်ငန်းစဉ်သည်
-    token များကို Gateway ဟို့စ် ပေါ်ရှိ auth profiles များတွင် သိမ်းဆည်းထားပါသည်။
+  - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
+    tokens in auth profiles on the gateway host.
 
 ### Z.AI (GLM)
 
@@ -190,8 +183,8 @@ Kimi Coding သည် Moonshot AI ၏ Anthropic-compatible endpoint ကို �
 
 ### Qwen OAuth (free tier)
 
-Qwen သည် device-code flow ကို အသုံးပြုပြီး Qwen Coder + Vision သို့ OAuth ဝင်ရောက်ခွင့် ပံ့ပိုးပါသည်။
-Bundled plugin ကို enable လုပ်ပြီးနောက် login ဝင်ပါ။
+Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
+Enable the bundled plugin, then log in:
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +257,7 @@ ollama pull llama3.3
 }
 ```
 
-Ollama သည် `http://127.0.0.1:11434/v1` တွင် local အဖြစ် လည်ပတ်နေသည့်အခါ အလိုအလျောက် ရှာဖွေတွေ့ရှိပါသည်။ မော်ဒယ် အကြံပြုချက်များနှင့် custom configuration များအတွက် [/providers/ollama](/providers/ollama) ကို ကြည့်ပါ။
+Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
@@ -303,8 +296,8 @@ Ollama သည် `http://127.0.0.1:11434/v1` တွင် local အဖြစ် 
 
 Notes:
 
-- custom providers များအတွက် `reasoning`, `input`, `cost`, `contextWindow`, နှင့် `maxTokens` သည် မလိုအပ်ဘဲ ရွေးချယ်နိုင်ပါသည်။
-  မထည့်သွင်းထားပါက OpenClaw သည် အောက်ပါအတိုင်း default သတ်မှတ်ပါသည်။
+- For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
+  When omitted, OpenClaw defaults to:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

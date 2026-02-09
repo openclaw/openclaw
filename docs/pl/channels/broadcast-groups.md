@@ -5,13 +5,6 @@ read_when:
   - Debugowanie odpowiedzi wielu agentów w WhatsApp
 status: experimental
 title: "Grupy rozgłoszeniowe"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:04Z
 ---
 
 # Grupy rozgłoszeniowe
@@ -109,7 +102,7 @@ Wszyscy agenci przetwarzają jednocześnie:
 }
 ```
 
-#### Sekwencyjnie
+#### Sekwencyjne
 
 Agenci przetwarzają po kolei (jeden czeka, aż poprzedni zakończy):
 
@@ -433,7 +426,7 @@ interface OpenClawConfig {
 3. **Kolejność wiadomości:** Odpowiedzi równoległe mogą docierać w dowolnej kolejności
 4. **Limity szybkości:** Wszyscy agenci wliczają się do limitów WhatsApp
 
-## Przyszłe rozszerzenia
+## Przyszłe ulepszenia
 
 Planowane funkcje:
 

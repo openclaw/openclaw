@@ -6,25 +6,18 @@ read_when:
   - Gusto mo ang setup-token o mga OAuth auth flow
   - Gusto mo ng maraming account o routing batay sa profile
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # OAuth
 
-Sinusuportahan ng OpenClaw ang “subscription auth” gamit ang OAuth para sa mga provider na nag-aalok nito (lalo na ang **OpenAI Codex (ChatGPT OAuth)**). Para sa mga Anthropic subscription, gamitin ang **setup-token** flow. Ipinapaliwanag ng pahinang ito:
+OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, use the **setup-token** flow. This page explains:
 
 - kung paano gumagana ang OAuth **token exchange** (PKCE)
 - kung saan **iniimbak** ang mga token (at kung bakit)
 - kung paano pangasiwaan ang **maraming account** (mga profile + per-session na override)
 
-Sinusuportahan din ng OpenClaw ang **provider plugins** na may sariling OAuth o API‑key
-flows. Patakbuhin ang mga ito sa pamamagitan ng:
+OpenClaw also supports **provider plugins** that ship their own OAuth or API‑key
+flows. Run them via:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -32,7 +25,7 @@ openclaw models auth login --provider <id>
 
 ## Ang token sink (bakit ito umiiral)
 
-Karaniwang gumagawa ang mga OAuth provider ng **bagong refresh token** sa panahon ng login/refresh flows. Ang ilang provider (o OAuth client) ay maaaring mag-invalidate ng mas lumang refresh token kapag may bagong na-isyu para sa parehong user/app.
+OAuth providers commonly mint a **new refresh token** during login/refresh flows. Some providers (or OAuth clients) can invalidate older refresh tokens when a new one is issued for the same user/app.
 
 Praktikal na sintomas:
 
@@ -54,7 +47,7 @@ Legacy na import-only file (suportado pa rin, ngunit hindi ang pangunahing store
 
 - `~/.openclaw/credentials/oauth.json` (ini-import sa `auth-profiles.json` sa unang gamit)
 
-Lahat ng nasa itaas ay sumusunod din sa `$OPENCLAW_STATE_DIR` (state dir override). Buong sanggunian: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token (subscription auth)
 
@@ -118,7 +111,7 @@ Awtomatiko ang refresh flow; karaniwan ay hindi mo kailangang pamahalaan ang mga
 
 Dalawang pattern:
 
-### 1) Inirerekomenda: hiwalay na mga agent
+### 1. Inirerekomenda: hiwalay na mga agent
 
 Kung gusto mong hindi kailanman magkahalo ang “personal” at “work,” gumamit ng mga isolated agent (hiwalay na mga session + kredensyal + workspace):
 
@@ -129,7 +122,7 @@ openclaw agents add personal
 
 Pagkatapos ay i-configure ang auth per-agent (wizard) at iruta ang mga chat sa tamang agent.
 
-### 2) Advanced: maraming profile sa iisang agent
+### 2. Advanced: maraming profile sa iisang agent
 
 Sinusuportahan ng `auth-profiles.json` ang maraming profile ID para sa parehong provider.
 

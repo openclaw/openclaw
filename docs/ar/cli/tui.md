@@ -4,13 +4,6 @@ read_when:
   - تريد واجهة مستخدم طرفية لـ Gateway «البوابة» (ملائمة للاستخدام عن بُعد)
   - تريد تمرير url/‏token/‏session من السكربتات
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: aa6f37b960926997
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:03Z
 ---
 
 # `openclaw tui`

@@ -4,17 +4,10 @@ read_when:
   - DM erişim denetimini ayarlarken
   - Yeni bir iOS/Android düğümünü eşleştirirken
   - OpenClaw güvenlik duruşunu gözden geçirirken
-title: "Eşleştirme"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:55Z
+title: "Pairing"
 ---
 
-# Eşleştirme
+# Pairing
 
 “Eşleştirme”, OpenClaw’ın açık **sahip onayı** adımıdır.
 İki yerde kullanılır:
@@ -24,7 +17,7 @@ x-i18n:
 
 Güvenlik bağlamı: [Güvenlik](/gateway/security)
 
-## 1) DM eşleştirme (gelen sohbet erişimi)
+## 1. DM eşleştirme (gelen sohbet erişimi)
 
 Bir kanal DM politikası `pairing` ile yapılandırıldığında, bilinmeyen göndericilere kısa bir kod verilir ve onaylayana kadar mesajları **işlenmez**.
 
@@ -45,16 +38,16 @@ openclaw pairing approve telegram <CODE>
 
 Desteklenen kanallar: `telegram`, `whatsapp`, `signal`, `imessage`, `discord`, `slack`.
 
-### Durumun nerede tutulduğu
+### Where the state lives
 
 `~/.openclaw/credentials/` altında saklanır:
 
 - Bekleyen istekler: `<channel>-pairing.json`
 - Onaylı izin listesi deposu: `<channel>-allowFrom.json`
 
-Bunları hassas olarak değerlendirin (asistanınıza erişimi sınırlarlar).
+Treat these as sensitive (they gate access to your assistant).
 
-## 2) Düğüm cihaz eşleştirme (iOS/Android/macOS/başsız düğümler)
+## 2. Düğüm cihaz eşleştirme (iOS/Android/macOS/başsız düğümler)
 
 Düğümler, `role: node` ile **cihaz** olarak Gateway’e bağlanır. Gateway (Ağ Geçidi),
 onaylanması gereken bir cihaz eşleştirme isteği oluşturur.

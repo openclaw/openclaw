@@ -4,13 +4,6 @@ read_when:
   - Вам нужен терминальный интерфейс для Gateway (шлюза) (подходит для удалённой работы)
   - Вам нужно передавать url/токен/сеанс из скриптов
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: aa6f37b960926997
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:18Z
 ---
 
 # `openclaw tui`

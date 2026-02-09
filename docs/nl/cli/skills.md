@@ -4,13 +4,6 @@ read_when:
   - Je wilt zien welke Skills beschikbaar zijn en klaar om te draaien
   - Je wilt ontbrekende binaries/omgevingsvariabelen/configuratie voor Skills debuggen
 title: "skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # `openclaw skills`
@@ -23,7 +16,7 @@ Gerelateerd:
 - Skills-config: [Skills config](/tools/skills-config)
 - ClawHub-installaties: [ClawHub](/tools/clawhub)
 
-## Opdrachten
+## Commands
 
 ```bash
 openclaw skills list

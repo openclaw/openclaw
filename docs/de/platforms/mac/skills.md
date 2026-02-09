@@ -1,16 +1,9 @@
 ---
-summary: „macOS-Skills-Einstellungs-UI und Gateway-gestützter Status“
+summary: "„macOS-Skills-Einstellungs-UI und Gateway-gestützter Status“"
 read_when:
   - „Aktualisieren der macOS-Skills-Einstellungs-UI“
   - „Ändern der Skills-Gating- oder Installationslogik“
-title: „Skills“
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:52Z
+title: "„Skills“"
 ---
 
 # Skills (macOS)

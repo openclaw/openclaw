@@ -1,22 +1,15 @@
 ---
 summary: "Uyandırma sözcüğü ve bas-konuş çakıştığında sesli yer paylaşımının yaşam döngüsü"
 read_when:
-  - Sesli yer paylaşımı davranışını ayarlarken
-title: "Sesli Yer Paylaşımı"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:38Z
+  - Ses kaplama davranışını ayarlama
+title: "Ses Kaplaması"
 ---
 
 # Sesli Yer Paylaşımı Yaşam Döngüsü (macOS)
 
 Hedef kitle: macOS uygulaması katkıda bulunanlar. Amaç: uyandırma sözcüğü ve bas-konuş çakıştığında sesli yer paylaşımını öngörülebilir tutmak.
 
-## Mevcut niyet
+## Mevcut amaç
 
 - Yer paylaşımı zaten uyandırma sözcüğü nedeniyle görünür durumdaysa ve kullanıcı kısayol tuşuna basarsa, kısayol oturumu metni sıfırlamak yerine mevcut metni _devralır_. Kısayol basılı tutulduğu sürece yer paylaşımı açık kalır. Kullanıcı bıraktığında: kırpılmış metin varsa gönder, yoksa kapat.
 - Yalnızca uyandırma sözcüğü, sessizlikte otomatik gönderim yapmaya devam eder; bas-konuş bırakıldığında hemen gönderir.
@@ -49,13 +42,14 @@ Hedef kitle: macOS uygulaması katkıda bulunanlar. Amaç: uyandırma sözcüğ�
 
 ## Hata ayıklama kontrol listesi
 
-- Yapışkan bir yer paylaşımını yeniden üretirken günlükleri akış halinde izleyin:
+- Takılı kalan bir kaplamayı yeniden üretirken günlükleri akış halinde izleyin:
 
   ```bash
   sudo log stream --predicate 'subsystem == "bot.molt" AND category CONTAINS "voicewake"' --level info --style compact
   ```
 
 - Yalnızca bir etkin oturum belirteci olduğunu doğrulayın; bayat geri çağırmalar koordinatör tarafından düşürülmelidir.
+
 - Bas-konuş bırakma işleminin her zaman etkin belirteçle `endCapture`’i çağırdığından emin olun; metin boşsa zil veya gönderim olmadan `dismiss` bekleyin.
 
 ## Geçiş adımları (önerilen)

@@ -5,13 +5,6 @@ read_when:
   - Node runner + UI IPC ကို အကောင်အထည်ဖော်နေချိန်
   - Exec host security modes နှင့် slash commands ကို ထည့်သွင်းနေချိန်
 title: "Exec Host Refactor"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:16Z
 ---
 
 # Exec host ပြန်လည်ဖွဲ့စည်းရေး အစီအစဉ်
@@ -258,7 +251,7 @@ Option B:
 ## Output ကန့်သတ်ချက်များ
 
 - stdout+stderr စုပေါင်းကို **200k** အထိ ကန့်သတ်; events အတွက် **tail 20k** ကို ထားရှိ။
-- ပြတ်တောက်မှုကို ရှင်းလင်းသော suffix ဖြင့် ဖော်ပြ (ဥပမာ `"… (truncated)"`)။
+- 35. အဆုံးသတ်ကို ရှင်းလင်းသော suffix ဖြင့် truncate လုပ်ပါ (ဥပမာ၊ `"…` 36. (truncated)\`)။
 
 ## Slash commands
 

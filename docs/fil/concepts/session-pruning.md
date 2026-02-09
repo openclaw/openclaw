@@ -3,18 +3,11 @@ summary: "Session pruning: pag-trim ng tool-result para mabawasan ang paglobo ng
 read_when:
   - Gusto mong bawasan ang paglaki ng LLM context mula sa mga output ng tool
   - Tina-tune mo ang agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:27Z
 ---
 
 # Session Pruning
 
-Ang session pruning ay nagta-trim ng **mga lumang resulta ng tool** mula sa in-memory context bago ang bawat tawag sa LLM. **Hindi** nito nire-rewrite ang on-disk na history ng session (`*.jsonl`).
+Session pruning trims **old tool results** from the in-memory context right before each LLM call. It does **not** rewrite the on-disk session history (`*.jsonl`).
 
 ## Kailan ito tumatakbo
 
@@ -32,7 +25,7 @@ Ang session pruning ay nagta-trim ng **mga lumang resulta ng tool** mula sa in-m
 
 ## Ano ang pinapabuti nito (gastos + behavior ng cache)
 
-- **Bakit nagpi-prune:** Ang Anthropic prompt caching ay naaangkop lang sa loob ng TTL. Kung ang session ay naging idle lampas sa TTL, ang susunod na request ay muling magca-cache ng buong prompt maliban kung i-trim mo muna ito.
+- **Why prune:** Anthropic prompt caching only applies within the TTL. If a session goes idle past the TTL, the next request re-caches the full prompt unless you trim it first.
 - **Ano ang mas nagiging mura:** binabawasan ng pruning ang laki ng **cacheWrite** para sa unang request pagkatapos mag-expire ang TTL.
 - **Bakit mahalaga ang pag-reset ng TTL:** kapag tumakbo ang pruning, nagre-reset ang cache window, kaya ang mga follow‑up request ay puwedeng mag-reuse ng bagong naka-cache na prompt sa halip na muling i-cache ang buong history.
 - **Ano ang hindi nito ginagawa:** hindi nagdadagdag ng token o “doble” na gastos ang pruning; binabago lang nito kung ano ang naka-cache sa unang post‑TTL request.
@@ -47,7 +40,7 @@ Ang session pruning ay nagta-trim ng **mga lumang resulta ng tool** mula sa in-m
 
 ## Pagtatantiya ng context window
 
-Gumagamit ang pruning ng tinantyang context window (chars ≈ tokens × 4). Nireresolba ang base window sa ganitong pagkakasunod-sunod:
+Pruning uses an estimated context window (chars ≈ tokens × 4). The base window is resolved in this order:
 
 1. `models.providers.*.models[].contextWindow` override.
 2. Model definition `contextWindow` (mula sa model registry).
@@ -79,7 +72,7 @@ Kung naka-set ang `agents.defaults.contextTokens`, itinuturing itong cap (min) s
 ## Pakikipag-ugnayan sa iba pang limitasyon
 
 - Ang mga built-in na tool ay nagta-truncate na ng sarili nilang output; ang session pruning ay dagdag na layer na pumipigil sa mahahabang chat na makaipon ng sobrang tool output sa context ng model.
-- Hiwalay ang compaction: ang compaction ay nagbubuod at nagpe-persist, samantalang ang pruning ay transient kada request. Tingnan ang [/concepts/compaction](/concepts/compaction).
+- Compaction is separate: compaction summarizes and persists, pruning is transient per request. See [/concepts/compaction](/concepts/compaction).
 
 ## Mga default (kapag naka-enable)
 

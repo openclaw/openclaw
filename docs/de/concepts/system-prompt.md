@@ -1,16 +1,9 @@
 ---
-summary: „Was der OpenClaw-System-Prompt enthält und wie er zusammengestellt wird“
+summary: "„Was der OpenClaw-System-Prompt enthält und wie er zusammengestellt wird“"
 read_when:
   - Beim Bearbeiten des System-Prompt-Texts, der Werkzeugliste oder der Zeit-/Heartbeat-Abschnitte
   - Beim Ändern des Workspace-Bootstraps oder des Verhaltens der Skills-Injektion
-title: „System-Prompt“
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:06Z
+title: "„System-Prompt“"
 ---
 
 # System-Prompt

@@ -4,18 +4,11 @@ read_when:
   - OpenClaw နှင့်အတူ Amazon Bedrock မော်ဒယ်များကို အသုံးပြုလိုသောအခါ
   - မော်ဒယ်ခေါ်ယူမှုများအတွက် AWS အထောက်အထား/ဒေသ သတ်မှတ်မှု လိုအပ်သောအခါ
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # Amazon Bedrock
 
-OpenClaw သည် pi‑ai ၏ **Bedrock Converse** စီးဆင်းပို့ဆောင်မှု ပံ့ပိုးသူကို အသုံးပြု၍ **Amazon Bedrock** မော်ဒယ်များကို အသုံးပြုနိုင်သည်။ Bedrock အတည်ပြုမှုသည် **AWS SDK default credential chain** ကို အသုံးပြု하며 API key မလိုအပ်ပါ။
+OpenClaw သည် pi‑ai ၏ **Bedrock Converse** streaming provider မှတဆင့် **Amazon Bedrock** models များကို အသုံးပြုနိုင်ပါသည်။ Bedrock auth သည် API key မဟုတ်ဘဲ **AWS SDK default credential chain** ကို အသုံးပြုပါသည်။
 
 ## pi‑ai မှ ပံ့ပိုးထားသည်များ
 
@@ -26,7 +19,7 @@ OpenClaw သည် pi‑ai ၏ **Bedrock Converse** စီးဆင်းပိ�
 
 ## မော်ဒယ် အလိုအလျောက် ရှာဖွေတွေ့ရှိမှု
 
-AWS အထောက်အထားများကို တွေ့ရှိပါက OpenClaw သည် **streaming** နှင့် **text output** ကို ပံ့ပိုးသော Bedrock မော်ဒယ်များကို အလိုအလျောက် ရှာဖွေတွေ့ရှိနိုင်သည်။ ရှာဖွေတွေ့ရှိမှုတွင် `bedrock:ListFoundationModels` ကို အသုံးပြုပြီး cache ထားသည် (မူလတန်ဖိုး: ၁ နာရီ)။
+AWS credentials များကို တွေ့ရှိပါက OpenClaw သည် **streaming** နှင့် **text output** ကို support လုပ်သော Bedrock models များကို အလိုအလျောက် discover လုပ်နိုင်ပါသည်။ Discovery သည် `bedrock:ListFoundationModels` ကို အသုံးပြုပြီး cache လုပ်ထားသည် (မူလသတ်မှတ်ချက်: ၁ နာရီ)။
 
 Config ရွေးချယ်မှုများသည် `models.bedrockDiscovery` အောက်တွင် ရှိပါသည်—
 
@@ -103,9 +96,10 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2 Instance Roles
 
-IAM role ကို ချိတ်ဆက်ထားသော EC2 instance ပေါ်တွင် OpenClaw ကို လည်ပတ်သည့်အခါ AWS SDK သည် authentication အတွက် instance metadata service (IMDS) ကို အလိုအလျောက် အသုံးပြုပါသည်။ သို့သော် OpenClaw ၏ credential detection သည် လက်ရှိတွင် environment variables များကိုသာ စစ်ဆေးပြီး IMDS အထောက်အထားများကို မစစ်ဆေးပါ။
+IAM role ကို ချိတ်ဆက်ထားသော EC2 instance ပေါ်တွင် OpenClaw ကို chạy လုပ်သောအခါ AWS SDK သည် authentication အတွက် instance metadata service (IMDS) ကို အလိုအလျောက် အသုံးပြုမည်ဖြစ်သည်။
+သို့သော် OpenClaw ၏ credential detection သည် လက်ရှိတွင် environment variables များကိုသာ စစ်ဆေးပြီး IMDS credentials များကို မစစ်ဆေးပါ။
 
-**အလုပ်လည်ပတ်နည်း:** AWS အထောက်အထားများ ရရှိနိုင်ကြောင်း အချက်ပြရန် `AWS_PROFILE=default` ကို သတ်မှတ်ပါ။ အမှန်တကယ် authentication သည် IMDS မှတစ်ဆင့် instance role ကို ဆက်လက် အသုံးပြုနေပါမည်။
+**Workaround:** AWS credentials ရရှိနိုင်ကြောင်း ပြသရန် `AWS_PROFILE=default` ကို သတ်မှတ်ပါ။ အမှန်တကယ် authentication သည် IMDS မှတဆင့် instance role ကို အသုံးပြုနေဆဲဖြစ်သည်။
 
 ```bash
 # Add to ~/.bashrc or your shell profile

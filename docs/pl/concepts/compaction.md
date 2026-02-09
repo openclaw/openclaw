@@ -1,16 +1,9 @@
 ---
-summary: „Okno kontekstu + kompakcja: jak OpenClaw utrzymuje sesje w limitach modelu”
+summary: "„Okno kontekstu + kompakcja: jak OpenClaw utrzymuje sesje w limitach modelu”"
 read_when:
   - Chcesz zrozumieć automatyczną kompakcję i /compact
   - Debugujesz długie sesje trafiające na limity kontekstu
-title: „Kompakcja”
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:03Z
+title: "Kompakcja a przycinanie"
 ---
 
 # Okno kontekstu i kompakcja
@@ -53,7 +46,7 @@ Użyj `/compact` (opcjonalnie z instrukcjami), aby wymusić przebieg kompakcji:
 
 Okno kontekstu jest specyficzne dla modelu. OpenClaw korzysta z definicji modelu z katalogu dostawcy skonfigurowanego w systemie, aby określić limity.
 
-## Kompakcja a przycinanie
+## Kompresja vs pruning
 
 - **Kompakcja**: streszcza i **utrzymuje** w JSONL.
 - **Przycinanie sesji**: usuwa tylko stare **wyniki narzędzi**, **w pamięci**, na potrzeby pojedynczego żądania.

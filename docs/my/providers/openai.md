@@ -4,23 +4,17 @@ read_when:
   - OpenClaw တွင် OpenAI မော်ဒယ်များကို အသုံးပြုလိုသောအခါ
   - API ကီးများအစား Codex စာရင်းသွင်းမှု အတည်ပြုခြင်းကို အသုံးပြုလိုသောအခါ
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:49Z
 ---
 
 # OpenAI
 
-OpenAI သည် GPT မော်ဒယ်များအတွက် ဖန်တီးသူများအသုံးပြုနိုင်သော API များကို ပံ့ပိုးပေးသည်။ Codex သည် စာရင်းသွင်းမှုအခြေပြု အသုံးပြုခွင့်အတွက် **ChatGPT sign-in** ကို ပံ့ပိုးပြီး၊ အသုံးပြုမှုအလိုက် ငွေပေးချေရန် **API key** ဖြင့်လည်း ဝင်ရောက်နိုင်သည်။ Codex cloud သည် ChatGPT sign-in ကို လိုအပ်သည်။
+OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
+access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
 
 ## ရွေးချယ်မှု A: OpenAI API key (OpenAI Platform)
 
-**အသင့်တော်ဆုံး:** တိုက်ရိုက် API အသုံးပြုခွင့်နှင့် အသုံးပြုမှုအလိုက် ငွေပေးချေမှု။
-OpenAI dashboard မှ သင့် API key ကို ရယူပါ။
+**Best for:** direct API access and usage-based billing.
+Get your API key from the OpenAI dashboard.
 
 ### CLI setup
 
@@ -41,8 +35,8 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 ## ရွေးချယ်မှု B: OpenAI Code (Codex) စာရင်းသွင်းမှု
 
-**အသင့်တော်ဆုံး:** API key မသုံးဘဲ ChatGPT/Codex စာရင်းသွင်းမှု အသုံးပြုခွင့်ကို အသုံးပြုလိုသောအခါ။
-Codex cloud သည် ChatGPT sign-in ကို လိုအပ်ပြီး၊ Codex CLI သည် ChatGPT သို့မဟုတ် API key ဖြင့် ဝင်ရောက်နိုင်သည်။
+**Best for:** using ChatGPT/Codex subscription access instead of an API key.
+Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or API key sign-in.
 
 ### CLI setup (Codex OAuth)
 

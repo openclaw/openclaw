@@ -2,13 +2,6 @@
 summary: "Notas do protocolo RPC para o assistente de integração inicial e o esquema de configuração"
 read_when: "Ao alterar as etapas do assistente de integração inicial ou os endpoints do esquema de configuração"
 title: "Protocolo de Integração Inicial e Configuração"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:46Z
 ---
 
 # Protocolo de Integração Inicial + Configuração

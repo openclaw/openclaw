@@ -4,13 +4,6 @@ read_when:
   - Gateway’i bir tarayıcıdan işletmek istiyorsanız
   - SSH tünelleri olmadan Tailnet erişimi istiyorsanız
 title: "Kontrol Arayüzü"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:07Z
 ---
 
 # Kontrol Arayüzü (tarayıcı)
@@ -69,7 +62,7 @@ yeniden onay gerektirmez. Belirteç döndürme ve iptal için
 ## Neler yapabilir (bugün)
 
 - Gateway WS üzerinden modelle sohbet (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
-- Sohbette araç çağrılarını + canlı araç çıktı kartlarını akış halinde gösterme (ajan olayları)
+- Stream tool calls + live tool output cards in Chat (agent events)
 - Kanallar: WhatsApp/Telegram/Discord/Slack + eklenti kanalları (Mattermost, vb.) durum + QR ile giriş + kanal başına yapılandırma (`channels.status`, `web.login.*`, `config.patch`)
 - Örnekler: varlık listesi + yenileme (`system-presence`)
 - Oturumlar: liste + oturum başına düşünme/ayrıntılı geçersiz kılmalar (`sessions.list`, `sessions.patch`)
@@ -156,12 +149,11 @@ olarak OpenClaw, cihaz kimliği olmadan Kontrol Arayüzü bağlantılarını **e
 }
 ```
 
-Bu, Kontrol Arayüzü için cihaz kimliği + eşleştirmeyi (HTTPS üzerinde bile) devre dışı bırakır.
-Yalnızca ağa güveniyorsanız kullanın.
+Bu, Kontrol Arayüzü için cihaz kimliği + eşleştirmeyi (HTTPS üzerinde bile) devre dışı bırakır. Yalnızca ağa güveniyorsanız kullanın.
 
 HTTPS kurulumu için [Tailscale](/gateway/tailscale) bölümüne bakın.
 
-## Arayüzü derleme
+## UI’yi derleme
 
 Gateway, statik dosyaları `dist/control-ui`’ten sunar. Şununla derleyin:
 

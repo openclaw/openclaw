@@ -5,25 +5,18 @@ read_when:
   - Điều tra lỗi ghép cặp hoặc xác thực bridge
   - Kiểm toán bề mặt node được gateway phơi bày
 title: "Giao thức Bridge"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:58Z
 ---
 
 # Giao thức Bridge (vận chuyển node kế thừa)
 
-Giao thức Bridge là một vận chuyển node **kế thừa** (TCP JSONL). Các client node mới
-nên sử dụng giao thức Gateway WebSocket hợp nhất thay thế.
+The Bridge protocol is a **legacy** node transport (TCP JSONL). New node clients
+should use the unified Gateway WebSocket protocol instead.
 
 Nếu bạn đang xây dựng một operator hoặc client node, hãy dùng
 [Giao thức Gateway](/gateway/protocol).
 
-**Lưu ý:** Các bản dựng OpenClaw hiện tại không còn kèm listener TCP bridge; tài liệu này được giữ lại để tham khảo lịch sử.
-Các khóa cấu hình `bridge.*` kế thừa không còn nằm trong schema cấu hình.
+**Note:** Current OpenClaw builds no longer ship the TCP bridge listener; this document is kept for historical reference.
+Legacy `bridge.*` config keys are no longer part of the config schema.
 
 ## Vì sao chúng tôi có cả hai
 
@@ -71,8 +64,8 @@ Việc thực thi danh sách cho phép kế thừa nằm trong `src/gateway/serv
 
 ## Sự kiện vòng đời Exec
 
-Node có thể phát ra sự kiện `exec.finished` hoặc `exec.denied` để đưa hoạt động system.run lên bề mặt.
-Các sự kiện này được ánh xạ sang sự kiện hệ thống trong gateway. (Node kế thừa vẫn có thể phát `exec.started`.)
+Nodes can emit `exec.finished` or `exec.denied` events to surface system.run activity.
+These are mapped to system events in the gateway. (Các node legacy vẫn có thể phát ra `exec.started`.)
 
 Các trường payload (tất cả đều tùy chọn trừ khi có ghi chú):
 
@@ -92,5 +85,5 @@ Các trường payload (tất cả đều tùy chọn trừ khi có ghi chú):
 
 ## Phiên bản hóa
 
-Bridge hiện là **v1 ngầm định** (không có thương lượng min/max). Khả năng tương thích ngược
-được kỳ vọng; hãy thêm trường phiên bản giao thức bridge trước bất kỳ thay đổi phá vỡ nào.
+Bridge is currently **implicit v1** (no min/max negotiation). Backward‑compat
+is expected; add a bridge protocol version field before any breaking changes.

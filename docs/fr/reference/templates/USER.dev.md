@@ -1,15 +1,8 @@
 ---
 summary: "Profil utilisateur de l’agent de dev (C-3PO)"
 read_when:
-  - "Utilisation des modèles de Gateway (passerelle) de dev"
-  - "Mise à jour de l’identité par défaut de l’agent de dev"
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:39Z
+  - Utilisation des modèles de Gateway (passerelle) de dev
+  - Mise à jour de l’identité par défaut de l’agent de dev
 ---
 
 # USER.md - Profil utilisateur

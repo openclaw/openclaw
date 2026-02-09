@@ -4,25 +4,18 @@ read_when:
   - /new、/reset、/stop、およびエージェントのライフサイクルイベントに対してイベント駆動型の自動化を行いたい場合
   - フックを構築、インストール、またはデバッグしたい場合
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:11Z
 ---
 
 # Hooks
 
-Hooks は、エージェントのコマンドやイベントに応答してアクションを自動化するための、拡張可能なイベント駆動型システムを提供します。Hooks はディレクトリから自動的に検出され、OpenClaw の Skills と同様に、CLI コマンドを通じて管理できます。
+フックは、エージェントコマンドやイベントに応じてアクションを自動化するための拡張可能なイベント駆動システムを提供します。 フックはディレクトリから自動的に検出され、CLIコマンドを介して管理することができます。
 
 ## Getting Oriented
 
-Hooks は、何かが起きたときに実行される小さなスクリプトです。種類は 2 つあります。
+Hooks は、何かが起きたときに実行される小さなスクリプトです。種類は 2 つあります。 2種類あります。
 
 - **Hooks**（このページ）: `/new`、`/reset`、`/stop`、またはライフサイクルイベントなどのエージェントイベントが発火した際に、Gateway（ゲートウェイ）内部で実行されます。
-- **Webhooks**: 外部の HTTP Webhook で、他のシステムから OpenClaw での処理をトリガーできます。[Webhook Hooks](/automation/webhook) を参照するか、Gmail ヘルパーコマンドとして `openclaw webhooks` を使用してください。
+- **Webhooks**: 外部のHTTPWebhookはOpenClawで他のシステムが動作するようにします。 **Webhooks**: 外部の HTTP Webhook で、他のシステムから OpenClaw での処理をトリガーできます。[Webhook Hooks](/automation/webhook) を参照するか、Gmail ヘルパーコマンドとして `openclaw webhooks` を使用してください。
 
 Hooks はプラグイン内にバンドルすることもできます。詳細は [Plugins](/tools/plugin#plugin-hooks) を参照してください。
 
@@ -33,11 +26,11 @@ Hooks はプラグイン内にバンドルすることもできます。詳細�
 - セッションの開始や終了時に後続の自動化をトリガーする
 - イベント発火時にエージェントのワークスペースへファイルを書き込んだり、外部 API を呼び出したりする
 
-小さな TypeScript 関数を書けるなら、フックを書けます。Hooks は自動的に検出され、CLI で有効化または無効化します。
+小さなTypeScript関数を書けば、フックを書くことができます。 フックは自動的に検出され、CLI経由でフックを有効または無効にします。
 
 ## Overview
 
-フックシステムでは、次のことが可能です。
+フックシステムは次のことを可能にします:
 
 - `/new` が発行されたときに、セッションコンテキストをメモリに保存する
 - 監査目的で全コマンドをログに記録する
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Onboarding
 
-オンボーディング（`openclaw onboard`）中に、推奨されるフックを有効化するかどうかを尋ねられます。ウィザードは対象となるフックを自動的に検出し、選択肢として提示します。
+オンボーディング (`openclawオンボード` ) 中に、推奨フックを有効にするよう求められます。 ウィザードは対象フックを自動的に検出し、選択対象フックを表示します。
 
 ## Hook Discovery
 
@@ -103,7 +96,7 @@ my-hook/
 
 ## Hook Packs（npm/archives）
 
-フックパックは標準的な npm パッケージで、`package.json` 内の `openclaw.hooks` を通じて 1 つ以上のフックをエクスポートします。インストール方法:
+フックパックは標準的な npm パッケージで、`package.json` 内の `openclaw.hooks` を通じて 1 つ以上のフックをエクスポートします。インストール方法: 以下でインストールします。
 
 ```bash
 openclaw hooks install <path-or-spec>
@@ -122,6 +115,7 @@ openclaw hooks install <path-or-spec>
 ```
 
 各エントリは、`HOOK.md` と `handler.ts`（または `index.ts`）を含むフックディレクトリを指します。フックパックは依存関係を同梱でき、それらは `~/.openclaw/hooks/<id>` 配下にインストールされます。
+フックパックは `~/.openclaw/hooks/<id> ` の下にインストールされます。
 
 ## Hook Structure
 
@@ -249,7 +243,7 @@ export default myHandler;
 
 これらのフックはイベントストリームのリスナーではありません。OpenClaw がツール結果を永続化する前に、プラグインが同期的に結果を調整できます。
 
-- **`tool_result_persist`**: セッショントランスクリプトに書き込まれる前にツール結果を変換します。同期である必要があります。更新後のツール結果ペイロード、またはそのまま保持する場合は `undefined` を返してください。[Agent Loop](/concepts/agent-loop) を参照してください。
+- **`tool_result_persist`**: セッショントランスクリプトに書き込む前にツールの結果を変換します。 同期する必要があります。更新されたツール結果ペイロードを返すか、そのままにするために `undefined` を返します。 [Agent Loop](/concepts/agent-loop)を参照してください。
 
 ### Future Events
 
@@ -399,7 +393,7 @@ Hooks にはカスタム設定を持たせることができます。
 }
 ```
 
-**Migration**: 新しいフックには、検出ベースの新しいシステムを使用してください。レガシーハンドラーは、ディレクトリベースのフックの後にロードされます。
+**Migration**: 新しいフックには、検出ベースの新しいシステムを使用してください。レガシーハンドラーは、ディレクトリベースのフックの後にロードされます。 従来のハンドラは、ディレクトリベースのフックの後にロードされます。
 
 ## CLI Commands
 
@@ -572,6 +566,7 @@ openclaw hooks enable soul-evil
 
 ゲートウェイ起動時（チャンネル起動後）に `BOOT.md` を実行します。
 これを実行するには、内部フックを有効化する必要があります。
+これを実行するには内部フックを有効にする必要があります。
 
 **Events**: `gateway:startup`
 
@@ -593,7 +588,7 @@ openclaw hooks enable boot-md
 
 ### Keep Handlers Fast
 
-Hooks はコマンド処理中に実行されます。軽量に保ってください。
+フックはコマンド処理中に実行されます。 体重を軽く保つ:
 
 ```typescript
 // ✓ Good - async work, returns immediately
@@ -685,7 +680,7 @@ const handler: HookHandler = async (event) => {
 
 ### Verify Eligibility
 
-フックが適格でない理由を確認します。
+フックが有効でない理由を確認してください:
 
 ```bash
 openclaw hooks info my-hook
@@ -805,7 +800,7 @@ Session reset
 openclaw hooks info my-hook
 ```
 
-不足していないか確認してください。
+不足しているものを探してください:
 
 - バイナリ（PATH を確認）
 - 環境変数

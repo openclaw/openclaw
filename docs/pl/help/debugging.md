@@ -5,13 +5,6 @@ read_when:
   - Chcesz uruchomić Gateway w trybie watch podczas iteracji
   - Potrzebujesz powtarzalnego procesu debugowania
 title: "Debugowanie"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:20Z
 ---
 
 # Debugowanie
@@ -129,7 +122,7 @@ Opcjonalne nadpisanie ścieżki:
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Równoważne zmienne środowiskowe:
+Równoważny env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

@@ -5,13 +5,6 @@ read_when:
   - Использование canvas/камеры узла для контекста агента
   - Добавление новых команд узла или помощников CLI
 title: "Узлы"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:03Z
 ---
 
 # Узлы

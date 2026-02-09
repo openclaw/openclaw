@@ -4,13 +4,6 @@ read_when:
   - Bạn cần đăng nhập vào các trang cho tự động hóa trình duyệt
   - Bạn muốn đăng cập nhật lên X/Twitter
 title: "Đăng nhập trình duyệt"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:15Z
 ---
 
 # Đăng nhập trình duyệt + đăng bài lên X/Twitter
@@ -19,13 +12,13 @@ x-i18n:
 
 Khi một trang yêu cầu đăng nhập, hãy **đăng nhập thủ công** trong hồ sơ trình duyệt **host** (trình duyệt openclaw).
 
-**Không** cung cấp thông tin đăng nhập cho mô hình. Đăng nhập tự động thường kích hoạt cơ chế chống bot và có thể khóa tài khoản.
+Do **not** give the model your credentials. Automated logins often trigger anti‑bot defenses and can lock the account.
 
 Quay lại tài liệu trình duyệt chính: [Browser](/tools/browser).
 
 ## Dùng hồ sơ Chrome nào?
 
-OpenClaw điều khiển một **hồ sơ Chrome chuyên dụng** (tên `openclaw`, giao diện tông cam). Hồ sơ này tách biệt với hồ sơ trình duyệt hằng ngày của bạn.
+OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tinted UI). This is separate from your daily browser profile.
 
 Hai cách đơn giản để truy cập:
 
@@ -46,9 +39,9 @@ Nếu bạn có nhiều hồ sơ, truyền `--browser-profile <name>` (mặc đ�
 
 ## Sandboxing + truy cập trình duyệt host
 
-Các phiên trình duyệt trong sandbox **dễ** kích hoạt phát hiện bot hơn. Với X/Twitter (và các trang nghiêm ngặt khác), hãy ưu tiên trình duyệt **host**.
+Sandboxed browser sessions are **more likely** to trigger bot detection. For X/Twitter (and other strict sites), prefer the **host** browser.
 
-Nếu tác tử đang ở sandbox, công cụ trình duyệt mặc định dùng sandbox. Để cho phép điều khiển host:
+If the agent is sandboxed, the browser tool defaults to the sandbox. To allow host control:
 
 ```json5
 {

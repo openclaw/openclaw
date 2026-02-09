@@ -3,17 +3,10 @@ summary: "Ajan çalışma alanı: konum, düzen ve yedekleme stratejisi"
 read_when:
   - Ajan çalışma alanını veya dosya düzenini açıklamanız gerektiğinde
   - Bir ajan çalışma alanını yedeklemek veya taşımak istediğinizde
-title: "Ajan Çalışma Alanı"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:22Z
+title: "Ajan çalışma alanı"
 ---
 
-# Ajan çalışma alanı
+# concepts/agent-workspace.md
 
 Çalışma alanı ajanın evidir. Dosya araçları ve çalışma alanı bağlamı için
 kullanılan tek çalışma dizinidir. Gizli tutun ve onu bellek gibi ele alın.
@@ -21,12 +14,12 @@ kullanılan tek çalışma dizinidir. Gizli tutun ve onu bellek gibi ele alın.
 Bu, yapılandırma, kimlik bilgileri ve oturumları saklayan `~/.openclaw/`’den
 ayrıdır.
 
-**Önemli:** çalışma alanı **varsayılan cwd**’dir, katı bir sandbox değildir.
-Araçlar göreli yolları çalışma alanına göre çözer; ancak sandboxing
+**Önemli:** çalışma alanı **varsayılan cwd**’dir, katı bir sandbox değildir. Araçlar göreli yolları çalışma alanına göre çözer; ancak sandboxing
 etkinleştirilmediği sürece mutlak yollar ana makinede başka yerlere
 erişebilir. Yalıtım gerekiyorsa
 [`agents.defaults.sandbox`](/gateway/sandboxing) (ve/veya ajan başına sandbox yapılandırması)
-kullanın. Sandboxing etkinleştirildiğinde ve `workspaceAccess` `"rw"`
+kullanın.
+Sandboxing etkinleştirildiğinde ve `workspaceAccess` `"rw"`
 değilse, araçlar ana makine çalışma alanınızda değil, `~/.openclaw/sandboxes` altında
 bir sandbox çalışma alanında çalışır.
 
@@ -90,7 +83,7 @@ Bunlar OpenClaw’ın çalışma alanı içinde beklediği standart dosyalardır
   - Bootstrap ritüeli sırasında oluşturulur/güncellenir.
 
 - `TOOLS.md`
-  - Yerel araçlarınız ve kurallarınız hakkında notlar.
+  - Notes about your local tools and conventions.
   - Araç kullanılabilirliğini kontrol etmez; yalnızca rehberliktir.
 
 - `HEARTBEAT.md`
@@ -118,7 +111,7 @@ Bunlar OpenClaw’ın çalışma alanı içinde beklediği standart dosyalardır
 
 - `skills/` (isteğe bağlı)
   - Çalışma alanına özgü Skills.
-  - Adlar çakıştığında yönetilen/paketlenmiş Skills’leri geçersiz kılar.
+  - Overrides managed/bundled skills when names collide.
 
 - `canvas/` (isteğe bağlı)
   - Düğüm görünümleri için Canvas UI dosyaları (örneğin `canvas/index.html`).
@@ -129,7 +122,7 @@ kısaltılır; sınırı `agents.defaults.bootstrapMaxChars` ile ayarlayın (var
 `openclaw setup`, mevcut dosyaların üzerine yazmadan eksik varsayılanları
 yeniden oluşturabilir.
 
-## Çalışma alanında OLMAYANLAR
+## What is NOT in the workspace
 
 Bunlar `~/.openclaw/` altında bulunur ve çalışma alanı deposuna
 kesinlikle commit edilmemelidir:
@@ -149,7 +142,7 @@ olması için **özel** bir git deposuna koyun.
 
 Bu adımları Gateway’in çalıştığı makinede çalıştırın (çalışma alanı oradadır).
 
-### 1) Depoyu başlatın
+### 1. Depoyu başlatın
 
 Git yüklüyse, yepyeni çalışma alanları otomatik olarak başlatılır. Bu çalışma
 alanı zaten bir depo değilse, çalıştırın:
@@ -161,7 +154,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Özel bir uzak depo ekleyin (başlangıç dostu seçenekler)
+### 2. Özel bir uzak depo ekleyin (başlangıç dostu seçenekler)
 
 Seçenek A: GitHub web arayüzü
 
@@ -196,7 +189,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Sürekli güncellemeler
+### 3. Sürekli güncellemeler
 
 ```bash
 git status
@@ -229,7 +222,7 @@ sırrı başka bir yerde tutun (parola yöneticisi, ortam değişkenleri veya
 
 ## Çalışma alanını yeni bir makineye taşıma
 
-1. Depoyu istenen yola klonlayın (varsayılan `~/.openclaw/workspace`).
+1. Clone the repo to the desired path (default `~/.openclaw/workspace`).
 2. `~/.openclaw/openclaw.json` içinde `agents.defaults.workspace`’yi bu yola ayarlayın.
 3. Eksik dosyaları tohumlamak için `openclaw setup --workspace <path>` çalıştırın.
 4. Oturumlara ihtiyacınız varsa, `~/.openclaw/agents/<agentId>/sessions/`’ü eski makineden

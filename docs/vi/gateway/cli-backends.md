@@ -5,26 +5,19 @@ read_when:
   - Bạn đang chạy Claude Code CLI hoặc các CLI AI cục bộ khác và muốn tái sử dụng chúng
   - Bạn cần một luồng chỉ văn bản, không dùng công cụ nhưng vẫn hỗ trợ phiên và hình ảnh
 title: "Backend CLI"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:00Z
 ---
 
 # Backend CLI (runtime dự phòng)
 
-OpenClaw có thể chạy **các CLI AI cục bộ** như một **phương án dự phòng chỉ văn bản** khi các nhà cung cấp API bị gián đoạn,
-bị giới hạn tốc độ hoặc tạm thời hoạt động không ổn định. Cách này được thiết kế có chủ đích là bảo thủ:
+OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
+rate-limited, or temporarily misbehaving. This is intentionally conservative:
 
 - **Tắt công cụ** (không gọi công cụ).
 - **Văn bản vào → văn bản ra** (đáng tin cậy).
 - **Hỗ trợ phiên** (để các lượt tiếp theo giữ được mạch lạc).
 - **Có thể truyền hình ảnh** nếu CLI chấp nhận đường dẫn ảnh.
 
-Đây là một **lưới an toàn** hơn là luồng chính. Hãy dùng khi bạn
+This is designed as a **safety net** rather than a primary path. Dùng nó khi bạn
 muốn phản hồi văn bản “luôn hoạt động” mà không phụ thuộc vào API bên ngoài.
 
 ## Khởi động nhanh cho người mới
@@ -58,7 +51,7 @@ Nếu gateway của bạn chạy dưới launchd/systemd và PATH bị tối gi�
 }
 ```
 
-Xong. Không cần khóa, không cần cấu hình xác thực bổ sung ngoài chính CLI.
+Vậy là xong. No keys, no extra auth config needed beyond the CLI itself.
 
 ## Dùng như phương án dự phòng
 
@@ -96,8 +89,8 @@ Tất cả backend CLI nằm dưới:
 agents.defaults.cliBackends
 ```
 
-Mỗi mục được khóa theo **provider id** (ví dụ: `claude-cli`, `my-cli`).
-Provider id trở thành vế trái của tham chiếu mô hình:
+Each entry is keyed by a **provider id** (e.g. `claude-cli`, `my-cli`).
+The provider id becomes the left side of your model ref:
 
 ```
 <provider>/<model>
@@ -168,9 +161,9 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw sẽ ghi ảnh base64 ra các tệp tạm. Nếu `imageArg` được đặt, các
-đường dẫn đó sẽ được truyền như đối số CLI. Nếu thiếu `imageArg`, OpenClaw
-sẽ nối các đường dẫn tệp vào prompt (path injection), đủ cho các CLI tự động
+OpenClaw will write base64 images to temp files. If `imageArg` is set, those
+paths are passed as CLI args. Nếu thiếu `imageArg`, OpenClaw sẽ nối thêm
+các đường dẫn tệp vào prompt (path injection), điều này đủ cho các CLI tự động
 nạp tệp cục bộ từ đường dẫn thuần (hành vi của Claude Code CLI).
 
 ## Đầu vào / đầu ra
@@ -214,13 +207,13 @@ Chỉ ghi đè khi cần (thường gặp: đường dẫn `command` tuyệt đ�
 
 ## Hạn chế
 
-- **Không có công cụ OpenClaw** (backend CLI không bao giờ nhận gọi công cụ). Một số CLI
-  vẫn có thể chạy công cụ tác tử riêng của chúng.
+- **Không có công cụ OpenClaw** (backend CLI không bao giờ nhận các lời gọi công cụ). Some CLIs
+  may still run their own agent tooling.
 - **Không streaming** (đầu ra CLI được thu thập rồi mới trả về).
 - **Đầu ra có cấu trúc** phụ thuộc vào định dạng JSON của CLI.
-- **Phiên Codex CLI** resume qua đầu ra văn bản (không phải JSONL), kém
-  cấu trúc hơn so với lần chạy `--json` ban đầu. Các phiên OpenClaw
-  vẫn hoạt động bình thường.
+- **Các phiên Codex CLI** được tiếp tục thông qua đầu ra văn bản (không có JSONL), kém
+  có cấu trúc hơn so với lần chạy `--json` ban đầu. OpenClaw sessions still work
+  normally.
 
 ## Xử lý sự cố
 

@@ -1,15 +1,8 @@
 ---
 summary: "macOS 앱이 gateway/Baileys 상태를 어떻게 보고하는지"
 read_when:
-  - mac 앱 상태 표시기를 디버깅할 때
-title: "상태 확인"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:40Z
+  - 28. mac 앱 상태 지표 디버깅
+title: "29. 상태 점검"
 ---
 
 # macOS 에서의 상태 확인
@@ -31,7 +24,7 @@ x-i18n:
 - UI 가 즉시 로드되도록 캐시된 스냅샷을 사용하며, 오프라인일 때도 자연스럽게 대체 동작합니다.
 - **채널 탭**에서는 WhatsApp/Telegram 에 대한 채널 상태와 제어 항목(로그인 QR, 로그아웃, 프로브, 마지막 연결 해제/오류)을 노출합니다.
 
-## 프로브 동작 방식
+## 30. 프로브 작동 방식
 
 - 앱은 약 60초마다 그리고 요청 시 `ShellExecutor` 를 통해 `openclaw health --json` 를 실행합니다. 이 프로브는 자격 증명을 로드하고 메시지를 전송하지 않은 채 상태를 보고합니다.
 - 깜빡임을 방지하기 위해 마지막으로 정상인 스냅샷과 마지막 오류를 별도로 캐시하고, 각각의 타임스탬프를 표시합니다.

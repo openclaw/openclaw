@@ -4,22 +4,14 @@ read_when:
   - آپ آڈیو اٹیچمنٹس کے لیے Deepgram اسپیچ ٹو ٹیکسٹ چاہتے ہیں
   - آپ کو Deepgram کنفیگ کی ایک فوری مثال درکار ہے
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # Deepgram (آڈیو ٹرانسکرپشن)
 
-Deepgram ایک اسپیچ ٹو ٹیکسٹ API ہے۔ OpenClaw میں اسے **ان باؤنڈ آڈیو/وائس نوٹ
-ٹرانسکرپشن** کے لیے `tools.media.audio` کے ذریعے استعمال کیا جاتا ہے۔
+Deepgram ایک اسپیچ ٹو ٹیکسٹ API ہے۔ OpenClaw میں اسے `tools.media.audio` کے ذریعے **آنے والی آڈیو/وائس نوٹ
+ٹرانسکرپشن** کے لیے استعمال کیا جاتا ہے۔
 
-جب فعال کیا جائے، OpenClaw آڈیو فائل Deepgram پر اپ لوڈ کرتا ہے اور ٹرانسکرپٹ
-کو جواب کی پائپ لائن میں داخل کرتا ہے (`{{Transcript}}` + `[Audio]` بلاک)۔ یہ **اسٹریمنگ نہیں** ہے؛
+فعال ہونے پر، OpenClaw آڈیو فائل Deepgram پر اپلوڈ کرتا ہے اور ٹرانسکرپٹ کو جواب کے پائپ لائن میں داخل کرتا ہے (`{{Transcript}}` + `[Audio]` بلاک)۔ یہ **اسٹریمنگ نہیں** ہے؛
 یہ پہلے سے ریکارڈ شدہ ٹرانسکرپشن اینڈپوائنٹ استعمال کرتا ہے۔
 
 ویب سائٹ: [https://deepgram.com](https://deepgram.com)  

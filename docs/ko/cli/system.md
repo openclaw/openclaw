@@ -5,13 +5,6 @@ read_when:
   - 하트비트를 활성화하거나 비활성화해야 할 때
   - 시스템 프레즌스 항목을 확인하고 싶을 때
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:28Z
 ---
 
 # `openclaw system`

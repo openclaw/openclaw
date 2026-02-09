@@ -4,13 +4,6 @@ read_when:
   - استدعاء الأدوات دون تشغيل دورة وكيل كاملة
   - بناء أتمتة تتطلب فرض سياسات الأدوات
 title: "واجهة برمجة تطبيقات استدعاء الأدوات"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:20Z
 ---
 
 # استدعاء الأدوات (HTTP)
@@ -33,7 +26,7 @@ x-i18n:
 - عند `gateway.auth.mode="token"`، استخدم `gateway.auth.token` (أو `OPENCLAW_GATEWAY_TOKEN`).
 - عند `gateway.auth.mode="password"`، استخدم `gateway.auth.password` (أو `OPENCLAW_GATEWAY_PASSWORD`).
 
-## نص الطلب
+## طلب الجسم
 
 ```json
 {

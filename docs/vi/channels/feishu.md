@@ -4,18 +4,11 @@ read_when:
   - Bạn muốn kết nối một bot Feishu/Lark
   - Bạn đang cấu hình kênh Feishu
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:11Z
 ---
 
 # Bot Feishu
 
-Feishu (Lark) là nền tảng chat nhóm được các công ty sử dụng cho nhắn tin và cộng tác. Plugin này kết nối OpenClaw với một bot Feishu/Lark bằng cơ chế đăng ký sự kiện WebSocket của nền tảng, cho phép nhận tin nhắn mà không cần mở URL webhook công khai.
+Feishu (Lark) là một nền tảng chat nhóm được các công ty sử dụng cho nhắn tin và cộng tác. Plugin này kết nối OpenClaw với bot Feishu/Lark bằng cách sử dụng đăng ký sự kiện WebSocket của nền tảng để có thể nhận tin nhắn mà không cần lộ URL webhook công khai.
 
 ---
 
@@ -78,13 +71,13 @@ Chọn **Feishu**, sau đó nhập App ID và App Secret.
 
 ## Bước 1: Tạo ứng dụng Feishu
 
-### 1. Mở Feishu Open Platform
+### 1. Mở Nền tảng Mở Feishu
 
 Truy cập [Feishu Open Platform](https://open.feishu.cn/app) và đăng nhập.
 
 Tenant Lark (toàn cầu) nên dùng [https://open.larksuite.com/app](https://open.larksuite.com/app) và đặt `domain: "lark"` trong cấu hình Feishu.
 
-### 2. Tạo ứng dụng
+### 2. Tạo một ứng dụng
 
 1. Nhấn **Create enterprise app**
 2. Điền tên ứng dụng + mô tả
@@ -160,7 +153,7 @@ Trong **Event Subscription**:
 
 ![Configure event subscription](../images/feishu-step6-event-subscription.png)
 
-### 7. Phát hành ứng dụng
+### 7. Xuất bản ứng dụng
 
 1. Tạo phiên bản trong **Version Management & Release**
 2. Gửi xét duyệt và phát hành
@@ -209,7 +202,7 @@ export FEISHU_APP_SECRET="xxx"
 
 ### Miền Lark (toàn cầu)
 
-Nếu tenant của bạn dùng Lark (quốc tế), hãy đặt miền thành `lark` (hoặc một chuỗi miền đầy đủ). Bạn có thể đặt tại `channels.feishu.domain` hoặc theo từng tài khoản (`channels.feishu.accounts.<id>.domain`).
+Nếu tenant của bạn ở Lark (quốc tế), hãy đặt domain là `lark` (hoặc một chuỗi domain đầy đủ). You can set it at `channels.feishu.domain` or per account (`channels.feishu.accounts.<id>.domain`).
 
 ```json5
 {
@@ -237,13 +230,13 @@ Nếu tenant của bạn dùng Lark (quốc tế), hãy đặt miền thành `la
 openclaw gateway
 ```
 
-### 2. Gửi tin nhắn thử
+### 2. Gửi một tin nhắn thử
 
 Trong Feishu, tìm bot của bạn và gửi một tin nhắn.
 
 ### 3. Phê duyệt ghép cặp
 
-Theo mặc định, bot sẽ trả lời bằng mã ghép cặp. Hãy phê duyệt:
+Theo mặc định, bot sẽ trả lời bằng một mã ghép cặp. Phê duyệt nó:
 
 ```bash
 openclaw pairing approve feishu <CODE>
@@ -267,6 +260,7 @@ Sau khi phê duyệt, bạn có thể trò chuyện bình thường.
 ### Tin nhắn trực tiếp (DM)
 
 - **Mặc định**: `dmPolicy: "pairing"` (người dùng chưa biết sẽ nhận mã ghép cặp)
+
 - **Phê duyệt ghép cặp**:
 
   ```bash
@@ -284,7 +278,7 @@ Sau khi phê duyệt, bạn có thể trò chuyện bình thường.
 - `"allowlist"` = chỉ cho phép `groupAllowFrom`
 - `"disabled"` = tắt tin nhắn nhóm
 
-**2. Yêu cầu mention** (`channels.feishu.groups.<chat_id>.requireMention`):
+**2. Mention requirement** (`channels.feishu.groups.<chat_id>.requireMention`):
 
 - `true` = yêu cầu @mention (mặc định)
 - `false` = phản hồi không cần mention
@@ -456,7 +450,7 @@ openclaw pairing list feishu
 
 ### Streaming
 
-Feishu hỗ trợ phản hồi streaming qua thẻ tương tác. Khi bật, bot sẽ cập nhật thẻ trong khi tạo văn bản.
+Feishu supports streaming replies via interactive cards. Khi được bật, bot sẽ cập nhật một thẻ trong khi nó tạo văn bản.
 
 ```json5
 {
@@ -534,34 +528,34 @@ Cấu hình đầy đủ: [Gateway configuration](/gateway/configuration)
 
 Các tùy chọn chính:
 
-| Thiết lập                                         | Mô tả                            | Mặc định  |
-| ------------------------------------------------- | -------------------------------- | --------- |
-| `channels.feishu.enabled`                         | Bật/tắt kênh                     | `true`    |
-| `channels.feishu.domain`                          | Miền API (`feishu` hoặc `lark`)  | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                           | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                       | -         |
-| `channels.feishu.accounts.<id>.domain`            | Ghi đè miền API theo tài khoản   | `feishu`  |
-| `channels.feishu.dmPolicy`                        | Chính sách DM                    | `pairing` |
+| Thiết lập                                         | Mô tả                                                                    | Mặc định  |
+| ------------------------------------------------- | ------------------------------------------------------------------------ | --------- |
+| `channels.feishu.enabled`                         | Bật/tắt kênh                                                             | `true`    |
+| `channels.feishu.domain`                          | Miền API (`feishu` hoặc `lark`)                       | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                                   | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                               | -         |
+| `channels.feishu.accounts.<id>.domain`            | Ghi đè miền API theo tài khoản                                           | `feishu`  |
+| `channels.feishu.dmPolicy`                        | Chính sách DM                                                            | `pairing` |
 | `channels.feishu.allowFrom`                       | Allowlist DM (danh sách open_id) | -         |
-| `channels.feishu.groupPolicy`                     | Chính sách nhóm                  | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Allowlist nhóm                   | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Yêu cầu @mention                 | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Bật nhóm                         | `true`    |
-| `channels.feishu.textChunkLimit`                  | Kích thước chia nhỏ tin nhắn     | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Giới hạn kích thước media        | `30`      |
-| `channels.feishu.streaming`                       | Bật xuất thẻ streaming           | `true`    |
-| `channels.feishu.blockStreaming`                  | Bật block streaming              | `true`    |
+| `channels.feishu.groupPolicy`                     | Chính sách nhóm                                                          | `open`    |
+| `channels.feishu.groupAllowFrom`                  | Allowlist nhóm                                                           | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | Yêu cầu @mention                                            | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | Bật nhóm                                                                 | `true`    |
+| `channels.feishu.textChunkLimit`                  | Kích thước chia nhỏ tin nhắn                                             | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | Giới hạn kích thước media                                                | `30`      |
+| `channels.feishu.streaming`                       | Bật xuất thẻ streaming                                                   | `true`    |
+| `channels.feishu.blockStreaming`                  | Bật block streaming                                                      | `true`    |
 
 ---
 
 ## Tham chiếu dmPolicy
 
-| Giá trị       | Hành vi                                                                    |
-| ------------- | -------------------------------------------------------------------------- |
+| Giá trị       | Hành vi                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------ |
 | `"pairing"`   | **Mặc định.** Người dùng chưa biết sẽ nhận mã ghép cặp; cần được phê duyệt |
-| `"allowlist"` | Chỉ người dùng trong `allowFrom` mới có thể chat                           |
-| `"open"`      | Cho phép tất cả người dùng (yêu cầu `"*"` trong allowFrom)                 |
-| `"disabled"`  | Tắt DM                                                                     |
+| `"allowlist"` | Chỉ người dùng trong `allowFrom` mới có thể chat                                           |
+| `"open"`      | Cho phép tất cả người dùng (yêu cầu `"*"` trong allowFrom)              |
+| `"disabled"`  | Tắt DM                                                                                     |
 
 ---
 

@@ -5,13 +5,6 @@ read_when:
   - Uruchamianie OpenClaw na urządzeniach ARM
   - Budowa taniej, zawsze włączonej osobistej AI
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:39Z
 ---
 
 # OpenClaw na Raspberry Pi
@@ -28,14 +21,14 @@ Idealne dla:
 
 ## Wymagania sprzętowe
 
-| Model Pi        | RAM     | Działa?      | Uwagi                                  |
-| --------------- | ------- | ------------ | -------------------------------------- |
-| **Pi 5**        | 4GB/8GB | ✅ Najlepsze | Najszybszy, zalecany                   |
-| **Pi 4**        | 4GB     | ✅ Dobre     | Najlepszy wybór dla większości         |
-| **Pi 4**        | 2GB     | ✅ OK        | Działa, dodaj swap                     |
-| **Pi 4**        | 1GB     | ⚠️ Ciasno    | Możliwe z swap, minimalna konfiguracja |
-| **Pi 3B+**      | 1GB     | ⚠️ Wolne     | Działa, ale ociężałe                   |
-| **Pi Zero 2 W** | 512MB   | ❌           | Niezalecane                            |
+| Model Pi        | RAM     | Działa?     | Uwagi                                       |
+| --------------- | ------- | ----------- | ------------------------------------------- |
+| **Pi 5**        | 4GB/8GB | ✅ Najlepsze | Najszybszy, zalecany                        |
+| **Pi 4**        | 4GB     | ✅ Dobre     | Słodkie miejsce dla większości użytkowników |
+| **Pi 4**        | 2GB     | ✅ OK        | Działa, dodaj swap                          |
+| **Pi 4**        | 1GB     | ⚠️ Jasny    | Możliwe z swap, minimalna konfiguracja      |
+| **Pi 3B+**      | 1GB     | ⚠️ Wolny    | Działa, ale ociężałe                        |
+| **Pi Zero 2 W** | 512MB   | ❌           | Niezalecane                                 |
 
 **Minimalne parametry:** 1GB RAM, 1 rdzeń, 500MB dysku  
 **Zalecane:** 2GB+ RAM, system 64-bit, karta SD 16GB+ (lub USB SSD)
@@ -48,7 +41,7 @@ Idealne dla:
 - Połączenie sieciowe (Ethernet lub WiFi)
 - ~30 minut
 
-## 1) Wgraj system operacyjny
+## 1. Wgraj system operacyjny
 
 Użyj **Raspberry Pi OS Lite (64-bit)** — bez środowiska graficznego dla serwera headless.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) Konfiguracja systemu
+## 3. Konfiguracja systemu
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Zainstaluj Node.js 22 (ARM64)
+## 4. Zainstaluj Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Dodaj swap (ważne dla 2GB lub mniej)
+## 5. Dodaj swap (ważne dla 2GB lub mniej)
 
 Swap zapobiega awariom z powodu braku pamięci:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Zainstaluj OpenClaw
+## 6. Zainstaluj OpenClaw
 
 ### Opcja A: Instalacja standardowa (zalecana)
 
@@ -134,7 +127,7 @@ npm link
 
 Instalacja „hackowalna” zapewnia bezpośredni dostęp do logów i kodu — przydatne przy debugowaniu problemów specyficznych dla ARM.
 
-## 7) Uruchom onboarding
+## 7. Uruchom onboarding
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Dostęp do panelu
+## 9. Dostęp do panelu
 
 Ponieważ Pi działa w trybie headless, użyj tunelu SSH:
 
@@ -230,13 +223,13 @@ htop
 
 Większość funkcji OpenClaw działa na ARM64, ale niektóre zewnętrzne binaria mogą wymagać wersji ARM:
 
-| Narzędzie               | Status ARM64 | Uwagi                               |
-| ----------------------- | ------------ | ----------------------------------- |
-| Node.js                 | ✅           | Działa świetnie                     |
-| WhatsApp (Baileys)      | ✅           | Czysty JS, bez problemów            |
-| Telegram                | ✅           | Czysty JS, bez problemów            |
+| Narzędzie                                  | Status ARM64 | Uwagi                               |
+| ------------------------------------------ | ------------ | ----------------------------------- |
+| Node.js                    | ✅            | Działa świetnie                     |
+| WhatsApp (Baileys)      | ✅            | Czysty JS, bez problemów            |
+| Telegram                                   | ✅            | Czysty JS, bez problemów            |
 | gog (Gmail CLI)         | ⚠️           | Sprawdź dostępność wersji ARM       |
-| Chromium (przeglądarka) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (przeglądarka) | ✅            | `sudo apt install chromium-browser` |
 
 Jeśli Skill nie działa, sprawdź, czy jego binarium ma wersję ARM. Wiele narzędzi Go/Rust ją ma; niektóre nie.
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Porównanie kosztów
 
-| Konfiguracja   | Koszt jednorazowy | Koszt miesięczny | Uwagi                        |
-| -------------- | ----------------- | ---------------- | ---------------------------- |
-| **Pi 4 (2GB)** | ~$45              | $0               | + prąd (~$5/rok)             |
-| **Pi 4 (4GB)** | ~$55              | $0               | Zalecane                     |
-| **Pi 5 (4GB)** | ~$60              | $0               | Najlepsza wydajność          |
-| **Pi 5 (8GB)** | ~$80              | $0               | Przesada, ale przyszłościowe |
-| DigitalOcean   | $0                | $6/mies.         | $72/rok                      |
-| Hetzner        | $0                | €3,79/mies.      | ~$50/rok                     |
+| Konfiguracja                      | Koszt jednorazowy    | Koszt miesięczny            | Uwagi                                               |
+| --------------------------------- | -------------------- | --------------------------- | --------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                          | + prąd (~$5/rok) |
+| **Pi 4 (4GB)** | ~$55 | $0                          | Zalecane                                            |
+| **Pi 5 (4GB)** | ~$60 | $0                          | Najlepsza wydajność                                 |
+| **Pi 5 (8GB)** | ~$80 | $0                          | Przesada, ale przyszłościowe                        |
+| DigitalOcean                      | $0                   | $6/mies.    | $72/rok                                             |
+| Hetzner                           | $0                   | €3,79/mies. | ~$50/rok                            |
 
 **Punkt równowagi:** Pi zwraca się po ~6–12 miesiącach w porównaniu z chmurowym VPS.
 

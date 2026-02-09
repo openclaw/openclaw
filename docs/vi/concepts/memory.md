@@ -3,22 +3,14 @@ summary: "Cách bộ nhớ OpenClaw hoạt động (tệp workspace + xả bộ 
 read_when:
   - Bạn muốn biết bố cục tệp bộ nhớ và quy trình làm việc
   - Bạn muốn tinh chỉnh cơ chế xả bộ nhớ tự động trước khi nén
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:19Z
 ---
 
 # Memory
 
-Bộ nhớ OpenClaw là **Markdown thuần trong workspace của tác tử**. Các tệp là
-nguồn sự thật; mô hình chỉ “ghi nhớ” những gì được ghi ra đĩa.
+14. Bộ nhớ OpenClaw là **Markdown thuần trong workspace của agent**. The files are the
+    source of truth; the model only "remembers" what gets written to disk.
 
-Các công cụ tìm kiếm bộ nhớ được cung cấp bởi plugin bộ nhớ đang hoạt động (mặc định:
-`memory-core`). Vô hiệu hóa plugin bộ nhớ bằng `plugins.slots.memory = "none"`.
+15. Công cụ tìm kiếm bộ nhớ được cung cấp bởi plugin bộ nhớ đang hoạt động (mặc định: `memory-core`). 16. Tắt plugin bộ nhớ bằng `plugins.slots.memory = "none"`.
 
 ## Memory files (Markdown)
 
@@ -31,22 +23,19 @@ Bố cục workspace mặc định dùng hai lớp bộ nhớ:
   - Bộ nhớ dài hạn đã được tuyển chọn.
   - **Chỉ tải trong phiên chính, riêng tư** (không bao giờ trong ngữ cảnh nhóm).
 
-Các tệp này nằm dưới workspace (`agents.defaults.workspace`, mặc định
-`~/.openclaw/workspace`). Xem [Agent workspace](/concepts/agent-workspace) để biết bố cục đầy đủ.
+17. Các tệp này nằm dưới workspace (`agents.defaults.workspace`, mặc định `~/.openclaw/workspace`). 18. Xem [Agent workspace](/concepts/agent-workspace) để biết bố cục đầy đủ.
 
 ## Khi nào ghi bộ nhớ
 
 - Quyết định, sở thích và sự thật bền vững ghi vào `MEMORY.md`.
 - Ghi chú hằng ngày và ngữ cảnh đang chạy ghi vào `memory/YYYY-MM-DD.md`.
 - Nếu ai đó nói “hãy nhớ điều này”, hãy ghi lại (đừng giữ trong RAM).
-- Khu vực này vẫn đang phát triển. Việc nhắc mô hình lưu bộ nhớ sẽ hữu ích; nó sẽ biết phải làm gì.
+- 19. Khu vực này vẫn đang phát triển. 20. Việc nhắc mô hình lưu bộ nhớ là hữu ích; nó sẽ biết phải làm gì.
 - Nếu bạn muốn điều gì đó được ghi nhớ, **hãy yêu cầu bot ghi vào bộ nhớ**.
 
 ## Automatic memory flush (pre-compaction ping)
 
-Khi một phiên **gần đến ngưỡng tự động nén**, OpenClaw kích hoạt một **lượt tác tử im lặng**
-để nhắc mô hình ghi bộ nhớ bền vững **trước khi** ngữ cảnh bị nén. Lời nhắc mặc định nói rõ mô hình _có thể trả lời_,
-nhưng thường thì `NO_REPLY` là phản hồi đúng để người dùng không bao giờ thấy lượt này.
+21. Khi một phiên **gần đến auto-compaction**, OpenClaw kích hoạt một **lượt tác tử im lặng** để nhắc mô hình ghi bộ nhớ bền vững **trước khi** context bị nén gọn. 22. Các prompt mặc định nói rõ mô hình _có thể trả lời_, nhưng thường thì `NO_REPLY` là phản hồi đúng để người dùng không bao giờ thấy lượt này.
 
 Cơ chế này được điều khiển bởi `agents.defaults.compaction.memoryFlush`:
 
@@ -90,7 +79,7 @@ Mặc định:
 
 - Bật theo mặc định.
 - Theo dõi thay đổi của tệp bộ nhớ (debounce).
-- Mặc định dùng embedding từ xa. Nếu `memorySearch.provider` chưa được đặt, OpenClaw tự động chọn:
+- 23. Sử dụng embeddings từ xa theo mặc định. 24. Nếu `memorySearch.provider` không được đặt, OpenClaw tự động chọn:
   1. `local` nếu `memorySearch.local.modelPath` được cấu hình và tệp tồn tại.
   2. `openai` nếu có thể phân giải khóa OpenAI.
   3. `gemini` nếu có thể phân giải khóa Gemini.
@@ -99,24 +88,18 @@ Mặc định:
 - Chế độ local dùng node-llama-cpp và có thể cần `pnpm approve-builds`.
 - Dùng sqlite-vec (khi có) để tăng tốc tìm kiếm vector trong SQLite.
 
-Embedding từ xa **yêu cầu** khóa API của nhà cung cấp embedding. OpenClaw
-phân giải khóa từ hồ sơ xác thực, `models.providers.*.apiKey`, hoặc biến môi trường.
-Codex OAuth chỉ bao phủ chat/completions và **không** đáp ứng embedding cho tìm kiếm bộ nhớ.
-Với Gemini, dùng `GEMINI_API_KEY` hoặc
-`models.providers.google.apiKey`. Với Voyage, dùng `VOYAGE_API_KEY` hoặc
-`models.providers.voyage.apiKey`. Khi dùng endpoint tương thích OpenAI tùy chỉnh,
-đặt `memorySearch.remote.apiKey` (và tùy chọn `memorySearch.remote.headers`).
+25. Embeddings từ xa **yêu cầu** API key cho nhà cung cấp embedding. 26. OpenClaw phân giải khóa từ auth profiles, `models.providers.*.apiKey`, hoặc biến môi trường. 27. Codex OAuth chỉ bao phủ chat/completions và **không** đáp ứng embeddings cho tìm kiếm bộ nhớ. For Gemini, use `GEMINI_API_KEY` or
+    `models.providers.google.apiKey`. 29. Với Voyage, sử dụng `VOYAGE_API_KEY` hoặc `models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+    set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (experimental)
 
-Đặt `memory.backend = "qmd"` để hoán đổi bộ lập chỉ mục SQLite tích hợp bằng
-[QMD](https://github.com/tobi/qmd): một sidecar tìm kiếm ưu tiên local kết hợp
-BM25 + vector + xếp hạng lại. Markdown vẫn là nguồn sự thật; OpenClaw gọi QMD
-để truy xuất. Các điểm chính:
+31. Đặt `memory.backend = "qmd"` để thay thế indexer SQLite tích hợp bằng [QMD](https://github.com/tobi/qmd): một sidecar tìm kiếm ưu tiên local kết hợp BM25 + vector + reranking. Markdown stays the source of truth; OpenClaw shells
+    out to QMD for retrieval. 33. Các điểm chính:
 
 **Prereqs**
 
-- Mặc định tắt. Chọn tham gia theo từng cấu hình (`memory.backend = "qmd"`).
+- 34. Bị tắt theo mặc định. 35. Bật theo từng cấu hình (`memory.backend = "qmd"`).
 - Cài QMD CLI riêng (`bun install -g https://github.com/tobi/qmd` hoặc tải
   bản phát hành) và đảm bảo binary `qmd` nằm trong `PATH` của gateway.
 - QMD cần bản dựng SQLite cho phép extension (`brew install sqlite` trên
@@ -126,8 +109,7 @@ BM25 + vector + xếp hạng lại. Markdown vẫn là nguồn sự thật; Open
 - Gateway chạy QMD trong một XDG home tự chứa dưới
   `~/.openclaw/agents/<agentId>/qmd/` bằng cách đặt `XDG_CONFIG_HOME` và
   `XDG_CACHE_HOME`.
-- Hỗ trợ hệ điều hành: macOS và Linux hoạt động ngay khi cài Bun + SQLite.
-  Windows được hỗ trợ tốt nhất qua WSL2.
+- 21. Hỗ trợ hệ điều hành: macOS và Linux hoạt động ngay sau khi cài Bun + SQLite. Windows is best supported via WSL2.
 
 **Cách sidecar chạy**
 
@@ -139,9 +121,7 @@ BM25 + vector + xếp hạng lại. Markdown vẫn là nguồn sự thật; Open
   mặc định 5 phút).
 - Làm mới khi khởi động hiện chạy nền theo mặc định để không chặn khởi động chat;
   đặt `memory.qmd.update.waitForBootSync = true` để giữ hành vi chặn trước đây.
-- Tìm kiếm chạy qua `qmd query --json`. Nếu QMD lỗi hoặc thiếu binary,
-  OpenClaw tự động quay về trình quản lý SQLite tích hợp để các công cụ bộ nhớ
-  vẫn hoạt động.
+- 23. Các tìm kiếm chạy qua `qmd query --json`. 37. Nếu QMD thất bại hoặc thiếu binary, OpenClaw tự động quay về trình quản lý SQLite tích hợp để các công cụ bộ nhớ vẫn hoạt động.
 - Hiện OpenClaw không phơi bày tinh chỉnh batch-size embedding của QMD; hành vi batch
   do QMD tự điều khiển.
 - **Lần tìm đầu tiên có thể chậm**: QMD có thể tải model GGUF local (reranker/mở rộng truy vấn)
@@ -150,9 +130,9 @@ BM25 + vector + xếp hạng lại. Markdown vẫn là nguồn sự thật; Open
   - Nếu muốn tải sẵn model thủ công (và làm ấm cùng chỉ mục OpenClaw dùng),
     hãy chạy một truy vấn một lần với các XDG dir của tác tử.
 
-    Trạng thái QMD của OpenClaw nằm dưới **state dir** của bạn (mặc định `~/.openclaw`).
-    Bạn có thể trỏ `qmd` tới đúng cùng chỉ mục bằng cách export cùng biến XDG
-    mà OpenClaw dùng:
+    38. Trạng thái QMD của OpenClaw nằm dưới **thư mục state** của bạn (mặc định `~/.openclaw`).
+        You can point `qmd` at the exact same index by exporting the same XDG vars
+        OpenClaw uses:
 
     ```bash
     # Pick the same state dir OpenClaw uses
@@ -186,9 +166,8 @@ BM25 + vector + xếp hạng lại. Markdown vẫn là nguồn sự thật; Open
   `commandTimeoutMs`, `updateTimeoutMs`, `embedTimeoutMs`).
 - `limits`: giới hạn payload recall (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
-- `scope`: cùng schema với [`session.sendPolicy`](/gateway/configuration#session).
-  Mặc định chỉ DM (`deny` tất cả, `allow` chat trực tiếp); nới lỏng để hiển thị
-  kết quả QMD trong nhóm/kênh.
+- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
+  41. Mặc định là chỉ DM (từ chối tất cả, cho phép chat trực tiếp); nới lỏng để hiển thị kết quả QMD trong nhóm/kênh.
 - Đoạn trích lấy từ ngoài workspace hiển thị là
   `qmd/<collection>/<relative-path>` trong kết quả `memory_search`; `memory_get`
   hiểu tiền tố đó và đọc từ root collection QMD đã cấu hình.
@@ -226,10 +205,8 @@ memory: {
 **Trích dẫn & fallback**
 
 - `memory.citations` áp dụng bất kể backend (`auto`/`on`/`off`).
-- Khi `qmd` chạy, chúng tôi gắn thẻ `status().backend = "qmd"` để chẩn đoán hiển thị
-  engine nào phục vụ kết quả. Nếu subprocess QMD thoát hoặc không thể phân tích
-  đầu ra JSON, trình quản lý tìm kiếm ghi cảnh báo và trả về nhà cung cấp tích hợp
-  (embedding Markdown hiện có) cho đến khi QMD phục hồi.
+- 29. Khi `qmd` chạy, chúng tôi gắn thẻ `status().backend = "qmd"` để chẩn đoán hiển thị
+      engine nào đã phục vụ kết quả. 42. Nếu subprocess QMD thoát hoặc đầu ra JSON không thể phân tích, trình quản lý tìm kiếm ghi log cảnh báo và trả về nhà cung cấp tích hợp (embeddings Markdown hiện có) cho đến khi QMD phục hồi.
 
 ### Additional memory paths
 
@@ -306,7 +283,7 @@ Fallback:
 
 Lập chỉ mục theo lô (OpenAI + Gemini):
 
-- Bật theo mặc định cho embedding OpenAI và Gemini. Đặt `agents.defaults.memorySearch.remote.batch.enabled = false` để tắt.
+- 43. Được bật theo mặc định cho embeddings OpenAI và Gemini. 32. Đặt `agents.defaults.memorySearch.remote.batch.enabled = false` để vô hiệu hóa.
 - Hành vi mặc định chờ hoàn tất batch; tinh chỉnh `remote.batch.wait`, `remote.batch.pollIntervalMs`, và `remote.batch.timeoutMinutes` nếu cần.
 - Đặt `remote.batch.concurrency` để điều khiển số job batch gửi song song (mặc định: 2).
 - Chế độ batch áp dụng khi `memorySearch.provider = "openai"` hoặc `"gemini"` và dùng khóa API tương ứng.
@@ -351,16 +328,16 @@ Chế độ local:
 
 ### Cách các công cụ bộ nhớ hoạt động
 
-- `memory_search` tìm kiếm ngữ nghĩa các khối Markdown (~400 token mục tiêu, chồng lấp 80 token) từ `MEMORY.md` + `memory/**/*.md`. Nó trả về văn bản snippet (giới hạn ~700 ký tự), đường dẫn tệp, khoảng dòng, điểm số, nhà cung cấp/model, và liệu có fallback từ local → remote embedding hay không. Không trả payload toàn bộ tệp.
-- `memory_get` đọc một tệp Markdown bộ nhớ cụ thể (tương đối theo workspace), tùy chọn từ dòng bắt đầu và trong N dòng. Đường dẫn ngoài `MEMORY.md` / `memory/` sẽ bị từ chối.
+- 33. `memory_search` tìm kiếm ngữ nghĩa các khối Markdown (~400 token mục tiêu, chồng lấp 80 token) từ `MEMORY.md` + `memory/**/*.md`. 44. Nó trả về đoạn trích văn bản (giới hạn ~700 ký tự), đường dẫn tệp, phạm vi dòng, điểm số, nhà cung cấp/mô hình, và liệu có fallback từ embeddings local → remote hay không. No full file payload is returned.
+- 36. `memory_get` đọc một tệp Markdown bộ nhớ cụ thể (tương đối workspace), tùy chọn từ một dòng bắt đầu và trong N dòng. 37. Các đường dẫn ngoài `MEMORY.md` / `memory/` sẽ bị từ chối.
 - Cả hai công cụ chỉ được bật khi `memorySearch.enabled` phân giải true cho tác tử.
 
 ### Những gì được lập chỉ mục (và khi nào)
 
 - Loại tệp: chỉ Markdown (`MEMORY.md`, `memory/**/*.md`).
 - Lưu trữ chỉ mục: SQLite theo từng tác tử tại `~/.openclaw/memory/<agentId>.sqlite` (cấu hình qua `agents.defaults.memorySearch.store.path`, hỗ trợ token `{agentId}`).
-- Độ mới: watcher trên `MEMORY.md` + `memory/` đánh dấu chỉ mục là bẩn (debounce 1,5s). Đồng bộ được lên lịch khi bắt đầu phiên, khi tìm kiếm, hoặc theo khoảng thời gian và chạy bất đồng bộ. Transcript phiên dùng ngưỡng delta để kích hoạt đồng bộ nền.
-- Kích hoạt lập chỉ mục lại: chỉ mục lưu **nhà cung cấp/model embedding + fingerprint endpoint + tham số chia khối**. Nếu bất kỳ thay đổi nào, OpenClaw tự động reset và lập chỉ mục lại toàn bộ kho.
+- 38. Độ mới: watcher trên `MEMORY.md` + `memory/` đánh dấu chỉ mục là bẩn (debounce 1,5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
+- 41. Kích hoạt lập chỉ mục lại: chỉ mục lưu trữ **nhà cung cấp/mô hình embedding + dấu vân tay endpoint + tham số chia khối**. 48. Nếu bất kỳ điều nào trong số đó thay đổi, OpenClaw tự động reset và lập chỉ mục lại toàn bộ kho.
 
 ### Hybrid search (BM25 + vector)
 
@@ -384,9 +361,8 @@ Nhưng nó có thể yếu với token chính xác, tín hiệu cao:
 - ký hiệu code (`memorySearch.query.hybrid`)
 - chuỗi lỗi (“sqlite-vec unavailable”)
 
-BM25 (toàn văn) thì ngược lại: mạnh ở token chính xác, yếu ở diễn đạt lại.
-Hybrid search là điểm cân bằng thực dụng: **dùng cả hai tín hiệu truy xuất** để có
-kết quả tốt cho cả truy vấn “ngôn ngữ tự nhiên” và “tìm kim đáy bể”.
+BM25 (full-text) is the opposite: strong at exact tokens, weaker at paraphrases.
+50. Tìm kiếm lai là phương án trung dung thực dụng: **sử dụng cả hai tín hiệu truy xuất** để bạn có kết quả tốt cho cả truy vấn “ngôn ngữ tự nhiên” và truy vấn “kim đáy bể”.
 
 #### Cách chúng tôi gộp kết quả (thiết kế hiện tại)
 
@@ -411,9 +387,9 @@ Ghi chú:
 - Nếu embedding không khả dụng (hoặc nhà cung cấp trả về vector rỗng), chúng tôi vẫn chạy BM25 và trả kết quả khớp từ khóa.
 - Nếu không thể tạo FTS5, chúng tôi giữ tìm kiếm chỉ vector (không lỗi cứng).
 
-Điều này không “hoàn hảo theo lý thuyết IR”, nhưng đơn giản, nhanh, và thường cải thiện recall/precision trên ghi chú thực tế.
-Nếu muốn nâng cao sau này, các bước tiếp theo phổ biến là Reciprocal Rank Fusion (RRF) hoặc chuẩn hóa điểm
-(min/max hoặc z-score) trước khi trộn.
+45. Điều này không phải là “hoàn hảo theo lý thuyết IR”, nhưng nó đơn giản, nhanh và thường cải thiện recall/precision trên ghi chú thực tế.
+    If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
+    (min/max or z-score) before mixing.
 
 Cấu hình:
 
@@ -456,8 +432,8 @@ agents: {
 
 ### Session memory search (experimental)
 
-Bạn có thể tùy chọn lập chỉ mục **transcript phiên** và hiển thị chúng qua `memory_search`.
-Tính năng này được che chắn sau một cờ experimental.
+47. Bạn có thể tùy chọn lập chỉ mục **bản ghi phiên** và hiển thị chúng qua `memory_search`.
+    This is gated behind an experimental flag.
 
 ```json5
 agents: {
@@ -477,7 +453,7 @@ Ghi chú:
 - `memory_search` không bao giờ chặn chờ lập chỉ mục; kết quả có thể hơi cũ cho đến khi đồng bộ nền hoàn tất.
 - Kết quả vẫn chỉ gồm snippet; `memory_get` vẫn giới hạn ở tệp bộ nhớ.
 - Lập chỉ mục phiên được cô lập theo từng tác tử (chỉ log phiên của tác tử đó được lập chỉ mục).
-- Log phiên nằm trên đĩa (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Bất kỳ tiến trình/người dùng nào có quyền truy cập filesystem đều có thể đọc, vì vậy hãy coi truy cập đĩa là ranh giới tin cậy. Để cô lập chặt chẽ hơn, chạy tác tử dưới các người dùng OS hoặc máy chủ riêng.
+- Session logs live on disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). 50. Bất kỳ tiến trình/người dùng nào có quyền truy cập hệ thống tệp đều có thể đọc chúng, vì vậy hãy coi quyền truy cập đĩa là ranh giới tin cậy. For stricter isolation, run agents under separate OS users or hosts.
 
 Ngưỡng delta (mặc định hiển thị):
 
@@ -498,9 +474,9 @@ agents: {
 
 ### SQLite vector acceleration (sqlite-vec)
 
-Khi extension sqlite-vec khả dụng, OpenClaw lưu embedding trong
-bảng ảo SQLite (`vec0`) và thực hiện truy vấn khoảng cách vector ngay trong
-cơ sở dữ liệu. Điều này giữ tìm kiếm nhanh mà không cần nạp mọi embedding vào JS.
+Khi tiện ích mở rộng sqlite-vec khả dụng, OpenClaw lưu trữ embedding trong một
+bảng ảo SQLite (`vec0`) và thực hiện các truy vấn khoảng cách vector ngay trong
+cơ sở dữ liệu. This keeps search fast without loading every embedding into JS.
 
 Cấu hình (tùy chọn):
 
@@ -531,8 +507,7 @@ Ghi chú:
 ### Local embedding auto-download
 
 - Model embedding local mặc định: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0,6 GB).
-- Khi `memorySearch.provider = "local"`, `node-llama-cpp` phân giải `modelPath`; nếu thiếu GGUF nó sẽ **tự động tải**
-  về cache (hoặc `local.modelCacheDir` nếu đặt), rồi nạp. Tải xuống tiếp tục khi thử lại.
+- When `memorySearch.provider = "local"`, `node-llama-cpp` resolves `modelPath`; if the GGUF is missing it **auto-downloads** to the cache (or `local.modelCacheDir` if set), then loads it. Downloads resume on retry.
 - Yêu cầu build native: chạy `pnpm approve-builds`, chọn `node-llama-cpp`, rồi `pnpm rebuild node-llama-cpp`.
 - Fallback: nếu thiết lập local thất bại và `memorySearch.fallback = "openai"`, chúng tôi tự động chuyển sang embedding từ xa
   (`openai/text-embedding-3-small` trừ khi bị ghi đè) và ghi lại lý do.
@@ -561,4 +536,4 @@ agents: {
 Ghi chú:
 
 - `remote.*` có ưu tiên cao hơn `models.providers.openai.*`.
-- `remote.headers` hợp nhất với header OpenAI; phía remote thắng khi xung đột khóa. Bỏ `remote.headers` để dùng mặc định OpenAI.
+- `remote.headers` được hợp nhất với header của OpenAI; remote sẽ thắng khi trùng khóa. Omit `remote.headers` to use the OpenAI defaults.

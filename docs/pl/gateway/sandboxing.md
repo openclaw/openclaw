@@ -3,13 +3,6 @@ summary: "Jak działa sandboxing w OpenClaw: tryby, zakresy, dostęp do obszaru 
 title: Sandboxing
 read_when: "Chcesz uzyskać dedykowane wyjaśnienie sandboxingu lub musisz dostroić agents.defaults.sandbox."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:27Z
 ---
 
 # Sandboxing
@@ -39,7 +32,7 @@ Nieobjęte sandboxingiem:
   - **Podwyższone wykonanie (elevated exec) działa na hoście i omija sandboxing.**
   - Jeśli sandboxing jest wyłączony, `tools.elevated` nie zmienia sposobu wykonania (już działa na hoście). Zobacz [Elevated Mode](/tools/elevated).
 
-## Tryby
+## Mody
 
 `agents.defaults.sandbox.mode` kontroluje **kiedy** używany jest sandboxing:
 
@@ -148,7 +141,7 @@ Wykonywany jest wewnątrz kontenera przez `sh -lc`.
 - Globalnie: `agents.defaults.sandbox.docker.setupCommand`
 - Per-agent: `agents.list[].sandbox.docker.setupCommand`
 
-Typowe pułapki:
+Często plamy:
 
 - Domyślne `docker.network` to `"none"` (brak wyjścia do sieci), więc instalacje pakietów się nie powiodą.
 - `readOnlyRoot: true` uniemożliwia zapisy; ustaw `readOnlyRoot: false` lub przygotuj niestandardowy obraz.

@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn lập chỉ mục hoặc tìm kiếm bộ nhớ ngữ nghĩa
   - Bạn đang gỡ lỗi khả năng sẵn sàng hoặc việc lập chỉ mục bộ nhớ
 title: "bộ nhớ"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:23Z
 ---
 
 # `openclaw memory`

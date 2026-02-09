@@ -5,13 +5,6 @@ read_when:
   - Você quer habilitar o plugin OpenProse
   - Você precisa entender o armazenamento de estado
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:38Z
 ---
 
 # OpenProse
@@ -120,7 +113,7 @@ Notas:
 ## Programas remotos
 
 `/prose run <handle/slug>` resolve para `https://p.prose.md/<handle>/<slug>`.
-URLs diretas são buscadas como estão. Isso usa a ferramenta `web_fetch` (ou `exec` para POST).
+URLs diretas são buscadas como estão. Isso usa a ferramenta `web_fetch` (ou `exec` para POST). Isto usa a ferramenta `web_fetch` (ou `exec` para POST).
 
 ## Mapeamento de runtime do OpenClaw
 
@@ -130,7 +123,7 @@ Programas OpenProse mapeiam para primitivas do OpenClaw:
 | ------------------------------------- | ---------------------- |
 | Iniciar sessão / Ferramenta de tarefa | `sessions_spawn`       |
 | Leitura/gravação de arquivos          | `read` / `write`       |
-| Busca na web                          | `web_fetch`            |
+| Busca Web                             | `web_fetch`            |
 
 Se a lista de permissões de ferramentas bloquear essas ferramentas, os programas OpenProse falharão. Veja [Configuração de Skills](/tools/skills-config).
 

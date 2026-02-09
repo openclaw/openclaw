@@ -5,13 +5,6 @@ read_when:
   - သတ်မှတ်ထားသော provider များအတွက် အပြန်အလှန်မရှိသော ဥပမာများလိုအပ်သောအခါ
 title: "CLI အလိုအလျောက်လုပ်ဆောင်မှု"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:58Z
 ---
 
 # CLI အလိုအလျောက်လုပ်ဆောင်မှု
@@ -19,7 +12,7 @@ x-i18n:
 `--non-interactive` ကို အသုံးပြု၍ `openclaw onboard` ကို အလိုအလျောက်လုပ်ဆောင်ပါ။
 
 <Note>
-`--json` သည် အပြန်အလှန်မရှိသော မုဒ်ကို ဆိုလိုခြင်းမဟုတ်ပါ။ စကရစ်များအတွက် `--non-interactive` (နှင့် `--workspace`) ကို အသုံးပြုပါ။
+`--json` သည် non-interactive mode ကို ဆိုလိုခြင်းမဟုတ်ပါ။ Script များအတွက် `--non-interactive` (နှင့် `--workspace`) ကို အသုံးပြုပါ။
 </Note>
 
 ## အခြေခံ အပြန်အလှန်မရှိသော ဥပမာ
@@ -41,7 +34,7 @@ openclaw onboard --non-interactive \
 ## Provider အလိုက် ဥပမာများ
 
 <AccordionGroup>
-  <Accordion title="Gemini ဥပမာ">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI ဥပမာ">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway ဥပမာ">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway ဥပမာ">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot ဥပမာ">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic ဥပမာ">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen ဥပမာ">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,7 +110,7 @@ openclaw onboard --non-interactive \
 
 ## အေးဂျင့်တစ်ခု ထပ်ထည့်ခြင်း
 
-ကိုယ်ပိုင် workspace၊ sessions နှင့် auth profiles ပါဝင်သော သီးခြားအေးဂျင့်တစ်ခုကို ဖန်တီးရန် `openclaw agents add <name>` ကို အသုံးပြုပါ။ `--workspace` မပါဘဲ လည်ပတ်ပါက wizard ကို စတင်ဖွင့်လှစ်မည်ဖြစ်သည်။
+`openclaw agents add <name>` ကို အသုံးပြု၍ ကိုယ်ပိုင် workspace၊ session များနှင့် auth profile များပါသော agent သီးခြားတစ်ခု ဖန်တီးပါ။ `--workspace` မပါဘဲ run လုပ်ပါက wizard ကို ဖွင့်ပေးသည်။
 
 ```bash
 openclaw agents add work \

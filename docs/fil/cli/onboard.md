@@ -3,13 +3,6 @@ summary: "Sanggunian ng CLI para sa `openclaw onboard` (interactive na onboardin
 read_when:
   - Gusto mo ng guided na setup para sa Gateway, workspace, auth, mga channel, at Skills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:15Z
 ---
 
 # `openclaw onboard`
@@ -46,5 +39,5 @@ openclaw agents add <name>
 ```
 
 <Note>
-Hindi ipinapahiwatig ng `--json` ang non-interactive na mode. Gamitin ang `--non-interactive` para sa mga script.
+Ang `--json` ay hindi nangangahulugang non-interactive mode. Gamitin ang `--non-interactive` para sa mga script.
 </Note>

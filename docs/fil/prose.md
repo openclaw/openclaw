@@ -5,18 +5,11 @@ read_when:
   - Gusto mong i-enable ang OpenProse plugin
   - Kailangan mong maunawaan ang pag-iimbak ng state
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:48Z
 ---
 
 # OpenProse
 
-Ang OpenProse ay isang portable, markdown-first na format ng workflow para sa pag-o-orchestrate ng mga AI session. Sa OpenClaw, dumarating ito bilang isang plugin na nag-i-install ng OpenProse skill pack kasama ang isang `/prose` slash command. Ang mga programa ay nakatira sa mga `.prose` file at maaaring mag-spawn ng maraming sub-agent na may malinaw na control flow.
+OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
 
 Opisyal na site: [https://www.prose.md](https://www.prose.md)
 
@@ -28,7 +21,7 @@ Opisyal na site: [https://www.prose.md](https://www.prose.md)
 
 ## I-install + i-enable
 
-Naka-disable bilang default ang mga bundled plugin. I-enable ang OpenProse:
+Bundled plugins are disabled by default. Paganahin ang OpenProse:
 
 ```bash
 openclaw plugins enable open-prose
@@ -42,7 +35,7 @@ Kaugnay na docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest),
 
 ## Slash command
 
-Ipinaparehistro ng OpenProse ang `/prose` bilang isang user-invocable na skill command. Iri-route nito ang mga tagubilin papunta sa OpenProse VM at gumagamit ng mga OpenClaw tool sa likod ng eksena.
+OpenProse registers `/prose` as a user-invocable skill command. Ito ay niruruta sa mga instruction ng OpenProse VM at gumagamit ng mga OpenClaw tool sa likod ng mga eksena.
 
 Mga karaniwang command:
 
@@ -119,8 +112,8 @@ Mga tala:
 
 ## Mga remote na programa
 
-Ang `/prose run <handle/slug>` ay nireresolba sa `https://p.prose.md/<handle>/<slug>`.
-Ang mga direktang URL ay kinukuha kung ano-ano (as-is). Ginagamit nito ang `web_fetch` tool (o `exec` para sa POST).
+`/prose run <handle/slug>` ay nireresolba sa `https://p.prose.md/<handle>/<slug>`.
+Ang mga direktang URL ay kinukuha kung ano ang eksakto. Ginagamit nito ang `web_fetch` tool (o `exec` para sa POST).
 
 ## OpenClaw runtime mapping
 
@@ -132,10 +125,10 @@ Ang mga OpenProse program ay mina-map sa mga OpenClaw primitive:
 | File read/write           | `read` / `write` |
 | Web fetch                 | `web_fetch`      |
 
-Kung bina-block ng iyong tool allowlist ang mga tool na ito, babagsak ang mga OpenProse program. Tingnan ang [Skills config](/tools/skills-config).
+Kung hinaharangan ng iyong tool allowlist ang mga tool na ito, mabibigo ang mga programang OpenProse. Tingnan ang [Skills config](/tools/skills-config).
 
 ## Seguridad + mga pag-apruba
 
-Ituring ang mga `.prose` file na parang code. Suriin bago patakbuhin. Gumamit ng mga OpenClaw tool allowlist at approval gate para kontrolin ang mga side effect.
+Tratuhin ang mga `.prose` file na parang code. Suriin bago patakbuhin. Use OpenClaw tool allowlists and approval gates to control side effects.
 
 Para sa deterministiko at approval-gated na mga workflow, ihambing sa [Lobster](/tools/lobster).

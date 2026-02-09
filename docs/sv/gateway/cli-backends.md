@@ -5,27 +5,20 @@ read_when:
   - Du kör Claude Code CLI eller andra lokala AI-CLI:er och vill återanvända dem
   - Du behöver en textbaserad, verktygsfri väg som ändå stöder sessioner och bilder
 title: "CLI-backends"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:19Z
 ---
 
 # CLI-backends (reservruntime)
 
-OpenClaw kan köra **lokala AI-CLI:er** som en **textbaserad reservlösning** när API-leverantörer är nere,
-rate-begränsade eller tillfälligt beter sig felaktigt. Detta är avsiktligt konservativt:
+OpenClaw kan köra **lokala AI CLI:er** som en **text-only fallback** när API-leverantörer är nere,
+hastighetsbegränsade, eller tillfälligt missköter sig. Detta är avsiktligt konservativt:
 
 - **Verktyg är inaktiverade** (inga verktygsanrop).
 - **Text in → text ut** (pålitligt).
 - **Sessioner stöds** (så att uppföljande turer förblir sammanhängande).
 - **Bilder kan skickas vidare** om CLI:t accepterar bildsökvägar.
 
-Detta är utformat som ett **säkerhetsnät** snarare än en primär väg. Använd det när du
-vill ha textbaserade svar som ”alltid fungerar” utan att förlita dig på externa API:er.
+Detta är utformat som ett **säkerhetsnät** snarare än en primär väg. Använd den när du
+vill att “alltid fungerar” textsvar utan att förlita sig på externa API:er.
 
 ## Nybörjarvänlig snabbstart
 
@@ -58,7 +51,7 @@ kommandosökvägen:
 }
 ```
 
-Det är allt. Inga nycklar, ingen extra autentiseringskonfig utöver själva CLI:t.
+Det är det. Inga nycklar, ingen extra auth konfiguration behövs utöver CLI själv.
 
 ## Använda det som reserv
 
@@ -96,8 +89,8 @@ Alla CLI-backends finns under:
 agents.defaults.cliBackends
 ```
 
-Varje post nycklas av ett **leverantörs-id** (t.ex. `claude-cli`, `my-cli`).
-Leverantörs-id:t blir vänstersidan av din modellreferens:
+Varje post är knappad av ett **leverantörs-id** (t.ex. `claude-cli`, `my-cli`).
+Leverantörs-id blir den vänstra sidan av din modell ref:
 
 ```
 <provider>/<model>
@@ -149,8 +142,9 @@ Leverantörs-id:t blir vänstersidan av din modellreferens:
 
 ## Sessioner
 
-- Om CLI:t stöder sessioner, sätt `sessionArg` (t.ex. `--session-id`) eller
-  `sessionArgs` (platshållare `{sessionId}`) när ID:t behöver infogas i flera flaggor.
+- Om CLI stöder sessioner, ange `sessionArg` (t.ex. `--session-id`) eller
+  `sessionArgs` (platshållare `{sessionId}`) när ID måste infogas
+  i flera flaggor.
 - Om CLI:t använder ett **resume-underkommando** med andra flaggor, sätt
   `resumeArgs` (ersätter `args` vid återupptagning) och valfritt `resumeOutput`
   (för icke-JSON-återupptagningar).
@@ -168,10 +162,10 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw skriver base64-bilder till temporära filer. Om `imageArg` är satt,
-skickas dessa sökvägar som CLI-argument. Om `imageArg` saknas, lägger OpenClaw till
-filsökvägarna i prompten (sökvägsinjektion), vilket räcker för CLI:er som automatiskt
-läser in lokala filer från rena sökvägar (Claude Code CLI-beteende).
+OpenClaw kommer att skriva base64-bilder till temp-filer. Om `imageArg` är satt, dessa
+vägar skickas som CLI args. Om `imageArg` saknas, lägger OpenClaw till filsökvägarna
+till prompten (sökvägsinjektion), vilket är tillräckligt för CLIs som auto-
+ladda lokala filer från vanliga sökvägar (Claude Code CLI beteende).
 
 ## In- / utdata
 
@@ -214,13 +208,13 @@ OpenClaw levereras också med ett standardval för `codex-cli`:
 
 ## Begränsningar
 
-- **Inga OpenClaw-verktyg** (CLI-backenden tar aldrig emot verktygsanrop). Vissa CLI:er
-  kan ändå köra sina egna agentverktyg.
+- **Inga OpenClaw-verktyg** (CLI-backend tar aldrig emot verktygssamtal). Vissa CLI:er
+  kan fortfarande köra sin egen agent verktyg.
 - **Ingen streaming** (CLI-utdata samlas in och returneras sedan).
 - **Strukturerade utdata** beror på CLI:ts JSON-format.
-- **Codex CLI-sessioner** återupptas via textutdata (ingen JSONL), vilket är mindre
-  strukturerat än den initiala `--json`-körningen. OpenClaw-sessioner fungerar
-  fortfarande normalt.
+- **Codex CLI-sessioner** återupptas via textutmatning (ingen JSONL), vilket är mindre
+  strukturerat än den initiala `--json` körningen. OpenClaw-sessioner fungerar fortfarande
+  normalt.
 
 ## Felsökning
 

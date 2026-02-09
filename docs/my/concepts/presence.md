@@ -5,13 +5,6 @@ read_when:
   - ထပ်နေသော သို့မဟုတ် အဟောင်းကျန်နေသည့် instance အတန်းများကို စစ်ဆေးနေချိန်
   - Gateway WS ချိတ်ဆက်မှု သို့မဟုတ် system-event beacon များကို ပြောင်းလဲနေချိန်
 title: "Presence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:26Z
 ---
 
 # Presence
@@ -23,82 +16,81 @@ OpenClaw “presence” သည် ပေါ့ပါးပြီး အကော
 
 တို့ကို ပြသပေးသည်။
 
-Presence ကို အဓိကအားဖြင့် macOS app ရဲ့ **Instances** တဘ်ကို ပြသရန်နှင့်
-အော်ပရေတာများအတွက် လျင်မြန်သော မြင်နိုင်စွမ်းကို ပံ့ပိုးရန် အသုံးပြုသည်။
+## ၂၄။ Presence fields (ပြသပုံ)
 
-## Presence fields (ပြသ되는 အချက်အလက်များ)
+၂၅။ Presence entries များသည် အောက်ပါကဲ့သို့သော fields ပါဝင်သည့် structured objects များဖြစ်ပါသည်:
 
-Presence အင်ထရီများသည် အောက်ပါကဲ့သို့သော field များပါဝင်သည့် ဖွဲ့စည်းထားသော အရာဝတ္ထုများဖြစ်သည်—
-
-- `instanceId` (ရွေးချယ်နိုင်သော်လည်း အလွန်အကြံပြုသည်): တည်ငြိမ်သော client အမှတ်အသား (အများအားဖြင့် `connect.client.instanceId`)
-- `host`: လူဖတ်လွယ်သော ဟို့စ်အမည်
-- `ip`: အကောင်းဆုံးကြိုးပမ်းမှုအခြေပြု IP လိပ်စာ
-- `version`: client ဗားရှင်း စာတန်း
-- `deviceFamily` / `modelIdentifier`: ဟာ့ဒ်ဝဲ ဆိုင်ရာ အညွှန်းများ
+- ၂၆။ `instanceId` (optional ဖြစ်သော်လည်း အလွန်အရေးကြီးပါသည်): stable client identity (အများအားဖြင့် `connect.client.instanceId`)
+- ၂၇။ `host`: လူဖတ်ရလွယ်သော host name
+- ၂၈။ `ip`: အကောင်းဆုံးကြိုးစားမှုအဖြစ် ရရှိသော IP address
+- ၂၉။ `version`: client version string
+- ၃၀။ `deviceFamily` / `modelIdentifier`: hardware ဆိုင်ရာ hints
 - `mode`: `ui`, `webchat`, `cli`, `backend`, `probe`, `test`, `node`, ...
-- `lastInputSeconds`: “နောက်ဆုံး အသုံးပြုသူ input မှ စက္ကန့်အရေအတွက်” (သိရှိပါက)
+- ၃၁။ `lastInputSeconds`: “နောက်ဆုံး user input မှစ၍ ကြာမြင့်ခဲ့သော စက္ကန့်များ” (သိရှိပါက)
 - `reason`: `self`, `connect`, `node-connected`, `periodic`, ...
-- `ts`: နောက်ဆုံး အပ်ဒိတ် အချိန်အမှတ် (epoch မှ စ၍ ms)
+- ၃၂။ `ts`: နောက်ဆုံး update timestamp (epoch မှစ၍ ms)
 
-## Producers (presence ကို ဘယ်နေရာမှ ရလာသလဲ)
+## ၃၃။ Producers (presence ရင်းမြစ်များ)
 
-Presence အင်ထရီများကို မျိုးစုံသော အရင်းအမြစ်များမှ ထုတ်လုပ်ပြီး **ပေါင်းစည်း** လုပ်ထားသည်။
+၃၄။ Presence entries များကို ရင်းမြစ်များစွာမှ ထုတ်လုပ်ပြီး **merged** လုပ်ထားပါသည်။
 
-### 1) Gateway ကိုယ်တိုင် အင်ထရီ
+### ၃၅။ ၁) Gateway self entry
 
-Gateway သည် စတင်အလုပ်လုပ်ချိန်တွင် “self” အင်ထရီတစ်ခုကို အမြဲ ထည့်သွင်းထားသည်။ ထို့ကြောင့် client များ မချိတ်ဆက်ရသေးခင်တည်းက UI များတွင် gateway ဟို့စ်ကို ပြသနိုင်သည်။
+၃၆။ Gateway သည် startup အချိန်တွင် “self” entry ကို အမြဲ seed လုပ်ထားသောကြောင့် client များ မချိတ်ဆက်ရသေးခင်တောင် UIs များတွင် gateway host ကို ပြသနိုင်ပါသည်။
 
-### 2) WebSocket ချိတ်ဆက်မှု
+### ၃၇။ ၂) WebSocket connect
 
-WS client တစ်ခုစီသည် `connect` တောင်းဆိုမှုဖြင့် စတင်သည်။ Handshake အောင်မြင်သည့်အခါ
-Gateway သည် ထိုချိတ်ဆက်မှုအတွက် presence အင်ထရီကို upsert လုပ်သည်။
+၃၈။ WS client တစ်ခုချင်းစီသည် `connect` request ဖြင့် စတင်ပါသည်။ ၃၉။ Handshake အောင်မြင်ပြီးနောက် Gateway သည် အဆိုပါ connection အတွက် presence entry ကို upsert လုပ်ပါသည်။
 
-#### တစ်ကြိမ်သုံး CLI အမိန့်များ မပေါ်လာရခြင်း အကြောင်းရင်း
+#### ၄၀။ တစ်ကြိမ်တည်း run လုပ်သော CLI commands များ မပေါ်လာရသည့် အကြောင်းရင်း
 
-CLI သည် မကြာခဏ အချိန်တိုအတွင်း တစ်ကြိမ်သုံး အမိန့်များအတွက်သာ ချိတ်ဆက်သည်။ Instances စာရင်းကို များလွန်းအောင် မဖြစ်စေရန် `client.mode === "cli"` ကို presence အင်ထရီအဖြစ် **မ** ပြောင်းလဲပါ။
+၄၁။ CLI သည် မကြာခဏ အချိန်တိုအတွင်း တစ်ကြိမ်တည်းသော commands များအတွက် ချိတ်ဆက်ပါသည်။ ၄၂။ Instances list ကို spam မဖြစ်စေရန် `client.mode === "cli"` ကို presence entry အဖြစ် **မပြောင်းလဲပါ**။
 
-### 3) `system-event` beacon များ
+### ၄၃။ ၃) `system-event` beacons
 
-Client များသည် `system-event` နည်းလမ်းကို အသုံးပြုပြီး ပိုမိုပြည့်စုံသော အချိန်အခါလိုက် beacon များကို ပို့နိုင်သည်။ mac app သည် ဟို့စ်အမည်၊ IP နှင့် `lastInputSeconds` ကို တင်ပြရန် ဤနည်းကို အသုံးပြုသည်။
+၄၄။ Clients များသည် `system-event` method ဖြင့် ပိုမိုအသေးစိတ်သော periodic beacons များကို ပို့နိုင်ပါသည်။ ၄၅။ mac app သည် host name၊ IP နှင့် `lastInputSeconds` ကို report လုပ်ရန် ဤနည်းကို အသုံးပြုပါသည်။
 
-### 4) Node ချိတ်ဆက်မှု (role: node)
+### ၄၆။ ၄) Node connects (role: node)
 
-Node တစ်ခုသည် Gateway WebSocket ကို `role: node` ဖြင့် ချိတ်ဆက်သောအခါ Gateway သည် ထို node အတွက် presence အင်ထရီကို upsert လုပ်သည် (အခြား WS client များနှင့် တူညီသော လုပ်ငန်းစဉ်)။
+၄၇။ Node တစ်ခုသည် Gateway WebSocket ကို `role: node` ဖြင့် ချိတ်ဆက်လာသောအခါ Gateway သည် အခြား WS clients များနှင့် အတူတူသော flow ဖြင့် အဆိုပါ node အတွက် presence entry ကို upsert လုပ်ပါသည်။
 
-## Merge + dedupe စည်းမျဉ်းများ (`instanceId` အရေးပါရသည့် အကြောင်းရင်း)
+## ၄၈။ Merge + dedupe rules (`instanceId` အရေးကြီးရခြင်း)
 
-Presence အင်ထရီများကို memory အတွင်းရှိ map တစ်ခုတည်းတွင် သိမ်းဆည်းထားသည်—
+၄၉။ Presence entries များကို in-memory map တစ်ခုတည်းအတွင်း သိမ်းဆည်းထားပါသည်:
 
-- အင်ထရီများကို **presence key** ဖြင့် ချိတ်ဆက်ထားသည်။
-- အကောင်းဆုံး key သည် ပြန်လည်စတင်မှုများအကြားတောင် တည်တံ့နေသော `instanceId` ( `connect.client.instanceId` မှ ရရှိ) ဖြစ်သည်။
-- Key များသည် အကြီးအသေး မခွဲခြားပါ။
+- ၅၀။ Entries များကို **presence key** ဖြင့် key လုပ်ထားပါသည်။
+- The best key is a stable `instanceId` (from `connect.client.instanceId`) that survives restarts.
+- Keys are case‑insensitive.
 
-Client တစ်ခုသည် တည်ငြိမ်သော `instanceId` မပါဘဲ ပြန်လည်ချိတ်ဆက်ပါက
-**ထပ်နေသော** အတန်းအဖြစ် ပေါ်လာနိုင်သည်။
+If a client reconnects without a stable `instanceId`, it may show up as a
+**duplicate** row.
 
-## TTL နှင့် အရွယ်အစား ကန့်သတ်ချက်
+## TTL and bounded size
 
-Presence ကို အလိုအလျောက် ပျောက်ကွယ်နိုင်သော အချက်အလက်အဖြစ် ရည်ရွယ်ထားသည်—
+Presence is intentionally ephemeral:
 
-- **TTL:** မိနစ် ၅ ကျော်အဟောင်းဖြစ်သော အင်ထရီများကို ဖယ်ရှားသည်
-- **အများဆုံး အင်ထရီအရေအတွက်:** ၂၀၀ (အဟောင်းဆုံးမှ စ၍ ဖယ်ရှားသည်)
+- **TTL:** entries older than 5 minutes are pruned
+- **Max entries:** 200 (oldest dropped first)
 
-ဤအရာသည် စာရင်းကို လတ်ဆတ်နေစေပြီး memory မကန့်သတ်ဘဲ ကြီးထွားသွားခြင်းကို တားဆီးပေးသည်။
+This keeps the list fresh and avoids unbounded memory growth.
 
-## Remote/tunnel သတိပြုရန် (loopback IP များ)
+## Remote/tunnel caveat (loopback IPs)
 
-Client တစ်ခုသည် SSH tunnel သို့မဟုတ် local port forward ဖြင့် ချိတ်ဆက်ပါက Gateway သည် အဝေးဘက်လိပ်စာကို `127.0.0.1` အဖြစ် မြင်နိုင်သည်။ Client က ကိုယ်တိုင်ပို့ထားသော ကောင်းမွန်သည့် IP ကို မရေးပေါ်မိစေရန် loopback remote address များကို လျစ်လျူရှုထားသည်။
+When a client connects over an SSH tunnel / local port forward, the Gateway may
+see the remote address as `127.0.0.1`. To avoid overwriting a good client‑reported
+IP, loopback remote addresses are ignored.
 
 ## Consumers
 
 ### macOS Instances tab
 
-macOS app သည် `system-presence` ၏ အထွက်ကို ပြသပြီး နောက်ဆုံး အပ်ဒိတ်၏ အသက်အရွယ်အပေါ် အခြေခံ၍ အခြေအနေ အညွှန်း (Active/Idle/Stale) သေးငယ်တစ်ခုကို အသုံးချသည်။
+The macOS app renders the output of `system-presence` and applies a small status
+indicator (Active/Idle/Stale) based on the age of the last update.
 
-## Debugging အကြံပြုချက်များ
+## Debugging tips
 
-- raw စာရင်းကို ကြည့်ရန် Gateway သို့ `system-presence` ကို ခေါ်ပါ။
-- ထပ်နေသည်များကို တွေ့ပါက—
-  - client များသည် handshake အတွင်း တည်ငြိမ်သော `client.instanceId` ကို ပို့နေကြောင်း အတည်ပြုပါ
-  - အချိန်အခါလိုက် beacon များသည် တူညီသော `instanceId` ကို အသုံးပြုနေကြောင်း အတည်ပြုပါ
-  - ချိတ်ဆက်မှုမှ ဆင်းသက်လာသော အင်ထရီတွင် `instanceId` မရှိမရှိ စစ်ဆေးပါ (ထိုကိစ္စတွင် ထပ်နေခြင်းကို မျှော်လင့်ရသည်)
+- To see the raw list, call `system-presence` against the Gateway.
+- If you see duplicates:
+  - confirm clients send a stable `client.instanceId` in the handshake
+  - confirm periodic beacons use the same `instanceId`
+  - check whether the connection‑derived entry is missing `instanceId` (duplicates are expected)

@@ -5,18 +5,11 @@ read_when:
   - ایجنٹ سیاق کے لیے نوڈ کینوس/کیمرہ کا استعمال
   - نئے نوڈ کمانڈز یا CLI مددگار شامل کرنا
 title: "نوڈز"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:45Z
 ---
 
 # نوڈز
 
-ایک **نوڈ** ایک معاون ڈیوائس (macOS/iOS/Android/headless) ہوتا ہے جو Gateway **WebSocket** (وہی پورٹ جو آپریٹرز کے لیے ہے) سے `role: "node"` کے ساتھ جڑتا ہے اور `node.invoke` کے ذریعے ایک کمانڈ سرفیس (مثلاً `canvas.*`، `camera.*`، `system.*`) فراہم کرتا ہے۔ پروٹوکول کی تفصیلات: [Gateway protocol](/gateway/protocol)۔
+A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
 لیگیسی ٹرانسپورٹ: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL؛ متروک/موجودہ نوڈز کے لیے ہٹا دیا گیا)۔
 
@@ -24,13 +17,14 @@ macOS **node mode** میں بھی چل سکتا ہے: مینو بار ایپ Gat
 
 نوٹس:
 
-- نوڈز **پیریفرلز** ہیں، گیٹ وے نہیں۔ یہ گیٹ وے سروس نہیں چلاتے۔
+- Nodes are **peripherals**, not gateways. They don’t run the gateway service.
 - Telegram/WhatsApp وغیرہ کے پیغامات **gateway** پر آتے ہیں، نوڈز پر نہیں۔
 - خرابیوں کے ازالے کی رہنمائی: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pairing + status
 
-**WS نوڈز ڈیوائس pairing استعمال کرتے ہیں۔** نوڈز `connect` کے دوران ڈیوائس شناخت پیش کرتے ہیں؛ Gateway `role: node` کے لیے ڈیوائس pairing کی درخواست بناتا ہے۔ ڈیوائسز کے CLI (یا UI) کے ذریعے منظوری دیں۔
+**WS nodes use device pairing.** Nodes present a device identity during `connect`; the Gateway
+creates a device pairing request for `role: node`. Approve via the devices CLI (or UI).
 
 فوری CLI:
 
@@ -49,7 +43,9 @@ openclaw nodes describe --node <idOrNameOrIp>
 
 ## Remote node host (system.run)
 
-جب آپ کا Gateway ایک مشین پر چل رہا ہو اور آپ چاہتے ہوں کہ کمانڈز دوسری مشین پر چلیں تو **node host** استعمال کریں۔ ماڈل بدستور **gateway** سے بات کرتا ہے؛ جب `host=node` منتخب ہو تو gateway `exec` کالز کو **node host** کی طرف فارورڈ کرتا ہے۔
+Use a **node host** when your Gateway runs on one machine and you want commands
+to execute on another. The model still talks to the **gateway**; the gateway
+forwards `exec` calls to the **node host** when `host=node` is selected.
 
 ### کیا کہاں چلتا ہے
 
@@ -67,7 +63,9 @@ openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 
 ### Remote gateway via SSH tunnel (loopback bind)
 
-اگر Gateway loopback (`gateway.bind=loopback`، مقامی موڈ میں بطورِ طے شدہ) پر bind ہو، تو ریموٹ node hosts براہِ راست کنیکٹ نہیں ہو سکتے۔ ایک SSH ٹنل بنائیں اور node host کو ٹنل کے لوکل اینڈ کی طرف پوائنٹ کریں۔
+If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode),
+remote node hosts cannot connect directly. Create an SSH tunnel and point the
+node host at the local end of the tunnel.
 
 مثال (node host -> gateway host):
 
@@ -109,7 +107,7 @@ openclaw nodes list
 
 ### Allowlist the commands
 
-Exec approvals **ہر node host کے لیے** ہوتی ہیں۔ gateway سے allowlist اندراجات شامل کریں:
+Exec approvals are **per node host**. Add allowlist entries from the gateway:
 
 ```bash
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
@@ -214,7 +212,7 @@ openclaw nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 
 ## Screen recordings (nodes)
 
-نوڈز `screen.record` (mp4) فراہم کرتے ہیں۔ مثال:
+Nodes expose `screen.record` (mp4). مثال:
 
 ```bash
 openclaw nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
@@ -263,8 +261,8 @@ openclaw nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"
 
 ## System commands (node host / mac node)
 
-macOS نوڈ `system.run`، `system.notify`، اور `system.execApprovals.get/set` فراہم کرتا ہے۔
-headless node host `system.run`، `system.which`، اور `system.execApprovals.get/set` فراہم کرتا ہے۔
+The macOS node exposes `system.run`, `system.notify`, and `system.execApprovals.get/set`.
+The headless node host exposes `system.run`, `system.which`, and `system.execApprovals.get/set`.
 
 مثالیں:
 
@@ -280,14 +278,14 @@ openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready
 - `system.run` `--cwd`، `--env KEY=VAL`، `--command-timeout`، اور `--needs-screen-recording` کو سپورٹ کرتا ہے۔
 - `system.notify` `--priority <passive|active|timeSensitive>` اور `--delivery <system|overlay|auto>` کو سپورٹ کرتا ہے۔
 - macOS نوڈز `PATH` اووررائیڈز چھوڑ دیتے ہیں؛ headless node hosts صرف `PATH` قبول کرتے ہیں جب وہ node host PATH کو prepend کرے۔
-- macOS node mode میں، `system.run` macOS ایپ میں exec approvals (Settings → Exec approvals) کے تحت gated ہے۔
-  Ask/allowlist/full headless node host کی طرح ہی برتاؤ کرتے ہیں؛ مسترد پرامپٹس `SYSTEM_RUN_DENIED` واپس کرتے ہیں۔
+- On macOS node mode, `system.run` is gated by exec approvals in the macOS app (Settings → Exec approvals).
+  Ask/allowlist/full behave the same as the headless node host; denied prompts return `SYSTEM_RUN_DENIED`.
 - headless node host پر، `system.run` exec approvals (`~/.openclaw/exec-approvals.json`) کے تحت gated ہے۔
 
 ## Exec node binding
 
-جب متعدد نوڈز دستیاب ہوں، آپ exec کو کسی مخصوص نوڈ سے bind کر سکتے ہیں۔
-یہ `exec host=node` کے لیے ڈیفالٹ نوڈ سیٹ کرتا ہے (اور فی ایجنٹ اووررائیڈ ہو سکتا ہے)۔
+When multiple nodes are available, you can bind exec to a specific node.
+This sets the default node for `exec host=node` (and can be overridden per agent).
 
 گلوبل ڈیفالٹ:
 
@@ -315,9 +313,9 @@ openclaw config unset agents.list[0].tools.exec.node
 
 ## Headless node host (cross-platform)
 
-OpenClaw ایک **headless node host** (بغیر UI) چلا سکتا ہے جو Gateway
-WebSocket سے جڑتا ہے اور `system.run` / `system.which` فراہم کرتا ہے۔ یہ Linux/Windows پر
-یا سرور کے ساتھ کم سے کم نوڈ چلانے کے لیے مفید ہے۔
+OpenClaw can run a **headless node host** (no UI) that connects to the Gateway
+WebSocket and exposes `system.run` / `system.which`. This is useful on Linux/Windows
+or for running a minimal node alongside a server.
 
 اسے شروع کریں:
 
@@ -331,9 +329,9 @@ openclaw node run --host <gateway-host> --port 18789
 - node host اپنا node id، token، display name، اور gateway کنیکشن معلومات `~/.openclaw/node.json` میں محفوظ کرتا ہے۔
 - Exec approvals مقامی طور پر `~/.openclaw/exec-approvals.json` کے ذریعے نافذ ہوتی ہیں
   (دیکھیں [Exec approvals](/tools/exec-approvals))۔
-- macOS پر، headless node host قابلِ رسائی ہونے پر companion app exec host کو ترجیح دیتا ہے اور
-  ایپ دستیاب نہ ہو تو لوکل اجرا پر واپس آ جاتا ہے۔ ایپ کو لازمی کرنے کے لیے `OPENCLAW_NODE_EXEC_HOST=app` سیٹ کریں،
-  یا fallback غیر فعال کرنے کے لیے `OPENCLAW_NODE_EXEC_FALLBACK=0`۔
+- On macOS, the headless node host prefers the companion app exec host when reachable and falls
+  back to local execution if the app is unavailable. Set `OPENCLAW_NODE_EXEC_HOST=app` to require
+  the app, or `OPENCLAW_NODE_EXEC_FALLBACK=0` to disable fallback.
 - جب Gateway WS TLS استعمال کرے تو `--tls` / `--tls-fingerprint` شامل کریں۔
 
 ## Mac node mode

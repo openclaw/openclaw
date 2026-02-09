@@ -5,13 +5,6 @@ read_when:
   - TTS-providers of limieten configureren
   - /tts-opdrachten gebruiken
 title: "Tekst-naar-spraak"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:07Z
 ---
 
 # Tekst-naar-spraak (TTS)
@@ -34,7 +27,8 @@ uitvoerformaten, maar niet alle opties worden door de Edge-service ondersteund. 
 
 Omdat Edge TTS een openbare webservice is zonder gepubliceerde SLA of quota, moet je deze
 als best-effort beschouwen. Als je gegarandeerde limieten en ondersteuning nodig hebt,
-gebruik OpenAI of ElevenLabs. Microsofts Speech REST API documenteert een audio­limiet van
+gebruik OpenAI of ElevenLabs.
+Microsofts Speech REST API documenteert een audio­limiet van
 10 minuten per aanvraag; Edge TTS publiceert geen limieten, dus ga uit van vergelijkbare
 of lagere limieten. citeturn0search3
 
@@ -49,7 +43,8 @@ Edge TTS vereist **geen** API-sleutel. Als er geen API-sleutels worden gevonden,
 OpenClaw standaard Edge TTS (tenzij uitgeschakeld via `messages.tts.edge.enabled=false`).
 
 Als meerdere providers zijn geconfigureerd, wordt de geselecteerde provider eerst gebruikt
-en fungeren de andere als fallback-opties. Auto-samenvatting gebruikt de geconfigureerde
+en fungeren de andere als fallback-opties.
+Auto-samenvatting gebruikt de geconfigureerde
 `summaryModel` (of `agents.defaults.model.primary`), dus die provider moet ook zijn geauthenticeerd
 als je samenvattingen inschakelt.
 

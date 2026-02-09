@@ -3,23 +3,19 @@ summary: "Cách chạy test cục bộ (vitest) và khi nào dùng các chế đ
 read_when:
   - Chạy hoặc sửa test
 title: "Kiểm thử"
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:09Z
 ---
 
 # Kiểm thử
 
 - Bộ công cụ kiểm thử đầy đủ (suite, live, Docker): [Testing](/help/testing)
 
-- `pnpm test:force`: Dừng mọi tiến trình gateway còn tồn đọng đang giữ cổng điều khiển mặc định, sau đó chạy toàn bộ suite Vitest với cổng gateway được cô lập để các bài test máy chủ không va chạm với một instance đang chạy. Dùng khi lần chạy gateway trước để lại cổng 18789 bị chiếm.
-- `pnpm test:coverage`: Chạy Vitest với coverage V8. Ngưỡng toàn cục là 70% cho lines/branches/functions/statements. Coverage loại trừ các entrypoint nặng tích hợp (kết nối CLI, cầu nối gateway/telegram, máy chủ webchat tĩnh) để tập trung mục tiêu vào logic có thể kiểm thử bằng unit test.
+- `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
+
+- `pnpm test:coverage`: Runs Vitest with V8 coverage. 4. Ngưỡng toàn cục là 70% cho lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
+
 - `pnpm test:e2e`: Chạy các smoke test end-to-end của gateway (ghép cặp WS/HTTP/node đa instance).
-- `pnpm test:live`: Chạy các bài test live của provider (minimax/zai). Yêu cầu khóa API và `LIVE=1` (hoặc `*_LIVE_TEST=1` theo từng provider) để bỏ qua trạng thái skip.
+
+- 5. `pnpm test:live`: Chạy các bài kiểm thử live của provider (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
 
 ## Benchmark độ trễ mô hình (khóa cục bộ)
 
@@ -29,7 +25,7 @@ Cách dùng:
 
 - `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
 - Biến môi trường tùy chọn: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
-- Prompt mặc định: “Trả lời bằng một từ duy nhất: ok. Không dấu câu hoặc văn bản bổ sung.”
+- Default prompt: “Reply with a single word: ok. No punctuation or extra text.”
 
 Lần chạy gần nhất (2025-12-31, 20 lượt):
 

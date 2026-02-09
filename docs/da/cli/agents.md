@@ -3,13 +3,6 @@ summary: "CLI-reference for `openclaw agents` (list/add/delete/angiv identitet)"
 read_when:
   - Du vil have flere isolerede agenter (workspaces + routing + auth)
 title: "agenter"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:58Z
 ---
 
 # `openclaw agents`

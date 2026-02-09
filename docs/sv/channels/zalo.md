@@ -3,18 +3,11 @@ summary: "Status, funktioner och konfiguration för stöd av Zalo-bot"
 read_when:
   - Arbetar med Zalo-funktioner eller webhooks
 title: "Zalo"
-x-i18n:
-  source_path: channels/zalo.md
-  source_hash: bd14c0d008a23552
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:37Z
 ---
 
 # Zalo (Bot API)
 
-Status: experimentell. Endast direktmeddelanden; grupper kommer snart enligt Zalo-dokumentationen.
+Status: experimentell. Direkta meddelanden endast, grupper kommer snart per Zalo docs.
 
 ## Plugin krävs
 
@@ -52,8 +45,8 @@ Minimal konfig:
 
 ## Vad det är
 
-Zalo är en meddelandeapp med fokus på Vietnam; dess Bot API låter Gateway köra en bot för 1:1-konversationer.
-Det passar bra för support eller notifieringar där du vill ha deterministisk routning tillbaka till Zalo.
+Zalo är en vietnam-fokuserad meddelandeapp; dess Bot API låter Gateway köra en bot för 1:1 konversationer.
+Det är en bra passform för stöd eller meddelanden där du vill ha deterministisk dirigering tillbaka till Zalo.
 
 - En Zalo Bot API-kanal som ägs av Gateway.
 - Deterministisk routning: svar går tillbaka till Zalo; modellen väljer aldrig kanaler.
@@ -62,7 +55,7 @@ Det passar bra för support eller notifieringar där du vill ha deterministisk r
 
 ## Konfigurering (snabb väg)
 
-### 1) Skapa en bottoken (Zalo Bot Platform)
+### 1. Skapa en bottoken (Zalo Bot Platform)
 
 1. Gå till [https://bot.zaloplatforms.com](https://bot.zaloplatforms.com) och logga in.
 2. Skapa en ny bot och konfigurera dess inställningar.
@@ -88,8 +81,8 @@ Env-alternativ: `ZALO_BOT_TOKEN=...` (fungerar endast för standardkontot).
 
 Stöd för flera konton: använd `channels.zalo.accounts` med per-konto-token och valfri `name`.
 
-3. Starta om gatewayn. Zalo startar när en token kan lösas (env eller konfig).
-4. DM-åtkomst är parning som standard. Godkänn koden när boten kontaktas första gången.
+3. Starta om gatewayn. Zalo startar när en token är löst (env eller config).
+4. DM åtkomststandard är att para. Godkänn koden när botten först kontaktas.
 
 ## Hur det fungerar (beteende)
 
@@ -107,11 +100,11 @@ Stöd för flera konton: använd `channels.zalo.accounts` med per-konto-token oc
 
 ### DM-åtkomst
 
-- Standard: `channels.zalo.dmPolicy = "pairing"`. Okända avsändare får en parningskod; meddelanden ignoreras tills de godkänts (koder löper ut efter 1 timme).
+- Standard: `channels.zalo.dmPolicy = "pairing"`. Okända avsändare får en parningskod; meddelanden ignoreras tills de godkänts (koder upphör efter 1 timme).
 - Godkänn via:
   - `openclaw pairing list zalo`
   - `openclaw pairing approve zalo <CODE>`
-- Parning är standardutbyte av token. Detaljer: [Parning](/channels/pairing)
+- Parkoppling är standard token exchange. Detaljer: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` accepterar numeriska användar-ID:n (ingen uppslagning av användarnamn finns).
 
 ## Long-polling vs webhook
@@ -134,16 +127,16 @@ Stöd för flera konton: använd `channels.zalo.accounts` med per-konto-token oc
 
 ## Funktioner
 
-| Funktion           | Status                                        |
-| ------------------ | --------------------------------------------- |
-| Direktmeddelanden  | ✅ Stöds                                      |
-| Grupper            | ❌ Kommer snart (enligt Zalo-dokumentationen) |
-| Media (bilder)     | ✅ Stöds                                      |
-| Reaktioner         | ❌ Stöds inte                                 |
-| Trådar             | ❌ Stöds inte                                 |
-| Omröstningar       | ❌ Stöds inte                                 |
-| Inbyggda kommandon | ❌ Stöds inte                                 |
-| Streaming          | ⚠️ Blockerad (2000-teckensgräns)              |
+| Funktion                          | Status                                                          |
+| --------------------------------- | --------------------------------------------------------------- |
+| Direktmeddelanden                 | ✅ Stöds                                                         |
+| Grupper                           | ❌ Kommer snart (enligt Zalo-dokumentationen) |
+| Media (bilder) | ✅ Stöds                                                         |
+| Reaktioner                        | ❌ Stöds inte                                                    |
+| Trådar                            | ❌ Stöds inte                                                    |
+| Omröstningar                      | ❌ Stöds inte                                                    |
+| Inbyggda kommandon                | ❌ Stöds inte                                                    |
+| Streaming                         | ⚠️ Blockerad (2000-teckensgräns)             |
 
 ## Leveransmål (CLI/cron)
 
@@ -175,7 +168,7 @@ Leverantörsalternativ:
 - `channels.zalo.botToken`: bottoken från Zalo Bot Platform.
 - `channels.zalo.tokenFile`: läs token från filsökväg.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (standard: parning).
-- `channels.zalo.allowFrom`: DM-tillåtelselista (användar-ID:n). `open` kräver `"*"`. Guiden frågar efter numeriska ID:n.
+- `channels.zalo.allowFrom`: DM allowlist (användar-ID). `open` kräver `"*"`. Guiden kommer att be om numeriska ID.
 - `channels.zalo.mediaMaxMb`: gräns för inkommande/utgående media (MB, standard 5).
 - `channels.zalo.webhookUrl`: aktivera webhook-läge (HTTPS krävs).
 - `channels.zalo.webhookSecret`: webhook-hemlighet (8–256 tecken).
@@ -189,8 +182,8 @@ Alternativ för flera konton:
 - `channels.zalo.accounts.<id>.name`: visningsnamn.
 - `channels.zalo.accounts.<id>.enabled`: aktivera/inaktivera konto.
 - `channels.zalo.accounts.<id>.dmPolicy`: DM-policy per konto.
-- `channels.zalo.accounts.<id>.allowFrom`: tillåtelselista per konto.
+- `channels.zalo.accounts.<id>.allowFrom`: Tillåten per konto.
 - `channels.zalo.accounts.<id>.webhookUrl`: webhook-URL per konto.
-- `channels.zalo.accounts.<id>.webhookSecret`: webhook-hemlighet per konto.
-- `channels.zalo.accounts.<id>.webhookPath`: webhook-sökväg per konto.
-- `channels.zalo.accounts.<id>.proxy`: proxy-URL per konto.
+- `channels.zalo.accounts.<id>.webhookSecret`: hemlighet per konto.
+- `channels.zalo.accounts.<id>.webhookPath`: sökväg per konto
+- `channels.zalo.accounts.<id>.proxy`: proxy per konto

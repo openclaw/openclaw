@@ -3,13 +3,6 @@ summary: "Comment le Gateway (passerelle), les nœuds et l’hôte du canvas se 
 read_when:
   - Vous voulez une vue concise du modele reseau du Gateway
 title: "Modele reseau"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:39Z
 ---
 
 La plupart des operations transitent par le Gateway (passerelle) (`openclaw gateway`), un

@@ -4,13 +4,6 @@ read_when:
   - macOS/iOS/Android üzerinde Talk modunun uygulanması
   - Ses/TTS/kesinti davranışının değiştirilmesi
 title: "Talk Modu"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:30Z
 ---
 
 # Talk Modu
@@ -19,7 +12,7 @@ Talk modu, sürekli bir sesli konuşma döngüsüdür:
 
 1. Konuşmayı dinler
 2. Dökümü modele gönderir (ana oturum, chat.send)
-3. Yanıtı bekler
+3. Wait for the response
 4. ElevenLabs üzerinden konuşur (akışlı oynatma)
 
 ## Davranış (macOS)

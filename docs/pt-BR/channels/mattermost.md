@@ -4,13 +4,6 @@ read_when:
   - Configurando o Mattermost
   - Depurando o roteamento do Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:01Z
 ---
 
 # Mattermost (plugin)
@@ -40,7 +33,7 @@ o OpenClaw oferecerá automaticamente o caminho de instalação local.
 
 Detalhes: [Plugins](/tools/plugin)
 
-## Início Rápido
+## Início rápido
 
 1. Instale o plugin do Mattermost.
 2. Crie uma conta de bot no Mattermost e copie o **token do bot**.

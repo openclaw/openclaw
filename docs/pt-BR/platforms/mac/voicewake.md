@@ -3,13 +3,6 @@ summary: "Modos de ativação por voz e push-to-talk, além de detalhes de rotea
 read_when:
   - Trabalhando nos fluxos de ativação por voz ou PTT
 title: "Ativação por Voz"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:37Z
 ---
 
 # Ativação por Voz & Push-to-Talk

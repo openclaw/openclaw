@@ -3,13 +3,6 @@ summary: "WhatsApp grup mesajı işleme davranışı ve yapılandırması (menti
 read_when:
   - Grup mesajı kurallarını veya mention’ları değiştirirken
 title: "Grup Mesajları"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:02Z
 ---
 
 # Grup mesajları (WhatsApp web kanalı)
@@ -18,7 +11,7 @@ Amaç: Clawd’un WhatsApp gruplarında bulunmasını, yalnızca pinglendiğinde
 
 Not: `agents.list[].groupChat.mentionPatterns` artık Telegram/Discord/Slack/iMessage tarafından da kullanılıyor; bu doküman WhatsApp’e özgü davranışlara odaklanır. Çoklu ajan kurulumları için, ajan başına `agents.list[].groupChat.mentionPatterns` ayarlayın (veya genel bir geri dönüş olarak `messages.groupChat.mentionPatterns` kullanın).
 
-## Uygulananlar (2025-12-03)
+## What’s implemented (2025-12-03)
 
 - Etkinleştirme modları: `mention` (varsayılan) veya `always`. `mention` bir ping gerektirir ( `mentionedJids` üzerinden gerçek WhatsApp @-mention’ları, regex desenleri veya botun E.164 numarasının metin içinde herhangi bir yerde geçmesi). `always` ajanı her mesajda uyandırır ancak yalnızca anlamlı değer katabildiğinde yanıt vermelidir; aksi halde sessiz belirteç `NO_REPLY` döndürür. Varsayılanlar yapılandırmada (`channels.whatsapp.groups`) ayarlanabilir ve grup bazında `/activation` ile geçersiz kılınabilir. `channels.whatsapp.groups` ayarlandığında, bir grup izin listesi olarak da davranır (tümüne izin vermek için `"*"` ekleyin).
 - Grup politikası: `channels.whatsapp.groupPolicy`, grup mesajlarının kabul edilip edilmeyeceğini (`open|disabled|allowlist`) denetler. `allowlist`, `channels.whatsapp.groupAllowFrom`’yi kullanır (geri dönüş: açık `channels.whatsapp.allowFrom`). Varsayılan `allowlist`’dur (gönderenler eklenene kadar engelli).
@@ -78,7 +71,7 @@ Bunu yalnızca sahip numarası (`channels.whatsapp.allowFrom`’dan; ayarlı de�
 
 ## Test / doğrulama
 
-- Manuel hızlı test:
+- Manual smoke:
   - Grupta bir `@openclaw` ping’i gönderin ve gönderen adını referans alan bir yanıtı doğrulayın.
   - İkinci bir ping gönderin ve geçmiş bloğunun dahil edildiğini, ardından bir sonraki turda temizlendiğini doğrulayın.
 - Gateway günlüklerini (`--verbose` ile çalıştırın) kontrol ederek `from: <groupJid>`’u ve `[from: …]` son ekini gösteren `inbound web message` girdilerini görün.

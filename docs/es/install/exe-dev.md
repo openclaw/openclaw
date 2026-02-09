@@ -4,13 +4,6 @@ read_when:
   - Desea un host Linux económico y siempre activo para el Gateway
   - Desea acceso remoto a la Control UI sin ejecutar su propio VPS
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:45Z
 ---
 
 # exe.dev
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## Instalación manual
 
-## 1) Crear la VM
+## 1. Crear la VM
 
 Desde su dispositivo:
 
@@ -59,14 +52,14 @@ ssh <vm-name>.exe.xyz
 
 Consejo: mantenga esta VM **stateful**. OpenClaw almacena estado en `~/.openclaw/` y `~/.openclaw/workspace/`.
 
-## 2) Instalar prerrequisitos (en la VM)
+## 2. Instalar prerrequisitos (en la VM)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) Instalar OpenClaw
+## 3. Instalar OpenClaw
 
 Ejecute el script de instalación de OpenClaw:
 
@@ -74,7 +67,7 @@ Ejecute el script de instalación de OpenClaw:
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) Configurar nginx para hacer proxy de OpenClaw al puerto 8000
+## 4. Configurar nginx para hacer proxy de OpenClaw al puerto 8000
 
 Edite `/etc/nginx/sites-enabled/default` con
 
@@ -108,7 +101,7 @@ server {
 }
 ```
 
-## 5) Acceder a OpenClaw y otorgar privilegios
+## 5. Acceder a OpenClaw y otorgar privilegios
 
 Acceda a `https://<vm-name>.exe.xyz/` (vea la salida de la Control UI durante el onboarding). Si solicita autenticación, pegue el
 token de `gateway.auth.token` en la VM (recupérelo con `openclaw config get gateway.auth.token` o genere uno

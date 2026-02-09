@@ -1,22 +1,16 @@
 ---
-summary: 「訊息流程、工作階段、佇列，以及推理可見性」
+summary: "Message flow, sessions, queueing, and reasoning visibility"
 read_when:
   - 說明傳入訊息如何轉換為回覆
-  - 釐清工作階段、佇列模式或串流行為
+  - Clarifying sessions, queueing modes, or streaming behavior
   - 文件化推理可見性與使用上的影響
-title: 「訊息」
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:42Z
+title: "訊息"
 ---
 
 # 訊息
 
-本頁整合說明 OpenClaw 如何處理傳入訊息、工作階段、佇列、串流，以及推理可見性。
+This page ties together how OpenClaw handles inbound messages, sessions, queueing,
+streaming, and reasoning visibility.
 
 ## 訊息流程（高階）
 
@@ -32,17 +26,19 @@ Inbound message
 
 - `messages.*` 用於前綴、佇列與群組行為。
 - `agents.defaults.*` 用於區塊串流與分塊的預設值。
-- 頻道覆寫（`channels.whatsapp.*`、`channels.telegram.*` 等）用於上限與串流切換。
+- 頻道覆寫（`channels.whatsapp.*`、`channels.telegram.*` 等）用於上限與串流切換。 for caps and streaming toggles.
 
 完整結構請參閱 [設定](/gateway/configuration)。
 
 ## 傳入去重（Inbound dedupe）
 
-頻道在重新連線後可能重新投遞相同的訊息。OpenClaw 會維持一個短存活快取，以 頻道 / 帳號 / 對象 / 工作階段 / 訊息 ID 作為鍵，確保重複投遞不會再次觸發代理程式執行。
+Channels can redeliver the same message after reconnects. 頻道在重新連線後可能重新投遞相同的訊息。OpenClaw 會維持一個短存活快取，以 頻道 / 帳號 / 對象 / 工作階段 / 訊息 ID 作為鍵，確保重複投遞不會再次觸發代理程式執行。
 
 ## 傳入防抖（Inbound debouncing）
 
-來自 **同一寄件者** 的快速連續訊息，可透過 `messages.inbound` 合併為單一代理程式回合。防抖以「頻道 + 對話」為作用範圍，並使用最新訊息來進行回覆串接／ID。
+Rapid consecutive messages from the **same sender** can be batched into a single
+agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation
+and uses the most recent message for reply threading/IDs.
 
 設定（全域預設 + 每頻道覆寫）：
 
@@ -63,26 +59,30 @@ Inbound message
 
 注意事項：
 
-- 防抖僅適用於 **純文字** 訊息；媒體／附件會立即送出。
+- Debounce applies to **text-only** messages; media/attachments flush immediately.
 - 控制指令會略過防抖，以保持其獨立性。
 
-## 工作階段與裝置
+## Sessions and devices
 
-工作階段由 Gateway 閘道器 擁有，而非用戶端。
+Sessions are owned by the gateway, not by clients.
 
-- 私聊會合併至代理程式的主要工作階段鍵。
+- Direct chats collapse into the agent main session key.
 - 群組／頻道各自擁有獨立的工作階段鍵。
-- 工作階段儲存與逐字稿位於閘道器主機上。
+- The session store and transcripts live on the gateway host.
 
-多個裝置／頻道可以對應到同一個工作階段，但歷史不會完整回同步到每個用戶端。建議：長時間對話請使用單一主要裝置，以避免上下文分歧。控制 UI 與 TUI 一律顯示由閘道器支援的工作階段逐字稿，因此它們是唯一可信來源。
+Multiple devices/channels can map to the same session, but history is not fully
+synced back to every client. Recommendation: use one primary device for long
+conversations to avoid divergent context. The Control UI and TUI always show the
+gateway-backed session transcript, so they are the source of truth.
 
 詳情：[工作階段管理](/concepts/session)。
 
-## 傳入內容與歷史上下文
+## Inbound bodies and history context
 
-OpenClaw 將 **提示內容** 與 **指令內容** 分離：
+OpenClaw separates the **prompt body** from the **command body**:
 
-- `Body`：送往代理程式的提示文字。這可能包含頻道封裝與選用的歷史包裝。
+- `Body`: prompt text sent to the agent. This may include channel envelopes and
+  optional history wrappers.
 - `CommandBody`：用於指令／命令解析的原始使用者文字。
 - `RawBody`：`CommandBody` 的舊別名（為相容性保留）。
 
@@ -91,24 +91,34 @@ OpenClaw 將 **提示內容** 與 **指令內容** 分離：
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
-對於 **非私聊**（群組／頻道／房間），**目前訊息內容** 會加上寄件者標籤前綴（與歷史項目使用相同樣式）。這可讓即時與佇列／歷史訊息在代理程式提示中保持一致。
+For **non-direct chats** (groups/channels/rooms), the **current message body** is prefixed with the
+sender label (same style used for history entries). This keeps real-time and queued/history
+messages consistent in the agent prompt.
 
-歷史緩衝區為 **僅待處理**：它們包含未觸發執行的群組訊息（例如需要提及才觸發的訊息），並 **排除** 已存在於工作階段逐字稿中的訊息。
+History buffers are **pending-only**: they include group messages that did _not_
+trigger a run (for example, mention-gated messages) and **exclude** messages
+already in the session transcript.
 
-指令剝離僅套用於 **目前訊息** 區段，以確保歷史保持完整。包裝歷史的頻道應將 `CommandBody`（或 `RawBody`）設為原始訊息文字，並將 `Body` 保持為合併後的提示。歷史緩衝區可透過 `messages.groupChat.historyLimit`（全域預設）與每頻道覆寫（如 `channels.slack.historyLimit` 或 `channels.telegram.accounts.<id>.historyLimit`）進行設定（將 `0` 設為停用）。
+Directive stripping only applies to the **current message** section so history
+remains intact. Channels that wrap history should set `CommandBody` (or
+`RawBody`) to the original message text and keep `Body` as the combined prompt.
+History buffers are configurable via `messages.groupChat.historyLimit` (global
+default) and per-channel overrides like `channels.slack.historyLimit` or
+`channels.telegram.accounts.<id>.historyLimit`）進行設定（將 `0` 設為停用）。
 
-## 佇列與後續回合
+## Queueing and followups
 
-若已有執行中的回合，傳入訊息可以被佇列、導向目前回合，或收集為後續回合。
+If a run is already active, inbound messages can be queued, steered into the
+current run, or collected for a followup turn.
 
 - 透過 `messages.queue`（以及 `messages.queue.byChannel`）設定。
 - 模式：`interrupt`、`steer`、`followup`、`collect`，以及其 backlog 變體。
 
 詳情：[佇列](/concepts/queue)。
 
-## 串流、分塊與批次
+## Streaming, chunking, and batching
 
-區塊串流會在模型產生文字區塊時即時送出部分回覆。分塊會遵循頻道文字上限，並避免切割圍欄程式碼。
+Block streaming sends partial replies as the model produces text blocks.1) 分塊會遵守通道文字長度限制，並避免切分圍欄程式碼。
 
 主要設定：
 
@@ -121,12 +131,12 @@ OpenClaw 將 **提示內容** 與 **指令內容** 分離：
 
 詳情：[串流 + 分塊](/concepts/streaming)。
 
-## 推理可見性與權杖
+## 2. 推理可見性與權杖
 
 OpenClaw 可顯示或隱藏模型推理：
 
 - `/reasoning on|off|stream` 控制可見性。
-- 即使隱藏，模型產生的推理內容仍會計入權杖用量。
+- 3. 由模型產生的推理內容仍會計入權杖用量。
 - Telegram 支援將推理串流至草稿氣泡。
 
 詳情：[思考 + 推理指令](/tools/thinking) 與 [權杖使用](/reference/token-use)。

@@ -1,17 +1,10 @@
 ---
 summary: "مرجع CLI لأمر `openclaw browser` (الملفات الشخصية، علامات التبويب، الإجراءات، ترحيل الامتداد)"
 read_when:
-  - "تستخدم `openclaw browser` وتريد أمثلة على المهام الشائعة"
-  - "تريد التحكم في متصفح يعمل على جهاز آخر عبر مضيف عُقدة"
-  - "تريد استخدام ترحيل امتداد Chrome (الإرفاق/الفصل عبر زر شريط الأدوات)"
+  - تستخدم `openclaw browser` وتريد أمثلة على المهام الشائعة
+  - تريد التحكم في متصفح يعمل على جهاز آخر عبر مضيف عُقدة
+  - تريد استخدام ترحيل امتداد Chrome (الإرفاق/الفصل عبر زر شريط الأدوات)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:57Z
 ---
 
 # `openclaw browser`
@@ -82,7 +75,7 @@ openclaw browser snapshot
 openclaw browser screenshot
 ```
 
-التنقّل/النقر/الكتابة (أتمتة واجهة المستخدم بالاعتماد على المراجع):
+تصفح/نقر / نوع (تلقائية واجهة المستخدم القائمة على الرفع):
 
 ```bash
 openclaw browser navigate https://example.com

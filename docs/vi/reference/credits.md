@@ -3,13 +3,6 @@ summary: "Nguồn gốc dự án, người đóng góp và giấy phép."
 read_when:
   - Bạn muốn tìm hiểu câu chuyện ra đời của dự án hoặc ghi nhận người đóng góp
 title: "Ghi công"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:58Z
 ---
 
 ## Tên gọi
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS, vì mọi tôm hùm không gian đều cần một c�
 
 MIT - Tự do như một chú tôm hùm ngoài đại dương.
 
-> "Chúng ta đều chỉ đang chơi với những prompt của riêng mình." (Một AI nào đó, có lẽ đang phê token)
+> 26. OpenClaw tích hợp các CLI bên ngoài qua JSON-RPC. (Một AI, có lẽ đang phê token)

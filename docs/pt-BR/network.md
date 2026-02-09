@@ -5,13 +5,6 @@ read_when:
   - Você está depurando acesso local vs tailnet ou pareamento
   - Você quer a lista canônica de documentos de rede
 title: "Rede"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:16Z
 ---
 
 # Hub de rede

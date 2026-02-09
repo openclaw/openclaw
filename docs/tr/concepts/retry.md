@@ -3,19 +3,12 @@ summary: "Giden sağlayıcı çağrıları için yeniden deneme ilkesi"
 read_when:
   - Sağlayıcı yeniden deneme davranışını veya varsayılanlarını güncellerken
   - Sağlayıcı gönderim hatalarını veya oran sınırlarını ayıklarken
-title: "Yeniden Deneme İlkesi"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:08Z
+title: "Retry Policy"
 ---
 
-# Yeniden deneme ilkesi
+# Yeniden deneme politikası
 
-## Amaçlar
+## Hedefler
 
 - Çok adımlı akış başına değil, HTTP isteği başına yeniden denemek.
 - Yalnızca mevcut adımı yeniden deneyerek sıralamayı korumak.

@@ -4,13 +4,6 @@ read_when:
   - आप पूर्ण ऑनबोर्डिंग विज़ार्ड के बिना पहली बार सेटअप कर रहे हों
   - आप डिफ़ॉल्ट कार्यक्षेत्र पथ सेट करना चाहते हों
 title: "सेटअप"
-x-i18n:
-  source_path: cli/setup.md
-  source_hash: 7f3fc8b246924edf
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:02Z
 ---
 
 # `openclaw setup`

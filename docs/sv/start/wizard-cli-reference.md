@@ -5,18 +5,11 @@ read_when:
   - Du felsöker introduktionsresultat eller integrerar introduktionsklienter
 title: "CLI‑referens för introduktion"
 sidebarTitle: "CLI‑referens"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:45Z
 ---
 
 # CLI‑referens för introduktion
 
-Den här sidan är den fullständiga referensen för `openclaw onboard`.
+Denna sida är den fullständiga referensen för `openclaw onboard`.
 För den korta guiden, se [Onboarding Wizard (CLI)](/start/wizard).
 
 ## Vad guiden gör
@@ -32,71 +25,72 @@ Lokalt läge (standard) leder dig genom:
 - Skills‑konfiguration
 
 Fjärrläge konfigurerar den här maskinen för att ansluta till en gateway någon annanstans.
-Det installerar eller ändrar ingenting på fjärrvärden.
+Det inte installera eller ändra något på fjärrvärden.
 
 ## Detaljer för lokalt flöde
 
 <Steps>
-  <Step title="Identifiering av befintlig konfiguration">
-    - Om `~/.openclaw/openclaw.json` finns, välj Behåll, Ändra eller Återställ.
-    - Att köra guiden igen raderar ingenting om du inte uttryckligen väljer Återställ (eller skickar `--reset`).
-    - Om konfigurationen är ogiltig eller innehåller äldre nycklar stoppar guiden och ber dig köra `openclaw doctor` innan du fortsätter.
-    - Återställ använder `trash` och erbjuder omfattningar:
-      - Endast konfiguration
-      - Konfiguration + autentiseringsuppgifter + sessioner
-      - Full återställning (tar även bort arbetsytan)
-  </Step>
-  <Step title="Modell och autentisering">
+  <Step title="Existing config detection">
+    - Om `~/.openclaw/openclaw.json` finns, välj Keep, Modifiera eller Återställ.
+    - Att köra om guiden torkar inte någonting om du inte uttryckligen väljer Återställ (eller skicka `--reset`).
+    - Om konfigurationen är ogiltig eller innehåller äldre nycklar, stannar guiden och ber dig att köra `openclaw doctor` innan du fortsätter.
+    - Återställ använder `trash` och erbjuder omfattning:
+      - Endast Config
+      - Config + autentiseringsuppgifter + sessioner
+      - Fullständig återställning (tar också bort arbetsytan)  
+</Step>
+  <Step title="Model and auth">
     - Fullständig alternativmatris finns i [Autentiserings- och modellalternativ](#auth-and-model-options).
   </Step>
-  <Step title="Arbetsyta">
+  <Step title="Workspace">
     - Standard `~/.openclaw/workspace` (konfigurerbar).
-    - Sår arbetsytefiler som behövs för bootstrap‑ritualen vid första körningen.
+    - Frön arbetsytefiler som behövs för första körda bootstrap ritual.
     - Arbetsytans layout: [Agent workspace](/concepts/agent-workspace).
   </Step>
   <Step title="Gateway">
-    - Frågar efter port, bind, autentiseringsläge och Tailscale‑exponering.
-    - Rekommenderat: behåll token‑auth aktiverad även för loopback så att lokala WS‑klienter måste autentisera.
-    - Inaktivera autentisering endast om du fullt ut litar på varje lokal process.
-    - Bindningar som inte är loopback kräver fortfarande autentisering.
+    - Prompts för port, bind, auth-läge och skräddarsydd exponering.
+    - Rekommenderas: hålla token auth aktiverad även för loopback så lokala WS-klienter måste autentisera.
+    - Inaktivera auth endast om du helt litar på varje lokal process.
+    - Icke-loopback binder fortfarande kräver auth.
   </Step>
-  <Step title="Kanaler">
-    - [WhatsApp](/channels/whatsapp): valfri QR‑inloggning
-    - [Telegram](/channels/telegram): bot‑token
-    - [Discord](/channels/discord): bot‑token
-    - [Google Chat](/channels/googlechat): servicekonto‑JSON + webhook‑audience
-    - [Mattermost](/channels/mattermost)‑plugin: bot‑token + bas‑URL
-    - [Signal](/channels/signal): valfri installation av `signal-cli` + kontokonfiguration
-    - [BlueBubbles](/channels/bluebubbles): rekommenderad för iMessage; server‑URL + lösenord + webhook
-    - [iMessage](/channels/imessage): äldre `imsg` CLI‑sökväg + DB‑åtkomst
-    - DM‑säkerhet: standard är parning. Första DM skickar en kod; godkänn via
-      `openclaw pairing approve <channel> <code>` eller använd tillåtelselistor.
+  <Step title="Channels">
+    - [WhatsApp](/channels/whatsapp): valfri QR-inloggning
+    - [Telegram](/channels/telegram): bot token
+    - [Discord](/channels/discord): bot token
+    - [Google Chat](/channels/googlechat): servicekonto JSON + webhook-publik
+    - [Mattermost](/channels/mattermost) plugin: bot token + bas-URL
+    - [Signal](/channels/signal): valfri `signal-cli` install + account config
+    - [BlueBubbles](/channels/bluebubbles): rekommenderas för iMessage; server-URL + lösenord + webhook
+    - [iMessage](/channels/imessage): äldre `imsg` CLI-sökväg + DB-åtkomst
+    - DM-säkerhet: standard paras. Första DM skickar en kod; godkänna via
+      `openclaw parkoppling godkänna <channel><code>` eller använd tillåtelselistor.
+  </Step><code>` eller använd tillåtna listor.
   </Step>
-  <Step title="Installation av daemon">
+  <Step title="Daemon install">
     - macOS: LaunchAgent
-      - Kräver inloggad användarsession; för headless, använd en anpassad LaunchDaemon (levereras inte).
-    - Linux och Windows via WSL2: systemd‑användarenhet
-      - Guiden försöker `loginctl enable-linger <user>` så att gatewayn fortsätter efter utloggning.
-      - Kan be om sudo (skriver `/var/lib/systemd/linger`); den försöker utan sudo först.
-    - Val av runtime: Node (rekommenderas; krävs för WhatsApp och Telegram). Bun rekommenderas inte.
+      - Kräver inloggad användarsession; för huvudlös, använd en anpassad LaunchDaemon (inte levererad).
+    - Linux och Windows via WSL2: systemdanvändarenhet
+      - Wizard försöker `loginctl enable-linger <user>` så gateway stannar upp efter utloggning.
+      - Kan fråga om sudo (skriver `/var/lib/systemd/linger`); den försöker utan sudo först.
+    - Runtime val: Node (rekommenderas; krävs för WhatsApp och Telegram). Bun rekommenderas inte.
   </Step>
-  <Step title="Hälsokontroll">
-    - Startar gatewayn (om behövs) och kör `openclaw health`.
-    - `openclaw status --deep` lägger till gateway‑hälsoprober i statusutdata.
+  <Step title="Health check">
+    - Startar gateway (om det behövs) och kör `openclaw health`.
+    - `openclaw status --deep` lägger till gateway hälso-sonder till statusutgång.
   </Step>
   <Step title="Skills">
-    - Läser tillgängliga Skills och kontrollerar krav.
-    - Låter dig välja node‑manager: npm eller pnpm (bun rekommenderas inte).
+    - Läser tillgängliga färdigheter och kontroller krav.
+    - Kan du välja nod manager: npm eller pnpm (bun rekommenderas inte).
     - Installerar valfria beroenden (vissa använder Homebrew på macOS).
   </Step>
-  <Step title="Slutför">
-    - Sammanfattning och nästa steg, inklusive iOS‑, Android‑ och macOS‑appalternativ.
+  <Step title="Finish">
+    - Sammanfattning och nästa steg, inklusive iOS, Android och macOS app-alternativ.
   </Step>
 </Steps>
 
 <Note>
-Om inget GUI upptäcks skriver guiden ut SSH‑portforward‑instruktioner för Control UI i stället för att öppna en webbläsare.
-Om Control UI‑resurser saknas försöker guiden bygga dem; reservlösningen är `pnpm ui:build` (installerar UI‑beroenden automatiskt).
+Om ingen GUI upptäcks, guiden skriver ut SSH port-forward instruktioner för Control UI istället för att öppna en webbläsare.
+Om UI-tillgångar saknas försöker guiden bygga dem; reservationen är `pnpm ui:build` (auto-installs UI deps).
 </Note>
 
 ## Detaljer för fjärrläge
@@ -113,8 +107,8 @@ Det du anger:
 - Token om fjärrgateway‑auth krävs (rekommenderas)
 
 <Note>
-- Om gatewayn är endast loopback, använd SSH‑tunnling eller ett tailnet.
-- Discovery‑tips:
+- Om gateway är loopback-endast, använd SSH-tunneling eller en tailnet.
+- Upptäcktledtrådar:
   - macOS: Bonjour (`dns-sd`)
   - Linux: Avahi (`avahi-browse`)
 </Note>
@@ -122,67 +116,73 @@ Det du anger:
 ## Autentiserings- och modellalternativ
 
 <AccordionGroup>
-  <Accordion title="Anthropic API‑nyckel (rekommenderas)">
+  <Accordion title="Anthropic API key (recommended)">
     Använder `ANTHROPIC_API_KEY` om den finns eller ber om en nyckel och sparar den sedan för daemon‑användning.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: kontrollerar nyckelringsposten ”Claude Code‑credentials”
     - Linux och Windows: återanvänder `~/.claude/.credentials.json` om den finns
 
+    ```
     På macOS, välj ”Always Allow” så att launchd‑starter inte blockeras.
+    ```
 
   </Accordion>
-  <Accordion title="Anthropic‑token (klistra in setup‑token)">
-    Kör `claude setup-token` på valfri maskin och klistra sedan in token.
-    Du kan namnge den; tomt använder standard.
+  <Accordion title="Anthropic token (setup-token paste)">
+    Kör `claude setup-token` på någon maskin, klistra sedan in token.
+    Du kan namnge det; tomt använder standard.
   </Accordion>
-  <Accordion title="OpenAI Code‑prenumeration (återanvänd Codex CLI)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     Om `~/.codex/auth.json` finns kan guiden återanvända den.
   </Accordion>
-  <Accordion title="OpenAI Code‑prenumeration (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     Webbläsarflöde; klistra in `code#state`.
 
+    ```
     Sätter `agents.defaults.model` till `openai-codex/gpt-5.3-codex` när modellen är osatt eller `openai/*`.
+    ```
 
   </Accordion>
-  <Accordion title="OpenAI API‑nyckel">
+  <Accordion title="OpenAI API key">
     Använder `OPENAI_API_KEY` om den finns eller ber om en nyckel och sparar den sedan till
     `~/.openclaw/.env` så att launchd kan läsa den.
 
+    ```
     Sätter `agents.defaults.model` till `openai/gpt-5.1-codex` när modellen är osatt, `openai/*` eller `openai-codex/*`.
+    ```
 
   </Accordion>
-  <Accordion title="xAI (Grok) API‑nyckel">
+  <Accordion title="xAI (Grok) API key">
     Ber om `XAI_API_KEY` och konfigurerar xAI som modellleverantör.
   </Accordion>
   <Accordion title="OpenCode Zen">
-    Ber om `OPENCODE_API_KEY` (eller `OPENCODE_ZEN_API_KEY`).
-    Setup‑URL: [opencode.ai/auth](https://opencode.ai/auth).
+    Prompts för `OPENCODE_API_KEY` (eller `OPENCODE_ZEN_API_KEY`).
+    Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="API‑nyckel (generisk)">
+  <Accordion title="API key (generic)">
     Lagrar nyckeln åt dig.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
-    Ber om `AI_GATEWAY_API_KEY`.
-    Mer information: [Vercel AI Gateway](/providers/vercel-ai-gateway).
+    Prompts för `AI_GATEWAY_API_KEY`.
+    Mer detalj: [Vercel AI Gateway](/providers/vercel-ai-gateway).
   </Accordion>
   <Accordion title="Cloudflare AI Gateway">
-    Ber om konto‑ID, gateway‑ID och `CLOUDFLARE_AI_GATEWAY_API_KEY`.
-    Mer information: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
+    Prompts för konto-ID, gateway-ID och `CLOUDFLARE_AI_GATEWAY_API_KEY`.
+    Mer detalj: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
   <Accordion title="MiniMax M2.1">
-    Konfiguration skrivs automatiskt.
-    Mer information: [MiniMax](/providers/minimax).
+    Konfigurationen är auto-skriven.
+    Mer detalj: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (Anthropic‑kompatibel)">
-    Ber om `SYNTHETIC_API_KEY`.
-    Mer information: [Synthetic](/providers/synthetic).
+  <Accordion title="Synthetic (Anthropic-compatible)">
+    Prompts för `SYNTHETIC_API_KEY`.
+    Mer detalj: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot och Kimi Coding">
-    Konfigurationer för Moonshot (Kimi K2) och Kimi Coding skrivs automatiskt.
-    Mer information: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
+  <Accordion title="Moonshot and Kimi Coding">
+    Moonshot (Kimi K2) och Kimi kodning konfigurationer är automatiskt skrivna.
+    Mer detalj: [Moonshot AI (Kimi + Kimi kodning)](/providers/moonshot).
   </Accordion>
-  <Accordion title="Hoppa över">
+  <Accordion title="Skip">
     Lämnar autentisering okonfigurerad.
   </Accordion>
 </AccordionGroup>
@@ -221,12 +221,12 @@ Typiska fält i `~/.openclaw/openclaw.json`:
 
 `openclaw agents add` skriver `agents.list[]` och valfri `bindings`.
 
-WhatsApp‑autentiseringsuppgifter hamnar under `~/.openclaw/credentials/whatsapp/<accountId>/`.
+WhatsApp-uppgifter går under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Sessioner lagras under `~/.openclaw/agents/<agentId>/sessions/`.
 
 <Note>
-Vissa kanaler levereras som plugins. När de väljs under introduktionen ber guiden
-om att installera pluginen (npm eller lokal sökväg) innan kanalkonfiguration.
+Vissa kanaler levereras som plugins. När den är markerad under registrering, uppmanar guiden
+att installera plugin (npm eller lokal sökväg) innan kanalkonfiguration.
 </Note>
 
 Gateway‑guide RPC:

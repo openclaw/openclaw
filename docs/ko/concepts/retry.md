@@ -4,13 +4,6 @@ read_when:
   - 프로바이더 재시도 동작 또는 기본값을 업데이트할 때
   - 프로바이더 전송 오류 또는 속도 제한을 디버깅할 때
 title: "재시도 정책"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:37Z
 ---
 
 # 재시도 정책

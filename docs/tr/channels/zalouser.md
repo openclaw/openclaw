@@ -4,13 +4,6 @@ read_when:
   - OpenClaw için Zalo Personal kurulumu
   - Zalo Personal oturum açma veya mesaj akışı sorunlarını giderme
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: ede847ebe6272256
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:57Z
 ---
 
 # Zalo Personal (resmi olmayan)
@@ -62,7 +55,7 @@ Gateway ana makinesinde `zca` ikili dosyasının `PATH` içinde mevcut olması g
 - Yanıt göndermek için `zca msg ...` kullanır (metin/medya/bağlantı).
 - Zalo Bot API’nin mevcut olmadığı “kişisel hesap” kullanım senaryoları için tasarlanmıştır.
 
-## Adlandırma
+## Naming
 
 Kanal kimliği `zalouser`’tür; bunun **kişisel bir Zalo kullanıcı hesabını** (resmi olmayan) otomatikleştirdiğini açıkça belirtir. Olası gelecekteki resmi Zalo API entegrasyonu için `zalo` ayrılmıştır.
 
@@ -141,7 +134,7 @@ Hesaplar zca profilleriyle eşleştirilir. Örnek:
 
 - zca-cli’yi yükleyin ve Gateway süreci için `PATH` üzerinde olduğundan emin olun.
 
-**Oturum kalıcı olmuyor:**
+**Login doesn’t stick:**
 
 - `openclaw channels status --probe`
 - Yeniden oturum açın: `openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`

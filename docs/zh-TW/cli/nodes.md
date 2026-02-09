@@ -4,20 +4,13 @@ read_when:
   - 你正在管理已配對的節點（攝影機、螢幕、畫布）
   - 你需要核准請求或呼叫節點指令
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:23Z
 ---
 
 # `openclaw nodes`
 
-管理已配對的節點（裝置），並呼叫節點能力。
+Manage paired nodes (devices) and invoke node capabilities.
 
-相關內容：
+Related:
 
 - Nodes 概覽：[Nodes](/nodes)
 - Camera：[Camera nodes](/nodes/camera)
@@ -40,9 +33,9 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` 會列印待處理／已配對的表格。已配對的列會包含最近一次連線的時間長度（Last Connect）。
-使用 `--connected` 只顯示目前已連線的節點。使用 `--last-connected <duration>` 來
-篩選在指定時間長度內連線的節點（例如 `24h`、`7d`）。
+`nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
+Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
+filter to nodes that connected within a duration (e.g. `24h`, `7d`).
 
 ## Invoke / run
 

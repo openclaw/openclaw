@@ -5,13 +5,6 @@ read_when:
   - ဆက်ရှင်များ၊ တန်းစီခြင်း မုဒ်များ သို့မဟုတ် စီးဆင်းပို့ဆောင်မှု အပြုအမူများကို ရှင်းလင်းရာတွင်
   - အကြောင်းရင်းမြင်သာမှုနှင့် အသုံးပြုမှုဆိုင်ရာ သက်ရောက်မှုများကို စာရွက်တင်သည့်အခါ
 title: "မက်ဆေ့ချ်များ"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:40Z
 ---
 
 # မက်ဆေ့ချ်များ
@@ -33,21 +26,21 @@ Inbound message
 
 - ပရီးဖစ်များ၊ တန်းစီခြင်း နှင့် အုပ်စု အပြုအမူများအတွက် `messages.*`။
 - ဘလောက်အလိုက် စီးဆင်းပို့ဆောင်မှု နှင့် ချန့်ခွဲခြင်း မူလတန်ဖိုးများအတွက် `agents.defaults.*`။
-- ကန့်သတ်ချက်များ နှင့် စီးဆင်းပို့ဆောင်မှု အပြောင်းအလဲများအတွက် ချန်နယ် အလိုက် အစားထိုးများ (`channels.whatsapp.*`, `channels.telegram.*` စသည်)။
+- Channel overrides (`channels.whatsapp.*`, `channels.telegram.*`, etc.) for caps and streaming toggles.
 
 အပြည့်အစုံ စနစ်ဖွဲ့စည်းပုံအတွက် [Configuration](/gateway/configuration) ကို ကြည့်ပါ။
 
 ## အဝင် မက်ဆေ့ချ် ထပ်တူဖယ်ရှားခြင်း (Inbound dedupe)
 
-ချန်နယ်များသည် ပြန်လည်ချိတ်ဆက်ပြီးနောက် တူညီသော မက်ဆေ့ချ်ကို ထပ်မံပို့နိုင်ပါသည်။ OpenClaw သည်
-ချန်နယ်/အကောင့်/အဖော်/ဆက်ရှင်/မက်ဆေ့ချ် ID အလိုက် ခေတ္တကာလ ကက်ရှ်တစ်ခုကို ထိန်းသိမ်းထားပြီး
-ထပ်တူ ပို့ဆောင်မှုများကြောင့် အေးဂျင့်ကို ထပ်မံ လည်ပတ်စေခြင်း မဖြစ်စေရန် ကာကွယ်သည်။
+Channels can redeliver the same message after reconnects. OpenClaw keeps a
+short-lived cache keyed by channel/account/peer/session/message id so duplicate
+deliveries do not trigger another agent run.
 
 ## အဝင် မက်ဆေ့ချ် တုန့်ပြန်နှေးကွေးပေါင်းစည်းခြင်း (Inbound debouncing)
 
-**တူညီသော ပို့သူ** ထံမှ ဆက်တိုက် အမြန်ပို့လာသော မက်ဆေ့ချ်များကို `messages.inbound` မှတဆင့်
-အေးဂျင့် တစ်ကြိမ်လှည့်အဖြစ် ပေါင်းစည်းနိုင်ပါသည်။ Debouncing သည် ချန်နယ် + စကားဝိုင်း အလိုက် သတ်မှတ်ထားပြီး
-ပြန်ကြားချက် ချည်တွဲခြင်း/ID များအတွက် နောက်ဆုံး မက်ဆေ့ချ်ကို အသုံးပြုသည်။
+Rapid consecutive messages from the **same sender** can be batched into a single
+agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation
+and uses the most recent message for reply threading/IDs.
 
 ဖွဲ့စည်းပြင်ဆင်မှု (ကမ္ဘာလုံးဆိုင်ရာ မူလတန်ဖိုး + ချန်နယ်အလိုက် အစားထိုးများ):
 
@@ -79,7 +72,10 @@ Inbound message
 - အုပ်စုများ/ချန်နယ်များတွင် ကိုယ်ပိုင် ဆက်ရှင် ကီးများ ရှိသည်။
 - ဆက်ရှင် သိုလှောင်ရာ နှင့် စာတမ်းမှတ်တမ်းများသည် Gateway ဟို့စ် ပေါ်တွင် ရှိသည်။
 
-ကိရိယာများ/ချန်နယ်များ အများအပြားက ဆက်ရှင် တစ်ခုတည်းသို့ မြေပုံချနိုင်သော်လည်း သမိုင်းကြောင်းကို client တစ်ခုချင်းစီသို့ အပြည့်အဝ ပြန်လည် စင်ခရိုနိုက် မလုပ်ပါ။ အကြံပြုချက်မှာ အကြာကြီး စကားပြောများအတွက် အဓိက ကိရိယာ တစ်ခုကို အသုံးပြုရန်ဖြစ်ပြီး အကြောင်းအရာ မကွဲလွဲစေရန် ဖြစ်သည်။ Control UI နှင့် TUI သည် Gateway အခြေပြု ဆက်ရှင် စာတမ်းမှတ်တမ်းကို အမြဲ ပြသသဖြင့် ယင်းတို့သည် အမှန်တရား အရင်းအမြစ် ဖြစ်သည်။
+Multiple devices/channels can map to the same session, but history is not fully
+synced back to every client. Recommendation: use one primary device for long
+conversations to avoid divergent context. The Control UI and TUI always show the
+gateway-backed session transcript, so they are the source of truth.
 
 အသေးစိတ်: [Session management](/concepts/session)။
 
@@ -87,7 +83,8 @@ Inbound message
 
 OpenClaw သည် **prompt body** နှင့် **command body** ကို ခွဲခြားထားသည်-
 
-- `Body`: အေးဂျင့်သို့ ပို့သော prompt စာသား။ ချန်နယ် အဖုံးအအုပ်များနှင့် ရွေးချယ်နိုင်သော သမိုင်း အဖုံးများ ပါဝင်နိုင်သည်။
+- `Body`: prompt text sent to the agent. This may include channel envelopes and
+  optional history wrappers.
 - `CommandBody`: လမ်းညွှန်ချက်/အမိန့် ခွဲခြမ်းစိတ်ဖြာရန် အသုံးပြုသော အသုံးပြုသူ၏ မူရင်း စာသား။
 - `RawBody`: `CommandBody` အတွက် အဟောင်း alias (ကိုက်ညီမှုအတွက် ထားရှိထားသည်)။
 
@@ -96,15 +93,18 @@ OpenClaw သည် **prompt body** နှင့် **command body** ကို �
 - `[Chat messages since your last reply - for context]`
 - `[Current message - respond to this]`
 
-**တိုက်ရိုက် မဟုတ်သော စကားပြောများ** (အုပ်စုများ/ချန်နယ်များ/အခန်းများ) အတွက် **လက်ရှိ မက်ဆေ့ချ် ဘော်ဒီ** ကို
-ပို့သူ အညွှန်းဖြင့် အရှေ့တွင် ထည့်သွင်းသည် (သမိုင်း အထည့်အသွင်းများတွင် အသုံးပြုသော စတိုင်တူ)။ ယင်းက အချိန်နှင့်တပြေးညီ နှင့် တန်းစီ/သမိုင်း မက်ဆေ့ချ်များကို အေးဂျင့် prompt အတွင်း တသမတ်တည်း ဖြစ်စေသည်။
+For **non-direct chats** (groups/channels/rooms), the **current message body** is prefixed with the
+sender label (same style used for history entries). This keeps real-time and queued/history
+messages consistent in the agent prompt.
 
 သမိုင်း ဘဖာများသည် **စောင့်ဆိုင်းနေသည့် အချက်များသာ** ပါဝင်သည်- အလုပ်မလုပ်စေခဲ့သော အုပ်စု မက်ဆေ့ချ်များ (ဥပမာ၊ mention-gated မက်ဆေ့ချ်များ) ကို ထည့်သွင်းပြီး ဆက်ရှင် စာတမ်းမှတ်တမ်းထဲတွင် ရှိပြီးသား မက်ဆေ့ချ်များကို **မပါဝင်** စေပါ။
 
-ညွှန်ကြားချက် ဖယ်ရှားခြင်းသည် **လက်ရှိ မက်ဆေ့ချ်** အပိုင်းတွင်သာ သက်ရောက်ပြီး သမိုင်းကို မထိခိုက်စေပါ။ သမိုင်းကို အဖုံးအအုပ်လုပ်သော ချန်နယ်များသည် မူရင်း မက်ဆေ့ချ် စာသားအဖြစ် `CommandBody` (သို့မဟုတ်
-`RawBody`) ကို သတ်မှတ်ပြီး ပေါင်းစည်းထားသော prompt အဖြစ် `Body` ကို ထိန်းသိမ်းထားသင့်သည်။
-သမိုင်း ဘဖာများကို `messages.groupChat.historyLimit` (ကမ္ဘာလုံးဆိုင်ရာ မူလတန်ဖိုး) နှင့် ချန်နယ်အလိုက် အစားထိုးများဖြစ်သည့် `channels.slack.historyLimit` သို့မဟုတ်
-`channels.telegram.accounts.<id>.historyLimit` ဖြင့် ဖွဲ့စည်းနိုင်သည် (`0` ကို သတ်မှတ်ပါက ပိတ်ထားနိုင်သည်)။
+Directive stripping only applies to the **current message** section so history
+remains intact. Channels that wrap history should set `CommandBody` (or
+`RawBody`) to the original message text and keep `Body` as the combined prompt.
+History buffers are configurable via `messages.groupChat.historyLimit` (global
+default) and per-channel overrides like `channels.slack.historyLimit` or
+`channels.telegram.accounts.<id>.historyLimit` (set `0` to disable).
 
 ## တန်းစီခြင်း နှင့် နောက်ဆက်တွဲများ
 
@@ -118,8 +118,8 @@ OpenClaw သည် **prompt body** နှင့် **command body** ကို �
 
 ## စီးဆင်းပို့ဆောင်မှု၊ ချန့်ခွဲခြင်း နှင့် အစုလိုက်ပို့ခြင်း
 
-ဘလောက်အလိုက် စီးဆင်းပို့ဆောင်မှုသည် မော်ဒယ်က စာသား ဘလောက်များ ထုတ်လုပ်သလို အပိုင်းလိုက် ပြန်ကြားချက်များကို ပို့သည်။
-ချန့်ခွဲခြင်းသည် ချန်နယ် စာသား ကန့်သတ်ချက်များကို လိုက်နာပြီး fenced code ကို ခွဲမဖြတ်စေပါ။
+Block streaming sends partial replies as the model produces text blocks.
+Chunking respects channel text limits and avoids splitting fenced code.
 
 အဓိက သတ်မှတ်ချက်များ-
 
@@ -146,7 +146,7 @@ OpenClaw သည် မော်ဒယ် အကြောင်းရင်းက
 
 အထွက် မက်ဆေ့ချ် ပုံစံချခြင်းကို `messages` တွင် အလယ်တန်း စီမံထားသည်-
 
-- `messages.responsePrefix`, `channels.<channel>.responsePrefix`, နှင့် `channels.<channel>.accounts.<id>.responsePrefix` (အထွက် ပရီးဖစ် အဆင့်ဆင့်), ထို့အပြင် `channels.whatsapp.messagePrefix` (WhatsApp အဝင် ပရီးဖစ်)
+- `messages.responsePrefix`, `channels.<channel>.responsePrefix`, and `channels.<channel>.accounts.<id>.responsePrefix` (outbound prefix cascade), plus `channels.whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - `replyToMode` နှင့် ချန်နယ်အလိုက် မူလတန်ဖိုးများဖြင့် ပြန်ကြားချက် ချည်တွဲခြင်း
 
 အသေးစိတ်: [Configuration](/gateway/configuration#messages) နှင့် ချန်နယ် စာရွက်များ။

@@ -4,20 +4,14 @@ read_when:
   - 你想要選擇模型提供者
   - 你需要快速概覽支援的 LLM 後端
 title: "模型提供者"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:58Z
 ---
 
 # 模型提供者
 
-OpenClaw 可使用多種 LLM 提供者。選擇一個提供者、完成身分驗證，然後將預設模型設定為 `provider/model`。
+OpenClaw can use many LLM providers. Pick a provider, authenticate, then set the
+default model as `provider/model`.
 
-在找聊天頻道文件（WhatsApp／Telegram／Discord／Slack／Mattermost（外掛）／等）嗎？請參閱 [頻道](/channels)。
+在找聊天頻道文件（WhatsApp／Telegram／Discord／Slack／Mattermost（外掛）／等）嗎？請參閱 [頻道](/channels)。 See [Channels](/channels).
 
 ## 重點推薦：Venice（Venice AI）
 
@@ -66,5 +60,5 @@ Venice 是我們推薦的 Venice AI 設定，提供以隱私優先的推論，�
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - 將 Claude Max／Pro 訂閱作為相容 OpenAI 的 API 端點使用
 
-如需完整的提供者目錄（xAI、Groq、Mistral 等）與進階設定，
-請參閱 [模型提供者](/concepts/model-providers)。
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

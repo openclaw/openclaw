@@ -5,13 +5,6 @@ read_when:
   - Ao implementar runner de nó + IPC de UI
   - Ao adicionar modos de segurança do host de exec e comandos slash
 title: "Refatoração do Host de Exec"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:02Z
 ---
 
 # Plano de refatoração do host de exec
@@ -112,7 +105,7 @@ Perguntar é **independente** da lista de permissões; a lista pode ser usada co
 
 Caminho: `~/.openclaw/exec-approvals.json`
 
-Finalidade:
+Propósito:
 
 - Política local + listas de permissões para o **host de execução** (gateway ou runner de nó).
 - Fallback de pergunta quando nenhuma UI estiver disponível.
@@ -157,7 +150,7 @@ Notas:
 
 ## Serviço runner (headless)
 
-### Função
+### Funções
 
 - Aplicar `exec.security` + `exec.ask` localmente.
 - Executar comandos do sistema e retornar a saída.
@@ -255,7 +248,7 @@ Opção B:
 - O runner retorna stdout/stderr agregados.
 - Eventos opcionais da Bridge para início/fim/negação.
 
-## Limites de saída
+## Tampas de saída
 
 - Limitar stdout+stderr combinados em **200k**; manter **cauda de 20k** para eventos.
 - Truncar com um sufixo claro (ex.: `"… (truncated)"`).
@@ -266,7 +259,7 @@ Opção B:
 - Overrides por agente e por sessão; não persistentes a menos que salvos via configuração.
 - `/elevated on|off|ask|full` permanece um atalho para `host=gateway security=full` (com `full` pulando aprovações).
 
-## História multiplataforma
+## História entre plataformas
 
 - O serviço runner é o alvo portátil de execução.
 - A UI é opcional; se ausente, aplica-se `askFallback`.

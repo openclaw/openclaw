@@ -5,13 +5,6 @@ read_when:
   - Установка, поиск или публикация Skills
   - Объяснение флагов CLI ClawHub и поведения синхронизации
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:16Z
 ---
 
 # ClawHub
@@ -75,8 +68,7 @@ pnpm add -g clawhub
 
 По умолчанию CLI устанавливает Skills в `./skills` в вашем текущем рабочем каталоге. Если настроено рабочее пространство OpenClaw, `clawhub` использует его как резервный вариант, если вы не переопределили `--workdir` (или `CLAWHUB_WORKDIR`). OpenClaw загружает Skills рабочего пространства из `<workspace>/skills` и подхватывает их в **следующем** сеансе. Если вы уже используете `~/.openclaw/skills` или Skills из комплекта, Skills рабочего пространства имеют приоритет.
 
-Для более подробной информации о том, как Skills загружаются, совместно используются и ограничиваются, см.
-[Skills](/tools/skills).
+Для более подробной информации о том, как Skills загружаются, совместно используются и ограничиваются, см. [Skills](/tools/skills).
 
 ## Обзор системы Skills
 

@@ -1,16 +1,9 @@
 ---
 summary: "OpenClaw’ı güvenlik uyarılarıyla birlikte kişisel asistan olarak çalıştırmak için uçtan uca rehber"
 read_when:
-  - Yeni bir asistan örneği devreye alınırken
+  - Yeni bir asistan örneğinin sisteme alınması
   - Güvenlik/izin etkileri gözden geçirilirken
 title: "Kişisel Asistan Kurulumu"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:53Z
 ---
 
 # OpenClaw ile kişisel bir asistan oluşturma
@@ -118,7 +111,7 @@ Kendi çalışma alanı dosyalarınızı zaten bir depodan sağlıyorsanız, ön
 }
 ```
 
-## Onu “bir asistan”a dönüştüren yapılandırma
+## Onu “bir asistana” dönüştüren yapılandırma
 
 OpenClaw varsayılan olarak iyi bir asistan kurulumuyla gelir, ancak genellikle şunları ayarlamak istersiniz:
 

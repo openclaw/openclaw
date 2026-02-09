@@ -2,13 +2,6 @@
 summary: "원격 Gateway(게이트웨이)에 연결하기 위한 OpenClaw.app의 SSH 터널 설정"
 read_when: "SSH를 통해 macOS 앱을 원격 Gateway(게이트웨이)에 연결할 때"
 title: "원격 Gateway(게이트웨이) 설정"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:06Z
 ---
 
 # 원격 Gateway(게이트웨이)와 함께 OpenClaw.app 실행하기
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## 작동 방식
 
-| 구성 요소                            | 역할                                              |
+| 구성 요소                                | What It Does                                      |
 | ------------------------------------ | ------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | 로컬 포트 18789를 원격 포트 18789로 포워딩합니다  |
+| `LocalForward 18789 127.0.0.1:18789` | 로컬 포트 18789를 원격 포트 18789로 포워딩합니다                  |
 | `ssh -N`                             | 원격 명령을 실행하지 않는 SSH(포트 포워딩만 수행) |
-| `KeepAlive`                          | 크래시 발생 시 터널을 자동으로 재시작합니다       |
-| `RunAtLoad`                          | 에이전트 로드 시 터널을 시작합니다                |
+| `KeepAlive`                          | 크래시 발생 시 터널을 자동으로 재시작합니다                          |
+| `RunAtLoad`                          | 에이전트 로드 시 터널을 시작합니다                               |
 
 OpenClaw.app은 클라이언트 머신의 `ws://127.0.0.1:18789`에 연결합니다. SSH 터널은 해당 연결을 Gateway(게이트웨이)가 실행 중인 원격 머신의 포트 18789로 포워딩합니다.

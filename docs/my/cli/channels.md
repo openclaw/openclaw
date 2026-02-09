@@ -4,13 +4,6 @@ read_when:
   - ချန်နယ်အကောင့်များ (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage) ကို ထည့်သွင်း/ဖယ်ရှား လုပ်ချင်သောအခါ
   - ချန်နယ် အခြေအနေကို စစ်ဆေးလိုသောအခါ သို့မဟုတ် ချန်နယ် လော့ဂ်များကို tail လုပ်ချင်သောအခါ
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:01Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - ကျယ်ပြန့်စွာ စစ်ဆေးရန် `openclaw status --deep` ကို ပြုလုပ်ပါ။
 - လမ်းညွှန်အတိုင်း ပြုပြင်ရန် `openclaw doctor` ကို အသုံးပြုပါ။
-- `openclaw channels list` သည် `Claude: HTTP 403 ... user:profile` ကို ပုံနှိပ်ပြသပါသည် → အသုံးပြုမှု snapshot သည် `user:profile` scope ကို လိုအပ်ပါသည်။ `--no-usage` ကို အသုံးပြုပါ၊ သို့မဟုတ် claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) ကို ပေးပါ၊ သို့မဟုတ် Claude Code CLI ဖြင့် ပြန်လည် အတည်ပြုပါ။
+- `openclaw channels list` သည် `Claude: HTTP 403 ...` ကို print ထုတ်သည်။ `user:profile` → usage snapshot အတွက် `user:profile` scope လိုအပ်သည်။ `--no-usage` ကို အသုံးပြုပါ၊ သို့မဟုတ် claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) ပေးပါ၊ သို့မဟုတ် Claude Code CLI မှတစ်ဆင့် ပြန်လည် authenticate လုပ်ပါ။
 
 ## Capabilities probe
 
@@ -68,7 +61,7 @@ openclaw channels capabilities --channel discord --target channel:123
 
 - `--channel` သည် မဖြစ်မနေ မလိုအပ်ပါ။ ချန်နယ်အားလုံး (extension များပါဝင်) ကို စာရင်းပြုလုပ်ရန် မထည့်ဘဲ ထားနိုင်ပါသည်။
 - `--target` သည် `channel:<id>` သို့မဟုတ် raw numeric channel id ကို လက်ခံပြီး Discord တွင်သာ သက်ဆိုင်ပါသည်။
-- Probe များသည် provider အလိုက် ကွာခြားပါသည်—Discord intents + ရွေးချယ်နိုင်သော channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (သိရှိထားသည့်နေရာများတွင် မှတ်ချက်ပြုထားသည်)။ Probe မရှိသည့် ချန်နယ်များသည် `Probe: unavailable` ကို ပြန်ပို့ပါသည်။
+- Probes များသည် provider အလိုက် သီးခြားဖြစ်သည်: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes (သိရှိသလောက် annotation လုပ်ထားသည်)။ probes မရှိသော channels များသည် `Probe: unavailable` ဟု report လုပ်မည်။
 
 ## Resolve names to IDs
 

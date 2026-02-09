@@ -3,18 +3,11 @@ summary: "Kurerade länkar till de mest använda OpenClaw-dokumenten."
 read_when:
   - Du vill ha snabb åtkomst till centrala dokumentsidor
 title: "Dokumentkatalog"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:26Z
 ---
 
 <Note>
-Den här sidan är ett kurerat index. Om du är ny, börja med [Kom igång](/start/getting-started).
-För en komplett karta över dokumentationen, se [Dokumenthubbar](/start/hubs).
+Denna sida är ett kurerat index. Om du är ny, börja med [Komma igång](/start/getting-started).
+För en komplett karta över dokumenten, se [Docs hubs](/start/hubs).
 </Note>
 
 ## Börja här

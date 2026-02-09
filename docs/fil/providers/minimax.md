@@ -4,20 +4,13 @@ read_when:
   - Gusto mo ng mga MiniMax model sa OpenClaw
   - Kailangan mo ng gabay sa setup ng MiniMax
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:55Z
 ---
 
 # MiniMax
 
-Ang MiniMax ay isang AI company na bumubuo ng **M2/M2.1** na pamilya ng mga model. Ang kasalukuyang
-coding‑focused na release ay **MiniMax M2.1** (Disyembre 23, 2025), na binuo para sa
-mga totoong‑mundo at kumplikadong gawain.
+MiniMax is an AI company that builds the **M2/M2.1** model family. The current
+coding-focused release is **MiniMax M2.1** (December 23, 2025), built for
+real-world complex tasks.
 
 Source: [MiniMax M2.1 release note](https://www.minimax.io/news/minimax-m21)
 
@@ -38,9 +31,9 @@ Itinatampok ng MiniMax ang mga sumusunod na pagpapahusay sa M2.1:
 
 - **Bilis:** Ang Lightning ang “fast” variant sa pricing docs ng MiniMax.
 - **Gastos:** Ipinapakita ng pricing ang parehong input cost, ngunit mas mataas ang output cost ng Lightning.
-- **Coding plan routing:** Ang Lightning back-end ay hindi direktang available sa MiniMax
-  coding plan. Awtomatikong niruruta ng MiniMax ang karamihan ng mga request sa Lightning, ngunit bumabalik sa
-  regular na M2.1 back-end kapag may traffic spikes.
+- **Coding plan routing:** The Lightning back-end isn’t directly available on the MiniMax
+  coding plan. MiniMax auto-routes most requests to Lightning, but falls back to the
+  regular M2.1 back-end during traffic spikes.
 
 ## Pumili ng setup
 
@@ -125,9 +118,9 @@ I-configure sa pamamagitan ng CLI:
 
 ### Opsyonal: Lokal sa pamamagitan ng LM Studio (manual)
 
-**Pinakamainam para sa:** local inference gamit ang LM Studio.
-Nakakita kami ng malalakas na resulta sa MiniMax M2.1 sa makapangyarihang hardware (hal.
-desktop/server) gamit ang local server ng LM Studio.
+**Best for:** local inference with LM Studio.
+We have seen strong results with MiniMax M2.1 on powerful hardware (e.g. a
+desktop/server) using LM Studio's local server.
 
 I-configure nang manu-mano sa pamamagitan ng `openclaw.json`:
 
@@ -194,9 +187,9 @@ Gamitin ang interactive config wizard para i-set up ang MiniMax nang hindi nag-e
 
 ### “Unknown model: minimax/MiniMax-M2.1”
 
-Karaniwan itong nangangahulugan na **hindi naka-configure ang MiniMax provider** (walang provider entry
-at walang nahanap na MiniMax auth profile/env key). May fix para sa detection na ito sa
-**2026.1.12** (hindi pa nailalabas sa oras ng pagsulat). Ayusin sa pamamagitan ng:
+This usually means the **MiniMax provider isn’t configured** (no provider entry
+and no MiniMax auth profile/env key found). A fix for this detection is in
+**2026.1.12** (unreleased at the time of writing). Fix by:
 
 - Pag-upgrade sa **2026.1.12** (o patakbuhin mula sa source `main`), pagkatapos ay i-restart ang Gateway.
 - Pagpapatakbo ng `openclaw configure` at pagpili ng **MiniMax M2.1**, o

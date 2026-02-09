@@ -4,13 +4,6 @@ read_when:
   - Kailangan mong mag-log in sa mga site para sa browser automation
   - Gusto mong mag-post ng mga update sa X/Twitter
 title: "Browser Login"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:56Z
 ---
 
 # Browser login + pag-post sa X/Twitter
@@ -19,13 +12,13 @@ x-i18n:
 
 Kapag nangangailangan ng login ang isang site, **mag-sign in nang manu-mano** sa **host** na browser profile (ang OpenClaw browser).
 
-Huwag **ibigay** sa model ang iyong mga kredensyal. Ang mga automated na login ay madalas mag-trigger ng mga anti‑bot defense at maaaring mag-lock ng account.
+25. **Huwag** ibigay sa modelo ang iyong mga kredensyal. 26. Ang mga automated login ay madalas mag-trigger ng anti-bot defenses at maaaring mag-lock ng account.
 
 Bumalik sa pangunahing browser docs: [Browser](/tools/browser).
 
 ## Aling Chrome profile ang ginagamit?
 
-Kinokontrol ng OpenClaw ang isang **dedikadong Chrome profile** (pinangalanang `openclaw`, may kahel na UI). Hiwalay ito sa iyong pang-araw-araw na browser profile.
+27. Kinokontrol ng OpenClaw ang isang **dedikadong Chrome profile** (pinangalanang `openclaw`, may orange-tinted na UI). 28. Hiwalay ito sa iyong pang-araw-araw na browser profile.
 
 Dalawang madaling paraan para ma-access ito:
 
@@ -46,9 +39,9 @@ Kung mayroon kang maraming profile, ipasa ang `--browser-profile <name>` (ang de
 
 ## Sandboxing + access sa host browser
 
-Ang mga sandboxed na browser session ay **mas malamang** na mag-trigger ng bot detection. Para sa X/Twitter (at iba pang mahigpit na site), piliin ang **host** browser.
+29. Ang mga sandboxed na browser session ay **mas malamang** na mag-trigger ng bot detection. 30. Para sa X/Twitter (at iba pang mahihigpit na site), mas mainam ang **host** browser.
 
-Kung ang agent ay naka-sandbox, ang browser tool ay default sa sandbox. Para payagan ang kontrol sa host:
+31. Kung naka-sandbox ang agent, ang browser tool ay default sa sandbox. 32. Para pahintulutan ang host control:
 
 ```json5
 {

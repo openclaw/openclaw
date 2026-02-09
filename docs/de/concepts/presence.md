@@ -1,17 +1,10 @@
 ---
-summary: „Wie OpenClaw-Presence-Einträge erzeugt, zusammengeführt und angezeigt werden“
+summary: "„Wie OpenClaw-Presence-Einträge erzeugt, zusammengeführt und angezeigt werden“"
 read_when:
   - Debugging der Registerkarte „Instances“
   - Untersuchung doppelter oder veralteter Instanzzeilen
   - Änderung der Gateway-WS-Verbindung oder von System-Event-Beacons
-title: „Presence“
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:55Z
+title: "Presence"
 ---
 
 # Presence
@@ -42,12 +35,12 @@ Presence-Einträge sind strukturierte Objekte mit Feldern wie:
 
 Presence-Einträge werden von mehreren Quellen erzeugt und **zusammengeführt**.
 
-### 1) Gateway-Selbsteintrag
+### 1. Gateway-Selbsteintrag
 
 Das Gateway legt beim Start immer einen „Self“-Eintrag an, sodass UIs den
 Gateway-Host anzeigen, noch bevor sich Clients verbinden.
 
-### 2) WebSocket-Verbindung
+### 2. WebSocket-Verbindung
 
 Jeder WS-Client beginnt mit einer `connect`-Anfrage. Nach erfolgreichem
 Handshake führt das Gateway ein Upsert eines Presence-Eintrags für diese
@@ -59,13 +52,13 @@ Die CLI verbindet sich häufig nur kurz für einmalige Befehle. Um ein
 Überfluten der Instances-Liste zu vermeiden, wird `client.mode === "cli"` **nicht**
 in einen Presence-Eintrag umgewandelt.
 
-### 3) `system-event`-Beacons
+### 3. `system-event`-Beacons
 
 Clients können reichhaltigere periodische Beacons über die Methode
 `system-event` senden. Die macOS-App nutzt dies, um Hostname, IP und
 `lastInputSeconds` zu melden.
 
-### 4) Node-Verbindungen (Rolle: node)
+### 4. Node-Verbindungen (Rolle: node)
 
 Wenn sich ein Node über den Gateway-WebSocket mit `role: node` verbindet,
 führt das Gateway ein Upsert eines Presence-Eintrags für diesen Node aus

@@ -1,15 +1,8 @@
 ---
-summary: „Routing-Regeln pro Kanal (WhatsApp, Telegram, Discord, Slack) und geteilter Kontext“
+summary: "„Routing-Regeln pro Kanal (WhatsApp, Telegram, Discord, Slack) und geteilter Kontext“"
 read_when:
   - Beim Ändern des Kanal-Routings oder des Inbox-Verhaltens
-title: „Kanal-Routing“
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:08Z
+title: "channels/channel-routing.md"
 ---
 
 # Kanäle & Routing

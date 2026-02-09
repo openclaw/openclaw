@@ -4,14 +4,7 @@ read_when:
   - Implementando aprovações de pareamento de nós sem UI do macOS
   - Adicionando fluxos de CLI para aprovar nós remotos
   - Estendendo o protocolo do gateway com gerenciamento de nós
-title: "Pareamento de propriedade do Gateway"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:57Z
+title: "Pareamento Gateway-Owned"
 ---
 
 # Pareamento de propriedade do Gateway (Opção B)
@@ -29,7 +22,7 @@ Apenas clientes que chamam explicitamente `node.pair.*` usam este fluxo.
 - **Solicitação pendente**: um nó solicitou entrada; requer aprovação.
 - **Nó pareado**: nó aprovado com um token de autenticação emitido.
 - **Transporte**: o endpoint WS do Gateway encaminha solicitações, mas não decide
-  a associação. (O suporte legado à ponte TCP está obsoleto/removido.)
+  a associação. (O suporte legado à ponte TCP está obsoleto/removido.) (Suporte à ponte TCP legada está obsoleto/removido)
 
 ## Como o pareamento funciona
 

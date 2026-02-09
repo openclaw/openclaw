@@ -4,19 +4,12 @@ read_when:
   - آپ سیمینٹک میموری کو انڈیکس یا تلاش کرنا چاہتے ہوں
   - آپ میموری کی دستیابی یا انڈیکسنگ کی ڈیبگنگ کر رہے ہوں
 title: "میموری"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:00Z
 ---
 
 # `openclaw memory`
 
-سیمینٹک میموری کی انڈیکسنگ اور تلاش کا انتظام کریں۔
-فعال میموری پلگ اِن کے ذریعے فراہم کیا جاتا ہے (بطورِ طے شدہ: `memory-core`؛ غیر فعال کرنے کے لیے `plugins.slots.memory = "none"` سیٹ کریں)۔
+2. معنوی میموری کی انڈیکسنگ اور تلاش کا نظم کریں۔
+3. فعال میموری پلگ ان کے ذریعے فراہم کیا جاتا ہے (ڈیفالٹ: `memory-core`؛ غیر فعال کرنے کے لیے `plugins.slots.memory = "none"` سیٹ کریں)۔
 
 متعلقہ:
 

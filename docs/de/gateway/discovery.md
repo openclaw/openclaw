@@ -3,15 +3,8 @@ summary: "Node-Erkennung und Transporte (Bonjour, Tailscale, SSH) zum Auffinden 
 read_when:
   - Implementierung oder Änderung der Bonjour-Erkennung/-Ankündigung
   - Anpassung von Remote-Verbindungsmodi (direkt vs. SSH)
-  - Entwurf von Node-Erkennung und Pairing für entfernte Nodes
+  - Entwurf Knotenerkennung + Paarung für entfernte Knoten
 title: "Discovery und Transporte"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:16Z
 ---
 
 # Discovery & Transporte
@@ -49,7 +42,7 @@ Protokolldetails:
 
 ## Discovery-Eingaben (wie Clients erfahren, wo das Gateway ist)
 
-### 1) Bonjour / mDNS (nur LAN)
+### 1. Bonjour / mDNS (nur LAN)
 
 Bonjour ist Best-Effort und überquert keine Netzwerke. Es wird nur für „gleiches LAN“-Bequemlichkeit verwendet.
 
@@ -83,7 +76,7 @@ Deaktivieren/Überschreiben:
 - `OPENCLAW_TAILNET_DNS` veröffentlicht einen `tailnetDns`-Hinweis (MagicDNS).
 - `OPENCLAW_CLI_PATH` überschreibt den angekündigten CLI-Pfad.
 
-### 2) Tailnet (netzwerkübergreifend)
+### 2. Tailnet (netzwerkübergreifend)
 
 Für Setups im Stil London/Wien hilft Bonjour nicht. Das empfohlene „direkte“ Ziel ist:
 
@@ -91,7 +84,7 @@ Für Setups im Stil London/Wien hilft Bonjour nicht. Das empfohlene „direkte�
 
 Wenn das Gateway erkennen kann, dass es unter Tailscale läuft, veröffentlicht es `tailnetDns` als optionalen Hinweis für Clients (einschließlich Weitbereichs-Beacons).
 
-### 3) Manuelles / SSH-Ziel
+### 3. Manuelles / SSH-Ziel
 
 Wenn es keine direkte Route gibt (oder direkt deaktiviert ist), können Clients jederzeit über SSH verbinden, indem sie den Loopback-Gateway-Port weiterleiten.
 

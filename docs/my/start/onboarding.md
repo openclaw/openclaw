@@ -5,36 +5,29 @@ read_when:
   - auth သို့မဟုတ် identity setup ကို အကောင်အထည်ဖော်နေချိန်
 title: "Onboarding (macOS အက်ပ်)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:03Z
 ---
 
 # Onboarding (macOS အက်ပ်)
 
-ဤစာရွက်စာတမ်းသည် လက်ရှိ အသုံးပြုနေသော ပထမအကြိမ် စတင်အသုံးပြုရာတွင် onboarding လုပ်ငန်းစဉ်ကို ဖော်ပြထားသည်။ ရည်ရွယ်ချက်မှာ ချောမွေ့သော “day 0” အတွေ့အကြုံတစ်ခုကို ပေးရန်ဖြစ်ပြီး Gateway ကို မည်သည့်နေရာတွင် chạy မည်ကို ရွေးချယ်ခြင်း၊ auth ကို ချိတ်ဆက်ခြင်း၊ wizard ကို chạy ခြင်းနှင့် agent ကို ကိုယ်တိုင် bootstrap လုပ်စေခြင်းတို့ ပါဝင်သည်။
+ဒီစာရွက်စာတမ်းက **လက်ရှိ** ပထမအကြိမ် run လုပ်တဲ့ onboarding flow ကို ဖော်ပြထားသည်။ ရည်ရွယ်ချက်က ချောမွေ့တဲ့ “day 0” အတွေ့အကြုံတစ်ခု ဖြစ်စေရန်ပါ — Gateway ကို ဘယ်မှာ chạy မလဲ ရွေးချယ်၊ auth ချိတ်ဆက်၊ wizard ကို chạy၊ ပြီးရင် agent ကို ကိုယ်တိုင် bootstrap လုပ်ခိုင်းပါ။
 
 <Steps>
-<Step title="macOS သတိပေးချက်ကို အတည်ပြုပါ">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="local networks ကို ရှာဖွေရန် ခွင့်ပြုပါ">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="ကြိုဆိုစာနှင့် လုံခြုံရေး သတိပေးချက်">
+<Step title="Welcome and security notice">
 <Frame caption="ပြသထားသော လုံခြုံရေး သတိပေးချက်ကို ဖတ်ရှုပြီး သင့်အနေဖြင့် ဆုံးဖြတ်ပါ">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Local နှင့် Remote">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -47,12 +40,11 @@ x-i18n:
 
 <Tip>
 **Gateway auth အကြံပြုချက်:**
-- ယခု wizard သည် loopback အတွက်တောင် **token** တစ်ခုကို ထုတ်ပေးသဖြင့် local WS clients များသည် authenticate လုပ်ရပါမည်။
-- auth ကို ပိတ်ထားပါက local process မည်သည့်အရာမဆို ချိတ်ဆက်နိုင်မည်ဖြစ်သည်။ ယုံကြည်စိတ်ချရသော စက်များတွင်သာ အသုံးပြုပါ။
-- စက်အများအပြားမှ ဝင်ရောက်အသုံးပြုရန် သို့မဟုတ် non‑loopback binds အတွက် **token** ကို အသုံးပြုပါ။
+- wizard က loopback အတွက်တောင် **token** ကို ယခု generate လုပ်ပေးထားတဲ့အတွက် local WS client များအနေနဲ့ authenticate လုပ်ရပါမယ်။
+- auth ကို ပိတ်ထားရင် local process မည်သည့်အရာမဆို ချိတ်ဆက်နိုင်ပါလိမ့်မယ်; ယုံကြည်စိတ်ချရသော စက်များပေါ်မှာသာ သုံးပါ။
 </Tip>
 </Step>
-<Step title="ခွင့်ပြုချက်များ">
+<Step title="Permissions">
 <Frame caption="OpenClaw ကို မည်သည့် ခွင့်ပြုချက်များ ပေးမည်ကို ရွေးချယ်ပါ">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -74,10 +66,7 @@ Onboarding သည် အောက်ပါအရာများအတွက် �
   အက်ပ်သည် global `openclaw` CLI ကို npm/pnpm မှတစ်ဆင့် ထည့်သွင်းနိုင်ပြီး terminal
   workflow များနှင့် launchd tasks များကို အစမှစ၍ အသုံးပြုနိုင်စေပါသည်။
 </Step>
-<Step title="Onboarding Chat (သီးသန့် ဆက်ရှင်)">
-  Setup ပြီးဆုံးပြီးနောက် အက်ပ်သည် သီးသန့် onboarding chat ဆက်ရှင်တစ်ခုကို ဖွင့်ပေးပြီး agent က
-  မိမိကိုယ်ကို မိတ်ဆက်ကာ နောက်တစ်ဆင့်များကို လမ်းညွှန်ပေးပါသည်။ ၎င်းသည် ပထမအကြိမ် အသုံးပြုရာတွင်
-  လမ်းညွှန်ချက်များကို သင့်ရဲ့ ပုံမှန် စကားပြောဆိုမှုများမှ ခွဲထားနိုင်စေပါသည်။ ပထမဆုံး agent chạy ချိန်တွင်
-  Gateway ဟို့စ် ပေါ်တွင် ဖြစ်ပေါ်သည့် အရာများအတွက် [Bootstrapping](/start/bootstrapping) ကို ကြည့်ပါ။
+<Step title="Onboarding Chat (dedicated session)">
+  - စက်များစွာအသုံးပြုခြင်း သို့မဟုတ် loopback မဟုတ်တဲ့ bind များအတွက် **token** ကို သုံးပါ။ setup ပြီးနောက် app က agent ကို ကိုယ်တိုင် မိတ်ဆက်ပြီး နောက်ထပ် အဆင့်များကို လမ်းညွှန်နိုင်အောင် သီးသန့် onboarding chat session တစ်ခု ဖွင့်ပေးပါသည်။ ဒါကြောင့် ပထမအကြိမ် လမ်းညွှန်မှုကို သင်ရဲ့ ပုံမှန် စကားဝိုင်းနဲ့ ခွဲထားနိုင်ပါသည်။
 </Step>
 </Steps>

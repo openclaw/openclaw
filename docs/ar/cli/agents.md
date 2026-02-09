@@ -3,13 +3,6 @@ summary: "مرجع CLI لأمر `openclaw agents` (السرد/الإضافة/ا�
 read_when:
   - عندما تحتاج إلى عدة وكلاء معزولين (مساحات عمل + توجيه + مصادقة)
 title: "الوكلاء"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:52Z
 ---
 
 # `openclaw agents`

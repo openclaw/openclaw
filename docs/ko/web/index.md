@@ -4,13 +4,6 @@ read_when:
   - Tailscale 을 통해 Gateway(게이트웨이)에 접근하려는 경우
   - 브라우저 Control UI 및 구성 편집이 필요한 경우
 title: "웹"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:40Z
 ---
 
 # 웹 (Gateway(게이트웨이))

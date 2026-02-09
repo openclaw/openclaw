@@ -5,13 +5,6 @@ read_when:
   - آپ کو ریموٹ Gateway + مقامی براؤزر آٹومیشن Tailscale کے ذریعے درکار ہے
   - آپ براؤزر ٹیک اوور کے سکیورٹی مضمرات کو سمجھنا چاہتے ہیں
 title: "Chrome ایکسٹینشن"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:57Z
 ---
 
 # Chrome ایکسٹینشن (براؤزر ریلے)
@@ -53,7 +46,7 @@ openclaw browser extension path
 
 ## اپڈیٹس (کوئی build مرحلہ نہیں)
 
-ایکسٹینشن OpenClaw ریلیز (npm پیکیج) کے اندر بطور static فائلز فراہم کی جاتی ہے۔ کوئی الگ “build” مرحلہ نہیں ہے۔
+The extension ships inside the OpenClaw release (npm package) as static files. There is no separate “build” step.
 
 OpenClaw اپگریڈ کرنے کے بعد:
 
@@ -107,13 +100,13 @@ openclaw browser create-profile \
 
 ### لوکل Gateway (Chrome والی ہی مشین) — عموماً **کوئی اضافی اقدامات نہیں**
 
-اگر Gateway اسی مشین پر چل رہا ہو جس پر Chrome ہے، تو وہ loopback پر براؤزر کنٹرول سروس شروع کرتا ہے
-اور ریلے سرور خودکار طور پر شروع ہو جاتا ہے۔ ایکسٹینشن لوکل ریلے سے بات کرتی ہے؛ CLI/ٹول کالز Gateway تک جاتی ہیں۔
+If the Gateway runs on the same machine as Chrome, it starts the browser control service on loopback
+and auto-starts the relay server. The extension talks to the local relay; the CLI/tool calls go to the Gateway.
 
 ### ریموٹ Gateway (Gateway کہیں اور چل رہا ہو) — **نوڈ ہوسٹ چلائیں**
 
-اگر آپ کا Gateway کسی دوسری مشین پر چل رہا ہے، تو اس مشین پر نوڈ ہوسٹ شروع کریں جس پر Chrome چل رہا ہے۔
-Gateway براؤزر ایکشنز کو اس نوڈ تک پراکسی کرے گا؛ ایکسٹینشن + ریلے براؤزر والی مشین پر ہی رہیں گے۔
+If your Gateway runs on another machine, start a node host on the machine that runs Chrome.
+The Gateway will proxy browser actions to that node; the extension + relay stay local to the browser machine.
 
 اگر متعدد نوڈز کنیکٹ ہوں تو ایک کو `gateway.nodes.browser.node` کے ساتھ پن کریں یا `gateway.nodes.browser.mode` سیٹ کریں۔
 
@@ -156,15 +149,15 @@ Gateway براؤزر ایکشنز کو اس نوڈ تک پراکسی کرے گا
 
 `openclaw browser extension path` اس **انسٹال شدہ** آن-ڈسک ڈائریکٹری کو پرنٹ کرتا ہے جس میں ایکسٹینشن فائلیں موجود ہوتی ہیں۔
 
-CLI جان بوجھ کر `node_modules` پاتھ پرنٹ نہیں کرتا۔ ہمیشہ پہلے `openclaw browser extension install` چلائیں تاکہ ایکسٹینشن کو آپ کی OpenClaw اسٹیٹ ڈائریکٹری کے تحت ایک مستحکم مقام پر کاپی کیا جا سکے۔
+The CLI intentionally does **not** print a `node_modules` path. Always run `openclaw browser extension install` first to copy the extension to a stable location under your OpenClaw state directory.
 
 اگر آپ اس انسٹال ڈائریکٹری کو منتقل یا حذف کر دیں تو Chrome ایکسٹینشن کو خراب (broken) نشان زد کر دے گا، جب تک آپ اسے کسی درست پاتھ سے دوبارہ لوڈ نہ کریں۔
 
 ## سکیورٹی مضمرات (یہ ضرور پڑھیں)
 
-یہ بہت طاقتور اور پرخطر ہے۔ اسے ایسے سمجھیں جیسے ماڈل کو “آپ کے براؤزر پر ہاتھ” دے دیے جائیں۔
+This is powerful and risky. Treat it like giving the model “hands on your browser”.
 
-- ایکسٹینشن Chrome کے debugger API (`chrome.debugger`) کا استعمال کرتی ہے۔ اٹیچ ہونے پر ماڈل یہ کر سکتا ہے:
+- The extension uses Chrome’s debugger API (`chrome.debugger`). When attached, the model can:
   - اس ٹیب میں کلک/ٹائپ/نیویگیٹ کرنا
   - صفحے کے مواد کو پڑھنا
   - وہ سب کچھ ایکسیس کرنا جس تک اس ٹیب کا لاگ اِن سیشن رسائی رکھتا ہے

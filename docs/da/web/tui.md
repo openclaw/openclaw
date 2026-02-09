@@ -4,13 +4,6 @@ read_when:
   - Du vil have en begyndervenlig gennemgang af TUI’en
   - Du har brug for den komplette liste over TUI-funktioner, kommandoer og genveje
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:53Z
 ---
 
 # TUI (Terminal UI)
@@ -49,7 +42,7 @@ Brug `--password`, hvis din Gateway bruger adgangskodegodkendelse.
 
 ## Mental model: agenter + sessioner
 
-- Agenter er unikke slugs (f.eks. `main`, `research`). Gateway eksponerer listen.
+- Agenter er unikke snegle (fx `main`, `forskning`). Porten udsætter listen.
 - Sessioner tilhører den aktuelle agent.
 - Sessionsnøgler gemmes som `agent:<agentId>:<sessionKey>`.
   - Hvis du skriver `/session main`, udvider TUI’en det til `agent:<currentAgent>:main`.
@@ -113,7 +106,7 @@ Sessionslivscyklus:
 - `/settings`
 - `/exit`
 
-Andre Gateway slash-kommandoer (for eksempel `/context`) videresendes til Gateway og vises som systemoutput. Se [Slash commands](/tools/slash-commands).
+Andre Gateway skråstregkommandoer (f.eks. `/context`) videresendes til Gateway og vises som systemoutput. Se [Slash kommandoer](/tools/slash-commands).
 
 ## Lokale shell-kommandoer
 
@@ -149,8 +142,8 @@ Andre Gateway slash-kommandoer (for eksempel `/context`) videresendes til Gatewa
 - `--thinking <level>`: Tilsidesæt tænkeniveau for afsendelser
 - `--timeout-ms <ms>`: Agent-timeout i ms (standard er `agents.defaults.timeoutSeconds`)
 
-Bemærk: Når du sætter `--url`, falder TUI’en ikke tilbage til konfiguration eller miljølegitimationsoplysninger.
-Angiv `--token` eller `--password` eksplicit. Manglende eksplicitte legitimationsoplysninger er en fejl.
+Bemærk: Når du angiver `--url`, falder TUI ikke tilbage til config eller miljø legitimationsoplysninger.
+Pass `--token` eller `--password` eksplicitt. Manglende eksplicitte legitimationsoplysninger er en fejl.
 
 ## Fejlfinding
 

@@ -3,13 +3,6 @@ summary: "Google Chat ऐप समर्थन स्थिति, क्षम
 read_when:
   - Google Chat चैनल सुविधाओं पर कार्य करते समय
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:05Z
 ---
 
 # Google Chat (Chat API)
@@ -54,7 +47,7 @@ x-i18n:
    - Env: `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - या config: `channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`।
 8. webhook audience प्रकार + मान सेट करें (जो आपके Chat ऐप विन्यास से मेल खाता हो)।
-9. Gateway प्रारंभ करें। Google Chat आपके webhook पथ पर POST करेगा।
+9. Gateway प्रारंभ करें। Google Chat will POST to your webhook path.
 
 ## Google Chat में जोड़ें
 
@@ -63,18 +56,18 @@ x-i18n:
 1. [Google Chat](https://chat.google.com/) पर जाएँ।
 2. **Direct Messages** के पास **+** (प्लस) आइकन पर क्लिक करें।
 3. खोज बार में (जहाँ आप सामान्यतः लोगों को जोड़ते हैं), Google Cloud Console में विन्यस्त किया गया **App name** टाइप करें।
-   - **टिप्पणी:** यह बॉट "Marketplace" ब्राउज़ सूची में _दिखाई नहीं देगा_ क्योंकि यह एक निजी ऐप है। आपको इसे नाम से खोज करना होगा।
+   - **Note**: The bot will _not_ appear in the "Marketplace" browse list because it is a private app. You must search for it by name.
 4. परिणामों में से अपने बॉट का चयन करें।
 5. 1:1 बातचीत शुरू करने के लिए **Add** या **Chat** पर क्लिक करें।
 6. सहायक को ट्रिगर करने के लिए "Hello" भेजें!
 
 ## सार्वजनिक URL (केवल वेबहुक)
 
-Google Chat वेबहुक्स के लिए एक सार्वजनिक HTTPS endpoint आवश्यक है। सुरक्षा के लिए, **केवल `/googlechat` पथ को ही इंटरनेट पर एक्सपोज़ करें**। OpenClaw डैशबोर्ड और अन्य संवेदनशील endpoints को अपने निजी नेटवर्क पर रखें।
+Google Chat webhooks require a public HTTPS endpoint. For security, **only expose the `/googlechat` path** to the internet. Keep the OpenClaw dashboard and other sensitive endpoints on your private network.
 
 ### विकल्प A: Tailscale Funnel (अनुशंसित)
 
-निजी डैशबोर्ड के लिए Tailscale Serve और सार्वजनिक वेबहुक पथ के लिए Funnel का उपयोग करें। इससे `/` निजी रहता है और केवल `/googlechat` एक्सपोज़ होता है।
+Use Tailscale Serve for the private dashboard and Funnel for the public webhook path. This keeps `/` private while exposing only `/googlechat`.
 
 1. **जाँचें कि आपका Gateway किस पते से बाउंड है:**
 
@@ -114,15 +107,15 @@ Google Chat वेबहुक्स के लिए एक सार्वज�
    tailscale funnel status
    ```
 
-आपका सार्वजनिक वेबहुक URL होगा:
+Your public webhook URL will be:
 `https://<node-name>.<tailnet>.ts.net/googlechat`
 
-आपका निजी डैशबोर्ड केवल tailnet तक सीमित रहेगा:
+Your private dashboard stays tailnet-only:
 `https://<node-name>.<tailnet>.ts.net:8443/`
 
 Google Chat ऐप विन्यास में सार्वजनिक URL का उपयोग करें (बिना `:8443` के)।
 
-> टिप्पणी: यह विन्यास रीबूट के बाद भी बना रहता है। बाद में इसे हटाने के लिए `tailscale funnel reset` और `tailscale serve reset` चलाएँ।
+> Note: This configuration persists across reboots. To remove it later, run `tailscale funnel reset` and `tailscale serve reset`.
 
 ### विकल्प B: रिवर्स प्रॉक्सी (Caddy)
 
@@ -145,16 +138,16 @@ your-domain.com {
 
 ## यह कैसे काम करता है
 
-1. Google Chat Gateway को वेबहुक POST भेजता है। प्रत्येक अनुरोध में `Authorization: Bearer <token>` हेडर शामिल होता है।
+1. Google Chat sends webhook POSTs to the gateway. Each request includes an `Authorization: Bearer <token>` header.
 2. OpenClaw टोकन को विन्यस्त `audienceType` + `audience` के विरुद्ध सत्यापित करता है:
    - `audienceType: "app-url"` → audience आपका HTTPS वेबहुक URL होता है।
    - `audienceType: "project-number"` → audience Cloud प्रोजेक्ट नंबर होता है।
 3. संदेश space के अनुसार रूट किए जाते हैं:
    - DMs सत्र कुंजी `agent:<agentId>:googlechat:dm:<spaceId>` का उपयोग करते हैं।
    - Spaces सत्र कुंजी `agent:<agentId>:googlechat:group:<spaceId>` का उपयोग करते हैं।
-4. DM पहुँच डिफ़ॉल्ट रूप से pairing होती है। अज्ञात प्रेषकों को pairing कोड मिलता है; इसे स्वीकृत करें:
+4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
-5. समूह spaces में डिफ़ॉल्ट रूप से @-mention आवश्यक होता है। यदि mention detection को ऐप के उपयोगकर्ता नाम की आवश्यकता हो, तो `botUser` का उपयोग करें।
+5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app’s user name.
 
 ## लक्ष्य
 
@@ -214,9 +207,9 @@ your-domain.com {
 status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Allowed
 ```
 
-इसका अर्थ है कि वेबहुक हैंडलर पंजीकृत नहीं है। सामान्य कारण:
+This means the webhook handler isn't registered. Common causes:
 
-1. **चैनल विन्यस्त नहीं**: आपके config में `channels.googlechat` अनुभाग अनुपस्थित है। जाँचें:
+1. **Channel not configured**: The `channels.googlechat` section is missing from your config. सत्यापित करें:
 
    ```bash
    openclaw config get channels.googlechat

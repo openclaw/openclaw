@@ -6,13 +6,6 @@ read_when:
   - Sie möchten Setup-Token- oder OAuth-Auth-Flows
   - Sie möchten mehrere Konten oder Profil-Routing
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:55Z
 ---
 
 # OAuth
@@ -82,7 +75,7 @@ Die interaktiven Login-Flows von OpenClaw sind in `@mariozechner/pi-ai` implemen
 
 ### Anthropic (Claude Pro/Max) setup-token
 
-Ablauf:
+Flussform:
 
 1. führen Sie `claude setup-token` aus
 2. fügen Sie das Token in OpenClaw ein
@@ -118,7 +111,7 @@ Der Refresh-Flow ist automatisch; in der Regel müssen Sie Tokens nicht manuell 
 
 Zwei Muster:
 
-### 1) Bevorzugt: getrennte Agenten
+### 1. Bevorzugt: getrennte Agenten
 
 Wenn „privat“ und „geschäftlich“ niemals interagieren sollen, verwenden Sie isolierte Agenten (separate Sitzungen + Anmeldedaten + Workspace):
 
@@ -129,7 +122,7 @@ openclaw agents add personal
 
 Konfigurieren Sie dann die Authentifizierung pro Agent (Assistent) und routen Sie Chats an den richtigen Agenten.
 
-### 2) Erweitert: mehrere Profile in einem Agenten
+### 2. Erweitert: mehrere Profile in einem Agenten
 
 `auth-profiles.json` unterstützt mehrere Profil-IDs für denselben Anbieter.
 

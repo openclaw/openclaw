@@ -3,22 +3,18 @@ summary: "Tlon／Urbit 的支援狀態、功能與設定"
 read_when:
   - 進行 Tlon／Urbit 頻道功能開發時
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:05Z
 ---
 
 # Tlon（外掛）
 
-Tlon 是建立於 Urbit 之上的去中心化即時通訊工具。OpenClaw 會連線到你的 Urbit 船艦，並可回應私訊與群組聊天訊息。群組回覆預設需要 @ 提及，且可透過允許清單進一步限制。
+6. Tlon 是一個建立在 Urbit 上的去中心化即時通訊軟體。 7. OpenClaw 會連接到你的 Urbit ship，並且可以
+   回應私訊與群組聊天訊息。 8. 群組回覆預設需要 @ 提及，且可以
+   透過允許清單進一步限制。
 
-狀態：透過外掛支援。支援私訊、群組提及、串內回覆，以及僅文字的媒體備援（將 URL 附加至說明文字）。不支援表情回應、投票，以及原生媒體上傳。
+9. 狀態：透過外掛支援。 10. 私訊、群組提及、串內回覆，以及僅文字的媒體備援
+   （URL 會附加在說明文字後）。 11. 不支援表情反應、投票與原生媒體上傳。
 
-## 需要外掛
+## 12. 需要外掛
 
 Tlon 以外掛形式提供，未隨核心安裝一併提供。
 
@@ -28,7 +24,7 @@ Tlon 以外掛形式提供，未隨核心安裝一併提供。
 openclaw plugins install @openclaw/tlon
 ```
 
-本機檢出（從 git 儲存庫執行時）：
+本機檢出（從 git repo 執行時）：
 
 ```bash
 openclaw plugins install ./extensions/tlon
@@ -38,11 +34,11 @@ openclaw plugins install ./extensions/tlon
 
 ## 設定
 
-1. 安裝 Tlon 外掛。
+1. 13. 安裝 Tlon 外掛。
 2. 蒐集你的船艦 URL 與登入碼。
 3. 設定 `channels.tlon`。
 4. 重新啟動 Gateway 閘道器。
-5. 對機器人傳送私訊，或在群組頻道中提及它。
+5. 14. 私訊機器人，或在群組頻道中提及它。
 
 最小設定（單一帳號）：
 
@@ -61,7 +57,7 @@ openclaw plugins install ./extensions/tlon
 
 ## 群組頻道
 
-預設啟用自動探索。你也可以手動釘選頻道：
+15. 自動探索預設為啟用。 16. 你也可以手動釘選頻道：
 
 ```json5
 {

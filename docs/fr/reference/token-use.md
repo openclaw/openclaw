@@ -1,16 +1,9 @@
 ---
-summary: « Comment OpenClaw construit le contexte de prompt et rapporte l’utilisation des tokens et les coûts »
+summary: "Comment OpenClaw construit le contexte de prompt et rapporte l’utilisation des tokens et les coûts"
 read_when:
   - Expliquer l’utilisation des tokens, les coûts ou les fenêtres de contexte
   - Déboguer la croissance du contexte ou le comportement de compactage
-title: « Utilisation des tokens et coûts »
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:46Z
+title: "Utilisation des tokens et coûts"
 ---
 
 # Utilisation des tokens et coûts

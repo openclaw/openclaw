@@ -4,13 +4,6 @@ read_when:
   - Model veya kullanıcılara zaman damgalarının nasıl gösterildiğini değiştiriyorsanız
   - Mesajlarda veya sistem istemi çıktısında zaman biçimlendirmesini hata ayıklıyorsanız
 title: "Tarih ve Saat"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:16Z
 ---
 
 # Tarih & Saat
@@ -51,7 +44,7 @@ Bu davranışı geçersiz kılabilirsiniz:
 
 ### Örnekler
 
-**Yerel (varsayılan):**
+**Local (default):**
 
 ```
 [WhatsApp +1555 2026-01-18 00:19 PST] hello

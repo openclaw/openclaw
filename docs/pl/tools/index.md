@@ -4,13 +4,6 @@ read_when:
   - Dodawanie lub modyfikowanie narzędzi agenta
   - Wycofywanie lub zmienianie skills `openclaw-*`
 title: "Narzędzia"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:27Z
 ---
 
 # Narzędzia (OpenClaw)
@@ -32,7 +25,7 @@ Możesz globalnie zezwalać/odmawiać narzędzi za pomocą `tools.allow` / `tool
 
 Uwagi:
 
-- Dopasowanie nie rozróżnia wielkości liter.
+- Dopasowanie jest niewrażliwe na wielkość liter.
 - Obsługiwane są symbole wieloznaczne `*` (`"*"` oznacza wszystkie narzędzia).
 - Jeśli `tools.allow` odwołuje się wyłącznie do nieznanych lub niezaładowanych nazw narzędzi wtyczek, OpenClaw zapisuje ostrzeżenie i ignoruje listę dozwolonych, aby narzędzia rdzeniowe pozostały dostępne.
 
@@ -515,5 +508,4 @@ Narzędzia są udostępniane w dwóch równoległych kanałach:
 1. **Tekst promptu systemowego**: lista czytelna dla człowieka + wskazówki.
 2. **Schemat narzędzi**: ustrukturyzowane definicje funkcji wysyłane do API modelu.
 
-Oznacza to, że agent widzi zarówno „jakie narzędzia istnieją”, jak i „jak je wywoływać”.
-Jeśli narzędzie nie pojawia się w promptcie systemowym ani w schemacie, model nie może go wywołać.
+Oznacza to, że agent widzi zarówno „jakie narzędzia istnieją”, jak i „jak je wywoływać”. Jeśli narzędzie nie pojawia się w promptcie systemowym ani w schemacie, model nie może go wywołać.

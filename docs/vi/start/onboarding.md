@@ -5,38 +5,29 @@ read_when:
   - Triển khai xác thực hoặc thiết lập danh tính
 title: "Hướng dẫn ban đầu (Ứng dụng macOS)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:21Z
 ---
 
 # Hướng dẫn ban đầu (Ứng dụng macOS)
 
-Tài liệu này mô tả luồng hướng dẫn ban đầu khi chạy lần đầu **hiện tại**. Mục tiêu là
-mang lại trải nghiệm “ngày 0” mượt mà: chọn nơi Gateway chạy, kết nối xác thực, chạy
-trình hướng dẫn, và để tác tử tự khởi tạo.
+Tài liệu này mô tả luồng onboarding chạy lần đầu **hiện tại**. Mục tiêu là một trải nghiệm “ngày 0” mượt mà: chọn nơi Gateway chạy, kết nối xác thực, chạy trình hướng dẫn, và để agent tự khởi tạo.
 
 <Steps>
-<Step title="Phê duyệt cảnh báo macOS">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Phê duyệt tìm mạng cục bộ">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Chào mừng và thông báo bảo mật">
+<Step title="Welcome and security notice">
 <Frame caption="Đọc thông báo bảo mật được hiển thị và quyết định cho phù hợp">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Cục bộ hay Từ xa">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -50,13 +41,13 @@ trình hướng dẫn, và để tác tử tự khởi tạo.
 - **Cấu hình sau:** bỏ qua thiết lập và để ứng dụng ở trạng thái chưa cấu hình.
 
 <Tip>
-**Mẹo xác thực Gateway:**
-- Trình hướng dẫn hiện tạo **token** ngay cả cho local loopback, vì vậy các client WS cục bộ phải xác thực.
-- Nếu bạn tắt xác thực, mọi tiến trình cục bộ đều có thể kết nối; chỉ dùng cách này trên các máy hoàn toàn đáng tin cậy.
-- Dùng **token** cho truy cập nhiều máy hoặc các bind không phải loopback.
+**Gateway auth tip:**
+- The wizard now generates a **token** even for loopback, so local WS clients must authenticate.
+- Nếu bạn tắt xác thực, bất kỳ tiến trình cục bộ nào cũng có thể kết nối; chỉ dùng cách này trên các máy hoàn toàn đáng tin cậy.
+- Dùng **token** cho truy cập đa máy hoặc khi bind không phải loopback.
 </Tip>
 </Step>
-<Step title="Quyền">
+<Step title="Permissions">
 <Frame caption="Chọn các quyền bạn muốn cấp cho OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -78,10 +69,7 @@ Hướng dẫn ban đầu yêu cầu các quyền TCC cần thiết cho:
   Ứng dụng có thể cài đặt CLI `openclaw` toàn cục qua npm/pnpm để các
   quy trình làm việc trên terminal và các tác vụ launchd hoạt động ngay.
 </Step>
-<Step title="Trò chuyện hướng dẫn ban đầu (phiên riêng)">
-  Sau khi thiết lập, ứng dụng mở một phiên trò chuyện hướng dẫn ban đầu chuyên biệt để tác tử
-  tự giới thiệu và hướng dẫn các bước tiếp theo. Cách này giữ phần hướng dẫn lần chạy đầu
-  tách biệt khỏi cuộc trò chuyện thông thường của bạn. Xem [Bootstrapping](/start/bootstrapping) để biết
-  điều gì diễn ra trên máy chủ gateway trong lần chạy tác tử đầu tiên.
+<Step title="Onboarding Chat (dedicated session)">
+  Sau khi thiết lập, ứng dụng sẽ mở một phiên chat onboarding riêng để agent tự giới thiệu và hướng dẫn các bước tiếp theo. Điều này giúp tách hướng dẫn lần chạy đầu khỏi các cuộc trò chuyện thông thường của bạn. Xem [Bootstrapping](/start/bootstrapping) để biết điều gì xảy ra trên máy chủ gateway trong lần chạy agent đầu tiên.
 </Step>
 </Steps>

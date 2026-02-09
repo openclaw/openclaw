@@ -5,13 +5,6 @@ read_when:
   - Je draait Claude Code CLI of andere lokale AI-CLI’s en wilt ze hergebruiken
   - Je hebt een tekst-only, tool-vrije route nodig die nog steeds sessies en afbeeldingen ondersteunt
 title: "CLI-backends"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:27Z
 ---
 
 # CLI-backends (fallback-runtime)
@@ -180,7 +173,7 @@ automatisch laden vanaf platte paden (gedrag van Claude Code CLI).
   laatste agent-bericht plus `thread_id` wanneer aanwezig.
 - `output: "text"` behandelt stdout als de uiteindelijke respons.
 
-Invoermodi:
+Input modes:
 
 - `input: "arg"` (standaard) geeft de prompt door als het laatste CLI-argument.
 - `input: "stdin"` verstuurt de prompt via stdin.

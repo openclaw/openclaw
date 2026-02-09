@@ -1,13 +1,6 @@
 ---
-title: Рефакторинг зеркалирования исходящих сессий (Issue #1520)
+title: "Рефакторинг зеркалирования исходящих сессий (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:03Z
 ---
 
 # Рефакторинг зеркалирования исходящих сессий (Issue #1520)
@@ -40,7 +33,7 @@ x-i18n:
 - Путь отправки плагинов зеркалирует через `appendAssistantMessageToSessionTranscript` с использованием выведенного sessionKey.
 - Отправка через Gateway выводит целевой ключ сессии, если он не предоставлен (агент по умолчанию), и гарантирует наличие записи сессии.
 
-## Обработка потоков/тем
+## Обработка тем
 
 - Slack: replyTo/threadId -> `resolveThreadSessionKeys` (суффикс).
 - Discord: threadId/replyTo -> `resolveThreadSessionKeys` с `useSuffix=false` для соответствия входящим (id канала потока уже ограничивает сессию).

@@ -4,22 +4,16 @@ read_when:
   - SOUL Evil フックを有効化または調整したい場合
   - パージウィンドウやランダム確率のペルソナ切り替えを行いたい場合
 title: "SOUL Evil フック"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:05Z
 ---
 
 # SOUL Evil フック
 
-SOUL Evil フックは、パージウィンドウ中またはランダムな確率によって、**注入された** `SOUL.md` コンテンツを `SOUL_EVIL.md` に入れ替えます。ディスク上のファイルは**変更しません**。
+SOUL Evil フックは、パージウィンドウ中またはランダムな確率によって、**注入された** `SOUL.md` コンテンツを `SOUL_EVIL.md` に入れ替えます。ディスク上のファイルは**変更しません**。 ディスク上のファイルを **変更**しません\*\* 。
 
 ## 仕組み
 
-`agent:bootstrap` が実行される際、このフックはシステムプロンプトが組み立てられる前に、メモリ内の `SOUL.md` コンテンツを置き換えることができます。`SOUL_EVIL.md` が存在しない、または空の場合、OpenClaw は警告をログに記録し、通常の `SOUL.md` を保持します。
+`agent:bootstrap` が実行される際、このフックはシステムプロンプトが組み立てられる前に、メモリ内の `SOUL.md` コンテンツを置き換えることができます。`SOUL_EVIL.md` が存在しない、または空の場合、OpenClaw は警告をログに記録し、通常の `SOUL.md` を保持します。 `SOUL_EVIL.md` が見つからないか空の場合、
+OpenClawは警告をログに記録し、通常の `SOUL.md` を保持します。
 
 サブエージェントの実行には、ブートストラップファイルに `SOUL.md` が含まれないため、このフックはサブエージェントには影響しません。
 
@@ -67,6 +61,6 @@ openclaw hooks enable soul-evil
 - ディスク上のファイルは書き込まれたり変更されたりしません。
 - `SOUL.md` がブートストラップリストに含まれていない場合、このフックは何もしません。
 
-## 関連項目
+## See Also
 
 - [Hooks](/automation/hooks)

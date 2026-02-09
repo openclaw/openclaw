@@ -4,20 +4,11 @@ read_when:
   - Windows 에 OpenClaw 를 설치하는 경우
   - Windows 컴패니언 앱 상태를 확인하는 경우
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:52Z
 ---
 
 # Windows (WSL2)
 
-Windows 에서 OpenClaw 를 사용하는 것은 **WSL2 를 통해** 사용하는 것을 권장합니다 (Ubuntu 권장).  
-CLI + Gateway(게이트웨이) 는 Linux 내부에서 실행되며, 이는 런타임을 일관되게 유지하고 도구 호환성(Node/Bun/pnpm, Linux 바이너리, Skills)을 크게 향상시킵니다.  
-네이티브 Windows 환경은 더 까다로울 수 있습니다. WSL2 는 완전한 Linux 경험을 제공하며, 설치는 단 하나의 명령으로 가능합니다: `wsl --install`.
+Windows 에서 OpenClaw 를 사용하는 것은 **WSL2 를 통해** 사용하는 것을 권장합니다 (Ubuntu 권장). CLI + Gateway(게이트웨이) 는 Linux 내부에서 실행되며, 이는 런타임을 일관되게 유지하고 도구 호환성(Node/Bun/pnpm, Linux 바이너리, Skills)을 크게 향상시킵니다. 네이티브 Windows 환경은 더 까다로울 수 있습니다. WSL2 는 완전한 Linux 경험을 제공하며, 설치는 단 하나의 명령으로 가능합니다: `wsl --install`.
 
 네이티브 Windows 컴패니언 앱은 계획되어 있습니다.
 
@@ -62,8 +53,7 @@ openclaw doctor
 
 ## 고급: WSL 서비스를 LAN 에 노출하기 (portproxy)
 
-WSL 은 자체 가상 네트워크를 사용합니다. 다른 머신이 **WSL 내부에서 실행 중인** 서비스(SSH, 로컬 TTS 서버, 또는 Gateway)에 접근해야 하는 경우, Windows 포트를 현재 WSL IP 로 포워딩해야 합니다.  
-WSL IP 는 재시작 후 변경되므로, 포워딩 규칙을 새로 고쳐야 할 수 있습니다.
+WSL 은 자체 가상 네트워크를 사용합니다. 다른 머신이 **WSL 내부에서 실행 중인** 서비스(SSH, 로컬 TTS 서버, 또는 Gateway)에 접근해야 하는 경우, Windows 포트를 현재 WSL IP 로 포워딩해야 합니다. WSL IP 는 재시작 후 변경되므로, 포워딩 규칙을 새로 고쳐야 할 수 있습니다.
 
 예시 (PowerShell **관리자 권한**):
 
@@ -104,7 +94,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 
 ## 단계별 WSL2 설치
 
-### 1) WSL2 + Ubuntu 설치
+### 1. WSL2 + Ubuntu 설치
 
 PowerShell 을 관리자 권한으로 엽니다:
 
@@ -117,7 +107,7 @@ wsl --install -d Ubuntu-24.04
 
 Windows 에서 재부팅을 요청하면 재부팅하십시오.
 
-### 2) systemd 활성화 (Gateway 설치에 필요)
+### 2. systemd 활성화 (Gateway 설치에 필요)
 
 WSL 터미널에서 실행합니다:
 
@@ -140,7 +130,7 @@ Ubuntu 를 다시 열고, 다음으로 확인합니다:
 systemctl --user status
 ```
 
-### 3) OpenClaw 설치 (WSL 내부)
+### 3. OpenClaw 설치 (WSL 내부)
 
 WSL 내부에서 Linux 시작하기 흐름을 따르십시오:
 

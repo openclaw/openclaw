@@ -4,13 +4,6 @@ read_when:
   - Sistem istemi metnini, araçlar listesini veya zaman/heartbeat bölümlerini düzenlerken
   - Çalışma alanı önyüklemesi veya skills enjeksiyonu davranışını değiştirirken
 title: "Sistem İstemi"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:24Z
 ---
 
 # Sistem İstemi
@@ -39,7 +32,7 @@ OpenClaw, her ajan çalıştırması için özel bir sistem istemi oluşturur. �
 
 Sistem istemindeki güvenlik korumaları tavsiye niteliğindedir. Model davranışını yönlendirir ancak politika dayatmaz. Katı uygulama için araç politikası, çalıştırma onayları, sandboxing ve kanal izin listelerini kullanın; operatörler bunları tasarım gereği devre dışı bırakabilir.
 
-## İstem modları
+## Prompt modes
 
 OpenClaw, alt ajanlar için daha küçük sistem istemleri oluşturabilir. Çalışma zamanı her çalıştırma için kullanıcıya açık olmayan bir yapılandırma olarak `promptMode` ayarlar:
 
@@ -106,7 +99,7 @@ Uygun skills mevcut olduğunda OpenClaw, her skill için **dosya yolunu** içere
 
 Bu yaklaşım, hedefli skill kullanımını mümkün kılarken temel istemi küçük tutar.
 
-## Dokümantasyon
+## Documentation
 
 Mevcut olduğunda sistem istemi, yerel OpenClaw dokümanları dizinine işaret eden bir **Documentation** bölümü içerir
 (repo çalışma alanında `docs/` veya paketlenmiş npm dokümanları) ve ayrıca herkese açık

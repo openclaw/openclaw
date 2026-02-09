@@ -1,16 +1,9 @@
 ---
-summary: „Verwenden Sie Z.AI (GLM-Modelle) mit OpenClaw“
+summary: "„Verwenden Sie Z.AI (GLM-Modelle) mit OpenClaw“"
 read_when:
   - Sie möchten Z.AI-/GLM-Modelle in OpenClaw verwenden
   - Sie benötigen eine einfache Einrichtung mit ZAI_API_KEY
-title: „Z.AI“
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:06Z
+title: "Z.AI"
 ---
 
 # Z.AI

@@ -5,13 +5,6 @@ read_when:
   - Você quer configurar níveis ou formatos de log
   - Você está solucionando problemas e precisa encontrar logs rapidamente
 title: "Logging"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:32Z
 ---
 
 # Logging
@@ -210,7 +203,8 @@ destinos personalizados:
 ### Flags de diagnóstico (logs direcionados)
 
 Use flags para ativar logs de debug extras e direcionados sem aumentar
-`logging.level`. As flags não diferenciam maiúsculas/minúsculas e suportam
+`logging.level`.
+As flags não diferenciam maiúsculas/minúsculas e suportam
 curingas (ex.: `telegram.*` ou `*`).
 
 ```json
@@ -235,8 +229,7 @@ Notas:
 
 ### Exportar para OpenTelemetry
 
-Os diagnósticos podem ser exportados via o plugin `diagnostics-otel` (OTLP/HTTP).
-Isso funciona com qualquer coletor/backend OpenTelemetry que aceite OTLP/HTTP.
+Os diagnósticos podem ser exportados via o plugin `diagnostics-otel` (OTLP/HTTP). Isso funciona com qualquer coletor/backend OpenTelemetry que aceite OTLP/HTTP.
 
 ```json
 {

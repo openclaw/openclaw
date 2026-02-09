@@ -4,13 +4,6 @@ read_when:
   - Você quer jobs e ativações agendadas
   - Você está depurando a execução e os logs do cron
 title: "cron"
-x-i18n:
-  source_path: cli/cron.md
-  source_hash: 09982d6dd1036a56
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:12Z
 ---
 
 # `openclaw cron`

@@ -4,19 +4,13 @@ read_when:
   - モデルプロバイダーを選択したいとき
   - LLM の認証とモデル選択のクイックなセットアップ例を確認したいとき
 title: "モデルプロバイダー クイックスタート"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:51Z
 ---
 
 # モデルプロバイダー
 
 OpenClaw は多数の LLM プロバイダーを利用できます。1 つ選択して認証し、既定の
-モデルを `provider/model` として設定します。
+モデルを `provider/model` として設定します。 1つの認証を選択し、デフォルトの
+モデルを`provider/model`に設定します。
 
 ## ハイライト: Venice（Venice AI）
 
@@ -55,5 +49,5 @@ Venice は、プライバシー重視の推論を実現するために推奨し�
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-xAI、Groq、Mistral などを含む完全なプロバイダー カタログや高度な設定については、
-[モデルプロバイダー](/concepts/model-providers) を参照してください。
+完全なプロバイダカタログ（xAI、Groq、Mistralなど） そして、高度な構成、
+[Model providers](/concepts/model-providers)を参照してください。

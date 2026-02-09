@@ -5,13 +5,6 @@ read_when:
   - Aanpassen van externe verbindingsmodi (direct vs SSH)
   - Ontwerpen van node-discovery + pairing voor externe nodes
 title: "Discovery en Transports"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:27Z
 ---
 
 # Discovery & transports
@@ -49,11 +42,11 @@ Protocoldetails:
 
 ## Discovery-inputs (hoe clients leren waar de Gateway is)
 
-### 1) Bonjour / mDNS (alleen LAN)
+### 1. Bonjour / mDNS (alleen LAN)
 
 Bonjour is best-effort en gaat niet over netwerken heen. Het wordt alleen gebruikt voor gemak binnen “hetzelfde LAN”.
 
-Doelrichting:
+Doel richting:
 
 - De **Gateway** adverteert zijn WS-eindpunt via Bonjour.
 - Clients browsen en tonen een lijst “kies een Gateway”, en slaan daarna het gekozen eindpunt op.
@@ -83,7 +76,7 @@ Uitschakelen/overschrijven:
 - `OPENCLAW_TAILNET_DNS` publiceert een `tailnetDns`-hint (MagicDNS).
 - `OPENCLAW_CLI_PATH` overschrijft het geadverteerde CLI-pad.
 
-### 2) Tailnet (cross-network)
+### 2. Tailnet (cross-network)
 
 Voor London/Vienna-achtige setups helpt Bonjour niet. Het aanbevolen “directe” doel is:
 
@@ -91,7 +84,7 @@ Voor London/Vienna-achtige setups helpt Bonjour niet. Het aanbevolen “directe�
 
 Als de Gateway kan detecteren dat hij onder Tailscale draait, publiceert hij `tailnetDns` als optionele hint voor clients (inclusief wide-area beacons).
 
-### 3) Handmatig / SSH-doel
+### 3. Handmatig / SSH-doel
 
 Wanneer er geen directe route is (of direct is uitgeschakeld), kunnen clients altijd via SSH verbinden door de local loopback Gateway-poort te forwarden.
 

@@ -3,23 +3,14 @@ summary: "Status ng suporta ng Tlon/Urbit, mga kakayahan, at konpigurasyon"
 read_when:
   - Gumagawa sa mga feature ng Tlon/Urbit channel
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:19Z
 ---
 
 # Tlon (plugin)
 
-Ang Tlon ay isang decentralized messenger na binuo sa Urbit. Kumokonekta ang OpenClaw sa iyong Urbit ship at kayang
-tumugon sa mga DM at mensahe sa group chat. Ang mga reply sa group ay nangangailangan ng @ mention bilang default at maaari
-pang higpitan sa pamamagitan ng mga allowlist.
+Ang Tlon ay isang desentralisadong messenger na binuo sa Urbit. OpenClaw connects to your Urbit ship and can
+respond to DMs and group chat messages. Ang mga reply sa grupo ay nangangailangan ng @ mention bilang default at maaari pang higpitan sa pamamagitan ng mga allowlist.
 
-Status: sinusuportahan sa pamamagitan ng plugin. Mga DM, group mentions, thread replies, at text-only na media fallback
-(URL na idinadagdag sa caption). Hindi sinusuportahan ang reactions, polls, at native media uploads.
+Status: suportado sa pamamagitan ng plugin. Mga DM, group mentions, thread replies, at text-only media fallback (URL na idinadagdag sa caption). Hindi suportado ang mga reaction, poll, at native media uploads.
 
 ## Kailangan ang plugin
 

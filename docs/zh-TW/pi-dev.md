@@ -1,22 +1,15 @@
 ---
 title: "Pi 開發工作流程"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:36Z
 ---
 
 # Pi 開發工作流程
 
 本指南總結了在 OpenClaw 中進行 Pi 整合時一個合理的工作流程。
 
-## 型別檢查與程式碼檢查
+## Type Checking and Linting
 
 - 型別檢查與建置：`pnpm build`
-- 程式碼檢查（Lint）：`pnpm lint`
+- Lint: `pnpm lint`
 - 格式檢查：`pnpm format`
 - 推送前的完整關卡：`pnpm lint && pnpm build && pnpm test`
 
@@ -28,7 +21,7 @@ x-i18n:
 scripts/pi/run-tests.sh
 ```
 
-若要包含會觸發真實提供者行為的即時測試：
+To include the live test that exercises real provider behavior:
 
 ```bash
 scripts/pi/run-tests.sh --live
@@ -56,9 +49,9 @@ scripts/pi/run-tests.sh --live
 
 針對工具呼叫行為，請提示一個 `read` 或 `exec` 動作，以便查看工具串流與承載資料的處理。
 
-## 全新狀態重設
+## Clean Slate Reset
 
-狀態資料位於 OpenClaw 的狀態目錄之下。預設為 `~/.openclaw`。若已設定 `OPENCLAW_STATE_DIR`，則改用該目錄。
+State lives under the OpenClaw state directory. Default is `~/.openclaw`. 若已設定 `OPENCLAW_STATE_DIR`，則改用該目錄。
 
 要重設所有內容：
 
@@ -69,7 +62,7 @@ scripts/pi/run-tests.sh --live
 - `sessions/` 若存在舊版路徑
 - `workspace/` 若你想要一個空白的工作區
 
-如果你只想重設工作階段，請刪除該代理程式的 `agents/<agentId>/sessions/` 與 `agents/<agentId>/sessions.json`。若不想重新進行身分驗證，請保留 `credentials/`。
+如果你只想重設工作階段，請刪除該代理程式的 `agents/<agentId>/sessions/` 與 `agents/<agentId>/sessions.json`。若不想重新進行身分驗證，請保留 `credentials/`。 Keep `credentials/` if you do not want to reauthenticate.
 
 ## 參考資料
 

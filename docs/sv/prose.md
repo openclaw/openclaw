@@ -5,18 +5,11 @@ read_when:
   - Du vill aktivera OpenProse-pluginet
   - Du behöver förstå lagring av tillstånd
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:11Z
 ---
 
 # OpenProse
 
-OpenProse är ett portabelt, markdown-först-arbetsflödesformat för att orkestrera AI-sessioner. I OpenClaw levereras det som ett plugin som installerar ett OpenProse Skills-paket samt ett `/prose`-snedstreckskommando. Program lever i `.prose`-filer och kan skapa flera underagenter med explicit kontrollflöde.
+OpenProse är ett portabelt, markdown-first workflow-format för att orkestrera AI-sessioner. I OpenClaw levereras den som en plugin som installerar ett OpenProse färdighetspaket plus ett `/prose`-snedstreck kommando. Program lever i `.prose`-filer och kan skapa flera underagenter med explicit kontrollflöde.
 
 Officiell webbplats: [https://www.prose.md](https://www.prose.md)
 
@@ -28,7 +21,7 @@ Officiell webbplats: [https://www.prose.md](https://www.prose.md)
 
 ## Installera + aktivera
 
-Medföljande pluginer är inaktiverade som standard. Aktivera OpenProse:
+Paketerade plugins är inaktiverade som standard. Aktivera OpenProse:
 
 ```bash
 openclaw plugins enable open-prose
@@ -42,7 +35,7 @@ Relaterad dokumentation: [Plugins](/tools/plugin), [Plugin-manifest](/plugins/ma
 
 ## Snedstreckskommando
 
-OpenProse registrerar `/prose` som ett användarinitierbart Skills-kommando. Det routar till OpenProse-VM-instruktionerna och använder OpenClaw-verktyg under huven.
+OpenProse registrerar `/prose` som ett användarvänligt skicklighetskommando. Det rutter till OpenProse VM instruktioner och använder OpenClaw verktyg under huvan.
 
 Vanliga kommandon:
 
@@ -119,8 +112,8 @@ Noteringar:
 
 ## Fjärrprogram
 
-`/prose run <handle/slug>` löses till `https://p.prose.md/<handle>/<slug>`.
-Direkta URL:er hämtas som de är. Detta använder verktyget `web_fetch` (eller `exec` för POST).
+`/prose run <handle/slug>` löser sig till `https://p.prose.md/<handle>/<slug>`.
+Direkta URL:er hämtas som is. Detta använder verktyget `web_fetch` (eller `exec` för POST).
 
 ## OpenClaw runtime-mappning
 
@@ -132,10 +125,10 @@ OpenProse-program mappar till OpenClaw-primitiver:
 | Filläsning/-skrivning        | `read` / `write` |
 | Webbhämtning                 | `web_fetch`      |
 
-Om din verktygstillåtelselista blockerar dessa verktyg kommer OpenProse-program att misslyckas. Se [Skills-konfig](/tools/skills-config).
+Om ditt verktyg tillåter blockering av dessa verktyg kommer OpenProse-program att misslyckas. Se [Färdigheter config](/tools/skills-config).
 
 ## Säkerhet + godkännanden
 
-Behandla `.prose`-filer som kod. Granska innan körning. Använd OpenClaws verktygstillåtelselistor och godkännandegrindar för att kontrollera bieffekter.
+Behandla `.prose`-filer som kod. Granska innan du kör. Använd OpenClaw verktyg tillåten lista och portar godkännande för att kontrollera biverkningar.
 
 För deterministiska, godkännandekontrollerade arbetsflöden, jämför med [Lobster](/tools/lobster).

@@ -5,13 +5,6 @@ read_when:
   - Alterando o streaming em blocos ou o comportamento de chunking do canal
   - Depurando respostas em bloco duplicadas/antecipadas ou streaming de rascunho
 title: "Streaming e Chunking"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:48Z
 ---
 
 # Streaming + chunking

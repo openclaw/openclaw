@@ -4,13 +4,6 @@ read_when:
   - Sie möchten den Gateway in der Cloud betreiben
   - Sie benötigen eine schnelle Übersicht über VPS-/Hosting-Anleitungen
 title: "VPS-Hosting"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:40Z
 ---
 
 # VPS-Hosting

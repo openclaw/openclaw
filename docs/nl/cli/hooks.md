@@ -4,13 +4,6 @@ read_when:
   - Je wilt agent hooks beheren
   - Je wilt hooks installeren of bijwerken
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:14Z
 ---
 
 # `openclaw hooks`

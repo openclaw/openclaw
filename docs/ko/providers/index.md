@@ -4,13 +4,6 @@ read_when:
   - 모델 프로바이더를 선택하려는 경우
   - 지원되는 LLM 백엔드의 빠른 개요가 필요한 경우
 title: "모델 프로바이더"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:56Z
 ---
 
 # 모델 프로바이더
@@ -59,7 +52,7 @@ Venice 는 개인정보 보호를 우선하는 추론을 위해 권장되는 Ven
 - [Ollama (로컬 모델)](/providers/ollama)
 - [Qianfan](/providers/qianfan)
 
-## 전사 프로바이더
+## 전사 제공업체
 
 - [Deepgram (오디오 전사)](/providers/deepgram)
 
@@ -67,5 +60,5 @@ Venice 는 개인정보 보호를 우선하는 추론을 위해 권장되는 Ven
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Claude Max/Pro 구독을 OpenAI 호환 API 엔드포인트로 사용합니다
 
-전체 프로바이더 카탈로그 (xAI, Groq, Mistral 등) 및 고급 구성은
+전체 제공업체 카탈로그(xAI, Groq, Mistral 등)는 전체 프로바이더 카탈로그 (xAI, Groq, Mistral 등) 및 고급 구성은
 [Model providers](/concepts/model-providers)를 참고하십시오.

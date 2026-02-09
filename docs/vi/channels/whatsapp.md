@@ -3,18 +3,11 @@ summary: "Tích hợp WhatsApp (kênh web): đăng nhập, hộp thư, trả l�
 read_when:
   - Làm việc với hành vi kênh WhatsApp/web hoặc định tuyến hộp thư
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:44Z
 ---
 
 # WhatsApp (kênh web)
 
-Trạng thái: Chỉ hỗ trợ WhatsApp Web qua Baileys. Gateway sở hữu (các) phiên.
+Status: WhatsApp Web via Baileys only. Gateway sở hữu (các) phiên làm việc.
 
 ## Khởi động nhanh (cho người mới)
 
@@ -62,13 +55,13 @@ Tắt bằng:
 
 ## Lấy số điện thoại (hai chế độ)
 
-WhatsApp yêu cầu số di động thật để xác minh. VoIP và số ảo thường bị chặn. Có hai cách được hỗ trợ để chạy OpenClaw trên WhatsApp:
+WhatsApp yêu cầu một số điện thoại di động thật để xác minh. Các số VoIP và số ảo thường bị chặn. Có hai cách được hỗ trợ để chạy OpenClaw trên WhatsApp:
 
 ### Số chuyên dụng (khuyến nghị)
 
-Dùng **một số điện thoại riêng** cho OpenClaw. Trải nghiệm tốt nhất, định tuyến sạch, không có quirks tự-chat. Thiết lập lý tưởng: **điện thoại Android cũ/dư + eSIM**. Để trên Wi‑Fi và nguồn điện, rồi liên kết qua QR.
+Sử dụng **một số điện thoại riêng** cho OpenClaw. Trải nghiệm người dùng (UX) tốt nhất, định tuyến rõ ràng, không có các vấn đề tự nhắn tin. Ideal setup: **spare/old Android phone + eSIM**. Để thiết bị kết nối Wi‑Fi và nguồn điện, rồi liên kết qua QR.
 
-**WhatsApp Business:** Bạn có thể dùng WhatsApp Business trên cùng thiết bị với số khác. Rất tiện để tách WhatsApp cá nhân — cài WhatsApp Business và đăng ký số OpenClaw ở đó.
+**WhatsApp Business:** Bạn có thể dùng WhatsApp Business trên cùng một thiết bị với một số khác. Great for keeping your personal WhatsApp separate — install WhatsApp Business and register the OpenClaw number there.
 
 **Cấu hình mẫu (số chuyên dụng, allowlist một người dùng):**
 
@@ -84,13 +77,13 @@ Dùng **một số điện thoại riêng** cho OpenClaw. Trải nghiệm tốt 
 ```
 
 **Chế độ ghép cặp (tùy chọn):**
-Nếu muốn ghép cặp thay vì allowlist, đặt `channels.whatsapp.dmPolicy` thành `pairing`. Người gửi không xác định sẽ nhận mã ghép cặp; phê duyệt bằng:
+Nếu bạn muốn ghép cặp thay vì allowlist, hãy đặt `channels.whatsapp.dmPolicy` thành `pairing`. Người gửi không xác định sẽ nhận được mã ghép cặp; phê duyệt bằng:
 `openclaw pairing approve whatsapp <code>`
 
 ### Số cá nhân (dự phòng)
 
-Giải pháp nhanh: chạy OpenClaw trên **chính số của bạn**. Nhắn cho chính mình (WhatsApp “Message yourself”) để thử nghiệm để không spam danh bạ. Dự kiến sẽ phải đọc mã xác minh trên điện thoại chính trong quá trình thiết lập và thử nghiệm. **Phải bật chế độ self-chat.**
-Khi trình hướng dẫn hỏi số WhatsApp cá nhân của bạn, hãy nhập số bạn sẽ nhắn từ (chủ sở hữu/người gửi), không phải số trợ lý.
+Giải pháp nhanh: chạy OpenClaw trên **chính số của bạn**. Message yourself (WhatsApp “Message yourself”) for testing so you don’t spam contacts. Dự kiến sẽ phải đọc mã xác minh trên điện thoại chính của bạn trong quá trình thiết lập và thử nghiệm. **Bắt buộc bật chế độ tự chat.**
+Khi trình hướng dẫn hỏi số WhatsApp cá nhân của bạn, hãy nhập số điện thoại mà bạn sẽ nhắn từ đó (chủ sở hữu/người gửi), không phải số của trợ lý.
 
 **Cấu hình mẫu (số cá nhân, self-chat):**
 
@@ -104,9 +97,9 @@ Khi trình hướng dẫn hỏi số WhatsApp cá nhân của bạn, hãy nhập
 }
 ```
 
-Tiền tố trả lời self-chat mặc định là `[{identity.name}]` khi được đặt (nếu không thì `[openclaw]`)
-nếu `messages.responsePrefix` chưa được đặt. Hãy đặt rõ ràng để tùy chỉnh hoặc tắt
-tiền tố (dùng `""` để loại bỏ).
+Self-chat replies default to `[{identity.name}]` when set (otherwise `[openclaw]`)
+if `messages.responsePrefix` is unset. Set it explicitly to customize or disable
+the prefix (use `""` to remove it).
 
 ### Mẹo nguồn số
 
@@ -117,7 +110,7 @@ tiền tố (dùng `""` để loại bỏ).
 
 **Tránh:** TextNow, Google Voice, hầu hết dịch vụ “SMS miễn phí” — WhatsApp chặn rất gắt.
 
-**Mẹo:** Số chỉ cần nhận một SMS xác minh. Sau đó, các phiên WhatsApp Web duy trì qua `creds.json`.
+**Tip:** The number only needs to receive one verification SMS. Sau đó, các phiên WhatsApp Web sẽ được duy trì qua `creds.json`.
 
 ## Vì sao không dùng Twilio?
 
@@ -192,8 +185,8 @@ Ghi chú:
 
 ## WhatsApp FAQ: gửi tin nhắn + ghép cặp
 
-**OpenClaw có nhắn cho liên hệ ngẫu nhiên khi tôi liên kết WhatsApp không?**  
-Không. Chính sách DM mặc định là **ghép cặp**, nên người gửi không xác định chỉ nhận mã ghép cặp và tin nhắn của họ **không được xử lý**. OpenClaw chỉ trả lời các chat nó nhận, hoặc các lần gửi bạn chủ động kích hoạt (agent/CLI).
+**Will OpenClaw message random contacts when I link WhatsApp?**  
+No. Chính sách DM mặc định là **pairing**, vì vậy người gửi không xác định chỉ nhận được mã ghép cặp và tin nhắn của họ **không được xử lý**. OpenClaw chỉ trả lời các cuộc trò chuyện mà nó nhận được, hoặc các lần gửi mà bạn kích hoạt rõ ràng (agent/CLI).
 
 **Ghép cặp hoạt động thế nào trên WhatsApp?**  
 Ghép cặp là cổng DM cho người gửi không xác định:
@@ -203,14 +196,15 @@ Ghép cặp là cổng DM cho người gửi không xác định:
 - Mã hết hạn sau 1 giờ; yêu cầu chờ xử lý bị giới hạn 3 mỗi kênh.
 
 **Nhiều người có thể dùng các instance OpenClaw khác nhau trên một số WhatsApp không?**  
-Có, bằng cách định tuyến mỗi người gửi đến một agent khác nhau qua `bindings` (peer `kind: "dm"`, E.164 người gửi như `+15551234567`). Trả lời vẫn đến từ **cùng một tài khoản WhatsApp**, và chat trực tiếp gộp về phiên chính của mỗi agent, nên dùng **một agent cho mỗi người**. Kiểm soát truy cập DM (`dmPolicy`/`allowFrom`) là toàn cục theo mỗi tài khoản WhatsApp. Xem [Multi-Agent Routing](/concepts/multi-agent).
+Có, bằng cách định tuyến mỗi người gửi tới một agent khác nhau qua `bindings` (peer `kind: "dm"`, sender E.164 như `+15551234567`). Phản hồi vẫn đến từ **cùng một tài khoản WhatsApp**, và các cuộc chat trực tiếp sẽ gộp vào phiên chính của từng agent, vì vậy hãy dùng **một agent cho mỗi người**. DM access control (`dmPolicy`/`allowFrom`) is global per WhatsApp account. Xem [Multi-Agent Routing](/concepts/multi-agent).
 
-**Vì sao trình hướng dẫn hỏi số điện thoại của tôi?**  
-Trình hướng dẫn dùng số đó để đặt **allowlist/chủ sở hữu** để DM của chính bạn được phép. Nó không dùng để tự động gửi. Nếu bạn chạy trên số WhatsApp cá nhân, dùng chính số đó và bật `channels.whatsapp.selfChatMode`.
+**Vì sao bạn hỏi số điện thoại của tôi trong trình hướng dẫn?**  
+Trình hướng dẫn dùng nó để thiết lập **allowlist/owner** để các DM của chính bạn được cho phép. Nó không được dùng cho việc gửi tự động. If you run on your personal WhatsApp number, use that same number and enable `channels.whatsapp.selfChatMode`.
 
 ## Chuẩn hóa tin nhắn (mô hình thấy gì)
 
 - `Body` là nội dung tin nhắn hiện tại kèm phong bì.
+
 - Ngữ cảnh trả lời trích dẫn **luôn được nối thêm**:
 
   ```
@@ -223,6 +217,7 @@ Trình hướng dẫn dùng số đó để đặt **allowlist/chủ sở hữu*
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = nội dung trích dẫn hoặc placeholder media
   - `ReplyToSender` = E.164 khi biết
+
 - Tin nhắn vào chỉ có media dùng placeholder:
   - `<media:image|video|audio|document|sticker>`
 
@@ -250,7 +245,7 @@ Trình hướng dẫn dùng số đó để đặt **allowlist/chủ sở hữu*
 
 ## Phản ứng xác nhận (tự động react khi nhận)
 
-WhatsApp có thể tự động gửi phản ứng emoji cho tin nhắn đến ngay khi nhận, trước khi bot tạo trả lời. Điều này cung cấp phản hồi tức thì cho người dùng rằng tin nhắn đã được nhận.
+WhatsApp can automatically send emoji reactions to incoming messages immediately upon receipt, before the bot generates a reply. Điều này cung cấp phản hồi tức thì cho người dùng rằng tin nhắn của họ đã được nhận.
 
 **Cấu hình:**
 
@@ -268,7 +263,7 @@ WhatsApp có thể tự động gửi phản ứng emoji cho tin nhắn đến n
 
 **Tùy chọn:**
 
-- `emoji` (string): Emoji dùng để xác nhận (ví dụ: "👀", "✅", "📨"). Trống hoặc bỏ qua = tắt tính năng.
+- `emoji` (string): Emoji dùng để xác nhận (ví dụ: "👀", "✅", "📨"). Để trống hoặc bỏ qua = tính năng bị vô hiệu hóa.
 - `direct` (boolean, mặc định: `true`): Gửi phản ứng trong chat trực tiếp/DM.
 - `group` (string, mặc định: `"mentions"`): Hành vi chat nhóm:
   - `"always"`: React mọi tin nhắn nhóm (kể cả không @mention)
@@ -332,7 +327,7 @@ WhatsApp có thể tự động gửi phản ứng emoji cho tin nhắn đến n
 
 WhatsApp gửi âm thanh dưới dạng **voice notes** (bong bóng PTT).
 
-- Kết quả tốt nhất: OGG/Opus. OpenClaw ghi lại `audio/ogg` thành `audio/ogg; codecs=opus`.
+- Kết quả tốt nhất: OGG/Opus. OpenClaw rewrites `audio/ogg` to `audio/ogg; codecs=opus`.
 - `[[audio_as_voice]]` bị bỏ qua cho WhatsApp (âm thanh đã là voice note).
 
 ## Giới hạn media + tối ưu
@@ -347,7 +342,7 @@ WhatsApp gửi âm thanh dưới dạng **voice notes** (bong bóng PTT).
 - **Gateway heartbeat** ghi log tình trạng kết nối (`web.heartbeatSeconds`, mặc định 60s).
 - **Agent heartbeat** có thể cấu hình theo agent (`agents.list[].heartbeat`) hoặc toàn cục
   qua `agents.defaults.heartbeat` (dùng khi không có mục theo agent).
-  - Dùng prompt heartbeat đã cấu hình (mặc định: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + hành vi bỏ qua `HEARTBEAT_OK`.
+  - Sử dụng prompt heartbeat đã cấu hình (mặc định: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK` skip behavior.
   - Gửi mặc định tới kênh dùng gần nhất (hoặc đích cấu hình).
 
 ## Hành vi kết nối lại
@@ -361,21 +356,21 @@ WhatsApp gửi âm thanh dưới dạng **voice notes** (bong bóng PTT).
 
 - `channels.whatsapp.dmPolicy` (chính sách DM: pairing/allowlist/open/disabled).
 - `channels.whatsapp.selfChatMode` (thiết lập cùng điện thoại; bot dùng số WhatsApp cá nhân của bạn).
-- `channels.whatsapp.allowFrom` (allowlist DM). WhatsApp dùng số E.164 (không có username).
+- `channels.whatsapp.allowFrom` (DM allowlist). WhatsApp uses E.164 phone numbers (no usernames).
 - `channels.whatsapp.mediaMaxMb` (trần lưu media đến).
 - `channels.whatsapp.ackReaction` (tự phản ứng khi nhận tin: `{emoji, direct, group}`).
-- `channels.whatsapp.accounts.<accountId>.*` (cài đặt theo tài khoản + tùy chọn `authDir`).
-- `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (trần media đến theo tài khoản).
-- `channels.whatsapp.accounts.<accountId>.ackReaction` (ghi đè phản ứng xác nhận theo tài khoản).
+- `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
+- `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap).
+- `channels.whatsapp.accounts.<accountId>.ackReaction` (per-account ack reaction override).
 - `channels.whatsapp.groupAllowFrom` (allowlist người gửi nhóm).
 - `channels.whatsapp.groupPolicy` (chính sách nhóm).
-- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (ngữ cảnh lịch sử nhóm; `0` tắt).
-- `channels.whatsapp.dmHistoryLimit` (giới hạn lịch sử DM theo lượt người dùng). Ghi đè theo người dùng: `channels.whatsapp.dms["<phone>"].historyLimit`.
+- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables).
+- `channels.whatsapp.dmHistoryLimit` (DM history limit in user turns). Per-user overrides: `channels.whatsapp.dms["<phone>"].historyLimit`.
 - `channels.whatsapp.groups` (allowlist nhóm + mặc định chặn theo mention; dùng `"*"` để cho phép tất cả)
 - `channels.whatsapp.actions.reactions` (chặn công cụ phản ứng WhatsApp).
 - `agents.list[].groupChat.mentionPatterns` (hoặc `messages.groupChat.mentionPatterns`)
 - `messages.groupChat.historyLimit`
-- `channels.whatsapp.messagePrefix` (tiền tố đến; theo tài khoản: `channels.whatsapp.accounts.<accountId>.messagePrefix`; đã deprecated: `messages.messagePrefix`)
+- `channels.whatsapp.messagePrefix` (inbound prefix; per-account: `channels.whatsapp.accounts.<accountId>.messagePrefix`; deprecated: `messages.messagePrefix`)
 - `messages.responsePrefix` (tiền tố đi)
 - `agents.defaults.mediaMaxMb`
 - `agents.defaults.heartbeat.every`
@@ -405,9 +400,9 @@ WhatsApp gửi âm thanh dưới dạng **voice notes** (bong bóng PTT).
 **Đã liên kết nhưng mất kết nối / vòng lặp kết nối lại**
 
 - Triệu chứng: `channels status` hiển thị `running, disconnected` hoặc cảnh báo “Linked but disconnected”.
-- Cách khắc phục: `openclaw doctor` (hoặc khởi động lại gateway). Nếu vẫn còn, liên kết lại qua `channels login` và kiểm tra `openclaw logs --follow`.
+- Fix: `openclaw doctor` (or restart the gateway). Nếu vẫn tiếp diễn, hãy liên kết lại qua `channels login` và kiểm tra `openclaw logs --follow`.
 
 **Runtime Bun**
 
-- **Không khuyến nghị** dùng Bun. WhatsApp (Baileys) và Telegram không ổn định trên Bun.
-  Chạy gateway với **Node**. (Xem ghi chú runtime trong Bắt đầu.)
+- Bun is **not recommended**. WhatsApp (Baileys) and Telegram are unreliable on Bun.
+  Chạy gateway bằng **Node**. (See Getting Started runtime note.)

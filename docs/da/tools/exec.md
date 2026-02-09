@@ -4,20 +4,13 @@ read_when:
   - Brug eller ændring af exec-værktøjet
   - Fejlfinding af stdin- eller TTY-adfærd
 title: "Exec-værktøj"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:59Z
 ---
 
 # Exec-værktøj
 
-Kør shell-kommandoer i workspace. Understøtter forgrunds- og baggrundskørsel via `process`.
+Kør shell-kommandoer i arbejdsområdet. Understøtter forgrund + baggrundsudførelse via `proces`.
 Hvis `process` ikke er tilladt, kører `exec` synkront og ignorerer `yieldMs`/`background`.
-Baggrundssessioner er afgrænset pr. agent; `process` ser kun sessioner fra samme agent.
+Baggrundssessioner er omfattet pr. agent; `process` ser kun sessioner fra samme agent.
 
 ## Parametre
 
@@ -45,9 +38,9 @@ Noter:
   fra `PATH` for at undgå fish-inkompatible scripts, og der faldes tilbage til `SHELL`, hvis ingen af dem findes.
 - Værtsudførelse (`gateway`/`node`) afviser `env.PATH` og loader-overskrivninger (`LD_*`/`DYLD_*`) for
   at forhindre binær kapring eller injiceret kode.
-- Vigtigt: sandboxing er **slået fra som standard**. Hvis sandboxing er slået fra, kører `host=sandbox` direkte på
-  gateway-værten (ingen container) og **kræver ikke godkendelser**. For at kræve godkendelser skal du køre med
-  `host=gateway` og konfigurere exec-godkendelser (eller aktivere sandboxing).
+- Vigtigt: sandboxing er **deaktiveret som standard**. Hvis sandboxing er slukket, 'host=sandbox' kører direkte på
+  gatewayens vært (ingen container) og **kræver ikke godkendelser**. For at kræve godkendelse, skal du køre med
+  `host=gateway` og konfigurere exec godkendelser (eller aktivere sandboxing).
 
 ## Konfiguration
 
@@ -74,16 +67,16 @@ Eksempel:
 
 ### PATH-håndtering
 
-- `host=gateway`: fletter din login-shells `PATH` ind i exec-miljøet. `env.PATH`-overskrivninger
-  afvises for værtsudførelse. Selve dæmonen kører stadig med en minimal `PATH`:
+- `host=gateway`: fletter dit login-shell `PATH` ind i exec miljøet. `env.PATH` tilsidesættelser er
+  afvist for udførelse af værten. Dæmonen selv kører stadig med en minimal `PATH`:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
-- `host=sandbox`: kører `sh -lc` (login-shell) inde i containeren, så `/etc/profile` kan nulstille `PATH`.
-  OpenClaw foranstiller `env.PATH` efter profilindlæsning via en intern env-var (ingen shell-interpolation);
+- `host=sandbox`: kører `sh -lc` (login shell) inde i beholderen, så `/etc/profile` kan nulstille `PATH`.
+  OpenClaw forbereder `env.PATH` efter profil sourcing via en intern env var (ingen shell interpolation);
   `tools.exec.pathPrepend` gælder også her.
-- `host=node`: kun ikke-blokerede env-overskrivninger, som du angiver, sendes til noden. `env.PATH`-overskrivninger
-  afvises for værtsudførelse. Headless node hosts accepterer `PATH` kun, når den foranstiller node-hostens
-  PATH (ingen erstatning). macOS-noder dropper `PATH`-overskrivninger helt.
+- `host=node`: kun ikke-blokerede env tilsidesætter du passerer er sendt til noden. `env.PATH` tilsidesættelser er
+  afvist for udførelse af værten. Hovedløse node værter accepterer kun `PATH` når det forbereder node vært
+  PATH (ingen erstatning). macOS noder drop `PATH` tilsidesætter helt.
 
 Per-agent node-binding (brug agentlisteindekset i konfigurationen):
 
@@ -96,8 +89,8 @@ Kontrol-UI: Fanen Nodes indeholder et lille panel “Exec node binding” for de
 
 ## Sessionsoverskrivninger (`/exec`)
 
-Brug `/exec` til at sætte **per-session** standarder for `host`, `security`, `ask` og `node`.
-Send `/exec` uden argumenter for at vise de aktuelle værdier.
+Brug `/exec` for at angive **per-session** standardindstillinger for `host`, `security`, `ask`, og `node`.
+Send `/exec` uden argumenter til at vise de aktuelle værdier.
 
 Eksempel:
 
@@ -107,27 +100,27 @@ Eksempel:
 
 ## Autorisationsmodel
 
-`/exec` honoreres kun for **autoriserede afsendere** (kanal-allowlists/parring plus `commands.useAccessGroups`).
-Den opdaterer **kun sessionstilstand** og skriver ikke konfiguration. For at deaktivere exec permanent skal du nægte det via værktøjspolitik
-(`tools.deny: ["exec"]` eller pr. agent). Værtsgodkendelser gælder stadig, medmindre du eksplicit sætter
+`/exec` er kun hædret for **autoriserede afsendere** (kanal allowlists/parring plus `commands.useAccessGroups`).
+Det opdaterer **sessionstilstand kun** og skriver ikke konfiguration. For at deaktivere eksekvering, benægte den via værktøj
+policy (`tools.deny: ["exec"]` eller per-agent). Værtsgodkendelser gælder stadig, medmindre du udtrykkeligt angiver
 `security=full` og `ask=off`.
 
 ## Exec-godkendelser (companion-app / node host)
 
-Sandboxede agents kan kræve godkendelse pr. anmodning, før `exec` kører på gateway- eller node-værten.
-Se [Exec approvals](/tools/exec-approvals) for politikken, allowlisten og UI-flowet.
+Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host. (Automatic Copy)
+Se [Exec godkendelser](/tools/exec-approvals) for politik, tilladsliste og UI flow.
 
-Når godkendelser er påkrævet, returnerer exec-værktøjet straks med
-`status: "approval-pending"` og et godkendelses-id. Når der er godkendt (eller afvist / timeout),
-udsender Gateway systemhændelser (`Exec finished` / `Exec denied`). Hvis kommandoen stadig
-kører efter `tools.exec.approvalRunningNoticeMs`, udsendes én enkelt `Exec running`-meddelelse.
+Når godkendelser er påkrævet, returnerer exec værktøjet straks med
+`status: "Godkendelsesafventende "` og et godkendelsesid. Når først godkendt (eller nægtet / timet ud),
+Gateway udsender systembegivenheder (`Exec færdiggjort` / `Exec nægtet`). Hvis kommandoen stadig er
+, der kører efter `tools.exec.approvalRunningNoticeMs`, udsendes en enkelt `Exec running` meddelelse.
 
 ## Allowlist + sikre bins
 
-Allowlist-håndhævelse matcher **kun opløste binære stier** (ingen basename-matches). Når
-`security=allowlist`, tillades shell-kommandoer automatisk kun, hvis hvert pipeline-segment er
-allowlistet eller et sikkert bin. Kædning (`;`, `&&`, `||`) og omdirigeringer afvises i
-allowlist-tilstand.
+Tillads håndhævelse matcher kun **løst binære stier** (ingen basename matches). Når
+`security=allowlist`, er skalkommandoer kun automatisk tilladt, hvis hvert pipeline-segment er
+tilladt, eller en sikker bin. Kædemål (`;`, `&`, `~~`) og omdirigeringer afvises i tilstanden
+tilladsliste.
 
 ## Eksempler
 
@@ -166,8 +159,8 @@ Indsæt (som standard indrammet):
 
 ## apply_patch (eksperimentel)
 
-`apply_patch` er et under-værktøj af `exec` til strukturerede redigeringer på tværs af flere filer.
-Aktivér det eksplicit:
+`apply_patch` er et underværktøj til `exec` for strukturerede multi-fil redigeringer.
+Aktiver det udtrykkeligt:
 
 ```json5
 {

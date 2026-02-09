@@ -3,19 +3,11 @@ summary: "Khám phá: cấu hình mô hình, hồ sơ xác thực và hành vi d
 read_when:
   - Khám phá các ý tưởng tương lai về lựa chọn mô hình + hồ sơ xác thực
 title: "Khám phá cấu hình mô hình"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:51Z
 ---
 
 # Cấu hình mô hình (Khám phá)
 
-Tài liệu này ghi lại các **ý tưởng** cho cấu hình mô hình trong tương lai. Đây không phải là
-đặc tả phát hành. Đối với hành vi hiện tại, xem:
+Tài liệu này ghi lại **các ý tưởng** cho cấu hình model trong tương lai. Đối với hành vi hiện tại, xem: Đối với hành vi hiện tại, xem:
 
 - [Models](/concepts/models)
 - [Model failover](/concepts/model-failover)

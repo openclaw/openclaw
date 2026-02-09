@@ -4,13 +4,6 @@ read_when:
   - Exposer l’interface de contrôle de la Gateway (passerelle) en dehors de localhost
   - Automatiser l’accès au tableau de bord via le tailnet ou en public
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c900c70a9301f290
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:53Z
 ---
 
 # Tailscale (tableau de bord de la Gateway (passerelle))

@@ -4,13 +4,6 @@ read_when:
   - Stable/beta/dev အကြား ပြောင်းလဲအသုံးပြုလိုသည့်အခါ
   - Prerelease များကို တက်ဂ်သတ်မှတ်ခြင်း သို့မဟုတ် ထုတ်ဝေခြင်း ပြုလုပ်နေသည့်အခါ
 title: "ဖွံ့ဖြိုးရေး ချန်နယ်များ"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:33Z
 ---
 
 # ဖွံ့ဖြိုးရေး ချန်နယ်များ
@@ -21,7 +14,7 @@ OpenClaw သည် အပ်ဒိတ် ချန်နယ် သုံးခ�
 
 - **stable**: npm dist-tag `latest`။
 - **beta**: npm dist-tag `beta` (စမ်းသပ်နေသော build များ)။
-- **dev**: `main` (git) ၏ အမြဲပြောင်းလဲနေသော head။ npm dist-tag: `dev` (ထုတ်ဝေသည့်အခါ)။
+- **dev**: `main` ၏ head ကို လိုက်လံပြောင်းလဲနေသည် (git)။ npm dist-tag: `dev` (publish လုပ်သည့်အခါ)။
 
 ကျွန်ုပ်တို့သည် build များကို **beta** သို့ ပို့ပြီး စမ်းသပ်ကာ၊ ထို့နောက် **စစ်ဆေးပြီးသား build တစ်ခုကို `latest` သို့ မြှင့်တင်** ပါသည်။
 ဗားရှင်းနံပါတ်ကို မပြောင်းလဲဘဲ — npm install များအတွက် အမှန်တရားရင်းမြစ်မှာ dist-tag များဖြစ်ပါသည်။
@@ -76,7 +69,7 @@ install လုပ်နည်းကိုပါ ကိုက်ညီအော�
 
 ## macOS အက်ပ် ရရှိနိုင်မှု
 
-Beta နှင့် dev build များတွင် macOS အက်ပ် ထုတ်ဝေမှု ပါဝင်မည်မဟုတ်နိုင်ပါ။ ထိုသို့ဖြစ်လည်း ပြဿနာမရှိပါ—
+Beta နဲ့ dev builds တွေမှာ macOS app release ကို **မပါဝင်နိုင်** ပါ။ That’s OK:
 
 - git tag နှင့် npm dist-tag ကို ဆက်လက် ထုတ်ဝေနိုင်ပါသည်။
 - release notes သို့မဟုတ် changelog တွင် “ဤ beta အတွက် macOS build မရှိပါ” ဟု ဖော်ပြပါ။

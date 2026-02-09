@@ -4,13 +4,6 @@ read_when:
   - Lägga till eller ändra parsning av kanalplatser
   - Använda platskontextfält i agentprompter eller verktyg
 title: "Kanalplatsparsning"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:21Z
 ---
 
 # Kanalplatsparsning

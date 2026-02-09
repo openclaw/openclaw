@@ -4,13 +4,6 @@ read_when:
   - သင် အမြန်ဆုံး တပ်ဆင်ခြင်း အဆင့်များကို ရှာဖွေနေသောအခါ
   - အဟောင်း လင့်ခ်တစ်ခုမှ ဤနေရာသို့ ပို့ဆောင်ခံရသောအခါ
 title: "အမြန်စတင်ရန်"
-x-i18n:
-  source_path: start/quickstart.md
-  source_hash: c03779abfcd92ec9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:51Z
 ---
 
 # အမြန်စတင်ရန်

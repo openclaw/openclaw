@@ -3,18 +3,11 @@ summary: "WhatsApp（Web チャンネル）統合：ログイン、受信トレ�
 read_when:
   - WhatsApp/Web チャンネルの挙動や受信トレイのルーティングに取り組むとき
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:37Z
 ---
 
 # WhatsApp（Web チャンネル）
 
-ステータス：Baileys 経由の WhatsApp Web のみ対応。Gateway がセッションを所有します。
+ステータス：Baileys 経由の WhatsApp Web のみ対応。Gateway がセッションを所有します。 ゲートウェイはセッションを所有しています。
 
 ## クイックセットアップ（初心者向け）
 
@@ -62,13 +55,13 @@ x-i18n:
 
 ## 電話番号の取得（2 つのモード）
 
-WhatsApp は認証のために実在する携帯電話番号を要求します。VoIP や仮想番号は通常ブロックされます。OpenClaw を WhatsApp で運用する方法は次の 2 つです。
+WhatsApp は認証のために実在する携帯電話番号を要求します。VoIP や仮想番号は通常ブロックされます。OpenClaw を WhatsApp で運用する方法は次の 2 つです。 VoIPと仮想番号は通常ブロックされます。 WhatsAppでOpenClawを実行するには2つの方法があります。
 
 ### 専用番号（推奨）
 
-OpenClaw 用に **別の電話番号** を使用します。UX が最良で、ルーティングも明確、自己チャット特有の癖もありません。理想的な構成は **予備／古い Android 端末 + eSIM** です。Wi‑Fi と電源に接続したまま、QR でリンクします。
+**別の電話番号** をOpenClawに使用します。 ベストUX、クリーンなルーティング、ない自己チャット癖。 理想的な設定: **spare/old Android phone + eSIM** . Wi-Fiと電源に残し、QRでリンクしてください。
 
-**WhatsApp Business：** 同じ端末で別の番号として WhatsApp Business を使用できます。個人用 WhatsApp と分離できるため便利です。WhatsApp Business をインストールし、OpenClaw 用番号を登録してください。
+**WhatsApp Business：** 同じ端末で別の番号として WhatsApp Business を使用できます。個人用 WhatsApp と分離できるため便利です。WhatsApp Business をインストールし、OpenClaw 用番号を登録してください。 WhatsAppビジネスをインストールし、そこでOpenClaw番号を登録してください。
 
 **サンプル設定（専用番号、単一ユーザー許可リスト）：**
 
@@ -83,14 +76,15 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 }
 ```
 
-**ペアリングモード（任意）：**  
+**ペアリングモード (オプション):**
+allowlistの代わりにペアリングをしたい場合は、 `channels.whatsapp.dmPolicy` を `pairing` に設定します。 **ペアリングモード（任意）：**  
 許可リストではなくペアリングを使う場合、`channels.whatsapp.dmPolicy` を `pairing` に設定します。不明な送信者にはペアリングコードが送られ、次で承認します：
 `openclaw pairing approve whatsapp <code>`
 
 ### 個人番号（フォールバック）
 
-簡易的な代替として、**自分の番号** で OpenClaw を実行できます。テスト時は「自分宛てにメッセージ」（WhatsApp の「自分にメッセージ」）を使い、連絡先をスパムしないようにしてください。セットアップや実験中は、メイン端末で認証コードを読む必要があります。**自己チャットモードを有効化する必要があります。**  
-ウィザードで個人の WhatsApp 番号を求められたら、アシスタント番号ではなく、メッセージ送信元（所有者／送信者）の電話番号を入力してください。
+クイックフォールバック: **あなた自身の番号**でOpenClawを実行します。 連絡先にスパムメールを送信しないようにテスト用のWhatsApp（「自分自身にメッセージを送信」）にメッセージを送信します。 セットアップと実験中にメインの携帯電話で検証コードを読み取ることを期待しています。 \*\*セルフチャットモードを有効にする必要があります。 \*
+ウィザードがあなたのWhatsApp番号を尋ねるときは、アシスタント番号ではなく、(所有者/送信者)からメッセージを送信する電話番号を入力します。
 
 **サンプル設定（個人番号、自己チャット）：**
 
@@ -106,7 +100,7 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 
 自己チャットの返信は、設定されている場合はデフォルトで `[{identity.name}]` を使用します（それ以外は `[openclaw]`）。  
 `messages.responsePrefix` が未設定の場合です。明示的に設定してカスタマイズまたは無効化してください  
-（削除するには `""` を使用）。
+（削除するには `""` を使用）。 7. プレフィックスをカスタマイズまたは無効化するには明示的に設定してください（削除するには `""` を使用します）。
 
 ### 番号調達のヒント
 
@@ -117,7 +111,7 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 
 **避けるべきもの：** TextNow、Google Voice、ほとんどの「無料 SMS」サービス — WhatsApp はこれらを積極的にブロックします。
 
-**ヒント：** 番号は最初の認証 SMS を 1 回受信できれば十分です。その後、WhatsApp Web セッションは `creds.json` により維持されます。
+**ヒント：** この数字は検証SMSを1回受け取るだけです。 その後、 WhatsApp Web セッションは `creds.json` 経由で継続されます。
 
 ## なぜ Twilio を使わないのか？
 
@@ -158,7 +152,7 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 - 送信 DM はペアリング返信を決してトリガーしません（連絡先のスパム防止）。
 - 受信の不明な送信者は引き続き `channels.whatsapp.dmPolicy` に従います。
 - 自己チャットモード（allowFrom に自分の番号を含める）では、自動既読送信を回避し、メンション JID を無視します。
-- 自己チャット以外の DM では既読が送信されます。
+- セルフチャット以外のDMの領収書をお読みください。
 
 ## 既読（Read receipts）
 
@@ -193,7 +187,7 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 ## WhatsApp FAQ：送信 + ペアリング
 
 **WhatsApp をリンクすると、OpenClaw がランダムな連絡先にメッセージを送りますか？**  
-いいえ。デフォルトの DM ポリシーは **ペアリング** のため、不明な送信者にはペアリングコードのみが送られ、メッセージは **処理されません**。OpenClaw は受信したチャット、またはエージェント／CLI で明示的にトリガーした送信にのみ返信します。
+いいえ。デフォルトの DM ポリシーは **ペアリング** のため、不明な送信者にはペアリングコードのみが送られ、メッセージは **処理されません**。OpenClaw は受信したチャット、またはエージェント／CLI で明示的にトリガーした送信にのみ返信します。 デフォルトのDMポリシーは**ペアリング**であるため、未知の送信者はペアリングコードのみを取得し、メッセージは**処理されません**。 OpenClawは、受信したチャットまたは明示的にトリガー(エージェント/CLI)を送信するチャットのみに返信します。
 
 **WhatsApp のペアリングはどのように機能しますか？**  
 ペアリングは不明な送信者に対する DM ゲートです。
@@ -203,14 +197,15 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 - コードは 1 時間で失効し、保留リクエストはチャンネルごとに最大 3 件です。
 
 **1 つの WhatsApp 番号で、複数人が異なる OpenClaw インスタンスを使えますか？**  
-はい。`bindings` により送信者ごとに別エージェントへルーティングできます（ピア `kind: "dm"`、送信者の E.164 例：`+15551234567`）。返信は **同一の WhatsApp アカウント** から送信され、ダイレクトチャットは各エージェントのメインセッションに集約されるため、**1 人につき 1 エージェント** を使用してください。DM のアクセス制御（`dmPolicy`/`allowFrom`）は WhatsApp アカウント単位でグローバルです。詳細は [Multi-Agent Routing](/concepts/multi-agent) を参照してください。
+はい。`bindings` により送信者ごとに別エージェントへルーティングできます（ピア `kind: "dm"`、送信者の E.164 例：`+15551234567`）。返信は **同一の WhatsApp アカウント** から送信され、ダイレクトチャットは各エージェントのメインセッションに集約されるため、**1 人につき 1 エージェント** を使用してください。DM のアクセス制御（`dmPolicy`/`allowFrom`）は WhatsApp アカウント単位でグローバルです。詳細は [Multi-Agent Routing](/concepts/multi-agent) を参照してください。 返信はまだ**同じWhatsAppアカウント**から来ており、各エージェントのメインセッションに直接チャットが崩壊しますので、**1人あたり1人のエージェント**を使用してください。 DM のアクセス制御(`dmPolicy`/`allowFrom`)は、WhatsAppアカウントごとにグローバルです。 [マルチエージェントルーティング](/concepts/multi-agent)を参照。
 
 **ウィザードで電話番号を尋ねられるのはなぜですか？**  
-自分の DM を許可するための **許可リスト／オーナー** 設定に使用されます。自動送信には使われません。個人の WhatsApp 番号で運用する場合は、その同じ番号を使用し、`channels.whatsapp.selfChatMode` を有効化してください。
+自分の DM を許可するための **許可リスト／オーナー** 設定に使用されます。自動送信には使われません。個人の WhatsApp 番号で運用する場合は、その同じ番号を使用し、`channels.whatsapp.selfChatMode` を有効化してください。 自動送信には使用されません。 あなたのWhatsApp番号で実行する場合は、その同じ番号を使用して、`channels.whatsapp.selfChatMode` を有効にしてください。
 
 ## メッセージ正規化（モデルが見る内容）
 
 - `Body` は現在のメッセージ本文（エンベロープ付き）です。
+
 - 引用返信のコンテキストは **常に付加** されます：
 
   ```
@@ -223,6 +218,7 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = 引用本文またはメディアのプレースホルダー
   - `ReplyToSender` = 既知の場合は E.164
+
 - メディアのみの受信メッセージはプレースホルダーを使用します：
   - `<media:image|video|audio|document|sticker>`
 
@@ -250,7 +246,7 @@ OpenClaw 用に **別の電話番号** を使用します。UX が最良で、�
 
 ## 受信確認リアクション（受信時の自動リアクション）
 
-WhatsApp は、ボットが返信を生成する前に、受信直後に絵文字リアクションを自動送信できます。これにより、ユーザーに即時の受信フィードバックを提供します。
+WhatsApp は、ボットが返信を生成する前に、受信直後に絵文字リアクションを自動送信できます。これにより、ユーザーに即時の受信フィードバックを提供します。 これにより、メッセージが受信されたことをユーザーに即座にフィードバックします。
 
 **設定：**
 
@@ -268,7 +264,7 @@ WhatsApp は、ボットが返信を生成する前に、受信直後に絵文�
 
 **オプション：**
 
-- `emoji`（string）：受信確認に使用する絵文字（例：「👀」「✅」「📨」）。空または未指定の場合は無効。
+- `emoji`（string）：受信確認に使用する絵文字（例：「👀」「✅」「📨」）。空または未指定の場合は無効。 空または省略された = 機能は無効です。
 - `direct`（boolean、デフォルト：`true`）：ダイレクト／DM チャットでリアクションを送信。
 - `group`（string、デフォルト：`"mentions"`）：グループチャットの挙動：
   - `"always"`：すべてのグループメッセージにリアクション（@メンションなしでも）
@@ -332,7 +328,7 @@ WhatsApp は、ボットが返信を生成する前に、受信直後に絵文�
 
 WhatsApp は音声を **ボイスノート**（PTT バブル）として送信します。
 
-- 最良の結果：OGG/Opus。OpenClaw は `audio/ogg` を `audio/ogg; codecs=opus` に書き換えます。
+- 最高の結果:OGG/Opus。 最良の結果：OGG/Opus。OpenClaw は `audio/ogg` を `audio/ogg; codecs=opus` に書き換えます。
 - `[[audio_as_voice]]` は WhatsApp では無視されます（音声は既にボイスノートとして送信されるため）。
 
 ## メディア制限 + 最適化
@@ -360,7 +356,7 @@ WhatsApp は音声を **ボイスノート**（PTT バブル）として送信�
 
 - `channels.whatsapp.dmPolicy`（DM ポリシー：pairing/allowlist/open/disabled）。
 - `channels.whatsapp.selfChatMode`（同一端末セットアップ；ボットが個人の WhatsApp 番号を使用）。
-- `channels.whatsapp.allowFrom`（DM 許可リスト）。WhatsApp は E.164 電話番号を使用します（ユーザー名なし）。
+- `channels.whatsapp.allowFrom` (DM allowlist). `channels.whatsapp.allowFrom`（DM 許可リスト）。WhatsApp は E.164 電話番号を使用します（ユーザー名なし）。
 - `channels.whatsapp.mediaMaxMb`（受信メディア保存上限）。
 - `channels.whatsapp.ackReaction`（受信時の自動リアクション：`{emoji, direct, group}`）。
 - `channels.whatsapp.accounts.<accountId>.*`（アカウント別設定 + 任意の `authDir`）。
@@ -369,7 +365,7 @@ WhatsApp は音声を **ボイスノート**（PTT バブル）として送信�
 - `channels.whatsapp.groupAllowFrom`（グループ送信者許可リスト）。
 - `channels.whatsapp.groupPolicy`（グループポリシー）。
 - `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit`（グループ履歴コンテキスト；`0` で無効化）。
-- `channels.whatsapp.dmHistoryLimit`（DM 履歴上限（ユーザーターン数））。ユーザー別上書き：`channels.whatsapp.dms["<phone>"].historyLimit`。
+- `channels.whatsapp.dmHistoryLimit`（DM 履歴上限（ユーザーターン数））。ユーザー別上書き：`channels.whatsapp.dms["<phone>"].historyLimit`。 `channels.imessage.dmHistoryLimit`: ユーザー ターン数での DM 履歴上限。ユーザーごとの上書き: `channels.whatsapp.dms["<phone>"].historyLimit`。
 - `channels.whatsapp.groups`（グループ許可リスト + メンションゲーティングのデフォルト；全許可は `"*"`）。
 - `channels.whatsapp.actions.reactions`（WhatsApp ツールのリアクションをゲート）。
 - `agents.list[].groupChat.mentionPatterns`（または `messages.groupChat.mentionPatterns`）。
@@ -404,9 +400,10 @@ WhatsApp は音声を **ボイスノート**（PTT バブル）として送信�
 **リンク済みだが切断／再接続ループ**
 
 - 症状：`channels status` に `running, disconnected` が表示される、または「Linked but disconnected」と警告される。
-- 対処：`openclaw doctor`（またはゲートウェイを再起動）。改善しない場合は `channels login` で再リンクし、`openclaw logs --follow` を確認してください。
+- 修正: `openclaw doctor` (またはゲートウェイを再起動) それが続く場合は、 `channels login` 経由でrelinkし、 `openclawログ --follow` を調べてください。
 
 **Bun ランタイム**
 
-- Bun は **非推奨** です。WhatsApp（Baileys）と Telegram は Bun では不安定です。  
+- Bun は **推奨されません** 。 Bun は **非推奨** です。WhatsApp（Baileys）と Telegram は Bun では不安定です。  
   **Node** でゲートウェイを実行してください。（Getting Started のランタイム注記を参照。）
+  **Node** でゲートウェイを実行します。 (ランタイムノート入門を参照してください。

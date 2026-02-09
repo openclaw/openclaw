@@ -3,13 +3,6 @@ summary: "Архитектура IPC macOS для приложения OpenClaw,
 read_when:
   - Редактирование контрактов IPC или IPC приложения в строке меню
 title: "IPC macOS"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:51Z
 ---
 
 # Архитектура IPC OpenClaw для macOS
@@ -59,7 +52,7 @@ Agent -> Gateway -> Node Service (WS)
   - Запись/инициализация/перезапуск LaunchAgent
 - Единственный экземпляр: приложение завершает работу на раннем этапе, если уже запущен другой экземпляр с тем же bundle ID.
 
-## Примечания по усилению защиты
+## Заметки о твердости
 
 - Предпочтительно требовать совпадение TeamID для всех привилегированных поверхностей.
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (только DEBUG) может разрешать вызовы от процессов с тем же UID для локальной разработки.

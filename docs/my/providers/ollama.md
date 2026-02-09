@@ -4,18 +4,11 @@ read_when:
   - Ollama မှတစ်ဆင့် local မော်ဒယ်များဖြင့် OpenClaw ကို လည်ပတ်လိုပါက
   - Ollama ကို တပ်ဆင်ခြင်းနှင့် ဖွဲ့စည်းပြင်ဆင်ခြင်းအတွက် လမ်းညွှန်ချက်များ လိုအပ်ပါက
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:04Z
 ---
 
 # Ollama
 
-Ollama သည် သင့်စက်ပေါ်တွင် open-source မော်ဒယ်များကို လွယ်ကူစွာ လည်ပတ်နိုင်စေရန် အထောက်အကူပြုသော local LLM runtime တစ်ခု ဖြစ်သည်။ OpenClaw သည် Ollama ၏ OpenAI-compatible API နှင့် ပေါင်းစည်းထားပြီး `OLLAMA_API_KEY` (သို့မဟုတ် auth profile) ကို သုံးရန် ရွေးချယ်ထားပြီး တိတိကျကျ `models.providers.ollama` ကို မသတ်မှတ်ထားပါက **tool အသုံးပြုနိုင်သော မော်ဒယ်များကို အလိုအလျောက် ရှာဖွေတွေ့ရှိနိုင်သည်**။
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Quick start
 
@@ -181,7 +174,7 @@ Ollama သည် အခမဲ့ဖြစ်ပြီး local တွင် လ�
 
 ### Streaming Configuration
 
-Ollama ၏ response format နှင့် ဆိုင်သော underlying SDK ထဲရှိ [known issue](https://github.com/badlogic/pi-mono/issues/1205) ကြောင့် Ollama မော်ဒယ်များအတွက် **streaming ကို default အနေဖြင့် ပိတ်ထားပါသည်**။ ၎င်းသည် tool-capable မော်ဒယ်များကို အသုံးပြုရာတွင် response များ ပျက်စီးခြင်းကို ကာကွယ်ပေးပါသည်။
+Due to a [known issue](https://github.com/badlogic/pi-mono/issues/1205) in the underlying SDK with Ollama's response format, **streaming is disabled by default** for Ollama models. This prevents corrupted responses when using tool-capable models.
 
 streaming ကို ပိတ်ထားသောအခါ response များကို တစ်ခါတည်း (non-streaming mode) ဖြင့် ပို့ဆောင်မည် ဖြစ်ပြီး content/reasoning deltas များ ပေါင်းသွားကာ output မပျက်စီးစေရန် ကူညီပါသည်။
 
@@ -223,7 +216,7 @@ Ollama အတွက် streaming ကို ပြန်ဖွင့်လို�
 
 ### Context windows
 
-auto-discovery ဖြင့် ရရှိသော မော်ဒယ်များအတွက် OpenClaw သည် Ollama က အစီရင်ခံသော context window ကို ရရှိပါက အသုံးပြုပြီး မရရှိပါက `8192` ကို default အဖြစ် သုံးပါသည်။ explicit provider config တွင် `contextWindow` နှင့် `maxTokens` ကို override လုပ်နိုင်ပါသည်။
+For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it defaults to `8192`. You can override `contextWindow` and `maxTokens` in explicit provider config.
 
 ## Troubleshooting
 
@@ -243,7 +236,7 @@ curl http://localhost:11434/api/tags
 
 ### မော်ဒယ်များ မရရှိနိုင်ခြင်း
 
-OpenClaw သည် tool support ကို အစီရင်ခံသော မော်ဒယ်များကိုသာ auto-discover လုပ်ပါသည်။ သင့်မော်ဒယ်ကို မတွေ့ပါက-
+OpenClaw only auto-discovers models that report tool support. If your model isn't listed, either:
 
 - tool-capable မော်ဒယ်တစ်ခုကို pull လုပ်ပါ၊ သို့မဟုတ်
 - `models.providers.ollama` တွင် မော်ဒယ်ကို လက်ဖြင့် သတ်မှတ်ပါ။
@@ -270,7 +263,7 @@ ollama serve
 
 ### Response များ ပျက်စီးခြင်း သို့မဟုတ် output ထဲတွင် tool အမည်များ ပေါ်လာခြင်း
 
-Ollama မော်ဒယ်များကို အသုံးပြုရာတွင် `sessions_send`, `memory_get` ကဲ့သို့သော tool အမည်များ ပါဝင်သည့် response များ ပျက်စီးလာခြင်း သို့မဟုတ် စာသားများ အပိုင်းပိုင်း ခွဲထွက်လာခြင်းကို တွေ့ပါက streaming response များနှင့် ဆိုင်သော upstream SDK ပြဿနာကြောင့် ဖြစ်ပါသည်။ **နောက်ဆုံး OpenClaw version တွင် Ollama မော်ဒယ်များအတွက် streaming ကို ပိတ်ထားခြင်းဖြင့် default အနေဖြင့် ဖြေရှင်းပြီးသား ဖြစ်ပါသည်**။
+If you see garbled responses containing tool names (like `sessions_send`, `memory_get`) or fragmented text when using Ollama models, this is due to an upstream SDK issue with streaming responses. **This is fixed by default** in the latest OpenClaw version by disabling streaming for Ollama models.
 
 သင် streaming ကို လက်ဖြင့် ဖွင့်ထားပြီး ဤပြဿနာကို ကြုံတွေ့ပါက-
 

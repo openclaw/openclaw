@@ -5,13 +5,6 @@ read_when:
   - Klärung von Sitzungen, Warteschlangenmodi oder Streaming-Verhalten
   - Dokumentation der Sichtbarkeit der Begründung und der Nutzungsauswirkungen
 title: "Nachrichten"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:01Z
 ---
 
 # Nachrichten
@@ -87,7 +80,7 @@ maßgebliche Quelle.
 
 Details: [Sitzungsverwaltung](/concepts/session).
 
-## Eingehende Inhalte und Verlaufskontext
+## Eingehende Körper und Verlaufskontext
 
 OpenClaw trennt den **Prompt-Body** vom **Command-Body**:
 
@@ -112,7 +105,8 @@ die bereits im Sitzungstranskript enthalten sind.
 Das Entfernen von Direktiven gilt nur für den Abschnitt der **aktuellen Nachricht**, sodass der
 Verlauf intakt bleibt. Kanäle, die Verlauf einbetten, sollten `CommandBody` (oder
 `RawBody`) auf den ursprünglichen Nachrichtentext setzen und `Body` als
-kombinierten Prompt beibehalten. Verlaufspuffer sind über `messages.groupChat.historyLimit` (globaler
+kombinierten Prompt beibehalten.
+Verlaufspuffer sind über `messages.groupChat.historyLimit` (globaler
 Standard) und kanalweise Überschreibungen wie `channels.slack.historyLimit` oder
 `channels.telegram.accounts.<id>.historyLimit` konfigurierbar (zum Deaktivieren `0` setzen).
 

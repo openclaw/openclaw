@@ -4,13 +4,6 @@ read_when:
   - Вам нужно входить на сайты для автоматизации браузера
   - Вы хотите публиковать обновления в X/Twitter
 title: "Вход в браузер"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:58Z
 ---
 
 # Вход в браузер + публикации в X/Twitter

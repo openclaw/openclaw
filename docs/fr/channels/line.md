@@ -5,13 +5,6 @@ read_when:
   - Vous avez besoin de la configuration des webhooks et des identifiants LINE
   - Vous souhaitez utiliser des options de message spécifiques à LINE
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 8fbac126786f95b9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:34Z
 ---
 
 # LINE (plugin)
@@ -52,7 +45,8 @@ https://gateway-host/line/webhook
 ```
 
 La Gateway (passerelle) répond à la vérification de webhook de LINE (GET) et aux
-événements entrants (POST). Si vous avez besoin d’un chemin personnalisé, définissez
+événements entrants (POST).
+Si vous avez besoin d’un chemin personnalisé, définissez
 `channels.line.webhookPath` ou `channels.line.accounts.<id>.webhookPath` et mettez l’URL à jour en conséquence.
 
 ## Configurer
@@ -184,7 +178,7 @@ messages Flex :
 /card info "Welcome" "Thanks for joining!"
 ```
 
-## Dépannage
+## Problemes courants
 
 - **Échec de la vérification du webhook :** assurez-vous que l’URL du webhook est en
   HTTPS et que `channelSecret` correspond à la console LINE.

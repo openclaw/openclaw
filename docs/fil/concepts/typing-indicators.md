@@ -3,20 +3,13 @@ summary: "Kailan nagpapakita ang OpenClaw ng mga indikator ng pagta-type at kung
 read_when:
   - Binabago ang behavior o mga default ng typing indicator
 title: "Mga Indikador ng Pagta-type"
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Mga indikator ng pagta-type
 
-Ang mga typing indicator ay ipinapadala sa chat channel habang aktibo ang isang run. Gamitin
-ang `agents.defaults.typingMode` para kontrolin **kung kailan** magsisimula ang pagta-type at ang `typingIntervalSeconds`
-para kontrolin **kung gaano kadalas** ito nire-refresh.
+Typing indicators are sent to the chat channel while a run is active. Use
+`agents.defaults.typingMode` to control **when** typing starts and `typingIntervalSeconds`
+to control **how often** it refreshes.
 
 ## Mga default
 
@@ -68,8 +61,8 @@ Maaari mong i-override ang mode o cadence kada session:
 
 - Ang `message` mode ay hindi magpapakita ng pagta-type para sa mga silent-only na reply (hal. ang `NO_REPLY`
   token na ginagamit para pigilan ang output).
-- Ang `thinking` ay nagfa-fire lang kung ang run ay nag-i-stream ng reasoning (`reasoningLevel: "stream"`).
-  Kung hindi nag-e-emit ng reasoning deltas ang model, hindi magsisimula ang pagta-type.
+- `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
+  If the model doesn’t emit reasoning deltas, typing won’t start.
 - Ang mga heartbeat ay hindi kailanman nagpapakita ng pagta-type, anuman ang mode.
-- Kinokontrol ng `typingIntervalSeconds` ang **refresh cadence**, hindi ang oras ng pagsisimula.
-  Ang default ay 6 na segundo.
+- `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
+  The default is 6 seconds.

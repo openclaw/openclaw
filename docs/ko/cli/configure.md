@@ -3,13 +3,6 @@ summary: "`openclaw configure`를 위한 CLI 참조 (대화형 구성 프롬프�
 read_when:
   - 자격 증명, 디바이스 또는 에이전트 기본값을 대화형으로 조정하려는 경우
 title: "configure"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:15Z
 ---
 
 # `openclaw configure`

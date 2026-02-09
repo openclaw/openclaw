@@ -1,13 +1,6 @@
 ---
 summary: "Jak przesłać PR o wysokiej wartości informacyjnej"
 title: "Przesyłanie PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:16Z
 ---
 
 Dobre PR-y są łatwe do przeglądu: recenzenci powinni szybko zrozumieć intencję, zweryfikować zachowanie i bezpiecznie wdrożyć zmiany. Ten przewodnik opisuje zwięzłe, wysokiej jakości zgłoszenia do przeglądu przez ludzi i LLM-y.
@@ -280,7 +273,7 @@ pnpm format
 - Agent notes:
 ```
 
-### Wydajność
+### Perf
 
 ```md
 #### Summary

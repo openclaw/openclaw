@@ -4,27 +4,20 @@ read_when:
   - Opdatering af udbyderes retry-adfærd eller standarder
   - Fejlfinding af fejl ved afsendelse hos udbydere eller rate limits
 title: "Retry-politik"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:05Z
 ---
 
 # Retry-politik
 
 ## Mål
 
-- Retry pr. HTTP-forespørgsel, ikke pr. flertrinsflow.
+- Prøv igen pr. HTTP-anmodning, ikke pr. flertrins flow.
 - Bevar rækkefølgen ved kun at retry det aktuelle trin.
 - Undgå at duplikere ikke-idempotente operationer.
 
 ## Standarder
 
 - Forsøg: 3
-- Maks. forsinkelsesloft: 30000 ms
+- Maks. forsinkelse hætte: 30000 ms
 - Jitter: 0,1 (10 procent)
 - Udbyderstandarder:
   - Telegram min. forsinkelse: 400 ms

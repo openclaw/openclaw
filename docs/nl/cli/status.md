@@ -4,13 +4,6 @@ read_when:
   - Je wilt een snelle diagnose van kanaalstatus + recente sessie-ontvangers
   - Je wilt een plakklare “alles”-status voor debugging
 title: "status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:10Z
 ---
 
 # `openclaw status`

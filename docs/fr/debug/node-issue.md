@@ -4,13 +4,6 @@ read_when:
   - Debogage de scripts de dev Node uniquement ou d’echecs en mode watch
   - Investigation des crashs du chargeur tsx/esbuild dans OpenClaw
 title: "Crash Node + tsx"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f9e9bd2281508337
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:32Z
 ---
 
 # Node + tsx "\_\_name is not a function" crash
@@ -68,13 +61,18 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Workarounds
 
 - Utiliser Bun pour les scripts de dev (retour temporaire actuel).
+
 - Utiliser Node + tsc en mode watch, puis executer la sortie compilee :
+
   ```bash
   pnpm exec tsc --watch --preserveWatchOutput
   node --watch openclaw.mjs status
   ```
+
 - Confirme localement : `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` fonctionne avec Node 25.
+
 - Desactiver keepNames d’esbuild dans le chargeur TS si possible (empeche l’insertion du helper `__name`) ; tsx ne l’expose pas actuellement.
+
 - Tester Node LTS (22/24) avec `tsx` pour voir si le probleme est specifique a Node 25.
 
 ## References

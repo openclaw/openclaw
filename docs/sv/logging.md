@@ -5,13 +5,6 @@ read_when:
   - Du vill konfigurera loggnivåer eller format
   - Du felsöker och behöver hitta loggar snabbt
 title: "Loggning"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:01Z
 ---
 
 # Loggning
@@ -75,8 +68,8 @@ openclaw doctor
 
 ### Control UI (webb)
 
-Control UI:s flik **Logs** tailar samma fil med hjälp av `logs.tail`.
-Se [/web/control-ui](/web/control-ui) för hur du öppnar den.
+Control UI: s **Loggar** fliken svansar samma fil med `logs.tail`.
+Se [/web/control-ui](/web/control-ui) för hur man öppnar den.
 
 ### Kanal‑endast‑loggar
 
@@ -90,14 +83,14 @@ openclaw channels logs --channel whatsapp
 
 ### Filloggar (JSONL)
 
-Varje rad i loggfilen är ett JSON‑objekt. CLI:t och Control UI tolkar dessa
-poster för att rendera strukturerad utdata (tid, nivå, delsystem, meddelande).
+Varje rad i loggfilen är ett JSON-objekt. CLI och Control UI tolkar dessa
+poster för att återge strukturerad utdata (tid, nivå, delsystem, meddelande).
 
 ### Konsolutdata
 
 Konsolloggar är **TTY‑medvetna** och formaterade för läsbarhet:
 
-- Prefix för delsystem (t.ex. `gateway/channels/whatsapp`)
+- Prefix för delsystem (t.ex. 'gateway/channels/whatsapp')
 - Nivåfärgning (info/warn/error)
 - Valfritt kompakt‑ eller JSON‑läge
 
@@ -146,10 +139,9 @@ Maskering påverkar **endast konsolutdata** och ändrar inte filloggar.
 
 ## Diagnostik + OpenTelemetry
 
-Diagnostik är strukturerade, maskinläsbara händelser för modellkörningar **och**
-telemetri för meddelandeflöden (webhooks, köhantering, sessionstillstånd). De
-ersätter **inte** loggar; de finns för att mata mätvärden, spårningar och andra
-exportörer.
+Diagnostik är strukturerad, maskinläsbara händelser för modellkörningar **och**
+meddelandeflödestelemetri (webbkrokar, köer, sessionsläge). De ersätter **inte**
+stockar; de finns för att mata mätvärden, spår och andra exportörer.
 
 Diagnostikhändelser emitteras i processen, men exportörer kopplas endast på när
 diagnostik **och** exportörspluginen är aktiverade.
@@ -165,8 +157,8 @@ diagnostik **och** exportörspluginen är aktiverade.
 
 - **Mätvärden**: räknare + histogram (tokenanvändning, meddelandeflöde, köhantering).
 - **Spår**: spann för modell‑användning + webhook-/meddelandebearbetning.
-- **Loggar**: exporteras över OTLP när `diagnostics.otel.logs` är aktiverat. Loggvolymen
-  kan vara hög; tänk på `logging.level` och filter i exportören.
+- **Loggar**: exporteras över OTLP när `diagnostics.otel.logs` är aktiverat. Log
+  volym kan vara hög; tänk på `logging.level` och exportörens filter.
 
 ### Katalog över diagnostikhändelser
 
@@ -206,9 +198,8 @@ egna sinks:
 
 ### Diagnostikflaggor (riktade loggar)
 
-Använd flaggor för att slå på extra, riktade debug‑loggar utan att höja
-`logging.level`. Flaggor är skiftlägesokänsliga och stöder jokertecken (t.ex.
-`telegram.*` eller `*`).
+Använd flaggor för att slå på extra, riktade debug-loggar utan att höja `logging.level`.
+Flaggor är skiftlägesokänsliga och stöder jokertecken (t.ex. `telegram.*` eller `*`).
 
 ```json
 {
@@ -232,8 +223,8 @@ Noteringar:
 
 ### Exportera till OpenTelemetry
 
-Diagnostik kan exporteras via pluginet `diagnostics-otel` (OTLP/HTTP). Detta fungerar
-med valfri OpenTelemetry‑collector/backend som accepterar OTLP/HTTP.
+Diagnostik kan exporteras via pluginen `diagnostics-otel` (OTLP / HTTP). Detta
+fungerar med alla OpenTelemetry collector/backend som accepterar OTLP/HTTP.
 
 ```json
 {
@@ -265,14 +256,12 @@ med valfri OpenTelemetry‑collector/backend som accepterar OTLP/HTTP.
 Noteringar:
 
 - Du kan också aktivera pluginet med `openclaw plugins enable diagnostics-otel`.
-- `protocol` stöder för närvarande endast `http/protobuf`. `grpc`
-  ignoreras.
+- `protocol` stöder för närvarande endast `http/protobuf`. `grpc` ignoreras.
 - Mätvärden inkluderar tokenanvändning, kostnad, kontextstorlek, körningstid samt
   räknare/histogram för meddelandeflöde (webhooks, köhantering, sessionstillstånd,
   ködjup/väntetid).
-- Spår/mätvärden kan växlas med `traces` / `metrics` (standard: på).
-  Spår inkluderar spann för modell‑användning samt webhook-/meddelandebearbetning
-  när aktiverat.
+- Traces/metrics kan växlas med `traces` / `metrics` (standard: on). Spår
+  inkluderar modellanvändningsområden plus webbhook/meddelandehantering när aktiverad.
 - Sätt `headers` när din collector kräver autentisering.
 - Miljövariabler som stöds: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
 
@@ -354,8 +343,8 @@ Köer + sessioner:
 
 - OTLP‑loggar använder samma strukturerade poster som skrivs till
   `logging.file`.
-- Respekterar `logging.level` (filloggnivå). Konsolmaskering gäller **inte** för
-  OTLP‑loggar.
+- Respektera `logging.level` (filloggnivå). Konsolens redaction applicerar **inte**
+  till OTLP-loggar.
 - Installationer med hög volym bör föredra sampling/filtrering i OTLP‑collector.
 
 ## Felsökningstips

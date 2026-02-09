@@ -5,18 +5,11 @@ read_when:
   - سورس سے iOS ایپ چلانا
   - گیٹ وے ڈسکوری یا کینوس کمانڈز کی ڈیبگنگ
 title: "iOS ایپ"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:28Z
 ---
 
 # iOS ایپ (نوڈ)
 
-دستیابی: اندرونی پیش منظر۔ iOS ایپ ابھی عوامی طور پر تقسیم نہیں کی گئی۔
+Availability: internal preview. 37. iOS ایپ ابھی عوامی طور پر تقسیم نہیں کی گئی۔
 
 ## یہ کیا کرتی ہے
 
@@ -60,12 +53,12 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-Gateway، `local.` پر `_openclaw-gw._tcp` کی تشہیر کرتا ہے۔ iOS ایپ انہیں خودکار طور پر فہرست میں دکھاتی ہے۔
+38. گیٹ وے `local.` پر `_openclaw-gw._tcp` کی تشہیر کرتا ہے۔ 39. iOS ایپ انہیں خودکار طور پر فہرست میں دکھاتی ہے۔
 
 ### Tailnet (کراس-نیٹ ورک)
 
-اگر mDNS بلاک ہو، تو unicast DNS-SD زون استعمال کریں (ایک ڈومین منتخب کریں؛ مثال: `openclaw.internal.`) اور Tailscale اسپلٹ DNS۔
-CoreDNS کی مثال کے لیے [Bonjour](/gateway/bonjour) دیکھیں۔
+40. اگر mDNS بلاک ہو تو unicast DNS-SD زون استعمال کریں (ایک ڈومین منتخب کریں؛ مثال: `openclaw.internal.`) اور Tailscale split DNS۔
+41. CoreDNS مثال کے لیے دیکھیں [Bonjour](/gateway/bonjour).
 
 ### دستی ہوسٹ/پورٹ
 
@@ -73,7 +66,7 @@ Settings میں **Manual Host** فعال کریں اور گیٹ وے ہوسٹ + 
 
 ## کینوس + A2UI
 
-iOS نوڈ ایک WKWebView کینوس رینڈر کرتا ہے۔ اسے چلانے کے لیے `node.invoke` استعمال کریں:
+The iOS node renders a WKWebView canvas. 43. اسے کنٹرول کرنے کے لیے `node.invoke` استعمال کریں:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

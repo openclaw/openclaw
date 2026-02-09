@@ -3,13 +3,6 @@ summary: "Estado de soporte de Matrix, capacidades y configuración"
 read_when:
   - Al trabajar en funciones del canal Matrix
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:50Z
 ---
 
 # Matrix (plugin)
@@ -48,10 +41,13 @@ Detalles: [Plugins](/tools/plugin)
 1. Instale el plugin de Matrix:
    - Desde npm: `openclaw plugins install @openclaw/matrix`
    - Desde un checkout local: `openclaw plugins install ./extensions/matrix`
+
 2. Cree una cuenta de Matrix en un homeserver:
    - Explore opciones de alojamiento en [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - O alójelo usted mismo.
+
 3. Obtenga un token de acceso para la cuenta del bot:
+
    - Use la API de inicio de sesión de Matrix con `curl` en su homeserver:
 
    ```bash
@@ -79,7 +75,9 @@ Detalles: [Plugins](/tools/plugin)
    - Si ambos están definidos, la configuración tiene prioridad.
    - Con token de acceso: el ID de usuario se obtiene automáticamente vía `/whoami`.
    - Cuando se establece, `channels.matrix.userId` debe ser el ID completo de Matrix (ejemplo: `@bot:example.org`).
+
 5. Reinicie el Gateway (o finalice el onboarding).
+
 6. Inicie un mensaje directo con el bot o invítelo a una sala desde cualquier cliente de Matrix
    (Element, Beeper, etc.; consulte [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requiere E2EE,
    así que configure `channels.matrix.encryption: true` y verifique el dispositivo.
@@ -122,7 +120,7 @@ El cifrado de extremo a extremo está **soportado** mediante el SDK criptográfi
 Habilítelo con `channels.matrix.encryption: true`:
 
 - Si el módulo criptográfico se carga, las salas cifradas se descifran automáticamente.
-- Los medios salientes se cifran al enviarse a salas cifradas.
+- Los medios salientes se cifran cuando se envían a salas cifradas.
 - En la primera conexión, OpenClaw solicita verificación del dispositivo desde sus otras sesiones.
 - Verifique el dispositivo en otro cliente de Matrix (Element, etc.) para habilitar el intercambio de claves.
 - Si el módulo criptográfico no puede cargarse, E2EE se deshabilita y las salas cifradas no se descifrarán;
@@ -197,17 +195,17 @@ Una vez verificado, el bot puede descifrar mensajes en salas cifradas.
 
 ## Capacidades
 
-| Función           | Estado                                                                                          |
-| ----------------- | ----------------------------------------------------------------------------------------------- |
-| Mensajes directos | ✅ Compatible                                                                                   |
-| Salas             | ✅ Compatible                                                                                   |
-| Hilos             | ✅ Compatible                                                                                   |
-| Medios            | ✅ Compatible                                                                                   |
+| Función           | Estado                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Mensajes directos | ✅ Compatible                                                                                                      |
+| Salas             | ✅ Compatible                                                                                                      |
+| Hilos             | ✅ Compatible                                                                                                      |
+| Medios            | ✅ Compatible                                                                                                      |
 | E2EE              | ✅ Compatible (se requiere módulo criptográfico)                                                |
 | Reacciones        | ✅ Compatible (enviar/leer mediante herramientas)                                               |
 | Encuestas         | ✅ Envío compatible; los inicios entrantes se convierten a texto (respuestas/finales ignorados) |
 | Ubicación         | ✅ Compatible (URI geo; altitud ignorada)                                                       |
-| Comandos nativos  | ✅ Compatible                                                                                   |
+| Comandos nativos  | ✅ Compatible                                                                                                      |
 
 ## Solución de problemas
 

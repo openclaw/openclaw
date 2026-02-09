@@ -3,13 +3,6 @@ summary: "Bezpośrednie uruchomienia CLI `openclaw agent` (z opcjonalnym dostarc
 read_when:
   - Dodawanie lub modyfikowanie punktu wejścia CLI agenta
 title: "Wysyłanie agenta"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:42Z
 ---
 
 # `openclaw agent` (bezpośrednie uruchomienia agenta)

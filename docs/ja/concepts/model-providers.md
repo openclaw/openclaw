@@ -4,19 +4,13 @@ read_when:
   - プロバイダー別のモデルセットアップ参照が必要な場合
   - モデルプロバイダー向けの設定例や CLI オンボーディングコマンドが欲しい場合
 title: "モデルプロバイダー"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:33Z
 ---
 
 # モデルプロバイダー
 
 このページでは **LLM／モデルプロバイダー** を扱います（WhatsApp／Telegram などのチャットチャンネルではありません）。
 モデル選択のルールについては [/concepts/models](/concepts/models) を参照してください。
+モデル選択ルールについては、[/concepts/models](/concepts/models) を参照してください。
 
 ## クイックルール
 
@@ -26,7 +20,7 @@ x-i18n:
 
 ## 組み込みプロバイダー（pi-ai カタログ）
 
-OpenClaw には pi‑ai カタログが同梱されています。これらのプロバイダーは
+pi-aiカタログを持つOpenClaw船。 OpenClaw には pi‑ai カタログが同梱されています。これらのプロバイダーは
 `models.providers` の設定を **必要としません**。認証を設定してモデルを選択するだけです。
 
 ### OpenAI
@@ -99,7 +93,8 @@ OpenClaw には pi‑ai カタログが同梱されています。これらの�
   - 有効化: `openclaw plugins enable google-gemini-cli-auth`
   - ログイン: `openclaw models auth login --provider google-gemini-cli --set-default`
   - 注記: `openclaw.json` にクライアント ID やシークレットを **貼り付けません**。CLI のログインフローは、
-    トークンをゲートウェイ ホスト上の認証プロファイルに保存します。
+    トークンをゲートウェイ ホスト上の認証プロファイルに保存します。 CLIログインフローは、ゲートウェイホストの認証プロファイルに
+    トークンを格納します。
 
 ### Z.AI（GLM）
 
@@ -192,6 +187,7 @@ Kimi Coding は Moonshot AI の Anthropic 互換エンドポイントを使用�
 
 Qwen はデバイスコードフローを介して、Qwen Coder + Vision への OAuth アクセスを提供します。
 バンドルされたプラグインを有効化してから、ログインしてください。
+バンドルされたプラグインを有効にして、ログイン：
 
 ```bash
 openclaw plugins enable qwen-portal-auth
@@ -264,7 +260,7 @@ ollama pull llama3.3
 }
 ```
 
-Ollama は、`http://127.0.0.1:11434/v1` でローカル実行している場合に自動検出されます。モデルの推奨事項やカスタム設定については [/providers/ollama](/providers/ollama) を参照してください。
+Ollama は、`http://127.0.0.1:11434/v1` でローカル実行している場合に自動検出されます。モデルの推奨事項やカスタム設定については [/providers/ollama](/providers/ollama) を参照してください。 モデルの推奨とカスタム設定については、[/providers/ollama](/providers/ollama)を参照してください。
 
 ### ローカルプロキシ（LM Studio、vLLM、LiteLLM など）
 
@@ -305,6 +301,7 @@ Ollama は、`http://127.0.0.1:11434/v1` でローカル実行している場合
 
 - カスタムプロバイダーの場合、`reasoning`、`input`、`cost`、`contextWindow`、および `maxTokens` は任意です。
   省略した場合、OpenClaw は次の既定値を使用します。
+  省略された場合、OpenClawのデフォルトは次のようになります:
   - `reasoning: false`
   - `input: ["text"]`
   - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`

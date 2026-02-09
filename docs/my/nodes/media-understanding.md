@@ -4,18 +4,11 @@ read_when:
   - မီဒီယာနားလည်မှုကို ဒီဇိုင်းဆွဲခြင်း သို့မဟုတ် ပြန်လည်ဖွဲ့စည်းခြင်း ပြုလုပ်နေချိန်
   - ဝင်လာသော အသံ/ဗီဒီယို/ရုပ်ပုံ အကြိုလုပ်ဆောင်မှုများကို ချိန်ညှိနေချိန်
 title: "မီဒီယာ နားလည်မှု"
-x-i18n:
-  source_path: nodes/media-understanding.md
-  source_hash: 4b275b152060eae3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:03Z
 ---
 
 # မီဒီယာ နားလည်မှု (ဝင်လာသော) — 2026-01-17
 
-OpenClaw သည် ပြန်ကြားချက် pipeline ကို မပြေးဆွဲမီ **ဝင်လာသော မီဒီယာ** (ရုပ်ပုံ/အသံ/ဗီဒီယို) ကို **အကျဉ်းချုပ်ဖော်ပြနိုင်** ပါသည်။ local ကိရိယာများ သို့မဟုတ် provider key များ ရရှိနိုင်ပါက အလိုအလျောက် သိရှိပြီး အသုံးပြုကာ၊ ပိတ်ထားနိုင်ခြင်း သို့မဟုတ် စိတ်ကြိုက်ပြင်ဆင်နိုင်ပါသည်။ နားလည်မှုကို ပိတ်ထားပါက မော်ဒယ်များသည် မူလ ဖိုင်များ/URL များကို ယခင်အတိုင်း လက်ခံရရှိနေဆဲဖြစ်ပါသည်။
+35. local tools သို့မဟုတ် provider keys ရရှိနိုင်ပါက auto-detect လုပ်ပြီး disable လုပ်ခြင်း သို့မဟုတ် customize လုပ်ခြင်းကို လုပ်နိုင်သည်။ 36. understanding ကို ပိတ်ထားပါက model များသည် မူရင်း files/URLs များကို ပုံမှန်အတိုင်း ဆက်လက်လက်ခံရရှိမည်ဖြစ်သည်။ 37. `prompt` သည် default အနေဖြင့် “Describe the {media}.” ကို အသုံးပြုပြီး `maxChars` guidance (image/video only) ကို ပေါင်းထည့်ထားသည်။
 
 ## ရည်မှန်းချက်များ
 
@@ -130,14 +123,13 @@ CLI template များတွင် အောက်ပါအချက်မျ
 
 - မီဒီယာသည် `maxBytes` ကို ကျော်လွန်ပါက ထိုမော်ဒယ်ကို ကျော်ပြီး **နောက်မော်ဒယ်ကို စမ်းသပ်** ပါသည်။
 - မော်ဒယ်က `maxChars` ထက် ပိုမို ပြန်ပေးပါက output ကို ဖြတ်တောက်ပါသည်။
-- `prompt` သည် မူလအားဖြင့် “Describe the {media}.” နှင့် `maxChars` လမ်းညွှန်ချက် (image/video သာ) ကို အသုံးပြုပါသည်။
+- 38. \`tools.media.<capability>
 - `<capability>.enabled: true` ဖြစ်ပြီး မော်ဒယ်များ မဖွဲ့စည်းထားပါက OpenClaw သည်
   provider က capability ကို ပံ့ပိုးနိုင်သည့်အခါ **active reply model** ကို စမ်းသပ်ပါသည်။
 
 ### မီဒီယာ နားလည်မှုကို အလိုအလျောက် သိရှိခြင်း (မူလ)
 
-`tools.media.<capability>.enabled` ကို `false` သို့ မသတ်မှတ်ထားပါက နှင့်
-မော်ဒယ်များကို မဖွဲ့စည်းထားပါက OpenClaw သည် အောက်ပါအစီအစဉ်အတိုင်း အလိုအလျောက် သိရှိပြီး **ပထမဆုံး အလုပ်လုပ်နိုင်သော ရွေးချယ်မှုတွင် ရပ်တန့်** ပါသည်—
+39. .enabled`ကို`false`ဟု မသတ်မှတ်ထားဘဲ model များကို configure မလုပ်ထားပါက OpenClaw သည် အောက်ပါအစဉ်အတိုင်း auto-detect လုပ်ပြီး **အလုပ်လုပ်သော ပထမ option တွင် ရပ်တန့်သည်**:40.`capabilities\` ကို သတ်မှတ်ပါက entry သည် ထို media types များအတွက်သာ run လုပ်မည်ဖြစ်သည်။
 
 1. **Local CLI များ** (audio သာ; ထည့်သွင်းထားပါက)
    - `sherpa-onnx-offline` (`SHERPA_ONNX_MODEL_DIR` နှင့် encoder/decoder/joiner/tokens လိုအပ်)
@@ -167,23 +159,23 @@ CLI template များတွင် အောက်ပါအချက်မျ
 
 ## Capability များ (ရွေးချယ်နိုင်)
 
-`capabilities` ကို သတ်မှတ်ပါက entry သည် ထိုမီဒီယာအမျိုးအစားများအတွက်သာ လုပ်ဆောင်ပါသည်။ Shared စာရင်းများအတွက် OpenClaw သည် မူလသတ်မှတ်ချက်များကို ခန့်မှန်းနိုင်ပါသည်—
+41. shared lists များအတွက် OpenClaw သည် defaults များကို infer လုပ်နိုင်သည်။ 42. CLI entries များအတွက် **`capabilities` ကို တိတိကျကျ သတ်မှတ်ပါ** unexpected matches မဖြစ်စေရန်။
 
 - `openai`, `anthropic`, `minimax`: **image**
 - `google` (Gemini API): **image + audio + video**
 - `groq`: **audio**
 - `deepgram`: **audio**
 
-CLI entry များအတွက် မထင်မှတ်ထားသော ကိုက်ညီမှုများကို ရှောင်ရန် **`capabilities` ကို အတိအကျ သတ်မှတ်ပါ**။
-`capabilities` ကို မသတ်မှတ်ပါက entry သည် ပါဝင်နေသည့် စာရင်းအတွက် အရည်အချင်းပြည့်မီပါသည်။
+43. `capabilities` ကို ချန်ထားပါက entry သည် ပါဝင်နေသော list အတွက် eligible ဖြစ်သည်။
+44. Understanding သည် **best‑effort** ဖြစ်သည်။
 
 ## Provider ပံ့ပိုးမှု ဇယား (OpenClaw integration များ)
 
 | Capability | Provider integration                                    | မှတ်ချက်များ                                                           |
 | ---------- | ------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Image      | OpenAI / Anthropic / Google / `pi-ai` မှတဆင့် အခြားများ | registry ထဲရှိ image-capable မော်ဒယ် မည်သည့်အရာမဆို အလုပ်လုပ်နိုင်သည်။ |
-| Audio      | OpenAI, Groq, Deepgram, Google                          | Provider transcription (Whisper/Deepgram/Gemini)                       |
-| Video      | Google (Gemini API)                                     | Provider video နားလည်မှု                                               |
+| Audio      | OpenAI, Groq, Deepgram, Google                          | Provider transcription (Whisper/Deepgram/Gemini)    |
+| Video      | Google (Gemini API)                  | Provider video နားလည်မှု                                               |
 
 ## အကြံပြု provider များ
 
@@ -215,7 +207,7 @@ Capability တစ်ခုချင်းစီအလိုက် `attachments` 
 
 ## Config ဥပမာများ
 
-### 1) Shared models စာရင်း + override များ
+### 1. Shared models စာရင်း + override များ
 
 ```json5
 {
@@ -252,7 +244,7 @@ Capability တစ်ခုချင်းစီအလိုက် `attachments` 
 }
 ```
 
-### 2) Audio + Video သာ (image ပိတ်)
+### 2. Audio + Video သာ (image ပိတ်)
 
 ```json5
 {
@@ -292,7 +284,7 @@ Capability တစ်ခုချင်းစီအလိုက် `attachments` 
 }
 ```
 
-### 3) ရွေးချယ်နိုင်သော image နားလည်မှု
+### 3. ရွေးချယ်နိုင်သော image နားလည်မှု
 
 ```json5
 {
@@ -323,7 +315,7 @@ Capability တစ်ခုချင်းစီအလိုက် `attachments` 
 }
 ```
 
-### 4) Multi‑modal single entry (capability များကို အတိအကျ သတ်မှတ်)
+### 4. Multi‑modal single entry (capability များကို အတိအကျ သတ်မှတ်)
 
 ```json5
 {
@@ -373,7 +365,7 @@ Capability တစ်ခုချင်းစီအလိုက် `attachments` 
 
 ## မှတ်ချက်များ
 
-- နားလည်မှုသည် **best‑effort** ဖြစ်ပါသည်။ အမှားများသည် ပြန်ကြားချက်များကို မတားဆီးပါ။
+- 45. Errors များသည် replies များကို မတားဆီးပါ။ 46. pairing မရှိပါက node device ကို အရင် approve လုပ်ပါ။
 - နားလည်မှုကို ပိတ်ထားသော်လည်း attachment များကို မော်ဒယ်များသို့ ဆက်လက် ပေးပို့ပါသည်။
 - နားလည်မှု လုပ်ဆောင်မည့် နေရာများကို ကန့်သတ်ရန် `scope` ကို အသုံးပြုပါ (ဥပမာ DM များသာ)။
 

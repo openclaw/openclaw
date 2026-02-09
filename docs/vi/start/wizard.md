@@ -5,29 +5,22 @@ read_when:
   - Thiết lập một máy mới
 title: "Trình hướng dẫn Onboarding (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:20Z
 ---
 
 # Trình hướng dẫn Onboarding (CLI)
 
-Trình hướng dẫn onboarding là cách **được khuyến nghị** để thiết lập OpenClaw trên macOS,
-Linux, hoặc Windows (qua WSL2; rất khuyến nghị).
-Nó cấu hình một Gateway cục bộ hoặc kết nối Gateway từ xa, cùng với các kênh, skills,
-và các giá trị mặc định của workspace trong một luồng có hướng dẫn.
+34. Trình hướng dẫn onboarding là cách **được khuyến nghị** để thiết lập OpenClaw trên macOS,
+    Linux hoặc Windows (qua WSL2; khuyến nghị mạnh mẽ).
+35. Nó cấu hình Gateway cục bộ hoặc kết nối Gateway từ xa, cùng với các kênh, skill
+    và các giá trị mặc định của workspace trong một luồng hướng dẫn duy nhất.
 
 ```bash
 openclaw onboard
 ```
 
 <Info>
-Cách nhanh nhất để có cuộc trò chuyện đầu tiên: mở Control UI (không cần thiết lập kênh). Chạy
-`openclaw dashboard` và chat trong trình duyệt. Tài liệu: [Dashboard](/web/dashboard).
+Fastest first chat: open the Control UI (no channel setup needed). 37. Chạy
+`openclaw dashboard` và chat trong trình duyệt. 38. Tài liệu: [Dashboard](/web/dashboard).
 </Info>
 
 Để cấu hình lại sau này:
@@ -38,13 +31,13 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` không đồng nghĩa với chế độ không tương tác. Với script, hãy dùng `--non-interactive`.
+39. `--json` không đồng nghĩa với chế độ không tương tác. 32. Đối với script, hãy dùng `--non-interactive`.
 </Note>
 
 <Tip>
-Khuyến nghị: thiết lập khóa API Brave Search để tác tử có thể dùng `web_search`
-(`web_fetch` hoạt động không cần khóa). Cách dễ nhất: `openclaw configure --section web`
-lưu `tools.web.search.apiKey`. Tài liệu: [Web tools](/tools/web).
+Recommended: set up a Brave Search API key so the agent can use `web_search`
+(`web_fetch` works without a key). 42. Cách dễ nhất: `openclaw configure --section web`
+để lưu `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 </Tip>
 
 ## QuickStart vs Advanced
@@ -69,8 +62,8 @@ Trình hướng dẫn bắt đầu với **QuickStart** (mặc định) so với
 
 **Chế độ cục bộ (mặc định)** sẽ hướng dẫn bạn qua các bước sau:
 
-1. **Model/Auth** — Khóa API Anthropic (khuyến nghị), OAuth, OpenAI, hoặc nhà cung cấp khác. Chọn mô hình mặc định.
-2. **Workspace** — Vị trí cho các tệp tác tử (mặc định `~/.openclaw/workspace`). Tạo các tệp bootstrap.
+1. 44. **Model/Auth** — Anthropic API key (khuyến nghị), OAuth, OpenAI hoặc các nhà cung cấp khác. 45. Chọn một model mặc định.
+2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). 47. Tạo các tệp bootstrap ban đầu.
 3. **Gateway** — Cổng, địa chỉ bind, chế độ xác thực, phơi bày Tailscale.
 4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, hoặc iMessage.
 5. **Daemon** — Cài đặt LaunchAgent (macOS) hoặc systemd user unit (Linux/WSL2).
@@ -78,17 +71,17 @@ Trình hướng dẫn bắt đầu với **QuickStart** (mặc định) so với
 7. **Skills** — Cài đặt các skills được khuyến nghị và các phụ thuộc tùy chọn.
 
 <Note>
-Chạy lại trình hướng dẫn **không** xóa bất cứ thứ gì trừ khi bạn chủ động chọn **Reset** (hoặc truyền `--reset`).
-Nếu cấu hình không hợp lệ hoặc chứa các khóa legacy, trình hướng dẫn sẽ yêu cầu bạn chạy `openclaw doctor` trước.
+48. Chạy lại trình hướng dẫn sẽ **không** xóa bất cứ thứ gì trừ khi bạn chủ động chọn **Reset** (hoặc truyền `--reset`).
+33. Nếu cấu hình không hợp lệ hoặc chứa các khóa legacy, trình hướng dẫn sẽ yêu cầu bạn chạy `openclaw doctor` trước.
 </Note>
 
-**Chế độ từ xa** chỉ cấu hình client cục bộ để kết nối tới một Gateway ở nơi khác.
-Nó **không** cài đặt hay thay đổi bất cứ thứ gì trên máy chủ từ xa.
+50. **Chế độ Remote** chỉ cấu hình client cục bộ để kết nối tới một Gateway ở nơi khác.
+    It does **not** install or change anything on the remote host.
 
 ## Thêm một tác tử khác
 
-Dùng `openclaw agents add <name>` để tạo một tác tử riêng với workspace,
-phiên và hồ sơ xác thực của riêng nó. Chạy không kèm `--workspace` sẽ khởi chạy trình hướng dẫn.
+Use `openclaw agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 Những gì nó thiết lập:
 

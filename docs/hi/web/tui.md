@@ -4,13 +4,6 @@ read_when:
   - आप TUI के लिए शुरुआती-अनुकूल मार्गदर्शन चाहते हैं
   - आपको TUI की सभी विशेषताओं, कमांड्स और शॉर्टकट्स की पूरी सूची चाहिए
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:58Z
 ---
 
 # TUI (Terminal UI)
@@ -49,7 +42,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 ## मानसिक मॉडल: एजेंट्स + सत्र
 
-- एजेंट्स अद्वितीय स्लग होते हैं (उदा. `main`, `research`)। Gateway सूची उपलब्ध कराता है।
+- 3. एजेंट अद्वितीय स्लग होते हैं (उदा. `main`, `research`)। 4. गेटवे सूची को उपलब्ध कराता है।
 - सत्र वर्तमान एजेंट से संबंधित होते हैं।
 - सत्र कुंजियाँ `agent:<agentId>:<sessionKey>` के रूप में संग्रहीत होती हैं।
   - यदि आप `/session main` टाइप करते हैं, तो TUI इसे `agent:<currentAgent>:main` में विस्तारित करता है।
@@ -113,7 +106,7 @@ Session lifecycle:
 - `/settings`
 - `/exit`
 
-अन्य Gateway स्लैश कमांड्स (उदाहरण के लिए, `/context`) Gateway को फ़ॉरवर्ड किए जाते हैं और सिस्टम आउटपुट के रूप में दिखाए जाते हैं। देखें [Slash commands](/tools/slash-commands)।
+5. अन्य गेटवे स्लैश कमांड (उदाहरण के लिए, `/context`) गेटवे को फ़ॉरवर्ड किए जाते हैं और सिस्टम आउटपुट के रूप में दिखाए जाते हैं। 6. देखें [Slash commands](/tools/slash-commands)।
 
 ## Local shell commands
 
@@ -149,8 +142,8 @@ Session lifecycle:
 - `--thinking <level>`: भेजने के लिए thinking स्तर ओवरराइड करें
 - `--timeout-ms <ms>`: एजेंट टाइमआउट (ms में) (डिफ़ॉल्ट `agents.defaults.timeoutSeconds`)
 
-टिप्पणी: जब आप `--url` सेट करते हैं, तो TUI config या environment क्रेडेंशियल्स पर वापस नहीं जाता।
-`--token` या `--password` को स्पष्ट रूप से पास करें। स्पष्ट क्रेडेंशियल्स का अभाव एक त्रुटि है।
+7. नोट: जब आप `--url` सेट करते हैं, तो TUI कॉन्फ़िग या एनवायरनमेंट क्रेडेंशियल्स पर फ़ॉलबैक नहीं करता।
+8. `--token` या `--password` को स्पष्ट रूप से प्रदान करें। 9. स्पष्ट क्रेडेंशियल्स का न होना एक त्रुटि है।
 
 ## समस्या-निवारण
 

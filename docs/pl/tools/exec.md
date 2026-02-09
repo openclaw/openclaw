@@ -4,13 +4,6 @@ read_when:
   - Używanie lub modyfikowanie narzędzia exec
   - Debugowanie zachowania stdin lub TTY
 title: "Narzędzie Exec"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:58Z
 ---
 
 # Narzędzie exec
@@ -94,7 +87,7 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 
 Interfejs sterowania: karta Węzły zawiera mały panel „Powiązanie węzła exec” dla tych samych ustawień.
 
-## Nadpisania sesji (`/exec`)
+## Zastąpienie sesji (`/exec`)
 
 Użyj `/exec`, aby ustawić **domyślne wartości per sesję** dla `host`, `security`, `ask` i `node`.
 Wyślij `/exec` bez argumentów, aby wyświetlić bieżące wartości.

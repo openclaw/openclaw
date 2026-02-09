@@ -3,13 +3,6 @@ summary: "Jak przychodzące audio/notatki głosowe są pobierane, transkrybowane
 read_when:
   - Zmiana transkrypcji audio lub obsługi multimediów
 title: "Audio i notatki głosowe"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
 ---
 
 # Audio / Voice Notes — 2026-01-17
@@ -114,7 +107,7 @@ Uwaga: Wykrywanie binariów jest „best‑effort” na macOS/Linux/Windows; upe
 - Transkrypt jest dostępny dla szablonów jako `{{Transcript}}`.
 - Stdout CLI jest limitowany (5 MB); utrzymuj zwięzłość wyjścia CLI.
 
-## Pułapki
+## Gotchas
 
 - Zasady zakresu działają na zasadzie „pierwsze dopasowanie wygrywa”. `chatType` jest normalizowane do `direct`, `group` lub `room`.
 - Upewnij się, że Twoje CLI kończy działanie kodem 0 i wypisuje zwykły tekst; JSON wymaga obróbki przez `jq -r .text`.

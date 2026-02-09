@@ -4,13 +4,6 @@ read_when:
   - Está cambiando cómo se muestran las marcas de tiempo al modelo o a los usuarios
   - Está depurando el formato de hora en mensajes o en la salida del prompt del sistema
 title: "Fecha y Hora"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:21Z
 ---
 
 # Fecha y Hora

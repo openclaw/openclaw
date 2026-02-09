@@ -1,20 +1,13 @@
 ---
-summary: ”macOS IPC-arkitektur för OpenClaw-appen, gateway-nodtransport och PeekabooBridge”
+summary: "”macOS IPC-arkitektur för OpenClaw-appen, gateway-nodtransport och PeekabooBridge”"
 read_when:
   - Redigering av IPC-kontrakt eller menyradsappens IPC
-title: ”macOS IPC”
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:08Z
+title: "”macOS IPC”"
 ---
 
 # OpenClaw macOS IPC-arkitektur
 
-**Nuvarande modell:** en lokal Unix-socket ansluter **nodvärdtjänsten** till **macOS-appen** för godkännanden av exec + `system.run`. En `openclaw-mac` felsöknings-CLI finns för discovery/anslutningskontroller; agentåtgärder går fortfarande via Gateway (nätverksgateway) WebSocket och `node.invoke`. UI-automation använder PeekabooBridge.
+**Nuvarande modell:** en lokal Unix-uttag ansluter **nod värdtjänst** till **macOS app** för exec godkännanden + `system.run`. En `openclaw-mac` debug CLI finns för upptäckt/anslut kontroller; agentåtgärder flödar fortfarande genom Gateway WebSocket och `node.invoke`. UI automation använder PeekabooBridge.
 
 ## Mål
 

@@ -1,15 +1,8 @@
 ---
-summary: 「每個代理程式的沙箱與工具限制、優先順序與範例」
+summary: "每個代理程式的沙箱與工具限制、優先順序與範例"
 title: 多代理程式沙箱與工具
-read_when: 「當你需要在多代理程式 Gateway 閘道器 中，為每個代理程式設定沙箱隔離或工具允許／拒絕政策時。」
+read_when: "You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:43Z
 ---
 
 # 多代理程式沙箱與工具設定
@@ -35,9 +28,11 @@ x-i18n:
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
+Credentials are **not** shared between agents. Never reuse `agentDir` across agents.
 認證資訊**不會**在代理程式之間共用。請勿在多個代理程式之間重複使用 `agentDir`。
 如果你想要共用認證，請將 `auth-profiles.json` 複製到另一個代理程式的 `agentDir` 中。
 
+For how sandboxing behaves at runtime, see [Sandboxing](/gateway/sandboxing).
 關於沙箱在執行階段的行為，請參閱 [Sandboxing](/gateway/sandboxing)。
 若要除錯「為什麼這個被封鎖？」，請參閱 [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) 與 `openclaw sandbox explain`。
 
@@ -145,7 +140,7 @@ x-i18n:
 
 **結果：**
 
-- 預設代理程式取得程式設計工具
+- default agents get coding tools
 - `support` 代理程式僅限訊息（加上 Slack 工具）
 
 ---
@@ -223,10 +218,11 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 7. **沙箱工具政策**（`tools.sandbox.tools` 或 `agents.list[].tools.sandbox.tools`）
 8. **子代理程式工具政策**（`tools.subagents.tools`，若適用）
 
-每一層都只能進一步限制工具，不能重新授權先前層級已拒絕的工具。
-若設定 `agents.list[].tools.sandbox.tools`，它會取代該代理程式的 `tools.sandbox.tools`。
-若設定 `agents.list[].tools.profile`，它會覆寫該代理程式的 `tools.profile`。
-提供者工具金鑰可接受 `provider`（例如 `google-antigravity`）或 `provider/model`（例如 `openai/gpt-5.2`）。
+Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
+If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
+If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
+`/exec` 只會改變已授權寄件者的工作階段預設值；它不會授予工具存取權。
+Provider 工具鍵可接受 `provider`（例如 `google-antigravity`）或 `provider/model`（例如 `openai/gpt-5.2`）。
 
 ### 工具群組（捷徑）
 
@@ -244,7 +240,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ### Elevated 模式
 
-`tools.elevated` 是全域基準（以寄件者為基礎的允許清單）。`agents.list[].tools.elevated` 可針對特定代理程式進一步限制 Elevated（兩者都必須允許）。
+`tools.elevated` is the global baseline (sender-based allowlist). `agents.list[].tools.elevated` can further restrict elevated for specific agents (both must allow).
 
 緩解模式：
 
@@ -303,7 +299,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## 工具限制範例
 
-### 唯讀代理程式
+### Read-only Agent
 
 ```json
 {
@@ -325,7 +321,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 }
 ```
 
-### 僅限通訊的代理程式
+### Communication-only Agent
 
 ```json
 {
@@ -342,7 +338,9 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 `agents.defaults.sandbox.mode: "non-main"` 是基於 `session.mainKey`（預設為 `"main"`），
 而不是代理程式 id。群組／頻道工作階段一律會取得自己的金鑰，
-因此會被視為 non-main 並套用沙箱。若你希望某個代理程式永遠不使用沙箱，請設定 `agents.list[].sandbox.mode: "off"`。
+因此會被視為 non-main 並套用沙箱。若你希望某個代理程式永遠不使用沙箱，請設定 `agents.list[].sandbox.mode: "off"`。 Group/channel sessions always get their own keys, so they
+are treated as non-main and will be sandboxed. If you want an agent to never
+sandbox, set `agents.list[].sandbox.mode: "off"`.
 
 ---
 
@@ -374,7 +372,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ---
 
-## 疑難排解
+## Troubleshooting
 
 ### 儘管設定了 `mode: "all"`，代理程式仍未進入沙箱
 
@@ -394,7 +392,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ---
 
-## 另請參閱
+## See Also
 
 - [Multi-Agent Routing](/concepts/multi-agent)
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)

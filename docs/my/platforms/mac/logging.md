@@ -4,13 +4,6 @@ read_when:
   - macOS လော့ဂ်များကို ဖမ်းယူနေစဉ် သို့မဟုတ် ကိုယ်ရေးလုံခြုံရေး ဒေတာ လော့ဂ်တင်ခြင်းကို စုံစမ်းစစ်ဆေးနေစဉ်
   - အသံ wake/ဆက်ရှင် အသက်ဝင်မှု စက်ဝိုင်း ပြဿနာများကို ဒီဘတ်လုပ်နေစဉ်
 title: "macOS လော့ဂ်မှတ်တမ်းများ"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:43Z
 ---
 
 # Logging (macOS)
@@ -21,17 +14,17 @@ OpenClaw သည် macOS အက်ပ် လော့ဂ်များကို
 
 - အသေးစိတ်အဆင့်: **Debug pane → Logs → App logging → Verbosity**
 - ဖွင့်ရန်: **Debug pane → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
-- တည်နေရာ: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (အလိုအလျောက် လှည့်ပတ်သည်; အဟောင်းဖိုင်များကို `.1`, `.2`, … ဟု နောက်ဆက်တွဲ အမည်တပ်သည်)
+- Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
 - ရှင်းလင်းရန်: **Debug pane → Logs → App logging → “Clear”**
 
 မှတ်ချက်များ:
 
-- ပုံမှန်အားဖြင့် **ပိတ်ထားသည်**။ အမှန်တကယ် ဒီဘတ်လုပ်နေစဉ်တွင်သာ ဖွင့်ပါ။
+- 19. ၎င်းသည် **default အနေဖြင့် ပိတ်ထားသည်**။ 20. Debugging ကို တက်ကြွစွာ လုပ်နေချိန်တွင်သာ Enable လုပ်ပါ။
 - ဖိုင်ကို ကိုယ်ရေးလုံခြုံရေးဆိုင်ရာ အချက်အလက်များ ပါဝင်နိုင်သဖြင့် သတိထားပါ။ စိစစ်မလုပ်ဘဲ မမျှဝေပါနှင့်။
 
 ## macOS တွင် Unified logging ကိုယ်ရေးလုံခြုံရေး ဒေတာ
 
-Unified logging သည် subsystem တစ်ခုက `privacy -off` ကို ရွေးချယ်အသုံးပြုမထားပါက payload အများစုကို ဖျက်ကွက်ထားသည်။ Peter ၏ macOS အကြောင်း [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) ဆောင်းပါးအရ၊ ဤအရာကို `/Library/Preferences/Logging/Subsystems/` အတွင်းရှိ plist တစ်ခုမှ subsystem အမည်ဖြင့် key ချထားခြင်းဖြင့် ထိန်းချုပ်သည်။ လော့ဂ်အသစ်များသာ အလံကို ယူဆောင်လာမည်ဖြစ်သောကြောင့် ပြဿနာကို ပြန်လည်ဖြစ်ပေါ်စေရန် မတိုင်မီ ဖွင့်ထားပါ။
+21. Unified logging သည် subsystem က `privacy -off` ကို opt-in မလုပ်လျှင် payload အများစုကို redact လုပ်ပါသည်။ 22. Peter ၏ macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) ဆိုင်ရာရေးသားချက်အရ ၎င်းကို subsystem အမည်ဖြင့် key လုပ်ထားသော `/Library/Preferences/Logging/Subsystems/` ထဲရှိ plist တစ်ခုမှ ထိန်းချုပ်ပါသည်။ Only new log entries pick up the flag, so enable it before reproducing an issue.
 
 ## OpenClaw အတွက် ဖွင့်ရန် (`bot.molt`)
 

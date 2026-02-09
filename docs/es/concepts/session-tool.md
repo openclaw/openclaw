@@ -3,13 +3,6 @@ summary: "Herramientas de sesión del agente para listar sesiones, obtener histo
 read_when:
   - Al agregar o modificar herramientas de sesión
 title: "Herramientas de sesión"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:25Z
 ---
 
 # Herramientas de sesión

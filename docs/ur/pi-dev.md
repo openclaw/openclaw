@@ -1,12 +1,5 @@
 ---
 title: "Pi ڈیولپمنٹ ورک فلو"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:25Z
 ---
 
 # Pi ڈیولپمنٹ ورک فلو
@@ -58,7 +51,7 @@ scripts/pi/run-tests.sh --live
 
 ## کلین سلیٹ ری سیٹ
 
-اسٹیٹ OpenClaw اسٹیٹ ڈائریکٹری کے تحت رہتی ہے۔ ڈیفالٹ `~/.openclaw` ہے۔ اگر `OPENCLAW_STATE_DIR` سیٹ ہو تو اس کے بجائے وہ ڈائریکٹری استعمال کریں۔
+State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OPENCLAW_STATE_DIR` is set, use that directory instead.
 
 ہر چیز ری سیٹ کرنے کے لیے:
 
@@ -69,7 +62,7 @@ scripts/pi/run-tests.sh --live
 - اگر لیگیسی راستے موجود ہوں تو `sessions/`
 - اگر آپ خالی ورک اسپیس چاہتے ہیں تو `workspace/`
 
-اگر آپ صرف سیشنز ری سیٹ کرنا چاہتے ہیں تو اس ایجنٹ کے لیے `agents/<agentId>/sessions/` اور `agents/<agentId>/sessions.json` حذف کریں۔ اگر آپ دوبارہ تصدیق نہیں کرنا چاہتے تو `credentials/` برقرار رکھیں۔
+If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `agents/<agentId>/sessions.json` for that agent. Keep `credentials/` if you do not want to reauthenticate.
 
 ## مراجع
 

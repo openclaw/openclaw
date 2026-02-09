@@ -4,13 +4,6 @@ read_when:
   - Feishu/Lark 봇을 연결하려는 경우
   - Feishu 채널을 구성하는 경우
 title: Feishu
-x-i18n:
-  source_path: channels/feishu.md
-  source_hash: c9349983562d1a98
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:08Z
 ---
 
 # Feishu 봇
@@ -267,6 +260,7 @@ openclaw pairing approve feishu <CODE>
 ### 다이렉트 메시지
 
 - **기본값**: `dmPolicy: "pairing"` (알 수 없는 사용자는 페어링 코드를 받음)
+
 - **페어링 승인**:
 
   ```bash
@@ -356,7 +350,7 @@ Feishu API 디버거를 사용하여 그룹 채팅 목록을 조회합니다.
 
 **방법 1 (권장)**
 
-1. Gateway 를 시작하고 봇에게 다이렉트 메시지 를 보냅니다
+1. Start the gateway and DM the bot
 2. `openclaw logs --follow` 를 실행하고 `open_id` 를 찾습니다
 
 **방법 2**
@@ -371,22 +365,22 @@ openclaw pairing list feishu
 
 ## 공통 명령어
 
-| Command   | Description    |
-| --------- | -------------- |
-| `/status` | 봇 상태 표시   |
-| `/reset`  | 세션 초기화    |
-| `/model`  | 모델 표시/전환 |
+| Command   | Description |
+| --------- | ----------- |
+| `/status` | 봇 상태 표시     |
+| `/reset`  | 세션 초기화      |
+| `/model`  | 모델 표시/전환    |
 
 > 참고: Feishu 는 아직 네이티브 명령 메뉴를 지원하지 않으므로, 명령은 텍스트로 전송해야 합니다.
 
 ## Gateway 관리 명령어
 
-| Command                    | Description              |
-| -------------------------- | ------------------------ |
-| `openclaw gateway status`  | Gateway 상태 표시        |
+| Command                    | Description       |
+| -------------------------- | ----------------- |
+| `openclaw gateway status`  | Gateway 상태 표시     |
 | `openclaw gateway install` | Gateway 서비스 설치/시작 |
-| `openclaw gateway stop`    | Gateway 서비스 중지      |
-| `openclaw gateway restart` | Gateway 서비스 재시작    |
+| `openclaw gateway stop`    | Gateway 서비스 중지    |
+| `openclaw gateway restart` | Gateway 서비스 재시작   |
 | `openclaw logs --follow`   | Gateway 로그 실시간 조회 |
 
 ---
@@ -400,7 +394,7 @@ openclaw pairing list feishu
 3. `groupPolicy` 가 `"disabled"` 로 설정되어 있지 않은지 확인합니다
 4. 로그를 확인합니다: `openclaw logs --follow`
 
-### 봇이 메시지를 수신하지 못하는 경우
+### Bot does not receive messages
 
 1. 앱이 게시 및 승인되었는지 확인합니다
 2. 이벤트 구독에 `im.message.receive_v1` 이 포함되어 있는지 확인합니다
@@ -418,7 +412,7 @@ openclaw pairing list feishu
 ### 메시지 전송 실패
 
 1. 앱에 `im:message:send_as_bot` 권한이 있는지 확인합니다
-2. 앱이 게시되었는지 확인합니다
+2. Ensure the app is published
 3. 상세 오류를 위해 로그를 확인합니다
 
 ---
@@ -534,34 +528,34 @@ Feishu 는 인터랙티브 카드를 통한 스트리밍 응답을 지원합니�
 
 주요 옵션:
 
-| Setting                                           | Description                              | Default   |
-| ------------------------------------------------- | ---------------------------------------- | --------- |
-| `channels.feishu.enabled`                         | 채널 활성화/비활성화                     | `true`    |
-| `channels.feishu.domain`                          | API 도메인 (`feishu` 또는 `lark`)        | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                   | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                               | -         |
-| `channels.feishu.accounts.<id>.domain`            | 계정별 API 도메인 재정의                 | `feishu`  |
-| `channels.feishu.dmPolicy`                        | 다이렉트 메시지 정책                     | `pairing` |
+| Setting                                           | Description                                                         | Default   |
+| ------------------------------------------------- | ------------------------------------------------------------------- | --------- |
+| `channels.feishu.enabled`                         | 채널 활성화/비활성화                                                         | `true`    |
+| `channels.feishu.domain`                          | API 도메인 (`feishu` 또는 `lark`)                     | `feishu`  |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                                              | -         |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                          | -         |
+| `channels.feishu.accounts.<id>.domain`            | 계정별 API 도메인 재정의                                                     | `feishu`  |
+| `channels.feishu.dmPolicy`                        | DM policy                                                           | `pairing` |
 | `channels.feishu.allowFrom`                       | 다이렉트 메시지 허용 목록 (open_id 목록) | -         |
-| `channels.feishu.groupPolicy`                     | 그룹 정책                                | `open`    |
-| `channels.feishu.groupAllowFrom`                  | 그룹 허용 목록                           | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | @멘션 필요                               | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | 그룹 활성화                              | `true`    |
-| `channels.feishu.textChunkLimit`                  | 메시지 청크 크기                         | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | 미디어 크기 제한                         | `30`      |
-| `channels.feishu.streaming`                       | 스트리밍 카드 출력 활성화                | `true`    |
-| `channels.feishu.blockStreaming`                  | 블록 스트리밍 활성화                     | `true`    |
+| `channels.feishu.groupPolicy`                     | 그룹 정책                                                               | `open`    |
+| `channels.feishu.groupAllowFrom`                  | 그룹 허용 목록                                                            | -         |
+| `channels.feishu.groups.<chat_id>.requireMention` | @멘션 필요                                                 | `true`    |
+| `channels.feishu.groups.<chat_id>.enabled`        | 그룹 활성화                                                              | `true`    |
+| `channels.feishu.textChunkLimit`                  | 메시지 청크 크기                                                           | `2000`    |
+| `channels.feishu.mediaMaxMb`                      | 미디어 크기 제한                                                           | `30`      |
+| `channels.feishu.streaming`                       | 스트리밍 카드 출력 활성화                                                      | `true`    |
+| `channels.feishu.blockStreaming`                  | 블록 스트리밍 활성화                                                         | `true`    |
 
 ---
 
 ## dmPolicy 참조
 
-| Value         | Behavior                                                       |
-| ------------- | -------------------------------------------------------------- |
+| Value         | Behavior                                               |
+| ------------- | ------------------------------------------------------ |
 | `"pairing"`   | **기본값.** 알 수 없는 사용자는 페어링 코드를 받으며 승인 필요 |
-| `"allowlist"` | `allowFrom` 에 있는 사용자만 대화 가능                         |
-| `"open"`      | 모든 사용자 허용 (`"*"` 이 allowFrom 에 필요)                  |
-| `"disabled"`  | 다이렉트 메시지 비활성화                                       |
+| `"allowlist"` | `allowFrom` 에 있는 사용자만 대화 가능                            |
+| `"open"`      | 모든 사용자 허용 (`"*"` 이 allowFrom 에 필요)  |
+| `"disabled"`  | Disable DMs                                            |
 
 ---
 
@@ -577,7 +571,7 @@ Feishu 는 인터랙티브 카드를 통한 스트리밍 응답을 지원합니�
 - ✅ 비디오
 - ✅ 스티커
 
-### 발신
+### Send
 
 - ✅ 텍스트
 - ✅ 이미지

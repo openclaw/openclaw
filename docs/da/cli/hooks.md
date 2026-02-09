@@ -4,13 +4,6 @@ read_when:
   - Du vil administrere agent-hooks
   - Du vil installere eller opdatere hooks
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:04Z
 ---
 
 # `openclaw hooks`
@@ -34,7 +27,7 @@ Viser alle fundne hooks fra workspace-, managed- og bundled-mapper.
 
 - `--eligible`: Vis kun kvalificerede hooks (krav opfyldt)
 - `--json`: Output som JSON
-- `-v, --verbose`: Vis detaljerede oplysninger inkl. manglende krav
+- `-v, --verbose`: Vis detaljerede oplysninger, herunder manglende krav
 
 **Eksempel på output:**
 
@@ -74,7 +67,7 @@ Viser detaljerede oplysninger om et specifikt hook.
 
 **Argumenter:**
 
-- `<name>`: Hook-navn (f.eks. `session-memory`)
+- `<name>`: Hook name (fx, `session-memory`)
 
 **Indstillinger:**
 
@@ -134,12 +127,12 @@ openclaw hooks enable <name>
 
 Aktivér et specifikt hook ved at tilføje det til din konfiguration (`~/.openclaw/config.json`).
 
-**Bemærk:** Hooks, der administreres af plugins, viser `plugin:<id>` i `openclaw hooks list` og
-kan ikke aktiveres/deaktiveres her. Aktivér/deaktivér i stedet plugin’et.
+**Bemærk:** Kroge håndteret af plugins vis `plugin:<id>` i `openclaw hooks list` og
+kan ikke aktiveres / deaktiveres her. Aktiver/deaktiver i stedet plugin'et.
 
 **Argumenter:**
 
-- `<name>`: Hook-navn (f.eks. `session-memory`)
+- `<name>`: Hook name (fx, `session-memory`)
 
 **Eksempel:**
 
@@ -156,7 +149,7 @@ openclaw hooks enable session-memory
 **Hvad den gør:**
 
 - Tjekker om hook’et findes og er kvalificeret
-- Opdaterer `hooks.internal.entries.<name>.enabled = true` i din konfiguration
+- Opdaterer `hooks.internal.entries.<name>.enabled = sand` i din config
 - Gemmer konfigurationen på disk
 
 **Efter aktivering:**
@@ -173,7 +166,7 @@ Deaktivér et specifikt hook ved at opdatere din konfiguration.
 
 **Argumenter:**
 
-- `<name>`: Hook-navn (f.eks. `command-logger`)
+- `<name>`: Hook name (fx, `kommando-logger`)
 
 **Eksempel:**
 

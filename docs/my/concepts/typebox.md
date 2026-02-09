@@ -3,21 +3,13 @@ summary: "Gateway ပရိုတိုကောအတွက် အမှန်�
 read_when:
   - ပရိုတိုကော schema များ သို့မဟုတ် codegen ကို အပ်ဒိတ်လုပ်နေချိန်
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:30Z
 ---
 
 # ပရိုတိုကောအတွက် အမှန်တရားရင်းမြစ်အဖြစ် TypeBox
 
 နောက်ဆုံးအပ်ဒိတ်လုပ်ခဲ့သည့်နေ့: 2026-01-10
 
-TypeBox သည် TypeScript ကို အဓိကထားသော schema library တစ်ခုဖြစ်သည်။ ကျွန်ုပ်တို့သည် ၎င်းကို **Gateway
-WebSocket ပရိုတိုကော** (handshake, request/response, server events) ကို သတ်မှတ်ရန် အသုံးပြုပါသည်။ ထို schema များသည် **runtime validation**, **JSON Schema ထုတ်ယူမှု**, နှင့် macOS အက်ပ်အတွက် **Swift codegen** ကို မောင်းနှင်ပေးပါသည်။ အမှန်တရားရင်းမြစ်တစ်ခုတည်းရှိပြီး အခြားအရာအားလုံးကို ထိုမှ ထုတ်လုပ်ပါသည်။
+TypeBox သည် TypeScript ကို အခြေခံထားသော schema library တစ်ခု ဖြစ်ပါသည်။ ၎င်းကို **Gateway WebSocket protocol** (handshake, request/response, server events) ကို သတ်မှတ်ရန် အသုံးပြုပါသည်။ ထို schema များသည် **runtime validation**, **JSON Schema export**, နှင့် macOS app အတွက် **Swift codegen** ကို မောင်းနှင်ပေးပါသည်။ အချက်အလက်ရင်းမြစ် တစ်ခုတည်းရှိပြီး အခြားအားလုံးကို ထုတ်လုပ်ထားပါသည်။
 
 ပရိုတိုကောကို အမြင်ကျယ်ကျယ် နားလည်လိုပါက
 [Gateway architecture](/concepts/architecture) မှ စတင်ကြည့်ရှုပါ။
@@ -28,11 +20,10 @@ Gateway WS မက်ဆေ့ချ်တိုင်းသည် frame သု�
 
 - **Request**: `{ type: "req", id, method, params }`
 - **Response**: `{ type: "res", id, ok, payload | error }`
-- **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
+- **Event**: `{ type: "event", event, payload, seq?, stateVersion?
+   }`
 
-ပထမဆုံး frame သည် **မဖြစ်မနေ** `connect` request ဖြစ်ရပါမည်။ ထို့နောက် client များသည်
-method များ (ဥပမာ `health`, `send`, `chat.send`) ကို ခေါ်နိုင်ပြီး event များ (ဥပမာ
-`presence`, `tick`, `agent`) ကို subscribe လုပ်နိုင်ပါသည်။
+ပထမ frame သည် မဖြစ်မနေ `connect` request ဖြစ်ရပါမည်။ အပြီးတွင် client များသည် methods (ဥပမာ `health`, `send`, `chat.send`) ကို ခေါ်နိုင်ပြီး events (ဥပမာ `presence`, `tick`, `agent`) ကို subscribe လုပ်နိုင်ပါသည်။
 
 ချိတ်ဆက်မှု လုပ်ငန်းစဉ် (အနည်းဆုံး):
 
@@ -78,8 +69,7 @@ Client                    Gateway
 
 ## runtime တွင် schema များကို အသုံးပြုပုံ
 
-- **Server ဘက်**: ဝင်လာသော frame တိုင်းကို AJV ဖြင့် validation လုပ်ပါသည်။ Handshake သည်
-  param များက `ConnectParams` နှင့် ကိုက်ညီသော `connect` request ကိုသာ လက်ခံပါသည်။
+- **Server side**: ဝင်လာသော frame အားလုံးကို AJV ဖြင့် validation လုပ်ပါသည်။ handshake သည် params များက `ConnectParams` နှင့် ကိုက်ညီသော `connect` request တစ်ခုတည်းကိုသာ လက်ခံပါသည်။
 - **Client ဘက်**: JS client သည် event နှင့် response frame များကို အသုံးမပြုမီ validation လုပ်ပါသည်။
 - **Method surface**: Gateway သည် ပံ့ပိုးထားသော `methods` နှင့်
   `events` ကို `hello-ok` တွင် ကြော်ငြာပါသည်။
@@ -281,8 +271,7 @@ Swift generator သည် အောက်ပါအရာများကို �
 
 ## Live schema JSON
 
-ထုတ်လုပ်ထားသော JSON Schema သည် repo ထဲရှိ `dist/protocol.schema.json` တွင် ရှိပါသည်။ ထုတ်ဝေထားသော raw ဖိုင်ကို
-အများအားဖြင့် အောက်ပါနေရာတွင် ရနိုင်ပါသည်-
+ထုတ်လုပ်ထားသော JSON Schema ကို repo အတွင်း `dist/protocol.schema.json` တွင် ရရှိနိုင်ပါသည်။ ထုတ်ဝေထားသော raw ဖိုင်ကို ပုံမှန်အားဖြင့် အောက်ပါနေရာတွင် ရရှိနိုင်ပါသည်:
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 

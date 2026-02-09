@@ -2,15 +2,8 @@
 summary: "빠른 시작은 이제 시작하기로 이동했습니다."
 read_when:
   - 가장 빠른 설정 단계를 찾고 있는 경우
-  - 이전 링크에서 이 문서로 이동한 경우
+  - 이전 링크를 통해 이곳으로 오셨습니다
 title: "빠른 시작"
-x-i18n:
-  source_path: start/quickstart.md
-  source_hash: c03779abfcd92ec9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:17Z
 ---
 
 # 빠른 시작

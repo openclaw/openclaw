@@ -4,13 +4,6 @@ summary: "Vercel AI Gateway တပ်ဆင်ခြင်း (auth + မော�
 read_when:
   - OpenClaw နှင့် Vercel AI Gateway ကို အသုံးပြုလိုပါက
   - API key အတွက် env var သို့မဟုတ် CLI auth ရွေးချယ်မှုကို လိုအပ်ပါက
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:48Z
 ---
 
 # Vercel AI Gateway

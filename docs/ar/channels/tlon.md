@@ -3,13 +3,6 @@ summary: "حالة دعم Tlon/Urbit وقدراته وتهيئته"
 read_when:
   - العمل على ميزات قناة Tlon/Urbit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:54Z
 ---
 
 # Tlon (إضافة)
@@ -45,7 +38,7 @@ openclaw plugins install ./extensions/tlon
 2. اجمع عنوان URL لسفينتك ورمز تسجيل الدخول.
 3. هيّئ `channels.tlon`.
 4. أعد تشغيل Gateway (البوابة).
-5. أرسل رسالة خاصة إلى الروبوت أو اذكره في قناة جماعية.
+5. DM البوت أو ذكره في قناة المجموعة.
 
 التهيئة الدنيا (حساب واحد):
 

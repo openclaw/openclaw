@@ -3,13 +3,6 @@ summary: "WhatsApp (webkanaal) integratie: inloggen, inbox, antwoorden, media en
 read_when:
   - Werken aan gedrag van het WhatsApp/webkanaal of inboxroutering
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:40Z
 ---
 
 # WhatsApp (webkanaal)
@@ -211,6 +204,7 @@ De wizard gebruikt dit om je **toegestane lijst/eigenaar** in te stellen zodat j
 ## Berichtnormalisatie (wat het model ziet)
 
 - `Body` is de huidige berichttekst met envelop.
+
 - Context van geciteerde antwoorden wordt **altijd toegevoegd**:
 
   ```
@@ -223,6 +217,7 @@ De wizard gebruikt dit om je **toegestane lijst/eigenaar** in te stellen zodat j
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = geciteerde tekst of media-placeholder
   - `ReplyToSender` = E.164 indien bekend
+
 - Inkomende berichten met alleen media gebruiken placeholders:
   - `<media:image|video|audio|document|sticker>`
 
@@ -308,7 +303,7 @@ WhatsApp kan automatisch emoji-reacties verzenden op inkomende berichten direct 
 - Semantiek voor het verwijderen van reacties: zie [/tools/reactions](/tools/reactions).
 - Tool-gating: `channels.whatsapp.actions.reactions` (standaard: ingeschakeld).
 
-## Limieten
+## Beperkingen
 
 - Uitgaande tekst wordt opgeknipt tot `channels.whatsapp.textChunkLimit` (standaard 4000).
 - Optioneel splitsen op nieuwe regels: stel `channels.whatsapp.chunkMode="newline"` in om op lege regels (paragraafgrenzen) te splitsen vóór lengte-opknippen.
@@ -350,7 +345,7 @@ WhatsApp verzendt audio als **spraaknotities** (PTT-bubbel).
   - Gebruikt de geconfigureerde heartbeat-prompt (standaard: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK`-skipgedrag.
   - Aflevering gebeurt standaard via het laatst gebruikte kanaal (of geconfigureerd doel).
 
-## Herverbindgedrag
+## Gedrag opnieuw verbinden
 
 - Backoff-beleid: `web.reconnect`:
   - `initialMs`, `maxMs`, `factor`, `jitter`, `maxAttempts`.

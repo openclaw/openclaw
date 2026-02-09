@@ -3,13 +3,6 @@ summary: "CLI-referentie voor `openclaw onboard` (interactieve onboardingwizard)
 read_when:
   - Je wilt begeleide installatie voor Gateway, werkruimte, authenticatie, kanalen en Skills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:09Z
 ---
 
 # `openclaw onboard`
@@ -38,7 +31,7 @@ Flow-notities:
 - `manual`: volledige prompts voor poort/binding/auth (alias van `advanced`).
 - Snelste eerste chat: `openclaw dashboard` (Control UI, geen kanaalconfiguratie).
 
-## Veelgebruikte vervolgopdrachten
+## Gemeenschappelijke follow-upopdrachten
 
 ```bash
 openclaw configure

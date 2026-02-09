@@ -1,16 +1,9 @@
 ---
-summary:「記錄介面、檔案記錄、WS 記錄樣式，以及主控台格式化」
+summary: "記錄輸出介面、檔案日誌、WS 日誌樣式與主控台格式"
 read_when:
   - 變更記錄輸出或格式時
   - 偵錯 CLI 或 Gateway 閘道器輸出時
-title:「Logging」
-x-i18n:
-  source_path: gateway/logging.md
-  source_hash: efb8eda5e77e3809
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:08Z
+title: "Logging"
 ---
 
 # Logging
@@ -19,13 +12,13 @@ x-i18n:
 
 OpenClaw 有兩個記錄「介面」：
 
-- **主控台輸出**（你在終端機／除錯 UI 中看到的內容）。
+- **Console output** (what you see in the terminal / Debug UI).
 - **檔案記錄**（JSON lines），由 Gateway 閘道器記錄器寫入。
 
-## 檔案型記錄器
+## File-based logger
 
 - 預設的輪替記錄檔位於 `/tmp/openclaw/` 之下（每天一個檔案）：`openclaw-YYYY-MM-DD.log`
-  - 日期使用閘道器主機的本地時區。
+  - Date uses the gateway host's local timezone.
 - 記錄檔路徑與層級可透過 `~/.openclaw/openclaw.json` 設定：
   - `logging.file`
   - `logging.level`
@@ -34,6 +27,7 @@ OpenClaw 有兩個記錄「介面」：
 
 Control UI 的 Logs 分頁會透過 Gateway 閘道器尾隨（tail）此檔案（`logs.tail`）。
 CLI 也可以執行相同操作：
+CLI can do the same:
 
 ```bash
 openclaw logs --follow
@@ -47,26 +41,26 @@ openclaw logs --follow
 - 若要在檔案記錄中擷取僅限 verbose 的細節，請將 `logging.level` 設為 `debug` 或
   `trace`。
 
-## 主控台擷取
+## Console capture
 
 CLI 會擷取 `console.log/info/warn/error/debug/trace` 並將其寫入檔案記錄，
 同時仍然輸出至 stdout／stderr。
 
-你可以透過以下方式獨立調整主控台詳細程度：
+You can tune console verbosity independently via:
 
 - `logging.consoleLevel`（預設 `info`）
 - `logging.consoleStyle`（`pretty` | `compact` | `json`）
 
 ## 工具摘要遮蔽
 
-Verbose 的工具摘要（例如 `🛠️ Exec: ...`）可以在進入
-主控台串流之前遮蔽敏感權杖。這僅適用於 **tools**，不會變更檔案記錄。
+Verbose tool summaries (e.g. `🛠️ Exec: ...`) can mask sensitive tokens before they hit the
+console stream. This is **tools-only** and does not alter file logs.
 
 - `logging.redactSensitive`：`off` | `tools`（預設：`tools`）
 - `logging.redactPatterns`：正則表達式字串的陣列（會覆蓋預設值）
   - 使用原始正則字串（自動 `gi`），或在需要自訂旗標時使用 `/pattern/flags`。
   - 比對項會保留前 6 + 後 4 個字元（長度 >= 18）進行遮蔽，否則為 `***`。
-  - 預設值涵蓋常見的金鑰指派、CLI 旗標、JSON 欄位、bearer 標頭、PEM 區塊，以及常見的權杖前綴。
+  - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, and popular token prefixes.
 
 ## Gateway WebSocket 記錄
 
@@ -100,10 +94,10 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
-## 主控台格式化（子系統記錄）
+## 主控台格式（子系統日誌）
 
-主控台格式化器具備 **TTY 感知**，並輸出一致、帶前綴的行。
-子系統記錄器會讓輸出保持分組且易於掃描。
+The console formatter is **TTY-aware** and prints consistent, prefixed lines.
+Subsystem loggers keep output grouped and scannable.
 
 行為：
 
@@ -117,4 +111,4 @@ openclaw gateway --verbose --ws-log full
 - **主控台記錄層級** 與檔案記錄層級分離（當 `logging.level` 設為 `debug`/`trace` 時，檔案仍保留完整細節）
 - **WhatsApp 訊息本文** 會以 `debug` 記錄（使用 `--verbose` 來查看）
 
-這可在維持既有檔案記錄穩定的同時，讓互動式輸出更容易掃描。
+這在維持既有檔案日誌穩定的同時，讓互動式輸出更易讀。

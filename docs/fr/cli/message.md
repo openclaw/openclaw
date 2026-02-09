@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification des actions CLI de message
   - Changement du comportement des canaux sortants
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 35159baf1ef71362
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:11Z
 ---
 
 # `openclaw message`
@@ -47,7 +40,7 @@ Recherche par nom :
 - Pour les fournisseurs pris en charge (Discord/Slack/etc.), les noms de canal comme `Help` ou `#help` sont résolus via le cache d’annuaire.
 - En cas d’absence dans le cache, OpenClaw tentera une recherche d’annuaire en direct lorsque le fournisseur le prend en charge.
 
-## Options courantes
+## Drapeaux courants
 
 - `--channel <name>`
 - `--account <id>`
@@ -59,7 +52,7 @@ Recherche par nom :
 
 ## Actions
 
-### Noyau
+### Core
 
 - `send`
   - Canaux : WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams
@@ -120,7 +113,7 @@ Recherche par nom :
   - Requis : `--guild-id`, `--query`
   - Optionnel : `--channel-id`, `--channel-ids` (répéter), `--author-id`, `--author-ids` (répéter), `--limit`
 
-### Fils
+### Fil de discussion
 
 - `thread create`
   - Canaux : Discord
@@ -181,7 +174,7 @@ Recherche par nom :
 - `ban` : `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` prend également en charge `--reason`
 
-### Diffusion
+### Broadcast
 
 - `broadcast`
   - Canaux : tout canal configuré ; utilisez `--channel all` pour cibler tous les fournisseurs

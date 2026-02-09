@@ -3,13 +3,6 @@ summary: "Discord 봇 지원 상태, 기능, 구성"
 read_when:
   - Discord 채널 기능 작업 중일 때
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:55Z
 ---
 
 # Discord (Bot API)
@@ -26,7 +19,7 @@ x-i18n:
    - 둘 다 설정된 경우 설정이 우선합니다 (환경 변수 폴백은 기본 계정 전용입니다).
 4. 메시지 권한과 함께 봇을 서버에 초대합니다 (다이렉트 메시지만 원한다면 개인 서버를 생성합니다).
 5. Gateway(게이트웨이) 를 시작합니다.
-6. 다이렉트 메시지 접근은 기본적으로 페어링 방식입니다. 첫 접촉 시 페어링 코드를 승인합니다.
+6. 첫 접촉 시 페어링 코드를 승인합니다.
 
 최소 설정:
 
@@ -55,13 +48,13 @@ x-i18n:
 3. OpenClaw 를 `channels.discord.token` 으로 설정합니다 (또는 폴백으로 `DISCORD_BOT_TOKEN`).
 4. Gateway(게이트웨이) 를 실행합니다. 토큰이 사용 가능하고 (설정 우선, 환경 변수 폴백) `channels.discord.enabled` 가 `false` 이 아닐 경우 Discord 채널이 자동으로 시작됩니다.
    - 환경 변수를 선호한다면 `DISCORD_BOT_TOKEN` 을 설정합니다 (설정 블록은 선택 사항입니다).
-5. 다이렉트 채팅: 전달 시 `user:<id>` (또는 `<@id>` 멘션) 을 사용합니다. 모든 턴은 공유된 `main` 세션으로 들어갑니다. 숫자 ID 만 단독으로 사용하는 것은 모호하므로 거부됩니다.
+5. 다이렉트 채팅: 전달 시 `user:<id>` (또는 `<@id>` 멘션) 을 사용합니다. 모든 턴은 공유된 `main` 세션으로 들어갑니다. Bare numeric IDs are ambiguous and rejected.
 6. 길드 채널: 전달에 `channel:<channelId>` 을 사용합니다. 기본적으로 멘션이 필요하며, 길드 또는 채널별로 설정할 수 있습니다.
 7. 다이렉트 채팅: 기본적으로 `channels.discord.dm.policy` 로 보안이 적용됩니다 (기본값: `"pairing"`). 알 수 없는 발신자는 페어링 코드를 받습니다 (1 시간 후 만료). `openclaw pairing approve discord <code>` 로 승인합니다.
    - 이전의 ‘누구나 허용’ 동작을 유지하려면 `channels.discord.dm.policy="open"` 와 `channels.discord.dm.allowFrom=["*"]` 을 설정합니다.
    - 강제 허용 목록을 사용하려면 `channels.discord.dm.policy="allowlist"` 을 설정하고 `channels.discord.dm.allowFrom` 에 발신자를 나열합니다.
    - 모든 다이렉트 메시지를 무시하려면 `channels.discord.dm.enabled=false` 또는 `channels.discord.dm.policy="disabled"` 을 설정합니다.
-8. 그룹 다이렉트 메시지는 기본적으로 무시됩니다. `channels.discord.dm.groupEnabled` 로 활성화하고 선택적으로 `channels.discord.dm.groupChannels` 로 제한합니다.
+8. 그룹 다이렉트 메시지는 기본적으로 무시됩니다. `channels.discord.dm.groupEnabled` 로 활성화하고, 선택적으로 `channels.discord.dm.groupChannels` 로 제한할 수 있습니다.
 9. 선택적 길드 규칙: 길드 id (권장) 또는 슬러그를 키로 하는 `channels.discord.guilds` 을 설정하고 채널별 규칙을 지정합니다.
 10. 선택적 네이티브 명령어: `commands.native` 는 기본값이 `"auto"` 입니다 (Discord/Telegram 는 켜짐, Slack 은 꺼짐). `channels.discord.commands.native: true|false|"auto"` 으로 재정의할 수 있으며, `false` 은 이전에 등록된 명령을 제거합니다. 텍스트 명령은 `commands.text` 로 제어되며 단독 `/...` 메시지로 전송되어야 합니다. 명령에 대한 접근 그룹 검사를 우회하려면 `commands.useAccessGroups: false` 을 사용합니다.
     - 전체 명령 목록 및 설정: [슬래시 명령어](/tools/slash-commands)
@@ -87,14 +80,14 @@ x-i18n:
 }
 ```
 
-## 나만의 봇 만들기
+## How to create your own bot
 
 이는 `#help` 와 같은 서버 (길드) 채널에서 OpenClaw 를 실행하기 위한 “Discord Developer Portal” 설정입니다.
 
-### 1) Discord 앱 + 봇 사용자 생성
+### 1. Discord 앱 + 봇 사용자 생성
 
 1. Discord Developer Portal → **Applications** → **New Application**
-2. 앱에서:
+2. In your app:
    - **Bot** → **Add Bot**
    - **Bot Token** 을 복사합니다 (이를 `DISCORD_BOT_TOKEN` 에 입력합니다)
 
@@ -109,7 +102,7 @@ Discord 는 명시적으로 활성화하지 않으면 “권한 인텐트” 를
 
 일반적으로 **Presence Intent** 는 필요하지 않습니다. 봇 자신의 프레즌스를 설정하는 것 (`setPresence` 액션) 은 게이트웨이 OP3 를 사용하며 이 인텐트가 필요하지 않습니다. 다른 길드 멤버의 프레즌스 업데이트를 수신하려는 경우에만 필요합니다.
 
-### 3) 초대 URL 생성 (OAuth2 URL Generator)
+### 3. 초대 URL 생성 (OAuth2 URL Generator)
 
 앱에서: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Discord 는 명시적으로 활성화하지 않으면 “권한 인텐트” 를
 
 생성된 URL 을 복사하여 열고 서버를 선택한 뒤 봇을 설치합니다.
 
-### 4) id 가져오기 (길드/사용자/채널)
+### 4. id 가져오기 (길드/사용자/채널)
 
 Discord 는 모든 곳에서 숫자 id 를 사용하며 OpenClaw 설정은 id 를 선호합니다.
 
@@ -146,7 +139,7 @@ Discord 는 모든 곳에서 숫자 id 를 사용하며 OpenClaw 설정은 id �
 
 #### 토큰
 
-환경 변수로 봇 토큰을 설정합니다 (서버에서는 권장):
+Set the bot token via env var (recommended on servers):
 
 - `DISCORD_BOT_TOKEN=...`
 
@@ -207,7 +200,7 @@ Discord 는 모든 곳에서 숫자 id 를 사용하며 OpenClaw 설정은 id �
 - 봇이 작성한 메시지는 기본적으로 무시됩니다. 허용하려면 `channels.discord.allowBots=true` 을 설정합니다 (자신의 메시지는 계속 필터링됩니다).
 - 경고: 다른 봇에 대한 응답을 허용하는 경우 (`channels.discord.allowBots=true`), `requireMention`, `channels.discord.guilds.*.channels.<id>.users` 허용 목록 및/또는 `AGENTS.md` 과 `SOUL.md` 의 가드레일을 사용하여 봇 간 응답 루프를 방지하십시오.
 
-### 6) 동작 확인
+### 6. 동작 확인
 
 1. Gateway(게이트웨이) 를 시작합니다.
 2. 서버 채널에서 `@Krill hello` 를 전송합니다 (또는 봇 이름).
@@ -220,10 +213,10 @@ Discord 는 모든 곳에서 숫자 id 를 사용하며 OpenClaw 설정은 id �
 - **봇이 연결되지만 길드 채널에서 응답하지 않음**:
   - **Message Content Intent** 누락, 또는
   - 봇에 채널 권한 (보기/전송/기록 읽기) 이 없음, 또는
-  - 설정에서 멘션을 요구하는데 멘션하지 않음, 또는
+  - Your config requires mentions and you didn’t mention it, or
   - 길드/채널 허용 목록이 채널/사용자를 거부함.
 - **`requireMention: false` 이지만 여전히 응답 없음**:
-- `channels.discord.groupPolicy` 의 기본값은 **allowlist** 입니다. 이를 `"open"` 로 설정하거나 `channels.discord.guilds` 아래에 길드 항목을 추가하십시오 (선택적으로 `channels.discord.guilds.<id>.channels` 아래에 채널을 나열하여 제한).
+- `groupPolicy`: 길드 채널 처리 제어 (`open|disabled|allowlist`).`allowlist` 는 채널 허용 목록이 필요합니다.
   - `DISCORD_BOT_TOKEN` 만 설정하고 `channels.discord` 섹션을 생성하지 않으면, 런타임은
     `groupPolicy` 를 `open` 로 기본 설정합니다. 이를 잠그려면 `channels.discord.groupPolicy`,
     `channels.defaults.groupPolicy` 또는 길드/채널 허용 목록을 추가하십시오.
@@ -329,7 +322,7 @@ ack 반응을 제거하려면 `messages.removeAckAfterReply` 을 사용합니다
 - `dm.allowFrom`: 다이렉트 메시지 허용 목록 (사용자 id 또는 이름). `dm.policy="allowlist"` 및 `dm.policy="open"` 검증에 사용됩니다. 마법사는 사용자 이름을 받아 봇이 멤버를 검색할 수 있을 때 id 로 해석합니다.
 - `dm.groupEnabled`: 그룹 다이렉트 메시지 활성화 (기본값 `false`).
 - `dm.groupChannels`: 그룹 다이렉트 메시지 채널 id 또는 슬러그에 대한 선택적 허용 목록.
-- `groupPolicy`: 길드 채널 처리 제어 (`open|disabled|allowlist`). `allowlist` 는 채널 허용 목록이 필요합니다.
+- `channels.discord.groupPolicy` 의 기본값은 **allowlist** 입니다. 이를 `"open"` 로 설정하거나 `channels.discord.guilds` 아래에 길드 항목을 추가하십시오 (선택적으로 `channels.discord.guilds.<id> .channels` 아래에 채널을 나열하여 제한).
 - `guilds`: 길드 id (권장) 또는 슬러그를 키로 하는 길드별 규칙.
 - `guilds."*"`: 명시적 항목이 없을 때 적용되는 길드별 기본 설정.
 - `guilds.<id>.slug`: 표시 이름에 사용되는 선택적 친화적 슬러그.
@@ -402,27 +395,27 @@ ack 반응을 제거하려면 `messages.removeAckAfterReply` 을 사용합니다
 
 ### 도구 액션 기본값
 
-| 액션 그룹      | 기본값   | 비고                         |
-| -------------- | -------- | ---------------------------- |
-| reactions      | enabled  | 반응 + 반응 목록 + emojiList |
-| stickers       | enabled  | 스티커 전송                  |
-| emojiUploads   | enabled  | 이모지 업로드                |
-| stickerUploads | enabled  | 스티커 업로드                |
-| polls          | enabled  | 투표 생성                    |
-| permissions    | enabled  | 채널 권한 스냅샷             |
-| messages       | enabled  | 읽기/전송/편집/삭제          |
-| threads        | enabled  | 생성/목록/답글               |
-| pins           | enabled  | 고정/해제/목록               |
-| search         | enabled  | 메시지 검색 (미리보기 기능)  |
-| memberInfo     | enabled  | 멤버 정보                    |
-| roleInfo       | enabled  | 역할 목록                    |
-| channelInfo    | enabled  | 채널 정보 + 목록             |
-| channels       | enabled  | 채널/카테고리 관리           |
-| voiceStatus    | enabled  | 음성 상태 조회               |
-| events         | enabled  | 예약 이벤트 목록/생성        |
-| roles          | disabled | 역할 추가/제거               |
-| moderation     | disabled | 타임아웃/킥/밴               |
-| presence       | disabled | 봇 상태/활동 (setPresence)   |
+| 액션 그룹          | 기본값      | 참고 자료                                    |
+| -------------- | -------- | ---------------------------------------- |
+| reactions      | enabled  | 반응 + 반응 목록 + emojiList                   |
+| stickers       | enabled  | 스티커 전송                                   |
+| emojiUploads   | enabled  | Upload emojis                            |
+| stickerUploads | enabled  | 스티커 업로드                                  |
+| polls          | enabled  | 투표 생성                                    |
+| permissions    | enabled  | 채널 권한 스냅샷                                |
+| messages       | enabled  | 읽기/전송/편집/삭제                              |
+| threads        | enabled  | 생성/목록/답글                                 |
+| pins           | enabled  | 고정/해제/목록                                 |
+| search         | enabled  | 메시지 검색 (미리보기 기능)      |
+| memberInfo     | enabled  | 멤버 정보                                    |
+| roleInfo       | enabled  | 역할 목록                                    |
+| channelInfo    | enabled  | 채널 정보 + 목록                               |
+| channels       | enabled  | 채널/카테고리 관리                               |
+| voiceStatus    | enabled  | 음성 상태 조회                                 |
+| events         | enabled  | 예약 이벤트 목록/생성                             |
+| roles          | disabled | 역할 추가/제거                                 |
+| moderation     | disabled | 타임아웃/킥/밴                                 |
+| presence       | disabled | 봇 상태/활동 (setPresence) |
 
 - `replyToMode`: `off` (기본값), `first`, 또는 `all`. 모델에 답글 태그가 포함된 경우에만 적용됩니다.
 

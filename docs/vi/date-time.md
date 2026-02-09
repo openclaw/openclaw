@@ -4,19 +4,12 @@ read_when:
   - Bạn đang thay đổi cách hiển thị dấu thời gian cho mô hình hoặc người dùng
   - Bạn đang gỡ lỗi định dạng thời gian trong tin nhắn hoặc đầu ra system prompt
 title: "Ngày và Giờ"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:50Z
 ---
 
 # Ngày & Giờ
 
-OpenClaw mặc định sử dụng **thời gian cục bộ của máy chủ cho dấu thời gian vận chuyển** và **chỉ dùng múi giờ của người dùng trong system prompt**.
-Dấu thời gian từ nhà cung cấp được giữ nguyên để các công cụ giữ được ngữ nghĩa gốc của chúng (thời gian hiện tại có sẵn qua `session_status`).
+Dấu thời gian của nhà cung cấp được giữ nguyên để các công cụ giữ ngữ nghĩa gốc của chúng (thời gian hiện tại khả dụng qua `session_status`).
+`timeFormat` kiểm soát **hiển thị 12h/24h** trong prompt.
 
 ## Message envelope (mặc định là local)
 
@@ -106,13 +99,13 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` đặt **múi giờ cục bộ của người dùng** cho ngữ cảnh prompt.
-- `timeFormat` kiểm soát **hiển thị 12h/24h** trong prompt. `auto` tuân theo tùy chọn của hệ điều hành.
+- `auto` tuân theo tùy chọn của hệ điều hành. Khi `timeFormat: "auto"`, OpenClaw kiểm tra tùy chọn hệ điều hành (macOS/Windows)
+  và quay về định dạng theo locale.
 
 ## Phát hiện định dạng thời gian (tự động)
 
-Khi `timeFormat: "auto"`, OpenClaw kiểm tra tùy chọn của hệ điều hành (macOS/Windows)
-và dự phòng sang định dạng theo locale. Giá trị được phát hiện sẽ được **cache theo từng process**
-để tránh các lời gọi hệ thống lặp lại.
+Giá trị được phát hiện được **lưu đệm theo từng tiến trình**
+để tránh các lời gọi hệ thống lặp lại. Điều này bắt đầu sau khi chuyển các script dev từ Bun sang `tsx` (commit `2871657e`, 2026-01-06).
 
 ## Payload công cụ + connector (thời gian thô từ nhà cung cấp + trường chuẩn hóa)
 

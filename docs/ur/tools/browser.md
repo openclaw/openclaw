@@ -5,20 +5,13 @@ read_when:
   - یہ جانچتے وقت کہ openclaw آپ کے اپنے Chrome میں مداخلت کیوں کر رہا ہے
   - macOS ایپ میں براؤزر سیٹنگز + لائف سائیکل نافذ کرتے وقت
 title: "Browser (OpenClaw-managed)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:39Z
 ---
 
 # Browser (openclaw-managed)
 
-OpenClaw ایک **وقف شدہ Chrome/Brave/Edge/Chromium پروفائل** چلا سکتا ہے جسے ایجنٹ کنٹرول کرتا ہے۔
-یہ آپ کے ذاتی براؤزر سے الگ تھلگ ہوتا ہے اور Gateway کے اندر موجود ایک چھوٹی
-مقامی کنٹرول سروس کے ذریعے منظم کیا جاتا ہے (صرف loopback)۔
+OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
+It is isolated from your personal browser and is managed through a small local
+control service inside the Gateway (loopback only).
 
 Beginner view:
 
@@ -35,7 +28,8 @@ Beginner view:
 - ایجنٹ ایکشنز (click/type/drag/select)، اسنیپ شاٹس، اسکرین شاٹس، PDFs۔
 - اختیاری ملٹی پروفائل سپورٹ (`openclaw`, `work`, `remote`, ...)۔
 
-یہ براؤزر آپ کا روزمرہ براؤزر **نہیں** ہے۔ یہ ایجنٹ آٹومیشن اور توثیق کے لیے ایک محفوظ، الگ تھلگ سطح ہے۔
+This browser is **not** your daily driver. It is a safe, isolated surface for
+agent automation and verification.
 
 ## Quick start
 
@@ -84,8 +78,8 @@ Gateway کو ری اسٹارٹ کریں۔
 
 Notes:
 
-- براؤزر کنٹرول سروس loopback پر ایک پورٹ سے بائنڈ ہوتی ہے جو `gateway.port` سے اخذ کیا جاتا ہے
-  (ڈیفالٹ: `18791`، یعنی gateway + 2)۔ ریلے اگلا پورٹ استعمال کرتا ہے (`18792`)۔
+- The browser control service binds to loopback on a port derived from `gateway.port`
+  (default: `18791`, which is gateway + 2). The relay uses the next port (`18792`).
 - اگر آپ Gateway پورٹ (`gateway.port` یا `OPENCLAW_GATEWAY_PORT`) اوور رائیڈ کریں،
   تو اخذ شدہ براؤزر پورٹس اسی “فیملی” میں رہنے کے لیے شفٹ ہو جاتے ہیں۔
 - `cdpUrl` اگر سیٹ نہ ہو تو بطورِ طے شدہ ریلے پورٹ لیتا ہے۔
@@ -93,15 +87,15 @@ Notes:
 - `remoteCdpHandshakeTimeoutMs` ریموٹ CDP WebSocket رسائی کی جانچ پر لاگو ہوتا ہے۔
 - `attachOnly: true` کا مطلب ہے “کبھی مقامی براؤزر لانچ نہ کریں؛ صرف اسی صورت منسلک کریں جب وہ پہلے سے چل رہا ہو۔”
 - `color` + فی پروفائل `color` براؤزر UI کو رنگ دیتے ہیں تاکہ معلوم ہو سکے کون سا پروفائل فعال ہے۔
-- ڈیفالٹ پروفائل `chrome` (extension relay) ہے۔ منیجڈ براؤزر کے لیے `defaultProfile: "openclaw"` استعمال کریں۔
+- Default profile is `chrome` (extension relay). Use `defaultProfile: "openclaw"` for the managed browser.
 - آٹو ڈیٹیکٹ آرڈر: اگر Chromium-based ہو تو سسٹم ڈیفالٹ براؤزر؛ ورنہ Chrome → Brave → Edge → Chromium → Chrome Canary۔
 - مقامی `openclaw` پروفائلز خود بخود `cdpPort`/`cdpUrl` اسائن کرتے ہیں — انہیں صرف ریموٹ CDP کے لیے سیٹ کریں۔
 
 ## Use Brave (or another Chromium-based browser)
 
-اگر آپ کا **سسٹم ڈیفالٹ** براؤزر Chromium-based ہے (Chrome/Brave/Edge وغیرہ)،
-OpenClaw اسے خود بخود استعمال کرتا ہے۔ آٹو ڈیٹیکشن اوور رائیڈ کرنے کے لیے
-`browser.executablePath` سیٹ کریں:
+If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
+OpenClaw uses it automatically. Set `browser.executablePath` to override
+auto-detection:
 
 CLI example:
 
@@ -136,22 +130,23 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 - **Local control (default):** Gateway loopback کنٹرول سروس شروع کرتا ہے اور مقامی براؤزر لانچ کر سکتا ہے۔
 - **Remote control (node host):** اس مشین پر node host چلائیں جہاں براؤزر موجود ہو؛ Gateway براؤزر ایکشنز کو وہاں پروکسی کرتا ہے۔
-- **Remote CDP:** `browser.profiles.<name>.cdpUrl` (یا `browser.cdpUrl`) سیٹ کریں تاکہ کسی ریموٹ Chromium-based براؤزر سے منسلک ہو سکیں۔ اس صورت میں OpenClaw مقامی براؤزر لانچ نہیں کرے گا۔
+- **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
+  attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 
 Remote CDP URLs میں auth شامل ہو سکتا ہے:
 
 - Query tokens (مثلاً `https://provider.example?token=<token>`)
 - HTTP Basic auth (مثلاً `https://user:pass@provider.example`)
 
-OpenClaw `/json/*` endpoints کال کرتے وقت اور CDP WebSocket سے جڑتے وقت
-auth برقرار رکھتا ہے۔ ٹوکنز کو کنفیگ فائلز میں کمیٹ کرنے کے بجائے
-environment variables یا secrets managers کو ترجیح دیں۔
+OpenClaw preserves the auth when calling `/json/*` endpoints and when connecting
+to the CDP WebSocket. Prefer environment variables or secrets managers for
+tokens instead of committing them to config files.
 
 ## Node browser proxy (zero-config default)
 
-اگر آپ اس مشین پر **node host** چلاتے ہیں جہاں براؤزر موجود ہے، تو OpenClaw
-بغیر کسی اضافی براؤزر کنفیگ کے براؤزر ٹول کالز کو خودکار طور پر اس node تک روٹ کر سکتا ہے۔
-یہ ریموٹ gateways کے لیے ڈیفالٹ راستہ ہے۔
+If you run a **node host** on the machine that has your browser, OpenClaw can
+auto-route browser tool calls to that node without any extra browser config.
+This is the default path for remote gateways.
 
 Notes:
 
@@ -163,10 +158,9 @@ Notes:
 
 ## Browserless (hosted remote CDP)
 
-[Browserless](https://browserless.io) ایک ہوسٹڈ Chromium سروس ہے جو
-HTTPS پر CDP endpoints فراہم کرتی ہے۔ آپ OpenClaw براؤزر پروفائل کو
-Browserless کے کسی ریجن endpoint کی طرف پوائنٹ کر سکتے ہیں اور
-اپنی API key سے تصدیق کر سکتے ہیں۔
+[Browserless](https://browserless.io) is a hosted Chromium service that exposes
+CDP endpoints over HTTPS. You can point a OpenClaw browser profile at a
+Browserless region endpoint and authenticate with your API key.
 
 Example:
 
@@ -207,7 +201,7 @@ Remote CDP tips:
 
 ## Profiles (multi-browser)
 
-OpenClaw متعدد نامی پروفائلز (routing configs) کو سپورٹ کرتا ہے۔ پروفائلز یہ ہو سکتے ہیں:
+OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 
 - **openclaw-managed**: ایک وقف شدہ Chromium-based براؤزر انسٹینس جس کی اپنی user data directory + CDP پورٹ ہو
 - **remote**: ایک واضح CDP URL (کہیں اور چل رہا Chromium-based براؤزر)
@@ -240,8 +234,8 @@ Flow:
 
 ### Sandboxed sessions
 
-اگر ایجنٹ سیشن sandboxed ہو، تو `browser` ٹول بطورِ طے شدہ `target="sandbox"` (sandbox براؤزر) پر جا سکتا ہے۔
-Chrome ایکسٹینشن ریلے takeover کے لیے ہوسٹ براؤزر کنٹرول درکار ہوتا ہے، لہٰذا یا تو:
+If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
+Chrome extension relay takeover requires host browser control, so either:
 
 - سیشن unsandboxed چلائیں، یا
 - `agents.defaults.sandbox.browser.allowHostControl: true` سیٹ کریں اور ٹول کال کرتے وقت `target="host"` استعمال کریں۔
@@ -323,10 +317,10 @@ Platforms:
 
 ### Playwright requirement
 
-کچھ فیچرز (navigate/act/AI snapshot/role snapshot، element screenshots، PDF) کے لیے
-Playwright درکار ہے۔ اگر Playwright انسٹال نہ ہو، تو یہ endpoints واضح 501
-غلطی لوٹاتے ہیں۔ openclaw-managed Chrome کے لیے ARIA snapshots اور بنیادی screenshots اب بھی کام کرتے ہیں۔
-Chrome ایکسٹینشن ریلے ڈرائیور کے لیے، ARIA snapshots اور screenshots کے لیے Playwright درکار ہے۔
+Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
+Playwright. If Playwright isn’t installed, those endpoints return a clear 501
+error. ARIA snapshots and basic screenshots still work for openclaw-managed Chrome.
+For the Chrome extension relay driver, ARIA snapshots and screenshots require Playwright.
 
 اگر آپ `Playwright is not available in this gateway build` دیکھیں، تو مکمل
 Playwright پیکج انسٹال کریں ( `playwright-core` نہیں ) اور gateway ری اسٹارٹ کریں، یا
@@ -334,17 +328,17 @@ Playwright پیکج انسٹال کریں ( `playwright-core` نہیں ) اور 
 
 #### Docker Playwright install
 
-اگر آپ کا Gateway Docker میں چل رہا ہو، تو `npx playwright` سے گریز کریں (npm override conflicts)۔
-اس کے بجائے bundled CLI استعمال کریں:
+If your Gateway runs in Docker, avoid `npx playwright` (npm override conflicts).
+Use the bundled CLI instead:
 
 ```bash
 docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-براؤزر ڈاؤن لوڈز کو برقرار رکھنے کے لیے، `PLAYWRIGHT_BROWSERS_PATH` سیٹ کریں (مثلاً،
-`/home/node/.cache/ms-playwright`) اور یقینی بنائیں کہ `/home/node` کو
-`OPENCLAW_HOME_VOLUME` یا bind mount کے ذریعے برقرار رکھا گیا ہو۔ [Docker](/install/docker) دیکھیں۔
+To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
+`/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
+`OPENCLAW_HOME_VOLUME` or a bind mount. See [Docker](/install/docker).
 
 ## How it works (internal)
 
@@ -360,8 +354,8 @@ High-level flow:
 
 ## CLI quick reference
 
-تمام کمانڈز مخصوص پروفائل کو ہدف بنانے کے لیے `--browser-profile <name>` قبول کرتی ہیں۔
-تمام کمانڈز مشین ریڈیبل آؤٹ پٹ (مستحکم payloads) کے لیے `--json` بھی قبول کرتی ہیں۔
+All commands accept `--browser-profile <name>` to target a specific profile.
+All commands also accept `--json` for machine-readable output (stable payloads).
 
 Basics:
 
@@ -452,8 +446,8 @@ Notes:
   - `--frame "<iframe selector>"` role snapshots کو کسی iframe تک محدود کرتا ہے (role refs جیسے `e12` کے ساتھ جوڑا جاتا ہے)۔
   - `--interactive` interactive عناصر کی ایک سادہ، آسان فہرست آؤٹ پٹ کرتا ہے (ایکشنز چلانے کے لیے بہترین)۔
   - `--labels` viewport-only اسکرین شاٹ شامل کرتا ہے جس پر overlayed ref labels ہوتے ہیں ( `MEDIA:<path>` پرنٹ کرتا ہے)۔
-- `click`/`type`/وغیرہ کو `snapshot` سے ایک `ref` درکار ہوتا ہے (یا عددی `12` یا role ref `e12`)۔
-  ایکشنز کے لیے CSS selectors دانستہ طور پر سپورٹ نہیں کیے جاتے۔
+- `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
+  CSS selectors are intentionally not supported for actions.
 
 ## Snapshots and refs
 
@@ -547,9 +541,9 @@ JSON میں role snapshots میں `refs` کے ساتھ ایک چھوٹا `stats`
 ## Security & privacy
 
 - openclaw براؤزر پروفائل میں لاگ اِن سیشنز ہو سکتے ہیں؛ اسے حساس سمجھیں۔
-- `browser act kind=evaluate` / `openclaw browser evaluate` اور `wait --fn`
-  صفحہ کے context میں من مانی JavaScript چلاتے ہیں۔ prompt injection اسے متاثر کر سکتا ہے۔
-  اگر ضرورت نہ ہو تو `browser.evaluateEnabled=false` کے ساتھ غیر فعال کریں۔
+- `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. Prompt injection can steer
+  this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
 - لاگ اِنز اور anti-bot نوٹس (X/Twitter وغیرہ) کے لیے دیکھیں [Browser login + X/Twitter posting](/tools/browser-login)۔
 - Gateway/node host کو نجی رکھیں (loopback یا tailnet-only)۔
 - Remote CDP endpoints طاقتور ہوتے ہیں؛ انہیں tunnel اور محفوظ رکھیں۔

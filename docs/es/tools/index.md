@@ -4,13 +4,6 @@ read_when:
   - Agregar o modificar herramientas del agente
   - Retirar o cambiar skills `openclaw-*`
 title: "Herramientas"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:29Z
 ---
 
 # Herramientas (OpenClaw)
@@ -496,7 +489,7 @@ Renderizado de canvas:
 2. `a2ui_push` (opcional)
 3. `snapshot`
 
-Selección de nodos:
+Orientación del nodo:
 
 1. `nodes` → `status`
 2. `describe` en el nodo elegido

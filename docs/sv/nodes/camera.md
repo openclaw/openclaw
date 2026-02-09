@@ -4,13 +4,6 @@ read_when:
   - Lägger till eller ändrar kamerainspelning på iOS-noder eller macOS
   - Utökar agentåtkomliga MEDIA-arbetsflöden med temporära filer
 title: "Kamerainspelning"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:50Z
 ---
 
 # Kamerainspelning (agent)
@@ -66,7 +59,7 @@ All kameratillgång är spärrad bakom **användarkontrollerade inställningar**
 
 ### Förgrundskrav
 
-Liksom `canvas.*` tillåter iOS-noden endast `camera.*`-kommandon i **förgrunden**. Anrop i bakgrunden returnerar `NODE_BACKGROUND_UNAVAILABLE`.
+Som `canvas.*`, tillåter iOS-noden endast `camera.*` kommandon i **förgrunden**. Bakgrundsinciteringar returnerar `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI-hjälpare (temporära filer + MEDIA)
 
@@ -105,7 +98,7 @@ Om behörigheter saknas uppmanar appen när det är möjligt; om de nekas missly
 
 ### Android-krav på förgrund
 
-Liksom `canvas.*` tillåter Android-noden endast `camera.*`-kommandon i **förgrunden**. Anrop i bakgrunden returnerar `NODE_BACKGROUND_UNAVAILABLE`.
+Som `canvas.*`, tillåter Android-noden endast `camera.*` kommandon i **förgrunden**. Bakgrundsinciteringar returnerar `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### Payload-skydd
 

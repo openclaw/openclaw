@@ -4,18 +4,11 @@ read_when:
   - Pagtawag ng mga tool nang hindi nagpapatakbo ng buong agent turn
   - Pagbuo ng mga automation na nangangailangan ng pagpapatupad ng tool policy
 title: "Tools Invoke API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:33Z
 ---
 
 # Tools Invoke (HTTP)
 
-Inilalantad ng Gateway ng OpenClaw ang isang simpleng HTTP endpoint para sa direktang pagtawag ng isang solong tool. Palagi itong naka-enable, ngunit naka-gate ng Gateway auth at tool policy.
+Ibinubunyag ng Gateway ng OpenClaw ang isang simpleng HTTP endpoint para tawagin ang isang tool nang direkta. Palagi itong naka-enable, ngunit nililimitahan ng Gateway auth at patakaran ng tool.
 
 - `POST /tools/invoke`
 - Parehong port ng Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -24,7 +17,7 @@ Ang default na max payload size ay 2 MB.
 
 ## Authentication
 
-Gumagamit ng Gateway auth configuration. Magpadala ng bearer token:
+Gumagamit ng configuration ng Gateway auth. Magpadala ng bearer token:
 
 - `Authorization: Bearer <token>`
 
@@ -50,7 +43,7 @@ Mga field:
 - `tool` (string, required): pangalan ng tool na tatawagin.
 - `action` (string, optional): ini-map sa args kung sinusuportahan ng tool schema ang `action` at inalis ito sa args payload.
 - `args` (object, optional): mga argumentong partikular sa tool.
-- `sessionKey` (string, optional): target session key. Kapag inalis o `"main"`, gagamitin ng Gateway ang naka-configure na main session key (iginagalang ang `session.mainKey` at default agent, o `global` sa global scope).
+- `sessionKey` (string, opsyonal): target na session key. Kung hindi ibinigay o `"main"`, gagamit ang Gateway ng naka-configure na pangunahing session key (iginagalang ang `session.mainKey` at default agent, o `global` sa global scope).
 - `dryRun` (boolean, optional): nakareserba para sa hinaharap; kasalukuyang hindi pinapansin.
 
 ## Policy + routing behavior
@@ -59,7 +52,7 @@ Sinasala ang availability ng tool sa parehong policy chain na ginagamit ng Gatew
 
 - `tools.profile` / `tools.byProvider.profile`
 - `tools.allow` / `tools.byProvider.allow`
-- `agents.<id>.tools.allow` / `agents.<id>.tools.byProvider.allow`
+- `agents.<id>``.tools.allow` / `agents.<id>`.tools.byProvider.allow\`
 - mga group policy (kung ang session key ay naka-map sa isang grupo o channel)
 - subagent policy (kapag tumatawag gamit ang subagent session key)
 

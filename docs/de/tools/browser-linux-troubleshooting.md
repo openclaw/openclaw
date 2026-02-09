@@ -1,14 +1,7 @@
 ---
-summary: „Beheben von Chrome/Brave/Edge/Chromium-CDP-Startproblemen für die OpenClaw-Browsersteuerung unter Linux“
-read_when: „Die Browsersteuerung schlägt unter Linux fehl, insbesondere mit Snap-Chromium“
-title: „Browser-Fehlerbehebung“
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:30Z
+summary: "„Beheben von Chrome/Brave/Edge/Chromium-CDP-Startproblemen für die OpenClaw-Browsersteuerung unter Linux“"
+read_when: "„Die Browsersteuerung schlägt unter Linux fehl, insbesondere mit Snap-Chromium“"
+title: "„Browser-Fehlerbehebung“"
 ---
 
 # Browser-Fehlerbehebung (Linux)
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Konfigurationsreferenz
 
-| Option                   | Beschreibung                                                                 | Standard                                                                     |
-| ------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `browser.enabled`        | Browsersteuerung aktivieren                                                  | `true`                                                                       |
+| Option                   | Beschreibung                                                                                    | Standard                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Browsersteuerung aktivieren                                                                     | `true`                                                                                          |
 | `browser.executablePath` | Pfad zu einem Chromium-basierten Browser-Binary (Chrome/Brave/Edge/Chromium) | automatisch erkannt (bevorzugt den Standardbrowser, sofern Chromium-basiert) |
-| `browser.headless`       | Ohne GUI ausführen                                                           | `false`                                                                      |
-| `browser.noSandbox`      | Flag `--no-sandbox` hinzufügen (für einige Linux-Setups erforderlich)        | `false`                                                                      |
-| `browser.attachOnly`     | Browser nicht starten, nur an einen bestehenden anhängen                     | `false`                                                                      |
-| `browser.cdpPort`        | Chrome-DevTools-Protocol-Port                                                | `18800`                                                                      |
+| `browser.headless`       | Ohne GUI ausführen                                                                              | `false`                                                                                         |
+| `browser.noSandbox`      | Flag `--no-sandbox` hinzufügen (für einige Linux-Setups erforderlich)        | `false`                                                                                         |
+| `browser.attachOnly`     | Browser nicht starten, nur an einen bestehenden anhängen                                        | `false`                                                                                         |
+| `browser.cdpPort`        | Chrome-DevTools-Protocol-Port                                                                   | `18800`                                                                                         |
 
 ### Problem: „Chrome extension relay is running, but no tab is connected“
 

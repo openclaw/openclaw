@@ -3,13 +3,6 @@ summary: "`openclaw configure` için CLI başvuru belgesi (etkileşimli yapılan
 read_when:
   - Kimlik bilgilerini, cihazları veya ajan varsayılanlarını etkileşimli olarak ayarlamak istediğinizde
 title: "yapılandır"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:01Z
 ---
 
 # `openclaw configure`

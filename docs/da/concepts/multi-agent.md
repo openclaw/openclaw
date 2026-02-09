@@ -3,18 +3,11 @@ summary: "Multi-agent-routing: isolerede agenter, kanalkonti og bindinger"
 title: Multi-Agent-routing
 read_when: "Du vil have flere isolerede agenter (workspaces + auth) i én gateway-proces."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:24Z
 ---
 
 # Multi-Agent-routing
 
-Mål: flere _isolerede_ agenter (separat workspace + `agentDir` + sessioner) samt flere kanalkonti (f.eks. to WhatsApps) i én kørende Gateway. Indgående trafik routes til en agent via bindinger.
+Mål: flere _isolated_ agenter (separate arbejdsrum + `agentDir` + sessioner), plus flere kanalkonti (f.eks. to WhatsApps) i en kørende Gateway. Indgående sendes til en agent via bindinger.
 
 ## Hvad er “én agent”?
 
@@ -24,25 +17,25 @@ En **agent** er en fuldt afgrænset hjerne med sin egen:
 - **Tilstandskatalog** (`agentDir`) til auth-profiler, modelregister og per-agent konfiguration.
 - **Session-lager** (chathistorik + routingtilstand) under `~/.openclaw/agents/<agentId>/sessions`.
 
-Auth-profiler er **per agent**. Hver agent læser fra sin egen:
+Auth profiler er **per-agent**. Hver agent læser fra sig selv:
 
 ```
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Primære agent-legitimationsoplysninger deles **ikke** automatisk. Genbrug aldrig `agentDir`
-på tværs af agenter (det forårsager auth-/sessionsammenstød). Hvis du vil dele credentials,
-så kopiér `auth-profiles.json` ind i den anden agents `agentDir`.
+Hovedagent legitimationsoplysninger **ikke** deles automatisk. Genbrug aldrig 'agentDir'
+på tværs af agenter (det forårsager auth/session kollisioner). Hvis du ønsker at dele creds,
+kopiere `auth-profiles.json` til den anden agent's `agentDir`.
 
-Skills er per agent via hver workspaces `skills/`-mappe, med delte skills
-tilgængelige fra `~/.openclaw/skills`. Se [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+Færdigheder er per-agent via hvert arbejdsområde `færdigheder/` mappe, med delte færdigheder
+til rådighed fra `~/.openclaw/skills`. Se [Færdigheder: per-agent vs delt](/tools/skills#per-agent-vs-shared-skills).
 
 Gateway kan hoste **én agent** (standard) eller **mange agenter** side om side.
 
-**Workspace-note:** hver agents workspace er den **standard cwd**, ikke en hård
-sandbox. Relative stier resolves inde i workspacet, men absolutte stier kan
-nå andre værtsplaceringer, medmindre sandboxing er aktiveret. Se
-[Sandboxing](/gateway/sandboxing).
+**Arbejdsrum note:** hver agents arbejdsområde er **standard cwd**, ikke en hård
+sandkasse. Relative stier løser inde i arbejdsområdet, men absolutte stier kan
+nå andre værtssteder, medmindre sandboxing er aktiveret. Se
+[Sandboxing](/gateway/sandboxing)
 
 ## Stier (hurtigt overblik)
 
@@ -89,7 +82,7 @@ Det gør det muligt for **flere personer** at dele én Gateway-server, mens dere
 
 ## Ét WhatsApp-nummer, flere personer (DM-split)
 
-Du kan route **forskellige WhatsApp-DM’er** til forskellige agenter, mens du bliver på **én WhatsApp-konto**. Match på afsenderens E.164 (som `+15551234567`) med `peer.kind: "dm"`. Svar kommer stadig fra det samme WhatsApp-nummer (ingen per-agent afsenderidentitet).
+Du kan dirigere **forskellige WhatsApp DMs** til forskellige agenter under opholdet på **one WhatsApp account**. Match på afsender E.164 (som `+15551234567`) med `peer.kind: "dm"`. Svar kommer stadig fra det samme WhatsApp nummer (ingen per-agent afsender identitet).
 
 Vigtig detalje: direkte chats kollapser til agentens **hovedsessionsnøgle**, så ægte isolation kræver **én agent per person**.
 
@@ -134,15 +127,15 @@ Bindinger er **deterministiske**, og **mest specifik vinder**:
 
 ## Flere konti / telefonnumre
 
-Kanaler, der understøtter **flere konti** (f.eks. WhatsApp), bruger `accountId` til at identificere
-hver login. Hver `accountId` kan routes til en anden agent, så én server kan hoste
+Kanaler der understøtter **flere konti** (f.eks. WhatsApp) bruger `accountId` til at identificere
+hvert login. Hver `accountId` kan dirigeres til en anden agent, så en server kan være vært
 flere telefonnumre uden at blande sessioner.
 
 ## Begreber
 
 - `agentId`: én “hjerne” (workspace, per-agent auth, per-agent session-lager).
-- `accountId`: én kanalkonto-instans (f.eks. WhatsApp-konto `"personal"` vs `"biz"`).
-- `binding`: router indgående beskeder til en `agentId` via `(channel, accountId, peer)` og evt. guild-/team-id’er.
+- `accountId`: en kanal konto instans (f.eks. WhatsApp konto `"personal"` vs `"biz"`).
+- `binding`: ruter indgående beskeder til en `agentId` af `(kanal, accountId, peer)` og eventuelt guild/team ids.
 - Direkte chats kollapser til `agent:<agentId>:<mainKey>` (per-agent “main”; `session.mainKey`).
 
 ## Eksempel: to WhatsApps → to agenter
@@ -325,8 +318,8 @@ og en strammere værktøjspolitik:
 
 Noter:
 
-- Værktøjs-tillad/afvis-lister er **værktøjer**, ikke skills. Hvis en skill skal køre et
-  binært program, skal `exec` være tilladt, og binæren skal findes i sandboxen.
+- Værktøjet tillad/benægte lister er **værktøjer**, ikke færdigheder. Hvis en færdighed skal køre en
+  binær, skal du sikre at `exec` er tilladt, og den binære findes i sandkassen.
 - For strengere gating: sæt `agents.list[].groupChat.mentionPatterns` og behold
   gruppe-tilladelseslister aktiveret for kanalen.
 
@@ -367,8 +360,8 @@ Fra og med v2026.1.6 kan hver agent have sin egen sandbox og værktøjsbegrænsn
 }
 ```
 
-Bemærk: `setupCommand` ligger under `sandbox.docker` og køres én gang ved oprettelse af containeren.
-Per-agent `sandbox.docker.*`-overstyringer ignoreres, når den løste scope er `"shared"`.
+Bemærk: `setupCommand` lever under `sandbox.docker` og kører én gang på container oprettelse.
+Per-agent `sandbox.docker.*` tilsidesættelser ignoreres, når det løste anvendelsesområde er `"delt"`.
 
 **Fordele:**
 
@@ -376,8 +369,8 @@ Per-agent `sandbox.docker.*`-overstyringer ignoreres, når den løste scope er `
 - **Ressourcestyring**: Sandbox specifikke agenter, mens andre forbliver på værten
 - **Fleksible politikker**: Forskellige tilladelser per agent
 
-Bemærk: `tools.elevated` er **global** og afsenderbaseret; den kan ikke konfigureres per agent.
-Hvis du har brug for per-agent-grænser, så brug `agents.list[].tools` til at afvise `exec`.
-Til gruppemålretning skal du bruge `agents.list[].groupChat.mentionPatterns`, så @mentions mappes korrekt til den tilsigtede agent.
+Bemærk: `tools.elevated` er **global** og afsenderbaseret; den kan ikke konfigureres pr. agent.
+Hvis du har brug for per-agent grænser, brug `agents.list[].tools` at benægte `exec`.
+For gruppemål, brug `agents.list[].groupChat.mentionPatterns` så @nævner kort rent til den tilsigtede agent.
 
 Se [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detaljerede eksempler.

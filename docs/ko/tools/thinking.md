@@ -1,15 +1,8 @@
 ---
 summary: " /think + /verbose에 대한 지시자 구문과 모델 추론에 미치는 영향"
 read_when:
-  - "사고 또는 상세 지시자 파싱이나 기본값을 조정할 때"
+  - 사고 방식 또는 장황한 지시문 파싱이나 기본값 조정
 title: "사고 수준"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:39Z
 ---
 
 # 사고 수준 (/think 지시자)

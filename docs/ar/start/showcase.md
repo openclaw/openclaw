@@ -2,13 +2,6 @@
 title: "العرض"
 description: "مشاريع OpenClaw الواقعية من المجتمع"
 summary: "مشاريع وتكاملات بناها المجتمع ومدعومة بواسطة OpenClaw"
-x-i18n:
-  source_path: start/showcase.md
-  source_hash: b3460f6a7b994879
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:17Z
 ---
 
 # العرض
@@ -41,7 +34,7 @@ x-i18n:
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
   />
-</div>
+</div></div>
 
 [المشاهدة على YouTube](https://www.youtube.com/watch?v=SaWSPZoPX34)
 
@@ -63,7 +56,7 @@ x-i18n:
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
   />
-</div>
+</div></div>
 
 [المشاهدة على YouTube](https://www.youtube.com/watch?v=mMSKQvlmFuQ)
 
@@ -85,7 +78,7 @@ x-i18n:
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
   />
-</div>
+</div></div>
 
 [المشاهدة على YouTube](https://www.youtube.com/watch?v=5kkIJNUGFho)
 
@@ -93,7 +86,7 @@ x-i18n:
 
 <CardGroup cols={2}>
 
-<Card title="مراجعة PR → ملاحظات عبر Telegram" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
+<Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
 ينهي OpenCode التغيير → يفتح PR → يراجع OpenClaw الفروقات ويرد في Telegram مع «اقتراحات طفيفة» إضافةً إلى قرار دمج واضح (بما في ذلك إصلاحات حرجة يجب تطبيقها أولًا).
@@ -101,7 +94,7 @@ x-i18n:
   <img src="/assets/showcase/pr-review-telegram.jpg" alt="OpenClaw PR review feedback delivered in Telegram" />
 </Card>
 
-<Card title="Skill قبو نبيذ خلال دقائق" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
+<Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
   **@prades_maxime** • `skills` `local` `csv`
 
 طلب من «Robby» (@openclaw) Skill محلي لقبو نبيذ. يطلب تصدير CSV نموذجيًا + مكان تخزينه، ثم يبني ويختبر Skill بسرعة (962 زجاجة في المثال).
@@ -109,7 +102,7 @@ x-i18n:
   <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw building a local wine cellar skill from CSV" />
 </Card>
 
-<Card title="الشراء الآلي من Tesco" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
+<Card title="Tesco Shop Autopilot" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
   **@marchattonhere** • `automation` `browser` `shopping`
 
 خطة وجبات أسبوعية → العناصر المعتادة → حجز وقت التوصيل → تأكيد الطلب. بلا واجهات API، فقط تحكم بالمتصفح.
@@ -117,7 +110,7 @@ x-i18n:
   <img src="/assets/showcase/tesco-shop.jpg" alt="Tesco shop automation via chat" />
 </Card>
 
-<Card title="SNAG: من لقطة شاشة إلى Markdown" icon="scissors" href="https://github.com/am-will/snag">
+<Card title="SNAG Screenshot-to-Markdown" icon="scissors" href="https://github.com/am-will/snag">
   **@am-will** • `devtools` `screenshots` `markdown`
 
 اختصار يحدد منطقة من الشاشة → Gemini vision → Markdown فوري في الحافظة.
@@ -125,7 +118,7 @@ x-i18n:
   <img src="/assets/showcase/snag.png" alt="SNAG screenshot-to-markdown tool" />
 </Card>
 
-<Card title="واجهة Agents" icon="window-maximize" href="https://releaseflow.net/kitze/agents-ui">
+<Card title="Agents UI" icon="window-maximize" href="https://releaseflow.net/kitze/agents-ui">
   **@kitze** • `ui` `skills` `sync`
 
 تطبيق سطح مكتب لإدارة Skills/الأوامر عبر Agents وClaude وCodex وOpenClaw.
@@ -133,7 +126,7 @@ x-i18n:
   <img src="/assets/showcase/agents-ui.jpg" alt="Agents UI app" />
 </Card>
 
-<Card title="ملاحظات صوتية في Telegram (papla.media)" icon="microphone" href="https://papla.media/docs">
+<Card title="Telegram Voice Notes (papla.media)" icon="microphone" href="https://papla.media/docs">
   **Community** • `voice` `tts` `telegram`
 
 يغلف TTS من papla.media ويرسل النتائج كملاحظات صوتية في Telegram (دون تشغيل تلقائي مزعج).
@@ -149,7 +142,7 @@ x-i18n:
   <img src="/assets/showcase/codexmonitor.png" alt="CodexMonitor on ClawHub" />
 </Card>
 
-<Card title="التحكم بطابعة Bambu ثلاثية الأبعاد" icon="print" href="https://clawhub.com/tobiasbischoff/bambu-cli">
+<Card title="Bambu 3D Printer Control" icon="print" href="https://clawhub.com/tobiasbischoff/bambu-cli">
   **@tobiasbischoff** • `hardware` `3d-printing` `skill`
 
 التحكم واستكشاف الأخطاء في طابعات BambuLab: الحالة، المهام، الكاميرا، AMS، المعايرة، والمزيد.
@@ -157,7 +150,7 @@ x-i18n:
   <img src="/assets/showcase/bambu-cli.png" alt="Bambu CLI skill on ClawHub" />
 </Card>
 
-<Card title="نقل فيينا (Wiener Linien)" icon="train" href="https://clawhub.com/hjanuschka/wienerlinien">
+<Card title="Vienna Transport (Wiener Linien)" icon="train" href="https://clawhub.com/hjanuschka/wienerlinien">
   **@hjanuschka** • `travel` `transport` `skill`
 
 مواعيد مغادرة آنية، اضطرابات، حالة المصاعد، وتخطيط المسارات للنقل العام في فيينا.
@@ -165,19 +158,17 @@ x-i18n:
   <img src="/assets/showcase/wienerlinien.png" alt="Wiener Linien skill on ClawHub" />
 </Card>
 
-<Card title="وجبات المدارس عبر ParentPay" icon="utensils" href="#">
+<Card title="ParentPay School Meals" icon="utensils" href="#">
   **@George5562** • `automation` `browser` `parenting`
 
-حجز آلي لوجبات المدارس في المملكة المتحدة عبر ParentPay. يستخدم إحداثيات الماوس للنقر الموثوق على خلايا الجداول.
-</Card>
+حجز آلي لوجبات المدارس في المملكة المتحدة عبر ParentPay. يستخدم إحداثيات الماوس للنقر الموثوق على خلايا الجداول. </Card>
 
-<Card title="رفع R2 (أرسل لي ملفاتي)" icon="cloud-arrow-up" href="https://clawhub.com/skills/r2-upload">
+<Card title="R2 Upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawhub.com/skills/r2-upload">
   **@julianengel** • `files` `r2` `presigned-urls`
 
-الرفع إلى Cloudflare R2/S3 وتوليد روابط تنزيل موقعة وآمنة. مثالي لنسخ OpenClaw البعيدة.
-</Card>
+الرفع إلى Cloudflare R2/S3 وتوليد روابط تنزيل موقعة وآمنة. مثالي لنسخ OpenClaw البعيدة. </Card>
 
-<Card title="تطبيق iOS عبر Telegram" icon="mobile" href="#">
+<Card title="iOS App via Telegram" icon="mobile" href="#">
   **@coard** • `ios` `xcode` `testflight`
 
 بناء تطبيق iOS كامل مع خرائط وتسجيل صوتي، ونشره على TestFlight بالكامل عبر دردشة Telegram.
@@ -185,30 +176,27 @@ x-i18n:
   <img src="/assets/showcase/ios-testflight.jpg" alt="iOS app on TestFlight" />
 </Card>
 
-<Card title="مساعد صحة Oura Ring" icon="heart-pulse" href="#">
+<Card title="Oura Ring Health Assistant" icon="heart-pulse" href="#">
   **@AS** • `health` `oura` `calendar`
 
 مساعد صحي شخصي يدمج بيانات خاتم Oura مع التقويم والمواعيد وجدول النادي الرياضي.
 
   <img src="/assets/showcase/oura-health.png" alt="Oura ring health assistant" />
 </Card>
-<Card title="فريق أحلام Kev (14+ Agents)" icon="robot" href="https://github.com/adam91holt/orchestrated-ai-articles">
+<Card title="Kev's Dream Team (14+ Agents)" icon="robot" href="https://github.com/adam91holt/orchestrated-ai-articles">
   **@adam91holt** • `multi-agent` `orchestration` `architecture` `manifesto`
 
-أكثر من 14 وكيلًا تحت Gateway واحد مع منسّق Opus 4.5 يوزّع المهام على عمّال Codex. توثيق تقني شامل يغطّي تشكيلة فريق الأحلام، اختيار النماذج، sandboxing، webhooks، نبضات الحالة، وتدفّقات التفويض. [Clawdspace](https://github.com/adam91holt/clawdspace) لـ sandboxing الوكلاء. [تدوينة](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/).
-</Card>
+أكثر من 14 وكيلًا تحت Gateway واحد مع منسّق Opus 4.5 يوزّع المهام على عمّال Codex. توثيق تقني شامل يغطّي تشكيلة فريق الأحلام، اختيار النماذج، sandboxing، webhooks، نبضات الحالة، وتدفّقات التفويض. [Clawdspace](https://github.com/adam91holt/clawdspace) لـ sandboxing الوكلاء. [تدوينة](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/). </Card>
 
 <Card title="Linear CLI" icon="terminal" href="https://github.com/Finesssee/linear-cli">
   **@NessZerra** • `devtools` `linear` `cli` `issues`
 
-CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Claude Code، OpenClaw). إدارة القضايا والمشاريع وتدفّقات العمل من الطرفية. تم دمج أول PR خارجي!
-</Card>
+CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Claude Code، OpenClaw). إدارة القضايا والمشاريع وتدفّقات العمل من الطرفية. تم دمج أول PR خارجي! </Card>
 
 <Card title="Beeper CLI" icon="message" href="https://github.com/blqke/beepcli">
   **@jules** • `messaging` `beeper` `cli` `automation`
 
-قراءة الرسائل وإرسالها وأرشفتها عبر Beeper Desktop. يستخدم واجهة Beeper المحلية MCP ليتمكّن الوكلاء من إدارة كل محادثاتك (iMessage، WhatsApp، إلخ) في مكان واحد.
-</Card>
+قراءة الرسائل وإرسالها وأرشفتها عبر Beeper Desktop. يستخدم واجهة Beeper المحلية MCP ليتمكّن الوكلاء من إدارة كل محادثاتك (iMessage، WhatsApp، إلخ) في مكان واحد. في مكان واحد. </Card>
 
 </CardGroup>
 
@@ -216,7 +204,7 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 <CardGroup cols={2}>
 
-<Card title="التحكم بمنقّي الهواء Winix" icon="wind" href="https://x.com/antonplex/status/2010518442471006253">
+<Card title="Winix Air Purifier Control" icon="wind" href="https://x.com/antonplex/status/2010518442471006253">
   **@antonplex** • `automation` `hardware` `air-quality`
 
 اكتشف Claude Code عناصر التحكم بالمُنقّي وأكّدها، ثم تولّى OpenClaw إدارة جودة هواء الغرفة.
@@ -224,7 +212,7 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
   <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via OpenClaw" />
 </Card>
 
-<Card title="لقطات سماء جميلة بالكاميرا" icon="camera" href="https://x.com/signalgaining/status/2010523120604746151">
+<Card title="Pretty Sky Camera Shots" icon="camera" href="https://x.com/signalgaining/status/2010523120604746151">
   **@signalgaining** • `automation` `camera` `skill` `images`
 
 يتم التحفيز عبر كاميرا السطح: اطلب من OpenClaw التقاط صورة للسماء كلما بدت جميلة — صمّم Skill والتقط الصورة.
@@ -232,61 +220,53 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
   <img src="/assets/showcase/roof-camera-sky.jpg" alt="Roof camera sky snapshot captured by OpenClaw" />
 </Card>
 
-<Card title="مشهد إحاطة صباحية مرئية" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
+<Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
   **@buddyhadry** • `automation` `briefing` `images` `telegram`
 
-مُحفّز مجدول يولّد صورة «مشهد» واحدة كل صباح (الطقس، المهام، التاريخ، منشور/اقتباس مفضل) عبر شخصية OpenClaw.
-</Card>
+مُحفّز مجدول يولّد صورة «مشهد» واحدة كل صباح (الطقس، المهام، التاريخ، منشور/اقتباس مفضل) عبر شخصية OpenClaw. </Card>
 
-<Card title="حجز ملعب Padel" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
+<Card title="Padel Court Booking" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
   **@joshp123** • `automation` `booking` `cli`
-  
-  أداة CLI للتحقق من التوفر والحجز عبر Playtomic. لا تفوّت ملعبًا شاغرًا مجددًا.
-  
+
+أداة CLI للتحقق من التوفر والحجز عبر Playtomic. لا تفوّت ملعبًا شاغرًا مجددًا.
+
   <img src="/assets/showcase/padel-screenshot.jpg" alt="padel-cli screenshot" />
 </Card>
 
-<Card title="استقبال المحاسبة" icon="file-invoice-dollar">
+<Card title="Accounting Intake" icon="file-invoice-dollar">
   **Community** • `automation` `email` `pdf`
-  
-  يجمع ملفات PDF من البريد الإلكتروني ويُحضّر المستندات لمستشار الضرائب. محاسبة شهرية على الطيار الآلي.
-</Card>
 
-<Card title="وضع المطوّر من الأريكة" icon="couch" href="https://davekiss.com">
+يجمع ملفات PDF من البريد الإلكتروني ويُحضّر المستندات لمستشار الضرائب. محاسبة شهرية على الطيار الآلي. </Card>
+
+<Card title="Couch Potato Dev Mode" icon="couch" href="https://davekiss.com">
   **@davekiss** • `telegram` `website` `migration` `astro`
 
-أعاد بناء الموقع الشخصي كاملًا عبر Telegram أثناء مشاهدة Netflix — Notion → Astro، ترحيل 18 منشورًا، وDNS إلى Cloudflare. لم يفتح حاسوبًا محمولًا.
-</Card>
+أعاد بناء الموقع الشخصي كاملًا عبر Telegram أثناء مشاهدة Netflix — Notion → Astro، ترحيل 18 منشورًا، وDNS إلى Cloudflare. لم يفتح حاسوبًا محمولًا. </Card>
 
-<Card title="وكيل البحث عن وظائف" icon="briefcase">
+<Card title="Job Search Agent" icon="briefcase">
   **@attol8** • `automation` `api` `skill`
 
-يبحث في إعلانات الوظائف، يطابقها مع كلمات السيرة الذاتية، ويعيد الفرص المناسبة مع الروابط. بُني خلال 30 دقيقة باستخدام واجهة JSearch API.
-</Card>
+يبحث في إعلانات الوظائف، يطابقها مع كلمات السيرة الذاتية، ويعيد الفرص المناسبة مع الروابط. بُني خلال 30 دقيقة باستخدام واجهة JSearch API. </Card>
 
-<Card title="منشئ Skill لـ Jira" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
+<Card title="Jira Skill Builder" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
   **@jdrhyne** • `automation` `jira` `skill` `devtools`
 
-اتصل OpenClaw بـ Jira ثم أنشأ Skill جديدًا فورًا (قبل توفره على ClawHub).
-</Card>
+اتصل OpenClaw بـ Jira ثم أنشأ Skill جديدًا فورًا (قبل توفره على ClawHub). </Card>
 
-<Card title="Skill Todoist عبر Telegram" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
+<Card title="Todoist Skill via Telegram" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
   **@iamsubhrajyoti** • `automation` `todoist` `skill` `telegram`
 
-أتمتة مهام Todoist وجعل OpenClaw يولّد Skill مباشرة داخل دردشة Telegram.
-</Card>
+أتمتة مهام Todoist وجعل OpenClaw يولّد Skill مباشرة داخل دردشة Telegram. </Card>
 
-<Card title="تحليل TradingView" icon="chart-line">
+<Card title="TradingView Analysis" icon="chart-line">
   **@bheem1798** • `finance` `browser` `automation`
 
-تسجيل الدخول إلى TradingView عبر أتمتة المتصفح، التقاط لقطات للمخططات، وإجراء تحليل تقني عند الطلب. بلا API — فقط تحكم بالمتصفح.
-</Card>
+تسجيل الدخول إلى TradingView عبر أتمتة المتصفح، التقاط لقطات للمخططات، وإجراء تحليل تقني عند الطلب. بلا API — فقط تحكم بالمتصفح. </Card>
 
-<Card title="دعم Slack آلي" icon="slack">
+<Card title="Slack Auto-Support" icon="slack">
   **@henrymascot** • `slack` `automation` `support`
 
-يراقب قناة Slack الخاصة بالشركة، يرد بمساعدة، ويحوّل الإشعارات إلى Telegram. أصلح تلقائيًا خطأً في الإنتاج ضمن تطبيق منشور دون طلب.
-</Card>
+يراقب قناة Slack الخاصة بالشركة، يرد بمساعدة، ويحوّل الإشعارات إلى Telegram. أصلح تلقائيًا خطأً في الإنتاج ضمن تطبيق منشور دون طلب. </Card>
 
 </CardGroup>
 
@@ -294,31 +274,28 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 <CardGroup cols={2}>
 
-<Card title="تعلّم الصينية xuezh" icon="language" href="https://github.com/joshp123/xuezh">
+<Card title="xuezh Chinese Learning" icon="language" href="https://github.com/joshp123/xuezh">
   **@joshp123** • `learning` `voice` `skill`
-  
-  محرّك لتعلّم الصينية مع تغذية راجعة للنطق وتدفّقات دراسة عبر OpenClaw.
-  
+
+محرّك لتعلّم الصينية مع تغذية راجعة للنطق وتدفّقات دراسة عبر OpenClaw.
+
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
 </Card>
 
-<Card title="خزنة ذاكرة WhatsApp" icon="vault">
+<Card title="WhatsApp Memory Vault" icon="vault">
   **Community** • `memory` `transcription` `indexing`
-  
-  يستوعب صادرات WhatsApp كاملة، يفرّغ أكثر من 1000 ملاحظة صوتية، يقاطعها مع سجلات git، ويُنتج تقارير Markdown مترابطة.
-</Card>
 
-<Card title="بحث دلالي Karakeep" icon="magnifying-glass" href="https://github.com/jamesbrooksco/karakeep-semantic-search">
+يستوعب صادرات WhatsApp كاملة، يفرّغ أكثر من 1000 ملاحظة صوتية، يقاطعها مع سجلات git، ويُنتج تقارير Markdown مترابطة. </Card>
+
+<Card title="Karakeep Semantic Search" icon="magnifying-glass" href="https://github.com/jamesbrooksco/karakeep-semantic-search">
   **@jamesbrooksco** • `search` `vector` `bookmarks`
-  
-  يضيف بحثًا متّجهيًا إلى إشارات Karakeep باستخدام تضمينات Qdrant + OpenAI/Ollama.
-</Card>
 
-<Card title="ذاكرة Inside-Out-2" icon="brain">
+يضيف بحثًا متّجهيًا إلى إشارات Karakeep باستخدام تضمينات Qdrant + OpenAI/Ollama. </Card>
+
+<Card title="Inside-Out-2 Memory" icon="brain">
   **Community** • `memory` `beliefs` `self-model`
-  
-  مدير ذاكرة منفصل يحوّل ملفات الجلسات إلى ذكريات → معتقدات → نموذج ذاتي متطوّر.
-</Card>
+
+مدير ذاكرة منفصل يحوّل ملفات الجلسات إلى ذكريات → معتقدات → نموذج ذاتي متطوّر. </Card>
 
 </CardGroup>
 
@@ -326,17 +303,15 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 <CardGroup cols={2}>
 
-<Card title="جسر الهاتف Clawdia" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
+<Card title="Clawdia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
-  
-  جسر HTTP بين مساعد Vapi الصوتي وOpenClaw. مكالمات هاتفية شبه فورية مع وكيلك.
-</Card>
 
-<Card title="تفريغ صوتي عبر OpenRouter" icon="microphone" href="https://clawhub.com/obviyus/openrouter-transcribe">
+جسر HTTP بين مساعد Vapi الصوتي وOpenClaw. مكالمات هاتفية شبه فورية مع وكيلك. </Card>
+
+<Card title="OpenRouter Transcription" icon="microphone" href="https://clawhub.com/obviyus/openrouter-transcribe">
   **@obviyus** • `transcription` `multilingual` `skill`
 
-تفريغ صوتي متعدد اللغات عبر OpenRouter (Gemini، إلخ). متاح على ClawHub.
-</Card>
+تفريغ صوتي متعدد اللغات عبر OpenRouter (Gemini، إلخ). متاح على ClawHub. </Card>
 
 </CardGroup>
 
@@ -344,29 +319,25 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 <CardGroup cols={2}>
 
-<Card title="إضافة Home Assistant" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
+<Card title="Home Assistant Add-on" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
-  
-  Gateway لـ OpenClaw يعمل على Home Assistant OS مع دعم نفق SSH وحالة دائمة.
-</Card>
 
-<Card title="Skill لـ Home Assistant" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
+Gateway لـ OpenClaw يعمل على Home Assistant OS مع دعم نفق SSH وحالة دائمة. </Card>
+
+<Card title="Home Assistant Skill" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
   **ClawHub** • `homeassistant` `skill` `automation`
-  
-  التحكم بأجهزة Home Assistant وأتمتتها باستخدام اللغة الطبيعية.
-</Card>
 
-<Card title="حزم Nix" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
+التحكم بأجهزة Home Assistant وأتمتتها باستخدام اللغة الطبيعية. </Card>
+
+<Card title="Nix Packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
-  
-  تهيئة OpenClaw بنمط nix متكاملة لتطبيقات قابلة لإعادة الإنتاج.
-</Card>
 
-<Card title="تقويم CalDAV" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
+تهيئة OpenClaw بنمط nix متكاملة لتطبيقات قابلة لإعادة الإنتاج. </Card>
+
+<Card title="CalDAV Calendar" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
   **ClawHub** • `calendar` `caldav` `skill`
-  
-  Skill تقويم باستخدام khal/vdirsyncer. تكامل تقويم مستضاف ذاتيًا.
-</Card>
+
+Skill تقويم باستخدام khal/vdirsyncer. تكامل تقويم مستضاف ذاتيًا. </Card>
 
 </CardGroup>
 
@@ -374,19 +345,19 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 <CardGroup cols={2}>
 
-<Card title="أتمتة GoHome" icon="house-signal" href="https://github.com/joshp123/gohome">
+<Card title="GoHome Automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
-  
-  أتمتة منزلية أصلية لـ Nix مع OpenClaw كواجهة، ولوحات Grafana جميلة.
-  
+
+أتمتة منزلية أصلية لـ Nix مع OpenClaw كواجهة، ولوحات Grafana جميلة.
+
   <img src="/assets/showcase/gohome-grafana.png" alt="GoHome Grafana dashboard" />
 </Card>
 
-<Card title="مكنسة Roborock" icon="robot" href="https://github.com/joshp123/gohome/tree/main/plugins/roborock">
+<Card title="Roborock Vacuum" icon="robot" href="https://github.com/joshp123/gohome/tree/main/plugins/roborock">
   **@joshp123** • `vacuum` `iot` `plugin`
-  
-  التحكّم بمكنسة Roborock الروبوتية عبر محادثة طبيعية.
-  
+
+التحكّم بمكنسة Roborock الروبوتية عبر محادثة طبيعية.
+
   <img src="/assets/showcase/roborock-screenshot.jpg" alt="Roborock status" />
 </Card>
 
@@ -396,11 +367,10 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 <CardGroup cols={2}>
 
-<Card title="سوق StarSwap" icon="star" href="https://star-swap.com/">
+<Card title="StarSwap Marketplace" icon="star" href="https://star-swap.com/">
   **Community** • `marketplace` `astronomy` `webapp`
-  
-  سوق متكامل لمعدات علم الفلك. بُني باستخدام/حول منظومة OpenClaw.
-</Card>
+
+سوق متكامل لمعدات علم الفلك. بُني باستخدام/حول منظومة OpenClaw. </Card>
 
 </CardGroup>
 
@@ -408,16 +378,16 @@ CLI لـ Linear يتكامل مع تدفّقات العمل الوكيلة (Clau
 
 ## أرسل مشروعك
 
-هل لديك ما تود مشاركته؟ يسعدنا عرضه!
+هل لديك شيء لمشاركته؟ نحن نحب أن نميزها!
 
 <Steps>
-  <Step title="شاركه">
+  <Step title="Share It">
     انشر في [#showcase على Discord](https://discord.gg/clawd) أو [غرّد إلى @openclaw](https://x.com/openclaw)
   </Step>
-  <Step title="ضمّن التفاصيل">
-    أخبرنا بما يفعله، وأرفق رابط المستودع/العرض التجريبي، وشارك لقطة شاشة إن توفرت
+  <Step title="Include Details">
+    Tell us what it does, link to the repo/demo, share a screenshot if you have one
   </Step>
-  <Step title="الظهور في الصفحة">
+  <Step title="Get Featured">
     سنضيف المشاريع المميّزة إلى هذه الصفحة
   </Step>
 </Steps>

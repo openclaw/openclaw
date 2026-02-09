@@ -3,18 +3,11 @@ summary: "Các liên kết được tuyển chọn đến những tài liệu Op
 read_when:
   - Bạn muốn truy cập nhanh các trang tài liệu chính
 title: "Danh mục tài liệu"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:09Z
 ---
 
 <Note>
-Trang này là một chỉ mục được tuyển chọn. Nếu bạn mới bắt đầu, hãy xem [Bắt đầu](/start/getting-started).
-Để xem bản đồ đầy đủ của tài liệu, hãy xem [Trung tâm tài liệu](/start/hubs).
+This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
+For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 
 ## Bắt đầu tại đây

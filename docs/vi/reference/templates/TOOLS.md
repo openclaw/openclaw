@@ -2,18 +2,11 @@
 summary: "Mẫu workspace cho TOOLS.md"
 read_when:
   - Khởi tạo workspace thủ công
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:05Z
 ---
 
 # TOOLS.md - Ghi chú cục bộ
 
-Skills định nghĩa _cách_ các công cụ hoạt động. Tệp này dành cho các chi tiết _của riêng bạn_ — những thứ chỉ có trong thiết lập của bạn.
+Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
 ## Nội dung nên có
 
@@ -46,8 +39,8 @@ Ví dụ như:
 
 ## Vì sao tách riêng?
 
-Skills được dùng chung. Thiết lập của bạn là của bạn. Tách riêng giúp bạn cập nhật skills mà không mất ghi chú, và chia sẻ skills mà không làm lộ hạ tầng của bạn.
+Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
 
 ---
 
-Hãy thêm bất cứ thứ gì giúp bạn làm việc hiệu quả. Đây là tờ “cheat sheet” của bạn.
+Add whatever helps you do your job. This is your cheat sheet.

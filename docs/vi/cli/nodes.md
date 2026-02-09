@@ -4,13 +4,6 @@ read_when:
   - Bạn đang quản lý các node đã ghép đôi (camera, màn hình, canvas)
   - Bạn cần phê duyệt yêu cầu hoặc gọi các lệnh của node
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:25Z
 ---
 
 # `openclaw nodes`
@@ -40,8 +33,8 @@ openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
 ```
 
-`nodes list` in ra các bảng đang chờ/đã ghép đôi. Các hàng đã ghép đôi bao gồm tuổi kết nối gần nhất (Last Connect).
-Dùng `--connected` để chỉ hiển thị các node đang kết nối hiện tại. Dùng `--last-connected <duration>` để
+`nodes list` in ra các bảng đang chờ/đã ghép cặp. Các hàng đã ghép cặp bao gồm tuổi kết nối gần nhất (Last Connect).
+Dùng `--connected` để chỉ hiển thị các node hiện đang kết nối. Dùng `--last-connected <duration>` để
 lọc các node đã kết nối trong một khoảng thời gian (ví dụ: `24h`, `7d`).
 
 ## Gọi / chạy

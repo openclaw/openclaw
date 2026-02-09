@@ -3,18 +3,11 @@ summary: "最もよく使用される OpenClaw ドキュメントへの厳選リ
 read_when:
   - 主要なドキュメントページへ素早くアクセスしたいとき
 title: "ドキュメントディレクトリ"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:12Z
 ---
 
 <Note>
-このページは厳選された索引です。初めての方は、[はじめに](/start/getting-started) から始めてください。
-ドキュメント全体の構成については、[ドキュメントハブ](/start/hubs) を参照してください。
+このページはキュレートされた索引です。 9. 初めての方は、[Getting Started](/start/getting-started) から始めてください。
+10. ドキュメント全体のマップについては、[Docs hubs](/start/hubs) を参照してください。
 </Note>
 
 ## ここから始める

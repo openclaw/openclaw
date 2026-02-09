@@ -4,13 +4,6 @@ read_when:
   - Você quer procurar ids de contatos/grupos/self para um canal
   - Você está desenvolvendo um adaptador de diretório de canais
 title: "diretório"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:14Z
 ---
 
 # `openclaw directory`

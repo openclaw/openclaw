@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn thêm/xóa tài khoản kênh (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - Bạn muốn kiểm tra trạng thái kênh hoặc theo dõi log kênh
 title: "channels"
-x-i18n:
-  source_path: cli/channels.md
-  source_hash: 16ab1642f247bfa9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:13Z
 ---
 
 # `openclaw channels`
@@ -53,7 +46,7 @@ openclaw channels logout --channel whatsapp
 
 - Chạy `openclaw status --deep` để thăm dò tổng quát.
 - Dùng `openclaw doctor` để sửa lỗi theo hướng dẫn.
-- `openclaw channels list` in ra `Claude: HTTP 403 ... user:profile` → ảnh chụp mức sử dụng cần phạm vi `user:profile`. Hãy dùng `--no-usage`, hoặc cung cấp khóa phiên claude.ai (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), hoặc xác thực lại qua Claude Code CLI.
+- `openclaw channels list` in ra `Claude: HTTP 403 ... user:profile` → ảnh chụp mức sử dụng cần scope `user:profile`. Dùng `--no-usage`, hoặc cung cấp khóa phiên claude.ai (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), hoặc xác thực lại qua Claude Code CLI.
 
 ## Thăm dò khả năng
 
@@ -68,7 +61,7 @@ Ghi chú:
 
 - `--channel` là tùy chọn; bỏ qua để liệt kê mọi kênh (bao gồm cả extension).
 - `--target` chấp nhận `channel:<id>` hoặc ID kênh dạng số thô và chỉ áp dụng cho Discord.
-- Việc thăm dò phụ thuộc vào từng nhà cung cấp: Discord intents + quyền kênh tùy chọn; Slack bot + phạm vi người dùng; cờ bot Telegram + webhook; phiên bản daemon Signal; token ứng dụng MS Teams + vai trò/phạm vi Graph (được chú thích khi biết). Các kênh không có thăm dò sẽ báo cáo `Probe: unavailable`.
+- Probe là theo từng nhà cung cấp: intent Discord + quyền kênh tùy chọn; bot Slack + user scopes; cờ bot Telegram + webhook; phiên bản daemon Signal; token ứng dụng MS Teams + vai trò/phạm vi Graph (được chú thích khi đã biết). Các kênh không có probe sẽ báo `Probe: unavailable`.
 
 ## Phân giải tên sang ID
 

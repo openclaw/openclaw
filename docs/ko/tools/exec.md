@@ -4,13 +4,6 @@ read_when:
   - Exec 도구를 사용하거나 수정할 때
   - stdin 또는 TTY 동작을 디버깅할 때
 title: "Exec 도구"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:42Z
 ---
 
 # Exec 도구
@@ -80,8 +73,7 @@ Example:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
 - `host=sandbox`: 컨테이너 내부에서 `sh -lc` (로그인 셸) 을 실행하므로 `/etc/profile` 가 `PATH` 를 재설정할 수 있습니다.
-  OpenClaw 는 내부 환경 변수를 통해 프로파일 소싱 이후 `env.PATH` 를 앞에 추가합니다 (셸 보간 없음).
-  `tools.exec.pathPrepend` 도 여기 적용됩니다.
+  OpenClaw 는 내부 환경 변수를 통해 프로파일 소싱 이후 `env.PATH` 를 앞에 추가합니다 (셸 보간 없음). `tools.exec.pathPrepend` 도 여기 적용됩니다.
 - `host=node`: 차단되지 않은 환경 변수 오버라이드만 노드로 전송됩니다. `env.PATH` 오버라이드는
   호스트 실행에서 거부됩니다. 헤드리스 노드 호스트는 노드 호스트 PATH 를 앞에 추가하는 경우에만 `PATH` 를 허용합니다
   (대체 없음). macOS 노드는 `PATH` 오버라이드를 완전히 제거합니다.
@@ -124,8 +116,7 @@ Gateway(게이트웨이) 는 시스템 이벤트 (`Exec finished` / `Exec denied
 
 ## 허용 목록 + 안전 바이너리
 
-허용 목록 강제는 **해결된 바이너리 경로만** 일치시킵니다 (basename 일치 없음).
-`security=allowlist` 인 경우 셸 명령은 모든 파이프라인 세그먼트가
+허용 목록 강제는 **해결된 바이너리 경로만** 일치시킵니다 (basename 일치 없음). `security=allowlist` 인 경우 셸 명령은 모든 파이프라인 세그먼트가
 허용 목록에 있거나 안전 바이너리일 때만 자동 허용됩니다. 체이닝 (`;`, `&&`, `||`) 과 리다이렉션은
 허용 목록 모드에서 거부됩니다.
 

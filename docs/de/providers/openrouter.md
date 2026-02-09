@@ -1,16 +1,9 @@
 ---
-summary: „Verwenden Sie die einheitliche API von OpenRouter, um in OpenClaw auf viele Modelle zuzugreifen“
+summary: "„Verwenden Sie die einheitliche API von OpenRouter, um in OpenClaw auf viele Modelle zuzugreifen“"
 read_when:
   - Sie möchten einen einzelnen API-Schlüssel für viele LLMs
   - Sie möchten Modelle über OpenRouter in OpenClaw ausführen
-title: „OpenRouter“
-x-i18n:
-  source_path: providers/openrouter.md
-  source_hash: b7e29fc9c456c64d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:03Z
+title: "OpenRouter"
 ---
 
 # OpenRouter

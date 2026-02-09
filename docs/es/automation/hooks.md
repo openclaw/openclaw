@@ -4,13 +4,6 @@ read_when:
   - Desea automatización basada en eventos para /new, /reset, /stop y eventos del ciclo de vida del agente
   - Desea crear, instalar o depurar hooks
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:45Z
 ---
 
 # Hooks
@@ -44,7 +37,7 @@ El sistema de hooks le permite:
 - Activar automatizaciones personalizadas en eventos del ciclo de vida del agente
 - Extender el comportamiento de OpenClaw sin modificar el código principal
 
-## Primeros pasos
+## Comenzando
 
 ### Hooks incluidos
 
@@ -79,7 +72,7 @@ Obtener información detallada:
 openclaw hooks info session-memory
 ```
 
-### Incorporación
+### Embarque
 
 Durante la incorporación (`openclaw onboard`), se le pedirá que habilite hooks recomendados. El asistente descubre automáticamente los hooks elegibles y los presenta para su selección.
 
@@ -709,7 +702,7 @@ Monitoree los registros del Gateway para ver la ejecución de hooks:
 tail -f ~/.openclaw/gateway.log
 ```
 
-### Probar hooks directamente
+### Prueba Hooks Directamente
 
 Pruebe sus handlers de forma aislada:
 

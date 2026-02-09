@@ -1,15 +1,8 @@
 ---
 summary: "ایسے ہبز جو ہر OpenClaw دستاویز سے لنک کرتے ہیں"
 read_when:
-  - "آپ کو دستاویزات کا مکمل نقشہ درکار ہو"
+  - آپ کو دستاویزات کا مکمل نقشہ درکار ہو
 title: "دستاویزات کے ہبز"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:51Z
 ---
 
 # دستاویزات کے ہبز

@@ -4,20 +4,13 @@ read_when:
   - Bạn muốn OpenClaw nhận DM qua Nostr
   - Bạn đang thiết lập nhắn tin phi tập trung
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:10Z
 ---
 
 # Nostr
 
 **Trạng thái:** Plugin tùy chọn (tắt theo mặc định).
 
-Nostr là một giao thức phi tập trung cho mạng xã hội. Kênh này cho phép OpenClaw nhận và phản hồi tin nhắn trực tiếp (DM) được mã hóa qua NIP-04.
+Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted direct messages (DMs) via NIP-04.
 
 ## Cài đặt (theo yêu cầu)
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Tham chiếu cấu hình
 
-| Khóa         | Kiểu     | Mặc định                                    | Mô tả                                  |
-| ------------ | -------- | ------------------------------------------- | -------------------------------------- |
-| `privateKey` | string   | required                                    | Khóa riêng ở định dạng `nsec` hoặc hex |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URL relay (WebSocket)                  |
-| `dmPolicy`   | string   | `pairing`                                   | Chính sách truy cập DM                 |
-| `allowFrom`  | string[] | `[]`                                        | Pubkey người gửi được phép             |
-| `enabled`    | boolean  | `true`                                      | Bật/tắt kênh                           |
-| `name`       | string   | -                                           | Tên hiển thị                           |
-| `profile`    | object   | -                                           | Metadata hồ sơ NIP-01                  |
+| Khóa         | Kiểu                                                         | Mặc định                                    | Mô tả                                    |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ---------------------------------------- |
+| `privateKey` | string                                                       | required                                    | Khóa riêng ở định dạng `nsec` hoặc hex   |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URL relay (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | Chính sách truy cập DM                   |
+| `allowFrom`  | string[] | `[]`                                        | Pubkey người gửi được phép               |
+| `enabled`    | boolean                                                      | `true`                                      | Bật/tắt kênh                             |
+| `name`       | string                                                       | -                                           | Tên hiển thị                             |
+| `profile`    | object                                                       | -                                           | Metadata hồ sơ NIP-01                    |
 
 ## Metadata hồ sơ
 
-Dữ liệu hồ sơ được xuất bản dưới dạng sự kiện NIP-01 `kind:0`. Bạn có thể quản lý từ Control UI (Channels -> Nostr -> Profile) hoặc đặt trực tiếp trong cấu hình.
+Profile data is published as a NIP-01 `kind:0` event. You can manage it from the Control UI (Channels -> Nostr -> Profile) or set it directly in config.
 
 Ví dụ:
 
@@ -176,7 +169,7 @@ Mẹo:
 | NIP    | Trạng thái | Mô tả                                     |
 | ------ | ---------- | ----------------------------------------- |
 | NIP-01 | Hỗ trợ     | Định dạng sự kiện cơ bản + metadata hồ sơ |
-| NIP-04 | Hỗ trợ     | DM mã hóa (`kind:4`)                      |
+| NIP-04 | Hỗ trợ     | DM mã hóa (`kind:4`)   |
 | NIP-17 | Dự kiến    | DM gói quà                                |
 | NIP-44 | Dự kiến    | Mã hóa có phiên bản                       |
 

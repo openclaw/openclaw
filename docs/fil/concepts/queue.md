@@ -3,13 +3,6 @@ summary: "Disenyo ng command queue na nagsi-serialize ng mga inbound auto-reply 
 read_when:
   - Binabago ang pagpapatupad o concurrency ng auto-reply
 title: "Command Queue"
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:26Z
 ---
 
 # Command Queue (2026-01-16)
@@ -33,17 +26,17 @@ Nagse-serialize kami ng mga inbound auto-reply run (lahat ng channel) gamit ang 
 
 Maaaring idirekta ng mga inbound message ang kasalukuyang run, maghintay ng followup turn, o gawin ang pareho:
 
-- `steer`: agad na i-inject sa kasalukuyang run (kinakansela ang mga nakabinbing tool call pagkatapos ng susunod na tool boundary). Kapag hindi streaming, babalik sa followup.
+- `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
 - `followup`: i-enqueue para sa susunod na agent turn matapos matapos ang kasalukuyang run.
-- `collect`: pagsamahin ang lahat ng naka-queue na message sa **iisang** followup turn (default). Kung ang mga message ay tumutukoy sa magkaibang channel/thread, idi-drain ang mga ito nang hiwalay upang mapanatili ang routing.
+- `collect`: coalesce all queued messages into a **single** followup turn (default). If messages target different channels/threads, they drain individually to preserve routing.
 - `steer-backlog` (aka `steer+backlog`): mag-steer ngayon **at** panatilihin ang message para sa followup turn.
 - `interrupt` (legacy): ihinto ang aktibong run para sa session na iyon, pagkatapos ay patakbuhin ang pinakabagong message.
 - `queue` (legacy alias): kapareho ng `steer`.
 
-Ibig sabihin ng steer-backlog ay maaari kang makakuha ng followup na sagot pagkatapos ng steered run, kaya
-ang mga streaming surface ay maaaring magmukhang may duplicate. Mas mainam ang `collect`/`steer` kung gusto mo ng
-isang sagot bawat inbound message.
-Ipadala ang `/queue collect` bilang standalone na command (bawat session) o itakda ang `messages.queue.byChannel.discord: "collect"`.
+Steer-backlog means you can get a followup response after the steered run, so
+streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
+one response per inbound message.
+Send `/queue collect` as a standalone command (per-session) or set `messages.queue.byChannel.discord: "collect"`.
 
 Mga default (kapag hindi naka-set sa config):
 
@@ -73,8 +66,8 @@ Nalalapat ang mga opsyon sa `followup`, `collect`, at `steer-backlog` (at sa `st
 - `cap`: maximum na naka-queue na message bawat session.
 - `drop`: overflow policy (`old`, `new`, `summarize`).
 
-Pinapanatili ng summarize ang isang maikling bullet list ng mga na-drop na message at ini-inject ito bilang synthetic na followup prompt.
-Mga default: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
+Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
+Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 ## Mga override bawat session
 

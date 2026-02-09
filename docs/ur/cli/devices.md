@@ -4,13 +4,6 @@ read_when:
   - آپ ڈیوائس جوڑی بنانے کی درخواستوں کی منظوری دے رہے ہوں
   - آپ کو ڈیوائس ٹوکنز کی گردش یا منسوخی درکار ہو
 title: "ڈیوائسز"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:58Z
 ---
 
 # `openclaw devices`
@@ -68,10 +61,10 @@ openclaw devices revoke --device <deviceId> --role node
 - `--timeout <ms>`: RPC ٹائم آؤٹ۔
 - `--json`: JSON آؤٹ پٹ (اسکرپٹنگ کے لیے سفارش کردہ)۔
 
-نوٹ: جب آپ `--url` سیٹ کرتے ہیں، تو CLI کنفیگ یا ماحولیاتی اسناد پر واپس نہیں جاتا۔
-`--token` یا `--password` واضح طور پر فراہم کریں۔ واضح اسناد کی عدم موجودگی ایک غلطی ہے۔
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ## Notes
 
-- ٹوکن کی گردش ایک نیا ٹوکن واپس کرتی ہے (حساس)۔ اسے راز کی طرح برتیں۔
+- Token rotation returns a new token (sensitive). Treat it like a secret.
 - ان کمانڈز کے لیے `operator.pairing` (یا `operator.admin`) اسکوپ درکار ہے۔

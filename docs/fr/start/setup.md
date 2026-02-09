@@ -4,13 +4,6 @@ read_when:
   - Configuration d'une nouvelle machine
   - Vous voulez le « dernier cri » sans casser votre configuration personnelle
 title: "Configuration"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:55Z
 ---
 
 # Configuration
@@ -88,7 +81,7 @@ Si la prise en main n’est pas disponible dans votre build :
 
 Objectif : travailler sur la Gateway TypeScript, obtenir le hot reload, et garder l’UI de l’app macOS connectee.
 
-### 0) (Optionnel) Executer aussi l’app macOS depuis la source
+### 0. (Optionnel) Executer aussi l’app macOS depuis la source
 
 Si vous voulez egalement l’app macOS en bleeding edge :
 
@@ -96,7 +89,7 @@ Si vous voulez egalement l’app macOS en bleeding edge :
 ./scripts/restart-mac.sh
 ```
 
-### 1) Demarrer la Gateway de dev
+### 1. Demarrer la Gateway de dev
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` lance la gateway en mode watch et recharge lors des changements TypeScript.
 
-### 2) Pointer l’app macOS vers votre Gateway en cours d’execution
+### 2. Pointer l’app macOS vers votre Gateway en cours d’execution
 
 Dans **OpenClaw.app** :
 
 - Mode de connexion : **Local**
   L’app se connectera a la gateway en cours d’execution sur le port configure.
 
-### 3) Verifier
+### 3. Verifier
 
 - Le statut de la Gateway dans l’app doit indiquer **« Using existing gateway … »**
 - Ou via la CLI :
@@ -157,7 +150,7 @@ sudo loginctl enable-linger $USER
 
 Pour des serveurs toujours actifs ou multi-utilisateurs, envisagez un service **systeme** plutot qu’un service utilisateur (pas de lingering necessaire). Voir le [runbook de la Gateway](/gateway) pour les notes systemd.
 
-## Documentation connexe
+## Docs associees
 
 - [Runbook de la Gateway](/gateway) (flags, supervision, ports)
 - [Configuration de la Gateway](/gateway/configuration) (schema de config + exemples)

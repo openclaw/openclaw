@@ -4,13 +4,6 @@ read_when:
   - Je keurt verzoeken voor apparaatkoppeling goed
   - Je moet apparaattokens roteren of intrekken
 title: "apparaten"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:07Z
 ---
 
 # `openclaw devices`

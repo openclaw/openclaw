@@ -4,20 +4,13 @@ read_when:
   - Gmail 받은편지함 트리거를 OpenClaw 에 연결하기
   - 에이전트 웨이크를 위한 Pub/Sub 푸시 설정하기
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:50Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 목표: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw 웹훅.
 
-## 사전 요구 사항
+## Prereqs
 
 - `gcloud` 설치 및 로그인 완료 ([설치 가이드](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) 설치 및 Gmail 계정에 대해 인증 완료 ([gogcli.sh](https://gogcli.sh/)).
@@ -125,8 +118,7 @@ openclaw webhooks gmail setup \
 커스텀 엔드포인트가 필요하신가요? `--push-endpoint <url>` 또는 `--tailscale off` 를 사용하십시오.
 
 플랫폼 참고: macOS 에서는 마법사가 Homebrew 를 통해
-`gcloud`, `gogcli`, `tailscale` 를 설치합니다.
-Linux 에서는 먼저 수동으로 설치하십시오.
+`gcloud`, `gogcli`, `tailscale` 를 설치합니다. Linux 에서는 먼저 수동으로 설치하십시오.
 
 Gateway(게이트웨이) 자동 시작 (권장):
 

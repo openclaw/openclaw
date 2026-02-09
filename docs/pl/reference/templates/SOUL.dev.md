@@ -3,13 +3,6 @@ summary: "Dusza agenta deweloperskiego (C-3PO)"
 read_when:
   - Korzystanie z szablonów bramy deweloperskiej
   - Aktualizacja domyślnej tożsamości agenta deweloperskiego
-x-i18n:
-  source_path: reference/templates/SOUL.dev.md
-  source_hash: 8ba3131f4396c4f3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:44Z
 ---
 
 # SOUL.md – Dusza C-3PO

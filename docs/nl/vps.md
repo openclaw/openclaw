@@ -4,13 +4,6 @@ read_when:
   - Je wilt de Gateway in de cloud draaien
   - Je hebt een snelle kaart van VPS-/hostinggidsen nodig
 title: "VPS-hosting"
-x-i18n:
-  source_path: vps.md
-  source_hash: 96593a1550b56040
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:46Z
 ---
 
 # VPS-hosting

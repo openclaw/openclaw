@@ -4,13 +4,6 @@ read_when:
   - Nakakonekta ang node pero pumapalya ang camera/canvas/screen/exec tools
   - Kailangan mo ang mental model ng pagpapares ng node kumpara sa mga approval
 title: "Pag-troubleshoot ng Node"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:42Z
 ---
 
 # Pag-troubleshoot ng node
@@ -57,12 +50,12 @@ Kung makita mo ang `NODE_BACKGROUND_UNAVAILABLE`, dalhin ang node app sa foregro
 
 ## Matrix ng mga pahintulot
 
-| Capability                   | iOS                                    | Android                                         | macOS node app                       | Karaniwang failure code        |
-| ---------------------------- | -------------------------------------- | ----------------------------------------------- | ------------------------------------ | ------------------------------ |
-| `camera.snap`, `camera.clip` | Camera (+ mic para sa audio ng clip)   | Camera (+ mic para sa audio ng clip)            | Camera (+ mic para sa audio ng clip) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Screen Recording (+ mic optional)      | Screen capture prompt (+ mic optional)          | Screen Recording                     | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | While Using o Always (depende sa mode) | Foreground/Background na lokasyon batay sa mode | Pahintulot sa lokasyon               | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (path ng host ng node)             | n/a (path ng host ng node)                      | Kinakailangan ang exec approvals     | `SYSTEM_RUN_DENIED`            |
+| Capability                   | iOS                                                       | Android                                                   | macOS node app                                          | Karaniwang failure code        |
+| ---------------------------- | --------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Camera (+ mic para sa audio ng clip)   | Camera (+ mic para sa audio ng clip)   | Camera (+ mic para sa audio ng clip) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Screen Recording (+ mic optional)      | Screen capture prompt (+ mic optional) | Screen Recording                                        | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | While Using o Always (depende sa mode) | Foreground/Background na lokasyon batay sa mode           | Pahintulot sa lokasyon                                  | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (path ng host ng node)             | n/a (path ng host ng node)             | Kinakailangan ang exec approvals                        | `SYSTEM_RUN_DENIED`            |
 
 ## Pagpapares kumpara sa mga approval
 
@@ -80,8 +73,8 @@ openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-Kung kulang ang pairing, i-approve muna ang node device.
-Kung ayos ang pairing pero pumapalya ang `system.run`, ayusin ang exec approvals/allowlist.
+Kung kulang ang pairing, aprubahan muna ang node device.
+Kung maayos ang pairing ngunit pumapalya ang `system.run`, ayusin ang exec approvals/allowlist.
 
 ## Mga karaniwang error code ng node
 

@@ -5,13 +5,6 @@ read_when:
   - Problemen oplossen met webhook-koppeling
   - iMessage configureren op macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:23Z
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ Status: gebundelde plugin die via HTTP met de BlueBubbles macOS-server praat. **
 ## Snelle start
 
 1. Installeer de BlueBubbles-server op je Mac (volg de instructies op [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. Schakel in de BlueBubbles-config de web-API in en stel een wachtwoord in.
+
 3. Voer `openclaw onboard` uit en selecteer BlueBubbles, of configureer handmatig:
 
    ```json5
@@ -49,13 +44,14 @@ Status: gebundelde plugin die via HTTP met de BlueBubbles macOS-server praat. **
    ```
 
 4. Richt BlueBubbles-webhooks naar je Gateway (voorbeeld: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Start de Gateway; deze registreert de webhook-handler en start het koppelen.
 
 ## Messages.app actief houden (VM / headless setups)
 
 Sommige macOS VM-/altijd-aan-setups kunnen ertoe leiden dat Messages.app “idle” wordt (inkomende gebeurtenissen stoppen totdat de app wordt geopend/naar de voorgrond gebracht). Een eenvoudige workaround is om **Messages elke 5 minuten te porren** met een AppleScript + LaunchAgent.
 
-### 1) Sla het AppleScript op
+### 1. Sla het AppleScript op
 
 Sla dit op als:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Installeer een LaunchAgent
+### 2. Installeer een LaunchAgent
 
 Sla dit op als:
 
@@ -153,7 +149,7 @@ DM’s:
 
 - Standaard: `channels.bluebubbles.dmPolicy = "pairing"`.
 - Onbekende afzenders ontvangen een koppelcode; berichten worden genegeerd totdat ze zijn goedgekeurd (codes verlopen na 1 uur).
-- Goedkeuren via:
+- Provideropties:
   - `openclaw pairing list bluebubbles`
   - `openclaw pairing approve bluebubbles <CODE>`
 - Koppelen is de standaard tokenuitwisseling. Details: [Koppelen](/channels/pairing)
@@ -287,11 +283,11 @@ Bepaal of antwoorden als één bericht worden verzonden of in blokken worden ges
 - Medialimiet via `channels.bluebubbles.mediaMaxMb` (standaard: 8 MB).
 - Uitgaande tekst wordt opgeknipt tot `channels.bluebubbles.textChunkLimit` (standaard: 4000 tekens).
 
-## Configuratiereferentie
+## Configuratie referentie
 
 Volledige configuratie: [Configuratie](/gateway/configuration)
 
-Provideropties:
+Provider-opties:
 
 - `channels.bluebubbles.enabled`: Het kanaal in-/uitschakelen.
 - `channels.bluebubbles.serverUrl`: Basis-URL van de BlueBubbles REST API.

@@ -3,13 +3,6 @@ summary: "Semántica de reacciones compartida entre canales"
 read_when:
   - Trabajando en reacciones en cualquier canal
 title: "Reacciones"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:48Z
 ---
 
 # Herramientas de reacciones

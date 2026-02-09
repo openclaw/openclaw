@@ -1,16 +1,9 @@
 ---
-summary: „Zalo-Personal-Plugin: QR-Login + Messaging über zca-cli (Plugin-Installation + Kanal-Konfiguration + CLI + Werkzeug)“
+summary: "„Zalo-Personal-Plugin: QR-Login + Messaging über zca-cli (Plugin-Installation + Kanal-Konfiguration + CLI + Werkzeug)“"
 read_when:
   - Sie möchten Zalo Personal (inoffiziell) in OpenClaw unterstützen
   - Sie konfigurieren oder entwickeln das zalouser-Plugin
-title: „Zalo-Personal-Plugin“
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:00Z
+title: "„Zalo-Personal-Plugin“"
 ---
 
 # Zalo Personal (Plugin)
@@ -23,7 +16,7 @@ Zalo-Personal-Unterstützung für OpenClaw über ein Plugin, das `zca-cli` verwe
 
 Die Kanal-ID ist `zalouser`, um explizit zu machen, dass hier ein **persönliches Zalo-Benutzerkonto** (inoffiziell) automatisiert wird. Wir halten `zalo` für eine mögliche zukünftige offizielle Zalo-API-Integration reserviert.
 
-## Ausführungsort
+## Wo es ausgeführt wird
 
 Dieses Plugin läuft **innerhalb des Gateway-Prozesses**.
 

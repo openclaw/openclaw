@@ -1,16 +1,9 @@
 ---
-summary: „Heartbeat-Abfragemeldungen und Benachrichtigungsregeln“
+summary: "„Heartbeat-Abfragemeldungen und Benachrichtigungsregeln“"
 read_when:
   - Anpassen der Heartbeat-Taktung oder -Nachrichten
   - Entscheidung zwischen Heartbeat und Cron für geplante Aufgaben
-title: „Heartbeat“
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:36Z
+title: "„Heartbeat“"
 ---
 
 # Heartbeat (Gateway)
@@ -56,6 +49,7 @@ Beispielkonfiguration:
   Prompt enthält einen Abschnitt „Heartbeat“, und der Lauf wird intern gekennzeichnet.
 - Aktive Stunden (`heartbeat.activeHours`) werden in der konfigurierten Zeitzone geprüft.
   Außerhalb des Fensters werden Heartbeats übersprungen, bis der nächste Tick innerhalb des Fensters erfolgt.
+  Außerhalb des Fensters werden Herzbeats übersprungen bis zum nächsten Häkchen im Fenster.
 
 ## Wofür der Heartbeat-Prompt gedacht ist
 
@@ -172,8 +166,7 @@ Beschränken Sie Heartbeats auf Geschäftszeiten in einer bestimmten Zeitzone:
 }
 ```
 
-Außerhalb dieses Fensters (vor 9 Uhr oder nach 22 Uhr Eastern) werden Heartbeats übersprungen.
-Der nächste geplante Tick innerhalb des Fensters läuft normal.
+Außerhalb dieses Fensters (vor 9 Uhr oder nach 22 Uhr Eastern) werden Heartbeats übersprungen. Der nächste geplante Tick innerhalb des Fensters läuft normal.
 
 ### Beispiel für mehrere Konten
 
@@ -233,7 +226,7 @@ Verwenden Sie `accountId`, um ein bestimmtes Konto in Mehrkonten-Kanälen wie Te
 
 - Heartbeats laufen standardmäßig in der Hauptsitzung des Agenten (`agent:<id>:<mainKey>`)
   oder `global`, wenn `session.scope = "global"`. Setzen Sie `session`, um auf eine
-  bestimmte Kanal-Sitzung (Discord/WhatsApp/etc.) zu überschreiben.
+  bestimmte Kanal-Sitzung (Discord/WhatsApp/etc.)
 - `session` beeinflusst nur den Laufkontext; die Auslieferung wird durch
   `target` und `to` gesteuert.
 - Um an einen bestimmten Kanal/Empfänger zu liefern, setzen Sie `target` +
@@ -302,12 +295,12 @@ channels:
 
 ### Häufige Muster
 
-| Ziel                                                  | Konfiguration                                                                            |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Standardverhalten (stille OKs, Alarme an)             | _(keine Konfiguration erforderlich)_                                                     |
+| Ziel                                                                     | Konfiguration                                                                            |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Standardverhalten (stille OKs, Alarme an)             | _(keine Konfiguration erforderlich)_                                  |
 | Vollständig still (keine Nachrichten, kein Indikator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Nur Indikator (keine Nachrichten)                     | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OKs nur in einem Kanal                                | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OKs nur in einem Kanal                                                   | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (optional)
 
@@ -317,7 +310,8 @@ stabil und sicher, um sie alle 30 Minuten einzubinden.
 
 Wenn `HEARTBEAT.md` existiert, aber faktisch leer ist (nur Leerzeilen und Markdown-
 Überschriften wie `# Heading`), überspringt OpenClaw den Heartbeat-Lauf, um API-
-Aufrufe zu sparen. Wenn die Datei fehlt, läuft der Heartbeat trotzdem, und das Modell
+Aufrufe zu sparen.
+Wenn die Datei fehlt, läuft der Heartbeat trotzdem, und das Modell
 entscheidet, was zu tun ist.
 
 Halten Sie sie klein (kurze Checkliste oder Erinnerungen), um Prompt-Aufblähung zu vermeiden.

@@ -2,15 +2,8 @@
 summary: "ヘルプ ハブ：よくある修正、インストールの健全性確認、問題発生時の参照先"
 read_when:
   - 初めて利用し、「何をクリック／実行すればよいか」のガイドが欲しいとき
-  - 何かが壊れて、最短で修正したいとき
+  - 何かが壊れていて、最速の修正パスが欲しいです。
 title: "ヘルプ"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:58Z
 ---
 
 # ヘルプ

@@ -4,13 +4,6 @@ read_when:
   - Вы хотите самый быстрый локальный цикл разработки (bun + watch)
   - Вы столкнулись с проблемами установки/патчей/скриптов жизненного цикла Bun
 title: "Bun (Экспериментально)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:40Z
 ---
 
 # Bun (экспериментально)
@@ -61,6 +54,6 @@ Bun может блокировать скрипты жизненного цик
 bun pm trust @whiskeysockets/baileys protobufjs
 ```
 
-## Ограничения
+## Пещеры
 
 - Некоторые скрипты по-прежнему жёстко завязаны на pnpm (например, `docs:build`, `ui:*`, `protocol:check`). Пока запускайте их через pnpm.

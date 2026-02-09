@@ -3,13 +3,6 @@ summary: "Reglas de manejo de imágenes y medios para envíos, el Gateway y resp
 read_when:
   - Modificando la canalización de medios o adjuntos
 title: "Soporte de Imágenes y Medios"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:58Z
 ---
 
 # Soporte de Imágenes y Medios — 2025-12-05

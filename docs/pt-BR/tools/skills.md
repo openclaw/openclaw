@@ -4,13 +4,6 @@ read_when:
   - Adicionar ou modificar skills
   - Alterar gating de skills ou regras de carregamento
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:40Z
 ---
 
 # Skills (OpenClaw)
@@ -50,8 +43,7 @@ workspace vence, depois gerenciada/local e, por fim, empacotada.
 Plugins podem enviar suas próprias skills listando diretórios `skills` em
 `openclaw.plugin.json` (caminhos relativos à raiz do plugin). As skills do plugin são carregadas
 quando o plugin é ativado e participam das regras normais de precedência de skills.
-Você pode aplicar gating a elas via `metadata.openclaw.requires.config` na entrada de configuração do plugin.
-Veja [Plugins](/tools/plugin) para descoberta/configuração e [Tools](/tools) para a
+Você pode aplicar gating a elas via `metadata.openclaw.requires.config` na entrada de configuração do plugin. Veja [Plugins](/tools/plugin) para descoberta/configuração e [Tools](/tools) para a
 superfície de ferramentas que essas skills ensinam.
 
 ## ClawHub (instalação + sincronização)
@@ -293,8 +285,7 @@ Notas:
 
 O OpenClaw envia um conjunto base de skills como **skills empacotadas** como parte da
 instalação (pacote npm ou OpenClaw.app). `~/.openclaw/skills` existe para substituições locais
-(por exemplo, fixar/patchar uma skill sem alterar a cópia empacotada).
-Skills de workspace pertencem ao usuário e substituem ambas em conflitos de nome.
+(por exemplo, fixar/patchar uma skill sem alterar a cópia empacotada). Skills de workspace pertencem ao usuário e substituem ambas em conflitos de nome.
 
 ## Referência de configuração
 

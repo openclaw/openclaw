@@ -6,24 +6,18 @@ read_when:
   - Du vil bruge setup-token eller OAuth-godkendelsesflows
   - Du vil have flere konti eller profil-routing
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:15Z
 ---
 
 # OAuth
 
-OpenClaw understøtter “subscription auth” via OAuth for udbydere, der tilbyder det (især **OpenAI Codex (ChatGPT OAuth)**). For Anthropic-abonnementer skal du bruge **setup-token**-flowet. Denne side forklarer:
+OpenClaw understøtter “abonnement auth” via OAuth for udbydere, der tilbyder det (især **OpenAI Codex (ChatGPT OAuth)**). For antropiske abonnementer skal du bruge **setup-token** flowet. Denne side forklarer:
 
 - hvordan OAuth **tokenudveksling** fungerer (PKCE)
 - hvor tokens **lagres** (og hvorfor)
 - hvordan du håndterer **flere konti** (profiler + overrides pr. session)
 
-OpenClaw understøtter også **provider-plugins**, der leveres med deres egne OAuth- eller API‑nøgle‑flows. Kør dem via:
+OpenClaw understøtter også **udbyder plugins**, der sender deres egne OAuth eller API-key
+strømme. Kør dem via:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -31,7 +25,7 @@ openclaw models auth login --provider <id>
 
 ## Token-sinken (hvorfor den findes)
 
-OAuth-udbydere udsteder ofte et **nyt refresh-token** under login-/refresh-flows. Nogle udbydere (eller OAuth-klienter) kan ugyldiggøre ældre refresh-tokens, når et nyt udstedes for den samme bruger/app.
+OAuth udbydere ofte mynte en **ny opdateringstoken** under login/refresh flows. Nogle udbydere (eller OAuth klienter) kan ugyldiggøre ældre opdaterings-tokens når en ny bliver udstedt for den samme bruger/app.
 
 Praktisk symptom:
 
@@ -44,7 +38,7 @@ For at reducere dette behandler OpenClaw `auth-profiles.json` som en **token-sin
 
 ## Lagring (hvor tokens ligger)
 
-Hemmeligheder lagres **pr. agent**:
+Hemmeligheder gemmes **per-agent**:
 
 - Auth-profiler (OAuth + API-nøgler): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Runtime-cache (administreres automatisk; redigér ikke): `~/.openclaw/agents/<agentId>/agent/auth.json`
@@ -53,7 +47,7 @@ Legacy import-only-fil (stadig understøttet, men ikke hovedlageret):
 
 - `~/.openclaw/credentials/oauth.json` (importeret til `auth-profiles.json` ved første brug)
 
-Alt ovenstående respekterer også `$OPENCLAW_STATE_DIR` (override af state-dir). Fuld reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
+Alle ovenstående også respektere `$OPENCLAW_STATE_DIR` (stat dir override). Fuld reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
 
 ## Anthropic setup-token (subscription auth)
 
@@ -117,7 +111,7 @@ Refresh-flowet er automatisk; du behøver som regel ikke at håndtere tokens man
 
 To mønstre:
 
-### 1) Foretrukken: separate agenter
+### 1. Foretrukken: separate agenter
 
 Hvis du vil have, at “personligt” og “arbejde” aldrig interagerer, så brug isolerede agenter (separate sessioner + legitimationsoplysninger + workspace):
 
@@ -128,14 +122,14 @@ openclaw agents add personal
 
 Konfigurér derefter auth pr. agent (guide) og route chats til den rigtige agent.
 
-### 2) Avanceret: flere profiler i én agent
+### 2. Avanceret: flere profiler i én agent
 
 `auth-profiles.json` understøtter flere profil-id’er for den samme udbyder.
 
 Vælg hvilken profil der bruges:
 
 - globalt via konfigurationsrækkefølge (`auth.order`)
-- pr. session via `/model ...@<profileId>`
+- per-session via `/model ...@<profileId>`
 
 Eksempel (session-override):
 

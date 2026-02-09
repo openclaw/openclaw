@@ -4,13 +4,6 @@ read_when:
   - आप वर्कफ़्लो के भीतर केवल-JSON LLM चरण चाहते हैं
   - आपको स्वचालन के लिए स्कीमा-मान्य LLM आउटपुट की आवश्यकता है
 title: "LLM कार्य"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:43Z
 ---
 
 # LLM कार्य
@@ -71,7 +64,7 @@ x-i18n:
 }
 ```
 
-`allowedModels` `provider/model` स्ट्रिंग्स की एक Allowlist है। यदि सेट किया गया हो, तो सूची के बाहर का कोई भी अनुरोध अस्वीकार कर दिया जाता है।
+`allowedModels` `provider/model` स्ट्रिंग्स की एक अलाउलिस्ट है। यदि सेट किया गया है, तो सूची के बाहर का कोई भी अनुरोध अस्वीकार कर दिया जाता है।
 
 ## टूल पैरामीटर
 

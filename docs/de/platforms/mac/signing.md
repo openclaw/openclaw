@@ -3,13 +3,6 @@ summary: "Signierschritte für macOS-Debug-Builds, die von Packaging-Skripten er
 read_when:
   - Beim Erstellen oder Signieren von macOS-Debug-Builds
 title: "macOS-Signierung"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:58Z
 ---
 
 # mac-Signierung (Debug-Builds)

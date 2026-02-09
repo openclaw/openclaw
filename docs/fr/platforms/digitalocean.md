@@ -4,13 +4,6 @@ read_when:
   - Mise en place d’OpenClaw sur DigitalOcean
   - Recherche d’un hébergement VPS bon marché pour OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:15Z
 ---
 
 # OpenClaw sur DigitalOcean
@@ -23,13 +16,13 @@ Si vous souhaitez une option à 0 $/mois et que l’ARM + une configuration sp�
 
 ## Comparaison des coûts (2026)
 
-| Fournisseur  | Offre           | Specs                     | Prix/mo       | Notes                                             |
-| ------------ | --------------- | ------------------------- | ------------- | ------------------------------------------------- |
-| Oracle Cloud | Always Free ARM | jusqu’à 4 OCPU, 24 Go RAM | 0 $           | ARM, capacité limitée / contraintes d’inscription |
+| Fournisseur  | Forfait         | Specs                     | Prix/mo                                          | Notes                                             |
+| ------------ | --------------- | ------------------------- | ------------------------------------------------ | ------------------------------------------------- |
+| Oracle Cloud | Always Free ARM | jusqu’à 4 OCPU, 24 Go RAM | 0 $                                              | ARM, capacité limitée / contraintes d’inscription |
 | Hetzner      | CX22            | 2 vCPU, 4 Go RAM          | 3,79 € (~4 $) | Option payante la moins chère                     |
-| DigitalOcean | Basic           | 1 vCPU, 1 Go RAM          | 6 $           | Interface simple, bonne documentation             |
-| Vultr        | Cloud Compute   | 1 vCPU, 1 Go RAM          | 6 $           | Nombreux emplacements                             |
-| Linode       | Nanode          | 1 vCPU, 1 Go RAM          | 5 $           | Désormais intégré à Akamai                        |
+| DigitalOcean | Basic           | 1 vCPU, 1 Go RAM          | 6 $                                              | Interface simple, bonne documentation             |
+| Vultr        | Cloud Compute   | 1 vCPU, 1 Go RAM          | 6 $                                              | Nombreux emplacements                             |
+| Linode       | Nanode          | 1 vCPU, 1 Go RAM          | 5 $                                              | Désormais intégré à Akamai                        |
 
 **Choisir un fournisseur :**
 
@@ -45,7 +38,7 @@ Si vous souhaitez une option à 0 $/mois et que l’ARM + une configuration sp�
 - Paire de clés SSH (ou acceptation d’utiliser l’authentification par mot de passe)
 - ~20 minutes
 
-## 1) Créer un Droplet
+## 1. Créer un Droplet
 
 1. Connectez-vous à [DigitalOcean](https://cloud.digitalocean.com/)
 2. Cliquez sur **Create → Droplets**
@@ -63,7 +56,7 @@ Si vous souhaitez une option à 0 $/mois et que l’ARM + une configuration sp�
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Installer OpenClaw
+## 3. Installer OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Lancer la prise en main
+## 4. Lancer la prise en main
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ L’assistant vous guidera à travers :
 - Jeton de la Gateway (généré automatiquement)
 - Installation du daemon (systemd)
 
-## 5) Vérifier la Gateway
+## 5. Vérifier la Gateway
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Accéder au tableau de bord
+## 6. Accéder au tableau de bord
 
 La gateway se lie au loopback par défaut. Pour accéder à l’interface de contrôle :
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Ouvrez : `http://<tailscale-ip>:18789` (jeton requis).
 
-## 7) Connecter vos canaux
+## 7. Connecter vos canaux
 
 ### Telegram
 
@@ -232,7 +225,7 @@ Pour le guide de configuration complet, voir [Oracle Cloud](/platforms/oracle). 
 
 ---
 
-## Dépannage
+## Problemes courants
 
 ### La Gateway ne démarre pas
 

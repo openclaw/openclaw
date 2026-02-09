@@ -4,13 +4,6 @@ read_when:
   - Gmail Pub/Sub ဖြစ်ရပ်များကို OpenClaw သို့ ချိတ်ဆက်လိုသောအခါ
   - webhook အကူအညီပေး အမိန့်များကို အသုံးပြုလိုသောအခါ
 title: "ဝဘ်ဟုတ်များ"
-x-i18n:
-  source_path: cli/webhooks.md
-  source_hash: 785ec62afe6631b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:07Z
 ---
 
 # `openclaw webhooks`

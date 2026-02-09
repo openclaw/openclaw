@@ -5,13 +5,6 @@ read_when:
   - Android gateway keşfi ya da kimlik doğrulamayı hata ayıklarken
   - İstemciler arasında sohbet geçmişi eşitliğini doğrularken
 title: "Android Uygulaması"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:36Z
 ---
 
 # Android Uygulaması (Node)
@@ -43,13 +36,13 @@ Android, Gateway WebSocket’ine (varsayılan `ws://<host>:18789`) doğrudan ba�
   - Manuel gateway ana makinesi/portu (geri dönüş)
 - Gateway makinesinde (veya SSH üzerinden) CLI’yi (`openclaw`) çalıştırabiliyor olmalısınız.
 
-### 1) Gateway’i başlatın
+### 1. Gateway’i başlatın
 
 ```bash
 openclaw gateway --port 18789 --verbose
 ```
 
-Günlüklerde aşağıdakine benzer bir şey gördüğünüzü doğrulayın:
+Confirm in logs you see something like:
 
 - `listening on ws://0.0.0.0:18789`
 
@@ -58,7 +51,7 @@ Yalnızca tailnet kurulumları için (Vienna ⇄ London önerilir), gateway’i 
 - Gateway ana makinesinde `~/.openclaw/openclaw.json` içinde `gateway.bind: "tailnet"` ayarlayın.
 - Gateway’i / macOS menü çubuğu uygulamasını yeniden başlatın.
 
-### 2) Keşfi doğrulayın (isteğe bağlı)
+### 2. Keşfi doğrulayın (isteğe bağlı)
 
 Gateway makinesinden:
 
@@ -77,7 +70,7 @@ Android NSD/mDNS keşfi ağlar arasında çalışmaz. Android node’unuz ve gat
 
 Ayrıntılar ve örnek CoreDNS yapılandırması: [Bonjour](/gateway/bonjour).
 
-### 3) Android’den bağlanın
+### 3. Android’den bağlanın
 
 Android uygulamasında:
 
@@ -91,7 +84,7 @@ Android uygulamasında:
 - Manuel uç nokta (etkinse), aksi halde
 - Son keşfedilen gateway (en iyi çaba).
 
-### 4) Eşleştirmeyi onaylayın (CLI)
+### 4. Eşleştirmeyi onaylayın (CLI)
 
 Gateway makinesinde:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Eşleştirme ayrıntıları: [Gateway eşleştirme](/gateway/pairing).
 
-### 5) Node’un bağlı olduğunu doğrulayın
+### 5. Node’un bağlı olduğunu doğrulayın
 
 - Node durumu üzerinden:
 
@@ -116,7 +109,7 @@ Eşleştirme ayrıntıları: [Gateway eşleştirme](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Sohbet + geçmiş
+### 6. Sohbet + geçmiş
 
 Android node’unun Sohbet sayfası, gateway’in **birincil oturum anahtarını** (`main`) kullanır; böylece geçmiş ve yanıtlar WebChat ve diğer istemcilerle paylaşılır:
 
@@ -124,7 +117,7 @@ Android node’unun Sohbet sayfası, gateway’in **birincil oturum anahtarını
 - Gönder: `chat.send`
 - Anlık güncellemeler (en iyi çaba): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + kamera
+### 7. Canvas + kamera
 
 #### Gateway Canvas Host (web içeriği için önerilir)
 

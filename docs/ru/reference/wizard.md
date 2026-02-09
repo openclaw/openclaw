@@ -6,13 +6,6 @@ read_when:
   - Отладка поведения мастера
 title: "Справочник мастера онбординга"
 sidebarTitle: "Wizard Reference"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:17Z
 ---
 
 # Справочник мастера онбординга
@@ -23,7 +16,7 @@ x-i18n:
 ## Детали потока (локальный режим)
 
 <Steps>
-  <Step title="Обнаружение существующего конфига">
+  <Step title="Existing config detection">
     - Если существует `~/.openclaw/openclaw.json`, предлагается выбрать **Сохранить / Изменить / Сбросить**.
     - Повторный запуск мастера **не** очищает ничего, если вы явно не выберете **Сброс**
       (или не передадите `--reset`).
@@ -32,9 +25,9 @@ x-i18n:
     - Сброс использует `trash` (никогда `rm`) и предлагает области:
       - Только конфиг
       - Конфиг + учётные данные + сеансы
-      - Полный сброс (также удаляет рабочее пространство)
-  </Step>
-  <Step title="Модель/Аутентификация">
+      - Полный сброс (также удаляет рабочее пространство)  
+</Step>
+  <Step title="Model/Auth">
     - **Ключ API Anthropic (рекомендуется)**: использует `ANTHROPIC_API_KEY`, если он есть, или запрашивает ключ, затем сохраняет его для использования демоном.
     - **Anthropic OAuth (Claude Code CLI)**: на macOS мастер проверяет элемент Keychain «Claude Code-credentials» (выберите «Always Allow», чтобы запуски launchd не блокировались); на Linux/Windows повторно использует `~/.claude/.credentials.json`, если он есть.
     - **Токен Anthropic (вставьте setup-token)**: запустите `claude setup-token` на любой машине, затем вставьте токен (его можно назвать; пусто = по умолчанию).
@@ -60,25 +53,25 @@ x-i18n:
     - Выберите модель по умолчанию из обнаруженных вариантов (или введите провайдер/модель вручную).
     - Мастер выполняет проверку модели и предупреждает, если настроенная модель неизвестна или отсутствует аутентификация.
     - Учётные данные OAuth хранятся в `~/.openclaw/credentials/oauth.json`; профили аутентификации — в `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (ключи API + OAuth).
-    - Подробнее: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - Подробнее: [/concepts/oauth](/concepts/oauth)    
+<Note>
     Совет для headless/серверов: завершите OAuth на машине с браузером, затем скопируйте
     `~/.openclaw/credentials/oauth.json` (или `$OPENCLAW_STATE_DIR/credentials/oauth.json`) на
     хост шлюза Gateway.
     </Note>
   </Step>
-  <Step title="Рабочее пространство">
+  <Step title="Workspace">
     - По умолчанию `~/.openclaw/workspace` (настраивается).
     - Создаёт файлы рабочего пространства, необходимые для ритуала инициализации агента.
-    - Полная структура рабочего пространства + руководство по резервному копированию: [Рабочее пространство агента](/concepts/agent-workspace)
-  </Step>
+    - Полная структура рабочего пространства + руководство по резервному копированию: [Рабочее пространство агента](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - Порт, привязка, режим аутентификации, экспонирование через Tailscale.
     - Рекомендация по аутентификации: сохраняйте **Token** даже для loopback, чтобы локальные WS‑клиенты должны были проходить аутентификацию.
     - Отключайте аутентификацию только если вы полностью доверяете каждому локальному процессу.
     - Привязки не к loopback всё равно требуют аутентификации.
   </Step>
-  <Step title="Каналы">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): необязательный вход по QR.
     - [Telegram](/channels/telegram): токен бота.
     - [Discord](/channels/discord): токен бота.
@@ -87,7 +80,8 @@ x-i18n:
     - [Signal](/channels/signal): необязательная установка `signal-cli` + настройка аккаунта.
     - [BlueBubbles](/channels/bluebubbles): **рекомендуется для iMessage**; URL сервера + пароль + вебхук.
     - [iMessage](/channels/imessage): устаревший путь CLI `imsg` + доступ к БД.
-    - Безопасность личных сообщений: по умолчанию — сопряжение. Первое личное сообщение отправляет код; подтвердите через `openclaw pairing approve <channel> <code>` или используйте списки разрешённых.
+    - Безопасность личных сообщений: по умолчанию — сопряжение. Первое личное сообщение отправляет код; подтвердите через `openclaw pairing approve <channel><code>` или используйте списки разрешённых.
+  </Step><code>` или используйте списки разрешённых.
   </Step>
   <Step title="Установка демона">
     - macOS: LaunchAgent
@@ -139,7 +133,7 @@ openclaw onboard --non-interactive \
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Пример Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +143,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Пример Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +153,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Пример Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +163,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Пример Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +175,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Пример Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +185,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Пример Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +195,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Пример OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

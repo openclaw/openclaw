@@ -5,13 +5,6 @@ read_when:
   - Investigación de fallos de emparejamiento o autenticación del bridge
   - Auditoría de la superficie de nodo expuesta por el Gateway
 title: "Protocolo Bridge"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:30Z
 ---
 
 # Protocolo Bridge (transporte de nodo heredado)
@@ -53,7 +46,7 @@ Cuando TLS está habilitado, los registros TXT de descubrimiento incluyen `bridg
 
 `hello-ok` devuelve `serverName` y puede incluir `canvasHostUrl`.
 
-## Tramas
+## Frames
 
 Cliente → Gateway:
 

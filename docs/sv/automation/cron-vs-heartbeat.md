@@ -5,33 +5,26 @@ read_when:
   - När du sätter upp bakgrundsövervakning eller aviseringar
   - När du optimerar tokenanvändning för periodiska kontroller
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:24Z
 ---
 
 # Cron vs Heartbeat: När du ska använda vad
 
-Både heartbeats och cron-jobb låter dig köra uppgifter enligt ett schema. Den här guiden hjälper dig att välja rätt mekanism för ditt användningsfall.
+Både hjärtslag och cron-jobb låter dig köra uppgifter på ett schema. Denna guide hjälper dig att välja rätt mekanism för ditt användningsfall.
 
 ## Snabb beslutshjälp
 
-| Användningsfall                           | Rekommenderat       | Varför                                        |
-| ----------------------------------------- | ------------------- | --------------------------------------------- |
-| Kontrollera inkorgen var 30:e minut       | Heartbeat           | Batchas med andra kontroller, kontextmedvetet |
-| Skicka daglig rapport kl. 9 exakt         | Cron (isolerad)     | Exakt timing krävs                            |
-| Övervaka kalendern för kommande händelser | Heartbeat           | Naturlig passform för periodisk medvetenhet   |
-| Köra veckovis djupanalys                  | Cron (isolerad)     | Fristående uppgift, kan använda annan modell  |
-| Påminn mig om 20 minuter                  | Cron (main, `--at`) | Engångsuppgift med exakt timing               |
-| Bakgrundskontroll av projekthälsa         | Heartbeat           | Åker snålskjuts på befintlig cykel            |
+| Användningsfall                                     | Rekommenderat                          | Varför                                        |
+| --------------------------------------------------- | -------------------------------------- | --------------------------------------------- |
+| Kontrollera inkorgen var 30:e minut | Heartbeat                              | Batchas med andra kontroller, kontextmedvetet |
+| Skicka daglig rapport kl. 9 exakt   | Cron (isolated)     | Exakt timing krävs                            |
+| Övervaka kalendern för kommande händelser           | Heartbeat                              | Naturlig passform för periodisk medvetenhet   |
+| Köra veckovis djupanalys                            | Cron (isolated)     | Fristående uppgift, kan använda annan modell  |
+| Påminn mig om 20 minuter                            | Cron (main, `--at`) | Engångsuppgift med exakt timing               |
+| Bakgrundskontroll av projekthälsa                   | Heartbeat                              | Åker snålskjuts på befintlig cykel            |
 
 ## Heartbeat: Periodisk medvetenhet
 
-Heartbeats körs i **huvudsessionen** med ett regelbundet intervall (standard: 30 min). De är utformade för att agenten ska kunna kontrollera läget och lyfta fram det som är viktigt.
+Hjärtslag körs i **huvudsessionen** med ett regelbundet intervall (standard: 30 min). De är utformade för agenten att kontrollera saker och yta allt viktigt.
 
 ### När du ska använda heartbeat
 
@@ -192,8 +185,8 @@ openclaw cron add --name "Call back" --at "2h" --session main --system-event "Ca
 
 ## Lobster: Deterministiska arbetsflöden med godkännanden
 
-Lobster är körmiljön för arbetsflöden för **flerstegspipelines med verktyg** som kräver deterministisk exekvering och explicita godkännanden.
-Använd den när uppgiften är mer än ett enda agentvarv och du vill ha ett återupptagbart arbetsflöde med mänskliga kontrollpunkter.
+Hummer är arbetsflödets körtid för **flerstegs verktygsrörledningar** som behöver deterministisk exekvering och uttryckliga godkännanden.
+Använd det när uppgiften är mer än en enda agent tur, och du vill ha ett återupptagbart arbetsflöde med mänskliga kontrollpunkter.
 
 ### När Lobster passar
 
@@ -206,8 +199,8 @@ Använd den när uppgiften är mer än ett enda agentvarv och du vill ha ett åt
 - **Heartbeat/cron** avgör _när_ en körning sker.
 - **Lobster** definierar _vilka steg_ som sker när körningen startar.
 
-För schemalagda arbetsflöden, använd cron eller heartbeat för att trigga ett agentvarv som anropar Lobster.
-För ad-hoc-arbetsflöden, anropa Lobster direkt.
+För schemalagda arbetsflöden, använd cron eller hjärtslag för att utlösa en agent tur som kallar Lobster.
+För ad-hoc arbetsflöden, ring Hummer direkt.
 
 ### Operativa noteringar (från koden)
 
@@ -222,13 +215,13 @@ Se [Lobster](/tools/lobster) för fullständig användning och exempel.
 
 Både heartbeat och cron kan interagera med huvudsessionen, men på olika sätt:
 
-|          | Heartbeat                        | Cron (main)                 | Cron (isolated)                     |
-| -------- | -------------------------------- | --------------------------- | ----------------------------------- |
-| Session  | Huvud                            | Huvud (via systemhändelse)  | `cron:<jobId>`                      |
-| Historik | Delad                            | Delad                       | Ny vid varje körning                |
-| Kontext  | Full                             | Full                        | Ingen (startar rent)                |
-| Modell   | Huvudsessionens modell           | Huvudsessionens modell      | Kan överskrivas                     |
-| Utdata   | Levereras om inte `HEARTBEAT_OK` | Heartbeat-prompt + händelse | Annonsera sammanfattning (standard) |
+|          | Heartbeat                        | Cron (main)                | Cron (isolated)                     |
+| -------- | -------------------------------- | --------------------------------------------- | ------------------------------------------------------ |
+| Session  | Huvud                            | Huvud (via systemhändelse) | `cron:<jobId>`                                         |
+| Historik | Delad                            | Delad                                         | Ny vid varje körning                                   |
+| Kontext  | Full                             | Full                                          | Ingen (startar rent)                |
+| Modell   | Huvudsessionens modell           | Huvudsessionens modell                        | Kan överskrivas                                        |
+| Utdata   | Levereras om inte `HEARTBEAT_OK` | Heartbeat-prompt + händelse                   | Annonsera sammanfattning (standard) |
 
 ### När du ska använda main-session-cron
 
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Kostnadsöverväganden
 
-| Mekanism        | Kostnadsprofil                                                     |
-| --------------- | ------------------------------------------------------------------ |
-| Heartbeat       | Ett varv var N:e minut; skalar med HEARTBEAT.md-storlek            |
-| Cron (main)     | Lägger till händelse till nästa heartbeat (ingen isolerad körning) |
-| Cron (isolated) | Fullt agentvarv per jobb; kan använda billigare modell             |
+| Mekanism                           | Kostnadsprofil                                                                          |
+| ---------------------------------- | --------------------------------------------------------------------------------------- |
+| Heartbeat                          | Ett varv var N:e minut; skalar med HEARTBEAT.md-storlek |
+| Cron (main)     | Lägger till händelse till nästa heartbeat (ingen isolerad körning)   |
+| Cron (isolated) | Fullt agentvarv per jobb; kan använda billigare modell                                  |
 
 **Tips**:
 

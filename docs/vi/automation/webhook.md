@@ -4,13 +4,6 @@ read_when:
   - Thêm hoặc thay đổi các endpoint webhook
   - Kết nối các hệ thống bên ngoài vào OpenClaw
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:01Z
 ---
 
 # Webhooks
@@ -36,7 +29,7 @@ Ghi chú:
 
 ## Xác thực
 
-Mỗi yêu cầu phải bao gồm hook token. Ưu tiên dùng header:
+Every request must include the hook token. 12. Ưu tiên header:
 
 - `Authorization: Bearer <token>` (khuyến nghị)
 - `x-openclaw-token: <token>`
@@ -81,12 +74,12 @@ Payload:
 
 - `message` **bắt buộc** (string): Prompt hoặc thông điệp để tác tử xử lý.
 - `name` tùy chọn (string): Tên dễ đọc cho hook (ví dụ: "GitHub"), dùng làm tiền tố trong tóm tắt phiên.
-- `sessionKey` tùy chọn (string): Khóa dùng để định danh phiên của tác tử. Mặc định là một `hook:<uuid>` ngẫu nhiên. Dùng khóa nhất quán cho phép hội thoại nhiều lượt trong ngữ cảnh hook.
+- `sessionKey` tùy chọn (string): Khóa được dùng để xác định phiên của agent. Mặc định là một `hook:<uuid>` ngẫu nhiên. 13. Việc dùng một key nhất quán cho phép hội thoại nhiều lượt trong ngữ cảnh hook.
 - `wakeMode` tùy chọn (`now` | `next-heartbeat`): Có kích hoạt heartbeat ngay lập tức (mặc định `now`) hay chờ lần kiểm tra định kỳ tiếp theo.
-- `deliver` tùy chọn (boolean): Nếu `true`, phản hồi của tác tử sẽ được gửi tới kênh nhắn tin. Mặc định `true`. Các phản hồi chỉ là xác nhận heartbeat sẽ tự động bị bỏ qua.
-- `channel` tùy chọn (string): Kênh nhắn tin để gửi. Một trong: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Mặc định `last`.
-- `to` tùy chọn (string): Định danh người nhận cho kênh (ví dụ: số điện thoại cho WhatsApp/Signal, chat ID cho Telegram, channel ID cho Discord/Slack/Mattermost (plugin), conversation ID cho MS Teams). Mặc định là người nhận gần nhất trong phiên chính.
-- `model` tùy chọn (string): Ghi đè mô hình (ví dụ: `anthropic/claude-3-5-sonnet` hoặc một bí danh). Phải nằm trong danh sách mô hình cho phép nếu có hạn chế.
+- `deliver` tùy chọn (boolean): Nếu `true`, phản hồi của agent sẽ được gửi tới kênh nhắn tin. Mặc định là `true`. Các phản hồi chỉ mang tính heartbeat xác nhận sẽ tự động bị bỏ qua.
+- `channel` tùy chọn (string): Kênh nhắn tin để phân phối. Một trong: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`. Mặc định là `last`.
+- `to` optional (string): The recipient identifier for the channel (e.g., phone number for WhatsApp/Signal, chat ID for Telegram, channel ID for Discord/Slack/Mattermost (plugin), conversation ID for MS Teams). 14. Mặc định là người nhận cuối cùng trong main session.
+- 15. `model` tùy chọn (string): Ghi đè model (ví dụ: `anthropic/claude-3-5-sonnet` hoặc một alias). Vì lý do này, WebChat cho phép bạn xem ngữ cảnh xuyên kênh cho agent đó tại một nơi.
 - `thinking` tùy chọn (string): Ghi đè mức độ suy nghĩ (ví dụ: `low`, `medium`, `high`).
 - `timeoutSeconds` tùy chọn (number): Thời lượng tối đa cho lần chạy tác tử tính bằng giây.
 
@@ -98,9 +91,9 @@ Hiệu lực:
 
 ### `POST /hooks/<name>` (ánh xạ)
 
-Tên hook tùy chỉnh được phân giải thông qua `hooks.mappings` (xem cấu hình). Một ánh xạ có thể
-chuyển payload bất kỳ thành hành động `wake` hoặc `agent`, với template tùy chọn hoặc
-biến đổi bằng mã.
+17. Tên hook tùy chỉnh được phân giải thông qua `hooks.mappings` (xem cấu hình). A mapping can
+    turn arbitrary payloads into `wake` or `agent` actions, with optional templates or
+    code transforms.
 
 Tùy chọn ánh xạ (tóm tắt):
 
@@ -113,8 +106,8 @@ Tùy chọn ánh xạ (tóm tắt):
   (`channel` mặc định là `last` và sẽ rơi về WhatsApp).
 - `allowUnsafeExternalContent: true` tắt lớp bao an toàn nội dung bên ngoài cho hook đó
   (nguy hiểm; chỉ dùng cho nguồn nội bộ đáng tin cậy).
-- `openclaw webhooks gmail setup` ghi cấu hình `hooks.gmail` cho `openclaw webhooks gmail run`.
-  Xem [Gmail Pub/Sub](/automation/gmail-pubsub) để biết luồng theo dõi Gmail đầy đủ.
+- 18. `openclaw webhooks gmail setup` ghi cấu hình `hooks.gmail` cho `openclaw webhooks gmail run`.
+  19. Xem [Gmail Pub/Sub](/automation/gmail-pubsub) để biết toàn bộ luồng Gmail watch.
 
 ## Phản hồi
 
@@ -165,6 +158,5 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Giữ các endpoint hook phía sau loopback, tailnet, hoặc reverse proxy đáng tin cậy.
 - Dùng hook token riêng; không tái sử dụng token xác thực của gateway.
 - Tránh đưa payload thô nhạy cảm vào log webhook.
-- Payload hook được coi là không đáng tin cậy và mặc định được bao bọc bằng các ranh giới an toàn.
-  Nếu buộc phải tắt điều này cho một hook cụ thể, hãy đặt `allowUnsafeExternalContent: true`
-  trong ánh xạ của hook đó (nguy hiểm).
+- 20. Payload hook được xem là không đáng tin cậy và mặc định được bọc trong các ranh giới an toàn.
+  21. Nếu bạn buộc phải tắt điều này cho một hook cụ thể, hãy đặt `allowUnsafeExternalContent: true` trong mapping của hook đó (nguy hiểm).

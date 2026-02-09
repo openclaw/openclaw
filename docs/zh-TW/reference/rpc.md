@@ -4,18 +4,11 @@ read_when:
   - 新增或變更外部 CLI 整合時
   - 偵錯 RPC 介接器（signal-cli、imsg）時
 title: "RPC 介接器"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:05Z
 ---
 
 # RPC 介接器
 
-OpenClaw 透過 JSON-RPC 整合外部 CLI。目前使用兩種模式。
+OpenClaw 透過 JSON-RPC 整合外部 CLI。目前使用兩種模式。 Two patterns are used today.
 
 ## 模式 A：HTTP 常駐程式（signal-cli）
 
@@ -45,6 +38,6 @@ legacy 設定與位址指定請參閱 [iMessage](/channels/imessage)（偏好 `c
 
 ## 介接器指引
 
-- Gateway 閘道器負責行程（啟動／停止與提供者生命週期綁定）。
-- 讓 RPC 用戶端具備韌性：設定逾時、在行程結束時重新啟動。
+- Gateway owns the process (start/stop tied to provider lifecycle).
+- Keep RPC clients resilient: timeouts, restart on exit.
 - 優先使用穩定的 ID（例如 `chat_id`），避免使用顯示字串。

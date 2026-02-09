@@ -5,13 +5,6 @@ read_when:
   - 為模型／提供者錯誤新增回歸測試
   - 除錯 Gateway + 代理程式 行為
 title: "測試"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:54Z
 ---
 
 # 測試
@@ -27,7 +20,7 @@ OpenClaw 有三個 Vitest 測試套件（unit/integration、e2e、live），以�
 
 ## 快速開始
 
-大多數情況：
+Most days:
 
 - 完整關卡（推送前預期執行）：`pnpm build && pnpm check && pnpm test`
 
@@ -54,7 +47,7 @@ OpenClaw 有三個 Vitest 測試套件（unit/integration、e2e、live），以�
 - 範圍：
   - 純 unit 測試
   - 程序內整合測試（Gateway 身分驗證、路由、工具、解析、設定）
-  - 已知錯誤的確定性回歸測試
+  - Deterministic regressions for known bugs
 - 期望：
   - 在 CI 中執行
   - 不需要真實金鑰
@@ -81,7 +74,7 @@ OpenClaw 有三個 Vitest 測試套件（unit/integration、e2e、live），以�
 - 預設：由 `pnpm test:live` **啟用**（設定 `OPENCLAW_LIVE_TEST=1`）
 - 範圍：
   - 「此提供者／模型今天是否真的能用真實憑證運作？」
-  - 捕捉提供者格式變更、工具呼叫怪異行為、身分驗證問題與速率限制行為
+  - Catch provider format changes, tool-calling quirks, auth issues, and rate limit behavior
 - 期望：
   - 設計上不適合 CI（真實網路、真實提供者政策、配額、故障）
   - 需要付費／消耗速率限制
@@ -101,7 +94,7 @@ OpenClaw 有三個 Vitest 測試套件（unit/integration、e2e、live），以�
 
 Live 測試分為兩層，以便隔離失敗來源：
 
-- 「Direct model」用來確認提供者／模型在該金鑰下至少能回應。
+- “Direct model” tells us the provider/model can answer at all with the given key.
 - 「Gateway smoke」用來確認完整的 Gateway + 代理程式 管線對該模型可用（工作階段、歷史、工具、沙箱政策等）。
 
 ### 第 1 層：直接模型完成（不經 Gateway）
@@ -120,8 +113,8 @@ Live 測試分為兩層，以便隔離失敗來源：
   - 或 `OPENCLAW_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-6,..."`（逗號分隔 allowlist）
 - 如何選擇提供者：
   - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"`（逗號分隔 allowlist）
-- 金鑰來源：
-  - 預設：設定檔儲存庫與環境變數後備
+- Where keys come from:
+  - By default: profile store and env fallbacks
   - 設定 `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` 以強制僅使用 **設定檔儲存庫**
 - 為何存在：
   - 將「提供者 API 壞了／金鑰無效」與「Gateway 代理程式 管線壞了」分離
@@ -131,7 +124,7 @@ Live 測試分為兩層，以便隔離失敗來源：
 
 - 測試：`src/gateway/gateway-models.profiles.live.test.ts`
 - 目標：
-  - 啟動程序內 Gateway
+  - Spin up an in-process gateway
   - 建立／修補一個 `agent:dev:*` 工作階段（每次執行可覆寫模型）
   - 迭代具備金鑰的模型並斷言：
     - 有「有意義」的回應（無工具）
@@ -175,7 +168,7 @@ openclaw models list --json
 - 啟用：
   - `pnpm test:live`（或直接呼叫 Vitest 時使用 `OPENCLAW_LIVE_TEST=1`）
   - `OPENCLAW_LIVE_SETUP_TOKEN=1`
-- 權杖來源（擇一）：
+- Token sources (pick one):
   - 設定檔：`OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
   - 原始權杖：`OPENCLAW_LIVE_SETUP_TOKEN_VALUE=sk-ant-oat01-...`
 - 模型覆寫（選用）：
@@ -195,7 +188,7 @@ OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-to
 - 啟用：
   - `pnpm test:live`（或直接呼叫 Vitest 時使用 `OPENCLAW_LIVE_TEST=1`）
   - `OPENCLAW_LIVE_CLI_BACKEND=1`
-- 預設：
+- Defaults:
   - 模型：`claude-cli/claude-sonnet-4-5`
   - 指令：`claude`
   - 參數：`["-p","--output-format","json","--dangerously-skip-permissions"]`
@@ -277,13 +270,13 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 選用的額外覆蓋（加分）：
 
 - xAI：`xai/grok-4`（或最新可用）
-- Mistral：`mistral/`…（選一個你已啟用且支援工具的模型）
-- Cerebras：`cerebras/`…（若你有存取權）
-- LM Studio：`lmstudio/`…（本機；工具呼叫取決於 API 模式）
+- Mistral: `mistral/`… (pick one “tools” capable model you have enabled)
+- Cerebras：`cerebras/`…（若你有存取權） (if you have access)
+- LM Studio：`lmstudio/`…（本機；工具呼叫取決於 API 模式） (local; tool calling depends on API mode)
 
 ### 視覺：影像傳送（附件 → 多模態訊息）
 
-在 `OPENCLAW_LIVE_GATEWAY_MODELS` 中至少包含一個支援影像的模型（Claude／Gemini／OpenAI 具備視覺能力的變體等），以驗證影像探測。
+在 `OPENCLAW_LIVE_GATEWAY_MODELS` 中至少包含一個支援影像的模型（Claude／Gemini／OpenAI 具備視覺能力的變體等），以驗證影像探測。 to exercise the image probe.
 
 ### 聚合器／替代 Gateway
 
@@ -297,16 +290,18 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - 內建：`openai`、`openai-codex`、`anthropic`、`google`、`google-vertex`、`google-antigravity`、`google-gemini-cli`、`zai`、`openrouter`、`opencode`、`xai`、`groq`、`cerebras`、`mistral`、`github-copilot`
 - 透過 `models.providers`（自訂端點）：`minimax`（雲端／API），以及任何 OpenAI／Anthropic 相容的代理（LM Studio、vLLM、LiteLLM 等）
 
-提示：不要嘗試在文件中硬編碼「所有模型」。權威清單是你的機器上 `discoverModels(...)` 的回傳結果 + 可用的金鑰。
+Tip: don’t try to hardcode “all models” in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine + whatever keys are available.
 
 ## 憑證（切勿提交）
 
-Live 測試探索憑證的方式與 CLI 相同。實務上的含意：
+Live 測試探索憑證的方式與 CLI 相同。實務上的含意： Practical implications:
 
 - 若 CLI 可用，live 測試應能找到相同的金鑰。
+
 - 若 live 測試顯示「no creds」，請用與除錯 `openclaw models list`／模型選擇相同的方法除錯。
 
 - 設定檔儲存庫：`~/.openclaw/credentials/`（建議；測試中「設定檔金鑰」的含意）
+
 - 設定：`~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
 
 若你想依賴環境變數金鑰（例如在你的 `~/.profile` 中已匯出），請在 `source ~/.profile` 之後執行本機測試，或使用下方的 Docker 執行器（可將 `~/.profile` 掛載進容器）。
@@ -326,7 +321,7 @@ Live 測試探索憑證的方式與 CLI 相同。實務上的含意：
 - Gateway 網路（兩個容器、WS 身分驗證 + 健康檢查）：`pnpm test:docker:gateway-network`（腳本：`scripts/e2e/gateway-network-docker.sh`）
 - 外掛（自訂擴充載入 + 登錄檔煙霧測試）：`pnpm test:docker:plugins`（腳本：`scripts/e2e/plugins-docker.sh`）
 
-實用的環境變數：
+Useful env vars:
 
 - `OPENCLAW_CONFIG_DIR=...`（預設：`~/.openclaw`）掛載到 `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...`（預設：`~/.openclaw/workspace`）掛載到 `/home/node/.openclaw/workspace`
@@ -334,7 +329,7 @@ Live 測試探索憑證的方式與 CLI 相同。實務上的含意：
 - `OPENCLAW_LIVE_GATEWAY_MODELS=...`／`OPENCLAW_LIVE_MODELS=...` 以縮小執行範圍
 - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` 以確保憑證來自設定檔儲存庫（而非環境變數）
 
-## 文件健全性
+## Docs sanity
 
 文件編輯後請執行文件檢查：`pnpm docs:list`。
 
@@ -360,9 +355,9 @@ Skills 仍缺少的部分（請見 [Skills](/tools/skills)）：
 
 未來的評估應先保持確定性：
 
-- 使用模擬提供者的情境執行器，斷言工具呼叫 + 順序、skill 檔案讀取與工作階段連線。
+- A scenario runner using mock providers to assert tool calls + order, skill file reads, and session wiring.
 - 一小組以 skill 為中心的情境（使用 vs 避免、門控、提示注入）。
-- 僅在 CI 安全套件就緒後，才加入選用的 live 評估（需環境變數門控）。
+- Optional live evals (opt-in, env-gated) only after the CI-safe suite is in place.
 
 ## 新增回歸（指引）
 
@@ -370,6 +365,6 @@ Skills 仍缺少的部分（請見 [Skills](/tools/skills)）：
 
 - 盡可能新增 CI 安全的回歸（模擬／替身提供者，或捕捉精確的請求形狀轉換）
 - 若本質上只能 live（速率限制、身分驗證政策），請保持 live 測試狹窄，並透過環境變數選擇性啟用
-- 優先鎖定能捕捉錯誤的最小層級：
+- Prefer targeting the smallest layer that catches the bug:
   - 提供者請求轉換／重播錯誤 → 直接模型測試
   - Gateway 工作階段／歷史／工具管線錯誤 → Gateway live 煙霧測試或 CI 安全的 Gateway 模擬測試

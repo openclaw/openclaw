@@ -3,13 +3,6 @@ summary: "Referencja CLI dla `openclaw configure` (interaktywne monity konfigura
 read_when:
   - Chcesz interaktywnie dostosować poświadczenia, urządzenia lub domyślne ustawienia agenta
 title: "configure"
-x-i18n:
-  source_path: cli/configure.md
-  source_hash: 9cb2bb5237b02b3a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:50Z
 ---
 
 # `openclaw configure`

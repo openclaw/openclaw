@@ -5,13 +5,6 @@ read_when:
   - Запуск приложения iOS из исходников
   - Отладка обнаружения шлюза Gateway или команд canvas
 title: "Приложение iOS"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:48Z
 ---
 
 # Приложение iOS (узел)

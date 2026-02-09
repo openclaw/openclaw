@@ -4,13 +4,6 @@ read_when:
   - 새로운 npm 릴리스를 진행할 때
   - 새로운 macOS 앱 릴리스를 진행할 때
   - 게시 전 메타데이터를 검증할 때
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:21Z
 ---
 
 # 릴리스 체크리스트 (npm + macOS)
@@ -90,7 +83,7 @@ x-i18n:
 7. **GitHub 릴리스 + appcast**
 
 - [ ] 태그 지정 및 푸시: `git tag vX.Y.Z && git push origin vX.Y.Z` (또는 `git push --tags`).
-- [ ] `vX.Y.Z`에 대한 GitHub 릴리스를 생성/갱신하고 **제목은 `openclaw X.Y.Z`**로 설정합니다(태그만 사용하지 마십시오). 본문에는 해당 버전의 **전체** 변경 로그 섹션(Highlights + Changes + Fixes)을 인라인으로 포함해야 하며(단순 링크 금지), **본문에 제목을 반복해서는 안 됩니다**.
+- [ ] `vX.Y.Z`에 대한 GitHub 릴리스를 생성/갱신하고 \*\*제목은 `openclaw X.Y.Z`\*\*로 설정합니다(태그만 사용하지 마십시오). 본문에는 해당 버전의 **전체** 변경 로그 섹션(Highlights + Changes + Fixes)을 인라인으로 포함해야 하며(단순 링크 금지), **본문에 제목을 반복해서는 안 됩니다**.
 - [ ] 산출물을 첨부합니다: `npm pack` tarball (선택 사항), `OpenClaw-X.Y.Z.zip`, 및 `OpenClaw-X.Y.Z.dSYM.zip` (생성된 경우).
 - [ ] 업데이트된 `appcast.xml`를 커밋하고 푸시합니다 (Sparkle 은 main 에서 피드를 가져옵니다).
 - [ ] 깨끗한 임시 디렉토리(`package.json` 없음)에서 `npx -y openclaw@X.Y.Z send --help`를 실행하여 설치/CLI 진입점이 정상 동작하는지 확인합니다.

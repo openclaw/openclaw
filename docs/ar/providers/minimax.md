@@ -4,13 +4,6 @@ read_when:
   - تريد نماذج MiniMax في OpenClaw
   - تحتاج إلى إرشادات إعداد MiniMax
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:42Z
 ---
 
 # MiniMax
@@ -38,8 +31,7 @@ MiniMax هي شركة ذكاء اصطناعي تطوّر عائلة النماذ
 
 - **السرعة:** Lightning هو المتغيّر «السريع» في مستندات تسعير MiniMax.
 - **التكلفة:** تُظهر التسعيرة نفس تكلفة الإدخال، لكن Lightning لديه تكلفة إخراج أعلى.
-- **توجيه خطط البرمجة:** الواجهة الخلفية لـ Lightning غير متاحة مباشرة ضمن خطة البرمجة لدى MiniMax.
-  تقوم MiniMax بتوجيه معظم الطلبات تلقائيًا إلى Lightning، لكنها تعود إلى
+- **توجيه خطط البرمجة:** الواجهة الخلفية لـ Lightning غير متاحة مباشرة ضمن خطة البرمجة لدى MiniMax. تقوم MiniMax بتوجيه معظم الطلبات تلقائيًا إلى Lightning، لكنها تعود إلى
   الواجهة الخلفية العادية لـ M2.1 أثناء ذُرى الحركة.
 
 ## اختر الإعداد

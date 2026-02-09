@@ -4,13 +4,6 @@ read_when:
   - Konfigurowanie obsługi iMessage
   - Debugowanie wysyłania/odbierania iMessage
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:17Z
 ---
 
 # iMessage (legacy: imsg)

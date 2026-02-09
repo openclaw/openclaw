@@ -4,13 +4,6 @@ read_when:
   - Justera heartbeat-frekvens eller meddelanden
   - Välja mellan heartbeat och cron för schemalagda uppgifter
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:37Z
 ---
 
 # Heartbeat (Gateway)
@@ -49,13 +42,13 @@ Exempel på konfig:
 
 ## Standardvärden
 
-- Intervall: `30m` (eller `1h` när Anthropic OAuth/setup-token är detekterat autentiseringsläge). Sätt `agents.defaults.heartbeat.every` eller per agent `agents.list[].heartbeat.every`; använd `0m` för att inaktivera.
-- Prompttext (konfigurerbar via `agents.defaults.heartbeat.prompt`):
-  `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-- Heartbeat-prompten skickas **ordagrant** som användarmeddelande. Systemprompten
-  innehåller en ”Heartbeat”-sektion och körningen flaggas internt.
+- Interval: `30m` (eller `1h` när Anthropic OAuth/setup-token är det detekterade auth läget). Ange `agents.defaults.heartbeat.every` eller per-agent `agents.list[].heartbeat.every`; använd `0m` för att inaktivera.
+- Prompt kropp (konfigurerbar via `agents.defaults.heartbeat.prompt`):
+  `Read HEARTBEAT.md om den existerar (arbetsytans sammanhang). Följ den strikt. Sluta inte eller upprepa gamla uppgifter från tidigare chattar. Om inget behöver uppmärksamhet, svara HEARTBEAT_OK.`
+- Hjärtslag-prompten skickas **ordagrande** som användarmeddelande. Systemet
+  prompten innehåller en “Heartbeat” sektion och körningen är flaggad internt.
 - Aktiva timmar (`heartbeat.activeHours`) kontrolleras i den konfigurerade tidszonen.
-  Utanför fönstret hoppas heartbeats över till nästa tick inom fönstret.
+  Utanför fönstret hoppas hjärtslag över till nästa fästing inne i fönstret.
 
 ## Vad heartbeat-prompten är till för
 
@@ -67,16 +60,16 @@ Standardprompten är avsiktligt bred:
   till ett ibland förekommande lättviktigt ”behöver du något?”-meddelande, men undviker
   nattligt spam genom att använda din konfigurerade lokala tidszon (se [/concepts/timezone](/concepts/timezone)).
 
-Om du vill att en heartbeat ska göra något mycket specifikt (t.ex. ”check Gmail PubSub
-stats” eller ”verify gateway health”), sätt `agents.defaults.heartbeat.prompt` (eller
-`agents.list[].heartbeat.prompt`) till en anpassad text (skickas ordagrant).
+Om du vill att ett hjärtslag ska göra något mycket specifikt (t.ex. “kontrollera Gmail PubSub
+statistik” eller “verifiera gateway hälsa”), ange `agents. efaults.heartbeat.prompt` (eller
+`agents.list[].heartbeat.prompt`) till en anpassad kropp (skickad verbatim).
 
 ## Svarskontrakt
 
 - Om inget kräver uppmärksamhet, svara med **`HEARTBEAT_OK`**.
-- Under heartbeat-körningar behandlar OpenClaw `HEARTBEAT_OK` som en kvittens när den
-  förekommer i **början eller slutet** av svaret. Tokenen tas bort och svaret
-  slängs om återstående innehåll är **≤ `ackMaxChars`** (standard: 300).
+- Under hjärtslag körs behandlar OpenClaw `HEARTBEAT_OK` som en ack när det visas
+  vid **början eller slutet** av svaret. Talet är borttaget och svaret är
+  tappat om det återstående innehållet är **≤ `ackMaxChars`** (standard: 300).
 - Om `HEARTBEAT_OK` förekommer i **mitten** av ett svar behandlas den inte
   särskilt.
 - För larm ska du **inte** inkludera `HEARTBEAT_OK`; returnera endast larmtexten.
@@ -111,14 +104,14 @@ och loggas; ett meddelande som bara är `HEARTBEAT_OK` slängs.
 - `agents.list[].heartbeat` slås samman ovanpå; om någon agent har ett `heartbeat`-block
   kör **endast dessa agenter** heartbeats.
 - `channels.defaults.heartbeat` sätter synlighetsstandarder för alla kanaler.
-- `channels.<channel>.heartbeat` åsidosätter kanalstandarder.
-- `channels.<channel>.accounts.<id>.heartbeat` (kanaler med flera konton) åsidosätter inställningar per kanal.
+- `kanaler.<channel>.heartbeat` åsidosätter kanalstandard.
+- `kanaler.<channel>.accounts.<id>.heartbeat` (multi-account kanaler) åsidosätter inställningar per kanal.
 
 ### Per-agent-heartbeats
 
-Om någon `agents.list[]`-post innehåller ett `heartbeat`-block kör **endast dessa
-agenter** heartbeats. Per-agent-blocket slås samman ovanpå `agents.defaults.heartbeat`
-(så du kan sätta gemensamma standarder en gång och åsidosätta per agent).
+Om någon `agents.list[]` inlägg innehåller ett `heartbeat`-block, **bara de agenterna**
+kör hjärtslag. Blocket per agent sammanfogas ovanpå `agents.defaults.heartbeat`
+(så att du kan ställa in delade standardvärden en gång och åsidosätta per agent).
 
 Exempel: två agenter, endast den andra agenten kör heartbeats.
 
@@ -169,8 +162,7 @@ Begränsa heartbeats till kontorstid i en specifik tidszon:
 }
 ```
 
-Utanför detta fönster (före kl. 9 eller efter kl. 22 Eastern) hoppas heartbeats över.
-Nästa schemalagda tick inom fönstret körs normalt.
+Utanför detta fönster (före 09:00 eller efter 22:00 östra), hoppas hjärtslag över. Nästa schemalagda bock inne i fönstret kommer att köras normalt.
 
 ### Exempel: flera konton
 
@@ -216,32 +208,26 @@ konton som Telegram:
   - `last` (standard): leverera till senast använda externa kanal.
   - Explicit kanal: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
   - `none`: kör heartbeaten men **leverera inte** externt.
-- `to`: valfri mottagaråsidosättning (kanalspecifikt id, t.ex. E.164 för WhatsApp eller ett Telegram-chatt-id).
-- `accountId`: valfritt konto-id för kanaler med flera konton. När `target: "last"`,
-  gäller konto-id:t för den lösta senaste kanalen om den stöder konton; annars ignoreras det.
-  Om konto-id:t inte matchar ett konfigurerat konto för den lösta kanalen hoppas leveransen över.
+- `to`: valfri mottagare åsidosätter (kanalspecifikt id, t.ex. E.164 för WhatsApp eller ett Telegram chatt-id).
+- `accountId`: valfritt kontonummer för kanaler med flera konton. När `target: "last"`, gäller konto-id för den lösta sista kanalen om den stöder konton; annars ignoreras. Om konto-id inte matchar ett konfigurerat konto för den lösta kanalen, hoppas leveransen över.
 - `prompt`: åsidosätter standardpromptens text (slås inte samman).
 - `ackMaxChars`: max antal tecken som tillåts efter `HEARTBEAT_OK` före leverans.
-- `activeHours`: begränsar heartbeat-körningar till ett tidsfönster. Objekt med
-  `start` (HH:MM, inklusive), `end` (HH:MM exklusive; `24:00`
-  tillåtet för dagens slut) och valfri `timezone`.
+- `activeHours`: begränsar hjärtslag körs till ett tidsfönster. Objekt med `start` (HH:MM, inclusive), `end` (HH:MM exklusive; `24:00` tillåts för slut-av-dag) och valfri `timezone`.
   - Utelämnad eller `"user"`: använder din `agents.defaults.userTimezone` om den är satt,
     annars faller den tillbaka till värdsystemets tidszon.
   - `"local"`: använder alltid värdsystemets tidszon.
-  - Valfri IANA-identifierare (t.ex. `America/New_York`): används direkt; om ogiltig,
-    faller den tillbaka till `"user"`-beteendet ovan.
+  - Någon IANA identifierare (t.ex. `America/New_York`): används direkt; om ogiltigt, faller tillbaka till `"användar"` beteende ovan.
   - Utanför det aktiva fönstret hoppas heartbeats över till nästa tick inom fönstret.
 
 ## Leveransbeteende
 
-- Heartbeats körs som standard i agentens huvudsession (`agent:<id>:<mainKey>`),
-  eller `global` när `session.scope = "global"`. Sätt `session` för att åsidosätta
-  till en specifik kanalsession (Discord/WhatsApp/etc.).
+- Heartbeats körs i agentens huvudsession som standard (`agent:<id>:<mainKey>`),
+  eller `global` när `session.scope = "global"`. Set `session` to override to a
+  specific channel session (Discord/WhatsApp/etc.).
 - `session` påverkar endast körningskontexten; leverans styrs av `target`
   och `to`.
-- För att leverera till en specifik kanal/mottagare, sätt `target` +
-  `to`. Med `target: "last"` använder leveransen den senaste externa kanalen
-  för den sessionen.
+- För att leverera till en specifik kanal / mottagare, sätt `target` + `to`. Med
+  `target: "last"`, använder leverans den sista externa kanalen för den sessionen.
 - Om huvudkön är upptagen hoppas heartbeaten över och försöks igen senare.
 - Om `target` löses till ingen extern destination körs varvet ändå men inget
   utgående meddelande skickas.
@@ -250,8 +236,8 @@ konton som Telegram:
 
 ## Synlighetskontroller
 
-Som standard undertrycks `HEARTBEAT_OK`-kvittenser medan larm-innehåll levereras.
-Du kan justera detta per kanal eller per konto:
+Som standard undertrycks 'HEARTBEAT_OK' bekräftelser medan varningens innehåll är
+levereras. Du kan justera detta per kanal eller per konto:
 
 ```yaml
 channels:
@@ -304,23 +290,22 @@ channels:
 
 ### Vanliga mönster
 
-| Mål                                           | Konfig                                                                                   |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Standardbeteende (tysta OK, larm på)          | _(ingen konfig behövs)_                                                                  |
+| Mål                                                              | Konfig                                                                                   |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Standardbeteende (tysta OK, larm på)          | _(ingen konfig behövs)_                                               |
 | Helt tyst (inga meddelanden, ingen indikator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Endast indikator (inga meddelanden)           | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OK i endast en kanal                          | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OK i endast en kanal                                             | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (valfritt)
 
-Om en `HEARTBEAT.md`-fil finns i arbetsytan säger standardprompten åt agenten att
-läsa den. Tänk på den som din ”heartbeat-checklista”: liten, stabil och säker att
-inkludera var 30:e minut.
+Om en 'HEARTBEAT.md' fil finns i arbetsytan, säger standardprompten till
+agenten att läsa den. Tänk på det som en ”hjärtslagschecklista”: liten, stabil och
+säker att inkludera var 30:e minut.
 
-Om `HEARTBEAT.md` finns men i praktiken är tom (endast tomma rader och
-markdown-rubriker som `# Heading`), hoppar OpenClaw över heartbeat-körningen för
-att spara API-anrop. Om filen saknas körs heartbeaten ändå och modellen avgör vad
-som ska göras.
+Om `HEARTBEAT. d` finns men är effektivt tom (endast tomma rader och markdown
+rubriker som `# Heading`), hoppar OpenClaw över hjärtslaget för att spara API-samtal.
+Om filen saknas körs heartbeat ändå och modellen avgör vad som ska göras.
 
 Håll den liten (kort checklista eller påminnelser) för att undvika prompt-svällning.
 
@@ -372,14 +357,14 @@ Om du vill ha transparens, aktivera:
 
 - `agents.defaults.heartbeat.includeReasoning: true`
 
-När detta är aktiverat levererar heartbeats även ett separat meddelande med prefix
-`Reasoning:` (samma form som `/reasoning on`). Detta kan vara användbart när
-agenten hanterar flera sessioner/codexar och du vill se varför den valde att pinga
-dig — men det kan också läcka mer intern detalj än du vill. Föredra att ha detta
-avstängt i gruppchattar.
+När aktiverad, kommer hjärtslag också att leverera ett separat meddelande prefixerat
+`Anledning:` (samma form som `/resonemang på`). Detta kan vara användbart när agenten
+hanterar flera sessioner/codexes och du vill se varför det bestämde sig för att pinga
+du — men det kan också läcka mer intern detalj än du vill. Föredrar att hålla den
+borta i gruppchattar.
 
 ## Kostnadsmedvetenhet
 
-Heartbeats kör fullständiga agentvarv. Kortare intervall förbrukar fler tokens.
-Håll `HEARTBEAT.md` litet och överväg en billigare `model` eller
-`target: "none"` om du bara vill ha interna tillståndsuppdateringar.
+Heartbeats kör full agent varv. Kortare intervaller brinner fler tokens. Behåll
+`HEARTBEAT.md` liten och överväg en billigare `modell` eller `target: "none"` om du
+bara vill ha interna statusuppdateringar.

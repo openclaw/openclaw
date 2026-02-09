@@ -3,20 +3,16 @@ summary: "TypeBox-scheman som den enda sanningskällan för gateway-protokollet"
 read_when:
   - Uppdaterar protokollscheman eller codegen
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:12Z
 ---
 
 # TypeBox som protokollets enda sanningskälla
 
 Senast uppdaterad: 2026-01-10
 
-TypeBox är ett schema-bibliotek med TypeScript som utgångspunkt. Vi använder det för att definiera **Gateway WebSocket‑protokollet** (handshake, request/response, serverhändelser). Dessa scheman driver **validering vid körning**, **export av JSON Schema** och **Swift‑codegen** för macOS‑appen. En enda sanningskälla; allt annat genereras.
+TypeBox är ett TypeScript-första schemabibliotek. Vi använder det för att definiera **Gateway
+WebSocket-protokollet** (handskakning, förfrågan/svar, serverhändelser). Dessa scheman
+kör **körtidsvalidering**, **JSON Schema export**, och **Swift codegen** för
+macOS appen. En källa till sanning; allt annat genereras.
 
 Om du vill ha sammanhang på protokollnivå, börja med
 [Gateway-arkitektur](/concepts/architecture).
@@ -27,9 +23,9 @@ Varje Gateway WS‑meddelande är en av tre ramar:
 
 - **Request**: `{ type: "req", id, method, params }`
 - **Response**: `{ type: "res", id, ok, payload | error }`
-- **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
+- **Händelse**: `{ typ: "händelse", händelse, nyttolast, q?, stateVersion? }`
 
-Den första ramen **måste** vara en `connect`‑request. Därefter kan klienter anropa
+Den första ramen **måste** vara en `connect`-begäran. Därefter kan klienter anropa
 metoder (t.ex. `health`, `send`, `chat.send`) och prenumerera på händelser (t.ex.
 `presence`, `tick`, `agent`).
 
@@ -77,7 +73,8 @@ Den auktoritativa listan finns i `src/gateway/server.ts` (`METHODS`, `EVENTS`).
 
 ## Hur schemana används vid körning
 
-- **Serversidan**: varje inkommande ram valideras med AJV. Handshaken accepterar endast en `connect`‑request vars parametrar matchar `ConnectParams`.
+- **Serversidan**: varje inkommande ram är validerad med AJV. Handskakningen endast
+  accepterar en `connect`-begäran vars parametrar matchar `ConnectParams`.
 - **Klientsidan**: JS‑klienten validerar händelse‑ och svarsrutor innan de används.
 - **Metodyta**: Gateway annonserar de stödda `methods` och `events` i `hello-ok`.
 
@@ -278,8 +275,8 @@ Okända ramtyper bevaras som råa payloads för framåtkompatibilitet.
 
 ## Live‑schema‑JSON
 
-Genererat JSON Schema finns i repo:t på `dist/protocol.schema.json`. Den
-publicerade råfilen är vanligtvis tillgänglig på:
+Genererad JSON Schema finns i repo på `dist/protocol.schema.json`. Den
+publicerade rå filen är vanligtvis tillgänglig på:
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 

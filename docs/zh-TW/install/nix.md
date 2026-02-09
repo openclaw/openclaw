@@ -5,13 +5,6 @@ read_when:
   - 你已在使用 Nix／NixOS／Home Manager
   - 你希望一切都被釘選並以宣告式方式管理
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:28Z
 ---
 
 # Nix 安裝
@@ -39,13 +32,13 @@ Reference the nix-openclaw README for module options.
 
 > **📦 完整指南：[github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> nix-openclaw 儲存庫是 Nix 安裝的唯一事實來源。本頁僅提供快速概覽。
+> 此頁面僅為快速總覽。 This page is just a quick overview.
 
 ## 你將獲得什麼
 
 - Gateway + macOS 應用程式 + 工具（whisper、spotify、cameras）— 全部已釘選
 - 可在重新開機後持續運作的 Launchd 服務
-- 具備宣告式設定的外掛系統
+- Plugin system with declarative config
 - 即時回滾：`home-manager switch --rollback`
 
 ---
@@ -56,19 +49,19 @@ Reference the nix-openclaw README for module options.
 
 OpenClaw 支援 **Nix 模式**，可使設定具備決定性，並停用自動安裝流程。
 可透過匯出以下設定來啟用：
+14. 透過匯出以下內容來啟用：
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
-在 macOS 上，GUI 應用程式不會自動繼承 shell 的環境變數。你也可以
-透過 defaults 啟用 Nix 模式：
+15. 在 macOS 上，GUI 應用程式不會自動繼承 shell 的環境變數。 設定 + 狀態路徑
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
 ```
 
-### 設定與狀態路徑
+### Config + state paths
 
 OpenClaw 會從 `OPENCLAW_CONFIG_PATH` 讀取 JSON5 設定，並將可變資料儲存在 `OPENCLAW_STATE_DIR`。
 
@@ -94,9 +87,9 @@ apps/macos/Sources/OpenClaw/Resources/Info.plist
 
 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) 會將此範本複製到應用程式套件中，並修補動態欄位
 （bundle ID、版本／建置、Git SHA、Sparkle 金鑰）。這能讓 plist 對於 SwiftPM
-封裝與 Nix 建置保持決定性（不需仰賴完整的 Xcode 工具鏈）。
+封裝與 Nix 建置保持決定性（不需仰賴完整的 Xcode 工具鏈）。 相關
 
-## 相關
+## Related
 
 - [nix-openclaw](https://github.com/openclaw/nix-openclaw) — 完整設定指南
 - [Wizard](/start/wizard) — 非 Nix 的 CLI 設定

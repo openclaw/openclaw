@@ -1,16 +1,9 @@
 ---
-summary: „Mattermost-Bot-Einrichtung und OpenClaw-Konfiguration“
+summary: "„Mattermost-Bot-Einrichtung und OpenClaw-Konfiguration“"
 read_when:
   - Mattermost einrichten
   - Mattermost-Routing debuggen
-title: „Mattermost“
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:18Z
+title: "Wichtigste"
 ---
 
 # Mattermost (Plugin)

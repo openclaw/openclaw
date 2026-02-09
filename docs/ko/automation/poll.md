@@ -4,13 +4,6 @@ read_when:
   - 설문 지원을 추가하거나 수정할 때
   - CLI 또는 게이트웨이에서 설문 전송을 디버깅할 때
 title: "설문"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:43Z
 ---
 
 # 설문

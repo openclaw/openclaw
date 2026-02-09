@@ -4,13 +4,6 @@ read_when:
   - Mise a jour des correspondances d’identifiants de modele d’appareils ou des fichiers NOTICE/licence
   - Modification de la maniere dont l’interface des Instances affiche les noms des appareils
 title: "Base de donnees des modeles d’appareils"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:34Z
 ---
 
 # Base de donnees des modeles d’appareils (noms conviviaux)
@@ -29,7 +22,7 @@ Nous fournissons actuellement la correspondance a partir du depot sous licence M
 
 Afin de garantir des builds deterministes, les fichiers JSON sont epingles a des commits amont specifiques (consignes dans `apps/macos/Sources/OpenClaw/Resources/DeviceModels/NOTICE.md`).
 
-## Mise a jour de la base de donnees
+## Mise à jour de la base de données
 
 1. Choisissez les commits amont auxquels vous souhaitez vous epingler (un pour iOS, un pour macOS).
 2. Mettez a jour les hachages de commit dans `apps/macos/Sources/OpenClaw/Resources/DeviceModels/NOTICE.md`.

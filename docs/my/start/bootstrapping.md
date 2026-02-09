@@ -6,20 +6,13 @@ read_when:
   - onboarding အိုင်ဒင်တီတီ တပ်ဆင်မှုကို ပြဿနာရှာဖွေရန်
 title: "အေးဂျင့် Bootstrapping"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:58Z
 ---
 
 # အေးဂျင့် Bootstrapping
 
-Bootstrapping သည် **ပထမဆုံး အလုပ်လုပ်စဉ်** အတွင်း အေးဂျင့်၏ အလုပ်ခန်း (workspace) ကို ပြင်ဆင်ပြီး
-အိုင်ဒင်တီတီ အသေးစိတ်အချက်အလက်များကို စုဆောင်းပေးသော လုပ်ငန်းစဉ်ဖြစ်သည်။ ၎င်းသည် onboarding ပြီးဆုံးပြီးနောက်
-အေးဂျင့်ကို ပထမဆုံး စတင်အလုပ်လုပ်ချိန်တွင် ဖြစ်ပေါ်လာသည်။
+Bootstrapping is the **first‑run** ritual that prepares an agent workspace and
+collects identity details. It happens after onboarding, when the agent starts
+for the first time.
 
 ## Bootstrapping က ဘာလုပ်သလဲ
 
@@ -33,9 +26,9 @@ Bootstrapping သည် **ပထမဆုံး အလုပ်လုပ်စ�
 
 ## ဘယ်နေရာမှာ လုပ်ဆောင်သလဲ
 
-Bootstrapping သည် အမြဲတမ်း **Gateway ဟို့စ်** ပေါ်တွင် လုပ်ဆောင်သည်။ macOS အက်ပ်က
-အဝေးရှိ Gateway（ဂိတ်ဝေး） သို့ ချိတ်ဆက်ထားပါက အလုပ်ခန်းနှင့် bootstrapping ဖိုင်များသည်
-အဲဒီအဝေးရှိ စက်ပေါ်တွင် တည်ရှိနေမည်ဖြစ်သည်။
+Bootstrapping always runs on the **gateway host**. If the macOS app connects to
+a remote Gateway, the workspace and bootstrapping files live on that remote
+machine.
 
 <Note>
 Gateway（ဂိတ်ဝေး） သည် အခြားစက်တစ်လုံးပေါ်တွင် လည်ပတ်နေပါက အလုပ်ခန်းဖိုင်များကို gateway ဟို့စ် ပေါ်တွင်သာ

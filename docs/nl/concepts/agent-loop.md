@@ -3,13 +3,6 @@ summary: "Levenscyclus van de agentlus, streams en wachtsemantiek"
 read_when:
   - Je hebt een exacte walkthrough nodig van de agentlus of levenscyclusgebeurtenissen
 title: "Agentlus"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:30Z
 ---
 
 # Agentlus (OpenClaw)
@@ -39,7 +32,7 @@ end-to-end is opgebouwd.
    - serializeert runs via per-sessie- en globale wachtrijen
    - resolveert model + auth-profiel en bouwt de pi-sessie
    - abonneert zich op pi-events en streamt assistant/tool-delta’s
-   - handhaaft time-out → breekt de run af bij overschrijding
+   - forceert time-out -> abortussen indien overschreden
    - retourneert payloads + usage-metadata
 4. `subscribeEmbeddedPiSession` overbrugt pi-agent-core-events naar de OpenClaw `agent`-stream:
    - tool-events ⇒ `stream: "tool"`
@@ -49,7 +42,7 @@ end-to-end is opgebouwd.
    - wacht op **lifecycle end/error** voor `runId`
    - retourneert `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
-## Wachtrijen + gelijktijdigheid
+## Wachtrij + concurrency
 
 - Runs worden geserialiseerd per sessiesleutel (sessielane) en optioneel via een globale lane.
 - Dit voorkomt tool-/sessieraces en houdt de sessiegeschiedenis consistent.

@@ -5,13 +5,6 @@ read_when:
   - Arbete med konfigmigreringar eller doctor-arbetsflöden
   - Hantering av plugin-konfigscheman eller spärrar för plugininläsning
 title: "Strikt konfigvalidering"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:21Z
 ---
 
 # Strikt konfigvalidering (migreringar endast via doctor)
@@ -32,9 +25,9 @@ x-i18n:
 
 - Konfig måste matcha schemat exakt på varje nivå.
 - Okända nycklar är valideringsfel (ingen passthrough på rot eller nästlat).
-- `plugins.entries.<id>.config` måste valideras av pluginens schema.
+- `plugins.entries.<id>.config` måste valideras av plugins schema.
   - Om en plugin saknar schema, **avvisa plugininläsning** och visa ett tydligt fel.
-- Okända `channels.<id>`-nycklar är fel om inte ett pluginmanifest deklarerar kanal-id:t.
+- Okända `kanaler.<id>` nycklar är fel om inte ett plugin manifest deklarerar kanal-id.
 - Pluginmanifest (`openclaw.plugin.json`) krävs för alla plugins.
 
 ## Tvingande plugin-schema
@@ -72,7 +65,7 @@ Tillåtna (endast diagnostik):
 - `openclaw status`
 - `openclaw gateway status`
 
-Allt annat måste hårdfalla med: ”Konfig ogiltig. Kör `openclaw doctor --fix`.”
+Allt annat måste vara svårt att misslyckas med: ”Konfigurera ogiltigt. Kör `openclaw doctor --fix`.”
 
 ## Fel-UX-format
 

@@ -4,13 +4,6 @@ read_when:
   - Você precisa de uma referência de configuração de modelos por provedor
   - Você quer exemplos de configuração ou comandos de integração inicial via CLI para provedores de modelo
 title: "Provedores de Modelo"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:42Z
 ---
 
 # Provedores de modelo

@@ -5,13 +5,6 @@ read_when:
   - သင့်ကိုယ်ပိုင် VM ပေါ်တွင် production-grade၊ အမြဲတမ်းလည်ပတ်နေသော Gateway တစ်ခုလိုအပ်ပါက
   - persistence၊ binaries နှင့် restart အပြုအမူများကို အပြည့်အဝ ထိန်းချုပ်လိုပါက
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:52Z
 ---
 
 # GCP Compute Engine ပေါ်ရှိ OpenClaw (Docker, Production VPS လမ်းညွှန်)
@@ -20,8 +13,8 @@ x-i18n:
 
 Docker ကိုအသုံးပြု၍ GCP Compute Engine VM ပေါ်တွင် တည်တံ့ခိုင်မြဲသော state၊ အတွင်းထည့်သွင်းထားသော binaries နှင့် လုံခြုံစိတ်ချရသော restart အပြုအမူတို့ပါဝင်သည့် OpenClaw Gateway ကို တည်မြဲစွာ လည်ပတ်စေပါ။
 
-“OpenClaw ကို ၂၄/၇ အတွက် လစဉ် ~$5-12” ခန့်ဖြင့် အသုံးပြုလိုပါက၊ ဤသည်မှာ Google Cloud ပေါ်ရှိ ယုံကြည်စိတ်ချရသော setup တစ်ခုဖြစ်ပါသည်။
-စျေးနှုန်းမှာ machine type နှင့် region အပေါ်မူတည်ပြီး ကွာခြားနိုင်ပါသည်။ သင့် workload ကို ဖြည့်ဆည်းနိုင်မည့် အငယ်ဆုံး VM ကိုရွေးချယ်ပြီး OOM ဖြစ်လာပါက scale up ပြုလုပ်ပါ။
+"OpenClaw ကို တစ်လ ~$5–12 နဲ့ 24/7 run ချင်တယ်" ဆိုရင် Google Cloud ပေါ်မှာ ဒီ setup က ယုံကြည်စိတ်ချရပါတယ်။
+စျေးနှုန်းက machine type နဲ့ region အလိုက် ကွာခြားပါတယ်; သင့် workload နဲ့ ကိုက်ညီတဲ့ အသေးဆုံး VM ကို ရွေးပြီး OOM ဖြစ်လာရင် scale up လုပ်ပါ။
 
 ## ကျွန်ုပ်တို့ ဘာလုပ်နေပါသလဲ (ရိုးရိုးရှင်းရှင်း)?
 
@@ -37,9 +30,9 @@ Gateway ကို အောက်ပါနည်းလမ်းများဖ�
 - သင့် laptop မှ SSH port forwarding ဖြင့်
 - firewall နှင့် token များကို ကိုယ်တိုင် စီမံခန့်ခွဲနိုင်ပါက port ကို တိုက်ရိုက် ဖွင့်ထားခြင်းဖြင့်
 
-ဤလမ်းညွှန်သည် GCP Compute Engine ပေါ်ရှိ Debian ကို အသုံးပြုပါသည်။
-Ubuntu ကိုလည်း အသုံးပြုနိုင်ပြီး package များကို သင့်တော်သလို ပြောင်းလဲပါ။
-Docker အတွက် ယေဘုယျ လုပ်ငန်းစဉ်ကို [Docker](/install/docker) တွင် ကြည့်ရှုနိုင်ပါသည်။
+ဒီ guide က GCP Compute Engine ပေါ်မှာ Debian ကို အသုံးပြုထားပါတယ်။
+Ubuntu လည်း အလုပ်လုပ်ပါတယ်; package များကို လိုက်ဖက်အောင် ပြောင်းလဲပါ။
+Generic Docker flow အတွက် [Docker](/install/docker) ကို ကြည့်ပါ။
 
 ---
 
@@ -72,7 +65,7 @@ Docker အတွက် ယေဘုယျ လုပ်ငန်းစဉ်က�
 
 ---
 
-## 1) gcloud CLI ကို ထည့်သွင်းခြင်း (သို့မဟုတ် Console ကို အသုံးပြုခြင်း)
+## 1. gcloud CLI ကို ထည့်သွင်းခြင်း (သို့မဟုတ် Console ကို အသုံးပြုခြင်း)
 
 **Option A: gcloud CLI** (automation အတွက် အကြံပြု)
 
@@ -91,7 +84,7 @@ gcloud auth login
 
 ---
 
-## 2) GCP project တစ်ခု ဖန်တီးခြင်း
+## 2. GCP project တစ်ခု ဖန်တီးခြင်း
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) VM ဖန်တီးခြင်း
+## 3. VM ဖန်တီးခြင်း
 
 **Machine types:**
 
-| Type     | Specs                    | Cost               | Notes                      |
-| -------- | ------------------------ | ------------------ | -------------------------- |
-| e2-small | 2 vCPU, 2GB RAM          | ~$12/mo            | အကြံပြုထားသည်              |
-| e2-micro | 2 vCPU (shared), 1GB RAM | Free tier eligible | Load များပါက OOM ဖြစ်နိုင် |
+| Type     | Specs                                       | Cost                    | Notes                      |
+| -------- | ------------------------------------------- | ----------------------- | -------------------------- |
+| e2-small | 2 vCPU, 2GB RAM                             | ~$12/mo | အကြံပြုထားသည်              |
+| e2-micro | 2 vCPU (shared), 1GB RAM | Free tier eligible      | Load များပါက OOM ဖြစ်နိုင် |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) VM သို့ SSH ဝင်ရောက်ခြင်း
+## 4. VM သို့ SSH ဝင်ရောက်ခြင်း
 
 **CLI:**
 
@@ -160,11 +153,11 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a
 
 Compute Engine dashboard တွင် သင့် VM အနားရှိ “SSH” ခလုတ်ကို နှိပ်ပါ။
 
-မှတ်ချက် — VM ဖန်တီးပြီးနောက် SSH key propagation သည် ၁–၂ မိနစ်ခန့် ကြာနိုင်ပါသည်။ Connection မရပါက စောင့်ပြီး ပြန်လည် ကြိုးစားပါ။
+မှတ်ချက်: VM ဖန်တီးပြီးနောက် SSH key propagation က ၁–၂ မိနစ် ကြာနိုင်ပါတယ်။ Connection refused ဖြစ်ရင် ခဏစောင့်ပြီး ထပ်ကြိုးစားပါ။
 
 ---
 
-## 5) Docker ကို ထည့်သွင်းခြင်း (VM ပေါ်တွင်)
+## 5. Docker ကို ထည့်သွင်းခြင်း (VM ပေါ်တွင်)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) OpenClaw repository ကို clone လုပ်ခြင်း
+## 6. OpenClaw repository ကို clone လုပ်ခြင်း
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,10 +198,10 @@ cd openclaw
 
 ---
 
-## 7) persistent host directory များ ဖန်တီးခြင်း
+## 7. persistent host directory များ ဖန်တီးခြင်း
 
-Docker container များသည် ephemeral ဖြစ်ပါသည်။
-အချိန်ကြာရှည်အသုံးပြုရမည့် state အားလုံးကို ဟို့စ်ပေါ်တွင် ထားရပါမည်။
+Docker container များက ephemeral ဖြစ်ပါတယ်။
+အချိန်ကြာရှည်အသုံးပြုမည့် state အားလုံးကို host ပေါ်တွင်သာ ထားရမည်။
 
 ```bash
 mkdir -p ~/.openclaw
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) environment variables ကို ပြင်ဆင်သတ်မှတ်ခြင်း
+## 8. environment variables ကို ပြင်ဆင်သတ်မှတ်ခြင်း
 
 repository root တွင် `.env` ကို ဖန်တီးပါ။
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose ဖွဲ့စည်းပြင်ဆင်ခြင်း
+## 9. Docker Compose ဖွဲ့စည်းပြင်ဆင်ခြင်း
 
 `docker-compose.yml` ကို ဖန်တီးပါ သို့မဟုတ် update ပြုလုပ်ပါ။
 
@@ -291,10 +284,10 @@ services:
 
 ---
 
-## 10) လိုအပ်သော binaries များကို image အတွင်း bake လုပ်ခြင်း (အရေးကြီး)
+## 10. လိုအပ်သော binaries များကို image အတွင်း bake လုပ်ခြင်း (အရေးကြီး)
 
-လည်ပတ်နေသော container အတွင်း binaries ကို ထည့်သွင်းခြင်းသည် အမှားဖြစ်ပါသည်။
-runtime အတွင်း ထည့်သွင်းထားသောအရာများသည် restart ပြုလုပ်သည်နှင့် ပျောက်ကွယ်သွားပါလိမ့်မည်။
+အလုပ်လုပ်နေတဲ့ container အတွင်း binaries ထည့်သွင်းခြင်းက အန္တရာယ်များတဲ့ လမ်းကြောင်းပါ။
+runtime အတွင်း install လုပ်ထားသမျှ အရာအားလုံးသည် restart ပြုလုပ်ပါက ပျောက်ကွယ်သွားမည်ဖြစ်သည်။
 
 Skills များမှ လိုအပ်သော external binaries အားလုံးကို image build လုပ်ချိန်တွင် ထည့်သွင်းရပါမည်။
 
@@ -304,8 +297,8 @@ Skills များမှ လိုအပ်သော external binaries အာ�
 - Google Places အတွက် `goplaces`
 - WhatsApp အတွက် `wacli`
 
-ဤများသည် ဥပမာများသာဖြစ်ပြီး စာရင်းပြည့်စုံခြင်း မဟုတ်ပါ။
-တူညီသော pattern ကို အသုံးပြုပြီး လိုအပ်သလောက် binaries များ ထည့်သွင်းနိုင်ပါသည်။
+ဤအရာများသည် ဥပမာများသာဖြစ်ပြီး ပြည့်စုံသောစာရင်းမဟုတ်ပါ။
+တူညီသော pattern ကို အသုံးပြုပြီး လိုအပ်သလောက် binaries များကို install လုပ်နိုင်ပါသည်။
 
 နောက်ပိုင်းတွင် အခြား binaries များအပေါ် မူတည်သော skills အသစ်များ ထည့်ပါက—
 
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Build နှင့် launch
+## 11. Build နှင့် launch
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 12) Gateway ကို အတည်ပြုခြင်း
+## 12. Gateway ကို အတည်ပြုခြင်း
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ docker compose logs -f openclaw-gateway
 
 ---
 
-## 13) သင့် laptop မှ ဝင်ရောက်ခြင်း
+## 13. သင့် laptop မှ ဝင်ရောက်ခြင်း
 
 Gateway port ကို forward လုပ်ရန် SSH tunnel တစ်ခု ဖန်တီးပါ—
 
@@ -412,7 +405,7 @@ Browser တွင် ဖွင့်ပါ—
 ## ဘာတွေ ဘယ်မှာ သိမ်းဆည်းထားသလဲ (source of truth)
 
 OpenClaw သည် Docker အတွင်း လည်ပတ်သော်လည်း Docker သည် source of truth မဟုတ်ပါ။
-Restart၊ rebuild နှင့် reboot များ ပြုလုပ်လည်း မပျက်စီးစေရန် အချိန်ကြာရှည်အသုံးပြုရမည့် state အားလုံးကို ထိန်းသိမ်းထားရပါမည်။
+အချိန်ကြာရှည်အသုံးပြုမည့် state အားလုံးသည် restarts, rebuilds နှင့် reboots များကို ကျော်လွှားနိုင်ရပါမည်။
 
 | Component           | Location                          | Persistence mechanism  | Notes                              |
 | ------------------- | --------------------------------- | ---------------------- | ---------------------------------- |
@@ -446,7 +439,7 @@ docker compose up -d
 
 **SSH connection refused**
 
-VM ဖန်တီးပြီးနောက် SSH key propagation သည် ၁–၂ မိနစ် ကြာနိုင်ပါသည်။ စောင့်ပြီး ပြန်လည်ကြိုးစားပါ။
+VM ဖန်တီးပြီးနောက် SSH key propagation အတွက် ၁–၂ မိနစ်ခန့် ကြာနိုင်ပါသည်။ စောင့်ပြီး ပြန်လည်ကြိုးစားပါ။
 
 **OS Login ပြဿနာများ**
 
@@ -498,7 +491,7 @@ Automation သို့မဟုတ် CI/CD pipeline များအတွက�
      --role="roles/compute.instanceAdmin.v1"
    ```
 
-Automation အတွက် Owner role ကို မသုံးပါနှင့်။ least privilege အယူအဆကို လိုက်နာပါ။
+automation အတွက် Owner role ကို အသုံးမပြုရန် ရှောင်ရှားပါ။ least privilege principle ကို လိုက်နာအသုံးပြုပါ။
 
 IAM role အသေးစိတ်ကို [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google.com/iam/docs/understanding-roles) တွင် ကြည့်ရှုနိုင်ပါသည်။
 

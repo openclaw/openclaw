@@ -5,13 +5,6 @@ read_when:
   - Debuggen waarom OpenClaw interfereert met je eigen Chrome
   - Browserinstellingen + levenscyclus implementeren in de macOS-app
 title: "Browser (door OpenClaw beheerd)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:30Z
 ---
 
 # Browser (door openclaw beheerd)
@@ -196,7 +189,7 @@ Notities:
 
 ## Beveiliging
 
-Kernideeën:
+Sleutel ideeën:
 
 - Browserbesturing is alleen loopback; toegang loopt via de Gateway-authenticatie of node-koppeling.
 - Houd de Gateway en eventuele node-hosts op een privénetwerk (Tailscale); vermijd publieke blootstelling.
@@ -350,7 +343,7 @@ Om browserdownloads te behouden, stel `PLAYWRIGHT_BROWSERS_PATH` in (bijvoorbeel
 
 ## Hoe het werkt (intern)
 
-Hoofdlijnen:
+Stroom op hoog niveau:
 
 - Een kleine **control server** accepteert HTTP-verzoeken.
 - Deze verbindt met Chromium-browsers (Chrome/Brave/Edge/Chromium) via **CDP**.

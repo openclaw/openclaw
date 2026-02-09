@@ -3,13 +3,6 @@ summary: "직접 `openclaw agent` CLI 실행 (선택적 전달 포함)"
 read_when:
   - 에이전트 CLI 엔트리포인트를 추가하거나 수정할 때
 title: "Agent Send"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:22Z
 ---
 
 # `openclaw agent` (직접 에이전트 실행)
@@ -35,7 +28,7 @@ x-i18n:
 
 Gateway(게이트웨이) 에 도달할 수 없는 경우, CLI 는 내장 로컬 실행으로 **폴백** 합니다.
 
-## 예시
+## Examples
 
 ```bash
 openclaw agent --to +15555550123 --message "status update"

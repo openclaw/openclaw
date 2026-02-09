@@ -5,13 +5,6 @@ read_when:
   - openclaw 가 자신의 Chrome 에 간섭하는 이유를 디버깅할 때
   - macOS 앱에서 브라우저 설정 + 라이프사이클을 구현할 때
 title: "Browser (OpenClaw 관리)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:23Z
 ---
 
 # Browser (openclaw-managed)
@@ -25,18 +18,16 @@ OpenClaw 는 에이전트가 제어하는 **전용 Chrome/Brave/Edge/Chromium �
 - **에이전트 전용의 별도 브라우저**라고 생각하면 됩니다.
 - `openclaw` 프로필은 개인 브라우저 프로필에 **전혀** 영향을 주지 않습니다.
 - 에이전트는 안전한 환경에서 **탭 열기, 페이지 읽기, 클릭, 타이핑**을 수행할 수 있습니다.
-- 기본 `chrome` 프로필은 확장 릴레이를 통해 **시스템 기본 Chromium 브라우저**를 사용합니다.
-  격리된 관리형 브라우저를 사용하려면 `openclaw` 로 전환하십시오.
+- 기본 `chrome` 프로필은 확장 릴레이를 통해 **시스템 기본 Chromium 브라우저**를 사용합니다. 격리된 관리형 브라우저를 사용하려면 `openclaw` 로 전환하십시오.
 
-## 제공 기능
+## 얻을 수 있는 것
 
 - **openclaw** 라는 이름의 별도 브라우저 프로필(기본 오렌지 색상 강조).
 - 결정론적인 탭 제어(목록/열기/포커스/닫기).
 - 에이전트 액션(클릭/타이핑/드래그/선택), 스냅샷, 스크린샷, PDF.
 - 선택적 다중 프로필 지원(`openclaw`, `work`, `remote`, ...).
 
-이 브라우저는 **일상적으로 사용하는 브라우저가 아닙니다**.
-에이전트 자동화와 검증을 위한 안전하고 격리된 표면입니다.
+이 브라우저는 **일상적으로 사용하는 브라우저가 아닙니다**. 에이전트 자동화와 검증을 위한 안전하고 격리된 표면입니다.
 
 ## 빠른 시작
 
@@ -97,8 +88,7 @@ openclaw browser --browser-profile openclaw snapshot
 - `color` + 프로필별 `color` 는 활성 프로필을 식별할 수 있도록 브라우저 UI 를 착색합니다.
 - 기본 프로필은 `chrome` (확장 릴레이)입니다. 관리형 브라우저에는 `defaultProfile: "openclaw"` 를 사용하십시오.
 - 자동 감지 순서: Chromium 기반 시스템 기본 브라우저 → Chrome → Brave → Edge → Chromium → Chrome Canary.
-- 로컬 `openclaw` 프로필은 `cdpPort`/`cdpUrl` 를 자동 할당합니다.
-  원격 CDP 에서만 이를 설정하십시오.
+- 로컬 `openclaw` 프로필은 `cdpPort`/`cdpUrl` 를 자동 할당합니다. 원격 CDP 에서만 이를 설정하십시오.
 
 ## Brave (또는 다른 Chromium 기반 브라우저) 사용
 
@@ -149,8 +139,7 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 - HTTP Basic 인증(예: `https://user:pass@provider.example`)
 
 OpenClaw 는 `/json/*` 엔드포인트를 호출할 때와
-CDP WebSocket 에 연결할 때 인증을 유지합니다.
-토큰은 설정 파일에 커밋하지 말고 환경 변수나 시크릿 매니저 사용을 권장합니다.
+CDP WebSocket 에 연결할 때 인증을 유지합니다. 토큰은 설정 파일에 커밋하지 말고 환경 변수나 시크릿 매니저 사용을 권장합니다.
 
 ## 노드 브라우저 프록시(무설정 기본)
 
@@ -169,8 +158,7 @@ OpenClaw 는 추가 브라우저 설정 없이도 브라우저 도구 호출을 
 ## Browserless (호스팅된 원격 CDP)
 
 [Browserless](https://browserless.io)는 HTTPS 를 통해
-CDP 엔드포인트를 노출하는 호스팅 Chromium 서비스입니다.
-OpenClaw 브라우저 프로필을 Browserless 지역 엔드포인트로 지정하고
+CDP 엔드포인트를 노출하는 호스팅 Chromium 서비스입니다. OpenClaw 브라우저 프로필을 Browserless 지역 엔드포인트로 지정하고
 API 키로 인증할 수 있습니다.
 
 예시:
@@ -203,7 +191,7 @@ API 키로 인증할 수 있습니다.
 
 - 브라우저 제어는 루프백 전용이며, 접근은 Gateway 인증 또는 노드 페어링을 통해 흐릅니다.
 - Gateway 와 모든 노드 호스트는 사설 네트워크(Tailscale)에 유지하고, 공개 노출을 피하십시오.
-- 원격 CDP URL/토큰은 시크릿으로 취급하고, 환경 변수 또는 시크릿 매니저를 사용하십시오.
+- 원격 CDP URL/토큰은 비밀로 취급하세요; 환경 변수나 시크릿 매니저 사용을 권장합니다.
 
 원격 CDP 팁:
 
@@ -212,8 +200,7 @@ API 키로 인증할 수 있습니다.
 
 ## 프로필(다중 브라우저)
 
-OpenClaw 는 여러 개의 이름 있는 프로필(라우팅 설정)을 지원합니다.
-프로필 유형:
+OpenClaw 는 여러 개의 이름 있는 프로필(라우팅 설정)을 지원합니다. 프로필 유형:
 
 - **openclaw-managed**: 전용 사용자 데이터 디렉토리 + CDP 포트를 가진 Chromium 기반 브라우저 인스턴스
 - **remote**: 명시적인 CDP URL(다른 위치에서 실행 중인 Chromium 기반 브라우저)
@@ -338,8 +325,7 @@ openclaw browser create-profile \
 
 일부 기능(navigate/act/AI 스냅샷/role 스냅샷, 요소 스크린샷, PDF)은
 Playwright 가 필요합니다. Playwright 가 설치되어 있지 않으면,
-해당 엔드포인트는 명확한 501 오류를 반환합니다.
-openclaw-managed Chrome 에서는 ARIA 스냅샷과 기본 스크린샷은 계속 동작합니다.
+해당 엔드포인트는 명확한 501 오류를 반환합니다. openclaw-managed Chrome 에서는 ARIA 스냅샷과 기본 스크린샷은 계속 동작합니다.
 Chrome 확장 릴레이 드라이버의 경우, ARIA 스냅샷과 스크린샷에도 Playwright 가 필요합니다.
 
 `Playwright is not available in this gateway build` 이 보이면,
@@ -360,8 +346,7 @@ docker compose run --rm openclaw-cli \
 브라우저 다운로드를 영구 저장하려면 `PLAYWRIGHT_BROWSERS_PATH` 을 설정하고
 (예: `/home/node/.cache/ms-playwright`),
 `/home/node` 이 `OPENCLAW_HOME_VOLUME` 또는 바인드 마운트를 통해
-영구화되어 있는지 확인하십시오.
-자세한 내용은 [Docker](/install/docker)를 참조하십시오.
+영구화되어 있는지 확인하십시오. 자세한 내용은 [Docker](/install/docker)를 참조하십시오.
 
 ## 동작 방식(내부)
 
@@ -458,8 +443,7 @@ docker compose run --rm openclaw-cli \
 
 참고 사항:
 
-- `upload` 및 `dialog` 는 **무장(arming)** 호출입니다.
-  파일 선택기/다이얼로그를 트리거하는 클릭/프레스 전에 실행하십시오.
+- `upload` 및 `dialog` 는 **무장(arming)** 호출입니다. 파일 선택기/다이얼로그를 트리거하는 클릭/프레스 전에 실행하십시오.
 - `upload` 는 `--input-ref` 또는 `--element` 를 통해
   파일 입력을 직접 설정할 수도 있습니다.
 - `snapshot`:
@@ -502,8 +486,7 @@ OpenClaw 는 두 가지 “스냅샷” 스타일을 지원합니다:
 
 참조 동작:
 
-- 참조는 **내비게이션 간에 안정적이지 않습니다**.
-  실패 시 `snapshot` 을 다시 실행하고 새로운 참조를 사용하십시오.
+- 참조는 **내비게이션 간에 안정적이지 않습니다**. 실패 시 `snapshot` 을 다시 실행하고 새로운 참조를 사용하십시오.
 - 역할 스냅샷이 `--frame` 로 생성된 경우,
   다음 역할 스냅샷까지 역할 참조는 해당 iframe 범위로 제한됩니다.
 
@@ -582,9 +565,7 @@ JSON 의 역할 스냅샷에는 `refs` 와 함께,
 
 - openclaw 브라우저 프로필에는 로그인된 세션이 포함될 수 있으므로 민감하게 취급하십시오.
 - `browser act kind=evaluate` / `openclaw browser evaluate` 및 `wait --fn` 는
-  페이지 컨텍스트에서 임의의 JavaScript 를 실행합니다.
-  프롬프트 인젝션이 이를 유도할 수 있습니다.
-  필요하지 않다면 `browser.evaluateEnabled=false` 으로 비활성화하십시오.
+  페이지 컨텍스트에서 임의의 JavaScript 를 실행합니다. 프롬프트 인젝션이 이를 유도할 수 있습니다. 필요하지 않다면 `browser.evaluateEnabled=false` 으로 비활성화하십시오.
 - 로그인 및 안티봇 참고 사항(X/Twitter 등)은
   [Browser login + X/Twitter posting](/tools/browser-login)을 참조하십시오.
 - Gateway/노드 호스트는 비공개로 유지하십시오(루프백 또는 tailnet 전용).

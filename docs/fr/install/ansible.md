@@ -5,13 +5,6 @@ read_when:
   - Vous avez besoin d'une configuration isolee par pare-feu avec acces VPN
   - Vous deployeez sur des serveurs Debian/Ubuntu distants
 title: "Ansible"
-x-i18n:
-  source_path: install/ansible.md
-  source_hash: 896807f344d923f0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:57Z
 ---
 
 # Installation Ansible
@@ -151,7 +144,7 @@ cd openclaw-ansible
 
 Remarque : Ceci est idempotent et peut etre execute en toute securite plusieurs fois.
 
-## Depannage
+## Problemes courants
 
 ### Le pare-feu bloque ma connexion
 
@@ -190,7 +183,7 @@ cd /opt/openclaw/openclaw
 sudo -u openclaw ./scripts/sandbox-setup.sh
 ```
 
-### Echec de connexion au fournisseur
+### Échec de la connexion au fournisseur
 
 Assurez-vous d'executer en tant qu'utilisateur `openclaw` :
 
@@ -207,7 +200,7 @@ Pour une architecture de securite detaillee et le depannage :
 - [Details techniques](https://github.com/openclaw/openclaw-ansible/blob/main/docs/architecture.md)
 - [Guide de depannage](https://github.com/openclaw/openclaw-ansible/blob/main/docs/troubleshooting.md)
 
-## Connexe
+## Associe
 
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) — guide de deploiement complet
 - [Docker](/install/docker) — configuration de la Gateway (passerelle) conteneurisee

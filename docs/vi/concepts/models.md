@@ -5,19 +5,13 @@ read_when:
   - Thay đổi hành vi dự phòng mô hình hoặc UX chọn mô hình
   - Cập nhật các probe quét mô hình (tools/images)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:46Z
 ---
 
 # Models CLI
 
-Xem [/concepts/model-failover](/concepts/model-failover) để biết về xoay vòng hồ sơ xác thực, thời gian cooldown và cách chúng tương tác với fallback.
-Tổng quan nhanh về nhà cung cấp + ví dụ: [/concepts/model-providers](/concepts/model-providers).
+See [/concepts/model-failover](/concepts/model-failover) for auth profile
+rotation, cooldowns, and how that interacts with fallbacks.
+Tổng quan nhanh về provider + ví dụ: [/concepts/model-providers](/concepts/model-providers).
 
 ## Cách chọn mô hình hoạt động
 
@@ -57,24 +51,22 @@ setup-token`).
 - `agents.defaults.models` (allowlist + bí danh + tham số nhà cung cấp)
 - `models.providers` (nhà cung cấp tùy chỉnh được ghi vào `models.json`)
 
-Tham chiếu mô hình được chuẩn hóa về chữ thường. Bí danh nhà cung cấp như `z.ai/*` được chuẩn hóa
-thành `zai/*`.
+Tham chiếu model được chuẩn hóa về chữ thường. Provider aliases like `z.ai/*` normalize
+to `zai/*`.
 
 Ví dụ cấu hình nhà cung cấp (bao gồm OpenCode Zen) có tại
 [/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy).
 
 ## “Model is not allowed” (và vì sao phản hồi bị dừng)
 
-Nếu `agents.defaults.models` được đặt, nó trở thành **allowlist** cho `/model` và cho
-ghi đè theo phiên. Khi người dùng chọn một mô hình không nằm trong allowlist đó,
-OpenClaw trả về:
+Nếu `agents.defaults.models` được đặt, nó trở thành **allowlist** cho `/model` và cho các ghi đè trong phiên. Khi người dùng chọn một model không nằm trong allowlist đó, OpenClaw trả về:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-Điều này xảy ra **trước** khi tạo phản hồi bình thường, nên thông điệp có thể
-khiến bạn cảm giác như “không phản hồi”. Cách khắc phục là một trong các cách sau:
+This happens **before** a normal reply is generated, so the message can feel
+like it “didn’t respond.” Cách khắc phục là một trong hai:
 
 - Thêm mô hình vào `agents.defaults.models`, hoặc
 - Xóa allowlist (loại bỏ `agents.defaults.models`), hoặc
@@ -111,7 +103,7 @@ Ghi chú:
 - `/model` (và `/model list`) là bộ chọn gọn nhẹ, đánh số (họ mô hình + các nhà cung cấp khả dụng).
 - `/model <#>` chọn từ bộ chọn đó.
 - `/model status` là chế độ xem chi tiết (các ứng viên xác thực và, khi được cấu hình, endpoint nhà cung cấp `baseUrl` + chế độ `api`).
-- Tham chiếu mô hình được phân tích bằng cách tách theo `/` **đầu tiên**. Dùng `provider/model` khi nhập `/model <ref>`.
+- Tham chiếu model được phân tích bằng cách tách theo dấu `/` **đầu tiên**. Sử dụng `provider/model` khi nhập `/model <ref>`.
 - Nếu ID mô hình tự nó chứa `/` (kiểu OpenRouter), bạn phải bao gồm tiền tố nhà cung cấp (ví dụ: `/model openrouter/moonshotai/kimi-k2`).
 - Nếu bạn bỏ qua nhà cung cấp, OpenClaw coi đầu vào là một bí danh hoặc một mô hình cho **nhà cung cấp mặc định** (chỉ hoạt động khi không có `/` trong ID mô hình).
 
@@ -144,7 +136,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-Mặc định hiển thị các mô hình đã cấu hình. Các cờ hữu ích:
+Shows configured models by default. Các cờ hữu ích:
 
 - `--all`: toàn bộ danh mục
 - `--local`: chỉ nhà cung cấp cục bộ
@@ -154,15 +146,10 @@ Mặc định hiển thị các mô hình đã cấu hình. Các cờ hữu ích
 
 ### `models status`
 
-Hiển thị primary model đã resolve, các fallback, mô hình hình ảnh và tổng quan xác thực
-của các nhà cung cấp đã cấu hình. Đồng thời hiển thị trạng thái hết hạn OAuth cho các hồ sơ tìm thấy
-trong kho xác thực (mặc định cảnh báo trong vòng 24h). `--plain` chỉ in ra
-primary model đã resolve.
-Trạng thái OAuth luôn được hiển thị (và được bao gồm trong đầu ra `--json`). Nếu một nhà cung cấp
-được cấu hình nhưng không có thông tin xác thực, `models status` sẽ in ra phần **Missing auth**.
-JSON bao gồm `auth.oauth` (cửa sổ cảnh báo + hồ sơ) và `auth.providers`
-(xác thực hiệu lực theo từng nhà cung cấp).
-Dùng `--check` cho tự động hóa (thoát `1` khi thiếu/hết hạn, `2` khi sắp hết hạn).
+Hiển thị model chính đã được phân giải, các fallback, model hình ảnh và tổng quan xác thực của các provider đã cấu hình. Nó cũng hiển thị trạng thái hết hạn OAuth cho các hồ sơ tìm thấy trong kho xác thực (mặc định cảnh báo trong vòng 24h). `--plain` chỉ in ra model chính đã được phân giải.
+Trạng thái OAuth luôn được hiển thị (và được bao gồm trong đầu ra `--json`). Nếu một provider đã cấu hình không có thông tin xác thực, `models status` sẽ in ra một mục **Missing auth**.
+JSON bao gồm `auth.oauth` (cửa sổ cảnh báo + hồ sơ) và `auth.providers` (xác thực hiệu lực theo từng provider).
+Sử dụng `--check` cho tự động hóa (thoát với mã `1` khi thiếu/hết hạn, `2` khi sắp hết hạn).
 
 Xác thực Anthropic được ưu tiên là setup-token của Claude Code CLI (chạy ở đâu cũng được; nếu cần thì dán trên máy chủ gateway):
 
@@ -186,8 +173,7 @@ Các cờ chính:
 - `--set-default`: đặt `agents.defaults.model.primary` thành lựa chọn đầu tiên
 - `--set-image`: đặt `agents.defaults.imageModel.primary` thành lựa chọn hình ảnh đầu tiên
 
-Việc probe yêu cầu khóa API OpenRouter (từ hồ sơ xác thực hoặc
-`OPENROUTER_API_KEY`). Nếu không có khóa, dùng `--no-probe` để chỉ liệt kê các ứng viên.
+Việc probing yêu cầu khóa API OpenRouter (từ hồ sơ xác thực hoặc `OPENROUTER_API_KEY`). Nếu không có khóa, dùng `--no-probe` để chỉ liệt kê các ứng viên.
 
 Kết quả quét được xếp hạng theo:
 
@@ -203,11 +189,8 @@ Input
 - Bộ lọc tùy chọn: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Điều khiển probe: `--timeout`, `--concurrency`
 
-Khi chạy trong TTY, bạn có thể chọn fallback một cách tương tác. Ở chế độ
-không tương tác, truyền `--yes` để chấp nhận mặc định.
+Khi chạy trong TTY, bạn có thể chọn các fallback một cách tương tác. Trong chế độ không tương tác, truyền `--yes` để chấp nhận các giá trị mặc định.
 
 ## Registry mô hình (`models.json`)
 
-Các nhà cung cấp tùy chỉnh trong `models.providers` được ghi vào `models.json` dưới
-thư mục tác tử (mặc định `~/.openclaw/agents/<agentId>/models.json`). Tệp này
-được hợp nhất theo mặc định trừ khi `models.mode` được đặt thành `replace`.
+Các provider tùy chỉnh trong `models.providers` được ghi vào `models.json` dưới thư mục agent (mặc định `~/.openclaw/agents/<agentId>/models.json`). Tệp này được hợp nhất theo mặc định trừ khi `models.mode` được đặt thành `replace`.

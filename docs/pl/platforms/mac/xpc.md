@@ -3,13 +3,6 @@ summary: "Architektura IPC w macOS dla aplikacji OpenClaw, transportu węzła Ga
 read_when:
   - Edycja kontraktów IPC lub IPC aplikacji paska menu
 title: "IPC w macOS"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
 ---
 
 # Architektura IPC OpenClaw w macOS

@@ -4,16 +4,9 @@ read_when:
   - Sie möchten Hintergrund-/Parallelarbeit über den Agenten ausführen
   - Sie ändern sessions_spawn oder die Sub-Agent-Werkzeugrichtlinie
 title: "Sub-Agents"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:46Z
 ---
 
-# Sub-Agents
+# Unter-Agenten
 
 Sub-Agents sind Hintergrund-Agentenläufe, die aus einem bestehenden Agentenlauf heraus gestartet werden. Sie laufen in ihrer eigenen Sitzung (`agent:<agentId>:subagent:<uuid>`) und **kündigen** nach Abschluss ihr Ergebnis im anfordernden Chat-Kanal an.
 
@@ -139,14 +132,14 @@ Standardmäßig erhalten Sub-Agents **alle Werkzeuge außer Sitzungswerkzeuge**:
 }
 ```
 
-## Nebenläufigkeit
+## Konwährung
 
 Sub-Agents verwenden eine dedizierte In-Process-Warteschlangen-Lane:
 
 - Lane-Name: `subagent`
 - Nebenläufigkeit: `agents.defaults.subagents.maxConcurrent` (Standard `8`)
 
-## Beenden
+## Stoppen
 
 - Das Senden von `/stop` im anfordernden Chat bricht die anfordernde Sitzung ab und stoppt alle aktiven Sub-Agent-Läufe, die daraus gestartet wurden.
 

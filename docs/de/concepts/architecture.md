@@ -1,15 +1,8 @@
 ---
-summary: „WebSocket-Gateway-Architektur, Komponenten und Client-Flows“
+summary: "„WebSocket-Gateway-Architektur, Komponenten und Client-Flows“"
 read_when:
   - Arbeit am Gateway-Protokoll, an Clients oder Transporten
-title: „Gateway-Architektur“
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:52Z
+title: "„Gateway-Architektur“"
 ---
 
 # Gateway-Architektur
@@ -116,6 +109,7 @@ Details: [Gateway-Protokoll](/gateway/protocol), [Pairing](/channels/pairing),
 ## Remote-Zugriff
 
 - Bevorzugt: Tailscale oder VPN.
+
 - Alternative: SSH-Tunnel
 
   ```bash
@@ -123,6 +117,7 @@ Details: [Gateway-Protokoll](/gateway/protocol), [Pairing](/channels/pairing),
   ```
 
 - Derselbe Handshake + Auth-Token gelten auch über den Tunnel.
+
 - TLS + optionales Pinning können für WS in Remote-Setups aktiviert werden.
 
 ## Betriebsübersicht

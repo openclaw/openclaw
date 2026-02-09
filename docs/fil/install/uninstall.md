@@ -4,13 +4,6 @@ read_when:
   - Gusto mong alisin ang OpenClaw mula sa isang makina
   - Patuloy na tumatakbo ang gateway service kahit pagkatapos ng uninstall
 title: "I-uninstall"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # I-uninstall
@@ -88,14 +81,14 @@ Gamitin ito kung patuloy na tumatakbo ang gateway service pero nawawala ang `ope
 
 ### macOS (launchd)
 
-Ang default na label ay `bot.molt.gateway` (o `bot.molt.<profile>`; maaaring umiiral pa ang legacy na `com.openclaw.*`):
+Ang default na label ay `bot.molt.gateway` (o `bot.molt.<profile>``; legacy `com.openclaw.\*\` may still exist):
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-Kung gumamit ka ng profile, palitan ang label at pangalan ng plist ng `bot.molt.<profile>`. Alisin ang anumang legacy na `com.openclaw.*` plists kung mayroon.
+If you used a profile, replace the label and plist name with `bot.molt.<profile>`. Remove any legacy `com.openclaw.*` plists if present.
 
 ### Linux (systemd user unit)
 
@@ -109,8 +102,8 @@ systemctl --user daemon-reload
 
 ### Windows (Scheduled Task)
 
-Ang default na task name ay `OpenClaw Gateway` (o `OpenClaw Gateway (<profile>)`).
-Ang task script ay nasa ilalim ng iyong state dir.
+Default task name is `OpenClaw Gateway` (or `OpenClaw Gateway (<profile>)`).
+The task script lives under your state dir.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,8 +116,8 @@ Kung gumamit ka ng profile, burahin ang katugmang task name at `~\.openclaw-<pro
 
 ### Normal na install (install.sh / npm / pnpm / bun)
 
-Kung gumamit ka ng `https://openclaw.ai/install.sh` o `install.ps1`, ang CLI ay na-install gamit ang `npm install -g openclaw@latest`.
-Alisin ito gamit ang `npm rm -g openclaw` (o `pnpm remove -g` / `bun remove -g` kung ganoon ang paraan ng pag-install mo).
+If you used `https://openclaw.ai/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
+Remove it with `npm rm -g openclaw` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Source checkout (git clone)
 

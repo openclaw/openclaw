@@ -2,21 +2,13 @@
 summary: "Windows (WSL2) desteği + yardımcı uygulama durumu"
 read_when:
   - Windows üzerinde OpenClaw kurarken
-  - Windows yardımcı uygulama durumunu ararken
+  - Windows yardımcı uygulamasının durumunu arıyor
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:35Z
 ---
 
 # Windows (WSL2)
 
-Windows üzerinde OpenClaw, **WSL2 üzerinden** (Ubuntu önerilir) kullanılması tavsiye edilir.  
-CLI + Gateway Linux içinde çalışır; bu da çalışma zamanını tutarlı tutar ve araçların çok daha uyumlu olmasını sağlar (Node/Bun/pnpm, Linux ikilileri, Skills). Yerel Windows daha zorlayıcı olabilir. WSL2 size tam Linux deneyimini sunar — tek komutla kurulum: `wsl --install`.
+Windows üzerinde OpenClaw, **WSL2 üzerinden** (Ubuntu önerilir) kullanılması tavsiye edilir. CLI + Gateway Linux içinde çalışır; bu da çalışma zamanını tutarlı tutar ve araçların çok daha uyumlu olmasını sağlar (Node/Bun/pnpm, Linux ikilileri, Skills). Yerel Windows daha zorlayıcı olabilir. WSL2 size tam Linux deneyimini sunar — tek komutla kurulum: `wsl --install`.
 
 Yerel Windows yardımcı uygulamaları planlanmaktadır.
 
@@ -106,7 +98,7 @@ Notlar:
 
 ## Adım adım WSL2 kurulumu
 
-### 1) WSL2 + Ubuntu’yu kurun
+### 1. WSL2 + Ubuntu’yu kurun
 
 PowerShell’i açın (Yönetici):
 
@@ -119,7 +111,7 @@ wsl --install -d Ubuntu-24.04
 
 Windows isterse yeniden başlatın.
 
-### 2) systemd’yi etkinleştirin (gateway kurulumu için gereklidir)
+### 2. systemd’yi etkinleştirin (gateway kurulumu için gereklidir)
 
 WSL terminalinizde:
 
@@ -142,7 +134,7 @@ Ubuntu’yu yeniden açın, ardından doğrulayın:
 systemctl --user status
 ```
 
-### 3) OpenClaw’ı kurun (WSL içinde)
+### 3. OpenClaw’ı kurun (WSL içinde)
 
 WSL içinde Linux Başlarken akışını izleyin:
 

@@ -1,15 +1,8 @@
 ---
 summary: "مرجع CLI لأمر `openclaw agent` (إرسال دورة وكيل واحدة عبر Gateway)"
 read_when:
-  - "تريد تشغيل دورة وكيل واحدة من خلال سكربتات (مع خيار تسليم الرد)"
+  - تريد تشغيل دورة وكيل واحدة من خلال سكربتات (مع خيار تسليم الرد)
 title: "الوكيل"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:52Z
 ---
 
 # `openclaw agent`

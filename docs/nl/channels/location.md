@@ -4,16 +4,9 @@ read_when:
   - Het toevoegen of wijzigen van kanaallocatieparsing
   - Het gebruiken van locatiecontextvelden in agentprompts of tools
 title: "Kanaallocatieparsing"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:00Z
 ---
 
-# Kanaallocatieparsing
+# channels/location.md
 
 OpenClaw normaliseert gedeelde locaties uit chatkanalen naar:
 
@@ -26,7 +19,7 @@ Momenteel ondersteund:
 - **WhatsApp** (locationMessage + liveLocationMessage)
 - **Matrix** (`m.location` met `geo_uri`)
 
-## Tekstopmaak
+## Tekst opmaak
 
 Locaties worden weergegeven als vriendelijke regels zonder haakjes:
 

@@ -1,17 +1,10 @@
 ---
-summary: „Integracja PeekabooBridge do automatyzacji interfejsu użytkownika w macOS”
+summary: "„Integracja PeekabooBridge do automatyzacji interfejsu użytkownika w macOS”"
 read_when:
   - Hostowanie PeekabooBridge w OpenClaw.app
   - Integracja Peekaboo za pomocą Swift Package Manager
   - Zmiana protokołu/ścieżek PeekabooBridge
-title: „Peekaboo Bridge”
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:26Z
+title: "„Peekaboo Bridge”"
 ---
 
 # Peekaboo Bridge (automatyzacja UI w macOS)

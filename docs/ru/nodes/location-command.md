@@ -4,13 +4,6 @@ read_when:
   - Добавление поддержки узла местоположения или UI разрешений
   - Проектирование фонового определения местоположения + push‑сценариев
 title: "Команда Location"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:45Z
 ---
 
 # Команда Location (узлы)

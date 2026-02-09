@@ -4,14 +4,7 @@ read_when:
   - Vous avez besoin d'une vue d'ensemble de l'architecture reseau et de la securite
   - Vous depannez l'acces local vs tailnet ou l'appairage
   - Vous voulez la liste canonique des documents reseau
-title: "Reseau"
-x-i18n:
-  source_path: network.md
-  source_hash: 0fe4e7dbc8ddea31
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:02Z
+title: "network.md"
 ---
 
 # Hub reseau
@@ -28,7 +21,7 @@ s’apparie et securise les appareils via localhost, le LAN et le tailnet.
 
 ## Appairage + identite
 
-- [Vue d’ensemble de l’appairage (Message prive + noeuds)](/start/pairing)
+- [Vue d'ensemble du jumelage (DM + nœuds)](/channels/pairing)
 - [Appairage des noeuds appartenant a la Gateway (passerelle)](/gateway/pairing)
 - [CLI des appareils (appairage + rotation de jetons)](/cli/devices)
 - [CLI d’appairage (approbations par Message prive)](/cli/pairing)

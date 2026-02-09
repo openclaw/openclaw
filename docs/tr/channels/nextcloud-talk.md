@@ -3,13 +3,6 @@ summary: "Nextcloud Talk destek durumu, yetenekler ve yapılandırma"
 read_when:
   - Nextcloud Talk kanal özellikleri üzerinde çalışırken
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:59Z
 ---
 
 # Nextcloud Talk (eklenti)
@@ -40,6 +33,7 @@ Ayrıntılar: [Plugins](/tools/plugin)
 ## Hızlı kurulum (başlangıç seviyesi)
 
 1. Nextcloud Talk eklentisini yükleyin.
+
 2. Nextcloud sunucunuzda bir bot oluşturun:
 
    ```bash
@@ -47,9 +41,11 @@ Ayrıntılar: [Plugins](/tools/plugin)
    ```
 
 3. Hedef oda ayarlarında botu etkinleştirin.
+
 4. OpenClaw’ı yapılandırın:
    - Yapılandırma: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - Veya ortam değişkeni: `NEXTCLOUD_TALK_BOT_SECRET` (yalnızca varsayılan hesap)
+
 5. Gateway’i yeniden başlatın (veya onboarding’i tamamlayın).
 
 Minimal yapılandırma:
@@ -102,16 +98,16 @@ Minimal yapılandırma:
 
 - Hiç oda izin vermemek için izin listesini boş bırakın veya `channels.nextcloud-talk.groupPolicy="disabled"` ayarlayın.
 
-## Yetenekler
+## Capabilities
 
-| Özellik           | Durum        |
-| ----------------- | ------------ |
-| Doğrudan mesajlar | Desteklenir  |
-| Odalar            | Desteklenir  |
-| Konular           | Desteklenmez |
-| Medya             | Yalnızca URL |
-| Tepkiler          | Desteklenir  |
-| Yerel komutlar    | Desteklenmez |
+| Özellik           | Status        |
+| ----------------- | ------------- |
+| Doğrudan mesajlar | Destekleniyor |
+| Odalar            | Destekleniyor |
+| Konular           | Desteklenmez  |
+| Medya             | Yalnızca URL  |
+| Tepkiler          | Destekleniyor |
+| Native commands   | Desteklenmez  |
 
 ## Yapılandırma referansı (Nextcloud Talk)
 

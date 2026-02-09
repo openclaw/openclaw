@@ -3,13 +3,6 @@ summary: "Loopback WebChat 정적 호스트 및 채팅 UI 를 위한 Gateway(게
 read_when:
   - WebChat 접근을 디버깅하거나 구성할 때
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:38Z
 ---
 
 # WebChat (Gateway(게이트웨이) WebSocket UI)

@@ -5,13 +5,6 @@ read_when:
   - تصحيح اكتشاف Gateway أو المصادقة على Android
   - التحقق من تطابق سجل الدردشة عبر العملاء
 title: "تطبيق Android"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:34Z
 ---
 
 # تطبيق Android (عُقدة)
@@ -43,7 +36,7 @@ x-i18n:
   - مضيف/منفذ Gateway يدويًا (حل احتياطي)
 - يمكنك تشغيل CLI (`openclaw`) على جهاز Gateway (أو عبر SSH).
 
-### 1) تشغيل Gateway
+### 1. تشغيل Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ openclaw gateway --port 18789 --verbose
 - عيّن `gateway.bind: "tailnet"` في `~/.openclaw/openclaw.json` على مضيف Gateway.
 - أعد تشغيل Gateway / تطبيق شريط القوائم على macOS.
 
-### 2) التحقق من الاكتشاف (اختياري)
+### 2. التحقق من الاكتشاف (اختياري)
 
 من جهاز Gateway:
 
@@ -77,7 +70,7 @@ dns-sd -B _openclaw-gw._tcp local.
 
 التفاصيل ومثال تهيئة CoreDNS: [Bonjour](/gateway/bonjour).
 
-### 3) الاتصال من Android
+### 3. الاتصال من Android
 
 في تطبيق Android:
 
@@ -91,7 +84,7 @@ dns-sd -B _openclaw-gw._tcp local.
 - نقطة نهاية يدوية (إن كانت مفعّلة)، وإلا
 - آخر Gateway تم اكتشافه (بأفضل جهد).
 
-### 4) اعتماد الإقران (CLI)
+### 4. اعتماد الإقران (CLI)
 
 على جهاز Gateway:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 تفاصيل الإقران: [إقران Gateway](/gateway/pairing).
 
-### 5) التحقق من اتصال العُقدة
+### 5. التحقق من اتصال العُقدة
 
 - عبر حالة العُقد:
 
@@ -116,7 +109,7 @@ openclaw nodes approve <requestId>
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) الدردشة + السجل
+### 6. الدردشة + السجل
 
 تستخدم ورقة الدردشة في عُقدة Android **مفتاح الجلسة الأساسية** الخاص بـ Gateway (`main`)، لذلك تتم مشاركة السجل والردود مع WebChat والعملاء الآخرين:
 
@@ -124,7 +117,7 @@ openclaw nodes approve <requestId>
 - الإرسال: `chat.send`
 - تحديثات الدفع (بأفضل جهد): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + الكاميرا
+### 7. Canvas + الكاميرا
 
 #### مضيف Canvas في Gateway (موصى به لمحتوى الويب)
 

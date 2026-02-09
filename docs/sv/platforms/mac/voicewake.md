@@ -3,26 +3,19 @@ summary: "Röstväckning och push‑to‑talk‑lägen samt routningsdetaljer i 
 read_when:
   - Arbetar med röstväckning eller PTT‑flöden
 title: "Röstväckning"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:09Z
 ---
 
 # Röstväckning & Push‑to‑talk
 
 ## Lägen
 
-- **Väckords‑läge** (standard): alltid‑på‑talsigenkänning väntar på trigger‑token (`swabbleTriggerWords`). Vid träff startar inspelning, överlägget visas med partiell text och skickas automatiskt efter tystnad.
-- **Push‑to‑talk (håll höger Option)**: håll ned höger Option‑tangent för att fånga ljud direkt—ingen trigger behövs. Överlägget visas medan tangenten hålls; släpp för att slutföra och vidarebefordra efter en kort fördröjning så att du kan justera texten.
+- **Wake-word-läge** (standard): Alltid-on Speech recognizer väntar på triggertokens (`swabbleTriggerWords`). På matchen börjar fånga, visar överlappningen med partiell text, och auto-skickar efter tystnad.
+- **Push-to-talk (Högeralternativ)**: håll rätt Optionsnyckel för att fånga omedelbart—ingen utlösare behövs. Överlagringen visas medan den hålls kvar; frisättningen slutför och framåt efter en kort fördröjning så att du kan justera texten.
 
 ## Körtidsbeteende (väckord)
 
 - Talsigenkänningen körs i `VoiceWakeRuntime`.
-- Triggern avfyras bara när det finns en **meningsfull paus** mellan väckordet och nästa ord (~0,55 s mellanrum). Överlägg/ljudsignal kan starta på pausen redan innan kommandot börjar.
+- Trigger avfyrar bara när det finns en **meningsfull paus** mellan vaknordet och nästa ord (~0.55s gap). Overlay/chime kan starta på pausen redan innan kommandot börjar.
 - Tystnadsfönster: 2,0 s när tal pågår, 5,0 s om endast triggern hördes.
 - Hårt stopp: 120 s för att förhindra skenande sessioner.
 - Debounce mellan sessioner: 350 ms.
@@ -45,7 +38,7 @@ Härdning:
 
 ## Push‑to‑talk‑detaljer
 
-- Hotkey‑detektering använder en global `.flagsChanged`‑monitor för **höger Option** (`keyCode 61` + `.option`). Vi observerar endast händelser (ingen ”swallowing”).
+- Snabbtangent detektering använder en global `.flagsChanged` monitor för **rätt Alternativ** (`keyCode 61` + `.option`). Vi observerar bara händelser (ingen svälja).
 - Inspelningspipeline körs i `VoicePushToTalk`: startar tal omedelbart, strömmar partialer till överlägget och anropar `VoiceWakeForwarder` vid släpp.
 - När push‑to‑talk startar pausar vi väckords‑körtiden för att undvika konkurrerande ljudtappningar; den startar automatiskt igen efter släpp.
 - Behörigheter: kräver Mikrofon + Tal; för att se händelser krävs tillstånd för Hjälpmedel/Inmatningsövervakning.
@@ -54,19 +47,19 @@ Härdning:
 ## Användarinställningar
 
 - **Röstväckning**‑växel: aktiverar väckords‑körtiden.
-- **Håll Cmd+Fn för att tala**: aktiverar push‑to‑talk‑övervakningen. Inaktiverad på macOS < 26.
+- **Håll Cmd+Fn för att prata**: aktiverar push-to-talk monitor. Inaktiverad på macOS < 26.
 - Språk‑ och mikrofonväljare, live‑nivåmätare, tabell för triggerord, testare (endast lokalt; vidarebefordrar inte).
 - Mikrofonväljaren bevarar senaste valet om en enhet kopplas bort, visar en frånkopplingshint och faller tillfälligt tillbaka till systemets standard tills enheten återkommer.
-- **Ljud**: signaler vid trigger‑detektering och vid sändning; standard är macOS‑systemljudet ”Glass”. Du kan välja valfri `NSSound`‑laddningsbar fil (t.ex. MP3/WAV/AIFF) för varje händelse eller välja **Inget ljud**.
+- **Ljud**: chimes vid avtryckardetektering och vid sändning; standard är macOS “Glass” systemljud. Du kan välja valfri `NSSound`-läsbar fil (t.ex. MP3/WAV/AIFF) för varje händelse eller välj **Inget Ljud**.
 
 ## Vidarebefordringsbeteende
 
 - När Röstväckning är aktiverad vidarebefordras transkript till den aktiva gateway/agenten (samma lokala vs fjärrläge som används i övriga mac‑appen).
-- Svar levereras till den **senast använda huvudleverantören** (WhatsApp/Telegram/Discord/WebChat). Om leverans misslyckas loggas felet och körningen är fortfarande synlig via WebChat/sessionloggar.
+- Svaren levereras till den **senast använda huvudleverantören** (WhatsApp/Telegram/Discord/WebChat). Om leveransen misslyckas, är felet loggat och körningen fortfarande synlig via WebChat/sessionsloggar.
 
 ## Vidarebefordringspayload
 
-- `VoiceWakeForwarder.prefixedTranscript(_:)` lägger till maskinhinten före sändning. Delas mellan väckords‑ och push‑to‑talk‑flöden.
+- `VoiceWakeForwarder.prefixedTranscript(_:)` föreskriver maskinledtråden innan sändning. Delad mellan vakna-ord och push-to-talk vägar.
 
 ## Snabb verifiering
 

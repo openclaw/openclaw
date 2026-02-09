@@ -6,13 +6,6 @@ read_when:
   - Chcesz użyć przepływów uwierzytelniania setup-token lub OAuth
   - Chcesz korzystać z wielu kont lub routingu profili
 title: "OAuth"
-x-i18n:
-  source_path: concepts/oauth.md
-  source_hash: af714bdadc4a8929
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:09Z
 ---
 
 # OAuth
@@ -23,8 +16,7 @@ OpenClaw obsługuje „subscription auth” przez OAuth dla dostawców, którzy 
 - gdzie tokeny są **przechowywane** (i dlaczego)
 - jak obsługiwać **wiele kont** (profile + nadpisania per sesja)
 
-OpenClaw obsługuje także **wtyczki dostawców**, które dostarczają własne przepływy OAuth lub kluczy API.
-Uruchamiaj je przez:
+OpenClaw obsługuje także **wtyczki dostawców**, które dostarczają własne przepływy OAuth lub kluczy API. Uruchamiaj je przez:
 
 ```bash
 openclaw models auth login --provider <id>
@@ -118,7 +110,7 @@ Przepływ odświeżania jest automatyczny; zazwyczaj nie trzeba zarządzać toke
 
 Dwa wzorce:
 
-### 1) Zalecane: oddzielni agenci
+### 1. Zalecane: oddzielni agenci
 
 Jeśli chcesz, aby „prywatne” i „służbowe” nigdy się nie stykały, użyj izolowanych agentów (oddzielne sesje + poświadczenia + obszar roboczy):
 
@@ -129,7 +121,7 @@ openclaw agents add personal
 
 Następnie skonfiguruj uwierzytelnianie per agent (kreator) i routuj czaty do właściwego agenta.
 
-### 2) Zaawansowane: wiele profili w jednym agencie
+### 2. Zaawansowane: wiele profili w jednym agencie
 
 `auth-profiles.json` obsługuje wiele identyfikatorów profili dla tego samego dostawcy.
 

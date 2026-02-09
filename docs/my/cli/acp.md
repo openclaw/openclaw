@@ -4,20 +4,13 @@ read_when:
   - ACP အခြေပြု IDE ပေါင်းစည်းမှုများကို တပ်ဆင်ချိန်
   - Gateway သို့ ACP ဆက်ရှင် လမ်းကြောင်းပြမှုကို ဒီဘဂ်လုပ်ချိန်
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:06Z
 ---
 
 # acp
 
 OpenClaw Gateway တစ်ခုနှင့် ဆက်သွယ်သော ACP (Agent Client Protocol) bridge ကို လည်ပတ်စေသည်။
 
-ဤအမိန့်သည် IDE များအတွက် stdio မှတဆင့် ACP ကို ပြောဆိုပြီး Prompts များကို WebSocket မှတဆင့် Gateway（ဂိတ်ဝေး）သို့ ပို့ဆောင်သည်။ ACP ဆက်ရှင်များကို Gateway ဆက်ရှင် ကီးများနှင့် ကိုက်ညီအောင် ထိန်းသိမ်းထားသည်။
+ဤ command သည် IDE များအတွက် stdio ပေါ်မှ ACP ကို ပြောဆိုပြီး WebSocket မှတစ်ဆင့် prompts များကို Gateway သို့ forward လုပ်ပေးသည်။ ၎င်းသည် ACP sessions များကို Gateway session keys များနှင့် ချိတ်ဆက်ထားသည်။
 
 ## Usage
 
@@ -39,8 +32,8 @@ openclaw acp --session agent:main:main --reset-session
 
 ## ACP client (debug)
 
-IDE မလိုအပ်ဘဲ bridge ကို စစ်ဆေးရန် built-in ACP client ကို အသုံးပြုပါ။
-၎င်းသည် ACP bridge ကို ဖွင့်ပြီး Prompts များကို အပြန်အလှန် ရိုက်ထည့်နိုင်စေသည်။
+IDE မပါဘဲ bridge ကို စစ်ဆေးရန် built-in ACP client ကို အသုံးပြုပါ။
+၎င်းသည် ACP bridge ကို spawn လုပ်ပြီး prompts များကို interactive အနေဖြင့် ရိုက်ထည့်နိုင်စေသည်။
 
 ```bash
 openclaw acp client
@@ -75,7 +68,7 @@ openclaw acp --url wss://gateway-host:18789 --token <token>
 
 ## Selecting agents
 
-ACP သည် agent များကို တိုက်ရိုက် မရွေးချယ်ပါ။ Gateway ဆက်ရှင် ကီးဖြင့် လမ်းကြောင်းပြုလုပ်သည်။
+ACP does not pick agents directly. ၎င်းသည် Gateway session key အလိုက် route လုပ်သည်။
 
 သတ်မှတ်ထားသော agent ကို ဦးတည်ရန် agent-အလိုက် ဆက်ရှင် ကီးများကို အသုံးပြုပါ:
 
@@ -85,7 +78,7 @@ openclaw acp --session agent:design:main
 openclaw acp --session agent:qa:bug-123
 ```
 
-ACP ဆက်ရှင်တစ်ခုစီသည် Gateway ဆက်ရှင် ကီးတစ်ခုနှင့် ကိုက်ညီပါသည်။ Agent တစ်ခုတွင် ဆက်ရှင်များ အများအပြား ရှိနိုင်ပြီး၊ ACP သည် သင် ကီး သို့မဟုတ် label ကို မပြောင်းလဲပါက သီးခြားထားသော `acp:<uuid>` ဆက်ရှင်ကို မူလအနေဖြင့် အသုံးပြုပါသည်။
+Each ACP session maps to a single Gateway session key. agent တစ်ခုတွင် sessions အများအပြား ရှိနိုင်သည်။ ACP သည် key သို့မဟုတ် label ကို override မလုပ်ပါက isolated `acp:<uuid>` session ကို default အဖြစ် သုံးသည်။
 
 ## Zed editor setup
 
@@ -131,8 +124,8 @@ Zed တွင် Agent panel ကို ဖွင့်ပြီး “OpenClaw A
 
 ## Session mapping
 
-မူလအနေဖြင့် ACP ဆက်ရှင်များသည် `acp:` prefix ပါသော သီးခြား Gateway ဆက်ရှင် ကီးကို ရရှိပါသည်။
-သိရှိပြီးသား ဆက်ရှင်ကို ပြန်အသုံးပြုရန် ဆက်ရှင် ကီး သို့မဟုတ် label ကို ပေးပါ:
+default အနေဖြင့် ACP sessions များသည် `acp:` prefix ပါသော isolated Gateway session key ကို ရရှိသည်။
+သိပြီးသား session ကို ပြန်အသုံးပြုရန် session key သို့မဟုတ် label ကို ပေးပါ။
 
 - `--session <key>`: သတ်မှတ်ထားသော Gateway ဆက်ရှင် ကီးကို အသုံးပြုပါ။
 - `--session-label <label>`: label ဖြင့် ရှိပြီးသား ဆက်ရှင်ကို ရှာဖွေသတ်မှတ်ပါ။

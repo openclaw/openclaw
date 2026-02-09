@@ -5,13 +5,6 @@ read_when:
   - Du har brug for ikke-interaktive eksempler for specifikke udbydere
 title: "CLI-automatisering"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:40Z
 ---
 
 # CLI-automatisering
@@ -19,7 +12,7 @@ x-i18n:
 Brug `--non-interactive` til at automatisere `openclaw onboard`.
 
 <Note>
-`--json` indebærer ikke ikke-interaktiv tilstand. Brug `--non-interactive` (og `--workspace`) til scripts.
+`--json` betyder ikke ikke-interaktiv tilstand. Brug `--non-interactive` (og `--workspace`) til scripts.
 </Note>
 
 ## Grundlæggende ikke-interaktivt eksempel
@@ -41,7 +34,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
 ## Udbyderspecifikke eksempler
 
 <AccordionGroup>
-  <Accordion title="Gemini-eksempel">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI-eksempel">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway-eksempel">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway-eksempel">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot-eksempel">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Syntetisk eksempel">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Tilføj `--json` for et maskinlæsbart resumé.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen-eksempel">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,8 +110,8 @@ Tilføj `--json` for et maskinlæsbart resumé.
 
 ## Tilføj en anden agent
 
-Brug `openclaw agents add <name>` til at oprette en separat agent med sit eget workspace,
-sessioner og autentificeringsprofiler. Kørsel uden `--workspace` starter opsætningsguiden.
+Brug `openclaw agenter add <name>` for at oprette en separat agent med sit eget arbejdsområde,
+sessioner og auth profiler. Kører uden `-- workspace` starter guiden.
 
 ```bash
 openclaw agents add work \

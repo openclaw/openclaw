@@ -1,18 +1,11 @@
 ---
 summary: "Ajan çalışma zamanı (gömülü pi-mono), çalışma alanı sözleşmesi ve oturum önyüklemesi"
 read_when:
-  - Ajan çalışma zamanını, çalışma alanı önyüklemesini veya oturum davranışını değiştirirken
-title: "Ajan Çalışma Zamanı"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
+  - Changing agent runtime, workspace bootstrap, or session behavior
+title: "Agent Runtime"
 ---
 
-# Ajan Çalışma Zamanı 🤖
+# Agent Runtime 🤖
 
 OpenClaw, **pi-mono**’dan türetilmiş tek bir gömülü ajan çalışma zamanı çalıştırır.
 
@@ -28,7 +21,7 @@ Tam çalışma alanı düzeni + yedekleme kılavuzu: [Ajan çalışma alanı](/c
 oturum başına çalışma alanlarıyla geçersiz kılabilir (bkz.
 [Gateway yapılandırması](/gateway/configuration)).
 
-## Önyükleme dosyaları (enjekte edilir)
+## Bootstrap files (injected)
 
 `agents.defaults.workspace` içinde OpenClaw, kullanıcı tarafından düzenlenebilir şu dosyaları bekler:
 
@@ -74,7 +67,7 @@ OpenClaw, pi-mono kod tabanının bazı parçalarını (modeller/araçlar) yenid
 - pi-coding ajan çalışma zamanı yoktur.
 - `~/.pi/agent` veya `<workspace>/.pi` ayarları dikkate alınmaz.
 
-## Oturumlar
+## Sessions
 
 Oturum dökümleri JSONL olarak şurada saklanır:
 

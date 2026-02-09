@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Reforço do Cron Add"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:49Z
 ---
 
 # Reforço do Cron Add e Alinhamento de Esquemas

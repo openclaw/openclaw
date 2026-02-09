@@ -5,13 +5,6 @@ read_when:
   - Je wilt een browser die op een andere machine draait bedienen via een node-host
   - Je wilt de Chrome-extensierelay gebruiken (koppelen/ontkoppelen via de werkbalkknop)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:06Z
 ---
 
 # `openclaw browser`

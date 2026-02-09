@@ -4,23 +4,16 @@ read_when:
   - Skapa eller validera en OpenClaw macOS-release
   - Uppdatera Sparkle-appcasten eller flödestillgångar
 title: "macOS-release"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:00Z
 ---
 
 # OpenClaw macOS-release (Sparkle)
 
-Den här appen levereras nu med Sparkle för automatiska uppdateringar. Releasebyggen måste vara Developer ID-signerade, zippade och publicerade med en signerad appcast-post.
+Denna app fartyg nu Sparkle auto-uppdateringar. Utgåvorna måste vara utvecklarID-signerade, zippade och publicerade med en signerad appcast-post.
 
 ## Förutsättningar
 
 - Developer ID Application-certifikat installerat (exempel: `Developer ID Application: <Developer Name> (<TEAMID>)`).
-- Sökväg till Sparkles privata nyckel satt i miljön som `SPARKLE_PRIVATE_KEY_FILE` (sökväg till din Sparkle ed25519-privata nyckel; offentlig nyckel är inbakad i Info.plist). Om den saknas, kontrollera `~/.profile`.
+- Sparkle privat nyckelväg i miljön som `SPARKLE_PRIVATE_KEY_FILE` (sökväg till din Sparkle ed25519 privata nyckel, offentlig nyckel bakad i Info.plist). Om det saknas, kontrollera `~/.profile`.
 - Notariseringuppgifter (nyckelringsprofil eller API-nyckel) för `xcrun notarytool` om du vill ha Gatekeeper-säker DMG/zip-distribution.
   - Vi använder en nyckelringsprofil med namnet `openclaw-notary`, skapad från App Store Connect API-nyckelns miljövariabler i din shellprofil:
     - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
@@ -34,8 +27,8 @@ Den här appen levereras nu med Sparkle för automatiska uppdateringar. Releaseb
 Noteringar:
 
 - `APP_BUILD` mappas till `CFBundleVersion`/`sparkle:version`; håll det numeriskt + monotont (inga `-beta`), annars jämför Sparkle det som lika.
-- Standard är aktuell arkitektur (`$(uname -m)`). För release-/universella byggen, sätt `BUILD_ARCHS="arm64 x86_64"` (eller `BUILD_ARCHS=all`).
-- Använd `scripts/package-mac-dist.sh` för releaseartefakter (zip + DMG + notarisering). Använd `scripts/package-mac-app.sh` för lokal/dev-paketering.
+- Standardvärdet för den aktuella arkitekturen (`$(uname -m)`). För utgåva/universella byggen, sätt `BUILD_ARCHS="arm64 x86_64"` (eller `BUILD_ARCHS=alla`).
+- Använd `scripts/package-mac-dist.sh` för release-artefakter (zip + DMG + notarization). Använd `scripts/package-mac-app.sh` för local/dev-paketering.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -77,8 +70,8 @@ Använd generatorn för versionsanteckningar så att Sparkle renderar formaterad
 SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh dist/OpenClaw-2026.2.6.zip https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml
 ```
 
-Genererar HTML-versionsanteckningar från `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) och bäddar in dem i appcast-posten.
-Committa den uppdaterade `appcast.xml` tillsammans med releaseartefakterna (zip + dSYM) vid publicering.
+Skapar HTML-versionsanteckningar från `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) och bäddar in dem i appcast-posten.
+Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when publishing. (Automatic Copy)
 
 ## Publicera & verifiera
 

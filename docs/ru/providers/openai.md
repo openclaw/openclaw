@@ -4,13 +4,6 @@ read_when:
   - Вы хотите использовать модели OpenAI в OpenClaw
   - Вам нужна аутентификация по подписке Codex вместо ключей API
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:49Z
 ---
 
 # OpenAI

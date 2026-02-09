@@ -5,18 +5,11 @@ read_when:
   - ဖွဲ့စည်းပြင်ဆင်မှု ဥပမာများကို ရှာဖွေနေစဉ်
   - OpenClaw ကို ပထမဆုံးအကြိမ် တပ်ဆင်နေစဉ်
 title: "ဖွဲ့စည်းပြင်ဆင်မှု ဥပမာများ"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:18Z
 ---
 
 # ဖွဲ့စည်းပြင်ဆင်မှု ဥပမာများ
 
-အောက်ပါ ဥပမာများသည် လက်ရှိ config schema နှင့် ကိုက်ညီအောင် ပြုလုပ်ထားပါသည်။ အပြည့်အစုံသော ရည်ညွှန်းချက်နှင့် field တစ်ခုချင်းစီအလိုက် မှတ်ချက်များအတွက် [Configuration](/gateway/configuration) ကို ကြည့်ပါ။
+Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
 ## အမြန်စတင်ရန်
 
@@ -55,7 +48,7 @@ x-i18n:
 
 ## ချဲ့ထွင်ထားသော ဥပမာ (အဓိက ရွေးချယ်မှုများ)
 
-> JSON5 သည် မှတ်ချက်များနှင့် trailing commas များကို အသုံးပြုနိုင်ပါသည်။ ပုံမှန် JSON လည်း အသုံးပြုနိုင်ပါသည်။
+> JSON5 lets you use comments and trailing commas. Regular JSON works too.
 
 ```json5
 {
@@ -608,6 +601,6 @@ x-i18n:
 ## အကြံပြုချက်များ
 
 - `dmPolicy: "open"` ကို သတ်မှတ်ပါက၊ ကိုက်ညီသော `allowFrom` စာရင်းတွင် `"*"` ပါဝင်ရပါမည်။
-- Provider ID များသည် မတူကွဲပြားပါသည် (ဖုန်းနံပါတ်များ၊ အသုံးပြုသူ ID များ၊ ချန်နယ် ID များ)။ ပုံစံကို အတည်ပြုရန် provider ၏ စာတမ်းများကို အသုံးပြုပါ။
+- Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
 - နောက်မှ ထည့်နိုင်သော ရွေးချယ်နိုင်သည့် အပိုင်းများ: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`။
 - အသေးစိတ် တပ်ဆင်မှု မှတ်ချက်များအတွက် [Providers](/channels/whatsapp) နှင့် [Troubleshooting](/gateway/troubleshooting) ကို ကြည့်ပါ။

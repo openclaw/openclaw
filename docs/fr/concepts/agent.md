@@ -3,13 +3,6 @@ summary: "Runtime de l’agent (pi-mono embarqué), contrat d’espace de travai
 read_when:
   - Modification du runtime de l’agent, de l’amorçage de l’espace de travail ou du comportement de session
 title: "Runtime de l’agent"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 04b4e0bc6345d2af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:14Z
 ---
 
 # Runtime de l’agent 🤖
@@ -88,8 +81,7 @@ Les dossiers de session hérités Pi/Tau ne sont **pas** lus.
 
 Lorsque le mode de file d’attente est `steer`, les messages entrants sont injectés dans l’exécution en cours.
 La file est vérifiée **après chaque appel d’outil** ; si un message en file est présent,
-les appels d’outils restants du message assistant courant sont ignorés (résultats d’outil en erreur avec « Skipped due to queued user message. »), puis le message utilisateur en file
-est injecté avant la réponse suivante de l’assistant.
+les appels d’outils restants du message assistant courant sont ignorés (résultats d’outil en erreur avec « Skipped due to queued user message.
 
 Lorsque le mode de file d’attente est `followup` ou `collect`, les messages entrants sont conservés jusqu’à la fin du tour en cours, puis un nouveau tour d’agent démarre avec les charges utiles en file. Voir
 [File d’attente](/concepts/queue) pour les modes + le comportement de debounce/cap.

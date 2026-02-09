@@ -4,13 +4,6 @@ read_when:
   - OpenResponses API’sini konuşan istemcileri entegre ederken
   - Öğe tabanlı girdiler, istemci araç çağrıları veya SSE olayları istediğinizde
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:26Z
 ---
 
 # OpenResponses API (HTTP)
@@ -36,7 +29,7 @@ Notlar:
 - `gateway.auth.mode="token"` olduğunda, `gateway.auth.token` (veya `OPENCLAW_GATEWAY_TOKEN`) kullanın.
 - `gateway.auth.mode="password"` olduğunda, `gateway.auth.password` (veya `OPENCLAW_GATEWAY_PASSWORD`) kullanın.
 
-## Bir ajan seçme
+## Choosing an agent
 
 Özel başlıklara gerek yoktur: ajan kimliğini OpenResponses `model` alanında kodlayın:
 

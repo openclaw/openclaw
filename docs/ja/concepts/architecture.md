@@ -3,13 +3,6 @@ summary: "WebSocket ゲートウェイのアーキテクチャ、コンポーネ
 read_when:
   - ゲートウェイプロトコル、クライアント、またはトランスポートに取り組んでいるとき
 title: "Gateway アーキテクチャ"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:28Z
 ---
 
 # Gateway アーキテクチャ
@@ -84,7 +77,7 @@ Client                    Gateway
 - 副作用を伴うメソッド（`send`、`agent`）では、安全に再試行できるよう冪等性キーが必須です。サーバーは短命の重複排除キャッシュを保持します。
 - ノードは `role: "node"` に加え、`connect` に capabilities / コマンド / 権限を含める必要があります。
 
-## ペアリングとローカルトラスト
+## ペアリングとローカルの信頼度
 
 - すべての WS クライアント（オペレーター + ノード）は、`connect` に **デバイスアイデンティティ** を含めます。
 - 新しいデバイス ID にはペアリング承認が必要です。Gateway は、以降の接続用に **デバイストークン** を発行します。
@@ -103,6 +96,7 @@ Client                    Gateway
 ## リモートアクセス
 
 - 推奨: Tailscale または VPN。
+
 - 代替: SSH トンネル
 
   ```bash
@@ -110,6 +104,7 @@ Client                    Gateway
   ```
 
 - トンネル越しでも同一のハンドシェイク + 認証トークンが適用されます。
+
 - リモート構成では、WS に対して TLS + 任意のピンニングを有効化できます。
 
 ## 運用スナップショット

@@ -4,18 +4,11 @@ read_when:
   - npm ထုတ်ပြန်မှု အသစ်တစ်ခု ပြုလုပ်နေချိန်
   - macOS အက်ပ် ထုတ်ပြန်မှု အသစ်တစ်ခု ပြုလုပ်နေချိန်
   - ထုတ်ပြန်မီ မီတာဒေတာများကို စစ်ဆေးနေချိန်
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:15Z
 ---
 
 # ထုတ်ပြန်မှု စစ်ဆေးစာရင်း (npm + macOS)
 
-repo root မှ `pnpm` (Node 22+) ကို အသုံးပြုပါ။ tag လုပ်ခြင်း/ထုတ်ပြန်ခြင်း မတိုင်မီ working tree ကို သန့်ရှင်းထားပါ။
+repo root မှ `pnpm` (Node 22+) ကို အသုံးပြုပါ။ tagging/publishing မလုပ်မီ working tree ကို သန့်ရှင်းအောင် ထိန်းသိမ်းထားပါ။
 
 ## Operator trigger
 
@@ -79,7 +72,7 @@ Operator က “release” ဟု ပြောလာသောအခါ (တာ�
 
 ### Troubleshooting (2.0.0-beta2 ထုတ်ပြန်မှုမှ မှတ်စုများ)
 
-- **npm pack/publish ချိတ်ဆွဲနေခြင်း သို့မဟုတ် အလွန်ကြီးမားသော tarball ထွက်ပေါ်ခြင်း**: `dist/OpenClaw.app` ထဲရှိ macOS အက်ပ် bundle (နှင့် release zips) များကို package ထဲသို့ ဆွဲထည့်သွားသည်။ `package.json` `files` ဖြင့် publish အကြောင်းအရာများကို whitelist လုပ်ခြင်းဖြင့် ဖြေရှင်းပါ (dist subdirs, docs, skills ကို ထည့်သွင်းပါ; app bundles များကို ဖယ်ထုတ်ပါ)။ `npm pack --dry-run` ဖြင့် `dist/OpenClaw.app` မပါဝင်ကြောင်း အတည်ပြုပါ။
+- **npm pack/publish ရပ်တန့်ခြင်း သို့မဟုတ် အလွန်ကြီးမားသော tarball ထွက်လာခြင်း**: `dist/OpenClaw.app` ထဲရှိ macOS app bundle (နှင့် release zips များ) ကို package ထဲသို့ ထည့်သွင်းသွားခြင်းကြောင့် ဖြစ်ပါသည်။ `package.json` ရှိ `files` ဖြင့် publish contents ကို whitelist လုပ်ခြင်းအားဖြင့် ပြင်ဆင်ပါ (dist subdirs, docs, skills များကို ထည့်ပြီး app bundles များကို ဖယ်ရှားပါ)။ `npm pack --dry-run` ဖြင့် `dist/OpenClaw.app` ကို စာရင်းမပါဝင်ကြောင်း အတည်ပြုပါ။
 - **dist-tags အတွက် npm auth web loop**: OTP prompt ရရန် legacy auth ကို အသုံးပြုပါ—
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **`npx` စစ်ဆေးမှုသည် `ECOMPROMISED: Lock compromised` ဖြင့် မအောင်မြင်ခြင်း**: cache အသစ်ဖြင့် ထပ်မံကြိုးစားပါ—
@@ -98,7 +91,7 @@ Operator က “release” ဟု ပြောလာသောအခါ (တာ�
 
 ## Plugin publish scope (npm)
 
-`@openclaw/*` scope အောက်ရှိ **ရှိပြီးသား npm plugins** များကိုသာ ထုတ်ပြန်ပါသည်။ npm ပေါ်မရှိသေးသော bundled plugins များသည် **disk-tree only** အဖြစ်သာ ရှိနေမည် (ထို့နောက် `extensions/**` ထဲတွင် ဆက်လက် ပို့ဆောင်ထားသည်)။
+`@openclaw/*` scope အောက်တွင် **ရှိပြီးသား npm plugins များသာ** publish လုပ်ပါသည်။ npm ပေါ်တွင် မရှိသော Bundled plugins များကို **disk-tree only** အဖြစ် ထားရှိပါသည် (`extensions/**` ထဲတွင် ဆက်လက် ပို့ဆောင်ပေးပါသည်)။
 
 စာရင်းကို ဆုံးဖြတ်ရန် လုပ်ငန်းစဉ်—
 

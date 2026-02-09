@@ -3,13 +3,6 @@ summary: "Referência da CLI para `openclaw config` (obter/definir/remover valor
 read_when:
   - Você quer ler ou editar a configuração de forma não interativa
 title: "configuração"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:12Z
 ---
 
 # `openclaw config`

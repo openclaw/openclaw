@@ -4,13 +4,6 @@ read_when:
   - Al ejecutar o depurar el proceso del gateway
   - Al investigar la aplicación de instancia única
 title: "Bloqueo del Gateway"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:25Z
 ---
 
 # Bloqueo del Gateway

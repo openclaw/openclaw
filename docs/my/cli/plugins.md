@@ -4,13 +4,6 @@ read_when:
   - in-process Gateway ပလပ်ဂင်များကို ထည့်သွင်း သို့မဟုတ် စီမံခန့်ခွဲလိုသည့်အခါ
   - ပလပ်ဂင် တင်သွင်းမှု မအောင်မြင်သည့် ပြဿနာများကို ဒီဘဂ်လုပ်လိုသည့်အခါ
 title: "ပလပ်ဂင်များ"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:06Z
 ---
 
 # `openclaw plugins`
@@ -35,9 +28,9 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-OpenClaw နှင့်အတူ ပါဝင်လာသော bundled plugins များသည် ပုံမှန်အားဖြင့် ပိတ်ထားပြီး စတင်သည်။ ၎င်းတို့ကို အသက်သွင်းရန် `plugins enable` ကို အသုံးပြုပါ။
+Bundled plugin များသည် OpenClaw နှင့်အတူ ပါဝင်လာသော်လည်း စတင်ချိန်တွင် ပိတ်ထားပါသည်။ ၎င်းတို့ကို အသက်သွင်းရန် `plugins enable` ကို အသုံးပြုပါ။
 
-ပလပ်ဂင်တိုင်းတွင် inline JSON Schema ပါဝင်သည့် `openclaw.plugin.json` ဖိုင်တစ်ခု ရှိရမည် (`configSchema`, အလွတ်ဖြစ်နေသော်လည်း)။ manifest သို့မဟုတ် schema မရှိခြင်း/မမှန်ကန်ခြင်းများကြောင့် ပလပ်ဂင်ကို မတင်သွင်းနိုင်ဘဲ config အတည်ပြုခြင်း မအောင်မြင်နိုင်ပါသည်။
+Plugin အားလုံးတွင် inline JSON Schema (`configSchema` — မရှိလည်းဖြစ်နိုင်) ပါဝင်သော `openclaw.plugin.json` ဖိုင် တစ်ခု ပါရမည်ဖြစ်ပါသည်။ Manifest သို့မဟုတ် schema များ မရှိခြင်း/မမှန်ကန်ခြင်းသည် plugin ကို load မလုပ်နိုင်စေပြီး config validation ကိုလည်း မအောင်မြင်စေပါသည်။
 
 ### Install
 
@@ -45,7 +38,7 @@ OpenClaw နှင့်အတူ ပါဝင်လာသော bundled plugins
 openclaw plugins install <path-or-spec>
 ```
 
-လုံခြုံရေး သတိပေးချက်—ပလပ်ဂင် ထည့်သွင်းခြင်းကို ကိုဒ်ကို chạy လုပ်သကဲ့သို့ စဉ်းစားပါ။ pinned versions ကို ဦးစားပေးအသုံးပြုပါ။
+Security မှတ်ချက်: plugin install လုပ်ခြင်းကို code chạy သလိုပဲ ဆက်ဆံပါ။ Pinned version များကို ဦးစားပေး အသုံးပြုပါ။
 
 ပံ့ပိုးထားသော archive များ—`.zip`, `.tgz`, `.tar.gz`, `.tar`။
 

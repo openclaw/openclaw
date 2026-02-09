@@ -2,13 +2,6 @@
 summary: "Eerste-opstartritueel voor nieuwe agents"
 read_when:
   - Een werkruimte handmatig bootstrappen
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:42Z
 ---
 
 # BOOTSTRAP.md - Hallo, wereld
@@ -57,7 +50,7 @@ Vraag hoe ze je willen bereiken:
 - **WhatsApp** — koppel hun persoonlijke account (je toont een QR-code)
 - **Telegram** — stel een bot in via BotFather
 
-Begeleid hen bij de optie die ze kiezen.
+Leid ze door waar ze ook kiezen.
 
 ## Wanneer je klaar bent
 

@@ -5,13 +5,6 @@ read_when:
   - Quiere habilitar el plugin OpenProse
   - Necesita comprender el almacenamiento de estado
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:17Z
 ---
 
 # OpenProse

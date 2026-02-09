@@ -4,24 +4,19 @@ read_when:
   - macOS/iOS での Bonjour 検出問題をデバッグする場合
   - mDNS サービスタイプ、TXT レコード、検出 UX を変更する場合
 title: "Bonjour 検出"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:55Z
 ---
 
 # Bonjour / mDNS 検出
 
 OpenClaw は、アクティブな Gateway（WebSocket エンドポイント）を検出するために、**LAN 限定の利便性機能**として Bonjour（mDNS / DNS‑SD）を使用します。これはベストエフォートであり、SSH や
-Tailnet ベースの接続を**置き換えるものではありません**。
+Tailnet ベースの接続を**置き換えるものではありません**。 これはベストエフォートであり、SSHまたは
+Tailnetベースの接続を**置き換えません**。
 
 ## Tailscale 経由のワイドエリア Bonjour（ユニキャスト DNS‑SD）
 
 ノードとゲートウェイが異なるネットワーク上にある場合、マルチキャスト mDNS は境界を越えません。同じ検出 UX を維持するには、Tailscale 経由で **ユニキャスト DNS‑SD**
-（「ワイドエリア Bonjour」）に切り替えます。
+（「ワイドエリア Bonjour」）に切り替えます。 同じ発見を維持するには、Tailscale上で**ユニキャストDNS‐SD**
+("Wide‐Area Bonjour")に切り替えます。
 
 高レベルの手順:
 
@@ -33,6 +28,7 @@ Tailnet ベースの接続を**置き換えるものではありません**。
 
 OpenClaw は任意の検出ドメインをサポートします。`openclaw.internal.` は単なる例です。
 iOS/Android ノードは `local.` と、設定したワイドエリア ドメインの両方をブラウズします。
+iOS/Androidノードは、`local.`と設定された広域ドメインの両方を参照します。
 
 ### Gateway 設定（推奨）
 
@@ -74,7 +70,8 @@ Tailscale 管理コンソールで次を行います:
 ### Gateway リスナーのセキュリティ（推奨）
 
 Gateway の WS ポート（デフォルト `18789`）は、既定では loopback にバインドされます。LAN/Tailnet
-アクセスの場合は、明示的にバインドし、認証を有効にしたままにしてください。
+アクセスの場合は、明示的にバインドし、認証を有効にしたままにしてください。 LAN/tailnet
+アクセスの場合は、明示的にバインドして認証を有効にしておきます。
 
 Tailnet 専用のセットアップの場合:
 
@@ -128,7 +125,7 @@ mDNS リゾルバーの問題です。
 
 Gateway はローテーションされるログファイルを書き込みます（起動時に
 `gateway log file: ...` として出力されます）。特に次の
-`bonjour:` 行を確認してください:
+`bonjour:` 行を確認してください: `bonjour:`線を探してください。特に：
 
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
@@ -152,7 +149,8 @@ iOS ノードは `NWBrowser` を使用して `_openclaw-gw._tcp` を検出しま
 - **スリープ / インターフェースの変動**: macOS は一時的に mDNS の結果を失うことがあります。再試行してください。
 - **ブラウズは成功するが解決に失敗する**: マシン名はシンプルに保ってください（絵文字や
   句読点を避けます）。その後 Gateway を再起動します。サービス インスタンス名は
-  ホスト名から派生するため、過度に複雑な名前は一部のリゾルバーを混乱させる可能性があります。
+  ホスト名から派生するため、過度に複雑な名前は一部のリゾルバーを混乱させる可能性があります。 サービスインスタンス名はホスト名の
+  に由来するため、過度に複雑な名前はリゾルバを混乱させる可能性があります。
 
 ## エスケープされたインスタンス名（`\032`）
 

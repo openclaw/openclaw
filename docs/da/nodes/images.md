@@ -3,18 +3,11 @@ summary: "Regler for håndtering af billeder og medier for send, gateway og agen
 read_when:
   - Ændring af mediepipeline eller vedhæftninger
 title: "Understøttelse af billeder og medier"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:28Z
 ---
 
 # Understøttelse af billeder og medier — 2025-12-05
 
-WhatsApp-kanalen kører via **Baileys Web**. Dette dokument beskriver de aktuelle regler for håndtering af medier for send, gateway og agent-svar.
+WhatsApp-kanalen kører via **Baileys Web**. Dette dokument indfanger de aktuelle regler for håndtering af medier for send, gateway og agent svar.
 
 ## Mål
 
@@ -55,7 +48,7 @@ WhatsApp-kanalen kører via **Baileys Web**. Dette dokument beskriver de aktuell
 - Medieforståelse (hvis konfigureret via `tools.media.*` eller delt `tools.media.models`) kører før templating og kan indsætte `[Image]`, `[Audio]` og `[Video]`-blokke i `Body`.
   - Lyd sætter `{{Transcript}}` og bruger transskriptionen til kommandoparsning, så slash-kommandoer stadig virker.
   - Video- og billedbeskrivelser bevarer eventuel billedtekst til kommandoparsning.
-- Som standard behandles kun den første matchende billed-/lyd-/video-vedhæftning; sæt `tools.media.<cap>.attachments` for at behandle flere vedhæftninger.
+- Som standard kun den første matchende billede/audio/video vedhæftet fil behandles; sæt `tools.media.<cap>.attachments` til at behandle flere vedhæftede filer.
 
 ## Grænser og fejl
 

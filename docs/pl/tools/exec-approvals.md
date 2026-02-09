@@ -5,16 +5,9 @@ read_when:
   - Implementowanie UX zatwierdzania exec w aplikacji na macOS
   - Przeglądanie monitów wyjścia z sandboxa i ich konsekwencji
 title: "Zatwierdzanie wykonania (Exec)"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:04Z
 ---
 
-# Zatwierdzanie wykonania (exec)
+# Zatwierdzanie wykonania (exec approvals)
 
 Zatwierdzanie wykonania (exec) to **zabezpieczenie aplikacji towarzyszącej / hosta węzła**, które pozwala agentowi działającemu w sandboxie uruchamiać
 polecenia na rzeczywistym hoście (`gateway` lub `node`). Traktuj to jak blokadę bezpieczeństwa:
@@ -222,7 +215,7 @@ Gateway -> Node Service (WS)
 Uwagi dotyczące bezpieczeństwa:
 
 - Tryb gniazda Unix `0600`, token przechowywany w `exec-approvals.json`.
-- Sprawdzenie równorzędności UID.
+- Sprawdzanie równorzędne z Same-UID.
 - Wyzwanie/odpowiedź (nonce + token HMAC + skrót żądania) + krótki TTL.
 
 ## Zdarzenia systemowe

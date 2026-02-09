@@ -1,12 +1,5 @@
 ---
 title: "Pi ဖွံ့ဖြိုးရေး လုပ်ငန်းစဉ်"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:38Z
 ---
 
 # Pi ဖွံ့ဖြိုးရေး လုပ်ငန်းစဉ်
@@ -58,7 +51,7 @@ tool call အပြုအမူကို စမ်းသပ်ရန်၊ tool 
 
 ## Clean Slate Reset
 
-State များသည် OpenClaw state directory အောက်တွင် ရှိပါသည်။ မူလသတ်မှတ်ချက်မှာ `~/.openclaw` ဖြစ်ပါသည်။ `OPENCLAW_STATE_DIR` ကို သတ်မှတ်ထားပါက ထို directory ကို အသုံးပြုပါ။
+2. State ကို OpenClaw state directory အောက်တွင် သိမ်းဆည်းထားပါသည်။ 3. ပုံမှန်တန်ဖိုးမှာ `~/.openclaw` ဖြစ်ပါသည်။ 4. `OPENCLAW_STATE_DIR` ကို သတ်မှတ်ထားပါက ထို directory ကို အသုံးပြုပါမည်။
 
 အားလုံးကို ပြန်လည်စတင်ရန်—
 
@@ -69,7 +62,7 @@ State များသည် OpenClaw state directory အောက်တွင်
 - legacy paths ရှိပါက `sessions/`
 - အလွတ် workspace လိုပါက `workspace/`
 
-sessions များကိုသာ ပြန်လည်စတင်လိုပါက ထို agent အတွက် `agents/<agentId>/sessions/` နှင့် `agents/<agentId>/sessions.json` ကို ဖျက်ပါ။ ပြန်လည် authenticate မလုပ်လိုပါက `credentials/` ကို ထိန်းသိမ်းထားပါ။
+5. Session များကိုသာ reset လုပ်ချင်ပါက အဆိုပါ agent အတွက် `agents/<agentId>/sessions/` နှင့် `agents/<agentId>/sessions.json` ကို ဖျက်ပါ။ 6. ပြန်လည် authenticate မလုပ်ချင်ပါက `credentials/` ကို ထားရှိထားပါ။
 
 ## References
 

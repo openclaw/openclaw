@@ -4,13 +4,6 @@ read_when:
   - O hub de solução de problemas apontou você para cá para um diagnóstico mais profundo
   - Você precisa de seções estáveis de runbook baseadas em sintomas com comandos exatos
 title: "Solução de problemas"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:13Z
 ---
 
 # Solução de problemas do Gateway
@@ -188,7 +181,7 @@ Relacionado:
 - [/automation/cron-jobs](/automation/cron-jobs)
 - [/gateway/heartbeat](/gateway/heartbeat)
 
-## Falha de ferramenta em nó pareado
+## Ferramenta emparelhada de nó falhou
 
 Se um nó está pareado, mas as ferramentas falham, isole estado de primeiro plano, permissões e aprovação.
 
@@ -254,7 +247,7 @@ Relacionado:
 
 A maioria das quebras pós-atualização é desvio de configuração ou padrões mais rígidos agora sendo aplicados.
 
-### 1) O comportamento de autenticação e sobrescrita de URL mudou
+### 1. O comportamento de autenticação e sobrescrita de URL mudou
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Assinaturas comuns:
 - `gateway connect failed:` → URL de destino incorreta.
 - `unauthorized` → endpoint alcançável, mas autenticação errada.
 
-### 2) Guardrails de bind e autenticação estão mais rígidos
+### 2. Guardrails de bind e autenticação estão mais rígidos
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ Assinaturas comuns:
 - `refusing to bind gateway ... without auth` → incompatibilidade entre bind e autenticação.
 - `RPC probe: failed` enquanto o runtime está em execução → gateway ativo, mas inacessível com a autenticação/URL atuais.
 
-### 3) O estado de pareamento e identidade do dispositivo mudou
+### 3. O estado de pareamento e identidade do dispositivo mudou
 
 ```bash
 openclaw devices list

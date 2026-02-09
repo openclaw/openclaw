@@ -4,13 +4,6 @@ read_when:
   - Het draaien van de headless Node-host
   - Het koppelen van een niet-macOS-node voor system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:16Z
 ---
 
 # `openclaw node`
@@ -97,7 +90,7 @@ Gebruik `openclaw node run` voor een foreground Node-host (geen service).
 
 Service-opdrachten accepteren `--json` voor machineleesbare uitvoer.
 
-## Koppelen
+## Pairing
 
 De eerste verbinding maakt een openstaande Node-koppelingsaanvraag aan op de Gateway.
 Keur deze goed via:

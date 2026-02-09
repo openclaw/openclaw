@@ -3,19 +3,12 @@ summary: "Sanggunian ng CLI para sa `openclaw agent` (magpadala ng isang agent t
 read_when:
   - Gusto mong magpatakbo ng isang agent turn mula sa mga script (opsyonal na ihatid ang tugon)
 title: "agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:18Z
 ---
 
 # `openclaw agent`
 
-Magpatakbo ng isang agent turn sa pamamagitan ng Gateway (gamitin ang `--local` para sa embedded).
-Gamitin ang `--agent <id>` para direktang i-target ang isang naka-configure na agent.
+26. Patakbuhin ang isang agent turn sa pamamagitan ng Gateway (gamitin ang `--local` para sa embedded).
+27. Gamitin ang `--agent <id>` upang direktang i-target ang isang naka-configure na agent.
 
 Kaugnay:
 

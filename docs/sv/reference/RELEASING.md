@@ -4,18 +4,11 @@ read_when:
   - Skapa en ny npm-release
   - Skapa en ny macOS-app-release
   - Verifiera metadata före publicering
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:30Z
 ---
 
 # Releasechecklista (npm + macOS)
 
-Använd `pnpm` (Node 22+) från repo-roten. Se till att arbetskatalogen är ren innan taggning/publicering.
+Använd `pnpm` (Node 22+) från reporoten. Håll arbetsträdet rent innan taggning/publicering.
 
 ## Operatörstrigger
 
@@ -27,7 +20,7 @@ När operatören säger ”release”, gör omedelbart denna preflight (inga ext
 
 1. **Version & metadata**
 
-- [ ] Höj versionen i `package.json` (t.ex. `2026.1.29`).
+- [ ] Bump `package.json` version (t.ex., `2026.1.29`).
 - [ ] Kör `pnpm plugins:sync` för att synka versioner + ändringsloggar för tilläggspaket.
 - [ ] Uppdatera CLI-/versionssträngar: [`src/cli/program.ts`](https://github.com/openclaw/openclaw/blob/main/src/cli/program.ts) och Baileys user agent i [`src/provider-web.ts`](https://github.com/openclaw/openclaw/blob/main/src/provider-web.ts).
 - [ ] Bekräfta paketmetadata (namn, beskrivning, repository, nyckelord, licens) och att `bin`-mappningen pekar på [`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs) för `openclaw`.
@@ -79,7 +72,7 @@ När operatören säger ”release”, gör omedelbart denna preflight (inga ext
 
 ### Felsökning (anteckningar från 2.0.0-beta2-releasen)
 
-- **npm pack/publish hänger eller skapar enorm tarball**: macOS-appbunten i `dist/OpenClaw.app` (och release-zippar) sveps in i paketet. Åtgärda genom att vitlista publiceringsinnehåll via `package.json` `files` (inkludera dist-undermappar, docs, skills; exkludera app-buntar). Bekräfta med `npm pack --dry-run` att `dist/OpenClaw.app` inte listas.
+- **npm pack/publicera hänger eller producerar enorma tarball**: macOS app bunt i `dist/OpenClaw.app` (och släpp zips) svepas in i paketet. Fixa genom att vitlista publicera innehåll via `package.json` `files` (inkludera dist underjord, dokument, färdigheter; exkludera apppaket). Bekräfta med `npm pack --dry-run` att `dist/OpenClaw.app` inte är listad.
 - **npm auth web-loop för dist-tags**: använd legacy-auth för att få OTP-prompt:
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **`npx`-verifiering misslyckas med `ECOMPROMISED: Lock compromised`**: försök igen med en ny cache:
@@ -98,8 +91,8 @@ När operatören säger ”release”, gör omedelbart denna preflight (inga ext
 
 ## Plugin-publiceringsomfång (npm)
 
-Vi publicerar endast **befintliga npm-plugins** under `@openclaw/*`-scopet. Bundlade
-plugins som inte finns på npm förblir **endast disk-tree** (skickas fortfarande i
+Vi publicerar endast **befintliga npm plugins** under `@openclaw/*` -omfattningen. Paketerade
+plugins som inte är på npm stannar **diskträd endast** (levereras fortfarande i
 `extensions/**`).
 
 Process för att ta fram listan:

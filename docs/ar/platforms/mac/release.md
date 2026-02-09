@@ -4,20 +4,13 @@ read_when:
   - عند قطع أو التحقق من إصدار OpenClaw على macOS
   - عند تحديث خلاصة أو أصول تطبيق Sparkle
 title: "إصدار macOS"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:32Z
 ---
 
 # إصدار OpenClaw على macOS (Sparkle)
 
 يشحن هذا التطبيق الآن تحديثات Sparkle التلقائية. يجب توقيع بنى الإصدار بمعرّف المطوّر (Developer ID)، وضغطها، ونشرها مع إدخال appcast موقّع.
 
-## المتطلبات المسبقة
+## المسبق
 
 - تثبيت شهادة Developer ID Application (مثال: `Developer ID Application: <Developer Name> (<TEAMID>)`).
 - تعيين مسار المفتاح الخاص لـ Sparkle في متغيرات البيئة كـ `SPARKLE_PRIVATE_KEY_FILE` (المسار إلى مفتاح Sparkle الخاص ed25519؛ المفتاح العام مضمّن في Info.plist). إذا كان مفقودًا، تحقّق من `~/.profile`.
@@ -84,7 +77,7 @@ SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh di
 
 - ارفع `OpenClaw-2026.2.6.zip` (و`OpenClaw-2026.2.6.dSYM.zip`) إلى إصدار GitHub للوسم `v2026.2.6`.
 - تأكّد من أن رابط appcast الخام يطابق الخلاصة المضمّنة: `https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml`.
-- فحوصات السلامة:
+- التحقق من المتعة:
   - `curl -I https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml` يُرجع 200.
   - `curl -I <enclosure url>` يُرجع 200 بعد رفع الأصول.
   - على بنية عامة سابقة، شغّل «التحقق من وجود تحديثات…» من تبويب «حول» وتحقق من أن Sparkle يثبت البنية الجديدة بسلاسة.

@@ -4,23 +4,16 @@ read_when:
   - အေးဂျင့် Workspace သို့မဟုတ် ၎င်း၏ ဖိုင်အလွှာအလေးအနက်ကို ရှင်းပြရန်လိုအပ်သောအခါ
   - အေးဂျင့် Workspace ကို အရန်သိမ်းဆည်းခြင်း သို့မဟုတ် ရွှေ့ပြောင်းရန်လိုအပ်သောအခါ
 title: "Agent Workspace"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:36Z
 ---
 
 # Agent workspace
 
-Workspace သည် အေးဂျင့်၏ အိမ်ဖြစ်သည်။ ဖိုင်ကိရိယာများနှင့် workspace context အတွက် အသုံးပြုသော တစ်ခုတည်းသော အလုပ်လုပ်ရာ ဒိုင်ရက်ထရီ ဖြစ်သည်။ ၎င်းကို ပုဂ္ဂိုလ်ရေးအဖြစ် ထိန်းသိမ်းပြီး မှတ်ဉာဏ်ကဲ့သို့ ဆက်ဆံသင့်သည်။
+Workspace သည် agent ၏ အိမ်ဖြစ်ပါသည်။ File tools နှင့် workspace context အတွက် အသုံးပြုသည့် တစ်ခုတည်းသော working directory ဖြစ်ပါသည်။ Private အဖြစ်ထားပြီး memory လို သဘောထားပါ။
 
 ဤအရာသည် config၊ အထောက်အထားများ၊ နှင့် ဆက်ရှင်များကို သိမ်းဆည်းသည့် `~/.openclaw/` နှင့် သီးခြားဖြစ်သည်။
 
-**အရေးကြီးချက်:** Workspace သည် **မူလ cwd** ဖြစ်ပြီး hard sandbox မဟုတ်ပါ။ ကိရိယာများသည် relative path များကို workspace အပေါ်အခြေခံ၍ ဖြေရှင်းသော်လည်း sandboxing ကို မဖွင့်ထားပါက absolute path များက ဟို့စ်၏ အခြားနေရာများသို့ ဆက်လက်ရောက်ရှိနိုင်ပါသည်။ သီးခြားခွဲထားမှု လိုအပ်ပါက [`agents.defaults.sandbox`](/gateway/sandboxing) (နှင့်/သို့မဟုတ် အေးဂျင့်တစ်ခုချင်းစီအလိုက် sandbox config) ကို အသုံးပြုပါ။
-Sandboxing ကို ဖွင့်ထားပြီး `workspaceAccess` သည် `"rw"` မဟုတ်ပါက ကိရိယာများသည် ဟို့စ် workspace မဟုတ်ဘဲ `~/.openclaw/sandboxes` အောက်ရှိ sandbox workspace အတွင်းတွင် လည်ပတ်ပါမည်။
+**အရေးကြီး:** workspace သည် **default cwd** ဖြစ်ပြီး hard sandbox မဟုတ်ပါ။ Tools များသည် relative path များကို workspace အပေါ်မူတည်၍ resolve လုပ်ပေးပါသည်၊ သို့သော် absolute path များသည် sandboxing မဖွင့်ထားလျှင် host ပေါ်ရှိ အခြားနေရာများကို ရောက်နိုင်ပါသေးသည်။ Isolation လိုအပ်ပါက [`agents.defaults.sandbox`](/gateway/sandboxing) (နှင့်/သို့မဟုတ် per‑agent sandbox config) ကို အသုံးပြုပါ။
+Sandboxing ကို ဖွင့်ထားပြီး `workspaceAccess` သည် `"rw"` မဟုတ်ပါက tools များသည် host workspace မဟုတ်ဘဲ `~/.openclaw/sandboxes` အောက်ရှိ sandbox workspace အတွင်းတွင် လုပ်ဆောင်ပါသည်။
 
 ## Default location
 
@@ -48,10 +41,10 @@ Workspace ဖိုင်များကို ကိုယ်တိုင် �
 
 ## Extra workspace folders
 
-အဟောင်းတင်ထားသော install များတွင် `~/openclaw` ကို ဖန်တီးထားနိုင်ပါသည်။ Workspace ဒိုင်ရက်ထရီ များစွာကို တပြိုင်နက် ထားရှိထားပါက အတည်ပြုခြင်း (auth) သို့မဟုတ် state drift အတွင်း မရှင်းလင်းမှုများ ဖြစ်စေနိုင်ပါသည်၊ အကြောင်းမှာ တစ်ချိန်တည်းတွင် workspace တစ်ခုသာ အလုပ်လုပ်နေသောကြောင့် ဖြစ်သည်။
+အဟောင်း install များတွင် `~/openclaw` ကို ဖန်တီးထားနိုင်ပါသည်။ Workspace directory များကို အများကြီးထားရှိခြင်းသည် confusing auth သို့မဟုတ် state drift ဖြစ်စေနိုင်ပါသည်၊ workspace တစ်ခုတည်းသာ တစ်ချိန်တည်းတွင် active ဖြစ်သောကြောင့် ဖြစ်ပါသည်။
 
-**အကြံပြုချက်:** အလုပ်လုပ်နေသော workspace တစ်ခုတည်းကိုသာ ထားရှိပါ။ အပိုဖိုလ်ဒါများကို မသုံးတော့ပါက archive လုပ်ပါ သို့မဟုတ် Trash သို့ ရွှေ့ပါ (ဥပမာ `trash ~/openclaw`)။
-Workspace များကို ရည်ရွယ်ချက်ရှိရှိ များစွာ ထားရှိထားပါက `agents.defaults.workspace` သည် လက်ရှိ အသုံးပြုနေသော workspace ကို ညွှန်ပြနေကြောင်း သေချာစေပါ။
+**အကြံပြုချက်:** active workspace တစ်ခုတည်းကို ထားရှိပါ။ မလိုအပ်တော့သော extra folder များရှိပါက archive လုပ်ပါ သို့မဟုတ် Trash သို့ ရွှေ့ပါ (ဥပမာ `trash ~/openclaw`)။
+Workspace များကို အကြံပြုချက်အရ ရည်ရွယ်ချက်ရှိရှိ အများကြီးထားထားပါက `agents.defaults.workspace` သည် active ဖြစ်သော တစ်ခုကို ညွှန်ပြနေကြောင်း သေချာပါစေ။
 
 `openclaw doctor` သည် အပို workspace ဒိုင်ရက်ထရီများကို တွေ့ရှိပါက သတိပေးပါမည်။
 
@@ -110,8 +103,8 @@ Workflow နှင့် အလိုအလျောက် memory flush အက�
 - `canvas/` (optional)
   - နိုဒ် ပြသမှုများအတွက် Canvas UI ဖိုင်များ (ဥပမာ `canvas/index.html`)။
 
-Bootstrap ဖိုင်တစ်ခုခု မရှိပါက OpenClaw သည် “missing file” marker ကို ဆက်ရှင်အတွင်း ထည့်သွင်းပြီး ဆက်လက် လည်ပတ်ပါမည်။ Bootstrap ဖိုင်ကြီးများကို ထည့်သွင်းရာတွင် truncate လုပ်ပါမည်။ ကန့်သတ်ချက်ကို `agents.defaults.bootstrapMaxChars` ဖြင့် ချိန်ညှိနိုင်ပါသည် (default: 20000)။
-`openclaw setup` သည် ရှိပြီးသား ဖိုင်များကို မအစားထိုးဘဲ ပျောက်နေသော default များကို ပြန်လည် ဖန်တီးနိုင်ပါသည်။
+Bootstrap ဖိုင်တစ်ခုခု ပျောက်နေပါက OpenClaw သည် session ထဲသို့ "missing file" marker ကို inject လုပ်ပြီး ဆက်လက်လုပ်ဆောင်ပါသည်။ ကြီးမားသော bootstrap ဖိုင်များကို inject လုပ်သောအခါ truncate လုပ်ပါသည်၊ `agents.defaults.bootstrapMaxChars` (default: 20000) ဖြင့် limit ကို ပြင်ဆင်နိုင်ပါသည်။
+`openclaw setup` သည် ရှိပြီးသား ဖိုင်များကို မဖျက်ဘဲ missing default များကို ပြန်လည်ဖန်တီးနိုင်ပါသည်။
 
 ## Workspace ထဲတွင် မပါဝင်သင့်သော အရာများ
 
@@ -126,13 +119,13 @@ Session များ သို့မဟုတ် config ကို ရွှေ�
 
 ## Git backup (အကြံပြုထားသော၊ ပုဂ္ဂိုလ်ရေး)
 
-Workspace ကို ပုဂ္ဂိုလ်ရေး မှတ်ဉာဏ်အဖြစ် ဆက်ဆံပါ။ **ပုဂ္ဂိုလ်ရေး** git repo တစ်ခုထဲသို့ ထည့်ထားခြင်းဖြင့် အရန်သိမ်းဆည်းထားနိုင်ပြီး ပြန်လည်ရယူနိုင်ပါသည်။
+Workspace ကို private memory အဖြစ် သဘောထားပါ။ **Private** git repo ထဲတွင် ထားပါ၊ ထိုသို့ထားလျှင် backup လုပ်ထားနိုင်ပြီး ပြန်လည်ရယူနိုင်ပါသည်။
 
 Gateway လည်ပတ်နေသော စက်ပေါ်တွင် အောက်ပါအဆင့်များကို လုပ်ဆောင်ပါ (workspace သည် ထိုနေရာတွင် တည်ရှိပါသည်)။
 
-### 1) Repo ကို စတင် initialize လုပ်ခြင်း
+### 1. Repo ကို စတင် initialize လုပ်ခြင်း
 
-Git ထည့်သွင်းထားပါက အသစ်ဖန်တီးသော workspace များကို အလိုအလျောက် initialize လုပ်ပေးပါသည်။ ဤ workspace သည် repo မဖြစ်သေးပါက အောက်ပါအမိန့်ကို လုပ်ဆောင်ပါ —
+Git ကို install လုပ်ထားပါက brand-new workspace များကို အလိုအလျောက် initialize လုပ်ပါသည်။ ဤ workspace သည် repo မဟုတ်သေးပါက အောက်ပါကို run လုပ်ပါ။
 
 ```bash
 cd ~/.openclaw/workspace
@@ -141,7 +134,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Private remote တစ်ခု ထည့်ခြင်း (အစပြုသူများအတွက် လွယ်ကူသော ရွေးချယ်မှုများ)
+### 2. Private remote တစ်ခု ထည့်ခြင်း (အစပြုသူများအတွက် လွယ်ကူသော ရွေးချယ်မှုများ)
 
 Option A: GitHub web UI
 
@@ -176,7 +169,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) ဆက်လက် အပ်ဒိတ်များ
+### 3. ဆက်လက် အပ်ဒိတ်များ
 
 ```bash
 git status
@@ -214,6 +207,5 @@ Private repo ဖြစ်သော်လည်း workspace ထဲတွင် �
 
 ## Advanced notes
 
-- Multi-agent routing တွင် အေးဂျင့်တစ်ခုချင်းစီအလိုက် workspace မတူညီစွာ အသုံးပြုနိုင်ပါသည်။ Routing configuration အတွက်
-  [Channel routing](/channels/channel-routing) ကို ကြည့်ပါ။
+- Multi-agent routing တွင် agent တစ်ခုချင်းစီအတွက် workspace မတူအောင် အသုံးပြုနိုင်ပါသည်။ Routing configuration အတွက် [Channel routing](/channels/channel-routing) ကို ကြည့်ပါ။
 - `agents.defaults.sandbox` ကို ဖွင့်ထားပါက main မဟုတ်သော ဆက်ရှင်များသည် `agents.defaults.sandbox.workspaceRoot` အောက်ရှိ per-session sandbox workspaces များကို အသုံးပြုနိုင်ပါသည်။

@@ -3,13 +3,6 @@ title: Sandbox vs Política de herramientas vs Elevado
 summary: "Por qué una herramienta está bloqueada: runtime del sandbox, política de permitir/denegar herramientas y compuertas de ejecución elevada"
 read_when: "Cuando aparece 'sandbox jail' o ve un rechazo de herramienta/elevado y quiere la clave de configuración exacta que debe cambiar."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:41Z
 ---
 
 # Sandbox vs Política de herramientas vs Elevado
@@ -31,7 +24,7 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Muestra:
+Imprime:
 
 - modo/alcance/acceso al workspace efectivos del sandbox
 - si la sesión está actualmente en sandbox (principal vs no principal)
@@ -58,7 +51,7 @@ Vea [Sandboxing](/gateway/sandboxing) para la matriz completa (alcance, montajes
 
 ## Política de herramientas: qué herramientas existen/son invocables
 
-Importan dos capas:
+Dos capas importan:
 
 - **Perfil de herramientas**: `tools.profile` y `agents.list[].tools.profile` (lista de permitidos base)
 - **Perfil de herramientas del proveedor**: `tools.byProvider[provider].profile` y `agents.list[].tools.byProvider[provider].profile`
@@ -112,7 +105,7 @@ Elevado **no** otorga herramientas adicionales; solo afecta a `exec`.
 - Elevado **no** está acotado por skill y **no** anula permitir/denegar de herramientas.
 - `/exec` es independiente de elevado. Solo ajusta los valores predeterminados de exec por sesión para remitentes autorizados.
 
-Compuertas:
+Puertas:
 
 - Habilitación: `tools.elevated.enabled` (y opcionalmente `agents.list[].tools.elevated.enabled`)
 - Listas de permitidos de remitentes: `tools.elevated.allowFrom.<provider>` (y opcionalmente `agents.list[].tools.elevated.allowFrom.<provider>`)

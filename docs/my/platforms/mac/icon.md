@@ -3,13 +3,6 @@ summary: "macOS ပေါ်ရှိ OpenClaw အတွက် မီနူး�
 read_when:
   - မီနူးဘား အိုင်ကွန် အပြုအမူကို ပြောင်းလဲနေချိန်
 title: "မီနူးဘား အိုင်ကွန်"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:45Z
 ---
 
 # မီနူးဘား အိုင်ကွန် အခြေအနေများ
@@ -18,13 +11,13 @@ x-i18n:
 
 - **Idle:** ပုံမှန် အိုင်ကွန် အန်နီမေးရှင်း (မျက်စိပိတ်ဖွင့်ခြင်း၊ အခါအားလျော်စွာ လှုပ်ခါခြင်း)။
 - **Paused:** Status item သည် `appearsDisabled` ကို အသုံးပြုသည်; လှုပ်ရှားမှု မရှိပါ။
-- **Voice trigger (big ears):** အသံနှိုးဆော်မှုကို တွေ့ရှိသည့်အခါ Voice wake detector က `AppState.triggerVoiceEars(ttl: nil)` ကို ခေါ်ပြီး၊ ပြောဆိုသံကို ဖမ်းယူနေစဉ်အတွင်း `earBoostActive=true` ကို ဆက်လက်ထားရှိသည်။ နားရွက်များကို အရွယ်အစား 1.9x အထိ ချဲ့ပြီး၊ ဖတ်ရှုရလွယ်ကူစေရန် နားရွက်အပေါက်များကို စက်ဝိုင်းပုံစံဖြစ်စေသည်။ ထို့နောက် တိတ်ဆိတ်မှု 1 စက္ကန့် ရှိပြီးပါက `stopVoiceEars()` မှတစ်ဆင့် နားရွက်များကို ပြန်ချသည်။ အက်ပ်အတွင်းရှိ အသံ pipeline မှသာ အလုပ်လုပ်သည်။
-- **Working (agent running):** `AppState.isWorking=true` က “tail/leg scurry” မိုက်ခရိုလှုပ်ရှားမှုကို မောင်းနှင်သည် — အလုပ်လုပ်နေစဉ် ခြေထောက် လှုပ်ခါမှု မြန်လာပြီး အနည်းငယ် တစ်ဘက်သို့ ရွေ့လျားမှု ပါဝင်သည်။ လက်ရှိတွင် WebChat agent လည်ပတ်မှုများအတွက်သာ အဖွင့်အပိတ် လုပ်ထားပြီး၊ အခြား ရေရှည် အလုပ်များကို ချိတ်ဆက်သည့်အခါလည်း အလားတူ အဖွင့်အပိတ် ထည့်သွင်းပါ။
+- 11. **Voice trigger (big ears):** Wake word ကို ကြားသည့်အခါ Voice wake detector သည် `AppState.triggerVoiceEars(ttl: nil)` ကို ခေါ်ပြီး utterance ကို ဖမ်းယူနေစဉ် `earBoostActive=true` ကို ထိန်းထားပါသည်။ 12. Ears များကို (1.9x) အရွယ်အစားတိုးကာ ဖတ်ရှုရလွယ်ရန် စက်ဝိုင်းပုံ ear holes ထည့်ပြီး၊ အသံမရှိသော 1s အပြီး `stopVoiceEars()` ဖြင့် ပြန်လည်ချပါသည်။ 13. In-app voice pipeline မှသာ trigger လုပ်ပါသည်။
+- 14. **Working (agent running):** `AppState.isWorking=true` သည် “tail/leg scurry” micro-motion ကို လှုံ့ဆော်ပြီး—အလုပ်လုပ်နေစဉ် ခြေထောက်လှုပ်ရှားမှု ပိုမြန်ပြီး အနည်းငယ် offset ဖြစ်ပါသည်။ 15. လက်ရှိ WebChat agent run အတွင်း toggle လုပ်ထားပြီး၊ အခြား long task များကို wire လုပ်သည့်အခါလည်း အလားတူ toggle ကို ထည့်ပါ။
 
 Wiring points
 
 - Voice wake: runtime/tester သည် trigger ဖြစ်သည့်အချိန် `AppState.triggerVoiceEars(ttl: nil)` ကို ခေါ်ပြီး၊ ဖမ်းယူချိန်ကာလနှင့် ကိုက်ညီစေရန် တိတ်ဆိတ်မှု 1 စက္ကန့် အပြီး `stopVoiceEars()` ကို ခေါ်ပါ။
-- Agent activity: အလုပ်လုပ်သည့် အပိုင်းအခြားများအတွင်း `AppStateStore.shared.setWorking(true/false)` ကို သတ်မှတ်ပါ (WebChat agent call တွင် ပြီးသား)။ အန်နီမေးရှင်း မကပ်နေစေရန် `defer` blocks များတွင် spans များကို တိုတောင်းစွာ ထားပြီး reset လုပ်ပါ။
+- 16. Agent activity: အလုပ်လုပ်နေသော span များအပေါ် `AppStateStore.shared.setWorking(true/false)` ကို သတ်မှတ်ပါ (WebChat agent call တွင် ပြီးသား)။ 17. Animation မပိတ်မိစေရန် spans များကို တိုတောင်းစွာထားပြီး `defer` blocks တွင် reset လုပ်ပါ။
 
 Shapes & sizes
 

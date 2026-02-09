@@ -1,15 +1,8 @@
 ---
-summary: « Capacités d’OpenClaw à travers les canaux, le routage, les médias et l’UX. »
+summary: "Capacités d’OpenClaw à travers les canaux, le routage, les médias et l’UX."
 read_when:
   - Vous voulez une liste complete de ce que prend en charge OpenClaw
-title: « Fonctionnalites »
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:07Z
+title: "Fonctionnalites"
 ---
 
 ## Highlights

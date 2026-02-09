@@ -4,19 +4,12 @@ read_when:
   - Du vill ha en enda API-nyckel för många LLM:er
   - Du behöver vägledning för konfiguration av Baidu Qianfan
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:11Z
 ---
 
 # Guide för Qianfan-leverantören
 
-Qianfan är Baidus MaaS-plattform och tillhandahåller ett **enhetligt API** som dirigerar förfrågningar till många modeller bakom en enda
-endpoint och API-nyckel. Den är OpenAI-kompatibel, så de flesta OpenAI-SDK:er fungerar genom att byta bas-URL.
+Qianfan är Baidus MaaS-plattform, tillhandahåller ett **enhetligt API** som rutter förfrågningar till många modeller bakom en enda
+slutpunkt och API-nyckel. Det är OpenAI-kompatibelt, så de flesta OpenAI SDKs fungerar genom att byta bas-URL.
 
 ## Förutsättningar
 

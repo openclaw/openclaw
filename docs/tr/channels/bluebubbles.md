@@ -5,13 +5,6 @@ read_when:
   - Webhook eşleştirme sorunlarını giderme
   - macOS üzerinde iMessage yapılandırma
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:16Z
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ Durum: BlueBubbles macOS sunucusuyla HTTP üzerinden konuşan paketlenmiş eklen
 ## Hızlı başlangıç
 
 1. Mac’inize BlueBubbles sunucusunu kurun ([bluebubbles.app/install](https://bluebubbles.app/install) üzerindeki talimatları izleyin).
+
 2. BlueBubbles yapılandırmasında web API’yi etkinleştirin ve bir parola belirleyin.
+
 3. `openclaw onboard` komutunu çalıştırın ve BlueBubbles’ı seçin ya da elle yapılandırın:
 
    ```json5
@@ -49,13 +44,14 @@ Durum: BlueBubbles macOS sunucusuyla HTTP üzerinden konuşan paketlenmiş eklen
    ```
 
 4. BlueBubbles webhook’larını gateway’inize yönlendirin (örnek: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Gateway’i başlatın; webhook işleyicisini kaydeder ve eşleştirmeyi başlatır.
 
 ## Messages.app’i canlı tutma (VM / başsız kurulumlar)
 
 Bazı macOS VM / sürekli açık kurulumlarda Messages.app “boşta” duruma geçebilir (uygulama açılana/öne getirilene kadar gelen olaylar durur). Basit bir geçici çözüm, **Messages’ı her 5 dakikada bir dürtmek** için AppleScript + LaunchAgent kullanmaktır.
 
-### 1) AppleScript’i kaydedin
+### 1. AppleScript’i kaydedin
 
 Şu adla kaydedin:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) Bir LaunchAgent kurun
+### 2. Bir LaunchAgent kurun
 
 Şu adla kaydedin:
 
@@ -188,7 +184,7 @@ Grup bazlı yapılandırma:
 }
 ```
 
-### Komut kapısı
+### Komut geçitleme
 
 - Kontrol komutları (örn. `/config`, `/model`) yetkilendirme gerektirir.
 - Komut yetkisini belirlemek için `allowFrom` ve `groupAllowFrom` kullanılır.
@@ -331,7 +327,7 @@ Kararlı yönlendirme için `chat_guid` tercih edin:
 
 - Webhook istekleri, `guid`/`password` sorgu parametreleri veya başlıklarının `channels.bluebubbles.password` ile karşılaştırılmasıyla doğrulanır. `localhost` kaynaklı istekler de kabul edilir.
 - API parolasını ve webhook uç noktasını gizli tutun (kimlik bilgisi gibi ele alın).
-- Localhost güveni, aynı ana makinedeki bir ters proxy’nin parolayı istemeden atlamasına yol açabilir. Gateway’i proxy’liyorsanız, proxy’de kimlik doğrulama zorunlu kılın ve `gateway.trustedProxies` yapılandırın. Bkz. [Gateway security](/gateway/security#reverse-proxy-configuration).
+- Localhost güveni, aynı ana makinedeki bir ters proxy’nin parolayı istemeden atlamasına yol açabilir. Gateway’i proxy’liyorsanız, proxy’de kimlik doğrulama zorunlu kılın ve `gateway.trustedProxies` yapılandırın. [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Sunucuyu LAN dışına açıyorsanız BlueBubbles sunucusunda HTTPS + güvenlik duvarı kurallarını etkinleştirin.
 
 ## Sorun Giderme

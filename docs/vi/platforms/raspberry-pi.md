@@ -5,13 +5,6 @@ read_when:
   - Chạy OpenClaw trên thiết bị ARM
   - Xây dựng AI cá nhân luôn bật với chi phí thấp
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:56Z
 ---
 
 # OpenClaw trên Raspberry Pi
@@ -28,13 +21,13 @@ Phù hợp cho:
 
 ## Yêu cầu phần cứng
 
-| Mẫu Pi          | RAM     | Hoạt động?  | Ghi chú                            |
-| --------------- | ------- | ----------- | ---------------------------------- |
+| Mẫu Pi          | RAM     | Hoạt động? | Ghi chú                            |
+| --------------- | ------- | ---------- | ---------------------------------- |
 | **Pi 5**        | 4GB/8GB | ✅ Tốt nhất | Nhanh nhất, khuyến nghị            |
 | **Pi 4**        | 4GB     | ✅ Tốt      | Điểm cân bằng cho đa số người dùng |
 | **Pi 4**        | 2GB     | ✅ Ổn       | Hoạt động, nên thêm swap           |
-| **Pi 4**        | 1GB     | ⚠️ Chật     | Có thể với swap, cấu hình tối giản |
-| **Pi 3B+**      | 1GB     | ⚠️ Chậm     | Chạy được nhưng ì ạch              |
+| **Pi 4**        | 1GB     | ⚠️ Chật    | Có thể với swap, cấu hình tối giản |
+| **Pi 3B+**      | 1GB     | ⚠️ Chậm    | Chạy được nhưng ì ạch              |
 | **Pi Zero 2 W** | 512MB   | ❌          | Không khuyến nghị                  |
 
 **Cấu hình tối thiểu:** 1GB RAM, 1 lõi, 500MB dung lượng  
@@ -48,7 +41,7 @@ Phù hợp cho:
 - Kết nối mạng (Ethernet hoặc WiFi)
 - ~30 phút
 
-## 1) Ghi hệ điều hành
+## 1. Ghi hệ điều hành
 
 Sử dụng **Raspberry Pi OS Lite (64-bit)** — không cần giao diện desktop cho máy chủ headless.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) Thiết lập hệ thống
+## 3. Thiết lập hệ thống
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Cài Node.js 22 (ARM64)
+## 4. Cài Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Thêm Swap (Quan trọng cho 2GB trở xuống)
+## 5. Thêm Swap (Quan trọng cho 2GB trở xuống)
 
 Swap giúp tránh lỗi hết bộ nhớ:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Cài đặt OpenClaw
+## 6. Cài đặt OpenClaw
 
 ### Tùy chọn A: Cài đặt tiêu chuẩn (Khuyến nghị)
 
@@ -134,7 +127,7 @@ npm link
 
 Cài đặt hackable cho bạn quyền truy cập trực tiếp vào log và mã nguồn — hữu ích khi gỡ lỗi các vấn đề đặc thù ARM.
 
-## 7) Chạy Hướng dẫn ban đầu
+## 7. Chạy Hướng dẫn ban đầu
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Truy cập Dashboard
+## 9. Truy cập Dashboard
 
 Vì Pi là headless, hãy dùng đường hầm SSH:
 
@@ -190,7 +183,7 @@ sudo systemctl restart openclaw
 
 ### Dùng USB SSD (Cải thiện rất lớn)
 
-Thẻ SD chậm và nhanh hao mòn. USB SSD cải thiện hiệu năng đáng kể:
+SD cards are slow and wear out. A USB SSD dramatically improves performance:
 
 ```bash
 # Check if booting from USB
@@ -230,19 +223,19 @@ htop
 
 Hầu hết tính năng OpenClaw hoạt động trên ARM64, nhưng một số nhị phân bên ngoài có thể cần bản build cho ARM:
 
-| Công cụ            | Trạng thái ARM64 | Ghi chú                             |
-| ------------------ | ---------------- | ----------------------------------- |
-| Node.js            | ✅               | Hoạt động rất tốt                   |
-| WhatsApp (Baileys) | ✅               | JS thuần, không vấn đề              |
-| Telegram           | ✅               | JS thuần, không vấn đề              |
+| Công cụ                               | Trạng thái ARM64 | Ghi chú                             |
+| ------------------------------------- | ---------------- | ----------------------------------- |
+| Node.js               | ✅                | Hoạt động rất tốt                   |
+| WhatsApp (Baileys) | ✅                | JS thuần, không vấn đề              |
+| Telegram                              | ✅                | JS thuần, không vấn đề              |
 | gog (Gmail CLI)    | ⚠️               | Kiểm tra bản phát hành cho ARM      |
-| Chromium (browser) | ✅               | `sudo apt install chromium-browser` |
+| Chromium (browser) | ✅                | `sudo apt install chromium-browser` |
 
-Nếu một skill bị lỗi, hãy kiểm tra xem nhị phân của nó có bản build ARM không. Nhiều công cụ Go/Rust có; một số thì không.
+If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
 
 ### 32-bit vs 64-bit
 
-**Luôn dùng OS 64-bit.** Node.js và nhiều công cụ hiện đại yêu cầu điều này. Kiểm tra bằng:
+**Always use 64-bit OS.** Node.js and many modern tools require it. Check with:
 
 ```bash
 uname -m
@@ -268,7 +261,7 @@ Vì Pi chỉ đóng vai trò Gateway (mô hình chạy trên cloud), hãy dùng 
 }
 ```
 
-**Đừng cố chạy LLM cục bộ trên Pi** — ngay cả mô hình nhỏ cũng quá chậm. Hãy để Claude/GPT xử lý phần nặng.
+**Don't try to run local LLMs on a Pi** — even small models are too slow. Let Claude/GPT do the heavy lifting.
 
 ---
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## So sánh chi phí
 
-| Thiết lập      | Chi phí một lần | Chi phí hàng tháng | Ghi chú               |
-| -------------- | --------------- | ------------------ | --------------------- |
-| **Pi 4 (2GB)** | ~$45            | $0                 | + điện (~$5/năm)      |
-| **Pi 4 (4GB)** | ~$55            | $0                 | Khuyến nghị           |
-| **Pi 5 (4GB)** | ~$60            | $0                 | Hiệu năng tốt nhất    |
-| **Pi 5 (8GB)** | ~$80            | $0                 | Dư thừa nhưng bền lâu |
-| DigitalOcean   | $0              | $6/tháng           | $72/năm               |
-| Hetzner        | $0              | €3.79/tháng        | ~$50/năm              |
+| Thiết lập                         | Chi phí một lần      | Chi phí hàng tháng          | Ghi chú                                             |
+| --------------------------------- | -------------------- | --------------------------- | --------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                          | + điện (~$5/năm) |
+| **Pi 4 (4GB)** | ~$55 | $0                          | Khuyến nghị                                         |
+| **Pi 5 (4GB)** | ~$60 | $0                          | Hiệu năng tốt nhất                                  |
+| **Pi 5 (8GB)** | ~$80 | $0                          | Dư thừa nhưng bền lâu                               |
+| DigitalOcean                      | $0                   | $6/tháng                    | $72/năm                                             |
+| Hetzner                           | $0                   | €3.79/tháng | ~$50/năm                            |
 
 **Điểm hòa vốn:** Một Pi tự hoàn vốn sau ~6-12 tháng so với VPS cloud.
 

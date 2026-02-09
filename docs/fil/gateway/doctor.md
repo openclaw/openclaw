@@ -4,18 +4,12 @@ read_when:
   - Pagdaragdag o pagbabago ng mga doctor migration
   - Pagpapakilala ng mga breaking na pagbabago sa config
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:58Z
 ---
 
 # Doctor
 
-`openclaw doctor` ang repair + migration tool para sa OpenClaw. Inaayos nito ang mga lumang config/state, nagsasagawa ng health check, at nagbibigay ng mga konkretong hakbang sa pag-aayos.
+`openclaw doctor` is the repair + migration tool for OpenClaw. It fixes stale
+config/state, checks health, and provides actionable repair steps.
 
 ## Mabilis na pagsisimula
 
@@ -47,8 +41,8 @@ Ilapat din ang mga agresibong repair (ino-overwrite ang mga custom supervisor co
 openclaw doctor --non-interactive
 ```
 
-Patakbuhin nang walang mga prompt at ilapat lamang ang mga ligtas na migration (config normalization + paglipat ng state sa disk). Nilalaktawan ang mga aksyon sa restart/service/sandbox na nangangailangan ng kumpirmasyon ng tao.
-Awtomatikong tumatakbo ang mga legacy state migration kapag na-detect.
+Patakbuhin nang walang mga prompt at ilapat lamang ang mga ligtas na migration (config normalization + paglipat ng on-disk state). Skips restart/service/sandbox actions that require human confirmation.
+Legacy state migrations run automatically when detected.
 
 ```bash
 openclaw doctor --deep
@@ -90,18 +84,18 @@ cat ~/.openclaw/openclaw.json
 
 ## Detalyadong gawi at paliwanag
 
-### 0) Opsyonal na update (git installs)
+### 0. Opsyonal na update (git installs)
 
 Kung ito ay isang git checkout at interactive na tumatakbo ang doctor, nag-aalok itong
 mag-update (fetch/rebase/build) bago patakbuhin ang doctor.
 
-### 1) Config normalization
+### 1. Config normalization
 
 Kung ang config ay may mga legacy na hugis ng value (halimbawa `messages.ackReaction`
 na walang channel-specific override), nini-normalize ng doctor ang mga ito sa kasalukuyang
 schema.
 
-### 2) Legacy config key migrations
+### 2. Legacy config key migrations
 
 Kapag ang config ay may mga deprecated na key, tumatanggi ang ibang command na tumakbo at hinihiling
 na patakbuhin mo ang `openclaw doctor`.
@@ -135,12 +129,12 @@ Mga kasalukuyang migration:
 
 ### 2b) OpenCode Zen provider overrides
 
-Kung manu-mano kang nagdagdag ng `models.providers.opencode` (o `opencode-zen`), ino-override nito
-ang built-in OpenCode Zen catalog mula sa `@mariozechner/pi-ai`. Maaari nitong pilitin
-ang bawat model na gumamit ng iisang API o gawing zero ang mga gastos. Nagbababala ang Doctor
-para maalis mo ang override at maibalik ang per-model API routing + gastos.
+If you’ve added `models.providers.opencode` (or `opencode-zen`) manually, it
+overrides the built-in OpenCode Zen catalog from `@mariozechner/pi-ai`. That can
+force every model onto a single API or zero out costs. Doctor warns so you can
+remove the override and restore per-model API routing + costs.
 
-### 3) Legacy state migrations (disk layout)
+### 3. Legacy state migrations (disk layout)
 
 Kayang i-migrate ng Doctor ang mas lumang on-disk layout papunta sa kasalukuyang istruktura:
 
@@ -152,16 +146,16 @@ Kayang i-migrate ng Doctor ang mas lumang on-disk layout papunta sa kasalukuyang
   - mula sa legacy `~/.openclaw/credentials/*.json` (maliban sa `oauth.json`)
   - patungo `~/.openclaw/credentials/whatsapp/<accountId>/...` (default account id: `default`)
 
-Ang mga migration na ito ay best-effort at idempotent; maglalabas ng mga babala ang doctor kapag
-may iniwang legacy folder bilang backup. Ang Gateway/CLI ay awtomatikong nagmi-migrate din
-ng legacy sessions + agent dir sa startup para mapunta ang history/auth/models sa per-agent path
-nang hindi na kailangan ng manu-manong doctor run. Ang WhatsApp auth ay sadyang
-mina-migrate lamang sa pamamagitan ng `openclaw doctor`.
+These migrations are best-effort and idempotent; doctor will emit warnings when
+it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates
+the legacy sessions + agent dir on startup so history/auth/models land in the
+per-agent path without a manual doctor run. WhatsApp auth is intentionally only
+migrated via `openclaw doctor`.
 
-### 4) Mga check sa integridad ng state (session persistence, routing, at kaligtasan)
+### 4. Mga check sa integridad ng state (session persistence, routing, at kaligtasan)
 
-Ang state directory ang operasyonal na utak. Kapag nawala ito, mawawala ang mga
-session, credential, log, at config (maliban kung may backup ka sa ibang lugar).
+The state directory is the operational brainstem. If it vanishes, you lose
+sessions, credentials, logs, and config (unless you have backups elsewhere).
 
 Sinusuri ng Doctor ang:
 
@@ -183,74 +177,71 @@ Sinusuri ng Doctor ang:
 - **Mga permiso ng config file**: nagbababala kung ang `~/.openclaw/openclaw.json` ay
   nababasa ng group/world at nag-aalok na higpitan sa `600`.
 
-### 5) Model auth health (OAuth expiry)
+### 5. Model auth health (OAuth expiry)
 
-Sinusuri ng Doctor ang mga OAuth profile sa auth store, nagbababala kapag ang mga token ay
-papalapit nang mag-expire o expired na, at maaaring i-refresh ang mga ito kapag ligtas.
-Kung ang Anthropic Claude Code profile ay luma na, iminumungkahi nitong patakbuhin ang
-`claude setup-token` (o mag-paste ng setup-token). Lumalabas lamang ang mga prompt sa refresh
-kapag interactive (TTY) ang takbo; nilalaktawan ng `--non-interactive` ang mga pagtatangkang mag-refresh.
+Doctor inspects OAuth profiles in the auth store, warns when tokens are
+expiring/expired, and can refresh them when safe. Kung lipas na ang Anthropic Claude Code profile, iminumungkahi nitong patakbuhin ang `claude setup-token` (o mag-paste ng setup-token).
+Refresh prompts only appear when running interactively (TTY); `--non-interactive`
+skips refresh attempts.
 
 Nag-uulat din ang Doctor ng mga auth profile na pansamantalang hindi magagamit dahil sa:
 
 - maiikling cooldown (rate limit/timeout/auth failure)
 - mas mahahabang disable (billing/credit failure)
 
-### 6) Hooks model validation
+### 6. Hooks model validation
 
 Kung naka-set ang `hooks.gmail.model`, bina-validate ng doctor ang model reference laban sa
 catalog at allowlist at nagbababala kapag hindi ito mare-resolve o hindi pinapayagan.
 
-### 7) Pag-aayos ng sandbox image
+### 7. Pag-aayos ng sandbox image
 
 Kapag naka-enable ang sandboxing, sine-check ng doctor ang mga Docker image at nag-aalok na
 mag-build o lumipat sa mga legacy na pangalan kung nawawala ang kasalukuyang image.
 
-### 8) Mga migration ng Gateway service at mga pahiwatig sa cleanup
+### 8. Mga migration ng Gateway service at mga pahiwatig sa cleanup
 
-Tinutukoy ng Doctor ang mga legacy gateway service (launchd/systemd/schtasks) at
-nag-aalok na alisin ang mga ito at i-install ang OpenClaw service gamit ang kasalukuyang gateway
-port. Maaari rin nitong i-scan ang mga karagdagang gateway-like service at mag-print ng mga
-pahiwatig sa cleanup. Ang mga profile-named OpenClaw gateway service ay itinuturing na first-class
-at hindi tina-flag bilang “extra.”
+Doctor detects legacy gateway services (launchd/systemd/schtasks) and
+offers to remove them and install the OpenClaw service using the current gateway
+port. It can also scan for extra gateway-like services and print cleanup hints.
+Profile-named OpenClaw gateway services are considered first-class and are not
+flagged as "extra."
 
-### 9) Mga babala sa seguridad
+### 9. Mga babala sa seguridad
 
 Naglalabas ang Doctor ng mga babala kapag ang isang provider ay bukas sa DM nang walang allowlist,
 o kapag ang isang policy ay naka-configure sa mapanganib na paraan.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 Kung tumatakbo bilang systemd user service, tinitiyak ng doctor na naka-enable ang lingering
 para manatiling buhay ang gateway kahit mag-logout.
 
-### 11) Status ng Skills
+### 11. Status ng Skills
 
 Nagpi-print ang Doctor ng mabilis na buod ng eligible/missing/blocked na Skills para sa kasalukuyang
 workspace.
 
-### 12) Mga check sa Gateway auth (local token)
+### 12. Mga check sa Gateway auth (local token)
 
-Nagbababala ang Doctor kapag nawawala ang `gateway.auth` sa isang lokal na gateway at nag-aalok na
-bumuo ng token. Gamitin ang `openclaw doctor --generate-gateway-token` para pilitin ang paglikha ng token
-sa automation.
+Doctor warns when `gateway.auth` is missing on a local gateway and offers to
+generate a token. Gamitin ang `openclaw doctor --generate-gateway-token` upang pilitin ang paglikha ng token sa automation.
 
-### 13) Health check ng Gateway + restart
+### 13. Health check ng Gateway + restart
 
 Nagpapatakbo ang Doctor ng health check at nag-aalok na i-restart ang gateway kapag
 tila hindi malusog.
 
-### 14) Mga babala sa status ng channel
+### 14. Mga babala sa status ng channel
 
 Kung malusog ang gateway, nagpapatakbo ang doctor ng channel status probe at nag-uulat
 ng mga babala na may mga iminungkahing ayos.
 
-### 15) Supervisor config audit + repair
+### 15. Supervisor config audit + repair
 
-Sinusuri ng Doctor ang naka-install na supervisor config (launchd/systemd/schtasks) para sa
-mga nawawala o luma nang default (hal., systemd network-online dependency at
-restart delay). Kapag may natagpuang mismatch, nagrerekomenda ito ng update at maaaring
-isulat muli ang service file/task ayon sa kasalukuyang default.
+Doctor checks the installed supervisor config (launchd/systemd/schtasks) for
+missing or outdated defaults (e.g., systemd network-online dependencies and
+restart delay). Kapag may nakitang mismatch, nagrerekomenda ito ng update at maaaring muling isulat ang service file/task sa kasalukuyang mga default.
 
 Mga tala:
 
@@ -260,27 +251,26 @@ Mga tala:
 - `openclaw doctor --repair --force` ino-overwrite ang mga custom supervisor config.
 - Maaari mong laging pilitin ang full rewrite gamit ang `openclaw gateway install --force`.
 
-### 16) Gateway runtime + port diagnostics
+### 16. Gateway runtime + port diagnostics
 
-Sinusuri ng Doctor ang runtime ng service (PID, huling exit status) at nagbababala kapag ang
-service ay naka-install ngunit hindi talaga tumatakbo. Sine-check din nito ang mga port collision
-sa gateway port (default `18789`) at nag-uulat ng mga posibleng sanhi (may tumatakbong
-gateway na, SSH tunnel).
+Sinusuri ng Doctor ang service runtime (PID, huling exit status) at nagbababala kapag naka-install ang service ngunit hindi talaga tumatakbo. It also checks for port collisions
+on the gateway port (default `18789`) and reports likely causes (gateway already
+running, SSH tunnel).
 
-### 17) Mga best practice sa Gateway runtime
+### 17. Mga best practice sa Gateway runtime
 
-Nagbababala ang Doctor kapag ang Gateway service ay tumatakbo sa Bun o sa path ng Node na pinamamahalaan
-ng version manager (`nvm`, `fnm`, `volta`, `asdf`, atbp.). Ang mga channel ng WhatsApp + Telegram ay nangangailangan ng Node,
-at ang mga path ng version manager ay maaaring masira pagkatapos ng upgrade dahil hindi
-nilo-load ng service ang iyong shell init. Nag-aalok ang Doctor na mag-migrate sa system Node
-install kapag available (Homebrew/apt/choco).
+Doctor warns when the gateway service runs on Bun or a version-managed Node path
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node,
+and version-manager paths can break after upgrades because the service does not
+load your shell init. Doctor offers to migrate to a system Node install when
+available (Homebrew/apt/choco).
 
-### 18) Pagsusulat ng config + wizard metadata
+### 18. Pagsusulat ng config + wizard metadata
 
 Ipinapersist ng Doctor ang anumang pagbabago sa config at tinatatakan ng wizard metadata
 para itala ang doctor run.
 
-### 19) Mga tip sa workspace (backup + memory system)
+### 19. Mga tip sa workspace (backup + memory system)
 
 Iminumungkahi ng Doctor ang isang workspace memory system kapag wala at nagpi-print ng tip sa backup
 kung ang workspace ay wala pa sa git.

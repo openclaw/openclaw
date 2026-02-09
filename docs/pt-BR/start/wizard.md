@@ -5,13 +5,6 @@ read_when:
   - Ao configurar uma nova máquina
 title: "Assistente de Integração Inicial (CLI)"
 sidebarTitle: "Integração inicial: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:02Z
 ---
 
 # Assistente de Integração Inicial (CLI)
@@ -52,7 +45,7 @@ que armazena `tools.web.search.apiKey`. Documentação: [Web tools](/tools/web).
 O assistente começa com **Início Rápido** (padrões) vs **Avançado** (controle total).
 
 <Tabs>
-  <Tab title="Início Rápido (padrões)">
+  <Tab title="QuickStart (defaults)">
     - gateway local (loopback)
     - Workspace padrão (ou workspace existente)
     - Porta do Gateway **18789**
@@ -60,7 +53,7 @@ O assistente começa com **Início Rápido** (padrões) vs **Avançado** (contro
     - Exposição via Tailscale **Desligada**
     - DMs do Telegram + WhatsApp com **lista de permissões** por padrão (você será solicitado a informar seu número de telefone)
   </Tab>
-  <Tab title="Avançado (controle total)">
+  <Tab title="Advanced (full control)">
     - Expõe todas as etapas (modo, workspace, gateway, canais, daemon, skills).
   </Tab>
 </Tabs>

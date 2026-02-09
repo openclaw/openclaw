@@ -6,114 +6,107 @@ read_when:
   - وزارڈ کے رویّے کی خرابیوں کا ازالہ کرتے وقت
 title: "آن بورڈنگ وزارڈ حوالہ"
 sidebarTitle: "وزارڈ حوالہ"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # آن بورڈنگ وزارڈ حوالہ
 
-یہ `openclaw onboard` CLI وزارڈ کا مکمل حوالہ ہے۔
-اعلٰی سطحی جائزے کے لیے، دیکھیں [Onboarding Wizard](/start/wizard)۔
+47. یہ `openclaw onboard` CLI ویزرڈ کے لیے مکمل حوالہ ہے۔
+48. اعلیٰ سطحی جائزے کے لیے، دیکھیں [Onboarding Wizard](/start/wizard)۔
 
 ## فلو کی تفصیلات (لوکل موڈ)
 
 <Steps>
-  <Step title="موجودہ کنفیگ کی شناخت">
-    - اگر `~/.openclaw/openclaw.json` موجود ہو، تو **Keep / Modify / Reset** میں سے انتخاب کریں۔
-    - وزارڈ کو دوبارہ چلانے سے کچھ بھی **ختم نہیں** ہوتا جب تک آپ واضح طور پر **Reset** منتخب نہ کریں
+  <Step title="Existing config detection">
+    49. - اگر `~/.openclaw/openclaw.json` موجود ہو تو **Keep / Modify / Reset** منتخب کریں۔
+    50. - ویزرڈ کو دوبارہ چلانے سے کچھ بھی **صاف نہیں ہوتا** جب تک کہ آپ واضح طور پر **Reset** منتخب نہ کریں
       (یا `--reset` پاس نہ کریں)۔
-    - اگر کنفیگ غیر معتبر ہو یا اس میں پرانی keys شامل ہوں، تو وزارڈ رک جاتا ہے اور
-      آپ سے کہتا ہے کہ آگے بڑھنے سے پہلے `openclaw doctor` چلائیں۔
-    - Reset میں `trash` استعمال ہوتا ہے (کبھی `rm` نہیں) اور اسکوپس پیش کیے جاتے ہیں:
+    - اگر کنفیگ غلط ہو یا اس میں لیگیسی کیز شامل ہوں تو وزارڈ رک جاتا ہے اور آپ سے کہتا ہے کہ آگے بڑھنے سے پہلے `openclaw doctor` چلائیں۔
+    - ری سیٹ میں `trash` استعمال ہوتا ہے (`rm` کبھی نہیں) اور اسکوپس فراہم کیے جاتے ہیں:
       - صرف کنفیگ
       - کنفیگ + اسناد + سیشنز
-      - مکمل ری سیٹ (ورک اسپیس بھی حذف کرتا ہے)
-  </Step>
-  <Step title="ماڈل/تصدیق">
-    - **Anthropic API key (سفارش کردہ)**: اگر `ANTHROPIC_API_KEY` موجود ہو تو اسے استعمال کرتا ہے یا کلید کے لیے پوچھتا ہے، پھر اسے daemon کے استعمال کے لیے محفوظ کرتا ہے۔
-    - **Anthropic OAuth (Claude Code CLI)**: macOS پر وزارڈ Keychain آئٹم "Claude Code-credentials" چیک کرتا ہے ( "Always Allow" منتخب کریں تاکہ launchd اسٹارٹس بلاک نہ ہوں)؛ Linux/Windows پر اگر `~/.claude/.credentials.json` موجود ہو تو اسی کو دوبارہ استعمال کرتا ہے۔
-    - **Anthropic token (setup-token پیسٹ کریں)**: کسی بھی مشین پر `claude setup-token` چلائیں، پھر ٹوکن پیسٹ کریں (آپ نام دے سکتے ہیں؛ خالی = default)۔
+      - مکمل ری سیٹ (ورک اسپیس بھی ہٹا دی جاتی ہے)  
+</Step>
+  <Step title="Model/Auth">
+    - **Anthropic API key (تجویز کردہ)**: اگر موجود ہو تو `ANTHROPIC_API_KEY` استعمال کرتا ہے یا کلید مانگتا ہے، پھر اسے ڈیمون کے استعمال کے لیے محفوظ کر لیتا ہے۔
+    - **Anthropic OAuth (Claude Code CLI)**: macOS پر وزارڈ Keychain آئٹم "Claude Code-credentials" چیک کرتا ہے ("Always Allow" منتخب کریں تاکہ launchd اسٹارٹس بلاک نہ ہوں)؛ Linux/Windows پر اگر موجود ہو تو `~/.claude/.credentials.json` دوبارہ استعمال کرتا ہے۔
+    - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
     - **OpenAI Code (Codex) سبسکرپشن (Codex CLI)**: اگر `~/.codex/auth.json` موجود ہو تو وزارڈ اسے دوبارہ استعمال کر سکتا ہے۔
-    - **OpenAI Code (Codex) سبسکرپشن (OAuth)**: براؤزر فلو؛ `code#state` پیسٹ کریں۔
+    - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
       - جب ماڈل سیٹ نہ ہو یا `openai/*` ہو تو `agents.defaults.model` کو `openai-codex/gpt-5.2` پر سیٹ کرتا ہے۔
-    - **OpenAI API key**: اگر `OPENAI_API_KEY` موجود ہو تو استعمال کرتا ہے یا کلید کے لیے پوچھتا ہے، پھر اسے `~/.openclaw/.env` میں محفوظ کرتا ہے تاکہ launchd اسے پڑھ سکے۔
-    - **xAI (Grok) API key**: `XAI_API_KEY` کے لیے پوچھتا ہے اور xAI کو بطور ماڈل فراہم کنندہ کنفیگر کرتا ہے۔
-    - **OpenCode Zen (ملٹی-ماڈل پراکسی)**: `OPENCODE_API_KEY` (یا `OPENCODE_ZEN_API_KEY`، اسے https://opencode.ai/auth پر حاصل کریں) کے لیے پوچھتا ہے۔
-    - **API key**: کلید آپ کے لیے محفوظ کرتا ہے۔
-    - **Vercel AI Gateway (ملٹی-ماڈل پراکسی)**: `AI_GATEWAY_API_KEY` کے لیے پوچھتا ہے۔
+    - **OpenAI API key**: اگر موجود ہو تو `OPENAI_API_KEY` استعمال کرتا ہے یا کلید مانگتا ہے، پھر اسے `~/.openclaw/.env` میں محفوظ کرتا ہے تاکہ launchd اسے پڑھ سکے۔
+    - **xAI (Grok) API key**: `XAI_API_KEY` کے لیے پرامپٹ کرتا ہے اور xAI کو ماڈل فراہم کنندہ کے طور پر کنفیگر کرتا ہے۔
+    - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
+    - **API key**: آپ کے لیے کلید محفوظ کرتا ہے۔
+    - **Vercel AI Gateway (ملٹی-ماڈل پراکسی)**: `AI_GATEWAY_API_KEY` کے لیے پرامپٹ کرتا ہے۔
     - مزید تفصیل: [Vercel AI Gateway](/providers/vercel-ai-gateway)
-    - **Cloudflare AI Gateway**: Account ID، Gateway ID، اور `CLOUDFLARE_AI_GATEWAY_API_KEY` کے لیے پوچھتا ہے۔
+    - **Cloudflare AI Gateway**: اکاؤنٹ ID، گیٹ وے ID، اور `CLOUDFLARE_AI_GATEWAY_API_KEY` کے لیے پرامپٹ کرتا ہے۔
     - مزید تفصیل: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
     - **MiniMax M2.1**: کنفیگ خودکار طور پر لکھی جاتی ہے۔
     - مزید تفصیل: [MiniMax](/providers/minimax)
-    - **Synthetic (Anthropic-compatible)**: `SYNTHETIC_API_KEY` کے لیے پوچھتا ہے۔
+    - **Synthetic (Anthropic-compatible)**: `SYNTHETIC_API_KEY` کے لیے پرامپٹ کرتا ہے۔
     - مزید تفصیل: [Synthetic](/providers/synthetic)
     - **Moonshot (Kimi K2)**: کنفیگ خودکار طور پر لکھی جاتی ہے۔
     - **Kimi Coding**: کنفیگ خودکار طور پر لکھی جاتی ہے۔
     - مزید تفصیل: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-    - **Skip**: ابھی کوئی تصدیق کنفیگر نہیں کی جاتی۔
-    - معلوم شدہ اختیارات میں سے ایک ڈیفالٹ ماڈل منتخب کریں (یا فراہم کنندہ/ماڈل دستی طور پر درج کریں)۔
-    - وزارڈ ماڈل چیک چلاتا ہے اور اگر کنفیگر کیا گیا ماڈل نامعلوم ہو یا تصدیق غائب ہو تو وارننگ دیتا ہے۔
-    - OAuth اسناد `~/.openclaw/credentials/oauth.json` میں رہتی ہیں؛ auth پروفائلز `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` میں (API keys + OAuth)۔
-    - مزید تفصیل: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - **Skip**: ابھی کوئی آتھنٹیکیشن کنفیگر نہیں کی جاتی۔
+    - دریافت شدہ آپشنز میں سے ڈیفالٹ ماڈل منتخب کریں (یا فراہم کنندہ/ماڈل دستی طور پر درج کریں)۔
+    - وزارڈ ماڈل چیک چلاتا ہے اور اگر کنفیگر کیا گیا ماڈل نامعلوم ہو یا آتھنٹیکیشن غائب ہو تو وارن کرتا ہے۔
+    - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
+    - مزید تفصیل: [/concepts/oauth](/concepts/oauth)    
+<Note>
     ہیڈلیس/سرور مشورہ: براؤزر والی مشین پر OAuth مکمل کریں، پھر
     `~/.openclaw/credentials/oauth.json` (یا `$OPENCLAW_STATE_DIR/credentials/oauth.json`) کو
     گیٹ وے ہوسٹ پر کاپی کریں۔
     </Note>
   </Step>
-  <Step title="ورک اسپیس">
-    - ڈیفالٹ `~/.openclaw/workspace` (قابلِ کنفیگریشن)۔
-    - ایجنٹ bootstrap رسم کے لیے درکار ورک اسپیس فائلز سیڈ کرتا ہے۔
-    - مکمل ورک اسپیس لے آؤٹ + بیک اپ گائیڈ: [Agent workspace](/concepts/agent-workspace)
-  </Step>
+  <Step title="Workspace">
+    - ڈیفالٹ `~/.openclaw/workspace` (کنفیگریبل)۔
+    - Seeds the workspace files needed for the agent bootstrap ritual.
+    - مکمل ورک اسپیس لے آؤٹ + بیک اپ گائیڈ: [Agent workspace](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
-    - پورٹ، bind، auth موڈ، tailscale ایکسپوژر۔
-    - auth کی سفارش: loopback کے لیے بھی **Token** برقرار رکھیں تاکہ لوکل WS کلائنٹس کو تصدیق کرنا پڑے۔
-    - auth صرف اسی صورت غیر فعال کریں جب آپ ہر لوکل پروسیس پر مکمل اعتماد رکھتے ہوں۔
-    - نان‑loopback binds میں پھر بھی auth درکار ہے۔
+    - پورٹ، بائنڈ، آتھ موڈ، ٹیل اسکیل ایکسپوژر۔
+    - آتھ کی سفارش: لوپ بیک کے لیے بھی **Token** برقرار رکھیں تاکہ لوکل WS کلائنٹس کو آتھنٹیکیٹ کرنا پڑے۔
+    - آتھ صرف اسی صورت میں غیر فعال کریں جب آپ ہر لوکل پروسیس پر مکمل بھروسہ رکھتے ہوں۔
+    - نان-لوپ بیک بائنڈز کے لیے بھی آتھ درکار ہے۔
   </Step>
-  <Step title="چینلز">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): اختیاری QR لاگ اِن۔
     - [Telegram](/channels/telegram): بوٹ ٹوکن۔
     - [Discord](/channels/discord): بوٹ ٹوکن۔
-    - [Google Chat](/channels/googlechat): سروس اکاؤنٹ JSON + ویب ہوک آڈینس۔
+    - [Google Chat](/channels/googlechat): سروس اکاؤنٹ JSON + ویب ہوک آڈیئنس۔
     - [Mattermost](/channels/mattermost) (پلگ اِن): بوٹ ٹوکن + بیس URL۔
     - [Signal](/channels/signal): اختیاری `signal-cli` انسٹال + اکاؤنٹ کنفیگ۔
-    - [BlueBubbles](/channels/bluebubbles): **iMessage کے لیے سفارش کردہ**؛ سرور URL + پاس ورڈ + ویب ہوک۔
-    - [iMessage](/channels/imessage): پرانا `imsg` CLI راستہ + DB رسائی۔
-    - DM سکیورٹی: ڈیفالٹ pairing ہے۔ پہلی DM ایک کوڈ بھیجتی ہے؛ `openclaw pairing approve <channel> <code>` کے ذریعے منظوری دیں یا allowlists استعمال کریں۔
+    - [BlueBubbles](/channels/bluebubbles): **iMessage کے لیے تجویز کردہ**؛ سرور URL + پاس ورڈ + ویب ہوک۔
+    - [iMessage](/channels/imessage): لیگیسی `imsg` CLI پاتھ + DB ایکسس۔
+    - DM سیکیورٹی: ڈیفالٹ پیئرنگ ہے۔ پہلا DM ایک کوڈ بھیجتا ہے؛ `openclaw pairing approve <channel><code>` کے ذریعے منظوری دیں یا allowlists استعمال کریں۔
+  </Step><code>` or use allowlists.
   </Step>
-  <Step title="Daemon انسٹال">
+  <Step title="Daemon install">
     - macOS: LaunchAgent
-      - لاگ اِن شدہ یوزر سیشن درکار؛ ہیڈلیس کے لیے کسٹم LaunchDaemon استعمال کریں (شامل نہیں)۔
+      - لاگ اِن شدہ یوزر سیشن درکار؛ ہیڈلیس کے لیے کسٹم LaunchDaemon استعمال کریں (شپ نہیں کیا گیا)۔
     - Linux (اور Windows بذریعہ WSL2): systemd یوزر یونٹ
-      - وزارڈ `loginctl enable-linger <user>` کے ذریعے lingering فعال کرنے کی کوشش کرتا ہے تاکہ لاگ آؤٹ کے بعد بھی Gateway چلتا رہے۔
-      - sudo کے لیے پرامپٹ ہو سکتا ہے ( `/var/lib/systemd/linger` لکھتا ہے)؛ پہلے sudo کے بغیر کوشش کرتا ہے۔
-    - **Runtime انتخاب:** Node (سفارش کردہ؛ WhatsApp/Telegram کے لیے لازم)۔ Bun **سفارش نہیں** کیا جاتا۔
+      - وزارڈ `loginctl enable-linger <user>` کے ذریعے لِنگرنگ فعال کرنے کی کوشش کرتا ہے تاکہ لاگ آؤٹ کے بعد بھی گیٹ وے چلتا رہے۔
+      - sudo کے لیے پرامپٹ ہو سکتا ہے (`/var/lib/systemd/linger` لکھتا ہے)؛ پہلے sudo کے بغیر کوشش کرتا ہے۔
+    - **Runtime انتخاب:** Node (تجویز کردہ؛ WhatsApp/Telegram کے لیے درکار)۔ Bun **تجویز نہیں کیا جاتا**۔
   </Step>
-  <Step title="ہیلتھ چیک">
-    - Gateway شروع کرتا ہے (اگر درکار ہو) اور `openclaw health` چلاتا ہے۔
-    - مشورہ: `openclaw status --deep` اسٹیٹس آؤٹ پٹ میں gateway ہیلتھ پروبز شامل کرتا ہے (قابلِ رسائی gateway درکار)۔
+  <Step title="Health check">
+    - گیٹ وے شروع کرتا ہے (اگر ضرورت ہو) اور `openclaw health` چلاتا ہے۔
+    - ٹِپ: `openclaw status --deep` اسٹیٹس آؤٹ پٹ میں گیٹ وے ہیلتھ پروبز شامل کرتا ہے (قابلِ رسائی گیٹ وے درکار)۔
   </Step>
-  <Step title="Skills (سفارش کردہ)">
-    - دستیاب skills پڑھتا ہے اور تقاضے چیک کرتا ہے۔
-    - node مینیجر منتخب کرنے دیتا ہے: **npm / pnpm** (bun سفارش نہیں)۔
-    - اختیاری dependencies انسٹال کرتا ہے (کچھ macOS پر Homebrew استعمال کرتی ہیں)۔
+  <Step title="Skills (recommended)">
+    - Reads the available skills and checks requirements.
+    - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
+    - اختیاری ڈیپنڈنسیز انسٹال کرتا ہے (کچھ macOS پر Homebrew استعمال کرتی ہیں)۔
   </Step>
-  <Step title="اختتام">
-    - خلاصہ + اگلے اقدامات، جن میں اضافی خصوصیات کے لیے iOS/Android/macOS ایپس شامل ہیں۔
+  <Step title="Finish">
+    - Summary + next steps, including iOS/Android/macOS apps for extra features.
   </Step>
 </Steps>
 
 <Note>
-اگر کوئی GUI دریافت نہ ہو، تو وزارڈ براؤزر کھولنے کے بجائے Control UI کے لیے SSH پورٹ‑فارورڈ ہدایات پرنٹ کرتا ہے۔
-اگر Control UI اثاثے موجود نہ ہوں، تو وزارڈ انہیں بنانے کی کوشش کرتا ہے؛ متبادل `pnpm ui:build` ہے (UI deps خودکار طور پر انسٹال کرتا ہے)۔
+If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
+If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 </Note>
 
 ## نان اِنٹرایکٹو موڈ
@@ -135,11 +128,11 @@ openclaw onboard --non-interactive \
 مشین‑ریڈیبل خلاصہ کے لیے `--json` شامل کریں۔
 
 <Note>
-`--json` کا مطلب **نان اِنٹرایکٹو موڈ نہیں** ہے۔ اسکرپٹس کے لیے `--non-interactive` (اور `--workspace`) استعمال کریں۔
+`--json` does **not** imply non-interactive mode. Use `--non-interactive` (and `--workspace`) for scripts.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Gemini مثال">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +142,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI مثال">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +152,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway مثال">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +162,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway مثال">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +174,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot مثال">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +184,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic مثال">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +194,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen مثال">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -226,8 +219,8 @@ openclaw agents add work \
 
 ## Gateway وزارڈ RPC
 
-Gateway وزارڈ فلو کو RPC کے ذریعے ایکسپوز کرتا ہے (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`)۔
-کلائنٹس (macOS ایپ، Control UI) آن بورڈنگ لاجک دوبارہ نافذ کیے بغیر مراحل رینڈر کر سکتے ہیں۔
+The Gateway exposes the wizard flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
+Clients (macOS app, Control UI) can render steps without re‑implementing onboarding logic.
 
 ## Signal سیٹ اپ (signal-cli)
 
@@ -261,11 +254,11 @@ Gateway وزارڈ فلو کو RPC کے ذریعے ایکسپوز کرتا ہے 
 
 `openclaw agents add`، `agents.list[]` اور اختیاری `bindings` لکھتا ہے۔
 
-WhatsApp اسناد `~/.openclaw/credentials/whatsapp/<accountId>/` کے تحت جاتی ہیں۔
-سیشنز `~/.openclaw/agents/<agentId>/sessions/` کے تحت محفوظ ہوتے ہیں۔
+WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
+Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
-کچھ چینلز پلگ اِنز کے طور پر فراہم کیے جاتے ہیں۔ آن بورڈنگ کے دوران جب آپ کسی ایک کا انتخاب کرتے ہیں، تو وزارڈ
-اسے کنفیگر کرنے سے پہلے انسٹال کرنے (npm یا لوکل راستہ) کے لیے پرامپٹ کرے گا۔
+Some channels are delivered as plugins. When you pick one during onboarding, the wizard
+will prompt to install it (npm or a local path) before it can be configured.
 
 ## متعلقہ دستاویزات
 

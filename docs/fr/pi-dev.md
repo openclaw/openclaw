@@ -1,12 +1,5 @@
 ---
 title: "Flux de travail de developpement Pi"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: 65bd0580dd03df05
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:09Z
 ---
 
 # Flux de travail de developpement Pi
@@ -56,7 +49,7 @@ Flux recommande :
 
 Pour le comportement des appels d’outils, demandez une action `read` ou `exec` afin de pouvoir observer le streaming des outils et la gestion des charges utiles.
 
-## Reinitialisation complete
+## Nettoyer la réinitialisation de Slate
 
 L’etat est stocke dans le repertoire d’etat OpenClaw. La valeur par defaut est `~/.openclaw`. Si `OPENCLAW_STATE_DIR` est defini, utilisez ce repertoire a la place.
 

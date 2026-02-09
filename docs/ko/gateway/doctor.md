@@ -2,15 +2,8 @@
 summary: "Doctor 명령: 상태 점검, 설정 마이그레이션 및 복구 단계"
 read_when:
   - Doctor 마이그레이션을 추가하거나 수정할 때
-  - 호환성이 깨지는 설정 변경을 도입할 때
+  - Introducing breaking config changes
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:27Z
 ---
 
 # Doctor
@@ -63,7 +56,7 @@ openclaw doctor --deep
 cat ~/.openclaw/openclaw.json
 ```
 
-## 수행 내용(요약)
+## What it does (summary)
 
 - git 설치에 대한 선택적 사전 업데이트(대화형 전용).
 - UI 프로토콜 최신성 점검(프로토콜 스키마가 더 최신인 경우 Control UI 재빌드).
@@ -91,17 +84,17 @@ cat ~/.openclaw/openclaw.json
 
 ## 상세 동작 및 근거
 
-### 0) 선택적 업데이트(git 설치)
+### 0. 선택적 업데이트(git 설치)
 
 git 체크아웃이며 doctor 가 대화형으로 실행 중인 경우,
 doctor 실행 전에 업데이트(fetch/rebase/build)를 제안합니다.
 
-### 1) 설정 정규화
+### 1. 설정 정규화
 
 설정에 레거시 값 형태가 포함된 경우(예: 채널별 오버라이드 없이
 `messages.ackReaction`), doctor 는 이를 현재 스키마로 정규화합니다.
 
-### 2) 레거시 설정 키 마이그레이션
+### 2. 레거시 설정 키 마이그레이션
 
 설정에 더 이상 사용되지 않는 키가 포함되어 있으면, 다른 명령은 실행을 거부하고
 `openclaw doctor` 실행을 요청합니다.
@@ -139,7 +132,7 @@ Gateway 는 시작 시 레거시 설정 형식을 감지하면 doctor 마이그�
 단일 API 로 강제하거나 비용을 0 으로 만들 수 있습니다. Doctor 는 경고를 표시하여
 오버라이드를 제거하고 모델별 API 라우팅 + 비용을 복원할 수 있도록 합니다.
 
-### 3) 레거시 상태 마이그레이션(디스크 레이아웃)
+### 3. 레거시 상태 마이그레이션(디스크 레이아웃)
 
 Doctor 는 오래된 디스크 레이아웃을 현재 구조로 마이그레이션할 수 있습니다:
 
@@ -157,7 +150,7 @@ Doctor 는 오래된 디스크 레이아웃을 현재 구조로 마이그레이�
 에이전트별 경로에 위치하도록 합니다. WhatsApp 인증은 의도적으로 `openclaw doctor`
 를 통해서만 마이그레이션됩니다.
 
-### 4) 상태 무결성 점검(세션 지속성, 라우팅, 안전성)
+### 4. 상태 무결성 점검(세션 지속성, 라우팅, 안전성)
 
 상태 디렉토리는 운영의 중추입니다. 이것이 사라지면 세션, 자격 증명, 로그,
 설정이 손실됩니다(다른 위치에 백업이 없는 경우).
@@ -179,7 +172,7 @@ Doctor 점검 항목:
 - **설정 파일 권한**: `~/.openclaw/openclaw.json` 이 그룹/전체 읽기 가능이면 경고하고
   `600` 로 강화할 것을 제안합니다.
 
-### 5) 모델 인증 상태(OAuth 만료)
+### 5. 모델 인증 상태(OAuth 만료)
 
 Doctor 는 인증 저장소의 OAuth 프로필을 검사하여 토큰 만료/만료 임박을 경고하고,
 안전한 경우 갱신할 수 있습니다. Anthropic Claude Code 프로필이 오래된 경우,
@@ -192,56 +185,53 @@ Doctor 는 다음으로 인해 일시적으로 사용 불가한 인증 프로필
 - 짧은 쿨다운(요율 제한/타임아웃/인증 실패)
 - 더 긴 비활성화(결제/크레딧 실패)
 
-### 6) Hooks 모델 검증
+### 6. Hooks 모델 검증
 
 `hooks.gmail.model` 가 설정된 경우, doctor 는 모델 참조를 카탈로그 및 허용 목록에 대해
 검증하고, 해석되지 않거나 허용되지 않는 경우 경고합니다.
 
-### 7) 샌드박스 이미지 복구
+### 7. 샌드박스 이미지 복구
 
 샌드박스화가 활성화된 경우, doctor 는 Docker 이미지를 점검하고 현재 이미지가 없는 경우
 빌드하거나 레거시 이름으로 전환하도록 제안합니다.
 
-### 8) Gateway 서비스 마이그레이션 및 정리 힌트
+### 8. Gateway 서비스 마이그레이션 및 정리 힌트
 
 Doctor 는 레거시 Gateway 서비스(launchd/systemd/schtasks)를 감지하고,
-현재 Gateway 포트를 사용하는 OpenClaw 서비스 설치 및 기존 서비스 제거를 제안합니다.
-또한 추가 Gateway 유사 서비스를 스캔하고 정리 힌트를 출력할 수 있습니다.
+현재 Gateway 포트를 사용하는 OpenClaw 서비스 설치 및 기존 서비스 제거를 제안합니다. 또한 추가 Gateway 유사 서비스를 스캔하고 정리 힌트를 출력할 수 있습니다.
 프로필 이름이 지정된 OpenClaw Gateway 서비스는 1급으로 간주되며 “추가”로 표시되지 않습니다.
 
-### 9) 보안 경고
+### 9. 보안 경고
 
 Doctor 는 허용 목록 없이 다이렉트 메시지에 열려 있는 프로바이더나,
 위험한 방식으로 구성된 정책이 있을 때 경고를 출력합니다.
 
-### 10) systemd linger(Linux)
+### 10. systemd linger(Linux)
 
 systemd 사용자 서비스로 실행 중인 경우, 로그아웃 후에도 Gateway 가 유지되도록
 linger 활성화를 확인합니다.
 
-### 11) Skills 상태
+### 11. Skills 상태
 
 Doctor 는 현재 워크스페이스에 대해 적격/누락/차단된 Skills 의 간단한 요약을 출력합니다.
 
-### 12) Gateway 인증 점검(로컬 토큰)
+### 12. Gateway 인증 점검(로컬 토큰)
 
-Doctor 는 로컬 Gateway 에서 `gateway.auth` 가 누락된 경우 경고하고 토큰 생성을 제안합니다.
-자동화에서는 `openclaw doctor --generate-gateway-token` 를 사용하여 토큰 생성을 강제할 수 있습니다.
+Doctor 는 로컬 Gateway 에서 `gateway.auth` 가 누락된 경우 경고하고 토큰 생성을 제안합니다. 자동화에서는 `openclaw doctor --generate-gateway-token` 를 사용하여 토큰 생성을 강제할 수 있습니다.
 
-### 13) Gateway 상태 점검 + 재시작
+### 13. Gateway 상태 점검 + 재시작
 
 Doctor 는 상태 점검을 실행하고 비정상으로 보일 경우 Gateway 재시작을 제안합니다.
 
-### 14) 채널 상태 경고
+### 14. 채널 상태 경고
 
 Gateway 가 정상인 경우, doctor 는 채널 상태 프로브를 실행하고
 권장 수정 사항과 함께 경고를 보고합니다.
 
-### 15) supervisor 설정 감사 + 복구
+### 15. supervisor 설정 감사 + 복구
 
 Doctor 는 설치된 supervisor 설정(launchd/systemd/schtasks)에서 누락되었거나
-오래된 기본값(예: systemd network-online 의존성, 재시작 지연)을 점검합니다.
-불일치를 발견하면 업데이트를 권장하고, 서비스 파일/작업을 현재 기본값으로
+오래된 기본값(예: systemd network-online 의존성, 재시작 지연)을 점검합니다. 불일치를 발견하면 업데이트를 권장하고, 서비스 파일/작업을 현재 기본값으로
 다시 작성할 수 있습니다.
 
 참고:
@@ -252,14 +242,13 @@ Doctor 는 설치된 supervisor 설정(launchd/systemd/schtasks)에서 누락되
 - `openclaw doctor --repair --force` 은 커스텀 supervisor 설정을 덮어씁니다.
 - `openclaw gateway install --force` 를 통해 언제든지 전체 재작성을 강제할 수 있습니다.
 
-### 16) Gateway 런타임 + 포트 진단
+### 16. Gateway 런타임 + 포트 진단
 
 Doctor 는 서비스 런타임(PID, 마지막 종료 상태)을 검사하고,
-서비스가 설치되어 있으나 실제로 실행 중이 아닌 경우 경고합니다.
-또한 Gateway 포트(기본값 `18789`)의 충돌을 점검하고,
+서비스가 설치되어 있으나 실제로 실행 중이 아닌 경우 경고합니다. 또한 Gateway 포트(기본값 `18789`)의 충돌을 점검하고,
 가능한 원인(Gateway 이미 실행 중, SSH 터널)을 보고합니다.
 
-### 17) Gateway 런타임 모범 사례
+### 17. Gateway 런타임 모범 사례
 
 Doctor 는 Gateway 서비스가 Bun 이나 버전 관리된 Node 경로
 (`nvm`, `fnm`, `volta`, `asdf` 등)에서
@@ -268,12 +257,12 @@ Doctor 는 Gateway 서비스가 Bun 이나 버전 관리된 Node 경로
 깨질 수 있습니다. 가능한 경우(Homebrew/apt/choco) 시스템 Node 설치로
 마이그레이션을 제안합니다.
 
-### 18) 설정 기록 + 마법사 메타데이터
+### 18. 설정 기록 + 마법사 메타데이터
 
 Doctor 는 모든 설정 변경을 저장하고 doctor 실행을 기록하기 위해
 마법사 메타데이터를 스탬프합니다.
 
-### 19) 워크스페이스 팁(백업 + 메모리 시스템)
+### 19. 워크스페이스 팁(백업 + 메모리 시스템)
 
 Doctor 는 누락된 경우 워크스페이스 메모리 시스템을 제안하고,
 워크스페이스가 아직 git 관리 하에 있지 않다면 백업 팁을 출력합니다.

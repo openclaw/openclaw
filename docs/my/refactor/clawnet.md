@@ -4,13 +4,6 @@ read_when:
   - နိုဒ်များနှင့် အော်ပရေးတာ ကလိုင်ယင့်များအတွက် တစ်စုတစ်စည်းတည်းသော ကွန်ယက်ပရိုတိုကောကို စီမံကိန်းရေးဆွဲနေစဉ်
   - စက်ပစ္စည်းများအကြား approvals၊ pairing၊ TLS နှင့် presence ကို ပြန်လည်ပြုပြင်နေစဉ်
 title: "Clawnet Refactor"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:30Z
 ---
 
 # Clawnet refactor (protocol + auth unification)
@@ -51,10 +44,10 @@ x-i18n:
 
 ## Two protocols
 
-### 1) Gateway WebSocket (control plane)
+### 1. Gateway WebSocket (control plane)
 
 - API အပြည့်အစုံ: config, channels, models, sessions, agent runs, logs, nodes စသည်တို့။
-- ပုံမှန် bind: loopback။ အဝေးမှ ဝင်ရောက်မှုကို SSH/Tailscale ဖြင့် ပြုလုပ်သည်။
+- Default bind: loopback. Remote access via SSH/Tailscale.
 - Auth: token/password via `connect`။
 - TLS pinning မရှိ (loopback/tunnel အပေါ် မူတည်)။
 - Code:
@@ -62,7 +55,7 @@ x-i18n:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (node transport)
+### 2. Bridge (node transport)
 
 - ခွင့်ပြုစာရင်းအကန့်အသတ်ရှိသော surface၊ node identity + pairing။
 - TCP အပေါ် JSONL; optional TLS + cert fingerprint pinning။
@@ -145,7 +138,7 @@ Role + scope ပါသော WS ပရိုတိုကောတစ်ခုတ
 
 ### Key rule
 
-Role သည် device အလိုက်မဟုတ်ဘဲ connection အလိုက် ဖြစ်သည်။ စက်တစ်လုံးတည်းက role နှစ်ခုကို သီးခြားဖွင့်နိုင်သည်။
+Role is per‑connection, not per device. A device may open both roles, separately.
 
 ---
 
@@ -187,7 +180,7 @@ Client တိုင်းသည် အောက်ပါအချက်မျာ
 
 ## Silent approval (SSH heuristic)
 
-အားနည်းချက် မဖြစ်စေရန် တိတိကျကျ သတ်မှတ်ရမည်။ အောက်ပါတစ်ခုကို ဦးစားပေး—
+Define it precisely to avoid a weak link. Prefer one:
 
 - **Local‑only**: client သည် loopback/Unix socket မှ ချိတ်ဆက်လာသောအခါ auto‑pair။
 - **Challenge via SSH**: gateway သည် nonce ထုတ်ပေးပြီး client က SSH ဖြင့် fetch လုပ်နိုင်ကြောင်း သက်သေပြသည်။
@@ -224,7 +217,7 @@ auto‑approval များအားလုံးကို log မှတ်တ�
 
 ## Current
 
-Approval သည် node host (mac app node runtime) ပေါ်တွင် ဖြစ်ပေါ်ပြီး prompt သည် node လည်ပတ်ရာနေရာတွင် ပေါ်လာသည်။
+Approval happens on node host (mac app node runtime). Prompt appears where node runs.
 
 ## Proposed
 
@@ -283,26 +276,25 @@ Approval ကို **gateway‑hosted** အဖြစ် ပြုလုပ်ပ
 
 ## Stable ID
 
-Auth အတွက် မဖြစ်မနေလိုအပ်ပြီး ဘယ်တော့မှ မပြောင်းလဲရ။
+Required for auth; never changes.
+အကြံပြု—
 
-ဦးစားပေး—
-
-- Keypair fingerprint (public key hash)။
+- Keypair fingerprint (public key hash).
 
 ## Cute slug (lobster‑themed)
 
-လူဖတ်ရလွယ်ကူသော label သာဖြစ်သည်။
+Human label only.
 
-- ဥပမာ: `scarlet-claw`, `saltwave`, `mantis-pinch`။
-- Gateway registry တွင် သိမ်းဆည်းပြီး ပြင်ဆင်နိုင်သည်။
-- Collision ကို ကိုင်တွယ်ခြင်း: `-2`, `-3`။
+- Example: `scarlet-claw`, `saltwave`, `mantis-pinch`.
+- Stored in gateway registry, editable.
+- Collision handling: `-2`, `-3`.
 
 ## UI grouping
 
-Role မတူသော်လည်း `deviceId` တူညီပါက “Instance” row တစ်ခုတည်းအဖြစ် ပြသသည်—
+Same `deviceId` across roles → single “Instance” row:
 
-- Badge: `operator`, `node`။
-- စွမ်းရည်များ + နောက်ဆုံး တွေ့ရှိချိန်ကို ပြသသည်။
+- Badge: `operator`, `node`.
+- Shows capabilities + last seen.
 
 ---
 
@@ -310,116 +302,116 @@ Role မတူသော်လည်း `deviceId` တူညီပါက “Insta
 
 ## Phase 0: Document + align
 
-- ဤစာတမ်းကို ထုတ်ဝေခြင်း။
-- ပရိုတိုကောခေါ်ဆိုမှုများ + approval flows အားလုံးကို စာရင်းပြုစုခြင်း။
+- Publish this doc.
+- Inventory all protocol calls + approval flows.
 
 ## Phase 1: Add roles/scopes to WS
 
-- `connect` params များကို `role`, `scope`, `deviceId` ဖြင့် တိုးချဲ့ခြင်း။
-- node role အတွက် allowlist gating ထည့်သွင်းခြင်း။
+- Extend `connect` params with `role`, `scope`, `deviceId`.
+- Add allowlist gating for node role.
 
 ## Phase 2: Bridge compatibility
 
-- Bridge ကို ဆက်လက် လည်ပတ်စေခြင်း။
-- WS node support ကို parallel အဖြစ် ထည့်သွင်းခြင်း။
-- config flag ဖြင့် feature များကို ထိန်းချုပ်ခြင်း။
+- Keep bridge running.
+- Add WS node support in parallel.
+- Gate features behind config flag.
 
 ## Phase 3: Central approvals
 
-- WS တွင် approval request + resolve events များ ထည့်သွင်းခြင်း။
-- mac app UI ကို prompt ပြ + respond ပြုလုပ်နိုင်အောင် update လုပ်ခြင်း။
-- Node runtime သည် UI prompt မပြတော့ပါ။
+- Add approval request + resolve events in WS.
+- Update mac app UI to prompt + respond.
+- Node runtime stops prompting UI.
 
 ## Phase 4: TLS unification
 
-- Bridge TLS runtime ကို အသုံးပြုပြီး WS အတွက် TLS config ထည့်သွင်းခြင်း။
-- Clients များတွင် pinning ထည့်သွင်းခြင်း။
+- Add TLS config for WS using bridge TLS runtime.
+- Add pinning to clients.
 
 ## Phase 5: Deprecate bridge
 
-- iOS/Android/mac node များကို WS သို့ ပြောင်းရွှေ့ခြင်း။
-- fallback အဖြစ် bridge ကို ထားရှိပြီး တည်ငြိမ်ပြီးနောက် ဖယ်ရှားခြင်း။
+- Migrate iOS/Android/mac node to WS.
+- Keep bridge as fallback; remove once stable.
 
 ## Phase 6: Device‑bound auth
 
-- local မဟုတ်သော connection အားလုံးအတွက် key‑based identity ကို မဖြစ်မနေလိုအပ်စေခြင်း။
-- revocation + rotation UI ထည့်သွင်းခြင်း။
+- Require key‑based identity for all non‑local connections.
+- Add revocation + rotation UI.
 
 ---
 
 # Security notes
 
-- Role/allowlist ကို gateway နယ်နိမိတ်တွင် ခိုင်မာစွာ အတည်ပြုသည်။
-- Operator scope မရှိဘဲ “full” API ကို မည်သည့် client မှ မရနိုင်ပါ။
-- Connection အားလုံးအတွက် pairing မဖြစ်မနေ လိုအပ်သည်။
-- TLS + pinning သည် mobile အတွက် MITM အန္တရာယ်ကို လျှော့ချသည်။
-- SSH silent approval သည် အဆင်ပြေစေရန်သာ ဖြစ်ပြီး မှတ်တမ်းတင်ထားကာ revoke လုပ်နိုင်သည်။
-- Discovery သည် trust anchor မဖြစ်ရ။
-- Capability claims များကို platform/type အလိုက် server allowlists များဖြင့် စစ်ဆေးအတည်ပြုသည်။
+- Role/allowlist enforced at gateway boundary.
+- No client gets “full” API without operator scope.
+- Pairing required for _all_ connections.
+- 1. Mobile အတွက် TLS + pinning သုံးခြင်းက MITM အန္တရာယ်ကို လျှော့ချပေးသည်။
+- 2. SSH silent approval သည် အဆင်ပြေစေမှုတစ်ရပ်သာဖြစ်ပြီး၊ မှတ်တမ်းတင်ထားပြီး ပြန်လည်ရုပ်သိမ်းနိုင်သည်။
+- 3. Discovery ကို ယုံကြည်မှုအခြေခံ (trust anchor) အဖြစ် မသုံးရ။
+- 4. Capability claims များကို platform/type အလိုက် server allowlists များနှင့် နှိုင်းယှဉ်စစ်ဆေးသည်။
 
 # Streaming + large payloads (node media)
 
-WS control plane သည် message အသေးများအတွက် သင့်တော်သော်လည်း node များတွင် အောက်ပါအရာများလည်း ရှိသည်—
+5. WS control plane သည် message အသေးများအတွက် သင့်တော်သော်လည်း node များက အောက်ပါတို့ကိုလည်း လုပ်ဆောင်သည်။
 
 - camera clips
 - screen recordings
 - audio streams
 
-ရွေးချယ်စရာများ—
+ရွေးချယ်စရာများ-
 
-1. WS binary frames + chunking + backpressure rules။
-2. သီးခြား streaming endpoint (TLS + auth ဆက်လက် အသုံးပြု)။
-3. media‑heavy commands များအတွက် bridge ကို အချိန်ပိုထားပြီး နောက်ဆုံးမှ ပြောင်းရွှေ့ခြင်း။
+1. 6. WS binary frames + chunking + backpressure rules။
+2. 7. သီးခြား streaming endpoint (TLS + auth ဆက်လက်အသုံးပြု)။
+3. 8. Media များစွာပါဝင်သော commands များအတွက် bridge ကို ပိုကြာကြာ ထားရှိပြီး နောက်ဆုံးမှ ပြောင်းရွှေ့ပါ။
 
-implementation မလုပ်မီ တစ်ခုကို ရွေးချယ်ပါ—drift မဖြစ်စေရန်။
+9) Implementation မလုပ်မီ တစ်ခုကို ရွေးချယ်ပါ၊ drift မဖြစ်စေရန်။
 
 # Capability + command policy
 
-- Node မှ ကြေညာသော caps/commands များကို **claims** အဖြစ်သာ သတ်မှတ်သည်။
-- Gateway သည် platform အလိုက် allowlists များဖြင့် အတည်ပြုစစ်ဆေးသည်။
-- command အသစ်တိုင်းအတွက် operator approval သို့မဟုတ် allowlist ပြောင်းလဲမှုကို လိုအပ်သည်။
-- ပြောင်းလဲမှုများကို timestamp ဖြင့် audit လုပ်သည်။
+- 10. Node မှ report လုပ်သော caps/commands များကို **claims** အဖြစ်သာ သတ်မှတ်သည်။
+- 11. Gateway က platform အလိုက် allowlists များကို အကောင်အထည်ဖော်ထိန်းချုပ်သည်။
+- 12. Command အသစ်တိုင်းအတွက် operator အတည်ပြုချက် သို့မဟုတ် allowlist ကို အထူးပြောင်းလဲရမည်။
+- 13. ပြောင်းလဲမှုများကို timestamp များဖြင့် audit လုပ်ပါ။
 
 # Audit + rate limiting
 
-- Log: pairing requests, approvals/denials, token issuance/rotation/revocation။
-- pairing spam နှင့် approval prompts များကို rate‑limit လုပ်သည်။
+- 14. Log: pairing requests, approvals/denials, token issuance/rotation/revocation။
+- 15. Pairing spam နှင့် approval prompts များကို rate‑limit လုပ်ပါ။
 
 # Protocol hygiene
 
-- protocol version + error codes ကို ထင်ရှားစွာ သတ်မှတ်ခြင်း။
-- reconnect rules + heartbeat policy။
-- presence TTL နှင့် last‑seen semantics။
+- 16. Protocol version ကို ရှင်းလင်းစွာ သတ်မှတ်ပြီး error codes ပါဝင်စေပါ။
+- 17. Reconnect rules + heartbeat policy။
+- 18. Presence TTL နှင့် last‑seen semantics။
 
 ---
 
 # Open questions
 
-1. Role နှစ်ခုလုံးကို စက်တစ်လုံးတည်း လည်ပတ်သောအခါ: token model
-   - role အလိုက် token သီးခြားထားရန် အကြံပြုသည် (node vs operator)။
-   - deviceId တူ; scope မတူ; revoke လုပ်ရန် ပိုရှင်းလင်း။
+1. 19. Device တစ်ခုတည်းက roles နှစ်ခုလုံး chạyနေပါက: token model။
+   - 20. Role အလိုက် သီးခြား tokens (node vs operator) ကို အကြံပြုသည်။
+   - 21. deviceId တူညီ၊ scopes ကွဲပြား၊ revocation ပိုမိုရှင်းလင်း။
 
-2. Operator scope အနုစိတ်အဆင့်
-   - read/write/admin + approvals + pairing (အနည်းဆုံး လိုအပ်ချက်)။
-   - နောက်ပိုင်းတွင် per‑feature scopes ကို စဉ်းစားနိုင်သည်။
+2. 22. Operator scope granularity
+   - 23. read/write/admin + approvals + pairing (minimum viable)။
+   - 24. နောက်ပိုင်းတွင် per‑feature scopes ကို စဉ်းစားပါ။
 
 3. Token rotation + revocation UX
-   - role ပြောင်းလဲသောအခါ auto‑rotate။
-   - deviceId + role အလိုက် revoke လုပ်နိုင်သော UI။
+   - 25. Role ပြောင်းလဲသည့်အခါ auto‑rotate လုပ်ပါ။
+   - 26. deviceId + role အလိုက် revoke လုပ်နိုင်သော UI။
 
 4. Discovery
-   - လက်ရှိ Bonjour TXT ကို WS TLS fingerprint + role hints ဖြင့် တိုးချဲ့ခြင်း။
-   - locator hints အဖြစ်သာ သတ်မှတ်ခြင်း။
+   - 27. လက်ရှိ Bonjour TXT ကို WS TLS fingerprint + role hints ပါအောင် တိုးချဲ့ပါ။
+   - 28. Locator hints အဖြစ်သာ သတ်မှတ်အသုံးပြုပါ။
 
 5. Cross‑network approval
-   - Operator clients အားလုံးသို့ broadcast; active UI တွင် modal ပြသသည်။
-   - ပထမဆုံး ဖြေကြားချက်သာ အနိုင်ရပြီး gateway က atomicity ကို အတည်ပြုသည်။
+   - 29. Operator clients အားလုံးသို့ broadcast လုပ်ပြီး active UI တွင် modal ပြပါ။
+   - 30. ပထမဆုံး တုံ့ပြန်သူသာ အနိုင်ရပြီး gateway က atomicity ကို အကောင်အထည်ဖော်သည်။
 
 ---
 
 # Summary (TL;DR)
 
-- ယနေ့: WS control plane + Bridge node transport။
-- နာကျင်မှု: approvals + duplication + stack နှစ်ခု။
-- အဆိုပြုချက်: roles + scopes ရှင်းလင်းသော WS ပရိုတိုကောတစ်ခုတည်း၊ unified pairing + TLS pinning၊ gateway‑hosted approvals၊ တည်ငြိမ်သော device IDs + ချစ်စရာ slugs။
-- ရလဒ်: UX ပိုရိုးရှင်း၊ လုံခြုံရေး ပိုခိုင်မာ၊ ထပ်နေမှုနည်း၊ mobile routing ပိုကောင်း။
+- 31. ယနေ့: WS control plane + Bridge node transport။
+- 32. အခက်အခဲများ: approvals + duplication + stacks နှစ်ခု။
+- 33. အဆိုပြုချက်: roles + scopes ကို ရှင်းလင်းစွာ သတ်မှတ်ထားသော WS protocol တစ်ခု၊ unified pairing + TLS pinning, gateway‑hosted approvals, stable device IDs + cute slugs။
+- 34. ရလဒ်: UX ပိုမိုရိုးရှင်း၊ လုံခြုံရေးပိုမိုခိုင်မာ၊ duplication လျော့နည်း၊ mobile routing ပိုကောင်း။

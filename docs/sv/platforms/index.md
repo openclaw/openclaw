@@ -4,23 +4,16 @@ read_when:
   - Letar efter OS-stöd eller installationssökvägar
   - Bestämmer var du ska köra Gateway
 title: "Plattformar"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:55Z
 ---
 
 # Plattformar
 
-OpenClaw-kärnan är skriven i TypeScript. **Node är den rekommenderade körtiden**.
-Bun rekommenderas inte för Gateway (WhatsApp-/Telegram-buggar).
+OpenClaw kärna är skriven i TypeScript. **Noden är den rekommenderade runtime**.
+Bun rekommenderas inte för Gateway (WhatsApp/Telegram buggar).
 
-Companion-appar finns för macOS (menyradsapp) och mobila noder (iOS/Android). Companion-appar för Windows och
-Linux är planerade, men Gateway stöds fullt ut redan i dag.
-Inbyggda Companion-appar för Windows är också planerade; Gateway rekommenderas via WSL2.
+Kompanjonappar finns för macOS (menyradens app) och mobila noder (iOS/Android). Windows och
+Linux-följeslagare är planerade, men Gateway stöds fullt ut idag.
+Inhemska följeslagare appar för Windows är också planerade; Gateway rekommenderas via WSL2.
 
 ## Välj ditt OS
 

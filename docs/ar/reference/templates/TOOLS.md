@@ -1,14 +1,7 @@
 ---
 summary: "قالب مساحة العمل لملف TOOLS.md"
 read_when:
-  - "التهيئة الأولية لمساحة عمل يدويًا"
-x-i18n:
-  source_path: reference/templates/TOOLS.md
-  source_hash: 3ed08cd537620749
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:43Z
+  - التهيئة اليدوية لمساحة عمل
 ---
 
 # TOOLS.md - ملاحظات محلية

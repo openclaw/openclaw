@@ -4,25 +4,18 @@ read_when:
   - Pagdaragdag o pagbabago ng mga agent tool
   - Pagretiro o pagbabago ng `openclaw-*` skills
 title: "Mga Tool"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:36Z
 ---
 
 # Mga Tool (OpenClaw)
 
-Inilalantad ng OpenClaw ang **first-class na mga agent tool** para sa browser, canvas, nodes, at cron.
-Pinapalitan nito ang mga lumang `openclaw-*` skills: ang mga tool ay typed, walang shelling,
-at dapat umasa ang agent sa mga ito nang direkta.
+26. Naglalantad ang OpenClaw ng **first-class agent tools** para sa browser, canvas, nodes, at cron.
+27. Pinapalitan ng mga ito ang lumang `openclaw-*` skills: ang mga tool ay typed, walang shelling,
+    at dapat direktang umasa ang agent sa mga ito.
 
 ## Pag-disable ng mga tool
 
-Maaari mong global na payagan/tanggihan ang mga tool gamit ang `tools.allow` / `tools.deny` sa `openclaw.json`
-(mas nangingibabaw ang deny). Pinipigilan nito na maipadala sa mga model provider ang mga hindi pinapayagang tool.
+28. Maaari mong global na pahintulutan/tanggihan ang mga tool sa pamamagitan ng `tools.allow` / `tools.deny` sa `openclaw.json`
+    (nanalo ang deny). This prevents disallowed tools from being sent to model providers.
 
 ```json5
 {
@@ -38,8 +31,8 @@ Mga tala:
 
 ## Mga profile ng tool (base allowlist)
 
-Itinatakda ng `tools.profile` ang isang **base tool allowlist** bago ang `tools.allow`/`tools.deny`.
-Per-agent na override: `agents.list[].tools.profile`.
+29. Itinatakda ng `tools.profile` ang isang **base tool allowlist** bago ang `tools.allow`/`tools.deny`.
+    Per-agent override: `agents.list[].tools.profile`.
 
 Mga profile:
 
@@ -88,13 +81,13 @@ Halimbawa (global coding profile, messaging-only na support agent):
 
 ## Provider-specific na patakaran ng tool
 
-Gamitin ang `tools.byProvider` para **lalo pang higpitan** ang mga tool para sa mga partikular na provider
-(o isang `provider/model`) nang hindi binabago ang iyong mga global default.
-Per-agent na override: `agents.list[].tools.byProvider`.
+30. Gamitin ang `tools.byProvider` para **lalo pang higpitan** ang mga tool para sa mga partikular na provider
+    (o isang `provider/model`) nang hindi binabago ang iyong global defaults.
+31. Per-agent override: `agents.list[].tools.byProvider`.
 
-Inilalapat ito **pagkatapos** ng base tool profile at **bago** ang mga allow/deny list,
-kaya maaari lamang nitong paliitin ang set ng tool.
-Tumatanggap ang mga provider key ng alinman sa `provider` (hal. `google-antigravity`) o
+This is applied **after** the base tool profile and **before** allow/deny lists,
+so it can only narrow the tool set.
+32. Tumatanggap ang mga provider key ng alinman sa `provider` (hal. `google-antigravity`) o
 `provider/model` (hal. `openai/gpt-5.2`).
 
 Halimbawa (panatilihin ang global coding profile, pero minimal na mga tool para sa Google Antigravity):
@@ -144,8 +137,8 @@ Halimbawa (agent-specific na override para sa isang provider):
 
 ## Mga grupo ng tool (shorthands)
 
-Sinusuportahan ng mga patakaran ng tool (global, agent, sandbox) ang mga entry na `group:*` na lumalawak sa maraming tool.
-Gamitin ang mga ito sa `tools.allow` / `tools.deny`.
+Sinusuportahan ng mga tool policy (global, agent, sandbox) ang mga `group:*` na entry na lumalawak sa maraming tool.
+33. Gamitin ang mga ito sa `tools.allow` / `tools.deny`.
 
 Mga available na grupo:
 
@@ -172,10 +165,10 @@ Halimbawa (payagan lamang ang mga file tool + browser):
 
 ## Plugins + mga tool
 
-Maaaring magrehistro ang mga plugin ng **karagdagang mga tool** (at mga CLI command) lampas sa core set.
-Tingnan ang [Plugins](/tools/plugin) para sa install + config, at [Skills](/tools/skills) para sa kung paano
-ini-inject ang gabay sa paggamit ng tool sa mga prompt. May ilang plugin na may kasamang sariling skills
-kasabay ng mga tool (halimbawa, ang voice-call plugin).
+34. Maaaring magrehistro ang mga plugin ng **karagdagang mga tool** (at mga CLI command) lampas sa core set.
+    See [Plugins](/tools/plugin) for install + config, and [Skills](/tools/skills) for how
+    tool usage guidance is injected into prompts. 35. Ang ilang plugin ay may dalang sarili nilang skills
+    kasama ng mga tool (halimbawa, ang voice-call plugin).
 
 Opsyonal na mga plugin tool:
 
@@ -186,8 +179,8 @@ Opsyonal na mga plugin tool:
 
 ### `apply_patch`
 
-Mag-apply ng structured patches sa isa o higit pang file. Gamitin para sa multi-hunk edits.
-Experimental: i-enable sa pamamagitan ng `tools.exec.applyPatch.enabled` (OpenAI models lamang).
+36. Mag-apply ng structured na mga patch sa isa o higit pang file. Use for multi-hunk edits.
+    Experimental: enable via `tools.exec.applyPatch.enabled` (OpenAI models only).
 
 ### `exec`
 
@@ -204,7 +197,7 @@ Mga core parameter:
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (node id/name para sa `host=node`)
-- Kailangan ng totoong TTY? Itakda ang `pty: true`.
+- Need a real TTY? 37. Itakda ang `pty: true`.
 
 Mga tala:
 
@@ -472,8 +465,8 @@ Mga tool na naka-back ng Gateway (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (kung naka-enable ang auth)
 - `timeoutMs`
 
-Tala: kapag nakatakda ang `gatewayUrl`, isama ang `gatewayToken` nang tahasan. Hindi nagmamana ang mga tool ng config
-o mga environment credential para sa mga override, at error ang kulang na tahasang credential.
+Note: when `gatewayUrl` is set, include `gatewayToken` explicitly. Tools do not inherit config
+or environment credentials for overrides, and missing explicit credentials is an error.
 
 Browser tool:
 
@@ -515,5 +508,5 @@ Inilalantad ang mga tool sa dalawang magkatulad na channel:
 1. **System prompt text**: isang human-readable na listahan + gabay.
 2. **Tool schema**: ang structured function definitions na ipinapadala sa model API.
 
-Ibig sabihin, nakikita ng agent ang parehong “kung anong mga tool ang umiiral” at “kung paano tawagin ang mga ito.” Kung ang isang tool
-ay hindi lumilitaw sa system prompt o sa schema, hindi ito maaaring tawagin ng model.
+38) Ibig sabihin nito, nakikita ng agent ang parehong “kung anong mga tool ang umiiral” at “kung paano tawagin ang mga ito.” 39. Kung ang isang tool
+    ay hindi lumalabas sa system prompt o sa schema, hindi ito maaaring tawagin ng modelo.

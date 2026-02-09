@@ -3,13 +3,6 @@ summary: "ချန်နယ်များအနှံ့ မျှဝေထာ
 read_when:
   - မည်သည့် ချန်နယ်မဆိုတွင် Reaction များကို ကိုင်တွယ်လုပ်ဆောင်နေစဉ်
 title: "Reactions"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:59Z
 ---
 
 # Reaction ကိရိယာများ

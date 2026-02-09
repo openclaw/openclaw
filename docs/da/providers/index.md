@@ -4,21 +4,14 @@ read_when:
   - Du vil vælge en modeludbyder
   - Du har brug for et hurtigt overblik over understøttede LLM-backends
 title: "Modeludbydere"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:30Z
 ---
 
 # Modeludbydere
 
-OpenClaw kan bruge mange LLM-udbydere. Vælg en udbyder, autentificér, og sæt derefter
-standardmodellen som `provider/model`.
+OpenClaw kan bruge mange LLM udbydere. Vælg en udbyder, autentisk, og angiv derefter standardmodellen
+som `udbyder/model`.
 
-Leder du efter dokumentation til chatkanaler (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/osv.)? Se [Kanaler](/channels).
+Leder du efter chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugin)/etc.)? Se [Channels](/channels).
 
 ## Highlight: Venice (Venice AI)
 
@@ -67,5 +60,5 @@ Se [Venice AI](/providers/venice).
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) – Brug Claude Max/Pro-abonnement som et OpenAI-kompatibelt API-endpoint
 
-For det fulde udbyderkatalog (xAI, Groq, Mistral osv.) og avanceret konfiguration,
+For hele udbyderkatalog (xAI, Groq, Mistral, osv.) og avanceret konfiguration,
 se [Modeludbydere](/concepts/model-providers).

@@ -4,20 +4,13 @@ read_when:
   - Integrera klienter som talar OpenResponses API
   - Du vill ha objektbaserade indata, klientverktygsanrop eller SSE-händelser
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:30Z
 ---
 
 # OpenResponses API (HTTP)
 
 OpenClaws Gateway kan exponera en OpenResponses-kompatibel `POST /v1/responses`-endpoint.
 
-Den här endpointen är **inaktiverad som standard**. Aktivera den först i konfigen.
+Denna slutpunkt är **inaktiverad som standard**. Aktivera det i konfigurationen först.
 
 - `POST /v1/responses`
 - Samma port som Gateway (WS + HTTP-multiplex): `http://<gateway-host>:<port>/v1/responses`
@@ -27,7 +20,7 @@ Under huven körs förfrågningar som en vanlig Gateway-agentkörning (samma kod
 
 ## Autentisering
 
-Använder Gateways autentiseringskonfiguration. Skicka en bearer-token:
+Använder Gateway auth konfiguration. Skicka en bärare token:
 
 - `Authorization: Bearer <token>`
 
@@ -92,7 +85,7 @@ från den, så att upprepade anrop kan dela en agent-session.
 
 ## Förfrågans form (stöds)
 
-Förfrågan följer OpenResponses API med objektbaserad indata. Nuvarande stöd:
+Begäran följer OpenResponses API med objektbaserad indata. Nuvarande stöd:
 
 - `input`: sträng eller array av objekt.
 - `instructions`: slås samman i systemprompten.
@@ -139,10 +132,10 @@ Accepteras för schemakompatibilitet men ignoreras när prompten byggs.
 
 ## Verktyg (klientsidans funktionsverktyg)
 
-Tillhandahåll verktyg med `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
+Ge verktyg med `tools: [{ typ: "function", funktion: { namn, beskrivning?, parametrar? } }]`.
 
-Om agenten beslutar att anropa ett verktyg returnerar svaret ett `function_call`-utdataobjekt.
-Du skickar sedan en uppföljande förfrågan med `function_call_output` för att fortsätta turen.
+Om agenten bestämmer sig för att anropa ett verktyg returnerar svaret ett `function_call`-utdataobjekt.
+Du skickar sedan en uppföljningsbegäran med `function_call_output` för att fortsätta svängen.
 
 ## Bilder (`input_image`)
 
@@ -155,8 +148,8 @@ Stöder base64- eller URL-källor:
 }
 ```
 
-Tillåtna MIME-typer (aktuella): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
-Maxstorlek (aktuellt): 10MB.
+Tillåtna MIME-typer (nuvarande): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Max storlek (nuvarande): 10MB.
 
 ## Filer (`input_file`)
 
@@ -183,11 +176,11 @@ Nuvarande beteende:
 
 - Filinnehåll avkodas och läggs till i **systemprompten**, inte i användarmeddelandet,
   så det förblir efemärt (sparas inte i sessionshistoriken).
-- PDF:er parsas för text. Om lite text hittas rasteriseras de första sidorna
+- PDF-filer är tolkade för text. Om lite text hittas, är de första sidorna rasterized
   till bilder och skickas till modellen.
 
-PDF-parsning använder den Node-vänliga `pdfjs-dist` legacy-builden (utan worker). Den moderna
-PDF.js-builden förväntar sig browser-workers/DOM-globala variabler och används därför inte i Gateway.
+PDF parsning använder Node-vänliga `pdfjs-dist` äldre bygga (ingen arbetare). Den moderna
+PDF.js bygga förväntar webbläsararbetare/DOM-globaler, så den används inte i Gateway.
 
 Standardvärden för URL-hämtning:
 

@@ -4,13 +4,6 @@ read_when:
   - Usted está gestionando nodos emparejados (cámaras, pantalla, lienzo)
   - Necesita aprobar solicitudes o invocar comandos de nodos
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:58Z
 ---
 
 # `openclaw nodes`
@@ -59,7 +52,7 @@ Indicadores de invocación:
 - `--invoke-timeout <ms>`: tiempo de espera de invocación del nodo (valor predeterminado `15000`).
 - `--idempotency-key <key>`: clave de idempotencia opcional.
 
-### Valores predeterminados de estilo exec
+### Ejec-estilo por defecto
 
 `nodes run` refleja el comportamiento exec del modelo (valores predeterminados + aprobaciones):
 

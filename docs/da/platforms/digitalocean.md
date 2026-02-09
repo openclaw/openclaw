@@ -4,32 +4,25 @@ read_when:
   - Opsætning af OpenClaw på DigitalOcean
   - Leder efter billig VPS-hosting til OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:32Z
 ---
 
 # OpenClaw på DigitalOcean
 
 ## Mål
 
-Kør en vedvarende OpenClaw Gateway på DigitalOcean for **$6/måned** (eller $4/md. med reserveret prissætning).
+Kør en vedvarende OpenClaw Gateway på DigitalOcean for **$6 / måned** (eller $4 / mdr med reserverede priser).
 
 Hvis du vil have en $0/måned-mulighed og ikke har noget imod ARM + udbyderspecifik opsætning, se [Oracle Cloud-guiden](/platforms/oracle).
 
 ## Prissammenligning (2026)
 
-| Udbyder      | Plan            | Specifikationer         | Pris/md.    | Noter                                         |
-| ------------ | --------------- | ----------------------- | ----------- | --------------------------------------------- |
-| Oracle Cloud | Always Free ARM | op til 4 OCPU, 24GB RAM | $0          | ARM, begrænset kapacitet / tilmeldings-quirks |
+| Udbyder      | Plan            | Specifikationer         | Pris/md.                       | Noter                                         |
+| ------------ | --------------- | ----------------------- | ---------------------------------------------- | --------------------------------------------- |
+| Oracle Cloud | Always Free ARM | op til 4 OCPU, 24GB RAM | $0                                             | ARM, begrænset kapacitet / tilmeldings-quirks |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM         | €3,79 (~$4) | Billigste betalte mulighed                    |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6          | Nem UI, god dokumentation                     |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6          | Mange lokationer                              |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5          | Nu en del af Akamai                           |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6                                             | Nem UI, god dokumentation                     |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6                                             | Mange lokationer                              |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5                                             | Nu en del af Akamai                           |
 
 **Valg af udbyder:**
 
@@ -45,7 +38,7 @@ Hvis du vil have en $0/måned-mulighed og ikke har noget imod ARM + udbyderspeci
 - SSH-nøglepar (eller villighed til at bruge adgangskodegodkendelse)
 - ~20 minutter
 
-## 1) Opret en Droplet
+## 1. Opret en Droplet
 
 1. Log ind på [DigitalOcean](https://cloud.digitalocean.com/)
 2. Klik **Create → Droplets**
@@ -63,7 +56,7 @@ Hvis du vil have en $0/måned-mulighed og ikke har noget imod ARM + udbyderspeci
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Installér OpenClaw
+## 3. Installér OpenClaw
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Kør introduktion
+## 4. Kør introduktion
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ Opsætningsguiden fører dig igennem:
 - Gateway-token (auto-genereret)
 - Daemon-installation (systemd)
 
-## 5) Verificér Gateway
+## 5. Verificér Gateway
 
 ```bash
 # Check status
@@ -106,9 +99,9 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Få adgang til dashboardet
+## 6. Få adgang til dashboardet
 
-Gatewayen binder som standard til loopback. For at få adgang til kontrol-UI’et:
+Gateway binder til loopback som standard. For at få adgang til kontrolUI:
 
 **Mulighed A: SSH-tunnel (anbefalet)**
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Åbn: `http://<tailscale-ip>:18789` (token påkrævet).
 
-## 7) Forbind dine kanaler
+## 7. Forbind dine kanaler
 
 ### Telegram
 
@@ -169,7 +162,7 @@ Se [Kanaler](/channels) for andre udbydere.
 
 ## Optimeringer til 1GB RAM
 
-$6-dropletten har kun 1GB RAM. For at holde det kørende stabilt:
+Den $6 droplet har kun 1GB RAM. For at holde tingene gnidningsløre:
 
 ### Tilføj swap (anbefalet)
 
@@ -204,7 +197,7 @@ Al tilstand ligger i:
 - `~/.openclaw/` — konfiguration, legitimationsoplysninger, sessionsdata
 - `~/.openclaw/workspace/` — workspace (SOUL.md, hukommelse, m.m.)
 
-Disse overlever genstarter. Tag backup jævnligt:
+Disse overleve genstarter. Tilbage dem periodisk:
 
 ```bash
 tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
@@ -228,7 +221,7 @@ Oracle Cloud tilbyder **Always Free** ARM-instanser, der er markant mere kraftfu
 - Tilmelding kan være finicky (prøv igen, hvis det fejler)
 - ARM-arkitektur — det meste virker, men nogle binærer kræver ARM-builds
 
-For den fulde opsætningsguide, se [Oracle Cloud](/platforms/oracle). For tilmeldingstips og fejlfinding af tilmeldingsprocessen, se denne [community-guide](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
+For den fulde opsætningsguide, se [Oracle Cloud](/platforms/oracle). For tilmeldingstips og fejlfinding af tilmeldingsprocessen, se denne [fællesskabsvejledning](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd).
 
 ---
 

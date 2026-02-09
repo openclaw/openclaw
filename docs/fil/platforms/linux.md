@@ -4,21 +4,14 @@ read_when:
   - Naghahanap ng status ng Linux companion app
   - Nagpaplano ng saklaw ng platform o mga kontribusyon
 title: "Linux App"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # Linux App
 
-Ang Gateway ay ganap na sinusuportahan sa Linux. **Node ang inirerekomendang runtime**.
+Ang Gateway ay ganap na suportado sa Linux. **Inirerekomendang runtime ang Node**.
 Hindi inirerekomenda ang Bun para sa Gateway (mga bug sa WhatsApp/Telegram).
 
-Planado ang mga native Linux companion app. Bukas ang mga kontribusyon kung gusto mong tumulong sa pagbuo ng isa.
+May planong mga native Linux companion app. Tinatanggap ang mga kontribusyon kung nais mong tumulong sa paggawa nito.
 
 ## Mabilis na ruta para sa baguhan (VPS)
 
@@ -72,8 +65,8 @@ openclaw doctor
 ## Kontrol ng system (systemd user unit)
 
 Bilang default, nag-i-install ang OpenClaw ng systemd **user** service. Gumamit ng **system**
-service para sa mga shared o palaging naka-on na server. Ang buong halimbawa ng unit at gabay ay
-nasa [Gateway runbook](/gateway).
+service para sa mga shared o laging-on na server. Ang buong halimbawa ng unit at gabay ay
+matatagpuan sa [Gateway runbook](/gateway).
 
 Minimal na setup:
 

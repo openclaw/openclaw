@@ -3,13 +3,6 @@ summary: "Mode exec eleve et directives /elevated"
 read_when:
   - Ajustement des valeurs par defaut du mode eleve, des listes d’autorisation ou du comportement des commandes slash
 title: "Mode eleve"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:02Z
 ---
 
 # Mode eleve (/elevated directives)
@@ -58,7 +51,7 @@ x-i18n:
 - Repli Discord : si `tools.elevated.allowFrom.discord` est omis, la liste `channels.discord.dm.allowFrom` est utilisee comme repli. Definissez `tools.elevated.allowFrom.discord` (meme `[]`) pour remplacer. Les listes d’autorisation par agent n’utilisent **pas** le repli.
 - Tous les gates doivent passer ; sinon le mode eleve est traite comme indisponible.
 
-## Journalisation + etat
+## Journalisation + statut
 
 - Les appels exec en mode eleve sont journalises au niveau info.
 - L’etat de la session inclut le mode eleve (par ex. `elevated=ask`, `elevated=full`).

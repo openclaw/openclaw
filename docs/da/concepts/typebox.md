@@ -3,23 +3,16 @@ summary: "TypeBox-skemaer som den eneste sandhedskilde for gateway-protokollen"
 read_when:
   - Opdatering af protokolskemaer eller kodegenerering
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:18Z
 ---
 
 # TypeBox som protokollens sandhedskilde
 
 Senest opdateret: 2026-01-10
 
-TypeBox er et TypeScript-first skemabibliotek. Vi bruger det til at definere **Gateway
-WebSocket-protokollen** (handshake, request/response, serverevents). Disse skemaer
-driver **runtime-validering**, **JSON Schema-eksport** og **Swift-kodegenerering**
-til macOS-appen. Én sandhedskilde; alt andet genereres.
+TypeBox er et TypeScript-første skema bibliotek. Vi bruger den til at definere \*\* Gateway
+WebSocket protokol\*\* (håndtryk, anmodning/svar, server begivenheder). Disse skemaer
+drev **runtime validering**, **JSON Schema export**, og **Swift codegen** for
+macOS app. En kilde til sandhed; alt andet genereres.
 
 Hvis du vil have den overordnede protokol-kontekst, så start med
 [Gateway-arkitektur](/concepts/architecture).
@@ -30,11 +23,11 @@ Hver Gateway WS-besked er én af tre frames:
 
 - **Request**: `{ type: "req", id, method, params }`
 - **Response**: `{ type: "res", id, ok, payload | error }`
-- **Event**: `{ type: "event", event, payload, seq?, stateVersion? }`
+- **Begivenhed**: `{ type: "begivenhed", event, nyttelast, seq?, stateVersion? }`
 
-Den første frame **skal** være en `connect`-request. Derefter kan klienter kalde
-metoder (f.eks. `health`, `send`, `chat.send`) og abonnere på events (f.eks.
-`presence`, `tick`, `agent`).
+Den første ramme **must** være en `connect` anmodning. Derefter kan klienter kalde
+metoder (f.eks. `health`, `send`, `chat.send`) og abonnere på begivenheder (f.eks.
+`tilstedeværelse`, `tick`, `agent`).
 
 Forbindelsesflow (minimalt):
 
@@ -80,8 +73,8 @@ Den autoritative liste findes i `src/gateway/server.ts` (`METHODS`, `EVENTS`).
 
 ## Hvordan skemaerne bruges ved runtime
 
-- **Serverside**: hver indgående frame valideres med AJV. Handshaken accepterer kun
-  en `connect`-request, hvis params matcher `ConnectParams`.
+- \*\*Serversiden \*\*: Alle indgående rammer er valideret med AJV. Håndtrykket kun
+  accepterer en `connect` anmodning, hvis params matcher `ConnectParams`.
 - **Klientside**: JS-klienten validerer event- og response-frames, før de
   bruges.
 - **Metadeflade**: Gateway annoncerer de understøttede `methods` og
@@ -284,8 +277,8 @@ Ukendte frametyper bevares som rå payloads for fremadrettet kompatibilitet.
 
 ## Live schema JSON
 
-Det genererede JSON Schema ligger i repoet ved `dist/protocol.schema.json`. Den
-offentliggjorte rå fil er typisk tilgængelig på:
+Genereret JSON Schema er i repo på `dist/protocol.schema.json`. Den
+offentliggjorte råfil er typisk tilgængelig på:
 
 - [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 

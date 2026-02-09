@@ -5,20 +5,13 @@ read_when:
   - Fejlsøgning af hvorfor openclaw interfererer med din egen Chrome
   - Implementering af browserindstillinger + livscyklus i macOS-appen
 title: "Browser (OpenClaw-administreret)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:30Z
 ---
 
 # Browser (openclaw-managed)
 
-OpenClaw kan køre en **dedikeret Chrome/Brave/Edge/Chromium-profil**, som agenten styrer.
-Den er isoleret fra din personlige browser og administreres via en lille lokal
-kontroltjeneste inde i Gateway (kun loopback).
+OpenClaw kan køre en **dedikeret Chrome/Brave/Edge/Chrom profil**, som agenten kontrollerer.
+Det er isoleret fra din personlige browser og styres gennem en lille lokal
+kontroltjeneste inde i Gateway (loopback kun).
 
 Begynderblik:
 
@@ -35,8 +28,8 @@ Begynderblik:
 - Agenthandlinger (klik/skriv/træk/vælg), snapshots, skærmbilleder, PDF’er.
 - Valgfri understøttelse af flere profiler (`openclaw`, `work`, `remote`, ...).
 
-Denne browser er **ikke** din daglige driver. Den er en sikker, isoleret overflade til
-agentautomatisering og verifikation.
+Denne browser er **ikke** din daglige driver. Det er en sikker, isoleret overflade for
+agent automatisering og verifikation.
 
 ## Hurtig start
 
@@ -95,15 +88,15 @@ Noter:
 - `remoteCdpHandshakeTimeoutMs` gælder for fjern CDP WebSocket-tilgængelighedstjek.
 - `attachOnly: true` betyder “start aldrig en lokal browser; tilknyt kun, hvis den allerede kører.”
 - `color` + pr.-profil `color` farver browser-UI’en, så du kan se, hvilken profil der er aktiv.
-- Standardprofilen er `chrome` (udvidelsesrelæ). Brug `defaultProfile: "openclaw"` for den administrerede browser.
+- Standard profil er 'chrome' (udvidelse relæ). Brug `defaultProfile: "openclaw"` til den administrerede browser.
 - Automatisk registreringsrækkefølge: systemets standardbrowser hvis Chromium-baseret; ellers Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Lokale `openclaw`-profiler tildeler automatisk `cdpPort`/`cdpUrl` — sæt dem kun for fjern CDP.
 
 ## Brug Brave (eller en anden Chromium-baseret browser)
 
-Hvis din **systemstandard**-browser er Chromium-baseret (Chrome/Brave/Edge/etc),
-bruger OpenClaw den automatisk. Sæt `browser.executablePath` for at tilsidesætte
-autodetektion:
+Hvis din **systemstandard** browser er Chromium-baseret (Chrome/Brave/Edge/etc), bruger
+OpenClaw det automatisk. Sæt `browser.executablePath` for at tilsidesætte
+auto-detektion:
 
 CLI-eksempel:
 
@@ -138,23 +131,23 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 - **Lokal kontrol (standard):** Gateway starter loopback-kontroltjenesten og kan starte en lokal browser.
 - **Fjern kontrol (node-vært):** kør en node-vært på maskinen, der har browseren; Gateway proxy’er browserhandlinger til den.
-- **Fjern CDP:** sæt `browser.profiles.<name>.cdpUrl` (eller `browser.cdpUrl`) for at
-  tilknytte til en fjern Chromium-baseret browser. I dette tilfælde starter OpenClaw ikke en lokal browser.
+- **Fjern-CDP:** sæt `browser.profiler.<name>.cdpUrl` (eller `browser.cdpUrl`) til
+  vedhæfte til en ekstern Chrom-baseret browser. I dette tilfælde vil OpenClaw ikke starte en lokal browser.
 
 Fjerne CDP-URL’er kan inkludere autentificering:
 
-- Forespørgsels-tokens (f.eks. `https://provider.example?token=<token>`)
+- Forespørgsel tokens (f.eks. `https://provider.example?token=<token>`)
 - HTTP Basic auth (f.eks. `https://user:pass@provider.example`)
 
-OpenClaw bevarer autentificeringen ved kald til `/json/*`-endepunkter og ved
-forbindelse til CDP WebSocket. Foretræk miljøvariabler eller secrets managers til
-tokens frem for at committe dem i konfigurationsfiler.
+OpenClaw bevarer auth når du ringer `/json/*` endepunkter og når du forbinder
+til CDP WebSocket. Foretræk miljøvariabler eller hemmeligheder managere for
+tokens i stedet for at forpligte dem til at konfigurere filer.
 
 ## Node browser-proxy (nul-konfigurationsstandard)
 
-Hvis du kører en **node-vært** på maskinen med din browser, kan OpenClaw
-automatisk route browser-værktøjskald til den node uden ekstra browserkonfiguration.
-Dette er standardstien for fjerne gateways.
+Hvis du kører en \*\* node vært \*\* på den maskine, der har din browser, OpenClaw kan
+auto-rute browser værktøj opkald til denne node uden nogen ekstra browser konfiguration.
+Dette er standardstien for eksterne gateways.
 
 Noter:
 
@@ -166,9 +159,9 @@ Noter:
 
 ## Browserless (hostet fjern CDP)
 
-[Browserless](https://browserless.io) er en hostet Chromium-tjeneste, der eksponerer
-CDP-endepunkter over HTTPS. Du kan pege en OpenClaw-browserprofil på et
-Browserless-regionsendepunkt og autentificere med din API-nøgle.
+[Browserless](https://browserless.io) er en hosted Chrom tjeneste, der udsætter
+CDP endepunkter over HTTPS. Du kan pege en OpenClaw browser profil på et
+Browserless region endpoint og godkende med din API-nøgle.
 
 Eksempel:
 
@@ -209,7 +202,7 @@ Tips til fjern CDP:
 
 ## Profiler (flere browsere)
 
-OpenClaw understøtter flere navngivne profiler (routing-konfigurationer). Profiler kan være:
+OpenClaw understøtter flere navngivne profiler (routing configs). Profiler kan være:
 
 - **openclaw-managed**: en dedikeret Chromium-baseret browserinstans med sin egen brugerdata-mappe + CDP-port
 - **remote**: en eksplicit CDP-URL (Chromium-baseret browser kører et andet sted)
@@ -242,8 +235,8 @@ Hvis Gateway kører et andet sted, så kør en node-vært på browsermaskinen, s
 
 ### Sandkasse-sessioner
 
-Hvis agentsessionen er sandboxed, kan `browser`-værktøjet som standard bruge `target="sandbox"` (sandbox-browser).
-Overtagelse via Chrome-udvidelsesrelæ kræver værtsbrowserkontrol, så enten:
+Hvis agentsessionen er sandboxed, kan værktøjet `browser` standard til `target="sandbox"` (sandkasse browser).
+Chrome udvidelse relæ overtagelse kræver vært browser kontrol, så enten:
 
 - kør sessionen usandboxed, eller
 - sæt `agents.defaults.sandbox.browser.allowHostControl: true` og brug `target="host"` ved kald af værktøjet.
@@ -325,10 +318,10 @@ Alle endepunkter accepterer `?profile=<name>`.
 
 ### Playwright-krav
 
-Nogle funktioner (navigér/handl/AI-snapshot/rolle-snapshot, element-skærmbilleder, PDF)
-kræver Playwright. Hvis Playwright ikke er installeret, returnerer disse endepunkter en tydelig
-501-fejl. ARIA-snapshots og grundlæggende skærmbilleder virker stadig for openclaw-managed Chrome.
-For Chrome-udvidelsesrelæ-driveren kræver ARIA-snapshots og skærmbilleder Playwright.
+Nogle funktioner (navigér/act/AI snapshot/role snapshot, element screenshots, PDF) kræver
+Playwright. Hvis Playwright ikke er installeret, disse endepunkter returnerer en klar 501
+fejl. ARIA snapshots og grundlæggende screenshots stadig arbejde for openclaw-managed Chrome.
+For Chrome udvidelse relæ driver, ARIA snapshots og screenshots kræver Playwright.
 
 Hvis du ser `Playwright is not available in this gateway build`, så installér den fulde
 Playwright-pakke (ikke `playwright-core`) og genstart gatewayen, eller geninstallér
@@ -336,17 +329,17 @@ OpenClaw med browsersupport.
 
 #### Docker Playwright-installation
 
-Hvis din Gateway kører i Docker, så undgå `npx playwright` (npm override-konflikter).
-Brug den medfølgende CLI i stedet:
+Hvis din Gateway kører i Docker, undgå `npx playwright` (npm tilsidesætte konflikter).
+Brug den bundtede CLI i stedet:
 
 ```bash
 docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-For at bevare browser-downloads, sæt `PLAYWRIGHT_BROWSERS_PATH` (for eksempel
-`/home/node/.cache/ms-playwright`) og sørg for at `/home/node` bevares via
-`OPENCLAW_HOME_VOLUME` eller et bind mount. Se [Docker](/install/docker).
+For at fortsætte browserdownloads, angiv `PLAYWRIGHT_BROWSERS_PATH` (for eksempel,
+`/home/node/.cache/ms-playwright`) og sørg for `/home/node` er persisted via
+`OPENCLAW_HOME_VOLUME` eller et bindingsmount. Se [Docker](/install/docker).
 
 ## Sådan virker det (internt)
 
@@ -363,8 +356,8 @@ skifte lokale/fjerne browsere og profiler.
 
 ## CLI hurtig reference
 
-Alle kommandoer accepterer `--browser-profile <name>` for at målrette en specifik profil.
-Alle kommandoer accepterer også `--json` for maskinlæsbar output (stabile payloads).
+Alle kommandoer accepterer `--browser-profil <name>` for at målrette en bestemt profil.
+Alle kommandoer accepterer også `--json` for maskinlæsbar output (stabil nyttelast).
 
 Grundlæggende:
 
@@ -456,8 +449,8 @@ Noter:
   - `--frame "<iframe selector>"` afgrænser rolle-snapshots til en iframe (parres med rolreferencer som `e12`).
   - `--interactive` giver en flad, let-at-vælge liste over interaktive elementer (bedst til at drive handlinger).
   - `--labels` tilføjer et skærmbillede kun af viewport med overlayede ref-etiketter (udskriver `MEDIA:<path>`).
-- `click`/`type`/osv. kræver en `ref` fra `snapshot` (enten numerisk `12` eller rolreference `e12`).
-  CSS-selektorer understøttes bevidst ikke til handlinger.
+- `click`/`type`/etc kræver en `ref` fra `snapshot` (enten numerisk `12` eller rolleref `e12`).
+  CSS-vælgere understøttes med vilje ikke for handlinger.
 
 ## Snapshots og referencer
 
@@ -504,7 +497,7 @@ openclaw browser wait "#main" \
 
 ## Debug-workflows
 
-Når en handling fejler (f.eks. “not visible”, “strict mode violation”, “covered”):
+Hvis en handling mislykkes (f.eks. »ikke synlig«, »streng tilstand overtrædelse«, »dækket«):
 
 1. `openclaw browser snapshot --interactive`
 2. Brug `click <ref>` / `type <ref>` (foretræk rolreferencer i interaktiv tilstand)
@@ -551,9 +544,9 @@ Disse er nyttige til “få sitet til at opføre sig som X”-workflows:
 ## Sikkerhed & privatliv
 
 - openclaw-browserprofilen kan indeholde indloggede sessioner; behandl den som følsom.
-- `browser act kind=evaluate` / `openclaw browser evaluate` og `wait --fn`
-  udfører vilkårlig JavaScript i sidekonteksten. Prompt injection kan styre
-  dette. Deaktivér det med `browser.evaluateEnabled=false`, hvis du ikke har brug for det.
+- `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. Øjeblikkelig injektion kan styre
+  dette. Deaktivér det med `browser.evaluateEnabled=false` hvis du ikke har brug for det.
 - For login- og anti-bot-noter (X/Twitter osv.), se [Browser login + X/Twitter posting](/tools/browser-login).
 - Hold Gateway/node-værten privat (loopback eller kun tailnet).
 - Fjerne CDP-endepunkter er kraftfulde; tunnelér og beskyt dem.

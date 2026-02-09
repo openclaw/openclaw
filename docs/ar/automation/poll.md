@@ -4,13 +4,6 @@ read_when:
   - إضافة دعم الاستطلاعات أو تعديله
   - تصحيح أخطاء إرسال الاستطلاعات من CLI أو Gateway
 title: "الاستطلاعات"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:47Z
 ---
 
 # الاستطلاعات
@@ -51,7 +44,7 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 
 الطريقة: `poll`
 
-المعاملات:
+Params:
 
 - `to` (string، مطلوب)
 - `question` (string، مطلوب)

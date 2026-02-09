@@ -4,13 +4,6 @@ read_when:
   - Skills の設定を追加または変更する場合
   - 同梱の許可リストやインストール動作を調整する場合
 title: "Skills 設定"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:32Z
 ---
 
 # Skills 設定
@@ -47,7 +40,8 @@ x-i18n:
 
 ## フィールド
 
-- `allowBundled`: **同梱** Skills のみに対する任意の許可リストです。設定されている場合、リスト内の同梱 Skills のみが対象になります（管理された／ワークスペースの Skills には影響しません）。
+- `allowBundled`: **同梱** Skills のみに対する任意の許可リストです。設定されている場合、リスト内の同梱 Skills のみが対象になります（管理された／ワークスペースの Skills には影響しません）。 設定されている場合、リスト内の
+  バンドルされたスキルのみが対象となります(管理スキル/ワークスペーススキルは影響を受けません)。
 - `load.extraDirs`: スキャン対象とする追加の Skill ディレクトリ（優先度は最も低い）。
 - `load.watch`: Skill フォルダーを監視し、Skills のスナップショットを更新します（デフォルト: true）。
 - `load.watchDebounceMs`: Skill ウォッチャーのイベントに対するデバウンス（ミリ秒、デフォルト: 250）。
@@ -55,6 +49,8 @@ x-i18n:
 - `install.nodeManager`: Node インストーラーの優先設定（`npm` | `pnpm` | `yarn` | `bun`、デフォルト: npm）。
   これは **Skill のインストール** のみに影響します。Gateway ランタイムは引き続き Node を使用してください
   （WhatsApp/Telegram では Bun は推奨されません）。
+  これは**スキルインストール**にのみ影響します。ゲートウェイランタイムはノード
+  (WhatsApp/Telegramにはお勧めしません)。
 - `entries.<skillKey>`: Skill ごとの上書き設定。
 
 Skill ごとのフィールド:
@@ -65,12 +61,13 @@ Skill ごとのフィールド:
 
 ## 注記
 
-- `entries` 配下のキーは、既定では Skill 名にマッピングされます。Skill が `metadata.openclaw.skillKey` を定義している場合は、そのキーを使用してください。
+- `entries`の下のキーは、デフォルトでスキル名にマップされます。 `entries` 配下のキーは、既定では Skill 名にマッピングされます。Skill が `metadata.openclaw.skillKey` を定義している場合は、そのキーを使用してください。
 - ウォッチャーが有効な場合、Skills への変更は次回のエージェントのターンで反映されます。
 
 ### サンドボックス化された Skills と環境変数
 
-セッションが **サンドボックス化** されている場合、Skill プロセスは Docker 内で実行されます。サンドボックスはホストの `process.env` を **継承しません**。
+セッションが **サンドボックス化** されている場合、Skill プロセスは Docker 内で実行されます。サンドボックスはホストの `process.env` を **継承しません**。 Sandbox
+は `process.env` を継承しません。
 
 次のいずれかを使用してください。
 

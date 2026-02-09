@@ -5,18 +5,11 @@ read_when:
   - Cài đặt, tìm kiếm hoặc phát hành Skills
   - Giải thích các cờ CLI của ClawHub và hành vi đồng bộ
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:34Z
 ---
 
 # ClawHub
 
-ClawHub là **registry Skills công khai cho OpenClaw**. Đây là dịch vụ miễn phí: tất cả Skills đều công khai, mở và hiển thị cho mọi người để chia sẻ và tái sử dụng. Một Skill chỉ đơn giản là một thư mục có tệp `SKILL.md` (kèm theo các tệp văn bản hỗ trợ). Bạn có thể duyệt Skills trên ứng dụng web hoặc dùng CLI để tìm kiếm, cài đặt, cập nhật và phát hành Skills.
+24. ClawHub là **registry kỹ năng công khai cho OpenClaw**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. 26. Một kỹ năng chỉ là một thư mục với tệp `SKILL.md` (kèm theo các tệp văn bản hỗ trợ). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
 
 Trang web: [clawhub.ai](https://clawhub.ai)
 
@@ -43,7 +36,7 @@ Trang web: [clawhub.ai](https://clawhub.ai)
 
 ## Dành cho ai (thân thiện với người mới)
 
-Nếu bạn muốn thêm khả năng mới cho tác tử OpenClaw của mình, ClawHub là cách dễ nhất để tìm và cài đặt Skills. Bạn không cần biết cách backend hoạt động. Bạn có thể:
+If you want to add new capabilities to your OpenClaw agent, ClawHub is the easiest way to find and install skills. 29. Bạn không cần biết backend hoạt động như thế nào. 30. Bạn có thể:
 
 - Tìm kiếm Skills bằng ngôn ngữ tự nhiên.
 - Cài đặt một Skill vào workspace của bạn.
@@ -73,16 +66,16 @@ pnpm add -g clawhub
 
 ## Cách tích hợp với OpenClaw
 
-Theo mặc định, CLI cài đặt Skills vào `./skills` trong thư mục làm việc hiện tại của bạn. Nếu một workspace OpenClaw được cấu hình, `clawhub` sẽ quay về workspace đó trừ khi bạn ghi đè `--workdir` (hoặc `CLAWHUB_WORKDIR`). OpenClaw tải Skills của workspace từ `<workspace>/skills` và sẽ nhận chúng ở **phiên** tiếp theo. Nếu bạn đã dùng `~/.openclaw/skills` hoặc Skills đi kèm, Skills của workspace sẽ được ưu tiên.
+44. Theo mặc định, CLI cài đặt các kỹ năng vào `./skills` dưới thư mục làm việc hiện tại của bạn. If a OpenClaw workspace is configured, `clawhub` falls back to that workspace unless you override `--workdir` (or `CLAWHUB_WORKDIR`). 33. OpenClaw tải các kỹ năng của workspace từ `<workspace>/skills` và sẽ nhận chúng ở phiên **tiếp theo**. 34. Nếu bạn đã sử dụng `~/.openclaw/skills` hoặc các kỹ năng đi kèm, kỹ năng của workspace sẽ được ưu tiên.
 
 Để biết thêm chi tiết về cách Skills được tải, chia sẻ và kiểm soát, xem
 [Skills](/tools/skills).
 
 ## Tổng quan hệ thống Skills
 
-Một Skill là một gói tệp có phiên bản, dạy OpenClaw cách thực hiện
-một tác vụ cụ thể. Mỗi lần phát hành tạo ra một phiên bản mới, và registry giữ
-lịch sử các phiên bản để người dùng có thể kiểm tra thay đổi.
+A skill is a versioned bundle of files that teaches OpenClaw how to perform a
+specific task. Each publish creates a new version, and the registry keeps a
+history of versions so users can audit changes.
 
 Một Skill điển hình bao gồm:
 
@@ -90,8 +83,8 @@ Một Skill điển hình bao gồm:
 - Các cấu hình, script hoặc tệp hỗ trợ tùy chọn được Skill sử dụng.
 - Metadata như thẻ, tóm tắt và yêu cầu cài đặt.
 
-ClawHub sử dụng metadata để hỗ trợ khám phá và phơi bày an toàn các khả năng của Skill.
-Registry cũng theo dõi các tín hiệu sử dụng (như sao và lượt tải) để cải thiện
+ClawHub sử dụng siêu dữ liệu để hỗ trợ khám phá và phơi bày an toàn các khả năng của kỹ năng.
+Registry cũng theo dõi các tín hiệu sử dụng (chẳng hạn như sao và lượt tải) để cải thiện
 xếp hạng và khả năng hiển thị.
 
 ## Dịch vụ cung cấp gì (tính năng)
@@ -106,9 +99,9 @@ xếp hạng và khả năng hiển thị.
 
 ## Bảo mật và kiểm duyệt
 
-ClawHub mặc định là mở. Bất kỳ ai cũng có thể tải lên Skills, nhưng tài khoản GitHub
-phải tồn tại ít nhất một tuần để phát hành. Điều này giúp giảm lạm dụng mà không
-chặn các đóng góp hợp lệ.
+39. ClawHub mặc định là mở. 40. Bất kỳ ai cũng có thể tải lên kỹ năng, nhưng tài khoản GitHub phải
+    được tạo ít nhất một tuần để xuất bản. Điều này giúp làm chậm việc lạm dụng mà không chặn
+    những người đóng góp hợp pháp.
 
 Báo cáo và kiểm duyệt:
 
@@ -119,7 +112,7 @@ Báo cáo và kiểm duyệt:
 - Moderator có thể xem Skills bị ẩn, bỏ ẩn, xóa hoặc cấm người dùng.
 - Lạm dụng tính năng báo cáo có thể dẫn đến bị cấm tài khoản.
 
-Muốn trở thành moderator? Hãy hỏi trong Discord của OpenClaw và liên hệ với một
+Bạn quan tâm đến việc trở thành người kiểm duyệt? 43. Hãy hỏi trong OpenClaw Discord và liên hệ với một
 moderator hoặc maintainer.
 
 ## Lệnh và tham số CLI
@@ -236,11 +229,11 @@ clawhub sync --all
 
 ### Thay đổi cục bộ so với phiên bản registry
 
-Cập nhật so sánh nội dung Skill cục bộ với các phiên bản registry bằng băm nội dung. Nếu các tệp cục bộ không khớp với bất kỳ phiên bản đã phát hành nào, CLI sẽ hỏi trước khi ghi đè (hoặc yêu cầu `--force` trong các lần chạy không tương tác).
+Các bản cập nhật so sánh nội dung kỹ năng cục bộ với các phiên bản trong registry bằng cách sử dụng băm nội dung. 45. Nếu các tệp cục bộ không khớp với bất kỳ phiên bản đã xuất bản nào, CLI sẽ hỏi trước khi ghi đè (hoặc yêu cầu `--force` trong các lần chạy không tương tác).
 
 ### Quét đồng bộ và gốc dự phòng
 
-`clawhub sync` quét workdir hiện tại của bạn trước. Nếu không tìm thấy Skills, nó sẽ quay về các vị trí legacy đã biết (ví dụ `~/openclaw/skills` và `~/.openclaw/skills`). Điều này được thiết kế để tìm các cài đặt Skill cũ mà không cần thêm cờ.
+46. `clawhub sync` quét workdir hiện tại của bạn trước. 47. Nếu không tìm thấy kỹ năng nào, nó sẽ quay về các vị trí legacy đã biết (ví dụ `~/openclaw/skills` và `~/.openclaw/skills`). 48. Điều này được thiết kế để tìm các bản cài đặt kỹ năng cũ mà không cần thêm cờ.
 
 ### Lưu trữ và lockfile
 
@@ -249,7 +242,7 @@ Cập nhật so sánh nội dung Skill cục bộ với các phiên bản regist
 
 ### Telemetry (đếm lượt cài đặt)
 
-Khi bạn chạy `clawhub sync` trong lúc đã đăng nhập, CLI sẽ gửi một ảnh chụp tối thiểu để tính lượt cài đặt. Bạn có thể tắt hoàn toàn:
+49. Khi bạn chạy `clawhub sync` trong lúc đã đăng nhập, CLI gửi một snapshot tối thiểu để tính toán số lượt cài đặt. 50. Bạn có thể tắt hoàn toàn điều này:
 
 ```bash
 export CLAWHUB_DISABLE_TELEMETRY=1

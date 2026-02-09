@@ -1,31 +1,24 @@
 ---
-summary: OpenClaw 在各通道、路由、媒體與使用者體驗方面的能力。
+summary: "OpenClaw 在各通道、路由、媒體與使用者體驗方面的能力。"
 read_when:
   - 你想要完整清單以了解 OpenClaw 支援的功能
-title: 功能
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:36Z
+title: "功能"
 ---
 
-## 重點亮點
+## Highlights
 
 <Columns>
   <Card title="Channels" icon="message-square">
     使用單一 Gateway 閘道器即可支援 WhatsApp、Telegram、Discord 與 iMessage。
   </Card>
   <Card title="Plugins" icon="plug">
-    透過擴充加入 Mattermost 與更多平台。
+    Add Mattermost and more with extensions.
   </Card>
   <Card title="Routing" icon="route">
     具備隔離工作階段的多代理程式路由。
   </Card>
   <Card title="Media" icon="image">
-    影像、音訊與文件的雙向收發。
+    Images, audio, and documents in and out.
   </Card>
   <Card title="Apps and UI" icon="monitor">
     Web 控制 UI 與 macOS 配套應用程式。
@@ -40,7 +33,7 @@ x-i18n:
 - 透過 WhatsApp Web（Baileys）的 WhatsApp 整合
 - Telegram 機器人支援（grammY）
 - Discord 機器人支援（channels.discord.js）
-- Mattermost 機器人支援（外掛）
+- Mattermost bot support (plugin)
 - 透過本機 imsg CLI（macOS）的 iMessage 整合
 - 以 RPC 模式為 Pi 提供代理程式橋接，支援工具串流
 - 長回應的串流與分段處理
@@ -55,6 +48,6 @@ x-i18n:
 - 具備配對、Canvas、聊天與相機的 Android 節點
 
 <Note>
-已移除舊版 Claude、Codex、Gemini 與 Opencode 路徑。Pi 是唯一的
-程式碼代理程式路徑。
+Legacy Claude, Codex, Gemini, and Opencode paths have been removed. Pi is the only
+coding agent path.
 </Note>

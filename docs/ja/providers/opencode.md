@@ -4,13 +4,6 @@ read_when:
   - OpenCode Zen をモデルアクセスに使用したい場合
   - コーディングに適したモデルのキュレーションされたリストが必要な場合
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:51Z
 ---
 
 # OpenCode Zen
@@ -18,6 +11,8 @@ x-i18n:
 OpenCode Zen は、コーディングエージェント向けに OpenCode チームが推奨する**キュレーションされたモデルの一覧**です。
 API キーと `opencode` プロバイダーを使用する、オプションのホスト型モデルアクセス経路です。
 Zen は現在ベータ版です。
+APIキーと`opencode`プロバイダを使用する、オプションのホスト型モデルアクセスパスです。
+禅は現在ベータになっている。
 
 ## CLI セットアップ
 

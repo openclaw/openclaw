@@ -4,19 +4,12 @@ read_when:
   - آپ OpenClaw کے لیے چیٹ چینل منتخب کرنا چاہتے ہوں
   - آپ کو معاون میسجنگ پلیٹ فارمز کا فوری جائزہ درکار ہو
 title: "چیٹ چینلز"
-x-i18n:
-  source_path: channels/index.md
-  source_hash: 6a0e2c70133776d3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:55Z
 ---
 
 # چیٹ چینلز
 
-OpenClaw آپ سے کسی بھی چیٹ ایپ پر بات کر سکتا ہے جو آپ پہلے ہی استعمال کرتے ہیں۔ ہر چینل Gateway کے ذریعے منسلک ہوتا ہے۔
-متن ہر جگہ معاون ہے؛ میڈیا اور ری ایکشنز چینل کے لحاظ سے مختلف ہوتے ہیں۔
+OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
+Text is supported everywhere; media and reactions vary by channel.
 
 ## معاون چینلز
 
@@ -44,8 +37,8 @@ OpenClaw آپ سے کسی بھی چیٹ ایپ پر بات کر سکتا ہے ج
 ## نوٹس
 
 - چینلز بیک وقت چل سکتے ہیں؛ متعدد کنفیگر کریں اور OpenClaw ہر چیٹ کے مطابق روٹنگ کرے گا۔
-- سب سے تیز سیٹ اپ عموماً **Telegram** ہوتا ہے (سادہ بوٹ ٹوکن)۔ WhatsApp کو QR جوڑی بنانے کی ضرورت ہوتی ہے اور
-  ڈسک پر زیادہ اسٹیٹ محفوظ کرتا ہے۔
+- Fastest setup is usually **Telegram** (simple bot token). WhatsApp requires QR pairing and
+  stores more state on disk.
 - گروپ کا رویہ چینل کے لحاظ سے مختلف ہوتا ہے؛ دیکھیں [Groups](/channels/groups)۔
 - حفاظت کے لیے DM جوڑی بنانا اور اجازت فہرستیں نافذ کی جاتی ہیں؛ دیکھیں [Security](/gateway/security)۔
 - Telegram کے اندرونی نکات: [grammY notes](/channels/grammy)۔

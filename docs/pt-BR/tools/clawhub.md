@@ -5,13 +5,6 @@ read_when:
   - Instalando, buscando ou publicando skills
   - Explicando flags da CLI do ClawHub e o comportamento de sincronização
 title: "ClawHub"
-x-i18n:
-  source_path: tools/clawhub.md
-  source_hash: b572473a11246357
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:17Z
 ---
 
 # ClawHub

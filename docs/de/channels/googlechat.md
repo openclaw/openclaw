@@ -3,13 +3,6 @@ summary: "Status der Google-Chat-App-Unterstützung, Funktionen und Konfiguratio
 read_when:
   - Arbeiten an Google-Chat-Kanal-Funktionen
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:22Z
 ---
 
 # Google Chat (Chat API)
@@ -143,7 +136,7 @@ Konfigurieren Sie die Ingress-Regeln Ihres Tunnels so, dass nur der Webhook-Pfad
 - **Pfad**: `/googlechat` -> `http://localhost:18789/googlechat`
 - **Standardregel**: HTTP 404 (Not Found)
 
-## Funktionsweise
+## Wie es funktioniert
 
 1. Google Chat sendet Webhook-POSTs an das Gateway. Jede Anfrage enthält einen `Authorization: Bearer <token>`-Header.
 2. OpenClaw verifiziert das Token anhand der konfigurierten `audienceType` + `audience`:

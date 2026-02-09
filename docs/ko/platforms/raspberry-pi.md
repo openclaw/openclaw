@@ -5,13 +5,6 @@ read_when:
   - ARM 디바이스에서 OpenClaw 실행하기
   - 저렴한 상시 실행 개인 AI 구축하기
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:59Z
 ---
 
 # Raspberry Pi에서 OpenClaw 실행
@@ -28,19 +21,19 @@ Raspberry Pi에서 **약 $35-80**의 일회성 비용(월 사용료 없음)으�
 
 ## 하드웨어 요구 사항
 
-| Pi 모델         | RAM     | 작동 여부 | 참고 사항                         |
-| --------------- | ------- | --------- | --------------------------------- |
-| **Pi 5**        | 4GB/8GB | ✅ 최고   | 가장 빠르며 권장됨                |
-| **Pi 4**        | 4GB     | ✅ 좋음   | 대부분의 사용자에게 최적          |
-| **Pi 4**        | 2GB     | ✅ 가능   | 작동함, 스왑 추가 권장            |
-| **Pi 4**        | 1GB     | ⚠️ 빡빡함 | 스왑 사용 시 가능, 최소 설정 필요 |
-| **Pi 3B+**      | 1GB     | ⚠️ 느림   | 작동하지만 반응이 둔함            |
-| **Pi Zero 2 W** | 512MB   | ❌        | 권장하지 않음                     |
+| Pi 모델           | RAM     | 작동 여부  | 참고 사항          |
+| --------------- | ------- | ------ | -------------- |
+| **Pi 5**        | 4GB/8GB | ✅ 최고   | 가장 빠르며 권장됨     |
+| **Pi 4**        | 4GB     | ✅ 좋음   | 대부분의 사용자에게 최적  |
+| **Pi 4**        | 2GB     | ✅ 확인   | 작동함, 스왑 추가     |
+| **Pi 4**        | 1GB     | ⚠️ 빡빡함 | 스왑으로 가능, 최소 구성 |
+| **Pi 3B+**      | 1GB     | ⚠️ 느림  | 작동하지만 반응이 둔함   |
+| **Pi Zero 2 W** | 512MB   | ❌      | 권장하지 않음        |
 
 **최소 사양:** RAM 1GB, 1 코어, 디스크 500MB  
 **권장 사양:** RAM 2GB 이상, 64비트 OS, 16GB 이상 SD 카드(또는 USB SSD)
 
-## 준비물
+## 필요한 것
 
 - Raspberry Pi 4 또는 5 (2GB 이상 권장)
 - MicroSD 카드(16GB 이상) 또는 USB SSD(더 나은 성능)
@@ -48,9 +41,9 @@ Raspberry Pi에서 **약 $35-80**의 일회성 비용(월 사용료 없음)으�
 - 네트워크 연결(Ethernet 또는 WiFi)
 - 약 30분
 
-## 1) OS 플래시
+## 1. OS 플래시
 
-헤드리스 서버에는 데스크톱이 필요 없으므로 **Raspberry Pi OS Lite (64-bit)**를 사용합니다.
+헤드리스 서버에는 데스크톱이 필요 없으므로 \*\*Raspberry Pi OS Lite (64-bit)\*\*를 사용합니다.
 
 1. [Raspberry Pi Imager](https://www.raspberrypi.com/software/) 다운로드
 2. OS 선택: **Raspberry Pi OS Lite (64-bit)**
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) 시스템 설정
+## 3. 시스템 설정
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Node.js 22 설치 (ARM64)
+## 4. Node.js 22 설치 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) 스왑 추가 (2GB 이하에서는 중요)
+## 5. 스왑 추가 (2GB 이하에서는 중요)
 
 스왑은 메모리 부족으로 인한 크래시를 방지합니다:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) OpenClaw 설치
+## 6. OpenClaw 설치
 
 ### 옵션 A: 표준 설치 (권장)
 
@@ -134,7 +127,7 @@ npm link
 
 해킹 가능한 설치는 로그와 코드에 직접 접근할 수 있어 ARM 전용 문제를 디버깅하는 데 유용합니다.
 
-## 7) 온보딩 실행
+## 7. 온보딩 실행
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) 대시보드 접근
+## 9. 대시보드 접근
 
 Pi는 헤드리스이므로 SSH 터널을 사용합니다:
 
@@ -230,13 +223,13 @@ htop
 
 대부분의 OpenClaw 기능은 ARM64에서 작동하지만, 일부 외부 바이너리는 ARM 빌드가 필요할 수 있습니다:
 
-| 도구                | ARM64 상태 | 참고 사항                           |
-| ------------------- | ---------- | ----------------------------------- |
-| Node.js             | ✅         | 매우 잘 작동함                      |
-| WhatsApp (Baileys)  | ✅         | 순수 JS, 문제 없음                  |
-| Telegram            | ✅         | 순수 JS, 문제 없음                  |
-| gog (Gmail CLI)     | ⚠️         | ARM 릴리스 여부 확인 필요           |
-| Chromium (브라우저) | ✅         | `sudo apt install chromium-browser` |
+| 도구                                    | ARM64 상태 | 참고 사항                               |
+| ------------------------------------- | -------- | ----------------------------------- |
+| Node.js               | ✅        | 매우 잘 작동함                            |
+| WhatsApp (Baileys) | ✅        | 순수 JS, 문제 없음                        |
+| Telegram                              | ✅        | 순수 JS, 문제 없음                        |
+| gog (Gmail CLI)    | ⚠️       | ARM 릴리스 여부 확인 필요                    |
+| Chromium (브라우저)    | ✅        | `sudo apt install chromium-browser` |
 
 Skill이 실패하면 해당 바이너리에 ARM 빌드가 있는지 확인하십시오. 많은 Go/Rust 도구는 지원하지만, 일부는 지원하지 않습니다.
 
@@ -343,20 +336,20 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## 비용 비교
 
-| 설정           | 일회성 비용 | 월 비용  | 참고 사항               |
-| -------------- | ----------- | -------- | ----------------------- |
-| **Pi 4 (2GB)** | ~$45        | $0       | + 전기 (~$5/년)         |
-| **Pi 4 (4GB)** | ~$55        | $0       | 권장됨                  |
-| **Pi 5 (4GB)** | ~$60        | $0       | 최고 성능               |
-| **Pi 5 (8GB)** | ~$80        | $0       | 과하지만 미래 대비 가능 |
-| DigitalOcean   | $0          | $6/월    | 연 $72                  |
-| Hetzner        | $0          | €3.79/월 | 연 ~$50                 |
+| 설정                                | 일회성 비용               | 월 비용                    | 참고 사항                                           |
+| --------------------------------- | -------------------- | ----------------------- | ----------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                      | + 전기 (~$5/년) |
+| **Pi 4 (4GB)** | ~$55 | $0                      | 권장됨                                             |
+| **Pi 5 (4GB)** | ~$60 | $0                      | 최고 성능                                           |
+| **Pi 5 (8GB)** | ~$80 | $0                      | 과하지만 미래 대비 가능                                   |
+| DigitalOcean                      | $0                   | $6/월                    | 연 $72                                           |
+| Hetzner                           | $0                   | €3.79/월 | 연 ~$50                          |
 
 **손익분기점:** Pi는 클라우드 VPS 대비 약 6-12개월 내에 본전을 회수합니다.
 
 ---
 
-## 참고 자료
+## 참고
 
 - [Linux 가이드](/platforms/linux) — 일반 Linux 설정
 - [DigitalOcean 가이드](/platforms/digitalocean) — 클라우드 대안

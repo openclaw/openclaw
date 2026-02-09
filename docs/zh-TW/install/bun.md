@@ -2,15 +2,8 @@
 summary: "Bun 工作流程（實驗性）：安裝方式與相較 pnpm 的注意事項"
 read_when:
   - 你想要最快的本地開發迴圈（bun + watch）
-  - 你遇到 Bun 安裝／修補／生命週期腳本問題
+  - 生產環境請使用 Node。
 title: "Bun（實驗性）"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:18Z
 ---
 
 # Bun（實驗性）
@@ -18,9 +11,9 @@ x-i18n:
 目標：使用 **Bun** 執行此儲存庫（可選，不建議用於 WhatsApp／Telegram），
 且不偏離 pnpm 的工作流程。
 
-⚠️ **不建議用於 Gateway runtime**（WhatsApp／Telegram 的錯誤）。正式環境請使用 Node。
+⚠️ **不建議用於 Gateway runtime**（WhatsApp／Telegram 的錯誤）。正式環境請使用 Node。 如果你想要 _不寫入 lockfile_：
 
-## 狀態
+## Status
 
 - Bun 是用於直接執行 TypeScript 的可選本地執行環境（`bun run …`、`bun --watch …`）。
 - `pnpm` 是建置的預設方案，並持續獲得完整支援（且被部分文件工具使用）。
@@ -28,13 +21,13 @@ x-i18n:
 
 ## 安裝
 
-預設：
+Default:
 
 ```sh
 bun install
 ```
 
-注意：`bun.lock`／`bun.lockb` 已加入 gitignore，因此不論採用哪種方式都不會造成儲存庫變動。若你希望「不寫入任何 lockfile」：
+注意：`bun.lock`／`bun.lockb` 已加入 gitignore，因此不論採用哪種方式都不會造成儲存庫變動。若你希望「不寫入任何 lockfile」： Bun 生命週期腳本（預設被封鎖）
 
 ```sh
 bun install --no-save
@@ -47,10 +40,10 @@ bun run build
 bun run vitest run
 ```
 
-## Bun 生命週期腳本（預設被封鎖）
+## Bun 可能會封鎖相依套件的生命週期腳本，除非明確信任（`bun pm untrusted` / `bun pm trust`）。
 
-Bun 可能會封鎖相依套件的生命週期腳本，除非明確信任（`bun pm untrusted`／`bun pm trust`）。
-對於此儲存庫而言，常被封鎖的腳本並非必要：
+對於此 repo，常被封鎖的腳本並非必要：
+注意事項
 
 - `@whiskeysockets/baileys` `preinstall`：檢查 Node 主要版本是否 >= 20（我們使用 Node 22+）。
 - `protobufjs` `postinstall`：輸出關於不相容版本配置的警告（不會產生建置產物）。
@@ -63,4 +56,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## 注意事項
 
-- 部分腳本仍硬編碼為 pnpm（例如 `docs:build`、`ui:*`、`protocol:check`）。目前請透過 pnpm 執行這些腳本。
+- 部分腳本仍硬編碼為 pnpm（例如 `docs:build`、`ui:*`、`protocol:check`）。目前請透過 pnpm 執行這些腳本。 穩定版、beta 與 dev 頻道：語意、切換與標記

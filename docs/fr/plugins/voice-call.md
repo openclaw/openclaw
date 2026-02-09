@@ -4,13 +4,6 @@ read_when:
   - Vous souhaitez passer un appel vocal sortant depuis OpenClaw
   - Vous configurez ou developpez le plugin voice-call
 title: "Plugin d’appel vocal"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:31Z
 ---
 
 # Appel vocal (plugin)

@@ -5,13 +5,6 @@ read_when:
   - Cron 은 실행되었지만 메시지가 전달되지 않았을 때
   - 하트비트가 무음이거나 건너뛰는 것처럼 보일 때
 title: "자동화 문제 해결"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:48Z
 ---
 
 # 자동화 문제 해결

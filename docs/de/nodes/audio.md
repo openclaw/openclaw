@@ -3,13 +3,6 @@ summary: "Wie eingehende Audio-/Sprachnachrichten heruntergeladen, transkribiert
 read_when:
   - Ändern der Audiotranskription oder Medienverarbeitung
 title: "Audio- und Sprachnachrichten"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:43Z
 ---
 
 # Audio / Sprachnachrichten — 2026-01-17
@@ -114,7 +107,7 @@ Hinweis: Die Erkennung von Binärdateien ist bestmöglich über macOS/Linux/Wind
 - Das Transkript steht Templates als `{{Transcript}}` zur Verfügung.
 - CLI‑stdout ist begrenzt (5 MB); halten Sie die CLI‑Ausgabe knapp.
 
-## Fallstricke
+## Gotchas
 
 - Scope‑Regeln verwenden „First‑Match‑Wins“. `chatType` wird zu `direct`, `group` oder `room` normalisiert.
 - Stellen Sie sicher, dass Ihre CLI mit Exit‑Code 0 beendet wird und reinen Text ausgibt; JSON muss über `jq -r .text` aufbereitet werden.

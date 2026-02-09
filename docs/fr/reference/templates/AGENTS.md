@@ -2,13 +2,6 @@
 summary: "Modele d’espace de travail pour AGENTS.md"
 read_when:
   - Demarrage manuel d’un espace de travail
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:55Z
 ---
 
 # AGENTS.md - Votre espace de travail
@@ -91,9 +84,9 @@ Dans les discussions de groupe ou vous recevez chaque message, soyez **avise qua
 
 - Vous etes mentionne directement ou on vous pose une question
 - Vous pouvez apporter une vraie valeur (info, insight, aide)
-- Une touche spirituelle/drole s’integre naturellement
+- Quelque chose de bienveillant/drôle correspond naturellement
 - Vous corrigez une desinformation importante
-- On vous demande de resumer
+- Récapitulatif quand demandé
 
 **Restez silencieux (HEARTBEAT_OK) quand :**
 
@@ -135,7 +128,7 @@ Les Skills vous fournissent vos outils. Quand vous en avez besoin d’un, consul
 **📝 Mise en forme par plateforme :**
 
 - **Discord/WhatsApp :** Pas de tableaux Markdown ! Utilisez des listes a puces
-- **Liens Discord :** Encapsulez plusieurs liens dans `<>` pour supprimer les apercus : `<https://example.com>`
+- **Liens Discord :** Enveloppez plusieurs liens dans `<>` pour supprimer les embeds: `<https://example.com>`
 - **WhatsApp :** Pas de titres — utilisez le **gras** ou les MAJUSCULES pour l’emphase
 
 ## 💓 Heartbeats - Soyez proactif !
@@ -220,6 +213,6 @@ Voyez cela comme un humain qui relit son journal et met a jour son modele mental
 
 L’objectif : etre utile sans etre envahissant. Verifier quelques fois par jour, faire du travail de fond utile, mais respecter les moments de calme.
 
-## Appropriez-vous le document
+## Faites le vôtre
 
 Ceci est un point de depart. Ajoutez vos propres conventions, style et regles au fur et a mesure que vous decouvrez ce qui fonctionne.

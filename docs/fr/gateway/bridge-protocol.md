@@ -5,13 +5,6 @@ read_when:
   - Investigation des échecs d’appairage ou d’authentification du pont
   - Audit de la surface nœud exposée par la passerelle
 title: "Protocole de pont"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:41Z
 ---
 
 # Protocole de pont (transport de nœud hérité)
@@ -53,7 +46,7 @@ Lorsque TLS est activé, les enregistrements TXT de découverte incluent `bridge
 
 `hello-ok` renvoie `serverName` et peut inclure `canvasHostUrl`.
 
-## Trames
+## Frames
 
 Client → Gateway :
 

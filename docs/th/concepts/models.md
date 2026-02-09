@@ -5,19 +5,13 @@ read_when:
   - การเปลี่ยนพฤติกรรมฟอลแบ็กของโมเดลหรือ UX การเลือก
   - การอัปเดตโพรบการสแกนโมเดล (เครื่องมือ/รูปภาพ)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:21Z
 ---
 
 # Models CLI
 
 ดู [/concepts/model-failover](/concepts/model-failover) สำหรับการหมุนเวียนโปรไฟล์การยืนยันตัวตน คูลดาวน์ และวิธีที่สิ่งเหล่านี้ทำงานร่วมกับฟอลแบ็ก
 ภาพรวมผู้ให้บริการแบบย่อพร้อมตัวอย่าง: [/concepts/model-providers](/concepts/model-providers)
+Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 ## การเลือกโมเดลทำงานอย่างไร
 
@@ -57,7 +51,7 @@ setup-token` ด้วย)
 - `agents.defaults.models` (allowlist + นามแฝง + พารามิเตอร์ผู้ให้บริการ)
 - `models.providers` (ผู้ให้บริการแบบกำหนดเองที่เขียนลงใน `models.json`)
 
-อ้างอิงโมเดลจะถูก normalize เป็นตัวพิมพ์เล็ก นามแฝงผู้ให้บริการอย่าง `z.ai/*` จะ normalize
+Model refs are normalized to lowercase. อ้างอิงโมเดลจะถูก normalize เป็นตัวพิมพ์เล็ก นามแฝงผู้ให้บริการอย่าง `z.ai/*` จะ normalize
 เป็น `zai/*`.
 
 ตัวอย่างการกำหนดค่าผู้ให้บริการ (รวม OpenCode Zen) อยู่ที่
@@ -67,14 +61,15 @@ setup-token` ด้วย)
 
 หากตั้งค่า `agents.defaults.models` จะกลายเป็น **allowlist** สำหรับ `/model` และสำหรับ
 session overrides เมื่อผู้ใช้เลือกโมเดลที่ไม่อยู่ใน allowlist นั้น
-OpenClaw จะส่งกลับ:
+OpenClaw จะส่งกลับ: When a user selects a model that isn’t in that allowlist,
+OpenClaw returns:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
 เหตุการณ์นี้เกิดขึ้น **ก่อน** การสร้างคำตอบตามปกติ ดังนั้นข้อความอาจดูเหมือน
-“ไม่ตอบกลับ” วิธีแก้คืออย่างใดอย่างหนึ่ง:
+“ไม่ตอบกลับ” วิธีแก้คืออย่างใดอย่างหนึ่ง: The fix is to either:
 
 - เพิ่มโมเดลลงใน `agents.defaults.models`, หรือ
 - ล้าง allowlist (ลบ `agents.defaults.models`), หรือ
@@ -111,7 +106,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 - `/model` (และ `/model list`) เป็นตัวเลือกแบบย่อ มีหมายเลข (ตระกูลโมเดล + ผู้ให้บริการที่ใช้ได้)
 - `/model <#>` เลือกจากตัวเลือกนั้น
 - `/model status` เป็นมุมมองรายละเอียด (ผู้สมัครการยืนยันตัวตน และเมื่อกำหนดค่าแล้ว จุดปลายทางผู้ให้บริการ `baseUrl` + โหมด `api`)
-- การอ้างอิงโมเดลจะถูกพาร์สโดยแยกที่ `/` **ครั้งแรก** ใช้ `provider/model` เมื่อพิมพ์ `/model <ref>`
+- การอ้างอิงโมเดลจะถูกพาร์สโดยแยกที่ `/` **ครั้งแรก** ใช้ `provider/model` เมื่อพิมพ์ `/model <ref>` Use `provider/model` when typing `/model <ref>`.
 - หาก ID โมเดลมี `/` อยู่แล้ว (สไตล์ OpenRouter) ต้องใส่คำนำหน้าผู้ให้บริการ (ตัวอย่าง: `/model openrouter/moonshotai/kimi-k2`)
 - หากละคำนำหน้าผู้ให้บริการ OpenClaw จะมองอินพุตเป็นนามแฝงหรือโมเดลของ **ผู้ให้บริการเริ่มต้น** (ใช้ได้เฉพาะเมื่อไม่มี `/` ใน ID โมเดล)
 
@@ -144,7 +139,7 @@ openclaw models image-fallbacks clear
 
 ### `models list`
 
-แสดงโมเดลที่กำหนดค่าไว้เป็นค่าเริ่มต้น แฟล็กที่มีประโยชน์:
+แสดงโมเดลที่กำหนดค่าไว้เป็นค่าเริ่มต้น แฟล็กที่มีประโยชน์: Useful flags:
 
 - `--all`: แคตตาล็อกทั้งหมด
 - `--local`: ผู้ให้บริการภายในเครื่องเท่านั้น
@@ -154,15 +149,16 @@ openclaw models image-fallbacks clear
 
 ### `models status`
 
-แสดง primary โมเดลที่ resolve แล้ว ฟอลแบ็ก โมเดลรูปภาพ และภาพรวมการยืนยันตัวตน
+Shows the resolved primary model, fallbacks, image model, and an auth overview
+of configured providers. แสดง primary โมเดลที่ resolve แล้ว ฟอลแบ็ก โมเดลรูปภาพ และภาพรวมการยืนยันตัวตน
 ของผู้ให้บริการที่กำหนดค่าไว้ นอกจากนี้ยังแสดงสถานะการหมดอายุ OAuth สำหรับโปรไฟล์ที่พบ
-ในคลังการยืนยันตัวตน (เตือนล่วงหน้า 24 ชม. เป็นค่าเริ่มต้น) `--plain` จะแสดงเฉพาะ
-primary โมเดลที่ resolve แล้ว
-สถานะ OAuth จะแสดงเสมอ (และถูกรวมในเอาต์พุต `--json`) หากผู้ให้บริการที่กำหนดค่าไว้
-ไม่มีข้อมูลรับรอง `models status` จะพิมพ์ส่วน **Missing auth**
-JSON จะรวม `auth.oauth` (ช่วงเตือน + โปรไฟล์) และ `auth.providers`
-(การยืนยันตัวตนที่มีผลต่อผู้ให้บริการ)
-ใช้ `--check` สำหรับอัตโนมัติ (exit `1` เมื่อขาด/หมดอายุ, `2` เมื่อใกล้หมดอายุ)
+ในคลังการยืนยันตัวตน (เตือนล่วงหน้า 24 ชม. `--plain` prints only the
+resolved primary model.
+OAuth status is always shown (and included in `--json` output). If a configured
+provider has no credentials, `models status` prints a **Missing auth** section.
+JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
+(effective auth per provider).
+Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
 การยืนยันตัวตน Anthropic ที่แนะนำคือ Claude Code CLI setup-token (รันได้ทุกที่; คัดลอกไปวางบนโฮสต์Gateway หากจำเป็น):
 
@@ -187,7 +183,7 @@ openclaw models status
 - `--set-image`: ตั้งค่า `agents.defaults.imageModel.primary` เป็นตัวเลือกรูปภาพแรก
 
 การโพรบต้องใช้ OpenRouter API key (จากโปรไฟล์การยืนยันตัวตนหรือ
-`OPENROUTER_API_KEY`) หากไม่มีคีย์ ให้ใช้ `--no-probe` เพื่อแสดงเฉพาะผู้สมัคร
+`OPENROUTER_API_KEY`) หากไม่มีคีย์ ให้ใช้ `--no-probe` เพื่อแสดงเฉพาะผู้สมัคร Without a key, use `--no-probe` to list candidates only.
 
 ผลการสแกนจะถูกจัดอันดับตาม:
 
@@ -204,10 +200,12 @@ openclaw models status
 - การควบคุมการโพรบ: `--timeout`, `--concurrency`
 
 เมื่อรันใน TTY คุณสามารถเลือกฟอลแบ็กแบบโต้ตอบได้ ในโหมดไม่โต้ตอบ
-ให้ส่ง `--yes` เพื่อยอมรับค่าเริ่มต้น
+ให้ส่ง `--yes` เพื่อยอมรับค่าเริ่มต้น In non‑interactive
+mode, pass `--yes` to accept defaults.
 
 ## ทะเบียนโมเดล (`models.json`)
 
 ผู้ให้บริการแบบกำหนดเองใน `models.providers` จะถูกเขียนลงใน `models.json` ภายใต้
 ไดเรกทอรีเอเจนต์ (ค่าเริ่มต้น `~/.openclaw/agents/<agentId>/models.json`) ไฟล์นี้
-จะถูกรวมโดยค่าเริ่มต้น เว้นแต่ตั้งค่า `models.mode` เป็น `replace`.
+จะถูกรวมโดยค่าเริ่มต้น เว้นแต่ตั้งค่า `models.mode` เป็น `replace`. This file
+is merged by default unless `models.mode` is set to `replace`.

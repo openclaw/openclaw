@@ -1,16 +1,9 @@
 ---
-summary: „Parsing eingehender Kanalstandorte (Telegram + WhatsApp) und Kontextfelder“
+summary: "„Parsing eingehender Kanalstandorte (Telegram + WhatsApp) und Kontextfelder“"
 read_when:
   - Beim Hinzufügen oder Ändern des Kanal-Standort-Parsing
   - Beim Verwenden von Standort-Kontextfeldern in Agent-Prompts oder Werkzeugen
-title: „Kanal-Standort-Parsing“
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:11Z
+title: "channels/location.md"
 ---
 
 # Kanal-Standort-Parsing

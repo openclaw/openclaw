@@ -4,20 +4,13 @@ read_when:
   - ကွန်ပျူတာအသစ်တစ်လုံးကို တပ်ဆင်နေစဉ်
   - ကိုယ်ပိုင် setup ကို မပျက်စီးစေဘဲ “နောက်ဆုံးဗားရှင်းများ” ကို အသုံးပြုလိုသောအခါ
 title: "တပ်ဆင်ခြင်း"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:07Z
 ---
 
 # တပ်ဆင်ခြင်း
 
 <Note>
-ပထမဆုံးအကြိမ် တပ်ဆင်နေပါက [Getting Started](/start/getting-started) မှ စတင်ပါ။
-wizard အကြောင်း အသေးစိတ်အတွက် [Onboarding Wizard](/start/wizard) ကို ကြည့်ပါ။
+18. ပထမဆုံး setup လုပ်နေတယ်ဆိုရင် [Getting Started](/start/getting-started) နဲ့ စတင်ပါ။
+19. wizard အသေးစိတ်အတွက် [Onboarding Wizard](/start/wizard) ကို ကြည့်ပါ။
 </Note>
 
 နောက်ဆုံးအပ်ဒိတ်လုပ်ထားသည့်နေ့: 2026-01-01
@@ -88,7 +81,7 @@ openclaw health
 
 ရည်ရွယ်ချက်: TypeScript Gateway ကို အလုပ်လုပ်ရန်၊ hot reload ရရှိစေရန်၊ macOS app UI ကို ဆက်လက် ချိတ်ဆက်ထားရန်။
 
-### 0) (ရွေးချယ်စရာ) macOS app ကိုလည်း source မှ လည်ပတ်ခြင်း
+### 0. (ရွေးချယ်စရာ) macOS app ကိုလည်း source မှ လည်ပတ်ခြင်း
 
 macOS app ကိုပါ bleeding edge သုံးလိုပါက—
 
@@ -96,7 +89,7 @@ macOS app ကိုပါ bleeding edge သုံးလိုပါက—
 ./scripts/restart-mac.sh
 ```
 
-### 1) dev Gateway ကို စတင်ပါ
+### 1. dev Gateway ကို စတင်ပါ
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` သည် gateway ကို watch mode ဖြင့် လည်ပတ်စေပြီး TypeScript ပြောင်းလဲမှုများအပေါ် အလိုအလျောက် reload လုပ်ပါသည်။
 
-### 2) macOS app ကို သင် လည်ပတ်နေသော Gateway သို့ ညွှန်ပြပါ
+### 2. macOS app ကို သင် လည်ပတ်နေသော Gateway သို့ ညွှန်ပြပါ
 
 **OpenClaw.app** အတွင်း—
 
 - Connection Mode: **Local**
   app သည် သတ်မှတ်ထားသော port ပေါ်ရှိ လည်ပတ်နေသော gateway ကို ချိတ်ဆက်ပါလိမ့်မည်။
 
-### 3) အတည်ပြုစစ်ဆေးခြင်း
+### 3. အတည်ပြုစစ်ဆေးခြင်း
 
 - app အတွင်း Gateway status တွင် **“Using existing gateway …”** ဟု ပြသရပါမည်
 - သို့မဟုတ် CLI ဖြင့်—
@@ -149,13 +142,13 @@ auth ကို debug လုပ်ရာတွင် သို့မဟုတ် 
 
 ## Linux (systemd user service)
 
-Linux ထည့်သွင်းမှုများတွင် systemd **user** service ကို အသုံးပြုပါသည်။ default အနေဖြင့် systemd သည် logout/idle အချိန်တွင် user services များကို ရပ်တန့်စေပြီး Gateway ကို သတ်ပစ်ပါသည်။ Onboarding သည် lingering ကို သင့်အတွက် enable လုပ်ရန် ကြိုးစားပါသည် (sudo တောင်းနိုင်ပါသည်)။ မဖြစ်သေးပါက အောက်ပါအတိုင်း လုပ်ဆောင်ပါ—
+20. Linux install တွေမှာ systemd **user** service ကို အသုံးပြုပါတယ်။ 21. ပုံမှန်အားဖြင့် systemd က logout/idle ဖြစ်တဲ့အခါ user services တွေကို ရပ်တန့်စေပြီး Gateway ကို သတ်ပစ်ပါတယ်။ 22. Onboarding က lingering ကို သင့်အတွက် enable လုပ်ဖို့ ကြိုးစားပါမယ် (sudo ကို မေးနိုင်ပါတယ်)။ 23. မသေးမကြီး ပိတ်နေသေးရင် အောက်ပါ command ကို run လုပ်ပါ:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-အမြဲတမ်း လည်ပတ်စေလိုသော သို့မဟုတ် multi-user server များအတွက် user service အစား **system** service ကို စဉ်းစားပါ (lingering မလိုအပ်ပါ)။ systemd ဆိုင်ရာ မှတ်ချက်များအတွက် [Gateway runbook](/gateway) ကို ကြည့်ပါ။
+24. အမြဲတမ်း on ဖြစ်နေစေချင်တဲ့ သို့မဟုတ် multi-user server တွေအတွက် user service အစား **system** service ကို စဉ်းစားပါ (lingering မလိုပါ)။ 25. systemd ဆိုင်ရာ မှတ်စုများအတွက် [Gateway runbook](/gateway) ကို ကြည့်ပါ။
 
 ## Related docs
 

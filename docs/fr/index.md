@@ -3,13 +3,6 @@ summary: "OpenClaw est une passerelle multicanal pour agents IA qui fonctionne s
 read_when:
   - Présenter OpenClaw aux nouveaux venus
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 97a613c67efb448b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:58Z
 ---
 
 # OpenClaw 🦞
@@ -31,19 +24,18 @@ x-i18n:
 
 > _« EXFOLIATE ! EXFOLIATE ! »_ — Un homard de l’espace, probablement
 
-<p align="center">
-  <strong>Passerelle pour agents IA sur n’importe quel OS, à travers WhatsApp, Telegram, Discord, iMessage, et plus encore.</strong><br />
+<p align="center"><strong>Passerelle pour agents IA sur n’importe quel OS, à travers WhatsApp, Telegram, Discord, iMessage, et plus encore.</strong><br />
   Envoyez un message, obtenez une réponse d’agent depuis votre poche. Des plugins ajoutent Mattermost et plus encore.
 </p>
 
 <Columns>
-  <Card title="Premiers pas" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     Installez OpenClaw et démarrez la Gateway (passerelle) en quelques minutes.
   </Card>
-  <Card title="Lancer l’assistant" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     Configuration guidée avec `openclaw onboard` et des flux d’appairage.
   </Card>
-  <Card title="Ouvrir l’interface de contrôle" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Lancez le tableau de bord du navigateur pour le chat, la configuration et les sessions.
   </Card>
 </Columns>
@@ -80,22 +72,22 @@ La Gateway (passerelle) est la source de vérité unique pour les sessions, le r
 ## Capacités clés
 
 <Columns>
-  <Card title="Passerelle multicanal" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     WhatsApp, Telegram, Discord et iMessage avec un seul processus Gateway (passerelle).
   </Card>
-  <Card title="Canaux par plugin" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     Ajoutez Mattermost et plus encore avec des paquets d’extension.
   </Card>
-  <Card title="Routage multi‑agents" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     Sessions isolées par agent, espace de travail ou expéditeur.
   </Card>
-  <Card title="Prise en charge des médias" icon="image">
+  <Card title="Media support" icon="image">
     Envoyez et recevez des images, de l’audio et des documents.
   </Card>
-  <Card title="Interface de contrôle Web" icon="monitor">
+  <Card title="Web Control UI" icon="monitor">
     Tableau de bord navigateur pour le chat, la configuration, les sessions et les nœuds.
   </Card>
-  <Card title="Nœuds mobiles" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Appairez des nœuds iOS et Android avec prise en charge de Canvas.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ La Gateway (passerelle) est la source de vérité unique pour les sessions, le r
 ## Démarrage rapide
 
 <Steps>
-  <Step title="Installer OpenClaw">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Prise en main et installation du service">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Appairer WhatsApp et démarrer la Gateway (passerelle)">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -158,22 +150,22 @@ Exemple :
 ## Commencez ici
 
 <Columns>
-  <Card title="Hubs de documentation" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     Toute la documentation et les guides, organisés par cas d’usage.
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="settings">
     Paramètres de base de la Gateway (passerelle), jetons et configuration du fournisseur.
   </Card>
-  <Card title="Accès à distance" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     Modèles d’accès SSH et tailnet.
   </Card>
-  <Card title="Canaux" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     Configuration spécifique aux canaux pour WhatsApp, Telegram, Discord, et plus encore.
   </Card>
-  <Card title="Nœuds" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     Nœuds iOS et Android avec appairage et Canvas.
   </Card>
-  <Card title="Aide" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     Correctifs courants et point d’entrée du dépannage.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Exemple :
 ## En savoir plus
 
 <Columns>
-  <Card title="Liste complète des fonctionnalités" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     Capacités complètes des canaux, du routage et des médias.
   </Card>
-  <Card title="Routage multi‑agents" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     Isolation des espaces de travail et sessions par agent.
   </Card>
-  <Card title="Sécurité" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     Jetons, listes d’autorisation et contrôles de sécurité.
   </Card>
-  <Card title="Dépannage" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Diagnostics de la Gateway (passerelle) et erreurs courantes.
   </Card>
-  <Card title="À propos et crédits" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     Origines du projet, contributeurs et licence.
   </Card>
 </Columns>

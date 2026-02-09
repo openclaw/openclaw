@@ -5,19 +5,12 @@ read_when:
   - آپ آن بورڈنگ کے نتائج ڈیبگ کر رہے ہوں یا آن بورڈنگ کلائنٹس ضم کر رہے ہوں
 title: "CLI آن بورڈنگ حوالہ"
 sidebarTitle: "CLI حوالہ"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:04Z
 ---
 
 # CLI آن بورڈنگ حوالہ
 
-یہ صفحہ `openclaw onboard` کے لیے مکمل حوالہ ہے۔
-مختصر رہنمائی کے لیے، [Onboarding Wizard (CLI)](/start/wizard) دیکھیں۔
+This page is the full reference for `openclaw onboard`.
+For the short guide, see [Onboarding Wizard (CLI)](/start/wizard).
 
 ## وزارڈ کیا کرتا ہے
 
@@ -32,71 +25,72 @@ x-i18n:
 - Skills سیٹ اپ
 
 ریموٹ موڈ اس مشین کو کہیں اور موجود gateway سے منسلک کرنے کے لیے کنفیگر کرتا ہے۔
-یہ ریموٹ ہوسٹ پر کچھ بھی انسٹال یا ترمیم نہیں کرتا۔
+It does not install or modify anything on the remote host.
 
 ## لوکل فلو کی تفصیلات
 
 <Steps>
-  <Step title="موجودہ کنفیگ کی شناخت">
-    - اگر `~/.openclaw/openclaw.json` موجود ہو تو Keep، Modify، یا Reset منتخب کریں۔
-    - وزارڈ کو دوبارہ چلانے سے کچھ بھی حذف نہیں ہوتا جب تک آپ واضح طور پر Reset منتخب نہ کریں (یا `--reset` پاس نہ کریں)۔
-    - اگر کنفیگ غیر معتبر ہو یا اس میں پرانی keys ہوں تو وزارڈ رک جاتا ہے اور جاری رکھنے سے پہلے `openclaw doctor` چلانے کا کہتا ہے۔
-    - Reset میں `trash` استعمال ہوتا ہے اور دائرہ کار کے اختیارات پیش کیے جاتے ہیں:
-      - صرف کنفیگ
-      - کنفیگ + اسناد + سیشنز
-      - مکمل ری سیٹ (ورک اسپیس بھی حذف کرتا ہے)
-  </Step>
-  <Step title="ماڈل اور تصدیق">
+  <Step title="Existing config detection">
+    - If `~/.openclaw/openclaw.json` exists, choose Keep, Modify, or Reset.
+    - Re-running the wizard does not wipe anything unless you explicitly choose Reset (or pass `--reset`).
+    - If config is invalid or contains legacy keys, the wizard stops and asks you to run `openclaw doctor` before continuing.
+    - Reset uses `trash` and offers scopes:
+      - Config only
+      - Config + credentials + sessions
+      - Full reset (also removes workspace)  
+</Step>
+  <Step title="Model and auth">
     - مکمل اختیارات کی فہرست [Auth and model options](#auth-and-model-options) میں ہے۔
   </Step>
-  <Step title="ورک اسپیس">
-    - بطورِ طے شدہ `~/.openclaw/workspace` (قابلِ کنفیگریشن)۔
-    - پہلی بار رَن کے بوٹ اسٹرَیپ رِچول کے لیے درکار ورک اسپیس فائلیں سیڈ کرتا ہے۔
-    - ورک اسپیس لے آؤٹ: [Agent workspace](/concepts/agent-workspace)۔
+  <Step title="Workspace">
+    - Default `~/.openclaw/workspace` (configurable).
+    - Seeds workspace files needed for first-run bootstrap ritual.
+    - ورک اسپیس لے آؤٹ: [Agent workspace](/concepts/agent-workspace).
   </Step>
   <Step title="Gateway">
-    - پورٹ، بائنڈ، تصدیقی موڈ، اور tailscale ایکسپوژر کے لیے پرامپٹ کرتا ہے۔
-    - سفارش کردہ: لوکل loopback کے لیے بھی ٹوکن تصدیق فعال رکھیں تاکہ لوکل WS کلائنٹس کو تصدیق کرنا پڑے۔
-    - تصدیق صرف اسی صورت غیر فعال کریں جب آپ ہر لوکل پروسیس پر مکمل اعتماد رکھتے ہوں۔
-    - نان-loopback بائنڈز کے لیے بھی تصدیق لازم ہے۔
+    - Prompts for port, bind, auth mode, and tailscale exposure.
+    - Recommended: keep token auth enabled even for loopback so local WS clients must authenticate.
+    - Disable auth only if you fully trust every local process.
+    - Non-loopback binds still require auth.
   </Step>
-  <Step title="چینلز">
-    - [WhatsApp](/channels/whatsapp): اختیاری QR لاگ اِن
-    - [Telegram](/channels/telegram): بوٹ ٹوکن
-    - [Discord](/channels/discord): بوٹ ٹوکن
-    - [Google Chat](/channels/googlechat): سروس اکاؤنٹ JSON + ویب ہُک آڈیئنس
-    - [Mattermost](/channels/mattermost) پلگ اِن: بوٹ ٹوکن + بیس URL
-    - [Signal](/channels/signal): اختیاری `signal-cli` انسٹال + اکاؤنٹ کنفیگ
-    - [BlueBubbles](/channels/bluebubbles): iMessage کے لیے سفارش کردہ؛ سرور URL + پاس ورڈ + ویب ہُک
-    - [iMessage](/channels/imessage): لیگیسی `imsg` CLI پاتھ + DB رسائی
-    - DM سکیورٹی: بطورِ طے شدہ pairing۔ پہلی DM ایک کوڈ بھیجتی ہے؛ منظوری دیں
-      `openclaw pairing approve <channel> <code>` کے ذریعے یا allowlists استعمال کریں۔
+  <Step title="Channels">
+    - [WhatsApp](/channels/whatsapp): optional QR login
+    - [Telegram](/channels/telegram): bot token
+    - [Discord](/channels/discord): bot token
+    - [Google Chat](/channels/googlechat): service account JSON + webhook audience
+    - [Mattermost](/channels/mattermost) plugin: bot token + base URL
+    - [Signal](/channels/signal): optional `signal-cli` install + account config
+    - [BlueBubbles](/channels/bluebubbles): recommended for iMessage; server URL + password + webhook
+    - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access
+    - DM security: default is pairing. First DM sends a code; approve via
+      `openclaw pairing approve <channel><code>` کے ذریعے یا allowlists استعمال کریں۔
+  </Step><code>` or use allowlists.
   </Step>
-  <Step title="ڈیمَن انسٹال">
+  <Step title="Daemon install">
     - macOS: LaunchAgent
-      - لاگ اِن شدہ یوزر سیشن درکار؛ headless کے لیے کسٹم LaunchDaemon استعمال کریں (شامل نہیں)۔
-    - Linux اور Windows بذریعہ WSL2: systemd یوزر یونٹ
-      - وزارڈ `loginctl enable-linger <user>` کی کوشش کرتا ہے تاکہ لاگ آؤٹ کے بعد بھی gateway چلتا رہے۔
-      - sudo کے لیے پرامپٹ ہو سکتا ہے (لکھتا ہے `/var/lib/systemd/linger`)؛ پہلے بغیر sudo کوشش کرتا ہے۔
-    - رن ٹائم انتخاب: Node (سفارش کردہ؛ WhatsApp اور Telegram کے لیے لازم)۔ Bun سفارش نہیں کیا جاتا۔
+      - Requires logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
+    - Linux and Windows via WSL2: systemd user unit
+      - Wizard attempts `loginctl enable-linger <user>` so gateway stays up after logout.
+      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
+    - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun is not recommended.
   </Step>
-  <Step title="ہیلتھ چیک">
-    - gateway شروع کرتا ہے (اگر درکار ہو) اور `openclaw health` چلاتا ہے۔
-    - `openclaw status --deep` اسٹیٹس آؤٹ پٹ میں gateway ہیلتھ پروبز شامل کرتا ہے۔
+  <Step title="Health check">
+    - Starts gateway (if needed) and runs `openclaw health`.
+    - `openclaw status --deep` adds gateway health probes to status output.
   </Step>
   <Step title="Skills">
-    - دستیاب Skills پڑھتا ہے اور تقاضے چیک کرتا ہے۔
-    - نوڈ مینیجر منتخب کرنے دیتا ہے: npm یا pnpm (bun سفارش نہیں کیا جاتا)۔
-    - اختیاری dependencies انسٹال کرتا ہے (کچھ macOS پر Homebrew استعمال کرتے ہیں)۔
+    - Reads available skills and checks requirements.
+    - Lets you choose node manager: npm or pnpm (bun not recommended).
+    - Installs optional dependencies (some use Homebrew on macOS).
   </Step>
-  <Step title="اختتام">
-    - خلاصہ اور اگلے اقدامات، بشمول iOS، Android، اور macOS ایپ کے اختیارات۔
+  <Step title="Finish">
+    - Summary and next steps, including iOS, Android, and macOS app options.
   </Step>
 </Steps>
 
 <Note>
-اگر کوئی GUI شناخت نہ ہو تو وزارڈ براؤزر کھولنے کے بجائے Control UI کے لیے SSH پورٹ-فارورڈ ہدایات پرنٹ کرتا ہے۔
-اگر Control UI اثاثے غائب ہوں تو وزارڈ انہیں بنانے کی کوشش کرتا ہے؛ فال بیک `pnpm ui:build` ہے (UI dependencies خودکار طور پر انسٹال کرتا ہے)۔
+If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
+If Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 </Note>
 
 ## ریموٹ موڈ کی تفصیلات
@@ -113,8 +107,8 @@ x-i18n:
 - اگر ریموٹ gateway تصدیق درکار کرے تو ٹوکن (سفارش کردہ)
 
 <Note>
-- اگر gateway صرف loopback تک محدود ہو تو SSH ٹنلنگ یا tailnet استعمال کریں۔
-- ڈسکوری اشارے:
+- If gateway is loopback-only, use SSH tunneling or a tailnet.
+- Discovery hints:
   - macOS: Bonjour (`dns-sd`)
   - Linux: Avahi (`avahi-browse`)
 </Note>
@@ -122,67 +116,73 @@ x-i18n:
 ## تصدیق اور ماڈل کے اختیارات
 
 <AccordionGroup>
-  <Accordion title="Anthropic API کلید (سفارش کردہ)">
+  <Accordion title="Anthropic API key (recommended)">
     اگر موجود ہو تو `ANTHROPIC_API_KEY` استعمال کرتا ہے یا کلید کے لیے پرامپٹ کرتا ہے، پھر ڈیمَن کے استعمال کے لیے محفوظ کرتا ہے۔
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: Keychain آئٹم "Claude Code-credentials" چیک کرتا ہے
     - Linux اور Windows: اگر موجود ہو تو `~/.claude/.credentials.json` دوبارہ استعمال کرتا ہے
 
+    ```
     macOS پر "Always Allow" منتخب کریں تاکہ launchd اسٹارٹس بلاک نہ ہوں۔
+    ```
 
   </Accordion>
-  <Accordion title="Anthropic ٹوکن (setup-token پیسٹ)">
-    کسی بھی مشین پر `claude setup-token` چلائیں، پھر ٹوکن پیسٹ کریں۔
-    آپ اسے نام دے سکتے ہیں؛ خالی چھوڑنے پر ڈیفالٹ استعمال ہوتا ہے۔
+  <Accordion title="Anthropic token (setup-token paste)">
+    Run `claude setup-token` on any machine, then paste the token.
+    You can name it; blank uses default.
   </Accordion>
-  <Accordion title="OpenAI Code سبسکرپشن (Codex CLI ری یوز)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     اگر `~/.codex/auth.json` موجود ہو تو وزارڈ اسے دوبارہ استعمال کر سکتا ہے۔
   </Accordion>
-  <Accordion title="OpenAI Code سبسکرپشن (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     براؤزر فلو؛ `code#state` پیسٹ کریں۔
 
+    ```
     جب ماڈل غیر سیٹ ہو یا `openai/*` ہو تو `agents.defaults.model` کو `openai-codex/gpt-5.3-codex` پر سیٹ کرتا ہے۔
+    ```
 
   </Accordion>
-  <Accordion title="OpenAI API کلید">
+  <Accordion title="OpenAI API key">
     اگر موجود ہو تو `OPENAI_API_KEY` استعمال کرتا ہے یا کلید کے لیے پرامپٹ کرتا ہے، پھر اسے
     `~/.openclaw/.env` میں محفوظ کرتا ہے تاکہ launchd اسے پڑھ سکے۔
 
+    ```
     جب ماڈل غیر سیٹ ہو، `openai/*` ہو، یا `openai-codex/*` ہو تو `agents.defaults.model` کو `openai/gpt-5.1-codex` پر سیٹ کرتا ہے۔
+    ```
 
   </Accordion>
-  <Accordion title="xAI (Grok) API کلید">
+  <Accordion title="xAI (Grok) API key">
     `XAI_API_KEY` کے لیے پرامپٹ کرتا ہے اور xAI کو ماڈل فراہم کنندہ کے طور پر کنفیگر کرتا ہے۔
   </Accordion>
   <Accordion title="OpenCode Zen">
-    `OPENCODE_API_KEY` (یا `OPENCODE_ZEN_API_KEY`) کے لیے پرامپٹ کرتا ہے۔
-    سیٹ اپ URL: [opencode.ai/auth](https://opencode.ai/auth)۔
+    Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).
+    Setup URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="API کلید (جنرل)">
+  <Accordion title="API key (generic)">
     کلید آپ کے لیے محفوظ کرتا ہے۔
   </Accordion>
   <Accordion title="Vercel AI Gateway">
-    `AI_GATEWAY_API_KEY` کے لیے پرامپٹ کرتا ہے۔
-    مزید تفصیل: [Vercel AI Gateway](/providers/vercel-ai-gateway)۔
+    Prompts for `AI_GATEWAY_API_KEY`.
+    More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway).
   </Accordion>
   <Accordion title="Cloudflare AI Gateway">
-    اکاؤنٹ ID، gateway ID، اور `CLOUDFLARE_AI_GATEWAY_API_KEY` کے لیے پرامپٹ کرتا ہے۔
-    مزید تفصیل: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)۔
+    Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
+    More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
   <Accordion title="MiniMax M2.1">
-    کنفیگ خودکار طور پر لکھی جاتی ہے۔
-    مزید تفصیل: [MiniMax](/providers/minimax)۔
+    Config is auto-written.
+    More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
-    `SYNTHETIC_API_KEY` کے لیے پرامپٹ کرتا ہے۔
-    مزید تفصیل: [Synthetic](/providers/synthetic)۔
+    Prompts for `SYNTHETIC_API_KEY`.
+    More detail: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot اور Kimi Coding">
-    Moonshot (Kimi K2) اور Kimi Coding کی کنفیگز خودکار طور پر لکھی جاتی ہیں۔
-    مزید تفصیل: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)۔
+  <Accordion title="Moonshot and Kimi Coding">
+    Moonshot (Kimi K2) and Kimi Coding configs are auto-written.
+    More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="اسکِپ">
+  <Accordion title="Skip">
     تصدیق کو غیر کنفیگرڈ چھوڑ دیتا ہے۔
   </Accordion>
 </AccordionGroup>
@@ -221,12 +221,12 @@ x-i18n:
 
 `openclaw agents add`، `agents.list[]` اور اختیاری `bindings` لکھتا ہے۔
 
-WhatsApp اسناد `~/.openclaw/credentials/whatsapp/<accountId>/` کے تحت جاتی ہیں۔
-سیشنز `~/.openclaw/agents/<agentId>/sessions/` کے تحت محفوظ ہوتے ہیں۔
+WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
+Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
 <Note>
-کچھ چینلز پلگ اِنز کے طور پر فراہم کیے جاتے ہیں۔ آن بورڈنگ کے دوران منتخب کرنے پر، وزارڈ
-چینل کنفیگریشن سے پہلے پلگ اِن انسٹال کرنے کے لیے پرامپٹ کرتا ہے (npm یا لوکل پاتھ)۔
+Some channels are delivered as plugins. When selected during onboarding, the wizard
+prompts to install the plugin (npm or local path) before channel configuration.
 </Note>
 
 Gateway وزارڈ RPC:

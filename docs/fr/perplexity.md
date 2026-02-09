@@ -1,16 +1,9 @@
 ---
-summary: « Configuration de Perplexity Sonar pour web_search »
+summary: "Configuration de Perplexity Sonar pour web_search"
 read_when:
   - Vous souhaitez utiliser Perplexity Sonar pour la recherche Web
   - Vous avez besoin de PERPLEXITY_API_KEY ou d’une configuration OpenRouter
-title: « Perplexity Sonar »
-x-i18n:
-  source_path: perplexity.md
-  source_hash: 264d08e62e3bec85
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:09Z
+title: "Perplexity Sonar"
 ---
 
 # Perplexity Sonar

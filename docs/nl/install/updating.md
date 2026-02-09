@@ -4,13 +4,6 @@ read_when:
   - OpenClaw updaten
   - Iets breekt na een update
 title: "Updaten"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:39Z
 ---
 
 # Updaten
@@ -29,6 +22,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Notities:
 
 - Voeg `--no-onboard` toe als je niet wilt dat de onboarding‑wizard opnieuw wordt gestart.
+
 - Voor **broninstallaties**, gebruik:
 
   ```bash
@@ -38,6 +32,7 @@ Notities:
   De installer zal `git pull --rebase` **alleen** uitvoeren als de repo schoon is.
 
 - Voor **globale installaties** gebruikt het script onder de motorkap `npm install -g openclaw@latest`.
+
 - Legacy‑notitie: `clawdbot` blijft beschikbaar als compatibiliteits‑shim.
 
 ## Vóór je update

@@ -5,13 +5,6 @@ read_when:
   - LINE 웹훅 및 자격 증명 설정이 필요한 경우
   - LINE 전용 메시지 옵션을 사용하려는 경우
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:57Z
 ---
 
 # LINE (플러그인)

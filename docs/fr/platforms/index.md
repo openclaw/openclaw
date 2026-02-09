@@ -4,13 +4,6 @@ read_when:
   - Recherche de la prise en charge des OS ou des chemins d’installation
   - Choix de l’emplacement d’exécution du Gateway
 title: "Plateformes"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:08Z
 ---
 
 # Plateformes

@@ -4,13 +4,6 @@ read_when:
   - Du vill styra Gateway från en webbläsare
   - Du vill ha Tailnet-åtkomst utan SSH-tunnlar
 title: "Kontroll-UI"
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:59Z
 ---
 
 # Kontroll-UI (webbläsare)
@@ -18,7 +11,7 @@ x-i18n:
 Kontroll-UI:t är en liten **Vite + Lit**-single-page-app som serveras av Gateway:
 
 - standard: `http://<host>:18789/`
-- valfritt prefix: ställ in `gateway.controlUi.basePath` (t.ex. `/openclaw`)
+- valfritt prefix: sätt `gateway.controlUi.basePath` (t.ex. `/openclaw`)
 
 Den talar **direkt med Gateway WebSocket** på samma port.
 
@@ -34,14 +27,14 @@ Autentisering tillhandahålls under WebSocket-handshake via:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-  Inställningspanelen i instrumentpanelen låter dig spara en token; lösenord sparas inte.
-  Introduktionsguiden genererar som standard en gateway-token, så klistra in den här vid första anslutningen.
+  Instrumentpanelens inställningspanel låter dig lagra en token; lösenord är inte beständiga.
+  Onboarding guiden genererar en gateway token som standard, så klistra in det här vid första anslutningen.
 
 ## Enhetsparning (första anslutning)
 
-När du ansluter till Kontroll-UI:t från en ny webbläsare eller enhet kräver Gateway
-ett **engångsgodkännande för parning** — även om du är på samma Tailnet
-med `gateway.auth.allowTailscale: true`. Detta är en säkerhetsåtgärd för att förhindra
+När du ansluter till styrgränssnittet från en ny webbläsare eller enhet, Gateway
+kräver ett **en-gångs parningsgodkännande** — även om du är på samma Tailnet
+med \`gateway. uth.allowSkala: sant. Detta är en säkerhetsåtgärd för att förhindra
 obehörig åtkomst.
 
 **Vad du ser:** "disconnected (1008): pairing required"
@@ -56,14 +49,14 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-När den har godkänts kommer enheten ihåg och kräver inte ny godkännandeprocess om du inte
-återkallar den med `openclaw devices revoke --device <id> --role <role>`. Se
-[Devices CLI](/cli/devices) för tokenrotation och återkallande.
+Once approved, the device is remembered and won't require re-approval unless
+you revoke it with `openclaw devices revoke --device <id> --role <role>`. Se
+[Enheter CLI](/cli/devices) för token rotation och återkallelse.
 
 **Noteringar:**
 
 - Lokala anslutningar (`127.0.0.1`) godkänns automatiskt.
-- Fjärranslutningar (LAN, Tailnet, etc.) kräver uttryckligt godkännande.
+- Fjärranslutningar (LAN, Tailnet etc.) kräver uttryckligt godkännande.
 - Varje webbläsarprofil genererar ett unikt enhets-ID, så byte av webbläsare eller
   rensning av webbläsardata kräver ny parning.
 
@@ -71,7 +64,7 @@ När den har godkänts kommer enheten ihåg och kräver inte ny godkännandeproc
 
 - Chatta med modellen via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Strömma verktygsanrop + livekort för verktygsutdata i chatt (agenthändelser)
-- Kanaler: status för WhatsApp/Telegram/Discord/Slack + plugin-kanaler (Mattermost, etc.), QR-inloggning + per-kanal-konfig (`channels.status`, `web.login.*`, `config.patch`)
+- Kanaler: WhatsApp/Telegram/Discord/Slack + plugin-kanaler (Mattermost, etc.) status + QR-inloggning + konfiguration per kanal (`channels.status`, `web.login.*`, `config.patch`)
 - Instanser: närvarolista + uppdatera (`system-presence`)
 - Sessioner: lista + per-session-åsidosättningar för thinking/verbose (`sessions.list`, `sessions.patch`)
 - Cron-jobb: lista/lägg till/kör/aktivera/inaktivera + körhistorik (`cron.*`)
@@ -88,7 +81,7 @@ När den har godkänts kommer enheten ihåg och kräver inte ny godkännandeproc
 
 Noteringar för panelen Cron-jobb:
 
-- För isolerade jobb är leverans som standard inställd på att annonsera sammanfattning. Du kan växla till ingen om du vill ha interna körningar.
+- För isolerade jobb är leveransstandard att meddela sammanfattning. Du kan byta till ingen om du vill ha interna körningar.
 - Fälten kanal/mål visas när annonsera är valt.
 
 ## Chattbeteende
@@ -115,13 +108,13 @@ openclaw gateway --tailscale serve
 
 - `https://<magicdns>/` (eller din konfigurerade `gateway.controlUi.basePath`)
 
-Som standard kan Serve-förfrågningar autentisera via Tailscale-identitetshuvuden
+Som standard kan Serve förfrågningar autentisera via Tailscale identitetshuvuden
 (`tailscale-user-login`) när `gateway.auth.allowTailscale` är `true`. OpenClaw
-verifierar identiteten genom att slå upp `x-forwarded-for`-adressen med
-`tailscale whois` och matcha den mot huvudet, och accepterar endast dessa när
-förfrågan träffar loopback med Tailscales `x-forwarded-*`-huvuden. Ställ in
+verifierar identiteten genom att lösa `x-forwarded-for`-adressen med
+`tailscale whois` och matcha den med huvudet, och accepterar endast dessa när
+-förfrågan träffar loopback med Tailscales `x-forwarded-*`-rubriker. Ställ in
 `gateway.auth.allowTailscale: false` (eller tvinga `gateway.auth.mode: "password"`)
-om du vill kräva token/lösenord även för Serve-trafik.
+om du vill kräva en token/lösenord även för Serve trafik.
 
 ### Binda till tailnet + token
 
@@ -138,8 +131,8 @@ Klistra in token i UI-inställningarna (skickas som `connect.params.auth.token`)
 ## Osäker HTTP
 
 Om du öppnar instrumentpanelen över vanlig HTTP (`http://<lan-ip>` eller `http://<tailscale-ip>`),
-kör webbläsaren i ett **icke-säkert sammanhang** och blockerar WebCrypto. Som standard
-**blockerar** OpenClaw Kontroll-UI-anslutningar utan enhetsidentitet.
+webbläsaren körs i en **osäker kontext** och blockerar WebCrypto. Som standard,
+OpenClaw **block** Kontroll UI-anslutningar utan enhetsidentitet.
 
 **Rekommenderad åtgärd:** använd HTTPS (Tailscale Serve) eller öppna UI:t lokalt:
 
@@ -158,7 +151,7 @@ kör webbläsaren i ett **icke-säkert sammanhang** och blockerar WebCrypto. Som
 }
 ```
 
-Detta inaktiverar enhetsidentitet + parning för Kontroll-UI:t (även över HTTPS). Använd
+Detta inaktiverar enhetsidentitet + parkoppling för styrgränssnittet (även på HTTPS). Använd
 endast om du litar på nätverket.
 
 Se [Tailscale](/gateway/tailscale) för vägledning om HTTPS-konfiguration.
@@ -183,12 +176,12 @@ För lokal utveckling (separat dev-server):
 pnpm ui:dev # auto-installs UI deps on first run
 ```
 
-Peka sedan UI:t mot din Gateway WS-URL (t.ex. `ws://127.0.0.1:18789`).
+Peka sedan UI på din Gateway WS URL (t.ex. `ws://127.0.0.1:18789`).
 
 ## Felsökning/test: dev-server + fjärr-Gateway
 
-Kontroll-UI:t är statiska filer; WebSocket-målet är konfigurerbart och kan vara
-annat än HTTP-ursprunget. Detta är praktiskt när du vill köra Vite-dev-servern
+Control UI är statiska filer; WebSocket målet är konfigurerbar och kan vara
+skiljer sig från HTTP ursprung. Detta är praktiskt när du vill att Vite dev-servern
 lokalt men Gateway körs någon annanstans.
 
 1. Starta UI-dev-servern: `pnpm ui:dev`
@@ -208,12 +201,12 @@ Noteringar:
 
 - `gatewayUrl` lagras i localStorage efter laddning och tas bort från URL:en.
 - `token` lagras i localStorage; `password` hålls endast i minnet.
-- När `gatewayUrl` är satt faller UI:t inte tillbaka till konfig- eller miljöuppgifter.
-  Tillhandahåll `token` (eller `password`) uttryckligen. Saknade uttryckliga uppgifter är ett fel.
+- När `gatewayUrl` är satt, faller UI inte tillbaka till config eller miljö uppgifter.
+  Ange `token` (eller `lösenord`) explicit. Saknar explicita referenser är ett fel.
 - Använd `wss://` när Gateway är bakom TLS (Tailscale Serve, HTTPS-proxy, etc.).
 - `gatewayUrl` accepteras endast i ett toppnivåfönster (inte inbäddat) för att förhindra clickjacking.
-- För cross-origin-dev-upplägg (t.ex. `pnpm ui:dev` till en fjärr-Gateway), lägg till UI:ts
-  ursprung i `gateway.controlUi.allowedOrigins`.
+- För cross-origin dev-inställningar (t.ex. `pnpm ui:dev` till en fjärr-Gateway), lägg till UI
+  ursprung till `gateway.controlUi.allowedOrigins`.
 
 Exempel:
 

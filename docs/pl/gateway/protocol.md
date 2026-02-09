@@ -5,13 +5,6 @@ read_when:
   - Debugowanie niezgodności protokołu lub problemów z połączeniem
   - Regenerowanie schematów/modeli protokołu
 title: "Protokół Gateway"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Protokół Gateway (WebSocket)
@@ -19,8 +12,6 @@ x-i18n:
 Protokół WS Gateway jest **pojedynczą płaszczyzną sterowania + transportem węzłów**
 dla OpenClaw. Wszyscy klienci (CLI, interfejs webowy, aplikacja na macOS, węzły
 iOS/Android, węzły bezgłowe) łączą się przez WebSocket i deklarują swoją **rolę**
-
-- **zakres** w trakcie handshake’u.
 
 ## Transport
 
@@ -142,7 +133,7 @@ Metody wywołujące skutki uboczne wymagają **kluczy idempotencji** (zob. schem
 
 ## Role + zakresy
 
-### Role
+### Role + zakresy
 
 - `operator` = klient płaszczyzny sterowania (CLI/UI/automatyzacja).
 - `node` = host możliwości (kamera/ekran/płótno/system.run).
@@ -178,7 +169,7 @@ Gateway traktuje je jako **roszczenia** i egzekwuje listy dozwolonych po stronie
 - Węzły mogą wywołać `skills.bins`, aby pobrać aktualną listę wykonywalnych Skills
   do automatycznych kontroli dozwolenia.
 
-## Zatwierdzanie exec
+## Zatwierdzanie wykonania (exec approvals)
 
 - Gdy żądanie exec wymaga zatwierdzenia, gateway rozgłasza `exec.approval.requested`.
 - Klienci operatora rozstrzygają, wywołując `exec.approval.resolve` (wymaga zakresu `operator.approvals`).

@@ -4,18 +4,11 @@ read_when:
   - Tilføjelse eller ændring af skills
   - Ændring af skill-gating eller indlæsningsregler
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:03Z
 ---
 
 # Skills (OpenClaw)
 
-OpenClaw bruger **[AgentSkills](https://agentskills.io)-kompatible** skill-mapper til at lære agenten at bruge værktøjer. Hver skill er en mappe, der indeholder en `SKILL.md` med YAML-frontmatter og instruktioner. OpenClaw indlæser **bundled skills** plus valgfrie lokale overrides og filtrerer dem ved indlæsning baseret på miljø, konfiguration og tilstedeværelse af binærer.
+OpenClaw bruger **[AgentSkills](https://agentskills.io)-kompatible** færdighedsmapper til at lære agenten hvordan man bruger værktøjer. Hver færdighed er en mappe, der indeholder en `SKILL.md` med YAML frontmatter og instruktioner. OpenClaw belastninger **bundtede færdigheder** plus valgfri lokale overskrivninger, og filtrerer dem på belastningstidspunktet baseret på miljø, config og binær tilstedeværelse.
 
 ## Placeringer og prioritet
 
@@ -34,7 +27,7 @@ Derudover kan du konfigurere ekstra skill-mapper (laveste prioritet) via
 
 ## Per-agent vs. delte skills
 
-I **multi-agent**-opsætninger har hver agent sit eget workspace. Det betyder:
+I **multi-agent** opsætninger, hver agent har sit eget arbejdsområde. Det betyder:
 
 - **Per-agent skills** ligger i `<workspace>/skills` kun for den agent.
 - **Delte skills** ligger i `~/.openclaw/skills` (managed/local) og er synlige
@@ -47,17 +40,16 @@ workspace vinder, derefter managed/local og til sidst bundled.
 
 ## Plugins + skills
 
-Plugins kan levere deres egne skills ved at angive `skills`-mapper i
-`openclaw.plugin.json` (stier relative til plugin-roden). Plugin-skills indlæses,
-når plugin’et er aktiveret, og deltager i de normale prioriteringsregler for skills.
-Du kan gate dem via `metadata.openclaw.requires.config` på plugin’ets konfigurationspost.
-Se [Plugins](/tools/plugin) for discovery/konfiguration og [Tools](/tools) for den
-værktøjsflade, som disse skills underviser i.
+Plugins kan sende deres egne færdigheder ved at notere `færdigheder` mapper i
+`openclaw.plugin.json` (stier i forhold til plugin root). Plugin færdigheder indlæse
+, når plugin'et er aktiveret og deltage i de normale regler for dygtighed forrang.
+Du kan gate dem via `metadata.openclaw.requires.config` på plugin ‘ s config
+post. Se [Plugins](/tools/plugin) for opdagelse/konfiguration og [Tools](/tools) for værktøjsfladen, som disse skills lærer.
 
 ## ClawHub (installation + synk)
 
-ClawHub er det offentlige skills-register for OpenClaw. Gennemse på
-[https://clawhub.com](https://clawhub.com). Brug det til at opdage, installere, opdatere og sikkerhedskopiere skills.
+ClawHub er registret over offentlige færdigheder for OpenClaw. Gennemse på
+[https://clawhub.com](https://clawhub.com). Brug den til at opdage, installere, opdatere og sikkerhedskopiere færdigheder.
 Fuld guide: [ClawHub](/tools/clawhub).
 
 Almindelige flows:
@@ -69,16 +61,16 @@ Almindelige flows:
 - Synk (scan + udgiv opdateringer):
   - `clawhub sync --all`
 
-Som standard installerer `clawhub` i `./skills` under din aktuelle
-arbejdsmappe (eller falder tilbage til det konfigurerede OpenClaw-workspace).
-OpenClaw opfanger dette som `<workspace>/skills` ved næste session.
+Som standard installeres `clawhub` i `./skills` under din nuværende fungerende
+mappe (eller falder tilbage til det konfigurerede OpenClaw arbejdsområde). OpenClaw henter
+der op som `<workspace>/skills` på den næste session.
 
 ## Sikkerhedsnoter
 
-- Behandl tredjeparts-skills som **utroværdig kode**. Læs dem, før du aktiverer dem.
-- Foretræk sandboxed kørsel for utroværdige input og risikable værktøjer. Se [Sandboxing](/gateway/sandboxing).
-- `skills.entries.*.env` og `skills.entries.*.apiKey` injicerer hemmeligheder i **host**-processen
-  for den agent-tur (ikke i sandboxen). Hold hemmeligheder ude af prompts og logs.
+- Behandl tredjepartskvalifikationer som **ikke-betroet kode**. Læs dem, før du aktiverer.
+- Foretræk sandkasse kørsler for upålidelige indgange og risikable værktøjer. Se [Sandboxing](/gateway/sandboxing).
+- `skills.entries.*.env` og `skills.entries.*.apiKey` injicerer hemmeligheder i **vært**processen
+  for den pågældende agent slå (ikke sandkassen). Hold hemmeligheder ude af prompter og logs.
 - For en bredere trusselsmodel og tjeklister, se [Security](/gateway/security).
 
 ## Format (AgentSkills + Pi-kompatibel)
@@ -100,11 +92,11 @@ Noter:
 - Brug `{baseDir}` i instruktioner til at referere til skill-mappens sti.
 - Valgfrie frontmatter-nøgler:
   - `homepage` — URL vist som “Website” i macOS Skills UI (også understøttet via `metadata.openclaw.homepage`).
-  - `user-invocable` — `true|false` (standard: `true`). Når `true`, eksponeres skill’et som en bruger slash-kommando.
-  - `disable-model-invocation` — `true|false` (standard: `false`). Når `true`, udelukkes skill’et fra modelprompten (stadig tilgængeligt via brugerinvokation).
-  - `command-dispatch` — `tool` (valgfrit). Når sat til `tool`, omgår slash-kommandoen modellen og dispatcher direkte til et værktøj.
+  - `user-invocable` — `trueřfalse` (standard: `true`). Når `true`, færdigheder er udsat som en bruger skråstreg kommando.
+  - `disable-model-invocation` — `true¤ false` (standard: `false`). Når `true`, færdigheder er udelukket fra model prompt (stadig tilgængelig via bruger påkaldelse).
+  - `command-dispatch` — `tool` (valgfrit). Når sat til `tool`, skråstregen kommando omgår modellen og afsender direkte til et værktøj.
   - `command-tool` — værktøjsnavn, der skal kaldes, når `command-dispatch: tool` er sat.
-  - `command-arg-mode` — `raw` (standard). For værktøjsdispatch videresendes den rå args-streng til værktøjet (ingen core-parsing).
+  - `command-arg-mode` — `raw` (standard). For værktøj afsendelse sender den rå args streng til værktøjet (ingen core parsing).
 
     Værktøjet kaldes med parametre:
     `{ command: "<raw args>", commandName: "<slash command>", skillName: "<skill name>" }`.
@@ -133,23 +125,23 @@ Felter under `metadata.openclaw`:
 - `always: true` — inkluder altid skill’et (spring andre gates over).
 - `emoji` — valgfri emoji brugt af macOS Skills UI.
 - `homepage` — valgfri URL vist som “Website” i macOS Skills UI.
-- `os` — valgfri liste over platforme (`darwin`, `linux`, `win32`). Hvis sat, er skill’et kun berettiget på disse OS’er.
+- `os` — valgfri liste over platforme (`darwin`, `linux`, `win32`). Hvis angivet, er færdigheden kun berettiget på disse styresystemer.
 - `requires.bins` — liste; hver skal findes på `PATH`.
 - `requires.anyBins` — liste; mindst én skal findes på `PATH`.
 - `requires.env` — liste; env-var skal findes **eller** være angivet i konfigurationen.
 - `requires.config` — liste over `openclaw.json`-stier, der skal være truthy.
-- `primaryEnv` — env-var-navn associeret med `skills.entries.<name>.apiKey`.
+- `primaryEnv` — env var navn forbundet med `skills.entries.<name>.apiKey`.
 - `install` — valgfrit array af installer-specifikationer brugt af macOS Skills UI (brew/node/go/uv/download).
 
 Note om sandboxing:
 
 - `requires.bins` kontrolleres på **hosten** ved indlæsning af skill’et.
-- Hvis en agent er sandboxed, skal binæren også findes **inde i containeren**.
-  Installér den via `agents.defaults.sandbox.docker.setupCommand` (eller et custom image).
-  `setupCommand` kører én gang efter, at containeren er oprettet.
-  Pakkeinstallationer kræver også netværks-egress, et skrivbart root-filsystem og en root-bruger i sandboxen.
-  Eksempel: `summarize`-skill’et (`skills/summarize/SKILL.md`) kræver `summarize` CLI
-  i sandbox-containeren for at køre der.
+- Hvis en agent er sandboxed, skal den binære skal også eksistere **inde i beholderen**.
+  Installere det via `agents.defaults.sandbox.docker.setupCommand` (eller et brugerdefineret billede).
+  `setupCommand` kører én gang efter beholderen er oprettet.
+  Pakken installerer også kræver netværk egress, en skrivbar root FS, og en root bruger i sandkassen.
+  Eksempel: 'summariser' færdighed ('færdigheder/opsummering/SKILL.md') har brug for 'summariser' CLI
+  i sandkassebeholderen til at køre der.
 
 Installer-eksempel:
 
@@ -183,9 +175,9 @@ Noter:
 - Hvis der er angivet flere installere, vælger gatewayen én **enkelt** foretrukken mulighed (brew når tilgængelig, ellers node).
 - Hvis alle installere er `download`, viser OpenClaw hver post, så du kan se de tilgængelige artefakter.
 - Installer-specifikationer kan inkludere `os: ["darwin"|"linux"|"win32"]` for at filtrere muligheder efter platform.
-- Node-installationer respekterer `skills.install.nodeManager` i `openclaw.json` (standard: npm; muligheder: npm/pnpm/yarn/bun).
-  Dette påvirker kun **skill-installationer**; Gateway-runtime bør stadig være Node
-  (Bun anbefales ikke til WhatsApp/Telegram).
+- Node installerer honor `skills.install.nodeManager` i `openclaw.json` (standard: npm; muligheder: npm/pnpm/yarn/bun).
+  Dette påvirker kun **færdighed installerer**; Gateway runtime skal stadig være node
+  (Bun anbefales ikke for WhatsApp/Telegram).
 - Go-installationer: hvis `go` mangler og `brew` er tilgængelig, installerer gatewayen først Go via Homebrew og sætter `GOBIN` til Homebrews `bin`, når det er muligt.
 - Download-installationer: `url` (påkrævet), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (standard: auto når arkiv registreres), `stripComponents`, `targetDir` (standard: `~/.openclaw/tools/<skillKey>`).
 
@@ -220,8 +212,8 @@ Bundled/managed skills kan slås til/fra og forsynes med env-værdier:
 
 Bemærk: hvis skill-navnet indeholder bindestreger, så citer nøglen (JSON5 tillader citerede nøgler).
 
-Konfigurationsnøgler matcher som standard **skill-navnet**. Hvis et skill definerer
-`metadata.openclaw.skillKey`, brug den nøgle under `skills.entries`.
+Konfigurationstaster matcher som standard **dygtighedsnavn**. Hvis en færdighed definerer
+`metadata.openclaw.skillKey`, brug denne nøgle under `skills.entries`.
 
 Regler:
 
@@ -229,15 +221,15 @@ Regler:
 - `env`: injiceres **kun hvis** variablen ikke allerede er sat i processen.
 - `apiKey`: bekvemmelighed for skills, der deklarerer `metadata.openclaw.primaryEnv`.
 - `config`: valgfri pose til brugerdefinerede per-skill-felter; brugerdefinerede nøgler skal ligge her.
-- `allowBundled`: valgfri tilladelsesliste kun for **bundled** skills. Hvis sat, er kun
-  bundled skills på listen berettigede (managed/workspace skills er upåvirkede).
+- `allowBundled`: valgfri tilladt liste for \*\*bundtede \*\* færdigheder. Hvis angivet, kun
+  bundtede færdigheder på listen er kvalificerede (administrerede/arbejdsområde færdigheder upåvirket).
 
 ## Miljøinjektion (per agent-kørsel)
 
 Når en agent-kørsel starter, gør OpenClaw følgende:
 
 1. Læser skill-metadata.
-2. Anvender eventuelle `skills.entries.<key>.env` eller `skills.entries.<key>.apiKey` på
+2. Gælder alle `skills.entries.<key>.env` eller `skills.entries.<key>.apiKey` til
    `process.env`.
 3. Opbygger systemprompten med **berettigede** skills.
 4. Gendanner det oprindelige miljø, efter at kørslen er slut.
@@ -246,19 +238,19 @@ Dette er **afgrænset til agent-kørslen**, ikke et globalt shell-miljø.
 
 ## Sessions-snapshot (performance)
 
-OpenClaw tager et snapshot af de berettigede skills **når en session starter** og genbruger den liste for efterfølgende ture i samme session. Ændringer i skills eller konfiguration træder i kraft ved næste nye session.
+OpenClaw snapshots de kvalificerede færdigheder **når en session starter** og genbruger denne liste til efterfølgende sving i samme session. Ændringer af færdigheder eller config træder i kraft på den næste nye session.
 
-Skills kan også opdateres midt i en session, når skills-watcher er aktiveret, eller når en ny berettiget fjernnode dukker op (se nedenfor). Tænk på dette som et **hot reload**: den opdaterede liste bruges ved næste agent-tur.
+Færdigheder kan også opdatere midten af sessionen, når færdighedswatcher er aktiveret, eller når en ny kvalificeret fjernbetjening vises (se nedenfor). Tænk på dette som en **varm genindlæsning**: den opdaterede liste hentes på næste agent tur.
 
 ## Fjern-macOS-noder (Linux-gateway)
 
-Hvis Gateway kører på Linux, men en **macOS-node** er forbundet **med `system.run` tilladt** (Exec approvals-sikkerhed ikke sat til `deny`), kan OpenClaw behandle macOS-only skills som berettigede, når de nødvendige binærer findes på den node. Agenten bør udføre disse skills via `nodes`-værktøjet (typisk `nodes.run`).
+Hvis Gateway kører på Linux, men et **macOS node** er forbundet **med `system. un` tilladt** (Exec godkendelser sikkerhed ikke indstillet til `benægt`), OpenClaw kan behandle macOS-kun færdigheder som kvalificerede, når de krævede binære filer er til stede på den pågældende node. Agenten bør udføre disse færdigheder via `noder`-værktøjet (typisk `nodes.run`).
 
-Dette afhænger af, at noden rapporterer sin kommando-understøttelse og af en bin-probe via `system.run`. Hvis macOS-noden senere går offline, forbliver skills synlige; kald kan fejle, indtil noden genforbinder.
+Dette er baseret på node rapportering sin kommando støtte og en bin sonde via `system.run`. Hvis macOS node går offline senere, de færdigheder forbliver synlige; påberåbelser kan mislykkes, indtil noden genoprettes.
 
 ## Skills-watcher (auto-opdatering)
 
-Som standard overvåger OpenClaw skill-mapper og opdaterer skills-snapshot’et, når `SKILL.md`-filer ændres. Konfigurer dette under `skills.load`:
+Som standard overvåger OpenClaw færdigheder mapper og bump færdigheder snapshot når `SKILL.md` filer ændres. Konfigurer dette under `skills.load`:
 
 ```json5
 {
@@ -273,7 +265,7 @@ Som standard overvåger OpenClaw skill-mapper og opdaterer skills-snapshot’et,
 
 ## Token-påvirkning (skills-liste)
 
-Når skills er berettigede, injicerer OpenClaw en kompakt XML-liste over tilgængelige skills i systemprompten (via `formatSkillsForPrompt` i `pi-coding-agent`). Omkostningen er deterministisk:
+Når færdigheder er kvalificeret, OpenClaw tilfører en kompakt XML-liste over tilgængelige færdigheder i systemet prompt (via `formatSkillsForPrompt` i `pi-kodning-agent`). Omkostningerne er målret:
 
 - **Basis-overhead (kun når ≥1 skill):** 195 tegn.
 - **Per skill:** 97 tegn + længden af de XML-escaped `<name>`, `<description>` og `<location>`-værdier.
@@ -287,14 +279,14 @@ total = 195 + Σ (97 + len(name_escaped) + len(description_escaped) + len(locati
 Noter:
 
 - XML-escaping udvider `& < > " '` til entiteter (`&amp;`, `&lt;`, osv.), hvilket øger længden.
-- Tokenantal varierer efter model-tokenizer. Et groft OpenAI-agtigt estimat er ~4 tegn/token, så **97 tegn ≈ 24 tokens** pr. skill plus dine faktiske feltlængder.
+- Token antal varierer efter model tokenizer. Et groft estimat i OpenAI-stil er ~4 tegn/token, så **97 tegn ≈ 24 tokens** pr. færdighed plus dine faktiske feltlængder.
 
 ## Livscyklus for managed skills
 
-OpenClaw leverer et basissæt af skills som **bundled skills** som en del af
-installationen (npm-pakke eller OpenClaw.app). `~/.openclaw/skills` findes til lokale
-overrides (f.eks. fastlåsning/patching af et skill uden at ændre den bundled
-kopi). Workspace skills er bruger-ejede og overstyrer begge ved navnekonflikter.
+OpenClaw leverer et basissæt af færdigheder som **bundtede færdigheder** som en del af
+installere (npm pakke eller OpenClaw.app). `~/.openclaw/skills` findes for lokale
+tilsidesættelser (for eksempel pinning/lappe en dygtighed uden at ændre den medfølgende
+-kopi). Arbejdspladsfærdigheder er brugerejede og tilsidesætter både på navnekonflikter.
 
 ## Konfigurationsreference
 

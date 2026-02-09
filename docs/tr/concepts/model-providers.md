@@ -4,13 +4,6 @@ read_when:
   - Sağlayıcı bazında model kurulum başvurusuna ihtiyaç duyduğunuzda
   - Model sağlayıcıları için örnek yapılandırmalar veya CLI ile başlangıç komutları istediğinizde
 title: "Model Sağlayıcıları"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Model sağlayıcıları

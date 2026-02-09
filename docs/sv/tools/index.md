@@ -4,20 +4,13 @@ read_when:
   - Lägger till eller ändrar agentverktyg
   - Avvecklar eller ändrar `openclaw-*` Skills
 title: "Verktyg"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:19:29Z
 ---
 
 # Verktyg (OpenClaw)
 
-OpenClaw exponerar **förstklassiga agentverktyg** för browser, canvas, noder och cron.
-Dessa ersätter de gamla `openclaw-*` Skills: verktygen är typade, ingen shell‑körning,
-och agenten bör förlita sig direkt på dem.
+OpenClaw exponerar **förstklassiga agentverktyg** för webbläsare, duk, noder och cron.
+Dessa ersätter de gamla `openclaw-*` färdigheterna: verktygen är skrivna, inget skalande,
+och agenten bör förlita sig på dem direkt.
 
 ## Inaktivera verktyg
 
@@ -38,8 +31,8 @@ Noteringar:
 
 ## Verktygsprofiler (bas‑tillåtelselista)
 
-`tools.profile` sätter en **bas‑tillåtelselista för verktyg** före `tools.allow`/`tools.deny`.
-Per‑agent‑åsidosättning: `agents.list[].tools.profile`.
+`tools.profile` sets a **base tool allowlist** before `tools.allow`/`tools.deny`.
+Per-agent override: `agents.list[].tools.profile`.
 
 Profiler:
 
@@ -88,12 +81,12 @@ Exempel (global kodningsprofil, supportagent med endast meddelanden):
 
 ## Leverantörsspecifik verktygspolicy
 
-Använd `tools.byProvider` för att **ytterligare begränsa** verktyg för specifika leverantörer
-(eller en enskild `provider/model`) utan att ändra dina globala standarder.
-Per‑agent‑åsidosättning: `agents.list[].tools.byProvider`.
+Använd `tools.byProvider` till **ytterligare begränsa** verktyg för specifika leverantörer
+(eller en enda `provider/model`) utan att ändra dina globala standarder.
+Per-agent override: `agents.list[].tools.byProvider`.
 
-Detta tillämpas **efter** basprofilen och **före** tillåt/neka‑listor,
-så den kan bara snäva in verktygsuppsättningen.
+Detta tillämpas **efter** basverktygsprofilen och **före** tillåta/neka listor,
+så att den endast kan begränsa verktygssatsen.
 Leverantörsnycklar accepterar antingen `provider` (t.ex. `google-antigravity`) eller
 `provider/model` (t.ex. `openai/gpt-5.2`).
 
@@ -144,7 +137,7 @@ Exempel (agent‑specifik åsidosättning för en enskild leverantör):
 
 ## Verktygsgrupper (genvägar)
 
-Verktygspolicyer (global, agent, sandbox) stöder `group:*`‑poster som expanderar till flera verktyg.
+Verktygspolicys (global, agent, sandbox) stödjer `group:*`‑poster som expanderar till flera verktyg.
 Använd dessa i `tools.allow` / `tools.deny`.
 
 Tillgängliga grupper:
@@ -172,10 +165,10 @@ Exempel (tillåt endast filverktyg + browser):
 
 ## Pluginer + verktyg
 
-Pluginer kan registrera **ytterligare verktyg** (och CLI‑kommandon) utöver kärnuppsättningen.
-Se [Plugins](/tools/plugin) för installation + konfig, och [Skills](/tools/skills) för hur
-vägledning om verktygsanvändning injiceras i prompts. Vissa pluginer levereras med egna Skills
-tillsammans med verktyg (till exempel röst‑samtalspluginen).
+Plugins kan registrera **ytterligare verktyg** (och CLI-kommandon) bortom kärnuppsättningen.
+Se [Plugins](/tools/plugin) för installation + config, och [Skills](/tools/skills) för hur
+verktygsanvändning vägledning injiceras i anvisningar. Vissa plugins skeppa sina egna färdigheter
+tillsammans med verktyg (till exempel röstsamtalsplugin).
 
 Valfria plugin‑verktyg:
 
@@ -186,8 +179,8 @@ Valfria plugin‑verktyg:
 
 ### `apply_patch`
 
-Applicera strukturerade patchar över en eller flera filer. Används för redigeringar med flera hunks.
-Experimentellt: aktivera via `tools.exec.applyPatch.enabled` (endast OpenAI‑modeller).
+Applicera strukturerade patchar över en eller flera filer. Använd för multi-hunk redigeringar.
+Experimentellt: aktivera via `tools.exec.applyPatch.enabled` (OpenAI-modeller endast).
 
 ### `exec`
 
@@ -204,7 +197,7 @@ Kärnparametrar:
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (nod‑id/namn för `host=node`)
-- Behöver du en riktig TTY? Sätt `pty: true`.
+- Behöver du en riktig TTY? Ange `pty: true`.
 
 Noteringar:
 
@@ -472,8 +465,8 @@ Gateway‑backade verktyg (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (om autentisering är aktiverad)
 - `timeoutMs`
 
-Obs: när `gatewayUrl` är satt, inkludera `gatewayToken` explicit. Verktyg ärver inte konfig
-eller miljöuppgifter för åsidosättningar, och saknade explicita uppgifter är ett fel.
+Obs: när `gatewayUrl` är satt, inkludera `gatewayToken` explicit. Verktyg ärver inte config
+eller miljöuppgifter för åsidosättningar, och saknade explicita referenser är ett fel.
 
 Browser‑verktyg:
 
@@ -515,5 +508,5 @@ Verktyg exponeras i två parallella kanaler:
 1. **Systemprompt‑text**: en människoläsbar lista + vägledning.
 2. **Verktygsschema**: de strukturerade funktionsdefinitionerna som skickas till modell‑API:t.
 
-Det betyder att agenten ser både ”vilka verktyg som finns” och ”hur de anropas”. Om ett verktyg
-inte visas i systemprompten eller schemat kan modellen inte anropa det.
+Det betyder att agenten ser både ”vilka verktyg som finns” och ”hur man kallar dem”. Om ett verktyg
+inte visas i systemprompten eller schemat, kan modellen inte kalla det.

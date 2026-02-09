@@ -1,25 +1,18 @@
 ---
 summary: "Çalışma alanını ve kimlik dosyalarını tohumlayan ajan başlatma ritüeli"
 read_when:
-  - Ajanın ilk çalıştırmada neler olduğunu anlamak
+  - İlk ajan çalıştırmasında ne olduğunu anlamak
   - Başlatma dosyalarının nerede bulunduğunu açıklamak
   - Katılım kimliği kurulumunda hata ayıklamak
-title: "Ajan Başlatma"
-sidebarTitle: "Başlatma"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
+title: "Ajan Önyüklemesi"
+sidebarTitle: "Önyükleme"
 ---
 
-# Ajan Başlatma
+# Ajan Önyüklemesi
 
 Başlatma, bir ajan çalışma alanını hazırlayan ve kimlik ayrıntılarını toplayan **ilk çalıştırma** ritüelidir. Katılımdan sonra, ajan ilk kez başlatıldığında gerçekleşir.
 
-## Başlatma ne yapar
+## Önyüklemenin ne yaptığı
 
 Ajanın ilk çalıştırılmasında OpenClaw çalışma alanını başlatır (varsayılan
 `~/.openclaw/workspace`):

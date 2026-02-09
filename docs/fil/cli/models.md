@@ -4,13 +4,6 @@ read_when:
   - Gusto mong baguhin ang mga default na model o tingnan ang status ng auth ng provider
   - Gusto mong i-scan ang mga available na model/provider at i-debug ang mga auth profile
 title: "mga model"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:20Z
 ---
 
 # `openclaw models`
@@ -31,19 +24,17 @@ openclaw models set <model-or-alias>
 openclaw models scan
 ```
 
-`openclaw models status` ipinapakita ang resolved na default/mga fallback kasama ang pangkalahatang-ideya ng auth.
-Kapag may available na mga snapshot ng paggamit ng provider, kasama sa seksyon ng status ng OAuth/token ang
-mga header ng paggamit ng provider.
-Idagdag ang `--probe` para magpatakbo ng live na mga auth probe laban sa bawat naka-configure na profile ng provider.
-Ang mga probe ay totoong request (maaaring kumonsumo ng mga token at mag-trigger ng mga rate limit).
-Gamitin ang `--agent <id>` para siyasatin ang estado ng model/auth ng isang naka-configure na agent. Kapag hindi isinama,
-gagamitin ng command ang `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` kung naka-set, kung hindi ay ang
-naka-configure na default agent.
+Ipinapakita ng `openclaw models status` ang resolved default/fallbacks kasama ang auth overview.
+Kapag available ang mga snapshot ng paggamit ng provider, kasama sa seksyon ng OAuth/token status ang mga provider usage header.
+Idagdag ang `--probe` upang magpatakbo ng mga live auth probe laban sa bawat naka-configure na provider profile.
+Ang mga probe ay mga totoong request (maaaring kumonsumo ng mga token at mag-trigger ng rate limits).
+Gamitin ang `--agent <id>` upang siyasatin ang model/auth state ng isang naka-configure na agent. Kapag hindi isinama,
+gagamitin ng command ang `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` kung naka-set, kung hindi ay ang naka-configure na default agent.
 
 Mga tala:
 
 - Tumatanggap ang `models set <model-or-alias>` ng `provider/model` o isang alias.
-- Ang mga model ref ay pino-parse sa pamamagitan ng paghahati sa **unang** `/`. Kung kasama sa model ID ang `/` (OpenRouter-style), isama ang prefix ng provider (halimbawa: `openrouter/moonshotai/kimi-k2`).
+- Ang mga model ref ay pina-parse sa pamamagitan ng paghahati sa **unang** `/`. Kung ang model ID ay may kasamang `/` (OpenRouter-style), isama ang provider prefix (halimbawa: `openrouter/moonshotai/kimi-k2`).
 - Kung aalisin mo ang provider, ituturing ng OpenClaw ang input bilang isang alias o isang model para sa **default provider** (gumagana lamang kapag walang `/` sa model ID).
 
 ### `models status`
@@ -77,8 +68,8 @@ openclaw models auth setup-token
 openclaw models auth paste-token
 ```
 
-Pinapatakbo ng `models auth login` ang auth flow ng provider plugin (OAuth/API key). Gamitin ang
-`openclaw plugins list` para makita kung aling mga provider ang naka-install.
+Pinapatakbo ng `models auth login` ang auth flow (OAuth/API key) ng provider plugin. Gamitin ang
+`openclaw plugins list` upang makita kung aling mga provider ang naka-install.
 
 Mga tala:
 

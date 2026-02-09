@@ -3,13 +3,6 @@ summary: "Telegram 봇 지원 상태, 기능 및 구성"
 read_when:
   - Telegram 기능 또는 웹훅을 작업할 때
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:19Z
 ---
 
 # Telegram (Bot API)
@@ -20,7 +13,7 @@ x-i18n:
 
 1. **@BotFather** 로 봇을 생성합니다 ([직접 링크](https://t.me/BotFather)). 핸들이 정확히 `@BotFather` 인지 확인한 다음 토큰을 복사합니다.
 2. 토큰을 설정합니다:
-   - 환경 변수: `TELEGRAM_BOT_TOKEN=...`
+   - Env: `TELEGRAM_BOT_TOKEN=...`
    - 또는 설정: `channels.telegram.botToken: "..."`.
    - 둘 다 설정된 경우 설정 값이 우선합니다 (환경 변수 폴백은 기본 계정에만 적용).
 3. Gateway 를 시작합니다.
@@ -40,7 +33,7 @@ x-i18n:
 }
 ```
 
-## 개요
+## 무엇인가요
 
 - Gateway 가 소유하는 Telegram Bot API 채널입니다.
 - 결정적 라우팅: 응답은 항상 Telegram 으로 돌아가며, 모델은 채널을 선택하지 않습니다.
@@ -48,7 +41,7 @@ x-i18n:
 
 ## 설정 (빠른 경로)
 
-### 1) 봇 토큰 생성 (BotFather)
+### 1. 봇 토큰 생성 (BotFather)
 
 1. Telegram 을 열고 **@BotFather** 와 대화합니다 ([직접 링크](https://t.me/BotFather)). 핸들이 정확히 `@BotFather` 인지 확인합니다.
 2. `/newbot` 를 실행한 뒤 안내에 따라 이름과 사용자 이름(끝이 `bot`)을 설정합니다.
@@ -59,7 +52,7 @@ x-i18n:
 - `/setjoingroups` — 봇을 그룹에 추가하는 것을 허용/차단합니다.
 - `/setprivacy` — 봇이 그룹의 모든 메시지를 볼 수 있는지 제어합니다.
 
-### 2) 토큰 구성 (환경 변수 또는 설정)
+### 2. 토큰 구성 (환경 변수 또는 설정)
 
 예시:
 
@@ -179,7 +172,7 @@ OpenClaw 는 시작 시 `/status`, `/reset`, `/model` 와 같은 기본 명령�
 
 기본적으로 봇은 그룹에서 언급에만 응답합니다 (`@botname` 또는 `agents.list[].groupChat.mentionPatterns` 의 패턴). 이 동작을 변경하려면:
 
-### 설정을 통해 (권장)
+### 설정 파일을 통해 (권장)
 
 ```json5
 {
@@ -350,7 +343,7 @@ Telegram 기능은 두 수준에서 구성할 수 있습니다(위에는 객체 
 
 ## 접근 제어 (다이렉트 메시지 + 그룹)
 
-### 다이렉트 메시지 접근
+### DM access
 
 - 기본값: `channels.telegram.dmPolicy = "pairing"`. 알 수 없는 발신자는 페어링 코드를 받으며, 승인될 때까지 메시지는 무시됩니다(코드는 1 시간 후 만료).
 - 승인 방법:
@@ -363,12 +356,12 @@ Telegram 기능은 두 수준에서 구성할 수 있습니다(위에는 객체 
 
 더 안전한 방법(서드파티 봇 없음):
 
-1. Gateway 를 시작하고 봇에 다이렉트 메시지를 보냅니다.
+1. 게이트웨이를 시작하고 봇에게 DM을 보내세요.
 2. `openclaw logs --follow` 를 실행하고 `from.id` 를 확인합니다.
 
 대안(공식 Bot API):
 
-1. 봇에 다이렉트 메시지를 보냅니다.
+1. 봇에게 DM을 보내세요.
 2. 봇 토큰으로 업데이트를 가져와 `message.from.id` 를 읽습니다:
 
    ```bash
@@ -509,7 +502,7 @@ OpenClaw 는 지능형 캐싱을 통해 Telegram 스티커의 수신과 전송�
 - 캐시된 스티커에 대한 빠른 응답 시간(비전 처리 지연 없음)
 - 캐시된 설명을 기반으로 한 스티커 검색 기능 제공
 
-캐시는 스티커 수신 시 자동으로 채워지며, 수동 관리가 필요하지 않습니다.
+스티커가 수신되면 캐시는 자동으로 채워집니다. 캐시는 스티커 수신 시 자동으로 채워지며, 수동 관리가 필요하지 않습니다.
 
 ### 스티커 전송
 

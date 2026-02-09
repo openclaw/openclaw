@@ -4,13 +4,6 @@ read_when:
   - جب آپ کسی چینل کے لیے رابطہ/گروپس/خود کی آئی ڈیز دیکھنا چاہتے ہوں
   - جب آپ چینل ڈائریکٹری اڈاپٹر تیار کر رہے ہوں
 title: "ڈائریکٹری"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:59Z
 ---
 
 # `openclaw directory`

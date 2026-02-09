@@ -2,39 +2,32 @@
 summary: "研究筆記：Clawd 工作區的離線記憶系統（Markdown 作為事實來源 + 衍生索引）"
 read_when:
   - 設計超越每日 Markdown 記錄的工作區記憶（~/.openclaw/workspace）
-  - 決定：獨立 CLI 還是深度整合 OpenClaw
+  - Deciding: 決定：獨立 CLI 還是深度整合 OpenClaw
   - 新增離線回憶 + 反思（保留／回憶／反思）
 title: "工作區記憶研究"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:14Z
 ---
 
 # Workspace Memory v2（離線）：研究筆記
 
 目標：Clawd 風格的工作區（`agents.defaults.workspace`，預設 `~/.openclaw/workspace`），其中「記憶」以每日一個 Markdown 檔案（`memory/YYYY-MM-DD.md`）儲存，並搭配一小組穩定檔案（例如 `memory.md`、`SOUL.md`）。
 
-本文提出一種 **離線優先** 的記憶架構，將 Markdown 作為可審閱的權威事實來源，同時透過衍生索引提供 **結構化回憶**（搜尋、實體摘要、信心更新）。
+This doc proposes an **offline-first** memory architecture that keeps Markdown as the canonical, reviewable source of truth, but adds **structured recall** (search, entity summaries, confidence updates) via a derived index.
 
 ## 為什麼要改變？
 
 目前的設定（每天一個檔案）非常適合：
 
 - 「只追加」的日誌記錄
-- 人工編輯
+- human editing
 - 以 git 為後盾的耐久性 + 可稽核性
 - 低摩擦的捕捉方式（「就寫下來」）
 
-但在以下方面較弱：
+It’s weak for:
 
 - 高回憶率的檢索（「我們對 X 做了什麼決定？」、「上次嘗試 Y 是什麼時候？」）
 - 以實體為中心的回答（「告訴我 Alice／The Castle／warelay」），而不必重讀許多檔案
 - 意見／偏好的一致性（以及其變更時的證據）
-- 時間限制（「2025 年 11 月期間什麼是真的？」）與衝突解決
+- 時間限制（「2025 年 11 月期間什麼是真的？」）與衝突解決 and conflict resolution
 
 ## 設計目標
 
@@ -42,7 +35,7 @@ x-i18n:
 - **可解釋**：檢索到的項目應可追溯（檔案 + 位置），並可與推論分離。
 - **低儀式感**：每日記錄維持 Markdown，不需繁重的結構化結構。
 - **漸進式**：v1 僅用 FTS 即有價值；語意／向量與圖結構為選用升級。
-- **對代理程式友善**：讓「在權杖預算內回憶」變得容易（回傳小型事實組合）。
+- **Agent-friendly**: makes “recall within token budgets” easy (return small bundles of facts).
 
 ## 北極星模型（Hindsight × Letta）
 
@@ -51,23 +44,23 @@ x-i18n:
 1. **Letta／MemGPT 風格的控制迴圈**
 
 - 維持一個小型「核心」永遠在上下文中（角色 + 關鍵使用者事實）
-- 其餘內容皆在上下文之外，透過工具檢索
+- everything else is out-of-context and retrieved via tools
 - 記憶寫入為明確的工具呼叫（追加／取代／插入），持久化後於下一回合重新注入
 
 2. **Hindsight 風格的記憶基底**
 
-- 區分「觀察到的」vs「相信的」vs「已摘要的」
+- separate what’s observed vs what’s believed vs what’s summarized
 - 支援保留／回憶／反思
-- 帶有信心的意見，並可隨證據演進
-- 具實體感知的檢索 + 時間查詢（即使沒有完整的知識圖譜）
+- confidence-bearing opinions that can evolve with evidence
+- entity-aware retrieval + temporal queries (even without full knowledge graphs)
 
 ## 提議的架構（Markdown 作為事實來源 + 衍生索引）
 
-### 權威儲存（git 友善）
+### Canonical store (git-friendly)
 
 保留 `~/.openclaw/workspace` 作為權威的人類可讀記憶。
 
-建議的工作區結構：
+Suggested workspace layout:
 
 ```
 ~/.openclaw/workspace/
@@ -87,7 +80,7 @@ x-i18n:
 
 注意事項：
 
-- **每日記錄仍然是每日記錄**。不需要把它變成 JSON。
+- **Daily log stays daily log**. No need to turn it into JSON.
 - `bank/` 檔案是 **精選的**，由反思工作產生，且仍可手動編輯。
 - `memory.md` 維持「小而核心」：你希望 Clawd 每個工作階段都能看到的內容。
 
@@ -99,7 +92,7 @@ x-i18n:
 ~/.openclaw/workspace/.memory/index.sqlite
 ```
 
-其基礎包含：
+Back it with:
 
 - 用於事實 + 實體連結 + 意見中繼資料的 SQLite schema
 - 用於詞彙回憶的 SQLite **FTS5**（快速、輕量、離線）
@@ -116,8 +109,8 @@ Hindsight 在此最重要的洞見：儲存 **敘事性、可自足的事實**�
 對於 `memory/YYYY-MM-DD.md` 的實務規則：
 
 - 在一天結束時（或期間），新增一個 `## Retain` 區段，包含 2–5 個條列，需具備：
-  - 敘事性（保留跨回合上下文）
-  - 自足性（日後單獨閱讀也合理）
+  - narrative (cross-turn context preserved)
+  - self-contained (standalone makes sense later)
   - 以類型 + 實體提及進行標記
 
 範例：
@@ -144,9 +137,9 @@ Hindsight 在此最重要的洞見：儲存 **敘事性、可自足的事實**�
 - **詞彙**：「尋找精確詞彙／名稱／指令」（FTS5）
 - **實體**：「告訴我 X」（實體頁 + 與實體連結的事實）
 - **時間**：「11 月 27 日左右發生了什麼」／「自上週以來」
-- **意見**：「Peter 偏好什麼？」（附信心 + 證據）
+- **意見**：「Peter 偏好什麼？」（附信心 + 證據） (with confidence + evidence)
 
-回傳格式應對代理程式友善並引用來源：
+Return format should be agent-friendly and cite sources:
 
 - `kind`（`world|experience|opinion|observation`）
 - `timestamp`（來源日期，或若存在則為擷取的時間範圍）
@@ -162,7 +155,7 @@ Hindsight 在此最重要的洞見：儲存 **敘事性、可自足的事實**�
 - 根據強化／矛盾更新 `bank/opinions.md` 的信心
 - 視需要提議編輯 `memory.md`（「偏核心」的耐久事實）
 
-意見演進（簡單、可解釋）：
+Opinion evolution (simple, explainable):
 
 - 每個意見包含：
   - 陳述
@@ -187,7 +180,7 @@ Hindsight 在此最重要的洞見：儲存 **敘事性、可自足的事實**�
   - `openclaw memory recall "…" --k 25 --since 30d`
   - `openclaw memory reflect --since 7d`
 
-### 為什麼仍要拆分成函式庫？
+### Why still split a library?
 
 - 讓記憶邏輯在沒有 Gateway 閘道器／執行環境下也可測試
 - 可在其他情境重用（本地腳本、未來桌面應用等）
@@ -204,29 +197,29 @@ Hindsight 在此最重要的洞見：儲存 **敘事性、可自足的事實**�
 - **不要一開始就用** SuCo。
 - 從 SQLite FTS +（選用）簡單嵌入開始；你會立刻獲得大多數 UX 收益。
 - 只有在以下情況才考慮 SuCo／HNSW／ScaNN 類解法：
-  - 語料很大（數萬／數十萬個區塊）
+  - corpus is big (tens/hundreds of thousands of chunks)
   - 暴力的嵌入搜尋變得太慢
   - 回憶品質確實被詞彙搜尋明顯限制
 
 離線友善的替代方案（由低到高複雜度）：
 
 - SQLite FTS5 + 中繼資料過濾（零 ML）
-- 嵌入 + 暴力搜尋（在區塊數低時效果出奇地好）
+- Embeddings + brute force (works surprisingly far if chunk count is low)
 - HNSW 索引（常見、穩健；需要函式庫綁定）
 - SuCo（研究等級；若有可嵌入的成熟實作則具吸引力）
 
-未解問題：
+Open question:
 
 - 在你的機器（筆電 + 桌機）上，用於「個人助理記憶」的 **最佳** 離線嵌入模型是什麼？
   - 如果你已經有 Ollama：用本地模型做嵌入；否則在工具鏈中隨附一個小型嵌入模型。
 
-## 最小但有用的試點
+## Smallest useful pilot
 
 如果你想要一個最小、但仍然有用的版本：
 
 - 新增 `bank/` 實體頁，以及每日記錄中的 `## Retain` 區段。
 - 使用 SQLite FTS 進行可引用來源的回憶（路徑 + 行號）。
-- 僅在回憶品質或規模有需求時才加入嵌入。
+- Add embeddings only if recall quality or scale demands it.
 
 ## 參考資料
 

@@ -3,13 +3,6 @@ summary: "ဆက်ရှင်များကို စာရင်းပြု
 read_when:
   - ဆက်ရှင် ကိရိယာများကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ပြောင်းလဲခြင်း
 title: "ဆက်ရှင် ကိရိယာများ"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:39Z
 ---
 
 # ဆက်ရှင် ကိရိယာများ
@@ -31,7 +24,7 @@ x-i18n:
 - Hooks များတွင် သီးခြား သတ်မှတ်မထားလျှင် `hook:<uuid>` ကို အသုံးပြုသည်။
 - Node ဆက်ရှင်များတွင် သီးခြား သတ်မှတ်မထားလျှင် `node-<nodeId>` ကို အသုံးပြုသည်။
 
-`global` နှင့် `unknown` သည် သိမ်းဆည်းထားသော တန်ဖိုးများဖြစ်ပြီး မည်သည့်အခါမှ စာရင်းမထည့်ပါ။ `session.scope = "global"` ဖြစ်ပါက ခေါ်ယူသူများက `global` ကို မမြင်ရအောင် ကိရိယာအားလုံးတွင် `main` သို့ alias ပြုလုပ်ထားသည်။
+`global` and `unknown` are reserved values and are never listed. `session.scope = "global"` ဖြစ်ပါက caller များက `global` ကို မမြင်ရစေရန် tools အားလုံးအတွက် `main` သို့ alias လုပ်ပါသည်။
 
 ## sessions_list
 
@@ -96,7 +89,7 @@ Behavior:
 
 - `timeoutSeconds = 0`: enqueue လုပ်ပြီး `{ runId, status: "accepted" }` ကို ပြန်ပေးသည်။
 - `timeoutSeconds > 0`: ပြီးစီးမှုအတွက် N စက္ကန့်အထိ စောင့်ပြီး `{ runId, status: "ok", reply }` ကို ပြန်ပေးသည်။
-- စောင့်ချိန် အဆုံးသတ်သွားပါက: `{ runId, status: "timeout", error }`။ Run ကို ဆက်လက်လုပ်ဆောင်မည်; နောက်မှ `sessions_history` ကို ခေါ်ပါ။
+- If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
 - Run မအောင်မြင်ပါက: `{ runId, status: "error", error }`။
 - Primary run ပြီးဆုံးပြီးနောက် delivery announce run များကို ကြေညာသည်၊ best‑effort ဖြစ်ပြီး `status: "ok"` သည် announce ပို့ပြီးကြောင်းကို အာမခံမပေးပါ။
 - Gateway（ဂိတ်ဝေး） `agent.wait` မှတစ်ဆင့် စောင့်ဆိုင်းခြင်း (server‑side) ကို အသုံးပြုသဖြင့် ပြန်လည်ချိတ်ဆက်မှုများကြောင့် စောင့်ဆိုင်းမှု မပျက်သွားပါ။
@@ -162,7 +155,7 @@ Parameters:
 
 Allowlist:
 
-- `agents.list[].subagents.allowAgents`: `agentId` မှတစ်ဆင့် ခွင့်ပြုထားသော agent id များစာရင်း (`["*"]` သည် မည်သူမဆို ခွင့်ပြုရန်)။ မူလ: တောင်းဆိုသူ အေးဂျင့်သာ။
+- `agents.list[].subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
 Discovery:
 

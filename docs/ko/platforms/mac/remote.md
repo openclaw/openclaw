@@ -3,13 +3,6 @@ summary: "SSH 를 통해 원격 OpenClaw Gateway(게이트웨이)를 제어하�
 read_when:
   - 원격 mac 제어를 설정하거나 디버깅할 때
 title: "원격 제어"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:54Z
 ---
 
 # 원격 OpenClaw (macOS ⇄ 원격 호스트)

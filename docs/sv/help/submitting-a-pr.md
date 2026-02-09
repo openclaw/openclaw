@@ -1,21 +1,14 @@
 ---
 summary: "Hur du skickar in en PR med hög signal"
 title: "Skicka in en PR"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:30Z
 ---
 
-Bra PR:er är lätta att granska: granskare ska snabbt förstå avsikten, verifiera beteendet och slå samman ändringar säkert. Den här guiden täcker kortfattade bidrag med hög signal för mänsklig och LLM-granskning.
+Bra PRs är lätt att granska: granskare bör snabbt veta avsikt, kontrollera beteende, och landa förändringar på ett säkert sätt. Denna guide omfattar kortfattade, hög-signal inlämningar för människa och LLM granskning.
 
 ## Vad som gör en bra PR
 
 - [ ] Förklara problemet, varför det spelar roll och ändringen.
-- [ ] Håll ändringar fokuserade. Undvik breda refaktoriseringar.
+- [ ] Håll ändringarna fokuserade. Undvik breda refaktorer.
 - [ ] Sammanfatta ändringar som är synliga för användare/konfig/standardvärden.
 - [ ] Lista testtäckning, hoppade tester och skäl.
 - [ ] Lägg till bevis: loggar, skärmbilder eller inspelningar (UI/UX).
@@ -23,9 +16,9 @@ Bra PR:er är lätta att granska: granskare ska snabbt förstå avsikten, verifi
 - [ ] Kör/åtgärda relevanta `pnpm`-kommandon innan du skapar PR.
 - [ ] Sök i kodbasen och på GitHub efter relaterad funktionalitet/ärenden/fixar.
 - [ ] Basera påståenden på bevis eller observation.
-- [ ] Bra titel: verb + omfattning + utfall (t.ex. `Docs: add PR and issue templates`).
+- [ ] Bra titel: verb + scope + resultat (t.ex., `Dokument: lägg till PR och utfärda mallar`).
 
-Var kortfattad; kortfattad granskning > grammatik. Utelämna avsnitt som inte är tillämpliga.
+Var kortfattad; kortfattad recension > grammatik. Utelämna eventuella icke-tillämpliga avsnitt.
 
 ### Baslinjevalideringskommandon (kör/åtgärda fel för din ändring)
 
@@ -53,7 +46,7 @@ Var kortfattad; kortfattad granskning > grammatik. Utelämna avsnitt som inte ä
 - [ ] Perf: Lägg till före-/efter-mått och hur de mättes.
 - [ ] UX/UI: Skärmbilder/video, notera tillgänglighetspåverkan.
 - [ ] Infra/Build: Miljöer/validering.
-- [ ] Security: Sammanfatta risk, reproduktion, verifiering, inga känsliga data. Endast välgrundade påståenden.
+- [ ] Säkerhet: Sammanfatta risk, repro, verifiering, inga känsliga data. Endast jordade fordringar.
 
 ## Checklista
 

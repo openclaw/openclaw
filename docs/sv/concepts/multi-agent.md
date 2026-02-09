@@ -3,18 +3,11 @@ summary: "Multi-agent-routning: isolerade agenter, kanalkonton och bindningar"
 title: Multi-Agent-routning
 read_when: "Du vill ha flera isolerade agenter (arbetsytor + autentisering) i en gateway-process."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:06Z
 ---
 
 # Multi-Agent-routning
 
-Mål: flera _isolerade_ agenter (separat arbetsyta + `agentDir` + sessioner), samt flera kanalkonton (t.ex. två WhatsApp) i en körande Gateway. Inkommande trafik routas till en agent via bindningar.
+Mål: flera _isolerade_ agenter (separat arbetsyta + `agentDir` + sessioner), plus flera kanalkonton (t.ex. två WhatsApps) i en kör Gateway. Inkommande dirigeras till en agent via bindningar.
 
 ## Vad är ”en agent”?
 
@@ -24,24 +17,24 @@ En **agent** är ett fullt avgränsat ”hjärna”-system med egna:
 - **Tillståndskatalog** (`agentDir`) för autentiseringsprofiler, modellregister och per-agent-konfig.
 - **Sessionslager** (chathistorik + routningstillstånd) under `~/.openclaw/agents/<agentId>/sessions`.
 
-Autentiseringsprofiler är **per agent**. Varje agent läser från sin egen:
+Auth profiler är **per agent**. Varje agent läser från sin egen:
 
 ```
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Huvudagentens inloggningsuppgifter delas **inte** automatiskt. Återanvänd aldrig `agentDir`
-mellan agenter (det orsakar autentiserings-/sessionskollisioner). Om du vill dela inloggningar,
-kopiera `auth-profiles.json` till den andra agentens `agentDir`.
+Referenser för huvudagent **inte** delas automatiskt. Återanvänd aldrig `agentDir`
+över agenter (det orsakar författ/session kollisioner). Om du vill dela kredit kopierar
+`auth-profiles.json` till den andra agentens `agentDir`.
 
-Skills är per agent via varje arbetsytas `skills/`-mapp, med delade Skills
+Färdigheter är per agent via varje arbetsytans `skills/`-mapp, med delade färdigheter
 tillgängliga från `~/.openclaw/skills`. Se [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 Gateway kan vara värd för **en agent** (standard) eller **många agenter** sida vid sida.
 
-**Arbetsytenotis:** varje agents arbetsyta är **standard-cwd**, inte en hård
-sandbox. Relativa sökvägar löses inom arbetsytan, men absoluta sökvägar kan
-nå andra platser på värden om sandboxing inte är aktiverat. Se
+**Arbetsytans anteckning:** varje agents arbetsyta är **standard cwd**, inte en hård
+sandlåda. Relativa vägar försvinner inne i arbetsytan, men absoluta vägar kan
+nå andra värdplatser om inte sandlådan är aktiverad. Se
 [Sandboxing](/gateway/sandboxing).
 
 ## Sökvägar (snabbkarta)
@@ -89,7 +82,7 @@ Detta gör att **flera personer** kan dela en Gateway-server samtidigt som deras
 
 ## Ett WhatsApp-nummer, flera personer (DM-delning)
 
-Du kan routa **olika WhatsApp-DM** till olika agenter samtidigt som du stannar på **ett WhatsApp-konto**. Matcha på avsändarens E.164 (som `+15551234567`) med `peer.kind: "dm"`. Svar skickas fortfarande från samma WhatsApp-nummer (ingen per-agent-avsändaridentitet).
+Du kan dirigera **olika WhatsApp DMs** till olika agenter medan du stannar på **ett WhatsApp konto**. Matcha på avsändare E.164 (som `+15551234567`) med `peer.kind: "dm"`. Svaren kommer fortfarande från samma WhatsApp nummer (ingen per-agent avsändare identitet).
 
 Viktig detalj: direktchattar kollapsar till agentens **huvudsessionnyckel**, så verklig isolering kräver **en agent per person**.
 
@@ -135,13 +128,13 @@ Bindningar är **deterministiska** och **mest specifika vinner**:
 ## Flera konton / telefonnummer
 
 Kanaler som stöder **flera konton** (t.ex. WhatsApp) använder `accountId` för att identifiera
-varje inloggning. Varje `accountId` kan routas till en annan agent, så en server kan vara värd för
+varje inloggning. Varje `accountId` kan dirigeras till en annan agent, så en server kan värd
 flera telefonnummer utan att blanda sessioner.
 
 ## Begrepp
 
 - `agentId`: en ”hjärna” (arbetsyta, per-agent-autentisering, per-agent-sessionslager).
-- `accountId`: en instans av ett kanalkonto (t.ex. WhatsApp-konto `"personal"` vs `"biz"`).
+- `accountId`: en kanal konto instans (t.ex. WhatsApp konto `"personlig"` vs `"biz"`).
 - `binding`: routar inkommande meddelanden till en `agentId` via `(channel, accountId, peer)` och valfritt guild-/team-id.
 - Direktchattar kollapsar till `agent:<agentId>:<mainKey>` (per-agent ”main”; `session.mainKey`).
 
@@ -325,8 +318,8 @@ och en stramare verktygspolicy:
 
 Noteringar:
 
-- Verktygens tillåt-/nekalistor gäller **verktyg**, inte Skills. Om en Skill behöver köra en
-  binär, säkerställ att `exec` är tillåtet och att binären finns i sandboxen.
+- Verktyg tillåtna/neka listor är **verktyg**, inte färdigheter. Om en färdighet behöver köra en
+  binär, se till att `exec` är tillåten och binären finns i sandlådan.
 - För striktare spärrar, sätt `agents.list[].groupChat.mentionPatterns` och behåll
   grupptillåtelselistor aktiverade för kanalen.
 
@@ -367,8 +360,8 @@ Från och med v2026.1.6 kan varje agent ha sin egen sandbox och verktygsbegräns
 }
 ```
 
-Obs: `setupCommand` ligger under `sandbox.docker` och körs en gång vid skapande av containern.
-Per-agent-åsidosättningar av `sandbox.docker.*` ignoreras när den upplösta omfattningen är `"shared"`.
+Obs: `setupCommand` bor under `sandbox.docker` och körs en gång på behållaren skapas.
+Per-agent `sandbox.docker.*` åsidosättningar ignoreras när det lösta området är `"delad"`.
 
 **Fördelar:**
 
@@ -376,8 +369,8 @@ Per-agent-åsidosättningar av `sandbox.docker.*` ignoreras när den upplösta o
 - **Resurskontroll**: Sandboxa specifika agenter medan andra körs på värden
 - **Flexibla policyer**: Olika behörigheter per agent
 
-Obs: `tools.elevated` är **global** och avsändarbaserad; den kan inte konfigureras per agent.
-Om du behöver per-agent-gränser, använd `agents.list[].tools` för att neka `exec`.
-För gruppinriktning, använd `agents.list[].groupChat.mentionPatterns` så att @omnämnanden mappas korrekt till avsedd agent.
+Obs: `tools.elevated` är **global** och avsändarbaserad; den är inte konfigurerbar per agent.
+Om du behöver gränser per agent, använd `agents.list[].tools` för att neka `exec`.
+För gruppinriktning, använd `agents.list[].groupChat.mentionPatterns` så @nämner karta rent till den avsedda agenten.
 
 Se [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) för detaljerade exempel.

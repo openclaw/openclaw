@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "OpenResponses Gateway 계획"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:04Z
 ---
 
 # OpenResponses Gateway 통합 계획
@@ -30,7 +23,7 @@ Open Responses 는 OpenAI Responses API 를 기반으로 한 개방형 추론 �
 - Chat Completions 를 비활성화하기 쉽고, 궁극적으로 제거할 수 있는 호환성 레이어로 유지합니다.
 - 분리되고 재사용 가능한 스키마로 검증 및 파싱을 표준화합니다.
 
-## 비목표
+## Non-goals
 
 - 1차 단계에서 OpenResponses 전체 기능 동등성 (이미지, 파일, 호스티드 도구).
 - 내부 에이전트 실행 로직 또는 도구 오케스트레이션 교체.

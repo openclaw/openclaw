@@ -1,26 +1,19 @@
 ---
-summary: 「Telegram ボットのサポート状況、機能、および設定」
+summary: "Telegram ボットのサポート状況、機能、および設定"
 read_when:
   - Telegram 機能や webhook に取り組むとき
-title: 「Telegram」
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:07Z
+title: "Telegram"
 ---
 
 # Telegram（Bot API）
 
-ステータス: grammY 経由でのボット DM + グループに対して本番対応。デフォルトはロングポーリング、webhook はオプションです。
+状態:gramY経由でボットDM+グループのプロダクション準備ができています。 デフォルトでロングポーリング。webhookは任意。
 
 ## クイックセットアップ（初心者向け）
 
-1. **@BotFather**（[直リンク](https://t.me/BotFather)）でボットを作成します。ハンドルが正確に `@BotFather` であることを確認し、トークンをコピーします。
+1. **@BotFather**（[直リンク](https://t.me/BotFather)）でボットを作成します。ハンドルが正確に `@BotFather` であることを確認し、トークンをコピーします。 ハンドルが `@BotFather` であることを確認し、トークンをコピーします。
 2. トークンを設定します:
-   - 環境変数: `TELEGRAM_BOT_TOKEN=...`
+   - Env: `TELEGRAM_BOT_TOKEN=...`
    - または設定: `channels.telegram.botToken: "..."`。
    - 両方が設定されている場合は、設定が優先されます（環境変数のフォールバックはデフォルトアカウントのみ）。
 3. ゲートウェイを起動します。
@@ -40,7 +33,7 @@ x-i18n:
 }
 ```
 
-## 概要
+## これは何か
 
 - Gateway（ゲートウェイ）が所有する Telegram Bot API チャンネルです。
 - 決定的ルーティング: 返信は必ず Telegram に戻り、モデルがチャンネルを選択することはありません。
@@ -48,9 +41,9 @@ x-i18n:
 
 ## セットアップ（高速パス）
 
-### 1) ボットトークンを作成（BotFather）
+### 1. ボットトークンを作成（BotFather）
 
-1. Telegram を開き、**@BotFather**（[直リンク](https://t.me/BotFather)）とチャットします。ハンドルが正確に `@BotFather` であることを確認します。
+1. Telegram を開き、**@BotFather**（[直リンク](https://t.me/BotFather)）とチャットします。ハンドルが正確に `@BotFather` であることを確認します。 ハンドルが正確に `@BotFather` であることを確認します。
 2. `/newbot` を実行し、指示に従います（名前 + `bot` で終わるユーザー名）。
 3. トークンをコピーして安全に保管します。
 
@@ -59,7 +52,7 @@ x-i18n:
 - `/setjoingroups` — ボットをグループに追加できるかを許可／拒否します。
 - `/setprivacy` — ボットがすべてのグループメッセージを見るかどうかを制御します。
 
-### 2) トークンを設定（環境変数または設定）
+### 2. トークンを設定（環境変数または設定）
 
 例:
 
@@ -78,11 +71,12 @@ x-i18n:
 
 環境変数オプション: `TELEGRAM_BOT_TOKEN=...`（デフォルトアカウントで有効）。
 環境変数と設定の両方がある場合、設定が優先されます。
+env と config の両方が設定されている場合、config が優先されます。
 
-マルチアカウント対応: アカウントごとのトークンと任意の `name` を指定して `channels.telegram.accounts` を使用します。共通パターンは [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。
+マルチアカウント対応: アカウントごとのトークンと任意の `name` を指定して `channels.telegram.accounts` を使用します。共通パターンは [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。 マルチアカウント対応: アカウントごとの設定と任意の `name` を使用して `channels.signal.accounts` を指定します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。
 
-3. ゲートウェイを起動します。トークンが解決されると Telegram が開始されます（設定優先、環境変数はフォールバック）。
-4. DM アクセスはデフォルトでペアリングです。ボットに最初に連絡したときにコードを承認します。
+3. ゲートウェイを起動します。 ゲートウェイを起動します。トークンが解決されると Telegram が開始されます（設定優先、環境変数はフォールバック）。
+4. DMアクセスのデフォルトはペアリングです。 Botが最初に連絡されたときにコードを承認します。
 5. グループの場合: ボットを追加し、プライバシー／管理者の挙動を決定し（下記参照）、`channels.telegram.groups` を設定してメンションゲーティング + 許可リストを制御します。
 
 ## トークン + プライバシー + 権限（Telegram 側）
@@ -96,6 +90,7 @@ x-i18n:
 
 Telegram ボットはデフォルトで **プライバシーモード** が有効で、受信できるグループメッセージが制限されます。
 ボットが _すべて_ のグループメッセージを見る必要がある場合、次の 2 つの方法があります。
+Botが_all_グループメッセージを表示する必要がある場合は、2つのオプションがあります。
 
 - `/setprivacy` でプライバシーモードを無効化 **または**
 - ボットをグループ **管理者** として追加（管理者ボットはすべてのメッセージを受信します）。
@@ -104,7 +99,7 @@ Telegram ボットはデフォルトで **プライバシーモード** が有�
 
 ### グループ権限（管理者権限）
 
-管理者ステータスはグループ内（Telegram UI）で設定します。管理者ボットは常にすべての
+管理ステータスはグループ内(テレグラムUI)に設定されています。 管理者ステータスはグループ内（Telegram UI）で設定します。管理者ボットは常にすべての
 グループメッセージを受信するため、完全な可視性が必要な場合は管理者を使用してください。
 
 ## 動作の仕組み（挙動）
@@ -139,6 +134,7 @@ OpenClaw は `sendMessageDraft` を使用して Telegram DM で部分的な返�
 
 OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティブコマンドを Telegram のボットメニューに登録します。
 設定により、カスタムコマンドをメニューに追加できます。
+メニューに以下のようにカスタムコマンドを追加できます。
 
 ```json5
 {
@@ -164,7 +160,7 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 
 - カスタムコマンドは **メニューエントリのみ** です。OpenClaw は、他で処理しない限り実装しません。
 - コマンド名は正規化され（先頭の `/` が削除され、小文字化）、`a-z`、`0-9`、`_`（1～32 文字）に一致する必要があります。
-- カスタムコマンドは **ネイティブコマンドを上書きできません**。競合は無視され、ログに記録されます。
+- カスタムコマンドは **ネイティブコマンドを上書きできません**。競合は無視され、ログに記録されます。 競合は無視されログに記録されます。
 - `commands.native` が無効の場合、カスタムコマンドのみが登録されます（存在しない場合はクリアされます）。
 
 ## 制限
@@ -172,13 +168,13 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 - 送信テキストは `channels.telegram.textChunkLimit` まで分割されます（デフォルト 4000）。
 - 任意の改行分割: `channels.telegram.chunkMode="newline"` を設定すると、長さ分割の前に空行（段落境界）で分割します。
 - メディアのダウンロード／アップロードは `channels.telegram.mediaMaxMb` までに制限されます（デフォルト 5）。
-- Telegram Bot API のリクエストは `channels.telegram.timeoutSeconds` 後にタイムアウトします（grammY 経由でのデフォルトは 500）。長時間のハングを避けるため、低く設定してください。
-- グループ履歴コンテキストは `channels.telegram.historyLimit`（または `channels.telegram.accounts.*.historyLimit`）を使用し、`messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定します（デフォルト 50）。
-- DM 履歴は `channels.telegram.dmHistoryLimit`（ユーザーターン）で制限できます。ユーザーごとの上書き: `channels.telegram.dms["<user_id>"].historyLimit`。
+- Telegram Bot API のリクエストは `channels.telegram.timeoutSeconds` 後にタイムアウトします（grammY 経由でのデフォルトは 500）。長時間のハングを避けるため、低く設定してください。 長いハングを避けるために下に設定してください。
+- グループ履歴コンテキストは `channels.telegram.historyLimit`（または `channels.telegram.accounts.*.historyLimit`）を使用し、`messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定します（デフォルト 50）。 `0`を無効にします（デフォルトは50）。
+- DM 履歴は `channels.telegram.dmHistoryLimit`（ユーザーターン）で制限できます。ユーザーごとの上書き: `channels.telegram.dms["<user_id>"].historyLimit`。 `channels.imessage.dmHistoryLimit`: ユーザー ターン数での DM 履歴上限。ユーザーごとの上書き: `channels.telegram.dms["<user_id>"].historyLimit`。
 
 ## グループのアクティベーションモード
 
-デフォルトでは、ボットはグループ内でメンションにのみ応答します（`@botname` または `agents.list[].groupChat.mentionPatterns` のパターン）。挙動を変更するには次を使用します。
+デフォルトでは、ボットはグループ内でメンションにのみ応答します（`@botname` または `agents.list[].groupChat.mentionPatterns` のパターン）。挙動を変更するには次を使用します。 この動作を変更するには:
 
 ### 設定経由（推奨）
 
@@ -195,7 +191,8 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 ```
 
 **重要:** `channels.telegram.groups` を設定すると **許可リスト** が作成され、一覧にあるグループ（または `"*"`）のみが受け入れられます。
-フォーラムトピックは、`channels.telegram.groups.<groupId>.topics.<topicId>` にトピックごとの上書きを追加しない限り、親グループの設定（allowFrom、requireMention、skills、prompts）を継承します。
+フォーラムトピックは、`channels.telegram.groups.<groupId>
+フォーラムトピックは、トピックごとのオーバーライドを `channels.telegram.groups に追加しない限り、親グループ設定（allowFrom、requireMention、スキル、プロンプト）を継承します。<groupId>.topics.<topicId>\`.
 
 すべてのグループで常時応答を許可する場合:
 
@@ -232,7 +229,7 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 - `/activation always` - すべてのメッセージに応答
 - `/activation mention` - メンション必須（デフォルト）
 
-**注記:** コマンドはセッション状態のみを更新します。再起動後も持続させるには設定を使用してください。
+**注記:** コマンドはセッション状態のみを更新します。再起動後も持続させるには設定を使用してください。 再起動時の永続的な動作には、config を使用します。
 
 ### グループチャット ID の取得
 
@@ -240,7 +237,7 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 
 **ヒント:** 自分のユーザー ID を取得するには、ボットに DM を送るとユーザー ID（ペアリングメッセージ）が返信されます。または、コマンドが有効になっていれば `/whoami` を使用します。
 
-**プライバシー注記:** `@userinfobot` はサードパーティ製ボットです。必要であれば、ボットをグループに追加してメッセージを送信し、`openclaw logs --follow` を使って `chat.id` を読み取るか、Bot API の `getUpdates` を使用してください。
+**プライバシーノート:** `@userinfobot` はサードパーティのボットです。 **プライバシー注記:** `@userinfobot` はサードパーティ製ボットです。必要であれば、ボットをグループに追加してメッセージを送信し、`openclaw logs --follow` を使って `chat.id` を読み取るか、Bot API の `getUpdates` を使用してください。
 
 ## 設定の書き込み
 
@@ -248,10 +245,10 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 
 これは次の場合に発生します。
 
-- グループがスーパーグループにアップグレードされ、Telegram が `migrate_to_chat_id` を発行した場合（チャット ID が変更されます）。OpenClaw は `channels.telegram.groups` を自動的に移行できます。
+- グループがスーパーグループにアップグレードされ、Telegram が `migrate_to_chat_id` を発行した場合（チャット ID が変更されます）。OpenClaw は `channels.telegram.groups` を自動的に移行できます。 OpenClawは自動的に`channels.telegram.groups`を移行できます。
 - Telegram チャットで `/config set` または `/config unset` を実行した場合（`commands.config: true` が必要）。
 
-無効化するには次を設定します。
+無効化するには：
 
 ```json5
 {
@@ -261,7 +258,7 @@ OpenClaw は起動時に、`/status`、`/reset`、`/model` などのネイティ
 
 ## トピック（フォーラムスーパーグループ）
 
-Telegram のフォーラムトピックには、メッセージごとに `message_thread_id` が含まれます。OpenClaw は次を行います。
+Telegram のフォーラムトピックには、メッセージごとに `message_thread_id` が含まれます。OpenClaw は次を行います。 OpenClaw:
 
 - 各トピックを分離するため、Telegram グループのセッションキーに `:topic:<threadId>` を付加します。
 - 応答がトピック内に留まるよう、`message_thread_id` を指定して入力中インジケーターと返信を送信します。
@@ -270,7 +267,7 @@ Telegram のフォーラムトピックには、メッセージごとに `messag
 - トピック固有の設定は `channels.telegram.groups.<chatId>.topics.<threadId>`（skills、許可リスト、自動返信、システムプロンプト、無効化）で利用できます。
 - トピック設定は、上書きしない限りグループ設定（requireMention、許可リスト、skills、prompts、有効化）を継承します。
 
-プライベートチャットでも、まれに `message_thread_id` が含まれる場合があります。OpenClaw は DM セッションキーを変更しませんが、存在する場合は返信／ドラフトストリーミングにスレッド ID を使用します。
+プライベートチャットには、 `message_thread_id` をいくつかのエッジケースに含めることができます。 プライベートチャットでも、まれに `message_thread_id` が含まれる場合があります。OpenClaw は DM セッションキーを変更しませんが、存在する場合は返信／ドラフトストリーミングにスレッド ID を使用します。
 
 ## インラインボタン
 
@@ -314,6 +311,7 @@ Telegram はコールバックボタン付きのインラインキーボード�
 - `all` — DM + グループ
 - `allowlist` — DM + グループ。ただし `allowFrom`/`groupAllowFrom` で許可された送信者のみ（制御コマンドと同じルール）
 
+デフォルト: `allowlist`
 デフォルト: `allowlist`。
 レガシー: `capabilities: ["inlineButtons"]` = `inlineButtons: "all"`。
 
@@ -347,18 +345,18 @@ Telegram の機能は 2 つのレベルで設定できます（上記はオブ�
 - `channels.telegram.capabilities`: 全 Telegram アカウントに適用されるグローバル既定の機能設定（上書きされない限り）。
 - `channels.telegram.accounts.<account>.capabilities`: 特定のアカウントに対してグローバル既定を上書きする、アカウント別機能設定。
 
-すべての Telegram ボット／アカウントを同一挙動にしたい場合はグローバル設定を使用します。異なる挙動が必要な場合（例: あるアカウントは DM のみ、別のアカウントはグループ可）はアカウント別設定を使用してください。
+すべての Telegram ボット／アカウントを同一挙動にしたい場合はグローバル設定を使用します。異なる挙動が必要な場合（例: あるアカウントは DM のみ、別のアカウントはグループ可）はアカウント別設定を使用してください。 異なるボットが異なる動作を必要とする場合は、アカウントごとの設定を使用します(例えば、1つのアカウントはDMを処理し、もう1つはグループで許可されています)。
 
 ## アクセス制御（DM + グループ）
 
 ### DM アクセス
 
-- デフォルト: `channels.telegram.dmPolicy = "pairing"`。未知の送信者にはペアリングコードが送られ、承認されるまでメッセージは無視されます（コードは 1 時間で失効）。
+- デフォルト: `channels.telegram.dmPolicy = "pairing"`。未知の送信者にはペアリングコードが送られ、承認されるまでメッセージは無視されます（コードは 1 時間で失効）。 不明な送信者にはペアリングコードが送信され、承認されるまでメッセージは無視されます（コードは 1 時間で期限切れ）。
 - 承認方法:
   - `openclaw pairing list telegram`
   - `openclaw pairing approve telegram <CODE>`
-- ペアリングは Telegram DM で使用されるデフォルトのトークン交換です。詳細: [ペアリング](/channels/pairing)
-- `channels.telegram.allowFrom` は数値のユーザー ID（推奨）または `@username` エントリを受け付けます。ボットのユーザー名ではありません。人間の送信者の ID を使用してください。ウィザードは `@username` を受け付け、可能な場合は数値 ID に解決します。
+- ペアリングは Telegram DM で使用されるデフォルトのトークン交換です。詳細: [ペアリング](/channels/pairing) 詳細: [Pairing](/channels/pairing)
+- `channels.telegram.allowFrom` は数値のユーザー ID（推奨）または `@username` エントリを受け付けます。ボットのユーザー名ではありません。人間の送信者の ID を使用してください。ウィザードは `@username` を受け付け、可能な場合は数値 ID に解決します。 ボットのユーザー名ではありません。人間の送信者のIDを使用してください。 ウィザードは `@username` を受け取り、可能な場合は数値IDで解決します。
 
 #### Telegram ユーザー ID の確認方法
 
@@ -436,14 +434,14 @@ Telegram はタグによる任意のスレッド返信をサポートしてい�
 
 ## 音声メッセージ（ボイス vs ファイル）
 
-Telegram は **ボイスノート**（丸いバブル）と **音声ファイル**（メタデータカード）を区別します。
-OpenClaw は後方互換性のため、デフォルトで音声ファイルを使用します。
+Telegramは**音声メモ** (丸いバブル) を **音声ファイル** (メタデータカード) と区別します。
+後方互換性のため、OpenClawはデフォルトでオーディオファイルに設定されています。
 
 エージェントの返信でボイスノートのバブルを強制するには、返信内の任意の場所に次のタグを含めます。
 
 - `[[audio_as_voice]]` — ファイルではなくボイスノートとして音声を送信します。
 
-このタグは配信されるテキストから削除されます。他のチャンネルはこのタグを無視します。
+タグは配信されたテキストから剥奪されます。 このタグは配信されるテキストから削除されます。他のチャンネルはこのタグを無視します。
 
 メッセージツールで送信する場合は、ボイス対応の音声 `media` URL を `asVoice: true` に設定します
 （メディアが存在する場合、`message` は任意です）。
@@ -466,7 +464,7 @@ OpenClaw は、インテリジェントなキャッシュを用いて Telegram �
 
 ユーザーがステッカーを送信した場合、OpenClaw は種類に応じて処理します。
 
-- **静的ステッカー（WEBP）:** ダウンロードされ、ビジョン処理されます。ステッカーはメッセージ内容に `<media:sticker>` プレースホルダーとして表示されます。
+- **静的ステッカー（WEBP）:** ダウンロードされ、ビジョン処理されます。ステッカーはメッセージ内容に `<media:sticker>` プレースホルダーとして表示されます。 ステッカーはメッセージの内容に`<media:sticker>`プレースホルダとして表示されます。
 - **アニメーションステッカー（TGS）:** スキップ（Lottie 形式は処理未対応）。
 - **ビデオステッカー（WEBM）:** スキップ（ビデオ形式は処理未対応）。
 
@@ -481,13 +479,13 @@ OpenClaw は、インテリジェントなキャッシュを用いて Telegram �
 
 ### ステッカーキャッシュ
 
-ステッカーは AI のビジョン機能で処理され、説明文が生成されます。同じステッカーが繰り返し送信されることが多いため、OpenClaw は冗長な API 呼び出しを避けるためにこれらの説明をキャッシュします。
+ステッカーはAIのビジョン機能によって記述を生成します。 ステッカーは AI のビジョン機能で処理され、説明文が生成されます。同じステッカーが繰り返し送信されることが多いため、OpenClaw は冗長な API 呼び出しを避けるためにこれらの説明をキャッシュします。
 
 **仕組み:**
 
-1. **初回遭遇:** ステッカー画像が AI に送信され、ビジョン解析が行われます。AI は説明文を生成します（例: 「元気よく手を振る漫画風の猫」）。
+1. **初回遭遇:** ステッカー画像が AI に送信され、ビジョン解析が行われます。AI は説明文を生成します（例: 「元気よく手を振る漫画風の猫」）。 AIは説明を生成します(例えば、「熱心に振っている漫画の猫」)。
 2. **キャッシュ保存:** 説明文は、ステッカーのファイル ID、絵文字、セット名とともに保存されます。
-3. **再遭遇:** 同じステッカーが再び表示された場合、キャッシュされた説明が直接使用され、画像は AI に送信されません。
+3. **再遭遇:** 同じステッカーが再び表示された場合、キャッシュされた説明が直接使用され、画像は AI に送信されません。 画像はAIに送信されません。
 
 **キャッシュの場所:** `~/.openclaw/telegram/sticker-cache.json`
 
@@ -510,11 +508,11 @@ OpenClaw は、インテリジェントなキャッシュを用いて Telegram �
 - キャッシュ済みステッカーの高速応答（ビジョン処理の遅延なし）
 - キャッシュされた説明に基づくステッカー検索機能を実現
 
-キャッシュはステッカー受信時に自動的に作成されます。手動でのキャッシュ管理は不要です。
+キャッシュはステッカー受信時に自動的に作成されます。手動でのキャッシュ管理は不要です。 手動キャッシュ管理は必要ありません。
 
 ### ステッカーの送信
 
-エージェントは `sticker` および `sticker-search` アクションを使用してステッカーを送信／検索できます。これらはデフォルトで無効のため、設定で有効化する必要があります。
+エージェントは `sticker` および `sticker-search` アクションを使用してステッカーを送信／検索できます。これらはデフォルトで無効のため、設定で有効化する必要があります。 これらはデフォルトで無効になっており、configで有効にする必要があります：
 
 ```json5
 {
@@ -541,7 +539,7 @@ OpenClaw は、インテリジェントなキャッシュを用いて Telegram �
 
 パラメータ:
 
-- `fileId`（必須）— ステッカーの Telegram ファイル ID。受信時の `Sticker.fileId`、または `sticker-search` の結果から取得します。
+- `fileId`（必須）— ステッカーの Telegram ファイル ID。受信時の `Sticker.fileId`、または `sticker-search` の結果から取得します。 ステッカーを受け取った時や、`sticker-search` 結果からこれを取得します。
 - `replyTo`（任意）— 返信先のメッセージ ID。
 - `threadId`（任意）— フォーラムトピック用のメッセージスレッド ID。
 
@@ -592,6 +590,7 @@ OpenClaw は、インテリジェントなキャッシュを用いて Telegram �
 
 ## ストリーミング（ドラフト）
 
+テレグラムはエージェントが応答を生成している間、**バブルを下書き**することができます。
 Telegram は、エージェントが応答を生成している間に **ドラフトバブル** をストリーミングできます。
 OpenClaw は Bot API の `sendMessageDraft`（実メッセージではありません）を使用し、
 その後、通常のメッセージとして最終返信を送信します。
@@ -612,6 +611,7 @@ OpenClaw は Bot API の `sendMessageDraft`（実メッセージではありま�
   - `channels.telegram.draftChunk: { minChars?, maxChars?, breakPreference? }`
     - 既定値: `minChars: 200`、`maxChars: 800`、`breakPreference: "paragraph"`（`channels.telegram.textChunkLimit` にクランプ）。
 
+注意: 下書きストリーミングは **ブロックストリーミング** (チャネルメッセージ) とは別のものです。
 注記: ドラフトストリーミングは **ブロックストリーミング**（チャンネルメッセージ）とは別です。
 ブロックストリーミングはデフォルトで無効で、ドラフト更新ではなく早期の Telegram メッセージを送信したい場合は `channels.telegram.blockStreaming: true` が必要です。
 
@@ -620,10 +620,11 @@ OpenClaw は Bot API の `sendMessageDraft`（実メッセージではありま�
 - `/reasoning stream` は、応答生成中に推論をドラフトバブルへストリーミングし、最終回答は推論なしで送信します。
 - `channels.telegram.streamMode` が `off` の場合、推論ストリームは無効化されます。
   詳細: [ストリーミング + チャンク化](/concepts/streaming)。
+  その他のコンテキスト: [ストリーミング + チャンキング](/concepts/streaming)。
 
 ## リトライポリシー
 
-送信する Telegram API 呼び出しは、一時的なネットワーク／429 エラー時に指数バックオフとジッターで再試行されます。`channels.telegram.retry` で設定します。詳細は [リトライポリシー](/concepts/retry) を参照してください。
+送信する Telegram API 呼び出しは、一時的なネットワーク／429 エラー時に指数バックオフとジッターで再試行されます。`channels.telegram.retry` で設定します。詳細は [リトライポリシー](/concepts/retry) を参照してください。 `channels.telegram.retry` で設定します。 6. [Retry policy](/concepts/retry) を参照してください。
 
 ## エージェントツール（メッセージ + リアクション）
 
@@ -636,7 +637,7 @@ OpenClaw は Bot API の `sendMessageDraft`（実メッセージではありま�
 ## リアクション通知
 
 **リアクションの仕組み:**
-Telegram のリアクションは、メッセージペイロードのプロパティではなく、**個別の `message_reaction` イベント**として届きます。ユーザーがリアクションを追加すると、OpenClaw は次を行います。
+Telegram のリアクションは、メッセージペイロードのプロパティではなく、**個別の `message_reaction` イベント**として届きます。ユーザーがリアクションを追加すると、OpenClaw は次を行います。 ユーザーがリアクションを追加すると、OpenClawは次のようになります。
 
 1. Telegram API から `message_reaction` 更新を受信
 2. 形式 `"Telegram reaction added: {emoji} by {user} on msg {id}"` の **システムイベント** に変換
@@ -658,7 +659,7 @@ Telegram のリアクションは、メッセージペイロードのプロパ�
   - `"minimal"` — エージェントは控えめにリアクション可能（目安: 5～10 往復に 1 回）
   - `"extensive"` — 適切な場合にエージェントが積極的にリアクション可能
 
-**フォーラムグループ:** フォーラムグループ内のリアクションには `message_thread_id` が含まれ、`agent:main:telegram:group:{chatId}:topic:{threadId}` のようなセッションキーが使用されます。これにより、同一トピック内のリアクションとメッセージが一緒に扱われます。
+**フォーラムグループ:** フォーラムグループ内のリアクションには `message_thread_id` が含まれ、`agent:main:telegram:group:{chatId}:topic:{threadId}` のようなセッションキーが使用されます。これにより、同一トピック内のリアクションとメッセージが一緒に扱われます。 これにより、同じトピックのリアクションとメッセージが一緒に保たれます。
 
 **設定例:**
 
@@ -718,7 +719,7 @@ Telegram のリアクションは、メッセージペイロードのプロパ�
 
 **ボットが起動後に沈黙する（または `HttpError: Network request ... failed` がログに出る）:**
 
-- 一部のホストは `api.telegram.org` を IPv6 に優先解決します。サーバーに IPv6 の送信経路がない場合、grammY が IPv6 専用リクエストでスタックすることがあります。
+- 一部のホストは `api.telegram.org` を IPv6 に優先解決します。サーバーに IPv6 の送信経路がない場合、grammY が IPv6 専用リクエストでスタックすることがあります。 サーバが動作していないIPv6エッグを持っていない場合、gramYはIPv6のみのリクエストで立ち往生する可能性があります。
 - 対処法: IPv6 の送信経路を有効化 **または** `api.telegram.org` に対して IPv4 解決を強制します（例: IPv4 の A レコードを使って `/etc/hosts` エントリを追加、または OS の DNS スタックで IPv4 を優先）。その後、ゲートウェイを再起動します。
 - 簡易確認: `dig +short api.telegram.org A` と `dig +short api.telegram.org AAAA` で DNS の返り値を確認します。
 
@@ -732,7 +733,7 @@ Telegram のリアクションは、メッセージペイロードのプロパ�
 - `channels.telegram.botToken`: ボットトークン（BotFather）。
 - `channels.telegram.tokenFile`: ファイルパスからトークンを読み込み。
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled`（デフォルト: ペアリング）。
-- `channels.telegram.allowFrom`: DM 許可リスト（ID／ユーザー名）。`open` には `"*"` が必要です。
+- `channels.telegram.allowFrom`: DM 許可リスト（ID／ユーザー名）。`open` には `"*"` が必要です。 `open`には`"*"`が必要です。
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled`（デフォルト: 許可リスト）。
 - `channels.telegram.groupAllowFrom`: グループ送信者許可リスト（ID／ユーザー名）。
 - `channels.telegram.groups`: グループ別の既定値 + 許可リスト（グローバル既定は `"*"` を使用）。
@@ -754,7 +755,7 @@ Telegram のリアクションは、メッセージペイロードのプロパ�
 - `channels.telegram.streamMode`: `off | partial | block`（ドラフトストリーミング）。
 - `channels.telegram.mediaMaxMb`: 送受信メディア上限（MB）。
 - `channels.telegram.retry`: Telegram API 送信のリトライポリシー（回数、minDelayMs、maxDelayMs、jitter）。
-- `channels.telegram.network.autoSelectFamily`: Node の autoSelectFamily を上書き（true=有効、false=無効）。Happy Eyeballs のタイムアウト回避のため、Node 22 ではデフォルト無効。
+- `channels.telegram.network.autoSelectFamily`: Node の autoSelectFamily を上書き（true=有効、false=無効）。Happy Eyeballs のタイムアウト回避のため、Node 22 ではデフォルト無効。 デフォルトはハッピーアイボールタイムアウトを避けるため、ノード22で無効になります。
 - `channels.telegram.proxy`: Bot API 呼び出し用のプロキシ URL（SOCKS／HTTP）。
 - `channels.telegram.webhookUrl`: webhook モードを有効化（`channels.telegram.webhookSecret` が必要）。
 - `channels.telegram.webhookSecret`: webhook シークレット（webhookUrl 設定時に必須）。
@@ -770,5 +771,5 @@ Telegram のリアクションは、メッセージペイロードのプロパ�
 
 - `agents.list[].groupChat.mentionPatterns`（メンションゲーティングパターン）。
 - `messages.groupChat.mentionPatterns`（グローバルフォールバック）。
-- `commands.native`（デフォルトは `"auto"` → Telegram／Discord でオン、Slack でオフ）、`commands.text`、`commands.useAccessGroups`（コマンド挙動）。`channels.telegram.commands.native` で上書き可能。
+- `commands.native`（デフォルトは `"auto"` → Telegram／Discord でオン、Slack でオフ）、`commands.text`、`commands.useAccessGroups`（コマンド挙動）。`channels.telegram.commands.native` で上書き可能。 `channels.telegram.commands.native` で上書きします。
 - `messages.responsePrefix`、`messages.ackReaction`、`messages.ackReactionScope`、`messages.removeAckAfterReply`。

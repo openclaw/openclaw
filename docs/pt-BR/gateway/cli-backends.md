@@ -5,13 +5,6 @@ read_when:
   - Você está executando Claude Code CLI ou outras CLIs de IA locais e quer reutilizá-las
   - Você precisa de um caminho somente texto, sem ferramentas, que ainda suporte sessões e imagens
 title: "Backends de CLI"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:55Z
 ---
 
 # Backends de CLI (runtime de fallback)

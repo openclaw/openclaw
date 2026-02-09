@@ -4,13 +4,6 @@ read_when:
   - Når du kører den headless node-vært
   - Paring af en ikke-macOS-node til system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:07Z
 ---
 
 # `openclaw node`
@@ -34,8 +27,8 @@ node-værten, så du kan holde kommandoadgang afgrænset og eksplicit.
 
 ## Browser-proxy (nul-konfiguration)
 
-Node-værter annoncerer automatisk en browser-proxy, hvis `browser.enabled` ikke er
-deaktiveret på noden. Det gør det muligt for agenten at bruge browserautomatisering på den node
+Node værter automatisk annoncere en browser proxy hvis `browser.enabled` er ikke
+deaktiveret på noden. Dette lader agenten bruge browser automation på den node
 uden ekstra konfiguration.
 
 Deaktivér den på noden, hvis nødvendigt:
@@ -99,8 +92,8 @@ Tjenestekommandoer accepterer `--json` for maskinlæsbar output.
 
 ## Paring
 
-Den første forbindelse opretter en afventende node-paringsanmodning på Gatewayen.
-Godkend den via:
+Den første forbindelse opretter en afventende node par anmodning på Gateway.
+Godkend det via:
 
 ```bash
 openclaw nodes pending

@@ -4,13 +4,6 @@ read_when:
   - Köra den huvudlösa node‑värden
   - Para ihop en node som inte är macOS för system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:46Z
 ---
 
 # `openclaw node`
@@ -34,8 +27,8 @@ node‑värden, så att du kan hålla kommandoåtkomst avgränsad och explicit.
 
 ## Webbläsarproxy (nollkonfig)
 
-Node‑värdar annonserar automatiskt en webbläsarproxy om `browser.enabled` inte är
-inaktiverad på noden. Detta gör att agenten kan använda webbläsarautomation på den noden
+Node värdar annonserar automatiskt en webbläsarproxy om `browser.enabled` inte är
+inaktiverat på noden. Detta låter agenten använda webbläsarautomatisering på den noden
 utan extra konfiguration.
 
 Inaktivera den på noden vid behov:
@@ -99,8 +92,8 @@ Tjänstkommandon accepterar `--json` för maskinläsbar utdata.
 
 ## Parning
 
-Den första anslutningen skapar en väntande parningsbegäran för noden på Gateway.
-Godkänn den via:
+Den första anslutningen skapar en väntande nod parförfrågan på Gateway.
+Godkänn det via:
 
 ```bash
 openclaw nodes pending

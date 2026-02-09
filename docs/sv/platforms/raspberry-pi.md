@@ -5,13 +5,6 @@ read_when:
   - Köra OpenClaw på ARM-enheter
   - Bygga en billig, alltid-på personlig AI
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:12Z
 ---
 
 # OpenClaw på Raspberry Pi
@@ -30,12 +23,12 @@ Perfekt för:
 
 | Pi-modell       | RAM     | Fungerar?  | Noteringar                       |
 | --------------- | ------- | ---------- | -------------------------------- |
-| **Pi 5**        | 4GB/8GB | ✅ Bäst    | Snabbast, rekommenderas          |
-| **Pi 4**        | 4GB     | ✅ Bra     | Bästa valet för de flesta        |
-| **Pi 4**        | 2GB     | ✅ OK      | Fungerar, lägg till swap         |
+| **Pi 5**        | 4GB/8GB | ✅ Bäst     | Snabbast, rekommenderas          |
+| **Pi 4**        | 4GB     | ✅ Bra      | Bästa valet för de flesta        |
+| **Pi 4**        | 2GB     | ✅ OK       | Fungerar, lägg till swap         |
 | **Pi 4**        | 1GB     | ⚠️ Snålt   | Möjligt med swap, minimal konfig |
 | **Pi 3B+**      | 1GB     | ⚠️ Långsam | Fungerar men seg                 |
-| **Pi Zero 2 W** | 512MB   | ❌         | Rekommenderas inte               |
+| **Pi Zero 2 W** | 512MB   | ❌          | Rekommenderas inte               |
 
 **Minimikrav:** 1GB RAM, 1 kärna, 500MB disk  
 **Rekommenderat:** 2GB+ RAM, 64-bitars OS, 16GB+ SD-kort (eller USB-SSD)
@@ -48,7 +41,7 @@ Perfekt för:
 - Nätverksanslutning (Ethernet eller WiFi)
 - ~30 minuter
 
-## 1) Flasha OS
+## 1. Flasha OS
 
 Använd **Raspberry Pi OS Lite (64-bit)** — inget skrivbord behövs för en headless-server.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) Systemkonfiguration
+## 3. Systemkonfiguration
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Installera Node.js 22 (ARM64)
+## 4. Installera Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Lägg till swap (Viktigt för 2GB eller mindre)
+## 5. Lägg till swap (Viktigt för 2GB eller mindre)
 
 Swap förhindrar krascher på grund av minnesbrist:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Installera OpenClaw
+## 6. Installera OpenClaw
 
 ### Alternativ A: Standardinstallation (Rekommenderas)
 
@@ -134,7 +127,7 @@ npm link
 
 Den hackbara installationen ger dig direkt åtkomst till loggar och kod — användbart för felsökning av ARM-specifika problem.
 
-## 7) Kör introduktion
+## 7. Kör introduktion
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Öppna instrumentpanelen
+## 9. Öppna instrumentpanelen
 
 Eftersom Pi är headless, använd en SSH-tunnel:
 
@@ -190,7 +183,7 @@ sudo systemctl restart openclaw
 
 ### Använd en USB-SSD (Stor förbättring)
 
-SD-kort är långsamma och slits ut. En USB-SSD förbättrar prestandan dramatiskt:
+SD-kort är långsamma och slitna. En USB-SSD förbättrar prestandan avsevärt:
 
 ```bash
 # Check if booting from USB
@@ -230,15 +223,15 @@ htop
 
 De flesta OpenClaw-funktioner fungerar på ARM64, men vissa externa binärer kan behöva ARM-byggen:
 
-| Verktyg               | ARM64-status | Noteringar                          |
-| --------------------- | ------------ | ----------------------------------- |
-| Node.js               | ✅           | Fungerar utmärkt                    |
-| WhatsApp (Baileys)    | ✅           | Ren JS, inga problem                |
-| Telegram              | ✅           | Ren JS, inga problem                |
+| Verktyg                                  | ARM64-status | Noteringar                          |
+| ---------------------------------------- | ------------ | ----------------------------------- |
+| Node.js                  | ✅            | Fungerar utmärkt                    |
+| WhatsApp (Baileys)    | ✅            | Ren JS, inga problem                |
+| Telegram                                 | ✅            | Ren JS, inga problem                |
 | gog (Gmail CLI)       | ⚠️           | Kontrollera om ARM-version finns    |
-| Chromium (webbläsare) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (webbläsare) | ✅            | `sudo apt install chromium-browser` |
 
-Om en skill misslyckas, kontrollera om dess binär har ett ARM-bygge. Många Go/Rust-verktyg har det; vissa har det inte.
+Om en färdighet misslyckas, kontrollera om dess binär har en ARM-bygge. Många Go/Rust verktyg gör; vissa inte.
 
 ### 32-bit vs 64-bit
 
@@ -268,7 +261,7 @@ Eftersom Pi bara är Gateway (modeller körs i molnet), använd API-baserade mod
 }
 ```
 
-**Försök inte köra lokala LLM:er på en Pi** — även små modeller är för långsamma. Låt Claude/GPT göra grovjobbet.
+**Försök inte att köra lokala LLMs på en Pi** - även små modeller är för långsamma. Låt Claude/GPT göra den tunga lyft.
 
 ---
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Kostnadsjämförelse
 
-| Setup          | Engångskostnad | Månadskostnad | Noteringar                 |
-| -------------- | -------------- | ------------- | -------------------------- |
-| **Pi 4 (2GB)** | ~$45           | $0            | + ström (~$5/år)           |
-| **Pi 4 (4GB)** | ~$55           | $0            | Rekommenderas              |
-| **Pi 5 (4GB)** | ~$60           | $0            | Bästa prestanda            |
-| **Pi 5 (8GB)** | ~$80           | $0            | Overkill men framtidssäker |
-| DigitalOcean   | $0             | $6/mån        | $72/år                     |
-| Hetzner        | $0             | €3,79/mån     | ~$50/år                    |
+| Setup                             | Engångskostnad       | Månadskostnad | Noteringar                                          |
+| --------------------------------- | -------------------- | ------------- | --------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0            | + ström (~$5/år) |
+| **Pi 4 (4GB)** | ~$55 | $0            | Rekommenderas                                       |
+| **Pi 5 (4GB)** | ~$60 | $0            | Bästa prestanda                                     |
+| **Pi 5 (8GB)** | ~$80 | $0            | Overkill men framtidssäker                          |
+| DigitalOcean                      | $0                   | $6/mån        | $72/år                                              |
+| Hetzner                           | $0                   | €3,79/mån     | ~$50/år                             |
 
 **Break-even:** En Pi betalar sig på ~6–12 månader jämfört med moln-VPS.
 

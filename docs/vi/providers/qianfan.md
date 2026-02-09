@@ -4,19 +4,11 @@ read_when:
   - Bạn muốn một khóa API duy nhất cho nhiều LLM
   - Bạn cần hướng dẫn thiết lập Baidu Qianfan
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:55Z
 ---
 
 # Hướng dẫn nhà cung cấp Qianfan
 
-Qianfan là nền tảng MaaS của Baidu, cung cấp một **API hợp nhất** để định tuyến yêu cầu tới nhiều mô hình phía sau một
-điểm cuối và khóa API duy nhất. Nền tảng này tương thích OpenAI, vì vậy hầu hết các SDK OpenAI đều hoạt động chỉ bằng cách chuyển base URL.
+`plugins.entries.<id>` 27. Nó tương thích với OpenAI, vì vậy hầu hết các SDK OpenAI đều hoạt động bằng cách chuyển base URL.
 
 ## Điều kiện tiên quyết
 

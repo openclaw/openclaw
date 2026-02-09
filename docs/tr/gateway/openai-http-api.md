@@ -3,13 +3,6 @@ summary: "Gateway üzerinden OpenAI uyumlu bir /v1/chat/completions HTTP uç nok
 read_when:
   - OpenAI Chat Completions bekleyen araçları entegre ederken
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # OpenAI Chat Completions (HTTP)
@@ -34,7 +27,7 @@ Notlar:
 - `gateway.auth.mode="token"` olduğunda, `gateway.auth.token` (veya `OPENCLAW_GATEWAY_TOKEN`) kullanın.
 - `gateway.auth.mode="password"` olduğunda, `gateway.auth.password` (veya `OPENCLAW_GATEWAY_PASSWORD`) kullanın.
 
-## Bir ajan seçme
+## Choosing an agent
 
 Özel başlıklar gerekmez: ajan kimliğini OpenAI `model` alanında kodlayın:
 

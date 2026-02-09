@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag o pagbabago ng mga aksyon ng message sa CLI
   - Pagbabago ng outbound na gawi ng channel
 title: "mensahe"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:33Z
 ---
 
 # `openclaw message`

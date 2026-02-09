@@ -3,13 +3,6 @@ summary: "چینلز کے مابین مشترک ری ایکشن معنیات"
 read_when:
   - کسی بھی چینل میں ری ایکشنز پر کام کرتے وقت
 title: "ری ایکشنز"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:41Z
 ---
 
 # ری ایکشن ٹولنگ

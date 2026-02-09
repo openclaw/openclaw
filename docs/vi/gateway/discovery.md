@@ -5,13 +5,6 @@ read_when:
   - Điều chỉnh các chế độ kết nối từ xa (trực tiếp so với SSH)
   - Thiết kế khám phá node + ghép cặp cho các node từ xa
 title: "Khám phá và phương thức truyền tải"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:02Z
 ---
 
 # Khám phá & phương thức truyền tải
@@ -25,7 +18,7 @@ Mục tiêu thiết kế là giữ toàn bộ việc khám phá/quảng bá mạ
 
 ## Thuật ngữ
 
-- **Gateway**: một tiến trình gateway chạy lâu dài, sở hữu trạng thái (phiên, ghép cặp, sổ đăng ký node) và chạy các kênh. Hầu hết thiết lập dùng một gateway cho mỗi máy chủ; cũng có thể có các thiết lập nhiều gateway cách ly.
+- Hầu hết các thiết lập dùng một gateway trên mỗi host; có thể thiết lập nhiều gateway cô lập. Bonjour hoạt động theo kiểu best-effort và không vượt qua các mạng.
 - **Gateway WS (control plane)**: endpoint WebSocket trên `127.0.0.1:18789` theo mặc định; có thể bind vào LAN/tailnet qua `gateway.bind`.
 - **Direct WS transport**: endpoint Gateway WS hướng LAN/tailnet (không dùng SSH).
 - **SSH transport (fallback)**: điều khiển từ xa bằng cách chuyển tiếp `127.0.0.1:18789` qua SSH.
@@ -49,9 +42,9 @@ Chi tiết giao thức:
 
 ## Đầu vào khám phá (cách client biết gateway ở đâu)
 
-### 1) Bonjour / mDNS (chỉ LAN)
+### 1. Bonjour / mDNS (chỉ LAN)
 
-Bonjour là best-effort và không vượt qua các mạng khác nhau. Nó chỉ dùng cho tiện lợi “cùng LAN”.
+Bonjour là best-effort và không hoạt động xuyên qua các mạng. Với các thiết lập kiểu London/Vienna, Bonjour sẽ không giúp ích.
 
 Hướng mục tiêu:
 
@@ -83,15 +76,15 @@ Tắt/ghi đè:
 - `OPENCLAW_TAILNET_DNS` xuất bản gợi ý `tailnetDns` (MagicDNS).
 - `OPENCLAW_CLI_PATH` ghi đè đường dẫn CLI được quảng bá.
 
-### 2) Tailnet (xuyên mạng)
+### 2. Tailnet (xuyên mạng)
 
-Với các thiết lập kiểu London/Vienna, Bonjour sẽ không giúp được. Mục tiêu “direct” được khuyến nghị là:
+Với các thiết lập kiểu London/Vienna, Bonjour sẽ không hữu ích. `openclaw doctor` là công cụ sửa chữa + di chuyển cho OpenClaw.
 
 - Tên Tailscale MagicDNS (ưu tiên) hoặc một IP tailnet ổn định.
 
 Nếu gateway có thể phát hiện nó đang chạy dưới Tailscale, nó sẽ công bố `tailnetDns` như một gợi ý tùy chọn cho client (bao gồm cả beacon diện rộng).
 
-### 3) Mục tiêu thủ công / SSH
+### 3. Mục tiêu thủ công / SSH
 
 Khi không có tuyến direct (hoặc direct bị tắt), client luôn có thể kết nối qua SSH bằng cách chuyển tiếp cổng gateway trên local loopback.
 

@@ -5,13 +5,6 @@ read_when:
   - Yeni bir makine kurarken
 title: "Katılım Sihirbazı (CLI)"
 sidebarTitle: "Katılım: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:48Z
 ---
 
 # Katılım Sihirbazı (CLI)
@@ -52,7 +45,7 @@ bu da `tools.web.search.apiKey` saklar. Belgeler: [Web tools](/tools/web).
 Sihirbaz **QuickStart** (varsayılanlar) ile **Advanced** (tam kontrol) seçenekleriyle başlar.
 
 <Tabs>
-  <Tab title="QuickStart (varsayılanlar)">
+  <Tab title="QuickStart (defaults)">
     - Yerel gateway (loopback)
     - Çalışma alanı varsayılanı (veya mevcut çalışma alanı)
     - Gateway portu **18789**
@@ -60,7 +53,7 @@ Sihirbaz **QuickStart** (varsayılanlar) ile **Advanced** (tam kontrol) seçenek
     - Tailscale erişimi **Kapalı**
     - Telegram + WhatsApp DM’leri varsayılan olarak **izin listesi** (telefon numaranız sorulacaktır)
   </Tab>
-  <Tab title="Advanced (tam kontrol)">
+  <Tab title="Advanced (full control)">
     - Tüm adımları açar (mod, çalışma alanı, gateway, kanallar, daemon, skills).
   </Tab>
 </Tabs>
@@ -85,12 +78,12 @@ Yapılandırma geçersizse veya eski anahtarlar içeriyorsa, sihirbaz önce `ope
 **Uzak mod** yalnızca yerel istemciyi başka bir yerdeki bir Gateway’e bağlanacak şekilde yapılandırır.
 Uzak ana makinede hiçbir şeyi **kurmaz** veya **değiştirmez**.
 
-## Başka bir ajan ekleme
+## 9. Başka bir ajan ekle
 
 Kendi çalışma alanı, oturumları ve kimlik doğrulama profilleri olan ayrı bir ajan oluşturmak için
 `openclaw agents add <name>` kullanın. `--workspace` olmadan çalıştırmak sihirbazı başlatır.
 
-Ayarladıkları:
+10. Ayarladıkları:
 
 - `agents.list[].name`
 - `agents.list[].workspace`
@@ -102,7 +95,7 @@ Notlar:
 - Gelen mesajları yönlendirmek için `bindings` ekleyin (sihirbaz bunu yapabilir).
 - Etkileşimsiz bayraklar: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
 
-## Tam başvuru
+## 11. Tam referans
 
 Ayrıntılı adım adım dökümler, etkileşimsiz betikleme, Signal kurulumu,
 RPC API ve sihirbazın yazdığı yapılandırma alanlarının tam listesi için

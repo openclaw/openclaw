@@ -3,13 +3,6 @@ summary: "အေးဂျင့်တစ်ခုချင်းစီအလိ�
 title: Multi-Agent Sandbox & Tools
 read_when: "multi-agent Gateway တစ်ခုတွင် အေးဂျင့်တစ်ခုချင်းစီအလိုက် sandboxing သို့မဟုတ် tool allow/deny မူဝါဒများ လိုအပ်သည့်အခါ"
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:23Z
 ---
 
 # Multi-Agent Sandbox & Tools ဖွဲ့စည်းပြင်ဆင်ခြင်း
@@ -36,11 +29,11 @@ Auth သည် per-agent ဖြစ်ပြီး အေးဂျင့်တစ
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Credentials များကို အေးဂျင့်များအကြား **မျှဝေမထားပါ**။ အေးဂျင့်များအကြား `agentDir` ကို ဘယ်တော့မှ မပြန်လည် အသုံးမပြုပါနှင့်။
-cred များကို မျှဝေလိုပါက `auth-profiles.json` ကို အခြား အေးဂျင့်၏ `agentDir` ထဲသို့ ကူးယူပါ။
+9. Credentials များကို agents များအကြား **မမျှဝေပါ**။ 10. agents များအကြား `agentDir` ကို ဘယ်တော့မှ ပြန်လည်အသုံးမပြုပါနှင့်။
+10. creds များကို မျှဝေလိုပါက `auth-profiles.json` ကို အခြား agent ၏ `agentDir` ထဲသို့ ကူးထည့်ပါ။
 
-runtime တွင် sandboxing အပြုအမူကို သိလိုပါက [Sandboxing](/gateway/sandboxing) ကို ကြည့်ပါ။
-“ဘာကြောင့် ဒီဟာကို ပိတ်ထားတာလဲ?” ကို အမှားရှာဖွေရန် [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) နှင့် `openclaw sandbox explain` ကို ကြည့်ပါ။
+12. runtime တွင် sandboxing ဘယ်လိုအလုပ်လုပ်သည်ကို သိရန် [Sandboxing](/gateway/sandboxing) ကို ကြည့်ပါ။
+13. “ဘာကြောင့် ဒီဟာ blocked ဖြစ်နေတာလဲ?” ကို debug လုပ်ရန် [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) နှင့် `openclaw sandbox explain` ကို ကြည့်ပါ။
 
 ---
 
@@ -224,10 +217,10 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 7. **Sandbox tool မူဝါဒ** (`tools.sandbox.tools` သို့မဟုတ် `agents.list[].tools.sandbox.tools`)
 8. **Subagent tool မူဝါဒ** (`tools.subagents.tools`, သက်ဆိုင်ပါက)
 
-အဆင့်တစ်ခုချင်းစီသည် tool များကို ထပ်မံကန့်သတ်နိုင်သော်လည်း ယခင်အဆင့်များတွင် ပိတ်ထားသော tool များကို ပြန်လည် ခွင့်မပြုနိုင်ပါ။
-`agents.list[].tools.sandbox.tools` ကို သတ်မှတ်ထားပါက ထိုအေးဂျင့်အတွက် `tools.sandbox.tools` ကို အစားထိုးပါသည်။
-`agents.list[].tools.profile` ကို သတ်မှတ်ထားပါက ထိုအေးဂျင့်အတွက် `tools.profile` ကို အစားထိုးပါသည်။
-Provider tool key များသည် `provider` (ဥပမာ `google-antigravity`) သို့မဟုတ် `provider/model` (ဥပမာ `openai/gpt-5.2`) ကို လက်ခံပါသည်။
+14) level တစ်ခုချင်းစီသည် tools များကို ထပ်မံကန့်သတ်နိုင်သော်လည်း ယခင် level များတွင် ငြင်းပယ်ထားသော tools များကို ပြန်လည်ခွင့်မပြုနိုင်ပါ။
+15) `agents.list[].tools.sandbox.tools` ကို သတ်မှတ်ထားပါက ထို agent အတွက် `tools.sandbox.tools` ကို အစားထိုးသုံးမည်ဖြစ်သည်။
+16) `agents.list[].tools.profile` ကို သတ်မှတ်ထားပါက ထို agent အတွက် `tools.profile` ကို override လုပ်မည်ဖြစ်သည်။
+17) Provider tool keys များသည် `provider` (ဥပမာ `google-antigravity`) သို့မဟုတ် `provider/model` (ဥပမာ `openai/gpt-5.2`) ကို လက်ခံပါသည်။
 
 ### Tool အုပ်စုများ (အတိုကောက်)
 
@@ -245,7 +238,7 @@ Tool မူဝါဒများ (global, agent, sandbox) တွင် tool မ�
 
 ### Elevated Mode
 
-`tools.elevated` သည် global baseline (sender-based allowlist) ဖြစ်ပါသည်။ `agents.list[].tools.elevated` သည် အချို့ အေးဂျင့်များအတွက် elevated ကို ထပ်မံကန့်သတ်နိုင်ပါသည် (နှစ်ဖက်စလုံး ခွင့်ပြုရပါမည်)။
+18. `tools.elevated` သည် global baseline (sender-based allowlist) ဖြစ်သည်။ 19. `agents.list[].tools.elevated` သည် agent တစ်ခုချင်းစီအတွက် elevated ကို ထပ်မံကန့်သတ်နိုင်သည် (နှစ်ဖက်စလုံးမှ ခွင့်ပြုရမည်)။
 
 ကာကွယ်ရေး ပုံစံများ—
 
@@ -341,9 +334,7 @@ Legacy `agent.*` ဖွဲ့စည်းမှုများကို `opencla
 
 ## အများဆုံး တွေ့ရသော အမှား: "non-main"
 
-`agents.defaults.sandbox.mode: "non-main"` သည် agent id မဟုတ်ဘဲ `session.mainKey` (default `"main"`) ကို အခြေခံပါသည်။
-Group/channel ဆက်ရှင်များသည် အမြဲတမ်း ကိုယ်ပိုင် keys များ ရရှိသဖြင့်
-non-main အဖြစ် ဆက်ဆံခံရပြီး sandbox ထဲသို့ ထည့်သွင်းခံရပါသည်။ အေးဂျင့်တစ်ခုကို sandbox မလုပ်စေလိုပါက `agents.list[].sandbox.mode: "off"` ကို သတ်မှတ်ပါ။
+20. `agents.defaults.sandbox.mode: "non-main"` သည် agent id မဟုတ်ဘဲ `session.mainKey` (default "main") အပေါ် အခြေခံထားသည်။ 21. Group/channel sessions များသည် အမြဲတမ်း ကိုယ်ပိုင် keys များကို ရရှိသဖြင့် non-main အဖြစ် သတ်မှတ်ခံရပြီး sandboxed ဖြစ်မည်။ 22. agent တစ်ခုကို ဘယ်တော့မှ sandbox မလုပ်ချင်ပါက `agents.list[].sandbox.mode: "off"` ကို သတ်မှတ်ပါ။
 
 ---
 

@@ -3,13 +3,6 @@ summary: "Поток работы приложения macOS для управл
 read_when:
   - При настройке или отладке удалённого управления mac с помощью OpenClaw
 title: "Удалённое управление"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:54Z
 ---
 
 # Удалённый OpenClaw (macOS ⇄ удалённый хост)
@@ -22,7 +15,7 @@ x-i18n:
 - **Remote over SSH (default)**: Команды OpenClaw выполняются на удалённом хосте. Приложение mac открывает SSH‑соединение с `-o BatchMode` плюс выбранной идентификацией/ключом и локальной переадресацией портов.
 - **Remote direct (ws/wss)**: Без SSH‑туннеля. Приложение mac подключается к URL шлюза напрямую (например, через Tailscale Serve или публичный HTTPS reverse proxy).
 
-## Удалённые транспорты
+## Удаленные перевозки
 
 Удалённый режим поддерживает два транспорта:
 

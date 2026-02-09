@@ -4,13 +4,6 @@ read_when:
   - إضافة أو تعديل تهيئة Skills
   - ضبط قائمة السماح المضمّنة أو سلوك التثبيت
 title: "تهيئة Skills"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:47Z
 ---
 
 # تهيئة Skills

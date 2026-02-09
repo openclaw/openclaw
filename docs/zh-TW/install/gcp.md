@@ -3,15 +3,8 @@ summary: "在 GCP Compute Engine VM（Docker）上 24/7 執行 OpenClaw Gateway�
 read_when:
   - 你希望在 GCP 上 24/7 執行 OpenClaw
   - 你想要在自己的 VM 上部署生產等級、永遠在線的 Gateway
-  - 你希望完全掌控持久化、二進位檔與重啟行為
+  - 你希望完全掌控持久化、二進位檔與重新啟動行為
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:35Z
 ---
 
 # 在 GCP Compute Engine 上執行 OpenClaw（Docker，生產 VPS 指南）
@@ -22,8 +15,9 @@ x-i18n:
 
 如果你想要「每月約 ~$5–12 就能 24/7 執行 OpenClaw」，這是在 Google Cloud 上可靠的設定方式。  
 費用會依機器類型與區域而異；請選擇能滿足工作負載的最小 VM，若遇到 OOM 再向上擴充。
+價格依機器類型與地區而異；選擇能滿足工作負載的最小 VM，若遇到 OOM 再向上擴充。
 
-## 我們在做什麼（白話版）？
+## 我們在做什麼（白話說明）？
 
 - 建立 GCP 專案並啟用計費
 - 建立 Compute Engine VM
@@ -35,11 +29,11 @@ x-i18n:
 Gateway 可透過以下方式存取：
 
 - 從你的筆電使用 SSH 連接埠轉送
-- 若你自行管理防火牆與權杖，則可直接對外開放連接埠
+- 若你自行管理防火牆與權杖，可直接曝露連接埠
 
-本指南在 GCP Compute Engine 上使用 Debian。  
-Ubuntu 亦可行；請對應調整套件。  
-若需通用的 Docker 流程，請參考 [Docker](/install/docker)。
+This guide uses Debian on GCP Compute Engine.
+Ubuntu also works; map packages accordingly.
+For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
@@ -52,11 +46,11 @@ Ubuntu 亦可行；請對應調整套件。
 5. 複製 OpenClaw 儲存庫
 6. 建立持久化的主機目錄
 7. 設定 `.env` 與 `docker-compose.yml`
-8. 內建必要的二進位檔、建置並啟動
+8. Bake required binaries, build, and launch
 
 ---
 
-## 你需要準備的項目
+## What you need
 
 - GCP 帳戶（e2-micro 可使用免費額度）
 - 已安裝 gcloud CLI（或使用 Cloud Console）
@@ -72,7 +66,7 @@ Ubuntu 亦可行；請對應調整套件。
 
 ---
 
-## 1) 安裝 gcloud CLI（或使用 Console）
+## 1. 安裝 gcloud CLI（或使用 Console）
 
 **選項 A：gcloud CLI**（建議用於自動化）
 
@@ -91,7 +85,7 @@ gcloud auth login
 
 ---
 
-## 2) 建立 GCP 專案
+## 2. 建立 GCP 專案
 
 **CLI：**
 
@@ -112,19 +106,19 @@ gcloud services enable compute.googleapis.com
 
 1. 前往 IAM 與管理 > 建立專案
 2. 命名並建立
-3. 為專案啟用計費
+3. Enable billing for the project
 4. 前往 API 與服務 > 啟用 API > 搜尋「Compute Engine API」> 啟用
 
 ---
 
-## 3) 建立 VM
+## 3. 建立 VM
 
 **機器類型：**
 
-| 類型     | 規格                    | 費用         | 備註             |
-| -------- | ----------------------- | ------------ | ---------------- |
-| e2-small | 2 vCPU，2GB RAM         | 約 ~$12/月   | 建議             |
-| e2-micro | 2 vCPU（共享），1GB RAM | 符合免費額度 | 高負載時可能 OOM |
+| 類型       | 規格                 | 費用                       | 注意事項       |
+| -------- | ------------------ | ------------------------ | ---------- |
+| e2-small | 2 vCPU，2GB RAM     | 約 ~$12/月 | 建議         |
+| e2-micro | 2 vCPU（共享），1GB RAM | 符合免費額度                   | 高負載時可能 OOM |
 
 **CLI：**
 
@@ -148,7 +142,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) SSH 連線至 VM
+## 4. SSH 連線至 VM
 
 **CLI：**
 
@@ -160,11 +154,11 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a
 
 在 Compute Engine 儀表板中，點擊 VM 旁的「SSH」按鈕。
 
-注意：VM 建立後，SSH 金鑰同步可能需要 1–2 分鐘。若連線被拒，請稍候再試。
+注意：VM 建立後，SSH 金鑰同步可能需要 1–2 分鐘。若連線被拒，請稍候再試。 If connection is refused, wait and retry.
 
 ---
 
-## 5) 在 VM 上安裝 Docker
+## 5. 在 VM 上安裝 Docker
 
 ```bash
 sudo apt-get update
@@ -194,21 +188,21 @@ docker compose version
 
 ---
 
-## 6) 複製 OpenClaw 儲存庫
+## 6. 複製 OpenClaw 儲存庫
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 ```
 
-本指南假設你會建置自訂映像檔，以確保二進位檔的持久性。
+This guide assumes you will build a custom image to guarantee binary persistence.
 
 ---
 
-## 7) 建立持久化的主機目錄
+## 7. 建立持久化的主機目錄
 
-Docker 容器是短暫的。  
-所有長期狀態都必須存放在主機上。
+Docker 容器是短暫的。
+All long-lived state must live on the host.
 
 ```bash
 mkdir -p ~/.openclaw
@@ -217,7 +211,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) 設定環境變數
+## 8. 設定環境變數
 
 在儲存庫根目錄建立 `.env`。
 
@@ -244,7 +238,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Docker Compose 設定
+## 9. Docker Compose 設定
 
 建立或更新 `docker-compose.yml`。
 
@@ -291,12 +285,12 @@ services:
 
 ---
 
-## 10) 將必要的二進位檔內建至映像檔（關鍵）
+## 10. 將必要的二進位檔烘焙進映像檔（關鍵）
 
-在執行中的容器內安裝二進位檔是個陷阱。  
-任何在執行階段安裝的內容，都會在重啟時遺失。
+Installing binaries inside a running container is a trap.
+任何在執行期間安裝的內容都會在重新啟動時遺失。
 
-Skills 所需的所有外部二進位檔，都必須在映像檔建置階段安裝。
+技能所需的所有外部二進位檔都必須在映像建置時安裝。
 
 以下範例僅示範三種常見的二進位檔：
 
@@ -304,8 +298,8 @@ Skills 所需的所有外部二進位檔，都必須在映像檔建置階段安�
 - 用於 Google Places 的 `goplaces`
 - 用於 WhatsApp 的 `wacli`
 
-這些只是範例，並非完整清單。  
-你可以依相同模式安裝任意數量的二進位檔。
+These are examples, not a complete list.
+You may install as many binaries as needed using the same pattern.
 
 若日後新增依賴其他二進位檔的 Skills，你必須：
 
@@ -354,7 +348,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) 建置並啟動
+## 11. 建置並啟動
 
 ```bash
 docker compose build
@@ -379,7 +373,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 12) 驗證 Gateway
+## 12. 驗證 Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +387,7 @@ docker compose logs -f openclaw-gateway
 
 ---
 
-## 13) 從你的筆電存取
+## 13. 從你的筆電存取
 
 建立 SSH 通道以轉送 Gateway 連接埠：
 
@@ -405,27 +399,28 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:1
 
 `http://127.0.0.1:18789/`
 
-貼上你的 Gateway 權杖。
+貼上你的閘道權杖。
 
 ---
 
-## 什麼資料存在哪裡（單一事實來源）
+## What persists where (source of truth)
 
 OpenClaw 在 Docker 中執行，但 Docker 並非單一事實來源。  
 所有長期狀態都必須能在重啟、重建與重新開機後存活。
+All long-lived state must survive restarts, rebuilds, and reboots.
 
-| 元件              | 位置                              | 持久化機制         | 備註                        |
-| ----------------- | --------------------------------- | ------------------ | --------------------------- |
-| Gateway 設定      | `/home/node/.openclaw/`           | 主機 Volume 掛載   | 包含 `openclaw.json`、權杖  |
-| 模型身分驗證設定  | `/home/node/.openclaw/`           | 主機 Volume 掛載   | OAuth 權杖、API 金鑰        |
-| Skill 設定        | `/home/node/.openclaw/skills/`    | 主機 Volume 掛載   | Skill 層級狀態              |
-| 代理程式工作區    | `/home/node/.openclaw/workspace/` | 主機 Volume 掛載   | 程式碼與代理程式產物        |
-| WhatsApp 工作階段 | `/home/node/.openclaw/`           | 主機 Volume 掛載   | 保留 QR 登入                |
-| Gmail 金鑰圈      | `/home/node/.openclaw/`           | 主機 Volume + 密碼 | 需要 `GOG_KEYRING_PASSWORD` |
-| 外部二進位檔      | `/usr/local/bin/`                 | Docker 映像檔      | 必須在建置時內建            |
-| Node 執行環境     | 容器檔案系統                      | Docker 映像檔      | 每次映像檔建置都會重建      |
-| OS 套件           | 容器檔案系統                      | Docker 映像檔      | 請勿在執行階段安裝          |
-| Docker 容器       | 短暫                              | 可重新啟動         | 可安全銷毀                  |
+| 元件            | 位置                                | 持久化機制             | 注意事項                      |
+| ------------- | --------------------------------- | ----------------- | ------------------------- |
+| Gateway 設定    | `/home/node/.openclaw/`           | Host volume mount | 包含 `openclaw.json`、權杖     |
+| 模型身分驗證設定      | `/home/node/.openclaw/`           | 主機磁碟區掛載           | OAuth 權杖、API 金鑰           |
+| Skill 設定      | `/home/node/.openclaw/skills/`    | Host volume mount | Skill 層級狀態                |
+| 代理程式工作區       | `/home/node/.openclaw/workspace/` | Host volume mount | 程式碼與代理程式產物                |
+| WhatsApp 工作階段 | `/home/node/.openclaw/`           | Host volume mount | 保留 QR 登入                  |
+| Gmail 金鑰圈     | `/home/node/.openclaw/`           | 主機 Volume + 密碼    | 需要 `GOG_KEYRING_PASSWORD` |
+| 外部二進位檔        | `/usr/local/bin/`                 | Docker 映像檔        | 必須在建置時烘焙                  |
+| Node 執行環境     | 容器檔案系統                            | Docker 映像檔        | 每次映像檔建置都會重建               |
+| OS 套件         | 容器檔案系統                            | Docker 映像檔        | 請勿在執行期安裝                  |
+| Docker 容器     | 暫時性                               | 可重新啟動             | 可安全銷毀                     |
 
 ---
 
@@ -442,11 +437,11 @@ docker compose up -d
 
 ---
 
-## 疑難排解
+## Troubleshooting
 
 **SSH 連線被拒**
 
-VM 建立後，SSH 金鑰同步可能需要 1–2 分鐘。請稍候再試。
+VM 建立後，SSH 金鑰同步可能需要 1–2 分鐘。請稍候再試。 Wait and retry.
 
 **OS Login 問題**
 
@@ -479,7 +474,7 @@ gcloud compute instances start openclaw-gateway --zone=us-central1-a
 
 ## 服務帳戶（安全性最佳實務）
 
-個人使用情境下，預設使用者帳戶即可。
+For personal use, your default user account works fine.
 
 對於自動化或 CI/CD 管線，請建立具備最小權限的專用服務帳戶：
 
@@ -498,7 +493,7 @@ gcloud compute instances start openclaw-gateway --zone=us-central1-a
      --role="roles/compute.instanceAdmin.v1"
    ```
 
-避免在自動化中使用 Owner 角色，請遵循最小權限原則。
+避免在自動化中使用 Owner 角色，請遵循最小權限原則。 3. 使用最小權限原則。
 
 IAM 角色細節請參考  
 [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google.com/iam/docs/understanding-roles)

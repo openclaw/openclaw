@@ -4,13 +4,6 @@ read_when:
   - När du kör eller felsöker gateway-processen
   - När du undersöker efterlevnad av eninstanskrav
 title: "Gateway-lås"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:12Z
 ---
 
 # Gateway-lås

@@ -1,15 +1,8 @@
 ---
-summary: « Élagage de session : rognage des résultats d’outils pour réduire l’encombrement du contexte »
+summary: "Élagage de session : rognage des résultats d’outils pour réduire l’encombrement du contexte"
 read_when:
   - Vous souhaitez réduire la croissance du contexte LLM due aux sorties d’outils
   - Vous ajustez agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:24Z
 ---
 
 # Élagage de session
@@ -72,7 +65,7 @@ Si `agents.defaults.contextTokens` est défini, il est traité comme un plafond 
 ## Sélection des outils
 
 - `tools.allow` / `tools.deny` prennent en charge les jokers `*`.
-- Le refus l’emporte.
+- Refuser la victoire.
 - La correspondance est insensible à la casse.
 - Liste d’autorisation vide => tous les outils sont autorisés.
 

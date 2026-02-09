@@ -4,13 +4,6 @@ read_when:
   - Je wilt MiniMax-modellen in OpenClaw gebruiken
   - Je hebt begeleiding nodig bij het instellen van MiniMax
 title: "MiniMax"
-x-i18n:
-  source_path: providers/minimax.md
-  source_hash: 291cdecbe68e1cb1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # MiniMax

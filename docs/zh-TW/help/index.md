@@ -1,21 +1,14 @@
 ---
-summary: "說明中心：常見修復、安裝健全性檢查，以及當問題發生時該從哪裡找起"
+summary: "說明中心：常見修復、安裝健檢，以及發生問題時該查看的地方"
 read_when:
   - 你是新手，想要「我該點什麼／跑什麼」的指南
-  - 出了問題，想要最快速的修復路徑
+  - 發生問題且你想要最快的修復途徑
 title: "說明"
-x-i18n:
-  source_path: help/index.md
-  source_hash: 9356d1929df3e81a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:10Z
 ---
 
-# 說明
+# help/index.md
 
-如果你想要快速「解除卡關」的流程，從這裡開始：
+如果你想要快速「解卡」的流程，從這裡開始：
 
 - **疑難排解：** [從這裡開始](/help/troubleshooting)
 - **安裝健全性（Node / npm / PATH）：** [安裝](/install#nodejs--npm-path-sanity)

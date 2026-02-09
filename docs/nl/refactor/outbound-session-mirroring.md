@@ -1,13 +1,6 @@
 ---
-title: Refactor van uitgaande sessiespiegeling (Issue #1520)
+title: "Refactor van uitgaande sessiespiegeling (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:48Z
 ---
 
 # Refactor van uitgaande sessiespiegeling (Issue #1520)
@@ -25,7 +18,7 @@ Uitgaande verzendingen werden gespiegeld naar de _huidige_ agent-sessie (tool se
 ## Doelen
 
 - Uitgaande berichten spiegelen naar de doelsessiesleutel van het kanaal.
-- Sessies aanmaken bij uitgaande verzending wanneer ze ontbreken.
+- Maak sessie invoergegevens aan op uitgaande wanneer deze ontbreken.
 - Thread-/topic-scoping afgestemd houden op inkomende sessiesleutels.
 - Core-kanalen plus gebundelde extensies dekken.
 
@@ -56,7 +49,7 @@ Uitgaande verzendingen werden gespiegeld naar de _huidige_ agent-sessie (tool se
   - Slack auto-thread-spiegeling matcht kanaal-ID’s hoofdletterongevoelig.
   - Gateway-send zet aangeleverde sessiesleutels om naar lowercase vóór spiegeling.
 
-## Beslissingen
+## Besluiten
 
 - **Gateway-send sessieafleiding**: als `sessionKey` is opgegeven, gebruik deze. Als deze ontbreekt, leid een sessionKey af van doel + standaard agent en spiegel daarheen.
 - **Aanmaken van sessies**: gebruik altijd `recordSessionMetaFromInbound` met `Provider/From/To/ChatType/AccountId/Originating*` afgestemd op inkomende formaten.

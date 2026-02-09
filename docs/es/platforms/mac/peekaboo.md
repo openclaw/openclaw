@@ -5,13 +5,6 @@ read_when:
   - Integración de Peekaboo mediante Swift Package Manager
   - Cambio del protocolo/rutas de PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:08Z
 ---
 
 # Peekaboo Bridge (automatización de UI en macOS)
@@ -54,7 +47,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Comportamiento de snapshots (automatización)
 
-Las snapshots se almacenan en memoria y caducan automáticamente después de una ventana corta. Si necesita una retención más prolongada, vuelva a capturar desde el cliente.
+Las snapshots se almacenan en memoria y caducan automáticamente después de una ventana corta.
+Si necesita una retención más prolongada, vuelva a capturar desde el cliente.
 
 ## Solución de problemas
 

@@ -5,13 +5,6 @@ read_when:
   - Отладка обнаружения шлюза Gateway или аутентификации на Android
   - Проверка совпадения истории чатов между клиентами
 title: "Приложение Android"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:50Z
 ---
 
 # Приложение Android (узел)
@@ -43,7 +36,7 @@ Android подключается напрямую к WebSocket шлюза Gatewa
   - Ручной ввод хоста/порта шлюза Gateway (резервный вариант)
 - Вы можете запускать CLI (`openclaw`) на машине шлюза Gateway (или через SSH).
 
-### 1) Запуск Gateway (шлюза)
+### 1. Запуск Gateway (шлюза)
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ openclaw gateway --port 18789 --verbose
 - Установите `gateway.bind: "tailnet"` в `~/.openclaw/openclaw.json` на хосте шлюза Gateway.
 - Перезапустите Gateway / приложение macOS в строке меню.
 
-### 2) Проверка обнаружения (необязательно)
+### 2. Проверка обнаружения (необязательно)
 
 С машины шлюза Gateway:
 
@@ -77,7 +70,7 @@ dns-sd -B _openclaw-gw._tcp local.
 
 Подробности и пример конфигурации CoreDNS: [Bonjour](/gateway/bonjour).
 
-### 3) Подключение с Android
+### 3. Подключение с Android
 
 В приложении Android:
 
@@ -91,7 +84,7 @@ dns-sd -B _openclaw-gw._tcp local.
 - К ручному endpoint (если включён), иначе
 - К последнему обнаруженному шлюзу (best-effort).
 
-### 4) Подтвердите сопряжение (CLI)
+### 4. Подтвердите сопряжение (CLI)
 
 На машине шлюза Gateway:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Подробности сопряжения: [Сопряжение Gateway](/gateway/pairing).
 
-### 5) Проверьте, что узел подключён
+### 5. Проверьте, что узел подключён
 
 - Через статус узлов:
 
@@ -116,7 +109,7 @@ openclaw nodes approve <requestId>
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Чат + история
+### 6. Чат + история
 
 Лист Chat узла Android использует **основной ключ сеанса** шлюза Gateway (`main`), поэтому история и ответы общие с WebChat и другими клиентами:
 
@@ -124,7 +117,7 @@ openclaw nodes approve <requestId>
 - Отправка: `chat.send`
 - Push-обновления (best-effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + камера
+### 7. Canvas + камера
 
 #### Хост Canvas Gateway (рекомендуется для веб-контента)
 

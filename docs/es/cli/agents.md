@@ -3,13 +3,6 @@ summary: "Referencia de la CLI para `openclaw agents` (listar/agregar/eliminar/e
 read_when:
   - Desea múltiples agentes aislados (espacios de trabajo + enrutamiento + autenticación)
 title: "agentes"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:53Z
 ---
 
 # `openclaw agents`

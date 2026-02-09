@@ -4,19 +4,12 @@ read_when:
   - Kørsel af scripts fra repoet
   - Tilføjelse eller ændring af scripts under ./scripts
 title: "Scripts"
-x-i18n:
-  source_path: help/scripts.md
-  source_hash: efd220df28f20b33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:13Z
 ---
 
 # Scripts
 
-Mappen `scripts/` indeholder hjælpescripts til lokale workflows og driftsopgaver.
-Brug disse, når en opgave er tydeligt knyttet til et script; ellers bør du foretrække CLI’en.
+Mappen `scripts/` indeholder hjælpere scripts til lokale arbejdsgange og ops opgaver.
+Brug disse når en opgave er klart bundet til et script; ellers foretrækker CLI.
 
 ## Konventioner
 

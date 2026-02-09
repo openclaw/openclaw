@@ -1,14 +1,7 @@
 ---
-summary: 「用於入門精靈與設定結構描述的 RPC 通訊協定備註」
-read_when: 「變更入門精靈步驟或設定結構描述端點時」
-title: 「入門引導與設定通訊協定」
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:51Z
+summary: "11. 新手導覽精靈與設定結構的 RPC 協定備註"
+read_when: "12. 變更新手導覽精靈步驟或設定結構端點"
+title: "13. 新手導覽與設定協定"
 ---
 
 # 入門引導 + 設定通訊協定
@@ -17,10 +10,10 @@ x-i18n:
 
 ## 元件
 
-- 精靈引擎（共用的工作階段 + 提示 + 入門引導狀態）。
-- CLI 入門引導使用與 UI 用戶端相同的精靈流程。
+- 14. 精靈引擎（共用工作階段 + 提示 + 新手導覽狀態）。
+- 15. CLI 新手導覽使用與 UI 客戶端相同的精靈流程。
 - Gateway RPC （遠端程序呼叫）公開精靈 + 設定結構描述端點。
-- macOS 入門引導使用精靈步驟模型。
+- 16. macOS 新手導覽使用精靈步驟模型。
 - Web UI 依據 JSON Schema + UI 提示來呈現設定表單。
 
 ## Gateway RPC
@@ -44,4 +37,4 @@ x-i18n:
 
 ## 注意事項
 
-- 本文件是追蹤入門引導／設定通訊協定重構的唯一位置。
+- 17. 本文件是追蹤新手導覽／設定協定重構的唯一來源。

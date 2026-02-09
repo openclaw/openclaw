@@ -2,16 +2,9 @@
 summary: "Заметки по RPC‑протоколу для мастера онбординга и схемы конфига"
 read_when: "При изменении шагов мастера онбординга или эндпоинтов схемы конфига"
 title: "Протокол онбординга и конфига"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:29Z
 ---
 
-# Протокол онбординга и конфига
+# Onboarding + Config Protocol
 
 Назначение: общие поверхности онбординга и конфига для CLI, приложения для macOS и веб‑интерфейса.
 

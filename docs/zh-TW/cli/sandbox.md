@@ -1,15 +1,8 @@
 ---
 title: 沙箱 CLI
-summary: 「管理沙箱容器並檢視有效的沙箱政策」
-read_when: 「當你正在管理沙箱容器或除錯沙箱／工具政策行為時。」
+summary: "管理沙箱容器並檢視有效的沙箱政策"
+read_when: "當你正在管理沙箱容器或除錯沙箱／工具政策行為時。"
 status: active
-x-i18n:
-  source_path: cli/sandbox.md
-  source_hash: 6e1186f26c77e188
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:26Z
 ---
 
 # 沙箱 CLI
@@ -18,13 +11,13 @@ x-i18n:
 
 ## 概覽
 
-OpenClaw 可以在隔離的 Docker 容器中執行代理程式以提升安全性。`sandbox` 指令可協助你管理這些容器，特別是在更新或設定變更之後。
+OpenClaw 可以在隔離的 Docker 容器中執行代理程式以提升安全性。`sandbox` 指令可協助你管理這些容器，特別是在更新或設定變更之後。 12. `sandbox` 指令可協助你管理這些容器，特別是在更新或設定變更之後。
 
 ## 指令
 
 ### `openclaw sandbox explain`
 
-檢視「有效的」沙箱模式／範圍／工作區存取、沙箱工具政策，以及提升的閘門（含修正設定的金鑰路徑）。
+13. 檢視**實際生效**的沙箱模式／範圍／工作區存取、沙箱工具原則，以及提升的閘道（含修復用的設定鍵路徑）。
 
 ```bash
 openclaw sandbox explain
@@ -47,9 +40,9 @@ openclaw sandbox list --json     # JSON output
 
 - 容器名稱與狀態（執行中／已停止）
 - Docker 映像與是否符合設定
-- 存在時間（自建立以來的時間）
+- 14. 年齡（自建立以來的時間）
 - 閒置時間（自上次使用以來的時間）
-- 關聯的工作階段／代理程式
+- 15. 關聯的工作階段／代理
 
 ### `openclaw sandbox recreate`
 
@@ -106,7 +99,7 @@ openclaw sandbox recreate --all
 openclaw sandbox recreate --agent family
 ```
 
-### 僅針對特定代理程式
+### 16. 僅針對特定代理
 
 ```bash
 # Update only one agent's containers
@@ -121,9 +114,9 @@ openclaw sandbox recreate --agent alfred
 - 容器僅會在 24 小時未使用後才被清除
 - 經常使用的代理程式會無限期地維持舊容器在執行
 
-**解決方案：** 使用 `openclaw sandbox recreate` 強制移除舊容器。它們會在下次需要時，以目前設定自動重新建立。
+**解決方案：** 使用 `openclaw sandbox recreate` 強制移除舊容器。它們會在下次需要時，以目前設定自動重新建立。 17. 下次需要時，會依目前設定自動重新建立。
 
-提示：優先使用 `openclaw sandbox recreate`，而非手動 `docker rm`。它會使用 Gateway 閘道器的容器命名，並在範圍／工作階段金鑰變更時避免不相符。
+提示：優先使用 `openclaw sandbox recreate`，而非手動 `docker rm`。它會使用 Gateway 閘道器的容器命名，並在範圍／工作階段金鑰變更時避免不相符。 18. 它使用 Gateway 的容器命名，並在範圍／工作階段鍵變更時避免不相符。
 
 ## 設定
 
@@ -151,7 +144,7 @@ openclaw sandbox recreate --agent alfred
 }
 ```
 
-## 另請參閱
+## 19. 另請參閱
 
 - [Sandbox Documentation](/gateway/sandboxing)
 - [Agent Configuration](/concepts/agent-workspace)

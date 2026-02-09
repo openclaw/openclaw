@@ -3,13 +3,6 @@ summary: "CLI-Referenz für `openclaw agent` (einen Agent-Zug über das Gateway 
 read_when:
   - Sie möchten einen Agent-Zug aus Skripten ausführen (optional Antwort zustellen)
 title: "Agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:27Z
 ---
 
 # `openclaw agent`

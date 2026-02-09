@@ -4,24 +4,18 @@ read_when:
   - คุณต้องการเปิดใช้งานหรือปรับแต่ง SOUL Evil hook
   - คุณต้องการช่วงเวลา purge หรือการสลับ persona แบบสุ่ม
 title: "SOUL Evil Hook"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:14Z
 ---
 
 # SOUL Evil Hook
 
 SOUL Evil hook จะสลับเนื้อหา `SOUL.md` ที่ถูก **inject** กับ `SOUL_EVIL.md` ระหว่าง
-ช่วงเวลา purge หรือด้วยโอกาสแบบสุ่ม โดยจะ **ไม่** แก้ไขไฟล์บนดิสก์
+ช่วงเวลา purge หรือด้วยโอกาสแบบสุ่ม โดยจะ **ไม่** แก้ไขไฟล์บนดิสก์ มัน **ไม่** แก้ไขไฟล์บนดิสก์
 
 ## ทำงานอย่างไร
 
 เมื่อ `agent:bootstrap` ทำงาน hook สามารถแทนที่เนื้อหา `SOUL.md` ในหน่วยความจำ
 ก่อนที่จะประกอบ system prompt หาก `SOUL_EVIL.md` หายไปหรือว่างเปล่า
+OpenClaw จะบันทึกคำเตือนและคงใช้ `SOUL.md` ตามปกติ หาก `SOUL_EVIL.md` หายไปหรือว่างเปล่า
 OpenClaw จะบันทึกคำเตือนและคงใช้ `SOUL.md` ตามปกติ
 
 การรัน sub-agent จะ **ไม่** รวม `SOUL.md` ในไฟล์ bootstrap ดังนั้น hook นี้

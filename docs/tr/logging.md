@@ -1,20 +1,13 @@
 ---
 summary: "Günlükleme genel bakışı: dosya günlükleri, konsol çıktısı, CLI ile izleme ve Control UI"
 read_when:
-  - Günlükleme için başlangıç seviyesinde, anlaşılır bir genel bakışa ihtiyaç duyduğunuzda
+  - You need a beginner-friendly overview of logging
   - Günlük seviyelerini veya biçimlerini yapılandırmak istediğinizde
-  - Sorun giderirken günlükleri hızlıca bulmanız gerektiğinde
-title: "Günlükleme"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:47Z
+  - You are troubleshooting and need to find logs quickly
+title: "Logging"
 ---
 
-# Günlükleme
+# Logging
 
 OpenClaw iki yerde günlük tutar:
 
@@ -24,7 +17,7 @@ OpenClaw iki yerde günlük tutar:
 Bu sayfa, günlüklerin nerede bulunduğunu, nasıl okunacağını ve günlük
 seviyeleri ile biçimlerinin nasıl yapılandırılacağını açıklar.
 
-## Günlükler nerede bulunur
+## Where logs live
 
 Varsayılan olarak Gateway, aşağıdaki dizin altında dönen bir günlük dosyası yazar:
 
@@ -42,7 +35,7 @@ Bunu `~/.openclaw/openclaw.json` içinde geçersiz kılabilirsiniz:
 }
 ```
 
-## Günlükler nasıl okunur
+## How to read logs
 
 ### CLI: canlı izleme (önerilir)
 
@@ -86,7 +79,7 @@ Kanal etkinliğini (WhatsApp/Telegram vb.) filtrelemek için şunu kullanın:
 openclaw channels logs --channel whatsapp
 ```
 
-## Günlük biçimleri
+## Log formats
 
 ### Dosya günlükleri (JSONL)
 
@@ -135,7 +128,7 @@ Tüm günlükleme yapılandırması, `~/.openclaw/openclaw.json` içindeki `logg
 - `compact`: daha sıkı çıktı (uzun oturumlar için en iyisi).
 - `json`: satır başına JSON (günlük işleyiciler için).
 
-### Sansürleme
+### Redaction
 
 Araç özetleri, konsola ulaşmadan önce hassas belirteçleri sansürleyebilir:
 
@@ -167,7 +160,7 @@ tanılamalar + dışa aktarıcı eklentisi etkinleştirildiğinde bağlanır.
 - **Günlükler**: `diagnostics.otel.logs` etkinleştirildiğinde OTLP üzerinden dışa aktarılır. Günlük
   hacmi yüksek olabilir; `logging.level` ve dışa aktarıcı filtrelerini göz önünde bulundurun.
 
-### Tanılama olay kataloğu
+### Diagnostic event catalog
 
 Model kullanımı:
 
@@ -215,7 +208,7 @@ Bayraklar büyük/küçük harfe duyarsızdır ve joker karakterleri destekler (
 }
 ```
 
-Ortam değişkeni ile geçersiz kılma (tek seferlik):
+Env override (one-off):
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -343,7 +336,7 @@ Kuyruklar + oturumlar:
 - Uç nokta zaten `/v1/logs` içeriyorsa, günlükler için olduğu gibi kullanılır.
 - `diagnostics.otel.logs`, ana günlükleyici çıktısı için OTLP günlük dışa aktarmayı etkinleştirir.
 
-### Günlük dışa aktarma davranışı
+### Log export behavior
 
 - OTLP günlükleri, `logging.file`’e yazılan aynı yapılandırılmış kayıtları kullanır.
 - `logging.level`’a (dosya günlük seviyesi) uyar. Konsol sansürlemesi OTLP günlüklerine **uygulanmaz**.

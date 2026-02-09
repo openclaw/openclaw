@@ -5,20 +5,13 @@ read_when:
   - Bạn cần hiểu các endpoint, khóa và tham chiếu mô hình riêng biệt
   - Bạn muốn cấu hình sao chép/dán cho từng nhà cung cấp
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:51Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot cung cấp API Kimi với các endpoint tương thích OpenAI. Cấu hình
-nhà cung cấp và đặt mô hình mặc định là `moonshot/kimi-k2.5`, hoặc dùng
-Kimi Coding với `kimi-coding/k2p5`.
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
+provider and set the default model to `moonshot/kimi-k2.5`, or use
+Kimi Coding with `kimi-coding/k2p5`.
 
 Các ID mô hình Kimi K2 hiện tại:
 
@@ -41,7 +34,7 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-Lưu ý: Moonshot và Kimi Coding là các nhà cung cấp riêng biệt. Khóa không thể dùng chung, endpoint khác nhau và tham chiếu mô hình cũng khác (Moonshot dùng `moonshot/...`, Kimi Coding dùng `kimi-coding/...`).
+9. Lưu ý: Moonshot và Kimi Coding là các nhà cung cấp riêng biệt. Keys are not interchangeable, endpoints differ, and model refs differ (Moonshot uses `moonshot/...`, Kimi Coding uses `kimi-coding/...`).
 
 ## Đoạn cấu hình (Moonshot API)
 
@@ -142,7 +135,7 @@ Lưu ý: Moonshot và Kimi Coding là các nhà cung cấp riêng biệt. Khóa 
 
 ## Ghi chú
 
-- Tham chiếu mô hình Moonshot dùng `moonshot/<modelId>`. Tham chiếu mô hình Kimi Coding dùng `kimi-coding/<modelId>`.
+- 11. Tham chiếu mô hình Moonshot sử dụng `moonshot/<modelId>`. Kimi Coding model refs use `kimi-coding/<modelId>`.
 - Ghi đè metadata về giá và ngữ cảnh trong `models.providers` nếu cần.
 - Nếu Moonshot công bố giới hạn ngữ cảnh khác cho một mô hình, hãy điều chỉnh
   `contextWindow` cho phù hợp.

@@ -4,20 +4,13 @@ read_when:
   - Een OpenClaw macOS-release maken of valideren
   - De Sparkle-appcast of feed-assets bijwerken
 title: "macOS-release"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:34Z
 ---
 
 # OpenClaw macOS-release (Sparkle)
 
 Deze app levert nu Sparkle automatische updates. Release-builds moeten met een Developer ID worden ondertekend, gecomprimeerd (zip) en gepubliceerd met een ondertekende appcast-vermelding.
 
-## Vereisten
+## Prereqs
 
 - Developer ID Application-certificaat geïnstalleerd (voorbeeld: `Developer ID Application: <Developer Name> (<TEAMID>)`).
 - Sparkle-privésleutelpad ingesteld in de omgeving als `SPARKLE_PRIVATE_KEY_FILE` (pad naar je Sparkle ed25519-privésleutel; publieke sleutel ingebakken in Info.plist). Als dit ontbreekt, controleer `~/.profile`.

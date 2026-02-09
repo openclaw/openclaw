@@ -4,13 +4,6 @@ read_when:
   - DigitalOcean üzerinde OpenClaw kurarken
   - OpenClaw için ucuz VPS barındırma ararken
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:36Z
 ---
 
 # DigitalOcean üzerinde OpenClaw
@@ -23,13 +16,13 @@ Aylık $0 seçeneği istiyor ve ARM + sağlayıcıya özgü kurulumla uğraşmay
 
 ## Maliyet Karşılaştırması (2026)
 
-| Sağlayıcı    | Plan            | Özellikler                | Aylık fiyat | Notlar                                     |
-| ------------ | --------------- | ------------------------- | ----------- | ------------------------------------------ |
-| Oracle Cloud | Always Free ARM | 4 OCPU’ya kadar, 24GB RAM | $0          | ARM, sınırlı kapasite / kayıt tuhaflıkları |
+| Sağlayıcı    | Plan            | Özellikler                | Price/mo                                                       | Notlar                                     |
+| ------------ | --------------- | ------------------------- | -------------------------------------------------------------- | ------------------------------------------ |
+| Oracle Cloud | Always Free ARM | 4 OCPU’ya kadar, 24GB RAM | $0                                                             | ARM, sınırlı kapasite / kayıt tuhaflıkları |
 | Hetzner      | CX22            | 2 vCPU, 4GB RAM           | €3.79 (~$4) | En ucuz ücretli seçenek                    |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6          | Kolay arayüz, iyi dokümantasyon            |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6          | Çok sayıda lokasyon                        |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5          | Artık Akamai’nin parçası                   |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM           | $6                                                             | Easy UI, good docs                         |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM           | $6                                                             | Çok sayıda lokasyon                        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM           | $5                                                             | Artık Akamai’nin parçası                   |
 
 **Bir sağlayıcı seçmek:**
 
@@ -45,7 +38,7 @@ Aylık $0 seçeneği istiyor ve ARM + sağlayıcıya özgü kurulumla uğraşmay
 - SSH anahtar çifti (ya da parola ile kimlik doğrulamayı kullanma isteği)
 - ~20 dakika
 
-## 1) Droplet oluşturma
+## 1. Droplet oluşturma
 
 1. [DigitalOcean](https://cloud.digitalocean.com/) hesabınıza giriş yapın
 2. **Create → Droplets**’e tıklayın
@@ -63,7 +56,7 @@ Aylık $0 seçeneği istiyor ve ARM + sağlayıcıya özgü kurulumla uğraşmay
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) OpenClaw kurulumu
+## 3. OpenClaw kurulumu
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Onboarding’i çalıştırma
+## 4. Onboarding’i çalıştırma
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ Sihirbaz sizi şu adımlardan geçirecek:
 - Gateway belirteci (otomatik oluşturulur)
 - Daemon kurulumu (systemd)
 
-## 5) Gateway’i doğrulama
+## 5. Gateway’i doğrulama
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Gösterge Tablosuna erişim
+## 6. Gösterge Tablosuna erişim
 
 Gateway varsayılan olarak loopback’e bağlanır. Control UI’ya erişmek için:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Açın: `http://<tailscale-ip>:18789` (belirteç gereklidir).
 
-## 7) Kanallarınızı bağlayın
+## 7. Kanallarınızı bağlayın
 
 ### Telegram
 
@@ -188,7 +181,7 @@ OOM hataları yaşıyorsanız şunları düşünün:
 - Yerel modeller yerine API tabanlı modelleri (Claude, GPT) kullanmak
 - `agents.defaults.model.primary`’u daha küçük bir modele ayarlamak
 
-### Belleği izleyin
+### Monitor memory
 
 ```bash
 free -h
@@ -197,9 +190,9 @@ htop
 
 ---
 
-## Kalıcılık
+## Persistence
 
-Tüm durum verileri şuralarda bulunur:
+Tüm durum şu dizinlerde bulunur:
 
 - `~/.openclaw/` — yapılandırma, kimlik bilgileri, oturum verileri
 - `~/.openclaw/workspace/` — çalışma alanı (SOUL.md, bellek, vb.)
@@ -225,7 +218,7 @@ Oracle Cloud, burada yer alan tüm ücretli seçeneklerden belirgin şekilde dah
 
 **Uyarılar:**
 
-- Kayıt süreci nazlı olabilir (başarısız olursa tekrar deneyin)
+- Kayıt süreci sorunlu olabilir (başarısız olursa tekrar deneyin)
 - ARM mimarisi — çoğu şey çalışır, ancak bazı ikili dosyalar ARM derlemeleri gerektirir
 
 Tam kurulum kılavuzu için [Oracle Cloud](/platforms/oracle) sayfasına bakın. Kayıt ipuçları ve kayıt sürecindeki sorunları gidermek için bu [topluluk kılavuzuna](https://gist.github.com/rssnyder/51e3cfedd730e7dd5f4a816143b25dbd) bakın.

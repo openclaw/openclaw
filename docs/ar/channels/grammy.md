@@ -3,13 +3,6 @@ summary: "تكامل Telegram Bot API عبر grammY مع ملاحظات الإع
 read_when:
   - عند العمل على مسارات Telegram أو grammY
 title: grammY
-x-i18n:
-  source_path: channels/grammy.md
-  source_hash: ea7ef23e6d77801f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:54Z
 ---
 
 # تكامل grammY ‏(Telegram Bot API)

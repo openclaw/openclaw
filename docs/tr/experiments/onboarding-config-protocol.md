@@ -2,13 +2,6 @@
 summary: "Onboarding sihirbazı ve yapılandırma şeması için RPC protokol notları"
 read_when: "Onboarding sihirbazı adımlarını veya yapılandırma şeması uç noktalarını değiştirirken"
 title: "Onboarding ve Yapılandırma Protokolü"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:20Z
 ---
 
 # Onboarding + Yapılandırma Protokolü

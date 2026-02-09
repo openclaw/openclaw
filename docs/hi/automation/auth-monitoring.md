@@ -4,19 +4,11 @@ read_when:
   - प्रमाणीकरण समाप्ति की निगरानी या अलर्ट सेट करते समय
   - Claude Code / Codex OAuth रिफ्रेश जाँचों का स्वचालन करते समय
 title: "प्रमाणीकरण निगरानी"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:49Z
 ---
 
 # प्रमाणीकरण निगरानी
 
-OpenClaw `openclaw models status` के माध्यम से OAuth समाप्ति की स्थिति उजागर करता है। इसका उपयोग
-स्वचालन और अलर्टिंग के लिए करें; फ़ोन वर्कफ़्लो के लिए स्क्रिप्ट वैकल्पिक अतिरिक्त हैं।
+OpenClaw `openclaw models status` के माध्यम से OAuth expiry health को उजागर करता है। इसे automation और alerting के लिए उपयोग करें; फोन workflows के लिए scripts वैकल्पिक अतिरिक्त हैं।
 
 ## अनुशंसित: CLI जाँच (पोर्टेबल)
 
@@ -34,8 +26,7 @@ openclaw models status --check
 
 ## वैकल्पिक स्क्रिप्ट्स (ops / फ़ोन वर्कफ़्लो)
 
-ये `scripts/` के अंतर्गत रहती हैं और **वैकल्पिक** हैं। ये Gateway होस्ट तक SSH पहुँच मानती हैं
-और systemd + Termux के लिए ट्यून की गई हैं।
+ये `scripts/` के अंतर्गत रहते हैं और **वैकल्पिक** हैं। ये gateway host पर SSH access मानते हैं और systemd + Termux के लिए ट्यून किए गए हैं।
 
 - `scripts/claude-auth-status.sh` अब `openclaw models status --json` को
   सत्य का स्रोत मानता है (यदि CLI उपलब्ध न हो तो सीधे फ़ाइल रीड पर फ़ॉलबैक करता है),

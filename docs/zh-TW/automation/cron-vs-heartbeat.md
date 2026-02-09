@@ -5,38 +5,31 @@ read_when:
   - 設定背景監控或通知
   - 為定期檢查最佳化權杖使用量
 title: "Cron 與 Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:06Z
 ---
 
 # Cron 與 Heartbeat：何時使用各自的機制
 
-Heartbeat 與 cron 工作都能讓你依排程執行任務。本指南協助你為你的使用情境選擇合適的機制。
+Heartbeat 與 cron 工作都能讓你依排程執行任務。本指南協助你為你的使用情境選擇合適的機制。 This guide helps you choose the right mechanism for your use case.
 
 ## 快速決策指南
 
-| 使用情境                  | 建議               | 原因                             |
-| ------------------------- | ------------------ | -------------------------------- |
-| 每 30 分鐘檢查收件匣      | Heartbeat          | 與其他檢查批次處理，具備情境感知 |
-| 每天上午 9 點準時寄送報告 | Cron（隔離）       | 需要精準時間                     |
-| 監控行事曆的即將到來事件  | Heartbeat          | 天然適合週期性察覺               |
-| 每週執行深度分析          | Cron（隔離）       | 獨立任務，可使用不同模型         |
-| 20 分鐘後提醒我           | Cron（主，`--at`） | 具備精準時機的一次性任務         |
-| 背景專案健康檢查          | Heartbeat          | 搭便車既有循環                   |
+| 使用情境           | 建議             | 原因                                       |
+| -------------- | -------------- | ---------------------------------------- |
+| 每 30 分鐘檢查收件匣   | Heartbeat      | Batches with other checks, context-aware |
+| 每天上午 9 點準時寄送報告 | Cron（隔離）       | 需要精準時間                                   |
+| 監控行事曆的即將到來事件   | Heartbeat      | 天然適合週期性察覺                                |
+| 每週執行深度分析       | Cron（隔離）       | 獨立任務，可使用不同模型                             |
+| 20 分鐘後提醒我      | Cron（主，`--at`） | One-shot with precise timing             |
+| 背景專案健康檢查       | Heartbeat      | Piggybacks on existing cycle             |
 
 ## Heartbeat：週期性察覺
 
-Heartbeat 會在**主工作階段**中以固定間隔執行（預設：30 分鐘）。它們旨在讓代理程式檢查各項狀態，並浮現任何重要事項。
+Heartbeats run in the **main session** at a regular interval (default: 30 min). They're designed for the agent to check on things and surface anything important.
 
 ### 何時使用 heartbeat
 
 - **多項週期性檢查**：與其使用 5 個獨立的 cron 工作分別檢查收件匣、行事曆、天氣、通知與專案狀態，不如用單一 heartbeat 將這些批次處理。
-- **具備情境感知的決策**：代理程式擁有完整的主工作階段情境，能做出聰明判斷，分辨哪些緊急、哪些可稍後處理。
+- **Context-aware decisions**: The agent has full main-session context, so it can make smart decisions about what's urgent vs. what can wait.
 - **對話連續性**：Heartbeat 執行共用同一工作階段，代理程式能記住近期對話並自然跟進。
 - **低負擔監控**：一個 heartbeat 取代多個小型輪詢任務。
 
@@ -98,8 +91,8 @@ Cron 工作會在**精確時間**執行，且可在隔離的工作階段中運�
 - **工作階段隔離**：在 `cron:<jobId>` 中執行，不會污染主歷史。
 - **模型覆寫**：每個工作可使用更便宜或更強的模型。
 - **投遞控制**：隔離工作預設為 `announce`（摘要）；可依需求選擇 `none`。
-- **即時投遞**：公告模式會直接發佈，不需等待 heartbeat。
-- **不需代理程式情境**：即使主工作階段閒置或被壓縮仍會執行。
+- **即時傳送**：公告模式會直接發佈，不需等待心跳。
+- **不需要代理上下文**：即使主工作階段閒置或已壓縮也能執行。
 - **一次性支援**：`--at` 用於精準的未來時間戳。
 
 ### Cron 範例：每日早晨簡報
@@ -192,13 +185,13 @@ openclaw cron add --name "Call back" --at "2h" --session main --system-event "Ca
 
 ## Lobster：具備核准的確定性工作流程
 
-Lobster 是用於**多步驟工具管線**的工作流程執行環境，提供確定性執行與明確的核准點。
-當任務不只是一個代理程式回合，且你需要可恢復的工作流程與人工檢查點時，請使用它。
+Lobster 是用於需要確定性執行與明確核准的 **多步驟工具管線** 的工作流程執行期。
+當任務不只是一個代理回合，且你想要可恢復、包含人工檢查點的工作流程時使用它。
 
 ### Lobster 的適用情境
 
 - **多步驟自動化**：需要固定的工具呼叫管線，而非一次性提示。
-- **核准關卡**：有副作用的動作應在核准前暫停，之後再繼續。
+- **核准關卡**：有副作用的操作應在你核准前暫停，核准後再繼續。
 - **可恢復執行**：在不重跑先前步驟的情況下繼續暫停的流程。
 
 ### 與 heartbeat 與 cron 的搭配方式
@@ -208,8 +201,9 @@ Lobster 是用於**多步驟工具管線**的工作流程執行環境，提供�
 
 對於排程式工作流程，使用 cron 或 heartbeat 觸發一個代理程式回合以呼叫 Lobster。
 對於臨時工作流程，直接呼叫 Lobster。
+對於臨時工作流程，直接呼叫 Lobster。
 
-### 營運注意事項（來自程式碼）
+### 營運備註（來自程式碼）
 
 - Lobster 以**本機子程序**（`lobster` CLI）在工具模式中執行，並回傳 **JSON 封裝**。
 - 若工具回傳 `needs_approval`，你可使用 `resumeToken` 與 `approve` 旗標繼續。
@@ -222,13 +216,13 @@ Lobster 是用於**多步驟工具管線**的工作流程執行環境，提供�
 
 Heartbeat 與 cron 都能與主工作階段互動，但方式不同：
 
-|          | Heartbeat                  | Cron（主）            | Cron（隔離）     |
-| -------- | -------------------------- | --------------------- | ---------------- |
-| 工作階段 | 主                         | 主（透過系統事件）    | `cron:<jobId>`   |
-| 歷史     | 共享                       | 共享                  | 每次皆為全新     |
-| 情境     | 完整                       | 完整                  | 無（乾淨起始）   |
-| 模型     | 主工作階段模型             | 主工作階段模型        | 可覆寫           |
-| 輸出     | 若非 `HEARTBEAT_OK` 則投遞 | Heartbeat 提示 + 事件 | 公告摘要（預設） |
+|      | Heartbeat             | Cron（主）           | Cron（隔離）       |
+| ---- | --------------------- | ----------------- | -------------- |
+| 工作階段 | 主                     | 主（透過系統事件）         | `cron:<jobId>` |
+| 歷史   | 共享                    | 共享                | 每次皆為全新         |
+| 情境   | 完整                    | 完整                | 無（乾淨起始）        |
+| 模型   | 主工作階段模型               | 主工作階段模型           | 可覆寫            |
+| 輸出   | 若非 `HEARTBEAT_OK` 則投遞 | Heartbeat 提示 + 事件 | 公告摘要（預設）       |
 
 ### 何時使用主工作階段 cron
 
@@ -254,7 +248,7 @@ openclaw cron add \
 - 不受先前情境影響的乾淨起點
 - 不同的模型或思考設定
 - 直接向頻道公告摘要
-- 不會讓主工作階段歷史雜亂
+- 不會讓主工作階段雜亂的歷史記錄
 
 ```bash
 openclaw cron add \
@@ -269,11 +263,11 @@ openclaw cron add \
 
 ## 成本考量
 
-| 機制         | 成本輪廓                                      |
-| ------------ | --------------------------------------------- |
-| Heartbeat    | 每 N 分鐘一次回合；隨 HEARTBEAT.md 規模而成長 |
-| Cron（主）   | 將事件加入下一次 heartbeat（無隔離回合）      |
-| Cron（隔離） | 每個工作一次完整代理程式回合；可用較便宜模型  |
+| 機制        | 成本輪廓                                            |
+| --------- | ----------------------------------------------- |
+| Heartbeat | 每 N 分鐘一次回合；隨 HEARTBEAT.md 規模而成長 |
+| Cron（主）   | 將事件加入下一次 heartbeat（無隔離回合）                       |
+| Cron（隔離）  | 每個工作一次完整代理程式回合；可用較便宜模型                          |
 
 **小技巧**：
 

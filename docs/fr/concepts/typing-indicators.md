@@ -1,15 +1,8 @@
 ---
-summary: « Quand OpenClaw affiche des indicateurs de saisie et comment les ajuster »
+summary: "Quand OpenClaw affiche des indicateurs de saisie et comment les ajuster"
 read_when:
   - Modification du comportement ou des valeurs par defaut des indicateurs de saisie
-title: « Indicateurs de saisie »
-x-i18n:
-  source_path: concepts/typing-indicators.md
-  source_hash: 8ee82d02829c4ff5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:26Z
+title: "Indicateurs de saisie"
 ---
 
 # Indicateurs de saisie
@@ -18,7 +11,7 @@ Les indicateurs de saisie sont envoyes au canal de chat pendant qu’une executi
 `agents.defaults.typingMode` pour controler **quand** la saisie commence et `typingIntervalSeconds`
 pour controler **a quelle frequence** elle est rafraichie.
 
-## Valeurs par defaut
+## Valeurs par défaut
 
 Lorsque `agents.defaults.typingMode` n’est **pas defini**, OpenClaw conserve le comportement historique :
 

@@ -4,13 +4,6 @@ read_when:
   - Buscando compatibilidad de SO o rutas de instalación
   - Decidiendo dónde ejecutar el Gateway
 title: "Plataformas"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:02Z
 ---
 
 # Plataformas
@@ -22,7 +15,7 @@ Existen aplicaciones complementarias para macOS (app de barra de menú) y nodos 
 Linux están planificadas, pero el Gateway cuenta con soporte completo hoy.
 También se planifican aplicaciones complementarias nativas para Windows; se recomienda el Gateway mediante WSL2.
 
-## Elija su SO
+## Elige tu sistema operativo
 
 - macOS: [macOS](/platforms/macos)
 - iOS: [iOS](/platforms/ios)

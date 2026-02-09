@@ -4,13 +4,6 @@ read_when:
   - Sie möchten einen Modellanbieter auswählen
   - Sie möchten schnelle Einrichtungsbeispiele für LLM-Authentifizierung und Modellauswahl
 title: "Schnellstart für Modellanbieter"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:03Z
 ---
 
 # Modellanbieter

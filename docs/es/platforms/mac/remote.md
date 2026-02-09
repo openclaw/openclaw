@@ -3,13 +3,6 @@ summary: "Flujo de la app de macOS para controlar un Gateway de OpenClaw remoto 
 read_when:
   - Configuración o depuración del control remoto de mac en macOS
 title: "Control remoto"
-x-i18n:
-  source_path: platforms/mac/remote.md
-  source_hash: 61b43707250d5515
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:15Z
 ---
 
 # OpenClaw remoto (macOS ⇄ host remoto)

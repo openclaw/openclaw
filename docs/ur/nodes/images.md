@@ -3,18 +3,11 @@ summary: "ارسال، گیٹ وے، اور ایجنٹ جوابات کے لیے 
 read_when:
   - میڈیا پائپ لائن یا منسلکات میں ترمیم کرتے وقت
 title: "تصویر اور میڈیا سپورٹ"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # Image & Media Support — 2025-12-05
 
-WhatsApp چینل **Baileys Web** کے ذریعے چلتا ہے۔ یہ دستاویز ارسال، گیٹ وے، اور ایجنٹ جوابات کے لیے موجودہ میڈیا ہینڈلنگ کے قواعد کو بیان کرتی ہے۔
+The WhatsApp channel runs via **Baileys Web**. This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Goals
 
@@ -42,7 +35,7 @@ WhatsApp چینل **Baileys Web** کے ذریعے چلتا ہے۔ یہ دستا�
 
 ## Auto-Reply Pipeline
 
-- `getReplyFromConfig` `{ text?, mediaUrl?, mediaUrls? }` واپس کرتا ہے۔
+- `getReplyFromConfig` returns `{ text?, mediaUrl?, mediaUrls? }`.
 - جب میڈیا موجود ہو، ویب سینڈر لوکل پاتھ یا URLs کو `openclaw message send` کی طرح اسی پائپ لائن سے حل کرتا ہے۔
 - اگر متعدد میڈیا اندراجات فراہم ہوں تو انہیں ترتیب وار بھیجا جاتا ہے۔
 
@@ -55,7 +48,7 @@ WhatsApp چینل **Baileys Web** کے ذریعے چلتا ہے۔ یہ دستا�
 - میڈیا فہم (اگر `tools.media.*` یا مشترکہ `tools.media.models` کے ذریعے کنفیگر کیا گیا ہو) ٹیمپلیٹنگ سے پہلے چلتا ہے اور `[Image]`، `[Audio]`، اور `[Video]` بلاکس کو `Body` میں داخل کر سکتا ہے۔
   - آڈیو `{{Transcript}}` سیٹ کرتا ہے اور کمانڈ پارسنگ کے لیے ٹرانسکرپٹ استعمال کرتا ہے تاکہ سلیش کمانڈز کام کرتی رہیں۔
   - ویڈیو اور تصویر کی وضاحتیں کمانڈ پارسنگ کے لیے کسی بھی کیپشن متن کو برقرار رکھتی ہیں۔
-- بطورِ طے شدہ صرف پہلی مماثل تصویر/آڈیو/ویڈیو منسلکہ پروسیس کی جاتی ہے؛ متعدد منسلکات پروسیس کرنے کے لیے `tools.media.<cap>.attachments` سیٹ کریں۔
+- By default only the first matching image/audio/video attachment is processed; set `tools.media.<cap>.attachments` to process multiple attachments.
 
 ## Limits & Errors
 

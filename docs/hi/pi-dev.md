@@ -1,12 +1,5 @@
 ---
 title: "Pi विकास कार्यप्रवाह"
-x-i18n:
-  source_path: pi-dev.md
-  source_hash: b6c44672306d8867
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:26Z
 ---
 
 # Pi विकास कार्यप्रवाह
@@ -58,7 +51,7 @@ scripts/pi/run-tests.sh --live
 
 ## क्लीन स्लेट रीसेट
 
-स्थिति OpenClaw स्टेट डायरेक्टरी के अंतर्गत रहती है। डिफ़ॉल्ट `~/.openclaw` है। यदि `OPENCLAW_STATE_DIR` सेट है, तो उसके स्थान पर उस डायरेक्टरी का उपयोग करें।
+डिफ़ॉल्ट `~/.openclaw` है। यदि `OPENCLAW_STATE_DIR` सेट है, तो उसके बजाय वही डायरेक्टरी उपयोग करें। अगर `OPENCLAW_STATE_DIR` सेट है, तो उसकी जगह उसी directory का उपयोग करें।
 
 सब कुछ रीसेट करने के लिए:
 
@@ -69,7 +62,7 @@ scripts/pi/run-tests.sh --live
 - यदि लेगेसी पथ मौजूद हों तो `sessions/`
 - यदि आप एक खाली वर्कस्पेस चाहते हैं तो `workspace/`
 
-यदि आप केवल सत्र रीसेट करना चाहते हैं, तो उस एजेंट के लिए `agents/<agentId>/sessions/` और `agents/<agentId>/sessions.json` हटाएँ। यदि आप पुनः प्रमाणीकरण नहीं करना चाहते हैं, तो `credentials/` रखें।
+If you only want to reset sessions, delete `agents/<agentId>/sessions/` and `agents/<agentId>/sessions.json` for that agent. Keep `credentials/` if you do not want to reauthenticate.
 
 ## संदर्भ
 

@@ -3,30 +3,23 @@ summary: "Hành vi và cấu hình cho việc xử lý tin nhắn nhóm WhatsApp
 read_when:
   - Khi thay đổi quy tắc tin nhắn nhóm hoặc nhắc tên
 title: "Tin nhắn nhóm"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:02Z
 ---
 
 # Tin nhắn nhóm (kênh WhatsApp web)
 
 Mục tiêu: cho phép Clawd tham gia các nhóm WhatsApp, chỉ thức dậy khi được ping, và giữ luồng đó tách biệt với phiên DM cá nhân.
 
-Lưu ý: `agents.list[].groupChat.mentionPatterns` hiện cũng được dùng cho Telegram/Discord/Slack/iMessage; tài liệu này tập trung vào hành vi riêng của WhatsApp. Với thiết lập đa tác tử, hãy đặt `agents.list[].groupChat.mentionPatterns` theo từng tác tử (hoặc dùng `messages.groupChat.mentionPatterns` làm dự phòng toàn cục).
+Lưu ý: `agents.list[].groupChat.mentionPatterns` hiện cũng được dùng cho Telegram/Discord/Slack/iMessage; tài liệu này tập trung vào hành vi riêng của WhatsApp. For multi-agent setups, set `agents.list[].groupChat.mentionPatterns` per agent (or use `messages.groupChat.mentionPatterns` as a global fallback).
 
 ## Những gì đã triển khai (2025-12-03)
 
-- Chế độ kích hoạt: `mention` (mặc định) hoặc `always`. `mention` yêu cầu một ping (nhắc @ thật của WhatsApp qua `mentionedJids`, các mẫu regex, hoặc số E.164 của bot xuất hiện ở bất kỳ đâu trong văn bản). `always` đánh thức tác tử với mọi tin nhắn nhưng chỉ nên trả lời khi có thể mang lại giá trị; nếu không thì trả về token im lặng `NO_REPLY`. Mặc định có thể đặt trong cấu hình (`channels.whatsapp.groups`) và ghi đè theo từng nhóm qua `/activation`. Khi đặt `channels.whatsapp.groups`, nó cũng hoạt động như một danh sách cho phép của nhóm (bao gồm `"*"` để cho phép tất cả).
-- Chính sách nhóm: `channels.whatsapp.groupPolicy` kiểm soát việc có chấp nhận tin nhắn nhóm hay không (`open|disabled|allowlist`). `allowlist` sử dụng `channels.whatsapp.groupAllowFrom` (dự phòng: `channels.whatsapp.allowFrom` rõ ràng). Mặc định là `allowlist` (bị chặn cho đến khi bạn thêm người gửi).
-- Phiên theo từng nhóm: khóa phiên có dạng `agent:<agentId>:whatsapp:group:<jid>` nên các lệnh như `/verbose on` hoặc `/think high` (gửi như tin nhắn độc lập) sẽ chỉ áp dụng trong phạm vi nhóm đó; trạng thái DM cá nhân không bị ảnh hưởng. Heartbeat bị bỏ qua cho các luồng nhóm.
-- Tiêm ngữ cảnh: các tin nhắn nhóm **chưa xử lý** (mặc định 50) mà _không_ kích hoạt chạy sẽ được thêm tiền tố dưới `[Chat messages since your last reply - for context]`, với dòng kích hoạt nằm dưới `[Current message - respond to this]`. Các tin nhắn đã có trong phiên sẽ không được tiêm lại.
+- Activation modes: `mention` (default) or `always`. `mention` yêu cầu một ping (mention WhatsApp @ thực thông qua `mentionedJids`, các mẫu regex, hoặc số E.164 của bot xuất hiện ở bất kỳ đâu trong văn bản). `always` đánh thức agent với mọi tin nhắn nhưng chỉ nên trả lời khi có thể mang lại giá trị thực; nếu không thì trả về token im lặng `NO_REPLY`. Giá trị mặc định có thể được đặt trong cấu hình (`channels.whatsapp.groups`) và được ghi đè theo từng nhóm thông qua `/activation`. When `channels.whatsapp.groups` is set, it also acts as a group allowlist (include `"*"` to allow all).
+- Group policy: `channels.whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` uses `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Default is `allowlist` (blocked until you add senders).
+- Per-group sessions: session keys look like `agent:<agentId>:whatsapp:group:<jid>` so commands such as `/verbose on` or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
+- Context injection: **pending-only** group messages (default 50) that _did not_ trigger a run are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`. Messages already in the session are not re-injected.
 - Hiển thị người gửi: mỗi lô tin nhắn nhóm giờ kết thúc bằng `[from: Sender Name (+E164)]` để Pi biết ai đang nói.
 - Tin nhắn tạm thời/xem một lần: chúng tôi mở gói trước khi trích xuất văn bản/nhắc tên, nên các ping bên trong vẫn kích hoạt.
-- System prompt cho nhóm: ở lượt đầu tiên của một phiên nhóm (và bất cứ khi nào `/activation` thay đổi chế độ) chúng tôi chèn một đoạn ngắn vào system prompt như `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.`. Nếu không có metadata, chúng tôi vẫn cho tác tử biết đó là chat nhóm.
+- Discord: allowlist sử dụng `channels.discord.guilds.<id>` Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.\` If metadata isn’t available we still tell the agent it’s a group chat.
 
 ## Ví dụ cấu hình (WhatsApp)
 
@@ -67,14 +60,14 @@ Dùng lệnh trong chat nhóm:
 - `/activation mention`
 - `/activation always`
 
-Chỉ số của chủ sở hữu (từ `channels.whatsapp.allowFrom`, hoặc số E.164 của bot khi chưa đặt) mới có thể thay đổi điều này. Gửi `/status` như một tin nhắn độc lập trong nhóm để xem chế độ kích hoạt hiện tại.
+Only the owner number (from `channels.whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## Cách sử dụng
 
 1. Thêm tài khoản WhatsApp của bạn (tài khoản đang chạy OpenClaw) vào nhóm.
-2. Nói `@openclaw …` (hoặc bao gồm số). Chỉ những người gửi trong danh sách cho phép mới có thể kích hoạt trừ khi bạn đặt `groupPolicy: "open"`.
+2. Say `@openclaw …` (or include the number). Only allowlisted senders can trigger it unless you set `groupPolicy: "open"`.
 3. Prompt của tác tử sẽ bao gồm ngữ cảnh nhóm gần đây cùng với dấu `[from: …]` ở cuối để có thể trả lời đúng người.
-4. Các chỉ thị cấp phiên (`/verbose on`, `/think high`, `/new` hoặc `/reset`, `/compact`) chỉ áp dụng cho phiên của nhóm đó; hãy gửi chúng như tin nhắn độc lập để được ghi nhận. Phiên DM cá nhân của bạn vẫn độc lập.
+4. Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
 ## Kiểm thử / xác minh
 

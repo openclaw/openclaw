@@ -1,15 +1,8 @@
 ---
 summary: "OpenClaw စာတမ်းအားလုံးသို့ ချိတ်ဆက်ထားသော Hub များ"
 read_when:
-  - "စာတမ်းများအားလုံး၏ မြေပုံတစ်ခုကို အပြည့်အစုံ သိလိုသည့်အခါ"
+  - စာတမ်းများအားလုံး၏ မြေပုံတစ်ခုကို အပြည့်အစုံ သိလိုသည့်အခါ
 title: "Docs Hub များ"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:01Z
 ---
 
 # Docs hub များ

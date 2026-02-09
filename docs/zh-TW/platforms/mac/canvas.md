@@ -1,22 +1,16 @@
 ---
-summary: 「透過 WKWebView 與自訂 URL scheme 內嵌的代理程式控制 Canvas 面板」
+summary: "透過 WKWebView 與自訂 URL scheme 內嵌的代理程式控制 Canvas 面板"
 read_when:
   - 實作 macOS Canvas 面板
   - 為視覺化工作空間加入代理程式控制
   - 偵錯 WKWebView Canvas 載入問題
-title: 「Canvas」
-x-i18n:
-  source_path: platforms/mac/canvas.md
-  source_hash: e39caa21542e839d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:45Z
+title: "Canvas"
 ---
 
 # Canvas（macOS 應用程式）
 
-macOS 應用程式使用 `WKWebView` 內嵌一個由代理程式控制的 **Canvas 面板**。它是一個輕量級的視覺化工作空間，適用於 HTML/CSS/JS、A2UI，以及小型互動式 UI 介面。
+macOS 應用程式使用 `WKWebView` 內嵌一個由代理程式控制的 **Canvas 面板**。它是一個輕量級的視覺化工作空間，適用於 HTML/CSS/JS、A2UI，以及小型互動式 UI 介面。 它是一個輕量化的視覺化工作空間，用於 HTML/CSS/JS、A2UI，以及小型互動式
+UI 介面。
 
 ## Canvas 的位置
 
@@ -38,12 +32,13 @@ Canvas 面板會透過 **自訂 URL scheme** 提供這些檔案：
 
 ## 面板行為
 
-- 無邊框、可調整大小的面板，錨定於選單列附近（或滑鼠游標）。
-- 依工作階段記住大小與位置。
-- 本機 Canvas 檔案變更時自動重新載入。
+- 無邊框、可調整大小的面板，錨定在選單列附近（或滑鼠游標旁）。
+- 每個工作階段會記住大小與位置。
+- 本地 Canvas 檔案變更時會自動重新載入。
 - 任一時間只會顯示一個 Canvas 面板（視需要切換工作階段）。
 
-Canvas 可在「設定」→ **Allow Canvas** 中停用。停用後，Canvas 節點指令會回傳 `CANVAS_DISABLED`。
+Canvas can be disabled from Settings → **Allow Canvas**. 停用時，Canvas
+節點指令會回傳 `CANVAS_DISABLED`。
 
 ## 代理程式 API 介面
 
@@ -71,6 +66,8 @@ openclaw nodes canvas snapshot --node <id>
 ## Canvas 中的 A2UI
 
 A2UI 由 Gateway 閘道器的 canvas 主機託管，並在 Canvas 面板內渲染。當 Gateway 閘道器宣告可用的 Canvas 主機時，macOS 應用程式會在首次開啟時自動導向至 A2UI 主機頁面。
+When the Gateway advertises a Canvas host, the macOS app auto‑navigates to the
+A2UI host page on first open.
 
 預設的 A2UI 主機 URL：
 
@@ -118,10 +115,10 @@ Canvas 可透過深層連結觸發新的代理程式執行：
 window.location.href = "openclaw://agent?message=Review%20this%20design";
 ```
 
-除非提供有效的金鑰，否則應用程式會要求確認。
+除非提供有效的金鑰，否則 App 會要求確認。
 
 ## 安全性注意事項
 
-- Canvas scheme 會阻擋目錄穿越；檔案必須位於工作階段根目錄之下。
-- 本機 Canvas 內容使用自訂 scheme（不需要 loopback 伺服器）。
+- Canvas 配置會阻擋目錄穿越；檔案必須位於工作階段根目錄之下。
+- Local Canvas content uses a custom scheme (no loopback server required).
 - 外部 `http(s)` URL 僅在明確導向時才允許。

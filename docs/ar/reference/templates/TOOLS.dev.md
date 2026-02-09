@@ -3,13 +3,6 @@ summary: "ملاحظات أدوات وكيل التطوير (C-3PO)"
 read_when:
   - استخدام قوالب Gateway للتطوير
   - تحديث هوية وكيل التطوير الافتراضية
-x-i18n:
-  source_path: reference/templates/TOOLS.dev.md
-  source_hash: 3d41097967c98116
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:42Z
 ---
 
 # TOOLS.md - ملاحظات أدوات المستخدم (قابل للتحرير)

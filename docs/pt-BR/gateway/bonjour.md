@@ -4,13 +4,6 @@ read_when:
   - Depurando problemas de descoberta Bonjour no macOS/iOS
   - Alterando tipos de serviço mDNS, registros TXT ou UX de descoberta
 title: "Descoberta Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:54Z
 ---
 
 # Descoberta Bonjour / mDNS
@@ -111,7 +104,7 @@ O Gateway anuncia pequenas dicas não secretas para tornar os fluxos de UI conve
 
 Ferramentas internas úteis:
 
-- Navegar por instâncias:
+- Procurar instâncias:
 
   ```bash
   dns-sd -B _openclaw-gw._tcp local.

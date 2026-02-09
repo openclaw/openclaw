@@ -4,23 +4,17 @@ read_when:
   - Opdatering af OpenClaw
   - Noget går i stykker efter en opdatering
 title: "Opdatering"
-x-i18n:
-  source_path: install/updating.md
-  source_hash: c95c31766fb7de8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:35Z
 ---
 
 # Opdatering
 
-OpenClaw udvikler sig hurtigt (før “1.0”). Behandl opdateringer som drift af infrastruktur: opdater → kør tjek → genstart (eller brug `openclaw update`, som genstarter) → verificér.
+OpenClaw bevæger sig hurtigt (før “1.0”). Behandl opdateringer som forsendelsesinfrastruktur: opdatering → Kør kontrol → Genstart (eller brug `openclaw opdatering`, som genstarter) → Bekræft.
 
 ## Anbefalet: kør web-installationsprogrammet igen (opgrader på stedet)
 
-Den **foretrukne** opdateringsvej er at køre installationsprogrammet fra websitet igen. Det
-registrerer eksisterende installationer, opgraderer på stedet og kører `openclaw doctor` efter behov.
+Den **foretrækkede** opdateringsstien er at køre installationsprogrammet igen fra hjemmesiden. Det
+registrerer eksisterende installationer, opgraderinger på plads, og kører 'openclaw doctor', når
+er nødvendigt.
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -29,6 +23,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 Noter:
 
 - Tilføj `--no-onboard`, hvis du ikke vil have introduktionsguiden til at køre igen.
+
 - For **kildeinstallationer**, brug:
 
   ```bash
@@ -38,6 +33,7 @@ Noter:
   Installationsprogrammet vil `git pull --rebase` **kun**, hvis repoet er rent.
 
 - For **globale installationer** bruger scriptet `npm install -g openclaw@latest` under motorhjelmen.
+
 - Legacy-note: `clawdbot` er fortsat tilgængelig som kompatibilitetsshim.
 
 ## Før du opdaterer
@@ -75,7 +71,7 @@ Brug `--tag <dist-tag|version>` til et engangs-installationstag/-version.
 
 Se [Udviklingskanaler](/install/development-channels) for kanalsemantik og release-noter.
 
-Note: ved npm-installationer logger gatewayen et opdateringstip ved opstart (tjekker det aktuelle kanal-tag). Deaktiver via `update.checkOnStart: false`.
+Bemærk: på npm installerer, gateway logger en opdatering tip ved opstart (kontrollerer den aktuelle kanal tag). Deaktiver via `update.checkOnStart: false`.
 
 Derefter:
 
@@ -106,11 +102,11 @@ Den kører et nogenlunde sikkert opdateringsflow:
 - Installerer afhængigheder, bygger, bygger Control UI og kører `openclaw doctor`.
 - Genstarter gatewayen som standard (brug `--no-restart` for at springe over).
 
-Hvis du installerede via **npm/pnpm** (ingen git-metadata), vil `openclaw update` forsøge at opdatere via din pakkehåndtering. Hvis den ikke kan registrere installationen, så brug “Opdatering (global installation)” i stedet.
+Hvis du har installeret via **npm/pnpm** (ingen git metadata), 'openclaw update' vil forsøge at opdatere via din pakkehåndtering. Hvis det ikke kan registrere installationen, skal du bruge “Opdater (global installation)” i stedet.
 
 ## Opdatering (Control UI / RPC)
 
-Control UI har **Opdater & Genstart** (RPC: `update.run`). Den:
+Brugergrænsefladen til kontrol har \*\*Opdatér og genstart \*\* (RPC: `update.run`). D.:
 
 1. Kører samme kilde-opdateringsflow som `openclaw update` (kun git checkout).
 2. Skriver en genstarts-sentinel med en struktureret rapport (stdout/stderr-hale).
@@ -148,7 +144,7 @@ Noter:
 
 ## Kør altid: `openclaw doctor`
 
-Doctor er kommandoen til “sikker opdatering”. Den er bevidst kedelig: reparér + migrér + advar.
+Læge er kommandoen “sikker opdatering”. Det er bevidst kedeligt: reparation + migrere + advarsel.
 
 Note: hvis du er på en **kildeinstallation** (git checkout), vil `openclaw doctor` tilbyde at køre `openclaw update` først.
 
@@ -176,7 +172,7 @@ openclaw logs --follow
 
 Hvis du er overvåget:
 
-- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (brug `bot.molt.<profile>`; legacy `com.openclaw.*` virker stadig)
+- macOS launchd (app-bundtet LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (brug `bot.molt.<profile>`; arv `com.openclaw.*` stadig virker)
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` virker kun, hvis servicen er installeret; ellers kør `openclaw gateway install`.

@@ -4,19 +4,12 @@ read_when:
   - Du ändrar hur tidsstämplar visas för modellen eller användare
   - Du felsöker tidsformatering i meddelanden eller i systempromptens utdata
 title: "Datum och tid"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:10Z
 ---
 
 # Datum och tid
 
-OpenClaw använder som standard **värd‑lokal tid för transporttidsstämplar** och **användarens tidszon endast i systemprompten**.
-Leverantörers tidsstämplar bevaras så att verktyg behåller sin inbyggda semantik (aktuell tid är tillgänglig via `session_status`).
+OpenClaw standard är **värdlokal tid för transporttidsstämplar** och **användartidszon endast i systemprompten**.
+Leverantörens tidsstämplar bevaras så att verktygen behåller sin ursprungliga semantik (aktuell tid finns tillgänglig via `session_status`).
 
 ## Meddelandekuvert (lokal som standard)
 
@@ -45,7 +38,7 @@ Du kan åsidosätta detta beteende:
 - `envelopeTimezone: "utc"` använder UTC.
 - `envelopeTimezone: "local"` använder värdens tidszon.
 - `envelopeTimezone: "user"` använder `agents.defaults.userTimezone` (faller tillbaka till värdens tidszon).
-- Använd en explicit IANA‑tidszon (t.ex. `"America/Chicago"`) för en fast zon.
+- Använd en explicit IANA tidszon (t.ex., "Amerika/Chicago"\`) för en fast zon.
 - `envelopeTimestamp: "off"` tar bort absoluta tidsstämplar från kuvert‑huvuden.
 - `envelopeElapsed: "off"` tar bort suffix för förfluten tid (stilen `+2m`).
 
@@ -105,13 +98,13 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - `userTimezone` anger **användar‑lokal tidszon** för prompt‑kontext.
-- `timeFormat` styr **12/24‑timmarsvisning** i prompten. `auto` följer OS‑inställningar.
+- `timeFormat`-kontroller **12h/24h display** i prompten. `auto` följer OS prefs.
 
 ## Detektering av tidsformat (auto)
 
-När `timeFormat: "auto"` inspekterar OpenClaw OS‑inställningen (macOS/Windows)
-och faller tillbaka till lokalanpassad formatering. Detekterat värde **cachelagras per process**
-för att undvika upprepade systemanrop.
+När `timeFormat: "auto"`, OpenClaw inspekterar OS-inställningen (macOS/Windows)
+och faller tillbaka till lokalformatering. Det upptäckta värdet är **cachelagrat per process**
+för att undvika upprepade systemsamtal.
 
 ## Verktygslaster + kopplingar (rå leverantörstid + normaliserade fält)
 

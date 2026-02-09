@@ -3,18 +3,11 @@ summary: "Multi-agent လမ်းကြောင်းညွှန်ကြာ�
 title: Multi-Agent Routing
 read_when: "Gateway လုပ်ငန်းစဉ်တစ်ခုအတွင်း သီးခြားခွဲထားသော agents (workspace + auth) များကို များစွာ အသုံးပြုလိုသောအခါ။"
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:43Z
 ---
 
 # Multi-Agent Routing
 
-ရည်မှန်းချက်: လည်ပတ်နေသော Gateway တစ်ခုအတွင်း _သီးခြားခွဲထားသော_ agents များ (သီးသန့် workspace + `agentDir` + sessions) ကို များစွာ အသုံးပြုနိုင်စေရန်၊ ထို့အပြင် ချန်နယ်အကောင့်များ (ဥပမာ WhatsApp နှစ်ခု) ကိုလည်း များစွာ အသုံးပြုနိုင်ရန်။ အဝင်မက်ဆေ့ချ်များကို bindings များဖြင့် agent သို့ လမ်းကြောင်းညွှန်ကြားသည်။
+Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
 ## “agent တစ်ခု” ဆိုတာဘာလဲ?
 
@@ -24,19 +17,24 @@ x-i18n:
 - **State directory** (`agentDir`) — auth profiles၊ model registry နှင့် agent တစ်ခုချင်းစီအလိုက် config များအတွက်။
 - **Session store** (chat history + routing state) ကို `~/.openclaw/agents/<agentId>/sessions` အောက်တွင် သိမ်းဆည်းသည်။
 
-Auth profiles များသည် **agent တစ်ခုချင်းစီအလိုက်** ဖြစ်သည်။ Agent တစ်ခုစီသည် ကိုယ်ပိုင်အနေဖြင့် အောက်ပါနေရာမှ ဖတ်ရှုသည်–
+Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-အဓိက agent ၏ credentials များကို အလိုအလျောက် မမျှဝေပါ။ `agentDir` ကို agents များအကြား မည်သည့်အခါမှ ပြန်လည်အသုံးမပြုပါနှင့် (auth/session များ ထိခိုက်မှု ဖြစ်စေသည်)။ credentials မျှဝေလိုပါက `auth-profiles.json` ကို အခြား agent ၏ `agentDir` ထဲသို့ ကူးယူပါ။
+Main agent credentials are **not** shared automatically. Never reuse `agentDir`
+across agents (it causes auth/session collisions). If you want to share creds,
+copy `auth-profiles.json` into the other agent's `agentDir`.
 
-Skills များသည် workspace တစ်ခုချင်းစီ၏ `skills/` ဖိုလ်ဒါမှတဆင့် **agent တစ်ခုချင်းစီအလိုက်** ဖြစ်ပြီး၊ `~/.openclaw/skills` မှ shared skills များကို အသုံးပြုနိုင်သည်။ [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) ကိုကြည့်ပါ။
+Skills are per-agent via each workspace’s `skills/` folder, with shared skills
+available from `~/.openclaw/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
 
 Gateway သည် **agent တစ်ခု** (default) သို့မဟုတ် **agent များစွာ** ကို အတူတကွ လက်တွဲအသုံးပြုနိုင်သည်။
 
-**Workspace မှတ်ချက်:** agent တစ်ခုချင်းစီ၏ workspace သည် **default cwd** ဖြစ်ပြီး hard sandbox မဟုတ်ပါ။ Relative paths များသည် workspace အတွင်း ဖြေရှင်းသော်လည်း absolute paths များဖြင့် sandboxing မဖွင့်ထားပါက host အခြားနေရာများသို့ ရောက်ရှိနိုင်သည်။ [Sandboxing](/gateway/sandboxing) ကိုကြည့်ပါ။
+**Workspace note:** each agent’s workspace is the **default cwd**, not a hard
+sandbox. ၁။ Relative paths များသည် workspace အတွင်းမှာသာ resolve လုပ်ပေးပြီး absolute paths များကတော့ sandboxing မဖွင့်ထားပါက အခြား host location များကို ရောက်နိုင်ပါသည်။ ၂။ ကြည့်ရန်
+[Sandboxing](/gateway/sandboxing)။
 
 ## Paths (အမြန်မြေပုံ)
 
@@ -83,7 +81,7 @@ openclaw agents list --bindings
 
 ## WhatsApp နံပါတ်တစ်ခု၊ လူများစွာ (DM ခွဲခြားခြင်း)
 
-**WhatsApp အကောင့်တစ်ခုတည်း** ကို အသုံးပြုထားပြီး **WhatsApp DM များ မတူညီခြင်း** ကို agent မတူညီသို့ လမ်းကြောင်းညွှန်ကြားနိုင်သည်။ ပို့သူ၏ E.164 (ဥပမာ `+15551234567`) ကို `peer.kind: "dm"` ဖြင့် ကိုက်ညီစေသည်။ ပြန်စာများသည် WhatsApp နံပါတ်တစ်ခုတည်းမှသာ ထွက်သည် (agent တစ်ခုချင်းစီအလိုက် ပို့သူ အမှတ်အသား မရှိပါ)။
+၃။ **WhatsApp account တစ်ခုတည်း** ကို အသုံးပြုပြီး **မတူညီသော WhatsApp DMs များကို မတူညီသော agents များဆီသို့ route လုပ်နိုင်ပါသည်**။ ၄။ `peer.kind: "dm"` ဖြင့် sender E.164 (ဥပမာ `+15551234567`) ကို match လုပ်ပါ။ ၅။ Replies များသည် အတူတူသော WhatsApp နံပါတ်မှသာ ပြန်လာပါသည် (agent တစ်ခုချင်းစီအလိုက် sender identity မရှိပါ)။
 
 အရေးကြီးသော အသေးစိတ်ချက်: direct chats များသည် agent ၏ **main session key** သို့ ပေါင်းစည်းသွားသဖြင့် စစ်မှန်သော သီးခြားခွဲခြားမှုအတွက် **လူတစ်ယောက်လျှင် agent တစ်ခု** လိုအပ်သည်။
 
@@ -128,7 +126,7 @@ Bindings များသည် **ဆုံးဖြတ်နိုင်သေ�
 
 ## အကောင့်များစွာ / ဖုန်းနံပါတ်များစွာ
 
-**အကောင့်များစွာ** ကို ထောက်ပံ့သော ချန်နယ်များ (ဥပမာ WhatsApp) သည် login တစ်ခုချင်းစီကို ခွဲခြားရန် `accountId` ကို အသုံးပြုသည်။ `accountId` တစ်ခုချင်းစီကို agent မတူညီသို့ လမ်းကြောင်းညွှန်ကြားနိုင်သဖြင့် server တစ်ခုတည်းပေါ်တွင် ဖုန်းနံပါတ်များစွာကို session မရောနှောဘဲ လက်ခံနိုင်သည်။
+၆။ **account များစွာကို support လုပ်သော** channels များ (ဥပမာ WhatsApp) သည် login တစ်ခုချင်းစီကို ခွဲခြားသတ်မှတ်ရန် `accountId` ကို အသုံးပြုပါသည်။ ၇။ `accountId` တစ်ခုချင်းစီကို မတူညီသော agent ဆီသို့ route လုပ်နိုင်သောကြောင့် server တစ်လုံးတည်းက session မရောနှောဘဲ ဖုန်းနံပါတ်များစွာကို host လုပ်နိုင်ပါသည်။
 
 ## Concepts
 
@@ -316,7 +314,7 @@ Peer bindings များသည် အမြဲ အနိုင်ရသော�
 
 မှတ်ချက်များ–
 
-- Tool allow/deny lists များသည် **tools** ဖြစ်ပြီး skills မဟုတ်ပါ။ Skill တစ်ခုက binary ကို လည်ပတ်ရန်လိုပါက `exec` ကို ခွင့်ပြုထားပြီး binary သည် sandbox အတွင်း ရှိနေကြောင်း သေချာပါစေ။
+- ၈။ Tool allow/deny lists များသည် skills မဟုတ်ဘဲ **tools** ဖြစ်ပါသည်။ ၉။ Skill တစ်ခုက binary ကို run လုပ်ရန်လိုအပ်ပါက `exec` ကို allow လုပ်ထားပြီး binary သည် sandbox အတွင်းရှိနေကြောင်း သေချာပါစေ။
 - ပိုမိုတင်းကျပ်သော gating အတွက် `agents.list[].groupChat.mentionPatterns` ကို သတ်မှတ်ပြီး ချန်နယ်အတွက် group allowlists များကို ဖွင့်ထားပါ။
 
 ## Per-Agent Sandbox နှင့် Tool Configuration
@@ -356,7 +354,8 @@ v2026.1.6 မှစ၍ agent တစ်ခုချင်းစီတွင် �
 }
 ```
 
-မှတ်ချက်: `setupCommand` သည် `sandbox.docker` အောက်တွင် ရှိပြီး container ဖန်တီးချိန် တစ်ကြိမ်သာ လည်ပတ်သည်။ Resolved scope သည် `"shared"` ဖြစ်နေပါက agent အလိုက် `sandbox.docker.*` overrides များကို လျစ်လျူရှုပါမည်။
+၁၀။ မှတ်ချက်: `setupCommand` သည် `sandbox.docker` အောက်တွင်ရှိပြီး container ဖန်တီးချိန်တွင် တစ်ကြိမ်သာ run လုပ်ပါသည်။
+၁၁။ resolved scope သည် `"shared"` ဖြစ်သောအခါ per-agent `sandbox.docker.*` overrides များကို ignore လုပ်ပါသည်။
 
 **အကျိုးကျေးဇူးများ:**
 
@@ -364,7 +363,8 @@ v2026.1.6 မှစ၍ agent တစ်ခုချင်းစီတွင် �
 - **အရင်းအမြစ် ထိန်းချုပ်မှု**: agent တချို့ကို sandbox အတွင်းထားပြီး အခြားများကို host ပေါ်တွင် ထားနိုင်သည်
 - **မူဝါဒ လိုက်လျောညီထွေမှု**: agent တစ်ခုချင်းစီအလိုက် ခွင့်ပြုချက် မတူညီနိုင်သည်
 
-မှတ်ချက်: `tools.elevated` သည် **global** ဖြစ်ပြီး ပို့သူအခြေခံ ဖြစ်သည်; agent အလိုက် မပြင်ဆင်နိုင်ပါ။ Agent အလိုက် ကန့်သတ်ချက်များလိုအပ်ပါက `agents.list[].tools` ကို အသုံးပြု၍ `exec` ကို ငြင်းပယ်ပါ။
-Group ကို ရည်ညွှန်းလိုပါက @mentions များကို ရည်ရွယ်ထားသော agent သို့ သေချာစွာ ချိတ်ဆက်နိုင်ရန် `agents.list[].groupChat.mentionPatterns` ကို အသုံးပြုပါ။
+၁၂။ မှတ်ချက်: `tools.elevated` သည် **global** ဖြစ်ပြီး sender-based ဖြစ်ပါသည်။ agent တစ်ခုချင်းစီအလိုက် configure လုပ်၍ မရပါ။
+၁၃။ Per-agent boundaries လိုအပ်ပါက `agents.list[].tools` ကို အသုံးပြုပြီး `exec` ကို deny လုပ်ပါ။
+၁၄။ Group targeting အတွက် `agents.list[].groupChat.mentionPatterns` ကို အသုံးပြုပါ၊ ထို့ကြောင့် @mentions များသည် ရည်ရွယ်ထားသော agent ဆီသို့ သန့်ရှင်းစွာ map လုပ်နိုင်ပါသည်။
 
 အသေးစိတ် ဥပမာများအတွက် [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) ကိုကြည့်ပါ။

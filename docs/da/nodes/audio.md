@@ -3,13 +3,6 @@ summary: "Hvordan indgående lyd/voicenotes downloades, transskriberes og indsæ
 read_when:
   - Ændring af lydtransskription eller mediehåndtering
 title: "Lyd og Voicenotes"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:29Z
 ---
 
 # Lyd / Voicenotes — 2026-01-17
@@ -37,9 +30,9 @@ auto‑detekterer OpenClaw i denne rækkefølge og stopper ved den første funge
 2. **Gemini CLI** (`gemini`) med `read_many_files`
 3. **Udbydernøgler** (OpenAI → Groq → Deepgram → Google)
 
-For at deaktivere auto‑detektion, sæt `tools.media.audio.enabled: false`.
-For at tilpasse, sæt `tools.media.audio.models`.
-Bemærk: Binær detektion er best‑effort på tværs af macOS/Linux/Windows; sørg for, at CLI’en er på `PATH` (vi udvider `~`), eller sæt en eksplicit CLI‑model med fuld kommandosti.
+For at deaktivere auto-detektion, angiv `tools.media.audio.enabled: false`.
+For at tilpasse, angiv `tools.media.audio.models`.
+Bemærk: Binær registrering er best-effort på tværs af macOS/Linux/Windows; sørg for, at CLI’en er på `PATH` (vi udvider `~`), eller angiv en eksplicit CLI-model med fuld kommandosti.
 
 ## Konfigurationseksempler
 
@@ -107,8 +100,8 @@ Bemærk: Binær detektion er best‑effort på tværs af macOS/Linux/Windows; s�
 - Deepgram opfanger `DEEPGRAM_API_KEY`, når `provider: "deepgram"` bruges.
 - Deepgram‑opsætningsdetaljer: [Deepgram (lydtransskription)](/providers/deepgram).
 - Lydudbydere kan tilsidesætte `baseUrl`, `headers` og `providerOptions` via `tools.media.audio`.
-- Standard størrelsesgrænse er 20MB (`tools.media.audio.maxBytes`). For stor lyd springes over for den model, og næste post prøves.
-- Standard `maxChars` for lyd er **ikke sat** (fuld transskription). Sæt `tools.media.audio.maxChars` eller pr. post `maxChars` for at trimme output.
+- Standard størrelse cap er 20MB (`tools.media.audio.maxBytes`). Oversize lyd er sprunget over for denne model og den næste post er prøvet.
+- Standard `maxChars` for lyd er **unset** (full transcript). Indstil `tools.media.audio.maxChars` eller per-entry `maxChars` for at trimme output.
 - OpenAI’s auto‑standard er `gpt-4o-mini-transcribe`; sæt `model: "gpt-4o-transcribe"` for højere nøjagtighed.
 - Brug `tools.media.audio.attachments` til at behandle flere voicenotes (`mode: "all"` + `maxAttachments`).
 - Transskriptionen er tilgængelig for skabeloner som `{{Transcript}}`.
@@ -116,6 +109,6 @@ Bemærk: Binær detektion er best‑effort på tværs af macOS/Linux/Windows; s�
 
 ## Faldgruber
 
-- Scope‑regler bruger first‑match‑wins. `chatType` normaliseres til `direct`, `group` eller `room`.
+- Anvendelsesregler bruger førsteklasses gevinster. `chatType` er normaliseret til `direct`, `group`, eller `room`.
 - Sørg for, at din CLI afslutter med status 0 og udskriver ren tekst; JSON skal tilpasses via `jq -r .text`.
 - Hold timeouts rimelige (`timeoutSeconds`, standard 60s) for at undgå at blokere svarkøen.

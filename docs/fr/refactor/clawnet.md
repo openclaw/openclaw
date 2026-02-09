@@ -4,13 +4,6 @@ read_when:
   - Planifier un protocole réseau unifié pour les nœuds et les clients opérateurs
   - Revoir les validations, l’appairage, TLS et la présence entre appareils
 title: "Refonte de Clawnet"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:06Z
 ---
 
 # Refonte de Clawnet (unification protocole + auth)
@@ -51,7 +44,7 @@ Document unique et rigoureux pour :
 
 ## Deux protocoles
 
-### 1) Gateway WebSocket (plan de contrôle)
+### 1. Gateway WebSocket (plan de contrôle)
 
 - Surface API complète : config, canaux, modèles, sessions, exécutions d’agents, logs, nœuds, etc.
 - Liaison par défaut : loopback. Accès distant via SSH/Tailscale.
@@ -62,7 +55,7 @@ Document unique et rigoureux pour :
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (transport des nœuds)
+### 2. Bridge (transport des nœuds)
 
 - Surface à liste blanche étroite, identité de nœud + appairage.
 - JSONL sur TCP ; TLS optionnel + pinning d’empreinte de certificat.
@@ -410,7 +403,7 @@ Choisir avant l’implémentation pour éviter les dérives.
    - Étendre le TXT Bonjour actuel pour inclure l’empreinte TLS WS + des indices de rôle.
    - Traiter comme de simples indices de localisation.
 
-5. Validation inter‑réseau
+5. Approbation du réseau croisé
    - Diffusion à tous les clients opérateurs ; l’UI active affiche la modale.
    - La première réponse l’emporte ; la Gateway garantit l’atomicité.
 

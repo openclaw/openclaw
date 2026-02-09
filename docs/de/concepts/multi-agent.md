@@ -3,13 +3,6 @@ summary: "Multi-Agent-Routing: isolierte Agenten, Kanal-Konten und Bindungen"
 title: Multi-Agent-Routing
 read_when: "Sie möchten mehrere isolierte Agenten (Workspaces + Auth) in einem Gateway-Prozess."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:04Z
 ---
 
 # Multi-Agent-Routing
@@ -44,7 +37,7 @@ sandbox. Relative Pfade werden innerhalb des Workspaces aufgelöst, absolute Pfa
 andere Host-Speicherorte erreichen, sofern sandboxing nicht aktiviert ist. Siehe
 [Sandboxing](/gateway/sandboxing).
 
-## Pfade (Kurzüberblick)
+## Pfade (Schnellkarte)
 
 - Konfiguration: `~/.openclaw/openclaw.json` (oder `OPENCLAW_CONFIG_PATH`)
 - State-Verzeichnis: `~/.openclaw` (oder `OPENCLAW_STATE_DIR`)

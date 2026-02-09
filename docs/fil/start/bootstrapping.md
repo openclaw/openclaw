@@ -6,20 +6,13 @@ read_when:
   - Pag-debug ng setup ng identity sa onboarding
 title: "Bootstrapping ng Agent"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Bootstrapping ng Agent
 
-Ang bootstrapping ay ang ritwal ng **unang takbo** na naghahanda ng agent workspace at
-nangongolekta ng mga detalye ng identity. Nangyayari ito pagkatapos ng onboarding, kapag
-unang beses na nagsisimula ang agent.
+Bootstrapping is the **first‑run** ritual that prepares an agent workspace and
+collects identity details. It happens after onboarding, when the agent starts
+for the first time.
 
 ## Ano ang ginagawa ng bootstrapping
 
@@ -33,9 +26,9 @@ Sa unang takbo ng agent, bina-bootstrap ng OpenClaw ang workspace (default
 
 ## Saan ito tumatakbo
 
-Palaging tumatakbo ang bootstrapping sa **gateway host**. Kung kumokonekta ang macOS app sa
-isang remote Gateway, ang workspace at mga bootstrapping file ay nasa remote
-na makinang iyon.
+Bootstrapping always runs on the **gateway host**. If the macOS app connects to
+a remote Gateway, the workspace and bootstrapping files live on that remote
+machine.
 
 <Note>
 Kapag tumatakbo ang Gateway sa ibang makina, i-edit ang mga workspace file sa host ng Gateway

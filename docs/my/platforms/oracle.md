@@ -5,13 +5,6 @@ read_when:
   - OpenClaw အတွက် ကုန်ကျစရိတ်နည်းသော VPS hosting ကို ရှာဖွေနေစဉ်
   - သေးငယ်သော ဆာဗာပေါ်တွင် 24/7 OpenClaw ကို အသုံးပြုလိုသည့်အခါ
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:59Z
 ---
 
 # Oracle Cloud (OCI) ပေါ်ရှိ OpenClaw
@@ -27,13 +20,13 @@ Oracle ၏ free tier သည် OpenClaw အတွက် (အထူးသဖြ�
 
 ## ကုန်ကျစရိတ် နှိုင်းယှဉ်ချက် (2026)
 
-| Provider     | Plan            | Specs                  | Price/mo | Notes                 |
-| ------------ | --------------- | ---------------------- | -------- | --------------------- |
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0       | ARM, limited capacity |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4     | Cheapest paid option  |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6       | Easy UI, good docs    |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6       | Many locations        |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5       | Now part of Akamai    |
+| Provider     | Plan            | Specs                  | Price/mo             | Notes                 |
+| ------------ | --------------- | ---------------------- | -------------------- | --------------------- |
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0                   | ARM, limited capacity |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | ~ $4 | Cheapest paid option  |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6                   | Easy UI, good docs    |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6                   | Many locations        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5                   | Now part of Akamai    |
 
 ---
 
@@ -43,7 +36,7 @@ Oracle ၏ free tier သည် OpenClaw အတွက် (အထူးသဖြ�
 - Tailscale အကောင့် ([tailscale.com](https://tailscale.com) တွင် အခမဲ့)
 - ~ မိနစ် 30 ခန့်
 
-## 1) OCI Instance တစ်ခု ဖန်တီးခြင်း
+## 1. OCI Instance တစ်ခု ဖန်တီးခြင်း
 
 1. [Oracle Cloud Console](https://cloud.oracle.com/) သို့ လော့ဂ်အင် ဝင်ပါ
 2. **Compute → Instances → Create Instance** သို့ သွားပါ
@@ -58,9 +51,9 @@ Oracle ၏ free tier သည် OpenClaw အတွက် (အထူးသဖြ�
 4. **Create** ကို နှိပ်ပါ
 5. public IP address ကို မှတ်သားထားပါ
 
-**အကြံပြုချက်:** Instance ဖန်တီးရာတွင် "Out of capacity" ဟု မအောင်မြင်ပါက availability domain ကို ပြောင်းကြည့်ပါ သို့မဟုတ် နောက်မှ ထပ်ကြိုးစားပါ။ Free tier စွမ်းရည်မှာ ကန့်သတ်ထားပါသည်။
+**အကြံပြုချက်:** instance ဖန်တီးရာတွင် "Out of capacity" ဟုပြသပြီး မအောင်မြင်ပါက availability domain ကိုပြောင်းကြည့်ပါ သို့မဟုတ် နောက်မှ ပြန်ကြိုးစားပါ။ Free tier ၏ capacity သည် ကန့်သတ်ထားပါသည်။
 
-## 2) ချိတ်ဆက်ခြင်းနှင့် Update ပြုလုပ်ခြင်း
+## 2. ချိတ်ဆက်ခြင်းနှင့် Update ပြုလုပ်ခြင်း
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **မှတ်ချက်:** ARM ပေါ်တွင် dependency အချို့ကို compile လုပ်ရန် `build-essential` လိုအပ်ပါသည်။
 
-## 3) User နှင့် Hostname ကို ပြင်ဆင်ခြင်း
+## 3. User နှင့် Hostname ကို ပြင်ဆင်ခြင်း
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Tailscale ထည့်သွင်းခြင်း
+## 4. Tailscale ထည့်သွင်းခြင်း
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,20 +96,20 @@ tailscale status
 
 **ယခုမှစ၍ Tailscale ဖြင့်သာ ချိတ်ဆက်ပါ:** `ssh ubuntu@openclaw` (သို့မဟုတ် Tailscale IP ကို အသုံးပြုပါ)
 
-## 5) OpenClaw ထည့်သွင်းခြင်း
+## 5. OpenClaw ထည့်သွင်းခြင်း
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
 source ~/.bashrc
 ```
 
-"How do you want to hatch your bot?" ဟု မေးလာပါက **"Do this later"** ကို ရွေးပါ။
+"How do you want to hatch your bot?" ဟုပြမေးသောအခါ **"Do this later"** ကို ရွေးချယ်ပါ။
 
 > မှတ်ချက်: ARM-native build ပြဿနာများ ကြုံပါက Homebrew ကို မသုံးမီ system packages (ဥပမာ `sudo apt install -y build-essential`) ဖြင့် စတင်ပါ။
 
-## 6) Gateway (loopback + token auth) ကို ပြင်ဆင်ပြီး Tailscale Serve ကို ဖွင့်ခြင်း
+## 6. Gateway (loopback + token auth) ကို ပြင်ဆင်ပြီး Tailscale Serve ကို ဖွင့်ခြင်း
 
-ပုံမှန်အားဖြင့် token auth ကို အသုံးပြုပါ။ ၎င်းသည် ခန့်မှန်းလွယ်ကူပြီး “insecure auth” Control UI flags မလိုအပ်ပါ။
+default အနေဖြင့် token auth ကို အသုံးပြုပါ။ ၎င်းသည် ခန့်မှန်းနိုင်ပြီး “insecure auth” Control UI flags မလိုအပ်စေပါ။
 
 ```bash
 # Keep the Gateway private on the VM
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) အတည်ပြုစစ်ဆေးခြင်း
+## 7. အတည်ပြုစစ်ဆေးခြင်း
 
 ```bash
 # Check version
@@ -149,9 +142,9 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) VCN Security ကို တင်းကျပ်စေခြင်း
+## 8. VCN Security ကို တင်းကျပ်စေခြင်း
 
-အရာအားလုံး အလုပ်လုပ်နေပြီဆိုပါက Tailscale မှလွဲ၍ traffic အားလုံးကို ပိတ်ရန် VCN ကို တင်းကျပ်စေပါ။ OCI ၏ Virtual Cloud Network သည် network edge တွင် firewall အဖြစ် လုပ်ဆောင်ပြီး traffic သည် instance သို့ မရောက်မီပင် ပိတ်ဆို့ပါသည်။
+အရာအားလုံး အလုပ်လုပ်နေပြီဖြစ်သောကြောင့် Tailscale မှလွဲ၍ traffic အားလုံးကို ပိတ်ရန် VCN ကို lock down လုပ်ပါ။ OCI ၏ Virtual Cloud Network သည် network edge တွင် firewall အဖြစ် လုပ်ဆောင်ပြီး — traffic သည် instance ထိ မရောက်မီပင် ပိတ်ဆို့ထားပါသည်။
 
 1. OCI Console တွင် **Networking → Virtual Cloud Networks** သို့ သွားပါ
 2. သင့် VCN ကို နှိပ်ပြီး → **Security Lists** → Default Security List
@@ -159,7 +152,7 @@ curl http://localhost:18789
    - `0.0.0.0/0 UDP 41641` (Tailscale)
 4. default egress rules (အပြင်ဘက်သို့ အားလုံး ခွင့်ပြုထားခြင်း) ကို ထားရှိပါ
 
-ဤအဆင့်သည် port 22 ရှိ SSH၊ HTTP၊ HTTPS နှင့် အခြားအားလုံးကို network edge တွင် ပိတ်ဆို့ပေးပါသည်။ ယခုမှစ၍ Tailscale ဖြင့်သာ ချိတ်ဆက်နိုင်ပါသည်။
+၎င်းသည် network edge တွင် SSH (port 22), HTTP, HTTPS နှင့် အခြားအားလုံးကို ပိတ်ဆို့ပါသည်။ ယခုမှစပြီး Tailscale မှတစ်ဆင့်သာ ချိတ်ဆက်နိုင်ပါမည်။
 
 ---
 
@@ -173,7 +166,7 @@ https://openclaw.<tailnet-name>.ts.net/
 
 `<tailnet-name>` ကို သင့် tailnet အမည်ဖြင့် အစားထိုးပါ ( `tailscale status` တွင် မြင်နိုင်ပါသည် )။
 
-SSH tunnel မလိုအပ်ပါ။ Tailscale မှ ပံ့ပိုးပေးသည်မှာ—
+SSH tunnel မလိုအပ်ပါ။ Tailscale သည် အောက်ပါအရာများကို ပံ့ပိုးပေးပါသည်:
 
 - HTTPS encryption (အလိုအလျောက် certificate များ)
 - Tailscale identity ဖြင့် authentication
@@ -237,7 +230,7 @@ ssh -L 18789:127.0.0.1:18789 ubuntu@openclaw
 
 ### Instance ဖန်တီးမှု မအောင်မြင်ပါ ("Out of capacity")
 
-Free tier ARM instance များမှာ လူကြိုက်များပါသည်။ အောက်ပါအချက်များကို စမ်းကြည့်ပါ—
+Free tier ARM instances များသည် လူကြိုက်များပါသည်။ စမ်းကြည့်ပါ:
 
 - availability domain ကို ပြောင်းပါ
 - လူနည်းချိန် (မနက်စောစော) တွင် ထပ်ကြိုးစားပါ
@@ -276,13 +269,13 @@ systemctl --user restart openclaw-gateway
 
 ### ARM binary ပြဿနာများ
 
-ကိရိယာအချို့တွင် ARM build မရှိနိုင်ပါ။ အောက်ပါတို့ကို စစ်ဆေးပါ—
+အချို့သော tools များတွင် ARM builds မရှိနိုင်ပါ။ စစ်ဆေးပါ:
 
 ```bash
 uname -m  # Should show aarch64
 ```
 
-npm packages အများစုမှာ ပြဿနာမရှိပါ။ Binary များအတွက် `linux-arm64` သို့မဟုတ် `aarch64` release များကို ရှာပါ။
+npm packages အများစုမှာ ပြဿနာမရှိဘဲ အလုပ်လုပ်ပါသည်။ binaries များအတွက် `linux-arm64` သို့မဟုတ် `aarch64` releases များကို ရှာဖွေပါ။
 
 ---
 

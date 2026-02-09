@@ -1,17 +1,10 @@
 ---
-summary: „Models-CLI: auflisten, setzen, Aliasse, Fallbacks, scannen, Status“
+summary: "„Models-CLI: auflisten, setzen, Aliasse, Fallbacks, scannen, Status“"
 read_when:
   - Hinzufügen oder Ändern der Models-CLI (models list/set/scan/aliases/fallbacks)
   - Ändern des Verhaltens von Modell-Fallbacks oder der Auswahl-UX
   - Aktualisieren der Model-Scan-Probes (Tools/Bilder)
-title: „Models-CLI“
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:02Z
+title: "„Models-CLI“"
 ---
 
 # Models-CLI

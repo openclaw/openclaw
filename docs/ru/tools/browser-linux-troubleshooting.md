@@ -2,13 +2,6 @@
 summary: "Исправление проблем запуска CDP Chrome/Brave/Edge/Chromium для управления браузером OpenClaw в Linux"
 read_when: "Управление браузером не работает в Linux, особенно со snap-версией Chromium"
 title: "Устранение неполадок браузера"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:02Z
 ---
 
 # Устранение неполадок браузера (Linux)
@@ -119,14 +112,14 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### Справочник конфигурации
 
-| Параметр                 | Описание                                                                      | Значение по умолчанию                                                       |
-| ------------------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `browser.enabled`        | Включить управление браузером                                                 | `true`                                                                      |
+| Параметр                 | Описание                                                                                         | Значение по умолчанию                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `browser.enabled`        | Включить управление браузером                                                                    | `true`                                                                                         |
 | `browser.executablePath` | Путь к бинарному файлу браузера на базе Chromium (Chrome/Brave/Edge/Chromium) | auto-detected (предпочитает браузер по умолчанию, если он на базе Chromium) |
-| `browser.headless`       | Запуск без GUI                                                                | `false`                                                                     |
-| `browser.noSandbox`      | Добавить флаг `--no-sandbox` (требуется для некоторых конфигураций Linux)     | `false`                                                                     |
-| `browser.attachOnly`     | Не запускать браузер, только подключаться к существующему                     | `false`                                                                     |
-| `browser.cdpPort`        | Порт Chrome DevTools Protocol                                                 | `18800`                                                                     |
+| `browser.headless`       | Запуск без GUI                                                                                   | `false`                                                                                        |
+| `browser.noSandbox`      | Добавить флаг `--no-sandbox` (требуется для некоторых конфигураций Linux)     | `false`                                                                                        |
+| `browser.attachOnly`     | Не запускать браузер, только подключаться к существующему                                        | `false`                                                                                        |
+| `browser.cdpPort`        | Порт Chrome DevTools Protocol                                                                    | `18800`                                                                                        |
 
 ### Проблема: «Chrome extension relay is running, but no tab is connected»
 

@@ -5,18 +5,11 @@ read_when:
   - Tìm kiếm các ví dụ cấu hình
   - Thiết lập OpenClaw lần đầu
 title: "Ví dụ cấu hình"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:56Z
 ---
 
 # Ví dụ cấu hình
 
-Các ví dụ bên dưới được căn chỉnh theo schema cấu hình hiện tại. Để tham khảo đầy đủ và ghi chú theo từng trường, xem [Configuration](/gateway/configuration).
+Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
 ## Khởi động nhanh
 
@@ -55,7 +48,7 @@ Lưu vào `~/.openclaw/openclaw.json` và bạn có thể DM cho bot từ số �
 
 ## Ví dụ mở rộng (các tùy chọn chính)
 
-> JSON5 cho phép dùng chú thích và dấu phẩy ở cuối. JSON thông thường cũng hoạt động.
+> JSON5 lets you use comments and trailing commas. Regular JSON works too.
 
 ```json5
 {
@@ -608,6 +601,6 @@ Nếu có hơn một người có thể DM bot của bạn (nhiều mục trong 
 ## Mẹo
 
 - Nếu bạn đặt `dmPolicy: "open"`, danh sách `allowFrom` tương ứng phải bao gồm `"*"`.
-- ID của nhà cung cấp khác nhau (số điện thoại, ID người dùng, ID kênh). Hãy dùng tài liệu của nhà cung cấp để xác nhận định dạng.
+- ID của nhà cung cấp khác nhau (số điện thoại, ID người dùng, ID kênh). Use the provider docs to confirm the format.
 - Các mục tùy chọn có thể thêm sau: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
 - Xem [Providers](/channels/whatsapp) và [Troubleshooting](/gateway/troubleshooting) để biết thêm ghi chú thiết lập chi tiết.

@@ -3,13 +3,6 @@ summary: "پروجیکٹ کی ابتدا، تعاون کنندگان، اور ل
 read_when:
   - آپ کو پروجیکٹ کی پس منظر کی کہانی یا تعاون کنندگان کے کریڈٹس جاننے ہوں
 title: "کریڈٹس"
-x-i18n:
-  source_path: reference/credits.md
-  source_hash: bddc33d4f789099c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 ## نام
@@ -31,4 +24,4 @@ OpenClaw = CLAW + TARDIS، کیونکہ ہر خلائی لابسٹر کو وقت
 
 MIT - سمندر میں آزاد لابسٹر کی طرح آزاد۔
 
-> "ہم سب دراصل اپنے ہی پرامپٹس کے ساتھ کھیل رہے ہیں۔" (ایک AI، غالباً ٹوکنز کے نشے میں)
+> "We are all just playing with our own prompts." (An AI, probably high on tokens)

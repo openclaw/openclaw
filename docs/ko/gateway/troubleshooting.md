@@ -4,13 +4,6 @@ read_when:
   - 문제 해결 허브에서 더 깊은 진단을 위해 이곳으로 안내된 경우
   - 정확한 명령어가 포함된 안정적인 증상 기반 런북 섹션이 필요한 경우
 title: "문제 해결"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:24Z
 ---
 
 # Gateway 문제 해결
@@ -48,9 +41,9 @@ openclaw config get channels
 openclaw logs --follow
 ```
 
-확인할 사항:
+Look for:
 
-- 다이렉트 메시지 발신자에 대한 페어링 대기 상태.
+- Pairing pending for DM senders.
 - 그룹 멘션 게이팅 (`requireMention`, `mentionPatterns`).
 - 채널/그룹 허용 목록 불일치.
 
@@ -78,7 +71,7 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-확인할 사항:
+Look for:
 
 - 올바른 프로브 URL 과 대시보드 URL.
 - 클라이언트와 Gateway(게이트웨이) 간 인증 모드/토큰 불일치.
@@ -108,7 +101,7 @@ openclaw doctor
 openclaw gateway status --deep
 ```
 
-확인할 사항:
+Look for:
 
 - 종료 힌트가 포함된 `Runtime: stopped`.
 - 서비스 구성 불일치 (`Config (cli)` vs `Config (service)`).
@@ -138,7 +131,7 @@ openclaw logs --follow
 openclaw config get channels
 ```
 
-확인할 사항:
+Look for:
 
 - 다이렉트 메시지 정책 (`pairing`, `allowlist`, `open`, `disabled`).
 - 그룹 허용 목록 및 멘션 요구 사항.
@@ -169,7 +162,7 @@ openclaw system heartbeat last
 openclaw logs --follow
 ```
 
-확인할 사항:
+Look for:
 
 - Cron 활성화 여부 및 다음 깨우기 시점 존재 여부.
 - 작업 실행 이력 상태 (`ok`, `skipped`, `error`).
@@ -200,7 +193,7 @@ openclaw logs --follow
 openclaw status
 ```
 
-확인할 사항:
+Look for:
 
 - 예상되는 기능을 갖춘 노드가 온라인인지 여부.
 - 카메라/마이크/위치/화면에 대한 OS 권한 부여.
@@ -231,7 +224,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-확인할 사항:
+Look for:
 
 - 유효한 브라우저 실행 파일 경로.
 - CDP 프로파일 접근 가능 여부.
@@ -254,7 +247,7 @@ openclaw doctor
 
 업그레이드 이후의 대부분의 장애는 구성 드리프트 또는 더 엄격해진 기본값이 이제 적용되기 때문입니다.
 
-### 1) 인증 및 URL 오버라이드 동작 변경
+### 1. 인증 및 URL 오버라이드 동작 변경
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ openclaw config get gateway.auth.mode
 - `gateway connect failed:` → 잘못된 URL 대상.
 - `unauthorized` → 엔드포인트는 도달 가능하지만 인증이 잘못됨.
 
-### 2) 바인드 및 인증 가드레일이 더 엄격해짐
+### 2. 바인드 및 인증 가드레일이 더 엄격해짐
 
 ```bash
 openclaw config get gateway.bind
@@ -292,7 +285,7 @@ openclaw logs --follow
 - `refusing to bind gateway ... without auth` → 바인드+인증 불일치.
 - 런타임이 실행 중인 상태에서의 `RPC probe: failed` → Gateway 는 살아 있으나 현재 인증/URL 로는 접근 불가.
 
-### 3) 페어링 및 디바이스 식별 상태 변경
+### 3. 페어링 및 디바이스 식별 상태 변경
 
 ```bash
 openclaw devices list

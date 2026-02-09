@@ -4,13 +4,6 @@ read_when:
   - Al actualizar el comportamiento o los valores predeterminados de reintento del proveedor
   - Al depurar errores de envío del proveedor o límites de velocidad
 title: "Política de reintentos"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:08Z
 ---
 
 # Política de reintentos

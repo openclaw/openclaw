@@ -3,13 +3,6 @@ summary: "OpenClaw 是一個可在任何 OS 上執行的 AI 代理程式多通�
 read_when:
   - 向新手介紹 OpenClaw
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:24Z
 ---
 
 # OpenClaw 🦞
@@ -31,9 +24,10 @@ x-i18n:
 
 > _「EXFOLIATE! EXFOLIATE!」_ — 可能是一隻太空龍蝦
 
-<p align="center">
-  <strong>跨 WhatsApp、Telegram、Discord、iMessage 等的任何 OS AI 代理程式 Gateway 閘道器。</strong><br />
+<p align="center"><strong>跨 WhatsApp、Telegram、Discord、iMessage 等的任何 OS AI 代理程式 Gateway 閘道器。</strong><br />
   傳送一則訊息，從口袋裡就能取得代理程式回應。外掛可加入 Mattermost 等更多通道。
+<br />
+  Send a message, get an agent response from your pocket. Plugins add Mattermost and more.
 </p>
 
 <Columns>
@@ -41,18 +35,18 @@ x-i18n:
     安裝 OpenClaw，數分鐘內啟動 Gateway 閘道器。
   </Card>
   <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
-    使用 `openclaw onboard` 與配對流程進行引導式設定。
+    Guided setup with `openclaw onboard` and pairing flows.
   </Card>
   <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
-    啟動瀏覽器儀表板，用於聊天、設定與工作階段。
+    Launch the browser dashboard for chat, config, and sessions.
   </Card>
 </Columns>
 
 ## What is OpenClaw?
 
-OpenClaw 是一個 **自架的 Gateway 閘道器**，可將你喜愛的聊天應用程式——WhatsApp、Telegram、Discord、iMessage 等——連接到像 Pi 這樣的 AI 程式設計代理程式。你只需在自己的機器（或伺服器）上執行單一 Gateway 閘道器程序，它就會成為你的訊息應用程式與隨時可用的 AI 助手之間的橋樑。
+OpenClaw 是一個 **自架的 Gateway 閘道器**，可將你喜愛的聊天應用程式——WhatsApp、Telegram、Discord、iMessage 等——連接到像 Pi 這樣的 AI 程式設計代理程式。你只需在自己的機器（或伺服器）上執行單一 Gateway 閘道器程序，它就會成為你的訊息應用程式與隨時可用的 AI 助手之間的橋樑。 You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
 
-**適合誰使用？** 想要隨時隨地傳訊與個人 AI 助手互動的開發者與進階使用者——同時不放棄對資料的控制，也不依賴託管服務。
+**Who is it for?** Developers and power users who want a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
 
 **有何不同？**
 
@@ -75,7 +69,7 @@ flowchart LR
   B --> G["iOS and Android nodes"]
 ```
 
-Gateway 閘道器是工作階段、路由與通道連線的單一事實來源。
+The Gateway is the single source of truth for sessions, routing, and channel connections.
 
 ## Key capabilities
 
@@ -93,7 +87,7 @@ Gateway 閘道器是工作階段、路由與通道連線的單一事實來源。
     傳送與接收圖片、音訊與文件。
   </Card>
   <Card title="Web Control UI" icon="monitor">
-    用於聊天、設定、工作階段與節點的瀏覽器儀表板。
+    Browser dashboard for chat, config, sessions, and nodes.
   </Card>
   <Card title="Mobile nodes" icon="smartphone">
     配對 iOS 與 Android 節點，支援 Canvas。
@@ -121,13 +115,13 @@ Gateway 閘道器是工作階段、路由與通道連線的單一事實來源。
   </Step>
 </Steps>
 
-需要完整安裝與開發設定嗎？請參閱 [Quick start](/start/quickstart)。
+需要完整安裝與開發設定嗎？請參閱 [Quick start](/start/quickstart)。 See [Quick start](/start/quickstart).
 
 ## Dashboard
 
 Gateway 閘道器啟動後，開啟瀏覽器 Control UI。
 
-- 本機預設：[http://127.0.0.1:18789/](http://127.0.0.1:18789/)
+- Local default: [http://127.0.0.1:18789/](http://127.0.0.1:18789/)
 - 遠端存取：[Web surfaces](/web) 與 [Tailscale](/gateway/tailscale)
 
 <p align="center">
@@ -162,7 +156,7 @@ Gateway 閘道器啟動後，開啟瀏覽器 Control UI。
     依使用情境整理的所有文件與指南。
   </Card>
   <Card title="Configuration" href="/gateway/configuration" icon="settings">
-    核心 Gateway 閘道器設定、權杖與提供者設定。
+    Core Gateway settings, tokens, and provider config.
   </Card>
   <Card title="Remote access" href="/gateway/remote" icon="globe">
     SSH 與 tailnet 的存取模式。
@@ -174,7 +168,7 @@ Gateway 閘道器啟動後，開啟瀏覽器 Control UI。
     具備配對與 Canvas 的 iOS 與 Android 節點。
   </Card>
   <Card title="Help" href="/help" icon="life-buoy">
-    常見修復方式與疑難排解入口。
+    Common fixes and troubleshooting entry point.
   </Card>
 </Columns>
 
@@ -185,15 +179,15 @@ Gateway 閘道器啟動後，開啟瀏覽器 Control UI。
     完整的通道、路由與媒體功能。
   </Card>
   <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
-    工作區隔離與每個代理程式的工作階段。
+    Workspace isolation and per-agent sessions.
   </Card>
   <Card title="Security" href="/gateway/security" icon="shield">
-    權杖、允許清單與安全控制。
+    Tokens, allowlists, and safety controls.
   </Card>
   <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
-    Gateway 閘道器診斷與常見錯誤。
+    Gateway diagnostics and common errors.
   </Card>
   <Card title="About and credits" href="/reference/credits" icon="info">
-    專案起源、貢獻者與授權。
+    Project origins, contributors, and license.
   </Card>
 </Columns>

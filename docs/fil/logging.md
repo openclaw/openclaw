@@ -5,13 +5,6 @@ read_when:
   - Gusto mong i-configure ang mga log level o format
   - Nagpa‑pag-troubleshoot ka at kailangan mong mabilis na mahanap ang mga log
 title: "Logging"
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:01Z
 ---
 
 # Logging
@@ -75,7 +68,7 @@ openclaw doctor
 
 ### Control UI (web)
 
-Ang tab na **Logs** ng Control UI ay nagta-tail ng parehong file gamit ang `logs.tail`.
+Ang **Logs** tab ng Control UI ay nagta-tail ng parehong file gamit ang `logs.tail`.
 Tingnan ang [/web/control-ui](/web/control-ui) kung paano ito buksan.
 
 ### Channel-only logs
@@ -90,8 +83,8 @@ openclaw channels logs --channel whatsapp
 
 ### File logs (JSONL)
 
-Ang bawat linya sa log file ay isang JSON object. Pini-parse ng CLI at Control UI ang mga
-entry na ito para mag-render ng structured output (oras, level, subsystem, mensahe).
+Each line in the log file is a JSON object. Ang CLI at Control UI ay nagpa-parse ng mga
+entry na ito upang mag-render ng structured output (oras, antas, subsystem, mensahe).
 
 ### Console output
 
@@ -147,10 +140,9 @@ Ang redaction ay nakakaapekto **sa console output lamang** at hindi binabago ang
 
 ## Diagnostics + OpenTelemetry
 
-Ang diagnostics ay structured, machine-readable na mga event para sa mga model run **at**
-telemetry ng daloy ng mensahe (webhooks, queueing, estado ng session). Hindi nila
-**pinapalitan** ang mga log; umiiral ang mga ito para pakainin ang metrics, traces, at iba
-pang exporter.
+Ang Diagnostics ay mga structured, machine-readable na event para sa mga model run **at**
+telemetry ng daloy ng mensahe (webhooks, queueing, estado ng session). Hindi nila **pinapalitan**
+ang mga log; umiiral sila upang pakainin ang metrics, traces, at iba pang exporter.
 
 Ang mga diagnostics event ay inilalabas in-process, ngunit ang mga exporter ay
 kumakabit lamang kapag pinagana ang diagnostics + ang exporter plugin.
@@ -165,8 +157,8 @@ kumakabit lamang kapag pinagana ang diagnostics + ang exporter plugin.
 
 - **Metrics**: mga counter + histogram (token usage, message flow, queueing).
 - **Traces**: mga span para sa paggamit ng model + pagproseso ng webhook/mensahe.
-- **Logs**: ine-export sa OTLP kapag pinagana ang `diagnostics.otel.logs`. Maaaring mataas
-  ang dami ng log; isaalang-alang ang `logging.level` at ang mga filter ng exporter.
+- **Logs**: ine-export sa OTLP kapag naka-enable ang `diagnostics.otel.logs`. Maaaring mataas ang volume ng log;
+  isaalang-alang ang `logging.level` at mga filter ng exporter.
 
 ### Catalog ng diagnostic event
 
@@ -206,9 +198,8 @@ o custom sink:
 
 ### Mga diagnostics flag (targeted logs)
 
-Gumamit ng mga flag para buksan ang dagdag, targeted na debug log nang hindi
-itinataas ang `logging.level`.
-Ang mga flag ay case-insensitive at may suportang wildcard (hal. `telegram.*` o `*`).
+Use flags to turn on extra, targeted debug logs without raising `logging.level`.
+Flags are case-insensitive and support wildcards (e.g. `telegram.*` or `*`).
 
 ```json
 {
@@ -232,8 +223,8 @@ Mga tala:
 
 ### Export sa OpenTelemetry
 
-Maaaring i-export ang diagnostics sa pamamagitan ng `diagnostics-otel` plugin (OTLP/HTTP). Gumagana
-ito sa anumang OpenTelemetry collector/backend na tumatanggap ng OTLP/HTTP.
+Maaaring i-export ang Diagnostics sa pamamagitan ng `diagnostics-otel` plugin (OTLP/HTTP). This
+works with any OpenTelemetry collector/backend that accepts OTLP/HTTP.
 
 ```json
 {
@@ -265,11 +256,11 @@ ito sa anumang OpenTelemetry collector/backend na tumatanggap ng OTLP/HTTP.
 Mga tala:
 
 - Maaari mo ring paganahin ang plugin gamit ang `openclaw plugins enable diagnostics-otel`.
-- Ang `protocol` ay kasalukuyang sumusuporta lamang sa `http/protobuf`. Binabalewala ang `grpc`.
+- `protocol` currently supports `http/protobuf` only. `grpc` ay binabalewala.
 - Kasama sa metrics ang token usage, gastos, laki ng context, tagal ng run, at mga counter/histogram
   ng daloy ng mensahe (webhooks, queueing, estado ng session, lalim/oras ng paghihintay ng queue).
-- Maaaring i-toggle ang traces/metrics gamit ang `traces` / `metrics` (default: on). Kasama sa traces
-  ang mga span ng paggamit ng model pati ang mga span ng pagproseso ng webhook/mensahe kapag pinagana.
+- Traces/metrics can be toggled with `traces` / `metrics` (default: on). Ang mga trace
+  ay kinabibilangan ng mga span ng paggamit ng modelo pati na rin ang mga span ng pagproseso ng webhook/mensahe kapag naka-enable.
 - Itakda ang `headers` kapag nangangailangan ng auth ang iyong collector.
 - Mga sinusuportahang environment variable: `OTEL_EXPORTER_OTLP_ENDPOINT`,
   `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_PROTOCOL`.
@@ -349,8 +340,8 @@ Mga queue + session:
 ### Pag-uugali ng log export
 
 - Ginagamit ng OTLP logs ang parehong structured record na sinusulat sa `logging.file`.
-- Iginagalang ang `logging.level` (antas ng file log). Hindi **naaangkop** ang console redaction
-  sa OTLP logs.
+- Igalang ang `logging.level` (antas ng file log). Console redaction does **not** apply
+  to OTLP logs.
 - Para sa mga installation na mataas ang volume, mas mainam ang OTLP collector sampling/filtering.
 
 ## Mga tip sa pag-troubleshoot

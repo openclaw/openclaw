@@ -4,20 +4,13 @@ read_when:
   - Thiết lập Mattermost
   - Gỡ lỗi định tuyến Mattermost
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:04Z
 ---
 
 # Mattermost (plugin)
 
-Trạng thái: được hỗ trợ thông qua plugin (bot token + sự kiện WebSocket). Hỗ trợ kênh, nhóm và DM.
-Mattermost là một nền tảng nhắn tin nhóm có thể tự lưu trữ; xem trang chính thức tại
-[mattermost.com](https://mattermost.com) để biết chi tiết sản phẩm và tải về.
+Status: supported via plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
+Mattermost is a self-hostable team messaging platform; see the official site at
+[mattermost.com](https://mattermost.com) for product details and downloads.
 
 ## Yêu cầu plugin
 
@@ -69,11 +62,11 @@ Thiết lập các biến này trên máy chủ gateway nếu bạn предпо
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
 
-Biến môi trường chỉ áp dụng cho tài khoản **mặc định** (`default`). Các tài khoản khác phải dùng giá trị trong cấu hình.
+Env vars apply only to the **default** account (`default`). Other accounts must use config values.
 
 ## Chế độ chat
 
-Mattermost tự động phản hồi DM. Hành vi trong kênh được điều khiển bởi `chatmode`:
+Mattermost responds to DMs automatically. Channel behavior is controlled by `chatmode`:
 
 - `oncall` (mặc định): chỉ phản hồi khi được @mention trong kênh.
 - `onmessage`: phản hồi mọi tin nhắn trong kênh.

@@ -1,17 +1,10 @@
 ---
 summary: "OpenClaw'ın ortam değişkenlerini nereden yüklediği ve öncelik sırası"
 read_when:
-  - Hangi ortam değişkenlerinin yüklendiğini ve hangi sırayla yüklendiğini bilmeniz gerektiğinde
+  - Hangi ortam değişkenlerinin yüklendiğini ve hangi sırayla yüklendiğini bilmeniz gerekir
   - Gateway'de eksik API anahtarlarını hata ayıklarken
   - Sağlayıcı kimlik doğrulaması veya dağıtım ortamlarını belgelendirirken
 title: "Ortam Değişkenleri"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:19Z
 ---
 
 # Ortam değişkenleri
@@ -58,7 +51,7 @@ Satır içi ortam değişkenlerini ayarlamanın iki eşdeğer yolu (ikisi de ge�
 }
 ```
 
-Ortam değişkeni karşılıkları:
+Ortam değişkeni eşdeğerleri:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`

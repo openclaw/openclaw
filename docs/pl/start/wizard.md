@@ -5,13 +5,6 @@ read_when:
   - Konfiguracja nowej maszyny
 title: "Kreator wdrażania (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:48Z
 ---
 
 # Kreator wdrażania (CLI)
@@ -52,7 +45,7 @@ które zapisuje `tools.web.search.apiKey`. Dokumentacja: [Web tools](/tools/web)
 Kreator rozpoczyna się od wyboru **Szybki start** (ustawienia domyślne) lub **Zaawansowane** (pełna kontrola).
 
 <Tabs>
-  <Tab title="Szybki start (ustawienia domyślne)">
+  <Tab title="QuickStart (defaults)">
     - Lokalny gateway (local loopback)
     - Domyślny obszar roboczy (lub istniejący obszar roboczy)
     - Port Gateway **18789**
@@ -60,7 +53,7 @@ Kreator rozpoczyna się od wyboru **Szybki start** (ustawienia domyślne) lub **
     - Ekspozycja Tailscale **Wyłączone**
     - DM-y Telegram i WhatsApp domyślnie ustawione na **lista dozwolonych** (zostaniesz poproszony o numer telefonu)
   </Tab>
-  <Tab title="Zaawansowane (pełna kontrola)">
+  <Tab title="Advanced (full control)">
     - Ujawnia każdy krok (tryb, obszar roboczy, gateway, kanały, demon, Skills).
   </Tab>
 </Tabs>

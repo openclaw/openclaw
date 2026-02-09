@@ -4,20 +4,15 @@ read_when:
   - macOS アプリ機能を実装する場合
   - macOS でのゲートウェイのライフサイクルやノードブリッジを変更する場合
 title: "macOS アプリ"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:56Z
 ---
 
 # OpenClaw macOS コンパニオン（メニューバー + ゲートウェイブローカー）
 
-macOS アプリは OpenClaw の **メニューバー コンパニオン**です。権限を管理し、ローカルで Gateway（ゲートウェイ）に接続または起動（launchd または手動）し、macOS の機能をノードとしてエージェントに公開します。
+macOS アプリは OpenClaw の **メニューバー コンパニオン**です。権限を管理し、ローカルで Gateway（ゲートウェイ）に接続または起動（launchd または手動）し、macOS の機能をノードとしてエージェントに公開します。 パーミッションを所有し、
+ローカルゲートウェイ(起動または手動)を管理/アタッチし、macOS
+機能をノードとしてエージェントに公開します。
 
-## できること
+## 何を行うか
 
 - ネイティブ通知とステータスをメニューバーに表示します。
 - TCC プロンプト（通知、アクセシビリティ、画面収録、マイク、音声認識、オートメーション / AppleScript）を管理します。
@@ -30,9 +25,12 @@ macOS アプリは OpenClaw の **メニューバー コンパニオン**です�
 ## ローカル vs リモート モード
 
 - **Local**（デフォルト）: 実行中のローカル Gateway があれば接続します。存在しない場合は、`openclaw gateway install` を介して launchd サービスを有効化します。
-- **Remote**: SSH / Tailscale 経由で Gateway に接続し、ローカルプロセスは起動しません。  
+- **リモート**: アプリは SSH / Tailscale でゲートウェイに接続し、ローカルプロセスの
+  を起動しません。
+  **Remote**: SSH / Tailscale 経由で Gateway に接続し、ローカルプロセスは起動しません。  
   リモート Gateway からこの Mac に到達できるよう、ローカルの **ノードホストサービス**を起動します。  
   アプリは Gateway を子プロセスとして起動しません。
+  このアプリは子プロセスとして Gateway を生成しません。
 
 ## launchd の制御
 
@@ -50,7 +48,7 @@ LaunchAgent がインストールされていない場合は、アプリから�
 
 ## ノード機能（mac）
 
-macOS アプリはノードとして振る舞います。一般的なコマンドは次のとおりです。
+macOS アプリはノードとして振る舞います。一般的なコマンドは次のとおりです。 一般的なコマンド:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
@@ -77,6 +75,7 @@ Gateway -> Node Service (WS)
 
 `system.run` は、macOS アプリの **実行承認**（設定 → 実行承認）で制御されます。  
 セキュリティ、確認、許可リストは、この Mac の次の場所にローカル保存されます。
+セキュリティ+Ask+allowlistはMac上にローカルに保存されています:
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -107,7 +106,7 @@ Gateway -> Node Service (WS)
 - プロンプトで「常に許可」を選択すると、そのコマンドが許可リストに追加されます。
 - `system.run` の環境変数オーバーライドはフィルタリング（`PATH`、`DYLD_*`、`LD_*`、`NODE_OPTIONS`、`PYTHON*`、`PERL*`、`RUBYOPT` を除外）された後、アプリの環境とマージされます。
 
-## ディープリンク
+## ディープ リンク
 
 アプリは、ローカルアクション用に `openclaw://` URL スキームを登録します。
 
@@ -183,9 +182,11 @@ macOS アプリが **Remote** モードで実行される場合、ローカル U
 - **リモート ポート:** リモート ホスト上の同一 Gateway ポート。
 - **挙動:** ランダムなローカル ポートは使用しません。既存の健全なトンネルを再利用し、必要に応じて再起動します。
 - **SSH 形態:** BatchMode + ExitOnForwardFailure + keepalive オプション付きの `ssh -N -L <local>:127.0.0.1:<remote>`。
-- **IP レポート:** SSH トンネルはループバックを使用するため、Gateway から見えるノード IP は `127.0.0.1` になります。実際のクライアント IP を表示したい場合は、**Direct (ws/wss)** トランスポートを使用してください（[macOS remote access](/platforms/mac/remote) を参照）。
+- **IP レポート:** SSH トンネルはループバックを使用するため、Gateway から見えるノード IP は `127.0.0.1` になります。実際のクライアント IP を表示したい場合は、**Direct (ws/wss)** トランスポートを使用してください（[macOS remote access](/platforms/mac/remote) を参照）。 実際のクライアント
+  IP を表示させたい場合は、**Direct (ws/wss)** を使用してください ([macOS リモート アクセス](/platforms/mac/remote)を参照してください)。
 
-セットアップ手順については [macOS remote access](/platforms/mac/remote) を、プロトコルの詳細については [Gateway protocol](/gateway/protocol) を参照してください。
+セットアップ手順については [macOS remote access](/platforms/mac/remote) を、プロトコルの詳細については [Gateway protocol](/gateway/protocol) を参照してください。 プロトコル
+の詳細については、[Gateway protocol](/gateway/protocol)を参照してください。
 
 ## 関連ドキュメント
 

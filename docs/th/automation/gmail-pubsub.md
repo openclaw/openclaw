@@ -4,20 +4,13 @@ read_when:
   - การเชื่อมทริกเกอร์กล่องจดหมาย Gmail เข้ากับ OpenClaw
   - การตั้งค่า Pub/Sub push สำหรับปลุกเอเจนต์
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:56Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 เป้าหมาย: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> เว็บฮุคของ OpenClaw
 
-## ข้อกำหนดก่อนเริ่มต้น
+## Prereqs
 
 - ติดตั้งและล็อกอิน `gcloud` แล้ว ([คู่มือการติดตั้ง](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - ติดตั้งและอนุญาต `gog` (gogcli) สำหรับบัญชี Gmail ([gogcli.sh](https://gogcli.sh/)).
@@ -25,6 +18,8 @@ x-i18n:
 - ล็อกอิน `tailscale` แล้ว ([tailscale.com](https://tailscale.com/)). การตั้งค่าที่รองรับใช้ Tailscale Funnel สำหรับเอ็นด์พอยต์ HTTPS สาธารณะ
   บริการอุโมงค์อื่นสามารถใช้ได้ แต่เป็นแบบ DIY/ไม่รองรับ และต้องเดินสายเองด้วยตนเอง
   ปัจจุบันเรารองรับเฉพาะ Tailscale
+  Other tunnel services can work, but are DIY/unsupported and require manual wiring.
+  Right now, Tailscale is what we support.
 
 ตัวอย่างคอนฟิกของ hook (เปิดใช้การแมป preset สำหรับ Gmail):
 
@@ -66,11 +61,11 @@ x-i18n:
 }
 ```
 
-หากต้องการช่องทางคงที่ ให้ตั้งค่า `channel` + `to` มิฉะนั้น `channel: "last"`
+If you want a fixed channel, set `channel` + `to`. หากต้องการช่องทางคงที่ ให้ตั้งค่า `channel` + `to` มิฉะนั้น `channel: "last"`
 จะใช้เส้นทางการส่งล่าสุด (สำรองไปที่ WhatsApp)
 
 หากต้องการบังคับใช้โมเดลที่ประหยัดกว่าสำหรับการรันจาก Gmail ให้ตั้งค่า `model` ในการแมป
-(`provider/model` หรือ alias) หากคุณบังคับใช้ `agents.defaults.models` ให้รวมไว้ที่นั่นด้วย
+(`provider/model` หรือ alias) หากคุณบังคับใช้ `agents.defaults.models` ให้รวมไว้ที่นั่นด้วย If you enforce `agents.defaults.models`, include it there.
 
 หากต้องการตั้งค่าโมเดลเริ่มต้นและระดับการคิดเฉพาะสำหรับ Gmail hooks ให้เพิ่ม
 `hooks.gmail.model` / `hooks.gmail.thinking` ในคอนฟิกของคุณ:
@@ -93,11 +88,12 @@ x-i18n:
 - หากตั้งค่า `agents.defaults.models` โมเดล Gmail ต้องอยู่ใน allowlist
 - เนื้อหา hook ของ Gmail จะถูกครอบด้วยขอบเขตความปลอดภัยของเนื้อหาภายนอกเป็นค่าเริ่มต้น
   หากต้องการปิด (อันตราย) ให้ตั้งค่า `hooks.gmail.allowUnsafeExternalContent: true`
+  To disable (dangerous), set `hooks.gmail.allowUnsafeExternalContent: true`.
 
 หากต้องการปรับแต่งการจัดการ payload เพิ่มเติม ให้เพิ่ม `hooks.mappings` หรือโมดูลแปลง JS/TS
 ภายใต้ `hooks.transformsDir` (ดู [Webhooks](/automation/webhook))
 
-## ตัวช่วยตั้งค่า (แนะนำ)
+## Wizard (recommended)
 
 ใช้ตัวช่วยของ OpenClaw เพื่อเชื่อมทุกอย่างเข้าด้วยกัน (ติดตั้ง dependencies บน macOS ผ่าน brew):
 
@@ -119,6 +115,9 @@ openclaw webhooks gmail setup \
 หากต้องการให้แบ็กเอนด์รับพาธที่มี prefix ให้ตั้งค่า
 `hooks.gmail.tailscale.target` (หรือ `--tailscale-target`) เป็น URL เต็ม เช่น
 `http://127.0.0.1:8788/gmail-pubsub` และให้ตรงกับ `hooks.gmail.serve.path`
+If you need the backend to receive the prefixed path, set
+`hooks.gmail.tailscale.target` (or `--tailscale-target`) to a full URL like
+`http://127.0.0.1:8788/gmail-pubsub` and match `hooks.gmail.serve.path`.
 
 ต้องการเอ็นด์พอยต์แบบกำหนดเองหรือไม่? ใช้ `--push-endpoint <url>` หรือ `--tailscale off`
 

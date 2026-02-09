@@ -1,16 +1,9 @@
 ---
-summary: „Linux-Unterstützung + Status der Companion-App“
+summary: "„Linux-Unterstützung + Status der Companion-App“"
 read_when:
   - Status der Linux-Companion-App gesucht wird
   - Plattformabdeckung oder Beiträge geplant werden
-title: „Linux-App“
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:47Z
+title: "„Linux-App“"
 ---
 
 # Linux-App

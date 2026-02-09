@@ -4,18 +4,11 @@ read_when:
   - Thiết lập hỗ trợ Signal
   - Gỡ lỗi gửi/nhận Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:16Z
 ---
 
 # Signal (signal-cli)
 
-Trạng thái: tích hợp CLI bên ngoài. Gateway giao tiếp với `signal-cli` qua HTTP JSON-RPC + SSE.
+Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
 
 ## Thiết lập nhanh (cho người mới)
 
@@ -88,7 +81,7 @@ Ví dụ:
 }
 ```
 
-Hỗ trợ nhiều tài khoản: dùng `channels.signal.accounts` với cấu hình theo từng tài khoản và `name` tùy chọn. Xem [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) để biết mẫu dùng chung.
+Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
 ## Chế độ daemon bên ngoài (httpUrl)
 
@@ -105,7 +98,7 @@ Nếu bạn muốn tự quản lý `signal-cli` (khởi động JVM chậm, init
 }
 ```
 
-Cách này bỏ qua tự động khởi chạy và thời gian chờ khởi động bên trong OpenClaw. Với khởi động chậm khi tự khởi chạy, đặt `channels.signal.startupTimeoutMs`.
+This skips auto-spawn and the startup wait inside OpenClaw. For slow starts when auto-spawning, set `channels.signal.startupTimeoutMs`.
 
 ## Kiểm soát truy cập (DM + nhóm)
 
@@ -116,7 +109,7 @@ DM:
 - Duyệt qua:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- Ghép cặp là cơ chế trao đổi token mặc định cho DM Signal. Chi tiết: [Pairing](/channels/pairing)
+- Pairing is the default token exchange for Signal DMs. Details: [Pairing](/channels/pairing)
 - Người gửi chỉ có UUID (từ `sourceUuid`) được lưu dưới dạng `uuid:<id>` trong `channels.signal.allowFrom`.
 
 Nhóm:
@@ -137,7 +130,7 @@ Nhóm:
 - Hỗ trợ tệp đính kèm (base64 lấy từ `signal-cli`).
 - Giới hạn media mặc định: `channels.signal.mediaMaxMb` (mặc định 8).
 - Dùng `channels.signal.ignoreAttachments` để bỏ qua tải media.
-- Ngữ cảnh lịch sử nhóm dùng `channels.signal.historyLimit` (hoặc `channels.signal.accounts.*.historyLimit`), dự phòng về `messages.groupChat.historyLimit`. Đặt `0` để tắt (mặc định 50).
+- Group history context uses `channels.signal.historyLimit` (or `channels.signal.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 
 ## Đang gõ + biên nhận đã đọc
 
@@ -166,7 +159,7 @@ Cấu hình:
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive`.
   - `off`/`ack` tắt phản ứng của tác tử (công cụ tin nhắn `react` sẽ báo lỗi).
   - `minimal`/`extensive` bật phản ứng của tác tử và đặt mức hướng dẫn.
-- Ghi đè theo tài khoản: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
+- Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>`.reactionLevel\`.
 
 ## Đích gửi (CLI/cron)
 
@@ -219,11 +212,11 @@ Tùy chọn nhà cung cấp:
 - `channels.signal.ignoreStories`: bỏ qua stories từ daemon.
 - `channels.signal.sendReadReceipts`: chuyển tiếp biên nhận đã đọc.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (mặc định: ghép cặp).
-- `channels.signal.allowFrom`: danh sách cho phép DM (E.164 hoặc `uuid:<id>`). `open` cần `"*"`. Signal không có tên người dùng; dùng id điện thoại/UUID.
+- `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` yêu cầu `"*"`. Signal has no usernames; use phone/UUID ids.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (mặc định: danh sách cho phép).
 - `channels.signal.groupAllowFrom`: danh sách cho phép người gửi trong nhóm.
 - `channels.signal.historyLimit`: số tin nhắn nhóm tối đa để đưa vào ngữ cảnh (0 để tắt).
-- `channels.signal.dmHistoryLimit`: giới hạn lịch sử DM theo lượt người dùng. Ghi đè theo từng người dùng: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
+- `channels.signal.dmHistoryLimit`: giới hạn lịch sử DM theo lượt người dùng. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: kích thước chia khối gửi đi (ký tự).
 - `channels.signal.chunkMode`: `length` (mặc định) hoặc `newline` để tách theo dòng trống (ranh giới đoạn) trước khi chia theo độ dài.
 - `channels.signal.mediaMaxMb`: giới hạn media vào/ra (MB).

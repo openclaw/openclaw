@@ -4,13 +4,6 @@ read_when:
   - OpenClaw 와 함께 Amazon Bedrock 모델을 사용하려는 경우
   - 모델 호출을 위한 AWS 자격 증명/리전 설정이 필요한 경우
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:55Z
 ---
 
 # Amazon Bedrock
@@ -103,7 +96,8 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## EC2 인스턴스 역할
 
-IAM 역할이 연결된 EC2 인스턴스에서 OpenClaw 를 실행하는 경우, AWS SDK 는 인증을 위해 인스턴스 메타데이터 서비스 (IMDS)를 자동으로 사용합니다. 그러나 OpenClaw 의 자격 증명 감지는 현재 환경 변수만 확인하며 IMDS 자격 증명은 확인하지 않습니다.
+IAM 역할이 연결된 EC2 인스턴스에서 OpenClaw 를 실행하는 경우, AWS SDK 는 인증을 위해 인스턴스 메타데이터 서비스 (IMDS)를 자동으로 사용합니다.
+그러나 OpenClaw 의 자격 증명 감지는 현재 환경 변수만 확인하며 IMDS 자격 증명은 확인하지 않습니다.
 
 **해결 방법:** AWS 자격 증명이 사용 가능함을 알리기 위해 `AWS_PROFILE=default` 를 설정하십시오. 실제 인증은 여전히 IMDS 를 통한 인스턴스 역할을 사용합니다.
 

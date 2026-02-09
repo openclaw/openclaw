@@ -3,18 +3,11 @@ summary: "Nextcloud Talk समर्थन की स्थिति, क्ष
 read_when:
   - Nextcloud Talk चैनल की विशेषताओं पर काम करते समय
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:57Z
 ---
 
 # Nextcloud Talk (प्लगइन)
 
-स्थिति: प्लगइन (वेबहुक बॉट) के माध्यम से समर्थित। प्रत्यक्ष संदेश, कमरे, रिएक्शन, और मार्कडाउन संदेश समर्थित हैं।
+स्थिति: प्लगइन (वेबहुक बॉट) के माध्यम से समर्थित। डायरेक्ट मैसेज, रूम्स, रिएक्शन्स और मार्कडाउन संदेश समर्थित हैं।
 
 ## प्लगइन आवश्यक
 
@@ -40,6 +33,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 ## त्वरित सेटअप (शुरुआती)
 
 1. Nextcloud Talk प्लगइन इंस्टॉल करें।
+
 2. अपने Nextcloud सर्वर पर एक बॉट बनाएँ:
 
    ```bash
@@ -47,9 +41,11 @@ openclaw plugins install ./extensions/nextcloud-talk
    ```
 
 3. लक्ष्य कमरे की सेटिंग्स में बॉट सक्षम करें।
+
 4. OpenClaw को कॉन्फ़िगर करें:
    - विन्यास: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - या env: `NEXTCLOUD_TALK_BOT_SECRET` (केवल डिफ़ॉल्ट अकाउंट)
+
 5. Gateway को पुनः प्रारंभ करें (या ऑनबोर्डिंग पूर्ण करें)।
 
 न्यूनतम विन्यास:
@@ -69,14 +65,14 @@ openclaw plugins install ./extensions/nextcloud-talk
 
 ## टिप्पणियाँ
 
-- बॉट DMs आरंभ नहीं कर सकते। उपयोगकर्ता को पहले बॉट को संदेश भेजना होगा।
+- बॉट्स DMs की शुरुआत नहीं कर सकते। उपयोगकर्ता को पहले बॉट को संदेश भेजना होगा।
 - वेबहुक URL Gateway द्वारा पहुँचा जा सकना चाहिए; यदि प्रॉक्सी के पीछे हों तो `webhookPublicUrl` सेट करें।
 - मीडिया अपलोड बॉट API द्वारा समर्थित नहीं हैं; मीडिया URLs के रूप में भेजा जाता है।
 - वेबहुक पेलोड DMs और कमरों में अंतर नहीं करता; कमरे-प्रकार लुकअप सक्षम करने के लिए `apiUser` + `apiPassword` सेट करें (अन्यथा DMs को कमरे माना जाता है)।
 
 ## प्रवेश नियंत्रण (DMs)
 
-- डिफ़ॉल्ट: `channels.nextcloud-talk.dmPolicy = "pairing"`। अज्ञात प्रेषकों को एक पेयरिंग कोड मिलता है।
+- डिफ़ॉल्ट: `channels.nextcloud-talk.dmPolicy = "pairing"`। Unknown senders get a pairing code.
 - स्वीकृति के माध्यम से:
   - `openclaw pairing list nextcloud-talk`
   - `openclaw pairing approve nextcloud-talk <CODE>`
@@ -131,7 +127,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 - `channels.nextcloud-talk.webhookPath`: वेबहुक पथ (डिफ़ॉल्ट: /nextcloud-talk-webhook)।
 - `channels.nextcloud-talk.webhookPublicUrl`: बाहरी रूप से पहुँचा जा सकने वाला वेबहुक URL।
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled`।
-- `channels.nextcloud-talk.allowFrom`: DM अलाउलिस्ट (उपयोगकर्ता IDs)। `open` के लिए `"*"` आवश्यक है।
+- `channels.nextcloud-talk.allowFrom`: DM अलाउलिस्ट (यूज़र IDs)। `open` के लिए `"*"` आवश्यक है।
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled`।
 - `channels.nextcloud-talk.groupAllowFrom`: समूह अलाउलिस्ट (उपयोगकर्ता IDs)।
 - `channels.nextcloud-talk.rooms`: प्रति-कमरा सेटिंग्स और अलाउलिस्ट।

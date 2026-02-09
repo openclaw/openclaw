@@ -4,13 +4,6 @@ read_when:
   - Ajustar la cadencia del heartbeat o la mensajería
   - Decidir entre heartbeat y cron para tareas programadas
 title: "Heartbeat"
-x-i18n:
-  source_path: gateway/heartbeat.md
-  source_hash: e763caf86ef74488
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:47Z
 ---
 
 # Heartbeat (Gateway)
@@ -291,12 +284,12 @@ channels:
 
 ### Patrones comunes
 
-| Objetivo                                                           | Configuración                                                                            |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| Comportamiento predeterminado (OKs silenciosos, alertas activadas) | _(no se necesita configuración)_                                                         |
+| Objetivo                                                                              | Configuración                                                                            |
+| ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Comportamiento predeterminado (OKs silenciosos, alertas activadas) | _(no se necesita configuración)_                                      |
 | Totalmente silencioso (sin mensajes, sin indicador)                | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
 | Solo indicador (sin mensajes)                                      | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
-| OKs solo en un canal                                               | `channels.telegram.heartbeat: { showOk: true }`                                          |
+| OKs solo en un canal                                                                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (opcional)
 

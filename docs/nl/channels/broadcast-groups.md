@@ -5,13 +5,6 @@ read_when:
   - Multi-agentreacties in WhatsApp debuggen
 status: experimental
 title: "Broadcastgroepen"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:10Z
 ---
 
 # Broadcastgroepen
@@ -109,7 +102,7 @@ Alle agents verwerken gelijktijdig:
 }
 ```
 
-#### Sequentieel
+#### Sequentiële
 
 Agents verwerken op volgorde (de volgende wacht tot de vorige klaar is):
 
@@ -159,7 +152,7 @@ Agents verwerken op volgorde (de volgende wacht tot de vorige klaar is):
 
 ## Hoe het werkt
 
-### Berichtstroom
+### Flow bericht
 
 1. **Binnenkomend bericht** komt aan in een WhatsApp-groep
 2. **Broadcastcontrole**: het systeem controleert of de peer-id in `broadcast` staat

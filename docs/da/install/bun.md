@@ -4,13 +4,6 @@ read_when:
   - Du vil have den hurtigste lokale udviklingsloop (bun + watch)
   - Du støder på problemer med Bun install/patch/lifecycle-scripts
 title: "Bun (Eksperimentel)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Bun (eksperimentel)
@@ -18,7 +11,7 @@ x-i18n:
 Mål: kør dette repo med **Bun** (valgfrit, ikke anbefalet til WhatsApp/Telegram)
 uden at afvige fra pnpm-workflows.
 
-⚠️ **Ikke anbefalet til Gateway-runtime** (WhatsApp/Telegram-fejl). Brug Node i produktion.
+⚠️ **Ikke anbefalet for Gateway runtime** (WhatsApp/Telegram bugs). Brug Node til produktion.
 
 ## Status
 
@@ -34,7 +27,7 @@ Standard:
 bun install
 ```
 
-Bemærk: `bun.lock`/`bun.lockb` er gitignored, så der er ingen repo-ændringer uanset hvad. Hvis du vil have _ingen lockfile-skrivninger_:
+Bemærk: `bun.lock`/`bun.lockb` er gitignored, så der er ingen repo churn begge veje. Hvis du ønsker _no lockfile writes_:
 
 ```sh
 bun install --no-save
@@ -49,8 +42,8 @@ bun run vitest run
 
 ## Bun lifecycle-scripts (blokeret som standard)
 
-Bun kan blokere afhængigheders lifecycle-scripts, medmindre de eksplicit er betroet (`bun pm untrusted` / `bun pm trust`).
-For dette repo er de ofte blokerede scripts ikke nødvendige:
+Bun kan blokere afhængighed livscyklus scripts medmindre udtrykkeligt betroede (`bun pm untrusted` / `bun pm trust`).
+For denne repo, er de almindeligt blokerede scripts ikke påkrævet:
 
 - `@whiskeysockets/baileys` `preinstall`: tjekker Node major >= 20 (vi kører Node 22+).
 - `protobufjs` `postinstall`: udsender advarsler om inkompatible versionsskemaer (ingen build-artifakter).
@@ -63,4 +56,4 @@ bun pm trust @whiskeysockets/baileys protobufjs
 
 ## Forbehold
 
-- Nogle scripts hardcoder stadig pnpm (fx `docs:build`, `ui:*`, `protocol:check`). Kør dem via pnpm indtil videre.
+- Nogle scripts stadig hardcode pnpm (f.eks. `docs:build`, `ui:*`, `protocol:check`). Kør dem via pnpm for nu.

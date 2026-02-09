@@ -2,15 +2,8 @@
 summary: "레거시 `openclaw-*` Skills 를 대체하는 OpenClaw 용 에이전트 도구 표면 (browser, canvas, nodes, message, cron)"
 read_when:
   - 에이전트 도구를 추가하거나 수정할 때
-  - `openclaw-*` Skills 를 폐기하거나 변경할 때
+  - "`openclaw-*` Skills 를 폐기하거나 변경할 때"
 title: "도구"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:17Z
 ---
 
 # Tools (OpenClaw)
@@ -174,8 +167,7 @@ OpenClaw 는 browser, canvas, nodes, cron 에 대한 **일급 에이전트 도�
 
 플러그인은 핵심 세트 외에 **추가 도구** (및 CLI 명령) 를 등록할 수 있습니다.
 설치 및 구성은 [Plugins](/tools/plugin) 를 참고하고,
-도구 사용 가이던스가 프롬프트에 어떻게 주입되는지는 [Skills](/tools/skills) 를 참고하십시오.
-일부 플러그인은 도구와 함께 자체 Skills 를 제공합니다
+도구 사용 가이던스가 프롬프트에 어떻게 주입되는지는 [Skills](/tools/skills) 를 참고하십시오. 일부 플러그인은 도구와 함께 자체 Skills 를 제공합니다
 (예: 음성 통화 플러그인).
 
 선택적 플러그인 도구:
@@ -516,5 +508,4 @@ Canvas 렌더:
 1. **시스템 프롬프트 텍스트**: 사람이 읽을 수 있는 목록 + 가이던스.
 2. **도구 스키마**: 모델 API 로 전송되는 구조화된 함수 정의.
 
-즉, 에이전트는 '어떤 도구가 존재하는지' 와 '어떻게 호출하는지' 를 모두 확인합니다.
-어떤 도구가 시스템 프롬프트나 스키마에 나타나지 않으면, 모델은 해당 도구를 호출할 수 없습니다.
+즉, 에이전트는 '어떤 도구가 존재하는지' 와 '어떻게 호출하는지' 를 모두 확인합니다. 어떤 도구가 시스템 프롬프트나 스키마에 나타나지 않으면, 모델은 해당 도구를 호출할 수 없습니다.

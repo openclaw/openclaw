@@ -2,16 +2,9 @@
 summary: "Notas de pesquisa: sistema de memória offline para workspaces do Clawd (Markdown como fonte de verdade + índice derivado)"
 read_when:
   - Projetando a memória do workspace (~/.openclaw/workspace) além de logs diários em Markdown
-  - Decidindo: CLI independente vs integração profunda com o OpenClaw
+  - Deciding: "Decidindo: CLI independente vs integração profunda com o OpenClaw"
   - Adicionando recordação e reflexão offline (retain/recall/reflect)
 title: "Pesquisa sobre Memória de Workspace"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:01Z
 ---
 
 # Memória de Workspace v2 (offline): notas de pesquisa
@@ -63,7 +56,7 @@ Duas peças para combinar:
 
 ## Arquitetura proposta (Markdown como fonte de verdade + índice derivado)
 
-### Armazenamento canônico (amigável ao git)
+### Loja canônica (git-friendly)
 
 Manter `~/.openclaw/workspace` como memória canônica legível por humanos.
 
@@ -99,7 +92,7 @@ Adicionar um índice derivado sob o workspace (não necessariamente versionado n
 ~/.openclaw/workspace/.memory/index.sqlite
 ```
 
-Baseado em:
+Voltar com:
 
 - esquema SQLite para fatos + links de entidades + metadados de opinião
 - SQLite **FTS5** para recordação lexical (rápido, pequeno, offline)

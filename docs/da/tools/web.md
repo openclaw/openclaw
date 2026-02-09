@@ -5,13 +5,6 @@ read_when:
   - Du har brug for opsætning af Brave Search API-nøgle
   - Du vil bruge Perplexity Sonar til websøgning
 title: "Webværktøjer"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:55Z
 ---
 
 # Webværktøjer
@@ -21,8 +14,8 @@ OpenClaw leverer to letvægts webværktøjer:
 - `web_search` — Søg på nettet via Brave Search API (standard) eller Perplexity Sonar (direkte eller via OpenRouter).
 - `web_fetch` — HTTP-hentning + læsbar ekstraktion (HTML → markdown/tekst).
 
-Disse er **ikke** browserautomatisering. Til JS-tunge sider eller logins skal du bruge
-[Browser-værktøjet](/tools/browser).
+Dette er **ikke** browserautomatisering. For JS-tunge websteder eller logins, brug
+[Browserværktøj](/tools/browser).
 
 ## Sådan virker det
 
@@ -30,16 +23,16 @@ Disse er **ikke** browserautomatisering. Til JS-tunge sider eller logins skal du
   - **Brave** (standard): returnerer strukturerede resultater (titel, URL, uddrag).
   - **Perplexity**: returnerer AI-syntetiserede svar med citater fra web-søgning i realtid.
 - Resultater caches pr. forespørgsel i 15 minutter (kan konfigureres).
-- `web_fetch` udfører et simpelt HTTP GET og udtrækker læsbart indhold
-  (HTML → markdown/tekst). Det udfører **ikke** JavaScript.
+- `web_fetch` gør en almindelig HTTP GET og udtrækker læsbart indhold
+  (HTML → markdown/text). Det gør \*\* ikke\*\* udføre JavaScript.
 - `web_fetch` er aktiveret som standard (medmindre det eksplicit deaktiveres).
 
 ## Valg af søgeudbyder
 
-| Udbyder              | Fordele                                         | Ulemper                                    | API-nøgle                                       |
-| -------------------- | ----------------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| Udbyder                                 | Fordele                                         | Ulemper                                    | API-nøgle                                       |
+| --------------------------------------- | ----------------------------------------------- | ------------------------------------------ | ----------------------------------------------- |
 | **Brave** (standard) | Hurtig, strukturerede resultater, gratis niveau | Traditionelle søgeresultater               | `BRAVE_API_KEY`                                 |
-| **Perplexity**       | AI-syntetiserede svar, citater, realtid         | Kræver Perplexity- eller OpenRouter-adgang | `OPENROUTER_API_KEY` eller `PERPLEXITY_API_KEY` |
+| **Perplexity**                          | AI-syntetiserede svar, citater, realtid         | Kræver Perplexity- eller OpenRouter-adgang | `OPENROUTER_API_KEY` eller `PERPLEXITY_API_KEY` |
 
 Se [Brave Search-opsætning](/brave-search) og [Perplexity Sonar](/perplexity) for udbyderspecifikke detaljer.
 
@@ -90,15 +83,15 @@ aktuelle grænser og priser.
 **Anbefalet:** kør `openclaw configure --section web`. Den gemmer nøglen i
 `~/.openclaw/openclaw.json` under `tools.web.search.apiKey`.
 
-**Miljø-alternativ:** sæt `BRAVE_API_KEY` i Gateway-processens
-miljø. For en gateway-installation, læg den i `~/.openclaw/.env` (eller dit
-service-miljø). Se [Miljøvariabler](/help/faq#how-does-openclaw-load-environment-variables).
+**Miljø alternativ:** sæt `BRAVE_API_KEY` i Gateway proces
+miljøet. For en gateway installation, skriv den i `~/.openclaw/.env` (eller dit
+servicemiljø). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Brug af Perplexity (direkte eller via OpenRouter)
 
-Perplexity Sonar-modeller har indbygget websøgning og returnerer AI-syntetiserede
-svar med citater. Du kan bruge dem via OpenRouter (ingen kreditkort krævet – understøtter
-krypto/forudbetaling).
+Perplexity Sonar modeller har indbyggede websøgning kapaciteter og returnere AI-syntetiserede
+svar med citationer. Du kan bruge dem via OpenRouter (ingen kreditkort kræves - understøtter
+crypto/prepaid).
 
 ### Sådan får du en OpenRouter API-nøgle
 
@@ -129,8 +122,8 @@ krypto/forudbetaling).
 }
 ```
 
-**Miljø-alternativ:** sæt `OPENROUTER_API_KEY` eller `PERPLEXITY_API_KEY` i Gateway-
-miljøet. For en gateway-installation, læg den i `~/.openclaw/.env`.
+**Miljø alternativ:** sæt `OPENROUTER_API_KEY` eller `PERPLEXITY_API_KEY` i Gateway
+miljøet. For en gateway installation, skriv den i `~/.openclaw/.env`.
 
 Hvis der ikke er sat en base-URL, vælger OpenClaw en standard baseret på API-nøglens kilde:
 
@@ -140,11 +133,11 @@ Hvis der ikke er sat en base-URL, vælger OpenClaw en standard baseret på API-n
 
 ### Tilgængelige Perplexity-modeller
 
-| Model                             | Beskrivelse                         | Bedst til            |
-| --------------------------------- | ----------------------------------- | -------------------- |
-| `perplexity/sonar`                | Hurtig Q&A med websøgning           | Hurtige opslag       |
-| `perplexity/sonar-pro` (standard) | Flertrinsræsonnement med websøgning | Komplekse spørgsmål  |
-| `perplexity/sonar-reasoning-pro`  | Chain-of-thought-analyse            | Dybdegående research |
+| Model                                                | Beskrivelse                                   | Bedst til            |
+| ---------------------------------------------------- | --------------------------------------------- | -------------------- |
+| `perplexity/sonar`                                   | Hurtig Q&A med websøgning | Hurtige opslag       |
+| `perplexity/sonar-pro` (standard) | Flertrinsræsonnement med websøgning           | Komplekse spørgsmål  |
+| `perplexity/sonar-reasoning-pro`                     | Chain-of-thought-analyse                      | Dybdegående research |
 
 ## web_search
 
@@ -179,7 +172,7 @@ Søg på nettet ved hjælp af din konfigurerede udbyder.
 
 - `query` (påkrævet)
 - `count` (1–10; standard fra konfiguration)
-- `country` (valgfri): 2-bogstavs landekode for regionsspecifikke resultater (fx "DE", "US", "ALL"). Hvis udeladt, vælger Brave sin standardregion.
+- `land` (valgfrit): landekode på 2 bogstaver for regionsspecifikke resultater (f.eks. "DE", "US", "ALL"). Hvis udeladt, Brave vælger sin standard region.
 - `search_lang` (valgfri): ISO-sprogkode for søgeresultater (fx "de", "en", "fr")
 - `ui_lang` (valgfri): ISO-sprogkode for UI-elementer
 - `freshness` (valgfri, kun Brave): filtrér efter opdagelsestid (`pd`, `pw`, `pm`, `py` eller `YYYY-MM-DDtoYYYY-MM-DD`)
@@ -256,7 +249,7 @@ Hent en URL og udtræk læsbart indhold.
 
 Noter:
 
-- `web_fetch` bruger Readability (udtræk af hovedindhold) først, derefter Firecrawl (hvis konfigureret). Hvis begge fejler, returnerer værktøjet en fejl.
+- `web_fetch` bruger først læsbarhed (main content extraction) og derefter Firecrawl (hvis konfigureret). Hvis begge mislykkes, returnerer værktøjet en fejl.
 - Firecrawl-forespørgsler bruger bot-omgåelsestilstand og cacher resultater som standard.
 - `web_fetch` sender en Chrome-lignende User-Agent og `Accept-Language` som standard; tilsidesæt `userAgent` om nødvendigt.
 - `web_fetch` blokerer private/interne værtsnavne og genkontrollerer redirects (begræns med `maxRedirects`).

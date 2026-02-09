@@ -3,13 +3,6 @@ summary: "Considerações de segurança e modelo de ameaças para executar um ga
 read_when:
   - Adicionando recursos que ampliam acesso ou automação
 title: "Segurança"
-x-i18n:
-  source_path: gateway/security/index.md
-  source_hash: 5566bbbbbf7364ec
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:10Z
 ---
 
 # Segurança 🔒
@@ -315,7 +308,7 @@ Isso é engenharia social 101. Crie desconfiança, incentive a bisbilhotar.
 
 ## Endurecimento de Configuração (exemplos)
 
-### 0) Permissões de arquivo
+### 0. Permissões de arquivo
 
 Mantenha config + estado privados no host do gateway:
 
@@ -442,7 +435,8 @@ Veja [Tailscale](/gateway/tailscale) e [Visão geral Web](/web).
 
 ### 0.6.1) Controle do navegador via host de nó (recomendado)
 
-Se seu Gateway é remoto, mas o navegador roda em outra máquina, execute um **host de nó** na máquina do navegador e deixe o Gateway fazer proxy das ações do navegador (veja [Ferramenta de navegador](/tools/browser)). Trate o pareamento de nó como acesso administrativo.
+Se seu Gateway é remoto, mas o navegador roda em outra máquina, execute um **host de nó** na máquina do navegador e deixe o Gateway fazer proxy das ações do navegador (veja [Ferramenta de navegador](/tools/browser)).
+Trate o pareamento de nó como acesso administrativo.
 
 Padrão recomendado:
 
@@ -487,7 +481,7 @@ Recomendações:
 
 Detalhes: [Logging](/gateway/logging)
 
-### 1) DMs: pareamento por padrão
+### 1. DMs: pareamento por padrão
 
 ```json5
 {
@@ -495,7 +489,7 @@ Detalhes: [Logging](/gateway/logging)
 }
 ```
 
-### 2) Grupos: exigir menção em todos os lugares
+### 2. Grupos: exigir menção em todos os lugares
 
 ```json
 {
@@ -535,7 +529,7 @@ Você já pode criar um perfil somente leitura combinando:
 
 Podemos adicionar uma única flag `readOnlyMode` depois para simplificar essa configuração.
 
-### 5) Linha de base segura (copiar/colar)
+### 5. Linha de base segura (copiar/colar)
 
 Uma configuração de “padrão seguro” que mantém o Gateway privado, exige pareamento de DM e evita bots de grupo sempre ligados:
 
@@ -567,7 +561,8 @@ Duas abordagens complementares:
 - **Executar o Gateway completo em Docker** (limite de contêiner): [Docker](/install/docker)
 - **Sandbox de ferramentas** (`agents.defaults.sandbox`, host gateway + ferramentas isoladas em Docker): [Sandboxing](/gateway/sandboxing)
 
-Nota: para evitar acesso entre agentes, mantenha `agents.defaults.sandbox.scope` em `"agent"` (padrão) ou `"session"` para isolamento mais estrito por sessão. `scope: "shared"` usa um único contêiner/workspace.
+Nota: para evitar acesso entre agentes, mantenha `agents.defaults.sandbox.scope` em `"agent"` (padrão) ou `"session"` para isolamento mais estrito por sessão. `scope: "shared"` usa um único contêiner/workspace. `scope: "shared"` uses a
+single container/workspace.
 
 Considere também o acesso ao workspace do agente dentro do sandbox:
 
@@ -579,7 +574,8 @@ Importante: `tools.elevated` é a válvula de escape global que executa exec no 
 
 ## Riscos de controle do navegador
 
-Habilitar controle do navegador dá ao modelo a capacidade de dirigir um navegador real. Se esse perfil do navegador já contiver sessões logadas, o modelo pode acessar essas contas e dados. Trate perfis de navegador como **estado sensível**:
+Habilitar controle do navegador dá ao modelo a capacidade de dirigir um navegador real.
+Se esse perfil do navegador já contiver sessões logadas, o modelo pode acessar essas contas e dados. Trate perfis de navegador como **estado sensível**:
 
 - Prefira um perfil dedicado para o agente (o perfil padrão `openclaw`).
 - Evite apontar o agente para seu perfil pessoal de uso diário.
@@ -709,7 +705,7 @@ Inclua diretrizes de segurança no prompt de sistema do seu agente:
 
 Se sua IA fizer algo ruim:
 
-### Conter
+### Contém
 
 1. **Pare:** pare o app macOS (se ele supervisionar o Gateway) ou termine seu processo `openclaw gateway`.
 2. **Feche a exposição:** defina `gateway.bind: "loopback"` (ou desative Tailscale Funnel/Serve) até entender o que aconteceu.
@@ -750,7 +746,9 @@ Se falhar, há novos candidatos ainda não no baseline.
 2. Entenda as ferramentas:
    - `detect-secrets scan` encontra candidatos e os compara ao baseline.
    - `detect-secrets audit` abre uma revisão interativa para marcar cada item do baseline como real ou falso positivo.
+
 3. Para segredos reais: gire/remova-os, depois reexecute a varredura para atualizar o baseline.
+
 4. Para falsos positivos: execute a auditoria interativa e marque-os como falsos:
 
    ```bash

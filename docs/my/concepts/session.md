@@ -3,30 +3,23 @@ summary: "ချတ်များအတွက် ဆက်ရှင် စီ�
 read_when:
   - ဆက်ရှင် ကိုင်တွယ်ပုံ သို့မဟုတ် သိမ်းဆည်းမှုကို ပြင်ဆင်နေချိန်
 title: "ဆက်ရှင် စီမံခန့်ခွဲမှု"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:54Z
 ---
 
 # ဆက်ရှင် စီမံခန့်ခွဲမှု
 
-OpenClaw သည် **အေးဂျင့်တစ်ခုလျှင် တိုက်ရိုက်ချတ် ဆက်ရှင်တစ်ခု** ကို အဓိကအဖြစ် သတ်မှတ်ထားသည်။ Direct chats များကို `agent:<agentId>:<mainKey>` သို့ စုစည်းထားပြီး (မူလသတ်မှတ်ချက် `main`)၊ group/channel chats များမှာ သီးခြားကီးများ ရရှိသည်။ `session.mainKey` ကို လိုက်နာဆောင်ရွက်သည်။
+OpenClaw treats **one direct-chat session per agent** as primary. Direct chats collapse to `agent:<agentId>:<mainKey>` (default `main`), while group/channel chats get their own keys. `session.mainKey` is honored.
 
 **Direct messages** များကို မည်သို့ အုပ်စုဖွဲ့မည်ကို ထိန်းချုပ်ရန် `session.dmScope` ကို အသုံးပြုပါ—
 
 - `main` (မူလသတ်မှတ်ချက်): ဆက်လက်တည်ရှိမှုအတွက် DM များအားလုံးသည် အဓိက ဆက်ရှင်ကို မျှဝေသည်။
 - `per-peer`: ချန်နယ်များအနှံ့ ပို့သူ id အလိုက် သီးခြားခွဲထားသည်။
 - `per-channel-peer`: ချန်နယ် + ပို့သူ အလိုက် သီးခြားခွဲထားသည် (multi-user inbox များအတွက် အကြံပြု)။
-- `per-account-channel-peer`: အကောင့် + ချန်နယ် + ပို့သူ အလိုက် သီးခြားခွဲထားသည် (multi-account inbox များအတွက် အကြံပြု)။
-  `per-peer`, `per-channel-peer`, သို့မဟုတ် `per-account-channel-peer` ကို အသုံးပြုနေစဉ် ချန်နယ်များအနှံ့ လူတစ်ယောက်တည်းအဖြစ် DM ဆက်ရှင်ကို မျှဝေနိုင်ရန် provider-prefixed peer ids များကို canonical identity တစ်ခုသို့ မြေပုံချရန် `session.identityLinks` ကို အသုံးပြုပါ။
+- `per-account-channel-peer`: isolate by account + channel + sender (recommended for multi-account inboxes).
+  Use `session.identityLinks` to map provider-prefixed peer ids to a canonical identity so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
 
 ## Secure DM mode (multi-user setup များအတွက် အကြံပြု)
 
-> **လုံခြုံရေး သတိပေးချက်:** သင့်အေးဂျင့်သည် **လူအများထံမှ DM များ** ကို လက်ခံနိုင်ပါက secure DM mode ကို ဖွင့်ထားရန် အလွန်အမင်း စဉ်းစားသင့်ပါသည်။ မဖွင့်ထားပါက အသုံးပြုသူအားလုံးသည် တူညီသော စကားဝိုင်းအကြောင်းအရာကို မျှဝေသုံးစွဲရပြီး အသုံးပြုသူအချင်းချင်းအကြား ကိုယ်ရေးကိုယ်တာ အချက်အလက်များ ပေါက်ကြားနိုင်ပါသည်။
+> **Security Warning:** If your agent can receive DMs from **multiple people**, you should strongly consider enabling secure DM mode. Without it, all users share the same conversation context, which can leak private information between users.
 
 **မူလသတ်မှတ်ချက်များဖြင့် ဖြစ်နိုင်သော ပြဿနာ ဥပမာ—**
 
@@ -55,36 +48,36 @@ OpenClaw သည် **အေးဂျင့်တစ်ခုလျှင် တ�
 
 မှတ်ချက်များ—
 
-- မူလသတ်မှတ်ချက်မှာ ဆက်လက်တည်ရှိမှုအတွက် `dmScope: "main"` ဖြစ်ပြီး (DM အားလုံးသည် အဓိက ဆက်ရှင်ကို မျှဝေသည်)၊ single-user setup များအတွက် သင့်လျော်သည်။
+- Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
 - တူညီသော ချန်နယ်ပေါ်ရှိ multi-account inbox များအတွက် `per-account-channel-peer` ကို ဦးစားပေးပါ။
 - လူတစ်ယောက်တည်းက ချန်နယ်များအနှံ့ ဆက်သွယ်လာပါက ၎င်းတို့၏ DM ဆက်ရှင်များကို canonical identity တစ်ခုအဖြစ် စုစည်းရန် `session.identityLinks` ကို အသုံးပြုပါ။
 - DM ဆက်ရှင် ဆက်တင်များကို `openclaw security audit` ဖြင့် စစ်ဆေးနိုင်ပါသည် ([security](/cli/security) ကို ကြည့်ပါ)။
 
 ## Gateway သည် အချက်အလက်၏ အရင်းအမြစ်ဖြစ်သည်
 
-ဆက်ရှင် အခြေအနေ အားလုံးကို **gateway** ( “master” OpenClaw ) မှ ပိုင်ဆိုင်ထားသည်။ UI client များ (macOS app, WebChat စသည်) သည် local ဖိုင်များကို မဖတ်ဘဲ ဆက်ရှင်စာရင်းများနှင့် token အရေအတွက်များအတွက် gateway ကို မေးမြန်းရပါမည်။
+စက်ရှင်အခြေအနေအားလုံးကို **ဂိတ်ဝေး** ("မာစတာ" OpenClaw) ကပိုင်ဆိုင်ထားသည်။ UI ကလိုင်းယင့်များ (macOS အက်ပ်၊ WebChat စသည်) သည် လိုကယ်ဖိုင်များကို ဖတ်ခြင်းအစား စက်ရှင်စာရင်းများနှင့် တိုကင်အရေအတွက်များအတွက် ဂိတ်ဝေးကို မေးမြန်းရမည်။
 
 - **remote mode** တွင် သင်စိတ်ဝင်စားရမည့် ဆက်ရှင်သိမ်းဆည်းမှုသည် သင့် Mac ပေါ်တွင် မရှိဘဲ အဝေးရှိ Gateway ဟို့စ် ပေါ်တွင် ရှိသည်။
-- UI များတွင် ပြသသော token အရေအတွက်များသည် gateway ၏ store field များ (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`) မှ လာသည်။ Client များသည် JSONL transcript များကို ဖတ်၍ စုစုပေါင်းကို “ပြင်ဆင်” မလုပ်ပါ။
+- UI များတွင် ပြသသော token အရေအတွက်များသည် gateway ၏ store fields (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`) မှ လာပါသည်။ ကလိုင်းယင့်များသည် စုစုပေါင်းကို “ပြင်ဆင်ရန်” JSONL မှတ်တမ်းများကို မခွဲခြမ်းစိတ်ဖြာပါ။
 
 ## State မည်သည့်နေရာတွင် ရှိသည်
 
 - **Gateway ဟို့စ်** ပေါ်တွင်—
   - Store ဖိုင်: `~/.openclaw/agents/<agentId>/sessions/sessions.json` (အေးဂျင့်တစ်ခုချင်းစီအလိုက်)။
 - Transcripts: `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl` (Telegram topic ဆက်ရှင်များတွင် `.../<SessionId>-topic-<threadId>.jsonl` ကို အသုံးပြုသည်)။
-- Store သည် `sessionKey -> { sessionId, updatedAt, ... }` တစ်ခုဖြစ်သည်။ Entry များကို ဖျက်ခြင်းမှာ လုံခြုံပြီး လိုအပ်သည့်အခါ အလိုအလျောက် ပြန်လည်ဖန်တီးမည်ဖြစ်သည်။
+- စတိုးသည် `sessionKey -> { sessionId, updatedAt, ... }` ဆိုသော မြေပုံ (map) တစ်ခုဖြစ်သည်။ အဝင်များကို ဖျက်ခြင်းသည် လုံခြုံသည်၊ လိုအပ်သည့်အခါ ပြန်လည်ဖန်တီးမည်ဖြစ်သည်။
 - Group entry များတွင် UI များတွင် ဆက်ရှင်ကို အညွှန်းတပ်ရန် `displayName`, `channel`, `subject`, `room`, နှင့် `space` ပါဝင်နိုင်သည်။
 - Session entry များတွင် UI များက ဆက်ရှင် မည်သည့်နေရာမှ လာသည်ကို ရှင်းပြနိုင်ရန် `origin` metadata (label + routing hints) ပါဝင်သည်။
 - OpenClaw သည် legacy Pi/Tau ဆက်ရှင် ဖိုလ်ဒါများကို **မဖတ်ပါ**။
 
 ## Session pruning
 
-OpenClaw သည် LLM ကို ခေါ်မီ ခဏအကြိုတွင် in-memory context ထဲမှ **အဟောင်း tool ရလဒ်များ** ကို မူလသတ်မှတ်ချက်အဖြစ် ဖြတ်တောက်ပစ်သည်။
-ဤလုပ်ဆောင်ချက်သည် JSONL history ကို **မပြန်လည်ရေးသားပါ**။ [/concepts/session-pruning](/concepts/session-pruning) ကို ကြည့်ပါ။
+OpenClaw သည် LLM ခေါ်ဆိုမှုမတိုင်မီ မူလအတိုင်း in-memory context ထဲမှ **ဟောင်းနေသော tool ရလဒ်များ** ကို ဖြတ်တောက်သည်။
+၎င်းသည် JSONL မှတ်တမ်းကို **ပြန်ရေးခြင်း မရှိပါ**။ [/concepts/session-pruning](/concepts/session-pruning) ကို ကြည့်ပါ။
 
 ## Pre-compaction memory flush
 
-ဆက်ရှင်သည် auto-compaction အနီးသို့ ရောက်လာသောအခါ OpenClaw သည် **silent memory flush** ကို လုပ်ဆောင်နိုင်ပြီး မော်ဒယ်အား တည်တံ့သော မှတ်စုများကို disk ပေါ်သို့ ရေးသားရန် သတိပေးပို့သည်။ ၎င်းသည် workspace ကို ရေးသားခွင့်ရှိသောအခါတွင်သာ လုပ်ဆောင်ပါသည်။ [Memory](/concepts/memory) နှင့် [Compaction](/concepts/compaction) ကို ကြည့်ပါ။
+စက်ရှင်သည် အလိုအလျောက် ချုံ့သိမ်းခြင်းနီးလာသည့်အခါ OpenClaw သည် **တိတ်ဆိတ်သော memory flush** ကို လုပ်ဆောင်နိုင်ပြီး မော်ဒယ်အား ခိုင်မာသော မှတ်စုများကို ဒစ်စ်ပေါ်သို့ ရေးသားရန် သတိပေးသည်။ ၎င်းကို workspace သည် ရေးနိုင်သော အခြေအနေဖြစ်သောအခါတွင်သာ လုပ်ဆောင်သည်။ [Memory](/concepts/memory) နှင့် [Compaction](/concepts/compaction) ကို ကြည့်ပါ။
 
 ## Transport များမှ ဆက်ရှင် ကီးများသို့ မြေပုံချခြင်း
 
@@ -107,12 +100,12 @@ OpenClaw သည် LLM ကို ခေါ်မီ ခဏအကြိုတွ�
 ## Lifecycle
 
 - Reset မူဝါဒ: ဆက်ရှင်များကို သက်တမ်းကုန်သည်အထိ ပြန်လည်အသုံးပြုမည်ဖြစ်ပြီး သက်တမ်းကုန်ဆုံးမှုကို နောက်လာမည့် inbound message တွင် စစ်ဆေးမည်ဖြစ်သည်။
-- Daily reset: မူလသတ်မှတ်ချက်မှာ **Gateway ဟို့စ်၏ ဒေသစံတော်ချိန် မနက် 4:00 နာရီ** ဖြစ်သည်။ နောက်ဆုံး အပ်ဒိတ်ချိန်သည် နောက်ဆုံး daily reset အချိန်ထက် စောနေပါက ဆက်ရှင်ကို stale ဟု သတ်မှတ်သည်။
-- Idle reset (ရွေးချယ်နိုင်): `idleMinutes` သည် sliding idle window တစ်ခု ထည့်ပေးသည်။ Daily နှင့် idle reset နှစ်ခုလုံးကို သတ်မှတ်ထားပါက **သက်တမ်းကုန်ဆုံးချိန် ပထမဆုံးရောက်သောတစ်ခု** သည် ဆက်ရှင်အသစ်ကို အတင်းအကျပ် စတင်စေသည်။
+- နေ့စဉ် reset: မူလတန်ဖိုးမှာ **gateway host ၏ local time အရ မနက် 4:00 နာရီ** ဖြစ်ပါသည်။ စက်ရှင်၏ နောက်ဆုံးအပ်ဒိတ်သည် နောက်ဆုံးနေ့စဉ် ပြန်လည်သတ်မှတ်ချိန်ထက် စောပါက စက်ရှင်ကို stale ဟု သတ်မှတ်သည်။
+- မလှုပ်ရှားမှုအပေါ် အခြေခံသည့် ပြန်လည်သတ်မှတ်ခြင်း (ရွေးချယ်နိုင်): `idleMinutes` သည် လှိုင်းလျှော မလှုပ်ရှားမှု ပြတင်းပေါက်တစ်ခု ထည့်ပေါင်းသည်။ နေ့စဉ်နှင့် မလှုပ်ရှားမှု ပြန်လည်သတ်မှတ်ချက် နှစ်ခုလုံးကို သတ်မှတ်ထားပါက **အရင်ဆုံး သက်တမ်းကုန်သည့်အရာ** သည် စက်ရှင်အသစ်ကို အတင်းအကျပ် စတင်စေသည်။
 - Legacy idle-only: `session.idleMinutes` ကို `session.reset`/`resetByType` မပါဘဲ သတ်မှတ်ထားပါက backward compatibility အတွက် OpenClaw သည် idle-only mode တွင် ဆက်လက် ရှိနေမည်ဖြစ်သည်။
 - Per-type override (ရွေးချယ်နိုင်): `resetByType` သည် `dm`, `group`, နှင့် `thread` ဆက်ရှင်များအတွက် မူဝါဒကို ပြန်လည်သတ်မှတ်နိုင်စေသည် (thread = Slack/Discord threads, Telegram topics, Matrix threads ကို connector မှ ပံ့ပိုးပေးသည့်အခါ)။
 - Per-channel override (ရွေးချယ်နိုင်): `resetByChannel` သည် ချန်နယ်တစ်ခုအတွက် reset မူဝါဒကို ပြန်လည်သတ်မှတ်ပြီး (`reset`/`resetByType` ထက် ဦးစားပေး အသက်ဝင်သည်) ချန်နယ်အတွက် ဆက်ရှင်အမျိုးအစားအားလုံးတွင် အသက်ဝင်သည်။
-- Reset triggers: `/new` သို့မဟုတ် `/reset` ကို တိတိကျကျ ပို့ခြင်း (နှင့် `resetTriggers` ထဲရှိ အပိုများ) သည် ဆက်ရှင် id အသစ်ကို စတင်စေပြီး မက်ဆေ့ချ်၏ ကျန်အပိုင်းကို ဆက်လက် လုပ်ဆောင်စေသည်။ `/new <model>` သည် model alias, `provider/model`, သို့မဟုတ် provider အမည် (fuzzy match) ကို လက်ခံပြီး ဆက်ရှင်အသစ်၏ မော်ဒယ်ကို သတ်မှတ်နိုင်သည်။ `/new` သို့မဟုတ် `/reset` ကို သီးသန့်ပို့ပါက OpenClaw သည် reset ကို အတည်ပြုရန် အတိုချုံး “hello” greeting turn တစ်ခုကို လုပ်ဆောင်သည်။
+- Reset triggers: တိတိကျကျ `/new` သို့မဟုတ် `/reset` (နှင့် `resetTriggers` ထဲရှိ အပိုများ) သည် session id အသစ်ကို စတင်ပြီး မက်ဆေ့ချ်၏ ကျန်ရှိသော အပိုင်းကို ဆက်လက်ပို့ဆောင်ပါသည်။ `/new <model>` သည် မော်ဒယ် alias၊ `provider/model` သို့မဟုတ် provider အမည် (fuzzy match) ကို လက်ခံပြီး စက်ရှင်အသစ်၏ မော်ဒယ်ကို သတ်မှတ်သည်။ `/new` သို့မဟုတ် `/reset` ကို တစ်ခုတည်းပို့ပါက OpenClaw သည် ပြန်လည်သတ်မှတ်မှုကို အတည်ပြုရန် အတိုချုံး “မင်္ဂလာပါ” နှုတ်ဆက်အလှည့်ကို လုပ်ဆောင်သည်။
 - Manual reset: Store ထဲမှ သီးခြားကီးများကို ဖျက်ခြင်း သို့မဟုတ် JSONL transcript ကို ဖယ်ရှားပါ။ နောက်လာမည့် မက်ဆေ့ချ်တွင် ၎င်းတို့ကို ပြန်လည်ဖန်တီးမည်ဖြစ်သည်။
 - Isolated cron jobs များသည် run တစ်ကြိမ်လျှင် idle reuse မရှိဘဲ `sessionId` အသစ်တစ်ခုကို အမြဲတမ်း ထုတ်ပေးသည်။
 
@@ -182,7 +175,7 @@ Runtime override (ပိုင်ရှင်သာ):
 - ချတ်အတွင်း `/status` ကို သီးသန့် မက်ဆေ့ချ်အဖြစ် ပို့ပါက အေးဂျင့်သည် ရောက်ရှိနိုင်မှု ရှိမရှိ၊ ဆက်ရှင် context ကို မည်မျှ အသုံးပြုထားသည်၊ လက်ရှိ thinking/verbose toggle များ၊ နှင့် သင့် WhatsApp web creds ကို နောက်ဆုံး refresh လုပ်ထားသည့် အချိန်ကို မြင်နိုင်ပါသည် (relink လိုအပ်မှုကို တွေ့ရှိရန် အထောက်အကူပြုသည်)။
 - `/context list` သို့မဟုတ် `/context detail` ကို ပို့၍ system prompt နှင့် inject လုပ်ထားသော workspace ဖိုင်များ (နှင့် context အများဆုံး ပါဝင်သည့် အစိတ်အပိုင်းများ) ကို ကြည့်နိုင်ပါသည်။
 - `/stop` ကို သီးသန့် မက်ဆေ့ချ်အဖြစ် ပို့၍ လက်ရှိ run ကို ရပ်တန့်စေခြင်း၊ ထိုဆက်ရှင်အတွက် queue ထဲရှိ followup များကို ဖျက်ခြင်း၊ နှင့် ၎င်းမှ စတင်ထားသော sub-agent run များအားလုံးကို ရပ်တန့်စေပါသည် (အဖြေတွင် ရပ်တန့်ခဲ့သော အရေအတွက် ပါဝင်သည်)။
-- `/compact` (ရွေးချယ်နိုင်သော ညွှန်ကြားချက်များ) ကို သီးသန့် မက်ဆေ့ချ်အဖြစ် ပို့၍ အဟောင်း context ကို အကျဉ်းချုပ်ပြီး window space ကို လွတ်လပ်စေပါ။ [/concepts/compaction](/concepts/compaction) ကို ကြည့်ပါ။
+- `/compact` (ရွေးချယ်နိုင်သော ညွှန်ကြားချက်များ) ကို သီးခြားမက်ဆေ့ချ်အဖြစ် ပို့၍ ဟောင်းနေသော context ကို အကျဉ်းချုပ်ကာ window နေရာလွတ် ပြန်လည်ရယူပါ။ [/concepts/compaction](/concepts/compaction) ကို ကြည့်ပါ။
 - JSONL transcript များကို တိုက်ရိုက် ဖွင့်၍ ပြည့်စုံသော turn များကို စစ်ဆေးနိုင်ပါသည်။
 
 ## Tips
@@ -198,5 +191,5 @@ Runtime override (ပိုင်ရှင်သာ):
 - `provider`: normalized ချန်နယ် id (extension များအပါအဝင်)
 - `from`/`to`: inbound envelope မှ raw routing id များ
 - `accountId`: provider အကောင့် id (multi-account ဖြစ်ပါက)
-- `threadId`: ချန်နယ်က ထောက်ပံ့ပါက thread/topic id
-  Origin field များကို direct messages၊ ချန်နယ်များနှင့် group များအတွက် ဖြည့်စွက်ထားသည်။ Connector တစ်ခုက delivery routing ကိုသာ အပ်ဒိတ်လုပ်ပါက (ဥပမာ DM အဓိက ဆက်ရှင်ကို လတ်ဆတ်စေရန်) ဆက်ရှင်၏ ရှင်းလင်းပြသ metadata ကို ထိန်းသိမ်းရန် inbound context ကို ပေးသင့်ပါသည်။ Extension များသည် inbound context တွင် `ConversationLabel`, `GroupSubject`, `GroupChannel`, `GroupSpace`, နှင့် `SenderName` ကို ပို့ပြီး `recordSessionMetaFromInbound` ကို ခေါ်ခြင်းဖြင့် (သို့မဟုတ် တူညီသော context ကို `updateLastRoute` သို့ ပို့ခြင်းဖြင့်) ဤအရာကို ပြုလုပ်နိုင်ပါသည်။
+- `threadId`: ချန်နယ်က ထောက်ပံ့ပါက thread/ခေါင်းစဉ် ID
+  မူလလာရာ (origin) ဖီးလ်များကို direct messages၊ channels နှင့် groups အတွက် ဖြည့်သွင်းထားသည်။ connector တစ်ခုက ပို့ဆောင်မှု လမ်းကြောင်းကိုသာ အပ်ဒိတ်လုပ်ပါက (ဥပမာ၊ DM အဓိက စက်ရှင်ကို အသစ်အဆန်းထားရန်) စက်ရှင်၏ explainer metadata ကို ထိန်းသိမ်းနိုင်ရန် inbound context ကို ပေးရပါမည်။ Extensions များသည် inbound context ထဲတွင် `ConversationLabel`, `GroupSubject`, `GroupChannel`, `GroupSpace`, နှင့် `SenderName` ကို ပို့ပြီး `recordSessionMetaFromInbound` ကို ခေါ်ခြင်း (သို့မဟုတ် တူညီသော context ကို `updateLastRoute` သို့ ပေးပို့ခြင်း) ဖြင့် ယင်းကို လုပ်ဆောင်နိုင်သည်။

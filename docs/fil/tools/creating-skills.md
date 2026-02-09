@@ -1,17 +1,10 @@
 ---
 title: "Paglikha ng Skills"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:53Z
 ---
 
 # Paglikha ng Mga Custom na Skills 🛠
 
-Dinisenyo ang OpenClaw para madaling mapalawak. Ang mga "Skills" ang pangunahing paraan para magdagdag ng mga bagong kakayahan sa iyong assistant.
+OpenClaw is designed to be easily extensible. "Skills" are the primary way to add new capabilities to your assistant.
 
 ## Ano ang isang Skill?
 
@@ -19,17 +12,17 @@ Ang skill ay isang direktoryo na naglalaman ng isang `SKILL.md` file (na nagbibi
 
 ## Hakbang-hakbang: Ang Iyong Unang Skill
 
-### 1. Gumawa ng Direktoryo
+### 38. 1. 39. Likhain ang Direktoryo
 
-Ang mga Skill ay nakatira sa iyong workspace, karaniwan ay `~/.openclaw/workspace/skills/`. Gumawa ng bagong folder para sa iyong skill:
+40. Ang mga skill ay nasa iyong workspace, karaniwan sa `~/.openclaw/workspace/skills/`. Create a new folder for your skill:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
 ```
 
-### 2. I-define ang `SKILL.md`
+### 2. Define the `SKILL.md`
 
-Gumawa ng `SKILL.md` file sa direktoryong iyon. Gumagamit ang file na ito ng YAML frontmatter para sa metadata at Markdown para sa mga tagubilin.
+41. Gumawa ng `SKILL.md` file sa direktoryong iyon. This file uses YAML frontmatter for metadata and Markdown for instructions.
 
 ```markdown
 ---
@@ -42,13 +35,13 @@ description: A simple skill that says hello.
 When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
 ```
 
-### 3. Magdagdag ng Mga Tool (Opsyonal)
+### 3. Add Tools (Optional)
 
 Maaari kang mag-define ng mga custom na tool sa frontmatter o utusan ang agent na gumamit ng mga umiiral na system tool (gaya ng `bash` o `browser`).
 
-### 4. I-refresh ang OpenClaw
+### 42. 4. 43. I-refresh ang OpenClaw
 
-Sabihin sa iyong agent na "refresh skills" o i-restart ang Gateway. Matutuklasan ng OpenClaw ang bagong direktoryo at i-iindex ang `SKILL.md`.
+44. Sabihin sa iyong agent na "refresh skills" o i-restart ang gateway. 45. Matutuklasan ng OpenClaw ang bagong direktoryo at i-iindex ang `SKILL.md`.
 
 ## Mga Best Practice
 

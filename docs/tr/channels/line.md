@@ -5,13 +5,6 @@ read_when:
   - LINE webhook + kimlik bilgisi kurulumuna ihtiyacınız var
   - LINE’a özgü mesaj seçeneklerini istiyorsunuz
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
 ---
 
 # LINE (eklenti)
@@ -71,7 +64,7 @@ Asgari yapılandırma:
 }
 ```
 
-Ortam değişkenleri (yalnızca varsayılan hesap):
+Env vars (default account only):
 
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_CHANNEL_SECRET`

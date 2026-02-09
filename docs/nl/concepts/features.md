@@ -3,34 +3,27 @@ summary: "OpenClaw-mogelijkheden over kanalen, routering, media en UX."
 read_when:
   - Je wilt een volledige lijst van wat OpenClaw ondersteunt
 title: "Functies"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:18Z
 ---
 
 ## Hoogtepunten
 
 <Columns>
-  <Card title="Kanalen" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord en iMessage met één Gateway.
   </Card>
   <Card title="Plugins" icon="plug">
     Voeg Mattermost en meer toe met extensies.
   </Card>
-  <Card title="Routering" icon="route">
+  <Card title="Routing" icon="route">
     Multi-agent-routering met geïsoleerde sessies.
   </Card>
   <Card title="Media" icon="image">
     Afbeeldingen, audio en documenten in en uit.
   </Card>
-  <Card title="Apps en UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web Control UI en macOS Companion-app.
   </Card>
-  <Card title="Mobiele nodes" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     iOS- en Android-nodes met Canvas-ondersteuning.
   </Card>
 </Columns>

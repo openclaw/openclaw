@@ -5,13 +5,6 @@ read_when:
   - आप किसी नोड होस्ट के माध्यम से दूसरी मशीन पर चल रहे ब्राउज़र को नियंत्रित करना चाहते हैं
   - आप Chrome एक्सटेंशन रिले का उपयोग करना चाहते हैं (टूलबार बटन के माध्यम से attach/detach)
 title: "ब्राउज़र"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:58Z
 ---
 
 # `openclaw browser`
@@ -42,7 +35,7 @@ openclaw browser --browser-profile openclaw snapshot
 
 ## प्रोफ़ाइल
 
-प्रोफ़ाइल नामित ब्राउज़र रूटिंग विन्यास हैं। व्यवहार में:
+प्रोफाइल नामित ब्राउज़र रूटिंग कॉन्फ़िग्स होते हैं। व्यवहार में:
 
 - `openclaw`: समर्पित OpenClaw-प्रबंधित Chrome इंस्टेंस लॉन्च/अटैच करता है (अलग-थलग user data dir)।
 - `chrome`: Chrome एक्सटेंशन रिले के माध्यम से आपके मौजूदा Chrome टैब नियंत्रित करता है।
@@ -107,7 +100,7 @@ openclaw browser extension path
 
 ## रिमोट ब्राउज़र नियंत्रण (node host प्रॉक्सी)
 
-यदि Gateway ब्राउज़र से अलग मशीन पर चलता है, तो Chrome/Brave/Edge/Chromium वाली मशीन पर **node host** चलाएँ। Gateway ब्राउज़र क्रियाओं को उस नोड तक प्रॉक्सी करेगा (अलग ब्राउज़र कंट्रोल सर्वर की आवश्यकता नहीं)।
+यदि Gateway ब्राउज़र से अलग मशीन पर चलता है, तो उस मशीन पर **नोड होस्ट** चलाएँ जहाँ Chrome/Brave/Edge/Chromium हो। Gateway उस नोड पर ब्राउज़र क्रियाओं को प्रॉक्सी करेगा (अलग ब्राउज़र कंट्रोल सर्वर की आवश्यकता नहीं)।
 
 स्वचालित रूटिंग को नियंत्रित करने के लिए `gateway.nodes.browser.mode` का उपयोग करें और यदि कई नोड जुड़े हों तो किसी विशिष्ट नोड को पिन करने के लिए `gateway.nodes.browser.node` का उपयोग करें।
 

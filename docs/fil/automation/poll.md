@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag o pagbabago ng suporta sa poll
   - Pag-debug ng pagpapadala ng poll mula sa CLI o Gateway
 title: "Mga Poll"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:20Z
 ---
 
 # Mga Poll
@@ -64,13 +57,13 @@ Mga parameter:
 ## Mga pagkakaiba ng channel
 
 - WhatsApp: 2-12 opsyon, ang `maxSelections` ay dapat nasa loob ng bilang ng opsyon, binabalewala ang `durationHours`.
-- Discord: 2-10 opsyon, ang `durationHours` ay kinoklamp sa 1-768 oras (default 24). Pinapagana ng `maxSelections > 1` ang multi-select; hindi sinusuportahan ng Discord ang mahigpit na bilang ng pagpili.
-- MS Teams: Mga poll gamit ang Adaptive Card (pinamamahalaan ng OpenClaw). Walang native na poll API; binabalewala ang `durationHours`.
+- Discord: 2-10 options, `durationHours` clamped to 1-768 hours (default 24). `maxSelections > 1` enables multi-select; Discord does not support a strict selection count.
+- MS Teams: Adaptive Card polls (OpenClaw-managed). No native poll API; `durationHours` is ignored.
 
 ## Agent tool (Message)
 
 Gamitin ang tool na `message` kasama ang aksyong `poll` (`to`, `pollQuestion`, `pollOption`, opsyonal na `pollMulti`, `pollDurationHours`, `channel`).
 
-Tala: Walang mode ang Discord na “pumili ng eksaktong N”; ang `pollMulti` ay nagma-map sa multi-select.
-Ang mga poll sa Teams ay nirere-render bilang Adaptive Cards at nangangailangan na manatiling online ang Gateway
-para maitala ang mga boto sa `~/.openclaw/msteams-polls.json`.
+Tandaan: Walang “pick exactly N” mode ang Discord; ang `pollMulti` ay tumutugma sa multi-select.
+Ang mga Teams poll ay nirender bilang Adaptive Cards at nangangailangan na manatiling online ang gateway
+upang maitala ang mga boto sa `~/.openclaw/msteams-polls.json`.

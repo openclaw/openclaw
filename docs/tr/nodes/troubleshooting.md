@@ -4,16 +4,9 @@ read_when:
   - Düğüm bağlı görünüyor ancak kamera/tuval/ekran/exec araçları başarısız oluyor
   - Düğüm eşleştirme ile onaylar arasındaki zihinsel modele ihtiyaç duyuyorsunuz
 title: "Düğüm Sorun Giderme"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:30Z
 ---
 
-# Düğüm sorun giderme
+# nodes/troubleshooting.md
 
 Durumda bir düğüm görünürken düğüm araçları başarısız oluyorsa bu sayfayı kullanın.
 
@@ -57,14 +50,14 @@ openclaw logs --follow
 
 ## İzinler matrisi
 
-| Yetenek                      | iOS                                            | Android                                         | macOS düğüm uygulaması             | Tipik hata kodu                |
-| ---------------------------- | ---------------------------------------------- | ----------------------------------------------- | ---------------------------------- | ------------------------------ |
+| Yetenek                      | iOS                                                               | Android                                                            | macOS düğüm uygulaması                                | Tipik hata kodu                |
+| ---------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------- | ------------------------------ |
 | `camera.snap`, `camera.clip` | Kamera (+ klip sesi için mikrofon)             | Kamera (+ klip sesi için mikrofon)              | Kamera (+ klip sesi için mikrofon) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Ekran Kaydı (+ mikrofon isteğe bağlı)          | Ekran yakalama istemi (+ mikrofon isteğe bağlı) | Ekran Kaydı                        | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Kullanım Sırasında veya Her Zaman (mode bağlı) | Moda bağlı olarak Ön Plan/Arka Plan konumu      | Konum izni                         | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (düğüm ana makinesi yolu)                  | n/a (düğüm ana makinesi yolu)                   | Exec onayları gerekli              | `SYSTEM_RUN_DENIED`            |
+| `screen.record`              | Ekran Kaydı (+ mikrofon isteğe bağlı)          | Ekran yakalama istemi (+ mikrofon isteğe bağlı) | Ekran Kaydı                                           | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Kullanım Sırasında veya Her Zaman (mode bağlı) | Moda bağlı olarak Ön Plan/Arka Plan konumu                         | Konum izni                                            | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (düğüm ana makinesi yolu)                  | n/a (düğüm ana makinesi yolu)                   | Exec onayları gerekli                                 | `SYSTEM_RUN_DENIED`            |
 
-## Eşleştirme ve onaylar
+## Pairing versus approvals
 
 Bunlar farklı geçitlerdir:
 

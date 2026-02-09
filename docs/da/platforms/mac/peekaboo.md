@@ -5,19 +5,13 @@ read_when:
   - Integration af Peekaboo via Swift Package Manager
   - Ændring af PeekabooBridge-protokol/stier
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:27Z
 ---
 
 # Peekaboo Bridge (macOS UI-automatisering)
 
-OpenClaw kan hoste **PeekabooBridge** som en lokal, tilladelsesbevidst broker til UI-automatisering.
-Det gør, at `peekaboo` CLI kan styre UI-automatisering, mens macOS-appens TCC-tilladelser genbruges.
+OpenClaw kan være vært for **PeekabooBridge** som en lokal, tilladelsesbevidst UI-automatisering
+mægler. Dette lader 'peekaboo' CLI drive UI automatisering, mens du genbruger
+macOS app TCC tilladelser.
 
 ## Hvad dette er (og ikke er)
 
@@ -31,7 +25,8 @@ I macOS-appen:
 
 - Indstillinger → **Enable Peekaboo Bridge**
 
-Når den er aktiveret, starter OpenClaw en lokal UNIX-socket-server. Hvis den er deaktiveret, stoppes hosten, og `peekaboo` falder tilbage til andre tilgængelige hosts.
+Når aktiveret, starter OpenClaw en lokal UNIX socket server. Hvis deaktiveret, vil værten
+stoppes og `peekaboo` falde tilbage til andre tilgængelige værter.
 
 ## Rækkefølge for klientopdagelse
 
@@ -41,7 +36,8 @@ Peekaboo-klienter prøver typisk hosts i denne rækkefølge:
 2. Claude.app (hvis installeret)
 3. OpenClaw.app (tynd broker)
 
-Brug `peekaboo bridge status --verbose` for at se, hvilken host der er aktiv, og hvilken socket-sti der er i brug. Du kan tilsidesætte med:
+Brug `peekaboo bro status --verbose` for at se hvilken vært er aktiv, og hvilken
+stien er i brug. Du kan tilsidesætte med:
 
 ```bash
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
@@ -55,8 +51,8 @@ export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 
 ## Snapshot-adfærd (automatisering)
 
-Snapshots gemmes i hukommelsen og udløber automatisk efter et kort tidsrum.
-Hvis du har brug for længere opbevaring, så genindfang fra klienten.
+Snapshots gemmes i hukommelsen og udløber automatisk efter et kort vindue.
+Hvis du har brug for længere tilbageholdelse, genindfangning fra kunden.
 
 ## Fejlfinding
 

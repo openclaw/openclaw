@@ -4,13 +4,6 @@ read_when:
   - Du vill växla mellan stable/beta/dev
   - Du taggar eller publicerar prereleaser
 title: "Utvecklingskanaler"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:33Z
 ---
 
 # Utvecklingskanaler
@@ -21,7 +14,7 @@ OpenClaw levererar tre uppdateringskanaler:
 
 - **stable**: npm dist-tag `latest`.
 - **beta**: npm dist-tag `beta` (byggen under test).
-- **dev**: rörlig head för `main` (git). npm dist-tag: `dev` (när publicerad).
+- **dev**: flytta huvud på `main` (git). npm dist-tag: `dev` (vid publicering).
 
 Vi levererar byggen till **beta**, testar dem och **befordrar sedan ett verifierat bygge till `latest`**
 utan att ändra versionsnumret — dist-tags är sanningskällan för npm-installationer.
@@ -76,7 +69,7 @@ När du växlar kanal med `openclaw update` synkar OpenClaw även plugin-källor
 
 ## Tillgänglighet för macOS-appen
 
-Beta- och dev-byggen kan **sakna** en macOS-apprelease. Det är OK:
+Beta- och dev-versioner får **inte** innehålla en macOS-app-utgåva. Det är okej:
 
 - Git-taggen och npm dist-taggen kan fortfarande publiceras.
 - Ange “ingen macOS-version för denna beta” i release notes eller changelog.

@@ -1,15 +1,8 @@
 ---
 summary: "Eksploracja: konfiguracja modeli, profile uwierzytelniania i zachowanie mechanizmu awaryjnego"
 read_when:
-  - "Eksplorowanie przyszłych pomysłów dotyczących wyboru modeli i profili uwierzytelniania"
+  - Eksplorowanie przyszłych pomysłów dotyczących wyboru modeli i profili uwierzytelniania
 title: "Eksploracja konfiguracji modeli"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:06Z
 ---
 
 # Konfiguracja modeli (eksploracja)

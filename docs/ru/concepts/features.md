@@ -3,34 +3,27 @@ summary: "Возможности OpenClaw по каналам, маршрути�
 read_when:
   - Вам нужен полный список поддерживаемых возможностей OpenClaw
 title: "Возможности"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:21Z
 ---
 
-## Основные возможности
+## Отметины
 
 <Columns>
-  <Card title="Каналы" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord и iMessage с одним Gateway (шлюзом).
   </Card>
-  <Card title="Плагины" icon="plug">
+  <Card title="Plugins" icon="plug">
     Добавляйте Mattermost и другие системы с помощью расширений.
   </Card>
-  <Card title="Маршрутизация" icon="route">
+  <Card title="Routing" icon="route">
     Мультиагентная маршрутизация с изолированными сеансами.
   </Card>
-  <Card title="Медиа" icon="image">
+  <Card title="Media" icon="image">
     Изображения, аудио и документы — на вход и на выход.
   </Card>
-  <Card title="Приложения и UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Веб-интерфейс управления и сопутствующее приложение для macOS.
   </Card>
-  <Card title="Мобильные узлы" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Узлы iOS и Android с поддержкой Canvas.
   </Card>
 </Columns>

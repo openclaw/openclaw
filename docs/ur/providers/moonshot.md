@@ -1,23 +1,17 @@
 ---
 summary: "Moonshot K2 بمقابلہ Kimi Coding کی کنفیگریشن (الگ فراہم کنندگان + کلیدیں)"
 read_when:
-  - "آپ کو Moonshot K2 (Moonshot Open Platform) بمقابلہ Kimi Coding کا سیٹ اپ درکار ہو"
-  - "آپ کو الگ اینڈپوائنٹس، کلیدیں، اور ماڈل ریفرنسز سمجھنے کی ضرورت ہو"
-  - "آپ دونوں میں سے کسی بھی فراہم کنندہ کے لیے کاپی/پیسٹ کنفیگ چاہتے ہوں"
+  - آپ کو Moonshot K2 (Moonshot Open Platform) بمقابلہ Kimi Coding کا سیٹ اپ درکار ہو
+  - آپ کو الگ اینڈپوائنٹس، کلیدیں، اور ماڈل ریفرنسز سمجھنے کی ضرورت ہو
+  - آپ دونوں میں سے کسی بھی فراہم کنندہ کے لیے کاپی/پیسٹ کنفیگ چاہتے ہوں
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:32Z
 ---
 
 # Moonshot AI (Kimi)
 
-Moonshot، Kimi API کو OpenAI کے ہم آہنگ اینڈپوائنٹس کے ساتھ فراہم کرتا ہے۔ فراہم کنندہ کو کنفیگر کریں اور ڈیفالٹ ماڈل کو `moonshot/kimi-k2.5` پر سیٹ کریں، یا
-Kimi Coding کو `kimi-coding/k2p5` کے ساتھ استعمال کریں۔
+Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
+provider and set the default model to `moonshot/kimi-k2.5`, or use
+Kimi Coding with `kimi-coding/k2p5`.
 
 موجودہ Kimi K2 ماڈل IDs:
 
@@ -40,7 +34,7 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-نوٹ: Moonshot اور Kimi Coding الگ فراہم کنندگان ہیں۔ کلیدیں ایک دوسرے کے لیے قابلِ تبادلہ نہیں ہیں، اینڈپوائنٹس مختلف ہیں، اور ماڈل ریفرنسز بھی مختلف ہیں (Moonshot `moonshot/...` استعمال کرتا ہے، جبکہ Kimi Coding `kimi-coding/...` استعمال کرتا ہے)۔
+Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangeable, endpoints differ, and model refs differ (Moonshot uses `moonshot/...`, Kimi Coding uses `kimi-coding/...`).
 
 ## Config snippet (Moonshot API)
 
@@ -141,7 +135,7 @@ openclaw onboard --auth-choice kimi-code-api-key
 
 ## نوٹس
 
-- Moonshot کے ماڈل ریفرنسز `moonshot/<modelId>` استعمال کرتے ہیں۔ Kimi Coding کے ماڈل ریفرنسز `kimi-coding/<modelId>` استعمال کرتے ہیں۔
+- Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi-coding/<modelId>`.
 - ضرورت ہو تو قیمتوں اور سیاق کے میٹاڈیٹا کو `models.providers` میں اووررائیڈ کریں۔
 - اگر Moonshot کسی ماڈل کے لیے مختلف سیاقی حدود شائع کرے تو
   `contextWindow` کو اسی کے مطابق ایڈجسٹ کریں۔

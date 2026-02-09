@@ -5,13 +5,6 @@ read_when:
   - आपको Brave Search API कुंजी सेटअप की आवश्यकता है
   - आप वेब खोज के लिए Perplexity Sonar का उपयोग करना चाहते हैं
 title: "वेब टूल्स"
-x-i18n:
-  source_path: tools/web.md
-  source_hash: c2f5e15bc78f09f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:02Z
 ---
 
 # वेब टूल्स
@@ -21,8 +14,8 @@ OpenClaw दो हल्के वेब टूल्स प्रदान क
 - `web_search` — Brave Search API (डिफ़ॉल्ट) या Perplexity Sonar (direct या OpenRouter के माध्यम से) के जरिए वेब खोज।
 - `web_fetch` — HTTP फ़ेच + पठनीय निष्कर्षण (HTML → markdown/text)।
 
-ये **ब्राउज़र ऑटोमेशन नहीं** हैं। JS-भारी साइटों या लॉगिन के लिए
-[ब्राउज़र टूल](/tools/browser) का उपयोग करें।
+These are **not** browser automation. For JS-heavy sites or logins, use the
+[Browser tool](/tools/browser).
 
 ## यह कैसे काम करता है
 
@@ -30,16 +23,16 @@ OpenClaw दो हल्के वेब टूल्स प्रदान क
   - **Brave** (डिफ़ॉल्ट): संरचित परिणाम लौटाता है (शीर्षक, URL, स्निपेट)।
   - **Perplexity**: रियल-टाइम वेब खोज से उद्धरणों सहित AI-संश्लेषित उत्तर लौटाता है।
 - परिणाम 15 मिनट के लिए क्वेरी के आधार पर कैश किए जाते हैं (कॉन्फ़िगर करने योग्य)।
-- `web_fetch` साधारण HTTP GET करता है और पठनीय सामग्री निकालता है
-  (HTML → markdown/text)। यह JavaScript निष्पादित **नहीं** करता।
+- `web_fetch` does a plain HTTP GET and extracts readable content
+  (HTML → markdown/text). It does **not** execute JavaScript.
 - `web_fetch` डिफ़ॉल्ट रूप से सक्षम है (जब तक स्पष्ट रूप से अक्षम न किया जाए)।
 
 ## खोज प्रदाता चुनना
 
-| प्रदाता              | लाभ                                   | सीमाएँ                                 | API कुंजी                                    |
-| -------------------- | ------------------------------------- | -------------------------------------- | -------------------------------------------- |
+| प्रदाता                                 | लाभ                                   | सीमाएँ                                 | API कुंजी                                    |
+| --------------------------------------- | ------------------------------------- | -------------------------------------- | -------------------------------------------- |
 | **Brave** (डिफ़ॉल्ट) | तेज़, संरचित परिणाम, मुफ़्त टियर      | पारंपरिक खोज परिणाम                    | `BRAVE_API_KEY`                              |
-| **Perplexity**       | AI-संश्लेषित उत्तर, उद्धरण, रियल-टाइम | Perplexity या OpenRouter एक्सेस आवश्यक | `OPENROUTER_API_KEY` या `PERPLEXITY_API_KEY` |
+| **Perplexity**                          | AI-संश्लेषित उत्तर, उद्धरण, रियल-टाइम | Perplexity या OpenRouter एक्सेस आवश्यक | `OPENROUTER_API_KEY` या `PERPLEXITY_API_KEY` |
 
 प्रदाता-विशिष्ट विवरणों के लिए [Brave Search सेटअप](/brave-search) और [Perplexity Sonar](/perplexity) देखें।
 
@@ -86,17 +79,17 @@ Brave मुफ़्त टियर और सशुल्क प्लान 
 
 ### कुंजी कहाँ सेट करें (अनुशंसित)
 
-**अनुशंसित:** `openclaw configure --section web` चलाएँ। यह कुंजी को
-`~/.openclaw/openclaw.json` में `tools.web.search.apiKey` के अंतर्गत संग्रहीत करता है।
+**Recommended:** run `openclaw configure --section web`. It stores the key in
+`~/.openclaw/openclaw.json` under `tools.web.search.apiKey`.
 
-**पर्यावरण विकल्प:** Gateway प्रक्रिया के
-पर्यावरण में `BRAVE_API_KEY` सेट करें। Gateway इंस्टॉल के लिए, इसे `~/.openclaw/.env` में रखें (या अपने
-सेवा पर्यावरण में)। देखें [Env vars](/help/faq#how-does-openclaw-load-environment-variables)।
+**Environment alternative:** set `BRAVE_API_KEY` in the Gateway process
+environment. For a gateway install, put it in `~/.openclaw/.env` (or your
+service environment). See [Env vars](/help/faq#how-does-openclaw-load-environment-variables).
 
 ## Perplexity का उपयोग (direct या OpenRouter के माध्यम से)
 
-Perplexity Sonar मॉडल्स में अंतर्निहित वेब खोज क्षमताएँ होती हैं और ये उद्धरणों सहित AI-संश्लेषित
-उत्तर लौटाते हैं। आप इन्हें OpenRouter के माध्यम से उपयोग कर सकते हैं (क्रेडिट कार्ड आवश्यक नहीं — क्रिप्टो/प्रीपेड समर्थित)।
+Perplexity Sonar models have built-in web search capabilities and return AI-synthesized
+answers with citations. 1. आप इन्हें OpenRouter के माध्यम से उपयोग कर सकते हैं (क्रेडिट कार्ड की आवश्यकता नहीं — क्रिप्टो/प्रीपेड समर्थित)।
 
 ### OpenRouter API कुंजी प्राप्त करना
 
@@ -127,8 +120,7 @@ Perplexity Sonar मॉडल्स में अंतर्निहित व
 }
 ```
 
-**पर्यावरण विकल्प:** Gateway
-पर्यावरण में `OPENROUTER_API_KEY` या `PERPLEXITY_API_KEY` सेट करें। Gateway इंस्टॉल के लिए, इसे `~/.openclaw/.env` में रखें।
+2. **Environment विकल्प:** Gateway environment में `OPENROUTER_API_KEY` या `PERPLEXITY_API_KEY` सेट करें। 3. Gateway इंस्टॉल के लिए, इसे `~/.openclaw/.env` में रखें।
 
 यदि कोई base URL सेट नहीं है, तो OpenClaw API कुंजी स्रोत के आधार पर एक डिफ़ॉल्ट चुनता है:
 
@@ -138,11 +130,11 @@ Perplexity Sonar मॉडल्स में अंतर्निहित व
 
 ### उपलब्ध Perplexity मॉडल्स
 
-| मॉडल                              | विवरण                         | सर्वोत्तम उपयोग |
-| --------------------------------- | ----------------------------- | --------------- |
-| `perplexity/sonar`                | वेब खोज के साथ तेज़ Q&A       | त्वरित लुकअप    |
-| `perplexity/sonar-pro` (डिफ़ॉल्ट) | वेब खोज के साथ बहु-चरणीय तर्क | जटिल प्रश्न     |
-| `perplexity/sonar-reasoning-pro`  | Chain-of-thought विश्लेषण     | गहन शोध         |
+| मॉडल                                                 | विवरण                                       | सर्वोत्तम उपयोग |
+| ---------------------------------------------------- | ------------------------------------------- | --------------- |
+| `perplexity/sonar`                                   | वेब खोज के साथ तेज़ Q&A | त्वरित लुकअप    |
+| `perplexity/sonar-pro` (डिफ़ॉल्ट) | वेब खोज के साथ बहु-चरणीय तर्क               | जटिल प्रश्न     |
+| `perplexity/sonar-reasoning-pro`                     | Chain-of-thought विश्लेषण                   | गहन शोध         |
 
 ## web_search
 
@@ -177,7 +169,7 @@ Perplexity Sonar मॉडल्स में अंतर्निहित व
 
 - `query` (आवश्यक)
 - `count` (1–10; डिफ़ॉल्ट कॉन्फ़िग से)
-- `country` (वैकल्पिक): क्षेत्र-विशिष्ट परिणामों के लिए 2-अक्षरों का देश कोड (जैसे, "DE", "US", "ALL")। यदि छोड़ा गया, तो Brave अपना डिफ़ॉल्ट क्षेत्र चुनता है।
+- 4. `country` (वैकल्पिक): क्षेत्र-विशिष्ट परिणामों के लिए 2-अक्षरों का देश कोड (जैसे, "DE", "US", "ALL")। 5. यदि छोड़ा गया, तो Brave अपना डिफ़ॉल्ट क्षेत्र चुनता है।
 - `search_lang` (वैकल्पिक): खोज परिणामों के लिए ISO भाषा कोड (जैसे, "de", "en", "fr")
 - `ui_lang` (वैकल्पिक): UI तत्वों के लिए ISO भाषा कोड
 - `freshness` (वैकल्पिक, केवल Brave): खोज समय के आधार पर फ़िल्टर (`pd`, `pw`, `pm`, `py`, या `YYYY-MM-DDtoYYYY-MM-DD`)
@@ -254,7 +246,7 @@ await web_search({
 
 टिप्पणियाँ:
 
-- `web_fetch` पहले Readability (मुख्य-सामग्री निष्कर्षण) का उपयोग करता है, फिर Firecrawl (यदि कॉन्फ़िगर किया गया हो)। यदि दोनों विफल हों, तो टूल एक त्रुटि लौटाता है।
+- 6. `web_fetch` पहले Readability (मुख्य-सामग्री निष्कर्षण) का उपयोग करता है, फिर Firecrawl (यदि कॉन्फ़िगर किया गया हो)। 7. यदि दोनों विफल हों, तो टूल एक त्रुटि लौटाता है।
 - Firecrawl अनुरोध bot-circumvention मोड का उपयोग करते हैं और डिफ़ॉल्ट रूप से परिणाम कैश करते हैं।
 - `web_fetch` डिफ़ॉल्ट रूप से Chrome-जैसा User-Agent और `Accept-Language` भेजता है; आवश्यकता होने पर `userAgent` को ओवरराइड करें।
 - `web_fetch` निजी/आंतरिक होस्टनेम्स को ब्लॉक करता है और रीडायरेक्ट्स को पुनः जाँचता है (सीमा `maxRedirects` के साथ)।

@@ -4,13 +4,6 @@ read_when:
   - Hinzufügen oder Ändern der Kameraaufnahme auf iOS-Nodes oder macOS
   - Erweitern agentenzugänglicher MEDIA-Temporärdatei-Workflows
 title: "Kameraaufnahme"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:45Z
 ---
 
 # Kameraaufnahme (Agent)

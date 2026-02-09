@@ -4,13 +4,6 @@ read_when:
   - आप सबसे तेज़ सेटअप चरणों की तलाश कर रहे हैं
   - आपको किसी पुराने लिंक से यहाँ भेजा गया था
 title: "त्वरित प्रारंभ"
-x-i18n:
-  source_path: start/quickstart.md
-  source_hash: c03779abfcd92ec9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:41Z
 ---
 
 # त्वरित प्रारंभ

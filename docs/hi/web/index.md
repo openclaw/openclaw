@@ -4,13 +4,6 @@ read_when:
   - आप Tailscale के माध्यम से Gateway तक पहुँचना चाहते हैं
   - आप ब्राउज़र कंट्रोल UI और कॉन्फ़िग संपादन चाहते हैं
 title: "वेब"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:48Z
 ---
 
 # वेब (Gateway)
@@ -18,20 +11,20 @@ x-i18n:
 Gateway, Gateway WebSocket के समान पोर्ट से एक छोटा **ब्राउज़र कंट्रोल UI** (Vite + Lit) परोसता है:
 
 - डिफ़ॉल्ट: `http://<host>:18789/`
-- वैकल्पिक प्रीफ़िक्स: `gateway.controlUi.basePath` सेट करें (उदा. `/openclaw`)
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/openclaw`)
 
-क्षमताएँ [Control UI](/web/control-ui) में उपलब्ध हैं।
-यह पृष्ठ बाइंड मोड, सुरक्षा, और वेब-फेसिंग सतहों पर केंद्रित है।
+Capabilities live in [Control UI](/web/control-ui).
+This page focuses on bind modes, security, and web-facing surfaces.
 
 ## वेबहुक्स
 
-जब `hooks.enabled=true`, Gateway उसी HTTP सर्वर पर एक छोटा वेबहुक एंडपॉइंट भी उपलब्ध कराता है।
-प्रमाणीकरण + पेलोड्स के लिए [Gateway configuration](/gateway/configuration) → `hooks` देखें।
+When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
+See [Gateway configuration](/gateway/configuration) → `hooks` for auth + payloads.
 
 ## कॉन्फ़िग (डिफ़ॉल्ट-ऑन)
 
-एसेट्स मौजूद होने पर कंट्रोल UI **डिफ़ॉल्ट रूप से सक्षम** रहता है (`dist/control-ui`)।
-आप इसे कॉन्फ़िग के माध्यम से नियंत्रित कर सकते हैं:
+The Control UI is **enabled by default** when assets are present (`dist/control-ui`).
+You can control it via config:
 
 ```json5
 {
@@ -108,15 +101,15 @@ openclaw gateway
 - UI `connect.params.auth.token` या `connect.params.auth.password` भेजता है।
 - कंट्रोल UI एंटी-क्लिकजैकिंग हेडर्स भेजता है और केवल same-origin ब्राउज़र
   वेब-सॉकेट कनेक्शनों को स्वीकार करता है, जब तक कि `gateway.controlUi.allowedOrigins` सेट न हो।
-- Serve के साथ, Tailscale पहचान हेडर्स प्रमाणीकरण को पूरा कर सकते हैं जब
-  `gateway.auth.allowTailscale` `true` हो (कोई टोकन/पासवर्ड आवश्यक नहीं)। स्पष्ट क्रेडेंशियल्स अनिवार्य करने के लिए
-  `gateway.auth.allowTailscale: false` सेट करें। देखें
-  [Tailscale](/gateway/tailscale) और [Security](/gateway/security)।
+- With Serve, Tailscale identity headers can satisfy auth when
+  `gateway.auth.allowTailscale` is `true` (no token/password required). Set
+  `gateway.auth.allowTailscale: false` to require explicit credentials. See
+  [Tailscale](/gateway/tailscale) and [Security](/gateway/security).
 - `gateway.tailscale.mode: "funnel"` के लिए `gateway.auth.mode: "password"` (साझा पासवर्ड) आवश्यक है।
 
 ## UI का निर्माण
 
-Gateway स्थिर फ़ाइलें `dist/control-ui` से परोसता है। इन्हें इस प्रकार बनाएँ:
+1. गेटवे `dist/control-ui` से स्थिर फ़ाइलें परोसता है। 2. इन्हें इस तरह बिल्ड करें:
 
 ```bash
 pnpm ui:build # auto-installs UI deps on first run

@@ -5,13 +5,6 @@ read_when:
   - Exécution d'OpenClaw sur des appareils ARM
   - Construction d'une IA personnelle toujours active et peu coûteuse
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:29Z
 ---
 
 # OpenClaw sur Raspberry Pi
@@ -23,19 +16,19 @@ Exécuter une Gateway (passerelle) OpenClaw persistante, toujours active, sur un
 Parfait pour :
 
 - Assistant IA personnel 24/7
-- Hub de domotique
+- Centre d'automatisation de la maison
 - Bot Telegram/WhatsApp basse consommation et toujours disponible
 
 ## Exigences matérielles
 
-| Modèle Pi       | RAM     | Fonctionne ? | Notes                                                  |
-| --------------- | ------- | ------------ | ------------------------------------------------------ |
-| **Pi 5**        | 4GB/8GB | ✅ Meilleur  | Le plus rapide, recommandé                             |
-| **Pi 4**        | 4GB     | ✅ Bon       | Le meilleur compromis pour la plupart des utilisateurs |
-| **Pi 4**        | 2GB     | ✅ OK        | Fonctionne, ajouter du swap                            |
-| **Pi 4**        | 1GB     | ⚠️ Limité    | Possible avec swap, config minimale                    |
-| **Pi 3B+**      | 1GB     | ⚠️ Lent      | Fonctionne mais peu réactif                            |
-| **Pi Zero 2 W** | 512MB   | ❌           | Non recommandé                                         |
+| Modèle Pi       | RAM     | Fonctionne ?      | Notes                                                  |
+| --------------- | ------- | ----------------- | ------------------------------------------------------ |
+| **Pi 5**        | 4GB/8GB | ✅ Meilleur        | Le plus rapide, recommandé                             |
+| **Pi 4**        | 4GB     | ✅ Bon             | Le meilleur compromis pour la plupart des utilisateurs |
+| **Pi 4**        | 2GB     | ✅ OK              | Fonctionne, ajouter du swap                            |
+| **Pi 4**        | 1GB     | ⚠️ Tight          | Possible avec swap, config minimale                    |
+| **Pi 3B+**      | 1GB     | ⚠️ Ralentissement | Fonctionne mais peu réactif                            |
+| **Pi Zero 2 W** | 512MB   | ❌                 | Non recommandé                                         |
 
 **Spécifications minimales :** 1GB de RAM, 1 cœur, 500MB de disque  
 **Recommandé :** 2GB+ de RAM, OS 64 bits, carte SD de 16GB+ (ou SSD USB)
@@ -48,7 +41,7 @@ Parfait pour :
 - Connexion réseau (Ethernet ou WiFi)
 - ~30 minutes
 
-## 1) Flasher l’OS
+## 1. Flasher l’OS
 
 Utilisez **Raspberry Pi OS Lite (64-bit)** — aucun environnement de bureau nécessaire pour un serveur headless.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) Configuration du système
+## 3. Configuration du système
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Installer Node.js 22 (ARM64)
+## 4. Installer Node.js 22 (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Ajouter du swap (important pour 2GB ou moins)
+## 5. Ajouter du swap (important pour 2GB ou moins)
 
 Le swap évite les crashs par manque de mémoire :
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Installer OpenClaw
+## 6. Installer OpenClaw
 
 ### Option A : Installation standard (recommandée)
 
@@ -134,13 +127,13 @@ npm link
 
 L’installation hackable vous donne un accès direct aux logs et au code — utile pour déboguer des problèmes spécifiques à ARM.
 
-## 7) Lancer la prise en main
+## 7. Lancer la prise en main
 
 ```bash
 openclaw onboard --install-daemon
 ```
 
-Suivez l’assistant :
+Suivez l'assistant :
 
 1. **Mode Gateway (passerelle) :** Local
 2. **Auth :** Clés API recommandées (OAuth peut être capricieux sur un Pi headless)
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Accéder au tableau de bord
+## 9. Accéder au tableau de bord
 
 Comme le Pi est headless, utilisez un tunnel SSH :
 
@@ -230,13 +223,13 @@ htop
 
 La plupart des fonctionnalités d’OpenClaw fonctionnent sur ARM64, mais certains binaires externes peuvent nécessiter des versions ARM :
 
-| Outil                 | Statut ARM64 | Notes                               |
-| --------------------- | ------------ | ----------------------------------- |
-| Node.js               | ✅           | Fonctionne très bien                |
-| WhatsApp (Baileys)    | ✅           | JS pur, aucun problème              |
-| Telegram              | ✅           | JS pur, aucun problème              |
+| Outil                                    | Statut ARM64 | Notes                               |
+| ---------------------------------------- | ------------ | ----------------------------------- |
+| Node.js                  | ✅            | Fonctionne très bien                |
+| WhatsApp (Baileys)    | ✅            | JS pur, aucun problème              |
+| Telegram                                 | ✅            | JS pur, aucun problème              |
 | gog (Gmail CLI)       | ⚠️           | Vérifier la disponibilité ARM       |
-| Chromium (navigateur) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (navigateur) | ✅            | `sudo apt install chromium-browser` |
 
 Si un Skill échoue, vérifiez si son binaire dispose d’une version ARM. De nombreux outils Go/Rust en ont ; certains non.
 
@@ -289,7 +282,7 @@ sudo systemctl start openclaw
 
 ---
 
-## Dépannage
+## Problemes courants
 
 ### Manque de mémoire (OOM)
 
@@ -301,7 +294,7 @@ free -h
 # Or reduce services running on the Pi
 ```
 
-### Performances lentes
+### Performance lente
 
 - Utilisez un SSD USB au lieu d’une carte SD
 - Désactivez les services inutilisés : `sudo systemctl disable cups bluetooth avahi-daemon`
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Comparaison des coûts
 
-| Configuration  | Coût unique | Coût mensuel | Notes                   |
-| -------------- | ----------- | ------------ | ----------------------- |
-| **Pi 4 (2GB)** | ~$45        | $0           | + électricité (~$5/an)  |
-| **Pi 4 (4GB)** | ~$55        | $0           | Recommandé              |
-| **Pi 5 (4GB)** | ~$60        | $0           | Meilleures performances |
-| **Pi 5 (8GB)** | ~$80        | $0           | Excessif mais pérenne   |
-| DigitalOcean   | $0          | $6/mo        | $72/an                  |
-| Hetzner        | $0          | €3.79/mo     | ~$50/an                 |
+| Configuration                     | Coût unique          | Coût mensuel             | Notes                                                     |
+| --------------------------------- | -------------------- | ------------------------ | --------------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                       | + électricité (~$5/an) |
+| **Pi 4 (4GB)** | ~$55 | $0                       | Recommandé                                                |
+| **Pi 5 (4GB)** | ~$60 | $0                       | Meilleures performances                                   |
+| **Pi 5 (8GB)** | ~$80 | $0                       | Vaincre mais à l'épreuve de l'avenir                      |
+| DigitalOcean                      | $0                   | $6/mo                    | $72/an                                                    |
+| Hetzner                           | $0                   | €3.79/mo | ~$50/an                                   |
 
 **Seuil de rentabilité :** un Pi est amorti en ~6–12 mois par rapport à un VPS cloud.
 

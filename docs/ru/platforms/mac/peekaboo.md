@@ -1,17 +1,10 @@
 ---
 summary: "Интеграция PeekabooBridge для автоматизации UI в macOS"
 read_when:
-  - "Хостинг PeekabooBridge в OpenClaw.app"
-  - "Интеграция Peekaboo через Swift Package Manager"
-  - "Изменение протокола/путей PeekabooBridge"
+  - Хостинг PeekabooBridge в OpenClaw.app
+  - Интеграция Peekaboo через Swift Package Manager
+  - Изменение протокола/путей PeekabooBridge
 title: "Peekaboo Bridge"
-x-i18n:
-  source_path: platforms/mac/peekaboo.md
-  source_hash: b5b9ddb9a7c59e15
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:44Z
 ---
 
 # Peekaboo Bridge (автоматизация UI в macOS)

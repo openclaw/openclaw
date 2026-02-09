@@ -2,21 +2,14 @@
 summary: "Forskningsanteckningar: offline-minnessystem för Clawd-arbetsytor (Markdown som källa för sanningen + härlett index)"
 read_when:
   - Utformning av arbetsyteminne (~/.openclaw/workspace) bortom dagliga Markdown-loggar
-  - Beslut: fristående CLI vs djup OpenClaw-integration
+  - Deciding: fristående CLI vs djup OpenClaw integration
   - Tillägg av offline återkallelse + reflektion (retain/recall/reflect)
 title: "Forskning om arbetsyteminne"
-x-i18n:
-  source_path: experiments/research/memory.md
-  source_hash: 1753c8ee6284999f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:31Z
 ---
 
 # Arbetsyteminne v2 (offline): forskningsanteckningar
 
-Mål: arbetsyta i Clawd-stil (`agents.defaults.workspace`, standard `~/.openclaw/workspace`) där ”minne” lagras som en Markdown-fil per dag (`memory/YYYY-MM-DD.md`) plus en liten uppsättning stabila filer (t.ex. `memory.md`, `SOUL.md`).
+Mål: Clawd-style arbetsyta (`agents.defaults.workspace`, standard `~/. penclaw/workspace`) där ”memory” lagras som en Markdown-fil per dag (`memory/YYYY-MM-DD.md`) plus en liten uppsättning stabila filer (t.ex. `memory.md`, `SOUL.md`).
 
 Detta dokument föreslår en **offline-first**-minnesarkitektur som behåller Markdown som den kanoniska, granskbara källan för sanningen, men lägger till **strukturerad återkallelse** (sökning, entitetssammanfattningar, uppdatering av tillförlitlighet) via ett härlett index.
 
@@ -34,7 +27,7 @@ Den är svag för:
 - återhämtning med hög träffsäkerhet (”vad bestämde vi om X?”, ”senast vi provade Y?”)
 - entitetscentrerade svar (”berätta om Alice / The Castle / warelay”) utan att läsa många filer
 - stabilitet i åsikter/preferenser (och bevis när de ändras)
-- tidsbegränsningar (”vad gällde under nov 2025?”) och konfliktlösning
+- tidsbegränsningar ("vad var sant under november 2025?") och konfliktlösning
 
 ## Designmål
 
@@ -87,7 +80,7 @@ Föreslagen arbetsytestruktur:
 
 Noteringar:
 
-- **Daglig logg förblir daglig logg**. Ingen anledning att göra den till JSON.
+- **Daglig logg stannar daglig loggen**. Inget behov av att förvandla det till JSON.
 - Filerna `bank/` är **kuraterade**, producerade av reflektionsjobb, och kan fortfarande redigeras för hand.
 - `memory.md` förblir ”liten + kärnlik”: det du vill att Clawd ska se varje session.
 
@@ -144,7 +137,7 @@ Om du inte vill att författare ska behöva tänka på detta: reflektionsjobbet 
 - **lexikal**: ”hitta exakta termer / namn / kommandon” (FTS5)
 - **entitet**: ”berätta om X” (entitetssidor + entitetslänkade fakta)
 - **temporal**: ”vad hände runt 27 nov” / ”sedan förra veckan”
-- **åsikt**: ”vad föredrar Peter?” (med tillförlitlighet + bevis)
+- **åsikt**: “Vad föredrar Petr?” (med självförtroende + bevis)
 
 Returformatet bör vara agentvänligt och citera källor:
 

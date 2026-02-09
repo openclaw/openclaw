@@ -3,13 +3,6 @@ summary: "Runbook cho dịch vụ Gateway, vòng đời và vận hành"
 read_when:
   - Khi chạy hoặc gỡ lỗi tiến trình gateway
 title: "Runbook Gateway"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:37Z
 ---
 
 # Runbook dịch vụ Gateway
@@ -19,7 +12,7 @@ Cập nhật lần cuối: 2025-12-09
 ## Nó là gì
 
 - Tiến trình luôn chạy, sở hữu kết nối Baileys/Telegram duy nhất và mặt phẳng điều khiển/sự kiện.
-- Thay thế lệnh cũ `gateway`. Điểm vào CLI: `openclaw gateway`.
+- Replaces the legacy `gateway` command. CLI entry point: `openclaw gateway`.
 - Chạy cho đến khi bị dừng; thoát với mã khác 0 khi gặp lỗi nghiêm trọng để bộ giám sát khởi động lại.
 
 ## Cách chạy (local)
@@ -39,17 +32,17 @@ pnpm gateway:watch
   - Hot reload dùng khởi động lại trong tiến trình qua **SIGUSR1** khi cần.
   - Tắt bằng `gateway.reload.mode="off"`.
 - Gắn WebSocket mặt phẳng điều khiển vào `127.0.0.1:<port>` (mặc định 18789).
-- Cùng cổng đó cũng phục vụ HTTP (UI điều khiển, hooks, A2UI). Ghép đa kênh một cổng.
+- The same port also serves HTTP (control UI, hooks, A2UI). Single-port multiplex.
   - OpenAI Chat Completions (HTTP): [`/v1/chat/completions`](/gateway/openai-http-api).
   - OpenResponses (HTTP): [`/v1/responses`](/gateway/openresponses-http-api).
   - Tools Invoke (HTTP): [`/tools/invoke`](/gateway/tools-invoke-http-api).
-- Mặc định khởi động máy chủ tệp Canvas trên `canvasHost.port` (mặc định `18793`), phục vụ `http://<gateway-host>:18793/__openclaw__/canvas/` từ `~/.openclaw/workspace/canvas`. Tắt bằng `canvasHost.enabled=false` hoặc `OPENCLAW_SKIP_CANVAS_HOST=1`.
+- Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__openclaw__/canvas/` from `~/.openclaw/workspace/canvas`. Disable with `canvasHost.enabled=false` or `OPENCLAW_SKIP_CANVAS_HOST=1`.
 - Ghi log ra stdout; dùng launchd/systemd để giữ tiến trình sống và xoay vòng log.
 - Truyền `--verbose` để phản chiếu log gỡ lỗi (bắt tay, req/res, sự kiện) từ tệp log sang stdio khi xử lý sự cố.
 - `--force` dùng `lsof` để tìm các listener trên cổng đã chọn, gửi SIGTERM, ghi log những gì đã dừng, rồi khởi động gateway (thất bại nhanh nếu thiếu `lsof`).
 - Nếu chạy dưới bộ giám sát (launchd/systemd/chế độ tiến trình con của ứng dụng mac), việc dừng/khởi động lại thường gửi **SIGTERM**; các bản build cũ có thể hiển thị là `pnpm` `ELIFECYCLE` với mã thoát **143** (SIGTERM), đây là tắt bình thường, không phải crash.
 - **SIGUSR1** kích hoạt khởi động lại trong tiến trình khi được ủy quyền (gateway tool/config apply/update, hoặc bật `commands.restart` để khởi động lại thủ công).
-- Mặc định yêu cầu xác thực Gateway: đặt `gateway.auth.token` (hoặc `OPENCLAW_GATEWAY_TOKEN`) hoặc `gateway.auth.password`. Client phải gửi `connect.params.auth.token/password` trừ khi dùng danh tính Tailscale Serve.
+- Gateway auth is required by default: set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) or `gateway.auth.password`. Clients must send `connect.params.auth.token/password` unless using Tailscale Serve identity.
 - Trình hướng dẫn hiện tạo token theo mặc định, ngay cả trên loopback.
 - Thứ tự ưu tiên cổng: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > mặc định `18789`.
 
@@ -62,17 +55,18 @@ pnpm gateway:watch
   ```
 
 - Client sau đó kết nối tới `ws://127.0.0.1:18789` qua đường hầm.
+
 - Nếu đã cấu hình token, client phải kèm nó trong `connect.params.auth.token` ngay cả khi qua đường hầm.
 
 ## Nhiều gateway (cùng máy chủ)
 
-Thường không cần: một Gateway có thể phục vụ nhiều kênh nhắn tin và tác tử. Chỉ dùng nhiều Gateway cho dự phòng hoặc cô lập nghiêm ngặt (ví dụ: bot cứu hộ).
+Usually unnecessary: one Gateway can serve multiple messaging channels and agents. Use multiple Gateways only for redundancy or strict isolation (ex: rescue bot).
 
-Hỗ trợ nếu bạn cô lập trạng thái + cấu hình và dùng các cổng duy nhất. Hướng dẫn đầy đủ: [Multiple gateways](/gateway/multiple-gateways).
+Supported if you isolate state + config and use unique ports. Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 Tên dịch vụ nhận biết theo profile:
 
-- macOS: `bot.molt.<profile>` (bản cũ `com.openclaw.*` có thể vẫn tồn tại)
+- macOS: `bot.molt.<profile>` (legacy `com.openclaw.*` may still exist)
 - Linux: `openclaw-gateway-<profile>.service`
 - Windows: `OpenClaw Gateway (<profile>)`
 
@@ -82,7 +76,7 @@ Siêu dữ liệu cài đặt được nhúng trong cấu hình dịch vụ:
 - `OPENCLAW_SERVICE_KIND=gateway`
 - `OPENCLAW_SERVICE_VERSION=<version>`
 
-Mẫu Rescue-Bot: giữ một Gateway thứ hai được cô lập với profile, thư mục trạng thái, workspace và khoảng cách cổng cơ sở riêng. Hướng dẫn đầy đủ: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
+Rescue-Bot Pattern: keep a second Gateway isolated with its own profile, state dir, workspace, and base port spacing. Full guide: [Rescue-bot guide](/gateway/multiple-gateways#rescue-bot-guide).
 
 ### Profile dev (`--dev`)
 
@@ -110,7 +104,7 @@ Các cổng suy ra (quy tắc kinh nghiệm):
 - Cổng cơ sở = `gateway.port` (hoặc `OPENCLAW_GATEWAY_PORT` / `--port`)
 - cổng dịch vụ điều khiển trình duyệt = cơ sở + 2 (chỉ loopback)
 - `canvasHost.port = base + 4` (hoặc `OPENCLAW_CANVAS_HOST_PORT` / ghi đè cấu hình)
-- Các cổng CDP của profile trình duyệt tự cấp phát từ `browser.controlPort + 9 .. + 108` (lưu theo từng profile).
+- Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108` (được lưu theo từng hồ sơ).
 
 Danh sách kiểm tra cho mỗi instance:
 
@@ -137,12 +131,12 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 ## Giao thức (góc nhìn vận hành)
 
 - Tài liệu đầy đủ: [Gateway protocol](/gateway/protocol) và [Bridge protocol (legacy)](/gateway/bridge-protocol).
-- Khung đầu tiên bắt buộc từ client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
+- Mandatory first frame from client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{id,displayName?,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId?}, caps, auth?, locale?, userAgent? } }`.
 - Gateway phản hồi `res {type:"res", id, ok:true, payload:hello-ok }` (hoặc `ok:false` kèm lỗi, rồi đóng).
 - Sau bắt tay:
   - Yêu cầu: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Sự kiện: `{type:"event", event, payload, seq?, stateVersion?}`
-- Mục hiện diện có cấu trúc: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (đối với client WS, `instanceId` đến từ `connect.client.instanceId`).
+- Structured presence entries: `{host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }` (đối với client WS, `instanceId` lấy từ `connect.client.instanceId`).
 - Phản hồi `agent` theo hai giai đoạn: trước tiên ack `res` `{runId,status:"accepted"}`, sau đó là `res` `{runId,status:"ok"|"error",summary}` cuối cùng khi chạy xong; đầu ra dạng stream đến dưới dạng `event:"agent"`.
 
 ## Phương thức (tập ban đầu)
@@ -165,7 +159,7 @@ Xem thêm: [Presence](/concepts/presence) để biết cách tạo/khử trùng 
 - `agent` — các sự kiện công cụ/đầu ra được stream từ lượt chạy tác tử (gắn thẻ seq).
 - `presence` — cập nhật hiện diện (delta kèm stateVersion) được đẩy tới tất cả client đang kết nối.
 - `tick` — keepalive/no-op định kỳ để xác nhận còn sống.
-- `shutdown` — Gateway đang thoát; payload bao gồm `reason` và tùy chọn `restartExpectedMs`. Client nên kết nối lại.
+- `shutdown` — Gateway is exiting; payload includes `reason` and optional `restartExpectedMs`. Client nên kết nối lại.
 
 ## Tích hợp WebChat
 
@@ -188,7 +182,7 @@ Xem thêm: [Presence](/concepts/presence) để biết cách tạo/khử trùng 
 
 ## Mã lỗi (dạng res.error)
 
-- Lỗi dùng `{ code, message, details?, retryable?, retryAfterMs? }`.
+- Errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 - Mã chuẩn:
   - `NOT_LINKED` — WhatsApp chưa xác thực.
   - `AGENT_TIMEOUT` — tác tử không phản hồi trong thời hạn đã cấu hình.
@@ -202,7 +196,7 @@ Xem thêm: [Presence](/concepts/presence) để biết cách tạo/khử trùng 
 
 ## Phát lại / khoảng trống
 
-- Sự kiện không được phát lại. Client phát hiện khoảng trống seq và nên làm mới (`health` + `system-presence`) trước khi tiếp tục. WebChat và client macOS hiện tự động làm mới khi có khoảng trống.
+- Sự kiện không được phát lại. Clients detect seq gaps and should refresh (`health` + `system-presence`) before continuing. Client WebChat và macOS hiện tự động làm mới khi có khoảng trống.
 
 ## Giám sát (ví dụ macOS)
 
@@ -213,8 +207,8 @@ Xem thêm: [Presence](/concepts/presence) để biết cách tạo/khử trùng 
   - StandardOut/Err: đường dẫn tệp hoặc `syslog`
 - Khi lỗi, launchd khởi động lại; cấu hình sai nghiêm trọng nên tiếp tục thoát để người vận hành nhận ra.
 - LaunchAgent là theo người dùng và yêu cầu phiên đăng nhập; với thiết lập headless dùng LaunchDaemon tùy chỉnh (không kèm theo).
-  - `openclaw gateway install` ghi `~/Library/LaunchAgents/bot.molt.gateway.plist`
-    (hoặc `bot.molt.<profile>.plist`; bản cũ `com.openclaw.*` sẽ được dọn dẹp).
+  - `openclaw gateway install` ghi vào `~/Library/LaunchAgents/bot.molt.gateway.plist`
+    (hoặc `bot.molt.<profile>`.plist`; các nhãn cũ `com.openclaw.\*\` sẽ được dọn dẹp).
   - `openclaw doctor` kiểm tra cấu hình LaunchAgent và có thể cập nhật về mặc định hiện hành.
 
 ## Quản lý dịch vụ Gateway (CLI)
@@ -239,29 +233,28 @@ Ghi chú:
 - `gateway status` in đường dẫn cấu hình + mục tiêu thăm dò để tránh nhầm “localhost vs bind LAN” và lệch profile.
 - `gateway status` bao gồm dòng lỗi gateway gần nhất khi dịch vụ có vẻ đang chạy nhưng cổng bị đóng.
 - `logs` tail log tệp Gateway qua RPC (không cần `tail`/`grep` thủ công).
-- Nếu phát hiện các dịch vụ kiểu gateway khác, CLI sẽ cảnh báo trừ khi chúng là dịch vụ profile OpenClaw.
-  Chúng tôi vẫn khuyến nghị **một gateway trên mỗi máy** cho đa số thiết lập; dùng profile/cổng cô lập cho dự phòng hoặc bot cứu hộ. Xem [Multiple gateways](/gateway/multiple-gateways).
+- Nếu phát hiện các dịch vụ giống gateway khác, CLI sẽ cảnh báo trừ khi chúng là dịch vụ hồ sơ OpenClaw.
+  Chúng tôi vẫn khuyến nghị **một gateway cho mỗi máy** cho hầu hết các thiết lập; sử dụng hồ sơ/cổng tách biệt để dự phòng hoặc cho bot cứu hộ. Xem [Multiple gateways](/gateway/multiple-gateways).
   - Dọn dẹp: `openclaw gateway uninstall` (dịch vụ hiện tại) và `openclaw doctor` (di trú bản cũ).
 - `gateway install` là no-op khi đã cài; dùng `openclaw gateway install --force` để cài lại (thay đổi profile/env/đường dẫn).
 
 Ứng dụng mac đóng gói:
 
-- OpenClaw.app có thể đóng gói một gateway relay dựa trên Node và cài LaunchAgent theo người dùng với nhãn
-  `bot.molt.gateway` (hoặc `bot.molt.<profile>`; các nhãn cũ `com.openclaw.*` vẫn được unload sạch).
+- OpenClaw.app có thể đóng gói một gateway relay dựa trên Node và cài đặt LaunchAgent theo người dùng với nhãn
+  `bot.molt.gateway` (hoặc `bot.molt.<profile>`; các nhãn cũ `com.openclaw.*` vẫn được unload sạch sẽ).
 - Để dừng sạch, dùng `openclaw gateway stop` (hoặc `launchctl bootout gui/$UID/bot.molt.gateway`).
 - Để khởi động lại, dùng `openclaw gateway restart` (hoặc `launchctl kickstart -k gui/$UID/bot.molt.gateway`).
   - `launchctl` chỉ hoạt động nếu LaunchAgent đã được cài; nếu không hãy dùng `openclaw gateway install` trước.
-  - Thay nhãn bằng `bot.molt.<profile>` khi chạy profile có tên.
+  - Thay nhãn bằng \`bot.molt.<profile>\`\` khi chạy một hồ sơ được đặt tên.
 
 ## Giám sát (systemd user unit)
 
-OpenClaw cài **systemd user service** theo mặc định trên Linux/WSL2. Chúng tôi
-khuyến nghị dịch vụ người dùng cho máy một người dùng (env đơn giản hơn, cấu hình theo người dùng).
-Dùng **system service** cho máy đa người dùng hoặc máy chủ luôn bật (không cần lingering,
-giám sát dùng chung).
+OpenClaw cài đặt **dịch vụ systemd theo người dùng** theo mặc định trên Linux/WSL2. Chúng tôi
+khuyến nghị dịch vụ người dùng cho máy đơn người dùng (môi trường đơn giản hơn, cấu hình theo người dùng).
+Sử dụng **dịch vụ hệ thống** cho máy chủ nhiều người dùng hoặc luôn bật (không cần lingering, giám sát dùng chung).
 
 `openclaw gateway install` ghi user unit. `openclaw doctor` kiểm tra
-unit và có thể cập nhật để khớp với các mặc định khuyến nghị hiện tại.
+the unit và có thể cập nhật nó để khớp với các mặc định khuyến nghị hiện tại.
 
 Tạo `~/.config/systemd/user/openclaw-gateway[-<profile>].service`:
 
@@ -288,17 +281,17 @@ Bật lingering (bắt buộc để dịch vụ người dùng tồn tại qua �
 sudo loginctl enable-linger youruser
 ```
 
-Onboarding chạy bước này trên Linux/WSL2 (có thể yêu cầu sudo; ghi `/var/lib/systemd/linger`).
-Sau đó bật dịch vụ:
+Onboarding chạy lệnh này trên Linux/WSL2 (có thể yêu cầu sudo; ghi vào `/var/lib/systemd/linger`).
+Sau đó kích hoạt dịch vụ:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
 
-**Phương án thay thế (system service)** - cho máy chủ luôn bật hoặc đa người dùng, bạn có thể
-cài unit **system** của systemd thay vì user unit (không cần lingering).
-Tạo `/etc/systemd/system/openclaw-gateway[-<profile>].service` (sao chép unit ở trên,
-đổi `WantedBy=multi-user.target`, đặt `User=` + `WorkingDirectory=`), rồi:
+**Thay thế (dịch vụ hệ thống)** - đối với máy chủ luôn bật hoặc nhiều người dùng, bạn có thể
+cài đặt một đơn vị **systemd hệ thống** thay vì đơn vị người dùng (không cần lingering).
+Tạo `/etc/systemd/system/openclaw-gateway[-<profile>].service` (sao chép đơn vị ở trên,
+chuyển `WantedBy=multi-user.target`, đặt `User=` + `WorkingDirectory=`), sau đó:
 
 ```
 sudo systemctl daemon-reload

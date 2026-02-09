@@ -1,15 +1,8 @@
 ---
-summary: „Erhöhter Ausführungsmodus und /elevated‑Direktiven“
+summary: "„Erhöhter Ausführungsmodus und /elevated‑Direktiven“"
 read_when:
   - Anpassen der Standardwerte des erhöhten Modus, der Allowlists oder des Verhaltens von Slash‑Commands
-title: „Erhöhter Modus“
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:37Z
+title: "„Erhöhter Modus“"
 ---
 
 # Erhöhter Modus (/elevated‑Direktiven)
@@ -60,5 +53,5 @@ x-i18n:
 
 ## Protokollierung + Status
 
-- Erhöhte exec‑Aufrufe werden auf Info‑Ebene protokolliert.
+- Erhöhte exec Anrufe werden auf Info-Ebene protokolliert.
 - Der Sitzungsstatus enthält den erhöhten Modus (z. B. `elevated=ask`, `elevated=full`).

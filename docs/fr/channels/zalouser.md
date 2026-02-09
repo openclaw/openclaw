@@ -4,13 +4,6 @@ read_when:
   - Configuration de Zalo Personal pour OpenClaw
   - Depannage de la connexion ou du flux de messages Zalo Personal
 title: "Zalo Personal"
-x-i18n:
-  source_path: channels/zalouser.md
-  source_hash: 2a249728d556e5cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:46Z
 ---
 
 # Zalo Personal (non officiel)
@@ -54,7 +47,7 @@ La machine Gateway (passerelle) doit disposer du binaire `zca` disponible dans `
 ```
 
 4. Redemarrez la Gateway (passerelle) (ou terminez la prise en main).
-5. L’acces aux Messages prives est par defaut en appairage ; approuvez le code d’appairage lors du premier contact.
+5. Accès DM par défaut à l'appairage ; approuve le code d'appairage au premier contact.
 
 ## De quoi s’agit-il
 
@@ -62,7 +55,7 @@ La machine Gateway (passerelle) doit disposer du binaire `zca` disponible dans `
 - Utilise `zca msg ...` pour envoyer des reponses (texte/media/lien).
 - Concu pour des cas d’usage « compte personnel » lorsque l’API Zalo Bot n’est pas disponible.
 
-## Nommage
+## Nommer
 
 L’identifiant du canal est `zalouser` afin d’indiquer explicitement qu’il automatise un **compte utilisateur Zalo personnel** (non officiel). Nous reservons `zalo` pour une eventuelle future integration officielle de l’API Zalo.
 
@@ -81,7 +74,7 @@ openclaw directory groups list --channel zalouser --query "work"
 - Les messages sortants sont decoupes en blocs d’environ 2000 caracteres (limites du client Zalo).
 - Le streaming est bloque par defaut.
 
-## Controle d’acces (Messages prives)
+## Contrôle d'accès (DMs)
 
 `channels.zalouser.dmPolicy` prend en charge : `pairing | allowlist | open | disabled` (par defaut : `pairing`).
 `channels.zalouser.allowFrom` accepte des IDs ou des noms d’utilisateurs. L’assistant resout les noms en IDs via `zca friend find` lorsque disponible.
@@ -135,13 +128,13 @@ Les comptes correspondent a des profils zca. Exemple :
 }
 ```
 
-## Depannage
+## Problemes courants
 
 **`zca` introuvable :**
 
 - Installez zca-cli et assurez-vous qu’il est present dans `PATH` pour le processus Gateway (passerelle).
 
-**La connexion ne persiste pas :**
+**La connexion ne colle pas:**
 
 - `openclaw channels status --probe`
 - Reconnexion : `openclaw channels logout --channel zalouser && openclaw channels login --channel zalouser`

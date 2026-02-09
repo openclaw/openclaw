@@ -4,18 +4,11 @@ read_when:
   - 新しい npm リリースを作成する際
   - 新しい macOS アプリリリースを作成する際
   - 公開前にメタデータを検証する際
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:16Z
 ---
 
 # リリースチェックリスト（npm + macOS）
 
-リポジトリのルートから `pnpm`（Node 22+）を使用します。タグ付けや公開の前に、作業ツリーがクリーンであることを保ってください。
+リポジトリの `pnpm` (ノード22+) を使用します。 リポジトリのルートから `pnpm`（Node 22+）を使用します。タグ付けや公開の前に、作業ツリーがクリーンであることを保ってください。
 
 ## オペレータートリガー
 
@@ -79,7 +72,7 @@ x-i18n:
 
 ### トラブルシューティング（2.0.0-beta2 リリース時のメモ）
 
-- **npm pack / publish がハングする、または巨大な tarball を生成する**: `dist/OpenClaw.app` 内の macOS アプリバンドル（およびリリース zip）がパッケージに取り込まれています。`package.json` `files` によって公開内容をホワイトリスト化して修正します（dist サブディレクトリ、docs、skills を含め、アプリバンドルを除外）。`npm pack --dry-run` で `dist/OpenClaw.app` が一覧に含まれていないことを確認してください。
+- **npm pack / publish がハングする、または巨大な tarball を生成する**: `dist/OpenClaw.app` 内の macOS アプリバンドル（およびリリース zip）がパッケージに取り込まれています。`package.json` `files` によって公開内容をホワイトリスト化して修正します（dist サブディレクトリ、docs、skills を含め、アプリバンドルを除外）。`npm pack --dry-run` で `dist/OpenClaw.app` が一覧に含まれていないことを確認してください。 `package.json` `files` で公開内容をホワイトリストに追加して修正しました（ディストのサブディレクトリ、ドキュメント、スキル、アプリのバンドルを除く）。 `dist/OpenClaw.app`がリストされていない`npm pack --dry-run`で確認します。
 - **dist-tags の npm auth web ループ**: OTP プロンプトを表示するため、レガシー認証を使用します:
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **`npx` の検証が `ECOMPROMISED: Lock compromised` で失敗する**: 新しいキャッシュで再試行します:
@@ -98,7 +91,7 @@ x-i18n:
 
 ## プラグインの公開スコープ（npm）
 
-公開するのは `@openclaw/*` スコープ配下の **既存の npm プラグイン** のみです。npm に存在しない同梱プラグインは **ディスクツリーのみ** に留めます（引き続き `extensions/**` に同梱されます）。
+**既存の npm プラグイン** を `@openclaw/*` スコープにのみ公開します。 公開するのは `@openclaw/*` スコープ配下の **既存の npm プラグイン** のみです。npm に存在しない同梱プラグインは **ディスクツリーのみ** に留めます（引き続き `extensions/**` に同梱されます）。
 
 リストを導出する手順:
 

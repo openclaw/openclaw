@@ -3,13 +3,6 @@ summary: "Ciclo de vida del bucle del agente, streams y semántica de espera"
 read_when:
   - Necesita un recorrido exacto del bucle del agente o de los eventos del ciclo de vida
 title: "Bucle del agente"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:16Z
 ---
 
 # Bucle del agente (OpenClaw)
@@ -49,7 +42,7 @@ está conectado de extremo a extremo.
    - espera **fin/error del ciclo de vida** para `runId`
    - devuelve `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
-## Encolado + concurrencia
+## Cola + concurrencia
 
 - Las ejecuciones se serializan por clave de sesión (carril de sesión) y opcionalmente a través de un carril global.
 - Esto evita condiciones de carrera de herramientas/sesión y mantiene consistente el historial de la sesión.

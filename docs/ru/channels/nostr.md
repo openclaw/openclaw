@@ -4,13 +4,6 @@ read_when:
   - Вы хотите, чтобы OpenClaw принимал личные сообщения через Nostr
   - Вы настраиваете децентрализованный обмен сообщениями
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:16Z
 ---
 
 # Nostr
@@ -78,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Configuration reference
 
-| Key          | Type     | Default                                     | Description                              |
-| ------------ | -------- | ------------------------------------------- | ---------------------------------------- |
-| `privateKey` | string   | required                                    | Приватный ключ в формате `nsec` или hex  |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URL ретрансляторов (WebSocket)           |
-| `dmPolicy`   | string   | `pairing`                                   | Политика доступа к DM                    |
-| `allowFrom`  | string[] | `[]`                                        | Разрешённые публичные ключи отправителей |
-| `enabled`    | boolean  | `true`                                      | Включить/отключить канал                 |
-| `name`       | string   | -                                           | Отображаемое имя                         |
-| `profile`    | object   | -                                           | Метаданные профиля NIP-01                |
+| Key          | Type                                                         | Default                                     | Description                                       |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------------- |
+| `privateKey` | string                                                       | required                                    | Приватный ключ в формате `nsec` или hex           |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | URL ретрансляторов (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | Политика доступа к DM                             |
+| `allowFrom`  | string[] | `[]`                                        | Разрешённые публичные ключи отправителей          |
+| `enabled`    | boolean                                                      | `true`                                      | Включить/отключить канал                          |
+| `name`       | string                                                       | -                                           | Отображаемое имя                                  |
+| `profile`    | object                                                       | -                                           | Метаданные профиля NIP-01                         |
 
 ## Profile metadata
 
@@ -173,12 +166,12 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Protocol support
 
-| NIP    | Status    | Description                                 |
-| ------ | --------- | ------------------------------------------- |
-| NIP-01 | Supported | Базовый формат событий + метаданные профиля |
-| NIP-04 | Supported | Зашифрованные DM (`kind:4`)                 |
-| NIP-17 | Planned   | DM с «gift-wrap»                            |
-| NIP-44 | Planned   | Версионированное шифрование                 |
+| NIP    | Status    | Description                                    |
+| ------ | --------- | ---------------------------------------------- |
+| NIP-01 | Supported | Базовый формат событий + метаданные профиля    |
+| NIP-04 | Supported | Зашифрованные DM (`kind:4`) |
+| NIP-17 | Planned   | DM с «gift-wrap»                               |
+| NIP-44 | Planned   | Версионированное шифрование                    |
 
 ## Testing
 

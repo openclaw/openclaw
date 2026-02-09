@@ -1,15 +1,8 @@
 ---
-summary: 「Microsoft Teams 機器人支援狀態、功能與設定」
+summary: "Microsoft Teams 機器人支援狀態、功能與設定"
 read_when:
   - 進行 MS Teams 頻道功能相關工作時
-title: 「Microsoft Teams」
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:05Z
+title: "Microsoft Teams"
 ---
 
 # Microsoft Teams（外掛）
@@ -18,13 +11,13 @@ x-i18n:
 
 更新日期：2026-01-21
 
-狀態：支援文字與私訊附件；頻道／群組檔案傳送需要 `sharePointSiteId` + Graph 權限（請參閱〈[在群組聊天中傳送檔案](#sending-files-in-group-chats)〉）。投票透過 Adaptive Cards 傳送。
+狀態：支援文字與私訊附件；頻道／群組檔案傳送需要 `sharePointSiteId` + Graph 權限（請參閱〈[在群組聊天中傳送檔案](#sending-files-in-group-chats)〉）。投票透過 Adaptive Cards 傳送。 32. 投票會透過 Adaptive Cards 傳送。
 
-## 需要外掛
+## 33. 需要外掛
 
 Microsoft Teams 以外掛形式提供，未隨核心安裝一起包含。
 
-**重大變更（2026.1.15）：** MS Teams 已移出核心。若要使用，必須安裝外掛。
+**重大變更（2026.1.15）：** MS Teams 已移出核心。若要使用，必須安裝外掛。 34. 若使用此功能，必須安裝外掛。
 
 說明：讓核心安裝更輕量，並可讓 MS Teams 相依套件獨立更新。
 
@@ -34,7 +27,7 @@ Microsoft Teams 以外掛形式提供，未隨核心安裝一起包含。
 openclaw plugins install @openclaw/msteams
 ```
 
-本機檢出（從 git 儲存庫執行時）：
+本機檢出（從 git repo 執行時）：
 
 ```bash
 openclaw plugins install ./extensions/msteams
@@ -51,7 +44,7 @@ OpenClaw 會自動提供本機安裝路徑。
 2. 建立 **Azure Bot**（App ID + client secret + tenant ID）。
 3. 以這些憑證設定 OpenClaw。
 4. 透過公開 URL 或通道公開 `/api/messages`（預設連接埠 3978）。
-5. 安裝 Teams 應用程式套件並啟動 Gateway 閘道器。
+5. 35. 安裝 Teams 應用程式套件並啟動閘道。
 
 最小設定：
 
@@ -69,12 +62,12 @@ OpenClaw 會自動提供本機安裝路徑。
 }
 ```
 
-注意：群組聊天預設被封鎖（`channels.msteams.groupPolicy: "allowlist"`）。若要允許群組回覆，請設定 `channels.msteams.groupAllowFrom`（或使用 `groupPolicy: "open"` 以允許任何成員，仍需提及門檻）。
+注意：群組聊天預設被封鎖（`channels.msteams.groupPolicy: "allowlist"`）。若要允許群組回覆，請設定 `channels.msteams.groupAllowFrom`（或使用 `groupPolicy: "open"` 以允許任何成員，仍需提及門檻）。 36. 若要允許群組回覆，請設定 `channels.msteams.groupAllowFrom`（或使用 `groupPolicy: "open"` 以允許任何成員，但需提及）。
 
 ## 目標
 
 - 透過 Teams 私訊、群組聊天或頻道與 OpenClaw 對話。
-- 維持路由確定性：回覆一律回到訊息來源的頻道。
+- 保持路由的確定性：回覆一律回到訊息來源的頻道。
 - 預設採安全的頻道行為（除非另行設定，否則需要提及）。
 
 ## 設定寫入
@@ -93,12 +86,12 @@ OpenClaw 會自動提供本機安裝路徑。
 
 **私訊存取**
 
-- 預設：`channels.msteams.dmPolicy = "pairing"`。未知寄件者在核准前會被忽略。
-- `channels.msteams.allowFrom` 接受 AAD 物件 ID、UPN 或顯示名稱。當憑證允許時，精靈會透過 Microsoft Graph 將名稱解析為 ID。
+- 預設：`channels.msteams.dmPolicy = "pairing"`。未知寄件者在核准前會被忽略。 37. 未知的傳送者在核准前會被忽略。
+- 38. `channels.msteams.allowFrom` 接受 AAD 物件 ID、UPN 或顯示名稱。 39. 在認證允許的情況下，精靈會透過 Microsoft Graph 將名稱解析為 ID。
 
 **群組存取**
 
-- 預設：`channels.msteams.groupPolicy = "allowlist"`（除非加入 `groupAllowFrom`，否則封鎖）。若未設定，可用 `channels.defaults.groupPolicy` 覆寫預設。
+- 預設：`channels.msteams.groupPolicy = "allowlist"`（除非加入 `groupAllowFrom`，否則封鎖）。若未設定，可用 `channels.defaults.groupPolicy` 覆寫預設。 40. 在未設定時，使用 `channels.defaults.groupPolicy` 來覆寫預設值。
 - `channels.msteams.groupAllowFrom` 控制哪些寄件者可在群組聊天／頻道中觸發（回退至 `channels.msteams.allowFrom`）。
 - 設定 `groupPolicy: "open"` 以允許任何成員（預設仍需提及）。
 - 若要 **不允許任何頻道**，請設定 `channels.msteams.groupPolicy: "disabled"`。
@@ -143,7 +136,7 @@ OpenClaw 會自動提供本機安裝路徑。
 }
 ```
 
-## 運作方式
+## How it works
 
 1. 安裝 Microsoft Teams 外掛。
 2. 建立 **Azure Bot**（App ID + secret + tenant ID）。
@@ -161,16 +154,16 @@ OpenClaw 會自動提供本機安裝路徑。
 1. 前往 [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot)
 2. 填寫 **Basics** 分頁：
 
-   | 欄位               | 值                                                  |
-   | ------------------ | --------------------------------------------------- |
+   | 欄位                 | 值                                   |
+   | ------------------ | ----------------------------------- |
    | **Bot handle**     | 你的機器人名稱，例如 `openclaw-msteams`（必須唯一） |
-   | **Subscription**   | 選擇你的 Azure 訂閱                                 |
-   | **Resource group** | 新建或使用既有                                      |
-   | **Pricing tier**   | 開發／測試用選 **Free**                             |
-   | **Type of App**    | **Single Tenant**（建議，見下方說明）               |
-   | **Creation type**  | **Create new Microsoft App ID**                     |
+   | **Subscription**   | 選擇你的 Azure 訂閱                       |
+   | **Resource group** | 新建或使用既有                             |
+   | **Pricing tier**   | 開發／測試用選 **Free**                    |
+   | **Type of App**    | **Single Tenant**（建議，見下方說明）         |
+   | **Creation type**  | **Create new Microsoft App ID**     |
 
-> **淘汰通知：** 2025-07-31 之後已淘汰新建多租戶機器人。新機器人請使用 **Single Tenant**。
+> **Deprecation notice:** Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single Tenant** for new bots.
 
 3. 點擊 **Review + create** → **Create**（等待約 1–2 分鐘）
 
@@ -182,7 +175,7 @@ OpenClaw 會自動提供本機安裝路徑。
 4. 於 **Certificates & secrets** → **New client secret** → 複製 **Value** → 即為你的 `appPassword`
 5. 前往 **Overview** → 複製 **Directory (tenant) ID** → 即為你的 `tenantId`
 
-### 步驟 3：設定訊息端點
+### Step 3: Configure Messaging Endpoint
 
 1. 在 Azure Bot → **Configuration**
 2. 將 **Messaging endpoint** 設為你的 webhook URL：
@@ -195,9 +188,9 @@ OpenClaw 會自動提供本機安裝路徑。
 2. 點擊 **Microsoft Teams** → Configure → Save
 3. 接受服務條款
 
-## 本機開發（通道）
+## Local Development (Tunneling)
 
-Teams 無法連線至 `localhost`。本機開發需使用通道：
+Teams 無法連線至 `localhost`。本機開發需使用通道： Use a tunnel for local development:
 
 **選項 A：ngrok**
 
@@ -228,7 +221,7 @@ tailscale funnel 3978
 
 通常比手動編輯 JSON manifest 更容易。
 
-## 測試機器人
+## Testing the Bot
 
 **選項 A：Azure Web Chat（先驗證 webhook）**
 
@@ -239,8 +232,8 @@ tailscale funnel 3978
 **選項 B：Teams（安裝應用程式後）**
 
 1. 安裝 Teams 應用程式（側載或組織目錄）
-2. 在 Teams 中找到機器人並傳送私訊
-3. 檢查 Gateway 閘道器 日誌是否有進站活動
+2. Find the bot in Teams and send a DM
+3. Check gateway logs for incoming activity
 
 ## 設定（最小文字版）
 
@@ -277,11 +270,12 @@ tailscale funnel 3978
    ```
 
    也可改用環境變數而非設定鍵：
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
 
-5. **機器人端點**
+5. **Bot endpoint**
    - 將 Azure Bot Messaging Endpoint 設為：
      - `https://<host>:3978/api/messages`（或自訂路徑／連接埠）。
 
@@ -291,12 +285,12 @@ tailscale funnel 3978
 ## 歷史脈絡
 
 - `channels.msteams.historyLimit` 控制要包入提示中的最近頻道／群組訊息數量。
-- 回退至 `messages.groupChat.historyLimit`。設定 `0` 可停用（預設 50）。
-- 私訊歷史可用 `channels.msteams.dmHistoryLimit`（使用者輪次）限制。每位使用者可用 `channels.msteams.dms["<user_id>"].historyLimit` 覆寫。
+- 回退至 `messages.groupChat.historyLimit`。設定 `0` 可停用（預設 50）。 Set `0` to disable (default 50).
+- 私訊（DM）歷史可用 `channels.msteams.dmHistoryLimit`（使用者回合）限制；每位使用者可用 `channels.telegram.dms["<user_id>"].historyLimit` 覆寫。 私訊歷史可用 `channels.msteams.dmHistoryLimit`（使用者輪次）限制。每位使用者可用 `channels.msteams.dms["<user_id>"].historyLimit` 覆寫。
 
 ## 目前 Teams RSC 權限（Manifest）
 
-以下為 Teams 應用程式 manifest 中 **既有的 resourceSpecific 權限**。僅適用於安裝該應用程式的 team／聊天。
+These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team/chat where the app is installed.
 
 **頻道（team 範圍）：**
 
@@ -314,7 +308,7 @@ tailscale funnel 3978
 
 ## 範例 Teams Manifest（已隱去）
 
-最小且有效的範例，包含必要欄位。請替換 ID 與 URL。
+Minimal, valid example with the required fields. 最小且有效的範例，包含必要欄位。請替換 ID 與 URL。
 
 ```json
 {
@@ -387,36 +381,36 @@ tailscale funnel 3978
 
 ### **僅 Teams RSC**（已安裝應用程式，無 Graph API 權限）
 
-可用：
+Works:
 
-- 讀取頻道訊息 **文字** 內容。
-- 傳送頻道訊息 **文字** 內容。
+- Read channel message **text** content.
+- Send channel message **text** content.
 - 接收 **個人（私訊）** 檔案附件。
 
 不可用：
 
 - 頻道／群組 **圖片或檔案內容**（負載僅包含 HTML stub）。
 - 下載儲存在 SharePoint／OneDrive 的附件。
-- 讀取訊息歷史（即時 webhook 事件以外）。
+- Reading message history (beyond the live webhook event).
 
 ### **Teams RSC + Microsoft Graph Application 權限**
 
 新增：
 
-- 下載託管內容（貼入訊息的圖片）。
+- Downloading hosted contents (images pasted into messages).
 - 下載儲存在 SharePoint／OneDrive 的檔案附件。
 - 透過 Graph 讀取頻道／聊天訊息歷史。
 
 ### RSC vs Graph API
 
-| 能力           | RSC 權限           | Graph API                     |
-| -------------- | ------------------ | ----------------------------- |
-| **即時訊息**   | 是（透過 webhook） | 否（僅輪詢）                  |
-| **歷史訊息**   | 否                 | 是（可查詢歷史）              |
-| **設定複雜度** | 僅需 app manifest  | 需要系統管理員同意 + 權杖流程 |
-| **離線可用**   | 否（必須執行中）   | 是（隨時可查詢）              |
+| 能力        | RSC 權限          | Graph API                              |
+| --------- | --------------- | -------------------------------------- |
+| **即時訊息**  | 是（透過 webhook）   | No (polling only)   |
+| **歷史訊息**  | 否               | 是（可查詢歷史）                               |
+| **設定複雜度** | 僅需 app manifest | 需要系統管理員同意 + 權杖流程                       |
+| **離線可用**  | 否（必須執行中）        | Yes (query anytime) |
 
-**結論：** RSC 用於即時監聽；Graph API 用於歷史存取。若要在離線時補齊遺漏訊息，需要 Graph API 與 `ChannelMessage.Read.All`（需管理員同意）。
+**結論：** RSC 用於即時監聽；Graph API 用於歷史存取。若要在離線時補齊遺漏訊息，需要 Graph API 與 `ChannelMessage.Read.All`（需管理員同意）。 For catching up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
 
 ## 啟用 Graph 的媒體 + 歷史（頻道必需）
 
@@ -433,9 +427,9 @@ tailscale funnel 3978
 
 ### Webhook 逾時
 
-Teams 透過 HTTP webhook 傳送訊息。若處理時間過長（例如 LLM 回應過慢），可能會看到：
+Teams 透過 HTTP webhook 傳送訊息。若處理時間過長（例如 LLM 回應過慢），可能會看到： If processing takes too long (e.g., slow LLM responses), you may see:
 
-- Gateway 閘道器 逾時
+- Gateway timeouts
 - Teams 重試訊息（造成重複）
 - 回覆遺失
 
@@ -458,7 +452,7 @@ Teams 的 Markdown 比 Slack 或 Discord 更受限：
 - `channels.msteams.webhook.port`（預設 `3978`）
 - `channels.msteams.webhook.path`（預設 `/api/messages`）
 - `channels.msteams.dmPolicy`：`pairing | allowlist | open | disabled`（預設：pairing）
-- `channels.msteams.allowFrom`：私訊允許清單（AAD 物件 ID、UPN 或顯示名稱）。設定時若可存取 Graph，精靈會解析名稱為 ID。
+- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.textChunkLimit`：輸出文字分塊大小。
 - `channels.msteams.chunkMode`：`length`（預設）或 `newline`，在長度分塊前以空行（段落邊界）切分。
 - `channels.msteams.mediaAllowHosts`：入站附件主機允許清單（預設為 Microsoft／Teams 網域）。
@@ -475,7 +469,7 @@ Teams 的 Markdown 比 Slack 或 Discord 更受限：
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`：每頻道、每寄件者的工具政策覆寫（支援 `"*"` 萬用字元）。
 - `channels.msteams.sharePointSiteId`：群組聊天／頻道檔案上傳用的 SharePoint site ID（見〈[在群組聊天中傳送檔案](#sending-files-in-group-chats)〉）。
 
-## 路由與工作階段
+## Routing & Sessions
 
 - 工作階段鍵遵循標準代理程式格式（見 [/concepts/session](/concepts/session)）：
   - 私訊共用主要工作階段（`agent:<agentId>:<mainKey>`）。
@@ -487,12 +481,12 @@ Teams 的 Markdown 比 Slack 或 Discord 更受限：
 
 Teams 近期在相同資料模型上提供兩種頻道 UI 樣式：
 
-| 樣式                    | 說明                           | 建議的 `replyStyle` |
-| ----------------------- | ------------------------------ | ------------------- |
-| **Posts**（經典）       | 訊息以卡片呈現，回覆在下方串接 | `thread`（預設）    |
-| **Threads**（類 Slack） | 訊息線性流動，較像 Slack       | `top-level`         |
+| 樣式                   | Description     | 建議的 `replyStyle` |
+| -------------------- | --------------- | ---------------- |
+| **Posts**（經典）        | 訊息以卡片呈現，回覆在下方串接 | `thread`（預設）     |
+| **Threads**（類 Slack） | 訊息線性流動，較像 Slack | `top-level`      |
 
-**問題：** Teams API 不會暴露頻道使用的 UI 樣式。若使用錯誤的 `replyStyle`：
+**問題：** Teams API 不會暴露頻道使用的 UI 樣式。若使用錯誤的 `replyStyle`： If you use the wrong `replyStyle`:
 
 - 在 Threads 樣式頻道使用 `thread` → 回覆會不自然地巢狀
 - 在 Posts 樣式頻道使用 `top-level` → 回覆會成為獨立的頂層貼文，而非串內
@@ -521,25 +515,25 @@ Teams 近期在相同資料模型上提供兩種頻道 UI 樣式：
 **目前限制：**
 
 - **私訊：** 圖片與檔案附件可透過 Teams 機器人檔案 API 使用。
-- **頻道／群組：** 附件存放於 M365 儲存體（SharePoint／OneDrive）。Webhook 負載僅含 HTML stub，沒有實際位元組。**需要 Graph API 權限** 才能下載頻道附件。
+- **頻道／群組：** 附件存放於 M365 儲存體（SharePoint／OneDrive）。Webhook 負載僅含 HTML stub，沒有實際位元組。**需要 Graph API 權限** 才能下載頻道附件。 The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
 
-若無 Graph 權限，含圖片的頻道訊息會以純文字接收（機器人無法存取圖片內容）。
-預設僅從 Microsoft／Teams 主機名稱下載媒體。可用 `channels.msteams.mediaAllowHosts` 覆寫（使用 `["*"]` 以允許任何主機）。
-僅對 `channels.msteams.mediaAuthAllowHosts` 中的主機附加 Authorization 標頭（預設為 Graph + Bot Framework 主機）。請保持清單嚴格（避免多租戶尾碼）。
+Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
+By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
+Authorization headers are only attached for hosts in `channels.msteams.mediaAuthAllowHosts` (defaults to Graph + Bot Framework hosts). Keep this list strict (avoid multi-tenant suffixes).
 
 ## 在群組聊天中傳送檔案
 
-機器人可在私訊中透過 FileConsentCard 流程傳送檔案（內建）。然而，**在群組聊天／頻道中傳送檔案** 需要額外設定：
+Bots can send files in DMs using the FileConsentCard flow (built-in). However, **sending files in group chats/channels** requires additional setup:
 
-| 情境                 | 檔案傳送方式                              | 需要的設定                           |
-| -------------------- | ----------------------------------------- | ------------------------------------ |
-| **私訊**             | FileConsentCard → 使用者同意 → 機器人上傳 | 開箱即用                             |
-| **群組聊天／頻道**   | 上傳至 SharePoint → 分享連結              | 需要 `sharePointSiteId` + Graph 權限 |
-| **圖片（任何情境）** | Base64 內嵌                               | 開箱即用                             |
+| 情境           | 檔案傳送方式                          | 需要的設定                            |
+| ------------ | ------------------------------- | -------------------------------- |
+| **私訊**       | FileConsentCard → 使用者同意 → 機器人上傳 | Works out of the box             |
+| **群組聊天／頻道**  | 上傳至 SharePoint → 分享連結           | 需要 `sharePointSiteId` + Graph 權限 |
+| **圖片（任何情境）** | Base64 內嵌                       | Works out of the box             |
 
 ### 為何群組聊天需要 SharePoint
 
-機器人沒有個人的 OneDrive 磁碟（`/me/drive` Graph API 端點不適用於應用程式身分）。要在群組聊天／頻道中傳送檔案，機器人需上傳至 **SharePoint site** 並建立分享連結。
+Bots don't have a personal OneDrive drive (the `/me/drive` Graph API endpoint doesn't work for application identities). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
 
 ### 設定
 
@@ -578,21 +572,21 @@ Teams 近期在相同資料模型上提供兩種頻道 UI 樣式：
 
 ### 分享行為
 
-| 權限                                    | 分享行為                               |
-| --------------------------------------- | -------------------------------------- |
-| 僅 `Sites.ReadWrite.All`                | 組織範圍分享連結（組織內任何人可存取） |
-| `Sites.ReadWrite.All` + `Chat.Read.All` | 逐使用者分享連結（僅聊天成員可存取）   |
+| 權限                                      | 分享行為                |
+| --------------------------------------- | ------------------- |
+| 僅 `Sites.ReadWrite.All`                 | 組織範圍分享連結（組織內任何人可存取） |
+| `Sites.ReadWrite.All` + `Chat.Read.All` | 逐使用者分享連結（僅聊天成員可存取）  |
 
-逐使用者分享較安全，僅聊天參與者可存取檔案。若缺少 `Chat.Read.All` 權限，機器人會回退至組織範圍分享。
+逐使用者分享較安全，僅聊天參與者可存取檔案。若缺少 `Chat.Read.All` 權限，機器人會回退至組織範圍分享。 1. 如果缺少 `Chat.Read.All` 權限，機器人將回退為全組織範圍的分享。
 
 ### 回退行為
 
-| 情境                                        | 結果                                       |
-| ------------------------------------------- | ------------------------------------------ |
-| 群組聊天 + 檔案 + 已設定 `sharePointSiteId` | 上傳至 SharePoint，傳送分享連結            |
-| 群組聊天 + 檔案 + 未設定 `sharePointSiteId` | 嘗試 OneDrive 上傳（可能失敗），僅傳送文字 |
-| 個人聊天 + 檔案                             | FileConsentCard 流程（無需 SharePoint）    |
-| 任何情境 + 圖片                             | Base64 內嵌（無需 SharePoint）             |
+| 情境                                 | 結果                                |
+| ---------------------------------- | --------------------------------- |
+| 群組聊天 + 檔案 + 已設定 `sharePointSiteId` | 上傳至 SharePoint，傳送分享連結             |
+| 群組聊天 + 檔案 + 未設定 `sharePointSiteId` | 嘗試 OneDrive 上傳（可能失敗），僅傳送文字        |
+| 個人聊天 + 檔案                          | FileConsentCard 流程（無需 SharePoint） |
+| 任何情境 + 圖片                          | Base64 內嵌（無需 SharePoint）          |
 
 ### 檔案儲存位置
 
@@ -605,13 +599,13 @@ OpenClaw 以 Adaptive Cards 傳送 Teams 投票（Teams 沒有原生投票 API�
 - CLI：`openclaw message poll --channel msteams --target conversation:<id> ...`
 - 投票結果由 Gateway 閘道器 記錄於 `~/.openclaw/msteams-polls.json`。
 - Gateway 閘道器 必須保持上線才能記錄投票。
-- 目前不會自動張貼結果摘要（必要時可檢視儲存檔）。
+- 2. 投票目前尚未自動張貼結果摘要（如有需要請檢查儲存檔案）。
 
 ## Adaptive Cards（任意）
 
 可使用 `message` 工具或 CLI，將任意 Adaptive Card JSON 傳送給 Teams 使用者或對話。
 
-`card` 參數接受 Adaptive Card JSON 物件。提供 `card` 時，訊息文字為選填。
+`card` 參數接受 Adaptive Card JSON 物件。提供 `card` 時，訊息文字為選填。 3. 當提供 `card` 時，訊息文字為選填。
 
 **代理程式工具：**
 
@@ -636,18 +630,18 @@ openclaw message send --channel msteams \
   --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Hello!"}]}'
 ```
 
-卡片結構與範例請見 [Adaptive Cards 文件](https://adaptivecards.io/)。目標格式細節請見下方〈[目標格式](#target-formats)〉。
+卡片結構與範例請見 [Adaptive Cards 文件](https://adaptivecards.io/)。目標格式細節請見下方〈[目標格式](#target-formats)〉。 4. 目標格式的詳細資訊，請參閱下方的 [Target formats](#target-formats)。
 
 ## 目標格式
 
 MSTeams 目標使用前綴區分使用者與對話：
 
-| 目標類型           | 格式                             | 範例                                            |
-| ------------------ | -------------------------------- | ----------------------------------------------- |
-| 使用者（依 ID）    | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`     |
-| 使用者（依名稱）   | `user:<display-name>`            | `user:John Smith`（需要 Graph API）             |
-| 群組／頻道         | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`        |
-| 群組／頻道（原始） | `<conversation-id>`              | `19:abc123...@thread.tacv2`（若包含 `@thread`） |
+| 目標類型      | 格式                               | 範例                                          |
+| --------- | -------------------------------- | ------------------------------------------- |
+| 使用者（依 ID） | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197` |
+| 使用者（依名稱）  | `user:<display-name>`            | `user:John Smith`（需要 Graph API）             |
+| 群組／頻道     | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`    |
+| 群組／頻道（原始） | `<conversation-id>`              | `19:abc123...@thread.tacv2`（若包含 `@thread`）  |
 
 **CLI 範例：**
 
@@ -690,16 +684,16 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-注意：未加上 `user:` 前綴時，名稱預設會解析為群組／team。以顯示名稱指定人員時，務必使用 `user:`。
+注意：未加上 `user:` 前綴時，名稱預設會解析為群組／team。以顯示名稱指定人員時，務必使用 `user:`。 5. 以顯示名稱指定人員時，請務必使用 `user:`。
 
-## 主動式訊息
+## 6. 主動式訊息
 
-- 僅在使用者 **互動之後** 才能傳送主動式訊息，因為我們會在該時點儲存會話參考。
+- 7. 只有在使用者互動**之後**才能進行主動式訊息，因為我們會在該時點儲存對話參考。
 - 請見 `/gateway/configuration` 以了解 `dmPolicy` 與允許清單門檻。
 
 ## Team 與 Channel ID（常見陷阱）
 
-Teams URL 中的 `groupId` 查詢參數 **不是** 用於設定的 team ID。請從 URL 路徑擷取 ID：
+Teams URL 中的 `groupId` 查詢參數 **不是** 用於設定的 team ID。請從 URL 路徑擷取 ID： 8. 請改為從 URL 路徑中擷取 ID：
 
 **Team URL：**
 
@@ -723,37 +717,37 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 - Channel ID = `/channel/` 之後的路徑片段（URL 解碼）
 - **忽略** `groupId` 查詢參數
 
-## 私有頻道
+## 9. 私人頻道
 
 機器人在私有頻道中的支援有限：
 
-| 功能                | 標準頻道 | 私有頻道       |
-| ------------------- | -------- | -------------- |
-| 機器人安裝          | 是       | 有限           |
-| 即時訊息（webhook） | 是       | 可能無法運作   |
-| RSC 權限            | 是       | 可能行為不同   |
-| @mentions           | 是       | 若可存取機器人 |
-| Graph API 歷史      | 是       | 是（需權限）   |
+| 功能                               | 標準頻道 | 10. 私人頻道     |
+| -------------------------------- | ---- | ----------------------------------- |
+| 11. 機器人安裝 | 是    | 有限                                  |
+| 即時訊息（webhook）                    | 是    | 可能無法運作                              |
+| RSC 權限                           | 是    | 可能行為不同                              |
+| @mentions           | 是    | 12. 如果機器人可存取 |
+| Graph API 歷史                     | 是    | 是（需權限）                              |
 
 **私有頻道不可用時的替代方案：**
 
 1. 使用標準頻道與機器人互動
-2. 使用私訊—使用者隨時可直接私訊機器人
+2. 13. 使用私訊（DM）—使用者隨時都可以直接傳訊給機器人
 3. 使用 Graph API 讀取歷史（需要 `ChannelMessage.Read.All`）
 
-## 疑難排解
+## 14) 疑難排解
 
 ### 常見問題
 
-- **頻道中看不到圖片：** 缺少 Graph 權限或管理員同意。重新安裝 Teams 應用程式並完全結束／重啟 Teams。
+- **頻道中看不到圖片：** 缺少 Graph 權限或管理員同意。重新安裝 Teams 應用程式並完全結束／重啟 Teams。 15. 重新安裝 Teams 應用程式，並完全關閉後再重新開啟 Teams。
 - **頻道沒有回應：** 預設需要提及；設定 `channels.msteams.requireMention=false` 或逐 team／頻道設定。
 - **版本不一致（Teams 仍顯示舊 manifest）：** 移除並重新加入應用程式，並完全結束 Teams 以刷新。
-- **Webhook 回傳 401 Unauthorized：** 在未使用 Azure JWT 手動測試時屬正常，表示端點可達但驗證失敗。請使用 Azure Web Chat 正確測試。
+- **Webhook 回傳 401 Unauthorized：** 在未使用 Azure JWT 手動測試時屬正常，表示端點可達但驗證失敗。請使用 Azure Web Chat 正確測試。 16. 使用 Azure Web Chat 進行正確的測試。
 
 ### Manifest 上傳錯誤
 
-- **「Icon file cannot be empty」：** manifest 參照的圖示為 0 位元組。請建立有效的 PNG 圖示（`outline.png` 需 32×32，`color.png` 需 192×192）。
-- **「webApplicationInfo.Id already in use」：** 應用程式仍安裝於其他 team／聊天。請先解除安裝，或等待 5–10 分鐘傳播完成。
+- **「Icon file cannot be empty」：** manifest 參照的圖示為 0 位元組。請建立有效的 PNG 圖示（`outline.png` 需 32×32，`color.png` 需 192×192）。 17. 建立有效的 PNG 圖示（`outline.png` 為 32x32，`color.png` 為 192x192）。
+- **「webApplicationInfo.Id already in use」：** 應用程式仍安裝於其他 team／聊天。請先解除安裝，或等待 5–10 分鐘傳播完成。 18. 請先找到並解除安裝，或等待 5–10 分鐘讓變更傳播完成。
 - **上傳時顯示「Something went wrong」：** 改用 [https://admin.teams.microsoft.com](https://admin.teams.microsoft.com) 上傳，開啟瀏覽器 DevTools（F12）→ Network 分頁，查看回應本文以取得實際錯誤。
 - **側載失敗：** 嘗試「Upload an app to your org's app catalog」而非「Upload a custom app」，通常可繞過側載限制。
 

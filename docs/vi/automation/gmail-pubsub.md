@@ -4,13 +4,6 @@ read_when:
   - Kết nối các trigger hộp thư Gmail với OpenClaw
   - Thiết lập Pub/Sub push để đánh thức tác tử
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:54Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -22,9 +15,9 @@ Mục tiêu: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> webhook O
 - `gcloud` đã được cài đặt và đăng nhập ([hướng dẫn cài đặt](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) đã được cài đặt và ủy quyền cho tài khoản Gmail ([gogcli.sh](https://gogcli.sh/)).
 - Đã bật hook OpenClaw (xem [Webhooks](/automation/webhook)).
-- `tailscale` đã đăng nhập ([tailscale.com](https://tailscale.com/)). Thiết lập được hỗ trợ sử dụng Tailscale Funnel cho endpoint HTTPS công khai.
-  Các dịch vụ tunnel khác có thể dùng, nhưng là DIY/không được hỗ trợ và cần cấu hình thủ công.
-  Hiện tại, chúng tôi chỉ hỗ trợ Tailscale.
+- `tailscale` đã đăng nhập ([tailscale.com](https://tailscale.com/)). Cấu hình được hỗ trợ sử dụng Tailscale Funnel cho endpoint HTTPS công khai.
+  Các dịch vụ đường hầm khác có thể hoạt động, nhưng là DIY/không được hỗ trợ và yêu cầu cấu hình thủ công.
+  Hiện tại, Tailscale là thứ chúng tôi hỗ trợ.
 
 Ví dụ cấu hình hook (bật ánh xạ preset Gmail):
 
@@ -66,11 +59,11 @@ thiết lập `deliver` + tùy chọn `channel`/`to`:
 }
 ```
 
-Nếu bạn muốn một kênh cố định, đặt `channel` + `to`. Nếu không, `channel: "last"`
-sẽ dùng tuyến gửi gần nhất (mặc định quay về WhatsApp).
+Nếu bạn muốn một kênh cố định, hãy đặt `channel` + `to`. Nếu không, `channel: "last"`
+sẽ dùng tuyến gửi gần nhất (fallback về WhatsApp).
 
-Để ép dùng mô hình rẻ hơn cho các lần chạy Gmail, đặt `model` trong ánh xạ
-(`provider/model` hoặc bí danh). Nếu bạn bắt buộc `agents.defaults.models`, hãy thêm nó ở đó.
+Để buộc dùng model rẻ hơn cho các lần chạy Gmail, hãy đặt `model` trong mapping
+(`provider/model` hoặc alias). Nếu bạn áp dụng `agents.defaults.models`, hãy bao gồm nó ở đó.
 
 Để đặt mô hình mặc định và mức độ suy nghĩ riêng cho hook Gmail, thêm
 `hooks.gmail.model` / `hooks.gmail.thinking` trong cấu hình của bạn:
@@ -91,8 +84,8 @@ Ghi chú:
 - `model`/`thinking` theo từng hook trong ánh xạ vẫn ghi đè các giá trị mặc định này.
 - Thứ tự fallback: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → chính (xác thực/giới hạn tốc độ/timeout).
 - Nếu đặt `agents.defaults.models`, mô hình Gmail phải nằm trong allowlist.
-- Nội dung hook Gmail mặc định được bao bọc bằng ranh giới an toàn nội dung bên ngoài.
-  Để tắt (nguy hiểm), đặt `hooks.gmail.allowUnsafeExternalContent: true`.
+- 2. Nội dung hook Gmail mặc định được bọc trong các ranh giới an toàn cho external-content.
+     Để vô hiệu hóa (nguy hiểm), hãy đặt `hooks.gmail.allowUnsafeExternalContent: true`.
 
 Để tùy biến xử lý payload sâu hơn, thêm `hooks.mappings` hoặc một module transform JS/TS
 dưới `hooks.transformsDir` (xem [Webhooks](/automation/webhook)).
@@ -112,15 +105,13 @@ Mặc định:
 - Ghi cấu hình `hooks.gmail` cho `openclaw webhooks gmail run`.
 - Bật preset hook Gmail (`hooks.presets: ["gmail"]`).
 
-Ghi chú về đường dẫn: khi `tailscale.mode` được bật, OpenClaw tự động đặt
-`hooks.gmail.serve.path` thành `/` và giữ đường dẫn công khai ở
+Ghi chú về path: khi bật `tailscale.mode`, OpenClaw tự động đặt
+`hooks.gmail.serve.path` thành `/` và giữ path công khai tại
 `hooks.gmail.tailscale.path` (mặc định `/gmail-pubsub`) vì Tailscale
 loại bỏ tiền tố set-path trước khi proxy.
-Nếu bạn cần backend nhận đường dẫn có tiền tố, hãy đặt
-`hooks.gmail.tailscale.target` (hoặc `--tailscale-target`) thành một URL đầy đủ như
-`http://127.0.0.1:8788/gmail-pubsub` và khớp `hooks.gmail.serve.path`.
+3. Nếu bạn cần backend nhận được đường dẫn có tiền tố, hãy đặt `hooks.gmail.tailscale.target` (hoặc `--tailscale-target`) thành một URL đầy đủ như `http://127.0.0.1:8788/gmail-pubsub` và khớp với `hooks.gmail.serve.path`.
 
-Muốn endpoint tùy chỉnh? Dùng `--push-endpoint <url>` hoặc `--tailscale off`.
+Muốn một endpoint tùy chỉnh? Sử dụng `--push-endpoint <url>` hoặc `--tailscale off`.
 
 Ghi chú nền tảng: trên macOS, wizard cài `gcloud`, `gogcli` và `tailscale`
 qua Homebrew; trên Linux, hãy cài thủ công trước.

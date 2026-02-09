@@ -4,18 +4,11 @@ read_when:
   - Chỉnh sửa văn bản system prompt, danh sách công cụ, hoặc các phần thời gian/heartbeat
   - Thay đổi hành vi bootstrap workspace hoặc cơ chế chèn Skills
 title: "System Prompt"
-x-i18n:
-  source_path: concepts/system-prompt.md
-  source_hash: 1de1b529402a5f1b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:49Z
 ---
 
 # System Prompt
 
-OpenClaw xây dựng một system prompt tùy chỉnh cho mỗi lần chạy tác tử. Prompt này **thuộc sở hữu của OpenClaw** và không sử dụng prompt mặc định của p-coding-agent.
+OpenClaw builds a custom system prompt for every agent run. Prompt là **do OpenClaw sở hữu** và không dùng prompt mặc định của p-coding-agent.
 
 Prompt được OpenClaw lắp ghép và chèn vào mỗi lần chạy tác tử.
 
@@ -37,18 +30,18 @@ Prompt được thiết kế gọn nhẹ và sử dụng các phần cố địn
 - **Runtime**: host, OS, node, model, repo root (khi phát hiện), mức độ suy nghĩ (một dòng).
 - **Reasoning**: mức độ hiển thị hiện tại + gợi ý bật/tắt /reasoning.
 
-Các guardrail an toàn trong system prompt mang tính hướng dẫn. Chúng định hướng hành vi của mô hình nhưng không thực thi chính sách. Hãy dùng chính sách công cụ, phê duyệt exec, sandboxing và danh sách cho phép kênh để thực thi cứng; theo thiết kế, người vận hành có thể vô hiệu hóa các cơ chế này.
+Safety guardrails in the system prompt are advisory. Chúng hướng dẫn hành vi của mô hình nhưng không cưỡng chế chính sách. Sử dụng chính sách công cụ, phê duyệt thực thi, sandboxing và allowlist kênh để cưỡng chế cứng; các toán tử có thể vô hiệu hóa chúng theo thiết kế.
 
 ## Chế độ prompt
 
-OpenClaw có thể tạo các system prompt nhỏ hơn cho sub-agent. Runtime đặt
+OpenClaw có thể kết xuất các system prompt nhỏ hơn cho các tác nhân con. Runtime đặt một
 `promptMode` cho mỗi lần chạy (không phải cấu hình hướng người dùng):
 
 - `full` (mặc định): bao gồm tất cả các phần ở trên.
-- `minimal`: dùng cho sub-agent; lược bỏ **Skills**, **Memory Recall**, **OpenClaw
+- `minimal`: dùng cho các tác nhân con; lược bỏ **Skills**, **Memory Recall**, **OpenClaw
   Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
-  **Messaging**, **Silent Replies** và **Heartbeats**. Tooling, **Safety**,
-  Workspace, Sandbox, Current Date & Time (khi biết), Runtime và ngữ cảnh được chèn
+  **Messaging**, **Silent Replies**, và **Heartbeats**. Tooling, **Safety**,
+  Workspace, Sandbox, Ngày & Giờ Hiện Tại (khi biết), Runtime và ngữ cảnh được chèn
   vẫn khả dụng.
 - `none`: chỉ trả về dòng nhận diện cơ bản.
 
@@ -67,19 +60,19 @@ Các tệp bootstrap được cắt gọn và nối vào dưới **Project Conte
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (chỉ trên workspace hoàn toàn mới)
 
-Các tệp lớn sẽ bị cắt ngắn kèm theo một marker. Kích thước tối đa cho mỗi tệp được điều khiển bởi
+Các tệp lớn bị cắt bớt với một dấu đánh dấu. Kích thước tối đa cho mỗi tệp được kiểm soát bởi
 `agents.defaults.bootstrapMaxChars` (mặc định: 20000). Các tệp bị thiếu sẽ chèn một
-marker ngắn báo thiếu tệp.
+dấu đánh dấu tệp bị thiếu ngắn.
 
 Các hook nội bộ có thể chặn bước này thông qua `agent:bootstrap` để biến đổi hoặc thay thế
 các tệp bootstrap được chèn (ví dụ hoán đổi `SOUL.md` bằng một persona thay thế).
 
-Để kiểm tra mức đóng góp của từng tệp được chèn (raw so với injected, cắt ngắn, cộng thêm overhead của schema công cụ), hãy dùng `/context list` hoặc `/context detail`. Xem [Context](/concepts/context).
+Để kiểm tra mức đóng góp của từng tệp được chèn (thô so với đã chèn, cắt bớt, cộng thêm overhead schema của công cụ), dùng `/context list` hoặc `/context detail`. Xem [Context](/concepts/context).
 
 ## Xử lý thời gian
 
-System prompt bao gồm một phần **Current Date & Time** riêng khi
-múi giờ người dùng được biết. Để giữ cache prompt ổn định, hiện nay nó chỉ bao gồm
+System prompt bao gồm một mục **Current Date & Time** chuyên biệt khi
+múi giờ người dùng được biết. Để giữ bộ nhớ đệm prompt ổn định, giờ đây nó chỉ bao gồm
 **múi giờ** (không có đồng hồ động hay định dạng thời gian).
 
 Dùng `session_status` khi tác tử cần thời gian hiện tại; thẻ trạng thái
@@ -94,10 +87,9 @@ Xem [Date & Time](/date-time) để biết đầy đủ chi tiết hành vi.
 
 ## Skills
 
-Khi có các Skills đủ điều kiện, OpenClaw chèn một **danh sách Skills khả dụng** gọn nhẹ
-(`formatSkillsForPrompt`) bao gồm **đường dẫn tệp** cho mỗi skill. Prompt hướng dẫn mô hình sử dụng `read` để tải SKILL.md tại vị trí được liệt kê
-(workspace, managed hoặc bundled). Nếu không có Skills đủ điều kiện, phần
-Skills sẽ bị lược bỏ.
+Khi tồn tại các kỹ năng đủ điều kiện, OpenClaw chèn một **danh sách kỹ năng khả dụng** gọn nhẹ
+(`formatSkillsForPrompt`) bao gồm **đường dẫn tệp** cho mỗi kỹ năng. Prompt hướng dẫn mô hình dùng `read` để tải SKILL.md tại vị trí đã liệt kê
+(workspace, managed, hoặc bundled). Nếu không có kỹ năng nào đủ điều kiện, mục Skills sẽ bị lược bỏ.
 
 ```
 <available_skills>
@@ -113,9 +105,6 @@ Cách này giữ prompt nền nhỏ gọn trong khi vẫn cho phép sử dụng 
 
 ## Documentation
 
-Khi có sẵn, system prompt bao gồm một phần **Documentation** trỏ tới
-thư mục tài liệu OpenClaw cục bộ (hoặc `docs/` trong workspace repo hoặc tài liệu gói npm
-được bundled) và cũng ghi chú mirror công khai, repo nguồn, cộng đồng Discord và
-ClawHub ([https://clawhub.com](https://clawhub.com)) để khám phá Skills. Prompt hướng dẫn mô hình tham khảo tài liệu cục bộ trước
-đối với hành vi, lệnh, cấu hình hoặc kiến trúc của OpenClaw, và tự chạy
-`openclaw status` khi có thể (chỉ hỏi người dùng khi không có quyền truy cập).
+Khi khả dụng, system prompt bao gồm một mục **Documentation** trỏ tới thư mục tài liệu OpenClaw cục bộ (hoặc `docs/` trong workspace repo hoặc tài liệu được đóng gói trong npm package) và cũng ghi chú mirror công khai, repo nguồn, Discord cộng đồng và ClawHub ([https://clawhub.com](https://clawhub.com)) để khám phá kỹ năng. Prompt hướng dẫn mô hình tham khảo tài liệu cục bộ trước
+cho hành vi, lệnh, cấu hình hoặc kiến trúc của OpenClaw, và tự chạy
+`openclaw status` khi có thể (chỉ hỏi người dùng khi nó không có quyền truy cập).

@@ -4,13 +4,6 @@ read_when:
   - Node is verbonden maar camera-/canvas-/scherm-/exec-tools falen
   - Je hebt het mentale model nodig voor node-koppeling versus goedkeuringen
 title: "Node-problemen oplossen"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:33Z
 ---
 
 # Node-problemen oplossen
@@ -57,12 +50,12 @@ Als je `NODE_BACKGROUND_UNAVAILABLE` ziet, breng de node-app naar de voorgrond e
 
 ## Rechtenmatrix
 
-| Capability                   | iOS                                               | Android                                                | macOS node-app                       | Typische foutcode              |
-| ---------------------------- | ------------------------------------------------- | ------------------------------------------------------ | ------------------------------------ | ------------------------------ |
-| `camera.snap`, `camera.clip` | Camera (+ microfoon voor clip-audio)              | Camera (+ microfoon voor clip-audio)                   | Camera (+ microfoon voor clip-audio) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Schermopname (+ microfoon optioneel)              | Schermopnameprompt (+ microfoon optioneel)             | Schermopname                         | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | Tijdens gebruik of Altijd (afhankelijk van modus) | Locatie in voorgrond/achtergrond afhankelijk van modus | Locatierechten                       | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n.v.t. (node-hostpad)                             | n.v.t. (node-hostpad)                                  | Exec-goedkeuringen vereist           | `SYSTEM_RUN_DENIED`            |
+| Capability                   | iOS                                                                                      | Android                                                                                  | macOS node-app                                          | Typische foutcode              |
+| ---------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------ |
+| `camera.snap`, `camera.clip` | Camera (+ microfoon voor clip-audio)                                  | Camera (+ microfoon voor clip-audio)                                  | Camera (+ microfoon voor clip-audio) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Schermopname (+ microfoon optioneel)                                  | Schermopnameprompt (+ microfoon optioneel)                            | Schermopname                                            | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | Tijdens gebruik of Altijd (afhankelijk van modus)                     | Locatie in voorgrond/achtergrond afhankelijk van modus                                   | Locatierechten                                          | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n.v.t. (node-hostpad) | n.v.t. (node-hostpad) | Exec-goedkeuringen vereist                              | `SYSTEM_RUN_DENIED`            |
 
 ## Koppeling versus goedkeuringen
 

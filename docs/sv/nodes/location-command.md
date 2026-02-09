@@ -4,13 +4,6 @@ read_when:
   - Lägger till stöd för platsnoder eller behörighets-UI
   - Utformar flöden för bakgrundsplats + push
 title: "Platskommando"
-x-i18n:
-  source_path: nodes/location-command.md
-  source_hash: 23124096256384d2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:48Z
 ---
 
 # Platskommando (noder)
@@ -24,9 +17,9 @@ x-i18n:
 
 ## Varför en väljare (inte bara en strömbrytare)
 
-OS-behörigheter är flernivå. Vi kan exponera en väljare i appen, men OS avgör fortfarande den faktiska tilldelningen.
+OS-behörigheter är flera nivåer. Vi kan exponera en väljare i appen, men OS bestämmer fortfarande själva bidraget.
 
-- iOS/macOS: användaren kan välja **Vid användning** eller **Alltid** i systemuppmaningar/Inställningar. Appen kan begära uppgradering, men OS kan kräva Inställningar.
+- iOS/macOS: användaren kan välja **Under Användning** eller **alltid** i systemuppmaningar/inställningar. Appen kan begära uppgradering, men OS kan kräva inställningar.
 - Android: bakgrundsplats är en separat behörighet; på Android 10+ kräver den ofta ett Inställningsflöde.
 - Exakt plats är en separat tilldelning (iOS 14+ ”Exakt”, Android ”fine” vs ”coarse”).
 
@@ -47,7 +40,7 @@ UI-beteende:
 
 ## Behörighetsmappning (node.permissions)
 
-Valfritt. macOS-noden rapporterar `location` via behörighetskartan; iOS/Android kan utelämna den.
+Valfritt. macOS nod rapporter `location` via behörighetskartan; iOS/Android kan utelämna det.
 
 ## Kommando: `location.get`
 
@@ -103,7 +96,7 @@ Push-utlöst flöde (framtida):
 
 Noteringar:
 
-- iOS: Alltid-behörighet + bakgrundsläge för plats krävs. Tyst push kan strypas; räkna med intermittenta fel.
+- iOS: Alltid behörighet + bakgrundsplats krävs. Tyst tryck kan strypas, förvänta intermittent misslyckanden.
 - Android: bakgrundsplats kan kräva en foreground service; annars kan man förvänta sig nekande.
 
 ## Modell-/verktygsintegration
@@ -116,5 +109,5 @@ Noteringar:
 
 - Av: ”Platsdelning är inaktiverad.”
 - Vid användning: ”Endast när OpenClaw är öppet.”
-- Alltid: ”Tillåt bakgrundsplats. Kräver systembehörighet.”
-- Exakt: ”Använd exakt GPS-position. Stäng av för att dela ungefärlig plats.”
+- Alltid: “Tillåt bakgrundsplats. Kräver systembehörighet.”
+- Precise: ”Använd exakt GPS-position. Växla av för att dela ungefärlig plats. "

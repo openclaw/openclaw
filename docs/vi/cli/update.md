@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn cập nhật một bản checkout nguồn một cách an toàn
   - Bạn cần hiểu hành vi viết tắt `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:31Z
 ---
 
 # `openclaw update`
@@ -60,9 +53,8 @@ Options:
 
 ## `update wizard`
 
-Luồng tương tác để chọn kênh cập nhật và xác nhận có khởi động lại Gateway sau khi cập nhật hay không
-(mặc định là khởi động lại). Nếu bạn chọn `dev` mà không có bản checkout git, công cụ sẽ
-đề nghị tạo một bản.
+Nếu bạn chọn `dev` mà không có bản checkout git, nó
+sẽ đề nghị tạo một bản. `voicecall` là một lệnh do plugin cung cấp.
 
 ## What it does
 

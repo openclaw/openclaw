@@ -1,15 +1,8 @@
 ---
-summary: 「チャンネル接続性のためのヘルスチェック手順」
+summary: "チャンネル接続性のためのヘルスチェック手順"
 read_when:
   - WhatsApp チャンネルのヘルスを診断する場合
-title: 「ヘルスチェック」
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:49Z
+title: "ヘルスチェック"
 ---
 
 # ヘルスチェック（CLI）
@@ -28,8 +21,8 @@ x-i18n:
 ## 詳細診断
 
 - ディスク上の認証情報：`ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json`（mtime は最近である必要があります）。
-- セッションストア：`ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json`（パスは設定で上書き可能）。件数と最近の受信者は `status` で表示されます。
-- 再リンクフロー：ログにステータスコード 409–515 または `loggedOut` が表示された場合は `openclaw channels logout && openclaw channels login --verbose` を実行します。（注：QR ログインフローは、ペアリング後にステータス 515 の場合は一度だけ自動再起動します。）
+- セッションストア：`ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json`（パスは設定で上書き可能）。件数と最近の受信者は `status` で表示されます。 カウントと最近の受信者は `status` で表示されます。
+- 再リンクフロー：ログにステータスコード 409–515 または `loggedOut` が表示された場合は `openclaw channels logout && openclaw channels login --verbose` を実行します。（注：QR ログインフローは、ペアリング後にステータス 515 の場合は一度だけ自動再起動します。） (注:QRログインフローはペアリング後の状態515で一度自動的に再起動します。
 
 ## 問題が発生した場合
 
@@ -39,4 +32,4 @@ x-i18n:
 
 ## 専用の「health」コマンド
 
-`openclaw health --json` は、実行中の Gateway（ゲートウェイ）にヘルススナップショットを要求します（CLI から直接チャンネルソケットには接続しません）。利用可能な場合は、リンク済み認証情報／認証経過時間、チャンネル別プローブ要約、セッションストア要約、プローブ所要時間を報告します。Gateway（ゲートウェイ）に到達できない場合、またはプローブが失敗／タイムアウトした場合は非ゼロで終了します。既定の 10 秒を上書きするには `--timeout <ms>` を使用してください。
+`openclaw health --json` は、実行中の Gateway（ゲートウェイ）にヘルススナップショットを要求します（CLI から直接チャンネルソケットには接続しません）。利用可能な場合は、リンク済み認証情報／認証経過時間、チャンネル別プローブ要約、セッションストア要約、プローブ所要時間を報告します。Gateway（ゲートウェイ）に到達できない場合、またはプローブが失敗／タイムアウトした場合は非ゼロで終了します。既定の 10 秒を上書きするには `--timeout <ms>` を使用してください。 チャネルごとのプローブサマリー、セッションストアサマリー、プローブ期間が利用可能な場合、リンクされたクレジット/認証年齢、およびプローブ期間が報告されます。 ゲートウェイに到達できない場合、またはプローブが失敗/タイムアウトする場合、ゼロ以外は終了します。 `--timeout <ms>` を使用して、10のデフォルトを上書きします。

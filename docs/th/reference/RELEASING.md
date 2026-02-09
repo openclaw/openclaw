@@ -4,20 +4,13 @@ read_when:
   - การตัดรีลีส npm ใหม่
   - การตัดรีลีสแอปmacOS ใหม่
   - การตรวจสอบเมทาดาทาก่อนเผยแพร่
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:52Z
 ---
 
 # เช็กลิสต์การรีลีส (npm + macOS)
 
-ใช้ `pnpm` (Node 22+) จากรากของรีโป ตรวจสอบให้แน่ใจว่า working tree สะอาดก่อนการแท็ก/เผยแพร่
+ใช้ `pnpm` (Node 22+) จากรากของรีโป ใช้ `pnpm` (Node 22+) จากรากของรีโป ตรวจสอบให้แน่ใจว่า working tree สะอาดก่อนการแท็ก/เผยแพร่
 
-## การทริกเกอร์โดยโอเปอเรเตอร์
+## ทริกเกอร์ของผู้ปฏิบัติการ
 
 เมื่อโอเปอเรเตอร์พูดว่า “release” ให้ทำ preflight นี้ทันที (ไม่ถามคำถามเพิ่มเติมเว้นแต่ติดขัด):
 
@@ -79,7 +72,7 @@ x-i18n:
 
 ### การแก้ไขปัญหา (บันทึกจากรีลีส 2.0.0-beta2)
 
-- **npm pack/publish ค้างหรือสร้าง tarball ขนาดใหญ่มาก**: บันเดิลแอปmacOS ใน `dist/OpenClaw.app` (และไฟล์ zip ของรีลีส) ถูกดึงเข้าแพ็กเกจ แก้ไขโดย whitelist เนื้อหาที่เผยแพร่ผ่าน `package.json` `files` (รวม dist subdirs, docs, skills; ตัด app bundles ออก) ตรวจสอบด้วย `npm pack --dry-run` ว่าไม่มี `dist/OpenClaw.app` แสดงอยู่
+- **npm pack/publish ค้างหรือสร้าง tarball ขนาดใหญ่มาก**: บันเดิลแอปmacOS ใน `dist/OpenClaw.app` (และไฟล์ zip ของรีลีส) ถูกดึงเข้าแพ็กเกจ แก้ไขโดย whitelist เนื้อหาที่เผยแพร่ผ่าน `package.json` `files` (รวม dist subdirs, docs, skills; ตัด app bundles ออก) ตรวจสอบด้วย `npm pack --dry-run` ว่าไม่มี `dist/OpenClaw.app` แสดงอยู่ แก้ไขโดยการ whitelist เนื้อหาที่เผยแพร่ผ่าน `package.json` `files` (รวมไดเรกทอรี dist, docs, skills; ไม่รวม app bundles) ยืนยันด้วย `npm pack --dry-run` ว่า `dist/OpenClaw.app` ไม่ถูกแสดงรายการ
 - **npm auth web วนลูปสำหรับ dist-tags**: ใช้ legacy auth เพื่อให้มีการขอ OTP:
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **การยืนยัน `npx` ล้มเหลวด้วย `ECOMPROMISED: Lock compromised`**: ลองใหม่ด้วยแคชใหม่:
@@ -94,11 +87,11 @@ x-i18n:
 - [ ] แนบอาร์ติแฟกต์: tarball `npm pack` (ทางเลือก), `OpenClaw-X.Y.Z.zip`, และ `OpenClaw-X.Y.Z.dSYM.zip` (ถ้ามีการสร้าง)
 - [ ] คอมมิต `appcast.xml` ที่อัปเดตแล้วและพุช (Sparkle ดึงฟีดจาก main)
 - [ ] จากไดเรกทอรีชั่วคราวที่สะอาด (ไม่มี `package.json`), รัน `npx -y openclaw@X.Y.Z send --help` เพื่อยืนยันว่าการติดตั้ง/จุดเข้า CLI ทำงานได้
-- [ ] ประกาศ/แชร์โน้ตรีลีส
+- [ ] ประกาศ/แชร์บันทึกการออกเวอร์ชัน
 
 ## ขอบเขตการเผยแพร่ปลั๊กอิน (npm)
 
-เราจะเผยแพร่เฉพาะ **ปลั๊กอิน npm ที่มีอยู่แล้ว** ภายใต้สโคป `@openclaw/*` เท่านั้น ปลั๊กอินที่บันเดิลมาแต่ไม่ได้อยู่บน npm จะคงเป็น **disk-tree only** (ยังคงถูกส่งมอบใน `extensions/**`).
+เราจะเผยแพร่เฉพาะ **ปลั๊กอิน npm ที่มีอยู่แล้ว** ภายใต้สโคป `@openclaw/*` เราจะเผยแพร่เฉพาะ **ปลั๊กอิน npm ที่มีอยู่แล้ว** ภายใต้สโคป `@openclaw/*` เท่านั้น ปลั๊กอินที่บันเดิลมาแต่ไม่ได้อยู่บน npm จะคงเป็น **disk-tree only** (ยังคงถูกส่งมอบใน `extensions/**`).
 
 กระบวนการเพื่อหาไลสต์:
 

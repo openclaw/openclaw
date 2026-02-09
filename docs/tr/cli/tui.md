@@ -2,15 +2,8 @@
 summary: "Gateway’e bağlı `openclaw tui` için CLI başvurusu (terminal UI)"
 read_when:
   - Gateway için bir terminal UI istiyorsanız (uzaktan kullanıma uygun)
-  - Betiklerden URL/belirteç/oturum geçirmek istiyorsanız
+  - You want to pass url/token/session from scripts
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: aa6f37b960926997
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:05Z
 ---
 
 # `openclaw tui`

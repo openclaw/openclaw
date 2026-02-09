@@ -1,16 +1,9 @@
 ---
-summary: „Zaloguj się do GitHub Copilot z OpenClaw, korzystając z przepływu urządzenia”
+summary: "„Zaloguj się do GitHub Copilot z OpenClaw, korzystając z przepływu urządzenia”"
 read_when:
   - Chcesz używać GitHub Copilot jako dostawcy modeli
   - Potrzebujesz przepływu `openclaw models auth login-github-copilot`
-title: „GitHub Copilot”
-x-i18n:
-  source_path: providers/github-copilot.md
-  source_hash: 503e0496d92c921e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:27Z
+title: "GitHub Copilot"
 ---
 
 # GitHub Copilot
@@ -23,18 +16,18 @@ dostawcy modeli na dwa różne sposoby.
 
 ## Dwa sposoby użycia Copilot w OpenClaw
 
-### 1) Wbudowany dostawca GitHub Copilot (`github-copilot`)
+### 1. Wbudowany dostawca GitHub Copilot (`github-copilot`)
 
 Użyj natywnego przepływu logowania urządzenia, aby uzyskać token GitHub, a następnie
 wymień go na tokeny API Copilot podczas działania OpenClaw. Jest to **domyślna**
 i najprostsza ścieżka, ponieważ nie wymaga VS Code.
 
-### 2) Wtyczka Copilot Proxy (`copilot-proxy`)
+### 2. Wtyczka Copilot Proxy (`copilot-proxy`)
 
 Użyj rozszerzenia VS Code **Copilot Proxy** jako lokalnego mostu. OpenClaw komunikuje się
-z punktem końcowym `/v1` proxy i używa listy modeli skonfigurowanej w tym miejscu.
-Wybierz tę opcję, jeśli już korzystasz z Copilot Proxy w VS Code lub musisz przez niego
-routować ruch. Musisz włączyć wtyczkę i utrzymywać uruchomione rozszerzenie VS Code.
+z punktem końcowym `/v1` proxy i używa listy modeli skonfigurowanej w tym miejscu. Wybierz tę opcję, jeśli już korzystasz z Copilot Proxy w VS Code lub musisz przez niego
+routować ruch.
+Musisz włączyć wtyczkę i utrzymywać uruchomione rozszerzenie VS Code.
 
 Użyj GitHub Copilot jako dostawcy modeli (`github-copilot`). Polecenie logowania uruchamia
 przepływ urządzenia GitHub, zapisuje profil uwierzytelniania i aktualizuje konfigurację,
@@ -46,8 +39,7 @@ aby korzystać z tego profilu.
 openclaw models auth login-github-copilot
 ```
 
-Zostaniesz poproszony o odwiedzenie adresu URL i wprowadzenie jednorazowego kodu.
-Pozostaw terminal otwarty do momentu zakończenia procesu.
+Zostaniesz poproszony o odwiedzenie adresu URL i wprowadzenie jednorazowego kodu. Pozostaw terminal otwarty do momentu zakończenia procesu.
 
 ### Opcjonalne flagi
 

@@ -1,13 +1,6 @@
 ---
-title: Refaktorering af udgående sessionsspejling (Issue #1520)
+title: "Refaktorering af udgående sessionsspejling (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:39Z
 ---
 
 # Refaktorering af udgående sessionsspejling (Issue #1520)
@@ -20,7 +13,7 @@ x-i18n:
 
 ## Kontekst
 
-Udgående afsendelser blev spejlet ind i den _nuværende_ agent-session (værktøjets sessionsnøgle) i stedet for målkanalens session. Indgående routing bruger kanal-/peer-sessionsnøgler, så udgående svar landede i den forkerte session, og førstegangskontakter manglede ofte sessionsposter.
+Udgående udsendelser blev spejlet ind i _current_ agent sessionen (værktøjs sessionsnøgle) i stedet for målkanalsessionen. Indgående routing bruger kanal/peer session nøgler, så udgående svar landede i den forkerte session og første kontakt mål ofte manglede session indgange.
 
 ## Mål
 
@@ -58,7 +51,7 @@ Udgående afsendelser blev spejlet ind i den _nuværende_ agent-session (værkt�
 
 ## Beslutninger
 
-- **Gateway-send session-udledning**: hvis `sessionKey` er angivet, bruges den. Hvis udeladt, udledes en sessionKey fra mål + standardagent og spejles der.
+- **Gateway send session afledning**: hvis `sessionKey` er leveret, brug den. Hvis udeladt, udlede en sessionKey fra mål + standard agent og spejl der.
 - **Oprettelse af sessionsposter**: brug altid `recordSessionMetaFromInbound` med `Provider/From/To/ChatType/AccountId/Originating*` justeret til indgående formater.
 - **Målnormalisering**: udgående routing bruger resolverede mål (post `resolveChannelTarget`), når de er tilgængelige.
 - **Bogstavstørrelse i sessionsnøgler**: kanoniser sessionsnøgler til små bogstaver ved skrivning og under migreringer.
@@ -76,7 +69,7 @@ Udgående afsendelser blev spejlet ind i den _nuværende_ agent-session (værkt�
 
 ## Åbne punkter / Opfølgninger
 
-- Voice-call-plugin bruger brugerdefinerede `voice:<phone>`-sessionsnøgler. Udgående mapping er ikke standardiseret her; hvis message-tool skal understøtte voice-call-afsendelser, skal der tilføjes eksplicit mapping.
+- Plugin til stemmeopkald bruger brugerdefinerede `voice:<phone>` session nøgler. Outbound mapping er ikke standardiseret her; hvis message-tool skulle understøtte voice-call sends, tilføj eksplicit mapping.
 - Bekræft om eksterne plugins bruger ikke-standard `From/To`-formater ud over det medfølgende sæt.
 
 ## Berørte filer

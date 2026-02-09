@@ -4,13 +4,6 @@ read_when:
   - Configuration de la prise en charge de Signal
   - Dépannage de l’envoi/réception Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: ca4de8b3685017f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:47Z
 ---
 
 # Signal (signal-cli)
@@ -109,7 +102,7 @@ Cela ignore l’auto-lancement et l’attente de demarrage dans OpenClaw. Pour d
 
 ## Controle d’acces (Messages prives + groupes)
 
-Messages prives :
+DMs:
 
 - Par defaut : `channels.signal.dmPolicy = "pairing"`.
 - Les expediteurs inconnus recoivent un code d’appairage ; les messages sont ignores jusqu’a approbation (les codes expirent apres 1 heure).
@@ -124,7 +117,7 @@ Groupes :
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
 - `channels.signal.groupAllowFrom` controle qui peut declencher dans les groupes lorsque `allowlist` est defini.
 
-## Fonctionnement (comportement)
+## Comment ça marche (comportement)
 
 - `signal-cli` s’execute comme un daemon ; la Gateway lit les evenements via SSE.
 - Les messages entrants sont normalises dans l’enveloppe de canal partagee.
@@ -174,6 +167,29 @@ Configuration :
 - Messages prives UUID : `uuid:<id>` (ou UUID brut).
 - Groupes : `signal:group:<groupId>`.
 - Noms d’utilisateur : `username:<name>` (si pris en charge par votre compte Signal).
+
+## Problemes courants
+
+Exécutez d'abord cette échelle :
+
+```bash
+openclaw models auth paste-token --provider anthropic
+openclaw models status
+```
+
+Ensuite, confirmez l'état d'appairage du DM si nécessaire:
+
+```bash
+openclaw pairing list signal
+```
+
+Échecs communs :
+
+- Le démon est joignable mais pas de réponses : vérifiez les paramètres du compte/démon (`httpUrl`, `account`) et le mode réception.
+- DMs ignorés: l'expéditeur est en attente d'approbation du jumelage.
+- Les messages de groupe ont été ignorés : envoi de blocs de barrière d'expéditeur/mention de groupe.
+
+channels/signal.md
 
 ## Reference de configuration (Signal)
 

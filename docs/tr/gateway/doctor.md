@@ -4,13 +4,6 @@ read_when:
   - Doctor geçişleri eklerken veya değiştirirken
   - Kırıcı yapılandırma değişiklikleri sunarken
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:46Z
 ---
 
 # Doctor
@@ -63,7 +56,7 @@ Yazmadan önce değişiklikleri gözden geçirmek istiyorsanız, önce yapıland
 cat ~/.openclaw/openclaw.json
 ```
 
-## Ne yapar (özet)
+## What it does (summary)
 
 - Git kurulumları için isteğe bağlı ön uç güncellemesi (yalnızca etkileşimli).
 - UI protokol güncelliği denetimi (protokol şeması daha yeniyse Control UI’yi yeniden oluşturur).
@@ -91,17 +84,17 @@ cat ~/.openclaw/openclaw.json
 
 ## Ayrıntılı davranış ve gerekçe
 
-### 0) İsteğe bağlı güncelleme (git kurulumları)
+### 0. İsteğe bağlı güncelleme (git kurulumları)
 
 Bu bir git checkout ise ve doctor etkileşimli çalışıyorsa, doctor’ı çalıştırmadan önce
 güncelleme (fetch/rebase/build) teklif eder.
 
-### 1) Yapılandırma normalizasyonu
+### 1. Yapılandırma normalizasyonu
 
 Yapılandırma eski değer biçimleri içeriyorsa (örneğin kanal-özel geçersiz kılma olmadan `messages.ackReaction`),
 doctor bunları geçerli şemaya normalize eder.
 
-### 2) Eski yapılandırma anahtarı geçişleri
+### 2. Eski yapılandırma anahtarı geçişleri
 
 Yapılandırma kullanımdan kaldırılmış anahtarlar içerdiğinde, diğer komutlar çalışmayı reddeder ve
 `openclaw doctor` çalıştırmanızı ister.
@@ -139,13 +132,13 @@ Mevcut geçişler:
 her modeli tek bir API’ye zorlayabilir veya maliyetleri sıfırlayabilir. Doctor,
 geçersiz kılmayı kaldırıp model başına API yönlendirmesini + maliyetleri geri yükleyebilmeniz için uyarır.
 
-### 3) Eski durum geçişleri (disk yerleşimi)
+### 3. Eski durum geçişleri (disk yerleşimi)
 
 Doctor, eski disk yerleşimlerini geçerli yapıya taşıyabilir:
 
-- Oturumlar deposu + dökümler:
+- Sessions store + transcripts:
   - `~/.openclaw/sessions/`’ten `~/.openclaw/agents/<agentId>/sessions/`’e
-- Ajan dizini:
+- Agent dir:
   - `~/.openclaw/agent/`’ten `~/.openclaw/agents/<agentId>/agent/`’ya
 - WhatsApp kimlik doğrulama durumu (Baileys):
   - eski `~/.openclaw/credentials/*.json`’den (`oauth.json` hariç)
@@ -157,7 +150,7 @@ eski oturumlar + ajan dizinini otomatik taşır; böylece geçmiş/kimlik doğru
 manuel bir doctor çalıştırmasına gerek kalmadan ajan başına yola yerleşir. WhatsApp
 kimlik doğrulaması kasıtlı olarak yalnızca `openclaw doctor` aracılığıyla taşınır.
 
-### 4) Durum bütünlüğü denetimleri (oturum kalıcılığı, yönlendirme ve güvenli kullanım)
+### 4. Durum bütünlüğü denetimleri (oturum kalıcılığı, yönlendirme ve güvenli kullanım)
 
 Durum dizini operasyonel beyin sapıdır. Kaybolursa, oturumları, kimlik bilgilerini,
 günlükleri ve yapılandırmayı kaybedersiniz (başka yerde yedekleriniz yoksa).
@@ -179,7 +172,7 @@ Doctor şunları denetler:
 - **Yapılandırma dosyası izinleri**: `~/.openclaw/openclaw.json` grup/dünya tarafından okunabilir ise uyarır
   ve `600`’a sıkılaştırmayı önerir.
 
-### 5) Model kimlik doğrulama sağlığı (OAuth süresi dolması)
+### 5. Model kimlik doğrulama sağlığı (OAuth süresi dolması)
 
 Doctor, kimlik doğrulama deposundaki OAuth profillerini inceler, belirteçler
 dolmak üzereyken/dolduğunda uyarır ve güvenliyse yenileyebilir. Anthropic Claude Code
@@ -192,17 +185,17 @@ Doctor ayrıca, geçici olarak kullanılamaz olan kimlik doğrulama profillerini
 - kısa beklemeler (oran sınırları/zaman aşımları/kimlik doğrulama hataları)
 - daha uzun süreli devre dışı bırakmalar (faturalama/kredi sorunları)
 
-### 6) Hooks model doğrulaması
+### 6. Hooks model doğrulaması
 
 `hooks.gmail.model` ayarlıysa, doctor model referansını katalog ve izin listesine karşı
 doğrular ve çözümlenemeyecek veya izin verilmeyen durumlarda uyarır.
 
-### 7) Sandbox imajı onarımı
+### 7. Sandbox imajı onarımı
 
 sandboxing etkin olduğunda, doctor Docker imajlarını denetler ve geçerli imaj
 eksikse oluşturmayı veya eski adlara geçmeyi teklif eder.
 
-### 8) Gateway hizmet geçişleri ve temizlik ipuçları
+### 8. Gateway hizmet geçişleri ve temizlik ipuçları
 
 Doctor, eski gateway hizmetlerini (launchd/systemd/schtasks) algılar ve
 bunları kaldırıp geçerli gateway portunu kullanarak OpenClaw hizmetini kurmayı
@@ -210,37 +203,37 @@ teklif eder. Ayrıca ek gateway-benzeri hizmetleri tarayabilir ve temizlik ipuç
 Profil adlandırmalı OpenClaw gateway hizmetleri birinci sınıf kabul edilir ve “ekstra”
 olarak işaretlenmez.
 
-### 9) Güvenlik uyarıları
+### 9. Güvenlik uyarıları
 
 Doctor, bir sağlayıcı izin listesi olmadan DM’lere açık olduğunda veya
 bir politika tehlikeli bir şekilde yapılandırıldığında uyarılar üretir.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 systemd kullanıcı hizmeti olarak çalışıyorsa, doctor, oturum kapatıldıktan sonra
 gateway’in ayakta kalması için linger’ın etkin olduğundan emin olur.
 
-### 11) Skills durumu
+### 11. Skills durumu
 
 Doctor, mevcut çalışma alanı için uygun/eksik/engelli skills’in hızlı bir özetini yazdırır.
 
-### 12) Gateway kimlik doğrulama denetimleri (yerel belirteç)
+### 12. Gateway kimlik doğrulama denetimleri (yerel belirteç)
 
 Doctor, yerel bir gateway’de `gateway.auth` eksik olduğunda uyarır ve
 bir belirteç oluşturmayı teklif eder. Otomasyonda belirteç oluşturmayı zorlamak için
 `openclaw doctor --generate-gateway-token` kullanın.
 
-### 13) Gateway sağlık denetimi + yeniden başlatma
+### 13. Gateway sağlık denetimi + yeniden başlatma
 
 Doctor bir sağlık denetimi çalıştırır ve sağlıksız göründüğünde gateway’i
 yeniden başlatmayı teklif eder.
 
-### 14) Kanal durum uyarıları
+### 14. Kanal durum uyarıları
 
 Gateway sağlıklıysa, doctor bir kanal durum yoklaması çalıştırır ve
 önerilen düzeltmelerle birlikte uyarıları raporlar.
 
-### 15) Supervisor yapılandırma denetimi + onarım
+### 15. Supervisor yapılandırma denetimi + onarım
 
 Doctor, yüklü supervisor yapılandırmasını (launchd/systemd/schtasks)
 eksik veya güncel olmayan varsayılanlar için denetler (ör. systemd network-online
@@ -255,14 +248,14 @@ Notlar:
 - `openclaw doctor --repair --force` özel supervisor yapılandırmalarının üzerine yazar.
 - Her zaman `openclaw gateway install --force` ile tam bir yeniden yazmayı zorlayabilirsiniz.
 
-### 16) Gateway çalışma zamanı + port tanılamaları
+### 16. Gateway çalışma zamanı + port tanılamaları
 
 Doctor, hizmet çalışma zamanını (PID, son çıkış durumu) inceler ve
 hizmet yüklü olup fiilen çalışmadığında uyarır. Ayrıca gateway portunda
 (varsayılan `18789`) port çakışmalarını denetler ve olası nedenleri raporlar
 (gateway’in zaten çalışıyor olması, SSH tüneli).
 
-### 17) Gateway çalışma zamanı en iyi uygulamaları
+### 17. Gateway çalışma zamanı en iyi uygulamaları
 
 Doctor, gateway hizmeti Bun üzerinde veya sürüm yöneticili bir Node yolunda
 çalıştığında uyarır (`nvm`, `fnm`, `volta`, `asdf`, vb.). WhatsApp + Telegram kanalları Node gerektirir
@@ -270,12 +263,12 @@ ve sürüm yöneticisi yolları yükseltmelerden sonra bozulabilir; çünkü hiz
 kabuk başlatma dosyalarınızı yüklemez. Doctor, mümkün olduğunda
 (Homebrew/apt/choco) sistem Node kurulumuna geçişi teklif eder.
 
-### 18) Yapılandırma yazımı + sihirbaz meta verileri
+### 18. Yapılandırma yazımı + sihirbaz meta verileri
 
 Doctor, yapılandırma değişikliklerini kalıcı hale getirir ve doctor çalıştırmasını
 kaydetmek için sihirbaz meta verilerini damgalar.
 
-### 19) Çalışma alanı ipuçları (yedekleme + bellek sistemi)
+### 19. Çalışma alanı ipuçları (yedekleme + bellek sistemi)
 
 Doctor, eksikse bir çalışma alanı bellek sistemi önerir ve çalışma alanı
 zaten git altında değilse bir yedekleme ipucu yazdırır.

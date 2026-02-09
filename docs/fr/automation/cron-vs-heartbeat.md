@@ -5,13 +5,6 @@ read_when:
   - Mettre en place une surveillance ou des notifications en arrière-plan
   - Optimiser l’utilisation des tokens pour des vérifications périodiques
 title: "Cron vs Heartbeat"
-x-i18n:
-  source_path: automation/cron-vs-heartbeat.md
-  source_hash: fca1006df9d2e842
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:37Z
 ---
 
 # Cron vs Heartbeat : quand utiliser chacun
@@ -20,14 +13,14 @@ Les heartbeats et les tâches cron vous permettent tous deux d’exécuter des t
 
 ## Guide de décision rapide
 
-| Cas d’usage                                          | Recommandé               | Pourquoi                                                    |
-| ---------------------------------------------------- | ------------------------ | ----------------------------------------------------------- |
-| Vérifier la boîte de réception toutes les 30 min     | Heartbeat                | Regroupé avec d’autres vérifications, conscient du contexte |
+| Cas d’usage                                          | Recommandé                                  | Pourquoi                                                    |
+| ---------------------------------------------------- | ------------------------------------------- | ----------------------------------------------------------- |
+| Vérifier la boîte de réception toutes les 30 min     | Heartbeat                                   | Regroupé avec d’autres vérifications, conscient du contexte |
 | Envoyer un rapport quotidien à 9h précises           | Cron (isolé)             | Timing exact requis                                         |
-| Surveiller le calendrier pour les événements à venir | Heartbeat                | Adapté naturellement à une vigilance périodique             |
+| Surveiller le calendrier pour les événements à venir | Heartbeat                                   | Adapté naturellement à une vigilance périodique             |
 | Exécuter une analyse approfondie hebdomadaire        | Cron (isolé)             | Tâche autonome, peut utiliser un autre modèle               |
 | Me rappeler dans 20 minutes                          | Cron (principal, `--at`) | Exécution unique avec timing précis                         |
-| Vérification de l’état d’un projet en arrière-plan   | Heartbeat                | S’appuie sur un cycle existant                              |
+| Vérification de l’état d’un projet en arrière-plan   | Heartbeat                                   | S’appuie sur un cycle existant                              |
 
 ## Heartbeat : vigilance périodique
 
@@ -223,12 +216,12 @@ Voir [Lobster](/tools/lobster) pour l’utilisation complète et des exemples.
 Heartbeat et cron peuvent tous deux interagir avec la session principale, mais de manière différente :
 
 |            | Heartbeat                       | Cron (principal)                   | Cron (isolé)                   |
-| ---------- | ------------------------------- | ---------------------------------- | ------------------------------ |
-| Session    | Principale                      | Principale (via événement système) | `cron:<jobId>`                 |
-| Historique | Partagé                         | Partagé                            | Nouveau à chaque exécution     |
-| Contexte   | Complet                         | Complet                            | Aucun (démarre à zéro)         |
-| Modèle     | Modèle de la session principale | Modèle de la session principale    | Peut être remplacé             |
-| Sortie     | Livrée si non `HEARTBEAT_OK`    | Prompt heartbeat + événement       | Annonce du résumé (par défaut) |
+| ---------- | ------------------------------- | ----------------------------------------------------- | ------------------------------------------------- |
+| Session    | Principale                      | Principale (via événement système) | `cron:<jobId>`                                    |
+| Historique | Partagé                         | Partagé                                               | Nouveau à chaque exécution                        |
+| Contexte   | Complet                         | Complet                                               | Aucun (démarre à zéro)         |
+| Modèle     | Modèle de la session principale | Modèle de la session principale                       | Peut être remplacé                                |
+| Sortie     | Livrée si non `HEARTBEAT_OK`    | Prompt heartbeat + événement                          | Annonce du résumé (par défaut) |
 
 ### Quand utiliser un cron en session principale
 
@@ -251,7 +244,7 @@ openclaw cron add \
 
 Utilisez `--session isolated` lorsque vous souhaitez :
 
-- Une ardoise vierge sans contexte préalable
+- Une ardoise propre sans contexte préalable
 - Des paramètres de modèle ou de réflexion différents
 - Annoncer directement des résumés dans un canal
 - Un historique qui n’encombre pas la session principale
@@ -269,11 +262,11 @@ openclaw cron add \
 
 ## Considérations de coût
 
-| Mécanisme        | Profil de coût                                                       |
-| ---------------- | -------------------------------------------------------------------- |
-| Heartbeat        | Un tour toutes les N minutes ; évolue avec la taille de HEARTBEAT.md |
-| Cron (principal) | Ajoute un événement au prochain heartbeat (pas de tour isolé)        |
-| Cron (isolé)     | Tour d’agent complet par tâche ; peut utiliser un modèle moins cher  |
+| Mécanisme                           | Profil de coût                                                                       |
+| ----------------------------------- | ------------------------------------------------------------------------------------ |
+| Heartbeat                           | Un tour toutes les N minutes ; évolue avec la taille de HEARTBEAT.md |
+| Cron (principal) | Ajoute un événement au prochain heartbeat (pas de tour isolé)     |
+| Cron (isolé)     | Tour d’agent complet par tâche ; peut utiliser un modèle moins cher                  |
 
 **Conseils** :
 

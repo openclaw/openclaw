@@ -3,13 +3,6 @@ summary: "Acceso y autenticación del dashboard del Gateway (UI de control)"
 read_when:
   - Cambiar la autenticación del dashboard o los modos de exposición
 title: "Dashboard"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:56Z
 ---
 
 # Dashboard (UI de control)

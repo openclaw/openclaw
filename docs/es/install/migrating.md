@@ -4,13 +4,6 @@ read_when:
   - Está moviendo OpenClaw a una nueva laptop/servidor
   - Quiere conservar sesiones, autenticación e inicios de sesión de canales (WhatsApp, etc.)
 title: "Guía de migración"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:55Z
 ---
 
 # Migración de OpenClaw a una nueva máquina
@@ -26,7 +19,7 @@ Pero existen errores comunes relacionados con **perfiles**, **permisos** y **cop
 
 ## Antes de empezar (qué va a migrar)
 
-### 1) Identifique su directorio de estado
+### 1. Identifique su directorio de estado
 
 La mayoría de las instalaciones usan el valor predeterminado:
 
@@ -45,7 +38,7 @@ openclaw status
 
 Busque menciones de `OPENCLAW_STATE_DIR` / perfil en la salida. Si ejecuta múltiples gateways, repita para cada perfil.
 
-### 2) Identifique su workspace
+### 2. Identifique su workspace
 
 Valores predeterminados comunes:
 
@@ -54,7 +47,7 @@ Valores predeterminados comunes:
 
 Su workspace es donde viven archivos como `MEMORY.md`, `USER.md` y `memory/*.md`.
 
-### 3) Entienda qué conservará
+### 3. Entienda qué conservará
 
 Si copia **ambos** el directorio de estado y el workspace, conservará:
 
@@ -137,7 +130,7 @@ openclaw gateway restart
 openclaw status
 ```
 
-## Errores comunes (y cómo evitarlos)
+## Pistolas comunes (y cómo evitarlas)
 
 ### Error común: desajuste de perfil / directorio de estado
 

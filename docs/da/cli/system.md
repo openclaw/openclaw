@@ -5,13 +5,6 @@ read_when:
   - Du skal aktivere eller deaktivere heartbeats
   - Du vil inspicere systemets tilstedeværelsesposter
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:04Z
 ---
 
 # `openclaw system`
@@ -30,9 +23,9 @@ openclaw system presence
 
 ## `system event`
 
-Sæt en systemhændelse i kø på **main**-sessionen. Den næste heartbeat vil injicere
-den som en `System:`-linje i prompten. Brug `--mode now` til at udløse heartbeat
-med det samme; `next-heartbeat` venter på den næste planlagte tick.
+Kør en systembegivenhed i **main**-sessionen. Det næste hjerteslag vil injicere
+det som en `System:` linje i prompten. Brug `--mode nu` at udløse hjerteslag
+med det samme; `next-heartbeat` venter på den næste planlagte flåt.
 
 Flag:
 

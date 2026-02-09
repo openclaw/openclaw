@@ -5,13 +5,6 @@ read_when:
   - Pareando um novo nó iOS/Android
   - Revisando a postura de segurança do OpenClaw
 title: "Pareamento"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:00Z
 ---
 
 # Pareamento
@@ -24,7 +17,7 @@ Ela é usada em dois lugares:
 
 Contexto de segurança: [Security](/gateway/security)
 
-## 1) Pareamento de DM (acesso a chat de entrada)
+## 1. Pareamento de DM (acesso a chat de entrada)
 
 Quando um canal é configurado com a política de DM `pairing`, remetentes desconhecidos recebem um código curto e a mensagem **não é processada** até que você aprove.
 
@@ -54,7 +47,7 @@ Armazenado em `~/.openclaw/credentials/`:
 
 Trate-os como sensíveis (eles controlam o acesso ao seu assistente).
 
-## 2) Pareamento de dispositivos de nó (iOS/Android/macOS/nós headless)
+## 2. Pareamento de dispositivos de nó (iOS/Android/macOS/nós headless)
 
 Os nós se conectam ao Gateway como **dispositivos** com `role: node`. O Gateway
 cria uma solicitação de pareamento de dispositivo que deve ser aprovada.

@@ -1,18 +1,11 @@
 ---
 summary: "Indsendelse af issues og fejlrapporter med højt signal"
 title: "Indsendelse af en issue"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:19Z
 ---
 
 ## Indsendelse af en issue
 
-Klare og præcise issues fremskynder diagnosticering og rettelser. Medtag følgende for bugs, regressioner eller manglende funktioner:
+Klart, kortfattet spørgsmål fremskynde diagnose og rettelser. Inkludér følgende for fejl, regressioner eller funktionshuller:
 
 ### Hvad du skal inkludere
 
@@ -28,7 +21,7 @@ Klare og præcise issues fremskynder diagnosticering og rettelser. Medtag følge
 - [ ] Bekræftet ikke for nylig rettet/adresseret (især sikkerhed)
 - [ ] Påstande understøttet af evidens eller repro
 
-Vær kortfattet. Knapphed > perfekt grammatik.
+Vær kortfattet. Terseness > perfekt grammatik.
 
 Validering (kør/ret før PR):
 
@@ -84,7 +77,7 @@ Validering (kør/ret før PR):
 ### Evidence (redacted)
 ```
 
-_Undgå hemmeligheder/udnyttelsesdetaljer offentligt. For følsomme issues, minimer detaljer og anmod om privat indberetning._
+_Undgå hemmeligheder/udnytte detaljer i offentligheden. For følsomme spørgsmål, minimere detaljer og anmode om privat offentliggørelse. _
 
 #### Regressionsrapport
 
@@ -156,4 +149,4 @@ _Undgå hemmeligheder/udnyttelsesdetaljer offentligt. For følsomme issues, mini
 
 ### Indsendelse af en rettelses-PR
 
-Issue før PR er valgfrit. Medtag detaljer i PR’en, hvis du springer over. Hold PR’en fokuseret, angiv issue-nummer, tilføj tests eller forklar fravær, dokumentér adfærdsændringer/risici, inkluder redigerede logs/skærmbilleder som dokumentation, og kør korrekt validering før indsendelse.
+Issue before PR is optional. (Automatic Copy) Inkludér detaljer i PR hvis du springer over. Hold PR fokuseret, note issue nummer, tilføje tests eller forklare fravær, dokument adfærd ændringer/risici omfatte redigerede logfiler / screenshots som bevis, og køre korrekt validering før indsendelse.

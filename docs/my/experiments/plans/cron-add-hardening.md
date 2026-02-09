@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Cron Add Hardening"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:23Z
 ---
 
 # Cron Add Hardening & Schema Alignment
 
 ## အကြောင်းအရာ (Context)
 
-မကြာသေးမီက Gateway လော့ဂ်များတွင် မမှန်ကန်သော ပါရာမီတာများ ( `sessionTarget`, `wakeMode`, `payload` မပါရှိခြင်း၊ နှင့် မမှန်ကန်သော `schedule` ) ကြောင့် `cron.add` မအောင်မြင်မှုများကို ထပ်ခါတလဲလဲ တွေ့ရှိရပါသည်။ ၎င်းက client တစ်ခု (အထူးသဖြင့် agent tool call လမ်းကြောင်းဖြစ်နိုင်) မှ job payload များကို wrapper ဖြင့် ထုပ်ပိုးထားခြင်း သို့မဟုတ် အစိတ်အပိုင်းမပြည့်စုံဘဲ ပို့နေကြောင်းကို ညွှန်ပြပါသည်။ ထို့အပြင် TypeScript၊ gateway schema၊ CLI flags၊ နှင့် UI form types တို့အကြား cron provider enums များ မကိုက်ညီခြင်းလည်း ရှိနေပြီး၊ UI တွင် `cron.status` အတွက် မကိုက်ညီမှု ( `jobCount` ကို မျှော်မှန်းသော်လည်း gateway က `jobs` ကို ပြန်ပို့ခြင်း) ရှိနေပါသည်။
+ဤအချက်က client တစ်ခု (အများအားဖြင့် agent tool call path) သည် wrapped သို့မဟုတ် အပြည့်အစုံ မသတ်မှတ်ထားသော job payloads များကို ပို့နေကြောင်း ပြသပါသည်။ ထို့အပြင် TypeScript ထဲရှိ cron provider enums, gateway schema, CLI flags, UI form types တို့အကြား မကိုက်ညီမှုများရှိပြီး `cron.status` အတွက် UI မကိုက်ညီမှုလည်း ရှိပါသည် (`jobCount` ကို မျှော်လင့်ထားသော်လည်း gateway က `jobs` ကို ပြန်ပေးနေသည်)။ Telegram allowlists များသည် ယခုအခါ `telegram:` နှင့် `tg:` prefixes များကို case-insensitive အနေဖြင့် လက်ခံပြီး မတော်တဆ ပါဝင်လာသော whitespace များကိုလည်း ခံနိုင်ရည်ရှိပါသည်။
 
 ## ရည်မှန်းချက်များ (Goals)
 

@@ -4,13 +4,6 @@ read_when:
   - Süreç içi Gateway eklentilerini yüklemek veya yönetmek istiyorsunuz
   - Eklenti yükleme hatalarını ayıklamak istiyorsunuz
 title: "plugins"
-x-i18n:
-  source_path: cli/plugins.md
-  source_hash: 60476e0a9b7247bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:00Z
 ---
 
 # `openclaw plugins`

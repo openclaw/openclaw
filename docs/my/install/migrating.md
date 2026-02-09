@@ -4,13 +4,6 @@ read_when:
   - OpenClaw ကို လက်ပ်တော့/ဆာဗာ အသစ်သို့ ရွှေ့နေသည့်အခါ
   - ဆက်ရှင်များ၊ အတည်ပြုချက် (auth) နှင့် ချန်နယ် လော့ဂ်အင်များ (WhatsApp စသည်) ကို ထိန်းသိမ်းထားချင်သည့်အခါ
 title: "Migration လမ်းညွှန်"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:51Z
 ---
 
 # OpenClaw ကို စက်အသစ်သို့ ရွှေ့ပြောင်းခြင်း
@@ -26,7 +19,7 @@ x-i18n:
 
 ## စတင်မီ (သင် ရွှေ့ပြောင်းမည့် အရာများ)
 
-### 1) သင့် state directory ကို သတ်မှတ်ပါ
+### 1. သင့် state directory ကို သတ်မှတ်ပါ
 
 အများစုသော ထည့်သွင်းမှုများတွင် ပုံမှန်ကို အသုံးပြုပါသည်—
 
@@ -43,9 +36,9 @@ x-i18n:
 openclaw status
 ```
 
-ထုတ်လွှတ်မှုအတွင်း `OPENCLAW_STATE_DIR` / profile အကြောင်း ဖော်ပြထားခြင်းကို ရှာပါ။ gateway များကို profile အများကြီးဖြင့် chạy လုပ်ထားပါက profile တစ်ခုချင်းစီအတွက် ထပ်လုပ်ပါ။
+Look for mentions of `OPENCLAW_STATE_DIR` / profile in the output. If you run multiple gateways, repeat for each profile.
 
-### 2) သင့် workspace ကို သတ်မှတ်ပါ
+### 2. သင့် workspace ကို သတ်မှတ်ပါ
 
 အများအားဖြင့် အသုံးများသော ပုံမှန်များ—
 
@@ -54,7 +47,7 @@ openclaw status
 
 Workspace သည် `MEMORY.md`, `USER.md`, နှင့် `memory/*.md` ကဲ့သို့သော ဖိုင်များ တည်ရှိရာ နေရာဖြစ်ပါသည်။
 
-### 3) ဘာတွေကို ထိန်းသိမ်းထားမလဲ ဆိုတာကို နားလည်ပါ
+### 3. ဘာတွေကို ထိန်းသိမ်းထားမလဲ ဆိုတာကို နားလည်ပါ
 
 state dir နှင့် workspace **နှစ်ခုလုံး** ကို ကူးယူပါက အောက်ပါအရာများကို ဆက်လက် ထိန်းသိမ်းနိုင်ပါသည်—
 
@@ -128,7 +121,7 @@ profile/state dir များ အများကြီးရှိပါက (�
 openclaw doctor
 ```
 
-Doctor သည် “လုံခြုံပြီး သာမန်” အမိန့်ဖြစ်ပြီး services များကို ပြုပြင်ပေးကာ config migrations များကို အသုံးချပြီး မကိုက်ညီမှုများကို သတိပေးပါသည်။
+Doctor က “အန္တရာယ်ကင်းပြီး ပုံမှန်” command ပါ။ ဒါက services တွေကို ပြုပြင်ပေးပြီး config migrations ကို အသုံးချကာ မကိုက်ညီမှုတွေကို သတိပေးပါတယ်။
 
 ထို့နောက်—
 
@@ -155,7 +148,7 @@ openclaw doctor
 
 ### Footgun: `openclaw.json` ကိုသာ ကူးယူခြင်း
 
-`openclaw.json` တစ်ခုတည်းနဲ့ မလုံလောက်ပါ။ provider အများစုသည် state ကို အောက်ပါနေရာများအောက်တွင် သိမ်းဆည်းထားပါသည်—
+`openclaw.json` is not enough. Many providers store state under:
 
 - `$OPENCLAW_STATE_DIR/credentials/`
 - `$OPENCLAW_STATE_DIR/agents/<agentId>/...`
@@ -177,7 +170,7 @@ remote mode ဖြစ်ပါက **gateway host** ကို ရွှေ့ပ�
 
 ### Footgun: အရန်ကူးယူမှုများအတွင်း လျှို့ဝှက်ချက်များ
 
-`$OPENCLAW_STATE_DIR` တွင် လျှို့ဝှက်ချက်များ (API keys၊ OAuth tokens၊ WhatsApp credentials) ပါဝင်ပါသည်။ အရန်ကူးယူမှုများကို production secrets ကဲ့သို့ ဆက်ဆံပါ—
+`$OPENCLAW_STATE_DIR` contains secrets (API keys, OAuth tokens, WhatsApp creds). Treat backups like production secrets:
 
 - encrypted အဖြစ် သိမ်းဆည်းပါ
 - မလုံခြုံသော ချန်နယ်များမှ မမျှဝေပါနှင့်

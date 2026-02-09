@@ -4,18 +4,11 @@ read_when:
   - एक ही मशीन पर एक से अधिक Gateway चलाते समय
   - प्रत्येक Gateway के लिए पृथक विन्यास/स्थिति/पोर्ट्स की आवश्यकता हो
 title: "एकाधिक Gateway"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:16Z
 ---
 
 # एकाधिक Gateway (एक ही होस्ट)
 
-अधिकांश सेटअप में एक Gateway का उपयोग करना चाहिए क्योंकि एक ही Gateway कई मैसेजिंग कनेक्शन और एजेंट संभाल सकता है। यदि आपको अधिक मज़बूत आइसोलेशन या रेडंडेंसी (जैसे, एक रेस्क्यू बॉट) की आवश्यकता है, तो पृथक प्रोफाइल/पोर्ट्स के साथ अलग-अलग Gateway चलाएँ।
+46. अधिकांश सेटअप में एक Gateway का उपयोग करना चाहिए क्योंकि एक ही Gateway कई messaging connections और agents संभाल सकता है। 47. यदि आपको अधिक isolation या redundancy (जैसे, rescue bot) चाहिए, तो isolated profiles/ports के साथ अलग-अलग Gateways चलाएँ।
 
 ## आइसोलेशन चेकलिस्ट (आवश्यक)
 
@@ -87,7 +80,7 @@ openclaw --profile rescue gateway install
 
 - ब्राउज़र कंट्रोल सेवा पोर्ट = बेस + 2 (केवल loopback)
 - `canvasHost.port = base + 4`
-- ब्राउज़र प्रोफाइल CDP पोर्ट्स `browser.controlPort + 9 .. + 108` से स्वतः आवंटित होते हैं
+- 48. Browser profile CDP ports `browser.controlPort + 9 .. 49. + 108` से अपने-आप allocate होते हैं।
 
 यदि आप इनमें से किसी को भी विन्यास या पर्यावरण चर में ओवरराइड करते हैं, तो आपको प्रत्येक इंस्टेंस के लिए इन्हें अद्वितीय रखना होगा।
 
@@ -95,8 +88,8 @@ openclaw --profile rescue gateway install
 
 - कई इंस्टेंस पर `browser.cdpUrl` को एक ही मान पर **पिन न करें**।
 - प्रत्येक इंस्टेंस को अपना स्वयं का ब्राउज़र कंट्रोल पोर्ट और CDP रेंज चाहिए (जो उसके Gateway पोर्ट से व्युत्पन्न होती है)।
-- यदि आपको स्पष्ट CDP पोर्ट्स की आवश्यकता है, तो प्रति इंस्टेंस `browser.profiles.<name>.cdpPort` सेट करें।
-- रिमोट Chrome: `browser.profiles.<name>.cdpUrl` का उपयोग करें (प्रति प्रोफाइल, प्रति इंस्टेंस)।
+- 50. यदि आपको explicit CDP ports चाहिए, तो `browser.profiles.<name>` सेट करेंप्रति इंस्टेंस `.cdpPort`।
+- Remote Chrome: `browser.profiles.<name>` का उपयोग करें`.cdpUrl` (प्रति प्रोफ़ाइल, प्रति इंस्टेंस)।
 
 ## मैनुअल env उदाहरण
 

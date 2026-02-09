@@ -3,18 +3,11 @@ summary: "Sessionsrensning: trimning av verktygsresultat för att minska kontext
 read_when:
   - Du vill minska LLM-kontekttillväxt från verktygsutdata
   - Du finjusterar agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:03Z
 ---
 
 # Sessionsrensning
 
-Sessionsrensning trimmar **gamla verktygsresultat** från kontexten i minnet precis före varje LLM-anrop. Den skriver **inte** om sessionshistoriken på disk (`*.jsonl`).
+Sessionsbeskärning trims **gamla verktygsresultat** från minneskontexten precis innan varje LLM-anrop. Det skriver **inte** om sessionshistoriken på disken (`*.jsonl`).
 
 ## När den körs
 
@@ -32,7 +25,7 @@ Sessionsrensning trimmar **gamla verktygsresultat** från kontexten i minnet pre
 
 ## Vad detta förbättrar (kostnad + cachebeteende)
 
-- **Varför rensa:** Anthropics prompt-cachning gäller endast inom TTL. Om en session står still längre än TTL, cachar nästa begäran om hela prompten igen om du inte trimmar den först.
+- **Varför beskära:** Antropisk prompt cachelagring gäller endast inom TTL. Om en session går vilse förbi TTL, nästa begäran cachelagrar den fullständiga frågan om du inte trimma den först.
 - **Vad blir billigare:** rensning minskar **cacheWrite**-storleken för den första begäran efter att TTL har löpt ut.
 - **Varför TTL-återställningen spelar roll:** när rensning körs återställs cachefönstret, så uppföljande begäranden kan återanvända den nyligen cachade prompten i stället för att cacha hela historiken igen.
 - **Vad den inte gör:** rensning lägger inte till tokens eller ”dubblar” kostnader; den ändrar bara vad som cachas vid den första begäran efter TTL.
@@ -47,7 +40,7 @@ Sessionsrensning trimmar **gamla verktygsresultat** från kontexten i minnet pre
 
 ## Uppskattning av kontextfönster
 
-Rensning använder ett uppskattat kontextfönster (tecken ≈ tokens × 4). Basfönstret löses i denna ordning:
+Beskärning använder ett uppskattat sammanhangsfönster (tecken <unk> tokens × 4). Basfönstret är löst i denna ordning:
 
 1. `models.providers.*.models[].contextWindow`-åsidosättning.
 2. Modelldefinitionens `contextWindow` (från modellregistret).
@@ -79,7 +72,7 @@ Om `agents.defaults.contextTokens` är satt behandlas det som ett tak (min) på 
 ## Interaktion med andra begränsningar
 
 - Inbyggda verktyg trunkerar redan sina egna utdata; sessionsrensning är ett extra lager som förhindrar att långvariga chattar ackumulerar för mycket verktygsutdata i modellkontexten.
-- Kompaktering är separat: kompaktering sammanfattar och persisterar, rensning är transient per begäran. Se [/concepts/compaction](/concepts/compaction).
+- Komprimering är separat: komprimering sammanfattar och kvarstår, beskärning är övergående per begäran. Se [/concepts/compaction](/concepts/compaction).
 
 ## Standardvärden (när aktiverat)
 

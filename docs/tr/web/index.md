@@ -4,13 +4,6 @@ read_when:
   - Gateway’e Tailscale üzerinden erişmek istiyorsunuz
   - Tarayıcı Kontrol UI ve yapılandırma düzenlemeyi istiyorsunuz
 title: "Web"
-x-i18n:
-  source_path: web/index.md
-  source_hash: 1315450b71a799c8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:51Z
 ---
 
 # Web (Gateway)
@@ -28,7 +21,7 @@ Bu sayfa bağlama modları, güvenlik ve web’e açık yüzeylere odaklanır.
 `hooks.enabled=true` olduğunda, Gateway aynı HTTP sunucusunda küçük bir webhook uç noktası da sunar.
 Kimlik doğrulama ve yükler için [Gateway yapılandırması](/gateway/configuration) → `hooks` bölümüne bakın.
 
-## Yapılandırma (varsayılan açık)
+## Config (default-on)
 
 Varlıklar mevcut olduğunda (`dist/control-ui`) Kontrol UI **varsayılan olarak etkindir**.
 Yapılandırma ile denetleyebilirsiniz:

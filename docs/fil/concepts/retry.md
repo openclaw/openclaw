@@ -4,13 +4,6 @@ read_when:
   - Ina-update ang retry behavior o mga default ng provider
   - Nagde-debug ng mga error sa pagpapadala ng provider o mga rate limit
 title: "Patakaran sa Retry"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:14Z
 ---
 
 # Patakaran sa retry

@@ -3,17 +3,10 @@ summary: "Jak OpenClaw rotuje profile uwierzytelniania i wykonuje przełączanie
 read_when:
   - Diagnozowanie rotacji profili uwierzytelniania, czasów odnowienia (cooldown) lub zachowania przełączania awaryjnego modeli
   - Aktualizowanie reguł przełączania awaryjnego dla profili uwierzytelniania lub modeli
-title: "Przełączanie awaryjne modeli"
-x-i18n:
-  source_path: concepts/model-failover.md
-  source_hash: eab7c0633824d941
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:16Z
+title: "Model nieudany"
 ---
 
-# Przełączanie awaryjne modeli
+# Modelowe przechwytywanie awarii
 
 OpenClaw obsługuje awarie w dwóch etapach:
 
@@ -74,15 +67,15 @@ i nie podlega automatycznej rotacji do rozpoczęcia nowej sesji.
 
 Profile przypięte automatycznie (wybrane przez router sesji) są traktowane jako **preferencja**:
 są próbowane w pierwszej kolejności, ale OpenClaw może przełączyć się na inny profil
-przy limitach szybkości lub timeoutach. Profile przypięte przez użytkownika pozostają
+przy limitach szybkości lub timeoutach.
+Profile przypięte przez użytkownika pozostają
 zablokowane na tym profilu; jeśli zawiedzie i skonfigurowano przełączanie awaryjne modeli,
 OpenClaw przechodzi do następnego modelu zamiast zmieniać profil.
 
 ### Dlaczego OAuth może „wyglądać na zagubiony”
 
 Jeśli masz zarówno profil OAuth, jak i profil klucza API dla tego samego dostawcy,
-round‑robin może przełączać się między nimi pomiędzy wiadomościami, o ile nie są przypięte.
-Aby wymusić pojedynczy profil:
+round‑robin może przełączać się między nimi pomiędzy wiadomościami, o ile nie są przypięte. Aby wymusić pojedynczy profil:
 
 - Przypnij za pomocą `auth.order[provider] = ["provider:profileId"]`, lub
 - Użyj nadpisania per sesja przez `/model …` z nadpisaniem profilu
@@ -92,7 +85,8 @@ Aby wymusić pojedynczy profil:
 
 Gdy profil zawiedzie z powodu błędów uwierzytelniania/limitów szybkości
 (lub timeoutu, który wygląda jak limit szybkości), OpenClaw oznacza go jako
-będący w cooldown i przechodzi do następnego profilu. Błędy formatu/nieprawidłowych
+będący w cooldown i przechodzi do następnego profilu.
+Błędy formatu/nieprawidłowych
 żądań (na przykład błędy walidacji identyfikatora wywołania narzędzia Cloud Code Assist)
 są traktowane jako kwalifikujące się do przełączania awaryjnego i używają tych samych cooldownów.
 
@@ -120,8 +114,7 @@ Stan jest przechowywany w `auth-profiles.json` pod `usageStats`:
 ## Wyłączenia rozliczeń
 
 Awarie rozliczeń/kredytów (na przykład „niewystarczające kredyty” / „zbyt niski stan kredytów”)
-są traktowane jako kwalifikujące się do przełączania awaryjnego, ale zwykle nie są przejściowe.
-Zamiast krótkiego cooldownu OpenClaw oznacza profil jako **wyłączony** (z dłuższym backoffem)
+są traktowane jako kwalifikujące się do przełączania awaryjnego, ale zwykle nie są przejściowe. Zamiast krótkiego cooldownu OpenClaw oznacza profil jako **wyłączony** (z dłuższym backoffem)
 i przełącza się na następny profil/dostawcę.
 
 Stan jest przechowywany w `auth-profiles.json`:
@@ -142,7 +135,7 @@ Ustawienia domyślne:
 - Backoff rozliczeń zaczyna się od **5 godzin**, podwaja się przy każdej awarii rozliczeń i ma limit **24 godzin**.
 - Liczniki backoffu resetują się, jeśli profil nie zawiódł przez **24 godziny** (konfigurowalne).
 
-## Przełączanie awaryjne modelu
+## Model rezerwowy
 
 Jeśli wszystkie profile dla dostawcy zawiodą, OpenClaw przechodzi do następnego modelu w
 `agents.defaults.model.fallbacks`. Dotyczy to awarii uwierzytelniania, limitów szybkości oraz

@@ -5,13 +5,6 @@ read_when:
   - Dostosowywanie trybów połączeń zdalnych (bezpośrednio vs SSH)
   - Projektowanie wykrywania węzłów i parowania dla węzłów zdalnych
 title: "Wykrywanie i transporty"
-x-i18n:
-  source_path: gateway/discovery.md
-  source_hash: e12172c181515bfa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Wykrywanie i transporty
@@ -23,7 +16,7 @@ OpenClaw ma dwa odrębne problemy, które na pierwszy rzut oka wyglądają podob
 
 Celem projektowym jest utrzymanie całego wykrywania/reklamowania sieciowego w **Node Gateway** (`openclaw gateway`) oraz traktowanie klientów (aplikacja macOS, iOS) wyłącznie jako konsumentów.
 
-## Terminy
+## Regulamin
 
 - **Gateway**: pojedynczy, długotrwale działający proces Gateway, który posiada stan (sesje, parowanie, rejestr węzłów) i uruchamia kanały. Większość konfiguracji używa jednego na host; możliwe są izolowane konfiguracje z wieloma Gateway.
 - **Gateway WS (płaszczyzna sterowania)**: punkt końcowy WebSocket na `127.0.0.1:18789` domyślnie; może być powiązany z LAN/tailnet za pomocą `gateway.bind`.
@@ -49,7 +42,7 @@ Szczegóły protokołów:
 
 ## Wejścia wykrywania (jak klienci dowiadują się, gdzie jest Gateway)
 
-### 1) Bonjour / mDNS (tylko LAN)
+### 1. Bonjour / mDNS (tylko LAN)
 
 Bonjour działa w trybie best-effort i nie przekracza granic sieci. Jest używany wyłącznie dla wygody w „tej samej sieci LAN”.
 
@@ -83,7 +76,7 @@ Wyłączanie/zastępowanie:
 - `OPENCLAW_TAILNET_DNS` publikuje wskazówkę `tailnetDns` (MagicDNS).
 - `OPENCLAW_CLI_PATH` zastępuje reklamowaną ścieżkę CLI.
 
-### 2) Tailnet (między sieciami)
+### 2. Tailnet (między sieciami)
 
 Dla konfiguracji w stylu Londyn/Wiedeń Bonjour nie pomoże. Zalecanym celem „bezpośrednim” jest:
 
@@ -91,7 +84,7 @@ Dla konfiguracji w stylu Londyn/Wiedeń Bonjour nie pomoże. Zalecanym celem „
 
 Jeśli Gateway potrafi wykryć, że działa pod Tailscale, publikuje `tailnetDns` jako opcjonalną wskazówkę dla klientów (w tym w beaconach szerokiego zasięgu).
 
-### 3) Cel ręczny / SSH
+### 3. Cel ręczny / SSH
 
 Gdy nie ma trasy bezpośredniej (lub bezpośrednia jest wyłączona), klienci zawsze mogą połączyć się przez SSH, przekazując port Gateway na local loopback.
 

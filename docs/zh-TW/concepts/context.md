@@ -1,22 +1,15 @@
 ---
-summary: 「Context：模型看到的是什麼、如何建構，以及如何檢視」
+summary: "Context：模型看到的是什麼、如何建構，以及如何檢視"
 read_when:
   - 你想了解 OpenClaw 中「context」的意思
   - 你正在除錯為什麼模型「知道」某些事（或忘記了）
   - 你想降低 context 的負擔（/context、/status、/compact）
-title: 「Context」
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:43Z
+title: "Context"
 ---
 
 # Context
 
-「Context」是 **OpenClaw 在一次執行中送給模型的所有內容**。它受限於模型的 **context window**（權杖上限）。
+「Context」是 **OpenClaw 在一次執行中送給模型的所有內容**。它受限於模型的 **context window**（權杖上限）。 It is bounded by the model’s **context window** (token limit).
 
 新手心智模型：
 
@@ -90,19 +83,19 @@ Top tools (schema size):
 - System prompt（所有區段）。
 - Conversation history。
 - Tool 呼叫 + Tool 結果。
-- 附件／逐字稿（影像／音訊／檔案）。
+- Attachments/transcripts (images/audio/files).
 - Compaction 摘要與修剪產物。
 - 提供者的「包裝器」或隱藏標頭（不可見，但仍會計入）。
 
 ## OpenClaw 如何建構 system prompt
 
-System prompt **由 OpenClaw 持有**，且每次執行都會重建。內容包含：
+System prompt **由 OpenClaw 持有**，且每次執行都會重建。內容包含： It includes:
 
 - 工具清單 + 簡短描述。
 - Skills 清單（僅中繼資料；見下文）。
 - 工作區位置。
 - 時間（UTC + 若有設定則轉換為使用者時間）。
-- 執行期中繼資料（主機／作業系統／模型／thinking）。
+- Runtime metadata (host/OS/model/thinking).
 - 在 **Project Context** 下注入的工作區啟動檔案。
 
 完整拆解：[System Prompt](/concepts/system-prompt)。
@@ -119,40 +112,40 @@ System prompt **由 OpenClaw 持有**，且每次執行都會重建。內容包�
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md`（僅首次執行）
 
-大型檔案會依檔案使用 `agents.defaults.bootstrapMaxChars` 進行截斷（預設 `20000` 個字元）。`/context` 會顯示 **原始 vs 注入** 的大小，以及是否發生截斷。
+大型檔案會依檔案使用 `agents.defaults.bootstrapMaxChars` 進行截斷（預設 `20000` 個字元）。`/context` 會顯示 **原始 vs 注入** 的大小，以及是否發生截斷。 `/context` shows **raw vs injected** sizes and whether truncation happened.
 
 ## Skills：注入的內容 vs 隨需載入
 
-System prompt 會包含精簡的 **skills 清單**（名稱 + 描述 + 位置）。這份清單具有實際的負擔。
+System prompt 會包含精簡的 **skills 清單**（名稱 + 描述 + 位置）。這份清單具有實際的負擔。 This list has real overhead.
 
-Skill 的指示 **預設不會** 包含。模型被期望在 **需要時** 才 `read` 該 skill 的 `SKILL.md`。
+Skill instructions are _not_ included by default. Skill 的指示 **預設不會** 包含。模型被期望在 **需要時** 才 `read` 該 skill 的 `SKILL.md`。
 
 ## Tools：有兩種成本
 
 Tools 以兩種方式影響 context：
 
 1. System prompt 中的 **Tool 清單文字**（你看到的「Tooling」）。
-2. **Tool schemas**（JSON）。這些會送給模型以便呼叫工具；即使你看不到純文字內容，也會計入 context。
+2. **Tool schemas** (JSON). These are sent to the model so it can call tools. They count toward context even though you don’t see them as plain text.
 
 `/context detail` 會拆解最大的 tool schema，讓你看出主要佔用來源。
 
 ## 指令、指示詞與「行內捷徑」
 
-Slash commands 由 Gateway 閘道器 處理，行為略有不同：
+Slash commands 由 Gateway 閘道器 處理，行為略有不同： There are a few different behaviors:
 
 - **獨立指令**：只包含 `/...` 的訊息會以指令執行。
 - **指示詞**：`/think`、`/verbose`、`/reasoning`、`/elevated`、`/model`、`/queue` 會在模型看到訊息前被移除。
-  - 僅包含指示詞的訊息會保留工作階段設定。
+  - Directive-only messages persist session settings.
   - 一般訊息中的行內指示詞會作為每則訊息的提示。
 - **行內捷徑**（僅允許清單中的寄件者）：一般訊息中的某些 `/...` token 可立即執行（例如：「hey /status」），並在模型看到剩餘文字前被移除。
 
 詳細說明：[Slash commands](/tools/slash-commands)。
 
-## 工作階段、compaction 與 pruning（哪些會持續）
+## Sessions, compaction, and pruning (what persists)
 
-跨訊息是否持續，取決於機制：
+What persists across messages depends on the mechanism:
 
-- **一般歷史** 會在工作階段逐字稿中持續，直到依政策被 compact 或 prune。
+- **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** 會將摘要持續寫入逐字稿，並保留近期訊息。
 - **Pruning** 會從單次執行的 _記憶體中_ prompt 移除舊的 tool 結果，但不會改寫逐字稿。
 
@@ -162,7 +155,7 @@ Slash commands 由 Gateway 閘道器 處理，行為略有不同：
 
 `/context` 在可用時，偏好最新的 **以執行建構** 的 system prompt 報告：
 
-- `System prompt (run)` = 取自上一次內嵌（可用工具）執行並持續保存於工作階段儲存中。
+- `System prompt (run)` = captured from the last embedded (tool-capable) run and persisted in the session store.
 - `System prompt (estimate)` = 當不存在執行報告時即時計算（或透過不產生報告的 CLI 後端執行時）。
 
-無論哪一種，它都只回報大小與主要貢獻者；**不會** 傾印完整的 system prompt 或 tool schema。
+Either way, it reports sizes and top contributors; it does **not** dump the full system prompt or tool schemas.

@@ -4,13 +4,6 @@ read_when:
   - 페어링된 노드 (카메라, 화면, 캔버스)를 관리할 때
   - 요청을 승인하거나 노드 명령을 호출해야 할 때
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:28Z
 ---
 
 # `openclaw nodes`

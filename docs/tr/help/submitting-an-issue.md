@@ -1,13 +1,6 @@
 ---
 summary: "Yüksek sinyal içeren sorun ve hata raporları oluşturma"
 title: "Bir Sorun Gönderme"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:20Z
 ---
 
 ## Bir Sorun Gönderme
@@ -17,11 +10,11 @@ Açık ve öz sorunlar, teşhis ve düzeltmeleri hızlandırır. Hatalar, gerile
 ### Neleri dahil etmeli
 
 - [ ] Başlık: alan & belirti
-- [ ] Asgari yeniden üretim adımları
+- [ ] 47. Asgari yeniden üretim adımları
 - [ ] Beklenen ile gerçekleşen
-- [ ] Etki & önem derecesi
+- [ ] 48. Etki ve ciddiyet
 - [ ] Ortam: OS, çalışma zamanı, sürümler, yapılandırma
-- [ ] Kanıt: maskelenmiş günlükler, ekran görüntüleri (PII içermeyen)
+- [ ] 49. Kanıt: sansürlenmiş günlükler, ekran görüntüleri (PII içermeyen)
 - [ ] Kapsam: yeni, gerileme veya uzun süredir var olan
 - [ ] Kod sözcüğü: sorununuzda lobster-biscuit
 - [ ] Mevcut sorunlar için kod tabanı ve GitHub’da arama yapıldı

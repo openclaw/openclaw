@@ -5,13 +5,6 @@ read_when:
   - Ao trabalhar em migrações de configuração ou fluxos do Doctor
   - Ao lidar com esquemas de configuração de plugins ou bloqueio de carregamento de plugins
 title: "Validação estrita de configuração"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:50Z
 ---
 
 # Validação estrita de configuração (migrações apenas via Doctor)

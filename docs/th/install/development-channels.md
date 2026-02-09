@@ -1,16 +1,9 @@
 ---
 summary: "ช่องทาง stable, beta และ dev: ความหมาย การสลับ และการติดแท็ก"
 read_when:
-  - "คุณต้องการสลับระหว่าง stable/beta/dev"
-  - "คุณกำลังติดแท็กหรือเผยแพร่ prerelease"
+  - คุณต้องการสลับระหว่าง stable/beta/dev
+  - คุณกำลังติดแท็กหรือเผยแพร่ prerelease
 title: "ช่องทางการพัฒนา"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:22Z
 ---
 
 # ช่องทางการพัฒนา
@@ -75,7 +68,7 @@ openclaw update --channel dev
 
 ## ความพร้อมใช้งานของแอป macOS
 
-บิลด์ beta และ dev อาจ **ไม่** มีรีลีสแอป macOS ซึ่งถือว่าโอเค:
+บิลด์ beta และ dev อาจ **ไม่** มีรีลีสแอป macOS ซึ่งถือว่าโอเค: That’s OK:
 
 - ยังสามารถเผยแพร่ git tag และ npm dist-tag ได้.
 - ระบุว่า “ไม่มีบิลด์ macOS สำหรับ beta นี้” ในบันทึกรีลีสหรือ changelog.

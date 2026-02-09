@@ -3,13 +3,6 @@ summary: "Runbook para o serviço Gateway, ciclo de vida e operações"
 read_when:
   - Ao executar ou depurar o processo do gateway
 title: "Runbook do Gateway"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:24Z
 ---
 
 # Runbook do serviço Gateway
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - Os clientes então se conectam a `ws://127.0.0.1:18789` através do túnel.
+
 - Se um token estiver configurado, os clientes devem incluí-lo em `connect.params.auth.token` mesmo através do túnel.
 
 ## Múltiplos gateways (mesmo host)

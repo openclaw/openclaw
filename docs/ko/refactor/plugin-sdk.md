@@ -4,13 +4,6 @@ read_when:
   - 플러그인 아키텍처를 정의하거나 리팩터링할 때
   - 채널 커넥터를 플러그인 SDK/런타임으로 마이그레이션할 때
 title: "플러그인 SDK 리팩터링"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:11Z
 ---
 
 # 플러그인 SDK + 런타임 리팩터링 계획
@@ -25,7 +18,7 @@ x-i18n:
 
 ## 목표 아키텍처 (두 계층)
 
-### 1) 플러그인 SDK (컴파일 타임, 안정적, 배포 가능)
+### 1. 플러그인 SDK (컴파일 타임, 안정적, 배포 가능)
 
 범위: 타입, 헬퍼, 설정 유틸리티. 런타임 상태나 사이드 이펙트는 포함하지 않습니다.
 
@@ -44,7 +37,7 @@ x-i18n:
 - `openclaw/plugin-sdk` 로 퍼블리시(또는 코어에서 `openclaw/plugin-sdk` 로 export).
 - 명시적인 안정성 보장을 포함한 semver 적용.
 
-### 2) 플러그인 런타임 (실행 표면, 주입됨)
+### 2. 플러그인 런타임 (실행 표면, 주입됨)
 
 범위: 코어 런타임 동작에 접촉하는 모든 것.
 플러그인은 `OpenClawPluginApi.runtime` 를 통해서만 접근하며, `src/**` 를 직접 임포트하지 않습니다.

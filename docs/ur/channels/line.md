@@ -5,22 +5,17 @@ read_when:
   - آپ کو LINE ویب ہُک اور اسناد کی سیٹ اپ درکار ہے
   - آپ LINE کے مخصوص پیغام اختیارات چاہتے ہیں
 title: LINE
-x-i18n:
-  source_path: channels/line.md
-  source_hash: 52eb66d06d616173
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:59Z
 ---
 
 # LINE (plugin)
 
-LINE، LINE میسجنگ API کے ذریعے OpenClaw سے جڑتا ہے۔ یہ پلگ اِن گیٹ وے پر ایک ویب ہُک
-ریسیور کے طور پر چلتا ہے اور تصدیق کے لیے آپ کا چینل ایکسس ٹوکن اور چینل سیکرٹ استعمال کرتا ہے۔
+LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
+receiver on the gateway and uses your channel access token + channel secret for
+authentication.
 
-اسٹیٹس: پلگ اِن کے ذریعے معاونت یافتہ۔ براہِ راست پیغامات، گروپ چیٹس، میڈیا، مقامات، Flex
-پیغامات، ٹیمپلیٹ پیغامات، اور فوری جوابات معاونت یافتہ ہیں۔ ری ایکشنز اور تھریڈز معاونت یافتہ نہیں ہیں۔
+Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+messages, template messages, and quick replies are supported. Reactions and threads
+are not supported.
 
 ## Plugin required
 
@@ -49,9 +44,9 @@ openclaw plugins install ./extensions/line
 https://gateway-host/line/webhook
 ```
 
-گیٹ وے، LINE کی ویب ہُک ویریفیکیشن (GET) اور اِن باؤنڈ ایونٹس (POST) کا جواب دیتا ہے۔
-اگر آپ کو کسٹم پاتھ درکار ہو تو `channels.line.webhookPath` یا
-`channels.line.accounts.<id>.webhookPath` سیٹ کریں اور اس کے مطابق URL اپڈیٹ کریں۔
+The gateway responds to LINE’s webhook verification (GET) and inbound events (POST).
+If you need a custom path, set `channels.line.webhookPath` or
+`channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
 ## Configure
 
@@ -108,8 +103,7 @@ Env vars (صرف ڈیفالٹ اکاؤنٹ):
 
 ## Access control
 
-براہِ راست پیغامات بطورِ طے شدہ جوڑی بنانے پر ہوتے ہیں۔ نامعلوم ارسال کنندگان کو ایک
-جوڑی بنانے کا کوڈ ملتا ہے اور منظوری تک ان کے پیغامات نظر انداز کر دیے جاتے ہیں۔
+براہِ راست پیغامات بطورِ ڈیفالٹ پیئرنگ پر سیٹ ہوتے ہیں۔ نامعلوم بھیجنے والوں کو ایک پیئرنگ کوڈ ملتا ہے اور منظوری تک ان کے پیغامات نظرانداز کر دیے جاتے ہیں۔
 
 ```bash
 openclaw pairing list line
@@ -122,9 +116,9 @@ openclaw pairing approve line <CODE>
 - `channels.line.allowFrom`: DMs کے لیے اجازت یافتہ LINE یوزر IDs
 - `channels.line.groupPolicy`: `allowlist | open | disabled`
 - `channels.line.groupAllowFrom`: گروپس کے لیے اجازت یافتہ LINE یوزر IDs
-- فی گروپ اووررائیڈز: `channels.line.groups.<groupId>.allowFrom`
+- فی گروپ اووررائیڈز: `channels.line.groups.<groupId>`.allowFrom\`
 
-LINE IDs کیس سینسٹو ہوتے ہیں۔ درست IDs اس طرح دکھتے ہیں:
+LINE IDs are case-sensitive. درست IDs اس طرح نظر آتے ہیں:
 
 - صارف: `U` + 32 ہیکس حروف
 - گروپ: `C` + 32 ہیکس حروف

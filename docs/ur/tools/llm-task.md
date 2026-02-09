@@ -4,13 +4,6 @@ read_when:
   - آپ ورک فلو کے اندر صرف JSON پر مبنی LLM مرحلہ چاہتے ہیں
   - آپ آٹومیشن کے لیے اسکیما سے توثیق شدہ LLM آؤٹ پٹ چاہتے ہیں
 title: "LLM ٹاسک"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:42Z
 ---
 
 # LLM ٹاسک
@@ -71,7 +64,7 @@ x-i18n:
 }
 ```
 
-`allowedModels` `provider/model` اسٹرنگز کی ایک اجازت فہرست ہے۔ اگر یہ سیٹ ہو تو فہرست سے باہر کسی بھی درخواست کو مسترد کر دیا جاتا ہے۔
+`allowedModels`، `provider/model` اسٹرنگز کی ایک allowlist ہے۔ اگر سیٹ ہو، تو فہرست سے باہر کی کوئی بھی درخواست مسترد کر دی جاتی ہے۔
 
 ## ٹول کے پیرامیٹرز
 

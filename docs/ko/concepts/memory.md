@@ -3,13 +3,6 @@ summary: "OpenClaw 메모리가 작동하는 방식 (워크스페이스 파일 +
 read_when:
   - 메모리 파일 레이아웃과 워크플로를 알고 싶을 때
   - 자동 사전 컴팩션 메모리 플러시를 조정하고 싶을 때
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:25Z
 ---
 
 # Memory
@@ -40,13 +33,12 @@ OpenClaw 메모리는 **에이전트 워크스페이스에 있는 순수 Markdow
 - 일상적인 노트와 실행 중인 컨텍스트는 `memory/YYYY-MM-DD.md` 에 기록합니다.
 - 누군가가 '이것을 기억해 달라'고 말하면, 반드시 기록하십시오 (RAM 에만 두지 마십시오).
 - 이 영역은 아직 발전 중입니다. 모델에게 메모리를 저장하라고 상기시키는 것이 도움이 되며, 모델은 무엇을 해야 할지 알고 있습니다.
-- 어떤 내용이 확실히 남아야 한다면, **봇에게 메모리에 기록하라고 요청하십시오**.
+- 무언가를 확실히 남기고 싶다면, **봇에게 그것을 메모리에 쓰도록 요청하세요**.
 
 ## 자동 메모리 플러시 (사전 컴팩션 핑)
 
 세션이 **자동 컴팩션에 가까워지면**, OpenClaw 는 컨텍스트가 컴팩트되기 **이전**에
-지속적인 메모리를 기록하도록 모델에게 상기시키는 **무음의 에이전트 턴**을 트리거합니다.
-기본 프롬프트는 모델이 _응답할 수 있음_ 을 명시적으로 말하지만, 보통은
+지속적인 메모리를 기록하도록 모델에게 상기시키는 **무음의 에이전트 턴**을 트리거합니다. 기본 프롬프트는 모델이 _응답할 수 있음_ 을 명시적으로 말하지만, 보통은
 `NO_REPLY` 가 올바른 응답이므로 사용자는 이 턴을 보지 않게 됩니다.
 
 이는 `agents.defaults.compaction.memoryFlush` 로 제어됩니다:
@@ -101,20 +93,14 @@ OpenClaw 는 `MEMORY.md` 과 `memory/*.md` 에 대해 작은 벡터 인덱스를
 - 사용 가능한 경우 sqlite-vec 를 사용해 SQLite 내부에서 벡터 검색을 가속합니다.
 
 원격 임베딩은 임베딩 프로바이더의 API 키가 **필수**입니다. OpenClaw 는
-인증 프로필, `models.providers.*.apiKey`, 또는 환경 변수에서 키를 확인합니다.
-Codex OAuth 는 채팅/완성만 포함하며 메모리 검색용 임베딩에는 **충분하지 않습니다**.
-Gemini 의 경우 `GEMINI_API_KEY` 또는 `models.providers.google.apiKey` 를 사용하십시오.
-Voyage 의 경우 `VOYAGE_API_KEY` 또는 `models.providers.voyage.apiKey` 를 사용하십시오.
-사용자 정의 OpenAI 호환 엔드포인트를 사용할 때는 `memorySearch.remote.apiKey`
+인증 프로필, `models.providers.*.apiKey`, 또는 환경 변수에서 키를 확인합니다. Codex OAuth 는 채팅/완성만 포함하며 메모리 검색용 임베딩에는 **충분하지 않습니다**. Gemini 의 경우 `GEMINI_API_KEY` 또는 `models.providers.google.apiKey` 를 사용하십시오. Voyage 의 경우 `VOYAGE_API_KEY` 또는 `models.providers.voyage.apiKey` 를 사용하십시오. 사용자 정의 OpenAI 호환 엔드포인트를 사용할 때는 `memorySearch.remote.apiKey`
 (선택적으로 `memorySearch.remote.headers`)를 설정하십시오.
 
 ### QMD 백엔드 (실험적)
 
 `memory.backend = "qmd"` 를 설정하면 내장 SQLite 인덱서를
 [QMD](https://github.com/tobi/qmd)로 교체합니다. QMD 는
-BM25 + 벡터 + 재랭킹을 결합한 로컬 우선 검색 사이드카입니다.
-Markdown 은 여전히 단일한 진실의 원천이며, OpenClaw 는 검색을 위해 QMD 를 호출합니다.
-핵심 사항:
+BM25 + 벡터 + 재랭킹을 결합한 로컬 우선 검색 사이드카입니다. Markdown 은 여전히 단일한 진실의 원천이며, OpenClaw 는 검색을 위해 QMD 를 호출합니다. 핵심 사항:
 
 **사전 요구 사항**
 
@@ -128,8 +114,7 @@ Markdown 은 여전히 단일한 진실의 원천이며, OpenClaw 는 검색을 
 - Gateway(게이트웨이) 는 `XDG_CONFIG_HOME` 와
   `XDG_CACHE_HOME` 를 설정하여 `~/.openclaw/agents/<agentId>/qmd/` 아래의
   독립적인 XDG 홈에서 QMD 를 실행합니다.
-- OS 지원: macOS 와 Linux 는 Bun + SQLite 설치 후 바로 동작합니다.
-  Windows 는 WSL2 를 통해 가장 잘 지원됩니다.
+- OS 지원: macOS 와 Linux 는 Bun + SQLite 설치 후 바로 동작합니다. Windows 는 WSL2 를 통해 가장 잘 지원됩니다.
 
 **사이드카 실행 방식**
 
@@ -145,8 +130,7 @@ Markdown 은 여전히 단일한 진실의 원천이며, OpenClaw 는 검색을 
 - 검색은 `qmd query --json` 를 통해 실행됩니다. QMD 가 실패하거나 바이너리가
   없으면, OpenClaw 는 자동으로 내장 SQLite 관리자로 폴백하여
   메모리 도구가 계속 작동하도록 합니다.
-- OpenClaw 는 현재 QMD 임베드 배치 크기 조정을 노출하지 않습니다.
-  배치 동작은 QMD 자체에서 제어됩니다.
+- OpenClaw 는 현재 QMD 임베드 배치 크기 조정을 노출하지 않습니다. 배치 동작은 QMD 자체에서 제어됩니다.
 - **첫 검색은 느릴 수 있음**: QMD 는 첫 `qmd query` 실행 시
   로컬 GGUF 모델 (재랭커/쿼리 확장)을 다운로드할 수 있습니다.
   - OpenClaw 는 QMD 실행 시 `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` 를 자동 설정합니다.
@@ -190,8 +174,7 @@ Markdown 은 여전히 단일한 진실의 원천이며, OpenClaw 는 검색을 
 - `limits`: 회상 페이로드를 제한합니다
   (`maxResults`, `maxSnippetChars`, `maxInjectedChars`, `timeoutMs`).
 - `scope`: [`session.sendPolicy`](/gateway/configuration#session)과 동일한 스키마입니다.
-  기본값은 다이렉트 메시지 전용입니다 (`deny` 전체, `allow` 다이렉트 채팅).
-  이를 완화하면 그룹/채널에서 QMD 결과를 노출할 수 있습니다.
+  기본값은 다이렉트 메시지 전용입니다 (`deny` 전체, `allow` 다이렉트 채팅). 이를 완화하면 그룹/채널에서 QMD 결과를 노출할 수 있습니다.
 - 워크스페이스 외부에서 가져온 스니펫은 `memory_search` 결과에서
   `qmd/<collection>/<relative-path>` 로 표시됩니다. `memory_get` 는 이 접두사를 이해하고
   구성된 QMD 컬렉션 루트에서 읽습니다.
@@ -232,8 +215,7 @@ memory: {
 - `memory.citations` 는 백엔드에 관계없이 적용됩니다
   (`auto`/`on`/`off`).
 - `qmd` 이 실행되면, 진단에서 어떤 엔진이 결과를 제공했는지
-  표시하기 위해 `status().backend = "qmd"` 을 태그합니다.
-  QMD 서브프로세스가 종료되거나 JSON 출력이 파싱되지 않으면,
+  표시하기 위해 `status().backend = "qmd"` 을 태그합니다. QMD 서브프로세스가 종료되거나 JSON 출력이 파싱되지 않으면,
   검색 관리자는 경고를 기록하고 QMD 가 복구될 때까지
   내장 프로바이더 (기존 Markdown 임베딩)를 반환합니다.
 
@@ -313,8 +295,7 @@ API 키를 설정하고 싶지 않다면 `memorySearch.provider = "local"` 를 �
 
 배치 인덱싱 (OpenAI + Gemini):
 
-- OpenAI 와 Gemini 임베딩에 대해 기본적으로 활성화되어 있습니다.
-  비활성화하려면 `agents.defaults.memorySearch.remote.batch.enabled = false` 를 설정하십시오.
+- OpenAI 와 Gemini 임베딩에 대해 기본적으로 활성화되어 있습니다. 비활성화하려면 `agents.defaults.memorySearch.remote.batch.enabled = false` 를 설정하십시오.
 - 기본 동작은 배치 완료를 기다립니다. 필요 시
   `remote.batch.wait`, `remote.batch.pollIntervalMs`, `remote.batch.timeoutMinutes` 를 조정하십시오.
 - 병렬로 제출할 배치 작업 수는 `remote.batch.concurrency` 로 제어합니다 (기본값: 2).
@@ -365,13 +346,10 @@ agents: {
 ### 메모리 도구가 작동하는 방식
 
 - `memory_search` 는 `MEMORY.md` + `memory/**/*.md` 에서
-  Markdown 청크 (~400 토큰 목표, 80 토큰 오버랩)를 의미적으로 검색합니다.
-  스니펫 텍스트 (약 700 자로 제한), 파일 경로, 라인 범위, 점수,
-  프로바이더/모델, 로컬 → 원격 임베딩으로 폴백했는지 여부를 반환합니다.
-  전체 파일 페이로드는 반환되지 않습니다.
+  Markdown 청크 (~400 토큰 목표, 80 토큰 오버랩)를 의미적으로 검색합니다. 스니펫 텍스트 (약 700 자로 제한), 파일 경로, 라인 범위, 점수,
+  프로바이더/모델, 로컬 → 원격 임베딩으로 폴백했는지 여부를 반환합니다. 전체 파일 페이로드는 반환되지 않습니다.
 - `memory_get` 는 특정 메모리 Markdown 파일을
-  (워크스페이스 상대 경로로) 읽으며, 시작 라인과 N 라인을 선택적으로 지정할 수 있습니다.
-  `MEMORY.md` / `memory/` 외부의 경로는 거부됩니다.
+  (워크스페이스 상대 경로로) 읽으며, 시작 라인과 N 라인을 선택적으로 지정할 수 있습니다. `MEMORY.md` / `memory/` 외부의 경로는 거부됩니다.
 - 두 도구 모두 에이전트에 대해 `memorySearch.enabled` 이 true 로 해석될 때만 활성화됩니다.
 
 ### 무엇이 (언제) 인덱싱되는가
@@ -380,9 +358,7 @@ agents: {
 - 인덱스 저장소: 에이전트별 SQLite, 위치는 `~/.openclaw/memory/<agentId>.sqlite`
   (`agents.defaults.memorySearch.store.path` 로 구성 가능, `{agentId}` 토큰 지원).
 - 최신성: `MEMORY.md` + `memory/` 에 대한 워처가
-  인덱스를 더티로 표시합니다 (디바운스 1.5초).
-  동기화는 세션 시작 시, 검색 시, 또는 간격 기반으로 예약되며 비동기로 실행됩니다.
-  세션 전사본은 델타 임계값을 사용해 백그라운드 동기화를 트리거합니다.
+  인덱스를 더티로 표시합니다 (디바운스 1.5초). 동기화는 세션 시작 시, 검색 시, 또는 간격 기반으로 예약되며 비동기로 실행됩니다. 세션 전사본은 델타 임계값을 사용해 백그라운드 동기화를 트리거합니다.
 - 재인덱싱 트리거: 인덱스는 임베딩 **프로바이더/모델 + 엔드포인트 지문 + 청킹 파라미터**를
   저장합니다. 이 중 하나라도 변경되면 OpenClaw 는 자동으로 전체 저장소를
   리셋하고 재인덱싱합니다.
@@ -411,7 +387,8 @@ OpenClaw 는 벡터 전용 검색으로 폴백합니다.
 - 오류 문자열 ('sqlite-vec unavailable')
 
 BM25 (전체 텍스트)는 그 반대입니다. 정확한 토큰에는 강하지만,
-의역에는 약합니다. 하이브리드 검색은 실용적인 중간 지점으로,
+의역에는 약합니다.
+하이브리드 검색은 실용적인 중간 지점으로,
 **두 가지 검색 신호를 모두 사용**하여
 '자연어' 쿼리와 '건초 더미 속 바늘' 쿼리 모두에서
 좋은 결과를 제공합니다.
@@ -490,7 +467,8 @@ agents: {
 ### 세션 메모리 검색 (실험적)
 
 선택적으로 **세션 전사본**을 인덱싱하여 `memory_search` 를 통해
-노출할 수 있습니다. 이는 실험적 플래그 뒤에 있습니다.
+노출할 수 있습니다.
+이는 실험적 플래그 뒤에 있습니다.
 
 ```json5
 agents: {
@@ -508,16 +486,13 @@ agents: {
 - 세션 인덱싱은 **옵트인**입니다 (기본값 비활성).
 - 세션 업데이트는 디바운스되며 델타 임계값을 넘으면
   **비동기적으로 인덱싱**됩니다 (best-effort).
-- `memory_search` 는 인덱싱을 기다리지 않습니다.
-  백그라운드 동기화가 끝날 때까지 결과가 약간 오래될 수 있습니다.
+- `memory_search` 는 인덱싱을 기다리지 않습니다. 백그라운드 동기화가 끝날 때까지 결과가 약간 오래될 수 있습니다.
 - 결과는 여전히 스니펫만 포함하며,
   `memory_get` 는 메모리 파일로만 제한됩니다.
 - 세션 인덱싱은 에이전트별로 격리됩니다
   (해당 에이전트의 세션 로그만 인덱싱).
-- 세션 로그는 디스크에 존재합니다 (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`).
-  파일 시스템 접근 권한이 있는 모든 프로세스/사용자가 읽을 수 있으므로,
-  디스크 접근을 신뢰 경계로 취급하십시오.
-  더 엄격한 격리를 원하면 에이전트를
+- 세션 로그는 디스크에 존재합니다 (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). 파일 시스템 접근 권한이 있는 모든 프로세스/사용자가 읽을 수 있으므로,
+  디스크 접근을 신뢰 경계로 취급하십시오. 더 엄격한 격리를 원하면 에이전트를
   별도의 OS 사용자 또는 호스트에서 실행하십시오.
 
 델타 임계값 (기본값 표시):
@@ -541,8 +516,7 @@ agents: {
 
 sqlite-vec 확장을 사용할 수 있으면, OpenClaw 는 임베딩을
 SQLite 가상 테이블 (`vec0`)에 저장하고,
-데이터베이스 내에서 벡터 거리 쿼리를 수행합니다.
-이로써 모든 임베딩을 JS 로 로드하지 않고도
+데이터베이스 내에서 벡터 거리 쿼리를 수행합니다. 이로써 모든 임베딩을 JS 로 로드하지 않고도
 검색을 빠르게 유지할 수 있습니다.
 
 구성 (선택 사항):
@@ -564,8 +538,7 @@ agents: {
 
 참고 사항:
 
-- `enabled` 의 기본값은 true 입니다.
-  비활성화되면 검색은 저장된 임베딩에 대한
+- `enabled` 의 기본값은 true 입니다. 비활성화되면 검색은 저장된 임베딩에 대한
   프로세스 내 코사인 유사도로 폴백합니다.
 - sqlite-vec 확장이 없거나 로드에 실패하면,
   OpenClaw 는 오류를 기록하고 JS 폴백으로 계속 진행합니다
@@ -577,8 +550,7 @@ agents: {
 
 - 기본 로컬 임베딩 모델: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB).
 - `memorySearch.provider = "local"` 인 경우, `node-llama-cpp` 는
-  `modelPath` 를 해석합니다.
-  GGUF 가 없으면 캐시로 **자동 다운로드**한 뒤
+  `modelPath` 를 해석합니다. GGUF 가 없으면 캐시로 **자동 다운로드**한 뒤
   (또는 `local.modelCacheDir` 가 설정된 경우 그 위치로)
   로드합니다. 다운로드는 재시도 시 이어서 진행됩니다.
 - 네이티브 빌드 요구 사항:
@@ -612,5 +584,4 @@ agents: {
 
 - `remote.*` 는 `models.providers.openai.*` 보다 우선합니다.
 - `remote.headers` 은 OpenAI 헤더와 병합되며,
-  키 충돌 시 원격이 우선합니다.
-  OpenAI 기본값을 사용하려면 `remote.headers` 을 생략하십시오.
+  키 충돌 시 원격이 우선합니다. OpenAI 기본값을 사용하려면 `remote.headers` 을 생략하십시오.

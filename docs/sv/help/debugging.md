@@ -5,13 +5,6 @@ read_when:
   - Du vill köra Gateway i bevakningsläge medan du itererar
   - Du behöver ett repeterbart felsökningsflöde
 title: "Felsökning"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:32Z
 ---
 
 # Felsökning
@@ -21,9 +14,9 @@ leverantör blandar resonemang i vanlig text.
 
 ## Körningsbaserade felsökningsöverskrivningar
 
-Använd `/debug` i chatten för att ställa in **endast körningsbaserade** konfigöverskrivningar (minne, inte disk).
-`/debug` är inaktiverad som standard; aktivera med `commands.debug: true`.
-Detta är praktiskt när du behöver växla svåråtkomliga inställningar utan att redigera `openclaw.json`.
+Använd `/debug` i chatten för att sätta **körtid** config overrides (minne, inte disk).
+`/debug` är inaktiverat som standard; aktivera med `commands.debug: true`.
+Detta är praktiskt när du behöver växla oklara inställningar utan att redigera `openclaw.json`.
 
 Exempel:
 
@@ -55,7 +48,7 @@ vid varje omstart.
 
 ## Dev-profil + dev-gateway (--dev)
 
-Använd dev-profilen för att isolera tillstånd och starta en säker, förbrukningsbar setup för
+Använd dev-profilen för att isolera tillståndet och snurra upp en säker, engångsinställning för
 felsökning. Det finns **två** `--dev`-flaggor:
 
 - **Global `--dev` (profil):** isolerar tillstånd under `~/.openclaw-dev` och
@@ -95,8 +88,8 @@ Vad detta gör:
 pnpm gateway:dev:reset
 ```
 
-Obs: `--dev` är en **global** profilflagga och äts upp av vissa körmiljöer.
-Om du behöver skriva ut den explicit, använd miljövariabeln:
+Obs: `--dev` är en **global** profilflagga och äts av vissa löpare.
+Om du behöver stava ut, använd env var form:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -113,9 +106,9 @@ openclaw gateway stop
 
 ## Loggning av rå ström (OpenClaw)
 
-OpenClaw kan logga den **råa assistentströmmen** före all filtrering/formatering.
-Detta är det bästa sättet att se om resonemang kommer som vanliga textdeltor
-(eller som separata tänkeblock).
+OpenClaw kan logga **rå assistentström** före filtrering/formatering.
+Detta är det bästa sättet att se om resonemanget kommer som ren text deltas
+(eller som separata tankeblock).
 
 Aktivera via CLI:
 

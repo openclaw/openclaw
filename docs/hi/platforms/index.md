@@ -4,23 +4,16 @@ read_when:
   - OS समर्थन या इंस्टॉल पथ खोज रहे हों
   - यह तय कर रहे हों कि Gateway कहाँ चलाना है
 title: "प्लेटफ़ॉर्म"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:25Z
 ---
 
 # प्लेटफ़ॉर्म
 
-OpenClaw का कोर TypeScript में लिखा गया है। **Node अनुशंसित रनटाइम है**।
-Gateway के लिए Bun की अनुशंसा नहीं की जाती (WhatsApp/Telegram बग्स के कारण)।
+OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
+Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
-macOS (मेनू बार ऐप) और मोबाइल नोड्स (iOS/Android) के लिए सहचर ऐप्स उपलब्ध हैं। Windows और
-Linux के लिए सहचर ऐप्स योजनाबद्ध हैं, लेकिन Gateway आज पूरी तरह समर्थित है।
-Windows के लिए नेटिव सहचर ऐप्स भी योजनाबद्ध हैं; Gateway के लिए WSL2 के माध्यम से चलाने की अनुशंसा की जाती है।
+macOS (menu bar app) और mobile nodes (iOS/Android) के लिए companion apps मौजूद हैं। Windows and
+Linux companion apps are planned, but the Gateway is fully supported today.
+Native companion apps for Windows are also planned; the Gateway is recommended via WSL2.
 
 ## अपना OS चुनें
 
@@ -56,5 +49,5 @@ Windows के लिए नेटिव सहचर ऐप्स भी यो
 
 सेवा लक्ष्य OS पर निर्भर करता है:
 
-- macOS: LaunchAgent (`bot.molt.gateway` या `bot.molt.<profile>`; लेगेसी `com.openclaw.*`)
+- macOS: LaunchAgent (`bot.molt.gateway` or `bot.molt.<profile>`; legacy `com.openclaw.*`)
 - Linux/WSL2: systemd यूज़र सेवा (`openclaw-gateway[-<profile>].service`)

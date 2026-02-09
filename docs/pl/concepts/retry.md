@@ -4,13 +4,6 @@ read_when:
   - Aktualizacja zachowania lub domyślnych ustawień ponawiania u dostawców
   - Debugowanie błędów wysyłania lub limitów szybkości u dostawców
 title: "Polityka ponawiania"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:03Z
 ---
 
 # Polityka ponawiania

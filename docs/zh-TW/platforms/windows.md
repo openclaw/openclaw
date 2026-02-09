@@ -2,22 +2,19 @@
 summary: "Windows（WSL2）支援與配套應用程式狀態"
 read_when:
   - 在 Windows 上安裝 OpenClaw
-  - 尋找 Windows 配套應用程式狀態
+  - Looking for Windows companion app status
 title: "Windows（WSL2）"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:59Z
 ---
 
 # Windows（WSL2）
 
-在 Windows 上使用 OpenClaw **建議透過 WSL2**（建議使用 Ubuntu）。CLI 與 Gateway 閘道器 會在 Linux 內執行，這能保持執行環境一致，並讓工具鏈具有更高的相容性（Node/Bun/pnpm、Linux 二進位檔、skills）。原生 Windows 可能會比較棘手。WSL2 可提供完整的 Linux 體驗——只需一個指令即可安裝：`wsl --install`。
+OpenClaw on Windows is recommended **via WSL2** (Ubuntu recommended). The
+CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
+tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Native
+Windows might be trickier. WSL2 gives you the full Linux experience — one command
+to install: `wsl --install`.
 
-原生 Windows 配套應用程式已列入規劃中。
+已規劃原生 Windows 夥伴應用程式。
 
 ## 安裝（WSL2）
 
@@ -60,7 +57,9 @@ openclaw doctor
 
 ## 進階：透過 LAN 公開 WSL 服務（portproxy）
 
-WSL 有自己的虛擬網路。若另一台機器需要連線到**在 WSL 內**執行的服務（SSH、本機 TTS 伺服器，或 Gateway 閘道器），你必須將 Windows 連接埠轉送到目前的 WSL IP。WSL IP 會在重新啟動後變更，因此你可能需要重新整理轉送規則。
+WSL 有其自己的虛擬網路。 如果另一台機器需要存取
+在 **WSL 內部** 執行的服務（SSH、本機 TTS 伺服器或 Gateway），你必須將 Windows 連接埠轉送到目前的 WSL IP。 The WSL IP changes after restarts,
+so you may need to refresh the forwarding rule.
 
 範例（PowerShell **以系統管理員身分**）：
 
@@ -97,11 +96,12 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 - 遠端節點必須指向**可到達的** Gateway 閘道器 URL（不是 `127.0.0.1`）；請使用
   `openclaw status --all` 進行確認。
 - 使用 `listenaddress=0.0.0.0` 以供 LAN 存取；`127.0.0.1` 則僅限本機。
-- 若希望自動化，可註冊一個排程工作，在登入時執行重新整理步驟。
+- If you want this automatic, register a Scheduled Task to run the refresh
+  step at login.
 
 ## WSL2 逐步安裝
 
-### 1) 安裝 WSL2 + Ubuntu
+### 1. 安裝 WSL2 + Ubuntu
 
 開啟 PowerShell（系統管理員）：
 
@@ -114,7 +114,7 @@ wsl --install -d Ubuntu-24.04
 
 若 Windows 要求，請重新啟動。
 
-### 2) 啟用 systemd（安裝 Gateway 閘道器 所需）
+### 2. 啟用 systemd（安裝 Gateway 閘道器 所需）
 
 在你的 WSL 終端機中：
 
@@ -137,7 +137,7 @@ wsl --shutdown
 systemctl --user status
 ```
 
-### 3) 安裝 OpenClaw（在 WSL 內）
+### 3. 安裝 OpenClaw（在 WSL 內）
 
 在 WSL 內依照 Linux 的入門指南流程操作：
 
@@ -154,4 +154,5 @@ openclaw onboard
 
 ## Windows 配套應用程式
 
-目前尚未提供 Windows 配套應用程式。若你有興趣協助實現，歡迎貢獻。
+We do not have a Windows companion app yet. Contributions are welcome if you want
+contributions to make it happen.

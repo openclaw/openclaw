@@ -3,13 +3,6 @@ summary: "Các bước kiểm tra sức khỏe để xác minh kết nối kênh
 read_when:
   - Chẩn đoán tình trạng kênh WhatsApp
 title: "Kiểm tra sức khỏe"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:58Z
 ---
 
 # Kiểm tra sức khỏe (CLI)
@@ -28,8 +21,8 @@ Hướng dẫn ngắn để xác minh kết nối kênh mà không cần đoán 
 ## Chẩn đoán chuyên sâu
 
 - Thông tin xác thực trên đĩa: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime nên là gần đây).
-- Kho phiên: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (đường dẫn có thể ghi đè trong cấu hình). Số lượng và người nhận gần đây được hiển thị qua `status`.
-- Luồng liên kết lại: `openclaw channels logout && openclaw channels login --verbose` khi các mã trạng thái 409–515 hoặc `loggedOut` xuất hiện trong nhật ký. (Lưu ý: luồng đăng nhập bằng QR tự động khởi động lại một lần đối với trạng thái 515 sau khi ghép cặp.)
+- Kho phiên: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (đường dẫn có thể bị ghi đè trong cấu hình). Số lượng và các người nhận gần đây được hiển thị qua `status`.
+- Luồng liên kết lại: `openclaw channels logout && openclaw channels login --verbose` khi các mã trạng thái 409–515 hoặc `loggedOut` xuất hiện trong log. (Lưu ý: luồng đăng nhập bằng QR tự khởi động lại một lần cho trạng thái 515 sau khi ghép đôi.)
 
 ## Khi có sự cố
 
@@ -39,4 +32,4 @@ Hướng dẫn ngắn để xác minh kết nối kênh mà không cần đoán 
 
 ## Lệnh "health" chuyên dụng
 
-`openclaw health --json` yêu cầu Gateway đang chạy cung cấp ảnh chụp sức khỏe của nó (CLI không mở socket kênh trực tiếp). Lệnh báo cáo thông tin xác thực đã liên kết/tuổi xác thực khi có, tóm tắt thăm dò theo từng kênh, tóm tắt kho phiên và thời lượng thăm dò. Lệnh thoát với mã khác 0 nếu Gateway không truy cập được hoặc thăm dò thất bại/hết thời gian chờ. Dùng `--timeout <ms>` để ghi đè mặc định 10 giây.
+`openclaw health --json` asks the running Gateway for its health snapshot (no direct channel sockets from the CLI). It reports linked creds/auth age when available, per-channel probe summaries, session-store summary, and a probe duration. Lệnh sẽ thoát với mã khác 0 nếu Gateway không thể truy cập hoặc phép thăm dò thất bại/hết thời gian. Dùng `--timeout <ms>` để ghi đè mặc định 10s.

@@ -1,26 +1,19 @@
 ---
-summary: 「在同一台主機上執行多個 OpenClaw Gateway 閘道器（隔離、連接埠與設定檔）」
+summary: "在同一台主機上執行多個 OpenClaw Gateway 閘道器（隔離、連接埠與設定檔）"
 read_when:
   - 在同一台機器上執行多個 Gateway 閘道器
   - 你需要每個 Gateway 閘道器都有隔離的設定 / 狀態 / 連接埠
-title: 「多個 Gateway 閘道器」
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:05Z
+title: "多個 Gateway 閘道器"
 ---
 
 # 多個 Gateway 閘道器（同一主機）
 
-大多數設定應該只使用一個 Gateway 閘道器，因為單一 Gateway 閘道器即可處理多個訊息連線與代理程式。若你需要更強的隔離或備援（例如救援機器人），請使用彼此隔離的設定檔與連接埠來執行多個獨立的 Gateway 閘道器。
+Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. 若需要更強的隔離或備援（例如救援機器人），請以隔離的設定檔／連接埠執行多個 Gateway。
 
 ## 隔離檢查清單（必要）
 
 - `OPENCLAW_CONFIG_PATH` — 每個實例獨立的設定檔
-- `OPENCLAW_STATE_DIR` — 每個實例獨立的工作階段、憑證、快取
+- `OPENCLAW_STATE_DIR` — per-instance sessions, creds, caches
 - `agents.defaults.workspace` — 每個實例獨立的工作區根目錄
 - `gateway.port`（或 `--port`）— 每個實例必須唯一
 - 衍生的連接埠（瀏覽器 / 畫布）不得重疊
@@ -29,7 +22,7 @@ x-i18n:
 
 ## 建議作法：設定檔（profiles，`--profile`）
 
-設定檔會自動界定 `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH`，並為服務名稱加上尾碼。
+Profiles auto-scope `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` and suffix service names.
 
 ```bash
 # main
@@ -41,7 +34,7 @@ openclaw --profile rescue setup
 openclaw --profile rescue gateway --port 19001
 ```
 
-每個設定檔的服務：
+Per-profile services:
 
 ```bash
 openclaw --profile main gateway install
@@ -55,9 +48,9 @@ openclaw --profile rescue gateway install
 - 設定檔 / 設定
 - 狀態目錄
 - 工作區
-- 基礎連接埠（以及其衍生連接埠）
+- base port (plus derived ports)
 
-如此可讓救援機器人與主要機器人完全隔離，當主要機器人停機時，仍能進行除錯或套用設定變更。
+This keeps the rescue bot isolated from the main bot so it can debug or apply config changes if the primary bot is down.
 
 連接埠間距：基礎連接埠之間至少預留 20 個連接埠，確保衍生的瀏覽器 / 畫布 / CDP 連接埠永不衝突。
 
@@ -81,7 +74,7 @@ openclaw --profile rescue onboard
 openclaw --profile rescue gateway install
 ```
 
-## 連接埠對應（衍生）
+## Port mapping (derived)
 
 基礎連接埠 = `gateway.port`（或 `OPENCLAW_GATEWAY_PORT` / `--port`）。
 
@@ -89,9 +82,9 @@ openclaw --profile rescue gateway install
 - `canvasHost.port = base + 4`
 - 瀏覽器設定檔的 CDP 連接埠會自動從 `browser.controlPort + 9 .. + 108` 配置
 
-若你在設定或環境變數中覆寫任何一項，必須確保每個實例都使用唯一的值。
+If you override any of these in config or env, you must keep them unique per instance.
 
-## 瀏覽器 / CDP 注意事項（常見踩雷點）
+## Browser/CDP notes (common footgun)
 
 - **不要** 在多個實例上將 `browser.cdpUrl` 固定為相同的值。
 - 每個實例都需要自己的瀏覽器控制連接埠與 CDP 範圍（由其 Gateway 閘道器連接埠衍生）。

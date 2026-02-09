@@ -4,13 +4,6 @@ read_when:
   - Bir makineden OpenClaw'ı kaldırmak istiyorsunuz
   - Kaldırma işleminden sonra gateway servisi hâlâ çalışıyor
 title: "Kaldırma"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:26Z
 ---
 
 # Kaldırma
@@ -119,7 +112,7 @@ Remove-Item -Force "$env:USERPROFILE\.openclaw\gateway.cmd"
 
 Bir profil kullandıysanız, eşleşen görev adını ve `~\.openclaw-<profile>\gateway.cmd` öğesini silin.
 
-## Normal kurulum vs kaynak kodu ile kurulum
+## Normal install vs source checkout
 
 ### Normal kurulum (install.sh / npm / pnpm / bun)
 
@@ -131,5 +124,5 @@ Bir profil kullandıysanız, eşleşen görev adını ve `~\.openclaw-<profile>\
 Bir depo kopyasından çalıştırıyorsanız (`git clone` + `openclaw ...` / `bun run openclaw ...`):
 
 1. Depoyu silmeden **önce** gateway servisini kaldırın (yukarıdaki kolay yolu veya manuel servis kaldırmayı kullanın).
-2. Depo dizinini silin.
+2. Delete the repo directory.
 3. Yukarıda gösterildiği gibi durum + çalışma alanını kaldırın.

@@ -4,13 +4,6 @@ read_when:
   - Ina-update ang UI ng settings ng Skills sa macOS
   - Binabago ang gating o pag-uugali ng pag-install ng skills
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Skills (macOS)
@@ -32,7 +25,7 @@ Ipinapakita ng macOS app ang OpenClaw Skills sa pamamagitan ng Gateway; hindi ni
 
 ## Mga Env/API key
 
-- Iniimbak ng app ang mga key sa `~/.openclaw/openclaw.json` sa ilalim ng `skills.entries.<skillKey>`.
+- 22. Iniimbak ng app ang mga key sa `~/.openclaw/openclaw.json` sa ilalim ng \`skills.entries.<skillKey>.
 - Ang `skills.update` ay nagpa-patch ng `enabled`, `apiKey`, at `env`.
 
 ## Remote mode

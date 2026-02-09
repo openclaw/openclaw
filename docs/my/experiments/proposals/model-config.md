@@ -3,18 +3,11 @@ summary: "လေ့လာဆန်းစစ်ခြင်း: မော်ဒ�
 read_when:
   - အနာဂတ် မော်ဒယ်ရွေးချယ်မှု + အထောက်အထားအတည်ပြု ပရိုဖိုင် အယူအဆများကို စူးစမ်းလေ့လာနေစဉ်
 title: "မော်ဒယ် ဖွဲ့စည်းပြင်ဆင်မှု လေ့လာဆန်းစစ်ခြင်း"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:17Z
 ---
 
 # Model Config (Exploration)
 
-ဤစာရွက်စာတမ်းသည် အနာဂတ် မော်ဒယ် ဖွဲ့စည်းပြင်ဆင်မှုအတွက် **အယူအဆများ** ကို မှတ်တမ်းတင်ထားသည်။ ၎င်းသည် ထုတ်လုပ်ပြီး အသုံးပြုရန် ပြီးပြည့်စုံသော စံသတ်မှတ်ချက် မဟုတ်ပါ။ လက်ရှိ အပြုအမူများအတွက် အောက်ပါတို့ကို ကြည့်ပါ—
+ဤသည်မှာ shipping spec မဟုတ်ပါ။ လက်ရှိ အပြုအမူအတွက် ကြည့်ရန်: standalone CLI နှင့် deep OpenClaw integration အကြား
 
 - [Models](/concepts/models)
 - [Model failover](/concepts/model-failover)

@@ -3,23 +3,19 @@ summary: "स्थानीय रूप से परीक्षण (vitest) 
 read_when:
   - परीक्षण चलाते या ठीक करते समय
 title: "परीक्षण"
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:40Z
 ---
 
 # परीक्षण
 
 - पूर्ण परीक्षण किट (सूट्स, लाइव, Docker): [Testing](/help/testing)
 
-- `pnpm test:force`: डिफ़ॉल्ट कंट्रोल पोर्ट को पकड़े हुए किसी भी शेष gateway प्रक्रिया को समाप्त करता है, फिर एक पृथक gateway पोर्ट के साथ पूरा Vitest सूट चलाता है ताकि सर्वर परीक्षण किसी चल रहे इंस्टेंस से टकराएँ नहीं। इसका उपयोग तब करें जब किसी पिछले gateway रन ने पोर्ट 18789 को व्यस्त छोड़ दिया हो।
-- `pnpm test:coverage`: V8 कवरेज के साथ Vitest चलाता है। वैश्विक थ्रेशहोल्ड 70% lines/branches/functions/statements हैं। कवरेज में इंटीग्रेशन-भारी एंट्रीपॉइंट्स (CLI वायरिंग, gateway/telegram ब्रिज, webchat static server) शामिल नहीं हैं, ताकि लक्ष्य यूनिट-टेस्ट योग्य लॉजिक पर केंद्रित रहे।
+- `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
+
+- `pnpm test:coverage`: Runs Vitest with V8 coverage. Global thresholds are 70% lines/branches/functions/statements. Coverage excludes integration-heavy entrypoints (CLI wiring, gateway/telegram bridges, webchat static server) to keep the target focused on unit-testable logic.
+
 - `pnpm test:e2e`: gateway एंड-टू-एंड स्मोक परीक्षण चलाता है (मल्टी-इंस्टेंस WS/HTTP/node पेयरिंग)।
-- `pnpm test:live`: प्रदाता लाइव परीक्षण (minimax/zai) चलाता है। अनस्किप करने के लिए API कुंजियाँ और `LIVE=1` (या प्रदाता-विशिष्ट `*_LIVE_TEST=1`) आवश्यक हैं।
+
+- `pnpm test:live`: Runs provider live tests (minimax/zai). Requires API keys and `LIVE=1` (or provider-specific `*_LIVE_TEST=1`) to unskip.
 
 ## मॉडल विलंबता बेंच (स्थानीय कुंजियाँ)
 
@@ -29,7 +25,7 @@ x-i18n:
 
 - `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
 - वैकल्पिक env: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
-- डिफ़ॉल्ट प्रॉम्प्ट: “Reply with a single word: ok. No punctuation or extra text.”
+- Default prompt: “Reply with a single word: ok. No punctuation or extra text.”
 
 अंतिम रन (2025-12-31, 20 रन):
 

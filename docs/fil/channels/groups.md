@@ -3,13 +3,6 @@ summary: "Pag-uugali ng group chat sa iba’t ibang surface (WhatsApp/Telegram/D
 read_when:
   - Kapag binabago ang pag-uugali ng group chat o mention gating
 title: "Mga Grupo"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:41Z
 ---
 
 # Mga Grupo
@@ -18,8 +11,8 @@ Tinatrato ng OpenClaw ang mga group chat nang pare-pareho sa iba’t ibang surfa
 
 ## Panimulang gabay para sa baguhan (2 minuto)
 
-“Naninirahan” ang OpenClaw sa sarili mong mga messaging account. Walang hiwalay na WhatsApp bot user.
-Kung **ikaw** ay nasa isang grupo, nakikita ng OpenClaw ang grupong iyon at puwede itong sumagot doon.
+Ang OpenClaw ay “nabubuhay” sa sarili mong mga messaging account. Walang hiwalay na WhatsApp bot user.
+Kung **ikaw** ay nasa isang grupo, makikita ng OpenClaw ang grupong iyon at tutugon doon.
 
 Default na pag-uugali:
 
@@ -47,12 +40,12 @@ otherwise -> reply
 
 Kung gusto mo...
 
-| Layunin                                                   | Itatakda                                                   |
-| --------------------------------------------------------- | ---------------------------------------------------------- |
-| Payagan ang lahat ng grupo pero sumagot lang sa @mentions | `groups: { "*": { requireMention: true } }`                |
-| I-disable ang lahat ng sagot sa grupo                     | `groupPolicy: "disabled"`                                  |
-| Mga partikular na grupo lang                              | `groups: { "<group-id>": { ... } }` (walang `"*"` key)     |
-| Ikaw lang ang puwedeng mag-trigger sa mga grupo           | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Layunin                                                                | Itatakda                                                                                                 |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Payagan ang lahat ng grupo pero sumagot lang sa @mentions | `groups: { "*": { requireMention: true } }`                                                              |
+| I-disable ang lahat ng sagot sa grupo                                  | `groupPolicy: "disabled"`                                                                                |
+| Mga partikular na grupo lang                                           | 18. `groups: { "<group-id>": { ... 19. } }` (walang `"*"` key) |
+| Ikaw lang ang puwedeng mag-trigger sa mga grupo                        | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]`                                               |
 
 ## Mga session key
 
@@ -65,14 +58,14 @@ Kung gusto mo...
 
 Oo — maayos itong gumagana kung ang “personal” mong traffic ay **DM** at ang “public” mong traffic ay **mga grupo**.
 
-Bakit: sa single-agent mode, karaniwang napupunta ang mga DM sa **main** session key (`agent:main:main`), habang ang mga grupo ay laging gumagamit ng **non-main** na mga session key (`agent:main:<channel>:group:<id>`). Kung i-enable mo ang sandboxing gamit ang `mode: "non-main"`, tatakbo ang mga group session sa Docker habang nananatiling on-host ang pangunahing DM session mo.
+20. Bakit: sa single-agent mode, ang mga DM ay karaniwang napupunta sa **main** session key (`agent:main:main`), habang ang mga grupo ay palaging gumagamit ng **non-main** na session key (`agent:main:<channel>:group:<id>`). Kung i-enable mo ang sandboxing gamit ang `mode: "non-main"`, ang mga group session na iyon ay tatakbo sa Docker habang ang iyong pangunahing DM session ay mananatiling on-host.
 
 Nagbibigay ito sa iyo ng isang agent na “utak” (shared workspace + memory), pero dalawang posture ng execution:
 
 - **DM**: buong tools (host)
 - **Mga grupo**: sandbox + limitadong tools (Docker)
 
-> Kung kailangan mo ng tunay na magkahiwalay na workspace/persona (“personal” at “public” ay hindi dapat maghalo), gumamit ng pangalawang agent + bindings. Tingnan ang [Multi-Agent Routing](/concepts/multi-agent).
+> Kung kailangan mo ng tunay na magkakahiwalay na workspace/persona (“personal” at “public” ay hindi dapat maghalo), gumamit ng pangalawang agent + bindings. Tingnan ang [Multi-Agent Routing](/concepts/multi-agent).
 
 Halimbawa (DM sa host, mga grupo ay sandboxed + messaging-only na tools):
 
@@ -99,7 +92,7 @@ Halimbawa (DM sa host, mga grupo ay sandboxed + messaging-only na tools):
 }
 ```
 
-Gusto mo ba ng “nakikita lang ng mga grupo ang folder X” sa halip na “walang host access”? Panatilihin ang `workspaceAccess: "none"` at i-mount lang ang mga allowlisted na path papasok sa sandbox:
+24. Gusto mo ba ng “groups can only see folder X” sa halip na “no host access”? Panatilihin ang `workspaceAccess: "none"` at i-mount lamang ang mga path na nasa allowlist papunta sa sandbox:
 
 ```json5
 {
@@ -181,8 +174,8 @@ Kontrolin kung paano hinahawakan ang mga mensahe sa grupo/room kada channel:
 }
 ```
 
-| Policy        | Pag-uugali                                                                   |
-| ------------- | ---------------------------------------------------------------------------- |
+| Policy        | Pag-uugali                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------- |
 | `"open"`      | Nilalampasan ng mga grupo ang mga allowlist; nananatili ang mention-gating.  |
 | `"disabled"`  | I-block ang lahat ng mensahe sa grupo nang buo.                              |
 | `"allowlist"` | Payagan lang ang mga grupo/room na tumutugma sa naka-configure na allowlist. |
@@ -191,9 +184,9 @@ Mga tala:
 
 - Ang `groupPolicy` ay hiwalay sa mention-gating (na nangangailangan ng @mentions).
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: gamitin ang `groupAllowFrom` (fallback: tahasang `allowFrom`).
-- Discord: gumagamit ang allowlist ng `channels.discord.guilds.<id>.channels`.
+- Discord: gumagamit ang allowlist ng `channels.discord.guilds.<id>.mga channel`.
 - Slack: gumagamit ang allowlist ng `channels.slack.channels`.
-- Matrix: gumagamit ang allowlist ng `channels.matrix.groups` (mga room ID, alias, o pangalan). Gamitin ang `channels.matrix.groupAllowFrom` para limitahan ang mga sender; sinusuportahan din ang per-room `users` na mga allowlist.
+- 27. Matrix: ang allowlist ay gumagamit ng `channels.matrix.groups` (mga room ID, alias, o pangalan). Gamitin ang `channels.matrix.groupAllowFrom` upang limitahan ang mga sender; sinusuportahan din ang per-room na `users` allowlist.
 - Ang mga Group DM ay hiwalay na kinokontrol (`channels.discord.dm.*`, `channels.slack.dm.*`).
 - Ang Telegram allowlist ay puwedeng tumugma sa mga user ID (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) o username (`"@alice"` o `"alice"`); case-insensitive ang mga prefix.
 - Default ay `groupPolicy: "allowlist"`; kung walang laman ang group allowlist mo, naka-block ang mga mensahe sa grupo.
@@ -206,9 +199,9 @@ Mabilis na mental model (sunod-sunod na evaluation para sa mga mensahe sa grupo)
 
 ## Mention gating (default)
 
-Nangangailangan ng mention ang mga mensahe sa grupo maliban kung na-override kada grupo. Ang mga default ay nakatira kada subsystem sa ilalim ng `*.groups."*"`.
+29. Ang mga mensahe ng grupo ay nangangailangan ng mention maliban kung overridden per group. 30. Ang mga default ay nakatira per subsystem sa ilalim ng `*.groups."*"`.
 
-Ang pag-reply sa mensahe ng bot ay binibilang bilang implicit na mention (kapag sinusuportahan ng channel ang reply metadata). Nalalapat ito sa Telegram, WhatsApp, Slack, Discord, at Microsoft Teams.
+Ang pagrereply sa isang bot message ay binibilang bilang implicit na mention (kapag sinusuportahan ng channel ang reply metadata). 32. Nalalapat ito sa Telegram, WhatsApp, Slack, Discord, at Microsoft Teams.
 
 ```json5
 {
@@ -253,14 +246,14 @@ Mga tala:
 - Per-agent override: `agents.list[].groupChat.mentionPatterns` (kapaki-pakinabang kapag maraming agent ang nagbabahagi ng isang grupo).
 - Ipinapatupad lang ang mention gating kapag posible ang mention detection (native mentions o naka-configure ang `mentionPatterns`).
 - Ang mga default ng Discord ay nasa `channels.discord.guilds."*"` (maaaring i-override kada guild/channel).
-- Ang context ng history ng grupo ay binalot nang pare-pareho sa lahat ng channel at **pending-only** (mga mensaheng nilaktawan dahil sa mention gating); gamitin ang `messages.groupChat.historyLimit` para sa global default at ang `channels.<channel>.historyLimit` (o `channels.<channel>.accounts.*.historyLimit`) para sa mga override. Itakda ang `0` para i-disable.
+- Ang group history context ay binabalot nang pare-pareho sa lahat ng channel at **pending-only** (mga mensaheng nilaktawan dahil sa mention gating); gamitin ang `messages.groupChat.historyLimit` para sa global default at `channels.<channel>34. `.historyLimit`(o`channels.<channel>`35. `.accounts.\*.historyLimit`) para sa mga override. 36. Itakda sa `0\` para i-disable.
 
 ## Mga restriksiyon sa tool ng grupo/channel (opsyonal)
 
 May ilang channel config na sumusuporta sa paglilimita kung aling mga tool ang available **sa loob ng isang partikular na grupo/room/channel**.
 
 - `tools`: payagan/itanggi ang mga tool para sa buong grupo.
-- `toolsBySender`: per-sender na mga override sa loob ng grupo (ang mga key ay sender ID/username/email/numero ng telepono depende sa channel). Gamitin ang `"*"` bilang wildcard.
+- 37. `toolsBySender`: mga per-sender override sa loob ng grupo (ang mga key ay sender ID/username/email/numero ng telepono depende sa channel). 38. Gamitin ang `"*"` bilang wildcard.
 
 Ayos ng resolusyon (pinaka-espesipiko ang nananalo):
 
@@ -296,7 +289,7 @@ Mga tala:
 
 ## Mga group allowlist
 
-Kapag naka-configure ang `channels.whatsapp.groups`, `channels.telegram.groups`, o `channels.imessage.groups`, kumikilos ang mga key bilang group allowlist. Gamitin ang `"*"` para payagan ang lahat ng grupo habang itinatakda pa rin ang default na pag-uugali ng mention.
+Kapag na-configure ang `channels.whatsapp.groups`, `channels.telegram.groups`, o `channels.imessage.groups`, ang mga key ay nagsisilbing group allowlist. 40. Gamitin ang `"*"` para payagan ang lahat ng grupo habang itinatakda pa rin ang default na behavior ng mention.
 
 Mga karaniwang intensyon (copy/paste):
 
@@ -356,7 +349,7 @@ Puwedeng i-toggle ng mga group owner ang activation kada grupo:
 - `/activation mention`
 - `/activation always`
 
-Tinutukoy ang owner ng `channels.whatsapp.allowFrom` (o ang sariling E.164 ng bot kapag hindi nakatakda). Ipadala ang command bilang hiwalay na mensahe. Sa kasalukuyan, binabalewala ng ibang surface ang `/activation`.
+41. Ang owner ay tinutukoy ng `channels.whatsapp.allowFrom` (o ang sariling E.164 ng bot kapag hindi nakatakda). 42. Ipadala ang command bilang standalone na mensahe. 43. Ang ibang surface ay kasalukuyang hindi pinapansin ang `/activation`.
 
 ## Mga context field
 
@@ -368,7 +361,7 @@ Itinatakda ng mga inbound payload ng grupo ang:
 - `WasMentioned` (resulta ng mention gating)
 - Ang mga Telegram forum topic ay kasama rin ang `MessageThreadId` at `IsForum`.
 
-Kasama sa system prompt ng agent ang isang group intro sa unang turn ng bagong group session. Ipinapaalala nito sa model na sumagot na parang tao, iwasan ang mga Markdown table, at iwasang mag-type ng literal na `\n` na mga sequence.
+44. Kasama sa agent system prompt ang isang group intro sa unang turn ng bagong group session. 45. Pinapaalala nito sa model na sumagot na parang tao, iwasan ang mga Markdown table, at iwasan ang pag-type ng literal na `\n` na mga sequence.
 
 ## Mga detalye para sa iMessage
 

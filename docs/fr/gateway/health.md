@@ -2,14 +2,7 @@
 summary: "Étapes de vérification de l’état pour la connectivité des canaux"
 read_when:
   - Diagnostic de l’état du canal WhatsApp
-title: "Vérifications de l’état"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:39Z
+title: "Contrôles de santé"
 ---
 
 # Vérifications de l’état (CLI)

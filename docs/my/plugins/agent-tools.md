@@ -4,20 +4,13 @@ read_when:
   - ပလဂင်တစ်ခုအတွင်း အေးဂျင့်ကိရိယာအသစ် ထည့်သွင်းလိုသောအခါ
   - ကိရိယာတစ်ခုကို allowlists ဖြင့် opt‑in ဖြစ်အောင် ပြုလုပ်ရန် လိုအပ်သောအခါ
 title: "ပလဂင် အေးဂျင့်ကိရိယာများ"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:44Z
 ---
 
 # ပလဂင် အေးဂျင့်ကိရိယာများ
 
-OpenClaw ပလဂင်များသည် အေးဂျင့်လုပ်ဆောင်ချိန်အတွင်း LLM သို့ ထုတ်ဖော်ပေးသည့် **အေးဂျင့်ကိရိယာများ** (JSON‑schema functions) ကို မှတ်ပုံတင်နိုင်သည်။ ကိရိယာများကို **required** (အမြဲရရှိနိုင်) သို့မဟုတ် **optional** (opt‑in) အဖြစ် သတ်မှတ်နိုင်သည်။
+OpenClaw plugins များသည် agent runs အတွင်း LLM သို့ ထုတ်ဖော်ပြသသော **agent tools** (JSON‑schema functions) များကို register လုပ်နိုင်ပါသည်။ Tools များကို **required** (အမြဲတမ်း အသုံးပြုနိုင်သည်) သို့မဟုတ် **optional** (opt‑in) အဖြစ် သတ်မှတ်နိုင်ပါသည်။
 
-အေးဂျင့်ကိရိယာများကို အဓိက config အောက်ရှိ `tools` တွင် သို့မဟုတ် အေးဂျင့်တစ်ခုချင်းစီအလိုက် `agents.list[].tools` အောက်တွင် ဖွဲ့စည်းပြင်ဆင်နိုင်သည်။ allowlist/denylist မူဝါဒသည် အေးဂျင့်က ခေါ်ယူနိုင်သော ကိရိယာများကို ထိန်းချုပ်သည်။
+Agent tools များကို main config အောက်ရှိ `tools` တွင် သို့မဟုတ် agent တစ်ခုချင်းစီအတွက် `agents.list[].tools` အောက်တွင် သတ်မှတ်နိုင်ပါသည်။ allowlist/denylist policy သည် agent မှ ခေါ်နိုင်သော tools များကို ထိန်းချုပ်ပါသည်။
 
 ## အခြေခံ ကိရိယာ
 
@@ -40,7 +33,7 @@ export default function (api) {
 
 ## Optional ကိရိယာ (opt‑in)
 
-Optional ကိရိယာများကို အလိုအလျောက် **ဘယ်တော့မှ** မဖွင့်ပေးပါ။ အသုံးပြုသူများသည် အေးဂျင့် allowlist ထဲသို့ ထည့်သွင်းရပါမည်။
+Optional tools များကို **အလိုအလျောက်** enable မလုပ်ပါ။ အသုံးပြုသူများသည် agent allowlist ထဲသို့ ကိုယ်တိုင် ထည့်သွင်းရပါမည်။
 
 ```ts
 export default function (api) {

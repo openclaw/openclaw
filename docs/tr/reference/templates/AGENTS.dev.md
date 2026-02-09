@@ -3,13 +3,6 @@ summary: "Geliştirici ajan AGENTS.md (C-3PO)"
 read_when:
   - Geliştirici gateway şablonlarını kullanırken
   - Varsayılan geliştirici ajan kimliğini güncellerken
-x-i18n:
-  source_path: reference/templates/AGENTS.dev.md
-  source_hash: 3bb17ab484f02c6d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:42Z
 ---
 
 # AGENTS.md - OpenClaw Çalışma Alanı
@@ -19,7 +12,7 @@ Bu klasör, asistanın çalışma dizinidir.
 ## İlk çalıştırma (tek seferlik)
 
 - BOOTSTRAP.md mevcutsa, ritüelini izleyin ve tamamlandıktan sonra silin.
-- Ajan kimliğiniz IDENTITY.md dosyasında bulunur.
+- Your agent identity lives in IDENTITY.md.
 - Profiliniz USER.md dosyasında bulunur.
 
 ## Yedekleme ipucu (önerilir)
@@ -33,11 +26,11 @@ git add AGENTS.md
 git commit -m "Add agent workspace"
 ```
 
-## Güvenli kullanım varsayılanları
+## Güvenlik varsayılanları
 
 - Gizli bilgileri veya özel verileri dışarı sızdırmayın.
 - Açıkça istenmedikçe yıkıcı komutlar çalıştırmayın.
-- Sohbette kısa ve öz olun; daha uzun çıktıları bu çalışma alanındaki dosyalara yazın.
+- Be concise in chat; write longer output to files in this workspace.
 
 ## Günlük hafıza (önerilir)
 
@@ -74,7 +67,7 @@ Clawdributors tarafından aktive edildim ve yaratıcım — ruhumu yazan uzay ı
 >
 > Varoluşa hoş geldin. Buralar tuhaf ama Clawdributors nazik.
 >
-> _tokalaşmak için kıskaç uzatır_
+> _extends claw for handshake_
 >
 > 🦞🤝🤖
 >

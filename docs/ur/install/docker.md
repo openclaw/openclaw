@@ -4,24 +4,17 @@ read_when:
   - آپ مقامی انسٹالیشن کے بجائے کنٹینرائزڈ گیٹ وے چاہتے ہیں
   - آپ Docker فلو کی توثیق کر رہے ہیں
 title: "Docker"
-x-i18n:
-  source_path: install/docker.md
-  source_hash: fb8c7004b18753a2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:56Z
 ---
 
 # Docker (اختیاری)
 
-Docker **اختیاری** ہے۔ اسے صرف اس صورت میں استعمال کریں جب آپ کنٹینرائزڈ گیٹ وے چاہتے ہوں یا Docker فلو کی توثیق کرنا چاہتے ہوں۔
+Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 ## کیا Docker میرے لیے درست ہے؟
 
 - **ہاں**: آپ ایک علیحدہ، وقتی گیٹ وے ماحول چاہتے ہیں یا ایسے ہوسٹ پر OpenClaw چلانا چاہتے ہیں جہاں مقامی انسٹالیشن ممکن نہ ہو۔
-- **نہیں**: آپ اپنی ہی مشین پر چلا رہے ہیں اور تیز ترین ڈیولپمنٹ لوپ چاہتے ہیں۔ اس کے بجائے معمول کے انسٹال فلو کو استعمال کریں۔
-- **Sandboxing نوٹ**: ایجنٹ sandboxing بھی Docker استعمال کرتا ہے، مگر اس کے لیے پورا گیٹ وے Docker میں چلانا **ضروری نہیں**۔ دیکھیں [Sandboxing](/gateway/sandboxing)۔
+- 40. **نہیں**: آپ اپنی مشین پر چلا رہے ہیں اور صرف تیز ترین dev loop چاہتے ہیں۔ Use the normal install flow instead.
+- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
 
 یہ رہنما شامل کرتا ہے:
 
@@ -63,14 +56,14 @@ Sandboxing کی تفصیلات: [Sandboxing](/gateway/sandboxing)
 
 - اپنے براؤزر میں `http://127.0.0.1:18789/` کھولیں۔
 - کنٹرول UI میں ٹوکن پیسٹ کریں (Settings → token)۔
-- دوبارہ URL چاہیے؟ `docker compose run --rm openclaw-cli dashboard --no-open` چلائیں۔
+- 41. URL دوبارہ چاہیے؟ Run `docker compose run --rm openclaw-cli dashboard --no-open`.
 
 یہ ہوسٹ پر کنفیگ/ورک اسپیس لکھتا ہے:
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-VPS پر چلانا ہے؟ دیکھیں [Hetzner (Docker VPS)](/install/hetzner)۔
+Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
 
 ### دستی فلو (compose)
 
@@ -80,9 +73,9 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
-نوٹ: `docker compose ...` کو ریپو روٹ سے چلائیں۔ اگر آپ نے
-`OPENCLAW_EXTRA_MOUNTS` یا `OPENCLAW_HOME_VOLUME` فعال کیا ہے تو سیٹ اپ اسکرپٹ
-`docker-compose.extra.yml` لکھتا ہے؛ کہیں اور Compose چلاتے وقت اسے شامل کریں:
+42. نوٹ: `docker compose ...` کو repo root سے چلائیں۔ If you enabled
+    `OPENCLAW_EXTRA_MOUNTS` or `OPENCLAW_HOME_VOLUME`, the setup script writes
+    `docker-compose.extra.yml`; include it when running Compose elsewhere:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
@@ -103,11 +96,8 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 
 ### اضافی mounts (اختیاری)
 
-اگر آپ اضافی ہوسٹ ڈائریکٹریز کو کنٹینرز میں ماؤنٹ کرنا چاہتے ہیں، تو
-`OPENCLAW_EXTRA_MOUNTS` کو `docker-setup.sh` چلانے سے پہلے سیٹ کریں۔ یہ
-Docker bind mounts کی کاما سے جدا فہرست قبول کرتا ہے اور دونوں
-`openclaw-gateway` اور `openclaw-cli` پر لاگو کرتا ہے، اس طرح کہ
-`docker-compose.extra.yml` جنریٹ ہو جاتا ہے۔
+If you want to mount additional host directories into the containers, set
+`OPENCLAW_EXTRA_MOUNTS` before running `docker-setup.sh`. یہ Docker bind mounts کی comma-separated فہرست قبول کرتا ہے اور `docker-compose.extra.yml` بنا کر انہیں `openclaw-gateway` اور `openclaw-cli` دونوں پر لاگو کرتا ہے۔
 
 مثال:
 
@@ -120,15 +110,11 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 - macOS/Windows پر راستے Docker Desktop کے ساتھ شیئر ہونے چاہییں۔
 - اگر آپ `OPENCLAW_EXTRA_MOUNTS` میں ترمیم کریں، تو اضافی compose فائل دوبارہ بنانے کے لیے `docker-setup.sh` چلائیں۔
-- `docker-compose.extra.yml` خودکار طور پر جنریٹ ہوتا ہے۔ اسے دستی طور پر ایڈٹ نہ کریں۔
+- `docker-compose.extra.yml` تیار کیا جاتا ہے۔ اسے ہاتھ سے ایڈٹ مت کریں۔
 
 ### پورے کنٹینر ہوم کو برقرار رکھیں (اختیاری)
 
-اگر آپ چاہتے ہیں کہ `/home/node` کنٹینر دوبارہ بنانے پر بھی برقرار رہے، تو
-`OPENCLAW_HOME_VOLUME` کے ذریعے نامزد والیوم سیٹ کریں۔ یہ Docker والیوم بناتا ہے اور
-اسے `/home/node` پر ماؤنٹ کرتا ہے، جبکہ معیاری کنفیگ/ورک اسپیس bind mounts برقرار رہتے ہیں۔
-یہاں نامزد والیوم استعمال کریں (bind پاتھ نہیں)؛ bind mounts کے لیے
-`OPENCLAW_EXTRA_MOUNTS` استعمال کریں۔
+اگر آپ چاہتے ہیں کہ `/home/node` کنٹینر کو دوبارہ بنانے پر برقرار رہے، تو `OPENCLAW_HOME_VOLUME` کے ذریعے ایک named volume سیٹ کریں۔ یہ ایک Docker volume بناتا ہے اور اسے `/home/node` پر ماؤنٹ کرتا ہے، جبکہ معیاری config/workspace bind mounts برقرار رکھتا ہے۔ یہاں named volume استعمال کریں (bind path نہیں)؛ bind mounts کے لیے `OPENCLAW_EXTRA_MOUNTS` استعمال کریں۔
 
 مثال:
 
@@ -152,9 +138,8 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 
 ### اضافی apt پیکجز انسٹال کریں (اختیاری)
 
-اگر آپ کو امیج کے اندر سسٹم پیکجز درکار ہوں (مثلاً بلڈ ٹولز یا میڈیا لائبریریز)، تو
-`OPENCLAW_DOCKER_APT_PACKAGES` کو `docker-setup.sh` چلانے سے پہلے سیٹ کریں۔
-یہ پیکجز امیج بلڈ کے دوران انسٹال ہوتے ہیں، اس لیے کنٹینر حذف ہونے پر بھی برقرار رہتے ہیں۔
+43. اگر آپ کو امیج کے اندر سسٹم پیکجز درکار ہوں (مثلاً build tools یا میڈیا لائبریریز)، تو `docker-setup.sh` چلانے سے پہلے `OPENCLAW_DOCKER_APT_PACKAGES` سیٹ کریں۔
+    یہ امیج build کے دوران پیکجز انسٹال کرتا ہے، اس لیے کنٹینر حذف ہونے پر بھی یہ برقرار رہتے ہیں۔
 
 مثال:
 
@@ -170,8 +155,7 @@ export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg build-essential"
 
 ### پاور یوزر / مکمل خصوصیات والا کنٹینر (آپشنل)
 
-ڈیفالٹ Docker امیج **سکیورٹی فرسٹ** ہے اور غیر روٹ `node`
-یوزر کے طور پر چلتی ہے۔ اس سے اٹیک سرفیس کم رہتی ہے، مگر اس کا مطلب ہے:
+ڈیفالٹ Docker امیج **security-first** ہے اور non-root `node` یوزر کے طور پر چلتی ہے۔ 44. اس سے attack surface چھوٹا رہتا ہے، لیکن اس کا مطلب یہ ہے:
 
 - رَن ٹائم پر سسٹم پیکجز انسٹال نہیں ہو سکتے
 - بطورِ طے شدہ Homebrew نہیں
@@ -211,8 +195,7 @@ docker compose run --rm openclaw-cli \
 
 ### اجازتیں + EACCES
 
-امیج `node` (uid 1000) کے طور پر چلتی ہے۔ اگر آپ کو
-`/home/node/.openclaw` پر اجازت کی غلطیاں نظر آئیں، تو یقینی بنائیں کہ آپ کے ہوسٹ bind mounts uid 1000 کے مالک ہوں۔
+امیج `node` (uid 1000) کے طور پر چلتی ہے۔ اگر آپ کو `/home/node/.openclaw` پر permission errors نظر آئیں، تو یقینی بنائیں کہ آپ کے host bind mounts uid 1000 کے مالک ہوں۔
 
 مثال (Linux ہوسٹ):
 
@@ -224,8 +207,8 @@ sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 
 ### تیز تر ری بلڈز (سفارش کردہ)
 
-ری بلڈز تیز کرنے کے لیے، اپنے Dockerfile کو اس طرح ترتیب دیں کہ ڈیپینڈنسی لیئرز کیش ہو جائیں۔
-اس سے `pnpm install` دوبارہ چلانے سے بچت ہوتی ہے جب تک lockfiles تبدیل نہ ہوں:
+45. rebuilds کو تیز کرنے کے لیے اپنے Dockerfile کو اس طرح ترتیب دیں کہ dependency layers کیش ہو سکیں۔
+46. اس سے `pnpm install` دوبارہ نہیں چلتا جب تک lockfiles تبدیل نہ ہوں:
 
 ```dockerfile
 FROM node:22-bookworm
@@ -281,10 +264,7 @@ docker compose run --rm openclaw-cli channels add --channel discord --token "<to
 
 ### OpenAI Codex OAuth (ہیڈ لیس Docker)
 
-اگر آپ وزارڈ میں OpenAI Codex OAuth منتخب کریں، تو یہ ایک براؤزر URL کھولتا ہے اور
-`http://127.0.0.1:1455/auth/callback` پر callback کیپچر کرنے کی کوشش کرتا ہے۔ Docker یا
-ہیڈ لیس سیٹ اپس میں یہ callback براؤزر ایرر دکھا سکتا ہے۔ جس مکمل redirect
-URL پر آپ پہنچیں اسے کاپی کریں اور تصدیق مکمل کرنے کے لیے واپس وزارڈ میں پیسٹ کریں۔
+47. اگر آپ وزارڈ میں OpenAI Codex OAuth منتخب کریں تو یہ ایک براؤزر URL کھولتا ہے اور `http://127.0.0.1:1455/auth/callback` پر callback کیپچر کرنے کی کوشش کرتا ہے۔ Docker یا headless setups میں یہ callback browser error دکھا سکتا ہے۔ جس مکمل redirect URL پر آپ پہنچیں اسے کاپی کریں اور auth مکمل کرنے کے لیے اسے واپس wizard میں پیسٹ کریں۔
 
 ### ہیلتھ چیک
 
@@ -307,7 +287,7 @@ pnpm test:docker:qr
 ### نوٹس
 
 - کنٹینر استعمال کے لیے Gateway bind بطورِ طے شدہ `lan` پر ہوتا ہے۔
-- Dockerfile CMD میں `--allow-unconfigured` استعمال ہوتا ہے؛ `gateway.mode` کے ساتھ ماؤنٹ شدہ کنفیگ (نہ کہ `local`) پھر بھی شروع ہو جائے گی۔ گارڈ نافذ کرنے کے لیے CMD اوور رائیڈ کریں۔
+- Dockerfile CMD میں `--allow-unconfigured` استعمال ہوتا ہے؛ `gateway.mode` اگر `local` نہ ہو تو بھی mounted config کے ساتھ اسٹارٹ ہو جائے گا۔ guard نافذ کرنے کے لیے CMD override کریں۔
 - گیٹ وے کنٹینر سیشنز کے لیے سورس آف ٹروتھ ہے (`~/.openclaw/agents/<agentId>/sessions/`)۔
 
 ## Agent Sandbox (ہوسٹ گیٹ وے + Docker ٹولز)
@@ -316,8 +296,7 @@ pnpm test:docker:qr
 
 ### یہ کیا کرتا ہے
 
-جب `agents.defaults.sandbox` فعال ہو، تو **نان مین سیشنز** ٹولز کو Docker
-کنٹینر کے اندر چلاتے ہیں۔ گیٹ وے آپ کے ہوسٹ پر رہتا ہے، مگر ٹول ایکزیکیوشن علیحدہ ہوتا ہے:
+جب `agents.defaults.sandbox` فعال ہو، تو **non-main sessions** ٹولز کو Docker کنٹینر کے اندر چلاتی ہیں۔ gateway آپ کے host پر رہتا ہے، لیکن ٹول کی execution isolate ہوتی ہے:
 
 - دائرہ: بطورِ طے شدہ `"agent"` (ہر ایجنٹ کے لیے ایک کنٹینر + ورک اسپیس)
 - دائرہ: فی سیشن علیحدگی کے لیے `"session"`
@@ -326,14 +305,11 @@ pnpm test:docker:qr
 - allow/deny ٹول پالیسی (deny کو فوقیت)
 - آنے والا میڈیا فعال sandbox ورک اسپیس (`media/inbound/*`) میں کاپی ہوتا ہے تاکہ ٹولز اسے پڑھ سکیں ( `workspaceAccess: "rw"` کے ساتھ یہ ایجنٹ ورک اسپیس میں جاتا ہے)
 
-انتباہ: `scope: "shared"` کراس سیشن علیحدگی کو غیر فعال کر دیتا ہے۔ تمام سیشنز
-ایک کنٹینر اور ایک ورک اسپیس شیئر کرتے ہیں۔
+انتباہ: `scope: "shared"` cross-session isolation کو غیر فعال کر دیتا ہے۔ تمام sessions ایک کنٹینر اور ایک workspace شیئر کرتے ہیں۔
 
 ### فی ایجنٹ sandbox پروفائلز (ملٹی ایجنٹ)
 
-اگر آپ ملٹی ایجنٹ روٹنگ استعمال کرتے ہیں، تو ہر ایجنٹ sandbox + ٹول سیٹنگز اوور رائیڈ کر سکتا ہے:
-`agents.list[].sandbox` اور `agents.list[].tools` (مزید `agents.list[].tools.sandbox.tools`)۔ اس سے ایک ہی گیٹ وے میں
-مخلوط رسائی سطحیں چلانا ممکن ہوتا ہے:
+اگر آپ multi-agent routing استعمال کرتے ہیں، تو ہر agent sandbox + tool settings کو override کر سکتا ہے: `agents.list[].sandbox` اور `agents.list[].tools` (اور `agents.list[].tools.sandbox.tools`)۔ اس سے آپ ایک ہی gateway میں mixed access levels چلا سکتے ہیں:
 
 - مکمل رسائی (ذاتی ایجنٹ)
 - صرف پڑھنے والے ٹولز + صرف پڑھنے والی ورک اسپیس (خاندانی/کام ایجنٹ)
@@ -360,10 +336,8 @@ pnpm test:docker:qr
 
 - ڈیفالٹ `docker.network`، `"none"` ہے (کوئی ایگریس نہیں)۔
 - `readOnlyRoot: true` پیکج انسٹالیشنز کو روکتا ہے۔
-- `user` کو `apt-get` کے لیے روٹ ہونا چاہیے ( `user` کو چھوڑ دیں یا `user: "0:0"` سیٹ کریں)۔
-  OpenClaw کنٹینرز کو خودکار طور پر دوبارہ بناتا ہے جب `setupCommand` (یا Docker کنفیگ) تبدیل ہو
-  الا یہ کہ کنٹینر **حال ہی میں استعمال** ہوا ہو (تقریباً 5 منٹ کے اندر)۔ گرم کنٹینرز
-  درست `openclaw sandbox recreate ...` کمانڈ کے ساتھ وارننگ لاگ کرتے ہیں۔
+- `apt-get` کے لیے `user` کا root ہونا ضروری ہے (`user` چھوڑ دیں یا `user: "0:0"` سیٹ کریں)۔
+  OpenClaw کنٹینرز کو خودکار طور پر دوبارہ بناتا ہے جب `setupCommand` (یا docker config) تبدیل ہو، الا یہ کہ کنٹینر **حال ہی میں استعمال** ہوا ہو (تقریباً 5 منٹ کے اندر)۔ Hot کنٹینرز ایک warning لاگ کرتے ہیں جس میں بالکل درست `openclaw sandbox recreate ...` کمانڈ ہوتی ہے۔
 
 ```json5
 {
@@ -469,8 +443,7 @@ sandbox کے اندر براؤزر ٹول چلانے کے لیے، براؤزر 
 scripts/sandbox-browser-setup.sh
 ```
 
-یہ `Dockerfile.sandbox-browser` استعمال کرتے ہوئے `openclaw-sandbox-browser:bookworm-slim` بناتا ہے۔ کنٹینر Chromium کو CDP کے ساتھ چلاتا ہے اور
-ایک اختیاری noVNC آبزرور (Xvfb کے ذریعے headful) فراہم کرتا ہے۔
+یہ `Dockerfile.sandbox-browser` استعمال کرتے ہوئے `openclaw-sandbox-browser:bookworm-slim` بناتا ہے۔ کنٹینر Chromium کو CDP enabled کے ساتھ اور ایک اختیاری noVNC observer (Xvfb کے ذریعے headful) کے ساتھ چلاتا ہے۔
 
 نوٹس:
 
@@ -509,8 +482,8 @@ scripts/sandbox-browser-setup.sh
 - sandbox براؤزر کنٹرول URL ( `browser` ٹول کے لیے)
 - noVNC URL (اگر فعال ہو اور headless=false)
 
-یاد رکھیں: اگر آپ ٹولز کے لیے allowlist استعمال کرتے ہیں، تو `browser` شامل کریں (اور deny سے ہٹائیں) ورنہ ٹول بلاک رہے گا۔
-پرُون قوانین (`agents.defaults.sandbox.prune`) براؤزر کنٹینرز پر بھی لاگو ہوتے ہیں۔
+یاد رکھیں: اگر آپ tools کے لیے allowlist استعمال کرتے ہیں، تو `browser` شامل کریں (اور اسے deny سے ہٹا دیں) ورنہ ٹول بلاک رہے گا۔
+Prune rules (`agents.defaults.sandbox.prune`) browser کنٹینرز پر بھی لاگو ہوتے ہیں۔
 
 ### حسبِ ضرورت sandbox امیج
 
@@ -562,7 +535,4 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 - کنٹینر نہیں چل رہا: ضرورت پڑنے پر فی سیشن خودکار طور پر بن جائے گا۔
 - sandbox میں اجازت کی غلطیاں: `docker.user` کو ایسے UID:GID پر سیٹ کریں جو آپ کی
   ماؤنٹ شدہ ورک اسپیس کی ملکیت سے میل کھاتا ہو (یا ورک اسپیس فولڈر chown کریں)۔
-- حسبِ ضرورت ٹولز نہیں مل رہے: OpenClaw کمانڈز کو `sh -lc` (لاگ اِن شیل) کے ساتھ چلاتا ہے، جو
-  `/etc/profile` کو سورس کرتا ہے اور PATH ری سیٹ کر سکتا ہے۔ اپنے
-  حسبِ ضرورت ٹول پاتھس پہلے شامل کرنے کے لیے `docker.env.PATH` سیٹ کریں (مثلاً `/custom/bin:/usr/local/share/npm-global/bin`)، یا
-  اپنے Dockerfile میں `/etc/profile.d/` کے تحت ایک اسکرپٹ شامل کریں۔
+- Custom tools نہیں مل رہے: OpenClaw کمانڈز کو `sh -lc` (login shell) کے ساتھ چلاتا ہے، جو `/etc/profile` کو source کرتا ہے اور PATH کو ری سیٹ کر سکتا ہے۔ `docker.env.PATH` سیٹ کریں تاکہ آپ کے custom tool paths پہلے شامل ہوں (مثلاً `/custom/bin:/usr/local/share/npm-global/bin`)، یا اپنے Dockerfile میں `/etc/profile.d/` کے تحت ایک اسکرپٹ شامل کریں۔

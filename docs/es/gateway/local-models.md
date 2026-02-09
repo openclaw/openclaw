@@ -5,13 +5,6 @@ read_when:
   - Está conectando LM Studio o un proxy compatible con OpenAI
   - Necesita la guía más segura para modelos locales
 title: "Modelos locales"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:31Z
 ---
 
 # Modelos locales
@@ -114,7 +107,7 @@ Intercambie el orden de principal y fallback; mantenga el mismo bloque de provee
 
 ### Alojamiento regional / enrutamiento de datos
 
-- También existen variantes alojadas de MiniMax/Kimi/GLM en OpenRouter con endpoints fijados por región (p. ej., alojados en EE. UU.). Elija allí la variante regional para mantener el tráfico en su jurisdicción elegida mientras sigue usando `models.mode: "merge"` como fallback de Anthropic/OpenAI.
+- También existen variantes alojadas de MiniMax/Kimi/GLM en OpenRouter con endpoints fijados por región (p. ej., alojados en EE. Elija allí la variante regional para mantener el tráfico en su jurisdicción elegida mientras sigue usando `models.mode: "merge"` como fallback de Anthropic/OpenAI.
 - Solo local sigue siendo la vía de mayor privacidad; el enrutamiento regional alojado es el punto intermedio cuando necesita funciones del proveedor pero quiere controlar el flujo de datos.
 
 ## Otros proxies locales compatibles con OpenAI

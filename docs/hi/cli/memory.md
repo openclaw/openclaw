@@ -4,19 +4,12 @@ read_when:
   - आप सेमान्टिक मेमोरी को इंडेक्स या खोज करना चाहते हैं
   - आप मेमोरी उपलब्धता या इंडेक्सिंग का डिबग कर रहे हैं
 title: "मेमोरी"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:02Z
 ---
 
 # `openclaw memory`
 
-सेमान्टिक मेमोरी इंडेक्सिंग और खोज का प्रबंधन करें।
-सक्रिय मेमोरी प्लगइन द्वारा प्रदान किया गया (डिफ़ॉल्ट: `memory-core`; निष्क्रिय करने के लिए `plugins.slots.memory = "none"` सेट करें)।
+Manage semantic memory indexing and search.
+Provided by the active memory plugin (default: `memory-core`; set `plugins.slots.memory = "none"` to disable).
 
 संबंधित:
 

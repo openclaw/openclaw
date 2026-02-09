@@ -4,13 +4,6 @@ read_when:
   - Gusto mong makita kung aling mga Skills ang available at handang patakbuhin
   - Gusto mong i-debug ang mga nawawalang binary/env/config para sa mga Skills
 title: "skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:18Z
 ---
 
 # `openclaw skills`

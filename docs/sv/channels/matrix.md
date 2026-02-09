@@ -3,24 +3,17 @@ summary: "Status, funktioner och konfiguration för Matrix-stöd"
 read_when:
   - Arbetar med funktioner för Matrix-kanalen
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:38Z
 ---
 
 # Matrix (plugin)
 
-Matrix är ett öppet, decentraliserat meddelandeprotokoll. OpenClaw ansluter som en Matrix-**användare**
-på valfri homeserver, så du behöver ett Matrix-konto för boten. När den är inloggad kan du skicka DM
-till boten direkt eller bjuda in den till rum (Matrix ”grupper”). Beeper är också ett giltigt klientalternativ,
-men kräver att E2EE är aktiverat.
+Matrix är ett öppet, decentraliserat meddelandeprotokoll. OpenClaw ansluter som en matris **användare**
+på alla homeserver, så du behöver ett Matrix-konto för boten. När den är inloggad kan du DM
+boten direkt eller bjuda in den till rum (matris "grupper"). Beeper är ett giltigt klientalternativ också,
+men det kräver att E2EE aktiveras.
 
 Status: stöds via plugin (@vector-im/matrix-bot-sdk). Direktmeddelanden, rum, trådar, media, reaktioner,
-omröstningar (skicka + poll-start som text), plats och E2EE (med kryptostöd).
+opinionsundersökningar (skicka + poll-start som text), plats och E2EE (med crypto support).
 
 ## Plugin krävs
 
@@ -48,10 +41,13 @@ Detaljer: [Plugins](/tools/plugin)
 1. Installera Matrix-pluginet:
    - Från npm: `openclaw plugins install @openclaw/matrix`
    - Från en lokal checkout: `openclaw plugins install ./extensions/matrix`
+
 2. Skapa ett Matrix-konto på en homeserver:
    - Utforska värdalternativ på [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Eller hosta själv.
+
 3. Skaffa en åtkomsttoken för botkontot:
+
    - Använd Matrix inloggnings-API med `curl` på din homeserver:
 
    ```bash
@@ -79,9 +75,11 @@ Detaljer: [Plugins](/tools/plugin)
    - Om båda är satta har konfig företräde.
    - Med åtkomsttoken: användar-ID hämtas automatiskt via `/whoami`.
    - När den är satt ska `channels.matrix.userId` vara hela Matrix-ID:t (exempel: `@bot:example.org`).
+
 5. Starta om gatewayen (eller slutför introduktionen).
-6. Starta ett DM med boten eller bjud in den till ett rum från valfri Matrix-klient
-   (Element, Beeper m.fl.; se [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper kräver E2EE,
+
+6. Starta en DM med botten eller bjud in den till ett rum från någon Matrix klient
+   (Element, Beeper, etc.; se [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper kräver E2EE,
    så sätt `channels.matrix.encryption: true` och verifiera enheten.
 
 Minimal konfig (åtkomsttoken, användar-ID hämtas automatiskt):
@@ -124,7 +122,7 @@ Aktivera med `channels.matrix.encryption: true`:
 - Om kryptomodulen laddas dekrypteras krypterade rum automatiskt.
 - Utgående media krypteras när den skickas till krypterade rum.
 - Vid första anslutningen begär OpenClaw enhetsverifiering från dina andra sessioner.
-- Verifiera enheten i en annan Matrix-klient (Element m.fl.) för att aktivera nyckeldelning.
+- Verifiera enheten i en annan matrisklient (Element, etc.) för att aktivera nyckeldelning.
 - Om kryptomodulen inte kan laddas inaktiveras E2EE och krypterade rum dekrypteras inte;
   OpenClaw loggar en varning.
 - Om du ser fel om saknad kryptomodul (till exempel `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -132,16 +130,16 @@ Aktivera med `channels.matrix.encryption: true`:
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` eller hämta binären med
   `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js`.
 
-Kryptotillstånd lagras per konto + åtkomsttoken i
+Kryptostatus lagras per konto + åtkomsttoken i
 `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
-(SQLite-databas). Synk-tillståndet ligger bredvid i `bot-storage.json`.
-Om åtkomsttoken (enhet) ändras skapas ett nytt lager och boten måste
-återverifieras för krypterade rum.
+(SQLite-databas). Synkronisera tillståndet lever tillsammans med det i `bot-storage.json`.
+If the access token (device) changes, a new store is created and the bot must be
+re-verified for encrypted rooms.
 
 **Enhetsverifiering:**
-När E2EE är aktiverat begär boten verifiering från dina andra sessioner vid uppstart.
-Öppna Element (eller en annan klient) och godkänn verifieringsbegäran för att etablera förtroende.
-När den är verifierad kan boten dekryptera meddelanden i krypterade rum.
+När E2EE är aktiverat kommer boten att begära verifiering från dina andra sessioner vid start.
+Öppna Element (eller en annan klient) och godkänn verifieringsbegäran för att skapa förtroende.
+När boten har verifierats kan den dekryptera meddelanden i krypterade rum.
 
 ## Routingmodell
 
@@ -155,11 +153,11 @@ När den är verifierad kan boten dekryptera meddelanden i krypterade rum.
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - Publika DM: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
-- `channels.matrix.dm.allowFrom` accepterar fullständiga Matrix-användar-ID:n (exempel: `@user:server`). Guiden löser visningsnamn till användar-ID:n när katalogsökningen hittar en enda exakt matchning.
+- `channels.matrix.dm.allowFrom` accepterar fullständiga Matrix användar-ID (exempel: `@user:server`). Guiden löser visningsnamn till användar-ID när katalogsökningen hittar en enda exakt match.
 
 ## Rum (grupper)
 
-- Standard: `channels.matrix.groupPolicy = "allowlist"` (omnämnandespärr). Använd `channels.defaults.groupPolicy` för att åsidosätta standarden när den är osatt.
+- Standard: `channels.matrix.groupPolicy = "allowlist"` (omnämnandespärr). Använd `channels.defaults.groupPolicy` för att åsidosätta standard när du inaktiverar.
 - Tillåtelselista för rum med `channels.matrix.groups` (rum-ID:n eller alias; namn löses till ID:n när katalogsökningen hittar en enda exakt matchning):
 
 ```json5
@@ -197,17 +195,17 @@ När den är verifierad kan boten dekryptera meddelanden i krypterade rum.
 
 ## Funktioner
 
-| Funktion           | Status                                                                            |
-| ------------------ | --------------------------------------------------------------------------------- |
-| Direktmeddelanden  | ✅ Stöds                                                                          |
-| Rum                | ✅ Stöds                                                                          |
-| Trådar             | ✅ Stöds                                                                          |
-| Media              | ✅ Stöds                                                                          |
+| Funktion           | Status                                                                                              |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| Direktmeddelanden  | ✅ Stöds                                                                                             |
+| Rum                | ✅ Stöds                                                                                             |
+| Trådar             | ✅ Stöds                                                                                             |
+| Media              | ✅ Stöds                                                                                             |
 | E2EE               | ✅ Stöds (kryptomodul krävs)                                                      |
 | Reaktioner         | ✅ Stöds (skicka/läsa via verktyg)                                                |
 | Omröstningar       | ✅ Skick stöds; inkommande poll-start konverteras till text (svar/slut ignoreras) |
 | Plats              | ✅ Stöds (geo-URI; höjd ignoreras)                                                |
-| Inbyggda kommandon | ✅ Stöds                                                                          |
+| Inbyggda kommandon | ✅ Stöds                                                                                             |
 
 ## Felsökning
 
@@ -253,7 +251,7 @@ Leverantörsalternativ:
 - `channels.matrix.textChunkLimit`: textstyckningsstorlek för utgående text (tecken).
 - `channels.matrix.chunkMode`: `length` (standard) eller `newline` för att dela vid tomma rader (styckegränser) före längdstyckning.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (standard: parning).
-- `channels.matrix.dm.allowFrom`: DM-tillåtelselista (fullständiga Matrix-användar-ID:n). `open` kräver `"*"`. Guiden löser namn till ID:n när möjligt.
+- `channels.matrix.dm.allowFrom`: DM allowlist (full Matrix användar-ID). `open` kräver `"*"`. Guiden löser namn på ID när det är möjligt.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (standard: tillåtelselista).
 - `channels.matrix.groupAllowFrom`: tillåtna avsändare för gruppmeddelanden (fullständiga Matrix-användar-ID:n).
 - `channels.matrix.allowlistOnly`: tvinga tillåtelselisteregler för DM + rum.

@@ -4,18 +4,11 @@ read_when:
   - 플러그인/확장을 추가하거나 수정할 때
   - 플러그인 설치 또는 로드 규칙을 문서화할 때
 title: "플러그인"
-x-i18n:
-  source_path: tools/plugin.md
-  source_hash: b36ca6b90ca03eaa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:03Z
 ---
 
 # 플러그인 (확장)
 
-## 빠른 시작 (플러그인이 처음이신가요?)
+## 빠른 시작(플러그인이 처음이신가요?)
 
 플러그인은 OpenClaw 를 추가 기능(명령, 도구, Gateway RPC)으로 확장하는 **작은 코드 모듈**입니다.
 
@@ -55,7 +48,8 @@ openclaw plugins install @openclaw/voice-call
 - Qwen OAuth (프로바이더 인증) — `qwen-portal-auth` 로 번들됨 (기본 비활성화)
 - Copilot Proxy (프로바이더 인증) — 로컬 VS Code Copilot Proxy 브리지; 내장 `github-copilot` 디바이스 로그인과는 별도 (번들, 기본 비활성화)
 
-OpenClaw 플러그인은 jiti 를 통해 런타임에 로드되는 **TypeScript 모듈**입니다. **구성 검증은 플러그인 코드를 실행하지 않습니다**. 대신 플러그인 매니페스트와 JSON Schema 를 사용합니다. 자세한 내용은 [Plugin manifest](/plugins/manifest) 를 참고하십시오.
+OpenClaw 플러그인은 jiti 를 통해 런타임에 로드되는 **TypeScript 모듈**입니다. **구성
+유효성 검사는 플러그인 코드를 실행하지 않습니다**; 대신 플러그인 매니페스트와 JSON 스키마를 사용합니다. 자세한 내용은 [Plugin manifest](/plugins/manifest) 를 참고하십시오.
 
 플러그인은 다음을 등록할 수 있습니다:
 
@@ -88,7 +82,7 @@ const result = await api.runtime.tts.textToSpeechTelephony({
 - PCM 오디오 버퍼 + 샘플 레이트를 반환합니다. 플러그인은 프로바이더에 맞게 리샘플링/인코딩해야 합니다.
 - Edge TTS 는 전화 통화에 지원되지 않습니다.
 
-## 디바이스 검색 & 우선순위
+## 검색 및 우선순위
 
 OpenClaw 는 다음 순서로 스캔합니다:
 
@@ -110,8 +104,7 @@ OpenClaw 는 다음 순서로 스캔합니다:
 
 - `<openclaw>/extensions/*`
 
-번들 플러그인은 `plugins.entries.<id>.enabled` 또는 `openclaw plugins enable <id>` 를 통해 명시적으로 활성화해야 합니다.
-설치된 플러그인은 기본적으로 활성화되지만, 동일한 방식으로 비활성화할 수 있습니다.
+번들 플러그인은 `plugins.entries.<id>.enabled` 또는 `openclaw plugins enable <id>` 를 통해 명시적으로 활성화해야 합니다. 설치된 플러그인은 기본적으로 활성화되지만, 동일한 방식으로 비활성화할 수 있습니다.
 
 각 플러그인은 루트에 `openclaw.plugin.json` 파일을 포함해야 합니다. 경로가 파일을 가리키는 경우,
 플러그인 루트는 해당 파일의 디렉토리이며 매니페스트를 포함해야 합니다.
@@ -324,7 +317,7 @@ export default function register(api) {
 - 훅 디렉토리는 일반 훅 구조(`HOOK.md` + `handler.ts`)를 따릅니다.
 - 훅 자격 규칙(OS/bins/env/config 요구 사항)은 그대로 적용됩니다.
 - 플러그인 관리 훅은 `openclaw hooks list` 에 `plugin:<id>` 와 함께 표시됩니다.
-- `openclaw hooks` 를 통해 플러그인 관리 훅을 활성화/비활성화할 수 없습니다. 대신 플러그인을 활성화/비활성화하십시오.
+- `openclaw hooks` 를 통해 플러그인 관리 훅을 활성화/비활성화할 수 없습니다.
 
 ## 프로바이더 플러그인 (모델 인증)
 
@@ -379,8 +372,7 @@ api.registerProvider({
 
 ### 메시징 채널 등록
 
-플러그인은 내장 채널(WhatsApp, Telegram 등)처럼 동작하는 **채널 플러그인**을 등록할 수 있습니다.
-채널 구성은 `channels.<id>` 아래에 위치하며, 채널 플러그인 코드로 검증됩니다.
+플러그인은 내장 채널(WhatsApp, Telegram 등)처럼 동작하는 **채널 플러그인**을 등록할 수 있습니다. 채널 구성은 `channels.<id>` 아래에 위치하며, 채널 플러그인 코드로 검증됩니다.
 
 ```ts
 const myChannel = {
@@ -536,8 +528,7 @@ export default function (api) {
 
 ### 자동 응답 명령 등록
 
-플러그인은 **AI 에이전트를 호출하지 않고** 실행되는 사용자 정의 슬래시 명령을 등록할 수 있습니다.
-이는 토글 명령, 상태 확인, LLM 처리가 필요 없는 빠른 작업에 유용합니다.
+플러그인은 **AI 에이전트를 호출하지 않고** 실행되는 사용자 정의 슬래시 명령을 등록할 수 있습니다. 이는 토글 명령, 상태 확인, LLM 처리가 필요 없는 빠른 작업에 유용합니다.
 
 ```ts
 export default function (api) {
@@ -590,7 +581,7 @@ api.registerCommand({
 - 명령은 전역으로 등록되며 모든 채널에서 동작합니다
 - 명령 이름은 대소문자를 구분하지 않습니다(`/MyStatus` 는 `/mystatus` 과 일치)
 - 명령 이름은 문자로 시작해야 하며 문자, 숫자, 하이픈, 언더스코어만 포함할 수 있습니다
-- 예약된 명령 이름(`help`, `status`, `reset` 등)은 플러그인이 재정의할 수 없습니다
+- 예약된 명령 이름(`help`, `status`, `reset` 등)은 플러그인이 재정의할 수 없습니다 플러그인으로는 재정의할 수 없습니다
 - 플러그인 간 중복 명령 등록은 진단 오류로 실패합니다
 
 ### 백그라운드 서비스 등록

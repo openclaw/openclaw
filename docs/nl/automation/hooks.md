@@ -4,20 +4,13 @@ read_when:
   - Je wilt gebeurtenisgestuurde automatisering voor /new, /reset, /stop en levenscyclusgebeurtenissen van agents
   - Je wilt hooks bouwen, installeren of debuggen
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:25Z
 ---
 
 # Hooks
 
 Hooks bieden een uitbreidbaar gebeurtenisgestuurd systeem voor het automatiseren van acties als reactie op agentopdrachten en gebeurtenissen. Hooks worden automatisch ontdekt vanuit mappen en kunnen via CLI-opdrachten worden beheerd, vergelijkbaar met hoe Skills werken in OpenClaw.
 
-## Oriëntatie
+## Gearchiveerd krijgen
 
 Hooks zijn kleine scripts die worden uitgevoerd wanneer er iets gebeurt. Er zijn twee soorten:
 
@@ -743,7 +736,7 @@ test("my handler works", async () => {
 - **`src/gateway/server-startup.ts`**: Laadt hooks bij het starten van de gateway
 - **`src/auto-reply/reply/commands-core.ts`**: Triggert opdrachtevents
 
-### Detectiestroom
+### Ontdekking Flow
 
 ```
 Gateway startup
@@ -759,7 +752,7 @@ Load handlers from eligible hooks
 Register handlers for events
 ```
 
-### Gebeurtenisstroom
+### Gebeurtenis flow
 
 ```
 User sends /new
@@ -885,7 +878,7 @@ node -e "import('./path/to/handler.ts').then(console.log)"
    Does something useful.
    ```
 
-3. Werk de config bij:
+3. Config bijwerken:
 
    ```json
    {

@@ -3,13 +3,6 @@ summary: "Referencja CLI dla `openclaw agent` (wysłanie jednej tury agenta prze
 read_when:
   - Chcesz uruchomić jedną turę agenta ze skryptów (opcjonalnie dostarczyć odpowiedź)
 title: "agent"
-x-i18n:
-  source_path: cli/agent.md
-  source_hash: dcf12fb94e207c68
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:54Z
 ---
 
 # `openclaw agent`

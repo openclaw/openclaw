@@ -4,13 +4,6 @@ read_when:
   - နိုဒ်သည် ချိတ်ဆက်ထားသော်လည်း camera/canvas/screen/exec ကိရိယာများ မအလုပ်လုပ်ပါက
   - နိုဒ် pairing နှင့် approvals အကြား စိတ်ကူးမော်ဒယ်ကို နားလည်ရန် လိုအပ်ပါက
 title: "နိုဒ် ပြဿနာဖြေရှင်းခြင်း"
-x-i18n:
-  source_path: nodes/troubleshooting.md
-  source_hash: 5c40d298c9feaf8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:40Z
 ---
 
 # နိုဒ် ပြဿနာဖြေရှင်းခြင်း
@@ -57,12 +50,12 @@ openclaw logs --follow
 
 ## Permissions matrix
 
-| Capability                   | iOS                                            | Android                                         | macOS node app               | ပုံမှန် မအောင်မြင်မှု ကုဒ်     |
-| ---------------------------- | ---------------------------------------------- | ----------------------------------------------- | ---------------------------- | ------------------------------ |
-| `camera.snap`၊ `camera.clip` | Camera (+ clip အသံအတွက် mic)                   | Camera (+ clip အသံအတွက် mic)                    | Camera (+ clip အသံအတွက် mic) | `*_PERMISSION_REQUIRED`        |
-| `screen.record`              | Screen Recording (+ mic optional)              | Screen capture prompt (+ mic optional)          | Screen Recording             | `*_PERMISSION_REQUIRED`        |
-| `location.get`               | While Using သို့မဟုတ် Always (mode အပေါ်မူတည်) | Mode အပေါ်မူတည်၍ Foreground/Background location | Location permission          | `LOCATION_PERMISSION_REQUIRED` |
-| `system.run`                 | n/a (node host path)                           | n/a (node host path)                            | Exec approvals လိုအပ်သည်     | `SYSTEM_RUN_DENIED`            |
+| Capability                   | iOS                                                               | Android                                                   | macOS node app                                  | ပုံမှန် မအောင်မြင်မှု ကုဒ်     |
+| ---------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------- | ------------------------------ |
+| `camera.snap`၊ `camera.clip` | Camera (+ clip အသံအတွက် mic)                   | Camera (+ clip အသံအတွက် mic)           | Camera (+ clip အသံအတွက် mic) | `*_PERMISSION_REQUIRED`        |
+| `screen.record`              | Screen Recording (+ mic optional)              | Screen capture prompt (+ mic optional) | Screen Recording                                | `*_PERMISSION_REQUIRED`        |
+| `location.get`               | While Using သို့မဟုတ် Always (mode အပေါ်မူတည်) | Mode အပေါ်မူတည်၍ Foreground/Background location           | Location permission                             | `LOCATION_PERMISSION_REQUIRED` |
+| `system.run`                 | n/a (node host path)                           | n/a (node host path)                   | Exec approvals လိုအပ်သည်                        | `SYSTEM_RUN_DENIED`            |
 
 ## Pairing နှင့် approvals အကြား ကွာခြားချက်
 
@@ -80,8 +73,8 @@ openclaw approvals get --node <idOrNameOrIp>
 openclaw approvals allowlist add --node <idOrNameOrIp> "/usr/bin/uname"
 ```
 
-Pairing မရှိပါက နိုဒ်စက်ပစ္စည်းကို ဦးစွာ အတည်ပြုပါ။
-Pairing အဆင်ပြေသော်လည်း `system.run` မအောင်မြင်ပါက exec approvals/allowlist ကို ပြုပြင်ပါ။
+47. pairing အဆင်ပြေသော်လည်း `system.run` မအောင်မြင်ပါက exec approvals/allowlist ကို ပြင်ဆင်ပါ။
+48. Triggers များကို normalize လုပ်ထားသည် (trim လုပ်ပြီး empty များကို ဖယ်ရှားသည်)။
 
 ## အများဆုံး တွေ့ရသော နိုဒ် အမှားကုဒ်များ
 

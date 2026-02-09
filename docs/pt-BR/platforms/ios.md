@@ -5,13 +5,6 @@ read_when:
   - Executar o app iOS a partir do código-fonte
   - Depurar descoberta do gateway ou comandos de canvas
 title: "App iOS"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:24Z
 ---
 
 # App iOS (Nó)

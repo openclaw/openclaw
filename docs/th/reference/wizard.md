@@ -3,27 +3,22 @@ summary: "เอกสารอ้างอิงฉบับสมบูรณ�
 read_when:
   - เมื่อต้องการค้นหาขั้นตอนหรือแฟล็กเฉพาะของวิซาร์ด
   - เมื่อต้องการทำให้การเริ่มต้นใช้งานเป็นอัตโนมัติด้วยโหมดไม่โต้ตอบ
-  - เมื่อต้องการดีบักพฤติกรรมของวิซาร์ด
+  - 43. การดีบักพฤติกรรมของวิซาร์ด
 title: "เอกสารอ้างอิงวิซาร์ดการเริ่มต้นใช้งาน"
 sidebarTitle: "Wizard Reference"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:02Z
 ---
 
-# เอกสารอ้างอิงวิซาร์ดการเริ่มต้นใช้งาน
+# reference/wizard.md
 
 นี่คือเอกสารอ้างอิงฉบับสมบูรณ์สำหรับวิซาร์ด CLI `openclaw onboard`  
 สำหรับภาพรวมระดับสูง โปรดดู [Onboarding Wizard](/start/wizard)
+44. สำหรับภาพรวมระดับสูง ดู [Onboarding Wizard](/start/wizard)
 
 ## รายละเอียดโฟลว์(โหมดภายในเครื่อง)
 
 <Steps>
-  <Step title="การตรวจจับคอนฟิกที่มีอยู่">
+  <Step title="Existing config detection">
+    
     - หากมี `~/.openclaw/openclaw.json` อยู่ ให้เลือก **เก็บไว้ / แก้ไข / รีเซ็ต**
     - การรันวิซาร์ดซ้ำจะ **ไม่** ลบสิ่งใด เว้นแต่คุณจะเลือก **รีเซ็ต** อย่างชัดเจน
       (หรือส่ง `--reset`)
@@ -33,61 +28,83 @@ x-i18n:
       - คอนฟิกเท่านั้น
       - คอนฟิก + ข้อมูลรับรอง + เซสชัน
       - รีเซ็ตทั้งหมด(รวมถึงลบเวิร์กสเปซ)
-  </Step>
-  <Step title="โมเดล/การยืนยันตัวตน">
-    - **Anthropic API key (แนะนำ)**: ใช้ `ANTHROPIC_API_KEY` หากมีอยู่ หรือถามหาคีย์ จากนั้นบันทึกไว้สำหรับการใช้งานของเดมอน
-    - **Anthropic OAuth (Claude Code CLI)**: บน macOS วิซาร์ดจะตรวจสอบ Keychain item “Claude Code-credentials”(เลือก “Always Allow” เพื่อไม่ให้ launchd ถูกบล็อก); บน Linux/Windows จะนำ `~/.claude/.credentials.json` ที่มีอยู่มาใช้ซ้ำ
-    - **Anthropic token (วาง setup-token)**: รัน `claude setup-token` บนเครื่องใดก็ได้ จากนั้นวางโทเคน(ตั้งชื่อได้; เว้นว่าง=ค่าเริ่มต้น)
-    - **OpenAI Code (Codex) subscription (Codex CLI)**: หากมี `~/.codex/auth.json` อยู่ วิซาร์ดสามารถนำมาใช้ซ้ำได้
-    - **OpenAI Code (Codex) subscription (OAuth)**: โฟลว์ผ่านเบราว์เซอร์; วาง `code#state`
-      - ตั้งค่า `agents.defaults.model` เป็น `openai-codex/gpt-5.2` เมื่อยังไม่ตั้งค่าโมเดลหรือเป็น `openai/*`
-    - **OpenAI API key**: ใช้ `OPENAI_API_KEY` หากมีอยู่ หรือถามหาคีย์ จากนั้นบันทึกไปยัง `~/.openclaw/.env` เพื่อให้ launchd อ่านได้
-    - **xAI (Grok) API key**: ถามหา `XAI_API_KEY` และตั้งค่า xAI เป็นผู้ให้บริการโมเดล
-    - **OpenCode Zen (พร็อกซีหลายโมเดล)**: ถามหา `OPENCODE_API_KEY` (หรือ `OPENCODE_ZEN_API_KEY` รับได้ที่ https://opencode.ai/auth)
-    - **API key**: จัดเก็บคีย์ให้คุณ
-    - **Vercel AI Gateway (พร็อกซีหลายโมเดล)**: ถามหา `AI_GATEWAY_API_KEY`
-    - รายละเอียดเพิ่มเติม: [Vercel AI Gateway](/providers/vercel-ai-gateway)
-    - **Cloudflare AI Gateway**: ถามหา Account ID, Gateway ID และ `CLOUDFLARE_AI_GATEWAY_API_KEY`
-    - รายละเอียดเพิ่มเติม: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
-    - **MiniMax M2.1**: เขียนคอนฟิกอัตโนมัติ
-    - รายละเอียดเพิ่มเติม: [MiniMax](/providers/minimax)
-    - **Synthetic (เข้ากันได้กับ Anthropic)**: ถามหา `SYNTHETIC_API_KEY`
-    - รายละเอียดเพิ่มเติม: [Synthetic](/providers/synthetic)
-    - **Moonshot (Kimi K2)**: เขียนคอนฟิกอัตโนมัติ
-    - **Kimi Coding**: เขียนคอนฟิกอัตโนมัติ
-    - รายละเอียดเพิ่มเติม: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
-    - **ข้าม**: ยังไม่ตั้งค่าการยืนยันตัวตน
-    - เลือกโมเดลเริ่มต้นจากตัวเลือกที่ตรวจพบ(หรือป้อนผู้ให้บริการ/โมเดลด้วยตนเอง)
-    - วิซาร์ดจะตรวจสอบโมเดลและแจ้งเตือนหากโมเดลที่ตั้งค่าไม่รู้จักหรือขาดการยืนยันตัวตน
-    - ข้อมูลรับรอง OAuth อยู่ที่ `~/.openclaw/credentials/oauth.json`; โปรไฟล์การยืนยันตัวตนอยู่ที่ `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`(API keys + OAuth)
+  
+    45. - การรันวิซาร์ดซ้ำจะ **ไม่** ลบสิ่งใด เว้นแต่คุณจะเลือก **Reset** อย่างชัดเจน
+      (หรือส่ง `--reset`)
+    46. - หากการตั้งค่าไม่ถูกต้องหรือมีคีย์แบบเดิม วิซาร์ดจะหยุดและขอให้คุณรัน
+      `openclaw doctor` ก่อนดำเนินการต่อ
+    47. - Reset ใช้ `trash` (ไม่ใช้ `rm` เด็ดขาด) และมีขอบเขตให้เลือก:
+      - เฉพาะ config
+      - Config + credentials + sessions
+      - รีเซ็ตทั้งหมด (รวมถึงลบ workspace)  
+</Step>
+  <Step title="Model/Auth">
+    48. - **Anthropic API key (แนะนำ)**: ใช้ `ANTHROPIC_API_KEY` หากมีอยู่ หรือจะขอให้ป้อนคีย์ จากนั้นบันทึกไว้สำหรับการใช้งานของดีมอน
+    49. - **Anthropic OAuth (Claude Code CLI)**: บน macOS วิซาร์ดจะตรวจสอบรายการ Keychain "Claude Code-credentials" (เลือก "Always Allow" เพื่อไม่ให้การเริ่มต้นด้วย launchd ถูกบล็อก); บน Linux/Windows จะนำ `~/.claude/.credentials.json` มาใช้ซ้ำหากมีอยู่
+    50. - **Anthropic token (วาง setup-token)**: รัน `claude setup-token` บนเครื่องใดก็ได้ จากนั้นวางโทเคน (คุณสามารถตั้งชื่อได้; เว้นว่าง = ค่าเริ่มต้น)
+    - **OpenAI Code (Codex) subscription (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
+    - **OpenAI Code (Codex) subscription (OAuth)**: browser flow; paste the `code#state`.
+      - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+    - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.openclaw/.env` so launchd can read it.
+    - **xAI (Grok) API key**: prompts for `XAI_API_KEY` and configures xAI as a model provider.
+    - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
+    - **API key**: stores the key for you.
+    - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
+    - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
+    - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
+    - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
+    - **MiniMax M2.1**: config is auto-written.
+    - More detail: [MiniMax](/providers/minimax)
+    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
+    - More detail: [Synthetic](/providers/synthetic)
+    - **Moonshot (Kimi K2)**: config is auto-written.
+    - **Kimi Coding**: config is auto-written.
+    - More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+    - **Skip**: no auth configured yet.
+    - Pick a default model from detected options (or enter provider/model manually).
+    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
+    - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`(API keys + OAuth)
     - รายละเอียดเพิ่มเติม: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    
+    - รายละเอียดเพิ่มเติม: [/concepts/oauth](/concepts/oauth)    
+<Note>
     เคล็ดลับสำหรับโหมด headless/เซิร์ฟเวอร์: ทำ OAuth บนเครื่องที่มีเบราว์เซอร์ให้เสร็จ จากนั้นคัดลอก
     `~/.openclaw/credentials/oauth.json` (หรือ `$OPENCLAW_STATE_DIR/credentials/oauth.json`) ไปยัง
     โฮสต์Gateway
     </Note>
   </Step>
-  <Step title="เวิร์กสเปซ">
+  <Step title="Workspace">
+    - Default `~/.openclaw/workspace` (configurable).
+    - Seeds the workspace files needed for the agent bootstrap ritual.
+    
     - ค่าเริ่มต้น `~/.openclaw/workspace`(ปรับได้)
     - เตรียมไฟล์เวิร์กสเปซที่จำเป็นสำหรับพิธีบูตสแตรปเอเจนต์
     - โครงสร้างเวิร์กสเปซเต็มรูปแบบ + คู่มือสำรองข้อมูล: [Agent workspace](/concepts/agent-workspace)
-  </Step>
+    
+</Step>
   <Step title="Gateway">
+    - Port, bind, auth mode, tailscale exposure.
+    
     - พอร์ต การ bind โหมดการยืนยันตัวตน การเปิดให้เข้าถึงผ่าน Tailscale
     - คำแนะนำด้านการยืนยันตัวตน: ควรใช้ **Token** แม้กับ loopback เพื่อให้ไคลเอนต์ WS ภายในเครื่องต้องยืนยันตัวตน
     - ปิดการยืนยันตัวตนเฉพาะเมื่อคุณเชื่อถือทุกโปรเซสภายในเครื่องอย่างสมบูรณ์
     - การ bind ที่ไม่ใช่ loopback ยังต้องมีการยืนยันตัวตน
+  
+    - Disable auth only if you fully trust every local process.
+    - Non‑loopback binds still require auth.
   </Step>
-  <Step title="ช่องทาง">
-    - [WhatsApp](/channels/whatsapp): เข้าสู่ระบบด้วย QR(ไม่บังคับ)
-    - [Telegram](/channels/telegram): โทเคนบอต
-    - [Discord](/channels/discord): โทเคนบอต
-    - [Google Chat](/channels/googlechat): JSON ของ service account + audience ของ webhook
-    - [Mattermost](/channels/mattermost)(ปลั๊กอิน): โทเคนบอต + base URL
-    - [Signal](/channels/signal): ติดตั้ง `signal-cli` (ไม่บังคับ) + คอนฟิกบัญชี
-    - [BlueBubbles](/channels/bluebubbles): **แนะนำสำหรับ iMessage**; URL เซิร์ฟเวอร์ + รหัสผ่าน + webhook
-    - [iMessage](/channels/imessage): เส้นทาง CLI `imsg` แบบเดิม + การเข้าถึงฐานข้อมูล
-    - ความปลอดภัย DM: ค่าเริ่มต้นคือการจับคู่ DM แรกจะส่งรหัส ให้อนุมัติผ่าน `openclaw pairing approve <channel> <code>` หรือใช้รายการอนุญาต
+  <Step title="Channels">
+    - [WhatsApp](/channels/whatsapp): optional QR login.
+    - [Telegram](/channels/telegram): bot token.
+    - [Discord](/channels/discord): bot token.
+    - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
+    - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
+    - [Signal](/channels/signal): optional `signal-cli` install + account config.
+    - [BlueBubbles](/channels/bluebubbles): **recommended for iMessage**; server URL + password + webhook.
+    - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
+    - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel><code>` หรือใช้รายการอนุญาต
+  </Step><code>` or use allowlists.
+  <code>` หรือใช้รายการอนุญาต
   </Step>
   <Step title="การติดตั้งเดมอน">
     - macOS: LaunchAgent
@@ -109,11 +126,32 @@ x-i18n:
   <Step title="เสร็จสิ้น">
     - สรุป + ขั้นตอนถัดไป รวมถึงแอป iOS/Android/macOS สำหรับฟีเจอร์เพิ่มเติม
   </Step>
+
+    - Linux (and Windows via WSL2): systemd user unit
+      - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
+      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
+    - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
+  </Step>
+  <Step title="Health check">
+    - Starts the Gateway (if needed) and runs `openclaw health`.
+    - Tip: `openclaw status --deep` adds gateway health probes to status output (requires a reachable gateway).
+  </Step>
+  <Step title="Skills (recommended)">
+    - Reads the available skills and checks requirements.
+    - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
+    - Installs optional dependencies (some use Homebrew on macOS).
+  </Step>
+  <Step title="Finish">
+    - Summary + next steps, including iOS/Android/macOS apps for extra features.
+  </Step>
 </Steps>
 
 <Note>
+
 หากไม่ตรวจพบ GUI วิซาร์ดจะแสดงคำแนะนำการทำ SSH port-forward สำหรับ Control UI แทนการเปิดเบราว์เซอร์
 หากไม่มีไฟล์ assets ของ Control UI วิซาร์ดจะพยายามสร้างขึ้นใหม่; ทางเลือกสำรองคือ `pnpm ui:build`(ติดตั้งไลบรารี UI อัตโนมัติ)
+
+If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 </Note>
 
 ## โหมดไม่โต้ตอบ
@@ -135,11 +173,13 @@ openclaw onboard --non-interactive \
 เพิ่ม `--json` เพื่อรับสรุปแบบเครื่องอ่านได้
 
 <Note>
+
 `--json` **ไม่ได้** หมายถึงโหมดไม่โต้ตอบ ใช้ `--non-interactive`(และ `--workspace`) สำหรับสคริปต์
+ Use `--non-interactive` (and `--workspace`) for scripts.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="ตัวอย่าง Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +189,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +199,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +209,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +221,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +231,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +241,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="ตัวอย่าง OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -226,6 +266,7 @@ openclaw agents add work \
 
 ## Gateway wizard RPC
 
+The Gateway exposes the wizard flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
 Gateway เปิดเผยโฟลว์ของวิซาร์ดผ่าน RPC(`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`)  
 ไคลเอนต์(แอป macOS, Control UI)สามารถเรนเดอร์ขั้นตอนได้โดยไม่ต้องนำตรรกะการเริ่มต้นใช้งานไปทำใหม่
 
@@ -263,8 +304,9 @@ Gateway เปิดเผยโฟลว์ของวิซาร์ดผ่
 
 ข้อมูลรับรอง WhatsApp จะอยู่ภายใต้ `~/.openclaw/credentials/whatsapp/<accountId>/`  
 เซสชันจะถูกจัดเก็บภายใต้ `~/.openclaw/agents/<agentId>/sessions/`
+Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
-บางช่องทางถูกจัดส่งในรูปแบบปลั๊กอิน เมื่อคุณเลือกช่องทางหนึ่งระหว่างการเริ่มต้นใช้งาน วิซาร์ด
+Some channels are delivered as plugins. บางช่องทางถูกจัดส่งในรูปแบบปลั๊กอิน เมื่อคุณเลือกช่องทางหนึ่งระหว่างการเริ่มต้นใช้งาน วิซาร์ด
 จะขอให้ติดตั้งก่อน(npm หรือพาธภายในเครื่อง)จึงจะสามารถตั้งค่าได้
 
 ## เอกสารที่เกี่ยวข้อง

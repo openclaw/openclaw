@@ -4,13 +4,6 @@ read_when:
   - Mise en place de la surveillance ou d’alertes d’expiration d’authentification
   - Automatisation des vérifications de rafraîchissement OAuth de Claude Code / Codex
 title: "Surveillance de l’authentification"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:19Z
 ---
 
 # Surveillance de l’authentification

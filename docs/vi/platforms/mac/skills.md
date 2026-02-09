@@ -4,13 +4,6 @@ read_when:
   - Cập nhật giao diện cài đặt Skills trên macOS
   - Thay đổi cơ chế kiểm soát hoặc hành vi cài đặt Skills
 title: "Skills"
-x-i18n:
-  source_path: platforms/mac/skills.md
-  source_hash: ecd5286bbe49eed8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:41Z
 ---
 
 # Skills (macOS)
@@ -32,7 +25,7 @@ x-i18n:
 
 ## Khóa Env/API
 
-- Ứng dụng lưu trữ khóa trong `~/.openclaw/openclaw.json` dưới `skills.entries.<skillKey>`.
+- The app stores keys in `~/.openclaw/openclaw.json` under `skills.entries.<skillKey>`.
 - `skills.update` vá `enabled`, `apiKey`, và `env`.
 
 ## Chế độ từ xa

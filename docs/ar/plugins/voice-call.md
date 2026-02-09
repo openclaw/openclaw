@@ -1,16 +1,9 @@
 ---
 summary: "ملحق المكالمات الصوتية: مكالمات صادرة وواردة عبر Twilio/Telnyx/Plivo (تثبيت الملحق + التهيئة + CLI)"
 read_when:
-  - "تريد إجراء مكالمة صوتية صادرة من OpenClaw"
-  - "تقوم بتهيئة أو تطوير ملحق المكالمات الصوتية"
+  - تريد إجراء مكالمة صوتية صادرة من OpenClaw
+  - تقوم بتهيئة أو تطوير ملحق المكالمات الصوتية
 title: "ملحق المكالمات الصوتية"
-x-i18n:
-  source_path: plugins/voice-call.md
-  source_hash: 46d05a5912b785d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:40Z
 ---
 
 # المكالمات الصوتية (ملحق)
@@ -155,7 +148,7 @@ cd ./extensions/voice-call && pnpm install
 }
 ```
 
-## تحويل النص إلى كلام للمكالمات
+## TTS للمكالمات
 
 تستخدم المكالمات الصوتية تهيئة `messages.tts` الأساسية (OpenAI أو ElevenLabs) لـ
 بثّ الكلام أثناء المكالمات. يمكنك تجاوزها ضمن تهيئة الملحق

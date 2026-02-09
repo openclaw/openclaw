@@ -4,18 +4,11 @@ read_when:
   - Du ønsker baggrunds-/parallelarbejde via agenten
   - Du ændrer sessions_spawn eller politik for sub-agent-værktøjer
 title: "Sub-agenter"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:53Z
 ---
 
 # Sub-agenter
 
-Sub-agenter er baggrundsagentkørsler, der startes fra en eksisterende agentkørsel. De kører i deres egen session (`agent:<agentId>:subagent:<uuid>`) og **annoncerer**, når de er færdige, deres resultat tilbage til anmoderens chatkanal.
+Subagenter er baggrundsagentur kører opfostrede fra en eksisterende agent kørsel. De kører i deres egen session (`agent:<agentId>:subagent:<uuid>`) og, når færdig, \*\*annoncere \*\* deres resultat tilbage til anmoderen chat kanal.
 
 ## Slash-kommando
 
@@ -36,9 +29,9 @@ Primære mål:
 - Gøre værktøjsfladen svær at misbruge: sub-agenter får **ikke** sessionværktøjer som standard.
 - Undgå indlejret fan-out: sub-agenter kan ikke starte sub-agenter.
 
-Omkostningsnote: hver sub-agent har sin **egen** kontekst og tokenforbrug. For tunge eller gentagne
-opgaver bør du sætte en billigere model for sub-agenter og beholde din hovedagent på en model med højere kvalitet.
-Du kan konfigurere dette via `agents.defaults.subagents.model` eller pr. agent-override.
+Anskaffelsesbemærkning: Hver underagent har sin \*\* egen\*\* kontekst og token brug. For tunge eller gentagne
+opgaver, indstille en billigere model for sub-agenter og holde din vigtigste agent på en højere kvalitet model.
+Du kan konfigurere dette via `agents.defaults.subagents.model` eller per-agent overrides.
 
 ## Værktøj
 
@@ -61,7 +54,7 @@ Værktøjsparametre:
 
 Tilladelsesliste:
 
-- `agents.list[].subagents.allowAgents`: liste over agent-id’er, der kan målrettes via `agentId` (`["*"]` for at tillade alle). Standard: kun anmoderagenten.
+- `agents.list[].subagents.allowAgents`: liste over agenter ids, der kan målrettes via `agentId` (`["*"]` for at tillade alle). Standard: kun anmoderen.
 
 Discovery:
 
@@ -70,10 +63,10 @@ Discovery:
 Auto-arkivering:
 
 - Sub-agentsessioner arkiveres automatisk efter `agents.defaults.subagents.archiveAfterMinutes` (standard: 60).
-- Arkivering bruger `sessions.delete` og omdøber transkriptet til `*.deleted.<timestamp>` (samme mappe).
+- Arkiv bruger `sessions.delete` og omdøber udskriften til `*.deleted.<timestamp>` (samme mappe).
 - `cleanup: "delete"` arkiverer straks efter announce (bevarer stadig transkriptet via omdøbning).
 - Auto-arkivering er best-effort; ventende timere går tabt, hvis gatewayen genstarter.
-- `runTimeoutSeconds` auto-arkiverer **ikke**; den stopper kun kørslen. Sessionen forbliver indtil auto-arkivering.
+- `runTimeoutSeconds` gør **ikke** auto-arkiv; det stopper kun kørslen. Sessionen forbliver indtil auto-arkivering.
 
 ## Autentificering
 
@@ -83,7 +76,7 @@ Sub-agent-autentificering afgøres af **agent-id**, ikke af sessionstype:
 - Autentificeringslageret indlæses fra den agents `agentDir`.
 - Hovedagentens auth-profiler flettes ind som **fallback**; agentprofiler tilsidesætter hovedprofiler ved konflikter.
 
-Bemærk: sammenfletningen er additiv, så hovedprofiler er altid tilgængelige som fallback. Fuldt isoleret auth pr. agent understøttes endnu ikke.
+Bemærk: Sammenlægningen er additiv, så hovedprofiler er altid tilgængelige som tilbagefald. Fuldt isoleret auth per agent understøttes ikke endnu.
 
 ## Announce
 
@@ -101,7 +94,7 @@ Sub-agenter rapporterer tilbage via et announce-trin:
 
 Announce-payloads inkluderer en statistiklinje til sidst (selv når den er indpakket):
 
-- Køretid (f.eks. `runtime 5m12s`)
+- Runtime (fx, `runtime 5m12s`)
 - Tokenforbrug (input/output/i alt)
 - Estimeret omkostning, når modelpriser er konfigureret (`models.providers.*.models[].cost`)
 - `sessionKey`, `sessionId` og transkriptsti (så hovedagenten kan hente historik via `sessions_history` eller inspicere filen på disk)
@@ -152,7 +145,7 @@ Sub-agenter bruger en dedikeret in-process kø-bane:
 
 ## Begrænsninger
 
-- Sub-agent-announce er **best-effort**. Hvis gatewayen genstarter, går ventende “announce tilbage”-arbejde tabt.
+- Underagent annoncere er **bedst indsats**. Hvis gateway genstarter, indtil “annoncere tilbage” arbejde er tabt.
 - Sub-agenter deler stadig de samme gateway-procesressourcer; betragt `maxConcurrent` som en sikkerhedsventil.
 - `sessions_spawn` er altid ikke-blokerende: den returnerer `{ status: "accepted", runId, childSessionKey }` med det samme.
 - Sub-agentkontekst injicerer kun `AGENTS.md` + `TOOLS.md` (ingen `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md` eller `BOOTSTRAP.md`).

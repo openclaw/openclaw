@@ -1,21 +1,14 @@
 ---
 summary: "उच्च-सिग्नल PR कैसे सबमिट करें"
 title: "PR सबमिट करना"
-x-i18n:
-  source_path: help/submitting-a-pr.md
-  source_hash: 277b0f51b948d1a9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:20Z
 ---
 
-अच्छे PR की समीक्षा करना आसान होता है: समीक्षकों को जल्दी से उद्देश्य समझ आ जाना चाहिए, व्यवहार की पुष्टि कर सकें, और बदलावों को सुरक्षित रूप से मर्ज कर सकें। यह मार्गदर्शिका मानव और LLM समीक्षा के लिए संक्षिप्त, उच्च-सिग्नल सबमिशन को कवर करती है।
+Good PRs are easy to review: reviewers should quickly know the intent, verify behavior, and land changes safely. This guide covers concise, high-signal submissions for human and LLM review.
 
 ## एक अच्छा PR क्या बनाता है
 
 - [ ] समस्या, उसका महत्व, और किए गए बदलाव को समझाएँ।
-- [ ] बदलावों को केंद्रित रखें। व्यापक रिफैक्टर से बचें।
+- [ ] Keep changes focused. Avoid broad refactors.
 - [ ] उपयोगकर्ता-परक/विन्यास/डिफ़ॉल्ट में हुए बदलावों का सार दें।
 - [ ] टेस्ट कवरेज, स्किप्स, और उनके कारण सूचीबद्ध करें।
 - [ ] प्रमाण जोड़ें: लॉग्स, स्क्रीनशॉट्स, या रिकॉर्डिंग्स (UI/UX)।
@@ -25,7 +18,7 @@ x-i18n:
 - [ ] दावों को प्रमाण या अवलोकन पर आधारित रखें।
 - [ ] अच्छा शीर्षक: क्रिया + दायरा + परिणाम (उदा., `Docs: add PR and issue templates`)।
 
-संक्षिप्त रहें; संक्षिप्त समीक्षा > व्याकरण। जो अनुभाग लागू न हों, उन्हें छोड़ दें।
+Be concise; concise review > grammar. Omit any non-applicable sections.
 
 ### आधारभूत सत्यापन कमांड्स (अपने बदलाव के लिए विफलताओं को चलाएँ/ठीक करें)
 
@@ -53,7 +46,7 @@ x-i18n:
 - [ ] Perf: पहले/बाद के मेट्रिक्स जोड़ें, और मापन विधि बताएं।
 - [ ] UX/UI: स्क्रीनशॉट/वीडियो, पहुँचयोग्यता पर प्रभाव नोट करें।
 - [ ] Infra/Build: परिवेश/सत्यापन।
-- [ ] Security: जोखिम, repro, सत्यापन का सार; कोई संवेदनशील डेटा नहीं। केवल ठोस दावे।
+- [ ] Security: Summarize risk, repro, verification, no sensitive data. Grounded claims only.
 
 ## चेकलिस्ट
 

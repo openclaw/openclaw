@@ -3,13 +3,6 @@ summary: "Toegang en authenticatie voor het Gateway-dashboard (Control UI)"
 read_when:
   - Het wijzigen van dashboardauthenticatie of blootstellingsmodi
 title: "Dashboard"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:49Z
 ---
 
 # Dashboard (Control UI)

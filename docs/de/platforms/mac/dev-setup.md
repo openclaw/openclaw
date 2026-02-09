@@ -1,15 +1,8 @@
 ---
-summary: „Einrichtungsleitfaden für Entwickler, die an der OpenClaw macOS-App arbeiten“
+summary: "„Einrichtungsleitfaden für Entwickler, die an der OpenClaw macOS-App arbeiten“"
 read_when:
   - Einrichten der macOS-Entwicklungsumgebung
-title: „macOS-Entwickler-Setup“
-x-i18n:
-  source_path: platforms/mac/dev-setup.md
-  source_hash: 52d3cadae980ae62
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:52Z
+title: "„macOS-Entwickler-Setup“"
 ---
 
 # macOS-Entwickler-Setup
@@ -23,7 +16,7 @@ Stellen Sie vor dem Build der App sicher, dass Folgendes installiert ist:
 1. **Xcode 26.2+**: Erforderlich für die Swift-Entwicklung.
 2. **Node.js 22+ & pnpm**: Erforderlich für Gateway, CLI und Packaging-Skripte.
 
-## 1. Abhängigkeiten installieren
+## 1) Abhängigkeiten installieren
 
 Installieren Sie die projektweiten Abhängigkeiten:
 

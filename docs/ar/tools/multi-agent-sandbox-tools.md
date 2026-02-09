@@ -3,13 +3,6 @@ summary: "Sandbox لكل وكيل + قيود الأدوات، الأسبقية،
 title: Sandbox والأدوات متعددة الوكلاء
 read_when: "عندما تريد sandboxing لكل وكيل أو سياسات سماح/منع أدوات لكل وكيل ضمن Gateway متعدد الوكلاء."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:58Z
 ---
 
 # تهيئة Sandbox والأدوات متعددة الوكلاء
@@ -189,7 +182,7 @@ x-i18n:
 
 ---
 
-## أسبقية التهيئة
+## سابقة الإعدادات
 
 عند وجود تهيئات عالمية (`agents.defaults.*`) وخاصة بالوكيل (`agents.list[].*`):
 
@@ -243,7 +236,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 - `group:nodes`: `nodes`
 - `group:openclaw`: جميع أدوات OpenClaw المدمجة (باستثناء إضافات الموفّرين)
 
-### الوضع المُرتفع
+### وضع Elevated
 
 `tools.elevated` هو الأساس العالمي (قائمة سماح تعتمد على المُرسِل). يمكن لـ `agents.list[].tools.elevated` تقييد الوضع المُرتفع أكثر لوكلاء محددين (يجب أن يسمح كلاهما).
 

@@ -1,18 +1,11 @@
 ---
 summary: "Her OpenClaw dokümanına bağlantı veren merkezler"
 read_when:
-  - Dokümantasyonun eksiksiz bir haritasını istediğinizde
-title: "Doküman Merkezleri"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:52Z
+  - Belgelerin tamamının bir haritasını istiyorsun
+title: "Dokümantasyon Merkezleri"
 ---
 
-# Doküman merkezleri
+# Dokümantasyon merkezleri
 
 <Note>
 OpenClaw’a yeniyseniz, [Başlarken](/start/getting-started) ile başlayın.

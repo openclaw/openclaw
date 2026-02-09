@@ -5,13 +5,6 @@ read_when:
   - تشغيل تطبيق iOS من الشيفرة المصدرية
   - تصحيح اكتشاف Gateway أو أوامر اللوحة
 title: "تطبيق iOS"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:26Z
 ---
 
 # تطبيق iOS (عُقدة)
@@ -49,7 +42,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-4. تحقّق من الاتصال:
+4. التحقق من الاتصال:
 
 ```bash
 openclaw nodes status
@@ -85,7 +78,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"ur
 - تنتقل عُقدة iOS تلقائيًا إلى A2UI عند الاتصال عندما يتم الإعلان عن عنوان URL لمضيف اللوحة.
 - عُد إلى الهيكل الافتراضي المدمج باستخدام `canvas.navigate` و`{"url":""}`.
 
-### تقييم اللوحة / لقطة
+### قماش فاس / لقطة
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.eval --params '{"javaScript":"(() => { const {ctx} = window.__openclaw; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'

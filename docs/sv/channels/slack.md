@@ -2,13 +2,6 @@
 summary: "Slack-konfiguration för socket- eller HTTP-webhook-läge"
 read_when: "Konfigurera Slack eller felsöka Slack socket/HTTP-läge"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:58Z
 ---
 
 # Slack
@@ -38,9 +31,9 @@ Minimal konfiguration:
 ### Konfigurering
 
 1. Skapa en Slack-app (From scratch) på [https://api.slack.com/apps](https://api.slack.com/apps).
-2. **Socket Mode** → slå på. Gå sedan till **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** med scopet `connections:write`. Kopiera **App Token** (`xapp-...`).
-3. **OAuth & Permissions** → lägg till bot-token-scopes (använd manifestet nedan). Klicka **Install to Workspace**. Kopiera **Bot User OAuth Token** (`xoxb-...`).
-4. Valfritt: **OAuth & Permissions** → lägg till **User Token Scopes** (se den skrivskyddade listan nedan). Installera om appen och kopiera **User OAuth Token** (`xoxp-...`).
+2. **Sockelläge** → växla på. Gå sedan till **Grundläggande information** → **App-Level Tokens** → **Generera token och omfattning** med scope `connections:write`. Kopiera **App Token** (`xapp-...`).
+3. **OAuth & Behörigheter** → lägg till bot token scopes (använd manifestet nedan). Klicka **Installera till Workspace**. Kopiera **Bot User OAuth Token** (`xoxb-...`).
+4. Valfritt: **OAuth & Permissions** → lägg till **Användartoken Scopes** (se listan nedan för skrivskydd). Installera om appen och kopiera **User OAuth Token** (`xoxp-...`).
 5. **Event Subscriptions** → aktivera events och prenumerera på:
    - `message.*` (inkluderar redigeringar/borttagningar/trådsändningar)
    - `app_mention`
@@ -49,7 +42,7 @@ Minimal konfiguration:
    - `channel_rename`
    - `pin_added`, `pin_removed`
 6. Bjud in boten till kanaler som du vill att den ska läsa.
-7. Slash Commands → skapa `/openclaw` om du använder `channels.slack.slashCommand`. Om du aktiverar inbyggda kommandon, lägg till ett slash-kommando per inbyggt kommando (samma namn som `/help`). Inbyggda är som standard avstängda för Slack om du inte sätter `channels.slack.commands.native: true` (global `commands.native` är `"auto"` vilket lämnar Slack avstängt).
+7. Slash kommandon → skapa `/openclaw` om du använder `channels.slack.slashCommand`. Om du aktiverar inbyggda kommandon, lägg till ett snedstreck kommando per inbyggt kommando (samma namn som `/help`). Native defaults to off for Slack if you set `channels.slack.commands.native: true` (global `commands.native` är `"auto"` som lämnar Slack av).
 8. App Home → aktivera **Messages Tab** så att användare kan DM:a boten.
 
 Använd manifestet nedan så att scopes och events hålls synkroniserade.
@@ -79,14 +72,14 @@ Eller via konfig:
 
 ### Användartoken (valfritt)
 
-OpenClaw kan använda en Slack-användartoken (`xoxp-...`) för läsoperationer (historik,
-nålar, reaktioner, emoji, medlemsinfo). Som standard förblir detta skrivskyddat: läsningar
-föredrar användartoken när den finns, och skrivningar använder fortfarande bot-token om du inte
-uttryckligen väljer annat. Även med `userTokenReadOnly: false` förblir bot-token
-föredragen för skrivningar när den är tillgänglig.
+OpenClaw kan använda en Slack användartoken (`xoxp-...`) för läsoperationer (historia,
+pins, reaktioner, emoji, medlemsinfo). Som standard förblir detta skrivskyddad: läser
+föredrar användaren token när närvarande, och skriver fortfarande använda bot token om inte
+du uttryckligen väljer in. Även med `userTokenReadOnly: false`, bottoken förblir
+föredras för skriver när den är tillgänglig.
 
-Användartoken konfigureras i konfigfilen (ingen stöd för miljövariabler). För
-flera konton, sätt `channels.slack.accounts.<id>.userToken`.
+Användartokens är konfigurerade i konfigurationsfilen (ingen env var support). För
+multi-konto, ange `channels.slack.accounts.<id>.userToken`.
 
 Exempel med bot + app + användartoken:
 
@@ -123,19 +116,19 @@ Exempel med userTokenReadOnly explicit satt (tillåt skrivningar med användarto
 
 - Läsoperationer (historik, reaktionslista, nållista, emojilista, medlemsinfo,
   sökning) föredrar användartoken när den är konfigurerad, annars bot-token.
-- Skrivoperationer (skicka/redigera/ta bort meddelanden, lägga till/ta bort reaktioner, nåla/avnåla,
-  filuppladdningar) använder bot-token som standard. Om `userTokenReadOnly: false` och
-  ingen bot-token är tillgänglig, faller OpenClaw tillbaka till användartoken.
+- Skriv operationer (send/edit/delete messages, add/remove reactions, pin/unpin,
+  file uploads) använd bot-token som standard. Om `userTokenReadOnly: false` och
+  finns ingen bot token tillgänglig, faller OpenClaw tillbaka till användartoken.
 
 ### Historikkontext
 
 - `channels.slack.historyLimit` (eller `channels.slack.accounts.*.historyLimit`) styr hur många senaste kanal-/gruppmeddelanden som bäddas in i prompten.
-- Faller tillbaka till `messages.groupChat.historyLimit`. Sätt `0` för att inaktivera (standard 50).
+- Faller tillbaka till `messages.groupChat.historyLimit`. Sätt `0` till att inaktivera (standard 50).
 
 ## HTTP-läge (Events API)
 
-Använd HTTP-webhook-läge när din Gateway är nåbar av Slack över HTTPS (typiskt för serverdistributioner).
-HTTP-läge använder Events API + Interactivity + Slash Commands med en delad request-URL.
+Använd HTTP webhook-läge när din Gateway kan nås av Slack över HTTPS (typiskt för serverdistributioner).
+HTTP-läge använder Händelser API + Interactivity + Slash kommandon med en delad begäran URL.
 
 ### Konfigurering (HTTP-läge)
 
@@ -165,13 +158,13 @@ Exempel på request-URL:
 }
 ```
 
-HTTP-läge med flera konton: sätt `channels.slack.accounts.<id>.mode = "http"` och ange en unik
-`webhookPath` per konto så att varje Slack-app kan peka på sin egen URL.
+Multi-konto HTTP-läge: sätt `channels.slack.accounts.<id>.mode = "http"` och ge en unik
+`webhookPath` per konto så att varje Slack app kan peka på sin egen URL.
 
 ### Manifest (valfritt)
 
-Använd detta Slack-app-manifest för att skapa appen snabbt (justera namn/kommando om du vill). Inkludera
-användarscopes om du planerar att konfigurera en användartoken.
+Använd denna Slack app manifest för att skapa appen snabbt (justera namnet/kommandot om du vill). Inkludera
+användarens omfattning om du planerar att konfigurera en användartoken.
 
 ```json
 {
@@ -261,12 +254,12 @@ användarscopes om du planerar att konfigurera en användartoken.
 }
 ```
 
-Om du aktiverar inbyggda kommandon, lägg till en `slash_commands`-post per kommando du vill exponera (som matchar listan `/help`). Åsidosätt med `channels.slack.commands.native`.
+Om du aktiverar inhemska kommandon, lägg till en `slash_commands`-post per kommando som du vill avslöja (matchar listan` /help`). Åsidosätt med `channels.slack.commands.native`.
 
 ## Scopes (aktuella vs valfria)
 
-Slacks Conversations API är typ-scopat: du behöver bara scopes för de
-konversationstyper du faktiskt använder (channels, groups, im, mpim). Se
+Slack's Conversations API är typ-scoped: du behöver bara omfattningen för de
+konversationstyper du faktiskt rör (kanaler, grupper, im, mpim). Se
 [https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) för översikten.
 
 ### Bot-token-scopes (krävs)
@@ -316,7 +309,7 @@ Lägg till dessa under **User Token Scopes** om du konfigurerar `channels.slack.
 
 ## Konfig
 
-Slack använder endast Socket-läge (ingen HTTP-webhook-server). Ange båda token:
+Slack använder endast Socket Mode (ingen HTTP webhook server). Ge båda tokens:
 
 ```json
 {
@@ -370,9 +363,9 @@ Token kan också anges via miljövariabler:
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
-Ack-reaktioner styrs globalt via `messages.ackReaction` +
+Ack reaktioner kontrolleras globalt via `messages.ackReaction` +
 `messages.ackReactionScope`. Använd `messages.removeAckAfterReply` för att rensa
-ack-reaktionen efter att boten svarar.
+ack-reaktionen efter att botten svarat.
 
 ## Begränsningar
 
@@ -384,11 +377,11 @@ ack-reaktionen efter att boten svarar.
 
 Som standard svarar OpenClaw i huvudkanalen. Använd `channels.slack.replyToMode` för att styra automatisk trådning:
 
-| Läge    | Beteende                                                                                                                                                                    |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Standard.** Svara i huvudkanalen. Tråda endast om det utlösande meddelandet redan var i en tråd.                                                                          |
-| `first` | Första svaret går till tråden (under det utlösande meddelandet), efterföljande svar går till huvudkanalen. Användbart för att behålla kontext synlig och undvika trådskräp. |
-| `all`   | Alla svar går till tråden. Håller konversationer samlade men kan minska synligheten.                                                                                        |
+| Läge    | Beteende                                                                                                                                                                                                                                |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **Standard.** Svara i huvudkanalen. Endast tråd om det utlösande meddelandet redan fanns i en tråd.                                                                                     |
+| `first` | Första svaret går till tråden (under det utlösande meddelandet), följande svar går till huvudkanalen. Användbart för att hålla kontexten synlig samtidigt som trådens skräp undviks. |
+| `all`   | Alla svar går till tråden. Håller konversationer innehöll men kan minska synligheten.                                                                                                                   |
 
 Läget gäller både autosvar och agentverktygsanrop (`slack sendMessage`).
 
@@ -478,7 +471,7 @@ För finmaskig kontroll, använd dessa taggar i agentsvar:
 - Kanaler mappar till `agent:<agentId>:slack:channel:<channelId>`-sessioner.
 - Slash-kommandon använder `agent:<agentId>:slack:slash:<userId>`-sessioner (prefix konfigurerbart via `channels.slack.slashCommand.sessionPrefix`).
 - Om Slack inte tillhandahåller `channel_type`, härleder OpenClaw den från kanal-ID-prefix (`D`, `C`, `G`) och använder som standard `channel` för att hålla sessionsnycklar stabila.
-- Registrering av inbyggda kommandon använder `commands.native` (global standard `"auto"` → Slack av) och kan åsidosättas per workspace med `channels.slack.commands.native`. Textkommandon kräver fristående `/...`-meddelanden och kan inaktiveras med `commands.text: false`. Slack slash-kommandon hanteras i Slack-appen och tas inte bort automatiskt. Använd `commands.useAccessGroups: false` för att kringgå åtkomstgruppskontroller för kommandon.
+- Inhemsk kommandoregistrering använder `commands.native` (global default `"auto"` → Slack off) och kan åsidosättas per-workspace med `channels.slack.commands.native`. Textkommandon kräver fristående `/...` meddelanden och kan inaktiveras med `commands.text: false`. Slack snedstreck kommandon hanteras i Slack appen och tas inte bort automatiskt. Använd `commands.useAccessGroups: false` för att förbigå access-gruppskontroller efter kommandon.
 - Fullständig kommandolista + konfig: [Slash commands](/tools/slash-commands)
 
 ## DM-säkerhet (parning)
@@ -486,15 +479,15 @@ För finmaskig kontroll, använd dessa taggar i agentsvar:
 - Standard: `channels.slack.dm.policy="pairing"` — okända DM-avsändare får en parningskod (löper ut efter 1 timme).
 - Godkänn via: `openclaw pairing approve slack <code>`.
 - För att tillåta alla: sätt `channels.slack.dm.policy="open"` och `channels.slack.dm.allowFrom=["*"]`.
-- `channels.slack.dm.allowFrom` accepterar användar-ID:n, @handles eller e-postadresser (löses vid start när token tillåter). Guiden accepterar användarnamn och löser dem till ID:n under konfigureringen när token tillåter.
+- `channels.slack.dm.allowFrom` accepterar användar-ID, @handles, eller e-post (lösas vid start när tokens tillåts). Guiden accepterar användarnamn och löser dem till ids under installationen när tokens tillåter.
 
 ## Gruppolicy
 
 - `channels.slack.groupPolicy` styr kanalhantering (`open|disabled|allowlist`).
 - `allowlist` kräver att kanaler listas i `channels.slack.channels`.
-- Om du endast sätter `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` och aldrig skapar en `channels.slack`-sektion,
-  sätts körtidsstandard `groupPolicy` till `open`. Lägg till `channels.slack.groupPolicy`,
-  `channels.defaults.groupPolicy` eller en kanal-tillåtelselista för att låsa ned.
+- Om du bara anger `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` och aldrig skapar en `channels.slack` sektion,
+  runtime defaults `groupPolicy` till `open`. Lägg till `channels.slack.groupPolicy`,
+  `channels.defaults.groupPolicy`, eller en kanal tillåten lista för att låsa ner den.
 - Konfigureringsguiden accepterar `#channel`-namn och löser dem till ID:n när möjligt
   (offentliga + privata); om flera träffar finns föredras den aktiva kanalen.
 - Vid start löser OpenClaw kanal-/användarnamn i tillåtelselistor till ID:n (när token tillåter)
@@ -536,10 +529,10 @@ Slack-verktygsåtgärder kan spärras med `channels.slack.actions.*`:
 
 - Skrivningar använder som standard bot-token så att tillståndsändrande åtgärder hålls inom
   appens botbehörigheter och identitet.
-- Att sätta `userTokenReadOnly: false` tillåter att användartoken används för skriv-
-  operationer när bot-token saknas, vilket innebär att åtgärder körs med den
-  installerande användarens åtkomst. Behandla användartoken som högt privilegierad och håll
-  åtgärdsspärrar och tillåtelselistor strikta.
+- Ställa in `userTokenReadOnly: false` låter användaren token användas för att skriva
+  operationer när en bot token inte är tillgänglig, vilket innebär åtgärder som körs med att
+  installera användarens åtkomst. Behandla användartoken som mycket privilegierad och håll
+  åtgärdsgrindar och tillåt listor strama.
 - Om du aktiverar skrivningar med användartoken, säkerställ att användartoken inkluderar de skriv-
   scopes du förväntar dig (`chat:write`, `reactions:write`, `pins:write`,
   `files:write`) annars kommer dessa operationer att misslyckas.
@@ -575,7 +568,7 @@ För triage-flöde: [/channels/troubleshooting](/channels/troubleshooting).
 - Omnämnandespärr styrs via `channels.slack.channels` (sätt `requireMention` till `true`); `agents.list[].groupChat.mentionPatterns` (eller `messages.groupChat.mentionPatterns`) räknas också som omnämnanden.
 - Multi-agent-åsidosättning: sätt per-agent-mönster på `agents.list[].groupChat.mentionPatterns`.
 - Reaktionsnotifieringar följer `channels.slack.reactionNotifications` (använd `reactionAllowlist` med läge `allowlist`).
-- Bot-skapade meddelanden ignoreras som standard; aktivera via `channels.slack.allowBots` eller `channels.slack.channels.<id>.allowBots`.
-- Varning: Om du tillåter svar till andra botar (`channels.slack.allowBots=true` eller `channels.slack.channels.<id>.allowBots=true`), förhindra bot-till-bot-svarsloopar med `requireMention`, `channels.slack.channels.<id>.users`-tillåtelselistor och/eller tydliga skyddsräcken i `AGENTS.md` och `SOUL.md`.
+- Bot-författade meddelanden ignoreras som standard; aktivera via `channels.slack.allowBots` eller `channels.slack.channels.<id>.allowBots`.
+- Varning: Om du tillåter svar på andra robotar (`channels.slack.allowBots=true` eller `channels.slack.channels.<id>.allowBots=true`), förhindra bot-to-bot svarsloopar med `requireMention`, `channels.slack.channels.<id>.users` tillåter listor, och/eller klara skyddsräcken i `AGENTS.md` och `SOUL.md`.
 - För Slack-verktyget finns semantiken för borttagning av reaktioner i [/tools/reactions](/tools/reactions).
 - Bilagor laddas ned till medielagret när det är tillåtet och under storleksgränsen.

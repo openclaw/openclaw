@@ -5,13 +5,6 @@ read_when:
   - تصحيح أخطاء ردود متعددة الوكلاء في WhatsApp
 status: experimental
 title: "مجموعات البثّ"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:08Z
 ---
 
 # مجموعات البثّ
@@ -80,7 +73,7 @@ Agents:
 أضِف قسمًا علويًا باسم `broadcast` (بجوار `bindings`). المفاتيح هي مُعرّفات أقران WhatsApp:
 
 - محادثات المجموعات: JID للمجموعة (مثل `120363403215116621@g.us`)
-- المحادثات المباشرة: رقم هاتف بصيغة E.164 (مثل `+15551234567`)
+- DM: E.164 رقم الهاتف (على سبيل المثال `+15551234567`)
 
 ```json
 {
@@ -318,7 +311,7 @@ Result: Agent A and C respond, Agent B logs error
 **تحقق من:**
 
 1. وجود مُعرّفات الوكلاء ضمن `agents.list`
-2. صحة صيغة مُعرّف النظير (مثل `120363403215116621@g.us`)
+2. تنسيق معرف الند صحيح (مثال: `120363403215116621@g.us`)
 3. عدم وجود الوكلاء في قوائم المنع
 
 **تصحيح الأخطاء:**
@@ -405,7 +398,7 @@ tail -f ~/.openclaw/logs/gateway.log | grep broadcast
 }
 ```
 
-## مرجع واجهة البرمجة
+## مرجع API
 
 ### مخطط التهيئة
 

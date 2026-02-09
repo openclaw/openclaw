@@ -3,19 +3,12 @@ summary: "OpenClaw-funktioner på tværs af kanaler, routing, medier og UX."
 read_when:
   - Du vil have en komplet liste over, hvad OpenClaw understøtter
 title: "Funktioner"
-x-i18n:
-  source_path: concepts/features.md
-  source_hash: 1b6aee0bfda75182
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:07Z
 ---
 
 ## Højdepunkter
 
 <Columns>
-  <Card title="Kanaler" icon="message-square">
+  <Card title="Channels" icon="message-square">
     WhatsApp, Telegram, Discord og iMessage med en enkelt Gateway.
   </Card>
   <Card title="Plugins" icon="plug">
@@ -24,13 +17,13 @@ x-i18n:
   <Card title="Routing" icon="route">
     Multi-agent-routing med isolerede sessioner.
   </Card>
-  <Card title="Medier" icon="image">
+  <Card title="Media" icon="image">
     Billeder, lyd og dokumenter ind og ud.
   </Card>
-  <Card title="Apps og UI" icon="monitor">
+  <Card title="Apps and UI" icon="monitor">
     Web Control UI og macOS companion-app.
   </Card>
-  <Card title="Mobile noder" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     iOS- og Android-noder med Canvas-understøttelse.
   </Card>
 </Columns>
@@ -55,6 +48,6 @@ x-i18n:
 - Android-node med parring, Canvas, chat og kamera
 
 <Note>
-Ældre Claude-, Codex-, Gemini- og Opencode-stier er fjernet. Pi er den eneste
-coding agent-sti.
+Legacy Claude, Codex, Gemini og Opencode stier er blevet fjernet. Pi er den eneste
+kodning agent sti.
 </Note>

@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de commandes ou d’options CLI
   - Documentation de nouvelles surfaces de commandes
 title: "Reference CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 973e7806d0261c6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:00Z
 ---
 
 # Reference CLI
@@ -447,7 +440,7 @@ Astuce : utilisez `npx clawhub` pour rechercher, installer et synchroniser des s
 
 ### `pairing`
 
-Approuver les demandes d’appairage en Messages prives entre canaux.
+Approuver les demandes d'appairage de DM à travers les canaux.
 
 Sous-commandes :
 
@@ -596,7 +589,7 @@ Notes :
 
 ### `health`
 
-Recuperer l’etat depuis le Gateway en cours d’execution.
+Recupere l'etat de sante de la Gateway (passerelle) en cours d'execution.
 
 Options :
 
@@ -911,7 +904,7 @@ Sous-commandes :
 
 Toutes les commandes `cron` acceptent `--url`, `--token`, `--timeout`, `--expect-final`.
 
-## Hote de noeud
+## Hôte du noeud
 
 `node` execute un **hote de noeud sans interface** ou le gere comme un service en arriere-plan. Voir
 [`openclaw node`](/cli/node).

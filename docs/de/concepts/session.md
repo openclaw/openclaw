@@ -1,15 +1,8 @@
 ---
-summary: „Regeln, Schlüssel und Persistenz der Sitzungsverwaltung für Chats“
+summary: "„Regeln, Schlüssel und Persistenz der Sitzungsverwaltung für Chats“"
 read_when:
   - Ändern der Sitzungsbehandlung oder -speicherung
-title: „Sitzungsverwaltung“
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:16Z
+title: "Sitzungsverwaltung"
 ---
 
 # Sitzungsverwaltung
@@ -48,7 +41,7 @@ Verwenden Sie `session.dmScope`, um zu steuern, wie **Direktnachrichten** gruppi
 
 **Wann aktivieren:**
 
-- Sie haben Pairing-Freigaben für mehr als einen Absender
+- Sie haben Paargenehmigungen für mehr als einen Absender
 - Sie verwenden eine DM-Allowlist mit mehreren Einträgen
 - Sie setzen `dmPolicy: "open"`
 - Mehrere Telefonnummern oder Konten können Ihren Agenten kontaktieren
@@ -77,7 +70,7 @@ Der gesamte Sitzungszustand wird **vom Gateway** (dem „Master“-OpenClaw) **b
 - Sitzungseinträge enthalten `origin`-Metadaten (Label + Routing-Hinweise), damit UIs erklären können, woher eine Sitzung stammt.
 - OpenClaw liest **keine** alten Pi/Tau-Sitzungsordner.
 
-## Sitzungsbereinigung
+## Sitzungsbeschnitten
 
 OpenClaw kürzt standardmäßig **alte Werkzeugergebnisse** aus dem In-Memory-Kontext unmittelbar vor LLM-Aufrufen.
 Dies schreibt die JSONL-Historie **nicht** um. Siehe [/concepts/session-pruning](/concepts/session-pruning).
@@ -119,7 +112,7 @@ wenn der Workspace beschreibbar ist. Siehe [Memory](/concepts/memory) und
 - Manueller Reset: Löschen Sie bestimmte Schlüssel aus dem Store oder entfernen Sie das JSONL-Transkript; die nächste Nachricht erstellt sie neu.
 - Isolierte Cron-Jobs erzeugen pro Lauf immer eine frische `sessionId` (keine Leerlauf-Wiederverwendung).
 
-## Sende-Richtlinie (optional)
+## Richtlinie senden (optional)
 
 Blockieren Sie die Zustellung für bestimmte Sitzungstypen, ohne einzelne IDs aufzulisten.
 

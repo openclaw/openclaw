@@ -3,24 +3,17 @@ summary: "Trạng thái hỗ trợ Matrix, khả năng và cấu hình"
 read_when:
   - Làm việc với các tính năng kênh Matrix
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:19Z
 ---
 
 # Matrix (plugin)
 
-Matrix là một giao thức nhắn tin mở, phi tập trung. OpenClaw kết nối như một **người dùng** Matrix
-trên bất kỳ homeserver nào, vì vậy bạn cần một tài khoản Matrix cho bot. Sau khi đăng nhập,
-bạn có thể nhắn tin trực tiếp (DM) cho bot hoặc mời bot vào các phòng (Matrix “groups”).
-Beeper cũng là một lựa chọn client hợp lệ, nhưng yêu cầu phải bật E2EE.
+32. Matrix là một giao thức nhắn tin mở, phi tập trung. 33. OpenClaw kết nối như một **người dùng** Matrix
+    trên bất kỳ homeserver nào, vì vậy bạn cần một tài khoản Matrix cho bot. 34. Sau khi đăng nhập, bạn có thể DM
+    bot trực tiếp hoặc mời nó vào các phòng ("groups" của Matrix). 35. Beeper cũng là một tùy chọn client hợp lệ,
+    nhưng yêu cầu phải bật E2EE.
 
-Trạng thái: được hỗ trợ qua plugin (@vector-im/matrix-bot-sdk). Hỗ trợ tin nhắn trực tiếp, phòng, luồng,
-media, phản ứng, thăm dò (gửi + poll-start dưới dạng văn bản), vị trí và E2EE (có hỗ trợ crypto).
+36. Trạng thái: được hỗ trợ thông qua plugin (@vector-im/matrix-bot-sdk). Tin nhắn trực tiếp, phòng, luồng, media, reaction,
+    thăm dò ý kiến (gửi + poll-start dưới dạng văn bản), vị trí và E2EE (có hỗ trợ crypto).
 
 ## Yêu cầu plugin
 
@@ -48,10 +41,13 @@ Chi tiết: [Plugins](/tools/plugin)
 1. Cài đặt plugin Matrix:
    - Từ npm: `openclaw plugins install @openclaw/matrix`
    - Từ bản checkout cục bộ: `openclaw plugins install ./extensions/matrix`
+
 2. Tạo một tài khoản Matrix trên homeserver:
    - Xem các tùy chọn lưu trữ tại [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Hoặc tự host.
+
 3. Lấy access token cho tài khoản bot:
+
    - Dùng Matrix login API với `curl` tại homeserver của bạn:
 
    ```bash
@@ -79,10 +75,12 @@ Chi tiết: [Plugins](/tools/plugin)
    - Nếu cả hai cùng được đặt, config có ưu tiên cao hơn.
    - Khi dùng access token: user ID được lấy tự động qua `/whoami`.
    - Khi đặt, `channels.matrix.userId` phải là Matrix ID đầy đủ (ví dụ: `@bot:example.org`).
+
 5. Khởi động lại gateway (hoặc hoàn tất onboarding).
-6. Bắt đầu DM với bot hoặc mời bot vào một phòng từ bất kỳ Matrix client nào
-   (Element, Beeper, v.v.; xem [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper yêu cầu E2EE,
-   vì vậy hãy đặt `channels.matrix.encryption: true` và xác minh thiết bị.
+
+6. 38. Bắt đầu DM với bot hoặc mời nó vào một phòng từ bất kỳ client Matrix nào
+       (Element, Beeper, v.v.; xem [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). 39. Beeper yêu cầu E2EE,
+       vì vậy hãy đặt `channels.matrix.encryption: true` và xác minh thiết bị.
 
 Cấu hình tối thiểu (access token, user ID tự động lấy):
 
@@ -124,7 +122,7 @@ Bật bằng `channels.matrix.encryption: true`:
 - Nếu mô-đun crypto tải thành công, các phòng được mã hóa sẽ tự động được giải mã.
 - Media gửi đi sẽ được mã hóa khi gửi tới các phòng được mã hóa.
 - Ở lần kết nối đầu tiên, OpenClaw yêu cầu xác minh thiết bị từ các phiên khác của bạn.
-- Xác minh thiết bị trong một Matrix client khác (Element, v.v.) để bật chia sẻ khóa.
+- Xác minh thiết bị trong một client Matrix khác (Element, v.v.). 41. để bật chia sẻ khóa.
 - Nếu mô-đun crypto không thể tải, E2EE sẽ bị tắt và các phòng được mã hóa sẽ không được giải mã;
   OpenClaw ghi log cảnh báo.
 - Nếu bạn thấy lỗi thiếu mô-đun crypto (ví dụ, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
@@ -132,16 +130,16 @@ Bật bằng `channels.matrix.encryption: true`:
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` hoặc tải binary bằng
   `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js`.
 
-Trạng thái crypto được lưu theo từng tài khoản + access token tại
-`~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
-(cơ sở dữ liệu SQLite). Trạng thái đồng bộ nằm cạnh đó tại `bot-storage.json`.
-Nếu access token (thiết bị) thay đổi, một kho lưu mới sẽ được tạo và bot phải được
-xác minh lại cho các phòng được mã hóa.
+42. Trạng thái crypto được lưu theo từng tài khoản + access token trong
+    `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
+    (cơ sở dữ liệu SQLite). 43. Trạng thái đồng bộ được lưu cùng với nó trong `bot-storage.json`.
+43. Nếu access token (thiết bị) thay đổi, một kho mới sẽ được tạo và bot phải được
+    xác minh lại cho các phòng được mã hóa.
 
-**Xác minh thiết bị:**
-Khi bật E2EE, bot sẽ yêu cầu xác minh từ các phiên khác của bạn khi khởi động.
-Mở Element (hoặc client khác) và chấp thuận yêu cầu xác minh để thiết lập độ tin cậy.
-Sau khi xác minh, bot có thể giải mã tin nhắn trong các phòng được mã hóa.
+45. **Xác minh thiết bị:**
+    Khi E2EE được bật, bot sẽ yêu cầu xác minh từ các phiên khác của bạn khi khởi động.
+46. Mở Element (hoặc client khác) và chấp thuận yêu cầu xác minh để thiết lập độ tin cậy.
+    Sau khi được xác minh, bot có thể giải mã tin nhắn trong các phòng được mã hóa.
 
 ## Mô hình định tuyến
 
@@ -150,16 +148,16 @@ Sau khi xác minh, bot có thể giải mã tin nhắn trong các phòng đượ
 
 ## Kiểm soát truy cập (DM)
 
-- Mặc định: `channels.matrix.dm.policy = "pairing"`. Người gửi không xác định sẽ nhận mã ghép cặp.
+- Mặc định: `channels.matrix.dm.policy = "pairing"`. 48. Người gửi không xác định sẽ nhận được mã ghép cặp.
 - Phê duyệt qua:
   - `openclaw pairing list matrix`
   - `openclaw pairing approve matrix <CODE>`
 - DM công khai: `channels.matrix.dm.policy="open"` cùng với `channels.matrix.dm.allowFrom=["*"]`.
-- `channels.matrix.dm.allowFrom` chấp nhận Matrix user ID đầy đủ (ví dụ: `@user:server`). Trình hướng dẫn sẽ phân giải tên hiển thị sang user ID khi tìm kiếm thư mục cho ra một kết quả khớp chính xác duy nhất.
+- `channels.matrix.dm.allowFrom` chấp nhận ID người dùng Matrix đầy đủ (ví dụ: `@user:server`). Trình hướng dẫn sẽ phân giải tên hiển thị thành ID người dùng khi tìm kiếm thư mục tìm thấy một khớp chính xác duy nhất.
 
 ## Phòng (nhóm)
 
-- Mặc định: `channels.matrix.groupPolicy = "allowlist"` (giới hạn theo mention). Dùng `channels.defaults.groupPolicy` để ghi đè mặc định khi chưa đặt.
+- Mặc định: `channels.matrix.groupPolicy = "allowlist"` (yêu cầu mention). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Cho phép phòng theo danh sách cho phép bằng `channels.matrix.groups` (room ID hoặc alias; tên sẽ được phân giải sang ID khi tìm kiếm thư mục cho ra một kết quả khớp chính xác duy nhất):
 
 ```json5
@@ -197,17 +195,17 @@ Sau khi xác minh, bot có thể giải mã tin nhắn trong các phòng đượ
 
 ## Khả năng
 
-| Tính năng          | Trạng thái                                                                               |
-| ------------------ | ---------------------------------------------------------------------------------------- |
-| Tin nhắn trực tiếp | ✅ Hỗ trợ                                                                                |
-| Phòng              | ✅ Hỗ trợ                                                                                |
-| Luồng              | ✅ Hỗ trợ                                                                                |
-| Media              | ✅ Hỗ trợ                                                                                |
+| Tính năng          | Trạng thái                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Tin nhắn trực tiếp | ✅ Hỗ trợ                                                                                                   |
+| Phòng              | ✅ Hỗ trợ                                                                                                   |
+| Luồng              | ✅ Hỗ trợ                                                                                                   |
+| Media              | ✅ Hỗ trợ                                                                                                   |
 | E2EE               | ✅ Hỗ trợ (cần mô-đun crypto)                                                            |
 | Phản ứng           | ✅ Hỗ trợ (gửi/đọc qua công cụ)                                                          |
 | Thăm dò            | ✅ Hỗ trợ gửi; poll bắt đầu gửi vào được chuyển thành văn bản (bỏ qua phản hồi/kết thúc) |
 | Vị trí             | ✅ Hỗ trợ (URI địa lý; bỏ qua độ cao)                                                    |
-| Lệnh gốc           | ✅ Hỗ trợ                                                                                |
+| Lệnh gốc           | ✅ Hỗ trợ                                                                                                   |
 
 ## Xử lý sự cố
 
@@ -253,7 +251,7 @@ Tùy chọn nhà cung cấp:
 - `channels.matrix.textChunkLimit`: kích thước chia đoạn văn bản gửi đi (ký tự).
 - `channels.matrix.chunkMode`: `length` (mặc định) hoặc `newline` để chia theo dòng trống (ranh giới đoạn) trước khi chia theo độ dài.
 - `channels.matrix.dm.policy`: `pairing | allowlist | open | disabled` (mặc định: ghép cặp).
-- `channels.matrix.dm.allowFrom`: danh sách cho phép DM (Matrix user ID đầy đủ). `open` yêu cầu `"*"`. Trình hướng dẫn sẽ phân giải tên sang ID khi có thể.
+- `channels.matrix.dm.allowFrom`: DM allowlist (full Matrix user IDs). `open` requires `"*"`. Trình hướng dẫn phân giải tên thành ID khi có thể.
 - `channels.matrix.groupPolicy`: `allowlist | open | disabled` (mặc định: allowlist).
 - `channels.matrix.groupAllowFrom`: người gửi được cho phép cho tin nhắn nhóm (Matrix user ID đầy đủ).
 - `channels.matrix.allowlistOnly`: ép buộc quy tắc allowlist cho DM + phòng.

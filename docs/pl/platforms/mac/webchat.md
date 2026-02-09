@@ -3,13 +3,6 @@ summary: "Jak aplikacja na macOS osadza WebChat Gateway i jak go debugować"
 read_when:
   - Debugowanie widoku WebChat na macOS lub portu loopback
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:23Z
 ---
 
 # WebChat (aplikacja macOS)
@@ -23,6 +16,7 @@ Aplikacja na macOS w pasku menu osadza interfejs WebChat jako natywny widok Swif
 ## Uruchamianie i debugowanie
 
 - Ręcznie: menu Lobster → „Open Chat”.
+
 - Automatyczne otwieranie do testów:
 
   ```bash

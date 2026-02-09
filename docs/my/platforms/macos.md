@@ -4,18 +4,11 @@ read_when:
   - macOS အက်ပ် အင်္ဂါရပ်များကို အကောင်အထည်ဖော်နေချိန်
   - macOS တွင် Gateway lifecycle သို့မဟုတ် node bridging ကို ပြောင်းလဲနေချိန်
 title: "macOS အက်ပ်"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:03Z
 ---
 
 # OpenClaw macOS Companion (မီနူးဘား + gateway broker)
 
-macOS အက်ပ်သည် OpenClaw အတွက် **မီနူးဘား အတူတကွ အသုံးပြုသော အက်ပ်** ဖြစ်သည်။ ၎င်းသည် ခွင့်ပြုချက်များကို ကိုင်တွယ်ပိုင်ဆိုင်ပြီး Gateway ကို ဒေသခံအနေဖြင့် စီမံခန့်ခွဲခြင်း/ချိတ်ဆက်ခြင်း (launchd သို့မဟုတ် manual) ပြုလုပ်ကာ macOS စွမ်းဆောင်ရည်များကို node တစ်ခုအဖြစ် အေးဂျင့်သို့ ဖော်ထုတ်ပေးသည်။
+macOS app သည် OpenClaw အတွက် **menu‑bar companion** ဖြစ်သည်။ ၎င်းသည် permissions များကို ပိုင်ဆိုင်ပြီး Gateway ကို locally (launchd သို့မဟုတ် manual) စီမံခန့်ခွဲ/ချိတ်ဆက်ကာ macOS capabilities များကို agent အတွက် node အဖြစ် ထုတ်ဖော်ပေးသည်။
 
 ## ၎င်း၏ လုပ်ဆောင်ချက်များ
 
@@ -31,28 +24,28 @@ macOS အက်ပ်သည် OpenClaw အတွက် **မီနူးဘာ�
 ## Local နှင့် remote မုဒ်များ
 
 - **Local** (မူလ): အက်ပ်သည် လည်ပတ်နေသော local Gateway ရှိပါက ချိတ်ဆက်ပြီး၊ မရှိပါက `openclaw gateway install` ဖြင့် launchd service ကို ဖွင့်ပေးသည်။
-- **Remote**: အက်ပ်သည် SSH/Tailscale မှတစ်ဆင့် Gateway သို့ ချိတ်ဆက်ပြီး local process ကို မည်သည့်အခါမျှ မစတင်ပါ။
-  remote Gateway က ဤ Mac သို့ ရောက်ရှိနိုင်ရန် local **node host service** ကို အက်ပ်က စတင်ပေးသည်။
-  အက်ပ်သည် Gateway ကို child process အဖြစ် မဖန်တီးပါ။
+- **Remote**: app သည် Gateway သို့ SSH/Tailscale ဖြင့် ချိတ်ဆက်ပြီး local process ကို ဘယ်တော့မှ မစတင်ပါ။
+  Remote Gateway က ဒီ Mac ကို ရောက်နိုင်ရန် app သည် local **node host service** ကို စတင်သည်။
+  App သည် Gateway ကို child process အဖြစ် မစတင်ပါ။
 
 ## Launchd ထိန်းချုပ်မှု
 
-အက်ပ်သည် per‑user LaunchAgent တစ်ခုကို စီမံခန့်ခွဲပြီး label သည် `bot.molt.gateway`
-( `--profile`/`OPENCLAW_PROFILE` ကို အသုံးပြုသည့်အခါ `bot.molt.<profile>` ; legacy `com.openclaw.*` သည် ဆက်လက် unload လုပ်ဆောင်နိုင်သည်) ဖြစ်သည်။
+App သည် per‑user LaunchAgent ကို `bot.molt.gateway` အဖြစ် စီမံခန့်ခွဲသည်
+(or `bot.molt.<profile>`` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.\*\` still unloads).
 
 ```bash
 launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-named profile ဖြင့် လည်ပတ်သည့်အခါ label ကို `bot.molt.<profile>` ဖြင့် အစားထိုးပါ။
+Named profile ဖြင့် chạy သောအခါ label ကို `bot.molt.<profile>` ဖြင့် အစားထိုးပါ။\` when running a named profile.
 
 LaunchAgent မထည့်သွင်းရသေးပါက အက်ပ်မှ ဖွင့်ပါ သို့မဟုတ်
 `openclaw gateway install` ကို လည်ပတ်ပါ။
 
 ## Node စွမ်းဆောင်ရည်များ (mac)
 
-macOS အက်ပ်သည် node တစ်ခုအဖြစ် မိမိကိုယ်ကို တင်ပြသည်။ ပုံမှန် အသုံးများသော အမိန့်များမှာ—
+macOS app သည် node အဖြစ် ကိုယ်စားပြု ပြသသည်။ အများဆုံးအသုံးပြုသော command များ:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
@@ -77,8 +70,8 @@ Gateway -> Node Service (WS)
 
 ## Exec approvals (system.run)
 
-`system.run` ကို macOS အက်ပ် (Settings → Exec approvals) ရှိ **Exec approvals** မှ ထိန်းချုပ်သည်။
-Security + ask + allowlist များကို Mac အတွင်း ဒေသခံအနေဖြင့် အောက်ပါနေရာတွင် သိမ်းဆည်းထားသည်—
+`system.run` ကို macOS app ထဲရှိ **Exec approvals** (Settings → Exec approvals) ဖြင့် ထိန်းချုပ်သည်။
+Security + ask + allowlist များကို Mac ပေါ်တွင် local အဖြစ် သိမ်းဆည်းထားသည်:
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -190,12 +183,9 @@ remote Gateway နှင့် localhost ပေါ်တွင် ရှိသ�
 - **အပြုအမူ:** random local port မသုံးပါ; ကျန်းမာသော tunnel ရှိနေပါက ပြန်လည်အသုံးပြု သို့မဟုတ် လိုအပ်ပါက ပြန်စတင်သည်။
 - **SSH ပုံစံ:** BatchMode +
   ExitOnForwardFailure + keepalive options ပါသော `ssh -N -L <local>:127.0.0.1:<remote>`။
-- **IP အစီရင်ခံမှု:** SSH tunnel သည် loopback ကို အသုံးပြုသဖြင့် gateway သည် node IP ကို
-  `127.0.0.1` အဖြစ် မြင်ရမည်ဖြစ်သည်။ အမှန်တကယ် client IP ကို ပြသစေလိုပါက
-  **Direct (ws/wss)** Transport ကို အသုံးပြုပါ ([macOS remote access](/platforms/mac/remote) ကို ကြည့်ပါ)။
+- **IP reporting:** SSH tunnel သည် loopback ကို အသုံးပြုသောကြောင့် gateway သည် node IP ကို `127.0.0.1` အဖြစ် မြင်မည် ဖြစ်သည်။ Client IP အမှန်ကို ပြသလိုပါက **Direct (ws/wss)** transport ကို အသုံးပြုပါ ([macOS remote access](/platforms/mac/remote) ကို ကြည့်ပါ)။
 
-တပ်ဆင်မှုအဆင့်များအတွက် [macOS remote access](/platforms/mac/remote) ကို ကြည့်ပါ။ protocol
-အသေးစိတ်အတွက် [Gateway protocol](/gateway/protocol) ကို ကြည့်ပါ။
+setup လုပ်ရန် အဆင့်များအတွက် [macOS remote access](/platforms/mac/remote) ကိုကြည့်ပါ။ protocol အချက်အလက်များအတွက် [Gateway protocol](/gateway/protocol) ကိုကြည့်ပါ။
 
 ## ဆက်စပ် စာတမ်းများ
 

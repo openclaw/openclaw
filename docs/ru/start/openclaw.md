@@ -4,13 +4,6 @@ read_when:
   - Онбординг нового экземпляра ассистента
   - Обзор последствий для безопасности и прав доступа
 title: "Настройка персонального ассистента"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:09Z
 ---
 
 # Создание персонального ассистента с OpenClaw
@@ -124,7 +117,7 @@ openclaw setup
 
 - персона/инструкции в `SOUL.md`
 - параметры рассуждений (при необходимости)
-- сигналы keepalive (когда вы начнёте доверять системе)
+- сердцебиты (только вы доверяете)
 
 Пример:
 
@@ -171,7 +164,7 @@ openclaw setup
 - `/new` или `/reset` начинает новый сеанс для этого чата (настраивается через `resetTriggers`). Если отправлено отдельно, агент отвечает коротким приветствием для подтверждения сброса.
 - `/compact [instructions]` уплотняет контекст сеанса и сообщает оставшийся бюджет контекста.
 
-## Сигналы keepalive (проактивный режим)
+## Сердцебиты (проактивный)
 
 По умолчанию OpenClaw запускает сигнал keepalive каждые 30 минут с подсказкой:
 `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`  

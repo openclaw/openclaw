@@ -2,18 +2,11 @@
 summary: "SSH-tunnelkonfiguration för OpenClaw.app som ansluter till en fjärr-Gateway"
 read_when: "Ansluta macOS-appen till en fjärr-Gateway över SSH"
 title: "Konfigurering av fjärr-Gateway"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:24Z
 ---
 
 # Köra OpenClaw.app med en fjärr-Gateway
 
-OpenClaw.app använder SSH-tunnling för att ansluta till en fjärr-Gateway (nätverksgateway). Den här guiden visar hur du ställer in det.
+OpenClaw.app använder SSH-tunneln för att ansluta till en fjärr-gateway. Den här guiden visar hur du ställer in den.
 
 ## Översikt
 
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Hur det fungerar
 
-| Komponent                            | Vad den gör                                                   |
-| ------------------------------------ | ------------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Vidarebefordrar lokal port 18789 till fjärrport 18789         |
+| Komponent                            | Vad den gör                                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Vidarebefordrar lokal port 18789 till fjärrport 18789                            |
 | `ssh -N`                             | SSH utan att köra fjärrkommandon (endast portvidarebefordran) |
-| `KeepAlive`                          | Startar automatiskt om tunneln om den kraschar                |
-| `RunAtLoad`                          | Startar tunneln när agenten laddas                            |
+| `KeepAlive`                          | Startar automatiskt om tunneln om den kraschar                                   |
+| `RunAtLoad`                          | Startar tunneln när agenten laddas                                               |
 
-OpenClaw.app ansluter till `ws://127.0.0.1:18789` på din klientmaskin. SSH-tunneln vidarebefordrar den anslutningen till port 18789 på fjärrmaskinen där Gateway (nätverksgateway) körs.
+OpenClaw.app ansluter till `ws://127.0.0.1:18789` på din klientmaskin. SSH-tunneln framåt som ansluter till port 18789 på fjärrmaskinen där Gateway körs.

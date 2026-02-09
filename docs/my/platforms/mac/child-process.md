@@ -3,25 +3,19 @@ summary: "macOS တွင် Gateway ၏ လည်ပတ်မှုအဆင့
 read_when:
   - mac app ကို Gateway lifecycle နှင့် ပေါင်းစည်းနေစဉ်
 title: "Gateway Lifecycle"
-x-i18n:
-  source_path: platforms/mac/child-process.md
-  source_hash: 9b910f574b723bc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:41Z
 ---
 
 # macOS တွင် Gateway lifecycle
 
-macOS အက်ပ်သည် မူလအတိုင်း **launchd ကို အသုံးပြုပြီး Gateway ကို စီမံခန့်ခွဲသည်**၊ Gateway ကို child process အဖြစ် မဖန်တီးပါ။ ပထမဦးစွာ သတ်မှတ်ထားသော ပေါ့တ်တွင် လည်ပတ်နေပြီးသား Gateway တစ်ခုကို ချိတ်ဆက်ရန် ကြိုးစားပါသည်။ ချိတ်ဆက်နိုင်သော Gateway မရှိပါက external `openclaw` CLI ကို အသုံးပြုပြီး launchd service ကို ဖွင့်လှစ်ပါသည် (embedded runtime မပါဝင်ပါ)။ ၎င်းကြောင့် login အချိန်တွင် အလိုအလျောက် စတင်ခြင်းနှင့် crash ဖြစ်ပါက ပြန်လည်စတင်ခြင်းကို ယုံကြည်စိတ်ချရစေပါသည်။
+31. macOS app သည် ပုံမှန်အားဖြင့် **launchd ဖြင့် Gateway ကို စီမံခန့်ခွဲ** ပြီး Gateway ကို child process အဖြစ် မဖန်တီးပါ။ 32. ၎င်းသည် အရင်ဆုံး သတ်မှတ်ထားသော port ပေါ်တွင် လည်ပတ်နေသော Gateway ရှိမရှိ ချိတ်ဆက်ရန် ကြိုးစားပြီး မရနိုင်ပါက external `openclaw` CLI (embedded runtime မပါ) ဖြင့် launchd service ကို ဖွင့်ပေးပါသည်။ This gives you
+    reliable auto‑start at login and restart on crashes.
 
-Child‑process mode (Gateway ကို အက်ပ်မှ တိုက်ရိုက် spawn လုပ်ခြင်း) ကို ယနေ့အထိ **မအသုံးပြုသေးပါ**။ UI နှင့် ပိုမိုနီးကပ်စွာ ချိတ်ဆက်ရန် လိုအပ်ပါက Gateway ကို terminal မှ လက်ဖြင့် chạy လုပ်ပါ။
+34. Child‑process mode (Gateway ကို app မှ တိုက်ရိုက် spawn လုပ်ခြင်း) ကို ယနေ့အထိ **မအသုံးပြုပါ**။
+35. UI နှင့် ပိုမို တင်းကျပ်စွာ ချိတ်ဆက်လိုပါက Gateway ကို terminal ထဲတွင် ကိုယ်တိုင် လည်ပတ်ပါ။
 
 ## မူလအပြုအမူ (launchd)
 
-- အက်ပ်သည် per‑user LaunchAgent တစ်ခုကို `bot.molt.gateway` ဟူသော label ဖြင့် ထည့်သွင်းပါသည်
-  (`--profile`/`OPENCLAW_PROFILE` ကို အသုံးပြုသည့်အခါ `bot.molt.<profile>` ဖြစ်ပြီး; legacy `com.openclaw.*` ကိုလည်း ထောက်ပံ့ပါသည်)။
+- 36. app သည် per‑user LaunchAgent ကို `bot.molt.gateway` အဖြစ် ထည့်သွင်းပေးပါသည်37.  (`--profile`/`OPENCLAW_PROFILE` ကို အသုံးပြုပါက `bot.molt.<profile>`; legacy `com.openclaw.*` ကို ပံ့ပိုးထားပါသည်)။
 - Local mode ကို ဖွင့်ထားသောအခါ LaunchAgent ကို load လုပ်ထားကြောင်း အတည်ပြုပြီး
   လိုအပ်ပါက Gateway ကို စတင်ပါသည်။
 - လော့ဂ်များကို launchd gateway log path တွင် ရေးသားပါသည် (Debug Settings တွင် မြင်နိုင်ပါသည်)။
@@ -33,15 +27,15 @@ launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-named profile ကို chạy လုပ်နေပါက label ကို `bot.molt.<profile>` ဖြင့် အစားထိုးပါ။
+38. named profile ဖြင့် လည်ပတ်သောအခါ label ကို `bot.molt.<profile>` ဖြင့် အစားထိုးပါ။39.
 
 ## လက်မှတ်မထိုးထားသော dev builds
 
-`scripts/restart-mac.sh --no-sign` သည် signing keys မရှိသေးသည့် အခြေအနေတွင် မြန်ဆန်သော local builds အတွက် ဖြစ်ပါသည်။ launchd သည် လက်မှတ်မထိုးထားသော relay binary ကို မညွှန်စေရန်—
+40. `scripts/restart-mac.sh --no-sign` ကို signing key မရှိသည့် အချိန် အမြန် local build များအတွက် အသုံးပြုပါသည်။ 41. unsigned relay binary ကို launchd မှ မညွှန်ပြစေရန် ၎င်းသည် -
 
 - `~/.openclaw/disable-launchagent` ကို ရေးသားပါသည်။
 
-`scripts/restart-mac.sh` ကို signed အနေဖြင့် chạy လုပ်ပါက marker ရှိနေပါက ဤ override ကို ဖယ်ရှားပါသည်။ လက်ဖြင့် reset လုပ်ရန်—
+42. `scripts/restart-mac.sh` ကို signed ဖြင့် လည်ပတ်ပါက marker ရှိနေသည့်အခါ ဤ override ကို ဖယ်ရှားပေးပါသည်။ 43. လက်ဖြင့် ပြန်လည် reset လုပ်ရန် -
 
 ```bash
 rm ~/.openclaw/disable-launchagent
@@ -49,13 +43,11 @@ rm ~/.openclaw/disable-launchagent
 
 ## Attach-only mode
 
-macOS အက်ပ်သည် **launchd ကို မတပ်ဆင်ဘဲ မစီမံခန့်ခွဲရန်** အတင်းအကျပ် ပြုလုပ်လိုပါက
-`--attach-only` (သို့မဟုတ် `--no-launchd`) ဖြင့် စတင်ပါ။ ၎င်းသည် `~/.openclaw/disable-launchagent` ကို သတ်မှတ်ပြီး
-အက်ပ်သည် လည်ပတ်နေပြီးသား Gateway တစ်ခုကိုသာ ချိတ်ဆက်ပါမည်။ Debug Settings တွင်လည်း အလားတူ အပြုအမူကို ပြောင်းလဲနိုင်ပါသည်။
+44. macOS app ကို **launchd ကို ဘယ်တော့မှ မထည့်သွင်း သို့မဟုတ် မစီမံစေရန်** `--attach-only` (သို့မဟုတ် `--no-launchd`) ဖြင့် ဖွင့်ပါ။ 45. ၎င်းသည် `~/.openclaw/disable-launchagent` ကို သတ်မှတ်ပြီး app သည် လည်ပတ်နေပြီးသား Gateway သို့သာ ချိတ်ဆက်ပါမည်။ 46. Debug Settings တွင် အလားတူ အပြုအမူကို ပြောင်းလဲနိုင်ပါသည်။
 
 ## Remote mode
 
-Remote mode တွင် local Gateway ကို မစတင်ပါ။ အက်ပ်သည် remote ဟို့စ်သို့ SSH တန်နယ်ကို အသုံးပြုပြီး ထိုတန်နယ်မှတဆင့် ချိတ်ဆက်ပါသည်။
+47. Remote mode သည် local Gateway ကို ဘယ်တော့မှ မစတင်ပါ။ 48. app သည် remote host သို့ SSH tunnel ကို အသုံးပြုပြီး ထို tunnel မှတဆင့် ချိတ်ဆက်ပါသည်။
 
 ## launchd ကို ဦးစားပေးသည့် အကြောင်းရင်းများ
 

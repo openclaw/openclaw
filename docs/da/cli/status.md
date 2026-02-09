@@ -4,13 +4,6 @@ read_when:
   - Du vil have en hurtig diagnose af kanaltilstand + nylige sessionsmodtagere
   - Du vil have en indsættelig “all”-status til fejlfinding
 title: "status"
-x-i18n:
-  source_path: cli/status.md
-  source_hash: 2bbf5579c48034fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:04Z
 ---
 
 # `openclaw status`

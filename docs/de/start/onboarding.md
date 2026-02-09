@@ -1,17 +1,10 @@
 ---
-summary: „Onboarding-Ablauf beim ersten Start für OpenClaw (macOS-App)“
+summary: "„Onboarding-Ablauf beim ersten Start für OpenClaw (macOS-App)“"
 read_when:
   - Entwurf des macOS-Onboarding-Assistenten
   - Implementierung von Authentifizierung oder Identitätseinrichtung
-title: „Onboarding (macOS-App)“
-sidebarTitle: „Onboarding: macOS-App“
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:24Z
+title: "„Onboarding (macOS-App)“"
+sidebarTitle: "„Onboarding: macOS-App“"
 ---
 
 # Onboarding (macOS-App)
@@ -21,22 +14,22 @@ reibungsloses „Tag‑0“-Erlebnis: auswählen, wo der Gateway läuft, Authent
 Assistenten ausführen und den Agenten sich selbst bootstrappen lassen.
 
 <Steps>
-<Step title="macOS-Warnung bestätigen">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Zugriff auf lokale Netzwerke bestätigen">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Willkommen und Sicherheitshinweis">
+<Step title="Welcome and security notice">
 <Frame caption="Lesen Sie den angezeigten Sicherheitshinweis und entscheiden Sie entsprechend">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Lokal vs. Remote">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -56,7 +49,7 @@ Wo läuft der **Gateway**?
 - Verwenden Sie ein **Token** für den Zugriff über mehrere Maschinen oder für Non‑loopback‑Bindings.
 </Tip>
 </Step>
-<Step title="Berechtigungen">
+<Step title="Permissions">
 <Frame caption="Wählen Sie, welche Berechtigungen Sie OpenClaw erteilen möchten">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -78,7 +71,7 @@ Das Onboarding fordert die benötigten TCC-Berechtigungen an für:
   Die App kann die globale `openclaw` CLI über npm/pnpm installieren, sodass Terminal‑Workflows
   und launchd‑Tasks sofort funktionieren.
 </Step>
-<Step title="Onboarding-Chat (dedizierte Sitzung)">
+<Step title="Onboarding Chat (dedicated session)">
   Nach der Einrichtung öffnet die App eine dedizierte Onboarding-Chat-Sitzung, damit der Agent sich
   vorstellen und die nächsten Schritte anleiten kann. Dadurch bleibt die Anleitung beim ersten Start
   von Ihrer normalen Unterhaltung getrennt. Siehe [Bootstrapping](/start/bootstrapping) für

@@ -5,22 +5,15 @@ read_when:
   - Bạn đang kết nối LM Studio hoặc một proxy tương thích OpenAI
   - Bạn cần hướng dẫn an toàn nhất cho mô hình cục bộ
 title: "Mô hình cục bộ"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:01Z
 ---
 
 # Mô hình cục bộ
 
-Chạy cục bộ là khả thi, nhưng OpenClaw kỳ vọng ngữ cảnh lớn + cơ chế phòng vệ mạnh trước prompt injection. GPU nhỏ sẽ cắt ngữ cảnh và làm rò rỉ an toàn. Hãy nhắm cao: **≥2 Mac Studio tối đa cấu hình hoặc dàn GPU tương đương (~$30k+)**. Một GPU **24 GB** đơn lẻ chỉ phù hợp với prompt nhẹ hơn và độ trễ cao hơn. Hãy dùng **biến thể mô hình lớn/đầy đủ nhất có thể chạy**; các checkpoint bị lượng tử hóa mạnh hoặc “nhỏ” làm tăng rủi ro prompt injection (xem [Security](/gateway/security)).
+Chạy local là khả thi, nhưng OpenClaw kỳ vọng ngữ cảnh lớn + các biện pháp phòng vệ mạnh trước prompt injection. Thẻ nhỏ cắt ngữ cảnh và làm rò rỉ an toàn. Đặt mục tiêu cao: **≥2 Mac Studio được tối đa hóa hoặc dàn GPU tương đương (~$30k+)**. Một GPU **24 GB** chỉ hoạt động cho prompt nhẹ hơn với độ trễ cao hơn. Sử dụng **biến thể mô hình lớn nhất/đầy đủ mà bạn có thể chạy**; các checkpoint được lượng tử hóa mạnh hoặc “nhỏ” làm tăng rủi ro prompt-injection (xem [Security](/gateway/security)).
 
 ## Khuyến nghị: LM Studio + MiniMax M2.1 (Responses API, bản đầy đủ)
 
-Ngăn xếp cục bộ tốt nhất hiện nay. Tải MiniMax M2.1 trong LM Studio, bật máy chủ cục bộ (mặc định `http://127.0.0.1:1234`), và dùng Responses API để tách phần suy luận khỏi văn bản đầu ra cuối.
+Ngăn xếp local tốt nhất hiện nay. Tải MiniMax M2.1 trong LM Studio, bật máy chủ cục bộ (mặc định `http://127.0.0.1:1234`), và dùng Responses API để tách phần suy luận khỏi văn bản cuối.
 
 ```json5
 {
@@ -114,12 +107,12 @@ Giữ cấu hình mô hình hosted ngay cả khi chạy cục bộ; dùng `model
 
 ### Lưu trữ theo khu vực / định tuyến dữ liệu
 
-- Các biến thể MiniMax/Kimi/GLM dạng hosted cũng có trên OpenRouter với endpoint cố định theo khu vực (ví dụ: lưu trữ tại Mỹ). Chọn biến thể theo khu vực ở đó để giữ lưu lượng trong phạm vi pháp lý bạn chọn, đồng thời vẫn dùng `models.mode: "merge"` cho các phương án dự phòng Anthropic/OpenAI.
+- Các biến thể MiniMax/Kimi/GLM dạng hosted cũng có trên OpenRouter với endpoint ghim theo khu vực (ví dụ: host tại Mỹ). Chọn biến thể khu vực tại đó để giữ lưu lượng trong phạm vi pháp lý bạn chọn, đồng thời vẫn dùng `models.mode: "merge"` cho fallback Anthropic/OpenAI.
 - Chỉ-cục-bộ vẫn là con đường bảo mật mạnh nhất; định tuyến hosted theo khu vực là phương án trung gian khi bạn cần tính năng của nhà cung cấp nhưng muốn kiểm soát luồng dữ liệu.
 
 ## Các proxy cục bộ tương thích OpenAI khác
 
-vLLM, LiteLLM, OAI-proxy hoặc gateway tùy chỉnh đều hoạt động nếu chúng cung cấp endpoint `/v1` kiểu OpenAI. Thay khối provider ở trên bằng endpoint và ID mô hình của bạn:
+vLLM, LiteLLM, OAI-proxy, hoặc gateway tùy chỉnh đều hoạt động nếu chúng cung cấp endpoint `/v1` kiểu OpenAI. Thay thế khối nhà cung cấp ở trên bằng endpoint và ID mô hình của bạn:
 
 ```json5
 {
@@ -152,6 +145,6 @@ Giữ `models.mode: "merge"` để các mô hình hosted vẫn khả dụng làm
 ## Xử lý sự cố
 
 - Gateway có truy cập được proxy không? `curl http://127.0.0.1:1234/v1/models`.
-- Mô hình LM Studio bị dỡ? Nạp lại; khởi động nguội là nguyên nhân “treo” thường gặp.
-- Lỗi ngữ cảnh? Giảm `contextWindow` hoặc tăng giới hạn máy chủ.
+- Model LM Studio đã bị unload? Reload; cold start là nguyên nhân “treo” phổ biến.
+- Lỗi ngữ cảnh? Giảm `contextWindow` hoặc tăng giới hạn máy chủ của bạn.
 - An toàn: mô hình cục bộ bỏ qua bộ lọc phía nhà cung cấp; hãy giữ tác tử hẹp và bật compaction để giới hạn bán kính ảnh hưởng của prompt injection.

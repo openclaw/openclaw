@@ -4,13 +4,6 @@ read_when:
   - Dodawanie lub modyfikowanie skills
   - Zmiana bramkowania skills lub reguł ładowania
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:12Z
 ---
 
 # Skills (OpenClaw)
@@ -50,8 +43,7 @@ wygrywa obszar roboczy, następnie zarządzane/lokalne, a na końcu dołączone.
 Wtyczki mogą dostarczać własne skills, wskazując katalogi `skills` w
 `openclaw.plugin.json` (ścieżki względne względem katalogu głównego wtyczki). Skills wtyczek są ładowane,
 gdy wtyczka jest włączona, i podlegają standardowym regułom priorytetów skills.
-Możesz je bramkować przez `metadata.openclaw.requires.config` w wpisie konfiguracji wtyczki.
-Zobacz [Plugins](/tools/plugin) w zakresie wykrywania/konfiguracji oraz [Tools](/tools) w zakresie
+Możesz je bramkować przez `metadata.openclaw.requires.config` w wpisie konfiguracji wtyczki. Zobacz [Plugins](/tools/plugin) w zakresie wykrywania/konfiguracji oraz [Tools](/tools) w zakresie
 powierzchni narzędzi, których te skills uczą.
 
 ## ClawHub (instalacja + synchronizacja)
@@ -61,7 +53,7 @@ ClawHub to publiczny rejestr skills dla OpenClaw. Przeglądaj na
 i tworzenia kopii zapasowych skills.
 Pełny przewodnik: [ClawHub](/tools/clawhub).
 
-Typowe scenariusze:
+Wspólne przepływy:
 
 - Instalacja skilla do obszaru roboczego:
   - `clawhub install <skill-slug>`
@@ -259,11 +251,9 @@ odświeżona lista jest używana przy następnej turze agenta.
 
 Jeśli Gateway działa na Linuxie, ale podłączony jest **węzeł macOS** **z dozwolonym `system.run`**
 (zabezpieczenia Exec approvals nie ustawione na `deny`), OpenClaw może traktować
-skills wyłącznie dla macOS jako kwalifikujące się, gdy wymagane binaria są obecne na tym węźle.
-Agent powinien wykonywać te skills przez narzędzie `nodes` (zwykle `nodes.run`).
+skills wyłącznie dla macOS jako kwalifikujące się, gdy wymagane binaria są obecne na tym węźle. Agent powinien wykonywać te skills przez narzędzie `nodes` (zwykle `nodes.run`).
 
-Opiera się to na raportowaniu przez węzeł obsługi poleceń oraz na sondzie binariów przez `system.run`.
-Jeśli węzeł macOS później przejdzie offline, skills pozostają widoczne; wywołania mogą się nie powieść,
+Opiera się to na raportowaniu przez węzeł obsługi poleceń oraz na sondzie binariów przez `system.run`. Jeśli węzeł macOS później przejdzie offline, skills pozostają widoczne; wywołania mogą się nie powieść,
 dopóki węzeł nie połączy się ponownie.
 
 ## Watcher skills (automatyczne odświeżanie)

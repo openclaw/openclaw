@@ -4,13 +4,6 @@ read_when:
   - DigitalOcean 에서 OpenClaw 설정 중
   - OpenClaw 를 위한 저렴한 VPS 호스팅을 찾는 경우
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:43Z
 ---
 
 # DigitalOcean 에서 OpenClaw
@@ -23,13 +16,13 @@ DigitalOcean 에서 **월 $6** (또는 예약 요금제로 월 $4)로 영구적�
 
 ## 비용 비교 (2026)
 
-| 프로바이더   | 플랜            | 사양                  | 월 요금     | 비고                                |
-| ------------ | --------------- | --------------------- | ----------- | ----------------------------------- |
-| Oracle Cloud | Always Free ARM | 최대 4 OCPU, 24GB RAM | $0          | ARM, 제한된 용량 / 가입 시 까다로움 |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM       | €3.79 (~$4) | 가장 저렴한 유료 옵션               |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM       | $6          | 쉬운 UI, 좋은 문서                  |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM       | $6          | 다양한 지역                         |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM       | $5          | 현재 Akamai 의 일부                 |
+| 프로바이더        | 플랜              | 사양                  | 21. 월별 가격                               | 참고 자료                   |
+| ------------ | --------------- | ------------------- | -------------------------------------------------------------- | ----------------------- |
+| Oracle Cloud | Always Free ARM | 최대 4 OCPU, 24GB RAM | $0                                                             | ARM, 제한된 용량 / 가입 시 까다로움 |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM     | €3.79 (~$4) | 가장 저렴한 유료 옵션            |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM     | $6                                                             | 쉬운 UI, 좋은 문서            |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM     | $6                                                             | 다양한 지역                  |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM     | $5                                                             | 현재 Akamai 의 일부          |
 
 **프로바이더 선택:**
 
@@ -45,7 +38,7 @@ DigitalOcean 에서 **월 $6** (또는 예약 요금제로 월 $4)로 영구적�
 - SSH 키 페어 (또는 비밀번호 인증 사용 가능)
 - 약 20 분
 
-## 1) Droplet 생성
+## 1. Droplet 생성
 
 1. [DigitalOcean](https://cloud.digitalocean.com/) 에 로그인합니다.
 2. **Create → Droplets** 를 클릭합니다.
@@ -63,7 +56,7 @@ DigitalOcean 에서 **월 $6** (또는 예약 요금제로 월 $4)로 영구적�
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) OpenClaw 설치
+## 3. OpenClaw 설치
 
 ```bash
 # Update system
@@ -80,7 +73,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) 온보딩 실행
+## 4. 온보딩 실행
 
 ```bash
 openclaw onboard --install-daemon
@@ -93,7 +86,7 @@ openclaw onboard --install-daemon
 - Gateway 토큰 (자동 생성)
 - 데몬 설치 (systemd)
 
-## 5) Gateway 확인
+## 5. Gateway 확인
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) 대시보드 접근
+## 6. 대시보드 접근
 
 Gateway 는 기본적으로 loopback 에 바인딩됩니다. Control UI 에 접근하려면 다음 중 하나를 사용하십시오:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 열기: `http://<tailscale-ip>:18789` (토큰 필요).
 
-## 7) 채널 연결
+## 7. 채널 연결
 
 ### Telegram
 
@@ -199,7 +192,7 @@ htop
 
 ## 지속성
 
-모든 상태 데이터는 다음 위치에 저장됩니다:
+22. 모든 상태는 다음에 저장됩니다:
 
 - `~/.openclaw/` — 설정, 자격 증명, 세션 데이터
 - `~/.openclaw/workspace/` — 워크스페이스 (SOUL.md, 메모리 등)
@@ -216,12 +209,12 @@ tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 
 Oracle Cloud 는 여기의 어떤 유료 옵션보다도 훨씬 강력한 **Always Free** ARM 인스턴스를 월 $0 로 제공합니다.
 
-| 제공 항목          | 사양               |
-| ------------------ | ------------------ |
-| **4 OCPU**         | ARM Ampere A1      |
-| **24GB RAM**       | 충분히 여유로움    |
-| **200GB 스토리지** | 블록 볼륨          |
-| **영구 무료**      | 신용카드 요금 없음 |
+| 23. 제공되는 내용 | 사양            |
+| ---------------------------------- | ------------- |
+| **4 OCPU**                         | ARM Ampere A1 |
+| **24GB RAM**                       | 충분히 여유로움      |
+| **200GB 스토리지**                     | 블록 볼륨         |
+| **영구 무료**                          | 신용카드 요금 없음    |
 
 **주의 사항:**
 
@@ -261,7 +254,7 @@ free -h
 
 ---
 
-## 함께 보기
+## 24. 함께 보기
 
 - [Hetzner 가이드](/install/hetzner) — 더 저렴하고 더 강력함
 - [Docker 설치](/install/docker) — 컨테이너 기반 설정

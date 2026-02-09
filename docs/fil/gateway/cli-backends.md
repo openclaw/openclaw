@@ -5,27 +5,18 @@ read_when:
   - Nagpapatakbo ka ng Claude Code CLI o iba pang lokal na AI CLIs at gusto mo silang muling gamitin
   - Kailangan mo ng text-only, walang tool na ruta na patuloy na sumusuporta sa sessions at images
 title: "Mga CLI Backend"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # Mga CLI backend (fallback runtime)
 
-Kayang patakbuhin ng OpenClaw ang **lokal na AI CLIs** bilang **text-only fallback** kapag down,
-na-rate-limit, o pansamantalang may problema ang mga API provider. Ito ay sadyang konserbatibo:
+Kayang patakbuhin ng OpenClaw ang **local AI CLIs** bilang isang **text‑only fallback** kapag down, rate‑limited, o pansamantalang nagkakamali ang mga API provider. Ito ay sadyang konserbatibo:
 
 - **Naka-disable ang mga tool** (walang tool calls).
 - **Text in → text out** (maaasahan).
 - **Sinusuportahan ang sessions** (para manatiling magkakaugnay ang mga follow-up turn).
 - **Maaaring ipasa ang images** kung tumatanggap ang CLI ng mga image path.
 
-Dinisenyo ito bilang **safety net** sa halip na pangunahing ruta. Gamitin ito kapag gusto mo ng
-“palaging gumagana” na text responses nang hindi umaasa sa mga external API.
+This is designed as a **safety net** rather than a primary path. Gamitin ito kapag gusto mo ng mga tekstong tugon na “laging gumagana” nang hindi umaasa sa mga external API.
 
 ## Beginner-friendly na mabilis na pagsisimula
 
@@ -58,7 +49,7 @@ command path:
 }
 ```
 
-Iyon na. Walang keys, walang dagdag na auth config na kailangan bukod sa mismong CLI.
+Iyon lang. No keys, no extra auth config needed beyond the CLI itself.
 
 ## Paggamit bilang fallback
 
@@ -95,7 +86,7 @@ Lahat ng CLI backend ay nasa ilalim ng:
 agents.defaults.cliBackends
 ```
 
-Ang bawat entry ay naka-key sa isang **provider id** (hal. `claude-cli`, `my-cli`).
+Bawat entry ay naka‑key sa isang **provider id** (hal., `claude-cli`, `my-cli`).
 Ang provider id ang nagiging kaliwang bahagi ng iyong model ref:
 
 ```
@@ -167,10 +158,7 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-Isusulat ng OpenClaw ang mga base64 image sa mga temp file. Kung nakatakda ang `imageArg`, ang mga
-path na iyon ay ipapasa bilang mga CLI arg. Kung nawawala ang `imageArg`, idinadagdag ng OpenClaw ang
-mga file path sa prompt (path injection), na sapat para sa mga CLI na awtomatikong
-naglo-load ng mga lokal na file mula sa plain paths (ugali ng Claude Code CLI).
+Isusulat ng OpenClaw ang mga base64 na larawan sa mga temp file. Kung naka‑set ang `imageArg`, ipapasa ang mga path na iyon bilang mga CLI arg. Kung wala ang `imageArg`, idinadagdag ng OpenClaw ang mga file path sa prompt (path injection), na sapat para sa mga CLI na awtomatikong naglo‑load ng mga lokal na file mula sa mga plain path (gawi ng Claude Code CLI).
 
 ## Inputs / outputs
 
@@ -213,12 +201,10 @@ I-override lamang kung kinakailangan (karaniwan: absolute na `command` path).
 
 ## Mga limitasyon
 
-- **Walang OpenClaw tools** (hindi kailanman tumatanggap ng tool calls ang CLI backend). Maaaring
-  patakbuhin pa rin ng ilang CLI ang sarili nilang agent tooling.
+- **Walang OpenClaw tools** (hindi kailanman tumatanggap ng tool call ang CLI backend). Maaaring patakbuhin pa rin ng ilang CLI ang sarili nilang agent tooling.
 - **Walang streaming** (kinokolekta muna ang CLI output bago ibalik).
 - **Structured outputs** ay nakadepende sa JSON format ng CLI.
-- **Codex CLI sessions** ay nagre-resume sa pamamagitan ng text output (walang JSONL), na mas
-  hindi structured kaysa sa paunang `--json` run. Normal pa ring gumagana ang OpenClaw sessions.
+- **Ang mga Codex CLI session** ay nagre‑resume sa pamamagitan ng text output (walang JSONL), na mas hindi istrukturado kaysa sa paunang `--json` run. Gumagana pa rin nang normal ang mga OpenClaw session.
 
 ## Pag-troubleshoot
 

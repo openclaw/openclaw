@@ -4,13 +4,6 @@ read_when:
   - Necesita ediciones estructuradas de archivos en múltiples archivos
   - Desea documentar o depurar ediciones basadas en parches
 title: "Herramienta apply_patch"
-x-i18n:
-  source_path: tools/apply-patch.md
-  source_hash: 8cec2b4ee3afa910
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:39Z
 ---
 
 # herramienta apply_patch

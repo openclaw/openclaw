@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn tra cứu ID liên hệ/nhóm/self cho một kênh
   - Bạn đang phát triển bộ điều hợp danh bạ kênh
 title: "directory"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:22Z
 ---
 
 # `openclaw directory`

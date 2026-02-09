@@ -4,13 +4,6 @@ read_when:
   - Sohbet komutlarını kullanırken veya yapılandırırken
   - Komut yönlendirmesi ya da izinleri hata ayıklarken
 title: "Slash Komutları"
-x-i18n:
-  source_path: tools/slash-commands.md
-  source_hash: ca0deebf89518e8c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:16Z
 ---
 
 # Slash komutları
@@ -156,7 +149,7 @@ Notlar:
 - `/model <#>` bu seçiciden seçim yapar (mümkünse mevcut sağlayıcıyı tercih eder).
 - `/model status` ayrıntılı görünümü gösterir; yapılandırılmış sağlayıcı uç noktasını (`baseUrl`) ve mevcutsa API modunu (`api`) içerir.
 
-## Hata ayıklama geçersiz kılmaları
+## 49. Hata ayıklama geçersiz kılmaları
 
 `/debug` **yalnızca çalışma zamanı** yapılandırma geçersiz kılmalarını ayarlamanıza izin verir (bellek, diske yazılmaz). Yalnızca sahip. Varsayılan olarak devre dışıdır; `commands.debug: true` ile etkinleştirin.
 

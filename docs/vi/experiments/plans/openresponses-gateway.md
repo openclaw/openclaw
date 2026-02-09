@@ -4,13 +4,6 @@ owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
 title: "Kế hoạch Gateway OpenResponses"
-x-i18n:
-  source_path: experiments/plans/openresponses-gateway.md
-  source_hash: 71a22c48397507d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:00Z
 ---
 
 # Kế hoạch tích hợp Gateway OpenResponses
@@ -20,9 +13,7 @@ x-i18n:
 Gateway OpenClaw hiện đang cung cấp một endpoint Chat Completions tương thích OpenAI ở mức tối thiểu tại
 `/v1/chat/completions` (xem [OpenAI Chat Completions](/gateway/openai-http-api)).
 
-Open Responses là một tiêu chuẩn suy luận mở dựa trên OpenAI Responses API. Nó được thiết kế
-cho các quy trình agentic và sử dụng đầu vào dựa trên item cùng với các sự kiện streaming ngữ nghĩa. Đặc tả OpenResponses
-định nghĩa `/v1/responses`, không phải `/v1/chat/completions`.
+Open Responses là một tiêu chuẩn suy luận mở dựa trên OpenAI Responses API. Đặc tả OpenResponses định nghĩa `/v1/responses`, không phải `/v1/chat/completions`. Tài liệu này ghi lại **các ý tưởng** cho cấu hình model trong tương lai.
 
 ## Mục tiêu
 

@@ -4,13 +4,6 @@ read_when:
   - Du kopplar ytor för leverantörers användning/kvoter
   - Du behöver förklara beteendet för användningsspårning eller autentiseringskrav
 title: "Användningsspårning"
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:04Z
 ---
 
 # Användningsspårning
@@ -22,7 +15,7 @@ x-i18n:
 
 ## Var det visas
 
-- `/status` i chattar: emoji‑rik statusruta med sessionstokens + uppskattad kostnad (endast API-nyckel). Leverantörsanvändning visas för **den aktuella modellleverantören** när den är tillgänglig.
+- `/status` i chattar: emojirika statuskort med sessiontokens + beräknad kostnad (endast API-nyckel). Leverantörsanvändning visar för **nuvarande modellleverantör** när den är tillgänglig.
 - `/usage off|tokens|full` i chattar: användningsfot per svar (OAuth visar endast tokens).
 - `/usage cost` i chattar: lokal kostnadssammanfattning aggregerad från OpenClaw‑sessionsloggar.
 - CLI: `openclaw status --usage` skriver ut en fullständig uppdelning per leverantör.

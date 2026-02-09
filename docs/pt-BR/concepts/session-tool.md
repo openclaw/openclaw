@@ -3,13 +3,6 @@ summary: "Ferramentas de sessão do agente para listar sessões, buscar históri
 read_when:
   - Ao adicionar ou modificar ferramentas de sessão
 title: "Ferramentas de Sessão"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:48Z
 ---
 
 # Ferramentas de Sessão

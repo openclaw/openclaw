@@ -3,13 +3,6 @@ summary: "चैनलों के बीच साझा प्रतिक्
 read_when:
   - किसी भी चैनल में प्रतिक्रियाओं पर कार्य करते समय
 title: "प्रतिक्रियाएँ"
-x-i18n:
-  source_path: tools/reactions.md
-  source_hash: 0f11bff9adb4bd02
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:42Z
 ---
 
 # प्रतिक्रिया टूलिंग

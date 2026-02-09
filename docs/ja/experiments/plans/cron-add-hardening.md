@@ -4,20 +4,13 @@ owner: "openclaw"
 status: "complete"
 last_updated: "2026-01-05"
 title: "Cron Add のハードニング"
-x-i18n:
-  source_path: experiments/plans/cron-add-hardening.md
-  source_hash: d7e469674bd9435b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:47Z
 ---
 
 # Cron Add のハードニング & スキーマ整合
 
 ## Context
 
-最近の ゲートウェイ ログでは、無効なパラメーター（`sessionTarget`、`wakeMode`、`payload` の欠落、および不正な `schedule`）により、`cron.add` の失敗が繰り返し発生しています。これは、少なくとも 1 つのクライアント（おそらく エージェント のツール呼び出し経路）が、ラップされた、または部分的に指定された ジョブ ペイロードを送信していることを示しています。別途、TypeScript の cron プロバイダー enum、ゲートウェイ のスキーマ、CLI フラグ、UI フォーム型の間に乖離があり、さらに `cron.status` に関する UI の不一致（`jobCount` を期待する一方で ゲートウェイ は `jobs` を返す）もあります。
+最近のゲートウェイログでは、無効なパラメータで繰り返された `cron.add` 失敗が表示されます。(`sessionTarget` 、 `wakeMode` 、 `payload` 、 `schedule` がありません)。 これは、少なくとも1つのクライアント (エージェントツールコールパス) がラップされたジョブペイロードまたは部分的に指定されたジョブペイロードを送信している可能性があります。 それとは別に、TypeScript、ゲートウェイスキーマ、CLIフラグ、UIフォームタイプのcronプロバイダ列挙に加え、`cronのUI不一致があります。 tatus` (ゲートウェイは `jobs` を返し、`jobCount` を期待しています)。
 
 ## Goals
 
@@ -44,7 +37,7 @@ x-i18n:
 
 - `cron.add` と `cron.update` が一般的な ラッパー 形状を正規化し、不足している `kind` フィールドを推論するようになりました。
 - エージェント の cron ツール スキーマが ゲートウェイ のスキーマと一致し、無効な ペイロード が減少しました。
-- プロバイダー の enum が ゲートウェイ、CLI、UI、macOS ピッカー 全体で整合されました。
+- プロバイダの列挙は、ゲートウェイ、CLI、UI、およびmacOSピッカーで整列されます。
 - Control UI は ステータス 用に ゲートウェイ の `jobs` 件数 フィールドを使用します。
 
 ## Current behavior

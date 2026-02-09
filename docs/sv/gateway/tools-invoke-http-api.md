@@ -4,18 +4,11 @@ read_when:
   - Anropa verktyg utan att köra en fullständig agenttur
   - Bygga automatiseringar som behöver verktygspolicysäkerställande
 title: "Tools Invoke API"
-x-i18n:
-  source_path: gateway/tools-invoke-http-api.md
-  source_hash: 17ccfbe0b0d9bb61
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:25Z
 ---
 
 # Tools Invoke (HTTP)
 
-OpenClaws Gateway exponerar en enkel HTTP-slutpunkt för att anropa ett enskilt verktyg direkt. Den är alltid aktiverad, men skyddas av Gateway-autentisering och verktygspolicy.
+OpenClaws Gateway exponerar en enkel HTTP-slutpunkt för att åberopa ett enda verktyg direkt. Det är alltid aktiverat, men gated av Gateway auth och verktygspolitik.
 
 - `POST /tools/invoke`
 - Samma port som Gateway (WS + HTTP-multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -24,7 +17,7 @@ Standardstorlek för max nyttolast är 2 MB.
 
 ## Autentisering
 
-Använder Gatewayns autentiseringskonfiguration. Skicka en bearer-token:
+Använder Gateway auth konfiguration. Skicka en bärare token:
 
 - `Authorization: Bearer <token>`
 
@@ -50,7 +43,7 @@ Fält:
 - `tool` (string, obligatoriskt): namnet på verktyget som ska anropas.
 - `action` (string, valfritt): mappas in i args om verktygsschemat stöder `action` och args-nyttolasten utelämnade det.
 - `args` (object, valfritt): verktygsspecifika argument.
-- `sessionKey` (string, valfritt): mål-sessionnyckel. Om utelämnad eller `"main"`, använder Gateway den konfigurerade huvud-sessionnyckeln (respekterar `session.mainKey` och standardagent, eller `global` i global omfattning).
+- `sessionKey` (sträng, valfritt): målsessionsnyckel. Om utelämnad eller `"main"` använder Gateway den konfigurerade huvudsessionsnyckeln (honors `session.mainKey` och standardagent, eller `global` i global omfattning).
 - `dryRun` (boolean, valfritt): reserverad för framtida bruk; ignoreras för närvarande.
 
 ## Policy- och routningsbeteende
@@ -59,7 +52,7 @@ Tillgänglighet för verktyg filtreras genom samma policykedja som används av G
 
 - `tools.profile` / `tools.byProvider.profile`
 - `tools.allow` / `tools.byProvider.allow`
-- `agents.<id>.tools.allow` / `agents.<id>.tools.byProvider.allow`
+- `agenter.<id>.tools.allow` / `agenter.<id>.tools.byProvider.allow`
 - gruppolicyer (om sessionnyckeln mappar till en grupp eller kanal)
 - underagentpolicy (vid anrop med en underagents sessionnyckel)
 

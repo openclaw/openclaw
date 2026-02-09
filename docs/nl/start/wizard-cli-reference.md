@@ -5,13 +5,6 @@ read_when:
   - Je debugt onboardingresultaten of integreert onboardingclients
 title: "CLI Onboarding-referentie"
 sidebarTitle: "CLI-referentie"
-x-i18n:
-  source_path: start/wizard-cli-reference.md
-  source_hash: 20bb32d6fd952345
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:01Z
 ---
 
 # CLI Onboarding-referentie
@@ -37,19 +30,19 @@ Er wordt niets geïnstalleerd of gewijzigd op de remote host.
 ## Details lokale flow
 
 <Steps>
-  <Step title="Detectie van bestaande config">
+  <Step title="Existing config detection">
     - Als `~/.openclaw/openclaw.json` bestaat, kies je Behouden, Wijzigen of Resetten.
     - Het opnieuw uitvoeren van de wizard wist niets, tenzij je expliciet Reset kiest (of `--reset` meegeeft).
     - Als de config ongeldig is of legacy-sleutels bevat, stopt de wizard en vraagt je om `openclaw doctor` uit te voeren voordat je verdergaat.
     - Reset gebruikt `trash` en biedt scopes:
       - Alleen config
       - Config + credentials + sessies
-      - Volledige reset (verwijdert ook de werkruimte)
-  </Step>
-  <Step title="Model en auth">
+      - Volledige reset (verwijdert ook de werkruimte)  
+</Step>
+  <Step title="Model and auth">
     - De volledige optiematrix staat in [Auth- en modelopties](#auth-and-model-options).
   </Step>
-  <Step title="Werkruimte">
+  <Step title="Workspace">
     - Standaard `~/.openclaw/workspace` (configureerbaar).
     - Zaait werkruimtebestanden die nodig zijn voor het bootstrapritueel bij de eerste run.
     - Werkruimte-indeling: [Agent-werkruimte](/concepts/agent-workspace).
@@ -60,7 +53,7 @@ Er wordt niets geïnstalleerd of gewijzigd op de remote host.
     - Schakel auth alleen uit als je elk lokaal proces volledig vertrouwt.
     - Niet-loopback binds vereisen nog steeds auth.
   </Step>
-  <Step title="Kanalen">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): optionele QR-login
     - [Telegram](/channels/telegram): bot-token
     - [Discord](/channels/discord): bot-token
@@ -70,7 +63,8 @@ Er wordt niets geïnstalleerd of gewijzigd op de remote host.
     - [BlueBubbles](/channels/bluebubbles): aanbevolen voor iMessage; server-URL + wachtwoord + webhook
     - [iMessage](/channels/imessage): legacy `imsg` CLI-pad + DB-toegang
     - DM-beveiliging: standaard is koppelen. De eerste DM stuurt een code; goedkeuren via
-      `openclaw pairing approve <channel> <code>` of gebruik toegestane lijsten.
+      `openclaw pairing approve <channel><code>` of gebruik toegestane lijsten.
+  </Step><code>` of gebruik toegestane lijsten.
   </Step>
   <Step title="Daemon-installatie">
     - macOS: LaunchAgent
@@ -122,44 +116,50 @@ Wat je instelt:
 ## Auth- en modelopties
 
 <AccordionGroup>
-  <Accordion title="Anthropic API-sleutel (aanbevolen)">
+  <Accordion title="Anthropic API key (recommended)">
     Gebruikt `ANTHROPIC_API_KEY` indien aanwezig of vraagt om een sleutel, en slaat deze vervolgens op voor daemon-gebruik.
   </Accordion>
   <Accordion title="Anthropic OAuth (Claude Code CLI)">
     - macOS: controleert Keychain-item "Claude Code-credentials"
     - Linux en Windows: hergebruikt `~/.claude/.credentials.json` indien aanwezig
 
+    ```
     Kies op macOS "Always Allow" zodat launchd-starts niet blokkeren.
+    ```
 
   </Accordion>
-  <Accordion title="Anthropic-token (setup-token plakken)">
+  <Accordion title="Anthropic token (setup-token paste)">
     Voer `claude setup-token` uit op een willekeurige machine en plak vervolgens het token.
     Je kunt het een naam geven; leeg gebruikt de standaard.
   </Accordion>
-  <Accordion title="OpenAI Code-abonnement (Codex CLI hergebruik)">
+  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     Als `~/.codex/auth.json` bestaat, kan de wizard dit hergebruiken.
   </Accordion>
-  <Accordion title="OpenAI Code-abonnement (OAuth)">
+  <Accordion title="OpenAI Code subscription (OAuth)">
     Browserflow; plak `code#state`.
 
+    ```
     Stelt `agents.defaults.model` in op `openai-codex/gpt-5.3-codex` wanneer het model niet is ingesteld of `openai/*`.
+    ```
 
   </Accordion>
-  <Accordion title="OpenAI API-sleutel">
+  <Accordion title="OpenAI API key">
     Gebruikt `OPENAI_API_KEY` indien aanwezig of vraagt om een sleutel, en slaat deze vervolgens op in
     `~/.openclaw/.env` zodat launchd deze kan lezen.
 
+    ```
     Stelt `agents.defaults.model` in op `openai/gpt-5.1-codex` wanneer het model niet is ingesteld, `openai/*` of `openai-codex/*`.
+    ```
 
   </Accordion>
-  <Accordion title="xAI (Grok) API-sleutel">
+  <Accordion title="xAI (Grok) API key">
     Vraagt om `XAI_API_KEY` en configureert xAI als modelprovider.
   </Accordion>
   <Accordion title="OpenCode Zen">
     Vraagt om `OPENCODE_API_KEY` (of `OPENCODE_ZEN_API_KEY`).
     Setup-URL: [opencode.ai/auth](https://opencode.ai/auth).
   </Accordion>
-  <Accordion title="API-sleutel (generiek)">
+  <Accordion title="API key (generic)">
     Slaat de sleutel voor je op.
   </Accordion>
   <Accordion title="Vercel AI Gateway">
@@ -174,15 +174,15 @@ Wat je instelt:
     Config wordt automatisch weggeschreven.
     Meer details: [MiniMax](/providers/minimax).
   </Accordion>
-  <Accordion title="Synthetic (Anthropic-compatibel)">
+  <Accordion title="Synthetic (Anthropic-compatible)">
     Vraagt om `SYNTHETIC_API_KEY`.
     Meer details: [Synthetic](/providers/synthetic).
   </Accordion>
-  <Accordion title="Moonshot en Kimi Coding">
+  <Accordion title="Moonshot and Kimi Coding">
     Moonshot (Kimi K2) en Kimi Coding-configs worden automatisch weggeschreven.
     Meer details: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
-  <Accordion title="Overslaan">
+  <Accordion title="Skip">
     Laat auth ongeconfigureerd.
   </Accordion>
 </AccordionGroup>

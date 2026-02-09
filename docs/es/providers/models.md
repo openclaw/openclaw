@@ -4,13 +4,6 @@ read_when:
   - Quiere elegir un proveedor de modelos
   - Quiere ejemplos de configuración rápida para la autenticación de LLM y la selección de modelos
 title: "Inicio rápido de proveedores de modelos"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:18Z
 ---
 
 # Proveedores de modelos

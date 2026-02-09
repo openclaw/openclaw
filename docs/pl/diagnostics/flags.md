@@ -4,13 +4,6 @@ read_when:
   - Potrzebujesz ukierunkowanych logów debugowania bez podnoszenia globalnych poziomów logowania
   - Musisz zebrać logi specyficzne dla podsystemu na potrzeby wsparcia
 title: "Flagi diagnostyczne"
-x-i18n:
-  source_path: diagnostics/flags.md
-  source_hash: daf0eca0e6bd1cbc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:08Z
 ---
 
 # Flagi diagnostyczne
@@ -19,9 +12,9 @@ Flagi diagnostyczne umożliwiają włączenie ukierunkowanych logów debugowania
 
 ## Jak to działa
 
-- Flagi są ciągami znaków (bez rozróżniania wielkości liter).
+- Flagi są ciągami znaków (wielkość liter jest różna).
 - Flagi można włączyć w konfiguracji lub przez nadpisanie zmienną środowiskową.
-- Obsługiwane są symbole wieloznaczne:
+- Obsługiwane są karty dzikie:
   - `telegram.*` dopasowuje `telegram.http`
   - `*` włącza wszystkie flagi
 
@@ -47,7 +40,7 @@ Wiele flag:
 
 Po zmianie flag uruchom ponownie gateway (bramę).
 
-## Nadpisanie przez zmienne środowiskowe (jednorazowe)
+## Zastąp Env (jednorazowy)
 
 ```bash
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -83,7 +76,7 @@ Filtruj diagnostykę HTTP Telegrama:
 rg "telegram http error" /tmp/openclaw/openclaw-*.log
 ```
 
-Albo śledź na żywo podczas odtwarzania problemu:
+Lub ogon podczas reprodukcji:
 
 ```bash
 tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"

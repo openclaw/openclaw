@@ -4,18 +4,11 @@ read_when:
   - Introduktion av en ny assistentinstans
   - Granskning av säkerhets- och behörighetsimplikationer
 title: "Konfigurering av personlig assistent"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:37Z
 ---
 
 # Bygga en personlig assistent med OpenClaw
 
-OpenClaw är en WhatsApp + Telegram + Discord + iMessage-gateway för **Pi**-agenter. Plugins lägger till Mattermost. Den här guiden är uppsättningen för ”personlig assistent”: ett dedikerat WhatsApp-nummer som beter sig som din alltid‑på‑agent.
+OpenClaw är en WhatsApp + Telegram + Discord + iMessage gateway för **Pi** agenter. Tillägg till Mattermost. Denna guide är "personlig assistent" setup: en dedikerad WhatsApp nummer som beter sig som din alltid ombud.
 
 ## ⚠️ Säkerhet först
 
@@ -29,7 +22,7 @@ Börja försiktigt:
 
 - Sätt alltid `channels.whatsapp.allowFrom` (kör aldrig öppet mot hela världen på din personliga Mac).
 - Använd ett dedikerat WhatsApp-nummer för assistenten.
-- Heartbeats är nu som standard var 30:e minut. Inaktivera tills du litar på uppsättningen genom att sätta `agents.defaults.heartbeat.every: "0m"`.
+- Heartbeats är nu standard för var 30:e minut. Inaktivera tills du litar på installationen genom att ställa in `agents.defaults.heartbeat.every: "0m"`.
 
 ## Förutsättningar
 
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-Om du länkar ditt personliga WhatsApp till OpenClaw blir varje meddelande till dig ”agentindata”. Det är sällan vad du vill.
+Om du länkar din personliga WhatsApp till OpenClaw, varje meddelande till dig blir “agent input”. Det är sällan det du vill.
 
 ## Snabbstart på 5 minuter
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 Meddela nu assistentnumret från din tillåtelselista.
 
-När introduktionen är klar öppnar vi automatiskt instrumentpanelen och skriver ut en ren (icke‑tokeniserad) länk. Om den ber om autentisering, klistra in token från `gateway.auth.token` i Control UI‑inställningarna. För att öppna igen senare: `openclaw dashboard`.
+När onboarding är klar öppnar vi instrumentbrädan automatiskt och skriver ut en ren (icke-tokenized) länk. Om det ber om att få auth, klistra in token från `gateway.auth.token` i kontrollgränssnittets inställningar. För att öppna senare: `openclaw dashboard`.
 
 ## Ge agenten en arbetsyta (AGENTS)
 
 OpenClaw läser driftinstruktioner och ”minne” från sin arbetsytekatalog.
 
-Som standard använder OpenClaw `~/.openclaw/workspace` som agentarbetsyta och skapar den (plus startfilerna `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatiskt vid konfigurering/första agentkörning. `BOOTSTRAP.md` skapas bara när arbetsytan är helt ny (den ska inte komma tillbaka efter att du raderar den). `MEMORY.md` är valfri (skapas inte automatiskt); när den finns laddas den för normala sessioner. Subagentsessioner injicerar endast `AGENTS.md` och `TOOLS.md`.
+Som standard använder OpenClaw `~/.openclaw/workspace` som agentens arbetsyta, och kommer att skapa det (plus start-`AGENTS. d`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatiskt vid setup/första agent kör. `BOOTSTRAP.md` skapas bara när arbetsytan är helt ny (det bör inte komma tillbaka efter att du tagit bort den). `MEMORY.md` är valfritt (inte automatiskt skapat); när närvarande, är det laddat för normala sessioner. Underagent sessioner endast injicera `AGENTS.md` och `TOOLS.md`.
 
-Tips: behandla den här mappen som OpenClaws ”minne” och gör den till ett git‑repo (helst privat) så att dina `AGENTS.md` + minnesfiler säkerhetskopieras. Om git är installerat initieras helt nya arbetsytor automatiskt.
+Tips: behandla den här mappen som OpenClaws ”minne” och gör den till en git repo (helst privat) så att dina `AGENTS.md` + minnesfiler säkerhetskopieras. Om git är installerat är helt nya arbetsytor autoinitierade.
 
 ```bash
 openclaw setup
@@ -168,14 +161,14 @@ Exempel:
 
 - Sessionsfiler: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - Sessionsmetadata (tokenanvändning, senaste rutt, etc): `~/.openclaw/agents/<agentId>/sessions/sessions.json` (legacy: `~/.openclaw/sessions/sessions.json`)
-- `/new` eller `/reset` startar en ny session för den chatten (konfigurerbart via `resetTriggers`). Om det skickas ensamt svarar agenten med ett kort hej för att bekräfta återställningen.
+- `/new` eller `/reset` startar en ny session för den chatten (konfigurerbar via `resetTriggers`). Om den skickas ensam, svarar agenten med en kort hej för att bekräfta återställningen.
 - `/compact [instructions]` komprimerar sessionskontexten och rapporterar återstående kontextbudget.
 
 ## Heartbeats (proaktivt läge)
 
-Som standard kör OpenClaw en heartbeat var 30:e minut med prompten:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`  
-Sätt `agents.defaults.heartbeat.every: "0m"` för att inaktivera.
+Som standard kör OpenClaw ett hjärtslag var 30:e minut med prompten:
+`Read HEARTBEAT.md om det finns (arbetsytans sammanhang). Följ den strikt. Sluta inte eller upprepa gamla uppgifter från tidigare chattar. Om inget behöver uppmärksamhet, svara HEARTBEAT_OK.`
+Set `agents.defaults.heartbeat.every: "0m"` för att inaktivera.
 
 - Om `HEARTBEAT.md` finns men i praktiken är tom (endast tomma rader och markdown‑rubriker som `# Heading`), hoppar OpenClaw över heartbeat‑körningen för att spara API‑anrop.
 - Om filen saknas körs heartbeat ändå och modellen avgör vad som ska göras.
@@ -198,7 +191,7 @@ Inkommande bilagor (bilder/ljud/dokument) kan exponeras till ditt kommando via m
 - `{{MediaUrl}}` (pseudo‑URL)
 - `{{Transcript}}` (om ljudtranskribering är aktiverad)
 
-Utgående bilagor från agenten: inkludera `MEDIA:<path-or-url>` på en egen rad (inga mellanslag). Exempel:
+Utgående bilagor från agenten: inkludera `MEDIA:<path-or-url>` på sin egen linje (inga mellanslag). Exempel:
 
 ```
 Here’s the screenshot.

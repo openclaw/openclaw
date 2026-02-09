@@ -5,13 +5,6 @@ read_when:
   - डुप्लिकेट या पुरानी instance पंक्तियों की जाँच करते समय
   - Gateway WS कनेक्ट या system-event beacons बदलते समय
 title: "Presence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:12Z
 ---
 
 # Presence
@@ -42,28 +35,27 @@ Presence प्रविष्टियाँ संरचित ऑब्जे
 
 Presence प्रविष्टियाँ कई स्रोतों से उत्पन्न होती हैं और **मर्ज** की जाती हैं।
 
-### 1) Gateway self entry
+### 1. Gateway self entry
 
 Gateway स्टार्टअप पर हमेशा एक “self” प्रविष्टि सीड करता है ताकि किसी भी क्लाइंट के
 कनेक्ट होने से पहले ही UI में Gateway होस्ट दिखाई दे।
 
-### 2) WebSocket connect
+### 2. WebSocket connect
 
-हर WS क्लाइंट एक `connect` अनुरोध से शुरू होता है। सफल हैंडशेक पर
-Gateway उस कनेक्शन के लिए एक presence प्रविष्टि upsert करता है।
+Every WS client begins with a `connect` request. On successful handshake the
+Gateway upserts a presence entry for that connection.
 
 #### एक‑बार वाले CLI कमांड क्यों नहीं दिखते
 
-CLI अक्सर छोटे, एक‑बार वाले कमांड के लिए कनेक्ट होता है। Instances सूची में
-स्पैम से बचने के लिए, `client.mode === "cli"` को presence प्रविष्टि में **परिवर्तित नहीं**
-किया जाता।
+The CLI often connects for short, one‑off commands. To avoid spamming the
+Instances list, `client.mode === "cli"` is **not** turned into a presence entry.
 
-### 3) `system-event` beacons
+### 3. `system-event` beacons
 
-क्लाइंट `system-event` मेथड के माध्यम से अधिक समृद्ध आवधिक beacons भेज सकते हैं।
-mac ऐप इसका उपयोग होस्ट नाम, IP, और `lastInputSeconds` रिपोर्ट करने के लिए करता है।
+Clients can send richer periodic beacons via the `system-event` method. The mac
+app uses this to report host name, IP, and `lastInputSeconds`.
 
-### 4) Node कनेक्शन (role: node)
+### 4. Node कनेक्शन (role: node)
 
 जब कोई node Gateway WebSocket पर `role: node` के साथ कनेक्ट होता है, तो Gateway
 उस node के लिए एक presence प्रविष्टि upsert करता है (अन्य WS क्लाइंट्स जैसा ही प्रवाह)।
@@ -91,9 +83,9 @@ Presence जानबूझकर ephemeral है:
 
 ## Remote/tunnel चेतावनी (loopback IPs)
 
-जब कोई क्लाइंट SSH टनल / local port forward के माध्यम से कनेक्ट होता है, तो Gateway
-रिमोट पते को `127.0.0.1` के रूप में देख सकता है। किसी अच्छे क्लाइंट‑रिपोर्टेड
-IP को ओवरराइट करने से बचने के लिए, loopback रिमोट पतों को अनदेखा किया जाता है।
+When a client connects over an SSH tunnel / local port forward, the Gateway may
+see the remote address as `127.0.0.1`. To avoid overwriting a good client‑reported
+IP, loopback remote addresses are ignored.
 
 ## Consumers
 

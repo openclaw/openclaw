@@ -5,13 +5,6 @@ read_when:
   - Depurar por qué openclaw está interfiriendo con su propio Chrome
   - Implementar ajustes y ciclo de vida del navegador en la app de macOS
 title: "Navegador (administrado por OpenClaw)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:22Z
 ---
 
 # Navegador (administrado por openclaw)
@@ -257,7 +250,7 @@ openclaw browser extension install
 - “Load unpacked” → seleccione el directorio impreso por `openclaw browser extension path`
 - Fije la extensión y luego haga clic en ella en la pestaña que desea controlar (la insignia muestra `ON`).
 
-2. Úsela:
+2. Utilícelo:
 
 - CLI: `openclaw browser --browser-profile chrome tabs`
 - Herramienta del agente: `browser` con `profile="chrome"`
@@ -499,7 +492,7 @@ openclaw browser wait "#main" \
   --timeout-ms 15000
 ```
 
-## Flujos de depuración
+## Depurar workflows
 
 Cuando una acción falla (p. ej., “not visible”, “strict mode violation”, “covered”):
 

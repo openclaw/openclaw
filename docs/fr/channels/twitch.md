@@ -3,13 +3,6 @@ summary: "Configuration et configuration initiale du bot de chat Twitch"
 read_when:
   - Configuration de l’integration du chat Twitch pour OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 0dd1c05bef570470
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:00:52Z
 ---
 
 # Twitch (plugin)
@@ -88,7 +81,7 @@ Aucune inscription manuelle d’application n’est necessaire. Les jetons expir
 
 ### Configurer le bot
 
-**Variable d’environnement (compte par defaut uniquement) :**
+**Env var (compte par défaut uniquement) :**
 
 ```bash
 OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
@@ -253,7 +246,7 @@ Par defaut, `requireMention` est `true`. Pour desactiver et repondre a tous les 
 }
 ```
 
-## Depannage
+## Problemes courants
 
 Commencez par executer les commandes de diagnostic :
 
@@ -269,7 +262,7 @@ openclaw channels status --probe
 
 **Verifier que le bot est dans le canal :** Le bot doit rejoindre le canal specifie dans `channel`.
 
-### Problemes de jeton
+### Problèmes de jeton
 
 **« Failed to connect » ou erreurs d’authentification :**
 
@@ -277,7 +270,7 @@ openclaw channels status --probe
 - Verifiez que le jeton possede les portees `chat:read` et `chat:write`
 - Si vous utilisez le renouvellement de jeton, verifiez que `clientSecret` et `refreshToken` sont definis
 
-### Le renouvellement du jeton ne fonctionne pas
+### L'actualisation du jeton ne fonctionne pas
 
 **Verifier les journaux pour les evenements de renouvellement :**
 

@@ -3,13 +3,6 @@ summary: "WhatsApp 그룹 메시지 처리에 대한 동작과 구성 (mentionPa
 read_when:
   - 그룹 메시지 규칙 또는 멘션 변경 시
 title: "그룹 메시지"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:04Z
 ---
 
 # 그룹 메시지 (WhatsApp 웹 채널)
@@ -78,7 +71,7 @@ WhatsApp 이 텍스트 본문에서 시각적 `@` 를 제거하더라도 표시 
 
 ## 테스트 / 검증
 
-- 수동 스모크 테스트:
+- Manual smoke:
   - 그룹에서 `@openclaw` 핑을 보내고 발신자 이름을 참조하는 응답이 오는지 확인합니다.
   - 두 번째 핑을 보내고, 히스토리 블록이 포함된 후 다음 턴에서 초기화되는지 확인합니다.
 - Gateway 로그를 확인합니다(`--verbose` 로 실행). `from: <groupJid>` 와 `[from: …]` 접미사를 보여주는 `inbound web message` 항목을 확인하십시오.

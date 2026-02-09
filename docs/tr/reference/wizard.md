@@ -5,14 +5,7 @@ read_when:
   - Etkileşimsiz modla onboarding’i otomatikleştirirken
   - Sihirbaz davranışında hata ayıklarken
 title: "Onboarding Sihirbazı Başvurusu"
-sidebarTitle: "Sihirbaz Başvurusu"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:00Z
+sidebarTitle: "reference/wizard.md"
 ---
 
 # Onboarding Sihirbazı Başvurusu
@@ -23,7 +16,7 @@ Bu belge, `openclaw onboard` CLI sihirbazının tam başvurusudur.
 ## Akış ayrıntıları (yerel mod)
 
 <Steps>
-  <Step title="Mevcut yapılandırmanın algılanması">
+  <Step title="Existing config detection">
     - `~/.openclaw/openclaw.json` mevcutsa **Koru / Değiştir / Sıfırla** seçeneklerinden biri seçilir.
     - Sihirbazı yeniden çalıştırmak, siz açıkça **Sıfırla**yı seçmedikçe
       (veya `--reset` geçmedikçe) hiçbir şeyi **silmez**.
@@ -32,9 +25,9 @@ Bu belge, `openclaw onboard` CLI sihirbazının tam başvurusudur.
     - Sıfırlama `trash` kullanır (asla `rm` değil) ve kapsam seçenekleri sunar:
       - Yalnızca yapılandırma
       - Yapılandırma + kimlik bilgileri + oturumlar
-      - Tam sıfırlama (çalışma alanını da kaldırır)
-  </Step>
-  <Step title="Model/Kimlik Doğrulama">
+      - Tam sıfırlama (çalışma alanını da kaldırır)  
+</Step>
+  <Step title="Model/Auth">
     - **Anthropic API anahtarı (önerilir)**: mevcutsa `ANTHROPIC_API_KEY` kullanır veya bir anahtar ister, ardından daemon kullanımı için kaydeder.
     - **Anthropic OAuth (Claude Code CLI)**: macOS’ta sihirbaz “Claude Code-credentials” Keychain öğesini kontrol eder (“Always Allow” seçin ki launchd başlatmaları engellenmesin); Linux/Windows’ta mevcutsa `~/.claude/.credentials.json` yeniden kullanılır.
     - **Anthropic token’ı (setup-token yapıştır)**: herhangi bir makinede `claude setup-token` çalıştırın, ardından token’ı yapıştırın (ad verebilirsiniz; boş = varsayılan).
@@ -60,25 +53,25 @@ Bu belge, `openclaw onboard` CLI sihirbazının tam başvurusudur.
     - Algılanan seçeneklerden varsayılan bir model seçin (veya sağlayıcı/modeli manuel girin).
     - Sihirbaz bir model denetimi çalıştırır ve yapılandırılan model bilinmiyorsa veya kimlik doğrulama eksikse uyarır.
     - OAuth kimlik bilgileri `~/.openclaw/credentials/oauth.json` altında; kimlik doğrulama profilleri `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` altında bulunur (API anahtarları + OAuth).
-    - Daha fazla ayrıntı: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - Daha fazla ayrıntı: [/concepts/oauth](/concepts/oauth)    
+<Note>
     Başsız/sunucu ipucu: OAuth’u tarayıcılı bir makinede tamamlayın, ardından
     `~/.openclaw/credentials/oauth.json` (veya `$OPENCLAW_STATE_DIR/credentials/oauth.json`) dosyasını
     gateway ana makinesine kopyalayın.
     </Note>
   </Step>
-  <Step title="Çalışma alanı">
+  <Step title="Workspace">
     - Varsayılan `~/.openclaw/workspace` (yapılandırılabilir).
     - Ajan bootstrap ritüeli için gereken çalışma alanı dosyalarını oluşturur.
-    - Tam çalışma alanı düzeni + yedekleme kılavuzu: [Ajan çalışma alanı](/concepts/agent-workspace)
-  </Step>
+    - Tam çalışma alanı düzeni + yedekleme kılavuzu: [Ajan çalışma alanı](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - Port, bağlama, kimlik doğrulama modu, Tailscale yayını.
     - Kimlik doğrulama önerisi: local loopback için bile **Token**’ı koruyun; böylece yerel WS istemcileri kimlik doğrulamak zorunda kalır.
     - Kimlik doğrulamayı yalnızca tüm yerel süreçlere tamamen güveniyorsanız devre dışı bırakın.
     - Loopback olmayan bağlamalar yine de kimlik doğrulama gerektirir.
   </Step>
-  <Step title="Kanallar">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): isteğe bağlı QR ile giriş.
     - [Telegram](/channels/telegram): bot belirteci.
     - [Discord](/channels/discord): bot belirteci.
@@ -87,7 +80,8 @@ Bu belge, `openclaw onboard` CLI sihirbazının tam başvurusudur.
     - [Signal](/channels/signal): isteğe bağlı `signal-cli` kurulumu + hesap yapılandırması.
     - [BlueBubbles](/channels/bluebubbles): **iMessage için önerilir**; sunucu URL’si + parola + webhook.
     - [iMessage](/channels/imessage): eski `imsg` CLI yolu + veritabanı erişimi.
-    - DM güvenliği: varsayılan eşleştirmedir. İlk DM bir kod gönderir; `openclaw pairing approve <channel> <code>` üzerinden onaylayın veya izin listeleri kullanın.
+    - DM güvenliği: varsayılan eşleştirmedir. İlk DM bir kod gönderir; `openclaw pairing approve <channel><code>` üzerinden onaylayın veya izin listeleri kullanın.
+  </Step><code>` üzerinden onaylayın veya izin listeleri kullanın.
   </Step>
   <Step title="Daemon kurulumu">
     - macOS: LaunchAgent
@@ -139,7 +133,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
 </Note>
 
 <AccordionGroup>
-  <Accordion title="Gemini örneği">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +143,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI örneği">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +153,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway örneği">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +163,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway örneği">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +175,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot örneği">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +185,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic örneği">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +195,7 @@ Makine tarafından okunabilir bir özet için `--json` ekleyin.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen örneği">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

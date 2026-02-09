@@ -3,13 +3,6 @@ summary: "Elevated exec-läge och /elevated-direktiv"
 read_when:
   - Justerar standardvärden för elevated-läge, tillåtelselistor eller beteende för snedstreckskommandon
 title: "Elevated-läge"
-x-i18n:
-  source_path: tools/elevated.md
-  source_hash: 83767a0160930402
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:41Z
 ---
 
 # Elevated-läge (/elevated-direktiv)
@@ -26,10 +19,10 @@ x-i18n:
 
 ## Vad det styr (och vad det inte gör)
 
-- **Tillgänglighetsgrindar**: `tools.elevated` är den globala baslinjen. `agents.list[].tools.elevated` kan ytterligare begränsa elevated per agent (båda måste tillåta).
+- **Tillgänglighetsportar**: `tools.elevated` är den globala baslinjen. `agents.list[].tools.elevated` kan ytterligare begränsa förhöjd per agent (båda måste tillåta).
 - **Per-sessionstillstånd**: `/elevated on|off|ask|full` sätter elevated-nivån för den aktuella sessionsnyckeln.
 - **Inline-direktiv**: `/elevated on|ask|full` i ett meddelande gäller endast för det meddelandet.
-- **Grupper**: I gruppchattar respekteras elevated-direktiv endast när agenten nämns. Kommandobara meddelanden som kringgår krav på omnämnande behandlas som omnämnda.
+- **Grupper**: I gruppchattar hedras förhöjda direktiv endast när agenten nämns. Kommandon endast meddelanden som kringgår nämna krav behandlas som nämnts.
 - **Körning på värd**: elevated tvingar `exec` till gateway-värden; `full` sätter även `security=full`.
 - **Godkännanden**: `full` hoppar över exec-godkännanden; `on`/`ask` respekterar dem när tillåtelselista-/frågeregler kräver det.
 - **Ej sandboxade agenter**: no-op för plats; påverkar endast grindar, loggning och status.
@@ -44,7 +37,7 @@ x-i18n:
 
 ## Ställa in en sessionsstandard
 
-- Skicka ett meddelande som **endast** är direktivet (blanksteg tillåtna), t.ex. `/elevated full`.
+- Skicka ett meddelande som är **bara** direktivet (blanktecken tillåtet), t.ex. `/förhöjd full`.
 - Bekräftelsesvar skickas (`Elevated mode set to full...` / `Elevated mode disabled.`).
 - Om elevated-åtkomst är inaktiverad eller avsändaren inte finns på den godkända tillåtelselistan svarar direktivet med ett åtgärdbart fel och ändrar inte sessionsstatus.
 - Skicka `/elevated` (eller `/elevated:`) utan argument för att se aktuell elevated-nivå.
@@ -52,13 +45,13 @@ x-i18n:
 ## Tillgänglighet + tillåtelselistor
 
 - Funktionsgrind: `tools.elevated.enabled` (standard kan vara av via konfig även om koden stöder det).
-- Avsändarens tillåtelselista: `tools.elevated.allowFrom` med per-leverantörslistor (t.ex. `discord`, `whatsapp`).
+- Avsändartillåten lista: `tools.elevated.allowFrom` med per-provider allowlists (t.ex. `discord`, `whatsapp`).
 - Per-agent-grind: `agents.list[].tools.elevated.enabled` (valfri; kan endast ytterligare begränsa).
 - Per-agent-tillåtelselista: `agents.list[].tools.elevated.allowFrom` (valfri; när den är satt måste avsändaren matcha **både** globala + per-agent-tillåtelselistor).
-- Discord-reserv: om `tools.elevated.allowFrom.discord` utelämnas används listan `channels.discord.dm.allowFrom` som reserv. Sätt `tools.elevated.allowFrom.discord` (även `[]`) för att åsidosätta. Per-agent-tillåtelselistor använder **inte** reserven.
+- Discord fallback: om `tools.elevated.allowFrom.discord` utelämnas `channels.discord.dm.allowFrom`-listan används som en reserv. Ange `tools.elevated.allowFrom.discord` (även `[]`) att åsidosätta. Per-agent allowlists gör **inte** använda reserven.
 - Alla grindar måste passera; annars behandlas elevated som otillgängligt.
 
 ## Loggning + status
 
 - Elevated exec-anrop loggas på info-nivå.
-- Sessionsstatus inkluderar elevated-läge (t.ex. `elevated=ask`, `elevated=full`).
+- Sessionsstatus inkluderar förhöjt läge (t.ex. `elevated=ask`, `elevated=full`).

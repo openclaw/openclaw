@@ -6,13 +6,6 @@ read_when:
   - Bạn muốn toàn quyền kiểm soát việc lưu trữ lâu dài, các binary và hành vi khởi động lại
   - Bạn đang chạy OpenClaw trong Docker trên Hetzner hoặc nhà cung cấp tương tự
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:27Z
 ---
 
 # OpenClaw trên Hetzner (Docker, Hướng dẫn VPS production)
@@ -21,8 +14,8 @@ x-i18n:
 
 Chạy một OpenClaw Gateway bền vững trên VPS Hetzner bằng Docker, với trạng thái được lưu lâu dài, các binary được đóng gói sẵn và hành vi khởi động lại an toàn.
 
-Nếu bạn muốn “OpenClaw 24/7 với ~$5”, đây là thiết lập đơn giản và đáng tin cậy nhất.  
-Giá Hetzner có thể thay đổi; hãy chọn VPS Debian/Ubuntu nhỏ nhất và nâng cấp nếu gặp lỗi OOM.
+If you want “OpenClaw 24/7 for ~$5”, this is the simplest reliable setup.
+Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS and scale up if you hit OOMs.
 
 ## Chúng ta đang làm gì (nói đơn giản)?
 
@@ -37,9 +30,9 @@ Gateway có thể được truy cập qua:
 - Chuyển tiếp cổng SSH từ laptop của bạn
 - Mở cổng trực tiếp nếu bạn tự quản lý firewall và token
 
-Hướng dẫn này giả định bạn dùng Ubuntu hoặc Debian trên Hetzner.  
-Nếu bạn dùng VPS Linux khác, hãy ánh xạ các gói tương ứng.  
-Với luồng Docker chung, xem [Docker](/install/docker).
+This guide assumes Ubuntu or Debian on Hetzner.  
+If you are on another Linux VPS, map packages accordingly.
+For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
@@ -71,7 +64,7 @@ Với luồng Docker chung, xem [Docker](/install/docker).
 
 ---
 
-## 1) Tạo VPS
+## 1. Tạo VPS
 
 Tạo một VPS Ubuntu hoặc Debian trên Hetzner.
 
@@ -81,12 +74,12 @@ Kết nối với quyền root:
 ssh root@YOUR_VPS_IP
 ```
 
-Hướng dẫn này giả định VPS là có trạng thái (stateful).  
-Không nên coi nó là hạ tầng dùng xong bỏ.
+This guide assumes the VPS is stateful.
+Đừng coi đây là hạ tầng dùng rồi bỏ.
 
 ---
 
-## 2) Cài Docker (trên VPS)
+## 2. Cài Docker (trên VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Clone repository OpenClaw
+## 3. Clone repository OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,10 +107,10 @@ Hướng dẫn này giả định bạn sẽ build một image tùy chỉnh đ�
 
 ---
 
-## 4) Tạo các thư mục host lưu trữ lâu dài
+## 4. Tạo các thư mục host lưu trữ lâu dài
 
-Docker container là tạm thời.  
-Mọi trạng thái tồn tại lâu dài phải nằm trên host.
+Docker containers are ephemeral.
+All long-lived state must live on the host.
 
 ```bash
 mkdir -p /root/.openclaw
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Cấu hình biến môi trường
+## 5. Cấu hình biến môi trường
 
 Tạo `.env` ở thư mục gốc của repository.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Cấu hình Docker Compose
+## 6. Cấu hình Docker Compose
 
 Tạo hoặc cập nhật `docker-compose.yml`.
 
@@ -204,10 +197,10 @@ services:
 
 ---
 
-## 7) Đóng gói các binary cần thiết vào image (quan trọng)
+## 7. Đóng gói các binary cần thiết vào image (quan trọng)
 
-Cài binary bên trong container đang chạy là một cái bẫy.  
-Bất cứ thứ gì cài ở runtime sẽ bị mất khi restart.
+Installing binaries inside a running container is a trap.
+Anything installed at runtime will be lost on restart.
 
 Tất cả các binary bên ngoài mà Skills cần phải được cài ở bước build image.
 
@@ -217,8 +210,8 @@ Ví dụ dưới đây chỉ minh họa ba binary phổ biến:
 - `goplaces` cho Google Places
 - `wacli` cho WhatsApp
 
-Đây chỉ là ví dụ, không phải danh sách đầy đủ.  
-Bạn có thể cài bao nhiêu binary tùy ý theo cùng một mẫu.
+These are examples, not a complete list.
+You may install as many binaries as needed using the same pattern.
 
 Nếu sau này bạn thêm Skills mới phụ thuộc vào các binary khác, bạn phải:
 
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Build và khởi chạy
+## 8. Build và khởi chạy
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) Xác minh Gateway
+## 9. Xác minh Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,8 +313,8 @@ Dán gateway token của bạn.
 
 ## Những gì được lưu ở đâu (nguồn sự thật)
 
-OpenClaw chạy trong Docker, nhưng Docker không phải là nguồn sự thật.  
-Mọi trạng thái tồn tại lâu dài phải sống sót qua restart, rebuild và reboot.
+OpenClaw runs in Docker, but Docker is not the source of truth.
+All long-lived state must survive restarts, rebuilds, and reboots.
 
 | Thành phần             | Vị trí                            | Cơ chế lưu trữ         | Ghi chú                        |
 | ---------------------- | --------------------------------- | ---------------------- | ------------------------------ |

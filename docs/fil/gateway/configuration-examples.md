@@ -5,18 +5,11 @@ read_when:
   - Paghahanap ng mga halimbawa ng configuration
   - Unang beses na pagse-setup ng OpenClaw
 title: "Mga Halimbawa ng Configuration"
-x-i18n:
-  source_path: gateway/configuration-examples.md
-  source_hash: 2c9cee53d56a4232
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:25Z
 ---
 
 # Mga Halimbawa ng Configuration
 
-Ang mga halimbawa sa ibaba ay nakaayon sa kasalukuyang config schema. Para sa kumpletong reference at mga tala kada field, tingnan ang [Configuration](/gateway/configuration).
+Examples below are aligned with the current config schema. Para sa kumpletong sanggunian at mga tala kada field, tingnan ang [Configuration](/gateway/configuration).
 
 ## Mabilis na pagsisimula
 
@@ -55,7 +48,7 @@ I-save sa `~/.openclaw/openclaw.json` at maaari mo nang i-DM ang bot mula sa num
 
 ## Pinalawak na halimbawa (pangunahing mga opsyon)
 
-> Pinapayagan ka ng JSON5 na gumamit ng mga comment at trailing commas. Gumagana rin ang regular na JSON.
+> Pinapayagan ka ng JSON5 na gumamit ng mga comment at trailing comma. Gumagana rin ang regular na JSON.
 
 ```json5
 {
@@ -608,6 +601,6 @@ Kung higit sa isang tao ang maaaring mag-DM sa iyong bot (maramihang entry sa `a
 ## Mga tip
 
 - Kung itinakda mo ang `dmPolicy: "open"`, dapat isama ng katugmang listahan ng `allowFrom` ang `"*"`.
-- Magkakaiba ang mga provider ID (mga numero ng telepono, user ID, channel ID). Gamitin ang mga docs ng provider upang kumpirmahin ang format.
+- Nagkakaiba ang mga Provider ID (mga numero ng telepono, user ID, channel ID). Gamitin ang mga dokumento ng provider upang kumpirmahin ang format.
 - Mga opsyonal na seksyon na maaaring idagdag sa ibang pagkakataon: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
 - Tingnan ang [Providers](/channels/whatsapp) at [Troubleshooting](/gateway/troubleshooting) para sa mas malalim na mga tala sa setup.

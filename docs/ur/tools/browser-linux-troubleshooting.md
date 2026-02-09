@@ -2,13 +2,6 @@
 summary: "لینکس پر OpenClaw براؤزر کنٹرول کے لیے Chrome/Brave/Edge/Chromium CDP کے آغاز کے مسائل حل کریں"
 read_when: "لینکس پر براؤزر کنٹرول ناکام ہو، خصوصاً snap Chromium کے ساتھ"
 title: "براؤزر کی خرابیوں کا ازالہ"
-x-i18n:
-  source_path: tools/browser-linux-troubleshooting.md
-  source_hash: bac2301022511a0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:44Z
 ---
 
 # براؤزر کی خرابیوں کا ازالہ (Linux)
@@ -23,7 +16,7 @@ OpenClaw کا براؤزر کنٹرول سرور درج ذیل خرابی کے �
 
 ### بنیادی وجہ
 
-Ubuntu (اور بہت سی لینکس ڈسٹروز) پر Chromium کی ڈیفالٹ انسٹالیشن ایک **snap پیکج** ہوتی ہے۔ Snap کی AppArmor پابندیاں اس طریقے میں مداخلت کرتی ہیں جس کے ذریعے OpenClaw براؤزر پروسیس کو شروع اور مانیٹر کرتا ہے۔
+On Ubuntu (and many Linux distros), the default Chromium installation is a **snap package**. Snap's AppArmor confinement interferes with how OpenClaw spawns and monitors the browser process.
 
 `apt install chromium` کمانڈ ایک اسٹب پیکج انسٹال کرتی ہے جو snap کی طرف ری ڈائریکٹ کرتی ہے:
 
@@ -119,19 +112,19 @@ curl -s http://127.0.0.1:18791/tabs
 
 ### کنفیگ حوالہ
 
-| Option                   | Description                                                          | Default                                                                |
-| ------------------------ | -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `browser.enabled`        | براؤزر کنٹرول فعال کریں                                              | `true`                                                                 |
+| Option                   | Description                                                                             | Default                                                                                   |
+| ------------------------ | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `browser.enabled`        | براؤزر کنٹرول فعال کریں                                                                 | `true`                                                                                    |
 | `browser.executablePath` | Chromium پر مبنی براؤزر بائنری کا راستہ (Chrome/Brave/Edge/Chromium) | خودکار طور پر معلوم (جب Chromium پر مبنی ہو تو ڈیفالٹ براؤزر کو ترجیح) |
-| `browser.headless`       | GUI کے بغیر چلائیں                                                   | `false`                                                                |
-| `browser.noSandbox`      | `--no-sandbox` فلیگ شامل کریں (کچھ لینکس سیٹ اپس کے لیے درکار)       | `false`                                                                |
-| `browser.attachOnly`     | براؤزر لانچ نہ کریں، صرف موجودہ سے منسلک ہوں                         | `false`                                                                |
-| `browser.cdpPort`        | Chrome DevTools Protocol پورٹ                                        | `18800`                                                                |
+| `browser.headless`       | GUI کے بغیر چلائیں                                                                      | `false`                                                                                   |
+| `browser.noSandbox`      | `--no-sandbox` فلیگ شامل کریں (کچھ لینکس سیٹ اپس کے لیے درکار)       | `false`                                                                                   |
+| `browser.attachOnly`     | براؤزر لانچ نہ کریں، صرف موجودہ سے منسلک ہوں                                            | `false`                                                                                   |
+| `browser.cdpPort`        | Chrome DevTools Protocol پورٹ                                                           | `18800`                                                                                   |
 
 ### مسئلہ: "Chrome extension relay is running, but no tab is connected"
 
-آپ `chrome` پروفائل (ایکسٹینشن ریلے) استعمال کر رہے ہیں۔ یہ توقع کرتا ہے کہ OpenClaw
-براؤزر ایکسٹینشن کسی فعال ٹیب سے منسلک ہو۔
+You’re using the `chrome` profile (extension relay). It expects the OpenClaw
+browser extension to be attached to a live tab.
 
 حل کے اختیارات:
 

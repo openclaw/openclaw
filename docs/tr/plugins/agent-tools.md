@@ -4,13 +4,6 @@ read_when:
   - Bir eklentide yeni bir ajan aracı eklemek istiyorsunuz
   - Bir aracı izin listeleri aracılığıyla isteğe bağlı yapmak istiyorsunuz
 title: "Eklenti Ajan Araçları"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:31Z
 ---
 
 # Eklenti ajan araçları
@@ -101,7 +94,7 @@ Araç kullanılabilirliğini etkileyen diğer yapılandırma ayarları:
 
 ## Kurallar + ipuçları
 
-- Araç adları, çekirdek araç adlarıyla **çakışmamalıdır**; çakışan araçlar atlanır.
+- Araç adları çekirdek araç adlarıyla **çakışmamalıdır**; çakışan araçlar atlanır.
 - İzin listelerinde kullanılan eklenti kimlikleri, çekirdek araç adlarıyla çakışmamalıdır.
 - Yan etkileri tetikleyen veya ek ikili dosyalar/kimlik bilgileri gerektiren araçlar için
   `optional: true` tercih edilmelidir.

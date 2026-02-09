@@ -5,13 +5,6 @@ read_when:
   - Nag-iimplement ng node runner + UI IPC
   - Nagdadagdag ng mga security mode ng exec host at slash commands
 title: "Refactor ng Exec Host"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:06Z
 ---
 
 # Plano ng refactor ng exec host
@@ -258,7 +251,7 @@ Opsyon B:
 ## Mga limitasyon ng output
 
 - I-cap ang pinagsamang stdout+stderr sa **200k**; panatilihin ang **tail na 20k** para sa mga event.
-- I-truncate gamit ang malinaw na suffix (hal., `"… (truncated)"`).
+- 30. I-truncate gamit ang malinaw na suffix (hal., `"… 31. (truncated)"`).
 
 ## Mga slash command
 

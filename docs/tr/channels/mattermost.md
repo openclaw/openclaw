@@ -1,16 +1,9 @@
 ---
 summary: "Mattermost bot kurulumu ve OpenClaw yapılandırması"
 read_when:
-  - Mattermost kurulumu
-  - Mattermost yönlendirmede hata ayıklama
+  - Setting up Mattermost
+  - Debugging Mattermost routing
 title: "Mattermost"
-x-i18n:
-  source_path: channels/mattermost.md
-  source_hash: 1599abf7539c51f7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:59Z
 ---
 
 # Mattermost (eklenti)
@@ -63,7 +56,7 @@ Asgari yapılandırma:
 }
 ```
 
-## Ortam değişkenleri (varsayılan hesap)
+## Environment variables (default account)
 
 Ortam değişkenlerini tercih ediyorsanız bunları gateway ana makinesinde ayarlayın:
 
@@ -72,7 +65,7 @@ Ortam değişkenlerini tercih ediyorsanız bunları gateway ana makinesinde ayar
 
 Ortam değişkenleri yalnızca **varsayılan** hesap için geçerlidir (`default`). Diğer hesaplar yapılandırma değerlerini kullanmalıdır.
 
-## Sohbet modları
+## Chat modes
 
 Mattermost DM'lere otomatik olarak yanıt verir. Kanal davranışı `chatmode` ile denetlenir:
 

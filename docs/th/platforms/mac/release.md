@@ -4,20 +4,13 @@ read_when:
   - ระหว่างตัดหรือยืนยันการรีลีส OpenClaw บน macOS
   - ระหว่างอัปเดต appcast หรือแอสเซ็ตของฟีด Sparkle
 title: "การรีลีส macOS"
-x-i18n:
-  source_path: platforms/mac/release.md
-  source_hash: 98d6640ae4ea9cc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:29Z
 ---
 
 # การรีลีส OpenClaw บน macOS (Sparkle)
 
-แอปนี้รองรับการอัปเดตอัตโนมัติด้วย Sparkle แล้ว บิลด์สำหรับรีลีสต้องเซ็นชื่อด้วย Developer ID, บีบอัดเป็น zip และเผยแพร่พร้อมรายการ appcast ที่เซ็นชื่อแล้ว
+33. แอปนี้มาพร้อม Sparkle auto-updates แล้ว 34. บิลด์รีลีสต้องเซ็นด้วย Developer ID บีบอัดเป็น zip และเผยแพร่พร้อมรายการ appcast ที่เซ็นชื่อแล้ว
 
-## ข้อกำหนดก่อนเริ่มต้น
+## 35. ข้อกำหนดเบื้องต้น
 
 - ติดตั้งใบรับรอง Developer ID Application แล้ว (ตัวอย่าง: `Developer ID Application: <Developer Name> (<TEAMID>)`).
 - ตั้งค่าเส้นทางคีย์ส่วนตัวของ Sparkle ใน environment เป็น `SPARKLE_PRIVATE_KEY_FILE` (พาธไปยังคีย์ส่วนตัว ed25519 ของ Sparkle; คีย์สาธารณะถูกฝังใน Info.plist). หากไม่มี ให้ตรวจสอบ `~/.profile`.
@@ -79,6 +72,7 @@ SPARKLE_PRIVATE_KEY_FILE=/path/to/ed25519-private-key scripts/make_appcast.sh di
 
 สร้างบันทึกการรีลีสแบบ HTML จาก `CHANGELOG.md` (ผ่าน [`scripts/changelog-to-html.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/changelog-to-html.sh)) และฝังลงในรายการ appcast
 คอมมิตไฟล์ `appcast.xml` ที่อัปเดตแล้วไปพร้อมกับแอสเซ็ตของรีลีส (zip + dSYM) ระหว่างการเผยแพร่
+36. คอมมิต `appcast.xml` ที่อัปเดตแล้วควบคู่กับแอสเซ็ตรีลีส (zip + dSYM) เมื่อเผยแพร่
 
 ## เผยแพร่และตรวจสอบ
 

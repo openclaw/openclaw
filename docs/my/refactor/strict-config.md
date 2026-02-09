@@ -5,13 +5,6 @@ read_when:
   - ဖွဲ့စည်းပြင်ဆင်မှု ပြောင်းလဲမှုများ သို့မဟုတ် doctor လုပ်ငန်းစဉ်များပေါ်တွင် လုပ်ဆောင်နေချိန်
   - plugin ဖွဲ့စည်းပြင်ဆင်မှု schema များ သို့မဟုတ် plugin load gating ကို ကိုင်တွယ်နေချိန်
 title: "တင်းကျပ်သော ဖွဲ့စည်းပြင်ဆင်မှု စစ်ဆေးအတည်ပြုခြင်း"
-x-i18n:
-  source_path: refactor/strict-config.md
-  source_hash: 5bc7174a67d2234e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:01Z
 ---
 
 # တင်းကျပ်သော ဖွဲ့စည်းပြင်ဆင်မှု စစ်ဆေးအတည်ပြုခြင်း (doctor သာ အသုံးပြုသည့် ပြောင်းလဲမှုများ)
@@ -32,9 +25,9 @@ x-i18n:
 
 - Config သည် အဆင့်တိုင်းတွင် schema နှင့် အပြည့်အဝ ကိုက်ညီရပါမည်။
 - မသိရှိသော key များသည် စစ်ဆေးအတည်ပြု အမှားများဖြစ်သည် (root သို့မဟုတ် nested တွင် passthrough မရှိပါ)။
-- `plugins.entries.<id>.config` ကို plugin ၏ schema ဖြင့် စစ်ဆေးအတည်ပြုရပါမည်။
+- `plugins.entries.<id>``.config` ကို plugin ၏ schema အရ စစ်ဆေးအတည်ပြုရပါမည်။
   - plugin တွင် schema မရှိပါက **plugin load ကို ပယ်ချပြီး** ရှင်းလင်းသော အမှားကို ပြသပါ။
-- မသိရှိသော `channels.<id>` key များသည် plugin manifest က channel id ကို ကြေညာထားခြင်းမရှိပါက အမှားများဖြစ်သည်။
+- မသိသော `channels.<id>`` key` များကို plugin manifest မှ channel id ကို ကြေညာထားခြင်း မရှိပါက အမှားအဖြစ် သတ်မှတ်ပါသည်။
 - Plugin manifest များ (`openclaw.plugin.json`) ကို plugin အားလုံးအတွက် လိုအပ်ပါသည်။
 
 ## Plugin schema အကောင်အထည်ဖော်ခြင်း
@@ -72,7 +65,7 @@ x-i18n:
 - `openclaw status`
 - `openclaw gateway status`
 
-အခြားအရာအားလုံးသည် “Config မမှန်ကန်ပါ။ `openclaw doctor --fix` ကို လည်ပတ်ပါ။” ဟူသော စာတမ်းဖြင့် အပြင်းအထန် ပျက်ကွက်ရပါမည်။
+အခြားအရာအားလုံးကို အောက်ပါ စာသားဖြင့် hard-fail ဖြစ်ရပါမည် — “Config invalid. `openclaw doctor --fix` ကို အလုပ်လုပ်ပါ။”
 
 ## Error UX ပုံစံ
 

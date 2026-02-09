@@ -3,20 +3,13 @@ summary: "Direkta körningar av `openclaw agent` via CLI (med valfri leverans)"
 read_when:
   - När du lägger till eller ändrar agentens CLI-ingångspunkt
 title: "Skicka agent"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:36Z
 ---
 
 # `openclaw agent` (direkta agentkörningar)
 
-`openclaw agent` kör en enskild agenttur utan att behöva ett inkommande chattmeddelande.
-Som standard går den **via Gateway**; lägg till `--local` för att tvinga den inbäddade
-körtiden på den aktuella maskinen.
+`openclaw agent` kör en enda agent tur utan att behöva ett inkommande chattmeddelande.
+Som standard går det **genom Gateway**; lägg till `--local` för att tvinga den inbäddade
+runtime på den aktuella maskinen.
 
 ## Beteende
 

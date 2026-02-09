@@ -4,13 +4,6 @@ read_when:
   - Você está gerenciando nodes pareados (câmeras, tela, canvas)
   - Você precisa aprovar solicitações ou invocar comandos de nodes
 title: "nodes"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:24Z
 ---
 
 # `openclaw nodes`

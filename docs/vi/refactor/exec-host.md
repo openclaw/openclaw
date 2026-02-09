@@ -5,13 +5,6 @@ read_when:
   - Triển khai node runner + IPC UI
   - Thêm các chế độ bảo mật exec host và slash command
 title: "Refactor Exec Host"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:17Z
 ---
 
 # Kế hoạch refactor exec host
@@ -258,7 +251,7 @@ Tùy chọn B:
 ## Giới hạn đầu ra
 
 - Giới hạn stdout+stderr kết hợp ở **200k**; giữ **đuôi 20k** cho sự kiện.
-- Cắt với hậu tố rõ ràng (ví dụ `"… (truncated)"`).
+- Truncate with a clear suffix (e.g., `"… (truncated)"`).
 
 ## Slash command
 

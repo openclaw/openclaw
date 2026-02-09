@@ -3,13 +3,6 @@ summary: "Kroki podpisywania dla debugowych buildów macOS generowanych przez sk
 read_when:
   - Budowanie lub podpisywanie debugowych buildów macOS
 title: "Podpisywanie macOS"
-x-i18n:
-  source_path: platforms/mac/signing.md
-  source_hash: 403b92f9a0ecdb7c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
 ---
 
 # podpisywanie mac (debug buildy)

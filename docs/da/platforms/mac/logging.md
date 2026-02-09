@@ -4,13 +4,6 @@ read_when:
   - Indsamling af macOS-logs eller undersøgelse af logning af private data
   - Fejlfinding af problemer med voice wake/session-livscyklus
 title: "macOS-logning"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:24Z
 ---
 
 # Logning (macOS)
@@ -26,12 +19,12 @@ OpenClaw ruter macOS-app-logs gennem swift-log (unified logging som standard) og
 
 Noter:
 
-- Dette er **slået fra som standard**. Aktivér kun, mens du aktivt fejlsøger.
+- Dette er **deaktiveret som standard**. Aktiver kun under aktivt fejlfinding.
 - Behandl filen som følsom; del den ikke uden gennemgang.
 
 ## Private data i unified logging på macOS
 
-Unified logging redigerer de fleste payloads, medmindre et subsystem tilvælger `privacy -off`. Ifølge Peters gennemgang af macOS’ [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) styres dette af en plist i `/Library/Preferences/Logging/Subsystems/`, nøglelagt efter subsystem-navnet. Kun nye logposter får flaget, så aktivér det, før du genskaber et problem.
+Unified logging redacts de fleste nyttelast, medmindre et delsystem vælger `privacy -off`. Per Peters opskrift på macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) dette styres af en plist i `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Kun nye logposter afhente flaget, så aktiver det før gengivelse af et problem.
 
 ## Aktivér for OpenClaw (`bot.molt`)
 
@@ -55,7 +48,7 @@ sudo install -m 644 -o root -g wheel /tmp/bot.molt.plist /Library/Preferences/Lo
 ```
 
 - Ingen genstart er nødvendig; logd registrerer filen hurtigt, men kun nye loglinjer vil inkludere private payloads.
-- Se det mere detaljerede output med den eksisterende hjælper, f.eks. `./scripts/clawlog.sh --category WebChat --last 5m`.
+- Se rigere output med den eksisterende hjælper, f.eks `./scripts/clawlog.sh --category WebChat --last 5m`.
 
 ## Deaktivér efter fejlfinding
 

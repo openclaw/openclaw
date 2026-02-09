@@ -4,19 +4,12 @@ read_when:
   - 你想要選擇模型提供者
   - 你想要快速設定 LLM 身分驗證與模型選擇的範例
 title: "模型提供者快速入門"
-x-i18n:
-  source_path: providers/models.md
-  source_hash: 691d2c97ef6b01cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:57Z
 ---
 
 # 模型提供者
 
-OpenClaw 可使用多種 LLM 提供者。選擇其中一個、完成身分驗證，然後將預設
-模型設定為 `provider/model`。
+OpenClaw can use many LLM providers. 30. 選擇其中一個，完成驗證，然後將預設
+模型設為 `provider/model`。
 
 ## 重點：Venice（Venice AI）
 
@@ -55,5 +48,5 @@ Venice 是我們建議的 Venice AI 設定，主打隱私優先的推論，並�
 - [Amazon Bedrock](/providers/bedrock)
 - [Qianfan](/providers/qianfan)
 
-如需完整的提供者目錄（xAI、Groq、Mistral 等）與進階設定，
-請參閱 [Model providers](/concepts/model-providers)。
+For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
+see [Model providers](/concepts/model-providers).

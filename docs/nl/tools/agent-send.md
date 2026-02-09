@@ -3,13 +3,6 @@ summary: "Directe `openclaw agent` CLI-uitvoeringen (met optionele aflevering)"
 read_when:
   - Toevoegen of wijzigen van het agent-CLI-entrypoint
 title: "Agent verzenden"
-x-i18n:
-  source_path: tools/agent-send.md
-  source_hash: a84d6a304333eebe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:50Z
 ---
 
 # `openclaw agent` (directe agent-uitvoeringen)

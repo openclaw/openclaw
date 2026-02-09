@@ -1,16 +1,9 @@
 ---
-summary: „Ausführen der ACP-Brücke für IDE-Integrationen“
+summary: "„Ausführen der ACP-Brücke für IDE-Integrationen“"
 read_when:
   - Einrichten von ACP-basierten IDE-Integrationen
   - Debuggen des ACP-Sitzungsroutings zum Gateway
-title: „acp“
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:29Z
+title: "acp"
 ---
 
 # acp

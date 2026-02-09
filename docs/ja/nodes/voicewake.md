@@ -4,13 +4,6 @@ read_when:
   - 音声ウェイクワードの挙動やデフォルトを変更する場合
   - ウェイクワード同期が必要な新しいノードプラットフォームを追加する場合
 title: "Voice Wake"
-x-i18n:
-  source_path: nodes/voicewake.md
-  source_hash: eb34f52dfcdc3fc1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:24Z
 ---
 
 # Voice Wake（グローバル ウェイクワード）
@@ -42,7 +35,7 @@ OpenClaw では、**ウェイクワードは Gateway が所有する単一のグ
 
 注記：
 
-- トリガーは正規化されます（前後の空白を除去し、空要素は破棄）。空のリストの場合はデフォルトにフォールバックします。
+- トリガーは正規化されます(トリミングされ、空になっています)。 空のリストはデフォルトに戻ります。
 - 安全性のため、上限（件数／長さ）が適用されます。
 
 ### イベント

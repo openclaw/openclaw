@@ -4,20 +4,13 @@ read_when:
   - OpenResponses API ကို ပြောဆိုနိုင်သော client များကို ပေါင်းစည်းရာတွင်
   - item-based inputs၊ client tool calls သို့မဟုတ် SSE events လိုအပ်သည့်အခါ
 title: "OpenResponses API"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:38Z
 ---
 
 # OpenResponses API (HTTP)
 
 OpenClaw ၏ Gateway သည် OpenResponses နှင့် ကိုက်ညီသော `POST /v1/responses` endpoint ကို ဆောင်ရွက်ပေးနိုင်သည်။
 
-ဤ endpoint သည် **မူလအနေဖြင့် ပိတ်ထားသည်**။ အရင်ဆုံး config တွင် ဖွင့်ရပါမည်။
+ဒီ endpoint ကို **ပုံမှန်အားဖြင့် ပိတ်ထားပါတယ်**။ config ထဲမှာ အရင်ဆုံး enable လုပ်ပါ။
 
 - `POST /v1/responses`
 - Gateway နှင့် တူညီသော port (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/responses`
@@ -27,7 +20,7 @@ OpenClaw ၏ Gateway သည် OpenResponses နှင့် ကိုက်ည�
 
 ## Authentication
 
-Gateway auth configuration ကို အသုံးပြုသည်။ bearer token တစ်ခု ပို့ပါ—
+Gateway auth configuration ကို အသုံးပြုပါတယ်။ bearer token တစ်ခု ပို့ပါ။
 
 - `Authorization: Bearer <token>`
 
@@ -91,7 +84,7 @@ Request တွင် OpenResponses ၏ `user` string ပါဝင်ပါက Ga
 
 ## Request ပုံစံ (ထောက်ပံ့ထားသည်)
 
-Request သည် item-based input ဖြင့် OpenResponses API ကို လိုက်နာသည်။ လက်ရှိထောက်ပံ့မှု—
+ဒီ request က item-based input ပါတဲ့ OpenResponses API ကို လိုက်နာပါတယ်။ လက်ရှိ support လုပ်ထားတာများ:
 
 - `input`: string သို့မဟုတ် item object များ၏ array။
 - `instructions`: system prompt ထဲသို့ ပေါင်းထည့်သည်။
@@ -138,10 +131,10 @@ Schema ကိုက်ညီမှုအတွက် လက်ခံသော်
 
 ## Tools (client-side function tools)
 
-`tools: [{ type: "function", function: { name, description?, parameters? } }]` ဖြင့် tools များကို ပံ့ပိုးပါ။
+`tools: [{ type: "function", function: { name, description?, parameters?` နဲ့ tools ပေးပါ။ `} }]`။
 
-Agent က tool ကို ခေါ်ရန် ဆုံးဖြတ်ပါက response သည် `function_call` output item တစ်ခုကို ပြန်ပေးမည်ဖြစ်သည်။
-ထို့နောက် turn ကို ဆက်လက်လုပ်ဆောင်ရန် `function_call_output` ဖြင့် follow-up request တစ်ခု ပို့ရပါမည်။
+agent က tool ကို ခေါ်ရန် ဆုံးဖြတ်ရင် response ထဲမှာ `function_call` output item ကို ပြန်ပေးပါတယ်။
+ပြီးရင် turn ကို ဆက်လက်လုပ်ဆောင်ဖို့ `function_call_output` နဲ့ follow-up request တစ်ခု ပို့ရပါမယ်။
 
 ## Images (`input_image`)
 
@@ -154,8 +147,8 @@ base64 သို့မဟုတ် URL source များကို ထောက
 }
 ```
 
-ခွင့်ပြုထားသော MIME types (လက်ရှိ)—`image/jpeg`, `image/png`, `image/gif`, `image/webp`။
-အများဆုံး အရွယ်အစား (လက်ရှိ)—10MB။
+ခွင့်ပြုထားတဲ့ MIME types (လက်ရှိ): `image/jpeg`, `image/png`, `image/gif`, `image/webp`။
+အများဆုံး အရွယ်အစား (လက်ရှိ): 10MB။
 
 ## Files (`input_file`)
 
@@ -182,11 +175,9 @@ base64 သို့မဟုတ် URL source များကို ထောက
 
 - File အကြောင်းအရာကို decode လုပ်ပြီး **system prompt** ထဲသို့ ထည့်သွင်းသည် (user message မဟုတ်ပါ)၊
   ထို့ကြောင့် ephemeral ဖြစ်ပြီး session history တွင် မသိမ်းဆည်းပါ။
-- PDF များကို စာသားအတွက် parse လုပ်သည်။ စာသား အနည်းငယ်သာ တွေ့ရှိပါက ပထမ စာမျက်နှာများကို rasterize လုပ်၍
-  image များအဖြစ် ပြောင်းပြီး မော်ဒယ်သို့ ပို့ပေးသည်။
+- PDF ဖိုင်တွေကို စာသားအတွက် parse လုပ်ပါတယ်။ စာသား နည်းနည်းပဲ တွေ့ရရင် ပထမစာမျက်နှာတွေကို rasterize လုပ်ပြီး
 
-PDF parsing သည် Node-friendly `pdfjs-dist` legacy build (worker မပါ) ကို အသုံးပြုသည်။ Modern
-PDF.js build သည် browser workers/DOM globals ကို မျှော်မှန်းထားသောကြောင့် Gateway တွင် မအသုံးပြုပါ။
+image အဖြစ် ပြောင်းလဲကာ model ဆီကို ပို့ပါတယ်။ PDF parsing က Node-friendly `pdfjs-dist` legacy build (worker မပါ) ကို အသုံးပြုပါတယ်။
 
 URL fetch မူလတန်ဖိုးများ—
 

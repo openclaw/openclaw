@@ -1,15 +1,8 @@
 ---
 summary: "Gateway 프로토콜을 위한 단일 진실 원천으로서의 TypeBox 스키마"
 read_when:
-  - "프로토콜 스키마 또는 코드 생성기를 업데이트할 때"
+  - 프로토콜 스키마 또는 코드 생성기를 업데이트할 때
 title: "TypeBox"
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:53Z
 ---
 
 # 프로토콜의 단일 진실 원천으로서의 TypeBox
@@ -47,14 +40,14 @@ Client                    Gateway
 
 공통 메서드 + 이벤트:
 
-| Category  | Examples                                                  | Notes                                        |
-| --------- | --------------------------------------------------------- | -------------------------------------------- |
+| Category  | Examples                                                  | Notes                            |
+| --------- | --------------------------------------------------------- | -------------------------------- |
 | Core      | `connect`, `health`, `status`                             | `connect` 는 반드시 처음이어야 합니다        |
 | Messaging | `send`, `poll`, `agent`, `agent.wait`                     | 부수 효과에는 `idempotencyKey` 가 필요합니다 |
-| Chat      | `chat.history`, `chat.send`, `chat.abort`, `chat.inject`  | WebChat 이 이를 사용합니다                   |
-| Sessions  | `sessions.list`, `sessions.patch`, `sessions.delete`      | 세션 관리                                    |
-| Nodes     | `node.list`, `node.invoke`, `node.pair.*`                 | Gateway WS + 노드 작업                       |
-| Events    | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | 서버 푸시                                    |
+| Chat      | `chat.history`, `chat.send`, `chat.abort`, `chat.inject`  | WebChat 이 이를 사용합니다               |
+| Sessions  | `sessions.list`, `sessions.patch`, `sessions.delete`      | 세션 관리                            |
+| Nodes     | `node.list`, `node.invoke`, `node.pair.*`                 | Gateway WS + 노드 작업               |
+| Events    | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | 서버 푸시                            |
 
 권위 있는 목록은 `src/gateway/server.ts` (`METHODS`, `EVENTS`)에 있습니다.
 

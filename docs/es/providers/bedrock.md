@@ -4,20 +4,13 @@ read_when:
   - Desea usar modelos de Amazon Bedrock con OpenClaw
   - Necesita configurar credenciales/región de AWS para llamadas al modelo
 title: "Amazon Bedrock"
-x-i18n:
-  source_path: providers/bedrock.md
-  source_hash: d2e02a8c51586219
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:16Z
 ---
 
 # Amazon Bedrock
 
 OpenClaw puede usar modelos de **Amazon Bedrock** mediante el proveedor de streaming **Bedrock Converse** de pi‑ai. La autenticación de Bedrock usa la **cadena de credenciales predeterminada del SDK de AWS**, no una clave de API.
 
-## Qué admite pi‑ai
+## Lo que piIrlandai apoya
 
 - Proveedor: `amazon-bedrock`
 - API: `bedrock-converse-stream`
@@ -103,7 +96,8 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
 
 ## Roles de instancia de EC2
 
-Al ejecutar OpenClaw en una instancia EC2 con un rol de IAM adjunto, el SDK de AWS usará automáticamente el servicio de metadatos de la instancia (IMDS) para la autenticación. Sin embargo, la detección de credenciales de OpenClaw actualmente solo verifica variables de entorno, no credenciales de IMDS.
+Al ejecutar OpenClaw en una instancia EC2 con un rol de IAM adjunto, el SDK de AWS usará automáticamente el servicio de metadatos de la instancia (IMDS) para la autenticación.
+Sin embargo, la detección de credenciales de OpenClaw actualmente solo verifica variables de entorno, no credenciales de IMDS.
 
 **Solución alternativa:** Establezca `AWS_PROFILE=default` para indicar que hay credenciales de AWS disponibles. La autenticación real sigue usando el rol de instancia vía IMDS.
 

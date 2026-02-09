@@ -1,16 +1,9 @@
 ---
-summary: „OpenClaw na DigitalOcean (prosta płatna opcja VPS)”
+summary: "„OpenClaw na DigitalOcean (prosta płatna opcja VPS)”"
 read_when:
   - Konfigurowanie OpenClaw na DigitalOcean
   - Szukanie taniego hostingu VPS dla OpenClaw
-title: „DigitalOcean”
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
+title: "DigitalOcean"
 ---
 
 # OpenClaw na DigitalOcean
@@ -23,13 +16,13 @@ Jeśli chcesz opcję za 0 USD/mies. i nie przeszkadza Ci ARM oraz konfiguracja s
 
 ## Porównanie kosztów (2026)
 
-| Dostawca     | Plan            | Specyfikacja         | Cena/mies.      | Uwagi                                             |
-| ------------ | --------------- | -------------------- | --------------- | ------------------------------------------------- |
-| Oracle Cloud | Always Free ARM | do 4 OCPU, 24 GB RAM | 0 USD           | ARM, ograniczona dostępność / niuanse rejestracji |
+| Dostawca     | Plan            | Specyfikacja         | Cena/m2                                            | Uwagi                                             |
+| ------------ | --------------- | -------------------- | -------------------------------------------------- | ------------------------------------------------- |
+| Oracle Cloud | Always Free ARM | do 4 OCPU, 24 GB RAM | 0 USD                                              | ARM, ograniczona dostępność / niuanse rejestracji |
 | Hetzner      | CX22            | 2 vCPU, 4 GB RAM     | 3,79 € (~4 USD) | Najtańsza płatna opcja                            |
-| DigitalOcean | Basic           | 1 vCPU, 1 GB RAM     | 6 USD           | Prosty interfejs, dobra dokumentacja              |
-| Vultr        | Cloud Compute   | 1 vCPU, 1 GB RAM     | 6 USD           | Wiele lokalizacji                                 |
-| Linode       | Nanode          | 1 vCPU, 1 GB RAM     | 5 USD           | Obecnie część Akamai                              |
+| DigitalOcean | Basic           | 1 vCPU, 1 GB RAM     | 6 USD                                              | Prosty interfejs, dobra dokumentacja              |
+| Vultr        | Cloud Compute   | 1 vCPU, 1 GB RAM     | 6 USD                                              | Wiele lokalizacji                                 |
+| Linode       | Nanode          | 1 vCPU, 1 GB RAM     | 5 USD                                              | Obecnie część Akamai                              |
 
 **Wybór dostawcy:**
 
@@ -45,7 +38,7 @@ Jeśli chcesz opcję za 0 USD/mies. i nie przeszkadza Ci ARM oraz konfiguracja s
 - Para kluczy SSH (lub gotowość do użycia uwierzytelniania hasłem)
 - ~20 minut
 
-## 1) Utwórz Droplet
+## 1. Utwórz Droplet
 
 1. Zaloguj się do [DigitalOcean](https://cloud.digitalocean.com/)
 2. Kliknij **Create → Droplets**
@@ -63,7 +56,7 @@ Jeśli chcesz opcję za 0 USD/mies. i nie przeszkadza Ci ARM oraz konfiguracja s
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Zainstaluj OpenClaw
+## 3. Zainstaluj OpenClaw
 
 ```bash
 # Update system
@@ -80,20 +73,20 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) Uruchom onboarding
+## 4. Uruchom onboarding
 
 ```bash
 openclaw onboard --install-daemon
 ```
 
-Kreator przeprowadzi Cię przez:
+Kreator przejdzie przez Ciebie:
 
 - Uwierzytelnianie modelu (klucze API lub OAuth)
 - Konfigurację kanałów (Telegram, WhatsApp, Discord itd.)
 - Token Gateway (generowany automatycznie)
 - Instalację demona (systemd)
 
-## 5) Zweryfikuj Gateway
+## 5. Zweryfikuj Gateway
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) Uzyskaj dostęp do panelu
+## 6. Uzyskaj dostęp do panelu
 
 Gateway domyślnie wiąże się z local loopback. Aby uzyskać dostęp do Control UI:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 Otwórz: `http://<tailscale-ip>:18789` (wymagany token).
 
-## 7) Podłącz swoje kanały
+## 7. Podłącz swoje kanały
 
 ### Telegram
 

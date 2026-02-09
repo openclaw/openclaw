@@ -4,13 +4,6 @@ read_when:
   - คุณต้องการจัดการ agent hooks
   - คุณต้องการติดตั้งหรืออัปเดต hooks
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:01Z
 ---
 
 # `openclaw hooks`
@@ -104,7 +97,7 @@ Requirements:
   Config: ✓ workspace.dir
 ```
 
-## ตรวจสอบสิทธิ์การใช้งานHooks
+## ตรวจสอบคุณสมบัติการใช้งาน Hooks
 
 ```bash
 openclaw hooks check
@@ -135,7 +128,7 @@ openclaw hooks enable <name>
 เปิดใช้งาน hook เฉพาะโดยเพิ่มลงในคอนฟิกของคุณ (`~/.openclaw/config.json`)
 
 **หมายเหตุ:** Hooks ที่ถูกจัดการโดยปลั๊กอินจะแสดง `plugin:<id>` ใน `openclaw hooks list` และ
-ไม่สามารถเปิด/ปิดได้ที่นี่ ให้เปิด/ปิดปลั๊กอินแทน
+ไม่สามารถเปิด/ปิดได้ที่นี่ ให้เปิด/ปิดปลั๊กอินแทน Enable/disable the plugin instead.
 
 **อาร์กิวเมนต์:**
 
@@ -241,7 +234,7 @@ openclaw hooks update --all
 - `--all`: อัปเดตแพ็ก hook ที่ติดตามทั้งหมด
 - `--dry-run`: แสดงสิ่งที่จะเปลี่ยนแปลงโดยไม่เขียนลงดิสก์
 
-## Hooksที่มากับระบบ
+## Hooks ที่มาพร้อมชุด
 
 ### session-memory
 

@@ -4,13 +4,6 @@ read_when:
   - การนำโหมดTalkไปใช้งานบน macOS/iOS/Android
   - การเปลี่ยนพฤติกรรมเสียง/TTS/การขัดจังหวะ
 title: "โหมดTalk"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:26Z
 ---
 
 # โหมดTalk
@@ -38,7 +31,7 @@ x-i18n:
 { "voice": "<voice-id>", "once": true }
 ```
 
-กติกา:
+กฎ:
 
 - ใช้เฉพาะบรรทัดแรกที่ไม่ว่าง
 - คีย์ที่ไม่รู้จักจะถูกละเว้น

@@ -5,13 +5,6 @@ read_when:
   - Você está depurando chaves de API ausentes no Gateway
   - Você está documentando autenticação de provedores ou ambientes de implantação
 title: "Variáveis de ambiente"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:00Z
 ---
 
 # Variáveis de ambiente
@@ -58,12 +51,12 @@ Duas formas equivalentes de definir variáveis de ambiente inline (ambas não so
 }
 ```
 
-Equivalentes em variáveis de ambiente:
+Inserir equivalentes:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
-## Substituição de variáveis de ambiente na configuração
+## Env var substitution in config
 
 Você pode referenciar variáveis de ambiente diretamente em valores de string da configuração usando a sintaxe `${VAR_NAME}`:
 

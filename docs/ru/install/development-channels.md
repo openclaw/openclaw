@@ -4,13 +4,6 @@ read_when:
   - Вы хотите переключаться между stable/beta/dev
   - Вы помечаете или публикуете предварительные релизы
 title: "Каналы разработки"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:42Z
 ---
 
 # Каналы разработки

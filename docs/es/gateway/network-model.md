@@ -3,13 +3,6 @@ summary: "Cómo se conectan el Gateway, los nodos y el host del canvas."
 read_when:
   - Quiere una vista concisa del modelo de red del Gateway
 title: "Modelo de red"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:36Z
 ---
 
 La mayoría de las operaciones fluyen a través del Gateway (`openclaw gateway`), un único

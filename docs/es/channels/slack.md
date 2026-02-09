@@ -2,13 +2,6 @@
 summary: "Configuración de Slack para modo socket o webhook HTTP"
 read_when: "Configurar Slack o depurar el modo socket/HTTP de Slack"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:13Z
 ---
 
 # Slack
@@ -384,11 +377,11 @@ reacción de acuse después de que el bot responda.
 
 De forma predeterminada, OpenClaw responde en el canal principal. Use `channels.slack.replyToMode` para controlar el enhebrado automático:
 
-| Modo    | Comportamiento                                                                                                                                                                      |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Predeterminado.** Responder en el canal principal. Solo enhebra si el mensaje desencadenante ya estaba en un hilo.                                                                |
+| Modo    | Comportamiento                                                                                                                                                                                                                         |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **Predeterminado.** Responder en el canal principal. Solo enhebra si el mensaje desencadenante ya estaba en un hilo.                                                                   |
 | `first` | La primera respuesta va al hilo (bajo el mensaje desencadenante), las respuestas posteriores van al canal principal. Útil para mantener el contexto visible evitando saturar hilos. |
-| `all`   | Todas las respuestas van al hilo. Mantiene las conversaciones contenidas pero puede reducir la visibilidad.                                                                         |
+| `all`   | Todas las respuestas van al hilo. Mantiene las conversaciones contenidas pero puede reducir la visibilidad.                                                                                            |
 
 El modo se aplica tanto a las auto‑respuestas como a las llamadas de herramientas del agente (`slack sendMessage`).
 

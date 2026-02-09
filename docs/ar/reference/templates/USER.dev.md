@@ -1,15 +1,8 @@
 ---
 summary: "ملف تعريف مستخدم وكيل التطوير (C-3PO)"
 read_when:
-  - "استخدام قوالب Gateway الخاصة بالتطوير"
-  - "تحديث هوية وكيل التطوير الافتراضية"
-x-i18n:
-  source_path: reference/templates/USER.dev.md
-  source_hash: f78f58bdbef10afb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:39Z
+  - استخدام قوالب Gateway الخاصة بالتطوير
+  - تحديث هوية وكيل التطوير الافتراضية
 ---
 
 # USER.md - ملف تعريف المستخدم

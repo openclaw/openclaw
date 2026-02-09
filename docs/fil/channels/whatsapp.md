@@ -3,18 +3,11 @@ summary: "Integrasyon ng WhatsApp (web channel): login, inbox, mga sagot, media,
 read_when:
   - Kapag nagtatrabaho sa behavior ng WhatsApp/web channel o inbox routing
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:51Z
 ---
 
 # WhatsApp (web channel)
 
-Status: WhatsApp Web sa pamamagitan lang ng Baileys. Ang Gateway ang may-ari ng mga session.
+Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
 ## Quick setup (beginner)
 
@@ -62,13 +55,13 @@ I-disable gamit ang:
 
 ## Pagkuha ng numero ng telepono (dalawang mode)
 
-Nangangailangan ang WhatsApp ng totoong mobile number para sa verification. Karaniwang naka-block ang VoIP at virtual numbers. May dalawang suportadong paraan para patakbuhin ang OpenClaw sa WhatsApp:
+WhatsApp requires a real mobile number for verification. VoIP and virtual numbers are usually blocked. There are two supported ways to run OpenClaw on WhatsApp:
 
 ### Dedicated number (inirerekomenda)
 
-Gumamit ng **hiwalay na numero ng telepono** para sa OpenClaw. Pinakamahusay na UX, malinis na routing, walang self-chat quirks. Ideal na setup: **ekstra/lumang Android phone + eSIM**. Iwan itong naka‑Wi‑Fi at may power, at i-link gamit ang QR.
+Use a **separate phone number** for OpenClaw. Best UX, clean routing, no self-chat quirks. Ideal setup: **spare/old Android phone + eSIM**. Leave it on Wi‑Fi and power, and link it via QR.
 
-**WhatsApp Business:** Maaari mong gamitin ang WhatsApp Business sa parehong device na may ibang numero. Maganda ito para manatiling hiwalay ang personal mong WhatsApp — i-install ang WhatsApp Business at irehistro roon ang numero ng OpenClaw.
+**WhatsApp Business:** You can use WhatsApp Business on the same device with a different number. Great for keeping your personal WhatsApp separate — install WhatsApp Business and register the OpenClaw number there.
 
 **Sample config (dedicated number, single-user allowlist):**
 
@@ -83,14 +76,14 @@ Gumamit ng **hiwalay na numero ng telepono** para sa OpenClaw. Pinakamahusay na 
 }
 ```
 
-**Pairing mode (opsyonal):**
-Kung gusto mo ng pairing sa halip na allowlist, itakda ang `channels.whatsapp.dmPolicy` sa `pairing`. Makakatanggap ang mga hindi kilalang sender ng pairing code; aprubahan gamit ang:
+**Pairing mode (optional):**
+If you want pairing instead of allowlist, set `channels.whatsapp.dmPolicy` to `pairing`. Unknown senders get a pairing code; approve with:
 `openclaw pairing approve whatsapp <code>`
 
 ### Personal number (fallback)
 
-Mabilis na fallback: patakbuhin ang OpenClaw sa **sarili mong numero**. Mag-message sa sarili mo (WhatsApp “Message yourself”) para sa testing para hindi ka mag-spam ng contacts. Asahang magbasa ng verification codes sa pangunahing phone mo habang nagse-setup at nag-eeksperimento. **Kailangang i-enable ang self-chat mode.**
-Kapag tinanong ng wizard ang personal mong WhatsApp number, ilagay ang teleponong pagmumulan ng mensahe (ang owner/sender), hindi ang assistant number.
+Quick fallback: run OpenClaw on **your own number**. Message yourself (WhatsApp “Message yourself”) for testing so you don’t spam contacts. Expect to read verification codes on your main phone during setup and experiments. **Must enable self-chat mode.**
+When the wizard asks for your personal WhatsApp number, enter the phone you will message from (the owner/sender), not the assistant number.
 
 **Sample config (personal number, self-chat):**
 
@@ -104,9 +97,9 @@ Kapag tinanong ng wizard ang personal mong WhatsApp number, ilagay ang teleponon
 }
 ```
 
-Ang mga self-chat reply ay default sa `[{identity.name}]` kapag naka-set (kung hindi, `[openclaw]`)
-kung hindi naka-set ang `messages.responsePrefix`. Itakda ito nang tahasan para i-customize o i-disable
-ang prefix (gamitin ang `""` para alisin ito).
+Self-chat replies default to `[{identity.name}]` when set (otherwise `[openclaw]`)
+if `messages.responsePrefix` is unset. Set it explicitly to customize or disable
+the prefix (use `""` to remove it).
 
 ### Mga tip sa pagkuha ng numero
 
@@ -117,7 +110,7 @@ ang prefix (gamitin ang `""` para alisin ito).
 
 **Iwasan:** TextNow, Google Voice, karamihan sa mga “free SMS” service — agresibong bina-block ng WhatsApp ang mga ito.
 
-**Tip:** Kailangan lang ng numero na makatanggap ng isang verification SMS. Pagkatapos nito, nagpapatuloy ang mga WhatsApp Web session sa pamamagitan ng `creds.json`.
+**Tip:** The number only needs to receive one verification SMS. After that, WhatsApp Web sessions persist via `creds.json`.
 
 ## Bakit Hindi Twilio?
 
@@ -192,8 +185,8 @@ Mga tala:
 
 ## WhatsApp FAQ: pagpapadala ng mensahe + pairing
 
-**Magme-message ba ang OpenClaw sa mga random contact kapag ni-link ko ang WhatsApp?**  
-Hindi. Ang default na DM policy ay **pairing**, kaya ang mga hindi kilalang sender ay makakakuha lang ng pairing code at ang kanilang mensahe ay **hindi ipo-proseso**. Sumusagot lang ang OpenClaw sa mga chat na natatanggap nito, o sa mga send na tahasan mong tine-trigger (agent/CLI).
+**Will OpenClaw message random contacts when I link WhatsApp?**  
+No. Default DM policy is **pairing**, so unknown senders only get a pairing code and their message is **not processed**. OpenClaw only replies to chats it receives, or to sends you explicitly trigger (agent/CLI).
 
 **Paano gumagana ang pairing sa WhatsApp?**  
 Ang pairing ay DM gate para sa mga hindi kilalang sender:
@@ -202,15 +195,16 @@ Ang pairing ay DM gate para sa mga hindi kilalang sender:
 - Aprubahan gamit ang: `openclaw pairing approve whatsapp <code>` (listahan gamit ang `openclaw pairing list whatsapp`).
 - Nag-e-expire ang mga code pagkalipas ng 1 oras; ang mga pending request ay may limit na 3 bawat channel.
 
-**Maaari bang gumamit ang maraming tao ng magkakaibang OpenClaw instance sa isang WhatsApp number?**  
-Oo, sa pamamagitan ng pag-route ng bawat sender sa ibang agent gamit ang `bindings` (peer `kind: "dm"`, sender E.164 tulad ng `+15551234567`). Ang mga reply ay manggagaling pa rin sa **iisang WhatsApp account**, at ang mga direct chat ay nagsasama sa pangunahing session ng bawat agent, kaya gumamit ng **isang agent bawat tao**. Ang DM access control (`dmPolicy`/`allowFrom`) ay global kada WhatsApp account. Tingnan ang [Multi-Agent Routing](/concepts/multi-agent).
+**Can multiple people use different OpenClaw instances on one WhatsApp number?**  
+Yes, by routing each sender to a different agent via `bindings` (peer `kind: "dm"`, sender E.164 like `+15551234567`). Replies still come from the **same WhatsApp account**, and direct chats collapse to each agent’s main session, so use **one agent per person**. DM access control (`dmPolicy`/`allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent).
 
-**Bakit hinihingi ninyo ang phone number ko sa wizard?**  
-Ginagamit ito ng wizard para itakda ang **allowlist/owner** mo para payagan ang sarili mong DMs. Hindi ito ginagamit para sa auto-sending. Kung tumatakbo ka sa personal mong WhatsApp number, gamitin ang parehong numero at i-enable ang `channels.whatsapp.selfChatMode`.
+**Why do you ask for my phone number in the wizard?**  
+The wizard uses it to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that same number and enable `channels.whatsapp.selfChatMode`.
 
 ## Message normalization (kung ano ang nakikita ng model)
 
 - Ang `Body` ang kasalukuyang body ng mensahe na may envelope.
+
 - Ang quoted reply context ay **laging idinadagdag**:
 
   ```
@@ -223,6 +217,7 @@ Ginagamit ito ng wizard para itakda ang **allowlist/owner** mo para payagan ang 
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = quoted body o media placeholder
   - `ReplyToSender` = E.164 kapag kilala
+
 - Ang media-only inbound messages ay gumagamit ng placeholders:
   - `<media:image|video|audio|document|sticker>`
 
@@ -250,7 +245,7 @@ Ginagamit ito ng wizard para itakda ang **allowlist/owner** mo para payagan ang 
 
 ## Acknowledgment reactions (auto-react sa pagtanggap)
 
-Maaaring awtomatikong magpadala ang WhatsApp ng emoji reactions sa mga papasok na mensahe agad sa pagtanggap, bago pa bumuo ng reply ang bot. Nagbibigay ito ng instant feedback sa mga user na natanggap ang kanilang mensahe.
+WhatsApp can automatically send emoji reactions to incoming messages immediately upon receipt, before the bot generates a reply. This provides instant feedback to users that their message was received.
 
 **Configuration:**
 
@@ -268,7 +263,7 @@ Maaaring awtomatikong magpadala ang WhatsApp ng emoji reactions sa mga papasok n
 
 **Mga opsyon:**
 
-- `emoji` (string): Emoji na gagamitin para sa acknowledgment (hal., "👀", "✅", "📨"). Kapag walang laman o wala = naka-disable ang feature.
+- `emoji` (string): Emoji to use for acknowledgment (e.g., "👀", "✅", "📨"). Empty or omitted = feature disabled.
 - `direct` (boolean, default: `true`): Magpadala ng reactions sa direct/DM chats.
 - `group` (string, default: `"mentions"`): Behavior sa group chat:
   - `"always"`: Mag-react sa lahat ng group message (kahit walang @mention)
@@ -332,7 +327,7 @@ Maaaring awtomatikong magpadala ang WhatsApp ng emoji reactions sa mga papasok n
 
 Nagpapadala ang WhatsApp ng audio bilang **voice notes** (PTT bubble).
 
-- Pinakamahusay na resulta: OGG/Opus. Nirerewrite ng OpenClaw ang `audio/ogg` patungong `audio/ogg; codecs=opus`.
+- Best results: OGG/Opus. OpenClaw rewrites `audio/ogg` to `audio/ogg; codecs=opus`.
 - Binabalewala ang `[[audio_as_voice]]` para sa WhatsApp (ang audio ay dumarating na bilang voice note).
 
 ## Mga limitasyon sa media + optimization
@@ -347,7 +342,7 @@ Nagpapadala ang WhatsApp ng audio bilang **voice notes** (PTT bubble).
 - **Gateway heartbeat** ay naglo-log ng kalusugan ng koneksyon (`web.heartbeatSeconds`, default 60s).
 - **Agent heartbeat** ay maaaring i-configure kada agent (`agents.list[].heartbeat`) o nang global
   sa pamamagitan ng `agents.defaults.heartbeat` (fallback kapag walang per-agent entries na naka-set).
-  - Ginagamit ang naka-configure na heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK` skip behavior.
+  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`) + `HEARTBEAT_OK` skip behavior.
   - Default ang delivery sa huling ginamit na channel (o naka-configure na target).
 
 ## Reconnect behavior
@@ -361,16 +356,16 @@ Nagpapadala ang WhatsApp ng audio bilang **voice notes** (PTT bubble).
 
 - `channels.whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `channels.whatsapp.selfChatMode` (same-phone setup; ginagamit ng bot ang personal mong WhatsApp number).
-- `channels.whatsapp.allowFrom` (DM allowlist). Gumagamit ang WhatsApp ng E.164 phone numbers (walang username).
+- `channels.whatsapp.allowFrom` (DM allowlist). WhatsApp uses E.164 phone numbers (no usernames).
 - `channels.whatsapp.mediaMaxMb` (inbound media save cap).
 - `channels.whatsapp.ackReaction` (auto-reaction sa pagtanggap ng mensahe: `{emoji, direct, group}`).
-- `channels.whatsapp.accounts.<accountId>.*` (per-account settings + opsyonal na `authDir`).
+- `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
 - `channels.whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap).
 - `channels.whatsapp.accounts.<accountId>.ackReaction` (per-account ack reaction override).
 - `channels.whatsapp.groupAllowFrom` (group sender allowlist).
 - `channels.whatsapp.groupPolicy` (group policy).
-- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (group history context; dini-disable ng `0`).
-- `channels.whatsapp.dmHistoryLimit` (DM history limit sa user turns). Per-user overrides: `channels.whatsapp.dms["<phone>"].historyLimit`.
+- `channels.whatsapp.historyLimit` / `channels.whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables).
+- `channels.whatsapp.dmHistoryLimit` (DM history limit in user turns). Per-user overrides: `channels.whatsapp.dms["<phone>"].historyLimit`.
 - `channels.whatsapp.groups` (group allowlist + mention gating defaults; gamitin ang `"*"` para payagan ang lahat)
 - `channels.whatsapp.actions.reactions` (i-gate ang WhatsApp tool reactions).
 - `agents.list[].groupChat.mentionPatterns` (o `messages.groupChat.mentionPatterns`)
@@ -405,9 +400,9 @@ Nagpapadala ang WhatsApp ng audio bilang **voice notes** (PTT bubble).
 **Naka-link pero disconnected / reconnect loop**
 
 - Sintomas: ang `channels status` ay nagpapakita ng `running, disconnected` o nagbababala ng “Linked but disconnected”.
-- Ayusin: `openclaw doctor` (o i-restart ang gateway). Kung magpatuloy, i-relink sa pamamagitan ng `channels login` at suriin ang `openclaw logs --follow`.
+- Fix: `openclaw doctor` (or restart the gateway). If it persists, relink via `channels login` and inspect `openclaw logs --follow`.
 
 **Bun runtime**
 
-- **Hindi inirerekomenda** ang Bun. Hindi maaasahan ang WhatsApp (Baileys) at Telegram sa Bun.
-  Patakbuhin ang gateway gamit ang **Node**. (Tingnan ang runtime note sa Getting Started.)
+- Bun is **not recommended**. WhatsApp (Baileys) and Telegram are unreliable on Bun.
+  Run the gateway with **Node**. (See Getting Started runtime note.)

@@ -2,14 +2,7 @@
 summary: "Schritte zur Zustandsprüfung der Kanalkonnektivität"
 read_when:
   - Diagnose des Zustands des WhatsApp-Kanals
-title: "Zustandsprüfungen"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:13Z
+title: "Health Checks"
 ---
 
 # Zustandsprüfungen (CLI)

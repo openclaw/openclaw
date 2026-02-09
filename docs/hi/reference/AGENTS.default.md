@@ -3,20 +3,13 @@ summary: "व्यक्तिगत सहायक सेटअप के ल
 read_when:
   - नए OpenClaw एजेंट सत्र की शुरुआत करते समय
   - डिफ़ॉल्ट Skills को सक्षम या ऑडिट करते समय
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:50Z
 ---
 
 # AGENTS.md — OpenClaw व्यक्तिगत सहायक (डिफ़ॉल्ट)
 
 ## पहली बार चलाना (अनुशंसित)
 
-OpenClaw एजेंट के लिए एक समर्पित वर्कस्पेस डायरेक्टरी का उपयोग करता है। डिफ़ॉल्ट: `~/.openclaw/workspace` ( `agents.defaults.workspace` के माध्यम से विन्यास योग्य)।
+OpenClaw uses a dedicated workspace directory for the agent. Default: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
 
 1. वर्कस्पेस बनाएँ (यदि पहले से मौजूद न हो):
 
@@ -59,7 +52,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## आत्मा (आवश्यक)
 
-- `SOUL.md` पहचान, स्वर और सीमाएँ परिभाषित करता है। इसे अद्यतन रखें।
+- `SOUL.md` defines identity, tone, and boundaries. Keep it current.
 - यदि आप `SOUL.md` बदलते हैं, तो उपयोगकर्ता को बताएँ।
 - आप प्रत्येक सत्र में एक नया इंस्टेंस हैं; निरंतरता इन फ़ाइलों में रहती है।
 
@@ -108,7 +101,7 @@ git commit -m "Add Clawd workspace"
 - **eightctl** — टर्मिनल से आपकी नींद को नियंत्रित करें।
 - **imsg** — iMessage और SMS भेजें, पढ़ें, स्ट्रीम करें।
 - **wacli** — WhatsApp CLI: सिंक, खोज, भेजें।
-- **discord** — Discord क्रियाएँ: रिएक्ट, स्टिकर्स, पोल्स। `user:<id>` या `channel:<id>` लक्ष्य उपयोग करें (केवल संख्यात्मक आईडी अस्पष्ट होती हैं)।
+- **discord** — Discord actions: react, stickers, polls. Use `user:<id>` or `channel:<id>` targets (bare numeric ids are ambiguous).
 - **gog** — Google Suite CLI: Gmail, Calendar, Drive, Contacts।
 - **spotify-player** — खोज/क्यू/प्लेबैक नियंत्रण के लिए टर्मिनल Spotify क्लाइंट।
 - **sag** — mac-स्टाइल say UX के साथ ElevenLabs स्पीच; डिफ़ॉल्ट रूप से स्पीकर्स पर स्ट्रीम करता है।
@@ -124,7 +117,7 @@ git commit -m "Add Clawd workspace"
 - स्क्रिप्टिंग के लिए `openclaw` CLI को प्राथमिकता दें; mac ऐप अनुमतियाँ संभालता है।
 - Skills टैब से इंस्टॉल चलाएँ; यदि बाइनरी पहले से मौजूद हो तो यह बटन छिपा देता है।
 - हार्टबीट्स सक्षम रखें ताकि सहायक रिमाइंडर्स शेड्यूल कर सके, इनबॉक्स मॉनिटर कर सके और कैमरा कैप्चर ट्रिगर कर सके।
-- Canvas UI फुल-स्क्रीन नेटिव ओवरले के साथ चलता है। ऊपर-बाएँ/ऊपर-दाएँ/नीचे के किनारों में महत्वपूर्ण नियंत्रण न रखें; लेआउट में स्पष्ट गटर जोड़ें और safe-area insets पर निर्भर न रहें।
+- Canvas UI runs full-screen with native overlays. Avoid placing critical controls in the top-left/top-right/bottom edges; add explicit gutters in the layout and don’t rely on safe-area insets.
 - ब्राउज़र-आधारित सत्यापन के लिए, OpenClaw-प्रबंधित Chrome प्रोफ़ाइल के साथ `openclaw browser` (टैब/स्थिति/स्क्रीनशॉट) उपयोग करें।
 - DOM निरीक्षण के लिए, `openclaw browser eval|query|dom|snapshot` का उपयोग करें (और मशीन आउटपुट की आवश्यकता होने पर `--json`/`--out`)।
 - इंटरैक्शन के लिए, `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` का उपयोग करें (क्लिक/टाइप के लिए स्नैपशॉट संदर्भ आवश्यक हैं; CSS सेलेक्टर्स के लिए `evaluate` उपयोग करें)।

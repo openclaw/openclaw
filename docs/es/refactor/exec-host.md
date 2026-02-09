@@ -5,13 +5,6 @@ read_when:
   - Al implementar el runner de nodos + IPC de la UI
   - Al agregar modos de seguridad del host de exec y comandos slash
 title: "Refactorización del Host de Exec"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:44Z
 ---
 
 # Plan de refactorización del host de exec
@@ -58,7 +51,7 @@ x-i18n:
 - `allowlist`: permitir solo coincidencias.
 - `full`: permitir todo (equivalente a elevado).
 
-### Modo de confirmación
+### Modo preguntar
 
 - `off`: nunca preguntar.
 - `on-miss`: preguntar solo cuando la lista de permitidos no coincide.
@@ -236,7 +229,7 @@ Opción B:
 
 - La herramienta `exec` del gateway maneja el ciclo de vida directamente (solo síncrono).
 
-## Flujos de exec
+## Flujos Exec
 
 ### Host sandbox
 

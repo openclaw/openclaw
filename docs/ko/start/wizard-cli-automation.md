@@ -5,13 +5,6 @@ read_when:
   - 특정 프로바이더에 대한 비대화형 예제가 필요할 때
 title: "CLI 자동화"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:18Z
 ---
 
 # CLI 자동화
@@ -22,7 +15,7 @@ x-i18n:
 `--json`은 비대화형 모드를 의미하지 않습니다. 스크립트에서는 `--non-interactive` (및 `--workspace`)를 사용하십시오.
 </Note>
 
-## 기준 비대화형 예제
+## 기본 비대화형 예제
 
 ```bash
 openclaw onboard --non-interactive \
@@ -41,7 +34,7 @@ openclaw onboard --non-interactive \
 ## 프로바이더별 예제
 
 <AccordionGroup>
-  <Accordion title="Gemini 예제">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Z.AI 예제">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Vercel AI Gateway 예제">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Cloudflare AI Gateway 예제">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Moonshot 예제">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Synthetic 예제">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="OpenCode Zen 예제">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -117,8 +110,7 @@ openclaw onboard --non-interactive \
 
 ## 다른 에이전트 추가
 
-`openclaw agents add <name>`를 사용하여 자체 워크스페이스, 세션 및 인증 프로필을 갖는 별도의 에이전트를 생성합니다.
-`--workspace` 없이 실행하면 마법사가 시작됩니다.
+`openclaw agents add <name>`를 사용하여 자체 워크스페이스, 세션 및 인증 프로필을 갖는 별도의 에이전트를 생성합니다. `--workspace` 없이 실행하면 마법사가 시작됩니다.
 
 ```bash
 openclaw agents add work \

@@ -3,13 +3,6 @@ summary: "Gateway ダッシュボード（Control UI）のアクセスと認証"
 read_when:
   - ダッシュボードの認証や公開モードを変更する場合
 title: "ダッシュボード"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:37Z
 ---
 
 # Dashboard（Control UI）
@@ -28,11 +21,11 @@ Gateway ダッシュボードは、既定では `/` で提供されるブラウ�
 - バインドモードやセキュリティに関する注意点については [Web surfaces](/web) を参照してください。
 
 認証は WebSocket ハンドシェイク時に `connect.params.auth`（トークンまたはパスワード）によって強制されます。
-[Gateway configuration](/gateway/configuration) の `gateway.auth` を参照してください。
+[Gateway configuration](/gateway/configuration) の `gateway.auth` を参照してください。 [ゲートウェイ設定](/gateway/configuration)の「gateway.auth」を参照してください。
 
-セキュリティ上の注意: Control UI は **管理者向けの画面**（チャット、設定、実行承認）です。
-公開インターネットに公開しないでください。UI は初回読み込み後、トークンを `localStorage` に保存します。
-localhost、Tailscale Serve、または SSH トンネルの使用を推奨します。
+セキュリティノート: Control UI は **管理者サーフェス** (チャット、設定、exec 承認) です。
+公にそれを公開しないでください。 UIは最初に読み込んだ後にトークンを`localStorage`に保存します。
+localhost、Tailscale Serve、またはSSHトンネルを好みます。
 
 ## Fast path（推奨）
 
@@ -44,7 +37,7 @@ localhost、Tailscale Serve、または SSH トンネルの使用を推奨しま
 
 - **Localhost**: `http://127.0.0.1:18789/` を開きます。
 - **トークンの取得元**: `gateway.auth.token`（または `OPENCLAW_GATEWAY_TOKEN`）。接続後、UI は localStorage にコピーを保存します。
-- **Localhost 以外**: Tailscale Serve（`gateway.auth.allowTailscale: true` の場合はトークン不要）、トークン付きの tailnet バインド、または SSH トンネルを使用してください。詳細は [Web surfaces](/web) を参照してください。
+- **Localhost 以外**: Tailscale Serve（`gateway.auth.allowTailscale: true` の場合はトークン不要）、トークン付きの tailnet バインド、または SSH トンネルを使用してください。詳細は [Web surfaces](/web) を参照してください。 31. [Web surfaces](/web) を参照してください。
 
 ## 「unauthorized」／1008 が表示される場合
 

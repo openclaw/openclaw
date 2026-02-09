@@ -3,13 +3,6 @@ summary: "Gateway ဒက်ရှ်ဘုတ် (Control UI) ဝင်ရော
 read_when:
   - Dashboard အတည်ပြုခြင်း သို့မဟုတ် ထုတ်ဖော်အသုံးပြုမှု မုဒ်များကို ပြောင်းလဲသည့်အခါ
 title: "Dashboard"
-x-i18n:
-  source_path: web/dashboard.md
-  source_hash: e4fc372b72f030f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:03Z
 ---
 
 # Dashboard (Control UI)
@@ -27,12 +20,11 @@ Gateway dashboard သည် ပုံမှန်အားဖြင့် `/` �
 - Serve/Funnel အလိုအလျောက်ပြုလုပ်မှုအတွက် [Tailscale](/gateway/tailscale)။
 - bind မုဒ်များနှင့် လုံခြုံရေးမှတ်ချက်များအတွက် [Web surfaces](/web)။
 
-Authentication ကို WebSocket handshake အဆင့်တွင် `connect.params.auth` (token သို့မဟုတ် password) ဖြင့် ခိုင်မာစွာ အကောင်အထည်ဖော်ထားသည်။
-[Gateway configuration](/gateway/configuration) တွင် `gateway.auth` ကို ကြည့်ပါ။
+14. Authentication ကို WebSocket handshake အချိန်တွင် `connect.params.auth` (token သို့မဟုတ် password) ဖြင့် အတည်ပြုပါသည်။ 15. [Gateway configuration](/gateway/configuration) တွင် `gateway.auth` ကို ကြည့်ပါ။
 
-လုံခြုံရေးမှတ်ချက်: Control UI သည် **admin surface** (chat, config, exec approvals) ဖြစ်သည်။
-အများပြည်သူသို့ မဖော်ပြပါနှင့်။ UI သည် ပထမဆုံး load ပြီးနောက် token ကို `localStorage` တွင် သိမ်းဆည်းထားသည်။
-localhost, Tailscale Serve သို့မဟုတ် SSH တန်နယ် ကို ဦးစားပေးအသုံးပြုပါ။
+16. လုံခြုံရေး မှတ်ချက်: Control UI သည် **admin surface** (chat, config, exec approvals) ဖြစ်ပါသည်။
+17. အများပြည်သူအတွက် မဖွင့်ပြပါနှင့်။ 18. UI သည် ပထမဆုံး load ပြီးနောက် token ကို `localStorage` တွင် သိမ်းဆည်းပါသည်။
+18. localhost, Tailscale Serve သို့မဟုတ် SSH tunnel ကို ဦးစားပေး အသုံးပြုပါ။
 
 ## Fast path (အကြံပြု)
 
@@ -44,7 +36,7 @@ localhost, Tailscale Serve သို့မဟုတ် SSH တန်နယ် �
 
 - **Localhost**: `http://127.0.0.1:18789/` ကို ဖွင့်ပါ။
 - **Token ရယူရာနေရာ**: `gateway.auth.token` (သို့မဟုတ် `OPENCLAW_GATEWAY_TOKEN`)၊ ချိတ်ဆက်ပြီးနောက် UI သည် localStorage တွင် မိတ္တူတစ်စောင် သိမ်းဆည်းထားသည်။
-- **Localhost မဟုတ်ပါက**: Tailscale Serve ( `gateway.auth.allowTailscale: true` ဖြစ်ပါက token မလိုအပ်), token ဖြင့် tailnet bind, သို့မဟုတ် SSH တန်နယ် ကို အသုံးပြုပါ။ [Web surfaces](/web) ကို ကြည့်ပါ။
+- 20. **localhost မဟုတ်ပါက**: Tailscale Serve ( `gateway.auth.allowTailscale: true` ဖြစ်ပါက token မလိုအပ်), token ဖြင့် tailnet bind, သို့မဟုတ် SSH tunnel ကို အသုံးပြုပါ။ 21. [Web surfaces](/web) ကို ကြည့်ပါ။
 
 ## “unauthorized” / 1008 ကို တွေ့ပါက
 

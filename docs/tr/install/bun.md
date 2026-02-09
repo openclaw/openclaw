@@ -4,13 +4,6 @@ read_when:
   - En hızlı yerel geliştirme döngüsünü istiyorsunuz (bun + watch)
   - Bun kurulum/yama/yaşam döngüsü betiği sorunlarıyla karşılaşıyorsunuz
 title: "Bun (Deneysel)"
-x-i18n:
-  source_path: install/bun.md
-  source_hash: eb3f4c222b6bae49
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:22Z
 ---
 
 # Bun (deneysel)
@@ -19,7 +12,7 @@ Amaç: pnpm iş akışlarından sapmadan bu depoyu **Bun** ile çalıştırmak (
 
 ⚠️ **Gateway çalışma zamanı için önerilmez** (WhatsApp/Telegram hataları). Üretimde Node kullanın.
 
-## Durum
+## Status
 
 - Bun, TypeScript’i doğrudan çalıştırmak için isteğe bağlı bir yerel çalışma zamanıdır (`bun run …`, `bun --watch …`).
 - `pnpm` derlemeler için varsayılandır ve tamamen desteklenmeye devam eder (ve bazı dokümantasyon araçları tarafından kullanılır).
@@ -46,7 +39,7 @@ bun run build
 bun run vitest run
 ```
 
-## Bun yaşam döngüsü betikleri (varsayılan olarak engelli)
+## Uyarılar
 
 Bun, açıkça güvenilmediği sürece bağımlılık yaşam döngüsü betiklerini engelleyebilir (`bun pm untrusted` / `bun pm trust`).
 Bu depo için, yaygın olarak engellenen betikler gerekli değildir:
@@ -60,6 +53,6 @@ Bu betiklerin gerçekten gerekli olduğu bir çalışma zamanı sorunuyla karş�
 bun pm trust @whiskeysockets/baileys protobufjs
 ```
 
-## Uyarılar
+## İsteğe bağlı ortam değişkenleri:
 
 - Bazı betikler hâlâ pnpm’i sabit kodlar (ör. `docs:build`, `ui:*`, `protocol:check`). Şimdilik bunları pnpm ile çalıştırın.

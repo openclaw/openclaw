@@ -5,13 +5,6 @@ read_when:
   - Você quer um servidor de API local que encapsule a Claude Code CLI
   - Você quer economizar usando assinatura em vez de chaves de API
 title: "Proxy de API Claude Max"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:39Z
 ---
 
 # Proxy de API Claude Max
@@ -20,10 +13,10 @@ x-i18n:
 
 ## Por que usar isso?
 
-| Abordagem             | Custo                                                                 | Ideal para                                  |
-| --------------------- | --------------------------------------------------------------------- | ------------------------------------------- |
+| Abordagem             | Custo                                                                                                    | Ideal para                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | API da Anthropic      | Pagamento por token (~US$15/M de entrada, US$75/M de saída para Opus) | Apps em produção, alto volume               |
-| Assinatura Claude Max | US$200/mês fixo                                                       | Uso pessoal, desenvolvimento, uso ilimitado |
+| Assinatura Claude Max | US$200/mês fixo                                                                                          | Uso pessoal, desenvolvimento, uso ilimitado |
 
 Se você tem uma assinatura Claude Max e quer usá-la com ferramentas compatíveis com OpenAI, este proxy pode economizar uma quantia significativa.
 

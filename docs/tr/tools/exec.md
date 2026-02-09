@@ -4,13 +4,6 @@ read_when:
   - Exec aracını kullanırken veya değiştirirken
   - Stdin veya TTY davranışını hata ayıklarken
 title: "Exec Aracı"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:04Z
 ---
 
 # Exec aracı
@@ -95,10 +88,11 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 
 Denetim UI'si: Nodes sekmesi aynı ayarlar için küçük bir “Exec node binding” paneli içerir.
 
-## Oturum geçersiz kılmaları (`/exec`)
+## 25. Oturum geçersiz kılmaları (`/exec`)
 
 `/exec` kullanarak `host`, `security`, `ask` ve `node` için **oturum başına**
-varsayılanları ayarlayın. Geçerli değerleri göstermek için bağımsız değişkensiz `/exec` gönderin.
+varsayılanları ayarlayın.
+Geçerli değerleri göstermek için bağımsız değişkensiz `/exec` gönderin.
 
 Örnek:
 
@@ -125,8 +119,7 @@ tek bir `Exec running` bildirimi yayılır.
 
 ## İzin listesi + güvenli ikililer
 
-İzin listesi zorlaması **yalnızca çözümlenmiş ikili yollarını** eşleştirir (basename eşleşmesi yok).
-`security=allowlist` durumunda, kabuk komutları yalnızca her bir boru hattı parçası izin listesinde veya bir güvenli ikili ise
+İzin listesi zorlaması **yalnızca çözümlenmiş ikili yollarını** eşleştirir (basename eşleşmesi yok). `security=allowlist` durumunda, kabuk komutları yalnızca her bir boru hattı parçası izin listesinde veya bir güvenli ikili ise
 otomatik olarak izinli sayılır. Zincirleme (`;`, `&&`, `||`) ve yönlendirmeler,
 izin listesi modunda reddedilir.
 
@@ -159,7 +152,7 @@ Gönder (yalnızca CR gönder):
 { "tool": "process", "action": "submit", "sessionId": "<id>" }
 ```
 
-Yapıştır (varsayılan olarak köşeli parantezli):
+26. Yapıştır (varsayılan olarak köşeli parantez içinde):
 
 ```json
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }

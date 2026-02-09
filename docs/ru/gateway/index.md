@@ -1,15 +1,8 @@
 ---
-summary: «Рунбук для сервиса Gateway, его жизненного цикла и операций»
+summary: "Рунбук для сервиса Gateway, его жизненного цикла и операций"
 read_when:
   - При запуске или отладке процесса Gateway
-title: «Рунбук Gateway»
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:11Z
+title: "Рунбук Gateway"
 ---
 
 # Рунбук сервиса Gateway
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - Затем клиенты подключаются к `ws://127.0.0.1:18789` через туннель.
+
 - Если настроен токен, клиенты должны включать его в `connect.params.auth.token` даже через туннель.
 
 ## Несколько Gateway (на одном хосте)
@@ -112,7 +106,7 @@ openclaw --dev health
 - `canvasHost.port = base + 4` (или `OPENCLAW_CANVAS_HOST_PORT` / переопределение в конфиге)
 - Порты CDP профиля браузера выделяются автоматически начиная с `browser.controlPort + 9 .. + 108` (сохраняются для профиля).
 
-Чек-лист для каждого инстанса:
+Checklist per instance:
 
 - уникальный `gateway.port`
 - уникальный `OPENCLAW_CONFIG_PATH`
@@ -173,7 +167,7 @@ OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b opencla
 - Удалённое использование проходит через тот же SSH/Tailscale‑туннель; если настроен токен Gateway, клиент включает его во время `connect`.
 - Приложение для macOS подключается через один WS (общее соединение); оно гидратирует присутствие из начального снимка и слушает события `presence` для обновления UI.
 
-## Набор текста и валидация
+## Напечатать и проверить
 
 - Сервер валидирует каждый входящий фрейм с помощью AJV по JSON Schema, сгенерированной из определений протокола.
 - Клиенты (TS/Swift) используют сгенерированные типы (TS — напрямую; Swift — через генератор репозитория).
@@ -240,7 +234,7 @@ openclaw logs --follow
 - `gateway status` включает последнюю строку ошибки Gateway, когда сервис выглядит запущенным, но порт закрыт.
 - `logs` читает файл логов Gateway через RPC (без ручного `tail`/`grep`).
 - Если обнаружены другие сервисы, похожие на gateway, CLI предупреждает, если это не сервисы профиля OpenClaw.
-  Мы по‑прежнему рекомендуем **один gateway на машину** для большинства установок; используйте изолированные профили/порты для резервирования или rescue bot. См. [Несколько Gateway](/gateway/multiple-gateways).
+  Мы по‑прежнему рекомендуем **один gateway на машину** для большинства установок; используйте изолированные профили/порты для резервирования или rescue bot. См. См. [Multiple gateways](/gateway/multiple-gateways).
   - Очистка: `openclaw gateway uninstall` (текущий сервис) и `openclaw doctor` (устаревшие миграции).
 - `gateway install` — no-op, если уже установлено; используйте `openclaw gateway install --force` для переустановки (изменения профиля/env/пути).
 

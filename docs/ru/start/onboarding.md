@@ -5,13 +5,6 @@ read_when:
   - Реализация настройки аутентификации или идентификации
 title: "Онбординг (приложение для macOS)"
 sidebarTitle: "Onboarding: macOS App"
-x-i18n:
-  source_path: start/onboarding.md
-  source_hash: 45f912067527158f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:03Z
 ---
 
 # Онбординг (приложение для macOS)
@@ -21,22 +14,22 @@ x-i18n:
 пройти мастер и позволить агенту самостоятельно выполнить начальную инициализацию.
 
 <Steps>
-<Step title="Подтвердите предупреждение macOS">
+<Step title="Approve macOS warning">
 <Frame>
 <img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Разрешите поиск локальных сетей">
+<Step title="Approve find local networks">
 <Frame>
 <img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
-<Step title="Приветствие и уведомление о безопасности">
+<Step title="Welcome and security notice">
 <Frame caption="Прочитайте отображаемое уведомление о безопасности и примите решение">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
-<Step title="Локально или удалённо">
+<Step title="Local vs Remote">
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
@@ -56,7 +49,7 @@ x-i18n:
 - Используйте **токен** для доступа с нескольких машин или для небиндингов не через loopback.
 </Tip>
 </Step>
-<Step title="Разрешения">
+<Step title="Permissions">
 <Frame caption="Выберите, какие разрешения вы хотите предоставить OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
@@ -78,10 +71,10 @@ x-i18n:
   Приложение может установить глобальный CLI `openclaw` через npm/pnpm, чтобы
   рабочие процессы в терминале и задачи launchd работали сразу «из коробки».
 </Step>
-<Step title="Чат онбординга (выделенный сеанс)">
+<Step title="Onboarding Chat (dedicated session)">
   После настройки приложение открывает выделенный чат онбординга, чтобы агент мог
   представиться и направить дальнейшие шаги. Это позволяет держать руководство при
-  первом запуске отдельно от обычного диалога. См. [Bootstrapping](/start/bootstrapping)
+  первом запуске отдельно от обычного диалога. [Bootstrapping](/start/bootstrapping)
   для понимания того, что происходит на хосте шлюза Gateway при первом запуске агента.
 </Step>
 </Steps>

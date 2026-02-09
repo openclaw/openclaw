@@ -4,13 +4,6 @@ summary: "Vercel AI Gateway kurulumu (kimlik doğrulama + model seçimi)"
 read_when:
   - OpenClaw ile Vercel AI Gateway kullanmak istiyorsunuz
   - API anahtarı ortam değişkenine veya CLI kimlik doğrulama seçeneğine ihtiyacınız var
-x-i18n:
-  source_path: providers/vercel-ai-gateway.md
-  source_hash: 2bf1687c1152c6e1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # Vercel AI Gateway
@@ -50,7 +43,7 @@ openclaw onboard --non-interactive \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY"
 ```
 
-## Ortam notu
+## Environment note
 
 Gateway bir daemon olarak çalışıyorsa (launchd/systemd), `AI_GATEWAY_API_KEY`
 değerinin bu süreç tarafından kullanılabilir olduğundan emin olun (örneğin

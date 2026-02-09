@@ -4,22 +4,15 @@ read_when:
   - Auto-compaction နှင့် /compact ကို နားလည်လိုသည့်အခါ
   - Context ကန့်သတ်ချက်များကို ထိမိနေသော ဆက်ရှင်ရှည်များကို စစ်ဆေးပြုပြင်နေသောအခါ
 title: "Compaction"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:16Z
 ---
 
 # Context Window & Compaction
 
-မော်ဒယ်တိုင်းတွင် **context window** (မြင်နိုင်သော token အများဆုံးအရေအတွက်) ရှိပါသည်။ အချိန်ကြာရှည်စွာ ဆက်လက်ပြောဆိုသည့် ချတ်များတွင် မက်ဆေ့ချ်များနှင့် tool ရလဒ်များ စုဆောင်းလာပြီး window ကန့်သတ်ချက်နီးကပ်လာသောအခါ OpenClaw သည် ကန့်သတ်ချက်များအတွင်း ဆက်လက်လုပ်ဆောင်နိုင်ရန် အဟောင်းများကို **compaction** ပြုလုပ်ပါသည်။
+Model တစ်ခုချင်းစီတွင် **context window** (မြင်နိုင်သော max token အရေအတွက်) ရှိပါသည်။ ကြာရှည်သည့် chat များတွင် message နှင့် tool result များ စုပေါင်းလာပါသည်၊ window က တင်းကျပ်လာသောအခါ OpenClaw သည် limit အတွင်း ရှိစေရန် အဟောင်း history များကို **compact** လုပ်ပါသည်။
 
 ## Compaction ဆိုသည်မှာ
 
-Compaction သည် **အဟောင်းများသော စကားဝိုင်းကို အကျဉ်းချုပ်ဖော်ပြခြင်း** ပြုလုပ်ပြီး နောက်ဆုံးပိုင်း မက်ဆေ့ချ်များကို မပြောင်းလဲဘဲ ထားရှိပါသည်။ အကျဉ်းချုပ်ကို ဆက်ရှင်မှတ်တမ်းအတွင်း သိမ်းဆည်းထားသောကြောင့် နောက်တစ်ကြိမ် တောင်းဆိုမှုများတွင် အောက်ပါအချက်များကို အသုံးပြုပါသည်—
+Compaction သည် **အဟောင်း conversation များကို summary လုပ်**၍ compact summary entry တစ်ခုအဖြစ် ထားပြီး လတ်တလော message များကို မပြောင်းလဲဘဲ ထိန်းထားပါသည်။ 1. အကျဉ်းချုပ်ကို session history ထဲမှာ သိမ်းဆည်းထားပြီး၊ နောက်ထပ် တောင်းဆိုမှုများတွင် အသုံးပြုသည်။
 
 - Compaction အကျဉ်းချုပ်
 - Compaction ပြုလုပ်ထားသည့် အချက်အလက်အပြီးရှိ မကြာသေးမီ မက်ဆေ့ချ်များ
@@ -39,7 +32,7 @@ Compaction သည် ဆက်ရှင်၏ JSONL မှတ်တမ်းအ�
 - verbose mode တွင် `🧹 Auto-compaction complete`
 - `🧹 Compactions: <count>` ကို ပြသထားသော `/status`
 
-Compaction မပြုလုပ်မီ OpenClaw သည် disk တွင် တည်တံ့စွာ သိမ်းဆည်းရန်အတွက် **silent memory flush** အလှည့်ကို လုပ်ဆောင်နိုင်ပါသည်။ အသေးစိတ်နှင့် configuration အတွက် [Memory](/concepts/memory) ကို ကြည့်ပါ။
+2. Compaction မလုပ်မီ၊ OpenClaw သည် **silent memory flush** turn ကို လုပ်ဆောင်ပြီး durable notes များကို disk သို့ သိမ်းဆည်းနိုင်သည်။ 3. အသေးစိတ်နှင့် config အတွက် [Memory](/concepts/memory) ကို ကြည့်ပါ။
 
 ## Manual compaction
 
@@ -51,7 +44,7 @@ Compaction ကို အတင်းအကျပ် လုပ်ဆောင်�
 
 ## Context window အရင်းအမြစ်
 
-Context window သည် မော်ဒယ်အလိုက် ကွဲပြားပါသည်။ OpenClaw သည် သတ်မှတ်ထားသော provider catalog ထဲရှိ မော်ဒယ် သတ်မှတ်ချက်ကို အသုံးပြုပြီး ကန့်သတ်ချက်များကို ဆုံးဖြတ်ပါသည်။
+4. Context window သည် model အလိုက် ကွာခြားပါသည်။ 5. OpenClaw သည် ကန့်သတ်ချက်များကို သတ်မှတ်ရန် configured provider catalog ထဲမှ model definition ကို အသုံးပြုပါသည်။
 
 ## Compaction နှင့် pruning ၏ ကွာခြားချက်
 

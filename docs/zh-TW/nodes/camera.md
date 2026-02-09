@@ -4,13 +4,6 @@ read_when:
   - 新增或修改 iOS 節點或 macOS 上的相機擷取功能時
   - 擴充代理程式可存取的 MEDIA 暫存檔案工作流程時
 title: "相機擷取"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:36Z
 ---
 
 # 相機擷取（代理程式）
@@ -28,7 +21,7 @@ OpenClaw 支援用於代理程式工作流程的 **相機擷取**：
 ### 使用者設定（預設開啟）
 
 - iOS 設定分頁 → **Camera** → **Allow Camera**（`camera.enabled`）
-  - 預設：**開啟**（缺少金鑰時視為已啟用）。
+  - 32. 預設：**開啟**（缺少鍵視為已啟用）。
   - 關閉時：`camera.*` 指令會回傳 `CAMERA_DISABLED`。
 
 ### 指令（透過 Gateway `node.invoke`）
@@ -38,7 +31,7 @@ OpenClaw 支援用於代理程式工作流程的 **相機擷取**：
     - `devices`：`{ id, name, position, deviceType }` 的陣列
 
 - `camera.snap`
-  - 參數：
+  - Params:
     - `facing`：`front|back`（預設：`front`）
     - `maxWidth`：number（選用；iOS 節點上的預設為 `1600`）
     - `quality`：`0..1`（選用；預設：`0.9`）
@@ -52,7 +45,7 @@ OpenClaw 支援用於代理程式工作流程的 **相機擷取**：
   - 負載防護：照片會重新壓縮，以確保 base64 負載低於 5 MB。
 
 - `camera.clip`
-  - 參數：
+  - Params:
     - `facing`：`front|back`（預設：`front`）
     - `durationMs`：number（預設 `3000`，並限制最大值為 `60000`）
     - `includeAudio`：boolean（預設 `true`）
@@ -66,7 +59,7 @@ OpenClaw 支援用於代理程式工作流程的 **相機擷取**：
 
 ### 前景需求
 
-如同 `canvas.*`，iOS 節點僅允許在 **前景** 執行 `camera.*` 指令。於背景呼叫時會回傳 `NODE_BACKGROUND_UNAVAILABLE`。
+如同 `canvas.*`，iOS 節點僅允許在 **前景** 執行 `camera.*` 指令。於背景呼叫時會回傳 `NODE_BACKGROUND_UNAVAILABLE`。 Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI 輔助工具（暫存檔案 + MEDIA）
 
@@ -84,14 +77,14 @@ openclaw nodes camera clip --node <id> --no-audio
 注意事項：
 
 - `nodes camera snap` 預設為 **兩者皆有** 的鏡頭方向，以提供代理程式兩種視角。
-- 輸出檔案為暫存檔（位於作業系統的暫存目錄），除非你自行建立包裝器。
+- 50. 輸出檔案為暫存檔（位於作業系統的暫存目錄），除非你自行建立包裝器。
 
 ## Android 節點
 
 ### Android 使用者設定（預設開啟）
 
 - Android 設定頁面 → **Camera** → **Allow Camera**（`camera.enabled`）
-  - 預設：**開啟**（缺少金鑰時視為已啟用）。
+  - 預設值：**on**（缺少鍵值時視為已啟用）。
   - 關閉時：`camera.*` 指令會回傳 `CAMERA_DISABLED`。
 
 ### 權限
@@ -105,9 +98,9 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ### Android 前景需求
 
-如同 `canvas.*`，Android 節點僅允許在 **前景** 執行 `camera.*` 指令。於背景呼叫時會回傳 `NODE_BACKGROUND_UNAVAILABLE`。
+如同 `canvas.*`，Android 節點僅允許在 **前景** 執行 `camera.*` 指令。於背景呼叫時會回傳 `NODE_BACKGROUND_UNAVAILABLE`。 背景呼叫會回傳 `NODE_BACKGROUND_UNAVAILABLE`。
 
-### 負載防護
+### Payload 防護
 
 照片會重新壓縮，以確保 base64 負載低於 5 MB。
 
@@ -115,7 +108,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ### 使用者設定（預設關閉）
 
-macOS 配套應用程式提供一個核取方塊：
+macOS 伴隨應用程式提供一個核取方塊：
 
 - **Settings → General → Allow Camera**（`openclaw.cameraEnabled`）
   - 預設：**關閉**
@@ -147,7 +140,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ## 安全性與實務限制
 
-- 相機與麥克風存取會觸發一般的作業系統權限提示（並需要在 Info.plist 中提供用途說明字串）。
+- 相機與麥克風存取會觸發一般的作業系統權限提示（並且需要在 Info.plist 中提供使用說明字串）。
 - 為避免節點負載過大（base64 額外負擔 + 訊息限制），影片剪輯有上限（目前為 `<= 60s`）。
 
 ## macOS 螢幕影片（作業系統層級）

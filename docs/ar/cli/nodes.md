@@ -1,16 +1,9 @@
 ---
 summary: "مرجع CLI لأمر `openclaw nodes` (list/status/approve/invoke، الكاميرا/اللوحة/الشاشة)"
 read_when:
-  - "أنت تدير عُقدًا مقترنة (كاميرات، شاشة، لوحة)"
-  - "تحتاج إلى الموافقة على الطلبات أو استدعاء أوامر العُقد"
-title: "العُقد"
-x-i18n:
-  source_path: cli/nodes.md
-  source_hash: 23da6efdd659a82d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:03Z
+  - أنت تدير عُقدًا مقترنة (كاميرات، شاشة، لوحة)
+  - تحتاج إلى الموافقة على الطلبات أو استدعاء أوامر العُقد
+title: "nodes"
 ---
 
 # `openclaw nodes`

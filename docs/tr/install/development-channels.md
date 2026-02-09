@@ -4,13 +4,6 @@ read_when:
   - Kararlı/beta/dev arasında geçiş yapmak istiyorsunuz
   - Ön sürümleri etiketliyor veya yayımlıyorsunuz
 title: "Geliştirme Kanalları"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:23Z
 ---
 
 # Geliştirme kanalları

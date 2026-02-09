@@ -4,13 +4,6 @@ read_when:
   - macOS/iOS/Android پر ٹاک موڈ نافذ کرنا
   - آواز/TTS/انٹرپٹ کے رویّے میں تبدیلی
 title: "ٹاک موڈ"
-x-i18n:
-  source_path: nodes/talk.md
-  source_hash: ecbc3701c9e95029
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:29Z
 ---
 
 # ٹاک موڈ

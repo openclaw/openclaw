@@ -3,13 +3,6 @@ summary: "すべての OpenClaw ドキュメントにリンクするハブ"
 read_when:
   - ドキュメント全体の完全なマップが必要な場合
 title: "ドキュメントハブ"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:19Z
 ---
 
 # ドキュメントハブ

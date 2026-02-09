@@ -5,13 +5,6 @@ read_when:
   - آپ خودکار کمپیکشن کے رویے میں تبدیلی کر رہے ہوں یا “پری-کمپیکشن” ہاؤس کیپنگ شامل کر رہے ہوں
   - آپ میموری فلشز یا خاموش سسٹم ٹرنز نافذ کرنا چاہتے ہوں
 title: "سیشن مینجمنٹ کی تفصیلی رہنمائی"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:11Z
 ---
 
 # Session Management & Compaction (Deep Dive)
@@ -96,7 +89,7 @@ OpenClaw ان کو `src/config/sessions.ts` کے ذریعے ریزولو کرت�
 
 - **Reset** (`/new`, `/reset`) اس `sessionKey` کے لیے نیا `sessionId` بناتا ہے۔
 - **Daily reset** (ڈیفالٹ گیٹ وے ہوسٹ کے مقامی وقت کے مطابق صبح 4:00 بجے) ری سیٹ باؤنڈری کے بعد آنے والے اگلے پیغام پر نیا `sessionId` بناتا ہے۔
-- **Idle expiry** (`session.reset.idleMinutes` یا لیگیسی `session.idleMinutes`) اس وقت نیا `sessionId` بناتا ہے جب آئیڈل ونڈو کے بعد پیغام آئے۔ جب ڈیلی + آئیڈل دونوں کنفیگر ہوں تو جو پہلے ختم ہو وہی لاگو ہوتا ہے۔
+- **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 
 نفاذی تفصیل: یہ فیصلہ `src/auto-reply/reply/session.ts` میں `initSessionState()` کے اندر ہوتا ہے۔
 
@@ -174,7 +167,7 @@ OpenClaw جان بوجھ کر ٹرانسکرپٹس کو “درست” نہیں 
 - کمپیکشن خلاصہ
 - `firstKeptEntryId` کے بعد کے پیغامات
 
-کمپیکشن **پائیدار** ہے (سیشن پروننگ کے برعکس)۔ دیکھیں [/concepts/session-pruning](/concepts/session-pruning)۔
+Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
 ---
 
@@ -283,10 +276,10 @@ Pi ایکسٹینشن API میں `session_before_compact` ہُک بھی فراہ
 
 ## Troubleshooting checklist
 
-- سیشن کی غلط؟ [/concepts/session](/concepts/session) سے آغاز کریں اور `/status` میں `sessionKey` کی تصدیق کریں۔
-- اسٹور بمقابلہ ٹرانسکرپٹ عدم مطابقت؟ Gateway ہوسٹ اور `openclaw status` سے اسٹور پاتھ کی تصدیق کریں۔
-- کمپیکشن اسپام؟ چیک کریں:
+- Session key wrong? Start with [/concepts/session](/concepts/session) and confirm the `sessionKey` in `/status`.
+- Store vs transcript mismatch? Confirm the Gateway host and the store path from `openclaw status`.
+- Compaction spam? Check:
   - ماڈل کانٹیکسٹ ونڈو (بہت چھوٹی)
   - کمپیکشن سیٹنگز (ماڈل ونڈو کے لیے `reserveTokens` بہت زیادہ ہو تو جلد کمپیکشن ہو سکتی ہے)
   - ٹول-رزلٹ پھولاؤ: سیشن پروننگ کو فعال/ٹیون کریں
-- خاموش ٹرنز لیک ہو رہے ہیں؟ تصدیق کریں کہ جواب `NO_REPLY` (عین ٹوکن) سے شروع ہوتا ہے اور آپ اس بلڈ پر ہیں جس میں اسٹریمنگ دبانے کی فکس شامل ہے۔
+- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (exact token) and you’re on a build that includes the streaming suppression fix.

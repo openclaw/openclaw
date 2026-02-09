@@ -2,15 +2,8 @@
 summary: "Agent-tooloppervlak voor OpenClaw (browser, canvas, nodes, message, cron) ter vervanging van verouderde `openclaw-*` Skills"
 read_when:
   - Agent-tools toevoegen of wijzigen
-  - `openclaw-*` Skills uitfaseren of wijzigen
+  - "`openclaw-*` Skills uitfaseren of wijzigen"
 title: "Tools"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:29Z
 ---
 
 # Tools (OpenClaw)

@@ -2,17 +2,10 @@
 summary: "Środowisko uruchomieniowe agenta (osadzony pi-mono), kontrakt obszaru roboczego i bootstrap sesji"
 read_when:
   - Zmiana środowiska uruchomieniowego agenta, bootstrapu obszaru roboczego lub zachowania sesji
-title: "Środowisko uruchomieniowe agenta"
-x-i18n:
-  source_path: concepts/agent.md
-  source_hash: 121103fda29a5481
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:16Z
+title: "Agent Runtime"
 ---
 
-# Środowisko uruchomieniowe agenta 🤖
+# Agent Runtime 🤖
 
 OpenClaw uruchamia pojedyncze, osadzone środowisko uruchomieniowe agenta wywiedzione z **pi-mono**.
 
@@ -77,7 +70,7 @@ OpenClaw ponownie wykorzystuje fragmenty bazy kodu pi-mono (modele/narzędzia), 
 - Brak środowiska uruchomieniowego agenta pi-coding.
 - Nie są konsultowane ustawienia `~/.pi/agent` ani `<workspace>/.pi`.
 
-## Sesje
+## Sessions
 
 Transkrypty sesji są przechowywane jako JSONL w:
 
@@ -86,7 +79,7 @@ Transkrypty sesji są przechowywane jako JSONL w:
 Identyfikator sesji jest stabilny i wybierany przez OpenClaw.
 Starsze foldery sesji Pi/Tau **nie** są odczytywane.
 
-## Sterowanie podczas strumieniowania
+## Układ kierowniczy podczas przesyłania strumieniowego
 
 Gdy tryb kolejki to `steer`, przychodzące wiadomości są wstrzykiwane do bieżącego uruchomienia.
 Kolejka jest sprawdzana **po każdym wywołaniu narzędzia**; jeśli obecna jest wiadomość w kolejce,
@@ -95,8 +88,7 @@ pozostałe wywołania narzędzi z bieżącej wiadomości asystenta są pomijane 
 jest zakolejkowana wiadomość użytkownika.
 
 Gdy tryb kolejki to `followup` lub `collect`, przychodzące wiadomości są wstrzymywane do
-zakończenia bieżącej tury, po czym rozpoczyna się nowa tura agenta z zakolejkowanymi ładunkami. Zob.
-[Kolejka](/concepts/queue) — tryby oraz zachowanie debounce/limitów.
+zakończenia bieżącej tury, po czym rozpoczyna się nowa tura agenta z zakolejkowanymi ładunkami. Zob. [Kolejka](/concepts/queue) — tryby oraz zachowanie debounce/limitów.
 
 Strumieniowanie blokowe wysyła ukończone bloki asystenta natychmiast po ich zakończeniu; jest ono
 **domyślnie wyłączone** (`agents.defaults.blockStreamingDefault: "off"`).

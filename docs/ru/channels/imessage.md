@@ -4,13 +4,6 @@ read_when:
   - Настройка поддержки iMessage
   - Отладка отправки/приёма iMessage
 title: iMessage
-x-i18n:
-  source_path: channels/imessage.md
-  source_hash: b418a589547d1ef0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:30Z
 ---
 
 # iMessage (legacy: imsg)
@@ -75,7 +68,7 @@ x-i18n:
 
 macOS выдаёт разрешения TCC для каждого контекста приложения/процесса. Подтвердите запросы в том же контексте, где запускается `imsg` (например, Terminal/iTerm, сессия LaunchAgent или процесс, запущенный по SSH).
 
-Чек-лист:
+Checklist:
 
 - **Full Disk Access**: разрешите доступ процессу, запускающему OpenClaw (и любой shell/SSH-обёртке, которая выполняет `imsg`). Это требуется для чтения базы данных Messages (`chat.db`).
 - **Automation → Messages**: разрешите процессу, запускающему OpenClaw (и/или вашему терминалу), управлять **Messages.app** для исходящей отправки.
@@ -110,7 +103,7 @@ imsg send <handle> "test"
 6. Настройте SSH так, чтобы `ssh <bot-macos-user>@localhost true` работал без пароля.
 7. Укажите `channels.imessage.accounts.bot.cliPath` на SSH-обёртку, которая запускает `imsg` от имени пользователя бота.
 
-Примечание о первом запуске: отправка/приём могут потребовать GUI-разрешений (Automation + Full Disk Access) у _пользователя macOS бота_. Если `imsg rpc` выглядит зависшим или завершается, войдите под этим пользователем (помогает Screen Sharing), выполните одноразово `imsg chats --limit 1` / `imsg send ...`, подтвердите запросы и повторите попытку. См. [Устранение неполадок macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
+Примечание о первом запуске: отправка/приём могут потребовать GUI-разрешений (Automation + Full Disk Access) у _пользователя macOS бота_. Если `imsg rpc` выглядит зависшим или завершается, войдите под этим пользователем (помогает Screen Sharing), выполните одноразово `imsg chats --limit 1` / `imsg send ...`, подтвердите запросы и повторите попытку. См. См. [Устранение неполадок macOS Privacy and Security TCC](#troubleshooting-macos-privacy-and-security-tcc).
 
 Пример обёртки (`chmod +x`). Замените `<bot-macos-user>` на фактическое имя пользователя macOS:
 
@@ -220,11 +213,11 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 - Используйте SSH-ключи, чтобы `ssh bot@mac-mini.tailnet-1234.ts.net` работал без запросов.
 - `remoteHost` должен совпадать с SSH-целью, чтобы SCP мог получать вложения.
 
-Поддержка нескольких аккаунтов: используйте `channels.imessage.accounts` с конфигурацией для каждого аккаунта и необязательным `name`. См. [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) для общего шаблона. Не коммитьте `~/.openclaw/openclaw.json` (часто содержит токены).
+Поддержка нескольких аккаунтов: используйте `channels.imessage.accounts` с конфигурацией для каждого аккаунта и необязательным `name`. [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) для общего шаблона. Не коммитьте `~/.openclaw/openclaw.json` (часто содержит токены).
 
 ## Контроль доступа (личные сообщения + группы)
 
-Личные сообщения:
+DMs:
 
 - По умолчанию: `channels.imessage.dmPolicy = "pairing"`.
 - Неизвестные отправители получают код сопряжения; сообщения игнорируются до подтверждения (коды истекают через 1 час).

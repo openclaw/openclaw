@@ -3,26 +3,19 @@ summary: "Các chế độ kích hoạt bằng giọng nói và nhấn-để-nó
 read_when:
   - Làm việc trên các luồng Voice Wake hoặc PTT
 title: "Voice Wake"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:51Z
 ---
 
 # Voice Wake & Nhấn-để-nói
 
 ## Chế độ
 
-- **Chế độ từ đánh thức** (mặc định): trình nhận dạng giọng nói luôn bật chờ các token kích hoạt (`swabbleTriggerWords`). Khi khớp, hệ thống bắt đầu thu âm, hiển thị overlay với văn bản tạm thời và tự động gửi sau khi im lặng.
-- **Nhấn-để-nói (giữ Option phải)**: giữ phím Option phải để thu âm ngay—không cần từ kích hoạt. Overlay xuất hiện trong lúc giữ; thả phím sẽ hoàn tất và chuyển tiếp sau một độ trễ ngắn để bạn có thể chỉnh văn bản.
+- **Wake-word mode** (default): always-on Speech recognizer waits for trigger tokens (`swabbleTriggerWords`). On match it starts capture, shows the overlay with partial text, and auto-sends after silence.
+- **Push-to-talk (Right Option hold)**: hold the right Option key to capture immediately—no trigger needed. The overlay appears while held; releasing finalizes and forwards after a short delay so you can tweak text.
 
 ## Hành vi thời gian chạy (từ đánh thức)
 
 - Trình nhận dạng giọng nói chạy trong `VoiceWakeRuntime`.
-- Kích hoạt chỉ xảy ra khi có **khoảng dừng có ý nghĩa** giữa từ đánh thức và từ tiếp theo (khoảng cách ~0,55s). Overlay/chuông có thể bắt đầu ngay tại khoảng dừng, thậm chí trước khi lệnh bắt đầu.
+- Trigger only fires when there’s a **meaningful pause** between the wake word and the next word (~0.55s gap). The overlay/chime can start on the pause even before the command begins.
 - Cửa sổ im lặng: 2,0s khi đang nói liên tục, 5,0s nếu chỉ nghe thấy từ kích hoạt.
 - Dừng cứng: 120s để ngăn phiên chạy quá lâu.
 - Chống dội giữa các phiên: 350ms.
@@ -45,7 +38,7 @@ Gia cố:
 
 ## Chi tiết nhấn-để-nói
 
-- Phát hiện phím nóng sử dụng bộ theo dõi toàn cục `.flagsChanged` cho **Option phải** (`keyCode 61` + `.option`). Chỉ quan sát sự kiện (không chặn).
+- Phát hiện phím nóng sử dụng một monitor toàn cục `.flagsChanged` cho **Option phải** (`keyCode 61` + `.option`). We only observe events (no swallowing).
 - Pipeline thu âm nằm trong `VoicePushToTalk`: bắt đầu Speech ngay, stream các phần tạm thời lên overlay và gọi `VoiceWakeForwarder` khi thả phím.
 - Khi nhấn-để-nói bắt đầu, chúng tôi tạm dừng runtime từ đánh thức để tránh xung đột các tap âm thanh; nó sẽ tự động khởi động lại sau khi thả phím.
 - Quyền: cần Microphone + Speech; để nhận sự kiện cần phê duyệt Accessibility/Input Monitoring.
@@ -54,19 +47,19 @@ Gia cố:
 ## Cài đặt cho người dùng
 
 - **Voice Wake**: bật runtime từ đánh thức.
-- **Giữ Cmd+Fn để nói**: bật bộ theo dõi nhấn-để-nói. Bị vô hiệu trên macOS < 26.
+- **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
 - Bộ chọn ngôn ngữ & mic, đồng hồ mức âm trực tiếp, bảng từ kích hoạt, trình kiểm thử (chỉ cục bộ; không chuyển tiếp).
 - Bộ chọn mic giữ lại lựa chọn cuối cùng nếu thiết bị ngắt kết nối, hiển thị gợi ý đã ngắt và tạm thời chuyển sang mặc định hệ thống cho đến khi thiết bị quay lại.
-- **Âm thanh**: chuông khi phát hiện kích hoạt và khi gửi; mặc định là âm hệ thống macOS “Glass”. Bạn có thể chọn bất kỳ tệp có thể tải bằng `NSSound` (ví dụ MP3/WAV/AIFF) cho mỗi sự kiện hoặc chọn **Không âm thanh**.
+- **Sounds**: chimes on trigger detect and on send; defaults to the macOS “Glass” system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
 
 ## Hành vi chuyển tiếp
 
 - Khi Voice Wake được bật, bản chép lời sẽ được chuyển tiếp tới gateway/tác tử đang hoạt động (cùng chế độ cục bộ vs từ xa như phần còn lại của ứng dụng mac).
-- Phản hồi được gửi tới **nhà cung cấp chính được dùng gần nhất** (WhatsApp/Telegram/Discord/WebChat). Nếu gửi thất bại, lỗi sẽ được ghi log và lần chạy vẫn hiển thị qua WebChat/log phiên.
+- Replies are delivered to the **last-used main provider** (WhatsApp/Telegram/Discord/WebChat). If delivery fails, the error is logged and the run is still visible via WebChat/session logs.
 
 ## Payload chuyển tiếp
 
-- `VoiceWakeForwarder.prefixedTranscript(_:)` thêm gợi ý máy vào trước khi gửi. Dùng chung cho cả luồng từ đánh thức và nhấn-để-nói.
+- `VoiceWakeForwarder.prefixedTranscript(_:)` prepends the machine hint before sending. Shared between wake-word and push-to-talk paths.
 
 ## Xác minh nhanh
 

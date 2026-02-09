@@ -4,13 +4,6 @@ read_when:
   - Førstegangsopsætning fra bunden
   - Du vil have den hurtigste vej til en fungerende chat
 title: "Kom godt i gang"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:39Z
 ---
 
 # Kom godt i gang
@@ -18,10 +11,10 @@ x-i18n:
 Mål: gå fra nul til en første fungerende chat med minimal opsætning.
 
 <Info>
-Hurtigste chat: åbn Control UI (ingen kanalopsætning nødvendig). Kør `openclaw dashboard`
+Hurtigste chat: åbne Control UI (ingen kanal setup nødvendig). Kør `openclaw dashboard`
 og chat i browseren, eller åbn `http://127.0.0.1:18789/` på
-<Tooltip headline="Gateway host" tip="Den maskine, der kører OpenClaw gateway-tjenesten.">gateway-værten</Tooltip>.
-Dokumentation: [Dashboard](/web/dashboard) og [Control UI](/web/control-ui).
+<Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">gateway-værten</Tooltip>.
+Dokumenter: [Dashboard](/web/dashboard) og [Control UI] (/web/control-ui).
 </Info>
 
 ## Forudsætninger
@@ -35,7 +28,7 @@ Tjek din Node-version med `node --version`, hvis du er i tvivl.
 ## Hurtig opsætning (CLI)
 
 <Steps>
-  <Step title="Installér OpenClaw (anbefalet)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ Tjek din Node-version med `node --version`, hvis du er i tvivl.
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     Andre installationsmetoder og krav: [Install](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="Kør introduktionsguiden">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     Guiden konfigurerer autentificering, gateway-indstillinger og valgfrie kanaler.
     Se [Onboarding Wizard](/start/wizard) for detaljer.
-
-  </Step>
-  <Step title="Tjek Gateway">
-    Hvis du installerede tjenesten, burde den allerede køre:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Åbn Control UI">
+  <Step title="Check the Gateway">
+    Hvis du installerede tjenesten, burde den allerede køre:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,20 +84,24 @@ Hvis Control UI indlæses, er din Gateway klar til brug.
 ## Valgfrie tjek og ekstra funktioner
 
 <AccordionGroup>
-  <Accordion title="Kør Gateway i forgrunden">
+  <Accordion title="Run the Gateway in the foreground">
     Nyttigt til hurtige tests eller fejlfinding.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="Send en testbesked">
+  <Accordion title="Send a test message">
     Kræver en konfigureret kanal.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -106,10 +109,10 @@ Hvis Control UI indlæses, er din Gateway klar til brug.
 ## Gå mere i dybden
 
 <Columns>
-  <Card title="Onboarding Wizard (detaljer)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Fuld reference til CLI-guiden og avancerede indstillinger.
   </Card>
-  <Card title="Introduktion til macOS-appen" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     Første kørselsflow for macOS-appen.
   </Card>
 </Columns>

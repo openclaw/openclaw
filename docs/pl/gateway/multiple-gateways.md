@@ -4,13 +4,6 @@ read_when:
   - Uruchamianie więcej niż jednego Gateway na tej samej maszynie
   - Potrzebujesz izolowanych konfiguracji/stanu/portów dla każdego Gateway
 title: "Wiele Gateway"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:11Z
 ---
 
 # Wiele Gateway (ten sam host)
@@ -53,7 +46,7 @@ openclaw --profile rescue gateway install
 Uruchom drugi Gateway na tym samym hoście z własnymi:
 
 - profilem/konfiguracją
-- katalogiem stanu
+- katalog stanu
 - workspace
 - portem bazowym (plus porty pochodne)
 

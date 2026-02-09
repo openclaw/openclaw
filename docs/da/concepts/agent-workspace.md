@@ -4,30 +4,22 @@ read_when:
   - Du skal forklare agent-workspacet eller dets fillayout
   - Du vil sikkerhedskopiere eller migrere et agent-workspace
 title: "Agent Workspace"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:18Z
 ---
 
 # Agent-workspace
 
-Workspacet er agentens hjem. Det er den eneste arbejdsmappe, der bruges til
-filværktøjer og til workspace-kontekst. Hold det privat, og behandl det som hukommelse.
+Arbejdsrummet er agentens hjem. Det er den eneste arbejdsmappe, der bruges til
+-filværktøjer og til arbejdsrumssammenhæng. Hold den privat og behandl den som hukommelse.
 
 Dette er adskilt fra `~/.openclaw/`, som gemmer konfiguration, legitimationsoplysninger og
 sessioner.
 
-**Vigtigt:** workspacet er **standard cwd**, ikke en hård sandbox. Værktøjer
-opløser relative stier i forhold til workspacet, men absolutte stier kan stadig
-nå andre steder på værten, medmindre sandboxing er aktiveret. Hvis du har brug
-for isolation, så brug [`agents.defaults.sandbox`](/gateway/sandboxing) (og/eller
-sandbox-konfiguration pr. agent). Når sandboxing er aktiveret, og `workspaceAccess`
-ikke er `"rw"`, arbejder værktøjer inde i et sandbox-workspace under
-`~/.openclaw/sandboxes`, ikke dit værts-workspace.
+**Vigtigt:** arbejdsområdet er **standard cwd**, ikke en hård sandkasse. Værktøjer
+løser relative stier mod arbejdsområdet, men absolutte stier kan stadig nå
+andre steder på værten, medmindre sandboxing er aktiveret. Hvis du har brug for isolation, brug
+[`agents.defaults.sandbox`](/gateway/sandboxing) (og/eller per-agent sandbox config).
+Når sandboxing er aktiveret og `workspaceAccess` er ikke `"rw"`, værktøjer operere
+inde i en sandkasse arbejdsområde under `~/.openclaw/sandboxes`, ikke dit værts arbejdsområde.
 
 ## Standardplacering
 
@@ -56,14 +48,14 @@ oprettelse af bootstrap-filer:
 
 ## Ekstra workspace-mapper
 
-Ældre installationer kan have oprettet `~/openclaw`. At have flere
-workspace-mapper liggende kan give forvirrende auth- eller tilstandsdrift, fordi
-kun ét workspace er aktivt ad gangen.
+Ældre installationer kan have oprettet `~/openclaw`. Holde flere arbejdsområde
+mapper omkring kan forårsage forvirrende auth eller state drift, fordi kun et
+arbejdsområde er aktivt ad gangen.
 
-**Anbefaling:** behold ét enkelt aktivt workspace. Hvis du ikke længere bruger
-de ekstra mapper, så arkivér dem eller flyt dem til Papirkurven (for eksempel
-`trash ~/openclaw`). Hvis du bevidst beholder flere workspaces, skal du sikre, at
-`agents.defaults.workspace` peger på det aktive.
+**Anbefaling:** behold et enkelt aktivt arbejdsområde. Hvis du ikke længere bruger
+ekstra mapper, skal du arkivere dem eller flytte dem til papirkurven (for eksempel `trash ~/openclaw`).
+Hvis du forsætligt beholder flere arbejdsområder, sørg for
+`agents.defaults.workspace` peger på den aktive.
 
 `openclaw doctor` advarer, når den registrerer ekstra workspace-mapper.
 
@@ -122,9 +114,9 @@ Se [Memory](/concepts/memory) for workflowet og automatisk hukommelses-flush.
 - `canvas/` (valgfri)
   - Canvas-UI-filer til node-visninger (for eksempel `canvas/index.html`).
 
-Hvis en bootstrap-fil mangler, indsætter OpenClaw en “missing file”-markør i
-sessionen og fortsætter. Store bootstrap-filer afkortes, når de indsættes;
-justér grænsen med `agents.defaults.bootstrapMaxChars` (standard: 20000).
+Hvis nogen bootstrap fil mangler, tilfører OpenClaw en "manglende fil" markør i
+sessionen og fortsætter. Store bootstrap filer afkortet når du injiceres;
+justere grænsen med `agents.defaults.bootstrapMaxChars` (standard: 20000).
 `openclaw setup` kan genskabe manglende standarder uden at overskrive eksisterende
 filer.
 
@@ -142,15 +134,15 @@ hold dem ude af versionskontrol.
 
 ## Git-backup (anbefalet, privat)
 
-Behandl workspacet som privat hukommelse. Læg det i et **privat** git-repo, så
-det er sikkerhedskopieret og kan gendannes.
+Behandl arbejdsområdet som privat hukommelse. Placer det i en **private** git repo så det er
+sikkerhedskopieret og inddrivelig.
 
 Kør disse trin på den maskine, hvor Gateway kører (det er der, workspacet ligger).
 
-### 1) Initialisér repoet
+### 1. Initialisér repoet
 
-Hvis git er installeret, initialiseres helt nye workspaces automatisk. Hvis dette
-workspace ikke allerede er et repo, så kør:
+Hvis git er installeret, initialiseres helt nye arbejdsområder automatisk. Hvis dette
+arbejdsområde ikke allerede er et repo, køre:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -159,7 +151,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Tilføj en privat remote (begyndervenlige muligheder)
+### 2. Tilføj en privat remote (begyndervenlige muligheder)
 
 Mulighed A: GitHub web-UI
 
@@ -194,7 +186,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Løbende opdateringer
+### 3. Løbende opdateringer
 
 ```bash
 git status
@@ -235,7 +227,7 @@ Foreslået `.gitignore`-starter:
 
 ## Avancerede noter
 
-- Multi-agent-routing kan bruge forskellige workspaces pr. agent. Se
-  [Channel routing](/channels/channel-routing) for routing-konfiguration.
+- Multi-agent routing kan bruge forskellige arbejdsområder pr. agent. Se
+  [Kanal routing](/channels/channel-routing) for routing konfiguration.
 - Hvis `agents.defaults.sandbox` er aktiveret, kan ikke-hovedsessioner bruge
   sandbox-workspaces pr. session under `agents.defaults.sandbox.workspaceRoot`.

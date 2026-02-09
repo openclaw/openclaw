@@ -5,13 +5,6 @@ read_when:
   - Fejlfinding af svar fra flere agenter i WhatsApp
 status: experimental
 title: "Broadcast-grupper"
-x-i18n:
-  source_path: channels/broadcast-groups.md
-  source_hash: 25866bc0d519552d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:03Z
 ---
 
 # Broadcast-grupper
@@ -21,15 +14,15 @@ x-i18n:
 
 ## Overblik
 
-Broadcast-grupper gør det muligt for flere agenter at behandle og svare på den samme besked samtidig. Det giver dig mulighed for at oprette specialiserede agentteams, der arbejder sammen i en enkelt WhatsApp-gruppe eller DM — alt sammen med ét telefonnummer.
+Broadcast grupper gør det muligt for flere agenter at behandle og reagere på den samme besked samtidigt. Dette giver dig mulighed for at oprette specialiserede agent teams, der arbejder sammen i en enkelt WhatsApp gruppe eller DM - alle ved hjælp af et telefonnummer.
 
 Nuværende omfang: **Kun WhatsApp** (webkanal).
 
-Broadcast-grupper evalueres efter kanalens tilladelseslister og regler for gruppeaktivering. I WhatsApp-grupper betyder det, at udsendelser sker, når OpenClaw normalt ville svare (for eksempel ved omtale, afhængigt af dine gruppeindstillinger).
+Broadcast-grupper evalueres efter kanaltilladelseslister og gruppeaktiveringsregler. I WhatsApp grupper betyder det, at udsendelser sker, når OpenClaw normalt vil svare (for eksempel: omtale, afhængigt af dine gruppeindstillinger).
 
 ## Anvendelsestilfælde
 
-### 1. Specialiserede agentteams
+### 1. Specialiserede Agent Teams
 
 Udrul flere agenter med atomare, fokuserede ansvarsområder:
 
@@ -44,7 +37,7 @@ Agents:
 
 Hver agent behandler den samme besked og bidrager med sit specialiserede perspektiv.
 
-### 2. Understøttelse af flere sprog
+### 2. Multi-Sprogunderstøttelse
 
 ```
 Group: "International Support"
@@ -54,7 +47,7 @@ Agents:
   - Agent_ES (responds in Spanish)
 ```
 
-### 3. Arbejdsgange til kvalitetssikring
+### 3. Kvalitetssikring Arbejdsprocesser
 
 ```
 Group: "Customer Support"
@@ -63,7 +56,7 @@ Agents:
   - QAAgent (reviews quality, only responds if issues found)
 ```
 
-### 4. Opgaveautomatisering
+### 4. Opgave Automatisering
 
 ```
 Group: "Project Management"
@@ -77,10 +70,10 @@ Agents:
 
 ### Grundlæggende opsætning
 
-Tilføj en topniveau-`broadcast`-sektion (ved siden af `bindings`). Nøglerne er WhatsApp peer-id’er:
+Tilføj en top-niveau `broadcast` sektion (ved siden af `bindinger`). Nøgler er WhatsApp peer ids:
 
-- gruppechats: gruppe-JID (f.eks. `120363403215116621@g.us`)
-- DM’er: E.164-telefonnummer (f.eks. `+15551234567`)
+- gruppechats: gruppe JID (f.eks. `120363403215116621@g.us`)
+- DMs: E.164 telefonnummer (f.eks. `+15551234567`)
 
 ```json
 {
@@ -170,7 +163,7 @@ Agenter behandles i rækkefølge (én venter på, at den forrige er færdig):
 4. **Hvis ikke i broadcast-listen**:
    - Normal routing anvendes (første matchende binding)
 
-Bemærk: Broadcast-grupper omgår ikke kanalens tilladelseslister eller regler for gruppeaktivering (omtaler/kommandoer/osv.). De ændrer kun _hvilke agenter der køres_, når en besked er berettiget til behandling.
+Bemærk: broadcast grupper ikke omgå kanal tillalister eller gruppe aktivering regler (omtaler/kommandoer/etc). De ændrer kun _which agents run_ når en meddelelse er berettiget til behandling.
 
 ### Sessionsisolering
 
@@ -186,7 +179,7 @@ Hver agent i en broadcast-gruppe opretholder fuldstændigt adskilte:
 Det giver hver agent mulighed for at have:
 
 - Forskellige personligheder
-- Forskellig værktøjsadgang (f.eks. skrivebeskyttet vs. læse-skrive)
+- Forskellig adgang til værktøjet (f.eks. skrivebeskyttet vs. læse-skriv)
 - Forskellige modeller (f.eks. opus vs. sonnet)
 - Forskellige Skills installeret
 
@@ -214,7 +207,7 @@ Tools: read only
 
 ## Bedste praksis
 
-### 1. Hold agenter fokuserede
+### 1. Behold Agenter Fokuseret
 
 Design hver agent med ét enkelt, klart ansvar:
 
@@ -229,7 +222,7 @@ Design hver agent med ét enkelt, klart ansvar:
 ✅ **Godt:** Hver agent har én opgave  
 ❌ **Dårligt:** Én generisk "dev-helper"-agent
 
-### 2. Brug beskrivende navne
+### 2. Brug Beskrivende Navne
 
 Gør det tydeligt, hvad hver agent laver:
 
@@ -243,7 +236,7 @@ Gør det tydeligt, hvad hver agent laver:
 }
 ```
 
-### 3. Konfigurer forskellig værktøjsadgang
+### 3. Indstil Forskellige Værktøjsadgang
 
 Giv agenterne kun de værktøjer, de har brug for:
 
@@ -260,7 +253,7 @@ Giv agenterne kun de værktøjer, de har brug for:
 }
 ```
 
-### 4. Overvåg ydeevne
+### 4. Overvåg Ydelse
 
 Med mange agenter bør du overveje:
 
@@ -268,9 +261,9 @@ Med mange agenter bør du overveje:
 - At begrænse broadcast-grupper til 5–10 agenter
 - At bruge hurtigere modeller til simplere agenter
 
-### 5. Håndtér fejl elegant
+### 5. Håndter Fejl Gracefully
 
-Agenter fejler uafhængigt. Én agents fejl blokerer ikke andre:
+Agenter mislykkes uafhængigt. En agents fejl blokerer ikke andre:
 
 ```
 Message → [Agent A ✓, Agent B ✗ error, Agent C ✓]
@@ -318,7 +311,7 @@ Broadcast-grupper fungerer sammen med eksisterende routing:
 **Tjek:**
 
 1. Agent-id’er findes i `agents.list`
-2. Peer-id-formatet er korrekt (f.eks. `120363403215116621@g.us`)
+2. Modpartens ID-format er korrekt (f.eks. `120363403215116621@g.us`)
 3. Agenter er ikke i afvisningslister
 
 **Debug:**
@@ -428,7 +421,7 @@ interface OpenClawConfig {
 
 ## Begrænsninger
 
-1. **Maks. agenter:** Ingen hård grænse, men 10+ agenter kan være langsomt
+1. **Maks. agenter:** Ingen hård grænse, men 10+ agenter kan være langsomme
 2. **Delt kontekst:** Agenter ser ikke hinandens svar (bevidst design)
 3. **Beskedrækkefølge:** Parallelle svar kan ankomme i vilkårlig rækkefølge
 4. **Rate limits:** Alle agenter tæller med i WhatsApps rate limits

@@ -4,13 +4,6 @@ read_when:
   - Вам нужен справочник по настройке моделей для каждого провайдера
   - Вам нужны примеры конфигов или команды CLI для онбординга провайдеров моделей
 title: "Провайдеры моделей"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:34Z
 ---
 
 # Провайдеры моделей
@@ -240,7 +233,7 @@ MiniMax настраивается через `models.providers`, посколь
 - MiniMax (Anthropic‑совместимый): `--auth-choice minimax-api`
 - Аутентификация: `MINIMAX_API_KEY`
 
-См. [/providers/minimax](/providers/minimax) для деталей настройки, вариантов моделей и фрагментов конфига.
+[/providers/minimax](/providers/minimax) для деталей настройки, вариантов моделей и фрагментов конфига.
 
 ### Ollama
 

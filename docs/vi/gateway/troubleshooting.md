@@ -4,19 +4,12 @@ read_when:
   - Trung tâm xử lý sự cố đã điều hướng bạn tới đây để chẩn đoán sâu hơn
   - Bạn cần các mục sổ tay dựa trên triệu chứng ổn định với lệnh chính xác
 title: "Xử lý sự cố"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:23Z
 ---
 
 # Xử lý sự cố Gateway
 
-Trang này là sổ tay chuyên sâu.
-Hãy bắt đầu tại [/help/troubleshooting](/help/troubleshooting) nếu bạn muốn luồng phân loại nhanh trước.
+This page is the deep runbook.
+Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
 
 ## Thang lệnh
 
@@ -117,7 +110,7 @@ Cần kiểm tra:
 Dấu hiệu thường gặp:
 
 - `Gateway start blocked: set gateway.mode=local` → chế độ gateway cục bộ chưa được bật.
-- `refusing to bind gateway ... without auth` → bind không phải loopback mà không có token/mật khẩu.
+- `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → xung đột cổng.
 
 Liên quan:
@@ -242,7 +235,7 @@ Dấu hiệu thường gặp:
 - `Failed to start Chrome CDP on port` → tiến trình trình duyệt không khởi chạy được.
 - `browser.executablePath not found` → đường dẫn cấu hình không hợp lệ.
 - `Chrome extension relay is running, but no tab is connected` → relay của tiện ích chưa được gắn.
-- `Browser attachOnly is enabled ... not reachable` → hồ sơ chỉ-gắn không có đích khả dụng.
+- `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 Liên quan:
 
@@ -254,7 +247,7 @@ Liên quan:
 
 Hầu hết sự cố sau nâng cấp là do lệch cấu hình hoặc các mặc định chặt chẽ hơn hiện đang được áp dụng.
 
-### 1) Hành vi ghi đè xác thực và URL đã thay đổi
+### 1. Hành vi ghi đè xác thực và URL đã thay đổi
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ Dấu hiệu thường gặp:
 - `gateway connect failed:` → sai đích URL.
 - `unauthorized` → endpoint truy cập được nhưng xác thực sai.
 
-### 2) Ràng buộc bind và xác thực chặt chẽ hơn
+### 2. Ràng buộc bind và xác thực chặt chẽ hơn
 
 ```bash
 openclaw config get gateway.bind
@@ -289,10 +282,10 @@ Cần kiểm tra:
 
 Dấu hiệu thường gặp:
 
-- `refusing to bind gateway ... without auth` → không khớp bind+xác thực.
+- `refusing to bind gateway ... without auth` → bind+auth mismatch.
 - `RPC probe: failed` trong khi runtime đang chạy → gateway còn sống nhưng không truy cập được với xác thực/url hiện tại.
 
-### 3) Trạng thái ghép cặp và định danh thiết bị đã thay đổi
+### 3. Trạng thái ghép cặp và định danh thiết bị đã thay đổi
 
 ```bash
 openclaw devices list

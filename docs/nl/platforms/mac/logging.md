@@ -4,13 +4,6 @@ read_when:
   - Vastleggen van macOS-logs of onderzoek naar het loggen van privégegevens
   - Debuggen van problemen met de levenscyclus van voice wake/sessies
 title: "macOS-logging"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:32Z
 ---
 
 # Logging (macOS)

@@ -5,25 +5,20 @@ read_when:
   - Claude Code CLI သို့မဟုတ် အခြား local AI CLI များကို လည်ပတ်အသုံးပြုနေပြီး ပြန်လည်အသုံးချလိုသောအခါ
   - session များနှင့် ပုံရိပ်များကို ထောက်ပံ့ထားသေးပြီး ကိရိယာမပါသော စာသားသာ လမ်းကြောင်းလိုအပ်သောအခါ
 title: "CLI Backends"
-x-i18n:
-  source_path: gateway/cli-backends.md
-  source_hash: 8285f4829900bc81
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:36Z
 ---
 
 # CLI backends (fallback runtime)
 
-OpenClaw သည် API ပံ့ပိုးသူများ ပိတ်သွားခြင်း၊ rate-limit ခံရခြင်း၊ သို့မဟုတ် ယာယီ မမှန်ကန်စွာ လုပ်ဆောင်နေသည့်အချိန်တွင် **local AI CLI များ** ကို **စာသားသာ အစားထိုး လမ်းကြောင်း** အဖြစ် လည်ပတ်စေနိုင်သည်။ ဤဒီဇိုင်းမှာ အထူးသဖြင့် သတိထားစွာ ပြုလုပ်ထားသည်—
+OpenClaw can run **local AI CLIs** as a **text-only fallback** when API providers are down,
+rate-limited, or temporarily misbehaving. This is intentionally conservative:
 
 - **Tools များကို ပိတ်ထားသည်** (tool calls မရှိပါ)။
 - **စာသားဝင် → စာသားထွက်** (ယုံကြည်စိတ်ချရ)။
 - **Sessions များကို ထောက်ပံ့ထားသည်** (နောက်ဆက်တွဲ မေးခွန်းများကို အညီအမျှ ဆက်လက်လုပ်ဆောင်နိုင်ရန်)။
 - **CLI က ပုံရိပ်လမ်းကြောင်းများကို လက်ခံပါက ပုံရိပ်များကို ဖြတ်သန်းပို့ဆောင်နိုင်သည်**။
 
-ဤအရာသည် အဓိက လမ်းကြောင်းအဖြစ် မဟုတ်ဘဲ **အကာအကွယ်ကွန်ယက် (safety net)** အဖြစ် ဒီဇိုင်းထားခြင်း ဖြစ်သည်။ ပြင်ပ API များကို မမှီခိုဘဲ “အမြဲအလုပ်လုပ်” သည့် စာသားအဖြေများ လိုအပ်သည့်အခါ အသုံးပြုပါ။
+This is designed as a **safety net** rather than a primary path. Use it when you
+want “always works” text responses without relying on external APIs.
 
 ## Beginner-friendly quick start
 
@@ -55,7 +50,7 @@ Gateway ကို launchd/systemd အောက်တွင် လည်ပတ်
 }
 ```
 
-ဒီလောက်နဲ့ ပြီးပါပြီ။ key မလိုပါ၊ CLI ကိုယ်တိုင်အတွက် လိုအပ်သည့်အရာများအပြင် အပို auth config မလိုအပ်ပါ။
+That’s it. No keys, no extra auth config needed beyond the CLI itself.
 
 ## Using it as a fallback
 
@@ -92,7 +87,8 @@ CLI backend များအားလုံးသည် အောက်ပါန�
 agents.defaults.cliBackends
 ```
 
-Entry တစ်ခုချင်းစီကို **provider id** ဖြင့် သတ်မှတ်ထားသည် (ဥပမာ `claude-cli`, `my-cli`)။ provider id သည် model ref ၏ ဘယ်ဘက်အပိုင်း ဖြစ်လာမည်—
+Each entry is keyed by a **provider id** (e.g. `claude-cli`, `my-cli`).
+The provider id becomes the left side of your model ref:
 
 ```
 <provider>/<model>
@@ -163,11 +159,9 @@ imageArg: "--image",
 imageMode: "repeat"
 ```
 
-OpenClaw သည် base64 ပုံရိပ်များကို temp ဖိုင်များအဖြစ် ရေးထုတ်မည်။ `imageArg` ကို သတ်မှတ်ထားပါက
-ထိုလမ်းကြောင်းများကို CLI args အဖြစ် ပို့သည်။ `imageArg` မရှိပါက OpenClaw သည်
-ဖိုင်လမ်းကြောင်းများကို prompt ထဲသို့ ထည့်သွင်းပေါင်းထည့်မည် (path injection)။ ၎င်းသည်
-plain path များမှ local ဖိုင်များကို အလိုအလျောက် load လုပ်သော CLI များအတွက် လုံလောက်သည်
-(Claude Code CLI ၏ အပြုအမူ)။
+OpenClaw will write base64 images to temp files. `imageArg` ကို သတ်မှတ်ထားပါက ထို paths များကို CLI args အဖြစ် ပို့ဆောင်ပါသည်။ If `imageArg` is missing, OpenClaw appends the
+file paths to the prompt (path injection), which is enough for CLIs that auto-
+load local files from plain paths (Claude Code CLI behavior).
 
 ## Inputs / outputs
 
@@ -210,11 +204,13 @@ OpenClaw တွင် `codex-cli` အတွက်လည်း default တစ်�
 
 ## Limitations
 
-- **OpenClaw tools မရှိပါ** (CLI backend သည် tool calls မရရှိပါ)။ CLI အချို့သည် ကိုယ်ပိုင် agent tooling ကို ဆက်လက် အသုံးပြုနိုင်ပါသည်။
+- **No OpenClaw tools** (the CLI backend never receives tool calls). Some CLIs
+  may still run their own agent tooling.
 - **Streaming မရှိပါ** (CLI output ကို စုစည်းပြီးမှ ပြန်ပို့သည်)။
 - **Structured outputs** များသည် CLI ၏ JSON ဖော်မတ်အပေါ် မူတည်သည်။
-- **Codex CLI sessions** သည် text output ဖြင့် resume လုပ်ရသည် (JSONL မဟုတ်ပါ)၊ ထို့ကြောင့်
-  မူလ `--json` run ထက် ဖွဲ့စည်းပုံနည်းပါးသည်။ OpenClaw sessions များသည် ပုံမှန်အတိုင်း ဆက်လက် အလုပ်လုပ်သည်။
+- **Codex CLI sessions** resume via text output (no JSONL), which is less
+  structured than the initial `--json` run. OpenClaw sessions still work
+  normally.
 
 ## Troubleshooting
 

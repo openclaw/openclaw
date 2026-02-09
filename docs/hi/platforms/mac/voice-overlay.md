@@ -3,28 +3,21 @@ summary: "जब वेक‑वर्ड और पुश‑टू‑टॉक 
 read_when:
   - वॉइस ओवरले के व्यवहार को समायोजित करते समय
 title: "वॉइस ओवरले"
-x-i18n:
-  source_path: platforms/mac/voice-overlay.md
-  source_hash: 5d32704c412295c2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:35Z
 ---
 
 # वॉइस ओवरले जीवनचक्र (macOS)
 
-लक्षित पाठक: macOS ऐप योगदानकर्ता। लक्ष्य: जब वेक‑वर्ड और पुश‑टू‑टॉक ओवरलैप हों, तब वॉइस ओवरले को पूर्वानुमेय बनाए रखना।
+Audience: macOS app contributors. Goal: keep the voice overlay predictable when wake-word and push-to-talk overlap.
 
 ## वर्तमान आशय
 
-- यदि वेक‑वर्ड से ओवरले पहले से दिखाई दे रहा है और उपयोगकर्ता हॉटकी दबाता है, तो हॉटकी सत्र मौजूदा पाठ को रीसेट करने के बजाय उसे _अपनाता_ है। हॉटकी दबे रहने तक ओवरले दिखाई देता रहता है। उपयोगकर्ता छोड़ते समय: यदि ट्रिम किया हुआ पाठ मौजूद है तो भेजें, अन्यथा बंद करें।
+- If the overlay is already visible from wake-word and the user presses the hotkey, the hotkey session _adopts_ the existing text instead of resetting it. The overlay stays up while the hotkey is held. When the user releases: send if there is trimmed text, otherwise dismiss.
 - केवल वेक‑वर्ड होने पर मौन पर स्वतः भेजा जाता है; पुश‑टू‑टॉक में छोड़ते ही भेजा जाता है।
 
 ## कार्यान्वित (9 दिसंबर, 2025)
 
-- ओवरले सत्र अब प्रत्येक कैप्चर (वेक‑वर्ड या पुश‑टू‑टॉक) के लिए एक टोकन वहन करते हैं। जब टोकन मेल नहीं खाता, तो आंशिक/अंतिम/भेजें/बंद करें/लेवल अपडेट्स छोड़ दिए जाते हैं, जिससे पुराने कॉलबैक से बचाव होता है।
-- पुश‑टू‑टॉक किसी भी दृश्यमान ओवरले पाठ को प्रीफिक्स के रूप में अपनाता है (इसलिए वेक ओवरले ऊपर होने पर हॉटकी दबाने से पाठ बना रहता है और नई बोली जुड़ती है)। यह वर्तमान पाठ पर लौटने से पहले अंतिम ट्रांसक्रिप्ट के लिए अधिकतम 1.5 सेकंड प्रतीक्षा करता है।
+- Overlay sessions now carry a token per capture (wake-word or push-to-talk). Partial/final/send/dismiss/level updates are dropped when the token doesn’t match, avoiding stale callbacks.
+- Push-to-talk adopts any visible overlay text as a prefix (so pressing the hotkey while the wake overlay is up keeps the text and appends new speech). यह अंतिम transcript के लिए 1.5s तक प्रतीक्षा करता है, उसके बाद मौजूदा text पर fallback कर जाता है।
 - चाइम/ओवरले लॉगिंग `info` पर श्रेणियों `voicewake.overlay`, `voicewake.ptt`, और `voicewake.chime` में उत्सर्जित होती है (सत्र प्रारंभ, आंशिक, अंतिम, भेजें, बंद करें, चाइम कारण)।
 
 ## अगले चरण
@@ -56,6 +49,7 @@ x-i18n:
   ```
 
 - केवल एक सक्रिय सत्र टोकन की पुष्टि करें; बासी कॉलबैक को कोऑर्डिनेटर द्वारा छोड़ा जाना चाहिए।
+
 - सुनिश्चित करें कि पुश‑टू‑टॉक रिलीज़ हमेशा सक्रिय टोकन के साथ `endCapture` को कॉल करती है; यदि पाठ खाली है, तो बिना चाइम या सेंड के `dismiss` की अपेक्षा करें।
 
 ## माइग्रेशन चरण (सुझावित)

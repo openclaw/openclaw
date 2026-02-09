@@ -5,18 +5,11 @@ read_when:
   - クラウドプラットフォームにデプロイしたい場合
   - 更新、移行、またはアンインストールが必要な場合
 title: "インストール"
-x-i18n:
-  source_path: install/index.md
-  source_hash: 67c029634ba38196
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:20Z
 ---
 
 # インストール
 
-すでに［はじめに］(/start/getting-started) を完了していますか？ それで問題ありません — このページは、代替のインストール方法、プラットフォーム固有の手順、そしてメンテナンス向けです。
+33. すでに [Getting Started](/start/getting-started) を完了しましたか？ すべて設定されています — このページは、代替のインストール方法、プラットフォーム固有の手順、およびメンテナンスのためのものです。
 
 ## システム要件
 
@@ -31,13 +24,16 @@ Windows では、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) �
 ## インストール方法
 
 <Tip>
+
 **インストーラースクリプト**は、OpenClaw をインストールする推奨方法です。Node の検出、インストール、オンボーディングを 1 ステップで処理します。
+ Node の検出、インストール、オンボーディングを 1 つのステップで処理します。
 </Tip>
 
 <AccordionGroup>
-  <Accordion title="インストーラースクリプト" icon="rocket" defaultOpen>
+  <Accordion title="Installer script" icon="rocket" defaultOpen>
     CLI をダウンロードし、npm でグローバルにインストールして、オンボーディングウィザードを起動します。
 
+    ```
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -50,11 +46,11 @@ Windows では、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) �
         ```
       </Tab>
     </Tabs>
-
+    
     以上です — スクリプトが Node の検出、インストール、オンボーディングを処理します。
-
+    
     オンボーディングをスキップしてバイナリのみをインストールする場合：
-
+    
     <Tabs>
       <Tab title="macOS / Linux / WSL2">
         ```bash
@@ -67,28 +63,30 @@ Windows では、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) �
         ```
       </Tab>
     </Tabs>
-
+    
     すべてのフラグ、環境変数、CI/自動化オプションについては、［Installer internals］(/install/installer) を参照してください。
+    ```
 
   </Accordion>
 
   <Accordion title="npm / pnpm" icon="package">
     すでに Node 22+ があり、インストールを自分で管理したい場合：
 
+    ```
     <Tabs>
       <Tab title="npm">
         ```bash
         npm install -g openclaw@latest
         openclaw onboard --install-daemon
         ```
-
+    
         <Accordion title="sharp のビルドエラー？">
           libvips をグローバルにインストールしている場合（macOS で Homebrew 経由の場合に一般的）、`sharp` が失敗したら、事前ビルド済みバイナリを強制してください：
-
+    
           ```bash
           SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
           ```
-
+    
           `sharp: Please add node-gyp to your dependencies` が表示される場合は、ビルドツール（macOS：Xcode CLT + `npm install -g node-gyp`）をインストールするか、上記の環境変数を使用してください。
         </Accordion>
       </Tab>
@@ -98,22 +96,24 @@ Windows では、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) �
         pnpm approve-builds -g        # approve openclaw, node-llama-cpp, sharp, etc.
         openclaw onboard --install-daemon
         ```
-
+    
         <Note>
         pnpm では、ビルドスクリプトを含むパッケージに対して明示的な承認が必要です。最初のインストールで「Ignored build scripts」の警告が表示されたら、`pnpm approve-builds -g` を実行し、一覧のパッケージを選択してください。
         </Note>
       </Tab>
     </Tabs>
+    ```
 
   </Accordion>
 
-  <Accordion title="ソースから" icon="github">
-    コントリビューター、またはローカルチェックアウトから実行したい方のための方法です。
+  <Accordion title="From source" icon="github">
+    コントリビューターまたはローカルチェックアウトから実行したい人のために。
 
+    ```
     <Steps>
       <Step title="クローンとビルド">
         [OpenClaw リポジトリ](https://github.com/openclaw/openclaw) をクローンしてビルドします：
-
+    
         ```bash
         git clone https://github.com/openclaw/openclaw.git
         cd openclaw
@@ -124,11 +124,11 @@ Windows では、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) �
       </Step>
       <Step title="CLI をリンク">
         `openclaw` コマンドをグローバルで利用可能にします：
-
+    
         ```bash
         pnpm link --global
         ```
-
+    
         あるいは、リンクを省略して、リポジトリ内から `pnpm openclaw ...` 経由でコマンドを実行できます。
       </Step>
       <Step title="オンボーディングを実行">
@@ -137,8 +137,9 @@ Windows では、[WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) �
         ```
       </Step>
     </Steps>
-
+    
     より高度な開発ワークフローについては、［セットアップ］(/start/setup) を参照してください。
+    ```
 
   </Accordion>
 </AccordionGroup>
@@ -172,7 +173,7 @@ openclaw dashboard      # open the browser UI
 
 ## トラブルシューティング：`openclaw` が見つからない
 
-<Accordion title="PATH の診断と修正">
+<Accordion title="PATH diagnosis and fix">
   クイック診断：
 
 ```bash
@@ -192,19 +193,18 @@ export PATH="$(npm prefix -g)/bin:$PATH"
 
 Windows では、`npm prefix -g` の出力を PATH に追加してください。
 
-その後、新しいターミナルを開く（または zsh では `rehash`、bash では `hash -r` を実行）してください。
-</Accordion>
+その後、新しいターミナルを開く（または zsh では `rehash`、bash では `hash -r` を実行）してください。 </Accordion> </Accordion>
 
 ## 更新 / アンインストール
 
 <CardGroup cols={3}>
-  <Card title="更新" href="/install/updating" icon="refresh-cw">
+  <Card title="Updating" href="/install/updating" icon="refresh-cw">
     OpenClaw を最新の状態に保ちます。
   </Card>
-  <Card title="移行" href="/install/migrating" icon="arrow-right">
+  <Card title="Migrating" href="/install/migrating" icon="arrow-right">
     新しいマシンへ移行します。
   </Card>
-  <Card title="アンインストール" href="/install/uninstall" icon="trash-2">
+  <Card title="Uninstall" href="/install/uninstall" icon="trash-2">
     OpenClaw を完全に削除します。
   </Card>
 </CardGroup>

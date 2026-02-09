@@ -3,13 +3,6 @@ summary: "Status wsparcia bota Telegram, możliwości i konfiguracja"
 read_when:
   - Prace nad funkcjami Telegram lub webhookami
 title: "Telegram"
-x-i18n:
-  source_path: channels/telegram.md
-  source_hash: 604e2dc12d2b776d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:12Z
 ---
 
 # Telegram (Bot API)
@@ -48,7 +41,7 @@ Minimalna konfiguracja:
 
 ## Konfiguracja (szybka ścieżka)
 
-### 1) Utwórz token bota (BotFather)
+### 1. Utwórz token bota (BotFather)
 
 1. Otwórz Telegram i porozmawiaj z **@BotFather** ([bezpośredni link](https://t.me/BotFather)). Potwierdź, że uchwyt to dokładnie `@BotFather`.
 2. Uruchom `/newbot`, a następnie postępuj zgodnie z instrukcjami (nazwa + nazwa użytkownika kończąca się na `bot`).
@@ -59,7 +52,7 @@ Opcjonalne ustawienia BotFather:
 - `/setjoingroups` — zezwól/zabroń dodawania bota do grup.
 - `/setprivacy` — kontroluj, czy bot widzi wszystkie wiadomości w grupach.
 
-### 2) Skonfiguruj token (env lub konfiguracja)
+### 2. Skonfiguruj token (env lub konfiguracja)
 
 Przykład:
 
@@ -117,7 +110,7 @@ wiadomości w grupie, więc użyj admina, jeśli potrzebujesz pełnej widocznoś
 - Long-polling używa runnera grammY z sekwencjonowaniem per czat; całkowita współbieżność jest ograniczona przez `agents.defaults.maxConcurrent`.
 - Telegram Bot API nie obsługuje potwierdzeń odczytu; nie ma opcji `sendReadReceipts`.
 
-## Strumieniowanie szkiców
+## Szkic streamingu
 
 OpenClaw może strumieniować częściowe odpowiedzi w DM-ach Telegrama przy użyciu `sendMessageDraft`.
 
@@ -307,7 +300,7 @@ Dla konfiguracji per konto:
 }
 ```
 
-Zakresy:
+Koszyki:
 
 - `off` — przyciski inline wyłączone
 - `dm` — tylko DM-y (cele grupowe zablokowane)
@@ -591,7 +584,7 @@ Wyszukiwanie używa dopasowania rozmytego w tekście opisu, znakach emoji i nazw
 }
 ```
 
-## Strumieniowanie (szkice)
+## Strumieniowanie (szkicy)
 
 Telegram może strumieniować **dymki szkiców** podczas generowania odpowiedzi przez agenta.
 OpenClaw używa Bot API `sendMessageDraft` (nie są to prawdziwe wiadomości), a następnie wysyła

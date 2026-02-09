@@ -3,13 +3,6 @@ summary: "멀티 에이전트 라우팅: 격리된 에이전트, 채널 계정, 
 title: 멀티 에이전트 라우팅
 read_when: "하나의 Gateway(게이트웨이) 프로세스에서 여러 개의 격리된 에이전트(워크스페이스 + 인증)를 사용하려는 경우."
 status: active
-x-i18n:
-  source_path: concepts/multi-agent.md
-  source_hash: aa2b77f4707628ca
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:57Z
 ---
 
 # 멀티 에이전트 라우팅
@@ -35,15 +28,13 @@ x-i18n:
 공유하려면 `auth-profiles.json` 를 다른 에이전트의 `agentDir` 로 복사하십시오.
 
 Skills 는 각 워크스페이스의 `skills/` 폴더를 통해 에이전트별로 관리되며,
-공유 Skills 는 `~/.openclaw/skills` 에서 사용할 수 있습니다.
-[Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills)를 참고하십시오.
+공유 Skills 는 `~/.openclaw/skills` 에서 사용할 수 있습니다. [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills)를 참고하십시오.
 
 Gateway(게이트웨이)는 **하나의 에이전트**(기본값) 또는 **여러 에이전트**를 나란히 호스팅할 수 있습니다.
 
 **워크스페이스 참고:** 각 에이전트의 워크스페이스는 **기본 cwd** 이며, 강제
 샌드박스가 아닙니다. 상대 경로는 워크스페이스 내부로 해석되지만, 절대 경로는
-샌드박스화가 활성화되지 않은 경우 다른 호스트 위치에 접근할 수 있습니다.
-[Sandboxing](/gateway/sandboxing)을 참고하십시오.
+샌드박스화가 활성화되지 않은 경우 다른 호스트 위치에 접근할 수 있습니다. [Sandboxing](/gateway/sandboxing)을 참고하십시오.
 
 ## 경로(빠른 맵)
 

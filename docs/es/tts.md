@@ -5,13 +5,6 @@ read_when:
   - Configurar proveedores o límites de TTS
   - Usar comandos /tts
 title: "Texto a Voz"
-x-i18n:
-  source_path: tts.md
-  source_hash: 070ff0cc8592f64c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:10Z
 ---
 
 # Texto a voz (TTS)
@@ -48,7 +41,8 @@ Edge TTS **no** requiere una clave de API. Si no se encuentran claves de API, Op
 Edge TTS de forma predeterminada (a menos que se deshabilite mediante `messages.tts.edge.enabled=false`).
 
 Si se configuran múltiples proveedores, el proveedor seleccionado se usa primero y los
-otros son opciones de respaldo. El auto‑resumen usa el `summaryModel` (o `agents.defaults.model.primary`)
+otros son opciones de respaldo.
+El auto‑resumen usa el `summaryModel` (o `agents.defaults.model.primary`)
 configurado, por lo que ese proveedor también debe estar autenticado si habilita resúmenes.
 
 ## Enlaces de servicios

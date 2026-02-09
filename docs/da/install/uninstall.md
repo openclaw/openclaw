@@ -4,13 +4,6 @@ read_when:
   - Du vil fjerne OpenClaw fra en maskine
   - Gateway-servicen kører stadig efter afinstallation
 title: "Afinstallér"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:26Z
 ---
 
 # Afinstallér
@@ -88,14 +81,14 @@ Brug dette, hvis gateway-servicen bliver ved med at køre, men `openclaw` mangle
 
 ### macOS (launchd)
 
-Standardetiketten er `bot.molt.gateway` (eller `bot.molt.<profile>`; den ældre `com.openclaw.*` kan stadig findes):
+Standard etiket er `bot.molt.gateway` (eller `bot.molt.<profile>`; arv `com.openclaw.*` kan stadig eksistere):
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-Hvis du brugte en profil, så erstat etiketten og plist-navnet med `bot.molt.<profile>`. Fjern eventuelle ældre `com.openclaw.*`-plists, hvis de findes.
+Hvis du har brugt en profil, skal du erstatte etiketten og plist navn med `bot.molt.<profile>`. Fjern enhver arv `com.openclaw.*` plists hvis til stede.
 
 ### Linux (systemd bruger-enhed)
 
@@ -110,7 +103,7 @@ systemctl --user daemon-reload
 ### Windows (Planlagt opgave)
 
 Standard opgavenavn er `OpenClaw Gateway` (eller `OpenClaw Gateway (<profile>)`).
-Opgavescriptet ligger under din tilstandsmappen.
+Opgaven script lever under din tilstand dir.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,8 +116,8 @@ Hvis du brugte en profil, så slet det tilsvarende opgavenavn og `~\.openclaw-<p
 
 ### Normal installation (install.sh / npm / pnpm / bun)
 
-Hvis du brugte `https://openclaw.ai/install.sh` eller `install.ps1`, blev CLI’en installeret med `npm install -g openclaw@latest`.
-Fjern den med `npm rm -g openclaw` (eller `pnpm remove -g` / `bun remove -g`, hvis du installerede på den måde).
+Hvis du brugte `https://openclaw.ai/install.sh` eller `install.ps1`, blev CLI installeret med `npm install -g openclaw@latest`.
+Fjern det med `npm rm -g openclaw` (eller `pnpm remove -g` / `bun remove -g` hvis du installerede på den måde).
 
 ### Kildekode-checkout (git clone)
 

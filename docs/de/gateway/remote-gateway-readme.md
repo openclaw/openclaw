@@ -2,13 +2,6 @@
 summary: "SSH-Tunnel-Einrichtung für OpenClaw.app zur Verbindung mit einem entfernten Gateway"
 read_when: "Verbinden der macOS-App mit einem entfernten Gateway über SSH"
 title: "Einrichtung eines entfernten Gateways"
-x-i18n:
-  source_path: gateway/remote-gateway-readme.md
-  source_hash: b1ae266a7cb4911b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:17Z
 ---
 
 # Betrieb von OpenClaw.app mit einem entfernten Gateway
@@ -154,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## Funktionsweise
 
-| Komponente                           | Funktion                                                          |
-| ------------------------------------ | ----------------------------------------------------------------- |
-| `LocalForward 18789 127.0.0.1:18789` | Leitet den lokalen Port 18789 an den entfernten Port 18789 weiter |
-| `ssh -N`                             | SSH ohne Ausführung entfernter Befehle (nur Portweiterleitung)    |
-| `KeepAlive`                          | Startet den Tunnel automatisch neu, falls er abstürzt             |
-| `RunAtLoad`                          | Startet den Tunnel, wenn der Agent geladen wird                   |
+| Komponente                           | Was es tut                                                                        |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| `LocalForward 18789 127.0.0.1:18789` | Leitet den lokalen Port 18789 an den entfernten Port 18789 weiter                 |
+| `ssh -N`                             | SSH ohne Ausführung entfernter Befehle (nur Portweiterleitung) |
+| `KeepAlive`                          | Startet den Tunnel automatisch neu, falls er abstürzt                             |
+| `RunAtLoad`                          | Startet den Tunnel, wenn der Agent geladen wird                                   |
 
 OpenClaw.app verbindet sich auf Ihrer Client-Maschine mit `ws://127.0.0.1:18789`. Der SSH-Tunnel leitet diese Verbindung an Port 18789 auf der entfernten Maschine weiter, auf der das Gateway ausgeführt wird.

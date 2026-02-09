@@ -4,13 +4,6 @@ read_when:
   - TUI の初心者向けウォークスルーが必要な場合
   - TUI の機能、コマンド、ショートカットの完全な一覧が必要な場合
 title: "TUI"
-x-i18n:
-  source_path: web/tui.md
-  source_hash: 6ab8174870e4722d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:46Z
 ---
 
 # TUI（Terminal UI）
@@ -39,7 +32,7 @@ openclaw tui --url ws://<host>:<port> --token <gateway-token>
 
 Gateway（ゲートウェイ）がパスワード認証を使用している場合は `--password` を使用してください。
 
-## 画面の構成
+## あなたが見るもの
 
 - ヘッダー：接続 URL、現在のエージェント、現在のセッション。
 - チャットログ：ユーザーメッセージ、アシスタントの返信、システム通知、ツールカード。
@@ -49,7 +42,7 @@ Gateway（ゲートウェイ）がパスワード認証を使用している場�
 
 ## メンタルモデル：エージェント + セッション
 
-- エージェントは一意のスラッグです（例：`main`、`research`）。Gateway（ゲートウェイ）が一覧を公開します。
+- エージェントは固有のナメクジです（例：`main`、`research`）。 ゲートウェイはリストを公開します。
 - セッションは現在のエージェントに属します。
 - セッションキーは `agent:<agentId>:<sessionKey>` として保存されます。
   - `/session main` と入力すると、TUI は `agent:<currentAgent>:main` に展開します。
@@ -62,7 +55,7 @@ Gateway（ゲートウェイ）がパスワード認証を使用している場�
 ## 送信 + 配信
 
 - メッセージは Gateway（ゲートウェイ）に送信されます。プロバイダーへの配信はデフォルトでオフです。
-- 配信を有効にする方法：
+- 配送先:
   - `/deliver on`
   - または Settings パネル
   - または `openclaw tui --deliver` を付けて起動
@@ -113,7 +106,7 @@ Gateway（ゲートウェイ）がパスワード認証を使用している場�
 - `/settings`
 - `/exit`
 
-その他の Gateway（ゲートウェイ）のスラッシュコマンド（例：`/context`）は Gateway（ゲートウェイ）に転送され、システム出力として表示されます。詳細は [Slash commands](/tools/slash-commands) を参照してください。
+その他の Gateway（ゲートウェイ）のスラッシュコマンド（例：`/context`）は Gateway（ゲートウェイ）に転送され、システム出力として表示されます。詳細は [Slash commands](/tools/slash-commands) を参照してください。 [Slash commands](/tools/slash-commands)を参照してください。
 
 ## ローカルシェルコマンド
 
@@ -151,6 +144,7 @@ Gateway（ゲートウェイ）がパスワード認証を使用している場�
 
 注記：`--url` を設定した場合、TUI は設定や環境変数の認証情報にフォールバックしません。
 `--token` または `--password` を明示的に指定してください。明示的な認証情報が欠けている場合はエラーとなります。
+`--token` または `--password` を明示的に渡します。 明示的な資格情報が見つかりませんでした。
 
 ## トラブルシューティング
 

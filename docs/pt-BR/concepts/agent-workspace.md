@@ -4,13 +4,6 @@ read_when:
   - Você precisa explicar o workspace do agente ou seu layout de arquivos
   - Você quer fazer backup ou migrar um workspace de agente
 title: "Workspace do Agente"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:40Z
 ---
 
 # Workspace do agente
@@ -154,7 +147,7 @@ Trate o workspace como memória privada. Coloque-o em um repositório git
 Execute estas etapas na máquina onde o Gateway é executado (é lá que o workspace
 fica).
 
-### 1) Inicialize o repositório
+### 1. Inicialize o repositório
 
 Se o git estiver instalado, workspaces novos em folha são inicializados
 automaticamente. Se este workspace ainda não for um repositório, execute:
@@ -166,7 +159,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) Adicione um remoto privado (opções amigáveis para iniciantes)
+### 2. Adicione um remoto privado (opções amigáveis para iniciantes)
 
 Opção A: Interface web do GitHub
 
@@ -201,7 +194,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) Atualizações contínuas
+### 3. Atualizações contínuas
 
 ```bash
 git status

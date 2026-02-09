@@ -4,13 +4,6 @@ read_when:
   - إضافة أو تعديل أوامر CLI أو الخيارات
   - توثيق أسطح أوامر جديدة
 title: "مرجع CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:10Z
 ---
 
 # مرجع CLI
@@ -59,7 +52,7 @@ x-i18n:
 - [`skills`](/cli/skills)
 - [`voicecall`](/cli/voicecall) (إضافة؛ إذا كانت مثبّتة)
 
-## الرايات العامة
+## الأعلام العالمية
 
 - `--dev`: عزل الحالة ضمن `~/.openclaw-dev` وتحويل المنافذ الافتراضية.
 - `--profile <name>`: عزل الحالة ضمن `~/.openclaw-<name>`.
@@ -272,7 +265,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw memory index` — إعادة فهرسة ملفات الذاكرة.
 - `openclaw memory search "<query>"` — بحث دلالي عبر الذاكرة.
 
-## أوامر الشرطة المائلة في الدردشة
+## أوامر خط الدردشة
 
 تدعم رسائل الدردشة أوامر `/...` (نصية وأصلية). راجع [/tools/slash-commands](/tools/slash-commands).
 
@@ -522,7 +515,7 @@ openclaw status --deep
 
 #### `agents list`
 
-سرد الوكلاء المهيّئين.
+قائمة الوكلاء الذين تم تكوينهم.
 
 الخيارات:
 
@@ -735,7 +728,7 @@ openclaw logs --no-color
 - `gateway install|uninstall|start|stop|restart`
 - `gateway run`
 
-استدعاءات RPC الشائعة:
+الرايات العامة
 
 - `config.apply` (تحقق + كتابة تهيئة + إعادة تشغيل + إيقاظ)
 - `config.patch` (دمج تحديث جزئي + إعادة تشغيل + إيقاظ)
@@ -925,7 +918,7 @@ openclaw models status
 - `node stop`
 - `node restart`
 
-## العُقد
+## Nodes
 
 يتواصل `nodes` مع Gateway ويستهدف العُقد المقترنة. راجع [/nodes](/nodes).
 

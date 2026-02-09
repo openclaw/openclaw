@@ -4,18 +4,11 @@ read_when:
   - Introduktion af en ny assistentinstans
   - Gennemgang af sikkerheds- og tilladelsesimplikationer
 title: "Opsætning af personlig assistent"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:50Z
 ---
 
 # Opbygning af en personlig assistent med OpenClaw
 
-OpenClaw er en WhatsApp + Telegram + Discord + iMessage gateway til **Pi**-agenter. Plugins tilføjer Mattermost. Denne guide er opsætningen af den “personlige assistent”: ét dedikeret WhatsApp-nummer, der opfører sig som din altid-tilgængelige agent.
+OpenClaw er en WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agenter. Plugins tilføjer Mattermost. Denne guide er den "personlige assistent" opsætning: en dedikeret WhatsApp nummer, der opfører sig som din altid-on agent.
 
 ## ⚠️ Sikkerhed først
 
@@ -29,7 +22,7 @@ Start konservativt:
 
 - Sæt altid `channels.whatsapp.allowFrom` (kør aldrig åbent mod hele verden på din personlige Mac).
 - Brug et dedikeret WhatsApp-nummer til assistenten.
-- Heartbeats er nu som standard hver 30. minut. Deaktivér, indtil du har tillid til opsætningen, ved at sætte `agents.defaults.heartbeat.every: "0m"`.
+- Hjertebanken nu standard til hver 30 minutter. Deaktiver indtil du har tillid til opsætningen ved at indstille `agents.defaults.heartbeat.every: "0m"`.
 
 ## Forudsætninger
 
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-Hvis du forbinder din personlige WhatsApp til OpenClaw, bliver hver besked til dig “agent-input”. Det er sjældent, hvad du ønsker.
+Hvis du forbinder din personlige WhatsApp med OpenClaw, hver meddelelse til dig bliver “agent input”. Det er sjældent, hvad du ønsker.
 
 ## 5-minutters hurtig start
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 Send nu en besked til assistentnummeret fra din tilladelseslistede telefon.
 
-Når introduktionen er færdig, åbner vi automatisk dashboardet og udskriver et rent (ikke-tokeniseret) link. Hvis den beder om auth, indsæt token fra `gateway.auth.token` i Control UI-indstillingerne. For at genåbne senere: `openclaw dashboard`.
+Når onboarding er færdig, vi auto-åbne instrumentbrættet og udskrive et rent (ikke tokeniseret) link. Hvis det beder om auth, indsæt token fra `gateway.auth.token` i Control UI indstillinger. For at genåbne senere: `openclaw dashboard`.
 
 ## Giv agenten et workspace (AGENTS)
 
 OpenClaw læser driftsinstruktioner og “hukommelse” fra sit workspace-bibliotek.
 
-Som standard bruger OpenClaw `~/.openclaw/workspace` som agent-workspace og opretter det (plus startfilerne `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatisk ved opsætning/første agentkørsel. `BOOTSTRAP.md` oprettes kun, når workspace’et er helt nyt (det bør ikke komme tilbage, efter du har slettet det). `MEMORY.md` er valgfri (oprettes ikke automatisk); når den findes, indlæses den til normale sessioner. Subagent-sessioner injicerer kun `AGENTS.md` og `TOOLS.md`.
+Som standard bruger OpenClaw `~/.openclaw/workspace` som agent arbejdsområde, og vil skabe det (plus starter `AGENTS. d`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatisk på setup/first agent kørsel. `BOOTSTRAP.md` er kun oprettet, når arbejdsområdet er helt nyt (det bør ikke komme tilbage efter du har slettet det). `MEMORY.md` er valgfri (ikke auto-oprettet); når det er til stede, er det indlæst for normale sessioner. Subagent sessioner injicerer kun `AGENTS.md` og `TOOLS.md`.
 
-Tip: betragt denne mappe som OpenClaws “hukommelse”, og gør den til et git-repo (helst privat), så dine `AGENTS.md` + hukommelsesfiler er sikkerhedskopieret. Hvis git er installeret, initialiseres helt nye workspaces automatisk.
+Tip: behandle denne mappe som OpenClaws “hukommelse” og gøre det til en git repo (ideelt private) så dine `AGENTS.md` + hukommelsesfiler er sikkerhedskopieret. Hvis git er installeret, er helt nye arbejdsområder automatisk initialiseret.
 
 ```bash
 openclaw setup
@@ -168,14 +161,14 @@ Eksempel:
 
 - Sessionsfiler: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - Sessionsmetadata (tokenforbrug, seneste rute, osv.): `~/.openclaw/agents/<agentId>/sessions/sessions.json` (legacy: `~/.openclaw/sessions/sessions.json`)
-- `/new` eller `/reset` starter en ny session for den chat (konfigurerbart via `resetTriggers`). Sendt alene svarer agenten med et kort hej for at bekræfte nulstillingen.
+- `/new` eller `/reset` starter en frisk session for denne chat (konfigurerbar via `resetTriggers`). Hvis sendt alene, agenten besvarer med en kort goddag til at bekræfte nulstillingen.
 - `/compact [instructions]` komprimerer sessionskonteksten og rapporterer det resterende kontekstbudget.
 
 ## Heartbeats (proaktiv tilstand)
 
-Som standard kører OpenClaw et heartbeat hver 30. minut med prompten:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`  
-Sæt `agents.defaults.heartbeat.every: "0m"` for at deaktivere.
+Som standard kører OpenClaw et hjerteslag hver 30 minutter med prompten:
+`Læs HEARTBEAT.md hvis det eksisterer (arbejdsområde kontekst). Følg den nøje. Udsæt eller gentag ikke gamle opgaver fra tidligere chats. Hvis intet behøver opmærksomhed, svar HEARTBEAT_OK.`
+Sæt `agents.defaults.heartbeat.every: "0m"` til at deaktivere.
 
 - Hvis `HEARTBEAT.md` findes, men reelt er tom (kun tomme linjer og markdown-overskrifter som `# Heading`), springer OpenClaw heartbeat-kørslen over for at spare API-kald.
 - Hvis filen mangler, kører heartbeat stadig, og modellen beslutter, hvad der skal gøres.
@@ -198,7 +191,7 @@ Indgående vedhæftninger (billeder/lyd/dokumenter) kan eksponeres til din komma
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (hvis lydtransskription er aktiveret)
 
-Udgående vedhæftninger fra agenten: medtag `MEDIA:<path-or-url>` på sin egen linje (ingen mellemrum). Eksempel:
+Udgående vedhæftede filer fra agenten: inkludere `MEDIA:<path-or-url>` på sin egen linje (ingen mellemrum). Eksempel:
 
 ```
 Here’s the screenshot.

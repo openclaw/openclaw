@@ -4,13 +4,6 @@ read_when:
   - Thiết lập lần đầu từ con số không
   - Bạn muốn con đường nhanh nhất để có một cuộc trò chuyện hoạt động
 title: "Bắt đầu"
-x-i18n:
-  source_path: start/getting-started.md
-  source_hash: 6eeb4d38a70f2ad9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:16Z
 ---
 
 # Bắt đầu
@@ -18,10 +11,10 @@ x-i18n:
 Mục tiêu: đi từ con số không đến cuộc trò chuyện hoạt động đầu tiên với thiết lập tối thiểu.
 
 <Info>
-Cách trò chuyện nhanh nhất: mở Control UI (không cần thiết lập kênh). Chạy `openclaw dashboard`
-và trò chuyện trong trình duyệt, hoặc mở `http://127.0.0.1:18789/` trên
+Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`
+and chat in the browser, or open `http://127.0.0.1:18789/` on the
 <Tooltip headline="Gateway host" tip="The machine running the OpenClaw gateway service.">máy chủ gateway</Tooltip>.
-Tài liệu: [Dashboard](/web/dashboard) và [Control UI](/web/control-ui).
+Docs: [Dashboard](/web/dashboard) and [Control UI](/web/control-ui).
 </Info>
 
 ## Điều kiện tiên quyết
@@ -35,7 +28,7 @@ Kiểm tra phiên bản Node của bạn bằng `node --version` nếu bạn ch�
 ## Thiết lập nhanh (CLI)
 
 <Steps>
-  <Step title="Cài đặt OpenClaw (khuyến nghị)">
+  <Step title="Install OpenClaw (recommended)">
     <Tabs>
       <Tab title="macOS/Linux">
         ```bash
@@ -49,29 +42,35 @@ Kiểm tra phiên bản Node của bạn bằng `node --version` nếu bạn ch�
       </Tab>
     </Tabs>
 
+    ```
     <Note>
     Các phương thức cài đặt khác và yêu cầu: [Install](/install).
     </Note>
+    ```
 
   </Step>
-  <Step title="Chạy trình hướng dẫn ban đầu">
+  <Step title="Run the onboarding wizard">
     ```bash
     openclaw onboard --install-daemon
     ```
 
+    ```
     Trình hướng dẫn cấu hình xác thực, cài đặt gateway và các kênh tùy chọn.
     Xem [Onboarding Wizard](/start/wizard) để biết chi tiết.
-
-  </Step>
-  <Step title="Kiểm tra Gateway">
-    Nếu bạn đã cài đặt dịch vụ, nó sẽ chạy sẵn:
-
-    ```bash
-    openclaw gateway status
     ```
 
   </Step>
-  <Step title="Mở Control UI">
+  <Step title="Check the Gateway">
+    Nếu bạn đã cài đặt dịch vụ, nó sẽ chạy sẵn:
+
+    ````
+    ```bash
+    openclaw gateway status
+    ```
+    ````
+
+  </Step>
+  <Step title="Open the Control UI">
     ```bash
     openclaw dashboard
     ```
@@ -85,20 +84,24 @@ Nếu Control UI tải được, Gateway của bạn đã sẵn sàng sử dụn
 ## Kiểm tra tùy chọn và phần bổ sung
 
 <AccordionGroup>
-  <Accordion title="Chạy Gateway ở chế độ foreground">
+  <Accordion title="Run the Gateway in the foreground">
     Hữu ích cho kiểm tra nhanh hoặc xử lý sự cố.
 
+    ````
     ```bash
     openclaw gateway --port 18789
     ```
+    ````
 
   </Accordion>
-  <Accordion title="Gửi tin nhắn kiểm tra">
+  <Accordion title="Send a test message">
     Yêu cầu một kênh đã được cấu hình.
 
+    ````
     ```bash
     openclaw message send --target +15555550123 --message "Hello from OpenClaw"
     ```
+    ````
 
   </Accordion>
 </AccordionGroup>
@@ -106,10 +109,10 @@ Nếu Control UI tải được, Gateway của bạn đã sẵn sàng sử dụn
 ## Tìm hiểu sâu hơn
 
 <Columns>
-  <Card title="Onboarding Wizard (chi tiết)" href="/start/wizard">
+  <Card title="Onboarding Wizard (details)" href="/start/wizard">
     Tài liệu tham chiếu đầy đủ cho trình hướng dẫn CLI và các tùy chọn nâng cao.
   </Card>
-  <Card title="Hướng dẫn ban đầu cho ứng dụng macOS" href="/start/onboarding">
+  <Card title="macOS app onboarding" href="/start/onboarding">
     Quy trình chạy lần đầu cho ứng dụng macOS.
   </Card>
 </Columns>

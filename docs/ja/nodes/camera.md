@@ -4,13 +4,6 @@ read_when:
   - iOS ノードまたは macOS におけるカメラキャプチャの追加や変更を行う場合
   - エージェントがアクセス可能な MEDIA 一時ファイルのワークフローを拡張する場合
 title: "カメラキャプチャ"
-x-i18n:
-  source_path: nodes/camera.md
-  source_hash: cd6e2edd05a6575d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:30Z
 ---
 
 # カメラキャプチャ（エージェント）
@@ -38,7 +31,7 @@ OpenClaw は、エージェントのワークフロー向けに **カメラキ�
     - `devices`：`{ id, name, position, deviceType }` の配列
 
 - `camera.snap`
-  - パラメータ：
+  - Params:
     - `facing`：`front|back`（既定値：`front`）
     - `maxWidth`：number（任意；iOS ノードでは既定 `1600`）
     - `quality`：`0..1`（任意；既定 `0.9`）
@@ -52,7 +45,7 @@ OpenClaw は、エージェントのワークフロー向けに **カメラキ�
   - ペイロードガード：写真は、base64 ペイロードが 5 MB 未満になるよう再圧縮されます。
 
 - `camera.clip`
-  - パラメータ：
+  - Params:
     - `facing`：`front|back`（既定値：`front`）
     - `durationMs`：number（既定 `3000`、最大 `60000` にクランプ）
     - `includeAudio`：boolean（既定 `true`）
@@ -66,7 +59,7 @@ OpenClaw は、エージェントのワークフロー向けに **カメラキ�
 
 ### フォアグラウンド要件
 
-`canvas.*` と同様に、iOS ノードは **フォアグラウンド** でのみ `camera.*` コマンドを許可します。バックグラウンドからの呼び出しは `NODE_BACKGROUND_UNAVAILABLE` を返します。
+`canvas.*` と同様に、iOS ノードは **フォアグラウンド** でのみ `camera.*` コマンドを許可します。バックグラウンドからの呼び出しは `NODE_BACKGROUND_UNAVAILABLE` を返します。 バックグラウンドでの呼び出しは `NODE_BACKGROUND_UNAVAILABLE` を返します。
 
 ### CLI ヘルパー（一時ファイル + MEDIA）
 
@@ -104,7 +97,7 @@ openclaw nodes camera clip --node <id> --no-audio
 
 ### Android のフォアグラウンド要件
 
-`canvas.*` と同様に、Android ノードは **フォアグラウンド** でのみ `camera.*` コマンドを許可します。バックグラウンドからの呼び出しは `NODE_BACKGROUND_UNAVAILABLE` を返します。
+`canvas.*` と同様に、Android ノードは **フォアグラウンド** でのみ `camera.*` コマンドを許可します。バックグラウンドからの呼び出しは `NODE_BACKGROUND_UNAVAILABLE` を返します。 バックグラウンドでの呼び出しは `NODE_BACKGROUND_UNAVAILABLE` を返します。
 
 ### ペイロードガード
 

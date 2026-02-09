@@ -1,15 +1,8 @@
 ---
-summary: „Design der Befehlswarteschlange, das eingehende Auto-Reply-Ausführungen serialisiert“
+summary: "„Design der Befehlswarteschlange, das eingehende Auto-Reply-Ausführungen serialisiert“"
 read_when:
   - Beim Ändern der Auto-Reply-Ausführung oder -Nebenläufigkeit
-title: „Befehlswarteschlange“
-x-i18n:
-  source_path: concepts/queue.md
-  source_hash: 2104c24d200fb4f9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:01Z
+title: "Befehlswarteschlange"
 ---
 
 # Befehlswarteschlange (2026-01-16)
@@ -21,7 +14,7 @@ Wir serialisieren eingehende Auto-Reply-Ausführungen (alle Kanäle) über eine 
 - Auto-Reply-Ausführungen können teuer sein (LLM-Aufrufe) und kollidieren, wenn mehrere eingehende Nachrichten kurz hintereinander eintreffen.
 - Serialisierung vermeidet Konkurrenz um gemeinsam genutzte Ressourcen (Sitzungsdateien, Logs, CLI-stdin) und reduziert die Wahrscheinlichkeit von Upstream-Ratenbegrenzungen.
 
-## Funktionsweise
+## Wie es funktioniert
 
 - Eine lane-bewusste FIFO-Warteschlange leert jede Lane mit einer konfigurierbaren Nebenläufigkeitsgrenze (Standard: 1 für nicht konfigurierte Lanes; main standardmäßig 4, subagent 8).
 - `runEmbeddedPiAgent` reiht nach **Sitzungsschlüssel** (Lane `session:<key>`) ein, um sicherzustellen, dass pro Sitzung nur eine aktive Ausführung existiert.
@@ -75,7 +68,7 @@ Optionen gelten für `followup`, `collect` und `steer-backlog` (sowie für `stee
 „Summarize“ behält eine kurze Stichpunktliste verworfener Nachrichten und injiziert sie als synthetischen Follow-up-Prompt.
 Standardwerte: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
-## Pro-Sitzung-Overrides
+## Sitzungsüberschreibungen
 
 - Senden Sie `/queue <mode>` als eigenständigen Befehl, um den Modus für die aktuelle Sitzung zu speichern.
 - Optionen können kombiniert werden: `/queue collect debounce:2s cap:25 drop:summarize`

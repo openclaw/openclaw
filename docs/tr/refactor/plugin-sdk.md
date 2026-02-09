@@ -4,13 +4,6 @@ read_when:
   - Eklenti mimarisini tanımlarken veya yeniden düzenlerken
   - Kanal bağlayıcılarını eklenti SDK'sı/çalışma zamanına taşırken
 title: "Eklenti SDK'sı Yeniden Düzenleme"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:47Z
 ---
 
 # Eklenti SDK'sı + Çalışma Zamanı Yeniden Düzenleme Planı
@@ -21,11 +14,11 @@ Hiçbir eklenti doğrudan `src/**` içe aktarmasın. Tüm bağımlılıklar SDK 
 ## Neden şimdi
 
 - Mevcut bağlayıcılar desenleri karıştırıyor: doğrudan çekirdek içe aktarımları, yalnızca dağıtıma özel köprüler ve özel yardımcılar.
-- Bu durum yükseltmeleri kırılgan hale getiriyor ve temiz bir harici eklenti yüzeyini engelliyor.
+- This makes upgrades brittle and blocks a clean external plugin surface.
 
 ## Hedef mimari (iki katman)
 
-### 1) Eklenti SDK'sı (derleme zamanı, kararlı, yayımlanabilir)
+### 1. Eklenti SDK'sı (derleme zamanı, kararlı, yayımlanabilir)
 
 Kapsam: türler, yardımcılar ve yapılandırma yardımcıları. Çalışma zamanı durumu yok, yan etki yok.
 
@@ -44,7 +37,7 @@ Dağıtım:
 - `openclaw/plugin-sdk` olarak yayımlansın (veya çekirdekten `openclaw/plugin-sdk` altında dışa aktarılsın).
 - Açık kararlılık garantileriyle semver.
 
-### 2) Eklenti Çalışma Zamanı (yürütme yüzeyi, enjekte edilen)
+### 2. Eklenti Çalışma Zamanı (yürütme yüzeyi, enjekte edilen)
 
 Kapsam: çekirdek çalışma zamanı davranışına dokunan her şey.
 Eklentiler `src/**` içe aktarmasın diye `OpenClawPluginApi.runtime` üzerinden erişilir.
@@ -174,7 +167,7 @@ Notlar:
 ### Aşama 2: hafif doğrudan içe aktarımlı eklentiler
 
 - Matrix, SDK + çalışma zamanına taşınsın.
-- Onboarding, dizin ve grup bahsetme mantığı doğrulansın.
+- Validate onboarding, directory, group mention logic.
 
 ### Aşama 3: ağır doğrudan içe aktarımlı eklentiler
 
@@ -192,7 +185,7 @@ Notlar:
 - Lint kuralı / CI denetimi eklensin: `src/**` içinden `extensions/**` içe aktarımları yok.
 - Eklenti SDK/sürüm uyumluluk denetimleri eklensin (çalışma zamanı + SDK semver).
 
-## Uyumluluk ve sürümleme
+## Compatibility and versioning
 
 - SDK: semver, yayımlanmış, değişiklikleri belgelenmiş.
 - Çalışma zamanı: çekirdek sürüm başına sürümlenir. `api.runtime.version` eklensin.
@@ -208,7 +201,7 @@ Notlar:
 
 - SDK türleri nerede barındırılmalı: ayrı paket mi yoksa çekirdek dışa aktarımı mı?
 - Çalışma zamanı türlerinin dağıtımı: SDK'da mı (yalnızca türler) yoksa çekirdekte mi?
-- Paketli ve harici eklentiler için doküman bağlantıları nasıl sunulmalı?
+- How to expose docs links for bundled vs external plugins?
 - Geçiş sırasında depo içi eklentiler için sınırlı doğrudan çekirdek içe aktarımlarına izin veriyor muyuz?
 
 ## Başarı ölçütleri

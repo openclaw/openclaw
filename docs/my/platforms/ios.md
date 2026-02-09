@@ -5,18 +5,11 @@ read_when:
   - iOS အက်ပ်ကို source မှ chạy/run လုပ်ရန်
   - gateway discovery သို့မဟုတ် canvas commands များကို debug လုပ်ရန်
 title: "iOS App"
-x-i18n:
-  source_path: platforms/ios.md
-  source_hash: 692eebdc82e4bb8d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:41Z
 ---
 
 # iOS App (Node)
 
-ရရှိနိုင်မှု: အတွင်းပိုင်း preview ဖြစ်သည်။ iOS အက်ပ်ကို ယခုအချိန်တွင် အများပြည်သူသို့ မဖြန့်ချိသေးပါ။
+Availability: internal preview. 2. iOS app ကို အများပြည်သူအတွက် မဖြန့်ချိသေးပါ။
 
 ## ဘာလုပ်ပေးသလဲ
 
@@ -60,12 +53,12 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour (LAN)
 
-Gateway သည် `_openclaw-gw._tcp` ကို `local.` ပေါ်တွင် ကြော်ငြာပေးသည်။ iOS အက်ပ်က အလိုအလျောက် စာရင်းပြုစု ပြသပါသည်။
+3. Gateway သည် `local.` ပေါ်တွင် `_openclaw-gw._tcp` ကို ကြော်ငြာပေးသည်။ The iOS app lists these automatically.
 
 ### Tailnet (ကွန်ယက်ကူးလွန်)
 
-mDNS ကို ပိတ်ထားပါက unicast DNS-SD zone ကို အသုံးပြုပါ (domain တစ်ခုကို ရွေးပါ; ဥပမာ: `openclaw.internal.`) နှင့် Tailscale split DNS ကို သုံးပါ။
-CoreDNS ဥပမာအတွက် [Bonjour](/gateway/bonjour) ကို ကြည့်ပါ။
+5. mDNS ကို ပိတ်ထားပါက unicast DNS-SD zone ကို အသုံးပြုပါ (domain တစ်ခု ရွေးချယ်ပါ; ဥပမာ: `openclaw.internal.`) နှင့် Tailscale split DNS ကို အသုံးပြုပါ။
+   See [Bonjour](/gateway/bonjour) for the CoreDNS example.
 
 ### Manual host/port
 
@@ -73,7 +66,7 @@ Settings တွင် **Manual Host** ကို ဖွင့်ပြီး gate
 
 ## Canvas + A2UI
 
-iOS နိုဒ်သည် WKWebView canvas ကို render လုပ်ပါသည်။ ၎င်းကို ထိန်းချုပ်ရန် `node.invoke` ကို အသုံးပြုပါ:
+7. iOS node သည် WKWebView canvas ကို render လုပ်ပေးသည်။ 8. ၎င်းကို မောင်းနှင်ရန် `node.invoke` ကို အသုံးပြုပါ:
 
 ```bash
 openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18793/__openclaw__/canvas/"}'

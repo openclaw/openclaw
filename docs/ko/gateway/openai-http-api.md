@@ -3,13 +3,6 @@ summary: "Gateway(게이트웨이)에서 OpenAI 호환 /v1/chat/completions HTTP
 read_when:
   - OpenAI Chat Completions 를 기대하는 도구를 통합할 때
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:03Z
 ---
 
 # OpenAI Chat Completions (HTTP)
@@ -21,7 +14,7 @@ OpenClaw 의 Gateway(게이트웨이)는 작은 OpenAI 호환 Chat Completions �
 - `POST /v1/chat/completions`
 - Gateway(게이트웨이)와 동일한 포트 (WS + HTTP 멀티플렉스): `http://<gateway-host>:<port>/v1/chat/completions`
 
-내부적으로 요청은 일반적인 Gateway(게이트웨이) 에이전트 실행으로 처리됩니다 (`openclaw agent` 와 동일한 코드 경로). 따라서 라우팅/권한/구성은 사용자의 Gateway(게이트웨이)와 일치합니다.
+내부적으로 요청은 일반적인 Gateway(게이트웨이) 에이전트 실행으로 처리됩니다 (`openclaw agent` 와 동일한 코드 경로).
 
 ## 인증
 

@@ -4,13 +4,6 @@ read_when:
   - Potrzebujesz referencji konfiguracji modeli według dostawców
   - Chcesz zobaczyć przykładowe konfiguracje lub polecenia CLI do onboardingu dostawców modeli
 title: "Dostawcy modeli"
-x-i18n:
-  source_path: concepts/model-providers.md
-  source_hash: b086e62236225de6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:15Z
 ---
 
 # Dostawcy modeli

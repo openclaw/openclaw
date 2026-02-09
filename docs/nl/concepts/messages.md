@@ -5,13 +5,6 @@ read_when:
   - Verduidelijken van sessies, wachtrijmodi of streaminggedrag
   - Documenteren van zichtbaarheid van redenering en gebruiksimplicaties
 title: "Berichten"
-x-i18n:
-  source_path: concepts/messages.md
-  source_hash: 773301d5c0c1e3b8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:24Z
 ---
 
 # Berichten
@@ -37,13 +30,13 @@ Belangrijke knoppen staan in de configuratie:
 
 Zie [Configuratie](/gateway/configuration) voor het volledige schema.
 
-## Inkomende deduplicatie
+## Inkomende dedupe
 
 Kanalen kunnen hetzelfde bericht opnieuw afleveren na reconnects. OpenClaw houdt een
 kortlevende cache bij, gesleuteld op kanaal/account/peer/sessie/bericht-id, zodat dubbele
 afleveringen geen nieuwe agent-run triggeren.
 
-## Inkomend debouncen
+## Inkomende debouncing
 
 Snelle opeenvolgende berichten van **dezelfde afzender** kunnen via `messages.inbound` worden
 gebundeld tot één agentbeurt. Debouncing is gescopeerd per kanaal + gesprek
@@ -102,8 +95,7 @@ Wanneer een kanaal geschiedenis aanlevert, gebruikt het een gedeelde wrapper:
 - `[Current message - respond to this]`
 
 Voor **niet-directe chats** (groepen/kanalen/rooms) wordt de **huidige berichtbody**
-voorafgegaan door het afzenderlabel (dezelfde stijl als gebruikt voor geschiedenisitems).
-Dit houdt realtime- en wachtrij-/geschiedenisberichten consistent in de agentprompt.
+voorafgegaan door het afzenderlabel (dezelfde stijl als gebruikt voor geschiedenisitems). Dit houdt realtime- en wachtrij-/geschiedenisberichten consistent in de agentprompt.
 
 Geschiedenisbuffers zijn **alleen-pending**: ze bevatten groepsberichten die _geen_
 run hebben getriggerd (bijvoorbeeld mention-gated berichten) en **sluiten** berichten
@@ -112,11 +104,12 @@ uit die al in het sessietranscript staan.
 Directive stripping is alleen van toepassing op de **huidige bericht**-sectie zodat de
 geschiedenis intact blijft. Kanalen die geschiedenis wrappen, moeten `CommandBody` (of
 `RawBody`) instellen op de oorspronkelijke berichttekst en `Body` behouden
-als de gecombineerde prompt. Geschiedenisbuffers zijn configureerbaar via `messages.groupChat.historyLimit`
+als de gecombineerde prompt.
+Geschiedenisbuffers zijn configureerbaar via `messages.groupChat.historyLimit`
 (globale standaard) en per-kanaaloverschrijvingen zoals `channels.slack.historyLimit` of
 `channels.telegram.accounts.<id>.historyLimit` (stel `0` in om uit te schakelen).
 
-## Wachtrijen en vervolgberichten
+## Wachtrij en opvolging
 
 Als er al een run actief is, kunnen inkomende berichten in de wachtrij worden geplaatst,
 naar de huidige run worden gestuurd, of worden verzameld voor een vervolgbeurt.

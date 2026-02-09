@@ -3,13 +3,6 @@ summary: "Modes de reveil vocal et push-to-talk, ainsi que les details de routag
 read_when:
   - Travail sur les parcours de reveil vocal ou de PTT
 title: "Reveil vocal"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:27Z
 ---
 
 # Reveil vocal & Push-to-Talk

@@ -4,17 +4,10 @@ read_when:
   - OpenClaw’da “bağlam”ın ne anlama geldiğini anlamak istiyorsunuz
   - Modelin neden bir şeyi “bildiğini” (ya da unuttuğunu) ayıklıyorsunuz
   - Bağlam yükünü azaltmak istiyorsunuz (/context, /status, /compact)
-title: "Bağlam"
-x-i18n:
-  source_path: concepts/context.md
-  source_hash: e6f42f515380ce12
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:21Z
+title: "Context"
 ---
 
-# Bağlam
+# Context
 
 “Bağlam”, **OpenClaw’un bir çalıştırma için modele gönderdiği her şeydir**. Modelin **bağlam penceresi** (token sınırı) ile sınırlıdır.
 
@@ -83,7 +76,7 @@ Top tools (schema size):
 … (+N more tools)
 ```
 
-## Bağlam penceresine neler dahil edilir
+## What counts toward the context window
 
 Modelin aldığı her şey dahildir; buna şunlar da dahil:
 

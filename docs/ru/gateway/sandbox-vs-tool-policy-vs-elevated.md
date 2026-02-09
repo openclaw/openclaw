@@ -1,15 +1,8 @@
 ---
 title: Sandbox vs Tool Policy vs Elevated
-summary: «Почему инструмент блокируется: среда выполнения sandbox, политика разрешения/запрета инструментов и шлюзы elevated exec»
-read_when: «Вы столкнулись с “sandbox jail” или видите отказ инструмента/elevated и хотите узнать точный ключ конфига, который нужно изменить».
+summary: "Почему инструмент блокируется: среда выполнения sandbox, политика разрешения/запрета инструментов и шлюзы elevated exec"
+read_when: "«Вы столкнулись с “sandbox jail” или видите отказ инструмента/elevated и хотите узнать точный ключ конфига, который нужно изменить»."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:44Z
 ---
 
 # Sandbox vs Tool Policy vs Elevated
@@ -20,7 +13,7 @@ x-i18n:
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) определяет **какие инструменты доступны/разрешены**.
 3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) — это **исключительно exec-механизм обхода**, позволяющий запускаться на хосте при работе в sandbox.
 
-## Быстрый отладочный путь
+## Быстрая отладка
 
 Используйте инспектор, чтобы увидеть, что OpenClaw _фактически_ делает:
 
@@ -58,7 +51,7 @@ Sandboxing управляется ключом `agents.defaults.sandbox.mode`:
 
 ## Tool policy: какие инструменты существуют/могут вызываться
 
-Имеют значение два уровня:
+Два слоя имеют значение:
 
 - **Профиль инструментов**: `tools.profile` и `agents.list[].tools.profile` (базовый список разрешённых)
 - **Профиль инструментов провайдера**: `tools.byProvider[provider].profile` и `agents.list[].tools.byProvider[provider].profile`

@@ -3,18 +3,11 @@ summary: "Mga patakaran sa paghawak ng imahe at media para sa send, gateway, at 
 read_when:
   - Pagbabago sa media pipeline o mga attachment
 title: "Suporta sa Imahe at Media"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # Suporta sa Imahe at Media — 2025-12-05
 
-Ang WhatsApp channel ay tumatakbo sa pamamagitan ng **Baileys Web**. Nilalaman ng dokumentong ito ang kasalukuyang mga patakaran sa paghawak ng media para sa send, gateway, at agent replies.
+Ang WhatsApp channel ay tumatakbo sa pamamagitan ng **Baileys Web**. Kinukunan ng dokumentong ito ang kasalukuyang mga patakaran sa paghawak ng media para sa send, gateway, at mga reply ng agent.
 
 ## Mga Layunin
 
@@ -42,7 +35,7 @@ Ang WhatsApp channel ay tumatakbo sa pamamagitan ng **Baileys Web**. Nilalaman n
 
 ## Auto-Reply Pipeline
 
-- Ang `getReplyFromConfig` ay nagbabalik ng `{ text?, mediaUrl?, mediaUrls? }`.
+- `getReplyFromConfig` ay nagbabalik ng `{ text?, mediaUrl?, mediaUrls?` }\`.
 - Kapag may media, nireresolba ng web sender ang mga lokal na path o URL gamit ang parehong pipeline gaya ng `openclaw message send`.
 - Maramihang media entry ay ipinapadala nang sunud-sunod kapag ibinigay.
 
@@ -55,7 +48,7 @@ Ang WhatsApp channel ay tumatakbo sa pamamagitan ng **Baileys Web**. Nilalaman n
 - Ang pag-unawa sa media (kung naka-configure sa pamamagitan ng `tools.media.*` o shared `tools.media.models`) ay tumatakbo bago ang templating at maaaring magpasok ng mga block na `[Image]`, `[Audio]`, at `[Video]` sa `Body`.
   - Ang audio ay nagse-set ng `{{Transcript}}` at ginagamit ang transcript para sa command parsing upang patuloy na gumana ang mga slash command.
   - Ang mga deskripsyon ng video at imahe ay pinananatili ang anumang caption text para sa command parsing.
-- Bilang default, tanging ang unang tumutugmang image/audio/video attachment lamang ang pinoproseso; itakda ang `tools.media.<cap>.attachments` upang magproseso ng maraming attachment.
+- Ang isang **node** ay isang kasamang device (macOS/iOS/Android/headless) na kumokonekta sa Gateway **WebSocket** (kaparehong port ng mga operator) na may `role: "node"` at naglalantad ng command surface (hal. `canvas.*`, `camera.*`, `system.*`) sa pamamagitan ng `node.invoke`.Mga detalye ng protocol: [Gateway protocol](/gateway/protocol).
 
 ## Mga Limitasyon at Error
 

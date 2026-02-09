@@ -4,13 +4,6 @@ read_when:
   - Вы утверждаете запросы на сопряжение устройств
   - Вам нужно выполнить ротацию или отзыв токенов устройств
 title: "устройства"
-x-i18n:
-  source_path: cli/devices.md
-  source_hash: ac7d130ecdc5d429
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:14Z
 ---
 
 # `openclaw devices`

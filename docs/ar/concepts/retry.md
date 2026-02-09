@@ -4,13 +4,6 @@ read_when:
   - تحديث سلوك أو الإعدادات الافتراضية لإعادة المحاولة لدى الموفّر
   - تصحيح أخطاء إرسال الموفّر أو حدود المعدّل
 title: "سياسة إعادة المحاولة"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:07Z
 ---
 
 # سياسة إعادة المحاولة

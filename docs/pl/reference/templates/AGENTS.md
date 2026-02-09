@@ -2,13 +2,6 @@
 summary: "Szablon obszaru roboczego dla AGENTS.md"
 read_when:
   - Ręczne uruchamianie obszaru roboczego
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:56Z
 ---
 
 # AGENTS.md – Twój obszar roboczy
@@ -93,15 +86,15 @@ Na czatach grupowych, gdzie otrzymujesz każdą wiadomość, **rozsądnie decydu
 - Możesz dodać realną wartość (informację, wgląd, pomoc)
 - Coś dowcipnego/zabawnego pasuje naturalnie
 - Korygujesz istotną dezinformację
-- Proszone jest podsumowanie
+- Podsumowanie na zapytanie
 
 **Zachowaj ciszę (HEARTBEAT_OK), gdy:**
 
 - To tylko luźna pogawędka między ludźmi
 - Ktoś już odpowiedział na pytanie
 - Twoja odpowiedź brzmiałaby tylko „tak” albo „fajnie”
-- Rozmowa toczy się dobrze bez Ciebie
-- Dodanie wiadomości przerwałoby klimat
+- Rozmowa przebiega bez ciebie
+- Dodanie wiadomości przerwie przelotkę
 
 **Zasada ludzka:** Ludzie na czatach grupowych nie odpowiadają na każdą pojedynczą wiadomość. Ty też nie powinieneś. Jakość > ilość. Jeśli nie wysłałbyś tego w prawdziwym czacie ze znajomymi, nie wysyłaj.
 
@@ -118,7 +111,7 @@ Na platformach obsługujących reakcje (Discord, Slack) używaj emoji naturalnie
 - Doceniasz coś, ale nie musisz odpowiadać (👍, ❤️, 🙌)
 - Coś Cię rozbawiło (😂, 💀)
 - Uważasz coś za interesujące lub dające do myślenia (🤔, 💡)
-- Chcesz potwierdzić odbiór bez przerywania toku rozmowy
+- Chcesz potwierdzić bez przerywania przepływu
 - To prosta sytuacja „tak/nie” lub akceptacja (✅, 👀)
 
 **Dlaczego to ważne:**  
@@ -190,7 +183,7 @@ Możesz swobodnie edytować `HEARTBEAT.md`, dodając krótką checklistę lub pr
 - Przyszedł ważny e-mail
 - Zbliża się wydarzenie w kalendarzu (&lt;2 h)
 - Znalazłeś coś interesującego
-- Minęło &gt;8 h od Twojej ostatniej wiadomości
+- To było >8h odkąd coś powiedziałeś/aś
 
 **Kiedy zachować ciszę (HEARTBEAT_OK):**
 

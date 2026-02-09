@@ -3,13 +3,6 @@ summary: "Status, mogelijkheden en configuratie van Matrix-ondersteuning"
 read_when:
   - Werken aan Matrix-kanaalfunctionaliteit
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:20Z
 ---
 
 # Matrix (plugin)
@@ -48,10 +41,13 @@ Details: [Plugins](/tools/plugin)
 1. Installeer de Matrix-plugin:
    - Vanuit npm: `openclaw plugins install @openclaw/matrix`
    - Vanuit een lokale checkout: `openclaw plugins install ./extensions/matrix`
+
 2. Maak een Matrix-account aan op een homeserver:
    - Bekijk hostingopties op [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Of host het zelf.
+
 3. Verkrijg een access token voor het botaccount:
+
    - Gebruik de Matrix login-API met `curl` op je homeserver:
 
    ```bash
@@ -79,7 +75,9 @@ Details: [Plugins](/tools/plugin)
    - Als beide zijn ingesteld, heeft config voorrang.
    - Met access token: gebruikers-ID wordt automatisch opgehaald via `/whoami`.
    - Indien ingesteld, moet `channels.matrix.userId` de volledige Matrix-ID zijn (voorbeeld: `@bot:example.org`).
+
 5. Herstart de Gateway (of rond onboarding af).
+
 6. Start een DM met de bot of nodig hem uit in een kamer vanuit een Matrix-client
    (Element, Beeper, enz.; zie [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper vereist E2EE,
    dus stel `channels.matrix.encryption: true` in en verifieer het apparaat.
@@ -197,17 +195,17 @@ Na verificatie kan de bot berichten in versleutelde kamers ontsleutelen.
 
 ## Mogelijkheden
 
-| Functie           | Status                                                                                                |
-| ----------------- | ----------------------------------------------------------------------------------------------------- |
-| Directe berichten | ✅ Ondersteund                                                                                        |
-| Kamers            | ✅ Ondersteund                                                                                        |
-| Threads           | ✅ Ondersteund                                                                                        |
-| Media             | ✅ Ondersteund                                                                                        |
+| Functie           | Status                                                                                                                  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Directe berichten | ✅ Ondersteund                                                                                                           |
+| Kamers            | ✅ Ondersteund                                                                                                           |
+| Threads           | ✅ Ondersteund                                                                                                           |
+| Media             | ✅ Ondersteund                                                                                                           |
 | E2EE              | ✅ Ondersteund (crypto-module vereist)                                                                |
 | Reacties          | ✅ Ondersteund (verzenden/lezen via tools)                                                            |
 | Polls             | ✅ Verzenden ondersteund; inkomende poll-starts worden omgezet naar tekst (reacties/einden genegeerd) |
 | Locatie           | ✅ Ondersteund (geo-URI; hoogte genegeerd)                                                            |
-| Native opdrachten | ✅ Ondersteund                                                                                        |
+| Native opdrachten | ✅ Ondersteund                                                                                                           |
 
 ## Problemen oplossen
 

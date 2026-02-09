@@ -4,25 +4,18 @@ read_when:
   - Tilføjelse eller ændring af agent-værktøjer
   - Udfasning eller ændring af `openclaw-*` Skills
 title: "Værktøjer"
-x-i18n:
-  source_path: tools/index.md
-  source_hash: 84d3788b0f5df3d5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:25Z
 ---
 
 # Værktøjer (OpenClaw)
 
-OpenClaw eksponerer **førsteklasses agent-værktøjer** til browser, canvas, nodes og cron.
-Disse erstatter de gamle `openclaw-*` Skills: værktøjerne er typed, uden shelling,
-og agenten bør stole direkte på dem.
+OpenClaw udsætter **førsteklasses agentværktøjer** for browser, lærred, noder og cron.
+Disse erstatter de gamle `openclaw-*` færdigheder: værktøjerne er skrevet, ingen beskydning,
+og agenten bør stole på dem direkte.
 
 ## Deaktivering af værktøjer
 
-Du kan globalt tillade/afvise værktøjer via `tools.allow` / `tools.deny` i `openclaw.json`
-(afvisning vinder). Dette forhindrer ikke-tilladte værktøjer i at blive sendt til modeludbydere.
+Du kan globalt tillade / nægte værktøjer via `tools.allow` / `tools.deny` i `openclaw.json`
+(benægte vinder). Dette forhindrer forbudte værktøjer i at blive sendt til modeludbydere.
 
 ```json5
 {
@@ -38,8 +31,8 @@ Noter:
 
 ## Værktøjsprofiler (basis-tilladelsesliste)
 
-`tools.profile` sætter en **basis-tilladelsesliste for værktøjer** før `tools.allow`/`tools.deny`.
-Per-agent-override: `agents.list[].tools.profile`.
+`tools.profile` sætter et **base tool allowlist** før `tools.allow`/`tools.deny`.
+Per-agent tilsidesættelse: `agents.list[].tools.profile`.
 
 Profiler:
 
@@ -88,14 +81,14 @@ Eksempel (global coding-profil, supportagent kun til messaging):
 
 ## Udbyderspecifik værktøjspolitik
 
-Brug `tools.byProvider` til **yderligere at begrænse** værktøjer for specifikke udbydere
-(eller en enkelt `provider/model`) uden at ændre dine globale standarder.
-Per-agent-override: `agents.list[].tools.byProvider`.
+Brug `tools.byProvider` til **yderligere begrænse** værktøjer for specifikke udbydere
+(eller en enkelt `udbyder/model`) uden at ændre dine globale standardindstillinger.
+Per-agent tilsidesættelse: `agents.list[].tools.byProvider`.
 
-Dette anvendes **efter** basisværktøjsprofilen og **før** tillad/afvis-lister,
-så den kan kun indsnævre værktøjssættet.
-Udbydernøgler accepterer enten `provider` (fx `google-antigravity`) eller
-`provider/model` (fx `openai/gpt-5.2`).
+Dette anvendes **efter** basis-værktøjets profil og **før** tillade/benægte lister,
+, så det kun kan indsnævre værktøjet.
+Leverandørnøgler accepterer enten `provider` (f.eks. `google-antigravity`) eller
+`provider/model` (f.eks. `openai/gpt-5.2`).
 
 Eksempel (bevar global coding-profil, men minimale værktøjer for Google Antigravity):
 
@@ -173,9 +166,9 @@ Eksempel (tillad kun filværktøjer + browser):
 ## Plugins + værktøjer
 
 Plugins kan registrere **yderligere værktøjer** (og CLI-kommandoer) ud over kernesættet.
-Se [Plugins](/tools/plugin) for installation + konfiguration og [Skills](/tools/skills) for hvordan
-vejledning i værktøjsbrug injiceres i prompts. Nogle plugins leveres med deres egne Skills
-sammen med værktøjer (fx voice-call-plugin’et).
+Se [Plugins](/tools/plugin) for installation + config, og [Skills](/tools/skills) for hvordan
+værktøj brug vejledning injiceres i prompter. Nogle plugins sender deres egne færdigheder
+sammen med værktøjer (for eksempel plugin'et voice-call).
 
 Valgfrie plugin-værktøjer:
 
@@ -186,8 +179,8 @@ Valgfrie plugin-værktøjer:
 
 ### `apply_patch`
 
-Anvend strukturerede patches på tværs af en eller flere filer. Bruges til multi-hunk-redigeringer.
-Eksperimentelt: aktiver via `tools.exec.applyPatch.enabled` (kun OpenAI-modeller).
+Anvend strukturerede rettelser på tværs af en eller flere filer. Brug til multi-hunk redigeringer.
+Eksperimentel: Aktiver via `tools.exec.applyPatch.enabled` (OpenAI modeller kun).
 
 ### `exec`
 
@@ -204,7 +197,7 @@ Kerneparametre:
 - `security` (`deny | allowlist | full`)
 - `ask` (`off | on-miss | always`)
 - `node` (node-id/navn for `host=node`)
-- Brug for en rigtig TTY? Sæt `pty: true`.
+- Har du brug for en rigtig TTY? Sæt `pty: true`.
 
 Noter:
 
@@ -452,7 +445,7 @@ Noter:
 - Levering/annoncering sker efter fuldførelse og er best-effort; `status: "ok"` bekræfter, at agentkørslen er afsluttet, ikke at annoncen blev leveret.
 - `sessions_spawn` starter en sub-agent-kørsel og poster et announce-svar tilbage til anmoder-chatten.
 - `sessions_spawn` er ikke-blokerende og returnerer `status: "accepted"` med det samme.
-- `sessions_send` kører et reply‑back ping‑pong (svar `REPLY_SKIP` for at stoppe; maks. ture via `session.agentToAgent.maxPingPongTurns`, 0–5).
+- `sessions_send` kører et svar-back ping-pong (svar `REPLY_SKIP` til at stoppe; max drejes via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - Efter ping‑pong kører målagenten et **announce-trin**; svar `ANNOUNCE_SKIP` for at undertrykke annoncen.
 
 ### `agents_list`
@@ -472,8 +465,8 @@ Gateway-bakkede værktøjer (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (hvis auth er aktiveret)
 - `timeoutMs`
 
-Note: når `gatewayUrl` er sat, skal `gatewayToken` inkluderes eksplicit. Værktøjer arver ikke konfiguration
-eller miljø-credentials for overrides, og manglende eksplicitte credentials er en fejl.
+Bemærk: Når `gatewayUrl` er indstillet, skal du inkludere `gatewayToken` udtrykkeligt. Værktøjer arver ikke config
+eller miljø legitimationsoplysninger for tilsidesættelser, og manglende eksplicitte legitimationsoplysninger er en fejl.
 
 Browser-værktøj:
 
@@ -515,5 +508,5 @@ Værktøjer eksponeres i to parallelle kanaler:
 1. **System prompt-tekst**: en menneskeligt læsbar liste + vejledning.
 2. **Værktøjsskema**: de strukturerede funktionsdefinitioner, der sendes til model-API’en.
 
-Det betyder, at agenten ser både “hvilke værktøjer findes” og “hvordan de kaldes”. Hvis et værktøj
-ikke fremgår af system prompten eller skemaet, kan modellen ikke kalde det.
+Det betyder, at agenten ser både ”hvilke redskaber der findes” og ”hvordan man kalder dem”. Hvis et værktøj
+ikke vises i systemprompten eller skemaet, kan modellen ikke kalde det.

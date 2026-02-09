@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification du comportement d’exécution en arrière-plan
   - Débogage de tâches d’exécution de longue durée
 title: "Outil d’exécution en arrière-plan et de processus"
-x-i18n:
-  source_path: gateway/background-process.md
-  source_hash: e11a7d74a75000d6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:35Z
 ---
 
 # Outil d’exécution en arrière-plan + processus
@@ -40,7 +33,7 @@ Comportement :
 
 Lors du lancement de processus enfants de longue durée en dehors des outils exec/process (par exemple, des relances de CLI ou des assistants de Gateway (passerelle)), attachez l’assistant de pontage des processus enfants afin que les signaux de terminaison soient relayés et que les écouteurs soient détachés lors de la sortie ou d’une erreur. Cela évite les processus orphelins sous systemd et maintient un comportement d’arrêt cohérent entre les plateformes.
 
-Surcharges via variables d’environnement :
+Substitutions d'environnement :
 
 - `PI_BASH_YIELD_MS` : rendement par défaut (ms)
 - `PI_BASH_MAX_OUTPUT_CHARS` : limite de sortie en mémoire (caractères)

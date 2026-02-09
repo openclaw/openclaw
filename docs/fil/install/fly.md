@@ -1,13 +1,6 @@
 ---
 title: Fly.io
 description: Deploy OpenClaw on Fly.io
-x-i18n:
-  source_path: install/fly.md
-  source_hash: 148f8e3579f185f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:50Z
 ---
 
 # Fly.io Deployment
@@ -44,11 +37,11 @@ fly volumes create openclaw_data --size 1 --region iad
 
 **Tip:** Pumili ng rehiyong malapit sa iyo. Mga karaniwang opsyon: `lhr` (London), `iad` (Virginia), `sjc` (San Jose).
 
-## 2) I-configure ang fly.toml
+## 2. I-configure ang fly.toml
 
 I-edit ang `fly.toml` para tumugma sa pangalan ng app at mga kinakailangan mo.
 
-**Paalala sa seguridad:** Ang default na config ay naglalantad ng public URL. Para sa mas hardened na deployment na walang public IP, tingnan ang [Private Deployment](#private-deployment-hardened) o gamitin ang `fly.private.toml`.
+**Paalala sa seguridad:** Ang default na config ay naglalantad ng isang pampublikong URL. Para sa mas pinatibay na deployment na walang pampublikong IP, tingnan ang [Private Deployment](#private-deployment-hardened) o gamitin ang `fly.private.toml`.
 
 ```toml
 app = "my-openclaw"  # Your app name
@@ -85,15 +78,15 @@ primary_region = "iad"
 
 **Mga pangunahing setting:**
 
-| Setting                        | Bakit                                                                                |
-| ------------------------------ | ------------------------------------------------------------------------------------ |
-| `--bind lan`                   | Naka-bind sa `0.0.0.0` para maabot ng proxy ng Fly ang gateway                       |
+| Setting                        | Bakit                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `--bind lan`                   | Naka-bind sa `0.0.0.0` para maabot ng proxy ng Fly ang gateway                                          |
 | `--allow-unconfigured`         | Nagsisimula nang walang config file (gagawa ka ng isa pagkatapos)                    |
 | `internal_port = 3000`         | Dapat tumugma sa `--port 3000` (o `OPENCLAW_GATEWAY_PORT`) para sa Fly health checks |
-| `memory = "2048mb"`            | 512MB ay masyadong maliit; 2GB ang inirerekomenda                                    |
-| `OPENCLAW_STATE_DIR = "/data"` | Pinapanatili ang state sa volume                                                     |
+| `memory = "2048mb"`            | 512MB ay masyadong maliit; 2GB ang inirerekomenda                                                       |
+| `OPENCLAW_STATE_DIR = "/data"` | Pinapanatili ang state sa volume                                                                        |
 
-## 3) Mag-set ng secrets
+## 3. Mag-set ng secrets
 
 ```bash
 # Required: Gateway token (for non-loopback binding)
@@ -114,15 +107,15 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 - Ang non-loopback binds (`--bind lan`) ay nangangailangan ng `OPENCLAW_GATEWAY_TOKEN` para sa seguridad.
 - Tratuhin ang mga token na ito na parang mga password.
-- **Mas piliin ang env vars kaysa config file** para sa lahat ng API keys at tokens. Pinananatiling hindi napupunta ang secrets sa `openclaw.json` kung saan maaari silang aksidenteng ma-expose o ma-log.
+- **Mas piliin ang env vars kaysa config file** para sa lahat ng API key at token. Pinananatili nitong wala ang mga secret sa `openclaw.json` kung saan maaari silang aksidenteng malantad o ma-log.
 
-## 4) Mag-deploy
+## 4. Mag-deploy
 
 ```bash
 fly deploy
 ```
 
-Ang unang deploy ay nagbu-build ng Docker image (~2–3 minuto). Mas mabilis ang mga susunod na deploy.
+Ang unang deploy ay bumubuo ng Docker image (~2–3 minuto). Mas mabilis ang mga susunod na deploy.
 
 Pagkatapos ng deployment, i-verify:
 
@@ -138,7 +131,7 @@ Dapat mong makita ang:
 [discord] logged in to discord as xxx
 ```
 
-## 5) Gumawa ng config file
+## 5. Gumawa ng config file
 
 Mag-SSH sa machine para gumawa ng tamang config:
 
@@ -209,7 +202,7 @@ EOF
 - Environment variable: `DISCORD_BOT_TOKEN` (inirerekomenda para sa secrets)
 - Config file: `channels.discord.token`
 
-Kung gagamit ng env var, hindi na kailangang idagdag ang token sa config. Awtomatikong binabasa ng gateway ang `DISCORD_BOT_TOKEN`.
+Kung gumagamit ng env var, hindi na kailangang idagdag ang token sa config. Awtomatikong binabasa ng gateway ang `DISCORD_BOT_TOKEN`.
 
 I-restart para ma-apply:
 
@@ -218,7 +211,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6) I-access ang Gateway
+## 6. I-access ang Gateway
 
 ### Control UI
 
@@ -261,7 +254,7 @@ Hindi maabot ng Fly ang gateway sa naka-configure na port.
 
 ### OOM / Mga Isyu sa Memory
 
-Paulit-ulit na nagre-restart o pinapatay ang container. Mga palatandaan: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, o tahimik na mga restart.
+Patuloy na nagre-restart o napapatay ang container. Mga palatandaan: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, o tahimik na mga restart.
 
 **Ayusin:** Taasan ang memory sa `fly.toml`:
 
@@ -276,7 +269,7 @@ O i-update ang isang umiiral na machine:
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
 
-**Tandaan:** 512MB ay masyadong maliit. Maaaring gumana ang 1GB ngunit puwedeng mag-OOM sa ilalim ng load o kapag verbose ang logging. **Inirerekomenda ang 2GB.**
+**Tandaan:** Masyadong maliit ang 512MB. Maaaring gumana ang 1GB ngunit maaaring mag-OOM kapag may load o may verbose logging. **Inirerekomenda ang 2GB.**
 
 ### Mga Isyu sa Gateway Lock
 
@@ -295,7 +288,7 @@ Ang lock file ay nasa `/data/gateway.*.lock` (wala sa subdirectory).
 
 ### Hindi Binabasa ang Config
 
-Kung gumagamit ng `--allow-unconfigured`, gumagawa ang gateway ng minimal na config. Dapat basahin ang iyong custom config sa `/data/openclaw.json` sa restart.
+Kung gumagamit ng `--allow-unconfigured`, gagawa ang gateway ng isang minimal na config. Ang iyong custom config sa `/data/openclaw.json` ay dapat basahin muli sa restart.
 
 I-verify na umiiral ang config:
 
@@ -305,7 +298,7 @@ fly ssh console --command "cat /data/openclaw.json"
 
 ### Pagsusulat ng Config via SSH
 
-Hindi sinusuportahan ng `fly ssh console -C` command ang shell redirection. Para magsulat ng config file:
+Hindi sinusuportahan ng `fly ssh console -C` na utos ang shell redirection. Para magsulat ng config file:
 
 ```bash
 # Use echo + tee (pipe from local to remote)
@@ -357,11 +350,11 @@ fly machine update <machine-id> --command "node dist/index.js gateway --port 300
 fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js gateway --port 3000 --bind lan" -y
 ```
 
-**Tandaan:** Pagkatapos ng `fly deploy`, maaaring mag-reset ang machine command sa nasa `fly.toml`. Kung may manual na pagbabago ka, i-apply muli ang mga iyon pagkatapos ng deploy.
+**Tandaan:** Pagkatapos ng `fly deploy`, maaaring mag-reset ang machine command sa kung ano ang nasa `fly.toml`. Kung gumawa ka ng mga manual na pagbabago, ilapat muli ang mga ito pagkatapos ng deploy.
 
 ## Private Deployment (Hardened)
 
-Sa default, nag-a-allocate ang Fly ng mga public IP, kaya naa-access ang iyong gateway sa `https://your-app.fly.dev`. Maginhawa ito ngunit ibig sabihin ay nadidiskubre ang iyong deployment ng mga internet scanner (Shodan, Censys, atbp.).
+Sa default, nag-a-allocate ang Fly ng mga pampublikong IP, na ginagawang maa-access ang iyong gateway sa `https://your-app.fly.dev`. Maginhawa ito ngunit nangangahulugan na ang iyong deployment ay natutuklasan ng mga internet scanner (Shodan, Censys, atbp.).
 
 Para sa hardened na deployment na **walang public exposure**, gamitin ang private template.
 
@@ -437,7 +430,7 @@ fly ssh console -a my-openclaw
 
 ### Mga webhook sa private deployment
 
-Kung kailangan mo ng webhook callbacks (Twilio, Telnyx, atbp.) nang walang public exposure:
+Kung kailangan mo ng mga webhook callback (Twilio, Telnyx, atbp.) nang walang pampublikong exposure:
 
 1. **ngrok tunnel** – Patakbuhin ang ngrok sa loob ng container o bilang sidecar
 2. **Tailscale Funnel** – Ilantad ang mga partikular na path via Tailscale
@@ -464,7 +457,7 @@ Halimbawang voice-call config gamit ang ngrok:
 }
 ```
 
-Tumatakbo ang ngrok tunnel sa loob ng container at nagbibigay ng public webhook URL nang hindi inilalantad ang Fly app mismo. I-set ang `webhookSecurity.allowedHosts` sa public tunnel hostname para tanggapin ang forwarded host headers.
+Ang ngrok tunnel ay tumatakbo sa loob ng container at nagbibigay ng pampublikong webhook URL nang hindi inilalantad ang Fly app mismo. 2. Itakda ang `webhookSecurity.allowedHosts` sa pampublikong tunnel hostname para tanggapin ang mga forwarded host header.
 
 ### Mga benepisyo sa seguridad
 

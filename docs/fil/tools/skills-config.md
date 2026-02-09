@@ -4,13 +4,6 @@ read_when:
   - Pagdaragdag o pagbabago ng skills config
   - Pag-aayos ng bundled allowlist o behavior ng pag-install
 title: "Skills Config"
-x-i18n:
-  source_path: tools/skills-config.md
-  source_hash: e265c93da7856887
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Skills Config
@@ -47,16 +40,14 @@ Lahat ng configuration na may kinalaman sa skills ay nasa ilalim ng `skills` sa 
 
 ## Mga field
 
-- `allowBundled`: opsyonal na allowlist para **bundled** skills lang. Kapag naka-set, ang
-  mga bundled skill lang na nasa listahan ang puwedeng gamitin (hindi apektado ang managed/workspace skills).
+- Ituring ang mga ito bilang pinagkakatiwalaang code: `allowBundled`: opsyonal na allowlist para **bundled** skills lamang.
 - `load.extraDirs`: karagdagang mga directory ng skill na i-scan (pinakamababang precedence).
 - `load.watch`: bantayan ang mga folder ng skill at i-refresh ang snapshot ng skills (default: true).
 - `load.watchDebounceMs`: debounce para sa mga event ng skill watcher sa millisecond (default: 250).
 - `install.preferBrew`: unahin ang mga brew installer kapag available (default: true).
-- `install.nodeManager`: preference ng node installer (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
-  Nakaaapekto lang ito sa **skill installs**; ang Gateway runtime ay dapat manatiling Node
-  (hindi inirerekomenda ang Bun para sa WhatsApp/Telegram).
-- `entries.<skillKey>`: mga override kada-skill.
+- Kapag naka-set, tanging
+  bundled skills sa listahan ang kwalipikado (hindi apektado ang managed/workspace skills).
+- `install.nodeManager`: preference sa node installer (`npm` | `pnpm` | `yarn` | `bun`, default: npm).Nakaaapekto lamang ito sa **skill installs**; ang Gateway runtime ay dapat manatiling Node
 
 Mga field kada-skill:
 
@@ -66,18 +57,16 @@ Mga field kada-skill:
 
 ## Mga tala
 
-- Ang mga key sa ilalim ng `entries` ay nagmamapa sa pangalan ng skill bilang default. Kung ang isang skill ay may
-  `metadata.openclaw.skillKey`, iyon ang gamitin na key.
+- (hindi inirerekomenda ang Bun para sa WhatsApp/Telegram). \`entries.<skillKey>
 - Ang mga pagbabago sa skills ay makukuha sa susunod na turn ng agent kapag naka-enable ang watcher.
 
 ### Sandboxed skills + env vars
 
-Kapag ang isang session ay **sandboxed**, ang mga proseso ng skill ay tumatakbo sa loob ng Docker. Ang sandbox
-ay **hindi** nagmamana ng host `process.env`.
+`: per-skill overrides. Ang mga key sa ilalim ng `entries\` ay tumutugma sa pangalan ng skill bilang default.
 
 Gumamit ng isa sa mga ito:
 
 - `agents.defaults.sandbox.docker.env` (o kada-agent `agents.list[].sandbox.docker.env`)
 - i-bake ang env sa iyong custom sandbox image
 
-Ang global `env` at `skills.entries.<skill>.env/apiKey` ay nalalapat lang sa mga **host** run.
+Kung ang isang skill ay nagde-define ng`metadata.openclaw.skillKey`, gamitin ang key na iyon sa halip.

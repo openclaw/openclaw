@@ -3,13 +3,6 @@ summary: "Składnia dyrektyw dla /think + /verbose oraz ich wpływ na rozumowani
 read_when:
   - Dostosowywanie parsowania dyrektyw think lub verbose albo ustawień domyślnych
 title: "Poziomy myślenia"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:52Z
 ---
 
 # Poziomy myślenia (dyrektywy /think)

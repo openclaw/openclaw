@@ -4,19 +4,12 @@ read_when:
   - Du vil redigere exec-godkendelser fra CLI
   - Du skal administrere tilladelseslister på gateway- eller node-værter
 title: "godkendelser"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:59Z
 ---
 
 # `openclaw approvals`
 
-Administrér exec-godkendelser for den **lokale vært**, **gateway-vært** eller en **node-vært**.
-Som standard målretter kommandoer den lokale godkendelsesfil på disken. Brug `--gateway` for at målrette gatewayen, eller `--node` for at målrette en specifik node.
+Administrer exec godkendelser for den **lokale vært**, **gateway vært**, eller en **node vært**.
+Kommandoer som standard målretter den lokale godkendelsesfil på disken. Brug `-- gateway` for at målrette gatewayen, eller `-- node` for at målrette en bestemt knude.
 
 Relateret:
 

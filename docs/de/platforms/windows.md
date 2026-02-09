@@ -1,24 +1,16 @@
 ---
-summary: „Windows‑Unterstützung (WSL2) + Status der Companion‑App“
+summary: "„Windows‑Unterstützung (WSL2) + Status der Companion‑App“"
 read_when:
   - „OpenClaw unter Windows installieren“
   - „Status der Windows‑Companion‑App suchen“
-title: „Windows (WSL2)“
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:01Z
+title: "Windows (WSL2)"
 ---
 
 # Windows (WSL2)
 
 OpenClaw unter Windows wird **über WSL2** empfohlen (Ubuntu empfohlen). Die
 CLI + Gateway laufen innerhalb von Linux, was die Laufzeit konsistent hält und
-die Tooling‑Kompatibilität deutlich verbessert (Node/Bun/pnpm, Linux‑Binärdateien, Skills).
-Natives Windows kann kniffliger sein. WSL2 bietet Ihnen die vollständige Linux‑Erfahrung —
+die Tooling‑Kompatibilität deutlich verbessert (Node/Bun/pnpm, Linux‑Binärdateien, Skills). Natives Windows kann kniffliger sein. WSL2 bietet Ihnen die vollständige Linux‑Erfahrung —
 ein Befehl zur Installation: `wsl --install`.
 
 Native Windows‑Companion‑Apps sind geplant.
@@ -67,7 +59,7 @@ openclaw doctor
 WSL verfügt über ein eigenes virtuelles Netzwerk. Wenn ein anderes Gerät einen Dienst
 erreichen muss, der **innerhalb von WSL** läuft (SSH, ein lokaler TTS‑Server oder das Gateway),
 müssen Sie einen Windows‑Port an die aktuelle WSL‑IP weiterleiten. Die WSL‑IP ändert sich nach
-Neustarts, daher müssen Sie die Weiterleitungsregel ggf. aktualisieren.
+Neustarts, daher müssen Sie die Weiterleitungsregel ggf.
 
 Beispiel (PowerShell **als Administrator**):
 
@@ -109,7 +101,7 @@ Hinweise:
 
 ## Schritt‑für‑Schritt‑WSL2‑Installation
 
-### 1) WSL2 + Ubuntu installieren
+### 1. WSL2 + Ubuntu installieren
 
 Öffnen Sie PowerShell (Admin):
 
@@ -122,7 +114,7 @@ wsl --install -d Ubuntu-24.04
 
 Starten Sie neu, falls Windows dazu auffordert.
 
-### 2) systemd aktivieren (erforderlich für die Gateway‑Installation)
+### 2. systemd aktivieren (erforderlich für die Gateway‑Installation)
 
 In Ihrem WSL‑Terminal:
 
@@ -145,7 +137,7 @@ wsl --shutdown
 systemctl --user status
 ```
 
-### 3) OpenClaw installieren (innerhalb von WSL)
+### 3. OpenClaw installieren (innerhalb von WSL)
 
 Folgen Sie dem Linux‑Ablauf „Erste Schritte“ innerhalb von WSL:
 

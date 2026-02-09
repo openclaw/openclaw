@@ -5,29 +5,22 @@ read_when:
   - Opsætning af en ny maskine
 title: "Introduktionsguide (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:46Z
 ---
 
 # Introduktionsguide (CLI)
 
-Introduktionsguiden er den **anbefalede** måde at sætte OpenClaw op på macOS,
-Linux eller Windows (via WSL2; stærkt anbefalet).
-Den konfigurerer en lokal Gateway eller en fjern Gateway-forbindelse samt kanaler, skills
-og standardindstillinger for workspace i ét guidet forløb.
+Onboarding-guiden er den **anbefalede** måde at oprette OpenClaw på macOS,
+Linux eller Windows (via WSL2; anbefales kraftigt).
+Det konfigurerer en lokal Gateway eller en ekstern Gateway forbindelse, plus kanaler, færdigheder,
+og arbejdsområde standarder i en guidet flow.
 
 ```bash
 openclaw onboard
 ```
 
 <Info>
-Hurtigste første chat: åbn Control UI (ingen kanalopsætning nødvendig). Kør
-`openclaw dashboard` og chat i browseren. Docs: [Dashboard](/web/dashboard).
+Hurtigste første chat: åbne Control UI (ingen kanal setup nødvendig). Kør
+'openclaw dashboard' og chat i browseren. Dokumenter: [Dashboard](/web/dashboard).
 </Info>
 
 For at omkonfigurere senere:
@@ -38,13 +31,13 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` betyder ikke ikke‑interaktiv tilstand. Til scripts skal du bruge `--non-interactive`.
+`--json` betyder ikke ikke-interaktiv tilstand. For scripts, brug `--non-interactive`.
 </Note>
 
 <Tip>
-Anbefalet: opsæt en Brave Search API-nøgle, så agenten kan bruge `web_search`
-(`web_fetch` fungerer uden en nøgle). Nemste vej: `openclaw configure --section web`
-som gemmer `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
+Anbefalet: opsæt en modig søgning API-nøgle, så agenten kan bruge `web_search`
+(`web_fetch` fungerer uden en nøgle). Nemmeste sti: `openclaw configure --section web`
+som gemmer `tools.web.search.apiKey`. Docs: [Webværktøjer] (/tools/web).
 </Tip>
 
 ## Hurtig start vs Avanceret
@@ -52,7 +45,7 @@ som gemmer `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 Guiden starter med **Hurtig start** (standarder) vs **Avanceret** (fuld kontrol).
 
 <Tabs>
-  <Tab title="Hurtig start (standarder)">
+  <Tab title="QuickStart (defaults)">
     - Lokal gateway (loopback)
     - Workspace-standard (eller eksisterende workspace)
     - Gateway-port **18789**
@@ -60,7 +53,7 @@ Guiden starter med **Hurtig start** (standarder) vs **Avanceret** (fuld kontrol)
     - Tailscale-eksponering **Fra**
     - Telegram + WhatsApp DMs er som standard **tilladelsesliste** (du bliver bedt om dit telefonnummer)
   </Tab>
-  <Tab title="Avanceret (fuld kontrol)">
+  <Tab title="Advanced (full control)">
     - Eksponerer hvert trin (tilstand, workspace, gateway, kanaler, daemon, skills).
   </Tab>
 </Tabs>
@@ -69,8 +62,8 @@ Guiden starter med **Hurtig start** (standarder) vs **Avanceret** (fuld kontrol)
 
 **Lokal tilstand (standard)** fører dig gennem disse trin:
 
-1. **Model/Auth** — Anthropic API-nøgle (anbefalet), OAuth, OpenAI eller andre udbydere. Vælg en standardmodel.
-2. **Workspace** — Placering for agentfiler (standard `~/.openclaw/workspace`). Seeder bootstrap-filer.
+1. **Model/Auth** — Antropisk API-nøgle (anbefales), OAuth, OpenAI eller andre udbydere. Vælg en standardmodel.
+2. **Arbejdsrum** — Placering af agentfiler (standard `~/.openclaw/workspace`). Seeds bootstrap filer.
 3. **Gateway** — Port, bind-adresse, autentificeringstilstand, Tailscale-eksponering.
 4. **Kanaler** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles eller iMessage.
 5. **Daemon** — Installerer en LaunchAgent (macOS) eller en systemd-brugerenhed (Linux/WSL2).
@@ -78,17 +71,17 @@ Guiden starter med **Hurtig start** (standarder) vs **Avanceret** (fuld kontrol)
 7. **Skills** — Installerer anbefalede skills og valgfrie afhængigheder.
 
 <Note>
-Genkørsel af guiden sletter **intet**, medmindre du eksplicit vælger **Reset** (eller angiver `--reset`).
-Hvis konfigurationen er ugyldig eller indeholder forældede nøgler, beder guiden dig om først at køre `openclaw doctor`.
+Genkørende guiden gør **ikke** sletning af noget, medmindre du eksplicit vælger **Nulstil** (eller pass `--reset`).
+Hvis config er ugyldig eller indeholder ældre nøgler, beder guiden dig om at køre `openclaw doctor` først.
 </Note>
 
-**Fjern tilstand** konfigurerer kun den lokale klient til at forbinde til en Gateway et andet sted.
-Den installerer eller ændrer **ikke** noget på den fjernværtsmaskine.
+**Fjerntilstand** konfigurerer kun den lokale klient til at forbinde til en Gateway andetsteds.
+Det gør **ikke** installere eller ændre noget på den eksterne vært.
 
 ## Tilføj en anden agent
 
-Brug `openclaw agents add <name>` til at oprette en separat agent med eget workspace,
-sessioner og autentificeringsprofiler. Kørsel uden `--workspace` starter guiden.
+Brug `openclaw agenter add <name>` for at oprette en separat agent med sit eget arbejdsområde,
+sessioner og auth profiler. Kører uden `-- workspace` starter guiden.
 
 Hvad den sætter:
 

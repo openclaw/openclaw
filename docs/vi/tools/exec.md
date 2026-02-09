@@ -4,20 +4,13 @@ read_when:
   - Khi dùng hoặc chỉnh sửa công cụ exec
   - Khi gỡ lỗi hành vi stdin hoặc TTY
 title: "Công cụ Exec"
-x-i18n:
-  source_path: tools/exec.md
-  source_hash: 3b32238dd8dce93d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:37Z
 ---
 
 # Công cụ Exec
 
-Chạy lệnh shell trong workspace. Hỗ trợ thực thi tiền cảnh + nền thông qua `process`.
-Nếu `process` bị cấm, `exec` chạy đồng bộ và bỏ qua `yieldMs`/`background`.
-Các phiên chạy nền được phạm vi theo từng tác tử; `process` chỉ thấy các phiên từ cùng tác tử.
+Chạy lệnh shell trong workspace. Hỗ trợ thực thi tiền cảnh + hậu cảnh thông qua `process`.
+Nếu `process` bị từ chối, `exec` chạy đồng bộ và bỏ qua `yieldMs`/`background`.
+Background sessions are scoped per agent; `process` only sees sessions from the same agent.
 
 ## Tham số
 
@@ -45,8 +38,8 @@ Ghi chú:
   từ `PATH` để tránh các script không tương thích với fish, rồi mới rơi về `SHELL` nếu không có.
 - Thực thi trên host (`gateway`/`node`) từ chối `env.PATH` và ghi đè loader (`LD_*`/`DYLD_*`) để
   ngăn chặn chiếm đoạt binary hoặc chèn mã.
-- Quan trọng: sandboxing **tắt theo mặc định**. Khi sandboxing tắt, `host=sandbox` chạy trực tiếp trên
-  máy chủ gateway (không container) và **không yêu cầu phê duyệt**. Để yêu cầu phê duyệt, hãy chạy với
+- Quan trọng: sandboxing **tắt theo mặc định**. If sandboxing is off, `host=sandbox` runs directly on
+  the gateway host (no container) and **does not require approvals**. Để yêu cầu phê duyệt, hãy chạy với
   `host=gateway` và cấu hình phê duyệt exec (hoặc bật sandboxing).
 
 ## Cấu hình
@@ -75,15 +68,15 @@ Ví dụ:
 ### Xử lý PATH
 
 - `host=gateway`: hợp nhất `PATH` của login-shell của bạn vào môi trường exec. Các ghi đè `env.PATH` bị
-  từ chối đối với thực thi trên host. Bản thân daemon vẫn chạy với `PATH` tối thiểu:
+  từ chối cho thực thi trên host. Bản thân daemon vẫn chạy với một `PATH` tối thiểu:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
-- `host=sandbox`: chạy `sh -lc` (login shell) bên trong container, nên `/etc/profile` có thể đặt lại `PATH`.
-  OpenClaw thêm `env.PATH` vào đầu sau khi nạp profile thông qua một biến môi trường nội bộ (không nội suy shell);
-  `tools.exec.pathPrepend` cũng áp dụng ở đây.
-- `host=node`: chỉ các ghi đè env không bị chặn mà bạn truyền mới được gửi tới node. Các ghi đè `env.PATH` bị
-  từ chối cho thực thi trên host. Các máy chủ node headless chỉ chấp nhận `PATH` khi nó thêm vào đầu PATH của node host
-  (không thay thế). Node macOS loại bỏ hoàn toàn các ghi đè `PATH`.
+- `host=sandbox`: chạy `sh -lc` (login shell) bên trong container, vì vậy `/etc/profile` có thể đặt lại `PATH`.
+  OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
+  `tools.exec.pathPrepend` applies here too.
+- `host=node`: chỉ các ghi đè env không bị chặn mà bạn truyền vào mới được gửi tới node. Các ghi đè `env.PATH` bị
+  từ chối cho thực thi trên host. Các node host headless chỉ chấp nhận `PATH` khi nó được thêm tiền tố vào
+  PATH của node host (không thay thế). Các node macOS loại bỏ hoàn toàn các ghi đè `PATH`.
 
 Ràng buộc node theo từng tác tử (dùng chỉ mục danh sách tác tử trong cấu hình):
 
@@ -96,7 +89,7 @@ UI điều khiển: tab Nodes bao gồm một bảng nhỏ “Exec node binding�
 
 ## Ghi đè phiên (`/exec`)
 
-Dùng `/exec` để đặt các giá trị mặc định **theo từng phiên** cho `host`, `security`, `ask`, và `node`.
+Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `node`.
 Gửi `/exec` không kèm đối số để hiển thị các giá trị hiện tại.
 
 Ví dụ:
@@ -107,27 +100,27 @@ Ví dụ:
 
 ## Mô hình ủy quyền
 
-`/exec` chỉ được tôn trọng đối với **người gửi được ủy quyền** (allowlist kênh/ghép cặp cộng với `commands.useAccessGroups`).
-Nó chỉ cập nhật **trạng thái phiên** và không ghi cấu hình. Để tắt exec một cách cứng, hãy từ chối qua
-chính sách công cụ (`tools.deny: ["exec"]` hoặc theo từng tác tử). Phê duyệt trên host vẫn áp dụng trừ khi bạn đặt rõ ràng
-`security=full` và `ask=off`.
+`/exec` is only honored for **authorized senders** (channel allowlists/pairing plus `commands.useAccessGroups`).
+It updates **session state only** and does not write config. To hard-disable exec, deny it via tool
+policy (`tools.deny: ["exec"]` or per-agent). Host approvals still apply unless you explicitly set
+`security=full` and `ask=off`.
 
 ## Phê duyệt Exec (ứng dụng đồng hành / máy chủ node)
 
-Các tác tử có sandbox có thể yêu cầu phê duyệt theo từng yêu cầu trước khi `exec` chạy trên gateway hoặc máy chủ node.
-Xem [Phê duyệt Exec](/tools/exec-approvals) để biết chính sách, allowlist và luồng UI.
+Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host.
+See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
 
-Khi yêu cầu phê duyệt, công cụ exec trả về ngay với
-`status: "approval-pending"` và một id phê duyệt. Khi được phê duyệt (hoặc bị từ chối / hết thời gian),
-Gateway phát các sự kiện hệ thống (`Exec finished` / `Exec denied`). Nếu lệnh vẫn
-đang chạy sau `tools.exec.approvalRunningNoticeMs`, sẽ phát một thông báo `Exec running` duy nhất.
+When approvals are required, the exec tool returns immediately with
+`status: "approval-pending"` and an approval id. Once approved (or denied / timed out),
+the Gateway emits system events (`Exec finished` / `Exec denied`). If the command is still
+running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` notice is emitted.
 
 ## Allowlist + safe bin
 
-Việc thực thi allowlist khớp **chỉ theo đường dẫn binary đã phân giải** (không khớp theo basename). Khi
-`security=allowlist`, các lệnh shell chỉ được tự động cho phép nếu mọi đoạn pipeline đều
-được allowlist hoặc là safe bin. Việc nối lệnh (`;`, `&&`, `||`) và chuyển hướng bị từ chối trong
-chế độ allowlist.
+Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
+`security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
+allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
+allowlist mode.
 
 ## Ví dụ
 
@@ -166,8 +159,8 @@ Dán (mặc định có bao khung):
 
 ## apply_patch (thử nghiệm)
 
-`apply_patch` là một công cụ con của `exec` cho việc chỉnh sửa có cấu trúc nhiều tệp.
-Bật một cách tường minh:
+`apply_patch` is a subtool of `exec` for structured multi-file edits.
+Enable it explicitly:
 
 ```json5
 {

@@ -5,29 +5,22 @@ read_when:
   - 你想要一個包裝 Claude Code CLI 的本機 API 伺服器
   - 你想要透過訂閱而非 API 金鑰來節省成本
 title: "Claude Max API Proxy"
-x-i18n:
-  source_path: providers/claude-max-api-proxy.md
-  source_hash: 43d0ab1461dd6f1d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:55Z
 ---
 
 # Claude Max API Proxy
 
-**claude-max-api-proxy** 是一個社群工具，能將你的 Claude Max/Pro 訂閱公開為一個 OpenAI 相容的 API 端點。這讓你可以在任何支援 OpenAI API 格式的工具中使用你的訂閱。
+**claude-max-api-proxy** 是一個社群工具，能將你的 Claude Max/Pro 訂閱公開為一個 OpenAI 相容的 API 端點。這讓你可以在任何支援 OpenAI API 格式的工具中使用你的訂閱。 This allows you to use your subscription with any tool that supports the OpenAI API format.
 
 ## 為什麼要使用？
 
-| 方案            | 成本                                           | 最適合                   |
-| --------------- | ---------------------------------------------- | ------------------------ |
-| Anthropic API   | 依權杖計費（Opus 約為 $15/M 輸入、$75/M 輸出） | 正式產品、高用量         |
-| Claude Max 訂閱 | 每月 $200 固定費用                             | 個人使用、開發、無限使用 |
+| 方案            | 成本                                                                                     | 最適合                          |
+| ------------- | -------------------------------------------------------------------------------------- | ---------------------------- |
+| Anthropic API | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume |
+| Claude Max 訂閱 | 每月 $200 固定費用                                                                           | 個人使用、開發、無限使用                 |
 
 如果你已經擁有 Claude Max 訂閱，並希望將它用於 OpenAI 相容的工具，這個 Proxy 可以為你節省可觀的費用。
 
-## 運作方式
+## How It Works
 
 ```
 Your App → claude-max-api-proxy → Claude Code CLI → Anthropic (via subscription)
@@ -97,7 +90,7 @@ curl http://localhost:3456/v1/chat/completions \
 
 ## 可用模型
 
-| 模型 ID           | 對應至          |
+| 模型 ID             | Maps To         |
 | ----------------- | --------------- |
 | `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |
@@ -149,7 +142,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 - 此 Proxy 於本機執行，不會將資料傳送至任何第三方伺服器
 - 完整支援串流回應
 
-## 另請參閱
+## See Also
 
 - [Anthropic provider](/providers/anthropic) - 使用 setup-token 或 API 金鑰的原生 OpenClaw Claude 整合
 - [OpenAI provider](/providers/openai) - 適用於 OpenAI/Codex 訂閱

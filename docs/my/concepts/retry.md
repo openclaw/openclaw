@@ -4,13 +4,6 @@ read_when:
   - Provider ၏ retry အပြုအမူ သို့မဟုတ် ပုံသေတန်ဖိုးများကို ပြင်ဆင်နေချိန်
   - Provider ပို့ဆောင်မှု အမှားများ သို့မဟုတ် rate limit များကို စစ်ဆေးအဖြေရှာနေချိန်
 title: "ပြန်လည်ကြိုးစားမှု မူဝါဒ"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:12Z
 ---
 
 # ပြန်လည်ကြိုးစားမှု မူဝါဒ

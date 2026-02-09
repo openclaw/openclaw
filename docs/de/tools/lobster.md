@@ -1,17 +1,10 @@
 ---
 title: Lobster
-summary: „Typisierte Workflow-Laufzeit für OpenClaw mit fortsetzbaren Genehmigungssperren.“
+summary: "„Typisierte Workflow-Laufzeit für OpenClaw mit fortsetzbaren Genehmigungssperren.“"
 description: Typed workflow runtime for OpenClaw — composable pipelines with approval gates.
 read_when:
   - Sie möchten deterministische, mehrstufige Workflows mit expliziten Genehmigungen
   - Sie müssen einen Workflow fortsetzen, ohne frühere Schritte erneut auszuführen
-x-i18n:
-  source_path: tools/lobster.md
-  source_hash: e787b65558569e8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:48Z
 ---
 
 # Lobster

@@ -5,13 +5,6 @@ read_when:
   - Potrzebujesz nieinteraktywnych przykładów dla konkretnych dostawców
 title: "Automatyzacja CLI"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:38Z
 ---
 
 # Automatyzacja CLI
@@ -41,7 +34,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
 ## Przykłady specyficzne dla dostawców
 
 <AccordionGroup>
-  <Accordion title="Przykład Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -51,7 +44,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Przykład Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -61,7 +54,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Przykład Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -71,7 +64,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Przykład Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -83,7 +76,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Przykład Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -93,7 +86,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Przykład Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -103,7 +96,7 @@ Dodaj `--json`, aby uzyskać podsumowanie czytelne dla maszyn.
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="Przykład OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

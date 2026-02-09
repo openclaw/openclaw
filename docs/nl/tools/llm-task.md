@@ -4,13 +4,6 @@ read_when:
   - Je wilt een LLM-stap met alleen JSON binnen workflows
   - Je hebt schema-gevalideerde LLM-uitvoer nodig voor automatisering
 title: "LLM-taak"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:46Z
 ---
 
 # LLM-taak

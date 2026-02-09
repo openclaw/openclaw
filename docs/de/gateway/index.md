@@ -1,15 +1,8 @@
 ---
-summary: „Runbook für den Gateway‑Dienst, Lebenszyklus und Betrieb“
+summary: "„Runbook für den Gateway‑Dienst, Lebenszyklus und Betrieb“"
 read_when:
   - Beim Ausführen oder Debuggen des Gateway‑Prozesses
-title: „Gateway‑Runbook“
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: e59d842824f892f6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:44Z
+title: "„Gateway‑Runbook“"
 ---
 
 # Gateway‑Dienst‑Runbook
@@ -22,7 +15,7 @@ Zuletzt aktualisiert: 2025-12-09
 - Ersetzt den Legacy‑Befehl `gateway`. CLI‑Einstiegspunkt: `openclaw gateway`.
 - Läuft bis zum Stoppen; beendet sich bei fatalen Fehlern mit einem Nicht‑Null‑Exitcode, sodass der Supervisor ihn neu startet.
 
-## Ausführen (lokal)
+## So läuft (lokal)
 
 ```bash
 openclaw gateway --port 18789
@@ -62,6 +55,7 @@ pnpm gateway:watch
   ```
 
 - Clients verbinden sich anschließend über den Tunnel mit `ws://127.0.0.1:18789`.
+
 - Wenn ein Token konfiguriert ist, müssen Clients es auch über den Tunnel in `connect.params.auth.token` mitsenden.
 
 ## Mehrere Gateways (gleicher Host)

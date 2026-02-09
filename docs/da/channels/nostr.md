@@ -4,20 +4,13 @@ read_when:
   - Du vil have OpenClaw til at modtage DM'er via Nostr
   - Du er ved at opsætte decentraliseret messaging
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:59Z
 ---
 
 # Nostr
 
 **Status:** Valgfrit plugin (deaktiveret som standard).
 
-Nostr er en decentraliseret protokol til sociale netværk. Denne kanal gør det muligt for OpenClaw at modtage og svare på krypterede direkte beskeder (DM'er) via NIP-04.
+Nostr er en decentraliseret protokol til socialt netværk. Denne kanal gør det muligt for OpenClaw at modtage og reagere på krypterede direkte beskeder (DM'er) via NIP-04.
 
 ## Installér (efter behov)
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Konfigurationsreference
 
-| Nøgle        | Type     | Standard                                    | Beskrivelse                             |
-| ------------ | -------- | ------------------------------------------- | --------------------------------------- |
-| `privateKey` | string   | krævet                                      | Privat nøgle i `nsec`- eller hex-format |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay-URL'er (WebSocket)                |
-| `dmPolicy`   | string   | `pairing`                                   | DM-adgangspolitik                       |
-| `allowFrom`  | string[] | `[]`                                        | Tilladte afsenderes pubkeys             |
-| `enabled`    | boolean  | `true`                                      | Aktivér/deaktivér kanal                 |
-| `name`       | string   | -                                           | Vist navn                               |
-| `profile`    | object   | -                                           | NIP-01 profilmetadata                   |
+| Nøgle        | Type                                                         | Standard                                    | Beskrivelse                                 |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------- |
+| `privateKey` | string                                                       | krævet                                      | Privat nøgle i `nsec`- eller hex-format     |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay-URL'er (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM-adgangspolitik                           |
+| `allowFrom`  | string[] | `[]`                                        | Tilladte afsenderes pubkeys                 |
+| `enabled`    | boolean                                                      | `true`                                      | Aktivér/deaktivér kanal                     |
+| `name`       | string                                                       | -                                           | Vist navn                                   |
+| `profile`    | object                                                       | -                                           | NIP-01 profilmetadata                       |
 
 ## Profilmetadata
 
-Profildata publiceres som en NIP-01 `kind:0`-event. Du kan administrere den fra Control UI (Kanaler -> Nostr -> Profil) eller angive den direkte i konfigurationen.
+Profildata offentliggøres som en NIP-01 `kind:0` begivenhed. Du kan håndtere det fra Control UI (Kanaler - > Nostr - > Profil) eller indstille det direkte i konfiguration.
 
 Eksempel:
 
@@ -173,12 +166,12 @@ Tips:
 
 ## Protokolunderstøttelse
 
-| NIP    | Status       | Beskrivelse                                 |
-| ------ | ------------ | ------------------------------------------- |
-| NIP-01 | Understøttet | Grundlæggende event-format + profilmetadata |
-| NIP-04 | Understøttet | Krypterede DM'er (`kind:4`)                 |
-| NIP-17 | Planlagt     | Gaveindpakkede DM'er                        |
-| NIP-44 | Planlagt     | Versioneret kryptering                      |
+| NIP    | Status       | Beskrivelse                                    |
+| ------ | ------------ | ---------------------------------------------- |
+| NIP-01 | Understøttet | Grundlæggende event-format + profilmetadata    |
+| NIP-04 | Understøttet | Krypterede DM'er (`kind:4`) |
+| NIP-17 | Planlagt     | Gaveindpakkede DM'er                           |
+| NIP-44 | Planlagt     | Versioneret kryptering                         |
 
 ## Test
 

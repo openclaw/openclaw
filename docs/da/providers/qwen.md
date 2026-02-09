@@ -4,13 +4,6 @@ read_when:
   - Du vil bruge Qwen med OpenClaw
   - Du vil have gratis OAuth-adgang til Qwen Coder
 title: "Qwen"
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:32Z
 ---
 
 # Qwen
@@ -48,9 +41,9 @@ openclaw models set qwen-portal/coder-model
 
 ## Genbrug Qwen Code CLI-login
 
-Hvis du allerede er logget ind med Qwen Code CLI, vil OpenClaw synkronisere legitimationsoplysninger
-fra `~/.qwen/oauth_creds.json`, når den indlæser auth-lageret. Du skal stadig have en
-`models.providers.qwen-portal`-post (brug login-kommandoen ovenfor til at oprette en).
+Hvis du allerede er logget ind med Qwen-koden CLI, vil OpenClaw synkronisere legitimationsoplysninger
+fra `~/.qwen/oauth_creds.json` når den indlæser auth store. Du har stadig brug for en
+`models.providers.qwen-portal` post (brug login-kommandoen ovenfor for at oprette en).
 
 ## Noter
 

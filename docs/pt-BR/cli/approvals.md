@@ -4,13 +4,6 @@ read_when:
   - Você quer editar aprovações de execução pela CLI
   - Você precisa gerenciar listas de permissões em hosts do gateway ou de nó
 title: "aprovações"
-x-i18n:
-  source_path: cli/approvals.md
-  source_hash: 4329cdaaec2c5f5d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:07Z
 ---
 
 # `openclaw approvals`

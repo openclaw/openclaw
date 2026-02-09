@@ -4,19 +4,12 @@ read_when:
   - Du vill använda OpenCode Zen för modellåtkomst
   - Du vill ha en kurerad lista med kodningsvänliga modeller
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:12Z
 ---
 
 # OpenCode Zen
 
-OpenCode Zen är en **kurerad lista med modeller** som rekommenderas av OpenCode-teamet för kodningsagenter.
-Det är en valfri, hostad väg för modellåtkomst som använder en API-nyckel och leverantören `opencode`.
+OpenCode Zen är en **kurerad lista över modeller** som rekommenderas av OpenCode-teamet för kodningsagenter.
+Det är en frivillig, hostad modellens åtkomstväg som använder en API-nyckel och leverantören `opencode`.
 Zen är för närvarande i beta.
 
 ## CLI-konfigurering

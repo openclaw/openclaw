@@ -4,13 +4,6 @@ read_when:
   - Ao adicionar ou modificar comandos ou opções da CLI
   - Ao documentar novas superfícies de comando
 title: "Referência da CLI"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:13Z
 ---
 
 # Referência da CLI
@@ -791,6 +784,7 @@ Opções:
 
 Sempre inclui a visão geral de autenticação e o status de expiração OAuth para perfis no repositório de autenticação.
 `--probe` executa requisições ao vivo (pode consumir tokens e acionar limites de taxa).
+`--probe` executa solicitações ao vivo (pode consumir tokens e acionar limites de taxa de ativação).
 
 ### `models set <model>`
 
@@ -925,7 +919,7 @@ Subcomandos:
 - `node stop`
 - `node restart`
 
-## Nós
+## Nodes
 
 `nodes` se comunica com o Gateway e direciona nós pareados. Veja [/nodes](/nodes).
 

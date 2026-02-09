@@ -5,13 +5,6 @@ read_when:
   - Вы хотите запускать Gateway (шлюз) в режиме наблюдения во время итераций
   - Вам нужен воспроизводимый рабочий процесс отладки
 title: "Отладка"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:41Z
 ---
 
 # Отладка
@@ -44,7 +37,7 @@ x-i18n:
 pnpm gateway:watch --force
 ```
 
-Это соответствует:
+Это сопоставляется так:
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -129,7 +122,7 @@ pnpm gateway:watch --force --raw-stream
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Эквивалентные переменные окружения:
+Эквивалентные символы:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

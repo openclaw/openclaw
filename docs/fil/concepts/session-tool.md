@@ -3,13 +3,6 @@ summary: "Mga tool ng agent session para sa paglista ng mga session, pagkuha ng 
 read_when:
   - Pagdaragdag o pagbabago ng mga session tool
 title: "Mga Tool ng Session"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:36Z
 ---
 
 # Mga Tool ng Session
@@ -31,7 +24,7 @@ Layunin: maliit at mahirap abusuhin na set ng mga tool para makapaglista ang mga
 - Ang mga hook ay gumagamit ng `hook:<uuid>` maliban kung hayagang itinakda.
 - Ang mga node session ay gumagamit ng `node-<nodeId>` maliban kung hayagang itinakda.
 
-Ang `global` at `unknown` ay mga reserved na value at hindi kailanman inililista. Kung `session.scope = "global"`, ina-alias namin ito sa `main` para sa lahat ng tool upang hindi kailanman makita ng mga tumatawag ang `global`.
+`global` and `unknown` are reserved values and are never listed. If `session.scope = "global"`, we alias it to `main` for all tools so callers never see `global`.
 
 ## sessions_list
 
@@ -40,7 +33,7 @@ Ilista ang mga session bilang array ng mga row.
 Mga Parameter:
 
 - `kinds?: string[]` filter: alinman sa `"main" | "group" | "cron" | "hook" | "node" | "other"`
-- `limit?: number` max na mga row (default: server default, clamp hal. 200)
+- `limit?: number` max rows (default: server default, clamp e.g. 200)
 - `activeMinutes?: number` mga session lang na na-update sa loob ng N minuto
 - `messageLimit?: number` 0 = walang mga mensahe (default 0); >0 = isama ang huling N na mga mensahe
 
@@ -96,7 +89,7 @@ Gawi:
 
 - `timeoutSeconds = 0`: i-enqueue at ibalik ang `{ runId, status: "accepted" }`.
 - `timeoutSeconds > 0`: maghintay ng hanggang N segundo para sa pagkumpleto, pagkatapos ay ibalik ang `{ runId, status: "ok", reply }`.
-- Kung mag-time out ang paghihintay: `{ runId, status: "timeout", error }`. Magpapatuloy ang run; tawagin ang `sessions_history` sa ibang pagkakataon.
+- If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
 - Kung mabigo ang run: `{ runId, status: "error", error }`.
 - Inaanunsyo ang delivery runs pagkatapos makumpleto ang primary run at best-effort ito; hindi ginagarantiya ng `status: "ok"` na naihatid ang anunsyo.
 - Naghihintay sa pamamagitan ng gateway `agent.wait` (server-side) upang hindi mawala ang paghihintay sa mga reconnect.
@@ -162,7 +155,7 @@ Mga Parameter:
 
 Allowlist:
 
-- `agents.list[].subagents.allowAgents`: listahan ng mga agent id na pinapayagan sa pamamagitan ng `agentId` (`["*"]` para payagan ang anuman). Default: ang requester agent lang.
+- `agents.list[].subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
 Discovery:
 

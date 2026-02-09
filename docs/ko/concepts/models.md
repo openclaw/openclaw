@@ -5,13 +5,6 @@ read_when:
   - 모델 폴백 동작 또는 선택 UX 를 변경할 때
   - 모델 스캔 프로브 (도구/이미지)를 업데이트할 때
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:52Z
 ---
 
 # Models CLI
@@ -153,11 +146,9 @@ openclaw models image-fallbacks clear
 
 ### `models status`
 
-해결된 primary 모델, 폴백, 이미지 모델, 그리고 구성된 프로바이더의 인증 개요를 표시합니다.
-또한 인증 스토어에서 발견된 프로필의 OAuth 만료 상태를 노출합니다
+해결된 primary 모델, 폴백, 이미지 모델, 그리고 구성된 프로바이더의 인증 개요를 표시합니다. 또한 인증 스토어에서 발견된 프로필의 OAuth 만료 상태를 노출합니다
 (기본적으로 24 시간 이내 경고). `--plain` 는 해결된 primary 모델만 출력합니다.
-OAuth 상태는 항상 표시되며 (`--json` 출력에도 포함됩니다).
-구성된 프로바이더에 자격 증명이 없으면, `models status` 가 **Missing auth** 섹션을 출력합니다.
+OAuth 상태는 항상 표시되며 (`--json` 출력에도 포함됩니다). 구성된 프로바이더에 자격 증명이 없으면, `models status` 가 **Missing auth** 섹션을 출력합니다.
 JSON 에는 `auth.oauth` (경고 윈도우 + 프로필)와 `auth.providers`
 (프로바이더별 유효 인증)가 포함됩니다.
 자동화를 위해 `--check` 를 사용하십시오 (누락/만료 시 종료 코드 `1`, 만료 예정 시 `2`).

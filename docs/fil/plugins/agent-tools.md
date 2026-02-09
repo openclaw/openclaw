@@ -4,20 +4,13 @@ read_when:
   - Gusto mong magdagdag ng bagong agent tool sa isang plugin
   - Kailangan mong gawing opt-in ang isang tool gamit ang mga allowlist
 title: "Mga Plugin Agent Tool"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:41Z
 ---
 
 # Mga plugin agent tool
 
-Ang mga OpenClaw plugin ay maaaring magrehistro ng **agent tool** (mga JSON‑schema function) na inilalantad sa LLM habang tumatakbo ang agent. Ang mga tool ay maaaring **required** (palaging available) o **optional** (opt‑in).
+Maaaring magrehistro ang mga OpenClaw plugin ng **agent tools** (JSON‑schema functions) na inilalantad sa LLM sa panahon ng mga agent run. Ang mga tool ay maaaring **required** (laging available) o **optional** (opt‑in).
 
-Ang mga agent tool ay kino-configure sa ilalim ng `tools` sa pangunahing config, o per‑agent sa ilalim ng `agents.list[].tools`. Kinokontrol ng patakaran ng allowlist/denylist kung aling mga tool ang maaaring tawagin ng agent.
+Ang mga agent tool ay kino-configure sa ilalim ng `tools` sa pangunahing config, o kada‑agent sa `agents.list[].tools`. Kinokontrol ng allowlist/denylist policy kung aling mga tool ang maaaring tawagin ng agent.
 
 ## Pangunahing tool
 
@@ -40,7 +33,7 @@ export default function (api) {
 
 ## Opsyonal na tool (opt‑in)
 
-Ang mga opsyonal na tool ay **hindi kailanman** awtomatikong naka-enable. Kailangang idagdag ng mga user ang mga ito sa allowlist ng agent.
+Optional tools are **never** auto‑enabled. Dapat idagdag ng mga user ang mga ito sa agent allowlist.
 
 ```ts
 export default function (api) {

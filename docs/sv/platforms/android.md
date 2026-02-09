@@ -5,13 +5,6 @@ read_when:
   - Felsökning av Android-gatewayupptäckt eller autentisering
   - Verifiering av chathistorikparitet mellan klienter
 title: "Android-app"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:57Z
 ---
 
 # Android App (Node)
@@ -26,7 +19,7 @@ x-i18n:
 
 ## Systemkontroll
 
-Systemkontroll (launchd/systemd) finns på Gateway-värden. Se [Gateway](/gateway).
+Systemkontroll (launchd/systemd) bor på Gateway-värden. Se [Gateway](/gateway).
 
 ## Anslutningsrunbook
 
@@ -43,7 +36,7 @@ Android ansluter direkt till Gateway WebSocket (standard `ws://<host>:18789`) oc
   - Manuell gateway-värd/port (reserv)
 - Du kan köra CLI (`openclaw`) på gateway-maskinen (eller via SSH).
 
-### 1) Starta Gateway
+### 1. Starta Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ För installationer som endast använder tailnet (rekommenderat för Wien ⇄ Lo
 - Sätt `gateway.bind: "tailnet"` i `~/.openclaw/openclaw.json` på gateway-värden.
 - Starta om Gateway / macOS-menyradsappen.
 
-### 2) Verifiera upptäckt (valfritt)
+### 2. Verifiera upptäckt (valfritt)
 
 Från gateway-maskinen:
 
@@ -70,14 +63,14 @@ Fler felsökningsanteckningar: [Bonjour](/gateway/bonjour).
 
 #### Tailnet-upptäckt (Wien ⇄ London) via unicast DNS-SD
 
-Android NSD/mDNS-upptäckt korsar inte nätverk. Om din Android-nod och gatewayn är på olika nätverk men anslutna via Tailscale, använd Wide-Area Bonjour / unicast DNS-SD i stället:
+Android NSD/mDNS upptäckten kommer inte korsa nätverk. Om din Android-nod och gateway är på olika nätverk men ansluten via Tailscale, använd Wide-Area Bonjour / unicast DNS-SD istället:
 
 1. Sätt upp en DNS-SD-zon (exempel `openclaw.internal.`) på gateway-värden och publicera `_openclaw-gw._tcp`-poster.
 2. Konfigurera Tailscale split DNS för din valda domän som pekar på den DNS-servern.
 
 Detaljer och exempel på CoreDNS-konfig: [Bonjour](/gateway/bonjour).
 
-### 3) Anslut från Android
+### 3. Anslut från Android
 
 I Android-appen:
 
@@ -91,7 +84,7 @@ Efter den första lyckade parkopplingen återansluter Android automatiskt vid st
 - Manuell slutpunkt (om aktiverad), annars
 - Den senast upptäckta gatewayn (best effort).
 
-### 4) Godkänn parkoppling (CLI)
+### 4. Godkänn parkoppling (CLI)
 
 På gateway-maskinen:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Parkopplingsdetaljer: [Gateway-parkoppling](/gateway/pairing).
 
-### 5) Verifiera att noden är ansluten
+### 5. Verifiera att noden är ansluten
 
 - Via nodstatus:
 
@@ -116,7 +109,7 @@ Parkopplingsdetaljer: [Gateway-parkoppling](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chatt + historik
+### 6. Chatt + historik
 
 Android-nodens Chatt-vy använder gatewayns **primära sessionsnyckel** (`main`), så historik och svar delas med WebChat och andra klienter:
 
@@ -124,7 +117,7 @@ Android-nodens Chatt-vy använder gatewayns **primära sessionsnyckel** (`main`)
 - Skicka: `chat.send`
 - Push-uppdateringar (best effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + kamera
+### 7. Canvas + kamera
 
 #### Gateway Canvas Host (rekommenderas för webbinnehåll)
 
@@ -140,14 +133,14 @@ Obs: noder använder den fristående canvas-värden på `canvasHost.port` (stand
 openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/__openclaw__/canvas/"}'
 ```
 
-Tailnet (valfritt): om båda enheterna är på Tailscale, använd ett MagicDNS-namn eller tailnet-IP i stället för `.local`, t.ex. `http://<gateway-magicdns>:18793/__openclaw__/canvas/`.
+Tailnet (valfritt): om båda enheterna är på Tailscale, använd ett MagicDNS-namn eller tailnet IP istället för `.local`, t.ex. `http://<gateway-magicdns>:18793/__openclaw__/canvas/`.
 
-Den här servern injicerar en live-reload-klient i HTML och laddar om vid filändringar.
-A2UI-värden finns på `http://<gateway-host>:18793/__openclaw__/a2ui/`.
+Denna server injicerar en live-reload-klient till HTML och laddar om filändringar.
+A2UI-värden bor på `http://<gateway-host>:18793/__openclaw__/a2ui/`.
 
 Canvas-kommandon (endast foreground):
 
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (använd `{"url":""}` eller `{"url":"/"}` för att återgå till standardstommen). `canvas.snapshot` returnerar `{ format, base64 }` (standard `format="jpeg"`).
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (använd `{"url":""}` eller `{"url":"/"}` för att återgå till standardställningen). `canvas.snapshot` returnerar `{ format, base64 }` (standard `format="jpeg"`).
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` äldre alias)
 
 Kamerakommandon (endast foreground; behörighetsstyrda):

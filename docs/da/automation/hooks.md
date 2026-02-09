@@ -4,25 +4,18 @@ read_when:
   - Du ønsker hændelsesdrevet automatisering for /new, /reset, /stop og agentens livscyklus-hændelser
   - Du vil bygge, installere eller fejlfinde hooks
 title: "Hooks"
-x-i18n:
-  source_path: automation/hooks.md
-  source_hash: 9fbcf9e04fd9e62c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:17Z
 ---
 
 # Hooks
 
-Hooks giver et udvideligt, hændelsesdrevet system til at automatisere handlinger som reaktion på agentkommandoer og -hændelser. Hooks opdages automatisk fra mapper og kan administreres via CLI-kommandoer, på samme måde som Skills fungerer i OpenClaw.
+Hooks giver et omfattende eventdrevet system til automatisering af handlinger som reaktion på agent kommandoer og begivenheder. Kroge bliver automatisk opdaget fra mapper og kan styres via CLI kommandoer, svarende til hvordan færdigheder fungerer i OpenClaw.
 
 ## Overblik
 
-Hooks er små scripts, der kører, når noget sker. Der er to typer:
+Kroge er små scripts, der kører, når der sker noget. Der er to slags:
 
 - **Hooks** (denne side): kører inde i Gateway, når agenthændelser udløses, såsom `/new`, `/reset`, `/stop` eller livscyklus-hændelser.
-- **Webhooks**: eksterne HTTP-webhooks, der lader andre systemer udløse arbejde i OpenClaw. Se [Webhook Hooks](/automation/webhook) eller brug `openclaw webhooks` til Gmail-hjælpekommandoer.
+- **Webhooks**: eksterne HTTP webhooks, der lader andre systemer udløse arbejde i OpenClaw. Se [Webhook Hooks](/automation/webhook) eller brug 'openclaw webhooks' for Gmail helper kommandoer.
 
 Hooks kan også pakkes inde i plugins; se [Plugins](/tools/plugin#plugin-hooks).
 
@@ -33,7 +26,7 @@ Almindelige anvendelser:
 - Udløs opfølgende automatisering, når en session starter eller slutter
 - Skriv filer ind i agentens workspace eller kald eksterne API’er, når hændelser udløses
 
-Hvis du kan skrive en lille TypeScript-funktion, kan du skrive et hook. Hooks opdages automatisk, og du aktiverer eller deaktiverer dem via CLI’en.
+Hvis du kan skrive en lille TypeScript-funktion, kan du skrive en krog. Kroge bliver opdaget automatisk, og du aktiverer eller deaktiverer dem via CLI.
 
 ## Overblik
 
@@ -81,7 +74,7 @@ openclaw hooks info session-memory
 
 ### Introduktion
 
-Under introduktionen (`openclaw onboard`) bliver du bedt om at aktivere anbefalede hooks. Opsætningsguiden opdager automatisk egnede hooks og præsenterer dem til valg.
+Under onboarding (`openclaw onboard`), vil du blive bedt om at aktivere anbefalede kroge. Guiden opdager automatisk kvalificerede kroge og præsenterer dem til udvælgelse.
 
 ## Hook-opdagelse
 
@@ -103,7 +96,7 @@ my-hook/
 
 ## Hook-pakker (npm/arkiver)
 
-Hook-pakker er standard npm-pakker, der eksporterer et eller flere hooks via `openclaw.hooks` i
+Krogpakker er standard npm pakker, der eksporterer en eller flere kroge via `openclaw.hooks` i
 `package.json`. Installér dem med:
 
 ```bash
@@ -122,8 +115,8 @@ Eksempel på `package.json`:
 }
 ```
 
-Hver indgang peger på en hook-mappe, der indeholder `HOOK.md` og `handler.ts` (eller `index.ts`).
-Hook-pakker kan levere afhængigheder; de installeres under `~/.openclaw/hooks/<id>`.
+Hver post peger på en krog mappe indeholdende `HOOK.md` og `handler.ts` (eller `index.ts`).
+Krogpakker kan sende afhængigheder; de vil blive installeret under `~/.openclaw/hooks/<id>`.
 
 ## Hook-struktur
 
@@ -163,15 +156,15 @@ No configuration needed.
 
 Objektet `metadata.openclaw` understøtter:
 
-- **`emoji`**: Visnings-emoji til CLI (f.eks. `"💾"`)
-- **`events`**: Array af hændelser, der lyttes efter (f.eks. `["command:new", "command:reset"]`)
+- **`emoji`**: Display emoji for CLI (f.eks. `"💾"`)
+- **`begivenheder`**: Array af begivenheder der skal lyttes til (fx, `["kommando:ny", "kommando:reset"]`)
 - **`export`**: Navngivet eksport, der bruges (standard er `"default"`)
 - **`homepage`**: Dokumentations-URL
 - **`requires`**: Valgfrie krav
-  - **`bins`**: Påkrævede binære filer på PATH (f.eks. `["git", "node"]`)
+  - **`binder`**: Krævede binære filer på PATH (f.eks. `["git", "node"]`)
   - **`anyBins`**: Mindst én af disse binære filer skal være til stede
   - **`env`**: Påkrævede miljøvariabler
-  - **`config`**: Påkrævede konfigurationsstier (f.eks. `["workspace.dir"]`)
+  - **`config`**: Krævede konfigurationsstier (f.eks. `["workspace.dir"]`)
   - **`os`**: Påkrævede platforme (f.eks. `["darwin", "linux"]`)
 - **`always`**: Omgå egnethedstjek (boolean)
 - **`install`**: Installationsmetoder (for medfølgende hooks: `[{"id":"bundled","kind":"bundled"}]`)
@@ -251,7 +244,7 @@ Udløses, når gatewayen starter:
 
 Disse hooks er ikke hændelsesstream-lyttere; de lader plugins synkront justere tool-resultater, før OpenClaw persisterer dem.
 
-- **`tool_result_persist`**: Transformér tool-resultater, før de skrives til sessionsudskriften. Skal være synkron; returnér den opdaterede tool-result-payload eller `undefined` for at beholde den uændret. Se [Agent Loop](/concepts/agent-loop).
+- **`tool_result_persist`**: transformere værktøj resultater, før de er skrevet til sessions-transkriptionen. Skal være synkron; returnere den opdaterede værktøj resultat nyttelast eller `undefined` for at holde det som-is. Se [Agent Loop](/concepts/agent-loop).
 
 ### Fremtidige hændelser
 
@@ -265,12 +258,12 @@ Planlagte hændelsestyper:
 
 ## Oprettelse af brugerdefinerede hooks
 
-### 1. Vælg placering
+### 1. Vælg Placering
 
 - **Workspace-hooks** (`<workspace>/hooks/`): Pr. agent, højeste prioritet
 - **Managed hooks** (`~/.openclaw/hooks/`): Delt på tværs af workspaces
 
-### 2. Opret mappestruktur
+### 2. Opret Mappestruktur
 
 ```bash
 mkdir -p ~/.openclaw/hooks/my-hook
@@ -308,7 +301,7 @@ const handler: HookHandler = async (event) => {
 export default handler;
 ```
 
-### 5. Aktivér og test
+### 5. Aktiver og test
 
 ```bash
 # Verify hook is discovered
@@ -401,7 +394,7 @@ Det gamle konfigurationsformat fungerer stadig af hensyn til bagudkompatibilitet
 }
 ```
 
-**Migrering**: Brug det nye opdagelsesbaserede system til nye hooks. Legacy-handlere indlæses efter mappebaserede hooks.
+**Migration**: Brug det nye opdagelsesbaserede system til nye kroge. Legacy handlers er indlæst efter mappebaserede kroge.
 
 ## CLI-kommandoer
 
@@ -572,8 +565,8 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-Kører `BOOT.md`, når gatewayen starter (efter kanaler er startet).
-Interne hooks skal være aktiveret, for at dette kan køre.
+Kører `BOOT.md`, når gateway’en starter (efter kanaler starter).
+Interne kroge skal være aktiveret for at dette kan køre.
 
 **Hændelser**: `gateway:startup`
 
@@ -595,7 +588,7 @@ openclaw hooks enable boot-md
 
 ### Hold handlere hurtige
 
-Hooks kører under kommandobehandling. Hold dem letvægtige:
+Hooks kører under kommando behandling. Behold dem letvægt:
 
 ```typescript
 // ✓ Good - async work, returns immediately

@@ -5,24 +5,16 @@ read_when:
   - Pagsisiyasat ng mga pagkabigo sa pairing o bridge auth
   - Pag-audit sa node surface na inilalantad ng gateway
 title: "Bridge Protocol"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:30Z
 ---
 
 # Bridge protocol (legacy node transport)
 
-Ang Bridge protocol ay isang **legacy** na node transport (TCP JSONL). Ang mga bagong node client
-ay dapat gumamit ng unified Gateway WebSocket protocol sa halip.
+Ang Bridge protocol ay isang **legacy** na node transport (TCP JSONL). Ang mga bagong node client ay dapat gumamit ng pinag‑isang Gateway WebSocket protocol sa halip.
 
 Kung gumagawa ka ng operator o node client, gamitin ang
 [Gateway protocol](/gateway/protocol).
 
-**Tala:** Ang mga kasalukuyang OpenClaw build ay hindi na nagsasama ng TCP bridge listener; ang dokumentong ito ay pinananatili para sa historical reference.
+**Tandaan:** Ang kasalukuyang OpenClaw build ay hindi na kasama ang TCP bridge listener; ang dokumentong ito ay pinananatili para sa historikal na sanggunian.
 Ang mga legacy na `bridge.*` config key ay hindi na bahagi ng config schema.
 
 ## Bakit mayroon tayo ng dalawa
@@ -70,8 +62,8 @@ Ang legacy allowlist enforcement ay nanirahan sa `src/gateway/server-bridge.ts` 
 
 ## Exec lifecycle events
 
-Maaaring maglabas ang mga node ng `exec.finished` o `exec.denied` na mga event upang ilantad ang system.run activity.
-Ang mga ito ay mina-map sa mga system event sa gateway. (Ang mga legacy node ay maaari pa ring maglabas ng `exec.started`.)
+Maaaring maglabas ang mga node ng mga event na `exec.finished` o `exec.denied` upang ipakita ang system.run activity.
+Ang mga ito ay kino‑map sa mga system event sa gateway. (Maaaring maglabas pa rin ang mga legacy node ng `exec.started`.)
 
 Mga field ng payload (lahat ay opsyonal maliban kung nakasaad):
 

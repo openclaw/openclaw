@@ -3,13 +3,6 @@ summary: "Kişisel asistan kurulumu için varsayılan OpenClaw ajan talimatları
 read_when:
   - Yeni bir OpenClaw ajan oturumu başlatırken
   - Varsayılan Skills’i etkinleştirirken veya denetlerken
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:51Z
 ---
 
 # AGENTS.md — OpenClaw Kişisel Asistan (varsayılan)

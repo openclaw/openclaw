@@ -4,13 +4,6 @@ read_when:
   - Webhook 엔드포인트 추가 또는 변경 시
   - 외부 시스템을 OpenClaw 에 연결할 때
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:56Z
 ---
 
 # Webhooks

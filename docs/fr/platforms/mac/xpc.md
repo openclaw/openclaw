@@ -1,15 +1,8 @@
 ---
-summary: « Architecture IPC macOS pour l’application OpenClaw, le transport du nœud Gateway (passerelle) et PeekabooBridge »
+summary: "Architecture IPC macOS pour l’application OpenClaw, le transport du nœud Gateway (passerelle) et PeekabooBridge"
 read_when:
-  - « Modification des contrats IPC ou de l’IPC de l’application de barre de menus »
-title: « IPC macOS »
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:21Z
+  - Modification des contrats IPC ou de l’IPC de l’application de barre de menus
+title: "IPC macOS"
 ---
 
 # Architecture IPC macOS d’OpenClaw

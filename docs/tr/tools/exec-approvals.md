@@ -5,13 +5,6 @@ read_when:
   - macOS uygulamasında exec onay UX’ini uygularken
   - Sandbox kaçış istemlerini ve etkilerini incelerken
 title: "Exec Onayları"
-x-i18n:
-  source_path: tools/exec-approvals.md
-  source_hash: 66630b5d79671dd4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:02Z
 ---
 
 # Exec onayları
@@ -78,7 +71,7 @@ Onaylar, yürütme ana makinesinde yerel bir JSON dosyasında tutulur:
 }
 ```
 
-## Politika ayarları
+## 23. Politika ayar düğmeleri
 
 ### Güvenlik (`exec.security`)
 
@@ -129,14 +122,12 @@ Gateway RPC üzerinden `skills.bins` kullanarak skill bin listesini getirir. Sı
 ## Güvenli bin’ler (yalnızca stdin)
 
 `tools.exec.safeBins`, **stdin-only** ikili dosyaların küçük bir listesini (örneğin `jq`)
-tanımlar; bunlar açık izin listesi girdileri **olmadan** izin listesi modunda çalışabilir.
-Güvenli bin’ler konumsal dosya argümanlarını ve yol benzeri belirteçleri reddeder; böylece yalnızca gelen akış üzerinde çalışabilirler.
+tanımlar; bunlar açık izin listesi girdileri **olmadan** izin listesi modunda çalışabilir. Güvenli bin’ler konumsal dosya argümanlarını ve yol benzeri belirteçleri reddeder; böylece yalnızca gelen akış üzerinde çalışabilirler.
 Shell zincirleme ve yönlendirmeler izin listesi modunda otomatik olarak izinli değildir.
 
 Shell zincirleme (`&&`, `||`, `;`), her üst düzey bölüm izin listesini sağladığında
 ( güvenli bin’ler veya skill otomatik izin dahil) izinlidir. Yönlendirmeler izin listesi modunda desteklenmez.
-Komut ikamesi (`$()` / ters tırnaklar) izin listesi ayrıştırması sırasında reddedilir; çift tırnakların içinde dahi.
-Kelimesi kelimesine `$()` metnine ihtiyacınız varsa tek tırnak kullanın.
+Komut ikamesi (`$()` / ters tırnaklar) izin listesi ayrıştırması sırasında reddedilir; çift tırnakların içinde dahi. Kelimesi kelimesine `$()` metnine ihtiyacınız varsa tek tırnak kullanın.
 
 Varsayılan güvenli bin’ler: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
@@ -237,7 +228,7 @@ Bunlar, node olay raporladıktan sonra ajanın oturumuna gönderilir.
 Gateway ana makinesi exec onayları, komut bittiğinde (ve isteğe bağlı olarak eşikten daha uzun sürdüğünde) aynı yaşam döngüsü olaylarını üretir.
 Onay kapılı exec’ler, kolay ilişkilendirme için bu mesajlarda `runId` olarak onay kimliğini yeniden kullanır.
 
-## Etkiler
+## 24. Etkileri
 
 - **full** güçlüdür; mümkün olduğunda izin listelerini tercih edin.
 - **ask**, hızlı onaylara izin verirken sizi döngüde tutar.

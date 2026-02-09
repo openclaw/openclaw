@@ -5,13 +5,6 @@ read_when:
   - Cron đã chạy nhưng không có thông báo nào được gửi
   - Heartbeat có vẻ im lặng hoặc bị bỏ qua
 title: "Xử lý sự cố Tự động hóa"
-x-i18n:
-  source_path: automation/troubleshooting.md
-  source_hash: 10eca4a59119910f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:52Z
 ---
 
 # Xử lý sự cố tự động hóa

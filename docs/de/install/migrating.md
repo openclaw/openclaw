@@ -4,13 +4,6 @@ read_when:
   - Sie ziehen OpenClaw auf einen neuen Laptop/Server um
   - Sie möchten Sitzungen, Authentifizierung und Kanal-Logins (WhatsApp usw.) beibehalten
 title: "Migrationsleitfaden"
-x-i18n:
-  source_path: install/migrating.md
-  source_hash: 604d862c4bf86e79
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:42Z
 ---
 
 # Migration von OpenClaw auf eine neue Maschine
@@ -26,7 +19,7 @@ Es gibt jedoch häufige Stolperfallen rund um **Profile**, **Berechtigungen** un
 
 ## Bevor Sie beginnen (was Sie migrieren)
 
-### 1) Identifizieren Sie Ihr State-Verzeichnis
+### 1. Identifizieren Sie Ihr State-Verzeichnis
 
 Die meisten Installationen verwenden den Standard:
 
@@ -45,7 +38,7 @@ openclaw status
 
 Achten Sie in der Ausgabe auf Hinweise zu `OPENCLAW_STATE_DIR` / Profil. Wenn Sie mehrere Gateways betreiben, wiederholen Sie dies für jedes Profil.
 
-### 2) Identifizieren Sie Ihren Workspace
+### 2. Identifizieren Sie Ihren Workspace
 
 Gängige Standards:
 
@@ -54,7 +47,7 @@ Gängige Standards:
 
 Ihr Workspace ist der Ort, an dem Dateien wie `MEMORY.md`, `USER.md` und `memory/*.md` liegen.
 
-### 3) Verstehen, was Sie beibehalten
+### 3. Verstehen, was Sie beibehalten
 
 Wenn Sie **sowohl** das State-Verzeichnis als auch den Workspace kopieren, behalten Sie:
 
@@ -67,7 +60,7 @@ Wenn Sie **sowohl** das State-Verzeichnis als auch den Workspace kopieren, behal
 Wenn Sie **nur** den Workspace kopieren (z. B. per Git), behalten Sie **nicht**:
 
 - Sitzungen
-- Zugangsdaten
+- anmeldedaten
 - Kanal-Logins
 
 Diese befinden sich unter `$OPENCLAW_STATE_DIR`.
@@ -137,7 +130,7 @@ openclaw gateway restart
 openclaw status
 ```
 
-## Häufige Stolperfallen (und wie man sie vermeidet)
+## Gemeinsame Fußwaffen (und wie man sie vermeidet)
 
 ### Stolperfalle: Profil-/State-Verzeichnis-Mismatch
 

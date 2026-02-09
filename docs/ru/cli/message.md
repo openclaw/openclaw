@@ -4,13 +4,6 @@ read_when:
   - Добавление или изменение действий CLI для сообщений
   - Изменение поведения исходящих каналов
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:34Z
 ---
 
 # `openclaw message`
@@ -59,7 +52,7 @@ openclaw message <subcommand> [flags]
 
 ## Действия
 
-### Базовые
+### Core
 
 - `send`
   - Каналы: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (плагин)/Signal/iMessage/MS Teams
@@ -120,7 +113,7 @@ openclaw message <subcommand> [flags]
   - Обязательно: `--guild-id`, `--query`
   - Необязательно: `--channel-id`, `--channel-ids` (повтор), `--author-id`, `--author-ids` (повтор), `--limit`
 
-### Треды
+### Потоки
 
 - `thread create`
   - Каналы: Discord
@@ -137,7 +130,7 @@ openclaw message <subcommand> [flags]
   - Обязательно: `--target` (id треда), `--message`
   - Необязательно: `--media`, `--reply-to`
 
-### Эмодзи
+### Emojis
 
 - `emoji list`
   - Discord: `--guild-id`
@@ -181,7 +174,7 @@ openclaw message <subcommand> [flags]
 - `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` также поддерживает `--reason`
 
-### Рассылка
+### Broadcast
 
 - `broadcast`
   - Каналы: любой настроенный канал; используйте `--channel all` для нацеливания на всех провайдеров

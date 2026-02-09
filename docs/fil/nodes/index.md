@@ -5,18 +5,11 @@ read_when:
   - Paggamit ng node canvas/camera para sa konteksto ng agent
   - Pagdaragdag ng mga bagong node command o CLI helper
 title: "Mga Node"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:57Z
 ---
 
 # Mga Node
 
-Ang **node** ay isang kasamang device (macOS/iOS/Android/headless) na kumokonekta sa Gateway **WebSocket** (kaparehong port ng mga operator) gamit ang `role: "node"` at naglalantad ng isang command surface (hal. `canvas.*`, `camera.*`, `system.*`) sa pamamagitan ng `node.invoke`. Mga detalye ng protocol: [Gateway protocol](/gateway/protocol).
+Ang isang **node** ay isang kasamang device (macOS/iOS/Android/headless) na kumokonekta sa Gateway **WebSocket** (kaparehong port ng mga operator) na may `role: "node"` at naglalantad ng command surface (hal. `canvas.*`, `camera.*`, `system.*`) sa pamamagitan ng `node.invoke`. Hindi sila nagpapatakbo ng gateway service.
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/inisyal na tinanggal para sa mga kasalukuyang node).
 
@@ -24,13 +17,13 @@ Maaari ring tumakbo ang macOS sa **node mode**: ang menubar app ay kumokonekta s
 
 Mga tala:
 
-- Ang mga node ay **peripheral**, hindi mga gateway. Hindi sila nagpapatakbo ng gateway service.
+- Ang mga node ay **mga peripheral**, hindi mga gateway. Hindi sila nagpapatakbo ng gateway service.
 - Ang mga mensahe mula sa Telegram/WhatsApp/etc. ay dumarating sa **gateway**, hindi sa mga node.
 - Runbook sa pag-troubleshoot: [/nodes/troubleshooting](/nodes/troubleshooting)
 
 ## Pag-pair + status
 
-**Gumagamit ng device pairing ang mga WS node.** Nagpapakita ang mga node ng device identity sa panahon ng `connect`; lumilikha ang Gateway ng device pairing request para sa `role: node`. I-apruba sa pamamagitan ng CLI ng device (o UI).
+Gumamit ng **node host** kapag ang iyong Gateway ay tumatakbo sa isang makina at gusto mong maipatupad ang mga command sa iba pa. Aprubahan sa pamamagitan ng devices CLI (o UI).
 
 Mabilis na CLI:
 
@@ -50,7 +43,8 @@ Mga tala:
 
 ## Remote node host (system.run)
 
-Gumamit ng **node host** kapag tumatakbo ang iyong Gateway sa isang makina at gusto mong maisagawa ang mga command sa iba pa. Nakikipag-usap pa rin ang model sa **gateway**; ipinapasa ng gateway ang mga `exec` call sa **node host** kapag pinili ang `host=node`.
+Kung ang Gateway ay naka-bind sa loopback (`gateway.bind=loopback`, default sa local mode),
+hindi makakakonekta nang direkta ang mga remote node host. Nakikipag-usap pa rin ang modelo sa **gateway**; ipinapasa ng gateway ang mga `exec` call sa **node host** kapag napili ang `host=node`.
 
 ### Ano ang tumatakbo saan
 
@@ -68,8 +62,7 @@ openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 
 ### Remote gateway sa pamamagitan ng SSH tunnel (loopback bind)
 
-Kung ang Gateway ay naka-bind sa loopback (`gateway.bind=loopback`, default sa local mode),
-hindi direktang makakakonekta ang mga remote node host. Gumawa ng SSH tunnel at ituro ang
+Ang mga exec approval ay **bawat node host**. Gumawa ng SSH tunnel at ituro ang
 node host sa lokal na dulo ng tunnel.
 
 Halimbawa (node host -> gateway host):
@@ -112,7 +105,7 @@ Mga opsyon sa pagpapangalan:
 
 ### I-allowlist ang mga command
 
-Ang mga pag-apruba ng exec ay **per node host**. Magdagdag ng mga entry sa allowlist mula sa gateway:
+Naglalantad ang mga node ng `screen.record` (mp4). Magdagdag ng mga allowlist entry mula sa gateway:
 
 ```bash
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
@@ -267,8 +260,8 @@ Mga tala:
 
 ## Mga system command (node host / mac node)
 
-Inilalantad ng macOS node ang `system.run`, `system.notify`, at `system.execApprovals.get/set`.
-Inilalantad ng headless node host ang `system.run`, `system.which`, at `system.execApprovals.get/set`.
+Sa macOS node mode, ang `system.run` ay pinaghihigpitan ng mga exec approval sa macOS app (Settings → Exec approvals).
+Ang ask/allowlist/full ay kumikilos nang pareho sa headless node host; ang mga tinanggihang prompt ay nagbabalik ng `SYSTEM_RUN_DENIED`.
 
 Mga halimbawa:
 
@@ -284,14 +277,14 @@ Mga tala:
 - Sinusuportahan ng `system.run` ang `--cwd`, `--env KEY=VAL`, `--command-timeout`, at `--needs-screen-recording`.
 - Sinusuportahan ng `system.notify` ang `--priority <passive|active|timeSensitive>` at `--delivery <system|overlay|auto>`.
 - Tinatanggal ng mga macOS node ang mga override ng `PATH`; ang mga headless node host ay tumatanggap lamang ng `PATH` kapag ito ay nagpe-prepend sa node host PATH.
-- Sa macOS node mode, ang `system.run` ay naka-gate ng exec approvals sa macOS app (Settings → Exec approvals).
-  Ang Ask/allowlist/full ay kumikilos nang pareho sa headless node host; ang mga tinanggihang prompt ay nagbabalik ng `SYSTEM_RUN_DENIED`.
+- Sa macOS node mode, ang `system.run` ay nililimitahan ng mga exec approval sa macOS app (Settings → Exec approvals).
+  Ang Ask/allowlist/full ay kumikilos nang pareho gaya ng headless node host; ang mga tinanggihang prompt ay nagbabalik ng `SYSTEM_RUN_DENIED`.
 - Sa headless node host, ang `system.run` ay naka-gate ng exec approvals (`~/.openclaw/exec-approvals.json`).
 
 ## Pagbubuklod ng exec sa node
 
-Kapag may maraming node na available, maaari mong i-bind ang exec sa isang partikular na node.
-Itinatakda nito ang default node para sa `exec host=node` (at maaaring i-override per agent).
+Kapag maraming node ang available, maaari mong i‑bind ang exec sa isang partikular na node.
+Itinatakda nito ang default na node para sa `exec host=node` (at maaaring i-override kada agent).
 
 Global default:
 
@@ -319,9 +312,9 @@ Maaaring magsama ang mga node ng isang `permissions` na mapa sa `node.list` / `n
 
 ## Headless node host (cross-platform)
 
-Maaaring patakbuhin ng OpenClaw ang isang **headless node host** (walang UI) na kumokonekta sa Gateway
-WebSocket at naglalantad ng `system.run` / `system.which`. Kapaki-pakinabang ito sa Linux/Windows
-o para sa pagpapatakbo ng minimal na node sa tabi ng isang server.
+Sa macOS, mas pinipili ng headless node host ang exec host ng companion app kapag maaabot at bumabagsak
+pabalik sa lokal na pagpapatupad kung hindi available ang app. Itakda ang `OPENCLAW_NODE_EXEC_HOST=app` upang hingin
+ang app, o `OPENCLAW_NODE_EXEC_FALLBACK=0` upang huwag paganahin ang fallback.
 
 Simulan ito:
 
@@ -335,9 +328,8 @@ Mga tala:
 - Iniimbak ng node host ang node id, token, display name, at impormasyon ng koneksyon sa gateway sa `~/.openclaw/node.json`.
 - Ang mga exec approval ay ipinapatupad nang lokal sa pamamagitan ng `~/.openclaw/exec-approvals.json`
   (tingnan ang [Exec approvals](/tools/exec-approvals)).
-- Sa macOS, mas pinipili ng headless node host ang exec host ng companion app kapag maaabot at
-  bumabagsak sa lokal na execution kung hindi available ang app. Itakda ang `OPENCLAW_NODE_EXEC_HOST=app` upang hilingin
-  ang app, o `OPENCLAW_NODE_EXEC_FALLBACK=0` upang i-disable ang fallback.
+- Sa macOS, mas pinipili ng headless node host ang companion app exec host kapag naaabot at bumabagsak
+  pabalik sa lokal na pag-execute kung hindi available ang app. Maaari kaming maglantad ng selector sa loob ng app, ngunit ang OS pa rin ang magpapasya sa aktwal na pagbibigay.
 - Idagdag ang `--tls` / `--tls-fingerprint` kapag gumagamit ng TLS ang Gateway WS.
 
 ## Mac node mode

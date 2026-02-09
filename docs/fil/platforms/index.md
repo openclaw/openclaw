@@ -4,23 +4,16 @@ read_when:
   - Naghahanap ng suporta sa OS o mga path ng pag-install
   - Nagpapasya kung saan patakbuhin ang Gateway
 title: "Mga Platform"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:37Z
 ---
 
 # Mga Platform
 
-Ang OpenClaw core ay isinulat sa TypeScript. **Node ang inirerekomendang runtime**.
-Hindi inirerekomenda ang Bun para sa Gateway (may mga bug sa WhatsApp/Telegram).
+Ang OpenClaw core ay nakasulat sa TypeScript. **Inirerekomendang runtime ang Node**.
+Hindi inirerekomenda ang Bun para sa Gateway (mga bug sa WhatsApp/Telegram).
 
-May mga companion app para sa macOS (menu bar app) at mga mobile node (iOS/Android). Ang mga companion app para sa Windows at
-Linux ay planado, ngunit ganap na suportado na ang Gateway ngayon.
-Planado rin ang mga native companion app para sa Windows; inirerekomenda ang Gateway via WSL2.
+May mga companion app para sa macOS (menu bar app) at mga mobile node (iOS/Android). May planong Windows at
+Linux companion apps, ngunit ang Gateway ay ganap na suportado na ngayon.
+May plano rin para sa mga native companion app sa Windows; inirerekomenda ang Gateway sa pamamagitan ng WSL2.
 
 ## Piliin ang iyong OS
 
@@ -56,5 +49,5 @@ Gumamit ng isa sa mga ito (lahat ay suportado):
 
 Nakadepende sa OS ang service target:
 
-- macOS: LaunchAgent (`bot.molt.gateway` o `bot.molt.<profile>`; legacy `com.openclaw.*`)
+- macOS: LaunchAgent (`bot.molt.gateway` o `bot.molt.<profile>``; legacy `com.openclaw.\*\`)
 - Linux/WSL2: systemd user service (`openclaw-gateway[-<profile>].service`)

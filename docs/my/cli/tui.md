@@ -4,13 +4,6 @@ read_when:
   - Gateway အတွက် terminal UI (အဝေးမှ အသုံးပြုရန် အဆင်ပြေ)
   - script များမှ url/token/session ကို ပို့ချင်သောအခါ
 title: "tui"
-x-i18n:
-  source_path: cli/tui.md
-  source_hash: aa6f37b960926997
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:07Z
 ---
 
 # `openclaw tui`

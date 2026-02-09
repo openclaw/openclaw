@@ -1,15 +1,8 @@
 ---
 summary: "Regles de gestion des images et des medias pour l’envoi, la Gateway (passerelle) et les reponses de l’agent"
 read_when:
-  - "Modification du pipeline media ou des pieces jointes"
+  - Modification du pipeline media ou des pieces jointes
 title: "Prise en charge des images et des medias"
-x-i18n:
-  source_path: nodes/images.md
-  source_hash: 971aed398ea01078
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:10Z
 ---
 
 # Prise en charge des images et des medias — 2025-12-05

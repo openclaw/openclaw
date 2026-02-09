@@ -2,13 +2,6 @@
 summary: "RPC-protokolnoter for introduktionsguide og konfigurationsskema"
 read_when: "Ændring af trin i introduktionsguiden eller endpoints for konfigurationsskema"
 title: "Introduktion og konfigurationsprotokol"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:06Z
 ---
 
 # Introduktion + konfigurationsprotokol
@@ -26,14 +19,14 @@ Formål: delte introduktions- og konfigurationsflader på tværs af CLI, macOS-a
 ## Gateway RPC
 
 - `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`
-- `wizard.next` params: `{ sessionId, answer?: { stepId, value? } }`
+- `wizard.next` params: `{ sessionId, svar?: { stepId, værdi? } }`
 - `wizard.cancel` params: `{ sessionId }`
 - `wizard.status` params: `{ sessionId }`
 - `config.schema` params: `{}`
 
 Svar (form)
 
-- Opsætningsguide: `{ sessionId, done, step?, status?, error? }`
+- Wizard: `{ sessionId, færdig, trin?, status?, fejl? }`
 - Konfigurationsskema: `{ schema, uiHints, version, generatedAt }`
 
 ## UI-hints

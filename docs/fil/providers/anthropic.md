@@ -4,24 +4,17 @@ read_when:
   - Gusto mong gumamit ng mga Anthropic model sa OpenClaw
   - Gusto mo ng setup-token sa halip na mga API key
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:48Z
 ---
 
 # Anthropic (Claude)
 
-Binubuo ng Anthropic ang pamilya ng **Claude** na mga model at nagbibigay ng access sa pamamagitan ng isang API.
-Sa OpenClaw, maaari kang mag-authenticate gamit ang isang API key o isang **setup-token**.
+Binubuo ng Anthropic ang pamilya ng **Claude** na mga modelo at nagbibigay ng access sa pamamagitan ng isang API.
+In OpenClaw you can authenticate with an API key or a **setup-token**.
 
 ## Opsyon A: Anthropic API key
 
-**Pinakamainam para sa:** karaniwang API access at billing na batay sa paggamit.
-Gumawa ng iyong API key sa Anthropic Console.
+**Pinakamainam para sa:** karaniwang API access at usage-based billing.
+Lumikha ng iyong API key sa Anthropic Console.
 
 ### CLI setup
 
@@ -44,16 +37,16 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt caching (Anthropic API)
 
-Sinusuportahan ng OpenClaw ang feature ng prompt caching ng Anthropic. Ito ay **API-only**; hindi iginagalang ng subscription auth ang mga cache setting.
+Sinusuportahan ng OpenClaw ang tampok na prompt caching ng Anthropic. Ito ay **API-only**; ang subscription auth ay hindi nirerespeto ang mga cache setting.
 
 ### Konpigurasyon
 
 Gamitin ang parameter na `cacheRetention` sa iyong model config:
 
-| Value   | Cache Duration | Description                                       |
-| ------- | -------------- | ------------------------------------------------- |
-| `none`  | Walang caching | I-disable ang prompt caching                      |
-| `short` | 5 minuto       | Default para sa API Key auth                      |
+| Value   | Cache Duration | Description                                                          |
+| ------- | -------------- | -------------------------------------------------------------------- |
+| `none`  | Walang caching | I-disable ang prompt caching                                         |
+| `short` | 5 minuto       | Default para sa API Key auth                                         |
 | `long`  | 1 oras         | Pinalawig na cache (nangangailangan ng beta flag) |
 
 ```json5
@@ -72,7 +65,7 @@ Gamitin ang parameter na `cacheRetention` sa iyong model config:
 
 ### Mga default
 
-Kapag gumagamit ng Anthropic API Key authentication, awtomatikong inilalapat ng OpenClaw ang `cacheRetention: "short"` (5-minutong cache) para sa lahat ng Anthropic model. Maaari mo itong i-override sa pamamagitan ng tahasang pag-set ng `cacheRetention` sa iyong config.
+Kapag gumagamit ng Anthropic API Key authentication, awtomatikong inilalapat ng OpenClaw ang `cacheRetention: "short"` (5‑minutong cache) para sa lahat ng Anthropic model. Maaari mo itong i-override sa pamamagitan ng tahasang pagtatakda ng `cacheRetention` sa iyong config.
 
 ### Legacy na parameter
 
@@ -92,7 +85,7 @@ request; panatilihin ito kung o-overtide mo ang mga provider header (tingnan ang
 
 ### Saan kukuha ng setup-token
 
-Ang mga setup-token ay ginagawa ng **Claude Code CLI**, hindi ng Anthropic Console. Maaari mo itong patakbuhin sa **anumang machine**:
+Ang mga setup-token ay nililikha ng **Claude Code CLI**, hindi ng Anthropic Console. Maaari mo itong patakbuhin sa **anumang makina**:
 
 ```bash
 claude setup-token
@@ -128,21 +121,21 @@ openclaw onboard --auth-choice setup-token
 ## Mga tala
 
 - I-generate ang setup-token gamit ang `claude setup-token` at i-paste ito, o patakbuhin ang `openclaw models auth setup-token` sa host ng Gateway.
-- Kung makikita mo ang “OAuth token refresh failed …” sa isang Claude subscription, mag-re-auth gamit ang isang setup-token. Tingnan ang [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
+- Kung makita mo ang “OAuth token refresh failed …” sa isang Claude subscription, mag-re-auth gamit ang isang setup-token. Tingnan ang [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - Ang mga detalye ng auth + mga patakaran sa reuse ay nasa [/concepts/oauth](/concepts/oauth).
 
 ## Pag-troubleshoot
 
 **401 errors / biglang naging invalid ang token**
 
-- Maaaring mag-expire o ma-revoke ang Claude subscription auth. Patakbuhin muli ang `claude setup-token`
-  at i-paste ito sa **host ng Gateway**.
+- Claude subscription auth can expire or be revoked. Re-run `claude setup-token`
+  and paste it into the **gateway host**.
 - Kung ang Claude CLI login ay nasa ibang machine, gamitin ang
   `openclaw models auth paste-token --provider anthropic` sa host ng Gateway.
 
 **Walang nakitang API key para sa provider na "anthropic"**
 
-- Ang auth ay **per agent**. Ang mga bagong agent ay hindi nagmamana ng mga key ng pangunahing agent.
+- Auth is **per agent**. New agents don’t inherit the main agent’s keys.
 - Patakbuhin muli ang onboarding para sa agent na iyon, o mag-paste ng setup-token / API key sa
   host ng Gateway, pagkatapos ay i-verify gamit ang `openclaw models status`.
 

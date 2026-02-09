@@ -2,13 +2,6 @@
 summary: "Socket یا HTTP webhook موڈ کے لیے Slack سیٹ اپ"
 read_when: "Slack سیٹ اپ کرتے وقت یا Slack socket/HTTP موڈ کی ڈیبگنگ کے دوران"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:45Z
 ---
 
 # Slack
@@ -38,9 +31,9 @@ x-i18n:
 ### سیٹ اپ
 
 1. [https://api.slack.com/apps](https://api.slack.com/apps) پر ایک Slack ایپ بنائیں (From scratch)۔
-2. **Socket Mode** → آن کریں۔ پھر **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** میں اسکوپ `connections:write` کے ساتھ ٹوکن بنائیں۔ **App Token** (`xapp-...`) کاپی کریں۔
+2. **Socket Mode** → آن کریں۔ پھر **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** پر جائیں اور اسکوپ `connections:write` کے ساتھ ٹوکن بنائیں۔ **App Token** (`xapp-...`) کاپی کریں۔
 3. **OAuth & Permissions** → بوٹ ٹوکن اسکوپس شامل کریں (نیچے دیا گیا مینی فیسٹ استعمال کریں)۔ **Install to Workspace** پر کلک کریں۔ **Bot User OAuth Token** (`xoxb-...`) کاپی کریں۔
-4. اختیاری: **OAuth & Permissions** → **User Token Scopes** شامل کریں (نیچے دی گئی read-only فہرست دیکھیں)۔ ایپ دوبارہ انسٹال کریں اور **User OAuth Token** (`xoxp-...`) کاپی کریں۔
+4. Optional: **OAuth & Permissions** → add **User Token Scopes** (see the read-only list below). ایپ کو دوبارہ انسٹال کریں اور **User OAuth Token** (`xoxp-...`) کاپی کریں۔
 5. **Event Subscriptions** → ایونٹس فعال کریں اور درج ذیل کو سبسکرائب کریں:
    - `message.*` (ترمیمات/حذف/تھریڈ براڈکاسٹس شامل ہیں)
    - `app_mention`
@@ -49,12 +42,12 @@ x-i18n:
    - `channel_rename`
    - `pin_added`, `pin_removed`
 6. بوٹ کو اُن چینلز میں مدعو کریں جنہیں آپ پڑھوانا چاہتے ہیں۔
-7. Slash Commands → اگر آپ `channels.slack.slashCommand` استعمال کرتے ہیں تو `/openclaw` بنائیں۔ اگر آپ native commands فعال کرتے ہیں تو ہر built-in کمانڈ کے لیے ایک slash command شامل کریں (نام `/help` جیسے ہی ہوں)۔ Slack کے لیے native بطورِ طے شدہ بند رہتا ہے جب تک آپ `channels.slack.commands.native: true` سیٹ نہ کریں (عالمی `commands.native` بطورِ طے شدہ `"auto"` ہے جو Slack کو بند ہی رکھتا ہے)۔
+7. Slash Commands → اگر آپ `channels.slack.slashCommand` استعمال کرتے ہیں تو `/openclaw` بنائیں۔ اگر آپ نیٹو کمانڈز فعال کرتے ہیں تو ہر بلٹ اِن کمانڈ کے لیے ایک سلیش کمانڈ شامل کریں (وہی نام جو `/help` میں ہیں)۔ Slack کے لیے نیٹو ڈیفالٹ آف ہوتا ہے جب تک آپ `channels.slack.commands.native: true` سیٹ نہ کریں (گلوبل `commands.native` کی ویلیو `"auto"` ہے جو Slack کو آف ہی چھوڑتی ہے)۔
 8. App Home → **Messages Tab** فعال کریں تاکہ صارفین بوٹ کو DM کر سکیں۔
 
 اسکوپس اور ایونٹس کو ہم آہنگ رکھنے کے لیے نیچے دیا گیا مینی فیسٹ استعمال کریں۔
 
-ملٹی اکاؤنٹ سپورٹ: ہر اکاؤنٹ کے ٹوکنز کے ساتھ `channels.slack.accounts` استعمال کریں اور اختیاری طور پر `name`۔ مشترکہ پیٹرن کے لیے [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) دیکھیں۔
+ملٹی اکاؤنٹ سپورٹ: ہر اکاؤنٹ کے ٹوکنز کے ساتھ `channels.slack.accounts` استعمال کریں اور اختیاری `name` شامل کریں۔ مشترکہ پیٹرن کے لیے [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) دیکھیں۔
 
 ### OpenClaw کنفیگ (Socket موڈ)
 
@@ -79,10 +72,10 @@ env vars کے ذریعے ٹوکن سیٹ کریں (سفارش کردہ):
 
 ### User token (اختیاری)
 
-OpenClaw پڑھنے کی کارروائیوں کے لیے Slack user token (`xoxp-...`) استعمال کر سکتا ہے (ہسٹری،
-پن، ری ایکشنز، ایموجی، ممبر معلومات)۔ بطورِ طے شدہ یہ read-only رہتا ہے: موجود ہونے پر پڑھائیاں user token کو ترجیح دیتی ہیں، اور لکھائیاں تب تک بوٹ ٹوکن ہی استعمال کرتی ہیں جب تک آپ واضح طور پر اجازت نہ دیں۔ `userTokenReadOnly: false` کے ساتھ بھی، اگر بوٹ ٹوکن دستیاب ہو تو لکھائی کے لیے وہی ترجیحی رہتا ہے۔
+OpenClaw ریڈ آپریشنز کے لیے Slack یوزر ٹوکن (`xoxp-...`) استعمال کر سکتا ہے (ہسٹری، پنز، ری ایکشنز، ایموجی، ممبر معلومات)۔ ڈیفالٹ طور پر یہ ریڈ اونلی رہتا ہے: ریڈز موجود ہونے پر یوزر ٹوکن کو ترجیح دیتے ہیں، اور رائٹس اب بھی بوٹ ٹوکن سے ہوتے ہیں جب تک آپ واضح طور پر آپٹ اِن نہ کریں۔ Even with `userTokenReadOnly: false`, the bot token stays
+preferred for writes when it is available.
 
-User tokens کنفیگ فائل میں سیٹ کیے جاتے ہیں (env var سپورٹ نہیں)۔ ملٹی اکاؤنٹ کے لیے `channels.slack.accounts.<id>.userToken` سیٹ کریں۔
+یوزر ٹوکنز کنفیگ فائل میں سیٹ کیے جاتے ہیں (env var سپورٹ نہیں)۔ ملٹی اکاؤنٹ کے لیے، `channels.slack.accounts.<id>` سیٹ کریں۔.userToken\`.
 
 بوٹ + ایپ + یوزر ٹوکنز کے ساتھ مثال:
 
@@ -119,18 +112,17 @@ userTokenReadOnly کو واضح طور پر سیٹ کرنے کی مثال (user 
 
 - پڑھنے کی کارروائیاں (ہسٹری، ری ایکشنز فہرست، پن فہرست، ایموجی فہرست، ممبر معلومات،
   سرچ) کنفیگر ہونے پر user token کو ترجیح دیتی ہیں، ورنہ بوٹ ٹوکن۔
-- لکھنے کی کارروائیاں (پیغامات بھیجنا/ترمیم/حذف، ری ایکشنز شامل/ہٹانا، پن/ان پن،
-  فائل اپ لوڈز) بطورِ طے شدہ بوٹ ٹوکن استعمال کرتی ہیں۔ اگر `userTokenReadOnly: false` سیٹ ہو اور
-  کوئی بوٹ ٹوکن دستیاب نہ ہو تو OpenClaw user token پر واپس چلا جاتا ہے۔
+- رائٹ آپریشنز (میسجز بھیجنا/ایڈٹ/ڈیلیٹ، ری ایکشنز شامل/ہٹانا، پن/اَن پن، فائل اپلوڈز) ڈیفالٹ طور پر بوٹ ٹوکن استعمال کرتے ہیں۔ If `userTokenReadOnly: false` and
+  no bot token is available, OpenClaw falls back to the user token.
 
 ### History سیاق
 
 - `channels.slack.historyLimit` (یا `channels.slack.accounts.*.historyLimit`) اس بات کو کنٹرول کرتا ہے کہ حالیہ کتنے چینل/گروپ پیغامات پرامپٹ میں شامل ہوں۔
-- `messages.groupChat.historyLimit` پر فالبیک ہوتا ہے۔ غیر فعال کرنے کے لیے `0` سیٹ کریں (بطورِ طے شدہ 50)۔
+- `messages.groupChat.historyLimit` پر فال بیک ہوتا ہے۔ غیر فعال کرنے کے لیے `0` سیٹ کریں (ڈیفالٹ 50)۔
 
 ## HTTP موڈ (Events API)
 
-جب آپ کا Gateway Slack کے لیے HTTPS پر قابلِ رسائی ہو تو HTTP webhook موڈ استعمال کریں (عموماً سرور ڈپلائمنٹس کے لیے)۔
+جب آپ کا گیٹ وے Slack کے لیے HTTPS پر قابلِ رسائی ہو تو HTTP ویب ہُک موڈ استعمال کریں (عموماً سرور ڈپلائمنٹس کے لیے)۔
 HTTP موڈ Events API + Interactivity + Slash Commands کو ایک مشترکہ ریکویسٹ URL کے ساتھ استعمال کرتا ہے۔
 
 ### سیٹ اپ (HTTP موڈ)
@@ -161,12 +153,11 @@ HTTP موڈ Events API + Interactivity + Slash Commands کو ایک مشترکہ
 }
 ```
 
-ملٹی اکاؤنٹ HTTP موڈ: `channels.slack.accounts.<id>.mode = "http"` سیٹ کریں اور ہر اکاؤنٹ کے لیے ایک منفرد
-`webhookPath` فراہم کریں تاکہ ہر Slack ایپ اپنی الگ URL کی طرف اشارہ کر سکے۔
+ملٹی اکاؤنٹ HTTP موڈ: `channels.slack.accounts.<id>` سیٹ کریں۔.mode = "http"`اور ہر اکاؤنٹ کے لیے ایک منفرد`webhookPath\` فراہم کریں تاکہ ہر Slack ایپ اپنی الگ URL پر پوائنٹ کر سکے۔
 
 ### مینی فیسٹ (اختیاری)
 
-ایپ کو تیزی سے بنانے کے لیے یہ Slack ایپ مینی فیسٹ استعمال کریں (اگر چاہیں تو نام/کمانڈ ایڈجسٹ کریں)۔ اگر آپ user token کنفیگر کرنے کا ارادہ رکھتے ہیں تو user scopes شامل کریں۔
+ایپ جلدی بنانے کے لیے اس Slack ایپ مینی فیسٹ کا استعمال کریں (اگر چاہیں تو نام/کمانڈ ایڈجسٹ کریں)۔ اگر آپ یوزر ٹوکن کنفیگر کرنے کا ارادہ رکھتے ہیں تو یوزر اسکوپس شامل کریں۔
 
 ```json
 {
@@ -256,12 +247,11 @@ HTTP موڈ Events API + Interactivity + Slash Commands کو ایک مشترکہ
 }
 ```
 
-اگر آپ native commands فعال کرتے ہیں تو جس کمانڈ کو ظاہر کرنا چاہتے ہیں اس کے لیے ایک `slash_commands` اندراج شامل کریں (فہرست `/help` کے مطابق)۔ `channels.slack.commands.native` کے ساتھ اوور رائیڈ کریں۔
+اگر آپ نیٹو کمانڈز فعال کرتے ہیں تو جس ہر کمانڈ کو ایکسپوز کرنا چاہتے ہیں اس کے لیے ایک `slash_commands` انٹری شامل کریں (`/help` کی فہرست کے مطابق)۔ `channels.slack.commands.native` کے ذریعے اووررائیڈ کریں۔
 
 ## Scopes (موجودہ بمقابلہ اختیاری)
 
-Slack کی Conversations API ٹائپ-اسکوپڈ ہے: آپ کو صرف اُن گفتگو کی اقسام کے اسکوپس درکار ہیں جنہیں آپ واقعی استعمال کرتے ہیں (channels، groups، im، mpim)۔ جائزہ کے لیے
-[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) دیکھیں۔
+Slack کی Conversations API ٹائپ-اسکوپڈ ہے: آپ کو صرف انہی کنورسیشن ٹائپس کے اسکوپس درکار ہیں جنہیں آپ واقعی استعمال کرتے ہیں (channels, groups, im, mpim)۔ جائزہ کے لیے [https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) دیکھیں۔
 
 ### بوٹ ٹوکن اسکوپس (لازم)
 
@@ -310,7 +300,7 @@ Slack کی Conversations API ٹائپ-اسکوپڈ ہے: آپ کو صرف اُن
 
 ## کنفیگ
 
-Slack صرف Socket موڈ استعمال کرتا ہے (کوئی HTTP webhook سرور نہیں)۔ دونوں ٹوکن فراہم کریں:
+Slack صرف Socket Mode استعمال کرتا ہے (کوئی HTTP ویب ہُک سرور نہیں)۔ دونوں ٹوکن فراہم کریں:
 
 ```json
 {
@@ -364,9 +354,8 @@ Slack صرف Socket موڈ استعمال کرتا ہے (کوئی HTTP webhook �
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
-Ack ری ایکشنز کو عالمی طور پر `messages.ackReaction` +
-`messages.ackReactionScope` کے ذریعے کنٹرول کیا جاتا ہے۔ بوٹ کے جواب کے بعد
-ack ری ایکشن صاف کرنے کے لیے `messages.removeAckAfterReply` استعمال کریں۔
+Ack ری ایکشنز کو گلوبلی `messages.ackReaction` + `messages.ackReactionScope` کے ذریعے کنٹرول کیا جاتا ہے۔ Use `messages.removeAckAfterReply` to clear the
+ack reaction after the bot replies.
 
 ## حدود
 
@@ -376,13 +365,13 @@ ack ری ایکشن صاف کرنے کے لیے `messages.removeAckAfterReply` �
 
 ## جواب کی تھریڈنگ
 
-بطورِ طے شدہ، OpenClaw مرکزی چینل میں جواب دیتا ہے۔ خودکار تھریڈنگ کنٹرول کرنے کے لیے `channels.slack.replyToMode` استعمال کریں:
+ڈیفالٹ طور پر، OpenClaw مین چینل میں جواب دیتا ہے۔ خودکار تھریڈنگ کو کنٹرول کرنے کے لیے `channels.slack.replyToMode` استعمال کریں:
 
-| موڈ     | رویّہ                                                                                                                               |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **بطورِ طے شدہ۔** مرکزی چینل میں جواب۔ صرف تب تھریڈ بنے گا جب محرک پیغام پہلے ہی تھریڈ میں ہو۔                                      |
-| `first` | پہلا جواب تھریڈ میں (محرک پیغام کے نیچے)، بعد کے جوابات مرکزی چینل میں۔ سیاق برقرار رکھتے ہوئے تھریڈ کی بھرمار سے بچنے کے لیے مفید۔ |
-| `all`   | تمام جوابات تھریڈ میں۔ گفتگو محدود رہتی ہے مگر نمایاں پن کم ہو سکتا ہے۔                                                             |
+| موڈ     | رویّہ                                                                                                                                                                              |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`   | **ڈیفالٹ۔** مین چینل میں جواب دیں۔ صرف اس صورت میں تھریڈ کریں جب ٹرگر کرنے والا پیغام پہلے ہی کسی تھریڈ میں ہو۔                                                                    |
+| `first` | پہلا جواب تھریڈ میں جاتا ہے (ٹرگر کرنے والے پیغام کے نیچے)، بعد کے جوابات مین چینل میں جاتے ہیں۔ کانٹیکسٹ کو واضح رکھتے ہوئے تھریڈ کی بھیڑ سے بچنے کے لیے مفید۔ |
+| `all`   | تمام جوابات تھریڈ میں جائیں۔ گفتگو کو محدود رکھتا ہے مگر ویژیبِلٹی کم ہو سکتی ہے۔                                                                                                  |
 
 یہ موڈ خودکار جوابات اور ایجنٹ ٹول کالز (`slack sendMessage`) دونوں پر لاگو ہوتا ہے۔
 
@@ -412,7 +401,7 @@ ack ری ایکشن صاف کرنے کے لیے `messages.removeAckAfterReply` �
 
 ترجیحی ترتیب:
 
-1. `replyToModeByChatType.<chatType>`
+1. \`replyToModeByChatType.<chatType>\`\`
 2. `replyToMode`
 3. فراہم کنندہ کا ڈیفالٹ (`off`)
 
@@ -472,7 +461,7 @@ Legacy `channels.slack.dm.replyToMode` اب بھی بطورِ فالبیک قب�
 - چینلز `agent:<agentId>:slack:channel:<channelId>` سیشنز پر میپ ہوتے ہیں۔
 - Slash commands `agent:<agentId>:slack:slash:<userId>` سیشنز استعمال کرتے ہیں (پریفکس `channels.slack.slashCommand.sessionPrefix` کے ذریعے کنفیگر ایبل)۔
 - اگر Slack `channel_type` فراہم نہ کرے تو OpenClaw چینل آئی ڈی پریفکس (`D`, `C`, `G`) سے اندازہ لگاتا ہے اور سیشن کیز کو مستحکم رکھنے کے لیے بطورِ طے شدہ `channel` اختیار کرتا ہے۔
-- Native کمانڈ رجسٹریشن `commands.native` استعمال کرتی ہے (عالمی ڈیفالٹ `"auto"` → Slack بند) اور `channels.slack.commands.native` کے ذریعے فی ورک اسپیس اوور رائیڈ ہو سکتی ہے۔ ٹیکسٹ کمانڈز کے لیے الگ تھلگ `/...` پیغامات درکار ہوتے ہیں اور `commands.text: false` کے ذریعے غیر فعال کی جا سکتی ہیں۔ Slack slash commands Slack ایپ میں منیج ہوتی ہیں اور خودکار طور پر ہٹائی نہیں جاتیں۔ کمانڈز کے لیے ایکسیس-گروپ چیکس بائی پاس کرنے کو `commands.useAccessGroups: false` استعمال کریں۔
+- نیٹو کمانڈ رجسٹریشن `commands.native` استعمال کرتی ہے (گلوبل ڈیفالٹ `"auto"` → Slack آف) اور اسے فی ورک اسپیس `channels.slack.commands.native` کے ذریعے اووررائیڈ کیا جا سکتا ہے۔ Text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
 - مکمل کمانڈ فہرست + کنفیگ: [Slash commands](/tools/slash-commands)
 
 ## DM سکیورٹی (جوڑی بنانا)
@@ -480,22 +469,22 @@ Legacy `channels.slack.dm.replyToMode` اب بھی بطورِ فالبیک قب�
 - ڈیفالٹ: `channels.slack.dm.policy="pairing"` — نامعلوم DM بھیجنے والوں کو ایک pairing کوڈ ملتا ہے (1 گھنٹے بعد منقضی)۔
 - منظوری بذریعہ: `openclaw pairing approve slack <code>`۔
 - سب کو اجازت دینے کے لیے: `channels.slack.dm.policy="open"` اور `channels.slack.dm.allowFrom=["*"]` سیٹ کریں۔
-- `channels.slack.dm.allowFrom` یوزر آئی ڈیز، @ہینڈلز، یا ای میلز قبول کرتا ہے (جب ٹوکن اجازت دیں تو اسٹارٹ اپ پر حل کیے جاتے ہیں)۔ وِزرد یوزرنیمز قبول کرتا ہے اور سیٹ اپ کے دوران (جب ٹوکن اجازت دیں) انہیں آئی ڈیز میں حل کر دیتا ہے۔
+- `channels.slack.dm.allowFrom` accepts user IDs, @handles, or emails (resolved at startup when tokens allow). The wizard accepts usernames and resolves them to ids during setup when tokens allow.
 
 ## گروپ پالیسی
 
 - `channels.slack.groupPolicy` چینل ہینڈلنگ (`open|disabled|allowlist`) کو کنٹرول کرتا ہے۔
 - `allowlist` کے لیے چینلز کا `channels.slack.channels` میں درج ہونا لازم ہے۔
-- اگر آپ صرف `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` سیٹ کریں اور کبھی `channels.slack` سیکشن نہ بنائیں،
-  تو رن ٹائم بطورِ طے شدہ `groupPolicy` کو `open` پر سیٹ کر دیتا ہے۔ اسے لاک ڈاؤن کرنے کے لیے `channels.slack.groupPolicy`،
-  `channels.defaults.groupPolicy`، یا چینل allowlist شامل کریں۔
+- If you only set `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` and never create a `channels.slack` section,
+  the runtime defaults `groupPolicy` to `open`. Add `channels.slack.groupPolicy`,
+  `channels.defaults.groupPolicy`, or a channel allowlist to lock it down.
 - کنفیگر وِزرد `#channel` نام قبول کرتا ہے اور جہاں ممکن ہو انہیں آئی ڈیز میں حل کرتا ہے
   (عوامی + نجی)؛ اگر متعدد میچ ہوں تو فعال چینل کو ترجیح دیتا ہے۔
 - اسٹارٹ اپ پر، OpenClaw allowlists میں چینل/یوزر ناموں کو آئی ڈیز میں حل کرتا ہے (جب ٹوکن اجازت دیں)
   اور میپنگ لاگ کرتا ہے؛ غیر حل شدہ اندراجات جیسے ٹائپ کیے گئے ہوں ویسے ہی رکھے جاتے ہیں۔
 - **کوئی چینلز** اجازت دینے کے لیے، `channels.slack.groupPolicy: "disabled"` سیٹ کریں (یا خالی allowlist رکھیں)۔
 
-چینل آپشنز (`channels.slack.channels.<id>` یا `channels.slack.channels.<name>`):
+Channel options (`channels.slack.channels.<id>` or `channels.slack.channels.<name>`):
 
 - `allow`: جب `groupPolicy="allowlist"` ہو تو چینل کو اجازت/انکار۔
 - `requireMention`: چینل کے لیے مینشن گیٹنگ۔
@@ -530,10 +519,10 @@ Slack ٹول ایکشنز کو `channels.slack.actions.*` کے ذریعے گیٹ
 
 - لکھائیاں بطورِ طے شدہ بوٹ ٹوکن استعمال کرتی ہیں تاکہ حالت بدلنے والی کارروائیاں
   ایپ کے بوٹ کی اجازتوں اور شناخت تک محدود رہیں۔
-- `userTokenReadOnly: false` سیٹ کرنے سے، جب بوٹ ٹوکن دستیاب نہ ہو، یوزر ٹوکن کو
-  لکھنے کی کارروائیوں کے لیے استعمال کیا جا سکتا ہے، جس کا مطلب ہے کہ کارروائیاں
-  انسٹال کرنے والے یوزر کی رسائی کے ساتھ چلتی ہیں۔ یوزر ٹوکن کو نہایت بااختیار سمجھیں
-  اور ایکشن گیٹس اور allowlists کو سخت رکھیں۔
+- Setting `userTokenReadOnly: false` allows the user token to be used for write
+  operations when a bot token is unavailable, which means actions run with the
+  installing user's access. Treat the user token as highly privileged and keep
+  action gates and allowlists tight.
 - اگر آپ یوزر-ٹوکن لکھائیاں فعال کرتے ہیں تو یقینی بنائیں کہ یوزر ٹوکن میں مطلوبہ
   لکھنے کے اسکوپس شامل ہوں (`chat:write`, `reactions:write`, `pins:write`,
   `files:write`) ورنہ وہ کارروائیاں ناکام ہوں گی۔
@@ -569,7 +558,7 @@ openclaw pairing list slack
 - مینشن گیٹنگ `channels.slack.channels` کے ذریعے کنٹرول ہوتی ہے (`requireMention` کو `true` پر سیٹ کریں)؛ `agents.list[].groupChat.mentionPatterns` (یا `messages.groupChat.mentionPatterns`) بھی مینشن شمار ہوتے ہیں۔
 - ملٹی ایجنٹ اوور رائیڈ: `agents.list[].groupChat.mentionPatterns` پر فی ایجنٹ پیٹرنز سیٹ کریں۔
 - ری ایکشن نوٹیفکیشنز `channels.slack.reactionNotifications` کے مطابق ہوتی ہیں (موڈ `allowlist` کے ساتھ `reactionAllowlist` استعمال کریں)۔
-- بوٹ کے تحریر کردہ پیغامات بطورِ طے شدہ نظر انداز ہوتے ہیں؛ `channels.slack.allowBots` یا `channels.slack.channels.<id>.allowBots` کے ذریعے فعال کریں۔
-- انتباہ: اگر آپ دوسرے بوٹس کو جواب دینے کی اجازت دیتے ہیں (`channels.slack.allowBots=true` یا `channels.slack.channels.<id>.allowBots=true`) تو بوٹ-سے-بوٹ جواب کے لوپس سے بچنے کے لیے `requireMention`, `channels.slack.channels.<id>.users` allowlists، اور/یا `AGENTS.md` اور `SOUL.md` میں واضح گارڈ ریلز استعمال کریں۔
+- Bot-authored messages are ignored by default; enable via `channels.slack.allowBots` or `channels.slack.channels.<id>.allowBots`.
+- Warning: If you allow replies to other bots (`channels.slack.allowBots=true` or `channels.slack.channels.<id>.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `channels.slack.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 - Slack ٹول کے لیے، ری ایکشن ہٹانے کی معنویت [/tools/reactions](/tools/reactions) میں ہے۔
 - اٹیچمنٹس اجازت ملنے اور سائز حد کے اندر ہونے پر میڈیا اسٹور میں ڈاؤن لوڈ کی جاتی ہیں۔

@@ -5,13 +5,6 @@ read_when:
   - Sie verwenden bereits Nix/NixOS/Home Manager
   - Sie möchten alles fest gepinnt und deklarativ verwalten
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:35Z
 ---
 
 # Nix-Installation

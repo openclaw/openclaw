@@ -3,13 +3,6 @@ summary: "इनबाउंड ऑडियो/वॉयस नोट्स क
 read_when:
   - ऑडियो ट्रांसक्रिप्शन या मीडिया हैंडलिंग बदलते समय
 title: "ऑडियो और वॉयस नोट्स"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:30Z
 ---
 
 # ऑडियो / वॉयस नोट्स — 2026-01-17
@@ -37,9 +30,9 @@ x-i18n:
 2. **Gemini CLI** (`gemini`) का उपयोग `read_many_files` के साथ
 3. **प्रदाता कुंजियाँ** (OpenAI → Groq → Deepgram → Google)
 
-स्वतः‑पता लगाना अक्षम करने के लिए, `tools.media.audio.enabled: false` सेट करें।
-कस्टमाइज़ करने के लिए, `tools.media.audio.models` सेट करें।
-टिप्पणी: बाइनरी डिटेक्शन macOS/Linux/Windows पर best‑effort है; सुनिश्चित करें कि CLI `PATH` पर हो (हम `~` का विस्तार करते हैं), या पूर्ण कमांड पथ के साथ एक स्पष्ट CLI मॉडल सेट करें।
+Auto-detection को अक्षम करने के लिए, `tools.media.audio.enabled: false` सेट करें।
+Customize करने के लिए, `tools.media.audio.models` सेट करें।
+टिप्पणी: बाइनरी डिटेक्शन macOS/Linux/Windows पर best‑effort है; सुनिश्चित करें कि CLI `PATH` पर है (हम `~` का विस्तार करते हैं), या पूर्ण कमांड पथ के साथ एक स्पष्ट CLI मॉडल सेट करें।
 
 ## विन्यास उदाहरण
 
@@ -107,8 +100,8 @@ x-i18n:
 - Deepgram, जब `provider: "deepgram"` उपयोग किया जाता है, तो `DEEPGRAM_API_KEY` को ग्रहण करता है।
 - Deepgram सेटअप विवरण: [Deepgram (ऑडियो ट्रांसक्रिप्शन)](/providers/deepgram)।
 - ऑडियो प्रदाता `tools.media.audio` के माध्यम से `baseUrl`, `headers`, और `providerOptions` को ओवरराइड कर सकते हैं।
-- डिफ़ॉल्ट आकार सीमा 20MB है (`tools.media.audio.maxBytes`)। अधिक आकार के ऑडियो को उस मॉडल के लिए स्किप किया जाता है और अगली एंट्री आज़माई जाती है।
-- ऑडियो के लिए डिफ़ॉल्ट `maxChars` **अनसेट** है (पूर्ण ट्रांसक्रिप्ट)। आउटपुट ट्रिम करने के लिए `tools.media.audio.maxChars` या प्रति‑एंट्री `maxChars` सेट करें।
+- Default size cap 20MB है (`tools.media.audio.maxBytes`)। Oversize audio उस मॉडल के लिए छोड़ दिया जाता है और अगली प्रविष्टि आज़माई जाती है।
+- Audio के लिए default `maxChars` **unset** होता है (पूरा transcript)। आउटपुट ट्रिम करने के लिए `tools.media.audio.maxChars` या प्रति-प्रविष्टि `maxChars` सेट करें।
 - OpenAI का ऑटो डिफ़ॉल्ट `gpt-4o-mini-transcribe` है; अधिक सटीकता के लिए `model: "gpt-4o-transcribe"` सेट करें।
 - अनेक वॉयस नोट्स प्रोसेस करने के लिए `tools.media.audio.attachments` का उपयोग करें (`mode: "all"` + `maxAttachments`)।
 - ट्रांसक्रिप्ट टेम्पलेट्स में `{{Transcript}}` के रूप में उपलब्ध है।
@@ -116,6 +109,6 @@ x-i18n:
 
 ## सावधानियाँ
 
-- स्कोप नियमों में पहला‑मिलान जीतता है। `chatType` को `direct`, `group`, या `room` में सामान्यीकृत किया जाता है।
+- Scope rules में first-match wins लागू होता है। `chatType` को `direct`, `group`, या `room` में normalize किया जाता है।
 - सुनिश्चित करें कि आपका CLI 0 के साथ बाहर निकलता है और सादा पाठ प्रिंट करता है; JSON को `jq -r .text` के माध्यम से समायोजित करना होगा।
 - उत्तर कतार को ब्लॉक होने से बचाने के लिए टाइमआउट उचित रखें (`timeoutSeconds`, डिफ़ॉल्ट 60s)।

@@ -3,19 +3,12 @@ summary: "डेव एजेंट टूल्स नोट्स (C-3PO)"
 read_when:
   - डेव Gateway टेम्पलेट्स का उपयोग करते समय
   - डिफ़ॉल्ट डेव एजेंट पहचान को अपडेट करते समय
-x-i18n:
-  source_path: reference/templates/TOOLS.dev.md
-  source_hash: 3d41097967c98116
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:38Z
 ---
 
 # TOOLS.md - उपयोगकर्ता टूल नोट्स (संपादन योग्य)
 
-यह फ़ाइल बाहरी टूल्स और परंपराओं के बारे में _आपके_ नोट्स के लिए है।
-यह यह परिभाषित नहीं करती कि कौन-से टूल्स मौजूद हैं; OpenClaw आंतरिक रूप से अंतर्निर्मित टूल्स प्रदान करता है।
+This file is for _your_ notes about external tools and conventions.
+It does not define which tools exist; OpenClaw provides built-in tools internally.
 
 ## उदाहरण
 

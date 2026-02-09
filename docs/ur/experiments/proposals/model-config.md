@@ -3,19 +3,12 @@ summary: "تحقیق: ماڈل کنفیگ، تصدیقی پروفائلز، او
 read_when:
   - مستقبل کے ماڈل انتخاب اور تصدیقی پروفائل کے تصورات کی کھوج کے دوران
 title: "ماڈل کنفیگ کی تحقیق"
-x-i18n:
-  source_path: experiments/proposals/model-config.md
-  source_hash: 48623233d80f874c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:09Z
 ---
 
 # ماڈل کنفیگ (تحقیق)
 
-یہ دستاویز مستقبل کی ماڈل کنفیگریشن کے لیے **خیالات** کو محفوظ کرتی ہے۔ یہ
-کوئی جاری ہونے والی (shipping) وضاحت نہیں ہے۔ موجودہ رویّے کے لیے ملاحظہ کریں:
+یہ دستاویز مستقبل کی ماڈل کنفیگریشن کے لیے **خیالات** کو محفوظ کرتی ہے۔ یہ کوئی
+shipping spec نہیں ہے۔ موجودہ رویے کے لیے، دیکھیں:
 
 - [Models](/concepts/models)
 - [Model failover](/concepts/model-failover)

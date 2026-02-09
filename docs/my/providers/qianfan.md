@@ -4,18 +4,12 @@ read_when:
   - LLM များစွာအတွက် API key တစ်ခုတည်းကို အသုံးပြုလိုသောအခါ
   - Baidu Qianfan ကို တပ်ဆင်သတ်မှတ်ရန် လမ်းညွှန်ချက်များ လိုအပ်သောအခါ
 title: "Qianfan"
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:46Z
 ---
 
 # Qianfan ပံ့ပိုးသူ လမ်းညွှန်
 
-Qianfan သည် Baidu ၏ MaaS ပလက်ဖောင်းဖြစ်ပြီး၊ **ပေါင်းစည်းထားသော API** တစ်ခုကို ပေးထားကာ endpoint တစ်ခုနှင့် API key တစ်ခုတည်းမှတဆင့် မော်ဒယ်များစွာသို့ တောင်းဆိုမှုများကို လမ်းကြောင်းညွှန်ပေးပါသည်။ ၎င်းသည် OpenAI-compatible ဖြစ်သောကြောင့် base URL ကို ပြောင်းလဲခြင်းဖြင့် OpenAI SDK အများစုကို အသုံးပြုနိုင်ပါသည်။
+Qianfan is Baidu's MaaS platform, provides a **unified API** that routes requests to many models behind a single
+endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
 ## ကြိုတင်လိုအပ်ချက်များ
 

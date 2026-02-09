@@ -4,20 +4,13 @@ read_when:
   - Bạn muốn một máy chủ Linux luôn bật với chi phí thấp cho Gateway
   - Bạn muốn truy cập Control UI từ xa mà không cần tự vận hành VPS
 title: "exe.dev"
-x-i18n:
-  source_path: install/exe-dev.md
-  source_hash: 72ab798afd058a76
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:17Z
 ---
 
 # exe.dev
 
 Mục tiêu: OpenClaw Gateway chạy trên một VM exe.dev, có thể truy cập từ laptop của bạn thông qua: `https://<vm-name>.exe.xyz`
 
-Trang này giả định bạn dùng image mặc định **exeuntu** của exe.dev. Nếu bạn chọn bản phân phối khác, hãy ánh xạ các gói tương ứng.
+This page assumes exe.dev's default **exeuntu** image. If you picked a different distro, map packages accordingly.
 
 ## Lối nhanh cho người mới
 
@@ -34,8 +27,8 @@ Trang này giả định bạn dùng image mặc định **exeuntu** của exe.d
 
 ## Cài đặt tự động với Shelley
 
-Shelley, tác tử của [exe.dev](https://exe.dev), có thể cài đặt OpenClaw ngay lập tức bằng prompt của chúng tôi.
-Prompt được sử dụng như sau:
+Shelley, [exe.dev](https://exe.dev)'s agent, can install OpenClaw instantly with our
+prompt. The prompt used is as below:
 
 ```
 Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-interactive and accept-risk flags for openclaw onboarding. Add the supplied auth or token as needed. Configure nginx to forward from the default port 18789 to the root location on the default enabled site config, making sure to enable Websocket support. Pairing is done by "openclaw devices list" and "openclaw device approve <request id>". Make sure the dashboard shows that OpenClaw's health is OK. exe.dev handles forwarding from port 8000 to port 80/443 and HTTPS for us, so the final "reachable" should be <vm-name>.exe.xyz, without port specification.
@@ -43,7 +36,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 
 ## Cài đặt thủ công
 
-## 1) Tạo VM
+## 1. Tạo VM
 
 Từ thiết bị của bạn:
 
@@ -57,16 +50,16 @@ Sau đó kết nối:
 ssh <vm-name>.exe.xyz
 ```
 
-Mẹo: hãy giữ VM này ở trạng thái **stateful**. OpenClaw lưu trạng thái tại `~/.openclaw/` và `~/.openclaw/workspace/`.
+Tip: keep this VM **stateful**. OpenClaw stores state under `~/.openclaw/` and `~/.openclaw/workspace/`.
 
-## 2) Cài đặt các yêu cầu tiên quyết (trên VM)
+## 2. Cài đặt các yêu cầu tiên quyết (trên VM)
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y git curl jq ca-certificates openssl
 ```
 
-## 3) Cài đặt OpenClaw
+## 3. Cài đặt OpenClaw
 
 Chạy script cài đặt OpenClaw:
 
@@ -74,7 +67,7 @@ Chạy script cài đặt OpenClaw:
 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
-## 4) Thiết lập nginx để proxy OpenClaw sang cổng 8000
+## 4. Thiết lập nginx để proxy OpenClaw sang cổng 8000
 
 Chỉnh sửa `/etc/nginx/sites-enabled/default` với
 
@@ -108,18 +101,18 @@ server {
 }
 ```
 
-## 5) Truy cập OpenClaw và cấp quyền
+## 5. Truy cập OpenClaw và cấp quyền
 
-Truy cập `https://<vm-name>.exe.xyz/` (xem đầu ra Control UI từ quá trình onboarding). Nếu hệ thống yêu cầu xác thực, hãy dán
-token từ `gateway.auth.token` trên VM (lấy bằng `openclaw config get gateway.auth.token`, hoặc tạo mới bằng
-`openclaw doctor --generate-gateway-token`). Phê duyệt thiết bị bằng `openclaw devices list` và
-`openclaw devices approve <requestId>`. Khi không chắc chắn, hãy dùng Shelley trực tiếp từ trình duyệt của bạn!
+Access `https://<vm-name>.exe.xyz/` (see the Control UI output from onboarding). If it prompts for auth, paste the
+token from `gateway.auth.token` on the VM (retrieve with `openclaw config get gateway.auth.token`, or generate one
+with `openclaw doctor --generate-gateway-token`). Approve devices with `openclaw devices list` and
+`openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
 
 ## Truy cập từ xa
 
-Truy cập từ xa được xử lý thông qua xác thực của [exe.dev](https://exe.dev). Theo
-mặc định, lưu lượng HTTP từ cổng 8000 sẽ được chuyển tiếp tới `https://<vm-name>.exe.xyz`
-với xác thực qua email.
+Remote access is handled by [exe.dev](https://exe.dev)'s authentication. By
+default, HTTP traffic from port 8000 is forwarded to `https://<vm-name>.exe.xyz`
+with email auth.
 
 ## Cập nhật
 

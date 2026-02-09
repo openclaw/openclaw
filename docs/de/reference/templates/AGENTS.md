@@ -1,14 +1,7 @@
 ---
-summary: „Arbeitsbereich-Vorlage für AGENTS.md“
+summary: "„Arbeitsbereich-Vorlage für AGENTS.md“"
 read_when:
   - Manuelles Bootstrapping eines Arbeitsbereichs
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:29Z
 ---
 
 # AGENTS.md – Ihr Arbeitsbereich
@@ -93,13 +86,13 @@ In Gruppenchats, in denen Sie jede Nachricht erhalten, seien Sie **klug darin, w
 - Sie echten Mehrwert liefern können (Infos, Einblicke, Hilfe)
 - Etwas Witziges/Lustiges natürlich passt
 - Wichtige Fehlinformationen korrigiert werden müssen
-- Eine Zusammenfassung erbeten wird
+- Zusammenfassung bei Anfrage
 
 **Still bleiben (HEARTBEAT_OK), wenn:**
 
 - Es nur lockerer Smalltalk zwischen Menschen ist
 - Jemand die Frage bereits beantwortet hat
-- Ihre Antwort nur „ja“ oder „nett“ wäre
+- Ihre Antwort wäre einfach "yeah" oder "nice"
 - Das Gespräch ohne Sie gut fließt
 - Eine zusätzliche Nachricht die Stimmung unterbrechen würde
 

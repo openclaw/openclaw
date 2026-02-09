@@ -4,13 +4,6 @@ read_when:
   - تشغيل أكثر من Gateway واحد على الجهاز نفسه
   - تحتاج إلى تهيئة/حالة/منافذ معزولة لكل Gateway
 title: "Gateways متعددة"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:15Z
 ---
 
 # Gateways متعددة (المضيف نفسه)
@@ -53,7 +46,7 @@ openclaw --profile rescue gateway install
 شغّل Gateway ثانية على المضيف نفسه مع ما يلي خاص بها:
 
 - ملف تعريفي/تهيئة
-- دليل حالة
+- الولاية العتيقة
 - مساحة عمل
 - منفذ أساسي (بالإضافة إلى المنافذ المُشتقة)
 
@@ -81,7 +74,7 @@ openclaw --profile rescue onboard
 openclaw --profile rescue gateway install
 ```
 
-## تعيين المنافذ (المُشتقة)
+## رسم خرائط الموانئ (مشتقة)
 
 المنفذ الأساسي = `gateway.port` (أو `OPENCLAW_GATEWAY_PORT` / `--port`).
 

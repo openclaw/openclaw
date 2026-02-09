@@ -3,13 +3,6 @@ summary: "Regels, sleutels en persistentie voor chat-sessiebeheer"
 read_when:
   - Het aanpassen van sessie-afhandeling of opslag
 title: "Sessiebeheer"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:40Z
 ---
 
 # Sessiebeheer

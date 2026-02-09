@@ -4,13 +4,6 @@ read_when:
   - Integrer des clients qui parlent l’API OpenResponses
   - Vous souhaitez des entrees basees sur des items, des appels d’outils cote client, ou des evenements SSE
 title: "API OpenResponses"
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:50Z
 ---
 
 # API OpenResponses (HTTP)
@@ -189,7 +182,7 @@ Comportement actuel :
 L’analyse PDF utilise la build legacy `pdfjs-dist` compatible Node (sans worker). La build moderne
 PDF.js attend des workers navigateur/des globales DOM, elle n’est donc pas utilisee dans la Gateway.
 
-Parametres par defaut pour la recuperation d’URL :
+Défaut de récupération d'URL :
 
 - `files.allowUrl` : `true`
 - `images.allowUrl` : `true`
@@ -241,7 +234,7 @@ Les valeurs par defaut peuvent etre ajusteessous `gateway.http.endpoints.respons
 }
 ```
 
-Valeurs par defaut lorsqu’elles sont omises :
+Par défaut en cas d'omission :
 
 - `maxBodyBytes` : 20MB
 - `files.maxBytes` : 5MB

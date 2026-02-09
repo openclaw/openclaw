@@ -4,13 +4,6 @@ read_when:
   - Je wilt OpenClaw van een machine verwijderen
   - De Gateway-service draait nog steeds na het verwijderen
 title: "Verwijderen"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:30Z
 ---
 
 # Verwijderen

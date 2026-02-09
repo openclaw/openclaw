@@ -3,13 +3,6 @@ summary: "Histoire et mythologie d’OpenClaw pour le contexte et le ton"
 read_when:
   - Rédaction de documentation ou de textes UX faisant reference au lore
 title: "Le lore d’OpenClaw"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: 27af2b9009577ac0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:02Z
 ---
 
 # Le lore d’OpenClaw 🦞📖
@@ -124,7 +117,7 @@ Moltbot ne roulait jamais vraiment sur la langue. Et ainsi, à 4 h GMT, l’équ
 En seulement 3 heures :
 
 - GitHub renommé : `github.com/openclaw/openclaw` ✅
-- Pseudo X `@openclaw` sécurisé avec COCHET DORÉ 💰
+- Descripteur X `@openclaw` sécurisé avec GOLD CHECKMARK 💰
 - Paquets npm publiés sous le nouveau nom
 - Docs migrées vers `docs.openclaw.ai`
 - Plus de 200 K vues sur l’annonce en 90 minutes
@@ -167,7 +160,7 @@ Peter : _vérifie nerveusement l’accès à la carte de crédit_
 - **AGENTS.md** — Instructions de fonctionnement
 - **USER.md** — Contexte sur le créateur
 
-## Le credo du homard
+## Le Credo du homard
 
 ```
 I am Molty.

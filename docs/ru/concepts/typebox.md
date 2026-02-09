@@ -1,15 +1,8 @@
 ---
-summary: «Схемы TypeBox как единственный источник истины для протокола Gateway»
+summary: "Схемы TypeBox как единственный источник истины для протокола Gateway"
 read_when:
-  - «При обновлении схем протокола или codegen»
-title: «TypeBox»
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 72fb8a1244edd84b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:38Z
+  - При обновлении схем протокола или codegen
+title: "TypeBox"
 ---
 
 # TypeBox как источник истины протокола
@@ -66,7 +59,7 @@ Client                    Gateway
 - Сгенерированная JSON Schema: `dist/protocol.schema.json`
 - Сгенерированные Swift‑модели: `apps/macos/Sources/OpenClawProtocol/GatewayModels.swift`
 
-## Текущий пайплайн
+## Текущий трубопровод
 
 - `pnpm protocol:gen`
   - записывает JSON Schema (draft‑07) в `dist/protocol.schema.json`

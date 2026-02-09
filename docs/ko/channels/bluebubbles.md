@@ -5,13 +5,6 @@ read_when:
   - 웹훅 페어링 문제 해결
   - macOS 에서 iMessage 구성
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:11Z
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ x-i18n:
 ## 빠른 시작
 
 1. Mac 에 BlueBubbles 서버를 설치합니다 ([bluebubbles.app/install](https://bluebubbles.app/install) 의 안내를 따르십시오).
+
 2. BlueBubbles 설정에서 웹 API 를 활성화하고 비밀번호를 설정합니다.
+
 3. `openclaw onboard` 를 실행하고 BlueBubbles 를 선택하거나, 수동으로 구성합니다:
 
    ```json5
@@ -49,13 +44,14 @@ x-i18n:
    ```
 
 4. BlueBubbles 웹훅을 Gateway(게이트웨이) 로 지정합니다 (예: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Gateway(게이트웨이) 를 시작하면 웹훅 핸들러를 등록하고 페어링을 시작합니다.
 
 ## Messages.app 유지 (VM / 헤드리스 설정)
 
 일부 macOS VM / 상시 실행 설정에서는 Messages.app 이 '유휴' 상태가 되어 (앱을 열거나 포그라운드로 가져오기 전까지 인바운드 이벤트가 중지됨) 문제가 발생할 수 있습니다. 간단한 해결책은 AppleScript + LaunchAgent 를 사용해 **5 분마다 Messages 를 자극**하는 것입니다.
 
-### 1) AppleScript 저장
+### 1. AppleScript 저장
 
 다음 이름으로 저장합니다:
 
@@ -78,7 +74,7 @@ on error
 end try
 ```
 
-### 2) LaunchAgent 설치
+### 2. LaunchAgent 설치
 
 다음 이름으로 저장합니다:
 
@@ -125,7 +121,7 @@ launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null
 launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 ```
 
-## 온보딩
+## Onboarding
 
 BlueBubbles 는 대화형 설정 마법사에서 사용할 수 있습니다:
 
@@ -149,7 +145,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 
 ## 접근 제어 (다이렉트 메시지 + 그룹)
 
-다이렉트 메시지:
+DM:
 
 - 기본값: `channels.bluebubbles.dmPolicy = "pairing"`.
 - 알 수 없는 발신자는 페어링 코드를 받으며, 승인될 때까지 메시지는 무시됩니다 (코드는 1 시간 후 만료).

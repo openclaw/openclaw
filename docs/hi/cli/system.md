@@ -5,13 +5,6 @@ read_when:
   - आपको हार्टबीट सक्षम या अक्षम करने की आवश्यकता है
   - आप सिस्टम प्रेज़ेंस प्रविष्टियों का निरीक्षण करना चाहते हैं
 title: "system"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:01Z
 ---
 
 # `openclaw system`
@@ -30,9 +23,8 @@ openclaw system presence
 
 ## `system event`
 
-**main** सत्र पर एक सिस्टम इवेंट को कतार में डालें। अगला हार्टबीट इसे प्रॉम्प्ट में
-एक `System:` पंक्ति के रूप में इंजेक्ट करेगा। हार्टबीट को तुरंत ट्रिगर करने के लिए `--mode now` का उपयोग करें;
-`next-heartbeat` अगली निर्धारित टिक का इंतज़ार करता है।
+Enqueue a system event on the **main** session. 15. अगला heartbeat इसे प्रॉम्प्ट में एक `System:` लाइन के रूप में इंजेक्ट करेगा। Use `--mode now` to trigger the heartbeat
+immediately; `next-heartbeat` waits for the next scheduled tick.
 
 Flags:
 

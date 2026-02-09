@@ -1,16 +1,9 @@
 ---
-summary: „Zadania LLM wyłącznie w JSON do workflow (opcjonalne narzędzie wtyczki)”
+summary: "„Zadania LLM wyłącznie w JSON do workflow (opcjonalne narzędzie wtyczki)”"
 read_when:
   - Chcesz mieć krok LLM wyłącznie w JSON wewnątrz workflow
   - Potrzebujesz wyjścia LLM walidowanego schematem do automatyzacji
-title: „Zadanie LLM”
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:40Z
+title: "„Zadanie LLM”"
 ---
 
 # Zadanie LLM

@@ -5,13 +5,6 @@ read_when:
   - Вы хотите управлять браузером, запущенным на другой машине, через хост узла
   - Вы хотите использовать реле расширения Chrome (подключение/отключение через кнопку на панели инструментов)
 title: "браузер"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:14Z
 ---
 
 # `openclaw browser`

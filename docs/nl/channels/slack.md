@@ -2,13 +2,6 @@
 summary: "Slack-installatie voor socket- of HTTP-webhookmodus"
 read_when: "Slack instellen of Slack socket-/HTTP-modus debuggen"
 title: "Slack"
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:44Z
 ---
 
 # Slack
@@ -374,7 +367,7 @@ Ack-reacties worden globaal aangestuurd via `messages.ackReaction` +
 `messages.ackReactionScope`. Gebruik `messages.removeAckAfterReply` om de
 ack-reactie te verwijderen nadat de bot heeft geantwoord.
 
-## Limieten
+## Beperkingen
 
 - Uitgaande tekst wordt opgeknipt tot `channels.slack.textChunkLimit` (standaard 4000).
 - Optioneel splitsen op nieuwe regels: stel `channels.slack.chunkMode="newline"` in om op lege regels (paragraafgrenzen) te splitsen vóór lengte-opknippen.
@@ -384,11 +377,11 @@ ack-reactie te verwijderen nadat de bot heeft geantwoord.
 
 Standaard antwoordt OpenClaw in het hoofdkanaal. Gebruik `channels.slack.replyToMode` om automatische threading te regelen:
 
-| Modus   | Gedrag                                                                                                                                                                            |
-| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **Standaard.** Antwoord in het hoofdkanaal. Thread alleen als het triggerende bericht al in een thread stond.                                                                     |
+| Modus   | Gedrag                                                                                                                                                                                                                               |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`   | **Standaard.** Antwoord in het hoofdkanaal. Thread alleen als het triggerende bericht al in een thread stond.                                                                        |
 | `first` | Eerste antwoord gaat in de thread (onder het triggerende bericht), vervolgreplies gaan naar het hoofdkanaal. Handig om context zichtbaar te houden en thread-rommel te vermijden. |
-| `all`   | Alle antwoorden gaan in de thread. Houdt gesprekken compact maar kan zichtbaarheid verminderen.                                                                                   |
+| `all`   | Alle antwoorden gaan in de thread. Houdt gesprekken compact maar kan zichtbaarheid verminderen.                                                                                                      |
 
 De modus geldt voor zowel auto-replies als agent tool calls (`slack sendMessage`).
 
@@ -529,7 +522,7 @@ Slack-toolacties kunnen worden begrensd met `channels.slack.actions.*`:
 | reactions  | ingeschakeld | Reageren + reacties lijst            |
 | messages   | ingeschakeld | Lezen/verzenden/bewerken/verwijderen |
 | pins       | ingeschakeld | Pinnen/ontpinnen/lijsten             |
-| memberInfo | ingeschakeld | Ledeninfo                            |
+| memberInfo | ingeschakeld | Lid informatie                       |
 | emojiList  | ingeschakeld | Aangepaste emojilijst                |
 
 ## Beveiligingsnotities

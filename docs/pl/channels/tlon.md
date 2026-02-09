@@ -3,13 +3,6 @@ summary: "Status wsparcia Tlon/Urbit, możliwości i konfiguracja"
 read_when:
   - Praca nad funkcjami kanału Tlon/Urbit
 title: "Tlon"
-x-i18n:
-  source_path: channels/tlon.md
-  source_hash: 85fd29cda05b4563
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:53Z
 ---
 
 # Tlon (wtyczka)

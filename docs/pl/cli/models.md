@@ -4,13 +4,6 @@ read_when:
   - Chcesz zmienić domyślne modele lub wyświetlić stan uwierzytelniania dostawców
   - Chcesz przeskanować dostępne modele/dostawców i debugować profile uwierzytelniania
 title: "modele"
-x-i18n:
-  source_path: cli/models.md
-  source_hash: 923b6ffc7de382ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:01Z
 ---
 
 # `openclaw models`

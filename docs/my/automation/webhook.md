@@ -4,13 +4,6 @@ read_when:
   - Webhook endpoint များကို ထည့်သွင်းခြင်း သို့မဟုတ် ပြောင်းလဲခြင်း
   - အပြင်ပစနစ်များကို OpenClaw နှင့် ချိတ်ဆက်ခြင်း
 title: "Webhooks"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:08Z
 ---
 
 # Webhooks
@@ -36,7 +29,7 @@ Notes:
 
 ## Auth
 
-Request တိုင်းတွင် hook token ကို ထည့်သွင်းရပါမည်။ Header များကို အသုံးပြုရန် အကြံပြုပါသည်—
+Request တစ်ခုချင်းစီတွင် hook token ပါဝင်ရပါမည်။ Header များကို ဦးစားပေး အသုံးပြုပါ:
 
 - `Authorization: Bearer <token>` (အကြံပြု)
 - `x-openclaw-token: <token>`
@@ -81,12 +74,12 @@ Payload:
 
 - `message` **လိုအပ်သည်** (string): အေးဂျင့်မှ ကိုင်တွယ်ဆောင်ရွက်ရန် prompt သို့မဟုတ် မက်ဆေ့ချ်။
 - `name` ရွေးချယ်နိုင်သည် (string): hook အတွက် လူသားဖတ်ရှုနိုင်သော အမည် (ဥပမာ၊ "GitHub")၊ session summary များတွင် prefix အဖြစ် အသုံးပြုသည်။
-- `sessionKey` ရွေးချယ်နိုင်သည် (string): အေးဂျင့်၏ session ကို ခွဲခြားသတ်မှတ်ရန် အသုံးပြုသည့် key။ မူလအားဖြင့် ကျပန်း `hook:<uuid>` ကို အသုံးပြုသည်။ တူညီသော key ကို အသုံးပြုပါက hook context အတွင်း multi-turn စကားဝိုင်း ပြုလုပ်နိုင်သည်။
+- `sessionKey` optional (string): agent ၏ session ကို ခွဲခြားသတ်မှတ်ရန် အသုံးပြုသော key ဖြစ်ပါသည်။ Default အနေဖြင့် random `hook:<uuid>` ကို အသုံးပြုပါသည်။ တူညီသော key ကို အသုံးပြုခြင်းဖြင့် hook context အတွင်း multi-turn conversation ကို ပြုလုပ်နိုင်ပါသည်။
 - `wakeMode` ရွေးချယ်နိုင်သည် (`now` | `next-heartbeat`): ချက်ချင်း heartbeat ကို trigger လုပ်မလား (မူလ `now`) သို့မဟုတ် နောက်တစ်ကြိမ် အချိန်ကာလဆိုင်ရာ စစ်ဆေးမှုကို စောင့်မလား။
-- `deliver` ရွေးချယ်နိုင်သည် (boolean): `true` ဖြစ်ပါက အေးဂျင့်၏ တုံ့ပြန်ချက်ကို မက်ဆေ့ချ် ချန်နယ်သို့ ပို့ပေးမည်ဖြစ်သည်။ မူလတန်ဖိုးမှာ `true` ဖြစ်သည်။ heartbeat အတည်ပြုချက်သာ ပါဝင်သော တုံ့ပြန်ချက်များကို အလိုအလျောက် ကျော်သွားမည်။
-- `channel` ရွေးချယ်နိုင်သည် (string): ပို့ဆောင်ရန် မက်ဆေ့ချ် ချန်နယ်။ အောက်ပါတို့မှ တစ်ခုဖြစ်ရမည်— `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`။ မူလတန်ဖိုးမှာ `last` ဖြစ်သည်။
-- `to` ရွေးချယ်နိုင်သည် (string): ချန်နယ်အတွက် လက်ခံသူ အမှတ်အသား (ဥပမာ၊ WhatsApp/Signal အတွက် ဖုန်းနံပါတ်၊ Telegram အတွက် chat ID၊ Discord/Slack/Mattermost (plugin) အတွက် channel ID၊ MS Teams အတွက် conversation ID)။ မူလအားဖြင့် main session တွင် နောက်ဆုံးအသုံးပြုခဲ့သော လက်ခံသူကို အသုံးပြုသည်။
-- `model` ရွေးချယ်နိုင်သည် (string): မော်ဒယ် override (ဥပမာ၊ `anthropic/claude-3-5-sonnet` သို့မဟုတ် alias)။ ကန့်သတ်ထားပါက ခွင့်ပြုထားသော model စာရင်းအတွင်း ပါဝင်ရပါမည်။
+- `deliver` optional (boolean): `true` ဖြစ်ပါက agent ၏ တုံ့ပြန်မှုကို messaging channel သို့ ပို့ပေးပါမည်။ Defaults to `true`. Heartbeat acknowledgment မျှသာ ပါဝင်သော response များကို အလိုအလျောက် ကျော်သွားပါသည်။
+- `channel` optional (string): The messaging channel for delivery. အောက်ပါအနက်မှ တစ်ခု: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `mattermost` (plugin), `signal`, `imessage`, `msteams`။ 1. ပုံမှန်အားဖြင့် `last` ကို အသုံးပြုသည်။
+- 2. `to` ကို ရွေးချယ်နိုင်သည် (string): ချန်နယ်အတွက် လက်ခံသူကို ဖော်ညွှန်းသော အမှတ်အသား (ဥပမာ၊ WhatsApp/Signal အတွက် ဖုန်းနံပါတ်၊ Telegram အတွက် chat ID၊ Discord/Slack/Mattermost (plugin) အတွက် channel ID၊ MS Teams အတွက် conversation ID)။ 3. အဓိက session အတွင်းရှိ နောက်ဆုံး လက်ခံသူကို ပုံမှန် သုံးသည်။
+- 4. `model` ကို ရွေးချယ်နိုင်သည် (string): မော်ဒယ် အစားထိုးသတ်မှတ်မှု (ဥပမာ၊ `anthropic/claude-3-5-sonnet` သို့မဟုတ် alias)။ 5. ကန့်သတ်ထားပါက ခွင့်ပြုထားသော မော်ဒယ်စာရင်းအတွင်း ပါဝင်ရမည်။
 - `thinking` ရွေးချယ်နိုင်သည် (string): စဉ်းစားမှုအဆင့် override (ဥပမာ၊ `low`, `medium`, `high`)။
 - `timeoutSeconds` ရွေးချယ်နိုင်သည် (number): အေးဂျင့် လည်ပတ်မှုအတွက် အများဆုံး ကြာချိန် (စက္ကန့်ဖြင့်)။
 
@@ -98,9 +91,7 @@ Effect:
 
 ### `POST /hooks/<name>` (mapped)
 
-Custom hook အမည်များကို `hooks.mappings` (configuration ကို ကြည့်ပါ) မှတဆင့် ဖြေရှင်းပေးသည်။ Mapping တစ်ခုသည်
-အမျိုးမျိုးသော payload များကို `wake` သို့မဟုတ် `agent` လုပ်ဆောင်ချက်များအဖြစ် ပြောင်းလဲနိုင်ပြီး template များ သို့မဟုတ်
-code transform များကိုလည်း ရွေးချယ်အသုံးပြုနိုင်သည်။
+6. Custom hook အမည်များကို `hooks.mappings` မှတစ်ဆင့် ဖြေရှင်းသတ်မှတ်သည် (configuration ကို ကြည့်ပါ)။ 7. Mapping တစ်ခုသည် arbitrary payload များကို `wake` သို့မဟုတ် `agent` action များအဖြစ် ပြောင်းလဲနိုင်ပြီး optional template များ သို့မဟုတ် code transform များပါဝင်နိုင်သည်။
 
 Mapping options (အကျဉ်းချုပ်):
 
@@ -113,8 +104,8 @@ Mapping options (အကျဉ်းချုပ်):
   (`channel` ၏ မူလတန်ဖိုးမှာ `last` ဖြစ်ပြီး WhatsApp သို့ fallback လုပ်သည်)။
 - `allowUnsafeExternalContent: true` သည် ထို hook အတွက် external content safety wrapper ကို ပိတ်ထားသည်
   (အန္တရာယ်ရှိသည်; ယုံကြည်ရသော အတွင်းပိုင်းရင်းမြစ်များအတွက်သာ အသုံးပြုပါ)။
-- `openclaw webhooks gmail setup` သည် `openclaw webhooks gmail run` အတွက် `hooks.gmail` config ကို ရေးသားပေးသည်။
-  Gmail watch flow အပြည့်အစုံကို [Gmail Pub/Sub](/automation/gmail-pubsub) တွင် ကြည့်ပါ။
+- 8. `openclaw webhooks gmail setup` သည် `openclaw webhooks gmail run` အတွက် `hooks.gmail` config ကို ရေးသားပေးသည်။
+  9. Gmail watch flow အပြည့်အစုံအတွက် [Gmail Pub/Sub](/automation/gmail-pubsub) ကို ကြည့်ပါ။
 
 ## Responses
 
@@ -165,6 +156,5 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 - Hook endpoint များကို loopback, tailnet သို့မဟုတ် ယုံကြည်ရသော reverse proxy နောက်တွင်သာ ထားရှိပါ။
 - သီးသန့် hook token ကို အသုံးပြုပါ; gateway auth token များကို ပြန်လည်အသုံးမပြုပါနှင့်။
 - Webhook log များတွင် အရေးကြီးသော raw payload များကို မထည့်သွင်းပါနှင့်။
-- Hook payload များကို မယုံကြည်ရသော အချက်အလက်များအဖြစ် သဘောထားပြီး မူလအားဖြင့် safety boundary များဖြင့် ဖုံးအုပ်ထားသည်။
-  Hook တစ်ခုအတွက်သာ ပိတ်ရန် လိုအပ်ပါက ထို hook ၏ mapping တွင် `allowUnsafeExternalContent: true` ကို သတ်မှတ်ပါ
-  (အန္တရာယ်ရှိသည်)။
+- 10. Hook payload များကို ယုံကြည်မရသော အရာများအဖြစ် သဘောထားပြီး ပုံမှန်အားဖြင့် လုံခြုံရေး boundary များဖြင့် ထုပ်ပိုးထားသည်။
+  11. Hook တစ်ခုအတွက် သီးသန့် ဒီအချက်ကို ပိတ်ရန်လိုအပ်ပါက ထို hook ၏ mapping တွင် `allowUnsafeExternalContent: true` ကို သတ်မှတ်ပါ (အန္တရာယ်ရှိသည်)။

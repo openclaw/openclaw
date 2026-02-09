@@ -3,18 +3,12 @@ summary: "Paano ini-embed ng mac app ang Gateway WebChat at paano ito i-debug"
 read_when:
   - Pag-debug ng mac WebChat view o loopback port
 title: "WebChat"
-x-i18n:
-  source_path: platforms/mac/webchat.md
-  source_hash: 7c425374673b817a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:39Z
 ---
 
 # WebChat (macOS app)
 
-Ini-embed ng macOS menu bar app ang WebChat UI bilang isang native na SwiftUI view. Kumokonekta ito sa Gateway at naka-default sa **main session** para sa napiling agent (may session switcher para sa iba pang session).
+Ang macOS menu bar app ay nag-e-embed ng WebChat UI bilang isang native SwiftUI view. 45. Ito
+ay kumokonekta sa Gateway at nagde-default sa **main session** para sa napiling agent (na may session switcher para sa iba pang session).
 
 - **Local mode**: direktang kumokonekta sa lokal na Gateway WebSocket.
 - **Remote mode**: ipinapasa ang Gateway control port sa SSH at ginagamit ang tunnel na iyon bilang data plane.
@@ -22,6 +16,7 @@ Ini-embed ng macOS menu bar app ang WebChat UI bilang isang native na SwiftUI vi
 ## Launch & debugging
 
 - Manual: Lobster menu → “Open Chat”.
+
 - Auto‑open para sa testing:
 
   ```bash
@@ -34,7 +29,8 @@ Ini-embed ng macOS menu bar app ang WebChat UI bilang isang native na SwiftUI vi
 
 - Data plane: mga Gateway WS method `chat.history`, `chat.send`, `chat.abort`,
   `chat.inject` at mga event `chat`, `agent`, `presence`, `tick`, `health`.
-- Session: naka-default sa primary session (`main`, o `global` kapag global ang scope). Kayang mag-switch ng UI sa pagitan ng mga session.
+- Session: nagde-default sa primary session (`main`, o `global` kapag ang scope ay
+  global). 46. Maaaring magpalit ang UI sa pagitan ng mga session.
 - Gumagamit ang onboarding ng dedicated na session para manatiling hiwalay ang first‑run setup.
 
 ## Security surface

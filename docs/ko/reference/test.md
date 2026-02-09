@@ -3,13 +3,6 @@ summary: "로컬에서 테스트 (Vitest) 를 실행하는 방법과 force/cover
 read_when:
   - 테스트를 실행하거나 수정할 때
 title: "테스트"
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:17Z
 ---
 
 # 테스트
@@ -17,8 +10,11 @@ x-i18n:
 - 전체 테스트 키트 (스위트, 라이브, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: 기본 제어 포트를 점유하고 있는 잔여 gateway 프로세스를 종료한 다음, 격리된 gateway 포트로 전체 Vitest 스위트를 실행하여 서버 테스트가 실행 중인 인스턴스와 충돌하지 않도록 합니다. 이전 gateway 실행으로 인해 포트 18789 가 점유된 상태로 남아 있을 때 사용하십시오.
+
 - `pnpm test:coverage`: V8 커버리지와 함께 Vitest 를 실행합니다. 전역 임계값은 라인/브랜치/함수/구문 모두 70% 입니다. 커버리지는 통합 비중이 높은 엔트리포인트 (CLI 연결부, gateway/telegram 브리지, webchat 정적 서버) 를 제외하여 단위 테스트 가능한 로직에 목표를 집중합니다.
+
 - `pnpm test:e2e`: gateway 엔드투엔드 스모크 테스트 (다중 인스턴스 WS/HTTP/node 페어링) 를 실행합니다.
+
 - `pnpm test:live`: 프로바이더 라이브 테스트 (minimax/zai) 를 실행합니다. API 키와 `LIVE=1` (또는 프로바이더별 `*_LIVE_TEST=1`) 가 필요하며, 이를 통해 스킵을 해제합니다.
 
 ## 모델 지연 시간 벤치 (로컬 키)

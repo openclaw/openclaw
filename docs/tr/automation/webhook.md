@@ -4,13 +4,6 @@ read_when:
   - Webhook uç noktaları eklerken veya değiştirirken
   - Harici sistemleri OpenClaw’a bağlarken
 title: "Webhook'lar"
-x-i18n:
-  source_path: automation/webhook.md
-  source_hash: f26b88864567be82
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:02Z
 ---
 
 # Webhook'lar
@@ -34,7 +27,7 @@ Notlar:
 - `hooks.token`, `hooks.enabled=true` olduğunda gereklidir.
 - `hooks.path` varsayılan olarak `/hooks` değerini alır.
 
-## Kimlik Doğrulama
+## Kimlik doğrulama
 
 Her isteğin hook belirtecini içermesi gerekir. Tercihen başlıkları kullanın:
 
@@ -55,7 +48,7 @@ Yük (payload):
 - `text` **gerekli** (string): Olayın açıklaması (örn. "Yeni e-posta alındı").
 - `mode` isteğe bağlı (`now` | `next-heartbeat`): Anında bir heartbeat tetiklenip tetiklenmeyeceği (varsayılan `now`) ya da bir sonraki periyodik kontrolün beklenmesi.
 
-Etki:
+Etkisi:
 
 - **Ana** oturum için bir sistem olayı kuyruğa alınır
 - `mode=now` ise, anında bir heartbeat tetiklenir
@@ -90,7 +83,7 @@ Yük (payload):
 - `thinking` isteğe bağlı (string): Düşünme düzeyi geçersiz kılma (örn. `low`, `medium`, `high`).
 - `timeoutSeconds` isteğe bağlı (number): Ajan çalıştırması için saniye cinsinden azami süre.
 
-Etki:
+Etkisi:
 
 - **İzole** bir ajan turu çalıştırır (kendi oturum anahtarı)
 - Her zaman **ana** oturuma bir özet gönderir

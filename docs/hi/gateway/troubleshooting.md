@@ -4,19 +4,12 @@ read_when:
   - समस्या-निवारण हब ने आपको गहन निदान के लिए यहाँ भेजा है
   - आपको सटीक कमांड्स के साथ स्थिर, लक्षण-आधारित रनबुक अनुभागों की आवश्यकता है
 title: "समस्या-निवारण"
-x-i18n:
-  source_path: gateway/troubleshooting.md
-  source_hash: 163c4af6be740e23
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:32Z
 ---
 
 # Gateway समस्या-निवारण
 
-यह पृष्ठ गहन रनबुक है।
-यदि आप पहले त्वरित ट्रायेज फ्लो चाहते हैं, तो [/help/troubleshooting](/help/troubleshooting) से शुरुआत करें।
+This page is the deep runbook.
+Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
 
 ## कमांड सीढ़ी
 
@@ -117,7 +110,7 @@ openclaw gateway status --deep
 सामान्य संकेत:
 
 - `Gateway start blocked: set gateway.mode=local` → स्थानीय Gateway मोड सक्षम नहीं है।
-- `refusing to bind gateway ... without auth` → टोकन/पासवर्ड के बिना non-loopback बाइंड।
+- `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → पोर्ट टकराव।
 
 संबंधित:
@@ -242,7 +235,7 @@ openclaw doctor
 - `Failed to start Chrome CDP on port` → ब्राउज़र प्रक्रिया लॉन्च होने में विफल।
 - `browser.executablePath not found` → विन्यस्त पथ अमान्य है।
 - `Chrome extension relay is running, but no tab is connected` → एक्सटेंशन रिले संलग्न नहीं।
-- `Browser attachOnly is enabled ... not reachable` → attach-only प्रोफ़ाइल में कोई पहुँचयोग्य लक्ष्य नहीं।
+- `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
 संबंधित:
 
@@ -254,7 +247,7 @@ openclaw doctor
 
 अधिकांश पोस्ट-अपग्रेड समस्याएँ विन्यास ड्रिफ्ट या अब लागू किए जा रहे अधिक सख्त डिफ़ॉल्ट्स के कारण होती हैं।
 
-### 1) प्रमाणीकरण और URL ओवरराइड व्यवहार बदला
+### 1. प्रमाणीकरण और URL ओवरराइड व्यवहार बदला
 
 ```bash
 openclaw gateway status
@@ -273,7 +266,7 @@ openclaw config get gateway.auth.mode
 - `gateway connect failed:` → गलत URL लक्ष्य।
 - `unauthorized` → एंडपॉइंट पहुँचयोग्य है लेकिन प्रमाणीकरण गलत है।
 
-### 2) बाइंड और प्रमाणीकरण गार्डरेल्स अधिक सख्त हैं
+### 2. बाइंड और प्रमाणीकरण गार्डरेल्स अधिक सख्त हैं
 
 ```bash
 openclaw config get gateway.bind
@@ -289,10 +282,10 @@ openclaw logs --follow
 
 सामान्य संकेत:
 
-- `refusing to bind gateway ... without auth` → बाइंड+प्रमाणीकरण असंगति।
+- `refusing to bind gateway ... without auth` → bind+auth mismatch.
 - रनटाइम चलते समय `RPC probe: failed` → Gateway जीवित है लेकिन वर्तमान प्रमाणीकरण/URL के साथ पहुँच से बाहर है।
 
-### 3) पेयरिंग और डिवाइस पहचान स्थिति बदली
+### 3. पेयरिंग और डिवाइस पहचान स्थिति बदली
 
 ```bash
 openclaw devices list

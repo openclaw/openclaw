@@ -4,13 +4,6 @@ read_when:
   - Definiowanie lub refaktoryzacja architektury wtyczek
   - Migracja konektorów kanałów do SDK/runtime wtyczek
 title: "Refaktoryzacja SDK wtyczek"
-x-i18n:
-  source_path: refactor/plugin-sdk.md
-  source_hash: 1f3519f43632fcac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:40Z
 ---
 
 # Plan refaktoryzacji SDK + Runtime wtyczek
@@ -25,7 +18,7 @@ Cel: każdy konektor komunikacyjny jest wtyczką (dołączoną lub zewnętrzną)
 
 ## Docelowa architektura (dwie warstwy)
 
-### 1) SDK wtyczek (czas kompilacji, stabilne, publikowalne)
+### 1. SDK wtyczek (czas kompilacji, stabilne, publikowalne)
 
 Zakres: typy, pomocniki i narzędzia konfiguracji. Brak stanu runtime, brak efektów ubocznych.
 
@@ -39,12 +32,12 @@ Zawartość (przykłady):
 - Pomocniki parametrów narzędzi: `createActionGate`, `readStringParam`, `readNumberParam`, `readReactionParams`, `jsonResult`.
 - Pomocnik linków do dokumentacji: `formatDocsLink`.
 
-Dostarczenie:
+Dostawa:
 
 - Publikowane jako `openclaw/plugin-sdk` (lub eksportowane z core pod `openclaw/plugin-sdk`).
 - Semver z jednoznacznymi gwarancjami stabilności.
 
-### 2) Runtime wtyczek (powierzchnia wykonawcza, wstrzykiwana)
+### 2. Runtime wtyczek (powierzchnia wykonawcza, wstrzykiwana)
 
 Zakres: wszystko, co dotyka zachowania runtime core.
 Dostępne przez `OpenClawPluginApi.runtime`, aby wtyczki nigdy nie importowały `src/**`.

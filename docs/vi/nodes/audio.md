@@ -3,13 +3,6 @@ summary: "Cách các ghi chú âm thanh/giọng nói đầu vào được tải 
 read_when:
   - Thay đổi phiên âm âm thanh hoặc xử lý media
 title: "Âm thanh và Ghi chú giọng nói"
-x-i18n:
-  source_path: nodes/audio.md
-  source_hash: b926c47989ab0d1e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:28Z
 ---
 
 # Âm thanh / Ghi chú giọng nói — 2026-01-17
@@ -37,9 +30,9 @@ OpenClaw sẽ tự động phát hiện theo thứ tự sau và dừng ở tùy 
 2. **Gemini CLI** (`gemini`) sử dụng `read_many_files`
 3. **Khóa nhà cung cấp** (OpenAI → Groq → Deepgram → Google)
 
-Để tắt tự động phát hiện, đặt `tools.media.audio.enabled: false`.
-Để tùy chỉnh, đặt `tools.media.audio.models`.
-Lưu ý: Việc phát hiện binary là nỗ lực tốt nhất trên macOS/Linux/Windows; hãy đảm bảo CLI nằm trên `PATH` (chúng tôi mở rộng `~`), hoặc đặt một mô hình CLI rõ ràng với đường dẫn lệnh đầy đủ.
+To disable auto-detection, set `tools.media.audio.enabled: false`.
+To customize, set `tools.media.audio.models`.
+Lưu ý: Việc phát hiện nhị phân là best‑effort trên macOS/Linux/Windows; hãy đảm bảo CLI nằm trong `PATH` (chúng tôi mở rộng `~`), hoặc đặt một mô hình CLI tường minh với đường dẫn lệnh đầy đủ.
 
 ## Ví dụ cấu hình
 
@@ -107,8 +100,8 @@ Lưu ý: Việc phát hiện binary là nỗ lực tốt nhất trên macOS/Linu
 - Deepgram sử dụng `DEEPGRAM_API_KEY` khi dùng `provider: "deepgram"`.
 - Chi tiết thiết lập Deepgram: [Deepgram (phiên âm âm thanh)](/providers/deepgram).
 - Các nhà cung cấp âm thanh có thể ghi đè `baseUrl`, `headers` và `providerOptions` thông qua `tools.media.audio`.
-- Giới hạn kích thước mặc định là 20MB (`tools.media.audio.maxBytes`). Âm thanh vượt kích thước sẽ bị bỏ qua cho mô hình đó và thử mục tiếp theo.
-- `maxChars` mặc định cho âm thanh là **không đặt** (toàn bộ bản phiên âm). Đặt `tools.media.audio.maxChars` hoặc theo từng mục `maxChars` để cắt bớt đầu ra.
+- Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
+- Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.
 - Mặc định tự động của OpenAI là `gpt-4o-mini-transcribe`; đặt `model: "gpt-4o-transcribe"` để có độ chính xác cao hơn.
 - Dùng `tools.media.audio.attachments` để xử lý nhiều ghi chú giọng nói (`mode: "all"` + `maxAttachments`).
 - Bản phiên âm có sẵn cho các template dưới dạng `{{Transcript}}`.
@@ -116,6 +109,6 @@ Lưu ý: Việc phát hiện binary là nỗ lực tốt nhất trên macOS/Linu
 
 ## Các điểm dễ sai
 
-- Quy tắc phạm vi dùng nguyên tắc khớp đầu tiên. `chatType` được chuẩn hóa thành `direct`, `group` hoặc `room`.
+- Scope rules use first-match wins. `chatType` is normalized to `direct`, `group`, or `room`.
 - Đảm bảo CLI của bạn thoát với mã 0 và in văn bản thuần; JSON cần được xử lý lại qua `jq -r .text`.
 - Giữ thời gian chờ ở mức hợp lý (`timeoutSeconds`, mặc định 60s) để tránh chặn hàng đợi phản hồi.

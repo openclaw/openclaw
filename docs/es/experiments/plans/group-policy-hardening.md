@@ -3,13 +3,6 @@ summary: "Endurecimiento de la lista de permitidos de Telegram: prefijo + normal
 read_when:
   - Revisión de cambios históricos de la lista de permitidos de Telegram
 title: "Endurecimiento de la lista de permitidos de Telegram"
-x-i18n:
-  source_path: experiments/plans/group-policy-hardening.md
-  source_hash: 70569968857d4084
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:20Z
 ---
 
 # Endurecimiento de la lista de permitidos de Telegram

@@ -3,13 +3,6 @@ summary: "Microsoft Teams-bot supportstatus, funktioner og konfiguration"
 read_when:
   - Arbejder med MS Teams-kanalfunktioner
 title: "Microsoft Teams"
-x-i18n:
-  source_path: channels/msteams.md
-  source_hash: cec0b5a6eb3ff1ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:58Z
 ---
 
 # Microsoft Teams (plugin)
@@ -18,13 +11,13 @@ x-i18n:
 
 Opdateret: 2026-01-21
 
-Status: tekst + DM-vedhæftninger understøttes; afsendelse af filer i kanaler/grupper kræver `sharePointSiteId` + Graph-tilladelser (se [Afsendelse af filer i gruppechats](#sending-files-in-group-chats)). Afstemninger sendes via Adaptive Cards.
+Status: tekst + DM vedhæftede filer understøttes; kanal / gruppe fil afsendelse kræver `sharePointSiteId` + graf tilladelser (se [Sender filer i gruppe chats](#sending-files-in-group-chats)). Afstemninger sendes via Adaptive Cards.
 
 ## Plugin påkrævet
 
 Microsoft Teams leveres som et plugin og er ikke bundlet med kerneinstallationen.
 
-**Breaking change (2026.1.15):** MS Teams er flyttet ud af kernen. Hvis du bruger det, skal du installere plugin’et.
+**Breaking change (2026.1.15):** MS Teams flyttet ud af kerne. Hvis du bruger det, skal du installere plugin.
 
 Forklaring: holder kerneinstallationer lettere og lader MS Teams-afhængigheder opdatere uafhængigt.
 
@@ -69,7 +62,7 @@ Minimal konfiguration:
 }
 ```
 
-Bemærk: gruppechats er blokeret som standard (`channels.msteams.groupPolicy: "allowlist"`). For at tillade gruppesvar skal du sætte `channels.msteams.groupAllowFrom` (eller bruge `groupPolicy: "open"` for at tillade ethvert medlem, mention-gated).
+Bemærk: gruppechats blokeres som standard (`channels.msteams.groupPolicy: "allowlist"`). For at tillade gruppe svar, angiv `channels.msteams.groupAllowFrom` (eller brug `groupPolicy: "open"` for at tillade ethvert medlem, mention-gated).
 
 ## Mål
 
@@ -93,12 +86,12 @@ Deaktivér med:
 
 **DM-adgang**
 
-- Standard: `channels.msteams.dmPolicy = "pairing"`. Ukendte afsendere ignoreres, indtil de er godkendt.
-- `channels.msteams.allowFrom` accepterer AAD-objekt-ID’er, UPN’er eller visningsnavne. Opsætningsguiden opløser navne til ID’er via Microsoft Graph, når legitimationsoplysninger tillader det.
+- Standard: `channels.msteams.dmPolicy = "pairing"`. Ukendte afsendere ignoreres indtil de godkendes.
+- `channels.msteams.allowFrom` accepterer AAD objekt IDs, UPN'er, eller vise navne. Guiden løser navne til id'er via Microsoft Graph, når legitimationsoplysninger tillader.
 
 **Gruppeadgang**
 
-- Standard: `channels.msteams.groupPolicy = "allowlist"` (blokeret, medmindre du tilføjer `groupAllowFrom`). Brug `channels.defaults.groupPolicy` til at tilsidesætte standarden, når den ikke er sat.
+- Standard: `channels.msteams.groupPolicy = "allowlist"` (blokeret medmindre du tilføjer `groupAllowFrom`). Brug `channels.defaults.groupPolicy` for at tilsidesætte standarden, når den ikke er angivet.
 - `channels.msteams.groupAllowFrom` styrer, hvilke afsendere der kan trigge i gruppechats/kanaler (falder tilbage til `channels.msteams.allowFrom`).
 - Sæt `groupPolicy: "open"` for at tillade ethvert medlem (stadig mention‑gated som standard).
 - For at tillade **ingen kanaler**, sæt `channels.msteams.groupPolicy: "disabled"`.
@@ -162,16 +155,16 @@ Før du konfigurerer OpenClaw, skal du oprette en Azure Bot-ressource.
 1. Gå til [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot)
 2. Udfyld fanen **Basics**:
 
-   | Felt               | Værdi                                                |
-   | ------------------ | ---------------------------------------------------- |
+   | Felt               | Værdi                                                                   |
+   | ------------------ | ----------------------------------------------------------------------- |
    | **Bot handle**     | Dit botnavn, fx `openclaw-msteams` (skal være unikt) |
-   | **Subscription**   | Vælg dit Azure-abonnement                            |
-   | **Resource group** | Opret ny eller brug eksisterende                     |
-   | **Pricing tier**   | **Free** til dev/test                                |
+   | **Subscription**   | Vælg dit Azure-abonnement                                               |
+   | **Resource group** | Opret ny eller brug eksisterende                                        |
+   | **Pricing tier**   | **Free** til dev/test                                                   |
    | **Type of App**    | **Single Tenant** (anbefalet – se note nedenfor)     |
-   | **Creation type**  | **Create new Microsoft App ID**                      |
+   | **Creation type**  | **Create new Microsoft App ID**                                         |
 
-> **Afviklingsmeddelelse:** Oprettelse af nye multi-tenant bots blev afviklet efter 2025-07-31. Brug **Single Tenant** til nye bots.
+> **Afskrivningsmeddelelse:** Oprettelse af nye multi-tenant bots blev forældet efter 2025-07-31. Brug **Enkelt Leje** til nye bots.
 
 3. Klik **Review + create** → **Create** (vent ~1-2 minutter)
 
@@ -198,7 +191,7 @@ Før du konfigurerer OpenClaw, skal du oprette en Azure Bot-ressource.
 
 ## Lokal udvikling (Tunneling)
 
-Teams kan ikke nå `localhost`. Brug en tunnel til lokal udvikling:
+Hold kan ikke nå `localhost`. Brug en tunnel til lokal udvikling:
 
 **Mulighed A: ngrok**
 
@@ -278,6 +271,7 @@ Dette er ofte nemmere end håndredigering af JSON-manifester.
    ```
 
    Du kan også bruge miljøvariabler i stedet for konfigurationsnøgler:
+
    - `MSTEAMS_APP_ID`
    - `MSTEAMS_APP_PASSWORD`
    - `MSTEAMS_TENANT_ID`
@@ -292,12 +286,12 @@ Dette er ofte nemmere end håndredigering af JSON-manifester.
 ## Historikkontekst
 
 - `channels.msteams.historyLimit` styrer, hvor mange nylige kanal-/gruppebeskeder der pakkes ind i prompten.
-- Falder tilbage til `messages.groupChat.historyLimit`. Sæt `0` for at deaktivere (standard 50).
-- DM-historik kan begrænses med `channels.msteams.dmHistoryLimit` (brugerskift). Pr.-bruger-tilsidesættelser: `channels.msteams.dms["<user_id>"].historyLimit`.
+- Falder tilbage til `messages.groupChat.historyLimit`. Sæt `0` til at deaktivere (standard 50).
+- DM historie kan begrænses med `channels.msteams.dmHistoryLimit` (bruger drejninger). Per-user tilsidesættelser: `channels.msteams.dms["<user_id>"].historyLimit`.
 
 ## Aktuelle Teams RSC-tilladelser (Manifest)
 
-Dette er de **eksisterende resourceSpecific-tilladelser** i vores Teams-app-manifest. De gælder kun inde i det team/chat, hvor appen er installeret.
+Disse er de \*\* eksisterende ressourcespecifikke tilladelser\*\* i vores Teams app manifest. De gælder kun inde i teamet/chat, hvor appen er installeret.
 
 **For kanaler (team-scope):**
 
@@ -315,7 +309,7 @@ Dette er de **eksisterende resourceSpecific-tilladelser** i vores Teams-app-mani
 
 ## Eksempel på Teams-manifest (redigeret)
 
-Minimalt, gyldigt eksempel med de krævede felter. Erstat ID’er og URL’er.
+Minimal, gyldigt eksempel med de obligatoriske felter. Erstat ID'er og URL'er.
 
 ```json
 {
@@ -410,14 +404,14 @@ Tilføjer:
 
 ### RSC vs Graph API
 
-| Funktion                   | RSC-tilladelser  | Graph API                          |
-| -------------------------- | ---------------- | ---------------------------------- |
-| **Realtime-beskeder**      | Ja (via webhook) | Nej (kun polling)                  |
-| **Historiske beskeder**    | Nej              | Ja (kan forespørge historik)       |
-| **Opsætningskompleksitet** | Kun app-manifest | Kræver admin-samtykke + token-flow |
-| **Virker offline**         | Nej (skal køre)  | Ja (forespørg når som helst)       |
+| Funktion                   | RSC-tilladelser                     | Graph API                                       |
+| -------------------------- | ----------------------------------- | ----------------------------------------------- |
+| **Realtime-beskeder**      | Ja (via webhook) | Nej (kun polling)            |
+| **Historiske beskeder**    | Nej                                 | Ja (kan forespørge historik) |
+| **Opsætningskompleksitet** | Kun app-manifest                    | Kræver admin-samtykke + token-flow              |
+| **Virker offline**         | Nej (skal køre)  | Ja (forespørg når som helst) |
 
-**Bundlinje:** RSC er til realtime-lytning; Graph API er til historisk adgang. For at indhente missede beskeder offline skal du bruge Graph API med `ChannelMessage.Read.All` (kræver admin-samtykke).
+**Bundlinje:** RSC er til realtidslytte; GrafAPI er for historisk adgang. For at indhente ubesvarede beskeder mens du er offline, skal du bruge Graph API med `ChannelMessage.Read.All` (kræver admin samtykke).
 
 ## Graph-aktiveret medier + historik (påkrævet for kanaler)
 
@@ -434,7 +428,7 @@ Hvis du har brug for billeder/filer i **kanaler** eller vil hente **beskedhistor
 
 ### Webhook-timeouts
 
-Teams leverer beskeder via HTTP webhook. Hvis behandlingen tager for lang tid (fx langsomme LLM-svar), kan du se:
+Teams leverer beskeder via HTTP webhook. Hvis behandlingen tager for lang tid (f.eks. langsom LLM svar), kan du se:
 
 - Gateway-timeouts
 - Teams forsøger igen (giver dubletter)
@@ -459,21 +453,21 @@ Nøgleindstillinger (se `/gateway/configuration` for delte kanalmønstre):
 - `channels.msteams.webhook.port` (standard `3978`)
 - `channels.msteams.webhook.path` (standard `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (standard: pairing)
-- `channels.msteams.allowFrom`: tilladelsesliste for DMs (AAD-objekt-ID’er, UPN’er eller visningsnavne). Guiden opløser navne til ID’er under opsætning, når Graph-adgang er tilgængelig.
+- `channels.msteams.allowFrom`: allowlist for DMs (AAD objekt IDs, UPNs, eller vise navne). Guiden løser navne til id'er under opsætning når graf- adgang er tilgængelig.
 - `channels.msteams.textChunkLimit`: udgående tekst-chunkstørrelse.
 - `channels.msteams.chunkMode`: `length` (standard) eller `newline` for at splitte på tomme linjer (afsnitsgrænser) før længde-chunking.
 - `channels.msteams.mediaAllowHosts`: tilladelsesliste for indgående vedhæftningsværter (standard Microsoft/Teams-domæner).
 - `channels.msteams.mediaAuthAllowHosts`: tilladelsesliste for vedhæftning af Authorization-headere ved mediegenforsøg (standard Graph + Bot Framework-værter).
 - `channels.msteams.requireMention`: kræv @mention i kanaler/grupper (standard true).
 - `channels.msteams.replyStyle`: `thread | top-level` (se [Svarstil](#reply-style-threads-vs-posts)).
-- `channels.msteams.teams.<teamId>.replyStyle`: pr.-team-tilsidesættelse.
-- `channels.msteams.teams.<teamId>.requireMention`: pr.-team-tilsidesættelse.
-- `channels.msteams.teams.<teamId>.tools`: standard pr.-team værktøjspolitik-tilsidesættelser (`allow`/`deny`/`alsoAllow`), brugt når en kanal-tilsidesættelse mangler.
-- `channels.msteams.teams.<teamId>.toolsBySender`: standard pr.-team pr.-afsender værktøjspolitik-tilsidesættelser (`"*"` wildcard understøttet).
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: pr.-kanal-tilsidesættelse.
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: pr.-kanal-tilsidesættelse.
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: pr.-kanal værktøjspolitik-tilsidesættelser (`allow`/`deny`/`alsoAllow`).
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: pr.-kanal pr.-afsender værktøjspolitik-tilsidesættelser (`"*"` wildcard understøttet).
+- `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
+- `channels.msteams.teams.<teamId>.requireMention`: per-team tilsidesættelse.
+- `channels.msteams.teams.<teamId>.tools`: standard overskrivning pr. hold værktøjspolitik (`allow`/`deny`/`alsoAllow`) bruges, når en kanal overskrivning mangler.
+- `channels.msteams.teams.<teamId>.toolsBySender`: Standard per-team per-sender værktøj politik tilsidesættelser (`"*"` jokertegn understøttet).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender værktøj politik tilsidesættelser (`"*"` jokertegn understøttet).
 - `channels.msteams.sharePointSiteId`: SharePoint site-ID til filuploads i gruppechats/kanaler (se [Afsendelse af filer i gruppechats](#sending-files-in-group-chats)).
 
 ## Routing & Sessioner
@@ -488,12 +482,12 @@ Nøgleindstillinger (se `/gateway/configuration` for delte kanalmønstre):
 
 Teams har for nylig introduceret to kanal-UI-stile over den samme underliggende datamodel:
 
-| Stil                    | Beskrivelse                                         | Anbefalet `replyStyle` |
-| ----------------------- | --------------------------------------------------- | ---------------------- |
-| **Indlæg** (klassisk)   | Beskeder vises som kort med trådede svar nedenunder | `thread` (standard)    |
-| **Tråde** (Slack-lign.) | Beskeder flyder lineært, mere som Slack             | `top-level`            |
+| Stil                                                       | Beskrivelse                                         | Anbefalet `replyStyle`                 |
+| ---------------------------------------------------------- | --------------------------------------------------- | -------------------------------------- |
+| **Indlæg** (klassisk)                   | Beskeder vises som kort med trådede svar nedenunder | `thread` (standard) |
+| **Tråde** (Slack-lign.) | Beskeder flyder lineært, mere som Slack             | `top-level`                            |
 
-**Problemet:** Teams API’et eksponerer ikke, hvilken UI-stil en kanal bruger. Hvis du bruger den forkerte `replyStyle`:
+**Problemet:** Teams API afslører ikke hvilken UI stil en kanal anvender. Hvis du bruger den forkerte `replyStyle`:
 
 - `thread` i en Tråde-kanal → svar vises akavet indlejret
 - `top-level` i en Indlæg-kanal → svar vises som separate top-level indlæg i stedet for i tråden
@@ -522,25 +516,25 @@ Teams har for nylig introduceret to kanal-UI-stile over den samme underliggende 
 **Nuværende begrænsninger:**
 
 - **DMs:** Billeder og filvedhæftninger virker via Teams bot fil-API’er.
-- **Kanaler/grupper:** Vedhæftninger ligger i M365-lager (SharePoint/OneDrive). Webhook-payloaden indeholder kun en HTML-stub, ikke de faktiske filbytes. **Graph API-tilladelser er påkrævet** for at downloade kanalvedhæftninger.
+- **Kanaler/grupper:** Vedhæftede filer bor i M365 lagerplads (SharePoint/OneDrive). Den webhook nyttelast indeholder kun en HTML stub, ikke den faktiske fil bytes. **Graf API tilladelser er påkrævet** for at downloade kanal vedhæftede filer.
 
-Uden Graph-tilladelser modtages kanalbeskeder med billeder som kun tekst (billedindholdet er ikke tilgængeligt for botten).
-Som standard downloader OpenClaw kun medier fra Microsoft/Teams-værtsnavne. Tilsidesæt med `channels.msteams.mediaAllowHosts` (brug `["*"]` for at tillade enhver vært).
-Authorization-headere vedhæftes kun for værter i `channels.msteams.mediaAuthAllowHosts` (standard Graph + Bot Framework-værter). Hold denne liste stram (undgå multi-tenant-suffikser).
+Uden graftilladelser, vil kanalbeskeder med billeder blive modtaget som kun tekst (billedet indhold er ikke tilgængeligt for bot).
+Som standard downloader OpenClaw kun medier fra Microsoft / Teams værtsnavne. Tilsidesæt med `channels.msteams.mediaAllowHosts` (brug `["*"]` for at tillade enhver vært).
+Authorization headers are only attached for host in `channels.msteams.mediaAuthAllowHosts` (defaults to Graph + Bot Framework hosts). Hold denne liste streng (undgå multi-lejer suffikser).
 
 ## Afsendelse af filer i gruppechats
 
-Bots kan sende filer i DMs ved hjælp af FileConsentCard-flowet (indbygget). **Afsendelse af filer i gruppechats/kanaler** kræver dog ekstra opsætning:
+Bots kan sende filer i DMs ved hjælp af FileConsentCard flow (indbygget). **Afsendelse af filer i gruppechats/kanaler** kræver dog yderligere opsætning:
 
-| Kontekst                | Hvordan filer sendes                               | Nødvendig opsætning                           |
-| ----------------------- | -------------------------------------------------- | --------------------------------------------- |
-| **DMs**                 | FileConsentCard → bruger accepterer → bot uploader | Virker out of the box                         |
-| **Gruppechats/kanaler** | Upload til SharePoint → delingslink                | Kræver `sharePointSiteId` + Graph-tilladelser |
-| **Billeder (alle)**     | Base64-kodet inline                                | Virker out of the box                         |
+| Kontekst                               | Hvordan filer sendes                               | Nødvendig opsætning                           |
+| -------------------------------------- | -------------------------------------------------- | --------------------------------------------- |
+| **DMs**                                | FileConsentCard → bruger accepterer → bot uploader | Virker out of the box                         |
+| **Gruppechats/kanaler**                | Upload til SharePoint → delingslink                | Kræver `sharePointSiteId` + Graph-tilladelser |
+| **Billeder (alle)** | Base64-kodet inline                                | Virker out of the box                         |
 
 ### Hvorfor gruppechats kræver SharePoint
 
-Bots har ikke et personligt OneDrive-drev (Graph API-endpointet `/me/drive` virker ikke for applikationsidentiteter). For at sende filer i gruppechats/kanaler uploader botten til et **SharePoint-site** og opretter et delingslink.
+Bots har ikke et personligt OneDrive drev (`/me/drive` Graph API endpoint virker ikke for applikationsidentiteter). For at sende filer i gruppechats/-kanaler uploader bot til et \*\* SharePoint site \*\* og opretter et delingslink.
 
 ### Opsætning
 
@@ -579,18 +573,18 @@ Bots har ikke et personligt OneDrive-drev (Graph API-endpointet `/me/drive` virk
 
 ### Delingsadfærd
 
-| Tilladelse                              | Delingsadfærd                                                |
-| --------------------------------------- | ------------------------------------------------------------ |
-| `Sites.ReadWrite.All` kun               | Organisationsdækkende delingslink (alle i org kan få adgang) |
-| `Sites.ReadWrite.All` + `Chat.Read.All` | Pr.-bruger delingslink (kun chatmedlemmer kan få adgang)     |
+| Tilladelse                              | Delingsadfærd                                                                               |
+| --------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `Sites.ReadWrite.All` kun               | Organisationsdækkende delingslink (alle i org kan få adgang)             |
+| `Sites.ReadWrite.All` + `Chat.Read.All` | Pr.-bruger delingslink (kun chatmedlemmer kan få adgang) |
 
-Pr.-bruger deling er mere sikker, da kun chatdeltagerne kan få adgang til filen. Hvis `Chat.Read.All`-tilladelsen mangler, falder botten tilbage til organisationsdækkende deling.
+Per-bruger deling er mere sikker, da kun chatdeltagerne kan få adgang til filen. Hvis `Chat.Read.Alle` tilladelse mangler, falder botten tilbage til delingen i hele organisationen.
 
 ### Fallback-adfærd
 
-| Scenarie                                           | Resultat                                           |
-| -------------------------------------------------- | -------------------------------------------------- |
-| Gruppechat + fil + `sharePointSiteId` konfigureret | Upload til SharePoint, send delingslink            |
+| Scenarie                                           | Resultat                                                              |
+| -------------------------------------------------- | --------------------------------------------------------------------- |
+| Gruppechat + fil + `sharePointSiteId` konfigureret | Upload til SharePoint, send delingslink                               |
 | Gruppechat + fil + ingen `sharePointSiteId`        | Forsøg OneDrive-upload (kan fejle), send kun tekst |
 | Personlig chat + fil                               | FileConsentCard-flow (virker uden SharePoint)      |
 | Enhver kontekst + billede                          | Base64-kodet inline (virker uden SharePoint)       |
@@ -612,7 +606,7 @@ OpenClaw sender Teams-afstemninger som Adaptive Cards (der findes ikke en indbyg
 
 Send vilkårlig Adaptive Card JSON til Teams-brugere eller samtaler ved hjælp af `message`-værktøjet eller CLI.
 
-Parameteren `card` accepterer et Adaptive Card JSON-objekt. Når `card` er angivet, er beskedteksten valgfri.
+Parameteren 'kort' accepterer et JSON-objekt med Adaptive kort. Når `kort` er leveret, er beskedteksten valgfri.
 
 **Agent-værktøj:**
 
@@ -637,17 +631,17 @@ openclaw message send --channel msteams \
   --card '{"type":"AdaptiveCard","version":"1.5","body":[{"type":"TextBlock","text":"Hello!"}]}'
 ```
 
-Se [Adaptive Cards-dokumentation](https://adaptivecards.io/) for kortskema og eksempler. For detaljer om målformat, se [Target formats](#target-formats) nedenfor.
+Se [Adaptive Cards documentation](https://adaptivecards.io/) for kortskema og eksempler. For detaljer i målformatet, se [Målformater](#target-formats) nedenfor.
 
 ## Target formats
 
 MSTeams-mål bruger præfikser til at skelne mellem brugere og samtaler:
 
-| Måltype             | Format                           | Eksempel                                                |
-| ------------------- | -------------------------------- | ------------------------------------------------------- |
-| Bruger (efter ID)   | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`             |
+| Måltype                                | Format                           | Eksempel                                                                   |
+| -------------------------------------- | -------------------------------- | -------------------------------------------------------------------------- |
+| Bruger (efter ID)   | `user:<aad-object-id>`           | `user:40a1a0ed-4ff2-4164-a219-55518990c197`                                |
 | Bruger (efter navn) | `user:<display-name>`            | `user:John Smith` (kræver Graph API)                    |
-| Gruppe/kanal        | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                |
+| Gruppe/kanal                           | `conversation:<conversation-id>` | `conversation:19:abc123...@thread.tacv2`                                   |
 | Gruppe/kanal (rå)   | `<conversation-id>`              | `19:abc123...@thread.tacv2` (hvis indeholder `@thread`) |
 
 **CLI-eksempler:**
@@ -691,7 +685,7 @@ openclaw message send --channel msteams --target "conversation:19:abc...@thread.
 }
 ```
 
-Bemærk: Uden `user:`-præfikset default’er navne til gruppe-/team-opløsning. Brug altid `user:`, når du målretter personer efter visningsnavn.
+Bemærk: Uden `brugeren:` præfiks, navne standard gruppe/team opløsning. Brug altid `user:` når du målretter folk efter visningsnavn.
 
 ## Proaktiv beskeder
 
@@ -700,7 +694,7 @@ Bemærk: Uden `user:`-præfikset default’er navne til gruppe-/team-opløsning.
 
 ## Team- og Kanal-ID’er (Almindelig faldgrube)
 
-Query-parameteren `groupId` i Teams-URL’er er **IKKE** team-ID’et, der bruges til konfiguration. Udtræk i stedet ID’er fra URL-stien:
+Parameteren `groupId` forespørgsel i Teams URL'er er **NOT** team-ID'et, der bruges til konfiguration. Udtræk ID'er fra URL-stien i stedet:
 
 **Team-URL:**
 
@@ -728,13 +722,13 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 Bots har begrænset support i private kanaler:
 
-| Funktion                    | Standardkanaler | Private kanaler            |
-| --------------------------- | --------------- | -------------------------- |
-| Bot-installation            | Ja              | Begrænset                  |
-| Realtime-beskeder (webhook) | Ja              | Virker muligvis ikke       |
-| RSC-tilladelser             | Ja              | Kan opføre sig anderledes  |
-| @mentions                   | Ja              | Hvis botten er tilgængelig |
-| Graph API-historik          | Ja              | Ja (med tilladelser)       |
+| Funktion                                       | Standardkanaler | Private kanaler                         |
+| ---------------------------------------------- | --------------- | --------------------------------------- |
+| Bot-installation                               | Ja              | Begrænset                               |
+| Realtime-beskeder (webhook) | Ja              | Virker muligvis ikke                    |
+| RSC-tilladelser                                | Ja              | Kan opføre sig anderledes               |
+| @mentions                         | Ja              | Hvis botten er tilgængelig              |
+| Graph API-historik                             | Ja              | Ja (med tilladelser) |
 
 **Workarounds hvis private kanaler ikke virker:**
 
@@ -746,15 +740,15 @@ Bots har begrænset support i private kanaler:
 
 ### Almindelige problemer
 
-- **Billeder vises ikke i kanaler:** Graph-tilladelser eller admin-samtykke mangler. Geninstallér Teams-appen og luk/genåbn Teams helt.
+- **Billeder vises ikke i kanaler:** Graf tilladelser eller admin samtykke mangler. Geninstaller Teams-appen og afslut fuldt ud og genåbn Teams.
 - **Ingen svar i kanal:** mentions kræves som standard; sæt `channels.msteams.requireMention=false` eller konfigurér pr. team/kanal.
 - **Versionsmismatch (Teams viser stadig gammelt manifest):** fjern + tilføj appen igen og luk Teams helt for at opdatere.
-- **401 Unauthorized fra webhook:** Forventet ved manuel test uden Azure JWT – betyder at endpoint er nåeligt, men autentificering fejlede. Brug Azure Web Chat til korrekt test.
+- **401 Uautoriseret fra webhook:** Forventet ved test manuelt uden Azure JWT - betyder, at endepunktet er tilgængeligt, men auth mislykkedes. Brug Azure Web Chat til at teste korrekt.
 
 ### Manifest-uploadfejl
 
-- **"Icon file cannot be empty":** Manifestet refererer til ikonfiler på 0 bytes. Opret gyldige PNG-ikoner (32x32 for `outline.png`, 192x192 for `color.png`).
-- **"webApplicationInfo.Id already in use":** Appen er stadig installeret i et andet team/chat. Find og afinstallér den først, eller vent 5-10 minutter på udbredelse.
+- **"Ikon fil kan ikke være tom":** Manifest referencer ikon filer, der er 0 bytes. Opret gyldige PNG-ikoner (32x32 for `omrids.png`, 192x192 for `color.png`).
+- **"webApplicationInfo.Id allerede i brug":** Appen er stadig installeret i et andet team/chat. Find og afinstallere det først, eller vent 5-10 minutter til formering.
 - **"Something went wrong" ved upload:** Upload i stedet via [https://admin.teams.microsoft.com](https://admin.teams.microsoft.com), åbn browser DevTools (F12) → Network-fanen, og tjek response body for den faktiske fejl.
 - **Sideload fejler:** Prøv "Upload an app to your org's app catalog" i stedet for "Upload a custom app" – dette omgår ofte sideload-begrænsninger.
 

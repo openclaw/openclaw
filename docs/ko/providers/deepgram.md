@@ -4,13 +4,6 @@ read_when:
   - 오디오 첨부 파일에 대해 Deepgram 음성-텍스트 변환이 필요합니다
   - 빠른 Deepgram 구성 예제가 필요합니다
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:53Z
 ---
 
 # Deepgram (오디오 전사)

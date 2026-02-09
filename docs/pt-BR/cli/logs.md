@@ -4,13 +4,6 @@ read_when:
   - Você precisa acompanhar logs do Gateway remotamente (sem SSH)
   - Você quer linhas de log em JSON para ferramentas
 title: "logs"
-x-i18n:
-  source_path: cli/logs.md
-  source_hash: 911a57f0f3b78412
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:23Z
 ---
 
 # `openclaw logs`

@@ -4,18 +4,11 @@ read_when:
   - आप एजेंट के माध्यम से पृष्ठभूमि/समानांतर कार्य चाहते हैं
   - आप sessions_spawn या उप-एजेंट टूल नीति बदल रहे हैं
 title: "उप-एजेंट"
-x-i18n:
-  source_path: tools/subagents.md
-  source_hash: 3c83eeed69a65dbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:01Z
 ---
 
 # उप-एजेंट
 
-उप-एजेंट किसी मौजूदा एजेंट रन से उत्पन्न किए गए पृष्ठभूमि एजेंट रन होते हैं। वे अपनी स्वयं की सत्र में चलते हैं (`agent:<agentId>:subagent:<uuid>`) और, समाप्त होने पर, अनुरोधकर्ता चैट चैनल में अपना परिणाम **घोषित** करते हैं।
+Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel.
 
 ## स्लैश कमांड
 
@@ -36,9 +29,9 @@ x-i18n:
 - टूल सतह को दुरुपयोग से कठिन रखना: उप-एजेंट को डिफ़ॉल्ट रूप से सत्र टूल **नहीं** मिलते।
 - नेस्टेड फैन-आउट से बचना: उप-एजेंट उप-एजेंट उत्पन्न नहीं कर सकते।
 
-लागत नोट: प्रत्येक उप-एजेंट का **अपना** संदर्भ और टोकन उपयोग होता है। भारी या दोहराए जाने वाले
-कार्यों के लिए, उप-एजेंट के लिए सस्ता मॉडल सेट करें और अपने मुख्य एजेंट को उच्च-गुणवत्ता वाले मॉडल पर रखें।
-आप इसे `agents.defaults.subagents.model` के माध्यम से या प्रति-एजेंट ओवरराइड्स से विन्यस्त कर सकते हैं।
+Cost note: each sub-agent has its **own** context and token usage. For heavy or repetitive
+tasks, set a cheaper model for sub-agents and keep your main agent on a higher-quality model.
+You can configure this via `agents.defaults.subagents.model` or per-agent overrides.
 
 ## टूल
 
@@ -61,7 +54,7 @@ x-i18n:
 
 अनुमति-सूची (Allowlist):
 
-- `agents.list[].subagents.allowAgents`: `agentId` के माध्यम से लक्षित किए जा सकने वाले एजेंट आईडी की सूची (`["*"]` किसी को भी अनुमति देने के लिए)। डिफ़ॉल्ट: केवल अनुरोधकर्ता एजेंट।
+- `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
 डिस्कवरी:
 
@@ -70,10 +63,10 @@ x-i18n:
 ऑटो-आर्काइव:
 
 - उप-एजेंट सत्र `agents.defaults.subagents.archiveAfterMinutes` के बाद स्वचालित रूप से आर्काइव हो जाते हैं (डिफ़ॉल्ट: 60)।
-- आर्काइव `sessions.delete` का उपयोग करता है और ट्रांसक्रिप्ट का नाम `*.deleted.<timestamp>` में बदल देता है (उसी फ़ोल्डर में)।
+- Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
 - `cleanup: "delete"` घोषणा के तुरंत बाद आर्काइव करता है (फिर भी नाम बदलकर ट्रांसक्रिप्ट रखता है)।
 - ऑटो-आर्काइव सर्वोत्तम-प्रयास है; गेटवे के पुनः आरंभ होने पर लंबित टाइमर खो जाते हैं।
-- `runTimeoutSeconds` ऑटो-आर्काइव **नहीं** करता; यह केवल रन को रोकता है। सत्र ऑटो-आर्काइव तक बना रहता है।
+- `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
 
 ## प्रमाणीकरण
 
@@ -83,7 +76,7 @@ x-i18n:
 - प्रमाणीकरण स्टोर उस एजेंट के `agentDir` से लोड होता है।
 - मुख्य एजेंट की प्रमाणीकरण प्रोफ़ाइल्स को **फ़ॉलबैक** के रूप में मर्ज किया जाता है; टकराव होने पर एजेंट प्रोफ़ाइल्स मुख्य प्रोफ़ाइल्स को ओवरराइड करती हैं।
 
-टिप्पणी: मर्ज ऐडिटिव है, इसलिए मुख्य प्रोफ़ाइल्स हमेशा फ़ॉलबैक के रूप में उपलब्ध रहती हैं। प्रति-एजेंट पूर्णतः पृथक प्रमाणीकरण अभी समर्थित नहीं है।
+Note: the merge is additive, so main profiles are always available as fallbacks. Fully isolated auth per agent is not supported yet.
 
 ## घोषणा
 
@@ -152,7 +145,7 @@ x-i18n:
 
 ## सीमाएँ
 
-- उप-एजेंट घोषणा **सर्वोत्तम-प्रयास** है। यदि गेटवे पुनः आरंभ होता है, तो लंबित “घोषणा वापस” कार्य खो जाता है।
+- Sub-agent announce is **best-effort**. If the gateway restarts, pending “announce back” work is lost.
 - उप-एजेंट अभी भी उसी गेटवे प्रक्रिया संसाधनों को साझा करते हैं; `maxConcurrent` को सुरक्षा वाल्व के रूप में मानें।
 - `sessions_spawn` हमेशा नॉन-ब्लॉकिंग है: यह तुरंत `{ status: "accepted", runId, childSessionKey }` लौटाता है।
 - उप-एजेंट संदर्भ केवल `AGENTS.md` + `TOOLS.md` इंजेक्ट करता है (कोई `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, या `BOOTSTRAP.md` नहीं)।

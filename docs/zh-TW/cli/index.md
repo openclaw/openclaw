@@ -4,18 +4,11 @@ read_when:
   - 新增或修改 CLI 指令或選項時
   - 文件化新的指令介面時
 title: "CLI 參考"
-x-i18n:
-  source_path: cli/index.md
-  source_hash: 0013f522ac602176
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:28Z
 ---
 
 # CLI 參考
 
-本頁描述目前的 CLI 行為。若指令有所變更，請更新本文件。
+本頁描述目前的 CLI 行為。若指令有所變更，請更新本文件。 If commands change, update this doc.
 
 ## 指令頁面
 
@@ -67,7 +60,7 @@ x-i18n:
 - `--update`：`openclaw update` 的簡寫（僅限原始碼安裝）。
 - `-V`、`--version`、`-v`：列印版本並結束。
 
-## 輸出樣式
+## Output styling
 
 - ANSI 色彩與進度指示器僅在 TTY 工作階段中呈現。
 - OSC-8 超連結會在支援的終端機中呈現為可點擊連結；否則會回退為純 URL。
@@ -86,7 +79,7 @@ OpenClaw 在 CLI 輸出中使用「lobster」色盤。
 - `success`（#2FBF71）：成功狀態。
 - `warn`（#FFB020）：警告、回退、注意事項。
 - `error`（#E23D2D）：錯誤、失敗。
-- `muted`（#8B7F77）：弱化、後設資料。
+- `muted` (#8B7F77): de-emphasis, metadata.
 
 色盤的唯一真實來源：`src/terminal/palette.ts`（亦稱「lobster seam」）。
 
@@ -252,7 +245,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw security audit --deep` — 盡力而為的即時 Gateway 閘道器 探測。
 - `openclaw security audit --fix` — 強化安全預設值並對狀態／設定執行 chmod。
 
-## 外掛
+## Plugins
 
 管理擴充功能及其設定：
 
@@ -262,7 +255,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw plugins enable <id>` / `disable <id>` — 切換 `plugins.entries.<id>.enabled`。
 - `openclaw plugins doctor` — 回報外掛載入錯誤。
 
-多數外掛變更需要重新啟動 Gateway 閘道器。請參閱 [/plugin](/tools/plugin)。
+Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 ## 記憶體
 
@@ -274,9 +267,9 @@ openclaw [--dev] [--profile <name>] <command>
 
 ## 聊天斜線指令
 
-聊天訊息支援 `/...` 指令（文字與原生）。請參閱 [/tools/slash-commands](/tools/slash-commands)。
+聊天訊息支援 `/...` 指令（文字與原生）。請參閱 [/tools/slash-commands](/tools/slash-commands)。 See [/tools/slash-commands](/tools/slash-commands).
 
-重點：
+Highlights:
 
 - `/status` 用於快速診斷。
 - `/config` 用於持久化的設定變更。
@@ -286,7 +279,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `setup`
 
-初始化設定與工作區。
+Initialize config + workspace.
 
 選項：
 
@@ -301,7 +294,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `onboard`
 
-互動式精靈，用於設定 Gateway 閘道器、工作區與 Skills。
+Interactive wizard to set up gateway, workspace, and skills.
 
 選項：
 
@@ -346,12 +339,12 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `configure`
 
-互動式設定精靈（模型、頻道、Skills、Gateway 閘道器）。
+Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-非互動式設定輔助（get/set/unset）。在沒有
-子指令的情況下執行 `openclaw config` 會啟動精靈。
+Non-interactive config helpers (get/set/unset). Running `openclaw config` with no
+subcommand launches the wizard.
 
 子指令：
 
@@ -361,7 +354,7 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `doctor`
 
-健康檢查 + 快速修復（設定 + Gateway 閘道器 + 舊版服務）。
+Health checks + quick fixes (config + gateway + legacy services).
 
 選項：
 
@@ -447,7 +440,7 @@ openclaw status --deep
 
 ### `pairing`
 
-核准跨頻道的私訊配對請求。
+Approve DM pairing requests across channels.
 
 子指令：
 
@@ -456,7 +449,7 @@ openclaw status --deep
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/automation/gmail-pubsub)。
+Gmail Pub/Sub hook setup + runner. Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/automation/gmail-pubsub)。
 
 子指令：
 
@@ -465,7 +458,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 ### `dns setup`
 
-廣域探索 DNS 輔助（CoreDNS + Tailscale）。請參閱 [/gateway/discovery](/gateway/discovery)。
+廣域探索 DNS 輔助（CoreDNS + Tailscale）。請參閱 [/gateway/discovery](/gateway/discovery)。 See [/gateway/discovery](/gateway/discovery).
 
 選項：
 
@@ -498,7 +491,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 ### `agent`
 
-透過 Gateway 閘道器（或內嵌的 `--local`）執行一次代理程式回合。
+Run one agent turn via the Gateway (or `--local` embedded).
 
 必要項目：
 
@@ -531,7 +524,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 #### `agents add [name]`
 
-新增一個隔離的代理程式。未傳遞旗標（或 `--non-interactive`）時會執行引導式精靈；在非互動模式下需要 `--workspace`。
+Add a new isolated agent. 新增一個隔離的代理程式。未傳遞旗標（或 `--non-interactive`）時會執行引導式精靈；在非互動模式下需要 `--workspace`。
 
 選項：
 
@@ -542,11 +535,11 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 - `--non-interactive`
 - `--json`
 
-綁定規格使用 `channel[:accountId]`。對於 WhatsApp，若省略 `accountId`，會使用預設帳號 id。
+Binding specs use `channel[:accountId]`. 綁定規格使用 `channel[:accountId]`。對於 WhatsApp，若省略 `accountId`，會使用預設帳號 id。
 
 #### `agents delete <id>`
 
-刪除代理程式並修剪其工作區 + 狀態。
+Delete an agent and prune its workspace + state.
 
 選項：
 
@@ -561,7 +554,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 ### `status`
 
-顯示已連結工作階段的健康度與近期收件者。
+Show linked session health and recent recipients.
 
 選項：
 
@@ -575,13 +568,13 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 注意事項：
 
-- 概覽在可用時包含 Gateway 閘道器 + 節點主機服務狀態。
+- Overview includes Gateway + node host service status when available.
 
 ### 使用量追蹤
 
 當 OAuth／API 憑證可用時，OpenClaw 可呈現提供者使用量／額度。
 
-呈現位置：
+Surfaces:
 
 - `/status`（可用時新增一行簡短的提供者使用量）
 - `openclaw status --usage`（列印完整的提供者明細）
@@ -589,14 +582,14 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 注意事項：
 
-- 資料直接來自提供者的使用量端點（非估算）。
+- Data comes directly from provider usage endpoints (no estimates).
 - 提供者：Anthropic、GitHub Copilot、OpenAI Codex OAuth，另在啟用對應提供者外掛時包含 Gemini CLI／Antigravity。
 - 若不存在相符的憑證，使用量會隱藏。
 - 詳細資訊：請參閱 [Usage tracking](/concepts/usage-tracking)。
 
 ### `health`
 
-從執行中的 Gateway 閘道器 擷取健康資訊。
+從正在執行的 Gateway 閘道器 擷取健康狀態。
 
 選項：
 
@@ -606,7 +599,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 ### `sessions`
 
-列出已儲存的對話工作階段。
+List stored conversation sessions.
 
 選項：
 
@@ -634,7 +627,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 ### `uninstall`
 
-解除安裝 Gateway 閘道器 服務 + 本機資料（保留 CLI）。
+Uninstall the gateway service + local data (CLI remains).
 
 選項：
 
@@ -694,7 +687,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 - `gateway status` 會依服務解析後的連接埠／設定預設探測 Gateway RPC （遠端程序呼叫）（可用 `--url/--token/--password` 覆寫）。
 - `gateway status` 支援 `--no-probe`、`--deep` 與 `--json` 以利腳本化。
-- `gateway status` 在可偵測時也會呈現舊版或額外的 Gateway 閘道器 服務（`--deep` 會加入系統層級掃描）。以設定檔命名的 OpenClaw 服務視為一級公民，不會標示為「額外」。
+- `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
 - `gateway status` 會列印 CLI 使用的設定路徑與服務可能使用的設定（服務環境），以及解析後的探測目標 URL。
 - `gateway install|uninstall|start|stop|restart` 支援 `--json` 以利腳本化（預設輸出仍維持對人友善）。
 - `gateway install` 預設使用 Node 執行階段；**不建議** bun（WhatsApp／Telegram 問題）。
@@ -706,7 +699,7 @@ Gmail Pub/Sub 掛鉤設定 + 執行器。請參閱 [/automation/gmail-pubsub](/a
 
 注意事項：
 
-- TTY 工作階段會呈現著色、結構化的檢視；非 TTY 會回退為純文字。
+- TTY sessions render a colorized, structured view; non-TTY falls back to plain text.
 - `--json` 會輸出逐行 JSON（每行一個日誌事件）。
 
 範例：
@@ -721,9 +714,9 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Gateway 閘道器 CLI 輔助（RPC 子指令請使用 `--url`、`--token`、`--password`、`--timeout`、`--expect-final`）。
-當你傳遞 `--url` 時，CLI 不會自動套用設定或環境憑證。
-請明確加入 `--token` 或 `--password`。缺少明確憑證將視為錯誤。
+Gateway CLI helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for RPC subcommands).
+When you pass `--url`, the CLI does not auto-apply config or environment credentials.
+Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 子指令：
 
@@ -746,7 +739,7 @@ Gateway 閘道器 CLI 輔助（RPC 子指令請使用 `--url`、`--token`、`--p
 
 ## 模型
 
-回退行為與掃描策略請參閱 [/concepts/models](/concepts/models)。
+See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
 偏好的 Anthropic 驗證（setup-token）：
 
@@ -789,8 +782,8 @@ Root 選項：
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 
-一律包含驗證概覽與驗證儲存庫中設定檔的 OAuth 到期狀態。
-`--probe` 會執行即時請求（可能消耗權杖並觸發速率限制）。
+Always includes the auth overview and OAuth expiry status for profiles in the auth store.
+`--probe` runs live requests (may consume tokens and trigger rate limits).
 
 ### `models set <model>`
 
@@ -895,7 +888,7 @@ Root 選項：
 
 ## Cron
 
-管理排程工作（Gateway RPC （遠端程序呼叫））。請參閱 [/automation/cron-jobs](/automation/cron-jobs)。
+管理排程工作（Gateway RPC （遠端程序呼叫））。請參閱 [/automation/cron-jobs](/automation/cron-jobs)。 See [/automation/cron-jobs](/automation/cron-jobs).
 
 子指令：
 
@@ -911,10 +904,11 @@ Root 選項：
 
 所有 `cron` 指令都接受 `--url`、`--token`、`--timeout`、`--expect-final`。
 
-## 節點主機
+## Node 主機
 
 `node` 會執行 **無頭節點主機**，或將其作為背景服務管理。請參閱
-[`openclaw node`](/cli/node)。
+[`openclaw node`](/cli/node)。 See
+[`openclaw node`](/cli/node).
 
 子指令：
 
@@ -925,9 +919,9 @@ Root 選項：
 - `node stop`
 - `node restart`
 
-## 節點
+## Nodes
 
-`nodes` 會與 Gateway 閘道器 通訊並以已配對的節點為目標。請參閱 [/nodes](/nodes)。
+`nodes` talks to the Gateway and targets paired nodes. See [/nodes](/nodes).
 
 常用選項：
 
@@ -969,7 +963,7 @@ Root 選項：
 
 ## 瀏覽器
 
-瀏覽器控制 CLI（專用 Chrome／Brave／Edge／Chromium）。請參閱 [`openclaw browser`](/cli/browser) 與 [Browser tool](/tools/browser)。
+瀏覽器控制 CLI（專用 Chrome／Brave／Edge／Chromium）。請參閱 [`openclaw browser`](/cli/browser) 與 [Browser tool](/tools/browser)。 See [`openclaw browser`](/cli/browser) and the [Browser tool](/tools/browser).
 
 常用選項：
 

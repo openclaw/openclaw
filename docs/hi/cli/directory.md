@@ -4,13 +4,6 @@ read_when:
   - आप किसी चैनल के लिए संपर्क/समूह/self आईडी ढूंढना चाहते हैं
   - आप एक चैनल डायरेक्टरी एडेप्टर विकसित कर रहे हैं
 title: "डायरेक्टरी"
-x-i18n:
-  source_path: cli/directory.md
-  source_hash: 7c878d9013aeaa22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:59Z
 ---
 
 # `openclaw directory`

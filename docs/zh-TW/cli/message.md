@@ -2,15 +2,8 @@
 summary: "用於 `openclaw message` 的 CLI 參考（傳送與頻道動作）"
 read_when:
   - 新增或修改訊息 CLI 動作時
-  - 變更對外頻道行為時
+  - Changing outbound channel behavior
 title: "message"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:39Z
 ---
 
 # `openclaw message`
@@ -27,7 +20,7 @@ openclaw message <subcommand> [flags]
 頻道選擇：
 
 - 若設定了多個頻道，則必須指定 `--channel`。
-- 若只設定了一個頻道，則會成為預設值。
+- If exactly one channel is configured, it becomes the default.
 - 可用值：`whatsapp|telegram|discord|googlechat|slack|mattermost|signal|imessage|msteams`（Mattermost 需要外掛）
 
 目標格式（`--target`）：
@@ -45,7 +38,7 @@ openclaw message <subcommand> [flags]
 名稱查找：
 
 - 對於支援的提供者（Discord/Slack 等），像是 `Help` 或 `#help` 的頻道名稱會透過目錄快取解析。
-- 若快取未命中，且提供者支援，OpenClaw 會嘗試即時目錄查找。
+- On cache miss, OpenClaw will attempt a live directory lookup when the provider supports it.
 
 ## Common flags
 

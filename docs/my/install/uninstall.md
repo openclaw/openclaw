@@ -4,13 +4,6 @@ read_when:
   - စက်တစ်လုံးမှ OpenClaw ကို ဖယ်ရှားလိုသောအခါ
   - uninstall ပြီးနောက် Gateway service ဆက်လက် လည်ပတ်နေသေးသောအခါ
 title: "ဖယ်ရှားခြင်း"
-x-i18n:
-  source_path: install/uninstall.md
-  source_hash: 6673a755c5e1f90a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:37Z
 ---
 
 # ဖယ်ရှားခြင်း
@@ -88,14 +81,14 @@ Gateway service ဆက်လက် လည်ပတ်နေသော်လည်
 
 ### macOS (launchd)
 
-မူလ label သည် `bot.molt.gateway` (သို့မဟုတ် `bot.molt.<profile>` ; legacy `com.openclaw.*` သည် ရှိနေသေးနိုင်သည်) —
+Default label is `bot.molt.gateway` (or `bot.molt.<profile>`; legacy `com.openclaw.*` may still exist):
 
 ```bash
 launchctl bootout gui/$UID/bot.molt.gateway
 rm -f ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-profile ကို အသုံးပြုထားပါက label နှင့် plist အမည်ကို `bot.molt.<profile>` ဖြင့် အစားထိုးပါ။ ရှိနေပါက legacy `com.openclaw.*` plist များကို ဖယ်ရှားပါ။
+If you used a profile, replace the label and plist name with `bot.molt.<profile>`. Remove any legacy `com.openclaw.*` plists if present.
 
 ### Linux (systemd user unit)
 
@@ -109,8 +102,8 @@ systemctl --user daemon-reload
 
 ### Windows (Scheduled Task)
 
-မူလ task အမည်သည် `OpenClaw Gateway` (သို့မဟုတ် `OpenClaw Gateway (<profile>)`) ဖြစ်သည်။
-task script သည် သင်၏ state dir အောက်တွင် ရှိသည်။
+Default task name is `OpenClaw Gateway` (or `OpenClaw Gateway (<profile>)`).
+The task script lives under your state dir.
 
 ```powershell
 schtasks /Delete /F /TN "OpenClaw Gateway"
@@ -123,8 +116,8 @@ profile ကို အသုံးပြုထားပါက ကိုက်ည�
 
 ### ပုံမှန် install (install.sh / npm / pnpm / bun)
 
-`https://openclaw.ai/install.sh` သို့မဟုတ် `install.ps1` ကို အသုံးပြုထားပါက CLI ကို `npm install -g openclaw@latest` ဖြင့် ထည့်သွင်းထားသည်။
-`npm rm -g openclaw` (သို့မဟုတ် ထိုနည်းလမ်းဖြင့် ထည့်သွင်းထားပါက `pnpm remove -g` / `bun remove -g`) ဖြင့် ဖယ်ရှားပါ။
+If you used `https://openclaw.ai/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
+Remove it with `npm rm -g openclaw` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Source checkout (git clone)
 

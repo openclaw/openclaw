@@ -4,18 +4,11 @@ read_when:
   - Thêm hoặc chỉnh sửa các migration của doctor
   - Giới thiệu các thay đổi cấu hình gây phá vỡ tương thích
 title: "Doctor"
-x-i18n:
-  source_path: gateway/doctor.md
-  source_hash: df7b25f60fd08d50
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:22Z
 ---
 
 # Doctor
 
-`openclaw doctor` là công cụ sửa chữa + migration cho OpenClaw. Nó khắc phục cấu hình/trạng thái lỗi thời, kiểm tra sức khỏe và cung cấp các bước sửa chữa có thể hành động.
+`openclaw doctor` là công cụ sửa chữa + di trú cho OpenClaw. Nó sửa cấu hình/trạng thái cũ, kiểm tra tình trạng, và cung cấp các bước sửa chữa có thể thực hiện.
 
 ## Khởi động nhanh
 
@@ -47,8 +40,9 @@ openclaw doctor --repair --force
 openclaw doctor --non-interactive
 ```
 
-Chạy không cần nhắc và chỉ áp dụng các migration an toàn (chuẩn hóa cấu hình + di chuyển trạng thái trên đĩa). Bỏ qua các hành động khởi động lại/dịch vụ/sandbox cần xác nhận của con người.
-Các migration trạng thái cũ chạy tự động khi được phát hiện.
+Chạy không cần nhắc và chỉ áp dụng các di trú an toàn (chuẩn hóa cấu hình + di chuyển trạng thái trên đĩa). Các di chuyển trạng thái legacy chạy tự động khi được phát hiện.
+Nếu bạn đã thêm `models.providers.opencode` (hoặc `opencode-zen`) thủ công, nó
+ghi đè danh mục OpenCode Zen tích hợp từ `@mariozechner/pi-ai`.
 
 ```bash
 openclaw doctor --deep
@@ -90,17 +84,17 @@ cat ~/.openclaw/openclaw.json
 
 ## Hành vi chi tiết và lý do
 
-### 0) Cập nhật tùy chọn (cài đặt git)
+### 0. Cập nhật tùy chọn (cài đặt git)
 
 Nếu đây là bản checkout git và doctor chạy ở chế độ tương tác, nó sẽ đề nghị
 cập nhật (fetch/rebase/build) trước khi chạy doctor.
 
-### 1) Chuẩn hóa cấu hình
+### 1. Chuẩn hóa cấu hình
 
 Nếu cấu hình chứa các dạng giá trị cũ (ví dụ `messages.ackReaction`
 không có ghi đè theo kênh), doctor sẽ chuẩn hóa chúng theo schema hiện tại.
 
-### 2) Migration khóa cấu hình cũ
+### 2. Migration khóa cấu hình cũ
 
 Khi cấu hình chứa các khóa đã bị loại bỏ, các lệnh khác sẽ từ chối chạy và yêu cầu
 bạn chạy `openclaw doctor`.
@@ -133,12 +127,10 @@ Các migration hiện tại:
 
 ### 2b) Ghi đè nhà cung cấp OpenCode Zen
 
-Nếu bạn đã thêm thủ công `models.providers.opencode` (hoặc `opencode-zen`), nó sẽ
-ghi đè danh mục OpenCode Zen tích hợp từ `@mariozechner/pi-ai`. Điều này có thể
-buộc mọi mô hình dùng một API duy nhất hoặc đặt chi phí về 0. Doctor cảnh báo để
-bạn có thể gỡ ghi đè và khôi phục định tuyến API + chi phí theo từng mô hình.
+If you’ve added `models.providers.opencode` (or `opencode-zen`) manually, it
+overrides the built-in OpenCode Zen catalog from `@mariozechner/pi-ai`. Điều đó có thể buộc mọi model dùng chung một API hoặc đặt chi phí về 0. Doctor sẽ cảnh báo để bạn có thể gỡ bỏ ghi đè và khôi phục định tuyến API + chi phí theo từng model.
 
-### 3) Migration trạng thái cũ (bố cục đĩa)
+### 3. Migration trạng thái cũ (bố cục đĩa)
 
 Doctor có thể di chuyển các bố cục trên đĩa cũ sang cấu trúc hiện tại:
 
@@ -150,16 +142,11 @@ Doctor có thể di chuyển các bố cục trên đĩa cũ sang cấu trúc hi
   - từ `~/.openclaw/credentials/*.json` cũ (trừ `oauth.json`)
   - sang `~/.openclaw/credentials/whatsapp/<accountId>/...` (id tài khoản mặc định: `default`)
 
-Các migration này theo kiểu best-effort và idempotent; doctor sẽ phát ra cảnh báo
-khi để lại bất kỳ thư mục cũ nào làm bản sao lưu. Gateway/CLI cũng tự động
-migration sessions cũ + thư mục agent khi khởi động để lịch sử/xác thực/mô hình
-nằm trong đường dẫn theo từng tác tử mà không cần chạy doctor thủ công. Xác thực
-WhatsApp được cố ý chỉ migration thông qua `openclaw doctor`.
+Các di trú này là best-effort và idempotent; doctor sẽ phát cảnh báo khi để lại bất kỳ thư mục legacy nào làm bản sao lưu. Gateway/CLI cũng tự động di trú các phiên + thư mục agent legacy khi khởi động để lịch sử/xác thực/model nằm trong đường dẫn theo từng agent mà không cần chạy doctor thủ công. Xác thực WhatsApp được cố ý chỉ di trú thông qua `openclaw doctor`.
 
-### 4) Kiểm tra tính toàn vẹn trạng thái (lưu phiên, định tuyến và an toàn)
+### 4. Kiểm tra tính toàn vẹn trạng thái (lưu phiên, định tuyến và an toàn)
 
-Thư mục state là “thân não” vận hành. Nếu nó biến mất, bạn sẽ mất
-sessions, thông tin xác thực, log và cấu hình (trừ khi có bản sao lưu ở nơi khác).
+Thư mục state là bộ não vận hành. Nếu nó biến mất, bạn sẽ mất phiên, thông tin xác thực, log và cấu hình (trừ khi bạn có bản sao lưu ở nơi khác).
 
 Doctor kiểm tra:
 
@@ -181,73 +168,64 @@ Doctor kiểm tra:
 - **Quyền tệp cấu hình**: cảnh báo nếu `~/.openclaw/openclaw.json` có thể đọc bởi group/world
   và đề nghị siết chặt về `600`.
 
-### 5) Sức khỏe xác thực mô hình (hạn OAuth)
+### 5. Sức khỏe xác thực mô hình (hạn OAuth)
 
-Doctor kiểm tra các hồ sơ OAuth trong kho xác thực, cảnh báo khi token
-sắp hết hạn/đã hết hạn và có thể làm mới khi an toàn. Nếu hồ sơ Anthropic Claude Code
-bị lỗi thời, nó đề xuất chạy `claude setup-token` (hoặc dán setup-token).
-Lời nhắc làm mới chỉ xuất hiện khi chạy tương tác (TTY); `--non-interactive`
-bỏ qua các nỗ lực làm mới.
+Doctor kiểm tra các hồ sơ OAuth trong kho auth, cảnh báo khi token sắp hết hạn/đã hết hạn, và có thể làm mới chúng khi an toàn. Nếu hồ sơ Anthropic Claude Code bị cũ, nó sẽ đề xuất chạy `claude setup-token` (hoặc dán một setup-token).
+Lời nhắc làm mới chỉ xuất hiện khi chạy tương tác (TTY); `--non-interactive` sẽ bỏ qua các lần thử làm mới.
 
 Doctor cũng báo cáo các hồ sơ xác thực tạm thời không dùng được do:
 
 - cooldown ngắn (giới hạn tốc độ/timeouts/lỗi xác thực)
 - vô hiệu dài hơn (lỗi thanh toán/tín dụng)
 
-### 6) Xác thực mô hình Hooks
+### 6. Xác thực mô hình Hooks
 
 Nếu đặt `hooks.gmail.model`, doctor sẽ xác thực tham chiếu mô hình so với
 catalog và allowlist, và cảnh báo khi nó không phân giải được hoặc bị cấm.
 
-### 7) Sửa chữa image sandbox
+### 7. Sửa chữa image sandbox
 
 Khi sandboxing được bật, doctor kiểm tra các image Docker và đề nghị build hoặc
 chuyển sang tên legacy nếu image hiện tại bị thiếu.
 
-### 8) Migration dịch vụ Gateway và gợi ý dọn dẹp
+### 8. Migration dịch vụ Gateway và gợi ý dọn dẹp
 
-Doctor phát hiện các dịch vụ gateway cũ (launchd/systemd/schtasks) và
-đề nghị gỡ chúng và cài đặt dịch vụ OpenClaw với cổng gateway hiện tại.
-Nó cũng có thể quét các dịch vụ giống gateway dư và in ra gợi ý dọn dẹp.
-Các dịch vụ gateway OpenClaw được đặt tên theo profile được coi là hạng nhất và
-không bị gắn cờ là “dư”.
+Doctor phát hiện các dịch vụ gateway legacy (launchd/systemd/schtasks) và đề nghị gỡ bỏ chúng và cài đặt dịch vụ OpenClaw bằng cổng gateway hiện tại. Nó cũng có thể quét các dịch vụ giống gateway khác và in ra gợi ý dọn dẹp.
+Các dịch vụ gateway OpenClaw được đặt tên theo profile được coi là first-class và không bị gắn cờ là "extra."
 
-### 9) Cảnh báo bảo mật
+### 9. Cảnh báo bảo mật
 
 Doctor phát ra cảnh báo khi một nhà cung cấp mở DM mà không có allowlist, hoặc
 khi một chính sách được cấu hình theo cách nguy hiểm.
 
-### 10) systemd linger (Linux)
+### 10. systemd linger (Linux)
 
 Nếu chạy như dịch vụ người dùng systemd, doctor đảm bảo bật lingering để
 gateway tiếp tục chạy sau khi đăng xuất.
 
-### 11) Trạng thái Skills
+### 11. Trạng thái Skills
 
 Doctor in ra tóm tắt nhanh các Skills đủ điều kiện/thiếu/bị chặn cho workspace hiện tại.
 
-### 12) Kiểm tra xác thực Gateway (token local)
+### 12. Kiểm tra xác thực Gateway (token local)
 
-Doctor cảnh báo khi thiếu `gateway.auth` trên gateway local và đề nghị
-tạo token. Dùng `openclaw doctor --generate-gateway-token` để buộc tạo token
-trong tự động hóa.
+Doctor cảnh báo khi thiếu `gateway.auth` trên gateway cục bộ và đề nghị tạo một token. Use `openclaw doctor --generate-gateway-token` to force token
+creation in automation.
 
-### 13) Kiểm tra sức khỏe Gateway + khởi động lại
+### 13. Kiểm tra sức khỏe Gateway + khởi động lại
 
 Doctor chạy kiểm tra sức khỏe và đề nghị khởi động lại gateway khi có dấu hiệu
 không khỏe.
 
-### 14) Cảnh báo trạng thái kênh
+### 14. Cảnh báo trạng thái kênh
 
 Nếu gateway khỏe, doctor chạy thăm dò trạng thái kênh và báo cáo
 cảnh báo kèm cách khắc phục đề xuất.
 
-### 15) Kiểm toán + sửa chữa cấu hình supervisor
+### 15. Kiểm toán + sửa chữa cấu hình supervisor
 
-Doctor kiểm tra cấu hình supervisor đã cài (launchd/systemd/schtasks) để tìm
-các mặc định bị thiếu hoặc lỗi thời (ví dụ phụ thuộc network-online của systemd và
-độ trễ khởi động lại). Khi phát hiện không khớp, nó khuyến nghị cập nhật và có thể
-ghi lại tệp dịch vụ/tác vụ theo mặc định hiện tại.
+Doctor kiểm tra cấu hình supervisor đã cài (launchd/systemd/schtasks) để tìm các mặc định bị thiếu hoặc lỗi thời (ví dụ: phụ thuộc network-online của systemd và độ trễ khởi động lại). When it finds a mismatch, it recommends an update and can
+rewrite the service file/task to the current defaults.
 
 Ghi chú:
 
@@ -257,26 +235,24 @@ Ghi chú:
 - `openclaw doctor --repair --force` ghi đè cấu hình supervisor tùy chỉnh.
 - Bạn luôn có thể buộc ghi lại toàn bộ qua `openclaw gateway install --force`.
 
-### 16) Chẩn đoán runtime + cổng Gateway
+### 16. Chẩn đoán runtime + cổng Gateway
 
-Doctor kiểm tra runtime dịch vụ (PID, trạng thái thoát gần nhất) và cảnh báo khi
-dịch vụ đã cài nhưng thực tế không chạy. Nó cũng kiểm tra xung đột cổng
-trên cổng gateway (mặc định `18789`) và báo cáo các nguyên nhân có khả năng
-(x gateway đã chạy, đường hầm SSH).
+Doctor kiểm tra runtime của dịch vụ (PID, trạng thái thoát gần nhất) và cảnh báo khi dịch vụ đã được cài nhưng thực tế không chạy. It also checks for port collisions
+on the gateway port (default `18789`) and reports likely causes (gateway already
+running, SSH tunnel).
 
-### 17) Thực hành tốt runtime Gateway
+### 17. Thực hành tốt runtime Gateway
 
-Doctor cảnh báo khi dịch vụ gateway chạy trên Bun hoặc đường dẫn Node do trình
-quản lý phiên bản cung cấp (`nvm`, `fnm`, `volta`, `asdf`, v.v.). Các kênh WhatsApp + Telegram yêu cầu Node,
-và các đường dẫn do trình quản lý phiên bản có thể bị hỏng sau nâng cấp vì dịch vụ
-không nạp shell init của bạn. Doctor đề nghị di chuyển sang cài đặt Node hệ thống
-khi có (Homebrew/apt/choco).
+Doctor warns when the gateway service runs on Bun or a version-managed Node path
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram channels require Node,
+and version-manager paths can break after upgrades because the service does not
+load your shell init. Doctor đề nghị di trú sang cài đặt Node ở mức hệ thống khi có sẵn (Homebrew/apt/choco).
 
-### 18) Ghi cấu hình + metadata wizard
+### 18. Ghi cấu hình + metadata wizard
 
 Doctor lưu mọi thay đổi cấu hình và đóng dấu metadata wizard để ghi nhận lần chạy doctor.
 
-### 19) Mẹo workspace (sao lưu + hệ thống bộ nhớ)
+### 19. Mẹo workspace (sao lưu + hệ thống bộ nhớ)
 
 Doctor gợi ý hệ thống bộ nhớ cho workspace khi thiếu và in mẹo sao lưu
 nếu workspace chưa nằm trong git.

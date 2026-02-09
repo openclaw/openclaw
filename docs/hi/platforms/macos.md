@@ -4,20 +4,13 @@ read_when:
   - macOS ऐप फीचर्स को लागू करते समय
   - macOS पर Gateway लाइफसाइकिल या नोड ब्रिजिंग में परिवर्तन करते समय
 title: "macOS ऐप"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:43Z
 ---
 
 # OpenClaw macOS सहचर (मेनू बार + Gateway ब्रोकर)
 
-macOS ऐप OpenClaw के लिए **मेनू‑बार सहचर** है। यह अनुमतियों का स्वामित्व लेता है,
-Gateway को स्थानीय रूप से प्रबंधित/अटैच करता है (launchd या मैनुअल),
-और macOS क्षमताओं को एजेंट के लिए एक नोड के रूप में एक्सपोज़ करता है।
+The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
+manages/attaches to the Gateway locally (launchd or manual), and exposes macOS
+capabilities to the agent as a node.
 
 ## यह क्या करता है
 
@@ -34,29 +27,29 @@ Gateway को स्थानीय रूप से प्रबंधित/�
 
 - **Local** (डिफ़ॉल्ट): यदि चल रहा स्थानीय Gateway मौजूद है तो ऐप उससे अटैच होता है;
   अन्यथा यह `openclaw gateway install` के माध्यम से launchd सेवा सक्षम करता है।
-- **Remote**: ऐप SSH/Tailscale के माध्यम से Gateway से कनेक्ट होता है और कभी भी
-  स्थानीय प्रक्रिया शुरू नहीं करता।
-  ऐप स्थानीय **node host service** शुरू करता है ताकि दूरस्थ Gateway इस Mac तक पहुँच सके।
-  ऐप Gateway को चाइल्ड प्रक्रिया के रूप में स्पॉन नहीं करता।
+- **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
+  a local process.
+  The app starts the local **node host service** so the remote Gateway can reach this Mac.
+  The app does not spawn the Gateway as a child process.
 
 ## Launchd नियंत्रण
 
-ऐप प्रति‑उपयोगकर्ता LaunchAgent का प्रबंधन करता है जिसका लेबल `bot.molt.gateway` है
-(या `--profile`/`OPENCLAW_PROFILE` का उपयोग करते समय `bot.molt.<profile>`; लेगेसी `com.openclaw.*` अभी भी अनलोड करता है)।
+The app manages a per‑user LaunchAgent labeled `bot.molt.gateway`
+(or `bot.molt.<profile>` when using `--profile`/`OPENCLAW_PROFILE`; legacy `com.openclaw.*` still unloads).
 
 ```bash
 launchctl kickstart -k gui/$UID/bot.molt.gateway
 launchctl bootout gui/$UID/bot.molt.gateway
 ```
 
-नामित प्रोफ़ाइल चलाते समय लेबल को `bot.molt.<profile>` से बदलें।
+Replace the label with `bot.molt.<profile>` when running a named profile.
 
 यदि LaunchAgent इंस्टॉल नहीं है, तो ऐप से इसे सक्षम करें या
 `openclaw gateway install` चलाएँ।
 
 ## नोड क्षमताएँ (mac)
 
-macOS ऐप स्वयं को एक नोड के रूप में प्रस्तुत करता है। सामान्य कमांड:
+The macOS app presents itself as a node. सामान्य कमांड:
 
 - Canvas: `canvas.present`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot`, `canvas.a2ui.*`
 - Camera: `camera.snap`, `camera.clip`
@@ -81,8 +74,8 @@ Gateway -> Node Service (WS)
 
 ## Exec अनुमोदन (system.run)
 
-`system.run` macOS ऐप में **Exec approvals** द्वारा नियंत्रित होता है (Settings → Exec approvals)।
-सुरक्षा + पूछना + allowlist स्थानीय रूप से Mac पर संग्रहीत होते हैं:
+`system.run` is controlled by **Exec approvals** in the macOS app (Settings → Exec approvals).
+Security + ask + allowlist are stored locally on the Mac in:
 
 ```
 ~/.openclaw/exec-approvals.json
@@ -195,12 +188,12 @@ Node CLI की `dns-sd` आधारित डिस्कवरी से भ�
   या आवश्यकता होने पर उसे पुनः शुरू करता है।
 - **SSH स्वरूप:** `ssh -N -L <local>:127.0.0.1:<remote>` BatchMode +
   ExitOnForwardFailure + keepalive विकल्पों के साथ।
-- **IP रिपोर्टिंग:** SSH टनल loopback का उपयोग करती है, इसलिए Gateway को नोड
-  IP `127.0.0.1` के रूप में दिखाई देगा। यदि आप वास्तविक क्लाइंट
-  IP दिखाना चाहते हैं तो **Direct (ws/wss)** ट्रांसपोर्ट का उपयोग करें (देखें [macOS remote access](/platforms/mac/remote))।
+- **IP reporting:** the SSH tunnel uses loopback, so the gateway will see the node
+  IP as `127.0.0.1`. Use **Direct (ws/wss)** transport if you want the real client
+  IP to appear (see [macOS remote access](/platforms/mac/remote)).
 
-सेटअप चरणों के लिए, देखें [macOS remote access](/platforms/mac/remote)। प्रोटोकॉल
-विवरण के लिए, देखें [Gateway protocol](/gateway/protocol)।
+For setup steps, see [macOS remote access](/platforms/mac/remote). For protocol
+details, see [Gateway protocol](/gateway/protocol).
 
 ## संबंधित दस्तावेज़
 

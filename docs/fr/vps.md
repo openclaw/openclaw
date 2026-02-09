@@ -1,16 +1,9 @@
 ---
-summary: « Hub d’hébergement VPS pour OpenClaw (Oracle/Fly/Hetzner/GCP/exe.dev) »
+summary: "Hub d’hébergement VPS pour OpenClaw (Oracle/Fly/Hetzner/GCP/exe.dev)"
 read_when:
   - Vous souhaitez exécuter le Gateway (passerelle) dans le cloud
   - Vous avez besoin d’une vue d’ensemble rapide des guides VPS/hébergement
-title: « Hébergement VPS »
-x-i18n:
-  source_path: vps.md
-  source_hash: 38e3e254853e5839
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:06Z
+title: "Hébergement VPS"
 ---
 
 # Hébergement VPS

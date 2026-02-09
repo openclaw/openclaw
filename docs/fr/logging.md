@@ -1,17 +1,10 @@
 ---
-summary: « Aperçu de la journalisation : journaux de fichiers, sortie console, suivi CLI et l’UI de contrôle »
+summary: "Aperçu de la journalisation : journaux de fichiers, sortie console, suivi CLI et l’UI de contrôle"
 read_when:
   - Vous avez besoin d’un aperçu de la journalisation adapté aux debutants
   - Vous souhaitez configurer les niveaux ou les formats de journalisation
   - Vous effectuez un depannage et devez trouver rapidement les journaux
-title: « Journalisation »
-x-i18n:
-  source_path: logging.md
-  source_hash: 884fcf4a906adff3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:26Z
+title: "Journalisation"
 ---
 
 # Journalisation
@@ -24,7 +17,7 @@ OpenClaw enregistre les journaux a deux endroits :
 Cette page explique ou se trouvent les journaux, comment les lire et comment
 configurer les niveaux et les formats de journalisation.
 
-## Ou se trouvent les journaux
+## Où vivent les logs
 
 Par defaut, la Gateway ecrit un fichier de journalisation avec rotation sous :
 
@@ -138,7 +131,7 @@ des journaux de fichiers.
 - `compact` : sortie plus compacte (ideal pour les longues sessions).
 - `json` : JSON par ligne (pour les processeurs de journaux).
 
-### Masquage (redaction)
+### Redaction
 
 Les resumes d’outils peuvent masquer les jetons sensibles avant l’affichage en
 console :
@@ -146,8 +139,7 @@ console :
 - `logging.redactSensitive` : `off` | `tools` (defaut : `tools`)
 - `logging.redactPatterns` : liste de chaines regex pour remplacer l’ensemble par defaut
 
-Le masquage n’affecte que la **sortie console** et ne modifie pas les journaux de
-fichiers.
+La suppression affecte **la sortie de la console seulement** et ne modifie pas le journal des fichiers.
 
 ## Diagnostics + OpenTelemetry
 
@@ -218,9 +210,8 @@ disponibles pour des plugins ou des puits personnalises :
 ### Indicateurs de diagnostics (journaux cibles)
 
 Utilisez des indicateurs pour activer des journaux de debogage cibles
-supplementaires sans augmenter `logging.level`. Les indicateurs sont insensibles
-a la casse et prennent en charge les jokers (par ex. `telegram.*` ou
-`*`).
+supplementaires sans augmenter `logging.level`.
+Les drapeaux sont insensibles à la casse et prennent en charge les jokers (par exemple `telegram.*` ou `*`).
 
 ```json
 {
@@ -230,7 +221,7 @@ a la casse et prennent en charge les jokers (par ex. `telegram.*` ou
 }
 ```
 
-Surcharge via variable d’environnement (ponctuelle) :
+Surcharge d'Env (unique) :
 
 ```
 OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
@@ -279,8 +270,7 @@ accepte OTLP/HTTP.
 Notes :
 
 - Vous pouvez egalement activer le plugin avec `openclaw plugins enable diagnostics-otel`.
-- `protocol` prend actuellement en charge uniquement `http/protobuf`.
-  `grpc` est ignore.
+- `protocol` prend actuellement en charge uniquement `http/protobuf`. `grpc` est ignore.
 - Les metriques incluent l’utilisation des jetons, le cout, la taille du
   contexte, la duree d’execution et des compteurs/histogrammes de flux de
   messages (webhooks, mise en file d’attente, etat de session, profondeur/attente

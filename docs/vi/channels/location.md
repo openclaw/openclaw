@@ -4,13 +4,6 @@ read_when:
   - Thêm hoặc chỉnh sửa phân tích vị trí của kênh
   - Sử dụng các trường ngữ cảnh vị trí trong prompt hoặc công cụ của tác tử
 title: "Phân tích vị trí kênh"
-x-i18n:
-  source_path: channels/location.md
-  source_hash: 5602ef105c3da7e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:55Z
 ---
 
 # Phân tích vị trí kênh

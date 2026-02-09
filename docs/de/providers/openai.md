@@ -1,16 +1,9 @@
 ---
-summary: „Verwenden Sie OpenAI über API-Schlüssel oder ein Codex-Abonnement in OpenClaw“
+summary: "„Verwenden Sie OpenAI über API-Schlüssel oder ein Codex-Abonnement in OpenClaw“"
 read_when:
   - Sie möchten OpenAI-Modelle in OpenClaw verwenden
   - Sie möchten die Authentifizierung über ein Codex-Abonnement statt über API-Schlüssel
-title: „OpenAI“
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:04Z
+title: "OpenAI"
 ---
 
 # OpenAI

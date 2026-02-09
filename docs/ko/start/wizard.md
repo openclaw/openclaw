@@ -5,13 +5,6 @@ read_when:
   - 새 머신을 설정할 때
 title: "온보딩 마법사 (CLI)"
 sidebarTitle: "온보딩: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:23Z
 ---
 
 # 온보딩 마법사 (CLI)
@@ -24,8 +17,7 @@ openclaw onboard
 ```
 
 <Info>
-가장 빠른 첫 채팅: Control UI 를 여십시오(채널 설정 불필요).  
-`openclaw dashboard` 를 실행하고 브라우저에서 채팅하십시오. 문서: [Dashboard](/web/dashboard).
+가장 빠른 첫 채팅: Control UI 를 여십시오(채널 설정 불필요). `openclaw dashboard` 를 실행하고 브라우저에서 채팅하십시오. 문서: [Dashboard](/web/dashboard).
 </Info>
 
 나중에 다시 구성하려면:
@@ -50,7 +42,7 @@ openclaw agents add <name>
 마법사는 **빠른 시작**(기본값)과 **고급**(전체 제어) 중에서 시작합니다.
 
 <Tabs>
-  <Tab title="빠른 시작 (기본값)">
+  <Tab title="QuickStart (defaults)">
     - 로컬 게이트웨이(loopback)
     - 워크스페이스 기본값(또는 기존 워크스페이스)
     - Gateway 포트 **18789**
@@ -58,7 +50,7 @@ openclaw agents add <name>
     - Tailscale 노출 **끔**
     - Telegram + WhatsApp 다이렉트 메시지는 기본적으로 **allowlist**(전화번호를 입력하라는 안내가 표시됩니다)
   </Tab>
-  <Tab title="고급 (전체 제어)">
+  <Tab title="Advanced (full control)">
     - 모든 단계(모드, 워크스페이스, 게이트웨이, 채널, 데몬, Skills)를 노출합니다.
   </Tab>
 </Tabs>
@@ -85,8 +77,7 @@ openclaw agents add <name>
 
 ## 다른 에이전트 추가
 
-`openclaw agents add <name>` 를 사용하여 자체 워크스페이스, 세션 및 인증 프로필을 가진 별도의 에이전트를 생성하십시오.
-`--workspace` 없이 실행하면 마법사가 시작됩니다.
+`openclaw agents add <name>` 를 사용하여 자체 워크스페이스, 세션 및 인증 프로필을 가진 별도의 에이전트를 생성하십시오. `--workspace` 없이 실행하면 마법사가 시작됩니다.
 
 설정되는 항목:
 

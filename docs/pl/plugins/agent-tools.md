@@ -4,13 +4,6 @@ read_when:
   - Chcesz dodać nowe narzędzie agenta we wtyczce
   - Musisz uczynić narzędzie opcjonalnym (opt‑in) za pomocą list dozwolonych
 title: "Narzędzia agenta we wtyczkach"
-x-i18n:
-  source_path: plugins/agent-tools.md
-  source_hash: 4479462e9d8b17b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:29Z
 ---
 
 # Narzędzia agenta we wtyczkach

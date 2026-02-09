@@ -4,13 +4,6 @@ read_when:
   - Implémentation de fonctionnalités de l’application macOS
   - Modification du cycle de vie de la passerelle ou du pontage de nœuds sur macOS
 title: "Application macOS"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:31Z
 ---
 
 # Application compagnon macOS OpenClaw (barre de menus + courtier de passerelle)
@@ -194,8 +187,7 @@ d’interface utilisateur locaux puissent communiquer avec une Gateway distante 
   ou le redémarre si nécessaire.
 - **Forme SSH :** `ssh -N -L <local>:127.0.0.1:<remote>` avec BatchMode +
   ExitOnForwardFailure + options de keepalive.
-- **Rapport d’IP :** le tunnel SSH utilise le loopback, la Gateway verra donc l’IP du nœud comme `127.0.0.1`.
-  Utilisez le transport **Direct (ws/wss)** si vous souhaitez que la véritable IP cliente apparaisse
+- **Rapport d’IP :** le tunnel SSH utilise le loopback, la Gateway verra donc l’IP du nœud comme `127.0.0.1`. Utilisez le transport **Direct (ws/wss)** si vous souhaitez que la véritable IP cliente apparaisse
   (voir [accès distant macOS](/platforms/mac/remote)).
 
 Pour les étapes de configuration, voir [accès distant macOS](/platforms/mac/remote). Pour les détails

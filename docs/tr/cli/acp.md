@@ -4,13 +4,6 @@ read_when:
   - ACP tabanlı IDE entegrasyonlarını kurarken
   - ACP oturum yönlendirmesini Gateway’e hata ayıklarken
 title: "acp"
-x-i18n:
-  source_path: cli/acp.md
-  source_hash: 0c09844297da250b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:06Z
 ---
 
 # acp
@@ -133,7 +126,7 @@ Belirli bir Gateway veya ajanı hedeflemek için:
 
 Zed’de Ajan panelini açın ve bir iş parçacığı başlatmak için “OpenClaw ACP”yi seçin.
 
-## Oturum eşleme
+## Session mapping
 
 Varsayılan olarak, ACP oturumları `acp:` önekiyle izole bir Gateway oturum anahtarı alır.
 Bilinen bir oturumu yeniden kullanmak için bir oturum anahtarı veya etiket geçin:

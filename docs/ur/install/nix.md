@@ -5,13 +5,6 @@ read_when:
   - آپ پہلے ہی Nix/NixOS/Home Manager استعمال کر رہے ہیں
   - آپ چاہتے ہیں کہ ہر چیز پن شدہ ہو اور اعلامی طور پر منظم ہو
 title: "Nix"
-x-i18n:
-  source_path: install/nix.md
-  source_hash: f1452194cfdd7461
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:24Z
 ---
 
 # Nix انسٹالیشن
@@ -39,7 +32,7 @@ Reference the nix-openclaw README for module options.
 
 > **📦 مکمل رہنمائی: [github.com/openclaw/nix-openclaw](https://github.com/openclaw/nix-openclaw)**
 >
-> nix-openclaw ریپو Nix انسٹالیشن کے لیے واحد مستند ماخذ ہے۔ یہ صفحہ صرف ایک مختصر جائزہ ہے۔
+> nix-openclaw ریپو Nix انسٹالیشن کے لیے ماخذِ حقیقت ہے۔ یہ صفحہ صرف ایک فوری جائزہ ہے۔
 
 ## آپ کو کیا ملتا ہے
 
@@ -54,15 +47,15 @@ Reference the nix-openclaw README for module options.
 
 جب `OPENCLAW_NIX_MODE=1` سیٹ ہو (nix-openclaw کے ساتھ خودکار):
 
-OpenClaw ایک **Nix موڈ** کی حمایت کرتا ہے جو کنفیگریشن کو قطعی بناتا ہے اور خودکار انسٹال فلوؤں کو غیر فعال کرتا ہے۔
-اسے فعال کرنے کے لیے ایکسپورٹ کریں:
+OpenClaw ایک **Nix mode** کو سپورٹ کرتا ہے جو کنفیگریشن کو متعین (deterministic) بناتا ہے اور آٹو-انسٹال فلو کو غیر فعال کرتا ہے۔
+اسے ایکسپورٹ کر کے فعال کریں:
 
 ```bash
 OPENCLAW_NIX_MODE=1
 ```
 
-macOS پر، GUI ایپ خودکار طور پر شیل کے env vars وراثت میں نہیں لیتی۔ آپ
-defaults کے ذریعے بھی Nix موڈ فعال کر سکتے ہیں:
+On macOS, the GUI app does not automatically inherit shell env vars. آپ
+defaults کے ذریعے بھی Nix mode فعال کر سکتے ہیں:
 
 ```bash
 defaults write bot.molt.mac openclaw.nixMode -bool true
@@ -92,9 +85,9 @@ macOS پیکیجنگ فلو ایک مستحکم Info.plist ٹیمپلیٹ کی �
 apps/macos/Sources/OpenClaw/Resources/Info.plist
 ```
 
-[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) اس ٹیمپلیٹ کو ایپ بنڈل میں کاپی کرتا ہے اور متحرک فیلڈز
-(بنڈل ID، ورژن/بلڈ، Git SHA، Sparkle keys) کو پیچ کرتا ہے۔ اس سے plist، SwiftPM
-پیکیجنگ اور Nix بلڈز کے لیے قطعی رہتا ہے (جو مکمل Xcode ٹول چین پر انحصار نہیں کرتے)۔
+[`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) اس ٹیمپلیٹ کو ایپ بنڈل میں کاپی کرتا ہے اور متحرک فیلڈز کو پیچ کرتا ہے
+(بنڈل ID، ورژن/بلڈ، Git SHA، Sparkle keys)۔ اس سے plist، SwiftPM پیکیجنگ اور Nix builds کے لیے متعین رہتا ہے
+(جو مکمل Xcode ٹول چین پر انحصار نہیں کرتے)۔
 
 ## متعلقہ
 

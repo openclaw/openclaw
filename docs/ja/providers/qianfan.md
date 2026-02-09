@@ -1,21 +1,14 @@
 ---
-summary: 「Qianfan の統合 API を使用して、OpenClaw で多数のモデルにアクセスします」
+summary: "Qianfan の統合 API を使用して、OpenClaw で多数のモデルにアクセスします"
 read_when:
   - 多数の LLM に対して単一の API キーを使いたい場合
   - Baidu Qianfan のセットアップ手順が必要な場合
-title: 「Qianfan」
-x-i18n:
-  source_path: providers/qianfan.md
-  source_hash: 2ca710b422f190b6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:52Z
+title: "Qianfan"
 ---
 
 # Qianfan プロバイダーガイド
 
-Qianfan は Baidu の MaaS プラットフォームであり、**統合 API** を提供して、単一のエンドポイントと API キーの背後で多数のモデルへリクエストをルーティングします。OpenAI 互換のため、base URL を切り替えるだけで、ほとんどの OpenAI SDK が動作します。
+Qianfan は Baidu の MaaS プラットフォームであり、**統合 API** を提供して、単一のエンドポイントと API キーの背後で多数のモデルへリクエストをルーティングします。OpenAI 互換のため、base URL を切り替えるだけで、ほとんどの OpenAI SDK が動作します。 OpenAIと互換性があるため、ほとんどのOpenAISDKはベースURLを切り替えることで動作します。
 
 ## 前提条件
 

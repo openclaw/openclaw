@@ -5,13 +5,6 @@ read_when:
   - Solución de problemas de emparejamiento de webhooks
   - Configuración de iMessage en macOS
 title: "BlueBubbles"
-x-i18n:
-  source_path: channels/bluebubbles.md
-  source_hash: a5208867c934460a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:47Z
 ---
 
 # BlueBubbles (macOS REST)
@@ -32,7 +25,9 @@ Estado: plugin incluido que se comunica con el servidor macOS de BlueBubbles med
 ## Inicio rápido
 
 1. Instale el servidor de BlueBubbles en su Mac (siga las instrucciones en [bluebubbles.app/install](https://bluebubbles.app/install)).
+
 2. En la configuración de BlueBubbles, habilite la API web y establezca una contraseña.
+
 3. Ejecute `openclaw onboard` y seleccione BlueBubbles, o configure manualmente:
 
    ```json5
@@ -49,15 +44,16 @@ Estado: plugin incluido que se comunica con el servidor macOS de BlueBubbles med
    ```
 
 4. Apunte los webhooks de BlueBubbles a su Gateway (ejemplo: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
+
 5. Inicie el Gateway; registrará el manejador de webhooks y comenzará el emparejamiento.
 
 ## Mantener Messages.app activo (VM / configuraciones sin interfaz)
 
 Algunas configuraciones de macOS en VM / siempre encendidas pueden provocar que Messages.app quede “inactivo” (los eventos entrantes se detienen hasta que la app se abre o pasa a primer plano). Una solución sencilla es **estimular Messages cada 5 minutos** usando un AppleScript + LaunchAgent.
 
-### 1) Guardar el AppleScript
+### 1. Guardar el AppleScript
 
-Guárdelo como:
+Guardar esto como:
 
 - `~/Scripts/poke-messages.scpt`
 
@@ -78,9 +74,9 @@ on error
 end try
 ```
 
-### 2) Instalar un LaunchAgent
+### 2. Instalar un LaunchAgent
 
-Guárdelo como:
+Guardar esto como:
 
 - `~/Library/LaunchAgents/com.user.poke-messages.plist`
 
@@ -118,14 +114,14 @@ Notas:
 - Esto se ejecuta **cada 300 segundos** y **al iniciar sesión**.
 - La primera ejecución puede activar avisos de **Automatización** de macOS (`osascript` → Messages). Apruébelos en la misma sesión de usuario que ejecuta el LaunchAgent.
 
-Cárguelo:
+Cargarlo:
 
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null || true
 launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 ```
 
-## Incorporación
+## Embarque
 
 BlueBubbles está disponible en el asistente de configuración interactivo:
 
@@ -149,7 +145,7 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
 
 ## Control de acceso (mensajes directos + grupos)
 
-Mensajes directos:
+DMs:
 
 - Predeterminado: `channels.bluebubbles.dmPolicy = "pairing"`.
 - Los remitentes desconocidos reciben un código de emparejamiento; los mensajes se ignoran hasta que se aprueban (los códigos expiran después de 1 hora).
@@ -188,7 +184,7 @@ Configuración por grupo:
 }
 ```
 
-### Filtrado de comandos
+### Compuerta de comandos
 
 - Los comandos de control (p. ej., `/config`, `/model`) requieren autorización.
 - Usa `allowFrom` y `groupAllowFrom` para determinar la autorización de comandos.

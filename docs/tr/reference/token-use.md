@@ -4,13 +4,6 @@ read_when:
   - Belirteç kullanımını, maliyetleri veya bağlam pencerelerini açıklarken
   - Bağlam büyümesini veya sıkıştırma davranışını hata ayıklarken
 title: "Belirteç Kullanımı ve Maliyetler"
-x-i18n:
-  source_path: reference/token-use.md
-  source_hash: f8bfadb36b51830c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:50Z
 ---
 
 # Belirteç kullanımı ve maliyetler
@@ -94,8 +87,7 @@ Heartbeat, boşta kalma aralıkları boyunca önbelleği **sıcak** tutabilir. M
 önleyerek önbellek yazma maliyetlerini azaltabilir.
 
 Anthropic API fiyatlandırmasında, önbellek okumaları giriş belirteçlerine göre
-çok daha ucuzdur; önbellek yazmaları ise daha yüksek bir çarpanla ücretlendirilir.
-En güncel oranlar ve TTL çarpanları için Anthropic’in istem önbellekleme
+çok daha ucuzdur; önbellek yazmaları ise daha yüksek bir çarpanla ücretlendirilir. En güncel oranlar ve TTL çarpanları için Anthropic’in istem önbellekleme
 fiyatlandırmasına bakın:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 

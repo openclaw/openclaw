@@ -1,17 +1,10 @@
 ---
-summary: „Wo OpenClaw Umgebungsvariablen lädt und die Rangfolge der Priorität“
+summary: "„Wo OpenClaw Umgebungsvariablen lädt und die Rangfolge der Priorität“"
 read_when:
   - Sie müssen wissen, welche Umgebungsvariablen geladen werden und in welcher Reihenfolge
   - Sie beheben fehlende API-Schlüssel im Gateway
   - Sie dokumentieren Anbieter-Authentifizierung oder Deployment-Umgebungen
-title: „Umgebungsvariablen“
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:22Z
+title: "„Umgebungsvariablen“"
 ---
 
 # Umgebungsvariablen
@@ -58,12 +51,12 @@ Zwei gleichwertige Möglichkeiten, Inline-Umgebungsvariablen zu setzen (beide oh
 }
 ```
 
-Entsprechungen als Umgebungsvariablen:
+Env var Äquivalenten:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
-## Ersetzung von Umgebungsvariablen in der Konfiguration
+## Env var Substitution in der Konfiguration
 
 Sie können Umgebungsvariablen direkt in Konfigurations-Stringwerten referenzieren, indem Sie die Syntax `${VAR_NAME}` verwenden:
 

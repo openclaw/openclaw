@@ -2,13 +2,6 @@
 summary: "RPC-protocolnotities voor onboardingwizard en config-schema"
 read_when: "Wijzigen van stappen in de onboardingwizard of config-schema-eindpunten"
 title: "Onboarding- en Config-protocol"
-x-i18n:
-  source_path: experiments/onboarding-config-protocol.md
-  source_hash: 55163b3ee029c024
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:18Z
 ---
 
 # Onboarding + Config-protocol

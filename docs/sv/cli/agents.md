@@ -3,13 +3,6 @@ summary: "CLI-referens för `openclaw agents` (lista/lägg till/ta bort/ange ide
 read_when:
   - Du vill ha flera isolerade agenter (arbetsytor + routning + autentisering)
 title: "agenter"
-x-i18n:
-  source_path: cli/agents.md
-  source_hash: 30556d81636a9ad8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:30Z
 ---
 
 # `openclaw agents`

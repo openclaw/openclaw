@@ -3,13 +3,6 @@ summary: "Sohbetler için oturum yönetimi kuralları, anahtarlar ve kalıcılı
 read_when:
   - Oturum işleme veya depolamayı değiştirirken
 title: "Oturum Yönetimi"
-x-i18n:
-  source_path: concepts/session.md
-  source_hash: e2040cea1e0738a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:40Z
 ---
 
 # Oturum Yönetimi
@@ -67,7 +60,7 @@ Tüm oturum durumu **gateway’e aittir** (“ana” OpenClaw). UI istemcileri (
 - **Uzak modda**, ilgilendiğiniz oturum deposu Mac’inizde değil, uzak gateway ana makinesindedir.
 - UI’larda gösterilen belirteç sayıları gateway’in depo alanlarından gelir (`inputTokens`, `outputTokens`, `totalTokens`, `contextTokens`). İstemciler toplamları “düzeltmek” için JSONL dökümlerini ayrıştırmaz.
 
-## Durumun bulunduğu yer
+## Durumun yaşadığı yerler
 
 - **Gateway ana makinesinde**:
   - Depo dosyası: `~/.openclaw/agents/<agentId>/sessions/sessions.json` (ajan başına).
@@ -77,10 +70,10 @@ Tüm oturum durumu **gateway’e aittir** (“ana” OpenClaw). UI istemcileri (
 - Oturum girdileri, UI’ların bir oturumun nereden geldiğini açıklayabilmesi için `origin` meta verilerini (etiket + yönlendirme ipuçları) içerir.
 - OpenClaw, eski Pi/Tau oturum klasörlerini **okumaz**.
 
-## Oturum budama
+## Session pruning
 
 OpenClaw, varsayılan olarak LLM çağrılarından hemen önce bellek içi bağlamdan **eski araç sonuçlarını** kırpar.
-Bu işlem JSONL geçmişini **yeniden yazmaz**. Bkz. [/concepts/session-pruning](/concepts/session-pruning).
+Bu işlem JSONL geçmişini **yeniden yazmaz**. [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Ön-sıkıştırma bellek boşaltma
 
@@ -137,7 +130,7 @@ Tek tek kimlikleri listelemeden belirli oturum türleri için teslimatı engelle
 }
 ```
 
-Çalışma zamanı geçersiz kılma (yalnızca sahip):
+Runtime override (owner only):
 
 - `/send on` → bu oturum için izin ver
 - `/send off` → bu oturum için reddet
@@ -185,7 +178,7 @@ Tek tek kimlikleri listelemeden belirli oturum türleri için teslimatı engelle
 - Ajanın erişilebilir olup olmadığını, oturum bağlamının ne kadarının kullanıldığını, mevcut düşünme/ayrıntılı anahtarlarını ve WhatsApp web kimlik bilgilerinizin en son ne zaman yenilendiğini görmek için sohbette bağımsız bir mesaj olarak `/status` gönderin (yeniden bağlama gereksinimlerini tespit etmeye yardımcı olur).
 - Sistem isteminde ve enjekte edilen çalışma alanı dosyalarında neler olduğunu (ve en büyük bağlam katkılarını) görmek için `/context list` veya `/context detail` gönderin.
 - Geçerli çalıştırmayı iptal etmek, bu oturum için kuyruğa alınmış takipleri temizlemek ve bundan türetilmiş tüm alt ajan çalıştırmalarını durdurmak için bağımsız bir mesaj olarak `/stop` gönderin (yanıt, durdurulan sayıyı içerir).
-- Eski bağlamı özetlemek ve pencere alanını boşaltmak için bağımsız bir mesaj olarak `/compact` (isteğe bağlı talimatlar) gönderin. Bkz. [/concepts/compaction](/concepts/compaction).
+- Eski bağlamı özetlemek ve pencere alanını boşaltmak için bağımsız bir mesaj olarak `/compact` (isteğe bağlı talimatlar) gönderin. [/concepts/compaction](/concepts/compaction).
 - Tam turları gözden geçirmek için JSONL dökümleri doğrudan açılabilir.
 
 ## İpuçları

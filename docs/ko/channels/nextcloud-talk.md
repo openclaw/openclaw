@@ -3,13 +3,6 @@ summary: "Nextcloud Talk 지원 상태, 기능, 및 구성"
 read_when:
   - Nextcloud Talk 채널 기능 작업 중
 title: "Nextcloud Talk"
-x-i18n:
-  source_path: channels/nextcloud-talk.md
-  source_hash: 2769144221e41391
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:06Z
 ---
 
 # Nextcloud Talk (플러그인)
@@ -40,6 +33,7 @@ OpenClaw 는 로컬 설치 경로를 자동으로 제안합니다.
 ## 빠른 설정 (초보자)
 
 1. Nextcloud Talk 플러그인을 설치합니다.
+
 2. Nextcloud 서버에서 봇을 생성합니다:
 
    ```bash
@@ -47,9 +41,11 @@ OpenClaw 는 로컬 설치 경로를 자동으로 제안합니다.
    ```
 
 3. 대상 방 설정에서 봇을 활성화합니다.
+
 4. OpenClaw 를 구성합니다:
    - 설정: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - 또는 환경 변수: `NEXTCLOUD_TALK_BOT_SECRET` (기본 계정만 해당)
+
 5. Gateway(게이트웨이)를 재시작합니다 (또는 온보딩을 완료합니다).
 
 최소 설정:
@@ -104,14 +100,14 @@ OpenClaw 는 로컬 설치 경로를 자동으로 제안합니다.
 
 ## 기능
 
-| 기능            | 상태          |
-| --------------- | ------------- |
-| 다이렉트 메시지 | 지원됨        |
-| 방              | 지원됨        |
-| 스레드          | 지원되지 않음 |
-| 미디어          | URL 전용      |
-| 반응            | 지원됨        |
-| 네이티브 명령   | 지원되지 않음 |
+| 기능       | 상태      |
+| -------- | ------- |
+| 다이렉트 메시지 | 지원됨     |
+| 방        | 지원됨     |
+| 스레드      | 지원되지 않음 |
+| 미디어      | URL 전용  |
+| 반응       | 지원됨     |
+| 네이티브 명령  | 지원되지 않음 |
 
 ## 구성 참조 (Nextcloud Talk)
 

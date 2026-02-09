@@ -3,13 +3,6 @@ title: Sandbox vs Política de Ferramentas vs Elevado
 summary: "Por que uma ferramenta é bloqueada: runtime de sandbox, política de permitir/negar ferramentas e portões de exec elevado"
 read_when: "Você cai na 'prisão do sandbox' ou vê uma recusa de ferramenta/elevado e quer a chave de configuração exata para mudar."
 status: active
-x-i18n:
-  source_path: gateway/sandbox-vs-tool-policy-vs-elevated.md
-  source_hash: 863ea5e6d137dfb6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:06Z
 ---
 
 # Sandbox vs Política de Ferramentas vs Elevado

@@ -4,18 +4,11 @@ read_when:
   - Phát hành một bản npm mới
   - Phát hành một bản ứng dụng macOS mới
   - Xác minh metadata trước khi xuất bản
-x-i18n:
-  source_path: reference/RELEASING.md
-  source_hash: 54cb2b822bfa3c0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:14Z
 ---
 
 # Danh sách kiểm tra phát hành (npm + macOS)
 
-Sử dụng `pnpm` (Node 22+) từ thư mục gốc của repo. Giữ working tree sạch trước khi gắn thẻ/xuất bản.
+.apiKey\`) có thể xuất các key sang env của tiến trình skill. 6. Giữ working tree sạch trước khi gắn thẻ/phát hành.
 
 ## Kích hoạt từ operator
 
@@ -79,7 +72,7 @@ Khi operator nói “release”, ngay lập tức thực hiện preflight này (
 
 ### Xử lý sự cố (ghi chú từ bản phát hành 2.0.0-beta2)
 
-- **npm pack/publish bị treo hoặc tạo tarball rất lớn**: bundle ứng dụng macOS trong `dist/OpenClaw.app` (và các zip phát hành) bị quét vào gói. Khắc phục bằng cách whitelist nội dung publish qua `package.json` `files` (bao gồm các thư mục con dist, docs, skills; loại trừ app bundles). Xác nhận với `npm pack --dry-run` rằng `dist/OpenClaw.app` không xuất hiện.
+- 6. **npm pack/publish bị treo hoặc tạo tarball khổng lồ**: gói ứng dụng macOS trong `dist/OpenClaw.app` (và các zip phát hành) bị cuốn vào gói. Khắc phục bằng cách whitelist nội dung xuất bản qua `package.json` `files` (bao gồm các thư mục con dist, docs, skills; loại trừ app bundles). Xác nhận bằng `npm pack --dry-run` rằng `dist/OpenClaw.app` không được liệt kê.
 - **npm auth web lặp cho dist-tags**: dùng xác thực legacy để nhận prompt OTP:
   - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add openclaw@X.Y.Z latest`
 - **Xác minh `npx` thất bại với `ECOMPROMISED: Lock compromised`**: thử lại với cache mới:
@@ -98,8 +91,8 @@ Khi operator nói “release”, ngay lập tức thực hiện preflight này (
 
 ## Phạm vi xuất bản plugin (npm)
 
-Chúng tôi chỉ xuất bản **các plugin npm hiện có** dưới scope `@openclaw/*`. Các plugin
-được bundle nhưng không có trên npm sẽ chỉ **tồn tại trên cây thư mục** (vẫn được phân phối trong
+Chúng tôi chỉ xuất bản **các plugin npm hiện có** dưới scope `@openclaw/*`. 10. Các plugin được đóng gói
+mà không có trên npm sẽ **chỉ tồn tại trong cây đĩa** (vẫn được phát hành trong
 `extensions/**`).
 
 Quy trình để suy ra danh sách:

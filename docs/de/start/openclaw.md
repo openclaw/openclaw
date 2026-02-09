@@ -1,16 +1,9 @@
 ---
-summary: „End-to-End-Leitfaden zum Ausführen von OpenClaw als persönlicher Assistent mit Sicherheitshinweisen“
+summary: "„End-to-End-Leitfaden zum Ausführen von OpenClaw als persönlicher Assistent mit Sicherheitshinweisen“"
 read_when:
   - Onboarding einer neuen Assistenteninstanz
   - Überprüfung von Sicherheits- und Berechtigungsimplikationen
-title: „Einrichtung eines persönlichen Assistenten“
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:32Z
+title: "„Einrichtung eines persönlichen Assistenten“"
 ---
 
 # Aufbau eines persönlichen Assistenten mit OpenClaw

@@ -1,15 +1,8 @@
 ---
 summary: "معمارية IPC على macOS لتطبيق OpenClaw ونقل عُقدة Gateway وPeekabooBridge"
 read_when:
-  - "عند تحرير عقود IPC أو IPC لتطبيق شريط القوائم"
+  - عند تحرير عقود IPC أو IPC لتطبيق شريط القوائم
 title: "IPC على macOS"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:34Z
 ---
 
 # معمارية OpenClaw لـ IPC على macOS
@@ -54,7 +47,7 @@ Agent -> Gateway -> Node Service (WS)
 ## التدفقات التشغيلية
 
 - إعادة التشغيل/إعادة البناء: `SIGN_IDENTITY="Apple Development: <Developer Name> (<TEAMID>)" scripts/restart-mac.sh`
-  - إنهاء المثيلات الحالية
+  - قتل مثيلات موجودة
   - بناء Swift + التحزيم
   - كتابة/تهيئة/تشغيل LaunchAgent
 - مثيل واحد: يخرج التطبيق مبكرًا إذا كان هناك مثيل آخر يعمل بنفس معرّف الحزمة.

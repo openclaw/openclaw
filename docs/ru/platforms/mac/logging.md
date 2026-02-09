@@ -4,13 +4,6 @@ read_when:
   - Захват логов macOS или расследование логирования приватных данных
   - Отладка проблем жизненного цикла голосового пробуждения/сеанса
 title: "Логирование в macOS"
-x-i18n:
-  source_path: platforms/mac/logging.md
-  source_hash: c4c201d154915e0e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:45Z
 ---
 
 # Логирование (macOS)

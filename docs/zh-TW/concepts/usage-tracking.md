@@ -1,28 +1,21 @@
 ---
-summary: 「使用量追蹤的呈現介面與憑證需求」
+summary: "使用量追蹤的呈現介面與憑證需求"
 read_when:
-  - 「你正在串接提供者的使用量／配額呈現介面」
-  - 「你需要說明使用量追蹤的行為或身分驗證需求」
-title: 「使用量追蹤」
-x-i18n:
-  source_path: concepts/usage-tracking.md
-  source_hash: 6f6ed2a70329b2a6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:50Z
+  - You are wiring provider usage/quota surfaces
+  - 你需要說明使用量追蹤的行為或身分驗證需求
+title: "使用量追蹤"
 ---
 
 # 使用量追蹤
 
-## 內容說明
+## 它是什麼
 
-- 直接從各提供者的使用量端點擷取使用量／配額。
-- 不提供成本估算；僅顯示提供者回報的時間視窗。
+- Pulls provider usage/quota directly from their usage endpoints.
+- No estimated costs; only the provider-reported windows.
 
-## 顯示位置
+## Where it shows up
 
-- 聊天中：`/status`：含豐富表情符號的狀態卡，顯示工作階段權杖＋預估成本（僅 API 金鑰）。在可用時，會顯示**目前模型提供者**的使用量。
+- `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available.
 - 聊天中：`/usage off|tokens|full`：每則回應的使用量頁尾（OAuth 僅顯示權杖）。
 - 聊天中：`/usage cost`：由 OpenClaw 工作階段紀錄彙總的本地成本摘要。
 - CLI：`openclaw status --usage` 會輸出完整的各提供者明細。

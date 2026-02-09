@@ -1,14 +1,7 @@
 ---
-summary: 「Socket モードまたは HTTP Webhook モード向けの Slack セットアップ」
-read_when: 「Slack をセットアップする場合、または Slack の Socket / HTTP モードをデバッグする場合」
-title: 「Slack」
-x-i18n:
-  source_path: channels/slack.md
-  source_hash: 8ab00a8a93ec31b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:25Z
+summary: "Socket モードまたは HTTP Webhook モード向けの Slack セットアップ"
+read_when: "Slack をセットアップする場合、または Slack の Socket / HTTP モードをデバッグする場合"
+title: "Slack"
 ---
 
 # Slack
@@ -38,9 +31,9 @@ x-i18n:
 ### セットアップ
 
 1. [https://api.slack.com/apps](https://api.slack.com/apps) で Slack アプリを作成します（From scratch）。
-2. **Socket Mode** → 有効化。次に **Basic Information** → **App-Level Tokens** → スコープ `connections:write` を指定して **Generate Token and Scopes** を実行します。**App Token**（`xapp-...`）をコピーします。
-3. **OAuth & Permissions** → ボットトークンのスコープを追加します（下記のマニフェストを使用）。**Install to Workspace** をクリックし、**Bot User OAuth Token**（`xoxb-...`）をコピーします。
-4. 任意: **OAuth & Permissions** → **User Token Scopes** を追加します（下記の読み取り専用リスト参照）。アプリを再インストールし、**User OAuth Token**（`xoxp-...`）をコピーします。
+2. **ソケットモード** → オンに切り替え **Socket Mode** → 有効化。次に **Basic Information** → **App-Level Tokens** → スコープ `connections:write` を指定して **Generate Token and Scopes** を実行します。**App Token**（`xapp-...`）をコピーします。 **App Token** (`xapp-...`) をコピーします。
+3. **OAuth と権限** → ボットトークンスコープの追加 (下のマニフェストを使用してください)。 **Install to Workspace**をクリックします。 **OAuth & Permissions** → ボットトークンのスコープを追加します（下記のマニフェストを使用）。**Install to Workspace** をクリックし、**Bot User OAuth Token**（`xoxb-...`）をコピーします。
+4. オプション: **OAuth およびパーミッション** → **ユーザトークンスコープ** の追加 (読み取り専用リストを参照してください。 任意: **OAuth & Permissions** → **User Token Scopes** を追加します（下記の読み取り専用リスト参照）。アプリを再インストールし、**User OAuth Token**（`xoxp-...`）をコピーします。
 5. **Event Subscriptions** → イベントを有効化し、以下を購読します:
    - `message.*`（編集／削除／スレッドブロードキャストを含む）
    - `app_mention`
@@ -49,12 +42,12 @@ x-i18n:
    - `channel_rename`
    - `pin_added`、`pin_removed`
 6. 読み取り対象にしたいチャンネルにボットを招待します。
-7. Slash Commands → `channels.slack.slashCommand` を使用する場合は `/openclaw` を作成します。ネイティブコマンドを有効にする場合、組み込みコマンドごとに 1 つの Slash コマンドを追加します（`/help` と同名）。Slack では、`channels.slack.commands.native: true` を設定しない限りネイティブはデフォルトでオフです（グローバル `commands.native` の既定値は `"auto"` で、Slack はオフのままです）。
+7. スラッシュコマンド → `channels.slack.slashCommand` を使用する場合は、 `/openclaw` を作成します。 ネイティブコマンドを有効にする場合は、組み込みコマンド(`/help`と同じ名前)ごとにスラッシュコマンドを1つ追加してください。 Slash Commands → `channels.slack.slashCommand` を使用する場合は `/openclaw` を作成します。ネイティブコマンドを有効にする場合、組み込みコマンドごとに 1 つの Slash コマンドを追加します（`/help` と同名）。Slack では、`channels.slack.commands.native: true` を設定しない限りネイティブはデフォルトでオフです（グローバル `commands.native` の既定値は `"auto"` で、Slack はオフのままです）。
 8. **App Home** → **Messages Tab** を有効にし、ユーザーがボットに DM できるようにします。
 
 スコープとイベントの同期を保つため、以下のマニフェストを使用してください。
 
-マルチアカウント対応: アカウントごとのトークンと任意の `name` を指定して `channels.slack.accounts` を使用します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。
+マルチアカウント対応: アカウントごとのトークンと任意の `name` を指定して `channels.slack.accounts` を使用します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。 マルチアカウント対応: アカウントごとの設定と任意の `name` を使用して `channels.signal.accounts` を指定します。共通パターンについては [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) を参照してください。
 
 ### OpenClaw 設定（Socket モード）
 
@@ -79,9 +72,10 @@ x-i18n:
 
 ### ユーザートークン（任意）
 
-OpenClaw は、読み取り操作（履歴、ピン、リアクション、絵文字、メンバー情報）に Slack のユーザートークン（`xoxp-...`）を使用できます。デフォルトでは読み取り専用のままです。ユーザートークンが存在する場合、読み取りはそれを優先し、書き込みは明示的にオプトインしない限りボットトークンを使用します。`userTokenReadOnly: false` を設定しても、ボットトークンが利用可能な場合は書き込みでボットトークンが引き続き優先されます。
+OpenClaw は、読み取り操作（履歴、ピン、リアクション、絵文字、メンバー情報）に Slack のユーザートークン（`xoxp-...`）を使用できます。デフォルトでは読み取り専用のままです。ユーザートークンが存在する場合、読み取りはそれを優先し、書き込みは明示的にオプトインしない限りボットトークンを使用します。`userTokenReadOnly: false` を設定しても、ボットトークンが利用可能な場合は書き込みでボットトークンが引き続き優先されます。 4. デフォルトではこれは読み取り専用のままです。読み取りはユーザートークンが存在する場合はそれを優先し、書き込みは明示的にオプトインしない限り引き続きボットトークンを使用します。 5. `userTokenReadOnly: false` の場合でも、利用可能であれば書き込みにはボットトークンが優先されます。
 
-ユーザートークンは設定ファイルでのみ設定できます（環境変数は非対応）。マルチアカウントの場合は `channels.slack.accounts.<id>.userToken` を設定します。
+ユーザートークンは設定ファイル内に設定されています(env var サポートはありません)。
+マルチアカウントの場合、`channels.slack.accounts.<id> を設定します。.userToken` を設定します。
 
 ボット + アプリ + ユーザートークンの例:
 
@@ -116,17 +110,21 @@ userTokenReadOnly を明示的に設定した例（ユーザートークンで�
 
 #### トークンの使用方法
 
-- 読み取り操作（履歴、リアクション一覧、ピン一覧、絵文字一覧、メンバー情報、検索）は、設定されていればユーザートークンを優先し、なければボットトークンを使用します。
-- 書き込み操作（メッセージの送信／編集／削除、リアクションの追加／削除、ピン／解除、ファイルアップロード）は、デフォルトでボットトークンを使用します。`userTokenReadOnly: false` が設定され、かつボットトークンが利用できない場合、OpenClaw はユーザートークンにフォールバックします。
+- 読み取り操作 (履歴、リアクションリスト、ピンリスト、絵文字リスト、メンバー情報、
+  検索) は、設定時にユーザートークンを好み、そうでなければボットトークンを好みます。
+- 書き込み操作 (メッセージの送信/編集/削除、リアクションの追加/削除、ピン/アンピン、
+  ファイルアップロード) はデフォルトでボットトークンを使用します。 `userTokenReadyOnly: false` と
+  ボットトークンが利用できない場合は、OpenClawはユーザートークンに戻ります。
 
 ### 履歴コンテキスト
 
 - `channels.slack.historyLimit`（または `channels.slack.accounts.*.historyLimit`）は、直近のチャンネル／グループメッセージをプロンプトに含める数を制御します。
-- `messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定します（デフォルト 50）。
+- `messages.groupChat.historyLimit` にフォールバックします。無効化するには `0` を設定します（デフォルト 50）。 `0`を無効にします（デフォルトは50）。
 
 ## HTTP モード（Events API）
 
 Gateway（ゲートウェイ）が HTTPS 経由で Slack から到達可能な場合（サーバー配備が一般的）に HTTP Webhook モードを使用します。HTTP モードは、Events API + Interactivity + Slash Commands を共通のリクエスト URL で使用します。
+HTTP モードでは、イベント API + Interactivity + Slash コマンドと共有リクエストの URL を使用します。
 
 ### セットアップ（HTTP モード）
 
@@ -160,7 +158,8 @@ Gateway（ゲートウェイ）が HTTPS 経由で Slack から到達可能な�
 
 ### マニフェスト（任意）
 
-この Slack アプリマニフェストを使用すると、アプリを迅速に作成できます（必要に応じて名前／コマンドを調整してください）。ユーザートークンを設定する予定がある場合は、ユーザースコープを含めてください。
+この Slack アプリマニフェストを使用すると、アプリを迅速に作成できます（必要に応じて名前／コマンドを調整してください）。ユーザートークンを設定する予定がある場合は、ユーザースコープを含めてください。 ユーザートークンを設定する場合は、
+ユーザースコープを含めます。
 
 ```json
 {
@@ -250,12 +249,13 @@ Gateway（ゲートウェイ）が HTTPS 経由で Slack から到達可能な�
 }
 ```
 
-ネイティブコマンドを有効にする場合、公開したいコマンドごとに `slash_commands` エントリを 1 つ追加します（`/help` の一覧と一致させます）。`channels.slack.commands.native` で上書きできます。
+ネイティブコマンドを有効にする場合、公開したいコマンドごとに `slash_commands` エントリを 1 つ追加します（`/help` の一覧と一致させます）。`channels.slack.commands.native` で上書きできます。 `channels.slack.commands.native` で上書きします。
 
 ## スコープ（現在 vs 任意）
 
 Slack の Conversations API はタイプ別スコープです。実際に扱う会話タイプ（channels、groups、im、mpim）に必要なスコープのみを指定してください。概要は
-[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) を参照してください。
+[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/) を参照してください。 概要については、
+[https://docs.slack.dev/apis/web-api/using-the-conversations-api/](https://docs.slack.dev/apis/web-api/using-the-conversations-api/)を参照してください。
 
 ### ボットトークンのスコープ（必須）
 
@@ -304,7 +304,7 @@ Slack の Conversations API はタイプ別スコープです。実際に扱う�
 
 ## 設定
 
-Slack は Socket モードのみを使用します（HTTP Webhook サーバーなし）。両方のトークンを指定してください。
+Slack は Socket モードのみを使用します（HTTP Webhook サーバーなし）。両方のトークンを指定してください。 両方のトークンを提供:
 
 ```json
 {
@@ -353,12 +353,14 @@ Slack は Socket モードのみを使用します（HTTP Webhook サーバー�
 }
 ```
 
-トークンは環境変数でも指定できます:
+トークンはenv varを介して供給することもできます:
 
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
-Ack リアクションは `messages.ackReaction` + `messages.ackReactionScope` によりグローバル制御されます。ボットが返信した後に Ack リアクションを消すには `messages.removeAckAfterReply` を使用します。
+Ack リアクションは `messages.ackReaction` + `messages.ackReactionScope` によりグローバル制御されます。ボットが返信した後に Ack リアクションを消すには `messages.removeAckAfterReply` を使用します。 Ack リアクションは、グローバルに `messages.ackReaction` +
+`messages.ackReactionScope` で制御されます。ボットが返信後に
+ack リアクションをクリアするには `messages.removeAckAfterReply` を使用します。
 
 ## 制限
 
@@ -368,13 +370,13 @@ Ack リアクションは `messages.ackReaction` + `messages.ackReactionScope` �
 
 ## 返信のスレッド化
 
-デフォルトでは、OpenClaw はメインチャンネルに返信します。自動スレッド化は `channels.slack.replyToMode` で制御します。
+デフォルトでは、OpenClaw はメインチャンネルに返信します。自動スレッド化は `channels.slack.replyToMode` で制御します。 `channels.slack.replyToMode` を使用して、自動スレッドを制御します。
 
-| モード  | 動作                                                                                                                                               |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `off`   | **デフォルト。** メインチャンネルに返信します。トリガーとなったメッセージが既にスレッド内の場合のみスレッドに返信します。                          |
-| `first` | 最初の返信はスレッド（トリガーメッセージ配下）に送信し、以降の返信はメインチャンネルに送信します。文脈を保ちつつスレッドの乱立を防ぐのに有用です。 |
-| `all`   | すべての返信をスレッドに送信します。会話を集約できますが、可視性が下がる可能性があります。                                                         |
+| モード     | 動作                                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------- |
+| `off`   | **デフォルト。** メインチャンネルに返信します。トリガーとなったメッセージが既にスレッド内の場合のみスレッドに返信します。 スレッドは、すでにスレッド内にトリガーメッセージが存在する場合にのみ使用します。      |
+| `first` | 最初の返信はスレッド（トリガーメッセージ配下）に送信し、以降の返信はメインチャンネルに送信します。文脈を保ちつつスレッドの乱立を防ぐのに有用です。 スレッドの混乱を避けながらコンテキストを見えるようにするのに便利です。 |
+| `all`   | すべての返信はスレッドに移動します。 会話を保持しますが、視認性が低下する可能性があります。                                                                |
 
 このモードは自動返信とエージェントのツール呼び出し（`slack sendMessage`）の両方に適用されます。
 
@@ -464,7 +466,7 @@ DM のみスレッド化:
 - チャンネルは `agent:<agentId>:slack:channel:<channelId>` セッションにマップされます。
 - Slash コマンドは `agent:<agentId>:slack:slash:<userId>` セッションを使用します（プレフィックスは `channels.slack.slashCommand.sessionPrefix` で設定可能）。
 - Slack が `channel_type` を提供しない場合、OpenClaw はチャンネル ID のプレフィックス（`D`、`C`、`G`）から推測し、セッションキーの安定性を保つためにデフォルトで `channel` を使用します。
-- ネイティブコマンド登録は `commands.native` を使用します（グローバル既定 `"auto"` → Slack はオフ）。`channels.slack.commands.native` によりワークスペース単位で上書きできます。テキストコマンドは単独の `/...` メッセージを必要とし、`commands.text: false` で無効化できます。Slack の Slash コマンドは Slack アプリ側で管理され、自動削除されません。コマンドのアクセスグループチェックを回避するには `commands.useAccessGroups: false` を使用します。
+- ネイティブコマンド登録は `commands.native` を使用します（グローバル既定 `"auto"` → Slack はオフ）。`channels.slack.commands.native` によりワークスペース単位で上書きできます。テキストコマンドは単独の `/...` メッセージを必要とし、`commands.text: false` で無効化できます。Slack の Slash コマンドは Slack アプリ側で管理され、自動削除されません。コマンドのアクセスグループチェックを回避するには `commands.useAccessGroups: false` を使用します。 テキストコマンドはスタンドアロンの `/...` メッセージを必要とし、`commands.text: false` で無効にできます。 SlackスラッシュコマンドはSlackアプリで管理され、自動的には削除されません。 アクセスグループのコマンドチェックを回避するには、`commands.useAccessGroups: false` を使用します。
 - 完全なコマンド一覧と設定: [Slash commands](/tools/slash-commands)
 
 ## DM セキュリティ（ペアリング）
@@ -472,13 +474,14 @@ DM のみスレッド化:
 - デフォルト: `channels.slack.dm.policy="pairing"` — 未知の DM 送信者にはペアリングコードが送られます（1 時間で失効）。
 - 承認方法: `openclaw pairing approve slack <code>`。
 - 誰でも許可する場合: `channels.slack.dm.policy="open"` と `channels.slack.dm.allowFrom=["*"]` を設定します。
-- `channels.slack.dm.allowFrom` はユーザー ID、@ハンドル、またはメールアドレスを受け付けます（トークンが許可する場合、起動時に解決）。ウィザードはユーザー名を受け付け、セットアップ時に ID へ解決します。
+- `channels.slack.dm.allowFrom` はユーザー ID、@ハンドル、またはメールアドレスを受け付けます（トークンが許可する場合、起動時に解決）。ウィザードはユーザー名を受け付け、セットアップ時に ID へ解決します。 ウィザードはトークンが許可されている場合、ユーザー名を受け取り、セットアップ時にIDを取得します。
 
 ## グループポリシー
 
 - `channels.slack.groupPolicy` はチャンネルの扱い（`open|disabled|allowlist`）を制御します。
 - `allowlist` は、チャンネルが `channels.slack.channels` に列挙されていることを要求します。
-- `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` のみを設定し、`channels.slack` セクションを作成しない場合、実行時の既定で `groupPolicy` は `open` になります。制限するには `channels.slack.groupPolicy`、`channels.defaults.groupPolicy`、またはチャンネル許可リストを追加してください。
+- `SLACK_BOT_TOKEN`/`SLACK_APP_TOKEN` のみを設定し、`channels.slack` セクションを作成しない場合、実行時の既定で `groupPolicy` は `open` になります。制限するには `channels.slack.groupPolicy`、`channels.defaults.groupPolicy`、またはチャンネル許可リストを追加してください。 `channels.slack.groupPolicy` 、
+  `channels.defaults.groupPolicy` を追加するか、チャンネルをロックするための許可リストを追加します。
 - 設定ウィザードは `#channel` 名を受け付け、可能な場合に ID へ解決します（公開／非公開）。複数一致がある場合はアクティブなチャンネルを優先します。
 - 起動時に OpenClaw は許可リスト内のチャンネル／ユーザー名を ID に解決し（トークンが許可する場合）、対応関係をログに出力します。解決できない項目は入力どおり保持されます。
 - **チャンネルを一切許可しない** 場合は `channels.slack.groupPolicy: "disabled"` を設定します（または空の許可リストを維持します）。
@@ -506,18 +509,19 @@ cron / CLI 送信で使用します:
 
 Slack のツールアクションは `channels.slack.actions.*` で制御できます。
 
-| アクショングループ | デフォルト | 注記                       |
-| ------------------ | ---------- | -------------------------- |
-| reactions          | enabled    | リアクション追加 + 一覧    |
-| messages           | enabled    | 読み取り／送信／編集／削除 |
-| pins               | enabled    | ピン／解除／一覧           |
-| memberInfo         | enabled    | メンバー情報               |
-| emojiList          | enabled    | カスタム絵文字一覧         |
+| アクショングループ  | デフォルト   | 注記                |
+| ---------- | ------- | ----------------- |
+| reactions  | enabled | React + リアクションリスト |
+| messages   | enabled | 読み取り／送信／編集／削除     |
+| pins       | enabled | ピン／解除／一覧          |
+| memberInfo | enabled | メンバー情報            |
+| emojiList  | enabled | カスタム絵文字一覧         |
 
 ## セキュリティ注記
 
 - 書き込みはデフォルトでボットトークンを使用するため、状態変更アクションはアプリのボット権限とアイデンティティにスコープされます。
-- `userTokenReadOnly: false` を設定すると、ボットトークンが利用できない場合にユーザートークンでの書き込みが許可されます。これはインストールユーザーの権限で実行されることを意味します。ユーザートークンは高権限として扱い、アクションゲートと許可リストを厳格に保ってください。
+- `userTokenReadOnly: false` を設定すると、ボットトークンが利用できない場合にユーザートークンでの書き込みが許可されます。これはインストールユーザーの権限で実行されることを意味します。ユーザートークンは高権限として扱い、アクションゲートと許可リストを厳格に保ってください。 ユーザートークンを高度な特権として扱い、
+  アクションゲートを維持し、厳しいリストを許可します。
 - ユーザートークンでの書き込みを有効にする場合、期待する書き込みスコープ（`chat:write`、`reactions:write`、`pins:write`、`files:write`）が含まれていることを確認してください。含まれていない場合、該当操作は失敗します。
 
 ## トラブルシューティング

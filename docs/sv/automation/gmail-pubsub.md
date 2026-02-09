@@ -4,13 +4,6 @@ read_when:
   - Koppla Gmail-inkorgstriggers till OpenClaw
   - Konfigurera Pub/Sub-push för agentväckning
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:18Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -22,9 +15,9 @@ Mål: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> OpenClaw-webhook
 - `gcloud` installerat och inloggat ([installationsguide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) installerat och auktoriserat för Gmail-kontot ([gogcli.sh](https://gogcli.sh/)).
 - OpenClaw-hooks aktiverade (se [Webhooks](/automation/webhook)).
-- `tailscale` inloggat ([tailscale.com](https://tailscale.com/)). Den stödda uppsättningen använder Tailscale Funnel för den publika HTTPS-slutpunkten.
-  Andra tunnel-tjänster kan fungera, men är DIY/ej stödda och kräver manuell inkoppling.
-  Just nu är Tailscale det vi stöder.
+- `tailscale` inloggad ([tailscale.com](https://tailscale.com/)). Konfigurationen som stöds använder Tailscale Funnel för den offentliga HTTPS-slutpunkten.
+  Andra tunneltjänster kan fungera, men är DIY/ej stödda och kräver manuell ledning.
+  Just nu är Tailscale vad vi stöder.
 
 Exempel på hook-konfig (aktivera Gmail-förinställd mappning):
 
@@ -66,11 +59,11 @@ som sätter `deliver` + valfri `channel`/`to`:
 }
 ```
 
-Om du vill ha en fast kanal, sätt `channel` + `to`. Annars använder `channel: "last"`
-den senaste leveransrutten (faller tillbaka till WhatsApp).
+Om du vill ha en fast kanal, sätt `channel` + `to`. Annars `channel: "last"`
+använder den senaste leveransvägen (faller tillbaka till WhatsApp).
 
-För att tvinga en billigare modell för Gmail-körningar, sätt `model` i mappningen
-(`provider/model` eller alias). Om du tillämpar `agents.defaults.models`, inkludera den där.
+För att tvinga fram en billigare modell för Gmail-körningar, sätt `model` i kartläggningen
+(`provider/model` eller alias). Om du genomdriver `agents.defaults.models`, inkludera den där.
 
 För att sätta en standardmodell och tänkenivå specifikt för Gmail-hooks, lägg till
 `hooks.gmail.model` / `hooks.gmail.thinking` i din konfig:
@@ -91,8 +84,8 @@ Noteringar:
 - Per-hook `model`/`thinking` i mappningen åsidosätter fortfarande dessa standarder.
 - Reservordning: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primär (auth/rate-limit/timeouts).
 - Om `agents.defaults.models` är satt måste Gmail-modellen finnas i tillåtelselistan.
-- Innehållet i Gmail-hooken omsluts som standard av säkerhetsgränser för externt innehåll.
-  För att inaktivera (farligt), sätt `hooks.gmail.allowUnsafeExternalContent: true`.
+- Gmail-hook innehåll är insvept med externa säkerhetsgränser för innehåll som standard.
+  För att inaktivera (farlig), sätt `hooks.gmail.allowUnsafeExternalInnehåll: true`.
 
 För att anpassa payload-hanteringen ytterligare, lägg till `hooks.mappings` eller en JS/TS-transformmodul
 under `hooks.transformsDir` (se [Webhooks](/automation/webhook)).
@@ -112,15 +105,15 @@ Standarder:
 - Skriver `hooks.gmail`-konfig för `openclaw webhooks gmail run`.
 - Aktiverar Gmail-hook-förinställningen (`hooks.presets: ["gmail"]`).
 
-Sökvägsnotis: när `tailscale.mode` är aktiverat sätter OpenClaw automatiskt
-`hooks.gmail.serve.path` till `/` och behåller den publika sökvägen på
-`hooks.gmail.tailscale.path` (standard `/gmail-pubsub`) eftersom Tailscale
-tar bort set-path-prefixet innan proxyn.
-Om du behöver att backend tar emot den prefixade sökvägen, sätt
+Sökvägskommentaren: när `tailscale.mode` är aktiverat, sätter OpenClaw automatiskt
+`hooks.gmail.serve.path` till `/` och behåller den offentliga sökvägen på
+`hooks. mail.tailscale.path` (standard `/gmail-pubsub`) eftersom Tailscale
+tar bort set-path-prefixet innan proxying.
+Om du behöver backend för att få den prefixerade sökvägen anger du
 `hooks.gmail.tailscale.target` (eller `--tailscale-target`) till en fullständig URL som
-`http://127.0.0.1:8788/gmail-pubsub` och matcha `hooks.gmail.serve.path`.
+`http://127.0.0.1:8788/gmail-pubsub` och matchar `hooks.gmail.serve.path`.
 
-Vill du ha en anpassad slutpunkt? Använd `--push-endpoint <url>` eller `--tailscale off`.
+Vill du ha en anpassad slutpunkt? Använd `--push-endpoint <url>` eller` --tailscale off`.
 
 Plattformsnotis: på macOS installerar guiden `gcloud`, `gogcli` och `tailscale`
 via Homebrew; på Linux installerar du dem manuellt först.

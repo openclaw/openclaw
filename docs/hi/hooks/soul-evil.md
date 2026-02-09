@@ -4,22 +4,16 @@ read_when:
   - आप SOUL Evil हुक को सक्षम या ट्यून करना चाहते हैं
   - आप पर्ज विंडो या रैंडम-चांस पर्सोना स्वैप चाहते हैं
 title: "SOUL Evil हुक"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:19Z
 ---
 
 # SOUL Evil हुक
 
-SOUL Evil हुक **इंजेक्ट किए गए** `SOUL.md` कंटेंट को पर्ज विंडो के दौरान या रैंडम चांस के आधार पर `SOUL_EVIL.md` से स्वैप करता है। यह डिस्क पर फ़ाइलों में **कोई** बदलाव नहीं करता।
+SOUL Evil hook, **injected** `SOUL.md` कंटेंट को purge window के दौरान या रैंडम चांस से `SOUL_EVIL.md` से स्वैप कर देता है। यह डिस्क पर मौजूद फ़ाइलों को **modify नहीं** करता।
 
 ## यह कैसे काम करता है
 
-जब `agent:bootstrap` चलता है, तो यह हुक सिस्टम प्रॉम्प्ट असेंबल होने से पहले मेमोरी में `SOUL.md` कंटेंट को बदल सकता है। यदि `SOUL_EVIL.md` गायब है या खाली है, तो OpenClaw एक चेतावनी लॉग करता है और सामान्य `SOUL.md` को बनाए रखता है।
+जब `agent:bootstrap` चलता है, तब सिस्टम प्रॉम्प्ट असेंबल होने से पहले hook मेमोरी में `SOUL.md` कंटेंट को बदल सकता है। अगर `SOUL_EVIL.md` गायब है या खाली है,
+OpenClaw एक warning लॉग करता है और सामान्य `SOUL.md` को बनाए रखता है।
 
 सब-एजेंट रन में अपने बूटस्ट्रैप फ़ाइलों में `SOUL.md` शामिल नहीं होता, इसलिए इस हुक का सब-एजेंट्स पर कोई प्रभाव नहीं पड़ता।
 
@@ -56,7 +50,7 @@ openclaw hooks enable soul-evil
 - `file` (string): वैकल्पिक SOUL फ़ाइलनाम (डिफ़ॉल्ट: `SOUL_EVIL.md`)
 - `chance` (number 0–1): प्रति रन `SOUL_EVIL.md` का उपयोग करने की रैंडम संभावना
 - `purge.at` (HH:mm): दैनिक पर्ज प्रारंभ (24-घंटे की घड़ी)
-- `purge.duration` (duration): विंडो की अवधि (उदा. `30s`, `10m`, `1h`)
+- `purge.duration` (duration): window की लंबाई (उदा. `30s`, `10m`, `1h`)
 
 **प्राथमिकता:** पर्ज विंडो की प्राथमिकता रैंडम चांस पर होती है।
 

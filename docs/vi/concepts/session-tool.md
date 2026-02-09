@@ -3,13 +3,6 @@ summary: "Công cụ phiên tác tử để liệt kê phiên, lấy lịch sử
 read_when:
   - Thêm hoặc chỉnh sửa công cụ phiên
 title: "Công cụ Phiên"
-x-i18n:
-  source_path: concepts/session-tool.md
-  source_hash: cb6e0982ebf507bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:52Z
 ---
 
 # Công cụ Phiên
@@ -31,7 +24,7 @@ Mục tiêu: bộ công cụ nhỏ, khó dùng sai để tác tử có thể li�
 - Hooks dùng `hook:<uuid>` trừ khi được đặt rõ ràng.
 - Phiên node dùng `node-<nodeId>` trừ khi được đặt rõ ràng.
 
-`global` và `unknown` là các giá trị được dành riêng và không bao giờ được liệt kê. Nếu `session.scope = "global"`, chúng tôi alias nó thành `main` cho tất cả các công cụ để người gọi không bao giờ thấy `global`.
+41. `global` và `unknown` là các giá trị được dành riêng và không bao giờ được liệt kê. 42. Nếu `session.scope = "global"`, chúng tôi ánh xạ nó thành `main` cho tất cả công cụ để người gọi không bao giờ thấy `global`.
 
 ## sessions_list
 
@@ -96,7 +89,7 @@ Hành vi:
 
 - `timeoutSeconds = 0`: xếp hàng và trả về `{ runId, status: "accepted" }`.
 - `timeoutSeconds > 0`: chờ tối đa N giây để hoàn tất, sau đó trả về `{ runId, status: "ok", reply }`.
-- Nếu chờ bị timeout: `{ runId, status: "timeout", error }`. Tiến trình vẫn tiếp tục; gọi `sessions_history` sau.
+- 43. Nếu chờ bị hết thời gian: `{ runId, status: "timeout", error }`. 44. Lần chạy vẫn tiếp tục; hãy gọi `sessions_history` sau.
 - Nếu tiến trình thất bại: `{ runId, status: "error", error }`.
 - Các lần chạy thông báo (announce) sau khi lần chạy chính hoàn tất và là best-effort; `status: "ok"` không đảm bảo thông báo đã được gửi.
 - Chờ thông qua `agent.wait` của gateway (phía server) để việc reconnect không làm rơi quá trình chờ.
@@ -162,7 +155,7 @@ Tham số:
 
 Danh sách cho phép:
 
-- `agents.list[].subagents.allowAgents`: danh sách agent id được phép thông qua `agentId` (`["*"]` để cho phép bất kỳ). Mặc định: chỉ tác tử yêu cầu.
+- 45. `agents.list[].subagents.allowAgents`: danh sách id agent được phép qua `agentId` (`["*"]` để cho phép bất kỳ). 46. Mặc định: chỉ agent yêu cầu.
 
 Khám phá:
 

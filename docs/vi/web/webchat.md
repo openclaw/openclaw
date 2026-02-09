@@ -3,13 +3,6 @@ summary: "Lưu trữ tĩnh WebChat dạng loopback và cách dùng Gateway WS ch
 read_when:
   - Khi gỡ lỗi hoặc cấu hình quyền truy cập WebChat
 title: "WebChat"
-x-i18n:
-  source_path: web/webchat.md
-  source_hash: b5ee2b462c8c979a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:40Z
 ---
 
 # WebChat (Gateway WebSocket UI)
@@ -46,7 +39,7 @@ Cấu hình đầy đủ: [Configuration](/gateway/configuration)
 
 Tùy chọn kênh:
 
-- Không có khối `webchat.*` riêng. WebChat sử dụng endpoint gateway + các thiết lập xác thực bên dưới.
+- Không có khối `webchat.*` riêng biệt. WebChat sử dụng endpoint của gateway + các thiết lập xác thực bên dưới.
 
 Các tùy chọn toàn cục liên quan:
 

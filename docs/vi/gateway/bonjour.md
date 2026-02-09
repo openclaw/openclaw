@@ -4,26 +4,19 @@ read_when:
   - Gỡ lỗi các sự cố khám phá Bonjour trên macOS/iOS
   - Thay đổi loại dịch vụ mDNS, bản ghi TXT hoặc UX khám phá
 title: "Khám phá Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:01Z
 ---
 
 # Khám phá Bonjour / mDNS
 
-OpenClaw sử dụng Bonjour (mDNS / DNS‑SD) như một **tiện ích chỉ trong LAN** để phát hiện
-một Gateway đang hoạt động (điểm cuối WebSocket). Đây là cơ chế best‑effort và **không**
-thay thế cho SSH hoặc kết nối dựa trên Tailnet.
+OpenClaw uses Bonjour (mDNS / DNS‑SD) as a **LAN‑only convenience** to discover
+an active Gateway (WebSocket endpoint). It is best‑effort and does **not** replace SSH or
+Tailnet-based connectivity.
 
 ## Bonjour phạm vi rộng (Unicast DNS‑SD) qua Tailscale
 
-Nếu node và gateway ở các mạng khác nhau, multicast mDNS sẽ không vượt qua
-ranh giới mạng. Bạn có thể giữ nguyên UX khám phá bằng cách chuyển sang **unicast DNS‑SD**
-("Wide‑Area Bonjour") qua Tailscale.
+If the node and gateway are on different networks, multicast mDNS won’t cross the
+boundary. You can keep the same discovery UX by switching to **unicast DNS‑SD**
+("Wide‑Area Bonjour") over Tailscale.
 
 Các bước tổng quát:
 
@@ -33,8 +26,8 @@ Các bước tổng quát:
 3. Cấu hình **split DNS** của Tailscale để domain đã chọn được phân giải qua
    máy chủ DNS đó cho các máy khách (bao gồm iOS).
 
-OpenClaw hỗ trợ mọi domain khám phá; `openclaw.internal.` chỉ là ví dụ.
-Các node iOS/Android duyệt cả `local.` và domain phạm vi rộng đã cấu hình của bạn.
+OpenClaw supports any discovery domain; `openclaw.internal.` is just an example.
+iOS/Android nodes browse both `local.` and your configured wide‑area domain.
 
 ### Cấu hình Gateway (khuyến nghị)
 
@@ -75,8 +68,8 @@ Khi máy khách chấp nhận DNS tailnet, các node iOS có thể duyệt
 
 ### Bảo mật listener của Gateway (khuyến nghị)
 
-Cổng WS của Gateway (mặc định `18789`) mặc định chỉ bind vào loopback. Để truy cập LAN/tailnet,
-hãy bind rõ ràng và giữ xác thực được bật.
+The Gateway WS port (default `18789`) binds to loopback by default. For LAN/tailnet
+access, bind explicitly and keep auth enabled.
 
 Đối với thiết lập chỉ tailnet:
 
@@ -128,8 +121,8 @@ vấn đề với trình phân giải mDNS.
 
 ## Gỡ lỗi trong log của Gateway
 
-Gateway ghi một tệp log xoay vòng (được in khi khởi động như
-`gateway log file: ...`). Tìm các dòng `bonjour:`, đặc biệt là:
+The Gateway writes a rolling log file (printed on startup as
+`gateway log file: ...`). Look for `bonjour:` lines, especially:
 
 - `bonjour: advertise failed ...`
 - `bonjour: ... name conflict resolved` / `hostname conflict resolved`
@@ -151,9 +144,9 @@ Log bao gồm các chuyển trạng thái của trình duyệt và thay đổi t
 - **Bonjour không vượt qua mạng**: dùng Tailnet hoặc SSH.
 - **Multicast bị chặn**: một số mạng Wi‑Fi vô hiệu hóa mDNS.
 - **Ngủ / thay đổi giao diện**: macOS có thể tạm thời làm rớt kết quả mDNS; hãy thử lại.
-- **Duyệt được nhưng phân giải thất bại**: giữ tên máy đơn giản (tránh emoji hoặc
-  dấu câu), sau đó khởi động lại Gateway. Tên instance dịch vụ được suy ra từ
-  tên máy chủ, nên các tên quá phức tạp có thể gây nhầm lẫn cho một số trình phân giải.
+- **Browse works but resolve fails**: keep machine names simple (avoid emojis or
+  punctuation), then restart the Gateway. The service instance name derives from
+  the host name, so overly complex names can confuse some resolvers.
 
 ## Tên instance đã escape (`\032`)
 

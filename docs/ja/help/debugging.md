@@ -5,13 +5,6 @@ read_when:
   - 反復作業中に Gateway（ゲートウェイ）をウォッチモードで実行したい場合
   - 再現性のあるデバッグワークフローが必要な場合
 title: "デバッグ"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:08Z
 ---
 
 # デバッグ
@@ -20,9 +13,9 @@ x-i18n:
 
 ## 実行時デバッグ上書き
 
-チャット内で `/debug` を使用すると、**実行時のみ** の設定上書きを（ディスクではなくメモリ上で）行えます。
-`/debug` はデフォルトで無効になっているため、`commands.debug: true` で有効化してください。
-`openclaw.json` を編集せずに、あまり使われない設定を切り替えたい場合に便利です。
+チャットで `/debug` を使用して、**ランタイムのみ** 設定を上書きします（メモリ、ディスクではありません）。
+`/debug` はデフォルトで無効になっています。`commands.debug: true` で有効にしてください。
+`openclaw.json` を編集せずに、あいまいな設定を切り替える必要がある場合に便利です。
 
 例:
 
@@ -53,7 +46,8 @@ tsx watch src/entry.ts gateway --force
 
 ## Dev プロファイル + dev ゲートウェイ（--dev）
 
-dev プロファイルを使用すると、状態を分離し、デバッグ用に安全で使い捨て可能なセットアップを立ち上げられます。`--dev` フラグは **2 つ** あります。
+開発者プロファイルを使用して状態を分離し、
+デバッグ用の安全で使い捨てのセットアップを実行します。 **2つ** `--dev`フラグがあります。
 
 - **グローバル `--dev`（プロファイル）:** 状態を `~/.openclaw-dev` 配下に分離し、ゲートウェイのポートをデフォルトで `19001` に設定します（派生ポートもそれに合わせてシフトします）。
 - **`gateway --dev`:** Gateway（ゲートウェイ）に対し、存在しない場合にデフォルトの設定 + ワークスペースを自動作成し（BOOTSTRAP.md をスキップ）、起動するよう指示します。
@@ -67,7 +61,7 @@ OPENCLAW_PROFILE=dev openclaw tui
 
 まだグローバルインストールがない場合は、`pnpm openclaw ...` 経由で CLI を実行してください。
 
-この処理で行われること:
+これが何をするか:
 
 1. **プロファイルの分離**（グローバル `--dev`）
    - `OPENCLAW_PROFILE=dev`
@@ -92,6 +86,7 @@ pnpm gateway:dev:reset
 
 注記: `--dev` は **グローバル** なプロファイルフラグであり、一部のランナーでは消費されてしまいます。
 明示的に指定する必要がある場合は、環境変数形式を使用してください。
+スペルが必要な場合は、env var フォームを使用してください。
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -107,8 +102,9 @@ openclaw gateway stop
 
 ## Raw stream logging（OpenClaw）
 
-OpenClaw は、フィルタリングや整形が行われる前の **生のアシスタントストリーム** をログに出力できます。
-推論がプレーンテキストの差分として届いているのか、あるいは独立した思考ブロックとして届いているのかを確認する最良の方法です。
+OpenClawは、フィルタリング/フォーマットの前に**rawアシスタントストリーム**をログに記録できます。
+これは、推論がプレーンテキストのデルタ
+(または別々の思考ブロックとして) として到着しているかどうかを確認する最良の方法です。
 
 CLI で有効化します。
 
@@ -122,7 +118,7 @@ pnpm gateway:watch --force --raw-stream
 pnpm gateway:watch --force --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
 ```
 
-同等の環境変数:
+等価Env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1

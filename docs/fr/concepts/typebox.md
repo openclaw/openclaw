@@ -1,15 +1,8 @@
 ---
-summary: « Les schémas TypeBox comme source de vérité unique pour le protocole de la passerelle »
+summary: "Les schémas TypeBox comme source de vérité unique pour le protocole de la passerelle"
 read_when:
   - Lors de la mise à jour des schémas de protocole ou de la génération de code
-title: « TypeBox »
-x-i18n:
-  source_path: concepts/typebox.md
-  source_hash: 233800f4f5fabe8e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:31Z
+title: "TypeBox"
 ---
 
 # TypeBox comme source de vérité du protocole

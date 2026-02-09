@@ -3,13 +3,6 @@ summary: "Status de suporte do bot do Discord, capacidades e configuração"
 read_when:
   - Trabalhando em recursos do canal Discord
 title: "Discord"
-x-i18n:
-  source_path: channels/discord.md
-  source_hash: 9bebfe8027ff1972
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:44Z
 ---
 
 # Discord (API de Bot)
@@ -91,7 +84,7 @@ Desative com:
 
 Este é o setup do “Discord Developer Portal” para executar o OpenClaw em um canal de servidor (guilda) como `#help`.
 
-### 1) Criar o app do Discord + usuário do bot
+### 1. Criar o app do Discord + usuário do bot
 
 1. Discord Developer Portal → **Applications** → **New Application**
 2. No seu app:
@@ -109,7 +102,7 @@ Em **Bot** → **Privileged Gateway Intents**, ative:
 
 Normalmente você **não** precisa do **Presence Intent**. Definir a presença do próprio bot (ação `setPresence`) usa o gateway OP3 e não requer esse intent; ele só é necessário se você quiser receber atualizações de presença de outros membros da guilda.
 
-### 3) Gerar uma URL de convite (OAuth2 URL Generator)
+### 3. Gerar uma URL de convite (OAuth2 URL Generator)
 
 No seu app: **OAuth2** → **URL Generator**
 
@@ -132,7 +125,7 @@ Evite **Administrator** a menos que esteja depurando e confie totalmente no bot.
 
 Copie a URL gerada, abra-a, escolha seu servidor e instale o bot.
 
-### 4) Obter os ids (guilda/usuário/canal)
+### 4. Obter os ids (guilda/usuário/canal)
 
 O Discord usa ids numéricos em tudo; a configuração do OpenClaw prefere ids.
 
@@ -207,7 +200,7 @@ Notas:
 - Mensagens escritas pelo bot são ignoradas por padrão; defina `channels.discord.allowBots=true` para permiti-las (as próprias mensagens continuam filtradas).
 - Aviso: se você permitir respostas a outros bots (`channels.discord.allowBots=true`), evite loops de bot-para-bot com listas de permissões `requireMention`, `channels.discord.guilds.*.channels.<id>.users` e/ou limpe os guardrails em `AGENTS.md` e `SOUL.md`.
 
-### 6) Verificar se funciona
+### 6. Verificar se funciona
 
 1. Inicie o gateway.
 2. No canal do seu servidor, envie: `@Krill hello` (ou o nome do seu bot).
@@ -402,26 +395,26 @@ Notas de lista de permissões (com PK ativado):
 
 ### Padrões de ações de ferramentas
 
-| Grupo de ações | Padrão   | Notas                                 |
-| -------------- | -------- | ------------------------------------- |
-| reactions      | enabled  | Reagir + listar reações + emojiList   |
-| stickers       | enabled  | Enviar stickers                       |
-| emojiUploads   | enabled  | Enviar emojis                         |
-| stickerUploads | enabled  | Enviar stickers                       |
-| polls          | enabled  | Criar enquetes                        |
-| permissions    | enabled  | Snapshot de permissões do canal       |
-| messages       | enabled  | Ler/enviar/editar/excluir             |
-| threads        | enabled  | Criar/listar/responder                |
-| pins           | enabled  | Fixar/desafixar/listar                |
+| Grupo de ações | Padrão   | Notas                                                    |
+| -------------- | -------- | -------------------------------------------------------- |
+| reactions      | enabled  | Reagir + listar reações + emojiList                      |
+| stickers       | enabled  | Enviar stickers                                          |
+| emojiUploads   | enabled  | Enviar emojis                                            |
+| stickerUploads | enabled  | Enviar stickers                                          |
+| polls          | enabled  | Criar enquetes                                           |
+| permissions    | enabled  | Snapshot de permissões do canal                          |
+| messages       | enabled  | Ler/enviar/editar/excluir                                |
+| threads        | enabled  | Criar/listar/responder                                   |
+| pins           | enabled  | Fixar/desafixar/listar                                   |
 | search         | enabled  | Busca de mensagens (recurso prévia)   |
-| memberInfo     | enabled  | Informações do membro                 |
-| roleInfo       | enabled  | Lista de cargos                       |
-| channelInfo    | enabled  | Info do canal + lista                 |
-| channels       | enabled  | Gerenciamento de canais/categorias    |
-| voiceStatus    | enabled  | Consulta de estado de voz             |
-| events         | enabled  | Listar/criar eventos agendados        |
-| roles          | disabled | Adicionar/remover cargos              |
-| moderation     | disabled | Timeout/expulsar/banir                |
+| memberInfo     | enabled  | Informações do membro                                    |
+| roleInfo       | enabled  | Lista de cargos                                          |
+| channelInfo    | enabled  | Info do canal + lista                                    |
+| channels       | enabled  | Gerenciamento de canais/categorias                       |
+| voiceStatus    | enabled  | Consulta de estado de voz                                |
+| events         | enabled  | Listar/criar eventos agendados                           |
+| roles          | disabled | Adicionar/remover cargos                                 |
+| moderation     | disabled | Timeout/expulsar/banir                                   |
 | presence       | disabled | Status/atividade do bot (setPresence) |
 
 - `replyToMode`: `off` (padrão), `first` ou `all`. Aplica-se apenas quando o modelo inclui uma tag de resposta.

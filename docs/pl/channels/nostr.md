@@ -1,16 +1,9 @@
 ---
-summary: „Kanał DM Nostr przez zaszyfrowane wiadomości NIP-04”
+summary: "„Kanał DM Nostr przez zaszyfrowane wiadomości NIP-04”"
 read_when:
   - Chcesz, aby OpenClaw odbierał DM-y przez Nostr
   - Konfigurujesz zdecentralizowane komunikowanie
-title: „Nostr”
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:01Z
+title: "Nostr"
 ---
 
 # Nostr
@@ -47,7 +40,7 @@ openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 
 Po zainstalowaniu lub włączeniu wtyczek zrestartuj Gateway.
 
-## Szybki start
+## Szybka konfiguracja
 
 1. Wygeneruj parę kluczy Nostr (jeśli potrzebne):
 
@@ -78,15 +71,15 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Referencja konfiguracji
 
-| Klucz        | Typ      | Domyślna                                    | Opis                                     |
-| ------------ | -------- | ------------------------------------------- | ---------------------------------------- |
-| `privateKey` | string   | wymagane                                    | Klucz prywatny w formacie `nsec` lub hex |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Adresy relay (WebSocket)                 |
-| `dmPolicy`   | string   | `pairing`                                   | Polityka dostępu do DM-ów                |
-| `allowFrom`  | string[] | `[]`                                        | Dozwolone klucze publiczne nadawców      |
-| `enabled`    | boolean  | `true`                                      | Włącz/wyłącz kanał                       |
-| `name`       | string   | -                                           | Nazwa wyświetlana                        |
-| `profile`    | object   | -                                           | Metadane profilu NIP-01                  |
+| Klucz        | Typ                                                          | Domyślna                                    | Opis                                        |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------- |
+| `privateKey` | string                                                       | wymagane                                    | Klucz prywatny w formacie `nsec` lub hex    |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Adresy relay (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | Polityka dostępu do DM-ów                   |
+| `allowFrom`  | string[] | `[]`                                        | Dozwolone klucze publiczne nadawców         |
+| `enabled`    | boolean                                                      | `true`                                      | Włącz/wyłącz kanał                          |
+| `name`       | string                                                       | -                                           | Nazwa wyświetlana                           |
+| `profile`    | object                                                       | -                                           | Metadane profilu NIP-01                     |
 
 ## Metadane profilu
 
@@ -173,12 +166,12 @@ Wskazówki:
 
 ## Obsługa protokołów
 
-| NIP    | Status      | Opis                                         |
-| ------ | ----------- | -------------------------------------------- |
-| NIP-01 | Obsługiwane | Podstawowy format zdarzeń + metadane profilu |
-| NIP-04 | Obsługiwane | Zaszyfrowane DM-y (`kind:4`)                 |
-| NIP-17 | Planowane   | DM-y w „gift-wrap”                           |
-| NIP-44 | Planowane   | Wersjonowane szyfrowanie                     |
+| NIP    | Status      | Opis                                            |
+| ------ | ----------- | ----------------------------------------------- |
+| NIP-01 | Obsługiwane | Podstawowy format zdarzeń + metadane profilu    |
+| NIP-04 | Obsługiwane | Zaszyfrowane DM-y (`kind:4`) |
+| NIP-17 | Planowane   | DM-y w „gift-wrap”                              |
+| NIP-44 | Planowane   | Wersjonowane szyfrowanie                        |
 
 ## Testowanie
 

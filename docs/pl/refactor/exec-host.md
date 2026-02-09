@@ -5,13 +5,6 @@ read_when:
   - Implementacja runnera węzła + IPC interfejsu UI
   - Dodawanie trybów bezpieczeństwa hosta exec i poleceń slash
 title: "Refaktoryzacja hosta exec"
-x-i18n:
-  source_path: refactor/exec-host.md
-  source_hash: 53a9059cbeb1f3f1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:58Z
 ---
 
 # Plan refaktoryzacji hosta exec
@@ -25,7 +18,7 @@ x-i18n:
 - Obsłużyć **tryby zapytań**, które działają _z_ lub _bez_ list dozwolonych.
 - Wieloplatformowość: gniazdo Unix + uwierzytelnianie tokenem (parytet macOS/Linux/Windows).
 
-## Poza zakresem
+## Inne cele
 
 - Brak migracji starszych list dozwolonych ani wsparcia dla starszego schematu.
 - Brak PTY/strumieniowania dla exec węzła (tylko zagregowane wyjście).
@@ -266,7 +259,7 @@ Opcja B:
 - Nadpisania na agenta i na sesję; nietrwałe, chyba że zapisane przez konfigurację.
 - `/elevated on|off|ask|full` pozostaje skrótem do `host=gateway security=full` (z `full` pomijającym zatwierdzenia).
 
-## Wieloplatformowość
+## Wieloplatformowa historia
 
 - Usługa runnera jest przenośnym celem wykonawczym.
 - UI jest opcjonalne; jeśli go brakuje, obowiązuje `askFallback`.

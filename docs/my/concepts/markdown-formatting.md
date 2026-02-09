@@ -5,18 +5,11 @@ read_when:
   - ချန်နယ် formatter အသစ် သို့မဟုတ် style mapping အသစ် ထည့်သွင်းနေပါက
   - ချန်နယ်များအကြား ဖော်မတ်ချခြင်း regression များကို စစ်ဆေးနေပါက
 title: "Markdown ဖော်မတ်ချခြင်း"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:25Z
 ---
 
 # Markdown ဖော်မတ်ချခြင်း
 
-OpenClaw သည် ထွက်သွားသော Markdown ကို ချန်နယ်အလိုက် ထုတ်လုပ်မည့် output မတိုင်မီ မျှဝေထားသော အလယ်အလတ် ကိုယ်စားပြုမှု (IR) သို့ ပြောင်းလဲကာ ဖော်မတ်ချသည်။ IR သည် မူရင်း စာသားကို မပြောင်းလဲဘဲ ထိန်းသိမ်းထားပြီး style/link span များကို သယ်ဆောင်ထားသဖြင့် chunking နှင့် rendering ကို ချန်နယ်များအကြား တသမတ်တည်း လုပ်ဆောင်နိုင်သည်။
+23. OpenClaw သည် outbound Markdown ကို rendering မလုပ်မီ shared intermediate representation (IR) သို့ ပြောင်းလဲခြင်းဖြင့် format လုပ်ပါသည်။ 24. IR သည် source text ကို မပြောင်းလဲဘဲ ထိန်းထားပြီး style/link spans များကို သယ်ဆောင်ထားသဖြင့် chunking နှင့် rendering ကို channel များအကြား တူညီစွာ ထိန်းထားနိုင်ပါသည်။
 
 ## ရည်မှန်းချက်များ
 
@@ -63,7 +56,7 @@ IR (schematic):
 
 ## Table ကို ကိုင်တွယ်ခြင်း
 
-Markdown table များကို chat client များအကြား တသမတ်တည်း ထောက်ပံ့မှု မရှိပါ။ ချန်နယ်အလိုက် (နှင့် account အလိုက်) conversion ကို ထိန်းချုပ်ရန် `markdown.tables` ကို အသုံးပြုပါ။
+25. Markdown tables များကို chat clients အားလုံးတွင် တူညီစွာ မထောက်ပံ့နိုင်ပါ။ 26. Channel တစ်ခုချင်းစီ (နှင့် account တစ်ခုချင်းစီ) အလိုက် conversion ကို ထိန်းချုပ်ရန် `markdown.tables` ကို အသုံးပြုပါ။
 
 - `code`: table များကို code block အဖြစ် render လုပ်သည် (ချန်နယ်အများစုအတွက် မူလအခြေအနေ)။
 - `bullets`: row တစ်ခုချင်းစီကို bullet point များအဖြစ် ပြောင်းလဲသည် (Signal + WhatsApp အတွက် မူလအခြေအနေ)။
@@ -94,13 +87,13 @@ channels:
 
 ## Link မူဝါဒ
 
-- **Slack:** `[label](url)` -> `<url|label>`; bare URL များသည် bare အဖြစ်သာ ကျန်ရှိသည်။ Double-linking မဖြစ်စေရန် parse လုပ်စဉ် autolink ကို ပိတ်ထားသည်။
+- 27. **Slack:** `[label](url)` -> `<url|label>`; bare URLs များသည် bare အဖြစ်ပဲ ကျန်နေပါသည်။ 28. Double-linking မဖြစ်စေရန် parse လုပ်စဉ်တွင် Autolink ကို ပိတ်ထားပါသည်။
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode)။
 - **Signal:** `[label](url)` -> `label (url)` (label သည် URL နှင့် ကိုက်ညီပါက မပြောင်းလဲပါ)။
 
 ## Spoiler များ
 
-Spoiler marker များ (`||spoiler||`) ကို Signal အတွက်သာ parse လုပ်ပြီး SPOILER style range များသို့ mapping လုပ်သည်။ အခြား ချန်နယ်များတွင် ၎င်းတို့ကို plain text အဖြစ်သာ ကိုင်တွယ်သည်။
+29. Spoiler markers (`||spoiler||`) များကို Signal အတွက်သာ parse လုပ်ပြီး၊ ထိုနေရာတွင် SPOILER style ranges အဖြစ် map လုပ်ပါသည်။ 30. အခြား channel များတွင် ၎င်းတို့ကို plain text အဖြစ်သာ ကိုင်တွယ်ပါသည်။
 
 ## ချန်နယ် formatter ကို ထည့်သွင်း သို့မဟုတ် အပ်ဒိတ်လုပ်နည်း
 

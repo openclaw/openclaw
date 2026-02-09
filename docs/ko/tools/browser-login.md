@@ -4,13 +4,6 @@ read_when:
   - 브라우저 자동화를 위해 사이트에 로그인해야 할 때
   - X/Twitter에 업데이트를 게시하려는 경우
 title: "브라우저 로그인"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: c30faa9da6c6ef70
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:26:23Z
 ---
 
 # 브라우저 로그인 + X/Twitter 게시

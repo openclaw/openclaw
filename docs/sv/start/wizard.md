@@ -5,29 +5,22 @@ read_when:
   - När du sätter upp en ny maskin
 title: "Introduktionsguide (CLI)"
 sidebarTitle: "Onboarding: CLI"
-x-i18n:
-  source_path: start/wizard.md
-  source_hash: 5495d951a2d78ffb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:37Z
 ---
 
 # Introduktionsguide (CLI)
 
-Introduktionsguiden är det **rekommenderade** sättet att konfigurera OpenClaw på macOS,
-Linux eller Windows (via WSL2; starkt rekommenderat).
-Den konfigurerar en lokal Gateway eller en fjärranslutning till en Gateway, samt kanaler, Skills
-och standarder för arbetsytan i ett enda guidad flöde.
+Onboarding guiden är **rekommenderas** sätt att ställa in OpenClaw på macOS,
+Linux eller Windows (via WSL2; rekommenderas starkt).
+Det konfigurerar en lokal Gateway eller en fjärranslutning Gateway anslutning, plus kanaler, färdigheter,
+och standard arbetsyta i ett guidat flöde.
 
 ```bash
 openclaw onboard
 ```
 
 <Info>
-Snabbaste första chatten: öppna Control UI (ingen kanalinställning behövs). Kör
-`openclaw dashboard` och chatta i webbläsaren. Dokumentation: [Dashboard](/web/dashboard).
+Snabbaste första chatten: öppna Control UI (ingen kanal installation behövs). Kör
+`openclaw dashboard` och chatta i webbläsaren. Dokument: [Dashboard](/web/dashboard).
 </Info>
 
 För att konfigurera om senare:
@@ -38,13 +31,13 @@ openclaw agents add <name>
 ```
 
 <Note>
-`--json` innebär inte icke‑interaktivt läge. För skript, använd `--non-interactive`.
+`--json` innebär inte icke-interaktivt läge. För skript, använd `--non-interactive`.
 </Note>
 
 <Tip>
-Rekommenderat: konfigurera en Brave Search API‑nyckel så att agenten kan använda `web_search`
-(`web_fetch` fungerar utan nyckel). Enklaste vägen: `openclaw configure --section web`
-som lagrar `tools.web.search.apiKey`. Dokumentation: [Web tools](/tools/web).
+Rekommenderat: ställ in en modig sökAPI-nyckel så att agenten kan använda `web_search`
+(`web_fetch` fungerar utan en nyckel). Lättaste sökväg: `openclaw konfigurera --section web`
+som lagrar `tools.web.search.apiKey`. Dokument: [Webb verktyg](/tools/web).
 </Tip>
 
 ## Snabbstart vs Avancerat
@@ -52,7 +45,7 @@ som lagrar `tools.web.search.apiKey`. Dokumentation: [Web tools](/tools/web).
 Guiden börjar med **Snabbstart** (standard) vs **Avancerat** (full kontroll).
 
 <Tabs>
-  <Tab title="Snabbstart (standard)">
+  <Tab title="QuickStart (defaults)">
     - Lokal gateway (local loopback)
     - Standardarbetsyta (eller befintlig arbetsyta)
     - Gateway‑port **18789**
@@ -60,7 +53,7 @@ Guiden börjar med **Snabbstart** (standard) vs **Avancerat** (full kontroll).
     - Tailscale‑exponering **Av**
     - Telegram + WhatsApp‑DM:er är som standard **tillåtelselista** (du blir ombedd att ange ditt telefonnummer)
   </Tab>
-  <Tab title="Avancerat (full kontroll)">
+  <Tab title="Advanced (full control)">
     - Exponerar varje steg (läge, arbetsyta, gateway, kanaler, daemon, Skills).
   </Tab>
 </Tabs>
@@ -69,8 +62,8 @@ Guiden börjar med **Snabbstart** (standard) vs **Avancerat** (full kontroll).
 
 **Lokalt läge (standard)** leder dig genom följande steg:
 
-1. **Modell/Autentisering** — Anthropic API‑nyckel (rekommenderas), OAuth, OpenAI eller andra leverantörer. Välj en standardmodell.
-2. **Arbetsyta** — Plats för agentfiler (standard `~/.openclaw/workspace`). Skapar bootstrap‑filer.
+1. **Modell/Auth** — Antropisk API-nyckel (rekommenderas), OAuth, OpenAI eller andra leverantörer. Välj en standardmodell.
+2. **Arbetsyta** — Plats för agentfiler (standard `~/.openclaw/workspace`). Seeds bootstrap-filer.
 3. **Gateway** — Port, bind‑adress, autentiseringsläge, Tailscale‑exponering.
 4. **Kanaler** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles eller iMessage.
 5. **Daemon** — Installerar en LaunchAgent (macOS) eller en systemd‑användarenhet (Linux/WSL2).
@@ -78,17 +71,17 @@ Guiden börjar med **Snabbstart** (standard) vs **Avancerat** (full kontroll).
 7. **Skills** — Installerar rekommenderade Skills och valfria beroenden.
 
 <Note>
-Att köra guiden igen raderar **inget** om du inte uttryckligen väljer **Återställ** (eller skickar `--reset`).
-Om konfigen är ogiltig eller innehåller äldre nycklar ber guiden dig att först köra `openclaw doctor`.
+Återkörning av guiden torkar **inte** om du inte uttryckligen väljer **Återställ** (eller passerar `--reset`).
+Om konfigurationen är ogiltig eller innehåller äldre nycklar, ber guiden dig att köra `openclaw doctor` först.
 </Note>
 
-**Fjärrläge** konfigurerar endast den lokala klienten för att ansluta till en Gateway någon annanstans.
-Det installerar eller ändrar **inget** på fjärrvärden.
+**Fjärrläge** konfigurerar bara den lokala klienten för att ansluta till en Gateway någon annanstans.
+Det gör **inte** installera eller ändra något på fjärrvärden.
 
 ## Lägg till en annan agent
 
-Använd `openclaw agents add <name>` för att skapa en separat agent med egen arbetsyta,
-sessioner och autentiseringsprofiler. Körning utan `--workspace` startar guiden.
+Använd `openclaw agents add <name>` för att skapa en separat agent med sin egen arbetsyta,
+sessioner och auth profiler. Körs utan `--workspace` lanserar guiden.
 
 Vad den sätter:
 

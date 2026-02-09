@@ -5,13 +5,6 @@ read_when:
   - Zmieniasz logikę sanityzacji transkryptów lub naprawy wywołań narzędzi
   - Badasz niezgodności identyfikatorów wywołań narzędzi między dostawcami
 title: "Higiena transkryptu"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:45Z
 ---
 
 # Higiena transkryptu (poprawki specyficzne dla dostawców)
@@ -25,9 +18,9 @@ przed załadowaniem sesji. Gdy dochodzi do naprawy, oryginalny plik jest archiwi
 Zakres obejmuje:
 
 - Sanityzację identyfikatorów wywołań narzędzi
-- Walidację danych wejściowych wywołań narzędzi
+- Sprawdzanie poprawności danych wejściowych
 - Naprawę parowania wyników narzędzi
-- Walidację / porządkowanie tur
+- Włącz sprawdzanie / zamawianie
 - Czyszczenie sygnatur myśli
 - Sanityzację ładunków obrazów
 

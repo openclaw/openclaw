@@ -5,13 +5,6 @@ read_when:
   - Chcesz włączyć wtyczkę OpenProse
   - Musisz zrozumieć przechowywanie stanu
 title: "OpenProse"
-x-i18n:
-  source_path: prose.md
-  source_hash: 53c161466d278e5f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:32Z
 ---
 
 # OpenProse
@@ -40,7 +33,7 @@ Checkout deweloperski/lokalny: `openclaw plugins install ./extensions/open-prose
 
 Powiązana dokumentacja: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
 
-## Polecenie ukośne
+## Polecenie slash
 
 OpenProse rejestruje `/prose` jako polecenie Skills wywoływane przez użytkownika. Kieruje ono do instrukcji VM OpenProse i pod spodem korzysta z narzędzi OpenClaw.
 
@@ -130,7 +123,7 @@ Programy OpenProse mapują się na prymitywy OpenClaw:
 | ----------------------------------- | ------------------ |
 | Uruchomienie sesji / narzędzie Task | `sessions_spawn`   |
 | Odczyt/zapis plików                 | `read` / `write`   |
-| Pobieranie z sieci                  | `web_fetch`        |
+| Pobieranie strony internetowej      | `web_fetch`        |
 
 Jeśli lista dozwolonych narzędzi blokuje te narzędzia, programy OpenProse zakończą się niepowodzeniem. Zobacz [Skills config](/tools/skills-config).
 

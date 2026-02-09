@@ -4,13 +4,6 @@ read_when:
   - プロバイダーの再試行動作またはデフォルトを更新する場合
   - プロバイダーの送信エラーやレート制限をデバッグする場合
 title: "再試行ポリシー"
-x-i18n:
-  source_path: concepts/retry.md
-  source_hash: 55bb261ff567f46c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:21:26Z
 ---
 
 # 再試行ポリシー

@@ -5,20 +5,13 @@ read_when:
   - Ändra beteende för modell-fallback eller UX för val
   - Uppdatera modellskanningsprober (verktyg/bilder)
 title: "Models CLI"
-x-i18n:
-  source_path: concepts/models.md
-  source_hash: 13e17a306245e0cc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:05Z
 ---
 
 # Models CLI
 
-Se [/concepts/model-failover](/concepts/model-failover) för rotation av auth-profiler,
-cooldowns och hur detta samverkar med fallbacks.
-Snabb översikt över leverantörer + exempel: [/concepts/model-providers](/concepts/model-providers).
+Se [/concepts/model-failover](/concepts/model-failover) för auth profil
+rotation, cooldowns, och hur det interagerar med fallbackar.
+Snabb leverantörsöversikt + exempel: [/concepts/model-providers](/concepts/model-providers).
 
 ## Hur modellval fungerar
 
@@ -59,7 +52,7 @@ setup-token` stöds också).
 - `agents.defaults.models` (tillåtelselista + alias + leverantörsparametrar)
 - `models.providers` (anpassade leverantörer skrivs in i `models.json`)
 
-Modellreferenser normaliseras till gemener. Leverantörsalias som `z.ai/*` normaliseras
+Modell refs normaliseras till gemener. Leverantörens alias som `z.ai/*` normalisera
 till `zai/*`.
 
 Exempel på leverantörskonfiguration (inklusive OpenCode Zen) finns i
@@ -67,16 +60,16 @@ Exempel på leverantörskonfiguration (inklusive OpenCode Zen) finns i
 
 ## ”Model is not allowed” (och varför svar upphör)
 
-Om `agents.defaults.models` är satt blir den **tillåtelselistan** för `/model` och för
-session‑åsidosättningar. När en användare väljer en modell som inte finns i den listan
-returnerar OpenClaw:
+Om `agents.defaults.models` är satt, blir det **allowlist** för `/model` och för
+session overrides. När en användare väljer en modell som inte är i den tillåtna listan, returnerar
+OpenClaw:
 
 ```
 Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
-Detta sker **innan** ett normalt svar genereras, så meddelandet kan kännas som att det
-”inte svarade”. Åtgärden är att antingen:
+Detta händer **innan** ett normalt svar genereras, så meddelandet kan kännas
+som att det “inte svara”. Åtgärden är att antingen:
 
 - Lägga till modellen i `agents.defaults.models`, eller
 - Rensa tillåtelselistan (ta bort `agents.defaults.models`), eller
@@ -113,7 +106,7 @@ Noteringar:
 - `/model` (och `/model list`) är en kompakt, numrerad väljare (modellfamilj + tillgängliga leverantörer).
 - `/model <#>` väljer från den väljaren.
 - `/model status` är den detaljerade vyn (auth‑kandidater och, när konfigurerat, leverantörens endpoint `baseUrl` + läge `api`).
-- Modellreferenser parsas genom att dela på den **första** `/`. Använd `provider/model` när du skriver `/model <ref>`.
+- Modellrefs tolkas genom att dela på **först** `/`. Använd `provider/model` när du skriver `/model <ref>`.
 - Om modell‑ID:t i sig innehåller `/` (OpenRouter‑stil) måste du inkludera leverantörsprefixet (exempel: `/model openrouter/moonshotai/kimi-k2`).
 - Om du utelämnar leverantören behandlar OpenClaw inmatningen som ett alias eller en modell för **standardleverantören** (fungerar endast när det inte finns något `/` i modell‑ID:t).
 
@@ -156,15 +149,15 @@ Visar konfigurerade modeller som standard. Användbara flaggor:
 
 ### `models status`
 
-Visar den upplösta primära modellen, fallbacks, bildmodell samt en auth‑översikt
-över konfigurerade leverantörer. Den visar även OAuth‑utgångsstatus för profiler som hittas
-i auth‑lagret (varnar inom 24 h som standard). `--plain` skriver endast ut den
-upplösta primära modellen.
-OAuth‑status visas alltid (och inkluderas i `--json`‑utdata). Om en konfigurerad
-leverantör saknar autentiseringsuppgifter skriver `models status` ut en sektion **Missing auth**.
-JSON inkluderar `auth.oauth` (varningsfönster + profiler) och `auth.providers`
+Visar den upplösta primära modellen, fallbackar, bildmodell och en auth översikt
+av konfigurerade leverantörer. Den ytbehandlar också OAuth utgångsstatus för profiler som hittats
+i auth butiken (varnar inom 24h som standard). `--plain` skriver bara ut
+löste primärmodellen.
+OAuth status visas alltid (och ingår i `--json` utgång). Om en konfigurerad
+-leverantör inte har några inloggningsuppgifter, skriver `models status` ut en **Missing auth**-sektion.
+JSON innehåller `auth.oauth` (varna fönster + profiler) och `auth.providers`
 (effektiv auth per leverantör).
-Använd `--check` för automatisering (exit `1` vid saknad/utgången, `2` vid nära utgång).
+Använd `--check` för automatisering (exit `1` när det saknas/upphör, `2` vid upphörande).
 
 Föredragen Anthropic‑auth är Claude Code CLI setup‑token (kör var som helst; klistra in på gateway‑värden vid behov):
 
@@ -188,8 +181,8 @@ Viktiga flaggor:
 - `--set-default`: sätt `agents.defaults.model.primary` till första valet
 - `--set-image`: sätt `agents.defaults.imageModel.primary` till första bildvalet
 
-Probing kräver en OpenRouter API‑nyckel (från auth‑profiler eller
-`OPENROUTER_API_KEY`). Utan nyckel, använd `--no-probe` för att endast lista kandidater.
+Probing kräver en OpenRouter API-nyckel (från auth profiler eller
+`OPENROUTER_API_KEY`). Utan en nyckel, använd `--no-probe` endast för att lista kandidater.
 
 Skanningsresultat rangordnas efter:
 
@@ -205,11 +198,11 @@ Indata
 - Valfria filter: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probstyrning: `--timeout`, `--concurrency`
 
-När den körs i en TTY kan du välja fallbacks interaktivt. I icke‑interaktivt
-läge, skicka `--yes` för att acceptera standardvärden.
+När du kör i en TTY, kan du välja fallbackar interaktivt. I icke-interaktivt
+-läge, passera `--ja` för att acceptera standardinställningar.
 
 ## Modellregister (`models.json`)
 
 Anpassade leverantörer i `models.providers` skrivs in i `models.json` under
 agentkatalogen (standard `~/.openclaw/agents/<agentId>/models.json`). Denna fil
-slås samman som standard om inte `models.mode` är satt till `replace`.
+slås samman som standard såvida inte `models.mode` är satt till `ersätta`.

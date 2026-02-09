@@ -5,23 +5,16 @@ read_when:
   - block streaming သို့မဟုတ် channel chunking အပြုအမူကို ပြောင်းလဲရာတွင်
   - ထပ်နေသော/အလွန်စောသော ဘလောက် ပြန်ကြားမှုများ သို့မဟုတ် မူကြမ်း စီးဆင်းပို့ဆောင်မှုကို စစ်ဆေးပြင်ဆင်ရာတွင်
 title: "စီးဆင်းပို့ဆောင်ခြင်း နှင့် ချန့်ခွဲခြင်း"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:36Z
 ---
 
 # စီးဆင်းပို့ဆောင်ခြင်း + ချန့်ခွဲခြင်း
 
 OpenClaw တွင် သီးခြား “စီးဆင်းပို့ဆောင်မှု” အလွှာ ၂ ခု ရှိသည်–
 
-- **Block streaming (ချန်နယ်များ):** အကူအညီပေးသူက ရေးသားနေစဉ် **ဘလောက်များ** ကို ပြီးစီးသလို ထုတ်လွှင့်ပေးသည်။ ဤသည်တို့သည် ပုံမှန် ချန်နယ် မက်ဆေ့ချ်များဖြစ်ပြီး (token delta များ မဟုတ်ပါ)။
+- **Block streaming (channels):** အကူအညီပေးသူ ရေးသားနေစဉ် ပြီးစီးပြီးသား **block** များကို ထုတ်ပေးပါ။ ဤသည်များမှာ ပုံမှန် ချန်နယ် မက်ဆေ့ချ်များ ဖြစ်ပြီး (token deltas မဟုတ်ပါ)။
 - **Token-ish streaming (Telegram သာ):** စာသား ထုတ်လုပ်နေစဉ် **draft bubble** ကို အစိတ်အပိုင်း စာသားဖြင့် အပ်ဒိတ်လုပ်ပေးပြီး အဆုံးတွင် နောက်ဆုံး မက်ဆေ့ချ်ကို ပို့သည်။
 
-ယနေ့အချိန်တွင် ပြင်ပ ချန်နယ် မက်ဆေ့ချ်များသို့ **တကယ့် token streaming** မရှိပါ။ Telegram draft streaming သာ အစိတ်အပိုင်း စီးဆင်းပို့ဆောင်နိုင်သော မျက်နှာပြင်ဖြစ်သည်။
+ယနေ့အချိန်တွင် ပြင်ပ ချန်နယ် မက်ဆေ့ချ်များသို့ **အမှန်တကယ် တိုကင် streaming မရှိပါ**။ Telegram draft streaming သည် တစ်စိတ်တစ်ပိုင်း streaming လုပ်နိုင်သော တစ်ခုတည်းသော မျက်နှာပြင်ဖြစ်သည်။
 
 ## Block streaming (ချန်နယ် မက်ဆေ့ချ်များ)
 
@@ -49,7 +42,7 @@ Legend:
 - ချန်နယ်အလိုက် override များ: `*.blockStreaming` (နှင့် အကောင့်အလိုက် မူကွဲများ) ဖြင့် ချန်နယ်တစ်ခုချင်းစီအလိုက် `"on"`/`"off"` ကို အတင်းအကျပ် သတ်မှတ်နိုင်သည်။
 - `agents.defaults.blockStreamingBreak`: `"text_end"` သို့မဟုတ် `"message_end"`။
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`။
-- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (ပို့မည့်အချိန်မတိုင်မီ စီးဆင်းလာသော ဘလောက်များကို ပေါင်းစည်း)။
+- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (ပို့မည့်အချိန်မတိုင်မီ streamed blocks များကို ပေါင်းစည်းသည်)။
 - ချန်နယ် အမြင့်ဆုံး ကန့်သတ်ချက်: `*.textChunkLimit` (ဥပမာ၊ `channels.whatsapp.textChunkLimit`)။
 - ချန်နယ် ချန့်ခွဲမှု မုဒ်: `*.chunkMode` (`length` မူလအဖြစ်၊ `newline` သည် အရှည်အလိုက် ချန့်ခွဲမတိုင်မီ လွတ်နေသော လိုင်းများ (စာပိုဒ်နယ်နိမိတ်များ) တွင် ခွဲသည်)။
 - Discord soft cap: `channels.discord.maxLinesPerMessage` (မူလ 17) သည် UI ဖြတ်တောက်မှုကို ရှောင်ရန် အလွန်ရှည်သော ပြန်ကြားမှုများကို ခွဲပေးသည်။
@@ -74,8 +67,7 @@ Block chunking ကို `EmbeddedBlockChunker` ဖြင့် အကောင�
 
 ## Coalescing (စီးဆင်းလာသော ဘလောက်များကို ပေါင်းစည်း)
 
-Block streaming ဖွင့်ထားသည့်အခါ OpenClaw သည် ဆက်တိုက် ထွက်လာသော block chunk များကို **ပို့မီ ပေါင်းစည်း** နိုင်သည်။
-ဤအရာက “တစ်လိုင်းတစ်လိုင်း spam” ကို လျော့ချပြီး တိုးတက်လာသော အထွက်ကို ဆက်လက် ပေးစွမ်းနိုင်စေသည်။
+block streaming ကို ဖွင့်ထားသောအခါ OpenClaw သည် ပို့မီ **ဆက်တိုက် block chunk များကို ပေါင်းစည်း** နိုင်သည်။ ဤအရာသည် တစ်ကြောင်းချင်း စပမ်များကို လျော့ချပြီး တိုးတက်လာသော ထုတ်လွှတ်မှုကို ဆက်လက် ပေးစွမ်းနိုင်သည်။
 
 - Coalescing သည် **အလုပ်မလုပ်သော အကြားကာလများ** (`idleMs`) ကို စောင့်ပြီး flush လုပ်သည်။
 - Buffer များကို `maxChars` ဖြင့် ကန့်သတ်ထားပြီး ၎င်းကို ကျော်လွန်ပါက flush လုပ်မည်ဖြစ်သည်။
@@ -88,8 +80,7 @@ Block streaming ဖွင့်ထားသည့်အခါ OpenClaw သည်
 
 ## ဘလောက်များအကြား လူသားတူ အချိန်ညှိခြင်း
 
-Block streaming ဖွင့်ထားသည့်အခါ (ပထမ ဘလောက်နောက်ပိုင်း) block replies များအကြား **ကျပန်း အနားယူချိန်** ထည့်နိုင်သည်။
-ဤသည်က bubble အများအပြား ပါဝင်သည့် ပြန်ကြားမှုများကို ပို၍ သဘာဝကျစေသည်။
+block streaming ဖွင့်ထားသောအခါ (ပထမ block အပြီး) block ပြန်စာများအကြား **ကျပန်းအနားယူချိန်** ကို ထည့်နိုင်သည်။ ဤအရာသည် bubble များစွာပါသော ပြန်စာများကို ပိုမို သဘာဝကျစေသည်။
 
 - Config: `agents.defaults.humanDelay` (အေးဂျင့်အလိုက် `agents.list[].humanDelay` ဖြင့် override)။
 - မုဒ်များ: `off` (မူလ), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`)။
@@ -99,11 +90,11 @@ Block streaming ဖွင့်ထားသည့်အခါ (ပထမ ဘလ�
 
 ဤသည်တို့နှင့် ကိုက်ညီသည်–
 
-- **Chunk များကို စီးဆင်းပို့:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (ရေးသလို ထုတ်)။ Telegram မဟုတ်သော ချန်နယ်များတွင် `*.blockStreaming: true` လည်း လိုအပ်သည်။
+- **Stream chunks:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"` (ရေးသားသလို ထုတ်ပေးသည်)။ Telegram မဟုတ်သော ချန်နယ်များတွင်လည်း `*.blockStreaming: true` လိုအပ်သည်။
 - **အဆုံးတွင် အားလုံးကို စီးဆင်းပို့:** `blockStreamingBreak: "message_end"` (တစ်ကြိမ်သာ flush လုပ်ပြီး အလွန်ရှည်ပါက chunk များစွာ ဖြစ်နိုင်သည်)။
 - **Block streaming မရှိ:** `blockStreamingDefault: "off"` (နောက်ဆုံး ပြန်ကြားမှုသာ)။
 
-**ချန်နယ် မှတ်ချက်:** Telegram မဟုတ်သော ချန်နယ်များတွင် block streaming ကို **`*.blockStreaming` ကို `true` အဖြစ် တိတိကျကျ သတ်မှတ်ထားခြင်း မရှိပါက** ပိတ်ထားသည်။ Telegram သည် block replies မပါဘဲ draft များကို (`channels.telegram.streamMode`) စီးဆင်းပို့နိုင်သည်။
+**Channel မှတ်စု:** Telegram မဟုတ်သော ချန်နယ်များအတွက် `*.blockStreaming` ကို `true` ဟု တိတိကျကျ မသတ်မှတ်ထားပါက block streaming ကို **ပိတ်ထားသည်**။ Telegram သည် block ပြန်စာများ မပါဘဲ draft များကို (`channels.telegram.streamMode`) streaming လုပ်နိုင်သည်။
 
 Config တည်နေရာ သတိပေးချက်: `blockStreaming*` မူလတန်ဖိုးများသည် root config မဟုတ်ဘဲ
 `agents.defaults` အောက်တွင် ရှိသည်။

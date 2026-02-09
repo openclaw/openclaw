@@ -4,26 +4,16 @@ read_when:
   - Gateway Control UI ကို localhost ပြင်ပသို့ ဖော်ထုတ်အသုံးပြုရန်
   - tailnet သို့မဟုတ် အများပြည်သူဆိုင်ရာ ဒက်ရှ်ဘုတ် ဝင်ရောက်မှုကို အလိုအလျောက်လုပ်ဆောင်ရန်
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:34Z
 ---
 
 # Tailscale (Gateway ဒက်ရှ်ဘုတ်)
 
-OpenClaw သည် Gateway ဒက်ရှ်ဘုတ်နှင့် WebSocket ပို့တ်အတွက်
-Tailscale **Serve** (tailnet) သို့မဟုတ် **Funnel** (အများပြည်သူ) ကို အလိုအလျောက် ပြင်ဆင်ပေးနိုင်သည်။
-၎င်းက Gateway ကို loopback တွင်သာ ချည်နှောင်ထားပြီး
-Tailscale မှ HTTPS၊ လမ်းကြောင်းညွှန်ကြားမှု၊ (Serve အတွက်) identity headers များကို ပံ့ပိုးပေးသည်။
+OpenClaw သည် Gateway dashboard နှင့် WebSocket port အတွက် Tailscale **Serve** (tailnet) သို့မဟုတ် **Funnel** (public) ကို အလိုအလျောက် ပြင်ဆင်နိုင်ပါသည်။ ဤအရာသည် Gateway ကို loopback တွင် ချိတ်ထားပြီး Tailscale က HTTPS, routing နှင့် (Serve အတွက်) identity headers များကို ပံ့ပိုးပေးပါသည်။
 
 ## Modes
 
-- `serve`: `tailscale serve` ဖြင့် Tailnet-only Serve။ Gateway သည် `127.0.0.1` ပေါ်တွင် ဆက်လက်တည်ရှိသည်။
-- `funnel`: `tailscale funnel` ဖြင့် အများပြည်သူသုံး HTTPS။ OpenClaw သည် မျှဝေထားသော စကားဝှက်တစ်ခု လိုအပ်သည်။
+- `serve`: `tailscale serve` ကို အသုံးပြုထားသော Tailnet-သာ Serve ဖြစ်သည်။ Gateway သည် `127.0.0.1` ပေါ်တွင် ဆက်လက်ရှိနေပါသည်။
+- `funnel`: `tailscale funnel` မှတစ်ဆင့် Public HTTPS ဖြစ်သည်။ OpenClaw သည် မျှဝေထားသော စကားဝှက်တစ်ခုကို လိုအပ်ပါသည်။
 - `off`: မူလအခြေအနေ (Tailscale အလိုအလျောက် ပြင်ဆင်ခြင်း မရှိ)။
 
 ## Auth
@@ -33,16 +23,9 @@ Tailscale မှ HTTPS၊ လမ်းကြောင်းညွှန်ကြ
 - `token` (`OPENCLAW_GATEWAY_TOKEN` ကို သတ်မှတ်ထားသည့်အခါ မူလအဖြစ်)
 - `password` (`OPENCLAW_GATEWAY_PASSWORD` သို့မဟုတ် config မှတဆင့် မျှဝေထားသော လျှို့ဝှက်ချက်)
 
-`tailscale.mode = "serve"` ကို သတ်မှတ်ထားပြီး `gateway.auth.allowTailscale` သည် `true` ဖြစ်သည့်အခါ,
-မှန်ကန်သော Serve proxy တောင်းဆိုမှုများသည် token/စကားဝှက် မပေးပို့ဘဲ
-Tailscale identity headers (`tailscale-user-login`) မှတဆင့် အတည်ပြုနိုင်သည်။
-OpenClaw သည် local Tailscale daemon (`tailscale whois`) မှတဆင့်
-`x-forwarded-for` လိပ်စာကို ဖြေရှင်းကာ header နှင့် ကိုက်ညီကြောင်း စစ်ဆေးပြီးနောက် လက်ခံသည်။
-OpenClaw သည် loopback မှ ရောက်ရှိပြီး
-Tailscale ၏ `x-forwarded-for`, `x-forwarded-proto`, နှင့် `x-forwarded-host`
-headers များ ပါဝင်သည့်အခါသာ တောင်းဆိုမှုကို Serve အဖြစ် သတ်မှတ်သည်။
-အထူးအတည်ပြုချက်များကို မဖြစ်မနေလိုအပ်စေရန် `gateway.auth.allowTailscale: false` ကို သတ်မှတ်ပါ သို့မဟုတ်
-`gateway.auth.mode: "password"` ကို အတင်းအကျပ် သတ်မှတ်ပါ။
+`tailscale.mode = "serve"` ဖြစ်ပြီး `gateway.auth.allowTailscale` ကို `true` သတ်မှတ်ထားသောအခါ၊ မှန်ကန်သော Serve proxy request များသည် token/စကားဝှက် မပေးဘဲ Tailscale identity headers (`tailscale-user-login`) ဖြင့် အတည်ပြုနိုင်ပါသည်။ OpenClaw သည် local Tailscale daemon (`tailscale whois`) မှတစ်ဆင့် `x-forwarded-for` လိပ်စာကို ဖြေရှင်းကာ header နှင့် ကိုက်ညီမှုရှိမရှိ စစ်ဆေးပြီး လက်ခံပါသည်။
+OpenClaw သည် loopback မှလာပြီး Tailscale ၏ `x-forwarded-for`, `x-forwarded-proto`, နှင့် `x-forwarded-host` headers ပါရှိသော request များကိုသာ Serve အဖြစ် သတ်မှတ်ပါသည်။
+အတည်ပြုအချက်အလက်များကို တိတိကျကျ လိုအပ်စေရန် `gateway.auth.allowTailscale: false` သတ်မှတ်ပါ သို့မဟုတ် `gateway.auth.mode: "password"` ကို အတင်းအကျပ် သတ်မှတ်ပါ။
 
 ## Config examples
 
@@ -109,17 +92,12 @@ openclaw gateway --tailscale funnel --auth password
   သို့မဟုတ် `tailscale funnel` ပြင်ဆင်ချက်များကို ပြန်လည်ဖျက်သိမ်းစေလိုပါက `gateway.tailscale.resetOnExit` ကို သတ်မှတ်ပါ။
 - `gateway.bind: "tailnet"` သည် Tailnet သို့ တိုက်ရိုက် bind (HTTPS မပါ၊ Serve/Funnel မပါ) ဖြစ်သည်။
 - `gateway.bind: "auto"` သည် loopback ကို ဦးစားပေးသည်; Tailnet-only လိုအပ်ပါက `tailnet` ကို အသုံးပြုပါ။
-- Serve/Funnel သည် **Gateway control UI + WS** ကိုသာ ဖော်ထုတ်ပေးသည်။
-  Nodes များသည် တူညီသော Gateway WS endpoint မှတဆင့် ချိတ်ဆက်ကြ므로
-  Serve ကို node ဝင်ရောက်မှုအတွက်လည်း အသုံးပြုနိုင်သည်။
+- Serve/Funnel သည် **Gateway control UI + WS** ကိုသာ ဖော်ပြပေးပါသည်။ Node များသည် တူညီသော Gateway WS endpoint မှတစ်ဆင့် ချိတ်ဆက်သောကြောင့် Serve သည် node access အတွက်လည်း အလုပ်လုပ်နိုင်ပါသည်။
 
 ## Browser control (remote Gateway + local browser)
 
-Gateway ကို စက်တစ်လုံးပေါ်တွင် လည်ပတ်စေပြီး အခြားစက်တစ်လုံးပေါ်ရှိ browser ကို ထိန်းချုပ်လိုပါက,
-browser ရှိသည့် စက်ပေါ်တွင် **node host** ကို လည်ပတ်စေပြီး
-နှစ်ဖက်လုံးကို တူညီသော tailnet အတွင်း ထားပါ။
-Gateway သည် browser လုပ်ဆောင်ချက်များကို node သို့ proxy လုပ်ပေးမည်ဖြစ်ပြီး
-သီးခြား control server သို့မဟုတ် Serve URL မလိုအပ်ပါ။
+Gateway ကို စက်တစ်လုံးပေါ်တွင် chạy လုပ်ထားပြီး အခြားစက်တစ်လုံးပေါ်ရှိ browser ကို ထိန်းချုပ်လိုပါက၊ browser စက်ပေါ်တွင် **node host** တစ်ခု chạy လုပ်ပြီး နှစ်ဖက်လုံးကို တူညီသော tailnet ပေါ်တွင် ထားပါ။
+Gateway သည် browser လုပ်ဆောင်ချက်များကို node သို့ proxy လုပ်ပေးမည်ဖြစ်ပြီး၊ သီးခြား control server သို့မဟုတ် Serve URL မလိုအပ်ပါ။
 
 Browser control အတွက် Funnel ကို မသုံးပါနှင့်; node pairing ကို operator ဝင်ရောက်မှုကဲ့သို့ ဆက်ဆံပါ။
 

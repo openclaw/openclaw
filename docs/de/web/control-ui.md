@@ -1,16 +1,9 @@
 ---
-summary: „Browserbasierte Control UI für das Gateway (Chat, Nodes, Konfiguration)“
+summary: "„Browserbasierte Control UI für das Gateway (Chat, Nodes, Konfiguration)“"
 read_when:
   - Sie möchten das Gateway über einen Browser bedienen
   - Sie möchten Tailnet-Zugriff ohne SSH-Tunnel
-title: „Control UI“
-x-i18n:
-  source_path: web/control-ui.md
-  source_hash: baaaf73820f0e703
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:37:57Z
+title: "„Control UI“"
 ---
 
 # Control UI (Browser)

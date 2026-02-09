@@ -1,17 +1,10 @@
 ---
 title: "Oprettelse af Skills"
-x-i18n:
-  source_path: tools/creating-skills.md
-  source_hash: ad801da34fe361ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:39Z
 ---
 
 # Oprettelse af brugerdefinerede Skills 🛠
 
-OpenClaw er designet til at være let at udvide. "Skills" er den primære måde at tilføje nye funktioner til din assistent.
+OpenClaw er designet til at være let udvidet. "Færdigheder" er den primære måde at tilføje nye funktioner til din assistent.
 
 ## Hvad er en Skill?
 
@@ -21,15 +14,15 @@ En skill er en mappe, der indeholder en `SKILL.md`-fil (som giver instruktioner 
 
 ### 1. Opret mappen
 
-Skills ligger i dit workspace, typisk `~/.openclaw/workspace/skills/`. Opret en ny mappe til din skill:
+Færdigheder lever i dit arbejdsområde, normalt `~/.openclaw/workspace/skills/`. Opret en ny mappe til din færdighed:
 
 ```bash
 mkdir -p ~/.openclaw/workspace/skills/hello-world
 ```
 
-### 2. Definér `SKILL.md`
+### 2. Definér 'SKILL.md'
 
-Opret en `SKILL.md`-fil i mappen. Denne fil bruger YAML-frontmatter til metadata og Markdown til instruktioner.
+Opret en `SKILL.md` fil i mappen. Denne fil bruger YAML frontmatter til metadata og Markdown til instruktioner.
 
 ```markdown
 ---
@@ -42,13 +35,13 @@ description: A simple skill that says hello.
 When the user asks for a greeting, use the `echo` tool to say "Hello from your custom skill!".
 ```
 
-### 3. Tilføj værktøjer (valgfrit)
+### 3. Tilføj Værktøjer (Valgfri)
 
 Du kan definere brugerdefinerede værktøjer i frontmatter eller instruere agenten i at bruge eksisterende systemværktøjer (som `bash` eller `browser`).
 
-### 4. Opdatér OpenClaw
+### 4. Genopfrisk OpenClaw
 
-Bed din agent om at "refresh skills" eller genstart gateway. OpenClaw vil finde den nye mappe og indeksere `SKILL.md`.
+Bed din agent om at "genopfriske færdigheder" eller genstarte gatewayen. OpenClaw vil opdage den nye mappe og indeksere `SKILL.md`.
 
 ## Best Practices
 

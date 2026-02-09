@@ -3,13 +3,6 @@ summary: "WebSocket Gateway 閘道器架構、元件與客戶端流程"
 read_when:
   - 在處理 Gateway 閘道器協定、客戶端或傳輸時
 title: "Gateway 閘道器架構"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:40Z
 ---
 
 # Gateway 閘道器架構
@@ -50,7 +43,7 @@ x-i18n:
   核准狀態保存在裝置配對儲存區。
 - 提供命令，例如 `canvas.*`、`camera.*`、`screen.record`、`location.get`。
 
-協定細節：
+18. 協定細節：
 
 - [Gateway protocol](/gateway/protocol)
 
@@ -103,31 +96,33 @@ Client                    Gateway
 詳細資訊：[Gateway protocol](/gateway/protocol)、[Pairing](/channels/pairing)、
 [Security](/gateway/security)。
 
-## 協定型別與程式碼產生
+## 19. 協定型別與程式碼產生
 
 - TypeBox 結構描述定義協定。
 - 由這些結構描述產生 JSON Schema。
 - Swift 模型由 JSON Schema 產生。
 
-## 遠端存取
+## 20. 遠端存取
 
 - 首選：Tailscale 或 VPN。
+
 - 替代方案：SSH 通道
 
   ```bash
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
 
-- 通道中套用相同的交握＋身分驗證權杖。
+- 21. 相同的交握流程與驗證權杖會套用於通道中。
+
 - 在遠端設定中可啟用 WS 的 TLS＋選用釘選。
 
-## 營運快照
+## 22. 操作快照
 
 - 啟動：`openclaw gateway`（前景執行，日誌輸出至 stdout）。
 - 健康狀態：透過 WS 的 `health`（亦包含於 `hello-ok`）。
 - 監督：使用 launchd／systemd 進行自動重新啟動。
 
-## 不變量
+## 23. 不變條件
 
 - 每台主機僅有一個 Gateway 閘道器控制單一 Baileys 工作階段。
 - 交握為必要；任何非 JSON 或非 connect 的第一個訊框都會被強制關閉。

@@ -3,13 +3,6 @@ summary: "हर OpenClaw दस्तावेज़ से लिंक कर
 read_when:
   - आप दस्तावेज़ों का एक पूर्ण मानचित्र चाहते हैं
 title: "डॉक्स हब्स"
-x-i18n:
-  source_path: start/hubs.md
-  source_hash: 027cb7937ba63866
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:47Z
 ---
 
 # डॉक्स हब्स

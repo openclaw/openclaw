@@ -3,13 +3,6 @@ summary: "Status van ondersteuning voor Google Chat-apps, mogelijkheden en confi
 read_when:
   - Werken aan Google Chat-kanaalfuncties
 title: "Google Chat"
-x-i18n:
-  source_path: channels/googlechat.md
-  source_hash: 3d557dd25946ad11
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:16Z
 ---
 
 # Google Chat (Chat API)

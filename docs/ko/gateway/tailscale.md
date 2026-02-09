@@ -4,13 +4,6 @@ read_when:
   - localhost 외부로 Gateway Control UI 노출
   - tailnet 또는 공개 대시보드 접근 자동화
 title: "Tailscale"
-x-i18n:
-  source_path: gateway/tailscale.md
-  source_hash: c4842b10848d4fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:15Z
 ---
 
 # Tailscale (Gateway 대시보드)

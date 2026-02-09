@@ -3,13 +3,6 @@ summary: "ہر ایجنٹ کے لیے sandbox اور اوزار کی پابند�
 title: ملٹی ایجنٹ Sandbox اور Tools
 read_when: "جب آپ ملٹی ایجنٹ گیٹ وے میں ہر ایجنٹ کے لیے sandboxing یا ہر ایجنٹ کے لیے اوزار کی اجازت/ممانعت کی پالیسیاں چاہتے ہوں۔"
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:58Z
 ---
 
 # ملٹی ایجنٹ Sandbox اور Tools کنفیگریشن
@@ -35,11 +28,11 @@ x-i18n:
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-اسناد ایجنٹس کے درمیان **شیئر نہیں** ہوتیں۔ ایجنٹس کے درمیان کبھی بھی `agentDir` دوبارہ استعمال نہ کریں۔
-اگر آپ اسناد شیئر کرنا چاہتے ہیں تو `auth-profiles.json` کو دوسرے ایجنٹ کے `agentDir` میں کاپی کریں۔
+ایجنٹس کے درمیان کریڈینشلز **شیئر نہیں** کیے جاتے۔ Never reuse `agentDir` across agents.
+If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
 
-رن ٹائم پر sandboxing کے رویّے کے لیے [Sandboxing](/gateway/sandboxing) دیکھیں۔
-“یہ کیوں بلاک ہو رہا ہے؟” کی ڈیبگنگ کے لیے [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) اور `openclaw sandbox explain` دیکھیں۔
+For how sandboxing behaves at runtime, see [Sandboxing](/gateway/sandboxing).
+For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `openclaw sandbox explain`.
 
 ---
 
@@ -223,10 +216,10 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 7. **Sandbox اوزار پالیسی** (`tools.sandbox.tools` یا `agents.list[].tools.sandbox.tools`)
 8. **سب ایجنٹ اوزار پالیسی** (`tools.subagents.tools`، اگر قابلِ اطلاق ہو)
 
-ہر سطح مزید پابندیاں لگا سکتی ہے، لیکن پہلے کی سطحوں پر مسترد کیے گئے اوزار واپس اجازت نہیں دے سکتی۔
-اگر `agents.list[].tools.sandbox.tools` سیٹ ہو تو وہ اس ایجنٹ کے لیے `tools.sandbox.tools` کی جگہ لے لیتا ہے۔
-اگر `agents.list[].tools.profile` سیٹ ہو تو وہ اس ایجنٹ کے لیے `tools.profile` پر فوقیت رکھتا ہے۔
-فراہم کنندہ اوزار کی کلیدیں `provider` (مثلاً `google-antigravity`) یا `provider/model` (مثلاً `openai/gpt-5.2`) میں سے کسی کو قبول کرتی ہیں۔
+Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
+If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
+If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
+Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
 
 ### اوزار گروپس (مختصر نام)
 
@@ -244,7 +237,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ### Elevated موڈ
 
-`tools.elevated` عالمی بنیاد ہے (ارسال کنندہ پر مبنی اجازت فہرست)۔ `agents.list[].tools.elevated` مخصوص ایجنٹس کے لیے elevated کو مزید محدود کر سکتا ہے (دونوں کا اجازت دینا ضروری ہے)۔
+`tools.elevated` is the global baseline (sender-based allowlist). `agents.list[].tools.elevated` can further restrict elevated for specific agents (both must allow).
 
 تخفیف کے نمونے:
 
@@ -340,10 +333,10 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## عام غلطی: "non-main"
 
-`agents.defaults.sandbox.mode: "non-main"`، `session.mainKey` پر مبنی ہے (ڈیفالٹ `"main"`)،
-نہ کہ ایجنٹ آئی ڈی پر۔ گروپ/چینل سیشنز ہمیشہ اپنی الگ کلیدیں پاتے ہیں، اس لیے
-انہیں non-main سمجھا جاتا ہے اور وہ sandbox میں چلتے ہیں۔ اگر آپ چاہتے ہیں کہ
-کوئی ایجنٹ کبھی sandbox میں نہ جائے تو `agents.list[].sandbox.mode: "off"` سیٹ کریں۔
+`agents.defaults.sandbox.mode: "non-main"` is based on `session.mainKey` (default `"main"`),
+not the agent id. Group/channel sessions always get their own keys, so they
+are treated as non-main and will be sandboxed. If you want an agent to never
+sandbox, set `agents.list[].sandbox.mode: "off"`.
 
 ---
 

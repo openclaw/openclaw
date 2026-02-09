@@ -4,13 +4,6 @@ read_when:
   - Quiere un paso de LLM solo JSON dentro de flujos de trabajo
   - Necesita salida de LLM validada por esquema para automatización
 title: "Tarea de LLM"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:48Z
 ---
 
 # Tarea de LLM

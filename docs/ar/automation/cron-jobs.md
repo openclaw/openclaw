@@ -5,13 +5,6 @@ read_when:
   - ربط الأتمتة التي يجب أن تعمل مع نبضات القلب أو بجانبها
   - اتخاذ قرار بين نبضة القلب وCron للمهام المجدولة
 title: "وظائف Cron"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:24Z
 ---
 
 # وظائف Cron (مجدول Gateway)
@@ -26,7 +19,7 @@ Cron هو المجدول المدمج في Gateway. يقوم بحفظ المها
 
 استكشاف الأخطاء وإصلاحها: [/automation/troubleshooting](/automation/troubleshooting)
 
-## الخلاصة السريعة
+## TL;DR
 
 - يعمل Cron **داخل Gateway** (وليس داخل النموذج).
 - تستمر المهام تحت `~/.openclaw/cron/` بحيث لا تفقد الجداول عند إعادة التشغيل.
@@ -157,7 +150,7 @@ openclaw cron add \
 استخدم المهام المعزولة للأعمال المزعجة أو المتكررة أو «الأعمال الخلفية» التي لا ينبغي
 أن تُغرق سجل الدردشة الرئيسي.
 
-### أشكال الحمولة (ما الذي يُنفَّذ)
+### أشكال الحمولة (ما يجري)
 
 يدعم نوعان من الحمولات:
 
@@ -445,7 +438,7 @@ openclaw cron edit <jobId> \
   --thinking low
 ```
 
-سجل التشغيل:
+تشغيل التاريخ:
 
 ```bash
 openclaw cron runs --id <jobId> --limit 50

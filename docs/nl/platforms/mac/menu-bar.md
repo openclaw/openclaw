@@ -3,13 +3,6 @@ summary: "Statuslogica van de menubalk en wat aan gebruikers wordt getoond"
 read_when:
   - Afstellen van de mac-menubalk-UI of statuslogica
 title: "Menubalk"
-x-i18n:
-  source_path: platforms/mac/menu-bar.md
-  source_hash: 8eb73c0e671a76aa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:37Z
 ---
 
 # Statuslogica van de menubalk

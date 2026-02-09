@@ -4,19 +4,12 @@ read_when:
   - Du vill indexera eller söka i semantiskt minne
   - Du felsöker minnestillgänglighet eller indexering
 title: "minne"
-x-i18n:
-  source_path: cli/memory.md
-  source_hash: cb8ee2c9b2db2d57
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:41Z
 ---
 
 # `openclaw memory`
 
-Hantera indexering och sökning i semantiskt minne.
-Tillhandahålls av den aktiva minnespluginen (standard: `memory-core`; ange `plugins.slots.memory = "none"` för att inaktivera).
+Hantera semantisk minnesindexering och -sökning.
+Tillhandahålls av den aktiva minnespluginen (standard: `memory-core`; sätt `plugins.slots.memory = "none"` för att inaktivera).
 
 Relaterat:
 

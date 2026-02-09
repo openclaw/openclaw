@@ -5,13 +5,6 @@ read_when:
   - Изменение поведения блоковой потоковой передачи или чанкинга каналов
   - Отладка дублирующихся/ранних блочных ответов или черновой потоковой передачи
 title: "Потоковая передача и чанкинг"
-x-i18n:
-  source_path: concepts/streaming.md
-  source_hash: f014eb1898c4351b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:38Z
 ---
 
 # Потоковая передача + чанкинг

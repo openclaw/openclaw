@@ -6,13 +6,6 @@ read_when:
   - Vous voulez un environnement macOS réinitialisable que vous pouvez cloner
   - Vous voulez comparer les options de VM macOS locales et hébergées
 title: "VM macOS"
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:05Z
 ---
 
 # OpenClaw sur des VM macOS (Sandboxing)
@@ -56,7 +49,7 @@ Une fois que vous avez un accès SSH à une VM macOS, poursuivez à l’étape 6
 3. Terminez l’assistant de configuration, activez la connexion à distance (SSH)
 4. `lume run openclaw --no-display`
 5. Connectez-vous en SSH, installez OpenClaw, configurez les canaux
-6. Terminé
+6. Fait
 
 ---
 
@@ -69,7 +62,7 @@ Une fois que vous avez un accès SSH à une VM macOS, poursuivez à l’étape 6
 
 ---
 
-## 1) Installer Lume
+## 1. Installer Lume
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ Docs : [Installation de Lume](https://cua.ai/docs/lume/guide/getting-started/ins
 
 ---
 
-## 2) Créer la VM macOS
+## 2. Créer la VM macOS
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ Remarque : le téléchargement peut prendre un certain temps selon votre connexi
 
 ---
 
-## 3) Terminer l’assistant de configuration
+## 3. Terminer l’assistant de configuration
 
 Dans la fenêtre VNC :
 
@@ -119,7 +112,7 @@ Une fois la configuration terminée, activez SSH :
 
 ---
 
-## 4) Obtenir l’adresse IP de la VM
+## 4. Obtenir l’adresse IP de la VM
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Recherchez l’adresse IP (généralement `192.168.64.x`).
 
 ---
 
-## 5) Se connecter en SSH à la VM
+## 5. Se connecter en SSH à la VM
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Remplacez `youruser` par le compte que vous avez créé, et l’IP par celle de 
 
 ---
 
-## 6) Installer OpenClaw
+## 6. Installer OpenClaw
 
 À l’intérieur de la VM :
 
@@ -152,7 +145,7 @@ Suivez les invites de prise en main pour configurer votre fournisseur de modèle
 
 ---
 
-## 7) Configurer les canaux
+## 7. Configurer les canaux
 
 Modifiez le fichier de configuration :
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Exécuter la VM sans interface
+## 8. Exécuter la VM sans interface
 
 Arrêtez la VM et redémarrez-la sans affichage :
 
@@ -265,13 +258,13 @@ Pour un fonctionnement réellement continu, envisagez un Mac mini dédié ou un 
 
 ---
 
-## Dépannage
+## Problemes courants
 
-| Problème                                  | Solution                                                                                                     |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Impossible de se connecter en SSH à la VM | Vérifiez que « Remote Login » est activé dans les Réglages Système de la VM                                  |
-| IP de la VM non affichée                  | Attendez que la VM ait complètement démarré, relancez `lume get openclaw` à nouveau                          |
-| Commande Lume introuvable                 | Ajoutez `~/.local/bin` à votre PATH                                                                          |
+| Problème                                  | Solution                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Impossible de se connecter en SSH à la VM | Vérifiez que « Remote Login » est activé dans les Réglages Système de la VM                                                     |
+| IP de la VM non affichée                  | Attendez que la VM ait complètement démarré, relancez `lume get openclaw` à nouveau                                             |
+| Commande Lume introuvable                 | Ajoutez `~/.local/bin` à votre PATH                                                                                             |
 | QR WhatsApp ne se scanne pas              | Assurez-vous d’être connecté dans la VM (et non sur l’hôte) lors de l’exécution de `openclaw channels login` |
 
 ---

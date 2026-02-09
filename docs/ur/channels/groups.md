@@ -3,13 +3,6 @@ summary: "مختلف پلیٹ فارمز پر گروپ چیٹ کا رویہ (Wha
 read_when:
   - گروپ چیٹ کے رویے یا منشن گیٹنگ میں تبدیلی کرتے وقت
 title: "گروپس"
-x-i18n:
-  source_path: channels/groups.md
-  source_hash: 5380e07ea01f4a8f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:18Z
 ---
 
 # گروپس
@@ -18,8 +11,8 @@ OpenClaw مختلف پلیٹ فارمز پر گروپ چیٹس کو یکساں �
 
 ## مبتدی تعارف (2 منٹ)
 
-OpenClaw آپ کے اپنے میسجنگ اکاؤنٹس پر “رہتا” ہے۔ کوئی الگ WhatsApp بوٹ صارف موجود نہیں ہوتا۔
-اگر **آپ** کسی گروپ میں ہیں تو OpenClaw اس گروپ کو دیکھ سکتا ہے اور وہیں جواب دے سکتا ہے۔
+OpenClaw “lives” on your own messaging accounts. There is no separate WhatsApp bot user.
+If **you** are in a group, OpenClaw can see that group and respond there.
 
 بطورِ طے شدہ رویہ:
 
@@ -47,12 +40,12 @@ otherwise -> reply
 
 اگر آپ چاہتے ہیں...
 
-| مقصد                                                   | کیا سیٹ کریں                                               |
-| ------------------------------------------------------ | ---------------------------------------------------------- |
-| تمام گروپس کی اجازت دیں لیکن صرف @mentions پر جواب دیں | `groups: { "*": { requireMention: true } }`                |
-| تمام گروپ جوابات غیر فعال کریں                         | `groupPolicy: "disabled"`                                  |
-| صرف مخصوص گروپس                                        | `groups: { "<group-id>": { ... } }` (کوئی `"*"` کلید نہیں) |
-| گروپس میں صرف آپ ہی ٹرگر کر سکیں                       | `groupPolicy: "allowlist"`، `groupAllowFrom: ["+1555..."]` |
+| مقصد                                                                | کیا سیٹ کریں                                                          |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| تمام گروپس کی اجازت دیں لیکن صرف @mentions پر جواب دیں | `groups: { "*": { requireMention: true } }`                           |
+| تمام گروپ جوابات غیر فعال کریں                                      | `groupPolicy: "disabled"`                                             |
+| صرف مخصوص گروپس                                                     | `groups: { "<group-id>": { ... } }` (no `"*"` key) |
+| گروپس میں صرف آپ ہی ٹرگر کر سکیں                                    | `groupPolicy: "allowlist"`، `groupAllowFrom: ["+1555..."]`            |
 
 ## سیشن کیز
 
@@ -65,14 +58,14 @@ otherwise -> reply
 
 ہاں — یہ اچھی طرح کام کرتا ہے اگر آپ کی “ذاتی” ٹریفک **DMs** اور “عوامی” ٹریفک **گروپس** ہوں۔
 
-وجہ: سنگل ایجنٹ موڈ میں، DMs عموماً **مرکزی** سیشن کی (`agent:main:main`) میں آتی ہیں، جبکہ گروپس ہمیشہ **غیر مرکزی** سیشن کیز (`agent:main:<channel>:group:<id>`) استعمال کرتے ہیں۔ اگر آپ `mode: "non-main"` کے ساتھ sandboxing فعال کریں تو وہ گروپ سیشنز Docker میں چلتے ہیں جبکہ آپ کا مرکزی DM سیشن ہوسٹ پر ہی رہتا ہے۔
+Why: in single-agent mode, DMs typically land in the **main** session key (`agent:main:main`), while groups always use **non-main** session keys (`agent:main:<channel>:group:<id>`). If you enable sandboxing with `mode: "non-main"`, those group sessions run in Docker while your main DM session stays on-host.
 
 اس طرح آپ کے پاس ایک ایجنٹ “دماغ” (مشترکہ ورک اسپیس + میموری) ہوتا ہے، مگر دو ایکزیکیوشن انداز:
 
 - **DMs**: مکمل ٹولز (ہوسٹ)
 - **گروپس**: sandbox + محدود ٹولز (Docker)
 
-> اگر آپ کو واقعی الگ ورک اسپیس/شخصیات درکار ہوں (“ذاتی” اور “عوامی” کبھی مکس نہ ہوں)، تو دوسرا ایجنٹ + bindings استعمال کریں۔ دیکھیں [Multi-Agent Routing](/concepts/multi-agent)۔
+> If you need truly separate workspaces/personas (“personal” and “public” must never mix), use a second agent + bindings. See [Multi-Agent Routing](/concepts/multi-agent).
 
 مثال (DMs ہوسٹ پر، گروپس sandboxed + صرف میسجنگ ٹولز):
 
@@ -99,7 +92,7 @@ otherwise -> reply
 }
 ```
 
-“گروپس صرف فولڈر X دیکھ سکیں” (بجائے “کوئی ہوسٹ رسائی نہیں”) چاہتے ہیں؟ `workspaceAccess: "none"` برقرار رکھیں اور صرف اجازت فہرست میں شامل راستے sandbox میں ماؤنٹ کریں:
+Want “groups can only see folder X” instead of “no host access”? Keep `workspaceAccess: "none"` and mount only allowlisted paths into the sandbox:
 
 ```json5
 {
@@ -191,9 +184,9 @@ otherwise -> reply
 
 - `groupPolicy` منشن گیٹنگ سے الگ ہے (جس کے لیے @mentions درکار ہوتی ہیں)۔
 - WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: `groupAllowFrom` استعمال کریں (فال بیک: واضح `allowFrom`)۔
-- Discord: اجازت فہرست `channels.discord.guilds.<id>.channels` استعمال کرتی ہے۔
+- Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
 - Slack: اجازت فہرست `channels.slack.channels` استعمال کرتی ہے۔
-- Matrix: اجازت فہرست `channels.matrix.groups` استعمال کرتی ہے (روم آئی ڈیز، عرفیات، یا نام)۔ ارسال کنندگان کو محدود کرنے کے لیے `channels.matrix.groupAllowFrom` استعمال کریں؛ فی روم `users` اجازت فہرستیں بھی سپورٹڈ ہیں۔
+- Matrix: allowlist uses `channels.matrix.groups` (room IDs, aliases, or names). Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
 - گروپ DMs علیحدہ طور پر کنٹرول ہوتی ہیں (`channels.discord.dm.*`، `channels.slack.dm.*`)۔
 - Telegram اجازت فہرست یوزر آئی ڈیز (`"123456789"`، `"telegram:123456789"`، `"tg:123456789"`) یا یوزرنیمز (`"@alice"` یا `"alice"`) سے میچ کر سکتی ہے؛ پری فکس کیس اِن سنسِٹو ہوتے ہیں۔
 - ڈیفالٹ `groupPolicy: "allowlist"` ہے؛ اگر آپ کی گروپ اجازت فہرست خالی ہو تو گروپ پیغامات بلاک ہو جاتے ہیں۔
@@ -206,9 +199,9 @@ otherwise -> reply
 
 ## منشن گیٹنگ (ڈیفالٹ)
 
-گروپ پیغامات کے لیے منشن درکار ہوتی ہے، جب تک کہ فی گروپ اووررائیڈ نہ کیا جائے۔ ڈیفالٹس ہر سب سسٹم کے تحت `*.groups."*"` میں موجود ہیں۔
+Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-بوٹ کے پیغام کا جواب دینا ضمنی منشن شمار ہوتا ہے (جب چینل ریپلائی میٹاڈیٹا سپورٹ کرتا ہو)۔ یہ Telegram، WhatsApp، Slack، Discord، اور Microsoft Teams پر لاگو ہوتا ہے۔
+Replying to a bot message counts as an implicit mention (when the channel supports reply metadata). This applies to Telegram, WhatsApp, Slack, Discord, and Microsoft Teams.
 
 ```json5
 {
@@ -253,14 +246,14 @@ otherwise -> reply
 - فی ایجنٹ اووررائیڈ: `agents.list[].groupChat.mentionPatterns` (جب متعدد ایجنٹس ایک ہی گروپ شیئر کریں تو مفید)۔
 - منشن گیٹنگ صرف تب نافذ ہوتی ہے جب منشن ڈیٹیکشن ممکن ہو (نیٹو منشنز یا `mentionPatterns` کنفیگر ہوں)۔
 - Discord کے ڈیفالٹس `channels.discord.guilds."*"` میں ہیں (فی گلڈ/چینل اووررائیڈ ممکن)۔
-- گروپ ہسٹری کانٹیکسٹ تمام چینلز میں یکساں طور پر لپٹا ہوتا ہے اور **صرف زیرِ التواء** (منشن گیٹنگ کی وجہ سے چھوڑے گئے پیغامات) پر مشتمل ہوتا ہے؛ عالمی ڈیفالٹ کے لیے `messages.groupChat.historyLimit` اور اووررائیڈز کے لیے `channels.<channel>.historyLimit` (یا `channels.<channel>.accounts.*.historyLimit`) استعمال کریں۔ غیر فعال کرنے کے لیے `0` سیٹ کریں۔
+- Group history context is wrapped uniformly across channels and is **pending-only** (messages skipped due to mention gating); use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 
 ## گروپ/چینل ٹول پابندیاں (اختیاری)
 
 کچھ چینل کنفیگز اس بات کی اجازت دیتے ہیں کہ **کسی مخصوص گروپ/روم/چینل کے اندر** کون سے ٹولز دستیاب ہوں۔
 
 - `tools`: پورے گروپ کے لیے ٹولز کی اجازت/ممانعت۔
-- `toolsBySender`: گروپ کے اندر فی ارسال کنندہ اووررائیڈز (کلیدیں چینل کے مطابق sender IDs/یوزرنیمز/ای میلز/فون نمبرز ہوتی ہیں)۔ وائلڈ کارڈ کے طور پر `"*"` استعمال کریں۔
+- `toolsBySender`: per-sender overrides within the group (keys are sender IDs/usernames/emails/phone numbers depending on the channel). Use `"*"` as a wildcard.
 
 حل کی ترتیب (سب سے مخصوص کو ترجیح):
 
@@ -296,7 +289,7 @@ otherwise -> reply
 
 ## گروپ اجازت فہرستیں
 
-جب `channels.whatsapp.groups`، `channels.telegram.groups`، یا `channels.imessage.groups` کنفیگر ہوں تو یہ کیز گروپ اجازت فہرست کے طور پر کام کرتی ہیں۔ تمام گروپس کی اجازت دیتے ہوئے بھی ڈیفالٹ منشن رویہ سیٹ رکھنے کے لیے `"*"` استعمال کریں۔
+When `channels.whatsapp.groups`, `channels.telegram.groups`, or `channels.imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
 
 عام مقاصد (کاپی/پیسٹ):
 
@@ -356,7 +349,7 @@ otherwise -> reply
 - `/activation mention`
 - `/activation always`
 
-مالک کا تعین `channels.whatsapp.allowFrom` کے ذریعے ہوتا ہے (یا اگر سیٹ نہ ہو تو بوٹ کے خود کے E.164 کے ذریعے)۔ کمانڈ کو بطور الگ پیغام بھیجیں۔ دیگر پلیٹ فارمز فی الحال `/activation` کو نظرانداز کرتے ہیں۔
+Owner is determined by `channels.whatsapp.allowFrom` (or the bot’s self E.164 when unset). Send the command as a standalone message. Other surfaces currently ignore `/activation`.
 
 ## کانٹیکسٹ فیلڈز
 
@@ -368,7 +361,7 @@ otherwise -> reply
 - `WasMentioned` (منشن گیٹنگ کا نتیجہ)
 - Telegram فورم موضوعات میں اضافی طور پر `MessageThreadId` اور `IsForum` شامل ہوتے ہیں۔
 
-ایجنٹ سسٹم پرامپٹ میں نئے گروپ سیشن کے پہلے ٹرن پر گروپ تعارف شامل ہوتا ہے۔ یہ ماڈل کو انسان کی طرح جواب دینے، Markdown ٹیبلز سے گریز کرنے، اور لفظی `\n` تسلسل ٹائپ کرنے سے بچنے کی یاددہانی کراتا ہے۔
+The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, avoid Markdown tables, and avoid typing literal `\n` sequences.
 
 ## iMessage کی مخصوص باتیں
 

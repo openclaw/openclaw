@@ -1,16 +1,9 @@
 ---
 summary: "استخدم Z.AI (نماذج GLM) مع OpenClaw"
 read_when:
-  - "تريد نماذج Z.AI / GLM في OpenClaw"
-  - "تحتاج إلى إعداد بسيط لمفتاح ZAI_API_KEY"
+  - تريد نماذج Z.AI / GLM في OpenClaw
+  - تحتاج إلى إعداد بسيط لمفتاح ZAI_API_KEY
 title: "Z.AI"
-x-i18n:
-  source_path: providers/zai.md
-  source_hash: 2c24bbad86cf86c3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:32Z
 ---
 
 # Z.AI

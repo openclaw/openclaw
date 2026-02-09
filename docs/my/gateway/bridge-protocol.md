@@ -5,25 +5,17 @@ read_when:
   - pairing သို့မဟုတ် bridge authentication မအောင်မြင်မှုများကို စုံစမ်းစစ်ဆေးခြင်း
   - Gateway မှ ဖော်ထုတ်ထားသော နိုဒ် surface ကို စိစစ်သုံးသပ်ခြင်း
 title: "Bridge Protocol"
-x-i18n:
-  source_path: gateway/bridge-protocol.md
-  source_hash: 789bcf3cbc6841fc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:24Z
 ---
 
 # Bridge protocol (legacy node transport)
 
-Bridge protocol သည် **legacy** နိုဒ် ပို့ဆောင်ရေး (TCP JSONL) ဖြစ်သည်။ နိုဒ် client အသစ်များသည်
-ပေါင်းစည်းထားသော Gateway WebSocket protocol ကို အသုံးပြုသင့်ပါသည်။
+Bridge protocol သည် **legacy** node transport (TCP JSONL) ဖြစ်ပါသည်။ Node client အသစ်များသည် unified Gateway WebSocket protocol ကို အသုံးပြုသင့်ပါသည်။
 
 Operator သို့မဟုတ် နိုဒ် client ကို တည်ဆောက်နေပါက
 [Gateway protocol](/gateway/protocol) ကို အသုံးပြုပါ။
 
-**မှတ်ချက်:** လက်ရှိ OpenClaw build များတွင် TCP bridge listener ကို မထည့်သွင်းတော့ပါ။ ဤစာတမ်းကို သမိုင်းဆိုင်ရာ အကိုးအကားအဖြစ်သာ ထိန်းသိမ်းထားပါသည်။
-Legacy `bridge.*` config key များသည် config schema ၏ အစိတ်အပိုင်း မဟုတ်တော့ပါ။
+**Note:** Current OpenClaw builds no longer ship the TCP bridge listener; this document is kept for historical reference.
+Legacy `bridge.*` config keys များသည် config schema ၏ အစိတ်အပိုင်း မဟုတ်တော့ပါ။
 
 ## ဘာကြောင့် နှစ်မျိုးလုံး ရှိသနည်း
 
@@ -68,8 +60,8 @@ Legacy allowlist enforcement သည် `src/gateway/server-bridge.ts` တွင�
 
 ## Exec lifecycle events
 
-နိုဒ်များသည် system.run လှုပ်ရှားမှုကို ဖော်ပြရန် `exec.finished` သို့မဟုတ် `exec.denied` event များကို ထုတ်လွှတ်နိုင်သည်။
-ဤ event များကို gateway အတွင်းရှိ system event များအဖြစ် map လုပ်ပါသည်။ (Legacy နိုဒ်များသည် `exec.started` ကို ထုတ်လွှတ်နိုင်သေးပါသည်။)
+Nodes can emit `exec.finished` or `exec.denied` events to surface system.run activity.
+These are mapped to system events in the gateway. (Legacy nodes may still emit `exec.started`.)
 
 Payload field များ (ဖော်ပြထားခြင်းမရှိပါက အားလုံး optional):
 
@@ -88,5 +80,5 @@ Payload field များ (ဖော်ပြထားခြင်းမရှ�
 
 ## Versioning
 
-Bridge သည် လက်ရှိ **implicit v1** (min/max negotiation မရှိ) ဖြစ်ပါသည်။ Backward‑compat ကို မျှော်မှန်းထားပြီး
-breaking change များ မပြုလုပ်မီ bridge protocol version field ကို ထည့်သွင်းသင့်ပါသည်။
+Bridge သည် လက်ရှိ **implicit v1** (min/max negotiation မရှိ) ဖြစ်ပါသည်။ Backward‑compat
+is expected; add a bridge protocol version field before any breaking changes.

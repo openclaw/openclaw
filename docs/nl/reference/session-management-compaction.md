@@ -5,13 +5,6 @@ read_when:
   - Je wijzigt het gedrag van auto-compactie of voegt “pre-compactie”-huishoudtaken toe
   - Je wilt geheugen-flushes of stille systeembeurten implementeren
 title: "Diepgaande uitleg sessiebeheer"
-x-i18n:
-  source_path: reference/session-management-compaction.md
-  source_hash: 6344a9eaf8797eb4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:06Z
 ---
 
 # Sessiebeheer & Compactie (Diepgaande uitleg)

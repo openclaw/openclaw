@@ -4,13 +4,6 @@ read_when:
   - Kørsel eller fejlsøgning af gateway-processen
   - Undersøgelse af håndhævelse af enkeltinstans
 title: "Gateway-lås"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:09Z
 ---
 
 # Gateway-lås

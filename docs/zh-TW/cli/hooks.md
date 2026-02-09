@@ -4,20 +4,13 @@ read_when:
   - 你想要管理代理程式 hooks
   - 你想要安裝或更新 hooks
 title: "hooks"
-x-i18n:
-  source_path: cli/hooks.md
-  source_hash: b3cb5c4ce63c5ad3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:24Z
 ---
 
 # `openclaw hooks`
 
 管理代理程式 hooks（針對如 `/new`、`/reset` 等指令以及 Gateway 啟動時的事件驅動自動化）。
 
-相關內容：
+Related:
 
 - Hooks：[Hooks](/automation/hooks)
 - Plugin hooks：[Plugins](/tools/plugin#plugin-hooks)
@@ -62,7 +55,7 @@ openclaw hooks list --verbose
 openclaw hooks list --json
 ```
 
-回傳結構化 JSON，供程式化使用。
+Returns structured JSON for programmatic use.
 
 ## 取得 Hook 資訊
 
@@ -110,7 +103,7 @@ Requirements:
 openclaw hooks check
 ```
 
-顯示 hook 資格狀態的摘要（已就緒與未就緒的數量）。
+Show summary of hook eligibility status (how many are ready vs. not ready).
 
 **選項：**
 
@@ -135,7 +128,7 @@ openclaw hooks enable <name>
 透過將其加入你的設定（`~/.openclaw/config.json`）來啟用特定 hook。
 
 **注意：** 由插件管理的 hooks 會在 `openclaw hooks list` 中顯示 `plugin:<id>`，
-且無法在此啟用或停用。請改為啟用／停用對應的插件。
+且無法在此啟用或停用。請改為啟用／停用對應的插件。 Enable/disable the plugin instead.
 
 **引數：**
 
@@ -153,7 +146,7 @@ openclaw hooks enable session-memory
 ✓ Enabled hook: 💾 session-memory
 ```
 
-**執行內容：**
+**What it does:**
 
 - 檢查 hook 是否存在且符合資格
 - 更新你設定中的 `hooks.internal.entries.<name>.enabled = true`
@@ -199,7 +192,7 @@ openclaw hooks install <path-or-spec>
 
 從本機資料夾／封存檔或 npm 安裝 hook 套件。
 
-**執行內容：**
+**What it does:**
 
 - 將 hook 套件複製到 `~/.openclaw/hooks/<id>`
 - 在 `hooks.internal.entries.*` 中啟用已安裝的 hooks
@@ -234,7 +227,7 @@ openclaw hooks update <id>
 openclaw hooks update --all
 ```
 
-更新已安裝的 hook 套件（僅限 npm 安裝）。
+Update installed hook packs (npm installs only).
 
 **選項：**
 
@@ -245,7 +238,7 @@ openclaw hooks update --all
 
 ### session-memory
 
-當你執行 `/new` 時，將工作階段內容儲存到記憶體。
+Saves session context to memory when you issue `/new`.
 
 **啟用：**
 

@@ -2,16 +2,9 @@
 summary: "Referans: sağlayıcıya özgü transkript temizleme ve onarma kuralları"
 read_when:
   - Transkript biçimine bağlı sağlayıcı istek reddedilmelerini ayıklarken
-  - Transkript temizleme veya araç-çağrısı onarma mantığını değiştirirken
-  - Sağlayıcılar arasında araç-çağrısı kimliği uyuşmazlıklarını incelerken
-title: "Transkript Hijyeni"
-x-i18n:
-  source_path: reference/transcript-hygiene.md
-  source_hash: 43ed460827d514a8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:50Z
+  - Transkript temizleme veya araç çağrısı onarım mantığını değiştiriyorsun
+  - Sağlayıcılar arasında araç çağrısı kimliği uyuşmazlıklarını araştırıyorsun
+title: "Düşünce imzası temizliği"
 ---
 
 # Transkript Hijyeni (Sağlayıcı Düzeltmeleri)
@@ -21,7 +14,7 @@ Bu belge, bir çalıştırma öncesinde (model bağlamı oluşturulurken) transk
 Kapsam şunları içerir:
 
 - Araç-çağrısı kimliği temizleme
-- Araç-çağrısı girdi doğrulama
+- Araç çağrısı girdi doğrulaması
 - Araç sonucu eşleştirme onarımı
 - Tur doğrulama / sıralama
 - Düşünce imzası temizliği

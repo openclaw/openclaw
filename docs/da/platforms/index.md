@@ -4,23 +4,16 @@ read_when:
   - Leder efter OS-support eller installationsveje
   - Overvejer hvor Gateway skal køre
 title: "Platforme"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:24Z
 ---
 
 # Platforme
 
-OpenClaw-kernen er skrevet i TypeScript. **Node er den anbefalede runtime**.
-Bun anbefales ikke til Gateway (WhatsApp/Telegram-fejl).
+OpenClaw kerne er skrevet i TypeScript. **Node er den anbefalede runtime**.
+Bun anbefales ikke til Gateway (WhatsApp/Telegram bugs).
 
-Companion-apps findes til macOS (menulinje-app) og mobile noder (iOS/Android). Windows- og
-Linux-Companion-apps er planlagt, men Gateway er fuldt understøttet i dag.
-Native Companion-apps til Windows er også planlagt; Gateway anbefales via WSL2.
+Der findes ledsagende apps til macOS (menulinje-app) og mobilknuder (iOS/Android). Windows og
+Linux følgesvend apps er planlagt, men Gateway understøttes fuldt ud i dag.
+Indfødte følgesvend apps til Windows er også planlagt; Gateway anbefales via WSL2.
 
 ## Vælg dit OS
 
@@ -56,5 +49,5 @@ Brug en af disse (alle understøttes):
 
 Tjenestemålet afhænger af OS:
 
-- macOS: LaunchAgent (`bot.molt.gateway` eller `bot.molt.<profile>`; legacy `com.openclaw.*`)
+- macOS: LaunchAgent (`bot.molt.gateway` eller `bot.molt.<profile>`; arv `com.openclaw.*`)
 - Linux/WSL2: systemd-brugertjeneste (`openclaw-gateway[-<profile>].service`)

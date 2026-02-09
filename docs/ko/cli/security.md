@@ -4,13 +4,6 @@ read_when:
   - 구성/상태에 대해 빠른 보안 감사를 실행하고자 할 때
   - 안전한 “수정” 제안(chmod, 기본값 강화)을 적용하고자 할 때
 title: "security"
-x-i18n:
-  source_path: cli/security.md
-  source_hash: 96542b4784e53933
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:23Z
 ---
 
 # `openclaw security`

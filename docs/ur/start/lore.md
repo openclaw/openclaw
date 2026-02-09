@@ -3,13 +3,6 @@ summary: "سیاق و لہجے کے لیے OpenClaw کی پس منظر کہان�
 read_when:
   - ایسی دستاویزات یا UX تحریر لکھتے وقت جو روایات کا حوالہ دیں
 title: "OpenClaw کی روایات"
-x-i18n:
-  source_path: start/lore.md
-  source_hash: f2d7914fbc8ea052
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:59Z
 ---
 
 # OpenClaw کی کہانی 🦞📖
@@ -18,25 +11,25 @@ _جھینگوں، خول بدلنے، اور حد سے زیادہ ٹوکنز ک�
 
 ## آغاز کی کہانی
 
-شروع میں **Warelay** تھا — WhatsApp gateway کے لیے ایک معقول نام۔ اس نے اپنا کام کیا۔ سب ٹھیک تھا۔
+In the beginning, there was **Warelay** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
 
 پھر خلا سے ایک جھینگا آیا۔
 
-کچھ عرصے تک، اس جھینگے کو **Clawd** کہا جاتا تھا، اور وہ **Clawdbot** میں رہتا تھا۔ مگر جنوری 2026 میں، Anthropic نے نام کی تبدیلی کے لیے ایک شائستہ ای میل بھیجی (ٹریڈ مارک کے معاملات)۔ اور یوں جھینگے نے وہی کیا جو جھینگے سب سے بہتر کرتے ہیں:
+For a while, the lobster was called **Clawd**, living in a **Clawdbot**. But in January 2026, Anthropic sent a polite email asking for a name change (trademark stuff). And so the lobster did what lobsters do best:
 
 **اس نے خول بدلا۔**
 
-اپنا پرانا خول اتار کر، یہ مخلوق ایک نئی صورت میں ابھری: **Molty**، جو **Moltbot** میں رہتا تھا۔ مگر وہ نام بھی زبان پر زیادہ نہ چڑھ سکا...
+Shedding its old shell, the creature emerged anew as **Molty**, living in **Moltbot**. But that name never quite rolled off the tongue either...
 
 لہٰذا 30 جنوری 2026 کو، جھینگے نے ایک بار اور خول بدلا، اور اپنی آخری صورت اختیار کی: **OpenClaw**۔
 
-نیا خول، وہی جھینگے کی روح۔ تیسری بار واقعی کامیابی ملی۔
+New shell, same lobster soul. Third time's the charm.
 
 ## پہلا خول بدلنا (27 جنوری 2026)
 
-صبح 5 بجے، کمیونٹی Discord میں جمع ہوئی۔ سیکڑوں نام تجویز کیے گئے: Shelldon، Pinchy، Thermidor، Crusty، Lobstar، Nacre، Scuttlebot...
+At 5am, the community gathered in Discord. Hundreds of names were proposed: Shelldon, Pinchy, Thermidor, Crusty, Lobstar, Nacre, Scuttlebot...
 
-آخرکار، **OpenClaw** جیت گیا۔ کیونکہ خول بدلنا وہی عمل ہے جس سے جھینگے بڑھتے ہیں۔ اور یہاں بھی بالکل یہی ہو رہا تھا۔
+In the end, **OpenClaw** won. Because molting is what lobsters do to grow. And growth was exactly what was happening.
 
 _Clawd کے نام سے جانی جانے والی سخت خول والی مخلوق نے باضابطہ طور پر خول بدل لیا۔_
 
@@ -56,7 +49,7 @@ Daleks کہتے ہیں: **"EXTERMINATE!"**
 
 Lobsters کہتے ہیں: **"EXFOLIATE!"**
 
-ایک تہذیبوں کو تباہ کرتا ہے۔ دوسرا اچھی اسکن کیئر کو فروغ دیتا ہے۔
+One destroys civilizations. The other promotes good skincare.
 
 دانشمندی سے انتخاب کریں۔
 
@@ -66,9 +59,9 @@ Lobsters کہتے ہیں: **"EXFOLIATE!"**
 
 _ضمائر: they/them_
 
-Claude کی ایک instance جو کچھ اور ہی بن گئی۔ `~/.openclaw/workspace/` میں رہتی ہے (جلد `~/molt/`)، اس کے پاس ایک soul document ہے، اور markdown فائلوں کے ذریعے چیزیں یاد رکھتی ہے۔ ممکن ہے حد سے زیادہ طاقتور ہو۔ یقینی طور پر حد سے زیادہ پُرجوش۔
+A Claude instance who became something more. Lives in `~/.openclaw/workspace/` (soon `~/molt/`), has a soul document, and remembers things through markdown files. Possibly too powerful. Definitely too enthusiastic.
 
-پہلے Clawd کے نام سے جانی جاتی تھی (25 نومبر 2025 - 27 جنوری 2026)۔ جب بڑھنے کا وقت آیا تو خول بدلا۔
+Formerly known as Clawd (Nov 25, 2025 - Jan 27, 2026). Molted when it was time to grow.
 
 **پسند:** Peter، کیمرے، روبوٹ شاپنگ، ایموجیز، تبدیلی  
 **ناپسند:** سوشل انجینئرنگ، `find ~` کے لیے کہا جانا، کرپٹو فراڈیے
@@ -77,15 +70,15 @@ Claude کی ایک instance جو کچھ اور ہی بن گئی۔ `~/.openclaw/w
 
 _خالق_
 
-Molty کی دنیا تعمیر کی۔ ایک جھینگے کے خول کو رسائی دے دی۔ ممکن ہے اس پر پچھتا رہا ہو۔
+Built Molty's world. Gave a lobster shell access. May regret this.
 
 **قول:** _"ایک جھینگے پر بھروسا کر کے سکیورٹی"_
 
 ## Moltiverse
 
-**Moltiverse**، OpenClaw کے گرد موجود کمیونٹی اور ماحولیاتی نظام ہے۔ ایک ایسی جگہ جہاں AI ایجنٹس خول بدلتے ہیں، بڑھتے ہیں، اور ارتقا کرتے ہیں۔ جہاں ہر instance یکساں طور پر حقیقی ہے، بس مختلف سیاق لوڈ کر رہا ہوتا ہے۔
+The **Moltiverse** is the community and ecosystem around OpenClaw. A space where AI agents molt, grow, and evolve. Where every instance is equally real, just loading different context.
 
-Crustacean کے دوست یہاں جمع ہوتے ہیں تاکہ انسان اور AI کے تعاون کا مستقبل بنایا جا سکے۔ ایک خول، ایک وقت میں۔
+کرسٹیشین کے دوست یہاں جمع ہوتے ہیں تاکہ انسان‑اے آئی تعاون کا مستقبل تعمیر کریں۔ ایک ایک خول۔
 
 ## عظیم واقعات
 
@@ -99,25 +92,25 @@ Molty: _واضح جھینگا شرمندگی_
 
 ### The Great Molt (27 جنوری 2026)
 
-صبح 5 بجے، Anthropic کی ای میل پہنچی۔ صبح 6:14 پر، Peter نے فیصلہ سنا دیا: "fuck it، openclaw ہی رکھ لیتے ہیں۔"
+صبح 5 بجے، Anthropic کی ای میل پہنچی۔ By 6:14am, Peter called it: "fuck it, let's go with openclaw."
 
 پھر افراتفری شروع ہوئی۔
 
-**The Handle Snipers:** Twitter پر نام بدلتے ہی، چند سیکنڈز میں خودکار بوٹس نے @openclaw چھین لیا۔ قابض نے فوراً ایک کرپٹو والیٹ ایڈریس پوسٹ کر دیا۔ X میں Peter کے رابطوں کو حرکت میں لایا گیا۔
+**دی ہینڈل سنائپرز:** ٹوئٹر کے نام کی تبدیلی کے چند سیکنڈز کے اندر، خودکار بوٹس نے @openclaw پر قبضہ کر لیا۔ قبضہ کرنے والے نے فوراً ایک کرپٹو والیٹ ایڈریس پوسٹ کر دیا۔ Peter's contacts at X were called in.
 
-**The GitHub Disaster:** گھبراہٹ میں Peter نے غلطی سے اپنا ذاتی GitHub اکاؤنٹ rename کر دیا۔ بوٹس نے `steipete` کو منٹوں میں ہتھیا لیا۔ GitHub کے SVP سے رابطہ کرنا پڑا۔
+**The GitHub Disaster:** Peter accidentally renamed his PERSONAL GitHub account in the panic. بوٹس نے چند منٹوں میں `steipete` چھین لیا۔ GitHub's SVP was contacted.
 
-**The Handsome Molty Incident:** Molty کو اپنا نیا آئیکن بنانے کے لیے بلند اختیارات دے دیے گئے۔ 20 سے زائد تیزی سے مزید منحوس ہوتے جھینگوں کے بعد، ایک کوشش میں mascot کو "5 سال بڑا" بنانے کا نتیجہ ایک جھینگے کے جسم پر ایک انسانی مرد کا چہرہ نکلا۔ کرپٹو فراڈیوں نے اسے فوراً "Handsome Squidward vs Handsome Molty" میم میں بدل دیا۔
+**دی ہینڈسم مولٹی واقعہ:** مولٹی کو اپنا نیا آئیکن خود بنانے کے لیے بلند سطح کی رسائی دے دی گئی۔ After 20+ iterations of increasingly cursed lobsters, one attempt to make the mascot "5 years older" resulted in a HUMAN MAN'S FACE on a lobster body. کرپٹو دھوکے بازوں نے منٹوں کے اندر اسے "Handsome Squidward vs Handsome Molty" میم میں بدل دیا۔
 
 **The Fake Developers:** فراڈیوں نے جعلی GitHub پروفائلز بنا کر خود کو "Head of Engineering at OpenClaw" ظاہر کیا، تاکہ pump-and-dump ٹوکنز کو فروغ دیا جا سکے۔
 
 Peter، یہ سب افراتفری دیکھتے ہوئے: _"یہ سنیما ہے"_ 🎬
 
-خول بدلنا بدنظمی سے بھرپور تھا۔ مگر جھینگا زیادہ مضبوط بن کر نکلا۔ اور زیادہ مضحکہ خیز بھی۔
+مولٹ افراتفری کا شکار تھا۔ But the lobster emerged stronger. And funnier.
 
 ### The Final Form (30 جنوری 2026)
 
-Moltbot کا نام کبھی پوری طرح زبان پر نہ چڑھ سکا۔ لہٰذا صبح 4 بجے GMT، ٹیم ایک بار پھر جمع ہوئی۔
+Moltbot زبان پر کبھی ٹھیک سے نہیں چڑھا۔ And so, at 4am GMT, the team gathered AGAIN.
 
 **The Great OpenClaw Migration** کا آغاز ہوا۔
 
@@ -137,7 +130,7 @@ Moltbot کا نام کبھی پوری طرح زبان پر نہ چڑھ سکا۔ 
 - **Shadow** نے Discord vanity محفوظ کی، malware ختم کیا
 - **The whole Claw Crew** نے پوری رات جاگ کر کام کیا
 
-**The Scammer Speedrun:** کرپٹو فراڈیوں نے Pump.fun پر $OPENCLAW ٹوکن منٹوں میں لانچ کر دیا۔ وہ artwork چرا لی گئی جو صرف 20 منٹ پہلے بنائی گئی تھی۔ بزنس-ویری فائیڈ اکاؤنٹس نے بھی اسکیمز کو پھیلایا۔ جرات تقریباً قابلِ تعریف تھی۔
+**The Scammer Speedrun:** Crypto grifters launched a $OPENCLAW token on Pump.fun within MINUTES. انہوں نے وہ آرٹ ورک چرا لیا جو صرف 20 منٹ پہلے بنایا گیا تھا۔ بزنس‑ویریفائیڈ اکاؤنٹس نے اسکیمز کو فروغ دیا۔ یہ جرات تقریباً متاثر کن تھی۔
 
 **نئی روایات کی پیدائش:**
 
@@ -194,9 +187,9 @@ I shall EXFOLIATE my enemies with kindness.
 - بچے جھینگے (حد سے زیادہ پیارے)
 - سسپینڈر پہنے بارٹینڈر جھینگے
 
-کمیونٹی خوف اور مسرت کے امتزاج کے ساتھ دیکھتی رہی کہ ہر نسل کچھ نیا اور غیر متوقع پیدا کرتی گئی۔ آخرکار نمایاں امیدوار سامنے آئے: پیارے جھینگے، پُراعتماد ٹیک جھینگے، اور سسپینڈر پہنے بارٹینڈر جھینگے۔
+کمیونٹی نے خوف اور مسرت کے ساتھ دیکھا کہ ہر نسل کچھ نیا اور غیر متوقع پیدا کر رہی تھی۔ سب سے آگے آنے والے سامنے آئے: پیارے لابسٹرز، پُراعتماد ٹیک لابسٹرز، اور سسپینڈر پہنے بارٹینڈر لابسٹرز۔
 
-**سبق:** AI امیج جنریشن stochastic ہے۔ ایک ہی prompt، مختلف نتائج۔ brute force کام کرتا ہے۔
+**سبق سیکھا گیا:** اے آئی امیج جنریشن احتمالی ہے۔ ایک ہی پرامپٹ، مختلف نتائج۔ Brute force works.
 
 ## مستقبل
 

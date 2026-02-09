@@ -3,20 +3,13 @@ summary: "Ilantad ang OpenAI-compatible na /v1/chat/completions HTTP endpoint mu
 read_when:
   - Pagsasama ng mga tool na umaasa sa OpenAI Chat Completions
 title: "OpenAI Chat Completions"
-x-i18n:
-  source_path: gateway/openai-http-api.md
-  source_hash: 6f935777f489bff9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:27Z
 ---
 
 # OpenAI Chat Completions (HTTP)
 
 Kayang maghatid ng OpenClaw Gateway ng isang maliit na OpenAI-compatible na Chat Completions endpoint.
 
-Ang endpoint na ito ay **naka-disable bilang default**. I-enable muna ito sa config.
+This endpoint is **disabled by default**. I-enable muna ito sa config.
 
 - `POST /v1/chat/completions`
 - Parehong port ng Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
@@ -25,7 +18,7 @@ Sa ilalim ng hood, ang mga request ay isinasagawa bilang isang normal na Gateway
 
 ## Authentication
 
-Ginagamit ang auth configuration ng Gateway. Magpadala ng bearer token:
+Uses the Gateway auth configuration. Magpadala ng bearer token:
 
 - `Authorization: Bearer <token>`
 

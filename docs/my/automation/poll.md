@@ -4,13 +4,6 @@ read_when:
   - Poll အထောက်အပံ့ ထည့်သွင်းခြင်း သို့မဟုတ် ပြင်ဆင်ခြင်း
   - CLI သို့မဟုတ် Gateway မှ Poll ပို့ခြင်းကို အမှားရှာဖွေခြင်း
 title: "Poll များ"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:51Z
 ---
 
 # Poll များ
@@ -64,12 +57,12 @@ Params:
 ## ချန်နယ်အလိုက် ကွာခြားချက်များ
 
 - WhatsApp: ရွေးချယ်မှု 2-12 ခု၊ `maxSelections` သည် ရွေးချယ်မှု အရေအတွက်အတွင်း ဖြစ်ရမည်၊ `durationHours` ကို လျစ်လျူရှုသည်။
-- Discord: ရွေးချယ်မှု 2-10 ခု၊ `durationHours` ကို 1-768 နာရီအတွင်း ချုပ်ကန့်ထားသည် (default 24)။ `maxSelections > 1` သည် multi-select ကို ဖွင့်ပေးသည်; Discord သည် တိကျသေချာသော ရွေးချယ်မှု အရေအတွက်ကို မပံ့ပိုးပါ။
-- MS Teams: Adaptive Card poll များ (OpenClaw မှ စီမံခန့်ခွဲသည်)။ မူလ poll API မရှိပါ; `durationHours` ကို လျစ်လျူရှုသည်။
+- Discord: ရွေးချယ်စရာ ၂-၁၀ ခု၊ `durationHours` ကို ၁-၇၆၈ နာရီအတွင်း ကန့်သတ်ထားသည် (default ၂၄)။ `maxSelections > 1` ဖြစ်ပါက multi-select ကို enable လုပ်ပေးသည်; Discord သည် တိကျသော ရွေးချယ်မှု အရေအတွက်ကို မထောက်ပံ့ပါ။
+- MS Teams: Adaptive Card polls (OpenClaw မှ စီမံခန့်ခွဲသည်)။ Native poll API မရှိပါ; `durationHours` ကို လျစ်လျူရှုပါသည်။
 
 ## Agent tool (Message)
 
 `message` tool ကို `poll` action ဖြင့် အသုံးပြုပါ (`to`, `pollQuestion`, `pollOption`, optional `pollMulti`, `pollDurationHours`, `channel`)။
 
-မှတ်ချက်: Discord တွင် “အတိအကျ N ခုရွေးပါ” မုဒ် မရှိပါ; `pollMulti` သည် multi-select သို့ မက်ပ်လုပ်ပေးသည်။
-Teams poll များကို Adaptive Cards အဖြစ် ပြသပြီး မဲများကို `~/.openclaw/msteams-polls.json` တွင် မှတ်တမ်းတင်ရန် Gateway သည် အွန်လိုင်းအနေဖြင့် ဆက်လက် ရှိနေရန် လိုအပ်ပါသည်။
+မှတ်ချက်: Discord တွင် “အတိအကျ N ခု ရွေးချယ်ပါ” mode မရှိပါ; `pollMulti` သည် multi-select နှင့် ကိုက်ညီပါသည်။
+Teams polls များကို Adaptive Cards အဖြစ် render လုပ်ပြီး `~/.openclaw/msteams-polls.json` တွင် မဲများကို မှတ်တမ်းတင်ရန် gateway သည် အွန်လိုင်းနေဆဲ ဖြစ်ရပါမည်။

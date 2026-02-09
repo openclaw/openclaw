@@ -1,17 +1,10 @@
 ---
 summary: "Настройка Moonshot K2 vs Kimi Coding (отдельные провайдеры и ключи)"
 read_when:
-  - "Вам нужна настройка Moonshot K2 (Moonshot Open Platform) vs Kimi Coding"
-  - "Вам нужно понять различия отдельных эндпоинтов, ключей и ссылок на модели"
-  - "Вам нужен конфиг для копирования/вставки для любого провайдера"
+  - Вам нужна настройка Moonshot K2 (Moonshot Open Platform) vs Kimi Coding
+  - Вам нужно понять различия отдельных эндпоинтов, ключей и ссылок на модели
+  - Вам нужен конфиг для копирования/вставки для любого провайдера
 title: "Moonshot AI"
-x-i18n:
-  source_path: providers/moonshot.md
-  source_hash: 9e4a6192faa21b88
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:50Z
 ---
 
 # Moonshot AI (Kimi)

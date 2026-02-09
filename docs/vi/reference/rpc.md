@@ -4,18 +4,11 @@ read_when:
   - Thêm hoặc thay đổi tích hợp CLI bên ngoài
   - Gỡ lỗi adapter RPC (signal-cli, imsg)
 title: "Adapter RPC"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:01Z
 ---
 
 # Adapter RPC
 
-OpenClaw tích hợp các CLI bên ngoài thông qua JSON-RPC. Hiện có hai mẫu được sử dụng.
+28. **Hết hạn khi rảnh** (`session.reset.idleMinutes` hoặc legacy `session.idleMinutes`) tạo `sessionId` mới khi có tin nhắn đến sau cửa sổ rảnh. Hiện nay có hai mẫu được sử dụng.
 
 ## Mẫu A: Daemon HTTP (signal-cli)
 

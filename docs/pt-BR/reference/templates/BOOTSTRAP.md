@@ -2,13 +2,6 @@
 summary: "Ritual de primeira execução para novos agentes"
 read_when:
   - Inicializando um workspace manualmente
-x-i18n:
-  source_path: reference/templates/BOOTSTRAP.md
-  source_hash: 1fb8bc07eba3967f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:51Z
 ---
 
 # BOOTSTRAP.md - Hello, World

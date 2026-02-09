@@ -4,13 +4,6 @@ read_when:
   - Wdrażanie nowej instancji asystenta
   - Przegląd implikacji bezpieczeństwa i uprawnień
 title: "Konfiguracja osobistego asystenta"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:50Z
 ---
 
 # Budowanie osobistego asystenta z OpenClaw

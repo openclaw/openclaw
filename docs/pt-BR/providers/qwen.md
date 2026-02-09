@@ -4,13 +4,6 @@ read_when:
   - Você quer usar o Qwen com o OpenClaw
   - Você quer acesso OAuth gratuito ao Qwen Coder
 title: "Qwen"
-x-i18n:
-  source_path: providers/qwen.md
-  source_hash: 88b88e224e2fecbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:41Z
 ---
 
 # Qwen

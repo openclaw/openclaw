@@ -1,22 +1,15 @@
 ---
-summary: 「個人助理設定的預設 OpenClaw 代理程式指示與 Skills 名冊」
+summary: "個人助理設定的預設 OpenClaw 代理程式指示與 Skills 名冊"
 read_when:
   - 開始新的 OpenClaw 代理程式工作階段
   - 啟用或稽核預設 Skills
-x-i18n:
-  source_path: reference/AGENTS.default.md
-  source_hash: 6cbde95d29e80cbb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:14Z
 ---
 
 # AGENTS.md — OpenClaw 個人助理（預設）
 
 ## 首次執行（建議）
 
-OpenClaw 會為代理程式使用專用的工作區目錄。預設值：`~/.openclaw/workspace`（可透過 `agents.defaults.workspace` 設定）。
+將預設工作區範本複製到工作區： OpenClaw 會為代理程式使用專用的工作區目錄。預設值：`~/.openclaw/workspace`（可透過 `agents.defaults.workspace` 設定）。
 
 1. 建立工作區（若尚未存在）：
 
@@ -24,7 +17,7 @@ OpenClaw 會為代理程式使用專用的工作區目錄。預設值：`~/.open
 mkdir -p ~/.openclaw/workspace
 ```
 
-2. 將預設的工作區範本複製到工作區中：
+2. 將預設工作區範本複製到工作區：
 
 ```bash
 cp docs/reference/templates/AGENTS.md ~/.openclaw/workspace/AGENTS.md
@@ -59,9 +52,9 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## 靈魂（必要）
 
-- `SOUL.md` 定義身分、語氣與界線。請保持最新。
+- `SOUL.md` defines identity, tone, and boundaries. 每個工作階段你都是全新實例；連續性存在於這些檔案中。
 - 如果你變更了 `SOUL.md`，請告知使用者。
-- 每個工作階段你都是全新的實例；連續性存在於這些檔案中。
+- 記錄：決策、偏好、限制、未解事項。
 
 ## 共用空間（建議）
 
@@ -73,7 +66,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - 每日記錄：`memory/YYYY-MM-DD.md`（需要時建立 `memory/`）。
 - 長期記憶：`memory.md`，用於持久的事實、偏好與決策。
 - 工作階段開始時，讀取今天＋昨天＋（若存在）`memory.md`。
-- 擷取內容：決策、偏好、限制、未完成事項。
+- Capture: decisions, preferences, constraints, open loops.
 - 除非明確要求，否則避免記錄機密。
 
 ## 工具與 Skills
@@ -108,7 +101,7 @@ git commit -m "Add Clawd workspace"
 - **eightctl** — 從終端機控制你的睡眠。
 - **imsg** — 傳送、讀取、串流 iMessage 與 SMS。
 - **wacli** — WhatsApp CLI：同步、搜尋、傳送。
-- **discord** — Discord 操作：反應、貼圖、投票。請使用 `user:<id>` 或 `channel:<id>` 目標（單純的數字 ID 具有歧義）。
+- **discord** — Discord actions: react, stickers, polls. 保持心跳啟用，讓助理能排程提醒、監控收件匣並觸發相機擷取。
 - **gog** — Google Suite CLI：Gmail、Calendar、Drive、Contacts。
 - **spotify-player** — 終端機版 Spotify 用戶端，用於搜尋／佇列／控制播放。
 - **sag** — ElevenLabs 語音，具 mac 風格的 say 使用體驗；預設串流到喇叭。
@@ -123,8 +116,8 @@ git commit -m "Add Clawd workspace"
 
 - 腳本撰寫請優先使用 `openclaw` CLI；mac App 負責處理權限。
 - 從 Skills 分頁執行安裝；若二進位檔已存在，按鈕會被隱藏。
-- 保持心跳機制啟用，讓助理能排程提醒、監控收件匣並觸發攝影機擷取。
-- Canvas UI 以全螢幕執行並具備原生覆蓋層。避免將關鍵控制項放在左上／右上／底部邊緣；請在版面配置中加入明確的邊距，且不要依賴安全區域插圖。
+- Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
+- Canvas UI runs full-screen with native overlays. 發佈前驗證中繼資料
 - 需要以瀏覽器驅動的驗證時，請使用 `openclaw browser`（分頁／狀態／螢幕截圖）並搭配 OpenClaw 管理的 Chrome 設定檔。
 - 進行 DOM 檢視時，請使用 `openclaw browser eval|query|dom|snapshot`（需要機器輸出時使用 `--json`／`--out`）。
 - 互動操作請使用 `openclaw browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run`（點擊／輸入需要快照參考；CSS 選擇器請使用 `evaluate`）。

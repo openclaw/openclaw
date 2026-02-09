@@ -3,13 +3,6 @@ summary: "Песочница и ограничения инструментов 
 title: Песочница и инструменты для нескольких агентов
 read_when: "Когда требуется песочница для каждого агента или политики разрешения/запрета инструментов для каждого агента в многоагентном шлюзе."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:56:13Z
 ---
 
 # Конфигурация песочницы и инструментов для нескольких агентов
@@ -339,7 +332,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ---
 
-## Распространённая ошибка: «non-main»
+## Распространенный Питпад: "Неосновный"
 
 `agents.defaults.sandbox.mode: "non-main"` основан на `session.mainKey` (по умолчанию `"main"`),
 а не на идентификаторе агента. Сеансы групп/каналов всегда получают собственные ключи, поэтому

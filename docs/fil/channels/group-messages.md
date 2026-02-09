@@ -3,30 +3,23 @@ summary: "Pag-uugali at config para sa paghawak ng WhatsApp group messages (ang 
 read_when:
   - Kapag binabago ang mga patakaran ng group message o mga mention
 title: "Group Messages"
-x-i18n:
-  source_path: channels/group-messages.md
-  source_hash: 181a72f12f5021af
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:26Z
 ---
 
 # Group messages (WhatsApp web channel)
 
 Layunin: hayaan si Clawd na manatili sa mga WhatsApp group, magising lang kapag na-ping, at panatilihing hiwalay ang thread na iyon mula sa personal na DM session.
 
-Tandaan: ginagamit na ngayon ang `agents.list[].groupChat.mentionPatterns` ng Telegram/Discord/Slack/iMessage; ang dokumentong ito ay nakatuon sa WhatsApp-specific na pag-uugali. Para sa mga multi-agent setup, itakda ang `agents.list[].groupChat.mentionPatterns` kada agent (o gamitin ang `messages.groupChat.mentionPatterns` bilang global fallback).
+**Draft streaming:** opsyonal na `channels.telegram.streamMode` ay gumagamit ng `sendMessageDraft` sa mga private topic chat (Bot API 9.3+). Ito ay hiwalay sa channel block streaming.
 
 ## Ano ang naipatupad (2025-12-03)
 
-- Mga activation mode: `mention` (default) o `always`. Ang `mention` ay nangangailangan ng ping (tunay na WhatsApp @-mentions sa pamamagitan ng `mentionedJids`, mga regex pattern, o ang E.164 ng bot kahit saan sa teksto). Ang `always` ay gumigising sa agent sa bawat mensahe ngunit dapat lang itong sumagot kapag may maidaragdag na makabuluhang halaga; kung wala, ibinabalik nito ang silent token na `NO_REPLY`. Maaaring itakda ang mga default sa config (`channels.whatsapp.groups`) at i-override kada grupo sa pamamagitan ng `/activation`. Kapag nakatakda ang `channels.whatsapp.groups`, kumikilos din ito bilang group allowlist (isama ang `"*"` para payagan ang lahat).
-- Group policy: kinokontrol ng `channels.whatsapp.groupPolicy` kung tinatanggap ang mga group message (`open|disabled|allowlist`). Ginagamit ng `allowlist` ang `channels.whatsapp.groupAllowFrom` (fallback: tahasang `channels.whatsapp.allowFrom`). Ang default ay `allowlist` (naka-block hanggang magdagdag ka ng mga sender).
-- Per-group sessions: ang mga session key ay mukhang `agent:<agentId>:whatsapp:group:<jid>` kaya ang mga command gaya ng `/verbose on` o `/think high` (ipinadala bilang standalone na mga mensahe) ay naka-scope sa grupong iyon; hindi naaapektuhan ang personal na DM state. Nilalaktawan ang mga heartbeat para sa mga group thread.
-- Context injection: ang **pending-only** na mga group message (default na 50) na _hindi_ nag-trigger ng run ay ipinaprefix sa ilalim ng `[Chat messages since your last reply - for context]`, kasama ang linya na nag-trigger sa ilalim ng `[Current message - respond to this]`. Ang mga mensaheng nasa session na ay hindi muling ini-inject.
+- Activation modes: `mention` (default) or `always`. Para sa mga multi-agent setup, itakda ang `agents.list[].groupChat.mentionPatterns` bawat agent (o gamitin ang `messages.groupChat.mentionPatterns` bilang global fallback). Mga activation mode: `mention` (default) o `always`. Ang `mention` ay nangangailangan ng ping (tunay na WhatsApp @-mentions sa pamamagitan ng `mentionedJids`, mga regex pattern, o ang E.164 ng bot kahit saan sa teksto). Ang `always` ay ginigising ang agent sa bawat mensahe ngunit dapat lamang itong sumagot kapag maaari itong magbigay ng makabuluhang halaga; kung hindi, ibinabalik nito ang silent token na `NO_REPLY`.
+- Maaaring itakda ang mga default sa config (`channels.whatsapp.groups`) at i-override bawat group sa pamamagitan ng `/activation`. `allowlist` uses `channels.whatsapp.groupAllowFrom` (fallback: explicit `channels.whatsapp.allowFrom`). Patakaran sa grupo: Kinokontrol ng `channels.whatsapp.groupPolicy` kung tatanggapin ang mga mensahe ng grupo (`open|disabled|allowlist`).
+- Per-group sessions: session keys look like `agent:<agentId>:whatsapp:group:<jid>` so commands such as `/verbose on` or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched. 2. Nilalaktawan ang mga heartbeat para sa mga group thread.
+- Context injection: **pending-only** group messages (default 50) that _did not_ trigger a run are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`. Messages already in the session are not re-injected.
 - Sender surfacing: ang bawat batch ng grupo ay nagtatapos na ngayon sa `[from: Sender Name (+E164)]` para malaman ni Pi kung sino ang nagsasalita.
 - Ephemeral/view-once: binubuksan namin ang mga ito bago kunin ang teksto/mga mention, kaya ang mga ping sa loob ng mga ito ay nagti-trigger pa rin.
-- Group system prompt: sa unang turn ng isang group session (at tuwing binabago ng `/activation` ang mode) nag-iinject kami ng maikling blurb sa system prompt tulad ng `You are replying inside the WhatsApp group "<subject>". Group members: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.`. Kapag walang metadata, sinasabi pa rin namin sa agent na ito ay isang group chat.
+- Group system prompt: on the first turn of a group session (and whenever `/activation` changes the mode) we inject a short blurb into the system prompt like `You are replying inside the WhatsApp group "<subject>". 6. Mga miyembro ng grupo: Alice (+44...), Bob (+43...), … Activation: trigger-only … Address the specific sender noted in the message context.` If metadata isn’t available we still tell the agent it’s a group chat.
 
 ## Halimbawa ng config (WhatsApp)
 
@@ -67,14 +60,14 @@ Gamitin ang group chat command:
 - `/activation mention`
 - `/activation always`
 
-Ang owner number lang (mula sa `channels.whatsapp.allowFrom`, o ang sariling E.164 ng bot kapag hindi nakatakda) ang puwedeng magbago nito. Ipadala ang `/status` bilang standalone na mensahe sa grupo para makita ang kasalukuyang activation mode.
+9. Ang owner number lamang (mula sa `channels.whatsapp.allowFrom`, o ang sariling E.164 ng bot kapag hindi nakatakda) ang maaaring magbago nito. Ipadala ang `/status` bilang hiwalay na mensahe sa grupo upang makita ang kasalukuyang activation mode.
 
 ## Paano gamitin
 
 1. Idagdag ang iyong WhatsApp account (ang nagpapatakbo ng OpenClaw) sa grupo.
-2. Sabihin ang `@openclaw …` (o isama ang numero). Tanging ang mga allowlisted sender lang ang makakapag-trigger nito maliban kung itinakda mo ang `groupPolicy: "open"`.
+2. 11. Sabihin ang `@openclaw …` (o isama ang numero). Tanging mga sender na nasa allowlist ang puwedeng mag-trigger nito maliban kung itatakda mo ang `groupPolicy: "open"`.
 3. Isasama ng agent prompt ang kamakailang group context kasama ang trailing na `[from: …]` marker para ma-address ang tamang tao.
-4. Ang mga session-level directive (`/verbose on`, `/think high`, `/new` o `/reset`, `/compact`) ay naaangkop lamang sa session ng grupong iyon; ipadala ang mga ito bilang standalone na mensahe para marehistro. Mananatiling independent ang iyong personal na DM session.
+4. 13. Ang mga session-level directive (`/verbose on`, `/think high`, `/new` o `/reset`, `/compact`) ay naaangkop lang sa session ng grupong iyon; ipadala ang mga ito bilang standalone na mensahe para marehistro. Nanatiling hiwalay at independent ang iyong personal na DM session.
 
 ## Pagsubok / beripikasyon
 

@@ -1,15 +1,8 @@
 ---
 summary: "روابط مُنتقاة لأكثر مستندات OpenClaw استخدامًا."
 read_when:
-  - "تريد وصولًا سريعًا إلى صفحات المستندات الأساسية"
+  - تريد وصولًا سريعًا إلى صفحات المستندات الأساسية
 title: "دليل المستندات"
-x-i18n:
-  source_path: start/docs-directory.md
-  source_hash: 44d94b7a654801e9
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:41Z
 ---
 
 <Note>
@@ -26,7 +19,7 @@ x-i18n:
 - [أوامر الشرطة المائلة](/tools/slash-commands)
 - [توجيه متعدد الوكلاء](/concepts/multi-agent)
 - [التحديث والتراجع](/install/updating)
-- [الإقران (الرسائل الخاصة والعُقد)](/channels/pairing)
+- [الاقتران (DM and العقد)](/channels/pairing)
 - [وضع Nix](/install/nix)
 - [إعداد مساعد OpenClaw](/start/openclaw)
 - [Skills](/tools/skills)
@@ -39,7 +32,7 @@ x-i18n:
 - [الاكتشاف ووسائط النقل](/gateway/discovery)
 - [الوصول عن بُعد](/gateway/remote)
 
-## المزوّدون وتجربة المستخدم
+## المزودين و UX
 
 - [WebChat](/web/webchat)
 - [Control UI (المتصفح)](/web/control-ui)

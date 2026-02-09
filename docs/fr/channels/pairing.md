@@ -1,17 +1,10 @@
 ---
-summary: "Vue d’ensemble du pairing : approuver qui peut vous envoyer des messages privés et quels nœuds peuvent rejoindre"
+summary: "Aperçu de l'appairage : approuve qui peut vous DM + quels nœuds peuvent rejoindre"
 read_when:
-  - Configuration du contrôle d’accès aux messages privés
+  - Mise en place du contrôle d'accès aux DM
   - Pairing d’un nouveau nœud iOS/Android
   - Examen de la posture de sécurité d’OpenClaw
 title: "Pairing"
-x-i18n:
-  source_path: channels/pairing.md
-  source_hash: cc6ce9c71db6d96d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:15:37Z
 ---
 
 # Pairing
@@ -24,7 +17,7 @@ Il est utilisé à deux endroits :
 
 Contexte de sécurité : [Security](/gateway/security)
 
-## 1) Pairing des messages privés (accès entrant au chat)
+## 1. Pairing des messages privés (accès entrant au chat)
 
 Lorsqu’un canal est configuré avec la politique de DM `pairing`, les expéditeurs inconnus reçoivent un code court et leur message n’est **pas traité** tant que vous n’avez pas approuvé.
 
@@ -54,7 +47,7 @@ Stocké sous `~/.openclaw/credentials/` :
 
 Traitez ces éléments comme sensibles (ils conditionnent l’accès à votre assistant).
 
-## 2) Pairing des appareils nœuds (iOS/Android/macOS/nœuds headless)
+## 2. Pairing des appareils nœuds (iOS/Android/macOS/nœuds headless)
 
 Les nœuds se connectent à la Gateway (passerelle) en tant qu’**appareils** avec `role: node`. La Gateway
 crée une demande de pairing d’appareil qui doit être approuvée.

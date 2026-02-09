@@ -4,20 +4,13 @@ read_when:
   - Opsætning af en ny maskine
   - Du vil have “latest + greatest” uden at ødelægge din personlige opsætning
 title: "Opsætning"
-x-i18n:
-  source_path: start/setup.md
-  source_hash: 6620daddff099dc0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:45Z
 ---
 
 # Opsætning
 
 <Note>
-Hvis du sætter op for første gang, så start med [Kom godt i gang](/start/getting-started).
-For detaljer om opsætningsguiden, se [Onboarding Wizard](/start/wizard).
+Hvis du opsætter for første gang, så start med [Kom i gang](/start/getting-started).
+For guiden detaljer, se [Onboarding Wizard](/start/wizard).
 </Note>
 
 Sidst opdateret: 2026-01-01
@@ -88,7 +81,7 @@ Hvis onboarding ikke er tilgængelig i dit build:
 
 Mål: arbejd på TypeScript-Gateway, få hot reload, og behold macOS-appens UI tilsluttet.
 
-### 0) (Valgfrit) Kør også macOS-appen fra kilde
+### 0. (Valgfrit) Kør også macOS-appen fra kilde
 
 Hvis du også vil have macOS-appen på bleeding edge:
 
@@ -96,7 +89,7 @@ Hvis du også vil have macOS-appen på bleeding edge:
 ./scripts/restart-mac.sh
 ```
 
-### 1) Start dev-Gateway
+### 1. Start dev-Gateway
 
 ```bash
 pnpm install
@@ -105,14 +98,14 @@ pnpm gateway:watch
 
 `gateway:watch` kører gatewayen i watch-tilstand og genindlæser ved TypeScript-ændringer.
 
-### 2) Peg macOS-appen på din kørende Gateway
+### 2. Peg macOS-appen på din kørende Gateway
 
 I **OpenClaw.app**:
 
 - Connection Mode: **Local**
   Appen vil forbinde til den kørende gateway på den konfigurerede port.
 
-### 3) Verificér
+### 3. Verificér
 
 - Gateway-status i appen bør vise **“Using existing gateway …”**
 - Eller via CLI:
@@ -149,16 +142,16 @@ Brug dette ved fejlfinding af auth eller når du beslutter, hvad der skal sikker
 
 ## Linux (systemd user service)
 
-Linux-installationer bruger en systemd **user**-service. Som standard stopper systemd bruger-
-services ved logout/idle, hvilket dræber Gateway. Onboarding forsøger at aktivere
-lingering for dig (kan bede om sudo). Hvis det stadig er slået fra, så kør:
+Linux installerer bruge en systemd \*\* bruger\*\* tjeneste. Som standard stopper systemd bruger
+tjenester på logout/idle, som dræber Gateway. Onboarding forsøger at aktivere
+dvæle for dig (kan bede om sudo). Hvis det stadig er slukket, køre:
 
 ```bash
 sudo loginctl enable-linger $USER
 ```
 
-Til always-on eller multi-user-servere bør du overveje en **system**-service i stedet for en
-user-service (ingen lingering nødvendig). Se [Gateway runbook](/gateway) for systemd-noterne.
+For always-on eller multi-user servere, overvej en **system** service i stedet for en
+brugerservice (ingen dingering nødvendig). Se [Gateway runbook](/gateway) for systemd noter.
 
 ## Relaterede dokumenter
 

@@ -6,13 +6,6 @@ read_when:
   - Chcesz pełną kontrolę nad trwałością danych, binariami i zachowaniem przy restartach
   - Uruchamiasz OpenClaw w Dockerze na Hetznerze lub u podobnego dostawcy
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:28Z
 ---
 
 # OpenClaw na Hetzner (Docker, przewodnik dla produkcyjnego VPS)
@@ -71,7 +64,7 @@ Dla ogólnego przepływu Dockera zobacz [Docker](/install/docker).
 
 ---
 
-## 1) Utworzenie VPS
+## 1. Utworzenie VPS
 
 Utwórz VPS z Ubuntu lub Debianem w Hetznerze.
 
@@ -86,7 +79,7 @@ Nie traktuj go jako infrastruktury jednorazowej.
 
 ---
 
-## 2) Instalacja Dockera (na VPS)
+## 2. Instalacja Dockera (na VPS)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) Klonowanie repozytorium OpenClaw
+## 3. Klonowanie repozytorium OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,7 +107,7 @@ Ten przewodnik zakłada, że zbudujesz własny obraz, aby zagwarantować trwało
 
 ---
 
-## 4) Utworzenie trwałych katalogów na hoście
+## 4. Utworzenie trwałych katalogów na hoście
 
 Kontenery Dockera są efemeryczne.
 Cały długotrwały stan musi znajdować się na hoście.
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Konfiguracja zmiennych środowiskowych
+## 5. Konfiguracja zmiennych środowiskowych
 
 Utwórz `.env` w katalogu głównym repozytorium.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Konfiguracja Docker Compose
+## 6. Konfiguracja Docker Compose
 
 Utwórz lub zaktualizuj `docker-compose.yml`.
 
@@ -204,7 +197,7 @@ services:
 
 ---
 
-## 7) Wbudowanie wymaganych binariów do obrazu (krytyczne)
+## 7. Wbudowanie wymaganych binariów do obrazu (krytyczne)
 
 Instalowanie binariów wewnątrz działającego kontenera to pułapka.
 Wszystko zainstalowane w czasie działania zostanie utracone po restarcie.
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Budowanie i uruchomienie
+## 8. Budowanie i uruchomienie
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Oczekiwane wyjście:
 
 ---
 
-## 9) Weryfikacja Gateway
+## 9. Weryfikacja Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -323,15 +316,15 @@ Wklej token Gateway.
 OpenClaw działa w Dockerze, ale Docker nie jest źródłem prawdy.
 Cały długotrwały stan musi przetrwać restarty, przebudowy i rebooty.
 
-| Komponent                       | Lokalizacja                       | Mechanizm trwałości   | Uwagi                                |
-| ------------------------------- | --------------------------------- | --------------------- | ------------------------------------ |
-| Konfiguracja Gateway            | `/home/node/.openclaw/`           | Montaż wolumenu hosta | Zawiera `openclaw.json`, tokeny      |
-| Profile uwierzytelniania modeli | `/home/node/.openclaw/`           | Montaż wolumenu hosta | Tokeny OAuth, klucze API             |
-| Konfiguracje Skills             | `/home/node/.openclaw/skills/`    | Montaż wolumenu hosta | Stan na poziomie Skills              |
-| Obszar roboczy agenta           | `/home/node/.openclaw/workspace/` | Montaż wolumenu hosta | Kod i artefakty agenta               |
-| Sesja WhatsApp                  | `/home/node/.openclaw/`           | Montaż wolumenu hosta | Zachowuje logowanie QR               |
-| Pęk kluczy Gmail                | `/home/node/.openclaw/`           | Wolumen hosta + hasło | Wymaga `GOG_KEYRING_PASSWORD`        |
-| Zewnętrzne binaria              | `/usr/local/bin/`                 | Obraz Dockera         | Muszą być wbudowane na etapie builda |
-| Środowisko Node                 | System plików kontenera           | Obraz Dockera         | Odbudowywane przy każdym buildzie    |
-| Pakiety systemowe               | System plików kontenera           | Obraz Dockera         | Nie instalować w czasie działania    |
-| Kontener Dockera                | Efemeryczny                       | Restartowalny         | Bezpieczny do zniszczenia            |
+| Komponent                       | Lokalizacja                       | Mechanizm trwałości   | Uwagi                              |
+| ------------------------------- | --------------------------------- | --------------------- | ---------------------------------- |
+| Konfiguracja Gateway            | `/home/node/.openclaw/`           | Montaż wolumenu hosta | Zawiera `openclaw.json`, tokeny    |
+| Profile uwierzytelniania modeli | `/home/node/.openclaw/`           | Montaż wolumenu hosta | Tokeny OAuth, klucze API           |
+| Konfiguracje Skills             | `/home/node/.openclaw/skills/`    | Montaż wolumenu hosta | Stan na poziomie Skills            |
+| Obszar roboczy agenta           | `/home/node/.openclaw/workspace/` | Montaż wolumenu hosta | Kod i artefakty agenta             |
+| Sesja WhatsApp                  | `/home/node/.openclaw/`           | Montaż wolumenu hosta | Zachowuje logowanie QR             |
+| Pęk kluczy Gmail                | `/home/node/.openclaw/`           | Wolumen hosta + hasło | Wymaga `GOG_KEYRING_PASSWORD`      |
+| Zewnętrzne binaria              | `/usr/local/bin/`                 | Obraz Dockera         | Musi być upieczony w czasie budowy |
+| Runtime Node                    | System plików kontenera           | Obraz Dockera         | Odbudowywane przy każdym buildzie  |
+| Pakiety systemowe               | System plików kontenera           | Obraz Dockera         | Nie instalować w czasie działania  |
+| Kontener Dockera                | Efemeryczny                       | Restartowalny         | Bezpieczny do zniszczenia          |

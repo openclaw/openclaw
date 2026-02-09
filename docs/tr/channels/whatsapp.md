@@ -3,13 +3,6 @@ summary: "WhatsApp (web kanalı) entegrasyonu: giriş, gelen kutusu, yanıtlar, 
 read_when:
   - WhatsApp/web kanalı davranışı veya gelen kutusu yönlendirmesi üzerinde çalışırken
 title: "WhatsApp"
-x-i18n:
-  source_path: channels/whatsapp.md
-  source_hash: 9f7acdf2c71819ae
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:38Z
 ---
 
 # WhatsApp (web kanalı)
@@ -46,7 +39,7 @@ Asgari yapılandırma:
 
 Varsayılan olarak, WhatsApp `/config set|unset` tarafından tetiklenen yapılandırma güncellemelerini yazmaya izinlidir (`commands.config: true` gerektirir).
 
-Devre dışı bırakmak için:
+Şununla devre dışı bırakın:
 
 ```json5
 {
@@ -160,7 +153,7 @@ Davranış:
 - Kendi kendine sohbet modu (allowFrom numaranızı içerir) otomatik okundu bildirimlerini önler ve mention JID’lerini yok sayar.
 - Kendi kendine olmayan DM’ler için okundu bildirimleri gönderilir.
 
-## Okundu bildirimleri
+## Read receipts
 
 Varsayılan olarak gateway, kabul edildikten sonra gelen WhatsApp mesajlarını okundu (mavi tikler) olarak işaretler.
 
@@ -211,6 +204,7 @@ Sihirbaz bunu **izin listesi/sahip** ayarlamak için kullanır; böylece kendi D
 ## Mesaj normalizasyonu (modelin gördüğü)
 
 - `Body` mevcut mesaj gövdesidir (zarf ile).
+
 - Alıntılanan yanıt bağlamı **her zaman eklenir**:
 
   ```
@@ -223,6 +217,7 @@ Sihirbaz bunu **izin listesi/sahip** ayarlamak için kullanır; böylece kendi D
   - `ReplyToId` = stanzaId
   - `ReplyToBody` = alıntılanan gövde veya medya yer tutucusu
   - `ReplyToSender` = biliniyorsa E.164
+
 - Yalnızca medyadan oluşan gelen mesajlar yer tutucular kullanır:
   - `<media:image|video|audio|document|sticker>`
 
@@ -389,7 +384,7 @@ WhatsApp sesi **sesli not** (PTT balonu) olarak gönderir.
 - `web.heartbeatSeconds`
 - `web.reconnect.*`
 
-## Günlükler + sorun giderme
+## Logs + troubleshooting
 
 - Alt sistemler: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Günlük dosyası: `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (yapılandırılabilir).

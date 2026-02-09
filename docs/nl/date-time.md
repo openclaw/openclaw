@@ -4,13 +4,6 @@ read_when:
   - Je wijzigt hoe tijdstempels aan het model of gebruikers worden getoond
   - Je debugt tijdopmaak in berichten of uitvoer van de systeemprompt
 title: "Datum en tijd"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:20Z
 ---
 
 # Datum & Tijd

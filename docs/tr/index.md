@@ -3,13 +3,6 @@ summary: "OpenClaw, herhangi bir işletim sisteminde çalışan AI ajanları iç
 read_when:
   - OpenClaw’ı yeni başlayanlara tanıtma
 title: "OpenClaw"
-x-i18n:
-  source_path: index.md
-  source_hash: 22725fdce9eafb33
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:29Z
 ---
 
 # OpenClaw 🦞
@@ -31,19 +24,18 @@ x-i18n:
 
 > _"EXFOLIATE! EXFOLIATE!"_ — Muhtemelen bir uzay ıstakozu
 
-<p align="center">
-  <strong>WhatsApp, Telegram, Discord, iMessage ve daha fazlası için AI ajanlarına yönelik herhangi bir işletim sisteminde çalışan gateway.</strong><br />
+<p align="center"><strong>WhatsApp, Telegram, Discord, iMessage ve daha fazlası için AI ajanlarına yönelik herhangi bir işletim sisteminde çalışan gateway.</strong><br />
   Bir mesaj gönderin, cebinizden bir ajan yanıtı alın. Eklentiler Mattermost ve daha fazlasını ekler.
 </p>
 
 <Columns>
-  <Card title="Başlarken" href="/start/getting-started" icon="rocket">
+  <Card title="Get Started" href="/start/getting-started" icon="rocket">
     OpenClaw’ı yükleyin ve Gateway’i dakikalar içinde ayağa kaldırın.
   </Card>
-  <Card title="Sihirbazı Çalıştırın" href="/start/wizard" icon="sparkles">
+  <Card title="Run the Wizard" href="/start/wizard" icon="sparkles">
     `openclaw onboard` ve eşleştirme akışlarıyla yönlendirmeli kurulum.
   </Card>
-  <Card title="Kontrol UI’ını Açın" href="/web/control-ui" icon="layout-dashboard">
+  <Card title="Open the Control UI" href="/web/control-ui" icon="layout-dashboard">
     Sohbet, yapılandırma ve oturumlar için tarayıcı panosunu başlatın.
   </Card>
 </Columns>
@@ -77,25 +69,25 @@ flowchart LR
 
 Gateway, oturumlar, yönlendirme ve kanal bağlantıları için tek doğruluk kaynağıdır.
 
-## Temel yetenekler
+## Neler Kurulur
 
 <Columns>
-  <Card title="Çok kanallı gateway" icon="network">
+  <Card title="Multi-channel gateway" icon="network">
     Tek bir Gateway süreciyle WhatsApp, Telegram, Discord ve iMessage.
   </Card>
-  <Card title="Eklenti kanalları" icon="plug">
+  <Card title="Plugin channels" icon="plug">
     Uzantı paketleriyle Mattermost ve daha fazlasını ekleyin.
   </Card>
-  <Card title="Çok ajanlı yönlendirme" icon="route">
+  <Card title="Multi-agent routing" icon="route">
     Ajan, çalışma alanı veya gönderen başına yalıtılmış oturumlar.
   </Card>
-  <Card title="Medya desteği" icon="image">
+  <Card title="Media support" icon="image">
     Görseller, ses ve belgeler gönderin ve alın.
   </Card>
-  <Card title="Web Kontrol UI’ı" icon="monitor">
+  <Card title="Web Control UI" icon="monitor">
     Sohbet, yapılandırma, oturumlar ve düğümler için tarayıcı panosu.
   </Card>
-  <Card title="Mobil düğümler" icon="smartphone">
+  <Card title="Mobile nodes" icon="smartphone">
     Canvas desteğiyle iOS ve Android düğümlerini eşleştirin.
   </Card>
 </Columns>
@@ -103,17 +95,17 @@ Gateway, oturumlar, yönlendirme ve kanal bağlantıları için tek doğruluk ka
 ## Hızlı başlangıç
 
 <Steps>
-  <Step title="OpenClaw’ı Yükleyin">
+  <Step title="Install OpenClaw">
     ```bash
     npm install -g openclaw@latest
     ```
   </Step>
-  <Step title="Hizmeti devreye alın ve yükleyin">
+  <Step title="Onboard and install the service">
     ```bash
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="WhatsApp’ı eşleştirin ve Gateway’i başlatın">
+  <Step title="Pair WhatsApp and start the Gateway">
     ```bash
     openclaw channels login
     openclaw gateway --port 18789
@@ -158,22 +150,22 @@ Yapılandırma `~/.openclaw/openclaw.json` konumunda bulunur.
 ## Buradan başlayın
 
 <Columns>
-  <Card title="Dokümantasyon merkezleri" href="/start/hubs" icon="book-open">
+  <Card title="Docs hubs" href="/start/hubs" icon="book-open">
     Kullanım senaryosuna göre düzenlenmiş tüm dokümanlar ve kılavuzlar.
   </Card>
-  <Card title="Yapılandırma" href="/gateway/configuration" icon="settings">
+  <Card title="Configuration" href="/gateway/configuration" icon="settings">
     Temel Gateway ayarları, belirteçler ve sağlayıcı yapılandırması.
   </Card>
-  <Card title="Uzaktan erişim" href="/gateway/remote" icon="globe">
+  <Card title="Remote access" href="/gateway/remote" icon="globe">
     SSH ve tailnet erişim kalıpları.
   </Card>
-  <Card title="Kanallar" href="/channels/telegram" icon="message-square">
+  <Card title="Channels" href="/channels/telegram" icon="message-square">
     WhatsApp, Telegram, Discord ve daha fazlası için kanala özel kurulum.
   </Card>
-  <Card title="Düğümler" href="/nodes" icon="smartphone">
+  <Card title="Nodes" href="/nodes" icon="smartphone">
     Eşleştirme ve Canvas ile iOS ve Android düğümleri.
   </Card>
-  <Card title="Yardım" href="/help" icon="life-buoy">
+  <Card title="Help" href="/help" icon="life-buoy">
     Yaygın çözümler ve sorun giderme için giriş noktası.
   </Card>
 </Columns>
@@ -181,19 +173,19 @@ Yapılandırma `~/.openclaw/openclaw.json` konumunda bulunur.
 ## Daha fazlasını öğrenin
 
 <Columns>
-  <Card title="Tam özellik listesi" href="/concepts/features" icon="list">
+  <Card title="Full feature list" href="/concepts/features" icon="list">
     Kapsamlı kanal, yönlendirme ve medya yetenekleri.
   </Card>
-  <Card title="Çok ajanlı yönlendirme" href="/concepts/multi-agent" icon="route">
+  <Card title="Multi-agent routing" href="/concepts/multi-agent" icon="route">
     Çalışma alanı yalıtımı ve ajan başına oturumlar.
   </Card>
-  <Card title="Güvenlik" href="/gateway/security" icon="shield">
+  <Card title="Security" href="/gateway/security" icon="shield">
     Belirteçler, izin listeleri ve güvenli kullanım denetimleri.
   </Card>
-  <Card title="Sorun Giderme" href="/gateway/troubleshooting" icon="wrench">
+  <Card title="Troubleshooting" href="/gateway/troubleshooting" icon="wrench">
     Gateway tanılamaları ve yaygın hatalar.
   </Card>
-  <Card title="Hakkında ve katkılar" href="/reference/credits" icon="info">
+  <Card title="About and credits" href="/reference/credits" icon="info">
     Projenin kökenleri, katkıda bulunanlar ve lisans.
   </Card>
 </Columns>

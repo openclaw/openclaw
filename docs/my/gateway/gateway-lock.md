@@ -4,13 +4,6 @@ read_when:
   - Gateway လုပ်ငန်းစဉ်ကို လည်ပတ်နေစဉ် သို့မဟုတ် debug လုပ်နေစဉ်
   - တစ်ခုတည်းသာ လည်ပတ်နိုင်ရေးကို စစ်ဆေးလေ့လာနေစဉ်
 title: "Gateway Lock"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:16Z
 ---
 
 # Gateway lock

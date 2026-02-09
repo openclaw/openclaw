@@ -4,13 +4,6 @@ read_when:
   - Vous devez vous connecter à des sites pour l’automatisation du navigateur
   - Vous souhaitez publier des mises à jour sur X/Twitter
 title: "Connexion au navigateur"
-x-i18n:
-  source_path: tools/browser-login.md
-  source_hash: 8ceea2d5258836e3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:54Z
 ---
 
 # Connexion au navigateur + publication sur X/Twitter
@@ -41,8 +34,7 @@ Si vous avez plusieurs profils, passez `--browser-profile <name>` (la valeur par
 
 ## X/Twitter : flux recommandé
 
-- **Lecture/recherche/fils :** utilisez le Skill CLI **bird** (sans navigateur, stable).
-  - Dépôt : https://github.com/steipete/bird
+- **Lire/recherche/threads:** utilise le navigateur **hôte** (connexion manuelle).
 - **Publication de mises à jour :** utilisez le navigateur **hôte** (connexion manuelle).
 
 ## Sandboxing + accès au navigateur hôte

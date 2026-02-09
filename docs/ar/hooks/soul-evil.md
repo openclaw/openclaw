@@ -1,16 +1,9 @@
 ---
 summary: "خطاف SOUL Evil (استبدال SOUL.md بـ SOUL_EVIL.md)"
 read_when:
-  - "تريد تمكين خطاف SOUL Evil أو ضبطه"
-  - "تريد نافذة تطهير أو تبديل شخصية باحتمال عشوائي"
+  - تريد تمكين خطاف SOUL Evil أو ضبطه
+  - تريد نافذة تطهير أو تبديل شخصية باحتمال عشوائي
 title: "خطاف SOUL Evil"
-x-i18n:
-  source_path: hooks/soul-evil.md
-  source_hash: 32aba100712317d1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:19Z
 ---
 
 # خطاف SOUL Evil

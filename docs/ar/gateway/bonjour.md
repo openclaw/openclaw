@@ -4,13 +4,6 @@ read_when:
   - تصحيح مشكلات اكتشاف Bonjour على macOS/iOS
   - تغيير أنواع خدمات mDNS أو سجلات TXT أو تجربة واجهة الاكتشاف
 title: "اكتشاف Bonjour"
-x-i18n:
-  source_path: gateway/bonjour.md
-  source_hash: 6f1d676ded5a500c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:22Z
 ---
 
 # اكتشاف Bonjour / mDNS
@@ -111,7 +104,7 @@ dig @<TAILNET_IPV4> -p 53 _openclaw-gw._tcp.openclaw.internal PTR +short
 
 أدوات مدمجة مفيدة:
 
-- استعراض المثيلات:
+- حالات التصفح:
 
   ```bash
   dns-sd -B _openclaw-gw._tcp local.

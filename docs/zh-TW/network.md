@@ -1,17 +1,10 @@
 ---
-summary: "網路中樞：Gateway 閘道器介面、配對、探索與安全性"
+summary: "32. 網路樞紐：閘道介面、配對、探索與安全性"
 read_when:
   - 你需要網路架構與安全性的整體概覽
-  - 你正在除錯本機與 tailnet 存取或配對問題
+  - 33. 你正在除錯本地與 tailnet 存取或配對問題
   - 你想要官方的網路相關文件清單
 title: "網路"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:24Z
 ---
 
 # Network hub
@@ -34,8 +27,8 @@ x-i18n:
 
 Local trust：
 
-- 本機連線（loopback 或 Gateway 閘道器主機自身的 tailnet 位址）可以自動核准配對，以保持同一主機上的使用體驗順暢。
-- 非本機的 tailnet／LAN 用戶端仍需要明確的配對核准。
+- 34. 本地連線（回送位址或閘道主機自身的 tailnet 位址）可自動核准配對，以保持同主機的使用體驗順暢。
+- Non‑local tailnet/LAN clients still require explicit pairing approval.
 
 ## Discovery + transports
 

@@ -5,13 +5,6 @@ read_when:
   - Leder efter billig VPS-hosting til OpenClaw
   - Vil have OpenClaw kørende 24/7 på en lille server
 title: "Oracle Cloud"
-x-i18n:
-  source_path: platforms/oracle.md
-  source_hash: 8ec927ab5055c915
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:44Z
 ---
 
 # OpenClaw på Oracle Cloud (OCI)
@@ -27,13 +20,13 @@ Oracles gratis tier kan være et godt match til OpenClaw (især hvis du allerede
 
 ## Omkostningssammenligning (2026)
 
-| Udbyder      | Plan            | Specifikationer         | Pris/md | Noter                      |
-| ------------ | --------------- | ----------------------- | ------- | -------------------------- |
-| Oracle Cloud | Always Free ARM | op til 4 OCPU, 24GB RAM | $0      | ARM, begrænset kapacitet   |
-| Hetzner      | CX22            | 2 vCPU, 4GB RAM         | ~ $4    | Billigste betalte mulighed |
-| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6      | Nem UI, gode docs          |
-| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6      | Mange lokationer           |
-| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5      | Nu en del af Akamai        |
+| Udbyder      | Plan            | Specifikationer         | Pris/md              | Noter                      |
+| ------------ | --------------- | ----------------------- | -------------------- | -------------------------- |
+| Oracle Cloud | Always Free ARM | op til 4 OCPU, 24GB RAM | $0                   | ARM, begrænset kapacitet   |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM         | ~ $4 | Billigste betalte mulighed |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM         | $6                   | Nem UI, gode docs          |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM         | $6                   | Mange lokationer           |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM         | $5                   | Nu en del af Akamai        |
 
 ---
 
@@ -43,7 +36,7 @@ Oracles gratis tier kan være et godt match til OpenClaw (især hvis du allerede
 - Tailscale-konto (gratis på [tailscale.com](https://tailscale.com))
 - ~30 minutter
 
-## 1) Opret en OCI-instans
+## 1. Opret en OCI-instans
 
 1. Log ind i [Oracle Cloud Console](https://cloud.oracle.com/)
 2. Gå til **Compute → Instances → Create Instance**
@@ -58,9 +51,9 @@ Oracles gratis tier kan være et godt match til OpenClaw (især hvis du allerede
 4. Klik **Create**
 5. Notér den offentlige IP-adresse
 
-**Tip:** Hvis oprettelse af instans fejler med "Out of capacity", så prøv et andet availability domain eller igen senere. Kapaciteten i gratis tier er begrænset.
+**Tip:** Hvis oprettelse af instans mislykkes med "Ud af kapacitet", prøv et andet tilgængelighedsdomæne eller prøv igen senere. Frit niveau kapacitet er begrænset.
 
-## 2) Forbind og opdatér
+## 2. Forbind og opdatér
 
 ```bash
 # Connect via public IP
@@ -73,7 +66,7 @@ sudo apt install -y build-essential
 
 **Note:** `build-essential` er påkrævet for ARM-kompilering af nogle afhængigheder.
 
-## 3) Konfigurér bruger og hostname
+## 3. Konfigurér bruger og hostname
 
 ```bash
 # Set hostname
@@ -86,7 +79,7 @@ sudo passwd ubuntu
 sudo loginctl enable-linger ubuntu
 ```
 
-## 4) Installér Tailscale
+## 4. Installér Tailscale
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -103,7 +96,7 @@ tailscale status
 
 **Fremover: forbind via Tailscale:** `ssh ubuntu@openclaw` (eller brug Tailscale-IP’en).
 
-## 5) Installér OpenClaw
+## 5. Installér OpenClaw
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -112,11 +105,11 @@ source ~/.bashrc
 
 Når du bliver spurgt "How do you want to hatch your bot?", vælg **"Do this later"**.
 
-> Note: Hvis du støder på ARM-native build-problemer, så start med systempakker (f.eks. `sudo apt install -y build-essential`), før du rækker ud efter Homebrew.
+> Bemærk: Hvis du rammer ARM-indfødte byggeproblemer, skal du starte med systempakker (f.eks. 'sudo apt install -y build-essential'), før du når til Homebrew.
 
-## 6) Konfigurér Gateway (loopback + token-auth) og aktivér Tailscale Serve
+## 6. Konfigurér Gateway (loopback + token-auth) og aktivér Tailscale Serve
 
-Brug token-auth som standard. Det er forudsigeligt og undgår behovet for eventuelle “insecure auth”-flag i Control UI.
+Brug token auth som standard. Det er forudsigeligt og undgår at behøve enhver “usikker auth” Control UI flag.
 
 ```bash
 # Keep the Gateway private on the VM
@@ -133,7 +126,7 @@ openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 systemctl --user restart openclaw-gateway
 ```
 
-## 7) Verificér
+## 7. Verificér
 
 ```bash
 # Check version
@@ -149,9 +142,9 @@ tailscale serve status
 curl http://localhost:18789
 ```
 
-## 8) Lås VCN-sikkerheden ned
+## 8. Lås VCN-sikkerheden ned
 
-Nu hvor alt virker, lås VCN’en ned for at blokere al trafik undtagen Tailscale. OCI’s Virtual Cloud Network fungerer som en firewall ved netværkskanten — trafik blokeres, før den når din instans.
+Nu, hvor alt fungerer, låse VCN til at blokere al trafik undtagen Tailscale. OCI's Virtual Cloud Network fungerer som en firewall på netværkskanten - trafikken er blokeret, før den når frem til din instans.
 
 1. Gå til **Networking → Virtual Cloud Networks** i OCI Console
 2. Klik på din VCN → **Security Lists** → Default Security List
@@ -159,7 +152,7 @@ Nu hvor alt virker, lås VCN’en ned for at blokere al trafik undtagen Tailscal
    - `0.0.0.0/0 UDP 41641` (Tailscale)
 4. Behold standard udgående regler (tillad al udgående trafik)
 
-Dette blokerer SSH på port 22, HTTP, HTTPS og alt andet ved netværkskanten. Fremover kan du kun forbinde via Tailscale.
+Dette blokerer SSH på port 22, HTTP, HTTPS, og alt andet ved netværkskanten. Fra nu af kan du kun oprette forbindelse via Tailscale.
 
 ---
 
@@ -173,7 +166,7 @@ https://openclaw.<tailnet-name>.ts.net/
 
 Erstat `<tailnet-name>` med navnet på dit tailnet (synligt i `tailscale status`).
 
-Ingen SSH-tunnel nødvendig. Tailscale leverer:
+Ingen SSH-tunnel nødvendig. Skræddersy leverer:
 
 - HTTPS-kryptering (automatiske certifikater)
 - Autentificering via Tailscale-identitet
@@ -237,7 +230,7 @@ ssh -L 18789:127.0.0.1:18789 ubuntu@openclaw
 
 ### Oprettelse af instans fejler ("Out of capacity")
 
-Gratis ARM-instansers popularitet er høj. Prøv:
+Gratis niveau ARM forekomster er populære. Try:
 
 - Et andet availability domain
 - Forsøg igen uden for spidsbelastning (tidlig morgen)
@@ -276,13 +269,13 @@ systemctl --user restart openclaw-gateway
 
 ### ARM-binærproblemer
 
-Nogle værktøjer har måske ikke ARM-builds. Tjek:
+Nogle værktøjer har muligvis ikke ARM builds. Tjek:
 
 ```bash
 uname -m  # Should show aarch64
 ```
 
-De fleste npm-pakker virker fint. For binærer, kig efter `linux-arm64` eller `aarch64`-udgivelser.
+De fleste npm pakker fungerer fint. For binærer, se efter 'linux-arm64' eller 'aarch64' udgivelser.
 
 ---
 

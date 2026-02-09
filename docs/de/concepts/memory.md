@@ -1,15 +1,8 @@
 ---
-summary: „Wie der OpenClaw-Speicher funktioniert (Workspace-Dateien + automatischer Speicher-Flush)“
+summary: "„Wie der OpenClaw-Speicher funktioniert (Workspace-Dateien + automatischer Speicher-Flush)“"
 read_when:
   - Sie möchten das Layout und den Workflow der Speicherdateien verstehen
   - Sie möchten den automatischen Pre-Compaction-Speicher-Flush anpassen
-x-i18n:
-  source_path: concepts/memory.md
-  source_hash: e160dc678bb8fda2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:31Z
 ---
 
 # Speicher

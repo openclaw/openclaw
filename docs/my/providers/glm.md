@@ -4,19 +4,11 @@ read_when:
   - OpenClaw တွင် GLM မော်ဒယ်များကို အသုံးပြုလိုသောအခါ
   - မော်ဒယ် အမည်ပေးပုံစံနှင့် တပ်ဆင်မှုကို လိုအပ်သောအခါ
 title: "GLM မော်ဒယ်များ"
-x-i18n:
-  source_path: providers/glm.md
-  source_hash: 2d7b457f033f26f2
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:42Z
 ---
 
 # GLM မော်ဒယ်များ
 
-GLM သည် **မော်ဒယ်မိသားစု** (ကုမ္ပဏီမဟုတ်ပါ) ဖြစ်ပြီး Z.AI ပလက်ဖောင်းမှတဆင့် ရရှိနိုင်ပါသည်။ OpenClaw တွင် GLM
-မော်ဒယ်များကို `zai` provider နှင့် `zai/glm-4.7` ကဲ့သို့သော မော်ဒယ် ID များဖြင့် ဝင်ရောက်အသုံးပြုပါသည်။
+GLM သည် ကုမ္ပဏီမဟုတ်ဘဲ **model family** တစ်ခုဖြစ်ပြီး Z.AI platform မှတဆင့် ရရှိနိုင်ပါသည်။ OpenClaw တွင် GLM models များကို `zai` provider နှင့် `zai/glm-4.7` ကဲ့သို့သော model IDs များဖြင့် အသုံးပြုပါသည်။
 
 ## CLI Setup
 

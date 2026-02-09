@@ -3,13 +3,6 @@ summary: "Jak aplikacja macOS raportuje stany zdrowia gateway/Baileys"
 read_when:
   - Debugowanie wskaźników zdrowia aplikacji macOS
 title: "Kontrole zdrowia"
-x-i18n:
-  source_path: platforms/mac/health.md
-  source_hash: 0560e96501ddf53a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:24Z
 ---
 
 # Kontrole zdrowia na macOS

@@ -4,20 +4,14 @@ read_when:
   - モデルプロバイダーを選択したい場合
   - サポートされている LLM バックエンドの概要を素早く把握したい場合
 title: "モデルプロバイダー"
-x-i18n:
-  source_path: providers/index.md
-  source_hash: af168e89983fab19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:48Z
 ---
 
 # モデルプロバイダー
 
-OpenClaw は多くの LLM プロバイダーを使用できます。プロバイダーを選択して認証し、既定のモデルを `provider/model` として設定してください。
+OpenClaw は多くの LLM プロバイダーを使用できます。プロバイダーを選択して認証し、既定のモデルを `provider/model` として設定してください。 プロバイダを選択し、認証し、
+デフォルトモデルを`provider/model`に設定します。
 
-チャットチャンネルのドキュメント（WhatsApp/Telegram/Discord/Slack/Mattermost（プラグイン）/など）をお探しですか？ [Channels](/channels) を参照してください。
+チャットチャンネルのドキュメント（WhatsApp/Telegram/Discord/Slack/Mattermost（プラグイン）/など）をお探しですか？ [Channels](/channels) を参照してください。 [Channels](/channels) を参照してください。
 
 ## ハイライト：Venice（Venice AI）
 
@@ -66,4 +60,5 @@ Venice は、プライバシー重視の推論向けに推奨している Venice
 
 - [Claude Max API Proxy](/providers/claude-max-api-proxy) - Claude Max/Pro サブスクリプションを OpenAI 互換の API エンドポイントとして使用します
 
-xAI、Groq、Mistral などを含む完全なプロバイダー一覧と高度な設定については、[Model providers](/concepts/model-providers) を参照してください。
+完全なプロバイダカタログ（xAI、Groq、Mistralなど） そして、高度な構成、
+[Model providers](/concepts/model-providers)を参照してください。

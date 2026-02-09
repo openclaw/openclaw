@@ -4,13 +4,6 @@ read_when:
   - အပြည့်အစုံ onboarding wizard မသုံးဘဲ ပထမအကြိမ် စတင်တပ်ဆင်နေချိန်
   - မူလ workspace လမ်းကြောင်းကို သတ်မှတ်လိုသည့်အခါ
 title: "setup"
-x-i18n:
-  source_path: cli/setup.md
-  source_hash: 7f3fc8b246924edf
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:02Z
 ---
 
 # `openclaw setup`

@@ -3,13 +3,6 @@ summary: "Konfiguracja i uruchomienie bota czatu Twitch"
 read_when:
   - Konfiguracja integracji czatu Twitch dla OpenClaw
 title: "Twitch"
-x-i18n:
-  source_path: channels/twitch.md
-  source_hash: 4fa7daa11d1e5ed4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:07Z
 ---
 
 # Twitch (wtyczka)
@@ -235,7 +228,7 @@ Jeśli chcesz dostępu opartego na rolach, pozostaw `allowFrom` nieustawione i s
 }
 ```
 
-### Wyłączenie wymogu @wzmianki
+### Wyłącz wymóg @mention
 
 Domyślnie `requireMention` ma wartość `true`. Aby wyłączyć i odpowiadać na wszystkie wiadomości:
 

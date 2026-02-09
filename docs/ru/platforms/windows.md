@@ -4,13 +4,6 @@ read_when:
   - Установка OpenClaw в Windows
   - Поиск статуса сопутствующего приложения для Windows
 title: "Windows (WSL2)"
-x-i18n:
-  source_path: platforms/windows.md
-  source_hash: d17df1bd5636502e
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:50Z
 ---
 
 # Windows (WSL2)
@@ -105,7 +98,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 
 ## Пошаговая установка WSL2
 
-### 1) Установите WSL2 + Ubuntu
+### 1. Установите WSL2 + Ubuntu
 
 Откройте PowerShell (Администратор):
 
@@ -118,7 +111,7 @@ wsl --install -d Ubuntu-24.04
 
 Перезагрузитесь, если Windows запросит.
 
-### 2) Включите systemd (требуется для установки Gateway)
+### 2. Включите systemd (требуется для установки Gateway)
 
 В терминале WSL:
 
@@ -141,7 +134,7 @@ wsl --shutdown
 systemctl --user status
 ```
 
-### 3) Установите OpenClaw (внутри WSL)
+### 3. Установите OpenClaw (внутри WSL)
 
 Следуйте процессу «Начало работы» для Linux внутри WSL:
 

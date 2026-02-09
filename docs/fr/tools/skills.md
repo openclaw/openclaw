@@ -4,13 +4,6 @@ read_when:
   - Ajout ou modification de skills
   - Modification des règles de filtrage ou de chargement des skills
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 54685da5885600b3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:03:24Z
 ---
 
 # Skills (OpenClaw)
@@ -50,8 +43,7 @@ l’espace de travail l’emporte, puis gérées/locales, puis intégrées.
 Les plugins peuvent livrer leurs propres skills en listant des répertoires `skills` dans
 `openclaw.plugin.json` (chemins relatifs à la racine du plugin). Les skills de plugin se chargent
 lorsque le plugin est activé et participent aux règles normales de priorité des skills.
-Vous pouvez les filtrer via `metadata.openclaw.requires.config` sur l’entrée de configuration du plugin.
-Voir [Plugins](/plugin) pour la découverte/la configuration et [Tools](/tools) pour la surface d’outils que ces skills enseignent.
+Vous pouvez les filtrer via `metadata.openclaw.requires.config` sur l’entrée de configuration du plugin. Voir [Plugins](/plugin) pour la découverte/la configuration et [Tools](/tools) pour la surface d’outils que ces skills enseignent.
 
 ## ClawHub (installation + synchronisation)
 
@@ -292,8 +284,7 @@ Notes :
 
 OpenClaw livre un ensemble de base de skills comme **skills intégrées** dans le cadre de l’installation
 (package npm ou OpenClaw.app). `~/.openclaw/skills` existe pour des surcharges locales
-(par exemple, épingler/appliquer un correctif à une skill sans modifier la copie intégrée).
-Les skills d’espace de travail appartiennent à l’utilisateur et remplacent les deux en cas de conflit de nom.
+(par exemple, épingler/appliquer un correctif à une skill sans modifier la copie intégrée). Les skills d’espace de travail appartiennent à l’utilisateur et remplacent les deux en cas de conflit de nom.
 
 ## Référence de configuration
 

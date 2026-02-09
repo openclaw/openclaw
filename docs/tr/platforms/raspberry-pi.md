@@ -5,13 +5,6 @@ read_when:
   - ARM cihazlarda OpenClaw çalıştırma
   - Ucuz, her zaman açık kişisel bir yapay zekâ oluşturma
 title: "Raspberry Pi"
-x-i18n:
-  source_path: platforms/raspberry-pi.md
-  source_hash: 90b143a2877a4cea
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:43Z
 ---
 
 # Raspberry Pi üzerinde OpenClaw
@@ -22,20 +15,20 @@ Raspberry Pi üzerinde **~$35-80** tek seferlik maliyetle (aylık ücret yok) ka
 
 Şunlar için idealdir:
 
-- 7/24 kişisel yapay zekâ asistanı
-- Ev otomasyonu merkezi
+- 7/24 kişisel yapay zeka asistanı
+- Ev otomasyon merkezi
 - Düşük güç tüketimli, her zaman erişilebilir Telegram/WhatsApp botu
 
 ## Donanım Gereksinimleri
 
 | Pi Modeli       | RAM     | Çalışır mı? | Notlar                                |
 | --------------- | ------- | ----------- | ------------------------------------- |
-| **Pi 5**        | 4GB/8GB | ✅ En iyi   | En hızlı, önerilen                    |
-| **Pi 4**        | 4GB     | ✅ İyi      | Çoğu kullanıcı için ideal             |
-| **Pi 4**        | 2GB     | ✅ Uygun    | Çalışır, swap ekleyin                 |
-| **Pi 4**        | 1GB     | ⚠️ Sınırlı  | Swap ile mümkün, minimal yapılandırma |
+| **Pi 5**        | 4GB/8GB | ✅ En iyi    | En hızlı, önerilen                    |
+| **Pi 4**        | 4GB     | ✅ İyi       | Çoğu kullanıcı için ideal             |
+| **Pi 4**        | 2GB     | ✅ Uygun     | Çalışır, swap ekleyin                 |
+| **Pi 4**        | 1GB     | ⚠️ Sıkı     | Swap ile mümkün, minimal yapılandırma |
 | **Pi 3B+**      | 1GB     | ⚠️ Yavaş    | Çalışır ancak hantaldır               |
-| **Pi Zero 2 W** | 512MB   | ❌          | Önerilmez                             |
+| **Pi Zero 2 W** | 512MB   | ❌           | Önerilmez                             |
 
 **Minimum özellikler:** 1GB RAM, 1 çekirdek, 500MB disk  
 **Önerilen:** 2GB+ RAM, 64-bit işletim sistemi, 16GB+ SD kart (veya USB SSD)
@@ -48,7 +41,7 @@ Raspberry Pi üzerinde **~$35-80** tek seferlik maliyetle (aylık ücret yok) ka
 - Ağ bağlantısı (Ethernet veya WiFi)
 - ~30 dakika
 
-## 1) İşletim Sistemini Yazdırın
+## 1. İşletim Sistemini Yazdırın
 
 Başsız bir sunucu için masaüstüne gerek yok — **Raspberry Pi OS Lite (64-bit)** kullanın.
 
@@ -70,7 +63,7 @@ ssh user@gateway-host
 ssh user@192.168.x.x
 ```
 
-## 3) Sistem Kurulumu
+## 3. Sistem Kurulumu
 
 ```bash
 # Update system
@@ -83,7 +76,7 @@ sudo apt install -y git curl build-essential
 sudo timedatectl set-timezone America/Chicago  # Change to your timezone
 ```
 
-## 4) Node.js 22 Kurulumu (ARM64)
+## 4. Node.js 22 Kurulumu (ARM64)
 
 ```bash
 # Install Node.js via NodeSource
@@ -95,7 +88,7 @@ node --version  # Should show v22.x.x
 npm --version
 ```
 
-## 5) Swap Ekleyin (2GB veya daha az için önemli)
+## 5. Swap Ekleyin (2GB veya daha az için önemli)
 
 Swap, bellek yetersizliği (OOM) çökmelerini önler:
 
@@ -114,7 +107,7 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) OpenClaw Kurulumu
+## 6. OpenClaw Kurulumu
 
 ### Seçenek A: Standart Kurulum (Önerilir)
 
@@ -134,7 +127,7 @@ npm link
 
 Hacklenebilir kurulum, loglara ve koda doğrudan erişim sağlar — ARM’e özgü sorunları ayıklamak için kullanışlıdır.
 
-## 7) Onboarding’i Çalıştırın
+## 7. Onboarding’i Çalıştırın
 
 ```bash
 openclaw onboard --install-daemon
@@ -160,7 +153,7 @@ sudo systemctl status openclaw
 journalctl -u openclaw -f
 ```
 
-## 9) Panoya Erişim
+## 9. Panoya Erişim
 
 Pi başsız olduğu için bir SSH tüneli kullanın:
 
@@ -230,13 +223,13 @@ htop
 
 OpenClaw’ın çoğu özelliği ARM64 üzerinde çalışır; ancak bazı harici ikililer ARM derlemeleri gerektirebilir:
 
-| Araç                | ARM64 Durumu | Notlar                              |
-| ------------------- | ------------ | ----------------------------------- |
-| Node.js             | ✅           | Çok iyi çalışır                     |
-| WhatsApp (Baileys)  | ✅           | Saf JS, sorun yok                   |
-| Telegram            | ✅           | Saf JS, sorun yok                   |
+| Araç                                   | ARM64 Durumu | Notlar                              |
+| -------------------------------------- | ------------ | ----------------------------------- |
+| Node.js                | ✅            | Çok iyi çalışır                     |
+| WhatsApp (Baileys)  | ✅            | Saf JS, sorun yok                   |
+| Telegram                               | ✅            | Saf JS, sorun yok                   |
 | gog (Gmail CLI)     | ⚠️           | ARM sürümü var mı kontrol edin      |
-| Chromium (tarayıcı) | ✅           | `sudo apt install chromium-browser` |
+| Chromium (tarayıcı) | ✅            | `sudo apt install chromium-browser` |
 
 Bir skill başarısız olursa, ikilisinin ARM derlemesi olup olmadığını kontrol edin. Birçok Go/Rust aracı vardır; bazıları yoktur.
 
@@ -343,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Maliyet Karşılaştırması
 
-| Kurulum        | Tek Seferlik Maliyet | Aylık Maliyet | Notlar                              |
-| -------------- | -------------------- | ------------- | ----------------------------------- |
-| **Pi 4 (2GB)** | ~$45                 | $0            | + güç (~$5/yıl)                     |
-| **Pi 4 (4GB)** | ~$55                 | $0            | Önerilir                            |
-| **Pi 5 (4GB)** | ~$60                 | $0            | En iyi performans                   |
-| **Pi 5 (8GB)** | ~$80                 | $0            | Gereğinden fazla ama geleceğe dönük |
-| DigitalOcean   | $0                   | $6/ay         | $72/yıl                             |
-| Hetzner        | $0                   | €3.79/ay      | ~$50/yıl                            |
+| Kurulum                           | Tek Seferlik Maliyet | Aylık Maliyet            | Notlar                                             |
+| --------------------------------- | -------------------- | ------------------------ | -------------------------------------------------- |
+| **Pi 4 (2GB)** | ~$45 | $0                       | + güç (~$5/yıl) |
+| **Pi 4 (4GB)** | ~$55 | $0                       | Önerilir                                           |
+| **Pi 5 (4GB)** | ~$60 | $0                       | En iyi performans                                  |
+| **Pi 5 (8GB)** | ~$80 | $0                       | Aşırı ama geleceğe hazır                           |
+| DigitalOcean                      | $0                   | $6/ay                    | $72/yıl                                            |
+| Hetzner                           | $0                   | €3.79/ay | ~$50/yıl                           |
 
 **Başabaş:** Bir Pi, bulut VPS’e kıyasla ~6-12 ayda kendini amorti eder.
 

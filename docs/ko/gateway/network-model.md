@@ -3,13 +3,6 @@ summary: "Gateway(게이트웨이), 노드, 캔버스 호스트가 어떻게 연
 read_when:
   - Gateway(게이트웨이) 네트워킹 모델을 간결하게 파악하고 싶을 때
 title: "네트워크 모델"
-x-i18n:
-  source_path: gateway/network-model.md
-  source_hash: e3508b884757ef19
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:04Z
 ---
 
 대부분의 작업은 Gateway(게이트웨이) (`openclaw gateway`)를 통해 흐르며, 이는 채널 연결과 WebSocket 제어 플레인을 소유하는 단일 장기 실행 프로세스입니다.

@@ -1,15 +1,8 @@
 ---
 summary: "حالات أيقونة شريط القائمة والرسوم المتحركة لـ OpenClaw على نظام macOS"
 read_when:
-  - "تغيير سلوك أيقونة شريط القائمة"
+  - تغيير سلوك أيقونة شريط القائمة
 title: "أيقونة شريط القائمة"
-x-i18n:
-  source_path: platforms/mac/icon.md
-  source_hash: a67a6e6bbdc2b611
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:34Z
 ---
 
 # حالات أيقونة شريط القائمة

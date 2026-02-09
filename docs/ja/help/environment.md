@@ -1,22 +1,15 @@
 ---
-summary: 「OpenClaw が環境変数を読み込む場所と、その優先順位」
+summary: "OpenClaw が環境変数を読み込む場所と、その優先順位"
 read_when:
-  - どの環境変数が読み込まれ、どの順序で適用されるかを知る必要がある場合
+  - どのenvバーがロードされているか、そしてどの順序でロードされているかを知る必要があります。
   - Gateway で API キーが見つからない問題をデバッグしている場合
   - プロバイダー認証やデプロイ環境をドキュメント化している場合
-title: 「環境変数」
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:01Z
+title: "環境変数"
 ---
 
 # 環境変数
 
-OpenClaw は複数のソースから環境変数を取得します。ルールは **既存の値を決して上書きしない** ことです。
+OpenClaw は複数のソースから環境変数を取得します。ルールは **既存の値を決して上書きしない** ことです。 ルールは**既存の値を上書きしない**です。
 
 ## 優先順位（高い → 低い）
 
@@ -58,7 +51,7 @@ Config ファイルが完全に存在しない場合は、手順 4 はスキッ�
 }
 ```
 
-環境変数の同等設定：
+Env var equalents:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`

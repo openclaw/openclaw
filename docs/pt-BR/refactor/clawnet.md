@@ -4,13 +4,6 @@ read_when:
   - Planejar um protocolo de rede unificado para nós + clientes operadores
   - Retrabalhar aprovações, pareamento, TLS e presença entre dispositivos
 title: "Refatoração do Clawnet"
-x-i18n:
-  source_path: refactor/clawnet.md
-  source_hash: 719b219c3b326479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:32:06Z
 ---
 
 # Refatoração do Clawnet (unificação de protocolo + autenticação)
@@ -51,7 +44,7 @@ Documento único e rigoroso para:
 
 ## Dois protocolos
 
-### 1) Gateway WebSocket (plano de controle)
+### 1. Gateway WebSocket (plano de controle)
 
 - Superfície completa de API: configuração, canais, modelos, sessões, execuções de agente, logs, nós, etc.
 - Bind padrão: loopback. Acesso remoto via SSH/Tailscale.
@@ -62,7 +55,7 @@ Documento único e rigoroso para:
   - `src/gateway/client.ts`
   - `docs/gateway/protocol.md`
 
-### 2) Bridge (transporte de nós)
+### 2. Bridge (transporte de nós)
 
 - Superfície restrita por lista de permissões, identidade do nó + pareamento.
 - JSONL sobre TCP; TLS opcional + pinagem de impressão digital do certificado.
@@ -141,9 +134,9 @@ Protocolo WS único com papel + escopo.
 
 - API completa do plano de controle, protegida por escopo.
 - Recebe todas as aprovações.
-- Não executa ações de SO diretamente; roteia para os nós.
+- Não executa diretamente as ações do SA; rotas para nós.
 
-### Regra‑chave
+### Regra chave
 
 O papel é por conexão, não por dispositivo. Um dispositivo pode abrir ambos os papéis, separadamente.
 

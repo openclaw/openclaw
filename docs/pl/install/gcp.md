@@ -5,13 +5,6 @@ read_when:
   - Chcesz produkcyjny, zawsze włączony Gateway na własnej maszynie wirtualnej
   - Chcesz pełnej kontroli nad trwałością danych, binariami i zachowaniem przy restartach
 title: "GCP"
-x-i18n:
-  source_path: install/gcp.md
-  source_hash: 173d89358506c73c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:36Z
 ---
 
 # OpenClaw na GCP Compute Engine (Docker, przewodnik produkcyjny VPS)
@@ -72,7 +65,7 @@ Ogólny przepływ Dockera opisano w [Docker](/install/docker).
 
 ---
 
-## 1) Instalacja gcloud CLI (lub użycie konsoli)
+## 1. Instalacja gcloud CLI (lub użycie konsoli)
 
 **Opcja A: gcloud CLI** (zalecane do automatyzacji)
 
@@ -91,7 +84,7 @@ Wszystkie kroki można wykonać przez interfejs WWW na stronie [https://console.
 
 ---
 
-## 2) Utworzenie projektu GCP
+## 2. Utworzenie projektu GCP
 
 **CLI:**
 
@@ -117,14 +110,14 @@ gcloud services enable compute.googleapis.com
 
 ---
 
-## 3) Utworzenie maszyny wirtualnej
+## 3. Utworzenie maszyny wirtualnej
 
 **Typy maszyn:**
 
-| Typ      | Specyfikacja                     | Koszt           | Uwagi                              |
-| -------- | -------------------------------- | --------------- | ---------------------------------- |
-| e2-small | 2 vCPU, 2 GB RAM                 | ~12 USD/mies.   | Zalecane                           |
-| e2-micro | 2 vCPU (współdzielone), 1 GB RAM | Warstwa darmowa | Może powodować OOM przy obciążeniu |
+| Typ      | Specyfikacja                                        | Koszt                           | Uwagi                              |
+| -------- | --------------------------------------------------- | ------------------------------- | ---------------------------------- |
+| e2-small | 2 vCPU, 2 GB RAM                                    | ~12 $ / miesiąc | Zalecane                           |
+| e2-micro | 2 vCPU (współdzielone), 1 GB RAM | Warstwa darmowa                 | Może powodować OOM przy obciążeniu |
 
 **CLI:**
 
@@ -148,7 +141,7 @@ gcloud compute instances create openclaw-gateway \
 
 ---
 
-## 4) Połączenie SSH z maszyną wirtualną
+## 4. Połączenie SSH z maszyną wirtualną
 
 **CLI:**
 
@@ -164,7 +157,7 @@ Uwaga: propagacja klucza SSH może zająć 1–2 minuty po utworzeniu maszyny. J
 
 ---
 
-## 5) Instalacja Dockera (na maszynie wirtualnej)
+## 5. Instalacja Dockera (na maszynie wirtualnej)
 
 ```bash
 sudo apt-get update
@@ -194,7 +187,7 @@ docker compose version
 
 ---
 
-## 6) Sklonowanie repozytorium OpenClaw
+## 6. Sklonowanie repozytorium OpenClaw
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -205,7 +198,7 @@ Ten przewodnik zakłada, że zbudujesz niestandardowy obraz, aby zagwarantować 
 
 ---
 
-## 7) Utworzenie trwałych katalogów na hoście
+## 7. Utworzenie trwałych katalogów na hoście
 
 Kontenery Dockera są efemeryczne.
 Cały długotrwały stan musi znajdować się na hoście.
@@ -217,7 +210,7 @@ mkdir -p ~/.openclaw/workspace
 
 ---
 
-## 8) Konfiguracja zmiennych środowiskowych
+## 8. Konfiguracja zmiennych środowiskowych
 
 Utwórz `.env` w katalogu głównym repozytorium.
 
@@ -244,7 +237,7 @@ openssl rand -hex 32
 
 ---
 
-## 9) Konfiguracja Docker Compose
+## 9. Konfiguracja Docker Compose
 
 Utwórz lub zaktualizuj `docker-compose.yml`.
 
@@ -291,7 +284,7 @@ services:
 
 ---
 
-## 10) Wbudowanie wymaganych binariów w obraz (krytyczne)
+## 10. Wbudowanie wymaganych binariów w obraz (krytyczne)
 
 Instalowanie binariów wewnątrz działającego kontenera to pułapka.
 Wszystko, co zostanie zainstalowane w czasie działania, zostanie utracone przy restarcie.
@@ -354,7 +347,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 11) Budowanie i uruchamianie
+## 11. Budowanie i uruchamianie
 
 ```bash
 docker compose build
@@ -379,7 +372,7 @@ Oczekiwane wyjście:
 
 ---
 
-## 12) Weryfikacja Gateway
+## 12. Weryfikacja Gateway
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -393,7 +386,7 @@ Sukces:
 
 ---
 
-## 13) Dostęp z laptopa
+## 13. Dostęp z laptopa
 
 Utwórz tunel SSH, aby przekierować port Gateway:
 
@@ -414,18 +407,18 @@ Wklej token Gateway.
 OpenClaw działa w Dockerze, ale Docker nie jest źródłem prawdy.
 Cały długotrwały stan musi przetrwać restarty, przebudowy i ponowne uruchomienia systemu.
 
-| Komponent             | Lokalizacja                       | Mechanizm trwałości       | Uwagi                                |
-| --------------------- | --------------------------------- | ------------------------- | ------------------------------------ |
-| Konfiguracja Gateway  | `/home/node/.openclaw/`           | Montowanie woluminu hosta | Zawiera `openclaw.json`, tokeny      |
-| Profile auth modeli   | `/home/node/.openclaw/`           | Montowanie woluminu hosta | Tokeny OAuth, klucze API             |
-| Konfiguracje Skills   | `/home/node/.openclaw/skills/`    | Montowanie woluminu hosta | Stan na poziomie Skill               |
-| Obszar roboczy agenta | `/home/node/.openclaw/workspace/` | Montowanie woluminu hosta | Kod i artefakty agenta               |
-| Sesja WhatsApp        | `/home/node/.openclaw/`           | Montowanie woluminu hosta | Zachowuje logowanie QR               |
-| Pęk kluczy Gmail      | `/home/node/.openclaw/`           | Wolumin hosta + hasło     | Wymaga `GOG_KEYRING_PASSWORD`        |
-| Zewnętrzne binaria    | `/usr/local/bin/`                 | Obraz Dockera             | Muszą być wbudowane na etapie builda |
-| Runtime Node          | System plików kontenera           | Obraz Dockera             | Przebudowywany przy każdym buildzie  |
-| Pakiety systemowe     | System plików kontenera           | Obraz Dockera             | Nie instalować w czasie działania    |
-| Kontener Dockera      | Efemeryczny                       | Możliwy do restartu       | Bezpieczny do usunięcia              |
+| Komponent             | Lokalizacja                       | Mechanizm trwałości       | Uwagi                               |
+| --------------------- | --------------------------------- | ------------------------- | ----------------------------------- |
+| Konfiguracja Gateway  | `/home/node/.openclaw/`           | Montowanie woluminu hosta | Zawiera `openclaw.json`, tokeny     |
+| Profile auth modeli   | `/home/node/.openclaw/`           | Montowanie woluminu hosta | Tokeny OAuth, klucze API            |
+| Konfiguracje Skills   | `/home/node/.openclaw/skills/`    | Montowanie woluminu hosta | Stan na poziomie Skill              |
+| Obszar roboczy agenta | `/home/node/.openclaw/workspace/` | Montowanie woluminu hosta | Kod i artefakty agenta              |
+| Sesja WhatsApp        | `/home/node/.openclaw/`           | Montowanie woluminu hosta | Zachowuje logowanie QR              |
+| Pęk kluczy Gmail      | `/home/node/.openclaw/`           | Wolumin hosta + hasło     | Wymaga `GOG_KEYRING_PASSWORD`       |
+| Zewnętrzne binaria    | `/usr/local/bin/`                 | Obraz Dockera             | Musi być upieczony w czasie budowy  |
+| Runtime Node          | System plików kontenera           | Obraz Dockera             | Przebudowywany przy każdym buildzie |
+| Pakiety systemowe     | System plików kontenera           | Obraz Dockera             | Nie instalować w czasie działania   |
+| Kontener Dockera      | Efemeryczny                       | Możliwy do restartu       | Bezpieczny do usunięcia             |
 
 ---
 

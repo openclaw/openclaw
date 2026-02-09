@@ -3,13 +3,6 @@ summary: "Accès à distance via des tunnels SSH (Gateway WS) et des tailnets"
 read_when:
   - Exécution ou dépannage de configurations de passerelle distante
 title: "Accès à distance"
-x-i18n:
-  source_path: gateway/remote.md
-  source_hash: 449d406f88c53dcc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:49Z
 ---
 
 # Accès à distance (SSH, tunnels et tailnets)
@@ -29,7 +22,7 @@ Ce dépôt prend en charge le « distant via SSH » en maintenant une seule 
 Considérez l’**hôte de la Gateway** comme « là où vit l’agent ». Il possède les sessions, profils d’authentification, canaux et l’état.
 Votre ordinateur portable/de bureau (et les nœuds) se connectent à cet hôte.
 
-### 1) Gateway toujours active dans votre tailnet (VPS ou serveur domestique)
+### 1. Gateway toujours active dans votre tailnet (VPS ou serveur domestique)
 
 Exécutez la Gateway sur un hôte persistant et accédez-y via **Tailscale** ou SSH.
 
@@ -39,7 +32,7 @@ Exécutez la Gateway sur un hôte persistant et accédez-y via **Tailscale** ou 
 
 C’est idéal lorsque votre ordinateur portable se met souvent en veille mais que vous souhaitez un agent toujours actif.
 
-### 2) Le bureau à domicile exécute la Gateway, l’ordinateur portable est la télécommande
+### 2. Le bureau à domicile exécute la Gateway, l’ordinateur portable est la télécommande
 
 L’ordinateur portable n’exécute **pas** l’agent. Il se connecte à distance :
 
@@ -48,7 +41,7 @@ L’ordinateur portable n’exécute **pas** l’agent. Il se connecte à distan
 
 Runbook : [accès à distance macOS](/platforms/mac/remote).
 
-### 3) L’ordinateur portable exécute la Gateway, accès à distance depuis d’autres machines
+### 3. L’ordinateur portable exécute la Gateway, accès à distance depuis d’autres machines
 
 Conservez la Gateway en local mais exposez-la en toute sécurité :
 

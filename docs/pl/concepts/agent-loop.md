@@ -1,15 +1,8 @@
 ---
 summary: "Cykl życia pętli agenta, strumienie i semantyka oczekiwania"
 read_when:
-  - "Potrzebujesz dokładnego przejścia przez pętlę agenta lub zdarzenia cyklu życia"
+  - Potrzebujesz dokładnego przejścia przez pętlę agenta lub zdarzenia cyklu życia
 title: "Pętla agenta"
-x-i18n:
-  source_path: concepts/agent-loop.md
-  source_hash: e2c14fb74bd42caa
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
 ---
 
 # Pętla agenta (OpenClaw)
@@ -39,7 +32,7 @@ wyjaśnia, jak ta właściwa pętla jest połączona end-to-end.
    - serializuje uruchomienia przez kolejki per-sesja + globalne
    - rozwiązuje model + profil uwierzytelniania i buduje sesję pi
    - subskrybuje zdarzenia pi i strumieniuje delty asystenta/narzędzi
-   - egzekwuje limit czasu → przerywa uruchomienie po jego przekroczeniu
+   - wymusza limit czasu -> przerywa działanie, jeśli przekroczony
    - zwraca ładunki + metadane użycia
 4. `subscribeEmbeddedPiSession` mostkuje zdarzenia pi-agent-core do strumienia OpenClaw `agent`:
    - zdarzenia narzędzi => `stream: "tool"`

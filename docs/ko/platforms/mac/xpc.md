@@ -3,13 +3,6 @@ summary: "OpenClaw 앱, Gateway(게이트웨이) 노드 전송, 그리고 Peekab
 read_when:
   - IPC 계약 또는 메뉴 바 앱 IPC를 편집할 때
 title: "macOS IPC"
-x-i18n:
-  source_path: platforms/mac/xpc.md
-  source_hash: d0211c334a4a59b7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:50Z
 ---
 
 # OpenClaw macOS IPC 아키텍처

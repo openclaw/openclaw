@@ -4,20 +4,14 @@ read_when:
   - آپ OpenClaw پلگ اِن بنا رہے ہوں
   - آپ کو پلگ اِن کنفیگ اسکیما فراہم کرنا ہو یا پلگ اِن ویلیڈیشن کی غلطیوں کی ڈیبگنگ کرنی ہو
 title: "پلگ اِن مینی فیسٹ"
-x-i18n:
-  source_path: plugins/manifest.md
-  source_hash: 234c7c0e77f22f5c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:34Z
 ---
 
 # پلگ اِن مینی فیسٹ (openclaw.plugin.json)
 
-ہر پلگ اِن کو **پلگ اِن روٹ** میں ایک `openclaw.plugin.json` فائل لازماً شامل کرنی ہوتی ہے۔
-OpenClaw اس مینی فیسٹ کو پلگ اِن کا **کوڈ چلائے بغیر** کنفیگریشن کی توثیق کے لیے استعمال کرتا ہے۔
-غائب یا نامعتبر مینی فیسٹس کو پلگ اِن کی غلطیاں سمجھا جاتا ہے اور کنفیگ ویلیڈیشن کو روک دیا جاتا ہے۔
+Every plugin **must** ship a `openclaw.plugin.json` file in the **plugin root**.
+OpenClaw uses this manifest to validate configuration **without executing plugin
+code**. Missing or invalid manifests are treated as plugin errors and block
+config validation.
 
 مکمل پلگ اِن سسٹم گائیڈ دیکھیں: [پلگ اِنز](/tools/plugin).
 
@@ -59,8 +53,8 @@ OpenClaw اس مینی فیسٹ کو پلگ اِن کا **کوڈ چلائے بغ
 ## ویلیڈیشن کا برتاؤ
 
 - نامعلوم `channels.*` کلیدیں **غلطیاں** ہیں، الا یہ کہ چینل آئی ڈی کسی پلگ اِن مینی فیسٹ میں درج ہو۔
-- `plugins.entries.<id>`، `plugins.allow`، `plugins.deny`، اور `plugins.slots.*`
-  کو **قابلِ دریافت** پلگ اِن آئی ڈیز کی طرف حوالہ دینا لازم ہے۔ نامعلوم آئی ڈیز **غلطیاں** ہیں۔
+- `plugins.entries.<id>`, `plugins.allow`, `plugins.deny`, and `plugins.slots.*`
+  must reference **discoverable** plugin ids. Unknown ids are **errors**.
 - اگر پلگ اِن انسٹال ہو مگر اس کا مینی فیسٹ یا اسکیما خراب یا غائب ہو،
   تو ویلیڈیشن ناکام ہو جاتی ہے اور Doctor پلگ اِن کی غلطی رپورٹ کرتا ہے۔
 - اگر پلگ اِن کنفیگ موجود ہو لیکن پلگ اِن **غیرفعال** ہو،

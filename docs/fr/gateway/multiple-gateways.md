@@ -4,13 +4,6 @@ read_when:
   - Exécuter plus d'une Gateway sur la même machine
   - Vous avez besoin d'une configuration/d'un état/dés ports isolés par Gateway
 title: "Plusieurs Gateways"
-x-i18n:
-  source_path: gateway/multiple-gateways.md
-  source_hash: 09b5035d4e5fb97c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:01:38Z
 ---
 
 # Plusieurs Gateways (même hôte)

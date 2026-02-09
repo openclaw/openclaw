@@ -4,20 +4,13 @@ read_when:
   - OpenClaw ကို Nostr မှတဆင့် DM များ လက်ခံစေချင်သည့်အခါ
   - ဗဟိုမထားသော မက်ဆေ့ချ်ပို့ဆောင်ရေးကို တပ်ဆင်နေသည့်အခါ
 title: "Nostr"
-x-i18n:
-  source_path: channels/nostr.md
-  source_hash: 6b9fe4c74bf5e7c0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:06Z
 ---
 
 # Nostr
 
 **အခြေအနေ:** ရွေးချယ်အသုံးပြုနိုင်သော ပလဂင် (မူလအနေဖြင့် ပိတ်ထားသည်)။
 
-Nostr သည် လူမှုကွန်ရက်များအတွက် ဗဟိုမထားသော ပရိုတိုကောတစ်ခုဖြစ်သည်။ ဤချန်နယ်သည် NIP-04 မှတဆင့် စာဝှက်ထားသော တိုက်ရိုက်မက်ဆေ့ချ်များ (DM မက်ဆေ့ချ်များ) ကို OpenClaw မှ လက်ခံပြီး ပြန်လည်တုံ့ပြန်နိုင်စေသည်။
+Nostr သည် လူမှုကွန်ယက်အတွက် ဗဟိုမဲ့ (decentralized) protocol တစ်ခုဖြစ်သည်။ ဤ channel သည် OpenClaw ကို NIP-04 မှတစ်ဆင့် အင်ကရစ်ပြုလုပ်ထားသော တိုက်ရိုက်မက်ဆေ့ချ်များ (DMs) ကို လက်ခံပြီး တုံ့ပြန်နိုင်ရန် ခွင့်ပြုပါသည်။
 
 ## Install (လိုအပ်သည့်အခါ)
 
@@ -78,19 +71,19 @@ export NOSTR_PRIVATE_KEY="nsec1..."
 
 ## Configuration reference
 
-| Key          | Type     | Default                                     | Description                                 |
-| ------------ | -------- | ------------------------------------------- | ------------------------------------------- |
-| `privateKey` | string   | required                                    | `nsec` သို့မဟုတ် hex ဖော်မတ်ရှိ Private key |
-| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URL များ (WebSocket)                  |
-| `dmPolicy`   | string   | `pairing`                                   | DM ဝင်ရောက်ခွင့် မူဝါဒ                      |
-| `allowFrom`  | string[] | `[]`                                        | ခွင့်ပြုထားသော ပို့သူ pubkey များ           |
-| `enabled`    | boolean  | `true`                                      | ချန်နယ်ကို ဖွင့်/ပိတ်                       |
-| `name`       | string   | -                                           | ပြသမည့် အမည်                                |
-| `profile`    | object   | -                                           | NIP-01 ပရိုဖိုင် မီတာဒေတာ                   |
+| Key          | Type                                                         | Default                                     | Description                                   |
+| ------------ | ------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------- |
+| `privateKey` | string                                                       | required                                    | `nsec` သို့မဟုတ် hex ဖော်မတ်ရှိ Private key   |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URL များ (WebSocket) |
+| `dmPolicy`   | string                                                       | `pairing`                                   | DM ဝင်ရောက်ခွင့် မူဝါဒ                        |
+| `allowFrom`  | string[] | `[]`                                        | ခွင့်ပြုထားသော ပို့သူ pubkey များ             |
+| `enabled`    | boolean                                                      | `true`                                      | ချန်နယ်ကို ဖွင့်/ပိတ်                         |
+| `name`       | string                                                       | -                                           | ပြသမည့် အမည်                                  |
+| `profile`    | object                                                       | -                                           | NIP-01 ပရိုဖိုင် မီတာဒေတာ                     |
 
 ## Profile metadata
 
-Profile ဒေတာကို NIP-01 `kind:0` event အဖြစ် ထုတ်ပြန်သည်။ Control UI (Channels -> Nostr -> Profile) မှ စီမံခန့်ခွဲနိုင်သလို config ထဲတွင် တိုက်ရိုက် သတ်မှတ်နိုင်သည်။
+Profile ဒေတာကို NIP-01 `kind:0` event အဖြစ် ထုတ်ဝေပါသည်။ Control UI (Channels -> Nostr -> Profile) မှ စီမံခန့်ခွဲနိုင်သလို config တွင်လည်း တိုက်ရိုက် သတ်မှတ်နိုင်ပါသည်။
 
 ဥပမာ-
 
@@ -173,12 +166,12 @@ Profile ဒေတာကို NIP-01 `kind:0` event အဖြစ် ထုတ်
 
 ## Protocol support
 
-| NIP    | Status    | Description                               |
-| ------ | --------- | ----------------------------------------- |
-| NIP-01 | Supported | အခြေခံ event ဖော်မတ် + ပရိုဖိုင် မီတာဒေတာ |
-| NIP-04 | Supported | စာဝှက်ထားသော DM များ (`kind:4`)           |
-| NIP-17 | Planned   | Gift-wrapped DM များ                      |
-| NIP-44 | Planned   | ဗားရှင်းပါသော စာဝှက်ခြင်း                 |
+| NIP    | Status    | Description                                        |
+| ------ | --------- | -------------------------------------------------- |
+| NIP-01 | Supported | အခြေခံ event ဖော်မတ် + ပရိုဖိုင် မီတာဒေတာ          |
+| NIP-04 | Supported | စာဝှက်ထားသော DM များ (`kind:4`) |
+| NIP-17 | Planned   | Gift-wrapped DM များ                               |
+| NIP-44 | Planned   | ဗားရှင်းပါသော စာဝှက်ခြင်း                          |
 
 ## Testing
 

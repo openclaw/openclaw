@@ -5,13 +5,6 @@ read_when:
   - Pag-iimbestiga ng mga duplicate o lipas na instance row
   - Pagbabago ng gateway WS connect o system-event beacons
 title: "Presence"
-x-i18n:
-  source_path: concepts/presence.md
-  source_hash: c752c76a880878fe
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:23Z
 ---
 
 # Presence
@@ -42,27 +35,27 @@ Ang mga presence entry ay mga structured object na may mga field tulad ng:
 
 Ang mga presence entry ay ginagawa ng maraming source at **pinagsasama**.
 
-### 1) Gateway self entry
+### 1. Gateway self entry
 
 Palaging nagse-seed ang Gateway ng isang “self” entry sa startup para makita ng mga UI ang host ng gateway
 kahit wala pang nakakonektang client.
 
-### 2) WebSocket connect
+### 2. WebSocket connect
 
-Bawat WS client ay nagsisimula sa isang `connect` request. Sa matagumpay na handshake,
-nag-a-upsert ang Gateway ng isang presence entry para sa koneksyong iyon.
+Every WS client begins with a `connect` request. On successful handshake the
+Gateway upserts a presence entry for that connection.
 
 #### Bakit hindi lumalabas ang mga one‑off na CLI command
 
-Madalas na kumokonek ang CLI para sa maiikli at one‑off na command. Para maiwasan ang
-pag-spam sa listahan ng Instances, ang `client.mode === "cli"` ay **hindi** ginagawang presence entry.
+The CLI often connects for short, one‑off commands. To avoid spamming the
+Instances list, `client.mode === "cli"` is **not** turned into a presence entry.
 
-### 3) `system-event` beacons
+### 3. `system-event` beacons
 
-Maaaring magpadala ang mga client ng mas mayamang periodic beacon sa pamamagitan ng method na `system-event`.
-Ginagamit ito ng mac app para mag-report ng host name, IP, at `lastInputSeconds`.
+Clients can send richer periodic beacons via the `system-event` method. The mac
+app uses this to report host name, IP, and `lastInputSeconds`.
 
-### 4) Mga node connect (role: node)
+### 4. Mga node connect (role: node)
 
 Kapag kumonek ang isang node sa Gateway WebSocket gamit ang `role: node`, nag-a-upsert ang Gateway
 ng isang presence entry para sa node na iyon (parehong flow gaya ng ibang WS client).
@@ -89,9 +82,9 @@ Pinananatiling sariwa nito ang listahan at iniiwasan ang walang hangganang pagla
 
 ## Remote/tunnel caveat (loopback IPs)
 
-Kapag kumonek ang isang client sa pamamagitan ng SSH tunnel / local port forward, maaaring makita ng Gateway
-ang remote address bilang `127.0.0.1`. Para maiwasan ang pag-overwrite ng isang magandang
-client‑reported IP, binabalewala ang mga loopback na remote address.
+When a client connects over an SSH tunnel / local port forward, the Gateway may
+see the remote address as `127.0.0.1`. To avoid overwriting a good client‑reported
+IP, loopback remote addresses are ignored.
 
 ## Mga consumer
 

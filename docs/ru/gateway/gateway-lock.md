@@ -1,16 +1,9 @@
 ---
-summary: «Защита одиночного экземпляра Gateway с использованием привязки слушателя WebSocket»
+summary: "Защита одиночного экземпляра Gateway с использованием привязки слушателя WebSocket"
 read_when:
-  - «Запуск или отладка процесса шлюза»
-  - «Исследование обеспечения единственного экземпляра»
-title: «Блокировка Gateway»
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:29Z
+  - Запуск или отладка процесса шлюза
+  - Исследование обеспечения единственного экземпляра
+title: "Блокировка Gateway"
 ---
 
 # Блокировка Gateway

@@ -4,13 +4,6 @@ read_when:
   - Usted usa el plugin de llamada de voz y desea los puntos de entrada de la CLI
   - Usted quiere ejemplos rápidos para `voicecall call|continue|status|tail|expose`
 title: "voicecall"
-x-i18n:
-  source_path: cli/voicecall.md
-  source_hash: d93aaee6f6f5c9ac
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:33:06Z
 ---
 
 # `openclaw voicecall`

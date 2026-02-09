@@ -4,20 +4,13 @@ read_when:
   - Gmail-inboxtriggers koppelen aan OpenClaw
   - Pub/Sub-push instellen voor het wekken van agents
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
 
 Doel: Gmail-watch -> Pub/Sub-push -> `gog gmail watch serve` -> OpenClaw-webhook.
 
-## Vereisten
+## Prereqs
 
 - `gcloud` geïnstalleerd en aangemeld ([installatiehandleiding](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) geïnstalleerd en geautoriseerd voor het Gmail-account ([gogcli.sh](https://gogcli.sh/)).

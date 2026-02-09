@@ -4,22 +4,21 @@ read_when:
   - آپ کو ایجنٹ ورک اسپیس یا اس کی فائل ترتیب کی وضاحت درکار ہو
   - آپ ایجنٹ ورک اسپیس کا بیک اپ لینا یا اسے منتقل کرنا چاہتے ہوں
 title: "ایجنٹ ورک اسپیس"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:20Z
 ---
 
 # ایجنٹ ورک اسپیس
 
-ورک اسپیس ایجنٹ کا گھر ہے۔ یہ فائل اوزار اور ورک اسپیس سیاق کے لیے استعمال ہونے والی واحد ورکنگ ڈائریکٹری ہے۔ اسے نجی رکھیں اور میموری کی طرح برتاؤ کریں۔
+16. ورک اسپیس ایجنٹ کا گھر ہوتا ہے۔ It is the only working directory used for
+    file tools and for workspace context. Keep it private and treat it as memory.
 
 یہ `~/.openclaw/` سے الگ ہے، جو کنفیگ، اسناد، اور سیشنز کو محفوظ کرتا ہے۔
 
-**اہم:** ورک اسپیس **بطورِ طے شدہ cwd** ہے، کوئی سخت sandbox نہیں۔ اوزار نسبتی راستوں کو ورک اسپیس کے خلاف حل کرتے ہیں، لیکن مطلق راستے اب بھی ہوسٹ پر دوسری جگہوں تک پہنچ سکتے ہیں جب تک sandboxing فعال نہ ہو۔ اگر آپ کو علیحدگی درکار ہو تو [`agents.defaults.sandbox`](/gateway/sandboxing) (اور/یا ہر ایجنٹ کے لیے sandbox کنفیگ) استعمال کریں۔ جب sandboxing فعال ہو اور `workspaceAccess`، `"rw"` نہ ہو، تو اوزار `~/.openclaw/sandboxes` کے تحت ایک sandbox ورک اسپیس میں کام کرتے ہیں، نہ کہ آپ کی ہوسٹ ورک اسپیس میں۔
+**Important:** the workspace is the **default cwd**, not a hard sandbox. Tools
+resolve relative paths against the workspace, but absolute paths can still reach
+elsewhere on the host unless sandboxing is enabled. If you need isolation, use
+[`agents.defaults.sandbox`](/gateway/sandboxing) (and/or per‑agent sandbox config).
+When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate
+inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspace.
 
 ## بطورِ طے شدہ مقام
 
@@ -46,9 +45,14 @@ x-i18n:
 
 ## اضافی ورک اسپیس فولڈرز
 
-پرانے انسٹالز نے ممکن ہے `~/openclaw` بنایا ہو۔ متعدد ورک اسپیس ڈائریکٹریز کو برقرار رکھنا الجھن پیدا کر سکتا ہے، جیسے تصدیق یا اسٹیٹ میں فرق، کیونکہ ایک وقت میں صرف ایک ورک اسپیس فعال ہوتی ہے۔
+Older installs may have created `~/openclaw`. Keeping multiple workspace
+directories around can cause confusing auth or state drift, because only one
+workspace is active at a time.
 
-**سفارش:** ایک ہی فعال ورک اسپیس رکھیں۔ اگر آپ اضافی فولڈرز استعمال نہیں کرتے تو انہیں آرکائیو کریں یا ٹریش میں منتقل کریں (مثال کے طور پر `trash ~/openclaw`)۔ اگر آپ جان بوجھ کر متعدد ورک اسپیسز رکھتے ہیں، تو یقینی بنائیں کہ `agents.defaults.workspace` فعال والی کی طرف اشارہ کرتا ہو۔
+**Recommendation:** keep a single active workspace. If you no longer use the
+extra folders, archive or move them to Trash (for example `trash ~/openclaw`).
+If you intentionally keep multiple workspaces, make sure
+`agents.defaults.workspace` points to the active one.
 
 `openclaw doctor` اضافی ورک اسپیس ڈائریکٹریز کا پتہ چلنے پر خبردار کرتا ہے۔
 
@@ -107,7 +111,11 @@ x-i18n:
 - `canvas/` (اختیاری)
   - نوڈ ڈسپلے کے لیے Canvas UI فائلیں (مثال کے طور پر `canvas/index.html`)۔
 
-اگر کوئی بوٹ اسٹرپ فائل غائب ہو تو OpenClaw سیشن میں “missing file” مارکر داخل کرتا ہے اور جاری رکھتا ہے۔ بڑی بوٹ اسٹرپ فائلیں داخل کرتے وقت مختصر کر دی جاتی ہیں؛ حد کو `agents.defaults.bootstrapMaxChars` سے ایڈجسٹ کریں (بطورِ طے شدہ: 20000)۔ `openclaw setup` موجودہ فائلوں کو اوور رائیٹ کیے بغیر غائب ڈیفالٹس دوبارہ بنا سکتا ہے۔
+If any bootstrap file is missing, OpenClaw injects a "missing file" marker into
+the session and continues. Large bootstrap files are truncated when injected;
+adjust the limit with `agents.defaults.bootstrapMaxChars` (default: 20000).
+`openclaw setup` can recreate missing defaults without overwriting existing
+files.
 
 ## ورک اسپیس میں کیا شامل نہیں
 
@@ -122,13 +130,15 @@ x-i18n:
 
 ## Git بیک اپ (سفارش کردہ، نجی)
 
-ورک اسپیس کو نجی میموری سمجھیں۔ اسے ایک **نجی** git ریپو میں رکھیں تاکہ بیک اپ اور بحالی ممکن ہو۔
+Treat the workspace as private memory. Put it in a **private** git repo so it is
+backed up and recoverable.
 
 یہ مراحل اسی مشین پر چلائیں جہاں Gateway چلتا ہے (وہیں ورک اسپیس موجود ہوتی ہے)۔
 
-### 1) ریپو کو ابتدا دیں
+### 1. ریپو کو ابتدا دیں
 
-اگر git انسٹال ہے تو بالکل نئی ورک اسپیسز خودکار طور پر ابتدا ہو جاتی ہیں۔ اگر یہ ورک اسپیس پہلے سے ریپو نہیں ہے تو چلائیں:
+17. اگر git انسٹال ہو، تو بالکل نئی ورک اسپیسز خودکار طور پر ابتدائی حالت میں لائی جاتی ہیں۔ If this
+    workspace is not already a repo, run:
 
 ```bash
 cd ~/.openclaw/workspace
@@ -137,7 +147,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) نجی ریموٹ شامل کریں (مبتدی دوست آپشنز)
+### 2. نجی ریموٹ شامل کریں (مبتدی دوست آپشنز)
 
 آپشن A: GitHub ویب UI
 
@@ -172,7 +182,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) جاری اپ ڈیٹس
+### 3. جاری اپ ڈیٹس
 
 ```bash
 git status
@@ -210,5 +220,6 @@ git push
 
 ## اعلیٰ درجے کے نوٹس
 
-- ملٹی ایجنٹ روٹنگ ہر ایجنٹ کے لیے مختلف ورک اسپیسز استعمال کر سکتی ہے۔ روٹنگ کنفیگریشن کے لیے [Channel routing](/channels/channel-routing) دیکھیں۔
+- Multi-agent routing can use different workspaces per agent. See
+  [Channel routing](/channels/channel-routing) for routing configuration.
 - اگر `agents.defaults.sandbox` فعال ہو تو غیر مرکزی سیشنز `agents.defaults.sandbox.workspaceRoot` کے تحت فی سیشن sandbox ورک اسپیسز استعمال کر سکتے ہیں۔

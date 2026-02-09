@@ -1,14 +1,7 @@
 ---
 summary: "قالب مساحة العمل لملف AGENTS.md"
 read_when:
-  - التهيئة الأولية لمساحة العمل يدويًا
-x-i18n:
-  source_path: reference/templates/AGENTS.md
-  source_hash: 137c1346c44158b0
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:00Z
+  - التهيئة اليدوية لمساحة عمل
 ---
 
 # AGENTS.md - مساحة عملك
@@ -190,7 +183,7 @@ x-i18n:
 - وصول بريد مهم
 - اقتراب حدث في التقويم (&lt; ساعتين)
 - شيء مثير للاهتمام وجدته
-- مضى &gt; 8 ساعات منذ آخر تواصل لك
+- لقد كان أكثر من 8 ساعة منذ أن قلت أي شيء
 
 **متى تلتزم الصمت (HEARTBEAT_OK):**
 

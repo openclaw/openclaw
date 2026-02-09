@@ -5,13 +5,6 @@ read_when:
   - 하트비트와 함께 또는 하트비트와 연동되어 실행되어야 하는 자동화 연결
   - 예약 작업에서 하트비트와 cron 중 무엇을 선택할지 결정
 title: "Cron 작업"
-x-i18n:
-  source_path: automation/cron-jobs.md
-  source_hash: d2f7bd6c542034b1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:14Z
 ---
 
 # Cron 작업 (Gateway 스케줄러)
@@ -93,8 +86,7 @@ cron 작업은 다음으로 생각할 수 있습니다: **언제** 실행할지 
    - 메인 세션 → `payload.kind = "systemEvent"`
    - 격리 세션 → `payload.kind = "agentTurn"`
 
-선택 사항: 일회성 작업(`schedule.kind = "at"`)은 기본적으로 성공 후 삭제됩니다.
-유지하려면 `deleteAfterRun: false` 를 설정하십시오(성공 후 비활성화됩니다).
+선택 사항: 일회성 작업(`schedule.kind = "at"`)은 기본적으로 성공 후 삭제됩니다. 유지하려면 `deleteAfterRun: false` 를 설정하십시오(성공 후 비활성화됩니다).
 
 ## 개념
 
@@ -279,7 +271,7 @@ CLI 플래그는 `20m` 와 같은 사람 친화적 기간을 허용하지만, �
 }
 ```
 
-비고:
+Notes:
 
 - `schedule.kind`: `at`(`at`), `every`(`everyMs`), 또는 `cron`(`expr`, 선택적 `tz`)
 - `schedule.at` 는 ISO 8601 을 허용합니다(타임존 선택적; 생략 시 UTC 로 처리).
@@ -301,7 +293,7 @@ CLI 플래그는 `20m` 와 같은 사람 친화적 기간을 허용하지만, �
 }
 ```
 
-비고:
+Notes:
 
 - `jobId` 가 정식이며, `id` 은 호환을 위해 허용됩니다.
 - 패치에서 에이전트 바인딩을 제거하려면 `agentId: null` 를 사용하십시오.
@@ -471,5 +463,4 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 ### Telegram 이 잘못된 위치로 전달됨
 
 - 포럼 토픽의 경우, 명시적이고 모호하지 않도록 `-100…:topic:<id>` 를 사용하십시오.
-- 로그나 저장된 “마지막 라우트” 대상에 `telegram:...` 접두사가 보이더라도 정상입니다.
-  cron 전달은 이를 허용하며 토픽 id 를 올바르게 파싱합니다.
+- 로그나 저장된 “마지막 라우트” 대상에 `telegram:...` 접두사가 보이더라도 정상입니다. cron 전달은 이를 허용하며 토픽 id 를 올바르게 파싱합니다.

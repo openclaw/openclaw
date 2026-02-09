@@ -1,23 +1,16 @@
 ---
-summary: 「Gateway（ゲートウェイ）から OpenResponses 互換の /v1/responses HTTP エンドポイントを公開します」
+summary: "Gateway（ゲートウェイ）から OpenResponses 互換の /v1/responses HTTP エンドポイントを公開します"
 read_when:
   - OpenResponses API を話すクライアントを統合する場合
   - アイテムベースの入力、クライアントツール呼び出し、または SSE イベントが必要な場合
-title: 「OpenResponses API」
-x-i18n:
-  source_path: gateway/openresponses-http-api.md
-  source_hash: 0597714837f8b210
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:05Z
+title: "OpenResponses API"
 ---
 
 # OpenResponses API（HTTP）
 
 OpenClaw の Gateway は、OpenResponses 互換の `POST /v1/responses` エンドポイントを提供できます。
 
-このエンドポイントは **デフォルトでは無効** です。まず設定で有効化してください。
+このエンドポイントは **デフォルトでは無効** です。まず設定で有効化してください。 最初に設定で有効にします。
 
 - `POST /v1/responses`
 - Gateway と同一ポート（WS + HTTP の多重化）: `http://<gateway-host>:<port>/v1/responses`
@@ -27,7 +20,7 @@ OpenClaw の Gateway は、OpenResponses 互換の `POST /v1/responses` エン�
 
 ## 認証
 
-Gateway の認証設定を使用します。ベアラートークンを送信してください。
+ゲートウェイ認証設定を使用します。 ベアラートトークンを送信:
 
 - `Authorization: Bearer <token>`
 
@@ -91,7 +84,7 @@ Gateway の認証設定を使用します。ベアラートークンを送信し
 
 ## リクエスト形状（対応状況）
 
-リクエストは、アイテムベース入力の OpenResponses API に従います。現在の対応状況は次のとおりです。
+リクエストは、アイテムベース入力の OpenResponses API に従います。現在の対応状況は次のとおりです。 現在のサポート:
 
 - `input`: 文字列、またはアイテムオブジェクトの配列。
 - `instructions`: システムプロンプトにマージされます。
@@ -142,6 +135,7 @@ Gateway の認証設定を使用します。ベアラートークンを送信し
 
 エージェントがツール呼び出しを決定した場合、レスポンスには `function_call` の出力アイテムが返されます。
 その後、`function_call_output` を含むフォローアップリクエストを送信してターンを継続します。
+次に、`function_call_output` でフォローアップリクエストを送り、ターンを続けます。
 
 ## 画像（`input_image`）
 
@@ -156,6 +150,7 @@ base64 または URL ソースをサポートします。
 
 許可される MIME タイプ（現時点）: `image/jpeg`、`image/png`、`image/gif`、`image/webp`。
 最大サイズ（現時点）: 10MB。
+最大サイズ（現在）：10MB。
 
 ## ファイル（`input_file`）
 
@@ -182,11 +177,12 @@ base64 または URL ソースをサポートします。
 
 - ファイル内容はデコードされ、**ユーザーメッセージではなくシステムプロンプト** に追加されます。
   そのため、セッション履歴には永続化されず、一時的な扱いになります。
-- PDF はテキスト解析されます。取得できるテキストが少ない場合は、最初のページを画像にラスタライズして
+- PDF はテキストに対して解析されます。 PDF はテキスト解析されます。取得できるテキストが少ない場合は、最初のページを画像にラスタライズして
   モデルに渡します。
 
 PDF の解析には、Node 向けの `pdfjs-dist` レガシービルド（ワーカーなし）を使用します。最新の
-PDF.js ビルドはブラウザのワーカー／DOM グローバルを前提とするため、Gateway では使用されません。
+PDF.js ビルドはブラウザのワーカー／DOM グローバルを前提とするため、Gateway では使用されません。 現代の
+PDF.js はブラウザーのワーカー/DOMグローバルを期待しているため、Gatewayでは使用されません。
 
 URL フェッチのデフォルト:
 

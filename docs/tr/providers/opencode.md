@@ -4,13 +4,6 @@ read_when:
   - Model erişimi için OpenCode Zen istiyorsunuz
   - Kodlamaya uygun modellerden oluşan küratörlü bir liste istiyorsunuz
 title: "OpenCode Zen"
-x-i18n:
-  source_path: providers/opencode.md
-  source_hash: b3b5c640ac32f317
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:34Z
 ---
 
 # OpenCode Zen
@@ -27,7 +20,7 @@ openclaw onboard --auth-choice opencode-zen
 openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```
 
-## Yapılandırma parçası
+## Yapılandırma parçacığı
 
 ```json5
 {

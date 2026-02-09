@@ -3,13 +3,6 @@ summary: "Status de suporte do Matrix, capacidades e configuração"
 read_when:
   - Trabalhando em recursos do canal Matrix
 title: "Matrix"
-x-i18n:
-  source_path: channels/matrix.md
-  source_hash: 199b954b901cbb17
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:11Z
 ---
 
 # Matrix (plugin)
@@ -48,10 +41,13 @@ Detalhes: [Plugins](/tools/plugin)
 1. Instale o plugin Matrix:
    - Do npm: `openclaw plugins install @openclaw/matrix`
    - De um checkout local: `openclaw plugins install ./extensions/matrix`
+
 2. Crie uma conta Matrix em um homeserver:
    - Veja opções de hospedagem em [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Ou hospede você mesmo.
+
 3. Obtenha um token de acesso para a conta do bot:
+
    - Use a API de login do Matrix com `curl` no seu homeserver:
 
    ```bash
@@ -79,7 +75,9 @@ Detalhes: [Plugins](/tools/plugin)
    - Se ambos estiverem definidos, a configuração tem precedência.
    - Com token de acesso: o ID do usuário é obtido automaticamente via `/whoami`.
    - Quando definido, `channels.matrix.userId` deve ser o ID Matrix completo (exemplo: `@bot:example.org`).
+
 5. Reinicie o gateway (ou conclua a integração inicial).
+
 6. Inicie uma DM com o bot ou convide-o para uma sala a partir de qualquer cliente Matrix
    (Element, Beeper, etc.; veja [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). O Beeper requer E2EE,
    então defina `channels.matrix.encryption: true` e verifique o dispositivo.
@@ -197,17 +195,17 @@ Depois de verificado, o bot pode descriptografar mensagens em salas criptografad
 
 ## Capacidades
 
-| Recurso           | Status                                                                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| Mensagens diretas | ✅ Suportado                                                                                                 |
-| Salas             | ✅ Suportado                                                                                                 |
-| Threads           | ✅ Suportado                                                                                                 |
-| Mídia             | ✅ Suportado                                                                                                 |
+| Funcionalidade    | Status                                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Mensagens diretas | ✅ Suportado                                                                                                                    |
+| Ambientes         | ✅ Suportado                                                                                                                    |
+| Threads           | ✅ Suportado                                                                                                                    |
+| Mídia             | ✅ Suportado                                                                                                                    |
 | E2EE              | ✅ Suportado (módulo de crypto necessário)                                                                   |
 | Reações           | ✅ Suportado (enviar/ler via ferramentas)                                                                    |
 | Enquetes          | ✅ Envio suportado; inícios de enquete recebidos são convertidos em texto (respostas/finalizações ignoradas) |
 | Localização       | ✅ Suportado (URI geo; altitude ignorada)                                                                    |
-| Comandos nativos  | ✅ Suportado                                                                                                 |
+| Comandos nativos  | ✅ Suportado                                                                                                                    |
 
 ## Solução de problemas
 

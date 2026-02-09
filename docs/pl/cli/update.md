@@ -4,13 +4,6 @@ read_when:
   - Chcesz bezpiecznie zaktualizować checkout ze źródeł
   - Musisz zrozumieć zachowanie skrótu `--update`
 title: "update"
-x-i18n:
-  source_path: cli/update.md
-  source_hash: 3a08e8ac797612c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:09Z
 ---
 
 # `openclaw update`

@@ -4,18 +4,11 @@ read_when:
   - Pag-onboard ng bagong instance ng assistant
   - Pagrerepaso ng mga implikasyon sa kaligtasan/pahintulot
 title: "Setup ng Personal Assistant"
-x-i18n:
-  source_path: start/openclaw.md
-  source_hash: 8ebb0f602c074f77
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:03Z
 ---
 
 # Pagbuo ng personal assistant gamit ang OpenClaw
 
-Ang OpenClaw ay isang WhatsApp + Telegram + Discord + iMessage Gateway para sa mga **Pi** agent. Nagdaragdag ng Mattermost ang mga plugin. Ang gabay na ito ay ang setup para sa “personal assistant”: isang dedikadong WhatsApp number na kumikilos bilang palaging-on na agent mo.
+Ang OpenClaw ay isang WhatsApp + Telegram + Discord + iMessage gateway para sa mga **Pi** agent. Nagdaragdag ang mga plugin ng Mattermost. Ang gabay na ito ay ang setup ng "personal assistant": isang dedikadong WhatsApp number na kumikilos bilang iyong palaging naka‑on na agent.
 
 ## ⚠️ Unahin ang kaligtasan
 
@@ -29,7 +22,7 @@ Magsimula nang konserbatibo:
 
 - Palaging itakda ang `channels.whatsapp.allowFrom` (huwag kailanman patakbuhin na bukas sa buong mundo sa iyong personal na Mac).
 - Gumamit ng dedikadong WhatsApp number para sa assistant.
-- Ang mga heartbeat ay default na ngayon sa bawat 30 minuto. I-disable muna hanggang mapagkatiwalaan mo ang setup sa pamamagitan ng pagtatakda ng `agents.defaults.heartbeat.every: "0m"`.
+- Ang mga heartbeat ay naka‑default na ngayon sa bawat 30 minuto. I-disable muna hanggang sa mapagkakatiwalaan mo ang setup sa pamamagitan ng pag‑set ng `agents.defaults.heartbeat.every: "0m"`.
 
 ## Mga paunang kinakailangan
 
@@ -55,7 +48,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-Kung i-li-link mo ang personal mong WhatsApp sa OpenClaw, bawat mensahe sa iyo ay nagiging “agent input”. Bihira itong maging gusto mo.
+Kung iuugnay mo ang iyong personal na WhatsApp sa OpenClaw, bawat mensahe sa iyo ay nagiging “agent input”. Bihira itong ang gusto mo.
 
 ## 5-minutong mabilis na pagsisimula
 
@@ -81,15 +74,15 @@ openclaw gateway --port 18789
 
 Ngayon, mag-message sa assistant number mula sa allowlisted mong phone.
 
-Kapag natapos ang onboarding, awtomatiko naming bubuksan ang dashboard at magpi-print ng malinis (non-tokenized) na link. Kung humingi ito ng auth, i-paste ang token mula sa `gateway.auth.token` sa Control UI settings. Para muling buksan sa susunod: `openclaw dashboard`.
+Kapag natapos ang onboarding, awtomatiko naming binubuksan ang dashboard at nagpi‑print ng malinis (walang token) na link. Kung humingi ito ng auth, i‑paste ang token mula sa `gateway.auth.token` sa Control UI settings. Para muling buksan sa ibang oras: `openclaw dashboard`.
 
 ## Bigyan ang agent ng workspace (AGENTS)
 
 Binabasa ng OpenClaw ang mga operating instruction at “memory” mula sa directory ng workspace nito.
 
-Bilang default, ginagamit ng OpenClaw ang `~/.openclaw/workspace` bilang workspace ng agent, at awtomatikong lilikhain ito (kasama ang mga starter na `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) sa setup/unang takbo ng agent. Ang `BOOTSTRAP.md` ay nalilikha lamang kapag brand new ang workspace (hindi ito dapat bumalik matapos mo itong burahin). Opsyonal ang `MEMORY.md` (hindi auto-created); kapag naroon, nilo-load ito para sa mga normal na session. Ang mga subagent session ay nag-i-inject lamang ng `AGENTS.md` at `TOOLS.md`.
+Bilang default, ginagamit ng OpenClaw ang `~/.openclaw/workspace` bilang agent workspace, at awtomatiko itong lilikhain (kasama ang panimulang `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) sa setup/unang pagtakbo ng agent. Ang `BOOTSTRAP.md` ay nalilikha lamang kapag ang workspace ay ganap na bago (hindi ito dapat bumalik pagkatapos mo itong burahin). Opsyonal ang `MEMORY.md` (hindi awtomatikong nililikha); kapag naroon, ito ay nilo‑load para sa mga normal na session. Ang mga subagent session ay nag‑i‑inject lamang ng `AGENTS.md` at `TOOLS.md`.
 
-Tip: ituring ang folder na ito bilang “memory” ng OpenClaw at gawin itong git repo (mas mainam kung private) para naka-back up ang iyong `AGENTS.md` + mga memory file. Kung naka-install ang git, ang mga brand-new workspace ay awtomatikong ini-initialize.
+Tip: ituring ang folder na ito bilang “memory” ng OpenClaw at gawin itong git repo (mas mainam kung private) upang naka‑backup ang iyong `AGENTS.md` + mga memory file. Kung naka‑install ang git, ang mga bagong workspace ay awtomatikong ini‑initialize.
 
 ```bash
 openclaw setup
@@ -168,14 +161,14 @@ Halimbawa:
 
 - Mga file ng session: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
 - Metadata ng session (paggamit ng token, huling route, atbp): `~/.openclaw/agents/<agentId>/sessions/sessions.json` (legacy: `~/.openclaw/sessions/sessions.json`)
-- Ang `/new` o `/reset` ay nagsisimula ng bagong session para sa chat na iyon (maikokompigura sa pamamagitan ng `resetTriggers`). Kung ipinadala nang mag-isa, sasagot ang agent ng maikling hello para kumpirmahin ang reset.
+- Ang `/new` o `/reset` ay nagsisimula ng sariwang session para sa chat na iyon (na iko‑configure sa `resetTriggers`). Kapag ipinadala nang mag‑isa, sasagot ang agent ng isang maikling hello upang kumpirmahin ang reset.
 - Kinokompak ng `/compact [instructions]` ang session context at iniuulat ang natitirang budget ng context.
 
 ## Mga heartbeat (proactive mode)
 
-Bilang default, nagpapatakbo ang OpenClaw ng heartbeat tuwing 30 minuto gamit ang prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`  
-Itakda ang `agents.defaults.heartbeat.every: "0m"` para i-disable.
+Bilang default, nagpapatakbo ang OpenClaw ng heartbeat bawat 30 minuto na may prompt:
+`Read HEARTBEAT.md if it exists (workspace context). Sundin ito nang mahigpit. Huwag mag‑infer o ulitin ang mga lumang gawain mula sa mga naunang chat. Kung walang kailangang asikasuhin, sumagot ng HEARTBEAT_OK.`
+I‑set ang `agents.defaults.heartbeat.every: "0m"` upang i‑disable.
 
 - Kung umiiral ang `HEARTBEAT.md` pero epektibong walang laman (mga blankong linya at markdown headers lang gaya ng `# Heading`), nilalaktawan ng OpenClaw ang heartbeat run para makatipid ng API calls.
 - Kung nawawala ang file, tatakbo pa rin ang heartbeat at ang model ang magpapasya kung ano ang gagawin.
@@ -198,7 +191,7 @@ Maaaring i-surface ang mga inbound attachment (images/audio/docs) sa iyong comma
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (kung naka-enable ang audio transcription)
 
-Para sa outbound attachment mula sa agent: isama ang `MEDIA:<path-or-url>` sa sariling linya (walang spaces). Halimbawa:
+Mga outbound attachment mula sa agent: isama ang `MEDIA:<path-or-url>` sa sarili nitong linya (walang espasyo). Halimbawa:
 
 ```
 Here’s the screenshot.

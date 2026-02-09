@@ -5,13 +5,6 @@ read_when:
   - Kailangan mo ng remote Gateway + lokal na browser automation sa pamamagitan ng Tailscale
   - Gusto mong maunawaan ang mga implikasyon sa seguridad ng pag-takeover ng browser
 title: "Chrome Extension"
-x-i18n:
-  source_path: tools/chrome-extension.md
-  source_hash: 3b77bdad7d3dab6a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:08Z
 ---
 
 # Chrome extension (browser relay)
@@ -53,7 +46,7 @@ openclaw browser extension path
 
 ## Mga update (walang build step)
 
-Kasama ang extension sa OpenClaw release (npm package) bilang mga static file. Walang hiwalay na “build” step.
+Ang extension ay kasama sa OpenClaw release (npm package) bilang mga static file. Walang hiwalay na hakbang ng “build”.
 
 Pagkatapos mag-upgrade ng OpenClaw:
 
@@ -107,13 +100,13 @@ Kung makita mo ang `!`:
 
 ### Lokal na Gateway (kaparehong makina ng Chrome) — kadalasan **walang dagdag na hakbang**
 
-Kung tumatakbo ang Gateway sa parehong makina ng Chrome, sinisimulan nito ang browser control service sa loopback
+Kung ang Gateway ay tumatakbo sa parehong makina kung saan naroon ang Chrome, sinisimulan nito ang browser control service sa loopback
 at awtomatikong sinisimulan ang relay server. Nakikipag-usap ang extension sa lokal na relay; ang mga tawag ng CLI/tool ay papunta sa Gateway.
 
 ### Remote Gateway (tumatakbo ang Gateway sa ibang lugar) — **magpatakbo ng host ng node**
 
-Kung tumatakbo ang iyong Gateway sa ibang makina, magsimula ng host ng node sa makinang nagpapatakbo ng Chrome.
-Ipo-proxy ng Gateway ang mga aksyon ng browser papunta sa node na iyon; mananatiling lokal sa makinang may browser ang extension + relay.
+Kung ang iyong Gateway ay tumatakbo sa ibang makina, magsimula ng node host sa makinang nagpapatakbo ng Chrome.
+Ipa-proxy ng Gateway ang mga browser action sa node na iyon; ang extension + relay ay mananatiling lokal sa makinang may browser.
 
 Kung maraming node ang nakakonekta, i-pin ang isa gamit ang `gateway.nodes.browser.node` o itakda ang `gateway.nodes.browser.mode`.
 
@@ -156,15 +149,15 @@ Pag-debug: `openclaw sandbox explain`
 
 Ipi-print ng `openclaw browser extension path` ang **naka-install** na on-disk directory na naglalaman ng mga file ng extension.
 
-Sinasadya ng CLI na **hindi** mag-print ng `node_modules` path. Palaging patakbuhin muna ang `openclaw browser extension install` para kopyahin ang extension sa isang stable na lokasyon sa ilalim ng iyong OpenClaw state directory.
+Sadyang **hindi** ipinapakita ng CLI ang isang `node_modules` path. Palaging patakbuhin muna ang `openclaw browser extension install` upang kopyahin ang extension sa isang stable na lokasyon sa ilalim ng iyong OpenClaw state directory.
 
 Kung ililipat o buburahin mo ang install directory na iyon, mamarkahan ng Chrome ang extension bilang sira hanggang sa i-reload mo ito mula sa isang valid na path.
 
 ## Mga implikasyon sa seguridad (basahin ito)
 
-Makapangyarihan at mapanganib ito. Ituring ito na parang binibigyan mo ang model ng “mga kamay sa iyong browser”.
+Ito ay makapangyarihan at mapanganib. 29. Ituring ito na parang binibigyan ang modelo ng “hands on your browser”.
 
-- Ginagamit ng extension ang debugger API ng Chrome (`chrome.debugger`). Kapag naka-attach, kaya ng model na:
+- Ginagamit ng extension ang debugger API ng Chrome (`chrome.debugger`). Kapag naka-attach, ang modelo ay maaaring:
   - mag-click/mag-type/mag-navigate sa tab na iyon
   - magbasa ng nilalaman ng page
   - mag-access ng kahit ano na maa-access ng naka-log-in na session ng tab

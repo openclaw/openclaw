@@ -5,13 +5,6 @@ read_when:
   - Вы подключаете LM Studio или OpenAI-совместимый прокси
   - Вам нужны самые безопасные рекомендации для локальных моделей
 title: "Локальные модели"
-x-i18n:
-  source_path: gateway/local-models.md
-  source_hash: 82164e8c4f0c7479
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:36Z
 ---
 
 # Локальные модели

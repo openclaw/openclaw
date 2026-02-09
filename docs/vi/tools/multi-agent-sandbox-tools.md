@@ -3,13 +3,6 @@ summary: "Sandbox theo từng tác tử + hạn chế công cụ, thứ tự ưu
 title: Sandbox & Công cụ đa tác tử
 read_when: "Bạn muốn sandboxing theo từng tác tử hoặc chính sách cho phép/từ chối công cụ theo từng tác tử trong một gateway đa tác tử."
 status: active
-x-i18n:
-  source_path: tools/multi-agent-sandbox-tools.md
-  source_hash: 78364bcf0612a5e7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:38Z
 ---
 
 # Cấu hình Sandbox & Công cụ đa tác tử
@@ -36,11 +29,11 @@ Xác thực là theo từng tác tử: mỗi tác tử đọc từ kho xác th�
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-Thông tin xác thực **không** được chia sẻ giữa các tác tử. Không bao giờ tái sử dụng `agentDir` giữa các tác tử.
-Nếu bạn muốn chia sẻ thông tin xác thực, hãy sao chép `auth-profiles.json` vào `agentDir` của tác tử khác.
+Credentials are **not** shared between agents. Never reuse `agentDir` across agents.
+If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
 
-Để biết cách sandboxing hoạt động khi chạy, xem [Sandboxing](/gateway/sandboxing).
-Để gỡ lỗi “vì sao cái này bị chặn?”, xem [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) và `openclaw sandbox explain`.
+11. Để biết hành vi sandbox khi chạy, xem [Sandboxing](/gateway/sandboxing).
+12. Để gỡ lỗi “vì sao bị chặn?”, xem [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) và `openclaw sandbox explain`.
 
 ---
 
@@ -224,10 +217,10 @@ Thứ tự lọc là:
 7. **Chính sách công cụ của sandbox** (`tools.sandbox.tools` hoặc `agents.list[].tools.sandbox.tools`)
 8. **Chính sách công cụ của tác tử con** (`tools.subagents.tools`, nếu áp dụng)
 
-Mỗi cấp có thể tiếp tục hạn chế công cụ, nhưng không thể cấp lại các công cụ đã bị từ chối ở các cấp trước.
-Nếu đặt `agents.list[].tools.sandbox.tools`, nó sẽ thay thế `tools.sandbox.tools` cho tác tử đó.
-Nếu đặt `agents.list[].tools.profile`, nó sẽ ghi đè `tools.profile` cho tác tử đó.
-Các khóa công cụ theo nhà cung cấp chấp nhận `provider` (ví dụ: `google-antigravity`) hoặc `provider/model` (ví dụ: `openai/gpt-5.2`).
+13) Mỗi cấp có thể tiếp tục hạn chế công cụ, nhưng không thể cấp lại các công cụ đã bị từ chối ở các cấp trước.
+14) Nếu `agents.list[].tools.sandbox.tools` được đặt, nó sẽ thay thế `tools.sandbox.tools` cho tác tử đó.
+15) Nếu `agents.list[].tools.profile` được đặt, nó sẽ ghi đè `tools.profile` cho tác tử đó.
+    Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.2`).
 
 ### Nhóm công cụ (viết tắt)
 
@@ -245,7 +238,7 @@ Chính sách công cụ (toàn cục, theo tác tử, sandbox) hỗ trợ các m
 
 ### Chế độ Elevated
 
-`tools.elevated` là đường cơ sở toàn cục (allowlist dựa trên người gửi). `agents.list[].tools.elevated` có thể hạn chế thêm elevated cho các tác tử cụ thể (cả hai đều phải cho phép).
+17. `tools.elevated` là đường cơ sở toàn cục (allowlist dựa trên người gửi). 18. `agents.list[].tools.elevated` có thể tiếp tục hạn chế elevated cho các tác tử cụ thể (cả hai đều phải cho phép).
 
 Các mẫu giảm thiểu:
 
@@ -341,10 +334,7 @@ Các cấu hình `agent.*` cũ được di chuyển bởi `openclaw doctor`; v�
 
 ## Lỗi thường gặp: "non-main"
 
-`agents.defaults.sandbox.mode: "non-main"` dựa trên `session.mainKey` (mặc định `"main"`),
-không phải id của tác tử. Các phiên nhóm/kênh luôn có khóa riêng, vì vậy
-chúng được xem là non-main và sẽ bị sandbox. Nếu bạn muốn một tác tử không bao giờ
-bị sandbox, hãy đặt `agents.list[].sandbox.mode: "off"`.
+19. `agents.defaults.sandbox.mode: "non-main"` dựa trên `session.mainKey` (mặc định `"main"`), không phải id của tác tử. 20. Các phiên nhóm/kênh luôn có khóa riêng, vì vậy chúng được coi là non-main và sẽ bị sandbox. 21. Nếu bạn muốn một tác tử không bao giờ bị sandbox, hãy đặt `agents.list[].sandbox.mode: "off"`.
 
 ---
 

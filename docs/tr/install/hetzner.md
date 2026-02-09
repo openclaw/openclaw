@@ -6,13 +6,6 @@ read_when:
   - Kalıcılık, ikili dosyalar ve yeniden başlatma davranışı üzerinde tam kontrol istiyorsanız
   - OpenClaw’u Hetzner veya benzeri bir sağlayıcıda Docker ile çalıştırıyorsanız
 title: "Hetzner"
-x-i18n:
-  source_path: install/hetzner.md
-  source_hash: 84d9f24f1a803aa1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:32Z
 ---
 
 # Hetzner Üzerinde OpenClaw (Docker, Üretim VPS Rehberi)
@@ -21,7 +14,7 @@ x-i18n:
 
 Docker kullanarak bir Hetzner VPS üzerinde, dayanıklı durum, yerleşik ikili dosyalar ve güvenli yeniden başlatma davranışıyla kalıcı bir OpenClaw Gateway çalıştırmak.
 
-“~5$’a OpenClaw 7/24” istiyorsanız, bu en basit ve güvenilir kurulumdur.  
+“~5$’a OpenClaw 7/24” istiyorsanız, bu en basit ve güvenilir kurulumdur.
 Hetzner fiyatları değişir; en küçük Debian/Ubuntu VPS’i seçin ve OOM’lara (bellek yetersizliği) takılırsanız ölçeklendirin.
 
 ## Ne yapıyoruz (basitçe)?
@@ -38,7 +31,7 @@ Gateway’e şu yollarla erişilebilir:
 - Güvenlik duvarı ve belirteçleri kendiniz yönetiyorsanız doğrudan port açma
 
 Bu rehber, Hetzner üzerinde Ubuntu veya Debian varsayar.  
-Başka bir Linux VPS kullanıyorsanız, paketleri buna göre eşleyin.  
+Başka bir Linux VPS kullanıyorsanız, paketleri buna göre eşleyin.
 Genel Docker akışı için bkz. [Docker](/install/docker).
 
 ---
@@ -50,7 +43,7 @@ Genel Docker akışı için bkz. [Docker](/install/docker).
 3. OpenClaw deposunu klonlayın
 4. Kalıcı ana makine dizinlerini oluşturun
 5. `.env` ve `docker-compose.yml` yapılandırın
-6. Gerekli ikili dosyaları imaja yerleştirin
+6. Ana makine hacim bağlaması
 7. `docker compose up -d`
 8. Kalıcılığı ve Gateway erişimini doğrulayın
 
@@ -71,7 +64,7 @@ Genel Docker akışı için bkz. [Docker](/install/docker).
 
 ---
 
-## 1) VPS’i sağlayın
+## 1. VPS’i sağlayın
 
 Hetzner’da bir Ubuntu veya Debian VPS oluşturun.
 
@@ -81,12 +74,12 @@ Root olarak bağlanın:
 ssh root@YOUR_VPS_IP
 ```
 
-Bu rehber VPS’in durum bilgisi tutan (stateful) olduğunu varsayar.  
+Bu rehber VPS’in durum bilgisi tutan (stateful) olduğunu varsayar.
 Bunu tek kullanımlık (disposable) altyapı gibi ele almayın.
 
 ---
 
-## 2) Docker’ı kurun (VPS üzerinde)
+## 2. Docker’ı kurun (VPS üzerinde)
 
 ```bash
 apt-get update
@@ -103,7 +96,7 @@ docker compose version
 
 ---
 
-## 3) OpenClaw deposunu klonlayın
+## 3. OpenClaw deposunu klonlayın
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
@@ -114,9 +107,9 @@ Bu rehber, ikili dosyaların kalıcılığını garanti etmek için özel bir im
 
 ---
 
-## 4) Kalıcı ana makine dizinlerini oluşturun
+## 4. Kalıcı ana makine dizinlerini oluşturun
 
-Docker container’ları geçicidir.  
+Docker container’ları geçicidir.
 Tüm uzun ömürlü durum ana makinede bulunmalıdır.
 
 ```bash
@@ -130,7 +123,7 @@ chown -R 1000:1000 /root/.openclaw/workspace
 
 ---
 
-## 5) Ortam değişkenlerini yapılandırın
+## 5. Ortam değişkenlerini yapılandırın
 
 Depo kökünde `.env` oluşturun.
 
@@ -157,7 +150,7 @@ openssl rand -hex 32
 
 ---
 
-## 6) Docker Compose yapılandırması
+## 6. Docker Compose yapılandırması
 
 `docker-compose.yml` dosyasını oluşturun veya güncelleyin.
 
@@ -204,9 +197,9 @@ services:
 
 ---
 
-## 7) Gerekli ikili dosyaları imaja yerleştirin (kritik)
+## 7. Gerekli ikili dosyaları imaja yerleştirin (kritik)
 
-Çalışan bir container içine ikili dosyalar kurmak bir tuzaktır.  
+Çalışan bir container içine ikili dosyalar kurmak bir tuzaktır.
 Çalışma anında kurulan her şey yeniden başlatmada kaybolur.
 
 Skills tarafından gereken tüm harici ikili dosyalar imaj oluşturma zamanında kurulmalıdır.
@@ -217,7 +210,7 @@ Aşağıdaki örnekler yalnızca üç yaygın ikili dosyayı gösterir:
 - Google Places için `goplaces`
 - WhatsApp için `wacli`
 
-Bunlar örnektir, eksiksiz bir liste değildir.  
+Bunlar örnektir, eksiksiz bir liste değildir.
 Aynı deseni kullanarak gerektiği kadar ikili dosya kurabilirsiniz.
 
 Daha sonra ek ikili dosyalara bağımlı yeni skills eklerseniz şunları yapmalısınız:
@@ -267,7 +260,7 @@ CMD ["node","dist/index.js"]
 
 ---
 
-## 8) Derleyin ve başlatın
+## 8. Derleyin ve başlatın
 
 ```bash
 docker compose build
@@ -292,7 +285,7 @@ Beklenen çıktı:
 
 ---
 
-## 9) Gateway’i doğrulayın
+## 9. Gateway’i doğrulayın
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -320,18 +313,18 @@ Gateway belirtecinizi yapıştırın.
 
 ## Nerede ne kalıcı (tek doğru kaynak)
 
-OpenClaw Docker içinde çalışır, ancak Docker tek doğru kaynak değildir.  
+OpenClaw Docker içinde çalışır, ancak Docker tek doğru kaynak değildir.
 Tüm uzun ömürlü durum; yeniden başlatmalar, yeniden oluşturma ve yeniden başlatma (reboot) sonrasında hayatta kalmalıdır.
 
-| Bileşen                 | Konum                             | Kalıcılık mekanizması      | Notlar                               |
-| ----------------------- | --------------------------------- | -------------------------- | ------------------------------------ |
-| Gateway yapılandırması  | `/home/node/.openclaw/`           | Ana makine volume bağlama  | `openclaw.json`, belirteçler dahil   |
-| Model kimlik profilleri | `/home/node/.openclaw/`           | Ana makine volume bağlama  | OAuth belirteçleri, API anahtarları  |
-| Skill yapılandırmaları  | `/home/node/.openclaw/skills/`    | Ana makine volume bağlama  | Skill düzeyi durum                   |
-| Ajan çalışma alanı      | `/home/node/.openclaw/workspace/` | Ana makine volume bağlama  | Kod ve ajan artefaktları             |
-| WhatsApp oturumu        | `/home/node/.openclaw/`           | Ana makine volume bağlama  | QR girişini korur                    |
-| Gmail anahtarlığı       | `/home/node/.openclaw/`           | Ana makine volume + parola | `GOG_KEYRING_PASSWORD` gerektirir    |
-| Harici ikili dosyalar   | `/usr/local/bin/`                 | Docker imajı               | Oluşturma zamanında yerleştirilmeli  |
-| Node çalışma zamanı     | Container dosya sistemi           | Docker imajı               | Her imaj oluşturmada yeniden kurulur |
-| OS paketleri            | Container dosya sistemi           | Docker imajı               | Çalışma anında kurmayın              |
-| Docker container        | Geçici                            | Yeniden başlatılabilir     | Yok edilmesi güvenlidir              |
+| Bileşen                                     | Konum                             | Kalıcılık mekanizması      | Notlar                                  |
+| ------------------------------------------- | --------------------------------- | -------------------------- | --------------------------------------- |
+| Gateway yapılandırması                      | `/home/node/.openclaw/`           | Ana makine hacim bağlaması | `openclaw.json`, belirteçler dahil      |
+| Model kimlik profilleri                     | `/home/node/.openclaw/`           | Ana makine hacim bağlaması | OAuth belirteçleri, API anahtarları     |
+| Skill yapılandırmaları                      | `/home/node/.openclaw/skills/`    | Ana makine hacim bağlaması | Skill düzeyi durum                      |
+| concepts/agent-workspace.md | `/home/node/.openclaw/workspace/` | Ana makine hacim bağlaması | Kod ve ajan artefaktları                |
+| WhatsApp oturumu                            | `/home/node/.openclaw/`           | Harici ikili dosyalar      | QR girişini korur                       |
+| Gmail anahtarlığı                           | `/home/node/.openclaw/`           | Ana makine volume + parola | `GOG_KEYRING_PASSWORD` gerektirir       |
+| Derleme zamanında imaja gömülmelidir        | `/usr/local/bin/`                 | Docker imajı               | Node çalışma zamanı                     |
+| Çalışma zamanında kurmayın                  | Container dosya sistemi           | Docker imajı               | Her imaj oluşturmada yeniden kurulur    |
+| OS paketleri                                | Container dosya sistemi           | Docker imajı               | Yalnızca kaynaktan derliyorsanız `pnpm` |
+| Docker container                            | Geçicidir                         | Yeniden başlatılabilir     | Yok edilmesi güvenlidir                 |

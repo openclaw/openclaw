@@ -4,18 +4,11 @@ read_when:
   - Opsætning af Signal-understøttelse
   - Fejlfinding af Signal send/modtag
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:08Z
 ---
 
 # Signal (signal-cli)
 
-Status: ekstern CLI-integration. Gateway taler med `signal-cli` over HTTP JSON-RPC + SSE.
+Status: ekstern CLI integration. Gateway taler til `signal-cli` over HTTP JSON-RPC + SSE.
 
 ## Hurtig opsætning (begynder)
 
@@ -88,7 +81,7 @@ Eksempel:
 }
 ```
 
-Understøttelse af flere konti: brug `channels.signal.accounts` med kontospecifik konfiguration og valgfri `name`. Se [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for det fælles mønster.
+Multi-konto support: brug `channels.signal.accounts` med per-account config og valgfri `name`. Se [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for det delte mønster.
 
 ## Ekstern daemon-tilstand (httpUrl)
 
@@ -105,7 +98,7 @@ Hvis du vil administrere `signal-cli` selv (langsomme JVM-kolde starter, contain
 }
 ```
 
-Dette springer auto-start og opstartsventetiden i OpenClaw over. Ved langsomme starter ved auto-start kan du sætte `channels.signal.startupTimeoutMs`.
+Dette springer auto-spawn og opstart vente inde OpenClaw. For langsom starter, når auto-spawning, sæt `channels.signal.startupTimeoutMs`.
 
 ## Adgangskontrol (DM’er + grupper)
 
@@ -116,7 +109,7 @@ DM’er:
 - Godkend via:
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- Parring er standard token-udveksling for Signal-DM’er. Detaljer: [Pairing](/channels/pairing)
+- Parring er standard token udveksling for Signal DMs. Detaljer: [Pairing](/channels/pairing)
 - Afsendere kun med UUID (fra `sourceUuid`) gemmes som `uuid:<id>` i `channels.signal.allowFrom`.
 
 Grupper:
@@ -137,7 +130,7 @@ Grupper:
 - Vedhæftninger understøttes (base64 hentes fra `signal-cli`).
 - Standard medieloft: `channels.signal.mediaMaxMb` (standard 8).
 - Brug `channels.signal.ignoreAttachments` for at springe download af medier over.
-- Gruppehistorik-kontekst bruger `channels.signal.historyLimit` (eller `channels.signal.accounts.*.historyLimit`), med fallback til `messages.groupChat.historyLimit`. Sæt `0` for at deaktivere (standard 50).
+- Gruppe historie kontekst bruger `channels.signal.historyLimit` (eller `channels.signal.accounts.*.historyLimit`), falder tilbage til `messages.groupChat.historyLimit`. Sæt `0` til at deaktivere (standard 50).
 
 ## Skriver + læsekvitteringer
 
@@ -166,7 +159,7 @@ Konfiguration:
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive`.
   - `off`/`ack` deaktiverer agentreaktioner (beskedværktøjet `react` vil give fejl).
   - `minimal`/`extensive` aktiverer agentreaktioner og sætter vejledningsniveauet.
-- Kontospecifikke overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
+- Per-account tilsidesættelser: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
 ## Leveringsmål (CLI/cron)
 
@@ -219,11 +212,11 @@ Udbyderindstillinger:
 - `channels.signal.ignoreStories`: ignorer stories fra daemonen.
 - `channels.signal.sendReadReceipts`: videresend læsekvitteringer.
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (standard: parring).
-- `channels.signal.allowFrom`: DM-tilladelsesliste (E.164 eller `uuid:<id>`). `open` kræver `"*"`. Signal har ingen brugernavne; brug telefon-/UUID-id’er.
+- `channels.signal.allowFrom`: DM allowlist (E.164 eller `uuid:<id>`). `open` kræver `"*"`. Signal har ingen brugernavne; brug telefon/UUID id'er.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (standard: tilladelsesliste).
 - `channels.signal.groupAllowFrom`: tilladelsesliste for gruppeafsendere.
-- `channels.signal.historyLimit`: maks. antal gruppebeskeder, der medtages som kontekst (0 deaktiverer).
-- `channels.signal.dmHistoryLimit`: DM-historikgrænse i brugerturns. Kontospecifikke overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
+- `channels.signal.historyLimit`: max gruppe beskeder til at omfatte som kontekst (0 disables).
+- `channels.signal.dmHistoryLimit`: DM historie grænse i bruger sving. Per-user tilsidesættelser: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: udgående chunk-størrelse (tegn).
 - `channels.signal.chunkMode`: `length` (standard) eller `newline` for at splitte ved tomme linjer (afsnitsgrænser) før længdeopdeling.
 - `channels.signal.mediaMaxMb`: indgående/udgående medieloft (MB).

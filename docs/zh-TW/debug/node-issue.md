@@ -4,13 +4,6 @@ read_when:
   - 除錯僅限 Node 的開發腳本或 watch 模式失敗
   - 調查 OpenClaw 中的 tsx/esbuild 載入器當機
 title: "Node + tsx 當機"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:27:56Z
 ---
 
 # Node + tsx "\_\_name is not a function" 當機
@@ -25,7 +18,7 @@ x-i18n:
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-此問題在將開發腳本從 Bun 切換為 `tsx`（提交 `2871657e`，2026-01-06）之後開始出現。相同的執行路徑在使用 Bun 時可正常運作。
+This began after switching dev scripts from Bun to `tsx` (commit `2871657e`, 2026-01-06). The same runtime path worked with Bun.
 
 ## 環境
 
@@ -42,7 +35,7 @@ pnpm install
 node --import tsx src/entry.ts status
 ```
 
-## 儲存庫中的最小重現
+## Minimal repro in repo
 
 ```bash
 node --import tsx scripts/repro/tsx-name-repro.ts
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## 注意事項／假設
 
-- `tsx` 使用 esbuild 來轉換 TS/ESM。esbuild 的 `keepNames` 會產生一個 `__name` 輔助函式，並以 `__name(...)` 包裝函式定義。
+- `tsx` 使用 esbuild 來轉換 TS/ESM。esbuild 的 `keepNames` 會產生一個 `__name` 輔助函式，並以 `__name(...)` 包裝函式定義。 esbuild’s `keepNames` emits a `__name` helper and wraps function definitions with `__name(...)`.
 - 當機顯示 `__name` 在執行期存在但不是函式，這表示在 Node 25 的載入器路徑中，該輔助函式在此模組中遺失或被覆寫。
 - 在其他 esbuild 使用者中，當輔助函式遺失或被重寫時，也曾回報過類似的 `__name` 輔助函式問題。
 
@@ -65,9 +58,10 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 - `2871657e`（2026-01-06）：為了讓 Bun 成為選配，腳本從 Bun 改為 tsx。
 - 在此之前（Bun 路徑），`openclaw status` 與 `gateway:watch` 可正常運作。
 
-## 替代方案
+## Workarounds
 
 - 在開發腳本中使用 Bun（目前的暫時性回退）。
+
 - 使用 Node + tsc watch，然後執行已編譯的輸出：
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - 本機已確認：`pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` 可在 Node 25 上運作。
+
 - 若可行，停用 TS 載入器中的 esbuild keepNames（可避免插入 `__name` 輔助函式）；tsx 目前未提供此選項。
+
 - 以 `tsx` 測試 Node LTS（22/24），以確認是否為 Node 25 專屬問題。
 
 ## 參考資料

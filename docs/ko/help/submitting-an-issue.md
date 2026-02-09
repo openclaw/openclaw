@@ -1,13 +1,6 @@
 ---
 summary: "신호가 높은 이슈 및 버그 리포트 제출"
 title: "이슈 제출"
-x-i18n:
-  source_path: help/submitting-an-issue.md
-  source_hash: bcb33f05647e9f0d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:12Z
 ---
 
 ## 이슈 제출

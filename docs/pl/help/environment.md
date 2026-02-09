@@ -1,17 +1,10 @@
 ---
-summary: „Skąd OpenClaw ładuje zmienne środowiskowe i jaka jest kolejność pierwszeństwa”
+summary: "„Skąd OpenClaw ładuje zmienne środowiskowe i jaka jest kolejność pierwszeństwa”"
 read_when:
   - Musisz wiedzieć, które zmienne środowiskowe są ładowane i w jakiej kolejności
   - Debugujesz brakujące klucze API w Gateway
   - Dokumentujesz uwierzytelnianie dostawców lub środowiska wdrożeniowe
-title: „Zmienne środowiskowe”
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:12Z
+title: "„Zmienne środowiskowe”"
 ---
 
 # Zmienne środowiskowe
@@ -30,7 +23,7 @@ Jeśli plik konfiguracji jest całkowicie nieobecny, krok 4 jest pomijany; impor
 
 ## Blok Config `env`
 
-Dwa równoważne sposoby ustawiania wbudowanych zmiennych środowiskowych (oba nie nadpisują):
+Dwa równoważne sposoby ustawiania var env (oba nie są nadpisywane):
 
 ```json5
 {
@@ -43,7 +36,7 @@ Dwa równoważne sposoby ustawiania wbudowanych zmiennych środowiskowych (oba n
 }
 ```
 
-## Import zmiennych środowiskowych z powłoki
+## Import Shell env
 
 `env.shellEnv` uruchamia Twoją powłokę logowania i importuje tylko **brakujące** oczekiwane klucze:
 
@@ -58,12 +51,12 @@ Dwa równoważne sposoby ustawiania wbudowanych zmiennych środowiskowych (oba n
 }
 ```
 
-Odpowiedniki zmiennych środowiskowych:
+Ekwiwalenty Env var:
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
 
-## Podstawianie zmiennych środowiskowych w konfiguracji
+## Podstawienie Env var w konfiguracji
 
 Możesz odwoływać się bezpośrednio do zmiennych środowiskowych w wartościach typu string w konfiguracji, używając składni `${VAR_NAME}`:
 

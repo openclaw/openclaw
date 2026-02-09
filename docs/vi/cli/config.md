@@ -3,19 +3,11 @@ summary: "Tài liệu tham khảo CLI cho `openclaw config` (lấy/đặt/bỏ �
 read_when:
   - Bạn muốn đọc hoặc chỉnh sửa cấu hình theo cách không tương tác
 title: "config"
-x-i18n:
-  source_path: cli/config.md
-  source_hash: d60a35f5330f22bc
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:11Z
 ---
 
 # `openclaw config`
 
-Các trợ giúp cấu hình: lấy/đặt/bỏ đặt giá trị theo đường dẫn. Chạy không kèm lệnh con để mở
-trình hướng dẫn cấu hình (giống như `openclaw configure`).
+Config helpers: get/set/unset values by path. Chạy mà không có subcommand để mở trình hướng dẫn cấu hình (giống `openclaw configure`).
 
 ## Ví dụ
 
@@ -45,8 +37,8 @@ openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
 
 ## Giá trị
 
-Giá trị được phân tích cú pháp dưới dạng JSON5 khi có thể; nếu không thì được coi là chuỗi.
-Dùng `--json` để yêu cầu phân tích cú pháp JSON5.
+Giá trị được phân tích là JSON5 khi có thể; nếu không, chúng được xử lý như chuỗi.
+Dùng `--json` để yêu cầu phân tích JSON5.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"

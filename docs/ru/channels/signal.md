@@ -4,13 +4,6 @@ read_when:
   - Настройка поддержки Signal
   - Отладка отправки/получения сообщений Signal
 title: "Signal"
-x-i18n:
-  source_path: channels/signal.md
-  source_hash: b336b603edeb17a3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:24Z
 ---
 
 # Signal (signal-cli)
@@ -88,7 +81,7 @@ x-i18n:
 }
 ```
 
-Поддержка нескольких аккаунтов: используйте `channels.signal.accounts` с конфигурацией для каждого аккаунта и необязательным `name`. См. [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) для общего шаблона.
+Поддержка нескольких аккаунтов: используйте `channels.signal.accounts` с конфигурацией для каждого аккаунта и необязательным `name`. [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) для общего шаблона.
 
 ## Режим внешнего демона (httpUrl)
 
@@ -109,7 +102,7 @@ x-i18n:
 
 ## Контроль доступа (личные сообщения + группы)
 
-Личные сообщения:
+DMs:
 
 - По умолчанию: `channels.signal.dmPolicy = "pairing"`.
 - Неизвестные отправители получают код сопряжения; сообщения игнорируются до одобрения (коды истекают через 1 час).
@@ -139,7 +132,7 @@ x-i18n:
 - Используйте `channels.signal.ignoreAttachments`, чтобы пропустить загрузку медиа.
 - Контекст истории группы использует `channels.signal.historyLimit` (или `channels.signal.accounts.*.historyLimit`), с откатом к `messages.groupChat.historyLimit`. Установите `0` для отключения (по умолчанию 50).
 
-## Индикаторы набора и уведомления о прочтении
+## Набирать и читать квитанции
 
 - **Индикаторы набора**: OpenClaw отправляет сигналы набора через `signal-cli sendTyping` и обновляет их, пока формируется ответ.
 - **Уведомления о прочтении**: когда `channels.signal.sendReadReceipts` установлено в true, OpenClaw пересылает уведомления о прочтении для разрешённых личных сообщений.
@@ -177,7 +170,7 @@ message action=react channel=signal target=signal:group:<groupId> targetAuthor=u
 
 ## Устранение неполадок
 
-Сначала выполните эту цепочку:
+Сначала запустите лестницу:
 
 ```bash
 openclaw status

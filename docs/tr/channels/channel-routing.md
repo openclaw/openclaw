@@ -3,20 +3,13 @@ summary: "Kanal bazında yönlendirme kuralları (WhatsApp, Telegram, Discord, S
 read_when:
   - Kanal yönlendirmesi veya gelen kutusu davranışı değiştirildiğinde
 title: "Kanal Yönlendirme"
-x-i18n:
-  source_path: channels/channel-routing.md
-  source_hash: cfc2cade2984225d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:52Z
 ---
 
 # Kanallar ve yönlendirme
 
 OpenClaw yanıtları **mesajın geldiği kanala geri** yönlendirir. Model bir kanal seçmez; yönlendirme deterministiktir ve ana makine yapılandırması tarafından kontrol edilir.
 
-## Temel terimler
+## Anahtar terimler
 
 - **Kanal**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`.
 - **AccountId**: kanal başına hesap örneği (desteklendiğinde).
@@ -34,7 +27,7 @@ Gruplar ve kanallar, kanal bazında yalıtılmış kalır:
 - Gruplar: `agent:<agentId>:<channel>:group:<id>`
 - Kanallar/odalar: `agent:<agentId>:<channel>:channel:<id>`
 
-İş parçacıkları (threads):
+Konular:
 
 - Slack/Discord iş parçacıkları, temel anahtara `:thread:<threadId>` ekler.
 - Telegram forum konuları, grup anahtarına `:topic:<topicId>` gömer.
@@ -44,7 +37,7 @@ Gruplar ve kanallar, kanal bazında yalıtılmış kalır:
 - `agent:main:telegram:group:-1001234567890:topic:42`
 - `agent:main:discord:channel:123456:thread:987654`
 
-## Yönlendirme kuralları (bir ajan nasıl seçilir)
+## Yönlendirme kuralları (bir ajanın nasıl seçildiği)
 
 Yönlendirme, gelen her mesaj için **tek bir ajan** seçer:
 

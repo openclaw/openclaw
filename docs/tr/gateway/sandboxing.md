@@ -3,13 +3,6 @@ summary: "OpenClaw sandboxing’in nasıl çalıştığı: modlar, kapsamlar, ç
 title: Sandboxing
 read_when: "Sandboxing için özel bir açıklamaya ihtiyaç duyduğunuzda veya agents.defaults.sandbox ayarını ince ayarlamanız gerektiğinde."
 status: active
-x-i18n:
-  source_path: gateway/sandboxing.md
-  source_hash: c1bb7fd4ac37ef73
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:32Z
 ---
 
 # Sandboxing
@@ -22,7 +15,7 @@ Gateway ana makinede kalır; etkinleştirildiğinde araç yürütme izole bir sa
 Bu kusursuz bir güvenlik sınırı değildir, ancak modelin hatalı bir şey yapması durumunda
 dosya sistemi ve süreç erişimini anlamlı ölçüde sınırlar.
 
-## Neler sandbox içine alınır
+## What gets sandboxed
 
 - Araç yürütme (`exec`, `read`, `write`, `edit`, `apply_patch`, `process` vb.).
 - İsteğe bağlı sandbox’lanmış tarayıcı (`agents.defaults.sandbox.browser`).
@@ -66,8 +59,7 @@ Sandbox’a alınmayanlar:
 
 Gelen medya etkin sandbox çalışma alanına kopyalanır (`media/inbound/*`).
 Skills notu: `read` aracı sandbox köklüdür. `workspaceAccess: "none"` ile
-OpenClaw, uygun Skills’leri okunabilmeleri için sandbox çalışma alanına (`.../skills`) yansıtır.
-`"rw"` ile çalışma alanı Skills’leri `/workspace/skills` konumundan okunabilir.
+OpenClaw, uygun Skills’leri okunabilmeleri için sandbox çalışma alanına (`.../skills`) yansıtır. `"rw"` ile çalışma alanı Skills’leri `/workspace/skills` konumundan okunabilir.
 
 ## Özel bind mount’lar
 
@@ -146,18 +138,16 @@ Yollar:
 - Genel: `agents.defaults.sandbox.docker.setupCommand`
 - Ajan başına: `agents.list[].sandbox.docker.setupCommand`
 
-Yaygın tuzaklar:
+Common pitfalls:
 
 - Varsayılan `docker.network` değeri `"none"`’dır (çıkış yok), bu nedenle paket kurulumları başarısız olur.
 - `readOnlyRoot: true` yazmaları engeller; `readOnlyRoot: false` ayarlayın veya özel bir imaj oluşturun.
 - Paket kurulumları için `user` root olmalıdır (`user`’u kaldırın veya `user: "0:0"` ayarlayın).
-- Sandbox exec, ana makinenin `process.env`’sini **devralmaz**.
-  Skill API anahtarları için `agents.defaults.sandbox.docker.env` (veya özel bir imaj) kullanın.
+- Sandbox exec, ana makinenin `process.env`’sini **devralmaz**. Skill API anahtarları için `agents.defaults.sandbox.docker.env` (veya özel bir imaj) kullanın.
 
 ## Araç politikası + kaçış kapakları
 
-Araç izin/verme-engelleme politikaları sandbox kurallarından önce hâlâ uygulanır.
-Bir araç genel veya ajan başına engelliyse, sandboxing onu geri getirmez.
+Araç izin/verme-engelleme politikaları sandbox kurallarından önce hâlâ uygulanır. Bir araç genel veya ajan başına engelliyse, sandboxing onu geri getirmez.
 
 `tools.elevated`, `exec`’i ana makinede çalıştıran açık bir kaçış kapağıdır.
 `/exec` yönergeleri yalnızca yetkili gönderenler için geçerlidir ve oturum başına kalıcıdır; `exec`’yi kesin olarak devre dışı bırakmak için araç politikası engelini kullanın (bkz. [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
@@ -168,13 +158,13 @@ Hata ayıklama:
 - “Bu neden engellendi?” zihinsel modeli için [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) sayfasına bakın.
   Sıkı tutun.
 
-## Çoklu ajan geçersiz kılmaları
+## Multi-agent overrides
 
 Her ajan sandbox + araçları geçersiz kılabilir:
 `agents.list[].sandbox` ve `agents.list[].tools` (sandbox araç politikası için ayrıca `agents.list[].tools.sandbox.tools`).
 Öncelik sırası için [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) sayfasına bakın.
 
-## Asgari etkinleştirme örneği
+## Minimal enable example
 
 ```json5
 {

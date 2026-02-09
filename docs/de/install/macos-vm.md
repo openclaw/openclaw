@@ -1,18 +1,11 @@
 ---
-summary: „Führen Sie OpenClaw in einer sandboxed macOS-VM (lokal oder gehostet) aus, wenn Sie Isolation oder iMessage benötigen“
+summary: "„Führen Sie OpenClaw in einer sandboxed macOS-VM (lokal oder gehostet) aus, wenn Sie Isolation oder iMessage benötigen“"
 read_when:
   - Sie möchten OpenClaw von Ihrer primären macOS-Umgebung isolieren
   - Sie möchten iMessage-Integration (BlueBubbles) in einer Sandbox
   - Sie möchten eine zurücksetzbare macOS-Umgebung, die Sie klonen können
   - Sie möchten lokale vs. gehostete macOS-VM-Optionen vergleichen
-title: „macOS-VMs“
-x-i18n:
-  source_path: install/macos-vm.md
-  source_hash: 4d1c85a5e4945f9f
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:36:41Z
+title: "„macOS-VMs“"
 ---
 
 # OpenClaw auf macOS-VMs (Sandboxing)
@@ -60,7 +53,7 @@ Sobald Sie SSH-Zugriff auf eine macOS-VM haben, fahren Sie unten mit Schritt 6 f
 
 ---
 
-## Voraussetzungen (Lume)
+## Was du brauchst (Lume)
 
 - Apple-Silicon-Mac (M1/M2/M3/M4)
 - macOS Sequoia oder neuer auf dem Host
@@ -69,7 +62,7 @@ Sobald Sie SSH-Zugriff auf eine macOS-VM haben, fahren Sie unten mit Schritt 6 f
 
 ---
 
-## 1) Lume installieren
+## 1. Lume installieren
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/lume/scripts/install.sh)"
@@ -91,7 +84,7 @@ Doku: [Lume Installation](https://cua.ai/docs/lume/guide/getting-started/install
 
 ---
 
-## 2) Die macOS-VM erstellen
+## 2. Die macOS-VM erstellen
 
 ```bash
 lume create openclaw --os macos --ipsw latest
@@ -103,7 +96,7 @@ Hinweis: Der Download kann je nach Verbindung eine Weile dauern.
 
 ---
 
-## 3) Setup-Assistent abschließen
+## 3. Setup-Assistent abschließen
 
 Im VNC-Fenster:
 
@@ -119,7 +112,7 @@ Nach Abschluss der Einrichtung SSH aktivieren:
 
 ---
 
-## 4) IP-Adresse der VM ermitteln
+## 4. IP-Adresse der VM ermitteln
 
 ```bash
 lume get openclaw
@@ -129,7 +122,7 @@ Suchen Sie nach der IP-Adresse (meist `192.168.64.x`).
 
 ---
 
-## 5) Per SSH in die VM einloggen
+## 5. Per SSH in die VM einloggen
 
 ```bash
 ssh youruser@192.168.64.X
@@ -139,7 +132,7 @@ Ersetzen Sie `youruser` durch das von Ihnen erstellte Konto und die IP durch die
 
 ---
 
-## 6) OpenClaw installieren
+## 6. OpenClaw installieren
 
 Innerhalb der VM:
 
@@ -152,7 +145,7 @@ Folgen Sie den Onboarding-Aufforderungen, um Ihren Modellanbieter (Anthropic, Op
 
 ---
 
-## 7) Kanäle konfigurieren
+## 7. Kanäle konfigurieren
 
 Bearbeiten Sie die Konfigurationsdatei:
 
@@ -184,7 +177,7 @@ openclaw channels login
 
 ---
 
-## 8) Die VM headless ausführen
+## 8. Die VM headless ausführen
 
 Beenden Sie die VM und starten Sie sie ohne Anzeige neu:
 
@@ -253,7 +246,7 @@ lume run openclaw --no-display
 
 ---
 
-## Betrieb rund um die Uhr
+## Läuft rund um die Uhr
 
 Halten Sie die VM am Laufen durch:
 
@@ -267,11 +260,11 @@ Für echten Dauerbetrieb erwägen Sie einen dedizierten Mac mini oder einen klei
 
 ## Fehlerbehebung
 
-| Problem                    | Lösung                                                                                                                   |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Kein SSH-Zugriff auf VM    | Prüfen Sie, ob „Remote Login“ in den Systemeinstellungen der VM aktiviert ist                                            |
-| VM-IP wird nicht angezeigt | Warten Sie, bis die VM vollständig gebootet ist, und führen Sie `lume get openclaw` erneut aus                           |
-| Lume-Befehl nicht gefunden | Fügen Sie `~/.local/bin` zu Ihrem PATH hinzu                                                                             |
+| Problem                    | Lösung                                                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kein SSH-Zugriff auf VM    | Prüfen Sie, ob „Remote Login“ in den Systemeinstellungen der VM aktiviert ist                                                               |
+| VM-IP wird nicht angezeigt | Warten Sie, bis die VM vollständig gebootet ist, und führen Sie `lume get openclaw` erneut aus                                              |
+| Lume-Befehl nicht gefunden | Fügen Sie `~/.local/bin` zu Ihrem PATH hinzu                                                                                                |
 | WhatsApp-QR scannt nicht   | Stellen Sie sicher, dass Sie beim Ausführen von `openclaw channels login` in der VM (nicht auf dem Host) angemeldet sind |
 
 ---

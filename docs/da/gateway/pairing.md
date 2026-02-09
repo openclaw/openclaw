@@ -5,31 +5,24 @@ read_when:
   - Tilføjelse af CLI-flows til godkendelse af fjernnoder
   - Udvidelse af gateway-protokollen med nodehåndtering
 title: "Gateway-ejet parring"
-x-i18n:
-  source_path: gateway/pairing.md
-  source_hash: 1f5154292a75ea2c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:50:19Z
 ---
 
 # Gateway-ejet parring (Mulighed B)
 
-Ved gateway-ejet parring er **Gateway** kilden til sandhed for, hvilke noder der
-har tilladelse til at tilslutte sig. UI’er (macOS-app, fremtidige klienter) er blot
-frontends, der godkender eller afviser ventende anmodninger.
+I Gateway-ejet parring er **Gateway** den kilde til sandhed, som indholdselementer
+får lov til at deltage i. UI'er (macOS app, fremtidige kunder) er bare frontends at
+godkende eller afvise afventende anmodninger.
 
-**Vigtigt:** WS-noder bruger **device pairing** (rolle `node`) under `connect`.
-`node.pair.*` er et separat parrlager og styrer **ikke** WS-handshaken.
-Kun klienter, der eksplicit kalder `node.pair.*`, bruger dette flow.
+**Vigtigt:** WS noder bruger **enhedsparring** (rolle `node`) under `forbindelse`.
+`node.pair.*` er en separat parring butik og gør **ikke** gate WS håndtryk.
+Kun kunder, der udtrykkeligt kalder `node.pair.*` bruger denne flow.
 
 ## Begreber
 
 - **Ventende anmodning**: en node har anmodet om at tilslutte sig; kræver godkendelse.
 - **Parret node**: godkendt node med et udstedt auth-token.
-- **Transport**: Gateway-WS-endpointet videresender anmodninger, men afgør ikke
-  medlemskab. (Understøttelse af den ældre TCP-bro er forældet/fjernet.)
+- **Transport**: Gateway WS-endepunktet viderestiller anmodninger, men beslutter ikke et
+  -medlemskab. (Legacy TCP bridge support er forældet/fjernet.)
 
 ## Sådan fungerer parring
 

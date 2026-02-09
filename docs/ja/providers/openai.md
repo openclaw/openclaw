@@ -4,21 +4,16 @@ read_when:
   - OpenClaw で OpenAI モデルを使用したい場合
   - API キーではなく Codex サブスクリプション認証を使用したい場合
 title: "OpenAI"
-x-i18n:
-  source_path: providers/openai.md
-  source_hash: 6d78698351c3d2f5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:22:52Z
 ---
 
 # OpenAI
 
-OpenAI は GPT モデル向けの開発者 API を提供しています。Codex は、サブスクリプションによるアクセスのための **ChatGPT サインイン**、または従量課金アクセスのための **API キー** サインインをサポートします。Codex クラウドでは ChatGPT サインインが必要です。
+OpenAI は GPT モデル向けの開発者 API を提供しています。Codex は、サブスクリプションによるアクセスのための **ChatGPT サインイン**、または従量課金アクセスのための **API キー** サインインをサポートします。Codex クラウドでは ChatGPT サインインが必要です。 Codexはサブスクリプション
+アクセス用の**ChatGPTサインイン**または使用ベースのアクセス用の**APIキー**サインインをサポートしています。 コーデックのクラウドにはChatGPTサインインが必要です。
 
 ## オプション A: OpenAI API キー（OpenAI Platform）
 
+**Best for :** ダイレクトAPIアクセスと使用方法ベースの請求。
 **最適な用途:** 直接的な API アクセスと従量課金。
 OpenAI ダッシュボードから API キーを取得してください。
 
@@ -43,6 +38,7 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 
 **最適な用途:** API キーではなく ChatGPT/Codex サブスクリプションアクセスを使用する場合。
 Codex クラウドでは ChatGPT サインインが必要ですが、Codex CLI は ChatGPT または API キーでのサインインをサポートします。
+コーデッククラウドにはChatGPTサインインが必要ですが、Codex CLIはChatGPTまたはAPIキーサインインをサポートしています。
 
 ### CLI セットアップ（Codex OAuth）
 

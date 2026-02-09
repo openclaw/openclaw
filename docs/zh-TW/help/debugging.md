@@ -5,24 +5,18 @@ read_when:
   - 你想在反覆迭代時以監看模式執行 Gateway 閘道器
   - 你需要可重複的除錯工作流程
 title: "除錯"
-x-i18n:
-  source_path: help/debugging.md
-  source_hash: 504c824bff479000
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:28:17Z
 ---
 
 # 除錯
 
-本頁涵蓋用於串流輸出的除錯輔助工具，特別是在提供者將推理混入一般文字時。
+This page covers debugging helpers for streaming output, especially when a
+provider mixes reasoning into normal text.
 
 ## 執行期除錯覆寫
 
-在聊天中使用 `/debug` 來設定**僅限執行期**的設定覆寫（記憶體中，不寫入磁碟）。
-`/debug` 預設為停用；可透過 `commands.debug: true` 啟用。
-當你需要在不編輯 `openclaw.json` 的情況下切換較冷門的設定時，這會很方便。
+Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
+`/debug` 預設為停用；請以 `commands.debug: true` 啟用。
+This is handy when you need to toggle obscure settings without editing `openclaw.json`.
 
 範例：
 
@@ -43,7 +37,7 @@ x-i18n:
 pnpm gateway:watch --force
 ```
 
-這對應到：
+這會對應到：
 
 ```bash
 tsx watch src/entry.ts gateway --force
@@ -53,13 +47,14 @@ tsx watch src/entry.ts gateway --force
 
 ## Dev 設定檔 + dev gateway（--dev）
 
-使用 dev 設定檔來隔離狀態，並建立安全、可拋棄的除錯環境。這裡有**兩個** `--dev` 旗標：
+Use the dev profile to isolate state and spin up a safe, disposable setup for
+debugging. 共有 **兩個** `--dev` 旗標：
 
 - **全域 `--dev`（設定檔）：** 將狀態隔離在 `~/.openclaw-dev` 之下，並將 Gateway 閘道器連接埠預設為 `19001`（其衍生連接埠也會隨之位移）。
 - **`gateway --dev`：告訴 Gateway 在缺少時自動建立預設設定 +
   工作區**（並略過 BOOTSTRAP.md）。
 
-建議流程（dev 設定檔 + dev 啟動）：
+建議流程（開發者設定檔 + dev bootstrap）：
 
 ```bash
 pnpm gateway:dev
@@ -91,8 +86,8 @@ OPENCLAW_PROFILE=dev openclaw tui
 pnpm gateway:dev:reset
 ```
 
-注意：`--dev` 是**全域**設定檔旗標，且可能會被某些執行器吞掉。
-如果需要明確指定，請使用環境變數形式：
+注意：`--dev` 是一個**全域**設定檔旗標，且會被某些執行器吃掉。
+If you need to spell it out, use the env var form:
 
 ```bash
 OPENCLAW_PROFILE=dev openclaw gateway --dev --reset
@@ -109,8 +104,9 @@ openclaw gateway stop
 
 ## 原始串流記錄（OpenClaw）
 
-OpenClaw 可在任何過濾／格式化之前記錄**原始助理串流**。
-這是判斷推理是否以純文字差量到達（或以獨立的思考區塊到達）的最佳方式。
+OpenClaw 可以在任何過濾／格式化之前，記錄**原始助理串流**。
+這是查看推理是否以純文字增量抵達
+（或作為獨立的思考區塊）的最佳方式。
 
 透過 CLI 啟用：
 
@@ -131,7 +127,7 @@ OPENCLAW_RAW_STREAM=1
 OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 ```
 
-預設檔案：
+Default file:
 
 `~/.openclaw/logs/raw-stream.jsonl`
 
@@ -160,5 +156,5 @@ PI_RAW_STREAM_PATH=~/.pi-mono/logs/raw-openai-completions.jsonl
 ## 安全性注意事項
 
 - 原始串流記錄可能包含完整提示、工具輸出與使用者資料。
-- 請將記錄保留在本機，並在除錯後刪除。
-- 若需分享記錄，請先移除祕密資訊與 PII。
+- Keep logs local and delete them after debugging.
+- 若你分享日誌，請先清除祕密資訊與 PII。

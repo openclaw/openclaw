@@ -4,13 +4,6 @@ read_when:
   - Je wilt wisselen tussen stable/beta/dev
   - Je bent prereleases aan het taggen of publiceren
 title: "Ontwikkelkanalen"
-x-i18n:
-  source_path: install/development-channels.md
-  source_hash: 2b01219b7e705044
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Ontwikkelkanalen

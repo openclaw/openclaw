@@ -4,14 +4,7 @@ read_when:
   - Potrzebujesz przeglądu architektury sieci i bezpieczeństwa
   - Diagnozujesz dostęp lokalny vs. tailnet lub parowanie
   - Chcesz kanonicznej listy dokumentów sieciowych
-title: "Sieć"
-x-i18n:
-  source_path: network.md
-  source_hash: 6a0d5080db73de4c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:19Z
+title: "network.md"
 ---
 
 # Hub sieciowy

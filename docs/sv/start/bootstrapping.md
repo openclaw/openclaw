@@ -1,24 +1,17 @@
 ---
-summary: ”Agentens bootstrap‑ritual som sår arbetsytan och identitetsfilerna”
+summary: "”Agentens bootstrap‑ritual som sår arbetsytan och identitetsfilerna”"
 read_when:
   - Förstå vad som händer vid agentens första körning
   - Förklara var bootstrap‑filerna finns
   - Felsöka introduktionens identitetskonfiguration
-title: ”Agent‑bootstrap”
+title: "”Agent‑bootstrap”"
 sidebarTitle: "Bootstrapping"
-x-i18n:
-  source_path: start/bootstrapping.md
-  source_hash: 4a08b5102f25c6c4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:18:28Z
 ---
 
 # Agent‑bootstrap
 
-Bootstrap är **första‑körningen**‑ritualen som förbereder en agents arbetsyta och
-samlar in identitetsuppgifter. Den sker efter introduktionen, när agenten startar
+Bootstrapping är den \*\*första-run-ritualen \*\* som förbereder en agent arbetsyta och
+samlar identitetsdetaljer. Det händer efter ombordstigning, när agenten startar
 för första gången.
 
 ## Vad bootstrap gör
@@ -33,9 +26,9 @@ Vid agentens första körning bootstrappar OpenClaw arbetsytan (standard
 
 ## Var den körs
 
-Bootstrap körs alltid på **gateway‑värden**. Om macOS‑appen ansluter till en
-fjärr‑Gateway (nätverksgateway) finns arbetsytan och bootstrap‑filerna på den
-fjärrmaskinen.
+Bootstrapping körs alltid på **gateway host**. Om macOS appen ansluter till
+en fjärr-Gateway, arbetsytan och bootstrapping filer live på den fjärr-
+-maskinen.
 
 <Note>
 När Gateway (nätverksgateway) körs på en annan maskin ska du redigera

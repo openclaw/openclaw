@@ -4,22 +4,15 @@ read_when:
   - Du vill förstå autokompaktering och /compact
   - Du felsöker långa sessioner som slår i kontextgränser
 title: "Kompaktering"
-x-i18n:
-  source_path: concepts/compaction.md
-  source_hash: e1d6791f2902044b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:53Z
 ---
 
 # Kontextfönster & kompaktering
 
-Varje modell har ett **kontextfönster** (max antal tokens den kan se). Långvariga chattar samlar på sig meddelanden och verktygsresultat; när fönstret blir trångt **kompakterar** OpenClaw äldre historik för att hålla sig inom gränserna.
+Varje modell har ett **sammanhangsfönster** (max polletter det kan se). Långsiktiga chattar samlar meddelanden och verktygsresultat; när fönstret är tätt, OpenClaw **kompakter** äldre historik för att hålla sig inom gränserna.
 
 ## Vad kompaktering är
 
-Kompaktering **sammanfattar äldre konversation** till en kompakt sammanfattningspost och behåller senaste meddelanden intakta. Sammanfattningen lagras i sessionshistoriken, så framtida förfrågningar använder:
+Komprimering **sammanfattar äldre konversation** i en kompakt sammanfattande post och håller de senaste meddelandena intakta. Sammanfattningen lagras i sessionshistoriken, så framtida förfrågningar användning:
 
 - Kompakteringssammanfattningen
 - Senaste meddelanden efter kompakteringspunkten
@@ -39,7 +32,8 @@ Du ser:
 - `🧹 Auto-compaction complete` i utförligt läge
 - `/status` som visar `🧹 Compactions: <count>`
 
-Före kompaktering kan OpenClaw köra en **tyst minnesrensning** för att lagra beständiga anteckningar på disk. Se [Minne](/concepts/memory) för detaljer och konfiguration.
+Innan komprimering kan OpenClaw köra en **tyst minne flush** sväng för att lagra
+hållbara anteckningar till disk. Se [Memory](/concepts/memory) för detaljer och konfiguration.
 
 ## Manuell kompaktering
 
@@ -51,7 +45,7 @@ Använd `/compact` (valfritt med instruktioner) för att tvinga en kompakterings
 
 ## Källa för kontextfönster
 
-Kontextfönstret är modellspecifikt. OpenClaw använder modelldefinitionen från den konfigurerade leverantörskatalogen för att fastställa gränser.
+Kontextfönstret är modellspecifikt. OpenClaw använder modelldefinitionen från den konfigurerade leverantörskatalogen för att bestämma gränser.
 
 ## Kompaktering vs beskärning
 

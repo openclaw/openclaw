@@ -5,13 +5,6 @@ read_when:
   - Pag-debug ng Android gateway discovery o auth
   - Pag-verify ng parity ng chat history sa iba’t ibang client
 title: "Android App"
-x-i18n:
-  source_path: platforms/android.md
-  source_hash: 0f6aacdb2bc50354
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:45Z
 ---
 
 # Android App (Node)
@@ -26,7 +19,7 @@ x-i18n:
 
 ## System control
 
-Ang system control (launchd/systemd) ay nasa host ng Gateway. Tingnan ang [Gateway](/gateway).
+System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
 
 ## Connection Runbook
 
@@ -43,7 +36,7 @@ Direktang kumokonekta ang Android sa Gateway WebSocket (default `ws://<host>:187
   - Manual na gateway host/port (fallback)
 - Kaya mong patakbuhin ang CLI (`openclaw`) sa gateway machine (o via SSH).
 
-### 1) Simulan ang Gateway
+### 1. Simulan ang Gateway
 
 ```bash
 openclaw gateway --port 18789 --verbose
@@ -58,7 +51,7 @@ Para sa tailnet-only setups (inirerekomenda para sa Vienna ⇄ London), i-bind a
 - Itakda ang `gateway.bind: "tailnet"` sa `~/.openclaw/openclaw.json` sa host ng Gateway.
 - I-restart ang Gateway / macOS menubar app.
 
-### 2) I-verify ang discovery (opsyonal)
+### 2. I-verify ang discovery (opsyonal)
 
 Mula sa gateway machine:
 
@@ -70,14 +63,14 @@ Karagdagang tala sa pag-debug: [Bonjour](/gateway/bonjour).
 
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
-Hindi tatawid ng mga network ang Android NSD/mDNS discovery. Kung ang Android node at ang gateway ay nasa magkaibang network pero konektado via Tailscale, gamitin ang Wide-Area Bonjour / unicast DNS-SD sa halip:
+Hindi tatawid ng mga network ang Android NSD/mDNS discovery. Kung ang iyong Android node at ang gateway ay nasa magkaibang network ngunit konektado sa pamamagitan ng Tailscale, gumamit ng Wide‑Area Bonjour / unicast DNS‑SD sa halip:
 
 1. Mag-set up ng DNS-SD zone (halimbawa `openclaw.internal.`) sa host ng Gateway at i-publish ang mga record na `_openclaw-gw._tcp`.
 2. I-configure ang Tailscale split DNS para sa napiling domain na tumuturo sa DNS server na iyon.
 
 Mga detalye at halimbawa ng CoreDNS config: [Bonjour](/gateway/bonjour).
 
-### 3) Kumonekta mula sa Android
+### 3. Kumonekta mula sa Android
 
 Sa Android app:
 
@@ -91,7 +84,7 @@ Pagkatapos ng unang matagumpay na pairing, awtomatikong magre-reconnect ang Andr
 - Manual endpoint (kung naka-enable), kung hindi
 - Ang huling nadiskubreng gateway (best-effort).
 
-### 4) Aprubahan ang pairing (CLI)
+### 4. Aprubahan ang pairing (CLI)
 
 Sa gateway machine:
 
@@ -102,7 +95,7 @@ openclaw nodes approve <requestId>
 
 Mga detalye ng pairing: [Gateway pairing](/gateway/pairing).
 
-### 5) I-verify na nakakonekta ang node
+### 5. I-verify na nakakonekta ang node
 
 - Via status ng nodes:
 
@@ -116,7 +109,7 @@ Mga detalye ng pairing: [Gateway pairing](/gateway/pairing).
   openclaw gateway call node.list --params "{}"
   ```
 
-### 6) Chat + history
+### 6. Chat + history
 
 Ginagamit ng Chat sheet ng Android node ang **primary session key** ng gateway (`main`), kaya ibinabahagi ang history at mga reply sa WebChat at iba pang client:
 
@@ -124,7 +117,7 @@ Ginagamit ng Chat sheet ng Android node ang **primary session key** ng gateway (
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
-### 7) Canvas + camera
+### 7. Canvas + camera
 
 #### Gateway Canvas Host (inirerekomenda para sa web content)
 
@@ -140,14 +133,14 @@ Tandaan: gumagamit ang mga node ng standalone canvas host sa `canvasHost.port` (
 openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/__openclaw__/canvas/"}'
 ```
 
-Tailnet (opsyonal): kung parehong nasa Tailscale ang dalawang device, gumamit ng MagicDNS name o tailnet IP sa halip na `.local`, hal. `http://<gateway-magicdns>:18793/__openclaw__/canvas/`.
+Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18793/__openclaw__/canvas/`.
 
-Nag-i-inject ang server na ito ng live-reload client sa HTML at nagre-reload kapag may pagbabago sa file.
-Ang A2UI host ay nasa `http://<gateway-host>:18793/__openclaw__/a2ui/`.
+This server injects a live-reload client into HTML and reloads on file changes.
+The A2UI host lives at `http://<gateway-host>:18793/__openclaw__/a2ui/`.
 
 Mga command ng Canvas (foreground lamang):
 
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (gamitin ang `{"url":""}` o `{"url":"/"}` para bumalik sa default scaffold). Ibinabalik ng `canvas.snapshot` ang `{ format, base64 }` (default `format="jpeg"`).
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). Ang `canvas.snapshot` ay nagbabalik ng `{ format, base64 }` (default `format="jpeg"`).
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias)
 
 Mga command ng camera (foreground lamang; may permission gate):

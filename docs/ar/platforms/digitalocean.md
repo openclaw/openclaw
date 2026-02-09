@@ -4,13 +4,6 @@ read_when:
   - إعداد OpenClaw على DigitalOcean
   - البحث عن استضافة VPS منخفضة التكلفة لـ OpenClaw
 title: "DigitalOcean"
-x-i18n:
-  source_path: platforms/digitalocean.md
-  source_hash: bacdea3a44bc663d
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:35Z
 ---
 
 # OpenClaw على DigitalOcean
@@ -23,13 +16,13 @@ x-i18n:
 
 ## مقارنة التكاليف (2026)
 
-| المزوّد      | الخطة           | المواصفات            | السعر/شهر   | الملاحظات                         |
-| ------------ | --------------- | -------------------- | ----------- | --------------------------------- |
-| Oracle Cloud | Always Free ARM | حتى 4 OCPU، 24GB RAM | $0          | ARM، سعة محدودة / تعقيدات التسجيل |
+| Provider     | الخطة           | المواصفات            | السعر/شهر                                                      | الملاحظات                         |
+| ------------ | --------------- | -------------------- | -------------------------------------------------------------- | --------------------------------- |
+| Oracle Cloud | Always Free ARM | حتى 4 OCPU، 24GB RAM | $0                                                             | ARM، سعة محدودة / تعقيدات التسجيل |
 | Hetzner      | CX22            | 2 vCPU، 4GB RAM      | €3.79 (~$4) | أرخص خيار مدفوع                   |
-| DigitalOcean | Basic           | 1 vCPU، 1GB RAM      | $6          | واجهة سهلة، توثيق جيد             |
-| Vultr        | Cloud Compute   | 1 vCPU، 1GB RAM      | $6          | مواقع عديدة                       |
-| Linode       | Nanode          | 1 vCPU، 1GB RAM      | $5          | أصبح الآن جزءًا من Akamai         |
+| DigitalOcean | Basic           | 1 vCPU، 1GB RAM      | $6                                                             | واجهة سهلة، توثيق جيد             |
+| Vultr        | Cloud Compute   | 1 vCPU، 1GB RAM      | $6                                                             | مواقع عديدة                       |
+| Linode       | Nanode          | 1 vCPU، 1GB RAM      | $5                                                             | أصبح الآن جزءًا من Akamai         |
 
 **اختيار المزوّد:**
 
@@ -45,7 +38,7 @@ x-i18n:
 - زوج مفاتيح SSH (أو الاستعداد لاستخدام المصادقة بكلمة مرور)
 - ~20 دقيقة
 
-## 1) إنشاء Droplet
+## 1. إنشاء Droplet
 
 1. سجّل الدخول إلى [DigitalOcean](https://cloud.digitalocean.com/)
 2. انقر **Create → Droplets**
@@ -63,7 +56,7 @@ x-i18n:
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) تثبيت OpenClaw
+## 3. تثبيت OpenClaw
 
 ```bash
 # Update system
@@ -80,20 +73,20 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4) تشغيل التهيئة الأولية
+## 4. تشغيل التهيئة الأولية
 
 ```bash
 openclaw onboard --install-daemon
 ```
 
-سيقودك معالج الإعداد خلال:
+سيمشي المعالج من خلال:
 
 - مصادقة النموذج (مفاتيح API أو OAuth)
 - إعداد القنوات (Telegram، WhatsApp، Discord، إلخ)
 - رمز Gateway (يُنشأ تلقائيًا)
 - تثبيت الخدمة (systemd)
 
-## 5) التحقق من Gateway
+## 5. التحقق من Gateway
 
 ```bash
 # Check status
@@ -106,7 +99,7 @@ systemctl --user status openclaw-gateway.service
 journalctl --user -u openclaw-gateway.service -f
 ```
 
-## 6) الوصول إلى لوحة التحكم
+## 6. الوصول إلى لوحة التحكم
 
 يرتبط Gateway بالـ loopback افتراضيًا. للوصول إلى واجهة التحكم:
 
@@ -147,7 +140,7 @@ openclaw gateway restart
 
 افتح: `http://<tailscale-ip>:18789` (يتطلب رمزًا).
 
-## 7) ربط قنواتك
+## 7. ربط قنواتك
 
 ### Telegram
 
@@ -183,7 +176,7 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
 ### استخدام نموذج أخف
 
-إذا كنت تواجه نفاد الذاكرة (OOMs)، ففكّر في:
+إذا كنت تضرب OOM، فكر:
 
 - استخدام نماذج قائمة على API (Claude، GPT) بدل النماذج المحلية
 - تعيين `agents.defaults.model.primary` إلى نموذج أصغر

@@ -4,13 +4,6 @@ read_when:
   - Beim Ausführen des headless Node-Hosts
   - Beim Koppeln eines Nicht-macOS-Nodes für system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:43Z
 ---
 
 # `openclaw node`

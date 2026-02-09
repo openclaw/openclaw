@@ -3,13 +3,6 @@ summary: "CLI-referens för `openclaw onboard` (interaktiv introduktionsguide)"
 read_when:
   - Du vill ha guidad konfigurering för gateway, arbetsyta, autentisering, kanaler och Skills
 title: "onboard"
-x-i18n:
-  source_path: cli/onboard.md
-  source_hash: 69a96accb2d571ff
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:47Z
 ---
 
 # `openclaw onboard`

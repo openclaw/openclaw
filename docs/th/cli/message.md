@@ -4,13 +4,6 @@ read_when:
   - การเพิ่มหรือแก้ไขการดำเนินการของmessageผ่านCLI
   - การเปลี่ยนพฤติกรรมช่องทางขาออก
 title: "ข้อความ"
-x-i18n:
-  source_path: cli/message.md
-  source_hash: 7781b44b3998d271
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:52:14Z
 ---
 
 # `openclaw message`
@@ -120,7 +113,7 @@ openclaw message <subcommand> [flags]
   - จำเป็น: `--guild-id`, `--query`
   - ไม่บังคับ: `--channel-id`, `--channel-ids` (ทำซ้ำ), `--author-id`, `--author-ids` (ทำซ้ำ), `--limit`
 
-### เธรด
+### Threads
 
 - `thread create`
   - ช่องทาง: Discord
@@ -174,14 +167,14 @@ openclaw message <subcommand> [flags]
 - `event create` (Discord): `--guild-id`, `--event-name`, `--start-time`
   - ไม่บังคับ: `--end-time`, `--desc`, `--channel-id`, `--location`, `--event-type`
 
-### การดูแล (Discord)
+### การกลั่นกรอง (Discord)
 
 - `timeout`: `--guild-id`, `--user-id` (ไม่บังคับ `--duration-min` หรือ `--until`; หากละทั้งคู่จะล้าง timeout)
 - `kick`: `--guild-id`, `--user-id` (+ `--reason`)
 - `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
   - `timeout` ยังรองรับ `--reason`
 
-### บรอดคาสต์
+### Broadcast
 
 - `broadcast`
   - ช่องทาง: ช่องทางที่คอนฟิกไว้ทั้งหมด; ใช้ `--channel all` เพื่อกำหนดเป้าหมายทุกผู้ให้บริการ

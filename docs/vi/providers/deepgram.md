@@ -4,23 +4,15 @@ read_when:
   - Bạn muốn dùng Deepgram chuyển giọng nói thành văn bản cho tệp âm thanh đính kèm
   - Bạn cần một ví dụ cấu hình Deepgram nhanh
 title: "Deepgram"
-x-i18n:
-  source_path: providers/deepgram.md
-  source_hash: dabd1f6942c339fb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:50Z
 ---
 
 # Deepgram (Phiên âm âm thanh)
 
-Deepgram là một API chuyển giọng nói thành văn bản. Trong OpenClaw, nó được dùng cho **phiên âm âm thanh/tin nhắn thoại đến**
-thông qua `tools.media.audio`.
+Deepgram là một API chuyển giọng nói thành văn bản. Trong OpenClaw, nó được sử dụng cho **phiên âm âm thanh/ghi chú giọng nói đầu vào** thông qua `tools.media.audio`.
 
 Khi được bật, OpenClaw tải tệp âm thanh lên Deepgram và chèn bản phiên âm
-vào pipeline phản hồi (`{{Transcript}}` + khối `[Audio]`). Đây **không phải streaming**;
-nó sử dụng endpoint phiên âm cho bản ghi đã được ghi sẵn.
+vào pipeline phản hồi (`{{Transcript}}` + khối `[Audio]`). Điều này **không phải streaming**;
+nó sử dụng endpoint phiên âm ghi sẵn.
 
 Website: [https://deepgram.com](https://deepgram.com)  
 Docs: [https://developers.deepgram.com](https://developers.deepgram.com)

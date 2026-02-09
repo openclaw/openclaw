@@ -4,13 +4,6 @@ read_when:
   - Tilføjelse eller ændring af understøttelse af afstemninger
   - Fejlfinding af afstemningsafsendelser fra CLI eller gateway
 title: "Afstemninger"
-x-i18n:
-  source_path: automation/poll.md
-  source_hash: 760339865d27ec40
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:51Z
 ---
 
 # Afstemninger
@@ -64,13 +57,13 @@ Parametre:
 ## Kanal-forskelle
 
 - WhatsApp: 2-12 muligheder, `maxSelections` skal være inden for antallet af muligheder, ignorerer `durationHours`.
-- Discord: 2-10 muligheder, `durationHours` begrænses til 1-768 timer (standard 24). `maxSelections > 1` aktiverer multivalg; Discord understøtter ikke et strengt valgantal.
-- Microsoft Teams: Adaptive Card-afstemninger (OpenClaw-administrerede). Ingen indbygget afstemnings-API; `durationHours` ignoreres.
+- Discord: 2-10 muligheder, `varighedTimer` fastspændt til 1-768 timer (standard 24). `maxSelection > 1` aktiverer multi-select; Discord understøtter ikke en streng markeringstælling.
+- MS Teams: Adaptive Card meningsmålinger (OpenClaw-administreret). Ingen native meningsmåling API; `durationHours` ignoreres.
 
 ## Agent-værktøj (Message)
 
 Brug værktøjet `message` med handlingen `poll` (`to`, `pollQuestion`, `pollOption`, valgfri `pollMulti`, `pollDurationHours`, `channel`).
 
-Bemærk: Discord har ingen “vælg præcis N”-tilstand; `pollMulti` kortlægges til multivalg.
-Teams-afstemninger gengives som Adaptive Cards og kræver, at gatewayen forbliver online
+Bemærk: Discord har ingen “vælge præcis N” tilstand; `pollMulti` kort til multi-select.
+Teams meningsmålinger gengives som Adaptive Cards og kræver gateway til at forblive online
 for at registrere stemmer i `~/.openclaw/msteams-polls.json`.

@@ -4,24 +4,17 @@ read_when:
   - آپ OpenClaw میں Zalo پرسنل (غیر سرکاری) سپورٹ چاہتے ہیں
   - آپ zalouser پلگ اِن کو کنفیگر یا ڈیولپ کر رہے ہیں
 title: "Zalo پرسنل پلگ اِن"
-x-i18n:
-  source_path: plugins/zalouser.md
-  source_hash: b29b788b023cd507
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:33Z
 ---
 
 # Zalo پرسنل (پلگ اِن)
 
 OpenClaw کے لیے Zalo پرسنل سپورٹ بطور پلگ اِن، جو `zca-cli` استعمال کرتے ہوئے ایک عام Zalo یوزر اکاؤنٹ کو خودکار بناتا ہے۔
 
-> **تنبیہ:** غیر سرکاری آٹومیشن کے نتیجے میں اکاؤنٹ معطل یا بین ہو سکتا ہے۔ اپنے ذمہ استعمال کریں۔
+> **Warning:** Unofficial automation may lead to account suspension/ban. Use at your own risk.
 
 ## نام گذاری
 
-چینل آئی ڈی `zalouser` ہے تاکہ واضح رہے کہ یہ **پرسنل Zalo یوزر اکاؤنٹ** (غیر سرکاری) کو خودکار بناتا ہے۔ ہم مستقبل میں ممکنہ سرکاری Zalo API انضمام کے لیے `zalo` محفوظ رکھتے ہیں۔
+چینل آئی ڈی `zalouser` ہے تاکہ واضح ہو کہ یہ ایک **ذاتی Zalo صارف اکاؤنٹ** (غیر سرکاری) کو خودکار بناتا ہے۔ ہم `zalo` کو مستقبل میں ممکنہ سرکاری Zalo API انضمام کے لیے محفوظ رکھتے ہیں۔
 
 ## یہ کہاں چلتا ہے
 

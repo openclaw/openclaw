@@ -4,13 +4,6 @@ read_when:
   - Запуск хоста узла без графического интерфейса
   - Сопряжение узла не на macOS для system.run
 title: "node"
-x-i18n:
-  source_path: cli/node.md
-  source_hash: a8b1a57712663e22
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:55:24Z
 ---
 
 # `openclaw node`
@@ -97,7 +90,7 @@ openclaw node uninstall
 
 Команды сервиса принимают `--json` для машиночитаемого вывода.
 
-## Сопряжение
+## Pairing
 
 Первое подключение создаёт ожидающий запрос на сопряжение узла на Gateway.
 Подтвердите его через:
@@ -110,7 +103,7 @@ openclaw nodes approve <requestId>
 Хост узла сохраняет свой id узла, токен, отображаемое имя и информацию о подключении к Gateway в
 `~/.openclaw/node.json`.
 
-## Подтверждения выполнения команд
+## Утверждения Exec
 
 `system.run` ограничено локальными подтверждениями выполнения команд:
 

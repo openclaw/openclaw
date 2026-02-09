@@ -5,13 +5,6 @@ read_when:
   - آپ کو مخصوص فراہم کنندگان کے لیے غیر تعاملی مثالیں درکار ہوں
 title: "CLI خودکاری"
 sidebarTitle: "CLI automation"
-x-i18n:
-  source_path: start/wizard-cli-automation.md
-  source_hash: 5b5463359a87cfe6
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:40Z
 ---
 
 # CLI خودکاری
@@ -19,7 +12,7 @@ x-i18n:
 `--non-interactive` کا استعمال کر کے `openclaw onboard` کو خودکار بنائیں۔
 
 <Note>
-`--json` کا مطلب غیر تعاملی موڈ نہیں ہوتا۔ اسکرپٹس کے لیے `--non-interactive` (اور `--workspace`) استعمال کریں۔
+`--json` does not imply non-interactive mode. Use `--non-interactive` (and `--workspace`) for scripts.
 </Note>
 
 ## بنیادی غیر تعاملی مثال
@@ -117,7 +110,8 @@ openclaw onboard --non-interactive \
 
 ## ایک اور ایجنٹ شامل کریں
 
-اپنے ورک اسپیس، سیشنز، اور تصدیقی پروفائلز کے ساتھ ایک علیحدہ ایجنٹ بنانے کے لیے `openclaw agents add <name>` استعمال کریں۔ `--workspace` کے بغیر چلانے پر ویزارڈ شروع ہو جاتا ہے۔
+Use `openclaw agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 ```bash
 openclaw agents add work \

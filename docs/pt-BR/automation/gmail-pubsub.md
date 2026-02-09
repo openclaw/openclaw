@@ -4,13 +4,6 @@ read_when:
   - Conectando gatilhos da caixa de entrada do Gmail ao OpenClaw
   - Configurando push do Pub/Sub para despertar o agente
 title: "Gmail PubSub"
-x-i18n:
-  source_path: automation/gmail-pubsub.md
-  source_hash: dfb92133b69177e4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:29:49Z
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -92,6 +85,7 @@ Notas:
 - Ordem de fallback: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primário (autenticação/limite de taxa/timeouts).
 - Se `agents.defaults.models` estiver definido, o modelo do Gmail deve estar na lista de permissões.
 - O conteúdo do hook do Gmail é envolvido por limites de segurança de conteúdo externo por padrão.
+  Para desativar (perigoso), defina `hooks.gmail.allowUnsafeExternalContent: true`.
   Para desativar (perigoso), defina `hooks.gmail.allowUnsafeExternalContent: true`.
 
 Para personalizar ainda mais o tratamento do payload, adicione `hooks.mappings` ou um módulo de transformação JS/TS

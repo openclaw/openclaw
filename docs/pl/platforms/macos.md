@@ -4,13 +4,6 @@ read_when:
   - Implementowanie funkcji aplikacji macOS
   - Zmiany cyklu życia gateway lub mostkowania węzłów na macOS
 title: "Aplikacja macOS"
-x-i18n:
-  source_path: platforms/macos.md
-  source_hash: a5b1c02e5905e4cb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:39Z
 ---
 
 # OpenClaw macOS Companion (pasek menu + broker gateway)

@@ -4,13 +4,6 @@ read_when:
   - استكشاف أخطاء مصادقة النماذج أو انتهاء صلاحية OAuth
   - توثيق المصادقة أو تخزين بيانات الاعتماد
 title: "المصادقة"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:16Z
 ---
 
 # المصادقة
@@ -143,7 +136,7 @@ openclaw models auth order clear --provider anthropic
 openclaw models status
 ```
 
-### الرمز على وشك الانتهاء/منتهي الصلاحية
+### انتهت صلاحية الرمز المميز
 
 شغّل `openclaw models status` لتأكيد أي ملف تعريف على وشك الانتهاء. إذا كان ملف التعريف
 مفقودًا، فأعد تشغيل `claude setup-token` وألصق الرمز مرة أخرى.

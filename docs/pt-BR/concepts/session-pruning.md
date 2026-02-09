@@ -3,13 +3,6 @@ summary: "Poda de sessão: corte de resultados de ferramentas para reduzir o inc
 read_when:
   - Você quer reduzir o crescimento de contexto do LLM a partir de saídas de ferramentas
   - Você está ajustando agents.defaults.contextPruning
-x-i18n:
-  source_path: concepts/session-pruning.md
-  source_hash: 9b0aa2d1abea7050
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:41Z
 ---
 
 # Poda de sessão
@@ -72,8 +65,8 @@ Se `agents.defaults.contextTokens` estiver definido, ele é tratado como um limi
 ## Seleção de ferramentas
 
 - `tools.allow` / `tools.deny` suportam curingas `*`.
-- Deny tem prioridade.
-- A correspondência não diferencia maiúsculas de minúsculas.
+- Negar vitórias.
+- Correspondência é insensível a maiúsculas e minúsculas.
 - Lista de permissão vazia => todas as ferramentas permitidas.
 
 ## Interação com outros limites

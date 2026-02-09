@@ -5,20 +5,12 @@ read_when:
   - Gỡ lỗi vì sao openclaw can thiệp vào Chrome của bạn
   - Triển khai cài đặt trình duyệt + vòng đời trong ứng dụng macOS
 title: "Trình duyệt (do OpenClaw quản lý)"
-x-i18n:
-  source_path: tools/browser.md
-  source_hash: a868d040183436a1
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:41:05Z
 ---
 
 # Trình duyệt (do openclaw quản lý)
 
-OpenClaw có thể chạy một **profile Chrome/Brave/Edge/Chromium chuyên dụng** do tác tử điều khiển.
-Nó được cách ly khỏi trình duyệt cá nhân của bạn và được quản lý thông qua một dịch vụ
-điều khiển cục bộ nhỏ bên trong Gateway (chỉ loopback).
+OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
+35. Nó được cô lập khỏi trình duyệt cá nhân của bạn và được quản lý thông qua một dịch vụ điều khiển cục bộ nhỏ bên trong Gateway (chỉ loopback).
 
 Góc nhìn cho người mới:
 
@@ -35,8 +27,8 @@ Góc nhìn cho người mới:
 - Hành động của tác tử (nhấp/gõ/kéo/chọn), snapshot, ảnh chụp màn hình, PDF.
 - Hỗ trợ đa profile tùy chọn (`openclaw`, `work`, `remote`, ...).
 
-Trình duyệt này **không** phải là trình duyệt dùng hằng ngày. Nó là một bề mặt an toàn,
-cách ly cho tự động hóa và xác minh của tác tử.
+This browser is **not** your daily driver. It is a safe, isolated surface for
+agent automation and verification.
 
 ## Khởi động nhanh
 
@@ -86,8 +78,8 @@ Cài đặt trình duyệt nằm trong `~/.openclaw/openclaw.json`.
 
 Ghi chú:
 
-- Dịch vụ điều khiển trình duyệt bind vào loopback trên một cổng được suy ra từ `gateway.port`
-  (mặc định: `18791`, tức là gateway + 2). Relay dùng cổng kế tiếp (`18792`).
+- The browser control service binds to loopback on a port derived from `gateway.port`
+  (default: `18791`, which is gateway + 2). The relay uses the next port (`18792`).
 - Nếu bạn ghi đè cổng Gateway (`gateway.port` hoặc `OPENCLAW_GATEWAY_PORT`),
   các cổng trình duyệt suy ra sẽ dịch chuyển để giữ cùng một “họ”.
 - `cdpUrl` mặc định là cổng relay khi không được đặt.
@@ -95,15 +87,15 @@ Ghi chú:
 - `remoteCdpHandshakeTimeoutMs` áp dụng cho kiểm tra khả năng truy cập WebSocket CDP từ xa.
 - `attachOnly: true` nghĩa là “không bao giờ khởi chạy trình duyệt cục bộ; chỉ gắn nếu nó đã chạy.”
 - `color` + `color` theo từng profile nhuộm màu UI trình duyệt để bạn biết profile nào đang hoạt động.
-- Profile mặc định là `chrome` (relay extension). Dùng `defaultProfile: "openclaw"` cho trình duyệt được quản lý.
+- Default profile is `chrome` (extension relay). 36. Dùng `defaultProfile: "openclaw"` cho trình duyệt được quản lý.
 - Thứ tự tự phát hiện: trình duyệt mặc định hệ thống nếu dựa trên Chromium; nếu không thì Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Các profile `openclaw` cục bộ tự gán `cdpPort`/`cdpUrl` — chỉ đặt các giá trị đó cho CDP từ xa.
 
 ## Dùng Brave (hoặc trình duyệt dựa trên Chromium khác)
 
-Nếu **trình duyệt mặc định hệ thống** của bạn dựa trên Chromium (Chrome/Brave/Edge/etc),
-OpenClaw sẽ tự động dùng nó. Đặt `browser.executablePath` để ghi đè
-tự phát hiện:
+If your **system default** browser is Chromium-based (Chrome/Brave/Edge/etc),
+OpenClaw uses it automatically. Set `browser.executablePath` to override
+auto-detection:
 
 Ví dụ CLI:
 
@@ -138,23 +130,23 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 - **Điều khiển cục bộ (mặc định):** Gateway khởi động dịch vụ điều khiển loopback và có thể mở trình duyệt cục bộ.
 - **Điều khiển từ xa (node host):** chạy một node host trên máy có trình duyệt; Gateway proxy các hành động trình duyệt tới đó.
-- **CDP từ xa:** đặt `browser.profiles.<name>.cdpUrl` (hoặc `browser.cdpUrl`) để
-  gắn vào một trình duyệt dựa trên Chromium từ xa. Trong trường hợp này, OpenClaw sẽ không khởi chạy trình duyệt cục bộ.
+- **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
+  attach to a remote Chromium-based browser. 37. Trong trường hợp này, OpenClaw sẽ không khởi chạy trình duyệt cục bộ.
 
 URL CDP từ xa có thể bao gồm xác thực:
 
 - Token qua query (ví dụ: `https://provider.example?token=<token>`)
 - HTTP Basic auth (ví dụ: `https://user:pass@provider.example`)
 
-OpenClaw giữ nguyên xác thực khi gọi các endpoint `/json/*` và khi kết nối
-tới WebSocket CDP. Ưu tiên biến môi trường hoặc trình quản lý secrets cho
-token thay vì commit chúng vào file cấu hình.
+OpenClaw preserves the auth when calling `/json/*` endpoints and when connecting
+to the CDP WebSocket. Prefer environment variables or secrets managers for
+tokens instead of committing them to config files.
 
 ## Node browser proxy (mặc định zero-config)
 
-Nếu bạn chạy **node host** trên máy có trình duyệt, OpenClaw có thể
-tự động định tuyến các lệnh công cụ trình duyệt tới node đó mà không cần cấu hình trình duyệt bổ sung.
-Đây là đường đi mặc định cho các Gateway từ xa.
+If you run a **node host** on the machine that has your browser, OpenClaw can
+auto-route browser tool calls to that node without any extra browser config.
+38. Đây là đường dẫn mặc định cho các gateway từ xa.
 
 Ghi chú:
 
@@ -166,9 +158,9 @@ Ghi chú:
 
 ## Browserless (CDP từ xa được lưu trữ)
 
-[Browserless](https://browserless.io) là một dịch vụ Chromium được lưu trữ, phơi bày
-các endpoint CDP qua HTTPS. Bạn có thể trỏ một profile trình duyệt OpenClaw tới
-endpoint khu vực của Browserless và xác thực bằng khóa API của bạn.
+[Browserless](https://browserless.io) is a hosted Chromium service that exposes
+CDP endpoints over HTTPS. You can point a OpenClaw browser profile at a
+Browserless region endpoint and authenticate with your API key.
 
 Ví dụ:
 
@@ -209,7 +201,7 @@ Mẹo cho CDP từ xa:
 
 ## Profile (đa trình duyệt)
 
-OpenClaw hỗ trợ nhiều profile có tên (cấu hình định tuyến). Profile có thể là:
+OpenClaw supports multiple named profiles (routing configs). Profiles can be:
 
 - **openclaw-managed**: một instance trình duyệt dựa trên Chromium chuyên dụng với thư mục dữ liệu người dùng + cổng CDP riêng
 - **remote**: một URL CDP tường minh (trình duyệt dựa trên Chromium chạy ở nơi khác)
@@ -242,8 +234,8 @@ Nếu Gateway chạy ở nơi khác, hãy chạy một node host trên máy có 
 
 ### Phiên sandboxed
 
-Nếu phiên tác tử được sandboxed, công cụ `browser` có thể mặc định là `target="sandbox"` (sandbox browser).
-Việc takeover relay Chrome extension yêu cầu quyền điều khiển trình duyệt host, vì vậy hoặc là:
+If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
+Chrome extension relay takeover requires host browser control, so either:
 
 - chạy phiên không sandboxed, hoặc
 - đặt `agents.defaults.sandbox.browser.allowHostControl: true` và dùng `target="host"` khi gọi công cụ.
@@ -325,10 +317,10 @@ Tất cả các endpoint chấp nhận `?profile=<name>`.
 
 ### Yêu cầu Playwright
 
-Một số tính năng (điều hướng/hành động/AI snapshot/role snapshot, ảnh chụp phần tử, PDF)
-yêu cầu Playwright. Nếu Playwright chưa được cài, các endpoint đó trả về lỗi 501
-rõ ràng. ARIA snapshot và ảnh chụp cơ bản vẫn hoạt động cho Chrome do openclaw quản lý.
-Đối với driver relay Chrome extension, ARIA snapshot và ảnh chụp yêu cầu Playwright.
+Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
+Playwright. If Playwright isn’t installed, those endpoints return a clear 501
+error. ARIA snapshots and basic screenshots still work for openclaw-managed Chrome.
+For the Chrome extension relay driver, ARIA snapshots and screenshots require Playwright.
 
 Nếu bạn thấy `Playwright is not available in this gateway build`, hãy cài gói
 Playwright đầy đủ (không phải `playwright-core`) và khởi động lại gateway, hoặc cài lại
@@ -336,17 +328,17 @@ OpenClaw với hỗ trợ trình duyệt.
 
 #### Cài Playwright cho Docker
 
-Nếu Gateway của bạn chạy trong Docker, tránh `npx playwright` (xung đột override npm).
-Hãy dùng CLI đi kèm:
+1. Nếu Gateway của bạn chạy trong Docker, tránh dùng `npx playwright` (xung đột ghi đè npm).
+2. Thay vào đó, hãy dùng CLI được đóng gói sẵn:
 
 ```bash
 docker compose run --rm openclaw-cli \
   node /app/node_modules/playwright-core/cli.js install chromium
 ```
 
-Để lưu trữ các bản tải xuống của trình duyệt, đặt `PLAYWRIGHT_BROWSERS_PATH` (ví dụ,
-`/home/node/.cache/ms-playwright`) và đảm bảo `/home/node` được persist thông qua
-`OPENCLAW_HOME_VOLUME` hoặc bind mount. Xem [Docker](/install/docker).
+3. Để lưu trữ các bản tải xuống của trình duyệt, hãy đặt `PLAYWRIGHT_BROWSERS_PATH` (ví dụ,
+   `/home/node/.cache/ms-playwright`) và đảm bảo `/home/node` được lưu trữ bền vững thông qua
+   `OPENCLAW_HOME_VOLUME` hoặc một bind mount. 4. Xem [Docker](/install/docker).
 
 ## Cách hoạt động (nội bộ)
 
@@ -362,8 +354,8 @@ bạn hoán đổi trình duyệt và profile cục bộ/từ xa.
 
 ## Tham chiếu nhanh CLI
 
-Tất cả các lệnh chấp nhận `--browser-profile <name>` để nhắm tới một profile cụ thể.
-Tất cả các lệnh cũng chấp nhận `--json` cho đầu ra máy-đọc (payload ổn định).
+All commands accept `--browser-profile <name>` to target a specific profile.
+39. Tất cả các lệnh cũng chấp nhận `--json` để xuất kết quả dạng máy đọc được (payload ổn định).
 
 Cơ bản:
 
@@ -455,8 +447,8 @@ Ghi chú:
   - `--frame "<iframe selector>"` giới hạn role snapshot trong một iframe (kết hợp với role ref như `e12`).
   - `--interactive` xuất danh sách phẳng, dễ chọn các phần tử tương tác (tốt nhất để điều khiển hành động).
   - `--labels` thêm ảnh chụp chỉ viewport với nhãn ref chồng lên (in `MEDIA:<path>`).
-- `click`/`type`/v.v. yêu cầu một `ref` từ `snapshot` (hoặc `12` dạng số hoặc role ref `e12`).
-  CSS selector cố ý không được hỗ trợ cho hành động.
+- 40. `click`/`type`/v.v. yêu cầu một `ref` từ `snapshot` (có thể là số `12` hoặc role ref `e12`).
+  41. Bộ chọn CSS cố ý không được hỗ trợ cho các hành động.
 
 ## Snapshot và ref
 
@@ -550,9 +542,8 @@ Hữu ích cho các quy trình “làm cho trang hoạt động như X”:
 ## Bảo mật & quyền riêng tư
 
 - Profile trình duyệt openclaw có thể chứa các phiên đã đăng nhập; hãy xem nó là nhạy cảm.
-- `browser act kind=evaluate` / `openclaw browser evaluate` và `wait --fn`
-  thực thi JavaScript tùy ý trong ngữ cảnh trang. Prompt injection có thể điều hướng
-  việc này. Hãy tắt bằng `browser.evaluateEnabled=false` nếu bạn không cần.
+- `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
+  execute arbitrary JavaScript in the page context. 41. Prompt injection có thể điều hướng điều này. 42. Vô hiệu hóa bằng `browser.evaluateEnabled=false` nếu bạn không cần.
 - Với ghi chú đăng nhập và chống bot (X/Twitter, v.v.), xem [Đăng nhập trình duyệt + đăng bài X/Twitter](/tools/browser-login).
 - Giữ Gateway/node host ở chế độ riêng tư (chỉ loopback hoặc tailnet).
 - Endpoint CDP từ xa rất mạnh; hãy tunnel và bảo vệ chúng.

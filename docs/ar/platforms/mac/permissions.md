@@ -5,13 +5,6 @@ read_when:
   - حزم تطبيق macOS أو توقيعه
   - تغيير معرّفات الحِزمة أو مسارات تثبيت التطبيق
 title: "أذونات macOS"
-x-i18n:
-  source_path: platforms/mac/permissions.md
-  source_hash: 52bee5c896e31e99
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:48:31Z
 ---
 
 # أذونات macOS ‏(TCC)

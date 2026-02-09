@@ -5,13 +5,6 @@ read_when:
   - Gỡ lỗi xác thực Gateway, chế độ bind và kết nối
   - Khám phá gateway qua Bonjour (LAN + tailnet)
 title: "gateway"
-x-i18n:
-  source_path: cli/gateway.md
-  source_hash: cbc1690e6be84073
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:38:31Z
 ---
 
 # Gateway CLI
@@ -42,10 +35,10 @@ openclaw gateway run
 
 Ghi chú:
 
-- Theo mặc định, Gateway sẽ từ chối khởi động trừ khi `gateway.mode=local` được thiết lập trong `~/.openclaw/openclaw.json`. Dùng `--allow-unconfigured` cho các lần chạy ad-hoc/dev.
+- Theo mặc định, Gateway từ chối khởi động trừ khi `gateway.mode=local` được đặt trong `~/.openclaw/openclaw.json`. Dùng `--allow-unconfigured` cho các lần chạy ad-hoc/dev.
 - Bind vượt ra ngoài loopback khi không có xác thực sẽ bị chặn (hàng rào an toàn).
 - `SIGUSR1` kích hoạt khởi động lại trong tiến trình khi được ủy quyền (bật `commands.restart` hoặc dùng công cụ/config apply/update của gateway).
-- Các handler `SIGINT`/`SIGTERM` sẽ dừng tiến trình gateway, nhưng không khôi phục bất kỳ trạng thái terminal tùy chỉnh nào. Nếu bạn bọc CLI bằng TUI hoặc input raw-mode, hãy khôi phục terminal trước khi thoát.
+- Trình xử lý `SIGINT`/`SIGTERM` sẽ dừng tiến trình gateway, nhưng không khôi phục bất kỳ trạng thái terminal tùy chỉnh nào. Nếu bạn bọc CLI bằng TUI hoặc nhập liệu chế độ raw, hãy khôi phục terminal trước khi thoát.
 
 ### Tùy chọn
 
@@ -85,8 +78,8 @@ Tùy chọn dùng chung (khi được hỗ trợ):
 - `--timeout <ms>`: timeout/ngân sách (khác nhau theo từng lệnh).
 - `--expect-final`: chờ phản hồi “final” (các lời gọi agent).
 
-Lưu ý: khi bạn đặt `--url`, CLI sẽ không fallback sang thông tin xác thực từ config hoặc biến môi trường.
-Hãy truyền `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là lỗi.
+Lưu ý: khi bạn đặt `--url`, CLI sẽ không quay về dùng thông tin xác thực từ cấu hình hay môi trường.
+Truyền `--token` hoặc `--password` một cách tường minh. Thiếu thông tin xác thực tường minh là một lỗi.
 
 ### `gateway health`
 
@@ -114,12 +107,12 @@ Tùy chọn:
 
 ### `gateway probe`
 
-`gateway probe` là lệnh “debug mọi thứ”. Nó luôn probe:
+`gateway probe` là lệnh “debug mọi thứ”. Nó luôn thăm dò:
 
 - gateway từ xa đã cấu hình của bạn (nếu có), và
 - localhost (loopback) **ngay cả khi đã cấu hình remote**.
 
-Nếu có nhiều gateway có thể truy cập, lệnh sẽ in tất cả. Nhiều gateway được hỗ trợ khi bạn dùng các profile/cổng cách ly (ví dụ: bot cứu hộ), nhưng hầu hết cài đặt vẫn chỉ chạy một gateway.
+Nếu có nhiều gateway có thể truy cập, nó sẽ in ra tất cả. Nhiều gateway được hỗ trợ khi bạn dùng hồ sơ/cổng độc lập (ví dụ: một bot cứu hộ), nhưng hầu hết cài đặt vẫn chỉ chạy một gateway.
 
 ```bash
 openclaw gateway probe

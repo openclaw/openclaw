@@ -4,17 +4,10 @@ read_when:
   - Pareamento de nós iOS/Android a um gateway
   - Uso de canvas/câmera do nó para contexto do agente
   - Adição de novos comandos de nó ou auxiliares de CLI
-title: "Nós"
-x-i18n:
-  source_path: nodes/index.md
-  source_hash: ba259b5c384b9329
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:35Z
+title: "Nodes"
 ---
 
-# Nós
+# Nodes
 
 Um **nó** é um dispositivo complementar (macOS/iOS/Android/headless) que se conecta ao **WebSocket** do Gateway (mesma porta dos operadores) com `role: "node"` e expõe uma superfície de comandos (por exemplo, `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Detalhes do protocolo: [Gateway protocol](/gateway/protocol).
 
@@ -123,7 +116,7 @@ openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 
 As aprovações ficam no host de nó em `~/.openclaw/exec-approvals.json`.
 
-### Apontar exec para o nó
+### Vinculação de exec ao nó
 
 Configure os padrões (configuração do gateway):
 
@@ -289,7 +282,7 @@ Notas:
   Ask/allowlist/full se comportam da mesma forma que no host de nó headless; prompts negados retornam `SYSTEM_RUN_DENIED`.
 - No host de nó headless, `system.run` é controlado por aprovações de exec (`~/.openclaw/exec-approvals.json`).
 
-## Vinculação de exec ao nó
+## Associar nó Exec
 
 Quando vários nós estão disponíveis, você pode vincular exec a um nó específico.
 Isso define o nó padrão para `exec host=node` (e pode ser sobrescrito por agente).

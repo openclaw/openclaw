@@ -3,13 +3,6 @@ summary: "WebSocket गेटवे आर्किटेक्चर, घटक
 read_when:
   - Gateway प्रोटोकॉल, क्लाइंट्स, या ट्रांसपोर्ट्स पर काम करते समय
 title: "Gateway आर्किटेक्चर"
-x-i18n:
-  source_path: concepts/architecture.md
-  source_hash: 14079136faa267d7
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:19Z
 ---
 
 # Gateway आर्किटेक्चर
@@ -104,6 +97,7 @@ Client                    Gateway
 ## रिमोट एक्सेस
 
 - प्राथमिक: Tailscale या VPN।
+
 - वैकल्पिक: SSH टनल
 
   ```bash
@@ -111,6 +105,7 @@ Client                    Gateway
   ```
 
 - टनल के ऊपर वही हैंडशेक + ऑथ टोकन लागू होते हैं।
+
 - रिमोट सेटअप्स में WS के लिए TLS + वैकल्पिक पिनिंग सक्षम की जा सकती है।
 
 ## ऑपरेशन्स स्नैपशॉट

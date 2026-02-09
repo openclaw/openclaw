@@ -4,13 +4,6 @@ read_when:
   - Szukasz informacji o statusie aplikacji towarzyszącej na Linuksa
   - Planujesz zakres wsparcia platform lub wkład w rozwój
 title: "Aplikacja Linux"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:23Z
 ---
 
 # Aplikacja Linux

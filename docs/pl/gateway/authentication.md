@@ -4,13 +4,6 @@ read_when:
   - Debugowanie uwierzytelniania modelu lub wygaśnięcia OAuth
   - Dokumentowanie uwierzytelniania lub przechowywania poświadczeń
 title: "Uwierzytelnianie"
-x-i18n:
-  source_path: gateway/authentication.md
-  source_hash: 66fa2c64ff374c9c
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:51:14Z
 ---
 
 # Uwierzytelnianie
@@ -112,7 +105,7 @@ openclaw doctor
 
 ## Kontrolowanie, które poświadczenie jest używane
 
-### Na sesję (polecenie czatu)
+### Na sesję (komenda czatu)
 
 Użyj `/model <alias-or-id>@<profileId>`, aby przypiąć konkretne poświadczenie dostawcy dla bieżącej sesji
 (przykładowe identyfikatory profili: `anthropic:default`, `anthropic:work`).

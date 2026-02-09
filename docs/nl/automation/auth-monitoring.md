@@ -4,13 +4,6 @@ read_when:
   - Auth-vervalbewaking of waarschuwingen instellen
   - Automatiseren van controles voor OAuth-vernieuwing van Claude Code / Codex
 title: "Auth-bewaking"
-x-i18n:
-  source_path: automation/auth-monitoring.md
-  source_hash: eef179af9545ed7a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:56Z
 ---
 
 # Auth-bewaking

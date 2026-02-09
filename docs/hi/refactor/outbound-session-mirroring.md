@@ -1,13 +1,6 @@
 ---
-title: आउटबाउंड सत्र मिररिंग रिफ़ैक्टर (Issue #1520)
+title: "आउटबाउंड सत्र मिररिंग रिफ़ैक्टर (Issue #1520)" #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:47Z
 ---
 
 # आउटबाउंड सत्र मिररिंग रिफ़ैक्टर (Issue #1520)
@@ -20,7 +13,7 @@ x-i18n:
 
 ## संदर्भ
 
-आउटबाउंड भेजों को लक्ष्य चैनल सत्र के बजाय _वर्तमान_ एजेंट सत्र (टूल सत्र कुंजी) में मिरर किया जा रहा था। इनबाउंड रूटिंग चैनल/पीयर सत्र कुंजियों का उपयोग करती है, इसलिए आउटबाउंड प्रतिक्रियाएँ गलत सत्र में पहुँचती थीं और प्रथम-संपर्क लक्ष्यों में अक्सर सत्र प्रविष्टियाँ नहीं होती थीं।
+Outbound sends were mirrored into the _current_ agent session (tool session key) rather than the target channel session. Inbound routing uses channel/peer session keys, so outbound responses landed in the wrong session and first-contact targets often lacked session entries.
 
 ## लक्ष्य
 
@@ -58,7 +51,7 @@ x-i18n:
 
 ## निर्णय
 
-- **Gateway send सत्र व्युत्पत्ति**: यदि `sessionKey` प्रदान किया गया है, तो उसका उपयोग करें। यदि छोड़ा गया है, तो लक्ष्य + डिफ़ॉल्ट एजेंट से sessionKey व्युत्पन्न करें और वहीं मिरर करें।
+- **Gateway send session derivation**: if `sessionKey` is provided, use it. If omitted, derive a sessionKey from target + default agent and mirror there.
 - **सत्र प्रविष्टि निर्माण**: हमेशा `recordSessionMetaFromInbound` का उपयोग करें, जिसमें `Provider/From/To/ChatType/AccountId/Originating*` इनबाउंड प्रारूपों के अनुरूप हों।
 - **लक्ष्य सामान्यीकरण**: आउटबाउंड रूटिंग उपलब्ध होने पर रेज़ॉल्व किए गए लक्ष्यों (post `resolveChannelTarget`) का उपयोग करती है।
 - **सत्र कुंजी केसिंग**: लिखते समय और माइग्रेशन के दौरान सत्र कुंजियों को लोअरकेस में कैनोनिकलाइज़ करें।
@@ -76,7 +69,7 @@ x-i18n:
 
 ## खुले आइटम / फॉलो-अप
 
-- वॉइस-कॉल प्लगइन कस्टम `voice:<phone>` सत्र कुंजियों का उपयोग करता है। यहाँ आउटबाउंड मैपिंग मानकीकृत नहीं है; यदि message-tool को वॉइस-कॉल भेजों का समर्थन करना चाहिए, तो स्पष्ट मैपिंग जोड़ें।
+- Voice-call plugin uses custom `voice:<phone>` session keys. Outbound mapping is not standardized here; if message-tool should support voice-call sends, add explicit mapping.
 - पुष्टि करें कि क्या कोई बाहरी प्लगइन बंडल्ड सेट से परे गैर-मानक `From/To` प्रारूपों का उपयोग करता है।
 
 ## बदली गई फ़ाइलें

@@ -1,13 +1,6 @@
 ---
-title: Refactorisation du mirroring de session sortante (Issue #1520)
+title: Refactorisation du mirroring de session sortante (Issue #1520) #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
-x-i18n:
-  source_path: refactor/outbound-session-mirroring.md
-  source_hash: b88a72f36f7b6d8a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:40Z
 ---
 
 # Refactorisation du mirroring de session sortante (Issue #1520)

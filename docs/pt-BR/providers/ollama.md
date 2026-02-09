@@ -4,13 +4,6 @@ read_when:
   - Você quer executar o OpenClaw com modelos locais via Ollama
   - Você precisa de orientação de configuração e setup do Ollama
 title: "Ollama"
-x-i18n:
-  source_path: providers/ollama.md
-  source_hash: 61f88017027beb20
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:47Z
 ---
 
 # Ollama

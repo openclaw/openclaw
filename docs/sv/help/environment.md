@@ -5,18 +5,11 @@ read_when:
   - Du felsöker saknade API-nycklar i Gateway (nätverksgateway)
   - Du dokumenterar leverantörsautentisering eller driftsmiljöer
 title: "Miljövariabler"
-x-i18n:
-  source_path: help/environment.md
-  source_hash: b49ae50e5d306612
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:32Z
 ---
 
 # Miljövariabler
 
-OpenClaw hämtar miljövariabler från flera källor. Regeln är **att aldrig skriva över befintliga värden**.
+OpenClaw drar miljövariabler från flera källor. Regeln är **aldrig åsidosätta befintliga värden**.
 
 ## Prioritet (högst → lägst)
 

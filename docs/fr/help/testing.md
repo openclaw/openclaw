@@ -5,13 +5,6 @@ read_when:
   - Ajouter des régressions pour des bugs de modèle/fournisseur
   - Déboguer le comportement de la gateway (passerelle) et de l’agent
 title: "Tests"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:16:14Z
 ---
 
 # Tests
@@ -51,7 +44,7 @@ Considérez les suites comme une « augmentation du réalisme » (et de la f
 - Commande : `pnpm test`
 - Config : `vitest.config.ts`
 - Fichiers : `src/**/*.test.ts`
-- Périmètre :
+- Portée :
   - Tests unitaires purs
   - Tests d’intégration en processus (authentification de la gateway, routage, outillage, parsing, configuration)
   - Régressions déterministes pour des bugs connus
@@ -65,7 +58,7 @@ Considérez les suites comme une « augmentation du réalisme » (et de la f
 - Commande : `pnpm test:e2e`
 - Config : `vitest.e2e.config.ts`
 - Fichiers : `src/**/*.e2e.test.ts`
-- Périmètre :
+- Portée :
   - Comportement end-to-end de la gateway multi‑instances
   - Surfaces WebSocket/HTTP, appairage de nœuds et réseau plus lourd
 - Attentes :
@@ -79,8 +72,8 @@ Considérez les suites comme une « augmentation du réalisme » (et de la f
 - Config : `vitest.live.config.ts`
 - Fichiers : `src/**/*.live.test.ts`
 - Par défaut : **activée** par `pnpm test:live` (définit `OPENCLAW_LIVE_TEST=1`)
-- Périmètre :
-  - « Ce fournisseur/modèle fonctionne‑t‑il vraiment _aujourd’hui_ avec de vrais identifiants ? »
+- Portée :
+  - « Ce fournisseur/modèle fonctionne‑t‑il vraiment _aujourd’hui_ avec de vrais identifiants ? »
   - Détecter les changements de format des fournisseurs, les particularités d’appel d’outils, les problèmes d’authentification et le comportement des limites de débit
 - Attentes :
   - Non stable en CI par conception (réseaux réels, politiques fournisseurs réelles, quotas, pannes)
@@ -111,7 +104,7 @@ Les tests live sont scindés en deux couches pour isoler les pannes :
   - Énumérer les modèles découverts
   - Utiliser `getApiKeyForModel` pour sélectionner les modèles pour lesquels vous avez des identifiants
   - Exécuter une petite complétion par modèle (et des régressions ciblées si nécessaire)
-- Activation :
+- Comment activer :
   - `pnpm test:live` (ou `OPENCLAW_LIVE_TEST=1` si Vitest est invoqué directement)
 - Définissez `OPENCLAW_LIVE_MODELS=modern` (ou `all`, alias moderne) pour réellement exécuter cette suite ; sinon elle est ignorée afin de garder `pnpm test:live` focalisé sur le smoke de la gateway
 - Sélection des modèles :
@@ -143,7 +136,7 @@ Les tests live sont scindés en deux couches pour isoler les pannes :
   - Sonde `exec+read` : le test demande à l’agent d’`exec`‑écrire un nonce dans un fichier temporaire, puis de le `read`.
   - Sonde image : le test joint un PNG généré (chat + code aléatoire) et attend que le modèle renvoie `cat <CODE>`.
   - Référence d’implémentation : `src/gateway/gateway-models.profiles.live.test.ts` et `src/gateway/live-image-probe.ts`.
-- Activation :
+- Comment activer :
   - `pnpm test:live` (ou `OPENCLAW_LIVE_TEST=1` si Vitest est invoqué directement)
 - Sélection des modèles :
   - Par défaut : allowlist moderne (Opus/Sonnet/Haiku 4.5, GPT‑5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
@@ -154,7 +147,7 @@ Les tests live sont scindés en deux couches pour isoler les pannes :
 - Les sondes d’outils + image sont toujours actives dans ce test live :
   - Sonde `read` + sonde `exec+read` (stress d’outils)
   - La sonde image s’exécute lorsque le modèle annonce le support des entrées image
-  - Flux (vue d’ensemble) :
+  - Flux (haut niveau):
     - Le test génère un petit PNG avec « CAT » + code aléatoire (`src/gateway/live-image-probe.ts`)
     - L’envoie via `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`
     - La gateway analyse les pièces jointes en `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
@@ -304,9 +297,11 @@ Astuce : n’essayez pas de coder en dur « tous les modèles » dans la do
 Les tests live découvrent les identifiants de la même manière que la CLI. Implications pratiques :
 
 - Si la CLI fonctionne, les tests live devraient trouver les mêmes clés.
+
 - Si un test live indique « pas d’identifiants », déboguez comme vous le feriez pour `openclaw models list` / la sélection de modèle.
 
 - Magasin de profils : `~/.openclaw/credentials/` (préféré ; c’est ce que signifient les « clés de profil » dans les tests)
+
 - Configuration : `~/.openclaw/openclaw.json` (ou `OPENCLAW_CONFIG_PATH`)
 
 Si vous souhaitez vous appuyer sur des clés via variables d’environnement (p. ex. exportées dans votre `~/.profile`), exécutez les tests locaux après `source ~/.profile`, ou utilisez les runners Docker ci‑dessous (ils peuvent monter `~/.profile` dans le conteneur).
@@ -326,7 +321,7 @@ Ils exécutent `pnpm test:live` dans l’image Docker du dépôt, en montant vot
 - Réseau de la gateway (deux conteneurs, auth WS + santé) : `pnpm test:docker:gateway-network` (script : `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (chargement d’extensions personnalisées + smoke du registre) : `pnpm test:docker:plugins` (script : `scripts/e2e/plugins-docker.sh`)
 
-Variables d’environnement utiles :
+Variables utiles de l'env :
 
 - `OPENCLAW_CONFIG_DIR=...` (par défaut : `~/.openclaw`) monté sur `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (par défaut : `~/.openclaw/workspace`) monté sur `/home/node/.openclaw/workspace`

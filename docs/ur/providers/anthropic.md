@@ -4,24 +4,17 @@ read_when:
   - آپ OpenClaw میں Anthropic ماڈلز استعمال کرنا چاہتے ہیں
   - آپ API کلیدوں کے بجائے setup-token چاہتے ہیں
 title: "Anthropic"
-x-i18n:
-  source_path: providers/anthropic.md
-  source_hash: a0e91ae9fc5b67ba
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:47:37Z
 ---
 
 # Anthropic (Claude)
 
-Anthropic **Claude** ماڈل فیملی تیار کرتا ہے اور API کے ذریعے رسائی فراہم کرتا ہے۔
-OpenClaw میں آپ API کلید یا **setup-token** کے ساتھ تصدیق کر سکتے ہیں۔
+Anthropic **Claude** ماڈل فیملی بناتا ہے اور API کے ذریعے رسائی فراہم کرتا ہے۔
+OpenClaw میں آپ API کی یا **setup-token** کے ساتھ توثیق کر سکتے ہیں۔
 
 ## Option A: Anthropic API key
 
-**بہترین انتخاب:** معیاری API رسائی اور استعمال پر مبنی بلنگ۔
-Anthropic Console میں اپنی API کلید بنائیں۔
+**بہترین برائے:** معیاری API رسائی اور استعمال پر مبنی بلنگ۔
+Anthropic Console میں اپنی API کی بنائیں۔
 
 ### CLI setup
 
@@ -44,17 +37,17 @@ openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 
 ## Prompt caching (Anthropic API)
 
-OpenClaw، Anthropic کی prompt caching خصوصیت کو سپورٹ کرتا ہے۔ یہ **صرف API** کے لیے ہے؛ سبسکرپشن تصدیق cache کی ترتیبات کا احترام نہیں کرتی۔
+OpenClaw Anthropic کی پرامپٹ کیشنگ خصوصیت کو سپورٹ کرتا ہے۔ یہ **صرف API** کے لیے ہے؛ سبسکرپشن توثیق کیش سیٹنگز کو تسلیم نہیں کرتی۔
 
 ### Configuration
 
 اپنی ماڈل کنفیگ میں `cacheRetention` پیرامیٹر استعمال کریں:
 
-| Value   | Cache Duration | Description                       |
-| ------- | -------------- | --------------------------------- |
-| `none`  | No caching     | prompt caching کو غیر فعال کریں   |
-| `short` | 5 minutes      | API Key تصدیق کے لیے بطورِ طے شدہ |
-| `long`  | 1 hour         | توسیعی cache (beta flag درکار)    |
+| Value   | Cache Duration | Description                                       |
+| ------- | -------------- | ------------------------------------------------- |
+| `none`  | No caching     | prompt caching کو غیر فعال کریں                   |
+| `short` | 5 minutes      | API Key تصدیق کے لیے بطورِ طے شدہ                 |
+| `long`  | 1 hour         | توسیعی cache (beta flag درکار) |
 
 ```json5
 {
@@ -72,7 +65,7 @@ OpenClaw، Anthropic کی prompt caching خصوصیت کو سپورٹ کرتا �
 
 ### Defaults
 
-Anthropic API Key تصدیق استعمال کرنے پر، OpenClaw خودکار طور پر تمام Anthropic ماڈلز کے لیے `cacheRetention: "short"` (5 منٹ کی cache) لاگو کرتا ہے۔ آپ اپنی کنفیگ میں واضح طور پر `cacheRetention` سیٹ کر کے اسے اووررائیڈ کر سکتے ہیں۔
+Anthropic API Key توثیق استعمال کرتے وقت، OpenClaw خودکار طور پر تمام Anthropic ماڈلز کے لیے `cacheRetention: "short"` (5 منٹ کیش) لاگو کرتا ہے۔ آپ اپنی کنفیگ میں واضح طور پر `cacheRetention` سیٹ کر کے اسے اووررائیڈ کر سکتے ہیں۔
 
 ### Legacy parameter
 
@@ -91,7 +84,7 @@ OpenClaw، Anthropic API درخواستوں کے لیے `extended-cache-ttl-2025
 
 ### setup-token کہاں سے حاصل کریں
 
-Setup-tokens **Claude Code CLI** کے ذریعے بنائے جاتے ہیں، Anthropic Console کے ذریعے نہیں۔ آپ اسے **کسی بھی مشین** پر چلا سکتے ہیں:
+Setup-token **Claude Code CLI** کے ذریعے بنائے جاتے ہیں، Anthropic Console کے ذریعے نہیں۔ آپ اسے **کسی بھی مشین** پر چلا سکتے ہیں:
 
 ```bash
 claude setup-token
@@ -127,21 +120,21 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - `claude setup-token` کے ساتھ setup-token بنائیں اور پیسٹ کریں، یا گیٹ وے ہوسٹ پر `openclaw models auth setup-token` چلائیں۔
-- اگر Claude سبسکرپشن پر “OAuth token refresh failed …” نظر آئے تو setup-token کے ساتھ دوبارہ تصدیق کریں۔ دیکھیں [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription)۔
+- اگر Claude سبسکرپشن پر “OAuth token refresh failed …” نظر آئے تو setup-token کے ساتھ دوبارہ توثیق کریں۔ [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription) دیکھیں۔
 - تصدیق کی تفصیلات اور دوبارہ استعمال کے قواعد [/concepts/oauth](/concepts/oauth) میں ہیں۔
 
 ## Troubleshooting
 
 **401 errors / ٹوکن اچانک غیر معتبر**
 
-- Claude سبسکرپشن کی تصدیق کی میعاد ختم ہو سکتی ہے یا اسے منسوخ کیا جا سکتا ہے۔ `claude setup-token` دوبارہ چلائیں
-  اور اسے **گیٹ وے ہوسٹ** میں پیسٹ کریں۔
+- Claude سبسکرپشن کی توثیق ختم ہو سکتی ہے یا منسوخ کی جا سکتی ہے۔ `claude setup-token` دوبارہ چلائیں
+  اور اسے **gateway host** میں پیسٹ کریں۔
 - اگر Claude CLI لاگ اِن کسی مختلف مشین پر موجود ہے تو گیٹ وے ہوسٹ پر
   `openclaw models auth paste-token --provider anthropic` استعمال کریں۔
 
 **No API key found for provider "anthropic"**
 
-- تصدیق **ہر ایجنٹ کے لیے** ہوتی ہے۔ نئے ایجنٹس مرکزی ایجنٹ کی کلیدیں وراثت میں نہیں لیتے۔
+- توثیق **ہر ایجنٹ کے لیے** ہوتی ہے۔ نئے ایجنٹس مرکزی ایجنٹ کی کیز وراثت میں نہیں لیتے۔
 - اس ایجنٹ کے لیے onboarding دوبارہ چلائیں، یا گیٹ وے ہوسٹ پر setup-token / API کلید پیسٹ کریں، پھر `openclaw models status` کے ساتھ تصدیق کریں۔
 
 **No credentials found for profile `anthropic:default`**

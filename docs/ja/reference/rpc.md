@@ -4,18 +4,11 @@ read_when:
   - 外部 CLI 連携の追加または変更時
   - RPC アダプター（signal-cli、imsg）のデバッグ時
 title: "RPC アダプター"
-x-i18n:
-  source_path: reference/rpc.md
-  source_hash: 06dc6b97184cc704
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:23:00Z
 ---
 
 # RPC アダプター
 
-OpenClaw は JSON-RPC を介して外部 CLI を統合します。現在は 2 つのパターンが使用されています。
+OpenClaw は JSON-RPC を介して外部 CLI を統合します。現在は 2 つのパターンが使用されています。 現在では二つの模様が用いられている。
 
 ## パターン A: HTTP デーモン（signal-cli）
 

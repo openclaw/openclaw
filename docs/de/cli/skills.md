@@ -4,13 +4,6 @@ read_when:
   - Sie möchten sehen, welche Skills verfügbar und einsatzbereit sind
   - Sie möchten fehlende Binaries/Umgebungsvariablen/Konfigurationen für Skills debuggen
 title: "Skills"
-x-i18n:
-  source_path: cli/skills.md
-  source_hash: 7878442c88a27ec8
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:35:40Z
 ---
 
 # `openclaw skills`

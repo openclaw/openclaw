@@ -3,13 +3,6 @@ summary: "Como executar testes localmente (vitest) e quando usar os modos force/
 read_when:
   - Executando ou corrigindo testes
 title: "Testes"
-x-i18n:
-  source_path: reference/test.md
-  source_hash: 814cc52aae0788eb
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:54Z
 ---
 
 # Testes
@@ -17,8 +10,11 @@ x-i18n:
 - Kit completo de testes (suites, live, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: Encerra qualquer processo de gateway remanescente que esteja segurando a porta de controle padrão e, em seguida, executa a suíte completa do Vitest com uma porta de gateway isolada para que os testes de servidor não colidam com uma instância em execução. Use isto quando uma execução anterior do gateway deixou a porta 18789 ocupada.
+
 - `pnpm test:coverage`: Executa o Vitest com cobertura V8. Os limites globais são 70% para linhas/branches/funções/statements. A cobertura exclui entrypoints com muita integração (wiring da CLI, bridges gateway/telegram, servidor estático do webchat) para manter o alvo focado em lógica testável por testes unitários.
+
 - `pnpm test:e2e`: Executa testes de smoke end-to-end do gateway (pareamento multi-instância WS/HTTP/node).
+
 - `pnpm test:live`: Executa testes live de provedores (minimax/zai). Requer chaves de API e `LIVE=1` (ou `*_LIVE_TEST=1` específico do provedor) para desativar o skip.
 
 ## Bench de latência do modelo (chaves locais)

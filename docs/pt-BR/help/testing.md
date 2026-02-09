@@ -5,13 +5,6 @@ read_when:
   - Adicionar regressões para bugs de modelo/provedor
   - Depurar comportamento do gateway + agente
 title: "Testes"
-x-i18n:
-  source_path: help/testing.md
-  source_hash: 9bb77454e18e1d0b
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:31:40Z
 ---
 
 # Testes
@@ -51,7 +44,7 @@ Pense nas suítes como “realismo crescente” (e aumento de instabilidade/cust
 - Comando: `pnpm test`
 - Configuração: `vitest.config.ts`
 - Arquivos: `src/**/*.test.ts`
-- Escopo:
+- Enquadramento:
   - Testes unitários puros
   - Testes de integração in-process (autenticação do gateway, roteamento, ferramentas, parsing, configuração)
   - Regressões determinísticas para bugs conhecidos
@@ -65,7 +58,7 @@ Pense nas suítes como “realismo crescente” (e aumento de instabilidade/cust
 - Comando: `pnpm test:e2e`
 - Configuração: `vitest.e2e.config.ts`
 - Arquivos: `src/**/*.e2e.test.ts`
-- Escopo:
+- Enquadramento:
   - Comportamento end-to-end do gateway com múltiplas instâncias
   - Superfícies WebSocket/HTTP, pareamento de nós e networking mais pesado
 - Expectativas:
@@ -79,7 +72,7 @@ Pense nas suítes como “realismo crescente” (e aumento de instabilidade/cust
 - Configuração: `vitest.live.config.ts`
 - Arquivos: `src/**/*.live.test.ts`
 - Padrão: **habilitado** por `pnpm test:live` (define `OPENCLAW_LIVE_TEST=1`)
-- Escopo:
+- Enquadramento:
   - “Este provedor/modelo realmente funciona _hoje_ com credenciais reais?”
   - Capturar mudanças de formato do provedor, peculiaridades de tool-calling, problemas de autenticação e comportamento de rate limit
 - Expectativas:
@@ -89,7 +82,7 @@ Pense nas suítes como “realismo crescente” (e aumento de instabilidade/cust
   - Execuções live buscarão `~/.profile` para obter chaves de API ausentes
   - Rotação de chaves Anthropic: defina `OPENCLAW_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (ou `OPENCLAW_LIVE_ANTHROPIC_KEY=sk-...`) ou múltiplas variáveis `ANTHROPIC_API_KEY*`; os testes farão retry em rate limits
 
-## Qual suíte devo rodar?
+## Qual suíte eu deveria correr?
 
 Use esta tabela de decisão:
 
@@ -304,9 +297,11 @@ Dica: não tente codificar “todos os modelos” nos docs. A lista autoritativa
 Os testes live descobrem credenciais da mesma forma que a CLI. Implicações práticas:
 
 - Se a CLI funciona, os testes live devem encontrar as mesmas chaves.
+
 - Se um teste live disser “sem credenciais”, depure da mesma forma que você depuraria `openclaw models list` / seleção de modelo.
 
 - Store de perfis: `~/.openclaw/credentials/` (preferido; é o que “chaves de perfil” significa nos testes)
+
 - Configuração: `~/.openclaw/openclaw.json` (ou `OPENCLAW_CONFIG_PATH`)
 
 Se você quiser depender de chaves de ambiente (por exemplo, exportadas no seu `~/.profile`), execute testes locais após `source ~/.profile`, ou use os runners Docker abaixo (eles podem montar `~/.profile` no container).
@@ -326,7 +321,7 @@ Eles executam `pnpm test:live` dentro da imagem Docker do repo, montando seu dir
 - Networking do gateway (dois containers, auth WS + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (carregamento de extensão customizada + smoke do registry): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
-Variáveis de ambiente úteis:
+Env vs úteis:
 
 - `OPENCLAW_CONFIG_DIR=...` (padrão: `~/.openclaw`) montado em `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR=...` (padrão: `~/.openclaw/workspace`) montado em `/home/node/.openclaw/workspace`

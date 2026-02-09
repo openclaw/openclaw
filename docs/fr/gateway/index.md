@@ -3,13 +3,6 @@ summary: "Runbook pour le service Gateway, son cycle de vie et ses opérations"
 read_when:
   - Lors de l’exécution ou du débogage du processus gateway
 title: "Runbook du Gateway"
-x-i18n:
-  source_path: gateway/index.md
-  source_hash: 497d58090faaa6bd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T07:02:04Z
 ---
 
 # Runbook du service Gateway
@@ -50,16 +43,19 @@ pnpm gateway:watch
 - Si vous exécutez sous un superviseur (launchd/systemd/mode processus enfant de l’app mac), un arrêt/redémarrage envoie généralement **SIGTERM** ; les anciennes versions peuvent exposer cela comme `pnpm` `ELIFECYCLE` avec le code de sortie **143** (SIGTERM), ce qui correspond à un arrêt normal, pas à un crash.
 - **SIGUSR1** déclenche un redémarrage intra-processus lorsqu’il est autorisé (outil gateway / application de configuration / mise à jour, ou activez `commands.restart` pour les redémarrages manuels).
 - L’authentification Gateway est requise par défaut : définissez `gateway.auth.token` (ou `OPENCLAW_GATEWAY_TOKEN`) ou `gateway.auth.password`. Les clients doivent envoyer `connect.params.auth.token/password` sauf s’ils utilisent l’identité Tailscale Serve.
-- L’assistant génère désormais un jeton par défaut, même en loopback.
+- L'assistant génère désormais un jeton par défaut, même en cas de rebouclage.
 - Priorité des ports : `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > valeur par défaut `18789`.
 
 ## Accès distant
 
 - Tailscale/VPN recommandé ; sinon tunnel SSH :
+
   ```bash
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
+
 - Les clients se connectent ensuite à `ws://127.0.0.1:18789` via le tunnel.
+
 - Si un jeton est configuré, les clients doivent l’inclure dans `connect.params.auth.token` même via le tunnel.
 
 ## Gateways multiples (même hôte)

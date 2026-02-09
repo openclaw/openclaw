@@ -4,13 +4,6 @@ read_when:
   - Felsökning av Node-baserade utvecklingsskript eller fel i watch-läge
   - Undersökning av tsx/esbuild-loaderkrascher i OpenClaw
 title: "Node + tsx-krasch"
-x-i18n:
-  source_path: debug/node-issue.md
-  source_hash: f5beab7cdfe76796
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T08:17:09Z
 ---
 
 # Node + tsx ”\_\_name is not a function”-krasch
@@ -25,7 +18,7 @@ När OpenClaw körs via Node med `tsx` misslyckas uppstarten med:
     at .../src/agents/auth-profiles/constants.ts:25:20
 ```
 
-Detta började efter att utvecklingsskripten byttes från Bun till `tsx` (commit `2871657e`, 2026-01-06). Samma körväg fungerade med Bun.
+Detta började efter att ha bytt dev skript från Bun till `tsx` (commit `2871657e`, 2026-01-06). Samma bana fungerade med Bun.
 
 ## Miljö
 
@@ -56,7 +49,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 
 ## Noteringar / hypotes
 
-- `tsx` använder esbuild för att transformera TS/ESM. esbuilds `keepNames` emitterar en `__name`-hjälpfunktion och omsluter funktionsdefinitioner med `__name(...)`.
+- `tsx` använder esbuild för att omvandla TS/ESM. esbuild’s `keepNames` avger en `__name`-hjälpare och wraps funktionsdefinitioner med `__name(...)`.
 - Kraschen indikerar att `__name` finns men inte är en funktion vid körning, vilket innebär att hjälpfunktionen saknas eller har skrivits över för denna modul i Node 25:s loader-sökväg.
 - Liknande problem med `__name`-hjälpfunktioner har rapporterats i andra esbuild-konsumenter när hjälpfunktionen saknas eller skrivs om.
 
@@ -68,6 +61,7 @@ node --import tsx scripts/repro/tsx-name-repro.ts
 ## Lösningar
 
 - Använd Bun för utvecklingsskript (nuvarande tillfälliga återställning).
+
 - Använd Node + tsc watch och kör sedan kompilerad utdata:
 
   ```bash
@@ -76,7 +70,9 @@ node --import tsx scripts/repro/tsx-name-repro.ts
   ```
 
 - Bekräftat lokalt: `pnpm exec tsc -p tsconfig.json` + `node openclaw.mjs status` fungerar på Node 25.
+
 - Inaktivera esbuild keepNames i TS-loadern om möjligt (förhindrar insättning av `__name`-hjälpfunktionen); tsx exponerar inte detta i nuläget.
+
 - Testa Node LTS (22/24) med `tsx` för att se om problemet är specifikt för Node 25.
 
 ## Referenser

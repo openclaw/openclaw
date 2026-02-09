@@ -4,19 +4,12 @@ read_when:
   - Binabago mo kung paano ipinapakita ang mga timestamp sa model o mga user
   - Nagde-debug ka ng pag-format ng oras sa mga mensahe o output ng system prompt
 title: "Petsa at Oras"
-x-i18n:
-  source_path: date-time.md
-  source_hash: 753af5946a006215
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:26Z
 ---
 
 # Petsa at Oras
 
-Ang OpenClaw ay default sa **host-local na oras para sa mga transport timestamp** at **timezone ng user lamang sa system prompt**.
-Pinapanatili ang mga timestamp ng provider upang manatili ang kanilang native na semantika (ang kasalukuyang oras ay available sa pamamagitan ng `session_status`).
+OpenClaw defaults to **host-local time for transport timestamps** and **user timezone only in the system prompt**.
+Provider timestamps are preserved so tools keep their native semantics (current time is available via `session_status`).
 
 ## Mga message envelope (local bilang default)
 
@@ -105,13 +98,13 @@ System: [2026-01-12 12:19:17 PST] Model switched.
 ```
 
 - Itinatakda ng `userTimezone` ang **user-local timezone** para sa prompt context.
-- Kinokontrol ng `timeFormat` ang **12h/24h na display** sa prompt. Sinusunod ng `auto` ang mga preference ng OS.
+- `timeFormat` controls **12h/24h display** in the prompt. `auto` follows OS prefs.
 
 ## Time format detection (auto)
 
-Kapag `timeFormat: "auto"`, sinusuri ng OpenClaw ang preference ng OS (macOS/Windows)
-at bumabalik sa locale formatting. Ang na-detect na value ay **naka-cache kada process**
-upang maiwasan ang paulit-ulit na system call.
+When `timeFormat: "auto"`, OpenClaw inspects the OS preference (macOS/Windows)
+and falls back to locale formatting. The detected value is **cached per process**
+to avoid repeated system calls.
 
 ## Mga tool payload + connector (raw na oras ng provider + mga normalized na field)
 

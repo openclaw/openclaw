@@ -5,13 +5,6 @@ read_when:
   - Você quer controlar um navegador rodando em outra máquina via um host de nó
   - Você quer usar o relay da extensão do Chrome (anexar/desanexar via botão da barra de ferramentas)
 title: "browser"
-x-i18n:
-  source_path: cli/browser.md
-  source_hash: af35adfd68726fd5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:30:08Z
 ---
 
 # `openclaw browser`
@@ -59,7 +52,7 @@ Use um perfil específico:
 openclaw browser --browser-profile work tabs
 ```
 
-## Abas
+## Tabs
 
 ```bash
 openclaw browser tabs

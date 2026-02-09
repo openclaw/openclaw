@@ -4,13 +4,6 @@ read_when:
   - 에이전트 워크스페이스 또는 파일 레이아웃을 설명해야 할 때
   - 에이전트 워크스페이스를 백업하거나 마이그레이션하려는 경우
 title: "에이전트 워크스페이스"
-x-i18n:
-  source_path: concepts/agent-workspace.md
-  source_hash: d3cc655c58f00965
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:24:47Z
 ---
 
 # 에이전트 워크스페이스
@@ -19,7 +12,8 @@ x-i18n:
 
 이는 구성, 자격 증명, 세션을 저장하는 `~/.openclaw/` 와는 별개입니다.
 
-**중요:** 워크스페이스는 **기본 cwd** 이며, 하드 샌드박스가 아닙니다. 도구는 상대 경로를 워크스페이스 기준으로 해석하지만, 샌드박스화가 활성화되지 않은 경우 절대 경로는 호스트의 다른 위치에 접근할 수 있습니다. 격리가 필요하다면 [`agents.defaults.sandbox`](/gateway/sandboxing) (및/또는 에이전트별 샌드박스 설정)를 사용하십시오. 샌드박스화가 활성화되고 `workspaceAccess` 이 `"rw"` 이 아닌 경우, 도구는 호스트 워크스페이스가 아니라 `~/.openclaw/sandboxes` 아래의 샌드박스 워크스페이스 내부에서 동작합니다.
+**중요:** 워크스페이스는 **기본 cwd** 이며, 하드 샌드박스가 아닙니다. 도구는 상대 경로를 워크스페이스 기준으로 해석하지만, 샌드박스화가 활성화되지 않은 경우 절대 경로는 호스트의 다른 위치에 접근할 수 있습니다. 격리가 필요하다면 [`agents.defaults.sandbox`](/gateway/sandboxing) (및/또는 에이전트별 샌드박스 설정)를 사용하십시오.
+샌드박스화가 활성화되고 `workspaceAccess` 이 `"rw"` 이 아닌 경우, 도구는 호스트 워크스페이스가 아니라 `~/.openclaw/sandboxes` 아래의 샌드박스 워크스페이스 내부에서 동작합니다.
 
 ## 기본 위치
 
@@ -48,7 +42,8 @@ x-i18n:
 
 이전 설치에서는 `~/openclaw` 이 생성되었을 수 있습니다. 여러 워크스페이스 디렉토리를 유지하면 한 번에 하나의 워크스페이스만 활성화되기 때문에 인증이나 상태 드리프트로 혼란이 생길 수 있습니다.
 
-**권장 사항:** 단일 활성 워크스페이스를 유지하십시오. 더 이상 추가 폴더를 사용하지 않는다면 아카이브하거나 휴지통으로 이동하십시오(예: `trash ~/openclaw`). 의도적으로 여러 워크스페이스를 유지하는 경우, `agents.defaults.workspace` 이 활성 워크스페이스를 가리키는지 확인하십시오.
+**권장 사항:** 단일 활성 워크스페이스를 유지하십시오. 더 이상 추가 폴더를 사용하지 않는다면 아카이브하거나 휴지통으로 이동하십시오(예: `trash ~/openclaw`).
+의도적으로 여러 워크스페이스를 유지하는 경우, `agents.defaults.workspace` 이 활성 워크스페이스를 가리키는지 확인하십시오.
 
 `openclaw doctor` 는 추가 워크스페이스 디렉토리를 감지하면 경고합니다.
 
@@ -107,7 +102,8 @@ x-i18n:
 - `canvas/` (선택 사항)
   - 노드 표시를 위한 Canvas UI 파일(예: `canvas/index.html`).
 
-부트스트랩 파일이 누락되면 OpenClaw 는 세션에 '누락된 파일' 마커를 주입하고 계속 진행합니다. 큰 부트스트랩 파일은 주입 시 잘립니다. 제한은 `agents.defaults.bootstrapMaxChars` (기본값: 20000)으로 조정할 수 있습니다. `openclaw setup` 는 기존 파일을 덮어쓰지 않고 누락된 기본값을 재생성할 수 있습니다.
+부트스트랩 파일이 누락되면 OpenClaw 는 세션에 '누락된 파일' 마커를 주입하고 계속 진행합니다. 큰 부트스트랩 파일은 주입 시 잘립니다. 제한은 `agents.defaults.bootstrapMaxChars` (기본값: 20000)으로 조정할 수 있습니다.
+`openclaw setup` 는 기존 파일을 덮어쓰지 않고 누락된 기본값을 재생성할 수 있습니다.
 
 ## 워크스페이스에 포함되지 않는 항목
 
@@ -126,7 +122,7 @@ x-i18n:
 
 다음 단계는 Gateway(게이트웨이)가 실행되는 머신에서 수행하십시오(워크스페이스가 위치한 곳입니다).
 
-### 1) 저장소 초기화
+### 1. 저장소 초기화
 
 git 이 설치되어 있다면, 새 워크스페이스는 자동으로 초기화됩니다. 이 워크스페이스가 아직 저장소가 아니라면 다음을 실행하십시오:
 
@@ -137,7 +133,7 @@ git add AGENTS.md SOUL.md TOOLS.md IDENTITY.md USER.md HEARTBEAT.md memory/
 git commit -m "Add agent workspace"
 ```
 
-### 2) 비공개 원격 추가(초보자 친화적 옵션)
+### 2. 비공개 원격 추가(초보자 친화적 옵션)
 
 옵션 A: GitHub 웹 UI
 
@@ -172,7 +168,7 @@ git remote add origin <https-url>
 git push -u origin main
 ```
 
-### 3) 지속적인 업데이트
+### 3. 지속적인 업데이트
 
 ```bash
 git status

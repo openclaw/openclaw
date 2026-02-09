@@ -3,13 +3,6 @@ summary: "Mac uygulamasında sesle uyandırma ve bas-konuş modları ile yönlen
 read_when:
   - Sesle uyandırma veya PTT yolları üzerinde çalışırken
 title: "Sesle Uyandırma"
-x-i18n:
-  source_path: platforms/mac/voicewake.md
-  source_hash: f6440bb89f349ba5
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:53:41Z
 ---
 
 # Sesle Uyandırma ve Bas-Konuş
@@ -64,7 +57,7 @@ Sağlamlaştırma:
 - Sesle Uyandırma etkin olduğunda, dökümler etkin gateway/ajan’a iletilir (mac uygulamasının geri kalanında kullanılan aynı yerel vs uzak mod).
 - Yanıtlar **son kullanılan ana sağlayıcıya** (WhatsApp/Telegram/Discord/WebChat) teslim edilir. Teslimat başarısız olursa, hata günlüğe kaydedilir ve çalıştırma yine de WebChat/oturum günlükleri üzerinden görünür olur.
 
-## Yönlendirme yükü
+## Yük iletimi
 
 - `VoiceWakeForwarder.prefixedTranscript(_:)`, göndermeden önce makine ipucunu başa ekler. Uyandırma sözcüğü ve bas-konuş yolları arasında ortaktır.
 

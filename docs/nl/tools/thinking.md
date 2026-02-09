@@ -3,13 +3,6 @@ summary: "Richtlijnsyntax voor /think + /verbose en hoe deze de redenering van h
 read_when:
   - Het aanpassen van parsing of standaardwaarden voor thinking- of verbose-richtlijnen
 title: "Thinking-niveaus"
-x-i18n:
-  source_path: tools/thinking.md
-  source_hash: 0ae614147675be32
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:55Z
 ---
 
 # Thinking-niveaus (/think-richtlijnen)

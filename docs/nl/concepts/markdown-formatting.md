@@ -4,17 +4,10 @@ read_when:
   - Je wijzigt markdown-opmaak of chunking voor uitgaande kanalen
   - Je voegt een nieuwe kanaalformatter of stijlkoppeling toe
   - Je debugt regressies in opmaak over kanalen heen
-title: "Markdown-opmaak"
-x-i18n:
-  source_path: concepts/markdown-formatting.md
-  source_hash: f9cbf9b744f9a218
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:22Z
+title: "Markdown opmaak"
 ---
 
-# Markdown-opmaak
+# Markdown opmaak
 
 OpenClaw formatteert uitgaande Markdown door deze eerst om te zetten naar een gedeelde
 tussenrepresentatie (IR) voordat kanaalspecifieke uitvoer wordt gerenderd. De IR houdt de
@@ -127,7 +120,7 @@ gekoppeld aan SPOILER-stijlranges. Andere kanalen behandelen ze als platte tekst
 5. **Testen:** voeg format-tests toe of werk ze bij, en een uitgaande leveringstest
    als het kanaal chunking gebruikt.
 
-## Veelvoorkomende valkuilen
+## Veelvoorkomende hebbers
 
 - Slack-haakjes-tokens (`<@U123>`, `<#C123>`, `<https://...>`) moeten behouden
   blijven; escape ruwe HTML veilig.

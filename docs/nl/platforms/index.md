@@ -4,13 +4,6 @@ read_when:
   - Op zoek naar OS-ondersteuning of installatiepaden
   - Beslissen waar de Gateway moet draaien
 title: "Platformen"
-x-i18n:
-  source_path: platforms/index.md
-  source_hash: 959479995f9ecca3
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:46:29Z
 ---
 
 # Platformen

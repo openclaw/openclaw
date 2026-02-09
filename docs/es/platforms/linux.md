@@ -4,13 +4,6 @@ read_when:
   - Buscar el estado de la aplicación complementaria para Linux
   - Planificar la cobertura de plataformas o contribuciones
 title: "Aplicación Linux"
-x-i18n:
-  source_path: platforms/linux.md
-  source_hash: 93b8250cd1267004
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:02Z
 ---
 
 # Aplicación Linux
@@ -94,7 +87,7 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-Habilítelo:
+Habilitarlo:
 
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service

@@ -5,21 +5,14 @@ read_when:
   - Gỡ lỗi sai lệch giao thức hoặc lỗi kết nối
   - Tái tạo schema/mô hình giao thức
 title: "Giao thức Gateway"
-x-i18n:
-  source_path: gateway/protocol.md
-  source_hash: bdafac40d5356590
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:39:10Z
 ---
 
 # Giao thức Gateway (WebSocket)
 
-Giao thức WS của Gateway là **mặt phẳng điều khiển duy nhất + kênh truyền nút** cho
-OpenClaw. Tất cả client (CLI, web UI, ứng dụng macOS, các nút iOS/Android, các nút
-headless) kết nối qua WebSocket và khai báo **vai trò** + **phạm vi** tại thời điểm
-bắt tay.
+Giao thức Gateway WS là **mặt phẳng điều khiển duy nhất + vận chuyển node** cho
+OpenClaw. Tất cả client (CLI, web UI, ứng dụng macOS, node iOS/Android, node
+không giao diện) đều kết nối qua WebSocket và khai báo **vai trò** + **phạm vi** của họ tại
+thời điểm bắt tay.
 
 ## Transport
 
@@ -195,9 +188,8 @@ Gateway coi đây là **claims** và thực thi allowlist phía máy chủ.
 
 - Nếu `OPENCLAW_GATEWAY_TOKEN` (hoặc `--token`) được đặt, `connect.params.auth.token`
   phải khớp nếu không socket sẽ bị đóng.
-- Sau khi ghép cặp, Gateway phát hành một **device token** được gắn phạm vi theo
-  vai trò + phạm vi của kết nối. Token được trả về trong `hello-ok.auth.deviceToken` và nên
-  được client lưu lại cho các lần kết nối sau.
+- Sau khi ghép cặp, Gateway phát hành một **token thiết bị** được giới hạn theo vai trò kết nối + phạm vi. Nó được trả về trong `hello-ok.auth.deviceToken` và nên được
+  client lưu trữ cho các lần kết nối sau.
 - Device token có thể được xoay vòng/thu hồi qua `device.token.rotate` và
   `device.token.revoke` (yêu cầu phạm vi `operator.pairing`).
 
@@ -209,9 +201,9 @@ Gateway coi đây là **claims** và thực thi allowlist phía máy chủ.
 - Cần phê duyệt ghép cặp cho các ID thiết bị mới trừ khi bật auto-approval cục bộ.
 - Kết nối **Local** bao gồm loopback và địa chỉ tailnet của chính máy chủ gateway
   (để các ràng buộc tailnet cùng máy chủ vẫn có thể auto-approve).
-- Tất cả client WS phải bao gồm danh tính `device` trong `connect` (operator + node).
-  Control UI chỉ có thể bỏ qua **chỉ khi** `gateway.controlUi.allowInsecureAuth` được bật
-  (hoặc `gateway.controlUi.dangerouslyDisableDeviceAuth` cho trường hợp break-glass).
+- Tất cả client WS phải bao gồm danh tính `device` trong quá trình `connect` (operator + node).
+  Control UI có thể bỏ qua nó **chỉ** khi `gateway.controlUi.allowInsecureAuth` được bật
+  (hoặc `gateway.controlUi.dangerouslyDisableDeviceAuth` cho trường hợp khẩn cấp).
 - Các kết nối không phải local phải ký nonce `connect.challenge` do máy chủ cung cấp.
 
 ## TLS + pinning
@@ -222,6 +214,6 @@ Gateway coi đây là **claims** và thực thi allowlist phía máy chủ.
 
 ## Phạm vi
 
-Giao thức này phơi bày **toàn bộ API của gateway** (trạng thái, kênh, mô hình, chat,
-agent, phiên, node, phê duyệt, v.v.). Bề mặt chính xác được định nghĩa bởi các schema
-TypeBox trong `src/gateway/protocol/schema.ts`.
+Giao thức này cung cấp **toàn bộ API gateway** (trạng thái, kênh, mô hình, chat,
+agent, phiên, node, phê duyệt, v.v.). Bề mặt chính xác được xác định bởi các schema TypeBox trong
+`src/gateway/protocol/schema.ts`.

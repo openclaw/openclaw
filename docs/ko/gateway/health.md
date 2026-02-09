@@ -2,14 +2,7 @@
 summary: "채널 연결성에 대한 상태 확인 단계"
 read_when:
   - WhatsApp 채널 상태를 진단할 때
-title: "상태 확인"
-x-i18n:
-  source_path: gateway/health.md
-  source_hash: 74f242e98244c135
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:25:03Z
+title: "Health Checks"
 ---
 
 # 상태 확인 (CLI)

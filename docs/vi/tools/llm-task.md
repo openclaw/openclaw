@@ -4,13 +4,6 @@ read_when:
   - Bạn muốn một bước LLM chỉ JSON bên trong workflow
   - Bạn cần đầu ra LLM được xác thực theo schema để tự động hóa
 title: "Tác vụ LLM"
-x-i18n:
-  source_path: tools/llm-task.md
-  source_hash: b7aa78f179cb0f63
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:40:22Z
 ---
 
 # Tác vụ LLM
@@ -72,8 +65,8 @@ mà không cần viết mã OpenClaw tùy chỉnh cho từng workflow.
 }
 ```
 
-`allowedModels` là một danh sách cho phép của các chuỗi `provider/model`. Nếu được đặt,
-mọi yêu cầu nằm ngoài danh sách sẽ bị từ chối.
+`allowedModels` is an allowlist of `provider/model` strings. If set, any request
+outside the list is rejected.
 
 ## Tham số công cụ
 

@@ -2,17 +2,10 @@
 summary: "مرجع كامل لمعالج الإعداد عبر CLI: كل خطوة، وكل راية، وكل حقل تهيئة"
 read_when:
   - البحث عن خطوة أو راية محددة في المعالج
-  - أتمتة التهيئة الأولية باستخدام الوضع غير التفاعلي
-  - استكشاف سلوك المعالج وإصلاح الأخطاء
+  - أتمتة أونبواردينج مع الوضع غير التفاعلي
+  - تصحيح سلوك المعالج
 title: "مرجع معالج التهيئة الأولية"
 sidebarTitle: "Wizard Reference"
-x-i18n:
-  source_path: reference/wizard.md
-  source_hash: 05fac3786016d906
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:02Z
 ---
 
 # مرجع معالج التهيئة الأولية
@@ -23,7 +16,7 @@ x-i18n:
 ## تفاصيل التدفق (الوضع المحلي)
 
 <Steps>
-  <Step title="اكتشاف التهيئة الحالية">
+  <Step title="Existing config detection">
     - إذا كان `~/.openclaw/openclaw.json` موجودًا، فاختر **الاحتفاظ / التعديل / إعادة الضبط**.
     - إعادة تشغيل المعالج **لا** تمسح أي شيء ما لم تختر **إعادة الضبط** صراحةً
       (أو تمرّر `--reset`).
@@ -32,9 +25,9 @@ x-i18n:
     - تستخدم إعادة الضبط `trash` (ولا تستخدم أبدًا `rm`) وتعرض نطاقات:
       - التهيئة فقط
       - التهيئة + بيانات الاعتماد + الجلسات
-      - إعادة ضبط كاملة (تزيل أيضًا مساحة العمل)
-  </Step>
-  <Step title="النموذج/المصادقة">
+      - إعادة ضبط كاملة (تزيل أيضًا مساحة العمل)  
+</Step>
+  <Step title="Model/Auth">
     - **مفتاح Anthropic API (موصى به)**: يستخدم `ANTHROPIC_API_KEY` إن وُجد أو يطلب مفتاحًا، ثم يحفظه لاستخدامه من قِبل الـ daemon.
     - **Anthropic OAuth (Claude Code CLI)**: على macOS يتحقق المعالج من عنصر Keychain «Claude Code-credentials» (اختر «Always Allow» كي لا تمنع عمليات بدء launchd)؛ على Linux/Windows يعيد استخدام `~/.claude/.credentials.json` إن وُجد.
     - **رمز Anthropic (لصق setup-token)**: شغّل `claude setup-token` على أي جهاز، ثم الصق الرمز (يمكنك تسميته؛ الفراغ = الافتراضي).
@@ -60,25 +53,25 @@ x-i18n:
     - اختر نموذجًا افتراضيًا من الخيارات المكتشفة (أو أدخل الموفّر/النموذج يدويًا).
     - يُجري المعالج فحصًا للنموذج ويُحذّر إذا كان النموذج المُهيّأ غير معروف أو تنقصه المصادقة.
     - تعيش بيانات اعتماد OAuth في `~/.openclaw/credentials/oauth.json`؛ وتعيش ملفات تعريف المصادقة في `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (مفاتيح API + OAuth).
-    - مزيد من التفاصيل: [/concepts/oauth](/concepts/oauth)
-    <Note>
+    - مزيد من التفاصيل: [/concepts/oauth](/concepts/oauth)    
+<Note>
     نصيحة للرؤوس/الخوادم: أكمل OAuth على جهاز يحتوي على متصفح، ثم انسخ
     `~/.openclaw/credentials/oauth.json` (أو `$OPENCLAW_STATE_DIR/credentials/oauth.json`) إلى
     مضيف Gateway.
     </Note>
   </Step>
-  <Step title="مساحة العمل">
+  <Step title="Workspace">
     - الافتراضي `~/.openclaw/workspace` (قابل للتهيئة).
     - يزرع ملفات مساحة العمل اللازمة لطقس تمهيد الوكيل.
-    - مخطط مساحة العمل الكامل + دليل النسخ الاحتياطي: [Agent workspace](/concepts/agent-workspace)
-  </Step>
+    - مخطط مساحة العمل الكامل + دليل النسخ الاحتياطي: [Agent workspace](/concepts/agent-workspace)  
+</Step>
   <Step title="Gateway">
     - المنفذ، والربط، ووضع المصادقة، والتعرّض عبر Tailscale.
     - توصية المصادقة: الإبقاء على **Token** حتى مع loopback كي تضطر عملاء WS المحليين إلى المصادقة.
     - عطّل المصادقة فقط إذا كنت تثق تمامًا بكل عملية محلية.
     - الربط غير loopback يتطلب المصادقة أيضًا.
   </Step>
-  <Step title="القنوات">
+  <Step title="Channels">
     - [WhatsApp](/channels/whatsapp): تسجيل دخول QR اختياري.
     - [Telegram](/channels/telegram): رمز البوت.
     - [Discord](/channels/discord): رمز البوت.
@@ -87,7 +80,8 @@ x-i18n:
     - [Signal](/channels/signal): تثبيت `signal-cli` اختياري + تهيئة الحساب.
     - [BlueBubbles](/channels/bluebubbles): **موصى به لـ iMessage**؛ عنوان خادم + كلمة مرور + webhook.
     - [iMessage](/channels/imessage): مسار CLI قديم `imsg` + وصول إلى قاعدة البيانات.
-    - أمان الرسائل الخاصة (DM): الافتراضي هو الإقران. ترسل أول رسالة خاصة رمزًا؛ وافق عبر `openclaw pairing approve <channel> <code>` أو استخدم قوائم السماح.
+    - أمان الرسائل الخاصة (DM): الافتراضي هو الإقران. ترسل أول رسالة خاصة رمزًا؛ وافق عبر `openclaw pairing approve <channel><code>` أو استخدم قوائم السماح.
+  </Step><code>` أو استخدم قوائم السماح.
   </Step>
   <Step title="تثبيت الـ daemon">
     - macOS: LaunchAgent
@@ -139,7 +133,7 @@ openclaw onboard --non-interactive \
 </Note>
 
 <AccordionGroup>
-  <Accordion title="مثال Gemini">
+  <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -149,7 +143,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="مثال Z.AI">
+  <Accordion title="Z.AI example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -159,7 +153,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="مثال Vercel AI Gateway">
+  <Accordion title="Vercel AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -169,7 +163,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="مثال Cloudflare AI Gateway">
+  <Accordion title="Cloudflare AI Gateway example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -181,7 +175,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="مثال Moonshot">
+  <Accordion title="Moonshot example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -191,7 +185,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="مثال Synthetic">
+  <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \
@@ -201,7 +195,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
-  <Accordion title="مثال OpenCode Zen">
+  <Accordion title="OpenCode Zen example">
     ```bash
     openclaw onboard --non-interactive \
       --mode local \

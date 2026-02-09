@@ -5,13 +5,6 @@ read_when:
   - Kailangan mong i-enable o i-disable ang mga heartbeat
   - Gusto mong inspeksyunin ang mga entry ng system presence
 title: "sistema"
-x-i18n:
-  source_path: cli/system.md
-  source_hash: 36ae5dbdec327f5a
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:45:21Z
 ---
 
 # `openclaw system`
@@ -30,7 +23,7 @@ openclaw system presence
 
 ## `system event`
 
-Mag-enqueue ng system event sa **main** session. Ang susunod na heartbeat ay mag-i-inject
+Mag-enqueue ng system event sa **main** session. Ang susunod na heartbeat ay mag-iinject
 nito bilang isang `System:` na linya sa prompt. Gamitin ang `--mode now` para i-trigger ang heartbeat
 kaagad; ang `next-heartbeat` ay maghihintay sa susunod na naka-iskedyul na tick.
 

@@ -4,13 +4,6 @@ read_when:
   - Actualizar las asignaciones de identificadores de modelos de dispositivos o los archivos NOTICE/licencia
   - Cambiar cómo la UI de Instancias muestra los nombres de dispositivos
 title: "Base de datos de modelos de dispositivos"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T09:34:24Z
 ---
 
 # Base de datos de modelos de dispositivos (nombres amigables)

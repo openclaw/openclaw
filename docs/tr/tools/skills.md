@@ -4,13 +4,6 @@ read_when:
   - Skills eklerken veya değiştirirken
   - Skill geçitlemesini veya yükleme kurallarını değiştirirken
 title: "Skills"
-x-i18n:
-  source_path: tools/skills.md
-  source_hash: 70d7eb9e422c17a4
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:54:17Z
 ---
 
 # Skills (OpenClaw)
@@ -43,11 +36,13 @@ Aynı skill adı birden fazla yerde varsa, olağan öncelik geçerlidir: çalı�
 
 ## Eklentiler + skills
 
-Eklentiler, eklenti köküne göre göreli yollar olan `openclaw.plugin.json` içinde `skills` dizinlerini listeleyerek kendi skills’lerini sunabilir. Eklenti etkinleştirildiğinde eklenti skills’leri yüklenir ve normal skill öncelik kurallarına katılır. Bunları eklentinin yapılandırma girdisindeki `metadata.openclaw.requires.config` ile geçitleyebilirsiniz. Keşif/yapılandırma için [Plugins](/tools/plugin) ve bu skills’lerin öğrettiği araç yüzeyi için [Tools](/tools) sayfalarına bakın.
+Eklentiler, eklenti köküne göre göreli yollar olan `openclaw.plugin.json` içinde `skills` dizinlerini listeleyerek kendi skills’lerini sunabilir. Eklenti etkinleştirildiğinde eklenti skills’leri yüklenir ve normal skill öncelik kurallarına katılır.
+Bunları eklentinin yapılandırma girdisindeki `metadata.openclaw.requires.config` ile geçitleyebilirsiniz. Keşif/yapılandırma için [Plugins](/tools/plugin) ve bu skills’lerin öğrettiği araç yüzeyi için [Tools](/tools) sayfalarına bakın.
 
 ## ClawHub (kurulum + senkronizasyon)
 
-ClawHub, OpenClaw için herkese açık skills kayıt defteridir. [https://clawhub.com](https://clawhub.com) adresinden göz atın. Skills keşfetmek, kurmak, güncellemek ve yedeklemek için kullanın. Tam kılavuz: [ClawHub](/tools/clawhub).
+ClawHub, OpenClaw için herkese açık skills kayıt defteridir. [https://clawhub.com](https://clawhub.com) adresinden göz atın. Skills keşfetmek, kurmak, güncellemek ve yedeklemek için kullanın.
+Tam kılavuz: [ClawHub](/tools/clawhub).
 
 Yaygın akışlar:
 

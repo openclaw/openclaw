@@ -4,13 +4,6 @@ read_when:
   - Gateway प्रक्रिया चलाते या डिबग करते समय
   - एकल-इंस्टेंस प्रवर्तन की जाँच करते समय
 title: "Gateway लॉक"
-x-i18n:
-  source_path: gateway/gateway-lock.md
-  source_hash: 15fdfa066d1925da
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:15Z
 ---
 
 # Gateway लॉक

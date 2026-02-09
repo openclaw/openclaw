@@ -4,18 +4,11 @@ read_when:
   - डिवाइस मॉडल पहचानकर्ता मैपिंग या NOTICE/लाइसेंस फ़ाइलों को अपडेट करते समय
   - Instances UI डिवाइस नामों को कैसे प्रदर्शित करता है, इसमें परिवर्तन करते समय
 title: "डिवाइस मॉडल डेटाबेस"
-x-i18n:
-  source_path: reference/device-models.md
-  source_hash: 1d99c2538a0d8fdd
-  provider: openai
-  model: gpt-5.2-chat-latest
-  workflow: v1
-  generated_at: 2026-02-08T10:49:36Z
 ---
 
 # डिवाइस मॉडल डेटाबेस (उपयोगकर्ता‑अनुकूल नाम)
 
-macOS सहचर ऐप **Instances** UI में Apple डिवाइस मॉडल पहचानकर्ताओं (उदा. `iPad16,6`, `Mac16,6`) को मानव‑पठनीय नामों से मैप करके उपयोगकर्ता‑अनुकूल Apple डिवाइस मॉडल नाम दिखाता है।
+आज दो पैटर्न उपयोग में हैं।
 
 यह मैपिंग JSON के रूप में यहाँ vendored है:
 
