@@ -592,4 +592,43 @@ describe("context-pruning", () => {
       toolNames: ["exec"],
     });
   });
+
+  it("does not emit session:prune when session identity is missing", async () => {
+    triggerInternalHook.mockClear();
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeAssistant("a1"),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "x".repeat(5_000),
+      }),
+    ];
+
+    const settings = {
+      ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+      keepLastAssistants: 0,
+      softTrimRatio: 0.0,
+      hardClearRatio: 1.0,
+      minPrunableToolChars: 0,
+      tools: { allow: ["exec"] },
+      softTrim: { maxChars: 100, headChars: 30, tailChars: 30 },
+      hardClear: { enabled: false, placeholder: "cleared" },
+    };
+
+    const ctx = {
+      model: { contextWindow: 1000 },
+    } as unknown as ExtensionContext;
+    const pruned = await pruneContextMessages({
+      messages,
+      settings,
+      ctx,
+    });
+
+    expect(pruned).not.toBe(messages);
+    const event = triggerInternalHook.mock.calls.find(
+      (call) => call[0]?.type === "session" && call[0]?.action === "prune",
+    )?.[0];
+    expect(event).toBeUndefined();
+  });
 });
