@@ -55,6 +55,7 @@ type CallState = {
   sipChannelId: string;
   media?: MediaGraph;
   speaking: boolean;
+  ttsTimer?: NodeJS.Timeout;
   stt?: CoreSttSession;
   pendingMulaw?: Buffer;
   rtpPeer?: { address: string; port: number };
@@ -341,7 +342,7 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       }
 
       const pending = state.pendingMulaw;
-      if (pending && !state.speaking) {
+      if (pending && !state.ttsTimer) {
         state.pendingMulaw = undefined;
         const peer = this.getRtpPeer(state) || rinfo;
         this.sendMulawRtp(state, pending, peer);
@@ -360,13 +361,22 @@ export class AsteriskAriProvider implements VoiceCallProvider {
   private sendMulawRtp(state: CallState, mulaw: Buffer, peer: { address: string; port: number }) {
     if (!state.media) return;
     const udp = state.media.udp;
+
+    if (state.ttsTimer) {
+      clearInterval(state.ttsTimer);
+      state.ttsTimer = undefined;
+    }
+
     state.speaking = true;
     const payload = this.cfg.codec === "alaw" ? this.mulawToAlawBuffer(mulaw) : mulaw;
     const chunkIter = chunkAudio(payload, 160);
     let i = 0;
     const interval = setInterval(() => {
-      if (!this.calls.has(state.providerCallId) || !state.speaking) {
+      if (!this.calls.has(state.providerCallId) || state.ttsTimer !== interval) {
         clearInterval(interval);
+        if (state.ttsTimer === interval) {
+          state.ttsTimer = undefined;
+        }
         state.speaking = false;
         return;
       }
@@ -374,6 +384,9 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       const next = chunkIter.next();
       if (next.done || !next.value) {
         clearInterval(interval);
+        if (state.ttsTimer === interval) {
+          state.ttsTimer = undefined;
+        }
         state.speaking = false;
         return;
       }
@@ -393,6 +406,8 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       });
       i++;
     }, 20);
+
+    state.ttsTimer = interval;
   }
 
   private ensureRtpState(state: CallState): { seq: number; ts: number; ssrc: number } {
@@ -803,6 +818,10 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       await this.client.safeHangupChannel(state.sipChannelId).catch(() => {});
     }
 
+    if (state.ttsTimer) {
+      clearInterval(state.ttsTimer);
+      state.ttsTimer = undefined;
+    }
     if (state.media) {
       await this.mediaFactory.teardown(state.media);
     }
