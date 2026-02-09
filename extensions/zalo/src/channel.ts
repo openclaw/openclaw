@@ -162,7 +162,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
         if (!trimmed) {
           return false;
         }
-        return /^\d{3,}$/.test(trimmed);
+        return /^[a-f0-9]{3,}$/i.test(trimmed);
       },
       hint: "<chatId>",
     },

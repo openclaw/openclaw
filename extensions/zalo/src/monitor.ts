@@ -294,6 +294,10 @@ async function processUpdate(
   fetcher?: ZaloFetch,
 ): Promise<void> {
   const { event_name, message } = update;
+  console.log(
+    `[${account.accountId}] Zalo event: ${event_name}`,
+    JSON.stringify(update).slice(0, 500),
+  );
   if (!message) {
     return;
   }
@@ -367,15 +371,16 @@ async function handleImageMessage(
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void,
   fetcher?: ZaloFetch,
 ): Promise<void> {
-  const { photo, caption } = message;
+  const { photo, photo_url, caption } = message;
+  const photoSrc = photo || photo_url;
 
   let mediaPath: string | undefined;
   let mediaType: string | undefined;
 
-  if (photo) {
+  if (photoSrc) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: photoSrc });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,
