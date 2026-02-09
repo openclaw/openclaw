@@ -1,6 +1,7 @@
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
+import { pruneStaleFollowupQueues } from "../auto-reply/reply/queue/state.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
   DEDUPE_MAX,
@@ -113,6 +114,31 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunState.abortedRuns.delete(runId);
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
+      params.agentRunSeq.delete(runId);
+    }
+
+    // Prune stale followup queues (empty, not draining, idle > 10 min).
+    pruneStaleFollowupQueues();
+
+    // Safety-net: prune agentRunSeq entries for runs no longer tracked anywhere.
+    // Normally cleaned on lifecycle end, but stale entries can accumulate if
+    // events are lost or the run process crashes.
+    if (params.agentRunSeq.size > 500) {
+      const activeRunIds = new Set<string>();
+      for (const runId of params.chatAbortControllers.keys()) {
+        activeRunIds.add(runId);
+      }
+      for (const runId of params.chatRunState.abortedRuns.keys()) {
+        activeRunIds.add(runId);
+      }
+      for (const runId of params.chatRunBuffers.keys()) {
+        activeRunIds.add(runId);
+      }
+      for (const runId of params.agentRunSeq.keys()) {
+        if (!activeRunIds.has(runId)) {
+          params.agentRunSeq.delete(runId);
+        }
+      }
     }
   }, 60_000);
 

@@ -10,6 +10,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import { getTranscriptWriter } from "../../infra/batched-writer.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -133,7 +134,14 @@ function appendAssistantTranscriptMessage(params: {
   };
 
   try {
-    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+    // Use batched writer to consolidate transcript appends into fewer syscalls.
+    // Fire-and-forget the async write; the batched writer has sync fallback on error.
+    const line = `${JSON.stringify(transcriptEntry)}\n`;
+    getTranscriptWriter()
+      .append(transcriptPath, line)
+      .catch(() => {
+        // Sync fallback already handled inside BatchedWriter
+      });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
@@ -672,9 +680,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: messageBody,
     };
 
-    // Append to transcript file
+    // Append to transcript file (batched for fewer syscalls)
     try {
-      fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+      const line = `${JSON.stringify(transcriptEntry)}\n`;
+      getTranscriptWriter()
+        .append(transcriptPath, line)
+        .catch(() => {});
     } catch (err) {
       const errMessage = err instanceof Error ? err.message : String(err);
       respond(

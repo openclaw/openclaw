@@ -56,6 +56,29 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
   return created;
 }
 
+/**
+ * Prune stale queues that are empty, not draining, and older than `maxAgeMs`.
+ * Called periodically to prevent unbounded growth of FOLLOWUP_QUEUES.
+ */
+export function pruneStaleFollowupQueues(maxAgeMs = 10 * 60_000): number {
+  const now = Date.now();
+  let pruned = 0;
+  for (const [key, queue] of FOLLOWUP_QUEUES) {
+    if (queue.draining) {
+      continue;
+    }
+    if (queue.items.length > 0 || queue.droppedCount > 0) {
+      continue;
+    }
+    if (queue.lastEnqueuedAt > 0 && now - queue.lastEnqueuedAt < maxAgeMs) {
+      continue;
+    }
+    FOLLOWUP_QUEUES.delete(key);
+    pruned++;
+  }
+  return pruned;
+}
+
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
   if (!cleaned) {
