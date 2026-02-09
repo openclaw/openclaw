@@ -44,27 +44,27 @@ describe("completion stdout cleanliness", () => {
   });
 
   it("subsystem logger does not write to stdout when routeLogsToStderr is active", () => {
-    // Track whether rawConsole.log (i.e. stdout-bound original console.log) is called.
-    // After enableConsoleCapture(), rawConsole holds the original console methods.
-    const logSpy = vi.fn();
-    console.log = logSpy;
-    const errorSpy = vi.fn();
-    console.error = errorSpy;
+    // Spy on the actual stdout stream to verify no log leakage.
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
     setLoggerOverride({ level: "info", file: "/dev/null" });
     enableConsoleCapture();
     routeLogsToStderr();
 
+    // After capture, spy on rawConsole.error — the stderr-bound sink used by writeConsoleLine().
+    // writeConsoleLine routes to rawConsole.error (not process.stderr.write) when forceConsoleToStderr is set.
+    const rawErrorSpy = vi.spyOn(loggingState.rawConsole!, "error");
+
     // Simulate what happens during plugin loading — a subsystem logger emitting to console
     const logger = createSubsystemLogger("plugins");
     logger.info("Loaded 3 plugins");
 
-    // rawConsole.log (the original console.log) should NOT have been called,
-    // because writeConsoleLine redirects to rawConsole.error when forceConsoleToStderr is true.
-    expect(logSpy).not.toHaveBeenCalled();
-    // It should have gone to the error sink (stderr)
-    expect(errorSpy).toHaveBeenCalled();
-    const errorOutput = String(errorSpy.mock.calls[0]?.[0] ?? "");
+    // stdout should NOT have received the subsystem log message
+    const stdoutOutput = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(stdoutOutput).not.toContain("plugins");
+    // rawConsole.error (the stderr sink) should have received it
+    expect(rawErrorSpy).toHaveBeenCalled();
+    const errorOutput = String(rawErrorSpy.mock.calls[0]?.[0] ?? "");
     expect(errorOutput).toContain("plugins");
   });
 
