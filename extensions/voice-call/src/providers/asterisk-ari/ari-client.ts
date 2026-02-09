@@ -5,6 +5,7 @@ export type AriEvent = {
   type: string;
   channel?: AriChannel;
   args?: string[];
+  digit?: string;
 };
 
 export type AriWsHandler = (event: AriEvent) => void;

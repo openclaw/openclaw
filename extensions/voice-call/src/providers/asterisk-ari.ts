@@ -250,6 +250,24 @@ export class AsteriskAriProvider implements VoiceCallProvider {
           });
         }
       }
+    } else if (evt.type === "ChannelDtmfReceived") {
+      const chId = evt.channel?.id;
+      const digit = evt.digit;
+      if (!chId || !digit) return;
+
+      for (const state of this.calls.values()) {
+        if (state.sipChannelId === chId) {
+          this.manager.processEvent(
+            makeEvent({
+              type: "call.dtmf",
+              callId: state.callId,
+              providerCallId: state.providerCallId,
+              digits: digit,
+            }),
+          );
+          break;
+        }
+      }
     } else if (evt.type === "StasisEnd") {
       const chId = evt.channel?.id;
       for (const [pId, state] of this.calls.entries()) {
