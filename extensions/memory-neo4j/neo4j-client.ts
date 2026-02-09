@@ -63,7 +63,11 @@ export class Neo4jMemoryClient {
     if (this.initPromise) {
       return this.initPromise;
     }
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((err) => {
+      // Reset so subsequent calls retry instead of returning cached rejection
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -257,7 +261,7 @@ export class Neo4jMemoryClient {
     });
   }
 
-  async deleteMemory(id: string): Promise<boolean> {
+  async deleteMemory(id: string, agentId?: string): Promise<boolean> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -268,20 +272,21 @@ export class Neo4jMemoryClient {
     return this.retryOnTransient(async () => {
       const session = this.driver!.session();
       try {
-        // Decrement mentionCount on connected entities (floor at 0 to prevent
-        // negative counts from parallel deletes racing on the same entity)
-        await session.run(
-          `MATCH (m:Memory {id: $id})-[:MENTIONS]->(e:Entity)
-           SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END`,
-          { id },
-        );
-
-        // Then delete the memory with all its relationships
+        // Atomic: decrement mentionCount and delete in a single Cypher statement
+        // to prevent inconsistent state if a crash occurs between operations.
+        // When agentId is provided, scope the delete to that agent's memories
+        // to prevent cross-agent deletion.
+        const matchClause = agentId
+          ? "MATCH (m:Memory {id: $id, agentId: $agentId})"
+          : "MATCH (m:Memory {id: $id})";
         const result = await session.run(
-          `MATCH (m:Memory {id: $id})
+          `${matchClause}
+           OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+           SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END
+           WITH m, count(e) AS _
            DETACH DELETE m
            RETURN count(*) AS deleted`,
-          { id },
+          agentId ? { id, agentId } : { id },
         );
 
         const deleted =
@@ -668,54 +673,6 @@ export class Neo4jMemoryClient {
     });
   }
 
-  /**
-   * Calculate effective importance using retrieval-based reinforcement.
-   *
-   * Two modes:
-   * 1. With importance (regular memories): importance × freq_boost × recency
-   * 2. Without importance (core memories): freq_boost × recency
-   *
-   * Research basis:
-   * - ACT-R memory model (frequency with power-law decay)
-   * - FSRS spaced repetition (stability/retrievability)
-   * - Ebbinghaus forgetting curve (exponential decay)
-   */
-  calculateEffectiveImportance(
-    retrievalCount: number,
-    daysSinceLastRetrieval: number | null,
-    options: {
-      baseImportance?: number; // Include importance multiplier (for regular memories)
-      frequencyScale?: number; // How much retrievals boost importance (default: 0.3)
-      recencyHalfLifeDays?: number; // Half-life for recency decay (default: 14)
-    } = {},
-  ): number {
-    const { baseImportance, frequencyScale = 0.3, recencyHalfLifeDays = 14 } = options;
-
-    // Frequency boost: log(1 + n) provides diminishing returns
-    // log(1+0)=0, log(1+1)≈0.69, log(1+10)≈2.4, log(1+100)≈4.6
-    const frequencyBoost = 1 + Math.log1p(retrievalCount) * frequencyScale;
-
-    // Recency factor: exponential decay with configurable half-life
-    // If never retrieved (null), use a baseline factor
-    let recencyFactor: number;
-    if (daysSinceLastRetrieval === null) {
-      recencyFactor = 0.1; // Never retrieved - low baseline
-    } else {
-      recencyFactor = Math.pow(2, -daysSinceLastRetrieval / recencyHalfLifeDays);
-    }
-
-    // Combined effective importance
-    const usageScore = frequencyBoost * recencyFactor;
-
-    // Include importance multiplier if provided (for regular memories)
-    if (baseImportance !== undefined) {
-      return baseImportance * usageScore;
-    }
-
-    // Pure usage-based (for core memories)
-    return usageScore;
-  }
-
   // --------------------------------------------------------------------------
   // Entity & Relationship Operations
   // --------------------------------------------------------------------------
@@ -995,108 +952,175 @@ export class Neo4jMemoryClient {
    * 2. For each memory, query the vector index for nearest neighbors above threshold
    * 3. Build clusters via union-find (transitive closure)
    * 4. Return clusters with 2+ members
+   *
+   * @param threshold Minimum similarity score (0-1)
+   * @param agentId Optional agent filter
+   * @param returnSimilarities If true, includes pairwise similarity scores in the result
    */
   async findDuplicateClusters(
     threshold: number = 0.95,
     agentId?: string,
-  ): Promise<Array<{ memoryIds: string[]; texts: string[]; importances: number[] }>> {
+    returnSimilarities: boolean = false,
+  ): Promise<
+    Array<{
+      memoryIds: string[];
+      texts: string[];
+      importances: number[];
+      similarities?: Map<string, number>;
+    }>
+  > {
     await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      // Step 1: Fetch all memory metadata (no embeddings — lightweight)
-      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
-      const allResult = await session.run(
-        `MATCH (m:Memory) ${agentFilter}
-         RETURN m.id AS id, m.text AS text, m.importance AS importance`,
-        agentId ? { agentId } : {},
-      );
 
-      const memoryData = new Map<string, { text: string; importance: number }>();
-      for (const r of allResult.records) {
-        memoryData.set(r.get("id") as string, {
-          text: r.get("text") as string,
-          importance: r.get("importance") as number,
-        });
+    // Step 1: Fetch all memory metadata in a short-lived session
+    const memoryData = new Map<string, { text: string; importance: number }>();
+    {
+      const session = this.driver!.session();
+      try {
+        const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+        const allResult = await session.run(
+          `MATCH (m:Memory) ${agentFilter}
+           RETURN m.id AS id, m.text AS text, m.importance AS importance`,
+          agentId ? { agentId } : {},
+        );
+
+        for (const r of allResult.records) {
+          memoryData.set(r.get("id") as string, {
+            text: r.get("text") as string,
+            importance: r.get("importance") as number,
+          });
+        }
+      } finally {
+        await session.close();
       }
+    }
 
-      if (memoryData.size < 2) {
-        return [];
+    if (memoryData.size < 2) {
+      return [];
+    }
+
+    // Step 2: For each memory, find near-duplicates via HNSW vector index
+    // Each query uses a fresh short-lived session via retryOnTransient to
+    // avoid a single long-lived session that could expire mid-operation.
+    // Each query is O(log N) vs O(N) for brute-force, total O(N log N)
+    const parent = new Map<string, string>();
+    // Capture pairwise similarities if requested (for sleep cycle optimization)
+    const pairwiseSimilarities = returnSimilarities ? new Map<string, number>() : null;
+
+    const find = (x: string): string => {
+      if (!parent.has(x)) {
+        parent.set(x, x);
       }
+      if (parent.get(x) !== x) {
+        parent.set(x, find(parent.get(x)!));
+      }
+      return parent.get(x)!;
+    };
 
-      // Step 2: For each memory, find near-duplicates via HNSW vector index
-      // Each query is O(log N) vs O(N) for brute-force, total O(N log N)
-      const parent = new Map<string, string>();
+    const union = (x: string, y: string): void => {
+      const px = find(x);
+      const py = find(y);
+      if (px !== py) {
+        parent.set(px, py);
+      }
+    };
 
-      const find = (x: string): string => {
-        if (!parent.has(x)) {
-          parent.set(x, x);
-        }
-        if (parent.get(x) !== x) {
-          parent.set(x, find(parent.get(x)!));
-        }
-        return parent.get(x)!;
-      };
+    // Helper to create a canonical pair key (sorted)
+    const makePairKey = (a: string, b: string): string => {
+      return a < b ? `${a}:${b}` : `${b}:${a}`;
+    };
 
-      const union = (x: string, y: string): void => {
-        const px = find(x);
-        const py = find(y);
-        if (px !== py) {
-          parent.set(px, py);
-        }
-      };
-
-      let pairsFound = 0;
-      for (const id of memoryData.keys()) {
-        // Retry individual vector queries on transient errors
-        const similar = await this.retryOnTransient(async () => {
-          return session.run(
+    let pairsFound = 0;
+    for (const id of memoryData.keys()) {
+      // Retry individual vector queries on transient errors (each uses a fresh session)
+      const similar = await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          return await session.run(
             `MATCH (src:Memory {id: $id})
              CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
              YIELD node, score
              WHERE node.id <> $id AND score >= $threshold
-             RETURN node.id AS matchId`,
+             RETURN node.id AS matchId, score`,
             { id, k: neo4j.int(10), threshold },
           );
-        });
+        } finally {
+          await session.close();
+        }
+      });
 
-        for (const r of similar.records) {
-          const matchId = r.get("matchId") as string;
-          if (memoryData.has(matchId)) {
-            union(id, matchId);
-            pairsFound++;
+      for (const r of similar.records) {
+        const matchId = r.get("matchId") as string;
+        if (memoryData.has(matchId)) {
+          union(id, matchId);
+          pairsFound++;
+
+          // Capture similarity score if requested
+          if (pairwiseSimilarities) {
+            const score = r.get("score") as number;
+            const pairKey = makePairKey(id, matchId);
+            // Keep the highest score if we see this pair multiple times
+            const existing = pairwiseSimilarities.get(pairKey);
+            if (existing === undefined || score > existing) {
+              pairwiseSimilarities.set(pairKey, score);
+            }
           }
         }
-
-        // Early exit if we've found many pairs (safety bound)
-        if (pairsFound > 500) {
-          break;
-        }
       }
 
-      // Step 3: Group by root
-      const clusters = new Map<string, string[]>();
-      for (const id of memoryData.keys()) {
-        if (!parent.has(id)) {
-          continue;
-        }
-        const root = find(id);
-        if (!clusters.has(root)) {
-          clusters.set(root, []);
-        }
-        clusters.get(root)!.push(id);
+      // Early exit if we've found many pairs (safety bound)
+      if (pairsFound > 500) {
+        this.logger.warn(
+          `memory-neo4j: findDuplicateClusters hit safety bound (500 pairs) — some duplicates may not be detected. Consider running with a higher threshold.`,
+        );
+        break;
       }
+    }
 
-      // Return clusters with 2+ members
-      return Array.from(clusters.values())
-        .filter((ids) => ids.length >= 2)
-        .map((ids) => ({
+    // Step 3: Group by root
+    const clusters = new Map<string, string[]>();
+    for (const id of memoryData.keys()) {
+      if (!parent.has(id)) {
+        continue;
+      }
+      const root = find(id);
+      if (!clusters.has(root)) {
+        clusters.set(root, []);
+      }
+      clusters.get(root)!.push(id);
+    }
+
+    // Return clusters with 2+ members
+    return Array.from(clusters.values())
+      .filter((ids) => ids.length >= 2)
+      .map((ids) => {
+        const cluster: {
+          memoryIds: string[];
+          texts: string[];
+          importances: number[];
+          similarities?: Map<string, number>;
+        } = {
           memoryIds: ids,
           texts: ids.map((id) => memoryData.get(id)!.text),
           importances: ids.map((id) => memoryData.get(id)!.importance),
-        }));
-    } finally {
-      await session.close();
-    }
+        };
+
+        // Include similarities for this cluster if requested
+        if (pairwiseSimilarities) {
+          const clusterSims = new Map<string, number>();
+          for (let i = 0; i < ids.length - 1; i++) {
+            for (let j = i + 1; j < ids.length; j++) {
+              const pairKey = makePairKey(ids[i], ids[j]);
+              const score = pairwiseSimilarities.get(pairKey);
+              if (score !== undefined) {
+                clusterSims.set(pairKey, score);
+              }
+            }
+          }
+          cluster.similarities = clusterSims;
+        }
+
+        return cluster;
+      });
   }
 
   /**
@@ -1122,49 +1146,53 @@ export class Neo4jMemoryClient {
     return this.retryOnTransient(async () => {
       const session = this.driver!.session();
       try {
-        // Optimistic lock: verify all cluster members still exist before merging.
-        // New memories added or deleted between findDuplicateClusters() and this
-        // call could invalidate the cluster. Skip if any member is missing.
-        const verifyResult = await session.run(
-          `UNWIND $ids AS memId
-           OPTIONAL MATCH (m:Memory {id: memId})
-           RETURN memId, m IS NOT NULL AS exists`,
-          { ids: memoryIds },
-        );
-
-        const missingIds: string[] = [];
-        for (const r of verifyResult.records) {
-          if (!r.get("exists")) {
-            missingIds.push(r.get("memId") as string);
-          }
-        }
-
-        if (missingIds.length > 0) {
-          this.logger.warn(
-            `memory-neo4j: skipping cluster merge — ${missingIds.length} member(s) no longer exist: ${missingIds.join(", ")}`,
+        // Execute verify + transfer + delete in a single write transaction
+        // to prevent TOCTOU races (member deleted between verify and merge)
+        const deletedCount = await session.executeWrite(async (tx) => {
+          // Verify all cluster members still exist
+          const verifyResult = await tx.run(
+            `UNWIND $ids AS memId
+             OPTIONAL MATCH (m:Memory {id: memId})
+             RETURN memId, m IS NOT NULL AS exists`,
+            { ids: memoryIds },
           );
-          return { survivorId, deletedCount: 0 };
-        }
 
-        // Transfer MENTIONS relationships from deleted memories to survivor
-        await session.run(
-          `UNWIND $toDelete AS deadId
-           MATCH (dead:Memory {id: deadId})-[r:MENTIONS]->(e:Entity)
-           MATCH (survivor:Memory {id: $survivorId})
-           MERGE (survivor)-[:MENTIONS]->(e)
-           DELETE r`,
-          { toDelete, survivorId },
-        );
+          const missingIds: string[] = [];
+          for (const r of verifyResult.records) {
+            if (!r.get("exists")) {
+              missingIds.push(r.get("memId") as string);
+            }
+          }
 
-        // Delete the duplicate memories
-        await session.run(
-          `UNWIND $toDelete AS deadId
-           MATCH (m:Memory {id: deadId})
-           DETACH DELETE m`,
-          { toDelete },
-        );
+          if (missingIds.length > 0) {
+            this.logger.warn(
+              `memory-neo4j: skipping cluster merge — ${missingIds.length} member(s) no longer exist: ${missingIds.join(", ")}`,
+            );
+            return 0;
+          }
 
-        return { survivorId, deletedCount: toDelete.length };
+          // Transfer MENTIONS relationships from deleted memories to survivor
+          await tx.run(
+            `UNWIND $toDelete AS deadId
+             MATCH (dead:Memory {id: deadId})-[r:MENTIONS]->(e:Entity)
+             MATCH (survivor:Memory {id: $survivorId})
+             MERGE (survivor)-[:MENTIONS]->(e)
+             DELETE r`,
+            { toDelete, survivorId },
+          );
+
+          // Delete the duplicate memories
+          await tx.run(
+            `UNWIND $toDelete AS deadId
+             MATCH (m:Memory {id: deadId})
+             DETACH DELETE m`,
+            { toDelete },
+          );
+
+          return toDelete.length;
+        });
+
+        return { survivorId, deletedCount };
       } finally {
         await session.close();
       }
@@ -1260,19 +1288,14 @@ export class Neo4jMemoryClient {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
-      // Decrement mention counts on connected entities (floor at 0 to prevent
-      // negative counts from parallel prune/delete operations racing on the same entity)
-      await session.run(
-        `UNWIND $ids AS memId
-         MATCH (m:Memory {id: memId})-[:MENTIONS]->(e:Entity)
-         SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END`,
-        { ids: memoryIds },
-      );
-
-      // Delete the memories
+      // Atomic: decrement mentionCount and delete in a single Cypher statement
+      // to prevent inconsistent state if a crash occurs between operations
       const result = await session.run(
         `UNWIND $ids AS memId
          MATCH (m:Memory {id: memId})
+         OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+         SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END
+         WITH m, count(e) AS _
          DETACH DELETE m
          RETURN count(*) AS deleted`,
         { ids: memoryIds },
@@ -1546,152 +1569,6 @@ export class Neo4jMemoryClient {
 
     // Return the score at that boundary (or 0 if empty)
     return sorted[boundaryIndex]?.effectiveScore ?? 0;
-  }
-
-  /**
-   * Find regular memories that should be promoted to core (above Pareto threshold).
-   *
-   * Pareto-based promotion:
-   * - Calculate effective score for all memories: importance × freq × recency
-   * - Find the 80th percentile threshold (top 20%)
-   * - Regular memories above threshold get promoted to core
-   * - Also requires minimum age (default: 7 days) to ensure stability
-   */
-  async findPromotionCandidates(options: {
-    paretoThreshold: number; // The calculated Pareto threshold
-    minAgeDays?: number; // Minimum age in days (default: 7)
-    agentId?: string;
-    limit?: number;
-  }): Promise<
-    Array<{
-      id: string;
-      text: string;
-      category: string;
-      importance: number;
-      ageDays: number;
-      retrievalCount: number;
-      effectiveScore: number;
-    }>
-  > {
-    const { paretoThreshold, minAgeDays = 7, agentId, limit = 100 } = options;
-
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
-      const result = await session.run(
-        `MATCH (m:Memory)
-         WHERE m.category <> 'core'
-           AND m.createdAt IS NOT NULL
-           ${agentFilter}
-         WITH m,
-              duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
-              coalesce(m.retrievalCount, 0) AS retrievalCount,
-              CASE
-                WHEN m.lastRetrievedAt IS NULL THEN null
-                ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
-              END AS daysSinceRetrieval
-         WHERE ageDays >= $minAgeDays
-         WITH m, ageDays, retrievalCount, daysSinceRetrieval,
-              // Effective score: importance × freq_boost × recency
-              m.importance * (1 + log(1 + retrievalCount) * 0.3) *
-                CASE
-                  WHEN daysSinceRetrieval IS NULL THEN 0.1
-                  ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
-                END AS effectiveScore
-         WHERE effectiveScore >= $threshold
-         RETURN m.id AS id, m.text AS text, m.category AS category,
-                m.importance AS importance, ageDays, retrievalCount, effectiveScore
-         ORDER BY effectiveScore DESC
-         LIMIT $limit`,
-        {
-          threshold: paretoThreshold,
-          minAgeDays,
-          agentId,
-          limit: neo4j.int(limit),
-        },
-      );
-
-      return result.records.map((r) => ({
-        id: r.get("id") as string,
-        text: r.get("text") as string,
-        category: r.get("category") as string,
-        importance: r.get("importance") as number,
-        ageDays: r.get("ageDays") as number,
-        retrievalCount: r.get("retrievalCount") as number,
-        effectiveScore: r.get("effectiveScore") as number,
-      }));
-    } finally {
-      await session.close();
-    }
-  }
-
-  /**
-   * Find core memories that should be demoted (fallen below Pareto threshold).
-   *
-   * Core memories use the same formula for threshold comparison:
-   * importance × freq × recency
-   *
-   * If they fall below the top 20% threshold, they get demoted back to regular.
-   */
-  async findDemotionCandidates(options: {
-    paretoThreshold: number; // The calculated Pareto threshold
-    agentId?: string;
-    limit?: number;
-  }): Promise<
-    Array<{
-      id: string;
-      text: string;
-      importance: number;
-      retrievalCount: number;
-      effectiveScore: number;
-    }>
-  > {
-    const { paretoThreshold, agentId, limit = 100 } = options;
-
-    await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
-      const result = await session.run(
-        `MATCH (m:Memory)
-         WHERE m.category = 'core'
-           ${agentFilter}
-         WITH m,
-              coalesce(m.retrievalCount, 0) AS retrievalCount,
-              CASE
-                WHEN m.lastRetrievedAt IS NULL THEN null
-                ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
-              END AS daysSinceRetrieval
-         WITH m, retrievalCount, daysSinceRetrieval,
-              // Effective score: importance × freq_boost × recency
-              m.importance * (1 + log(1 + retrievalCount) * 0.3) *
-                CASE
-                  WHEN daysSinceRetrieval IS NULL THEN 0.1
-                  ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
-                END AS effectiveScore
-         WHERE effectiveScore < $threshold
-         RETURN m.id AS id, m.text AS text, m.importance AS importance,
-                retrievalCount, effectiveScore
-         ORDER BY effectiveScore ASC
-         LIMIT $limit`,
-        {
-          threshold: paretoThreshold,
-          agentId,
-          limit: neo4j.int(limit),
-        },
-      );
-
-      return result.records.map((r) => ({
-        id: r.get("id") as string,
-        text: r.get("text") as string,
-        importance: r.get("importance") as number,
-        retrievalCount: r.get("retrievalCount") as number,
-        effectiveScore: r.get("effectiveScore") as number,
-      }));
-    } finally {
-      await session.close();
-    }
   }
 
   /**

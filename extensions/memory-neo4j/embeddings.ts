@@ -2,8 +2,10 @@
  * Embedding generation for memory-neo4j.
  *
  * Supports both OpenAI and Ollama providers.
+ * Includes an LRU cache to avoid redundant API calls within a session.
  */
 
+import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { EmbeddingProvider } from "./config.js";
 import { contextLengthForModel } from "./config.js";
@@ -15,12 +17,63 @@ type Logger = {
   debug?: (msg: string) => void;
 };
 
+/**
+ * Simple LRU cache for embedding vectors.
+ * Keyed by SHA-256 hash of the input text to avoid storing large strings.
+ */
+class EmbeddingCache {
+  private readonly map = new Map<string, number[]>();
+  private readonly maxSize: number;
+
+  constructor(maxSize: number = 200) {
+    this.maxSize = maxSize;
+  }
+
+  private static hashText(text: string): string {
+    return createHash("sha256").update(text).digest("hex");
+  }
+
+  get(text: string): number[] | undefined {
+    const key = EmbeddingCache.hashText(text);
+    const value = this.map.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used) by re-inserting
+      this.map.delete(key);
+      this.map.set(key, value);
+    }
+    return value;
+  }
+
+  set(text: string, embedding: number[]): void {
+    const key = EmbeddingCache.hashText(text);
+    // If key exists, delete first to refresh position
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.maxSize) {
+      // Evict oldest (first) entry
+      const oldest = this.map.keys().next().value;
+      if (oldest !== undefined) {
+        this.map.delete(oldest);
+      }
+    }
+    this.map.set(key, embedding);
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+}
+
+/** Default concurrency for Ollama embedding requests */
+const OLLAMA_EMBED_CONCURRENCY = 4;
+
 export class Embeddings {
   private client: OpenAI | null = null;
   private readonly provider: EmbeddingProvider;
   private readonly baseUrl: string;
   private readonly logger: Logger | undefined;
   private readonly contextLength: number;
+  private readonly cache = new EmbeddingCache(200);
 
   constructor(
     private readonly apiKey: string | undefined,
@@ -70,21 +123,32 @@ export class Embeddings {
 
   /**
    * Generate an embedding vector for a single text.
+   * Results are cached to avoid redundant API calls.
    */
   async embed(text: string): Promise<number[]> {
     const input = this.truncateToContext(text);
-    if (this.provider === "ollama") {
-      return this.embedOllama(input);
+
+    // Check cache first
+    const cached = this.cache.get(input);
+    if (cached) {
+      this.logger?.debug?.("memory-neo4j: embedding cache hit");
+      return cached;
     }
-    return this.embedOpenAI(input);
+
+    const embedding =
+      this.provider === "ollama" ? await this.embedOllama(input) : await this.embedOpenAI(input);
+
+    this.cache.set(input, embedding);
+    return embedding;
   }
 
   /**
    * Generate embeddings for multiple texts.
    * Returns array of embeddings in the same order as input.
    *
-   * For Ollama: uses Promise.allSettled so individual failures don't break the
-   * entire batch. Failed embeddings are replaced with zero vectors and logged.
+   * For Ollama: processes in chunks of OLLAMA_EMBED_CONCURRENCY to avoid
+   * overwhelming the local server. Individual failures don't break the
+   * entire batch — failed embeddings are replaced with empty arrays.
    */
   async embedBatch(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) {
@@ -93,36 +157,77 @@ export class Embeddings {
 
     const truncated = texts.map((t) => this.truncateToContext(t));
 
-    if (this.provider === "ollama") {
-      // Ollama doesn't support batch, so we do sequential with resilient error handling
-      const results = await Promise.allSettled(truncated.map((t) => this.embedOllama(t)));
-      const embeddings: number[][] = [];
-      let failures = 0;
+    // Check cache for each text; only compute uncached ones
+    const results: (number[] | null)[] = truncated.map((t) => this.cache.get(t) ?? null);
+    const uncachedIndices: number[] = [];
+    const uncachedTexts: string[] = [];
+    for (let i = 0; i < results.length; i++) {
+      if (results[i] === null) {
+        uncachedIndices.push(i);
+        uncachedTexts.push(truncated[i]);
+      }
+    }
 
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
+    if (uncachedTexts.length === 0) {
+      this.logger?.debug?.(`memory-neo4j: embedBatch fully cached (${texts.length} texts)`);
+      return results as number[][];
+    }
+
+    let computed: number[][];
+
+    if (this.provider === "ollama") {
+      computed = await this.embedBatchOllama(uncachedTexts);
+    } else {
+      computed = await this.embedBatchOpenAI(uncachedTexts);
+    }
+
+    // Merge computed results back and populate cache
+    for (let i = 0; i < uncachedIndices.length; i++) {
+      const embedding = computed[i];
+      results[uncachedIndices[i]] = embedding;
+      if (embedding.length > 0) {
+        this.cache.set(uncachedTexts[i], embedding);
+      }
+    }
+
+    return results as number[][];
+  }
+
+  /**
+   * Ollama batch embedding with concurrency limiting.
+   * Processes in chunks to avoid overwhelming the server.
+   */
+  private async embedBatchOllama(texts: string[]): Promise<number[][]> {
+    const embeddings: number[][] = [];
+    let failures = 0;
+
+    // Process in chunks of OLLAMA_EMBED_CONCURRENCY
+    for (let i = 0; i < texts.length; i += OLLAMA_EMBED_CONCURRENCY) {
+      const chunk = texts.slice(i, i + OLLAMA_EMBED_CONCURRENCY);
+      const chunkResults = await Promise.allSettled(chunk.map((t) => this.embedOllama(t)));
+
+      for (let j = 0; j < chunkResults.length; j++) {
+        const result = chunkResults[j];
         if (result.status === "fulfilled") {
           embeddings.push(result.value);
         } else {
           failures++;
           this.logger?.warn?.(
-            `memory-neo4j: Ollama embedding failed for text ${i}: ${String(result.reason)}`,
+            `memory-neo4j: Ollama embedding failed for text ${i + j}: ${String(result.reason)}`,
           );
-          // Use zero vector as placeholder so indices stay aligned
+          // Use empty array as placeholder so indices stay aligned
           embeddings.push([]);
         }
       }
-
-      if (failures > 0) {
-        this.logger?.warn?.(
-          `memory-neo4j: ${failures}/${texts.length} Ollama embeddings failed in batch`,
-        );
-      }
-
-      return embeddings;
     }
 
-    return this.embedBatchOpenAI(truncated);
+    if (failures > 0) {
+      this.logger?.warn?.(
+        `memory-neo4j: ${failures}/${texts.length} Ollama embeddings failed in batch`,
+      );
+    }
+
+    return embeddings;
   }
 
   private async embedOpenAI(text: string): Promise<number[]> {

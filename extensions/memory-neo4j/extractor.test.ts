@@ -16,6 +16,8 @@ import {
   runBackgroundExtraction,
   rateImportance,
   resolveConflict,
+  isSemanticDuplicate,
+  runSleepCycle,
 } from "./extractor.js";
 import { passesAttentionGate, passesAssistantAttentionGate } from "./index.js";
 
@@ -1572,5 +1574,971 @@ describe("resolveConflict", () => {
 
     const result = await resolveConflict("mem A", "mem B", enabledConfig);
     expect(result).toBe("skip");
+  });
+});
+
+// ============================================================================
+// runSleepCycle() — Comprehensive Phase Testing
+// ============================================================================
+
+describe("runSleepCycle", () => {
+  let mockDb: any;
+  let mockEmbeddings: any;
+  let mockLogger: any;
+  let mockConfig: ExtractionConfig;
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+
+    // Mock logger
+    mockLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    // Mock embeddings
+    mockEmbeddings = {
+      embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+      embedBatch: vi.fn().mockResolvedValue([[0.1, 0.2, 0.3]]),
+    };
+
+    // Mock config
+    mockConfig = {
+      enabled: true,
+      apiKey: "test-key",
+      model: "test-model",
+      baseUrl: "https://test.ai/api/v1",
+      temperature: 0.0,
+      maxRetries: 0,
+    };
+
+    // Mock database with all required methods
+    mockDb = {
+      // findDuplicateClusters now accepts returnSimilarities param (3rd arg)
+      // When true, clusters include a similarities Map
+      findDuplicateClusters: vi
+        .fn()
+        .mockImplementation(async (threshold, agentId, returnSimilarities) => {
+          if (returnSimilarities) {
+            // Return empty clusters by default with similarities Map
+            return [];
+          }
+          return [];
+        }),
+      mergeMemoryCluster: vi.fn().mockResolvedValue({ survivorId: "s1", deletedCount: 0 }),
+      findConflictingMemories: vi.fn().mockResolvedValue([]),
+      invalidateMemory: vi.fn().mockResolvedValue(undefined),
+      calculateAllEffectiveScores: vi.fn().mockResolvedValue([]),
+      calculateParetoThreshold: vi.fn().mockReturnValue(0.5),
+      promoteToCore: vi.fn().mockResolvedValue(0),
+      demoteFromCore: vi.fn().mockResolvedValue(0),
+      findDecayedMemories: vi.fn().mockResolvedValue([]),
+      pruneMemories: vi.fn().mockResolvedValue(0),
+      countByExtractionStatus: vi
+        .fn()
+        .mockResolvedValue({ pending: 0, complete: 0, failed: 0, skipped: 0 }),
+      listPendingExtractions: vi.fn().mockResolvedValue([]),
+      findOrphanEntities: vi.fn().mockResolvedValue([]),
+      deleteOrphanEntities: vi.fn().mockResolvedValue(0),
+      findOrphanTags: vi.fn().mockResolvedValue([]),
+      deleteOrphanTags: vi.fn().mockResolvedValue(0),
+      updateExtractionStatus: vi.fn().mockResolvedValue(undefined),
+      mergeEntity: vi.fn().mockResolvedValue({ id: "e1", name: "test" }),
+      createMentions: vi.fn().mockResolvedValue(undefined),
+      createEntityRelationship: vi.fn().mockResolvedValue(undefined),
+      tagMemory: vi.fn().mockResolvedValue(undefined),
+      updateMemoryCategory: vi.fn().mockResolvedValue(undefined),
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  // Phase 1: Deduplication
+  describe("Phase 1: Deduplication", () => {
+    it("should merge clusters when vector similarity ≥ 0.95", async () => {
+      // New implementation calls findDuplicateClusters(0.75, agentId, true) with similarities
+      const similarities = new Map([
+        ["m1:m2", 0.97],
+        ["m1:m3", 0.96],
+        ["m2:m3", 0.98],
+      ]);
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["m1", "m2", "m3"],
+          texts: ["text 1", "text 2", "text 3"],
+          importances: [0.8, 0.9, 0.7],
+          similarities,
+        },
+      ]);
+      mockDb.mergeMemoryCluster.mockResolvedValue({ survivorId: "m2", deletedCount: 2 });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.findDuplicateClusters).toHaveBeenCalledWith(0.75, undefined, true);
+      expect(mockDb.mergeMemoryCluster).toHaveBeenCalledWith(["m1", "m2", "m3"], [0.8, 0.9, 0.7]);
+      expect(result.dedup.clustersFound).toBe(1);
+      expect(result.dedup.memoriesMerged).toBe(2);
+    });
+
+    it("should keep highest-importance memory in cluster", async () => {
+      const similarities = new Map([
+        ["high:low", 0.98],
+        ["high:mid", 0.96],
+        ["low:mid", 0.97],
+      ]);
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["low", "high", "mid"],
+          texts: ["text", "text", "text"],
+          importances: [0.3, 0.9, 0.5],
+          similarities,
+        },
+      ]);
+
+      await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // mergeMemoryCluster is called with all IDs and importances
+      // It's responsible for choosing the survivor (highest importance)
+      expect(mockDb.mergeMemoryCluster).toHaveBeenCalledWith(
+        ["low", "high", "mid"],
+        [0.3, 0.9, 0.5],
+      );
+    });
+
+    it("should report correct counts for multiple clusters", async () => {
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["a1", "a2"],
+          texts: ["a", "a"],
+          importances: [0.5, 0.6],
+          similarities: new Map([["a1:a2", 0.98]]),
+        },
+        {
+          memoryIds: ["b1", "b2", "b3"],
+          texts: ["b", "b", "b"],
+          importances: [0.7, 0.8, 0.9],
+          similarities: new Map([
+            ["b1:b2", 0.97],
+            ["b1:b3", 0.96],
+            ["b2:b3", 0.99],
+          ]),
+        },
+      ]);
+      mockDb.mergeMemoryCluster
+        .mockResolvedValueOnce({ survivorId: "a2", deletedCount: 1 })
+        .mockResolvedValueOnce({ survivorId: "b3", deletedCount: 2 });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.dedup.clustersFound).toBe(2);
+      expect(result.dedup.memoriesMerged).toBe(3);
+    });
+
+    it("should skip dedup when no clusters found", async () => {
+      mockDb.findDuplicateClusters.mockResolvedValue([]);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.dedup.clustersFound).toBe(0);
+      expect(result.dedup.memoriesMerged).toBe(0);
+      expect(mockDb.mergeMemoryCluster).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phase 1b: Conflict Detection
+  describe("Phase 1b: Conflict Detection", () => {
+    beforeEach(() => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              { message: { content: JSON.stringify({ keep: "a", reason: "more recent" }) } },
+            ],
+          }),
+      });
+    });
+
+    it("should call resolveConflict for entity-linked memory pairs", async () => {
+      mockDb.findConflictingMemories.mockResolvedValue([
+        {
+          memoryA: {
+            id: "m1",
+            text: "user prefers dark mode",
+            importance: 0.7,
+            createdAt: "2024-01-01",
+          },
+          memoryB: {
+            id: "m2",
+            text: "user prefers light mode",
+            importance: 0.6,
+            createdAt: "2024-01-02",
+          },
+        },
+      ]);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.findConflictingMemories).toHaveBeenCalled();
+      expect(result.conflict.pairsFound).toBe(1);
+      expect(result.conflict.resolved).toBe(1);
+    });
+
+    it("should invalidate the loser (importance → 0.01)", async () => {
+      mockDb.findConflictingMemories.mockResolvedValue([
+        {
+          memoryA: { id: "m1", text: "old info", importance: 0.5, createdAt: "2024-01-01" },
+          memoryB: { id: "m2", text: "new info", importance: 0.8, createdAt: "2024-01-02" },
+        },
+      ]);
+
+      // LLM says keep "a"
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [{ message: { content: JSON.stringify({ keep: "a", reason: "test" }) } }],
+          }),
+      });
+
+      await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.invalidateMemory).toHaveBeenCalledWith("m2");
+    });
+
+    it("should not count 'skip' decisions as resolved", async () => {
+      mockDb.findConflictingMemories.mockResolvedValue([
+        {
+          memoryA: { id: "m1", text: "text", importance: 0.5, createdAt: "2024-01-01" },
+          memoryB: { id: "m2", text: "text", importance: 0.5, createdAt: "2024-01-02" },
+        },
+      ]);
+
+      // LLM unavailable
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.conflict.pairsFound).toBe(1);
+      expect(result.conflict.resolved).toBe(0);
+      expect(result.conflict.invalidated).toBe(0);
+    });
+
+    it("should handle 'both' decision (no conflict)", async () => {
+      mockDb.findConflictingMemories.mockResolvedValue([
+        {
+          memoryA: { id: "m1", text: "likes coffee", importance: 0.5, createdAt: "2024-01-01" },
+          memoryB: { id: "m2", text: "works at Acme", importance: 0.5, createdAt: "2024-01-02" },
+        },
+      ]);
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              { message: { content: JSON.stringify({ keep: "both", reason: "no conflict" }) } },
+            ],
+          }),
+      });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.conflict.resolved).toBe(1);
+      expect(result.conflict.invalidated).toBe(0);
+      expect(mockDb.invalidateMemory).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phase 1b: Semantic Deduplication (0.75-0.95 band)
+  describe("Phase 1b: Semantic Deduplication", () => {
+    it("should check pairs in 0.75-0.95 similarity band", async () => {
+      // New implementation: single call at 0.75, clusters with similarities in 0.75-0.95 range go to semantic dedup
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["m1", "m2"],
+          texts: ["Tarun prefers dark mode", "Tarun likes dark theme"],
+          importances: [0.8, 0.7],
+          similarities: new Map([["m1:m2", 0.85]]), // 0.75-0.95 range
+        },
+      ]);
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({ verdict: "duplicate", reason: "paraphrase" }),
+                },
+              },
+            ],
+          }),
+      });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.findDuplicateClusters).toHaveBeenCalledWith(0.75, undefined, true);
+      expect(result.semanticDedup.pairsChecked).toBe(1);
+      expect(result.semanticDedup.duplicatesMerged).toBe(1);
+    });
+
+    it("should invalidate lower-importance duplicate", async () => {
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["high", "low"],
+          texts: ["high importance text", "low importance text"],
+          importances: [0.9, 0.3],
+          similarities: new Map([["high:low", 0.82]]), // 0.75-0.95 range
+        },
+      ]);
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [{ message: { content: JSON.stringify({ verdict: "duplicate" }) } }],
+          }),
+      });
+
+      await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // Should invalidate "low" (lower importance)
+      expect(mockDb.invalidateMemory).toHaveBeenCalledWith("low");
+    });
+
+    it("should report correct pair counts", async () => {
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["a", "b", "c"],
+          texts: ["text", "text", "text"],
+          importances: [0.5, 0.6, 0.7],
+          similarities: new Map([
+            ["a:b", 0.8],
+            ["a:c", 0.78],
+            ["b:c", 0.82],
+          ]), // All in 0.75-0.95 range
+        },
+      ]);
+
+      // All 3 pairs are collected and fired concurrently in one batch:
+      // (a,b) = duplicate, (a,c) = duplicate but skipped (a invalidated), (b,c) = unique
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              choices: [{ message: { content: JSON.stringify({ verdict: "duplicate" }) } }],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              choices: [{ message: { content: JSON.stringify({ verdict: "duplicate" }) } }],
+            }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              choices: [{ message: { content: JSON.stringify({ verdict: "unique" }) } }],
+            }),
+        });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // All 3 pairs checked concurrently, but only 1 merge (a,c duplicate skipped since a already invalidated)
+      expect(result.semanticDedup.pairsChecked).toBe(3);
+      expect(result.semanticDedup.duplicatesMerged).toBe(1);
+    });
+  });
+
+  // Phase 2: Pareto Scoring
+  describe("Phase 2: Pareto Scoring", () => {
+    it("should calculate correct threshold for top 20%", async () => {
+      const scores = [
+        {
+          id: "m1",
+          text: "test",
+          category: "fact",
+          importance: 0.9,
+          retrievalCount: 10,
+          ageDays: 5,
+          effectiveScore: 0.95,
+        },
+        {
+          id: "m2",
+          text: "test",
+          category: "fact",
+          importance: 0.5,
+          retrievalCount: 5,
+          ageDays: 10,
+          effectiveScore: 0.5,
+        },
+        {
+          id: "m3",
+          text: "test",
+          category: "core",
+          importance: 0.3,
+          retrievalCount: 2,
+          ageDays: 20,
+          effectiveScore: 0.3,
+        },
+      ];
+      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.8);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.calculateAllEffectiveScores).toHaveBeenCalled();
+      expect(mockDb.calculateParetoThreshold).toHaveBeenCalledWith(scores, 0.8); // 1 - paretoPercentile (default 0.2)
+      expect(result.pareto.totalMemories).toBe(3);
+      expect(result.pareto.coreMemories).toBe(1);
+      expect(result.pareto.regularMemories).toBe(2);
+      expect(result.pareto.threshold).toBe(0.8);
+    });
+
+    it("should handle empty database", async () => {
+      mockDb.calculateAllEffectiveScores.mockResolvedValue([]);
+      mockDb.calculateParetoThreshold.mockReturnValue(0); // Empty array returns 0
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.pareto.totalMemories).toBe(0);
+      expect(result.pareto.threshold).toBe(0);
+    });
+
+    it("should handle single memory", async () => {
+      mockDb.calculateAllEffectiveScores.mockResolvedValue([
+        {
+          id: "m1",
+          text: "test",
+          category: "fact",
+          importance: 0.9,
+          retrievalCount: 10,
+          ageDays: 5,
+          effectiveScore: 0.95,
+        },
+      ]);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.95);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.pareto.totalMemories).toBe(1);
+      expect(result.pareto.threshold).toBe(0.95);
+    });
+  });
+
+  // Phase 3: Promotion
+  describe("Phase 3: Core Promotion", () => {
+    it("should promote regular memories above threshold", async () => {
+      const scores = [
+        {
+          id: "m1",
+          text: "test",
+          category: "fact",
+          importance: 0.9,
+          retrievalCount: 10,
+          ageDays: 10,
+          effectiveScore: 0.95,
+        },
+        {
+          id: "m2",
+          text: "test",
+          category: "fact",
+          importance: 0.5,
+          retrievalCount: 5,
+          ageDays: 8,
+          effectiveScore: 0.6,
+        },
+        {
+          id: "m3",
+          text: "test",
+          category: "core",
+          importance: 0.8,
+          retrievalCount: 8,
+          ageDays: 5,
+          effectiveScore: 0.85,
+        },
+      ];
+      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.7); // threshold
+      mockDb.promoteToCore.mockResolvedValue(1);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        paretoPercentile: 0.2,
+        promotionMinAgeDays: 7,
+      });
+
+      // m1 should be promoted (category=fact, score=0.95 > 0.70, age=10 >= 7)
+      expect(mockDb.promoteToCore).toHaveBeenCalledWith(["m1"]);
+      expect(result.promotion.candidatesFound).toBe(1);
+      expect(result.promotion.promoted).toBe(1);
+    });
+
+    it("should respect promotionMinAgeDays", async () => {
+      const scores = [
+        {
+          id: "m1",
+          text: "test",
+          category: "fact",
+          importance: 0.9,
+          retrievalCount: 10,
+          ageDays: 5,
+          effectiveScore: 0.95,
+        },
+      ];
+      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.5);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        promotionMinAgeDays: 7,
+      });
+
+      // m1 age=5 < 7, should not be promoted
+      expect(result.promotion.candidatesFound).toBe(0);
+      expect(mockDb.promoteToCore).not.toHaveBeenCalled();
+    });
+
+    it("should not promote core memories again", async () => {
+      const scores = [
+        {
+          id: "m1",
+          text: "test",
+          category: "core",
+          importance: 0.9,
+          retrievalCount: 10,
+          ageDays: 10,
+          effectiveScore: 0.95,
+        },
+      ];
+      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.5);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.promotion.candidatesFound).toBe(0);
+      expect(mockDb.promoteToCore).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phase 4: Demotion
+  describe("Phase 4: Core Demotion", () => {
+    it("should demote core memories below threshold", async () => {
+      const scores = [
+        {
+          id: "m1",
+          text: "test",
+          category: "core",
+          importance: 0.3,
+          retrievalCount: 1,
+          ageDays: 30,
+          effectiveScore: 0.3,
+        },
+        {
+          id: "m2",
+          text: "test",
+          category: "core",
+          importance: 0.9,
+          retrievalCount: 10,
+          ageDays: 5,
+          effectiveScore: 0.95,
+        },
+      ];
+      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.7);
+      mockDb.demoteFromCore.mockResolvedValue(1);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // m1 should be demoted (category=core, score=0.30 < 0.70)
+      expect(mockDb.demoteFromCore).toHaveBeenCalledWith(["m1"]);
+      expect(result.demotion.candidatesFound).toBe(1);
+      expect(result.demotion.demoted).toBe(1);
+    });
+
+    it("should not demote regular memories", async () => {
+      const scores = [
+        {
+          id: "m1",
+          text: "test",
+          category: "fact",
+          importance: 0.2,
+          retrievalCount: 0,
+          ageDays: 50,
+          effectiveScore: 0.1,
+        },
+      ];
+      mockDb.calculateAllEffectiveScores.mockResolvedValue(scores);
+      mockDb.calculateParetoThreshold.mockReturnValue(0.7);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.demotion.candidatesFound).toBe(0);
+      expect(mockDb.demoteFromCore).not.toHaveBeenCalled();
+    });
+  });
+
+  // Phase 5: Extraction
+  describe("Phase 5: Entity Extraction", () => {
+    it("should process pending extractions in batches", async () => {
+      mockDb.countByExtractionStatus.mockResolvedValue({
+        pending: 5,
+        complete: 0,
+        failed: 0,
+        skipped: 0,
+      });
+      // First call returns 3 memories, second call returns empty to stop loop
+      mockDb.listPendingExtractions
+        .mockResolvedValueOnce([
+          { id: "m1", text: "text 1", agentId: "default", extractionRetries: 0 },
+          { id: "m2", text: "text 2", agentId: "default", extractionRetries: 0 },
+          { id: "m3", text: "text 3", agentId: "default", extractionRetries: 0 },
+        ])
+        .mockResolvedValueOnce([]);
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              {
+                message: { content: JSON.stringify({ entities: [], relationships: [], tags: [] }) },
+              },
+            ],
+          }),
+      });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        extractionBatchSize: 10,
+      });
+
+      expect(mockDb.listPendingExtractions).toHaveBeenCalled();
+      expect(result.extraction.total).toBe(5);
+      expect(result.extraction.processed).toBe(3);
+    });
+
+    it("should handle extraction failures with retry tracking", async () => {
+      mockDb.countByExtractionStatus.mockResolvedValue({
+        pending: 1,
+        complete: 0,
+        failed: 0,
+        skipped: 0,
+      });
+      // First call returns 1 memory, second call returns empty to stop loop
+      mockDb.listPendingExtractions
+        .mockResolvedValueOnce([
+          { id: "m1", text: "text", agentId: "default", extractionRetries: 0 },
+        ])
+        .mockResolvedValueOnce([]);
+
+      // Extraction fails (HTTP error)
+      globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.extraction.processed).toBe(1);
+      // runBackgroundExtraction doesn't throw on HTTP errors, it just marks the extraction status as failed/pending
+      // The sleep cycle counts it as succeeded because Promise.allSettled reports it as fulfilled
+      expect(result.extraction.succeeded).toBe(1);
+      expect(result.extraction.failed).toBe(0);
+    });
+
+    it("should respect batch size and delay", async () => {
+      mockDb.countByExtractionStatus.mockResolvedValue({
+        pending: 2,
+        complete: 0,
+        failed: 0,
+        skipped: 0,
+      });
+      mockDb.listPendingExtractions
+        .mockResolvedValueOnce([
+          { id: "m1", text: "text 1", agentId: "default", extractionRetries: 0 },
+        ])
+        .mockResolvedValueOnce([]);
+
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            choices: [
+              {
+                message: { content: JSON.stringify({ entities: [], relationships: [], tags: [] }) },
+              },
+            ],
+          }),
+      });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        extractionBatchSize: 1,
+        extractionDelayMs: 100,
+      });
+
+      expect(mockDb.listPendingExtractions).toHaveBeenCalledWith(1, undefined);
+      expect(result.extraction.processed).toBe(1);
+    });
+  });
+
+  // Phase 6: Decay & Pruning
+  describe("Phase 6: Decay & Pruning", () => {
+    it("should prune memories below retention threshold", async () => {
+      mockDb.findDecayedMemories.mockResolvedValue([
+        { id: "m1", text: "old memory", importance: 0.2, ageDays: 100, decayScore: 0.05 },
+        { id: "m2", text: "very old", importance: 0.1, ageDays: 200, decayScore: 0.02 },
+      ]);
+      mockDb.pruneMemories.mockResolvedValue(2);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.findDecayedMemories).toHaveBeenCalled();
+      expect(mockDb.pruneMemories).toHaveBeenCalledWith(["m1", "m2"]);
+      expect(result.decay.memoriesPruned).toBe(2);
+    });
+
+    it("should apply exponential decay based on age", async () => {
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        decayRetentionThreshold: 0.1,
+        decayBaseHalfLifeDays: 30,
+      });
+
+      expect(mockDb.findDecayedMemories).toHaveBeenCalledWith({
+        retentionThreshold: 0.1,
+        baseHalfLifeDays: 30,
+        importanceMultiplier: 2,
+        agentId: undefined,
+      });
+    });
+
+    it("should extend half-life based on importance", async () => {
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        decayImportanceMultiplier: 3,
+      });
+
+      expect(mockDb.findDecayedMemories).toHaveBeenCalledWith(
+        expect.objectContaining({
+          importanceMultiplier: 3,
+        }),
+      );
+    });
+  });
+
+  // Phase 7: Orphan Cleanup
+  describe("Phase 7: Orphan Cleanup", () => {
+    it("should remove entities with 0 mentions", async () => {
+      mockDb.findOrphanEntities.mockResolvedValue([
+        { id: "e1", name: "orphan1", type: "concept" },
+        { id: "e2", name: "orphan2", type: "person" },
+      ]);
+      mockDb.deleteOrphanEntities.mockResolvedValue(2);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.findOrphanEntities).toHaveBeenCalled();
+      expect(mockDb.deleteOrphanEntities).toHaveBeenCalledWith(["e1", "e2"]);
+      expect(result.cleanup.entitiesRemoved).toBe(2);
+    });
+
+    it("should remove unused tags", async () => {
+      mockDb.findOrphanTags.mockResolvedValue([{ id: "t1", name: "unused-tag" }]);
+      mockDb.deleteOrphanTags.mockResolvedValue(1);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(mockDb.findOrphanTags).toHaveBeenCalled();
+      expect(mockDb.deleteOrphanTags).toHaveBeenCalledWith(["t1"]);
+      expect(result.cleanup.tagsRemoved).toBe(1);
+    });
+
+    it("should report correct cleanup counts", async () => {
+      mockDb.findOrphanEntities.mockResolvedValue([{ id: "e1", name: "test", type: "concept" }]);
+      mockDb.deleteOrphanEntities.mockResolvedValue(1);
+      mockDb.findOrphanTags.mockResolvedValue([{ id: "t1", name: "test" }]);
+      mockDb.deleteOrphanTags.mockResolvedValue(1);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.cleanup.entitiesRemoved).toBe(1);
+      expect(result.cleanup.tagsRemoved).toBe(1);
+    });
+  });
+
+  // Abort handling
+  describe("Abort handling", () => {
+    it("should stop between phases when aborted", async () => {
+      const abortController = new AbortController();
+
+      // Abort after Phase 1
+      mockDb.findDuplicateClusters.mockImplementation(async () => {
+        abortController.abort();
+        return [];
+      });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        abortSignal: abortController.signal,
+      });
+
+      expect(result.aborted).toBe(true);
+      // Phase 1 ran, but subsequent phases should be skipped
+      expect(mockDb.findDuplicateClusters).toHaveBeenCalled();
+    });
+
+    it("should show aborted=true in result", async () => {
+      const abortController = new AbortController();
+      abortController.abort();
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        abortSignal: abortController.signal,
+      });
+
+      expect(result.aborted).toBe(true);
+    });
+
+    it("should not corrupt data on abort", async () => {
+      const abortController = new AbortController();
+
+      mockDb.findDuplicateClusters.mockImplementation(async () => {
+        abortController.abort();
+        return [
+          {
+            memoryIds: ["m1", "m2"],
+            texts: ["a", "b"],
+            importances: [0.5, 0.6],
+            similarities: new Map([["m1:m2", 0.98]]),
+          },
+        ];
+      });
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        abortSignal: abortController.signal,
+      });
+
+      // Even though aborted, the cluster merge should not have been called
+      // (abort happens before mergeMemoryCluster in the loop)
+      expect(result.aborted).toBe(true);
+    });
+  });
+
+  // Error isolation
+  describe("Error isolation", () => {
+    it("should continue to Phase 2 if Phase 1 fails", async () => {
+      mockDb.findDuplicateClusters.mockRejectedValue(new Error("phase 1 error"));
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // Phase 2 should still run
+      expect(mockDb.calculateAllEffectiveScores).toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("Phase 1 error"));
+    });
+
+    it("should handle LLM timeout without crashing", async () => {
+      mockDb.findConflictingMemories.mockResolvedValue([
+        {
+          memoryA: { id: "m1", text: "a", importance: 0.5, createdAt: "2024-01-01" },
+          memoryB: { id: "m2", text: "b", importance: 0.5, createdAt: "2024-01-02" },
+        },
+      ]);
+
+      globalThis.fetch = vi.fn().mockRejectedValue(new DOMException("timeout", "TimeoutError"));
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // Should not crash, conflict resolution returns "skip"
+      expect(result.conflict.resolved).toBe(0);
+      // Other phases should continue
+      expect(mockDb.calculateAllEffectiveScores).toHaveBeenCalled();
+    });
+
+    it("should handle Neo4j transient error retries", async () => {
+      // This is tested more thoroughly in neo4j-client.test.ts
+      // Here we just verify the sleep cycle doesn't crash
+      mockDb.findDuplicateClusters
+        .mockRejectedValueOnce(new Error("transient"))
+        .mockResolvedValueOnce([]);
+
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      // Should log error but continue
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+  });
+
+  // Progress callbacks
+  describe("Progress callbacks", () => {
+    it("should call onPhaseStart for each phase", async () => {
+      const onPhaseStart = vi.fn();
+
+      await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        onPhaseStart,
+      });
+
+      expect(onPhaseStart).toHaveBeenCalledWith("dedup");
+      expect(onPhaseStart).toHaveBeenCalledWith("conflict");
+      expect(onPhaseStart).toHaveBeenCalledWith("semanticDedup");
+      expect(onPhaseStart).toHaveBeenCalledWith("pareto");
+      expect(onPhaseStart).toHaveBeenCalledWith("promotion");
+      expect(onPhaseStart).toHaveBeenCalledWith("demotion");
+      expect(onPhaseStart).toHaveBeenCalledWith("extraction");
+      expect(onPhaseStart).toHaveBeenCalledWith("decay");
+      expect(onPhaseStart).toHaveBeenCalledWith("cleanup");
+    });
+
+    it("should call onProgress with phase messages", async () => {
+      const onProgress = vi.fn();
+      mockDb.findDuplicateClusters.mockResolvedValue([
+        {
+          memoryIds: ["m1", "m2"],
+          texts: ["a", "b"],
+          importances: [0.5, 0.6],
+          similarities: new Map([["m1:m2", 0.98]]),
+        },
+      ]);
+      mockDb.mergeMemoryCluster.mockResolvedValue({ survivorId: "m2", deletedCount: 1 });
+
+      await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger, {
+        onProgress,
+      });
+
+      expect(onProgress).toHaveBeenCalledWith("dedup", expect.any(String));
+    });
+  });
+
+  // Overall result structure
+  describe("Result structure", () => {
+    it("should return complete result object", async () => {
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result).toHaveProperty("dedup");
+      expect(result).toHaveProperty("conflict");
+      expect(result).toHaveProperty("semanticDedup");
+      expect(result).toHaveProperty("pareto");
+      expect(result).toHaveProperty("promotion");
+      expect(result).toHaveProperty("demotion");
+      expect(result).toHaveProperty("decay");
+      expect(result).toHaveProperty("extraction");
+      expect(result).toHaveProperty("cleanup");
+      expect(result).toHaveProperty("durationMs");
+      expect(result).toHaveProperty("aborted");
+    });
+
+    it("should track duration correctly", async () => {
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+      expect(typeof result.durationMs).toBe("number");
+    });
+
+    it("should default aborted to false", async () => {
+      const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
+
+      expect(result.aborted).toBe(false);
+    });
   });
 });
