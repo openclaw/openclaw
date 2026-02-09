@@ -278,15 +278,21 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
 }
 
 function resolveGrokConfig(search?: WebSearchConfig): GrokConfig {
-  if (!search || typeof search !== "object") return {};
+  if (!search || typeof search !== "object") {
+    return {};
+  }
   const grok = "grok" in search ? search.grok : undefined;
-  if (!grok || typeof grok !== "object") return {};
+  if (!grok || typeof grok !== "object") {
+    return {};
+  }
   return grok as GrokConfig;
 }
 
 function resolveGrokApiKey(grok?: GrokConfig): string | undefined {
   const fromConfig = normalizeApiKey(grok?.apiKey);
-  if (fromConfig) return fromConfig;
+  if (fromConfig) {
+    return fromConfig;
+  }
   const fromEnv = normalizeApiKey(process.env.XAI_API_KEY);
   return fromEnv || undefined;
 }
@@ -474,9 +480,7 @@ async function runWebSearch(params: {
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
-        : params.provider === "grok"
-          ? `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${params.grokInlineCitations ?? false}`
-          : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
