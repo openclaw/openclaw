@@ -22,10 +22,11 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 - **Skills loader** — Resolves `skills.json` in order: `dist/data/skills.json` (when argv[1] is `.../dist/index.js`), then same-dir `data/skills.json`, then `src/agents/prompt-engine/data/skills.json`. If the dist copy is missing, logs `Loaded skills from source path (dist copy missing)` so the gateway can start without a full rebuild.
 - **Agent loop** — One config/restart/cron change per request; report and ask before retry (`394341893`).
 - **Build** — Type fix for `SkillLibrary` in `selectSkillsForContext` (plugin-sdk dts build) (`ffe83456b`). Copy `skills.json` to dist during build (`scripts/copy-skills-data.ts`).
-- **Cron zombie scheduler fix** — Six changes to prevent and recover from a stuck scheduler:
+- **Cron zombie scheduler fix** — Seven changes to prevent and recover from a stuck scheduler:
   - Re-arm timer in catch block when `onTimer` throws.
   - Re-arm on `cron list` / `cron status` when timer is dead (zombie recovery).
   - Watchdog timer (every 2.5 min) re-arms if main timer dies.
+  - **Anti-zombie self-healing**: secondary check-in every 60s; if no timer tick completes within 60s (e.g. event loop blocked), the scheduler re-initializes (clear timer, re-arm) so the service does not stay "Active" with jobs frozen. Unit tests in `src/cron/service.anti-zombie.test.ts` cover re-init when idle and no false positive when a recent tick completed.
   - Per-job dynamic stuck threshold (`runningAtMs`) based on job timeout.
   - Stale `state.running` recovery when `onTimer` hangs.
   - Troubleshooting docs for "Cron stuck (zombie scheduler)".

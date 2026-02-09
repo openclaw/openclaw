@@ -26,6 +26,12 @@ const STALE_RUNNING_MS = 2 * DEFAULT_JOB_TIMEOUT_MS;
 /** Watchdog fires every 2.5 minutes to detect and recover from a dead timer. */
 const WATCHDOG_INTERVAL_MS = 2.5 * 60_000;
 
+/** Anti-zombie: if no timer tick completes within this window, re-initialize the scheduler. */
+const ANTI_ZOMBIE_IDLE_MS = 60_000;
+
+/** How often the anti-zombie check-in runs. */
+const ANTI_ZOMBIE_CHECK_INTERVAL_MS = 60_000;
+
 /**
  * Exponential backoff delays (in ms) indexed by consecutive error count.
  * After the last entry the delay stays constant.
@@ -297,6 +303,7 @@ export async function onTimer(state: CronServiceState) {
   } finally {
     state.running = false;
     state.runningStartedAtMs = null;
+    state.lastTimerTickAtMs = state.deps.nowMs();
     armTimer(state);
   }
 }
@@ -548,6 +555,10 @@ export function stopTimer(state: CronServiceState) {
     clearInterval(state.watchdogTimer);
   }
   state.watchdogTimer = null;
+  if (state.antiZombieTimer) {
+    clearInterval(state.antiZombieTimer);
+  }
+  state.antiZombieTimer = null;
 }
 
 /**
@@ -576,6 +587,50 @@ export function startWatchdog(state: CronServiceState) {
     armTimer(state);
   }, WATCHDOG_INTERVAL_MS);
   state.watchdogTimer.unref?.();
+}
+
+/**
+ * Anti-zombie self-healing: if the scheduler has not completed a single timer tick
+ * within ANTI_ZOMBIE_IDLE_MS (e.g. 60s), re-initialize the event loop (clear timer,
+ * reset running, re-arm). Solves the case where the service reports "Active" but
+ * jobs are frozen. Call when cron starts; stopTimer clears it.
+ */
+export function startAntiZombieWatchdog(state: CronServiceState) {
+  if (state.antiZombieTimer) {
+    return;
+  }
+  if (!state.deps.cronEnabled) {
+    return;
+  }
+  state.antiZombieTimer = setInterval(() => {
+    if (!state.deps.cronEnabled || state.store === null) {
+      return;
+    }
+    if (nextWakeAtMs(state) == null) {
+      return; // Nothing to run; no need to re-init
+    }
+    if (state.running) {
+      return; // Tick in progress; STALE_RUNNING_MS handles hung ticks
+    }
+    const now = state.deps.nowMs();
+    const lastTick = state.lastTimerTickAtMs ?? 0;
+    if (now - lastTick <= ANTI_ZOMBIE_IDLE_MS) {
+      return;
+    }
+    state.deps.log.warn(
+      { lastTimerTickAtMs: lastTick, idleMs: now - lastTick, thresholdMs: ANTI_ZOMBIE_IDLE_MS },
+      "cron: anti-zombie: no tick in 60s, re-initializing scheduler",
+    );
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+    state.timer = null;
+    state.running = false;
+    state.runningStartedAtMs = null;
+    state.lastTimerTickAtMs = now;
+    armTimer(state);
+  }, ANTI_ZOMBIE_CHECK_INTERVAL_MS);
+  state.antiZombieTimer.unref?.();
 }
 
 export function emit(state: CronServiceState, evt: CronEvent) {

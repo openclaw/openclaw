@@ -16,6 +16,7 @@ import {
   emit,
   executeJob,
   runMissedJobs,
+  startAntiZombieWatchdog,
   startWatchdog,
   stopTimer,
   wake,
@@ -42,7 +43,9 @@ export async function start(state: CronServiceState) {
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
+    state.lastTimerTickAtMs = state.deps.nowMs();
     startWatchdog(state);
+    startAntiZombieWatchdog(state);
     state.deps.log.info(
       {
         enabled: true,

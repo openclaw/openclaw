@@ -53,6 +53,10 @@ export type CronServiceState = {
   runningStartedAtMs: number | null;
   /** Background watchdog that re-arms the timer if it dies. */
   watchdogTimer: NodeJS.Timeout | null;
+  /** Anti-zombie check-in: re-init if no timer tick completes within this window. */
+  antiZombieTimer: NodeJS.Timeout | null;
+  /** Last time onTimer completed a tick (used by anti-zombie to detect frozen scheduler). */
+  lastTimerTickAtMs: number | null;
   running: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -67,6 +71,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     timer: null,
     runningStartedAtMs: null,
     watchdogTimer: null,
+    antiZombieTimer: null,
+    lastTimerTickAtMs: null,
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
