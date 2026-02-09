@@ -50,18 +50,18 @@ describe("Nix integration (U3, U5, U9)", () => {
     });
 
     it("STATE_DIR respects OPENCLAW_HOME when state override is unset", async () => {
-      const customHome = path.join(path.sep, "custom", "home");
+      const customHome = process.platform === "win32" ? "C:/custom/home" : "/custom/home";
       await withEnvOverride(
         { OPENCLAW_HOME: customHome, OPENCLAW_STATE_DIR: undefined },
         async () => {
           const { STATE_DIR } = await import("./config.js");
-          expect(STATE_DIR).toBe(path.join(path.resolve(customHome), ".openclaw"));
+          expect(STATE_DIR).toBe(path.resolve(path.join(customHome, ".openclaw")));
         },
       );
     });
 
     it("CONFIG_PATH defaults to OPENCLAW_HOME/.openclaw/openclaw.json", async () => {
-      const customHome = path.join(path.sep, "custom", "home");
+      const customHome = process.platform === "win32" ? "C:/custom/home" : "/custom/home";
       await withEnvOverride(
         {
           OPENCLAW_HOME: customHome,
@@ -71,7 +71,7 @@ describe("Nix integration (U3, U5, U9)", () => {
         async () => {
           const { CONFIG_PATH } = await import("./config.js");
           expect(CONFIG_PATH).toBe(
-            path.join(path.resolve(customHome), ".openclaw", "openclaw.json"),
+            path.resolve(path.join(customHome, ".openclaw", "openclaw.json")),
           );
         },
       );
