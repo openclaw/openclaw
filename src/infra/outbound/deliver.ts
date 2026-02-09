@@ -80,6 +80,10 @@ function throwIfAborted(abortSignal?: AbortSignal): void {
   }
 }
 
+function isListenOnlyWhatsAppGroup(cfg: OpenClawConfig, to: string): boolean {
+  return cfg.channels?.whatsapp?.groups?.[to]?.listenOnly === true;
+}
+
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: {
   cfg: OpenClawConfig;
@@ -203,6 +207,30 @@ export async function deliverOutboundPayloads(params: {
   const abortSignal = params.abortSignal;
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const results: OutboundDeliveryResult[] = [];
+
+  // HARD OUTBOUND GATE: never deliver anything into listen-only WhatsApp groups.
+  if (channel === "whatsapp" && isListenOnlyWhatsAppGroup(cfg, to)) {
+    // Optional: allow transcript mirroring without sending anything outward.
+    if (params.mirror) {
+      const normalized = normalizeReplyPayloadsForDelivery(payloads);
+      const mirrorText = resolveMirroredTranscriptText({
+        text: normalized
+          .map((p) => p.text ?? "")
+          .filter(Boolean)
+          .join("\n\n"),
+        mediaUrls: normalized.flatMap((p) => p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : [])),
+      });
+      if (mirrorText) {
+        await appendAssistantMessageToSessionTranscript({
+          agentId: params.mirror.agentId,
+          sessionKey: params.mirror.sessionKey,
+          text: mirrorText,
+        });
+      }
+    }
+    return [];
+  }
+
   const handler = await createChannelHandler({
     cfg,
     channel,

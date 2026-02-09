@@ -46,6 +46,14 @@ export type GroupHistoryEntry = {
   senderJid?: string;
 };
 
+function isListenOnlyWhatsAppGroup(
+  cfg: ReturnType<typeof loadConfig>,
+  jid: string | undefined,
+): boolean {
+  if (!jid) return false;
+  return cfg.channels?.whatsapp?.groups?.[jid]?.listenOnly === true;
+}
+
 function normalizeAllowFromE164(values: Array<string | number> | undefined): string[] {
   const list = Array.isArray(values) ? values : [];
   return list
@@ -350,6 +358,31 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
+        // HARD LISTEN-ONLY: suppress all outbound sends to configured listen-only groups
+        if (params.msg.chatType === "group") {
+          const groupJid = conversationId; // for groups, conversationId is the group jid
+          if (params.cfg.channels?.whatsapp?.groups?.[groupJid]?.listenOnly === true) {
+            // Optional: keep a breadcrumb in logs
+            const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+            whatsappOutboundLog.info(
+              `Suppressed outbound (kind=${info.kind}) to listenOnly group ${groupJid}${hasMedia ? " (media)" : ""}`,
+            );
+
+            // Optional: keep echo/transcript behavior consistent
+            if (info.kind === "tool") {
+              params.rememberSentText(payload.text, {});
+            } else {
+              const shouldLog = info.kind === "final" && payload.text ? true : undefined;
+              params.rememberSentText(payload.text, {
+                combinedBody,
+                combinedBodySessionKey: params.route.sessionKey,
+                logVerboseMessage: shouldLog,
+              });
+            }
+            return;
+          }
+        }
+
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,

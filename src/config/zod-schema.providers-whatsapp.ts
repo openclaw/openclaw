@@ -42,6 +42,7 @@ export const WhatsAppAccountSchema = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            listenOnly: z.boolean().optional(),
             tools: ToolPolicySchema,
             toolsBySender: ToolPolicyBySenderSchema,
           })
@@ -112,6 +113,7 @@ export const WhatsAppConfigSchema = z
         z
           .object({
             requireMention: z.boolean().optional(),
+            listenOnly: z.boolean().optional(),
             tools: ToolPolicySchema,
             toolsBySender: ToolPolicyBySenderSchema,
           })
