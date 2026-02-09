@@ -109,6 +109,7 @@ data class StatusActivity(
 enum class GatewayState(val title: String, val color: Color) {
   Connected("Connected", Color(0xFF2ECC71)),
   Connecting("Connecting…", Color(0xFFF1C40F)),
+  PairingRequired("Pairing Required", Color(0xFFE67E22)),
   Error("Error", Color(0xFFE74C3C)),
   Disconnected("Offline", Color(0xFF9E9E9E)),
 }

@@ -183,6 +183,7 @@ fun RootScreen(viewModel: MainViewModel) {
     remember(serverName, statusText) {
       when {
         serverName != null -> GatewayState.Connected
+        statusText.contains("pairing", ignoreCase = true) -> GatewayState.PairingRequired
         statusText.contains("connecting", ignoreCase = true) ||
           statusText.contains("reconnecting", ignoreCase = true) -> GatewayState.Connecting
         statusText.contains("error", ignoreCase = true) -> GatewayState.Error

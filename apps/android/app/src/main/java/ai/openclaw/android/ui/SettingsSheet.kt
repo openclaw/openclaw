@@ -82,6 +82,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val manualToken by viewModel.manualToken.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
@@ -285,6 +286,21 @@ fun SettingsSheet(viewModel: MainViewModel) {
     // Gateway
     item { Text("Gateway", style = MaterialTheme.typography.titleSmall) }
     item { ListItem(headlineContent = { Text("Status") }, supportingContent = { Text(statusText) }) }
+    if (statusText.contains("pairing", ignoreCase = true)) {
+      item {
+        ListItem(
+          headlineContent = { Text("Device Pairing Pending") },
+          supportingContent = {
+            Text(
+              "This device needs to be approved before it can connect. " +
+                "Open the OpenClaw web UI and approve the pending pairing request, " +
+                "or use the CLI: openclaw devices approve. " +
+                "The app will automatically connect once approved.",
+            )
+          },
+        )
+      }
+    }
     if (serverName != null) {
       item { ListItem(headlineContent = { Text("Server") }, supportingContent = { Text(serverName!!) }) }
     }
@@ -403,6 +419,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             enabled = manualEnabled,
           )
+          OutlinedTextField(
+            value = manualToken,
+            onValueChange = viewModel::setManualToken,
+            label = { Text("Gateway Token") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = manualEnabled,
+            singleLine = true,
+          )
           ListItem(
             headlineContent = { Text("Require TLS") },
             supportingContent = { Text("Pin the gateway certificate on first connect.") },
@@ -421,6 +445,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
           ) {
             Text("Connect (Manual)")
           }
+
         }
       }
     }
