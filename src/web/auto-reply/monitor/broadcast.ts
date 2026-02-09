@@ -60,7 +60,7 @@ export async function maybeBroadcastMessage(params: {
         channel: "whatsapp",
         accountId: params.route.accountId,
         peer: {
-          kind: params.msg.chatType === "group" ? "group" : "dm",
+          kind: params.msg.chatType === "group" ? "group" : "direct",
           id: params.peerId,
         },
         dmScope: params.cfg.session?.dmScope,

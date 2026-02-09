@@ -7,7 +7,7 @@ import {
   PresenceUpdateListener,
 } from "@buape/carbon";
 import { danger } from "../../globals.js";
-import { formatDurationSeconds } from "../../infra/format-duration.js";
+import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";

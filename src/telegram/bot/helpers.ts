@@ -99,6 +99,24 @@ export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
 
+/**
+ * Build parentPeer for forum topic binding inheritance.
+ * When a message comes from a forum topic, the peer ID includes the topic suffix
+ * (e.g., `-1001234567890:topic:99`). To allow bindings configured for the base
+ * group ID to match, we provide the parent group as `parentPeer` so the routing
+ * layer can fall back to it when the exact peer doesn't match.
+ */
+export function buildTelegramParentPeer(params: {
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  chatId: number | string;
+}): { kind: "group"; id: string } | undefined {
+  if (!params.isGroup || params.resolvedThreadId == null) {
+    return undefined;
+  }
+  return { kind: "group", id: String(params.chatId) };
+}
+
 export function buildSenderName(msg: Message) {
   const name =
     [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
@@ -208,31 +226,35 @@ export type TelegramReplyTarget = {
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
-  const quote = msg.quote;
+  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const quoteText =
+    msg.quote?.text ??
+    (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
 
-  if (quote?.text) {
-    body = quote.text.trim();
+  if (typeof quoteText === "string") {
+    body = quoteText.trim();
     if (body) {
       kind = "quote";
     }
   }
 
-  if (!body && reply) {
-    const replyBody = (reply.text ?? reply.caption ?? "").trim();
+  const replyLike = reply ?? externalReply;
+  if (!body && replyLike) {
+    const replyBody = (replyLike.text ?? replyLike.caption ?? "").trim();
     body = replyBody;
     if (!body) {
-      if (reply.photo) {
+      if (replyLike.photo) {
         body = "<media:image>";
-      } else if (reply.video) {
+      } else if (replyLike.video) {
         body = "<media:video>";
-      } else if (reply.audio || reply.voice) {
+      } else if (replyLike.audio || replyLike.voice) {
         body = "<media:audio>";
-      } else if (reply.document) {
+      } else if (replyLike.document) {
         body = "<media:document>";
       } else {
-        const locationData = extractTelegramLocation(reply);
+        const locationData = extractTelegramLocation(replyLike);
         if (locationData) {
           body = formatLocationText(locationData);
         }
@@ -242,11 +264,11 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   if (!body) {
     return null;
   }
-  const sender = reply ? buildSenderName(reply) : undefined;
+  const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
 
   return {
-    id: reply?.message_id ? String(reply.message_id) : undefined,
+    id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
     body,
     kind,

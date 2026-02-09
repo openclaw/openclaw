@@ -169,7 +169,7 @@ extension SessionRow {
                 systemSent: true,
                 abortedLastRun: true,
                 tokens: SessionTokenStats(input: 5000, output: 1200, total: 6200, contextTokens: 200_000),
-                model: "claude-opus-4-5"),
+                model: "claude-opus-4-6"),
             SessionRow(
                 id: "global",
                 key: "global",
@@ -242,7 +242,7 @@ struct SessionStoreSnapshot {
 
 @MainActor
 enum SessionLoader {
-    static let fallbackModel = "claude-opus-4-5"
+    static let fallbackModel = "claude-opus-4-6"
     static let fallbackContextTokens = 200_000
 
     static let defaultStorePath = standardize(

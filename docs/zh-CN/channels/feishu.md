@@ -109,17 +109,23 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
       "application:application.app_message_stats.overview:readonly",
       "application:application:self_manage",
       "application:bot.menu:write",
+      "cardkit:card:write",
       "contact:user.employee_id:readonly",
       "corehr:file:download",
+      "docs:document.content:read",
       "event:ip_list",
+      "im:chat",
       "im:chat.access_event.bot_p2p_chat:read",
       "im:chat.members:bot_access",
       "im:message",
       "im:message.group_at_msg:readonly",
+      "im:message.group_msg",
       "im:message.p2p_msg:readonly",
       "im:message:readonly",
       "im:message:send_as_bot",
-      "im:resource"
+      "im:resource",
+      "sheets:spreadsheet",
+      "wiki:wiki:readonly"
     ],
     "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
   }
@@ -453,7 +459,116 @@ openclaw pairing list feishu
 
 ### 流式输出
 
-飞书目前不支持消息编辑，因此默认禁用流式输出（`blockStreaming: true`）。机器人会等待完整回复后一次性发送。
+飞书支持通过交互式卡片实现流式输出，机器人会实时更新卡片内容显示生成进度。默认配置：
+
+```json5
+{
+  channels: {
+    feishu: {
+      streaming: true, // 启用流式卡片输出（默认 true）
+      blockStreaming: true, // 启用块级流式（默认 true）
+    },
+  },
+}
+```
+
+如需禁用流式输出（等待完整回复后一次性发送），可设置 `streaming: false`。
+
+### 消息引用
+
+在群聊中，机器人的回复可以引用用户发送的原始消息，让对话上下文更加清晰。
+
+配置选项：
+
+```json5
+{
+  channels: {
+    feishu: {
+      // 账户级别配置（默认 "all"）
+      replyToMode: "all",
+      groups: {
+        oc_xxx: {
+          // 特定群组可以覆盖
+          replyToMode: "first",
+        },
+      },
+    },
+  },
+}
+```
+
+`replyToMode` 值说明：
+
+| 值        | 行为                               |
+| --------- | ---------------------------------- |
+| `"off"`   | 不引用原消息（私聊默认值）         |
+| `"first"` | 仅在第一条回复时引用原消息         |
+| `"all"`   | 所有回复都引用原消息（群聊默认值） |
+
+> 注意：消息引用功能与流式卡片输出（`streaming: true`）不能同时使用。当启用流式输出时，回复会以卡片形式呈现，不会显示引用。
+
+### 多 Agent 路由
+
+通过 `bindings` 配置，您可以用一个飞书机器人对接多个不同功能或性格的 Agent。系统会根据用户 ID 或群组 ID 自动将对话分发到对应的 Agent。
+
+配置示例：
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main" },
+      {
+        id: "clawd-fan",
+        workspace: "/home/user/clawd-fan",
+        agentDir: "/home/user/.openclaw/agents/clawd-fan/agent",
+      },
+      {
+        id: "clawd-xi",
+        workspace: "/home/user/clawd-xi",
+        agentDir: "/home/user/.openclaw/agents/clawd-xi/agent",
+      },
+    ],
+  },
+  bindings: [
+    {
+      // 用户 A 的私聊 → main agent
+      agentId: "main",
+      match: {
+        channel: "feishu",
+        peer: { kind: "dm", id: "ou_28b31a88..." },
+      },
+    },
+    {
+      // 用户 B 的私聊 → clawd-fan agent
+      agentId: "clawd-fan",
+      match: {
+        channel: "feishu",
+        peer: { kind: "dm", id: "ou_0fe6b1c9..." },
+      },
+    },
+    {
+      // 某个群组 → clawd-xi agent
+      agentId: "clawd-xi",
+      match: {
+        channel: "feishu",
+        peer: { kind: "group", id: "oc_xxx..." },
+      },
+    },
+  ],
+}
+```
+
+匹配规则说明：
+
+| 字段              | 说明                                          |
+| ----------------- | --------------------------------------------- |
+| `agentId`         | 目标 Agent 的 ID，需要在 `agents.list` 中定义 |
+| `match.channel`   | 渠道类型，这里固定为 `"feishu"`               |
+| `match.peer.kind` | 对话类型：`"dm"`（私聊）或 `"group"`（群组）  |
+| `match.peer.id`   | 用户 Open ID（`ou_xxx`）或群组 ID（`oc_xxx`） |
+
+> 获取 ID 的方法：参见上文 [获取群组/用户 ID](#获取群组用户-id) 章节。
 
 ---
 
@@ -478,7 +593,8 @@ openclaw pairing list feishu
 | `channels.feishu.groups.<chat_id>.enabled`        | 是否启用该群组                 | `true`    |
 | `channels.feishu.textChunkLimit`                  | 消息分块大小                   | `2000`    |
 | `channels.feishu.mediaMaxMb`                      | 媒体大小限制                   | `30`      |
-| `channels.feishu.blockStreaming`                  | 禁用流式输出                   | `true`    |
+| `channels.feishu.streaming`                       | 启用流式卡片输出               | `true`    |
+| `channels.feishu.blockStreaming`                  | 启用块级流式                   | `true`    |
 
 ---
 

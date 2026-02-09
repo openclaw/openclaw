@@ -34,7 +34,7 @@ openclaw plugins install ./extensions/matrix
 If you choose Matrix during configure/onboarding and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## Setup
 
@@ -74,7 +74,7 @@ Details: [Plugins](/plugin)
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
 5. Restart the gateway (or finish onboarding).
 6. Start a DM with the bot or invite it to a room from any Matrix client
-   (Element, Beeper, etc.; see https://matrix.org/ecosystem/clients/). Beeper requires E2EE,
+   (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requires E2EE,
    so set `channels.matrix.encryption: true` and verify the device.
 
 Minimal config (access token, user ID auto-fetched):
@@ -201,6 +201,32 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 | Polls           | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
 | Location        | ✅ Supported (geo URI; altitude ignored)                                              |
 | Native commands | ✅ Supported                                                                          |
+
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+openclaw channels status --probe
+```
+
+Then confirm DM pairing state if needed:
+
+```bash
+openclaw pairing list matrix
+```
+
+Common failures:
+
+- Logged in but room messages ignored: room blocked by `groupPolicy` or room allowlist.
+- DMs ignored: sender pending approval when `channels.matrix.dm.policy="pairing"`.
+- Encrypted rooms fail: crypto support or encryption settings mismatch.
+
+For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
 
 ## Configuration reference (Matrix)
 

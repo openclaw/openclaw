@@ -30,8 +30,8 @@ describe("cron tool", () => {
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
-    ["run", { action: "run", jobId: "job-1" }, { id: "job-1" }],
-    ["run", { action: "run", id: "job-2" }, { id: "job-2" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
     ["runs", { action: "runs", id: "job-2" }, { id: "job-2" }],
   ])("%s sends id to gateway", async (action, args, expectedParams) => {
@@ -58,7 +58,21 @@ describe("cron tool", () => {
     const call = callGatewayMock.mock.calls[0]?.[0] as {
       params?: unknown;
     };
-    expect(call?.params).toEqual({ id: "job-primary" });
+    expect(call?.params).toEqual({ id: "job-primary", mode: "force" });
+  });
+
+  it("supports due-only run mode", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-due", {
+      action: "run",
+      jobId: "job-due",
+      runMode: "due",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: unknown;
+    };
+    expect(call?.params).toEqual({ id: "job-due", mode: "due" });
   });
 
   it("normalizes cron.add job payloads", async () => {
@@ -86,7 +100,7 @@ describe("cron tool", () => {
       deleteAfterRun: true,
       schedule: { kind: "at", at: new Date(123).toISOString() },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: { kind: "systemEvent", text: "hello" },
     });
   });
@@ -232,5 +246,201 @@ describe("cron tool", () => {
     };
     expect(call.method).toBe("cron.add");
     expect(call.params?.agentId).toBeNull();
+  });
+
+  it("infers delivery from threaded session keys", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({
+      agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
+    });
+    await tool.execute("call-thread", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    expect(call?.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "general",
+    });
+  });
+
+  it("preserves telegram forum topics when inferring delivery", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({
+      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+    });
+    await tool.execute("call-telegram-topic", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    expect(call?.params?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890:topic:99",
+    });
+  });
+
+  it("infers delivery when delivery is null", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:dm:alice" });
+    await tool.execute("call-null-delivery", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: null,
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    expect(call?.params?.delivery).toEqual({
+      mode: "announce",
+      to: "alice",
+    });
+  });
+
+  // ── Flat-params recovery (issue #11310) ──────────────────────────────
+
+  it("recovers flat params when job is missing", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-flat", {
+      action: "add",
+      name: "flat-job",
+      schedule: { kind: "at", at: new Date(123).toISOString() },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "do stuff" },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { name?: string; sessionTarget?: string; payload?: { kind?: string } };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.name).toBe("flat-job");
+    expect(call.params?.sessionTarget).toBe("isolated");
+    expect(call.params?.payload?.kind).toBe("agentTurn");
+  });
+
+  it("recovers flat params when job is empty object", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-empty-job", {
+      action: "add",
+      job: {},
+      name: "empty-job",
+      schedule: { kind: "cron", expr: "0 9 * * *" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "wake up" },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { name?: string; sessionTarget?: string; payload?: { text?: string } };
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params?.name).toBe("empty-job");
+    expect(call.params?.sessionTarget).toBe("main");
+    expect(call.params?.payload?.text).toBe("wake up");
+  });
+
+  it("recovers flat message shorthand as agentTurn payload", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-msg-shorthand", {
+      action: "add",
+      schedule: { kind: "at", at: new Date(456).toISOString() },
+      message: "do stuff",
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: { payload?: { kind?: string; message?: string }; sessionTarget?: string };
+    };
+    expect(call.method).toBe("cron.add");
+    // normalizeCronJobCreate infers agentTurn from message and isolated from agentTurn
+    expect(call.params?.payload?.kind).toBe("agentTurn");
+    expect(call.params?.payload?.message).toBe("do stuff");
+    expect(call.params?.sessionTarget).toBe("isolated");
+  });
+
+  it("does not recover flat params when no meaningful job field is present", async () => {
+    const tool = createCronTool();
+    await expect(
+      tool.execute("call-no-signal", {
+        action: "add",
+        name: "orphan-name",
+        enabled: true,
+      }),
+    ).rejects.toThrow("job required");
+  });
+
+  it("prefers existing non-empty job over flat params", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-nested-wins", {
+      action: "add",
+      job: {
+        name: "nested-job",
+        schedule: { kind: "at", at: new Date(123).toISOString() },
+        payload: { kind: "systemEvent", text: "from nested" },
+      },
+      name: "flat-name-should-be-ignored",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { name?: string; payload?: { text?: string } };
+    };
+    expect(call?.params?.name).toBe("nested-job");
+    expect(call?.params?.payload?.text).toBe("from nested");
+  });
+
+  it("does not infer delivery when mode is none", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-none", {
+      action: "add",
+      job: {
+        name: "reminder",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "none" },
+      },
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+    expect(call?.params?.delivery).toEqual({ mode: "none" });
   });
 });

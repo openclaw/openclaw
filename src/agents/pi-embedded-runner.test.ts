@@ -173,7 +173,6 @@ const readSessionMessages = async (sessionFile: string) => {
 };
 
 describe("runEmbeddedPiAgent", () => {
-  const itIfNotWin32 = process.platform === "win32" ? it.skip : it;
   it("writes models.json into the provided agentDir", async () => {
     const sessionFile = nextSessionFile();
 
@@ -219,39 +218,104 @@ describe("runEmbeddedPiAgent", () => {
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
 
-  itIfNotWin32(
-    "persists the first user message before assistant output",
-    { timeout: 120_000 },
-    async () => {
-      const sessionFile = nextSessionFile();
-      const cfg = makeOpenAiConfig(["mock-1"]);
-      await ensureModels(cfg);
+  it("falls back to per-agent workspace when runtime workspaceDir is missing", async () => {
+    const sessionFile = nextSessionFile();
+    const fallbackWorkspace = path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-main");
+    const cfg = {
+      ...makeOpenAiConfig(["mock-1"]),
+      agents: {
+        defaults: {
+          workspace: fallbackWorkspace,
+        },
+      },
+    } satisfies OpenClawConfig;
+    await ensureModels(cfg);
 
-      await runEmbeddedPiAgent({
-        sessionId: "session:test",
-        sessionKey: testSessionKey,
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test-fallback",
+      sessionKey: "agent:main:subagent:fallback-workspace",
+      sessionFile,
+      workspaceDir: undefined as unknown as string,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: "run-fallback-workspace",
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("ok");
+    await expect(fs.stat(fallbackWorkspace)).resolves.toBeTruthy();
+  });
+
+  it("throws when sessionKey is malformed", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = {
+      ...makeOpenAiConfig(["mock-1"]),
+      agents: {
+        defaults: {
+          workspace: path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-main"),
+        },
+        list: [
+          {
+            id: "research",
+            workspace: path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-research"),
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    await ensureModels(cfg);
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "session:test-fallback-malformed",
+        sessionKey: "agent::broken",
+        agentId: "research",
         sessionFile,
-        workspaceDir,
+        workspaceDir: undefined as unknown as string,
         config: cfg,
         prompt: "hello",
         provider: "openai",
         model: "mock-1",
         timeoutMs: 5_000,
         agentDir,
+        runId: "run-fallback-workspace-malformed",
         enqueue: immediateEnqueue,
-      });
+      }),
+    ).rejects.toThrow("Malformed agent session key");
+  });
 
-      const messages = await readSessionMessages(sessionFile);
-      const firstUserIndex = messages.findIndex(
-        (message) => message?.role === "user" && textFromContent(message.content) === "hello",
-      );
-      const firstAssistantIndex = messages.findIndex((message) => message?.role === "assistant");
-      expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-      if (firstAssistantIndex !== -1) {
-        expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
-      }
-    },
-  );
+  it("persists the first user message before assistant output", { timeout: 120_000 }, async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = makeOpenAiConfig(["mock-1"]);
+    await ensureModels(cfg);
+
+    await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey: testSessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      enqueue: immediateEnqueue,
+    });
+
+    const messages = await readSessionMessages(sessionFile);
+    const firstUserIndex = messages.findIndex(
+      (message) => message?.role === "user" && textFromContent(message.content) === "hello",
+    );
+    const firstAssistantIndex = messages.findIndex((message) => message?.role === "assistant");
+    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
+    if (firstAssistantIndex !== -1) {
+      expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
+    }
+  });
 
   it("persists the user message when prompt fails before assistant output", async () => {
     const sessionFile = nextSessionFile();

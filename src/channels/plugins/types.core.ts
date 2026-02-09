@@ -4,7 +4,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
-import type { NormalizedChatType } from "../chat-type.js";
+import type { ChatType } from "../chat-type.js";
 import type { ChatChannelId } from "../registry.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 
@@ -125,6 +125,7 @@ export type ChannelAccountSnapshot = {
   botTokenSource?: string;
   appTokenSource?: string;
   credentialSource?: string;
+  secretSource?: string;
   audienceType?: string;
   audience?: string;
   webhookPath?: string;
@@ -139,6 +140,10 @@ export type ChannelAccountSnapshot = {
   audit?: unknown;
   application?: unknown;
   bot?: unknown;
+  publicKey?: string | null;
+  profile?: unknown;
+  channelAccessToken?: string;
+  channelSecret?: string;
 };
 
 export type ChannelLogSink = {
@@ -162,7 +167,7 @@ export type ChannelGroupContext = {
 };
 
 export type ChannelCapabilities = {
-  chatTypes: Array<NormalizedChatType | "thread">;
+  chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
   edit?: boolean;
@@ -328,4 +333,5 @@ export type ChannelPollContext = {
   to: string;
   poll: PollInput;
   accountId?: string | null;
+  threadId?: string | null;
 };
