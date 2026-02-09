@@ -6,6 +6,7 @@ import { emptyPluginConfigSchema, renderQrPngBase64 } from "openclaw/plugin-sdk"
 import type { ConvosSDKClient } from "./src/sdk-client.js";
 import { resolveConvosAccount, type CoreConfig } from "./src/accounts.js";
 import { convosPlugin } from "./src/channel.js";
+import { getClientForAccount } from "./src/outbound.js";
 import { getConvosRuntime, setConvosRuntime, setConvosSetupActive } from "./src/runtime.js";
 import { resolveConvosDbPath } from "./src/sdk-client.js";
 import { setupConvosWithInvite } from "./src/setup.js";
@@ -372,6 +373,167 @@ const plugin = {
         }
         const result = await handleCancel();
         jsonResponse(res, 200, result);
+      },
+    });
+
+    // Fast conversation creation using the running channel client (no temporary XMTP client).
+    // Used by pool mode to avoid the slow setup flow when a runtime client is already active.
+    api.registerHttpRoute({
+      path: "/convos/conversation",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        try {
+          const body = await readJsonBody(req);
+          const name = typeof body.name === "string" ? body.name : undefined;
+          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
+
+          const runtime = getConvosRuntime();
+          const cfg = runtime.config.loadConfig() as OpenClawConfig;
+          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
+          const client = getClientForAccount(account.accountId);
+          if (!client) {
+            jsonResponse(res, 503, {
+              error: "Convos channel client not running. Start the channel first.",
+            });
+            return;
+          }
+
+          const result = await client.createConversation(name);
+          const qrDataUrl = await renderQrPngBase64(result.inviteUrl);
+          jsonResponse(res, 200, {
+            conversationId: result.conversationId,
+            inviteUrl: result.inviteUrl,
+            inviteSlug: result.inviteSlug,
+            qrDataUrl,
+          });
+        } catch (err) {
+          jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    });
+
+    // Join an existing conversation via invite URL.
+    // Used by pool mode / concierge to join a user-created conversation.
+    api.registerHttpRoute({
+      path: "/convos/join",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        try {
+          const body = await readJsonBody(req);
+          const inviteUrl = typeof body.inviteUrl === "string" ? body.inviteUrl : undefined;
+          if (!inviteUrl) {
+            jsonResponse(res, 400, { error: "inviteUrl (string) is required" });
+            return;
+          }
+          const name = typeof body.name === "string" ? body.name : undefined;
+          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
+
+          const runtime = getConvosRuntime();
+          const cfg = runtime.config.loadConfig() as OpenClawConfig;
+          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
+          const client = getClientForAccount(account.accountId);
+          if (!client) {
+            jsonResponse(res, 503, {
+              error: "Convos channel client not running. Start the channel first.",
+            });
+            return;
+          }
+
+          const result = await client.joinConversation(inviteUrl, name);
+          jsonResponse(res, 200, {
+            conversationId: result.conversationId,
+            status: result.status,
+          });
+        } catch (err) {
+          jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    });
+
+    // Send a message into a conversation.
+    // Used by clawdbot template to send messages into an active conversation.
+    api.registerHttpRoute({
+      path: "/convos/conversation/send",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        try {
+          const body = await readJsonBody(req);
+          const conversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
+          const message = typeof body.message === "string" ? body.message : undefined;
+          if (!conversationId || !message) {
+            jsonResponse(res, 400, { error: "conversationId and message (strings) are required" });
+            return;
+          }
+          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
+
+          const runtime = getConvosRuntime();
+          const cfg = runtime.config.loadConfig() as OpenClawConfig;
+          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
+          const client = getClientForAccount(account.accountId);
+          if (!client) {
+            jsonResponse(res, 503, {
+              error: "Convos channel client not running. Start the channel first.",
+            });
+            return;
+          }
+
+          await client.sendMessage(conversationId, message);
+          jsonResponse(res, 200, { ok: true });
+        } catch (err) {
+          jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
+      },
+    });
+
+    // Rename conversation + agent profile name.
+    // Used by pool mode after pre-creating a conversation during warm-up.
+    api.registerHttpRoute({
+      path: "/convos/rename",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        try {
+          const body = await readJsonBody(req);
+          const conversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
+          const name = typeof body.name === "string" ? body.name : undefined;
+
+          if (!conversationId) {
+            jsonResponse(res, 400, { error: "conversationId (string) is required" });
+            return;
+          }
+          if (!name) {
+            jsonResponse(res, 400, { error: "name (string) is required" });
+            return;
+          }
+
+          const accountId = typeof body.accountId === "string" ? body.accountId : undefined;
+          const runtime = getConvosRuntime();
+          const cfg = runtime.config.loadConfig() as OpenClawConfig;
+          const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
+          const client = getClientForAccount(account.accountId);
+          if (!client) {
+            jsonResponse(res, 503, {
+              error: "Convos channel client not running. Start the channel first.",
+            });
+            return;
+          }
+
+          await client.renameConversation(conversationId, name);
+          jsonResponse(res, 200, { ok: true });
+        } catch (err) {
+          jsonResponse(res, 500, { error: err instanceof Error ? err.message : String(err) });
+        }
       },
     });
 

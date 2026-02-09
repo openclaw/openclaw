@@ -271,7 +271,7 @@ export class ConvosSDKClient {
   /**
    * Join a conversation via invite URL or slug
    */
-  async joinConversation(invite: string): Promise<JoinConversationResult> {
+  async joinConversation(invite: string, name?: string): Promise<JoinConversationResult> {
     if (this.debug) {
       console.log(`[convos-sdk] Joining conversation with invite: ${invite.slice(0, 20)}...`);
     }
@@ -283,10 +283,34 @@ export class ConvosSDKClient {
         console.log(`[convos-sdk] Join result:`, result);
       }
 
-      return {
-        status: result.conversationId ? "joined" : "waiting_for_acceptance",
-        conversationId: result.conversationId ?? null,
-      };
+      if (!result.conversationId) {
+        return { status: "waiting_for_acceptance", conversationId: null };
+      }
+
+      // convos.join() returns the invite token as conversationId (not the XMTP
+      // group ID). Resolve the real group ID via listGroups() so callers can
+      // use it for send/rename. listGroups() also returns proper Group objects
+      // with updateAppData(), needed for setConversationProfile().
+      let conversationId: string = result.conversationId;
+      try {
+        await this.agent.client.conversations.sync();
+        const groups = this.agent.client.conversations.listGroups();
+        const group = groups[groups.length - 1];
+        if (group) {
+          conversationId = group.id;
+          console.log(`[convos-sdk] Resolved group ID: ${group.id}`);
+
+          if (name) {
+            const convosGroup = this.convos.group(group);
+            await convosGroup.setConversationProfile({ name });
+            console.log(`[convos-sdk] Set profile name: "${name}"`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[convos-sdk] Failed to resolve group / set profile:`, err);
+      }
+
+      return { status: "joined", conversationId };
     } catch (err) {
       if (this.debug) {
         console.error(`[convos-sdk] Join failed:`, err);
@@ -332,6 +356,16 @@ export class ConvosSDKClient {
     // Wrap with Convos to get invite functionality
     const convosGroup = this.convos.group(group);
 
+    // Set the agent's display name in the conversation so it shows
+    // the agent name instead of "Somebody" in the Convos app.
+    if (name) {
+      try {
+        await convosGroup.setConversationProfile({ name });
+      } catch (err) {
+        console.warn(`[convos-sdk] Failed to set profile name:`, err);
+      }
+    }
+
     // Create invite (automatically manages metadata)
     const invite = await convosGroup.createInvite({ name });
 
@@ -345,6 +379,25 @@ export class ConvosSDKClient {
       inviteSlug: invite.slug,
       inviteUrl: invite.url,
     };
+  }
+
+  /**
+   * Rename a conversation and update the agent's profile name within it.
+   */
+  async renameConversation(conversationId: string, name: string): Promise<void> {
+    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
+    if (!conversation) {
+      throw new Error(`Conversation not found: ${conversationId}`);
+    }
+
+    const convosGroup = this.convos.group(conversation);
+
+    // Update the agent's member display name in the conversation
+    await convosGroup.setConversationProfile({ name });
+
+    if (this.debug) {
+      console.log(`[convos-sdk] Renamed conversation ${conversationId} to "${name}"`);
+    }
   }
 
   /**
