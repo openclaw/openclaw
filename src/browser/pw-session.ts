@@ -549,8 +549,52 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
     // Remove the "disconnected" listener to prevent the old browser's teardown
     // from racing with a fresh connection and nulling the new `cached`.
     cur.browser.removeAllListeners("disconnected");
+
+    // Use a raw CDP WebSocket to send Runtime.terminateExecution to the stuck page.
+    // This bypasses Playwright entirely and kills any running JS on the page,
+    // unblocking the execution context for subsequent operations.
+    if (opts.targetId) {
+      const cdpHttpBase = normalized
+        .replace(/^ws:\/\//, "http://")
+        .replace(/\/devtools\/browser\/.*$/, "");
+      try {
+        const pageWsRes = await fetch(`${cdpHttpBase}/json/list`, {
+          signal: AbortSignal.timeout(2000),
+        });
+        const pages = (await pageWsRes.json()) as Array<{
+          id: string;
+          webSocketDebuggerUrl?: string;
+        }>;
+        const target = pages.find((p) => p.id === opts.targetId);
+        if (target?.webSocketDebuggerUrl) {
+          const { WebSocket } = await import("ws");
+          const ws = new WebSocket(target.webSocketDebuggerUrl);
+          await new Promise<void>((resolve) => {
+            ws.on("open", () => {
+              // Runtime.terminateExecution kills running JS without navigating away.
+              // Safe: only stops the current execution, doesn't crash the page.
+              ws.send(JSON.stringify({ id: 1, method: "Runtime.terminateExecution" }));
+              // Give it a moment to process, then close
+              setTimeout(() => {
+                ws.close();
+                resolve();
+              }, 500);
+            });
+            ws.on("error", () => {
+              resolve();
+            });
+            setTimeout(() => {
+              ws.close();
+              resolve();
+            }, 2000);
+          });
+        }
+      } catch {
+        // Best-effort; continue with disconnect anyway
+      }
+    }
+
     // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-    // The new connection (created by the next connectBrowser call) is independent.
     cur.browser.close().catch(() => {});
   }
 }
