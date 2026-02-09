@@ -72,7 +72,7 @@ export type PluginRuntime = {
         cfg: unknown;
         channel: string;
         accountId: string;
-        peer: { kind: "dm" | "group" | "channel"; id: string };
+        peer: { kind: RoutePeerKind; id: string };
       }): { sessionKey: string; accountId: string };
     };
     pairing: {

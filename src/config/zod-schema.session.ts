@@ -27,7 +27,13 @@ export const SessionSendPolicySchema = z
               .object({
                 channel: z.string().optional(),
                 chatType: z
-                  .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
+                  .union([
+                    z.literal("direct"),
+                    z.literal("group"),
+                    z.literal("channel"),
+                    /** @deprecated Use `direct` instead. Kept for backward compatibility. */
+                    z.literal("dm"),
+                  ])
                   .optional(),
                 keyPrefix: z.string().optional(),
               })
@@ -57,6 +63,8 @@ export const SessionSchema = z
     reset: SessionResetConfigSchema.optional(),
     resetByType: z
       .object({
+        direct: SessionResetConfigSchema.optional(),
+        /** @deprecated Use `direct` instead. Kept for backward compatibility. */
         dm: SessionResetConfigSchema.optional(),
         group: SessionResetConfigSchema.optional(),
         thread: SessionResetConfigSchema.optional(),

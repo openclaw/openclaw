@@ -43,7 +43,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "@alice",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:telegram:dm:@alice");
+    expect(route?.sessionKey).toBe("agent:main:telegram:direct:@alice");
     expect(route?.chatType).toBe("direct");
   });
 
@@ -64,7 +64,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "user:123",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:dm:alice");
+    expect(route?.sessionKey).toBe("agent:main:direct:alice");
   });
 
   it("strips chat_* prefixes for BlueBubbles group session keys", async () => {
@@ -88,7 +88,7 @@ describe("resolveOutboundSessionRoute", () => {
       target: "123456",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:zalouser:dm:123456");
+    expect(route?.sessionKey).toBe("agent:main:zalouser:direct:123456");
     expect(route?.chatType).toBe("direct");
   });
 

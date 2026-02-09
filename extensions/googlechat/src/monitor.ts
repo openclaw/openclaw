@@ -615,7 +615,7 @@ async function processMessageWithPipeline(params: {
     channel: "googlechat",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: spaceId,
     },
   });

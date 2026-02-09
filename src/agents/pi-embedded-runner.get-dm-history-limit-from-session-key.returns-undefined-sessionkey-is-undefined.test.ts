@@ -228,4 +228,18 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     } as OpenClawConfig;
     expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(5);
   });
+
+  describe("backward compatibility", () => {
+    it("accepts both legacy :dm: and new :direct: session keys", () => {
+      const config = {
+        channels: { telegram: { dmHistoryLimit: 10 } },
+      } as OpenClawConfig;
+      // Legacy format with :dm:
+      expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(10);
+      expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(10);
+      // New format with :direct:
+      expect(getDmHistoryLimitFromSessionKey("telegram:direct:123", config)).toBe(10);
+      expect(getDmHistoryLimitFromSessionKey("agent:main:telegram:direct:123", config)).toBe(10);
+    });
+  });
 });

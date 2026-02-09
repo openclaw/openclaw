@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
 
 export {
@@ -140,14 +141,14 @@ export function buildAgentPeerSessionKey(params: {
   mainKey?: string | undefined;
   channel: string;
   accountId?: string | null;
-  peerKind?: "dm" | "group" | "channel" | null;
+  peerKind?: ChatType | null;
   peerId?: string | null;
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
   dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 }): string {
-  const peerKind = params.peerKind ?? "dm";
-  if (peerKind === "dm") {
+  const peerKind = params.peerKind ?? "direct";
+  if (peerKind === "direct") {
     const dmScope = params.dmScope ?? "main";
     let peerId = (params.peerId ?? "").trim();
     const linkedPeerId =
@@ -165,14 +166,14 @@ export function buildAgentPeerSessionKey(params: {
     if (dmScope === "per-account-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       const accountId = normalizeAccountId(params.accountId);
-      return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:dm:${peerId}`;
+      return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:direct:${peerId}`;
     }
     if (dmScope === "per-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
-      return `agent:${normalizeAgentId(params.agentId)}:${channel}:dm:${peerId}`;
+      return `agent:${normalizeAgentId(params.agentId)}:${channel}:direct:${peerId}`;
     }
     if (dmScope === "per-peer" && peerId) {
-      return `agent:${normalizeAgentId(params.agentId)}:dm:${peerId}`;
+      return `agent:${normalizeAgentId(params.agentId)}:direct:${peerId}`;
     }
     return buildAgentMainSessionKey({
       agentId: params.agentId,

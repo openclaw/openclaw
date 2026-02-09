@@ -714,7 +714,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const parts = normalized.split(":").filter(Boolean);
     if (
       parts.length >= 2 &&
-      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "dm")
+      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "direct" || parts[1] === "dm")
     ) {
       return parts[0]?.toLowerCase();
     }

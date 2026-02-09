@@ -120,7 +120,7 @@ describe("monitorSlackProvider tool results", () => {
       bindings: [
         {
           agentId: "rich",
-          match: { channel: "slack", peer: { kind: "dm", id: "U1" } },
+          match: { channel: "slack", peer: { kind: "direct", id: "U1" } },
         },
       ],
       messages: {
