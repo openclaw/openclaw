@@ -325,4 +325,26 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       expect.objectContaining({ sessionKey: "session-1" }),
     );
   });
+
+  it("applies validated transcript before hooks even when it becomes empty", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    sanitizeSessionHistoryMock.mockResolvedValue([]);
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+    const beforeContext = sessionHook("compact:before")?.context;
+    expect(beforeContext).toMatchObject({
+      messageCountOriginal: 0,
+      tokenCountOriginal: 0,
+      messageCount: 0,
+      tokenCount: 0,
+    });
+  });
 });

@@ -612,12 +612,12 @@ export async function compactEmbeddedPiSessionDirect(
         const validated = transcriptPolicy.validateAnthropicTurns
           ? validateAnthropicTurns(validatedGemini)
           : validatedGemini;
-        // Keep compaction hooks aligned with the validated transcript that actually enters
-        // truncation/repair and compaction.
+        // Apply validated transcript to the live session even when no history limit is configured,
+        // so compaction and hook metrics are based on the same message set.
         session.agent.replaceMessages(validated);
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
-        const originalMessages = validated.slice();
+        const originalMessages = session.messages.slice();
         const truncated = limitHistoryTurns(
           session.messages,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
