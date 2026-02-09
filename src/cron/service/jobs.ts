@@ -9,7 +9,6 @@ import type {
   CronPayloadPatch,
 } from "../types.js";
 import type { CronServiceState } from "./state.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import {
   normalizeOptionalAgentId,
@@ -70,19 +69,9 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
       return undefined;
     }
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const schedule = job.schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
-        ? schedule.atMs
-        : typeof schedule.atMs === "string"
-          ? parseAbsoluteTimeMs(schedule.atMs)
-          : typeof schedule.at === "string"
-            ? parseAbsoluteTimeMs(schedule.at)
-            : null;
-    return atMs !== null ? atMs : undefined;
+    // Bug fix #3: Delegate to computeNextRunAtMs which correctly returns
+    // undefined for past timestamps, preventing tight-loop rescheduling.
+    return computeNextRunAtMs(job.schedule, nowMs);
   }
   return computeNextRunAtMs(job.schedule, nowMs);
 }
@@ -118,14 +107,13 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
       job.state.runningAtMs = undefined;
       changed = true;
     }
-    // Only recompute if nextRunAtMs is missing or already past-due.
-    // Preserving a still-future nextRunAtMs avoids accidentally advancing
-    // a job that hasn't fired yet (e.g. during restart recovery).
+    // Only recompute if nextRunAtMs is missing. Past-due jobs should keep
+    // their existing nextRunAtMs so they remain eligible for execution.
+    // After execution, applyJobResult computes the correct next slot.
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = nextRun === undefined || now >= nextRun;
-    if (isDueOrMissing) {
+    if (nextRun === undefined) {
       const newNext = computeJobNextRunAtMs(job, now);
-      if (job.state.nextRunAtMs !== newNext) {
+      if (newNext !== undefined) {
         job.state.nextRunAtMs = newNext;
         changed = true;
       }

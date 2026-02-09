@@ -155,10 +155,18 @@ export function armTimer(state: CronServiceState) {
 }
 
 export async function onTimer(state: CronServiceState) {
-  if (state.running) {
+  // Bug fix #1: Check `running` inside locked() to prevent race between
+  // two concurrent onTimer calls that both see running=false before either sets it.
+  const shouldRun = await locked(state, async () => {
+    if (state.running) {
+      return false;
+    }
+    state.running = true;
+    return true;
+  });
+  if (!shouldRun) {
     return;
   }
-  state.running = true;
   try {
     const dueJobs = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -240,6 +248,21 @@ export async function onTimer(state: CronServiceState) {
         for (const result of results) {
           const job = state.store?.jobs.find((j) => j.id === result.jobId);
           if (!job) {
+            // Bug fix #2: Job was removed while executing — skip silently.
+            state.deps.log.info(
+              { jobId: result.jobId },
+              "cron: job removed during execution, skipping result apply",
+            );
+            continue;
+          }
+          if (!job.enabled) {
+            // Bug fix #2: Job was disabled while executing — clear running marker
+            // but don't schedule next run.
+            job.state.runningAtMs = undefined;
+            state.deps.log.info(
+              { jobId: result.jobId },
+              "cron: job disabled during execution, clearing running state",
+            );
             continue;
           }
 
@@ -300,6 +323,8 @@ function findDueJobs(state: CronServiceState): CronJob[] {
 }
 
 export async function runMissedJobs(state: CronServiceState) {
+  // Bug fix #7: Use claim-in-lock → execute-outside → apply-in-lock pattern
+  // so the lock is not held during potentially long job execution.
   if (!state.store) {
     return;
   }
@@ -321,14 +346,82 @@ export async function runMissedJobs(state: CronServiceState) {
     return typeof next === "number" && now >= next;
   });
 
-  if (missed.length > 0) {
-    state.deps.log.info(
-      { count: missed.length, jobIds: missed.map((j) => j.id) },
-      "cron: running missed jobs after restart",
-    );
-    for (const job of missed) {
-      await executeJob(state, job, now, { forced: false });
+  if (missed.length === 0) {
+    return;
+  }
+
+  state.deps.log.info(
+    { count: missed.length, jobIds: missed.map((j) => j.id) },
+    "cron: running missed jobs after restart",
+  );
+
+  // Claim jobs by marking them as running and persist
+  for (const job of missed) {
+    job.state.runningAtMs = now;
+    job.state.lastError = undefined;
+  }
+  await persist(state);
+
+  // Execute outside the lock (caller should not hold the lock during this call)
+  for (const { id, job } of missed.map((j) => ({ id: j.id, job: j }))) {
+    const startedAt = state.deps.nowMs();
+    emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+
+    let coreResult: {
+      status: "ok" | "error" | "skipped";
+      error?: string;
+      summary?: string;
+      sessionId?: string;
+      sessionKey?: string;
+    };
+    try {
+      coreResult = await executeJobCore(state, job);
+    } catch (err) {
+      coreResult = { status: "error", error: String(err) };
     }
+
+    const endedAt = state.deps.nowMs();
+
+    // Apply result — re-check that job still exists and is enabled (Bug fix #2 for missed jobs)
+    await locked(state, async () => {
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+      const currentJob = state.store?.jobs.find((j) => j.id === id);
+      if (!currentJob) {
+        state.deps.log.warn(
+          { jobId: id },
+          "cron: missed job removed during execution, skipping apply",
+        );
+        return;
+      }
+
+      const shouldDelete = applyJobResult(state, currentJob, {
+        status: coreResult.status,
+        error: coreResult.error,
+        startedAt,
+        endedAt,
+      });
+
+      emit(state, {
+        jobId: currentJob.id,
+        action: "finished",
+        status: coreResult.status,
+        error: coreResult.error,
+        summary: coreResult.summary,
+        sessionId: coreResult.sessionId,
+        sessionKey: coreResult.sessionKey,
+        runAtMs: startedAt,
+        durationMs: currentJob.state.lastDurationMs,
+        nextRunAtMs: currentJob.state.nextRunAtMs,
+      });
+
+      if (shouldDelete && state.store) {
+        state.store.jobs = state.store.jobs.filter((j) => j.id !== currentJob.id);
+        emit(state, { jobId: currentJob.id, action: "removed" });
+      }
+
+      // Bug fix #6: Persist after each job execution during missed jobs recovery
+      await persist(state);
+    });
   }
 }
 

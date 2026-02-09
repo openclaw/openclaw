@@ -31,13 +31,18 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
   }
 
   if (schedule.kind === "every") {
-    const everyMs = Math.max(1, Math.floor(schedule.everyMs));
+    // Bug fix #8: Enforce a minimum interval of 10 seconds to prevent
+    // accidental tight loops from misconfigured jobs.
+    const everyMs = Math.max(10_000, Math.floor(schedule.everyMs));
     const anchor = Math.max(0, Math.floor(schedule.anchorMs ?? nowMs));
     if (nowMs < anchor) {
       return anchor;
     }
     const elapsed = nowMs - anchor;
-    const steps = Math.max(1, Math.floor((elapsed + everyMs - 1) / everyMs));
+    // Bug fix #4: Use strict ceiling division so that when nowMs lands exactly
+    // on a boundary we return the *next* boundary, not the current one.
+    // This prevents double-firing when nowMs === nextRunAtMs.
+    const steps = Math.floor(elapsed / everyMs) + 1;
     return anchor + steps * everyMs;
   }
 

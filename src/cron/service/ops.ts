@@ -14,6 +14,8 @@ import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
 
 export async function start(state: CronServiceState) {
+  // Bug fix #7: Don't hold the lock during runMissedJobs (which executes jobs).
+  // Phase 1: Load store and clear stale markers under the lock.
   await locked(state, async () => {
     if (!state.deps.cronEnabled) {
       state.deps.log.info({ enabled: false }, "cron: disabled");
@@ -30,7 +32,18 @@ export async function start(state: CronServiceState) {
         job.state.runningAtMs = undefined;
       }
     }
-    await runMissedJobs(state);
+    await persist(state);
+  });
+
+  if (!state.deps.cronEnabled) {
+    return;
+  }
+
+  // Phase 2: Run missed jobs outside the lock (runMissedJobs now manages its own locking).
+  await runMissedJobs(state);
+
+  // Phase 3: Recompute and arm timer under the lock.
+  await locked(state, async () => {
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);

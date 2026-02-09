@@ -18,5 +18,13 @@ export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): 
   state.op = keepAlive;
   storeLocks.set(storePath, keepAlive);
 
+  // Bug fix #5: Clean up storeLocks entry when this is the last operation
+  // for this storePath, preventing unbounded Map growth.
+  keepAlive.then(() => {
+    if (storeLocks.get(storePath) === keepAlive) {
+      storeLocks.delete(storePath);
+    }
+  });
+
   return (await next) as T;
 }

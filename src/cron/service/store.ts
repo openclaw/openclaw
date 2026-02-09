@@ -277,6 +277,9 @@ export async function ensureLoaded(
   }
   // Force reload always re-reads the file to avoid missing cross-service
   // edits on filesystems with coarse mtime resolution.
+  // Bug fix #10: forceReload MUST only be used inside locked() to prevent
+  // overwriting concurrent in-memory mutations. The pattern is:
+  //   locked() → ensureLoaded({forceReload}) → mutate → persist()
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
@@ -498,6 +501,16 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
+/**
+ * Persist the in-memory store to disk.
+ *
+ * Bug fix #10: IMPORTANT — callers MUST mutate the in-memory `state.store`
+ * BEFORE calling persist(). The flow is always:
+ *   1. Mutate state.store (in-memory)
+ *   2. Call persist(state) to flush to disk
+ * Never persist first and mutate after, as a concurrent forceReload between
+ * the two steps would overwrite the in-memory mutation with stale disk data.
+ */
 export async function persist(state: CronServiceState) {
   if (!state.store) {
     return;
