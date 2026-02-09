@@ -95,28 +95,40 @@ async function listGuildChannels(
     .filter((channel) => Boolean(channel.id) && Boolean(channel.name));
 }
 
+type FetchChannelResult =
+  | { status: "found"; channel: DiscordChannelSummary }
+  | { status: "not-found" }
+  | { status: "forbidden" }
+  | { status: "invalid" };
+
 async function fetchChannel(
   token: string,
   fetcher: typeof fetch,
   channelId: string,
-): Promise<DiscordChannelSummary | null> {
+): Promise<FetchChannelResult> {
   let raw: DiscordChannelPayload;
   try {
     raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher);
   } catch (err) {
-    if (err instanceof DiscordApiError && (err.status === 404 || err.status === 403)) {
-      return null;
+    if (err instanceof DiscordApiError && err.status === 403) {
+      return { status: "forbidden" };
+    }
+    if (err instanceof DiscordApiError && err.status === 404) {
+      return { status: "not-found" };
     }
     throw err;
   }
   if (!raw || typeof raw.guild_id !== "string" || typeof raw.id !== "string") {
-    return null;
+    return { status: "invalid" };
   }
   return {
-    id: raw.id,
-    name: typeof raw.name === "string" ? raw.name : "",
-    guildId: raw.guild_id,
-    type: raw.type,
+    status: "found",
+    channel: {
+      id: raw.id,
+      name: typeof raw.name === "string" ? raw.name : "",
+      guildId: raw.guild_id,
+      type: raw.type,
+    },
   };
 }
 
@@ -199,8 +211,9 @@ export async function resolveDiscordChannelAllowlist(params: {
     }
 
     if (parsed.channelId) {
-      const channel = await fetchChannel(token, fetcher, parsed.channelId);
-      if (channel?.guildId) {
+      const result = await fetchChannel(token, fetcher, parsed.channelId);
+      if (result.status === "found") {
+        const channel = result.channel;
         if (parsed.guildId && channel.guildId !== parsed.guildId) {
           results.push({
             input,
@@ -223,7 +236,7 @@ export async function resolveDiscordChannelAllowlist(params: {
         });
         continue;
       }
-      if (parsed.guildId) {
+      if (result.status === "not-found" && parsed.guildId) {
         const guild = guilds.find((entry) => entry.id === parsed.guildId);
         if (guild) {
           const channels = await getChannels(guild.id);
