@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installProcessWarningFilter, shouldIgnoreWarning } from "./warning-filter.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
-const baseEmitWarning = process.emitWarning.bind(process) as typeof process.emitWarning;
+const baseEmitWarning = process.emitWarning.bind(process);
 
 function resetWarningFilterInstallState(): void {
   const globalState = globalThis as typeof globalThis & {
