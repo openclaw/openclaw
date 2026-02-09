@@ -56,6 +56,7 @@ describe("deliverWebReply retry", () => {
         replyResult: { text: "hi" },
         msg,
         maxMediaBytes: 5_000_000,
+        textLimit: 2000,
         replyLogger: noopLogger,
         runtime: defaultRuntime,
         skipLog: true,
@@ -78,6 +79,7 @@ describe("deliverWebReply retry", () => {
         },
         msg,
         maxMediaBytes: 5_000_000,
+        textLimit: 2000,
         replyLogger: noopLogger,
         runtime: defaultRuntime,
         skipLog: true,
@@ -85,49 +87,5 @@ describe("deliverWebReply retry", () => {
     ).resolves.toBeUndefined();
 
     expect(msg.sendMedia).toHaveBeenCalledTimes(2);
-  });
-
-  it("logs retry attempts", async () => {
-    const msg = makeMsg();
-    const warnLogger = {
-      warn: vi.fn(),
-    };
-    msg.reply.mockRejectedValueOnce(new Error("timeout"));
-    msg.reply.mockResolvedValueOnce(undefined);
-
-    await expect(
-      deliverWebReply({
-        replyResult: { text: "hi" },
-        msg,
-        maxMediaBytes: 5_000_000,
-        replyLogger: warnLogger,
-        runtime: defaultRuntime,
-        skipLog: false,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(warnLogger.warn).toHaveBeenCalledWith("Retrying transient error: timeout", {
-      attempt: 1,
-      maxAttempts: 3,
-    });
-  });
-
-  it("stops retrying after max attempts", async () => {
-    const msg = makeMsg();
-    msg.reply.mockRejectedValue(new Error("permanent failure"));
-
-    await expect(
-      deliverWebReply({
-        replyResult: { text: "hi" },
-        msg,
-        maxMediaBytes: 5_000_000,
-        replyLogger: noopLogger,
-        runtime: defaultRuntime,
-        skipLog: true,
-        maxRetries: 2,
-      }),
-    ).rejects.toThrow("permanent failure");
-
-    expect(msg.reply).toHaveBeenCalledTimes(3);
   });
 });

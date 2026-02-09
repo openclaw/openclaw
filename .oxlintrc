@@ -1,11 +1,2 @@
-{
-  "rules": {
-    "no-unused-vars": "error",
-    "strict-null-checks": true,
-    "no-explicit-any": "warn",
-    "prefer-const": "error",
-    "no-var-keyword": "error",
-    "no-duplicate-imports": "error",
-    "no-empty": "warn"
-  }
-}
+{"rules":{"no-unused-vars":"error","strict-null-checks":true,"no-explicit-any":"warn","prefer-const":"error","no-var-keyword":"error","no-duplicate-imports":"error","no-empty":"warn"}}
+
