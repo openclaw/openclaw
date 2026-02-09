@@ -103,6 +103,29 @@ If you see `!`:
 If the Gateway runs on the same machine as Chrome, it starts the browser control service on loopback
 and auto-starts the relay server. The extension talks to the local relay; the CLI/tool calls go to the Gateway.
 
+### Common footgun: browser-capable node auto-routing
+
+If you have **exactly one** connected node with `browser` capability, the Gateway may automatically proxy
+browser commands to that node. This is great when the Gateway is remote and you intentionally run a node
+next to Chrome, but it's confusing when you want to drive Chrome on the **Gateway host**.
+
+Symptom: `openclaw browser --browser-profile chrome status` shows the relay port (`18792`) but `running: false`
+and you never see attached tabs on your Mac, because the Gateway is actually talking to the node (often Linux).
+
+Fix: force local browser control by disabling auto-routing:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      browser: {
+        mode: "manual",
+      },
+    },
+  },
+}
+```
+
 ### Remote Gateway (Gateway runs elsewhere) — **run a node host**
 
 If your Gateway runs on another machine, start a node host on the machine that runs Chrome.
