@@ -15,7 +15,7 @@ export type ModelSelectedContext = {
 
 /** Streaming event from an agent run (non-terminal subset of CliStreamEvent). */
 export type AgentStreamEvent =
-  | { type: "tool_start"; toolName: string; toolCallId: string }
+  | { type: "tool_start"; toolName: string; toolCallId: string; input?: Record<string, unknown> }
   | { type: "tool_result"; toolCallId: string; isError: boolean }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string };

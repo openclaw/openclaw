@@ -42,7 +42,7 @@ function convertUsage(raw?: RawCliUsage): CliUsage | undefined {
 }
 
 export type CliStreamEvent =
-  | { type: "tool_start"; toolName: string; toolCallId: string }
+  | { type: "tool_start"; toolName: string; toolCallId: string; input?: Record<string, unknown> }
   | { type: "tool_result"; toolCallId: string; isError: boolean }
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
@@ -66,6 +66,7 @@ type StreamJsonMessage = {
       type?: string;
       name?: string;
       id?: string;
+      input?: Record<string, unknown>;
       text?: string;
       thinking?: string;
     }>;
@@ -201,6 +202,7 @@ function processStreamEvent(
           type: "tool_start",
           toolName: block.name,
           toolCallId: block.id,
+          input: block.input,
         });
       } else if (block.type === "text" && block.text) {
         onEvent({ type: "text", text: block.text });

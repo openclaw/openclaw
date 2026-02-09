@@ -32,7 +32,11 @@ import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 
-export type CliToolStatusCallback = (info: { toolName: string; toolCallId: string }) => void;
+export type CliToolStatusCallback = (info: {
+  toolName: string;
+  toolCallId: string;
+  input?: Record<string, unknown>;
+}) => void;
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -253,6 +257,7 @@ export async function runCliAgent(params: {
               params.onToolStatus({
                 toolName: event.toolName,
                 toolCallId: event.toolCallId,
+                input: event.input,
               });
             }
             // Forward non-terminal events to stream event callback for status tracking.
