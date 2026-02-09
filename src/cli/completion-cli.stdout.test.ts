@@ -86,23 +86,21 @@ describe("completion stdout cleanliness", () => {
   });
 
   it("console.log sends script to stderr when routeLogsToStderr is active (demonstrating the need for process.stdout.write)", () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const logSpy = vi.fn();
-    console.log = logSpy;
 
     setLoggerOverride({ level: "info", file: "/dev/null" });
     enableConsoleCapture();
     routeLogsToStderr();
 
-    // This is what the current code does — console.log(script)
     // The patched console.log forwards to process.stderr.write when forceConsoleToStderr is set
     console.log("#compdef openclaw");
 
-    // The original console.log should NOT have been called (it was redirected to stderr)
-    expect(logSpy).not.toHaveBeenCalled();
-    // Instead, stderr.write should have received the content
-    const stderrCalls = stderrWrite.mock.calls.map(([chunk]) => String(chunk));
-    const stderrOutput = stderrCalls.join("");
+    // stdout should NOT have received the content
+    const stdoutOutput = stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(stdoutOutput).not.toContain("#compdef openclaw");
+    // stderr should have received it instead
+    const stderrOutput = stderrWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(stderrOutput).toContain("#compdef openclaw");
   });
 });
