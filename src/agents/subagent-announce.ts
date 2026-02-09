@@ -25,9 +25,6 @@ import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-que
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
-const MAX_ANNOUNCE_FINDINGS_CHARS = 420;
-const MAX_ANNOUNCE_SUMMARY_WORDS = 35;
-
 function formatDurationShort(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
@@ -56,14 +53,6 @@ function formatTokenCount(value?: number) {
     return `${(value / 1_000).toFixed(1)}k`;
   }
   return String(Math.round(value));
-}
-
-function compactAnnounceFindings(reply?: string) {
-  const text = (reply?.trim() ? reply : "(no output)").replace(/\s+/g, " ").trim();
-  if (text.length <= MAX_ANNOUNCE_FINDINGS_CHARS) {
-    return text;
-  }
-  return `${text.slice(0, MAX_ANNOUNCE_FINDINGS_CHARS).trimEnd()}...`;
 }
 
 async function buildCompactAnnounceStatsLine(params: {
@@ -463,7 +452,7 @@ export async function runSubagentAnnounceFlow(params: {
     const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
     const announceId = childSessionId || params.childRunId;
-    const conciseFindings = compactAnnounceFindings(reply);
+    const findings = reply || "(no output)";
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
@@ -473,11 +462,11 @@ export async function runSubagentAnnounceFlow(params: {
       `[System Message] [id: ${announceId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
       "",
       "Result:",
-      conciseFindings,
+      findings,
       "",
       statsLine,
       "",
-      `Reply with one short natural user update (${MAX_ANNOUNCE_SUMMARY_WORDS} words max); keep this internal context private (don't mention system/log/stats/session details or announce type). If no user-facing update is needed, reply ONLY: NO_REPLY.`,
+      "Reply with a natural user update; keep this internal context private (don't mention system/log/stats/session details or announce type). If no user-facing update is needed, reply ONLY: NO_REPLY.",
     ].join("\n");
 
     const requesterDepth = getSubagentDepthFromSessionStore(params.requesterSessionKey);

@@ -113,7 +113,7 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Result:");
     expect(msg).toContain("raw subagent reply");
     expect(msg).toContain("Stats:");
-    expect(msg).toContain("35 words max");
+    expect(msg).toContain("Reply with a natural user update");
     expect(msg).toContain("keep this internal context private");
   });
 
@@ -139,7 +139,7 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("completed successfully");
   });
 
-  it("trims long findings and includes compact stats", async () => {
+  it("keeps full findings and includes compact stats", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     sessionStore = {
       "agent:main:subagent:test": {
@@ -174,10 +174,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tokens 1.0k (in 12 / out 1.0k)");
     expect(msg).toContain("prompt/cache 197.0k");
     expect(msg).toContain("[id: child-session-usage]");
-    expect(msg).toContain("35 words max");
+    expect(msg).toContain("Reply with a natural user update");
     expect(msg).toContain("ONLY: NO_REPLY");
     expect(msg).toContain("step-0");
-    expect(msg).not.toContain("step-139");
+    expect(msg).toContain("step-139");
   });
 
   it("steers announcements into an active run when queue mode is steer", async () => {
