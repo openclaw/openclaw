@@ -17,6 +17,7 @@ import {
   rateImportance,
   resolveConflict,
   isSemanticDuplicate,
+  isTransientError,
   runSleepCycle,
 } from "./extractor.js";
 import { passesAttentionGate, passesAssistantAttentionGate } from "./index.js";
@@ -820,7 +821,7 @@ describe("runBackgroundExtraction", () => {
   }
 
   it("should skip extraction and mark as 'skipped' when disabled", async () => {
-    await runBackgroundExtraction(
+    const result = await runBackgroundExtraction(
       "mem-1",
       "test text",
       mockDb as never,
@@ -829,6 +830,7 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
     expect(mockDb.updateExtractionStatus).toHaveBeenCalledWith("mem-1", "skipped");
+    expect(result).toEqual({ success: true, memoryId: "mem-1" });
   });
 
   it("should mark as 'failed' when extraction returns null", async () => {
@@ -838,7 +840,7 @@ describe("runBackgroundExtraction", () => {
       text: () => Promise.resolve("error"),
     });
 
-    await runBackgroundExtraction(
+    const result = await runBackgroundExtraction(
       "mem-1",
       "test text",
       mockDb as never,
@@ -847,6 +849,7 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
     expect(mockDb.updateExtractionStatus).toHaveBeenCalledWith("mem-1", "failed");
+    expect(result).toEqual({ success: false, memoryId: "mem-1" });
   });
 
   it("should mark as 'complete' when extraction result is empty", async () => {
@@ -858,7 +861,7 @@ describe("runBackgroundExtraction", () => {
       }),
     );
 
-    await runBackgroundExtraction(
+    const result = await runBackgroundExtraction(
       "mem-1",
       "test text",
       mockDb as never,
@@ -867,6 +870,7 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
     expect(mockDb.updateExtractionStatus).toHaveBeenCalledWith("mem-1", "complete");
+    expect(result).toEqual({ success: true, memoryId: "mem-1" });
   });
 
   it("should batch entities, relationships, tags, and category in one call", async () => {
@@ -2274,10 +2278,10 @@ describe("runSleepCycle", () => {
       const result = await runSleepCycle(mockDb, mockEmbeddings, mockConfig, mockLogger);
 
       expect(result.extraction.processed).toBe(1);
-      // runBackgroundExtraction doesn't throw on HTTP errors, it just marks the extraction status as failed/pending
-      // The sleep cycle counts it as succeeded because Promise.allSettled reports it as fulfilled
-      expect(result.extraction.succeeded).toBe(1);
-      expect(result.extraction.failed).toBe(0);
+      // runBackgroundExtraction returns { success: false } on HTTP errors,
+      // so the sleep cycle correctly counts it as failed via outcome.value.success
+      expect(result.extraction.succeeded).toBe(0);
+      expect(result.extraction.failed).toBe(1);
     });
 
     it("should respect batch size and delay", async () => {
@@ -2568,5 +2572,84 @@ describe("runSleepCycle", () => {
 
       expect(result.aborted).toBe(false);
     });
+  });
+});
+
+// ============================================================================
+// isTransientError()
+// ============================================================================
+
+describe("isTransientError", () => {
+  it("should return false for non-Error values", () => {
+    expect(isTransientError("string error")).toBe(false);
+    expect(isTransientError(42)).toBe(false);
+    expect(isTransientError(null)).toBe(false);
+    expect(isTransientError(undefined)).toBe(false);
+  });
+
+  it("should classify AbortError as transient", () => {
+    const err = new DOMException("signal aborted", "AbortError");
+    expect(isTransientError(err)).toBe(true);
+  });
+
+  it("should classify TimeoutError as transient", () => {
+    const err = new DOMException("signal timed out", "TimeoutError");
+    expect(isTransientError(err)).toBe(true);
+  });
+
+  it("should classify timeout messages as transient", () => {
+    expect(isTransientError(new Error("Request timeout after 30s"))).toBe(true);
+  });
+
+  it("should classify ECONNREFUSED as transient", () => {
+    expect(isTransientError(new Error("connect ECONNREFUSED 127.0.0.1:7687"))).toBe(true);
+  });
+
+  it("should classify ECONNRESET as transient", () => {
+    expect(isTransientError(new Error("read ECONNRESET"))).toBe(true);
+  });
+
+  it("should classify ETIMEDOUT as transient", () => {
+    expect(isTransientError(new Error("connect ETIMEDOUT 10.0.0.1:443"))).toBe(true);
+  });
+
+  it("should classify DNS failure (ENOTFOUND) as transient", () => {
+    expect(isTransientError(new Error("getaddrinfo ENOTFOUND api.openrouter.ai"))).toBe(true);
+  });
+
+  it("should classify HTTP 429 (rate limit) as transient", () => {
+    expect(isTransientError(new Error("OpenRouter API error 429: rate limited"))).toBe(true);
+  });
+
+  it("should classify HTTP 502 (bad gateway) as transient", () => {
+    expect(isTransientError(new Error("OpenRouter API error 502: bad gateway"))).toBe(true);
+  });
+
+  it("should classify HTTP 503 (service unavailable) as transient", () => {
+    expect(isTransientError(new Error("OpenRouter API error 503: service unavailable"))).toBe(true);
+  });
+
+  it("should classify HTTP 504 (gateway timeout) as transient", () => {
+    expect(isTransientError(new Error("OpenRouter API error 504: gateway timeout"))).toBe(true);
+  });
+
+  it("should classify network errors as transient", () => {
+    expect(isTransientError(new Error("network error"))).toBe(true);
+    expect(isTransientError(new Error("fetch failed"))).toBe(true);
+    expect(isTransientError(new Error("socket hang up"))).toBe(true);
+  });
+
+  it("should classify HTTP 500 as non-transient", () => {
+    expect(isTransientError(new Error("OpenRouter API error 500: internal server error"))).toBe(
+      false,
+    );
+  });
+
+  it("should classify JSON parse errors as non-transient", () => {
+    expect(isTransientError(new Error("Unexpected token < in JSON"))).toBe(false);
+  });
+
+  it("should classify generic errors as non-transient", () => {
+    expect(isTransientError(new Error("something went wrong"))).toBe(false);
   });
 });

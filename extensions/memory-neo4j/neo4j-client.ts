@@ -18,6 +18,10 @@ import type {
 } from "./schema.js";
 import { ALLOWED_RELATIONSHIP_TYPES, escapeLucene, validateRelationshipType } from "./schema.js";
 
+// SAFETY: This pattern is built from the hardcoded ALLOWED_RELATIONSHIP_TYPES constant,
+// not from user input. It's used in Cypher variable-length path patterns like
+// (e1)-[:WORKS_AT|LIVES_AT|...*1..N]-(e2). Since the source is a compile-time
+// constant, there is no injection risk.
 const RELATIONSHIP_TYPE_PATTERN = [...ALLOWED_RELATIONSHIP_TYPES].join("|");
 
 // ============================================================================
@@ -501,7 +505,7 @@ export class Neo4jMemoryClient {
           const FLOOR = 0.3; // Minimum normalized score for the lowest-ranked result
           return records.map((r) => ({
             ...r,
-            score: range > 0 ? FLOOR + ((1 - FLOOR) * (r.rawScore - minScore)) / range : 1.0, // All scores identical → all get 1.0
+            score: range > 0 ? FLOOR + ((1 - FLOOR) * (r.rawScore - minScore)) / range : 0.5, // Single result or identical scores → moderate 0.5 to avoid inflating weak matches
           }));
         } finally {
           await session.close();
@@ -609,7 +613,8 @@ export class Neo4jMemoryClient {
           }
 
           return Array.from(byId.values())
-            .toSorted((a, b) => b.score - a.score)
+            .slice()
+            .sort((a, b) => b.score - a.score)
             .slice(0, limit);
         } finally {
           await session.close();
@@ -624,31 +629,45 @@ export class Neo4jMemoryClient {
 
   /**
    * Find similar memories by vector similarity. Used for deduplication.
+   * When agentId is provided, results are post-filtered to that agent
+   * (HNSW indexes don't support pre-filtering, so we fetch extra candidates).
    */
   async findSimilar(
     embedding: number[],
     threshold: number = 0.95,
     limit: number = 1,
+    agentId?: string,
   ): Promise<Array<{ id: string; text: string; score: number }>> {
     await this.ensureInitialized();
     try {
       return await this.retryOnTransient(async () => {
         const session = this.driver!.session();
         try {
+          // Fetch extra candidates when filtering by agentId since HNSW
+          // doesn't support pre-filtering; post-filter and trim to limit.
+          const fetchLimit = agentId ? limit * 3 : limit;
+          const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
           const result = await session.run(
             `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
              YIELD node, score
-             WHERE score >= $threshold
+             WHERE score >= $threshold ${agentFilter}
              RETURN node.id AS id, node.text AS text, score AS similarity
              ORDER BY score DESC`,
-            { embedding, limit: neo4j.int(limit), threshold },
+            {
+              embedding,
+              limit: neo4j.int(fetchLimit),
+              threshold,
+              ...(agentId ? { agentId } : {}),
+            },
           );
 
-          return result.records.map((r) => ({
+          const results = result.records.map((r) => ({
             id: r.get("id") as string,
             text: r.get("text") as string,
             score: r.get("similarity") as number,
           }));
+          // Trim to requested limit after post-filtering
+          return agentId ? results.slice(0, limit) : results;
         } finally {
           await session.close();
         }
@@ -1056,7 +1075,7 @@ export class Neo4jMemoryClient {
                 coalesce(m.extractionRetries, 0) AS extractionRetries
          ORDER BY m.createdAt ASC
          LIMIT $limit`,
-        { limit: neo4j.int(limit), agentId },
+        { limit: neo4j.int(limit), ...(agentId ? { agentId } : {}) },
       );
       return result.records.map((r) => ({
         id: r.get("id") as string,
@@ -1082,7 +1101,7 @@ export class Neo4jMemoryClient {
         `MATCH (m:Memory)
          ${agentFilter}
          RETURN m.extractionStatus AS status, count(m) AS count`,
-        { agentId },
+        agentId ? { agentId } : {},
       );
       const counts: Record<string, number> = {
         pending: 0,
@@ -1193,50 +1212,63 @@ export class Neo4jMemoryClient {
       return a < b ? `${a}:${b}` : `${b}:${a}`;
     };
 
+    // Process vector queries in concurrent batches to avoid overwhelming Neo4j
+    // while still being much faster than fully sequential execution.
+    const DEDUP_CONCURRENCY = 8;
     let pairsFound = 0;
-    for (const id of memoryData.keys()) {
-      // Retry individual vector queries on transient errors (each uses a fresh session)
-      const similar = await this.retryOnTransient(async () => {
-        const session = this.driver!.session();
-        try {
-          return await session.run(
-            `MATCH (src:Memory {id: $id})
-             CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
-             YIELD node, score
-             WHERE node.id <> $id AND score >= $threshold
-             RETURN node.id AS matchId, score`,
-            { id, k: neo4j.int(10), threshold },
-          );
-        } finally {
-          await session.close();
-        }
-      });
+    const allIds = [...memoryData.keys()];
 
-      for (const r of similar.records) {
-        const matchId = r.get("matchId") as string;
-        if (memoryData.has(matchId)) {
-          union(id, matchId);
-          pairsFound++;
-
-          // Capture similarity score if requested
-          if (pairwiseSimilarities) {
-            const score = r.get("score") as number;
-            const pairKey = makePairKey(id, matchId);
-            // Keep the highest score if we see this pair multiple times
-            const existing = pairwiseSimilarities.get(pairKey);
-            if (existing === undefined || score > existing) {
-              pairwiseSimilarities.set(pairKey, score);
-            }
-          }
-        }
-      }
-
-      // Early exit if we've found many pairs (safety bound)
+    for (let batchStart = 0; batchStart < allIds.length; batchStart += DEDUP_CONCURRENCY) {
       if (pairsFound > 500) {
         this.logger.warn(
           `memory-neo4j: findDuplicateClusters hit safety bound (500 pairs) — some duplicates may not be detected. Consider running with a higher threshold.`,
         );
         break;
+      }
+
+      const batch = allIds.slice(batchStart, batchStart + DEDUP_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map((id) =>
+          this.retryOnTransient(async () => {
+            const session = this.driver!.session();
+            try {
+              return await session.run(
+                `MATCH (src:Memory {id: $id})
+                 CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
+                 YIELD node, score
+                 WHERE node.id <> $id AND score >= $threshold
+                 RETURN node.id AS matchId, score`,
+                { id, k: neo4j.int(10), threshold },
+              );
+            } finally {
+              await session.close();
+            }
+          }),
+        ),
+      );
+
+      for (let idx = 0; idx < batch.length; idx++) {
+        const id = batch[idx];
+        const similar = results[idx];
+
+        for (const r of similar.records) {
+          const matchId = r.get("matchId") as string;
+          if (memoryData.has(matchId)) {
+            union(id, matchId);
+            pairsFound++;
+
+            // Capture similarity score if requested
+            if (pairwiseSimilarities) {
+              const score = r.get("score") as number;
+              const pairKey = makePairKey(id, matchId);
+              // Keep the highest score if we see this pair multiple times
+              const existing = pairwiseSimilarities.get(pairKey);
+              if (existing === undefined || score > existing) {
+                pairwiseSimilarities.set(pairKey, score);
+              }
+            }
+          }
+        }
       }
     }
 
@@ -1490,25 +1522,27 @@ export class Neo4jMemoryClient {
     }
 
     await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      // Atomic: decrement mentionCount and delete in a single Cypher statement
-      // to prevent inconsistent state if a crash occurs between operations
-      const result = await session.run(
-        `UNWIND $ids AS memId
-         MATCH (m:Memory {id: memId})
-         OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
-         SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END
-         WITH m, count(e) AS _
-         DETACH DELETE m
-         RETURN count(*) AS deleted`,
-        { ids: memoryIds },
-      );
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        // Atomic: decrement mentionCount and delete in a single Cypher statement
+        // to prevent inconsistent state if a crash occurs between operations
+        const result = await session.run(
+          `UNWIND $ids AS memId
+           MATCH (m:Memory {id: memId})
+           OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+           SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END
+           WITH m, count(e) AS _
+           DETACH DELETE m
+           RETURN count(*) AS deleted`,
+          { ids: memoryIds },
+        );
 
-      return (result.records[0]?.get("deleted") as number) ?? 0;
-    } finally {
-      await session.close();
-    }
+        return (result.records[0]?.get("deleted") as number) ?? 0;
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -1766,7 +1800,7 @@ export class Neo4jMemoryClient {
     }
 
     // Scores should already be sorted descending, but ensure it
-    const sorted = scores.toSorted((a, b) => b.effectiveScore - a.effectiveScore);
+    const sorted = [...scores].sort((a, b) => b.effectiveScore - a.effectiveScore);
 
     // Find the index at the percentile boundary
     // For top 20%, we want the score at index = 20% of total
@@ -1888,18 +1922,25 @@ export class Neo4jMemoryClient {
       const batch = memories.slice(i, i + batchSize);
       const vectors = await embedFn(batch.map((m) => m.text));
 
-      const session = this.driver!.session();
-      try {
-        for (let j = 0; j < batch.length; j++) {
-          if (vectors[j] && vectors[j].length > 0) {
-            await session.run("MATCH (m:Memory {id: $id}) SET m.embedding = $embedding", {
-              id: batch[j].id,
-              embedding: vectors[j],
-            });
-          }
+      // Build items array for batch UNWIND update
+      const items: Array<{ id: string; embedding: number[] }> = [];
+      for (let j = 0; j < batch.length; j++) {
+        if (vectors[j] && vectors[j].length > 0) {
+          items.push({ id: batch[j].id, embedding: vectors[j] });
         }
-      } finally {
-        await session.close();
+      }
+      if (items.length > 0) {
+        const session = this.driver!.session();
+        try {
+          await session.run(
+            `UNWIND $items AS item
+             MATCH (m:Memory {id: item.id})
+             SET m.embedding = item.embedding`,
+            { items },
+          );
+        } finally {
+          await session.close();
+        }
       }
       progress("memories", Math.min(i + batchSize, memories.length), memories.length);
     }

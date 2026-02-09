@@ -247,9 +247,9 @@ export const memoryNeo4jConfigSchema = {
     // Support both 'user' and 'username' for neo4j config
     const neo4jUsername =
       typeof neo4jRaw.user === "string"
-        ? neo4jRaw.user
+        ? resolveEnvVars(neo4jRaw.user)
         : typeof neo4jRaw.username === "string"
-          ? neo4jRaw.username
+          ? resolveEnvVars(neo4jRaw.username)
           : "neo4j";
 
     // Parse embedding section (optional for ollama without apiKey)

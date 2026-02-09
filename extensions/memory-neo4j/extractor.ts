@@ -217,13 +217,20 @@ async function callOpenRouterStream(
 // Entity Extraction
 // ============================================================================
 
-/** Max retries for transient extraction failures before marking permanently failed */
+/**
+ * Max retries for transient extraction failures before marking permanently failed.
+ *
+ * Retry budget accounting — two layers of retry:
+ *   Layer 1: callOpenRouter/callOpenRouterStream internal retries (config.maxRetries, default 2 = 3 attempts)
+ *   Layer 2: Sleep cycle retries (MAX_EXTRACTION_RETRIES = 3 sleep cycles)
+ *   Total worst-case: 3 × 3 = 9 LLM attempts per memory
+ */
 const MAX_EXTRACTION_RETRIES = 3;
 
 /**
  * Check if an error is transient (network/timeout) vs permanent (JSON parse, etc.)
  */
-function isTransientError(err: unknown): boolean {
+export function isTransientError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
@@ -234,6 +241,7 @@ function isTransientError(err: unknown): boolean {
     msg.includes("timeout") ||
     msg.includes("econnrefused") ||
     msg.includes("econnreset") ||
+    msg.includes("etimedout") ||
     msg.includes("enotfound") ||
     msg.includes("network") ||
     msg.includes("fetch failed") ||
@@ -434,10 +442,10 @@ export async function runBackgroundExtraction(
   logger: Logger,
   currentRetries: number = 0,
   abortSignal?: AbortSignal,
-): Promise<void> {
+): Promise<{ success: boolean; memoryId: string }> {
   if (!config.enabled) {
     await db.updateExtractionStatus(memoryId, "skipped").catch(() => {});
-    return;
+    return { success: true, memoryId };
   }
 
   try {
@@ -463,7 +471,7 @@ export async function runBackgroundExtraction(
         // Permanent failure (JSON parse, empty response, etc.)
         await db.updateExtractionStatus(memoryId, "failed");
       }
-      return;
+      return { success: false, memoryId };
     }
 
     // Empty extraction is valid — not all memories have extractable entities
@@ -473,7 +481,7 @@ export async function runBackgroundExtraction(
       result.tags.length === 0
     ) {
       await db.updateExtractionStatus(memoryId, "complete");
-      return;
+      return { success: true, memoryId };
     }
 
     // Batch all entity operations into a single transaction:
@@ -497,6 +505,7 @@ export async function runBackgroundExtraction(
         `${result.entities.length} entities, ${result.relationships.length} rels, ${result.tags.length} tags` +
         (result.category ? `, category=${result.category}` : ""),
     );
+    return { success: true, memoryId };
   } catch (err) {
     // Unexpected error during graph operations — treat as transient if retry budget remains
     const isTransient = isTransientError(err);
@@ -513,6 +522,7 @@ export async function runBackgroundExtraction(
         .updateExtractionStatus(memoryId, "failed", { incrementRetries: true })
         .catch(() => {});
     }
+    return { success: false, memoryId };
   }
 }
 
@@ -1058,7 +1068,7 @@ export async function runSleepCycle(
 
             for (const outcome of outcomes) {
               result.extraction.processed++;
-              if (outcome.status === "fulfilled") {
+              if (outcome.status === "fulfilled" && outcome.value.success) {
                 result.extraction.succeeded++;
               } else {
                 result.extraction.failed++;
