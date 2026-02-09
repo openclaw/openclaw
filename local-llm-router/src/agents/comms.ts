@@ -6,6 +6,7 @@
 import type { Task } from "../types.js";
 import { BaseAgent, type AgentResult } from "./base-agent.js";
 import { fetchEmails, searchEmails, sendEmail } from "../tools/email.js";
+import { sanitiseUntrustedInput } from "../security/guards.js";
 
 export class CommsAgent extends BaseAgent {
   async execute(task: Task): Promise<AgentResult> {
@@ -120,16 +121,32 @@ export class CommsAgent extends BaseAgent {
       const emails = await searchEmails(imapConfig, searchQuery.trim(), { limit: 5 });
       emailSummary = emails.length === 0
         ? "No emails found matching your search."
-        : emails.map((e) =>
-            `- From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}${e.isRead ? "" : " [UNREAD]"}`
-          ).join("\n");
+        : emails.map((e) => {
+            const { sanitised, flagged } = sanitiseUntrustedInput(
+              `From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}`,
+              `email:${e.from}`,
+              "untrusted",
+            );
+            if (flagged) {
+              return `- [FLAGGED INJECTION ATTEMPT] From: ${e.from} | Subject: ${e.subject}`;
+            }
+            return `- ${sanitised}${e.isRead ? "" : " [UNREAD]"}`;
+          }).join("\n");
     } else {
       const emails = await fetchEmails(imapConfig, { limit: 10, unseen: true });
       emailSummary = emails.length === 0
         ? "No unread emails."
-        : emails.map((e) =>
-            `- From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}`
-          ).join("\n");
+        : emails.map((e) => {
+            const { sanitised, flagged } = sanitiseUntrustedInput(
+              `From: ${e.from} | Subject: ${e.subject} | Date: ${e.date}`,
+              `email:${e.from}`,
+              "untrusted",
+            );
+            if (flagged) {
+              return `- [FLAGGED INJECTION ATTEMPT] From: ${e.from} | Subject: ${e.subject}`;
+            }
+            return `- ${sanitised}`;
+          }).join("\n");
     }
 
     const summaryPrompt = [

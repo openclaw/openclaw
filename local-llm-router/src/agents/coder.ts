@@ -6,6 +6,7 @@
 import type { Task } from "../types.js";
 import { BaseAgent, type AgentResult } from "./base-agent.js";
 import { execShell, requiresApproval as shellRequiresApproval } from "../tools/shell.js";
+import { checkShellSafety } from "../security/guards.js";
 
 export class CoderAgent extends BaseAgent {
   async execute(task: Task): Promise<AgentResult> {
@@ -51,6 +52,19 @@ export class CoderAgent extends BaseAgent {
 
       for (const block of bashBlocks) {
         const command = block[1].trim();
+
+        // Security: check for dangerous patterns in model-generated commands
+        const safetyCheck = checkShellSafety(command);
+        if (safetyCheck) {
+          outputs.push(`\n> \`${command}\` — BLOCKED: ${safetyCheck}`);
+          await this.audit({
+            action: "shell_blocked",
+            tool: "shell",
+            input: { command },
+            error: safetyCheck,
+          });
+          continue;
+        }
 
         if (shellRequiresApproval(command)) {
           outputs.push(`\n> \`${command}\` — skipped (requires approval)`);

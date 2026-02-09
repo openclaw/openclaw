@@ -16,6 +16,7 @@ import {
 } from "../router/model-selection.js";
 import { runWithModelFallback } from "../router/model-fallback.js";
 import { filterSkillsForAgent, formatSkillsForPrompt, type Skill } from "../shared/skill-loader.js";
+import { guardOutput } from "../security/guards.js";
 
 export interface AgentDeps {
   auditLog: AuditLog;
@@ -200,7 +201,24 @@ export abstract class BaseAgent {
         input: { taskId: task.id, intent: task.classification.intent },
       });
 
-      const output = await fn();
+      const rawOutput = await fn();
+
+      // Guard: check for leaked secrets in output
+      const { safe, redacted, secretsFound } = guardOutput(rawOutput);
+      const output = redacted;
+
+      if (!safe) {
+        await this.audit({
+          action: "output_redacted",
+          output: `Redacted ${secretsFound} secret(s) from response`,
+        });
+        await this.captureError({
+          type: "tool_failure",
+          model: task.route.model,
+          task: task.input,
+          context: { secretsFound, intent: task.classification.intent },
+        });
+      }
 
       const durationMs = Date.now() - start;
       await this.audit({

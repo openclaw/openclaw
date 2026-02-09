@@ -89,11 +89,20 @@ export async function execShell(
   const timeout = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const start = Date.now();
 
+  // Build a sanitised env — strip secrets from child process environment
+  const sanitisedEnv: Record<string, string> = {};
+  const SECRET_ENV_PATTERNS = /KEY|SECRET|TOKEN|PASS|PASSWORD|CREDENTIAL/i;
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (SECRET_ENV_PATTERNS.test(key)) continue; // Strip secrets from child env
+    sanitisedEnv[key] = value;
+  }
+
   const options: ExecFileOptions = {
     cwd: opts?.cwd,
     timeout,
     maxBuffer: MAX_OUTPUT_CHARS * 2,
-    env: { ...process.env, ...opts?.env },
+    env: { ...sanitisedEnv, ...opts?.env },
     shell: true,
   };
 

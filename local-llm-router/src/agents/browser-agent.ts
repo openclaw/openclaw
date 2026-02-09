@@ -8,6 +8,7 @@ import type { Task } from "../types.js";
 import { BaseAgent, type AgentResult } from "./base-agent.js";
 import { search, type SearchResponse } from "../tools/search.js";
 import * as browser from "../tools/browser.js";
+import { sanitiseUntrustedInput } from "../security/guards.js";
 
 export class BrowserAgent extends BaseAgent {
   async execute(task: Task): Promise<AgentResult> {
@@ -95,10 +96,13 @@ export class BrowserAgent extends BaseAgent {
       const text = await browser.extractText(page);
       const truncated = text.slice(0, 10_000);
 
+      // Sanitise web content before feeding to LLM
+      const { sanitised, flagged, flags } = sanitiseUntrustedInput(truncated, `web:${url}`, "untrusted");
+
       await this.audit({
         action: "web_scrape",
         tool: "browser",
-        input: { url },
+        input: { url, injectionFlagged: flagged, injectionFlags: flags },
         output: `Extracted ${text.length} chars`,
       });
 
@@ -109,7 +113,7 @@ export class BrowserAgent extends BaseAgent {
         `URL: ${url}`,
         "",
         "Page content:",
-        truncated,
+        sanitised,
       ].join("\n");
 
       return this.callModel(task, synthesisPrompt, { maxTokens: 4096 });
@@ -195,7 +199,8 @@ export class BrowserAgent extends BaseAgent {
       try {
         const results = await search(query.trim(), { maxResults: 5 });
         for (const r of results.results.slice(0, 2)) {
-          allResults.push(`### ${r.title}\nURL: ${r.url}\n${r.snippet}`);
+          const { sanitised } = sanitiseUntrustedInput(r.snippet, `search:${r.url}`, "untrusted");
+          allResults.push(`### ${r.title}\nURL: ${r.url}\n${sanitised}`);
         }
       } catch {
         // Search failed for this query, continue

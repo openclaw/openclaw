@@ -9,6 +9,7 @@ import type { Context as GrammyContext } from "grammy";
 import fs from "node:fs/promises";
 import type { Router } from "../router/index.js";
 import type { ApprovalLevel, Task } from "../types.js";
+import { checkRateLimit } from "../security/guards.js";
 
 // ---------------------------------------------------------------------------
 // Approval queue — pending tasks awaiting user confirmation
@@ -39,9 +40,17 @@ export function createTelegramBot(config: TelegramChannelConfig): Bot {
   bot.use(async (ctx, next) => {
     const userId = ctx.from?.id;
     if (!userId || !config.allowedUsers.includes(userId)) {
+      console.warn(`[telegram] Unauthorised access attempt from user ${userId}`);
       await ctx.reply("Unauthorised.");
       return;
     }
+
+    // Rate limit: max 30 messages per minute per user
+    if (!checkRateLimit(`telegram:${userId}`, 30, 60_000)) {
+      await ctx.reply("Rate limited. Please wait a moment.");
+      return;
+    }
+
     await next();
   });
 
