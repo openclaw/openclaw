@@ -44,6 +44,22 @@
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
     },
+    "autoRecallMinScore": {
+      "label": "Auto-Recall Min Score",
+      "help": "Minimum similarity score (0-1) for auto-recall results (default: 0.25)"
+    },
+    "coreMemory.enabled": {
+      "label": "Core Memory",
+      "help": "Enable core memory bootstrap (top memories auto-loaded into context)"
+    },
+    "coreMemory.maxEntries": {
+      "label": "Core Memory Max Entries",
+      "help": "Maximum number of core memories to load per session (default: 50)"
+    },
+    "coreMemory.refreshAtContextPercent": {
+      "label": "Core Memory Refresh %",
+      "help": "Re-inject core memories when context usage reaches this percentage (1-100, optional)"
+    },
     "extraction.apiKey": {
       "label": "Extraction API Key",
       "sensitive": true,
@@ -108,6 +124,29 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "autoRecallMinScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      "coreMemory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "maxEntries": {
+            "type": "number",
+            "minimum": 1
+          },
+          "refreshAtContextPercent": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
       },
       "extraction": {
         "type": "object",

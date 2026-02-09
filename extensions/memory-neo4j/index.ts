@@ -31,6 +31,7 @@ import {
   extractAssistantMessages,
   stripMessageWrappers,
   runSleepCycle,
+  isSemanticDuplicate,
   rateImportance,
 } from "./extractor.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
@@ -245,7 +246,8 @@ const memoryNeo4jPlugin = {
 
     // memory_forget — Delete with cascade
     api.registerTool(
-      (_ctx) => {
+      (ctx) => {
+        const agentId = ctx.agentId || "default";
         return {
           name: "memory_forget",
           label: "Memory Forget",
@@ -262,7 +264,7 @@ const memoryNeo4jPlugin = {
 
             // Direct delete by ID
             if (memoryId) {
-              const deleted = await db.deleteMemory(memoryId);
+              const deleted = await db.deleteMemory(memoryId, agentId);
               if (!deleted) {
                 return {
                   content: [
@@ -288,7 +290,7 @@ const memoryNeo4jPlugin = {
             // Search-based delete
             if (query) {
               const vector = await embeddings.embed(query);
-              const results = await db.vectorSearch(vector, 5, 0.7);
+              const results = await db.vectorSearch(vector, 5, 0.7, agentId);
 
               if (results.length === 0) {
                 return {
@@ -299,7 +301,7 @@ const memoryNeo4jPlugin = {
 
               // Auto-delete if single high-confidence match
               if (results.length === 1 && results[0].score > 0.9) {
-                await db.deleteMemory(results[0].id);
+                await db.deleteMemory(results[0].id, agentId);
                 return {
                   content: [
                     {
@@ -517,7 +519,10 @@ const memoryNeo4jPlugin = {
               console.log("═════════════════════════════════════════════════════════════");
               console.log("Seven-phase memory consolidation (Pareto-based):\n");
               console.log("  Phase 1:  Deduplication    — Merge near-duplicate memories");
-              console.log("  Phase 1b: Conflict Detection — Resolve contradictory memories");
+              console.log(
+                "  Phase 1b: Semantic Dedup   — LLM-based paraphrase detection (0.75–0.95 band)",
+              );
+              console.log("  Phase 1c: Conflict Detection — Resolve contradictory memories");
               console.log(
                 "  Phase 2:  Pareto Scoring   — Calculate effective scores for all memories",
               );
@@ -593,7 +598,8 @@ const memoryNeo4jPlugin = {
                   onPhaseStart: (phase) => {
                     const phaseNames: Record<string, string> = {
                       dedup: "Phase 1: Deduplication",
-                      conflict: "Phase 1b: Conflict Detection",
+                      semanticDedup: "Phase 1b: Semantic Deduplication",
+                      conflict: "Phase 1c: Conflict Detection",
                       pareto: "Phase 2: Pareto Scoring",
                       promotion: "Phase 3: Core Promotion",
                       demotion: "Phase 4: Core Demotion",
@@ -617,6 +623,9 @@ const memoryNeo4jPlugin = {
                 );
                 console.log(
                   `   Conflicts:      ${result.conflict.pairsFound} pairs, ${result.conflict.resolved} resolved, ${result.conflict.invalidated} invalidated`,
+                );
+                console.log(
+                  `   Semantic Dedup: ${result.semanticDedup.pairsChecked} pairs checked, ${result.semanticDedup.duplicatesMerged} merged`,
                 );
                 console.log(
                   `   Pareto:         ${result.pareto.totalMemories} total (${result.pareto.coreMemories} core, ${result.pareto.regularMemories} regular)`,
@@ -1114,17 +1123,44 @@ const memoryNeo4jPlugin = {
           const userMessages = extractUserMessages(event.messages);
           const retained = userMessages.filter((text) => passesAttentionGate(text));
 
+          let semanticDeduped = 0;
           for (const text of retained) {
             try {
               const vector = await embeddings.embed(text);
 
-              // Quick dedup (same content already stored)
+              // Quick dedup (same content already stored — cosine ≥ 0.95)
               const existing = await db.findSimilar(vector, 0.95, 1);
               if (existing.length > 0) {
                 continue;
               }
 
+              // Importance rating — moved before semantic dedup to avoid expensive LLM calls on low-value memories
               const importance = await rateImportance(text, extractionConfig);
+
+              // Skip low-importance memories (not worth the semantic dedup cost)
+              if (importance < 0.3) {
+                continue;
+              }
+
+              // Semantic dedup: check moderate-similarity memories (0.75–0.95)
+              // with LLM to catch paraphrases and reformulations
+              const candidates = await db.findSimilar(vector, 0.75, 3);
+              if (candidates.length > 0) {
+                let isDuplicate = false;
+                for (const candidate of candidates) {
+                  if (await isSemanticDuplicate(text, candidate.text, extractionConfig)) {
+                    api.logger.debug?.(
+                      `memory-neo4j: semantic dedup — skipped "${text.slice(0, 60)}..." (duplicate of "${candidate.text.slice(0, 60)}...")`,
+                    );
+                    isDuplicate = true;
+                    semanticDeduped++;
+                    break;
+                  }
+                }
+                if (isDuplicate) {
+                  continue;
+                }
+              }
 
               await db.storeMemory({
                 id: randomUUID(),
@@ -1165,11 +1201,30 @@ const memoryNeo4jPlugin = {
                 continue;
               }
 
+              // Semantic dedup for assistant messages too
+              const candidates = await db.findSimilar(vector, 0.75, 3);
+              if (candidates.length > 0) {
+                let isDuplicate = false;
+                for (const candidate of candidates) {
+                  if (await isSemanticDuplicate(text, candidate.text, extractionConfig)) {
+                    api.logger.debug?.(
+                      `memory-neo4j: semantic dedup (assistant) — skipped "${text.slice(0, 60)}..."`,
+                    );
+                    isDuplicate = true;
+                    semanticDeduped++;
+                    break;
+                  }
+                }
+                if (isDuplicate) {
+                  continue;
+                }
+              }
+
               await db.storeMemory({
                 id: randomUUID(),
                 text,
                 embedding: vector,
-                importance: Math.min(importance, 0.4), // cap assistant importance slightly lower
+                importance: importance * 0.75, // discount assistant importance proportionally
                 category: "other",
                 source: "auto-capture-assistant",
                 extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
@@ -1184,8 +1239,10 @@ const memoryNeo4jPlugin = {
             }
           }
 
-          if (stored > 0) {
-            api.logger.info(`memory-neo4j: auto-captured ${stored} memories (attention-gated)`);
+          if (stored > 0 || semanticDeduped > 0) {
+            api.logger.info(
+              `memory-neo4j: auto-captured ${stored} memories (attention-gated)${semanticDeduped > 0 ? `, ${semanticDeduped} semantic dupes skipped` : ""}`,
+            );
           } else if (userMessages.length > 0 || assistantMessages.length > 0) {
             api.logger.info(
               `memory-neo4j: auto-capture ran (0 stored, ${userMessages.length} user msgs, ${retained.length} passed gate, ${assistantMessages.length} assistant msgs, ${retainedAssistant.length} passed gate)`,

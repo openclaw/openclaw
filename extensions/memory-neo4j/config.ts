@@ -83,11 +83,15 @@ export function vectorDimsForModel(model: string): number {
   if (EMBEDDING_DIMENSIONS[model]) {
     return EMBEDDING_DIMENSIONS[model];
   }
-  // Check prefix match (for versioned models like mxbai-embed-large:latest)
+  // Prefer longest matching prefix (e.g. "mxbai-embed-large-2k" over "mxbai-embed-large")
+  let best: { dims: number; keyLen: number } | undefined;
   for (const [known, dims] of Object.entries(EMBEDDING_DIMENSIONS)) {
-    if (model.startsWith(known)) {
-      return dims;
+    if (model.startsWith(known) && (!best || known.length > best.keyLen)) {
+      best = { dims, keyLen: known.length };
     }
+  }
+  if (best) {
+    return best.dims;
   }
   // Return default for unknown models — callers should warn when this path is taken,
   // as the default 1024 dimensions may not match the actual model's output.

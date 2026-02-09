@@ -30,10 +30,9 @@ type Logger = {
 // Extraction Prompt
 // ============================================================================
 
-const ENTITY_EXTRACTION_PROMPT = `You are an entity extraction system for a personal memory store.
-Extract entities and relationships from this memory text, and classify the memory.
-
-Memory: "{text}"
+// System instruction (no user data) — user message contains the memory text
+const ENTITY_EXTRACTION_SYSTEM = `You are an entity extraction system for a personal memory store.
+Extract entities and relationships from the memory text provided by the user, and classify the memory.
 
 Return JSON:
 {
@@ -66,7 +65,12 @@ Rules:
 // Timeout for LLM and embedding fetch calls to prevent hanging indefinitely
 const FETCH_TIMEOUT_MS = 30_000;
 
-async function callOpenRouter(config: ExtractionConfig, prompt: string): Promise<string | null> {
+async function callOpenRouter(
+  config: ExtractionConfig,
+  prompt: string | Array<{ role: string; content: string }>,
+): Promise<string | null> {
+  const messages = typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt;
+
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     try {
       const response = await fetch(`${config.baseUrl}/chat/completions`, {
@@ -77,7 +81,7 @@ async function callOpenRouter(config: ExtractionConfig, prompt: string): Promise
         },
         body: JSON.stringify({
           model: config.model,
-          messages: [{ role: "user", content: prompt }],
+          messages,
           temperature: config.temperature,
           response_format: { type: "json_object" },
         }),
@@ -152,11 +156,15 @@ export async function extractEntities(
     return { result: null, transientFailure: false };
   }
 
-  const prompt = ENTITY_EXTRACTION_PROMPT.replace("{text}", text);
+  // System/user separation prevents memory text from being interpreted as instructions
+  const messages = [
+    { role: "system", content: ENTITY_EXTRACTION_SYSTEM },
+    { role: "user", content: text },
+  ];
 
   let content: string | null;
   try {
-    content = await callOpenRouter(config, prompt);
+    content = await callOpenRouter(config, messages);
   } catch (err) {
     // Network/timeout errors are transient — caller should retry
     return { result: null, transientFailure: isTransientError(err) };
@@ -259,36 +267,19 @@ export async function resolveConflict(
 ): Promise<"a" | "b" | "both" | "skip"> {
   if (!config.enabled) return "skip";
 
-  const prompt = `Two memories may conflict with each other. Determine which should be kept.
-
-Memory A: "${memA}"
-Memory B: "${memB}"
+  try {
+    const content = await callOpenRouter(config, [
+      {
+        role: "system",
+        content: `Two memories may conflict with each other. Determine which should be kept.
 
 If they genuinely contradict each other, keep the one that is more current, specific, or accurate.
 If they don't actually conflict (they cover different aspects or are both valid), keep both.
 
-Return JSON: {"keep": "a"|"b"|"both", "reason": "brief explanation"}`;
-
-  try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
+Return JSON: {"keep": "a"|"b"|"both", "reason": "brief explanation"}`,
       },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.0,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!response.ok) return "skip";
-
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = data.choices?.[0]?.message?.content;
+      { role: "user", content: `Memory A: "${memA}"\nMemory B: "${memB}"` },
+    ]);
     if (!content) return "skip";
 
     const parsed = JSON.parse(content) as { keep?: string };
@@ -457,6 +448,11 @@ export type SleepCycleResult = {
     resolved: number;
     invalidated: number;
   };
+  // Phase 1c: Semantic Deduplication
+  semanticDedup: {
+    pairsChecked: number;
+    duplicatesMerged: number;
+  };
   // Phase 2: Pareto Scoring & Threshold
   pareto: {
     totalMemories: number;
@@ -474,11 +470,11 @@ export type SleepCycleResult = {
     candidatesFound: number;
     demoted: number;
   };
-  // Phase 5: Decay & Pruning
+  // Phase 6: Decay & Pruning
   decay: {
     memoriesPruned: number;
   };
-  // Phase 6: Entity Extraction
+  // Phase 5: Entity Extraction
   extraction: {
     total: number;
     processed: number;
@@ -507,20 +503,21 @@ export type SleepCycleOptions = {
   paretoPercentile?: number; // Top N% for core (default: 0.2 = top 20%)
   promotionMinAgeDays?: number; // Min age before promotion (default: 7)
 
-  // Phase 5: Decay
+  // Phase 5: Extraction
+  extractionBatchSize?: number; // Memories per batch (default: 50)
+  extractionDelayMs?: number; // Delay between batches (default: 1000)
+
+  // Phase 6: Decay
   decayRetentionThreshold?: number; // Below this, memory is pruned (default: 0.1)
   decayBaseHalfLifeDays?: number; // Base half-life in days (default: 30)
   decayImportanceMultiplier?: number; // How much importance extends half-life (default: 2)
-
-  // Phase 6: Extraction
-  extractionBatchSize?: number; // Memories per batch (default: 50)
-  extractionDelayMs?: number; // Delay between batches (default: 1000)
 
   // Progress callback
   onPhaseStart?: (
     phase:
       | "dedup"
       | "conflict"
+      | "semanticDedup"
       | "pareto"
       | "promotion"
       | "demotion"
@@ -592,6 +589,7 @@ export async function runSleepCycle(
   const result: SleepCycleResult = {
     dedup: { clustersFound: 0, memoriesMerged: 0 },
     conflict: { pairsFound: 0, resolved: 0, invalidated: 0 },
+    semanticDedup: { pairsChecked: 0, duplicatesMerged: 0 },
     pareto: { totalMemories: 0, coreMemories: 0, regularMemories: 0, threshold: 0 },
     promotion: { candidatesFound: 0, promoted: 0 },
     demotion: { candidatesFound: 0, demoted: 0 },
@@ -602,32 +600,150 @@ export async function runSleepCycle(
     aborted: false,
   };
 
+  const LLM_CONCURRENCY = 8;
+
   // --------------------------------------------------------------------------
-  // Phase 1: Deduplication
+  // Phase 1: Deduplication (Optimized - combined vector + semantic dedup)
+  // Call findDuplicateClusters ONCE at 0.75 threshold, then split by similarity band:
+  // - ≥0.95: vector merge (high-confidence duplicates)
+  // - 0.75-0.95: semantic dedup via LLM (paraphrases)
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted) {
     onPhaseStart?.("dedup");
-    logger.info("memory-neo4j: [sleep] Phase 1: Deduplication");
+    logger.info("memory-neo4j: [sleep] Phase 1: Deduplication (vector + semantic)");
 
     try {
-      const clusters = await db.findDuplicateClusters(dedupThreshold, agentId);
-      result.dedup.clustersFound = clusters.length;
+      // Fetch clusters at 0.75 threshold with similarity scores
+      const allClusters = await db.findDuplicateClusters(0.75, agentId, true);
 
-      for (const cluster of clusters) {
-        if (abortSignal?.aborted) {
-          break;
+      // Helper to create canonical pair key (sorted)
+      const makePairKey = (a: string, b: string): string => {
+        return a < b ? `${a}:${b}` : `${b}:${a}`;
+      };
+
+      // Separate clusters into high-similarity (≥0.95) and medium-similarity (0.75-0.95)
+      const highSimClusters: typeof allClusters = [];
+      const mediumSimClusters: typeof allClusters = [];
+
+      for (const cluster of allClusters) {
+        if (abortSignal?.aborted) break;
+        if (!cluster.similarities || cluster.memoryIds.length < 2) continue;
+
+        // Check if ANY pair in this cluster has similarity ≥ dedupThreshold
+        let hasHighSim = false;
+        for (const [pairKey, score] of cluster.similarities.entries()) {
+          if (score >= dedupThreshold) {
+            hasHighSim = true;
+            break;
+          }
         }
+
+        if (hasHighSim) {
+          // Split this cluster into high-sim and medium-sim sub-clusters
+          // For simplicity, if a cluster has ANY high-sim pair, treat the whole cluster as high-sim
+          // (This matches the old behavior where Phase 1 would merge them all)
+          highSimClusters.push(cluster);
+        } else {
+          mediumSimClusters.push(cluster);
+        }
+      }
+
+      // Part 1a: Vector merge for high-similarity clusters (≥0.95)
+      result.dedup.clustersFound = highSimClusters.length;
+
+      for (const cluster of highSimClusters) {
+        if (abortSignal?.aborted) break;
 
         const { deletedCount } = await db.mergeMemoryCluster(
           cluster.memoryIds,
           cluster.importances,
         );
         result.dedup.memoriesMerged += deletedCount;
-        onProgress?.("dedup", `Merged cluster of ${cluster.memoryIds.length} → 1`);
+        onProgress?.("dedup", `Merged cluster of ${cluster.memoryIds.length} → 1 (vector)`);
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 1 complete — ${result.dedup.clustersFound} clusters, ${result.dedup.memoriesMerged} merged`,
+        `memory-neo4j: [sleep] Phase 1a (vector) complete — ${result.dedup.clustersFound} clusters, ${result.dedup.memoriesMerged} merged`,
+      );
+
+      // Part 1b: Semantic dedup for medium-similarity clusters (0.75-0.95)
+      onPhaseStart?.("semanticDedup");
+      logger.info("memory-neo4j: [sleep] Phase 1b: Semantic Deduplication (0.75-0.95 band)");
+
+      // Collect all candidate pairs upfront
+      type DedupPair = {
+        textA: string;
+        textB: string;
+        idA: string;
+        idB: string;
+        importanceA: number;
+        importanceB: number;
+      };
+      const allPairs: DedupPair[] = [];
+
+      for (const cluster of mediumSimClusters) {
+        if (cluster.memoryIds.length < 2) continue;
+        for (let i = 0; i < cluster.memoryIds.length - 1; i++) {
+          for (let j = i + 1; j < cluster.memoryIds.length; j++) {
+            allPairs.push({
+              textA: cluster.texts[i],
+              textB: cluster.texts[j],
+              idA: cluster.memoryIds[i],
+              idB: cluster.memoryIds[j],
+              importanceA: cluster.importances[i],
+              importanceB: cluster.importances[j],
+            });
+          }
+        }
+      }
+
+      // Process pairs in concurrent batches
+      const invalidatedIds = new Set<string>();
+
+      for (let i = 0; i < allPairs.length && !abortSignal?.aborted; i += LLM_CONCURRENCY) {
+        const batch = allPairs.slice(i, i + LLM_CONCURRENCY);
+
+        // Filter out pairs where one side was already invalidated
+        const activeBatch = batch.filter(
+          (p) => !invalidatedIds.has(p.idA) && !invalidatedIds.has(p.idB),
+        );
+
+        if (activeBatch.length === 0) continue;
+
+        const outcomes = await Promise.allSettled(
+          activeBatch.map((p) => isSemanticDuplicate(p.textA, p.textB, config)),
+        );
+
+        for (let k = 0; k < outcomes.length; k++) {
+          const pair = activeBatch[k];
+          result.semanticDedup.pairsChecked++;
+
+          if (
+            outcomes[k].status === "fulfilled" &&
+            (outcomes[k] as PromiseFulfilledResult<boolean>).value
+          ) {
+            // Skip if either side was invalidated by an earlier result in this batch
+            if (invalidatedIds.has(pair.idA) || invalidatedIds.has(pair.idB)) continue;
+
+            const keepId = pair.importanceA >= pair.importanceB ? pair.idA : pair.idB;
+            const removeId = keepId === pair.idA ? pair.idB : pair.idA;
+            const keepText = keepId === pair.idA ? pair.textA : pair.textB;
+            const removeText = removeId === pair.idA ? pair.textA : pair.textB;
+
+            await db.invalidateMemory(removeId);
+            invalidatedIds.add(removeId);
+            result.semanticDedup.duplicatesMerged++;
+
+            onProgress?.(
+              "semanticDedup",
+              `Merged: "${removeText.slice(0, 50)}..." → kept "${keepText.slice(0, 50)}..."`,
+            );
+          }
+        }
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 1b (semantic) complete — ${result.semanticDedup.pairsChecked} pairs checked, ${result.semanticDedup.duplicatesMerged} merged`,
       );
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 1 error: ${String(err)}`);
@@ -635,11 +751,11 @@ export async function runSleepCycle(
   }
 
   // --------------------------------------------------------------------------
-  // Phase 1b: Conflict Detection
+  // Phase 1c: Conflict Detection (formerly Phase 1b)
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted) {
     onPhaseStart?.("conflict");
-    logger.info("memory-neo4j: [sleep] Phase 1b: Conflict Detection");
+    logger.info("memory-neo4j: [sleep] Phase 1c: Conflict Detection");
 
     try {
       const pairs = await db.findConflictingMemories(agentId);
@@ -668,10 +784,10 @@ export async function runSleepCycle(
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 1b complete — ${result.conflict.pairsFound} pairs, ${result.conflict.resolved} resolved, ${result.conflict.invalidated} invalidated`,
+        `memory-neo4j: [sleep] Phase 1c complete — ${result.conflict.pairsFound} pairs, ${result.conflict.resolved} resolved, ${result.conflict.invalidated} invalidated`,
       );
     } catch (err) {
-      logger.warn(`memory-neo4j: [sleep] Phase 1b error: ${String(err)}`);
+      logger.warn(`memory-neo4j: [sleep] Phase 1c error: ${String(err)}`);
     }
   }
 
@@ -790,7 +906,7 @@ export async function runSleepCycle(
   // Phase 5: Entity Extraction (moved before decay so new memories get
   // extracted before pruning can remove them)
   // --------------------------------------------------------------------------
-  const EXTRACTION_CONCURRENCY = 3;
+  // Extraction uses LLM_CONCURRENCY (defined above, matches OLLAMA_NUM_PARALLEL)
   if (!abortSignal?.aborted && config.enabled) {
     onPhaseStart?.("extraction");
     logger.info("memory-neo4j: [sleep] Phase 5: Entity Extraction");
@@ -810,13 +926,9 @@ export async function runSleepCycle(
             break;
           }
 
-          // Process in parallel chunks of EXTRACTION_CONCURRENCY
-          for (
-            let i = 0;
-            i < pending.length && !abortSignal?.aborted;
-            i += EXTRACTION_CONCURRENCY
-          ) {
-            const chunk = pending.slice(i, i + EXTRACTION_CONCURRENCY);
+          // Process in parallel chunks of LLM_CONCURRENCY
+          for (let i = 0; i < pending.length && !abortSignal?.aborted; i += LLM_CONCURRENCY) {
+            const chunk = pending.slice(i, i + LLM_CONCURRENCY);
             const outcomes = await Promise.allSettled(
               chunk.map((memory) =>
                 runBackgroundExtraction(
@@ -840,10 +952,7 @@ export async function runSleepCycle(
               }
             }
 
-            if (
-              result.extraction.processed % 10 === 0 ||
-              i + EXTRACTION_CONCURRENCY >= pending.length
-            ) {
+            if (result.extraction.processed % 10 === 0 || i + LLM_CONCURRENCY >= pending.length) {
               onProgress?.(
                 "extraction",
                 `${result.extraction.processed}/${result.extraction.total} processed`,
@@ -1084,18 +1193,14 @@ export function extractAssistantMessages(messages: unknown[]): string[] {
 // LLM-Judged Importance Rating
 // ============================================================================
 
-const IMPORTANCE_RATING_PROMPT = `Rate the long-term importance of remembering this information on a scale of 1-10.
+// System instruction — user message contains the text to rate
+const IMPORTANCE_RATING_SYSTEM = `Rate the long-term importance of remembering the user's information on a scale of 1-10.
 1-3: Trivial/transient (greetings, temporary status)
 4-6: Moderately useful (general facts, minor preferences)
 7-9: Very important (key decisions, strong preferences, critical facts)
 10: Essential (identity-defining, safety-critical)
 
-Information: "{text}"
-
 Return JSON: {"score": N, "reason": "brief explanation"}`;
-
-/** Timeout for importance rating calls (much shorter than extraction) */
-const IMPORTANCE_TIMEOUT_MS = 5_000;
 
 /**
  * Rate the long-term importance of a text using an LLM.
@@ -1106,32 +1211,11 @@ export async function rateImportance(text: string, config: ExtractionConfig): Pr
     return 0.5;
   }
 
-  const prompt = IMPORTANCE_RATING_PROMPT.replace("{text}", text);
-
   try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: config.temperature,
-        response_format: { type: "json_object" },
-      }),
-      signal: AbortSignal.timeout(IMPORTANCE_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      return 0.5;
-    }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const content = data.choices?.[0]?.message?.content;
+    const content = await callOpenRouter(config, [
+      { role: "system", content: IMPORTANCE_RATING_SYSTEM },
+      { role: "user", content: text },
+    ]);
     if (!content) {
       return 0.5;
     }
@@ -1146,5 +1230,51 @@ export async function rateImportance(text: string, config: ExtractionConfig): Pr
     return Math.max(0.1, Math.min(1.0, clamped / 10));
   } catch {
     return 0.5;
+  }
+}
+
+// ============================================================================
+// Semantic Deduplication
+// ============================================================================
+
+// System instruction — user message contains the two texts to compare
+const SEMANTIC_DEDUP_SYSTEM = `You are a memory deduplication system. Determine whether the new text conveys the SAME factual information as the existing memory.
+
+Rules:
+- Return "duplicate" if the new text is conveying the same core fact(s), even if worded differently
+- Return "duplicate" if the new text is a subset of information already in the existing memory
+- Return "unique" if the new text contains genuinely new information not in the existing memory
+- Ignore differences in formatting, pronouns, or phrasing — focus on the underlying facts
+
+Return JSON: {"verdict": "duplicate"|"unique", "reason": "brief explanation"}`;
+
+/**
+ * Check whether new text is semantically a duplicate of an existing memory.
+ * Uses an LLM to compare meaning rather than surface similarity.
+ * Returns true if the new text is a duplicate (should be skipped).
+ * Returns false on any failure (allow storage).
+ */
+export async function isSemanticDuplicate(
+  newText: string,
+  existingText: string,
+  config: ExtractionConfig,
+): Promise<boolean> {
+  if (!config.enabled) {
+    return false;
+  }
+
+  try {
+    const content = await callOpenRouter(config, [
+      { role: "system", content: SEMANTIC_DEDUP_SYSTEM },
+      { role: "user", content: `Existing memory: "${existingText}"\nNew text: "${newText}"` },
+    ]);
+    if (!content) {
+      return false;
+    }
+
+    const parsed = JSON.parse(content) as { verdict?: string };
+    return parsed.verdict === "duplicate";
+  } catch {
+    return false;
   }
 }
