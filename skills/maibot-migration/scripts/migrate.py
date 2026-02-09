@@ -97,14 +97,14 @@ def detect():
         print("  GPU: Not detected (video generation unavailable)")
         checks["gpu"] = None
 
-    # Moltbot
-    ok, ver = run("moltbot --version")
+    # OpenClaw
+    ok, ver = run("openclaw --version")
     if ok:
-        print(f"  Moltbot: {ver} ✅")
-        checks["moltbot"] = ver
+        print(f"  OpenClaw: {ver} ✅")
+        checks["openclaw"] = ver
     else:
-        print("  Moltbot: NOT INSTALLED")
-        checks["moltbot"] = None
+        print("  OpenClaw: NOT INSTALLED")
+        checks["openclaw"] = None
 
     # Disk space
     total, used, free = shutil.disk_usage(Path.home())
@@ -118,8 +118,8 @@ def detect():
         missing.append("Node.js 22+")
     if not checks.get("git"):
         missing.append("Git")
-    if not checks.get("moltbot"):
-        missing.append("Moltbot (npm i -g moltbot)")
+    if not checks.get("openclaw"):
+        missing.append("OpenClaw (npm i -g openclaw)")
 
     if missing:
         print(f"  ❌ Missing: {', '.join(missing)}")
@@ -136,18 +136,18 @@ def detect():
 
 
 def install(maibot_dir=None, maibeauty_dir=None):
-    """Install Moltbot and clone repositories."""
+    """Install OpenClaw and clone repositories."""
     header("📦 Installing Dependencies")
 
-    # Install Moltbot
-    ok, ver = run("moltbot --version")
+    # Install OpenClaw
+    ok, ver = run("openclaw --version")
     if ok:
-        print(f"  Moltbot already installed: {ver}")
+        print(f"  OpenClaw already installed: {ver}")
     else:
-        print("  Installing Moltbot...")
-        ok, out = run("npm i -g moltbot", timeout=120)
+        print("  Installing OpenClaw...")
+        ok, out = run("npm i -g openclaw", timeout=120)
         if ok:
-            print("  ✅ Moltbot installed")
+            print("  ✅ OpenClaw installed")
         else:
             print(f"  ❌ Failed: {out}")
             return False
@@ -237,9 +237,9 @@ def validate(maibot_dir=None, maibeauty_dir=None):
 
     results = []
 
-    # Moltbot
-    ok, ver = run("moltbot --version")
-    results.append(("Moltbot", ok, ver))
+    # OpenClaw
+    ok, ver = run("openclaw --version")
+    results.append(("OpenClaw", ok, ver))
 
     # MAIBOT repo
     maibot = Path(maibot_dir or (Path.home() / "MAIBOT"))
@@ -287,7 +287,7 @@ def validate(maibot_dir=None, maibeauty_dir=None):
 
     print()
     if all_ok:
-        print("  🎉 Migration successful! Run `moltbot gateway run` to start.")
+        print("  🎉 Migration successful! Run `openclaw gateway start` to start.")
     else:
         print("  ⚠️  Some checks failed. Fix issues above and re-run validate.")
 
