@@ -390,6 +390,7 @@ jobs:
   # On push events, all steps are skipped and the job passes (no-op).
   # Heavy downstream jobs depend on this to fail fast on violations.
   code-size:
+    needs: [checks-lint]
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
