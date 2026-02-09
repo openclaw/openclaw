@@ -632,9 +632,7 @@ export async function compactEmbeddedPiSessionDirect(
         const hookSessionKey = params.sessionKey?.trim() || `compact:${params.sessionId}`;
         const hookRunner = getGlobalHookRunner();
         const messageCountOriginal = originalMessages.length;
-        const messageCountBefore = session.messages.length;
         let tokenCountOriginal: number | undefined;
-        let tokenCountBefore: number | undefined;
         try {
           tokenCountOriginal = 0;
           for (const message of originalMessages) {
@@ -643,6 +641,8 @@ export async function compactEmbeddedPiSessionDirect(
         } catch {
           tokenCountOriginal = undefined;
         }
+        const messageCountBefore = session.messages.length;
+        let tokenCountBefore: number | undefined;
         try {
           tokenCountBefore = 0;
           for (const message of session.messages) {
