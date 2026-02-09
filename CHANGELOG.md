@@ -336,7 +336,6 @@ Docs: https://docs.openclaw.ai
 - macOS: fix cron payload summary rendering and ISO 8601 formatter concurrency safety.
 - Discord: enforce DM allowlists for agent components (buttons/select menus), honoring pairing store approvals and tag matches. (#11254) Thanks @thedudeabidesai.
 
-
 ## 2026.2.2-3
 
 ### Fixes
