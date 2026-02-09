@@ -107,7 +107,7 @@ describe("configureGatewayForOnboarding", () => {
         hasExisting: false,
         port: 18789,
         bind: "loopback",
-        authMode: "token",
+        authMode: "password",
         tailscaleMode: "off",
         token: undefined,
         password: undefined,
@@ -118,7 +118,9 @@ describe("configureGatewayForOnboarding", () => {
       runtime,
     });
 
-    const authConfig = result.nextConfig.gateway?.auth;
-    expect((authConfig as { password?: string })?.password).not.toBe("undefined");
+    const authConfig = result.nextConfig.gateway?.auth as { mode?: string; password?: string };
+    expect(authConfig?.mode).toBe("password");
+    expect(authConfig?.password).toBe("");
+    expect(authConfig?.password).not.toBe("undefined");
   });
 });
