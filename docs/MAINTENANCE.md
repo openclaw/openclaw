@@ -17,7 +17,7 @@ This document helps ensure your fork's configuration stays correct after updates
 
 When pulling updates or rebuilding:
 
-### 1. **Never run these commands** (they will overwrite your custom setup):
+### 1. **Never run these commands** (they will overwrite your custom setup)
 
 ```bash
 # ❌ DON'T RUN - overwrites your custom service file
@@ -95,9 +95,32 @@ openclaw models list | grep -i ollama
 
 **What likely happened:** You may have run `openclaw doctor` at some point (it's recommended in the docs for updates), and it detected your fork path didn't match the expected global install path, then offered to "fix" it by overwriting your custom configuration.
 
+## Why skills.json Can Disappear
+
+If the OpenClaw **agent** is asked to run a "status" or "check" on the system and its **workspace is the fork repo** (`/root/projects/openclaw-fork`), it may run shell commands such as:
+
+- **`git status`** followed by **`git clean -fd`** (to "clean untracked files")
+- Or a custom script that removes `dist/` or runs a partial build
+
+Because **`dist/` is gitignored**, `git clean -fd` removes the entire `dist/` tree, including `dist/agents/prompt-engine/data/skills.json`. The gateway then fails with ENOENT when loading the skills registry.
+
+**What to do:**
+
+1. **Avoid:** Do not run `git clean -fd` (or `git clean -fdx`) inside the fork repo. If the agent's workspace is the repo, avoid asking it to "clean the repo" or run destructive git commands there.
+2. **Restore:** Run a full build so the copy step repopulates `dist/`:
+
+   ```bash
+   cd /root/projects/openclaw-fork
+   systemctl --user stop openclaw-gateway.service
+   pnpm build
+   systemctl --user start openclaw-gateway.service
+   ```
+
+3. **Fallback:** The gateway now tries the **source** path (`src/agents/prompt-engine/data/skills.json`) if the file is missing in `dist/`. So if only `dist/` was wiped (repo intact), the gateway may still start and you will see a log line: `Loaded skills from source path (dist copy missing)`.
+
 ## Protection Mechanisms
 
-### Backup your service file:
+### Backup your service file
 
 ```bash
 # Create a backup
@@ -105,7 +128,7 @@ cp ~/.config/systemd/user/openclaw-gateway.service \
    ~/.config/systemd/user/openclaw-gateway.service.backup
 ```
 
-### Verify service file hasn't changed:
+### Verify service file hasn't changed
 
 ```bash
 # Check ExecStart still points to your fork
@@ -114,17 +137,68 @@ systemctl --user cat openclaw-gateway.service | grep ExecStart
 # Should show: ExecStart=/usr/bin/node /root/projects/openclaw-fork/dist/index.js ...
 ```
 
-### Prevent accidental global installs:
+### Uninstall non-forked (global) OpenClaw
+
+Removing the global npm install prevents `openclaw doctor` (or any script using the global binary) from ever "fixing" your service back to the non-fork path. Do this on the VPS:
+
+**Step 1 — Confirm gateway is using the fork**
+
+```bash
+systemctl --user cat openclaw-gateway.service | grep ExecStart
+# Must show: ExecStart=/usr/bin/node /root/projects/openclaw-fork/dist/index.js ...
+```
+
+**Step 2 — Uninstall the global npm package**
+
+```bash
+sudo npm uninstall -g openclaw
+```
+
+**Step 3 — Verify it’s gone**
+
+```bash
+npm list -g openclaw 2>/dev/null || echo "Not installed (expected)"
+ls /usr/lib/node_modules/openclaw 2>/dev/null || echo "Gone (expected)"
+```
+
+**Step 4 — Make sure `openclaw` in your shell runs the fork**
+
+You use `openclaw gateway restart` and `openclaw logs`, so the `openclaw` command must point at the fork.
+
+- If `which openclaw` is already something like `/root/.local/share/pnpm/openclaw` and that pnpm global is your fork, you’re done.
+- Otherwise, use the fork explicitly from the repo:
+
+  ```bash
+  cd /root/projects/openclaw-fork
+  pnpm openclaw gateway restart
+  pnpm openclaw logs --follow
+  ```
+
+  Or make the fork the default `openclaw` for your user (from the repo directory):
+
+  ```bash
+  cd /root/projects/openclaw-fork
+  pnpm link --global
+  # Then: openclaw --version  (should match your fork, e.g. 2026.2.6-3)
+  ```
+
+**Step 5 — Quick check**
+
+```bash
+openclaw gateway restart
+openclaw logs --max-bytes 500
+```
+
+After this, only the fork is installed; doctor (if you run it via the fork) will no longer try to point the service at a global path.
+
+### Prevent accidental global installs (ongoing)
 
 ```bash
 # Check if global npm version exists (and remove if needed)
 npm list -g openclaw 2>/dev/null || echo "No global npm install found (good)"
-
-# If it exists and you want to remove it:
-# sudo npm uninstall -g openclaw
 ```
 
-### Protect against `openclaw doctor` overwrites:
+### Protect against `openclaw doctor` overwrites
 
 If you need to run `openclaw doctor` for other checks (config migrations, etc.) but want to preserve your service file:
 
@@ -145,7 +219,7 @@ openclaw doctor
 
 ## Troubleshooting
 
-### If you see old warning messages:
+### If you see old warning messages
 
 1. **Check which binary is running:**
 
@@ -176,7 +250,7 @@ openclaw doctor
    systemctl --user start openclaw-gateway.service
    ```
 
-### If `openclaw` command resolves to wrong binary:
+### If `openclaw` command resolves to wrong binary
 
 ```bash
 which openclaw
