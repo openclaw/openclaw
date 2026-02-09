@@ -49,37 +49,33 @@ describe("Nix integration (U3, U5, U9)", () => {
       });
     });
 
-    // Skip on Windows: these tests use Unix-style paths that only make sense on Nix/Unix
-    it.skipIf(process.platform === "win32")(
-      "STATE_DIR respects OPENCLAW_HOME when state override is unset",
-      async () => {
-        await withEnvOverride(
-          { OPENCLAW_HOME: "/custom/home", OPENCLAW_STATE_DIR: undefined },
-          async () => {
-            const { STATE_DIR } = await import("./config.js");
-            expect(STATE_DIR).toBe(path.resolve("/custom/home/.openclaw"));
-          },
-        );
-      },
-    );
+    it("STATE_DIR respects OPENCLAW_HOME when state override is unset", async () => {
+      const customHome = path.join(path.sep, "custom", "home");
+      await withEnvOverride(
+        { OPENCLAW_HOME: customHome, OPENCLAW_STATE_DIR: undefined },
+        async () => {
+          const { STATE_DIR } = await import("./config.js");
+          expect(STATE_DIR).toBe(path.join(path.resolve(customHome), ".openclaw"));
+        },
+      );
+    });
 
-    // Skip on Windows: these tests use Unix-style paths that only make sense on Nix/Unix
-    it.skipIf(process.platform === "win32")(
-      "CONFIG_PATH defaults to OPENCLAW_HOME/.openclaw/openclaw.json",
-      async () => {
-        await withEnvOverride(
-          {
-            OPENCLAW_HOME: "/custom/home",
-            OPENCLAW_CONFIG_PATH: undefined,
-            OPENCLAW_STATE_DIR: undefined,
-          },
-          async () => {
-            const { CONFIG_PATH } = await import("./config.js");
-            expect(CONFIG_PATH).toBe(path.resolve("/custom/home/.openclaw/openclaw.json"));
-          },
-        );
-      },
-    );
+    it("CONFIG_PATH defaults to OPENCLAW_HOME/.openclaw/openclaw.json", async () => {
+      const customHome = path.join(path.sep, "custom", "home");
+      await withEnvOverride(
+        {
+          OPENCLAW_HOME: customHome,
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+        async () => {
+          const { CONFIG_PATH } = await import("./config.js");
+          expect(CONFIG_PATH).toBe(
+            path.join(path.resolve(customHome), ".openclaw", "openclaw.json"),
+          );
+        },
+      );
+    });
 
     it("CONFIG_PATH defaults to ~/.openclaw/openclaw.json when env not set", async () => {
       await withEnvOverride(
