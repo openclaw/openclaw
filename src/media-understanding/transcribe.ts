@@ -237,7 +237,7 @@ async function transcribeAudioBufferWithCore(params: {
       entry.timeoutSeconds ??
         config?.timeoutSeconds ??
         params.cfg.tools?.media?.audio?.timeoutSeconds,
-      DEFAULT_TIMEOUT_SECONDS,
+      DEFAULT_TIMEOUT_SECONDS.audio,
     );
     const prompt = resolvePrompt("audio", entry.prompt ?? config?.prompt, maxChars);
 
