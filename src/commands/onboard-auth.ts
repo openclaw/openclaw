@@ -64,7 +64,6 @@ export {
   setXiaomiApiKey,
   setZaiApiKey,
   setXaiApiKey,
-  writeOAuthCredentials,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   writeOAuthCredentials,
   XIAOMI_DEFAULT_MODEL_REF,
