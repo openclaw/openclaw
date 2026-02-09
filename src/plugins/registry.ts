@@ -9,6 +9,7 @@ import type {
 import type { HookEntry } from "../hooks/types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
+  PluginLifecycleHookContext,
   PluginLifecycleHookHandlerMap,
   PluginLifecycleHookOptions,
   PluginLifecyclePhase,
@@ -513,22 +514,34 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
 
+    const buildLifecycleContext = (runtimeCtx: unknown): PluginLifecycleHookContext<P> =>
+      ({
+        phase,
+        metadata: {
+          hookName: mappedHook,
+          pluginId: record.id,
+          runtimeContext: runtimeCtx,
+        },
+      }) as PluginLifecycleHookContext<P>;
+
+    const wrappedCondition = options?.condition
+      ? (event: unknown, ctx: unknown) =>
+          options.condition?.(event as never, buildLifecycleContext(ctx))
+      : undefined;
+
     registerTypedHook(
       record,
       mappedHook,
       ((event: unknown, _ctx: unknown) =>
         handler(
           event as never,
-          {
-            phase,
-            metadata: { hookName: mappedHook, pluginId: record.id },
-          } as never,
+          buildLifecycleContext(_ctx) as never,
         )) as PluginHookHandlerMap[typeof mappedHook],
       {
         priority: options?.priority,
         timeoutMs: options?.timeoutMs,
         mode: options?.mode,
-        condition: options?.condition as PluginHookOptions<typeof mappedHook>["condition"],
+        condition: wrappedCondition as PluginHookOptions<typeof mappedHook>["condition"],
       },
     );
   };

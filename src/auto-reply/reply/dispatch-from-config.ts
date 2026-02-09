@@ -12,6 +12,7 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isPluginHookExecutionError } from "../../plugins/hooks.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { getReplyFromConfig } from "../reply.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
@@ -148,6 +149,40 @@ export async function dispatchReplyFromConfig(params: {
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
   const hookRunner = getGlobalHookRunner();
+  const runMessageSendingHook = async (args: {
+    to: string;
+    content: string;
+    channelId: string;
+    conversationId?: string;
+  }): Promise<{ to: string; content: string; cancel: boolean }> => {
+    if (!hookRunner?.hasHooks("message_sending")) {
+      return { to: args.to, content: args.content, cancel: false };
+    }
+    try {
+      const result = await hookRunner.runMessageSending(
+        {
+          to: args.to,
+          content: args.content,
+        },
+        {
+          channelId: args.channelId,
+          accountId: ctx.AccountId,
+          conversationId: args.conversationId,
+        },
+      );
+      return {
+        to: args.to,
+        content: typeof result?.content === "string" ? result.content : args.content,
+        cancel: result?.cancel === true,
+      };
+    } catch (err) {
+      if (isPluginHookExecutionError(err) && err.failClosed) {
+        throw err;
+      }
+      logVerbose(`dispatch-from-config: message_sending hook failed: ${String(err)}`);
+      return { to: args.to, content: args.content, cancel: false };
+    }
+  };
   const emitMessageSentHook = async (args: {
     to: string;
     content: string;
@@ -259,10 +294,31 @@ export async function dispatchReplyFromConfig(params: {
     if (abortSignal?.aborted) {
       return false;
     }
-    const result = await routeReply({
-      payload,
-      channel: originatingChannel,
+    const channelId = originatingChannel.toLowerCase();
+    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+    const sending = await runMessageSendingHook({
       to: originatingTo,
+      content: payload.text ?? "",
+      channelId,
+      conversationId,
+    });
+    if (sending.cancel) {
+      await emitMessageSentHook({
+        to: sending.to,
+        content: sending.content,
+        success: false,
+        error: "message canceled by plugin hook",
+        channelId,
+        conversationId,
+      });
+      return false;
+    }
+    const nextPayload: ReplyPayload =
+      typeof payload.text === "string" ? { ...payload, text: sending.content } : payload;
+    const result = await routeReply({
+      payload: nextPayload,
+      channel: originatingChannel,
+      to: sending.to,
       sessionKey: ctx.SessionKey,
       accountId: ctx.AccountId,
       threadId: ctx.MessageThreadId,
@@ -270,11 +326,9 @@ export async function dispatchReplyFromConfig(params: {
       abortSignal,
       mirror,
     });
-    const channelId = originatingChannel.toLowerCase();
-    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
     await emitMessageSentHook({
-      to: originatingTo,
-      content: payload.text ?? "",
+      to: sending.to,
+      content: sending.content,
       success: result.ok,
       error: result.ok ? undefined : (result.error ?? "route-reply failed"),
       channelId,
@@ -303,15 +357,27 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
-        const didQueue = dispatcher.sendFinalReply(payload);
-        queuedFinal = didQueue;
         const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
         const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-        void emitMessageSentHook({
+        const sending = await runMessageSendingHook({
           to: ctx.To ?? "",
           content: payload.text ?? "",
+          channelId,
+          conversationId,
+        });
+        const nextPayload: ReplyPayload =
+          typeof payload.text === "string" ? { ...payload, text: sending.content } : payload;
+        const didQueue = sending.cancel ? false : dispatcher.sendFinalReply(nextPayload);
+        queuedFinal = didQueue;
+        void emitMessageSentHook({
+          to: sending.to,
+          content: sending.content,
           success: didQueue,
-          error: didQueue ? undefined : "reply not queued",
+          error: didQueue
+            ? undefined
+            : sending.cancel
+              ? "message canceled by plugin hook"
+              : "reply not queued",
           channelId,
           conversationId,
         });
@@ -349,14 +415,28 @@ export async function dispatchReplyFromConfig(params: {
                 if (shouldRouteToOriginating) {
                   await sendPayloadAsync(ttsPayload, undefined, false);
                 } else {
-                  const didQueue = dispatcher.sendToolResult(ttsPayload);
                   const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
                   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-                  void emitMessageSentHook({
+                  const sending = await runMessageSendingHook({
                     to: ctx.To ?? "",
                     content: ttsPayload.text ?? "",
+                    channelId,
+                    conversationId,
+                  });
+                  const nextPayload: ReplyPayload =
+                    typeof ttsPayload.text === "string"
+                      ? { ...ttsPayload, text: sending.content }
+                      : ttsPayload;
+                  const didQueue = sending.cancel ? false : dispatcher.sendToolResult(nextPayload);
+                  void emitMessageSentHook({
+                    to: sending.to,
+                    content: sending.content,
                     success: didQueue,
-                    error: didQueue ? undefined : "reply not queued",
+                    error: didQueue
+                      ? undefined
+                      : sending.cancel
+                        ? "message canceled by plugin hook"
+                        : "reply not queued",
                     channelId,
                     conversationId,
                   });
@@ -386,14 +466,28 @@ export async function dispatchReplyFromConfig(params: {
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
-              const didQueue = dispatcher.sendBlockReply(ttsPayload);
               const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
               const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-              void emitMessageSentHook({
+              const sending = await runMessageSendingHook({
                 to: ctx.To ?? "",
                 content: ttsPayload.text ?? "",
+                channelId,
+                conversationId,
+              });
+              const nextPayload: ReplyPayload =
+                typeof ttsPayload.text === "string"
+                  ? { ...ttsPayload, text: sending.content }
+                  : ttsPayload;
+              const didQueue = sending.cancel ? false : dispatcher.sendBlockReply(nextPayload);
+              void emitMessageSentHook({
+                to: sending.to,
+                content: sending.content,
                 success: didQueue,
-                error: didQueue ? undefined : "reply not queued",
+                error: didQueue
+                  ? undefined
+                  : sending.cancel
+                    ? "message canceled by plugin hook"
+                    : "reply not queued",
                 channelId,
                 conversationId,
               });
@@ -425,15 +519,27 @@ export async function dispatchReplyFromConfig(params: {
           routedFinalCount += 1;
         }
       } else {
-        const didQueue = dispatcher.sendFinalReply(ttsReply);
-        queuedFinal = didQueue || queuedFinal;
         const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
         const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-        void emitMessageSentHook({
+        const sending = await runMessageSendingHook({
           to: ctx.To ?? "",
           content: ttsReply.text ?? "",
+          channelId,
+          conversationId,
+        });
+        const nextPayload: ReplyPayload =
+          typeof ttsReply.text === "string" ? { ...ttsReply, text: sending.content } : ttsReply;
+        const didQueue = sending.cancel ? false : dispatcher.sendFinalReply(nextPayload);
+        queuedFinal = didQueue || queuedFinal;
+        void emitMessageSentHook({
+          to: sending.to,
+          content: sending.content,
           success: didQueue,
-          error: didQueue ? undefined : "reply not queued",
+          error: didQueue
+            ? undefined
+            : sending.cancel
+              ? "message canceled by plugin hook"
+              : "reply not queued",
           channelId,
           conversationId,
         });
@@ -473,15 +579,29 @@ export async function dispatchReplyFromConfig(params: {
               routedFinalCount += 1;
             }
           } else {
-            const didQueue = dispatcher.sendFinalReply(ttsOnlyPayload);
-            queuedFinal = didQueue || queuedFinal;
             const channelId = (currentSurface ?? ctx.Provider ?? "").toLowerCase();
             const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-            void emitMessageSentHook({
+            const sending = await runMessageSendingHook({
               to: ctx.To ?? "",
               content: ttsOnlyPayload.text ?? "",
+              channelId,
+              conversationId,
+            });
+            const nextPayload: ReplyPayload =
+              typeof ttsOnlyPayload.text === "string"
+                ? { ...ttsOnlyPayload, text: sending.content }
+                : ttsOnlyPayload;
+            const didQueue = sending.cancel ? false : dispatcher.sendFinalReply(nextPayload);
+            queuedFinal = didQueue || queuedFinal;
+            void emitMessageSentHook({
+              to: sending.to,
+              content: sending.content,
               success: didQueue,
-              error: didQueue ? undefined : "reply not queued",
+              error: didQueue
+                ? undefined
+                : sending.cancel
+                  ? "message canceled by plugin hook"
+                  : "reply not queued",
               channelId,
               conversationId,
             });

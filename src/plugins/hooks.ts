@@ -91,6 +91,30 @@ export type HookRunnerOptions = {
   catchErrors?: boolean;
 };
 
+export class PluginHookExecutionError extends Error {
+  readonly hookName: PluginHookName;
+  readonly pluginId: string;
+  readonly failClosed: boolean;
+
+  constructor(params: {
+    hookName: PluginHookName;
+    pluginId: string;
+    message: string;
+    cause?: unknown;
+    failClosed?: boolean;
+  }) {
+    super(params.message, { cause: params.cause });
+    this.name = "PluginHookExecutionError";
+    this.hookName = params.hookName;
+    this.pluginId = params.pluginId;
+    this.failClosed = params.failClosed ?? true;
+  }
+}
+
+export function isPluginHookExecutionError(error: unknown): error is PluginHookExecutionError {
+  return error instanceof PluginHookExecutionError;
+}
+
 /**
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
@@ -153,7 +177,13 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): never | void => {
     const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
     if (shouldThrowForFailure(hook)) {
-      throw new Error(msg, { cause: err });
+      throw new PluginHookExecutionError({
+        hookName,
+        pluginId: hook.pluginId,
+        message: msg,
+        cause: err,
+        failClosed: true,
+      });
     }
     logger?.error(msg);
   };

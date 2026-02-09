@@ -10,6 +10,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { isPluginHookExecutionError } from "../../../plugins/hooks.js";
 import {
   isCronSessionKey,
   isSubagentSessionKey,
@@ -870,6 +871,9 @@ export async function runEmbeddedAttempt(
               );
             }
           } catch (hookErr) {
+            if (isPluginHookExecutionError(hookErr) && hookErr.failClosed) {
+              throw hookErr;
+            }
             log.warn(`before_agent_start hook failed: ${String(hookErr)}`);
           }
         }

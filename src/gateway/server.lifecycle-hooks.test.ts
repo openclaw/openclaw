@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { PluginHookExecutionError } from "../plugins/hooks.js";
 
 const mocked = vi.hoisted(() => ({
   hookRunner: {
@@ -43,5 +44,39 @@ describe("gateway lifecycle hook wiring", () => {
       { reason: "test-shutdown" },
       { port },
     );
+  });
+
+  test("does not fail startup/close when gateway lifecycle hooks throw", async () => {
+    mocked.hookRunner.runGatewayPreStart.mockRejectedValueOnce(new Error("pre-start boom"));
+    mocked.hookRunner.runGatewayStart.mockRejectedValueOnce(new Error("start boom"));
+    mocked.hookRunner.runGatewayPreStop.mockRejectedValueOnce(new Error("pre-stop boom"));
+    mocked.hookRunner.runGatewayStop.mockRejectedValueOnce(new Error("stop boom"));
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    await expect(server.close({ reason: "test-shutdown" })).resolves.toBeUndefined();
+
+    expect(mocked.hookRunner.runGatewayPreStart).toHaveBeenCalledWith({ port }, { port });
+    expect(mocked.hookRunner.runGatewayStart).toHaveBeenCalledWith({ port }, { port });
+    expect(mocked.hookRunner.runGatewayPreStop).toHaveBeenCalledWith(
+      { reason: "test-shutdown" },
+      { port },
+    );
+    expect(mocked.hookRunner.runGatewayStop).toHaveBeenCalledWith(
+      { reason: "test-shutdown" },
+      { port },
+    );
+  });
+
+  test("fails startup when gateway pre-start hook throws fail-closed error", async () => {
+    mocked.hookRunner.runGatewayPreStart.mockRejectedValueOnce(
+      new PluginHookExecutionError({
+        hookName: "gateway_pre_start",
+        pluginId: "policy",
+        message: "hard-stop",
+      }),
+    );
+    const port = await getFreePort();
+    await expect(startGatewayServer(port)).rejects.toThrow("hard-stop");
   });
 });

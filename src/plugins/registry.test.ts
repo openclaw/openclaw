@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHookRunner } from "./hooks.js";
 import { createPluginRegistry, type PluginRecord } from "./registry.js";
 
 function createRecord(): PluginRecord {
@@ -143,5 +144,45 @@ describe("plugin registry lifecycle mapping", () => {
 
     expect(registry.typedHooks).toHaveLength(1);
     expect(registry.typedHooks[0]?.hookName).toBe("message_sending");
+  });
+
+  it("passes lifecycle context to lifecycle conditions", async () => {
+    const { registry, createApi } = createPluginRegistry({
+      runtime: {} as never,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      coreGatewayHandlers: {},
+    });
+
+    const api = createApi(createRecord(), { config: {} as never });
+    const handler = vi.fn();
+    const condition = vi.fn(() => true);
+    api.lifecycle.on("preResponse", handler, { condition });
+
+    const runner = createHookRunner(registry);
+    await runner.runMessageSending(
+      {
+        to: "user-1",
+        content: "hello",
+      },
+      {
+        channelId: "slack",
+      },
+    );
+
+    expect(condition).toHaveBeenCalledTimes(1);
+    const [, ctx] = condition.mock.calls[0] ?? [];
+    expect(ctx).toMatchObject({
+      phase: "preResponse",
+      metadata: expect.objectContaining({
+        hookName: "message_sending",
+        pluginId: "test-plugin",
+      }),
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });
