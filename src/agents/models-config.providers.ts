@@ -696,7 +696,7 @@ export function buildAisaProvider(): ProviderConfig {
         reasoning: true,
         input: ["text"],
         cost: AISA_DEFAULT_COST,
-        contextWindow: 256000,
+        contextWindow: AISA_DEFAULT_CONTEXT_WINDOW,
         maxTokens: AISA_DEFAULT_MAX_TOKENS,
       },
     ],
