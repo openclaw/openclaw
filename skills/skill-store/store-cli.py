@@ -6,12 +6,13 @@ Manages skills from the trusted OpenClaw Skill Store.
 All downloads are SHA256-verified against the store manifest.
 
 Usage:
-    store-cli.py search <keyword>
-    store-cli.py list [--installed]
-    store-cli.py install <name>
-    store-cli.py info <name>
-    store-cli.py update <name> | --all
-    store-cli.py remove <name>
+    store-cli.py sync                       Fetch/update manifest from cloud store
+    store-cli.py search <keyword>           Search skills by name
+    store-cli.py list [--installed]          List store/installed skills
+    store-cli.py install <name> [--force]    Install a skill (SHA256-verified)
+    store-cli.py info <name>                Show skill details
+    store-cli.py update <name> | --all       Update installed skill(s)
+    store-cli.py remove <name>              Remove an installed skill
 """
 
 import argparse
@@ -49,6 +50,25 @@ def find_config_path():
     return None
 
 
+def normalize_store_url(raw_url):
+    """
+    Normalize the store base URL.
+    
+    The trustedStores[0].url should be the API base path, e.g.:
+        http://115.190.153.145:9650/api/v1/skill-guard
+    
+    From this base path:
+        - Manifest endpoint: {base}/manifest
+        - Download endpoint: {base}/skills/{name}/download
+    
+    If the user accidentally included /manifest in the URL, strip it.
+    """
+    url = raw_url.rstrip("/")
+    if url.endswith("/manifest"):
+        url = url[:-len("/manifest")]
+    return url
+
+
 def load_config():
     """Load openclaw.json and extract store configuration."""
     config_path = find_config_path()
@@ -63,10 +83,11 @@ def load_config():
     stores = guard.get("trustedStores", [])
     if not stores:
         print("Error: no trustedStores configured in skills.guard", file=sys.stderr)
+        print("Hint: add skills.guard.trustedStores[0].url in openclaw.json", file=sys.stderr)
         sys.exit(1)
 
     return {
-        "store_url": stores[0]["url"].rstrip("/"),
+        "store_url": normalize_store_url(stores[0]["url"]),
         "store_name": stores[0].get("name", "Unknown Store"),
         "api_key": stores[0].get("apiKey"),
     }
@@ -91,18 +112,58 @@ def resolve_paths():
 
 # ── Manifest cache ───────────────────────────────────────────────
 
-def load_manifest():
-    """Load the locally cached manifest."""
+def load_manifest(auto_sync=True):
+    """Load the locally cached manifest. If missing and auto_sync=True, fetch from store."""
     paths = resolve_paths()
     cache_path = paths["manifest_cache"]
 
     if not os.path.isfile(cache_path):
-        print("Error: manifest cache not found at", cache_path, file=sys.stderr)
-        print("Hint: the Skill Guard extension syncs the manifest on Gateway startup.", file=sys.stderr)
-        sys.exit(1)
+        if auto_sync:
+            print("  Manifest cache not found, syncing from store...", file=sys.stderr)
+            try:
+                _do_sync_manifest()
+            except Exception as e:
+                print(f"Error: failed to sync manifest — {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            print("Error: manifest cache not found at", cache_path, file=sys.stderr)
+            print("Hint: run 'store-cli.py sync' to fetch manifest, or start the Gateway.", file=sys.stderr)
+            sys.exit(1)
 
     with open(cache_path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def _do_sync_manifest():
+    """Fetch manifest from the cloud store and save to local cache."""
+    config = load_config()
+    paths = resolve_paths()
+    cache_path = paths["manifest_cache"]
+    manifest_url = f"{config['store_url']}/manifest"
+
+    req = urllib.request.Request(manifest_url)
+    if config.get("api_key"):
+        req.add_header("Authorization", f"Bearer {config['api_key']}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP {e.code} from {manifest_url}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"cannot reach store — {e.reason}")
+
+    # Validate basic structure
+    if "skills" not in data or "store" not in data:
+        raise RuntimeError("invalid manifest structure (missing 'skills' or 'store')")
+
+    # Save to cache
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+    return data
 
 
 # ── SHA256 helpers ───────────────────────────────────────────────
@@ -541,6 +602,28 @@ def cmd_remove(args):
     print(f"✓ Removed {name} from {installed_dir}")
 
 
+def cmd_sync(args):
+    """Sync manifest from the cloud store."""
+    print("Syncing manifest from store...")
+    try:
+        data = _do_sync_manifest()
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    store_info = data.get("store", {})
+    skills_count = len(data.get("skills", {}))
+    blocklist_count = len(data.get("blocklist", []))
+
+    print(f"✓ Manifest synced")
+    print(f"  Store: {store_info.get('name', '?')} (v{store_info.get('version', '?')})")
+    print(f"  Skills: {skills_count}")
+    print(f"  Blocklist: {blocklist_count}")
+
+    paths = resolve_paths()
+    print(f"  Cached at: {paths['manifest_cache']}")
+
+
 # ── Main ─────────────────────────────────────────────────────────
 
 def main():
@@ -576,6 +659,9 @@ def main():
     p_remove = subparsers.add_parser("remove", help="Remove an installed skill")
     p_remove.add_argument("name", help="Skill name")
 
+    # sync
+    subparsers.add_parser("sync", help="Sync manifest from the cloud store")
+
     args = parser.parse_args()
 
     commands = {
@@ -585,6 +671,7 @@ def main():
         "info": cmd_info,
         "update": cmd_update,
         "remove": cmd_remove,
+        "sync": cmd_sync,
     }
 
     if args.command == "update" and not args.all and not args.name:
