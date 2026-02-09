@@ -136,6 +136,41 @@ describe("ensureSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshot).toHaveBeenCalled();
   });
 
+  it("rebuilds when sessionEntry is undefined but sessionStore has a stale snapshot after restart", async () => {
+    // Edge case: sessionEntry is not passed, but the sessionStore already
+    // has an entry with a stale snapshot from a prior process lifetime.
+    // persistedVersion should be resolved from sessionStore, not just nextEntry.
+    vi.mocked(getSkillsSnapshotVersion).mockReturnValue(0);
+
+    const staleSnapshot = {
+      prompt: "STALE_FROM_STORE",
+      skills: [{ name: "store-skill" }],
+      version: 1707400800000,
+    };
+
+    const sessionStore: Record<string, SessionEntry> = {
+      "test-key": {
+        sessionId: "existing-session",
+        updatedAt: Date.now(),
+        systemSent: true,
+        skillsSnapshot: staleSnapshot,
+      },
+    };
+
+    const result = await ensureSkillSnapshot({
+      // No sessionEntry passed — the function must check sessionStore
+      sessionStore,
+      sessionKey: "test-key",
+      isFirstTurnInSession: false,
+      workspaceDir,
+      cfg,
+    });
+
+    // The stale snapshot in sessionStore should be replaced with a fresh one
+    expect(result.skillsSnapshot?.prompt).toBe("FRESH_SNAPSHOT");
+    expect(buildWorkspaceSkillSnapshot).toHaveBeenCalled();
+  });
+
   it("does not rebuild when session has no prior snapshot and version is zero", async () => {
     // Brand new session with no snapshot yet, version is 0.
     // The function should still build a snapshot (fallback path for no existing snapshot).
