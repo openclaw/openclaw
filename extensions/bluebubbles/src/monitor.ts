@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { timingSafeEqual } from "node:crypto";
 import {
   createReplyPrefixOptions,
   logAckFailure,
@@ -1530,7 +1531,9 @@ export async function handleBlueBubblesWebhookRequest(
       req.headers["x-bluebubbles-guid"] ??
       req.headers["authorization"];
     const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-    if (guid && guid.trim() === token) {
+    const guidBuf = Buffer.from(guid.trim());
+    const tokenBuf = Buffer.from(token);
+    if (guid && guidBuf.length === tokenBuf.length && timingSafeEqual(guidBuf, tokenBuf)) {
       return true;
     }
     const remote = req.socket?.remoteAddress ?? "";
