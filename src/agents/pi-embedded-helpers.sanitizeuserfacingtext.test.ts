@@ -60,4 +60,49 @@ describe("sanitizeUserFacingText", () => {
     const text = "Hello there!\n\nDifferent line.";
     expect(sanitizeUserFacingText(text)).toBe(text);
   });
+
+  it("does not replace text containing 402 in dollar amounts", () => {
+    const text = "Your total spend this month is $402.55 across all services.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("does not replace multi-paragraph prose discussing errors", () => {
+    const prose =
+      "Error handling is an important part of building robust applications.\n\n" +
+      "When a 500 Internal Server Error occurs, you should log the error and return a user-friendly message.";
+    expect(sanitizeUserFacingText(prose)).toBe(prose);
+  });
+
+  it("does not replace assistant text discussing billing topics", () => {
+    const billingProse =
+      "Here's how Stripe billing works:\n\n" +
+      "1. Create a plan with the pricing you want\n" +
+      "2. Subscribe customers to the plan\n" +
+      "3. Payment is collected automatically via credits";
+    expect(sanitizeUserFacingText(billingProse)).toBe(billingProse);
+  });
+
+  it("does not replace text with markdown formatting", () => {
+    const markdown =
+      "## Error Codes\n\n- 400: Bad request\n- 402: Payment required\n- 500: Internal server error";
+    expect(sanitizeUserFacingText(markdown)).toBe(markdown);
+  });
+
+  it("does not replace long multi-sentence text starting with error-like prefix", () => {
+    const longError =
+      "Error handling in distributed systems requires careful consideration. You need to handle timeouts, retries, and circuit breakers properly. Here are the key patterns to follow.";
+    expect(sanitizeUserFacingText(longError)).toBe(longError);
+  });
+
+  it("still catches short actual billing error messages", () => {
+    expect(sanitizeUserFacingText("HTTP 402 Payment Required")).toContain("billing error");
+    expect(sanitizeUserFacingText("insufficient credits")).toContain("billing error");
+  });
+
+  it("still catches short error messages with error prefix", () => {
+    expect(sanitizeUserFacingText("Error: rate limit exceeded")).toBe(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+    expect(sanitizeUserFacingText("Error: request timed out")).toBe("LLM request timed out.");
+  });
 });

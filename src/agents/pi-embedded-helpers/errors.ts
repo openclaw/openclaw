@@ -126,6 +126,38 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   return result.join("\n\n");
 }
 
+/**
+ * Max length for heuristic error detection. Real API errors are short
+ * (typically under 300 chars); anything longer is likely normal assistant
+ * prose and should not be pattern-matched against error heuristics.
+ */
+const MAX_ERROR_HEURISTIC_LENGTH = 500;
+
+/**
+ * Returns true when the text looks like normal assistant prose rather than
+ * a raw API error payload. Multi-sentence text, paragraph breaks, or markdown
+ * formatting is extremely unlikely to be an error message.
+ */
+function looksLikeAssistantProse(text: string): boolean {
+  if (text.length > MAX_ERROR_HEURISTIC_LENGTH) {
+    return true;
+  }
+  // Multiple paragraphs (double newline) → prose
+  if (text.includes("\n\n")) {
+    return true;
+  }
+  // Markdown headings, lists, code blocks → prose
+  if (/^#{1,6}\s|^\s*[-*]\s|```/m.test(text)) {
+    return true;
+  }
+  // Multiple sentences (3+) → prose, not an error message
+  const sentenceEnds = text.match(/[.!?]\s+[A-Z]/g);
+  if (sentenceEnds && sentenceEnds.length >= 2) {
+    return true;
+  }
+  return false;
+}
+
 function isLikelyHttpErrorText(raw: string): boolean {
   const match = raw.match(HTTP_STATUS_PREFIX_RE);
   if (!match) {
@@ -412,6 +444,19 @@ export function sanitizeUserFacingText(text: string): string {
     return stripped;
   }
 
+  // JSON error payloads are always worth catching regardless of length.
+  if (isRawApiErrorPayload(trimmed)) {
+    return formatRawAssistantErrorForUi(trimmed);
+  }
+
+  // Skip heuristic error detection for text that looks like normal assistant
+  // prose — long responses, multi-paragraph, markdown-formatted, etc.
+  // This prevents false positives where normal responses containing "402",
+  // "Error handling", or billing keywords get replaced with error messages.
+  if (looksLikeAssistantProse(trimmed)) {
+    return collapseConsecutiveDuplicateBlocks(stripped);
+  }
+
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return (
       "Message ordering conflict - please try again. " +
@@ -430,7 +475,7 @@ export function sanitizeUserFacingText(text: string): string {
     return BILLING_ERROR_USER_MESSAGE;
   }
 
-  if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
+  if (isLikelyHttpErrorText(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
@@ -468,7 +513,9 @@ const ERROR_PATTERNS = {
   overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
   timeout: ["timeout", "timed out", "deadline exceeded", "context deadline exceeded"],
   billing: [
-    /\b402\b/,
+    // Match "402" only in HTTP error contexts, not bare numbers like "$402.55"
+    /(?:HTTP[/ ]\s*|status[: ]\s*|^)402\s+payment\s+required/i,
+    /\berror\b.*\b402\b/i,
     "payment required",
     "insufficient credits",
     "credit balance",
@@ -531,6 +578,13 @@ export function isTimeoutErrorMessage(raw: string): boolean {
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) {
+    return false;
+  }
+  // Skip both strict and loose heuristics for text that looks like normal
+  // assistant prose — real API billing errors are always short, single-line
+  // messages, not multi-sentence responses.
+  // Note: pass original `raw` to preserve case for sentence boundary detection.
+  if (looksLikeAssistantProse(raw)) {
     return false;
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {

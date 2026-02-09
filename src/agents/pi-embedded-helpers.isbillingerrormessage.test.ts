@@ -28,4 +28,16 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage("invalid api key")).toBe(false);
     expect(isBillingErrorMessage("context length exceeded")).toBe(false);
   });
+
+  it("does not match 402 in dollar amounts", () => {
+    expect(isBillingErrorMessage("Your total spend is $402.55 this month.")).toBe(false);
+  });
+
+  it("does not false-positive on multi-sentence assistant prose about billing", () => {
+    const longBillingProse =
+      "Here's how to set up Stripe billing for your SaaS application. " +
+      "First, create a product and pricing plan in the Stripe dashboard. " +
+      "Then integrate the checkout session to collect payment from your customers.";
+    expect(isBillingErrorMessage(longBillingProse)).toBe(false);
+  });
 });
