@@ -56,7 +56,7 @@ describe("warning filter", () => {
   });
 
   it("installs once and suppresses known warnings at emit time", async () => {
-    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const baseEmitSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
 
     installProcessWarningFilter();
     installProcessWarningFilter();
@@ -74,10 +74,10 @@ describe("warning filter", () => {
       code: "DEP0060",
     });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(baseEmitSpy).not.toHaveBeenCalled();
 
     emitWarning("Visible warning", { type: "Warning", code: "OPENCLAW_TEST_WARNING" });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(writeSpy).toHaveBeenCalled();
+    expect(baseEmitSpy).toHaveBeenCalledTimes(1);
   });
 });
