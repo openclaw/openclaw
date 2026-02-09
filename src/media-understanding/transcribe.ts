@@ -103,7 +103,7 @@ function resolveProviderQuery(params: {
   const compat = buildDeepgramCompatQuery({ ...config?.deepgram, ...entry.deepgram });
   for (const [key, value] of Object.entries(compat ?? {})) {
     if (query[key] === undefined) {
-      query[key] = value as string | number | boolean;
+      query[key] = value;
     }
   }
   return Object.keys(query).length > 0 ? query : undefined;
