@@ -61,7 +61,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
-    const expectedStateDir = path.join("/home/peter", ".openclaw-dev");
+    const expectedStateDir = path.join(path.resolve("/home/peter"), ".openclaw-dev");
     expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toBe(expectedStateDir);
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(expectedStateDir, "openclaw.json"));
@@ -94,9 +94,10 @@ describe("applyCliProfileEnv", () => {
       homedir: () => "/home/fallback",
     });
 
-    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw-home", ".openclaw-work"));
+    const resolvedHome = path.resolve("/srv/openclaw-home");
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join(resolvedHome, ".openclaw-work"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
-      path.join("/srv/openclaw-home", ".openclaw-work", "openclaw.json"),
+      path.join(resolvedHome, ".openclaw-work", "openclaw.json"),
     );
   });
 });
