@@ -289,6 +289,7 @@ export async function browserSnapshot(
     labels?: boolean;
     mode?: "efficient";
     profile?: string;
+    timeoutMs?: number;
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
@@ -329,8 +330,12 @@ export async function browserSnapshot(
   if (opts.profile) {
     q.set("profile", opts.profile);
   }
+  const timeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+      ? Math.max(1000, Math.min(120_000, Math.floor(opts.timeoutMs)))
+      : 20000;
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
+    timeoutMs,
   });
 }
 

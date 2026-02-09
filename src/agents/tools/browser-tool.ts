@@ -479,11 +479,16 @@ export function createBrowserTool(opts?: {
               : undefined;
           const selector = typeof params.selector === "string" ? params.selector.trim() : undefined;
           const frame = typeof params.frame === "string" ? params.frame.trim() : undefined;
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? Math.max(1000, Math.min(120_000, Math.floor(params.timeoutMs)))
+              : undefined;
           const snapshot = proxyRequest
             ? ((await proxyRequest({
                 method: "GET",
                 path: "/snapshot",
                 profile,
+                timeoutMs,
                 query: {
                   format,
                   targetId,
@@ -513,6 +518,7 @@ export function createBrowserTool(opts?: {
                 labels,
                 mode,
                 profile,
+                timeoutMs,
               });
           if (snapshot.format === "ai") {
             const extractedText = snapshot.snapshot ?? "";
