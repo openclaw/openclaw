@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   applyAgentBindings,
   applyAgentConfig,
@@ -43,7 +44,9 @@ describe("agents helpers", () => {
     const work = summaries.find((summary) => summary.id === "work");
 
     expect(main).toBeTruthy();
-    expect(main?.workspace).toBe(path.join(os.homedir(), ".openclaw", "workspace-main"));
+    expect(main?.workspace).toBe(
+      path.join(resolveStateDir(process.env, os.homedir), "workspace-main"),
+    );
     expect(main?.bindings).toBe(1);
     expect(main?.model).toBe("anthropic/claude");
     expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(true);

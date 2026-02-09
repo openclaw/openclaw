@@ -1804,7 +1804,7 @@ async function processMessage(
     channel: "bluebubbles",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: peerId,
     },
   });
@@ -2442,7 +2442,7 @@ async function processReaction(
     channel: "bluebubbles",
     accountId: account.accountId,
     peer: {
-      kind: reaction.isGroup ? "group" : "dm",
+      kind: reaction.isGroup ? "group" : "direct",
       id: peerId,
     },
   });

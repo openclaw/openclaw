@@ -515,7 +515,7 @@ async function processMessageWithPipeline(params: {
     channel: "zalo",
     accountId: account.accountId,
     peer: {
-      kind: isGroup ? "group" : "dm",
+      kind: isGroup ? "group" : "direct",
       id: chatId,
     },
   });
