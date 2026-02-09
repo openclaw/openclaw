@@ -271,7 +271,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       const runner = run(bot, runnerOptions);
       activeRunner = runner;
       let stopPromise: Promise<void> | undefined;
-      let healthCheckTimer: ReturnType<typeof setInterval> | undefined;
+      let healthCheckTimer: ReturnType<typeof setTimeout> | undefined;
       let staleConnectionDetected = false;
       const stopRunner = () => {
         stopPromise ??= Promise.resolve(runner.stop())
@@ -297,34 +297,51 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       // Health check watchdog: periodically ping Telegram API to detect stale connections.
       // If the connection is dead (NAT timeout, firewall drop), the health check will fail
       // and we'll restart the runner.
+      // Uses a self-scheduling loop instead of setInterval to prevent overlapping checks
+      // when a health check takes longer than the interval period.
       const startHealthCheck = () => {
-        healthCheckTimer = setInterval(async () => {
-          if (opts.abortSignal?.aborted) {
-            return;
-          }
-          try {
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error("Health check timeout")), HEALTH_CHECK_TIMEOUT_MS);
-            });
-            await Promise.race([bot.api.getMe(), timeoutPromise]);
-            logVerbose("[telegram] Health check passed");
-          } catch (err) {
+        const scheduleNext = () => {
+          healthCheckTimer = setTimeout(async () => {
             if (opts.abortSignal?.aborted) {
               return;
             }
-            // Health check failed - connection is likely stale
-            staleConnectionDetected = true;
-            (opts.runtime?.error ?? console.error)(
-              `[telegram] Health check failed (stale connection detected): ${formatErrorMessage(err)}; restarting polling...`,
-            );
-            void stopRunner();
-          }
-        }, HEALTH_CHECK_INTERVAL_MS);
+            try {
+              let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+              const timeoutPromise = new Promise<never>((_, reject) => {
+                timeoutHandle = setTimeout(
+                  () => reject(new Error("Health check timeout")),
+                  HEALTH_CHECK_TIMEOUT_MS,
+                );
+              });
+              try {
+                await Promise.race([bot.api.getMe(), timeoutPromise]);
+              } finally {
+                if (timeoutHandle) {
+                  clearTimeout(timeoutHandle);
+                }
+              }
+              logVerbose("[telegram] Health check passed");
+            } catch (err) {
+              if (opts.abortSignal?.aborted) {
+                return;
+              }
+              // Health check failed - connection is likely stale
+              staleConnectionDetected = true;
+              (opts.runtime?.error ?? console.error)(
+                `[telegram] Health check failed (stale connection detected): ${formatErrorMessage(err)}; restarting polling...`,
+              );
+              void stopRunner();
+              return; // Don't schedule next check; runner restart will create a new watchdog
+            }
+            scheduleNext();
+          }, HEALTH_CHECK_INTERVAL_MS);
+        };
+        scheduleNext();
       };
 
       const stopHealthCheck = () => {
         if (healthCheckTimer) {
-          clearInterval(healthCheckTimer);
+          clearTimeout(healthCheckTimer);
           healthCheckTimer = undefined;
         }
       };
