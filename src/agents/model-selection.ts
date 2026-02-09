@@ -44,6 +44,9 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "kimi-code") {
     return "kimi-coding";
   }
+  if (normalized === "gonka-ai" || normalized === "gonka.ai") {
+    return "gonka";
+  }
   return normalized;
 }
 

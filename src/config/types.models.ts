@@ -4,7 +4,8 @@ export type ModelApi =
   | "anthropic-messages"
   | "google-generative-ai"
   | "github-copilot"
-  | "bedrock-converse-stream";
+  | "bedrock-converse-stream"
+  | "gonka";
 
 export type ModelCompatConfig = {
   supportsStore?: boolean;
@@ -13,7 +14,7 @@ export type ModelCompatConfig = {
   maxTokensField?: "max_completion_tokens" | "max_tokens";
 };
 
-export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
+export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token" | "private-key";
 
 export type ModelDefinitionConfig = {
   id: string;
