@@ -176,6 +176,51 @@ describe("sessions", () => {
     });
   });
 
+  it("updateLastRoute clears threadId when deliveryContext explicitly omits it", async () => {
+    const mainSessionKey = "agent:main:main";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [mainSessionKey]: {
+            sessionId: "sess-1",
+            updatedAt: 123,
+            deliveryContext: {
+              channel: "telegram",
+              to: "222",
+              threadId: "42",
+            },
+            lastChannel: "telegram",
+            lastTo: "222",
+            lastThreadId: "42",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: mainSessionKey,
+      deliveryContext: {
+        channel: "telegram",
+        to: "222",
+        threadId: undefined,
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "222",
+    });
+    expect(store[mainSessionKey]?.lastThreadId).toBeUndefined();
+  });
+
   it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
     const sessionKey = "agent:main:whatsapp:group:123@g.us";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
