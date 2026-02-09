@@ -154,7 +154,10 @@ export async function ensureSkillSnapshot(params: {
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   ensureSkillsWatcher({ workspaceDir, config: cfg });
-  const persistedVersion = nextEntry?.skillsSnapshot?.version ?? 0;
+  const persistedVersion =
+    nextEntry?.skillsSnapshot?.version ??
+    (sessionStore && sessionKey ? sessionStore[sessionKey]?.skillsSnapshot?.version : undefined) ??
+    0;
   // Refresh when: (a) the in-memory version is newer than the persisted one
   // (watcher fired), OR (b) the in-memory version is 0 (process restarted)
   // but the session holds a snapshot from a prior process lifetime.
