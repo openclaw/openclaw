@@ -40,33 +40,20 @@ SKIP_SHORT_PATTERNS = {
 }
 SKIP_SHORT_SUFFIXES = ('-cli.ts',)
 
-# Function names to skip in duplicate detection (common utilities, test helpers)
+# Function names to skip in duplicate detection.
+# Only list names so generic they're expected to appear independently in many modules.
+# Do NOT use prefix-based skipping — it hides real duplication (e.g. formatDuration,
+# stripPrefix, parseConfig are specific enough to flag).
 SKIP_DUPLICATE_FUNCTIONS = {
-    # Common utility names
+    # Lifecycle / framework plumbing
     'main', 'init', 'setup', 'teardown', 'cleanup', 'dispose', 'destroy',
     'open', 'close', 'connect', 'disconnect', 'execute', 'run', 'start', 'stop',
     'render', 'update', 'refresh', 'reset', 'clear', 'flush',
+    # Too-short / too-generic identifiers
+    'text', 'json', 'pad', 'mask', 'digest', 'confirm', 'intro', 'outro',
+    'exists', 'send', 'receive', 'listen', 'log', 'warn', 'error', 'info',
+    'help', 'version', 'config', 'configure', 'describe', 'test', 'action',
 }
-
-SKIP_DUPLICATE_PREFIXES = (
-    # Transformers
-    'normalize', 'parse', 'validate', 'serialize', 'deserialize',
-    'convert', 'transform', 'extract', 'encode', 'decode',
-    # Predicates
-    'is', 'has', 'can', 'should', 'will',
-    # Constructors/factories
-    'create', 'make', 'build', 'generate', 'new',
-    # Accessors
-    'get', 'set', 'read', 'write', 'load', 'save', 'fetch',
-    # Handlers
-    'handle', 'on', 'emit',
-    # Modifiers
-    'add', 'remove', 'delete', 'update', 'insert', 'append',
-    # Other common
-    'to', 'from', 'with', 'apply', 'process', 'resolve', 'ensure', 'check',
-    'filter', 'map', 'reduce', 'merge', 'split', 'join', 'find', 'search',
-    'register', 'unregister', 'subscribe', 'unsubscribe',
-)
 SKIP_DUPLICATE_FILE_PATTERNS = ('.test.ts', '.test.tsx', '.spec.ts')
 
 # Known packages in the monorepo
@@ -150,12 +137,33 @@ def find_duplicate_functions(files: List[Tuple[Path, int]], root_dir: Path) -> D
             # Skip known common function names
             if func in SKIP_DUPLICATE_FUNCTIONS:
                 continue
-            if any(func.startswith(prefix) for prefix in SKIP_DUPLICATE_PREFIXES):
-                continue
             function_locations[func].append(file_path)
     
-    # Filter to only duplicates
-    return {name: paths for name, paths in function_locations.items() if len(paths) > 1}
+    # Filter to only duplicates, ignoring cross-extension duplicates.
+    # Extensions are independent packages — the same function name in
+    # extensions/telegram and extensions/discord is expected, not duplication.
+    result: Dict[str, List[Path]] = {}
+    for name, paths in function_locations.items():
+        if len(paths) < 2:
+            continue
+        # If ALL instances are in different extensions, skip
+        ext_dirs = set()
+        non_ext = False
+        for p in paths:
+            try:
+                rel = p.relative_to(root_dir)
+                parts = rel.parts
+                if len(parts) >= 2 and parts[0] == 'extensions':
+                    ext_dirs.add(parts[1])
+                else:
+                    non_ext = True
+            except ValueError:
+                non_ext = True
+        # Skip if every instance lives in a different extension (no core overlap)
+        if not non_ext and len(ext_dirs) == len(paths):
+            continue
+        result[name] = paths
+    return result
 
 
 def validate_git_ref(root_dir: Path, ref: str) -> bool:
@@ -284,8 +292,6 @@ def find_duplicate_regressions(
         functions = extract_functions_from_content(content)
         for func in functions:
             if func in SKIP_DUPLICATE_FUNCTIONS:
-                continue
-            if any(func.startswith(prefix) for prefix in SKIP_DUPLICATE_PREFIXES):
                 continue
             base_function_locations[func].append(file_path)
 
@@ -432,7 +438,28 @@ def main():
 
         print()
         if args.strict and violations:
+            # Print actionable summary so contributors know what to do
+            print("─" * 60)
+            print("❌ Code size check failed\n")
+            if crossed:
+                print(f"   {len(crossed)} file(s) grew past the {args.threshold}-line limit.")
+            if grew:
+                print(f"   {len(grew)} file(s) already over {args.threshold} lines got larger.")
+            print()
+            print("   How to fix:")
+            print("   • Split large files into smaller, focused modules")
+            print("   • Extract helpers, types, or constants into separate files")
+            print("   • See AGENTS.md for guidelines (~500-700 LOC target)")
+            print()
+            print(f"   This check compares your PR against {args.compare_to}.")
+            print(f"   Only code files are checked ({', '.join(sorted(e for e in CODE_EXTENSIONS))}).")
+            print("   Docs, tests names, and config files are not affected.")
+            print("─" * 60)
             sys.exit(1)
+        elif args.strict:
+            print("─" * 60)
+            print("✅ Code size check passed — no files exceed thresholds.")
+            print("─" * 60)
         
         return
     
