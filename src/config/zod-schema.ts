@@ -576,6 +576,15 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     memory: MemorySchema,
+    vault: z
+      .object({
+        enabled: z.boolean().optional(),
+        proxies: z.record(z.string(), z.string().url()).optional(),
+        file: z.string().optional(),
+        publicKey: z.string().regex(/^age1/, "must start with 'age1'").optional(),
+      })
+      .strict()
+      .optional(),
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
