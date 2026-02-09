@@ -55,6 +55,7 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { sanitizeToolNamesForBedrock } from "./bedrock.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -240,7 +241,12 @@ export async function compactEmbeddedPiSessionDirect(
       modelId,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const googleSanitized = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const tools = sanitizeToolNamesForBedrock({
+      tools: googleSanitized,
+      provider,
+      modelApi: model?.api,
+    });
     logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
