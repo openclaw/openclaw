@@ -248,9 +248,12 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
   it("emits internal + plugin compaction hooks with counts", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) =>
-      params.messages.slice(1),
-    );
+    let sanitizedCount = 0;
+    sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
+      const sanitized = params.messages.slice(1);
+      sanitizedCount = sanitized.length;
+      return sanitized;
+    });
 
     const result = await compactEmbeddedPiSessionDirect({
       sessionId: "session-1",
@@ -272,8 +275,8 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(beforeContext).toMatchObject({
       messageCount: 2,
       tokenCount: 20,
-      messageCountOriginal: 2,
-      tokenCountOriginal: 20,
+      messageCountOriginal: sanitizedCount,
+      tokenCountOriginal: sanitizedCount * 10,
     });
     expect(afterContext).toMatchObject({
       messageCount: 1,
@@ -297,6 +300,29 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         compactedCount: 1,
       },
       expect.objectContaining({ sessionKey: "agent:main:session-1", messageProvider: "telegram" }),
+    );
+  });
+
+  it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(sessionHook("compact:before")?.sessionKey).toBe("session-1");
+    expect(sessionHook("compact:after")?.sessionKey).toBe("session-1");
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ sessionKey: "session-1" }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ sessionKey: "session-1" }),
     );
   });
 });

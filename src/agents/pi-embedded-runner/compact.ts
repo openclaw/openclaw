@@ -632,7 +632,7 @@ export async function compactEmbeddedPiSessionDirect(
           session.agent.replaceMessages(limited);
         }
         const missingSessionKey = !params.sessionKey || !params.sessionKey.trim();
-        const hookSessionKey = params.sessionKey?.trim() || `compact:${params.sessionId}`;
+        const hookSessionKey = params.sessionKey?.trim() || params.sessionId;
         const hookRunner = getGlobalHookRunner();
         const messageCountOriginal = originalMessages.length;
         let tokenCountOriginal: number | undefined;
