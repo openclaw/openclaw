@@ -305,3 +305,86 @@ export function formatToolSummary(display: ToolDisplay): string {
     ? `${display.emoji} ${display.label}: ${detail}`
     : `${display.emoji} ${display.label}`;
 }
+
+const MAX_DISCORD_CMD_LENGTH = 120;
+
+/**
+ * Format a tool call for Discord using code blocks and
+ * human-friendly verbs instead of raw tool names with colons.
+ */
+export function formatToolFeedbackDiscord(display: ToolDisplay): string {
+  const key = display.name.toLowerCase();
+
+  // Bash/exec: show command in inline code, strip noise
+  if (key === "bash" || key === "exec") {
+    if (display.detail) {
+      let cmd = display.detail.split(/\r?\n/)[0]?.trim() ?? display.detail;
+      // Strip leading "export FOO=bar &&" prefixes
+      cmd = cmd.replace(/^(?:export\s+\S+=\S+\s*&&\s*)+/g, "").trim();
+      // Strip leading echo "..." && prefixes
+      cmd = cmd.replace(/^echo\s+"[^"]*"\s*&&\s*/g, "").trim();
+      // Strip stderr/stdout redirections (2>/dev/null, >/dev/null)
+      cmd = cmd.replace(/\s*[12]?>\s*\/dev\/null/g, "").trim();
+      // Strip trailing pipe chains that are just filtering (| head, | tail)
+      cmd = cmd.replace(/\s*\|\s*(?:head|tail)\s+.*$/g, "").trim();
+      const truncated =
+        cmd.length > MAX_DISCORD_CMD_LENGTH
+          ? `${cmd.slice(0, MAX_DISCORD_CMD_LENGTH - 3)}...`
+          : cmd;
+      return `${display.emoji} Running \`${truncated}\``;
+    }
+    return `${display.emoji} Running a command`;
+  }
+
+  // Read: show file path in inline code
+  if (key === "read") {
+    if (display.detail) {
+      return `${display.emoji} Reading \`${display.detail}\``;
+    }
+    return `${display.emoji} Reading a file`;
+  }
+
+  // Write/Edit: show file path in inline code
+  if (key === "write" || key === "edit") {
+    const verb = key === "write" ? "Writing" : "Editing";
+    if (display.detail) {
+      return `${display.emoji} ${verb} \`${display.detail}\``;
+    }
+    return `${display.emoji} ${verb} a file`;
+  }
+
+  // Search tools: show query/pattern in inline code
+  if (key === "web_search" || key === "grep" || key === "glob") {
+    if (display.detail) {
+      return `${display.emoji} Searching \`${display.detail}\``;
+    }
+    return `${display.emoji} Searching`;
+  }
+
+  // Web fetch: show URL in inline code
+  if (key === "web_fetch") {
+    if (display.detail) {
+      return `${display.emoji} Fetching \`${display.detail}\``;
+    }
+    return `${display.emoji} Fetching a page`;
+  }
+
+  // Sub-agent / Task: show description
+  if (key === "task" || key === "sessions_spawn") {
+    if (display.detail) {
+      return `${display.emoji} ${display.detail}`;
+    }
+    return `${display.emoji} Running a sub-agent`;
+  }
+
+  // detailOnly tools (claude_code wrapper)
+  if (display.detailOnly && display.detail) {
+    return `${display.emoji} ${display.detail}`;
+  }
+
+  // Default: emoji + label + optional detail in inline code
+  if (display.detail) {
+    return `${display.emoji} ${display.label} \`${display.detail}\``;
+  }
+  return `${display.emoji} ${display.label}`;
+}
