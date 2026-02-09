@@ -301,6 +301,57 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
+          // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
+          // job properties to the top level alongside `action` instead of nesting
+          // them inside `job`. When `params.job` is missing or empty, reconstruct
+          // a synthetic job object from any recognised top-level job fields.
+          // See: https://github.com/openclaw/openclaw/issues/11310
+          if (
+            !params.job ||
+            (typeof params.job === "object" &&
+              params.job !== null &&
+              Object.keys(params.job as Record<string, unknown>).length === 0)
+          ) {
+            const JOB_KEYS: ReadonlySet<string> = new Set([
+              "name",
+              "schedule",
+              "sessionTarget",
+              "wakeMode",
+              "payload",
+              "delivery",
+              "enabled",
+              "description",
+              "deleteAfterRun",
+              "agentId",
+              "message",
+              "text",
+              "model",
+              "thinking",
+              "timeoutSeconds",
+              "allowUnsafeExternalContent",
+            ]);
+            const synthetic: Record<string, unknown> = {};
+            let found = false;
+            for (const key of Object.keys(params)) {
+              if (JOB_KEYS.has(key) && params[key] !== undefined) {
+                synthetic[key] = params[key];
+                found = true;
+              }
+            }
+            // Only use the synthetic job if at least one meaningful field is present
+            // (schedule, payload, message, or text are the minimum signals that the
+            // LLM intended to create a job).
+            if (
+              found &&
+              (synthetic.schedule !== undefined ||
+                synthetic.payload !== undefined ||
+                synthetic.message !== undefined ||
+                synthetic.text !== undefined)
+            ) {
+              params.job = synthetic;
+            }
+          }
+
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
