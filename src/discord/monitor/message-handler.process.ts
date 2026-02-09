@@ -64,6 +64,8 @@ import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "
 import { createTypingGuard } from "./typing-guard.js";
 import { sendTyping } from "./typing.js";
 
+const DEFAULT_ACK_DELAY_MS = 5000;
+
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
     cfg,
@@ -671,6 +673,37 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         logVerbose(`discord: failed to append job event: ${String(err)}`);
       });
     }
+  }
+
+  // ACK case: set up delayed sending for interim feedback if the main model takes too long.
+  const ackDelayMs = DEFAULT_ACK_DELAY_MS;
+  let _smartAckMessageId: string | undefined;
+  let _smartAckChannelId: string | undefined;
+  let smartAckCancelled = false;
+  let _smartAckDelayTimer: ReturnType<typeof setTimeout> | undefined;
+  if (triageResult && !triageResult.isFull) {
+    const ackText = triageResult.text;
+    _smartAckDelayTimer = setTimeout(async () => {
+      if (smartAckCancelled) {
+        return;
+      }
+      try {
+        // Suppress smart-status updates briefly so the ack isn't immediately overwritten.
+        smartStatusFilter?.suppress(10000);
+        deleteStatusMessage();
+        const result = await sendMessageDiscord(deliverTarget, ackText, {
+          token,
+          accountId,
+          rest: client.rest,
+        });
+        if (!smartAckCancelled) {
+          _smartAckMessageId = result.messageId !== "unknown" ? result.messageId : undefined;
+          _smartAckChannelId = result.channelId;
+        }
+      } catch (err) {
+        logVerbose(`discord: smart ack delivery failed: ${String(err)}`);
+      }
+    }, ackDelayMs);
   }
 
   const { queuedFinal, counts } = await dispatchInboundMessage({
