@@ -10,7 +10,6 @@ import UserNotifications
 private struct NotificationCallError: Error, Sendable {
     let message: String
 }
-
 // Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -37,7 +36,6 @@ private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
         cont?.resume(returning: response)
     }
 }
-
 @MainActor
 @Observable
 final class NodeAppModel {
