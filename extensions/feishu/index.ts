@@ -12,7 +12,6 @@ export { monitorFeishuProvider } from "./src/monitor.js";
 export {
   sendMessageFeishu,
   sendCardFeishu,
-  updateCardFeishu,
   editMessageFeishu,
   getMessageFeishu,
 } from "./src/send.js";
