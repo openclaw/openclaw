@@ -11,25 +11,19 @@
   $: isDark = theme === 'dark';
 </script>
 
-<main class="app" class:dark={isDark} class:light={!isDark}>
-  <!-- Background Accents -->
-  <div class="bg-accents">
-    <div class="accent accent-teal"></div>
-    <div class="accent accent-blue"></div>
-  </div>
-
+<div class="app" class:dark={isDark} class:light={!isDark}>
   <Sidebar {theme} on:toggleTheme={toggleTheme} />
   
-  <div class="content">
+  <main class="content">
     <ChatInterface {theme} />
-  </div>
+  </main>
 
   <!-- Keyboard Shortcut Hint -->
   <div class="shortcut-hint">
     <span><kbd>⌘</kbd> K</span>
     <span class="hint-text">SEARCH ANYWHERE</span>
   </div>
-</main>
+</div>
 
 <style>
   :global(*) {
@@ -44,79 +38,26 @@
   }
 
   .app {
-    position: relative;
+    min-height: 100vh;
+    width: 100%;
+    transition: background-color 0.5s;
+  }
+
+  .app.dark {
+    background-color: #0a0a0a;
+  }
+
+  .app.light {
+    background-color: #fafafa;
+  }
+
+  .content {
     min-height: 100vh;
     width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background-color 0.7s;
-    overflow-x: hidden;
-  }
-
-  .app.dark {
-    background-color: #050505;
-  }
-
-  .app.light {
-    background-color: #fcfcfc;
-  }
-
-  .bg-accents {
-    position: absolute;
-    inset: 0;
-    overflow: hidden;
-    pointer-events: none;
-  }
-
-  .accent {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(120px);
-    transition: opacity 1s;
-  }
-
-  .accent-teal {
-    top: -10%;
-    left: -10%;
-    width: 40%;
-    height: 40%;
-  }
-
-  .dark .accent-teal {
-    background: rgba(45, 212, 191, 0.05);
-    opacity: 0.5;
-  }
-
-  .light .accent-teal {
-    background: rgba(45, 212, 191, 0.1);
-    opacity: 0.3;
-  }
-
-  .accent-blue {
-    bottom: -10%;
-    right: -10%;
-    width: 40%;
-    height: 40%;
-  }
-
-  .dark .accent-blue {
-    background: rgba(59, 130, 246, 0.05);
-    opacity: 0.5;
-  }
-
-  .light .accent-blue {
-    background: rgba(59, 130, 246, 0.1);
-    opacity: 0.3;
-  }
-
-  .content {
-    position: relative;
-    width: 100%;
-    display: flex;
-    justify-content: center;
-    z-index: 10;
-    padding: 80px 0;
+    padding: 40px 24px;
   }
 
   .shortcut-hint {
@@ -131,7 +72,8 @@
     font-size: 11px;
     font-weight: 500;
     letter-spacing: 0.05em;
-    transition: opacity 0.5s;
+    transition: all 0.5s;
+    z-index: 50;
   }
 
   .dark .shortcut-hint {
