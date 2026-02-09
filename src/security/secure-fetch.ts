@@ -150,7 +150,11 @@ export function installSecureFetch(): void {
 
   PROXY_URL = process.env.PROXY_URL;
   if (!PROXY_URL) {
-    throw new Error("PROXY_URL environment variable is required in secure mode");
+    console.warn(
+      "[secure-fetch] OPENCLAW_SECURE_MODE=1 but PROXY_URL is not set; " +
+        "skipping fetch wrapper installation (proxy unavailable)",
+    );
+    return;
   }
 
   // Replace global fetch

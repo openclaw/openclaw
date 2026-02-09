@@ -338,8 +338,7 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
       }
 
       // Log only origin + pathname to avoid leaking secrets in URL path/query
-      const logUrl = new URL(targetUrl);
-      logger.info(`Proxying request: ${method} ${logUrl.origin}${logUrl.pathname}`);
+      logger.info(`Proxying request: ${method} ${parsedUrl.origin}${parsedUrl.pathname}`);
 
       // Redirect handling: we intentionally do NOT block or follow 3xx responses.
       // undici v7 request() does not follow redirects by default, so the raw 3xx
@@ -348,7 +347,9 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
       // the outside world through this proxy. If the client follows the Location header,
       // that follow-up request will route back through the proxy, where the target URL
       // is re-validated against the allowlist and credentials are re-injected as needed.
-      const response = await request(targetUrl, {
+      // Use the normalized parsedUrl so the fetched URL matches the allowlist check
+      const normalizedUrl = parsedUrl.toString();
+      const response = await request(normalizedUrl, {
         method: method as import("undici").Dispatcher.HttpMethod,
         headers,
         body: hasBody ? modifiedBody : undefined,
