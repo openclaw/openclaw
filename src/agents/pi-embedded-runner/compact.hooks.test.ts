@@ -40,7 +40,12 @@ vi.mock("@mariozechner/pi-coding-agent", () => {
             timestamp: 3,
           },
         ],
-        agent: { replaceMessages: vi.fn(), streamFn: vi.fn() },
+        agent: {
+          replaceMessages: vi.fn((messages: unknown[]) => {
+            session.messages = [...(messages as typeof session.messages)];
+          }),
+          streamFn: vi.fn(),
+        },
         compact: vi.fn(async () => {
           // simulate compaction trimming to a single message
           session.messages.splice(1);
@@ -139,7 +144,7 @@ vi.mock("./extensions.js", () => ({
 
 vi.mock("./history.js", () => ({
   getDmHistoryLimitFromSessionKey: vi.fn(() => undefined),
-  limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs),
+  limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
 }));
 
 vi.mock("../skills.js", () => ({
@@ -245,15 +250,21 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       type: "session",
       action: "compact:before",
     });
+    expect(sessionHook("compact:before")?.context).toMatchObject({
+      messageCount: 2,
+      tokenCount: 20,
+      messageCountOriginal: 3,
+      tokenCountOriginal: 30,
+    });
     expect(sessionHook("compact:after")?.context).toMatchObject({
       messageCount: 1,
-      compactedCount: 2,
+      compactedCount: 1,
     });
 
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageCount: 3,
-        tokenCount: 30,
+        messageCount: 2,
+        tokenCount: 20,
       }),
       expect.objectContaining({ sessionKey: "agent:main:session-1" }),
     );
@@ -261,7 +272,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       {
         messageCount: 1,
         tokenCount: 10,
-        compactedCount: 2,
+        compactedCount: 1,
       },
       expect.objectContaining({ sessionKey: "agent:main:session-1" }),
     );
