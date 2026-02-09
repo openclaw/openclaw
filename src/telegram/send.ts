@@ -397,7 +397,7 @@ export async function sendMessageTelegram(
 
     if (isVideoNote) {
       caption = undefined;
-      followUpText = text.trim() ? text : undefined;
+      followUpText = text;
     } else {
       const split = splitTelegramCaption(text);
       caption = split.caption;
@@ -414,7 +414,8 @@ export async function sendMessageTelegram(
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     const mediaParams = {
-      ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
+      caption: htmlCaption,
+      ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
       ...(opts.silent === true ? { disable_notification: true } : {}),
     };
