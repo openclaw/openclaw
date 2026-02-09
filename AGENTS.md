@@ -90,24 +90,26 @@
 
 ## Commit & Pull Request Guidelines
 
-- Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
-- Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
-- Group related changes; avoid bundling unrelated refactors.
-- Changelog workflow: keep latest released version at top (no `Unreleased`); after publishing, bump version and start a new top section.
-- PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
-- Read this when submitting a PR: `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr))
-- Read this when submitting an issue: `docs/help/submitting-an-issue.md` ([Submitting an Issue](https://docs.openclaw.ai/help/submitting-an-issue))
-- PR review flow: when given a PR link, review via `gh pr view`/`gh pr diff` and do **not** change branches.
-- PR review calls: prefer a single `gh pr view --json ...` to batch metadata/comments; run `gh pr diff` only when needed.
-- Before starting a review when a GH Issue/PR is pasted: run `git pull`; if there are local changes or unpushed commits, stop and alert the user before reviewing.
+- Use `scripts/committer "<msg>" <file...>` for all commits — never manual `git add`/`git commit`, so staging stays scoped.
+- Write concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
+- Group related changes; never bundle unrelated refactors.
+- Keep the latest released version at top of the changelog (no `Unreleased` section); after publishing, bump the version and start a new top section.
+- **Before opening a PR or issue, always check for duplicates** — run `gh pr list -S "<keywords>"` and `gh issue list -S "<keywords>"` to confirm no one has already submitted the same change. If a duplicate exists, comment on it instead of opening a new one.
+- Before submitting a PR, read `docs/help/submitting-a-pr.md` ([Submitting a PR](https://docs.openclaw.ai/help/submitting-a-pr)).
+- Before submitting an issue, read `docs/help/submitting-an-issue.md` ([Submitting an Issue](https://docs.openclaw.ai/help/submitting-an-issue)).
+- PRs should summarize scope, note testing performed, and call out any user-facing changes or new flags.
+- When reviewing a PR, use `gh pr view` / `gh pr diff` — do **not** switch branches.
+- Prefer a single `gh pr view --json ...` call to batch metadata and comments; run `gh pr diff` only when needed.
+- Before starting a review when a GitHub issue or PR is pasted: run `git pull`; if there are local changes or unpushed commits, stop and alert the user.
 - Goal: merge PRs. Prefer **rebase** when commits are clean; **squash** when history is messy.
-- PR merge flow: create a temp branch from `main`, merge the PR branch into it (prefer squash unless commit history is important; use rebase/merge when it is). Always try to merge the PR unless it’s truly difficult, then use another approach. If we squash, add the PR author as a co-contributor. Apply fixes, add changelog entry (include PR # + thanks), run full gate before the final commit, commit, merge back to `main`, delete the temp branch, and end on `main`.
-- If you review a PR and later do work on it, land via merge/squash (no direct-main commits) and always add the PR author as a co-contributor.
+- PR merge flow: create a temp branch from `main`, merge the PR branch into it (squash by default; rebase/merge when commit history matters), apply fixes, add a changelog entry (include PR # + thanks), run the full gate, commit, merge back to `main`, delete the temp branch, and end on `main`.
+- When squashing, add the PR author as co-contributor (`Co-authored-by:`).
+- If you review a PR and later do work on it, land via merge/squash (no direct-main commits) and always add the PR author as co-contributor.
 - When working on a PR: add a changelog entry with the PR number and thank the contributor.
 - When working on an issue: reference the issue in the changelog entry.
-- When merging a PR: leave a PR comment that explains exactly what we did and include the SHA hashes.
-- When merging a PR from a new contributor: add their avatar to the README “Thanks to all clawtributors” thumbnail list.
-- After merging a PR: run `bun scripts/update-clawtributors.ts` if the contributor is missing, then commit the regenerated README.
+- When merging a PR: leave a comment explaining what was done, including the final SHA(s).
+- When merging a PR from a new contributor: add their avatar to the README "Thanks to all clawtributors" list.
+- After merging: run `bun scripts/update-clawtributors.ts` if the contributor is missing, then commit the regenerated README.
 
 ## Shorthand Commands
 
