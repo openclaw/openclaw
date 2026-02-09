@@ -918,6 +918,7 @@ export class AsteriskAriProvider implements VoiceCallProvider {
 
     const call = this.manager.getCallByProviderCallId(providerCallId);
     if (!call) {
+      this.pendingInboundChannels.delete(providerCallId);
       return;
     }
 
