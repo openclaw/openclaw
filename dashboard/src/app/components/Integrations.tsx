@@ -426,48 +426,79 @@ const RemindersTab: React.FC<{ isDark: boolean }> = ({ isDark }) => {
 
 // WhatsApp Setup Component
 const WhatsAppSetup: React.FC<{ isDark: boolean; onClose: () => void; phoneNumber?: string }> = ({ isDark, onClose, phoneNumber }) => {
-  const [status, setStatus] = useState<"configuring" | "ready" | "error">("configuring");
+  const [status, setStatus] = useState<"loading" | "qr" | "connected" | "error" | "manual">("loading");
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [message, setMessage] = useState("");
   const [copied, setCopied] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
 
-  // Auto-configure WhatsApp on mount
-  useEffect(() => {
-    const configureWhatsApp = async () => {
+  // Fetch QR code from gateway
+  const fetchQrCode = async () => {
+    setStatus("loading");
+    try {
+      const gatewayUrl = localStorage.getItem("easyhub_gateway_url") || "http://localhost:3033";
+      const gatewayToken = localStorage.getItem("easyhub_gateway_token") || "";
+      
+      const response = await fetch(`${gatewayUrl}/api/channels/whatsapp/qr`, {
+        method: "GET",
+        headers: {
+          ...(gatewayToken ? { "Authorization": `Bearer ${gatewayToken}` } : {})
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.qrDataUrl) {
+          setQrDataUrl(data.qrDataUrl);
+          setMessage(data.message || "Scan this QR code with WhatsApp");
+          setStatus("qr");
+          // Start polling for connection status
+          pollConnectionStatus();
+        } else {
+          // Already connected or other message
+          setMessage(data.message || "WhatsApp status unknown");
+          if (data.message?.includes("already linked")) {
+            setStatus("connected");
+          } else {
+            setStatus("manual");
+          }
+        }
+      } else {
+        // Gateway error, fall back to manual
+        setStatus("manual");
+      }
+    } catch (err) {
+      // Gateway not reachable, show manual instructions
+      console.error("Gateway not reachable:", err);
+      setStatus("manual");
+    }
+  };
+
+  // Poll for connection status
+  const pollConnectionStatus = () => {
+    const interval = setInterval(async () => {
       try {
         const gatewayUrl = localStorage.getItem("easyhub_gateway_url") || "http://localhost:3033";
-        const gatewayToken = localStorage.getItem("easyhub_gateway_token") || "";
-        
-        // Try to configure WhatsApp via gateway API
-        const response = await fetch(`${gatewayUrl}/api/config/patch`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(gatewayToken ? { "Authorization": `Bearer ${gatewayToken}` } : {})
-          },
-          body: JSON.stringify({
-            channels: {
-              whatsapp: {
-                dmPolicy: "allowlist",
-                allowFrom: phoneNumber ? [phoneNumber] : ["*"]
-              }
-            }
-          })
-        });
-
+        const response = await fetch(`${gatewayUrl}/api/channels/whatsapp/status`);
         if (response.ok) {
-          setStatus("ready");
-        } else {
-          // Gateway might not be running, show manual instructions
-          setStatus("ready");
+          const data = await response.json();
+          if (data.connected) {
+            setStatus("connected");
+            setMessage("WhatsApp connected successfully!");
+            clearInterval(interval);
+          }
         }
-      } catch (err) {
-        // Gateway not reachable, show manual instructions anyway
-        setStatus("ready");
+      } catch {
+        // Ignore polling errors
       }
-    };
+    }, 3000);
 
-    configureWhatsApp();
-  }, [phoneNumber]);
+    // Stop polling after 3 minutes
+    setTimeout(() => clearInterval(interval), 180000);
+  };
+
+  useEffect(() => {
+    fetchQrCode();
+  }, []);
 
   const copyCommand = () => {
     navigator.clipboard.writeText("easyhub channels login");
@@ -496,38 +527,86 @@ const WhatsAppSetup: React.FC<{ isDark: boolean; onClose: () => void; phoneNumbe
         </button>
       </div>
 
-      {status === "configuring" && (
-        <div className="flex flex-col items-center py-6">
-          <div className="w-8 h-8 border-2 border-[#2dd4bf] border-t-transparent rounded-full animate-spin mb-3" />
+      {status === "loading" && (
+        <div className="flex flex-col items-center py-8">
+          <div className="w-10 h-10 border-2 border-[#2dd4bf] border-t-transparent rounded-full animate-spin mb-4" />
           <p className={`text-sm ${isDark ? "text-gray-400" : "text-gray-600"}`}>
-            Configuring WhatsApp...
+            Connecting to WhatsApp...
           </p>
         </div>
       )}
 
-      {status === "ready" && (
+      {status === "qr" && qrDataUrl && (
         <div className={`text-sm space-y-4 ${isDark ? "text-gray-300" : "text-gray-700"}`}>
-          <div className={`flex items-center gap-2 p-3 rounded-lg ${isDark ? "bg-green-500/10" : "bg-green-50"}`}>
-            <Check size={18} className="text-green-500" />
-            <span className={isDark ? "text-green-400" : "text-green-700"}>
-              WhatsApp configured! One more step to connect.
+          <div className="flex flex-col items-center">
+            <div className="bg-white p-4 rounded-xl mb-4 shadow-lg">
+              <img 
+                src={qrDataUrl}
+                alt="WhatsApp QR Code"
+                className="w-52 h-52"
+              />
+            </div>
+            <p className={`text-center ${isDark ? "text-gray-400" : "text-gray-600"}`}>
+              {message}
+            </p>
+          </div>
+
+          <div className={`space-y-2 ${isDark ? "text-gray-400" : "text-gray-600"}`}>
+            <div className="flex items-start gap-2">
+              <span className="font-bold text-[#2dd4bf]">1.</span>
+              <span>Open WhatsApp on your phone</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="font-bold text-[#2dd4bf]">2.</span>
+              <span>Go to <strong>Settings → Linked Devices</strong></span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="font-bold text-[#2dd4bf]">3.</span>
+              <span>Tap <strong>Link a Device</strong> and scan this QR</span>
+            </div>
+          </div>
+
+          <button
+            onClick={fetchQrCode}
+            className={`w-full py-2 rounded-lg text-sm font-medium ${
+              isDark ? "bg-white/10 text-white hover:bg-white/20" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+            }`}
+          >
+            Refresh QR Code
+          </button>
+        </div>
+      )}
+
+      {status === "connected" && (
+        <div className="flex flex-col items-center py-6">
+          <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mb-4">
+            <Check size={32} className="text-green-500" />
+          </div>
+          <p className={`font-semibold text-lg ${isDark ? "text-white" : "text-gray-900"}`}>
+            WhatsApp Connected!
+          </p>
+          <p className={`text-sm mt-2 ${isDark ? "text-gray-400" : "text-gray-600"}`}>
+            You can now send and receive messages
+          </p>
+        </div>
+      )}
+
+      {status === "manual" && (
+        <div className={`text-sm space-y-4 ${isDark ? "text-gray-300" : "text-gray-700"}`}>
+          <div className={`flex items-center gap-2 p-3 rounded-lg ${isDark ? "bg-amber-500/10" : "bg-amber-50"}`}>
+            <AlertCircle size={18} className="text-amber-500" />
+            <span className={isDark ? "text-amber-400" : "text-amber-700"}>
+              Gateway not reachable. Start it first, then scan QR.
             </span>
           </div>
 
           <div className={`p-4 rounded-xl border-2 border-dashed ${isDark ? "border-[#2dd4bf]/30 bg-[#2dd4bf]/5" : "border-[#2dd4bf]/50 bg-[#2dd4bf]/5"}`}>
             <div className="text-center space-y-3">
-              <div className={`text-lg font-semibold ${isDark ? "text-white" : "text-gray-900"}`}>
-                📱 Scan QR Code
-              </div>
               <p className={`text-sm ${isDark ? "text-gray-400" : "text-gray-600"}`}>
-                Open PowerShell/Terminal and run:
+                Run in terminal:
               </p>
               <div 
-                onClick={() => {
-                  navigator.clipboard.writeText("easyhub channels login");
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                }}
+                onClick={copyCommand}
                 className={`inline-flex items-center gap-3 px-4 py-2.5 rounded-lg font-mono text-sm cursor-pointer transition-all ${
                   copied 
                     ? "bg-green-500 text-white" 
@@ -542,27 +621,12 @@ const WhatsAppSetup: React.FC<{ isDark: boolean; onClose: () => void; phoneNumbe
             </div>
           </div>
 
-          <div className={`space-y-2 ${isDark ? "text-gray-400" : "text-gray-600"}`}>
-            <div className="flex items-start gap-2">
-              <span className="font-bold text-[#2dd4bf]">1.</span>
-              <span>Paste the command in PowerShell → QR code appears</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="font-bold text-[#2dd4bf]">2.</span>
-              <span>Open WhatsApp → <strong>Settings → Linked Devices</strong></span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="font-bold text-[#2dd4bf]">3.</span>
-              <span>Tap <strong>Link a Device</strong> → Scan the QR</span>
-            </div>
-          </div>
-
-          <div className={`p-3 rounded-lg ${isDark ? "bg-amber-500/10" : "bg-amber-50"}`}>
-            <p className={`text-xs ${isDark ? "text-amber-400" : "text-amber-700"}`}>
-              ⚠️ <strong>Note:</strong> Terminal is required because WhatsApp's QR code must be displayed securely. 
-              Future updates will show QR directly in dashboard.
-            </p>
-          </div>
+          <button
+            onClick={fetchQrCode}
+            className="w-full py-2.5 rounded-lg text-sm font-medium bg-[#2dd4bf] text-black hover:bg-[#5eead4]"
+          >
+            Try Again
+          </button>
         </div>
       )}
 
