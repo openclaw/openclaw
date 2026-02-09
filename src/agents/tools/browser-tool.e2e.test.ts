@@ -155,6 +155,23 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
   });
 
+  it("passes timeoutMs through to navigate", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, {
+      action: "navigate",
+      targetUrl: "https://example.com",
+      timeoutMs: 3000,
+    });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        url: "https://example.com",
+        timeoutMs: 3000,
+      }),
+    );
+  });
+
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });
