@@ -1542,7 +1542,7 @@ export function createExecTool(
         signal.addEventListener("abort", onAbortSignal, { once: true });
       }
 
-      return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
+      return new Promise<AgentToolResult<ExecToolDetails>>((resolve) => {
         const resolveRunning = () =>
           resolve({
             content: [
