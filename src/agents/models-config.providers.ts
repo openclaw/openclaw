@@ -91,6 +91,17 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const GONKA_BASE_URL = "http://node1.gonka.ai:8000/v1";
+const GONKA_DEFAULT_MODEL_ID = "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8";
+const GONKA_DEFAULT_CONTEXT_WINDOW = 128000;
+const GONKA_DEFAULT_MAX_TOKENS = 8192;
+const GONKA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -441,6 +452,30 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export function buildGonkaProvider(): ProviderConfig {
+  return {
+    baseUrl: GONKA_BASE_URL,
+    api: "openai-completions",
+    auth: "private-key",
+    models: [
+      {
+        id: GONKA_DEFAULT_MODEL_ID,
+        name: "Qwen3 235B A22B Instruct",
+        reasoning: false,
+        input: ["text"],
+        cost: GONKA_DEFAULT_COST,
+        contextWindow: GONKA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GONKA_DEFAULT_MAX_TOKENS,
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          maxTokensField: "max_tokens",
+        },
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -541,6 +576,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const gonkaKey =
+    resolveEnvApiKeyVarName("gonka") ??
+    resolveApiKeyFromProfiles({ provider: "gonka", store: authStore });
+  if (gonkaKey) {
+    providers.gonka = { ...buildGonkaProvider(), apiKey: gonkaKey };
   }
 
   return providers;

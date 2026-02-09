@@ -110,6 +110,7 @@
     "@aws-sdk/client-bedrock": "^3.985.0",
     "@buape/carbon": "0.14.0",
     "@clack/prompts": "^1.0.0",
+    "@cosmjs/crypto": "^0.38.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
@@ -135,6 +136,7 @@
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "file-type": "^21.3.0",
+    "gonka-openai": "^0.2.2",
     "grammy": "^1.39.3",
     "hono": "4.11.9",
     "jiti": "^2.6.1",
@@ -211,6 +213,7 @@
       "esbuild",
       "node-llama-cpp",
       "protobufjs",
+      "secp256k1",
       "sharp"
     ]
   }

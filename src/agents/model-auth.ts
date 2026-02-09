@@ -61,7 +61,13 @@ function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "private-key"
+  ) {
     return auth;
   }
   return undefined;
@@ -129,7 +135,7 @@ export type ResolvedProviderAuth = {
   apiKey?: string;
   profileId?: string;
   source: string;
-  mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  mode: "api-key" | "oauth" | "token" | "aws-sdk" | "private-key";
 };
 
 export async function resolveApiKeyForProvider(params: {
@@ -165,6 +171,13 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+
+  if (authOverride === "private-key") {
+    const envResolved = resolveEnvApiKey(provider);
+    if (envResolved) {
+      return { apiKey: envResolved.apiKey, source: envResolved.source, mode: "private-key" };
+    }
   }
 
   const order = resolveAuthProfileOrder({
@@ -233,7 +246,14 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "private-key"
+  | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
@@ -287,6 +307,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
   }
 
+  if (normalized === "gonka") {
+    return pick("GONKA_PRIVATE_KEY");
+  }
+
   const envMap: Record<string, string> = {
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
@@ -328,6 +352,9 @@ export function resolveModelAuthMode(
   const authOverride = resolveProviderAuthOverride(cfg, resolved);
   if (authOverride === "aws-sdk") {
     return "aws-sdk";
+  }
+  if (authOverride === "private-key") {
+    return "private-key";
   }
 
   const authStore = store ?? ensureAuthProfileStore();

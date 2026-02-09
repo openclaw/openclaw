@@ -517,6 +517,20 @@ export async function runEmbeddedAttempt(
       // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
       activeSession.agent.streamFn = streamSimple;
 
+      // Gonka provider: replace streamFn with ECDSA-signed variant
+      if (params.provider === "gonka") {
+        const { resolveApiKeyForProvider } = await import("../../model-auth.js");
+        const auth = await resolveApiKeyForProvider({
+          provider: "gonka",
+          cfg: params.config,
+          agentDir: params.agentDir,
+        }).catch(() => null);
+        if (auth?.apiKey) {
+          const { initGonkaStream } = await import("../../gonka-stream.js");
+          activeSession.agent.streamFn = await initGonkaStream(auth.apiKey, params.model.baseUrl);
+        }
+      }
+
       applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
