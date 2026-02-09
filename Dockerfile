@@ -16,23 +16,20 @@ RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY ui/package.json ./ui/package.json
-COPY patches ./patches
-COPY scripts ./scripts
+COPY --chown=node:node package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY --chown=node:node ui/package.json ./ui/package.json
+COPY --chown=node:node patches ./patches
+COPY --chown=node:node scripts ./scripts
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile && chown -R node:node node_modules
 
-COPY . .
-RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
+COPY --chown=node:node . .
+RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build && chown -R node:node dist
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:build
+RUN pnpm ui:build && chown -R node:node dist/control-ui ui/node_modules
 
 ENV NODE_ENV=production
-
-# Allow non-root user to write temp files during runtime/tests.
-RUN chown -R node:node /app
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
