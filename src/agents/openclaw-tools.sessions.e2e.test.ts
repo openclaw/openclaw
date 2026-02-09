@@ -359,9 +359,12 @@ describe("sessions tools", () => {
     // Should have formatted timestamp in Asia/Shanghai timezone
     expect(msg?.timestampFormatted).toBeDefined();
     expect(typeof msg?.timestampFormatted).toBe("string");
+    // Numeric conversion is deterministic; the tz abbreviation varies by ICU/OS
+    // (e.g. "CST", "GMT+8", "GMT+08:00") so we only assert on the stable parts.
+    expect(msg?.timestampFormatted).toContain("2026-01-15");
     expect(msg?.timestampFormatted).toContain("14:30");
-    // Timezone abbreviation varies by platform: "CST" or "GMT+8"
-    expect(msg?.timestampFormatted).toMatch(/CST|GMT\+8/);
+    // Verify a timezone suffix is present (any non-whitespace after HH:MM)
+    expect(msg?.timestampFormatted).toMatch(/\d{2}:\d{2}\s+\S+/);
     // Should preserve the original epoch timestamp
     expect(msg?.timestamp).toBe(utcEpochMs);
     // Should include the timezone in the top-level response
