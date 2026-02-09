@@ -7,13 +7,30 @@ type EnvelopeTimestampZone = string;
 
 export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone = "utc"): string {
   const normalized = zone.trim().toLowerCase();
+  const weekday = (() => {
+    try {
+      if (normalized === "utc" || normalized === "gmt") {
+        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
+      }
+      if (normalized === "local" || normalized === "host") {
+        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
+      }
+      return new Intl.DateTimeFormat("en-US", { timeZone: zone, weekday: "short" }).format(date);
+    } catch {
+      return undefined;
+    }
+  })();
+
   if (normalized === "utc" || normalized === "gmt") {
-    return formatUtcTimestamp(date);
+    const ts = formatUtcTimestamp(date);
+    return weekday ? `${weekday} ${ts}` : ts;
   }
   if (normalized === "local" || normalized === "host") {
-    return formatZonedTimestamp(date) ?? formatUtcTimestamp(date);
+    const ts = formatZonedTimestamp(date) ?? formatUtcTimestamp(date);
+    return weekday ? `${weekday} ${ts}` : ts;
   }
-  return formatZonedTimestamp(date, { timeZone: zone }) ?? formatUtcTimestamp(date);
+  const ts = formatZonedTimestamp(date, { timeZone: zone }) ?? formatUtcTimestamp(date);
+  return weekday ? `${weekday} ${ts}` : ts;
 }
 
 export function formatLocalEnvelopeTimestamp(date: Date): string {
