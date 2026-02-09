@@ -413,6 +413,14 @@ export function normalizeProviders(params: {
         if (apiKey?.trim()) {
           mutated = true;
           normalizedProvider = { ...normalizedProvider, apiKey };
+        } else {
+          // SDK's ModelRegistry.validateConfig rejects providers with models
+          // but no apiKey. Local providers (ollama, autorouter) don't need
+          // auth, but omitting apiKey causes the ENTIRE models.json to fail
+          // validation — silently dropping all provider overrides (including
+          // vault proxy baseUrl rewrites for other providers).
+          mutated = true;
+          normalizedProvider = { ...normalizedProvider, apiKey: "no-key-required" };
         }
       }
     }
