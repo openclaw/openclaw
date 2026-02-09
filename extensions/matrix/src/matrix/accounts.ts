@@ -18,10 +18,14 @@ function listConfiguredAccountIds(cfg: CoreConfig): string[] {
   if (!accounts || typeof accounts !== "object") {
     return [];
   }
-  // Normalize keys so listing and resolution use the same semantics
-  return Object.keys(accounts)
-    .filter(Boolean)
-    .map((id) => normalizeAccountId(id));
+  // Normalize and de-duplicate keys so listing and resolution use the same semantics
+  return [
+    ...new Set(
+      Object.keys(accounts)
+        .filter(Boolean)
+        .map((id) => normalizeAccountId(id)),
+    ),
+  ];
 }
 
 export function listMatrixAccountIds(cfg: CoreConfig): string[] {

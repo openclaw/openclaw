@@ -18,13 +18,33 @@ export function ensureNodeRuntime() {
   }
 }
 
+/** Look up account config with case-insensitive key fallback. */
+function findAccountConfig(
+  accounts: Record<string, unknown> | undefined,
+  accountId: string,
+): Record<string, unknown> | undefined {
+  if (!accounts) return undefined;
+  const normalized = normalizeAccountId(accountId);
+  // Direct lookup first
+  if (accounts[normalized]) return accounts[normalized] as Record<string, unknown>;
+  // Case-insensitive fallback
+  for (const key of Object.keys(accounts)) {
+    if (normalizeAccountId(key) === normalized) {
+      return accounts[key] as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
 export function resolveMediaMaxBytes(accountId?: string): number | undefined {
   const cfg = getCore().config.loadConfig() as CoreConfig;
-  // Check account-specific config first (normalize to ensure consistent keying)
-  const normalized = normalizeAccountId(accountId);
-  const accountConfig = cfg.channels?.matrix?.accounts?.[normalized];
+  // Check account-specific config first (case-insensitive key matching)
+  const accountConfig = findAccountConfig(
+    cfg.channels?.matrix?.accounts as Record<string, unknown> | undefined,
+    accountId ?? "",
+  );
   if (typeof accountConfig?.mediaMaxMb === "number") {
-    return accountConfig.mediaMaxMb * 1024 * 1024;
+    return (accountConfig.mediaMaxMb as number) * 1024 * 1024;
   }
   // Fall back to top-level config
   if (typeof cfg.channels?.matrix?.mediaMaxMb === "number") {
