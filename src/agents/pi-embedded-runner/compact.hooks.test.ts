@@ -250,16 +250,22 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       type: "session",
       action: "compact:before",
     });
-    expect(sessionHook("compact:before")?.context).toMatchObject({
+    const beforeContext = sessionHook("compact:before")?.context;
+    const afterContext = sessionHook("compact:after")?.context;
+
+    expect(beforeContext).toMatchObject({
       messageCount: 2,
       tokenCount: 20,
       messageCountOriginal: 3,
       tokenCountOriginal: 30,
     });
-    expect(sessionHook("compact:after")?.context).toMatchObject({
+    expect(afterContext).toMatchObject({
       messageCount: 1,
       compactedCount: 2,
     });
+    expect(afterContext?.compactedCount).toBe(
+      (beforeContext?.messageCountOriginal as number) - (afterContext?.messageCount as number),
+    );
 
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
