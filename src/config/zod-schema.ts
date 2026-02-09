@@ -91,6 +91,24 @@ const MemorySchema = z
   .strict()
   .optional();
 
+const GuardianRuleSchema = z
+  .object({
+    mode: z.union([z.literal("public"), z.literal("needs_key"), z.literal("deny")]),
+    path: z.string(),
+  })
+  .strict();
+
+const GuardianSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    keyFileName: z.string().optional(),
+    rules: z.array(GuardianRuleSchema).optional(),
+    cacheTtlMs: z.number().int().nonnegative().optional(),
+    failMode: z.union([z.literal("closed"), z.literal("open")]).optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     meta: z
@@ -155,6 +173,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    guardian: GuardianSchema,
     logging: z
       .object({
         level: z

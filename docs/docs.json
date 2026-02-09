@@ -1140,7 +1140,7 @@
               },
               {
                 "group": "Security",
-                "pages": ["security/formal-verification"]
+                "pages": ["security/guardian", "security/formal-verification"]
               },
               {
                 "group": "Web interfaces",
@@ -1247,7 +1247,13 @@
               },
               {
                 "group": "Environment and debugging",
-                "pages": ["help/environment", "help/debugging", "help/testing", "help/scripts"]
+                "pages": [
+                  "help/environment",
+                  "help/debugging",
+                  "help/testing",
+                  "diagnostics/guardian-validation",
+                  "help/scripts"
+                ]
               },
               {
                 "group": "Node runtime",

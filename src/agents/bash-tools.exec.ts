@@ -3,6 +3,8 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import path from "node:path";
+import type { GuardianConfig } from "../config/types.guardian.js";
+import { createGuardian, GuardianDeniedError, recordAuditEvent } from "../guardian.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   type ExecAsk,
@@ -182,6 +184,7 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   notifyOnExit?: boolean;
   cwd?: string;
+  guardian?: GuardianConfig;
 };
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -822,6 +825,7 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const guardian = createGuardian(defaults?.guardian);
 
   return {
     name: "exec",
@@ -962,6 +966,31 @@ export function createExecTool(
         containerWorkdir = resolved.containerWorkdir;
       } else {
         workdir = resolveWorkdir(rawWorkdir, warnings);
+      }
+
+      const execCheck = guardian.enabled
+        ? await guardian.checkAction({
+            actionType: "exec",
+            targetPath: workdir,
+            caller: "exec",
+            targetIsDir: true,
+          })
+        : { allowed: true, mode: "public" as const };
+      const execAuditTarget = workdir;
+      recordAuditEvent({
+        action_type: "exec",
+        target: execAuditTarget,
+        caller: "exec",
+        allowed: execCheck.allowed,
+        reason: execCheck.reason,
+      });
+      if (guardian.enabled && !execCheck.allowed) {
+        if (notifySessionKey) {
+          enqueueSystemEvent("Guardian blocked exec (command redacted).", {
+            sessionKey: notifySessionKey,
+          });
+        }
+        throw new GuardianDeniedError("exec", execAuditTarget);
       }
 
       const baseEnv = coerceEnv(process.env);

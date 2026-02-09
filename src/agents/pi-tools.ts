@@ -5,13 +5,17 @@ import {
   createWriteTool,
   readTool,
 } from "@mariozechner/pi-coding-agent";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { createGuardian, GuardianDeniedError, recordAuditEvent } from "../guardian.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import {
@@ -291,6 +295,7 @@ export function createOpenClawCodingTools(options?: {
     approvalRunningNoticeMs:
       options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+    guardian: options?.config?.guardian,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
@@ -310,7 +315,111 @@ export function createOpenClawCodingTools(options?: {
       : createApplyPatchTool({
           cwd: sandboxRoot ?? workspaceRoot,
           sandboxRoot: sandboxRoot && allowWorkspaceWrites ? sandboxRoot : undefined,
+          guardian: options?.config?.guardian,
         });
+  const guardian = createGuardian(options?.config?.guardian);
+  const guardianRoot = sandboxRoot ?? workspaceRoot;
+  const guardableToolNames = new Set(["read", "write", "edit", "web_fetch", "web_search", "browser"]);
+  const resolveToolPath = (rawPath: string): string => {
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+    if (trimmed.startsWith("~")) {
+      return resolveUserPath(trimmed);
+    }
+    if (path.isAbsolute(trimmed)) {
+      return path.normalize(trimmed);
+    }
+    return path.resolve(guardianRoot, trimmed);
+  };
+  const emitGuardianDenied = (actionType: string, target: string) => {
+    const sessionKey = options?.sessionKey;
+    if (!sessionKey) {
+      return;
+    }
+    const display = target ? shortenHomePath(target) : "unknown target";
+    enqueueSystemEvent(`Guardian blocked ${actionType} for ${display}.`, { sessionKey });
+  };
+  const wrapToolWithGuardian = (tool: AnyAgentTool): AnyAgentTool => {
+    if (!tool.execute) {
+      return tool;
+    }
+    const toolName = normalizeToolName(tool.name || "");
+    if (!guardableToolNames.has(toolName)) {
+      return tool;
+    }
+    return {
+      ...tool,
+      execute: async (toolCallId, params, signal, onUpdate) => {
+        const normalized = normalizeToolParams(params);
+        const record =
+          normalized ??
+          (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+        let actionType = toolName;
+        let target = "";
+        let targetPath: string | undefined;
+        let shouldGuard = false;
+        let targetIsDir = false;
+
+        if (toolName === "read") {
+          actionType = "read";
+          shouldGuard = true;
+          if (typeof record?.path === "string") {
+            targetPath = resolveToolPath(record.path);
+            target = targetPath;
+          }
+        } else if (toolName === "write" || toolName === "edit") {
+          actionType = "write";
+          shouldGuard = true;
+          if (typeof record?.path === "string") {
+            targetPath = resolveToolPath(record.path);
+            target = targetPath;
+          }
+        } else if (toolName === "web_fetch") {
+          actionType = "fetch";
+          if (typeof record?.url === "string") {
+            target = record.url;
+          }
+        } else if (toolName === "web_search") {
+          actionType = "search";
+          if (typeof record?.query === "string") {
+            target = record.query;
+          }
+        } else if (toolName === "browser") {
+          actionType = "browser";
+          const url = typeof record?.targetUrl === "string" ? record.targetUrl : "";
+          const action = typeof record?.action === "string" ? record.action : "action";
+          target = url || `action:${action}`;
+        }
+
+        const needsGuard = shouldGuard && guardian.enabled && targetPath;
+        const check = needsGuard
+          ? await guardian.checkAction({
+              actionType,
+              targetPath,
+              caller: `tool:${toolName}`,
+              targetIsDir,
+            })
+          : { allowed: true, mode: "public" as const };
+
+        recordAuditEvent({
+          action_type: actionType,
+          target: target || targetPath || "unknown",
+          caller: `tool:${toolName}`,
+          allowed: check.allowed,
+          reason: check.reason,
+        });
+
+        if (needsGuard && !check.allowed) {
+          emitGuardianDenied(actionType, targetPath ?? target);
+          throw new GuardianDeniedError(actionType, targetPath ?? target);
+        }
+
+        return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
+      },
+    };
+  };
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -442,9 +551,10 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
     }),
   );
+  const withGuardian = withHooks.map((tool) => wrapToolWithGuardian(tool));
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
+    ? withGuardian.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withGuardian;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
