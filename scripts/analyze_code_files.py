@@ -300,14 +300,15 @@ def find_threshold_regressions(
     root_dir: Path,
     compare_ref: str,
     threshold: int,
-) -> List[Tuple[Path, int, Optional[int]]]:
+) -> Tuple[List[Tuple[Path, int, Optional[int]]], List[Tuple[Path, int, int]]]:
     """
-    Find files that crossed the threshold compared to a base ref.
-    Returns list of (path, current_lines, base_lines) for files that:
-    - Were under threshold (or didn't exist) at compare_ref
-    - Are now at or over threshold
+    Find files that crossed the threshold or grew while already over it.
+    Returns two lists:
+    - crossed: (path, current_lines, base_lines) for files that newly crossed the threshold
+    - grew: (path, current_lines, base_lines) for files already over threshold that got larger
     """
-    regressions = []
+    crossed = []
+    grew = []
     
     for file_path, current_lines in files:
         if current_lines < threshold:
@@ -315,11 +316,14 @@ def find_threshold_regressions(
         
         base_lines = get_line_count_at_ref(file_path, root_dir, compare_ref)
         
-        # Regression if: file is new OR was under threshold before
         if base_lines is None or base_lines < threshold:
-            regressions.append((file_path, current_lines, base_lines))
+            # New file or crossed the threshold
+            crossed.append((file_path, current_lines, base_lines))
+        elif current_lines > base_lines:
+            # Already over threshold and grew larger
+            grew.append((file_path, current_lines, base_lines))
     
-    return regressions
+    return crossed, grew
 
 
 def main():
@@ -386,11 +390,11 @@ def main():
         violations = False
 
         # Check file length regressions
-        regressions = find_threshold_regressions(files, root_dir, args.compare_to, args.threshold)
+        crossed, grew = find_threshold_regressions(files, root_dir, args.compare_to, args.threshold)
         
-        if regressions:
-            print(f"⚠️  {len(regressions)} file(s) crossed {args.threshold} line threshold:\n")
-            for file_path, current, base in regressions:
+        if crossed:
+            print(f"⚠️  {len(crossed)} file(s) crossed {args.threshold} line threshold:\n")
+            for file_path, current, base in crossed:
                 relative_path = file_path.relative_to(root_dir)
                 if base is None:
                     print(f"   {relative_path}: {current:,} lines (new file)")
@@ -400,6 +404,16 @@ def main():
             violations = True
         else:
             print(f"✅ No files crossed {args.threshold} line threshold")
+
+        if grew:
+            print(f"⚠️  {len(grew)} already-large file(s) grew larger:\n")
+            for file_path, current, base in grew:
+                relative_path = file_path.relative_to(root_dir)
+                print(f"   {relative_path}: {base:,} → {current:,} lines (+{current - base:,})")
+            print()
+            violations = True
+        else:
+            print(f"✅ No already-large files grew")
 
         # Check new duplicate function names
         new_dupes = find_duplicate_regressions(files, root_dir, args.compare_to)
