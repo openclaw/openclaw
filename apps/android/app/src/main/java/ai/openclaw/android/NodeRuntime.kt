@@ -284,6 +284,7 @@ class NodeRuntime(context: Context) {
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
+  val manualToken: StateFlow<String> = prefs.manualToken
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
@@ -428,6 +429,10 @@ class NodeRuntime(context: Context) {
     prefs.setManualTls(value)
   }
 
+  fun setManualToken(value: String) {
+    prefs.setManualToken(value)
+  }
+
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
@@ -541,7 +546,7 @@ class NodeRuntime(context: Context) {
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
-      client = buildClientInfo(clientId = "openclaw-control-ui", clientMode = "ui"),
+      client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
   }
@@ -603,6 +608,11 @@ class NodeRuntime(context: Context) {
     if (host.isEmpty() || port <= 0 || port > 65535) {
       _statusText.value = "Failed: invalid manual host/port"
       return
+    }
+    // Save manual token so it's used by connect() → loadGatewayToken()
+    val manualTok = manualToken.value.trim()
+    if (manualTok.isNotEmpty()) {
+      prefs.saveGatewayToken(manualTok)
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
   }
