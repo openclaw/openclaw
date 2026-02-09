@@ -13,6 +13,7 @@ export type AgentEventPayload = {
 
 export type AgentRunContext = {
   sessionKey?: string;
+  channel?: string;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;
 };
@@ -39,6 +40,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
+  }
+  if (context.channel && existing.channel !== context.channel) {
+    existing.channel = context.channel;
   }
 }
 

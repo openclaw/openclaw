@@ -582,7 +582,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       const smartAckRunId = crypto.randomUUID();
       const smartAckStartedAt = Date.now();
       const smartAckSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
-      registerAgentRunContext(smartAckRunId, { sessionKey: smartAckSessionKey });
+      registerAgentRunContext(smartAckRunId, {
+        sessionKey: smartAckSessionKey,
+        channel: "discord",
+      });
       emitAgentEvent({
         runId: smartAckRunId,
         stream: "lifecycle",

@@ -258,7 +258,7 @@ export function createJobTracker(opts: {
           runId,
           status: "running",
           sessionKey,
-          channel: channelFromSessionKey(sessionKey),
+          channel: runContext?.channel ?? channelFromSessionKey(sessionKey),
           agentId: agentIdFromSessionKey(sessionKey),
           isHeartbeat: runContext?.isHeartbeat ?? false,
           startedAt: typeof data?.startedAt === "number" ? data.startedAt : evt.ts,

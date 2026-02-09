@@ -76,9 +76,9 @@ export function handleJobsEvent(host: JobsHost, payload: Record<string, unknown>
       // Insert at top for new jobs
       jobs.unshift(updated);
     }
-    // Recount active
+    // Recount active and total
     const activeCount = jobs.filter((j) => j.status === "running").length;
-    host.jobsList = { ...host.jobsList, jobs: [...jobs], activeCount };
+    host.jobsList = { ...host.jobsList, jobs: [...jobs], activeCount, total: jobs.length };
     // Update detail panel if watching this job
     if (host.jobsSelectedRunId === updated.runId) {
       host.jobsSelectedJob = updated;
