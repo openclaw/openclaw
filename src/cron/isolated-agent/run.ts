@@ -521,38 +521,29 @@ export async function runCronIsolatedAgentTurn(params: {
       `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
-let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
+let skillsSnapshot: Awaited<ReturnType<typeof buildWorkspaceSkillSnapshot>> =
+    cronSession.sessionEntry.skillsSnapshot;
   if (isFastTestEnv) {
     // Fast unit-test mode: avoid scanning the workspace and writing session stores.
     skillsSnapshot = skillsSnapshot ?? { prompt: "", skills: [] };
   } else {
-    const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
-    // Always rebuild when a skill filter is configured: config-level allowlist changes
-    // (add/remove/clear) do not bump the snapshot version, so the cached snapshot may
-    // contain stale skill sets. Rebuilding is cheap (reads SKILL.md files from disk)
-    // and cron runs on a schedule, not per-message.
-    const needsSkillsSnapshot =
-      !existingSnapshot ||
-      existingSnapshot.version !== skillsSnapshotVersion ||
-      skillFilter !== undefined;
-    if (needsSkillsSnapshot) {
-      skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfgWithAgentDefaults,
-        skillFilter,
-        eligibility: { remote: getRemoteSkillEligibility() },
-        snapshotVersion: skillsSnapshotVersion,
-      });
-      if (skillsSnapshot) {
-        cronSession.sessionEntry = {
-          ...cronSession.sessionEntry,
-          updatedAt: Date.now(),
-          skillsSnapshot,
-        };
-        await persistSessionEntry();
-      }
-    }
+    // Always rebuild: cron runs are infrequent (scheduled, not per-message), and
+    // config-level allowlist changes (agents.list[].skills) do not bump the snapshot
+    // version, so a version-only cache check would miss filter changes.
+    skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      config: cfgWithAgentDefaults,
+      skillFilter,
+      eligibility: { remote: getRemoteSkillEligibility() },
+      snapshotVersion: skillsSnapshotVersion,
+    });
+    cronSession.sessionEntry = {
+      ...cronSession.sessionEntry,
+      updatedAt: Date.now(),
+      skillsSnapshot,
+    };
+    await persistSessionEntry();
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
