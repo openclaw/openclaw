@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Cron: share isolated announce flow and harden scheduling/delivery reliability. (#11641) Thanks @tyler6204.
 - Cron tool: recover flat params when LLM omits the `job` wrapper for add requests. (#12124) Thanks @tyler6204.
 - Gateway/CLI: when `gateway.bind=lan`, use a LAN IP for probe URLs and Control UI links. (#11448) Thanks @AnonO6.
+- CLI: make `openclaw plugins list` output scannable by hoisting source roots and shortening bundled/global/workspace plugin paths.
 - Hooks: fix bundled hooks broken since 2026.2.2 (tsdown migration). (#9295) Thanks @patrickshao.
 - Routing: refresh bindings per message by loading config at route resolution so binding changes apply without restart. (#11372) Thanks @juanpablodlc.
 - Exec approvals: render forwarded commands in monospace for safer approval scanning. (#11937) Thanks @sebslight.
