@@ -22,7 +22,12 @@ export class CloudClient {
   private timeoutMs: number;
 
   constructor(opts: CloudClientOptions) {
-    this.stores = opts.stores;
+    // Normalize store URLs: strip trailing slashes and accidental /manifest suffix
+    // to prevent double-path issues (e.g. /manifest/manifest).
+    this.stores = opts.stores.map((s) => ({
+      ...s,
+      url: s.url.replace(/\/+$/, "").replace(/\/manifest$/i, ""),
+    }));
     this.fetchFn = opts.fetchImpl ?? globalThis.fetch;
     this.timeoutMs = opts.timeoutMs ?? 15_000;
   }

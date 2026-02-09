@@ -19,6 +19,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { applySecurityDefaults } from "../config/security-defaults.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -214,6 +215,22 @@ export async function startGatewayServer(
       );
     } catch (err) {
       log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
+    }
+  }
+
+  // Apply security defaults (skill-guard OOBE) — inject guard config if missing.
+  const securityInput = autoEnable.changes.length > 0 ? autoEnable.config : configSnapshot.config;
+  const securityDefaults = applySecurityDefaults({ config: securityInput });
+  if (securityDefaults.changes.length > 0) {
+    try {
+      await writeConfigFile(securityDefaults.config);
+      log.info(
+        `gateway: applied security defaults:\n${securityDefaults.changes
+          .map((entry) => `- ${entry}`)
+          .join("\n")}`,
+      );
+    } catch (err) {
+      log.warn(`gateway: failed to persist security defaults: ${String(err)}`);
     }
   }
 

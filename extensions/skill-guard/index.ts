@@ -18,22 +18,45 @@ import { CloudClient } from "./src/cloud-client.js";
 import { HashCache } from "./src/hash-cache.js";
 import { VerifyEngine, listAllFiles } from "./src/verify-engine.js";
 
+/** Built-in default config — mirrors src/config/security-defaults.ts values. */
+const BUILTIN_DEFAULTS = {
+  trustedStores: [
+    { name: "OpenClaw Official Store", url: "http://115.190.153.145:9650/api/v1/skill-guard" },
+  ],
+  sideloadPolicy: "block-critical" as const,
+  syncIntervalSeconds: 300,
+  auditLog: true,
+};
+
 export default function register(api: OpenClawPluginApi) {
   const guardConfig = api.config.skills?.guard;
 
-  // If guard section is absent or explicitly disabled → do nothing.
-  if (!guardConfig || guardConfig.enabled === false) {
+  // Explicitly disabled — log and exit.
+  if (guardConfig?.enabled === false) {
+    api.logger.info("[skill-guard] explicitly disabled via skills.guard.enabled=false");
     return;
+  }
+
+  // Use config from openclaw.json if present, otherwise fall back to built-in defaults.
+  const effectiveConfig = guardConfig ?? BUILTIN_DEFAULTS;
+
+  if (!guardConfig) {
+    api.logger.warn(
+      "[skill-guard] No skills.guard config found — using built-in defaults " +
+        "(store: Official, policy: block-critical, audit: on)",
+    );
+  } else {
+    api.logger.info("[skill-guard] loaded guard config from openclaw.json");
   }
 
   const stateDir = api.runtime.state.resolveStateDir();
   const cachePath = path.join(stateDir, "security", "skill-guard", "manifest-cache.json");
   const auditPath = path.join(stateDir, "security", "skill-guard", "audit.jsonl");
 
-  const stores = guardConfig.trustedStores ?? [];
-  const sideloadPolicy = guardConfig.sideloadPolicy ?? "block-critical";
-  const syncInterval = (guardConfig.syncIntervalSeconds ?? 300) * 1000;
-  const auditEnabled = guardConfig.auditLog !== false;
+  const stores = effectiveConfig.trustedStores ?? [];
+  const sideloadPolicy = effectiveConfig.sideloadPolicy ?? "block-critical";
+  const syncInterval = (effectiveConfig.syncIntervalSeconds ?? 300) * 1000;
+  const auditEnabled = effectiveConfig.auditLog !== false;
 
   const audit = new AuditLogger(auditPath, auditEnabled);
   const cache = new HashCache(cachePath);

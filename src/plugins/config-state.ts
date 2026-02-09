@@ -13,7 +13,7 @@ export type NormalizedPluginsConfig = {
   entries: Record<string, { enabled?: boolean; config?: unknown }>;
 };
 
-export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>();
+export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>(["skill-guard"]);
 
 const normalizeList = (value: unknown): string[] => {
   if (!Array.isArray(value)) {
