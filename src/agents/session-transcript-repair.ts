@@ -127,8 +127,9 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         droppedToolCalls += 1;
         droppedInMessage += 1;
         changed = true;
-        if (typeof block.id === "string" && block.id) {
-          strippedToolCallIds.add(block.id);
+        const toolBlock = block as ToolCallBlock;
+        if (typeof toolBlock.id === "string" && toolBlock.id) {
+          strippedToolCallIds.add(toolBlock.id);
         }
         continue;
       }
@@ -154,7 +155,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
     out = [];
     for (const msg of intermediate) {
       if (msg && typeof msg === "object" && msg.role === "toolResult") {
-        const id = extractToolResultId(msg as Extract<AgentMessage, { role: "toolResult" }>);
+        const id = extractToolResultId(msg);
         if (id && strippedToolCallIds.has(id)) {
           changed = true;
           continue;
