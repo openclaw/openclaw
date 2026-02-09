@@ -100,13 +100,31 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
+# Configure runtime global install dirs on persistent volume (/data)
+# so skills/tools installed at runtime persist across VM restarts
+# and the non-root node user has write access.
+ENV NPM_CONFIG_PREFIX="/data/npm-global"
+ENV PNPM_HOME="/data/pnpm-global"
+ENV GOPATH="/data/go"
+ENV GOBIN="/data/go/bin"
+ENV PATH="/data/npm-global/bin:/data/pnpm-global:/data/go/bin:${PATH}"
+
 # Allow non-root user to write temp files during runtime/tests.
 RUN chown -R node:node /app
+
+# Prepare Homebrew install dir with correct ownership before switching to node user
+RUN mkdir -p /home/linuxbrew/.linuxbrew && chown -R node:node /home/linuxbrew
 
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
+
+# Install Homebrew (Linuxbrew) as non-root node user
+RUN NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && \
+    /home/linuxbrew/.linuxbrew/bin/brew --version
+ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
+ENV PATH="${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:${PATH}"
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
