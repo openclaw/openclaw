@@ -698,6 +698,8 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 | 2026-02-08 | 테스트 스위트 754건 도입 | Claude Code Agent Teams 병렬 테스트 자동화 |
 | 2026-02-09 | 제품→AI콘텐츠→영상 E2E 13/13 PASS | 전체 파이프라인 정상 동작 확인 |
 | 2026-02-09 | Worker 수동 기동 방식 유지 | 자동 기동은 다음 단계 (Task Scheduler 검토) |
+| 2026-02-09 | R2 Public Access 활성화 (API 방식) | `r2.dev` subdomain 공개 접근 활성화 → Worker R2 업로드 → Public URL 서빙 확인 |
+| 2026-02-09 | R2 E2E 테스트 PASS | Worker→R2 업로드→Public URL→API 저장 전체 흐름 성공 (Job fc59515b, 2분46초, 2.6MB) |
 
 ---
 
@@ -731,11 +733,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `ce556d0 docs: update I036 with R2 public access setup and E2E test results (02-09)`
 - `2ea5be1 feat: add R2 upload to video worker pipeline (I036) (02-09)`
 - `a13de35 fix: resolve 3 E2E issues - encoding, UCP stats, register security (02-08)`
 - `0a1b7b4 test: add comprehensive test suite (753 tests) + fix SQLite/PostgreSQL compat (02-08)`
 - `438741a docs: I037 A013 code quality improvements record (02-08)`
-- `4620854 refactor: split api.ts into domain modules + unify USE_MOCK (A013 T5+T6) (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-09*
