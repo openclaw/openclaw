@@ -27,13 +27,14 @@ export type SessionsState = {
 };
 
 export async function loadSessions(
-  state: SessionsState & { requestUpdate?: () => void },
+  state: SessionsState,
   overrides?: {
     activeMinutes?: number;
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
   },
+  onUpdate?: () => void,
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -66,12 +67,12 @@ export async function loadSessions(
     state.sessionsError = String(err);
   } finally {
     state.sessionsLoading = false;
-    state.requestUpdate?.();
+    onUpdate?.();
   }
 }
 
 export async function patchSession(
-  state: SessionsState & { requestUpdate?: () => void },
+  state: SessionsState,
   key: string,
   patch: {
     label?: string | null;
@@ -79,6 +80,7 @@ export async function patchSession(
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
+  onUpdate?: () => void,
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -98,15 +100,14 @@ export async function patchSession(
   }
   try {
     await state.client.request("sessions.patch", params);
-    await loadSessions(state);
-    state.requestUpdate?.();
+    await loadSessions(state, undefined, onUpdate);
   } catch (err) {
     state.sessionsError = String(err);
-    state.requestUpdate?.();
+    onUpdate?.();
   }
 }
 
-export async function loadDeletedSessions(state: SessionsState & { requestUpdate?: () => void }) {
+export async function loadDeletedSessions(state: SessionsState, onUpdate?: () => void) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -136,13 +137,14 @@ export async function loadDeletedSessions(state: SessionsState & { requestUpdate
     state.sessionsError = String(err);
   } finally {
     state.sessionsLoading = false;
-    state.requestUpdate?.();
+    onUpdate?.();
   }
 }
 
 export async function restoreSession(
-  state: SessionsState & { requestUpdate?: () => void },
+  state: SessionsState,
   sessionId: string,
+  onUpdate?: () => void,
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -165,25 +167,18 @@ export async function restoreSession(
 
     // Refresh both lists after restore
     await Promise.all([
-      loadSessions(state),
-      state.sessionsShowDeleted ? loadDeletedSessions(state) : Promise.resolve(),
+      loadSessions(state, undefined, onUpdate),
+      state.sessionsShowDeleted ? loadDeletedSessions(state, onUpdate) : Promise.resolve(),
     ]);
-
-    // Force UI update
-    state.requestUpdate?.();
   } catch (err) {
     state.sessionsError = String(err);
   } finally {
     state.sessionsLoading = false;
-    // Force UI update on error too
-    state.requestUpdate?.();
+    onUpdate?.();
   }
 }
 
-export async function deleteSession(
-  state: SessionsState & { requestUpdate?: () => void },
-  key: string,
-) {
+export async function deleteSession(state: SessionsState, key: string, onUpdate?: () => void) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -224,17 +219,13 @@ export async function deleteSession(
 
     // Refresh both lists after deletion
     await Promise.all([
-      loadSessions(state),
-      state.sessionsShowDeleted ? loadDeletedSessions(state) : Promise.resolve(),
+      loadSessions(state, undefined, onUpdate),
+      state.sessionsShowDeleted ? loadDeletedSessions(state, onUpdate) : Promise.resolve(),
     ]);
-
-    // Force UI update
-    state.requestUpdate?.();
   } catch (err) {
     state.sessionsError = String(err);
   } finally {
     state.sessionsLoading = false;
-    // Force UI update on error too
-    state.requestUpdate?.();
+    onUpdate?.();
   }
 }

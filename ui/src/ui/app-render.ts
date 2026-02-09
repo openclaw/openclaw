@@ -103,7 +103,7 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   return identity?.avatarUrl;
 }
 
-export function renderApp(state: AppViewState) {
+export function renderApp(state: AppViewState & { requestUpdate?: () => void }) {
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -299,33 +299,36 @@ export function renderApp(state: AppViewState) {
 
         ${
           state.tab === "sessions"
-            ? renderSessions({
-                loading: state.sessionsLoading,
-                result: state.sessionsResult,
-                error: state.sessionsError,
-                activeMinutes: state.sessionsFilterActive,
-                limit: state.sessionsFilterLimit,
-                includeGlobal: state.sessionsIncludeGlobal,
-                includeUnknown: state.sessionsIncludeUnknown,
-                showDeleted: state.sessionsShowDeleted,
-                deletedSessions: state.sessionsDeletedList,
-                basePath: state.basePath,
-                onFiltersChange: (next) => {
-                  state.sessionsFilterActive = next.activeMinutes;
-                  state.sessionsFilterLimit = next.limit;
-                  state.sessionsIncludeGlobal = next.includeGlobal;
-                  state.sessionsIncludeUnknown = next.includeUnknown;
-                  const wasShowingDeleted = state.sessionsShowDeleted;
-                  state.sessionsShowDeleted = next.showDeleted;
-                  if (next.showDeleted && !wasShowingDeleted) {
-                    void loadDeletedSessions(state);
-                  }
-                },
-                onRefresh: () => loadSessions(state),
-                onPatch: (key, patch) => patchSession(state, key, patch),
-                onDelete: (key) => deleteSession(state, key),
-                onRestore: (sessionId) => restoreSession(state, sessionId),
-              })
+            ? (() => {
+                const onUpdate = () => state.requestUpdate?.();
+                return renderSessions({
+                  loading: state.sessionsLoading,
+                  result: state.sessionsResult,
+                  error: state.sessionsError,
+                  activeMinutes: state.sessionsFilterActive,
+                  limit: state.sessionsFilterLimit,
+                  includeGlobal: state.sessionsIncludeGlobal,
+                  includeUnknown: state.sessionsIncludeUnknown,
+                  showDeleted: state.sessionsShowDeleted,
+                  deletedSessions: state.sessionsDeletedList,
+                  basePath: state.basePath,
+                  onFiltersChange: (next) => {
+                    state.sessionsFilterActive = next.activeMinutes;
+                    state.sessionsFilterLimit = next.limit;
+                    state.sessionsIncludeGlobal = next.includeGlobal;
+                    state.sessionsIncludeUnknown = next.includeUnknown;
+                    const wasShowingDeleted = state.sessionsShowDeleted;
+                    state.sessionsShowDeleted = next.showDeleted;
+                    if (next.showDeleted && !wasShowingDeleted) {
+                      void loadDeletedSessions(state, onUpdate);
+                    }
+                  },
+                  onRefresh: () => loadSessions(state, undefined, onUpdate),
+                  onPatch: (key, patch) => patchSession(state, key, patch, onUpdate),
+                  onDelete: (key) => deleteSession(state, key, onUpdate),
+                  onRestore: (sessionId) => restoreSession(state, sessionId, onUpdate),
+                });
+              })()
             : nothing
         }
 
