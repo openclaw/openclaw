@@ -985,7 +985,9 @@ export class AsteriskAriProvider implements VoiceCallProvider {
       return;
     }
 
-    this.maybeEmitAnswered(state);
+    if (evt.channel?.state?.toLowerCase() === "up") {
+      this.maybeEmitAnswered(state);
+    }
   }
 
   private async cleanup(providerCallId: string, reason: EndReason = "completed") {
