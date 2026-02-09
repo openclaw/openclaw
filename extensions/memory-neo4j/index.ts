@@ -510,6 +510,10 @@ const memoryNeo4jPlugin = {
           .option("--decay-half-life <days>", "Base half-life in days (default: 30)")
           .option("--batch-size <n>", "Extraction batch size (default: 50)")
           .option("--delay <ms>", "Delay between extraction batches in ms (default: 1000)")
+          .option(
+            "--skip-semantic",
+            "Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)",
+          )
           .action(
             async (opts: {
               agent?: string;
@@ -520,6 +524,7 @@ const memoryNeo4jPlugin = {
               decayHalfLife?: string;
               batchSize?: string;
               delay?: string;
+              skipSemantic?: boolean;
             }) => {
               console.log("\n🌙 Memory Sleep Cycle");
               console.log("═════════════════════════════════════════════════════════════");
@@ -595,6 +600,7 @@ const memoryNeo4jPlugin = {
                 const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
                   agentId: opts.agent,
                   dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
+                  skipSemanticDedup: opts.skipSemantic === true,
                   paretoPercentile: pareto,
                   promotionMinAgeDays: promotionMinAge,
                   decayRetentionThreshold: decayThreshold,

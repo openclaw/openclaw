@@ -595,6 +595,7 @@ export type SleepCycleOptions = {
 
   // Phase 1: Deduplication
   dedupThreshold?: number; // Vector similarity threshold (default: 0.95)
+  skipSemanticDedup?: boolean; // Skip LLM-based semantic dedup (Phase 1b) and conflict detection (Phase 1c)
 
   // Phase 2-4: Pareto-based Promotion/Demotion
   paretoPercentile?: number; // Top N% for core (default: 0.2 = top 20%)
@@ -673,6 +674,7 @@ export async function runSleepCycle(
     agentId,
     abortSignal,
     dedupThreshold = 0.95,
+    skipSemanticDedup = false,
     paretoPercentile = 0.2,
     promotionMinAgeDays = 7,
     decayRetentionThreshold = 0.1,
@@ -766,89 +768,95 @@ export async function runSleepCycle(
       );
 
       // Part 1b: Semantic dedup for medium-similarity clusters (0.75-0.95)
-      onPhaseStart?.("semanticDedup");
-      logger.info("memory-neo4j: [sleep] Phase 1b: Semantic Deduplication (0.75-0.95 band)");
+      if (skipSemanticDedup) {
+        onPhaseStart?.("semanticDedup");
+        logger.info("memory-neo4j: [sleep] Phase 1b: Skipped (--skip-semantic)");
+        onProgress?.("semanticDedup", "Skipped — semantic dedup disabled");
+      } else {
+        onPhaseStart?.("semanticDedup");
+        logger.info("memory-neo4j: [sleep] Phase 1b: Semantic Deduplication (0.75-0.95 band)");
 
-      // Collect all candidate pairs upfront (with pairwise similarity for pre-screening)
-      type DedupPair = {
-        textA: string;
-        textB: string;
-        idA: string;
-        idB: string;
-        importanceA: number;
-        importanceB: number;
-        similarity?: number;
-      };
-      const allPairs: DedupPair[] = [];
+        // Collect all candidate pairs upfront (with pairwise similarity for pre-screening)
+        type DedupPair = {
+          textA: string;
+          textB: string;
+          idA: string;
+          idB: string;
+          importanceA: number;
+          importanceB: number;
+          similarity?: number;
+        };
+        const allPairs: DedupPair[] = [];
 
-      for (const cluster of mediumSimClusters) {
-        if (cluster.memoryIds.length < 2) continue;
-        for (let i = 0; i < cluster.memoryIds.length - 1; i++) {
-          for (let j = i + 1; j < cluster.memoryIds.length; j++) {
-            const pairKey = makePairKey(cluster.memoryIds[i], cluster.memoryIds[j]);
-            allPairs.push({
-              textA: cluster.texts[i],
-              textB: cluster.texts[j],
-              idA: cluster.memoryIds[i],
-              idB: cluster.memoryIds[j],
-              importanceA: cluster.importances[i],
-              importanceB: cluster.importances[j],
-              similarity: cluster.similarities?.get(pairKey),
-            });
+        for (const cluster of mediumSimClusters) {
+          if (cluster.memoryIds.length < 2) continue;
+          for (let i = 0; i < cluster.memoryIds.length - 1; i++) {
+            for (let j = i + 1; j < cluster.memoryIds.length; j++) {
+              const pairKey = makePairKey(cluster.memoryIds[i], cluster.memoryIds[j]);
+              allPairs.push({
+                textA: cluster.texts[i],
+                textB: cluster.texts[j],
+                idA: cluster.memoryIds[i],
+                idB: cluster.memoryIds[j],
+                importanceA: cluster.importances[i],
+                importanceB: cluster.importances[j],
+                similarity: cluster.similarities?.get(pairKey),
+              });
+            }
           }
         }
-      }
 
-      // Process pairs in concurrent batches
-      const invalidatedIds = new Set<string>();
+        // Process pairs in concurrent batches
+        const invalidatedIds = new Set<string>();
 
-      for (let i = 0; i < allPairs.length && !abortSignal?.aborted; i += LLM_CONCURRENCY) {
-        const batch = allPairs.slice(i, i + LLM_CONCURRENCY);
+        for (let i = 0; i < allPairs.length && !abortSignal?.aborted; i += LLM_CONCURRENCY) {
+          const batch = allPairs.slice(i, i + LLM_CONCURRENCY);
 
-        // Filter out pairs where one side was already invalidated
-        const activeBatch = batch.filter(
-          (p) => !invalidatedIds.has(p.idA) && !invalidatedIds.has(p.idB),
-        );
+          // Filter out pairs where one side was already invalidated
+          const activeBatch = batch.filter(
+            (p) => !invalidatedIds.has(p.idA) && !invalidatedIds.has(p.idB),
+          );
 
-        if (activeBatch.length === 0) continue;
+          if (activeBatch.length === 0) continue;
 
-        const outcomes = await Promise.allSettled(
-          activeBatch.map((p) =>
-            isSemanticDuplicate(p.textA, p.textB, config, p.similarity, abortSignal),
-          ),
-        );
+          const outcomes = await Promise.allSettled(
+            activeBatch.map((p) =>
+              isSemanticDuplicate(p.textA, p.textB, config, p.similarity, abortSignal),
+            ),
+          );
 
-        for (let k = 0; k < outcomes.length; k++) {
-          const pair = activeBatch[k];
-          result.semanticDedup.pairsChecked++;
+          for (let k = 0; k < outcomes.length; k++) {
+            const pair = activeBatch[k];
+            result.semanticDedup.pairsChecked++;
 
-          if (
-            outcomes[k].status === "fulfilled" &&
-            (outcomes[k] as PromiseFulfilledResult<boolean>).value
-          ) {
-            // Skip if either side was invalidated by an earlier result in this batch
-            if (invalidatedIds.has(pair.idA) || invalidatedIds.has(pair.idB)) continue;
+            if (
+              outcomes[k].status === "fulfilled" &&
+              (outcomes[k] as PromiseFulfilledResult<boolean>).value
+            ) {
+              // Skip if either side was invalidated by an earlier result in this batch
+              if (invalidatedIds.has(pair.idA) || invalidatedIds.has(pair.idB)) continue;
 
-            const keepId = pair.importanceA >= pair.importanceB ? pair.idA : pair.idB;
-            const removeId = keepId === pair.idA ? pair.idB : pair.idA;
-            const keepText = keepId === pair.idA ? pair.textA : pair.textB;
-            const removeText = removeId === pair.idA ? pair.textA : pair.textB;
+              const keepId = pair.importanceA >= pair.importanceB ? pair.idA : pair.idB;
+              const removeId = keepId === pair.idA ? pair.idB : pair.idA;
+              const keepText = keepId === pair.idA ? pair.textA : pair.textB;
+              const removeText = removeId === pair.idA ? pair.textA : pair.textB;
 
-            await db.invalidateMemory(removeId);
-            invalidatedIds.add(removeId);
-            result.semanticDedup.duplicatesMerged++;
+              await db.invalidateMemory(removeId);
+              invalidatedIds.add(removeId);
+              result.semanticDedup.duplicatesMerged++;
 
-            onProgress?.(
-              "semanticDedup",
-              `Merged: "${removeText.slice(0, 50)}..." → kept "${keepText.slice(0, 50)}..."`,
-            );
+              onProgress?.(
+                "semanticDedup",
+                `Merged: "${removeText.slice(0, 50)}..." → kept "${keepText.slice(0, 50)}..."`,
+              );
+            }
           }
         }
-      }
 
-      logger.info(
-        `memory-neo4j: [sleep] Phase 1b (semantic) complete — ${result.semanticDedup.pairsChecked} pairs checked, ${result.semanticDedup.duplicatesMerged} merged`,
-      );
+        logger.info(
+          `memory-neo4j: [sleep] Phase 1b (semantic) complete — ${result.semanticDedup.pairsChecked} pairs checked, ${result.semanticDedup.duplicatesMerged} merged`,
+        );
+      } // close skipSemanticDedup else
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 1 error: ${String(err)}`);
     }
@@ -857,7 +865,7 @@ export async function runSleepCycle(
   // --------------------------------------------------------------------------
   // Phase 1c: Conflict Detection (formerly Phase 1b)
   // --------------------------------------------------------------------------
-  if (!abortSignal?.aborted) {
+  if (!abortSignal?.aborted && !skipSemanticDedup) {
     onPhaseStart?.("conflict");
     logger.info("memory-neo4j: [sleep] Phase 1c: Conflict Detection");
 
