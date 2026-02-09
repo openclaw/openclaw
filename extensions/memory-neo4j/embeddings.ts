@@ -255,8 +255,30 @@ export class Embeddings {
 
   // Timeout for Ollama embedding fetch calls to prevent hanging indefinitely
   private static readonly EMBED_TIMEOUT_MS = 30_000;
+  // Retry configuration for transient Ollama errors (model loading, GPU pressure)
+  private static readonly OLLAMA_MAX_RETRIES = 2;
+  private static readonly OLLAMA_RETRY_BASE_DELAY_MS = 1000;
 
   private async embedOllama(text: string): Promise<number[]> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= Embeddings.OLLAMA_MAX_RETRIES; attempt++) {
+      try {
+        return await this.fetchOllamaEmbedding(text);
+      } catch (err) {
+        lastError = err;
+        if (attempt < Embeddings.OLLAMA_MAX_RETRIES) {
+          const delay = Embeddings.OLLAMA_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+          this.logger?.warn?.(
+            `memory-neo4j: Ollama embedding failed (attempt ${attempt + 1}/${Embeddings.OLLAMA_MAX_RETRIES + 1}), retrying in ${delay}ms: ${String(err)}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private async fetchOllamaEmbedding(text: string): Promise<number[]> {
     const url = `${this.baseUrl}/api/embed`;
     const response = await fetch(url, {
       method: "POST",

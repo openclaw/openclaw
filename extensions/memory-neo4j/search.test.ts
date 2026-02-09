@@ -25,16 +25,15 @@ describe("classifyQuery", () => {
       expect(classifyQuery("best coffee")).toBe("short");
     });
 
-    it("should classify a single capitalized word as 'short' (word count takes priority)", () => {
-      expect(classifyQuery("TypeScript")).toBe("short");
-    });
-
     it("should handle whitespace-padded short queries", () => {
       expect(classifyQuery("  hello  ")).toBe("short");
     });
   });
 
   describe("entity queries (proper nouns)", () => {
+    it("should classify a single capitalized word as 'entity' (proper noun detection)", () => {
+      expect(classifyQuery("TypeScript")).toBe("entity");
+    });
     it("should classify query with proper noun as 'entity'", () => {
       expect(classifyQuery("tell me about Tarun")).toBe("entity");
     });

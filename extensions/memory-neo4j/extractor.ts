@@ -38,10 +38,10 @@ Return JSON:
 {
   "category": "preference|fact|decision|entity|other",
   "entities": [
-    {"name": "tarun", "type": "person", "aliases": ["boss"], "description": "brief description"}
+    {"name": "alice", "type": "person", "aliases": ["manager"], "description": "brief description"}
   ],
   "relationships": [
-    {"source": "tarun", "target": "abundent", "type": "WORKS_AT", "confidence": 0.95}
+    {"source": "alice", "target": "acme corp", "type": "WORKS_AT", "confidence": 0.95}
   ],
   "tags": [
     {"name": "neo4j", "category": "technology"}
@@ -1073,9 +1073,20 @@ export async function runSleepCycle(
             }
           }
 
-          // Delay between batches
+          // Delay between batches (abort-aware)
           if (hasMore && !abortSignal?.aborted) {
-            await new Promise((resolve) => setTimeout(resolve, extractionDelayMs));
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, extractionDelayMs);
+              // If abort fires during delay, resolve immediately
+              abortSignal?.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(timer);
+                  resolve();
+                },
+                { once: true },
+              );
+            });
           }
         }
       }

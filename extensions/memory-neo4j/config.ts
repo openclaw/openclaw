@@ -5,6 +5,12 @@
  * Provides runtime parsing with env var resolution and defaults.
  */
 
+import type { MemoryCategory } from "./schema.js";
+import { MEMORY_CATEGORIES } from "./schema.js";
+
+export type { MemoryCategory };
+export { MEMORY_CATEGORIES };
+
 export type EmbeddingProvider = "openai" | "ollama";
 
 export type MemoryNeo4jConfig = {
@@ -64,17 +70,6 @@ export type ExtractionConfig = {
   temperature: number;
   maxRetries: number;
 };
-
-export const MEMORY_CATEGORIES = [
-  "core",
-  "preference",
-  "fact",
-  "decision",
-  "entity",
-  "other",
-] as const;
-
-export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 export const EMBEDDING_DIMENSIONS: Record<string, number> = {
   // OpenAI models
@@ -231,7 +226,7 @@ export const memoryNeo4jConfigSchema = {
     if (typeof neo4jRaw.uri !== "string" || !neo4jRaw.uri) {
       throw new Error("neo4j.uri is required");
     }
-    const neo4jUri = neo4jRaw.uri;
+    const neo4jUri = resolveEnvVars(neo4jRaw.uri);
     // Validate URI scheme — must be a valid Neo4j connection protocol
     const VALID_NEO4J_SCHEMES = [
       "bolt://",
@@ -362,7 +357,7 @@ export const memoryNeo4jConfigSchema = {
 
     return {
       neo4j: {
-        uri: neo4jRaw.uri,
+        uri: neo4jUri,
         username: neo4jUsername,
         password: neo4jPassword,
       },

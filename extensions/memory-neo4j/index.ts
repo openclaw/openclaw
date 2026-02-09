@@ -426,14 +426,15 @@ const memoryNeo4jPlugin = {
           .description("Search memories")
           .argument("<query>", "Search query")
           .option("--limit <n>", "Max results", "5")
-          .action(async (query: string, opts: { limit: string }) => {
+          .option("--agent <id>", "Agent id (default: default)")
+          .action(async (query: string, opts: { limit: string; agent?: string }) => {
             try {
               const results = await hybridSearch(
                 db,
                 embeddings,
                 query,
                 parseInt(opts.limit, 10),
-                "default",
+                opts.agent ?? "default",
                 extractionConfig.enabled,
                 { graphSearchDepth: cfg.graphSearchDepth },
               );
