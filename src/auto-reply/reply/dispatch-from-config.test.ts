@@ -557,6 +557,10 @@ describe("stripRoutingPrefix", () => {
     expect(stripRoutingPrefix("whatsapp:+15555550123")).toBe("whatsapp:+15555550123");
   });
 
+  it("passes through signal-style addresses unchanged", () => {
+    expect(stripRoutingPrefix("signal:+15555550123")).toBe("signal:+15555550123");
+  });
+
   it("passes through empty string unchanged", () => {
     expect(stripRoutingPrefix("")).toBe("");
   });
