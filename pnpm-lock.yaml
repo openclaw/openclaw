@@ -26,7 +26,7 @@ importers:
         version: 3.985.0
       '@buape/carbon':
         specifier: 0.14.0
-        version: 0.14.0(hono@4.11.9)
+        version: 0.14.0(hono@4.11.8)
       '@clack/prompts':
         specifier: ^1.0.0
         version: 1.0.0
@@ -65,7 +65,7 @@ importers:
         version: 0.6.0
       '@napi-rs/canvas':
         specifier: ^0.1.89
-        version: 0.1.89
+        version: 0.1.90
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -112,8 +112,8 @@ importers:
         specifier: ^1.39.3
         version: 1.39.3
       hono:
-        specifier: 4.11.9
-        version: 4.11.9
+        specifier: 4.11.8
+        version: 4.11.8
       jiti:
         specifier: ^2.6.1
         version: 2.6.1
@@ -1498,34 +1498,16 @@ packages:
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
 
-  '@napi-rs/canvas-android-arm64@0.1.89':
-    resolution: {integrity: sha512-CXxQTXsjtQqKGENS8Ejv9pZOFJhOPIl2goenS+aU8dY4DygvkyagDhy/I07D1YLqrDtPvLEX5zZHt8qUdnuIpQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
   '@napi-rs/canvas-android-arm64@0.1.90':
     resolution: {integrity: sha512-3JBULVF+BIgr7yy7Rf8UjfbkfFx4CtXrkJFD1MDgKJ83b56o0U9ciT8ZGTCNmwWkzu8RbNKlyqPP3KYRG88y7Q==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [android]
 
-  '@napi-rs/canvas-darwin-arm64@0.1.89':
-    resolution: {integrity: sha512-k29cR/Zl20WLYM7M8YePevRu2VQRaKcRedYr1V/8FFHkyIQ8kShEV+MPoPGi+znvmd17Eqjy2Pk2F2kpM2umVg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
   '@napi-rs/canvas-darwin-arm64@0.1.90':
     resolution: {integrity: sha512-L8XVTXl+8vd8u7nPqcX77NyG5RuFdVsJapQrKV9WE3jBayq1aSMht/IH7Dwiz/RNJ86E5ZSg9pyUPFIlx52PZA==}
     engines: {node: '>= 10'}
     cpu: [arm64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-x64@0.1.89':
-    resolution: {integrity: sha512-iUragqhBrA5FqU13pkhYBDbUD1WEAIlT8R2+fj6xHICY2nemzwMUI8OENDhRh7zuL06YDcRwENbjAVxOmaX9jg==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
     os: [darwin]
 
   '@napi-rs/canvas-darwin-x64@0.1.90':
@@ -1534,32 +1516,14 @@ packages:
     cpu: [x64]
     os: [darwin]
 
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.89':
-    resolution: {integrity: sha512-y3SM9sfDWasY58ftoaI09YBFm35Ig8tosZqgahLJ2WGqawCusGNPV9P0/4PsrLOCZqGg629WxexQMY25n7zcvA==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
   '@napi-rs/canvas-linux-arm-gnueabihf@0.1.90':
     resolution: {integrity: sha512-JCvTl99b/RfdBtgftqrf+5UNF7GIbp7c5YBFZ+Bd6++4Y3phaXG/4vD9ZcF1bw1P4VpALagHmxvodHuQ9/TfTg==}
     engines: {node: '>= 10'}
     cpu: [arm]
     os: [linux]
 
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.89':
-    resolution: {integrity: sha512-NEoF9y8xq5fX8HG8aZunBom1ILdTwt7ayBzSBIwrmitk7snj4W6Fz/yN/ZOmlM1iyzHDNX5Xn0n+VgWCF8BEdA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
   '@napi-rs/canvas-linux-arm64-gnu@0.1.90':
     resolution: {integrity: sha512-vbWFp8lrP8NIM5L4zNOwnsqKIkJo0+GIRUDcLFV9XEJCptCc1FY6/tM02PT7GN4PBgochUPB1nBHdji6q3ieyQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.89':
-    resolution: {integrity: sha512-UQQkIEzV12/l60j1ziMjZ+mtodICNUbrd205uAhbyTw0t60CrC/EsKb5/aJWGq1wM0agvcgZV72JJCKfLS6+4w==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
@@ -1570,32 +1534,14 @@ packages:
     cpu: [arm64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.89':
-    resolution: {integrity: sha512-1/VmEoFaIO6ONeeEMGoWF17wOYZOl5hxDC1ios2Bkz/oQjbJJ8DY/X22vWTmvuUKWWhBVlo63pxLGZbjJU/heA==}
-    engines: {node: '>= 10'}
-    cpu: [riscv64]
-    os: [linux]
-
   '@napi-rs/canvas-linux-riscv64-gnu@0.1.90':
     resolution: {integrity: sha512-0iiVDG5IH+gJb/YUrY/pRdbsjcgvwUmeckL/0gShWAA7004ygX2ST69M1wcfyxXrzFYjdF8S/Sn6aCAeBi89XQ==}
     engines: {node: '>= 10'}
     cpu: [riscv64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-x64-gnu@0.1.89':
-    resolution: {integrity: sha512-ebLuqkCuaPIkKgKH9q4+pqWi1tkPOfiTk5PM1LKR1tB9iO9sFNVSIgwEp+SJreTSbA2DK5rW8lQXiN78SjtcvA==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
   '@napi-rs/canvas-linux-x64-gnu@0.1.90':
     resolution: {integrity: sha512-SkKmlHMvA5spXuKfh7p6TsScDf7lp5XlMbiUhjdCtWdOS6Qke/A4qGVOciy6piIUCJibL+YX+IgdGqzm2Mpx/w==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-musl@0.1.89':
-    resolution: {integrity: sha512-w+5qxHzplvA4BkHhCaizNMLLXiI+CfP84YhpHm/PqMub4u8J0uOAv+aaGv40rYEYra5hHRWr9LUd6cfW32o9/A==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
@@ -1606,22 +1552,10 @@ packages:
     cpu: [x64]
     os: [linux]
 
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.89':
-    resolution: {integrity: sha512-DmyXa5lJHcjOsDC78BM3bnEECqbK3xASVMrKfvtT/7S7Z8NGQOugvu+L7b41V6cexCd34mBWgMOsjoEBceeB1Q==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
   '@napi-rs/canvas-win32-arm64-msvc@0.1.90':
     resolution: {integrity: sha512-2UHO/DC1oyuSjeCAhHA0bTD9qsg58kknRqjJqRfvIEFtdqdtNTcWXMCT9rQCuJ8Yx5ldhyh2SSp7+UDqD2tXZQ==}
     engines: {node: '>= 10'}
     cpu: [arm64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-x64-msvc@0.1.89':
-    resolution: {integrity: sha512-WMej0LZrIqIncQcx0JHaMXlnAG7sncwJh7obs/GBgp0xF9qABjwoRwIooMWCZkSansapKGNUHhamY6qEnFN7gA==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
     os: [win32]
 
   '@napi-rs/canvas-win32-x64-msvc@0.1.90':
@@ -1629,10 +1563,6 @@ packages:
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
-
-  '@napi-rs/canvas@0.1.89':
-    resolution: {integrity: sha512-7GjmkMirJHejeALCqUnZY3QwID7bbumOiLrqq2LKgxrdjdmxWQBTc6rcASa2u8wuWrH7qo4/4n/VNrOwCoKlKg==}
-    engines: {node: '>= 10'}
 
   '@napi-rs/canvas@0.1.90':
     resolution: {integrity: sha512-vO9j7TfwF9qYCoTOPO39yPLreTRslBVOaeIwhDZkizDvBb0MounnTl0yeWUMBxP4Pnkg9Sv+3eQwpxNUmTwt0w==}
@@ -3119,9 +3049,6 @@ packages:
   aws4@1.13.2:
     resolution: {integrity: sha512-lHe62zvbTB5eEABUVi/AwVh0ZKY9rMMDhmm+eeyuuUQbQ3+J+fONVQOZyj+DdrvD4BY33uYniyRJ4UJIaSKAfw==}
 
-  axios@1.13.4:
-    resolution: {integrity: sha512-1wVkUaAO6WyaYtCkcYCOx12ZgpGf9Zif+qXa4n+oYzK558YryKqiL6UWwd5DqiH3VRW0GYhTZQ/vlgJrCoNQlg==}
-
   axios@1.13.5:
     resolution: {integrity: sha512-cz4ur7Vb0xS4/KUN0tPWe44eqxrIu31me+fbang3ijiNscE129POzipJJA6zniq2C/Z6sJCjMimjS8Lc/GAs8Q==}
 
@@ -3819,8 +3746,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.11.9:
-    resolution: {integrity: sha512-Eaw2YTGM6WOxA6CXbckaEvslr2Ne4NFsKrvc0v97JD5awbmeBLO5w9Ho9L9kmKonrwF9RJlW6BxT1PVv/agBHQ==}
+  hono@4.11.8:
+    resolution: {integrity: sha512-eVkB/CYCCei7K2WElZW9yYQFWssG0DhaDhVvr7wy5jJ22K+ck8fWW0EsLpB0sITUTvPnc97+rrbQqIr5iqiy9Q==}
     engines: {node: '>=16.9.0'}
 
   hookable@6.0.1:
@@ -4956,11 +4883,6 @@ packages:
 
   selderee@0.11.0:
     resolution: {integrity: sha512-5TF+l7p4+OsnP8BCCvSyZiSPc4x4//p5uPwK8TCnVPJYRmU2aYKMpOXvw8zM5a5JvuuCGN1jmsMwuU2W02ukfA==}
-
-  semver@7.7.3:
-    resolution: {integrity: sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q==}
-    engines: {node: '>=10'}
-    hasBin: true
 
   semver@7.7.4:
     resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
@@ -6146,14 +6068,14 @@ snapshots:
 
   '@borewit/text-codec@0.2.1': {}
 
-  '@buape/carbon@0.14.0(hono@4.11.9)':
+  '@buape/carbon@0.14.0(hono@4.11.8)':
     dependencies:
       '@types/node': 25.2.2
       discord-api-types: 0.38.37
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260120.0
       '@discordjs/voice': 0.19.0
-      '@hono/node-server': 1.19.9(hono@4.11.9)
+      '@hono/node-server': 1.19.9(hono@4.11.8)
       '@types/bun': 1.3.6
       '@types/ws': 8.18.1
       ws: 8.19.0
@@ -6408,9 +6330,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@hono/node-server@1.19.9(hono@4.11.9)':
+  '@hono/node-server@1.19.9(hono@4.11.8)':
     dependencies:
-      hono: 4.11.9
+      hono: 4.11.8
     optional: true
 
   '@huggingface/jinja@0.5.4': {}
@@ -6594,7 +6516,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.58.0':
     dependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -6610,7 +6532,7 @@ snapshots:
     dependencies:
       '@types/node': 24.10.12
     optionalDependencies:
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
     transitivePeerDependencies:
       - debug
 
@@ -6813,7 +6735,7 @@ snapshots:
       '@azure/core-auth': 1.10.1
       '@azure/msal-node': 3.8.6
       '@microsoft/agents-activity': 1.2.3
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       jsonwebtoken: 9.0.3
       jwks-rsa: 3.2.2
       object-path: 0.11.8
@@ -6829,85 +6751,38 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@napi-rs/canvas-android-arm64@0.1.89':
-    optional: true
-
   '@napi-rs/canvas-android-arm64@0.1.90':
-    optional: true
-
-  '@napi-rs/canvas-darwin-arm64@0.1.89':
     optional: true
 
   '@napi-rs/canvas-darwin-arm64@0.1.90':
     optional: true
 
-  '@napi-rs/canvas-darwin-x64@0.1.89':
-    optional: true
-
   '@napi-rs/canvas-darwin-x64@0.1.90':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.89':
     optional: true
 
   '@napi-rs/canvas-linux-arm-gnueabihf@0.1.90':
     optional: true
 
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.89':
-    optional: true
-
   '@napi-rs/canvas-linux-arm64-gnu@0.1.90':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.89':
     optional: true
 
   '@napi-rs/canvas-linux-arm64-musl@0.1.90':
     optional: true
 
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.89':
-    optional: true
-
   '@napi-rs/canvas-linux-riscv64-gnu@0.1.90':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-gnu@0.1.89':
     optional: true
 
   '@napi-rs/canvas-linux-x64-gnu@0.1.90':
     optional: true
 
-  '@napi-rs/canvas-linux-x64-musl@0.1.89':
-    optional: true
-
   '@napi-rs/canvas-linux-x64-musl@0.1.90':
-    optional: true
-
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.89':
     optional: true
 
   '@napi-rs/canvas-win32-arm64-msvc@0.1.90':
     optional: true
 
-  '@napi-rs/canvas-win32-x64-msvc@0.1.89':
-    optional: true
-
   '@napi-rs/canvas-win32-x64-msvc@0.1.90':
     optional: true
-
-  '@napi-rs/canvas@0.1.89':
-    optionalDependencies:
-      '@napi-rs/canvas-android-arm64': 0.1.89
-      '@napi-rs/canvas-darwin-arm64': 0.1.89
-      '@napi-rs/canvas-darwin-x64': 0.1.89
-      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.89
-      '@napi-rs/canvas-linux-arm64-gnu': 0.1.89
-      '@napi-rs/canvas-linux-arm64-musl': 0.1.89
-      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.89
-      '@napi-rs/canvas-linux-x64-gnu': 0.1.89
-      '@napi-rs/canvas-linux-x64-musl': 0.1.89
-      '@napi-rs/canvas-win32-arm64-msvc': 0.1.89
-      '@napi-rs/canvas-win32-x64-msvc': 0.1.89
 
   '@napi-rs/canvas@0.1.90':
     optionalDependencies:
@@ -6922,7 +6797,6 @@ snapshots:
       '@napi-rs/canvas-linux-x64-musl': 0.1.90
       '@napi-rs/canvas-win32-arm64-msvc': 0.1.90
       '@napi-rs/canvas-win32-x64-msvc': 0.1.90
-    optional: true
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
@@ -7648,7 +7522,7 @@ snapshots:
       '@slack/types': 2.19.0
       '@slack/web-api': 7.13.0
       '@types/express': 5.0.6
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       express: 5.2.1
       path-to-regexp: 8.3.0
       raw-body: 3.0.2
@@ -7694,7 +7568,7 @@ snapshots:
       '@slack/types': 2.19.0
       '@types/node': 25.2.2
       '@types/retry': 0.12.0
-      axios: 1.13.5
+      axios: 1.13.5(debug@4.4.3)
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -8588,17 +8462,9 @@ snapshots:
 
   aws4@1.13.2: {}
 
-  axios@1.13.4(debug@4.4.3):
+  axios@1.13.5(debug@4.4.3):
     dependencies:
       follow-redirects: 1.15.11(debug@4.4.3)
-      form-data: 2.5.4
-      proxy-from-env: 1.1.0
-    transitivePeerDependencies:
-      - debug
-
-  axios@1.13.5:
-    dependencies:
-      follow-redirects: 1.15.11
       form-data: 2.5.4
       proxy-from-env: 1.1.0
     transitivePeerDependencies:
@@ -8756,14 +8622,14 @@ snapshots:
 
   cmake-js@7.4.0:
     dependencies:
-      axios: 1.13.4(debug@4.4.3)
+      axios: 1.13.5(debug@4.4.3)
       debug: 4.4.3
       fs-extra: 11.3.3
       memory-stream: 1.0.0
       node-api-headers: 1.8.0
       npmlog: 6.0.2
       rc: 1.2.8
-      semver: 7.7.3
+      semver: 7.7.4
       tar: 7.5.7
       url-join: 4.0.1
       which: 2.0.2
@@ -9171,8 +9037,6 @@ snapshots:
 
   flatbuffers@24.12.23: {}
 
-  follow-redirects@1.15.11: {}
-
   follow-redirects@1.15.11(debug@4.4.3):
     optionalDependencies:
       debug: 4.4.3
@@ -9369,7 +9233,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.11.9: {}
+  hono@4.11.8: {}
 
   hookable@6.0.1: {}
 
@@ -9990,7 +9854,7 @@ snapshots:
       ora: 8.2.0
       pretty-ms: 9.3.0
       proper-lockfile: 4.1.2
-      semver: 7.7.3
+      semver: 7.7.4
       simple-git: 3.30.0
       slice-ansi: 7.1.2
       stdout-update: 4.0.1
@@ -10634,8 +10498,6 @@ snapshots:
   selderee@0.11.0:
     dependencies:
       parseley: 0.12.1
-
-  semver@7.7.3: {}
 
   semver@7.7.4: {}
 
