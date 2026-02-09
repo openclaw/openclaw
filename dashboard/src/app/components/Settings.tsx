@@ -137,7 +137,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, theme }) =>
           {[
             { id: "models" as TabType, label: "Models" },
             { id: "advanced" as TabType, label: "Advanced" },
-            { id: "openclaw" as TabType, label: "OpenClaw" },
+            { id: "openclaw" as TabType, label: "Gateway" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -268,7 +268,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, theme }) =>
                   <div className={`text-xs font-medium mb-1 ${
                     isDark ? "text-gray-400" : "text-gray-500"
                   }`}>
-                    OpenClaw Model Format
+                    Model ID
                   </div>
                   <code className={`text-sm font-mono ${
                     isDark ? "text-[#2dd4bf]" : "text-[#0d9488]"
@@ -383,8 +383,8 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, theme }) =>
                       isDark ? "text-gray-400" : "text-gray-600"
                     }`}>
                       {gatewayStatus?.connected 
-                        ? "OpenClaw gateway is running on localhost:18789"
-                        : gatewayStatus?.error || "Start the gateway with: openclaw gateway"
+                        ? "Gateway is running on localhost:18789"
+                        : gatewayStatus?.error || "Start the gateway to enable sync"
                       }
                     </div>
                   </div>
@@ -411,7 +411,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, theme }) =>
                   type="password"
                   value={gatewayToken}
                   onChange={(e) => setGatewayTokenState(e.target.value)}
-                  placeholder="Enter your gateway token (from openclaw.json)"
+                  placeholder="Enter your gateway auth token"
                   className={`w-full px-4 py-3 rounded-xl border text-sm transition-colors font-mono ${
                     isDark
                       ? "bg-white/5 border-white/10 text-white placeholder-gray-500 focus:border-[#2dd4bf]/50"
@@ -419,7 +419,7 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, theme }) =>
                   } outline-none`}
                 />
                 <p className={`mt-2 text-xs ${isDark ? "text-gray-500" : "text-gray-400"}`}>
-                  Find this in ~/.openclaw/openclaw.json under gateway.auth.token
+                  Required to connect to the gateway for settings sync
                 </p>
               </div>
 
@@ -433,21 +433,21 @@ export const Settings: React.FC<SettingsProps> = ({ isOpen, onClose, theme }) =>
                     <div className={`font-medium text-sm mb-2 ${
                       isDark ? "text-white" : "text-gray-900"
                     }`}>
-                      OpenClaw Integration
+                      Gateway Integration
                     </div>
                     <div className={`text-xs space-y-2 ${
                       isDark ? "text-gray-400" : "text-gray-600"
                     }`}>
                       <p>
-                        When connected, EasyHub can sync settings with your OpenClaw configuration:
+                        When connected, EasyHub can sync settings with your gateway:
                       </p>
                       <ul className="list-disc list-inside space-y-1 ml-2">
-                        <li>Model selection synced to agents.defaults.model.primary</li>
-                        <li>API keys managed through OpenClaw's auth system</li>
-                        <li>Chat messages can be routed through OpenClaw gateway</li>
+                        <li>Model selection synced automatically</li>
+                        <li>API keys managed through the auth system</li>
+                        <li>Chat messages routed through the gateway</li>
                       </ul>
                       <p className="mt-2">
-                        <strong>Coming soon:</strong> Full two-way sync with OpenClaw config.
+                        <strong>Coming soon:</strong> Full two-way configuration sync.
                       </p>
                     </div>
                   </div>
