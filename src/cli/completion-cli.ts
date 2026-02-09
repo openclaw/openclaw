@@ -285,7 +285,18 @@ export function registerCompletionCli(program: Command) {
         throw new Error(`Unsupported shell: ${shell}`);
       }
       const script = getCompletionScript(shell, program);
-      process.stdout.write(script + "\n");
+      // Write directly to stdout, bypassing the patched console.log which redirects
+      // to stderr when routeLogsToStderr() is active. This keeps the script on stdout
+      // for shell sourcing (e.g. `source <(openclaw completion --shell zsh)`).
+      // Handle EPIPE/EIO gracefully when piped to a consumer that exits early.
+      // Re-throw other errors so real I/O failures (e.g. ENOSPC) are not swallowed.
+      process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EPIPE" || err.code === "EIO") {
+          process.exit(0);
+        }
+        throw err;
+      });
+      process.stdout.write(`${script}\n`);
     });
 }
 
