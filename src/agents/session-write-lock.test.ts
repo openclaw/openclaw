@@ -103,7 +103,7 @@ describe("acquireSessionWriteLock", () => {
   });
   it("cleans up locks on SIGINT without removing other handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
-    const originalKill = process.kill.bind(process) as typeof process.kill;
+    const originalKill = process.kill.bind(process);
     const killCalls: Array<NodeJS.Signals | undefined> = [];
     let otherHandlerCalled = false;
 
