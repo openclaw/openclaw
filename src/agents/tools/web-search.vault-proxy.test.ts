@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
-import { __testing } from "./web-search.js";
+import { createWebSearchTool, __testing } from "./web-search.js";
 
 const {
   inferPerplexityBaseUrlFromApiKey,
@@ -240,5 +240,165 @@ describe("web_search grok response parsing", () => {
     } as Parameters<typeof extractGrokContent>[0]);
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
+});
+
+describe("web_search vault proxy integration", () => {
+  it("creates tool when vault is disabled (unchanged behavior)", () => {
+    const tool = createWebSearchTool({
+      config: {
+        vault: { enabled: false },
+        tools: { web: { search: { enabled: true, provider: "brave" } } },
+      },
+    });
+    expect(tool).not.toBeNull();
+    expect(tool?.name).toBe("web_search");
+  });
+
+  it("creates tool when vault is enabled with brave proxy", () => {
+    const tool = createWebSearchTool({
+      config: {
+        vault: {
+          enabled: true,
+          proxies: { brave: "http://vault:8089" },
+        },
+        tools: { web: { search: { enabled: true, provider: "brave" } } },
+      },
+    });
+    expect(tool).not.toBeNull();
+    expect(tool?.name).toBe("web_search");
+  });
+
+  it("creates tool when vault is enabled with xai proxy (grok provider)", () => {
+    const tool = createWebSearchTool({
+      config: {
+        vault: {
+          enabled: true,
+          proxies: { xai: "http://vault:8087" },
+        },
+        tools: { web: { search: { enabled: true, provider: "grok" } } },
+      },
+    });
+    expect(tool).not.toBeNull();
+  });
+
+  it("creates tool when vault is enabled with perplexity proxy", () => {
+    const tool = createWebSearchTool({
+      config: {
+        vault: {
+          enabled: true,
+          proxies: { perplexity: "http://vault:8090" },
+        },
+        tools: { web: { search: { enabled: true, provider: "perplexity" } } },
+      },
+    });
+    expect(tool).not.toBeNull();
+  });
+
+  it("creates tool without vault config (no vault section)", () => {
+    const tool = createWebSearchTool({
+      config: {
+        tools: { web: { search: { enabled: true, provider: "brave" } } },
+      },
+    });
+    expect(tool).not.toBeNull();
+  });
+});
+
+describe("web_search vault proxy execute path", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("brave: routes through vault proxy URL, omits X-Subscription-Token", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      capturedUrl = url;
+      capturedHeaders = Object.fromEntries(
+        Object.entries(init?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+      );
+      return new Response(
+        JSON.stringify({
+          web: { results: [{ title: "test", url: "https://example.com", description: "desc" }] },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createWebSearchTool({
+      config: {
+        vault: { enabled: true, proxies: { brave: "http://vault:8089" } },
+        tools: { web: { search: { enabled: true, provider: "brave" } } },
+      },
+    })!;
+
+    await tool.execute("t1", { query: "test query" });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(capturedUrl).toContain("http://vault:8089/res/v1/web/search");
+    expect(capturedHeaders).not.toHaveProperty("x-subscription-token");
+  });
+
+  it("perplexity: routes through vault proxy URL, omits Authorization header", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      capturedUrl = url;
+      capturedHeaders = Object.fromEntries(
+        Object.entries(init?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+      );
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "answer" } }],
+          citations: ["https://example.com"],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createWebSearchTool({
+      config: {
+        vault: { enabled: true, proxies: { perplexity: "http://vault:8090" } },
+        tools: { web: { search: { enabled: true, provider: "perplexity" } } },
+      },
+    })!;
+
+    await tool.execute("t2", { query: "test query" });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(capturedUrl).toBe("http://vault:8090/chat/completions");
+    expect(capturedHeaders).not.toHaveProperty("authorization");
+  });
+
+  it("grok: routes through vault proxy URL, omits Authorization header", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      capturedUrl = url;
+      capturedHeaders = Object.fromEntries(
+        Object.entries(init?.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]),
+      );
+      return new Response(
+        JSON.stringify({ output_text: "answer", citations: ["https://example.com"] }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = createWebSearchTool({
+      config: {
+        vault: { enabled: true, proxies: { xai: "http://vault:8087" } },
+        tools: { web: { search: { enabled: true, provider: "grok" } } },
+      },
+    })!;
+
+    await tool.execute("t3", { query: "test query" });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(capturedUrl).toBe("http://vault:8087/v1/responses");
+    expect(capturedHeaders).not.toHaveProperty("authorization");
   });
 });
