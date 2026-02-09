@@ -332,6 +332,7 @@
 | A008 | TikTok Content Posting API 리서치 | ✅ Complete |
 | T004-LL | Lessons Learned: qwen3 /no_think 버그 | Complete |
 | T022 | 제품 등록 + AI 콘텐츠 + 영상 생성 E2E (2026-02-09) | ✅ Complete |
+| I037 | TTS 여성 음성 전환 + 자막 토글 기능 | ✅ Complete |
 
 ---
 
@@ -701,6 +702,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 | 2026-02-09 | R2 Public Access 활성화 (API 방식) | `r2.dev` subdomain 공개 접근 활성화 → Worker R2 업로드 → Public URL 서빙 확인 |
 | 2026-02-09 | R2 E2E 테스트 PASS | Worker→R2 업로드→Public URL→API 저장 전체 흐름 성공 (Job fc59515b, 2분46초, 2.6MB) |
 | 2026-02-09 | TTS 엔진 edge-tts 전환 | MMS-TTS-vie(남성) → edge-tts vi-VN-HoaiMyNeural(여성), 아바타(happy.png 여성)와 음성 일치 |
+| 2026-02-09 | 자막 모드 srt-only 기본값 | burn-in 제거, SRT 별도 R2 업로드, 프론트엔드 토글 |
 
 ---
 
@@ -734,11 +736,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `ce0588c docs: add I037 TTS female voice and subtitle toggle (02-09)`
 - `97fed6c feat: subtitle toggle - default hidden, SRT track on demand (02-09)`
 - `21213e1 feat: switch TTS to edge-tts female voice (vi-VN-HoaiMyNeural) (02-09)`
 - `ce556d0 docs: update I036 with R2 public access setup and E2E test results (02-09)`
 - `2ea5be1 feat: add R2 upload to video worker pipeline (I036) (02-09)`
-- `a13de35 fix: resolve 3 E2E issues - encoding, UCP stats, register security (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-09*
