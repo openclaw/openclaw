@@ -20,6 +20,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { encodeKeySequence, encodePaste } from "./pty-keys.js";
+import { extractOrFallback } from "../discord/extraction/integration.js";
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
@@ -148,15 +149,29 @@ export function createProcessTool(
         case "poll": {
           if (!scopedSession) {
             if (scopedFinished) {
+              // Agent-side extraction for finished sessions
+              let displayText =
+                scopedFinished.tail ||
+                `(no output recorded${scopedFinished.truncated ? " — truncated to cap" : ""})`;
+              let wasExtracted = false;
+
+              if (scopedFinished.aggregated) {
+                const extraction = extractOrFallback(scopedFinished.aggregated, undefined, {
+                  command: scopedFinished.command,
+                });
+
+                if (extraction.extracted) {
+                  displayText = extraction.text;
+                  wasExtracted = true;
+                }
+              }
+
               return {
                 content: [
                   {
                     type: "text",
                     text:
-                      (scopedFinished.tail ||
-                        `(no output recorded${
-                          scopedFinished.truncated ? " — truncated to cap" : ""
-                        })`) +
+                      displayText +
                       `\n\nProcess exited with ${
                         scopedFinished.exitSignal
                           ? `signal ${scopedFinished.exitSignal}`
@@ -170,6 +185,7 @@ export function createProcessTool(
                   exitCode: scopedFinished.exitCode ?? undefined,
                   aggregated: scopedFinished.aggregated,
                   name: deriveSessionName(scopedFinished.command),
+                  wasExtracted,
                 },
               };
             }
@@ -213,12 +229,30 @@ export function createProcessTool(
               : "failed"
             : "running";
           const output = [stdout.trimEnd(), stderr.trimEnd()].filter(Boolean).join("\n").trim();
+
+          // Agent-side extraction: try to extract clean response from accumulated output
+          let extractedText = output;
+          let wasExtracted = false;
+
+          if (scopedSession.aggregated) {
+            const extraction = extractOrFallback(scopedSession.aggregated, undefined, {
+              command: scopedSession.command,
+            });
+
+            if (extraction.extracted) {
+              // Use last line of extracted response as "new output" for this poll
+              const extractedLines = extraction.text.split("\n");
+              extractedText = extractedLines[extractedLines.length - 1] || extraction.text;
+              wasExtracted = true;
+            }
+          }
+
           return {
             content: [
               {
                 type: "text",
                 text:
-                  (output || "(no new output)") +
+                  (extractedText || "(no new output)") +
                   (exited
                     ? `\n\nProcess exited with ${
                         exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
@@ -232,6 +266,7 @@ export function createProcessTool(
               exitCode: exited ? exitCode : undefined,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
+              wasExtracted,
             },
           };
         }

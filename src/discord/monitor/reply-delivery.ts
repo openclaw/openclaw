@@ -7,6 +7,7 @@ import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord } from "../send.js";
+import { backupExtraction } from "../extraction/integration.js";
 
 export async function deliverDiscordReply(params: {
   replies: ReplyPayload[];
@@ -24,7 +25,17 @@ export async function deliverDiscordReply(params: {
   const chunkLimit = Math.min(params.textLimit, 2000);
   for (const payload of params.replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const rawText = payload.text ?? "";
+    let rawText = payload.text ?? "";
+
+    // Infrastructure-level backup extraction (if agent didn't extract)
+    const backup = backupExtraction(rawText, {
+      wasExtracted: (payload as any).wasExtracted,
+    });
+
+    if (backup.extracted && backup.wasBackup) {
+      rawText = backup.text;
+    }
+
     const tableMode = params.tableMode ?? "code";
     const text = convertMarkdownTables(rawText, tableMode);
     if (!text && mediaList.length === 0) continue;
