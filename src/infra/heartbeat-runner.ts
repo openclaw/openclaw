@@ -850,6 +850,10 @@ export async function runHeartbeatOnce(opts: {
     return true;
   };
 
+  // `getReplyFromConfig` may touch the session store entry (including clobbering `updatedAt`).
+  // Capture the prior value so early-return paths can restore monotonicity.
+  const previousUpdatedAt = entry?.updatedAt;
+
   try {
     // Capture transcript state before the heartbeat run so we can prune if HEARTBEAT_OK
     const transcriptState = await captureTranscriptState({
