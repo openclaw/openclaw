@@ -19,6 +19,13 @@ Explicit listing of changes in this fork relative to upstream [OpenClaw](https:/
 - **Ollama** — Support `OLLAMA_HOST` for cloud/remote discovery and requests (`8cb58d65d`).
 - **Agent loop** — One config/restart/cron change per request; report and ask before retry (`394341893`).
 - **Build** — Type fix for `SkillLibrary` in `selectSkillsForContext` (plugin-sdk dts build) (`ffe83456b`).
+- **Cron zombie scheduler fix** — Six changes to prevent and recover from a stuck scheduler:
+  - Re-arm timer in catch block when `onTimer` throws.
+  - Re-arm on `cron list` / `cron status` when timer is dead (zombie recovery).
+  - Watchdog timer (every 2.5 min) re-arms if main timer dies.
+  - Per-job dynamic stuck threshold (`runningAtMs`) based on job timeout.
+  - Stale `state.running` recovery when `onTimer` hangs.
+  - Troubleshooting docs for "Cron stuck (zombie scheduler)".
 - _(Add further customizations, fixes, or config here as you make them.)_
 
 ## Workflow / tooling

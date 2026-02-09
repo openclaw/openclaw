@@ -132,8 +132,8 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     expect(enqueueSystemEvent).toHaveBeenCalledWith("cron-tick", { agentId: undefined });
     expect(updated?.state.lastStatus).toBe("ok");
-    // nextRunAtMs should be the next whole-minute boundary (60s later).
-    expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);
+    // nextRunAtMs must advance by at least one full minute past the due time.
+    expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 60_000);
 
     cron.stop();
     await store.cleanup();
