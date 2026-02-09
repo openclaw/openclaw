@@ -359,7 +359,11 @@ export class ConvosSDKClient {
     // Set the agent's display name in the conversation so it shows
     // the agent name instead of "Somebody" in the Convos app.
     if (name) {
-      await convosGroup.setConversationProfile({ name });
+      try {
+        await convosGroup.setConversationProfile({ name });
+      } catch (err) {
+        console.warn(`[convos-sdk] Failed to set profile name:`, err);
+      }
     }
 
     // Create invite (automatically manages metadata)
