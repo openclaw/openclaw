@@ -6,7 +6,8 @@ afterEach(() => {
 });
 
 describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
-  it("uses OPENCLAW_HOME at module import time", async () => {
+  // Unix-style paths behave differently on Windows; skip there
+  it.skipIf(process.platform === "win32")("uses OPENCLAW_HOME at module import time", async () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
     vi.stubEnv("HOME", "/home/other");
     vi.resetModules();
