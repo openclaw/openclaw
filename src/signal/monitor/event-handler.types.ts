@@ -16,6 +16,25 @@ export type SignalEnvelope = {
   reactionMessage?: SignalReactionMessage | null;
 };
 
+export type SignalQuote = {
+  id?: number | null;
+  author?: string | null;
+  authorNumber?: string | null;
+  authorUuid?: string | null;
+  text?: string | null;
+  mentions?: Array<{
+    start?: number;
+    length?: number;
+    uuid?: string | null;
+  }> | null;
+  attachments?: Array<{
+    contentType?: string | null;
+    fileName?: string | null;
+    thumbnail?: unknown;
+  }> | null;
+  textStyles?: Array<unknown> | null;
+};
+
 export type SignalDataMessage = {
   timestamp?: number;
   message?: string | null;
@@ -24,7 +43,7 @@ export type SignalDataMessage = {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: SignalQuote | null;
   reaction?: SignalReactionMessage | null;
 };
 
