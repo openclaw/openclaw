@@ -711,7 +711,9 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const compactStartedAt = Date.now();
-        const messageCountCompactionInput = session.messages.length;
+        // Measure compactedCount from the original pre-limiting transcript so compaction
+        // lifecycle metrics represent total reduction through the compaction pipeline.
+        const messageCountCompactionInput = messageCountOriginal;
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );

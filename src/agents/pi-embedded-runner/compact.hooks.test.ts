@@ -258,7 +258,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
     expect(sessionHook("compact:after")?.context).toMatchObject({
       messageCount: 1,
-      compactedCount: 1,
+      compactedCount: 2,
     });
 
     expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
@@ -272,7 +272,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       {
         messageCount: 1,
         tokenCount: 10,
-        compactedCount: 1,
+        compactedCount: 2,
       },
       expect.objectContaining({ sessionKey: "agent:main:session-1" }),
     );
