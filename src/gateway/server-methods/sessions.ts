@@ -792,6 +792,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           // Restore full metadata
           store[sessionKey] = {
             ...(metadata as Record<string, unknown>),
+            sessionId, // Ensure sessionId is always set
             updatedAt: Date.now(),
             sessionFile: restoredPath,
           };
