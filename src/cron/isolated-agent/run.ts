@@ -101,12 +101,6 @@ function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return false;
 }
 
-/** Returns true when every skill in the snapshot is within the allowlist. */
-function snapshotMatchesFilter(snapshotSkills: Array<{ name: string }>, filter: string[]): boolean {
-  const allowed = new Set(filter);
-  return snapshotSkills.every((s) => allowed.has(s.name));
-}
-
 const CRON_SUBAGENT_WAIT_POLL_MS = 500;
 const CRON_SUBAGENT_WAIT_MIN_MS = 30_000;
 const CRON_SUBAGENT_FINAL_REPLY_GRACE_MS = 5_000;
@@ -535,14 +529,14 @@ let skillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
     const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
     const skillFilter = resolveAgentSkillsFilter(params.cfg, agentId);
-    const snapshotSkillsMismatch =
-      skillFilter !== undefined &&
-      existingSnapshot != null &&
-      !snapshotMatchesFilter(existingSnapshot.skills, skillFilter);
+    // Always rebuild when a skill filter is configured: config-level allowlist changes
+    // (add/remove/clear) do not bump the snapshot version, so the cached snapshot may
+    // contain stale skill sets. Rebuilding is cheap (reads SKILL.md files from disk)
+    // and cron runs on a schedule, not per-message.
     const needsSkillsSnapshot =
       !existingSnapshot ||
       existingSnapshot.version !== skillsSnapshotVersion ||
-      snapshotSkillsMismatch;
+      skillFilter !== undefined;
     if (needsSkillsSnapshot) {
       skillsSnapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfgWithAgentDefaults,
