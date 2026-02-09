@@ -53,11 +53,18 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { startSmartAck, type SmartAckConfig, type SmartAckContext } from "./smart-ack.js";
+import {
+  startSmartAck,
+  type SmartAckConfig,
+  type SmartAckContext,
+  type SmartAckResult,
+} from "./smart-ack.js";
 import { createSmartStatus } from "./smart-status.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { createTypingGuard } from "./typing-guard.js";
 import { sendTyping } from "./typing.js";
+
+const DEFAULT_ACK_DELAY_MS = 5000;
 
 export async function processDiscordMessage(ctx: DiscordMessagePreflightContext) {
   const {
@@ -562,8 +569,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     : null;
 
   // Await triage result. If FULL, deliver directly and skip Opus dispatch.
+  // Hoisted so the ack text is available for delayed delivery after the block.
+  let triageResult: SmartAckResult | null | undefined;
   if (smartAckController) {
-    const triageResult = await smartAckController.result;
+    triageResult = await smartAckController.result;
     if (triageResult?.isFull) {
       // Reinforce typing so the indicator doesn't drop between classification and delivery.
       void sendTyping({ rest: client.rest, channelId: typingChannelId }).catch(() => {});
@@ -668,14 +677,14 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   // ACK case: set up delayed sending for interim feedback if the main model takes too long.
-  const ackDelayMs = smartAckParsedConfig?.delayMs ?? DEFAULT_ACK_DELAY_MS;
+  const ackDelayMs = DEFAULT_ACK_DELAY_MS;
   let _smartAckMessageId: string | undefined;
   let _smartAckChannelId: string | undefined;
   let smartAckCancelled = false;
-  let smartAckDelayTimer: ReturnType<typeof setTimeout> | undefined;
-  if (smartAckResult && !smartAckResult.isFull) {
-    const ackText = smartAckResult.text;
-    smartAckDelayTimer = setTimeout(async () => {
+  let _smartAckDelayTimer: ReturnType<typeof setTimeout> | undefined;
+  if (triageResult && !triageResult.isFull) {
+    const ackText = triageResult.text;
+    _smartAckDelayTimer = setTimeout(async () => {
       if (smartAckCancelled) {
         return;
       }
