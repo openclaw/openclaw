@@ -590,17 +590,23 @@ export function createBrowserTool(opts?: {
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
           const type = params.type === "jpeg" ? "jpeg" : "png";
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? Math.max(1000, Math.min(120_000, Math.floor(params.timeoutMs)))
+              : undefined;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",
                 path: "/screenshot",
                 profile,
+                timeoutMs,
                 body: {
                   targetId,
                   fullPage,
                   ref,
                   element,
                   type,
+                  timeoutMs,
                 },
               })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
             : await browserScreenshotAction(baseUrl, {
@@ -610,6 +616,7 @@ export function createBrowserTool(opts?: {
                 element,
                 type,
                 profile,
+                timeoutMs,
               });
           return await imageResultFromFile({
             label: "browser:screenshot",
@@ -795,16 +802,26 @@ export function createBrowserTool(opts?: {
           if (!request || typeof request !== "object") {
             throw new Error("request required");
           }
+          const timeoutMs =
+            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+              ? Math.max(1000, Math.min(120_000, Math.floor(params.timeoutMs)))
+              : undefined;
+          const requestWithTimeout =
+            typeof timeoutMs === "number" && timeoutMs > 0 && !Object.hasOwn(request, "timeoutMs")
+              ? { ...request, timeoutMs }
+              : request;
           try {
             const result = proxyRequest
               ? await proxyRequest({
                   method: "POST",
                   path: "/act",
                   profile,
-                  body: request,
+                  timeoutMs,
+                  body: requestWithTimeout,
                 })
-              : await browserAct(baseUrl, request as Parameters<typeof browserAct>[1], {
+              : await browserAct(baseUrl, requestWithTimeout as Parameters<typeof browserAct>[1], {
                   profile,
+                  timeoutMs,
                 });
             return jsonResult(result);
           } catch (err) {

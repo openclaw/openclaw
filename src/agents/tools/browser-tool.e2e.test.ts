@@ -172,6 +172,49 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("passes timeoutMs through to screenshot", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, {
+      action: "screenshot",
+      targetId: "t1",
+      timeoutMs: 3000,
+    });
+
+    expect(browserActionsMocks.browserScreenshotAction).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        targetId: "t1",
+        timeoutMs: 3000,
+      }),
+    );
+  });
+
+  it("passes timeoutMs through to act", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.(null, {
+      action: "act",
+      timeoutMs: 3000,
+      request: {
+        kind: "click",
+        targetId: "t1",
+        ref: "e12",
+      },
+    });
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "click",
+        targetId: "t1",
+        ref: "e12",
+        timeoutMs: 3000,
+      }),
+      expect.objectContaining({
+        timeoutMs: 3000,
+      }),
+    );
+  });
+
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });
