@@ -13,6 +13,8 @@ const VERSION_MANAGER_MARKERS = [
   "/.nodenv/",
   "/.nodebrew/",
   "/nvs/",
+  // pnpm global store paths contain version-specific hashes that break after updates
+  "/.pnpm/",
 ];
 
 function getPathModule(platform: NodeJS.Platform) {
