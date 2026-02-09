@@ -217,9 +217,15 @@ export async function hybridSearch(
     rrfK?: number;
     candidateMultiplier?: number;
     graphFiringThreshold?: number;
+    graphSearchDepth?: number;
   } = {},
 ): Promise<HybridSearchResult[]> {
-  const { rrfK = 60, candidateMultiplier = 4, graphFiringThreshold = 0.3 } = options;
+  const {
+    rrfK = 60,
+    candidateMultiplier = 4,
+    graphFiringThreshold = 0.3,
+    graphSearchDepth = 1,
+  } = options;
 
   const candidateLimit = Math.floor(Math.min(200, Math.max(1, limit * candidateMultiplier)));
 
@@ -235,7 +241,7 @@ export async function hybridSearch(
     db.vectorSearch(queryEmbedding, candidateLimit, 0.1, agentId),
     db.bm25Search(query, candidateLimit, agentId),
     graphEnabled
-      ? db.graphSearch(query, candidateLimit, graphFiringThreshold, agentId)
+      ? db.graphSearch(query, candidateLimit, graphFiringThreshold, agentId, graphSearchDepth)
       : Promise.resolve([] as SearchSignalResult[]),
   ]);
 

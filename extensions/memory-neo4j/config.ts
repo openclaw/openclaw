@@ -38,6 +38,18 @@ export type MemoryNeo4jConfig = {
      */
     refreshAtContextPercent?: number;
   };
+  /**
+   * Maximum relationship hops for graph search spreading activation.
+   * Default: 1 (direct + 1-hop neighbors).
+   * Setting to 2+ enables deeper traversal but may slow queries.
+   */
+  graphSearchDepth: number;
+  /**
+   * Per-category decay curve parameters. Each category can have its own
+   * half-life (days) controlling how fast memories in that category decay.
+   * Categories not listed use the sleep cycle's default (30 days).
+   */
+  decayCurves: Record<string, { halfLifeDays: number }>;
 };
 
 /**
@@ -204,6 +216,8 @@ export const memoryNeo4jConfigSchema = {
         "autoRecallMinScore",
         "coreMemory",
         "extraction",
+        "graphSearchDepth",
+        "decayCurves",
       ],
       "memory-neo4j config",
     );
@@ -320,6 +334,32 @@ export const memoryNeo4jConfigSchema = {
       }
     }
 
+    // Parse decayCurves: per-category decay curve overrides
+    const decayCurvesRaw = cfg.decayCurves as Record<string, unknown> | undefined;
+    const decayCurves: Record<string, { halfLifeDays: number }> = {};
+    if (decayCurvesRaw && typeof decayCurvesRaw === "object") {
+      for (const [cat, val] of Object.entries(decayCurvesRaw)) {
+        if (val && typeof val === "object" && "halfLifeDays" in val) {
+          const hl = (val as Record<string, unknown>).halfLifeDays;
+          if (typeof hl === "number" && hl > 0) {
+            decayCurves[cat] = { halfLifeDays: hl };
+          } else {
+            throw new Error(`decayCurves.${cat}.halfLifeDays must be a positive number`);
+          }
+        }
+      }
+    }
+
+    // Parse graphSearchDepth: must be 1-3, default 1
+    const rawDepth = cfg.graphSearchDepth;
+    let graphSearchDepth = 1;
+    if (typeof rawDepth === "number") {
+      if (rawDepth < 1 || rawDepth > 3 || !Number.isInteger(rawDepth)) {
+        throw new Error(`graphSearchDepth must be 1, 2, or 3, got: ${rawDepth}`);
+      }
+      graphSearchDepth = rawDepth;
+    }
+
     return {
       neo4j: {
         uri: neo4jRaw.uri,
@@ -341,6 +381,8 @@ export const memoryNeo4jConfigSchema = {
         maxEntries: coreMemoryMaxEntries,
         refreshAtContextPercent,
       },
+      graphSearchDepth,
+      decayCurves,
     };
   },
 };

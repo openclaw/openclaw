@@ -68,11 +68,17 @@ const FETCH_TIMEOUT_MS = 30_000;
 async function callOpenRouter(
   config: ExtractionConfig,
   prompt: string | Array<{ role: string; content: string }>,
+  abortSignal?: AbortSignal,
 ): Promise<string | null> {
   const messages = typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt;
 
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     try {
+      // Combine the caller's abort signal with a per-request timeout
+      const signal = abortSignal
+        ? AbortSignal.any([abortSignal, AbortSignal.timeout(FETCH_TIMEOUT_MS)])
+        : AbortSignal.timeout(FETCH_TIMEOUT_MS);
+
       const response = await fetch(`${config.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -85,7 +91,7 @@ async function callOpenRouter(
           temperature: config.temperature,
           response_format: { type: "json_object" },
         }),
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        signal,
       });
 
       if (!response.ok) {
@@ -102,6 +108,105 @@ async function callOpenRouter(
         throw err;
       }
       // Exponential backoff
+      await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt)));
+    }
+  }
+  return null;
+}
+
+/**
+ * Streaming variant of callOpenRouter. Uses the streaming API to receive chunks
+ * incrementally, allowing earlier cancellation via abort signal and better
+ * latency characteristics for long responses.
+ *
+ * Accumulates all chunks into a single response string since extraction
+ * uses JSON mode (which requires the complete object to parse).
+ */
+async function callOpenRouterStream(
+  config: ExtractionConfig,
+  prompt: string | Array<{ role: string; content: string }>,
+  abortSignal?: AbortSignal,
+): Promise<string | null> {
+  const messages = typeof prompt === "string" ? [{ role: "user", content: prompt }] : prompt;
+
+  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    try {
+      const signal = abortSignal
+        ? AbortSignal.any([abortSignal, AbortSignal.timeout(FETCH_TIMEOUT_MS)])
+        : AbortSignal.timeout(FETCH_TIMEOUT_MS);
+
+      const response = await fetch(`${config.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: config.model,
+          messages,
+          temperature: config.temperature,
+          response_format: { type: "json_object" },
+          stream: true,
+        }),
+        signal,
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`OpenRouter API error ${response.status}: ${body}`);
+      }
+
+      if (!response.body) {
+        throw new Error("No response body for streaming request");
+      }
+
+      // Read SSE stream and accumulate content chunks
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      let buffer = "";
+
+      for (;;) {
+        // Check abort between chunks for responsive cancellation
+        if (abortSignal?.aborted) {
+          reader.cancel().catch(() => {});
+          return null;
+        }
+
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Parse SSE lines
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data: ")) continue;
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") continue;
+
+          try {
+            const parsed = JSON.parse(data) as {
+              choices?: Array<{ delta?: { content?: string } }>;
+            };
+            const chunk = parsed.choices?.[0]?.delta?.content;
+            if (chunk) {
+              accumulated += chunk;
+            }
+          } catch {
+            // Skip malformed SSE chunks
+          }
+        }
+      }
+
+      return accumulated || null;
+    } catch (err) {
+      if (attempt >= config.maxRetries) {
+        throw err;
+      }
       await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt)));
     }
   }
@@ -143,6 +248,8 @@ function isTransientError(err: unknown): boolean {
 /**
  * Extract entities and relationships from a memory text using LLM.
  *
+ * Uses streaming for responsive abort signal handling and better latency.
+ *
  * Returns { result, transientFailure }:
  * - result is the ExtractionResult or null if extraction returned nothing useful
  * - transientFailure is true if the failure was due to a network/timeout issue
@@ -151,6 +258,7 @@ function isTransientError(err: unknown): boolean {
 export async function extractEntities(
   text: string,
   config: ExtractionConfig,
+  abortSignal?: AbortSignal,
 ): Promise<{ result: ExtractionResult | null; transientFailure: boolean }> {
   if (!config.enabled) {
     return { result: null, transientFailure: false };
@@ -164,7 +272,8 @@ export async function extractEntities(
 
   let content: string | null;
   try {
-    content = await callOpenRouter(config, messages);
+    // Use streaming for extraction — allows responsive abort and better latency
+    content = await callOpenRouterStream(config, messages, abortSignal);
   } catch (err) {
     // Network/timeout errors are transient — caller should retry
     return { result: null, transientFailure: isTransientError(err) };
@@ -264,22 +373,27 @@ export async function resolveConflict(
   memA: string,
   memB: string,
   config: ExtractionConfig,
+  abortSignal?: AbortSignal,
 ): Promise<"a" | "b" | "both" | "skip"> {
   if (!config.enabled) return "skip";
 
   try {
-    const content = await callOpenRouter(config, [
-      {
-        role: "system",
-        content: `Two memories may conflict with each other. Determine which should be kept.
+    const content = await callOpenRouter(
+      config,
+      [
+        {
+          role: "system",
+          content: `Two memories may conflict with each other. Determine which should be kept.
 
 If they genuinely contradict each other, keep the one that is more current, specific, or accurate.
 If they don't actually conflict (they cover different aspects or are both valid), keep both.
 
 Return JSON: {"keep": "a"|"b"|"both", "reason": "brief explanation"}`,
-      },
-      { role: "user", content: `Memory A: "${memA}"\nMemory B: "${memB}"` },
-    ]);
+        },
+        { role: "user", content: `Memory A: "${memA}"\nMemory B: "${memB}"` },
+      ],
+      abortSignal,
+    );
     if (!content) return "skip";
 
     const parsed = JSON.parse(content) as { keep?: string };
@@ -319,6 +433,7 @@ export async function runBackgroundExtraction(
   config: ExtractionConfig,
   logger: Logger,
   currentRetries: number = 0,
+  abortSignal?: AbortSignal,
 ): Promise<void> {
   if (!config.enabled) {
     await db.updateExtractionStatus(memoryId, "skipped").catch(() => {});
@@ -326,7 +441,7 @@ export async function runBackgroundExtraction(
   }
 
   try {
-    const { result, transientFailure } = await extractEntities(text, config);
+    const { result, transientFailure } = await extractEntities(text, config, abortSignal);
 
     if (!result) {
       if (transientFailure) {
@@ -483,6 +598,7 @@ export type SleepCycleOptions = {
   decayRetentionThreshold?: number; // Below this, memory is pruned (default: 0.1)
   decayBaseHalfLifeDays?: number; // Base half-life in days (default: 30)
   decayImportanceMultiplier?: number; // How much importance extends half-life (default: 2)
+  decayCurves?: Record<string, { halfLifeDays: number }>; // Per-category decay curve overrides
 
   // Progress callback
   onPhaseStart?: (
@@ -552,6 +668,7 @@ export async function runSleepCycle(
     decayRetentionThreshold = 0.1,
     decayBaseHalfLifeDays = 30,
     decayImportanceMultiplier = 2,
+    decayCurves,
     extractionBatchSize = 50,
     extractionDelayMs = 1000,
     onPhaseStart,
@@ -642,7 +759,7 @@ export async function runSleepCycle(
       onPhaseStart?.("semanticDedup");
       logger.info("memory-neo4j: [sleep] Phase 1b: Semantic Deduplication (0.75-0.95 band)");
 
-      // Collect all candidate pairs upfront
+      // Collect all candidate pairs upfront (with pairwise similarity for pre-screening)
       type DedupPair = {
         textA: string;
         textB: string;
@@ -650,6 +767,7 @@ export async function runSleepCycle(
         idB: string;
         importanceA: number;
         importanceB: number;
+        similarity?: number;
       };
       const allPairs: DedupPair[] = [];
 
@@ -657,6 +775,7 @@ export async function runSleepCycle(
         if (cluster.memoryIds.length < 2) continue;
         for (let i = 0; i < cluster.memoryIds.length - 1; i++) {
           for (let j = i + 1; j < cluster.memoryIds.length; j++) {
+            const pairKey = makePairKey(cluster.memoryIds[i], cluster.memoryIds[j]);
             allPairs.push({
               textA: cluster.texts[i],
               textB: cluster.texts[j],
@@ -664,6 +783,7 @@ export async function runSleepCycle(
               idB: cluster.memoryIds[j],
               importanceA: cluster.importances[i],
               importanceB: cluster.importances[j],
+              similarity: cluster.similarities?.get(pairKey),
             });
           }
         }
@@ -683,7 +803,9 @@ export async function runSleepCycle(
         if (activeBatch.length === 0) continue;
 
         const outcomes = await Promise.allSettled(
-          activeBatch.map((p) => isSemanticDuplicate(p.textA, p.textB, config)),
+          activeBatch.map((p) =>
+            isSemanticDuplicate(p.textA, p.textB, config, p.similarity, abortSignal),
+          ),
         );
 
         for (let k = 0; k < outcomes.length; k++) {
@@ -737,7 +859,9 @@ export async function runSleepCycle(
       for (let i = 0; i < pairs.length && !abortSignal?.aborted; i += LLM_CONCURRENCY) {
         const chunk = pairs.slice(i, i + LLM_CONCURRENCY);
         const outcomes = await Promise.allSettled(
-          chunk.map((pair) => resolveConflict(pair.memoryA.text, pair.memoryB.text, config)),
+          chunk.map((pair) =>
+            resolveConflict(pair.memoryA.text, pair.memoryB.text, config, abortSignal),
+          ),
         );
 
         for (let k = 0; k < outcomes.length; k++) {
@@ -927,6 +1051,7 @@ export async function runSleepCycle(
                   config,
                   logger,
                   memory.extractionRetries,
+                  abortSignal,
                 ),
               ),
             );
@@ -978,6 +1103,7 @@ export async function runSleepCycle(
         retentionThreshold: decayRetentionThreshold,
         baseHalfLifeDays: decayBaseHalfLifeDays,
         importanceMultiplier: decayImportanceMultiplier,
+        decayCurves,
         agentId,
       });
 
@@ -1004,19 +1130,23 @@ export async function runSleepCycle(
 
     try {
       // Clean up orphan entities
-      const orphanEntities = await db.findOrphanEntities();
-      if (orphanEntities.length > 0) {
-        result.cleanup.entitiesRemoved = await db.deleteOrphanEntities(
-          orphanEntities.map((e) => e.id),
-        );
-        onProgress?.("cleanup", `Removed ${result.cleanup.entitiesRemoved} orphan entities`);
+      if (!abortSignal?.aborted) {
+        const orphanEntities = await db.findOrphanEntities();
+        if (orphanEntities.length > 0) {
+          result.cleanup.entitiesRemoved = await db.deleteOrphanEntities(
+            orphanEntities.map((e) => e.id),
+          );
+          onProgress?.("cleanup", `Removed ${result.cleanup.entitiesRemoved} orphan entities`);
+        }
       }
 
       // Clean up orphan tags
-      const orphanTags = await db.findOrphanTags();
-      if (orphanTags.length > 0) {
-        result.cleanup.tagsRemoved = await db.deleteOrphanTags(orphanTags.map((t) => t.id));
-        onProgress?.("cleanup", `Removed ${result.cleanup.tagsRemoved} orphan tags`);
+      if (!abortSignal?.aborted) {
+        const orphanTags = await db.findOrphanTags();
+        if (orphanTags.length > 0) {
+          result.cleanup.tagsRemoved = await db.deleteOrphanTags(orphanTags.map((t) => t.id));
+          onProgress?.("cleanup", `Removed ${result.cleanup.tagsRemoved} orphan tags`);
+        }
       }
 
       logger.info(
@@ -1109,8 +1239,20 @@ Rules:
 Return JSON: {"verdict": "duplicate"|"unique", "reason": "brief explanation"}`;
 
 /**
+ * Minimum cosine similarity to proceed with the LLM comparison.
+ * Below this threshold, texts are too dissimilar to be semantic duplicates,
+ * saving an expensive LLM call. Exported for testing.
+ */
+export const SEMANTIC_DEDUP_VECTOR_THRESHOLD = 0.8;
+
+/**
  * Check whether new text is semantically a duplicate of an existing memory.
- * Uses an LLM to compare meaning rather than surface similarity.
+ *
+ * When a pre-computed vector similarity score is provided (from findSimilar
+ * or findDuplicateClusters), the LLM call is skipped entirely for pairs
+ * below SEMANTIC_DEDUP_VECTOR_THRESHOLD — a fast pre-screen that avoids
+ * the most expensive part of the pipeline.
+ *
  * Returns true if the new text is a duplicate (should be skipped).
  * Returns false on any failure (allow storage).
  */
@@ -1118,16 +1260,27 @@ export async function isSemanticDuplicate(
   newText: string,
   existingText: string,
   config: ExtractionConfig,
+  vectorSimilarity?: number,
+  abortSignal?: AbortSignal,
 ): Promise<boolean> {
   if (!config.enabled) {
     return false;
   }
 
+  // Vector pre-screen: skip LLM call when similarity is below threshold
+  if (vectorSimilarity !== undefined && vectorSimilarity < SEMANTIC_DEDUP_VECTOR_THRESHOLD) {
+    return false;
+  }
+
   try {
-    const content = await callOpenRouter(config, [
-      { role: "system", content: SEMANTIC_DEDUP_SYSTEM },
-      { role: "user", content: `Existing memory: "${existingText}"\nNew text: "${newText}"` },
-    ]);
+    const content = await callOpenRouter(
+      config,
+      [
+        { role: "system", content: SEMANTIC_DEDUP_SYSTEM },
+        { role: "user", content: `Existing memory: "${existingText}"\nNew text: "${newText}"` },
+      ],
+      abortSignal,
+    );
     if (!content) {
       return false;
     }
