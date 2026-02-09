@@ -114,6 +114,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
 - xAI: `xai` (`XAI_API_KEY`)
+- SambaNova: `sambanova` (`SAMBANOVA_API_KEY`)
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.

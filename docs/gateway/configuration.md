@@ -2692,6 +2692,61 @@ Notes:
 - Available model: `MiniMax-M2.1` (default).
 - Update pricing in `models.json` if you need exact cost tracking.
 
+### SambaNova (Llama/GPT/Deepseek/Qwen)
+
+SambaNova provides inference with Llama, Gpt and DeepSeek models via their OpenAI-compatible endpoint.
+
+**Quick setup with native llama, gpt and deepseek models:**
+
+```bash
+clawdbot onboard --auth-choice sambanova-api-key
+```
+
+**Config snippet (Llama models):**
+
+```json5
+{
+  env: { SAMBANOVA_API_KEY: "..." },
+  agents: {
+    defaults: {
+      model: { primary: "sambanova/Llama-4-Maverick-17B-128E-Instruct" },
+      models: {
+        "sambanova/Llama-4-Maverick-17B-128E-Instruct": { alias: "Llama 4 17B" },
+        "sambanova/Meta-Llama-3.3-70B-Instruct": { alias: "Llama 3.3 70B" },
+        "sambanova/DeepSeek-V3.1-Terminus": { alias: "Deepseek V3.1 Terminus" },
+        "sambanova/gpt-oss-120b": { alias: "GPT OSS 120B" },
+        "sambanova/DeepSeek-V3.1": { alias: "DeepSeek V3.1" },
+        "sambanova/DeepSeek-V3.2": { alias: "DeepSeek V3.2" },
+        "sambanova/DeepSeek-V3-0324": { alias: "DeepSeek V3 0324" },
+        "sambanova/Qwen3-32B": { alias: "Qwen3 32B" },
+        "sambanova/Qwen3-235B": { alias: "Qwen3 235B" },
+      },
+    },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      sambanova: {
+        baseUrl: "https://api.sambanova.ai/v1",
+        apiKey: "${SAMBANOVA_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "sambanova/Llama-4-Maverick-17B-128E-Instruct", name: "Llama 4 17B (SAMBANOVA)" },
+          { id: "sambanova/Meta-Llama-3.3-70B-Instruct", name: "Llama 3.3 70B (SAMBANOVA)" },
+          { id: "sambanova/DeepSeek-V3.1-Terminus", name: "Deepseek V3.1 Terminus (SAMBANOVA)" },
+          { id: "sambanova/gpt-oss-120b", name: "Gpt OSS 120B (SAMBANOVA)" },
+          { id: "sambanova/DeepSeek-V3.1", name: "DeepSeek V3.1 (SAMBANOVA)" },
+          { id: "sambanova/DeepSeek-V3.2", name: "DeepSeek V3.2 (SAMBANOVA)" },
+          { id: "sambanova/DeepSeek-V3-0324", name: "DeepSeek V3 0324 (SAMBANOVA)" },
+          { id: "sambanova/Qwen3-32B", name: "Qwen3 32B (SAMBANOVA)" },
+          { id: "sambanova/Qwen3-235B", name: "Qwen3 235B (SAMBANOVA)" },
+        ],
+      },
+    },
+  },
+}
+```
+
 ### Cerebras (GLM 4.6 / 4.7)
 
 Use Cerebras via their OpenAI-compatible endpoint:

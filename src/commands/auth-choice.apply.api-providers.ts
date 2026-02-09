@@ -27,6 +27,8 @@ import {
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applySambanovaConfig,
+  applySambanovaProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyVeniceConfig,
@@ -41,10 +43,12 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  SAMBANOVA_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  ZAI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -52,12 +56,12 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setSambanovaApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
-  ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 
@@ -108,6 +112,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "venice-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "sambanova") {
+      authChoice = "sambanova-api-key";
     } else if (params.opts.tokenProvider === "qianfan") {
       authChoice = "qianfan-api-key";
     }
@@ -678,6 +684,64 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applySyntheticConfig,
         applyProviderConfig: applySyntheticProviderConfig,
         noteDefault: SYNTHETIC_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "sambanova-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "sambanova") {
+      await setSambanovaApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "SambaNova provides fast inference with their RDU AI chips.",
+          "Get your API key at: https://cloud.sambanova.ai/",
+        ].join("\n"),
+        "SambaNova",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("sambanova");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing SAMBANOVA_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setSambanovaApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter SambaNova API key",
+        validate: validateApiKeyInput,
+      });
+      await setSambanovaApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "sambanova:default",
+      provider: "sambanova",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: SAMBANOVA_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applySambanovaConfig,
+        applyProviderConfig: applySambanovaProviderConfig,
+        noteDefault: SAMBANOVA_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

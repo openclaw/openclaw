@@ -18,6 +18,7 @@ export type AuthChoice =
   | "moonshot-api-key-cn"
   | "kimi-code-api-key"
   | "synthetic-api-key"
+  | "sambanova-api-key"
   | "venice-api-key"
   | "codex-cli"
   | "apiKey"
@@ -79,6 +80,7 @@ export type OnboardOptions = {
   xiaomiApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
+  sambanovaApiKey?: string;
   veniceApiKey?: string;
   opencodeZenApiKey?: string;
   xaiApiKey?: string;

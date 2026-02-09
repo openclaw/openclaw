@@ -20,6 +20,7 @@ import {
   applyMoonshotConfigCn,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applySambanovaConfig,
   applySyntheticConfig,
   applyVeniceConfig,
   applyVercelAiGatewayConfig,
@@ -35,6 +36,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setSambanovaApiKey,
   setSyntheticApiKey,
   setXaiApiKey,
   setVeniceApiKey,
@@ -395,6 +397,28 @@ export async function applyNonInteractiveAuthChoice(params: {
     });
     return applyMoonshotConfig(nextConfig);
   }
+  
+  if (authChoice === "sambanova-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "sambanova",
+      cfg: baseConfig,
+      flagValue: opts.sambanovaApiKey,
+      flagName: "--sambanova-api-key",
+      envVar: "SAMBANOVA_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setSambanovaApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "sambanova:default",
+      provider: "sambanova",
+      mode: "api_key",
+    });
+    return applySambanovaConfig(nextConfig);
 
   if (authChoice === "moonshot-api-key-cn") {
     const resolved = await resolveNonInteractiveApiKey({

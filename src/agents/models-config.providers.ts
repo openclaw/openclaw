@@ -80,6 +80,15 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const SAMBANOVA_BASE_URL = "https://api.sambanova.ai/v1";
+const SAMBANOVA_DEFAULT_CONTEXT_WINDOW = 128000;
+const SAMBANOVA_DEFAULT_MAX_TOKENS = 8192;
+const SAMBANOVA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
 const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
@@ -414,6 +423,95 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildSambanovaProvider(): ProviderConfig {
+  return {
+    baseUrl: SAMBANOVA_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "Llama-4-Maverick-17B-128E-Instruct",
+        name: "Llama 4 17B",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "Meta-Llama-3.3-70B-Instruct",
+        name: "Llama 3.3 70B",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "DeepSeek-V3.1-Terminus",
+        name: "Deepseek V3 Terminus",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-oss-120b",
+        name: "GPT OSS 120B",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "DeepSeek-V3.1",
+        name: "DeepSeek V3.1",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "DeepSeek-V3.2",
+        name: "DeepSeek V3.2",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "DeepSeek-V3-0324",
+        name: "DeepSeek V3 0324",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "Qwen3-32B",
+        name: "Qwen3 32B",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "Qwen3-235B",
+        name: "Qwen3 235B",
+        reasoning: false,
+        input: ["text"],
+        cost: SAMBANOVA_DEFAULT_COST,
+        contextWindow: SAMBANOVA_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SAMBANOVA_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -534,6 +632,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  const sambanovaKey =
+    resolveEnvApiKeyVarName("sambanova") ??
+    resolveApiKeyFromProfiles({ provider: "sambanova", store: authStore });
+  if (sambanovaKey) {
+    providers.sambanova = { ...buildSambanovaProvider(), apiKey: sambanovaKey };
   }
 
   const qianfanKey =

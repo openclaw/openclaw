@@ -600,6 +600,83 @@ export function applyVeniceConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+export function applySambanovaProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models["sambanova/Llama-4-Maverick-17B-128E-Instruct"] = {
+    ...models["sambanova/Llama-4-Maverick-17B-128E-Instruct"],
+    alias: models["sambanova/Llama-4-Maverick-17B-128E-Instruct"]?.alias ?? "Llama 4 Maverick 17B",
+  };
+  models["sambanova/Meta-Llama-3.1-8B-Instruct"] = {
+    ...models["sambanova/Meta-Llama-3.1-8B-Instruct"],
+    alias: models["sambanova/Meta-Llama-3.1-8B-Instruct"]?.alias ?? "Llama 3.1 8B",
+  };
+  models["sambanova/DeepSeek-V3.1-Terminus"] = {
+    ...models["sambanova/DeepSeek-V3.1-Terminus"],
+    alias: models["sambanova/DeepSeek-V3.1-Terminus"]?.alias ?? "DeepSeek V3.1 Terminus",
+  };
+  models["sambanova/gpt-oss-120b"] = {
+    ...models["sambanova/gpt-oss-120b"],
+    alias: models["sambanova/gpt-oss-120b"]?.alias ?? "GPT OSS 120B",
+  };
+  models["sambanova/DeepSeek-V3.1"] = {
+    ...models["sambanova/DeepSeek-V3.1"],
+    alias: models["sambanova/DeepSeek-V3.1"]?.alias ?? "DeepSeek V3.1",
+  };
+  models["sambanova/DeepSeek-V3.2"] = {
+    ...models["sambanova/DeepSeek-V3.2"],
+    alias: models["sambanova/DeepSeek-V3.2"]?.alias ?? "DeepSeek V3.2",
+  };
+  models["sambanova/DeepSeek-V3-0324"] = {
+    ...models["sambanova/DeepSeek-V3-0324"],
+    alias: models["sambanova/DeepSeek-V3-0324"]?.alias ?? "DeepSeek V3 0324",
+  };
+  models["sambanova/Qwen3-32B"] = {
+    ...models["sambanova/Qwen3-32B"],
+    alias: models["sambanova/Qwen3-32B"]?.alias ?? "Qwen3 32B",
+  };
+  models["sambanova/Qwen3-235B"] = {
+    ...models["sambanova/Qwen3-235B"],
+    alias: models["sambanova/Qwen3-235B"]?.alias ?? "Qwen3 235B",
+  };
+  models["sambanova/Meta-Llama-3.3-70B-Instruct"] = {
+    ...models["sambanova/Meta-Llama-3.3-70B-Instruct"],
+    alias: models["sambanova/Meta-Llama-3.3-70B-Instruct"]?.alias ?? "Llama 3.3 70B",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applySambanovaConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applySambanovaProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: "sambanova/Meta-Llama-3.1-8B-Instruct",
+        },
+      },
+    },
+  };
+}
+
 export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[XAI_DEFAULT_MODEL_REF] = {

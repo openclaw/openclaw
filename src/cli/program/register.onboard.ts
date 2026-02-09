@@ -79,6 +79,7 @@ export function registerOnboardCommand(program: Command) {
     .option("--cloudflare-ai-gateway-api-key <key>", "Cloudflare AI Gateway API key")
     .option("--moonshot-api-key <key>", "Moonshot API key")
     .option("--kimi-code-api-key <key>", "Kimi Coding API key")
+    .option("--sambanova-api-key <key>", "Sambanova API key")
     .option("--gemini-api-key <key>", "Gemini API key")
     .option("--zai-api-key <key>", "Z.AI API key")
     .option("--xiaomi-api-key <key>", "Xiaomi API key")
