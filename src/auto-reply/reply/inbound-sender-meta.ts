@@ -1,6 +1,7 @@
 import type { MsgContext } from "../templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { listSenderLabelCandidates, resolveSenderLabel } from "../../channels/sender-label.js";
+import { escapeRegExp } from "../../utils.js";
 
 export function formatInboundBodyWithSenderMeta(params: { body: string; ctx: MsgContext }): string {
   const body = params.body;
@@ -50,8 +51,4 @@ function hasSenderMetaLine(body: string, ctx: MsgContext): boolean {
     const pattern = new RegExp(`(^|\\n|\\]\\s*)${escaped}:\\s`, "i");
     return pattern.test(body);
   });
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

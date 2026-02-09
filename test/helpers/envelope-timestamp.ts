@@ -3,6 +3,8 @@ import {
   formatZonedTimestamp,
 } from "../../src/infra/format-time/format-datetime.js";
 
+export { escapeRegExp } from "../../src/utils.js";
+
 type EnvelopeTimestampZone = string;
 
 export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone = "utc"): string {
@@ -35,8 +37,4 @@ export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone 
 
 export function formatLocalEnvelopeTimestamp(date: Date): string {
   return formatEnvelopeTimestamp(date, "local");
-}
-
-export function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
