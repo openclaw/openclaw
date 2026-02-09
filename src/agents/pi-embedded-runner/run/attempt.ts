@@ -621,6 +621,39 @@ export async function runEmbeddedAttempt(
         });
       };
 
+      // Streaming idle watchdog: abort if no streaming activity for 30 seconds.
+      const STREAM_IDLE_TIMEOUT_MS = 30_000;
+      let streamIdleTimer: NodeJS.Timeout | undefined;
+      const resetStreamIdleTimer = () => {
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
+        }
+        if (!aborted && activeSession.isStreaming) {
+          streamIdleTimer = setTimeout(() => {
+            if (activeSession.isStreaming && !aborted) {
+              log.warn(
+                `stream idle timeout (${STREAM_IDLE_TIMEOUT_MS}ms): runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              abortRun(true);
+            }
+          }, STREAM_IDLE_TIMEOUT_MS);
+        }
+      };
+      const wrappedOnPartialReply = params.onPartialReply
+        ? (...args: Parameters<NonNullable<typeof params.onPartialReply>>) => {
+            resetStreamIdleTimer();
+            return params.onPartialReply!(...args);
+          }
+        : () => {
+            resetStreamIdleTimer();
+          };
+      const wrappedOnAgentEvent = params.onAgentEvent
+        ? (...args: Parameters<NonNullable<typeof params.onAgentEvent>>) => {
+            resetStreamIdleTimer();
+            return params.onAgentEvent!(...args);
+          }
+        : undefined;
+
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
@@ -635,9 +668,9 @@ export async function runEmbeddedAttempt(
         onBlockReplyFlush: params.onBlockReplyFlush,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
-        onPartialReply: params.onPartialReply,
+        onPartialReply: wrappedOnPartialReply,
         onAssistantMessageStart: params.onAssistantMessageStart,
-        onAgentEvent: params.onAgentEvent,
+        onAgentEvent: wrappedOnAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
       });
 
@@ -875,6 +908,9 @@ export async function runEmbeddedAttempt(
         clearTimeout(abortTimer);
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
+        }
+        if (streamIdleTimer) {
+          clearTimeout(streamIdleTimer);
         }
         unsubscribe();
         clearActiveEmbeddedRun(params.sessionId, queueHandle);

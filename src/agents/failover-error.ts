@@ -163,6 +163,10 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 400) {
     return "format";
   }
+  // Treat server errors as transient; failover to next provider.
+  if (status !== undefined && status >= 500 && status < 600) {
+    return "timeout";
+  }
 
   const code = (getErrorCode(err) ?? "").toUpperCase();
   if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {

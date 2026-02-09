@@ -20,6 +20,53 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 
+// Circuit breaker: track per-provider failure rates and skip providers in cooldown.
+const CIRCUIT_BREAKER_THRESHOLD = 5; // consecutive failures to trip
+const CIRCUIT_BREAKER_COOLDOWN_MS = 60_000; // 1 minute cooldown after tripping
+const CIRCUIT_BREAKER_RESET_MS = 5 * 60_000; // reset failures if no error in 5 minutes
+
+type CircuitState = {
+  failures: number;
+  lastFailureAt: number;
+  trippedUntil: number; // 0 = not tripped
+};
+
+const circuitStates = new Map<string, CircuitState>();
+
+function getCircuitState(provider: string): CircuitState {
+  return circuitStates.get(provider) ?? { failures: 0, lastFailureAt: 0, trippedUntil: 0 };
+}
+
+function recordCircuitFailure(provider: string): void {
+  const state = getCircuitState(provider);
+  const now = Date.now();
+  // Reset counter if last failure was long ago (provider recovered for a while).
+  const failures = now - state.lastFailureAt > CIRCUIT_BREAKER_RESET_MS ? 1 : state.failures + 1;
+  const trippedUntil =
+    failures >= CIRCUIT_BREAKER_THRESHOLD ? now + CIRCUIT_BREAKER_COOLDOWN_MS : state.trippedUntil;
+  circuitStates.set(provider, { failures, lastFailureAt: now, trippedUntil });
+}
+
+function recordCircuitSuccess(provider: string): void {
+  circuitStates.delete(provider);
+}
+
+function isCircuitTripped(provider: string): boolean {
+  const state = circuitStates.get(provider);
+  if (!state) {
+    return false;
+  }
+  if (state.trippedUntil > 0 && Date.now() < state.trippedUntil) {
+    return true;
+  }
+  // Cooldown expired; reset trip.
+  if (state.trippedUntil > 0) {
+    state.trippedUntil = 0;
+    state.failures = 0;
+  }
+  return false;
+}
+
 type ModelCandidate = {
   provider: string;
   model: string;
@@ -239,6 +286,17 @@ export async function runWithModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    // Circuit breaker: skip providers that have been failing consecutively.
+    if (isCircuitTripped(candidate.provider) && i < candidates.length - 1) {
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: `Provider ${candidate.provider} circuit breaker tripped`,
+        reason: "rate_limit",
+      });
+      continue;
+    }
+
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -260,6 +318,7 @@ export async function runWithModelFallback<T>(params: {
     }
     try {
       const result = await params.run(candidate.provider, candidate.model);
+      recordCircuitSuccess(candidate.provider);
       return {
         result,
         provider: candidate.provider,
@@ -280,6 +339,7 @@ export async function runWithModelFallback<T>(params: {
       }
 
       lastError = normalized;
+      recordCircuitFailure(candidate.provider);
       const described = describeFailoverError(normalized);
       attempts.push({
         provider: candidate.provider,

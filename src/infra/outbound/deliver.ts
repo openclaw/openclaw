@@ -29,6 +29,44 @@ import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
 
+// Outbound retry: retry transient send failures with short backoff.
+const OUTBOUND_RETRY_ATTEMPTS = 3;
+const OUTBOUND_RETRY_BASE_MS = 1_000;
+
+function isTransientSendError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = String((err as { code?: unknown }).code ?? "");
+  if (["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND"].includes(code)) {
+    return true;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status === "number" && status >= 500) {
+    return true;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /connection closed|socket hang up|network|timeout/i.test(message);
+}
+
+async function withOutboundRetry<T>(fn: () => Promise<T>): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < OUTBOUND_RETRY_ATTEMPTS; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < OUTBOUND_RETRY_ATTEMPTS - 1 && isTransientSendError(err)) {
+        const delayMs = OUTBOUND_RETRY_BASE_MS * 2 ** attempt;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 type SendMatrixMessage = (
   to: string,
   text: string,
@@ -323,14 +361,14 @@ export async function deliverOutboundPayloads(params: {
       throwIfAborted(abortSignal);
       params.onPayload?.(payloadSummary);
       if (handler.sendPayload && payload.channelData) {
-        results.push(await handler.sendPayload(payload));
+        results.push(await withOutboundRetry(() => handler.sendPayload!(payload)));
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
         if (isSignalChannel) {
-          await sendSignalTextChunks(payloadSummary.text);
+          await withOutboundRetry(() => sendSignalTextChunks(payloadSummary.text));
         } else {
-          await sendTextChunks(payloadSummary.text);
+          await withOutboundRetry(() => sendTextChunks(payloadSummary.text));
         }
         continue;
       }
@@ -341,9 +379,9 @@ export async function deliverOutboundPayloads(params: {
         const caption = first ? payloadSummary.text : "";
         first = false;
         if (isSignalChannel) {
-          results.push(await sendSignalMedia(caption, url));
+          results.push(await withOutboundRetry(() => sendSignalMedia(caption, url)));
         } else {
-          results.push(await handler.sendMedia(caption, url));
+          results.push(await withOutboundRetry(() => handler.sendMedia(caption, url)));
         }
       }
     } catch (err) {

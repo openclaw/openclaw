@@ -13,7 +13,7 @@ import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
-import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { fetchBlueBubblesServerInfo, probeBlueBubbles } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -2490,8 +2490,19 @@ export async function monitorBlueBubblesProvider(
     statusSink,
   });
 
-  return await new Promise((resolve) => {
+  // Periodic health check: ping BlueBubbles server every 60s.
+  // If server is unreachable for 3 consecutive checks, throw to trigger
+  // gateway-level auto-restart (server-channels.ts exponential backoff).
+  const HEALTH_CHECK_INTERVAL_MS = 60_000;
+  const HEALTH_CHECK_MAX_FAILURES = 3;
+  let healthFailures = 0;
+  let healthTimer: ReturnType<typeof setInterval> | undefined;
+
+  return await new Promise<void>((resolve, reject) => {
     const stop = () => {
+      if (healthTimer) {
+        clearInterval(healthTimer);
+      }
       unregister();
       resolve();
     };
@@ -2502,6 +2513,57 @@ export async function monitorBlueBubblesProvider(
     }
 
     abortSignal?.addEventListener("abort", stop, { once: true });
+
+    healthTimer = setInterval(async () => {
+      try {
+        const probe = await probeBlueBubbles({
+          baseUrl: account.baseUrl,
+          password: account.config.password,
+          timeoutMs: 5000,
+        });
+        if (probe.ok) {
+          if (healthFailures > 0) {
+            runtime.log?.(
+              `[${account.accountId}] BlueBubbles server recovered after ${healthFailures} failed checks`,
+            );
+          }
+          healthFailures = 0;
+          statusSink?.({ connected: true } as Record<string, unknown>);
+        } else {
+          healthFailures++;
+          runtime.error?.(
+            `[${account.accountId}] BlueBubbles health check failed (${healthFailures}/${HEALTH_CHECK_MAX_FAILURES}): ${probe.error}`,
+          );
+          statusSink?.({ connected: false, lastError: probe.error } as Record<string, unknown>);
+          if (healthFailures >= HEALTH_CHECK_MAX_FAILURES) {
+            if (healthTimer) {
+              clearInterval(healthTimer);
+            }
+            unregister();
+            reject(
+              new Error(
+                `BlueBubbles server unreachable after ${HEALTH_CHECK_MAX_FAILURES} consecutive health checks`,
+              ),
+            );
+          }
+        }
+      } catch {
+        // Probe itself threw; count as failure.
+        healthFailures++;
+        if (healthFailures >= HEALTH_CHECK_MAX_FAILURES) {
+          if (healthTimer) {
+            clearInterval(healthTimer);
+          }
+          unregister();
+          reject(
+            new Error(
+              `BlueBubbles server unreachable after ${HEALTH_CHECK_MAX_FAILURES} consecutive health checks`,
+            ),
+          );
+        }
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
+
     runtime.log?.(
       `[${account.accountId}] BlueBubbles webhook listening on ${normalizeWebhookPath(path)}`,
     );

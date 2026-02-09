@@ -60,6 +60,38 @@ export type ChannelManager = {
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
 };
 
+// Auto-restart: exponential backoff per channel account.
+const AUTO_RESTART_BASE_MS = 5_000;
+const AUTO_RESTART_MAX_MS = 5 * 60_000;
+const AUTO_RESTART_MAX_ATTEMPTS = 12;
+
+type RestartState = { attempts: number; nextMs: number };
+const restartStates = new Map<string, RestartState>();
+
+function restartKey(channelId: ChannelId, accountId: string): string {
+  return `${channelId}:${accountId}`;
+}
+
+function getRestartState(channelId: ChannelId, accountId: string): RestartState {
+  const key = restartKey(channelId, accountId);
+  return restartStates.get(key) ?? { attempts: 0, nextMs: AUTO_RESTART_BASE_MS };
+}
+
+function advanceRestartState(channelId: ChannelId, accountId: string): RestartState {
+  const key = restartKey(channelId, accountId);
+  const prev = getRestartState(channelId, accountId);
+  const next: RestartState = {
+    attempts: prev.attempts + 1,
+    nextMs: Math.min(prev.nextMs * 2, AUTO_RESTART_MAX_MS),
+  };
+  restartStates.set(key, next);
+  return next;
+}
+
+function resetRestartState(channelId: ChannelId, accountId: string): void {
+  restartStates.delete(restartKey(channelId, accountId));
+}
+
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
   const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
@@ -140,6 +172,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
         const abort = new AbortController();
         store.aborts.set(id, abort);
+        resetRestartState(channelId, id);
         setRuntime(channelId, id, {
           accountId: id,
           running: true,
@@ -159,10 +192,38 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           setStatus: (next) => setRuntime(channelId, id, next),
         });
         const tracked = Promise.resolve(task)
+          .then(() => {
+            // Clean exit: reset restart backoff.
+            resetRestartState(channelId, id);
+          })
           .catch((err) => {
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
+
+            // Auto-restart with exponential backoff (skip if intentionally aborted).
+            if (!abort.signal.aborted) {
+              const state = getRestartState(channelId, id);
+              if (state.attempts < AUTO_RESTART_MAX_ATTEMPTS) {
+                const { nextMs } = advanceRestartState(channelId, id);
+                const delaySec = Math.round(nextMs / 1000);
+                log.info?.(
+                  `[${id}] auto-restart attempt ${state.attempts + 1}/${AUTO_RESTART_MAX_ATTEMPTS} in ${delaySec}s`,
+                );
+                setTimeout(() => {
+                  // Only restart if no new task was started in the meantime.
+                  if (!store.tasks.has(id)) {
+                    startChannel(channelId, id).catch((restartErr) => {
+                      log.error?.(`[${id}] auto-restart failed: ${formatErrorMessage(restartErr)}`);
+                    });
+                  }
+                }, nextMs);
+              } else {
+                log.error?.(
+                  `[${id}] giving up auto-restart after ${AUTO_RESTART_MAX_ATTEMPTS} attempts`,
+                );
+              }
+            }
           })
           .finally(() => {
             store.aborts.delete(id);
