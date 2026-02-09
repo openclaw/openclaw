@@ -556,10 +556,20 @@ export function buildAgentSystemPrompt(params: {
       const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
       return baseName.toLowerCase() === "soul.md";
     });
+    const hasRelationalFile = contextFiles.some((file) => {
+      const normalizedPath = file.path.trim().replace(/\\/g, "/");
+      const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
+      return baseName.toLowerCase() === "relational.md";
+    });
     lines.push("# Project Context", "", "The following project context files have been loaded:");
     if (hasSoulFile) {
       lines.push(
         "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+    }
+    if (hasRelationalFile) {
+      lines.push(
+        "If RELATIONAL.md is present, follow its relationship dynamics. This tracks how you and the user work together - communication patterns, trust levels, and collaboration preferences. Update it as the relationship evolves.",
       );
     }
     lines.push("");
