@@ -373,7 +373,7 @@ export function registerSlackMonitorSlashCommands(params: {
         accountId: account.accountId,
         teamId: ctx.teamId || undefined,
         peer: {
-          kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
+          kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
           id: isDirectMessage ? command.user_id : command.channel_id,
         },
       });

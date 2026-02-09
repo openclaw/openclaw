@@ -58,7 +58,8 @@ export function getDmHistoryLimitFromSessionKey(
   const kind = providerParts[1]?.toLowerCase();
   const userIdRaw = providerParts.slice(2).join(":");
   const userId = stripThreadSuffix(userIdRaw);
-  if (kind !== "dm") {
+  // Accept both "direct" (new) and "dm" (legacy) for backward compat
+  if (kind !== "direct" && kind !== "dm") {
     return undefined;
   }
 

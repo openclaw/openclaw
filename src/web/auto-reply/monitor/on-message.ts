@@ -68,7 +68,7 @@ export function createWebOnMessageHandler(params: {
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
-        kind: msg.chatType === "group" ? "group" : "dm",
+        kind: msg.chatType === "group" ? "group" : "direct",
         id: peerId,
       },
     });
