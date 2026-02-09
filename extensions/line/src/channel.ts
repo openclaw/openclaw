@@ -120,12 +120,19 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       };
     },
     isConfigured: (account) =>
-      Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
+      Boolean(
+        account.channelSecret?.trim() &&
+          (account.channelAccessToken?.trim() ||
+            (account.tokenSource && account.tokenSource !== "none")),
+      ),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim()),
+      configured: Boolean(
+        account.channelAccessToken?.trim() ||
+        (account.tokenSource && account.tokenSource !== "none"),
+      ),
       tokenSource: account.tokenSource ?? undefined,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
@@ -571,20 +578,14 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const issues: ChannelStatusIssue[] = [];
       for (const account of accounts) {
         const accountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-        if (!account.channelAccessToken?.trim()) {
+        const isConfigured =
+          account.configured || (account.tokenSource && account.tokenSource !== "none");
+        if (!isConfigured) {
           issues.push({
             channel: "line",
             accountId,
             kind: "config",
             message: "LINE channel access token not configured",
-          });
-        }
-        if (!account.channelSecret?.trim()) {
-          issues.push({
-            channel: "line",
-            accountId,
-            kind: "config",
-            message: "LINE channel secret not configured",
           });
         }
       }
@@ -605,7 +606,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {
       const configured = Boolean(
-        account.channelAccessToken?.trim() && account.channelSecret?.trim(),
+        account.channelSecret?.trim() &&
+        (account.channelAccessToken?.trim() ||
+          (account.tokenSource && account.tokenSource !== "none")),
       );
       return {
         accountId: account.accountId,
