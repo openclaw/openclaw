@@ -7,7 +7,14 @@ on_error() {
 }
 trap on_error ERR
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Prefer host paths so Windows node can resolve files when invoked from WSL/Git Bash.
+if command -v wslpath >/dev/null 2>&1; then
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && wslpath -w .)"
+elif ROOT_DIR_TMP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -W 2>/dev/null)"; then
+  ROOT_DIR="$ROOT_DIR_TMP"
+else
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
 HASH_FILE="$ROOT_DIR/src/canvas-host/a2ui/.bundle.hash"
 OUTPUT_FILE="$ROOT_DIR/src/canvas-host/a2ui/a2ui.bundle.js"
 A2UI_RENDERER_DIR="$ROOT_DIR/vendor/a2ui/renderers/lit"
@@ -27,14 +34,45 @@ INPUT_PATHS=(
   "$A2UI_APP_DIR"
 )
 
+is_wsl() {
+  [[ -f /proc/version ]] && grep -qi microsoft /proc/version
+}
+
+run_pnpm() {
+  if is_wsl && command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c pnpm "$@"
+  else
+    pnpm "$@"
+  fi
+}
+
+run_rolldown() {
+  if is_wsl && command -v cmd.exe >/dev/null 2>&1; then
+    cmd.exe /c rolldown "$@"
+  else
+    rolldown "$@"
+  fi
+}
+
 compute_hash() {
   ROOT_DIR="$ROOT_DIR" node --input-type=module - "${INPUT_PATHS[@]}" <<'NODE'
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const rootDir = process.env.ROOT_DIR ?? process.cwd();
-const inputs = process.argv.slice(2);
+const toWinPath = (p) => {
+  if (process.platform !== "win32") return p;
+  if (p.startsWith("/mnt/")) {
+    const drive = p[5]?.toUpperCase();
+    const rest = p.slice(7).replaceAll("/", "\\");
+    return drive ? `${drive}:\\${rest}` : p;
+  }
+  if (p.startsWith("/")) return p.replaceAll("/", "\\");
+  return p;
+};
+
+const rootDir = toWinPath(process.env.ROOT_DIR ?? process.cwd());
+const inputs = process.argv.slice(2).map(toWinPath);
 const files = [];
 
 async function walk(entryPath) {
@@ -81,7 +119,7 @@ if [[ -f "$HASH_FILE" ]]; then
   fi
 fi
 
-pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
-rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+run_pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
+run_rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
 
 echo "$current_hash" > "$HASH_FILE"
