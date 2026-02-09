@@ -1,6 +1,7 @@
 import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import fsSync from "node:fs";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
@@ -73,7 +74,7 @@ function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
 }
 
 function isMissingApiKeyError(err: unknown): boolean {
-  const message = formatError(err);
+  const message = formatErrorMessage(err);
   return message.includes("No API key found for provider");
 }
 
@@ -149,7 +150,7 @@ export async function createEmbeddingProvider(
   };
 
   const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini" | "voyage") =>
-    provider === "local" ? formatLocalSetupError(err) : formatError(err);
+    provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
 
   if (requestedProvider === "auto") {
     const missingKeyErrors: string[] = [];
@@ -202,20 +203,13 @@ export async function createEmbeddingProvider(
       } catch (fallbackErr) {
         // oxlint-disable-next-line preserve-caught-error
         throw new Error(
-          `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
+          `${reason}\n\nFallback to ${fallback} failed: ${formatErrorMessage(fallbackErr)}`,
           { cause: fallbackErr },
         );
       }
     }
     throw new Error(reason, { cause: primaryErr });
   }
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
 }
 
 function isNodeLlamaCppMissing(err: unknown): boolean {
@@ -230,7 +224,7 @@ function isNodeLlamaCppMissing(err: unknown): boolean {
 }
 
 function formatLocalSetupError(err: unknown): string {
-  const detail = formatError(err);
+  const detail = formatErrorMessage(err);
   const missing = isNodeLlamaCppMissing(err);
   return [
     "Local embeddings unavailable.",

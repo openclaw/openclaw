@@ -21,6 +21,27 @@ export function clampInt(value: number, min: number, max: number): number {
   return clampNumber(Math.floor(value), min, max);
 }
 
+/** Alias for clampNumber (shorter, more common name) */
+export const clamp = clampNumber;
+
+/**
+ * Escapes special regex characters in a string so it can be used in a RegExp constructor.
+ */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Safely parse JSON, returning null on error instead of throwing.
+ */
+export function safeParseJson<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 export type WebChannel = "web";
 
 export function assertWebChannel(input: string): asserts input is WebChannel {

@@ -15,6 +15,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Errors: prevent false positive context overflow detection when conversation mentions "context overflow" topic. (#2078) Thanks @sbking.
+- Model failover: treat HTTP 400 errors as failover-eligible, enabling automatic model fallback when providers return bad request errors. (#1879) Thanks @orenyomtov.
 - Exec approvals: format forwarded command text as inline/fenced monospace for safer approval scanning across channels. (#11937)
 - Config: clamp `maxTokens` to `contextWindow` to prevent invalid model configs. (#5516) Thanks @lailoo.
 - Docs: fix language switcher ordering and Japanese locale flag in Mintlify nav. (#12023) Thanks @joshp123.
@@ -25,13 +27,18 @@ Docs: https://docs.openclaw.ai
 - Gateway: stabilize chat routing by canonicalizing node session keys for node-originated chat methods. (#11755) Thanks @mbelinky.
 - Web UI: make chat refresh smoothly scroll to the latest messages and suppress new-messages badge flash during manual refresh.
 - Cron: route text-only isolated agent announces through the shared subagent announce flow; add exponential backoff for repeated errors; preserve future `nextRunAtMs` on restart; include current-boundary schedule matches; prevent stale threadId reuse across targets; and add per-job execution timeout. (#11641) Thanks @tyler6204.
+- Cron tool: recover flat params when LLM omits the `job` wrapper for add requests. (#11310, #12124) Thanks @tyler6204.
+- Cron scheduler: fix `nextRun` skipping the current occurrence when computed mid-second. (#12124) Thanks @tyler6204.
 - Subagents: stabilize announce timing, preserve compaction metrics across retries, clamp overflow-prone long timeouts, and cap impossible context usage token totals. (#11551) Thanks @tyler6204.
 - Agents: recover from context overflow caused by oversized tool results (pre-emptive capping + fallback truncation). (#11579) Thanks @tyler6204.
+- Gateway: no more post-compaction amnesia; injected transcript writes now preserve Pi session `parentId` chain so agents can remember again. Thanks @Takhoffman 🦞.
 - Telegram: render markdown spoilers with `<tg-spoiler>` HTML tags. (#11543) Thanks @ezhikkk.
+- Telegram: recover proactive sends when stale topic thread IDs are used by retrying without `message_thread_id`, and clear explicit no-thread route updates instead of inheriting stale thread state. (#11620)
 - Gateway/CLI: when `gateway.bind=lan`, use a LAN IP for probe URLs and Control UI links. (#11448) Thanks @AnonO6.
 - Memory: set Voyage embeddings `input_type` for improved retrieval. (#10818) Thanks @mcinteerj.
 - Memory/QMD: run boot refresh in background by default, add configurable QMD maintenance timeouts, and retry QMD after fallback failures. (#9690, #9705)
 - Memory/QMD: log explicit warnings when `memory.qmd.scope` blocks a search request. (#10191)
+- Memory/QMD: reuse default model cache across agents instead of re-downloading per agent. (#12114) Thanks @tyler6204.
 - Media understanding: recognize `.caf` audio attachments for transcription. (#10982) Thanks @succ985.
 - State dir: honor `OPENCLAW_STATE_DIR` for default device identity and canvas storage paths. (#4824) Thanks @kossoy.
 - Doctor/State dir: suppress repeated legacy migration warnings only for valid symlink mirrors, while keeping warnings for empty or invalid legacy trees. (#11709) Thanks @gumadeiras.
@@ -86,6 +93,9 @@ Docs: https://docs.openclaw.ai
 - Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206)
 - Telegram: remove `@ts-nocheck` from `bot-message.ts`, type deps via `Omit<BuildTelegramMessageContextParams>`, widen `allMedia` to `TelegramMediaRef[]`. (#9180)
 - Telegram: remove `@ts-nocheck` from `bot.ts`, fix duplicate `bot.catch` error handler (Grammy overrides), remove dead reaction `message_thread_id` routing, harden sticker cache guard. (#9077)
+- Telegram: allow per-group and per-topic `groupPolicy` overrides under `channels.telegram.groups`. (#9775) Thanks @nicolasstanley.
+- Telegram: add video note support (`asVideoNote: true`) for media sends, with docs + tests. (#7902) Thanks @thewulf7.
+- Feishu: expand channel handling (posts with images, doc links, routing, reactions/typing, replies, native commands). (#8975) Thanks @jiulingyun.
 - Onboarding: add Cloudflare AI Gateway provider setup and docs. (#7914) Thanks @roerohan.
 - Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.
 - Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.
@@ -101,7 +111,10 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Heartbeat: allow explicit accountId routing for multi-account channels. (#8702) Thanks @lsh411.
+- Routing: refresh bindings per message by loading config at route resolution so binding changes apply without restart. (#11372) Thanks @juanpablodlc.
 - TUI/Gateway: handle non-streaming finals, refresh history for non-local chat runs, and avoid event gap warnings for targeted tool streams. (#8432) Thanks @gumadeiras.
+- Security: stop exposing Gateway auth tokens via URL query parameters in Control UI entrypoints, and reject hook tokens in query parameters. (#9436) Thanks @coygeek.
+- Skills: ignore Python venvs and common cache/build folders in the skills watcher to prevent FD exhaustion. (#12399) Thanks @kylehowells.
 - Shell completion: auto-detect and migrate slow dynamic patterns to cached files for faster terminal startup; add completion health checks to doctor/update/onboard.
 - Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.
 - Web UI: fix agent model selection saves for default/non-default agents and wrap long workspace paths. Thanks @Takhoffman.
@@ -263,6 +276,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: require TLS 1.3 minimum for TLS listeners. (#5970) Thanks @loganaden.
 - Web UI: refine chat layout + extend session active duration.
 - CI: add formal conformance + alias consistency checks. (#5723, #5807)
+- Tools: add Grok (xAI) as a `web_search` provider. (#5796) Thanks @tmchow.
 
 ### Fixes
 
