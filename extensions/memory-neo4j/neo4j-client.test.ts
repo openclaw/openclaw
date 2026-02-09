@@ -1375,23 +1375,7 @@ describe("Neo4jMemoryClient", () => {
     });
 
     it("should perform graph search with entity traversal", async () => {
-      // Mock entity search
-      mockSession.run.mockResolvedValueOnce({
-        records: [
-          {
-            get: vi.fn((key) => {
-              const data: Record<string, any> = {
-                entityId: "e1",
-                name: "tarun",
-                score: 0.95,
-              };
-              return data[key];
-            }),
-          },
-        ],
-      });
-
-      // Mock memory search via entities
+      // Combined single-query now returns memory records directly
       mockSession.run.mockResolvedValueOnce({
         records: [
           {

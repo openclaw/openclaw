@@ -361,50 +361,22 @@ export async function runBackgroundExtraction(
       return;
     }
 
-    // MERGE Entity nodes (entities use fulltext search, not vector embeddings)
-    for (const entity of result.entities) {
-      try {
-        await db.mergeEntity({
-          id: randomUUID(),
-          name: entity.name,
-          type: entity.type,
-          aliases: entity.aliases,
-          description: entity.description,
-        });
+    // Batch all entity operations into a single transaction:
+    // entity merges, mentions, relationships, tags, category, and extraction status
+    await db.batchEntityOperations(
+      memoryId,
+      result.entities.map((e) => ({
+        id: randomUUID(),
+        name: e.name,
+        type: e.type,
+        aliases: e.aliases,
+        description: e.description,
+      })),
+      result.relationships,
+      result.tags,
+      result.category,
+    );
 
-        // Create MENTIONS relationship
-        await db.createMentions(memoryId, entity.name, "context", 1.0);
-      } catch (err) {
-        logger.warn(`memory-neo4j: entity merge failed for "${entity.name}": ${String(err)}`);
-      }
-    }
-
-    // Create inter-Entity relationships
-    for (const rel of result.relationships) {
-      try {
-        await db.createEntityRelationship(rel.source, rel.target, rel.type, rel.confidence);
-      } catch (err) {
-        logger.debug?.(
-          `memory-neo4j: relationship creation failed: ${rel.source}->${rel.target}: ${String(err)}`,
-        );
-      }
-    }
-
-    // Tag the memory
-    for (const tag of result.tags) {
-      try {
-        await db.tagMemory(memoryId, tag.name, tag.category);
-      } catch (err) {
-        logger.debug?.(`memory-neo4j: tagging failed for "${tag.name}": ${String(err)}`);
-      }
-    }
-
-    // Update category if the LLM classified it (only overwrites 'other')
-    if (result.category) {
-      await db.updateMemoryCategory(memoryId, result.category);
-    }
-
-    await db.updateExtractionStatus(memoryId, "complete");
     logger.info(
       `memory-neo4j: extraction complete for ${memoryId.slice(0, 8)} — ` +
         `${result.entities.length} entities, ${result.relationships.length} rels, ${result.tags.length} tags` +
@@ -761,26 +733,42 @@ export async function runSleepCycle(
       const pairs = await db.findConflictingMemories(agentId);
       result.conflict.pairsFound = pairs.length;
 
-      for (const pair of pairs) {
-        if (abortSignal?.aborted) break;
+      // Process conflict pairs in parallel chunks of LLM_CONCURRENCY
+      for (let i = 0; i < pairs.length && !abortSignal?.aborted; i += LLM_CONCURRENCY) {
+        const chunk = pairs.slice(i, i + LLM_CONCURRENCY);
+        const outcomes = await Promise.allSettled(
+          chunk.map((pair) => resolveConflict(pair.memoryA.text, pair.memoryB.text, config)),
+        );
 
-        const decision = await resolveConflict(pair.memoryA.text, pair.memoryB.text, config);
+        for (let k = 0; k < outcomes.length; k++) {
+          if (abortSignal?.aborted) break;
+          const pair = chunk[k];
+          const outcome = outcomes[k];
+          if (outcome.status !== "fulfilled") continue;
 
-        if (decision === "a") {
-          await db.invalidateMemory(pair.memoryB.id);
-          result.conflict.invalidated++;
-          result.conflict.resolved++;
-          onProgress?.("conflict", `Kept A, invalidated B: "${pair.memoryB.text.slice(0, 40)}..."`);
-        } else if (decision === "b") {
-          await db.invalidateMemory(pair.memoryA.id);
-          result.conflict.invalidated++;
-          result.conflict.resolved++;
-          onProgress?.("conflict", `Kept B, invalidated A: "${pair.memoryA.text.slice(0, 40)}..."`);
-        } else if (decision === "both") {
-          result.conflict.resolved++;
-          onProgress?.("conflict", `Kept both: no real conflict`);
+          const decision = outcome.value;
+          if (decision === "a") {
+            await db.invalidateMemory(pair.memoryB.id);
+            result.conflict.invalidated++;
+            result.conflict.resolved++;
+            onProgress?.(
+              "conflict",
+              `Kept A, invalidated B: "${pair.memoryB.text.slice(0, 40)}..."`,
+            );
+          } else if (decision === "b") {
+            await db.invalidateMemory(pair.memoryA.id);
+            result.conflict.invalidated++;
+            result.conflict.resolved++;
+            onProgress?.(
+              "conflict",
+              `Kept B, invalidated A: "${pair.memoryA.text.slice(0, 40)}..."`,
+            );
+          } else if (decision === "both") {
+            result.conflict.resolved++;
+            onProgress?.("conflict", `Kept both: no real conflict`);
+          }
+          // "skip" = LLM unavailable, don't count as resolved
         }
-        // "skip" = LLM unavailable, don't count as resolved
       }
 
       logger.info(
@@ -1051,143 +1039,15 @@ export async function runSleepCycle(
 }
 
 // ============================================================================
-// Message Extraction Helper
+// Message Extraction (re-exported from message-utils.ts)
 // ============================================================================
 
-/**
- * Extract user message texts from the event.messages array.
- * Handles both string content and content block arrays.
- */
-export function extractUserMessages(messages: unknown[]): string[] {
-  const texts: string[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    const msgObj = msg as Record<string, unknown>;
-
-    // Only process user messages for auto-capture
-    if (msgObj.role !== "user") {
-      continue;
-    }
-
-    const content = msgObj.content;
-    if (typeof content === "string") {
-      texts.push(content);
-      continue;
-    }
-
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (
-          block &&
-          typeof block === "object" &&
-          "type" in block &&
-          (block as Record<string, unknown>).type === "text" &&
-          "text" in block &&
-          typeof (block as Record<string, unknown>).text === "string"
-        ) {
-          texts.push((block as Record<string, unknown>).text as string);
-        }
-      }
-    }
-  }
-
-  // Strip wrappers then filter by length
-  return texts.map(stripMessageWrappers).filter((t) => t.length >= 10);
-}
-
-/**
- * Strip injected context, channel metadata wrappers, and system prefixes
- * so the attention gate sees only the raw user text.
- * Exported for use by the cleanup command.
- */
-export function stripMessageWrappers(text: string): string {
-  let s = text;
-  // Injected context from memory system
-  s = s.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "");
-  s = s.replace(/<core-memory-refresh>[\s\S]*?<\/core-memory-refresh>\s*/g, "");
-  s = s.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
-  // File attachments (PDFs, images, etc. forwarded inline by channels)
-  s = s.replace(/<file\b[^>]*>[\s\S]*?<\/file>\s*/g, "");
-  // Media attachment preamble (appears before Telegram wrapper)
-  s = s.replace(/^\[media attached:[^\]]*\]\s*(?:To send an image[^\n]*\n?)*/i, "");
-  // System exec output blocks (may appear before Telegram wrapper)
-  s = s.replace(/^(?:System:\s*\[[^\]]*\][^\n]*\n?)+/gi, "");
-  // Telegram wrapper — may now be at start after previous strips
-  s = s.replace(/^\s*\[Telegram\s[^\]]+\]\s*/i, "");
-  // "[message_id: NNN]" suffix (Telegram)
-  s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
-  // Slack wrapper — "[Slack <workspace> #channel @user] MESSAGE [slack message id: ...]"
-  s = s.replace(/^\s*\[Slack\s[^\]]+\]\s*/i, "");
-  s = s.replace(/\n?\[slack message id:\s*[^\]]*\]\s*$/i, "");
-  return s.trim();
-}
-
-// ============================================================================
-// Assistant Message Extraction
-// ============================================================================
-
-/**
- * Strip tool-use, thinking, and code-output blocks from assistant messages
- * so the attention gate sees only the substantive assistant text.
- */
-export function stripAssistantWrappers(text: string): string {
-  let s = text;
-  // Tool-use / tool-result / function_call blocks
-  s = s.replace(/<tool_use>[\s\S]*?<\/tool_use>\s*/g, "");
-  s = s.replace(/<tool_result>[\s\S]*?<\/tool_result>\s*/g, "");
-  s = s.replace(/<function_call>[\s\S]*?<\/function_call>\s*/g, "");
-  // Thinking tags
-  s = s.replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, "");
-  s = s.replace(/<antThinking>[\s\S]*?<\/antThinking>\s*/g, "");
-  // Code execution output
-  s = s.replace(/<code_output>[\s\S]*?<\/code_output>\s*/g, "");
-  return s.trim();
-}
-
-/**
- * Extract assistant message texts from the event.messages array.
- * Handles both string content and content block arrays.
- */
-export function extractAssistantMessages(messages: unknown[]): string[] {
-  const texts: string[] = [];
-
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object") {
-      continue;
-    }
-    const msgObj = msg as Record<string, unknown>;
-
-    if (msgObj.role !== "assistant") {
-      continue;
-    }
-
-    const content = msgObj.content;
-    if (typeof content === "string") {
-      texts.push(content);
-      continue;
-    }
-
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (
-          block &&
-          typeof block === "object" &&
-          "type" in block &&
-          (block as Record<string, unknown>).type === "text" &&
-          "text" in block &&
-          typeof (block as Record<string, unknown>).text === "string"
-        ) {
-          texts.push((block as Record<string, unknown>).text as string);
-        }
-      }
-    }
-  }
-
-  return texts.map(stripAssistantWrappers).filter((t) => t.length >= 10);
-}
+export {
+  extractUserMessages,
+  extractAssistantMessages,
+  stripMessageWrappers,
+  stripAssistantWrappers,
+} from "./message-utils.js";
 
 // ============================================================================
 // LLM-Judged Importance Rating

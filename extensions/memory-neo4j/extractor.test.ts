@@ -744,11 +744,7 @@ describe("runBackgroundExtraction", () => {
 
   let mockDb: {
     updateExtractionStatus: ReturnType<typeof vi.fn>;
-    mergeEntity: ReturnType<typeof vi.fn>;
-    createMentions: ReturnType<typeof vi.fn>;
-    createEntityRelationship: ReturnType<typeof vi.fn>;
-    tagMemory: ReturnType<typeof vi.fn>;
-    updateMemoryCategory: ReturnType<typeof vi.fn>;
+    batchEntityOperations: ReturnType<typeof vi.fn>;
   };
 
   let mockEmbeddings: {
@@ -766,11 +762,7 @@ describe("runBackgroundExtraction", () => {
     };
     mockDb = {
       updateExtractionStatus: vi.fn().mockResolvedValue(undefined),
-      mergeEntity: vi.fn().mockResolvedValue(undefined),
-      createMentions: vi.fn().mockResolvedValue(undefined),
-      createEntityRelationship: vi.fn().mockResolvedValue(undefined),
-      tagMemory: vi.fn().mockResolvedValue(undefined),
-      updateMemoryCategory: vi.fn().mockResolvedValue(undefined),
+      batchEntityOperations: vi.fn().mockResolvedValue(undefined),
     };
     mockEmbeddings = {
       embed: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
@@ -857,7 +849,7 @@ describe("runBackgroundExtraction", () => {
     expect(mockDb.updateExtractionStatus).toHaveBeenCalledWith("mem-1", "complete");
   });
 
-  it("should merge entities, create mentions, and mark complete", async () => {
+  it("should batch entities, relationships, tags, and category in one call", async () => {
     mockFetchResponse(
       JSON.stringify({
         category: "fact",
@@ -876,18 +868,16 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
 
-    expect(mockDb.mergeEntity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "alice",
-        type: "person",
-      }),
+    expect(mockDb.batchEntityOperations).toHaveBeenCalledWith(
+      "mem-1",
+      [expect.objectContaining({ name: "alice", type: "person" })],
+      [],
+      [],
+      "fact",
     );
-    expect(mockDb.createMentions).toHaveBeenCalledWith("mem-1", "alice", "context", 1.0);
-    expect(mockDb.updateMemoryCategory).toHaveBeenCalledWith("mem-1", "fact");
-    expect(mockDb.updateExtractionStatus).toHaveBeenCalledWith("mem-1", "complete");
   });
 
-  it("should create entity relationships", async () => {
+  it("should pass relationships to batchEntityOperations", async () => {
     mockFetchResponse(
       JSON.stringify({
         entities: [
@@ -908,10 +898,19 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
 
-    expect(mockDb.createEntityRelationship).toHaveBeenCalledWith("alice", "acme", "WORKS_AT", 0.9);
+    expect(mockDb.batchEntityOperations).toHaveBeenCalledWith(
+      "mem-1",
+      expect.arrayContaining([
+        expect.objectContaining({ name: "alice", type: "person" }),
+        expect.objectContaining({ name: "acme", type: "organization" }),
+      ]),
+      [{ source: "alice", target: "acme", type: "WORKS_AT", confidence: 0.9 }],
+      [],
+      undefined,
+    );
   });
 
-  it("should tag memories", async () => {
+  it("should pass tags to batchEntityOperations", async () => {
     mockFetchResponse(
       JSON.stringify({
         entities: [],
@@ -929,10 +928,16 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
 
-    expect(mockDb.tagMemory).toHaveBeenCalledWith("mem-1", "programming", "tech");
+    expect(mockDb.batchEntityOperations).toHaveBeenCalledWith(
+      "mem-1",
+      [],
+      [],
+      [{ name: "programming", category: "tech" }],
+      undefined,
+    );
   });
 
-  it("should not update category when result has no category", async () => {
+  it("should pass undefined category when result has no category", async () => {
     mockFetchResponse(
       JSON.stringify({
         entities: [{ name: "Test", type: "concept" }],
@@ -950,10 +955,16 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
 
-    expect(mockDb.updateMemoryCategory).not.toHaveBeenCalled();
+    expect(mockDb.batchEntityOperations).toHaveBeenCalledWith(
+      "mem-1",
+      [expect.objectContaining({ name: "test", type: "concept" })],
+      [],
+      [],
+      undefined,
+    );
   });
 
-  it("should handle entity merge failure gracefully", async () => {
+  it("should handle batchEntityOperations failure gracefully", async () => {
     mockFetchResponse(
       JSON.stringify({
         entities: [
@@ -965,9 +976,7 @@ describe("runBackgroundExtraction", () => {
       }),
     );
 
-    // First entity merge fails, second succeeds
-    mockDb.mergeEntity.mockRejectedValueOnce(new Error("merge failed"));
-    mockDb.mergeEntity.mockResolvedValueOnce(undefined);
+    mockDb.batchEntityOperations.mockRejectedValueOnce(new Error("batch failed"));
 
     await runBackgroundExtraction(
       "mem-1",
@@ -978,9 +987,8 @@ describe("runBackgroundExtraction", () => {
       mockLogger,
     );
 
-    // Should still continue and complete
-    expect(mockDb.mergeEntity).toHaveBeenCalledTimes(2);
-    expect(mockDb.updateExtractionStatus).toHaveBeenCalledWith("mem-1", "complete");
+    // Should handle error and mark as failed
+    expect(mockDb.batchEntityOperations).toHaveBeenCalledTimes(1);
     expect(mockLogger.warn).toHaveBeenCalled();
   });
 

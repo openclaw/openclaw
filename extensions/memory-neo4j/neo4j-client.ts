@@ -154,6 +154,12 @@ export class Neo4jMemoryClient {
         session,
         "CREATE INDEX entity_name_index IF NOT EXISTS FOR (e:Entity) ON (e.name)",
       );
+      // Composite index for queries that filter by both agentId and category
+      // (e.g. listByCategory, promotion/demotion filtering in sleep cycle)
+      await this.runSafe(
+        session,
+        "CREATE INDEX memory_agent_category_index IF NOT EXISTS FOR (m:Memory) ON (m.agentId, m.category)",
+      );
 
       this.logger.info("memory-neo4j: indexes ensured");
     } finally {
@@ -523,30 +529,21 @@ export class Neo4jMemoryClient {
       return await this.retryOnTransient(async () => {
         const session = this.driver!.session();
         try {
-          // Step 1: Find matching entities
-          const entityResult = await session.run(
-            `CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
-             YIELD node, score
-             WHERE score >= 0.5
-             RETURN node.id AS entityId, node.name AS name, score
-             ORDER BY score DESC
-             LIMIT 5`,
-            { query: escaped },
-          );
-
-          const entityIds = entityResult.records.map((r) => r.get("entityId") as string);
-          if (entityIds.length === 0) {
-            return [];
-          }
-
-          // Step 2 + 3: Direct mentions + 1-hop spreading activation
+          // Single query: entity fulltext lookup → direct mentions + 1-hop spreading activation
           const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
           const result = await session.run(
-            `UNWIND $entityIds AS eid
+            `// Find matching entities via fulltext index
+             CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
+             YIELD node AS entity, score
+             WHERE score >= 0.5
+             WITH entity
+             ORDER BY score DESC
+             LIMIT 5
+
              // Direct: Entity ← MENTIONS ← Memory
-             OPTIONAL MATCH (e:Entity {id: eid})<-[rm:MENTIONS]-(m:Memory)
+             OPTIONAL MATCH (entity)<-[rm:MENTIONS]-(m:Memory)
              WHERE m IS NOT NULL ${agentFilter}
-             WITH m, coalesce(rm.confidence, 1.0) AS directScore
+             WITH m, coalesce(rm.confidence, 1.0) AS directScore, entity
              WHERE m IS NOT NULL
 
              RETURN m.id AS id, m.text AS text, m.category AS category,
@@ -555,9 +552,16 @@ export class Neo4jMemoryClient {
 
              UNION
 
-             UNWIND $entityIds AS eid
+             // Find matching entities via fulltext index (repeated for UNION)
+             CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
+             YIELD node AS entity, score
+             WHERE score >= 0.5
+             WITH entity
+             ORDER BY score DESC
+             LIMIT 5
+
              // 1-hop: Entity → relationship → Entity ← MENTIONS ← Memory
-             OPTIONAL MATCH (e:Entity {id: eid})-[r1:${RELATIONSHIP_TYPE_PATTERN}]-(e2:Entity)
+             OPTIONAL MATCH (entity)-[r1:${RELATIONSHIP_TYPE_PATTERN}]-(e2:Entity)
              WHERE coalesce(r1.confidence, 0.7) >= $firingThreshold
              OPTIONAL MATCH (e2)<-[rm:MENTIONS]-(m:Memory)
              WHERE m IS NOT NULL ${agentFilter}
@@ -567,7 +571,7 @@ export class Neo4jMemoryClient {
              RETURN m.id AS id, m.text AS text, m.category AS category,
                     m.importance AS importance, m.createdAt AS createdAt,
                     max(hopScore) AS graphScore`,
-            { entityIds, firingThreshold, ...(agentId ? { agentId } : {}) },
+            { query: escaped, firingThreshold, ...(agentId ? { agentId } : {}) },
           );
 
           // Deduplicate by id, keeping highest score
@@ -871,6 +875,153 @@ export class Neo4jMemoryClient {
     } finally {
       await session.close();
     }
+  }
+
+  /**
+   * Batch all entity operations from an extraction result into a single managed
+   * transaction. Replaces the previous pattern of N individual session-per-call
+   * operations with a single atomic write.
+   *
+   * Operations performed atomically:
+   * 1. MERGE all Entity nodes
+   * 2. Create MENTIONS relationships (Memory → Entity)
+   * 3. Create inter-Entity relationships (validated against allowlist)
+   * 4. MERGE Tag nodes and create TAGGED relationships
+   * 5. Update memory category (if classified and current is 'other')
+   * 6. Set extractionStatus to 'complete'
+   */
+  async batchEntityOperations(
+    memoryId: string,
+    entities: Array<{
+      id: string;
+      name: string;
+      type: string;
+      aliases?: string[];
+      description?: string;
+    }>,
+    relationships: Array<{
+      source: string;
+      target: string;
+      type: string;
+      confidence: number;
+    }>,
+    tags: Array<{ name: string; category: string }>,
+    category?: string,
+  ): Promise<void> {
+    await this.ensureInitialized();
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        await session.executeWrite(async (tx) => {
+          const now = new Date().toISOString();
+
+          // 1. MERGE all entities in one UNWIND
+          if (entities.length > 0) {
+            await tx.run(
+              `UNWIND $entities AS e
+               MERGE (n:Entity {name: e.name})
+               ON CREATE SET
+                 n.id = e.id, n.type = e.type, n.aliases = e.aliases,
+                 n.description = e.description,
+                 n.firstSeen = $now, n.lastSeen = $now, n.mentionCount = 1
+               ON MATCH SET
+                 n.type = COALESCE(e.type, n.type),
+                 n.description = COALESCE(e.description, n.description),
+                 n.lastSeen = $now,
+                 n.mentionCount = n.mentionCount + 1`,
+              {
+                entities: entities.map((e) => ({
+                  id: e.id,
+                  name: e.name.trim().toLowerCase(),
+                  type: e.type,
+                  aliases: e.aliases ?? [],
+                  description: e.description ?? null,
+                })),
+                now,
+              },
+            );
+
+            // 2. Create MENTIONS relationships in one UNWIND
+            await tx.run(
+              `UNWIND $entityNames AS eName
+               MATCH (m:Memory {id: $memoryId})
+               MATCH (e:Entity {name: eName})
+               MERGE (m)-[r:MENTIONS]->(e)
+               ON CREATE SET r.role = 'context', r.confidence = 1.0`,
+              {
+                memoryId,
+                entityNames: entities.map((e) => e.name.trim().toLowerCase()),
+              },
+            );
+          }
+
+          // 3. Create inter-Entity relationships (filter valid types)
+          const validRels = relationships.filter((r) => validateRelationshipType(r.type));
+          if (validRels.length > 0) {
+            // Group by relationship type since Cypher requires literal rel types
+            const byType = new Map<string, typeof validRels>();
+            for (const rel of validRels) {
+              const group = byType.get(rel.type) ?? [];
+              group.push(rel);
+              byType.set(rel.type, group);
+            }
+
+            for (const [relType, rels] of byType) {
+              await tx.run(
+                `UNWIND $rels AS r
+                 MATCH (e1:Entity {name: r.source})
+                 MATCH (e2:Entity {name: r.target})
+                 MERGE (e1)-[rel:${relType}]->(e2)
+                 ON CREATE SET rel.confidence = r.confidence, rel.createdAt = $now
+                 ON MATCH SET rel.confidence = CASE WHEN r.confidence > rel.confidence THEN r.confidence ELSE rel.confidence END`,
+                {
+                  rels: rels.map((r) => ({
+                    source: r.source.trim().toLowerCase(),
+                    target: r.target.trim().toLowerCase(),
+                    confidence: r.confidence,
+                  })),
+                  now,
+                },
+              );
+            }
+          }
+
+          // 4. MERGE Tags and create TAGGED relationships in one UNWIND
+          if (tags.length > 0) {
+            await tx.run(
+              `UNWIND $tags AS t
+               MERGE (tag:Tag {name: t.name})
+               ON CREATE SET tag.id = t.id, tag.category = t.category, tag.createdAt = $now
+               WITH tag, t
+               MATCH (m:Memory {id: $memoryId})
+               MERGE (m)-[r:TAGGED]->(tag)
+               ON CREATE SET r.confidence = 1.0`,
+              {
+                memoryId,
+                tags: tags.map((t) => ({
+                  name: t.name.trim().toLowerCase(),
+                  category: t.category,
+                  id: randomUUID(),
+                })),
+                now,
+              },
+            );
+          }
+
+          // 5. Update category + 6. Set extraction status (in one statement)
+          const categoryClause = category
+            ? ", m.category = CASE WHEN m.category = 'other' THEN $category ELSE m.category END"
+            : "";
+          await tx.run(
+            `MATCH (m:Memory {id: $memoryId})
+             SET m.extractionStatus = 'complete', m.updatedAt = $now${categoryClause}`,
+            { memoryId, now, ...(category ? { category } : {}) },
+          );
+        });
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   /**

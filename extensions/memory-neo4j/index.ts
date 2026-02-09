@@ -17,6 +17,7 @@ import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
 import { stringEnum } from "openclaw/plugin-sdk";
 import type { MemoryCategory, MemorySource } from "./schema.js";
+import { passesAttentionGate, passesAssistantAttentionGate } from "./attention-gate.js";
 import {
   DEFAULT_EMBEDDING_DIMS,
   EMBEDDING_DIMENSIONS,
@@ -1104,7 +1105,7 @@ const memoryNeo4jPlugin = {
     );
     if (cfg.autoCapture) {
       api.logger.debug?.("memory-neo4j: registering agent_end hook for auto-capture");
-      api.on("agent_end", async (event, ctx) => {
+      api.on("agent_end", (event, ctx) => {
         api.logger.debug?.(
           `memory-neo4j: agent_end fired (success=${event.success}, messages=${event.messages?.length ?? 0})`,
         );
@@ -1116,141 +1117,17 @@ const memoryNeo4jPlugin = {
         const agentId = ctx.agentId || "default";
         const sessionKey = ctx.sessionKey;
 
-        try {
-          let stored = 0;
-
-          // Process user messages
-          const userMessages = extractUserMessages(event.messages);
-          const retained = userMessages.filter((text) => passesAttentionGate(text));
-
-          let semanticDeduped = 0;
-          for (const text of retained) {
-            try {
-              const vector = await embeddings.embed(text);
-
-              // Quick dedup (same content already stored — cosine ≥ 0.95)
-              const existing = await db.findSimilar(vector, 0.95, 1);
-              if (existing.length > 0) {
-                continue;
-              }
-
-              // Importance rating — moved before semantic dedup to avoid expensive LLM calls on low-value memories
-              const importance = await rateImportance(text, extractionConfig);
-
-              // Skip low-importance memories (not worth the semantic dedup cost)
-              if (importance < 0.3) {
-                continue;
-              }
-
-              // Semantic dedup: check moderate-similarity memories (0.75–0.95)
-              // with LLM to catch paraphrases and reformulations
-              const candidates = await db.findSimilar(vector, 0.75, 3);
-              if (candidates.length > 0) {
-                let isDuplicate = false;
-                for (const candidate of candidates) {
-                  if (await isSemanticDuplicate(text, candidate.text, extractionConfig)) {
-                    api.logger.debug?.(
-                      `memory-neo4j: semantic dedup — skipped "${text.slice(0, 60)}..." (duplicate of "${candidate.text.slice(0, 60)}...")`,
-                    );
-                    isDuplicate = true;
-                    semanticDeduped++;
-                    break;
-                  }
-                }
-                if (isDuplicate) {
-                  continue;
-                }
-              }
-
-              await db.storeMemory({
-                id: randomUUID(),
-                text,
-                embedding: vector,
-                importance,
-                category: "other", // sleep cycle will categorize
-                source: "auto-capture",
-                extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
-                agentId,
-                sessionKey,
-              });
-              stored++;
-            } catch (err) {
-              api.logger.debug?.(`memory-neo4j: auto-capture item failed: ${String(err)}`);
-            }
-          }
-
-          // Process assistant messages
-          const assistantMessages = extractAssistantMessages(event.messages);
-          const retainedAssistant = assistantMessages.filter((text) =>
-            passesAssistantAttentionGate(text),
-          );
-
-          for (const text of retainedAssistant) {
-            try {
-              const importance = await rateImportance(text, extractionConfig);
-
-              // Only store assistant messages that are genuinely important
-              if (importance < 0.7) {
-                continue;
-              }
-
-              const vector = await embeddings.embed(text);
-
-              const existing = await db.findSimilar(vector, 0.95, 1);
-              if (existing.length > 0) {
-                continue;
-              }
-
-              // Semantic dedup for assistant messages too
-              const candidates = await db.findSimilar(vector, 0.75, 3);
-              if (candidates.length > 0) {
-                let isDuplicate = false;
-                for (const candidate of candidates) {
-                  if (await isSemanticDuplicate(text, candidate.text, extractionConfig)) {
-                    api.logger.debug?.(
-                      `memory-neo4j: semantic dedup (assistant) — skipped "${text.slice(0, 60)}..."`,
-                    );
-                    isDuplicate = true;
-                    semanticDeduped++;
-                    break;
-                  }
-                }
-                if (isDuplicate) {
-                  continue;
-                }
-              }
-
-              await db.storeMemory({
-                id: randomUUID(),
-                text,
-                embedding: vector,
-                importance: importance * 0.75, // discount assistant importance proportionally
-                category: "other",
-                source: "auto-capture-assistant",
-                extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
-                agentId,
-                sessionKey,
-              });
-              stored++;
-            } catch (err) {
-              api.logger.debug?.(
-                `memory-neo4j: assistant auto-capture item failed: ${String(err)}`,
-              );
-            }
-          }
-
-          if (stored > 0 || semanticDeduped > 0) {
-            api.logger.info(
-              `memory-neo4j: auto-captured ${stored} memories (attention-gated)${semanticDeduped > 0 ? `, ${semanticDeduped} semantic dupes skipped` : ""}`,
-            );
-          } else if (userMessages.length > 0 || assistantMessages.length > 0) {
-            api.logger.info(
-              `memory-neo4j: auto-capture ran (0 stored, ${userMessages.length} user msgs, ${retained.length} passed gate, ${assistantMessages.length} assistant msgs, ${retainedAssistant.length} passed gate)`,
-            );
-          }
-        } catch (err) {
-          api.logger.warn(`memory-neo4j: auto-capture failed: ${String(err)}`);
-        }
+        // Fire-and-forget: run auto-capture asynchronously so it doesn't
+        // block the agent_end hook (which otherwise adds 2-10s per turn).
+        void runAutoCapture(
+          event.messages,
+          agentId,
+          sessionKey,
+          db,
+          embeddings,
+          extractionConfig,
+          api.logger,
+        );
       });
     }
 
@@ -1283,159 +1160,170 @@ const memoryNeo4jPlugin = {
 };
 
 // ============================================================================
-// Attention gate — lightweight heuristic filter (phase 1 of memory pipeline)
-//
-// Rejects obvious noise without any LLM call, analogous to how the brain's
-// sensory gating filters out irrelevant stimuli before they enter working
-// memory. Everything that passes gets stored; the sleep cycle decides what
-// matters.
+// Auto-capture pipeline (fire-and-forget from agent_end hook)
 // ============================================================================
 
-const NOISE_PATTERNS = [
-  // Greetings / acknowledgments (exact match, with optional punctuation)
-  /^(hi|hey|hello|yo|sup|ok|okay|sure|thanks|thank you|thx|ty|yep|yup|nope|no|yes|yeah|cool|nice|great|got it|sounds good|perfect|alright|fine|noted|ack|kk|k)\s*[.!?]*$/i,
-  // Two-word affirmations: "ok great", "sounds good", "yes please", etc.
-  /^(ok|okay|yes|yeah|yep|sure|no|nope|alright|right|fine|cool|nice|great)\s+(great|good|sure|thanks|please|ok|fine|cool|yeah|perfect|noted|absolutely|definitely|exactly)\s*[.!?]*$/i,
-  // Deictic: messages that are only pronouns/articles/common verbs — no standalone meaning
-  // e.g. "I need those", "let me do it", "ok let me test it out", "I got it"
-  /^(ok[,.]?\s+)?(i('ll|'m|'d|'ve)?\s+)?(just\s+)?(need|want|got|have|let|let's|let me|give me|send|do|did|try|check|see|look at|test|take|get|go|use)\s+(it|that|this|those|these|them|some|one|the|a|an|me|him|her|us)\s*(out|up|now|then|too|again|later|first|here|there|please)?\s*[.!?]*$/i,
-  // Short acknowledgments with trailing context: "ok, ..." / "yes, ..." when total is brief
-  /^(ok|okay|yes|yeah|yep|sure|no|nope|right|alright|fine|cool|nice|great|perfect)[,.]?\s+.{0,20}$/i,
-  // Conversational filler / noise phrases (standalone, with optional punctuation)
-  /^(hmm+|huh|haha|ha|lol|lmao|rofl|nah|meh|idk|brb|ttyl|omg|wow|whoa|welp|oops|ooh|aah|ugh|bleh|pfft|smh|ikr|tbh|imo|fwiw|np|nvm|nm|wut|wat|wha|heh|tsk|sigh|yay|woo+|boo|dang|darn|geez|gosh|sheesh|oof)\s*[.!?]*$/i,
-  // Single-word or near-empty
-  /^\S{0,3}$/,
-  // Pure emoji
-  /^[\p{Emoji}\s]+$/u,
-  // System/XML markup
-  /^<[a-z-]+>[\s\S]*<\/[a-z-]+>$/i,
+type AutoCaptureLogger = {
+  info: (msg: string) => void;
+  warn: (msg: string) => void;
+  debug?: (msg: string) => void;
+};
 
-  // --- Session reset prompts (from /new and /reset commands) ---
-  /^A new session was started via/i,
+/**
+ * Shared capture logic for both user and assistant messages.
+ * Extracts the common embed → dedup → rate → store pipeline.
+ */
+async function captureMessage(
+  text: string,
+  source: "auto-capture" | "auto-capture-assistant",
+  importanceThreshold: number,
+  importanceDiscount: number,
+  agentId: string,
+  sessionKey: string | undefined,
+  db: import("./neo4j-client.js").Neo4jMemoryClient,
+  embeddings: import("./embeddings.js").Embeddings,
+  extractionConfig: import("./config.js").ExtractionConfig,
+  logger: AutoCaptureLogger,
+): Promise<{ stored: boolean; semanticDeduped: boolean }> {
+  // For assistant messages, rate importance first (before embedding) to skip early
+  const rateFirst = source === "auto-capture-assistant";
 
-  // --- System infrastructure messages (never user-generated) ---
-  // Heartbeat prompts
-  /Read HEARTBEAT\.md if it exists/i,
-  // Pre-compaction flush prompts
-  /^Pre-compaction memory flush/i,
-  // System timestamp messages (cron outputs, reminders, exec reports)
-  /^System:\s*\[/i,
-  // Cron job wrappers
-  /^\[cron:[0-9a-f-]+/i,
-  // Gateway restart JSON payloads
-  /^GatewayRestart:\s*\{/i,
-  // Background task completion reports
-  /^\[\w{3}\s+\d{4}-\d{2}-\d{2}\s.*\]\s*A background task/i,
-];
-
-/** Maximum message length — code dumps, logs, etc. are not memories. */
-const MAX_CAPTURE_CHARS = 2000;
-
-/** Minimum message length — too short to be meaningful. */
-const MIN_CAPTURE_CHARS = 30;
-
-/** Minimum word count — short contextual phrases lack standalone meaning. */
-const MIN_WORD_COUNT = 5;
-
-function passesAttentionGate(text: string): boolean {
-  const trimmed = text.trim();
-
-  // Length bounds
-  if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_CAPTURE_CHARS) {
-    return false;
+  let importance: number | undefined;
+  if (rateFirst) {
+    importance = await rateImportance(text, extractionConfig);
+    if (importance < importanceThreshold) {
+      return { stored: false, semanticDeduped: false };
+    }
   }
 
-  // Word count — short phrases ("I need those") lack context for recall
-  const wordCount = trimmed.split(/\s+/).length;
-  if (wordCount < MIN_WORD_COUNT) {
-    return false;
+  const vector = await embeddings.embed(text);
+
+  // Quick dedup (same content already stored — cosine >= 0.95)
+  const existing = await db.findSimilar(vector, 0.95, 1);
+  if (existing.length > 0) {
+    return { stored: false, semanticDeduped: false };
   }
 
-  // Injected context from the memory system itself
-  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
-    return false;
+  // Rate importance if not already done
+  if (importance === undefined) {
+    importance = await rateImportance(text, extractionConfig);
+    if (importance < importanceThreshold) {
+      return { stored: false, semanticDeduped: false };
+    }
   }
 
-  // Noise patterns
-  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
-    return false;
+  // Semantic dedup: check moderate-similarity memories (0.75-0.95)
+  const candidates = await db.findSimilar(vector, 0.75, 3);
+  if (candidates.length > 0) {
+    for (const candidate of candidates) {
+      if (await isSemanticDuplicate(text, candidate.text, extractionConfig)) {
+        logger.debug?.(
+          `memory-neo4j: semantic dedup — skipped "${text.slice(0, 60)}..." (duplicate of "${candidate.text.slice(0, 60)}...")`,
+        );
+        return { stored: false, semanticDeduped: true };
+      }
+    }
   }
 
-  // Excessive emoji (likely reaction, not substance)
-  const emojiCount = (trimmed.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
-  if (emojiCount > 3) {
-    return false;
-  }
-
-  // Passes gate — retain for short-term storage
-  return true;
+  await db.storeMemory({
+    id: randomUUID(),
+    text,
+    embedding: vector,
+    importance: importance * importanceDiscount,
+    category: "other",
+    source,
+    extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
+    agentId,
+    sessionKey,
+  });
+  return { stored: true, semanticDeduped: false };
 }
 
-// ============================================================================
-// Assistant attention gate — stricter filter for assistant messages
-// ============================================================================
+/**
+ * Run the full auto-capture pipeline asynchronously.
+ * Processes user and assistant messages through attention gate → capture.
+ */
+async function runAutoCapture(
+  messages: unknown[],
+  agentId: string,
+  sessionKey: string | undefined,
+  db: import("./neo4j-client.js").Neo4jMemoryClient,
+  embeddings: import("./embeddings.js").Embeddings,
+  extractionConfig: import("./config.js").ExtractionConfig,
+  logger: AutoCaptureLogger,
+): Promise<void> {
+  try {
+    let stored = 0;
+    let semanticDeduped = 0;
 
-/** Maximum assistant message length — shorter than user to avoid code dumps. */
-const MAX_ASSISTANT_CAPTURE_CHARS = 1000;
+    // Process user messages
+    const userMessages = extractUserMessages(messages);
+    const retained = userMessages.filter((text) => passesAttentionGate(text));
 
-/** Minimum word count for assistant messages — higher than user. */
-const MIN_ASSISTANT_WORD_COUNT = 10;
+    for (const text of retained) {
+      try {
+        const result = await captureMessage(
+          text,
+          "auto-capture",
+          0.3,
+          1.0,
+          agentId,
+          sessionKey,
+          db,
+          embeddings,
+          extractionConfig,
+          logger,
+        );
+        if (result.stored) stored++;
+        if (result.semanticDeduped) semanticDeduped++;
+      } catch (err) {
+        logger.debug?.(`memory-neo4j: auto-capture item failed: ${String(err)}`);
+      }
+    }
 
-function passesAssistantAttentionGate(text: string): boolean {
-  const trimmed = text.trim();
+    // Process assistant messages
+    const assistantMessages = extractAssistantMessages(messages);
+    const retainedAssistant = assistantMessages.filter((text) =>
+      passesAssistantAttentionGate(text),
+    );
 
-  // Length bounds (stricter than user)
-  if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_ASSISTANT_CAPTURE_CHARS) {
-    return false;
+    for (const text of retainedAssistant) {
+      try {
+        const result = await captureMessage(
+          text,
+          "auto-capture-assistant",
+          0.7,
+          0.75,
+          agentId,
+          sessionKey,
+          db,
+          embeddings,
+          extractionConfig,
+          logger,
+        );
+        if (result.stored) stored++;
+        if (result.semanticDeduped) semanticDeduped++;
+      } catch (err) {
+        logger.debug?.(`memory-neo4j: assistant auto-capture item failed: ${String(err)}`);
+      }
+    }
+
+    if (stored > 0 || semanticDeduped > 0) {
+      logger.info(
+        `memory-neo4j: auto-captured ${stored} memories (attention-gated)${semanticDeduped > 0 ? `, ${semanticDeduped} semantic dupes skipped` : ""}`,
+      );
+    } else if (userMessages.length > 0 || assistantMessages.length > 0) {
+      logger.info(
+        `memory-neo4j: auto-capture ran (0 stored, ${userMessages.length} user msgs, ${retained.length} passed gate, ${assistantMessages.length} assistant msgs, ${retainedAssistant.length} passed gate)`,
+      );
+    }
+  } catch (err) {
+    logger.warn(`memory-neo4j: auto-capture failed: ${String(err)}`);
   }
-
-  // Word count — higher threshold than user messages
-  const wordCount = trimmed.split(/\s+/).length;
-  if (wordCount < MIN_ASSISTANT_WORD_COUNT) {
-    return false;
-  }
-
-  // Reject messages that are mostly code (>50% inside triple-backtick fences)
-  const codeBlockRegex = /```[\s\S]*?```/g;
-  let codeChars = 0;
-  let match: RegExpExecArray | null;
-  while ((match = codeBlockRegex.exec(trimmed)) !== null) {
-    codeChars += match[0].length;
-  }
-  if (codeChars > trimmed.length * 0.5) {
-    return false;
-  }
-
-  // Reject messages that are mostly tool output
-  if (
-    trimmed.includes("<tool_result>") ||
-    trimmed.includes("<tool_use>") ||
-    trimmed.includes("<function_call>")
-  ) {
-    return false;
-  }
-
-  // Injected context from the memory system itself
-  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
-    return false;
-  }
-
-  // Noise patterns (same as user gate)
-  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
-    return false;
-  }
-
-  // Excessive emoji (likely reaction, not substance)
-  const emojiCount = (trimmed.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
-  if (emojiCount > 3) {
-    return false;
-  }
-
-  return true;
 }
 
-// Exported for testing
-export { passesAttentionGate, passesAssistantAttentionGate };
+// Re-export attention gate for backwards compatibility (tests import from here)
+export { passesAttentionGate, passesAssistantAttentionGate } from "./attention-gate.js";
 
 // ============================================================================
 // Export
