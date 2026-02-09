@@ -700,6 +700,7 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 | 2026-02-09 | Worker 수동 기동 방식 유지 | 자동 기동은 다음 단계 (Task Scheduler 검토) |
 | 2026-02-09 | R2 Public Access 활성화 (API 방식) | `r2.dev` subdomain 공개 접근 활성화 → Worker R2 업로드 → Public URL 서빙 확인 |
 | 2026-02-09 | R2 E2E 테스트 PASS | Worker→R2 업로드→Public URL→API 저장 전체 흐름 성공 (Job fc59515b, 2분46초, 2.6MB) |
+| 2026-02-09 | TTS 엔진 edge-tts 전환 | MMS-TTS-vie(남성) → edge-tts vi-VN-HoaiMyNeural(여성), 아바타(happy.png 여성)와 음성 일치 |
 
 ---
 
@@ -733,11 +734,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `97fed6c feat: subtitle toggle - default hidden, SRT track on demand (02-09)`
 - `21213e1 feat: switch TTS to edge-tts female voice (vi-VN-HoaiMyNeural) (02-09)`
 - `ce556d0 docs: update I036 with R2 public access setup and E2E test results (02-09)`
 - `2ea5be1 feat: add R2 upload to video worker pipeline (I036) (02-09)`
 - `a13de35 fix: resolve 3 E2E issues - encoding, UCP stats, register security (02-08)`
-- `0a1b7b4 test: add comprehensive test suite (753 tests) + fix SQLite/PostgreSQL compat (02-08)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-09*
