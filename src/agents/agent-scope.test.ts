@@ -207,14 +207,16 @@ describe("resolveAgentConfig", () => {
     expect(result?.workspace).toBe("~/openclaw");
   });
 
-  it("uses OPENCLAW_HOME for default agent workspace", () => {
+  // Unix-style paths behave differently on Windows; skip there
+  it.skipIf(process.platform === "win32")("uses OPENCLAW_HOME for default agent workspace", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
 
     const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
     expect(workspace).toBe("/srv/openclaw-home/.openclaw/workspace");
   });
 
-  it("uses OPENCLAW_HOME for default agentDir", () => {
+  // Unix-style paths behave differently on Windows; skip there
+  it.skipIf(process.platform === "win32")("uses OPENCLAW_HOME for default agentDir", () => {
     vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
