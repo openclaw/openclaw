@@ -155,8 +155,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       deliver: !requesterIsSubagent,
       idempotencyKey: crypto.randomUUID(),
     },
-    expectFinal: true,
-    timeoutMs: 60_000,
+    timeoutMs: 15_000,
   });
 }
 
@@ -565,6 +564,18 @@ export async function runSubagentAnnounceFlow(params: {
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");
 
+    const requesterDepth = getSubagentDepthFromSessionStore(params.requesterSessionKey);
+    const requesterIsSubagent = requesterDepth >= 1;
+    // Drop child announces when the requester subagent has already finished.
+    // This prevents wasted NO_REPLY turns on completed orchestrator sessions.
+    if (requesterIsSubagent) {
+      const { isSubagentSessionRunActive } = await import("./subagent-registry.js");
+      if (!isSubagentSessionRunActive(params.requesterSessionKey)) {
+        didAnnounce = true;
+        return true;
+      }
+    }
+
     const queued = await maybeQueueSubagentAnnounce({
       requesterSessionKey: params.requesterSessionKey,
       triggerMessage,
@@ -579,9 +590,6 @@ export async function runSubagentAnnounceFlow(params: {
       didAnnounce = true;
       return true;
     }
-
-    const requesterDepth = getSubagentDepthFromSessionStore(params.requesterSessionKey);
-    const requesterIsSubagent = requesterDepth >= 1;
 
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
@@ -605,8 +613,7 @@ export async function runSubagentAnnounceFlow(params: {
             : undefined,
         idempotencyKey: crypto.randomUUID(),
       },
-      expectFinal: true,
-      timeoutMs: 60_000,
+      timeoutMs: 15_000,
     });
 
     didAnnounce = true;

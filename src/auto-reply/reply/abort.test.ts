@@ -28,10 +28,12 @@ vi.mock("../../process/command-queue.js", () => commandQueueMocks);
 
 const subagentRegistryMocks = vi.hoisted(() => ({
   listSubagentRunsForRequester: vi.fn(() => []),
+  markSubagentRunTerminated: vi.fn(() => 1),
 }));
 
 vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForRequester: subagentRegistryMocks.listSubagentRunsForRequester,
+  markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
 }));
 
 describe("abort detection", () => {

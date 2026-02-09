@@ -12,12 +12,14 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
   buildAllowedModelSet,
   isCliProvider,
   modelKey,
+  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
@@ -123,8 +125,14 @@ export async function agentCommand(
     throw new Error('Invalid verbose level. Use "on", "full", or "off".');
   }
 
+  const laneRaw = typeof opts.lane === "string" ? opts.lane.trim() : "";
+  const isSubagentLane = laneRaw === String(AGENT_LANE_SUBAGENT);
   const timeoutSecondsRaw =
-    opts.timeout !== undefined ? Number.parseInt(String(opts.timeout), 10) : undefined;
+    opts.timeout !== undefined
+      ? Number.parseInt(String(opts.timeout), 10)
+      : isSubagentLane
+        ? 0
+        : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)
@@ -250,11 +258,15 @@ export async function agentCommand(
         }
       : cfg;
 
-    const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+    const configuredDefaultRef = resolveConfiguredModelRef({
       cfg: cfgForModelSelection,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
+    const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
+      configuredDefaultRef.provider,
+      configuredDefaultRef.model,
+    );
     let provider = defaultProvider;
     let model = defaultModel;
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
@@ -283,9 +295,10 @@ export async function agentCommand(
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const key = modelKey(overrideProvider, overrideModel);
+        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
+        const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
         if (
-          !isCliProvider(overrideProvider, cfg) &&
+          !isCliProvider(normalizedOverride.provider, cfg) &&
           allowedModelKeys.size > 0 &&
           !allowedModelKeys.has(key)
         ) {
@@ -307,14 +320,15 @@ export async function agentCommand(
     const storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const key = modelKey(candidateProvider, storedModelOverride);
+      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
+      const key = modelKey(normalizedStored.provider, normalizedStored.model);
       if (
-        isCliProvider(candidateProvider, cfg) ||
+        isCliProvider(normalizedStored.provider, cfg) ||
         allowedModelKeys.size === 0 ||
         allowedModelKeys.has(key)
       ) {
-        provider = candidateProvider;
-        model = storedModelOverride;
+        provider = normalizedStored.provider;
+        model = normalizedStored.model;
       }
     }
     if (sessionEntry) {

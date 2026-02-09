@@ -16,6 +16,7 @@ import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   modelKey,
+  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -144,8 +145,9 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const provider = String(params.provider ?? "").trim() || defaultProvider;
-  const model = String(params.model ?? "").trim() || defaultModel;
+  const providerRaw = String(params.provider ?? "").trim() || defaultProvider;
+  const modelRaw = String(params.model ?? "").trim() || defaultModel;
+  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
@@ -172,7 +174,7 @@ function resolveFallbackCandidates(params: {
     candidates.push(candidate);
   };
 
-  addCandidate({ provider, model }, false);
+  addCandidate(normalizedPrimary, false);
 
   const modelFallbacks = (() => {
     if (params.fallbacksOverride !== undefined) {

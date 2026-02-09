@@ -5,6 +5,7 @@ import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import {
   listSubagentRunsForRequester,
+  markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
 } from "../../agents/subagent-registry.js";
@@ -43,6 +44,7 @@ const COMMAND_TELL = "/tell";
 const ACTIONS = new Set(["list", "stop", "kill", "log", "send", "steer", "info", "help"]);
 const RECENT_WINDOW_MINUTES = 30;
 const SUBAGENT_TASK_PREVIEW_MAX = 110;
+const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 
 function formatDurationCompact(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -536,6 +538,11 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         nextStore[childKey] = entry;
       });
     }
+    markSubagentRunTerminated({
+      runId: resolved.entry.runId,
+      childSessionKey: childKey,
+      reason: "killed",
+    });
     // Cascade: also stop any sub-sub-agents spawned by this child.
     stopSubagentsForRequester({
       cfg: params.cfg,
@@ -666,6 +673,21 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
           `subagents steer: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
         );
       }
+
+      // Best effort: wait for the interrupted run to settle so the steer
+      // message is appended on the existing conversation state.
+      try {
+        await callGateway({
+          method: "agent.wait",
+          params: {
+            runId: resolved.entry.runId,
+            timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS,
+          },
+          timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS + 2_000,
+        });
+      } catch {
+        // Continue even if wait fails; steer should still be attempted.
+      }
     }
 
     const idempotencyKey = crypto.randomUUID();
@@ -676,10 +698,12 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         params: {
           message,
           sessionKey: resolved.entry.childSessionKey,
+          sessionId: targetSessionId,
           idempotencyKey,
           deliver: false,
           channel: INTERNAL_MESSAGE_CHANNEL,
           lane: AGENT_LANE_SUBAGENT,
+          timeout: 0,
         },
         timeoutMs: 10_000,
       });
@@ -698,6 +722,7 @@ export const handleSubagentsCommand: CommandHandler = async (params, allowTextCo
         previousRunId: resolved.entry.runId,
         nextRunId: runId,
         fallback: resolved.entry,
+        runTimeoutSeconds: resolved.entry.runTimeoutSeconds ?? 0,
       });
       return {
         shouldContinue: false,

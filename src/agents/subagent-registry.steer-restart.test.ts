@@ -85,4 +85,31 @@ describe("subagent registry steer restarts", () => {
     const announce = announceSpy.mock.calls[0]?.[0] as { childRunId?: string };
     expect(announce.childRunId).toBe("run-new");
   });
+
+  it("marks killed runs terminated and inactive", async () => {
+    const mod = await import("./subagent-registry.js");
+    const childSessionKey = "agent:main:subagent:killed";
+
+    mod.registerSubagentRun({
+      runId: "run-killed",
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "kill me",
+      cleanup: "keep",
+    });
+
+    expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(true);
+    const updated = mod.markSubagentRunTerminated({
+      childSessionKey,
+      reason: "manual kill",
+    });
+    expect(updated).toBe(1);
+    expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
+
+    const run = mod.listSubagentRunsForRequester("agent:main:main")[0];
+    expect(run?.outcome).toEqual({ status: "error", error: "manual kill" });
+    expect(run?.cleanupHandled).toBe(true);
+    expect(typeof run?.cleanupCompletedAt).toBe("number");
+  });
 });

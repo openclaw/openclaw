@@ -582,6 +582,13 @@ describe("handleCommands subagents", () => {
       }
       return {};
     });
+    const storePath = path.join(testWorkspaceDir, "sessions-subagents-steer.json");
+    await updateSessionStore(storePath, (store) => {
+      store["agent:main:subagent:abc"] = {
+        sessionId: "child-session-steer",
+        updatedAt: Date.now(),
+      };
+    });
     addSubagentRunForTests({
       runId: "run-1",
       childSessionKey: "agent:main:subagent:abc",
@@ -595,11 +602,36 @@ describe("handleCommands subagents", () => {
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
     } as OpenClawConfig;
     const params = buildParams("/steer 1 check timer.ts instead", cfg);
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("steered");
+    const steerWaitIndex = callGatewayMock.mock.calls.findIndex(
+      (call) =>
+        (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
+        (call[0] as { method?: string; params?: { runId?: string } }).params?.runId === "run-1",
+    );
+    expect(steerWaitIndex).toBeGreaterThanOrEqual(0);
+    const steerRunIndex = callGatewayMock.mock.calls.findIndex(
+      (call) => (call[0] as { method?: string }).method === "agent",
+    );
+    expect(steerRunIndex).toBeGreaterThan(steerWaitIndex);
+    expect(callGatewayMock.mock.calls[steerWaitIndex]?.[0]).toMatchObject({
+      method: "agent.wait",
+      params: { runId: "run-1", timeoutMs: 5_000 },
+      timeoutMs: 7_000,
+    });
+    expect(callGatewayMock.mock.calls[steerRunIndex]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        lane: "subagent",
+        sessionKey: "agent:main:subagent:abc",
+        sessionId: "child-session-steer",
+        timeout: 0,
+      },
+    });
     const trackedRuns = listSubagentRunsForRequester("agent:main:main");
     expect(trackedRuns).toHaveLength(1);
     expect(trackedRuns[0].runId).toBe("run-steer-1");

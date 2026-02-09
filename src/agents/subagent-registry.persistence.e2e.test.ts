@@ -274,4 +274,12 @@ describe("subagent registry persistence", () => {
     };
     expect(afterSecond.runs?.["run-4"]).toBeUndefined();
   });
+
+  it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", async () => {
+    delete process.env.OPENCLAW_STATE_DIR;
+    vi.resetModules();
+    const { resolveSubagentRegistryPath } = await import("./subagent-registry.store.js");
+    const registryPath = resolveSubagentRegistryPath();
+    expect(registryPath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
+  });
 });

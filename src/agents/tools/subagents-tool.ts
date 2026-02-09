@@ -19,6 +19,7 @@ import { optionalStringEnum } from "../schema/typebox.js";
 import { getSubagentDepthFromSessionStore } from "../subagent-depth.js";
 import {
   listSubagentRunsForRequester,
+  markSubagentRunTerminated,
   markSubagentRunForSteerRestart,
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
@@ -33,6 +34,7 @@ const DEFAULT_RECENT_MINUTES = 30;
 const MAX_RECENT_MINUTES = 24 * 60;
 const MAX_STEER_MESSAGE_CHARS = 4_000;
 const STEER_RATE_LIMIT_MS = 2_000;
+const STEER_ABORT_SETTLE_TIMEOUT_MS = 5_000;
 
 const steerRateLimit = new Map<string, number>();
 
@@ -371,9 +373,7 @@ async function killSubagentRun(params: {
     cache: params.cache,
   });
   const sessionId = resolved.entry?.sessionId;
-  if (sessionId) {
-    abortEmbeddedPiRun(sessionId);
-  }
+  const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
   const cleared = clearSessionQueues([childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
@@ -391,7 +391,13 @@ async function killSubagentRun(params: {
       store[childSessionKey] = current;
     });
   }
-  return { killed: true, sessionId };
+  const marked = markSubagentRunTerminated({
+    runId: params.entry.runId,
+    childSessionKey,
+    reason: "killed",
+  });
+  const killed = marked > 0 || aborted || cleared.followupCleared > 0 || cleared.laneCleared > 0;
+  return { killed, sessionId };
 }
 
 /**
@@ -728,6 +734,21 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           );
         }
 
+        // Best effort: wait for the interrupted run to settle so the steer
+        // message appends onto the existing conversation context.
+        try {
+          await callGateway({
+            method: "agent.wait",
+            params: {
+              runId: resolved.entry.runId,
+              timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS,
+            },
+            timeoutMs: STEER_ABORT_SETTLE_TIMEOUT_MS + 2_000,
+          });
+        } catch {
+          // Continue even if wait fails; steer should still be attempted.
+        }
+
         const idempotencyKey = crypto.randomUUID();
         let runId: string = idempotencyKey;
         try {
@@ -736,10 +757,12 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
             params: {
               message,
               sessionKey: resolved.entry.childSessionKey,
+              sessionId,
               idempotencyKey,
               deliver: false,
               channel: INTERNAL_MESSAGE_CHANNEL,
               lane: AGENT_LANE_SUBAGENT,
+              timeout: 0,
             },
             timeoutMs: 10_000,
           });
@@ -763,6 +786,7 @@ export function createSubagentsTool(opts?: { agentSessionKey?: string }): AnyAge
           previousRunId: resolved.entry.runId,
           nextRunId: runId,
           fallback: resolved.entry,
+          runTimeoutSeconds: resolved.entry.runTimeoutSeconds ?? 0,
         });
 
         return jsonResult({

@@ -9,6 +9,9 @@ const embeddedRunMock = {
   queueEmbeddedPiMessage: vi.fn(() => false),
   waitForEmbeddedPiRunEnd: vi.fn(async () => true),
 };
+const subagentRegistryMock = {
+  isSubagentSessionRunActive: vi.fn(() => true),
+};
 let sessionStore: Record<string, Record<string, unknown>> = {};
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
@@ -52,6 +55,8 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("./pi-embedded.js", () => embeddedRunMock);
 
+vi.mock("./subagent-registry.js", () => subagentRegistryMock);
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -68,6 +73,7 @@ describe("subagent announce formatting", () => {
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
     embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockReset().mockResolvedValue(true);
+    subagentRegistryMock.isSubagentSessionRunActive.mockReset().mockReturnValue(true);
     readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
     sessionStore = {};
     configOverride = {

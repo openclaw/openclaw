@@ -814,40 +814,68 @@ describe("sessions tools", () => {
       startedAt: Date.now() - 60_000,
     });
 
-    const tool = createOpenClawTools({
-      agentSessionKey: "agent:main:main",
-    }).find((candidate) => candidate.name === "subagents");
-    expect(tool).toBeDefined();
-    if (!tool) {
-      throw new Error("missing subagents tool");
+    const sessionsModule = await import("../config/sessions.js");
+    const loadSessionStoreSpy = vi
+      .spyOn(sessionsModule, "loadSessionStore")
+      .mockImplementation(() => ({
+        "agent:main:subagent:steer": {
+          sessionId: "child-session-steer",
+          updatedAt: Date.now(),
+        },
+      }));
+
+    try {
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+      }).find((candidate) => candidate.name === "subagents");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing subagents tool");
+      }
+
+      const result = await tool.execute("call-subagents-steer", {
+        action: "steer",
+        target: "1",
+        message: "skip changelog and focus on tests",
+      });
+      const details = result.details as { status?: string; runId?: string; text?: string };
+      expect(details.status).toBe("accepted");
+      expect(details.runId).toBe("run-steer-1");
+      expect(details.text).toContain("steered");
+      const steerWaitIndex = callGatewayMock.mock.calls.findIndex(
+        (call) =>
+          (call[0] as { method?: string; params?: { runId?: string } }).method === "agent.wait" &&
+          (call[0] as { method?: string; params?: { runId?: string } }).params?.runId ===
+            "run-steer",
+      );
+      expect(steerWaitIndex).toBeGreaterThanOrEqual(0);
+      const steerRunIndex = callGatewayMock.mock.calls.findIndex(
+        (call) => (call[0] as { method?: string }).method === "agent",
+      );
+      expect(steerRunIndex).toBeGreaterThan(steerWaitIndex);
+      expect(callGatewayMock.mock.calls[steerWaitIndex]?.[0]).toMatchObject({
+        method: "agent.wait",
+        params: { runId: "run-steer", timeoutMs: 5_000 },
+        timeoutMs: 7_000,
+      });
+      expect(callGatewayMock.mock.calls[steerRunIndex]?.[0]).toMatchObject({
+        method: "agent",
+        params: {
+          lane: "subagent",
+          sessionKey: "agent:main:subagent:steer",
+          sessionId: "child-session-steer",
+          timeout: 0,
+        },
+      });
+
+      const trackedRuns = listSubagentRunsForRequester("agent:main:main");
+      expect(trackedRuns).toHaveLength(1);
+      expect(trackedRuns[0].runId).toBe("run-steer-1");
+      expect(trackedRuns[0].endedAt).toBeUndefined();
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+      resetSubagentRegistryForTests();
     }
-
-    const result = await tool.execute("call-subagents-steer", {
-      action: "steer",
-      target: "1",
-      message: "skip changelog and focus on tests",
-    });
-    const details = result.details as { status?: string; runId?: string; text?: string };
-    expect(details.status).toBe("accepted");
-    expect(details.runId).toBe("run-steer-1");
-    expect(details.text).toContain("steered");
-    const agentCall = callGatewayMock.mock.calls.find(
-      (call) => (call[0] as { method?: string }).method === "agent",
-    );
-    expect(agentCall?.[0]).toMatchObject({
-      method: "agent",
-      params: {
-        lane: "subagent",
-        sessionKey: "agent:main:subagent:steer",
-      },
-    });
-
-    const trackedRuns = listSubagentRunsForRequester("agent:main:main");
-    expect(trackedRuns).toHaveLength(1);
-    expect(trackedRuns[0].runId).toBe("run-steer-1");
-    expect(trackedRuns[0].endedAt).toBeUndefined();
-
-    resetSubagentRegistryForTests();
   });
 
   it("subagents numeric targets follow active-first list ordering", async () => {
