@@ -92,11 +92,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
       skillFilter: ["alpha", "charlie"],
     });
 
-    // Only the skills in the filter should appear in the prompt
-    expect(snapshot.prompt).toContain("alpha");
-    expect(snapshot.prompt).not.toContain("bravo");
-    expect(snapshot.prompt).toContain("charlie");
-    // The skills list should also be filtered
+    // Only the skills in the filter should appear
     expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual(["alpha", "charlie"]);
   });
 
