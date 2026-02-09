@@ -511,4 +511,25 @@ describe("getApiKeyForModel", () => {
       }
     }
   });
+
+  it("strips embedded CR/LF from ANTHROPIC_API_KEY", async () => {
+    const previous = process.env.ANTHROPIC_API_KEY;
+
+    try {
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-\r\nkey";
+
+      vi.resetModules();
+      const { resolveEnvApiKey } = await import("./model-auth.js");
+
+      const resolved = resolveEnvApiKey("anthropic");
+      expect(resolved?.apiKey).toBe("sk-ant-test-key");
+      expect(resolved?.source).toContain("ANTHROPIC_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = previous;
+      }
+    }
+  });
 });
