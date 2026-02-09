@@ -440,10 +440,21 @@ export async function updateLastRoute(params: {
     });
     const mergedInput = mergeDeliveryContext(explicitContext, inlineContext);
     const explicitDeliveryContext = params.deliveryContext;
-    const clearThreadFromFallback =
+    const explicitThreadFromDeliveryContext =
       explicitDeliveryContext != null &&
-      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId") &&
-      explicitDeliveryContext.threadId == null;
+      Object.prototype.hasOwnProperty.call(explicitDeliveryContext, "threadId")
+        ? explicitDeliveryContext.threadId
+        : undefined;
+    const explicitThreadValue =
+      explicitThreadFromDeliveryContext ??
+      (threadId != null && threadId !== "" ? threadId : undefined);
+    const explicitRouteProvided = Boolean(
+      explicitContext?.channel ||
+      explicitContext?.to ||
+      inlineContext?.channel ||
+      inlineContext?.to,
+    );
+    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
     const fallbackContext = clearThreadFromFallback
       ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
       : deliveryContextFromSession(existing);

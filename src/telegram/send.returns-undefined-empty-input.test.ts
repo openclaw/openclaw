@@ -508,6 +508,23 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("58");
   });
 
+  it("does not retry thread-not-found when no message_thread_id was provided", async () => {
+    const chatId = "123";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(chatId, "hello forum", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow("message thread not found");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("sets disable_notification when silent is true", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockResolvedValue({
