@@ -19,6 +19,7 @@ import {
   errorShape,
   formatValidationErrors,
   validateSessionsCompactParams,
+  validateSessionsCreateParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
@@ -234,6 +235,25 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cfg = loadConfig();
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const storePath = target.storePath;
+
+    // Check if session is persistent before allowing reset
+    const store = loadSessionStore(storePath);
+    const primaryKey = target.storeKeys[0] ?? key;
+    const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+    const entry = store[existingKey ?? primaryKey];
+
+    if (entry?.persistent === true) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Cannot reset persistent session "${entry.label || key}". Use sessions.delete to clear it, or switch to a different session.`,
+        ),
+      );
+      return;
+    }
+
     const next = await updateSessionStore(storePath, (store) => {
       const primaryKey = target.storeKeys[0] ?? key;
       const existingKey = target.storeKeys.find((candidate) => store[candidate]);
@@ -361,6 +381,87 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
+  },
+  "sessions.create": async ({ params, respond }) => {
+    if (!validateSessionsCreateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid sessions.create params: ${formatValidationErrors(validateSessionsCreateParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const p = params as {
+      label: string;
+      description?: string;
+      persistent?: boolean;
+      agentId?: string;
+      basedOn?: string;
+    };
+
+    const label = p.label.trim();
+    if (!label) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "label required"));
+      return;
+    }
+
+    const cfg = loadConfig();
+    const agentId = normalizeAgentId(p.agentId ?? resolveDefaultAgentId(cfg));
+
+    // Generate unique session key
+    const sessionId = randomUUID();
+    const sessionKey = `agent:${agentId}:named:${sessionId}`;
+
+    const now = Date.now();
+    const persistent = p.persistent !== false; // default to true
+
+    // Copy settings from basedOn session if provided
+    let baseEntry: SessionEntry | undefined;
+    if (p.basedOn) {
+      try {
+        const baseTarget = resolveGatewaySessionStoreTarget({ cfg, key: p.basedOn });
+        const baseStore = loadSessionStore(baseTarget.storePath);
+        baseEntry = baseStore[baseTarget.storeKeys[0] ?? p.basedOn];
+      } catch {
+        // If basedOn session not found, just proceed without copying
+      }
+    }
+
+    const entry: SessionEntry = {
+      sessionId,
+      updatedAt: now,
+      createdAt: now,
+      systemSent: false,
+      abortedLastRun: false,
+      persistent,
+      userCreated: true,
+      label,
+      description: p.description?.trim(),
+      // Copy preferences from base session if provided
+      thinkingLevel: baseEntry?.thinkingLevel,
+      verboseLevel: baseEntry?.verboseLevel,
+      reasoningLevel: baseEntry?.reasoningLevel,
+      elevatedLevel: baseEntry?.elevatedLevel,
+      responseUsage: baseEntry?.responseUsage,
+      modelOverride: baseEntry?.modelOverride,
+      providerOverride: baseEntry?.providerOverride,
+      // Start fresh with zero tokens
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      contextTokens: 0,
+    };
+
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
+    await updateSessionStore(target.storePath, (store) => {
+      store[sessionKey] = entry;
+    });
+
+    respond(true, { ok: true, key: sessionKey, sessionId, entry }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!validateSessionsCompactParams(params)) {

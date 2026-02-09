@@ -93,6 +93,25 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /**
+   * If true, this session will not be reset by /new or /reset commands.
+   * User must explicitly delete or switch away from persistent sessions.
+   */
+  persistent?: boolean;
+  /**
+   * If true, this session was created explicitly by the user (not auto-generated).
+   * Used to distinguish named sessions in UI.
+   */
+  userCreated?: boolean;
+  /**
+   * Optional description or notes about this session.
+   * Helps users remember what this session is for.
+   */
+  description?: string;
+  /**
+   * Timestamp (ms) when this session was created (not just updated).
+   */
+  createdAt?: number;
 };
 
 export function mergeSessionEntry(

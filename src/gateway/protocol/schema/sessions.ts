@@ -94,6 +94,17 @@ export const SessionsDeleteParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCreateParamsSchema = Type.Object(
+  {
+    label: SessionLabelString,
+    description: Type.Optional(Type.String({ maxLength: 500 })),
+    persistent: Type.Optional(Type.Boolean()),
+    agentId: Type.Optional(NonEmptyString),
+    basedOn: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
