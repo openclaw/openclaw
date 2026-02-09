@@ -51,7 +51,7 @@ Create a checklist of all review steps, print it, then continue and execute the 
 Use an isolated worktree for all review work.
 
 ```sh
-cd ~/Development/openclaw
+cd ~/dev/openclaw
 # Sanity: confirm you are in the repo
 git rev-parse --show-toplevel
 

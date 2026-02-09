@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
-import { detectMime, extensionForMime, imageMimeFromFormat } from "./mime.js";
+import { detectMime, extensionForMime, imageMimeFromFormat, isAudioFileName } from "./mime.js";
 
 async function makeOoxmlZip(opts: { mainMime: string; partPath: string }): Promise<Buffer> {
   const zip = new JSZip();
@@ -94,5 +94,19 @@ describe("extensionForMime", () => {
   it("returns undefined for null or undefined input", () => {
     expect(extensionForMime(null)).toBeUndefined();
     expect(extensionForMime(undefined)).toBeUndefined();
+  });
+});
+
+describe("isAudioFileName", () => {
+  it("matches known audio extensions", () => {
+    const cases = [
+      { fileName: "voice.mp3", expected: true },
+      { fileName: "voice.caf", expected: true },
+      { fileName: "voice.bin", expected: false },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(isAudioFileName(testCase.fileName)).toBe(testCase.expected);
+    }
   });
 });
