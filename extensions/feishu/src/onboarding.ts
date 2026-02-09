@@ -80,7 +80,10 @@ async function promptFeishuAllowFrom(params: {
     }
 
     const unique = [
-      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...parts]),
+      ...new Set([
+        ...existing.map((v: string | number) => String(v).trim()).filter(Boolean),
+        ...parts,
+      ]),
     ];
     return setFeishuAllowFrom(params.cfg, unique);
   }

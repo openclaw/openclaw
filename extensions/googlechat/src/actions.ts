@@ -97,11 +97,11 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
       if (mediaUrl) {
         const core = getGoogleChatRuntime();
         const maxBytes = (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-        const loaded = await core.channel.media.fetchRemoteMedia(mediaUrl, { maxBytes });
+        const loaded = await core.channel.media.fetchRemoteMedia({ url: mediaUrl, maxBytes });
         const upload = await uploadGoogleChatAttachment({
           account,
           space,
-          filename: loaded.filename ?? "attachment",
+          filename: loaded.fileName ?? "attachment",
           buffer: loaded.buffer,
           contentType: loaded.contentType,
         });
@@ -114,7 +114,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
             ? [
                 {
                   attachmentUploadToken: upload.attachmentUploadToken,
-                  contentName: loaded.filename,
+                  contentName: loaded.fileName,
                 },
               ]
             : undefined,

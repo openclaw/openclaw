@@ -86,7 +86,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       if (!spec?.gate) {
         continue;
       }
-      if (spec.unsupportedOnMacOS26 && macOS26) {
+      if ("unsupportedOnMacOS26" in spec && spec.unsupportedOnMacOS26 && macOS26) {
         continue;
       }
       if (gate(spec.gate)) {

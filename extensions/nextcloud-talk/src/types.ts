@@ -5,6 +5,8 @@ import type {
   GroupPolicy,
 } from "openclaw/plugin-sdk";
 
+export type { DmPolicy, GroupPolicy };
+
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this room. */

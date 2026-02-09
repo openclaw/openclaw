@@ -625,7 +625,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
         }
         ctx.setStatus({
           accountId: account.accountId,
-          user: userInfo,
+          profile: userInfo,
         });
       } catch {
         // ignore probe errors

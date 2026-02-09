@@ -204,7 +204,8 @@ export class UrbitSSEClient {
     if (!body) {
       return;
     }
-    const stream = body instanceof ReadableStream ? Readable.fromWeb(body) : body;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const stream = body instanceof ReadableStream ? Readable.fromWeb(body as any) : body;
     let buffer = "";
 
     try {

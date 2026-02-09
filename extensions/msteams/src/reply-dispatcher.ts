@@ -49,7 +49,7 @@ export function createMSTeamsReplyDispatcher(params: {
     start: sendTypingIndicator,
     onStartError: (err) => {
       logTypingFailure({
-        log: (message) => params.log.debug(message),
+        log: (message) => params.log.debug?.(message),
         channel: "msteams",
         action: "start",
         error: err,
@@ -94,7 +94,7 @@ export function createMSTeamsReplyDispatcher(params: {
           // Enable default retry/backoff for throttling/transient failures.
           retry: {},
           onRetry: (event) => {
-            params.log.debug("retrying send", {
+            params.log.debug?.("retrying send", {
               replyStyle: params.replyStyle,
               ...event,
             });
