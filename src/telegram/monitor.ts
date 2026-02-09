@@ -12,7 +12,11 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
+import {
+  computeBotTokenHash,
+  readTelegramUpdateOffset,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -118,8 +122,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
 
+    const tokenHash = computeBotTokenHash(token);
     let lastUpdateId = await readTelegramUpdateOffset({
       accountId: account.accountId,
+      tokenHash,
     });
     const persistUpdateId = async (updateId: number) => {
       if (lastUpdateId !== null && updateId <= lastUpdateId) {
@@ -130,6 +136,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         await writeTelegramUpdateOffset({
           accountId: account.accountId,
           updateId,
+          tokenHash,
         });
       } catch (err) {
         (opts.runtime?.error ?? console.error)(
