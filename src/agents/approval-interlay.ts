@@ -83,8 +83,8 @@ export function createApprovalEvent(params: {
 }
 
 /**
- * Send Slack DM with approve/reject buttons (async channel).
- * Returns immediately; approval happens asynchronously.
+ * Send approval request to #alfred-approvals channel.
+ * Returns immediately; approval happens asynchronously via reactions or timeout.
  */
 export async function sendSlackApprovalDm(params: {
   event: ApprovalEvent;
@@ -92,34 +92,54 @@ export async function sendSlackApprovalDm(params: {
 }): Promise<void> {
   const { event } = params;
 
-  const message = `
-🤔 *Model Divergence Approval*
+  const message = `🤔 *Model Divergence Approval Required*
 
 Auto-routing wants to escalate from Haiku → *${event.proposedTier.toUpperCase()}*
 
-**Reason:** ${event.reason}
-**Confidence:** ${(event.confidence * 100).toFixed(0)}%
-**Est. tokens:** ${event.estimatedTokens}
+*Reason:* ${event.reason}
+*Confidence:* ${(event.confidence * 100).toFixed(0)}%
+*Est. output tokens:* ${event.estimatedTokens}
 
-_Session: ${event.sessionKey}_
+_Session: \`${event.sessionKey}\`_
 
-React with:
-✅ Approve (use ${event.proposedTier})
-❌ Reject (use Haiku instead)
-  `.trim();
+:heavy_check_mark: React ✅ to approve (use ${event.proposedTier})
+:x: React ❌ to reject (use Haiku instead)
+Auto-proceeds in 60 seconds if no response.`;
 
   try {
-    // In production, this would call the Slack API via message tool
-    // For now, log the intent
-    console.log("[ApprovalInterlay] Slack DM pending:", {
-      to: "user:U0ABVDL7C9M",
-      message,
-    });
+    // Post to #alfred-approvals channel (C0ADLAX5PBM)
+    // Try via message broker first (production path)
+    const { postApprovalViaMessageSystem } = await import("./approval-message-broker.js").catch(
+      () => ({
+        postApprovalViaMessageSystem: undefined,
+      }),
+    );
 
-    // Record that we attempted to send
-    event.slackDmSent = true;
+    if (postApprovalViaMessageSystem) {
+      await postApprovalViaMessageSystem({
+        channel: _SLACK_CHANNEL,
+        message,
+        sessionKey: event.sessionKey,
+        userId: event.userId,
+      });
+      event.slackDmSent = true;
+      console.log("[ApprovalInterlay] Approval request posted to #alfred-approvals");
+    } else {
+      // Fallback: emit event for gateway to pick up
+      if (process.emit) {
+        process.emit("approval-request", {
+          channel: _SLACK_CHANNEL,
+          message,
+          sessionKey: event.sessionKey,
+          userId: event.userId,
+        });
+      }
+      console.log("[ApprovalInterlay] Approval request queued for #alfred-approvals:", message);
+      event.slackDmSent = true;
+    }
   } catch (err) {
-    console.error("[ApprovalInterlay] Failed to send Slack DM:", err);
+    console.error("[ApprovalInterlay] Failed to post approval to Slack:", err);
+    event.slackDmSent = false;
   }
 }
 
