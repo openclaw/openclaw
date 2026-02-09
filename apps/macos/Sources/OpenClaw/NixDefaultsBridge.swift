@@ -13,7 +13,6 @@ enum NixDefaultsBridge {
         showDockIconKey,
         "openclaw.gateway.attachExistingOnly",
         "gatewayPort",
-        nixAutoLaunchAtLoginKey,
     ]
 
     static func applyIfNeeded() {

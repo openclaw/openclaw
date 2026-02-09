@@ -38,20 +38,6 @@ struct OpenClawApp: App {
         // Bridge those settings into the current UserDefaults domain before we read them.
         NixDefaultsBridge.applyIfNeeded()
 
-        // In Nix mode we generally expect OpenClaw to stay running (node-mode, permissions, etc.).
-        // Enable launch-at-login by default, with an escape hatch.
-        if ProcessInfo.processInfo.isNixMode {
-            let shouldAutoLaunch = UserDefaults.standard.object(forKey: nixAutoLaunchAtLoginKey) as? Bool ?? true
-            if shouldAutoLaunch {
-                Task { @MainActor in
-                    let enabled = await LaunchAgentManager.status()
-                    if !enabled {
-                        await LaunchAgentManager.set(enabled: true, bundlePath: Bundle.main.bundlePath)
-                    }
-                }
-            }
-        }
-
         Self.applyAttachOnlyOverrideIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }

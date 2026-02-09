@@ -16,9 +16,6 @@ let swabbleTriggersKey = "openclaw.swabbleTriggers"
 let voiceWakeTriggerChimeKey = "openclaw.voiceWakeTriggerChime"
 let voiceWakeSendChimeKey = "openclaw.voiceWakeSendChime"
 let showDockIconKey = "openclaw.showDockIcon"
-
-// Nix mode defaults
-let nixAutoLaunchAtLoginKey = "openclaw.nixAutoLaunchAtLogin"
 let defaultVoiceWakeTriggers = ["openclaw"]
 let voiceWakeMaxWords = 32
 let voiceWakeMaxWordLength = 64
