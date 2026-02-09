@@ -59,8 +59,11 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-conduct@openclaw.ai or via Discord DM to project maintainers.
+reported to the community leaders responsible for enforcement by:
+
+- Opening a private issue/discussion on GitHub
+- Contacting via [trust.openclaw.ai](https://trust.openclaw.ai)
+- See [SECURITY.md](./SECURITY.md) for additional reporting channels
 
 All complaints will be reviewed and investigated promptly and fairly.
 
