@@ -4,6 +4,8 @@ import { __testing } from "./web-search.js";
 const {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
+  isDirectPerplexityBaseUrl,
+  resolvePerplexityRequestModel,
   normalizeFreshness,
   resolveGrokApiKey,
   resolveGrokModel,
@@ -54,6 +56,32 @@ describe("web_search perplexity baseUrl defaults", () => {
   it("defaults to OpenRouter for unknown config key formats", () => {
     expect(resolvePerplexityBaseUrl(undefined, "config", "weird-key")).toBe(
       "https://openrouter.ai/api/v1",
+    );
+  });
+});
+
+describe("web_search perplexity model normalization", () => {
+  it("detects direct Perplexity host", () => {
+    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai")).toBe(true);
+    expect(isDirectPerplexityBaseUrl("https://api.perplexity.ai/")).toBe(true);
+    expect(isDirectPerplexityBaseUrl("https://openrouter.ai/api/v1")).toBe(false);
+  });
+
+  it("strips provider prefix for direct Perplexity", () => {
+    expect(resolvePerplexityRequestModel("https://api.perplexity.ai", "perplexity/sonar-pro")).toBe(
+      "sonar-pro",
+    );
+  });
+
+  it("keeps prefixed model for OpenRouter", () => {
+    expect(
+      resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
+    ).toBe("perplexity/sonar-pro");
+  });
+
+  it("keeps model unchanged when URL is invalid", () => {
+    expect(resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro")).toBe(
+      "perplexity/sonar-pro",
     );
   });
 });
