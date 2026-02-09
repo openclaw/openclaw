@@ -161,4 +161,39 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("Model set to");
     expect(result?.text ?? "").not.toContain("failed");
   });
+
+  it("persists thinkingLevel=off (does not clear)", async () => {
+    const directives = parseInlineDirectives("/think off");
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      thinkingLevel: "low",
+    };
+    const sessionStore = { "agent:main:dm:1": sessionEntry };
+
+    const result = await handleDirectiveOnly({
+      cfg: baseConfig(),
+      directives,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:dm:1",
+      storePath: "/tmp/sessions.json",
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      allowedModelCatalog,
+      resetModelOverride: false,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    });
+
+    expect(result?.text ?? "").not.toContain("failed");
+    expect(sessionEntry.thinkingLevel).toBe("off");
+    expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
 });
