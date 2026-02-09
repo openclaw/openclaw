@@ -676,15 +676,14 @@ export async function compactEmbeddedPiSessionDirect(
               {
                 agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
-                workspaceDir: params.workspaceDir,
+                workspaceDir: effectiveWorkspace,
                 messageProvider: params.messageProvider,
               },
             );
           } catch (err) {
-              log.warn(`before_compaction hook failed: ${String(err)}`);
-            }
+            log.warn(`before_compaction hook failed: ${String(err)}`);
+          }
         }
-
         const diagEnabled = log.isEnabled("debug");
         const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics) {
@@ -712,6 +711,7 @@ export async function compactEmbeddedPiSessionDirect(
         }
 
         const compactStartedAt = Date.now();
+        const messageCountCompactionInput = session.messages.length;
         const result = await compactWithSafetyTimeout(() =>
           session.compact(params.customInstructions),
         );
@@ -731,7 +731,7 @@ export async function compactEmbeddedPiSessionDirect(
           tokensAfter = undefined;
         }
         const messageCountAfter = session.messages.length;
-        const compactedCount = Math.max(0, messageCountBefore - messageCountAfter);
+        const compactedCount = Math.max(0, messageCountCompactionInput - messageCountAfter);
         const postMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics && postMetrics) {
           log.debug(
@@ -776,7 +776,7 @@ export async function compactEmbeddedPiSessionDirect(
               {
                 agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
-                workspaceDir: params.workspaceDir,
+                workspaceDir: effectiveWorkspace,
                 messageProvider: params.messageProvider,
               },
             );
