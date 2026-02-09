@@ -443,6 +443,14 @@ jobs:
           swiftlint --config .swiftlint.yml
           swiftformat --lint apps/macos/Sources --config .swiftformat
 
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
+
       - name: Swift build (release)
         run: |
           set -euo pipefail
