@@ -67,4 +67,54 @@ describe("buildWorkspaceSkillSnapshot", () => {
       "visible-skill",
     ]);
   });
+
+  it("applies skillFilter to restrict skills to the allowlist", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    await _writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await _writeSkill({
+      dir: path.join(workspaceDir, "skills", "bravo"),
+      name: "bravo",
+      description: "Bravo skill",
+    });
+    await _writeSkill({
+      dir: path.join(workspaceDir, "skills", "charlie"),
+      name: "charlie",
+      description: "Charlie skill",
+    });
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      skillFilter: ["alpha", "charlie"],
+    });
+
+    // Only the skills in the filter should appear in the prompt
+    expect(snapshot.prompt).toContain("alpha");
+    expect(snapshot.prompt).not.toContain("bravo");
+    expect(snapshot.prompt).toContain("charlie");
+    // The skills list should also be filtered
+    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual(["alpha", "charlie"]);
+  });
+
+  it("returns empty snapshot when skillFilter is an empty array", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    await _writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      skillFilter: [],
+    });
+
+    expect(snapshot.prompt).toBe("");
+    expect(snapshot.skills).toEqual([]);
+  });
 });
