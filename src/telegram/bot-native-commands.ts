@@ -495,7 +495,7 @@ export const registerTelegramNativeCommands = ({
             channel: "telegram",
             accountId,
             peer: {
-              kind: isGroup ? "group" : "dm",
+              kind: isGroup ? "group" : "direct",
               id: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
             },
             parentPeer,

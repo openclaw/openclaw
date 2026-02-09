@@ -77,7 +77,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       channel: "signal",
       accountId: deps.accountId,
       peer: {
-        kind: entry.isGroup ? "group" : "dm",
+        kind: entry.isGroup ? "group" : "direct",
         id: entry.isGroup ? (entry.groupId ?? "unknown") : entry.senderPeerId,
       },
     });
@@ -370,7 +370,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         accountId: deps.accountId,
         peer: {
-          kind: isGroup ? "group" : "dm",
+          kind: isGroup ? "group" : "direct",
           id: isGroup ? (groupId ?? "unknown") : senderPeerId,
         },
       });

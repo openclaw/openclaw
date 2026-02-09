@@ -454,7 +454,7 @@ describe("initSessionState channel reset overrides", () => {
       session: {
         store: storePath,
         idleMinutes: 60,
-        resetByType: { dm: { mode: "idle", idleMinutes: 10 } },
+        resetByType: { direct: { mode: "idle", idleMinutes: 10 } },
         resetByChannel: { discord: { mode: "idle", idleMinutes: 10080 } },
       },
     } as OpenClawConfig;
