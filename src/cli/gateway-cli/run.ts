@@ -402,7 +402,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       gatewayLog.info("Gateway container is ready and healthy");
 
       // Set up graceful shutdown handlers
+      const abortController = new AbortController();
       const shutdown = async () => {
+        abortController.abort();
         gatewayLog.info("Shutting down secure gateway...");
         try {
           await stopGatewayContainer();
@@ -437,8 +439,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
       // P1 Fix: Monitor container health periodically
       const healthCheckLoop = async () => {
-        while (true) {
+        while (!abortController.signal.aborted) {
           await new Promise((resolve) => setTimeout(resolve, 10000)); // Check every 10s
+          if (abortController.signal.aborted) break;
           const isRunning = await isGatewayContainerRunning();
           if (!isRunning) {
             gatewayLog.error("Gateway container stopped unexpectedly");

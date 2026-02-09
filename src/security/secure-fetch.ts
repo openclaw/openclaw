@@ -121,21 +121,13 @@ async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promis
   }
 
   // Route through proxy, preserving all request details
+  // Spread init first, then override with proxy-specific fields
   // PROXY_URL is guaranteed to be set in secure mode (we throw at startup if not)
   return originalFetch(PROXY_URL!, {
+    ...init,
     method,
     headers,
     body,
-    // Preserve other init options
-    cache: init?.cache,
-    credentials: init?.credentials,
-    integrity: init?.integrity,
-    keepalive: init?.keepalive,
-    mode: init?.mode,
-    redirect: init?.redirect,
-    referrer: init?.referrer,
-    referrerPolicy: init?.referrerPolicy,
-    signal: init?.signal,
   });
 }
 

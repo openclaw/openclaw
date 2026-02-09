@@ -69,10 +69,14 @@ async function startRelayContainer(proxyPort: number, proxySocketPath?: string):
     // ignore
   }
 
+  // Socket mode: start directly on internal network (no bridge exposure)
+  // TCP mode: must start on bridge to reach host.docker.internal
+  const network = proxySocketPath ? SECURE_NETWORK_NAME : "bridge";
+
   const args = [
     "run", "-d",
     "--name", RELAY_CONTAINER_NAME,
-    "--network", "bridge",
+    "--network", network,
     "--restart", "unless-stopped",
   ];
 
@@ -96,8 +100,11 @@ async function startRelayContainer(proxyPort: number, proxySocketPath?: string):
 
   await execDocker(args);
 
-  // Also connect relay to the internal network so the gateway container can reach it
-  await execDocker(["network", "connect", SECURE_NETWORK_NAME, RELAY_CONTAINER_NAME]);
+  // TCP mode: also connect relay to the internal network so the gateway container can reach it
+  // Socket mode: relay already started on internal network, no extra connect needed
+  if (!proxySocketPath) {
+    await execDocker(["network", "connect", SECURE_NETWORK_NAME, RELAY_CONTAINER_NAME]);
+  }
 
   const mode = proxySocketPath ? `socket:${proxySocketPath}` : `tcp:host.docker.internal:${proxyPort}`;
   logger.info(`Relay container started: ${RELAY_CONTAINER_NAME} (${mode} → port ${proxyPort})`);
@@ -212,6 +219,10 @@ export async function startGatewayContainer(opts: GatewayContainerOptions): Prom
   for (const [key, value] of Object.entries(filteredEnv)) {
     if (explicitlySetKeys.has(key.toUpperCase())) {
       logger.debug(`Skipping explicitly set env var: ${key}`);
+      continue;
+    }
+    if (/[\n\r]/.test(value ?? "")) {
+      logger.warn(`Skipping env var with newline: ${key}`);
       continue;
     }
     args.push("-e", `${key}=${value}`);

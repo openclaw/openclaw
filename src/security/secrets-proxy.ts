@@ -1,13 +1,36 @@
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import fs from "node:fs";
+import path from "node:path";
 import crypto from "node:crypto";
 import { request } from "undici";
 import type { SecretRegistry } from "./secrets-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadAllowlist, isDomainAllowed } from "./secrets-proxy-allowlist.js";
 import { resolveOAuthToken } from "./secrets-registry.js";
+import { STATE_DIR } from "../config/paths.js";
 
 const logger = createSubsystemLogger("security/secrets-proxy");
+
+// ---------------------------------------------------------------------------
+// Allowlist cache — re-reads from disk only when the config file changes
+// ---------------------------------------------------------------------------
+const ALLOWLIST_CONFIG_PATH = path.join(STATE_DIR, "secrets-proxy-config.json");
+let _cachedAllowlist: string[] | null = null;
+let _allowlistMtimeMs = 0;
+
+function getCachedAllowlist(): string[] {
+  try {
+    const stat = fs.statSync(ALLOWLIST_CONFIG_PATH, { throwIfNoEntry: false });
+    const mtime = stat?.mtimeMs ?? 0;
+    if (!_cachedAllowlist || mtime !== _allowlistMtimeMs) {
+      _cachedAllowlist = loadAllowlist();
+      _allowlistMtimeMs = mtime;
+    }
+  } catch {
+    if (!_cachedAllowlist) _cachedAllowlist = loadAllowlist();
+  }
+  return _cachedAllowlist;
+}
 
 // DoS Protection Limits (from SECURITY.MD)
 const PLACEHOLDER_LIMITS = {
@@ -91,15 +114,20 @@ function resolveConfigPath(path: string, registry: SecretRegistry): string | obj
  */
 async function replacePlaceholders(text: string, registry: SecretRegistry): Promise<string> {
   let count = 0;
+  let limitHit = false;
   const startTime = Date.now();
 
   const checkLimits = () => {
+    if (limitHit) return true;
     if (Date.now() - startTime > PLACEHOLDER_LIMITS.timeoutMs) {
       logger.warn(`Placeholder replacement timeout reached`);
+      limitHit = true;
       return true;
     }
-    if (count++ >= PLACEHOLDER_LIMITS.maxReplacements) {
+    count++;
+    if (count > PLACEHOLDER_LIMITS.maxReplacements) {
       logger.warn(`Placeholder replacement limit reached (${PLACEHOLDER_LIMITS.maxReplacements})`);
+      limitHit = true;
       return true;
     }
     return false;
@@ -206,8 +234,8 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
   const { registry, authToken } = opts;
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // Load allowlist per-request so CLI changes take effect without restart
-    const allowedDomains = loadAllowlist();
+    // Cached allowlist: re-reads from disk only when config file mtime changes
+    const allowedDomains = getCachedAllowlist();
     // Set request timeout
     req.setTimeout(REQUEST_TIMEOUT_MS, () => {
       logger.warn(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`);
@@ -329,11 +357,11 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
           continue;
         }
         if (typeof value === "string") {
-          headers[key] = await replacePlaceholders(value, registry);
+          headers[lowerKey] = await replacePlaceholders(value, registry);
         } else if (Array.isArray(value)) {
           // P1 Fix: Handle string[] headers by joining
           const replaced = await Promise.all(value.map((v) => replacePlaceholders(v, registry)));
-          headers[key] = replaced.join(", ");
+          headers[lowerKey] = replaced.join(", ");
         }
       }
 
@@ -396,6 +424,9 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
   // Validate: exactly one of socketPath or port must be provided
   if (!opts.socketPath && !opts.port) {
     throw new Error("startSecretsProxy requires either socketPath (Linux/macOS) or port (Windows)");
+  }
+  if (opts.socketPath && opts.port) {
+    throw new Error("startSecretsProxy: socketPath and port are mutually exclusive");
   }
 
   return new Promise((resolve, reject) => {
