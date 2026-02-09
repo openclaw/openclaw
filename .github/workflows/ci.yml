@@ -386,6 +386,31 @@ jobs:
       - name: Run ${{ matrix.task }}
         run: ${{ matrix.command }}
 
+  # Check for files that grew past LOC threshold in this PR (delta-only).
+  code-size:
+    if: github.event_name == 'pull_request'
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}
+
+      - name: Check code file sizes
+        run: |
+          python scripts/analyze_code_files.py \
+            --compare-to origin/${{ github.base_ref }} \
+            --threshold 1000
+
   secrets:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:

@@ -2,13 +2,18 @@
 """
 Lists the longest and shortest code files in the project, and counts duplicated function names across files. Useful for identifying potential refactoring targets and enforcing code size guidelines.
 Threshold can be set to warn about files longer or shorter than a certain number of lines.
+
+CI mode (--compare-to): Only warns about files that grew past threshold compared to a base ref.
+Use --strict to exit non-zero on violations for CI gating.
 """
 
 import os
 import re
+import sys
+import subprocess
 import argparse
 from pathlib import Path
-from typing import List, Tuple, Dict, Set
+from typing import List, Tuple, Dict, Set, Optional
 from collections import defaultdict
 
 # File extensions to consider as code files
@@ -23,7 +28,10 @@ CODE_EXTENSIONS = {
 SKIP_DIRS = {
     'node_modules', '.git', 'dist', 'build', 'coverage',
     '__pycache__', '.turbo', 'out', '.worktrees', 'vendor',
-    'Pods', 'DerivedData', '.gradle', '.idea'
+    'Pods', 'DerivedData', '.gradle', '.idea',
+    'Swabble',  # Separate Swift package
+    'skills',   # Standalone skill scripts
+    '.pi',      # Pi editor extensions
 }
 
 # Filename patterns to skip in short-file warnings (barrel exports, stubs)
@@ -125,12 +133,7 @@ def extract_functions(file_path: Path) -> Set[str]:
     except Exception:
         return set()
     
-    functions = set()
-    for pattern in TS_FUNCTION_PATTERNS:
-        for match in pattern.finditer(content):
-            functions.add(match.group(1))
-    
-    return functions
+    return extract_functions_from_content(content)
 
 
 def find_duplicate_functions(files: List[Tuple[Path, int]], root_dir: Path) -> Dict[str, List[Path]]:
@@ -153,6 +156,170 @@ def find_duplicate_functions(files: List[Tuple[Path, int]], root_dir: Path) -> D
     
     # Filter to only duplicates
     return {name: paths for name, paths in function_locations.items() if len(paths) > 1}
+
+
+def validate_git_ref(root_dir: Path, ref: str) -> bool:
+    """Validate that a git ref exists. Exits with error if not."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--verify', ref],
+            capture_output=True,
+            cwd=root_dir,
+            encoding='utf-8',
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def get_file_content_at_ref(file_path: Path, root_dir: Path, ref: str) -> Optional[str]:
+    """Get content of a file at a specific git ref. Returns None if file doesn't exist at ref."""
+    try:
+        relative_path = file_path.relative_to(root_dir)
+        # Use forward slashes for git paths
+        git_path = str(relative_path).replace('\\', '/')
+        result = subprocess.run(
+            ['git', 'show', f'{ref}:{git_path}'],
+            capture_output=True,
+            cwd=root_dir,
+            encoding='utf-8',
+            errors='ignore',
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            # "does not exist" or "exists on disk, but not in" = file missing at ref (OK)
+            if 'does not exist' in stderr or 'exists on disk' in stderr:
+                return None
+            # Other errors (bad ref, git broken) = genuine failure
+            if stderr:
+                print(f"⚠️  git show error for {git_path}: {stderr}", file=sys.stderr)
+            return None
+        return result.stdout
+    except Exception as e:
+        print(f"⚠️  failed to read {file_path} at {ref}: {e}", file=sys.stderr)
+        return None
+
+
+def get_line_count_at_ref(file_path: Path, root_dir: Path, ref: str) -> Optional[int]:
+    """Get line count of a file at a specific git ref. Returns None if file doesn't exist at ref."""
+    content = get_file_content_at_ref(file_path, root_dir, ref)
+    if content is None:
+        return None
+    return len(content.splitlines())
+
+
+def extract_functions_from_content(content: str) -> Set[str]:
+    """Extract function names from TypeScript content string."""
+    functions = set()
+    for pattern in TS_FUNCTION_PATTERNS:
+        for match in pattern.finditer(content):
+            functions.add(match.group(1))
+    return functions
+
+
+def get_changed_files(root_dir: Path, compare_ref: str) -> Set[str]:
+    """Get set of files changed between compare_ref and HEAD (relative paths with forward slashes)."""
+    try:
+        result = subprocess.run(
+            ['git', 'diff', '--name-only', compare_ref, 'HEAD'],
+            capture_output=True,
+            cwd=root_dir,
+            encoding='utf-8',
+            errors='ignore',
+        )
+        if result.returncode != 0:
+            return set()
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+    except Exception:
+        return set()
+
+
+def find_duplicate_regressions(
+    files: List[Tuple[Path, int]],
+    root_dir: Path,
+    compare_ref: str,
+) -> Dict[str, List[Path]]:
+    """
+    Find new duplicate function names that didn't exist at the base ref.
+    Only checks functions in files that changed to keep CI fast.
+    Returns dict of function_name -> list of current file paths, only for
+    duplicates that are new (weren't duplicated at compare_ref).
+    """
+    # Build current duplicate map
+    current_dupes = find_duplicate_functions(files, root_dir)
+    if not current_dupes:
+        return {}
+
+    # Get changed files to scope the comparison
+    changed_files = get_changed_files(root_dir, compare_ref)
+    if not changed_files:
+        return {}  # Nothing changed, no new duplicates possible
+
+    # Only check duplicate functions that involve at least one changed file
+    relevant_dupes: Dict[str, List[Path]] = {}
+    for func_name, paths in current_dupes.items():
+        involves_changed = any(
+            str(p.relative_to(root_dir)).replace('\\', '/') in changed_files
+            for p in paths
+        )
+        if involves_changed:
+            relevant_dupes[func_name] = paths
+
+    if not relevant_dupes:
+        return {}
+
+    # For relevant duplicates, check if they were already duplicated at base ref
+    # Only need to read base versions of files involved in these duplicates
+    files_to_check: Set[Path] = set()
+    for paths in relevant_dupes.values():
+        files_to_check.update(paths)
+
+    base_function_locations: Dict[str, List[Path]] = defaultdict(list)
+    for file_path in files_to_check:
+        if file_path.suffix.lower() not in {'.ts', '.tsx'}:
+            continue
+        content = get_file_content_at_ref(file_path, root_dir, compare_ref)
+        if content is None:
+            continue
+        functions = extract_functions_from_content(content)
+        for func in functions:
+            if func in SKIP_DUPLICATE_FUNCTIONS:
+                continue
+            if any(func.startswith(prefix) for prefix in SKIP_DUPLICATE_PREFIXES):
+                continue
+            base_function_locations[func].append(file_path)
+
+    base_dupes = {name for name, paths in base_function_locations.items() if len(paths) > 1}
+
+    # Return only new duplicates
+    return {name: paths for name, paths in relevant_dupes.items() if name not in base_dupes}
+
+
+def find_threshold_regressions(
+    files: List[Tuple[Path, int]],
+    root_dir: Path,
+    compare_ref: str,
+    threshold: int,
+) -> List[Tuple[Path, int, Optional[int]]]:
+    """
+    Find files that crossed the threshold compared to a base ref.
+    Returns list of (path, current_lines, base_lines) for files that:
+    - Were under threshold (or didn't exist) at compare_ref
+    - Are now at or over threshold
+    """
+    regressions = []
+    
+    for file_path, current_lines in files:
+        if current_lines < threshold:
+            continue  # Not over threshold now, skip
+        
+        base_lines = get_line_count_at_ref(file_path, root_dir, compare_ref)
+        
+        # Regression if: file is new OR was under threshold before
+        if base_lines is None or base_lines < threshold:
+            regressions.append((file_path, current_lines, base_lines))
+    
+    return regressions
 
 
 def main():
@@ -189,10 +356,72 @@ def main():
         default='.',
         help='Directory to scan (default: current directory)'
     )
+    parser.add_argument(
+        '--compare-to',
+        type=str,
+        default=None,
+        help='Git ref to compare against (e.g., origin/main). Only warn about files that grew past threshold.'
+    )
+    parser.add_argument(
+        '--strict',
+        action='store_true',
+        help='Exit with non-zero status if any violations found (for CI)'
+    )
     
     args = parser.parse_args()
     
     root_dir = Path(args.directory).resolve()
+    
+    # CI delta mode: only show regressions
+    if args.compare_to:
+        print(f"\n📂 Scanning: {root_dir}")
+        print(f"🔍 Comparing to: {args.compare_to}\n")
+
+        if not validate_git_ref(root_dir, args.compare_to):
+            print(f"❌ Invalid git ref: {args.compare_to}", file=sys.stderr)
+            print("   Make sure the ref exists (e.g. run 'git fetch origin <branch>')", file=sys.stderr)
+            sys.exit(2)
+        
+        files = find_code_files(root_dir)
+        violations = False
+
+        # Check file length regressions
+        regressions = find_threshold_regressions(files, root_dir, args.compare_to, args.threshold)
+        
+        if regressions:
+            print(f"⚠️  {len(regressions)} file(s) crossed {args.threshold} line threshold:\n")
+            for file_path, current, base in regressions:
+                relative_path = file_path.relative_to(root_dir)
+                if base is None:
+                    print(f"   {relative_path}: {current:,} lines (new file)")
+                else:
+                    print(f"   {relative_path}: {base:,} → {current:,} lines (+{current - base:,})")
+            print()
+            violations = True
+        else:
+            print(f"✅ No files crossed {args.threshold} line threshold")
+
+        # Check new duplicate function names
+        new_dupes = find_duplicate_regressions(files, root_dir, args.compare_to)
+
+        if new_dupes:
+            print(f"⚠️  {len(new_dupes)} new duplicate function name(s):\n")
+            for func_name in sorted(new_dupes.keys()):
+                paths = new_dupes[func_name]
+                print(f"   {func_name}:")
+                for path in paths:
+                    print(f"       {path.relative_to(root_dir)}")
+            print()
+            violations = True
+        else:
+            print(f"✅ No new duplicate function names")
+
+        print()
+        if args.strict and violations:
+            sys.exit(1)
+        
+        return
+    
     print(f"\n📂 Scanning: {root_dir}\n")
     
     # Find and sort files by line count
@@ -306,6 +535,10 @@ def main():
         print(f"\n✅ No duplicate function names")
     
     print()
+    
+    # Exit with error if --strict and there are violations
+    if args.strict and long_warnings:
+        sys.exit(1)
 
 
 if __name__ == '__main__':
