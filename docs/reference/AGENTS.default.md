@@ -113,6 +113,7 @@ git commit -m "Add Clawd workspace"
 - **OpenHue CLI** — Philips Hue lighting control for scenes and automations.
 - **OpenAI Whisper** — Local speech-to-text for quick dictation and voicemail transcripts.
 - **Gemini CLI** — Google Gemini models from the terminal for fast Q&A.
+- **ffmpeg** — Video and audio editing — trim, convert, filter, merge, extract audio, create GIFs, and inspect media.
 - **agent-tools** — Utility toolkit for automations and helper scripts.
 
 ## Usage Notes
