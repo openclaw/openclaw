@@ -5,6 +5,9 @@ Threshold can be set to warn about files longer or shorter than a certain number
 
 CI mode (--compare-to): Only warns about files that grew past threshold compared to a base ref.
 Use --strict to exit non-zero on violations for CI gating.
+
+GitHub Actions: when GITHUB_ACTIONS=true, emits ::error annotations on flagged files
+and writes a Markdown job summary to $GITHUB_STEP_SUMMARY (if set).
 """
 
 import os
@@ -332,6 +335,64 @@ def find_threshold_regressions(
     return crossed, grew
 
 
+def _write_github_summary(
+    summary_path: str,
+    crossed: List[Tuple[Path, int, Optional[int]]],
+    grew: List[Tuple[Path, int, int]],
+    new_dupes: Dict[str, List[Path]],
+    root_dir: Path,
+    threshold: int,
+    compare_ref: str,
+) -> None:
+    """Write a Markdown job summary to $GITHUB_STEP_SUMMARY."""
+    lines: List[str] = []
+    lines.append("## Code Size Check Failed\n")
+
+    if crossed:
+        lines.append(f"### {len(crossed)} file(s) crossed the {threshold}-line threshold\n")
+        lines.append("| File | Before | After | Delta |")
+        lines.append("|------|-------:|------:|------:|")
+        for file_path, current, base in crossed:
+            rel = str(file_path.relative_to(root_dir)).replace('\\', '/')
+            before = f"{base:,}" if base is not None else "new"
+            lines.append(f"| `{rel}` | {before} | {current:,} | +{current - (base or 0):,} |")
+        lines.append("")
+
+    if grew:
+        lines.append(f"### {len(grew)} already-large file(s) grew larger\n")
+        lines.append("| File | Before | After | Delta |")
+        lines.append("|------|-------:|------:|------:|")
+        for file_path, current, base in grew:
+            rel = str(file_path.relative_to(root_dir)).replace('\\', '/')
+            lines.append(f"| `{rel}` | {base:,} | {current:,} | +{current - base:,} |")
+        lines.append("")
+
+    if new_dupes:
+        lines.append(f"### {len(new_dupes)} new duplicate function name(s)\n")
+        lines.append("| Function | Files |")
+        lines.append("|----------|-------|")
+        for func_name in sorted(new_dupes.keys()):
+            paths = new_dupes[func_name]
+            file_list = ", ".join(f"`{str(p.relative_to(root_dir)).replace(chr(92), '/')}`" for p in paths)
+            lines.append(f"| `{func_name}` | {file_list} |")
+        lines.append("")
+
+    lines.append("<details><summary>How to fix</summary>\n")
+    lines.append("- Split large files into smaller, focused modules")
+    lines.append("- Extract helpers, types, or constants into separate files")
+    lines.append("- See `AGENTS.md` for guidelines (~500–700 LOC target)")
+    lines.append(f"- This check compares your PR against `{compare_ref}`")
+    lines.append(f"- Only code files are checked: {', '.join(f'`{e}`' for e in sorted(CODE_EXTENSIONS))}")
+    lines.append("- Docs, test names, and config files are **not** affected")
+    lines.append("\n</details>")
+
+    try:
+        with open(summary_path, 'a', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+    except Exception as e:
+        print(f"⚠️  Failed to write job summary: {e}", file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Analyze code files: list longest/shortest files, find duplicate function names'
@@ -438,6 +499,28 @@ def main():
 
         print()
         if args.strict and violations:
+            # Emit GitHub Actions file annotations so violations appear inline in the PR diff
+            in_gha = os.environ.get('GITHUB_ACTIONS') == 'true'
+            if in_gha:
+                for file_path, current, base in crossed:
+                    rel = str(file_path.relative_to(root_dir)).replace('\\', '/')
+                    if base is None:
+                        print(f"::error file={rel},title=File over {args.threshold} lines::{rel} is {current:,} lines (new file). Split into smaller modules.")
+                    else:
+                        print(f"::error file={rel},title=File crossed {args.threshold} lines::{rel} grew from {base:,} to {current:,} lines (+{current - base:,}). Split into smaller modules.")
+                for file_path, current, base in grew:
+                    rel = str(file_path.relative_to(root_dir)).replace('\\', '/')
+                    print(f"::error file={rel},title=Large file grew larger::{rel} is already {base:,} lines and grew to {current:,} (+{current - base:,}). Consider refactoring.")
+                for func_name in sorted(new_dupes.keys()):
+                    for p in new_dupes[func_name]:
+                        rel = str(p.relative_to(root_dir)).replace('\\', '/')
+                        print(f"::error file={rel},title=Duplicate function '{func_name}'::Function '{func_name}' appears in multiple files. Centralize or rename.")
+
+            # Write GitHub Actions job summary (visible in the Actions check details)
+            summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+            if summary_path:
+                _write_github_summary(summary_path, crossed, grew, new_dupes, root_dir, args.threshold, args.compare_to)
+
             # Print actionable summary so contributors know what to do
             print("─" * 60)
             print("❌ Code size check failed\n")
