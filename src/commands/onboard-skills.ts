@@ -55,18 +55,19 @@ export async function setupSkills(
 ): Promise<OpenClawConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
-  const missing = report.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist);
+  const unsupportedOs = report.skills.filter(
+    (s) => !s.disabled && !s.blockedByAllowlist && s.missing.os.length > 0,
+  );
+  const missing = report.skills.filter(
+    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && s.missing.os.length === 0,
+  );
   const blocked = report.skills.filter((s) => s.blockedByAllowlist);
-
-  const needsBrewPrompt =
-    process.platform !== "win32" &&
-    report.skills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
-    !(await detectBinary("brew"));
 
   await prompter.note(
     [
       `Eligible: ${eligible.length}`,
       `Missing requirements: ${missing.length}`,
+      `Unsupported on this OS: ${unsupportedOs.length}`,
       `Blocked by allowlist: ${blocked.length}`,
     ].join("\n"),
     "Skills status",
@@ -80,48 +81,10 @@ export async function setupSkills(
     return cfg;
   }
 
-  if (needsBrewPrompt) {
-    await prompter.note(
-      [
-        "Many skill dependencies are shipped via Homebrew.",
-        "Without brew, you'll need to build from source or download releases manually.",
-      ].join("\n"),
-      "Homebrew recommended",
-    );
-    const showBrewInstall = await prompter.confirm({
-      message: "Show Homebrew install command?",
-      initialValue: true,
-    });
-    if (showBrewInstall) {
-      await prompter.note(
-        [
-          "Run:",
-          '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
-        ].join("\n"),
-        "Homebrew install",
-      );
-    }
-  }
-
-  const nodeManager = (await prompter.select({
-    message: "Preferred node manager for skill installs",
-    options: resolveNodeManagerOptions(),
-  })) as "npm" | "pnpm" | "bun";
-
-  let next: OpenClawConfig = {
-    ...cfg,
-    skills: {
-      ...cfg.skills,
-      install: {
-        ...cfg.skills?.install,
-        nodeManager,
-      },
-    },
-  };
-
   const installable = missing.filter(
     (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
   );
+  let next: OpenClawConfig = cfg;
   if (installable.length > 0) {
     const toInstall = await prompter.multiselect({
       message: "Install missing skill dependencies",
@@ -140,6 +103,59 @@ export async function setupSkills(
     });
 
     const selected = toInstall.filter((name) => name !== "__skip__");
+
+    const selectedSkills = selected
+      .map((name) => installable.find((s) => s.name === name))
+      .filter((item): item is (typeof installable)[number] => Boolean(item));
+
+    const needsBrewPrompt =
+      process.platform !== "win32" &&
+      selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
+      !(await detectBinary("brew"));
+
+    if (needsBrewPrompt) {
+      await prompter.note(
+        [
+          "Many skill dependencies are shipped via Homebrew.",
+          "Without brew, you'll need to build from source or download releases manually.",
+        ].join("\n"),
+        "Homebrew recommended",
+      );
+      const showBrewInstall = await prompter.confirm({
+        message: "Show Homebrew install command?",
+        initialValue: true,
+      });
+      if (showBrewInstall) {
+        await prompter.note(
+          [
+            "Run:",
+            '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+          ].join("\n"),
+          "Homebrew install",
+        );
+      }
+    }
+
+    const needsNodeManagerPrompt = selectedSkills.some((skill) =>
+      skill.install.some((option) => option.kind === "node"),
+    );
+    if (needsNodeManagerPrompt) {
+      const nodeManager = (await prompter.select({
+        message: "Preferred node manager for skill installs",
+        options: resolveNodeManagerOptions(),
+      })) as "npm" | "pnpm" | "bun";
+      next = {
+        ...next,
+        skills: {
+          ...next.skills,
+          install: {
+            ...next.skills?.install,
+            nodeManager,
+          },
+        },
+      };
+    }
+
     for (const name of selected) {
       const target = installable.find((s) => s.name === name);
       if (!target || target.install.length === 0) {
