@@ -157,7 +157,7 @@ def find_duplicate_functions(files: List[Tuple[Path, int]], root_dir: Path) -> D
 
 def main():
     parser = argparse.ArgumentParser(
-        description='List the longest and shortest code files in a project'
+        description='Analyze code files: list longest/shortest files, find duplicate function names'
     )
     parser.add_argument(
         '-t', '--threshold',

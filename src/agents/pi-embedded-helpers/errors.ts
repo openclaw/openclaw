@@ -50,16 +50,18 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
-  if (!isContextOverflowError(errorMessage)) {
-    return false;
-  }
   const lower = errorMessage.toLowerCase();
-  return (
+  const hasCompactionTerm =
     lower.includes("summarization failed") ||
     lower.includes("auto-compaction") ||
     lower.includes("compaction failed") ||
-    lower.includes("compaction")
-  );
+    lower.includes("compaction");
+  if (!hasCompactionTerm) {
+    return false;
+  }
+  // For compaction failures, also accept "context overflow" without colon
+  // since the error message itself describes a compaction/summarization failure
+  return isContextOverflowError(errorMessage) || lower.includes("context overflow");
 }
 
 const ERROR_PAYLOAD_PREFIX_RE =
