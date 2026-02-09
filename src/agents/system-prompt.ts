@@ -372,9 +372,35 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
-  // For "none" mode, return just the basic identity line
+  // For "none" mode, skip OpenClaw boilerplate but keep workspace files + tool listing + runtime
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    const noneLines: string[] = [];
+    // Tool listing (just the available tool names)
+    if (toolLines.length > 0) {
+      noneLines.push("Available tools: " + toolLines.join(", "));
+      noneLines.push("");
+    }
+    // Workspace files (AGENTS.md, SOUL.md, TOOLS.md — the actual system prompt)
+    const noneContextFiles = params.contextFiles ?? [];
+    for (const file of noneContextFiles) {
+      if (file.content?.trim()) {
+        noneLines.push(file.content);
+        noneLines.push("");
+      }
+    }
+    // Runtime info (model, host)
+    if (params.runtimeInfo) {
+      const ri = params.runtimeInfo;
+      const parts = [
+        ri.agentId ? `agent=${ri.agentId}` : "",
+        ri.host ? `host=${ri.host}` : "",
+        ri.model ? `model=${ri.model}` : "",
+      ].filter(Boolean);
+      if (parts.length > 0) {
+        noneLines.push(`Runtime: ${parts.join(" | ")}`);
+      }
+    }
+    return noneLines.join("\n");
   }
 
   const lines = [

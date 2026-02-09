@@ -341,7 +341,15 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = isSubagentSessionKey(params.sessionKey) ? "minimal" : "full";
+    // CLAWD PATCH: Use "none" prompt mode to skip OpenClaw boilerplate.
+    // Our workspace files (AGENTS.md) contain the full system prompt.
+    // This keeps the system prompt lean for small context windows (8K).
+    const promptMode =
+      process.env.CLAWD_LEAN_PROMPT === "1"
+        ? ("none" as const)
+        : isSubagentSessionKey(params.sessionKey)
+          ? "minimal"
+          : "full";
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],

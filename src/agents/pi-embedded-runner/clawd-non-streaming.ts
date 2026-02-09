@@ -208,7 +208,15 @@ export function createNonStreamingOllamaFn(toolDefs: ToolDef[]): StreamFn {
           messages.unshift({ role: "system", content: sysContent });
         }
 
-        const body: any = { model: model.id, messages, stream: false };
+        // Ollama defaults to num_ctx=2048 unless explicitly set.
+        // Our system prompt is ~20K chars (~6K tokens), so we need at least 16K context.
+        const numCtx = parseInt(process.env.NUM_CTX || "16384", 10);
+        const body: any = {
+          model: model.id,
+          messages,
+          stream: false,
+          options: { num_ctx: numCtx },
+        };
         if (tools.length > 0) {
           body.tools = tools;
           body.tool_choice = "auto";
@@ -216,27 +224,23 @@ export function createNonStreamingOllamaFn(toolDefs: ToolDef[]): StreamFn {
 
         if (process.env.CLAWDBOT_DEBUG_TOOLS) {
           console.error(
-            `[CLAWD] non-streaming: model=${model.id} tools=${tools.length} msgs=${messages.length}`,
+            `[CLAWD] non-streaming: model=${model.id} tools=${tools.length} msgs=${messages.length} num_ctx=${numCtx}`,
           );
-          // Dump context keys and system prompt for debugging
-          console.error(`[CLAWD] context keys: ${Object.keys(context).join(", ")}`);
-          if (context.system) {
-            const sys =
-              typeof context.system === "string" ? context.system : JSON.stringify(context.system);
-            console.error(`[CLAWD] context.system (${sys.length} chars): ${sys.slice(0, 500)}...`);
-          }
-          if (context.systemPrompt) {
-            console.error(
-              `[CLAWD] context.systemPrompt exists (${String(context.systemPrompt).length} chars)`,
-            );
-          }
-          // Also dump first few messages
-          for (let i = 0; i < Math.min(messages.length, 3); i++) {
-            const m = messages[i];
-            const c = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-            console.error(
-              `[CLAWD] msg[${i}] role=${m.role} (${c.length} chars): ${c.slice(0, 200)}...`,
-            );
+          // Dump system prompt to file for inspection
+          const sysMsg = messages.find((m: { role: string }) => m.role === "system");
+          if (sysMsg) {
+            try {
+              const nodeFs = await import("node:fs");
+              nodeFs.writeFileSync(
+                "/tmp/clawd-system-prompt.txt",
+                (sysMsg as { content: string }).content || "",
+              );
+              console.error(
+                `[CLAWD] system prompt dumped to /tmp/clawd-system-prompt.txt (${((sysMsg as { content: string }).content || "").length} chars)`,
+              );
+            } catch (e) {
+              console.error(`[CLAWD] dump failed: ${e}`);
+            }
           }
         }
 
