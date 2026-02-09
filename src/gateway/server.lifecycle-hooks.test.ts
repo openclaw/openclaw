@@ -79,4 +79,25 @@ describe("gateway lifecycle hook wiring", () => {
     const port = await getFreePort();
     await expect(startGatewayServer(port)).rejects.toThrow("hard-stop");
   });
+
+  test("does not block close when gateway stop hooks throw fail-closed errors", async () => {
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    mocked.hookRunner.runGatewayPreStop.mockRejectedValueOnce(
+      new PluginHookExecutionError({
+        hookName: "gateway_pre_stop",
+        pluginId: "policy",
+        message: "pre-stop denied",
+      }),
+    );
+    mocked.hookRunner.runGatewayStop.mockRejectedValueOnce(
+      new PluginHookExecutionError({
+        hookName: "gateway_stop",
+        pluginId: "policy",
+        message: "stop denied",
+      }),
+    );
+
+    await expect(server.close({ reason: "test-shutdown" })).resolves.toBeUndefined();
+  });
 });

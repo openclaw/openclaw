@@ -39,9 +39,38 @@ import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 
-const LIFECYCLE_PHASE_TO_HOOK: Partial<Record<PluginLifecyclePhase, PluginHookName>> = {
+const LIFECYCLE_CANONICAL_PHASE_TO_HOOK: Partial<Record<PluginLifecyclePhase, PluginHookName>> = {
+  "boot.pre": "gateway_pre_start",
+  "boot.post": "gateway_start",
+  "shutdown.pre": "gateway_pre_stop",
+  "shutdown.post": "gateway_stop",
+  "agent.pre": "before_agent_start",
+  "agent.post": "agent_end",
+  "request.pre": "message_received",
+  "request.post": "request_post",
+  "recall.pre": "before_recall",
+  "recall.post": "after_recall",
+  error: "agent_error",
+  "response.error": "response_error",
+  "tool.error": "tool_error",
+  "message.pre": "message_sending",
+  "message.post": "message_sent",
+  "tool.pre": "before_tool_call",
+  "tool.post": "after_tool_call",
+  "memory.compaction.pre": "before_compaction",
+  "memory.compaction.post": "after_compaction",
+};
+
+const LIFECYCLE_ALIAS_PHASE_TO_HOOK: Partial<Record<PluginLifecyclePhase, PluginHookName>> = {
+  preBoot: "gateway_pre_start",
+  postBoot: "gateway_start",
+  preShutdown: "gateway_pre_stop",
+  postShutdown: "gateway_stop",
+  preAgent: "before_agent_start",
   preRequest: "message_received",
+  postRequestIngress: "request_post",
   preRecall: "before_recall",
+  postRecall: "after_recall",
   preResponse: "message_sending",
   preToolExecution: "before_tool_call",
   preCompaction: "before_compaction",
@@ -49,22 +78,42 @@ const LIFECYCLE_PHASE_TO_HOOK: Partial<Record<PluginLifecyclePhase, PluginHookNa
   postResponse: "message_sent",
   postToolExecution: "after_tool_call",
   postCompaction: "after_compaction",
+  onResponseError: "response_error",
+  onToolError: "tool_error",
   onError: "agent_error",
-  "boot.pre": "gateway_pre_start",
-  "agent.pre": "before_agent_start",
-  "agent.post": "agent_end",
-  "recall.pre": "before_recall",
-  error: "agent_error",
-  "message.pre": "message_sending",
-  "message.post": "message_sent",
-  "tool.pre": "before_tool_call",
-  "tool.post": "after_tool_call",
-  "memory.compaction.pre": "before_compaction",
-  "memory.compaction.post": "after_compaction",
-  "boot.post": "gateway_start",
-  "shutdown.pre": "gateway_pre_stop",
-  "shutdown.post": "gateway_stop",
 };
+
+const LIFECYCLE_PHASE_TO_HOOK: Partial<Record<PluginLifecyclePhase, PluginHookName>> = {
+  ...LIFECYCLE_CANONICAL_PHASE_TO_HOOK,
+  ...LIFECYCLE_ALIAS_PHASE_TO_HOOK,
+};
+
+function assertLifecycleAliasCoverage() {
+  const aliasPerHook = new Map<PluginHookName, PluginLifecyclePhase>();
+  for (const [phase, hook] of Object.entries(LIFECYCLE_ALIAS_PHASE_TO_HOOK) as Array<
+    [PluginLifecyclePhase, PluginHookName | undefined]
+  >) {
+    if (!hook) {
+      continue;
+    }
+    const existing = aliasPerHook.get(hook);
+    if (existing) {
+      throw new Error(
+        `lifecycle alias mapping conflict: ${hook} has multiple aliases (${existing}, ${phase})`,
+      );
+    }
+    aliasPerHook.set(hook, phase);
+  }
+  for (const hook of Object.values(LIFECYCLE_CANONICAL_PHASE_TO_HOOK)) {
+    if (!hook) {
+      continue;
+    }
+    if (!aliasPerHook.has(hook)) {
+      throw new Error(`lifecycle alias mapping missing alias for runtime hook: ${hook}`);
+    }
+  }
+}
+assertLifecycleAliasCoverage();
 
 export type PluginToolRegistration = {
   pluginId: string;
@@ -492,6 +541,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       priority: opts?.priority,
       timeoutMs: opts?.timeoutMs,
       mode: opts?.mode,
+      onTimeout: opts?.onTimeout,
+      retry: opts?.retry,
+      maxConcurrency: opts?.maxConcurrency,
+      scope: opts?.scope,
       condition: opts?.condition,
       source: record.source,
     } as TypedPluginHookRegistration);
@@ -541,6 +594,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         priority: options?.priority,
         timeoutMs: options?.timeoutMs,
         mode: options?.mode,
+        onTimeout: options?.onTimeout,
+        retry: options?.retry,
+        maxConcurrency: options?.maxConcurrency,
+        scope: options?.scope,
         condition: wrappedCondition as PluginHookOptions<typeof mappedHook>["condition"],
       },
     );

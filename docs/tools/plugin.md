@@ -361,6 +361,10 @@ export default function register(api) {
       priority: 100,
       timeoutMs: 500,
       mode: "fail-open",
+      onTimeout: "fail-closed",
+      retry: { count: 2, backoffMs: 50 },
+      maxConcurrency: 4,
+      scope: { channels: ["slack"], toolNames: ["dangerous_tool"] },
       condition: (payload) => payload.toolName !== "dangerous_tool",
     },
   );
@@ -370,24 +374,37 @@ export default function register(api) {
 Current canonical lifecycle phases:
 
 - `boot.pre` / `boot.post`
+- `request.pre` / `request.post`
 - `message.pre` / `message.post`
 - `tool.pre` / `tool.post`
+- `tool.error`
 - `agent.pre` / `agent.post`
-- `recall.pre` / `error`
+- `recall.pre` / `recall.post`
+- `response.error`
+- `error`
 - `memory.compaction.pre` / `memory.compaction.post`
 - `shutdown.pre` / `shutdown.post`
 
 Proposal-style aliases supported by `api.lifecycle.on(...)`:
 
-- `preRequest` -> `message.pre`
+- `preBoot` -> `boot.pre` -> `gateway_pre_start`
+- `postBoot` -> `boot.post` -> `gateway_start`
+- `preShutdown` -> `shutdown.pre` -> `gateway_pre_stop`
+- `postShutdown` -> `shutdown.post` -> `gateway_stop`
+- `preAgent` -> `agent.pre` -> `before_agent_start`
+- `preRequest` -> `request.pre` -> `message_received`
+- `postRequestIngress` -> `request.post` -> `request_post`
 - `preRecall` -> `recall.pre` -> `before_recall`
-- `preResponse` -> `message.pre`
-- `preToolExecution` -> `tool.pre`
-- `preCompaction` -> `memory.compaction.pre`
-- `postRequest` -> `agent.post`
-- `postResponse` -> `message.post`
-- `postToolExecution` -> `tool.post`
-- `postCompaction` -> `memory.compaction.post`
+- `postRecall` -> `recall.post` -> `after_recall`
+- `preResponse` -> `message.pre` -> `message_sending`
+- `preToolExecution` -> `tool.pre` -> `before_tool_call`
+- `onToolError` -> `tool.error` -> `tool_error`
+- `preCompaction` -> `memory.compaction.pre` -> `before_compaction`
+- `postRequest` -> `agent.post` -> `agent_end`
+- `postResponse` -> `message.post` -> `message_sent`
+- `onResponseError` -> `response.error` -> `response_error`
+- `postToolExecution` -> `tool.post` -> `after_tool_call`
+- `postCompaction` -> `memory.compaction.post` -> `after_compaction`
 - `onError` -> `error` -> `agent_error` (only triggered for failed agent runs)
 
 Execution options:
@@ -395,6 +412,10 @@ Execution options:
 - `priority`: higher runs first
 - `timeoutMs`: max time per hook handler
 - `mode`: `fail-open` (log and continue) or `fail-closed` (throw)
+- `onTimeout`: timeout-only policy override (`fail-open` or `fail-closed`)
+- `retry`: retry failed handlers (`count`, optional `backoffMs`)
+- `maxConcurrency`: cap concurrent executions per handler registration
+- `scope`: optional filter by `channels`, `agentIds`, and/or `toolNames`
 - `condition`: skip handler when it returns false
 
 ## Provider plugins (model auth)

@@ -190,4 +190,183 @@ describe("plugin hook runner policies", () => {
     expect(out).toEqual({ params: { safe: true } });
     expect(error).toHaveBeenCalledTimes(1);
   });
+
+  it("applies default timeout when hook timeoutMs is omitted", async () => {
+    const error = vi.fn();
+    const logger: HookRunnerLogger = { warn: vi.fn(), error };
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "slow",
+          hookName: "before_tool_call",
+          source: "slow",
+          handler: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          },
+        },
+        {
+          pluginId: "fast",
+          hookName: "before_tool_call",
+          source: "fast",
+          handler: () => ({ params: { safe: true } }),
+        },
+      ]),
+      { logger, catchErrors: true, defaultTimeoutMs: 5 },
+    );
+
+    const out = await runner.runBeforeToolCall(
+      { toolName: "echo", params: {} },
+      { toolName: "echo" },
+    );
+    expect(out).toEqual({ params: { safe: true } });
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows message_received hooks to mutate content and cancel", async () => {
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "rewrite",
+          hookName: "message_received",
+          source: "rewrite",
+          priority: 100,
+          handler: () => ({ content: "rewritten" }),
+        },
+        {
+          pluginId: "cancel",
+          hookName: "message_received",
+          source: "cancel",
+          priority: 10,
+          handler: () => ({ cancel: true }),
+        },
+      ]),
+      { logger: noopLogger },
+    );
+
+    const out = await runner.runMessageReceived(
+      { from: "u1", content: "original" },
+      { channelId: "slack" },
+    );
+
+    expect(out).toEqual({ content: "rewritten", cancel: true });
+  });
+
+  it("applies scope filters for channel, agent, and tool", async () => {
+    const called = vi.fn();
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "scoped",
+          hookName: "before_tool_call",
+          source: "scoped",
+          scope: {
+            channels: ["slack"],
+            agentIds: ["agent-1"],
+            toolNames: ["echo"],
+          },
+          handler: called,
+        },
+      ]),
+      { logger: noopLogger },
+    );
+
+    await runner.runBeforeToolCall(
+      { toolName: "echo", params: {} },
+      { toolName: "echo", agentId: "agent-1" },
+    );
+    expect(called).not.toHaveBeenCalled();
+
+    await runner.runBeforeToolCall({ toolName: "echo", params: {} }, {
+      toolName: "echo",
+      agentId: "agent-1",
+      channelId: "slack",
+    } as never);
+    expect(called).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses onTimeout override when timeout is reached", async () => {
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "timeout-open",
+          hookName: "before_tool_call",
+          source: "timeout-open",
+          mode: "fail-closed",
+          onTimeout: "fail-open",
+          timeoutMs: 1,
+          handler: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          },
+        },
+      ]),
+      { logger: noopLogger, catchErrors: true },
+    );
+
+    await expect(
+      runner.runBeforeToolCall({ toolName: "echo", params: {} }, { toolName: "echo" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("retries failed handlers according to retry policy", async () => {
+    const handler = vi
+      .fn<() => { params: Record<string, unknown> }>()
+      .mockImplementationOnce(() => {
+        throw new Error("attempt-1");
+      })
+      .mockImplementationOnce(() => {
+        throw new Error("attempt-2");
+      })
+      .mockImplementation(() => ({ params: { ok: true } }));
+
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "retry",
+          hookName: "before_tool_call",
+          source: "retry",
+          retry: { count: 2 },
+          handler,
+        },
+      ]),
+      { logger: noopLogger },
+    );
+
+    const out = await runner.runBeforeToolCall(
+      { toolName: "echo", params: {} },
+      { toolName: "echo" },
+    );
+
+    expect(out).toEqual({ params: { ok: true } });
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
+
+  it("enforces maxConcurrency per hook registration", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const runner = createHookRunner(
+      createRegistryWithHooks([
+        {
+          pluginId: "serial",
+          hookName: "agent_end",
+          source: "serial",
+          maxConcurrency: 1,
+          handler: async () => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            inFlight -= 1;
+          },
+        },
+      ]),
+      { logger: noopLogger },
+    );
+
+    await Promise.all([
+      runner.runAgentEnd({ messages: [], success: true }, {}),
+      runner.runAgentEnd({ messages: [], success: true }, {}),
+      runner.runAgentEnd({ messages: [], success: true }, {}),
+    ]);
+
+    expect(peak).toBe(1);
+  });
 });

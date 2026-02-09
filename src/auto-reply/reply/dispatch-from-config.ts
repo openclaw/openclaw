@@ -211,8 +211,26 @@ export async function dispatchReplyFromConfig(params: {
     } catch (err) {
       logVerbose(`dispatch-from-config: message_sent hook failed: ${String(err)}`);
     }
+    if (!args.success && args.error && hookRunner?.hasHooks("response_error")) {
+      try {
+        await hookRunner.runResponseError(
+          {
+            to: args.to,
+            content: args.content,
+            error: args.error,
+          },
+          {
+            channelId: args.channelId,
+            accountId: ctx.AccountId,
+            conversationId: args.conversationId,
+          },
+        );
+      } catch (err) {
+        logVerbose(`dispatch-from-config: response_error hook failed: ${String(err)}`);
+      }
+    }
   };
-  if (hookRunner?.hasHooks("message_received")) {
+  if (hookRunner?.hasHooks("message_received") || hookRunner?.hasHooks("request_post")) {
     const timestamp =
       typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
         ? ctx.Timestamp
@@ -229,9 +247,9 @@ export async function dispatchReplyFromConfig(params: {
             : "";
     const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
     const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-
-    void hookRunner
-      .runMessageReceived(
+    let effectiveContent = content;
+    try {
+      const received = await hookRunner.runMessageReceived(
         {
           from: ctx.From ?? "",
           content,
@@ -255,10 +273,59 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           conversationId,
         },
-      )
-      .catch((err) => {
-        logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
-      });
+      );
+
+      if (received?.cancel) {
+        recordProcessed("skipped", { reason: "message canceled by plugin hook" });
+        return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+      }
+      if (typeof received?.content === "string") {
+        // Update inbound message fields so downstream reply resolution sees mutated content.
+        (ctx as { BodyForCommands?: string }).BodyForCommands = received.content;
+        (ctx as { RawBody?: string }).RawBody = received.content;
+        (ctx as { Body?: string }).Body = received.content;
+        effectiveContent = received.content;
+      }
+    } catch (err) {
+      if (isPluginHookExecutionError(err) && err.failClosed) {
+        throw err;
+      }
+      logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
+    }
+    if (hookRunner?.hasHooks("request_post")) {
+      try {
+        await hookRunner.runRequestPost(
+          {
+            from: ctx.From ?? "",
+            content: effectiveContent,
+            timestamp,
+            metadata: {
+              to: ctx.To,
+              provider: ctx.Provider,
+              surface: ctx.Surface,
+              threadId: ctx.MessageThreadId,
+              originatingChannel: ctx.OriginatingChannel,
+              originatingTo: ctx.OriginatingTo,
+              messageId: messageIdForHook,
+              senderId: ctx.SenderId,
+              senderName: ctx.SenderName,
+              senderUsername: ctx.SenderUsername,
+              senderE164: ctx.SenderE164,
+            },
+          },
+          {
+            channelId,
+            accountId: ctx.AccountId,
+            conversationId,
+          },
+        );
+      } catch (err) {
+        if (isPluginHookExecutionError(err) && err.failClosed) {
+          throw err;
+        }
+        logVerbose(`dispatch-from-config: request_post hook failed: ${String(err)}`);
+      }
+    }
   }
 
   // Check if we should route replies to originating channel instead of dispatcher.

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PluginHookExecutionError } from "../../plugins/hooks.js";
 
 const search = vi.fn(async () => []);
 const status = vi.fn(() => ({
@@ -13,6 +14,7 @@ const status = vi.fn(() => ({
 }));
 
 const runBeforeRecall = vi.fn();
+const runAfterRecall = vi.fn();
 const hasHooks = vi.fn(() => false);
 
 vi.mock("../../memory/index.js", () => ({
@@ -28,6 +30,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks,
     runBeforeRecall,
+    runAfterRecall,
   }),
 }));
 
@@ -57,5 +60,28 @@ describe("memory_search before_recall hook integration", () => {
       minScore: 0.8,
       sessionKey: "agent:main:dm",
     });
+    expect(runAfterRecall).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates fail-closed before_recall errors", async () => {
+    hasHooks.mockReturnValue(true);
+    runBeforeRecall.mockRejectedValue(
+      new PluginHookExecutionError({
+        hookName: "before_recall",
+        pluginId: "policy",
+        message: "recall denied",
+      }),
+    );
+
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const tool = createMemorySearchTool({ config: cfg, agentSessionKey: "agent:main:dm" });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await expect(
+      tool.execute("call_2", { query: "original query", maxResults: 6, minScore: 0.2 }),
+    ).rejects.toThrow("recall denied");
   });
 });

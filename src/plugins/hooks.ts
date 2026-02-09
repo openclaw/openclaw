@@ -16,6 +16,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeRecallEvent,
   PluginHookBeforeRecallResult,
+  PluginHookAfterRecallEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
@@ -29,15 +30,20 @@ import type {
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookMessageReceivedResult,
+  PluginHookRequestPostEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookResponseErrorEvent,
   PluginHookName,
   PluginHookRegistration,
+  PluginHookRetryPolicy,
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
   PluginHookSessionStartEvent,
   PluginHookToolContext,
+  PluginHookToolErrorEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -53,19 +59,23 @@ export type {
   PluginHookLlmOutputEvent,
   PluginHookBeforeRecallEvent,
   PluginHookBeforeRecallResult,
+  PluginHookAfterRecallEvent,
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookRequestPostEvent,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookResponseErrorEvent,
   PluginHookToolContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookToolErrorEvent,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -89,6 +99,8 @@ export type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
+  /** Default timeout per async hook handler when timeoutMs is not specified */
+  defaultTimeoutMs?: number;
 };
 
 export class PluginHookExecutionError extends Error {
@@ -109,6 +121,20 @@ export class PluginHookExecutionError extends Error {
     this.pluginId = params.pluginId;
     this.failClosed = params.failClosed ?? true;
   }
+}
+
+class HookTimeoutError extends Error {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`hook timeout after ${timeoutMs}ms`);
+    this.name = "HookTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function isHookTimeoutError(error: unknown): error is HookTimeoutError {
+  return error instanceof HookTimeoutError;
 }
 
 export function isPluginHookExecutionError(error: unknown): error is PluginHookExecutionError {
@@ -133,8 +159,22 @@ function getHooksForName<K extends PluginHookName>(
 export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
+  const defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
+  const concurrencyState = new WeakMap<
+    PluginHookRegistration,
+    { inFlight: number; waiters: Array<() => void> }
+  >();
   const shouldThrowForFailure = (hook: PluginHookRegistration): boolean =>
     !catchErrors || hook.mode === "fail-closed";
+  const shouldThrowForTimeout = (hook: PluginHookRegistration): boolean => {
+    if (!catchErrors) {
+      return true;
+    }
+    const onTimeout = hook.onTimeout ?? hook.mode ?? "fail-open";
+    return onTimeout === "fail-closed";
+  };
+  const resolveTimeoutMs = (hook: PluginHookRegistration): number =>
+    hook.timeoutMs === undefined ? defaultTimeoutMs : hook.timeoutMs;
 
   const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -147,7 +187,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         promise,
         new Promise<T>((_resolve, reject) => {
           timeoutId = setTimeout(() => {
-            reject(new Error(`hook timeout after ${timeoutMs}ms`));
+            reject(new HookTimeoutError(timeoutMs));
           }, timeoutMs);
         }),
       ]);
@@ -156,6 +196,131 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         clearTimeout(timeoutId);
       }
     }
+  };
+
+  const waitForAvailableConcurrency = async (hook: PluginHookRegistration): Promise<void> => {
+    const max = hook.maxConcurrency;
+    if (!Number.isFinite(max) || max === undefined || max <= 0) {
+      return;
+    }
+
+    const state = concurrencyState.get(hook) ?? { inFlight: 0, waiters: [] };
+    concurrencyState.set(hook, state);
+
+    if (state.inFlight < max) {
+      state.inFlight += 1;
+      return;
+    }
+
+    await new Promise<void>((resolve) => state.waiters.push(resolve));
+    state.inFlight += 1;
+  };
+
+  const releaseConcurrency = (hook: PluginHookRegistration): void => {
+    const max = hook.maxConcurrency;
+    if (!Number.isFinite(max) || max === undefined || max <= 0) {
+      return;
+    }
+    const state = concurrencyState.get(hook);
+    if (!state) {
+      return;
+    }
+    state.inFlight = Math.max(0, state.inFlight - 1);
+    const next = state.waiters.shift();
+    if (next) {
+      next();
+    }
+  };
+
+  const runWithConcurrencyLimit = async <T>(
+    hook: PluginHookRegistration,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    await waitForAvailableConcurrency(hook);
+    try {
+      return await run();
+    } finally {
+      releaseConcurrency(hook);
+    }
+  };
+
+  const normalizeRetryPolicy = (
+    retry: PluginHookRetryPolicy | undefined,
+  ): { count: number; backoffMs: number } => ({
+    count: Math.max(0, Math.floor(retry?.count ?? 0)),
+    backoffMs: Math.max(0, Math.floor(retry?.backoffMs ?? 0)),
+  });
+
+  const executeWithRetry = async <T>(
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+    run: () => Promise<T>,
+  ): Promise<T> => {
+    const { count, backoffMs } = normalizeRetryPolicy(hook.retry);
+    const totalAttempts = count + 1;
+    let attempt = 0;
+    while (true) {
+      try {
+        return await run();
+      } catch (err) {
+        attempt += 1;
+        if (attempt >= totalAttempts) {
+          throw err;
+        }
+        logger?.warn?.(
+          `[hooks] ${hookName} handler from ${hook.pluginId} failed on attempt ${attempt}/${totalAttempts}; retrying`,
+        );
+        if (backoffMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        }
+      }
+    }
+  };
+
+  const inScope = <K extends PluginHookName>(
+    hook: PluginHookRegistration<K>,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): boolean => {
+    const scope = hook.scope;
+    if (!scope) {
+      return true;
+    }
+
+    const matches = (allowed: string[] | undefined, value: string | undefined): boolean => {
+      if (!allowed) {
+        return true;
+      }
+      if (allowed.length === 0) {
+        return false;
+      }
+      if (!value) {
+        return false;
+      }
+      return allowed.includes(value);
+    };
+
+    const channelId =
+      typeof (ctx as { channelId?: unknown })?.channelId === "string"
+        ? ((ctx as { channelId?: string }).channelId ?? undefined)
+        : undefined;
+    const agentId =
+      typeof (ctx as { agentId?: unknown })?.agentId === "string"
+        ? ((ctx as { agentId?: string }).agentId ?? undefined)
+        : undefined;
+    const toolName =
+      (typeof (ctx as { toolName?: unknown })?.toolName === "string"
+        ? ((ctx as { toolName?: string }).toolName ?? undefined)
+        : undefined) ||
+      (typeof (event as { toolName?: unknown })?.toolName === "string"
+        ? ((event as { toolName?: string }).toolName ?? undefined)
+        : undefined);
+
+    return (
+      matches(scope.channels, channelId) &&
+      matches(scope.agentIds, agentId) &&
+      matches(scope.toolNames, toolName)
+    );
   };
 
   const evaluateCondition = async <K extends PluginHookName>(
@@ -176,7 +341,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     err: unknown,
   ): never | void => {
     const msg = `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${String(err)}`;
-    if (shouldThrowForFailure(hook)) {
+    const shouldThrow = isHookTimeoutError(err)
+      ? shouldThrowForTimeout(hook)
+      : shouldThrowForFailure(hook);
+    if (shouldThrow) {
       throw new PluginHookExecutionError({
         hookName,
         pluginId: hook.pluginId,
@@ -206,15 +374,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     const promises = hooks.map(async (hook) => {
       try {
+        if (!inScope(hook, event, ctx)) {
+          return;
+        }
         const shouldRun = await evaluateCondition(hook, event, ctx);
         if (!shouldRun) {
           return;
         }
-        await withTimeout(
-          Promise.resolve(
-            (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx),
+        await runWithConcurrencyLimit(hook, async () =>
+          executeWithRetry(hookName, hook, async () =>
+            withTimeout(
+              Promise.resolve(
+                (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx),
+              ),
+              resolveTimeoutMs(hook),
+            ),
           ),
-          hook.timeoutMs ?? 0,
         );
       } catch (err) {
         handleHookError(hookName, hook, err);
@@ -245,15 +420,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
+        if (!inScope(hook, event, ctx)) {
+          continue;
+        }
         const shouldRun = await evaluateCondition(hook, event, ctx);
         if (!shouldRun) {
           continue;
         }
-        const handlerResult = await withTimeout(
-          Promise.resolve(
-            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>)(event, ctx),
+        const handlerResult = await runWithConcurrencyLimit(hook, async () =>
+          executeWithRetry(hookName, hook, async () =>
+            withTimeout(
+              Promise.resolve(
+                (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>)(event, ctx),
+              ),
+              resolveTimeoutMs(hook),
+            ),
           ),
-          hook.timeoutMs ?? 0,
         );
 
         if (handlerResult !== undefined && handlerResult !== null) {
@@ -317,6 +499,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         minScore: next.minScore ?? acc?.minScore,
       }),
     );
+  }
+
+  /**
+   * Run after_recall hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runAfterRecall(
+    event: PluginHookAfterRecallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<void> {
+    return runVoidHook("after_recall", event, ctx);
   }
 
   /**
@@ -399,13 +592,37 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run message_received hook.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to mutate or cancel inbound request content.
+   * Runs sequentially.
    */
   async function runMessageReceived(
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
+  ): Promise<PluginHookMessageReceivedResult | undefined> {
+    return runModifyingHook<"message_received", PluginHookMessageReceivedResult>(
+      "message_received",
+      event,
+      ctx,
+      (acc, next) => ({
+        content: next.content ?? acc?.content,
+        metadata:
+          acc?.metadata && next.metadata
+            ? { ...acc.metadata, ...next.metadata }
+            : (next.metadata ?? acc?.metadata),
+        cancel: next.cancel ?? acc?.cancel,
+      }),
+    );
+  }
+
+  /**
+   * Run request_post hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runRequestPost(
+    event: PluginHookRequestPostEvent,
+    ctx: PluginHookMessageContext,
   ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
+    return runVoidHook("request_post", event, ctx);
   }
 
   /**
@@ -437,6 +654,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookMessageContext,
   ): Promise<void> {
     return runVoidHook("message_sent", event, ctx);
+  }
+
+  /**
+   * Run response_error hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runResponseError(
+    event: PluginHookResponseErrorEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("response_error", event, ctx);
   }
 
   // =========================================================================
@@ -476,6 +704,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run tool_error hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runToolError(
+    event: PluginHookToolErrorEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<void> {
+    return runVoidHook("tool_error", event, ctx);
+  }
+
+  /**
    * Run tool_result_persist hook.
    *
    * This hook is intentionally synchronous: it runs in hot paths where session
@@ -498,6 +737,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
+        if (!inScope(hook, event, ctx)) {
+          continue;
+        }
         if (hook.condition) {
           const gated = hook.condition({ ...event, message: current } as never, ctx as never);
           if (typeof (gated as Promise<unknown>)?.then === "function") {
@@ -644,6 +886,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runLlmInput,
     runLlmOutput,
     runBeforeRecall,
+    runAfterRecall,
     runAgentEnd,
     runAgentError,
     runBeforeCompaction,
@@ -651,11 +894,14 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeReset,
     // Message hooks
     runMessageReceived,
+    runRequestPost,
     runMessageSending,
     runMessageSent,
+    runResponseError,
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runToolError,
     runToolResultPersist,
     // Session hooks
     runSessionStart,

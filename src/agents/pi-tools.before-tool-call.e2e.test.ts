@@ -13,6 +13,7 @@ describe("before_tool_call hook integration", () => {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
     runAfterToolCall: ReturnType<typeof vi.fn>;
+    runToolError: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -20,6 +21,7 @@ describe("before_tool_call hook integration", () => {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
       runAfterToolCall: vi.fn(),
+      runToolError: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
@@ -156,7 +158,9 @@ describe("before_tool_call hook integration", () => {
   });
 
   it("emits after_tool_call with error when execution throws", async () => {
-    hookRunner.hasHooks.mockImplementation((name: string) => name === "after_tool_call");
+    hookRunner.hasHooks.mockImplementation(
+      (name: string) => name === "after_tool_call" || name === "tool_error",
+    );
     const execute = vi.fn().mockRejectedValue(new Error("tool exploded"));
     // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
@@ -166,6 +170,16 @@ describe("before_tool_call hook integration", () => {
     );
 
     expect(hookRunner.runAfterToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: { cmd: "pwd" },
+        error: "tool exploded",
+      }),
+      expect.objectContaining({
+        toolName: "exec",
+      }),
+    );
+    expect(hookRunner.runToolError).toHaveBeenCalledWith(
       expect.objectContaining({
         toolName: "exec",
         params: { cmd: "pwd" },
@@ -221,6 +235,7 @@ describe("before_tool_call hook integration for client tools", () => {
     hasHooks: ReturnType<typeof vi.fn>;
     runBeforeToolCall: ReturnType<typeof vi.fn>;
     runAfterToolCall: ReturnType<typeof vi.fn>;
+    runToolError: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -228,6 +243,7 @@ describe("before_tool_call hook integration for client tools", () => {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
       runAfterToolCall: vi.fn(),
+      runToolError: vi.fn(),
     };
     // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);

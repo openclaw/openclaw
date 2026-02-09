@@ -6,6 +6,7 @@ import type { AnyAgentTool } from "./common.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isPluginHookExecutionError } from "../../plugins/hooks.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
@@ -99,11 +100,33 @@ export function createMemorySearchTool(options: {
           mode: citationsMode,
           sessionKey: options.agentSessionKey,
         });
+        const recallStartedAt = Date.now();
         const rawResults = await manager.search(effectiveQuery, {
           maxResults: effectiveMaxResults,
           minScore: effectiveMinScore,
           sessionKey: options.agentSessionKey,
         });
+        if (hookRunner?.hasHooks("after_recall")) {
+          try {
+            await hookRunner.runAfterRecall(
+              {
+                query: effectiveQuery,
+                maxResults: effectiveMaxResults,
+                minScore: effectiveMinScore,
+                resultCount: Array.isArray(rawResults) ? rawResults.length : 0,
+                durationMs: Date.now() - recallStartedAt,
+              },
+              {
+                agentId,
+                sessionKey: options.agentSessionKey,
+              },
+            );
+          } catch (err) {
+            if (isPluginHookExecutionError(err) && err.failClosed) {
+              throw err;
+            }
+          }
+        }
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
@@ -119,6 +142,9 @@ export function createMemorySearchTool(options: {
           citations: citationsMode,
         });
       } catch (err) {
+        if (isPluginHookExecutionError(err) && err.failClosed) {
+          throw err;
+        }
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ results: [], disabled: true, error: message });
       }

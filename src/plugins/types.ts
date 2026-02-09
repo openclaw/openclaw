@@ -83,6 +83,18 @@ export type OpenClawPluginHookOptions = {
 };
 
 export type PluginHookExecutionMode = "fail-open" | "fail-closed";
+export type PluginHookTimeoutMode = "fail-open" | "fail-closed";
+
+export type PluginHookRetryPolicy = {
+  count: number;
+  backoffMs?: number;
+};
+
+export type PluginHookScope = {
+  channels?: string[];
+  agentIds?: string[];
+  toolNames?: string[];
+};
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
@@ -292,6 +304,11 @@ export type OpenClawPluginApi = {
 };
 
 export type PluginLifecyclePhase =
+  | "preBoot"
+  | "postBoot"
+  | "preShutdown"
+  | "postShutdown"
+  | "preAgent"
   | "preRequest"
   | "preRecall"
   | "preResponse"
@@ -301,6 +318,10 @@ export type PluginLifecyclePhase =
   | "postResponse"
   | "postToolExecution"
   | "postCompaction"
+  | "postRecall"
+  | "postRequestIngress"
+  | "onResponseError"
+  | "onToolError"
   | "onError"
   | "boot.pre"
   | "boot.post"
@@ -310,8 +331,13 @@ export type PluginLifecyclePhase =
   | "tool.post"
   | "agent.pre"
   | "agent.post"
+  | "request.pre"
+  | "request.post"
   | "recall.pre"
+  | "recall.post"
   | "error"
+  | "response.error"
+  | "tool.error"
   | "memory.compaction.pre"
   | "memory.compaction.post"
   | "shutdown.pre"
@@ -326,8 +352,13 @@ type PluginCanonicalLifecyclePayloadMap = {
   "tool.post": PluginHookAfterToolCallEvent;
   "agent.pre": PluginHookBeforeAgentStartEvent;
   "agent.post": PluginHookAgentEndEvent;
+  "request.pre": PluginHookMessageReceivedEvent;
+  "request.post": PluginHookRequestPostEvent;
   "recall.pre": PluginHookBeforeRecallEvent;
+  "recall.post": PluginHookAfterRecallEvent;
   error: PluginHookAgentErrorEvent;
+  "response.error": PluginHookResponseErrorEvent;
+  "tool.error": PluginHookToolErrorEvent;
   "memory.compaction.pre": PluginHookBeforeCompactionEvent;
   "memory.compaction.post": PluginHookAfterCompactionEvent;
   "shutdown.pre": { reason?: string };
@@ -335,7 +366,15 @@ type PluginCanonicalLifecyclePayloadMap = {
 };
 
 type PluginLifecycleAliasToCanonicalPhaseMap = {
+  preBoot: "boot.pre";
+  postBoot: "boot.post";
+  preShutdown: "shutdown.pre";
+  postShutdown: "shutdown.post";
+  preAgent: "agent.pre";
+  preRequest: "request.pre";
+  postRequestIngress: "request.post";
   preRecall: "recall.pre";
+  postRecall: "recall.post";
   preResponse: "message.pre";
   preToolExecution: "tool.pre";
   preCompaction: "memory.compaction.pre";
@@ -343,12 +382,12 @@ type PluginLifecycleAliasToCanonicalPhaseMap = {
   postResponse: "message.post";
   postToolExecution: "tool.post";
   postCompaction: "memory.compaction.post";
+  onResponseError: "response.error";
+  onToolError: "tool.error";
   onError: "error";
 };
 
 type PluginLifecycleAliasPayloadMap = {
-  preRequest: PluginHookMessageReceivedEvent;
-} & {
   [K in keyof PluginLifecycleAliasToCanonicalPhaseMap]: PluginCanonicalLifecyclePayloadMap[PluginLifecycleAliasToCanonicalPhaseMap[K]];
 };
 export type PluginLifecyclePayloadMap = PluginCanonicalLifecyclePayloadMap &
@@ -378,6 +417,10 @@ export type PluginLifecycleHookOptions<P extends PluginLifecyclePhase> = {
   priority?: number;
   timeoutMs?: number;
   mode?: PluginHookExecutionMode;
+  onTimeout?: PluginHookTimeoutMode;
+  retry?: PluginHookRetryPolicy;
+  maxConcurrency?: number;
+  scope?: PluginHookScope;
   condition?: (
     payload: PluginLifecyclePayloadMap[P],
     context: PluginLifecycleHookContext<P>,
@@ -388,6 +431,10 @@ export type PluginHookOptions<K extends PluginHookName> = {
   priority?: number;
   timeoutMs?: number;
   mode?: PluginHookExecutionMode;
+  onTimeout?: PluginHookTimeoutMode;
+  retry?: PluginHookRetryPolicy;
+  maxConcurrency?: number;
+  scope?: PluginHookScope;
   condition?: (
     event: Parameters<PluginHookHandlerMap[K]>[0],
     ctx: Parameters<PluginHookHandlerMap[K]>[1],
@@ -414,6 +461,8 @@ export type PluginHookName =
   | "llm_input"
   | "llm_output"
   | "before_recall"
+  | "after_recall"
+  | "request_post"
   | "agent_end"
   | "agent_error"
   | "before_compaction"
@@ -422,8 +471,10 @@ export type PluginHookName =
   | "message_received"
   | "message_sending"
   | "message_sent"
+  | "response_error"
   | "before_tool_call"
   | "after_tool_call"
+  | "tool_error"
   | "tool_result_persist"
   | "session_start"
   | "session_end"
@@ -549,6 +600,19 @@ export type PluginHookMessageReceivedEvent = {
   metadata?: Record<string, unknown>;
 };
 
+export type PluginHookMessageReceivedResult = {
+  content?: string;
+  metadata?: Record<string, unknown>;
+  cancel?: boolean;
+};
+
+export type PluginHookRequestPostEvent = {
+  from: string;
+  content: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
+};
+
 // message_sending hook
 export type PluginHookMessageSendingEvent = {
   to: string;
@@ -567,6 +631,12 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   error?: string;
+};
+
+export type PluginHookResponseErrorEvent = {
+  to: string;
+  content: string;
+  error: string;
 };
 
 // Tool context
@@ -594,6 +664,21 @@ export type PluginHookAfterToolCallEvent = {
   params: Record<string, unknown>;
   result?: unknown;
   error?: string;
+  durationMs?: number;
+};
+
+export type PluginHookToolErrorEvent = {
+  toolName: string;
+  params: Record<string, unknown>;
+  error: string;
+  durationMs?: number;
+};
+
+export type PluginHookAfterRecallEvent = {
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+  resultCount: number;
   durationMs?: number;
 };
 
@@ -688,6 +773,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeRecallEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeRecallResult | void> | PluginHookBeforeRecallResult | void;
+  after_recall: (
+    event: PluginHookAfterRecallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   agent_error: (
     event: PluginHookAgentErrorEvent,
@@ -708,6 +797,10 @@ export type PluginHookHandlerMap = {
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
+  ) => Promise<PluginHookMessageReceivedResult | void> | PluginHookMessageReceivedResult | void;
+  request_post: (
+    event: PluginHookRequestPostEvent,
+    ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
@@ -715,6 +808,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<PluginHookMessageSendingResult | void> | PluginHookMessageSendingResult | void;
   message_sent: (
     event: PluginHookMessageSentEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  response_error: (
+    event: PluginHookResponseErrorEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
   before_tool_call: (
@@ -725,6 +822,7 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  tool_error: (event: PluginHookToolErrorEvent, ctx: PluginHookToolContext) => Promise<void> | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
@@ -754,6 +852,10 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   priority?: number;
   timeoutMs?: number;
   mode?: PluginHookExecutionMode;
+  onTimeout?: PluginHookTimeoutMode;
+  retry?: PluginHookRetryPolicy;
+  maxConcurrency?: number;
+  scope?: PluginHookScope;
   condition?: (
     event: Parameters<PluginHookHandlerMap[K]>[0],
     ctx: Parameters<PluginHookHandlerMap[K]>[1],
