@@ -260,9 +260,9 @@ export async function handleOpenAiHttpRequest(
         ],
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
-    } catch (err) {
+    } catch {
       sendJson(res, 500, {
-        error: { message: String(err), type: "api_error" },
+        error: { message: "internal error", type: "api_error" },
       });
     }
     return true;
@@ -390,7 +390,7 @@ export async function handleOpenAiHttpRequest(
           ],
         });
       }
-    } catch (err) {
+    } catch {
       if (closed) {
         return;
       }
@@ -402,7 +402,7 @@ export async function handleOpenAiHttpRequest(
         choices: [
           {
             index: 0,
-            delta: { content: `Error: ${String(err)}` },
+            delta: { content: "Error: internal error" },
             finish_reason: "stop",
           },
         ],

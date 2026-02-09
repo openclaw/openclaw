@@ -450,9 +450,9 @@ export async function handleOpenResponsesHttpRequest(
         }
       }
     }
-  } catch (err) {
+  } catch {
     sendJson(res, 400, {
-      error: { message: String(err), type: "invalid_request_error" },
+      error: { message: "invalid request", type: "invalid_request_error" },
     });
     return true;
   }
@@ -467,9 +467,9 @@ export async function handleOpenResponsesHttpRequest(
     });
     resolvedClientTools = toolChoiceResult.tools;
     toolChoicePrompt = toolChoiceResult.extraSystemPrompt;
-  } catch (err) {
+  } catch {
     sendJson(res, 400, {
-      error: { message: String(err), type: "invalid_request_error" },
+      error: { message: "invalid tool configuration", type: "invalid_request_error" },
     });
     return true;
   }
