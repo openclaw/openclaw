@@ -1,6 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { __testing } from "./web-search.js";
 
+function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
+  const prev: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    prev[key] = process.env[key];
+    if (value === undefined) {
+      // Make tests hermetic even on machines with real keys set.
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 const {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
@@ -110,18 +134,10 @@ describe("web_search grok config resolution", () => {
   });
 
   it("returns undefined when no apiKey is available", () => {
-    const previous = process.env.XAI_API_KEY;
-    try {
-      delete process.env.XAI_API_KEY;
+    withEnv({ XAI_API_KEY: undefined }, () => {
       expect(resolveGrokApiKey({})).toBeUndefined();
       expect(resolveGrokApiKey(undefined)).toBeUndefined();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.XAI_API_KEY;
-      } else {
-        process.env.XAI_API_KEY = previous;
-      }
-    }
+    });
   });
 
   it("uses default model when not specified", () => {
