@@ -152,7 +152,10 @@ describe("web_search perplexity baseUrl defaults", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://api.perplexity.ai/chat/completions");
     const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    const body = JSON.parse(String(request?.body ?? "{}")) as { model?: string };
+    const requestBody = request?.body;
+    const body = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as {
+      model?: string;
+    };
     expect(body.model).toBe("sonar-pro");
   });
 
@@ -198,7 +201,10 @@ describe("web_search perplexity baseUrl defaults", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://openrouter.ai/api/v1/chat/completions");
     const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
-    const body = JSON.parse(String(request?.body ?? "{}")) as { model?: string };
+    const requestBody = request?.body;
+    const body = JSON.parse(typeof requestBody === "string" ? requestBody : "{}") as {
+      model?: string;
+    };
     expect(body.model).toBe("perplexity/sonar-pro");
   });
 

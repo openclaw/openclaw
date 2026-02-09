@@ -74,9 +74,9 @@ describe("web_search perplexity model normalization", () => {
   });
 
   it("keeps prefixed model for OpenRouter", () => {
-    expect(resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro")).toBe(
-      "perplexity/sonar-pro",
-    );
+    expect(
+      resolvePerplexityRequestModel("https://openrouter.ai/api/v1", "perplexity/sonar-pro"),
+    ).toBe("perplexity/sonar-pro");
   });
 
   it("keeps model unchanged when URL is invalid", () => {
