@@ -1,5 +1,5 @@
 import { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import type { CoreConfig } from "../types.js";
+import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
